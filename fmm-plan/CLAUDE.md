@@ -33,12 +33,14 @@ share this layer. Keep kernel-specific arithmetic out.
 
 | Path | Contents |
 | --- | --- |
-| `src/lib.rs` | Crate doc plus `pub mod fmm_tree;` and `pub mod interaction_manager;`. |
+| `src/lib.rs` | Crate doc plus `pub mod fmm_tree;`, `pub mod ghost_communicator;` and `pub mod interaction_manager;`. |
 | `src/fmm_tree.rs` | `FmmTree<'a, C>` plus the private helpers `get_ancestor_key` and `sort_by_leafs`. |
 | `src/fmm_tree_tests.rs` | 7 serial unit tests of the private helpers, included via `#[path]` from `fmm_tree.rs`. No MPI. |
 | `src/interaction_manager.rs` | `InteractionManager` — U/V/W/X lists for every non-ghost key of an `Octree`, computed locally. See the section below. |
 | `src/interaction_manager_tests.rs` | 9 serial unit tests on synthetic key maps (hand counts, brute-force oracle, adjacency, V-list directions), included via `#[path]`. No MPI. |
-| `tests/fmm_tree.rs` | One `#[test]` that owns MPI init and runs 10 named scenarios sequentially, each checking the tree and the interaction lists against an oracle. |
+| `src/ghost_communicator.rs` | `FmmGhostCommunicator<T>` — one rlst `GhostCommunicator<MortonKey>` per level with owned host send/receive buffers, built from the Morton keys of required ghosts (local and `Global` keys skipped) and a `LevelChunkSizes` (uniform or per level). |
+| `src/ghost_communicator_tests.rs` | 5 serial unit tests of the ghost bucketing and chunk-size lookup, included via `#[path]`. No MPI. |
+| `tests/fmm_tree.rs` | One `#[test]` that owns MPI init and runs 11 named scenarios sequentially, each checking the tree, the interaction lists against an oracle, and a forward/backward ghost exchange of every interaction-list ghost. |
 | `examples/test_fmm_tree.rs` | Seeded-random MPI smoke run; asserts global counts, backwards-mapped leaf membership, and interaction-list invariants. |
 | `.forgejo/workflows/run-tests.yml` | The authoritative CI commands (PRs to `main` only). |
 | `.forgejo/workflows/run-examples.yml`, `run-dependency-checks.yml` | Weekly scheduled jobs. |
@@ -134,7 +136,7 @@ cargo run --example test_fmm_tree
 
 `RUST_MIN_STACK=8388608` matters — keep it on test invocations.
 
-Plain `cargo test` gives 16 unit tests plus the integration test **on one rank
+Plain `cargo test` gives 21 unit tests plus the integration test **on one rank
 only**. It exercises no redistribution and no ghost layer, which is where the
 interesting bugs are.
 

@@ -3,10 +3,14 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use fmm_plan::{fmm_tree::FmmTree, interaction_manager::InteractionManager};
+use fmm_plan::{
+    fmm_tree::FmmTree,
+    ghost_communicator::{FmmGhostCommunicator, LevelChunkSizes},
+    interaction_manager::InteractionManager,
+};
 use mpi::{collective::SystemOperation, traits::*};
 use nd_octree::{
-    OctreeOptions, PhysicalBox, constants::DEEPEST_LEVEL, morton, morton::is_ancestor,
+    Octree, OctreeOptions, PhysicalBox, constants::DEEPEST_LEVEL, morton, morton::is_ancestor,
     octree::KeyType, points_to_morton,
 };
 use rlst::{
@@ -232,6 +236,107 @@ fn check_interaction_lists(
     }
 }
 
+/// The value that the owner of `key` sends as the `j`-th entry of its chunk.
+fn ghost_value(key: u64, j: usize) -> u64 {
+    key.wrapping_mul(64).wrapping_add(j as u64)
+}
+
+/// Exchange the data of every ghost in the interaction lists and check that
+/// each ghost holder receives its owner's values, forward and backward.
+fn check_ghost_exchange<C: CommunicatorCollectives>(
+    name: &str,
+    octree: &Octree<'_, C>,
+    lists: &InteractionManager,
+    chunk_sizes: LevelChunkSizes,
+) {
+    let all_keys = octree.all_keys();
+    let entries: Vec<u64> = [
+        lists.u_list(),
+        lists.v_list(),
+        lists.w_list(),
+        lists.x_list(),
+    ]
+    .into_iter()
+    .flat_map(|map| map.values().flatten().copied())
+    .collect();
+    let mut expected: Vec<u64> = entries
+        .iter()
+        .copied()
+        .filter(|entry| all_keys[entry].is_ghost())
+        .collect();
+    expected.sort_unstable();
+    expected.dedup();
+
+    let mut ghosts = FmmGhostCommunicator::<u64>::new(octree, entries, chunk_sizes.clone());
+    assert_eq!(ghosts.nlevels(), octree.global_max_level() + 1);
+
+    let mut received: Vec<u64> = Vec::new();
+    for level in 0..ghosts.nlevels() {
+        assert_eq!(
+            ghosts.chunk_size(level),
+            chunk_sizes.chunk_size(level).unwrap()
+        );
+        for (position, &key) in ghosts.receive_keys(level).iter().enumerate() {
+            assert_eq!(morton::level(key), level, "{name}: receive key level");
+            assert_eq!(ghosts.receive_position(key), Some(position));
+            received.push(key);
+        }
+        // Only the owner of a key sends it.
+        for key in ghosts.send_keys(level) {
+            assert!(
+                matches!(
+                    all_keys.get(key),
+                    Some(KeyType::LocalLeaf | KeyType::LocalInterior)
+                ),
+                "{name}: sent key {key} is not local to its owner"
+            );
+        }
+        for (key, chunk) in ghosts.send_chunks_mut(level) {
+            for (j, value) in chunk.iter_mut().enumerate() {
+                *value = ghost_value(key, j);
+            }
+        }
+    }
+    received.sort_unstable();
+    assert_eq!(received, expected, "{name}: received ghost keys");
+    // The graded tree always spreads its interaction lists over several ranks,
+    // so an exchange without any ghost would mean the check is vacuous.
+    let mut global_received = 0usize;
+    octree.comm().all_reduce_into(
+        &received.len(),
+        &mut global_received,
+        SystemOperation::sum(),
+    );
+    if name == "graded corner blob" && octree.comm().size() > 1 {
+        assert!(global_received > 0, "{name}: no ghosts were exchanged");
+    }
+
+    ghosts.forward_all();
+    for level in 0..ghosts.nlevels() {
+        let chunk_size = ghosts.chunk_size(level);
+        for (key, chunk) in ghosts.receive_chunks(level) {
+            let values: Vec<u64> = (0..chunk_size).map(|j| ghost_value(key, j)).collect();
+            assert_eq!(chunk, values, "{name}: forwarded values of {key}");
+            assert_eq!(ghosts.receive_chunk(key), Some(chunk));
+        }
+    }
+
+    // Send the received values back to the owners.
+    for level in 0..ghosts.nlevels() {
+        ghosts.send_buffer_mut(level).fill(0);
+        ghosts.backward(level);
+        for (key, chunk) in ghosts.send_chunks_mut(level) {
+            for (j, &value) in chunk.iter().enumerate() {
+                assert_eq!(
+                    value,
+                    ghost_value(key, j),
+                    "{name}: returned values of {key}"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn distributed_tree_regressions() {
     let universe = mpi::initialize().expect("this test owns MPI initialization");
@@ -379,5 +484,12 @@ fn distributed_tree_regressions() {
         global_leaves.sort_unstable();
         assert!(morton::is_complete_linear_and_balanced(&global_leaves));
         check_interaction_lists(name, tree.octree().all_keys(), &lists, &global_leaves);
+
+        let chunk_sizes = if name == "identical populations" {
+            LevelChunkSizes::Uniform(3)
+        } else {
+            LevelChunkSizes::PerLevel((1..=DEEPEST_LEVEL as usize + 1).collect())
+        };
+        check_ghost_exchange(name, tree.octree(), &lists, chunk_sizes);
     }
 }
