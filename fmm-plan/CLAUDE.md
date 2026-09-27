@@ -209,8 +209,11 @@ count, and differs between sources and targets. Empty ranges are normal;
 source and target occupancy are unrelated. Global counts are conserved.
 
 `forward_permute` maps original layout → tree order, `backward_permute` inverts
-it; the trailing argument is the chunk size, the number of contiguous values per
-record. Duplicate Morton keys must keep distinct records — the tests rely on
+it. Since rlst 0.8 the chunk size (contiguous values per record) is fixed when
+the `DataPermutation` is built; the tree's own permutations use chunk size 1. For
+multi-value records build a permutation from `source_indices()` /
+`target_indices()` (the original global indices in tree order) and the caller's
+index layout — a collective call. Duplicate Morton keys must keep distinct records — the tests rely on
 distinct global IDs to catch lost or duplicated entries where keys coincide.
 Grouping is stable within a leaf, but fine keys are **not** globally sorted after
 communication from several ranks; do not assume they are.

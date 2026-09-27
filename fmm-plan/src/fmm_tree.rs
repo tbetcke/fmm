@@ -23,6 +23,10 @@ where
     source_permutation: DataPermutation<'a, C>,
     /// The permutation of targets to the octree layout
     target_permutation: DataPermutation<'a, C>,
+    /// The original global source indices in tree order
+    source_indices: Vec<usize>,
+    /// The original global target indices in tree order
+    target_indices: Vec<usize>,
     /// The indptr mapping source index positions to the corresponding leaf keys
     source_indptr: Vec<usize>,
     /// The indptr mapping target index positions to the corresponding leaf keys
@@ -112,13 +116,15 @@ where
         );
 
         let source_permutation =
-            DataPermutation::new(source_layout.clone(), &sorted_source_indices);
+            DataPermutation::new(source_layout.clone(), &sorted_source_indices, 1);
         let target_permutation =
-            DataPermutation::new(target_layout.clone(), &sorted_target_indices);
+            DataPermutation::new(target_layout.clone(), &sorted_target_indices, 1);
 
         Self {
             source_permutation,
             target_permutation,
+            source_indices: sorted_source_indices,
+            target_indices: sorted_target_indices,
             source_indptr,
             target_indptr,
             octree,
@@ -126,13 +132,35 @@ where
     }
 
     /// Return the source permutation
+    ///
+    /// The permutation has a chunk size of one, i.e. one value per source. For records
+    /// with several values build a permutation from [`Self::source_indices`].
     pub fn source_permutation(&self) -> &DataPermutation<'a, C> {
         &self.source_permutation
     }
 
     /// Return the target permutation
+    ///
+    /// The permutation has a chunk size of one, i.e. one value per target. For records
+    /// with several values build a permutation from [`Self::target_indices`].
     pub fn target_permutation(&self) -> &DataPermutation<'a, C> {
         &self.target_permutation
+    }
+
+    /// Return the original global source indices in tree order
+    ///
+    /// Together with the source index layout this gives a permutation of any chunk size
+    /// via `DataPermutation::new(layout, tree.source_indices(), chunk_size)`.
+    pub fn source_indices(&self) -> &[usize] {
+        &self.source_indices
+    }
+
+    /// Return the original global target indices in tree order
+    ///
+    /// Together with the target index layout this gives a permutation of any chunk size
+    /// via `DataPermutation::new(layout, tree.target_indices(), chunk_size)`.
+    pub fn target_indices(&self) -> &[usize] {
+        &self.target_indices
     }
 
     /// Return the source map

@@ -32,8 +32,9 @@ fn keys(points: &[[f64; 3]]) -> Vec<u64> {
 
 fn check_population<C: Communicator + CommunicatorCollectives>(
     original: &[u64],
-    layout: &IndexLayout<C>,
+    layout: &Rc<IndexLayout<C>>,
     permutation: &DataPermutation<C>,
+    indices: &[usize],
     indptr: &[usize],
     leaves: &[u64],
     comm: &C,
@@ -49,7 +50,7 @@ fn check_population<C: Communicator + CommunicatorCollectives>(
     assert_eq!(actual_count, expected_count);
 
     let mut permuted_keys = vec![0u64; local_count];
-    permutation.forward_permute(original, &mut permuted_keys, 1);
+    permutation.forward_permute(original, &mut permuted_keys);
     let mut assigned_leaves = Vec::with_capacity(local_count);
     for (i, &leaf) in leaves.iter().enumerate() {
         let range = indptr[i]..indptr[i + 1];
@@ -69,10 +70,10 @@ fn check_population<C: Communicator + CommunicatorCollectives>(
         assigned_leaves.extend(std::iter::repeat_n(leaf, range.len()));
     }
     let mut restored_keys = vec![0u64; original.len()];
-    permutation.backward_permute(&permuted_keys, &mut restored_keys, 1);
+    permutation.backward_permute(&permuted_keys, &mut restored_keys);
     assert_eq!(restored_keys, original);
     let mut original_leaves = vec![0u64; original.len()];
-    permutation.backward_permute(&assigned_leaves, &mut original_leaves, 1);
+    permutation.backward_permute(&assigned_leaves, &mut original_leaves);
     assert!(
         original_leaves
             .iter()
@@ -82,6 +83,8 @@ fn check_population<C: Communicator + CommunicatorCollectives>(
 
     // Distinct global IDs detect lost/duplicated records even when keys coincide.
     // Two components also exercise the chunk-size convention used for FMM data.
+    assert_eq!(indices.len(), local_count);
+    let permutation = DataPermutation::new(layout.clone(), indices, 2);
     let payload: Vec<u64> = (0..original.len())
         .flat_map(|i| {
             let id = layout.local2global(i).unwrap() as u64;
@@ -89,7 +92,7 @@ fn check_population<C: Communicator + CommunicatorCollectives>(
         })
         .collect();
     let mut permuted = vec![0u64; 2 * local_count];
-    permutation.forward_permute(&payload, &mut permuted, 2);
+    permutation.forward_permute(&payload, &mut permuted);
     assert!(
         permuted
             .as_chunks::<2>()
@@ -98,7 +101,7 @@ fn check_population<C: Communicator + CommunicatorCollectives>(
             .all(|chunk| chunk[1] == 3 * chunk[0] + 1)
     );
     let mut restored = vec![0u64; payload.len()];
-    permutation.backward_permute(&permuted, &mut restored, 2);
+    permutation.backward_permute(&permuted, &mut restored);
     assert_eq!(restored, payload);
 }
 
@@ -354,6 +357,7 @@ fn distributed_tree_regressions() {
             &source_keys,
             &source_layout,
             tree.source_permutation(),
+            tree.source_indices(),
             tree.source_indptr(),
             leaves,
             &comm,
@@ -362,6 +366,7 @@ fn distributed_tree_regressions() {
             &target_keys,
             &target_layout,
             tree.target_permutation(),
+            tree.target_indices(),
             tree.target_indptr(),
             leaves,
             &comm,

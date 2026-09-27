@@ -114,7 +114,7 @@ fn main() {
 
     fmm_tree
         .source_permutation()
-        .backward_permute(&source_leafs_permuted, &mut source_leafs, 1);
+        .backward_permute(&source_leafs_permuted, &mut source_leafs);
 
     // Check that the back permuted array has the same length as the input fine keys
 
@@ -154,7 +154,7 @@ fn main() {
 
     fmm_tree
         .target_permutation()
-        .backward_permute(&target_leafs_permuted, &mut target_leafs, 1);
+        .backward_permute(&target_leafs_permuted, &mut target_leafs);
 
     // Check that the back permuted array has the same length as the input fine keys
 
