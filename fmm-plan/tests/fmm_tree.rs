@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use fmm_plan::{
+    fmm::index_fmm::run_index_fmm,
     fmm_tree::FmmTree,
     ghost_communicator::{FmmGhostCommunicator, LevelChunkSizes},
     interaction_manager::InteractionManager,
@@ -491,5 +492,10 @@ fn distributed_tree_regressions() {
             LevelChunkSizes::PerLevel((1..=DEEPEST_LEVEL as usize + 1).collect())
         };
         check_ghost_exchange(name, tree.octree(), &lists, chunk_sizes);
+
+        // Every leaf must receive every leaf index exactly once.
+        if let Err(message) = run_index_fmm(tree.octree(), &lists) {
+            panic!("rank {rank}: {name}: index FMM: {message}");
+        }
     }
 }

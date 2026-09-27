@@ -22,6 +22,13 @@ coordinates, kernel evaluations, or translation operators (M2M / M2L / L2L /
 near-field arithmetic) — analytical and kernel-independent FMMs are meant to
 share this layer. Keep kernel-specific arithmetic out.
 
+The one exception is `IndexFmm` in `src/fmm/index_fmm.rs`. It is a test FMM,
+not a real kernel: its operators propagate leaf indices so the distributed FMM
+topology workflow (upward and downward passes, the global levels, ghost
+exchanges, U/V/W/X lists) can be checked exactly. It is included only to test
+those workflows. Real FMM operators belong outside this crate and plug in
+through the `FmmOperator` trait.
+
 - Single Cargo package, not a workspace. Library only, no binaries.
 - MPI is a **required** dependency, including for one-rank runs.
 - Version `0.1.0-dev`; the public API is unstable and partly unimplemented.
@@ -40,7 +47,9 @@ share this layer. Keep kernel-specific arithmetic out.
 | `src/interaction_manager_tests.rs` | 9 serial unit tests on synthetic key maps (hand counts, brute-force oracle, adjacency, V-list directions), included via `#[path]`. No MPI. |
 | `src/ghost_communicator.rs` | `FmmGhostCommunicator<T>` — one rlst `GhostCommunicator<MortonKey>` per level with owned host send/receive buffers, built from the Morton keys of required ghosts (local and `Global` keys skipped) and a `LevelChunkSizes` (uniform or per level). |
 | `src/ghost_communicator_tests.rs` | 5 serial unit tests of the ghost bucketing and chunk-size lookup, included via `#[path]`. No MPI. |
-| `tests/fmm_tree.rs` | One `#[test]` that owns MPI init and runs 11 named scenarios sequentially, each checking the tree, the interaction lists against an oracle, and a forward/backward ghost exchange of every interaction-list ghost. |
+| `src/fmm.rs`, `src/fmm/` | Distributed FMM evaluation: the `FmmOperator` trait (`operator.rs`), the generic driver `FmmEvaluator` and per-level store `LevelData` (`evaluator.rs`), and the index-propagating test FMM `IndexFmm` / `run_index_fmm` (`index_fmm.rs`). Serial tests in `evaluator_tests.rs` and `index_fmm_tests.rs`. |
+| `tests/fmm_tree.rs` | One `#[test]` that owns MPI init and runs 11 named scenarios sequentially, each checking the tree, the interaction lists against an oracle, and a forward/backward ghost exchange of every interaction-list ghost, and the index FMM (every leaf must receive every leaf index exactly once). |
+| `examples/test_index_fmm.rs` | Seeded-random MPI run of the index FMM. |
 | `examples/test_fmm_tree.rs` | Seeded-random MPI smoke run; asserts global counts, backwards-mapped leaf membership, and interaction-list invariants. |
 | `.forgejo/workflows/run-tests.yml` | The authoritative CI commands (PRs to `main` only). |
 | `.forgejo/workflows/run-examples.yml`, `run-dependency-checks.yml` | Weekly scheduled jobs. |
@@ -136,7 +145,7 @@ cargo run --example test_fmm_tree
 
 `RUST_MIN_STACK=8388608` matters — keep it on test invocations.
 
-Plain `cargo test` gives 21 unit tests plus the integration test **on one rank
+Plain `cargo test` gives 29 unit tests plus the integration test **on one rank
 only**. It exercises no redistribution and no ghost layer, which is where the
 interesting bugs are.
 
