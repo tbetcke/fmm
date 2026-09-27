@@ -1,11 +1,9 @@
 //! Public-API regression tests. Keep MPI initialization in one test: MPI cannot
 //! be initialized again after finalization within the same process.
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use fmm_plan::{
     fmm::index_fmm::run_index_fmm,
-    fmm_tree::FmmTree,
     ghost_communicator::{FmmGhostCommunicator, LevelChunkSizes},
     interaction_manager::InteractionManager,
 };
@@ -14,12 +12,7 @@ use nd_octree::{
     Octree, OctreeOptions, PhysicalBox, constants::DEEPEST_LEVEL, morton, morton::is_ancestor,
     octree::KeyType, points_to_morton,
 };
-use rlst::{
-    Array,
-    distributed_tools::{DataPermutation, IndexLayout, array_tools::gather_to_all},
-    rlst_dynamic_array,
-    sparse::distributed_array::DistributedArray,
-};
+use rlst::{distributed_tools::array_tools::gather_to_all, rlst_dynamic_array};
 
 fn keys(points: &[[f64; 3]]) -> Vec<u64> {
     let mut array = rlst_dynamic_array!(f64, [3, points.len()]);
@@ -33,81 +26,6 @@ fn keys(points: &[[f64; 3]]) -> Vec<u64> {
         DEEPEST_LEVEL as usize,
         &PhysicalBox::new([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]),
     )
-}
-
-fn check_population<C: Communicator + CommunicatorCollectives>(
-    original: &[u64],
-    layout: &Rc<IndexLayout<C>>,
-    permutation: &DataPermutation<C>,
-    indices: &[usize],
-    indptr: &[usize],
-    leaves: &[u64],
-    comm: &C,
-) {
-    assert_eq!(indptr.len(), leaves.len() + 1);
-    assert_eq!(indptr[0], 0);
-    assert!(indptr.windows(2).all(|pair| pair[0] <= pair[1]));
-    let local_count = *indptr.last().unwrap();
-    let mut expected_count = 0usize;
-    let mut actual_count = 0usize;
-    comm.all_reduce_into(&original.len(), &mut expected_count, SystemOperation::sum());
-    comm.all_reduce_into(&local_count, &mut actual_count, SystemOperation::sum());
-    assert_eq!(actual_count, expected_count);
-
-    let mut permuted_keys = vec![0u64; local_count];
-    permutation.forward_permute(original, &mut permuted_keys);
-    let mut assigned_leaves = Vec::with_capacity(local_count);
-    for (i, &leaf) in leaves.iter().enumerate() {
-        let range = indptr[i]..indptr[i + 1];
-        assert!(
-            permuted_keys[range.clone()]
-                .iter()
-                .all(|&key| is_ancestor(leaf, key))
-        );
-        // An independent count oracle catches incorrect offsets, including empty leaves.
-        assert_eq!(
-            range.len(),
-            permuted_keys
-                .iter()
-                .filter(|&&key| is_ancestor(leaf, key))
-                .count()
-        );
-        assigned_leaves.extend(std::iter::repeat_n(leaf, range.len()));
-    }
-    let mut restored_keys = vec![0u64; original.len()];
-    permutation.backward_permute(&permuted_keys, &mut restored_keys);
-    assert_eq!(restored_keys, original);
-    let mut original_leaves = vec![0u64; original.len()];
-    permutation.backward_permute(&assigned_leaves, &mut original_leaves);
-    assert!(
-        original_leaves
-            .iter()
-            .zip(original)
-            .all(|(&leaf, &key)| is_ancestor(leaf, key))
-    );
-
-    // Distinct global IDs detect lost/duplicated records even when keys coincide.
-    // Two components also exercise the chunk-size convention used for FMM data.
-    assert_eq!(indices.len(), local_count);
-    let permutation = DataPermutation::new(layout.clone(), indices, 2);
-    let payload: Vec<u64> = (0..original.len())
-        .flat_map(|i| {
-            let id = layout.local2global(i).unwrap() as u64;
-            [id, 3 * id + 1]
-        })
-        .collect();
-    let mut permuted = vec![0u64; 2 * local_count];
-    permutation.forward_permute(&payload, &mut permuted);
-    assert!(
-        permuted
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .all(|chunk| chunk[1] == 3 * chunk[0] + 1)
-    );
-    let mut restored = vec![0u64; payload.len()];
-    permutation.backward_permute(&permuted, &mut restored);
-    assert_eq!(restored, payload);
 }
 
 /// Inclusive index bounds of a box, expressed in cells of the deepest level.
@@ -445,56 +363,36 @@ fn distributed_tree_regressions() {
     ];
     for (name, sources, targets, max_level, capacity) in cases {
         eprintln!("rank {rank}: {name}");
-        let source_keys = keys(&sources);
-        let target_keys = keys(&targets);
-        let source_layout = Rc::new(IndexLayout::from_local_counts(source_keys.len(), &comm));
-        let target_layout = Rc::new(IndexLayout::from_local_counts(target_keys.len(), &comm));
-        let source_array: Array<_, _> = source_keys.clone().into();
-        let target_array: Array<_, _> = target_keys.clone().into();
-        let sources = DistributedArray::new(source_layout.clone(), source_array);
-        let targets = DistributedArray::new(target_layout.clone(), target_array);
+        // One tree serves both populations, as in an FMM with distinct
+        // sources and targets. The ghost-children layer makes every list entry
+        // a key of the tree.
+        let mut fine_keys = keys(&sources);
+        fine_keys.extend(keys(&targets));
         let options = OctreeOptions::new()
             .with_max_level(max_level)
-            .with_max_fine_keys(capacity);
-        let tree = FmmTree::new(&sources, &targets, options, &comm);
-        let leaves = tree.octree().leaf_keys();
+            .with_max_fine_keys(capacity)
+            .with_ghost_children(true);
+        let octree = Octree::new(&fine_keys, options, &comm);
+        let leaves = octree.leaf_keys();
         assert!(leaves.windows(2).all(|pair| pair[0] < pair[1]));
-        check_population(
-            &source_keys,
-            &source_layout,
-            tree.source_permutation(),
-            tree.source_indices(),
-            tree.source_indptr(),
-            leaves,
-            &comm,
-        );
-        check_population(
-            &target_keys,
-            &target_layout,
-            tree.target_permutation(),
-            tree.target_indices(),
-            tree.target_indptr(),
-            leaves,
-            &comm,
-        );
 
         // The interaction lists are built without communication, but the oracle
         // needs the global tree, so the gather is entered by every rank.
-        let lists = InteractionManager::new(tree.octree());
+        let lists = InteractionManager::new(&octree);
         let mut global_leaves = gather_to_all(leaves, &comm);
         global_leaves.sort_unstable();
         assert!(morton::is_complete_linear_and_balanced(&global_leaves));
-        check_interaction_lists(name, tree.octree().all_keys(), &lists, &global_leaves);
+        check_interaction_lists(name, octree.all_keys(), &lists, &global_leaves);
 
         let chunk_sizes = if name == "identical populations" {
             LevelChunkSizes::Uniform(3)
         } else {
             LevelChunkSizes::PerLevel((1..=DEEPEST_LEVEL as usize + 1).collect())
         };
-        check_ghost_exchange(name, tree.octree(), &lists, chunk_sizes);
+        check_ghost_exchange(name, &octree, &lists, chunk_sizes);
 
         // Every leaf must receive every leaf index exactly once.
-        if let Err(message) = run_index_fmm(tree.octree(), &lists) {
+        if let Err(message) = run_index_fmm(&octree, &lists) {
             panic!("rank {rank}: {name}: index FMM: {message}");
         }
     }

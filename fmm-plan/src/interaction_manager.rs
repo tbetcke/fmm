@@ -44,8 +44,10 @@
 //!
 //! # What the lists are, and are not
 //!
-//! When the tree carries the ghost-children layer — as it does when it is built
-//! through [`FmmTree`](crate::fmm_tree::FmmTree) — every listed key is a key of
+//! When the tree carries the ghost-children layer, that is when it is built
+//! with
+//! [`OctreeOptions::with_ghost_children`](nd_octree::OctreeOptions::with_ghost_children),
+//! every listed key is a key of
 //! [`Octree::all_keys`](nd_octree::Octree::all_keys), carrying its own
 //! [`KeyType`]. That layer is what makes the entries of the V- and W-lists,
 //! which are children of neighbouring boxes, resolvable locally.
