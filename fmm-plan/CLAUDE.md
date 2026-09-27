@@ -37,7 +37,7 @@ share this layer. Keep kernel-specific arithmetic out.
 | `src/fmm_tree.rs` | `FmmTree<'a, C>` plus the private helpers `get_ancestor_key` and `sort_by_leafs`. |
 | `src/fmm_tree_tests.rs` | 7 serial unit tests of the private helpers, included via `#[path]` from `fmm_tree.rs`. No MPI. |
 | `src/interaction_manager.rs` | `InteractionManager` — U/V/W/X lists for every non-ghost key of an `Octree`, computed locally. See the section below. |
-| `src/interaction_manager_tests.rs` | 6 serial unit tests on synthetic key maps (hand counts, brute-force oracle, adjacency), included via `#[path]`. No MPI. |
+| `src/interaction_manager_tests.rs` | 9 serial unit tests on synthetic key maps (hand counts, brute-force oracle, adjacency, V-list directions), included via `#[path]`. No MPI. |
 | `tests/fmm_tree.rs` | One `#[test]` that owns MPI init and runs 10 named scenarios sequentially, each checking the tree and the interaction lists against an oracle. |
 | `examples/test_fmm_tree.rs` | Seeded-random MPI smoke run; asserts global counts, backwards-mapped leaf membership, and interaction-list invariants. |
 | `.forgejo/workflows/run-tests.yml` | The authoritative CI commands (PRs to `main` only). |
@@ -134,7 +134,7 @@ cargo run --example test_fmm_tree
 
 `RUST_MIN_STACK=8388608` matters — keep it on test invocations.
 
-Plain `cargo test` gives 13 unit tests plus the integration test **on one rank
+Plain `cargo test` gives 16 unit tests plus the integration test **on one rank
 only**. It exercises no redistribution and no ghost layer, which is where the
 interesting bugs are.
 

@@ -1,6 +1,6 @@
 //! Pure local tests; the interaction lists are built without MPI from synthetic
 //! key classification maps.
-use super::{InteractionManager, is_adjacent};
+use super::{InteractionManager, V_LIST_DIRECTIONS, is_adjacent};
 use nd_octree::{MortonKey, constants::DEEPEST_LEVEL, morton, octree::KeyType};
 use std::collections::HashMap;
 
@@ -435,4 +435,73 @@ fn ghost_classification_is_respected() {
         }
     }
     assert_eq!(lists.u_list().len(), mixed.len() - ghost_count);
+}
+
+#[test]
+fn v_list_directions_are_complete() {
+    let mut expected = Vec::new();
+    for x in -3i64..=3 {
+        for y in -3i64..=3 {
+            for z in -3i64..=3 {
+                if x.abs().max(y.abs()).max(z.abs()) >= 2 {
+                    expected.push([x, y, z]);
+                }
+            }
+        }
+    }
+    // The expected list is generated in lexicographic order, so equality also
+    // checks that the constant is sorted and free of duplicates.
+    assert_eq!(V_LIST_DIRECTIONS.to_vec(), expected);
+}
+
+#[test]
+fn v_list_by_direction_matches_v_list() {
+    for leaves in all_trees() {
+        let lists = InteractionManager::from_key_types(&key_types(&leaves));
+        let depth = leaves
+            .iter()
+            .map(|&leaf| morton::level(leaf))
+            .max()
+            .unwrap();
+        for level in 0..=depth + 1 {
+            let by_direction = lists.v_list_by_direction(level);
+            assert_eq!(by_direction.len(), V_LIST_DIRECTIONS.len());
+
+            let mut pair_count = 0;
+            for direction in V_LIST_DIRECTIONS {
+                let pairs = &by_direction[&direction];
+                assert!(pairs.is_sorted());
+                for &(target, source) in pairs {
+                    assert_eq!(morton::level(target), level);
+                    assert!(lists.v_list()[&target].contains(&source));
+                    let (_, target_index) = morton::decode(target);
+                    let (_, source_index) = morton::decode(source);
+                    let offset =
+                        [0, 1, 2].map(|dim| target_index[dim] as i64 - source_index[dim] as i64);
+                    assert_eq!(offset, direction);
+                }
+                pair_count += pairs.len();
+            }
+
+            let expected_count: usize = lists
+                .v_list()
+                .iter()
+                .filter(|&(&target, _)| morton::level(target) == level)
+                .map(|(_, sources)| sources.len())
+                .sum();
+            assert_eq!(pair_count, expected_count);
+        }
+    }
+}
+
+#[test]
+fn every_v_list_direction_occurs() {
+    let lists = InteractionManager::from_key_types(&key_types(&uniform_leaves(3)));
+    let by_direction = lists.v_list_by_direction(3);
+    for direction in V_LIST_DIRECTIONS {
+        assert!(
+            !by_direction[&direction].is_empty(),
+            "direction {direction:?} has no interaction"
+        );
+    }
 }

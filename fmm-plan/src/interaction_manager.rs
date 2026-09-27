@@ -25,6 +25,11 @@
 //! These lists are stored as hash maps from a Morton key to the sorted vector of
 //! the keys of the corresponding list.
 //!
+//! For translation-invariant kernels the V-list interactions of a level can be
+//! grouped by their offset `target - source`. [`V_LIST_DIRECTIONS`] lists all
+//! 316 possible offsets and [`InteractionManager::v_list_by_direction`] returns
+//! the `(target, source)` pairs of a level grouped by offset.
+//!
 //! # Guarantees
 //!
 //! - Construction is purely **local**. No MPI collective is used, so a rank may
@@ -89,6 +94,340 @@ use std::collections::HashMap;
 
 use mpi::traits::CommunicatorCollectives;
 use nd_octree::{MortonKey, Octree, morton, octree::KeyType};
+
+/// Offsets `target - source` of every possible V-list interaction in three
+/// dimensions, in lexicographic `(x, y, z)` order.
+///
+/// A V-list source and its target lie on the same level, so the offset is
+/// measured in index units of that level. The parents of source and target are
+/// adjacent, which bounds every component by 3, and source and target are not
+/// adjacent, which forces at least one component of magnitude 2 or 3. All
+/// `7^3 - 3^3 = 316` such vectors occur.
+pub const V_LIST_DIRECTIONS: [[i64; 3]; 316] = [
+    // x = -3
+    [-3, -3, -3],
+    [-3, -3, -2],
+    [-3, -3, -1],
+    [-3, -3, 0],
+    [-3, -3, 1],
+    [-3, -3, 2],
+    [-3, -3, 3],
+    [-3, -2, -3],
+    [-3, -2, -2],
+    [-3, -2, -1],
+    [-3, -2, 0],
+    [-3, -2, 1],
+    [-3, -2, 2],
+    [-3, -2, 3],
+    [-3, -1, -3],
+    [-3, -1, -2],
+    [-3, -1, -1],
+    [-3, -1, 0],
+    [-3, -1, 1],
+    [-3, -1, 2],
+    [-3, -1, 3],
+    [-3, 0, -3],
+    [-3, 0, -2],
+    [-3, 0, -1],
+    [-3, 0, 0],
+    [-3, 0, 1],
+    [-3, 0, 2],
+    [-3, 0, 3],
+    [-3, 1, -3],
+    [-3, 1, -2],
+    [-3, 1, -1],
+    [-3, 1, 0],
+    [-3, 1, 1],
+    [-3, 1, 2],
+    [-3, 1, 3],
+    [-3, 2, -3],
+    [-3, 2, -2],
+    [-3, 2, -1],
+    [-3, 2, 0],
+    [-3, 2, 1],
+    [-3, 2, 2],
+    [-3, 2, 3],
+    [-3, 3, -3],
+    [-3, 3, -2],
+    [-3, 3, -1],
+    [-3, 3, 0],
+    [-3, 3, 1],
+    [-3, 3, 2],
+    [-3, 3, 3],
+    // x = -2
+    [-2, -3, -3],
+    [-2, -3, -2],
+    [-2, -3, -1],
+    [-2, -3, 0],
+    [-2, -3, 1],
+    [-2, -3, 2],
+    [-2, -3, 3],
+    [-2, -2, -3],
+    [-2, -2, -2],
+    [-2, -2, -1],
+    [-2, -2, 0],
+    [-2, -2, 1],
+    [-2, -2, 2],
+    [-2, -2, 3],
+    [-2, -1, -3],
+    [-2, -1, -2],
+    [-2, -1, -1],
+    [-2, -1, 0],
+    [-2, -1, 1],
+    [-2, -1, 2],
+    [-2, -1, 3],
+    [-2, 0, -3],
+    [-2, 0, -2],
+    [-2, 0, -1],
+    [-2, 0, 0],
+    [-2, 0, 1],
+    [-2, 0, 2],
+    [-2, 0, 3],
+    [-2, 1, -3],
+    [-2, 1, -2],
+    [-2, 1, -1],
+    [-2, 1, 0],
+    [-2, 1, 1],
+    [-2, 1, 2],
+    [-2, 1, 3],
+    [-2, 2, -3],
+    [-2, 2, -2],
+    [-2, 2, -1],
+    [-2, 2, 0],
+    [-2, 2, 1],
+    [-2, 2, 2],
+    [-2, 2, 3],
+    [-2, 3, -3],
+    [-2, 3, -2],
+    [-2, 3, -1],
+    [-2, 3, 0],
+    [-2, 3, 1],
+    [-2, 3, 2],
+    [-2, 3, 3],
+    // x = -1
+    [-1, -3, -3],
+    [-1, -3, -2],
+    [-1, -3, -1],
+    [-1, -3, 0],
+    [-1, -3, 1],
+    [-1, -3, 2],
+    [-1, -3, 3],
+    [-1, -2, -3],
+    [-1, -2, -2],
+    [-1, -2, -1],
+    [-1, -2, 0],
+    [-1, -2, 1],
+    [-1, -2, 2],
+    [-1, -2, 3],
+    [-1, -1, -3],
+    [-1, -1, -2],
+    [-1, -1, 2],
+    [-1, -1, 3],
+    [-1, 0, -3],
+    [-1, 0, -2],
+    [-1, 0, 2],
+    [-1, 0, 3],
+    [-1, 1, -3],
+    [-1, 1, -2],
+    [-1, 1, 2],
+    [-1, 1, 3],
+    [-1, 2, -3],
+    [-1, 2, -2],
+    [-1, 2, -1],
+    [-1, 2, 0],
+    [-1, 2, 1],
+    [-1, 2, 2],
+    [-1, 2, 3],
+    [-1, 3, -3],
+    [-1, 3, -2],
+    [-1, 3, -1],
+    [-1, 3, 0],
+    [-1, 3, 1],
+    [-1, 3, 2],
+    [-1, 3, 3],
+    // x = 0
+    [0, -3, -3],
+    [0, -3, -2],
+    [0, -3, -1],
+    [0, -3, 0],
+    [0, -3, 1],
+    [0, -3, 2],
+    [0, -3, 3],
+    [0, -2, -3],
+    [0, -2, -2],
+    [0, -2, -1],
+    [0, -2, 0],
+    [0, -2, 1],
+    [0, -2, 2],
+    [0, -2, 3],
+    [0, -1, -3],
+    [0, -1, -2],
+    [0, -1, 2],
+    [0, -1, 3],
+    [0, 0, -3],
+    [0, 0, -2],
+    [0, 0, 2],
+    [0, 0, 3],
+    [0, 1, -3],
+    [0, 1, -2],
+    [0, 1, 2],
+    [0, 1, 3],
+    [0, 2, -3],
+    [0, 2, -2],
+    [0, 2, -1],
+    [0, 2, 0],
+    [0, 2, 1],
+    [0, 2, 2],
+    [0, 2, 3],
+    [0, 3, -3],
+    [0, 3, -2],
+    [0, 3, -1],
+    [0, 3, 0],
+    [0, 3, 1],
+    [0, 3, 2],
+    [0, 3, 3],
+    // x = 1
+    [1, -3, -3],
+    [1, -3, -2],
+    [1, -3, -1],
+    [1, -3, 0],
+    [1, -3, 1],
+    [1, -3, 2],
+    [1, -3, 3],
+    [1, -2, -3],
+    [1, -2, -2],
+    [1, -2, -1],
+    [1, -2, 0],
+    [1, -2, 1],
+    [1, -2, 2],
+    [1, -2, 3],
+    [1, -1, -3],
+    [1, -1, -2],
+    [1, -1, 2],
+    [1, -1, 3],
+    [1, 0, -3],
+    [1, 0, -2],
+    [1, 0, 2],
+    [1, 0, 3],
+    [1, 1, -3],
+    [1, 1, -2],
+    [1, 1, 2],
+    [1, 1, 3],
+    [1, 2, -3],
+    [1, 2, -2],
+    [1, 2, -1],
+    [1, 2, 0],
+    [1, 2, 1],
+    [1, 2, 2],
+    [1, 2, 3],
+    [1, 3, -3],
+    [1, 3, -2],
+    [1, 3, -1],
+    [1, 3, 0],
+    [1, 3, 1],
+    [1, 3, 2],
+    [1, 3, 3],
+    // x = 2
+    [2, -3, -3],
+    [2, -3, -2],
+    [2, -3, -1],
+    [2, -3, 0],
+    [2, -3, 1],
+    [2, -3, 2],
+    [2, -3, 3],
+    [2, -2, -3],
+    [2, -2, -2],
+    [2, -2, -1],
+    [2, -2, 0],
+    [2, -2, 1],
+    [2, -2, 2],
+    [2, -2, 3],
+    [2, -1, -3],
+    [2, -1, -2],
+    [2, -1, -1],
+    [2, -1, 0],
+    [2, -1, 1],
+    [2, -1, 2],
+    [2, -1, 3],
+    [2, 0, -3],
+    [2, 0, -2],
+    [2, 0, -1],
+    [2, 0, 0],
+    [2, 0, 1],
+    [2, 0, 2],
+    [2, 0, 3],
+    [2, 1, -3],
+    [2, 1, -2],
+    [2, 1, -1],
+    [2, 1, 0],
+    [2, 1, 1],
+    [2, 1, 2],
+    [2, 1, 3],
+    [2, 2, -3],
+    [2, 2, -2],
+    [2, 2, -1],
+    [2, 2, 0],
+    [2, 2, 1],
+    [2, 2, 2],
+    [2, 2, 3],
+    [2, 3, -3],
+    [2, 3, -2],
+    [2, 3, -1],
+    [2, 3, 0],
+    [2, 3, 1],
+    [2, 3, 2],
+    [2, 3, 3],
+    // x = 3
+    [3, -3, -3],
+    [3, -3, -2],
+    [3, -3, -1],
+    [3, -3, 0],
+    [3, -3, 1],
+    [3, -3, 2],
+    [3, -3, 3],
+    [3, -2, -3],
+    [3, -2, -2],
+    [3, -2, -1],
+    [3, -2, 0],
+    [3, -2, 1],
+    [3, -2, 2],
+    [3, -2, 3],
+    [3, -1, -3],
+    [3, -1, -2],
+    [3, -1, -1],
+    [3, -1, 0],
+    [3, -1, 1],
+    [3, -1, 2],
+    [3, -1, 3],
+    [3, 0, -3],
+    [3, 0, -2],
+    [3, 0, -1],
+    [3, 0, 0],
+    [3, 0, 1],
+    [3, 0, 2],
+    [3, 0, 3],
+    [3, 1, -3],
+    [3, 1, -2],
+    [3, 1, -1],
+    [3, 1, 0],
+    [3, 1, 1],
+    [3, 1, 2],
+    [3, 1, 3],
+    [3, 2, -3],
+    [3, 2, -2],
+    [3, 2, -1],
+    [3, 2, 0],
+    [3, 2, 1],
+    [3, 2, 2],
+    [3, 2, 3],
+    [3, 3, -3],
+    [3, 3, -2],
+    [3, 3, -1],
+    [3, 3, 0],
+    [3, 3, 1],
+    [3, 3, 2],
+    [3, 3, 3],
+];
 
 /// Manages interaction lists for boxes in an octree structure.
 ///
@@ -173,6 +512,45 @@ impl InteractionManager {
     /// Return the X-lists, keyed by the non-ghost keys of the tree.
     pub fn x_list(&self) -> &HashMap<MortonKey, Vec<MortonKey>> {
         &self.x_list
+    }
+
+    /// Group the V-list interactions of the targets on `level` by direction.
+    ///
+    /// Returns a map from each direction `d` of [`V_LIST_DIRECTIONS`] to the
+    /// pairs `(target, source)` with `target` a non-ghost key on `level`,
+    /// `source` in the V-list of `target`, and `index(target) - index(source)`
+    /// equal to `d`. Every direction is present, possibly with an empty vector,
+    /// and every vector is sorted by target and then by source.
+    pub fn v_list_by_direction(
+        &self,
+        level: usize,
+    ) -> HashMap<[i64; 3], Vec<(MortonKey, MortonKey)>> {
+        let mut by_direction: HashMap<[i64; 3], Vec<(MortonKey, MortonKey)>> = V_LIST_DIRECTIONS
+            .iter()
+            .map(|&direction| (direction, Vec::new()))
+            .collect();
+
+        for (&target, sources) in self.v_list.iter() {
+            if morton::level(target) != level {
+                continue;
+            }
+            let (_, target_index) = morton::decode(target);
+            for &source in sources {
+                let (_, source_index) = morton::decode(source);
+                let direction =
+                    [0, 1, 2].map(|dim| target_index[dim] as i64 - source_index[dim] as i64);
+                by_direction
+                    .get_mut(&direction)
+                    .expect("a V-list offset is one of V_LIST_DIRECTIONS")
+                    .push((target, source));
+            }
+        }
+
+        for pairs in by_direction.values_mut() {
+            pairs.sort_unstable();
+        }
+
+        by_direction
     }
 
     /// Build all four lists from a key classification map.
