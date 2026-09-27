@@ -1,0 +1,3 @@
+[workspace]
+members = ["fmm-plan", "octree"]
+resolver = "2"

@@ -1,0 +1,378 @@
+//! Public-API regression tests. Keep MPI initialization in one test: MPI cannot
+//! be initialized again after finalization within the same process.
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use fmm_plan::{fmm_tree::FmmTree, interaction_manager::InteractionManager};
+use mpi::{collective::SystemOperation, traits::*};
+use nd_octree::{
+    OctreeOptions, PhysicalBox, constants::DEEPEST_LEVEL, morton, morton::is_ancestor,
+    octree::KeyType, points_to_morton,
+};
+use rlst::{
+    Array,
+    distributed_tools::{DataPermutation, IndexLayout, array_tools::gather_to_all},
+    rlst_dynamic_array,
+    sparse::distributed_array::DistributedArray,
+};
+
+fn keys(points: &[[f64; 3]]) -> Vec<u64> {
+    let mut array = rlst_dynamic_array!(f64, [3, points.len()]);
+    for (j, point) in points.iter().enumerate() {
+        for i in 0..3 {
+            array[[i, j]] = point[i];
+        }
+    }
+    points_to_morton(
+        &array,
+        DEEPEST_LEVEL as usize,
+        &PhysicalBox::new([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]),
+    )
+}
+
+fn check_population<C: Communicator + CommunicatorCollectives>(
+    original: &[u64],
+    layout: &IndexLayout<C>,
+    permutation: &DataPermutation<C>,
+    indptr: &[usize],
+    leaves: &[u64],
+    comm: &C,
+) {
+    assert_eq!(indptr.len(), leaves.len() + 1);
+    assert_eq!(indptr[0], 0);
+    assert!(indptr.windows(2).all(|pair| pair[0] <= pair[1]));
+    let local_count = *indptr.last().unwrap();
+    let mut expected_count = 0usize;
+    let mut actual_count = 0usize;
+    comm.all_reduce_into(&original.len(), &mut expected_count, SystemOperation::sum());
+    comm.all_reduce_into(&local_count, &mut actual_count, SystemOperation::sum());
+    assert_eq!(actual_count, expected_count);
+
+    let mut permuted_keys = vec![0u64; local_count];
+    permutation.forward_permute(original, &mut permuted_keys, 1);
+    let mut assigned_leaves = Vec::with_capacity(local_count);
+    for (i, &leaf) in leaves.iter().enumerate() {
+        let range = indptr[i]..indptr[i + 1];
+        assert!(
+            permuted_keys[range.clone()]
+                .iter()
+                .all(|&key| is_ancestor(leaf, key))
+        );
+        // An independent count oracle catches incorrect offsets, including empty leaves.
+        assert_eq!(
+            range.len(),
+            permuted_keys
+                .iter()
+                .filter(|&&key| is_ancestor(leaf, key))
+                .count()
+        );
+        assigned_leaves.extend(std::iter::repeat_n(leaf, range.len()));
+    }
+    let mut restored_keys = vec![0u64; original.len()];
+    permutation.backward_permute(&permuted_keys, &mut restored_keys, 1);
+    assert_eq!(restored_keys, original);
+    let mut original_leaves = vec![0u64; original.len()];
+    permutation.backward_permute(&assigned_leaves, &mut original_leaves, 1);
+    assert!(
+        original_leaves
+            .iter()
+            .zip(original)
+            .all(|(&leaf, &key)| is_ancestor(leaf, key))
+    );
+
+    // Distinct global IDs detect lost/duplicated records even when keys coincide.
+    // Two components also exercise the chunk-size convention used for FMM data.
+    let payload: Vec<u64> = (0..original.len())
+        .flat_map(|i| {
+            let id = layout.local2global(i).unwrap() as u64;
+            [id, 3 * id + 1]
+        })
+        .collect();
+    let mut permuted = vec![0u64; 2 * local_count];
+    permutation.forward_permute(&payload, &mut permuted, 2);
+    assert!(
+        permuted
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .all(|chunk| chunk[1] == 3 * chunk[0] + 1)
+    );
+    let mut restored = vec![0u64; payload.len()];
+    permutation.backward_permute(&permuted, &mut restored, 2);
+    assert_eq!(restored, payload);
+}
+
+/// Inclusive index bounds of a box, expressed in cells of the deepest level.
+fn deepest_bounds(key: u64) -> [[u64; 2]; 3] {
+    let (level, index) = morton::decode(key);
+    let size = 1u64 << (DEEPEST_LEVEL as usize - level);
+    [0usize, 1, 2].map(|dim| {
+        let low = index[dim] as u64 * size;
+        [low, low + size - 1]
+    })
+}
+
+/// Two boxes touch when their closed cubes intersect and neither contains the
+/// other. Written independently of the implementation under test.
+fn touching(a: u64, b: u64) -> bool {
+    if is_ancestor(a, b) || is_ancestor(b, a) {
+        return false;
+    }
+    let a_bounds = deepest_bounds(a);
+    let b_bounds = deepest_bounds(b);
+    (0..3).all(|dim| {
+        a_bounds[dim][0] <= b_bounds[dim][1] + 1 && b_bounds[dim][0] <= a_bounds[dim][1] + 1
+    })
+}
+
+/// Brute-force U-, V-, W- and X-lists of `key` from the global key set, using
+/// only the geometric definitions. `keys` and `leaves` must be sorted.
+fn oracle_lists(keys: &[u64], leaves: &[u64], key: u64) -> [Vec<u64>; 4] {
+    let key_is_leaf = leaves.binary_search(&key).is_ok();
+    let key_level = morton::level(key);
+    let key_parent = morton::parent(key);
+    let mut u = Vec::new();
+    let mut v = Vec::new();
+    let mut w = Vec::new();
+    let mut x = Vec::new();
+    for &other in keys {
+        let other_is_leaf = leaves.binary_search(&other).is_ok();
+        let other_level = morton::level(other);
+        if key_is_leaf && other_is_leaf && other != key && touching(other, key) {
+            u.push(other);
+        }
+        if let Some(parent) = key_parent {
+            if other_level == key_level
+                && let Some(other_parent) = morton::parent(other)
+                && other_parent != parent
+                && touching(other_parent, parent)
+                && !touching(other, key)
+            {
+                v.push(other);
+            }
+            if other_is_leaf
+                && other_level < key_level
+                && touching(parent, other)
+                && !touching(key, other)
+            {
+                x.push(other);
+            }
+        }
+        if key_is_leaf
+            && other_level > key_level
+            && let Some(other_parent) = morton::parent(other)
+            && touching(other_parent, key)
+            && !touching(other, key)
+        {
+            w.push(other);
+        }
+    }
+    [u, v, w, x]
+}
+
+/// Compare the interaction lists of every local non-ghost key against the
+/// brute-force oracle over the gathered global tree.
+fn check_interaction_lists(
+    name: &str,
+    all_keys: &HashMap<u64, KeyType>,
+    lists: &InteractionManager,
+    global_leaves: &[u64],
+) {
+    let mut keys: Vec<u64> = morton::get_interior_keys(global_leaves)
+        .into_iter()
+        .collect();
+    keys.extend_from_slice(global_leaves);
+    keys.sort_unstable();
+    keys.dedup();
+
+    let mut expected_entries: Vec<u64> = all_keys
+        .iter()
+        .filter(|(_, key_type)| !key_type.is_ghost())
+        .map(|(&key, _)| key)
+        .collect();
+    expected_entries.sort_unstable();
+    for map in [
+        lists.u_list(),
+        lists.v_list(),
+        lists.w_list(),
+        lists.x_list(),
+    ] {
+        let mut entries: Vec<u64> = map.keys().copied().collect();
+        entries.sort_unstable();
+        assert_eq!(entries, expected_entries, "{name}: entry set");
+    }
+
+    for &key in &expected_entries {
+        let expected = oracle_lists(&keys, global_leaves, key);
+        let actual = [
+            &lists.u_list()[&key],
+            &lists.v_list()[&key],
+            &lists.w_list()[&key],
+            &lists.x_list()[&key],
+        ];
+        for (index, list_name) in ["U", "V", "W", "X"].into_iter().enumerate() {
+            assert_eq!(
+                *actual[index], expected[index],
+                "{name}: {list_name}-list of {key}"
+            );
+            assert!(actual[index].windows(2).all(|pair| pair[0] < pair[1]));
+            assert!(!actual[index].contains(&key));
+            // The tree is built with the ghost-children layer, so every entry is
+            // a key of the local map and carries its own classification.
+            for entry in actual[index] {
+                assert!(
+                    all_keys.contains_key(entry),
+                    "{name}: {list_name}-list entry {entry} of {key} is not a key of the tree"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn distributed_tree_regressions() {
+    let universe = mpi::initialize().expect("this test owns MPI initialization");
+    let comm = universe.world();
+    let rank = comm.rank() as usize;
+    let cloud: Vec<_> = (0..48)
+        .map(|i| {
+            let j = i + 17 * rank;
+            [
+                ((13 * j + 7) % 97) as f64 / 97.0,
+                ((29 * j + 3) % 89) as f64 / 89.0,
+                ((11 * j + 5) % 83) as f64 / 83.0,
+            ]
+        })
+        .collect();
+    let mut reversed = cloud.clone();
+    reversed.reverse();
+    // A dense blob filling the 64 level-6 cells of one level-4 cell. Next to the
+    // sparse cloud it forces a strongly graded tree, so local leaves meet much
+    // coarser remote neighbours and the V- and W-lists reach deep into other
+    // ranks. The blob sits in a different, well separated level-4 cell on every
+    // rank — a rank-independent blob would collapse into a single owner's
+    // subdomain and lose the per-rank deep/shallow contrast.
+    let blob: Vec<[f64; 3]> = {
+        // Eight level-6 cells per step, so the blobs never touch, and an offset of
+        // 0.005 keeps the points off the cell boundaries.
+        let corner = |n: usize| 0.005 + (n % 8) as f64 / 8.0;
+        let origin = [corner(rank), corner(3 * rank + 1), corner(5 * rank + 2)];
+        (0..64usize)
+            .map(|i| {
+                let coordinate = |k: usize, d: usize| origin[d] + (k % 4) as f64 / 64.0;
+                [
+                    coordinate(i, 0),
+                    coordinate(i / 4, 1),
+                    coordinate(i / 16, 2),
+                ]
+            })
+            .collect()
+    };
+    let graded: Vec<[f64; 3]> = cloud.iter().chain(blob.iter()).copied().collect();
+    let cases = [
+        (
+            "unsorted unequal populations",
+            cloud.clone(),
+            reversed[..31].to_vec(),
+            6,
+            8,
+        ),
+        ("identical populations", cloud.clone(), cloud.clone(), 6, 8),
+        (
+            "coarse refinement cap",
+            cloud.clone(),
+            reversed.clone(),
+            2,
+            2,
+        ),
+        (
+            "large leaf capacity",
+            cloud.clone(),
+            reversed.clone(),
+            6,
+            10000,
+        ),
+        (
+            "duplicate keys",
+            vec![[0.125; 3]; 17],
+            vec![[0.875; 3]; 9],
+            3,
+            4,
+        ),
+        (
+            "single point per population",
+            vec![[0.125; 3]],
+            vec![[0.875; 3]],
+            3,
+            4,
+        ),
+        ("no sources", vec![], cloud.clone(), 4, 8),
+        ("no targets", cloud.clone(), vec![], 4, 8),
+        (
+            "uneven rank populations",
+            cloud[..(rank % cloud.len()) + 1].to_vec(),
+            reversed[..(rank % 5) + 2].to_vec(),
+            4,
+            8,
+        ),
+        (
+            "graded corner blob",
+            graded,
+            reversed.iter().chain(blob.iter()).copied().collect(),
+            6,
+            1,
+        ),
+        (
+            "empty input ranks",
+            if rank == 0 { cloud.clone() } else { vec![] },
+            if rank + 1 == comm.size() as usize {
+                reversed.clone()
+            } else {
+                vec![]
+            },
+            4,
+            8,
+        ),
+    ];
+    for (name, sources, targets, max_level, capacity) in cases {
+        eprintln!("rank {rank}: {name}");
+        let source_keys = keys(&sources);
+        let target_keys = keys(&targets);
+        let source_layout = Rc::new(IndexLayout::from_local_counts(source_keys.len(), &comm));
+        let target_layout = Rc::new(IndexLayout::from_local_counts(target_keys.len(), &comm));
+        let source_array: Array<_, _> = source_keys.clone().into();
+        let target_array: Array<_, _> = target_keys.clone().into();
+        let sources = DistributedArray::new(source_layout.clone(), source_array);
+        let targets = DistributedArray::new(target_layout.clone(), target_array);
+        let options = OctreeOptions::new()
+            .with_max_level(max_level)
+            .with_max_fine_keys(capacity);
+        let tree = FmmTree::new(&sources, &targets, options, &comm);
+        let leaves = tree.octree().leaf_keys();
+        assert!(leaves.windows(2).all(|pair| pair[0] < pair[1]));
+        check_population(
+            &source_keys,
+            &source_layout,
+            tree.source_permutation(),
+            tree.source_indptr(),
+            leaves,
+            &comm,
+        );
+        check_population(
+            &target_keys,
+            &target_layout,
+            tree.target_permutation(),
+            tree.target_indptr(),
+            leaves,
+            &comm,
+        );
+
+        // The interaction lists are built without communication, but the oracle
+        // needs the global tree, so the gather is entered by every rank.
+        let lists = InteractionManager::new(tree.octree());
+        let mut global_leaves = gather_to_all(leaves, &comm);
+        global_leaves.sort_unstable();
+        assert!(morton::is_complete_linear_and_balanced(&global_leaves));
+        check_interaction_lists(name, tree.octree().all_keys(), &lists, &global_leaves);
+    }
+}
