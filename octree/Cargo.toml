@@ -30,8 +30,6 @@ rand_chacha = "0.10"
 mpi = { version = "0.8.2", features = ["derive", "user-operations"] }
 rlst = { version = "0.7.0", features = ["mpi"] }
 
-[profile.release]
-debug = 1
 
 [dev-dependencies]
 
