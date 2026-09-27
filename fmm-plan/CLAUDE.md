@@ -113,7 +113,6 @@ Stable Rust with Rust 2024, plus `rustfmt` and `clippy`.
 - Native prerequisites, as installed by CI: `libclang-dev cmake libfftw3-dev
   libopenblas-dev openmpi-bin libopenmpi-dev`. A dependency build failure is far
   more often a missing native library than a defect here.
-- `Cargo.lock` is gitignored (library crate) — do not add it.
 
 ## Checks
 
