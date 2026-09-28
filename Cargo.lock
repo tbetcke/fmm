@@ -263,7 +263,7 @@ version = "0.1.0-dev"
 dependencies = [
  "itertools 0.15.0",
  "mpi",
- "nd-octree 0.1.1-dev (git+https://codeberg.org/nd-project/octree.git)",
+ "nd-octree",
  "rand_chacha",
  "rlst",
 ]
@@ -483,18 +483,6 @@ dependencies = [
 [[package]]
 name = "nd-octree"
 version = "0.1.1-dev"
-dependencies = [
- "itertools 0.15.0",
- "mpi",
- "rand 0.10.3",
- "rand_chacha",
- "rlst",
-]
-
-[[package]]
-name = "nd-octree"
-version = "0.1.1-dev"
-source = "git+https://codeberg.org/nd-project/octree.git#e6c16dab890a6d28cbeb0b49c798eb76d6341589"
 dependencies = [
  "itertools 0.15.0",
  "mpi",
@@ -774,9 +762,9 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rlst"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03bf604daf138484807d3523e496f3c8dc81fe2fd38402bcd053c640605fce88"
+checksum = "682a57bf499f2b61275d98038d866ba945eb9c94aeb451b9fe69d97853e7bf93"
 dependencies = [
  "aligned-vec",
  "bindgen 0.73.2",
@@ -805,9 +793,9 @@ dependencies = [
 
 [[package]]
 name = "rlst-proc-macro"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17ef93f5d4f851de9075684164a393c471d1f99e43fe1d3f1f7434aab17db751"
+checksum = "5d965db6641f7cdc0886280f817d20072812d406135e6b6ce4bda7f79ea4fd94"
 dependencies = [
  "aligned-vec",
  "darling",

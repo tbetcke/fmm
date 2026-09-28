@@ -15,8 +15,8 @@ categories = ["mathematics", "science"]
 name = "fmm_plan"
 
 [dependencies]
-nd-octree = { git = "https://codeberg.org/nd-project/octree.git" }
-rlst = { version = "0.7", features = ["mpi"] }
+nd-octree = { path = "../octree" }
+rlst = { version = "0.8.0", features = ["mpi"] }
 mpi = { version = "0.8.2", features = ["derive", "complex"] }
 itertools = "0.15"
 
