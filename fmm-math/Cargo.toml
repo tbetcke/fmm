@@ -11,5 +11,8 @@ repository.workspace = true
 name = "nd_fmm_math"
 
 [dependencies]
+num-traits = { workspace = true }
 
 [dev-dependencies]
+proptest = { workspace = true }
+serde_json = { workspace = true }
