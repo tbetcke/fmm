@@ -11,12 +11,12 @@ needed. Only `fmm-math` (plus fixture tooling) is needed for Phase 0.
 
 This document refines Section 5 of the design document
 (`docs/design/laplace-fmm-plan.md`) into concrete crates for
-[nd-project/fmm](https://codeberg.org/nd-project/fmm).
+[tbetcke/fmm](https://github.com/tbetcke/fmm).
 
 ## 1. Starting point
 
 The repository is a Cargo workspace with two crates, both carrying their own
-`CLAUDE.md`, and Forgejo CI at the root.
+`CLAUDE.md`, and GitHub Actions CI at the root.
 
 | Item | What it is | State |
 | --- | --- | --- |
@@ -26,7 +26,7 @@ The repository is a Cargo workspace with two crates, both carrying their own
 | `fmm-plan/` (package `nd-fmm-plan`, lib `nd_fmm_plan`, 0.1.0-dev) | FMM topology and data flow: interaction lists, ghost exchange, distributed pass order | early; API unstable, partly unimplemented; renamed from `fmm-plan` on 2026-09-29 |
 | `CLAUDE.md` per crate | agent instructions; both require `cargo fmt --all` after Rust edits | in place; partly stale since the merge into one workspace (Section 6) |
 | root `CLAUDE.md` | workspace-wide rules | added with these documents |
-| `.forgejo/workflows/` | CI, see below | in place |
+| `.github/workflows/` | CI, see below | in place |
 | `LICENSE-MIT`, `LICENSE-APACHE` | dual licence | in place |
 
 Both existing crates declare their package fields and dependencies directly and point
@@ -311,7 +311,7 @@ another task.
 | Tests | unit tests in-crate; property tests with `proptest`; fixtures under `<crate>/fixtures/`, small and committed |
 | MPI tests | only in crates that depend on MPI (`nd-fmm-exec` and later): one MPI-initialising test per test executable, as in `nd-octree` and `nd-fmm-plan`; run tests with `RUST_MIN_STACK=8388608`; multi-rank runs by hand (on macOS with `--mca btl_tcp_if_include lo0 --mca oob_tcp_if_include lo0`) |
 | Formatting and lints | `cargo fmt` after every edit; `cargo clippy --workspace --all-targets -- -D warnings` locally (stricter than CI, which omits `--all-targets`) |
-| CI | the root Forgejo workflow runs fmt, clippy, tests and docs for default members on CPU and one rank; GPU tests are run locally and never block CI |
+| CI | the root GitHub Actions workflow runs fmt, clippy, tests and docs for default members on CPU and one rank; GPU tests are run locally and never block CI |
 
 ### 5.2 Root `Cargo.toml` additions
 
@@ -329,7 +329,7 @@ default-members = ["octree", "fmm-plan", "fmm-math"]
 [workspace.package]
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://codeberg.org/nd-project/fmm"
+repository = "https://github.com/tbetcke/fmm"
 
 [workspace.dependencies]
 num-traits = "0.2"
@@ -417,8 +417,8 @@ noise without testing anything.
       workspace, that needs a working MPI runtime and `RUST_MIN_STACK=8388608`, as in CI.
       Stated in root `CLAUDE.md` since Phase 0 T1.
 - [ ] Check that the `nd-fmm-*` names are free on crates.io if you plan to publish.
-- [ ] Hosting: Codeberg's members voted in July 2026 for Terms of Use changes that
+- [x] Hosting: Codeberg's members voted in July 2026 for Terms of Use changes that
       discourage projects "written and maintained with heavy use of LLMs"
       ([Codeberg blog](https://blog.codeberg.org/protecting-our-floss-commons-from-llms.html)).
-      Worth reading the actual Terms change against the planned Claude Code workflow
-      before investing further in hosting and CI there.
+      The repository moved to [tbetcke/fmm](https://github.com/tbetcke/fmm) on
+      2026-09-29, and CI now runs on GitHub Actions.

@@ -59,7 +59,7 @@ BLAS/LAPACK, so a dependency build failure is far more often a missing native li
 than a defect in a crate.
 
 ## Checks
-CI (`.forgejo/workflows/run-tests.yml`, pull requests to `main`) runs exactly this for
+CI (GitHub Actions, `.github/workflows/run-tests.yml`, pull requests to `main`) runs exactly this for
 the default members:
 
 ```sh

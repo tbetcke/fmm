@@ -10,7 +10,7 @@ default-members = ["octree", "fmm-plan", "fmm-math"]
 [workspace.package]
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://codeberg.org/nd-project/fmm"
+repository = "https://github.com/tbetcke/fmm"
 
 [workspace.dependencies]
 num-traits = "0.2"

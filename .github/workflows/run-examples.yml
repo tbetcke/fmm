@@ -5,20 +5,28 @@ on:
   schedule:
   - cron: "1 0 * * FRI"
 
+permissions:
+  contents: read
+
 jobs:
   run-examples:
     name: run-examples
-    runs-on: docker
+    runs-on: ubuntu-latest
     steps:
       - name: Install Rust
-        uses: https://github.com/dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - uses: actions/checkout@v6
         with:
           submodules: "true"
 
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev cmake libfftw3-dev libopenblas-dev openmpi-bin libopenmpi-dev
+
       - name: Install cargo-templated-examples
         run: cargo install cargo-templated-examples
 
-      - name: Check if dependencies are up-to-date
+      - name: Run examples
         run: cargo templated-examples NPROCESSES 3
