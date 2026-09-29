@@ -8,7 +8,6 @@ Phase and components: Phase 0, C0.1–C0.3 (tasks T2, T4, T5 in docs/phase0/).
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
 - Generic over T: RealScalar; no allocation in hot paths (write into caller slices).
 - No trigonometric functions in harmonic evaluation (CONVENTIONS §3.5).
-- Run `cargo fmt` after every Rust edit.
 - Before finishing: `cargo clippy -p nd-fmm-math --all-targets -- -D warnings`
   and `cargo test -p nd-fmm-math` must pass.
 

@@ -1,20 +1,7 @@
-# CLAUDE.md
+# nd-fmm-plan
 
-Guidance for Claude Code when working in this repository.
-
-## Working agreement
-
-Approval for one action is not approval for the next one of its kind. A request
-to commit, push, delete, or publish covers the message it appears in and nothing
-after it — ask again rather than carrying the permission forward.
-
-Default flow: make the change, run the checks, report exactly which ones ran and
-what they said, and leave the result uncommitted unless the current message asks
-for a commit. Never report a check as passing that you did not run.
-
-Always run `cargo fmt --all` after editing any Rust code, before running the
-other checks or committing. CI rejects unformatted code, and mechanical edits
-(renames, `sed` replacements) easily break import ordering.
+The root `CLAUDE.md` applies as well; it holds every workspace-wide rule. This file
+adds only what is specific to this crate.
 
 ## Project
 
@@ -33,16 +20,10 @@ exchanges, U/V/W/X lists) can be checked exactly. It is included only to test
 those workflows. Real FMM operators belong outside this crate and plug in
 through the `FmmOperator` trait.
 
-- A member of the `nd-project/fmm` Cargo workspace (root `Cargo.toml`, members
-  `octree` and `fmm-plan`). The root `CLAUDE.md` applies as well. Library only, no
-  binaries.
-- MPI is a **required** dependency, including for one-rank runs.
+- Library only, no binaries.
 - Version `0.1.0-dev`; the public API is unstable and partly unimplemented.
-- Developed in <https://codeberg.org/nd-project/fmm>, with CI via Forgejo Actions at
-  the workspace root. The `repository` field in `Cargo.toml` still points at the
-  former standalone repository `nd-project/nd-plan`, and `homepage` has a typo
-  (`codeberg.com.com`).
-- Licensed MIT / Apache-2.0.
+- The `repository` field in `Cargo.toml` still points at the former standalone
+  repository `nd-project/nd-plan`, and `homepage` has a typo (`codeberg.com.com`).
 
 ## Code map
 
@@ -56,32 +37,16 @@ through the `FmmOperator` trait.
 | `src/fmm.rs`, `src/fmm/` | Distributed FMM evaluation: the `FmmOperator` trait (`operator.rs`), the generic driver `FmmEvaluator` and per-level store `LevelData` (`evaluator.rs`), and the index-propagating test FMM `IndexFmm` / `run_index_fmm` (`index_fmm.rs`). Serial tests in `evaluator_tests.rs` and `index_fmm_tests.rs`. |
 | `tests/mpi_regressions.rs` | One `#[test]` that owns MPI init and runs 11 named scenarios sequentially. Each builds an `Octree` from the union of a source and a target point set (with the ghost-children layer) and checks the tree, the interaction lists against an oracle, and a forward/backward ghost exchange of every interaction-list ghost, and the index FMM (every leaf must receive every leaf index exactly once). |
 | `examples/test_index_fmm.rs` | Seeded-random MPI run of the index FMM. |
-| `../.forgejo/workflows/run-tests.yml` | The authoritative CI commands (PRs to `main` only), at the workspace root and shared with `nd-octree`. |
-| `../.forgejo/workflows/run-examples.yml`, `run-dependency-checks.yml` | Weekly scheduled jobs, also at the workspace root. |
 
 Read `src/interaction_manager.rs`, `src/fmm/evaluator.rs` and `tests/mpi_regressions.rs` for
 how the API actually behaves; prose is a summary, they are the contract.
 
 ### Navigating the code
 
-**Prefer LSP tools — go-to-definition, find-references, hover, document and
-workspace symbols — over `grep`/`find` whenever you are chasing a symbol.** They
-resolve through the real dependency graph, so they land on the right definition
-without you having to know where a crate keeps its sources, and a miss is a
-genuine "not found" rather than a typo in a path.
-
-This matters most across the dependencies. `nd-octree` is the workspace sibling
-at `../octree/src/…`. `rlst` comes from crates.io (0.8.0), so its sources are in
-Cargo's registry cache (`~/.cargo/registry/src/*/rlst-0.8.0/`). They are not in a
-`../rlst` checkout, which, if present on the machine, is an unrelated
-development tree and may differ from 0.8.0. A grep aimed at the wrong tree
-silently finds nothing, or finds a different version, and reads as fact. That is
-a real trap when checking what `rlst` provides or what `nd_octree` guarantees.
-
-`grep` is still the right tool for what LSP does not index: text in comments,
-CI YAML, `Cargo.toml`, and quick "where is this string" sweeps. Within this
-crate's seven small source modules (plus their `*_tests.rs` files), reading a
-whole file beats either.
+Follow the root navigation rules (LSP first; `rlst` sources in the registry cache, not
+`../rlst`). `nd-octree` is the workspace sibling at `../octree/src/…`. Within this
+crate's seven small source modules (plus their `*_tests.rs` files), reading a whole
+file beats either LSP or `grep`.
 
 ## The interaction manager
 
@@ -116,12 +81,7 @@ is the contract; the points that matter most when changing it:
   neighbours. The manager provides topology only; any exchange of multipole or
   particle data for those keys is the caller's job.
 
-Clippy is clean under `-D warnings` (also with `--all-targets`). Keep it that
-way: do not add blanket `#[allow]`s.
-
-## Build environment
-
-Stable Rust with Rust 2024, plus `rustfmt` and `clippy`.
+## Dependencies
 
 - `nd-octree` is a path dependency on the workspace sibling `../octree`
   (`nd-octree = { path = "../octree" }`). Keep it that way: do not switch to a
@@ -132,37 +92,18 @@ Stable Rust with Rust 2024, plus `rustfmt` and `clippy`.
   `distributed_tools::array_tools::gather_to_all` in `evaluator.rs`,
   `index_fmm.rs` and the tests. Tests and examples also use `rlst_dynamic_array`
   and `println_mpi`.
-- All dependencies are declared directly in this crate's `Cargo.toml`; the
-  workspace has no `[workspace.dependencies]` yet.
-- Native prerequisites, as installed by CI: `libclang-dev cmake libfftw3-dev
-  libopenblas-dev openmpi-bin libopenmpi-dev`. A dependency build failure is far
-  more often a missing native library than a defect here.
+- All dependencies are declared directly in this crate's `Cargo.toml`. The root
+  `[workspace.dependencies]` serves the new `nd-fmm-*` crates; migrating this crate
+  to it is a separate decision.
 
-## Checks
+## Crate checks
 
-Run from the workspace root. CI (`.forgejo/workflows/run-tests.yml`) runs
-exactly this, for every workspace member, not just this crate:
-
-```sh
-cargo fmt -- --check
-cargo clippy -- -D warnings
-cargo clippy --examples -- -D warnings
-RUST_MIN_STACK=8388608 cargo test
-cargo doc --no-deps
-```
-
-For this crate alone, add `-p nd-fmm-plan` (e.g.
-`RUST_MIN_STACK=8388608 cargo test -p nd-fmm-plan`). The root `CLAUDE.md` also
-asks for `cargo clippy --workspace --all-targets -- -D warnings` and
-`cargo test --workspace` before finishing a task.
-
-Also useful locally:
+The root checks cover this crate. For this crate alone, add `-p nd-fmm-plan` (e.g.
+`RUST_MIN_STACK=8388608 cargo test -p nd-fmm-plan`). Also useful locally:
 
 ```sh
 cargo run -p nd-fmm-plan --example test_index_fmm
 ```
-
-`RUST_MIN_STACK=8388608` matters — keep it on test invocations.
 
 `cargo test -p nd-fmm-plan` gives 22 unit tests plus the integration test **on one rank
 only**. It exercises no redistribution and no ghost layer, which is where the
@@ -170,8 +111,7 @@ interesting bugs are.
 
 ### Multi-rank runs
 
-CI never runs anything on more than one rank, so multi-rank coverage is entirely
-on you. For any change touching the interaction manager, the ghost
+For any change touching the interaction manager, the ghost
 communicator or the FMM evaluator (whose ghost-dependent and global-level
 paths only exist on more than one rank), build the test binary and launch it under MPI:
 
@@ -184,25 +124,16 @@ RUST_MIN_STACK=8388608 mpiexec -n 4 target/debug/deps/mpi_regressions-<hash> --t
 Use the executable Cargo prints, not the sibling `.d` file, and note the hash
 changes on rebuild.
 
-**On macOS here, plain `mpiexec -n 2 …` aborts** — Open MPI picks a non-loopback
-interface, the TCP connect times out after 60s, and every rank dies on a NULL
-communicator. Restrict it to loopback:
+On macOS, add the loopback flags from the root `CLAUDE.md`; with them, 2 and 4 ranks
+pass:
 
 ```sh
 mpiexec --mca btl_tcp_if_include lo0 --mca oob_tcp_if_include lo0 -n 4 <exe> --test-threads=1
 ```
 
-With that, 2 and 4 ranks pass. The failure is environmental; do not chase it as
-a bug in this crate.
-
-Always wrap multi-rank runs in an external timeout. An assertion on one rank
-leaves the others blocked in a collective, and the job hangs rather than failing.
-
-The scheduled `run-examples` workflow calls `cargo templated-examples`, but
-`Cargo.toml` has **no** `[[example]]` or `[package.metadata.example.*]` entries,
-so that job does nothing for this crate today. If you add examples that should
-run in CI, add both sections, mirroring `octree/Cargo.toml`. That job runs
-them at 3 ranks only.
+`Cargo.toml` has **no** `[[example]]` or `[package.metadata.example.*]` entries, so
+the weekly `run-examples` job does nothing for this crate today; register examples as
+the root `CLAUDE.md` describes if they should run there.
 
 ## Octree input and MPI discipline
 
@@ -214,18 +145,15 @@ are `[3, npoints]`, one point per **column**; `PhysicalBox` is
 `OctreeOptions::with_ghost_children(true)` whenever interaction lists or the FMM
 evaluator are used.
 
-**MPI discipline.** Every rank must reach every collective in the same order,
-including ranks with empty input — several test scenarios exist precisely to
-cover empty and uneven ranks. Keep MPI initialization in a **single** test per
-executable (MPI cannot be re-initialized after finalization in one process); do
-not add a second independently initializing parallel test to `tests/`. Globally
-empty octree construction is not covered by any test and should not be assumed
-to work.
+**MPI discipline.** The root MPI rules apply; several test scenarios exist precisely
+to cover empty and uneven ranks. `tests/mpi_regressions.rs` owns the one MPI
+initialisation for `tests/`; do not add a second independently initialising test
+there. Globally empty octree construction is not covered by any test and should not
+be assumed to work.
 
 ## Conventions
 
-- Match the existing module layout and rustdoc style. Document new public items;
-  CI builds docs. Keep changes targeted — no drive-by reformatting.
+- Match the existing module layout and rustdoc style.
 - Keep topology tests deterministic and free of translation operators. Serial
   helper tests go next to the helpers (`src/*_tests.rs`, included with `#[path]`);
   anything needing redistribution goes in `tests/` or `examples/`.

@@ -1,0 +1,15 @@
+[package]
+name = "nd-fmm-math"
+version = "0.1.0-dev"
+description = "Solid harmonics, rotation blocks and index layout for the nd-project FMM."
+readme = "README.md"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "nd_fmm_math"
+
+[dependencies]
+
+[dev-dependencies]
