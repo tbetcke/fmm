@@ -3,7 +3,8 @@
 Phase 0 fixes every mathematical convention in one reviewed file
 (`docs/CONVENTIONS.md`) and builds `nd-fmm-math` against high-precision fixtures, so
 that no later phase ever has to guess a sign. It ends when the identities hold to about
-1e-14 in f64 and a one-day CubeCL spike has measured f64 GEMM on the target GPU.
+1e-14 in f64 and a one-day CubeCL spike has measured GEMM throughput: f32 on the
+Metal GPU and f64 on the CubeCL CPU runtime (Metal has no f64).
 
 Companion documents: [docs/design/laplace-fmm-plan.md](../design/laplace-fmm-plan.md)
 (components C0.1–C0.3) and [docs/design/workspace-structure.md](../design/workspace-structure.md)
@@ -25,8 +26,9 @@ octree or `nd-fmm-plan`.
 ## Exit gate
 - Every acceptance test in the task briefs passes in CI.
 - `docs/CONVENTIONS.md` reviewed and signed off by hand; `CONVENTION_VERSION = 1` frozen.
-- The spike report states measured f32 and f64 GEMM throughput and recommends the
-  default M2L strategy.
+- The spike report states measured f32 (Metal) and f64 (CPU runtime) GEMM throughput,
+  recommends the default M2L strategy in f32, and gives a provisional f64
+  recommendation for data-centre CUDA cards from a roofline model.
 
 ## Tasks
 
@@ -56,5 +58,5 @@ In the repository root, start `claude` and say:
 - [ ] T3 merged: fixtures regenerate byte-identically, under 2 MB
 - [ ] T4 merged: fixture, separation, addition-theorem and harmonicity tests pass in f64 and f32
 - [ ] T5 merged: rotation, homomorphism, orthogonality and z-rotation tests pass up to p = 30
-- [ ] T6 report written: f32 and f64 GEMM throughput on the target GPU, default M2L strategy recommended
+- [ ] T6 report written: f32 GEMM throughput on Metal, f64 on the CPU runtime, default M2L strategy recommended (f64 provisional)
 - [ ] Design document updated where Phase 0 refined it (local-coefficient scaling, Section 2.4; spike outcome, Section 4)
