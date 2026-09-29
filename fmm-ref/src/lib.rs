@@ -48,12 +48,15 @@
 //! - [`Workspace`]: caller-owned scratch memory for the operators, built for a
 //!   maximum p.
 //! - [`leaf`]: the leaf operators P2M, P2L, L2P and M2P (§3.6, §3.7), with gradients.
+//! - [`p2p`]: the near-field operator P2P and the f64 direct-sum oracle (§3.1), with
+//!   gradients and self-interaction excluded.
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 //! [`RealScalar`]: nd_fmm_math::RealScalar
 
 mod frame;
 pub mod leaf;
+pub mod p2p;
 mod workspace;
 
 pub use frame::Frame;
