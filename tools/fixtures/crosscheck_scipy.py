@@ -14,7 +14,8 @@ Legendre functions with the Condon-Shortley phase removed:
     definitions of §3.3, regular gradients from the ladder of §3.4, irregular gradients
     from the analogous ladder dz I_n^m = -I_{n+1}^m, (dx - i dy) I_n^m = I_{n+1}^{m-1},
     (dx + i dy) I_n^m = -I_{n+1}^{m+1}. Errors are relative to the largest reference
-    value of the same degree, since single components can be close to zero.
+    value of the same degree, since single components can be close to zero. Set C has
+    irregular values only (no gradients, no regular records).
 
 Run from the repository root: python3 tools/fixtures/crosscheck_scipy.py
 (needs numpy, scipy), or: uv run tools/fixtures/crosscheck_scipy.py
@@ -155,7 +156,7 @@ def fixture_errors(p, records, X, sign):
     worst = [0.0, 0.0]
     for rec in records:
         x = np.array([float(c) for c in rec["x"]])
-        refs = [rec["value"], *rec["grad"]]
+        refs = [rec["value"], *rec.get("grad", [])]
         for n in range(p + 1):
             ours = [[] for _ in refs]
             for m in range(-n, n + 1):
@@ -178,10 +179,14 @@ for path in fixtures:
     data = json.loads(path.read_text(encoding="utf-8"))
     fp = data["header"]["p"]
     for family, X, sign in (("regular", R_def, -1), ("irregular", I_def, 1)):
-        ev, eg = fixture_errors(fp, data[family], X, sign)
+        records = data[family]
+        if not records:
+            continue
+        ev, eg = fixture_errors(fp, records, X, sign)
         label = f"{path.stem} {family[0].upper()}"
         checks.append((f"{label} values (p={fp})", ev, 1e-13))
-        checks.append((f"{label} gradients (p={fp})", eg, 1e-13))
+        if "grad" in records[0]:
+            checks.append((f"{label} gradients (p={fp})", eg, 1e-13))
 
 ok = True
 for name, e, tol in checks:

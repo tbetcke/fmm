@@ -1,6 +1,8 @@
 //! Values and gradients against the mpmath fixtures of tools/fixtures/
-//! (fmm-math/fixtures/harmonics_{A,B}.json): set A in f64 to relative 1e-13 (p = 30),
-//! set B in f32 to relative 1e-5 (p = 8).
+//! (fmm-math/fixtures/harmonics_{A,B,C}.json): set A in f64 to relative 1e-13 (p = 30),
+//! set B in f32 to relative 1e-5 (p = 8), and set C, irregular values only, in f64 to
+//! relative 1e-13 in the orthonormal weighting of CONVENTIONS §3.8 (p = 40, the degree
+//! 2p that M2L needs at p = 20, at the M2L shifts 4 ≤ |v| ≤ 11 of §3.9).
 
 use nd_fmm_math::harmonics::{irregular, irregular_grad, regular, regular_grad};
 use nd_fmm_math::{CONVENTION_VERSION, Layout, RealScalar};
@@ -11,7 +13,8 @@ use crate::common::degree_relative_error;
 struct Record {
     x: [f64; 3],
     value: Vec<f64>,
-    grad: [Vec<f64>; 3],
+    /// Absent in set C, which holds values only.
+    grad: Option<[Vec<f64>; 3]>,
 }
 
 struct Fixture {
@@ -41,19 +44,23 @@ fn records(v: &Value, len: usize) -> Vec<Record> {
         .iter()
         .map(|r| {
             let x = numbers(&r["x"]);
-            let grad: Vec<Vec<f64>> = r["grad"]
-                .as_array()
-                .expect("grad is a list of three arrays")
-                .iter()
-                .map(numbers)
-                .collect();
+            let grad = r.get("grad").map(|g| {
+                let grad: Vec<Vec<f64>> = g
+                    .as_array()
+                    .expect("grad is a list of three arrays")
+                    .iter()
+                    .map(numbers)
+                    .collect();
+                let grad: [Vec<f64>; 3] = grad.try_into().expect("grad has three components");
+                assert!(grad.iter().all(|g| g.len() == len));
+                grad
+            });
             let record = Record {
                 x: [x[0], x[1], x[2]],
                 value: numbers(&r["value"]),
-                grad: grad.try_into().expect("grad has three components"),
+                grad,
             };
             assert_eq!(record.value.len(), len);
-            assert!(record.grad.iter().all(|g| g.len() == len));
             record
         })
         .collect()
@@ -108,7 +115,8 @@ fn family_error<T: RealScalar>(
             "the gradient functions must return the same values"
         );
         worst = worst.max(degree_relative_error(p, &to_f64(&value), &record.value));
-        for (g, reference) in [&gx, &gy, &gz].into_iter().zip(&record.grad) {
+        let reference_grad = record.grad.as_ref().expect("sets A and B have gradients");
+        for (g, reference) in [&gx, &gy, &gz].into_iter().zip(reference_grad) {
             worst = worst.max(degree_relative_error(p, &to_f64(g), reference));
         }
     }
@@ -145,4 +153,56 @@ fn f32_matches_fixture_set_b() {
 #[test]
 fn f64_matches_fixture_set_b() {
     check_set::<f64>("B", 8, 1e-13);
+}
+
+fn factorial(k: usize) -> f64 {
+    (1..=k).map(|j| j as f64).product()
+}
+
+/// Nₘ / Sₘ = cₘ / √((n + |m|)! (n − |m|)!), c₀ = 1 and cₘ = √2 otherwise
+/// (CONVENTIONS §3.8): the weight that takes irregular harmonics in real storage to the
+/// orthonormal basis. Unweighted, the entries of degree 40 span sixteen orders of
+/// magnitude, so a degree-relative error would not test the small |m|.
+fn orthonormal_weight(n: usize, m: isize) -> f64 {
+    let k = m.unsigned_abs();
+    let c = if k == 0 { 1.0 } else { 2.0_f64.sqrt() };
+    c / (factorial(n + k) * factorial(n - k)).sqrt()
+}
+
+/// Set C: irregular values only, p = 40 at 4 ≤ |v| ≤ 11 (the range of the M2L shifts,
+/// CONVENTIONS §3.9), in f64, per degree relative in the orthonormal weighting Nₘ/Sₘ of
+/// §3.8.
+#[test]
+fn f64_matches_fixture_set_c() {
+    let fixture = load("C");
+    assert_eq!(fixture.p, 40);
+    assert!(fixture.regular.is_empty());
+    assert!(!fixture.irregular.is_empty());
+    let p = fixture.p;
+    let layout = Layout::new(p);
+    let weights: Vec<f64> = (0..layout.len())
+        .map(|i| {
+            let (n, m) = layout.nm(i);
+            orthonormal_weight(n, m)
+        })
+        .collect();
+    let mut value = vec![0.0; layout.len()];
+    let mut worst = 0.0_f64;
+    for record in &fixture.irregular {
+        assert!(record.grad.is_none(), "set C holds values only");
+        irregular(p, record.x, &mut value);
+        let weighted = |v: &[f64]| {
+            v.iter()
+                .zip(&weights)
+                .map(|(a, w)| a * w)
+                .collect::<Vec<_>>()
+        };
+        worst = worst.max(degree_relative_error(
+            p,
+            &weighted(&value),
+            &weighted(&record.value),
+        ));
+    }
+    println!("set C: irregular, orthonormal weighting, {worst:.2e}");
+    assert!(worst <= 1e-13, "set C irregular: {worst:e} > 1e-13");
 }
