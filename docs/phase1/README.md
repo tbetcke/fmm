@@ -104,12 +104,12 @@ In the repository root, start `claude` and say:
 "Read docs/phase1/T<k>-<name>.md and do that task." Review and merge before the next.
 
 ## Exit checklist
-- [ ] T1 merged: `nd-fmm-ref` skeleton, CI green, root `CLAUDE.md` points to Phase 1
-- [ ] T2 merged: `check_translations.py` passes, fixture set C committed, fixtures regenerate byte-identically
-- [ ] CONVENTIONS §3.11 and the §3.9 change reviewed and signed off; `CONVENTION_VERSION` decision recorded
-- [ ] T3 merged: leaf operators match the same-degree Legendre series and stay within the truncation bound, p ≤ 30
-- [ ] T4 merged: P2P and direct sum exact against brute force, coincident points excluded
-- [ ] T5 merged: M2M and L2L exactness and composition to 1e-13, p ≤ 30; M2L within its bound, p ≤ 20
-- [ ] T6 merged: rotation operators agree with direct to 1e-13, p ≤ 20
-- [ ] T7 merged: accuracy table and timing report in the PR
-- [ ] Design document updated: Section 2.3 cites §3.11; Section 7 Phase 1 status and measured errors; Section 9.1 translation risk retired; workspace-structure §3.1 matches the built `nd-fmm-ref` surface
+- [x] T1 merged: `nd-fmm-ref` skeleton, CI green, root `CLAUDE.md` points to Phase 1
+- [x] T2 merged: `check_translations.py` passes, fixture set C committed, fixtures regenerate byte-identically
+- [x] CONVENTIONS §3.11 and the §3.9 change reviewed and signed off; `CONVENTION_VERSION` decision recorded
+- [x] T3 merged: leaf operators match the same-degree Legendre series and stay within the truncation bound, p ≤ 30
+- [x] T4 merged: P2P and direct sum exact against brute force, coincident points excluded
+- [x] T5 merged: M2M and L2L exactness and composition to 1e-13, p ≤ 30; M2L within its bound, p ≤ 20
+- [x] T6 merged: rotation operators agree with direct to 1e-13, p ≤ 20
+- [x] T7 merged: accuracy table and timing report in the PR
+- [x] Design document updated: Section 2.3 cites §3.11; Section 7 Phase 1 status and measured errors; Section 9.1 translation risk retired; workspace-structure §3.1 matches the built `nd-fmm-ref` surface
