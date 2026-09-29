@@ -150,7 +150,7 @@ flowchart TB
   tables["nd-fmm-tables<br/>Phase 2 · op. tables"]
   kernels["nd-fmm-kernels<br/>Phase 4 · CubeCL"]
   ref["nd-fmm-ref<br/>Phase 1 · f64 oracle"]
-  math["nd-fmm-math<br/>Phase 0 · harmonics, Wigner-d, layout, RealScalar"]:::phase0
+  math["nd-fmm-math<br/>Phase 0 · harmonics, rotation blocks, layout, RealScalar"]:::phase0
   validate["nd-fmm-validate<br/>Phase 1 · dev tooling; uses every crate"]
   exec --> plan
   exec --> octree
@@ -175,7 +175,7 @@ Each crate has one job and a public surface small enough to describe in a few li
 
 | Directory | Package | Created in | Purpose | Depends on |
 | --- | --- | --- | --- | --- |
-| `fmm-math` | `nd-fmm-math` | Phase 0 | Legendre functions, real solid harmonics and gradients, Wigner-d, index layout, scalar trait | `num-traits` |
+| `fmm-math` | `nd-fmm-math` | Phase 0 (done) | real solid harmonics and gradients, rotation blocks, index layout, scalar trait | `num-traits` |
 | `fmm-ref` | `nd-fmm-ref` | Phase 1 | f64 reference operators (direct O(p⁴) and rotation O(p³)), P2P, direct-sum oracle | `nd-fmm-math`, `rayon` (optional) |
 | `fmm-tables` | `nd-fmm-tables` | Phase 2 | M2M/L2L (8 octants each), M2L (316 offsets, symmetry classes), rotation tables, versioned cache, later SVD compression | `nd-fmm-ref`, `faer`, a binary serialiser |
 | `fmm-exec` | `nd-fmm-exec` | Phase 3 (host), Phase 4 (device) | `impl FmmOperator` for Laplace, box geometry from Morton keys, user-facing FMM object, M2L strategy selection | `nd-fmm-plan`, `nd-octree`, `mpi`, `nd-fmm-tables`, `nd-fmm-kernels` (feature `gpu`), `rayon` |
@@ -207,13 +207,20 @@ Outside the crates, Phase 0 also adds these folders:
   stays MPI-free; `nd-fmm-exec` adds that bound where it meets `FmmOperator::Value`.
 - `struct Layout { p }` provides `len()`, `idx(n, m)`, `nm(i)` and iteration by degree.
 - These functions write into caller-provided slices and do not allocate:
-  - `legendre::table(p, cos_theta, out)`
-  - `harmonics::regular(p, x, out)`
-  - `harmonics::irregular(p, x, out)`
-  - `harmonics::regular_grad(p, x, out)`
-- `wigner::d_blocks(p, beta, out)` gives the per-degree real rotation blocks. Phase 0
-  task T5 names this `rotation::blocks`.
-- `CONVENTION_VERSION: u32` is bumped whenever a convention in `CONVENTIONS.md` changes.
+  - `harmonics::regular(p, x, out)` and `harmonics::irregular(p, x, out)`
+  - `harmonics::regular_grad(p, x, value, [gx, gy, gz])` and
+    `harmonics::irregular_grad(p, x, value, [gx, gy, gz])`, which also write the values
+  - `rotation::blocks(p, &q, out)`: per-degree real blocks Dⁿ(Q) for any rotation Q,
+    contiguous, row-major; `rotation::blocks_len(p)`, `rotation::block_range(n)`
+  - `rotation::to_irregular(p, blocks)`: S Dⁿ S⁻¹ in place, for irregular harmonics
+- `rotation::euler_zyz(alpha, beta, gamma)` returns the 3 × 3 rotation matrix.
+- `Layout` is built with `Layout::new(p)` (p: `usize`) and also offers `degree(n)` and
+  `degrees()`.
+- As implemented in Phase 0, there is no `legendre` module (harmonics use the Cartesian
+  recursions of CONVENTIONS §3.5 directly). There is no `wigner::d_blocks(p, beta, …)`
+  either: `rotation::blocks` takes a full rotation instead of a polar angle.
+- `CONVENTION_VERSION: u32` is bumped whenever a convention in `CONVENTIONS.md` changes;
+  a test checks it against the file.
 
 **`nd-fmm-ref`**
 
@@ -301,7 +308,7 @@ another task.
 | Topic | Rule |
 | --- | --- |
 | Naming | directory `fmm-<name>`, package `nd-fmm-<name>`, library name `nd_fmm_<name>` |
-| Edition and versions | Rust 2024; edition, licence and repository inherited from a new `[workspace.package]` (none exists yet) |
+| Edition and versions | Rust 2024; edition, licence and repository inherited from `[workspace.package]` (added in Phase 0 T1) |
 | Dependencies | declared once in `[workspace.dependencies]`, used with `.workspace = true`; `cubecl` pinned to an exact version there; `mpi` and `rlst` at the versions the existing crates use (0.8.2, 0.8.0) when a new crate needs them |
 | Precision | all numeric code generic over `T: RealScalar` (from `nd-fmm-math`); no `f64` hard-coding outside tests and table building. Does not apply to `nd-fmm-plan`, whose `FmmOperator::Value` is deliberately generic (its `IndexFmm` uses `u32`) |
 | Allocation | kernels and hot loops write into caller-provided slices; allocation only in constructors and plan building |
@@ -315,7 +322,7 @@ another task.
 
 ### 5.2 Root `Cargo.toml` additions
 
-The current root manifest has only `members` and `resolver = "2"`. Phase 0 adds:
+Before Phase 0 the root manifest had only `members` and `resolver = "2"`. Phase 0 added:
 
 ```toml
 [workspace]
@@ -337,8 +344,11 @@ thiserror = "2"
 proptest = "1"
 approx = "0.5"
 serde_json = "1"
+# Pinned by Phase 0 T6; only nd-fmm-kernels and spikes/ may use them:
+cubecl = { version = "=0.10.0", default-features = false, features = ["std", "stdlib"] }
+cubek-matmul = { version = "=0.2.0", default-features = false, features = ["std"] }
+cubek-std = { version = "=0.2.0", default-features = false }
 # Added when their phases start:
-# cubecl = { version = "=<pinned>", default-features = false }
 # faer = "<version>"
 # rayon = "1"
 # mpi = { version = "0.8.2", features = ["derive"] }   # Phase 3, match existing crates

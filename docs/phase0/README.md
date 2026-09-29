@@ -59,4 +59,4 @@ In the repository root, start `claude` and say:
 - [x] T4 merged: fixture, separation, addition-theorem and harmonicity tests pass in f64 and f32
 - [x] T5 merged: rotation, homomorphism, orthogonality and z-rotation tests pass up to p = 30
 - [x] T6 report written: f32 GEMM throughput on Metal, f64 on the CPU runtime, default M2L strategy recommended (f64 provisional)
-- [ ] Design document updated where Phase 0 refined it (local-coefficient scaling, Section 2.4; spike outcome, Section 4)
+- [x] Design document updated where Phase 0 refined it (local-coefficient scaling, Section 2.4; spike outcome, Section 4)
