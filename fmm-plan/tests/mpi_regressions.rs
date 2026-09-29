@@ -2,12 +2,12 @@
 //! be initialized again after finalization within the same process.
 use std::collections::HashMap;
 
-use fmm_plan::{
+use mpi::{collective::SystemOperation, traits::*};
+use nd_fmm_plan::{
     fmm::index_fmm::run_index_fmm,
     ghost_communicator::{FmmGhostCommunicator, LevelChunkSizes},
     interaction_manager::InteractionManager,
 };
-use mpi::{collective::SystemOperation, traits::*};
 use nd_octree::{
     Octree, OctreeOptions, PhysicalBox, constants::DEEPEST_LEVEL, morton, morton::is_ancestor,
     octree::KeyType, points_to_morton,

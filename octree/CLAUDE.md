@@ -12,6 +12,10 @@ the later action looks like an obvious continuation of the same task.
 In particular: make the changes, run the checks, report what happened, and leave
 the result uncommitted unless the current message asks for a commit.
 
+Always run `cargo fmt --all` after editing any Rust code, before running the
+other checks or committing. CI rejects unformatted code, and mechanical edits
+(renames, `sed` replacements) easily break import ordering.
+
 ## Project
 
 `nd-octree` (crate `nd-octree`, imported as `nd_octree`) is a Rust 2024 library

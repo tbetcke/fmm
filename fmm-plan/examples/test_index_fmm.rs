@@ -3,9 +3,9 @@
 //! Every leaf must end up with every leaf index exactly once. Run with, e.g.,
 //! `mpirun -n 4 target/debug/examples/test_index_fmm`.
 
-use fmm_plan::fmm::index_fmm::run_index_fmm;
-use fmm_plan::interaction_manager::InteractionManager;
 use mpi::traits::Communicator;
+use nd_fmm_plan::fmm::index_fmm::run_index_fmm;
+use nd_fmm_plan::interaction_manager::InteractionManager;
 use nd_octree::{Octree, OctreeOptions, PhysicalBox, constants::DEEPEST_LEVEL, points_to_morton};
 use rand_chacha::{ChaCha8Rng, rand_core::SeedableRng};
 use rlst::{println_mpi, rlst_dynamic_array};
