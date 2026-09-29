@@ -2,7 +2,7 @@
 //! be initialized again after finalization within the same process.
 use std::collections::HashMap;
 
-use fmm_plan::{
+use nd_fmm_plan::{
     fmm::index_fmm::run_index_fmm,
     ghost_communicator::{FmmGhostCommunicator, LevelChunkSizes},
     interaction_manager::InteractionManager,

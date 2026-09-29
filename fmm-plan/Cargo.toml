@@ -1,5 +1,5 @@
 [package]
-name = "fmm-plan"
+name = "nd-fmm-plan"
 version = "0.1.0-dev"
 authors = ["Timo Betcke"]
 edition = "2024"
@@ -12,7 +12,7 @@ keywords = ["numerics"]
 categories = ["mathematics", "science"]
 
 [lib]
-name = "fmm_plan"
+name = "nd_fmm_plan"
 
 [dependencies]
 nd-octree = { path = "../octree" }

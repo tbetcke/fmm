@@ -14,7 +14,7 @@ for a commit. Never report a check as passing that you did not run.
 
 ## Project
 
-`fmm-plan` (Cargo package `fmm-plan`, Rust crate `fmm_plan`, Rust 2024) plans the
+`nd-fmm-plan` (Cargo package `nd-fmm-plan`, Rust crate `nd_fmm_plan`, Rust 2024) plans the
 **topology and data flow** of a fast multipole method on top of an
 `nd_octree::Octree`: the interaction lists, the ghost exchange, and the
 distributed evaluation order. It does **not** own point
