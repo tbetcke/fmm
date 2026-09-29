@@ -1,6 +1,6 @@
 # Conventions
 
-`CONVENTION_VERSION = 1` (draft until signed off at the end of Phase 0 task T2).
+`CONVENTION_VERSION = 1` .
 
 This file is the single source of truth for basis functions, phases, storage and
 scaling in the `nd-fmm-*` crates. Code cites it as `CONVENTIONS §3.x`. Any change to
