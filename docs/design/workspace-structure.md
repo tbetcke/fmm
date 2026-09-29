@@ -347,6 +347,10 @@ nd-fmm-math = { path = "fmm-math" }
 
 ### 5.3 Per-crate `CLAUDE.md` template
 
+Workspace-wide rules (working agreement, formatting, CI and workspace checks, build
+environment, MPI) live only in the root `CLAUDE.md`; a crate file holds only what is
+specific to the crate, so shared rules cannot drift apart.
+
 ```markdown
 # nd-fmm-<name>
 
@@ -356,7 +360,6 @@ Phase and components: <e.g. Phase 0, C0.2 and C0.3>.
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
 - Generic over T: RealScalar; no allocation in hot paths.
-- Run `cargo fmt` after every Rust edit.
 - Before finishing: `cargo clippy -p nd-fmm-<name> --all-targets -- -D warnings`
   and `cargo test -p nd-fmm-<name>` must pass.
 
@@ -410,8 +413,9 @@ noise without testing anything.
 - [x] Stale crate `CLAUDE.md` files from the pre-workspace era were updated on
       2026-09-29. They now describe workspace membership, the root CI commands, the
       committed root `Cargo.lock`, and rlst as a crates.io dependency.
-- [ ] Root `CLAUDE.md` asks for `cargo test --workspace`. With MPI crates in the
+- [x] Root `CLAUDE.md` asks for `cargo test --workspace`. With MPI crates in the
       workspace, that needs a working MPI runtime and `RUST_MIN_STACK=8388608`, as in CI.
+      Stated in root `CLAUDE.md` since Phase 0 T1.
 - [ ] Check that the `nd-fmm-*` names are free on crates.io if you plan to publish.
 - [ ] Hosting: Codeberg's members voted in July 2026 for Terms of Use changes that
       discourage projects "written and maintained with heavy use of LLMs"

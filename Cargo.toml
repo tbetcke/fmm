@@ -1,3 +1,21 @@
 [workspace]
-members = ["fmm-plan", "octree"]
+# Keep "2"; moving to "3" (MSRV-aware resolution) is a separate decision.
 resolver = "2"
+members = ["fmm-plan", "octree", "fmm-math"]
+# Without default-members every member is built; spikes are added to members only,
+# so CI never builds them.
+default-members = ["octree", "fmm-plan", "fmm-math"]
+
+# Only new crates inherit from this; octree/ and fmm-plan/ keep their own fields.
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://codeberg.org/nd-project/fmm"
+
+[workspace.dependencies]
+num-traits = "0.2"
+thiserror = "2"
+proptest = "1"
+approx = "0.5"
+serde_json = "1"
+nd-fmm-math = { path = "fmm-math" }
