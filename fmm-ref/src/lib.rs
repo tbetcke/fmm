@@ -45,10 +45,16 @@
 //! ## Contents
 //!
 //! - [`Frame`]: the centre and scaling radius of an expansion (§3.7).
+//! - [`Workspace`]: caller-owned scratch memory for the operators, built for a
+//!   maximum p.
+//! - [`leaf`]: the leaf operators P2M, P2L, L2P and M2P (§3.6, §3.7), with gradients.
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 //! [`RealScalar`]: nd_fmm_math::RealScalar
 
 mod frame;
+pub mod leaf;
+mod workspace;
 
 pub use frame::Frame;
+pub use workspace::Workspace;
