@@ -33,11 +33,14 @@
 //! - [`Layout`]: the real storage index layout of §3.6.
 //! - [`harmonics`]: regular and irregular solid harmonics and their gradients,
 //!   evaluated by the Cartesian recursions of §3.5.
+//! - [`rotation`]: per-degree rotation blocks Dⁿ(Q) for regular and irregular
+//!   harmonics (§3.8) and z-y-z Euler angles.
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 
 pub mod harmonics;
 mod layout;
+pub mod rotation;
 mod scalar;
 
 pub use layout::Layout;
