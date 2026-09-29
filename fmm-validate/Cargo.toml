@@ -1,0 +1,15 @@
+[package]
+name = "nd-fmm-validate"
+version = "0.1.0-dev"
+description = "Error metrics, point distributions, accuracy sweeps and timing reports for the nd-project FMM."
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "nd_fmm_validate"
+
+[dependencies]
+nd-fmm-math = { workspace = true }
+nd-fmm-ref = { workspace = true }
