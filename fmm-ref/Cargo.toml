@@ -1,0 +1,18 @@
+[package]
+name = "nd-fmm-ref"
+version = "0.1.0-dev"
+description = "Reference Laplace FMM operators and direct-sum oracle for the nd-project FMM."
+readme = "README.md"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "nd_fmm_ref"
+
+[dependencies]
+nd-fmm-math = { workspace = true }
+num-traits = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
