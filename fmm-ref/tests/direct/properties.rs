@@ -18,14 +18,14 @@ use crate::m2l::check_against_direct_sum;
 
 /// Frames with centres in [−10, 10]³ and radii either powers of two from 2⁻²⁰ to 2³
 /// or uniform in [10⁻³, 10].
-fn frame() -> impl Strategy<Value = Frame<f64>> {
+pub fn frame() -> impl Strategy<Value = Frame<f64>> {
     let radius = prop_oneof![(-20i32..=3).prop_map(|k| 2f64.powi(k)), 1e-3..10.0f64];
     ([-10.0..10.0f64, -10.0..10.0f64, -10.0..10.0f64], radius)
         .prop_map(|(centre, radius)| Frame::new(centre, radius))
 }
 
 /// Directions, not too short to normalise.
-fn direction() -> impl Strategy<Value = [f64; 3]> {
+pub fn direction() -> impl Strategy<Value = [f64; 3]> {
     [-1.0..1.0f64, -1.0..1.0f64, -1.0..1.0f64]
         .prop_filter("direction must not be tiny", |v| norm(*v) > 0.1)
         .prop_map(|v| v.map(|c| c / norm(v)))
@@ -34,11 +34,11 @@ fn direction() -> impl Strategy<Value = [f64; 3]> {
 /// A frame nested in an outer one, as (radius ratio in [0.1, 0.9], direction,
 /// fraction in [0, 1] of the largest offset √3 (1 − ratio) that keeps the inner
 /// sphere inside the outer one).
-fn nesting() -> impl Strategy<Value = (f64, [f64; 3], f64)> {
+pub fn nesting() -> impl Strategy<Value = (f64, [f64; 3], f64)> {
     (0.1..=0.9f64, direction(), 0.0..=1.0f64)
 }
 
-fn nest(outer: &Frame<f64>, (ratio, direction, fraction): (f64, [f64; 3], f64)) -> Frame<f64> {
+pub fn nest(outer: &Frame<f64>, (ratio, direction, fraction): (f64, [f64; 3], f64)) -> Frame<f64> {
     let offset = direction.map(|c| c * fraction * SQRT3 * (1.0 - ratio));
     Frame::new(place(outer, offset), ratio * outer.radius)
 }
@@ -53,7 +53,7 @@ fn charge() -> impl Strategy<Value = f64> {
 }
 
 /// 64 cases per property, as for the other test targets.
-fn config() -> ProptestConfig {
+pub fn config() -> ProptestConfig {
     ProptestConfig::with_cases(64)
 }
 
