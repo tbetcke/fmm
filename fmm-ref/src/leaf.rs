@@ -301,7 +301,7 @@ fn contract<T: RealScalar>(p: usize, coefficients: &[T], values: &[T]) -> T {
 }
 
 /// Panics unless the coefficient slice `name` has length (p + 1)².
-fn check_coefficients<T>(p: usize, coefficients: &[T], name: &str) {
+pub(crate) fn check_coefficients<T>(p: usize, coefficients: &[T], name: &str) {
     let len = Layout::new(p).len();
     assert_eq!(
         coefficients.len(),
