@@ -27,7 +27,21 @@
 //!   storage; Euler angles in the z-y-z convention.
 //! - Precision (§3.9): f64 tested for p ≤ 30, f32 for p ≤ 8.
 //!
+//! ## Contents
+//!
+//! - [`RealScalar`]: the scalar trait all numeric code is generic over (`f32`, `f64`).
+//! - [`Layout`]: the real storage index layout of §3.6.
+//! - [`harmonics`]: regular and irregular solid harmonics and their gradients,
+//!   evaluated by the Cartesian recursions of §3.5.
+//!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
+
+pub mod harmonics;
+mod layout;
+mod scalar;
+
+pub use layout::Layout;
+pub use scalar::RealScalar;
 
 /// Version of the conventions in
 /// [`docs/CONVENTIONS.md`](https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md)
