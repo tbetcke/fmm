@@ -50,7 +50,7 @@ In the repository root, start `claude` and say:
 "Read docs/phase0/T<k>-<name>.md and do that task." Review and merge before the next.
 
 ## Exit checklist
-- [ ] T1 merged: workspace dependencies, `fmm-math` skeleton, CI green
+- [x] T1 merged: workspace dependencies, `fmm-math` skeleton, CI green
 - [ ] T2 merged: `CONVENTION_VERSION = 1` in `nd-fmm-math`
 - [ ] `docs/CONVENTIONS.md` reviewed and signed off
 - [ ] T3 merged: fixtures regenerate byte-identically, under 2 MB
