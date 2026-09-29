@@ -10,9 +10,12 @@ use nd_fmm_math::{Layout, RealScalar};
 /// with a larger degree panics. Its contents between calls are unspecified, and one
 /// workspace can be reused for any sequence of operators.
 ///
-/// It currently holds the buffers of the leaf operators in [`leaf`](crate::leaf): one
-/// set of solid-harmonic values and their three gradient components, each of length
-/// (p + 1)² in the real storage of CONVENTIONS §3.6.
+/// It holds the buffers of the leaf operators in [`leaf`](crate::leaf): one set of
+/// solid-harmonic values and their three gradient components, each of length (p + 1)²
+/// in the real storage of CONVENTIONS §3.6. For the translations in
+/// [`direct`](crate::direct) it holds the solid harmonics of the shift vector, up to
+/// degree 2p ((2p + 1)² reals), because M2L needs irregular harmonics up to degree 2p
+/// (CONVENTIONS §3.11).
 ///
 /// ```
 /// use nd_fmm_ref::{Frame, Workspace, leaf};
@@ -37,6 +40,8 @@ pub struct Workspace<T: RealScalar> {
     harmonics: Vec<T>,
     /// ∂x, ∂y and ∂z of the solid harmonics, (p + 1)² each in real storage.
     gradient: [Vec<T>; 3],
+    /// Solid harmonics of a translation's shift vector, (2p + 1)² in real storage.
+    shift: Vec<T>,
 }
 
 impl<T: RealScalar> Workspace<T> {
@@ -47,6 +52,7 @@ impl<T: RealScalar> Workspace<T> {
             p,
             harmonics: vec![T::zero(); len],
             gradient: core::array::from_fn(|_| vec![T::zero(); len]),
+            shift: vec![T::zero(); Layout::new(2 * p).len()],
         }
     }
 
@@ -89,6 +95,23 @@ impl<T: RealScalar> Workspace<T> {
             [&mut gx[..len], &mut gy[..len], &mut gz[..len]],
         )
     }
+
+    /// The buffer for the solid harmonics of a translation's shift vector up to degree
+    /// `degree`, of length (degree + 1)², for a translation of degree `p`: `degree` is
+    /// p for M2M and L2L and 2p for M2L (CONVENTIONS §3.11).
+    ///
+    /// # Panics
+    ///
+    /// If `p` exceeds [`p`](Self::p), or if `degree` exceeds 2p.
+    pub(crate) fn shift(&mut self, p: usize, degree: usize) -> &mut [T] {
+        self.check(p);
+        assert!(
+            degree <= 2 * p,
+            "shift harmonics of degree {degree} exceed 2p = {}",
+            2 * p
+        );
+        &mut self.shift[..Layout::new(degree).len()]
+    }
 }
 
 #[cfg(test)]
@@ -104,6 +127,22 @@ mod tests {
         let (values, [gx, gy, gz]) = ws.harmonics_and_gradient(3);
         assert_eq!([values.len(), gx.len(), gy.len(), gz.len()], [16; 4]);
         assert_eq!(Workspace::<f32>::new(0).harmonics(0).len(), 1);
+        assert_eq!(ws.shift(5, 10).len(), 121);
+        assert_eq!(ws.shift(5, 5).len(), 36);
+        assert_eq!(ws.shift(2, 4).len(), 25);
+        assert_eq!(Workspace::<f32>::new(0).shift(0, 0).len(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Workspace built for p = 3 is too small for p = 4")]
+    fn shift_rejects_larger_p() {
+        let _ = Workspace::<f64>::new(3).shift(4, 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "shift harmonics of degree 5 exceed 2p = 4")]
+    fn shift_rejects_degree_above_2p() {
+        let _ = Workspace::<f64>::new(3).shift(2, 5);
     }
 
     #[test]
