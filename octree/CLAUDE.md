@@ -25,9 +25,13 @@ stores Morton keys, tree structure, ownership, and neighbour relationships. It
 does **not** store point arrays or application data — those, and any algorithms
 on them, live outside this crate.
 
-- Single Cargo package, not a workspace.
+- A member of the `nd-project/fmm` Cargo workspace (root `Cargo.toml`, members
+  `octree` and `fmm-plan`). The root `CLAUDE.md` applies as well; `nd-fmm-plan`
+  depends on this crate through the path `../octree`.
 - MPI is a **required** dependency (also for one-rank programs), not a feature.
-- Upstream: <https://codeberg.org/nd-project/octree>, CI via Forgejo Actions.
+- Developed in <https://codeberg.org/nd-project/fmm>, with CI via Forgejo Actions at
+  the workspace root. The `repository` and `homepage` fields in `Cargo.toml` still
+  point at the former standalone repository `nd-project/octree`.
 - Licensed MIT / Apache-2.0.
 
 ## Code map
@@ -45,7 +49,7 @@ on them, live outside this crate.
 | `src/vtk.rs` | Dependency-free ASCII VTK/PVTU writer: serial `write_vtu` and collective `write_pvtu`. |
 | `tests/` | `mpi_edge_cases.rs` (one-rank construction regression), `vtk.rs` (serial VTK writer tests against the public `nd_octree::vtk` API). |
 | `examples/test_mpi_*.rs` | Executable, assertion-based MPI integration tests. |
-| `.forgejo/workflows/` | Authoritative CI commands. |
+| `../.forgejo/workflows/` | Authoritative CI commands, at the workspace root (shared with `nd-fmm-plan`). |
 | `find_examples.py` | Legacy shell-script generator driven by `//?` comments. It is **not** the current example runner; ignore it unless asked to work on it. |
 
 When checking how the API actually behaves, read the implementation and the
@@ -65,20 +69,36 @@ is an empty placeholder and does **not** enable MPI.
 
 ## Checks
 
-Run everything from the repository root. These are exactly what the
-`run-tests` workflow does:
+This crate is a workspace member, so run commands from the workspace root and
+select it with `-p nd-octree`. The root `run-tests` workflow
+(`.forgejo/workflows/run-tests.yml`, on pull requests to `main`) runs exactly
+this for the whole workspace:
 
 ```sh
 cargo fmt -- --check
-cargo clippy --all-targets --features strict -- -D warnings
+cargo clippy -- -D warnings
+cargo clippy --examples -- -D warnings
 RUST_MIN_STACK=8388608 cargo test
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
-cargo build --examples
+cargo doc --no-deps
 ```
 
+CI checks less than this crate has traditionally required. Run these stricter
+checks locally as well; they are not enforced by CI, but they pass on the
+current code:
+
+```sh
+cargo clippy -p nd-octree --all-targets --features strict -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps -p nd-octree
+cargo build -p nd-octree --examples
+```
+
+The root `CLAUDE.md` also asks for
+`cargo clippy --workspace --all-targets -- -D warnings` and
+`cargo test --workspace` before finishing a task.
+
 `RUST_MIN_STACK=8388608` is set as a CI environment variable; some tests need
-it. For a focused run, append a filter, e.g.
-`RUST_MIN_STACK=8388608 cargo test test_neighbours`.
+it. For a focused run, select the package and append a filter, e.g.
+`RUST_MIN_STACK=8388608 cargo test -p nd-octree test_neighbours`.
 
 `cargo test` also runs the doctests in the crate documentation. MPI doctests are
 marked `no_run` because they must be launched by an MPI launcher; keep that
@@ -97,10 +117,11 @@ needs a working MPI *runtime*, not just a linkable `libmpi`.
 
 `cargo test` does **not** run the example executables. For any change touching
 distributed code, build and run them explicitly with one rank and with multiple
-ranks:
+ranks. The target directory is shared at the workspace root, so the paths below
+work from there:
 
 ```sh
-cargo build --examples
+cargo build -p nd-octree --examples
 mpirun -n 1 target/debug/examples/test_mpi_complete_tree
 mpirun -n 3 target/debug/examples/test_mpi_complete_tree
 mpirun -n 3 target/debug/examples/test_mpi_global_bounding_box
@@ -110,18 +131,24 @@ mpirun -n 3 target/debug/examples/test_mpi_leaf_lookup
 mpirun -n 3 target/debug/examples/test_mpi_vtk target/vtk-example
 ```
 
-CI (both `run-tests` and the scheduled `run-examples`) only runs
-`test_mpi_complete_tree`, `test_mpi_global_bounding_box`, and
-`test_mpi_construction_edge_cases`, at 1 and 3 ranks.
-`test_mpi_leaf_lookup` and `test_mpi_vtk` are registered in `Cargo.toml` but are
-**not** in the CI loops — run them by hand when you touch lookup or VTK output.
+On macOS, a multi-rank launch can hang: Open MPI picks a non-loopback interface
+and the TCP connection times out. Add
+`--mca btl_tcp_if_include lo0 --mca oob_tcp_if_include lo0` (see
+`fmm-plan/CLAUDE.md`), and wrap multi-rank runs in an external timeout.
+
+`run-tests` only compiles the examples (`cargo clippy --examples`); it runs none
+of them. The weekly `run-examples` workflow runs
+`cargo templated-examples NPROCESSES 3`. That launches the examples registered
+with `templated-examples` metadata in `Cargo.toml` (currently all five) at
+3 ranks only. So no example runs on one rank in CI, and none runs on pull
+requests. Run the one-rank cases above by hand.
 
 Register every new example in `Cargo.toml` with both a `[[example]]` section and
 a `[package.metadata.example.<name>.templated-examples]` entry using
 `command = "mpirun -n {{NPROCESSES}}"`, matching the existing entries.
 
-A scheduled `run-dependency-checks` workflow runs `cargo audit` and
-`cargo upgrades` weekly.
+A weekly `run-dependency-checks` workflow runs `cargo upgrades` (not
+`cargo audit`).
 
 Report which checks you actually ran, and say plainly when something could not
 run (missing MPI, missing native libraries). Never claim an unrun check passed.
@@ -210,5 +237,9 @@ way around a failing debug assertion.
   `tools::seeded_rng` / `tools::generate_random_keys` where randomness helps.
   Exercise distributed behaviour in `examples/test_mpi_*.rs`, covering rank
   boundaries, empty ranks, and ghost/neighbour consistency.
-- Keep ignored artifacts out of commits: `target/`, VTK output, `*.csv`.
-  `Cargo.lock` is gitignored (library crate) — do not add it.
+- Keep build artifacts out of commits. The root `.gitignore` covers `target/`, but
+  not VTK output or `*.csv`, so leave those out by hand (`_test_sphere.vtk` is an
+  existing tracked file).
+- `Cargo.lock` lives at the workspace root and is committed. There is no crate-level
+  lock file. Commit lock-file changes together with the manifest change that causes
+  them.

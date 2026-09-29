@@ -33,11 +33,15 @@ exchanges, U/V/W/X lists) can be checked exactly. It is included only to test
 those workflows. Real FMM operators belong outside this crate and plug in
 through the `FmmOperator` trait.
 
-- Single Cargo package, not a workspace. Library only, no binaries.
+- A member of the `nd-project/fmm` Cargo workspace (root `Cargo.toml`, members
+  `octree` and `fmm-plan`). The root `CLAUDE.md` applies as well. Library only, no
+  binaries.
 - MPI is a **required** dependency, including for one-rank runs.
 - Version `0.1.0-dev`; the public API is unstable and partly unimplemented.
-- Upstream <https://codeberg.org/nd-project/nd-plan>, CI via Forgejo Actions.
-  (The `homepage` field in `Cargo.toml` has a typo: `codeberg.com.com`.)
+- Developed in <https://codeberg.org/nd-project/fmm>, with CI via Forgejo Actions at
+  the workspace root. The `repository` field in `Cargo.toml` still points at the
+  former standalone repository `nd-project/nd-plan`, and `homepage` has a typo
+  (`codeberg.com.com`).
 - Licensed MIT / Apache-2.0.
 
 ## Code map
@@ -52,8 +56,8 @@ through the `FmmOperator` trait.
 | `src/fmm.rs`, `src/fmm/` | Distributed FMM evaluation: the `FmmOperator` trait (`operator.rs`), the generic driver `FmmEvaluator` and per-level store `LevelData` (`evaluator.rs`), and the index-propagating test FMM `IndexFmm` / `run_index_fmm` (`index_fmm.rs`). Serial tests in `evaluator_tests.rs` and `index_fmm_tests.rs`. |
 | `tests/mpi_regressions.rs` | One `#[test]` that owns MPI init and runs 11 named scenarios sequentially. Each builds an `Octree` from the union of a source and a target point set (with the ghost-children layer) and checks the tree, the interaction lists against an oracle, and a forward/backward ghost exchange of every interaction-list ghost, and the index FMM (every leaf must receive every leaf index exactly once). |
 | `examples/test_index_fmm.rs` | Seeded-random MPI run of the index FMM. |
-| `.forgejo/workflows/run-tests.yml` | The authoritative CI commands (PRs to `main` only). |
-| `.forgejo/workflows/run-examples.yml`, `run-dependency-checks.yml` | Weekly scheduled jobs. |
+| `../.forgejo/workflows/run-tests.yml` | The authoritative CI commands (PRs to `main` only), at the workspace root and shared with `nd-octree`. |
+| `../.forgejo/workflows/run-examples.yml`, `run-dependency-checks.yml` | Weekly scheduled jobs, also at the workspace root. |
 
 Read `src/interaction_manager.rs`, `src/fmm/evaluator.rs` and `tests/mpi_regressions.rs` for
 how the API actually behaves; prose is a summary, they are the contract.
@@ -66,16 +70,18 @@ resolve through the real dependency graph, so they land on the right definition
 without you having to know where a crate keeps its sources, and a miss is a
 genuine "not found" rather than a typo in a path.
 
-This matters most across the two path dependencies. Their layouts do not match:
-`nd-octree` is a plain crate (`../octree/src/…`), but rlst nests its crate one
-level down (`../rlst/rlst/src/…`). A grep aimed at `../rlst/src/` silently
-returns nothing and reads as "this symbol does not exist" — a real trap when
-checking what `rlst` provides (`DistributedArray`, `IndexLayout`,
-`DataPermutation`, `sort_to_bins`, `all_to_allv`) or what `nd_octree` guarantees.
+This matters most across the dependencies. `nd-octree` is the workspace sibling
+at `../octree/src/…`. `rlst` comes from crates.io (0.8.0), so its sources are in
+Cargo's registry cache (`~/.cargo/registry/src/*/rlst-0.8.0/`). They are not in a
+`../rlst` checkout, which, if present on the machine, is an unrelated
+development tree and may differ from 0.8.0. A grep aimed at the wrong tree
+silently finds nothing, or finds a different version, and reads as fact. That is
+a real trap when checking what `rlst` provides or what `nd_octree` guarantees.
 
 `grep` is still the right tool for what LSP does not index: text in comments,
 CI YAML, `Cargo.toml`, and quick "where is this string" sweeps. Within this
-crate's six small source files, reading a whole file beats either.
+crate's seven small source modules (plus their `*_tests.rs` files), reading a
+whole file beats either.
 
 ## The interaction manager
 
@@ -117,18 +123,25 @@ way: do not add blanket `#[allow]`s.
 
 Stable Rust with Rust 2024, plus `rustfmt` and `clippy`.
 
-- `nd-octree` resolves to the **sibling path `../octree`** (the git source is
-  commented out in `Cargo.toml`). That checkout must exist and be readable. Do
-  not silently switch to the git dependency; the two can diverge.
-- `rlst` supplies `DistributedArray`, `IndexLayout`, `DataPermutation`,
-  `sort_to_bins` and `all_to_allv`.
+- `nd-octree` is a path dependency on the workspace sibling `../octree`
+  (`nd-octree = { path = "../octree" }`). Keep it that way: do not switch to a
+  git or crates.io source, which can diverge from the workspace copy.
+- `rlst` 0.8.0 (feature `mpi`) comes from crates.io, as does `mpi` 0.8.2 (rsmpi).
+  The crate uses rlst's `distributed_tools::{GhostCommunicator,
+  GhostCommunicatorBuilder, ChunkSizes}` in `ghost_communicator.rs`, and
+  `distributed_tools::array_tools::gather_to_all` in `evaluator.rs`,
+  `index_fmm.rs` and the tests. Tests and examples also use `rlst_dynamic_array`
+  and `println_mpi`.
+- All dependencies are declared directly in this crate's `Cargo.toml`; the
+  workspace has no `[workspace.dependencies]` yet.
 - Native prerequisites, as installed by CI: `libclang-dev cmake libfftw3-dev
   libopenblas-dev openmpi-bin libopenmpi-dev`. A dependency build failure is far
   more often a missing native library than a defect here.
 
 ## Checks
 
-Run from the repository root. CI (`run-tests.yml`) runs exactly:
+Run from the workspace root. CI (`.forgejo/workflows/run-tests.yml`) runs
+exactly this, for every workspace member, not just this crate:
 
 ```sh
 cargo fmt -- --check
@@ -138,15 +151,20 @@ RUST_MIN_STACK=8388608 cargo test
 cargo doc --no-deps
 ```
 
+For this crate alone, add `-p nd-fmm-plan` (e.g.
+`RUST_MIN_STACK=8388608 cargo test -p nd-fmm-plan`). The root `CLAUDE.md` also
+asks for `cargo clippy --workspace --all-targets -- -D warnings` and
+`cargo test --workspace` before finishing a task.
+
 Also useful locally:
 
 ```sh
-cargo run --example test_index_fmm
+cargo run -p nd-fmm-plan --example test_index_fmm
 ```
 
 `RUST_MIN_STACK=8388608` matters — keep it on test invocations.
 
-Plain `cargo test` gives 22 unit tests plus the integration test **on one rank
+`cargo test -p nd-fmm-plan` gives 22 unit tests plus the integration test **on one rank
 only**. It exercises no redistribution and no ghost layer, which is where the
 interesting bugs are.
 
@@ -158,7 +176,7 @@ communicator or the FMM evaluator (whose ghost-dependent and global-level
 paths only exist on more than one rank), build the test binary and launch it under MPI:
 
 ```sh
-cargo test --test mpi_regressions --no-run   # note the executable path it prints
+cargo test -p nd-fmm-plan --test mpi_regressions --no-run   # note the executable path it prints
 RUST_MIN_STACK=8388608 mpiexec -n 2 target/debug/deps/mpi_regressions-<hash> --test-threads=1
 RUST_MIN_STACK=8388608 mpiexec -n 4 target/debug/deps/mpi_regressions-<hash> --test-threads=1
 ```
@@ -183,7 +201,8 @@ leaves the others blocked in a collective, and the job hangs rather than failing
 The scheduled `run-examples` workflow calls `cargo templated-examples`, but
 `Cargo.toml` has **no** `[[example]]` or `[package.metadata.example.*]` entries,
 so that job does nothing for this crate today. If you add examples that should
-run in CI, add both sections, mirroring the `nd-octree` repository.
+run in CI, add both sections, mirroring `octree/Cargo.toml`. That job runs
+them at 3 ranks only.
 
 ## Octree input and MPI discipline
 
