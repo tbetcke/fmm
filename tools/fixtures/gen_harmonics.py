@@ -5,9 +5,10 @@
 # ///
 """High-precision fixtures for the solid harmonics of docs/CONVENTIONS.md.
 
-Writes fmm-math/fixtures/harmonics_{A,B}.json: regular harmonics R_n^m and irregular
+Writes fmm-math/fixtures/harmonics_{A,B,C}.json: regular harmonics R_n^m and irregular
 harmonics I_n^m (CONVENTIONS §3.3) and their Cartesian gradients, in the real storage
-order of §3.6, at seeded random points in the ranges of §3.9.
+order of §3.6, at seeded random points in the ranges of §3.9. Set C holds irregular
+values only (no gradients), up to the degree 2p that M2L needs (§3.9, §3.11).
 
 Everything is computed from the definitions in §3.3, not from the recursions of §3.5
 that the Rust code implements:
@@ -39,24 +40,29 @@ import mpmath
 from mpmath import mp, mpf, mpc
 
 # Bump when the generator changes its output (format, points or algorithm).
-GENERATOR_VERSION = 1
+GENERATOR_VERSION = 2
 MPMATH_VERSION = "1.4.1"
 # Significant digits every value is verified to before rounding to double.
 DIGITS = 40
-# Limit on the total size of the committed fixtures (docs/phase0/T3-fixtures.md).
-MAX_TOTAL_BYTES = 3_000_000
+# Limit on the total size of the committed fixtures: 3 MB in docs/phase0/T3-fixtures.md,
+# raised to 3.5 MB for set C (docs/phase1/T2-translation-conventions.md).
+MAX_TOTAL_BYTES = 3_500_000
 
 ROOT = Path(__file__).resolve().parents[2]
 CONVENTIONS = ROOT / "docs" / "CONVENTIONS.md"
 OUT_DIR = ROOT / "fmm-math" / "fixtures"
 
 # Ranges of CONVENTIONS §3.9: regular harmonics inside the box's sphere, irregular ones
-# well separated.
+# well separated; for set C the scaled M2L shifts |c' - c| / r in [4, 6 sqrt(3)].
 REGULAR_RADII = (0.0, math.sqrt(3.0))
 IRREGULAR_RADII = (2.0, 8.0)
+M2L_RADII = (4.0, 11.0)
 
-# name, seed, number of points per family, maximum degree p.
+# name, seed, number of points per family, maximum degree p. Sets A and B: both
+# families with gradients; their points are drawn regular first, then irregular.
 SETS = [("A", 20260929, 10, 30), ("B", 20260930, 50, 8)]
+# name, seed, number of points, maximum degree p. Set C: irregular values only.
+IRREGULAR_VALUE_SETS = [("C", 20261001, 4, 40)]
 
 # Working precision (decimal digits) for values and its verification, and for the
 # central differences, with their step sizes.
@@ -303,6 +309,52 @@ def point_record(coef, p, x, regular):
     }
 
 
+def value_record(coef, p, x):
+    """Irregular values only, verified as in values_and_gradients (set C)."""
+    what = f"I at {x}"
+    with mp.workdps(VALUE_DPS):
+        value = harmonics(coef, p, x, False)
+    with mp.workdps(VALUE_CHECK_DPS):
+        check_close(p, harmonics(coef, p, x, False), value, what)
+    return {"x": [fmt(c) for c in x], "value": [fmt(v) for v in real_storage(p, value)]}
+
+
+def generate_irregular_values(name, seed, count, p, version):
+    rng = random.Random(seed)
+    points = random_points(rng, count, *M2L_RADII)
+    coef = legendre_derivative_coefficients(p)
+    with mp.workdps(VALUE_DPS):
+        for x in points[:LEGENP_POINTS]:
+            x, y, z = (mpf(c) for c in x)
+            cross_check_legendre(coef, p, z / mpmath.sqrt(x * x + y * y + z * z))
+    header = {
+        "description": (
+            "Real irregular solid harmonics I_n^m, values only "
+            "(docs/CONVENTIONS.md §3.3, §3.6), at seeded random points in the range "
+            "of the M2L shifts (§3.9, §3.11)"
+        ),
+        "set": name,
+        "convention_version": version,
+        "generator": "tools/fixtures/gen_harmonics.py",
+        "generator_version": GENERATOR_VERSION,
+        "mpmath_version": MPMATH_VERSION,
+        "verified_digits": DIGITS,
+        "seed": seed,
+        "p": p,
+        "layout": "real storage, index n*n + n + m for -n <= m <= n (§3.6)",
+        "format": (
+            "decimal strings, 17 significant digits of the nearest double; "
+            "no gradients, and no regular records"
+        ),
+        "irregular_radius": [fmt(r) for r in M2L_RADII],
+    }
+    return {
+        "header": header,
+        "regular": [],
+        "irregular": [value_record(coef, p, x) for x in points],
+    }
+
+
 def generate(name, seed, count, p, version):
     rng = random.Random(seed)
     regular_points = random_points(rng, count, *REGULAR_RADII)
@@ -367,8 +419,10 @@ def main():
     check_legendre_sign()
     version = convention_version()
     total, stale = 0, []
-    for name, seed, count, p in SETS:
-        data = generate(name, seed, count, p, version)
+    jobs = [(name, seed, count, p, generate) for name, seed, count, p in SETS]
+    jobs += [(name, seed, count, p, generate_irregular_values) for name, seed, count, p in IRREGULAR_VALUE_SETS]
+    for name, seed, count, p, make in jobs:
+        data = make(name, seed, count, p, version)
         path = OUT_DIR / f"harmonics_{name}.json"
         text = (to_json(data) + "\n").encode("utf-8")
         total += len(text)

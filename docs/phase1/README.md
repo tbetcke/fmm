@@ -43,7 +43,8 @@ These hold for every task, so that no task decides them on its own:
   output expansion: a `Frame { centre, radius }`, where the radius is the scaling
   radius r of CONVENTIONS §3.7. No shift-sign convention leaks into the API, and
   §3.11 states the shift inside each formula. Phase 2 obtains the level-independent
-  tables by fixing the radii (r' = 2r for M2M and L2L, r' = r for M2L) and the offsets.
+  tables by fixing the radii (r' = 2r for M2M (child to parent), r' = r/2 for L2L
+  (parent to child), r' = r for M2L) and the offsets.
 - **Scaled coefficients only** (§3.7). There is no unscaled variant.
 - **Accumulate.** Every operator adds (+=) into its output, as `nd-fmm-plan`'s
   `FmmOperator` does. No operator applies 1/(4π) (§3.1).
