@@ -12,6 +12,10 @@ Default flow: make the change, run the checks, report exactly which ones ran and
 what they said, and leave the result uncommitted unless the current message asks
 for a commit. Never report a check as passing that you did not run.
 
+Always run `cargo fmt --all` after editing any Rust code, before running the
+other checks or committing. CI rejects unformatted code, and mechanical edits
+(renames, `sed` replacements) easily break import ordering.
+
 ## Project
 
 `nd-fmm-plan` (Cargo package `nd-fmm-plan`, Rust crate `nd_fmm_plan`, Rust 2024) plans the
