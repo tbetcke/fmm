@@ -55,7 +55,7 @@ In the repository root, start `claude` and say:
 - [x] T1 merged: workspace dependencies, `fmm-math` skeleton, CI green
 - [x] T2 merged: `CONVENTION_VERSION = 1` in `nd-fmm-math`
 - [x] `docs/CONVENTIONS.md` reviewed and signed off
-- [ ] T3 merged: fixtures regenerate byte-identically, under 3 MB
+- [x] T3 merged: fixtures regenerate byte-identically, under 3 MB
 - [ ] T4 merged: fixture, separation, addition-theorem and harmonicity tests pass in f64 and f32
 - [ ] T5 merged: rotation, homomorphism, orthogonality and z-rotation tests pass up to p = 30
 - [ ] T6 report written: f32 GEMM throughput on Metal, f64 on the CPU runtime, default M2L strategy recommended (f64 provisional)
