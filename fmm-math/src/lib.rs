@@ -27,10 +27,10 @@
 //!   storage; Euler angles in the z-y-z convention.
 //! - Precision (§3.9): f64 tested for p ≤ 30, f32 for p ≤ 8.
 //!
-//! [conventions]: https://codeberg.org/nd-project/fmm/src/branch/main/docs/CONVENTIONS.md
+//! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 
 /// Version of the conventions in
-/// [`docs/CONVENTIONS.md`](https://codeberg.org/nd-project/fmm/src/branch/main/docs/CONVENTIONS.md)
+/// [`docs/CONVENTIONS.md`](https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md)
 /// that this crate implements (CONVENTIONS §3.10).
 ///
 /// Any change to CONVENTIONS §3.1–§3.8 bumps this value, which invalidates committed

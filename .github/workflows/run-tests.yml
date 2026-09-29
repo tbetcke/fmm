@@ -5,22 +5,22 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   run-tests-rust:
     name: run-tests
-    runs-on: docker
+    runs-on: ubuntu-latest
     steps:
       - name: Install Rust
-        uses: https://github.com/dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
 
       - uses: actions/checkout@v6
         with:
           submodules: "true"
-
-      - name: Add universe repository
-        run: sudo add-apt-repository universe
 
       - name: Update package list
         run: sudo apt-get update
@@ -49,7 +49,7 @@ jobs:
           cargo clippy --examples -- -D warnings
 
       - name: Run unit tests
-        run: RUST_MIN_STACK=8388608 cargo test 
+        run: RUST_MIN_STACK=8388608 cargo test
 
       - name: Build docs
-        run: cargo doc --no-deps 
+        run: cargo doc --no-deps
