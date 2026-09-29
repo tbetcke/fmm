@@ -16,6 +16,7 @@ Do:
 - Keep crosscheck_scipy.py working as an independent double-precision second opinion;
   it must agree with the mpmath fixtures to about 1e-13.
 
-Must pass: regeneration is byte-identical; total fixture size under 2 MB.
+Must pass: regeneration is byte-identical; total fixture size under 3 MB (raised from
+2 MB: the point counts above at 17 significant digits need about 2.8 MB).
 
 Do not: write any Rust in this task.
