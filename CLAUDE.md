@@ -36,7 +36,9 @@ own CLAUDE.md for crate-specific rules; everything here applies to all of them.
   (its `IndexFmm` uses `u32`).
 - New dependencies of new crates only through [workspace.dependencies]; octree/ and
   fmm-plan/ declare theirs directly until migrated (a separate decision). CubeCL only
-  in nd-fmm-kernels and spikes/.
+  in nd-fmm-kernels and spikes/; it is pinned to `=0.10.0` (matmul: `cubek-matmul`
+  `=0.2.0`) in [workspace.dependencies]. 0.10.0 has no f64 on CUDA; see
+  spikes/cubecl-gemm/SPIKE_REPORT.md.
 - Document every public item; follow the crate's existing rustdoc style.
 
 ## Layout

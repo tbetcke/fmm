@@ -1,0 +1,19 @@
+[package]
+name = "nd-fmm-spike-cubecl-gemm"
+version = "0.0.0"
+description = "Throwaway benchmark: CubeCL GEMM throughput for dense M2L shapes (Phase 0, T6)."
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["metal", "cpu"]
+metal = ["cubecl/metal"]
+cpu = ["cubecl/cpu"]
+cuda = ["cubecl/cuda"]
+
+[dependencies]
+cubecl.workspace = true
+cubek-matmul.workspace = true
+cubek-std.workspace = true
