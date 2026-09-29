@@ -51,7 +51,7 @@ In the repository root, start `claude` and say:
 
 ## Exit checklist
 - [x] T1 merged: workspace dependencies, `fmm-math` skeleton, CI green
-- [ ] T2 merged: `CONVENTION_VERSION = 1` in `nd-fmm-math`
+- [x] T2 merged: `CONVENTION_VERSION = 1` in `nd-fmm-math`
 - [ ] `docs/CONVENTIONS.md` reviewed and signed off
 - [ ] T3 merged: fixtures regenerate byte-identically, under 2 MB
 - [ ] T4 merged: fixture, separation, addition-theorem and harmonicity tests pass in f64 and f32
