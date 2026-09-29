@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.9"
+# dependencies = ["numpy", "scipy"]
+# ///
 """Double-precision cross-check of docs/CONVENTIONS.md (CONVENTION_VERSION = 1).
 
 Independent second opinion next to the mpmath fixtures (T3). Checks, against SciPy's
@@ -6,12 +10,20 @@ Legendre functions with the Condon-Shortley phase removed:
   - separation identity and addition theorem of §3.4
   - gradient ladder of §3.4 (finite differences)
   - orthogonality of N D^n N^-1 for the rotation blocks of §3.8
+  - the committed mpmath fixtures fmm-math/fixtures/harmonics_*.json: values from the
+    definitions of §3.3, regular gradients from the ladder of §3.4, irregular gradients
+    from the analogous ladder dz I_n^m = -I_{n+1}^m, (dx - i dy) I_n^m = I_{n+1}^{m-1},
+    (dx + i dy) I_n^m = -I_{n+1}^{m+1}. Errors are relative to the largest reference
+    value of the same degree, since single components can be close to zero.
 
-Run: python3 tools/fixtures/crosscheck_scipy.py   (needs numpy, scipy)
+Run from the repository root: python3 tools/fixtures/crosscheck_scipy.py
+(needs numpy, scipy), or: uv run tools/fixtures/crosscheck_scipy.py
 Exits non-zero if any check exceeds its tolerance.
 """
+import json
 import sys
 from math import factorial as f
+from pathlib import Path
 
 import numpy as np
 from scipy.special import lpmv
@@ -124,9 +136,56 @@ for n in (3, 8):
     W = np.diag(N) @ D @ np.diag(1 / N)
     checks.append((f"N D^{n} N^-1 orthogonal", np.abs(W @ W.T - np.eye(2 * n + 1)).max(), 1e-12))
 
+
+
+def ladder_grad(X, sign, x, n, m):
+    """Gradient of X_n^m from the ladder: sign = -1 for R (degree n - 1), +1 for I (n + 1)."""
+    k = n + sign
+    Xk = lambda mm: X(k, mm, x) if 0 <= k and abs(mm) <= k else 0
+    if sign < 0:
+        dz, A, B = Xk(m), Xk(m - 1), -Xk(m + 1)
+    else:
+        dz, A, B = -Xk(m), Xk(m - 1), -Xk(m + 1)
+    # A = (dx - i dy) X, B = (dx + i dy) X.
+    return (A + B) / 2, 1j * (A - B) / 2, dz
+
+
+def fixture_errors(p, records, X, sign):
+    """Worst per-degree relative error of values and gradients in real storage (§3.6)."""
+    worst = [0.0, 0.0]
+    for rec in records:
+        x = np.array([float(c) for c in rec["x"]])
+        refs = [rec["value"], *rec["grad"]]
+        for n in range(p + 1):
+            ours = [[] for _ in refs]
+            for m in range(-n, n + 1):
+                c = X(n, abs(m), x)
+                g = ladder_grad(X, sign, x, n, abs(m))
+                for arr, v in zip(ours, (c, *g)):
+                    arr.append(v.real if m >= 0 else v.imag)
+            for k, (arr, ref) in enumerate(zip(ours, refs)):
+                ref = np.array([float(v) for v in ref[n * n : (n + 1) ** 2]])
+                scale = np.abs(ref).max()
+                err = np.abs(np.array(arr) - ref).max()
+                worst[min(k, 1)] = max(worst[min(k, 1)], err / scale if scale > 0 else err)
+    return worst
+
+
+fixtures = sorted((Path(__file__).resolve().parents[2] / "fmm-math" / "fixtures").glob("harmonics_*.json"))
+if not fixtures:
+    checks.append(("mpmath fixtures present", float("inf"), 0))
+for path in fixtures:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    fp = data["header"]["p"]
+    for family, X, sign in (("regular", R_def, -1), ("irregular", I_def, 1)):
+        ev, eg = fixture_errors(fp, data[family], X, sign)
+        label = f"{path.stem} {family[0].upper()}"
+        checks.append((f"{label} values (p={fp})", ev, 1e-13))
+        checks.append((f"{label} gradients (p={fp})", eg, 1e-13))
+
 ok = True
 for name, e, tol in checks:
     status = "ok" if e <= tol else "FAIL"
     ok &= e <= tol
-    print(f"{status:4}  {name:32} {e:.2e}  (tol {tol:.0e})")
+    print(f"{status:4}  {name:36} {e:.2e}  (tol {tol:.0e})")
 sys.exit(0 if ok else 1)
