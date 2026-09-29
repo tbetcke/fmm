@@ -4,8 +4,8 @@
 
 This file is the single source of truth for basis functions, phases, storage and
 scaling in the `nd-fmm-*` crates. Code cites it as `CONVENTIONS §3.x`. Any change to
-§3.1–§3.8 bumps `CONVENTION_VERSION`, which invalidates committed fixtures and cached
-operator tables.
+§3.1–§3.8 or §3.11 bumps `CONVENTION_VERSION`, which invalidates committed fixtures and
+cached operator tables.
 
 Summary of the choices: Legendre functions without the Condon–Shortley phase for
 m ≥ 0, negative orders defined by a (−1)^m conjugate symmetry, Racah-type factorial
@@ -162,8 +162,8 @@ D^n(Q_1 Q_2) = D^n(Q_1)\, D^n(Q_2)
 
 ## 3.10 Versioning
 
-`CONVENTION_VERSION = 1`. Any change to §3.1–§3.8 bumps it, which invalidates committed
-fixtures and cached operator tables.
+`CONVENTION_VERSION = 1`. Any change to §3.1–§3.8 or §3.11 bumps it, which invalidates
+committed fixtures and cached operator tables.
 
 ## 3.11 Translation operators
 
