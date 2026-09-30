@@ -5,6 +5,9 @@ As of 2026-09-29. Sections 1, 5, 7 and 9 were revised the same day after reading
 Revised again at the end of Phase 0 (Sections 2, 3.2, 4, 5, 6, 7, 8 and 9): the
 conventions are fixed, `nd-fmm-math` is implemented, and the CubeCL GEMM spike
 (`spikes/cubecl-gemm/SPIKE_REPORT.md`) has set the provisional M2L defaults.
+Revised again at the end of Phase 1 (Sections 2.1, 2.3, 7 and 9.1): the translation
+formulas are fixed in CONVENTIONS §3.11, and `nd-fmm-ref` and `nd-fmm-validate` are
+implemented.
 
 > Where this document and `docs/CONVENTIONS.md` differ (normalisation, phases, scaling),
 > **the conventions file takes precedence.** Section 2.4 below now follows the scaling of
@@ -90,9 +93,9 @@ is that the handling of negative m (the Condon–Shortley phase, and whether R�
 in CONVENTIONS §3.3: Pₙᵐ without the Condon–Shortley phase, and
 Xₙ⁻ᵐ = (−1)ᵐ conj(Xₙᵐ) for both families. The separation identity above, the
 expansions of Section 2.2 and the regular addition theorem (CONVENTIONS §3.4) hold
-exactly under these choices and are tested in `nd-fmm-math`. The translation formulas
-of Section 2.3 are still written up to signs and the direction of the shift vector;
-Phase 1 (C1.2) fixes them against the direct sum.
+exactly under these choices and are tested in `nd-fmm-math`. Phase 1 fixed the signs
+and shift directions of the translation formulas of Section 2.3 in CONVENTIONS §3.11,
+and `nd-fmm-ref` tests them (C1.2, C1.3).
 
 ### 2.2 Expansions
 
@@ -122,7 +125,8 @@ degree-p multipole expansion (M2P) needs Iₚ₊₁, which `nd-fmm-math` forms o
 
 ### 2.3 Translation theorems
 
-With t the shift vector between centres, the three translations are:
+From an expansion about c to one about c′, with the shift vector t = c − c′ for M2M
+and t = c′ − c for L2L and M2L, the three translations are:
 
 ```math
 \text{M2M:}\quad M_n^m(\mathbf{c}') = \sum_{k=0}^{n}\sum_{l} \overline{R_k^l(\mathbf{t})}\, M_{n-k}^{m-l}(\mathbf{c})
@@ -133,12 +137,17 @@ With t the shift vector between centres, the three translations are:
 ```
 
 ```math
-\text{M2L:}\quad L_j^i(\mathbf{c}') = \sum_{n=0}^{p}\sum_{m} \sigma_{n}\, I_{j+n}^{\,i+m}(\mathbf{t})^{\ast}\, M_n^m(\mathbf{c})
+\text{M2L:}\quad L_j^i(\mathbf{c}') = (-1)^{j+i} \sum_{n=0}^{p}\sum_{m} I_{n+j}^{\,m-i}(\mathbf{t})\, M_n^m(\mathbf{c})
 ```
 
-Here σₙ is a sign (typically (−1)ⁿ) and the star marks a convention-dependent
-conjugation. M2M and L2L are truncated convolutions over (n, m); M2L is a correlation
-that needs irregular harmonics up to degree 2p. Each is O(p⁴) when evaluated directly.
+M2M and L2L are truncated convolutions over (n, m); M2L is a correlation that needs
+irregular harmonics up to degree 2p. Each is O(p⁴) when evaluated directly.
+
+These are the unscaled forms; the scaled forms of CONVENTIONS §3.11 reduce to them for
+r = r′ = 1. §3.11 is the exact statement that the code implements: shift vectors,
+radius factors, the real-storage order sums, the coaxial forms, the rotation rule for
+coefficients and the M2L truncation bound.
+`tools/fixtures/check_translations.py` checks each of them in mpmath at 40 digits.
 
 ### 2.4 Scaling and level independence
 
@@ -634,7 +643,7 @@ component below is sized to be one Claude Code task with a testable acceptance c
 ```mermaid
 flowchart TB
   P0["Phase 0 · Conventions and math core<br/>C0.1–C0.3 · fmm-math · done"]
-  P1["Phase 1 · CPU reference operators<br/>C1.1–C1.4 · fmm-ref"]
+  P1["Phase 1 · CPU reference operators<br/>C1.1–C1.4 · fmm-ref · done"]
   P2["Phase 2 · Operator tables<br/>C2.1–C2.4 · fmm-tables"]
   P3["Phase 3 · CPU FMM on nd-fmm-plan<br/>C3.0–C3.4 · nd-fmm-plan, fmm-exec"]
   P4["Phase 4 · CubeCL kernels<br/>C4.0–C4.7 · nd-fmm-plan, fmm-kernels, fmm-exec"]
@@ -707,10 +716,105 @@ the limit is now 3 MB. `crosscheck_scipy.py` agrees with them to 1.2e-14.
 
 | ID | Component | Acceptance criterion | Depends on | Status |
 | --- | --- | --- | --- | --- |
-| C1.1 | P2M, L2P (potential and gradient), P2L, M2P | single-source error decays geometrically in p at the rate of Section 2.5 | C0.2 | Not started |
-| C1.2 | Direct O(p⁴) M2M, L2L, M2L | M2M after P2M equals P2M at the parent to 1e-14; same for L2L; M2L matches direct sum to the truncation bound | C1.1 | Not started |
-| C1.3 | Rotation-based O(p³) M2M, L2L, M2L | agrees with C1.2 to relative 1e-13 for p ≤ 20 | C0.3, C1.2 | Not started |
-| C1.4 | P2P and direct-sum oracle (self-interaction excluded) | exact against brute force on small sets; handles coincident source and target | C0.1 | Not started |
+| C1.1 | P2M, L2P (potential and gradient), P2L, M2P | single-source error decays geometrically in p at the rate of Section 2.5 | C0.2 | Done (T3, PR #8): `nd_fmm_ref::leaf`; measured below |
+| C1.2 | Direct O(p⁴) M2M, L2L, M2L | M2M after P2M equals P2M at the parent to 1e-14; same for L2L; M2L matches direct sum to the truncation bound | C1.1 | Done (T5, PR #11): `nd_fmm_ref::direct`, on the formulas of CONVENTIONS §3.11 (T2, PR #10); measured below |
+| C1.3 | Rotation-based O(p³) M2M, L2L, M2L | agrees with C1.2 to relative 1e-13 for p ≤ 20 | C0.3, C1.2 | Done (T6, PR #12): `nd_fmm_ref::rotation`; measured below |
+| C1.4 | P2P and direct-sum oracle (self-interaction excluded) | exact against brute force on small sets; handles coincident source and target | C0.1 | Done (T4, PR #9): `nd_fmm_ref::p2p`; measured below |
+
+T1 (PR #7) created the crate with `Frame`, and T7 (PR #13) added `nd-fmm-validate` with
+the accuracy and timing reports below. T2 added CONVENTIONS §3.11, widened §3.9 to
+irregular harmonics up to degree 40 (M2L up to p = 20) and added fixture set C.
+`CONVENTION_VERSION` stays 1: no existing convention changed, and §3.10 now covers §3.11.
+
+Measured worst errors, from the T3–T6 test suites (f64 unless stated). Coefficients are
+compared per degree in the §3.8 weighting (Nₘ for multipoles, Nₘ/Sₘ for locals);
+"terms" means relative to the term magnitudes of the sum that forms the result:
+
+| Check | Error measure | Measured | Test tolerance |
+| --- | --- | --- | --- |
+| P2M→M2P and P2L→L2P against the same-degree Legendre series, p ≤ 30, potential / gradient | terms / series gradient | 8.8e-15 / 2.2e-14 | 1e-13 / 1e-12 |
+| Same chains against exact 1/\|x − y\|, p ≤ 30, potential / gradient | (error − bound) / magnitude | 1.2e-15 / 1.4e-15 | 1e-14 |
+| Leaf operators, f32 against f64, p ≤ 8 | relative (L2P, M2P: terms) | 8.9e-7 | 1e-5 |
+| `p2p` (f64) against a naive loop | — | bit-identical | bit for bit |
+| `direct_sum` against double-double, cancelling sets up to 8192 sources, potential / gradient | Σ\|q\|/r, Σ\|q\|/r² | 4.0e-17 / 7.3e-17 | 1e-15 |
+| `direct_sum`, coincident targets and sources, potential / gradient | same | 1.7e-16 / 2.0e-16 | 1e-15 |
+| `p2p` f32 against `direct_sum`, potential / gradient | same | 9.3e-8 / 2.3e-7 | 1e-6 |
+| Direct M2M after P2M / M2M composition, p ≤ 30 | terms, per degree | 1.2e-15 / 2.1e-15 | 1e-13 |
+| Direct L2P∘L2L against L2P / L2L composition, p ≤ 30 | terms, per degree | 1.2e-15 / 5.1e-15 | 1e-13 |
+| Direct M2L monopole against P2L, p ≤ 20; z shifts against the coaxial forms | terms, per degree | 7.9e-15; 6.3e-15 | 1e-13 |
+| Direct M2L against its §3.11 bounds: coefficients vs P2L / V list vs direct sum / near the convergence limit | error / (bound + floor) | 0.11 / 0.10 / 0.028 | 1 |
+| Direct translations, f32 against f64, p ≤ 8 | terms, per degree | 3.9e-7 | 1e-5 |
+| Rotation against direct, M2M, L2L and M2L, p ≤ 20 (random frames, octants, all 316 offsets) | terms, per degree | 4.8e-15 (1.1e-14 with the near-axis runs) | 1e-13 |
+| Rotation against direct, M2M and L2L, 20 < p ≤ 30 | terms, per degree | 2.6e-14 | 1e-11 |
+| Rotation f32 against direct f64, p ≤ 8 | terms, per degree | 3.2e-7 | 1e-5 |
+
+The 1e-13 gates for direct exactness (T5) and for rotation against direct (T6, the
+Phase 1 gate) are met relative to the term magnitudes of each §3.11 sum, per degree, in
+the §3.8 weighting. They are not met relative to the result's own degree norm, which the
+tests print but do not assert. The translations add terms much larger than their
+result: a source near the output centre has small high-degree coefficients made of
+large, cancelling terms. Relative to the result itself, direct translations measured:
+
+| Direct, own degree norm | p = 12 | p = 16 | p = 20 | p = 25 | p = 30 |
+| --- | --- | --- | --- | --- | --- |
+| M2M after P2M | 8.3e-15 | 4.7e-14 | 2.0e-13 | 1.1e-12 | 6.2e-12 |
+| M2M composition | 1.7e-12 | 4.2e-11 | 8.0e-10 | 5.8e-8 | 6.3e-6 |
+| L2L composition | 8.6e-14 | 1.0e-12 | 1.3e-11 | 3.2e-10 | 4.1e-9 |
+
+Rotation against direct reaches 8.9e-13 in that measure (L2L, offset (1, 0, −3), p = 20)
+and 5.6e-13 (L2L, octants, r = 2⁻¹⁶, p = 10). Both occur only at degree 0, where the
+single weighted value nearly cancels (term scale 1.9e3 and 1.3e4 times the result);
+relative to the terms they are 4.8e-16 and 4.4e-17. Rotating that input by exact
+quarter turns about z already changes the rotation result by 1.3e-13 to 2.8e-13 in the
+strict measure, so this is the method's rounding floor, not a defect.
+
+M2L chain (P2M, direct M2L, L2P) against the direct sum over the V list (T5), relative
+to Σ|q|/|x − y|:
+
+| p | 0 | 5 | 10 | 15 | 20 |
+| --- | --- | --- | --- | --- | --- |
+| Worst error | 3.0e-1 | 7.0e-4 | 3.0e-6 | 5.5e-8 | 8.3e-10 |
+| Worst bound | 17 | 14 | 2.3 | 0.33 | 4.5e-2 |
+
+The error decays at a fitted 0.39 per degree, the bound at 0.70. The bound is valid but
+loose: at the worst offset it exceeds 1 for p ≤ 12.
+
+Single-translation accuracy (T7, `cargo run --release -p nd-fmm-validate --example
+accuracy`). 1,000 sources uniform in a box of half-width 0.5, charges uniform in
+[−1, 1); 1,000 targets uniform in the target box, for each of the 316 V-list offsets;
+direct M2M, M2L and L2L; relative L2 error of φ against `direct_sum`, over the pooled
+targets of all offsets:
+
+| Chain (f64) | p = 3 | p = 8 | p = 18 | p = 20 |
+| --- | --- | --- | --- | --- |
+| P2M → M2P | 8.95e-4 | 6.53e-6 | 1.35e-9 | 2.75e-10 |
+| P2L → L2P | 1.41e-3 | 8.37e-6 | 2.00e-9 | 4.62e-10 |
+| P2M → M2L → L2P | 1.77e-3 | 1.08e-5 | 2.71e-9 | 5.35e-10 |
+
+- The M2M and L2L chains reproduce P2M → M2P and P2M → M2L → L2P to all printed digits
+  in f64, as they are exact.
+- The worst single offset is larger: at p = 20, φ L2 up to 3.26e-9, φ max up to
+  5.43e-8 and ∇φ max up to 2.71e-6 (all P2L → L2P).
+- f32 matches f64 to 2–3 digits for all p ≤ 8, so truncation dominates there.
+- This is the single-translation prediction for C3.2. It sits above the
+  Gumerov–Duraiswami starting points of Section 4 (1e-4, 1e-7 and 1e-10 at p = 3, 8
+  and 18). Likely reasons are the mixed-sign charges, and that the error is relative to
+  the far field of one source box only, with no exact near field in the reference
+  norm. C3.2 should compare with the same charge distribution.
+
+Timing (T7, `--example timing`): f64, one thread on an Apple M3 Max, release build,
+median of 15 batches of at least 20 ms each. Rotation times include building the
+rotation blocks on every call; Phase 2 (C2.3) precomputes them.
+
+| Operator | fitted k in t ∝ pᵏ (p ≥ 8), direct / rotation | rotation faster from | p = 20, direct / rotation |
+| --- | --- | --- | --- |
+| M2M | 3.55 / 2.70 | between p = 20 and 30 (near tie at 20) | 121.77 / 116.04 µs |
+| L2L | 3.60 / 2.71 | p = 30 | 102.79 / 123.45 µs |
+| M2L | 3.40 / 2.62 | p = 12 | 203.60 / 124.55 µs |
+
+The exponents sit below 4 and 3 because lower-order terms still matter at p ≤ 30;
+rotation scales no worse than p³. At M2M, p = 20, the direct/rotation ratio was 0.97,
+1.12 and 1.05 in three runs.
 
 ### Phase 2: operator tables (`fmm-tables`)
 
@@ -844,7 +948,7 @@ and identity tests, the second with a one-day spike before Phase 4.
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
-| Sign or phase convention error in harmonics or translations | wrong results that still converge in p, found late | single conventions spec (C0.1); identity and commutation tests; cross-check against FMM3D. **Retired for harmonics and rotations** by Phase 0 (mpmath fixtures, identities, SciPy cross-check); still open for the translations of Section 2.3 until Phase 1 |
+| Sign or phase convention error in harmonics or translations | wrong results that still converge in p, found late | single conventions spec (C0.1); identity and commutation tests; cross-check against FMM3D. **Retired for harmonics and rotations** by Phase 0 (mpmath fixtures, identities, SciPy cross-check). **Retired for the translations** by Phase 1: signs and shift directions are fixed in CONVENTIONS §3.11 and checked in mpmath by `tools/fixtures/check_translations.py`; the T5 tests check the direct operators against P2M, P2L and the direct sum, and the T6 tests check the independent rotation operators against the direct ones to 1e-13, which also catches the M2L sign errors at orders ≤ −39 that no truncation-bound test can see |
 | f64 GEMM slow or unavailable in the CubeCL matmul engine | dense M2L loses its advantage in f64 | **Partly realised (T6).** CubeCL 0.10.0 has no f64 on CUDA and no FP64 tensor-core path in 0.10 or 0.11-pre. Plan a hand-written comptime-p f64 kernel; keep rotation as the f64 default above p ≈ 10; move the pin to 0.11 before Phase 4; measure on an A100/H100 |
 | CubeCL API churn between minor versions | rework of kernels | pin one version; keep CubeCL-specific code inside `fmm-kernels` behind thin wrappers |
 | f64 missing on some backends (WGSL, Metal; CUDA on CubeCL 0.10.0) | f64 features unavailable there | capability check at start-up; f32 path with scaled coefficients; CubeCL 0.11 for f64 on CUDA |

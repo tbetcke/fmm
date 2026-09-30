@@ -176,11 +176,11 @@ Each crate has one job and a public surface small enough to describe in a few li
 | Directory | Package | Created in | Purpose | Depends on |
 | --- | --- | --- | --- | --- |
 | `fmm-math` | `nd-fmm-math` | Phase 0 (done) | real solid harmonics and gradients, rotation blocks, index layout, scalar trait | `num-traits` |
-| `fmm-ref` | `nd-fmm-ref` | Phase 1 | f64 reference operators (direct O(p⁴) and rotation O(p³)), P2P, direct-sum oracle | `nd-fmm-math`, `rayon` (optional) |
+| `fmm-ref` | `nd-fmm-ref` | Phase 1 (done) | f64 reference operators (direct O(p⁴) and rotation O(p³)), P2P, direct-sum oracle | `nd-fmm-math`, `num-traits` |
 | `fmm-tables` | `nd-fmm-tables` | Phase 2 | M2M/L2L (8 octants each), M2L (316 offsets, symmetry classes), rotation tables, versioned cache, later SVD compression | `nd-fmm-ref`, `faer`, a binary serialiser |
 | `fmm-exec` | `nd-fmm-exec` | Phase 3 (host), Phase 4 (device) | `impl FmmOperator` for Laplace, box geometry from Morton keys, user-facing FMM object, M2L strategy selection | `nd-fmm-plan`, `nd-octree`, `mpi`, `nd-fmm-tables`, `nd-fmm-kernels` (feature `gpu`), `rayon` |
 | `fmm-kernels` | `nd-fmm-kernels` | Phase 4 | all `#[cube]` kernels; runtime-generic | `cubecl` (pinned), CubeCL matmul crate, `nd-fmm-math` (constants only) |
-| `fmm-validate` | `nd-fmm-validate` (`publish = false`) | Phase 1 | error norms, point distributions, accuracy sweeps, benchmarks | all of the above, as dev tooling |
+| `fmm-validate` | `nd-fmm-validate` (`publish = false`) | Phase 1 (done), grows with each phase | error norms, point distributions, accuracy sweeps, benchmarks | all of the above, as dev tooling; in Phase 1 `nd-fmm-math` and `nd-fmm-ref` |
 
 Dropped after scouting:
 
@@ -224,10 +224,26 @@ Outside the crates, Phase 0 also adds these folders:
 
 **`nd-fmm-ref`**
 
-- Free functions `p2m`, `m2m`, `m2l`, `l2l`, `l2p`, `p2l` and `m2p` over plain slices.
-  They live in `direct` and `rotation` modules with identical signatures.
-- `p2p(sources, charges, targets, out)` and `direct_sum(...)`, both with optional
-  gradients.
+- `Frame<T> { centre, radius }` is the centre and scaling radius of an expansion
+  (CONVENTIONS §3.7). `Frame::new(centre, radius)` panics unless radius > 0, and
+  `Frame::scaled(x)` returns (x − c)/r. Operators take frames, never shift vectors.
+- `Workspace<T>` holds every temporary. `Workspace::new(p)` allocates it for degree at
+  most p, and `p()` returns that degree.
+- Free functions over plain slices, generic over `T: RealScalar`:
+  - `leaf::p2m` and `leaf::p2l` `(p, &frame, sources, charges, &mut ws, out)`
+  - `leaf::l2p` and `leaf::m2p` `(p, &frame, coefficients, targets, &mut ws, potential,
+    gradient: Option<&mut [[T; 3]]>)`
+  - `direct::{m2m, l2l, m2l}` `(p, &from, &to, &mut ws, input, output)`: the O(p⁴) sums
+    of CONVENTIONS §3.11. `rotation::{m2m, l2l, m2l}` have the same signatures and work
+    in O(p³): rotate onto the z-axis, coaxial translation, rotate back, with the
+    rotation blocks built per call.
+  - `p2p::p2p(sources, charges, targets, potential, gradient)`.
+- `p2p::direct_sum(...)` has the same arguments in f64 only and sums with Neumaier
+  compensation. Both P2P functions skip exactly coincident pairs.
+- Every operator accumulates (+=), applies no 1/(4π) and does not allocate. It panics
+  on a slice of the wrong length or a workspace built for a smaller p.
+- As implemented in Phase 1, the leaf operators live in `leaf`, shared by both
+  translation methods, not in `direct` and `rotation`. There is no `rayon` dependency.
 
 **`nd-fmm-tables`**
 
@@ -258,7 +274,24 @@ Outside the crates, Phase 0 also adds these folders:
   p as a comptime parameter.
 - Backend features `cuda`, `hip`, `wgpu` and `cpu`, forwarded by `nd-fmm-exec`.
 
-**`nd-fmm-validate`** is specified when its phase starts; only its boundary is fixed now.
+**`nd-fmm-validate`** (Phase 1; MPI-free, and no library crate depends on it)
+
+- `SplitMix64`: the seeded generator of the `nd-fmm-math` tests, with `new(seed)`,
+  `next_u64()`, `uniform()` and `range(lo, hi)`.
+- `points::{cube, ball, sphere}` draw uniform points, and `points::charges` draws
+  charges in [−1, 1).
+- `metrics`:
+  - `ErrorNorms { l2, max }`, `potential_errors` and `gradient_errors`, and
+    `ErrorAccumulator` to pool several target sets;
+  - `potential_magnitudes` and `gradient_magnitudes`, with
+    `potential_error_relative_to_magnitude` and
+    `gradient_error_relative_to_magnitude`;
+  - `CoefficientKind::{Multipole, Local}`, `weight(kind, n, m)`, `degree_norms`,
+    `degree_errors` and `max_relative_degree_error`, per degree in the §3.8 weighting.
+- `accuracy`: `sweep::<T>(&config, p_max) -> Vec<Row>` runs the five `Chain`s over the
+  316 offsets of `v_list_offsets()`; also `Config`, `Errors`, `Row`, `SOURCE_CENTRE`
+  and `RADIUS`.
+- Examples `accuracy` and `timing` print Markdown reports; no timing is asserted.
 
 ## 4. How `nd-fmm-plan` and the octree connect
 
