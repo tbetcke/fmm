@@ -14,4 +14,6 @@ mod common;
 mod levels;
 mod precision;
 mod properties;
+#[path = "../support/mod.rs"]
+mod support;
 mod tables;
