@@ -50,6 +50,7 @@ pub use scalar::RealScalar;
 /// [`docs/CONVENTIONS.md`](https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md)
 /// that this crate implements (CONVENTIONS §3.10).
 ///
-/// Any change to CONVENTIONS §3.1–§3.8 bumps this value, which invalidates committed
-/// fixtures and cached operator tables. A test checks that it matches the file.
+/// Any change to CONVENTIONS §3.1–§3.8, §3.11 or §3.12 bumps this value, which
+/// invalidates committed fixtures and cached operator tables. A test checks that it
+/// matches the file.
 pub const CONVENTION_VERSION: u32 = 1;

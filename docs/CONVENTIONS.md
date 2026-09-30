@@ -4,8 +4,8 @@
 
 This file is the single source of truth for basis functions, phases, storage and
 scaling in the `nd-fmm-*` crates. Code cites it as `CONVENTIONS §3.x`. Any change to
-§3.1–§3.8 or §3.11 bumps `CONVENTION_VERSION`, which invalidates committed fixtures and
-cached operator tables.
+§3.1–§3.8, §3.11 or §3.12 bumps `CONVENTION_VERSION`, which invalidates committed
+fixtures and cached operator tables.
 
 Summary of the choices: Legendre functions without the Condon–Shortley phase for
 m ≥ 0, negative orders defined by a (−1)^m conjugate symmetry, Racah-type factorial
@@ -162,8 +162,9 @@ D^n(Q_1 Q_2) = D^n(Q_1)\, D^n(Q_2)
 
 ## 3.10 Versioning
 
-`CONVENTION_VERSION = 1`. Any change to §3.1–§3.8 or §3.11 bumps it, which invalidates
-committed fixtures and cached operator tables.
+`CONVENTION_VERSION = 1`. Any change to §3.1–§3.8, §3.11 or §3.12 bumps it, which
+invalidates committed fixtures and cached operator tables. §3.12 is included because
+cached tables depend on its geometry, layout and class rule.
 
 ## 3.11 Translation operators
 
@@ -429,3 +430,249 @@ frames and charges:
 
 The irregular addition theorem and the truncation bound are checked only through M2L;
 the axis values Rₖ⁰(s e_z), Iₖ⁰(±s e_z) only through the coaxial forms.
+
+## 3.12 Box geometry and operator tables
+
+The precomputed tables of `nd-fmm-tables` encode the geometry of an octree level and
+are stored in a fixed layout. This section states both, and the action of the cube
+symmetry group on coefficients that the symmetry-reduced M2L tables use. It builds on
+real storage (§3.6), the scaling (§3.7), rotations (§3.8) and the translations of §3.11.
+The octant and offset orders restate those of `nd_octree::morton` and
+`nd_fmm_plan::interaction_manager`, which crates without MPI cannot import; code that
+uses both must agree with them.
+
+### Domain and levels
+
+- The domain is a cube with lower corner a and side w. Level l, 0 ≤ l ≤ 16, has 2^l
+  boxes per axis.
+- The box on level l with index (i, j, k) from `morton::decode`, each in 0..2^l, has
+  centre and half-width
+
+```math
+\mathbf{c} = \mathbf{a} + \big((i, j, k) + \tfrac12\big)\, \frac{w}{2^l}, \qquad
+r_l = \frac{w}{2^{l+1}}
+```
+
+- r_l is the scaling radius of §3.7 on level l. c and r_l are the midpoint and the
+  half-side of `morton::physical_box`, which spans [a + i w / 2^l, a + (i + 1) w / 2^l]
+  along x, and likewise along y and z.
+
+### Child octants
+
+- The child index is o = 4x + 2y + z with x, y, z ∈ {0, 1}, as `morton::child_index`
+  returns it and `morton::children` orders the children. x, y and z are the lowest bits
+  of the child's index: the children of box (i, j, k) have indices
+  (2i + x, 2j + y, 2k + z).
+- With the sign vector s_o = (2x − 1, 2y − 1, 2z − 1), the child centre is
+
+```math
+\mathbf{c}_\text{child} = \mathbf{c}_\text{parent} + r_\text{child}\, \mathbf{s}_o, \qquad
+r_\text{child} = r_\text{parent} / 2
+```
+
+- So o = 0 is the child at the lower corner, s₀ = (−1, −1, −1), and o = 4 has
+  s₄ = (+1, −1, −1).
+
+### V-list offsets
+
+- The offset of a V-list pair is d = index(target) − index(source), in the index units
+  of their common level, as `InteractionManager::v_list_by_direction` computes it. It
+  lies in 𝒟 = {−3..3}³ \ {−1..1}³, which has 7³ − 3³ = 316 elements.
+- The offsets are ordered lexicographically in (d_x, d_y, d_z), as `V_LIST_DIRECTIONS`
+  is. The position of d in this order is its table index:
+
+```math
+\operatorname{index}(\mathbf{d}) = 49(d_x + 3) + 7(d_y + 3) + (d_z + 3) - 9\,\kappa(d_x)
+- [\,|d_x| \le 1\,]\,\big(3\,\kappa(d_y) + [\,|d_y| \le 1\,]\,\kappa(d_z)\big)
+```
+
+  with κ(t) = min(max(t + 1, 0), 3), the number of t′ ∈ {−1, 0, 1} with t′ < t, and
+  [·] = 1 if the condition holds and 0 otherwise. The first three terms are the position
+  in the lexicographic order of {−3..3}³; the others subtract the points of {−1..1}³
+  that precede d. So index(−3, −3, −3) = 0 and index(3, 3, 3) = 315.
+- The shift is c_target − c_source = 2 r_l d. In the terms of §3.11, the M2L from
+  (c, r_l) to (c + 2 r_l d, r_l) has b = 2d and σ = 1, and 4 ≤ |b| ≤ 6√3 (§3.9).
+
+### Canonical frames and level independence
+
+Each table is built at these frames, for child index o and offset d:
+
+| Table | Input frame | Output frame | §3.11 parameters |
+| --- | --- | --- | --- |
+| M2M(o) | child (½ s_o, ½) | parent (0, 1) | b = ½ s_o, ρ = ½ |
+| L2L(o) | parent (0, 1) | child (½ s_o, ½) | t = ½ s_o, σ = ½ |
+| M2L(d) | source (0, 1) | target (2d, 1) | b = 2d, σ = 1 |
+
+The operators of §3.11 depend on their frames only through these parameters. On level
+l of any cubic domain the child (c + r_(l+1) s_o, r_(l+1)) and its parent (c, r_l), and
+the V-list pair (c, r_l) and (c + 2 r_l d, r_l), give the same parameters. So a table
+built at the canonical frames is the operator on every level of every cubic domain,
+with no further factor (§3.7).
+
+A centre difference c′ − c formed in floating point carries a relative error of about
+ε |c| / r_l, which grows with the level; the tables are exact in their geometry. Code
+therefore looks tables up by integer offset d and child index o, never by a
+floating-point shift.
+
+### Matrix layout
+
+- A table has one degree p for input and output. Each operator is a real
+  (p + 1)² × (p + 1)² matrix A with output = A · input. Rows index output slots and
+  columns input slots, both in the real storage of §3.6 (index n² + n + m).
+- Storage is column-major: entry (i, k) sits at i + k (p + 1)².
+- The matrices of one family are contiguous, matrix t at offset t (p + 1)⁴: M2M and L2L
+  with t = o in child-index order, M2L with t = index(d).
+- Applying a table accumulates: output += A · input, as every operator does.
+- The entries do not depend on p, so the table at p is the leading
+  (p + 1)² × (p + 1)² block of the one at any larger p (not a contiguous range in
+  column-major storage).
+- Tables are computed in f64. An f32 table is the f64 table rounded entry by entry.
+
+### The cube symmetry group
+
+- O_h consists of the 48 signed permutation matrices P, (P v)_a = s_a v_π(a), for a
+  permutation π of the axes (0, 1, 2) = (x, y, z) and signs s = (s_x, s_y, s_z) ∈ {±1}³.
+  det P = sgn(π) s_x s_y s_z; 24 elements are proper (the rotations of the cube) and 24
+  improper, among them −I.
+- Enumeration order: element g, 0 ≤ g < 48, is
+
+```math
+g = 8k + 4\,[s_x < 0] + 2\,[s_y < 0] + [s_z < 0]
+```
+
+  where k is the position of (π(0), π(1), π(2)) in the lexicographic list
+  (0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0). So g = 0 is I, g = 7
+  is −I, and for g < 8 the element is diagonal.
+- Offsets: P permutes and negates the components of d, so P maps 𝒟 onto itself.
+- Octants: P s_o = s_o′ for a child index o′, so P permutes the eight octants. They form
+  one orbit, and element o, P = diag(1 − 2x, 1 − 2y, 1 − 2z) = −diag(s_o), is the first
+  element in the enumeration order with P s₀ = s_o.
+
+### Coefficients under improper P
+
+For proper P, Dⁿ(P) is the block of §3.8. For improper P, −P is proper, and parity
+(§3.11) gives Rₙ(Px) = (−1)ⁿ Rₙ(−Px) = (−1)ⁿ Dⁿ(−P) Rₙ(x). So define
+
+```math
+D^n(P) = (-1)^n\, D^n(-P) \qquad \text{for improper } P
+```
+
+Then, for all P in O_h,
+
+- Rₙ(Px) = Dⁿ(P) Rₙ(x), and Dⁿ(P₁ P₂) = Dⁿ(P₁) Dⁿ(P₂): the values Rₙ(x) at all x span
+  ℝ²ⁿ⁺¹, so the relation determines Dⁿ(P), and Rₙ(P₁ P₂ x) = Dⁿ(P₁) Dⁿ(P₂) Rₙ(x).
+  Hence Dⁿ(Pᵀ) = Dⁿ(P)⁻¹ and Dⁿ(−I) = (−1)ⁿ I;
+- Iₙ(Px) = S Dⁿ(P) S⁻¹ Iₙ(x), with S of §3.8, because |Px| = |x|.
+
+Per degree n let
+
+```math
+T_M(P) = K\, D^n(P)\, K, \qquad T_L(P) = K\, S\, D^n(P)\, S^{-1} K
+```
+
+with K of §3.11. The rule of §3.11 ("Rotation of coefficients") uses only
+Rₙ(Qx) = Dⁿ Rₙ(x), so it holds for every P in O_h: for sources y ↦ c + P(y − c) the
+coefficients of degree n become T_M(P) M̃ₙ and T_L(P) L̃ₙ. T_M and T_L are
+homomorphisms, and T(P)⁻¹ = T(Pᵀ) for both. Applied to a whole expansion, T(P) acts
+degree by degree. Coefficients and values depend on the frame (c, r) only through the
+scaled points u = (y − c)/r and v = (x − c)/r (§3.7), so the rule holds equally for
+sources Py in the frame (Pc, r). Likewise, the expansion with coefficients T(P) C in the
+frame (Pc, r), evaluated at Px, equals the one with coefficients C in (c, r) at x, for
+either kind: for a unit source the degree-n terms are those of the separation identity
+(§3.4), which depend on u and v only through |u|, |v| and u · v, and the coefficients
+of point sources span every degree.
+
+### Operator identities
+
+With the tables at the canonical frames, M2L(d) for an offset d and M2M(s), L2L(s) for
+the octant with sign vector s = s_o, for every P in O_h:
+
+```math
+\mathrm{M2L}(P\mathbf{d}) = T_L(P)\, \mathrm{M2L}(\mathbf{d})\, T_M(P)^{-1}, \qquad
+\mathrm{M2M}(P\mathbf{s}) = T_M(P)\, \mathrm{M2M}(\mathbf{s})\, T_M(P)^{-1}, \qquad
+\mathrm{L2L}(P\mathbf{s}) = T_L(P)\, \mathrm{L2L}(\mathbf{s})\, T_L(P)^{-1}
+```
+
+with T(P)⁻¹ = T(Pᵀ). For inversion, P = −I, T_M(−I) = T_L(−I) = diag((−1)ⁿ), so
+
+```math
+\mathrm{M2L}(-\mathbf{d}) = \operatorname{diag}\big((-1)^j\big)\, \mathrm{M2L}(\mathbf{d})\, \operatorname{diag}\big((-1)^n\big)
+```
+
+with j the output and n the input degree; this is also the parity
+Iₙ₊ⱼ(−b) = (−1)ⁿ⁺ʲ Iₙ₊ⱼ(b) in the formula of §3.11.
+
+*Derivation.* M2M: for sources y, the child coefficients M̃ = Σ q K Rₙ(2y − s) map to
+the parent coefficients Σ q K Rₙ(y) exactly (§3.11). Replace every y by Py: the child
+of sign vector Ps then has coefficients Σ q K Rₙ(P(2y − s)) = T_M(P) M̃, and the parent
+T_M(P) times the parent coefficients. So M2M(Ps) T_M(P) = T_M(P) M2M(s) on all
+coefficient vectors of point sources, which span every degree. L2L: the child expansion
+L2L(s) L̃ is the parent expansion re-expanded exactly (§3.11). Transform both with P as
+in the previous section: T_L(P) L̃ at the parent and T_L(P) L2L(s) L̃ at the child
+(½ Ps, ½) equal, at Px, the parent and child expansions at x. They therefore agree with
+each other, so T_L(P) L2L(s) L̃ = L2L(Ps) T_L(P) L̃. M2L: for a unit source at u,
+|u| ≤ √3, the M2L of its full multipole series equals its P2L coefficients
+K Iⱼ(u − b) (§3.11, truncation), and the terms of input degree n are the part of
+degree n in u. Replacing u by Pu and b by Pb maps K Iⱼ(u − b) to T_L(P) K Iⱼ(u − b)
+and the degree-n multipole coefficients to T_M(P) K Rₙ(u), so
+M2L(Pd)ⱼₙ T_M(P) = T_L(P) M2L(d)ⱼₙ for every block of output degree j and input
+degree n. The identity is therefore exact for the truncated tables of any degree p.
+
+### Symmetry classes
+
+- The 316 offsets form 16 orbits under O_h, the classes. Each class contains exactly
+  one offset with 0 ≤ d_x ≤ d_y ≤ d_z, its representative (the sorted absolute values
+  of any member).
+- Classes are numbered by the lexicographic order of their representatives:
+
+| Class | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Representative | (0,0,2) | (0,0,3) | (0,1,2) | (0,1,3) | (0,2,2) | (0,2,3) | (0,3,3) | (1,1,2) |
+| Size | 6 | 6 | 24 | 24 | 12 | 24 | 12 | 24 |
+
+| Class | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Representative | (1,1,3) | (1,2,2) | (1,2,3) | (1,3,3) | (2,2,2) | (2,2,3) | (2,3,3) | (3,3,3) |
+| Size | 24 | 24 | 48 | 24 | 8 | 24 | 24 | 8 |
+
+- The group element of an offset d is the first element P in the enumeration order
+  above with P · representative = d. A representative with a zero or repeated component
+  has a non-trivial stabiliser, so several elements qualify; the rule picks one, which
+  makes the class form, and the cached class tables, reproducible. The class form is
+  then M2L(d) = T_L(P) M2L(representative) T_M(Pᵀ).
+- Under the 16 elements that map the z-axis to itself or to its negative (π(2) = 2,
+  that is g ∈ {0, …, 7} ∪ {16, …, 23}) the offsets form 34 orbits.
+
+### The z-axis elements
+
+For the 16 elements with P e_z = ±e_z, per degree:
+
+- T_L(P) = T_M(P), and both are signed permutation matrices that map slot 0 to ± itself
+  and each slot pair (+m, −m) to itself, with entries 0 and ±1.
+- For g ∈ {0, …, 7}, P = diag(±1, ±1, ±1), they are diagonal.
+- For g ∈ {16, …, 23}, which exchange x and y, they exchange the two slots of every pair
+  with odd m and are diagonal on the pairs with even m.
+
+The reason: on ρ = x + iy these elements act as ρ ↦ ±ρ or ±conj ρ (g < 8) and as
+ρ ↦ ±iρ or ±i conj ρ (16 ≤ g ≤ 23), and Rₙᵐ is ρᵐ times a real polynomial in z and
+|ρ|² (§3.3), which z ↦ −z multiplies by (−1)ⁿ⁺ᵐ. S is constant on each slot pair, so it
+commutes with Dⁿ(P). So these transforms need no arithmetic beyond sign changes and slot
+exchanges.
+
+### Verification
+
+`tools/fixtures/check_symmetry.py` checks, in mpmath at 40 digits, for n ≤ 8 and seeded
+random points and coefficients:
+
+- the 316 offsets, their order and the closed-form index; the box centres, the child
+  index from the bits of a Morton key, the child centres and the shift 2 r_l d, in exact
+  rationals;
+- the enumeration of O_h, the 16 classes (34 under the z-axis elements), their
+  representatives and the group-element rule, and the action on the octants;
+- Rₙ(Px) = Dⁿ(P) Rₙ(x) and the irregular counterpart for all 48 P, with Dⁿ(P) fitted
+  for proper P and taken as (−1)ⁿ Dⁿ(−P) for improper P; the homomorphism on sampled
+  pairs; T(P) T(Pᵀ) = I;
+- the operator identities through the general forms of §3.11: M2L for all 316 offsets
+  from their representatives, M2M and L2L for all 48 P from octant 0, and inversion
+  for all 316 offsets;
+- the structure of T_M(P) and T_L(P) for the z-axis elements.
