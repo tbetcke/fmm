@@ -73,6 +73,9 @@
 //!   [`L2lTables`] (C2.1).
 //! - [`m2l`]: the dense M2L tables of the 316 V-list offsets, [`M2lTables`], and their
 //!   16-class form, [`M2lClasses`] (C2.2).
+//! - [`rotation`]: the rotation and coaxial tables of point-and-shoot translation for
+//!   the 316 offsets and the 8 octants, [`RotationTables`], and the table-driven
+//!   rotation M2L, M2M and L2L, O(p³) per application (C2.3).
 //! - [`symmetry`]: the cube group O_h, the symmetry classes of the offsets and the
 //!   coefficient transforms T_M(P) and T_L(P) (§3.12).
 //!
@@ -83,8 +86,10 @@ pub mod geometry;
 pub mod m2l;
 mod matrix_set;
 pub mod octant;
+pub mod rotation;
 pub mod symmetry;
 
 pub use m2l::{M2lClasses, M2lScratch, M2lTables};
 pub use matrix_set::MatrixSet;
 pub use octant::{L2lTables, M2mTables};
+pub use rotation::{RotationScratch, RotationTables};
