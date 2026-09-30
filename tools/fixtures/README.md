@@ -9,6 +9,7 @@ scripts below.
 | `gen_harmonics.py` | writes `fmm-math/fixtures/harmonics_{A,B,C}.json` | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
 | `crosscheck_scipy.py` | independent double-precision second opinion on the conventions and the fixtures | Python ≥ 3.9, `numpy`, `scipy` |
 | `check_translations.py` | high-precision check of the translation operators of CONVENTIONS §3.11; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
+| `check_symmetry.py` | high-precision check of the box geometry and cube symmetry rules of CONVENTIONS §3.12; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
 
 All scripts declare their dependencies inline (PEP 723), so with
 [uv](https://docs.astral.sh/uv/) no environment needs to be set up. Run them from the
@@ -130,3 +131,34 @@ Coefficients are compared per degree in the orthonormal weighting of CONVENTIONS
 magnitudes. Dⁿ is fitted from its definition Rₙ(Qx) = Dⁿ Rₙ(x) at random points, not
 taken from `nd-fmm-math`. The script exits non-zero on any failure and takes about
 half a minute.
+
+## Symmetry check
+
+```sh
+uv run tools/fixtures/check_symmetry.py
+```
+
+checks the box geometry and the cube symmetry rules of CONVENTIONS §3.12 in mpmath at 40
+significant digits, for degrees n ≤ 8 and seeded random points and coefficients. It
+imports the harmonics from `gen_harmonics.py` and the translation operators, the fit of
+Dⁿ and the error measures from `check_translations.py`. It prints the worst error of:
+
+| Check | Tolerance |
+| --- | --- |
+| the 316 V-list offsets: lexicographic order, none in {−1..1}³, the closed-form table index round-trips | exact |
+| box centres and half-widths as `morton::physical_box`, the child index o = 4x + 2y + z from the bits of a Morton key, child centres c + r_child s_o, the shift 2 r_l d (random domains, levels 0–15, exact rationals) | exact |
+| O_h: 48 distinct signed permutations in the enumeration order of §3.12, 24 proper, closed under composition, Pᵀ the inverse, 16 z-axis elements | exact |
+| classes: 16 orbits (34 under the z-axis elements), one representative 0 ≤ d_x ≤ d_y ≤ d_z each, P · representative = d under the group-element rule | exact |
+| octants: every P permutes the eight s_o; element o is the first with P s₀ = s_o | exact |
+| Rₙ(Px) = Dⁿ(P) Rₙ(x) and Iₙ(Px) = S Dⁿ(P) S⁻¹ Iₙ(x) for all 48 P, Dⁿ fitted for the 24 proper P and (−1)ⁿ Dⁿ(−P) for the improper ones | 1e-30 |
+| Dⁿ(P₁P₂) = Dⁿ(P₁) Dⁿ(P₂) on 96 sampled pairs, T(P) T(Pᵀ) = I for T_M and T_L and all 48 P, Dⁿ(−I) = (−1)ⁿ | 1e-30 |
+| M2L(P d) = T_L(P) M2L(d) T_M(Pᵀ) for all 316 offsets from their representatives (p = 8) | 1e-30 |
+| M2M(P s) = T_M(P) M2M(s) T_M(Pᵀ) and L2L(P s) = T_L(P) L2L(s) T_L(Pᵀ) for all 48 P from octant 0 (p = 8) | 1e-30 |
+| M2L(−d) = diag((−1)ʲ) M2L(d) diag((−1)ⁿ) for all 316 offsets (p = 8) | 1e-30 |
+| z-axis elements: T_L = T_M, signed permutations of the (+m, −m) slot pairs, diagonal unless P exchanges x and y, then exchanging the pairs of odd m; the pattern is printed | 1e-30 |
+
+The operators are the general forms of §3.11 from `check_translations.py`, applied to
+random coefficient vectors at the canonical frames of §3.12. Coefficient vectors are
+compared per degree in the orthonormal weighting of CONVENTIONS §3.8, as in the
+translation check. The script exits non-zero on any failure and takes a little over
+a minute.
