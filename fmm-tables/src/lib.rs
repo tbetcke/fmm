@@ -23,6 +23,8 @@
 //! - Box geometry and operator tables (§3.12): the child index o = 4x + 2y + z and its
 //!   sign vector s_o, the order and closed-form index of the 316 V-list offsets, the
 //!   canonical frames, and the matrix layout below. [`geometry`] restates them.
+//!   [`symmetry`] implements the cube symmetry group, its action on coefficients and
+//!   the 16 classes of the offsets.
 //!
 //! ## Rules for every table
 //!
@@ -69,7 +71,10 @@
 //! - [`geometry`]: child octants, V-list offsets and the canonical frames (§3.12).
 //! - [`octant`]: the M2M and L2L tables of the 8 child octants, [`M2mTables`] and
 //!   [`L2lTables`] (C2.1).
-//! - [`m2l`]: the dense M2L tables of the 316 V-list offsets, [`M2lTables`] (C2.2).
+//! - [`m2l`]: the dense M2L tables of the 316 V-list offsets, [`M2lTables`], and their
+//!   16-class form, [`M2lClasses`] (C2.2).
+//! - [`symmetry`]: the cube group O_h, the symmetry classes of the offsets and the
+//!   coefficient transforms T_M(P) and T_L(P) (§3.12).
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 //! [`RealScalar`]: nd_fmm_math::RealScalar
@@ -78,7 +83,8 @@ pub mod geometry;
 pub mod m2l;
 mod matrix_set;
 pub mod octant;
+pub mod symmetry;
 
-pub use m2l::M2lTables;
+pub use m2l::{M2lClasses, M2lScratch, M2lTables};
 pub use matrix_set::MatrixSet;
 pub use octant::{L2lTables, M2mTables};

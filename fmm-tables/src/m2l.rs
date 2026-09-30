@@ -15,10 +15,14 @@
 //! degree p is bounded in §3.11 ("M2L", Truncation).
 //!
 //! Storage: 316 (p + 1)⁴ reals. In f64 that is about 17 MB at p = 8, 211 MB at p = 16
-//! and 492 MB at p = 20. The symmetry-reduced form, 16 class matrices and per-offset
-//! coefficient transforms (§3.12, "Symmetry classes"), comes in Phase 2 / T5.
-//! [`build_matrices`] builds the matrices of chosen offsets only, bit-identical to
-//! those of the full table.
+//! and 492 MB at p = 20. [`build_matrices`] builds the matrices of chosen offsets only,
+//! bit-identical to those of the full table.
+//!
+//! [`M2lClasses`] is the symmetry-reduced form (§3.12, "Symmetry classes"): the 16
+//! class matrices and the coefficient transforms of the cube group
+//! ([`crate::symmetry`]), M2L(d) = T_L(P) M2L(representative) T_M(Pᵀ). It needs
+//! 16 (p + 1)⁴ reals plus the transforms, about 34 MB in f64 at p = 20, and applies
+//! each offset without expanding, or [`M2lClasses::expand`]s to the dense tables.
 //!
 //! ```
 //! use nd_fmm_ref::{Workspace, direct};
@@ -45,6 +49,7 @@ use nd_fmm_ref::{Workspace, direct};
 
 use crate::MatrixSet;
 use crate::geometry::{M2L_OFFSET_COUNT, m2l_frames, m2l_offset_index};
+use crate::symmetry::{CoefficientTransform, SignedPermutation, class_of, class_representatives};
 
 /// Builds the M2L matrices of degree `p` for the given table indices, in the given
 /// order: matrix t of the result is matrix `indices[t]` of [`M2lTables::build`]`(p)`,
@@ -93,7 +98,7 @@ pub fn build_matrices<T: RealScalar>(p: usize, indices: &[usize]) -> MatrixSet<T
 /// Storage: 316 (p + 1)⁴ reals, in the offset order of §3.12, each matrix column-major
 /// with output = A · input ([`MatrixSet`]); in f64 about 17 MB at p = 8, 211 MB at
 /// p = 16 and 492 MB at p = 20. Building costs 316 (p + 1)² calls of `direct::m2l`,
-/// each O(p⁴), so O(p⁶) in all. Phase 2 / T5 provides the 16-class form.
+/// each O(p⁴), so O(p⁶) in all. [`M2lClasses`] is the 16-class form.
 #[derive(Clone, Debug, PartialEq)]
 pub struct M2lTables<T: RealScalar> {
     p: usize,
@@ -147,5 +152,230 @@ impl<T: RealScalar> M2lTables<T> {
     #[inline]
     pub fn apply(&self, index: usize, multipole: &[T], local: &mut [T]) {
         self.matrices.apply(index, multipole, local);
+    }
+}
+
+/// The symmetry-reduced M2L tables: the matrices of the 16 class representatives and,
+/// for each of the 316 V-list offsets, its class and group element (CONVENTIONS §3.12,
+/// "Symmetry classes").
+///
+/// For the offset d with class representative d₀ and group element P, d = P d₀ and
+/// M2L(d) = T_L(P) M2L(d₀) T_M(Pᵀ) (§3.12, "Operator identities"), with the coefficient
+/// transforms T_M and T_L of [`CoefficientTransform`]. The class of d and P follow the
+/// rule of §3.12 ([`class_of`]), so the class form is reproducible. The class matrices
+/// are built as in [`M2lTables`] and are bit-identical to its matrices of the
+/// representatives.
+///
+/// Storage: 16 (p + 1)⁴ reals for the class matrices, in class order in a
+/// [`MatrixSet`], plus T_M(P) and T_L(P) for all 48 elements, 96 · `blocks_len(p)` =
+/// 32 (p + 1)(2p + 1)(2p + 3) reals, and 316 (class, element) pairs. In f64 that is
+/// about 1.6 MB at p = 8, 15.7 MB at p = 16 and 34.4 MB at p = 20, against 17 MB,
+/// 211 MB and 492 MB for [`M2lTables`].
+///
+/// [`M2lClasses::apply`] costs (p + 1)⁴ multiply–adds for the class matrix plus two
+/// transforms of `blocks_len(p)` = (p + 1)(2p + 1)(2p + 3)/3 multiply–adds each, O(p³).
+/// Building costs 16 (p + 1)² calls of `direct::m2l` instead of 316 (p + 1)².
+#[derive(Clone, Debug, PartialEq)]
+pub struct M2lClasses<T: RealScalar> {
+    p: usize,
+    matrices: MatrixSet<T>,
+    /// T_M(P) of element g at position g.
+    multipole: Vec<CoefficientTransform<T>>,
+    /// T_L(P) of element g at position g.
+    local: Vec<CoefficientTransform<T>>,
+    /// The class and the group element of each offset, in table-index order.
+    offsets: Vec<(usize, SignedPermutation)>,
+}
+
+impl<T: RealScalar> M2lClasses<T> {
+    /// Builds the class form of degree `p`: the matrices of the 16 representatives with
+    /// [`build_matrices`], T_M(P) and T_L(P) of all 48 elements with
+    /// [`CoefficientTransform::new`], and the class and element of every offset with
+    /// [`class_of`]. Everything is computed in f64 and then rounded to `T`, so the class
+    /// form in f32 is that of f64 rounded entry by entry. Allocates.
+    pub fn build(p: usize) -> Self {
+        let indices = class_representatives()
+            .map(|d| m2l_offset_index(d).expect("a representative is a V-list offset"));
+        let all = SignedPermutation::all();
+        Self {
+            p,
+            matrices: build_matrices(p, &indices),
+            multipole: all
+                .iter()
+                .map(|&e| CoefficientTransform::multipole(p, e))
+                .collect(),
+            local: all
+                .iter()
+                .map(|&e| CoefficientTransform::local(p, e))
+                .collect(),
+            offsets: (0..M2L_OFFSET_COUNT).map(class_of).collect(),
+        }
+    }
+
+    /// Returns the degree p of input and output.
+    #[inline]
+    pub fn p(&self) -> usize {
+        self.p
+    }
+
+    /// Returns the 16 class matrices M2L(d₀), in class order (CONVENTIONS §3.12).
+    #[inline]
+    pub fn matrices(&self) -> &MatrixSet<T> {
+        &self.matrices
+    }
+
+    /// Returns the table index of the V-list offset `offset` = d, or `None` if d is not
+    /// in {−3..3}³ \ {−1..1}³ ([`m2l_offset_index`]).
+    #[inline]
+    pub fn index(&self, offset: [i64; 3]) -> Option<usize> {
+        m2l_offset_index(offset)
+    }
+
+    /// Returns the class of the offset with table index `index`.
+    ///
+    /// # Panics
+    ///
+    /// If `index >= 316`.
+    #[inline]
+    pub fn class(&self, index: usize) -> usize {
+        self.offsets[index].0
+    }
+
+    /// Returns the group element P of the offset with table index `index`, with
+    /// d = P d₀ for the representative d₀ of its class.
+    ///
+    /// # Panics
+    ///
+    /// If `index >= 316`.
+    #[inline]
+    pub fn element(&self, index: usize) -> SignedPermutation {
+        self.offsets[index].1
+    }
+
+    /// Returns T_M(P) of degree ≤ p for `element` = P.
+    #[inline]
+    pub fn multipole_transform(&self, element: SignedPermutation) -> &CoefficientTransform<T> {
+        &self.multipole[element.index()]
+    }
+
+    /// Returns T_L(P) of degree ≤ p for `element` = P.
+    #[inline]
+    pub fn local_transform(&self, element: SignedPermutation) -> &CoefficientTransform<T> {
+        &self.local[element.index()]
+    }
+
+    /// Adds the M2L of the source multipole expansion `multipole` to the local
+    /// expansion `local` of the target box at the offset with table index `index`,
+    /// without expanding: T_M(Pᵀ), the class matrix and T_L(P) are applied in turn,
+    /// the first two into `scratch` (CONVENTIONS §3.12, "Symmetry classes").
+    ///
+    /// Both expansions are scaled coefficients of degree p, (p + 1)² reals in the
+    /// storage of §3.6. Accumulates into `local` and allocates nothing. Costs
+    /// (p + 1)⁴ + 2 `blocks_len(p)` multiply–adds, O(p⁴) plus two O(p³) transforms.
+    ///
+    /// # Panics
+    ///
+    /// If `index >= 316`, `scratch` is not of degree p, or `multipole` or `local` does
+    /// not have length (p + 1)².
+    pub fn apply(
+        &self,
+        index: usize,
+        multipole: &[T],
+        local: &mut [T],
+        scratch: &mut M2lScratch<T>,
+    ) {
+        let (class, element) = self.offsets[index];
+        let n = self.matrices.n();
+        assert_eq!(
+            scratch.rotated.len(),
+            n,
+            "`scratch` must be of degree p = {}",
+            self.p
+        );
+        scratch.rotated.fill(T::zero());
+        self.multipole[element.transpose().index()].apply(multipole, &mut scratch.rotated);
+        scratch.translated.fill(T::zero());
+        self.matrices
+            .apply(class, &scratch.rotated, &mut scratch.translated);
+        self.local[element.index()].apply(&scratch.translated, local);
+    }
+
+    /// Returns the dense tables: matrix index(d) is T_L(P) M2L(d₀) T_M(Pᵀ), formed in
+    /// `T` (CONVENTIONS §3.12, "Symmetry classes").
+    ///
+    /// Each matrix is formed block by block: column (n, j) of A T_M(Pᵀ) is the sum over
+    /// the slots i of degree n of T_M(Pᵀ)ᵢⱼ times column (n, i) of A, and T_L(P) is then
+    /// applied to each column with [`CoefficientTransform::apply`]. That costs
+    /// 2 (p + 1)² `blocks_len(p)` multiply–adds per offset, O(p⁵), against O(p⁶) for
+    /// [`M2lTables::build`]. The result agrees with [`M2lTables::build`] up to rounding;
+    /// the matrices of the representatives, whose element is I, are bit-identical.
+    /// Allocates the tables and one (p + 1)⁴ buffer.
+    pub fn expand(&self) -> M2lTables<T> {
+        let layout = Layout::new(self.p);
+        let n = layout.len();
+        let mut dense = MatrixSet::<T>::zeros(n, M2L_OFFSET_COUNT);
+        let mut right = vec![T::zero(); n * n];
+        for (index, &(class, element)) in self.offsets.iter().enumerate() {
+            let a = self.matrices.matrix(class);
+            let t_m = &self.multipole[element.transpose().index()];
+            right.fill(T::zero());
+            for (degree, range) in layout.degrees() {
+                let block = t_m.block(degree);
+                let width = 2 * degree + 1;
+                for (j, c) in range.clone().enumerate() {
+                    let column = &mut right[c * n..(c + 1) * n];
+                    for (i, k) in range.clone().enumerate() {
+                        let t = block[i * width + j];
+                        for (y, &x) in column.iter_mut().zip(&a[k * n..(k + 1) * n]) {
+                            *y = *y + t * x;
+                        }
+                    }
+                }
+            }
+            let t_l = &self.local[element.index()];
+            for (c, column) in right.chunks_exact(n).enumerate() {
+                t_l.apply(column, dense.column_mut(index, c));
+            }
+        }
+        M2lTables {
+            p: self.p,
+            matrices: dense,
+        }
+    }
+
+    /// Returns the same class form in precision `U`, every entry of the class matrices
+    /// and the transforms rounded to nearest.
+    pub fn cast<U: RealScalar>(&self) -> M2lClasses<U> {
+        M2lClasses {
+            p: self.p,
+            matrices: self.matrices.cast(),
+            multipole: self
+                .multipole
+                .iter()
+                .map(CoefficientTransform::cast)
+                .collect(),
+            local: self.local.iter().map(CoefficientTransform::cast).collect(),
+            offsets: self.offsets.clone(),
+        }
+    }
+}
+
+/// Caller-owned scratch of [`M2lClasses::apply`]: two coefficient vectors of degree p.
+#[derive(Clone, Debug)]
+pub struct M2lScratch<T: RealScalar> {
+    /// T_M(Pᵀ) times the multipole.
+    rotated: Vec<T>,
+    /// The class matrix times `rotated`.
+    translated: Vec<T>,
+}
+
+impl<T: RealScalar> M2lScratch<T> {
+    /// Allocates the scratch for degree `p`, 2 (p + 1)² reals.
+    pub fn new(p: usize) -> Self {
+        let n = Layout::new(p).len();
+        Self {
+            rotated: vec![T::zero(); n],
+            translated: vec![T::zero(); n],
+        }
     }
 }
