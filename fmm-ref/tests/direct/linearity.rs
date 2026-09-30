@@ -14,7 +14,7 @@ pub const LINEARITY_TOL: f64 = 1e-14;
 
 /// Tolerance of the accumulation comparisons, per degree relative to the term
 /// magnitudes plus the weighted norm of the initial values: one rounding per slot.
-const ACCUMULATION_TOL: f64 = 1e-15;
+pub const ACCUMULATION_TOL: f64 = 1e-15;
 
 #[test]
 fn translations_are_linear() {

@@ -49,6 +49,9 @@
 //!   maximum p.
 //! - [`leaf`]: the leaf operators P2M, P2L, L2P and M2P (§3.6, §3.7), with gradients.
 //! - [`direct`]: the translations M2M, L2L and M2L as direct O(p⁴) sums (§3.11).
+//! - [`rotation`]: the same translations in O(p³), by rotation onto the z axis,
+//!   coaxial translation and rotation back (§3.8, §3.11), with the signatures of
+//!   [`direct`].
 //! - [`p2p`]: the near-field operator P2P and the f64 direct-sum oracle (§3.1), with
 //!   gradients and self-interaction excluded.
 //!
@@ -59,6 +62,7 @@ pub mod direct;
 mod frame;
 pub mod leaf;
 pub mod p2p;
+pub mod rotation;
 mod workspace;
 
 pub use frame::Frame;

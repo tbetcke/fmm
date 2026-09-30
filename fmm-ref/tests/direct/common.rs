@@ -36,7 +36,7 @@
 use core::cell::{Cell, RefCell};
 
 use nd_fmm_math::{Layout, RealScalar};
-use nd_fmm_ref::{Frame, Workspace, direct};
+use nd_fmm_ref::{Frame, Workspace, direct, rotation};
 
 /// Largest degree tested in f64 (CONVENTIONS §3.9).
 pub const P_MAX: usize = 30;
@@ -296,7 +296,8 @@ pub fn l2l_shift(from: &Frame<f64>, to: &Frame<f64>) -> ([f64; 3], f64) {
     (from.scaled(to.centre), to.radius / from.radius)
 }
 
-/// The signature shared by `direct::m2m`, `direct::l2l` and `direct::m2l`.
+/// The signature shared by `direct::m2m`, `direct::l2l` and `direct::m2l`, and by their
+/// `rotation` counterparts.
 pub type Translate<T> = fn(usize, &Frame<T>, &Frame<T>, &mut Workspace<T>, &[T], &mut [T]);
 
 /// One of the three translations, with the kinds of its input and output and its term
@@ -317,6 +318,15 @@ impl Op {
             Op::M2m => direct::m2m::<T>,
             Op::L2l => direct::l2l::<T>,
             Op::M2l => direct::m2l::<T>,
+        }
+    }
+
+    /// The operator of `nd_fmm_ref::rotation`.
+    pub fn rotation<T: RealScalar>(self) -> Translate<T> {
+        match self {
+            Op::M2m => rotation::m2m::<T>,
+            Op::L2l => rotation::l2l::<T>,
+            Op::M2l => rotation::m2l::<T>,
         }
     }
 

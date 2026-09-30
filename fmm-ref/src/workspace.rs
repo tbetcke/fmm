@@ -1,5 +1,6 @@
 //! Caller-owned scratch memory for the operators.
 
+use nd_fmm_math::rotation::blocks_len;
 use nd_fmm_math::{Layout, RealScalar};
 
 /// Scratch memory for every operator of this crate, built once for a maximum degree.
@@ -15,7 +16,11 @@ use nd_fmm_math::{Layout, RealScalar};
 /// in the real storage of CONVENTIONS §3.6. For the translations in
 /// [`direct`](crate::direct) it holds the solid harmonics of the shift vector, up to
 /// degree 2p ((2p + 1)² reals), because M2L needs irregular harmonics up to degree 2p
-/// (CONVENTIONS §3.11).
+/// (CONVENTIONS §3.11). For the translations in [`rotation`](crate::rotation) it holds
+/// the rotation blocks Dⁿ, n ≤ p, of CONVENTIONS §3.8
+/// ([`blocks_len`](nd_fmm_math::rotation::blocks_len)`(p)` reals), two coefficient
+/// vectors of length (p + 1)² in the rotated frame, and the 2p + 1 axis values of the
+/// coaxial translation (§3.11, "Coaxial translations").
 ///
 /// ```
 /// use nd_fmm_ref::{Frame, Workspace, leaf};
@@ -42,6 +47,25 @@ pub struct Workspace<T: RealScalar> {
     gradient: [Vec<T>; 3],
     /// Solid harmonics of a translation's shift vector, (2p + 1)² in real storage.
     shift: Vec<T>,
+    /// Rotation blocks Dⁿ, n ≤ p (CONVENTIONS §3.8), `blocks_len(p)` reals.
+    blocks: Vec<T>,
+    /// The input rotated into the coaxial frame, and the coaxial output, (p + 1)² each.
+    rotated: [Vec<T>; 2],
+    /// Solid harmonics of order 0 of a coaxial shift, degrees 0 to 2p.
+    axis: Vec<T>,
+}
+
+/// The buffers of a rotation-based translation of degree p, borrowed from a
+/// [`Workspace`] by [`Workspace::rotation`].
+pub(crate) struct RotationBuffers<'a, T> {
+    /// Rotation blocks Dⁿ, n ≤ p, `blocks_len(p)` reals.
+    pub blocks: &'a mut [T],
+    /// Input coefficients in the rotated frame, (p + 1)² reals.
+    pub rotated_in: &'a mut [T],
+    /// Output coefficients in the rotated frame, (p + 1)² reals.
+    pub rotated_out: &'a mut [T],
+    /// Order-0 harmonics of the coaxial shift, 2p + 1 reals (degrees 0 to 2p).
+    pub axis: &'a mut [T],
 }
 
 impl<T: RealScalar> Workspace<T> {
@@ -53,6 +77,9 @@ impl<T: RealScalar> Workspace<T> {
             harmonics: vec![T::zero(); len],
             gradient: core::array::from_fn(|_| vec![T::zero(); len]),
             shift: vec![T::zero(); Layout::new(2 * p).len()],
+            blocks: vec![T::zero(); blocks_len(p)],
+            rotated: core::array::from_fn(|_| vec![T::zero(); len]),
+            axis: vec![T::zero(); 2 * p + 1],
         }
     }
 
@@ -112,6 +139,25 @@ impl<T: RealScalar> Workspace<T> {
         );
         &mut self.shift[..Layout::new(degree).len()]
     }
+
+    /// The buffers of a rotation-based translation of degree `p`: the rotation blocks
+    /// of degrees 0 to p, two coefficient vectors of length (p + 1)², and 2p + 1 axis
+    /// values.
+    ///
+    /// # Panics
+    ///
+    /// If `p` exceeds [`p`](Self::p).
+    pub(crate) fn rotation(&mut self, p: usize) -> RotationBuffers<'_, T> {
+        self.check(p);
+        let len = Layout::new(p).len();
+        let [rotated_in, rotated_out] = &mut self.rotated;
+        RotationBuffers {
+            blocks: &mut self.blocks[..blocks_len(p)],
+            rotated_in: &mut rotated_in[..len],
+            rotated_out: &mut rotated_out[..len],
+            axis: &mut self.axis[..2 * p + 1],
+        }
+    }
 }
 
 #[cfg(test)]
@@ -131,6 +177,20 @@ mod tests {
         assert_eq!(ws.shift(5, 5).len(), 36);
         assert_eq!(ws.shift(2, 4).len(), 25);
         assert_eq!(Workspace::<f32>::new(0).shift(0, 0).len(), 1);
+        for (built, p) in [(5, 5), (5, 3), (0, 0)] {
+            let mut ws = Workspace::<f64>::new(built);
+            let buffers = ws.rotation(p);
+            assert_eq!(buffers.blocks.len(), blocks_len(p));
+            assert_eq!(buffers.rotated_in.len(), (p + 1) * (p + 1));
+            assert_eq!(buffers.rotated_out.len(), (p + 1) * (p + 1));
+            assert_eq!(buffers.axis.len(), 2 * p + 1);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Workspace built for p = 3 is too small for p = 4")]
+    fn rotation_rejects_larger_p() {
+        let _ = Workspace::<f64>::new(3).rotation(4);
     }
 
     #[test]

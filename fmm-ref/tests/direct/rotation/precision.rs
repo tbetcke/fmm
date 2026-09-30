@@ -3,31 +3,31 @@
 use nd_fmm_ref::{Frame, Workspace};
 
 use crate::common::{
-    Op, P_MAX_F32, SplitMix64, Worst, apply, degree_error, len, random_coefficients,
+    Op, P_MAX_F32, SplitMix64, Worst, apply, degree_error, len, place, random_coefficients,
 };
-
-/// Tolerance of f32 against f64, per degree relative to the term magnitudes (brief T5).
-pub const F32_TOL: f64 = 1e-5;
-
-/// `frame` rounded to f32, and the rounded frame in f64.
-pub fn rounded(frame: &Frame<f64>) -> (Frame<f32>, Frame<f64>) {
-    let single = Frame::new(frame.centre.map(|c| c as f32), frame.radius as f32);
-    let double = Frame::new(single.centre.map(f64::from), f64::from(single.radius));
-    (single, double)
-}
+use crate::precision::{F32_TOL, rounded};
 
 #[test]
 fn f32_matches_f64() {
-    // Error measure: coefficients per degree in the orthonormal weighting of the
-    // output kind, relative to the term magnitudes of the translation (`common`), of
-    // the f32 result against the f64 result on the same f32-representable frames and
-    // coefficients.
-    let mut rng = SplitMix64::new(0x750d);
+    // The rotation operators in f32 against the direct operators in f64, on the same
+    // f32-representable frames and coefficients: the typical pairs of `Op::pairs`,
+    // which rotate, and a shift along −z, which does not.
+    //
+    // Error measure: per degree, weighted, relative to the term magnitudes of the
+    // translation (`common`), 1e-5, as for `direct` (`precision`).
+    let mut rng = SplitMix64::new(0x7608);
     let mut ws32 = Workspace::<f32>::new(P_MAX_F32);
     let mut ws64 = Workspace::<f64>::new(P_MAX_F32);
-    let worst = Worst::new("f32 vs f64, per degree");
+    let worst = Worst::new("rotation f32 vs direct f64, per degree");
     for op in Op::ALL {
-        for (from, to) in op.pairs() {
+        let mut pairs = op.pairs();
+        let (from, _) = pairs[0];
+        let shift = if let Op::M2l = op { -4.0 } else { -0.5 };
+        pairs.push((
+            from,
+            Frame::new(place(&from, [0.0, 0.0, shift]), from.radius),
+        ));
+        for (from, to) in pairs {
             let (from32, from64) = rounded(&from);
             let (to32, to64) = rounded(&to);
             for p in 0..=P_MAX_F32 {
@@ -37,7 +37,7 @@ fn f32_matches_f64() {
                     .collect();
                 let input64: Vec<f64> = input32.iter().map(|&c| f64::from(c)).collect();
                 let mut out32 = vec![0.0f32; len(p)];
-                op.function()(p, &from32, &to32, &mut ws32, &input32, &mut out32);
+                op.rotation()(p, &from32, &to32, &mut ws32, &input32, &mut out32);
                 let got: Vec<f64> = out32.iter().map(|&c| f64::from(c)).collect();
                 let want = apply(op, p, &from64, &to64, &mut ws64, &input64);
                 let scale = op.scale(p, &from64, &to64, &input64);
