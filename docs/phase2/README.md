@@ -171,5 +171,5 @@ In the repository root, start `claude` and say:
 - [x] T5 merged: 16 classes; the class form reconstructs all 316 matrices to 1e-13; memory reported
 - [x] T6 merged: table-driven rotation equals `nd_fmm_ref::rotation` to 1e-14 and `direct` to 1e-13, p ≤ 20
 - [x] T7 merged: cache round trip bit-identical; stale, mismatched and corrupt files rejected
-- [ ] T8 merged: tables report in the PR; CPU M2L strategy for Phase 3 recommended
-- [ ] Design documents updated: Section 7 Phase 2 status and measured numbers; Section 9.2 box-geometry question answered; workspace-structure §3 (dependencies of `nd-fmm-tables`), §3.1 (the built surface) and §6 ("Still open") match the result
+- [x] T8 merged: tables report in the PR; CPU M2L strategy for Phase 3 recommended
+- [x] Design documents updated: Section 7 Phase 2 status and measured numbers; Section 9.2 box-geometry question answered; workspace-structure §3 (dependencies of `nd-fmm-tables`), §3.1 (the built surface) and §6 ("Still open") match the result
