@@ -299,8 +299,8 @@ pub enum Expansion {
 /// slots with entries 0 and ±1, and T_L(P) = T_M(P) (§3.12, "The z-axis elements").
 #[derive(Clone, Debug, PartialEq)]
 pub struct CoefficientTransform<T: RealScalar> {
-    p: usize,
-    blocks: Vec<T>,
+    pub(crate) p: usize,
+    pub(crate) blocks: Vec<T>,
 }
 
 impl<T: RealScalar> CoefficientTransform<T> {

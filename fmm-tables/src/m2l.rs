@@ -101,8 +101,8 @@ pub fn build_matrices<T: RealScalar>(p: usize, indices: &[usize]) -> MatrixSet<T
 /// each O(p⁴), so O(p⁶) in all. [`M2lClasses`] is the 16-class form.
 #[derive(Clone, Debug, PartialEq)]
 pub struct M2lTables<T: RealScalar> {
-    p: usize,
-    matrices: MatrixSet<T>,
+    pub(crate) p: usize,
+    pub(crate) matrices: MatrixSet<T>,
 }
 
 impl<T: RealScalar> M2lTables<T> {
@@ -177,14 +177,14 @@ impl<T: RealScalar> M2lTables<T> {
 /// Building costs 16 (p + 1)² calls of `direct::m2l` instead of 316 (p + 1)².
 #[derive(Clone, Debug, PartialEq)]
 pub struct M2lClasses<T: RealScalar> {
-    p: usize,
-    matrices: MatrixSet<T>,
+    pub(crate) p: usize,
+    pub(crate) matrices: MatrixSet<T>,
     /// T_M(P) of element g at position g.
-    multipole: Vec<CoefficientTransform<T>>,
+    pub(crate) multipole: Vec<CoefficientTransform<T>>,
     /// T_L(P) of element g at position g.
-    local: Vec<CoefficientTransform<T>>,
+    pub(crate) local: Vec<CoefficientTransform<T>>,
     /// The class and the group element of each offset, in table-index order.
-    offsets: Vec<(usize, SignedPermutation)>,
+    pub(crate) offsets: Vec<(usize, SignedPermutation)>,
 }
 
 impl<T: RealScalar> M2lClasses<T> {

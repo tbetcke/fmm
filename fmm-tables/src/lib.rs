@@ -78,10 +78,13 @@
 //!   rotation M2L, M2M and L2L, O(p³) per application (C2.3).
 //! - [`symmetry`]: the cube group O_h, the symmetry classes of the offsets and the
 //!   coefficient transforms T_M(P) and T_L(P) (§3.12).
+//! - [`cache`]: the versioned on-disk cache of every table family, [`TableCache`],
+//!   keyed by family, degree, precision and the convention and format versions (C2.4).
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 //! [`RealScalar`]: nd_fmm_math::RealScalar
 
+pub mod cache;
 pub mod geometry;
 pub mod m2l;
 mod matrix_set;
@@ -89,6 +92,7 @@ pub mod octant;
 pub mod rotation;
 pub mod symmetry;
 
+pub use cache::{CacheError, CacheOutcome, TableCache};
 pub use m2l::{M2lClasses, M2lScratch, M2lTables};
 pub use matrix_set::MatrixSet;
 pub use octant::{L2lTables, M2mTables};

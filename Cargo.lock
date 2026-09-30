@@ -2226,6 +2226,7 @@ dependencies = [
  "nd-fmm-ref",
  "num-traits",
  "proptest",
+ "thiserror",
 ]
 
 [[package]]

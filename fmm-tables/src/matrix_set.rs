@@ -45,6 +45,22 @@ impl<T: RealScalar> MatrixSet<T> {
         }
     }
 
+    /// Wraps `data`, n² · `count` reals in the layout of [`MatrixSet::as_slice`]; the
+    /// cache uses it to reassemble a stored set.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `n == 0` or if `data` does not have length n² · `count`.
+    pub(crate) fn from_data(n: usize, count: usize, data: Vec<T>) -> Self {
+        assert!(n > 0, "MatrixSet order n must be positive");
+        assert_eq!(
+            Some(data.len()),
+            n.checked_mul(n).and_then(|n2| n2.checked_mul(count)),
+            "MatrixSet data must have length n^2 * count"
+        );
+        Self { n, count, data }
+    }
+
     /// Returns the order n of every matrix.
     #[inline]
     pub fn n(&self) -> usize {

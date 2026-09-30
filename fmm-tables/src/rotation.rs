@@ -305,28 +305,28 @@ pub struct Shift {
 /// for M2M or L2L.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShiftTables<T: RealScalar> {
-    operator: Operator,
-    p: usize,
+    pub(crate) operator: Operator,
+    pub(crate) p: usize,
     /// θ per stored polar angle, in f64.
-    polar_angles: Vec<f64>,
+    pub(crate) polar_angles: Vec<f64>,
     /// φ per azimuth, in f64.
-    azimuth_angles: Vec<f64>,
+    pub(crate) azimuth_angles: Vec<f64>,
     /// |c′ − c| per distance, in f64.
-    distances: Vec<f64>,
+    pub(crate) distances: Vec<f64>,
     /// T_in(R_y(−θ)) per polar angle, `blocks_len(p)` each.
-    forward: Vec<T>,
+    pub(crate) forward: Vec<T>,
     /// T_out(R_y(θ)) per polar angle, `blocks_len(p)` each.
-    backward: Vec<T>,
+    pub(crate) backward: Vec<T>,
     /// (Cₘ, Sₘ) for m = 1 to p per azimuth, 2p each.
-    azimuth: Vec<T>,
+    pub(crate) azimuth: Vec<T>,
     /// The per-order coaxial matrices per distance, `coaxial_len(p)` each.
-    coaxial: Vec<T>,
+    pub(crate) coaxial: Vec<T>,
     /// The shift of each entry, in entry order.
-    shifts: Vec<Shift>,
+    pub(crate) shifts: Vec<Shift>,
 }
 
 /// Number of coaxial factors per distance, Σᵢ (p + 1 − i)² = (p + 1)(p + 2)(2p + 3)/6.
-const fn coaxial_len(p: usize) -> usize {
+pub(crate) const fn coaxial_len(p: usize) -> usize {
     (p + 1) * (p + 2) * (2 * p + 3) / 6
 }
 
@@ -854,10 +854,10 @@ fn add<T: RealScalar>(x: &[T], out: &mut [T]) {
 /// at p = 8, 5.6 MB at p = 16 and 10.5 MB at p = 20.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RotationTables<T: RealScalar> {
-    p: usize,
-    m2m: ShiftTables<T>,
-    l2l: ShiftTables<T>,
-    m2l: ShiftTables<T>,
+    pub(crate) p: usize,
+    pub(crate) m2m: ShiftTables<T>,
+    pub(crate) l2l: ShiftTables<T>,
+    pub(crate) m2l: ShiftTables<T>,
 }
 
 impl<T: RealScalar> RotationTables<T> {
