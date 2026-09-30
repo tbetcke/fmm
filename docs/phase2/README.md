@@ -167,7 +167,7 @@ In the repository root, start `claude` and say:
 - [x] T2 merged: `check_symmetry.py` passes; §3.12 drafted
 - [x] CONVENTIONS §3.12 and the §3.10 change reviewed and signed off; `CONVENTION_VERSION` decision recorded
 - [x] T3 merged: M2M and L2L tables equal `direct` to 1e-14 on parent levels 0–15, p ≤ 30 (ignored release test for p > 12)
-- [ ] T4 merged: M2L tables equal `direct` to 1e-14 for all 316 offsets on levels 2, 9 and 16, p ≤ 20
+- [x] T4 merged: M2L tables equal `direct` to 1e-14 for all 316 offsets on levels 2, 9 and 16, p ≤ 20
 - [ ] T5 merged: 16 classes; the class form reconstructs all 316 matrices to 1e-13; memory reported
 - [ ] T6 merged: table-driven rotation equals `nd_fmm_ref::rotation` to 1e-14 and `direct` to 1e-13, p ≤ 20
 - [ ] T7 merged: cache round trip bit-identical; stale, mismatched and corrupt files rejected
