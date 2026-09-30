@@ -164,8 +164,8 @@ In the repository root, start `claude` and say:
 
 ## Exit checklist
 - [x] T1 merged: `nd-fmm-tables` skeleton, CI green, root `CLAUDE.md` points to Phase 2
-- [ ] T2 merged: `check_symmetry.py` passes; §3.12 drafted
-- [ ] CONVENTIONS §3.12 and the §3.10 change reviewed and signed off; `CONVENTION_VERSION` decision recorded
+- [x] T2 merged: `check_symmetry.py` passes; §3.12 drafted
+- [x] CONVENTIONS §3.12 and the §3.10 change reviewed and signed off; `CONVENTION_VERSION` decision recorded
 - [ ] T3 merged: M2M and L2L tables equal `direct` to 1e-14 on parent levels 0–15, p ≤ 30 (ignored release test for p > 12)
 - [ ] T4 merged: M2L tables equal `direct` to 1e-14 for all 316 offsets on levels 2, 9 and 16, p ≤ 20
 - [ ] T5 merged: 16 classes; the class form reconstructs all 316 matrices to 1e-13; memory reported
