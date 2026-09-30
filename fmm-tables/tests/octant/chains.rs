@@ -2,13 +2,12 @@
 //! P2M at the parent, L2P after the L2L table equals L2P of the original local, and
 //! two table steps equal one `direct` translation over two levels.
 
-use nd_fmm_math::{Layout, harmonics};
 use nd_fmm_ref::{Frame, Workspace, direct, leaf};
 use nd_fmm_tables::geometry::OCTANT_COUNT;
 
 use crate::common::{
     CHAIN_TOL, DEBUG_DEGREES, DYADIC, Domain, Kind, SplitMix64, Worst, apply, child_index,
-    degree_error, l2l, len, m2m, place, random_coefficients, terms,
+    degree_error, l2l, l2p_terms, len, m2m, place, random_coefficients, terms,
 };
 
 /// Parent levels of the chain tests, with the canonical parent (0, 1) as `None`.
@@ -68,21 +67,6 @@ fn m2m_table_after_p2m_equals_p2m_at_the_parent() {
             }
         }
     }
-}
-
-/// The L2P term magnitudes (1/r) Σᵢ wᵢ |Rᵢ(v)| τᵢ of the magnitudes `tau` in `frame` at
-/// `x`, with wᵢ = 1 for m = 0 and 2 otherwise (the doubling rule of CONVENTIONS §3.6).
-fn l2p_terms(p: usize, frame: &Frame<f64>, tau: &[f64], x: [f64; 3]) -> f64 {
-    let layout = Layout::new(p);
-    let mut values = vec![0.0; layout.len()];
-    harmonics::regular(p, frame.scaled(x), &mut values);
-    let sum: f64 = (0..layout.len())
-        .map(|i| {
-            let w = if layout.nm(i).1 == 0 { 1.0 } else { 2.0 };
-            w * (tau[i] * values[i]).abs()
-        })
-        .sum();
-    sum / frame.radius
 }
 
 #[test]
