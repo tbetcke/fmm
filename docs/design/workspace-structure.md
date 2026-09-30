@@ -177,7 +177,7 @@ Each crate has one job and a public surface small enough to describe in a few li
 | --- | --- | --- | --- | --- |
 | `fmm-math` | `nd-fmm-math` | Phase 0 (done) | real solid harmonics and gradients, rotation blocks, index layout, scalar trait | `num-traits` |
 | `fmm-ref` | `nd-fmm-ref` | Phase 1 (done) | f64 reference operators (direct O(p⁴) and rotation O(p³)), P2P, direct-sum oracle | `nd-fmm-math`, `num-traits` |
-| `fmm-tables` | `nd-fmm-tables` | Phase 2 | M2M/L2L (8 octants each), M2L (316 offsets, symmetry classes), rotation tables, versioned cache, later SVD compression | `nd-fmm-ref`, `faer`, a binary serialiser |
+| `fmm-tables` | `nd-fmm-tables` | Phase 2 | M2M/L2L (8 octants each), M2L (316 offsets, symmetry classes), rotation tables, versioned cache, later SVD compression | `nd-fmm-ref`, `rlst` (without its `mpi` feature), a binary serialiser |
 | `fmm-exec` | `nd-fmm-exec` | Phase 3 (host), Phase 4 (device) | `impl FmmOperator` for Laplace, box geometry from Morton keys, user-facing FMM object, M2L strategy selection | `nd-fmm-plan`, `nd-octree`, `mpi`, `nd-fmm-tables`, `nd-fmm-kernels` (feature `gpu`), `rayon` |
 | `fmm-kernels` | `nd-fmm-kernels` | Phase 4 | all `#[cube]` kernels; runtime-generic | `cubecl` (pinned), CubeCL matmul crate, `nd-fmm-math` (constants only) |
 | `fmm-validate` | `nd-fmm-validate` (`publish = false`) | Phase 1 (done), grows with each phase | error norms, point distributions, accuracy sweeps, benchmarks | all of the above, as dev tooling; in Phase 1 `nd-fmm-math` and `nd-fmm-ref` |
@@ -382,7 +382,7 @@ cubecl = { version = "=0.10.0", default-features = false, features = ["std", "st
 cubek-matmul = { version = "=0.2.0", default-features = false, features = ["std"] }
 cubek-std = { version = "=0.2.0", default-features = false }
 # Added when their phases start:
-# faer = "<version>"
+# rlst = "0.8.0"   # SVD compression (C6.2); match the existing crates, never with "mpi" here
 # rayon = "1"
 # mpi = { version = "0.8.2", features = ["derive"] }   # Phase 3, match existing crates
 nd-fmm-math = { path = "fmm-math" }

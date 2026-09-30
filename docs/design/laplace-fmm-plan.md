@@ -422,7 +422,7 @@ operator through `FmmOperator`.
 | --- | --- | --- | --- |
 | `fmm-math` (Phase 0, done) | `RealScalar`, real-basis index layout, regular and irregular solid harmonics with gradients by Cartesian recursion, rotation blocks Dⁿ(Q) for any rotation, `CONVENTION_VERSION` | none (`num-traits`) | generic f32/f64 |
 | `fmm-ref` | CPU reference operators: direct O(p⁴) and rotation O(p³), P2P, direct-sum oracle | `fmm-math` | f64 (f32 for comparison) |
-| `fmm-tables` | Builds M2M/L2L (8 each, by `morton::child_index`), M2L (316 or 16 + symmetry, keyed like `V_LIST_DIRECTIONS`), rotation and coaxial tables; SVD compression; versioned on-disk cache | `fmm-ref`, `faer` | built in f64, stored in both |
+| `fmm-tables` | Builds M2M/L2L (8 each, by `morton::child_index`), M2L (316 or 16 + symmetry, keyed like `V_LIST_DIRECTIONS`), rotation and coaxial tables; SVD compression; versioned on-disk cache | `fmm-ref`, `rlst` (SVD compression; without its `mpi` feature) | built in f64, stored in both |
 | `fmm-kernels` | `#[cube]` kernels: P2M, L2P, P2L, M2P, P2P, gather/scatter, M2L-GEMM, M2L-rotation, M2M/L2L | `cubecl`, the CubeCL matmul crate | generic |
 | `fmm-exec` | `impl FmmOperator` for Laplace (host per-pair path first, batched and device paths later), box centres and half-widths from Morton keys, device buffers, autotune selection, 1/(4π) | `nd-fmm-plan`, `nd-octree`, `fmm-kernels`, `fmm-tables` | generic |
 | `fmm-validate` | Error norms, accuracy sweeps, benchmark harness | all | f64 reference |
