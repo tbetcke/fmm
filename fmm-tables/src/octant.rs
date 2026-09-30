@@ -49,7 +49,7 @@ type Translate = fn(usize, &Frame<f64>, &Frame<f64>, &mut Workspace<f64>, &[f64]
 /// `direct::m2m`, each O(p⁴), so O(p⁶) in all.
 #[derive(Clone, Debug, PartialEq)]
 pub struct M2mTables<T: RealScalar> {
-    inner: OctantTables<T>,
+    pub(crate) inner: OctantTables<T>,
 }
 
 impl<T: RealScalar> M2mTables<T> {
@@ -100,7 +100,7 @@ impl<T: RealScalar> M2mTables<T> {
 /// `direct::l2l`, each O(p⁴), so O(p⁶) in all.
 #[derive(Clone, Debug, PartialEq)]
 pub struct L2lTables<T: RealScalar> {
-    inner: OctantTables<T>,
+    pub(crate) inner: OctantTables<T>,
 }
 
 impl<T: RealScalar> L2lTables<T> {
@@ -141,9 +141,9 @@ impl<T: RealScalar> L2lTables<T> {
 
 /// The implementation shared by [`M2mTables`] and [`L2lTables`].
 #[derive(Clone, Debug, PartialEq)]
-struct OctantTables<T: RealScalar> {
-    p: usize,
-    matrices: MatrixSet<T>,
+pub(crate) struct OctantTables<T: RealScalar> {
+    pub(crate) p: usize,
+    pub(crate) matrices: MatrixSet<T>,
 }
 
 impl<T: RealScalar> OctantTables<T> {
