@@ -1,11 +1,12 @@
-//! Smoke runs of the accuracy sweep at p ≤ 4 with few points.
+//! Smoke runs of the accuracy sweep at p ≤ 4 with few points, on the reference and the
+//! table path.
 //!
 //! These check that the sweep runs and is consistent, not the accuracy figures
 //! themselves: those are reported by the `accuracy` example. Error measure throughout:
 //! the relative L2 and max errors against `direct_sum` that the sweep reports
 //! (`nd_fmm_validate::metrics::ErrorNorms`), compared as plain numbers.
 
-use nd_fmm_validate::accuracy::{Chain, Config, Errors, Row, sweep};
+use nd_fmm_validate::accuracy::{Chain, Config, Errors, Row, Translations, sweep};
 
 const SMOKE: Config = Config {
     sources: 40,
@@ -32,7 +33,7 @@ fn row(rows: &[Row], chain: Chain, p: usize) -> &Row {
 
 #[test]
 fn f64_sweep_is_complete_finite_and_converges() {
-    let rows = sweep::<f64>(&SMOKE, P_MAX);
+    let rows = sweep::<f64>(&SMOKE, P_MAX, Translations::Reference);
     assert_eq!(rows.len(), Chain::ALL.len() * P_MAX);
     for (i, r) in rows.iter().enumerate() {
         assert_eq!(r.chain, Chain::ALL[i / P_MAX]);
@@ -70,7 +71,7 @@ fn f64_sweep_is_complete_finite_and_converges() {
 fn exact_translations_do_not_change_the_error() {
     // M2M and L2L are exact to degree p (CONVENTIONS §3.11), so the upward chain agrees
     // with P2M → M2P and the downward chain with P2M → M2L → L2P up to rounding.
-    let rows = sweep::<f64>(&SMOKE, P_MAX);
+    let rows = sweep::<f64>(&SMOKE, P_MAX, Translations::Reference);
     for (exact, with) in [
         (Chain::P2mM2p, Chain::P2mM2mM2p),
         (Chain::P2mM2lL2p, Chain::P2mM2lL2lL2p),
@@ -92,8 +93,8 @@ fn exact_translations_do_not_change_the_error() {
 fn f32_sweep_matches_f64_where_truncation_dominates() {
     // At p ≤ 4 the truncation error (≳ 1e-4) is far above f32 rounding (≈ 1e-7), so
     // the f32 errors agree with the f64 ones to a few per cent.
-    let single = sweep::<f32>(&SMOKE, P_MAX);
-    let double = sweep::<f64>(&SMOKE, P_MAX);
+    let single = sweep::<f32>(&SMOKE, P_MAX, Translations::Reference);
+    let double = sweep::<f64>(&SMOKE, P_MAX, Translations::Reference);
     for (s, d) in single.iter().zip(&double) {
         assert_eq!((s.chain, s.p), (d.chain, d.p));
         for (x, y) in values(&s.all)
@@ -108,7 +109,46 @@ fn f32_sweep_matches_f64_where_truncation_dominates() {
 
 #[test]
 fn deterministic_for_a_seed() {
-    assert_eq!(sweep::<f64>(&SMOKE, 2), sweep::<f64>(&SMOKE, 2));
+    assert_eq!(
+        sweep::<f64>(&SMOKE, 2, Translations::Reference),
+        sweep::<f64>(&SMOKE, 2, Translations::Reference)
+    );
     let other = Config { seed: 8, ..SMOKE };
-    assert_ne!(sweep::<f64>(&SMOKE, 2), sweep::<f64>(&other, 2));
+    assert_ne!(
+        sweep::<f64>(&SMOKE, 2, Translations::Reference),
+        sweep::<f64>(&other, 2, Translations::Reference)
+    );
+}
+
+#[test]
+fn table_path_reproduces_the_reference_errors() {
+    // The dense tables equal `nd_fmm_ref::direct` at their canonical frames up to
+    // rounding (nd-fmm-tables, C2.1 and C2.2), and the sweep geometry is those frames
+    // scaled by ½ (CONVENTIONS §3.7, §3.12), so in f64 every error figure agrees with
+    // the reference path's to relative 1e-12. (In f32 the rounded tables and the f32
+    // direct operators differ at f32 rounding, far above 1e-12.) Error measure:
+    // |table − reference| / reference per figure.
+    fn check(tables: &[Row], reference: &[Row], precision: &str) {
+        assert_eq!(tables.len(), reference.len());
+        for (t, r) in tables.iter().zip(reference) {
+            assert_eq!((t.chain, t.p), (r.chain, r.p));
+            for (x, y) in values(&t.all)
+                .into_iter()
+                .chain(values(&t.worst))
+                .zip(values(&r.all).into_iter().chain(values(&r.worst)))
+            {
+                let rel = (x - y).abs() / y;
+                assert!(rel <= 1e-12, "{precision} {t:?} vs {r:?}: relative {rel:e}");
+            }
+        }
+    }
+    let reference = sweep::<f64>(&SMOKE, P_MAX, Translations::Reference);
+    let tables = sweep::<f64>(&SMOKE, P_MAX, Translations::Tables);
+    check(&tables, &reference, "f64");
+    // Chains without a translation run the same code on both paths.
+    for (t, r) in tables.iter().zip(&reference) {
+        if matches!(t.chain, Chain::P2mM2p | Chain::P2lL2p) {
+            assert_eq!(t, r);
+        }
+    }
 }

@@ -3,12 +3,13 @@
 //! Development tooling that measures the nd-project FMM rather than testing it: error
 //! metrics, seeded point distributions, accuracy sweeps and (in the examples) timing
 //! reports. It grows with every phase; in Phase 1 it measures the reference operators
-//! of `nd-fmm-ref` against its direct-sum oracle.
+//! of `nd-fmm-ref` against its direct-sum oracle, and in Phase 2 the operator tables of
+//! `nd-fmm-tables`: their cost, and the same accuracy sweep run through them.
 //!
 //! No library crate depends on this crate, not even as a dev-dependency: once it
 //! depends on the executor crates, that would create dependency cycles. Everything
-//! here is seeded and deterministic; only the timing example measures wall-clock time,
-//! and nothing asserts timings.
+//! here is seeded and deterministic; only the `timing` and `tables` examples measure
+//! wall-clock time, and nothing asserts timings.
 //!
 //! ## Conventions
 //!
@@ -36,18 +37,24 @@
 //!   charges.
 //! - [`metrics`]: the error measures above.
 //! - [`accuracy`]: the single-translation accuracy sweep of the operator chains
-//!   against `nd_fmm_ref::p2p::direct_sum`, run by the `accuracy` example.
+//!   against `nd_fmm_ref::p2p::direct_sum`, with the translations of `nd-fmm-ref` or
+//!   of the tables, run by the `accuracy` example.
+//! - [`bench`](mod@bench): the helpers of the timing reports (median time per call, fitted
+//!   exponent, crossover, machine description).
 //!
-//! The examples `accuracy` and `timing` print Markdown reports on stdout:
+//! The examples `accuracy`, `timing` and `tables` print Markdown reports on stdout:
 //!
 //! ```text
 //! cargo run --release -p nd-fmm-validate --example accuracy
+//! cargo run --release -p nd-fmm-validate --example accuracy -- --tables
 //! cargo run --release -p nd-fmm-validate --example timing
+//! cargo run --release -p nd-fmm-validate --example tables
 //! ```
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 
 pub mod accuracy;
+pub mod bench;
 pub mod metrics;
 pub mod points;
 mod rng;

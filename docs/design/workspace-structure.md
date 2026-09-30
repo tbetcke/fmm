@@ -177,10 +177,10 @@ Each crate has one job and a public surface small enough to describe in a few li
 | --- | --- | --- | --- | --- |
 | `fmm-math` | `nd-fmm-math` | Phase 0 (done) | real solid harmonics and gradients, rotation blocks, index layout, scalar trait | `num-traits` |
 | `fmm-ref` | `nd-fmm-ref` | Phase 1 (done) | f64 reference operators (direct O(p⁴) and rotation O(p³)), P2P, direct-sum oracle | `nd-fmm-math`, `num-traits` |
-| `fmm-tables` | `nd-fmm-tables` | Phase 2 | M2M/L2L (8 octants each), M2L (316 offsets, symmetry classes), rotation tables, versioned cache, later SVD compression | `nd-fmm-ref`, `rlst` (without its `mpi` feature), a binary serialiser |
+| `fmm-tables` | `nd-fmm-tables` | Phase 2 (done) | M2M/L2L (8 octants each), M2L (316 offsets, symmetry classes), rotation tables, versioned cache, later SVD compression | `nd-fmm-math`, `nd-fmm-ref`, `num-traits`, `thiserror` (cache errors); `rlst` (without its `mpi` feature) only with SVD compression (C6.2); no serialiser, as the cache writes its own little-endian format |
 | `fmm-exec` | `nd-fmm-exec` | Phase 3 (host), Phase 4 (device) | `impl FmmOperator` for Laplace, box geometry from Morton keys, user-facing FMM object, M2L strategy selection | `nd-fmm-plan`, `nd-octree`, `mpi`, `nd-fmm-tables`, `nd-fmm-kernels` (feature `gpu`), `rayon` |
 | `fmm-kernels` | `nd-fmm-kernels` | Phase 4 | all `#[cube]` kernels; runtime-generic | `cubecl` (pinned), CubeCL matmul crate, `nd-fmm-math` (constants only) |
-| `fmm-validate` | `nd-fmm-validate` (`publish = false`) | Phase 1 (done), grows with each phase | error norms, point distributions, accuracy sweeps, benchmarks | all of the above, as dev tooling; in Phase 1 `nd-fmm-math` and `nd-fmm-ref` |
+| `fmm-validate` | `nd-fmm-validate` (`publish = false`) | Phase 1 (done), grows with each phase | error norms, point distributions, accuracy sweeps, benchmarks | all of the above, as dev tooling; in Phase 1 `nd-fmm-math` and `nd-fmm-ref`, in Phase 2 also `nd-fmm-tables` |
 
 Dropped after scouting:
 
@@ -245,16 +245,45 @@ Outside the crates, Phase 0 also adds these folders:
 - As implemented in Phase 1, the leaf operators live in `leaf`, shared by both
   translation methods, not in `direct` and `rotation`. There is no `rayon` dependency.
 
-**`nd-fmm-tables`**
+**`nd-fmm-tables`** (Phase 2; MPI-free)
 
-- `M2mTables` and `L2lTables` hold 8 matrices each, indexed by `morton::child_index`
-  (4x + 2y + z).
-- `M2lTables` holds 316 offsets, keyed by the same `[i64; 3]` offsets and sign as
-  `nd_fmm_plan::interaction_manager::V_LIST_DIRECTIONS` (target − source), with optional
-  symmetry maps.
-- `RotationTables`.
-- `TableCache::load_or_build(p, precision)`, keyed by p, precision and
-  `CONVENTION_VERSION`.
+- Every family is generic over `T: RealScalar`, built in f64 with `build(p)` at the
+  canonical frames of CONVENTIONS §3.12 and rounded entry by entry to `T`.
+- Every application accumulates (+=), applies no 1/(4π) and does not allocate; any
+  temporaries come from caller-owned scratch.
+- `MatrixSet<T>` holds `count` square matrices of order n, column-major and contiguous
+  (§3.12, "Matrix layout"). It offers `matrix(i)`, `as_slice()`, `apply(i, x, y)`
+  (y += Aᵢ x) and `cast()`.
+- `geometry` restates the octant and offset order of §3.12 instead of importing it from
+  `nd-octree` or `nd-fmm-plan` (C3.1 checks that they agree):
+  - `octant_direction(o)` gives the sign vector s_o of child index o = 4x + 2y + z;
+  - `m2l_offsets()` gives the 316 offsets d = index(target) − index(source) in
+    lexicographic order, and `m2l_offset_index(d)` their closed-form table index;
+  - `m2m_frames(o)`, `l2l_frames(o)` and `m2l_frames(index)` give the canonical frames.
+- `M2mTables` and `L2lTables` hold 8 matrices each, applied with `apply(o, input,
+  output)`.
+- `M2lTables` holds the 316 dense matrices, applied with `apply(index, multipole,
+  local)`. `m2l::build_matrices(p, indices)` builds chosen offsets only.
+- `M2lClasses` is the 16-class form: the class matrices, T_M(P) and T_L(P) of the 48
+  elements of O_h, and each offset's class and element. It offers `apply(index, m, l,
+  &mut M2lScratch)` without expanding, and `expand()` to the dense tables.
+  - `symmetry` provides `SignedPermutation`, `class_representatives()`, `class_of`
+    and `CoefficientTransform`.
+- `RotationTables` holds the rotation and coaxial tables of the 316 offsets and the 8
+  octants, one `ShiftTables` per `rotation::Operator`. It offers `m2l(index, …)`,
+  `m2m(o, …)` and `l2l(o, …)`, each with a `RotationScratch`, in O(p³) and building no
+  block per call.
+- `cache::TableCache::new(dir)` works in a directory the caller chooses, and offers
+  `load::<F>(p)`, `store(&F)` and `load_or_build::<F>(p) -> (F, CacheOutcome)`.
+  - F is any of the five families in f32 or f64 (`CachedTable`).
+  - A file is keyed by `TableKind`, p, precision, `CONVENTION_VERSION` and
+    `FORMAT_VERSION`; its header repeats the key and holds an FNV-1a checksum of the
+    payload.
+  - Writes are atomic. A stale, mismatched or corrupt file is rejected, and
+    `load_or_build` then rebuilds it (`CacheOutcome::Rebuilt`).
+- As implemented in Phase 2, the cache is generic over the family rather than taking
+  `(p, precision)`. The offsets and octants are restated in `geometry`, not keyed by
+  `nd-fmm-plan` types. There is no `rlst` and no serialiser.
 
 **`nd-fmm-exec`**
 
@@ -288,10 +317,15 @@ Outside the crates, Phase 0 also adds these folders:
     `gradient_error_relative_to_magnitude`;
   - `CoefficientKind::{Multipole, Local}`, `weight(kind, n, m)`, `degree_norms`,
     `degree_errors` and `max_relative_degree_error`, per degree in the §3.8 weighting.
-- `accuracy`: `sweep::<T>(&config, p_max) -> Vec<Row>` runs the five `Chain`s over the
-  316 offsets of `v_list_offsets()`; also `Config`, `Errors`, `Row`, `SOURCE_CENTRE`
-  and `RADIUS`.
-- Examples `accuracy` and `timing` print Markdown reports; no timing is asserted.
+- `accuracy`: `sweep::<T>(&config, p_max, translations) -> Vec<Row>` runs the five
+  `Chain`s over the 316 offsets of `nd_fmm_tables::geometry::m2l_offsets()`, with the
+  translations of `nd_fmm_ref::direct` or the dense tables of `nd-fmm-tables`
+  (`Translations::{Reference, Tables}`, Phase 2); also `Config`, `Errors`, `Row`,
+  `SOURCE_CENTRE` and `RADIUS`.
+- `bench` (Phase 2): the helpers of the timing reports, `median_time_per_call`,
+  `fitted_exponent`, `crossover` and the machine description.
+- Examples `accuracy` (with `--tables` for the table path), `timing` and `tables` print
+  Markdown reports; no timing is asserted.
 
 ## 4. How `nd-fmm-plan` and the octree connect
 
@@ -447,12 +481,15 @@ noise without testing anything.
 - [ ] Column order within a level's `LevelData` follows insertion (partly `HashMap`)
       order. Should it be Morton order, for reproducible floating-point sums and
       cache-friendly gathers?
-- [ ] Box geometry conventions are used by the tables but are not in
-      `docs/CONVENTIONS.md`. Propose adding them as a new section before Phase 2,
-      together with a `CONVENTION_VERSION` decision:
+- [x] Box geometry conventions used by the tables are now CONVENTIONS §3.12 (Phase 2
+      T2, PR #17, signed off before T3), which §3.10 covers; `CONVENTION_VERSION`
+      stays 1. §3.12 states:
   - child octant index 4x + 2y + z;
   - M2L offset sign (target − source, in units of the box width);
   - the shift vector c_target − c_source = 2 r_l · offset.
+
+  It also states the offset order and table index, the canonical frames, the matrix
+  layout and the cube symmetry group.
 - [x] Stale crate `CLAUDE.md` files from the pre-workspace era were updated on
       2026-09-29. They now describe workspace membership, the root CI commands, the
       committed root `Cargo.lock`, and rlst as a crates.io dependency.

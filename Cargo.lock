@@ -2235,6 +2235,7 @@ version = "0.1.0-dev"
 dependencies = [
  "nd-fmm-math",
  "nd-fmm-ref",
+ "nd-fmm-tables",
 ]
 
 [[package]]

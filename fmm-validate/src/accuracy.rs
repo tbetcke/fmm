@@ -10,7 +10,8 @@
 //! The standard one-box separation of a uniform octree level (design §2.5): a source
 //! box with centre c = (½, ½, ½) and half-width r = ½ (the scaling radius of
 //! CONVENTIONS §3.7), and a target box of the same size with centre c + 2r·d for a
-//! V-list offset d ∈ {−3..3}³ \ {−1..1}³, 316 offsets in all ([`v_list_offsets`]).
+//! V-list offset d ∈ {−3..3}³ \ {−1..1}³, 316 offsets in all, in the table order of
+//! CONVENTIONS §3.12 ([`m2l_offsets`]).
 //! The six face-adjacent offsets (d a permutation of (±2, 0, 0)) have the smallest
 //! centre distance, |b| = 4 in scaled units, and so the worst convergence ratio
 //! 2√3/4 ≈ 0.87 of the M2L bound (CONVENTIONS §3.11, "M2L"); they are equivalent under
@@ -25,8 +26,9 @@
 //!
 //! # Chains
 //!
-//! Every expansion has degree p; translations are those of `nd_fmm_ref::direct`
-//! (the `rotation` operators agree with them to 1e-13, Phase 1 T6).
+//! Every expansion has degree p. The translations M2M, M2L and L2L are chosen by
+//! [`Translations`]: those of `nd_fmm_ref::direct` (the `rotation` operators agree with
+//! them to 1e-13, Phase 1 T6), or the dense tables of `nd-fmm-tables`.
 //!
 //! - [`Chain::P2mM2p`]: P2M in the source box, M2P at the targets.
 //! - [`Chain::P2lL2p`]: P2L of the sources in the target box, L2P at the targets.
@@ -38,6 +40,19 @@
 //!
 //! M2M and L2L are exact to degree p (CONVENTIONS §3.11), so the third chain agrees
 //! with the first, and the fifth with the fourth, up to rounding.
+//!
+//! # Table path
+//!
+//! With [`Translations::Tables`], every translation is looked up by its integer
+//! geometry (CONVENTIONS §3.12): M2M from source child o to the source box is
+//! [`M2mTables`] matrix o, L2L from the target box to its child o is [`L2lTables`]
+//! matrix o, and M2L to the target box at offset d is [`M2lTables`] matrix index(d).
+//! The child boxes of this module are numbered o = 4x + 2y + z with the bit set on
+//! the positive side, as the child index of §3.12, and the boxes have half-width ½ and
+//! ¼, so by the scaling of §3.7 the canonical-frame tables apply unchanged. Every
+//! translation of every chain is an octant or a V-list offset, so no chain stays on
+//! `nd_fmm_ref::direct`; P2M → M2P and P2L → L2P have no translation and are the same
+//! in both paths. The tables are built in f64 at each degree and rounded to T.
 //!
 //! # Error measure
 //!
@@ -56,10 +71,10 @@
 //! end-to-end measure of design §8.2, not a rounding-level test.
 //!
 //! ```
-//! use nd_fmm_validate::accuracy::{Chain, Config, sweep};
+//! use nd_fmm_validate::accuracy::{Chain, Config, Translations, sweep};
 //!
 //! let config = Config { sources: 20, targets: 20, seed: 1 };
-//! let rows = sweep::<f64>(&config, 2);
+//! let rows = sweep::<f64>(&config, 2, Translations::Reference);
 //! assert_eq!(rows.len(), Chain::ALL.len() * 2);
 //! assert!(rows.iter().all(|row| row.all.potential.l2 < 1.0));
 //! ```
@@ -69,6 +84,8 @@ use core::ops::Range;
 use nd_fmm_math::{Layout, RealScalar};
 use nd_fmm_ref::p2p::direct_sum;
 use nd_fmm_ref::{Frame, Workspace, direct, leaf};
+use nd_fmm_tables::geometry::{M2L_OFFSET_COUNT, m2l_offsets};
+use nd_fmm_tables::{L2lTables, M2lTables, M2mTables};
 
 use crate::metrics::{ErrorAccumulator, ErrorNorms};
 use crate::{SplitMix64, points};
@@ -78,23 +95,6 @@ pub const SOURCE_CENTRE: [f64; 3] = [0.5, 0.5, 0.5];
 
 /// Half-width r of both boxes, their scaling radius (CONVENTIONS §3.7).
 pub const RADIUS: f64 = 0.5;
-
-/// The 316 V-list offsets d ∈ {−3..3}³ \ {−1..1}³ of a uniform octree level (design
-/// §2.5), in lexicographic order of (x, y, z). The target box centre is c + 2r·d.
-pub fn v_list_offsets() -> Vec<[i32; 3]> {
-    let mut out = Vec::with_capacity(316);
-    for x in -3..=3 {
-        for y in -3..=3 {
-            for z in -3..=3 {
-                let d: [i32; 3] = [x, y, z];
-                if d.iter().any(|c: &i32| c.abs() > 1) {
-                    out.push(d);
-                }
-            }
-        }
-    }
-    out
-}
 
 /// One of the operator chains of the sweep (module documentation).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,6 +129,97 @@ impl Chain {
             Chain::P2mM2mM2p => "P2M → M2M → M2P",
             Chain::P2mM2lL2p => "P2M → M2L → L2P",
             Chain::P2mM2lL2lL2p => "P2M → M2L → L2L → L2P",
+        }
+    }
+}
+
+/// The implementation of the translations M2M, M2L and L2L in a sweep (module
+/// documentation, "Table path").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Translations {
+    /// `nd_fmm_ref::direct::{m2m, m2l, l2l}` at the frames of the boxes.
+    Reference,
+    /// The dense tables of `nd-fmm-tables`, [`M2mTables`], [`M2lTables`] and
+    /// [`L2lTables`], built at each degree, looked up by child index and offset.
+    Tables,
+}
+
+impl Translations {
+    /// The implementation in words, for reports.
+    pub fn name(self) -> &'static str {
+        match self {
+            Translations::Reference => "`nd_fmm_ref::direct`",
+            Translations::Tables => "the dense tables of `nd-fmm-tables`",
+        }
+    }
+}
+
+/// The translations of one degree p: nd-fmm-ref, or the dense tables of degree p.
+struct Translator<T: RealScalar> {
+    p: usize,
+    tables: Option<(M2mTables<T>, M2lTables<T>, L2lTables<T>)>,
+}
+
+impl<T: RealScalar> Translator<T> {
+    /// The translations of degree `p`; builds the tables for [`Translations::Tables`].
+    fn new(translations: Translations, p: usize) -> Self {
+        let tables = match translations {
+            Translations::Reference => None,
+            Translations::Tables => Some((
+                M2mTables::build(p),
+                M2lTables::build(p),
+                L2lTables::build(p),
+            )),
+        };
+        Self { p, tables }
+    }
+
+    /// Adds the M2M from child `o` (frame `child`) to its parent (frame `parent`).
+    fn m2m(
+        &self,
+        o: usize,
+        child: &Frame<T>,
+        parent: &Frame<T>,
+        ws: &mut Workspace<T>,
+        input: &[T],
+        output: &mut [T],
+    ) {
+        match &self.tables {
+            None => direct::m2m(self.p, child, parent, ws, input, output),
+            Some((m2m, _, _)) => m2m.apply(o, input, output),
+        }
+    }
+
+    /// Adds the M2L from `source` to `target`, the box at the offset with table index
+    /// `index`.
+    fn m2l(
+        &self,
+        index: usize,
+        source: &Frame<T>,
+        target: &Frame<T>,
+        ws: &mut Workspace<T>,
+        input: &[T],
+        output: &mut [T],
+    ) {
+        match &self.tables {
+            None => direct::m2l(self.p, source, target, ws, input, output),
+            Some((_, m2l, _)) => m2l.apply(index, input, output),
+        }
+    }
+
+    /// Adds the L2L from a parent (frame `parent`) to its child `o` (frame `child`).
+    fn l2l(
+        &self,
+        o: usize,
+        parent: &Frame<T>,
+        child: &Frame<T>,
+        ws: &mut Workspace<T>,
+        input: &[T],
+        output: &mut [T],
+    ) {
+        match &self.tables {
+            None => direct::l2l(self.p, parent, child, ws, input, output),
+            Some((_, _, l2l)) => l2l.apply(o, input, output),
         }
     }
 }
@@ -173,7 +264,7 @@ pub struct Row {
     /// separately.
     pub worst: Errors,
     /// The offset d whose target box has the largest potential L2 error.
-    pub worst_offset: [i32; 3],
+    pub worst_offset: [i64; 3],
     /// Errors over the targets of all 316 offsets together.
     pub all: Errors,
 }
@@ -210,11 +301,11 @@ impl Accumulators {
 #[derive(Clone, Copy, Default)]
 struct Worst {
     errors: Errors,
-    offset: [i32; 3],
+    offset: [i64; 3],
 }
 
 impl Worst {
-    fn update(&mut self, errors: Errors, offset: [i32; 3]) {
+    fn update(&mut self, errors: Errors, offset: [i64; 3]) {
         let max = |a: ErrorNorms, b: ErrorNorms| ErrorNorms {
             l2: a.l2.max(b.l2),
             max: a.max.max(b.max),
@@ -312,17 +403,24 @@ fn frame<T: RealScalar>(centre: [f64; 3], radius: f64) -> Frame<T> {
 }
 
 /// Runs every [`Chain`] at every degree p = 1..=`p_max` in precision T, for the target
-/// boxes at all 316 V-list offsets, and returns one [`Row`] per chain and degree
-/// (chains in the order of [`Chain::ALL`], then increasing p).
+/// boxes at all 316 V-list offsets, with the translations of `translations`, and
+/// returns one [`Row`] per chain and degree (chains in the order of [`Chain::ALL`],
+/// then increasing p).
 ///
 /// Serial; the cost is dominated by the 316 direct sums of `config.sources` ×
-/// `config.targets` pairs and by the evaluations at `316 · config.targets` targets per
-/// chain and degree.
+/// `config.targets` pairs, by the evaluations at `316 · config.targets` targets per
+/// chain and degree and, for [`Translations::Tables`], by building the dense M2L table
+/// of every degree (316 (p + 1)² calls of `direct::m2l`). The direct sums are kept for
+/// all offsets, 4 · 316 · `config.targets` f64, and one degree's tables at a time.
+///
+/// Each figure depends only on the chain, the degree and the translations, not on the
+/// order of the loops: [`Translations::Reference`] gives the figures of the Phase 1
+/// report bit for bit.
 ///
 /// # Panics
 ///
 /// If `p_max == 0`, or `config` has no sources or no targets.
-pub fn sweep<T: RealScalar>(config: &Config, p_max: usize) -> Vec<Row> {
+pub fn sweep<T: RealScalar>(config: &Config, p_max: usize, translations: Translations) -> Vec<Row> {
     assert!(p_max >= 1, "the sweep starts at p = 1");
     assert!(
         config.sources > 0 && config.targets > 0,
@@ -348,20 +446,58 @@ pub fn sweep<T: RealScalar>(config: &Config, p_max: usize) -> Vec<Row> {
         frame(c, r)
     });
 
+    let offsets = m2l_offsets();
+    let target_centre = |offset: [i64; 3]| -> [f64; 3] {
+        core::array::from_fn(|i| SOURCE_CENTRE[i] + 2.0 * RADIUS * offset[i] as f64)
+    };
+
+    // The oracle, independent of the degree: the direct sum at the targets of every
+    // offset, in table order.
+    let n_t = config.targets;
+    let mut exact = vec![0.0; M2L_OFFSET_COUNT * n_t];
+    let mut exact_gradient = vec![[0.0; 3]; M2L_OFFSET_COUNT * n_t];
+    for (index, &offset) in offsets.iter().enumerate() {
+        targets.move_to(&target_local, target_centre(offset), RADIUS);
+        let range = index * n_t..(index + 1) * n_t;
+        direct_sum(
+            &sources.points64,
+            &charges64,
+            &targets.points64,
+            &mut exact[range.clone()],
+            Some(&mut exact_gradient[range]),
+        );
+    }
+
     let mut ws = Workspace::<T>::new(p_max);
     let max_len = Layout::new(p_max).len();
 
-    // Source side, independent of the offset: P2M in the source box, and P2M in the
-    // children followed by M2M to the source box.
-    let mut multipoles = Vec::with_capacity(p_max + 1);
-    let mut merged = Vec::with_capacity(p_max + 1);
+    let n_chains = Chain::ALL.len();
+    let mut all = vec![Accumulators::default(); n_chains * (p_max + 1)];
+    let mut worst = vec![Worst::default(); n_chains * (p_max + 1)];
+    let slot = |c: usize, p: usize| c * (p_max + 1) + p;
+
+    let mut potential = vec![T::zero(); n_t];
+    let mut gradient = vec![[T::zero(); 3]; n_t];
+    let mut local = vec![T::zero(); max_len];
+    let mut child_local = vec![T::zero(); max_len];
     let mut child_multipole = vec![T::zero(); max_len];
-    for p in 0..=p_max {
+
+    for p in 1..=p_max {
         let len = Layout::new(p).len();
-        let mut m = vec![T::zero(); len];
-        leaf::p2m(p, &source_frame, &sources.points, &charges, &mut ws, &mut m);
-        multipoles.push(m);
-        let mut m = vec![T::zero(); len];
+        let translator = Translator::<T>::new(translations, p);
+
+        // Source side, independent of the offset: P2M in the source box, and P2M in
+        // the children followed by M2M to the source box.
+        let mut multipole = vec![T::zero(); len];
+        leaf::p2m(
+            p,
+            &source_frame,
+            &sources.points,
+            &charges,
+            &mut ws,
+            &mut multipole,
+        );
+        let mut merged = vec![T::zero(); len];
         for (k, child) in source_children.iter().enumerate() {
             let range = sources.octants[k].clone();
             if range.is_empty() {
@@ -377,46 +513,20 @@ pub fn sweep<T: RealScalar>(config: &Config, p_max: usize) -> Vec<Row> {
                 &mut ws,
                 cm,
             );
-            direct::m2m(p, child, &source_frame, &mut ws, cm, &mut m);
+            translator.m2m(k, child, &source_frame, &mut ws, cm, &mut merged);
         }
-        merged.push(m);
-    }
 
-    let n_chains = Chain::ALL.len();
-    let mut all = vec![Accumulators::default(); n_chains * (p_max + 1)];
-    let mut worst = vec![Worst::default(); n_chains * (p_max + 1)];
-    let slot = |c: usize, p: usize| c * (p_max + 1) + p;
+        for (index, &offset) in offsets.iter().enumerate() {
+            let centre = target_centre(offset);
+            targets.move_to(&target_local, centre, RADIUS);
+            let target_frame = frame::<T>(centre, RADIUS);
+            let target_children: [Frame<T>; 8] = core::array::from_fn(|k| {
+                let (c, r) = child(centre, RADIUS, k);
+                frame(c, r)
+            });
+            let range = index * n_t..(index + 1) * n_t;
+            let (exact, exact_gradient) = (&exact[range.clone()], &exact_gradient[range]);
 
-    let n_t = config.targets;
-    let mut exact = vec![0.0; n_t];
-    let mut exact_gradient = vec![[0.0; 3]; n_t];
-    let mut potential = vec![T::zero(); n_t];
-    let mut gradient = vec![[T::zero(); 3]; n_t];
-    let mut local = vec![T::zero(); max_len];
-    let mut child_local = vec![T::zero(); max_len];
-
-    for offset in v_list_offsets() {
-        let centre: [f64; 3] =
-            core::array::from_fn(|i| SOURCE_CENTRE[i] + 2.0 * RADIUS * f64::from(offset[i]));
-        targets.move_to(&target_local, centre, RADIUS);
-        let target_frame = frame::<T>(centre, RADIUS);
-        let target_children: [Frame<T>; 8] = core::array::from_fn(|k| {
-            let (c, r) = child(centre, RADIUS, k);
-            frame(c, r)
-        });
-
-        exact.fill(0.0);
-        exact_gradient.fill([0.0; 3]);
-        direct_sum(
-            &sources.points64,
-            &charges64,
-            &targets.points64,
-            &mut exact,
-            Some(&mut exact_gradient),
-        );
-
-        for p in 1..=p_max {
-            let len = Layout::new(p).len();
             for (c, chain) in Chain::ALL.into_iter().enumerate() {
                 potential.fill(T::zero());
                 gradient.fill([T::zero(); 3]);
@@ -426,9 +536,9 @@ pub fn sweep<T: RealScalar>(config: &Config, p_max: usize) -> Vec<Row> {
                 match chain {
                     Chain::P2mM2p | Chain::P2mM2mM2p => {
                         let m = if chain == Chain::P2mM2p {
-                            &multipoles[p]
+                            &multipole
                         } else {
-                            &merged[p]
+                            &merged
                         };
                         leaf::m2p(p, &source_frame, m, &targets.points, &mut ws, pot, grad);
                     }
@@ -437,23 +547,23 @@ pub fn sweep<T: RealScalar>(config: &Config, p_max: usize) -> Vec<Row> {
                         leaf::l2p(p, &target_frame, local, &targets.points, &mut ws, pot, grad);
                     }
                     Chain::P2mM2lL2p => {
-                        direct::m2l(
-                            p,
+                        translator.m2l(
+                            index,
                             &source_frame,
                             &target_frame,
                             &mut ws,
-                            &multipoles[p],
+                            &multipole,
                             local,
                         );
                         leaf::l2p(p, &target_frame, local, &targets.points, &mut ws, pot, grad);
                     }
                     Chain::P2mM2lL2lL2p => {
-                        direct::m2l(
-                            p,
+                        translator.m2l(
+                            index,
                             &source_frame,
                             &target_frame,
                             &mut ws,
-                            &multipoles[p],
+                            &multipole,
                             local,
                         );
                         for (k, child) in target_children.iter().enumerate() {
@@ -463,7 +573,7 @@ pub fn sweep<T: RealScalar>(config: &Config, p_max: usize) -> Vec<Row> {
                             }
                             let cl = &mut child_local[..len];
                             cl.fill(T::zero());
-                            direct::l2l(p, &target_frame, child, &mut ws, local, cl);
+                            translator.l2l(k, &target_frame, child, &mut ws, local, cl);
                             leaf::l2p(
                                 p,
                                 child,
@@ -476,9 +586,9 @@ pub fn sweep<T: RealScalar>(config: &Config, p_max: usize) -> Vec<Row> {
                         }
                     }
                 }
-                all[slot(c, p)].add(&potential, &gradient, &exact, &exact_gradient);
+                all[slot(c, p)].add(&potential, &gradient, exact, exact_gradient);
                 let mut this = Accumulators::default();
-                this.add(&potential, &gradient, &exact, &exact_gradient);
+                this.add(&potential, &gradient, exact, exact_gradient);
                 worst[slot(c, p)].update(this.finish(), offset);
             }
         }
@@ -502,22 +612,9 @@ pub fn sweep<T: RealScalar>(config: &Config, p_max: usize) -> Vec<Row> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use nd_fmm_tables::geometry::octant_direction;
 
-    #[test]
-    fn offsets_are_the_v_list() {
-        let offsets = v_list_offsets();
-        assert_eq!(offsets.len(), 316);
-        assert!(offsets.contains(&[2, 0, 0]) && offsets.contains(&[-3, 3, -1]));
-        assert!(!offsets.contains(&[1, -1, 1]));
-        for d in &offsets {
-            let cheb = d.iter().map(|c| c.abs()).max().unwrap();
-            assert!((2..=3).contains(&cheb), "{d:?}");
-        }
-        let mut sorted = offsets.clone();
-        sorted.dedup();
-        assert_eq!(sorted.len(), 316);
-    }
+    use super::*;
 
     #[test]
     fn children_tile_their_parent() {
@@ -527,6 +624,10 @@ mod tests {
             assert_eq!(r, 0.25);
             let u: [f64; 3] = core::array::from_fn(|i| c[i] - 0.5);
             assert_eq!(octant(u), k);
+            // The child index of CONVENTIONS §3.12, which the tables use: the child
+            // centre is the parent centre plus r_child s_o.
+            let s = octant_direction(k).map(|t| t as f64);
+            assert_eq!(c, core::array::from_fn(|i| 0.5 + 0.25 * s[i]), "o = {k}");
         }
         let (order, ranges) = sort_by_octant(&[[0.1, -0.2, 0.3], [-0.5, 0.5, -0.5], [0.0; 3]]);
         assert_eq!(order, [1, 0, 2]);
