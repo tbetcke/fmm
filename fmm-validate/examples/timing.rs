@@ -15,10 +15,13 @@
 //! load; this example only reports them and asserts nothing.
 
 use std::hint::black_box;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use nd_fmm_ref::{Frame, Workspace, direct, rotation};
 use nd_fmm_validate::SplitMix64;
+use nd_fmm_validate::bench::{
+    BATCHES, MIN_BATCH, cores, cpu_model, crossover, fitted_exponent, median_time_per_call, target,
+};
 
 /// Degrees timed for every operator.
 const PS: [usize; 8] = [2, 4, 6, 8, 10, 12, 16, 20];
@@ -29,12 +32,6 @@ const P_EXTRA: usize = 30;
 
 /// Smallest degree used in the fit of the exponent.
 const FIT_FROM: usize = 8;
-
-/// Number of timed batches per figure; the median is reported.
-const BATCHES: usize = 15;
-
-/// Minimum duration of one batch.
-const MIN_BATCH: Duration = Duration::from_millis(20);
 
 /// The signature shared by `direct::{m2m, l2l, m2l}` and `rotation::{m2m, l2l, m2l}`.
 type Translate = fn(usize, &Frame<f64>, &Frame<f64>, &mut Workspace<f64>, &[f64], &mut [f64]);
@@ -97,7 +94,7 @@ fn time_per_call(f: Translate, p: usize, from: &Frame<f64>, to: &Frame<f64>) -> 
     let input: Vec<f64> = (0..len).map(|_| rng.range(-1.0, 1.0)).collect();
     let mut output = vec![0.0; len];
     let mut ws = Workspace::new(p);
-    let mut batch = |calls: usize| {
+    let batch = |calls: usize| {
         output.fill(0.0);
         let start = Instant::now();
         for _ in 0..calls {
@@ -114,88 +111,7 @@ fn time_per_call(f: Translate, p: usize, from: &Frame<f64>, to: &Frame<f64>) -> 
         black_box(&output);
         elapsed
     };
-    // Warm up, and find the number of calls per batch.
-    let mut calls = 1;
-    while batch(calls) < MIN_BATCH {
-        calls *= 2;
-    }
-    let mut times: Vec<f64> = (0..BATCHES)
-        .map(|_| batch(calls).as_secs_f64() / calls as f64)
-        .collect();
-    times.sort_by(f64::total_cmp);
-    times[BATCHES / 2]
-}
-
-/// Least-squares slope of ln t against ln p over the points with p ≥ `FIT_FROM`.
-fn fitted_exponent(ps: &[usize], times: &[f64]) -> f64 {
-    let points: Vec<(f64, f64)> = ps
-        .iter()
-        .zip(times)
-        .filter(|(p, _)| **p >= FIT_FROM)
-        .map(|(&p, &t)| ((p as f64).ln(), t.ln()))
-        .collect();
-    let n = points.len() as f64;
-    let (mx, my) = points
-        .iter()
-        .fold((0.0, 0.0), |(a, b), (x, y)| (a + x / n, b + y / n));
-    let sxy: f64 = points.iter().map(|(x, y)| (x - mx) * (y - my)).sum();
-    let sxx: f64 = points.iter().map(|(x, _)| (x - mx) * (x - mx)).sum();
-    sxy / sxx
-}
-
-/// The crossover: the smallest measured p from which rotation is faster at every
-/// larger measured p, and the largest measured p at which direct is faster.
-fn crossover(ps: &[usize], direct: &[f64], rotation: &[f64]) -> String {
-    let last_direct = (0..ps.len()).rev().find(|&i| direct[i] <= rotation[i]);
-    match last_direct {
-        None => "rotation is faster at every measured p".to_string(),
-        Some(i) if i + 1 == ps.len() => "direct is faster at the largest measured p".to_string(),
-        Some(i) => format!(
-            "rotation is faster for p ≥ {} (direct is faster at p = {})",
-            ps[i + 1],
-            ps[i]
-        ),
-    }
-}
-
-/// The value of a `sysctl` key (macOS), if it can be read.
-fn sysctl(key: &str) -> Option<String> {
-    let out = std::process::Command::new("sysctl")
-        .args(["-n", key])
-        .output()
-        .ok()?;
-    let s = String::from_utf8(out.stdout).ok()?;
-    let s = s.trim();
-    (out.status.success() && !s.is_empty()).then(|| s.to_string())
-}
-
-/// The CPU model, from `sysctl` on macOS and `/proc/cpuinfo` on Linux.
-fn cpu_model() -> String {
-    let from_proc = || {
-        let info = std::fs::read_to_string("/proc/cpuinfo").ok()?;
-        info.lines()
-            .find(|l| l.starts_with("model name") || l.starts_with("Model"))
-            .and_then(|l| l.split(':').nth(1))
-            .map(|s| s.trim().to_string())
-    };
-    let model = if cfg!(target_os = "macos") {
-        sysctl("machdep.cpu.brand_string")
-    } else {
-        from_proc()
-    };
-    model.unwrap_or_else(|| "unknown".to_string())
-}
-
-/// The core count: logical CPUs from `std::thread::available_parallelism`, and on
-/// macOS the physical cores from `sysctl`.
-fn cores() -> String {
-    let logical = std::thread::available_parallelism().map_or(0, |n| n.get());
-    match sysctl("hw.physicalcpu") {
-        Some(physical) if cfg!(target_os = "macos") => {
-            format!("{physical} physical, {logical} logical")
-        }
-        _ => format!("{logical} logical"),
-    }
+    median_time_per_call(batch)
 }
 
 fn main() {
@@ -203,16 +119,7 @@ fn main() {
     println!();
     println!("- CPU: {}", cpu_model());
     println!("- Cores: {}; the benchmark runs on one thread.", cores());
-    println!(
-        "- Target: {}-{}{}",
-        std::env::consts::ARCH,
-        std::env::consts::OS,
-        if cfg!(debug_assertions) {
-            " (DEBUG BUILD: timings are not meaningful; use --release)"
-        } else {
-            ", release build"
-        }
-    );
+    println!("- Target: {}", target());
     println!(
         "- f64; median over {BATCHES} batches of at least {} ms each, time per call in µs. \
          M2M child to parent, L2L parent to child (octant (+, −, +)), M2L for the V-list \
@@ -270,9 +177,9 @@ fn main() {
         println!(
             "- {}: direct k = {:.2}, rotation k = {:.2}; {}.",
             op.name(),
-            fitted_exponent(&ps, d),
-            fitted_exponent(&ps, r),
-            crossover(&ps, d, r)
+            fitted_exponent(&ps, d, FIT_FROM),
+            fitted_exponent(&ps, r, FIT_FROM),
+            crossover(&ps, d, r).describe("direct", "rotation")
         );
     }
 }

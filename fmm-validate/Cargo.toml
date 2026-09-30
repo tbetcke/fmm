@@ -13,3 +13,4 @@ name = "nd_fmm_validate"
 [dependencies]
 nd-fmm-math = { workspace = true }
 nd-fmm-ref = { workspace = true }
+nd-fmm-tables = { workspace = true }

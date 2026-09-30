@@ -18,7 +18,8 @@ later phase (C3.2–C3.4 calibration, Phase 4 benchmarks).
   and `cargo test -p nd-fmm-validate` must pass.
 
 ## Allowed dependencies
-Phase 1: nd-fmm-math, nd-fmm-ref. Later phases add the crates they validate.
+Phase 1: nd-fmm-math, nd-fmm-ref. Phase 2: nd-fmm-tables. Later phases add the crates
+they validate.
 Anything else (criterion, rand, plotting) needs a note in the PR.
 
 ## Test oracle

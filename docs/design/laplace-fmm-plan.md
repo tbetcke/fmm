@@ -356,9 +356,9 @@ The Phase 0 spike (task T6, `spikes/cubecl-gemm/SPIKE_REPORT.md`) put numbers on
 | Method | M2L cost per pair | Per-box conversion | Precomputed data | GPU fit | Accuracy control | Role in this library |
 | --- | --- | --- | --- | --- | --- | --- |
 | Direct matrices | O(p⁴), bandwidth-bound per pair | none | none (or 316 matrices) | poor unless batched | exact truncation at p | f64 oracle; source of dense tables |
-| Dense precomputed + GEMM | O(p⁴) flops, compute-bound | none | 316 × (p+1)⁴ values, or 16 with symmetry | excellent | exact truncation at p | GPU default in f32 (p ≤ 8, measured); provisional f64 GPU default for p ≤ 8 |
+| Dense precomputed + GEMM | O(p⁴) flops, compute-bound | none | 316 × (p+1)⁴ values, or 16 with symmetry | excellent | exact truncation at p | GPU default in f32 (p ≤ 8, measured); provisional f64 GPU default for p ≤ 8; CPU per-pair default for p ≤ 8 (Phase 2, measured) |
 | Dense + SVD compression | O(k²) with k < (p+1)², plus basis changes | O(p² k) | shared bases + small cores | excellent | truncation at p and SVD tolerance | optimisation after the default works |
-| Rotation (point-and-shoot) | ≈ (10/3)(p+1)³ multiply-adds | none | rotation and coaxial tables, O(p³) | good; irregular inner loops | exact truncation at p | CPU default; provisional f64 GPU default for p ≥ 12 |
+| Rotation (point-and-shoot) | ≈ (10/3)(p+1)³ multiply-adds | none | rotation and coaxial tables, O(p³) | good; irregular inner loops | exact truncation at p | CPU per-pair default for p ≥ 10 (Phase 2, measured); provisional f64 GPU default for p ≥ 12 |
 | Plane-wave | O(p²) diagonal | O(p³) × 6 directions | quadrature tables; ~2.5× expansion memory | good, complex bookkeeping | fixed quadrature levels | optional phase 6 |
 | FFT / Toeplitz | O(p² log p), large constant | FFT setup | FFT plans | fair | stability concerns | not planned |
 | Cartesian Taylor | O(p⁴)–O(p⁶) | none | none | excellent at low p | exact truncation at p | optional low-accuracy f32 path |
@@ -422,7 +422,7 @@ operator through `FmmOperator`.
 | --- | --- | --- | --- |
 | `fmm-math` (Phase 0, done) | `RealScalar`, real-basis index layout, regular and irregular solid harmonics with gradients by Cartesian recursion, rotation blocks Dⁿ(Q) for any rotation, `CONVENTION_VERSION` | none (`num-traits`) | generic f32/f64 |
 | `fmm-ref` | CPU reference operators: direct O(p⁴) and rotation O(p³), P2P, direct-sum oracle | `fmm-math` | f64 (f32 for comparison) |
-| `fmm-tables` | Builds M2M/L2L (8 each, by `morton::child_index`), M2L (316 or 16 + symmetry, keyed like `V_LIST_DIRECTIONS`), rotation and coaxial tables; SVD compression; versioned on-disk cache | `fmm-ref`, `rlst` (SVD compression; without its `mpi` feature) | built in f64, stored in both |
+| `fmm-tables` | Builds M2M/L2L (8 each, by `morton::child_index`), M2L (316 or 16 + symmetry, keyed like `V_LIST_DIRECTIONS`), rotation and coaxial tables; SVD compression (C6.2, later); versioned on-disk cache | `fmm-ref`, `fmm-math`, `thiserror` (cache errors); `rlst` (without its `mpi` feature) only with SVD compression | built in f64, stored in both |
 | `fmm-kernels` | `#[cube]` kernels: P2M, L2P, P2L, M2P, P2P, gather/scatter, M2L-GEMM, M2L-rotation, M2M/L2L | `cubecl`, the CubeCL matmul crate | generic |
 | `fmm-exec` | `impl FmmOperator` for Laplace (host per-pair path first, batched and device paths later), box centres and half-widths from Morton keys, device buffers, autotune selection, 1/(4π) | `nd-fmm-plan`, `nd-octree`, `fmm-kernels`, `fmm-tables` | generic |
 | `fmm-validate` | Error norms, accuracy sweeps, benchmark harness | all | f64 reference |
@@ -820,10 +820,121 @@ rotation scales no worse than p³. At M2M, p = 20, the direct/rotation ratio was
 
 | ID | Component | Acceptance criterion | Depends on | Status |
 | --- | --- | --- | --- | --- |
-| C2.1 | M2M and L2L matrices for the 8 octants, scaled | applying the table equals C1.2 to 1e-14 at every level | C1.2 | Not started |
-| C2.2 | M2L matrices for the 316 offsets, level scaling, optional 16-class symmetry | table result equals C1.2 for all offsets and three levels | C1.2 | Not started |
-| C2.3 | Rotation and coaxial tables for the uniform V list | table-driven rotation M2L equals C1.3 | C1.3 | Not started |
-| C2.4 | Versioned on-disk cache keyed by p, precision and convention version | cold build vs cache load bit-identical; stale version rejected | C2.1–C2.3 | Not started |
+| C2.1 | M2M and L2L matrices for the 8 octants, scaled | applying the table equals C1.2 to 1e-14 at every level | C1.2 | Done (T3, PR #18): `nd_fmm_tables::octant`, equal to `direct` to 1e-14 on parent levels 0–15 for p ≤ 30; measured below |
+| C2.2 | M2L matrices for the 316 offsets, level scaling, optional 16-class symmetry | table result equals C1.2 for all offsets and three levels | C1.2 | Done (T4, PR #19; T5, PR #20): `M2lTables` equal `direct` to 1e-14 for all 316 offsets on levels 2, 9 and 16, p ≤ 20; the 16-class `M2lClasses` reconstructs all 316 matrices to 1e-13; measured below |
+| C2.3 | Rotation and coaxial tables for the uniform V list | table-driven rotation M2L equals C1.3 | C1.3 | Done (T6, PR #21): `RotationTables`, M2L, M2M and L2L equal to `nd_fmm_ref::rotation` to 1e-14 and to `direct` to 1e-13, p ≤ 20; measured below |
+| C2.4 | Versioned on-disk cache keyed by p, precision and convention version | cold build vs cache load bit-identical; stale version rejected | C2.1–C2.3 | Done (T7, PR #22): `TableCache`, bit-identical round trip for every family in f64 and f32; stale, mismatched and corrupt files rejected; measured below |
+
+T1 (PR #16) created `nd-fmm-tables`. T2 (PR #17) added CONVENTIONS §3.12, on box
+geometry and operator tables, and extended the versioning rule of §3.10 to it; §3.12 was
+signed off before T3. `CONVENTION_VERSION` stays 1, since no existing convention
+changed. T3 to T7 (PRs #18 to #22) built the tables and the cache. T8 added the tables
+report and the table path of the accuracy sweep to `nd-fmm-validate`.
+
+- Every table is built in f64 from `nd-fmm-ref` at the canonical frames of §3.12. An
+  f32 table is the f64 table rounded entry by entry.
+- The crate depends on `nd-fmm-math`, `nd-fmm-ref`, `num-traits` and `thiserror`.
+  `rlst` waits for SVD compression (C6.2). The cache uses a hand-written little-endian
+  format with an FNV-1a checksum instead of a serialiser.
+- It is MPI-free and serial (no rayon). It restates the octant and offset order of
+  `nd-octree` and `nd-fmm-plan` instead of importing them; C3.1 checks that they agree.
+
+Tables report (T8, `cargo run --release -p nd-fmm-validate --example tables`): f64, one
+thread on an Apple M3 Max, release build, one run. Build times are single serial builds.
+
+| p | M2M + L2L | dense M2L | 16-class M2L | rotation (all three families) |
+| --- | --- | --- | --- | --- |
+| 4 | 0.27 ms | 8.08 ms | 0.63 ms | 0.34 ms |
+| 8 | 5.86 ms | 219.4 ms | 11.8 ms | 1.44 ms |
+| 12 | 51.4 ms | 1.78 s | 92.5 ms | 4.19 ms |
+| 16 | 216.8 ms | 8.27 s | 422.6 ms | 11.0 ms |
+| 20 | 764.6 ms | 28.78 s | 1.46 s | 24.1 ms |
+| 30 | 8.18 s | — | — | — |
+
+Memory in f64. The f32 figures are exactly half, since every counted value is stored in
+the table's precision. The class form counts the 16 matrices and T_M(P), T_L(P) of the
+48 group elements, not its 2.5 kB of indices. The rotation families count blocks and
+factors (`ShiftTables::storage_len`), not their few kB of f64 angles and shifts.
+
+| p | M2M or L2L dense (each) | M2L dense | M2L classes | M2M or L2L rotation (each) | M2L rotation |
+| --- | --- | --- | --- | --- | --- |
+| 4 | 40.0 kB | 1.6 MB | 206.7 kB | 6.0 kB | 132.7 kB |
+| 8 | 419.9 kB | 16.6 MB | 1.6 MB | 33.8 kB | 767.0 kB |
+| 12 | 1.8 MB | 72.2 MB | 5.9 MB | 100.9 kB | 2.3 MB |
+| 16 | 5.3 MB | 211.1 MB | 15.7 MB | 224.7 kB | 5.1 MB |
+| 20 | 12.4 MB | 491.6 MB | 34.4 MB | 422.7 kB | 9.7 MB |
+| 30 | 59.1 MB | — | — | — | — |
+
+Time per M2L application in µs, the median of 15 batches of at least 20 ms each. A
+batch applies all 316 offsets in table order, so each figure is the mean over the V
+list, read from memory as a per-pair FMM reads it. "One offset" applies only
+(3, −2, 1), whose matrix stays in cache. The `nd-fmm-ref` operators run at the
+canonical frames; `rotation` builds its blocks on every call.
+
+| p | dense | dense, one offset | classes | table rotation | `ref::rotation` | `ref::direct` | dense / table rotation |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 2 | 0.029 | 0.039 | 0.071 | 0.089 | 0.521 | 0.165 | 0.33 |
+| 4 | 0.113 | 0.110 | 0.253 | 0.251 | 2.101 | 0.968 | 0.45 |
+| 6 | 0.355 | 0.276 | 0.621 | 0.546 | 5.175 | 3.348 | 0.65 |
+| 8 | 0.942 | 0.692 | 1.441 | 1.009 | 10.449 | 8.658 | 0.93 |
+| 10 | 2.053 | 1.585 | 2.930 | 1.685 | 18.493 | 17.401 | 1.22 |
+| 12 | 4.030 | 4.060 | 5.422 | 2.649 | 30.368 | 32.200 | 1.52 |
+| 16 | 11.839 | 11.833 | 18.014 | 5.610 | 66.310 | 89.337 | 2.11 |
+| 20 | 27.343 | 27.314 | 33.437 | 10.530 | 118.227 | 204.051 | 2.60 |
+
+M2M and L2L, dense octant table against table-driven rotation, µs per application (mean
+over the 8 octants):
+
+| p | M2M dense | M2M table rotation | L2L dense | L2L table rotation |
+| --- | --- | --- | --- | --- |
+| 4 | 0.110 | 0.232 | 0.109 | 0.229 |
+| 6 | 0.343 | 0.473 | 0.333 | 0.481 |
+| 8 | 0.985 | 0.953 | 0.955 | 0.856 |
+| 12 | 4.025 | 2.222 | 4.031 | 2.245 |
+| 20 | 27.389 | 9.322 | 29.030 | 8.923 |
+
+- Fitted exponents for p ≥ 8, M2L: dense 3.69, classes 3.53, table rotation 2.56,
+  `ref::rotation` 2.66, `ref::direct` 3.46. For M2M and L2L: dense 3.65 and 3.73, table
+  rotation 2.52 and 2.57.
+- Table-driven rotation beats the dense table for p ≥ 10 in M2L (dense wins at p = 8,
+  ratio 0.93) and for p ≥ 8 in M2M and L2L. It is 11× faster than `ref::rotation` at
+  p = 20, which rebuilds the blocks on every call, and 19× faster than `ref::direct`.
+- Across the V list and for a single offset the dense times agree for p ≥ 12, so the
+  per-pair product is bound by arithmetic, not by reading the table from memory.
+- The class form is slower than table rotation from p = 4 and slower than the dense
+  table at every p. It saves memory; it does not save time.
+
+Cache (`TableCache::load_or_build`, f64): cold is build and store in an empty
+directory; warm is the median of five loads after the first. The first load after a
+store is slower, by 7–36 ms in this run, a one-off cost of the freshly written file. Warm loads run at about
+0.85 GB/s, bound by value decoding (about 8× a raw `fs::read`). Every warm load was
+bit-identical to the cold build.
+
+| Family | p = 8: file / cold / warm | p = 16: file / cold / warm |
+| --- | --- | --- |
+| M2M (L2L alike) | 419.9 kB / 11.5 ms / 0.50 ms | 5.3 MB / 128.4 ms / 6.15 ms |
+| M2L dense | 16.6 MB / 247.8 ms / 19.9 ms | 211.1 MB / 8.75 s / 258.0 ms |
+| M2L classes | 1.6 MB / 20.3 ms / 1.85 ms | 15.7 MB / 452.8 ms / 18.4 ms |
+| rotation | 840.8 kB / 8.60 ms / 1.06 ms | 5.6 MB / 25.7 ms / 6.35 ms |
+
+The cache pays off for the dense and class tables, 11–34× over a cold build. For the
+rotation tables it gains only 4–8×, since they build in tens of ms.
+
+Table-path accuracy (T8, `--example accuracy -- --tables`): with M2M, M2L and L2L taken
+from the dense tables, looked up by child index and offset, every chain reproduces the
+single-translation table of Phase 1 above to all printed digits in f64 (900 of 900
+cells). In f32, 3 of 360 cells differ in the third digit, for example 6.74e-4 against
+6.75e-4 for P2M → M2L → L2P at p = 7. The f32 tables are the rounded f64 tables, while
+the reference path computes in f32.
+
+Recommendation for the Phase 3 per-pair CPU M2L (C3.1): the dense table for p ≤ 8 and
+table-driven rotation (`RotationTables::m2l`) for p ≥ 10. Between the two measured
+degrees they are within about 20%. Rotation also avoids the dense table's memory per
+rank: 211 MB at p = 16 and 492 MB at p = 20, against 5.1 MB and 9.7 MB. For M2M and L2L,
+rotation wins from p = 8. This holds only for single-threaded per-pair application, one
+matrix–vector product or one rotation per pair. The batched GEMM path of Phase 4 applies
+one table to thousands of multipoles at high arithmetic intensity, and changes the
+comparison (Section 4).
 
 ### Phase 3: CPU FMM on `nd-fmm-plan` (`fmm-exec` host path)
 
@@ -966,9 +1077,16 @@ and identity tests, the second with a one-day spike before Phase 4.
   `nd-fmm-plan`'s `InteractionManager` builds U, V, W and X (Section 1).
 - Should `LevelData` order the boxes of a level in Morton order rather than insertion
   order, for reproducible sums and cache-friendly gathers (Section 5.3)?
-- Should the box geometry conventions go into `docs/CONVENTIONS.md` before Phase 2? These
-  are the child index 4x + 2y + z and the offset sign target − source, which both
-  follow `nd-octree` and `nd-fmm-plan`.
+- *Answered in Phase 2:* the box geometry conventions went into `docs/CONVENTIONS.md`
+  before the tables were built. §3.12 (T2, PR #17, signed off before T3) states:
+  - the domain and levels;
+  - the child index o = 4x + 2y + z;
+  - the V-list offset d = index(target) − index(source), with its table index and the
+    shift 2 r_l d;
+  - the canonical frames, the matrix layout and the cube symmetry group.
+
+  §3.10 covers it, and `CONVENTION_VERSION` stays 1. Checking the tables' order against
+  `morton::child_index` and `V_LIST_DIRECTIONS` is part of C3.1.
 - Which GPUs matter most (NVIDIA, AMD, Apple, or all)? This decides whether f64 is a
   first-class target. *Partly answered in Phase 0:* development runs on Apple Silicon
   (Metal, f32 only), and the f64 targets are NVIDIA data-centre cards (A100, H100
