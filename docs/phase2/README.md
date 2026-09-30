@@ -163,7 +163,7 @@ In the repository root, start `claude` and say:
 "Read docs/phase2/T<k>-<name>.md and do that task." Review and merge before the next.
 
 ## Exit checklist
-- [ ] T1 merged: `nd-fmm-tables` skeleton, CI green, root `CLAUDE.md` points to Phase 2
+- [x] T1 merged: `nd-fmm-tables` skeleton, CI green, root `CLAUDE.md` points to Phase 2
 - [ ] T2 merged: `check_symmetry.py` passes; §3.12 drafted
 - [ ] CONVENTIONS §3.12 and the §3.10 change reviewed and signed off; `CONVENTION_VERSION` decision recorded
 - [ ] T3 merged: M2M and L2L tables equal `direct` to 1e-14 on parent levels 0–15, p ≤ 30 (ignored release test for p > 12)
