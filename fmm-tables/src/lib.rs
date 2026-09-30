@@ -20,6 +20,9 @@
 //!   the level.
 //! - Translations (§3.11): M2M, L2L and M2L, reached only through
 //!   [`nd_fmm_ref::direct`] and [`nd_fmm_ref::rotation`].
+//! - Box geometry and operator tables (§3.12): the child index o = 4x + 2y + z and its
+//!   sign vector s_o, the order and closed-form index of the 316 V-list offsets, the
+//!   canonical frames, and the matrix layout below. [`geometry`] restates them.
 //!
 //! ## Rules for every table
 //!
@@ -63,10 +66,16 @@
 //!
 //! - [`MatrixSet`]: a family of square matrices, stored column-major and contiguously,
 //!   with an accumulating matrix–vector product.
+//! - [`geometry`]: child octants, V-list offsets and the canonical frames (§3.12).
+//! - [`octant`]: the M2M and L2L tables of the 8 child octants, [`M2mTables`] and
+//!   [`L2lTables`] (C2.1).
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 //! [`RealScalar`]: nd_fmm_math::RealScalar
 
+pub mod geometry;
 mod matrix_set;
+pub mod octant;
 
 pub use matrix_set::MatrixSet;
+pub use octant::{L2lTables, M2mTables};
