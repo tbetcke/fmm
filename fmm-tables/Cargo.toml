@@ -1,0 +1,19 @@
+[package]
+name = "nd-fmm-tables"
+version = "0.1.0-dev"
+description = "Precomputed Laplace FMM operator tables and their versioned cache for the nd-project FMM."
+readme = "README.md"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "nd_fmm_tables"
+
+[dependencies]
+nd-fmm-math = { workspace = true }
+nd-fmm-ref = { workspace = true }
+num-traits = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
