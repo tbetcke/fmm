@@ -171,3 +171,6 @@ be assumed to work.
   than as new `#[test]` functions, so MPI ownership stays with one test.
 - Preserve in-progress work and the local `../octree` path dependency unless
   asked to change them.
+- Phase 3 rewrites this crate (docs/phase3/README.md, T1 and T4–T7; design in
+  docs/design/fmm-plan-redesign.md once T1 lands). Until T7, add the new modules beside
+  the old ones and keep the old API working as the reference.
