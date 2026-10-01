@@ -165,6 +165,60 @@ pub fn main() {
     let nglobals = gather_to_all(std::slice::from_ref(&globals(ghost_keys).len()), &comm);
     assert_eq!(nglobals.iter().unique().count(), 1);
 
+    // The layer also replicates every coarse block of every rank, with the leaf or
+    // interior classification and the owner its own rank assigns. Every rank enters
+    // the gathers, also on one rank.
+
+    let own_blocks = ghost_tree.coarse_tree_leafs();
+    let own_block_is_leaf = own_blocks
+        .iter()
+        .map(|block| ghost_keys[block] == KeyType::LocalLeaf)
+        .collect_vec();
+    let block_counts = gather_to_all(std::slice::from_ref(&own_blocks.len()), &comm);
+    let blocks = gather_to_all(own_blocks, &comm);
+    let block_is_leaf = gather_to_all(&own_block_is_leaf, &comm);
+    let owners = block_counts
+        .iter()
+        .enumerate()
+        .flat_map(|(owner, &count)| std::iter::repeat_n(owner, count))
+        .collect_vec();
+    let rank = comm.rank() as usize;
+    let mut supplied_blocks = 0;
+    for ((block, &is_leaf), &owner) in blocks.iter().zip(&block_is_leaf).zip(&owners) {
+        let key_type = ghost_keys.get(block).copied();
+        if owner == rank {
+            // On one rank the only block is the root, which is `Global` unless it
+            // is the only leaf.
+            assert!(matches!(
+                key_type,
+                Some(KeyType::LocalLeaf | KeyType::LocalInterior | KeyType::Global)
+            ));
+        } else if is_leaf {
+            assert_eq!(key_type, Some(KeyType::GhostLeaf(owner)));
+        } else {
+            assert_eq!(key_type, Some(KeyType::GhostInterior(owner)));
+        }
+        if !all_keys.contains_key(block) {
+            supplied_blocks += 1;
+        }
+    }
+
+    // Hence every child of every `Global` key is a key of the tree.
+
+    for (&key, &key_type) in ghost_keys {
+        if key_type != KeyType::Global {
+            continue;
+        }
+        for child in morton::children(key).unwrap() {
+            assert!(ghost_keys.contains_key(&child));
+        }
+    }
+    println!(
+        "rank {}: {} coarse blocks, {supplied_blocks} of them supplied by the ghost-children layer",
+        comm.rank(),
+        blocks.len()
+    );
+
     // Non-vacuity: on more than one rank the baseline tree is missing children that
     // the layer supplies. The count is reported so a silently vacuous run is visible.
 
