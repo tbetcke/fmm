@@ -1,10 +1,10 @@
 [workspace]
 # Keep "2"; moving to "3" (MSRV-aware resolution) is a separate decision.
 resolver = "2"
-members = ["fmm-plan", "octree", "fmm-math", "fmm-ref", "fmm-validate", "fmm-tables", "spikes/cubecl-gemm"]
+members = ["fmm-plan", "octree", "fmm-math", "fmm-ref", "fmm-validate", "fmm-tables", "fmm-exec", "spikes/cubecl-gemm"]
 # Without default-members every member is built; spikes are added to members only,
 # so CI never builds them.
-default-members = ["octree", "fmm-plan", "fmm-math", "fmm-ref", "fmm-validate", "fmm-tables"]
+default-members = ["octree", "fmm-plan", "fmm-math", "fmm-ref", "fmm-validate", "fmm-tables", "fmm-exec"]
 
 # Only new crates inherit from this; octree/ and fmm-plan/ keep their own fields.
 [workspace.package]
@@ -26,3 +26,11 @@ cubek-std = { version = "=0.2.0", default-features = false }
 nd-fmm-math = { path = "fmm-math" }
 nd-fmm-ref = { path = "fmm-ref" }
 nd-fmm-tables = { path = "fmm-tables" }
+# Phase 3, at the versions octree/ and fmm-plan/ use. rlst is never given the "mpi"
+# feature here; nd-octree enables it for the build.
+mpi = { version = "0.8.2", features = ["derive"] }
+rlst = "0.9.0"
+# octree/ and fmm-plan/ do not use these entries yet (a separate decision).
+nd-octree = { path = "octree" }
+nd-fmm-plan = { path = "fmm-plan" }
+nd-fmm-exec = { path = "fmm-exec" }

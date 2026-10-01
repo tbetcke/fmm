@@ -9,7 +9,7 @@ own CLAUDE.md for crate-specific rules; everything here applies to all of them.
   Never change a convention in code; propose changes in the PR description instead.
 - Cite conventions in doc comments as `CONVENTIONS §3.x`.
 - CONVENTION_VERSION in nd-fmm-math must match the file.
-- Current phase and task briefs: docs/phase2/README.md.
+- Current phase and task briefs: docs/phase3/README.md.
 - Background: docs/design/laplace-fmm-plan.md (operators, plan) and
   docs/design/workspace-structure.md (crate layout). CONVENTIONS.md wins on any conflict.
 

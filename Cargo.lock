@@ -2181,6 +2181,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d5439c4ad607c3c23abf66de8c8bf57ba8adcd1f129e699851a6e43935d339d"
 
 [[package]]
+name = "nd-fmm-exec"
+version = "0.1.0-dev"
+dependencies = [
+ "nd-fmm-math",
+ "nd-fmm-plan",
+ "nd-fmm-ref",
+ "nd-fmm-tables",
+ "nd-octree",
+ "proptest",
+ "thiserror",
+]
+
+[[package]]
 name = "nd-fmm-math"
 version = "0.1.0-dev"
 dependencies = [
