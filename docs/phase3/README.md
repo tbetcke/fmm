@@ -260,12 +260,34 @@ These hold for every task, so that no task decides them on its own:
   - over all targets when N ≤ 10⁴, otherwise over 1,000 targets sampled with a fixed
     seed (design §8.2);
   - charges uniform in [−1, 1), as in the Phase 1 prediction;
+  - for the C3.2 gate, the root mean square of the relative L2 errors of eight seeded
+    charge vectors, √((1/8) Σₖ eₖ²), each vector counting equally. Decided in T9: on
+    the uniform level-4 tree the error of one vector varied by a factor of 2.3 (p = 3)
+    to 2.7 (p = 8) across seeds, because the far field of the coarsest V-list level
+    (64 boxes) partly cancels at each target by an amount that depends on the charges,
+    while every pair stayed within its single-translation error. Pooling the sums over
+    the vectors instead would weight each by ‖φₖ‖² and let one smooth potential
+    dominate;
   - the oracle expands 1/|x − y|; tests compare with 4π times the `Fmm` output, or
     divide by 4π, and say which.
-- **Predictions.** The single-translation table of Phase 1 T7 (design §7) gives
-  relative L2 errors of 1.77e-3, 1.08e-5 and 2.71e-9 at p = 3, 8 and 18. The C3.2 gate
-  allows twice that. If a gate fails, the task reports the measured errors and their
-  breakdown and stops. It does not tune tolerances or operators to pass.
+- **Predictions.** The single-translation prediction of P2M → M2L → L2P (design §7):
+  1.77e-3, 1.08e-5 and 6.74e-9 at p = 3, 8 and 18. The C3.2 gate allows twice that.
+  If a gate fails, the task reports the measured errors and their breakdown and stops.
+  It does not tune tolerances or operators to pass.
+  - p = 3 and 8 are the Phase 1 T7 values: one draw of 1,000 sources with 1,000
+    targets per offset.
+  - p = 18 was re-derived in T9 (decided on 2026-10-01, refined on 2026-10-02). The
+    Phase 1 value, 2.71e-9, was too low: about 90% of the p = 18 error comes from the
+    six face offsets, whose error is heavy-tailed, and with 10⁴ targets per offset the
+    Phase 1 draw gives 4.00e-9. The prediction is the median over 33 draws (the Phase
+    1 draw and seeds 1–32) with 10⁴ targets per offset: 6.74e-9, with neighbours
+    6.71e-9 and 6.97e-9 and a bootstrap 5–95% interval of 5.66e-9 to 8.49e-9 for the
+    median.
+  - The draw matters more than the targets: one box of 1,000 mixed-sign charges
+    varies the prediction by up to 25× between draws (p = 18: 2.6e-9 to 6.5e-8).
+  - The same 33 draws give medians of 2.07e-3 and 1.50e-5 at p = 3 and 8, above the
+    Phase 1 values: the Phase 1 draw lies below the median. Keeping the Phase 1
+    values there is the stricter gate.
 - **Test time.** Keep the debug-mode runs of `cargo test -p nd-fmm-plan` and
   `cargo test -p nd-fmm-exec` under a minute each. Large-N checks go into `#[ignore]`
   tests or `nd-fmm-validate` examples, run in release mode and reported.
@@ -305,8 +327,9 @@ These hold for every task, so that no task decides them on its own:
   The octant and offset order of `nd-fmm-tables`, `nd-octree` and `nd-fmm-plan` agree.
   A non-cubic domain is rejected.
 - C3.2: on a uniform level-4 tree with N = 10⁵, the relative L2 error of φ against the
-  direct sum is at most twice the single-translation prediction at p = 3, 8 and 18
-  (f64): 3.5e-3, 2.2e-5 and 5.4e-9.
+  direct sum, as the root mean square over eight charge vectors ("Error measures"), is
+  at most twice the single-translation prediction at p = 3, 8 and 18 (f64): 3.5e-3,
+  2.2e-5 and 1.35e-8 ("Predictions").
 - C3.3: on a sphere surface, a Plummer sphere and Gaussian clusters (N = 10⁵, adaptive
   trees with non-empty W and X lists), the relative L2 error of φ is at most twice the
   uniform-tree error at the same p.

@@ -57,10 +57,55 @@
 //! - [`operator`]: [`LaplaceOperator`](operator::LaplaceOperator), the Laplace kernel on
 //!   the level-batched interface of `nd-fmm-plan` and on its per-pair interface, with
 //!   per-pair kernels for every operator (§3.11–§3.13; C3.1).
+//! - [`fmm`]: the user-facing [`FmmBuilder`](fmm::FmmBuilder) and [`Fmm`](fmm::Fmm),
+//!   which load the caller's points into an octree and evaluate potentials and
+//!   gradients in the caller's order, with 1/(4π) applied once (§3.1, §3.13; C3.2).
+//!
+//! ## Example
+//!
+//! A complete evaluation on one rank: potentials and gradients of random charges at the
+//! sources themselves (a point does not act on itself).
+//!
+//! ```no_run
+//! use mpi::traits::Communicator;
+//! use nd_fmm_exec::fmm::FmmBuilder;
+//!
+//! let universe = mpi::initialize().expect("MPI initialises once");
+//! let comm = universe.world();
+//!
+//! let points: Vec<[f64; 3]> = (0..10_000)
+//!     .map(|i| {
+//!         let t = i as f64;
+//!         [(0.37 * t).sin(), (0.71 * t).cos(), (0.13 * t).sin()]
+//!     })
+//!     .collect();
+//! let charges: Vec<f64> = (0..points.len()).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect();
+//!
+//! // Degree 8, with gradients; every other setting at its default.
+//! let mut fmm = FmmBuilder::<f64>::new(8)
+//!     .gradients(true)
+//!     .build(&points, &points, &comm)
+//!     .expect("on one rank every point is owned");
+//! let output = fmm.evaluate(&charges).expect("one charge per source");
+//!
+//! // φ(xᵢ) = Σⱼ qⱼ / (4π |xᵢ − yⱼ|), in the order of `points`.
+//! assert_eq!(output.potential.len(), points.len());
+//! let gradient = output.gradient.expect("built with gradients");
+//! println!(
+//!     "rank {}: φ(x₀) = {:e}, ∇φ(x₀) = {:?}, {} leaves on {} levels, M2L {:?}",
+//!     comm.rank(),
+//!     output.potential[0],
+//!     gradient[0],
+//!     fmm.nleaves(),
+//!     fmm.nlevels(),
+//!     fmm.strategy()
+//! );
+//! ```
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 //! [`RealScalar`]: nd_fmm_math::RealScalar
 
+pub mod fmm;
 pub mod geometry;
 pub mod operator;
 pub mod tables;

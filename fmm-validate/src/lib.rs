@@ -41,20 +41,29 @@
 //!   of the tables, run by the `accuracy` example.
 //! - [`bench`](mod@bench): the helpers of the timing reports (median time per call, fitted
 //!   exponent, crossover, machine description).
+//! - [`fmm_accuracy`]: the complete FMM of `nd-fmm-exec` on a uniform tree against the
+//!   direct sum, over several charge vectors (C3.2), run by the `fmm_accuracy` example.
 //!
-//! The examples `accuracy`, `timing` and `tables` print Markdown reports on stdout:
+//! The examples `accuracy`, `timing`, `tables` and `fmm_accuracy` print Markdown
+//! reports on stdout:
 //!
 //! ```text
 //! cargo run --release -p nd-fmm-validate --example accuracy
 //! cargo run --release -p nd-fmm-validate --example accuracy -- --tables
 //! cargo run --release -p nd-fmm-validate --example timing
 //! cargo run --release -p nd-fmm-validate --example tables
+//! cargo run --release -p nd-fmm-validate --example fmm_accuracy
 //! ```
+//!
+//! Since Phase 3 the crate depends on `nd-fmm-exec`, and so on MPI: building it, and
+//! `cargo test -p nd-fmm-validate`, need an MPI installation. `fmm_accuracy` runs on
+//! one rank.
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 
 pub mod accuracy;
 pub mod bench;
+pub mod fmm_accuracy;
 pub mod metrics;
 pub mod points;
 mod rng;

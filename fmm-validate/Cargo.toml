@@ -14,3 +14,5 @@ name = "nd_fmm_validate"
 nd-fmm-math = { workspace = true }
 nd-fmm-ref = { workspace = true }
 nd-fmm-tables = { workspace = true }
+nd-fmm-exec = { workspace = true }
+mpi = { workspace = true }
