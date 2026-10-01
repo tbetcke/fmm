@@ -1,7 +1,8 @@
 # nd-fmm-plan redesign: box index, batched operators, variable leaf data
 
-As of 2026-10-01. Phase 3 / T1. Status: **draft for sign-off**; no code changes until it
-is signed off. The sign-off decisions will be recorded in Section 12.
+As of 2026-10-01. Phase 3 / T1. Status: **signed off** on 2026-10-01 by Timo Betcke, with
+every recommendation accepted. The decisions are recorded in Section 12. This document is
+the specification for T4–T7.
 
 This document designs the replacement of `nd-fmm-plan` (`fmm-plan/`). It answers the
 ten requirements of `docs/phase3/README.md` ("Requirements on the new nd-fmm-plan") and
@@ -1048,4 +1049,22 @@ Further choices made in this design, listed so they can be overruled:
 
 ### Recorded decisions
 
-*(To be filled in at sign-off.)*
+Signed off by Timo Betcke on 2026-10-01 (PR #25). Every recommendation above is accepted
+as written:
+
+| # | Decision | Carried out in |
+| --- | --- | --- |
+| 1 | Requirements 1–10 accepted, with refinements (a) P2P list = U plus the leaf itself, (b) M2M called once per level and pass, (c) one source exchange for all levels, multipole exchange per level | T4 (a, b), T5 (c), T6 (b) |
+| 2 | One `Value` type | T5, T6 |
+| 3 | Batched `FmmOperator` only, with `PairOperator` and the `PerPair` wrapper; no finer per-offset calls | T6 |
+| 4 | Per-key list rule reused, moved into a private function shared by old and new code | T4 |
+| 5 | nd-fmm-plan moves to `[workspace.dependencies]` and `[workspace.package]`; licence form, `homepage` and `repository` fixed | T7 |
+| 6 | No nd-octree change in Phase 3; `Plan::new` checks that every coarse block is held. Documenting this in `OctreeOptions::with_ghost_children`, with a test, is a separate decision outside Phase 3 | T4 (check) |
+| 7 | Redistribution stays in C5.1, with the API of §9 | C5.1 |
+| 8 | CONVENTIONS §3.12's reference to `InteractionManager::v_list_by_direction` is reworded to the new V-list view; the convention is unchanged | T7 |
+
+The further choices stand as designed:
+- local leaves ordered by (level, key), ghost leaves by key (§3.3);
+- V rows in offset order (§4.4);
+- a local slot for ghost boxes (§5.1);
+- the root multipole formed on every rank count (§1.5).
