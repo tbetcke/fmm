@@ -253,6 +253,15 @@ impl OctreeOptions {
     ///
     /// The layer is what a fast multipole method needs to resolve its V- and
     /// W-list entries locally, since those are children of neighbouring boxes.
+    ///
+    /// On more than one rank the layer also replicates every coarse block, that
+    /// is every key of [`Octree::coarse_tree_leafs`] on every rank, without its
+    /// children. A block of another rank is a key of [`Octree::all_keys`],
+    /// classified as [`KeyType::GhostLeaf`] or [`KeyType::GhostInterior`] with its
+    /// owner. The children of a [`KeyType::Global`] key are `Global` keys or
+    /// coarse blocks, so every child of every `Global` key is a key of the map as
+    /// well. This lets a distributed fast multipole method form the multipoles of
+    /// the `Global` keys on every rank from the multipoles of all blocks.
     /// # Arguments
     /// - `enabled`: Whether the ghost-children layer is stored.
     ///
@@ -564,6 +573,9 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
     /// same-level neighbour cell of that key which the tree holds as an interior
     /// box, all eight children of that neighbour are keys of this map too. A ghost
     /// interior that the layer itself added does **not** have its own children here.
+    /// The layer also makes every coarse block of every rank, and hence every child
+    /// of every global key, a key of this map; see
+    /// [`OctreeOptions::with_ghost_children`].
     /// Global keys are keys that are not uniquely assigned to a rank but exist on all ranks.
     /// The global keys are those that are close to the root of the tree. By construction these
     /// are the ancestors of the coarse tree leafs, where as the coarse tree leafs themselves are
