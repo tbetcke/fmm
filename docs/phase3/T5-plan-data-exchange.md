@@ -16,9 +16,9 @@ disagree, the design wins. Report the difference.
 Read first: root CLAUDE.md, fmm-plan/CLAUDE.md, docs/phase3/README.md (requirements 3,
 4, 7 and 8), docs/design/fmm-plan-redesign.md (§5, §8, §10 and §11), the T4 code,
 fmm-plan/src/ghost_communicator.rs and src/fmm/evaluator.rs (`LevelData`, `exchange`,
-`upward_global`), and the rlst 0.8.0 sources of `distributed_tools::ghost_communicator`
+`upward_global`), and the rlst 0.9.0 sources of `distributed_tools::ghost_communicator`
 (`ChunkSizes::PerIndex`, `receive_chunk_sizes`, `receive_offsets`, `send_chunk_sizes`,
-`send_offsets`) in `~/.cargo/registry/src/*/rlst-0.8.0/`, not in any `../rlst`
+`send_offsets`) in `~/.cargo/registry/src/*/rlst-0.9.0/`, not in any `../rlst`
 checkout.
 
 Do:

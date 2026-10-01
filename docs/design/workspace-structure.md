@@ -86,7 +86,7 @@ It stores no points and no application data.
   - Points are rlst `[3, n]` arrays of `f64`, one point per column.
   - `points_to_morton` bins points into level-16 keys, but the octree never stores,
     sorts or permutes points.
-- **Distribution.** Uses rsmpi (`mpi` 0.8.2) and rlst 0.8 distributed tools directly.
+- **Distribution.** Uses rsmpi (`mpi` 0.8.2) and rlst 0.9 distributed tools directly.
   - `Octree<'o, C: CommunicatorCollectives>` borrows its communicator. MPI is required,
     also on one rank.
   - Construction is collective. It computes the coarse tree, replicates it on every
@@ -376,7 +376,7 @@ another task.
 | --- | --- |
 | Naming | directory `fmm-<name>`, package `nd-fmm-<name>`, library name `nd_fmm_<name>` |
 | Edition and versions | Rust 2024; edition, licence and repository inherited from `[workspace.package]` (added in Phase 0 T1) |
-| Dependencies | declared once in `[workspace.dependencies]`, used with `.workspace = true`; `cubecl` pinned to an exact version there; `mpi` and `rlst` at the versions the existing crates use (0.8.2, 0.8.0) when a new crate needs them |
+| Dependencies | declared once in `[workspace.dependencies]`, used with `.workspace = true`; `cubecl` pinned to an exact version there; `mpi` and `rlst` at the versions the existing crates use (0.8.2, 0.9.0) when a new crate needs them |
 | Precision | all numeric code generic over `T: RealScalar` (from `nd-fmm-math`); no `f64` hard-coding outside tests and table building. Does not apply to `nd-fmm-plan`, whose `FmmOperator::Value` is deliberately generic (its `IndexFmm` uses `u32`) |
 | Allocation | kernels and hot loops write into caller-provided slices; allocation only in constructors and plan building |
 | Errors | `thiserror` enums in public APIs; panics only for violated internal invariants (`debug_assert!`) |
@@ -416,7 +416,7 @@ cubecl = { version = "=0.10.0", default-features = false, features = ["std", "st
 cubek-matmul = { version = "=0.2.0", default-features = false, features = ["std"] }
 cubek-std = { version = "=0.2.0", default-features = false }
 # Added when their phases start:
-# rlst = "0.8.0"   # SVD compression (C6.2); match the existing crates, never with "mpi" here
+# rlst = "0.9.0"   # SVD compression (C6.2); match the existing crates, never with "mpi" here
 # rayon = "1"
 # mpi = { version = "0.8.2", features = ["derive"] }   # Phase 3, match existing crates
 nd-fmm-math = { path = "fmm-math" }
