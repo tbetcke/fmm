@@ -72,7 +72,7 @@
 #[path = "evaluator_tests.rs"]
 pub(crate) mod tests;
 
-use std::{error::Error, fmt};
+use std::{borrow::Borrow, error::Error, fmt};
 
 use mpi::{collective::SystemOperation, traits::CommunicatorCollectives};
 
@@ -391,8 +391,12 @@ pub(crate) fn validate<Op: FmmOperator>(
 ///
 /// See the [module documentation](self) for the pass order, the accumulation order and
 /// the collectives.
-pub struct Evaluator<'p, C: CommunicatorCollectives, Op: FmmOperator> {
-    plan: &'p Plan,
+///
+/// The evaluator holds its plan as `P`: by default it borrows it (`&'p Plan`), and with
+/// `P = Plan` it owns it, so that an evaluator can be stored next to the octree it was
+/// planned from without borrowing from its own owner. Both behave the same.
+pub struct Evaluator<'p, C: CommunicatorCollectives, Op: FmmOperator, P: Borrow<Plan> = &'p Plan> {
+    plan: P,
     comm: &'p C,
     operator: Op,
     data: Data<Op::Value>,
@@ -402,8 +406,10 @@ pub struct Evaluator<'p, C: CommunicatorCollectives, Op: FmmOperator> {
     completed: Stage,
 }
 
-impl<'p, C: CommunicatorCollectives, Op: FmmOperator> Evaluator<'p, C, Op> {
+impl<'p, C: CommunicatorCollectives, Op: FmmOperator, P: Borrow<Plan>> Evaluator<'p, C, Op, P> {
     /// Build the stores and exchanges of an evaluation on `plan` with `operator`.
+    ///
+    /// `plan` is a `&Plan` or, for an evaluator that owns its plan, a `Plan`.
     ///
     /// `source_counts[j]` and `target_counts[j]` are the numbers of source and target
     /// points of local leaf j, in the leaf order of
@@ -427,13 +433,14 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator> Evaluator<'p, C, Op> {
     /// [`EvaluatorError::OtherRank`] (or the exchange's
     /// [`ExchangeError::OtherRank`]).
     pub fn new(
-        plan: &'p Plan,
+        plan: P,
         comm: &'p C,
         operator: Op,
         source_counts: &[usize],
         target_counts: &[usize],
     ) -> Result<Self, EvaluatorError> {
-        let local = validate(plan, &operator, source_counts, target_counts);
+        let planned: &Plan = plan.borrow();
+        let local = validate(planned, &operator, source_counts, target_counts);
         let mut valid = false;
         comm.all_reduce_into(&local.is_ok(), &mut valid, SystemOperation::logical_and());
         local?;
@@ -441,17 +448,17 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator> Evaluator<'p, C, Op> {
             return Err(EvaluatorError::OtherRank);
         }
 
-        let (multipole_sizes, _) = level_sizes(&operator, plan.nlevels());
+        let (multipole_sizes, _) = level_sizes(&operator, planned.nlevels());
         let source_exchange =
-            SourceExchange::new(plan, comm, source_counts, operator.source_point_size())
+            SourceExchange::new(planned, comm, source_counts, operator.source_point_size())
                 .map_err(EvaluatorError::Exchange)?;
-        let multipole_exchange = MultipoleExchange::new(plan, comm, &multipole_sizes)
+        let multipole_exchange = MultipoleExchange::new(planned, comm, &multipole_sizes)
             .map_err(EvaluatorError::Exchange)?;
-        let coarse_exchange =
-            CoarseExchange::new(plan, comm, &multipole_sizes).map_err(EvaluatorError::Exchange)?;
+        let coarse_exchange = CoarseExchange::new(planned, comm, &multipole_sizes)
+            .map_err(EvaluatorError::Exchange)?;
 
         let data = Data::new(
-            plan,
+            planned,
             &operator,
             source_exchange.leaf_counts(),
             target_counts,
@@ -469,8 +476,8 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator> Evaluator<'p, C, Op> {
     }
 
     /// Return the plan.
-    pub fn plan(&self) -> &'p Plan {
-        self.plan
+    pub fn plan(&self) -> &Plan {
+        self.plan.borrow()
     }
 
     /// Return the communicator.
@@ -503,7 +510,7 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator> Evaluator<'p, C, Op> {
     /// Return the source data of every local leaf mutably, leaf r of the slice being
     /// local leaf r.
     pub fn local_sources_mut(&mut self) -> LeafSliceMut<'_, Op::Value> {
-        let nlocal = self.plan.index().leaves().nlocal();
+        let nlocal = self.plan().index().leaves().nlocal();
         self.data.sources.range_mut(0..nlocal)
     }
 
@@ -594,7 +601,8 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator> Evaluator<'p, C, Op> {
     /// level first. Local.
     pub fn upward_local(&mut self) {
         self.enter(Stage::UpwardLocal);
-        self.data.upward_local(self.plan, &mut self.operator);
+        self.data
+            .upward_local(self.plan.borrow(), &mut self.operator);
     }
 
     /// Step 3: gather every rank's coarse-block multipoles and form the multipoles of
@@ -605,7 +613,8 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator> Evaluator<'p, C, Op> {
     pub fn upward_global(&mut self) {
         self.enter(Stage::UpwardGlobal);
         self.coarse_exchange.gather(&mut self.data.multipoles);
-        self.data.upward_global(self.plan, &mut self.operator);
+        self.data
+            .upward_global(self.plan.borrow(), &mut self.operator);
     }
 
     /// Step 4: fetch the multipoles of the ghost boxes of the V- and W-lists, level by
@@ -622,13 +631,14 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator> Evaluator<'p, C, Op> {
     /// Step 5: L2L, M2L and P2L, level by level from level 1. Local.
     pub fn downward(&mut self) {
         self.enter(Stage::Downward);
-        self.data.downward(self.plan, &mut self.operator);
+        self.data.downward(self.plan.borrow(), &mut self.operator);
     }
 
     /// Step 6: L2P, M2P and P2P on the local leaves of every level. Local.
     pub fn evaluate_leaves(&mut self) {
         self.enter(Stage::EvaluateLeaves);
-        self.data.evaluate_leaves(self.plan, &mut self.operator);
+        self.data
+            .evaluate_leaves(self.plan.borrow(), &mut self.operator);
     }
 
     /// Record that `stage` runs; debug builds check that it follows the last one.
@@ -642,7 +652,7 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator> Evaluator<'p, C, Op> {
     }
 
     fn assert_local(&self, leaf: usize) {
-        let nlocal = self.plan.index().leaves().nlocal();
+        let nlocal = self.plan().index().leaves().nlocal();
         assert!(
             leaf < nlocal,
             "leaf {leaf} is not one of the {nlocal} local leaves"

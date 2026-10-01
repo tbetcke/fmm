@@ -76,7 +76,8 @@ Tests that define done:
     vector gives the same result as a fresh build with it.
 - tests/accuracy.rs, its own executable with one `#[ignore]` MPI test (release): the
   C3.2 gate in its smallest form, a uniform level-4 tree with N = 10⁵ at p = 3 and 8,
-  1,000 sampled targets, f64, within twice the prediction. This keeps the gate next to
+  1,000 sampled targets, f64, the root mean square over eight seeded charge vectors
+  (docs/phase3/README.md, "Error measures"), within twice the prediction. This keeps the gate next to
   the code; the full report is the example below.
 - nd-fmm-validate:
   - add nd-fmm-exec (`workspace = true`) and, in fmm-validate/CLAUDE.md, "Phase 3:
@@ -86,7 +87,8 @@ Tests that define done:
     templated-examples): uniform cube, N = 10⁵, sources equal to targets, charges in
     [−1, 1), a uniform level-4 tree (`max_level` 4, `max_points_per_leaf` 1). For
     p ∈ {3, 8, 18} in f64 and p ∈ {3, 8} in f32, it prints the relative L2 and max
-    error of φ and ∇φ over 1,000 sampled targets, the prediction and the ratio, the
+    error of φ and ∇φ over 1,000 sampled targets (root mean squares over eight charge
+    vectors, with the spread of the φ L2 error), the prediction and the ratio, the
     tree (levels, leaves, points per leaf) and the stage timings, as Markdown;
   - a smoke test of the example's core at N = 500, p = 2 (one MPI-initialising test in
     its executable).

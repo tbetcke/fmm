@@ -665,8 +665,9 @@ fn check_variable_counts<C: CommunicatorCollectives>(name: &str, comm: &C, plan:
         &targets,
     )
     .unwrap();
+    // This one owns a copy of the plan; it must agree with the borrowing ones.
     let mut rows = Evaluator::new(
-        plan,
+        plan.clone(),
         comm,
         BatchedIndexFmm::new(nleaves, Walk::Rows),
         &sources,

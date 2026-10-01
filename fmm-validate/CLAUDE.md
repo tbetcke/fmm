@@ -18,8 +18,13 @@ later phase (C3.2–C3.4 calibration, Phase 4 benchmarks).
   and `cargo test -p nd-fmm-validate` must pass.
 
 ## Allowed dependencies
-Phase 1: nd-fmm-math, nd-fmm-ref. Phase 2: nd-fmm-tables. Later phases add the crates
-they validate.
+Phase 1: nd-fmm-math, nd-fmm-ref. Phase 2: nd-fmm-tables. Phase 3: nd-fmm-exec (and so
+MPI: `mpi` from [workspace.dependencies]). Later phases add the crates they validate.
+
+Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
+installation. Tests that run an FMM initialise MPI, at most one test per test
+executable (`tests/fmm_accuracy.rs`).
+
 Anything else (criterion, rand, plotting) needs a note in the PR.
 
 ## Test oracle
