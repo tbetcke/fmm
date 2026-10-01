@@ -4,23 +4,16 @@ use std::collections::HashMap;
 
 use mpi::{collective::SystemOperation, traits::*};
 use nd_fmm_plan::{
-    fmm::{
-        evaluator::FmmEvaluator,
-        index_fmm::{self as old_index_fmm, global_leaf_indices, run_index_fmm},
+    evaluator::Evaluator,
+    exchange::{CoarseExchange, MultipoleExchange, SourceExchange},
+    index_fmm::{self, BatchedIndexFmm, GlobalLeaves, IndexFmm, IndexPath, Walk},
+    interaction_manager::V_LIST_DIRECTIONS,
+    lists::{GroupedCsr, offset_index},
+    operator::{
+        FmmOperator, FmmSizes, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PerPair, UpwardPass,
     },
-    ghost_communicator::{FmmGhostCommunicator, LevelChunkSizes},
-    interaction_manager::{InteractionManager, V_LIST_DIRECTIONS},
-    v2::{
-        evaluator::Evaluator,
-        exchange::{CoarseExchange, MultipoleExchange, SourceExchange},
-        index_fmm::{self as index_fmm, BatchedIndexFmm, GlobalLeaves, IndexFmm, IndexPath, Walk},
-        lists::{GroupedCsr, offset_index},
-        operator::{
-            FmmOperator, FmmSizes, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PerPair, UpwardPass,
-        },
-        plan::Plan,
-        store::LevelBuffers,
-    },
+    plan::Plan,
+    store::LevelBuffers,
 };
 use nd_octree::{
     Octree, OctreeOptions, PhysicalBox, constants::DEEPEST_LEVEL, morton, morton::is_ancestor,
@@ -110,63 +103,24 @@ fn oracle_lists(keys: &[u64], leaves: &[u64], key: u64) -> [Vec<u64>; 4] {
     [u, v, w, x]
 }
 
-/// Compare the interaction lists of every local non-ghost key against the
-/// brute-force oracle over the gathered global tree.
-fn check_interaction_lists(
-    name: &str,
-    all_keys: &HashMap<u64, KeyType>,
-    lists: &InteractionManager,
-    global_leaves: &[u64],
-) {
+/// The brute-force U-, V-, W- and X-lists of every non-ghost key of `all_keys`, by key,
+/// over the gathered global tree. The reference for the plan, the multipole ghosts and
+/// the pairs that an evaluation issues.
+type OracleLists = HashMap<u64, [Vec<u64>; 4]>;
+
+/// Compute the [`OracleLists`] from the local key map and the sorted global leaves.
+fn oracle_of(all_keys: &HashMap<u64, KeyType>, global_leaves: &[u64]) -> OracleLists {
     let mut keys: Vec<u64> = morton::get_interior_keys(global_leaves)
         .into_iter()
         .collect();
     keys.extend_from_slice(global_leaves);
     keys.sort_unstable();
     keys.dedup();
-
-    let mut expected_entries: Vec<u64> = all_keys
+    all_keys
         .iter()
-        .filter(|(_, key_type)| !key_type.is_ghost())
-        .map(|(&key, _)| key)
-        .collect();
-    expected_entries.sort_unstable();
-    for map in [
-        lists.u_list(),
-        lists.v_list(),
-        lists.w_list(),
-        lists.x_list(),
-    ] {
-        let mut entries: Vec<u64> = map.keys().copied().collect();
-        entries.sort_unstable();
-        assert_eq!(entries, expected_entries, "{name}: entry set");
-    }
-
-    for &key in &expected_entries {
-        let expected = oracle_lists(&keys, global_leaves, key);
-        let actual = [
-            &lists.u_list()[&key],
-            &lists.v_list()[&key],
-            &lists.w_list()[&key],
-            &lists.x_list()[&key],
-        ];
-        for (index, list_name) in ["U", "V", "W", "X"].into_iter().enumerate() {
-            assert_eq!(
-                *actual[index], expected[index],
-                "{name}: {list_name}-list of {key}"
-            );
-            assert!(actual[index].windows(2).all(|pair| pair[0] < pair[1]));
-            assert!(!actual[index].contains(&key));
-            // The tree is built with the ghost-children layer, so every entry is
-            // a key of the local map and carries its own classification.
-            for entry in actual[index] {
-                assert!(
-                    all_keys.contains_key(entry),
-                    "{name}: {list_name}-list entry {entry} of {key} is not a key of the tree"
-                );
-            }
-        }
-    }
+        .filter(|(_, kind)| !kind.is_ghost())
+        .map(|(&key, _)| (key, oracle_lists(&keys, global_leaves, key)))
+        .collect()
 }
 
 /// The rows of a grouped view as sorted (target, source, group) triples, checking that
@@ -209,17 +163,10 @@ fn grouped_batches<G: Copy + Into<usize>>(view: &GroupedCsr<G>) -> Vec<(u32, u32
 fn check_plan(
     name: &str,
     all_keys: &HashMap<u64, KeyType>,
+    oracle: &OracleLists,
     plan: &Plan,
     coarse_blocks: &[u64],
-    global_leaves: &[u64],
 ) {
-    let mut keys: Vec<u64> = morton::get_interior_keys(global_leaves)
-        .into_iter()
-        .collect();
-    keys.extend_from_slice(global_leaves);
-    keys.sort_unstable();
-    keys.dedup();
-
     let index = plan.index();
     let leaves = index.leaves();
     let mut own_blocks = coarse_blocks.to_vec();
@@ -274,7 +221,7 @@ fn check_plan(
                 assert!(lists.m2m_global().row(i).0.is_empty());
                 continue;
             }
-            let expected = oracle_lists(&keys, global_leaves, key);
+            let expected = &oracle[&key];
             let mut v: Vec<u64> = lists.v().row(i).0.iter().map(key_on(level)).collect();
             let mut x: Vec<u64> = lists.x().row(i).iter().map(leaf_key).collect();
             v.sort_unstable();
@@ -379,102 +326,6 @@ fn ghost_value(key: u64, j: usize) -> u64 {
     key.wrapping_mul(64).wrapping_add(j as u64)
 }
 
-/// Exchange the data of every ghost in the interaction lists and check that
-/// each ghost holder receives its owner's values, forward and backward.
-fn check_ghost_exchange<C: CommunicatorCollectives>(
-    name: &str,
-    octree: &Octree<'_, C>,
-    lists: &InteractionManager,
-    chunk_sizes: LevelChunkSizes,
-) {
-    let all_keys = octree.all_keys();
-    let entries: Vec<u64> = [
-        lists.u_list(),
-        lists.v_list(),
-        lists.w_list(),
-        lists.x_list(),
-    ]
-    .into_iter()
-    .flat_map(|map| map.values().flatten().copied())
-    .collect();
-    let mut expected: Vec<u64> = entries
-        .iter()
-        .copied()
-        .filter(|entry| all_keys[entry].is_ghost())
-        .collect();
-    expected.sort_unstable();
-    expected.dedup();
-
-    let mut ghosts = FmmGhostCommunicator::<u64>::new(octree, entries, chunk_sizes.clone());
-    assert_eq!(ghosts.nlevels(), octree.global_max_level() + 1);
-
-    let mut received: Vec<u64> = Vec::new();
-    for level in 0..ghosts.nlevels() {
-        assert_eq!(
-            ghosts.chunk_size(level),
-            chunk_sizes.chunk_size(level).unwrap()
-        );
-        for (position, &key) in ghosts.receive_keys(level).iter().enumerate() {
-            assert_eq!(morton::level(key), level, "{name}: receive key level");
-            assert_eq!(ghosts.receive_position(key), Some(position));
-            received.push(key);
-        }
-        // Only the owner of a key sends it.
-        for key in ghosts.send_keys(level) {
-            assert!(
-                matches!(
-                    all_keys.get(key),
-                    Some(KeyType::LocalLeaf | KeyType::LocalInterior)
-                ),
-                "{name}: sent key {key} is not local to its owner"
-            );
-        }
-        for (key, chunk) in ghosts.send_chunks_mut(level) {
-            for (j, value) in chunk.iter_mut().enumerate() {
-                *value = ghost_value(key, j);
-            }
-        }
-    }
-    received.sort_unstable();
-    assert_eq!(received, expected, "{name}: received ghost keys");
-    // The graded tree always spreads its interaction lists over several ranks,
-    // so an exchange without any ghost would mean the check is vacuous.
-    let mut global_received = 0usize;
-    octree.comm().all_reduce_into(
-        &received.len(),
-        &mut global_received,
-        SystemOperation::sum(),
-    );
-    if name == "graded corner blob" && octree.comm().size() > 1 {
-        assert!(global_received > 0, "{name}: no ghosts were exchanged");
-    }
-
-    ghosts.forward_all();
-    for level in 0..ghosts.nlevels() {
-        let chunk_size = ghosts.chunk_size(level);
-        for (key, chunk) in ghosts.receive_chunks(level) {
-            let values: Vec<u64> = (0..chunk_size).map(|j| ghost_value(key, j)).collect();
-            assert_eq!(chunk, values, "{name}: forwarded values of {key}");
-            assert_eq!(ghosts.receive_chunk(key), Some(chunk));
-        }
-    }
-
-    // Send the received values back to the owners.
-    for level in 0..ghosts.nlevels() {
-        ghosts.send_buffer_mut(level).fill(0);
-        ghosts.backward(level);
-        for (key, chunk) in ghosts.send_chunks_mut(level) {
-            for (j, &value) in chunk.iter().enumerate() {
-                assert_eq!(
-                    value,
-                    ghost_value(key, j),
-                    "{name}: returned values of {key}"
-                );
-            }
-        }
-    }
-}
-
 /// Values per source point, as for Laplace (CONVENTIONS §3.13: coordinates, then charge).
 const SOURCE_POINT_SIZE: usize = 4;
 
@@ -569,17 +420,16 @@ fn check_source_exchange<C: CommunicatorCollectives>(
 }
 
 /// Forward the multipoles of every non-ghost box with `sizes[l]` values on level l, and
-/// check that exactly the ghosts of the V- and W-lists receive their owner's values. The
-/// old communicator, built for the same ghosts as the old evaluator builds it, must
-/// receive the same keys in the same order. Returns the traffic, new and old.
+/// check that exactly the ghosts of the V- and W-lists of the oracle receive their
+/// owner's values. Returns the traffic.
 fn check_multipole_exchange<C: CommunicatorCollectives>(
     name: &str,
-    octree: &Octree<'_, C>,
-    lists: &InteractionManager,
+    comm: &C,
+    all_keys: &HashMap<u64, KeyType>,
+    oracle: &OracleLists,
     plan: &Plan,
     sizes: &[usize],
-) -> [Traffic; 2] {
-    let comm = octree.comm();
+) -> Traffic {
     let index = plan.index();
     let mut exchange = MultipoleExchange::<u64>::new(plan, comm, sizes)
         .unwrap_or_else(|error| panic!("{name}: multipole exchange: {error}"));
@@ -596,25 +446,15 @@ fn check_multipole_exchange<C: CommunicatorCollectives>(
     }
     exchange.forward_all(&mut multipoles);
 
-    // The ghosts of the V- and W-lists, by level, as the old evaluator exchanges them.
-    let entries: Vec<u64> = [lists.v_list(), lists.w_list()]
-        .into_iter()
-        .flat_map(|map| map.values().flatten().copied())
-        .collect();
-    let all_keys = octree.all_keys();
+    // The ghosts of the V- and W-lists, by level.
     let mut expected = vec![Vec::new(); index.nlevels()];
-    for &entry in &entries {
+    for &entry in oracle.values().flat_map(|[_, v, w, _]| v.iter().chain(w)) {
         if all_keys[&entry].is_ghost() {
             expected[morton::level(entry)].push(entry);
         }
     }
-    let old = FmmGhostCommunicator::<u64>::new(
-        octree,
-        entries,
-        LevelChunkSizes::PerLevel(sizes.to_vec()),
-    );
 
-    let (mut new_traffic, mut old_traffic) = (Traffic::default(), Traffic::default());
+    let mut traffic = Traffic::default();
     for (level, expected) in expected.iter_mut().enumerate() {
         expected.sort_unstable();
         expected.dedup();
@@ -627,11 +467,6 @@ fn check_multipole_exchange<C: CommunicatorCollectives>(
         assert_eq!(
             &received_keys, expected,
             "{name}: received ghosts of level {level}"
-        );
-        assert_eq!(
-            old.receive_keys(level),
-            received_keys,
-            "{name}: old against new"
         );
         for i in 0..index.len(level) {
             let key = index.key(level, i);
@@ -648,12 +483,10 @@ fn check_multipole_exchange<C: CommunicatorCollectives>(
             }
         }
         let communicator = exchange.communicator(level);
-        new_traffic.keys += communicator.total_receive_count();
-        new_traffic.values += communicator.receive_buffer_len();
-        old_traffic.keys += old.receive_keys(level).len();
-        old_traffic.values += old.receive_buffer(level).len();
+        traffic.keys += communicator.total_receive_count();
+        traffic.values += communicator.receive_buffer_len();
     }
-    [new_traffic, old_traffic]
+    traffic
 }
 
 /// Gather the multipoles of every rank's coarse blocks and check that every rank then
@@ -726,38 +559,23 @@ fn hashed_target_count(key: u64) -> usize {
     hashed_count(key ^ 0x5bd1_e995)
 }
 
-/// Run the old evaluator and the new one (per pair, and batched with both walks) with
-/// the index FMM and counts of one, and check that every leaf holds the same target
-/// values in all four.
-fn check_evaluator_against_old<C: CommunicatorCollectives>(
+/// Run the index FMM with counts of one, per pair and batched with both walks: every
+/// leaf must receive every leaf index exactly once, on every path. The global numbering
+/// of the leaves is their position in the global Morton order.
+fn check_counts_of_one<C: CommunicatorCollectives>(
     name: &str,
-    octree: &Octree<'_, C>,
-    lists: &InteractionManager,
+    comm: &C,
     plan: &Plan,
+    global_leaves: &[u64],
 ) {
-    let comm = octree.comm();
-    let (nleaves, old_indices) = global_leaf_indices(octree);
-    let mut old = FmmEvaluator::new(octree, lists, old_index_fmm::IndexFmm::new(nleaves));
-    for (&leaf, &index) in octree.leaf_keys().iter().zip(&old_indices) {
-        old.sources_mut(leaf)[0] = index;
-    }
-    old.evaluate();
-
-    // The new numbering of the leaves is the old one.
     let leaves = plan.index().leaves();
     let numbering = GlobalLeaves::new(plan, comm);
-    assert_eq!(numbering.nleaves(), nleaves, "{name}");
-    let old_index: HashMap<u64, u32> = octree
-        .leaf_keys()
-        .iter()
-        .copied()
-        .zip(old_indices.iter().copied())
-        .collect();
-    assert_eq!(leaves.nlocal(), old_index.len(), "{name}: local leaves");
+    let nleaves = numbering.nleaves();
+    assert_eq!(nleaves, global_leaves.len(), "{name}: number of leaves");
     for j in 0..leaves.nlocal() {
         assert_eq!(
-            numbering.indices()[j],
-            old_index[&leaves.key(j)],
+            global_leaves[numbering.indices()[j] as usize],
+            leaves.key(j),
             "{name}: global index of leaf {}",
             leaves.key(j)
         );
@@ -785,13 +603,13 @@ fn check_evaluator_against_old<C: CommunicatorCollectives>(
         &numbering,
         &ones,
     );
+    let expected = vec![1u32; nleaves];
     for j in 0..leaves.nlocal() {
         let key = leaves.key(j);
-        let reference = old.targets(key).unwrap();
-        assert_eq!(per_pair[j], reference, "{name}: per pair, leaf {key}");
-        assert_eq!(rows[j], reference, "{name}: batched rows, leaf {key}");
+        assert_eq!(per_pair[j], expected, "{name}: per pair, leaf {key}");
+        assert_eq!(rows[j], expected, "{name}: batched rows, leaf {key}");
         assert_eq!(
-            groupings[j], reference,
+            groupings[j], expected,
             "{name}: batched groupings, leaf {key}"
         );
     }
@@ -1132,11 +950,11 @@ fn pairs_of(method: &'static str, target: u64, sources: &[u64]) -> Vec<(&'static
 
 /// Evaluate with a recording operator: every level gets every call once, in pass order;
 /// every batch honours its grouping; and the pairs issued are exactly the pairs of the
-/// old lists, each once.
+/// oracle lists, each once.
 fn check_batches<C: CommunicatorCollectives>(
     name: &str,
     octree: &Octree<'_, C>,
-    lists: &InteractionManager,
+    oracle: &OracleLists,
     plan: &Plan,
 ) {
     let nlocal = plan.index().leaves().nlocal();
@@ -1160,8 +978,9 @@ fn check_batches<C: CommunicatorCollectives>(
             continue;
         }
         let entries = |method, sources: &[u64]| pairs_of(method, key, sources);
-        expected.extend(entries("m2l", &lists.v_list()[&key]));
-        expected.extend(entries("p2l", &lists.x_list()[&key]));
+        let [u, v, w, x] = &oracle[&key];
+        expected.extend(entries("m2l", v));
+        expected.extend(entries("p2l", x));
         if let Some(parent) = morton::parent(key) {
             expected.push(("l2l", key, parent));
         }
@@ -1171,8 +990,8 @@ fn check_batches<C: CommunicatorCollectives>(
         match kind {
             KeyType::LocalLeaf => {
                 expected.extend([("p2m", key, key), ("l2p", key, key), ("p2p", key, key)]);
-                expected.extend(entries("m2p", &lists.w_list()[&key]));
-                expected.extend(entries("p2p", &lists.u_list()[&key]));
+                expected.extend(entries("m2p", w));
+                expected.extend(entries("p2p", u));
             }
             KeyType::LocalInterior => expected.extend(entries("m2m local", &children)),
             KeyType::Global => expected.extend(entries("m2m global", &children)),
@@ -1328,23 +1147,21 @@ fn distributed_tree_regressions() {
         let leaves = octree.leaf_keys();
         assert!(leaves.windows(2).all(|pair| pair[0] < pair[1]));
 
-        // The interaction lists are built without communication, but the oracle
-        // needs the global tree, so the gather is entered by every rank.
-        let lists = InteractionManager::new(&octree);
+        // The oracle needs the global tree, so the gather is entered by every rank.
         let mut global_leaves = gather_to_all(leaves, &comm);
         global_leaves.sort_unstable();
         assert!(morton::is_complete_linear_and_balanced(&global_leaves));
-        check_interaction_lists(name, octree.all_keys(), &lists, &global_leaves);
+        let oracle = oracle_of(octree.all_keys(), &global_leaves);
 
-        // The index-form plan, against the same oracle. Building it is collective.
+        // The index-form plan, against the oracle. Building it is collective.
         let plan =
             Plan::new(&octree).unwrap_or_else(|error| panic!("rank {rank}: {name}: {error}"));
         check_plan(
             name,
             octree.all_keys(),
+            &oracle,
             &plan,
             octree.coarse_tree_leafs(),
-            &global_leaves,
         );
         // The graded tree has `Global` boxes on every rank count and spreads its lists
         // over several ranks, so the global pass and the ghost leaves are exercised.
@@ -1363,15 +1180,8 @@ fn distributed_tree_regressions() {
             );
         }
 
-        let chunk_sizes = if name == "identical populations" {
-            LevelChunkSizes::Uniform(3)
-        } else {
-            LevelChunkSizes::PerLevel((1..=DEEPEST_LEVEL as usize + 1).collect())
-        };
-        check_ghost_exchange(name, &octree, &lists, chunk_sizes.clone());
-
-        // The new exchanges. Sources: counts of one (as the old evaluator), counts from a
-        // hash of the key (zeros included), and the real source points per leaf.
+        // The exchanges. Sources: counts of one, counts from a hash of the key (zeros
+        // included), and the real source points per leaf.
         let mut source_points = gather_to_all(&keys(&sources), &comm);
         source_points.sort_unstable();
         let ones = check_source_exchange(name, &comm, &plan, |_| 1).total(&comm);
@@ -1379,35 +1189,26 @@ fn distributed_tree_regressions() {
         let points =
             check_source_exchange(name, &comm, &plan, |key| points_in(&source_points, key))
                 .total(&comm);
+        // One ghost key per ghost leaf, whatever the counts.
+        assert_eq!(ones.keys, ghost_leaves, "{name}: source ghost keys");
+        assert_eq!(ones.values, ghost_leaves * SOURCE_POINT_SIZE, "{name}");
+        assert_eq!(hashed.keys, ghost_leaves, "{name}: source ghost keys");
+        assert_eq!(points.keys, ghost_leaves, "{name}: source ghost keys");
+        // Multipole sizes per level: uniform in one scenario, growing with the level in
+        // the others.
         let sizes: Vec<usize> = (0..plan.nlevels())
-            .map(|level| chunk_sizes.chunk_size(level).unwrap())
+            .map(|level| {
+                if name == "identical populations" {
+                    3
+                } else {
+                    level + 1
+                }
+            })
             .collect();
-        let [multipoles, old_multipoles] =
-            check_multipole_exchange(name, &octree, &lists, &plan, &sizes);
-        let (multipoles, old_multipoles) = (multipoles.total(&comm), old_multipoles.total(&comm));
+        let multipoles =
+            check_multipole_exchange(name, &comm, octree.all_keys(), &oracle, &plan, &sizes)
+                .total(&comm);
         let coarse = check_coarse_gather(name, &comm, &plan, &sizes);
-
-        // The same source ghosts as the old evaluator, which exchanges one fixed-size
-        // chunk per leaf.
-        let source_entries = [lists.u_list(), lists.x_list()]
-            .into_iter()
-            .flat_map(|map| map.values().flatten().copied());
-        let old_sources = FmmGhostCommunicator::<u64>::new(
-            &octree,
-            source_entries,
-            LevelChunkSizes::Uniform(SOURCE_POINT_SIZE),
-        );
-        let old_sources = Traffic {
-            keys: (0..old_sources.nlevels())
-                .map(|level| old_sources.receive_keys(level).len())
-                .sum(),
-            values: (0..old_sources.nlevels())
-                .map(|level| old_sources.receive_buffer(level).len())
-                .sum(),
-        }
-        .total(&comm);
-        assert_eq!(ones, old_sources, "{name}: source traffic, old against new");
-        assert_eq!(multipoles, old_multipoles, "{name}: multipole traffic");
         if comm.size() > 1 && name == "graded corner blob" {
             assert!(
                 ones.keys > 0 && multipoles.keys > 0,
@@ -1429,24 +1230,18 @@ fn distributed_tree_regressions() {
                 "traffic on {} ranks, {name}: ghost keys / values received, summed over ranks",
                 comm.size()
             );
-            println!("  sources, old (one chunk of {SOURCE_POINT_SIZE} per leaf): {old_sources:?}");
-            println!("  sources, new, counts of one:      {ones:?}");
-            println!("  sources, new, hashed counts:      {hashed:?}");
-            println!("  sources, new, source points:      {points:?}");
-            println!("  multipoles, old:                  {old_multipoles:?}");
-            println!("  multipoles, new:                  {multipoles:?}");
-            println!("  coarse gather, per rank:          {coarse:?}");
+            println!("  sources, counts of one:  {ones:?}");
+            println!("  sources, hashed counts:  {hashed:?}");
+            println!("  sources, source points:  {points:?}");
+            println!("  multipoles:              {multipoles:?}");
+            println!("  coarse gather, per rank: {coarse:?}");
         }
 
-        // Every leaf must receive every leaf index exactly once.
-        if let Err(message) = run_index_fmm(&octree, &lists) {
-            panic!("rank {rank}: {name}: index FMM: {message}");
-        }
-
-        // The new evaluator: equal to the old one with counts of one, the count check
-        // with variable counts on every path, the batches it issues, and determinism.
-        check_evaluator_against_old(name, &octree, &lists, &plan);
+        // The evaluator with the index FMM: every leaf receives every leaf index once with
+        // counts of one, the count check with variable counts on every path, the batches
+        // it issues, and determinism.
+        check_counts_of_one(name, &comm, &plan, &global_leaves);
         check_variable_counts(name, &comm, &plan);
-        check_batches(name, &octree, &lists, &plan);
+        check_batches(name, &octree, &oracle, &plan);
     }
 }

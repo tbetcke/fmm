@@ -6,8 +6,8 @@ use super::{
     ExchangeError, displacements, ghost_counts, level_sizes, multipole_ghosts, owned_chunk_size,
     source_ghosts,
 };
-use crate::interaction_manager::InteractionManager;
-use crate::v2::plan::tests::{cases, plan};
+use crate::interaction_manager::tests::ListMaps;
+use crate::plan::tests::{cases, plan};
 
 /// A source count per key that every rank can recompute; zero for about one key in five.
 fn count_of(key: MortonKey) -> usize {
@@ -90,7 +90,7 @@ fn multipole_ghosts_are_the_ghost_entries_of_v_and_w_rows() {
     for (name, map) in cases() {
         let plan = plan(&map);
         let index = plan.index();
-        let lists = InteractionManager::from_key_types(&map);
+        let lists = ListMaps::new(&map);
         for level in 0..plan.nlevels() {
             let mut expected: Vec<MortonKey> = Vec::new();
             for (&key, &kind) in &map {

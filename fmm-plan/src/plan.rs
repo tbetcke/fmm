@@ -3,9 +3,8 @@
 //! [`Plan::new`] numbers every box the rank holds ([`BoxIndex`]) and builds the views of
 //! [`LevelLists`] for every level, from the octree's key classification alone. The
 //! lists come from the per-key rule of
-//! [`InteractionManager`](crate::interaction_manager::InteractionManager), shared with it
-//! unchanged, and are translated to indices at build time (design §4.1,
-//! `docs/design/fmm-plan-redesign.md`).
+//! [`interaction_manager`](crate::interaction_manager) and are translated to indices at
+//! build time (design §4.1, `docs/design/fmm-plan-redesign.md`).
 //!
 //! # Guarantees
 //!

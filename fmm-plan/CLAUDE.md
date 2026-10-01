@@ -7,45 +7,51 @@ adds only what is specific to this crate.
 
 `nd-fmm-plan` (Cargo package `nd-fmm-plan`, Rust crate `nd_fmm_plan`, Rust 2024) plans the
 **topology and data flow** of a fast multipole method on top of an
-`nd_octree::Octree`: the interaction lists, the ghost exchange, and the
-distributed evaluation order. It does **not** own point
-coordinates, kernel evaluations, or translation operators (M2M / M2L / L2L /
-near-field arithmetic) — analytical and kernel-independent FMMs are meant to
-share this layer. Keep kernel-specific arithmetic out.
+`nd_octree::Octree`: a Morton-ordered integer index of the boxes, the interaction lists
+as index arrays, the data stores and ghost exchanges, and the distributed evaluation
+order with a level-batched operator interface. It does **not** own point coordinates,
+kernel evaluations, or translation operators (M2M / M2L / L2L / near-field arithmetic)
+— analytical and kernel-independent FMMs are meant to share this layer. Keep
+kernel-specific arithmetic out. The design is `docs/design/fmm-plan-redesign.md`
+(signed off; the decisions are recorded in its §12).
 
-The one exception is `IndexFmm` in `src/fmm/index_fmm.rs`. It is a test FMM,
-not a real kernel: its operators propagate leaf indices so the distributed FMM
-topology workflow (upward and downward passes, the global levels, ghost
-exchanges, U/V/W/X lists) can be checked exactly. It is included only to test
-those workflows. Real FMM operators belong outside this crate and plug in
-through the `FmmOperator` trait.
+The one exception is the index FMM in `src/index_fmm.rs` (`IndexFmm`,
+`BatchedIndexFmm`). It is a test FMM, not a real kernel: its operators propagate leaf
+indices, with variable counts per leaf, so the distributed FMM topology workflow
+(upward and downward passes, the global levels, ghost exchanges, U/V/W/X lists) can be
+checked exactly. It is included only to test those workflows. Real FMM operators
+belong outside this crate (the Laplace operator in `nd-fmm-exec`) and plug in through
+the `FmmOperator` trait, or `PairOperator` with the `PerPair` adapter.
 
 - Library only, no binaries.
-- Version `0.1.0-dev`; the public API is unstable and partly unimplemented.
-- The `repository` field in `Cargo.toml` still points at the former standalone
-  repository `nd-project/nd-plan`, and `homepage` has a typo (`codeberg.com.com`).
+- Version `0.1.0-dev`; the public API is unstable. Redistribution of points to their
+  owning ranks is designed (design §9) but not implemented (C5.1).
 
 ## Code map
 
 | Path | Contents |
 | --- | --- |
-| `src/lib.rs` | Crate doc plus `pub mod fmm;`, `pub mod ghost_communicator;`, `pub mod interaction_manager;` and `pub mod v2;`. |
-| `src/interaction_manager.rs` | `InteractionManager` — U/V/W/X lists for every non-ghost key of an `Octree`, computed locally. See the section below. |
-| `src/v2.rs`, `src/v2/` | The redesigned plan (Phase 3, T4–T7), beside the old API until T7: `index.rs` (`BoxIndex`, `LeafNumbering`: Morton-ordered `u32` box indices per level, leaf numbering), `lists.rs` (`Csr`, `GroupedCsr` as `VList`/`Children`/`Parents`, `LevelLists`, `offset_index`), `plan.rs` (`Plan::new`, `Plan::from_key_types`, `PlanError`), `store.rs` (`LevelBuffers`, `LeafStore` and their slice types: one buffer per level kind, CSR leaf data with variable counts), `exchange.rs` (`SourceExchange`, `MultipoleExchange`, `CoarseExchange`, `ExchangeError`: variable-size source exchange into the ghost tail, per-level multipole exchange, coarse-block gather), `operator.rs` (`FmmSizes`, the level-batched `FmmOperator` with its batch types `P2m` … `P2p` and `UpwardPass`, the per-pair `PairOperator` and its `PerPair` adapter), `evaluator.rs` (`Evaluator`, `EvaluatorError`: the pass order on the plan, stores and exchanges, public stages, debug-checked stage order), `index_fmm.rs` (`IndexFmm` on `PairOperator`, `BatchedIndexFmm` with `Walk::{Rows, Groupings}`, `GlobalLeaves`, `check_counts`, `run_index_fmm` with `IndexPath`: the index FMM with variable counts). The per-key list rule is shared with `InteractionManager` through the private `interaction_manager::key_lists`. |
-| `src/v2/plan_tests.rs` | 12 serial unit tests of the index and the index-form lists against `InteractionManager` on the trees of `interaction_manager_tests.rs`, included via `#[path]`. No MPI. |
-| `src/v2/store_tests.rs`, `src/v2/exchange_tests.rs` | 9 serial unit tests of the store layouts and 6 of the ghost bucketing and per-key chunk sizes (on the trees of `plan_tests.rs`), included via `#[path]`. No MPI. |
-| `src/v2/operator_tests.rs`, `src/v2/index_fmm_tests.rs`, `src/v2/evaluator_tests.rs` | 3 serial unit tests of the `PerPair` adapter on hand-made batches, 7 of the index operators (adapter and both batched walks) on hand-made chunks with several points per leaf, and 4 of the evaluator passes (the full index FMM with variable counts on the ghost-free trees of `plan_tests.rs`, reset and repeat, call order, validation errors), included via `#[path]`. No MPI. |
-| `src/interaction_manager_tests.rs` | 9 serial unit tests on synthetic key maps (hand counts, brute-force oracle, adjacency, V-list directions), included via `#[path]`. No MPI. |
-| `src/ghost_communicator.rs` | `FmmGhostCommunicator<T>` — one rlst `GhostCommunicator<MortonKey>` per level with owned host send/receive buffers, built from the Morton keys of required ghosts (local and `Global` keys skipped) and a `LevelChunkSizes` (uniform or per level). |
-| `src/ghost_communicator_tests.rs` | 5 serial unit tests of the ghost bucketing and chunk-size lookup, included via `#[path]`. No MPI. |
-| `src/fmm.rs`, `src/fmm/` | Distributed FMM evaluation: the `FmmOperator` trait (`operator.rs`), the generic driver `FmmEvaluator` and per-level store `LevelData` (`evaluator.rs`), and the index-propagating test FMM `IndexFmm` / `run_index_fmm` (`index_fmm.rs`). Serial tests in `evaluator_tests.rs` and `index_fmm_tests.rs`. |
-| `tests/mpi_regressions.rs` | One `#[test]` that owns MPI init and runs 12 named scenarios sequentially. Each builds an `Octree` from the union of a source and a target point set (with the ghost-children layer) and checks the tree, the interaction lists against an oracle, and a forward/backward ghost exchange of every interaction-list ghost, and the index FMM (every leaf must receive every leaf index exactly once). Each scenario also builds a `v2::plan::Plan` and checks its index-form lists against the same oracle, with the view invariants, and runs the `v2::exchange` exchanges: sources with counts of one, `hash(key) % 5` and the real source points per leaf, multipoles with per-level sizes (ghost keys equal to the old communicator's), and the coarse gather. On the graded and the dense-leaf scenarios rank 0 prints the exchange traffic, old against new (`--nocapture`). Each scenario then runs the `v2::evaluator::Evaluator` with the index FMM: with counts of one it must equal the old evaluator on every leaf (per pair and both batched walks); with `hash(key) % 5` counts it must pass the count check on every path, give bit-identical values on a second evaluation and agree across the paths; and a recording operator checks the call order, the groupings of every batch and that every list pair of the old lists is issued exactly once. |
-| `examples/test_index_fmm.rs` | Seeded-random MPI run of the index FMM: the old evaluator, then the new one with random counts on every path. Registered for the weekly `run-examples` job. |
-| `examples/evaluator_stage_cost.rs` | Release-mode wall time per stage of the old and the new evaluator with the index FMM on a 10⁴-leaf tree, on one rank (T6 report; nothing asserted; about 1.3 GB per evaluator). |
-| `examples/plan_build_cost.rs` | Release-mode timing and heap use of `Plan::new` against `InteractionManager::new`, on one rank (T4 report; nothing asserted). |
+| `src/lib.rs` | Crate doc (module overview, the compute graph, future extensions) and the `pub mod` lines. |
+| `src/index.rs` | `BoxIndex`, `LeafNumbering`: Morton-ordered `u32` box indices per level for every held key (local, `Global`, ghost), and the leaf numbering (local leaves by (level, key), then the ghost leaves named by U or X, by key). |
+| `src/interaction_manager.rs` | `V_LIST_DIRECTIONS` (the 316 V-list offsets, CONVENTIONS §3.12) and the private per-key list rule `key_lists`, with its helpers. See the section below. |
+| `src/lists.rs` | `Csr`, `GroupedCsr` as `VList`/`Children`/`Parents`, `LevelLists` (the views of one level), `offset_index`, `NOFFSETS`, `NOCTANTS`. |
+| `src/plan.rs` | `Plan::new` (collective), `Plan::from_key_types` (local), `PlanError`. |
+| `src/store.rs` | `LevelBuffers`, `LeafStore` and their slice types: one buffer per level kind, CSR leaf data with variable counts. |
+| `src/exchange.rs` | `SourceExchange`, `MultipoleExchange`, `CoarseExchange`, `ExchangeError`: variable-size source exchange into the ghost tail, per-level multipole exchange, coarse-block gather. |
+| `src/operator.rs` | `FmmSizes`, the level-batched `FmmOperator` with its batch types `P2m` … `P2p` and `UpwardPass`, the per-pair `PairOperator` and its `PerPair` adapter. |
+| `src/evaluator.rs` | `Evaluator`, `EvaluatorError`: the pass order on the plan, stores and exchanges, public stages, debug-checked stage order. |
+| `src/index_fmm.rs` | `IndexFmm` on `PairOperator`, `BatchedIndexFmm` with `Walk::{Rows, Groupings}`, `GlobalLeaves`, `check_counts`, `run_index_fmm` with `IndexPath`. |
+| `src/interaction_manager_tests.rs` | 7 serial unit tests of the per-key rule on synthetic key maps (hand counts, W/X on a refined octant, brute-force oracle, invariants, adjacency, ghost classification, V-list offsets), through the test helper `ListMaps`, included via `#[path]`. No MPI. |
+| `src/plan_tests.rs` | 12 serial unit tests of the index and the index-form lists against `ListMaps` on the trees of `interaction_manager_tests.rs`. No MPI. |
+| `src/store_tests.rs`, `src/exchange_tests.rs` | 9 serial unit tests of the store layouts and 6 of the ghost bucketing and per-key chunk sizes (on the trees of `plan_tests.rs`). No MPI. |
+| `src/operator_tests.rs`, `src/index_fmm_tests.rs`, `src/evaluator_tests.rs` | 3 serial unit tests of the `PerPair` adapter on hand-made batches, 7 of the index operators (adapter and both batched walks) on hand-made chunks with several points per leaf, and 4 of the evaluator passes (the full index FMM with variable counts on the ghost-free trees of `plan_tests.rs`, reset and repeat, call order, validation errors). No MPI. |
+| `tests/mpi_regressions.rs` | One `#[test]` that owns MPI init and runs 12 named scenarios sequentially. Each builds an `Octree` from the union of a source and a target point set (with the ghost-children layer) and computes brute-force U/V/W/X lists of every non-ghost key over the gathered global tree (`oracle_lists`). It then builds a `Plan` and checks the numbering, the leaves, the index-form lists against the oracle and the view invariants; runs the exchanges (sources with counts of one, `hash(key) % 5` and the real source points per leaf; multipoles with per-level sizes, exactly the ghosts of the oracle's V- and W-lists; the coarse gather); and runs the `Evaluator` with the index FMM: with counts of one every leaf must receive every leaf index once, on every path; with `hash(key) % 5` counts it must pass the count check on every path, give bit-identical values on a second evaluation and agree across the paths; and a recording operator checks the call order, the groupings of every batch and that every oracle pair is issued exactly once. On the graded and the dense-leaf scenarios rank 0 prints the exchange traffic (`--nocapture`). |
+| `examples/test_index_fmm.rs` | Seeded-random MPI run of the index FMM, with one point per leaf and with random counts, on every path. Registered for the weekly `run-examples` job. |
+| `examples/evaluator_stage_cost.rs` | Release-mode wall time per stage of the evaluator with the index FMM, per pair and both batched walks, on a 10⁴-leaf tree, on one rank (nothing asserted; about 1.3 GB per evaluator). |
+| `examples/plan_build_cost.rs` | Release-mode timing and heap use of `Plan::new`, on one rank (nothing asserted). |
 
-Read `src/interaction_manager.rs`, `src/fmm/evaluator.rs` and `tests/mpi_regressions.rs` for
-how the API actually behaves; prose is a summary, they are the contract.
+Read `src/plan.rs`, `src/lists.rs`, `src/evaluator.rs` and `tests/mpi_regressions.rs`
+for how the API actually behaves; prose is a summary, they are the contract.
 
 ### Navigating the code
 
@@ -54,53 +60,48 @@ Follow the root navigation rules (LSP first; `rlst` sources in the registry cach
 crate's small source modules (plus their `*_tests.rs` files), reading a whole
 file beats either LSP or `grep`.
 
-## The interaction manager
+## The interaction lists
 
-`InteractionManager::new(&octree)` derives the U-, V-, W- and X-lists from
-`octree.all_keys()` alone. It is **local — no collectives** — so it may be
-called on any subset of ranks. The module doc in `src/interaction_manager.rs`
-is the contract; the points that matter most when changing it:
+`Plan::from_key_types` applies the private per-key rule `interaction_manager::key_lists`
+to every non-ghost key of `octree.all_keys()` and translates the lists to indices. The
+rule is **local — no collectives**; `Plan::new` adds two all-reduces (validation agreed
+on every rank). The module docs of `src/interaction_manager.rs` and `src/lists.rs` are
+the contract; the points that matter most when changing them:
 
-- **Entries exist for every non-ghost key** (`LocalLeaf`, `LocalInterior`,
-  `Global`) in all four maps. Inapplicable lists (U and W for interior boxes,
-  V and X at levels 0 and 1) are empty vectors, never missing entries. Ghost
-  keys get no entry. Every list is sorted ascending, deduplicated, and never
-  contains the box itself.
+- **Rows for every box.** A box view of level l has one row per held box of the level,
+  ghosts included (with empty rows); a leaf view has one row per local leaf of the
+  level. Inapplicable lists (U and W for interior boxes, V and X at levels 0 and 1)
+  are empty rows. Rows never contain the box itself, except the near list (U plus the
+  leaf itself, design §12 decision 1a).
 - **Adjacency** means the closed cubes share at least a vertex and neither box
   is an ancestor of the other. Boxes may be at different levels.
 - **It relies on the octree's guarantees**: complete, 2:1 balanced across all
-  26 directions, plus the one-cell same-level ghost halo. Those let it decide
+  26 directions, plus the one-cell same-level ghost halo. Those let the rule decide
   everything from a neighbour's leaf/interior classification and Morton
   arithmetic without looking children up. If `nd-octree` ever relaxes balance
-  or shrinks the halo, the `.expect`/`debug_assert`s in this module fire.
-- **Every listed key is a key of `all_keys`**, with its own `KeyType` — and,
-  for a ghost, its owner rank via `KeyType::ghost_rank`; a `Global` entry has no
-  single owner because it lives on every rank. This holds only when the
-  octree is built with `OctreeOptions::with_ghost_children(true)`, as the tests
-  and examples do; a tree built with default options does not give it. That
-  layer replicates the children of the interior boxes bordering the rank, which
-  is exactly what the V- and W-lists need. `InteractionManager::new` asserts it whenever
-  `octree.options().ghost_children()` is set; the assertion lives in `new`, not
-  in `from_key_types`, because `src/interaction_manager_tests.rs` drives
-  `from_key_types` with hand-built maps that need not satisfy the guarantee.
-- **Listed keys are routinely ghosts** — V and W entries are children of remote
-  neighbours. The manager provides topology only; any exchange of multipole or
-  particle data for those keys is the caller's job.
+  or shrinks the halo, the `.expect`/`debug_assert`s in the rule fire.
+- **Every listed key is a held key**, with its own `KeyType` — and, for a ghost, its
+  owner rank via `KeyType::ghost_rank`. This holds only when the octree is built with
+  `OctreeOptions::with_ghost_children(true)`; `Plan::new` returns
+  `PlanError::MissingGhostChildren` otherwise, and checks every entry, every child of a
+  non-ghost interior box and every own coarse block. `Plan::from_key_types` is what
+  `src/plan_tests.rs` drives with hand-built maps.
+- **Listed boxes are routinely ghosts** — V and W entries are children of remote
+  neighbours. `exchange` moves their data; the plan provides topology only.
 
 ## Dependencies
 
-- `nd-octree` is a path dependency on the workspace sibling `../octree`
-  (`nd-octree = { path = "../octree" }`). Keep it that way: do not switch to a
-  git or crates.io source, which can diverge from the workspace copy.
-- `rlst` 0.9.0 (feature `mpi`) comes from crates.io, as does `mpi` 0.8.2 (rsmpi).
-  The crate uses rlst's `distributed_tools::{GhostCommunicator,
-  GhostCommunicatorBuilder, ChunkSizes}` in `ghost_communicator.rs`, and
-  `distributed_tools::array_tools::gather_to_all` in `evaluator.rs`,
-  `index_fmm.rs` and the tests. Tests and examples also use `rlst_dynamic_array`
-  and `println_mpi`.
-- All dependencies are declared directly in this crate's `Cargo.toml`. The root
-  `[workspace.dependencies]` serves the new `nd-fmm-*` crates; migrating this crate
-  to it is a separate decision.
+- All dependencies come from the root `[workspace.dependencies]`, and the package
+  fields `edition`, `license`, `homepage` and `repository` from `[workspace.package]`.
+  The crate adds the features it needs: `rlst` with `mpi`, `mpi` with `complex` (the
+  workspace entry has `derive`).
+- `nd-octree` is the workspace path dependency on `../octree`. Keep it that way: do not
+  switch to a git or crates.io source, which can diverge from the workspace copy.
+- `rlst` 0.9.0 and `mpi` 0.8.2 (rsmpi) come from crates.io. The crate uses rlst's
+  `distributed_tools::{GhostCommunicator, GhostCommunicatorBuilder, ChunkSizes}` in
+  `exchange.rs`, and `distributed_tools::array_tools::gather_to_all` in `index_fmm.rs`
+  and the tests. Tests and examples also use `rlst_dynamic_array` and `println_mpi`;
+  `rand_chacha` is a dev-dependency.
 
 ## Crate checks
 
@@ -111,20 +112,20 @@ The root checks cover this crate. For this crate alone, add `-p nd-fmm-plan` (e.
 cargo run -p nd-fmm-plan --example test_index_fmm
 ```
 
-`cargo test -p nd-fmm-plan` gives 63 unit tests plus the integration test **on one rank
-only**. It exercises no redistribution and no ghost layer, which is where the
+`cargo test -p nd-fmm-plan` gives 48 unit tests plus the integration test **on one rank
+only**. It exercises no ghost exchange and no ghost layer, which is where the
 interesting bugs are.
 
 ### Multi-rank runs
 
-For any change touching the interaction manager, the ghost
-communicator or the FMM evaluator (whose ghost-dependent and global-level
-paths only exist on more than one rank), build the test binary and launch it under MPI:
+For any change touching the plan, the lists, the exchanges or the evaluator (whose
+ghost-dependent and global-level paths only exist on more than one rank), build the
+test binary and launch it under MPI, under an external timeout:
 
 ```sh
 cargo test -p nd-fmm-plan --test mpi_regressions --no-run   # note the executable path it prints
-RUST_MIN_STACK=8388608 mpiexec -n 2 target/debug/deps/mpi_regressions-<hash> --test-threads=1
-RUST_MIN_STACK=8388608 mpiexec -n 4 target/debug/deps/mpi_regressions-<hash> --test-threads=1
+RUST_MIN_STACK=8388608 timeout 600 mpiexec -n 2 target/debug/deps/mpi_regressions-<hash> --test-threads=1
+RUST_MIN_STACK=8388608 timeout 600 mpiexec -n 4 target/debug/deps/mpi_regressions-<hash> --test-threads=1
 ```
 
 Use the executable Cargo prints, not the sibling `.d` file, and note the hash
@@ -149,8 +150,7 @@ Octree fine keys must be valid Morton keys at level `DEEPEST_LEVEL` (16) —
 with `points_to_morton(&points, DEEPEST_LEVEL as usize, &bbox)`. Point arrays
 are `[3, npoints]`, one point per **column**; `PhysicalBox` is
 `[xmin, ymin, zmin, xmax, ymax, zmax]`. Build the octree with
-`OctreeOptions::with_ghost_children(true)` whenever interaction lists or the FMM
-evaluator are used.
+`OctreeOptions::with_ghost_children(true)`; `Plan::new` requires it.
 
 **MPI discipline.** The root MPI rules apply; several test scenarios exist precisely
 to cover empty and uneven ranks. `tests/mpi_regressions.rs` owns the one MPI
@@ -160,26 +160,29 @@ be assumed to work.
 
 ## Conventions
 
-- Match the existing module layout and rustdoc style.
+- Match the existing module layout and rustdoc style. Cite the design as
+  `design §x.y` (`docs/design/fmm-plan-redesign.md`) and conventions as
+  `CONVENTIONS §3.x`.
 - Keep topology tests deterministic and free of translation operators. Serial
   helper tests go next to the helpers (`src/*_tests.rs`, included with `#[path]`);
-  anything needing redistribution goes in `tests/` or `examples/`.
-- Existing coverage: interaction lists — serial: hand-counted U/V sizes on a uniform level-2 tree,
-  W/X on a one-octant-refined tree, a brute-force geometric oracle on adaptive
-  trees, list invariants, the adjacency helper, and ghost classification;
-  multi-rank: every `tests/mpi_regressions.rs` scenario compares all four lists of every
-  local non-ghost key against a brute-force oracle over the gathered global tree,
-  and checks that every list entry is a key of `all_keys`. Most scenarios only
-  reach leaf level 3; `graded corner blob` adds a dense corner at leaf level 6
-  against coarse remote neighbours, and `dense max-level leaf` puts 1,000 duplicate
-  points into one leaf at `max_level`, so one source chunk dwarfs the others. Every
-  scenario also runs a forward/backward ghost exchange, the `v2` exchanges and the
-  index FMM. Scenarios cover refinement caps, duplicate keys, empty populations, and
-  uneven and empty ranks.
+  anything needing MPI goes in `tests/` or `examples/`.
+- Existing coverage: interaction lists — serial: hand-counted U/V sizes on a uniform
+  level-2 tree, W/X on a one-octant-refined tree, a brute-force geometric oracle on
+  adaptive trees, list invariants, the adjacency helper, ghost classification, and the
+  index-form views against the per-key rule; multi-rank: every
+  `tests/mpi_regressions.rs` scenario compares all four index-form lists of every local
+  non-ghost box against a brute-force oracle over the gathered global tree. Most
+  scenarios only reach leaf level 3; `graded corner blob` adds a dense corner at leaf
+  level 6 against coarse remote neighbours, and `dense max-level leaf` puts 1,000
+  duplicate points into one leaf at `max_level`, so one source chunk dwarfs the others.
+  Every scenario also runs the exchanges and the index FMM on every path. Scenarios
+  cover refinement caps, duplicate keys, empty populations, and uneven and empty ranks.
 - Add new `tests/mpi_regressions.rs` scenarios to the existing `cases` array rather
-  than as new `#[test]` functions, so MPI ownership stays with one test.
-- Preserve in-progress work and the local `../octree` path dependency unless
-  asked to change them.
-- Phase 3 rewrites this crate (docs/phase3/README.md, T1 and T4–T7; design in
-  docs/design/fmm-plan-redesign.md once T1 lands). Until T7, add the new modules beside
-  the old ones and keep the old API working as the reference.
+  than as new `#[test]` functions, so MPI ownership stays with one test. The scenario
+  set must not shrink.
+- Keep the local `../octree` path dependency unless asked to change it.
+- Phase 3 rebuilt this crate (docs/phase3/README.md, T1 and T4–T7): the old map-based
+  API (`InteractionManager`, `FmmGhostCommunicator`, `FmmEvaluator`, `LevelData`, the
+  per-pair `FmmOperator`) was removed in T7, after T6 showed that the new evaluator
+  reproduces it on every scenario. Changes now go to the code as it is; there is no
+  parallel reference implementation to keep.

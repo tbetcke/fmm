@@ -1,8 +1,56 @@
 //! Pure local tests; the interaction lists are built without MPI from synthetic
 //! key classification maps.
-use super::{InteractionManager, V_LIST_DIRECTIONS, is_adjacent};
+use super::{V_LIST_DIRECTIONS, is_adjacent, key_lists};
 use nd_octree::{MortonKey, constants::DEEPEST_LEVEL, morton, octree::KeyType};
 use std::collections::HashMap;
+
+/// The four lists of every non-ghost key of a key map, by the per-key rule, as maps from
+/// key to list. The reference that the index-form lists of `Plan` are checked against.
+pub(crate) struct ListMaps {
+    u_list: HashMap<MortonKey, Vec<MortonKey>>,
+    v_list: HashMap<MortonKey, Vec<MortonKey>>,
+    w_list: HashMap<MortonKey, Vec<MortonKey>>,
+    x_list: HashMap<MortonKey, Vec<MortonKey>>,
+}
+
+impl ListMaps {
+    /// Apply [`key_lists`] to every non-ghost key of `all_keys`.
+    pub(crate) fn new(all_keys: &HashMap<MortonKey, KeyType>) -> Self {
+        let mut lists = Self {
+            u_list: HashMap::new(),
+            v_list: HashMap::new(),
+            w_list: HashMap::new(),
+            x_list: HashMap::new(),
+        };
+        for (&key, &key_type) in all_keys.iter() {
+            if key_type.is_ghost() {
+                continue;
+            }
+            let [u, v, w, x] = key_lists(key, key_type, all_keys);
+            lists.u_list.insert(key, u);
+            lists.v_list.insert(key, v);
+            lists.w_list.insert(key, w);
+            lists.x_list.insert(key, x);
+        }
+        lists
+    }
+
+    pub(crate) fn u_list(&self) -> &HashMap<MortonKey, Vec<MortonKey>> {
+        &self.u_list
+    }
+
+    pub(crate) fn v_list(&self) -> &HashMap<MortonKey, Vec<MortonKey>> {
+        &self.v_list
+    }
+
+    pub(crate) fn w_list(&self) -> &HashMap<MortonKey, Vec<MortonKey>> {
+        &self.w_list
+    }
+
+    pub(crate) fn x_list(&self) -> &HashMap<MortonKey, Vec<MortonKey>> {
+        &self.x_list
+    }
+}
 
 /// All cells of a uniformly refined tree at the given level.
 pub(crate) fn uniform_leaves(level: usize) -> Vec<MortonKey> {
@@ -202,7 +250,7 @@ fn level_one_keys() -> Vec<MortonKey> {
 #[test]
 fn uniform_level_two_tree_matches_hand_counts() {
     let leaves = uniform_leaves(2);
-    let lists = InteractionManager::from_key_types(&key_types(&leaves));
+    let lists = ListMaps::new(&key_types(&leaves));
 
     // A corner, a face, an edge and an interior box of the 4x4x4 grid. The
     // U-count is the in-domain closed 3x3x3 neighbourhood minus the box itself,
@@ -238,7 +286,7 @@ fn uniform_level_two_tree_matches_hand_counts() {
 #[test]
 fn one_refined_octant_gives_expected_w_and_x() {
     let leaves = refined_octant_leaves();
-    let lists = InteractionManager::from_key_types(&key_types(&leaves));
+    let lists = ListMaps::new(&key_types(&leaves));
     let child = |index: [usize; 3]| morton::from_index_and_level(index, 2);
     let octant = |index: [usize; 3]| morton::from_index_and_level(index, 1);
 
@@ -311,7 +359,7 @@ fn lists_match_brute_force_oracle_on_adaptive_trees() {
     // Count non-empty lists so that the comparison cannot pass vacuously.
     let mut populated = [0usize; 4];
     for leaves in all_trees() {
-        let lists = InteractionManager::from_key_types(&key_types(&leaves));
+        let lists = ListMaps::new(&key_types(&leaves));
         let oracle = Oracle::new(&leaves);
         for &key in &oracle.keys {
             let expected = [oracle.u(key), oracle.v(key), oracle.w(key), oracle.x(key)];
@@ -334,7 +382,7 @@ fn lists_match_brute_force_oracle_on_adaptive_trees() {
 fn invariants_hold() {
     for leaves in all_trees() {
         let all_keys = key_types(&leaves);
-        let lists = InteractionManager::from_key_types(&all_keys);
+        let lists = ListMaps::new(&all_keys);
         for map in [
             lists.u_list(),
             lists.v_list(),
@@ -401,7 +449,7 @@ fn adjacency_helper() {
 fn ghost_classification_is_respected() {
     let leaves = uniform_leaves(2);
     let local = key_types(&leaves);
-    let reference = InteractionManager::from_key_types(&local);
+    let reference = ListMaps::new(&local);
 
     // Pretend the slab with the largest x-index belongs to another rank. The
     // lists depend only on the leaf/interior classification, not on ownership.
@@ -419,7 +467,7 @@ fn ghost_classification_is_respected() {
     let ghost_count = mixed.values().filter(|value| value.is_ghost()).count();
     assert_eq!(ghost_count, 16 + 4);
 
-    let lists = InteractionManager::from_key_types(&mixed);
+    let lists = ListMaps::new(&mixed);
     for (&key, &key_type) in mixed.iter() {
         for (map, map_reference) in [
             (lists.u_list(), reference.u_list()),
@@ -452,56 +500,4 @@ fn v_list_directions_are_complete() {
     // The expected list is generated in lexicographic order, so equality also
     // checks that the constant is sorted and free of duplicates.
     assert_eq!(V_LIST_DIRECTIONS.to_vec(), expected);
-}
-
-#[test]
-fn v_list_by_direction_matches_v_list() {
-    for leaves in all_trees() {
-        let lists = InteractionManager::from_key_types(&key_types(&leaves));
-        let depth = leaves
-            .iter()
-            .map(|&leaf| morton::level(leaf))
-            .max()
-            .unwrap();
-        for level in 0..=depth + 1 {
-            let by_direction = lists.v_list_by_direction(level);
-            assert_eq!(by_direction.len(), V_LIST_DIRECTIONS.len());
-
-            let mut pair_count = 0;
-            for direction in V_LIST_DIRECTIONS {
-                let pairs = &by_direction[&direction];
-                assert!(pairs.is_sorted());
-                for &(target, source) in pairs {
-                    assert_eq!(morton::level(target), level);
-                    assert!(lists.v_list()[&target].contains(&source));
-                    let (_, target_index) = morton::decode(target);
-                    let (_, source_index) = morton::decode(source);
-                    let offset =
-                        [0, 1, 2].map(|dim| target_index[dim] as i64 - source_index[dim] as i64);
-                    assert_eq!(offset, direction);
-                }
-                pair_count += pairs.len();
-            }
-
-            let expected_count: usize = lists
-                .v_list()
-                .iter()
-                .filter(|&(&target, _)| morton::level(target) == level)
-                .map(|(_, sources)| sources.len())
-                .sum();
-            assert_eq!(pair_count, expected_count);
-        }
-    }
-}
-
-#[test]
-fn every_v_list_direction_occurs() {
-    let lists = InteractionManager::from_key_types(&key_types(&uniform_leaves(3)));
-    let by_direction = lists.v_list_by_direction(3);
-    for direction in V_LIST_DIRECTIONS {
-        assert!(
-            !by_direction[&direction].is_empty(),
-            "direction {direction:?} has no interaction"
-        );
-    }
 }

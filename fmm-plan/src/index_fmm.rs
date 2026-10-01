@@ -12,8 +12,7 @@
 //!
 //! If the FMM visits every pair of leaves exactly once, every target point of every leaf
 //! holds, at index j, exactly the number of source points of leaf j ([`check_counts`]).
-//! With one point per leaf this is the check of the old
-//! [`index_fmm`](crate::fmm::index_fmm): a count of one at every index. A missed
+//! With one point per leaf the check is a count of one at every index. A missed
 //! interaction leaves too small a count, an interaction counted twice too large a one.
 //!
 //! **Zero counts hide defects.** A leaf without source points contributes zero
@@ -395,9 +394,7 @@ impl FmmOperator for BatchedIndexFmm {
 ///
 /// The ranks hold consecutive ranges of the Morton order, so the global index of a local
 /// leaf is the number of leaves on lower ranks plus its position in this rank's Morton
-/// order. This is the numbering of
-/// [`global_leaf_indices`](crate::fmm::index_fmm::global_leaf_indices), so both index
-/// FMMs give the same target vectors.
+/// order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GlobalLeaves {
     nleaves: usize,

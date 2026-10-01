@@ -1,11 +1,71 @@
-//! A library to generate FMM plans
+//! A library to generate FMM plans.
 //!
-//! [`interaction_manager`] derives the U-, V-, W- and X-lists of the boxes of
-//! an octree, and [`ghost_communicator`] exchanges the data of ghost boxes between
-//! ranks. [`fmm`] runs a distributed FMM on top of them. [`v2`] holds the
-//! redesigned, index-based plan that replaces them during Phase 3.
+//! `nd-fmm-plan` plans the topology and data flow of a distributed fast multipole method
+//! on an [`nd_octree::Octree`]: which boxes interact, in which order, and when data
+//! crosses ranks. It owns no kernel arithmetic; translation operators plug in through
+//! [`operator::FmmOperator`]. The design is `docs/design/fmm-plan-redesign.md`.
+//!
+//! - [`index`]: every box a rank holds gets a dense, Morton-ordered `u32` index per
+//!   level, and every leaf it needs a leaf index ([`index::BoxIndex`]).
+//! - [`lists`]: the U-, V-, W- and X-lists and the parent/child relations as index
+//!   arrays, held once per target (CSR) and once grouped by V-list offset or child
+//!   octant; [`interaction_manager`] holds the 316 V-list offsets
+//!   ([`V_LIST_DIRECTIONS`](interaction_manager::V_LIST_DIRECTIONS)) and the per-key
+//!   list rule.
+//! - [`plan`]: [`Plan`](plan::Plan) builds the index and the lists of every level from
+//!   an octree.
+//! - [`store`]: the data of an evaluation, one buffer per level and kind for
+//!   multipoles and locals, and CSR leaf stores with variable counts per leaf.
+//! - [`exchange`]: the ghost exchanges of sources and multipoles, and the gather of the
+//!   coarse blocks for the global upward pass.
+//! - [`operator`]: the level-batched operator interface, with a per-pair adapter.
+//! - [`evaluator`]: [`Evaluator`](evaluator::Evaluator) runs the distributed pass order
+//!   on a plan, its stores and its exchanges.
+//! - [`index_fmm`]: a test FMM that propagates leaf indices instead of numbers, which
+//!   checks the complete distributed compute graph without any numerical error.
+//!
+//! # Compute graph
+//!
+//! [`Evaluator::evaluate`](evaluator::Evaluator::evaluate) runs the following stages in
+//! order. Stages marked *collective* must be entered by every rank of the communicator
+//! in the same order. Every operator call receives one level of one kind, with both
+//! views of its lists: the target-centric rows and the groupings by offset or octant.
+//!
+//! 1. **Source exchange** (collective). The source data of every ghost leaf in a U- or
+//!    X-list is fetched from its owner, with variable counts per leaf, in one exchange
+//!    for all levels.
+//! 2. **Local upward pass.** From the deepest level up: `p2m` on the local leaves of the
+//!    level, then `m2m` from the level into the local interior boxes of its parent
+//!    level. A local interior box has all its children on the local rank, so no
+//!    communication is needed.
+//! 3. **Global upward pass** (collective). The multipoles of the coarse blocks of all
+//!    ranks are gathered on every rank, and every rank computes the multipoles of the
+//!    [`Global`](nd_octree::octree::KeyType::Global) boxes itself, with `m2m` of the
+//!    global pass, deepest level first.
+//! 4. **Multipole exchange** (collective). The multipole of every ghost box in a V- or
+//!    W-list is fetched from its owner, one exchange per level.
+//! 5. **Downward pass.** Level by level from level 1: `l2l` from the parents, `m2l` over
+//!    the V-list and `p2l` over the X-list. The locals of the `Global` boxes are
+//!    computed redundantly on every rank, so no communication is needed.
+//! 6. **Leaf evaluation.** Level by level: `l2p`, `m2p` over the W-list, and `p2p` over
+//!    the near list (the U-list and the leaf itself) of the local leaves.
+//!
+//! The [`evaluator`] module documents the calls, the collectives and the accumulation
+//! order of every value.
+//!
+//! # Future extensions
+//!
+//! - Overlapping the exchanges with the computation that does not need ghost data
+//!   (design §10).
+//! - Device-resident data: the views are flat index arrays and the stores flat buffers,
+//!   so both can be uploaded once (design §10).
 
-pub mod fmm;
-pub mod ghost_communicator;
+pub mod evaluator;
+pub mod exchange;
+pub mod index;
+pub mod index_fmm;
 pub mod interaction_manager;
-pub mod v2;
+pub mod lists;
+pub mod operator;
+pub mod plan;
+pub mod store;

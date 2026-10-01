@@ -1,11 +1,16 @@
-//! A manager for interactions of boxes.
+//! The interaction-list rule and the V-list offsets.
 //!
-//! The interaction manager stores, for every non-ghost key of an [`Octree`], the
-//! four classical FMM interaction lists. Two boxes are *adjacent* if their closed
-//! cubes intersect, that is if they share at least a vertex, an edge or a face,
-//! **and** neither box is an ancestor of the other. In particular a box is never
-//! adjacent to itself and the root box is adjacent to nothing. Boxes of different
-//! levels may be adjacent.
+//! This module defines the four classical FMM interaction lists of a box, and computes
+//! them for one key of a key map (the private `key_lists`). [`Plan`](crate::plan::Plan)
+//! applies that rule to every non-ghost key of an [`Octree`](nd_octree::Octree) and stores the result as
+//! index arrays ([`lists`](crate::lists)). [`V_LIST_DIRECTIONS`] lists the 316 offsets of
+//! a V-list pair, in the order that the offset index of a V-list batch refers to
+//! (CONVENTIONS §3.12).
+//!
+//! Two boxes are *adjacent* if their closed cubes intersect, that is if they share at
+//! least a vertex, an edge or a face, **and** neither box is an ancestor of the other.
+//! In particular a box is never adjacent to itself and the root box is adjacent to
+//! nothing. Boxes of different levels may be adjacent.
 //!
 //! For a box `B` with parent `P` the lists are
 //!
@@ -22,24 +27,14 @@
 //!   X-list is the dual of the W-list, that is `N` is in the X-list of `B` if and
 //!   only if `B` is in the W-list of `N`.
 //!
-//! These lists are stored as hash maps from a Morton key to the sorted vector of
-//! the keys of the corresponding list.
-//!
-//! For translation-invariant kernels the V-list interactions of a level can be
-//! grouped by their offset `target - source`. [`V_LIST_DIRECTIONS`] lists all
-//! 316 possible offsets and [`InteractionManager::v_list_by_direction`] returns
-//! the `(target, source)` pairs of a level grouped by offset.
-//!
 //! # Guarantees
 //!
-//! - Construction is purely **local**. No MPI collective is used, so a rank may
-//!   build its interaction lists at any time and independently of other ranks.
-//! - There is an entry in **all four** maps for **every** non-ghost key of
-//!   [`Octree::all_keys`](nd_octree::Octree::all_keys), that is for every
-//!   [`KeyType::LocalLeaf`], [`KeyType::LocalInterior`] and [`KeyType::Global`]
-//!   key. A list that does not apply is present as an empty vector, never as a
-//!   missing entry. Ghost keys receive no entry.
-//! - Every list is sorted in ascending order, contains no duplicates and never
+//! - The rule is purely **local**: it reads only the key map
+//!   ([`Octree::all_keys`](nd_octree::Octree::all_keys)) and uses no MPI collective.
+//! - Lists are computed for non-ghost keys ([`KeyType::LocalLeaf`],
+//!   [`KeyType::LocalInterior`] and [`KeyType::Global`]). A list that does not apply is
+//!   empty.
+//! - Every list is sorted in ascending key order, contains no duplicates and never
 //!   contains the key it belongs to.
 //!
 //! # What the lists are, and are not
@@ -50,43 +45,27 @@
 //! every listed key is a key of
 //! [`Octree::all_keys`](nd_octree::Octree::all_keys), carrying its own
 //! [`KeyType`]. That layer is what makes the entries of the V- and W-lists,
-//! which are children of neighbouring boxes, resolvable locally.
-//! [`InteractionManager::new`] accepts any [`Octree`], however, and on a tree
-//! built with [`OctreeOptions::default`](nd_octree::OctreeOptions::default) some
-//! V- and W-list entries are generally absent from the key map.
+//! which are children of neighbouring boxes, resolvable locally;
+//! [`Plan::new`](crate::plan::Plan::new) requires it.
 //!
-//! The listed keys are keys of the *global* tree, so many of them are ghosts of
-//! the local rank. The manager provides topology only; moving the multipole or
-//! particle data associated with those boxes to this rank remains the
-//! responsibility of the caller.
-//!
-//! To learn which rank owns a listed key — the usual reason for wanting a V- or
-//! W-list entry resolved — look the key up in
-//! [`Octree::all_keys`](nd_octree::Octree::all_keys) and read
-//! [`KeyType::ghost_rank`]. A [`KeyType::GhostLeaf`] or
-//! [`KeyType::GhostInterior`] names its owning rank; a [`KeyType::LocalLeaf`] or
-//! [`KeyType::LocalInterior`] key belongs to this rank; and a
-//! [`KeyType::Global`] key has no single owner, since it exists on every rank.
-//! [`Octree::owner_rank`](nd_octree::Octree::owner_rank) does **not** work for
-//! these keys: it rejects anything that is not at the finest level, whereas list
-//! entries are boxes at arbitrary levels.
+//! The listed keys are keys of the *global* tree, so many of them are ghosts of the
+//! local rank. A [`KeyType::GhostLeaf`] or [`KeyType::GhostInterior`] names its owning
+//! rank ([`KeyType::ghost_rank`]); a [`KeyType::Global`] key has no single owner, since
+//! it exists on every rank. The rule provides topology only; moving the data of those
+//! boxes is the job of [`exchange`](crate::exchange).
 //!
 //! # Requirements on the tree
 //!
 //! The reductions used here rely on the tree being complete and 2:1 balanced
 //! across all 26 neighbour directions, and on the ghost layer being a one-cell
-//! same-level halo, as guaranteed by [`Octree`]. Together these imply that every
+//! same-level halo, as guaranteed by [`Octree`](nd_octree::Octree). Together these imply that every
 //! same-level neighbour cell of an interior box exists in the tree, and that two
 //! adjacent leaves differ by at most one level.
 //!
 //! Resolvability of the list entries additionally requires the ghost-children
-//! layer, that is a tree built with
-//! [`OctreeOptions::with_ghost_children`](nd_octree::OctreeOptions::with_ghost_children):
-//! for every non-ghost key and every same-level neighbour cell of it that the
+//! layer: for every non-ghost key and every same-level neighbour cell of it that the
 //! tree holds as an interior box, all eight children of that neighbour must be
-//! keys of the tree. [`InteractionManager::new`] checks the resulting lists
-//! against [`Octree::all_keys`](nd_octree::Octree::all_keys) whenever the tree
-//! reports that layer.
+//! keys of the tree.
 
 #[cfg(test)]
 #[path = "interaction_manager_tests.rs"]
@@ -94,8 +73,7 @@ pub(crate) mod tests;
 
 use std::collections::HashMap;
 
-use mpi::traits::CommunicatorCollectives;
-use nd_octree::{MortonKey, Octree, morton, octree::KeyType};
+use nd_octree::{MortonKey, morton, octree::KeyType};
 
 /// Offsets `target - source` of every possible V-list interaction in three
 /// dimensions, in lexicographic `(x, y, z)` order.
@@ -431,168 +409,10 @@ pub const V_LIST_DIRECTIONS: [[i64; 3]; 316] = [
     [3, 3, 3],
 ];
 
-/// Manages interaction lists for boxes in an octree structure.
-///
-/// The interaction manager organizes boxes into different interaction
-/// categories. See the [module documentation](self) for the precise definitions
-/// and for the guarantees the lists satisfy.
-pub struct InteractionManager {
-    /// Maps each non-ghost key to the leaves adjacent to it (U-list).
-    u_list: HashMap<MortonKey, Vec<MortonKey>>,
-
-    /// Maps each non-ghost key to the boxes on its own level whose parent is
-    /// adjacent to its parent and that are not adjacent to it (V-list).
-    v_list: HashMap<MortonKey, Vec<MortonKey>>,
-
-    /// Maps each non-ghost key to the leaves on the level of its parent, that is
-    /// the same-level neighbours of the parent, that are not adjacent to it
-    /// (X-list).
-    x_list: HashMap<MortonKey, Vec<MortonKey>>,
-
-    /// Maps each non-ghost key to the finer boxes whose parent is adjacent to it
-    /// and that are not adjacent to it (W-list).
-    w_list: HashMap<MortonKey, Vec<MortonKey>>,
-}
-
-impl InteractionManager {
-    /// Create a new `InteractionManager` from an octree.
-    ///
-    /// Computes the U-, V-, W- and X-lists of every non-ghost key of
-    /// `octree`. The computation is local to this rank and uses **no**
-    /// collective operation, so it need not be entered by all ranks.
-    ///
-    /// # Arguments
-    ///
-    /// * `octree` - The distributed octree whose local keys are classified.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `octree` was built with the ghost-children layer but a list
-    /// entry is not a key of
-    /// [`Octree::all_keys`](nd_octree::Octree::all_keys), which would mean the
-    /// layer did not deliver its guarantee.
-    pub fn new<C: CommunicatorCollectives>(octree: &Octree<'_, C>) -> Self {
-        let all_keys = octree.all_keys();
-        let manager = Self::from_key_types(all_keys);
-
-        // The guarantee only holds for a tree that carries the ghost-children
-        // layer, so a tree built without it is left unchecked.
-        if octree.options().ghost_children() {
-            for map in [
-                &manager.u_list,
-                &manager.v_list,
-                &manager.w_list,
-                &manager.x_list,
-            ] {
-                for entry in map.values().flatten() {
-                    assert!(
-                        all_keys.contains_key(entry),
-                        "the ghost-children layer must make every list entry a key of the tree"
-                    );
-                }
-            }
-        }
-
-        manager
-    }
-
-    /// Return the U-lists, keyed by the non-ghost keys of the tree.
-    pub fn u_list(&self) -> &HashMap<MortonKey, Vec<MortonKey>> {
-        &self.u_list
-    }
-
-    /// Return the V-lists, keyed by the non-ghost keys of the tree.
-    pub fn v_list(&self) -> &HashMap<MortonKey, Vec<MortonKey>> {
-        &self.v_list
-    }
-
-    /// Return the W-lists, keyed by the non-ghost keys of the tree.
-    pub fn w_list(&self) -> &HashMap<MortonKey, Vec<MortonKey>> {
-        &self.w_list
-    }
-
-    /// Return the X-lists, keyed by the non-ghost keys of the tree.
-    pub fn x_list(&self) -> &HashMap<MortonKey, Vec<MortonKey>> {
-        &self.x_list
-    }
-
-    /// Group the V-list interactions of the targets on `level` by direction.
-    ///
-    /// Returns a map from each direction `d` of [`V_LIST_DIRECTIONS`] to the
-    /// pairs `(target, source)` with `target` a non-ghost key on `level`,
-    /// `source` in the V-list of `target`, and `index(target) - index(source)`
-    /// equal to `d`. Every direction is present, possibly with an empty vector,
-    /// and every vector is sorted by target and then by source.
-    pub fn v_list_by_direction(
-        &self,
-        level: usize,
-    ) -> HashMap<[i64; 3], Vec<(MortonKey, MortonKey)>> {
-        let mut by_direction: HashMap<[i64; 3], Vec<(MortonKey, MortonKey)>> = V_LIST_DIRECTIONS
-            .iter()
-            .map(|&direction| (direction, Vec::new()))
-            .collect();
-
-        for (&target, sources) in self.v_list.iter() {
-            if morton::level(target) != level {
-                continue;
-            }
-            let (_, target_index) = morton::decode(target);
-            for &source in sources {
-                let (_, source_index) = morton::decode(source);
-                let direction =
-                    [0, 1, 2].map(|dim| target_index[dim] as i64 - source_index[dim] as i64);
-                by_direction
-                    .get_mut(&direction)
-                    .expect("a V-list offset is one of V_LIST_DIRECTIONS")
-                    .push((target, source));
-            }
-        }
-
-        for pairs in by_direction.values_mut() {
-            pairs.sort_unstable();
-        }
-
-        by_direction
-    }
-
-    /// Build all four lists from a key classification map.
-    ///
-    /// Requires the map to describe a complete, 2:1 (26-neighbour) balanced tree
-    /// together with its one-cell same-level ghost halo, as
-    /// [`Octree::all_keys`](nd_octree::Octree::all_keys) provides.
-    pub(crate) fn from_key_types(all_keys: &HashMap<MortonKey, KeyType>) -> Self {
-        let mut u_list = HashMap::<MortonKey, Vec<MortonKey>>::new();
-        let mut v_list = HashMap::<MortonKey, Vec<MortonKey>>::new();
-        let mut w_list = HashMap::<MortonKey, Vec<MortonKey>>::new();
-        let mut x_list = HashMap::<MortonKey, Vec<MortonKey>>::new();
-
-        // Each key is treated independently, so the iteration order of the map
-        // does not matter.
-        for (&key, &key_type) in all_keys.iter() {
-            if key_type.is_ghost() {
-                continue;
-            }
-
-            let [u, v, w, x] = key_lists(key, key_type, all_keys);
-            u_list.insert(key, u);
-            v_list.insert(key, v);
-            w_list.insert(key, w);
-            x_list.insert(key, x);
-        }
-
-        Self {
-            u_list,
-            v_list,
-            x_list,
-            w_list,
-        }
-    }
-}
-
 /// Compute the U-, V-, W- and X-lists of the non-ghost `key`, in that order.
 ///
-/// This is the per-key rule shared by [`InteractionManager`] and
-/// [`crate::v2::plan::Plan`]. Each list is sorted ascending and deduplicated.
+/// This is the per-key rule that [`Plan`](crate::plan::Plan) applies to every non-ghost
+/// key. Each list is sorted ascending and deduplicated.
 /// The rule requires `all_keys` to describe a complete, 2:1 (26-neighbour)
 /// balanced tree together with its one-cell same-level ghost halo, as
 /// [`Octree::all_keys`](nd_octree::Octree::all_keys) provides; it panics if a

@@ -36,9 +36,9 @@
 //!   `local_leaves(l).start + r`, so the rows line up with the CSR offsets of a leaf
 //!   store restricted to that range.
 //! - **The lists are those of the per-key rule.** For every non-ghost box, `v`, `w`, `x`
-//!   and `near` minus the box itself hold exactly its V-, W-, X- and U-list of
-//!   [`InteractionManager`](crate::interaction_manager::InteractionManager), translated
-//!   to indices. Ghost boxes have empty rows in every view.
+//!   and `near` minus the box itself hold exactly its V-, W-, X- and U-list of the
+//!   per-key rule of [`interaction_manager`](crate::interaction_manager), translated to
+//!   indices. Ghost boxes have empty rows in every view.
 //! - **Entry levels.** V entries lie on l, W entries on l + 1, X entries on l − 1 and U
 //!   entries on l − 1, l or l + 1 (2:1 balance). V and W entries are boxes of any kind,
 //!   U and X entries are leaves.

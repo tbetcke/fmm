@@ -1,5 +1,5 @@
-//! Measure the wall time per stage of the old and the new evaluator with the index FMM,
-//! on one rank.
+//! Measure the wall time per stage of the evaluator with the index FMM, per pair and
+//! batched with both walks, on one rank.
 //!
 //! The tree holds uniform random points, about 10⁴ leaves by default. The index FMM
 //! stores one count per leaf in every coefficient and target point, so each evaluator
@@ -13,23 +13,16 @@ use std::time::Instant;
 
 use mpi::traits::CommunicatorCollectives;
 use nd_fmm_plan::{
-    fmm::{
-        evaluator::FmmEvaluator,
-        index_fmm::{IndexFmm as OldIndexFmm, check_targets, global_leaf_indices},
-    },
-    interaction_manager::InteractionManager,
-    v2::{
-        evaluator::Evaluator,
-        index_fmm::{BatchedIndexFmm, GlobalLeaves, IndexFmm, Walk, check_counts},
-        operator::{FmmOperator, PerPair},
-        plan::Plan,
-    },
+    evaluator::Evaluator,
+    index_fmm::{BatchedIndexFmm, GlobalLeaves, IndexFmm, Walk, check_counts},
+    operator::{FmmOperator, PerPair},
+    plan::Plan,
 };
 use nd_octree::{Octree, OctreeOptions, PhysicalBox, constants::DEEPEST_LEVEL, points_to_morton};
 use rand_chacha::{ChaCha8Rng, rand_core::SeedableRng};
 use rlst::rlst_dynamic_array;
 
-/// The stages of both evaluators, in order.
+/// The stages of the evaluator, in order.
 const STAGES: [&str; 7] = [
     "reset",
     "exchange_sources",
@@ -47,9 +40,9 @@ fn time(f: impl FnOnce()) -> f64 {
     start.elapsed().as_secs_f64() * 1e3
 }
 
-/// The best of `repeats` timings of every stage of the new evaluator with `operator`,
-/// and the construction time.
-fn new_evaluator<C: CommunicatorCollectives, Op: FmmOperator<Value = u32>>(
+/// The best of `repeats` timings of every stage of the evaluator with `operator`, and
+/// the construction time.
+fn stage_times<C: CommunicatorCollectives, Op: FmmOperator<Value = u32>>(
     plan: &Plan,
     comm: &C,
     operator: Op,
@@ -107,85 +100,37 @@ fn main() {
         octree.global_max_level() + 1
     );
 
-    // The old evaluator. It has no public reset; `evaluate` clears first, and the stages
-    // are timed after it, on uncleared data, which costs the same.
     let mut rows = Vec::new();
-    {
-        let lists = InteractionManager::new(&octree);
-        let (n, indices) = global_leaf_indices(&octree);
-        let mut evaluator = None;
-        let build = time(|| {
-            evaluator = Some(FmmEvaluator::new(&octree, &lists, OldIndexFmm::new(n)));
-        });
-        let mut evaluator = evaluator.unwrap();
-        for (&leaf, &index) in octree.leaf_keys().iter().zip(&indices) {
-            evaluator.sources_mut(leaf)[0] = index;
-        }
-        let reset = time(|| evaluator.evaluate());
-        check_targets(&evaluator).unwrap();
-        let mut best = [f64::INFINITY; 7];
-        for _ in 0..repeats {
-            let times = [
-                f64::NAN,
-                time(|| evaluator.exchange_sources()),
-                time(|| evaluator.upward_local()),
-                time(|| evaluator.upward_global()),
-                time(|| evaluator.exchange_multipoles()),
-                time(|| evaluator.downward()),
-                time(|| evaluator.evaluate_leaves()),
-            ];
-            for (b, t) in best.iter_mut().zip(times) {
-                *b = b.min(t);
-            }
-        }
-        best[0] = f64::NAN;
-        println!("old: full evaluate (with clear) {reset:.1} ms");
-        rows.push(("old `FmmEvaluator`", build, best));
-    }
-
     let plan = Plan::new(&octree).unwrap();
     rows.push({
-        let (build, best) = new_evaluator(&plan, &comm, PerPair(IndexFmm::new(nleaves)), repeats);
-        ("new `Evaluator`, `PerPair<IndexFmm>`", build, best)
+        let (build, best) = stage_times(&plan, &comm, PerPair(IndexFmm::new(nleaves)), repeats);
+        ("`PerPair<IndexFmm>`", build, best)
     });
     rows.push({
-        let (build, best) = new_evaluator(
+        let (build, best) = stage_times(
             &plan,
             &comm,
             BatchedIndexFmm::new(nleaves, Walk::Rows),
             repeats,
         );
-        ("new `Evaluator`, `BatchedIndexFmm` (rows)", build, best)
+        ("`BatchedIndexFmm` (rows)", build, best)
     });
     rows.push({
-        let (build, best) = new_evaluator(
+        let (build, best) = stage_times(
             &plan,
             &comm,
             BatchedIndexFmm::new(nleaves, Walk::Groupings),
             repeats,
         );
-        (
-            "new `Evaluator`, `BatchedIndexFmm` (groupings)",
-            build,
-            best,
-        )
+        ("`BatchedIndexFmm` (groupings)", build, best)
     });
 
     println!("\nWall time in ms, best of {repeats}:\n");
-    println!("| Evaluator | new | {} | total |", STAGES.join(" | "));
+    println!("| Operator | new | {} | total |", STAGES.join(" | "));
     println!("| --- | --- |{}", " --- |".repeat(STAGES.len() + 1));
     for (name, build, best) in rows {
-        let total: f64 = best.iter().filter(|t| !t.is_nan()).sum();
-        let cells: Vec<String> = best
-            .iter()
-            .map(|t| {
-                if t.is_nan() {
-                    "–".to_string()
-                } else {
-                    format!("{t:.1}")
-                }
-            })
-            .collect();
+        let total: f64 = best.iter().sum();
+        let cells: Vec<String> = best.iter().map(|t| format!("{t:.1}")).collect();
         println!(
             "| {name} | {build:.1} | {} | {total:.1} |",
             cells.join(" | ")

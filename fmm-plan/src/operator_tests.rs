@@ -5,9 +5,9 @@ use super::{
     FmmOperator, FmmSizes, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PairOperator, PerPair,
     UpwardPass,
 };
-use crate::v2::index::BoxIndex;
-use crate::v2::lists::{Csr, CsrBuilder, GroupedBuilder, GroupedCsr, NOCTANTS, NOFFSETS};
-use crate::v2::store::{LeafStore, LevelBuffers, LevelSlice};
+use crate::index::BoxIndex;
+use crate::lists::{Csr, CsrBuilder, GroupedBuilder, GroupedCsr, NOCTANTS, NOFFSETS};
+use crate::store::{LeafStore, LevelBuffers, LevelSlice};
 
 /// A three-level index: the root, its eight children (child 0 interior, the others
 /// leaves) and the eight children of child 0 (leaves). Local leaves 0..7 are boxes 1..8

@@ -482,8 +482,8 @@ r_\text{child} = r_\text{parent} / 2
 ### V-list offsets
 
 - The offset of a V-list pair is d = index(target) − index(source), in the index units
-  of their common level, as `InteractionManager::v_list_by_direction` computes it. It
-  lies in 𝒟 = {−3..3}³ \ {−1..1}³, which has 7³ − 3³ = 316 elements.
+  of their common level, as the V-list view of `nd-fmm-plan` (`lists::VList`) groups
+  its pairs by it. It lies in 𝒟 = {−3..3}³ \ {−1..1}³, which has 7³ − 3³ = 316 elements.
 - The offsets are ordered lexicographically in (d_x, d_y, d_z), as `V_LIST_DIRECTIONS`
   is. The position of d in this order is its table index:
 
