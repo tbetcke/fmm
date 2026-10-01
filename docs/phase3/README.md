@@ -371,7 +371,7 @@ In the repository root, start `claude` and say:
 "Read docs/phase3/T<k>-<name>.md and do that task." Review and merge before the next.
 
 ## Exit checklist
-- [ ] T1 merged: redesign signed off; sign-off decisions recorded in the document
+- [x] T1 merged: redesign signed off; sign-off decisions recorded in the document
 - [ ] T2 merged: `check_leaf_geometry.py` passes; §3.13 drafted
 - [ ] CONVENTIONS §3.13 reviewed and signed off; `CONVENTION_VERSION` and §3.10 decisions recorded
 - [ ] T3 merged: `nd-fmm-exec` skeleton, CI green, root `CLAUDE.md` points to Phase 3; relative frames exact in f32 and f64; table order agrees with `nd-octree`
