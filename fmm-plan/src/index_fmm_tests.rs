@@ -1,13 +1,11 @@
 //! Pure local tests of the index operators on hand-made chunks with several points per
 //! leaf, through the per-pair adapter and both batched walks. No MPI.
 use super::{BatchedIndexFmm, IndexFmm, Walk, check_counts};
-use crate::v2::index::BoxIndex;
-use crate::v2::lists::{NOCTANTS, NOFFSETS};
-use crate::v2::operator::tests::{csr, grouped, hand_index};
-use crate::v2::operator::{
-    FmmOperator, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PerPair, UpwardPass,
-};
-use crate::v2::store::{LeafStore, LevelBuffers};
+use crate::index::BoxIndex;
+use crate::lists::{NOCTANTS, NOFFSETS};
+use crate::operator::tests::{csr, grouped, hand_index};
+use crate::operator::{FmmOperator, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PerPair, UpwardPass};
+use crate::store::{LeafStore, LevelBuffers};
 
 /// The leaves of [`hand_index`]; leaf j of these tests carries the global index j.
 const NLEAVES: usize = 15;

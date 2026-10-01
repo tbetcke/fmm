@@ -1,5 +1,4 @@
-//! Measure the time and memory of building the index-form plan against the old
-//! interaction manager, on one rank.
+//! Measure the time and memory of building the plan, on one rank.
 //!
 //! Reports, per tree, the best of several builds and the heap memory: the peak during the
 //! build and what the result retains, both counted by a wrapping allocator. Nothing is
@@ -10,7 +9,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use nd_fmm_plan::{interaction_manager::InteractionManager, v2::plan::Plan};
+use nd_fmm_plan::plan::Plan;
 use nd_octree::{Octree, OctreeOptions, PhysicalBox, constants::DEEPEST_LEVEL, points_to_morton};
 use rand_chacha::{ChaCha8Rng, rand_core::SeedableRng};
 use rlst::rlst_dynamic_array;
@@ -132,8 +131,8 @@ fn main() {
             32,
         ),
     ];
-    println!("| Tree | Leaves | Boxes held | Build | Time (ms) | Peak heap (MB) | Retained (MB) |");
-    println!("| --- | --- | --- | --- | --- | --- | --- |");
+    println!("| Tree | Leaves | Boxes held | Time (ms) | Peak heap (MB) | Retained (MB) |");
+    println!("| --- | --- | --- | --- | --- | --- |");
     for (name, fine_keys, max_level, capacity) in cases {
         let options = OctreeOptions::new()
             .with_max_level(max_level)
@@ -141,20 +140,7 @@ fn main() {
             .with_ghost_children(true);
         let octree = Octree::new(&fine_keys, options, &comm);
         let (nleaves, nboxes) = (octree.leaf_keys().len(), octree.all_keys().len());
-        let repeats = 5;
-        for (build, (time, peak, retained)) in [
-            (
-                "`InteractionManager::new`",
-                measure(repeats, || InteractionManager::new(&octree)),
-            ),
-            (
-                "`Plan::new`",
-                measure(repeats, || Plan::new(&octree).unwrap()),
-            ),
-        ] {
-            println!(
-                "| {name} | {nleaves} | {nboxes} | {build} | {time:.2} | {peak:.2} | {retained:.2} |"
-            );
-        }
+        let (time, peak, retained) = measure(5, || Plan::new(&octree).unwrap());
+        println!("| {name} | {nleaves} | {nboxes} | {time:.2} | {peak:.2} | {retained:.2} |");
     }
 }

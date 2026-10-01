@@ -6,10 +6,11 @@ members = ["fmm-plan", "octree", "fmm-math", "fmm-ref", "fmm-validate", "fmm-tab
 # so CI never builds them.
 default-members = ["octree", "fmm-plan", "fmm-math", "fmm-ref", "fmm-validate", "fmm-tables", "fmm-exec"]
 
-# Only new crates inherit from this; octree/ and fmm-plan/ keep their own fields.
+# Every crate but octree/ inherits from this; octree/ keeps its own fields.
 [workspace.package]
 edition = "2024"
 license = "MIT OR Apache-2.0"
+homepage = "https://github.com/tbetcke/fmm"
 repository = "https://github.com/tbetcke/fmm"
 
 [workspace.dependencies]
@@ -26,11 +27,12 @@ cubek-std = { version = "=0.2.0", default-features = false }
 nd-fmm-math = { path = "fmm-math" }
 nd-fmm-ref = { path = "fmm-ref" }
 nd-fmm-tables = { path = "fmm-tables" }
-# Phase 3, at the versions octree/ and fmm-plan/ use. rlst is never given the "mpi"
-# feature here; nd-octree enables it for the build.
+# Phase 3, at the versions octree/ uses. rlst is never given the "mpi" feature here;
+# the crates that need it (nd-octree, nd-fmm-plan) enable it themselves.
 mpi = { version = "0.8.2", features = ["derive"] }
 rlst = "0.9.0"
-# octree/ and fmm-plan/ do not use these entries yet (a separate decision).
+rand_chacha = "0.10"
+# octree/ does not use these entries yet (a separate decision).
 nd-octree = { path = "octree" }
 nd-fmm-plan = { path = "fmm-plan" }
 nd-fmm-exec = { path = "fmm-exec" }

@@ -4,7 +4,7 @@
 //! `docs/design/fmm-plan-redesign.md`): the multipoles and locals of every box as
 //! [`LevelBuffers`], and the source data, target input and target output as
 //! [`LeafStore`]s with variable counts per leaf. It runs the pass order of the
-//! [`fmm`](crate::fmm) compute graph on them, one [`FmmOperator`] call per level and
+//! [compute graph](crate#compute-graph) on them, one [`FmmOperator`] call per level and
 //! operator kind, and fills the ghost parts of the stores with the exchanges of
 //! [`exchange`](super::exchange).
 //!
@@ -48,10 +48,7 @@
 //! | target output of a local leaf | `l2p`; then the W-list by box index; then the near list (U-list and the leaf itself) by leaf index |
 //!
 //! With a fixed tree, ranks and counts this fixes every floating-point sum, so two
-//! evaluations are bit-identical. Compared with the old
-//! [`FmmEvaluator`](crate::fmm::evaluator::FmmEvaluator), the V-list is added in offset
-//! order instead of source-key order, and the self pair of P2P in leaf-index order
-//! within the near list instead of last.
+//! evaluations are bit-identical.
 //!
 //! # Collectives
 //!

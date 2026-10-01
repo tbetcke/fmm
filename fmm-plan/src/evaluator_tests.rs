@@ -4,11 +4,11 @@
 use nd_octree::MortonKey;
 
 use super::{Data, EvaluatorError, validate};
-use crate::v2::index_fmm::{BatchedIndexFmm, GlobalLeaves, IndexFmm, Walk, check_counts};
-use crate::v2::operator::{
+use crate::index_fmm::{BatchedIndexFmm, GlobalLeaves, IndexFmm, Walk, check_counts};
+use crate::operator::{
     FmmOperator, FmmSizes, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PerPair, UpwardPass,
 };
-use crate::v2::plan::{
+use crate::plan::{
     Plan,
     tests::{cases, plan},
 };
@@ -352,7 +352,7 @@ fn invalid_counts_and_sizes_are_errors() {
             usize::from(self.0 != "target_output_point_size")
         }
     }
-    impl crate::v2::operator::PairOperator for Zero {
+    impl crate::operator::PairOperator for Zero {
         fn p2m(&mut self, _: MortonKey, _: &[u32], _: &mut [u32]) {}
         fn m2m(&mut self, _: MortonKey, _: MortonKey, _: usize, _: &[u32], _: &mut [u32]) {}
         fn m2l(&mut self, _: MortonKey, _: MortonKey, _: usize, _: &[u32], _: &mut [u32]) {}

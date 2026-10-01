@@ -6,10 +6,10 @@ use nd_octree::{MortonKey, morton, octree::KeyType};
 
 use super::{Plan, PlanError};
 use crate::interaction_manager::{
-    InteractionManager, V_LIST_DIRECTIONS,
-    tests::{all_trees, key_types, uniform_leaves},
+    V_LIST_DIRECTIONS,
+    tests::{ListMaps, all_trees, key_types, uniform_leaves},
 };
-use crate::v2::lists::{Csr, GroupedCsr, NOCTANTS, NOFFSETS, offset, offset_index};
+use crate::lists::{Csr, GroupedCsr, NOCTANTS, NOFFSETS, offset, offset_index};
 
 /// Reclassify the root as `Global`, as on one rank.
 pub(crate) fn with_global_root(map: &HashMap<MortonKey, KeyType>) -> HashMap<MortonKey, KeyType> {
@@ -194,8 +194,8 @@ fn leaves_are_numbered_local_by_level_then_named_ghosts_by_key() {
         assert_eq!(next, leaves.nlocal());
 
         // Ghost leaves: exactly those named by a U- or X-list of a non-ghost key, by key.
-        let old = InteractionManager::from_key_types(&map);
-        let named: BTreeSet<MortonKey> = [old.u_list(), old.x_list()]
+        let reference = ListMaps::new(&map);
+        let named: BTreeSet<MortonKey> = [reference.u_list(), reference.x_list()]
             .into_iter()
             .flat_map(|lists| lists.values().flatten().copied())
             .filter(|entry| map[entry].is_ghost())
@@ -237,13 +237,13 @@ fn leaves_are_numbered_local_by_level_then_named_ghosts_by_key() {
 }
 
 #[test]
-fn index_lists_equal_interaction_manager_lists() {
+fn index_lists_equal_the_per_key_rule() {
     // Count non-empty lists so that the comparison cannot pass vacuously.
     let mut populated = [0usize; 4];
     for (name, map) in cases() {
         let plan = plan(&map);
         let index = plan.index();
-        let old = InteractionManager::from_key_types(&map);
+        let reference = ListMaps::new(&map);
         let leaf_key = |j: u32| index.leaf_key(j as usize);
 
         for level in 0..index.nlevels() {
@@ -269,8 +269,8 @@ fn index_lists_equal_interaction_manager_lists() {
                     assert!(lists.p2m().row(i).is_empty());
                     continue;
                 }
-                assert_eq!(v, old.v_list()[&key], "{name}: V of {key}");
-                assert_eq!(x, old.x_list()[&key], "{name}: X of {key}");
+                assert_eq!(v, reference.v_list()[&key], "{name}: V of {key}");
+                assert_eq!(x, reference.x_list()[&key], "{name}: X of {key}");
 
                 let (u, w) = match index.box_leaf(level, i) {
                     Some(leaf) => {
@@ -286,8 +286,8 @@ fn index_lists_equal_interaction_manager_lists() {
                     }
                     None => (Vec::new(), Vec::new()),
                 };
-                assert_eq!(u, old.u_list()[&key], "{name}: U of {key}");
-                assert_eq!(w, old.w_list()[&key], "{name}: W of {key}");
+                assert_eq!(u, reference.u_list()[&key], "{name}: U of {key}");
+                assert_eq!(w, reference.w_list()[&key], "{name}: W of {key}");
                 for (count, list) in populated.iter_mut().zip([&u, &v, &w, &x]) {
                     *count += usize::from(!list.is_empty());
                 }

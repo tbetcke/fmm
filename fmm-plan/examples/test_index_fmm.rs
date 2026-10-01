@@ -1,17 +1,15 @@
-//! Run the index-propagating test FMM on random points, with the old evaluator and with
-//! the new one with random counts per leaf.
+//! Run the index-propagating test FMM on random points, with one point per leaf and with
+//! random counts per leaf.
 //!
-//! With the old evaluator every leaf must end up with every leaf index exactly once.
-//! With the new one every target point of every leaf must hold, at the index of each
-//! leaf, the number of source points of that leaf, through the per-pair adapter and
-//! through both walks of the batched operator. Run with, e.g.,
+//! With one point per leaf every leaf must end up with every leaf index exactly once.
+//! With random counts every target point of every leaf must hold, at the index of each
+//! leaf, the number of source points of that leaf. Both are checked through the per-pair
+//! adapter and through both walks of the batched operator. Run with, e.g.,
 //! `mpirun -n 4 target/debug/examples/test_index_fmm`.
 
 use mpi::traits::Communicator;
-use nd_fmm_plan::fmm::index_fmm::run_index_fmm;
-use nd_fmm_plan::interaction_manager::InteractionManager;
-use nd_fmm_plan::v2::{
-    index_fmm::{self, IndexPath, Walk},
+use nd_fmm_plan::{
+    index_fmm::{IndexPath, Walk, run_index_fmm},
     plan::Plan,
 };
 use nd_octree::{Octree, OctreeOptions, PhysicalBox, constants::DEEPEST_LEVEL, points_to_morton};
@@ -55,38 +53,33 @@ fn main() {
         .with_max_fine_keys(10)
         .with_ghost_children(true);
     let octree = Octree::new(&fine_keys, options, &comm);
-    let lists = InteractionManager::new(&octree);
 
-    match run_index_fmm(&octree, &lists) {
-        Ok(()) => println_mpi!(
-            comm.rank(),
-            "Old index FMM correct on {} local leaves",
-            octree.leaf_keys().len()
-        ),
-        Err(message) => panic!("rank {}: old index FMM failed: {message}", comm.rank()),
-    }
-
-    // The new evaluator, with random source and target counts per local leaf.
     let plan = Plan::new(&octree).unwrap_or_else(|error| panic!("plan: {error}"));
     let nlocal = plan.index().leaves().nlocal();
+    let ones = vec![1; nlocal];
     let source_counts: Vec<usize> = (0..nlocal).map(|_| random_count(&mut rng)).collect();
     let target_counts: Vec<usize> = (0..nlocal).map(|_| random_count(&mut rng)).collect();
-    for path in [
-        IndexPath::PerPair,
-        IndexPath::Batched(Walk::Rows),
-        IndexPath::Batched(Walk::Groupings),
+    for (label, sources, targets) in [
+        ("one point per leaf", &ones, &ones),
+        ("random counts", &source_counts, &target_counts),
     ] {
-        match index_fmm::run_index_fmm(&plan, &comm, path, &source_counts, &target_counts) {
-            Ok(()) => println_mpi!(
-                comm.rank(),
-                "New index FMM ({path:?}) correct on {nlocal} local leaves, {} source and {} target points",
-                source_counts.iter().sum::<usize>(),
-                target_counts.iter().sum::<usize>()
-            ),
-            Err(message) => panic!(
-                "rank {}: new index FMM ({path:?}) failed: {message}",
-                comm.rank()
-            ),
+        for path in [
+            IndexPath::PerPair,
+            IndexPath::Batched(Walk::Rows),
+            IndexPath::Batched(Walk::Groupings),
+        ] {
+            match run_index_fmm(&plan, &comm, path, sources, targets) {
+                Ok(()) => println_mpi!(
+                    comm.rank(),
+                    "Index FMM ({label}, {path:?}) correct on {nlocal} local leaves, {} source and {} target points",
+                    sources.iter().sum::<usize>(),
+                    targets.iter().sum::<usize>()
+                ),
+                Err(message) => panic!(
+                    "rank {}: index FMM ({label}, {path:?}) failed: {message}",
+                    comm.rank()
+                ),
+            }
         }
     }
 }
