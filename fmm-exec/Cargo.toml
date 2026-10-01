@@ -1,0 +1,22 @@
+[package]
+name = "nd-fmm-exec"
+version = "0.1.0-dev"
+description = "The Laplace FMM of the nd-project on nd-fmm-plan: box geometry, operators and the user-facing FMM."
+readme = "README.md"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "nd_fmm_exec"
+
+[dependencies]
+nd-fmm-math = { workspace = true }
+nd-fmm-ref = { workspace = true }
+nd-fmm-tables = { workspace = true }
+nd-fmm-plan = { workspace = true }
+nd-octree = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
