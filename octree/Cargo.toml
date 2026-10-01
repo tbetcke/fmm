@@ -28,7 +28,7 @@ itertools = "0.15.*"
 rand = "0.10"
 rand_chacha = "0.10"
 mpi = { version = "0.8.2", features = ["derive", "user-operations"] }
-rlst = { version = "0.8.0", features = ["mpi"] }
+rlst = { version = "0.9.0", features = ["mpi"] }
 
 
 [dev-dependencies]

@@ -16,7 +16,7 @@ name = "nd_fmm_plan"
 
 [dependencies]
 nd-octree = { path = "../octree" }
-rlst = { version = "0.8.0", features = ["mpi"] }
+rlst = { version = "0.9.0", features = ["mpi"] }
 mpi = { version = "0.8.2", features = ["derive", "complex"] }
 itertools = "0.15"
 

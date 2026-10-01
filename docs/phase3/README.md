@@ -211,11 +211,14 @@ These hold for every task, so that no task decides them on its own:
   - The library never sets environment variables: OpenBLAS reads them once at
     initialisation, so setting them later has no effect, and Rust 2024 makes
     `std::env::set_var` unsafe. The library reads and reports them instead (T10).
-  - rlst's runtime control, `rlst::threading::set_blas_threads`, works only with a
-    matching backend feature. In rlst 0.8.0 the `extern` declaration of
-    `openblas_set_num_threads` sits under `cfg(feature = "mkl_threading")`, so the
-    `openblas_threading` feature alone should fail to link. Report this upstream
-    before any phase relies on it.
+  - rlst's runtime control, `rlst::threading::set_blas_threads`, needs no feature
+    since rlst 0.9.0: on Linux and macOS it finds a dynamically linked OpenBLAS, MKL,
+    BLIS, FlexiBLAS or Accelerate at runtime, and returns
+    `BlasThreadingError::NoBackendFound` if there is none. A statically linked
+    backend needs its feature (`openblas_threading` for OpenBLAS), which now links
+    the thread-control functions itself; in 0.8.0 the `extern` declaration of
+    `openblas_set_num_threads` sat under `cfg(feature = "mkl_threading")`, so that
+    feature alone failed to link.
 - **Strategy.** `M2lStrategy::{Dense, Classes, Rotation, Auto}`:
   - `Dense`: dense octant tables and `M2lTables`;
   - `Classes`: dense octant tables and `M2lClasses` (memory, not speed);
@@ -269,7 +272,7 @@ These hold for every task, so that no task decides them on its own:
 - **Dependencies.**
   - `nd-fmm-exec`: `nd-fmm-math`, `nd-fmm-ref`, `nd-fmm-tables`, `nd-fmm-plan`,
     `nd-octree`, `mpi`, `rlst` and `thiserror`, through `[workspace.dependencies]`;
-    dev-dependency `proptest`. T3 adds `mpi` 0.8.2 (feature `derive`), `rlst` 0.8.0
+    dev-dependency `proptest`. T3 adds `mpi` 0.8.2 (feature `derive`), `rlst` 0.9.0
     (no features; `nd-octree` enables `mpi` for the build) and path entries for
     `nd-octree` and `nd-fmm-plan`.
   - `nd-fmm-plan`: whether the rewrite moves it to `[workspace.dependencies]` and

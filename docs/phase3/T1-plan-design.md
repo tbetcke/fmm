@@ -20,9 +20,9 @@ Read first:
 - every source file of fmm-plan/ (`src/lib.rs`, `src/fmm.rs`, `src/fmm/*.rs`,
   `src/interaction_manager.rs`, `src/ghost_communicator.rs`, their `*_tests.rs`,
   `tests/mpi_regressions.rs`, `examples/test_index_fmm.rs`), in full;
-- the public API of nd-octree (`src/octree.rs`, `src/morton.rs`), and the rlst 0.8.0
+- the public API of nd-octree (`src/octree.rs`, `src/morton.rs`), and the rlst 0.9.0
   sources of `distributed_tools::{ghost_communicator, array_tools}` in
-  `~/.cargo/registry/src/*/rlst-0.8.0/`;
+  `~/.cargo/registry/src/*/rlst-0.9.0/`;
 - docs/design/laplace-fmm-plan.md §5 (architecture, interfaces, data layout), §6.4–§6.6
   (kernel mapping, batching, avoiding atomics) and §9;
 - docs/design/workspace-structure.md §1.1 and §4;

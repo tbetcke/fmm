@@ -30,7 +30,7 @@ Do:
   Add a one-line README and keep fmm-exec/CLAUDE.md.
 - In [workspace.dependencies], add:
   - `mpi = { version = "0.8.2", features = ["derive"] }`;
-  - `rlst = "0.8.0"`, without features. Keep the comment that it is never given the
+  - `rlst = "0.9.0"`, without features. Keep the comment that it is never given the
     `mpi` feature there;
   - `nd-octree = { path = "octree" }`, `nd-fmm-plan = { path = "fmm-plan" }` and
     `nd-fmm-exec = { path = "fmm-exec" }`.
