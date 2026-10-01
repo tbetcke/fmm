@@ -1059,7 +1059,7 @@ as written:
 | 3 | Batched `FmmOperator` only, with `PairOperator` and the `PerPair` wrapper; no finer per-offset calls | T6 |
 | 4 | Per-key list rule reused, moved into a private function shared by old and new code | T4 |
 | 5 | nd-fmm-plan moves to `[workspace.dependencies]` and `[workspace.package]`; licence form, `homepage` and `repository` fixed | T7 |
-| 6 | No nd-octree change in Phase 3; `Plan::new` checks that every coarse block is held. Documenting this in `OctreeOptions::with_ghost_children`, with a test, is a separate decision outside Phase 3 | T4 (check) |
+| 6 | No nd-octree change inside the Phase 3 tasks; `Plan::new` checks that every coarse block is held. Also approved, as a separate decision: document in `OctreeOptions::with_ghost_children` (public docs) that with the layer every coarse block is held on every rank, and add an nd-octree test for it | T4 (check); a separate nd-octree PR (docs and test) |
 | 7 | Redistribution stays in C5.1, with the API of §9 | C5.1 |
 | 8 | CONVENTIONS §3.12's reference to `InteractionManager::v_list_by_direction` is reworded to the new V-list view; the convention is unchanged | T7 |
 
