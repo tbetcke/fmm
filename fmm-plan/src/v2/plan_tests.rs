@@ -12,7 +12,7 @@ use crate::interaction_manager::{
 use crate::v2::lists::{Csr, GroupedCsr, NOCTANTS, NOFFSETS, offset, offset_index};
 
 /// Reclassify the root as `Global`, as on one rank.
-fn with_global_root(map: &HashMap<MortonKey, KeyType>) -> HashMap<MortonKey, KeyType> {
+pub(crate) fn with_global_root(map: &HashMap<MortonKey, KeyType>) -> HashMap<MortonKey, KeyType> {
     let mut map = map.clone();
     if map[&morton::root()] == KeyType::LocalInterior {
         map.insert(morton::root(), KeyType::Global);
@@ -22,7 +22,7 @@ fn with_global_root(map: &HashMap<MortonKey, KeyType>) -> HashMap<MortonKey, Key
 
 /// Pretend that the level-one half with x-index 1 and everything below it belong to rank
 /// 1. The lists depend only on the leaf/interior classification, so they do not change.
-fn ghost_half(map: &HashMap<MortonKey, KeyType>) -> HashMap<MortonKey, KeyType> {
+pub(crate) fn ghost_half(map: &HashMap<MortonKey, KeyType>) -> HashMap<MortonKey, KeyType> {
     let mut map = map.clone();
     for (&key, kind) in map.iter_mut() {
         if morton::level(key) == 0 {
@@ -41,7 +41,7 @@ fn ghost_half(map: &HashMap<MortonKey, KeyType>) -> HashMap<MortonKey, KeyType> 
 
 /// Every key map of these tests, with a name: each tree all local, with a `Global` root,
 /// and with a `Global` root and a ghost half.
-fn cases() -> Vec<(String, HashMap<MortonKey, KeyType>)> {
+pub(crate) fn cases() -> Vec<(String, HashMap<MortonKey, KeyType>)> {
     let mut cases = Vec::new();
     for (t, leaves) in all_trees().into_iter().enumerate() {
         let local = key_types(&leaves);
@@ -54,11 +54,11 @@ fn cases() -> Vec<(String, HashMap<MortonKey, KeyType>)> {
     cases
 }
 
-fn nlevels(map: &HashMap<MortonKey, KeyType>) -> usize {
+pub(crate) fn nlevels(map: &HashMap<MortonKey, KeyType>) -> usize {
     map.keys().map(|&key| morton::level(key)).max().unwrap() + 1
 }
 
-fn plan(map: &HashMap<MortonKey, KeyType>) -> Plan {
+pub(crate) fn plan(map: &HashMap<MortonKey, KeyType>) -> Plan {
     Plan::from_key_types(map, nlevels(map), &[morton::root()]).unwrap()
 }
 

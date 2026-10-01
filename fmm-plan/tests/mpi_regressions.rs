@@ -8,8 +8,10 @@ use nd_fmm_plan::{
     ghost_communicator::{FmmGhostCommunicator, LevelChunkSizes},
     interaction_manager::{InteractionManager, V_LIST_DIRECTIONS},
     v2::{
+        exchange::{CoarseExchange, MultipoleExchange, SourceExchange},
         lists::{GroupedCsr, offset_index},
         plan::Plan,
+        store::LevelBuffers,
     },
 };
 use nd_octree::{
@@ -465,6 +467,251 @@ fn check_ghost_exchange<C: CommunicatorCollectives>(
     }
 }
 
+/// Values per source point, as for Laplace (CONVENTIONS §3.13: coordinates, then charge).
+const SOURCE_POINT_SIZE: usize = 4;
+
+/// A source count per leaf that every rank can recompute from the key; zero for about one
+/// key in five.
+fn hashed_count(key: u64) -> usize {
+    (key.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 32) as usize % 5
+}
+
+/// The number of fine keys of `points` (sorted) that lie in `leaf`.
+fn points_in(points: &[u64], leaf: u64) -> usize {
+    points.iter().filter(|&&p| is_ancestor(leaf, p)).count()
+}
+
+/// Ghost keys and values that this rank receives in one exchange.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Traffic {
+    keys: usize,
+    values: usize,
+}
+
+impl Traffic {
+    /// The sum over all ranks.
+    fn total<C: CommunicatorCollectives>(self, comm: &C) -> Self {
+        let mut all = [0usize; 2];
+        comm.all_reduce_into(
+            &[self.keys, self.values][..],
+            &mut all[..],
+            SystemOperation::sum(),
+        );
+        Self {
+            keys: all[0],
+            values: all[1],
+        }
+    }
+}
+
+/// Forward seeded source chunks with `count(key)` points of every local leaf, and check
+/// that every ghost leaf receives its owner's count and values.
+fn check_source_exchange<C: CommunicatorCollectives>(
+    name: &str,
+    comm: &C,
+    plan: &Plan,
+    count: impl Fn(u64) -> usize,
+) -> Traffic {
+    let leaves = plan.index().leaves();
+    let nlocal = leaves.nlocal();
+    let local_counts: Vec<usize> = (0..nlocal).map(|j| count(leaves.key(j))).collect();
+    let mut exchange = SourceExchange::<u64>::new(plan, comm, &local_counts, SOURCE_POINT_SIZE)
+        .unwrap_or_else(|error| panic!("{name}: source exchange: {error}"));
+    assert_eq!(&exchange.leaf_counts()[..nlocal], local_counts, "{name}");
+    assert_eq!(exchange.ghost_leaves(), leaves.ghosts(), "{name}");
+    for (g, j) in leaves.ghosts().enumerate() {
+        let key = leaves.key(j);
+        assert_eq!(
+            exchange.ghost_counts()[g],
+            count(key),
+            "{name}: owner's count of ghost leaf {key}"
+        );
+    }
+    assert!(
+        exchange
+            .send_leaves()
+            .iter()
+            .all(|&j| (j as usize) < nlocal),
+        "{name}: only local leaves are sent"
+    );
+
+    let mut sources = exchange.new_store();
+    for j in 0..nlocal {
+        let key = leaves.key(j);
+        for (k, value) in sources.chunk_mut(j).iter_mut().enumerate() {
+            *value = ghost_value(key, k);
+        }
+    }
+    exchange.forward(&mut sources);
+    for j in 0..leaves.len() {
+        let key = leaves.key(j);
+        let expected: Vec<u64> = (0..count(key) * SOURCE_POINT_SIZE)
+            .map(|k| ghost_value(key, k))
+            .collect();
+        assert_eq!(
+            sources.chunk(j),
+            expected,
+            "{name}: source chunk of leaf {key}"
+        );
+    }
+    Traffic {
+        keys: exchange.communicator().total_receive_count(),
+        values: exchange.communicator().receive_buffer_len(),
+    }
+}
+
+/// Forward the multipoles of every non-ghost box with `sizes[l]` values on level l, and
+/// check that exactly the ghosts of the V- and W-lists receive their owner's values. The
+/// old communicator, built for the same ghosts as the old evaluator builds it, must
+/// receive the same keys in the same order. Returns the traffic, new and old.
+fn check_multipole_exchange<C: CommunicatorCollectives>(
+    name: &str,
+    octree: &Octree<'_, C>,
+    lists: &InteractionManager,
+    plan: &Plan,
+    sizes: &[usize],
+) -> [Traffic; 2] {
+    let comm = octree.comm();
+    let index = plan.index();
+    let mut exchange = MultipoleExchange::<u64>::new(plan, comm, sizes)
+        .unwrap_or_else(|error| panic!("{name}: multipole exchange: {error}"));
+    let mut multipoles = LevelBuffers::<u64>::from_index(index, sizes);
+    for level in 0..index.nlevels() {
+        for i in 0..index.len(level) {
+            if !index.kind(level, i).is_ghost() {
+                let key = index.key(level, i);
+                for (k, value) in multipoles.chunk_mut(level, i).iter_mut().enumerate() {
+                    *value = ghost_value(key, k);
+                }
+            }
+        }
+    }
+    exchange.forward_all(&mut multipoles);
+
+    // The ghosts of the V- and W-lists, by level, as the old evaluator exchanges them.
+    let entries: Vec<u64> = [lists.v_list(), lists.w_list()]
+        .into_iter()
+        .flat_map(|map| map.values().flatten().copied())
+        .collect();
+    let all_keys = octree.all_keys();
+    let mut expected = vec![Vec::new(); index.nlevels()];
+    for &entry in &entries {
+        if all_keys[&entry].is_ghost() {
+            expected[morton::level(entry)].push(entry);
+        }
+    }
+    let old = FmmGhostCommunicator::<u64>::new(
+        octree,
+        entries,
+        LevelChunkSizes::PerLevel(sizes.to_vec()),
+    );
+
+    let (mut new_traffic, mut old_traffic) = (Traffic::default(), Traffic::default());
+    for (level, expected) in expected.iter_mut().enumerate() {
+        expected.sort_unstable();
+        expected.dedup();
+        let received = exchange.receive_boxes(level);
+        assert!(received.windows(2).all(|pair| pair[0] < pair[1]), "{name}");
+        let received_keys: Vec<u64> = received
+            .iter()
+            .map(|&i| index.key(level, i as usize))
+            .collect();
+        assert_eq!(
+            &received_keys, expected,
+            "{name}: received ghosts of level {level}"
+        );
+        assert_eq!(
+            old.receive_keys(level),
+            received_keys,
+            "{name}: old against new"
+        );
+        for i in 0..index.len(level) {
+            let key = index.key(level, i);
+            let chunk = multipoles.chunk(level, i);
+            if index.kind(level, i).is_ghost() && received.binary_search(&(i as u32)).is_err() {
+                assert!(
+                    chunk.iter().all(|&v| v == 0),
+                    "{name}: unrequested ghost {key}"
+                );
+            } else {
+                for (k, &value) in chunk.iter().enumerate() {
+                    assert_eq!(value, ghost_value(key, k), "{name}: multipole of {key}");
+                }
+            }
+        }
+        let communicator = exchange.communicator(level);
+        new_traffic.keys += communicator.total_receive_count();
+        new_traffic.values += communicator.receive_buffer_len();
+        old_traffic.keys += old.receive_keys(level).len();
+        old_traffic.values += old.receive_buffer(level).len();
+    }
+    [new_traffic, old_traffic]
+}
+
+/// Gather the multipoles of every rank's coarse blocks and check that every rank then
+/// holds every block's values, in global key order, in the gathered buffer and in the
+/// block's slot.
+fn check_coarse_gather<C: CommunicatorCollectives>(
+    name: &str,
+    comm: &C,
+    plan: &Plan,
+    sizes: &[usize],
+) -> Traffic {
+    let index = plan.index();
+    let rank = comm.rank() as usize;
+    let mut gather = CoarseExchange::<u64>::new(plan, comm, sizes)
+        .unwrap_or_else(|error| panic!("{name}: coarse gather: {error}"));
+    let all_blocks = gather_to_all(plan.coarse_blocks(), comm);
+    assert_eq!(
+        gather.keys(),
+        all_blocks,
+        "{name}: coarse blocks in rank order"
+    );
+    assert!(
+        all_blocks.windows(2).all(|pair| pair[0] < pair[1]),
+        "{name}: rank order is key order"
+    );
+    assert_eq!(
+        &gather.keys()[gather.rank_blocks(rank)],
+        plan.coarse_blocks()
+    );
+
+    let mut multipoles = LevelBuffers::<u64>::from_index(index, sizes);
+    for &key in plan.coarse_blocks() {
+        let (level, i) = index.find(key).unwrap();
+        for (k, value) in multipoles
+            .chunk_mut(level, i as usize)
+            .iter_mut()
+            .enumerate()
+        {
+            *value = ghost_value(key, k);
+        }
+    }
+    gather.gather(&mut multipoles);
+    let first = gather.gathered().to_vec();
+    for (b, &key) in gather.keys().iter().enumerate() {
+        let (level, i) = gather.block(b);
+        assert_eq!(
+            index.key(level, i as usize),
+            key,
+            "{name}: slot of block {key}"
+        );
+        let expected: Vec<u64> = (0..sizes[level]).map(|k| ghost_value(key, k)).collect();
+        assert_eq!(gather.chunk(b), expected, "{name}: gathered block {key}");
+        assert_eq!(
+            multipoles.chunk(level, i as usize),
+            expected,
+            "{name}: block {key} in its slot"
+        );
+    }
+    gather.gather(&mut multipoles);
+    assert_eq!(gather.gathered(), first, "{name}: two gathers agree");
+    Traffic {
+        keys: gather.keys().len(),
+        values: gather.gathered().len(),
+    }
+}
+
 #[test]
 fn distributed_tree_regressions() {
     let universe = mpi::initialize().expect("this test owns MPI initialization");
@@ -559,6 +806,21 @@ fn distributed_tree_regressions() {
             1,
         ),
         (
+            "dense max-level leaf",
+            if rank == 0 {
+                cloud
+                    .iter()
+                    .copied()
+                    .chain([[0.3, 0.6, 0.4]; 1000])
+                    .collect()
+            } else {
+                cloud.clone()
+            },
+            reversed.clone(),
+            5,
+            8,
+        ),
+        (
             "empty input ranks",
             if rank == 0 { cloud.clone() } else { vec![] },
             if rank + 1 == comm.size() as usize {
@@ -625,7 +887,75 @@ fn distributed_tree_regressions() {
         } else {
             LevelChunkSizes::PerLevel((1..=DEEPEST_LEVEL as usize + 1).collect())
         };
-        check_ghost_exchange(name, &octree, &lists, chunk_sizes);
+        check_ghost_exchange(name, &octree, &lists, chunk_sizes.clone());
+
+        // The new exchanges. Sources: counts of one (as the old evaluator), counts from a
+        // hash of the key (zeros included), and the real source points per leaf.
+        let mut source_points = gather_to_all(&keys(&sources), &comm);
+        source_points.sort_unstable();
+        let ones = check_source_exchange(name, &comm, &plan, |_| 1).total(&comm);
+        let hashed = check_source_exchange(name, &comm, &plan, hashed_count).total(&comm);
+        let points =
+            check_source_exchange(name, &comm, &plan, |key| points_in(&source_points, key))
+                .total(&comm);
+        let sizes: Vec<usize> = (0..plan.nlevels())
+            .map(|level| chunk_sizes.chunk_size(level).unwrap())
+            .collect();
+        let [multipoles, old_multipoles] =
+            check_multipole_exchange(name, &octree, &lists, &plan, &sizes);
+        let (multipoles, old_multipoles) = (multipoles.total(&comm), old_multipoles.total(&comm));
+        let coarse = check_coarse_gather(name, &comm, &plan, &sizes);
+
+        // The same source ghosts as the old evaluator, which exchanges one fixed-size
+        // chunk per leaf.
+        let source_entries = [lists.u_list(), lists.x_list()]
+            .into_iter()
+            .flat_map(|map| map.values().flatten().copied());
+        let old_sources = FmmGhostCommunicator::<u64>::new(
+            &octree,
+            source_entries,
+            LevelChunkSizes::Uniform(SOURCE_POINT_SIZE),
+        );
+        let old_sources = Traffic {
+            keys: (0..old_sources.nlevels())
+                .map(|level| old_sources.receive_keys(level).len())
+                .sum(),
+            values: (0..old_sources.nlevels())
+                .map(|level| old_sources.receive_buffer(level).len())
+                .sum(),
+        }
+        .total(&comm);
+        assert_eq!(ones, old_sources, "{name}: source traffic, old against new");
+        assert_eq!(multipoles, old_multipoles, "{name}: multipole traffic");
+        if comm.size() > 1 && name == "graded corner blob" {
+            assert!(
+                ones.keys > 0 && multipoles.keys > 0,
+                "{name}: no ghost exchanged"
+            );
+        }
+        if name == "dense max-level leaf" {
+            let leaves = plan.index().leaves();
+            let local_max = (0..leaves.nlocal())
+                .map(|j| points_in(&source_points, leaves.key(j)))
+                .max()
+                .unwrap_or(0);
+            let mut dense = 0usize;
+            comm.all_reduce_into(&local_max, &mut dense, SystemOperation::max());
+            assert!(dense >= 1000, "{name}: the dense leaf holds {dense} points");
+        }
+        if rank == 0 && (name == "graded corner blob" || name == "dense max-level leaf") {
+            println!(
+                "traffic on {} ranks, {name}: ghost keys / values received, summed over ranks",
+                comm.size()
+            );
+            println!("  sources, old (one chunk of {SOURCE_POINT_SIZE} per leaf): {old_sources:?}");
+            println!("  sources, new, counts of one:      {ones:?}");
+            println!("  sources, new, hashed counts:      {hashed:?}");
+            println!("  sources, new, source points:      {points:?}");
+            println!("  multipoles, old:                  {old_multipoles:?}");
+            println!("  multipoles, new:                  {multipoles:?}");
+            println!("  coarse gather, per rank:          {coarse:?}");
+        }
 
         // Every leaf must receive every leaf index exactly once.
         if let Err(message) = run_index_fmm(&octree, &lists) {
