@@ -86,7 +86,7 @@ is the contract; the points that matter most when changing it:
 - `nd-octree` is a path dependency on the workspace sibling `../octree`
   (`nd-octree = { path = "../octree" }`). Keep it that way: do not switch to a
   git or crates.io source, which can diverge from the workspace copy.
-- `rlst` 0.8.0 (feature `mpi`) comes from crates.io, as does `mpi` 0.8.2 (rsmpi).
+- `rlst` 0.9.0 (feature `mpi`) comes from crates.io, as does `mpi` 0.8.2 (rsmpi).
   The crate uses rlst's `distributed_tools::{GhostCommunicator,
   GhostCommunicatorBuilder, ChunkSizes}` in `ghost_communicator.rs`, and
   `distributed_tools::array_tools::gather_to_all` in `evaluator.rs`,

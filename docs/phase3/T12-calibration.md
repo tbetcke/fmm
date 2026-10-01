@@ -50,8 +50,8 @@ Do:
     risks, with what Phase 3 found); §9.2 (Morton column order and variable-size leaf
     data answered); §6 or §8.3 (the "Threads and BLAS" rule of docs/phase3/README.md,
     as a constraint on the Phase 4 host batched path, the CubeCL CPU runtime and the
-    SVD of C6.2, with the rlst `set_blas_threads` defect and whether it was reported
-    upstream);
+    SVD of C6.2, with how rlst 0.9.0's `set_blas_threads` detects the backend and
+    which feature, if any, the build needs);
   - workspace-structure.md: §1.1 (what nd-fmm-plan now provides), §3 (the
     dependencies of nd-fmm-exec and nd-fmm-plan as built), §3.1 (the built surface of
     nd-fmm-exec, nd-fmm-plan and nd-fmm-validate's new examples and points), §4 (the
