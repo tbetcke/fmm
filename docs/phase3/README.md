@@ -382,7 +382,7 @@ In the repository root, start `claude` and say:
 - [x] T4 merged: new index and lists equal the brute-force oracle on 1, 2 and 4 ranks
 - [x] T5 merged: variable-size ghost exchange passes on 1, 2 and 4 ranks
 - [x] T6 merged: new evaluator equals the old one for `IndexFmm` on every scenario; variable counts pass; on 1, 2 and 4 ranks
-- [ ] T7 merged: old API removed; `fmm-plan/CLAUDE.md` and crate docs describe the new crate
+- [x] T7 merged: old API removed; `fmm-plan/CLAUDE.md` and crate docs describe the new crate
 - [ ] T8 merged: each operator equals `nd-fmm-ref` on levels 2, 9 and 16 (1e-14 dense; 1e-13 classes, rotation and leaf operators)
 - [ ] T9 merged: uniform tree, N = 10⁵, within twice the prediction at p = 3, 8 and 18
 - [ ] T10 merged: threaded output bit-identical to serial for 1, 2, 4 and 8 threads; speed-up reported
