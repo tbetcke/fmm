@@ -254,6 +254,13 @@ impl<T: Copy + Default> LevelBuffers<T> {
 }
 
 impl<'a, T> LevelSlice<'a, T> {
+    /// Return a level without boxes, with chunks of `size` values, for the level below
+    /// the deepest one.
+    pub(crate) fn empty(size: usize) -> Self {
+        debug_assert!(size > 0, "level sizes must be positive");
+        Self { data: &[], size }
+    }
+
     /// Return the number of boxes.
     pub fn len(&self) -> usize {
         self.data.len() / self.size

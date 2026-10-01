@@ -4,12 +4,20 @@ use std::collections::HashMap;
 
 use mpi::{collective::SystemOperation, traits::*};
 use nd_fmm_plan::{
-    fmm::index_fmm::run_index_fmm,
+    fmm::{
+        evaluator::FmmEvaluator,
+        index_fmm::{self as old_index_fmm, global_leaf_indices, run_index_fmm},
+    },
     ghost_communicator::{FmmGhostCommunicator, LevelChunkSizes},
     interaction_manager::{InteractionManager, V_LIST_DIRECTIONS},
     v2::{
+        evaluator::Evaluator,
         exchange::{CoarseExchange, MultipoleExchange, SourceExchange},
+        index_fmm::{self as index_fmm, BatchedIndexFmm, GlobalLeaves, IndexFmm, IndexPath, Walk},
         lists::{GroupedCsr, offset_index},
+        operator::{
+            FmmOperator, FmmSizes, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PerPair, UpwardPass,
+        },
         plan::Plan,
         store::LevelBuffers,
     },
@@ -712,6 +720,479 @@ fn check_coarse_gather<C: CommunicatorCollectives>(
     }
 }
 
+/// A target count per leaf that every rank can recompute from the key, independent of
+/// [`hashed_count`]; zero for about one key in five.
+fn hashed_target_count(key: u64) -> usize {
+    hashed_count(key ^ 0x5bd1_e995)
+}
+
+/// Run the old evaluator and the new one (per pair, and batched with both walks) with
+/// the index FMM and counts of one, and check that every leaf holds the same target
+/// values in all four.
+fn check_evaluator_against_old<C: CommunicatorCollectives>(
+    name: &str,
+    octree: &Octree<'_, C>,
+    lists: &InteractionManager,
+    plan: &Plan,
+) {
+    let comm = octree.comm();
+    let (nleaves, old_indices) = global_leaf_indices(octree);
+    let mut old = FmmEvaluator::new(octree, lists, old_index_fmm::IndexFmm::new(nleaves));
+    for (&leaf, &index) in octree.leaf_keys().iter().zip(&old_indices) {
+        old.sources_mut(leaf)[0] = index;
+    }
+    old.evaluate();
+
+    // The new numbering of the leaves is the old one.
+    let leaves = plan.index().leaves();
+    let numbering = GlobalLeaves::new(plan, comm);
+    assert_eq!(numbering.nleaves(), nleaves, "{name}");
+    let old_index: HashMap<u64, u32> = octree
+        .leaf_keys()
+        .iter()
+        .copied()
+        .zip(old_indices.iter().copied())
+        .collect();
+    assert_eq!(leaves.nlocal(), old_index.len(), "{name}: local leaves");
+    for j in 0..leaves.nlocal() {
+        assert_eq!(
+            numbering.indices()[j],
+            old_index[&leaves.key(j)],
+            "{name}: global index of leaf {}",
+            leaves.key(j)
+        );
+    }
+
+    let ones = vec![1; leaves.nlocal()];
+    let per_pair = evaluate_index(
+        plan,
+        comm,
+        PerPair(IndexFmm::new(nleaves)),
+        &numbering,
+        &ones,
+    );
+    let rows = evaluate_index(
+        plan,
+        comm,
+        BatchedIndexFmm::new(nleaves, Walk::Rows),
+        &numbering,
+        &ones,
+    );
+    let groupings = evaluate_index(
+        plan,
+        comm,
+        BatchedIndexFmm::new(nleaves, Walk::Groupings),
+        &numbering,
+        &ones,
+    );
+    for j in 0..leaves.nlocal() {
+        let key = leaves.key(j);
+        let reference = old.targets(key).unwrap();
+        assert_eq!(per_pair[j], reference, "{name}: per pair, leaf {key}");
+        assert_eq!(rows[j], reference, "{name}: batched rows, leaf {key}");
+        assert_eq!(
+            groupings[j], reference,
+            "{name}: batched groupings, leaf {key}"
+        );
+    }
+}
+
+/// Evaluate the index FMM with `operator`, counts `counts` for sources and targets, and
+/// return the target output of every local leaf. Collective.
+fn evaluate_index<C: CommunicatorCollectives, Op: FmmOperator<Value = u32>>(
+    plan: &Plan,
+    comm: &C,
+    operator: Op,
+    numbering: &GlobalLeaves,
+    counts: &[usize],
+) -> Vec<Vec<u32>> {
+    let mut evaluator = Evaluator::new(plan, comm, operator, counts, counts)
+        .unwrap_or_else(|error| panic!("evaluator: {error}"));
+    numbering.fill_sources(evaluator.local_sources_mut());
+    evaluator.evaluate();
+    (0..counts.len())
+        .map(|j| evaluator.target_output(j).to_vec())
+        .collect()
+}
+
+/// Run the index FMM with seeded variable counts (zeros included) on every path, check
+/// the counts, and check that evaluations are bit-identical: twice on one evaluator, and
+/// across the walks and the adapter.
+fn check_variable_counts<C: CommunicatorCollectives>(name: &str, comm: &C, plan: &Plan) {
+    let leaves = plan.index().leaves();
+    let sources: Vec<usize> = (0..leaves.nlocal())
+        .map(|j| hashed_count(leaves.key(j)))
+        .collect();
+    let targets: Vec<usize> = (0..leaves.nlocal())
+        .map(|j| hashed_target_count(leaves.key(j)))
+        .collect();
+    for path in [
+        IndexPath::PerPair,
+        IndexPath::Batched(Walk::Rows),
+        IndexPath::Batched(Walk::Groupings),
+    ] {
+        if let Err(message) = index_fmm::run_index_fmm(plan, comm, path, &sources, &targets) {
+            panic!("{name}: variable counts, {path:?}: {message}");
+        }
+    }
+
+    let numbering = GlobalLeaves::new(plan, comm);
+    let global = numbering.gather_counts(comm, &sources);
+    let nleaves = numbering.nleaves();
+    let mut groupings = Evaluator::new(
+        plan,
+        comm,
+        BatchedIndexFmm::new(nleaves, Walk::Groupings),
+        &sources,
+        &targets,
+    )
+    .unwrap();
+    let mut rows = Evaluator::new(
+        plan,
+        comm,
+        BatchedIndexFmm::new(nleaves, Walk::Rows),
+        &sources,
+        &targets,
+    )
+    .unwrap();
+    let mut per_pair = Evaluator::new(
+        plan,
+        comm,
+        PerPair(IndexFmm::new(nleaves)),
+        &sources,
+        &targets,
+    )
+    .unwrap();
+    numbering.fill_sources(groupings.local_sources_mut());
+    numbering.fill_sources(rows.local_sources_mut());
+    numbering.fill_sources(per_pair.local_sources_mut());
+    groupings.evaluate();
+    rows.evaluate();
+    per_pair.evaluate();
+    if let Err(message) =
+        index_fmm::check_counts(plan.index(), groupings.target_output_store(), &global)
+    {
+        panic!("{name}: variable counts: {message}");
+    }
+
+    let first = (
+        groupings.target_output_store().clone(),
+        groupings.multipoles().clone(),
+        groupings.locals().clone(),
+        groupings.source_store().clone(),
+    );
+    groupings.evaluate();
+    let second = (
+        groupings.target_output_store().clone(),
+        groupings.multipoles().clone(),
+        groupings.locals().clone(),
+        groupings.source_store().clone(),
+    );
+    assert!(first == second, "{name}: two evaluations differ");
+
+    // A walk over the target-centric rows, a walk over the groupings and the per-pair
+    // adapter give the same values everywhere.
+    for (other, label) in [
+        (
+            (rows.target_output_store(), rows.multipoles(), rows.locals()),
+            "rows",
+        ),
+        (
+            (
+                per_pair.target_output_store(),
+                per_pair.multipoles(),
+                per_pair.locals(),
+            ),
+            "per pair",
+        ),
+    ] {
+        assert!(other.0 == &first.0, "{name}: {label}: target output");
+        assert!(other.1 == &first.1, "{name}: {label}: multipoles");
+        assert!(other.2 == &first.2, "{name}: {label}: locals");
+    }
+}
+
+/// One level call: (method, level, pass of an M2M).
+type Call = (&'static str, usize, Option<UpwardPass>);
+
+/// A test operator that computes nothing. It checks every batch it receives (the
+/// groupings of design §4.4, both views, buffer shapes) and records every call and every
+/// pair, by key.
+struct Recorder<'p> {
+    plan: &'p Plan,
+    calls: Vec<Call>,
+    /// (method, target key, source key) of every pair issued.
+    pairs: Vec<(&'static str, u64, u64)>,
+}
+
+impl Recorder<'_> {
+    fn key(&self, level: usize, i: u32) -> u64 {
+        self.plan.index().key(level, i as usize)
+    }
+
+    fn leaf(&self, j: u32) -> u64 {
+        self.plan.index().leaf_key(j as usize)
+    }
+
+    /// Check both views of a grouped batch and return its (target, source, group)
+    /// triples.
+    fn grouped<G: Copy + Into<usize>>(&self, view: &GroupedCsr<G>) -> Vec<(u32, u32, usize)> {
+        let rows = grouped_rows(view);
+        assert_eq!(
+            rows,
+            grouped_batches(view),
+            "both views hold the same pairs"
+        );
+        rows
+    }
+}
+
+impl FmmSizes for Recorder<'_> {
+    type Value = u32;
+
+    fn multipole_size(&self, _level: usize) -> usize {
+        1
+    }
+
+    fn local_size(&self, _level: usize) -> usize {
+        1
+    }
+
+    fn source_point_size(&self) -> usize {
+        1
+    }
+
+    fn target_input_point_size(&self) -> usize {
+        0
+    }
+
+    fn target_output_point_size(&self) -> usize {
+        1
+    }
+}
+
+impl FmmOperator for Recorder<'_> {
+    fn p2m(&mut self, b: P2m<'_, u32>) {
+        assert_eq!(b.multipoles.len(), b.index.len(b.level));
+        assert_eq!(b.leaves.nrows(), b.index.len(b.level));
+        for t in 0..b.leaves.nrows() {
+            for &j in b.leaves.row(t) {
+                let pair = ("p2m", self.key(b.level, t as u32), self.leaf(j));
+                self.pairs.push(pair);
+            }
+        }
+        self.calls.push(("p2m", b.level, None));
+    }
+
+    fn m2m(&mut self, b: M2m<'_, u32>) {
+        assert_eq!(b.multipoles.len(), b.index.len(b.level));
+        assert_eq!(b.child_multipoles.len(), b.index.len(b.level + 1));
+        let triples = self.grouped(b.children);
+        // Complete octant batches: every parent appears in all eight, with its child of
+        // that octant.
+        let parents: Vec<u32> = (0..b.children.nrows() as u32)
+            .filter(|&t| !b.children.row(t as usize).0.is_empty())
+            .collect();
+        for o in 0..8 {
+            assert_eq!(b.children.batch(o).0, parents, "octant batch {o}");
+        }
+        let method = match b.pass {
+            UpwardPass::Local => "m2m local",
+            UpwardPass::Global => "m2m global",
+        };
+        for (t, c, o) in triples {
+            let (parent, child) = (self.key(b.level, t), self.key(b.level + 1, c));
+            assert_eq!(morton::children(parent).unwrap()[o], child);
+            self.pairs.push((method, parent, child));
+        }
+        self.calls.push(("m2m", b.level, Some(b.pass)));
+    }
+
+    fn m2l(&mut self, b: M2l<'_, u32>) {
+        assert_eq!(b.locals.len(), b.index.len(b.level));
+        assert_eq!(b.multipoles.len(), b.index.len(b.level));
+        for (t, s, d) in self.grouped(b.pairs) {
+            let (target, source) = (self.key(b.level, t), self.key(b.level, s));
+            let (_, ti) = morton::decode(target);
+            let (_, si) = morton::decode(source);
+            let offset = [0, 1, 2].map(|k| ti[k] as i64 - si[k] as i64);
+            assert_eq!(offset_index(offset), Some(d), "offset index of a V pair");
+            self.pairs.push(("m2l", target, source));
+        }
+        self.calls.push(("m2l", b.level, None));
+    }
+
+    fn p2l(&mut self, b: P2l<'_, u32>) {
+        assert_eq!(b.locals.len(), b.index.len(b.level));
+        for t in 0..b.x.nrows() {
+            for &j in b.x.row(t) {
+                let pair = ("p2l", self.key(b.level, t as u32), self.leaf(j));
+                self.pairs.push(pair);
+            }
+        }
+        self.calls.push(("p2l", b.level, None));
+    }
+
+    fn l2l(&mut self, b: L2l<'_, u32>) {
+        assert_eq!(b.locals.len(), b.index.len(b.level));
+        assert_eq!(b.parent_locals.len(), b.index.len(b.level - 1));
+        let triples = self.grouped(b.parents);
+        for t in 0..b.parents.nrows() {
+            assert!(b.parents.row(t).0.len() <= 1, "one parent per child");
+        }
+        for (t, p, o) in triples {
+            let (child, parent) = (self.key(b.level, t), self.key(b.level - 1, p));
+            assert_eq!(morton::parent(child), Some(parent));
+            assert_eq!(morton::child_index(child), o);
+            self.pairs.push(("l2l", child, parent));
+        }
+        self.calls.push(("l2l", b.level, None));
+    }
+
+    fn l2p(&mut self, b: L2p<'_, u32>) {
+        assert_eq!(b.leaves, b.index.leaves().local(b.level));
+        assert_eq!(b.target_output.nleaves(), b.leaves.len());
+        assert_eq!(b.boxes.nrows(), b.leaves.len());
+        for r in 0..b.boxes.nrows() {
+            for &i in b.boxes.row(r) {
+                let pair = (
+                    "l2p",
+                    self.leaf((b.leaves.start + r) as u32),
+                    self.key(b.level, i),
+                );
+                self.pairs.push(pair);
+            }
+        }
+        self.calls.push(("l2p", b.level, None));
+    }
+
+    fn m2p(&mut self, b: M2p<'_, u32>) {
+        assert_eq!(b.target_output.nleaves(), b.leaves.len());
+        assert_eq!(b.w.nrows(), b.leaves.len());
+        for r in 0..b.w.nrows() {
+            for &s in b.w.row(r) {
+                let target = self.leaf((b.leaves.start + r) as u32);
+                self.pairs.push(("m2p", target, self.key(b.level + 1, s)));
+            }
+        }
+        self.calls.push(("m2p", b.level, None));
+    }
+
+    fn p2p(&mut self, b: P2p<'_, u32>) {
+        assert_eq!(b.target_output.nleaves(), b.leaves.len());
+        assert_eq!(b.near.nrows(), b.leaves.len());
+        assert_eq!(b.sources.nleaves(), b.index.leaves().len());
+        for r in 0..b.near.nrows() {
+            for &j in b.near.row(r) {
+                let target = self.leaf((b.leaves.start + r) as u32);
+                self.pairs.push(("p2p", target, self.leaf(j)));
+            }
+        }
+        self.calls.push(("p2p", b.level, None));
+    }
+}
+
+/// The level calls of one evaluation, in the order of design §7.2.
+fn expected_calls(nlevels: usize) -> Vec<Call> {
+    let deepest = nlevels - 1;
+    let mut calls = Vec::new();
+    for level in (0..=deepest).rev() {
+        calls.push(("p2m", level, None));
+        if level > 0 {
+            calls.push(("m2m", level - 1, Some(UpwardPass::Local)));
+        }
+    }
+    for level in (0..deepest).rev() {
+        calls.push(("m2m", level, Some(UpwardPass::Global)));
+    }
+    for level in 1..=deepest {
+        calls.extend([
+            ("l2l", level, None),
+            ("m2l", level, None),
+            ("p2l", level, None),
+        ]);
+    }
+    for level in 0..=deepest {
+        calls.extend([
+            ("l2p", level, None),
+            ("m2p", level, None),
+            ("p2p", level, None),
+        ]);
+    }
+    calls
+}
+
+/// The pairs (method, target, source) of `target` with every one of `sources`.
+fn pairs_of(method: &'static str, target: u64, sources: &[u64]) -> Vec<(&'static str, u64, u64)> {
+    sources
+        .iter()
+        .map(|&source| (method, target, source))
+        .collect()
+}
+
+/// Evaluate with a recording operator: every level gets every call once, in pass order;
+/// every batch honours its grouping; and the pairs issued are exactly the pairs of the
+/// old lists, each once.
+fn check_batches<C: CommunicatorCollectives>(
+    name: &str,
+    octree: &Octree<'_, C>,
+    lists: &InteractionManager,
+    plan: &Plan,
+) {
+    let nlocal = plan.index().leaves().nlocal();
+    let counts: Vec<usize> = (0..nlocal)
+        .map(|j| hashed_count(plan.index().leaf_key(j)))
+        .collect();
+    let recorder = Recorder {
+        plan,
+        calls: Vec::new(),
+        pairs: Vec::new(),
+    };
+    let mut evaluator = Evaluator::new(plan, octree.comm(), recorder, &counts, &counts)
+        .unwrap_or_else(|error| panic!("{name}: evaluator: {error}"));
+    evaluator.evaluate();
+    let recorder = evaluator.operator();
+    assert_eq!(recorder.calls, expected_calls(plan.nlevels()), "{name}");
+
+    let mut expected = Vec::new();
+    for (&key, &kind) in octree.all_keys() {
+        if kind.is_ghost() {
+            continue;
+        }
+        let entries = |method, sources: &[u64]| pairs_of(method, key, sources);
+        expected.extend(entries("m2l", &lists.v_list()[&key]));
+        expected.extend(entries("p2l", &lists.x_list()[&key]));
+        if let Some(parent) = morton::parent(key) {
+            expected.push(("l2l", key, parent));
+        }
+        let children = morton::children(key)
+            .map(|c| c.to_vec())
+            .unwrap_or_default();
+        match kind {
+            KeyType::LocalLeaf => {
+                expected.extend([("p2m", key, key), ("l2p", key, key), ("p2p", key, key)]);
+                expected.extend(entries("m2p", &lists.w_list()[&key]));
+                expected.extend(entries("p2p", &lists.u_list()[&key]));
+            }
+            KeyType::LocalInterior => expected.extend(entries("m2m local", &children)),
+            KeyType::Global => expected.extend(entries("m2m global", &children)),
+            _ => unreachable!(),
+        }
+    }
+    expected.sort_unstable();
+    let mut issued = recorder.pairs.clone();
+    issued.sort_unstable();
+    assert_eq!(
+        issued.len(),
+        expected.len(),
+        "{name}: number of pairs issued"
+    );
+    assert!(
+        issued == expected,
+        "{name}: every list pair is issued exactly once"
+    );
+}
+
 #[test]
 fn distributed_tree_regressions() {
     let universe = mpi::initialize().expect("this test owns MPI initialization");
@@ -961,5 +1442,11 @@ fn distributed_tree_regressions() {
         if let Err(message) = run_index_fmm(&octree, &lists) {
             panic!("rank {rank}: {name}: index FMM: {message}");
         }
+
+        // The new evaluator: equal to the old one with counts of one, the count check
+        // with variable counts on every path, the batches it issues, and determinism.
+        check_evaluator_against_old(name, &octree, &lists, &plan);
+        check_variable_counts(name, &comm, &plan);
+        check_batches(name, &octree, &lists, &plan);
     }
 }

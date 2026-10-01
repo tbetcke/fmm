@@ -23,5 +23,8 @@ itertools = "0.15"
 [dev-dependencies]
 rand_chacha = "0.10"
 
+[[example]]
+name = "test_index_fmm"
 
-
+[package.metadata.example.test_index_fmm.templated-examples]
+command = "mpirun -n {{NPROCESSES}}"
