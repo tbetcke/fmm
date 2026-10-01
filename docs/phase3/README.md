@@ -156,8 +156,8 @@ These hold for every task, so that no task decides them on its own:
 - **Old code as reference.** T4–T6 add the new modules beside the old ones, under a
   new module path. Nothing of the old API changes until T7 removes it, after T6 has
   shown that both agree. `nd-fmm-exec` is written only against the new API.
-- **Leaf-scaled data (§3.13, drafted in T2).** This refines design §5.3, which
-  interleaved absolute (x, y, z, q):
+- **Leaf-scaled data (§3.13, drafted in T2, signed off on 2026-10-01).** This refines
+  design §5.3, which interleaved absolute (x, y, z, q):
   - A point x in leaf b is stored as u = (x − c_b)/r_b ∈ [−1, 1]³, computed in f64
     from the user's coordinates and the domain, then rounded to T.
   - A source chunk of n points holds the n coordinate triples, then the n charges, so
@@ -373,7 +373,11 @@ In the repository root, start `claude` and say:
 ## Exit checklist
 - [x] T1 merged: redesign signed off; sign-off decisions recorded in the document
 - [x] T2 merged: `check_leaf_geometry.py` passes; §3.13 drafted
-- [ ] CONVENTIONS §3.13 reviewed and signed off; `CONVENTION_VERSION` and §3.10 decisions recorded
+- [x] CONVENTIONS §3.13 reviewed and signed off; `CONVENTION_VERSION` and §3.10 decisions recorded
+  - Signed off by Timo Betcke on 2026-10-01. Every T2 recommendation is accepted as
+    written: (1) §3.13 as merged in PR #27; (2) `CONVENTION_VERSION` stays 1, and the
+    §3.10 bump rule is not extended to §3.13; (3) source chunks hold coordinates, then
+    charges; (4) target chunks hold leaf-scaled values.
 - [ ] T3 merged: `nd-fmm-exec` skeleton, CI green, root `CLAUDE.md` points to Phase 3; relative frames exact in f32 and f64; table order agrees with `nd-octree`
 - [ ] T4 merged: new index and lists equal the brute-force oracle on 1, 2 and 4 ranks
 - [ ] T5 merged: variable-size ghost exchange passes on 1, 2 and 4 ranks
