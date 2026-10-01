@@ -378,7 +378,7 @@ In the repository root, start `claude` and say:
     written: (1) §3.13 as merged in PR #27; (2) `CONVENTION_VERSION` stays 1, and the
     §3.10 bump rule is not extended to §3.13; (3) source chunks hold coordinates, then
     charges; (4) target chunks hold leaf-scaled values.
-- [ ] T3 merged: `nd-fmm-exec` skeleton, CI green, root `CLAUDE.md` points to Phase 3; relative frames exact in f32 and f64; table order agrees with `nd-octree`
+- [x] T3 merged: `nd-fmm-exec` skeleton, CI green, root `CLAUDE.md` points to Phase 3; relative frames exact in f32 and f64; table order agrees with `nd-octree`
 - [ ] T4 merged: new index and lists equal the brute-force oracle on 1, 2 and 4 ranks
 - [ ] T5 merged: variable-size ghost exchange passes on 1, 2 and 4 ranks
 - [ ] T6 merged: new evaluator equals the old one for `IndexFmm` on every scenario; variable counts pass; on 1, 2 and 4 ranks
