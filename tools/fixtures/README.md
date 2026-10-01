@@ -10,6 +10,7 @@ scripts below.
 | `crosscheck_scipy.py` | independent double-precision second opinion on the conventions and the fixtures | Python ≥ 3.9, `numpy`, `scipy` |
 | `check_translations.py` | high-precision check of the translation operators of CONVENTIONS §3.11; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
 | `check_symmetry.py` | high-precision check of the box geometry and cube symmetry rules of CONVENTIONS §3.12; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
+| `check_leaf_geometry.py` | exact and high-precision check of the leaf data and relative box geometry of CONVENTIONS §3.13; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
 
 All scripts declare their dependencies inline (PEP 723), so with
 [uv](https://docs.astral.sh/uv/) no environment needs to be set up. Run them from the
@@ -162,3 +163,36 @@ random coefficient vectors at the canonical frames of §3.12. Coefficient vector
 compared per degree in the orthonormal weighting of CONVENTIONS §3.8, as in the
 translation check. The script exits non-zero on any failure and takes a little over
 a minute.
+
+## Leaf geometry check
+
+```sh
+uv run tools/fixtures/check_leaf_geometry.py
+```
+
+checks the leaf data and relative box geometry of CONVENTIONS §3.13 with seeded random
+keys and points: the geometry in exact rationals (`fractions.Fraction`), the f64
+evaluation of leaf-scaled coordinates in Python floats (IEEE doubles, reproducing
+`compute_global_bounding_box`, `points_to_morton` and the formula of §3.13 operation by
+operation), and the scaling identities in mpmath at 40 significant digits. It imports
+the leaf sums, the gradient ladder and the error measures from `check_translations.py`.
+It prints the worst error of:
+
+| Check | Tolerance |
+| --- | --- |
+| integer centres a + C_L w / 2^(L+1) equal the midpoint of `morton::physical_box` and the §3.12 centre; C_L odd times 2^(L − l) (levels 0–16, every L ≥ l, a dyadic and a generic domain) | exact |
+| relative frames ĉ(s\|t), r̂(s\|t) equal (c_s − c_t) / r_t and r_s / r_t, round-trip through f32 and f64 (`struct.pack`), reversal rule; largest numerator reported (random key pairs on all 17 × 17 level combinations, three domains) | exact |
+| the relative frames of child and parent, and of V-list pairs, are the canonical frames (½ s_o, ½) and (2d, 1) of §3.12 | exact |
+| u evaluated in f64 in the order of §3.13, and cast to f32, against the exact u (level 16 and random levels, a domain far from the origin and one around it) | the error bound of §3.13 (ratio ≤ 1) |
+| u of points that `points_to_morton` puts into the leaf, including points within a few ulps of the leaf and domain faces, lies in [−1, 1]³ up to β_k (exact u) and β_k plus the error bound (f64, f32) | ratio ≤ 1 |
+| frame maps: (u_t − ĉ(s\|t)) / r̂(s\|t) = (x − c_s) / r_s, (u_s − ĉ(t\|s)) / r̂(t\|s) = (y − c_t) / r_t, ĉ(s\|t) + r̂(s\|t) u_s = (y − c_t) / r_t | exact |
+| P2P in leaf-scaled coordinates times 1 / r_t and 1 / r_t² equals the absolute potential and gradient | 1e-30 |
+| L2P at the unit frame and M2P at (ĉ(s\|t), r̂(s\|t)) give r_t φ and r_t² ∇φ of the absolute frames (p = 8) | 1e-30 |
+| P2M at the unit frame and P2L at (ĉ(t\|s), r̂(t\|s)) give the coefficients of the absolute frames (p = 8) | 1e-30 |
+
+The domain of the containment check comes from the emulated
+`compute_global_bounding_box`, and u uses its x side as w, so the y and z sides differ
+from w by rounding, as in docs/phase3/README.md ("Domain"). The bounds are the
+rigorous forms (with the ε² terms) of the first-order bounds in §3.13. The expansion
+operators themselves are checked in Rust by Phase 3 T8. The script exits non-zero on
+any failure and takes a few seconds.
