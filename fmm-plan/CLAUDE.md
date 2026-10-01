@@ -31,13 +31,14 @@ through the `FmmOperator` trait.
 | --- | --- |
 | `src/lib.rs` | Crate doc plus `pub mod fmm;`, `pub mod ghost_communicator;`, `pub mod interaction_manager;` and `pub mod v2;`. |
 | `src/interaction_manager.rs` | `InteractionManager` — U/V/W/X lists for every non-ghost key of an `Octree`, computed locally. See the section below. |
-| `src/v2.rs`, `src/v2/` | The redesigned plan (Phase 3, T4–T7), beside the old API until T7: `index.rs` (`BoxIndex`, `LeafNumbering`: Morton-ordered `u32` box indices per level, leaf numbering), `lists.rs` (`Csr`, `GroupedCsr` as `VList`/`Children`/`Parents`, `LevelLists`, `offset_index`), `plan.rs` (`Plan::new`, `Plan::from_key_types`, `PlanError`). The per-key list rule is shared with `InteractionManager` through the private `interaction_manager::key_lists`. |
+| `src/v2.rs`, `src/v2/` | The redesigned plan (Phase 3, T4–T7), beside the old API until T7: `index.rs` (`BoxIndex`, `LeafNumbering`: Morton-ordered `u32` box indices per level, leaf numbering), `lists.rs` (`Csr`, `GroupedCsr` as `VList`/`Children`/`Parents`, `LevelLists`, `offset_index`), `plan.rs` (`Plan::new`, `Plan::from_key_types`, `PlanError`), `store.rs` (`LevelBuffers`, `LeafStore` and their slice types: one buffer per level kind, CSR leaf data with variable counts), `exchange.rs` (`SourceExchange`, `MultipoleExchange`, `CoarseExchange`, `ExchangeError`: variable-size source exchange into the ghost tail, per-level multipole exchange, coarse-block gather). The per-key list rule is shared with `InteractionManager` through the private `interaction_manager::key_lists`. |
 | `src/v2/plan_tests.rs` | 12 serial unit tests of the index and the index-form lists against `InteractionManager` on the trees of `interaction_manager_tests.rs`, included via `#[path]`. No MPI. |
+| `src/v2/store_tests.rs`, `src/v2/exchange_tests.rs` | 9 serial unit tests of the store layouts and 6 of the ghost bucketing and per-key chunk sizes (on the trees of `plan_tests.rs`), included via `#[path]`. No MPI. |
 | `src/interaction_manager_tests.rs` | 9 serial unit tests on synthetic key maps (hand counts, brute-force oracle, adjacency, V-list directions), included via `#[path]`. No MPI. |
 | `src/ghost_communicator.rs` | `FmmGhostCommunicator<T>` — one rlst `GhostCommunicator<MortonKey>` per level with owned host send/receive buffers, built from the Morton keys of required ghosts (local and `Global` keys skipped) and a `LevelChunkSizes` (uniform or per level). |
 | `src/ghost_communicator_tests.rs` | 5 serial unit tests of the ghost bucketing and chunk-size lookup, included via `#[path]`. No MPI. |
 | `src/fmm.rs`, `src/fmm/` | Distributed FMM evaluation: the `FmmOperator` trait (`operator.rs`), the generic driver `FmmEvaluator` and per-level store `LevelData` (`evaluator.rs`), and the index-propagating test FMM `IndexFmm` / `run_index_fmm` (`index_fmm.rs`). Serial tests in `evaluator_tests.rs` and `index_fmm_tests.rs`. |
-| `tests/mpi_regressions.rs` | One `#[test]` that owns MPI init and runs 11 named scenarios sequentially. Each builds an `Octree` from the union of a source and a target point set (with the ghost-children layer) and checks the tree, the interaction lists against an oracle, and a forward/backward ghost exchange of every interaction-list ghost, and the index FMM (every leaf must receive every leaf index exactly once). Each scenario also builds a `v2::plan::Plan` and checks its index-form lists against the same oracle, with the view invariants. |
+| `tests/mpi_regressions.rs` | One `#[test]` that owns MPI init and runs 12 named scenarios sequentially. Each builds an `Octree` from the union of a source and a target point set (with the ghost-children layer) and checks the tree, the interaction lists against an oracle, and a forward/backward ghost exchange of every interaction-list ghost, and the index FMM (every leaf must receive every leaf index exactly once). Each scenario also builds a `v2::plan::Plan` and checks its index-form lists against the same oracle, with the view invariants, and runs the `v2::exchange` exchanges: sources with counts of one, `hash(key) % 5` and the real source points per leaf, multipoles with per-level sizes (ghost keys equal to the old communicator's), and the coarse gather. On the graded and the dense-leaf scenarios rank 0 prints the exchange traffic, old against new (`--nocapture`). |
 | `examples/test_index_fmm.rs` | Seeded-random MPI run of the index FMM. |
 | `examples/plan_build_cost.rs` | Release-mode timing and heap use of `Plan::new` against `InteractionManager::new`, on one rank (T4 report; nothing asserted). |
 
@@ -108,7 +109,7 @@ The root checks cover this crate. For this crate alone, add `-p nd-fmm-plan` (e.
 cargo run -p nd-fmm-plan --example test_index_fmm
 ```
 
-`cargo test -p nd-fmm-plan` gives 34 unit tests plus the integration test **on one rank
+`cargo test -p nd-fmm-plan` gives 49 unit tests plus the integration test **on one rank
 only**. It exercises no redistribution and no ghost layer, which is where the
 interesting bugs are.
 
@@ -167,9 +168,11 @@ be assumed to work.
   local non-ghost key against a brute-force oracle over the gathered global tree,
   and checks that every list entry is a key of `all_keys`. Most scenarios only
   reach leaf level 3; `graded corner blob` adds a dense corner at leaf level 6
-  against coarse remote neighbours. Every scenario also runs a forward/backward
-  ghost exchange and the index FMM. Scenarios cover refinement caps, duplicate
-  keys, empty populations, and uneven and empty ranks.
+  against coarse remote neighbours, and `dense max-level leaf` puts 1,000 duplicate
+  points into one leaf at `max_level`, so one source chunk dwarfs the others. Every
+  scenario also runs a forward/backward ghost exchange, the `v2` exchanges and the
+  index FMM. Scenarios cover refinement caps, duplicate keys, empty populations, and
+  uneven and empty ranks.
 - Add new `tests/mpi_regressions.rs` scenarios to the existing `cases` array rather
   than as new `#[test]` functions, so MPI ownership stays with one test.
 - Preserve in-progress work and the local `../octree` path dependency unless
