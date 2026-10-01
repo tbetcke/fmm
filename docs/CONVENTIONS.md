@@ -5,7 +5,8 @@
 This file is the single source of truth for basis functions, phases, storage and
 scaling in the `nd-fmm-*` crates. Code cites it as `CONVENTIONS §3.x`. Any change to
 §3.1–§3.8, §3.11 or §3.12 bumps `CONVENTION_VERSION`, which invalidates committed
-fixtures and cached operator tables.
+fixtures and cached operator tables. §3.13 describes in-memory data only; a change to
+it does not bump the version (§3.10).
 
 Summary of the choices: Legendre functions without the Condon–Shortley phase for
 m ≥ 0, negative orders defined by a (−1)^m conjugate symmetry, Racah-type factorial
@@ -165,6 +166,11 @@ D^n(Q_1 Q_2) = D^n(Q_1)\, D^n(Q_2)
 `CONVENTION_VERSION = 1`. Any change to §3.1–§3.8, §3.11 or §3.12 bumps it, which
 invalidates committed fixtures and cached operator tables. §3.12 is included because
 cached tables depend on its geometry, layout and class rule.
+
+§3.13 is not included, and a change to it does not bump `CONVENTION_VERSION`: it
+describes in-memory data only (chunk layouts, leaf-scaled values, relative frames), and
+no committed fixture and no cached table depends on it. A change to §3.13 changes the
+code that implements it in the same pull request.
 
 ## 3.11 Translation operators
 
@@ -676,3 +682,264 @@ random points and coefficients:
   from their representatives, M2M and L2L for all 48 P from octant 0, and inversion
   for all 316 offsets;
 - the structure of T_M(P) and T_L(P) for the z-axis elements.
+
+## 3.13 Leaf data and relative geometry
+
+The per-leaf chunks of `nd-fmm-plan` hold source data, target input and target output
+(docs/phase3/README.md, requirement 4). This section fixes their layout for the Laplace
+kernel and how one box sees the geometry of another. It builds on the kernel (§3.1),
+real storage (§3.6), the scaling (§3.7), the L2P and M2P forms of §3.11 and the domain,
+levels and tables of §3.12. It is arranged so that no operator ever forms a
+floating-point shift: the domain enters only when points are loaded and when output
+is produced, and every frame an operator uses is an exact dyadic rational computed
+from integer key indices.
+
+Notation: ε₆₄ = 2⁻⁵³ is the unit roundoff of f64 and ε_T that of the storage type T
+(2⁻²⁴ for f32); fl(·) is one correctly rounded f64 operation.
+
+### Integer centres
+
+- For a key on level l with index i from `morton::decode` and a reference level L,
+  l ≤ L ≤ 16, the integer centre is, componentwise,
+
+```math
+\mathbf{C}_L = (2\mathbf{i} + 1)\, 2^{L-l}, \qquad
+\mathbf{c} = \mathbf{a} + \mathbf{C}_L\, \frac{w}{2^{L+1}}
+```
+
+- Each component of C_L is an odd multiple of 2^(L−l) in [1, 2^(L+1) − 1].
+- Since (2i + 1) 2^(L−l) / 2^(L+1) = (i + ½) / 2^l, c is the centre of §3.12, the
+  midpoint of `morton::physical_box`, for every L ≥ l. C_L is that centre in units of
+  the half-width r_L, measured from a.
+
+### Relative frames
+
+For boxes s and t on levels l_s and l_t, with L = max(l_s, l_t), the frame of s seen
+from t is
+
+```math
+\hat{\mathbf{c}}(s|t) = \frac{\mathbf{c}_s - \mathbf{c}_t}{r_t} = \big(\mathbf{C}_L(s) - \mathbf{C}_L(t)\big)\, 2^{\,l_t - L},
+\qquad
+\hat r(s|t) = \frac{r_s}{r_t} = 2^{\,l_t - l_s}
+```
+
+because c_s − c_t = (C_L(s) − C_L(t)) w / 2^(L+1) and r_t = w / 2^(l_t+1). Neither a
+nor w remains: relative frames do not depend on the domain.
+
+- **Exact.** N = C_L(s) − C_L(t) is an integer with |N| ≤ 2^(L+1) − 2 ≤ 2¹⁷ − 2 = 131070
+  for keys on levels 0–16; boxes in opposite corners of level 16 attain it. So
+  ĉ(s|t) = N · 2^(l_t − L) with 0 ≤ L − l_t ≤ 16, and r̂(s|t) = 2^k with |k| ≤ 16.
+  Both have at most 17 significant bits and exponents far inside the normal range, so
+  they are exact in f32 (24-bit significand) and f64. Code forms N in integer
+  arithmetic, converts it to T (exact, |N| < 2²⁴) and multiplies by the power of two
+  (exact); no step rounds.
+- **Reversal.** ĉ(t|s) = −ĉ(s|t) / r̂(s|t) and r̂(t|s) = 1 / r̂(s|t), both exact;
+  ĉ(t|t) = 0 and r̂(t|t) = 1.
+- **The parameters of §3.11.** For an input expansion in box s and an output expansion
+  in box t: M2M has b = ĉ(s|t) and ρ = r̂(s|t); L2L has the shift ĉ(t|s) (the t of
+  §3.11) and σ = r̂(t|s); M2L has b = ĉ(t|s) and σ = r̂(t|s). A child of octant o seen from its parent has
+  (ĉ, r̂) = (½ s_o, ½), and the target of a V-list pair with offset d, seen from its
+  source, has (2d, 1). These are the canonical frames of §3.12, so each table is its
+  operator at the relative frames, exactly, on every level.
+
+### Leaf-scaled coordinates
+
+A point x in leaf b, with level l and index i, of the domain with lower corner a and
+side w (§3.12) is stored, per component, as
+
+```math
+\mathbf{u} = (\mathbf{x} - \mathbf{a})\, \frac{2^{l+1}}{w} - (2\mathbf{i} + 1)
+```
+
+- **Evaluation.** In f64, in this order: d = fl(x − a); then the scaling
+  fl(d · 2^(l+1) / w), which rounds once because the product with 2^(l+1) is exact
+  (fl(d / r_l), with r_l = w · 2^−(l+1) exact, is the same double); then
+  fl(· − (2i + 1)), where 2i + 1 < 2¹⁷ is exact; then rounding to T. Multiplying by a
+  precomputed fl(2^(l+1) / w) rounds once more and is not this formula.
+- **Exact value.** In exact arithmetic u = (x − c_b) / r_b, the scaled coordinates of
+  §3.7 in the frame of b.
+- a is the lower corner of the `PhysicalBox` the tree was built with, and w its side
+  (one value for all three axes).
+
+**Error bound.** Let u be the exact value of the formula for the given doubles x, a and
+w, and ũ the stored one. Per component, to first order in ε₆₄ and ε_T,
+
+```math
+|\tilde u - u| \le
+\underbrace{\varepsilon_{64} \frac{|x - a|}{r_l}}_{x - a}
++ \underbrace{\varepsilon_{64} \frac{|x - a|}{r_l}}_{\text{scaling}}
++ \underbrace{\varepsilon_{64}\, |u|}_{-\,(2i+1)}
++ \underbrace{\varepsilon_T\, |u|}_{\text{cast}}
+```
+
+- *The rounding of x − a* is at most ε₆₄ |x − a| / r_l ≤ ε₆₄ (|x| + |a|) / r_l, and zero
+  when x − a is exact, as for a domain far from the origin (Sterbenz). It stays within
+  the precision of the input itself: x and a are doubles, which locate a point only to
+  about ε₆₄ (|x| + |a|), that is ε₆₄ (|x| + |a|) / r_l in units of the leaf. No layout of
+  the leaf data recovers more. Interleaved absolute coordinates stored in T lose
+  ε_T |x| / r_l instead: for |x| ≈ w, 2¹⁷ ε₃₂ ≈ 7.8e-3 at level 16 in f32.
+- *The scaling* is at most ε₆₄ |x − a| / r_l. For points of the domain |x − a| ≤ w up
+  to rounding, so the two terms together are at most 2 · 2^(l+1) ε₆₄ = 2^(l−51),
+  2.9e-11 at level 16, wherever the domain lies.
+- *The subtraction of 2i + 1* is at most ε₆₄ |u|, and exact (Sterbenz) in every
+  component with i ≥ 1 or u ≥ −½.
+- *The cast* is at most ε_T |u|, and absent for T = f64.
+
+So in f64 the stored u is within 2^(l−51) + ε₆₄ of the exact one, and in f32 the cast
+dominates on every level.
+
+**Containment.** Let w_k = fl(max_k − min_k) be the side of the `PhysicalBox` along axis
+k, which `points_to_morton` divides by, and a_k = min_k. For every point that
+`points_to_morton` puts into leaf b (from its key on the leaf's level or any deeper
+one), component k of the exact u lies in [−1 − β_k, 1 + β_k], and that of the stored
+ũ in [−1 − β_k − E, 1 + β_k + E], with E the error bound above and, to first order,
+
+```math
+\beta_k = \frac{|w_k - w| + 2\varepsilon_{64}\, w}{r_l}
+```
+
+*Derivation.* `points_to_morton` computes ρ = fl(fl(x − a_k) / w_k). Rounding is
+monotone and a_k < x < max_k, so 0 ≤ ρ ≤ 1. The index on level l is
+i = min(⌊2^l ρ⌋, 2^l − 1) (a deeper key's index shifted right gives the same), so
+i ≤ 2^l ρ ≤ i + 1. Exactly, 2^l (x − a) / w = 2^l ρ (w_k / w)(1 + δ) with
+|δ| ≤ 2ε₆₄ to first order, which differs from 2^l ρ by at most
+2^l (|w_k − w| / w + 2ε₆₄). And u = 2 (2^l (x − a) / w − i) − 1.
+
+- For w_k = w, β = 2^(l−51), 2.9e-11 at level 16.
+- `compute_global_bounding_box` forms each side as the difference of two rounded corner
+  coordinates, so its sides agree only to |w_k − w| = O(ε₆₄ (|a| + w)) (docs/phase3/README.md,
+  "Domain"). Then β = O(ε₆₄ (|a| + w) / r_l): the order of the input precision above,
+  and far inside the tested range |u| ≤ √3 of §3.9.
+
+### Source chunks
+
+A leaf with n ≥ 0 source points holds 4n values of T, 4 per point:
+
+```text
+u_0 u_1 … u_(n−1) q_0 q_1 … q_(n−1)        u_j = (x, y, z) of point j
+```
+
+- The first 3n values are the leaf-scaled coordinate triples, point-major, x before y
+  before z, so they read as n values of `[T; 3]` without copying.
+- The last n values are the charges in the same point order, rounded to T and not
+  scaled: the kernel's scale enters only through r_t at output.
+- These chunks are exchanged for ghost leaves (U and X lists). u is relative to the
+  leaf's own key, so a received chunk needs no transformation.
+
+### Target input and output
+
+A leaf with n ≥ 0 target points has two chunks, in the same point order:
+
+- **Target input**, 3n values: the leaf-scaled positions u₀, …, uₙ₋₁, point-major,
+  from the same formula as sources. Local only, never exchanged.
+- **Target output**, n values (potentials only) or 4n values (with gradients): first
+  φ̂₀, …, φ̂ₙ₋₁, then, with gradients, the triples ĝ₀, …, ĝₙ₋₁, point-major. Which of
+  the two is fixed for an FMM. Local only.
+
+For a target x in leaf t with half-width r_t,
+
+```math
+\hat\phi(\mathbf{x}) = r_t \sum_j \frac{q_j}{|\mathbf{x} - \mathbf{y}_j|}, \qquad
+\hat{\mathbf{g}}(\mathbf{x}) = r_t^2\, \nabla_{\mathbf{x}} \sum_j \frac{q_j}{|\mathbf{x} - \mathbf{y}_j|}
+```
+
+the potential and gradient of the 1/|x − y| kernel of §3.1 in units of the target
+leaf. Every operator below accumulates (+=) into them with no further factor.
+
+### Operators in scaled coordinates
+
+A `nd_fmm_ref::Frame` (C, R) maps a point p to (p − C) / R (`Frame::scaled`); `leaf::l2p`
+and `leaf::m2p` multiply by 1/R and, for the gradient, 1/R² (§3.11, "L2P and M2P").
+Each operator passes:
+
+| Operator | Call | Frame | Applied to | Result, with no factor |
+| --- | --- | --- | --- | --- |
+| P2M at leaf s | `leaf::p2m` | ((0, 0, 0), 1) | u_s | M̃ of s in (c_s, r_s) |
+| P2L from leaf s into box t | `leaf::p2l` | (ĉ(t\|s), r̂(t\|s)) | u_s | L̃ of t in (c_t, r_t) |
+| L2P at leaf t | `leaf::l2p` | ((0, 0, 0), 1) | u_t | φ̂, ĝ |
+| M2P from box s at leaf t | `leaf::m2p` | (ĉ(s\|t), r̂(s\|t)) | u_t | φ̂, ĝ |
+| P2P from leaf s to leaf t | `p2p::p2p` | none | ŷ = ĉ(s\|t) + r̂(s\|t) u_s and u_t | φ̂, ĝ |
+| M2M, L2L, M2L | tables (§3.12) | by child index o and offset index (d) | coefficients | coefficients in the output frame |
+
+*Derivations.* With y = c_s + r_s u_s for a source in leaf s and x = c_t + r_t u_t for a
+target in leaf t:
+
+- **P2M.** §3.7 defines the multipole of leaf s in its frame (c_s, r_s) as
+  M̃ = Σ q conj Rₙᵐ((y − c_s) / r_s) = Σ q conj Rₙᵐ(u_s). The unit frame maps u_s to
+  itself exactly, so `p2m` returns M̃.
+- **P2L.** §3.7 defines the local expansion of box t in its frame as
+  L̃ = Σ q conj Iₙᵐ((y − c_t) / r_t). Here (y − c_t) / r_t = ĉ(s|t) + r̂(s|t) u_s
+  = (u_s − ĉ(t|s)) / r̂(t|s) by the reversal rule, which the frame (ĉ(t|s), r̂(t|s))
+  computes. `p2l` uses its frame only through `Frame::scaled`, so it returns L̃ with no
+  factor.
+- **L2P.** By §3.11, φ(x) = (1/r_t) Σ L̃ₙᵐ Rₙᵐ(v) and ∇φ(x) = (1/r_t²) Σ L̃ₙᵐ (∇Rₙᵐ)(v)
+  with v = (x − c_t) / r_t = u_t. With the unit frame, `l2p` returns
+  Σ L̃ₙᵐ Rₙᵐ(u_t) = r_t φ = φ̂ and Σ L̃ₙᵐ (∇Rₙᵐ)(u_t) = r_t² ∇φ = ĝ.
+- **M2P.** By §3.11, in the frame (c_s, r_s) of the multipole,
+  φ(x) = (1/r_s) Σ M̃ₙᵐ Iₙᵐ(v) and ∇φ(x) = (1/r_s²) Σ M̃ₙᵐ (∇Iₙᵐ)(v) with
+  v = (x − c_s) / r_s = (u_t − ĉ(s|t)) / r̂(s|t), which the frame (ĉ(s|t), r̂(s|t))
+  computes. `m2p` returns (1/r̂) Σ M̃ₙᵐ Iₙᵐ(v) = (r_t / r_s) Σ M̃ₙᵐ Iₙᵐ(v) = r_t φ = φ̂, and
+  (1/r̂²) Σ M̃ₙᵐ (∇Iₙᵐ)(v) = (r_t² / r_s²) Σ M̃ₙᵐ (∇Iₙᵐ)(v) = r_t² ∇φ = ĝ. The 1/r̂ and
+  1/r̂² that `m2p` applies are exactly the factors that convert to units of t.
+- **P2P.** ŷ = (y − c_t) / r_t = ĉ(s|t) + r̂(s|t) u_s and x − y = r_t (u_t − ŷ). So
+  Σ q / |u_t − ŷ| = r_t Σ q / |x − y| = φ̂, and
+  −Σ q (u_t − ŷ) / |u_t − ŷ|³ = r_t² · (−Σ q (x − y) / |x − y|³) = ĝ, which `p2p`
+  computes from ŷ and u_t. For s = t, ŷ = u_s: the stored chunk is passed unchanged.
+  For s ≠ t, ŷ is formed in scratch; r̂ u_s is exact (barring underflow) and the
+  addition rounds once.
+- **M2M, L2L and M2L.** The coefficients are scaled (§3.7) and the tables of §3.12 are
+  the operators at the relative frames (see "Relative frames"). They are looked up by
+  child index o and offset index (d); no geometry is evaluated.
+
+Since ĉ and r̂ are exact in T, `Frame::scaled` rounds once in P2L and M2P (the
+subtraction; division by a power of two is exact), relative to |u − ĉ|, on every level
+and wherever the domain lies, in place of the ε |c| / r_l of a floating-point shift
+(§3.12).
+
+### Coincident pairs
+
+A source and a target at the same point x lie in the same leaf, because
+`points_to_morton` maps a point to its key by its coordinates alone. They get the same
+u bit for bit, and for s = t P2P passes the stored u_s unchanged, so the exact-coincidence
+rule of `nd_fmm_ref::p2p` still excludes the pair.
+
+This assumes that sources and targets in one leaf are loaded with the same formula from
+the same f64 coordinates: the same a, w and key, the same operation order and the same
+T. Two consequences, both below the resolution of T in the leaf:
+
+- distinct points whose stored u agree in T (closer than about ε_T r_l per component)
+  are excluded as coincident;
+- for s ≠ t, a rounded ŷ that equals u_t is excluded likewise.
+
+### Output
+
+```math
+\phi(\mathbf{x}) = \frac{\hat\phi}{4\pi r_t}, \qquad
+\nabla\phi(\mathbf{x}) = \frac{\hat{\mathbf{g}}}{4\pi r_t^2}
+```
+
+with r_t = w / 2^(l_t+1), exact in f64. `nd-fmm-exec` applies both once, when producing
+output (§3.1). No operator, table or chunk contains 1/(4π) or r_t.
+
+### Verification
+
+`tools/fixtures/check_leaf_geometry.py` checks, with seeded random keys and points, in
+exact rationals, in IEEE doubles that reproduce `nd_octree` operation by operation, and
+in mpmath at 40 digits:
+
+- the integer centres against the midpoint of `morton::physical_box` and the centre of
+  §3.12, on every level 0–16 and every L ≥ l, for a dyadic and a generic domain;
+- the relative frames against (c_s − c_t) / r_t and r_s / r_t, for random key pairs on
+  all level combinations and three domains, their exact round trip through f32 and f64,
+  the largest numerator (2¹⁷ − 2), the reversal rule, and the canonical frames of
+  §3.12;
+- the f64 evaluation of u, and its cast to f32, against the error bound, at the deepest
+  level and on random levels, for a domain far from the origin and one around it;
+- containment in [−1, 1]³ up to β_k, for the domain of `compute_global_bounding_box`
+  and points near the leaf faces;
+- the frame maps of P2L, M2P and P2P, exactly;
+- the scaling identities: P2P in leaf-scaled coordinates against the absolute potential
+  and gradient, L2P and M2P at the frames above against r_t and r_t² times their
+  absolute values, and P2M and P2L against the coefficients of the absolute frames.
+
+The expansion operators themselves are checked in Rust by Phase 3 T8.
