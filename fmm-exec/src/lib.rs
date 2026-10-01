@@ -51,8 +51,16 @@
 //! - [`geometry`]: the validated cubic [`Domain`](geometry::Domain), box centres and
 //!   radii (§3.12), integer centres, exact relative frames and leaf-scaled coordinates
 //!   (§3.13).
+//! - [`tables`]: the M2L strategy ([`M2lStrategy`](tables::M2lStrategy)) and the
+//!   translation tables it needs ([`Tables`](tables::Tables)), built or loaded from a
+//!   cache, applied by child index and offset index (§3.11, §3.12).
+//! - [`operator`]: [`LaplaceOperator`](operator::LaplaceOperator), the Laplace kernel on
+//!   the level-batched interface of `nd-fmm-plan` and on its per-pair interface, with
+//!   per-pair kernels for every operator (§3.11–§3.13; C3.1).
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 //! [`RealScalar`]: nd_fmm_math::RealScalar
 
 pub mod geometry;
+pub mod operator;
+pub mod tables;

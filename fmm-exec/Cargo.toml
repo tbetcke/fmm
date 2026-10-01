@@ -16,6 +16,7 @@ nd-fmm-ref = { workspace = true }
 nd-fmm-tables = { workspace = true }
 nd-fmm-plan = { workspace = true }
 nd-octree = { workspace = true }
+mpi = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
