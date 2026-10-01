@@ -29,14 +29,17 @@ through the `FmmOperator` trait.
 
 | Path | Contents |
 | --- | --- |
-| `src/lib.rs` | Crate doc plus `pub mod fmm;`, `pub mod ghost_communicator;` and `pub mod interaction_manager;`. |
+| `src/lib.rs` | Crate doc plus `pub mod fmm;`, `pub mod ghost_communicator;`, `pub mod interaction_manager;` and `pub mod v2;`. |
 | `src/interaction_manager.rs` | `InteractionManager` — U/V/W/X lists for every non-ghost key of an `Octree`, computed locally. See the section below. |
+| `src/v2.rs`, `src/v2/` | The redesigned plan (Phase 3, T4–T7), beside the old API until T7: `index.rs` (`BoxIndex`, `LeafNumbering`: Morton-ordered `u32` box indices per level, leaf numbering), `lists.rs` (`Csr`, `GroupedCsr` as `VList`/`Children`/`Parents`, `LevelLists`, `offset_index`), `plan.rs` (`Plan::new`, `Plan::from_key_types`, `PlanError`). The per-key list rule is shared with `InteractionManager` through the private `interaction_manager::key_lists`. |
+| `src/v2/plan_tests.rs` | 12 serial unit tests of the index and the index-form lists against `InteractionManager` on the trees of `interaction_manager_tests.rs`, included via `#[path]`. No MPI. |
 | `src/interaction_manager_tests.rs` | 9 serial unit tests on synthetic key maps (hand counts, brute-force oracle, adjacency, V-list directions), included via `#[path]`. No MPI. |
 | `src/ghost_communicator.rs` | `FmmGhostCommunicator<T>` — one rlst `GhostCommunicator<MortonKey>` per level with owned host send/receive buffers, built from the Morton keys of required ghosts (local and `Global` keys skipped) and a `LevelChunkSizes` (uniform or per level). |
 | `src/ghost_communicator_tests.rs` | 5 serial unit tests of the ghost bucketing and chunk-size lookup, included via `#[path]`. No MPI. |
 | `src/fmm.rs`, `src/fmm/` | Distributed FMM evaluation: the `FmmOperator` trait (`operator.rs`), the generic driver `FmmEvaluator` and per-level store `LevelData` (`evaluator.rs`), and the index-propagating test FMM `IndexFmm` / `run_index_fmm` (`index_fmm.rs`). Serial tests in `evaluator_tests.rs` and `index_fmm_tests.rs`. |
-| `tests/mpi_regressions.rs` | One `#[test]` that owns MPI init and runs 11 named scenarios sequentially. Each builds an `Octree` from the union of a source and a target point set (with the ghost-children layer) and checks the tree, the interaction lists against an oracle, and a forward/backward ghost exchange of every interaction-list ghost, and the index FMM (every leaf must receive every leaf index exactly once). |
+| `tests/mpi_regressions.rs` | One `#[test]` that owns MPI init and runs 11 named scenarios sequentially. Each builds an `Octree` from the union of a source and a target point set (with the ghost-children layer) and checks the tree, the interaction lists against an oracle, and a forward/backward ghost exchange of every interaction-list ghost, and the index FMM (every leaf must receive every leaf index exactly once). Each scenario also builds a `v2::plan::Plan` and checks its index-form lists against the same oracle, with the view invariants. |
 | `examples/test_index_fmm.rs` | Seeded-random MPI run of the index FMM. |
+| `examples/plan_build_cost.rs` | Release-mode timing and heap use of `Plan::new` against `InteractionManager::new`, on one rank (T4 report; nothing asserted). |
 
 Read `src/interaction_manager.rs`, `src/fmm/evaluator.rs` and `tests/mpi_regressions.rs` for
 how the API actually behaves; prose is a summary, they are the contract.
@@ -45,7 +48,7 @@ how the API actually behaves; prose is a summary, they are the contract.
 
 Follow the root navigation rules (LSP first; `rlst` sources in the registry cache, not
 `../rlst`). `nd-octree` is the workspace sibling at `../octree/src/…`. Within this
-crate's seven small source modules (plus their `*_tests.rs` files), reading a whole
+crate's small source modules (plus their `*_tests.rs` files), reading a whole
 file beats either LSP or `grep`.
 
 ## The interaction manager
@@ -105,7 +108,7 @@ The root checks cover this crate. For this crate alone, add `-p nd-fmm-plan` (e.
 cargo run -p nd-fmm-plan --example test_index_fmm
 ```
 
-`cargo test -p nd-fmm-plan` gives 22 unit tests plus the integration test **on one rank
+`cargo test -p nd-fmm-plan` gives 34 unit tests plus the integration test **on one rank
 only**. It exercises no redistribution and no ghost layer, which is where the
 interesting bugs are.
 

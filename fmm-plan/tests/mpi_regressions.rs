@@ -6,7 +6,11 @@ use mpi::{collective::SystemOperation, traits::*};
 use nd_fmm_plan::{
     fmm::index_fmm::run_index_fmm,
     ghost_communicator::{FmmGhostCommunicator, LevelChunkSizes},
-    interaction_manager::InteractionManager,
+    interaction_manager::{InteractionManager, V_LIST_DIRECTIONS},
+    v2::{
+        lists::{GroupedCsr, offset_index},
+        plan::Plan,
+    },
 };
 use nd_octree::{
     Octree, OctreeOptions, PhysicalBox, constants::DEEPEST_LEVEL, morton, morton::is_ancestor,
@@ -153,6 +157,211 @@ fn check_interaction_lists(
             }
         }
     }
+}
+
+/// The rows of a grouped view as sorted (target, source, group) triples, checking that
+/// every row is strictly ascending in its group.
+fn grouped_rows<G: Copy + Into<usize>>(view: &GroupedCsr<G>) -> Vec<(u32, u32, usize)> {
+    let mut triples = Vec::new();
+    for t in 0..view.nrows() {
+        let (sources, groups) = view.row(t);
+        assert!(
+            groups
+                .windows(2)
+                .all(|pair| pair[0].into() < pair[1].into())
+        );
+        triples.extend(
+            sources
+                .iter()
+                .zip(groups)
+                .map(|(&s, &g)| (t as u32, s, g.into())),
+        );
+    }
+    triples.sort_unstable();
+    triples
+}
+
+/// The batches of a grouped view as sorted (target, source, group) triples, checking that
+/// every batch lists its targets strictly ascending, so each at most once.
+fn grouped_batches<G: Copy + Into<usize>>(view: &GroupedCsr<G>) -> Vec<(u32, u32, usize)> {
+    let mut triples = Vec::new();
+    for g in 0..view.ngroups() {
+        let (targets, sources) = view.batch(g);
+        assert!(targets.windows(2).all(|pair| pair[0] < pair[1]));
+        triples.extend(targets.iter().zip(sources).map(|(&t, &s)| (t, s, g)));
+    }
+    triples.sort_unstable();
+    triples
+}
+
+/// Compare the index-form lists of every local non-ghost box against the brute-force
+/// oracle, through the key and index maps, and check the invariants of the views.
+fn check_plan(
+    name: &str,
+    all_keys: &HashMap<u64, KeyType>,
+    plan: &Plan,
+    coarse_blocks: &[u64],
+    global_leaves: &[u64],
+) {
+    let mut keys: Vec<u64> = morton::get_interior_keys(global_leaves)
+        .into_iter()
+        .collect();
+    keys.extend_from_slice(global_leaves);
+    keys.sort_unstable();
+    keys.dedup();
+
+    let index = plan.index();
+    let leaves = index.leaves();
+    let mut own_blocks = coarse_blocks.to_vec();
+    own_blocks.sort_unstable();
+    assert_eq!(plan.coarse_blocks(), own_blocks, "{name}: coarse blocks");
+
+    // The numbering: every held key, in Morton order per level.
+    let mut held = 0;
+    for level in 0..index.nlevels() {
+        let level_keys = index.keys(level);
+        assert!(level_keys.windows(2).all(|pair| pair[0] < pair[1]));
+        for (i, &key) in level_keys.iter().enumerate() {
+            assert_eq!(morton::level(key), level);
+            assert_eq!(
+                index.kind(level, i),
+                all_keys[&key],
+                "{name}: kind of {key}"
+            );
+            assert_eq!(index.find(key), Some((level, i as u32)));
+        }
+        held += level_keys.len();
+    }
+    assert_eq!(held, all_keys.len(), "{name}: held keys");
+
+    // The leaves: local ones by (level, key), then the ghosts named by U or X, by key.
+    let mut local: Vec<(usize, u64)> = all_keys
+        .iter()
+        .filter(|&(_, &kind)| kind == KeyType::LocalLeaf)
+        .map(|(&key, _)| (morton::level(key), key))
+        .collect();
+    local.sort_unstable();
+    let numbered: Vec<(usize, u64)> = (0..leaves.nlocal())
+        .map(|j| (leaves.level(j), leaves.key(j)))
+        .collect();
+    assert_eq!(numbered, local, "{name}: local leaves");
+    let ghost_leaves: Vec<u64> = leaves.ghosts().map(|j| leaves.key(j)).collect();
+    assert!(ghost_leaves.windows(2).all(|pair| pair[0] < pair[1]));
+    let mut named = Vec::new();
+
+    let leaf_key = |j: &u32| leaves.key(*j as usize);
+    for level in 0..index.nlevels() {
+        let lists = plan.level(level);
+        let local = leaves.local(level);
+        let key_on = |level: usize| move |i: &u32| index.key(level, *i as usize);
+
+        for (i, &key) in index.keys(level).iter().enumerate() {
+            let kind = index.kind(level, i);
+            if kind.is_ghost() {
+                assert!(lists.v().row(i).0.is_empty() && lists.x().row(i).is_empty());
+                assert!(lists.l2l().row(i).0.is_empty() && lists.p2m().row(i).is_empty());
+                assert!(lists.m2m_local().row(i).0.is_empty());
+                assert!(lists.m2m_global().row(i).0.is_empty());
+                continue;
+            }
+            let expected = oracle_lists(&keys, global_leaves, key);
+            let mut v: Vec<u64> = lists.v().row(i).0.iter().map(key_on(level)).collect();
+            let mut x: Vec<u64> = lists.x().row(i).iter().map(leaf_key).collect();
+            v.sort_unstable();
+            x.sort_unstable();
+            let (u, w) = match index.box_leaf(level, i) {
+                Some(leaf) => {
+                    let r = leaf as usize - local.start;
+                    let near: Vec<u64> = lists.near().row(r).iter().map(leaf_key).collect();
+                    assert!(
+                        near.contains(&key),
+                        "{name}: near list of {key} lacks itself"
+                    );
+                    let mut u: Vec<u64> = near.into_iter().filter(|&e| e != key).collect();
+                    u.sort_unstable();
+                    let w: Vec<u64> = lists.w().row(r).iter().map(key_on(level + 1)).collect();
+                    (u, w)
+                }
+                None => (Vec::new(), Vec::new()),
+            };
+            for (list_name, actual, expected) in [
+                ("U", &u, &expected[0]),
+                ("V", &v, &expected[1]),
+                ("W", &w, &expected[2]),
+                ("X", &x, &expected[3]),
+            ] {
+                assert_eq!(
+                    actual, expected,
+                    "{name}: index-form {list_name}-list of {key}"
+                );
+            }
+            named.extend(
+                u.iter()
+                    .chain(&x)
+                    .copied()
+                    .filter(|entry| all_keys[entry].is_ghost()),
+            );
+
+            // Octant views: the children of non-ghost interiors, the parent of every box.
+            let (children, octants) = match kind {
+                KeyType::LocalInterior => lists.m2m_local().row(i),
+                KeyType::Global => lists.m2m_global().row(i),
+                _ => (&[][..], &[][..]),
+            };
+            let children: Vec<u64> = children.iter().map(key_on(level + 1)).collect();
+            if kind == KeyType::LocalInterior || kind == KeyType::Global {
+                assert_eq!(children, morton::children(key).unwrap(), "{name}: children");
+                assert_eq!(octants, [0, 1, 2, 3, 4, 5, 6, 7]);
+            } else {
+                assert!(children.is_empty());
+            }
+            let (parents, octants) = lists.l2l().row(i);
+            let parents: Vec<u64> = parents.iter().map(key_on(level.wrapping_sub(1))).collect();
+            assert_eq!(parents, morton::parent(key).into_iter().collect::<Vec<_>>());
+            if level > 0 {
+                assert_eq!(octants, [morton::child_index(key) as u8]);
+            }
+        }
+
+        // The same pairs in both views, with offset indices that match the keys.
+        for view in [lists.m2m_local(), lists.m2m_global(), lists.l2l()] {
+            assert_eq!(grouped_rows(view), grouped_batches(view), "{name}: octants");
+        }
+        let v_pairs = grouped_rows(lists.v());
+        assert_eq!(v_pairs, grouped_batches(lists.v()), "{name}: V batches");
+        for &(t, s, d) in &v_pairs {
+            let direction = {
+                let (_, target) = morton::decode(index.key(level, t as usize));
+                let (_, source) = morton::decode(index.key(level, s as usize));
+                [0, 1, 2].map(|dim| target[dim] as i64 - source[dim] as i64)
+            };
+            assert_eq!(V_LIST_DIRECTIONS[d], direction);
+            assert_eq!(offset_index(direction), Some(d));
+        }
+
+        // Rows cover the boxes of the level, and the local leaves of the level, once each.
+        let nboxes = index.len(level);
+        for nrows in [
+            lists.v().nrows(),
+            lists.x().nrows(),
+            lists.m2m_local().nrows(),
+            lists.m2m_global().nrows(),
+            lists.l2l().nrows(),
+            lists.p2m().nrows(),
+        ] {
+            assert_eq!(nrows, nboxes, "{name}: box rows of level {level}");
+        }
+        for nrows in [lists.near().nrows(), lists.w().nrows(), lists.l2p().nrows()] {
+            assert_eq!(nrows, local.len(), "{name}: leaf rows of level {level}");
+        }
+        for (r, leaf) in local.enumerate() {
+            assert_eq!(lists.l2p().row(r), [leaves.box_index(leaf)]);
+        }
+    }
+
+    named.sort_unstable();
+    named.dedup();
+    assert_eq!(ghost_leaves, named, "{name}: ghost leaves");
 }
 
 /// The value that the owner of `key` sends as the `j`-th entry of its chunk.
@@ -383,6 +592,33 @@ fn distributed_tree_regressions() {
         global_leaves.sort_unstable();
         assert!(morton::is_complete_linear_and_balanced(&global_leaves));
         check_interaction_lists(name, octree.all_keys(), &lists, &global_leaves);
+
+        // The index-form plan, against the same oracle. Building it is collective.
+        let plan =
+            Plan::new(&octree).unwrap_or_else(|error| panic!("rank {rank}: {name}: {error}"));
+        check_plan(
+            name,
+            octree.all_keys(),
+            &plan,
+            octree.coarse_tree_leafs(),
+            &global_leaves,
+        );
+        // The graded tree has `Global` boxes on every rank count and spreads its lists
+        // over several ranks, so the global pass and the ghost leaves are exercised.
+        let global_pairs: usize = plan.levels().iter().map(|l| l.m2m_global().len()).sum();
+        let mut ghost_leaves = 0usize;
+        comm.all_reduce_into(
+            &plan.index().leaves().ghosts().len(),
+            &mut ghost_leaves,
+            SystemOperation::sum(),
+        );
+        if name == "graded corner blob" {
+            assert!(global_pairs > 0, "{name}: no global M2M pair");
+            assert!(
+                comm.size() == 1 || ghost_leaves > 0,
+                "{name}: no ghost leaf"
+            );
+        }
 
         let chunk_sizes = if name == "identical populations" {
             LevelChunkSizes::Uniform(3)

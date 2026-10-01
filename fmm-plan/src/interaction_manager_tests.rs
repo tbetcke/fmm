@@ -5,7 +5,7 @@ use nd_octree::{MortonKey, constants::DEEPEST_LEVEL, morton, octree::KeyType};
 use std::collections::HashMap;
 
 /// All cells of a uniformly refined tree at the given level.
-fn uniform_leaves(level: usize) -> Vec<MortonKey> {
+pub(crate) fn uniform_leaves(level: usize) -> Vec<MortonKey> {
     let n = 1usize << level;
     let mut leaves = Vec::with_capacity(n * n * n);
     for x in 0..n {
@@ -62,7 +62,7 @@ fn adaptive_leaves() -> Vec<Vec<MortonKey>> {
 }
 
 /// Every tree used by these tests.
-fn all_trees() -> Vec<Vec<MortonKey>> {
+pub(crate) fn all_trees() -> Vec<Vec<MortonKey>> {
     let mut trees = vec![
         uniform_leaves(1),
         uniform_leaves(2),
@@ -73,7 +73,7 @@ fn all_trees() -> Vec<Vec<MortonKey>> {
 }
 
 /// Classify a complete, balanced leaf list as a purely local tree.
-fn key_types(leaves: &[MortonKey]) -> HashMap<MortonKey, KeyType> {
+pub(crate) fn key_types(leaves: &[MortonKey]) -> HashMap<MortonKey, KeyType> {
     assert!(morton::is_complete_linear_and_balanced(leaves));
     let mut all_keys = HashMap::<MortonKey, KeyType>::new();
     for key in morton::get_interior_keys(leaves) {
@@ -110,13 +110,13 @@ fn touching(a: MortonKey, b: MortonKey) -> bool {
 
 /// A brute-force oracle over the global key set, using only the geometric
 /// definitions of the four lists.
-struct Oracle {
-    keys: Vec<MortonKey>,
+pub(crate) struct Oracle {
+    pub(crate) keys: Vec<MortonKey>,
     leaves: Vec<MortonKey>,
 }
 
 impl Oracle {
-    fn new(leaves: &[MortonKey]) -> Self {
+    pub(crate) fn new(leaves: &[MortonKey]) -> Self {
         let mut keys: Vec<MortonKey> = morton::get_interior_keys(leaves).into_iter().collect();
         keys.extend_from_slice(leaves);
         keys.sort_unstable();
@@ -131,7 +131,7 @@ impl Oracle {
     }
 
     /// All leaves adjacent to a leaf `b`.
-    fn u(&self, b: MortonKey) -> Vec<MortonKey> {
+    pub(crate) fn u(&self, b: MortonKey) -> Vec<MortonKey> {
         if !self.is_leaf(b) {
             return Vec::new();
         }
@@ -144,7 +144,7 @@ impl Oracle {
 
     /// All boxes on the level of `b` whose parent touches the parent of `b` and
     /// that do not touch `b`.
-    fn v(&self, b: MortonKey) -> Vec<MortonKey> {
+    pub(crate) fn v(&self, b: MortonKey) -> Vec<MortonKey> {
         let Some(b_parent) = morton::parent(b) else {
             return Vec::new();
         };
@@ -162,7 +162,7 @@ impl Oracle {
 
     /// All boxes finer than the leaf `b` whose parent touches `b` and that do
     /// not touch `b` themselves.
-    fn w(&self, b: MortonKey) -> Vec<MortonKey> {
+    pub(crate) fn w(&self, b: MortonKey) -> Vec<MortonKey> {
         if !self.is_leaf(b) {
             return Vec::new();
         }
@@ -178,7 +178,7 @@ impl Oracle {
     }
 
     /// The dual of the W-list: all leaves `l` with `b` in `w(l)`, written out.
-    fn x(&self, b: MortonKey) -> Vec<MortonKey> {
+    pub(crate) fn x(&self, b: MortonKey) -> Vec<MortonKey> {
         let Some(b_parent) = morton::parent(b) else {
             return Vec::new();
         };

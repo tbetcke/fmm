@@ -90,7 +90,7 @@
 
 #[cfg(test)]
 #[path = "interaction_manager_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::HashMap;
 
@@ -560,7 +560,7 @@ impl InteractionManager {
     /// Requires the map to describe a complete, 2:1 (26-neighbour) balanced tree
     /// together with its one-cell same-level ghost halo, as
     /// [`Octree::all_keys`](nd_octree::Octree::all_keys) provides.
-    fn from_key_types(all_keys: &HashMap<MortonKey, KeyType>) -> Self {
+    pub(crate) fn from_key_types(all_keys: &HashMap<MortonKey, KeyType>) -> Self {
         let mut u_list = HashMap::<MortonKey, Vec<MortonKey>>::new();
         let mut v_list = HashMap::<MortonKey, Vec<MortonKey>>::new();
         let mut w_list = HashMap::<MortonKey, Vec<MortonKey>>::new();
@@ -573,85 +573,7 @@ impl InteractionManager {
                 continue;
             }
 
-            let mut u = Vec::<MortonKey>::new();
-            let mut v = Vec::<MortonKey>::new();
-            let mut w = Vec::<MortonKey>::new();
-            let mut x = Vec::<MortonKey>::new();
-
-            // The U- and W-lists are derived from the same-level neighbour cells
-            // of a leaf. Both are empty for interior keys.
-            if is_leaf(key_type) {
-                for neighbour in valid_neighbours(key) {
-                    match all_keys.get(&neighbour) {
-                        // The neighbour cell is a leaf of the tree. It is
-                        // adjacent to `key` and hence in the U-list.
-                        Some(&neighbour_type) if is_leaf(neighbour_type) => u.push(neighbour),
-                        // The neighbour cell is refined. Its children adjacent to
-                        // `key` are leaves by 2:1 balance and form part of the
-                        // U-list, the remaining children form part of the
-                        // W-list. Deeper descendants cannot contribute: their
-                        // parents are not adjacent to `key`.
-                        Some(&neighbour_type) if is_interior(neighbour_type) => {
-                            for child in children_of(neighbour) {
-                                if is_adjacent(child, key) {
-                                    u.push(child);
-                                } else {
-                                    w.push(child);
-                                }
-                            }
-                        }
-                        Some(_) => {
-                            unreachable!("KeyType is partitioned into leaf and interior variants")
-                        }
-                        // The neighbour cell is not in the tree, so it is covered
-                        // by a coarser leaf. By 2:1 balance that leaf is the
-                        // parent of the cell. Several cells may share it.
-                        None => {
-                            let parent = morton::parent(neighbour)
-                                .expect("a neighbour cell is never the root");
-                            debug_assert!(
-                                all_keys.get(&parent).copied().is_some_and(is_leaf),
-                                "the parent of a missing neighbour cell must be a local leaf"
-                            );
-                            u.push(parent);
-                        }
-                    }
-                }
-            }
-
-            // The V- and X-lists are derived from the same-level neighbour cells
-            // of the parent. Both are empty for the root.
-            if let Some(parent) = morton::parent(key) {
-                for neighbour in valid_neighbours(parent) {
-                    // The parent is interior, so by 2:1 balance all its
-                    // same-level neighbour cells exist, and by the halo property
-                    // they are all known locally. A miss means that assumption
-                    // broke, which must not be papered over.
-                    let neighbour_type = *all_keys
-                        .get(&neighbour)
-                        .expect("a same-level neighbour of an interior key must be known locally");
-                    if is_interior(neighbour_type) {
-                        // All children of the neighbour exist in the tree. Those
-                        // not adjacent to `key` form the V-list.
-                        for child in children_of(neighbour) {
-                            if !is_adjacent(child, key) {
-                                v.push(child);
-                            }
-                        }
-                    } else if !is_adjacent(neighbour, key) {
-                        // A leaf neighbour of the parent that does not touch
-                        // `key` is an X-list entry and contributes nothing to
-                        // the V-list.
-                        x.push(neighbour);
-                    }
-                }
-            }
-
-            finish(&mut u);
-            finish(&mut v);
-            finish(&mut w);
-            finish(&mut x);
-
+            let [u, v, w, x] = key_lists(key, key_type, all_keys);
             u_list.insert(key, u);
             v_list.insert(key, v);
             w_list.insert(key, w);
@@ -667,8 +589,103 @@ impl InteractionManager {
     }
 }
 
+/// Compute the U-, V-, W- and X-lists of the non-ghost `key`, in that order.
+///
+/// This is the per-key rule shared by [`InteractionManager`] and
+/// [`crate::v2::plan::Plan`]. Each list is sorted ascending and deduplicated.
+/// The rule requires `all_keys` to describe a complete, 2:1 (26-neighbour)
+/// balanced tree together with its one-cell same-level ghost halo, as
+/// [`Octree::all_keys`](nd_octree::Octree::all_keys) provides; it panics if a
+/// same-level neighbour of the parent of `key` is not a key of the map.
+pub(crate) fn key_lists(
+    key: MortonKey,
+    key_type: KeyType,
+    all_keys: &HashMap<MortonKey, KeyType>,
+) -> [Vec<MortonKey>; 4] {
+    let mut u = Vec::<MortonKey>::new();
+    let mut v = Vec::<MortonKey>::new();
+    let mut w = Vec::<MortonKey>::new();
+    let mut x = Vec::<MortonKey>::new();
+
+    // The U- and W-lists are derived from the same-level neighbour cells
+    // of a leaf. Both are empty for interior keys.
+    if is_leaf(key_type) {
+        for neighbour in valid_neighbours(key) {
+            match all_keys.get(&neighbour) {
+                // The neighbour cell is a leaf of the tree. It is
+                // adjacent to `key` and hence in the U-list.
+                Some(&neighbour_type) if is_leaf(neighbour_type) => u.push(neighbour),
+                // The neighbour cell is refined. Its children adjacent to
+                // `key` are leaves by 2:1 balance and form part of the
+                // U-list, the remaining children form part of the
+                // W-list. Deeper descendants cannot contribute: their
+                // parents are not adjacent to `key`.
+                Some(&neighbour_type) if is_interior(neighbour_type) => {
+                    for child in children_of(neighbour) {
+                        if is_adjacent(child, key) {
+                            u.push(child);
+                        } else {
+                            w.push(child);
+                        }
+                    }
+                }
+                Some(_) => {
+                    unreachable!("KeyType is partitioned into leaf and interior variants")
+                }
+                // The neighbour cell is not in the tree, so it is covered
+                // by a coarser leaf. By 2:1 balance that leaf is the
+                // parent of the cell. Several cells may share it.
+                None => {
+                    let parent =
+                        morton::parent(neighbour).expect("a neighbour cell is never the root");
+                    debug_assert!(
+                        all_keys.get(&parent).copied().is_some_and(is_leaf),
+                        "the parent of a missing neighbour cell must be a local leaf"
+                    );
+                    u.push(parent);
+                }
+            }
+        }
+    }
+
+    // The V- and X-lists are derived from the same-level neighbour cells
+    // of the parent. Both are empty for the root.
+    if let Some(parent) = morton::parent(key) {
+        for neighbour in valid_neighbours(parent) {
+            // The parent is interior, so by 2:1 balance all its
+            // same-level neighbour cells exist, and by the halo property
+            // they are all known locally. A miss means that assumption
+            // broke, which must not be papered over.
+            let neighbour_type = *all_keys
+                .get(&neighbour)
+                .expect("a same-level neighbour of an interior key must be known locally");
+            if is_interior(neighbour_type) {
+                // All children of the neighbour exist in the tree. Those
+                // not adjacent to `key` form the V-list.
+                for child in children_of(neighbour) {
+                    if !is_adjacent(child, key) {
+                        v.push(child);
+                    }
+                }
+            } else if !is_adjacent(neighbour, key) {
+                // A leaf neighbour of the parent that does not touch
+                // `key` is an X-list entry and contributes nothing to
+                // the V-list.
+                x.push(neighbour);
+            }
+        }
+    }
+
+    finish(&mut u);
+    finish(&mut v);
+    finish(&mut w);
+    finish(&mut x);
+
+    [u, v, w, x]
+}
+
 /// Return true if the key type denotes an interior box of the tree.
-fn is_interior(key_type: KeyType) -> bool {
+pub(crate) fn is_interior(key_type: KeyType) -> bool {
     matches!(
         key_type,
         KeyType::LocalInterior | KeyType::GhostInterior(_) | KeyType::Global
@@ -676,12 +693,12 @@ fn is_interior(key_type: KeyType) -> bool {
 }
 
 /// Return true if the key type denotes a leaf of the tree.
-fn is_leaf(key_type: KeyType) -> bool {
+pub(crate) fn is_leaf(key_type: KeyType) -> bool {
     matches!(key_type, KeyType::LocalLeaf | KeyType::GhostLeaf(_))
 }
 
 /// Iterate over the in-domain same-level neighbour cells of `key`.
-fn valid_neighbours(key: MortonKey) -> impl Iterator<Item = MortonKey> {
+pub(crate) fn valid_neighbours(key: MortonKey) -> impl Iterator<Item = MortonKey> {
     morton::neighbours(key)
         .into_iter()
         .filter(|&neighbour| morton::is_valid(neighbour))
