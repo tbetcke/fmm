@@ -44,10 +44,10 @@ use crate::{SplitMix64, points};
 /// docs/phase3/README.md, "Predictions").
 ///
 /// p = 3 and 8 are the Phase 1 T7 values (one draw of 1,000 sources, 1,000 targets per
-/// offset). p = 18 is the T9 re-derivation, the median over nine draws with 10⁴
+/// offset). p = 18 is the T9 re-derivation, the median over 33 draws with 10⁴
 /// targets per offset; Phase 1's 2.71e-9 had too few targets for the heavy-tailed
 /// error of the face offsets.
-pub const PREDICTION: [(usize, f64); 3] = [(3, 1.77e-3), (8, 1.08e-5), (18, 5.78e-9)];
+pub const PREDICTION: [(usize, f64); 3] = [(3, 1.77e-3), (8, 1.08e-5), (18, 6.74e-9)];
 
 /// Returns the prediction at degree `p`, if [`PREDICTION`] has one.
 pub fn prediction(p: usize) -> Option<f64> {

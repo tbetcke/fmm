@@ -73,7 +73,7 @@ fn main() {
     );
     println!(
         "- Prediction: the single-translation φ L2 error of P2M → M2L → L2P (design §7; \
-         p = 18 re-derived in T9 as the median over nine source draws, docs/phase3/README.md, \
+         p = 18 re-derived in T9 as the median over 33 source draws, docs/phase3/README.md, \
          \"Predictions\"), {}; the C3.2 gate allows twice that.",
         PREDICTION
             .iter()
