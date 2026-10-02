@@ -295,9 +295,9 @@ In the repository root, start `claude` and say:
 "Read docs/phase3s/T<k>-<name>.md and do that task." Review and merge before the next.
 
 ## Exit checklist
-- [ ] `docs/design/simd-p2p.md` signed off, including the unsafe exception
-- [ ] T1 merged: `check_p2p_domain.py` passes; §3.13 addition drafted
-- [ ] §3.13 addition reviewed and signed off
+- [x] `docs/design/simd-p2p.md` signed off, including the unsafe exception
+- [x] T1 merged: `check_p2p_domain.py` passes; §3.13 addition drafted
+- [x] §3.13 addition reviewed and signed off
 - [ ] T2 merged: spike report with NEON measurements, the green-kernels baseline on NEON and the x86_64 formulations
 - [ ] Spike recommendation signed off (loop order, inverse square root, blocking, relaxed level)
 - [x] x86_64 benchmark machines: none available; x86_64 is correctness-only in CI (decided 2026-10-02)
