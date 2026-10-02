@@ -33,16 +33,18 @@
 //!
 //! - [`SplitMix64`]: a small seeded generator, the algorithm of the `nd-fmm-math`
 //!   tests, so no `rand` dependency.
-//! - [`points`]: uniform points in a cube and a ball, and on a sphere surface; random
-//!   charges.
+//! - [`points`]: uniform points in a cube and a ball, and on a sphere surface; the
+//!   Plummer sphere and Gaussian clusters, truncated; random charges.
 //! - [`metrics`]: the error measures above.
 //! - [`accuracy`]: the single-translation accuracy sweep of the operator chains
 //!   against `nd_fmm_ref::p2p::direct_sum`, with the translations of `nd-fmm-ref` or
 //!   of the tables, run by the `accuracy` example.
 //! - [`bench`](mod@bench): the helpers of the timing reports (median time per call, fitted
 //!   exponent, crossover, machine description).
-//! - [`fmm_accuracy`]: the complete FMM of `nd-fmm-exec` on a uniform tree against the
-//!   direct sum, over several charge vectors (C3.2), run by the `fmm_accuracy` example.
+//! - [`fmm_accuracy`]: the complete FMM of `nd-fmm-exec` against the direct sum, over
+//!   several charge vectors, on a uniform tree (C3.2) and on the adaptive trees of the
+//!   sphere surface, the Plummer sphere and Gaussian clusters (C3.3), run by the
+//!   `fmm_accuracy` example.
 //!
 //! The examples `accuracy`, `timing`, `tables` and `fmm_accuracy` print Markdown
 //! reports on stdout:
@@ -53,6 +55,7 @@
 //! cargo run --release -p nd-fmm-validate --example timing
 //! cargo run --release -p nd-fmm-validate --example tables
 //! cargo run --release -p nd-fmm-validate --example fmm_accuracy
+//! cargo run --release -p nd-fmm-validate --example fmm_accuracy -- --distribution plummer
 //! ```
 //!
 //! Since Phase 3 the crate depends on `nd-fmm-exec`, and so on MPI: building it, and
