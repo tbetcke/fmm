@@ -304,7 +304,7 @@ In the repository root, start `claude` and say:
 - [x] arm64 CI job: yes (decided 2026-10-02)
 - [x] AVX-512: deferred until hardware is available (decided 2026-10-02)
 - [x] T3 merged: `nd-fmm-simd` skeleton, CI green including the new x86_64 and arm64 `nd-fmm-simd` job, root `CLAUDE.md` points to Phase 3S
-- [ ] T4 merged: inverse square root within 4 u_T on every ISA run; no calls in the inner loops
+- [x] T4 merged: inverse square root within 4 u_T on every ISA run; no calls in the inner loops
 - [ ] T5 merged: kernel accuracy and invariance on every ISA run; throughput against the spike reported
 - [ ] T6 merged: Phase 3 gates pass with every ISA; bit-identity for threads and per-pair; `Auto` default
 - [x] Leaf-size default: T7 adopts its own recommendation (decided 2026-10-02)
