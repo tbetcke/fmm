@@ -1,5 +1,6 @@
 //! The portable scalar path: a plain loop with `sqrt` and division, written for
-//! clarity, not speed (docs/design/simd-p2p.md §5.2).
+//! clarity, not speed (docs/design/simd-p2p.md §5.2), and the one-lane implementation
+//! of the vector layer, [`Scalar`].
 //!
 //! For each target, the sources are visited in input order and each term is added
 //! directly into the outputs, with the formulas and operation order of
@@ -10,6 +11,100 @@
 //! (CONVENTIONS §3.13, "Fast kernels"), where the reference skips x == y.
 
 use nd_fmm_math::RealScalar;
+
+use super::Simd;
+use crate::{Isa, SimdScalar};
+
+/// The token of the scalar path, available everywhere: the vector layer with one lane
+/// ([`Simd::W`] = 1), in plain Rust.
+///
+/// It is the reference of the layer's tests, and lets the generic vector code run on
+/// the scalar path as a check. Its inverse square root and its "estimate" are both
+/// 1/√x by `sqrt` and a division, within 1.5 u_T: two correctly rounded operations.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Scalar;
+
+impl<T: SimdScalar> Simd<T> for Scalar {
+    type V = T;
+    type Mask = bool;
+    const W: usize = 1;
+    const ISA: Isa = Isa::Scalar;
+
+    #[inline(always)]
+    fn splat(self, x: T) -> T {
+        x
+    }
+
+    #[inline(always)]
+    fn load(self, x: &[T]) -> T {
+        x[0]
+    }
+
+    #[inline(always)]
+    fn store(self, v: T, out: &mut [T]) {
+        out[0] = v;
+    }
+
+    #[inline(always)]
+    fn add(self, a: T, b: T) -> T {
+        a + b
+    }
+
+    #[inline(always)]
+    fn sub(self, a: T, b: T) -> T {
+        a - b
+    }
+
+    #[inline(always)]
+    fn mul(self, a: T, b: T) -> T {
+        a * b
+    }
+
+    #[inline(always)]
+    fn fma(self, a: T, b: T, c: T) -> T {
+        a.mul_add(b, c)
+    }
+
+    #[inline(always)]
+    fn fnma(self, a: T, b: T, c: T) -> T {
+        (-a).mul_add(b, c)
+    }
+
+    #[inline(always)]
+    fn eq(self, a: T, b: T) -> bool {
+        a == b
+    }
+
+    #[inline(always)]
+    fn and_not(self, mask: bool, v: T) -> T {
+        if mask { T::zero() } else { v }
+    }
+
+    #[inline(always)]
+    fn rsqrt_estimate(self, x: T) -> T {
+        T::one() / x.sqrt()
+    }
+
+    #[inline(always)]
+    fn rsqrt(self, x: T) -> T {
+        T::one() / x.sqrt()
+    }
+
+    #[inline(always)]
+    fn load3(self, points: &[[T; 3]]) -> [T; 3] {
+        points[0]
+    }
+
+    #[inline(always)]
+    fn store3(self, v: [T; 3], points: &mut [[T; 3]]) {
+        points[0] = v;
+    }
+
+    #[inline(always)]
+    fn broadcast(self, point: &[T; 3], charge: T) -> ([T; 3], T) {
+        (*point, charge)
+    }
+}
 
 /// P2P with the scalar path, with lengths already checked by the caller.
 pub(crate) fn p2p<T: RealScalar>(
