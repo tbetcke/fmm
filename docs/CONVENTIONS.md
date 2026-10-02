@@ -911,6 +911,87 @@ T. Two consequences, both below the resolution of T in the leaf:
   are excluded as coincident;
 - for s ≠ t, a rounded ŷ that equals u_t is excluded likewise.
 
+### Fast kernels
+
+The vectorised P2P kernels of `nd-fmm-simd` (docs/design/simd-p2p.md) exclude a pair by
+r² = 0 instead. They take the inputs of `p2p::p2p` (u_t, and ŷ as formed above, u_s
+itself for s = t) and compute in T each component dₖ = fl(u_t,k − ŷₖ) by one
+subtraction, then r² = d₀² + d₁² + d₂² with the two additions in any order and each
+square rounded or fused into an fma. A pair with r² = 0 contributes nothing.
+`nd_fmm_ref::p2p` keeps the exact-coincidence rule. On leaf-scaled data the two rules
+agree. With G_k = 2⁻ᵏ ℤ, the dyadic rationals whose denominator divides 2ᵏ:
+
+- **Rounding keeps a grid.** For z ∈ G_k, with 2⁻ᵏ no smaller than the smallest
+  subnormal of T, fl(z) ∈ G_k: if |z| < 2^(p−k), with p = 24 or 53 significand bits, z
+  is exact in T; otherwise |fl(z)| ≥ 2^(p−k), where the spacing of T is at least
+  2^(1−k).
+- **Stored coordinates lie in G₅₃**, in f32 and f64, for every double
+  v = fl(fl(x − a) · 2^(l+1) / w) the evaluation forms. If |v − (2i + 1)| ≥ ½, the f64
+  result has magnitude at least ½, and every double that large lies in G₅₃. Otherwise
+  v > ½, so v ∈ G₅₃, and so do its difference with the integer 2i + 1, the rounding of
+  that difference and the cast to f32. A nonzero |u| is therefore at least 2⁻⁵³,
+  whatever the domain, level and index.
+- **Mapped sources lie in G₅₄.** By 2:1 balance a U list holds leaves on l_t − 1, l_t
+  and l_t + 1. Componentwise, ĉ(s|t) ∈ {±1, ±3} with r̂ = 2 for a coarser source,
+  ĉ ∈ {0, ±2} with r̂ = 1 on the same level, and ĉ ∈ {±½, ±3/2} with r̂ = ½ for a finer
+  one. r̂ u_s is exact and lies in G₅₄, and ĉ ∈ G₁, so ŷ = fl(ĉ + r̂ u_s) ∈ G₅₄. For
+  s = t, ŷ = u_s ∈ G₅₃.
+- **Differences.** u_t,k − ŷₖ ∈ G₅₄, so dₖ ∈ G₅₄. dₖ = 0 exactly when u_t,k == ŷₖ as
+  floating-point values (+0 and −0 compare equal and square to +0), and otherwise
+  |dₖ| ≥ 2⁻⁵⁴.
+- **r².** A nonzero dₖ has dₖ² ≥ 2⁻¹⁰⁸, a power of two, so its rounding is at least
+  2⁻¹⁰⁸ too. The terms are non-negative and rounding is monotone, so in every order and
+  with or without fma, r² ≥ 2⁻¹⁰⁸ unless all three dₖ vanish, and r² = 0 if they do.
+
+So on leaf-scaled data r² = 0 if and only if u_t == ŷ in all three components, which
+is the rule of `nd_fmm_ref::p2p` on the same inputs, with both consequences listed
+above. Every nonzero r² is at least 2⁻¹⁰⁸: a normal number in f32 (smallest normal
+2⁻¹²⁶) with a margin of 2¹⁸, and in f64 by far.
+
+*The smallest value.* ŷ, and hence dₖ, in fact lie in G₅₃. For coarser and same-level
+sources r̂ u_s ∈ G₅₃ and ĉ ∈ ℤ. A finer source with u_s ∉ G₅₂ has v < 1, because every
+double v ≥ 1 lies in G₅₂ and so do fl(v − (2i + 1)) and its cast. With |u| ≤ 1 + β′
+(β′ ≤ ⅛, below) that means index 0 along that axis and u_s ∈ [−1, 0). Adjacency then
+forces index 0 for the target and ĉ = −½, so |ĉ + r̂ u_s| > ½, and its rounding lies in
+G₅₃. Hence a nonzero |dₖ| is at least 2⁻⁵³ and a nonzero r² at least 2⁻¹⁰⁶. Both are
+attained: in a leaf with index 0 along an axis of the domain [0, 1]³, the points at the
+leaf centre and one f64 spacing below it have u = 0 and u = −2⁻⁵³, both exact in f32,
+and r² = 2⁻¹⁰⁶ when their other components agree.
+
+*The largest value.* The stored |u| is at most 1 + β′ per component, with β′ = β + the
+error bound above ("Containment"). A U-list source then has |ŷₖ| ≤ 5 + 2β′ (a coarser
+leaf with |ĉₖ| = 3), so |dₖ| ≤ 6 + 3β′, and with the roundings
+r² ≤ 3 (6 + 3β′)² (1 + ε_T)⁷, which is 108 for β′ = 0 and below 122 < 2⁷ for β′ ≤ ⅛.
+β′ ≤ ⅛ holds on every level for every domain that `Domain::new` accepts with corner
+coordinates of magnitude M ≤ 2³⁰ w: its side tolerance gives β ≤ 2⁻³⁶ (4M/w + 6) to first
+order, and the error bound adds less than 2⁻²².
+
+**Kernel domain.** r² = 0, or 2⁻¹⁰⁸ ≤ r² ≤ 2⁷: the bounds above rounded outwards to
+powers of two, with the lower end from the argument that needs no containment bound.
+The accuracy contract of a fast kernel (docs/design/simd-p2p.md, Sections 3 and 4.3)
+holds for pairs in the domain; pairs outside it are outside the contract, whatever the
+reference does there. Every pair that P2P forms in the FMM lies in it (at the upper end,
+for domains with M ≤ 2³⁰ w). The domain lies inside the normal range of f32, so an
+inverse-square-root estimate never sees a subnormal r², also when an f64 r² is
+converted to f32 for the estimate.
+
+**Range of the terms in f32.** The domain bounds r², not every intermediate of a term.
+In f32 with gradients:
+
+- the reference forms r² · r, which is 2⁻¹²⁶ at r² = 2⁻⁸⁴, subnormal below it and zero
+  below 2⁻¹⁰⁰, where the term becomes infinite;
+- a fast kernel forms (q ρ) ρ² ≈ q r⁻³, with ρ ≈ 1/r, which exceeds the largest f32
+  (about 2¹²⁸) below r² ≈ 2⁻⁸⁵·³ for |q| = 1.
+
+The term itself, of magnitude at most |q| / r² ≤ 2¹⁰⁸ |q|, would be finite. So in f32
+the gradient of a pair with r² < 2⁻⁸⁴, two points closer than 2⁻⁴² r_t, is inaccurate
+or infinite in both paths, and the gradient contract of fast kernels in f32 holds for
+2⁻⁸⁴ ≤ r² ≤ 2⁷ and |q| ≤ 1. Potentials, and everything in f64, stay in the normal
+range on the whole domain.
+
+Like the rest of §3.13 this describes in-memory data and the kernels that read it. It
+changes no fixture and no table, and `CONVENTION_VERSION` stays 1 (§3.10).
+
 ### Output
 
 ```math
@@ -943,3 +1024,23 @@ in mpmath at 40 digits:
   absolute values, and P2M and P2L against the coefficients of the absolute frames.
 
 The expansion operators themselves are checked in Rust by Phase 3 T8.
+
+`tools/fixtures/check_p2p_domain.py` checks "Fast kernels", with u evaluated as above,
+ŷ, dₖ and r² emulated operation by operation in f32 and f64, and the claims in exact
+rationals:
+
+- that u lies in G₅₃ for every double v near 2i + 1, (2i + 1) ± ½ and (2i + 1) ± 1, and
+  for tiny v;
+- adversarial pairs on levels 0–16: target leaves at the first, last, middle and random
+  indices, the leaf itself and every U-list neighbour that 2:1 balance allows (every ĉ
+  component), with points within a few spacings of the leaf centres, of the leaf faces
+  as `points_to_morton` draws them, of the source centres and of the cancellations
+  ĉ + r̂ u_s ≈ 0, in a dyadic domain at the origin, a dyadic, a generic and a far domain;
+- seeded random pairs on levels 0–16 in a dyadic, a generic and a far domain, with
+  duplicated points in the self pairs;
+- in both: ŷ and dₖ in G₅₄ and G₅₃, r² = 0 exactly when the rule of `nd_fmm_ref::p2p`
+  skips the pair, with r² formed as the reference forms it and with fma in two orders,
+  and every nonzero r² at least 2⁻¹⁰⁶;
+- the largest r² at the far corners of corner neighbours on all three levels, against
+  3 (6 + 3β′)² (1 + ε_T)⁷ and 2⁷;
+- the f32 range of the gradient intermediates on [2⁻⁸⁴, 2⁷].

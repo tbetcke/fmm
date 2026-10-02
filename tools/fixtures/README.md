@@ -11,6 +11,7 @@ scripts below.
 | `check_translations.py` | high-precision check of the translation operators of CONVENTIONS §3.11; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
 | `check_symmetry.py` | high-precision check of the box geometry and cube symmetry rules of CONVENTIONS §3.12; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
 | `check_leaf_geometry.py` | exact and high-precision check of the leaf data and relative box geometry of CONVENTIONS §3.13; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
+| `check_p2p_domain.py` | exact check of the coincident-pair rule and the domain of r² of fast P2P kernels, CONVENTIONS §3.13 "Fast kernels"; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned, through `check_leaf_geometry.py`) |
 
 All scripts declare their dependencies inline (PEP 723), so with
 [uv](https://docs.astral.sh/uv/) no environment needs to be set up. Run them from the
@@ -196,3 +197,33 @@ from w by rounding, as in docs/phase3/README.md ("Domain"). The bounds are the
 rigorous forms (with the ε² terms) of the first-order bounds in §3.13. The expansion
 operators themselves are checked in Rust by Phase 3 T8. The script exits non-zero on
 any failure and takes a few seconds.
+
+## P2P domain check
+
+```sh
+uv run tools/fixtures/check_p2p_domain.py
+```
+
+checks the claims of CONVENTIONS §3.13, "Fast kernels": that a fast P2P kernel, which
+skips a pair when r² = 0, skips exactly the pairs that the exact-coincidence rule of
+`nd_fmm_ref::p2p` skips on leaf-scaled data, and that every nonzero r² lies in the kernel
+domain [2⁻¹⁰⁸, 2⁷]. The stored values come from `check_leaf_geometry.py`'s emulation of
+`points_to_morton` and of the f64 formula of §3.13, cast to f32. ŷ, dₖ and r² are formed
+operation by operation in T: an f32 operation as the f32 rounding of the f64 result
+(correctly rounded, since 53 ≥ 2 · 24 + 2), an fma rounded once from its exact value
+(`fractions.Fraction`). The claims are checked in exact rationals. It prints, and fails
+on any violation of:
+
+| Check | Claim |
+| --- | --- |
+| the f32 and f64 emulation against exact rounding of rationals, including f32 subnormals | exact |
+| u = fl(v − (2i + 1)) and its f32 cast for every double v near 2i + 1, (2i + 1) ± ½ and (2i + 1) ± 1, and tiny v; smallest nonzero \|u\| reported | u ∈ G₅₃ |
+| adversarial pairs: levels 0–16, the self pair and every U-list neighbour of 2:1 balance (every ĉ component), points within a few spacings of leaf centres, leaf faces (as `points_to_morton` draws them), source centres and cancellations ĉ + r̂ u_s ≈ 0, four domains | ŷ, dₖ ∈ G₅₄ and G₅₃; dₖ = 0 ⇔ u_t,k == ŷₖ; r² = 0 ⇔ the reference rule skips; nonzero r² ≥ 2⁻¹⁰⁶ |
+| seeded random pairs on levels 0–16, three domains, duplicated points in the self pairs | the same |
+| the far corners of corner neighbours on all three levels | r² ≤ 3 (6 + 3β′)² (1 + ε_T)⁷ < 2⁷ |
+| f32 gradient intermediates r² · r (reference) and (q ρ) ρ² (fast kernels) for r² in [2⁻⁸⁴, 2⁷] | normal and finite |
+
+r² is formed as the reference forms it, ((d₀² + d₁²) + d₂²), and with fma in two
+orders. The last lines give, per precision, the smallest nonzero r² found (2⁻¹⁰⁶, the
+sharp bound) with its margin to the domain's lower end 2⁻¹⁰⁸ and to the smallest normal
+number, and the largest r² (108). It takes about half a minute.
