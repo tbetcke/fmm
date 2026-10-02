@@ -1,6 +1,9 @@
 # FMM workspace structure: crates, boundaries and conventions
 
 As of 2026-09-29; revised the same day after reading the `octree` and `fmm-plan` sources.
+Revised at the end of Phase 3 (2026-10-02; Sections 1.1, 3, 3.1, 4 and 6): `nd-fmm-plan`
+is rewritten around a batched operator interface, and `nd-fmm-exec` and the Phase 3
+parts of `nd-fmm-validate` are built.
 
 Add six new crates to the existing workspace, created phase by phase rather than all at
 once. The existing `nd-fmm-plan` crate is the integration layer. It already owns the
@@ -51,7 +54,8 @@ directory `fmm-plan`, package `nd-fmm-plan`), and a `CLAUDE.md` in every crate.
 
 ### 1.1 What the existing crates provide
 
-Checked against the sources. Line references are to the state on 2026-09-29.
+Checked against the sources: `nd-octree` on 2026-09-29, `nd-fmm-plan` as rewritten in
+Phase 3 (2026-10-02).
 
 **`nd-octree`** is a topology library. It stores keys, ownership and neighbour relations.
 It stores no points and no application data.
@@ -96,45 +100,52 @@ It stores no points and no application data.
     interior boxes, which the V- and W-lists need.
 
 **`nd-fmm-plan`** plans the topology and data flow of an FMM on a concrete
-`nd_octree::Octree`. Kernel arithmetic is deliberately kept out of it.
+`nd_octree::Octree`. Kernel arithmetic is deliberately kept out of it. Phase 3 rewrote
+it (design: [fmm-plan-redesign.md](fmm-plan-redesign.md); T4–T7, PRs #30–#33). As of
+the end of Phase 3 it provides:
 
-- **`InteractionManager::new(&octree)`** computes the U, V, W and X lists locally, with no
-  collectives.
-  - The lists are `HashMap<MortonKey, Vec<MortonKey>>`, one entry for every non-ghost key.
-    Entries are sorted, deduplicated and routinely ghosts.
-  - The tree must be built with `with_ghost_children(true)`.
-  - `V_LIST_DIRECTIONS: [[i64; 3]; 316]` lists the M2L offsets.
-  - `v_list_by_direction(level)` groups the (target, source) pairs of a level by offset
-    `index(target) − index(source)`.
-- **`FmmOperator`** trait: associated `type Value: Equivalence + Copy + Default`.
-  - Sizes: `multipole_size(level)`, `local_size(level)`, `source_size()`, `target_size()`.
-  - All eight operators (`p2m`, `m2m`, `m2l`, `p2l`, `l2l`, `l2p`, `m2p`, `p2p`) act on
-    **one pair of boxes**, given only by their Morton keys.
-  - Each operator accumulates into flat slices.
-  - Geometry is the implementation's job, derived from the key.
-- **`FmmEvaluator`** implements the whole distributed pass order in `evaluate()`:
-  1. Source exchange for U and X ghosts.
-  2. Local P2M and M2M.
-  3. Global upward pass: coarse-tree multipoles are gathered to all ranks, and `Global`
-     keys are recomputed on every rank.
-  4. Multipole exchange for V and W ghosts.
-  5. Downward pass: L2L, then M2L over V, then P2L over X.
-  6. Leaves: L2P, then M2P over W, then P2P over U and self.
-- **`LevelData<T>`** stores one flat buffer per level with `chunk_size(level)` values per
-  key; key k occupies `data[l][pos·size .. (pos+1)·size]`.
-  - A level's multipoles are therefore already a column-major
-    `multipole_size × nboxes` matrix.
-  - Column positions follow insertion order (partly `HashMap` order), not Morton order.
-- **`FmmGhostCommunicator<T>`** holds one rlst `GhostCommunicator` per level
-  (neighbourhood collectives) over host buffers with a fixed chunk size per level.
-- **Limits stated in the crate (`src/fmm.rs`, "Future extensions"):**
-  - source and target data have a fixed size per leaf;
-  - operators are applied one pair at a time;
-  - there is no batching per level or per V-list direction;
-  - there is no overlap of exchange and computation;
-  - there is no device-resident data.
-- **`IndexFmm`** is a test operator. It propagates leaf indices (`Value = u32`) and so
-  checks the whole distributed compute graph exactly.
+- **`index::BoxIndex`.** On every level, the boxes a rank holds (local, `Global` and
+  ghost) are numbered 0..n in Morton order, by their sorted keys: deterministic for a
+  fixed tree and number of ranks. Index → key is O(1); key → index is a binary search,
+  used only off hot paths. Leaves have a separate leaf numbering: the local leaves by
+  (level, key), so each level's leaves are one contiguous range, then the ghost leaves
+  that a U or X list names.
+- **`lists`.** The U, V, W and X lists and the parent/child relations as index arrays:
+  - target-centric CSR rows (`Csr`, `VList`, `Children`, `Parents`), whose rows line
+    up with `chunks_mut(size)` of an output buffer;
+  - V grouped per (level, offset) in the order of `V_LIST_DIRECTIONS` (CONVENTIONS
+    §3.12), with each target at most once per batch; M2M and L2L grouped per (level,
+    child octant), with local and global M2M views.
+
+  The per-key list rule of the original `InteractionManager` is kept (private, in
+  `interaction_manager`), and its brute-force oracle in `tests/mpi_regressions.rs` is
+  the specification. The tree must be built with `with_ghost_children(true)`.
+- **`plan::Plan::new(&octree)`** builds the index and the lists of every level
+  without communication, then agrees on the level count and on validity (missing
+  ghost-children layer, unheld list entries or children) with two all-reduces, so an
+  error is returned on every rank.
+- **`store`.** `LevelBuffers`: one buffer per kind (multipoles, locals), box i of level
+  l at offset(l) + i · size(l), so a level is a column-major size × n matrix.
+  `LeafStore`: CSR stores for source data (local and ghost leaves), target input and
+  target output (local leaves only), with variable counts per leaf, zero allowed.
+- **`exchange`.** `SourceExchange` (variable-size ghost chunks, one exchange for all
+  levels), `MultipoleExchange` (one per level) and `CoarseExchange` (the gather of the
+  coarse blocks for the global upward pass). Buffers are flat and contiguous per level.
+- **`operator`.** `FmmSizes` and the level-batched `FmmOperator`: one `&mut self`
+  call per level and kind (`p2m`, `m2m` per pass, `m2l`, `p2l`, `l2l`, `l2p`, `m2p`,
+  `p2p`), each with the level, the `BoxIndex`, both views of its list, the shared
+  inputs and an exclusive output. `PairOperator` and the `PerPair<P>` adapter serve
+  simple per-pair operators.
+- **`evaluator::Evaluator`** runs the unchanged distributed pass order in six public
+  stages: source exchange, local upward pass, global upward pass, multipole exchange,
+  downward pass, leaf evaluation. Every rank enters every collective, also with empty
+  input. Every accumulation follows the order of the target's row.
+- **`index_fmm`.** `IndexFmm` (per pair) and `BatchedIndexFmm` (walking the rows or the
+  groupings) propagate leaf indices and check the whole distributed compute graph
+  exactly, with any per-leaf counts.
+- **Still not provided** ("Future extensions" in the crate docs): overlap of exchange
+  and computation (C5.2) and device-resident data. The redistribution of points to
+  their owning ranks is designed (redesign §9) and implemented in C5.1.
 
 ## 2. Workspace layout
 
@@ -178,18 +189,20 @@ Each crate has one job and a public surface small enough to describe in a few li
 | `fmm-math` | `nd-fmm-math` | Phase 0 (done) | real solid harmonics and gradients, rotation blocks, index layout, scalar trait | `num-traits` |
 | `fmm-ref` | `nd-fmm-ref` | Phase 1 (done) | f64 reference operators (direct O(p⁴) and rotation O(p³)), P2P, direct-sum oracle | `nd-fmm-math`, `num-traits` |
 | `fmm-tables` | `nd-fmm-tables` | Phase 2 (done) | M2M/L2L (8 octants each), M2L (316 offsets, symmetry classes), rotation tables, versioned cache, later SVD compression | `nd-fmm-math`, `nd-fmm-ref`, `num-traits`, `thiserror` (cache errors); `rlst` (without its `mpi` feature) only with SVD compression (C6.2); no serialiser, as the cache writes its own little-endian format |
-| `fmm-exec` | `nd-fmm-exec` | Phase 3 (host), Phase 4 (device) | `impl FmmOperator` for Laplace, box geometry from Morton keys, user-facing FMM object, M2L strategy selection | `nd-fmm-plan`, `nd-octree`, `mpi`, `nd-fmm-tables`, `nd-fmm-kernels` (feature `gpu`), `rayon` |
+| `fmm-exec` | `nd-fmm-exec` | Phase 3 (host, done), Phase 4 (device) | the level-batched `FmmOperator` for Laplace (`LaplaceOperator`), box geometry from integer Morton keys, user-facing FMM object, M2L strategy selection, host threading | as built in Phase 3: `nd-fmm-math`, `nd-fmm-ref`, `nd-fmm-tables`, `nd-fmm-plan`, `nd-octree`, `mpi` (feature `derive`), `rlst` (no features of its own; `nd-octree` enables `mpi`), `rayon`, `thiserror`; dev-dependency `proptest`. Phase 4 adds `nd-fmm-kernels` (feature `gpu`) |
 | `fmm-kernels` | `nd-fmm-kernels` | Phase 4 | all `#[cube]` kernels; runtime-generic | `cubecl` (pinned), CubeCL matmul crate, `nd-fmm-math` (constants only) |
-| `fmm-validate` | `nd-fmm-validate` (`publish = false`) | Phase 1 (done), grows with each phase | error norms, point distributions, accuracy sweeps, benchmarks | all of the above, as dev tooling; in Phase 1 `nd-fmm-math` and `nd-fmm-ref`, in Phase 2 also `nd-fmm-tables` |
+| `fmm-validate` | `nd-fmm-validate` (`publish = false`) | Phase 1 (done), grows with each phase | error norms, point distributions, accuracy sweeps, the FMM accuracy reports and the calibration of p, benchmarks | all of the above, as dev tooling; in Phase 1 `nd-fmm-math` and `nd-fmm-ref`, in Phase 2 also `nd-fmm-tables`, in Phase 3 also `nd-fmm-exec` and `mpi` (so building it needs MPI) |
+| `fmm-plan` | `nd-fmm-plan` (existing; rewritten in Phase 3) | before this plan; rewritten in Phase 3 (T4–T7) | kernel-agnostic plan of a distributed FMM: box index, lists, stores, ghost exchange, batched operator interface, evaluator | as built: `nd-octree`, `rlst` (feature `mpi`), `mpi` (feature `complex`, kept for complex-valued operators downstream), all from `[workspace.dependencies]`; dev-dependency `rand_chacha`. No rayon: threading lives in `nd-fmm-exec` |
 
 Dropped after scouting:
 
 - **`fmm-tree`.** It was to implement a `TreeView` trait for the octree types. There is
   no such trait: `nd-fmm-plan` works on `nd_octree::Octree` directly.
 - **`fmm-dist`.** Ghost exchange of sources and multipoles already exists in
-  `FmmEvaluator`. What remains of Phase 5 is multi-rank validation of the Laplace
-  operator, plus overlap of communication and computation. The overlap belongs in
-  `nd-fmm-plan`.
+  `nd-fmm-plan` (`FmmEvaluator` then, `Evaluator` since the Phase 3 rewrite). What
+  remains of Phase 5 is the redistribution of points (C5.1), multi-rank validation of
+  the Laplace operator, and overlap of communication and computation. The overlap
+  belongs in `nd-fmm-plan`.
 
 Outside the crates, Phase 0 also adds these folders:
 
@@ -285,17 +298,56 @@ Outside the crates, Phase 0 also adds these folders:
   `(p, precision)`. The offsets and octants are restated in `geometry`, not keyed by
   `nd-fmm-plan` types. There is no `rlst` and no serialiser.
 
-**`nd-fmm-exec`**
+**`nd-fmm-exec`** (Phase 3, host path; as built)
 
-- `LaplaceOperator<T>: FmmOperator<Value = T>` holds the tables and the domain.
-  - It derives each box's centre and half-width from `morton::decode` and the cubic
-    domain: r_l = side / 2^(l+1).
-  - It rejects a non-cubic domain.
-- `FmmBuilder` (p, precision, strategy, backend) wraps `InteractionManager` and
-  `FmmEvaluator`. `Fmm::evaluate(charges) -> Output` returns potentials and optional
-  gradients, and applies 1/(4π) once (CONVENTIONS §3.1).
-- `enum M2lStrategy { Dense, Compressed, Rotation, Auto }`, and a host backend (rayon)
-  that runs Phase 3 without any GPU.
+- `geometry`: the validated cubic `Domain` (`Domain::new` rejects a box whose sides
+  differ by more than `SIDE_TOLERANCE` = 4 times ε (|corner| + side), the rounding of
+  `compute_global_bounding_box`), `radius`,
+  `centre`, `integer_centre`, `relative_frame::<T>(s, t)` (the exact dyadic frame of
+  box s seen from box t, CONVENTIONS §3.13), `leaf_coordinates` and `contains`.
+- `tables`: `enum M2lStrategy { Dense, Classes, Rotation, Auto }` (`Auto`: `Dense`
+  for p ≤ 8, `Rotation` above; `resolve(p)`), and `Tables<T>`, which builds or loads
+  (`load_or_build` with a `TableCache`) only the families the strategy uses and applies
+  `m2m(o, …)`, `l2l(o, …)` and `m2l(index, …)` by octant and offset index with a
+  `TableScratch`. `Compressed` comes with C6.2.
+- `operator`: `LaplaceOperator<T>` implements `FmmSizes`, the batched `FmmOperator` and
+  `PairOperator`. `new(tables, gradients, max_leaf_points)` sizes its scratch;
+  `with_pool(Arc<ThreadPool>)` adds per-thread scratch and runs every level call in
+  the pool; `set_serial` runs a threaded build serially. One public method per pair or
+  leaf (`p2m_leaf`, `m2m_pair`, `m2l_pair`, …). A source point has 4 values
+  (`SOURCE_POINT_SIZE`; a chunk of n points holds the n leaf-scaled coordinate
+  triples, then the n charges), a target point 3 of input. No operator allocates or
+  applies 1/(4π).
+- `fmm`: `FmmBuilder<T>::new(p)` with `strategy`, `gradients`, `max_level` (default
+  16), `max_points_per_leaf` (default 64), `domain`, `table_cache(dir)` and
+  `threads(n)` (default 1); `build(sources, targets, comm)` (collective) gives
+  `Fmm<'o, T, C>`. `Fmm::evaluate(charges) -> Result<Output<T>, FmmError>` returns φ
+  and optional ∇φ in the caller's order with 1/(4π) applied once (CONVENTIONS §3.1),
+  and `StageTimings`. Accessors: the octree, plan, operator, domain, counts,
+  `list_sizes`, `cache_outcomes`, `build_timings` and `threading`. `FmmError` and
+  `SettingsError` cover every input error, agreed on every rank; until C5.1, points
+  in another rank's leaves give `PointsNotOwned` on every rank. `MAX_DEGREE` = 20.
+- `threading`: `ThreadingReport` (rayon threads, MPI level provided, the five BLAS
+  variables, `warnings()`), `REQUIRED_MPI_THREADING` = `Funneled`, `BLAS_VARIABLES`.
+- As built in Phase 3 there is no backend parameter: the host path is the only one
+  until Phase 4 adds the device path behind the same operator interface.
+
+**`nd-fmm-plan`** (existing; rewritten in Phase 3, see Section 1.1)
+
+- `index::{BoxIndex, LeafNumbering, NONE}`; `lists::{Csr, GroupedCsr, VList, Children,
+  Parents, LevelLists, offset_index, NOFFSETS, NOCTANTS}`; `plan::{Plan, PlanError}`.
+- `store::{LevelBuffers, LeafStore}` and their slice types (`LevelSlice`,
+  `LevelSliceMut`, `LeafSlice`, `LeafSliceMut` with `split_at_mut`).
+- `exchange::{SourceExchange, MultipoleExchange, CoarseExchange, ExchangeError}`.
+- `operator::{FmmSizes, FmmOperator, PairOperator, PerPair, UpwardPass}` and the batch
+  types `P2m`, `M2m`, `M2l`, `P2l`, `L2l`, `L2p`, `M2p`, `P2p`.
+- `evaluator::{Evaluator, EvaluatorError}`: `new(plan, comm, op, source_counts,
+  target_counts)`, `reset`, `evaluate` and the six public stages. The `Evaluator` can
+  own its plan (`P: Borrow<Plan>`), which lets `Fmm` hold both.
+- `index_fmm::{IndexFmm, BatchedIndexFmm, Walk, GlobalLeaves, check_counts,
+  run_index_fmm, IndexPath}`; `interaction_manager::V_LIST_DIRECTIONS`.
+- Examples `test_index_fmm` (registered with templated-examples), `evaluator_stage_cost`
+  and `plan_build_cost`.
 
 **`nd-fmm-kernels`**
 
@@ -303,12 +355,13 @@ Outside the crates, Phase 0 also adds these folders:
   p as a comptime parameter.
 - Backend features `cuda`, `hip`, `wgpu` and `cpu`, forwarded by `nd-fmm-exec`.
 
-**`nd-fmm-validate`** (Phase 1; MPI-free, and no library crate depends on it)
+**`nd-fmm-validate`** (Phase 1; MPI since Phase 3, and no library crate depends on it)
 
 - `SplitMix64`: the seeded generator of the `nd-fmm-math` tests, with `new(seed)`,
   `next_u64()`, `uniform()` and `range(lo, hi)`.
-- `points::{cube, ball, sphere}` draw uniform points, and `points::charges` draws
-  charges in [−1, 1).
+- `points::{cube, ball, sphere}` draw uniform points, `points::plummer` the Plummer
+  sphere (truncated at 10 a) and `points::gaussian_clusters` Gaussian clusters
+  (truncated at 4 σ) (Phase 3, T11), and `points::charges` draws charges in [−1, 1).
 - `metrics`:
   - `ErrorNorms { l2, max }`, `potential_errors` and `gradient_errors`, and
     `ErrorAccumulator` to pool several target sets;
@@ -324,42 +377,58 @@ Outside the crates, Phase 0 also adds these folders:
   `SOURCE_CENTRE` and `RADIUS`.
 - `bench` (Phase 2): the helpers of the timing reports, `median_time_per_call`,
   `fitted_exponent`, `crossover` and the machine description.
-- Examples `accuracy` (with `--tables` for the table path), `timing` and `tables` print
-  Markdown reports; no timing is asserted.
+- `fmm_accuracy` (Phase 3, T9 and T11): `Distribution` (cube, sphere, Plummer,
+  clusters), `Config` (`Config::C32`, `Config::c33(d)`), `Problem`, `Oracle`, `Run`
+  and `run::<T>(config, problem, charges, oracle, (p, threads), comm)`, the complete
+  FMM of `nd-fmm-exec` against `direct_sum` over several charge vectors; `PREDICTION`.
+- `calibration` (Phase 3, T12): `config(d, n)`, `Reference` (the problem and both
+  oracles, once per distribution), `Precision`, `sweep`, `leaf_study`, `Measure`,
+  `smallest_p`, `worst`, `floor` and `Reached`; `F64_DEGREES` (1..=20),
+  `F32_DEGREES` (1..=8), `TARGET_EXPONENTS` (3..=12), `LEAF_SIZES`.
+- Examples `accuracy` (with `--tables` for the table path), `timing`, `tables`,
+  `fmm_accuracy` (`--distribution`, `--threads`) and `calibrate` (`--threads`, `--n`)
+  print Markdown reports; no timing is asserted. `fmm_accuracy` and `calibrate`
+  initialise MPI and run on one rank; they are not registered with
+  templated-examples. The one MPI-initialising test is `tests/fmm_accuracy.rs`.
 
 ## 4. How `nd-fmm-plan` and the octree connect
 
 `nd-fmm-plan` decides *what* to compute and *when*: interaction lists, pass order, ghost
 exchange and the global coarse levels. The new crates decide *how*, for the Laplace
-kernel. The seam is `FmmOperator`, which already exists; no new tree trait is needed.
+kernel. The seam is `nd-fmm-plan`'s level-batched `FmmOperator` (Section 1.1); no tree
+trait is needed. Phase 3 rewrote `nd-fmm-plan` to provide it
+([fmm-plan-redesign.md](fmm-plan-redesign.md)).
 
 | Concern | Owner | Status |
 | --- | --- | --- |
 | Tree construction, partitioning, ghost keys | `nd-octree` | exists |
-| U, V, W, X lists; V-list grouping by offset | `nd-fmm-plan` (`InteractionManager`) | exists |
-| Pass order, level loop, which lists feed which operator | `nd-fmm-plan` (`FmmEvaluator`) | exists |
-| Ghost exchange of sources and multipoles, global coarse levels | `nd-fmm-plan` (`FmmEvaluator`, `FmmGhostCommunicator`) | exists; host buffers only |
-| Variable-size source and target data per leaf | `nd-fmm-plan` | **missing; blocks Phase 3** |
-| Batched operator hooks (per level, per octant, per V-list offset) | `nd-fmm-plan` (interface) | **missing; blocks Phase 4 GEMM path** |
+| Morton-ordered integer box index per level | `nd-fmm-plan` (`BoxIndex`) | done in Phase 3 (T4) |
+| U, V, W, X lists as index arrays; groupings by V-list offset and child octant | `nd-fmm-plan` (`Plan`, `lists`) | done in Phase 3 (T4) |
+| Pass order, level loop, which lists feed which operator | `nd-fmm-plan` (`Evaluator`) | done in Phase 3 (T6); order unchanged |
+| Ghost exchange of sources and multipoles, global coarse levels | `nd-fmm-plan` (`exchange`, `Evaluator`) | done in Phase 3 (T5); host buffers, flat per level |
+| Variable-size source and target data per leaf | `nd-fmm-plan` (`LeafStore`) | done in Phase 3 (T5, C3.0) |
+| Batched operator hooks (per level, per octant, per V-list offset) | `nd-fmm-plan` (`FmmOperator`, batch types) | done in Phase 3 (T6, C4.0) |
+| Redistribution of points to their owning ranks | `nd-fmm-plan` | designed (redesign §9); C5.1 |
 | Overlap of exchange with local work; device-resident buffers | `nd-fmm-plan` | missing; Phase 4–5 |
-| Box geometry from keys, M2L strategies, device buffers, 1/(4π) | `nd-fmm-exec` | new |
-| Operator math and kernels | `nd-fmm-math` … `nd-fmm-kernels` | new |
+| Box geometry from keys, M2L strategies, host threading, 1/(4π) | `nd-fmm-exec` | done in Phase 3 (host path) |
+| Device buffers and kernels | `nd-fmm-exec`, `nd-fmm-kernels` | Phase 4 |
+| Operator math and tables | `nd-fmm-math`, `nd-fmm-ref`, `nd-fmm-tables` | done (Phases 0–2) |
 
-Why the two gaps matter:
+How Phase 3 closed the two gaps of the original crate:
 
-- **Fixed size per leaf.** `source_size()` is one number for every leaf, but particle
-  counts per leaf vary. Padding every leaf to the largest one is possible, but leaves at
-  `max_level` have no occupancy bound. So a real FMM needs per-leaf offsets, which means
-  CSR-style `LevelData` for sources and targets.
-- **One pair at a time.** The per-pair interface with `HashMap` lookups is right for
-  correctness and fine for a CPU reference path. It rules out batched GEMM:
-  - M2L needs one call per (level, offset), with gathered column indices from
-    `v_list_by_direction`.
-  - M2M and L2L need one call per (level, octant).
+- **Fixed size per leaf.** `source_size()` was one number for every leaf, but particle
+  counts per leaf vary and are unbounded at `max_level`. The rewrite holds sources,
+  target input and target output in CSR stores with per-leaf counts, zero allowed, and
+  exchanges variable-size ghost chunks. Sizes per point are fixed.
+- **One pair at a time.** The per-pair interface with `HashMap` lookups ruled out
+  batched GEMM. The rewrite makes one call per level and kind. Each call carries the
+  target-centric rows, which the host path walks target by target and threads with
+  `par_chunks_mut`, and the groupings by offset (M2L) and octant (M2M, L2L), from which
+  the GEMM path of Phase 4 gathers its columns. A per-pair adapter (`PerPair`) keeps the
+  per-pair form for `IndexFmm`, tests and reference paths.
 
-Both extensions are general, not Laplace-specific, and are listed as future work in
-`nd-fmm-plan` itself. So they are `nd-fmm-plan` tasks, done on that crate's terms, with
-`IndexFmm` extended to cover them.
+Both are general, not Laplace-specific, and are checked with `IndexFmm` on 1, 2 and 4
+ranks, with counts of one and with seeded variable counts.
 
 Phases 0 to 2 depend on none of this, because they never touch a tree.
 
@@ -457,8 +526,8 @@ noise without testing anything.
 | 0 | `fmm-math`, `docs/CONVENTIONS.md`, `tools/fixtures/`, `spikes/cubecl-gemm/`, root `CLAUDE.md` |
 | 1 | `fmm-ref`, `fmm-validate` |
 | 2 | `fmm-tables` |
-| 3 | before: variable-size leaf data in `nd-fmm-plan`; then `fmm-exec` (host backend, per-pair `FmmOperator`) |
-| 4 | before: batched operator hooks in `nd-fmm-plan`; then `fmm-kernels` and the device backend in `fmm-exec` |
+| 3 (done) | the rewrite of `nd-fmm-plan` (box index, lists, variable-size leaf data, batched operator interface; T1, T4–T7); `fmm-exec` (host path on the batched interface, threaded with rayon; T3, T8–T11); the calibration in `fmm-validate` (T12) |
+| 4 | `fmm-kernels` and the device backend in `fmm-exec`, on the batched interface that Phase 3 delivered |
 | 5 | multi-rank validation of `fmm-exec`; exchange/compute overlap in `nd-fmm-plan` (no new crate) |
 
 ### Answered by scouting
@@ -476,11 +545,19 @@ noise without testing anything.
 
 ### Still open
 
-- [ ] Who designs variable-size leaf data and batched operator hooks in `nd-fmm-plan`, and
+- [x] Who designs variable-size leaf data and batched operator hooks in `nd-fmm-plan`, and
       does the per-pair `FmmOperator` stay as the reference path next to them?
-- [ ] Column order within a level's `LevelData` follows insertion (partly `HashMap`)
+      Answered in Phase 3: T1 designed a rewrite of the crate
+      ([fmm-plan-redesign.md](fmm-plan-redesign.md), signed off), built in T4–T7.
+      The batched `FmmOperator` replaced the per-pair trait. The per-pair form stays
+      as `PairOperator` with the `PerPair` adapter, the path of `IndexFmm` and of
+      reference operators; `LaplaceOperator` implements both, bit-identically.
+- [x] Column order within a level's `LevelData` followed insertion (partly `HashMap`)
       order. Should it be Morton order, for reproducible floating-point sums and
-      cache-friendly gathers?
+      cache-friendly gathers? Answered in Phase 3: yes. `BoxIndex` numbers every
+      level's boxes in Morton order, deterministically, and `LevelBuffers` store
+      them in that order. Results are bit-identical from run to run and for any
+      number of host threads.
 - [x] Box geometry conventions used by the tables are now CONVENTIONS §3.12 (Phase 2
       T2, PR #17, signed off before T3), which §3.10 covers; `CONVENTION_VERSION`
       stays 1. §3.12 states:

@@ -45,9 +45,12 @@
 //!   several charge vectors, on a uniform tree (C3.2) and on the adaptive trees of the
 //!   sphere surface, the Plummer sphere and Gaussian clusters (C3.3), run by the
 //!   `fmm_accuracy` example.
+//! - [`calibration`]: the degree p against the accuracy of the complete FMM, per
+//!   precision and distribution, the smallest p for each target accuracy, and a
+//!   leaf-size study (C3.4), run by the `calibrate` example.
 //!
-//! The examples `accuracy`, `timing`, `tables` and `fmm_accuracy` print Markdown
-//! reports on stdout:
+//! The examples `accuracy`, `timing`, `tables`, `fmm_accuracy` and `calibrate` print
+//! Markdown reports on stdout:
 //!
 //! ```text
 //! cargo run --release -p nd-fmm-validate --example accuracy
@@ -56,16 +59,18 @@
 //! cargo run --release -p nd-fmm-validate --example tables
 //! cargo run --release -p nd-fmm-validate --example fmm_accuracy
 //! cargo run --release -p nd-fmm-validate --example fmm_accuracy -- --distribution plummer
+//! cargo run --release -p nd-fmm-validate --example calibrate -- --threads 8
 //! ```
 //!
 //! Since Phase 3 the crate depends on `nd-fmm-exec`, and so on MPI: building it, and
-//! `cargo test -p nd-fmm-validate`, need an MPI installation. `fmm_accuracy` runs on
-//! one rank.
+//! `cargo test -p nd-fmm-validate`, need an MPI installation. `fmm_accuracy` and
+//! `calibrate` run on one rank.
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 
 pub mod accuracy;
 pub mod bench;
+pub mod calibration;
 pub mod fmm_accuracy;
 pub mod metrics;
 pub mod points;

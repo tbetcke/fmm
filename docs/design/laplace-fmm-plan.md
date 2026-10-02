@@ -8,6 +8,12 @@ conventions are fixed, `nd-fmm-math` is implemented, and the CubeCL GEMM spike
 Revised again at the end of Phase 1 (Sections 2.1, 2.3, 7 and 9.1): the translation
 formulas are fixed in CONVENTIONS §3.11, and `nd-fmm-ref` and `nd-fmm-validate` are
 implemented.
+Revised again at the end of Phase 3 (2026-10-02; Sections 1, 2.5, 4, 5, 6.8 (new), 7,
+9.1 and 9.2): `nd-fmm-plan` is rewritten with a Morton-ordered box index, index-based
+lists, variable-size leaf data and a level-batched operator interface
+([fmm-plan-redesign.md](fmm-plan-redesign.md)); leaf data are leaf-scaled
+(CONVENTIONS §3.13); the host FMM in `nd-fmm-exec` is checked on uniform and adaptive
+trees, threaded with rayon, and p is calibrated against accuracy.
 
 > Where this document and `docs/CONVENTIONS.md` differ (normalisation, phases, scaling),
 > **the conventions file takes precedence.** Section 2.4 below now follows the scaling of
@@ -36,25 +42,27 @@ small enough to hand to Claude Code one at a time.
   reference.
 
 **Provided by the existing `nd-octree` and `nd-fmm-plan` crates** (checked in the
-repository)
+repository; `nd-fmm-plan` as rewritten in Phase 3,
+[fmm-plan-redesign.md](fmm-plan-redesign.md))
 
 - **Boxes.** Boxes are `u64` Morton keys at levels 0–16 of an adaptive, complete,
   2:1-balanced tree. The domain is cubic when it comes from
   `compute_global_bounding_box`; the Laplace operator must check this for a
-  user-supplied box. There is no integer box index, and the octree
-  does not group boxes by level. `nd-fmm-plan` stores per-level data contiguously
-  (`LevelData`), with a fixed number of values per box on each level.
+  user-supplied box. The octree has no integer box index and does not group boxes by
+  level. `nd-fmm-plan` numbers the boxes a rank holds on each level 0..n in Morton order
+  (`BoxIndex`) and stores per-level data contiguously by that index (`LevelBuffers`).
 - **Particles.** The octree stores no points. `points_to_morton` bins them into keys, and
-  the application keeps and redistributes its own point data. `nd-fmm-plan` currently
-  holds a fixed number of source and target values per leaf, so variable leaf occupancy
-  is not supported yet.
-- **Interaction lists.** `nd-fmm-plan`'s `InteractionManager` builds U, V, W and X for
-  every non-ghost key. `v_list_by_direction` groups V-list pairs by the 316 offsets.
-- **Distribution.** `nd-fmm-plan`'s `FmmEvaluator` runs the whole distributed pass
-  order over an `FmmOperator` trait with all eight operators, one pair of boxes at a
-  time. This includes exchanging ghost sources (for U and X) and ghost multipoles (for V
-  and W). It also computes the replicated coarse (`Global`) levels on every rank. This
-  covers what the original plan called the locally essential tree (LET) exchange.
+  the application keeps and redistributes its own point data. `nd-fmm-plan` holds leaf
+  data in CSR stores with a variable number of points per leaf, zero included.
+- **Interaction lists.** `nd-fmm-plan`'s `Plan` builds U, V, W and X for every
+  non-ghost box as index arrays, by target (CSR) and grouped by the 316 V-list offsets
+  and the 8 child octants.
+- **Distribution.** `nd-fmm-plan`'s `Evaluator` runs the whole distributed pass order
+  over a level-batched `FmmOperator` trait with all eight operators, one call per level
+  and kind. This includes exchanging ghost sources (for U and X) and ghost multipoles
+  (for V and W). It also computes the replicated coarse (`Global`) levels on every
+  rank. This covers what the original plan called the locally essential tree (LET)
+  exchange.
 
 **Out of scope**
 
@@ -190,8 +198,9 @@ On a uniform level each box has at most 27 near neighbours (self included) and a
 (`nd_fmm_plan::interaction_manager::V_LIST_DIRECTIONS`, offset = target − source in
 level index units). Under the 48-element cube symmetry group they reduce to 16
 equivalence classes. The adaptive lists U, V, W and X follow Cheng, Greengard and
-Rokhlin (1999); `nd-fmm-plan`'s `InteractionManager` implements them, with the
-definitions in its module documentation.
+Rokhlin (1999); `nd-fmm-plan` implements them (the per-key rule in
+`interaction_manager`, the index lists in `lists`), with the definitions in its module
+documentation.
 
 Accuracy: for the standard one-box separation, the classical bound for evaluating a
 multipole expansion decays like (√3 / (4 − √3))ᵖ ≈ 0.76ᵖ; the M2L-to-local step has a
@@ -376,11 +385,34 @@ Why this ordering:
 - Plane-wave M2L buys at most tens of percent on CPUs in careful comparisons, at
   substantial complexity. It stays optional.
 
-Starting points for p (to be recalibrated in Phase 3): relative L2 errors near 1e-4,
-1e-7 and 1e-10 were reached with p = 3, 8 and 18 for uniformly random sources
-([Gumerov & Duraiswami 2005](http://users.umiacs.umd.edu/~ramanid/pubs/Gumerov_Duraiswami_TR_4701.pdf),
-converted to this document's convention). f32 caps usable accuracy near 1e-6, so f32
-runs use p ≤ 8.
+Starting points for p, calibrated in Phase 3 (C3.4, T12; the full table is in
+Section 7, Phase 3). The smallest p whose relative L2 error of φ is below the target,
+worst over the four distributions of Section 8.2 (N = 10⁵, adaptive trees with 64
+points per leaf, mean over eight charge vectors):
+
+| target | 1e-3 | 1e-4 | 1e-5 | 1e-6 | 1e-7 | 1e-8 | 1e-9 to 1e-12 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| f64, φ | 5 | 7 | 9 | 12 | 15 | 19 | > 20 |
+| f64, ∇φ | 4 | 7 | 10 | 13 | 16 | 20 | > 20 |
+| f32, φ | 5 | 7 | > 8 | > 8 | > 8 | > 8 | > 8 |
+| f32, ∇φ | 4 | 7 | > 8 | > 8 | > 8 | > 8 | > 8 |
+
+- The Gumerov–Duraiswami starting points (relative L2 errors near 1e-4, 1e-7 and 1e-10
+  at p = 3, 8 and 18 for uniformly random sources,
+  [Gumerov & Duraiswami 2005](http://users.umiacs.umd.edu/~ramanid/pubs/Gumerov_Duraiswami_TR_4701.pdf),
+  converted to this document's convention) are not reached here. On the uniform cube,
+  p = 3, 8 and 18 give 2.6e-3, 1.8e-5 and 1.0e-8, 26×, 180× and 100× above them.
+  That is within 1.5–1.7× of this library's own single-translation error of
+  P2M → M2L → L2P over the 316 V-list offsets (Phase 1 T7, re-derived at p = 18 in
+  Phase 3 T9). The full FMM follows that error: T9 and T11 traced every part of the
+  output to its pair kernels and lists and found no further error source (C3.2, C3.3).
+- The error falls by about 2.7 per degree from p = 3 to 8, 2.1 from 8 to 18, and 1.75
+  from 18 to 20. Each further digit costs about four degrees near p = 20. Targets of
+  1e-9 and below need p > 20, outside the range CONVENTIONS §3.9 tests for M2L.
+- In f32 the φ error at p ≤ 8 stays within 5% of f64 on every distribution: truncation,
+  not rounding, sets it, so f32 reaches 1e-4 at p = 7 and 1e-5 only on the sphere. The
+  f32 rounding floor shows in ∇φ on the sphere surface, 1.1e-5 from p = 5 on, where
+  f64 reaches 3.4e-7 at p = 8. f32 runs keep p ≤ 8.
 
 M2M and L2L use 8 precomputed matrices each (one per child octant), again
 level-independent after scaling, applied as batched GEMM on GPU. P2M, L2P, P2L and M2P
@@ -389,10 +421,12 @@ evaluate harmonics per particle with recursions, one thread per particle or per 
 ## 5. Architecture
 
 The library splits into a pure-Rust math core, a table generator, CubeCL kernels and an
-execution crate. The execution crate implements `nd-fmm-plan`'s `FmmOperator` trait for
-the Laplace kernel. `nd-fmm-plan` already owns everything tree-shaped on top of the
-existing octree: the interaction lists, the pass order and the ghost exchange. The new
-crates never re-implement any of that. Each crate can be built and tested alone, which
+execution crate. The execution crate implements `nd-fmm-plan`'s level-batched
+`FmmOperator` trait for the Laplace kernel. `nd-fmm-plan` owns everything tree-shaped on
+top of the existing octree: the box index, the interaction lists, the pass order and the
+ghost exchange. It was rewritten in Phase 3 for this interface
+([fmm-plan-redesign.md](fmm-plan-redesign.md)). The new crates never re-implement any of
+that. Each crate can be built and tested alone, which
 is what makes the components easy to hand to Claude Code one at a time.
 
 ```mermaid
@@ -403,7 +437,7 @@ flowchart TB
   end
   subgraph run["Per run: every FMM evaluation"]
     direction LR
-    plan["nd-fmm-plan (existing)<br/>U/V/W/X lists, FmmEvaluator pass order,<br/>ghost exchange (MPI)"] --> exec["fmm-exec<br/>impl FmmOperator for Laplace,<br/>box geometry, M2L strategies, autotune"] --> kernels["fmm-kernels (CubeCL)<br/>P2M, M2M, M2L, L2L, L2P, P2P;<br/>M2L as GEMM or rotation"]
+    plan["nd-fmm-plan (rewritten in Phase 3)<br/>box index, U/V/W/X lists, Evaluator pass order,<br/>ghost exchange (MPI)"] --> exec["fmm-exec<br/>batched FmmOperator for Laplace,<br/>box geometry, M2L strategies, autotune"] --> kernels["fmm-kernels (CubeCL)<br/>P2M, M2M, M2L, L2L, L2P, P2P;<br/>M2L as GEMM or rotation"]
   end
   tables -- "tables uploaded once" --> exec
   octree["nd-octree (existing)<br/>Morton keys, ownership, ghost keys"] -- "Octree" --> plan
@@ -412,7 +446,7 @@ flowchart TB
 
 The top band runs once per (p, precision), can be cached on disk, and needs neither MPI
 nor the octree. The lower band runs on every evaluation. `nd-fmm-plan` calls the Laplace
-operator through `FmmOperator`.
+operator through `FmmOperator`, once per level and operator kind.
 
 ### 5.1 Crates
 
@@ -424,9 +458,9 @@ operator through `FmmOperator`.
 | `fmm-ref` | CPU reference operators: direct O(p⁴) and rotation O(p³), P2P, direct-sum oracle | `fmm-math` | f64 (f32 for comparison) |
 | `fmm-tables` | Builds M2M/L2L (8 each, by `morton::child_index`), M2L (316 or 16 + symmetry, keyed like `V_LIST_DIRECTIONS`), rotation and coaxial tables; SVD compression (C6.2, later); versioned on-disk cache | `fmm-ref`, `fmm-math`, `thiserror` (cache errors); `rlst` (without its `mpi` feature) only with SVD compression | built in f64, stored in both |
 | `fmm-kernels` | `#[cube]` kernels: P2M, L2P, P2L, M2P, P2P, gather/scatter, M2L-GEMM, M2L-rotation, M2M/L2L | `cubecl`, the CubeCL matmul crate | generic |
-| `fmm-exec` | `impl FmmOperator` for Laplace (host per-pair path first, batched and device paths later), box centres and half-widths from Morton keys, device buffers, autotune selection, 1/(4π) | `nd-fmm-plan`, `nd-octree`, `fmm-kernels`, `fmm-tables` | generic |
-| `fmm-validate` | Error norms, accuracy sweeps, benchmark harness | all | f64 reference |
-| `nd-fmm-plan` (existing) | Interaction lists, distributed pass order, ghost exchange, global coarse levels; needs the extensions of Section 5.2 | `nd-octree`, `mpi`, `rlst` | generic `Value` |
+| `fmm-exec` (Phase 3: host path done) | `LaplaceOperator<T>`, the batched `FmmOperator` for Laplace: host path target by target with rayon threads (Phase 3), device path later; box geometry from integer Morton keys (CONVENTIONS §3.13); M2L strategy selection; `FmmBuilder` and `Fmm`, which load leaf-scaled points and apply 1/(4π) once; device buffers and autotune later | `nd-fmm-plan`, `nd-octree`, `nd-fmm-tables`, `nd-fmm-ref`, `nd-fmm-math`, `mpi`, `rlst`, `rayon`, `thiserror`; `fmm-kernels` from Phase 4 | generic |
+| `fmm-validate` | Error norms, point distributions, accuracy sweeps of the operators and of the complete FMM, the calibration of p (C3.4), benchmark harness | all | f64 reference |
+| `nd-fmm-plan` (rewritten in Phase 3) | Morton-ordered integer box index, index-based interaction lists (target-centric CSR, and grouped by V-list offset and child octant), level buffers and variable-size CSR leaf stores, ghost exchange, global coarse levels, the level-batched operator interface with a per-pair adapter, the evaluator; designed in [fmm-plan-redesign.md](fmm-plan-redesign.md) | `nd-octree`, `mpi`, `rlst` | generic `Value` |
 
 The adapter crate (`fmm-tree`) and the distribution crate (`fmm-dist`) of earlier drafts
 are dropped. There is no tree trait to adapt to, and the ghost exchange already exists in
@@ -462,62 +496,84 @@ The gradient functions also write the values, because the ladder needs the
 neighbouring degree. There is no separate Legendre module and no factorial table: the
 recursions and `to_irregular` use running ratios, so no factorial is ever formed.
 
-The tree-facing interface already exists: `nd_fmm_plan::fmm::operator::FmmOperator`.
-Abridged:
+The tree-facing interface is `nd_fmm_plan::operator::FmmOperator`. Phase 3 replaced the
+per-pair trait of the original crate with a level-batched one
+([fmm-plan-redesign.md](fmm-plan-redesign.md) §6; T6, PR #32; the old API was removed in
+T7, PR #33). Abridged:
 
 ```rust
-pub trait FmmOperator {
-    type Value: Equivalence + Copy + Default;          // f32/f64 for Laplace
-    fn multipole_size(&self, level: usize) -> usize;  // (p+1)^2; may vary by level
+pub trait FmmSizes {
+    type Value: Equivalence + Copy + Default + Send + Sync;  // f32/f64 for Laplace
+    fn multipole_size(&self, level: usize) -> usize;        // (p+1)^2; may vary by level
     fn local_size(&self, level: usize) -> usize;
-    fn source_size(&self) -> usize;                    // fixed per leaf today
-    fn target_size(&self) -> usize;
-    fn p2m(&self, leaf: MortonKey, sources: &[Self::Value], multipole: &mut [Self::Value]);
-    fn m2l(&self, source: MortonKey, target: MortonKey,
-           source_multipole: &[Self::Value], target_local: &mut [Self::Value]);
-    // m2m, l2l, p2l (X-list), l2p, m2p (W-list), p2p (U-list and self) alike;
-    // every operator accumulates (+=) into its output.
+    fn source_point_size(&self) -> usize;                   // per point; counts per leaf vary
+    fn target_input_point_size(&self) -> usize;
+    fn target_output_point_size(&self) -> usize;
+}
+
+pub trait FmmOperator: FmmSizes {
+    // One call per level and kind. Each batch holds the level, the `BoxIndex` (keys for
+    // geometry), both views of its list, the shared inputs and an exclusive output.
+    fn p2m(&mut self, batch: P2m<'_, Self::Value>);
+    fn m2l(&mut self, batch: M2l<'_, Self::Value>);  // rows by target; batches by offset
+    // m2m (per pass: local, global), l2l, p2l, l2p, m2p, p2p alike;
+    // every call adds (+=) into its output, each target in the order of its row.
 }
 ```
 
-`FmmEvaluator::new(&octree, &InteractionManager::new(&octree), operator)` and
-`evaluate()` then run the full distributed pass. The Laplace operator derives geometry
-from the key: `morton::decode(key)` gives the level l and the index (i, j, k). With a
-cubic domain of side w and lower corner a:
+- Every batch carries two views of its list (requirement 5 of docs/phase3/README.md):
+  - the target-centric CSR rows, which a host operator walks target by target, one
+    thread per target with `par_chunks_mut` and no atomics;
+  - the groupings by V-list offset (M2L) and by child octant (M2M, L2L), each target
+    at most once per batch, for the GEMM path of Phase 4.
 
-- centre: c = a + (idx + ½) · w / 2^l;
-- half-width: r_l = w / 2^(l+1).
+  A V row is ordered by offset index and an M2M row by octant, so walking the
+  groupings in index order adds each target's contributions in the same order as
+  walking the rows.
+- `&mut self` lets the operator own its scratch, so it needs no `RefCell`.
+- `PairOperator` and the `PerPair<P>` adapter let a simple operator (`IndexFmm`, tests,
+  a reference path) implement one method per pair. `LaplaceOperator` implements both,
+  and the two paths are bit-identical.
+- `Plan::new(&octree)` builds the index and lists. `Evaluator::new(plan, comm, op,
+  source_counts, target_counts)` and `evaluate()` then run the distributed pass in six
+  public stages (§7 of the redesign), with the same order, global coarse levels and
+  ghost exchange as the original crate.
 
-The shift for an M2L offset d is c_target − c_source = 2 r_l · d, so a scaled table
-keyed by d serves every level.
+The Laplace operator derives geometry from integer keys (CONVENTIONS §3.13).
+`morton::decode(key)` gives the level l and the index (i, j, k). The frame of a box s
+seen from box t has centre (c_s − c_t)/r_t and radius r_s/r_t. Both are exact dyadic
+rationals formed from the integer indices, in f32 as in f64, so no shift is ever formed
+from floating-point centres. The domain enters only when points are loaded and when
+output leaves the FMM. Tables are looked up by integer key, never by shift: M2M and L2L
+by the octant of the batch, M2L by its offset index.
 
-Extensions needed from `nd-fmm-plan`. These are general, not Laplace-specific, and the
-crate already lists them as future work:
+Extensions of `nd-fmm-plan` that the original design asked for:
 
-1. **Variable-size leaf data** (before Phase 3). Per-leaf offsets for sources and
-   targets, because leaf occupancy varies and is unbounded at `max_level`.
-2. **Batched operator hooks** (before the Phase 4 GEMM path). Level-wide calls with
-   gathered buffer positions:
-   - M2M and L2L per (level, child octant);
-   - M2L per (level, offset), using `v_list_by_direction`;
-   - leaf operators per level.
+1. **Variable-size leaf data.** *Done in Phase 3* (C3.0, T5): three CSR leaf stores
+   (sources, target input, target output) with per-leaf counts, zero allowed, and a
+   variable-size ghost exchange of sources.
+2. **Batched operator hooks.** *Done in Phase 3* (C4.0, absorbed by the rewrite, T6):
+   the interface above, with M2M and L2L per (level, octant) and M2L per (level,
+   offset) as groupings, and the leaf operators per level. The per-pair adapter stays
+   as the reference path.
+3. **Device-resident buffers and exchange/compute overlap** (Phases 4–5). The views
+   are flat index arrays and every store is one allocation, so both can be uploaded
+   once (redesign §10).
 
-   The per-pair trait stays as the reference path.
-3. **Device-resident buffers and exchange/compute overlap** (Phases 4–5).
-
-The same pattern (a `plan` step on the host, an `apply` step on the device) is intended
-for the batched hooks, so the M2L strategies (dense GEMM, compressed GEMM, rotation,
-plane-wave) sit behind one interface in `fmm-exec`.
+The M2L strategies (dense GEMM, compressed GEMM, rotation, plane-wave) sit behind the
+batched interface in `fmm-exec`: a strategy plans its gathers from the groupings on the
+host and applies them on the device.
 
 ### 5.3 Data layout
 
-- **Coefficients.** `nd-fmm-plan`'s `LevelData` stores one flat buffer per level with
-  `multipole_size(level)` values per box. A level's multipoles are therefore already a
+- **Coefficients.** `nd-fmm-plan`'s `LevelBuffers` hold one buffer per level and kind,
+  box i of a level at i · `multipole_size(level)`. A level's multipoles are therefore a
   column-major (p+1)² × boxes matrix and directly a GEMM operand. There are separate
   multipole and local buffers.
-  - Column order follows insertion (partly `HashMap` order), not Morton order.
-  - GEMM plans must gather by `LevelData` position.
-  - Making the order Morton is an open question (Section 9.2).
+  - Columns are in Morton order: on every level, the boxes a rank holds (local,
+    `Global` and ghost) are numbered 0..n by their sorted keys (`BoxIndex`, Phase 3 T4).
+    The numbering is deterministic for a fixed tree and number of ranks (Section 9.2).
+  - GEMM plans gather by box index, which the groupings of Section 5.2 give directly.
 - **Real basis.** Store the real and imaginary parts of the m ≥ 0 coefficients
   (CONVENTIONS §3.6). Every operator becomes a real matrix, so kernels need no complex
   type and real GEMM applies. Two consequences for operators built on this storage:
@@ -527,14 +583,27 @@ plane-wave) sit behind one interface in `fmm-exec`.
 - **Scaled coefficients** (Section 2.4, refined by CONVENTIONS §3.7), so tables are
   level-independent and f32 stays in range. This relies on a cubic domain, which
   `compute_global_bounding_box` guarantees.
-- **Particles.** The application owns them; the octree stores no points. For sources,
-  interleave (x, y, z, q) per particle inside a leaf's source chunk, and keep separate
-  target chunks, because `FmmOperator` passes one flat slice per leaf. A true
-  structure-of-arrays layout needs the variable-size extension of Section 5.2.
-- **M2L plans.** For each level and offset, `v_list_by_direction` yields (target, source)
-  key pairs, mapped to parallel arrays of source and target column positions. For a fixed
-  offset each target has at most one source, so the scatter-add after a GEMM has no write
-  conflicts within that batch, and no atomics are needed.
+- **Particles: leaf-scaled data** (CONVENTIONS §3.13, signed off on 2026-10-01; this
+  replaces the interleaved absolute (x, y, z, q) of earlier drafts). The application
+  owns the points; the octree stores none. `Fmm` sorts them into leaf order once and
+  writes them into the CSR leaf stores of `nd-fmm-plan`:
+  - a point x in leaf b is stored as u = (x − c_b)/r_b ∈ [−1, 1]³, computed in f64 from
+    the user's coordinates and the domain, then rounded to T;
+  - a source chunk of n points holds the n coordinate triples, then the n charges, so
+    `as_chunks::<3>()` gives `[[T; 3]]` without copying;
+  - target positions live in the target-input store, in the same leaf-scaled form;
+  - the target output holds φ̂ = r_t Σ q/|x − y| and, with gradients,
+    ĝ = r_t² ∇ₓ Σ q/|x − y|. `Fmm` applies φ = φ̂ / (4π r_t) and ∇φ = ĝ / (4π r_t²)
+    once, on the way out.
+
+  A shift formed from floating-point centres would carry a relative error of
+  ε |c| / r_l, up to 6.5e4 ε at level 16 (four digits in f32). With leaf-scaled data and
+  the relative frames of Section 5.2, P2M, L2P, P2L and M2P call `nd_fmm_ref::leaf`
+  unchanged; only P2P between two different leaves maps its sources into scratch.
+- **M2L plans.** For each level and offset, the M2L grouping (`lists::VList`) holds
+  parallel arrays of target and source box indices. For a fixed offset each target has
+  at most one source, so the scatter-add after a GEMM has no write conflicts within
+  that batch, and no atomics are needed.
 
 ## 6. CubeCL design considerations
 
@@ -634,6 +703,69 @@ candidates keyed by (backend, precision, p, boxes per level). In f64 the dense/r
 crossover, provisionally near p ≈ 10 (Section 4), is set here. Persist the
 tuning cache so production runs do not re-tune.
 
+### 6.8 Threads and BLAS
+
+Phase 3 threads the host path with rayon inside each rank (C3.5, T10). Nested thread
+pools oversubscribe the cores: a GEMM called inside a rayon worker would start its own
+BLAS threads on every worker. The rule of docs/phase3/README.md ("Threads and BLAS")
+holds for every later phase:
+
+- A matrix product called inside a rayon worker runs single-threaded. Ranks × rayon
+  threads × BLAS threads, and any other pool, stay at or below the physical cores.
+  Never nest two pools that both fill the machine.
+- Large products outside rayon may use BLAS threads.
+- The launcher sets BLAS threads through environment variables, before the process
+  starts: `OPENBLAS_NUM_THREADS`, `OMP_NUM_THREADS`, `MKL_NUM_THREADS`,
+  `BLIS_NUM_THREADS`, and `VECLIB_MAXIMUM_THREADS` for Accelerate on macOS. With Open
+  MPI they are passed with `mpirun -x`.
+- The library never sets an environment variable. OpenBLAS reads them once at
+  initialisation, and Rust 2024 makes `std::env::set_var` unsafe. `Fmm::threading()`
+  (`ThreadingReport`) reads and reports them instead, and warns, with more than one
+  rayon thread, about a variable that is unset or not 1.
+
+Phase 3 makes no BLAS call in any compute path (T10 audit: `MatrixSet::apply` is a
+hand-written loop, `nd-fmm-ref` is plain Rust, `nd-fmm-plan` uses rlst only for its
+exchanges, and the release binaries link no BLAS symbol). The rule becomes binding
+where later work adds one:
+
+- **Phase 4 host batched path.** A GEMM per (level, offset) or per octant called from
+  a rayon worker must run with one BLAS thread. Alternatively the level call runs the
+  GEMM outside rayon with BLAS threads, but never both. The first task that calls BLAS
+  inside a worker turns the `ThreadingReport` warning into an error, or forces one
+  BLAS thread with `rlst::threading::set_blas_threads(1)` before the pool starts.
+- **CubeCL CPU runtime (Phase 4).** It has its own worker pool. It counts as a pool
+  in the product above, so it must not run inside rayon workers, or rayon must run
+  with one thread while it is active.
+- **SVD of C6.2.** It runs once at table build, outside rayon, and may use BLAS
+  threads. Table builds called from inside a threaded `Fmm` must not.
+
+`rlst::threading::set_blas_threads(n)` (rlst 0.9.0, `src/threading.rs`) finds the
+backend itself:
+
+- On Linux and macOS it looks up the thread-control functions at run time with
+  `dlsym(RTLD_DEFAULT, …)` among the libraries loaded into the process. That finds a
+  dynamically linked OpenBLAS (also the ILP64 `64_` symbols), Intel MKL, BLIS,
+  FlexiBLAS, and Accelerate on macOS 15 or later, with no feature.
+- A statically linked backend is invisible to that lookup. It needs the matching
+  feature (`openblas_threading`, `mkl_threading` or `blis_threading`), which links
+  the functions directly and requires the library in the final binary. On other
+  targets only the features work. In rlst 0.8.0 the `openblas_set_num_threads`
+  declaration sat under `cfg(feature = "mkl_threading")`, so that feature alone
+  failed to link; 0.9.0 fixes it.
+- With no backend found it returns `BlasThreadingError::NoBackendFound`. The lookup
+  is resolved once and cached, so a library loaded later with `dlopen` is missed.
+- The setting is process-global for OpenBLAS, MKL, BLIS and FlexiBLAS, and must not
+  change while other threads run BLAS. For Accelerate it applies to the **calling
+  thread only** (1 means single-threaded, more lets Accelerate choose). On macOS, one
+  call on the main thread therefore does not reach the rayon workers; set
+  `VECLIB_MAXIMUM_THREADS=1` at launch, or call it on every worker.
+
+The workspace needs no rlst threading feature today, because nothing calls BLAS in a
+compute path. The first task that calls `set_blas_threads` needs none either if the
+binary links its BLAS dynamically. If it links one statically, it must enable the
+matching feature (`openblas_threading` for OpenBLAS), and check `NoBackendFound` on
+every target it supports.
+
 ## 7. Phased implementation plan
 
 Seven phases, each ending in a gate that must pass before the next starts: conventions,
@@ -644,9 +776,9 @@ component below is sized to be one Claude Code task with a testable acceptance c
 flowchart TB
   P0["Phase 0 · Conventions and math core<br/>C0.1–C0.3 · fmm-math · done"]
   P1["Phase 1 · CPU reference operators<br/>C1.1–C1.4 · fmm-ref · done"]
-  P2["Phase 2 · Operator tables<br/>C2.1–C2.4 · fmm-tables"]
-  P3["Phase 3 · CPU FMM on nd-fmm-plan<br/>C3.0–C3.4 · nd-fmm-plan, fmm-exec"]
-  P4["Phase 4 · CubeCL kernels<br/>C4.0–C4.7 · nd-fmm-plan, fmm-kernels, fmm-exec"]
+  P2["Phase 2 · Operator tables<br/>C2.1–C2.4 · fmm-tables · done"]
+  P3["Phase 3 · CPU FMM on nd-fmm-plan<br/>C3.0–C3.5, C4.0 · nd-fmm-plan, fmm-exec · done"]
+  P4["Phase 4 · CubeCL kernels<br/>C4.1–C4.7 · fmm-kernels, fmm-exec"]
   P5["Phase 5 · Distributed<br/>C5.1–C5.3 · nd-fmm-plan, fmm-exec"]
   P6["Phase 6 · Optimisation and extensions<br/>C6.1–C6.5 · optional, benchmark-driven"]
   S["Spike · CubeCL GEMM<br/>Phase 0 task T6 · done; f64 CUDA run pending"]
@@ -663,8 +795,9 @@ Phases run in order, with two exceptions:
 
 - Phase 6 items can start as soon as the component they build on (usually C4.5) has
   passed its own test.
-- C5.1 can start right after C3.3. `FmmEvaluator` is distributed from the start, so the
-  host path already runs on several ranks.
+- C5.1 can start right after C3.3. The `Evaluator` is distributed from the start; the
+  host path needs only the redistribution of points to their owning ranks
+  ([fmm-plan-redesign.md](fmm-plan-redesign.md) §9) to run on several ranks.
 
 Components marked *(nd-fmm-plan)* are general extensions of that crate. They are done
 under its own `CLAUDE.md` rules and are checked with its `IndexFmm` test operator
@@ -940,21 +1073,229 @@ comparison (Section 4).
 
 | ID | Component | Acceptance criterion | Depends on | Status |
 | --- | --- | --- | --- | --- |
-| C3.0 | *(nd-fmm-plan)* Variable-size source and target data per leaf (per-leaf offsets in `LevelData`, exchange of variable-size ghost chunks) | `IndexFmm` with random per-leaf counts passes `mpi_regressions` on 1, 2 and 4 ranks; existing scenarios unchanged | none | Not started |
-| C3.1 | Laplace `FmmOperator` (host, per pair): box centre and half-width from Morton keys and the cubic domain, tables looked up by `child_index` and V-list offset | each operator equals the `fmm-ref` result for the same geometry at three levels; non-cubic domain rejected | C2.2, C3.0 | Not started |
-| C3.2 | Uniform-tree FMM through `FmmEvaluator`, one rank | relative L2 error vs direct sum within 2× of the single-translation prediction, N = 10⁵ | C3.1, C1.4 | Not started |
-| C3.3 | Adaptive trees (W and X paths: M2P, P2L); lists come from `InteractionManager` | same accuracy on clustered distributions (e.g. Plummer, sphere surface) | C3.2 | Not started |
-| C3.4 | Accuracy calibration: p vs error for f64 and f32 | published table of p for 1e-3 to 1e-12 targets | C3.3 | Not started |
+| C3.0 | *(nd-fmm-plan)* Variable-size source and target data per leaf; in Phase 3 the rewrite of the crate (Morton-ordered box index, index-based lists, level buffers and CSR leaf stores, variable-size ghost exchange) | `IndexFmm` with random per-leaf counts passes `mpi_regressions` on 1, 2 and 4 ranks; existing scenarios unchanged | none | Done as the rewrite (T1, PR #25: [fmm-plan-redesign.md](fmm-plan-redesign.md), signed off; T4–T7, PRs #30–#33): requirements 1–10 of docs/phase3/README.md met; every `mpi_regressions` scenario passes its brute-force list oracle on 1, 2 and 4 ranks; `IndexFmm` passes with counts of one and with seeded variable counts (zeros included) and equalled the old evaluator on every scenario before T7 removed the old API |
+| C4.0 | *(nd-fmm-plan)* Batched operator hooks, moved here from Phase 4 | every batched call honours its grouping; the per-pair adapter equals the batched path for `IndexFmm` | C3.0 | Done in Phase 3, absorbed by the rewrite (T6, PR #32): the level-batched `FmmOperator` of Section 5.2 with both views, `PairOperator` and `PerPair`; each target at most once per (level, offset), complete octant batches, adapter equal to the batched path |
+| C3.1 | Laplace `FmmOperator` (host, level-batched): geometry from integer Morton keys (CONVENTIONS §3.13), tables looked up by octant and V-list offset index | each operator equals the `fmm-ref` result for the same geometry at three levels; non-cubic domain rejected | C2.2, C3.0 | Done (T3, PR #29: geometry; T8, PR #34: `LaplaceOperator<T>`): on levels 2, 9 and 16, M2M, L2L and M2L equal `direct` to 2.8e-15 or better with `Dense` (bound 1e-14) and to 5.8e-15 or better with `Classes` and `Rotation` (1e-13); the leaf operators and P2P to 4.0e-16 or better (1e-13); the table order of `nd-fmm-tables`, `nd-octree` and `nd-fmm-plan` agrees; the batched and per-pair paths are bit-identical |
+| C3.2 | Uniform-tree FMM through the `Evaluator`, one rank | relative L2 error vs direct sum within 2× of the single-translation prediction, N = 10⁵ | C3.1, C1.4 | Done (T9, PR #35): `FmmBuilder`, `Fmm`, `Output`; 1.50×, 1.64× and 1.63× the prediction at p = 3, 8 and 18 (table below) |
+| C3.3 | Adaptive trees (W and X paths: M2P, P2L); lists from `nd-fmm-plan`'s `Plan` | same accuracy on clustered distributions (e.g. Plummer, sphere surface) | C3.2 | Done (T11, PR #38): sphere surface, Plummer sphere and Gaussian clusters at 0.40–1.26× the uniform-tree error (gate 2×) |
+| C3.4 | Accuracy calibration: p vs error for f64 and f32 | published table of p for 1e-3 to 1e-12 targets | C3.3 | Done (T12): the calibration table below; Section 4 holds its summary |
+| C3.5 | Host threading with rayon inside each rank (new in Phase 3) | output bit-identical to the serial path for 1, 2, 4 and 8 threads on every C3.2 and C3.3 scenario, f32 and f64 | C3.2 | Done (T10, PR #36; T11): `FmmBuilder::threads(n)`, default 1, a pool owned by the `Fmm`; every `mpi_exec` scenario bit-identical at 2, 4 and 8 threads (the p = 8 runs of T11 at one thread in debug, covered at N = 10⁵ by the ignored `adaptive.rs`); speed-up below |
 
-The per-pair path runs serially on each rank. Host parallelism beyond MPI ranks comes
-with the batched hooks of C4.0, which a rayon host backend can use as well.
+The host path runs each level call target by target through the target-centric rows,
+each target's contributions in the order of its row, with per-thread scratch built at
+construction. With `threads(n)`, rayon splits the target loop of each level call; every
+target sees the same accumulation order, so the output is bit-identical for any number
+of threads. Worker threads never call MPI, and with more than one thread `build`
+requires MPI at `Threading::Funneled`. Phase 3 calls no BLAS routine (Section 6.8).
+
+Every figure below is from one rank of an Apple M3 Max (12 performance and 4
+efficiency cores, 64 GB), release build, with every BLAS thread variable set to 1.
+Errors are relative L2 (and max) errors against `direct_sum` in f64 at 1,000 sampled
+targets, as the root mean square over eight charge vectors uniform in [−1, 1)
+(docs/phase3/README.md, "Error measures"). Timings are wall times, reported and never
+asserted.
+
+**C3.2, uniform tree** (T9, `fmm_accuracy`): N = 10⁵ uniform in [−1, 1)³, a uniform
+level-4 tree (4,096 leaves, 8–44 points each, 640,584 V pairs), one thread.
+
+| precision | p | strategy | φ L2 | φ max | ∇φ L2 | prediction | φ L2 / prediction | evaluate (ms) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| f64 | 3 | Dense | 2.650e-3 | 4.292e-3 | 2.748e-3 | 1.77e-3 | 1.50 | 197 |
+| f64 | 8 | Dense | 1.776e-5 | 4.515e-5 | 3.406e-5 | 1.08e-5 | 1.64 | 952 |
+| f64 | 18 | Rotation | 1.099e-8 | 6.777e-8 | 3.662e-8 | 6.74e-9 | 1.63 | 5,587 |
+| f32 | 3 | Dense | 2.650e-3 | 4.292e-3 | 2.748e-3 | 1.77e-3 | 1.50 | 186 |
+| f32 | 8 | Dense | 1.785e-5 | 4.465e-5 | 3.407e-5 | 1.08e-5 | 1.65 | 620 |
+
+The gate as first written failed on one charge vector (2.2× and 2.5×). T9 found no
+defect: with mixed-sign charges the far field of the coarsest V-list level partly
+cancels at each target by an amount that depends on the charges, and one vector's
+error varied by 2.3–2.7× across seeds. Hence the root mean square over eight vectors,
+and the p = 18 prediction re-derived as the median over 33 source draws (6.74e-9;
+Phase 1's 2.71e-9 had too few targets for the heavy-tailed error of the face offsets).
+
+**C3.3, adaptive trees** (T11, `fmm_accuracy`): N = 10⁵, `max_level` 16, 64 points per
+leaf as the refinement target for every distribution, f64, one thread.
+
+| distribution | leaf levels | leaves | W = X pairs | p = 3: φ L2 (ratio to cube) | p = 8 | p = 18 |
+| --- | --- | --- | --- | --- | --- | --- |
+| sphere surface | 3–5 | 8,191 | 62,540 | 1.221e-3 (0.46) | 8.516e-6 (0.48) | 4.432e-9 (0.40) |
+| Plummer, a = 0.1 | 3–8 | 5,678 | 36,642 | 3.202e-3 (1.21) | 2.187e-5 (1.23) | 1.379e-8 (1.26) |
+| 5 Gaussian clusters, σ = 0.02 | 2–8 | 8,667 | 74,161 | 2.366e-3 (0.89) | 1.577e-5 (0.89) | 7.325e-9 (0.67) |
+
+Masking M2L, M2P or P2L in turn (T11, `fmm-exec/tests/adaptive.rs`) shows that V
+carries almost all of the error. At p = 8 the W and X parts contribute about 1e-6
+against 1–3e-5 in total, with relative errors no worse than V's. f32 is within 1% of
+f64 everywhere at p = 3 and 8.
+
+**C3.5, threads** (T10): the C3.2 problem, mean time per evaluation in ms, speed-up
+over one thread. 16 threads include the 4 efficiency cores, which cap the speed-up
+near 11–13×.
+
+| precision | p | 1 thread | 2 | 4 | 8 | 16 | speed-up 2 / 4 / 8 / 16 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| f64 | 3 | 206.1 | 102.5 | 53.1 | 27.6 | 19.2 | 2.01 / 3.88 / 7.47 / 10.73 |
+| f64 | 8 | 968.8 | 485.7 | 251.4 | 133.1 | 96.4 | 1.99 / 3.85 / 7.28 / 10.05 |
+| f64 | 18 | 5503.1 | 2805.4 | 1432.0 | 718.7 | 485.7 | 1.96 / 3.84 / 7.66 / 11.33 |
+| f32 | 3 | 187.4 | 97.4 | 49.6 | 26.0 | 19.2 | 1.92 / 3.78 / 7.21 / 9.76 |
+| f32 | 8 | 618.8 | 318.5 | 162.9 | 89.5 | 73.0 | 1.94 / 3.80 / 6.91 / 8.48 |
+
+To 8 threads the large stages run at 91–98% efficiency. Dense M2L at p = 8 scales a
+little worse (91%) than rotation at p = 18 (96%), probably because the 17 MB of dense
+tables stream from memory. The upward pass at p ≤ 8 is too short to scale.
+
+**C3.4, calibration** (T12, `cargo run --release -p nd-fmm-validate --example
+calibrate`): each of the four distributions with N = 10⁵, sources equal to targets,
+`max_level` 16 and 64 points per leaf as the refinement target (the cube's tree is then
+the uniform level-4 tree, drawn with another seed than C3.2), the default strategy
+(`Auto`: `Dense` for p ≤ 8, `Rotation` above), f64 at p = 1..=20 and f32 at p = 1..=8.
+The table gives the smallest p whose relative L2 error is below the target. "> 20" or
+"> 8" means no tested degree reaches it. The worst column is the largest p of the four.
+The errors are the same for every thread count (C3.5). The whole example ran in 4.8
+minutes on 16 threads and in 47 minutes on one.
+
+| target | φ f64: cube | sphere | Plummer | clusters | worst | ∇φ f64: cube | sphere | Plummer | clusters | worst |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1e-3 | 4 | 4 | 5 | 4 | **5** | 4 | 1 | 4 | 4 | **4** |
+| 1e-4 | 7 | 6 | 7 | 7 | **7** | 7 | 2 | 6 | 7 | **7** |
+| 1e-5 | 9 | 8 | 9 | 9 | **9** | 9 | 4 | 9 | 10 | **10** |
+| 1e-6 | 12 | 11 | 12 | 12 | **12** | 13 | 7 | 12 | 13 | **13** |
+| 1e-7 | 15 | 14 | 15 | 15 | **15** | 16 | 10 | 16 | 16 | **16** |
+| 1e-8 | 19 | 17 | 19 | 18 | **19** | 20 | 13 | 19 | 20 | **20** |
+| 1e-9 | > 20 | > 20 | > 20 | > 20 | **> 20** | > 20 | 17 | > 20 | > 20 | **> 20** |
+| 1e-10 | > 20 | > 20 | > 20 | > 20 | **> 20** | > 20 | 20 | > 20 | > 20 | **> 20** |
+| 1e-11, 1e-12 | > 20 | > 20 | > 20 | > 20 | **> 20** | > 20 | > 20 | > 20 | > 20 | **> 20** |
+
+| target | φ f32: cube | sphere | Plummer | clusters | worst | ∇φ f32: cube | sphere | Plummer | clusters | worst |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1e-3 | 4 | 4 | 5 | 4 | **5** | 4 | 1 | 4 | 4 | **4** |
+| 1e-4 | 7 | 6 | 7 | 7 | **7** | 7 | 2 | 6 | 7 | **7** |
+| 1e-5 to 1e-12 | > 8 | 8 (1e-5 only) | > 8 | > 8 | **> 8** | > 8 | > 8 | > 8 | > 8 | **> 8** |
+| floor: smallest error, at p | 1.83e-5, 8 | 8.94e-6, 8 | 2.20e-5, 8 | 1.59e-5, 8 | 2.20e-5 | 1.91e-5, 8 | 1.09e-5, 8 | 1.39e-5, 8 | 2.58e-5, 8 | 2.58e-5 |
+| f64 at that p | 1.82e-5 | 8.52e-6 | 2.19e-5 | 1.58e-5 | | 1.90e-5 | 3.36e-7 | 1.39e-5 | 2.58e-5 | |
+
+- f64 reaches 1e-8 at p = 19 at worst. Every target from 1e-9 down needs p > 20,
+  outside the range CONVENTIONS §3.9 tests for M2L. Near p = 20 the error falls by
+  about 1.75 per degree, so each further digit costs about four degrees.
+- The distributions differ by at most one or two degrees for φ. The Plummer sphere is
+  the worst or tied at every φ target in f64. The sphere surface needs the fewest
+  degrees, especially for ∇φ: its ∇φ error is 25–50× below its φ error at the same p.
+- In f32, φ stays within 5% of f64 up to p = 8, so truncation sets the f32 error there.
+  The rounding floor appears only in ∇φ on the sphere: 1.1e-5 from p = 5 on (1.09e-5
+  at p = 8 against 3.36e-7 in f64).
+
+**Per-pair cost** (T12, the calibration run on one thread): wall time in ms of one
+evaluation (mean over the eight charge vectors) and of the build, by stage. Upward is
+P2M and M2M; downward is L2L, M2L and P2L, dominated by M2L; leaves is L2P, M2P and P2P,
+dominated by P2P. The last column divides the downward stage by the number of V pairs.
+
+| distribution | precision | p | strategy | build | upward | downward | leaves | evaluate | downward share | leaves share | downward per V pair (µs) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| cube | f64 | 3 | Dense | 49 | 2 | 37 | 158 | 199 | 19% | 80% | 0.06 |
+| cube | f64 | 8 | Dense | 268 | 19 | 738 | 187 | 944 | 78% | 20% | 1.15 |
+| cube | f64 | 12 | Rotation | 51 | 40 | 1,694 | 225 | 1,960 | 86% | 11% | 2.65 |
+| cube | f64 | 18 | Rotation | 66 | 108 | 5,039 | 318 | 5,465 | 92% | 6% | 7.87 |
+| cube | f32 | 3 | Dense | 49 | 3 | 33 | 152 | 188 | 18% | 81% | 0.05 |
+| cube | f32 | 8 | Dense | 280 | 18 | 423 | 180 | 622 | 68% | 29% | 0.66 |
+| sphere | f64 | 3 | Dense | 75 | 3 | 60 | 161 | 224 | 27% | 72% | 0.08 |
+| sphere | f64 | 8 | Dense | 296 | 25 | 966 | 349 | 1,340 | 72% | 26% | 1.26 |
+| sphere | f64 | 12 | Rotation | 77 | 50 | 2,216 | 604 | 2,871 | 77% | 21% | 2.88 |
+| sphere | f64 | 18 | Rotation | 94 | 141 | 6,671 | 1,235 | 8,047 | 83% | 15% | 8.67 |
+| sphere | f32 | 8 | Dense | 294 | 21 | 584 | 347 | 953 | 61% | 36% | 0.76 |
+| Plummer | f64 | 3 | Dense | 72 | 3 | 85 | 322 | 410 | 21% | 78% | 0.10 |
+| Plummer | f64 | 8 | Dense | 293 | 21 | 1,143 | 776 | 1,941 | 59% | 40% | 1.40 |
+| Plummer | f64 | 12 | Rotation | 72 | 44 | 2,607 | 1,407 | 4,059 | 64% | 35% | 3.20 |
+| Plummer | f64 | 18 | Rotation | 86 | 119 | 7,503 | 2,903 | 10,525 | 71% | 28% | 9.22 |
+| Plummer | f32 | 3 | Dense | 70 | 3 | 77 | 311 | 392 | 20% | 79% | 0.10 |
+| Plummer | f32 | 8 | Dense | 290 | 19 | 734 | 771 | 1,524 | 48% | 51% | 0.90 |
+| clusters | f64 | 3 | Dense | 88 | 3 | 102 | 311 | 416 | 24% | 75% | 0.10 |
+| clusters | f64 | 8 | Dense | 309 | 25 | 1,392 | 818 | 2,236 | 62% | 37% | 1.38 |
+| clusters | f64 | 12 | Rotation | 92 | 51 | 3,149 | 1,512 | 4,713 | 67% | 32% | 3.12 |
+| clusters | f64 | 18 | Rotation | 103 | 145 | 9,271 | 3,188 | 12,604 | 74% | 25% | 9.20 |
+| clusters | f32 | 8 | Dense | 318 | 22 | 901 | 824 | 1,747 | 52% | 47% | 0.89 |
+
+- At p = 3 the leaf stage (P2P) takes 72–81% of an evaluation. From p = 8 the
+  downward stage (M2L) dominates in f64: 59–78% at p = 8, 64–86% at p = 12 and
+  71–92% at p = 18. In f32
+  at p = 8 the two are close on the adaptive trees (48–61% downward).
+- Per V pair, dense M2L costs 1.15–1.40 µs at p = 8 in f64 and 0.66–0.90 µs in f32.
+  Rotation costs 2.7–3.2 µs at p = 12 and 7.9–9.2 µs at p = 18. These agree with the
+  single applications of Phase 2 (0.94 µs dense at p = 8, about 8 µs for table
+  rotation at p = 18), so the per-pair path adds little over its kernels; the rest of
+  the stage is L2L, P2L and the loop around the kernels.
+- The upward pass is at most 2% of an evaluation. The build is 50–100 ms without dense
+  tables. Dense tables add about 220–230 ms at p = 8, which `table_cache` reduces to
+  a load (45 ms at p = 8 in T8).
+- Every error in the sweeps is bit-identical on 1 and 16 threads.
+
+
+**Leaf size** (T12): p = 8 in f64, one thread, the calibration problems with only
+`max_points_per_leaf` changed. "near" is the share of the leaf stage (P2P, with L2P
+and M2P) in one evaluation, in ms.
+
+| distribution | points per leaf (target) | leaves | V pairs | φ L2 | ∇φ L2 | evaluate | far (upward + downward) | near |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| cube | 16 | 31,543 | 5,578,602 | 1.89e-5 | 2.80e-5 | 6,720 | 6,516 | 3% |
+| cube | 32 | 5,657 | 656,322 | 1.82e-5 | 1.95e-5 | 1,320 | 877 | 33% |
+| cube | 64, 128 | 4,096 | 640,584 | 1.82e-5 | 1.90e-5 | 938–941 | 755–757 | 19–20% |
+| cube | 256 | 512 | 56,448 | 1.60e-5 | 1.09e-5 | 1,380 | 80 | 94% |
+| Plummer | 16 | 21,652 | 3,574,518 | 2.27e-5 | 2.05e-5 | 4,858 | 4,317 | 11% |
+| Plummer | 32 | 11,201 | 1,750,788 | 2.24e-5 | 1.86e-5 | 2,899 | 2,239 | 23% |
+| Plummer | 64 | 5,678 | 813,714 | 2.19e-5 | 1.39e-5 | 1,943 | 1,163 | 40% |
+| Plummer | 128 | 3,298 | 434,322 | 2.14e-5 | 1.29e-5 | 1,694 | 731 | 57% |
+| Plummer | 256 | 2,157 | 256,332 | 2.09e-5 | 1.07e-5 | 1,874 | 550 | 71% |
+
+- The φ error barely moves: 1.6–1.9e-5 on the cube and 2.1–2.3e-5 for Plummer. ∇φ
+  improves with larger leaves (2.8e-5 to 1.1e-5 on the cube), because more of it comes
+  from the exact near field.
+- The uniform cube's tree changes only in steps (leaves on levels 4–5 at 16 and 32,
+  level 4 at 64 and 128, level 3 at 256), so its balance jumps from 20% to 94% near.
+  Plummer refines smoothly, and near and far balance between 64 and 128 points per
+  leaf; 128 is its fastest evaluation. The default of 64 is within 15% of it, and is
+  the cube's fastest with 128. On 16 threads the picture is the same (fastest at 64
+  or 128 for both). Defaults are not tuned here.
+
+**Recommendation for Phase 4** (T12). The GPU tests should run two distributions at
+N = 10⁵ with the calibration settings above (`max_level` 16, 64 points per leaf, eight
+charge vectors):
+
+- the **uniform cube**: one leaf level, empty W and X lists, the cleanest offset and
+  octant batches for the GEMM path;
+- the **Plummer sphere** (a = 0.1): leaves on six levels, non-empty W and X lists, the
+  largest error of the four at most targets, and the largest near-field share.
+
+  The Gaussian clusters, with the most V pairs (about 10⁶), are the optional third, a
+  stress case for batch sizes.
+
+At these degrees, with the expected relative L2 errors against the direct sum (root
+mean square over the eight vectors; cube / Plummer):
+
+| precision | p | M2L path it exercises | φ L2 | ∇φ L2 | dominant per-pair stage (one thread) |
+| --- | --- | --- | --- | --- | --- |
+| f32 | 3 | dense, hand-written small-p kernel ((p+1)² = 16 < 64) | 2.61e-3 / 3.20e-3 | 1.45e-3 / 1.12e-3 | leaves (P2P), 79–81% |
+| f32 | 8 | dense, library CMMA ((p+1)² = 81) | 1.83e-5 / 2.20e-5 | 1.91e-5 / 1.39e-5 | downward 68% (cube); downward and leaves even (Plummer, 48% / 51%) |
+| f64 | 8 | dense, hand-written f64 kernel | 1.82e-5 / 2.19e-5 | 1.90e-5 / 1.39e-5 | downward (M2L), 59–78% |
+| f64 | 12 | the dense/rotation crossover (Section 4) | 7.12e-7 / 8.06e-7 | 1.04e-6 / 7.06e-7 | downward, 64–86% |
+| f64 | 18 | rotation | 1.02e-8 / 1.38e-8 | 2.40e-8 / 1.62e-8 | downward, 71–92% |
+
+- The gate of Phase 4 compares the GPU output with the CPU FMM of Phase 3 at the same p
+  and strategy, not only with the direct sum. The errors above say what the direct-sum
+  comparison must reproduce: in f64 to the printed digits, in f32 within a few per cent
+  (f32 is within 5% of f64 at p ≤ 8 for φ).
+- f32 targets below about 1e-5 are out of reach at p ≤ 8 (truncation). ∇φ near close
+  pairs on a surface floors at about 1e-5 (sphere), so f32 gradient tests should use the
+  cube and Plummer, not the sphere.
+- P2P is the larger stage at p ≤ 3 and stays at 20–51% of an evaluation at p = 8. A GEMM M2L alone
+  therefore cannot speed up the low-p runs, and the P2P kernel (C4.2) is benchmarked
+  alongside M2L from the start.
+- Dense table building (about 230 ms at p = 8, 8.5 s at p = 16; T8) belongs outside
+  timed runs; GPU benchmarks use `table_cache`.
+
 
 ### Phase 4: CubeCL kernels (`fmm-kernels`, `fmm-exec` device path)
 
 | ID | Component | Acceptance criterion | Depends on | Status |
 | --- | --- | --- | --- | --- |
-| C4.0 | *(nd-fmm-plan)* Batched operator hooks: M2M/L2L per (level, octant), M2L per (level, offset) from `v_list_by_direction`, leaf operators per level, all with gathered `LevelData` positions | `IndexFmm` through the batched hooks equals the per-pair result on 1, 2 and 4 ranks; each target has at most one source per offset | C3.0 | Not started |
-| C4.1 | Device buffers, plan and table upload, precision capability check | round-trip upload/download exact; f64 refused cleanly where unsupported (Metal, wgpu, and CUDA on CubeCL 0.10.0) | C3.1, C4.0 | Not started |
+| C4.1 | Device buffers, plan and table upload, precision capability check | round-trip upload/download exact; f64 refused cleanly where unsupported (Metal, wgpu, and CUDA on CubeCL 0.10.0) | C3.1 | Not started |
 | C4.2 | P2P kernel (shared-memory tiling) | matches C1.4 to precision; reaches a stated fraction of peak | C4.1 | Not started |
 | C4.3 | P2M and L2P kernels | match C1.1 to precision | C4.1 | Not started |
 | C4.4 | M2M and L2L as batched GEMM | match C2.1 per level | C4.1 | Not started |
@@ -962,10 +1303,14 @@ with the batched hooks of C4.0, which a rayon host backend can use as well.
 | C4.6 | M2L rotation kernel | matches C2.3; timing vs C4.5 across p | C4.1 | Not started |
 | C4.7 | Autotune registration and persistent cache | picks the fastest strategy per (backend, precision, p) | C4.5, C4.6 | Not started |
 
+C4.0, the batched operator hooks, was delivered in Phase 3 by the `nd-fmm-plan` rewrite
+(Section 5.2): the device path plugs into the same `FmmOperator` as the host path, and
+gathers from the groupings by offset and octant.
+
 ### Phase 5: distributed (`nd-fmm-plan`, `fmm-exec`)
 
-The ghost exchange itself already exists in `FmmEvaluator`, so there is no `fmm-dist`
-crate. This phase validates the Laplace operator on several ranks and adds overlap.
+The ghost exchange itself already exists in `nd-fmm-plan`'s `Evaluator`, so there is no
+`fmm-dist` crate. This phase validates the Laplace operator on several ranks and adds overlap.
 
 | ID | Component | Acceptance criterion | Depends on | Status |
 | --- | --- | --- | --- | --- |
@@ -1038,7 +1383,11 @@ self-hosted runner. Until then they are run by hand, following `fmm-plan/CLAUDE.
 - Time each stage separately (P2M, M2M, M2L, L2L, L2P, P2P, communication) and report
   achieved GFLOP/s and GB/s against device peak.
 - Tune leaf size so the near field and far field are roughly balanced, the optimum in
-  the classical cost model.
+  the classical cost model. Phase 3 measured the balance of the per-pair host path at
+  p = 8 (Section 7, Phase 3, "Leaf size"); the batched paths of Phase 4 shift it, so it
+  is measured again there.
+- Keep every thread pool inside the core budget of Section 6.8 when timing threaded
+  host paths, and report the rayon threads and the BLAS variables with each run.
 - Compare at matched accuracy against FMM3D (analytic Laplace), and against ExaFMM-t and
   kifmm-rs as kernel-independent baselines.
 - Keep a small benchmark in CI on the CPU runtime to catch performance regressions, and
@@ -1066,17 +1415,25 @@ and identity tests, the second with a one-day spike before Phase 4.
 | CubeCL CPU runtime too slow to build or compile kernels for CI | kernel tests cannot run in CI | small shapes only; cache the LLVM bundle; otherwise run kernel tests by hand like the GPU tests |
 | Dense M2L memory at high p (~400 MB at p = 19) | out of memory next to large particle sets | symmetry reduction, SVD compression, or rotation M2L above a p threshold |
 | Launch overhead on small top levels | GPU idle, poor scaling at small N | host execution or merged launches for top levels |
-| Adaptive-list edge cases (W, X lists, level jumps) | accuracy loss on clustered data | lists already checked against a brute-force oracle in `nd-fmm-plan`; clustered test distributions in C3.3 |
-| `nd-fmm-plan` extensions (C3.0, C4.0) delayed or shaped for one kernel | Phase 3 and the GEMM path are blocked | specify them as general extensions checked with `IndexFmm`; keep the per-pair path as fallback and reference |
-| Per-pair `FmmOperator` calls with `HashMap` lookups too slow even on CPU | Phase 3 timings meaningless | Phase 3 gates on accuracy only; performance is measured on the batched path (C4.0 onwards) |
+| Adaptive-list edge cases (W, X lists, level jumps) | accuracy loss on clustered data | lists already checked against a brute-force oracle in `nd-fmm-plan`; clustered test distributions in C3.3. **Retired by Phase 3.** The rewritten lists still pass the oracle on 1, 2 and 4 ranks. On the sphere surface, Plummer sphere and Gaussian clusters (leaves on up to seven levels, 37,000–74,000 W and X pairs) the error is 0.40–1.26× the uniform tree's. Masking each list in turn shows the W and X parts at about 1e-6 of a 1–3e-5 total at p = 8 (T11), and graded trees, coincident points and points on box faces pass against the direct sum |
+| `nd-fmm-plan` extensions (C3.0, C4.0) delayed or shaped for one kernel | Phase 3 and the GEMM path are blocked | specify them as general extensions checked with `IndexFmm`; keep the per-pair path as fallback and reference. **Retired by Phase 3, by rewriting the crate instead of extending it** ([fmm-plan-redesign.md](fmm-plan-redesign.md), T1–T7). The rewrite took seven tasks, and the Laplace operator was written once, against the final interface. The interface was checked against a GEMM sketch in the design and by `IndexFmm` walking both views. It is checked against a real GEMM only in Phase 4 |
+| Per-pair `FmmOperator` calls with `HashMap` lookups too slow even on CPU | Phase 3 timings meaningless | Phase 3 gates on accuracy only; performance is measured on the batched path (C4.0 onwards). **Retired by Phase 3.** No hot path looks a key up in a `HashMap`, and the host path runs one level call per kind, target by target. On one thread, an f64 evaluation at N = 10⁵ takes 0.2 s (uniform cube, p = 3) to 12.6 s (Gaussian clusters, p = 18); with 16 threads the whole calibration sweep took 4.8 minutes (Section 7, Phase 3) |
 | MPI required by every crate above the tables | tests need an MPI runtime; MPI can be initialised once per test executable | keep `fmm-math`, `fmm-ref` and `fmm-tables` MPI-free; follow the one-MPI-test-per-executable rule of the existing crates |
 
 ### 9.2 Open questions
 
 - *Answered:* the octree gives only same-level neighbours and parent/child helpers.
-  `nd-fmm-plan`'s `InteractionManager` builds U, V, W and X (Section 1).
-- Should `LevelData` order the boxes of a level in Morton order rather than insertion
-  order, for reproducible sums and cache-friendly gathers (Section 5.3)?
+  `nd-fmm-plan` builds U, V, W and X (`Plan`, Section 1).
+- *Answered in Phase 3:* yes, Morton order. The rewritten `nd-fmm-plan` numbers the
+  boxes a rank holds on every level 0..n by their sorted keys, so a level's buffer is in
+  Morton column order and deterministic for a fixed tree and number of ranks
+  (requirement 2 of docs/phase3/README.md). Every accumulation follows the order of a
+  target's row, so results are bit-identical from run to run and for any number of
+  threads (C3.5).
+- *Answered in Phase 3:* variable-size leaf data. Sources, target input and target
+  output are CSR stores with per-leaf counts, zero allowed, and the source exchange
+  sends variable-size ghost chunks (C3.0). The point layout inside a leaf is the
+  leaf-scaled form of CONVENTIONS §3.13 (Section 5.3).
 - *Answered in Phase 2:* the box geometry conventions went into `docs/CONVENTIONS.md`
   before the tables were built. §3.12 (T2, PR #17, signed off before T3) states:
   - the domain and levels;
@@ -1098,6 +1455,10 @@ and identity tests, the second with a one-day spike before Phase 4.
   the f64 default? This is preferred, not required. Without it, Phase 4 proceeds on the
   provisional f64 recommendation of Section 4. The run measures the hand-written f64
   kernel's efficiency, predicted at 19–36% of the roofline, and the dense time per pair.
+- *New in Phase 3:* targets of 1e-9 and below need p > 20 in f64 (Section 4), beyond
+  the degrees CONVENTIONS §3.9 tests for M2L and `nd-fmm-exec` accepts
+  (`MAX_DEGREE` = 20). Are they needed? If so, extending the tested range (and the
+  rotation tables, the only M2L form that stays affordable there) is a separate task.
 - What accuracy range and N per GPU are typical for your applications?
 - Outputs needed: potential only, gradient, or also Hessians?
 - Should the 1/(4π) factor be part of the kernel or left to the caller? (Provisionally
