@@ -1,0 +1,19 @@
+[package]
+name = "nd-fmm-simd"
+version = "0.1.0-dev"
+description = "Hand-written SIMD kernels for the host path of the nd-project FMM: P2P on NEON and AVX2 + FMA, with a scalar fallback and runtime dispatch."
+readme = "README.md"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "nd_fmm_simd"
+
+[dependencies]
+nd-fmm-math = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+nd-fmm-ref = { workspace = true }
+proptest = { workspace = true }

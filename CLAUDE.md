@@ -9,7 +9,8 @@ own CLAUDE.md for crate-specific rules; everything here applies to all of them.
   Never change a convention in code; propose changes in the PR description instead.
 - Cite conventions in doc comments as `CONVENTIONS §3.x`.
 - CONVENTION_VERSION in nd-fmm-math must match the file.
-- Current phase and task briefs: docs/phase3/README.md.
+- Current phase and task briefs: docs/phase3s/README.md (Phase 3S, SIMD P2P on the
+  host; design docs/design/simd-p2p.md). Phase 3 briefs: docs/phase3/README.md.
 - Background: docs/design/laplace-fmm-plan.md (operators, plan) and
   docs/design/workspace-structure.md (crate layout). CONVENTIONS.md wins on any conflict.
 
@@ -39,6 +40,10 @@ own CLAUDE.md for crate-specific rules; everything here applies to all of them.
   in nd-fmm-kernels and spikes/; it is pinned to `=0.10.0` (matmul: `cubek-matmul`
   `=0.2.0`) in [workspace.dependencies]. 0.10.0 has no f64 on CUDA; see
   spikes/cubecl-gemm/SPIKE_REPORT.md.
+- `unsafe` only in nd-fmm-simd's `arch` modules and its ISA dispatch, in
+  nd-fmm-kernels, and in spikes/. Every block carries a `// SAFETY:` comment and
+  every public function stays safe; all other crates, nd-fmm-exec included, are free
+  of `unsafe` (docs/design/simd-p2p.md §5.4).
 - Document every public item; follow the crate's existing rustdoc style.
 
 ## Layout
@@ -70,11 +75,28 @@ RUST_MIN_STACK=8388608 cargo test
 cargo doc --no-deps
 ```
 
+A second job, `run-tests-simd`, runs nd-fmm-simd alone, without MPI, on an x86_64
+(`ubuntu-latest`) and an arm64 (`ubuntu-24.04-arm`) runner: it prints the CPU, then
+
+```sh
+cargo clippy -p nd-fmm-simd --all-targets -- -D warnings
+cargo test -p nd-fmm-simd -- --show-output
+cargo test -p nd-fmm-simd --release -- --ignored --show-output
+```
+
 Before finishing any task, also run the stricter
 
 ```sh
 cargo clippy --workspace --all-targets -- -D warnings
 RUST_MIN_STACK=8388608 cargo test --workspace
+```
+
+For a change to nd-fmm-simd, also clippy the other architecture's code, after
+`rustup target add <other>` (`x86_64-apple-darwin` on Apple silicon,
+`aarch64-unknown-linux-gnu` on x86_64 Linux):
+
+```sh
+cargo clippy -p nd-fmm-simd --all-targets --target <other> -- -D warnings
 ```
 
 `cargo test --workspace` needs a working MPI runtime, because nd-octree and

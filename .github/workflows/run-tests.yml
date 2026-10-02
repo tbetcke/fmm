@@ -53,3 +53,39 @@ jobs:
 
       - name: Build docs
         run: cargo doc --no-deps
+
+  # nd-fmm-simd alone, without MPI, on real x86_64 (AVX2 + FMA) and arm64 (NEON)
+  # hardware (Phase 3S, decided 2026-10-02). The tests print the ISAs they ran;
+  # --show-output puts that into the log. Correctness and accuracy only, never timings.
+  run-tests-simd:
+    name: run-tests-simd (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: actions/checkout@v6
+
+      - name: CPU and toolchain
+        run: |
+          lscpu
+          rustc --version
+
+      - name: Clippy
+        run: cargo clippy -p nd-fmm-simd --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test -p nd-fmm-simd -- --show-output
+
+      - name: Run release accuracy tests (ignored)
+        run: cargo test -p nd-fmm-simd --release -- --ignored --show-output
