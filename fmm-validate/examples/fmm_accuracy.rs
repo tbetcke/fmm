@@ -3,18 +3,24 @@
 //! p ∈ {3, 8} in f32, against the f64 direct sum at 1,000 sampled targets, over eight
 //! charge vectors. Prints Markdown on stdout.
 //!
-//! Run in release mode, on one rank (the points are not redistributed until C5.1):
+//! Run in release mode, on one rank (the points are not redistributed until C5.1), with
+//! `--threads n` rayon threads (default 1) and one BLAS thread:
 //!
 //! ```text
-//! cargo run --release -p nd-fmm-validate --example fmm_accuracy
+//! OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 BLIS_NUM_THREADS=1 \
+//!     VECLIB_MAXIMUM_THREADS=1 \
+//!     cargo run --release -p nd-fmm-validate --example fmm_accuracy -- --threads 4
 //! ```
 //!
 //! The problem and the error measure are described in `nd_fmm_validate::fmm_accuracy`.
-//! The errors are deterministic for the seed; the timings are wall times on this
-//! machine, reported and never asserted.
+//! The errors are deterministic for the seed and the same for every number of threads;
+//! the timings are wall times on this machine, reported and never asserted. MPI is
+//! initialised with `Threading::Funneled`, and the threading report (rayon threads, MPI
+//! level, BLAS variables; `nd_fmm_exec::threading`) is printed with the results.
 
 use std::time::{Duration, Instant};
 
+use mpi::Threading;
 use mpi::traits::*;
 use nd_fmm_validate::bench::{cores, cpu_model, target};
 use nd_fmm_validate::fmm_accuracy::{Config, Oracle, PREDICTION, Problem, Run, run};
@@ -25,9 +31,32 @@ const F64_PS: [usize; 3] = [3, 8, 18];
 /// The degrees in f32, at most 8 (design §4).
 const F32_PS: [usize; 2] = [3, 8];
 
+/// The `--threads n` argument, 1 by default; exits with a message on anything else.
+fn threads() -> usize {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let usage = || -> ! {
+        eprintln!("usage: fmm_accuracy [--threads n], n >= 1; got {args:?}");
+        std::process::exit(2);
+    };
+    match args.as_slice() {
+        [] => 1,
+        [flag, n] if flag == "--threads" => match n.parse() {
+            Ok(n) if n >= 1 => n,
+            _ => usage(),
+        },
+        _ => usage(),
+    }
+}
+
 fn main() {
-    let universe = mpi::initialize().expect("MPI initialises");
+    let threads = threads();
+    let (universe, provided) =
+        mpi::initialize_with_threading(Threading::Funneled).expect("MPI initialises");
     let comm = universe.world();
+    if threads > 1 && provided < Threading::Funneled {
+        eprintln!("--threads {threads} needs MPI at Funneled; it provides {provided:?}");
+        std::process::exit(2);
+    }
     if comm.size() != 1 {
         eprintln!("fmm_accuracy runs on one rank; points are not redistributed until C5.1");
         std::process::exit(2);
@@ -46,13 +75,27 @@ fn main() {
 
     let mut runs: Vec<Run> = F64_PS
         .iter()
-        .map(|&p| run::<f64>(&config, &problem, &problem.charges, &oracle64, p, &comm))
+        .map(|&p| {
+            run::<f64>(
+                &config,
+                &problem,
+                &problem.charges,
+                &oracle64,
+                (p, threads),
+                &comm,
+            )
+        })
         .collect();
-    runs.extend(
-        F32_PS
-            .iter()
-            .map(|&p| run::<f32>(&config, &problem, &charges32, &oracle32, p, &comm)),
-    );
+    runs.extend(F32_PS.iter().map(|&p| {
+        run::<f32>(
+            &config,
+            &problem,
+            &charges32,
+            &oracle32,
+            (p, threads),
+            &comm,
+        )
+    }));
 
     println!("# Accuracy of the FMM on a uniform tree (C3.2)");
     println!();
@@ -82,11 +125,32 @@ fn main() {
             .join(", ")
     );
     println!(
-        "- Machine: {}; {}; {}; one rank, one thread. The direct sums took {:.1} s.",
+        "- Machine: {}; {}; {}; one rank, {threads} thread{}. The direct sums took {:.1} \
+         s (one thread).",
         cpu_model(),
         cores(),
         target(),
+        if threads == 1 { "" } else { "s" },
         oracle_time.as_secs_f64()
+    );
+    let threading = &runs[0].threading;
+    let warnings = threading.warnings();
+    println!(
+        "- Threading: {threading}.{}",
+        if warnings.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " Warning: with {threads} rayon threads, set {} to 1 in the launching \
+                 shell (no BLAS routine runs in a worker in Phase 3, so the results are \
+                 unaffected).",
+                warnings
+                    .iter()
+                    .map(|v| v.name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
     );
 
     let tree = &runs[0];

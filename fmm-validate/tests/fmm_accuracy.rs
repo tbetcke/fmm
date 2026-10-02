@@ -1,12 +1,13 @@
 //! A smoke run of the core of the `fmm_accuracy` example at N = 500, p = 2, in f64 and
-//! f32: it runs, is consistent and converges roughly as expected. The accuracy figures
-//! themselves are reported by the example.
+//! f32: it runs, is consistent and converges roughly as expected, and on two threads
+//! gives the same errors. The accuracy figures themselves are reported by the example.
 //!
 //! The one test of this executable that initialises MPI (MPI cannot be initialised
 //! twice in one process). Error measure: the root mean squares of the relative L2 and
 //! max errors over the charge vectors that `fmm_accuracy::run` reports, compared as
 //! plain numbers.
 
+use mpi::Threading;
 use nd_fmm_validate::fmm_accuracy::{Config, Oracle, Problem, prediction, run};
 
 const SMOKE: Config = Config {
@@ -19,7 +20,9 @@ const SMOKE: Config = Config {
 
 #[test]
 fn smoke_run_at_n_500_and_p_2() {
-    let universe = mpi::initialize().expect("this test owns MPI initialization");
+    let (universe, provided) = mpi::initialize_with_threading(Threading::Funneled)
+        .expect("this test owns MPI initialization");
+    assert!(provided >= Threading::Funneled, "MPI provides {provided:?}");
     let comm = universe.world();
 
     let problem = Problem::new(&SMOKE);
@@ -36,7 +39,16 @@ fn smoke_run_at_n_500_and_p_2() {
     assert_eq!(problem, Problem::new(&SMOKE), "seeded");
 
     let oracle = Oracle::new(&problem, &problem.charges);
-    let r64 = run::<f64>(&SMOKE, &problem, &problem.charges, &oracle, 2, &comm);
+    let r64 = run::<f64>(&SMOKE, &problem, &problem.charges, &oracle, (2, 1), &comm);
+    assert_eq!(r64.threading.threads, 1);
+    // Two threads: the output is bit-identical (C3.5), so are the errors.
+    let threaded = run::<f64>(&SMOKE, &problem, &problem.charges, &oracle, (2, 2), &comm);
+    assert_eq!(threaded.threading.threads, 2);
+    assert_eq!(
+        (threaded.potential, threaded.gradient),
+        (r64.potential, r64.gradient),
+        "two threads"
+    );
     let charges32 = problem.charges_as::<f32>();
     let rounded: Vec<Vec<f64>> = charges32
         .iter()
@@ -47,7 +59,7 @@ fn smoke_run_at_n_500_and_p_2() {
         &problem,
         &charges32,
         &Oracle::new(&problem, &rounded),
-        2,
+        (2, 1),
         &comm,
     );
     eprintln!("{r64:?}\n{r32:?}");

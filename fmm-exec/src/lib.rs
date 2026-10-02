@@ -45,6 +45,11 @@
 //!   rank with empty input, and an error that depends on one rank's input is agreed by
 //!   all ranks before the next collective. Operator and geometry code never calls MPI;
 //!   at most one test per test executable initialises it.
+//! - **Threads.** Opt-in ([`FmmBuilder::threads`](fmm::FmmBuilder::threads), default 1):
+//!   rayon over the targets of each level call, in a pool the FMM owns, bit-identical to
+//!   the serial path for every thread count. Worker threads never call MPI or BLAS. To
+//!   use threads, initialise MPI with
+//!   `mpi::initialize_with_threading(mpi::Threading::Funneled)`; see [`threading`].
 //!
 //! ## Contents
 //!
@@ -59,7 +64,10 @@
 //!   per-pair kernels for every operator (§3.11–§3.13; C3.1).
 //! - [`fmm`]: the user-facing [`FmmBuilder`](fmm::FmmBuilder) and [`Fmm`](fmm::Fmm),
 //!   which load the caller's points into an octree and evaluate potentials and
-//!   gradients in the caller's order, with 1/(4π) applied once (§3.1, §3.13; C3.2).
+//!   gradients in the caller's order, with 1/(4π) applied once (§3.1, §3.13; C3.2),
+//!   optionally on several threads (C3.5).
+//! - [`threading`]: the rules for rayon threads, MPI and BLAS, how to launch with one
+//!   BLAS thread, and the [`ThreadingReport`](threading::ThreadingReport) of an FMM.
 //!
 //! ## Example
 //!
@@ -109,3 +117,4 @@ pub mod fmm;
 pub mod geometry;
 pub mod operator;
 pub mod tables;
+pub mod threading;

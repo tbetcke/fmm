@@ -32,6 +32,8 @@ nd-fmm-tables = { path = "fmm-tables" }
 mpi = { version = "0.8.2", features = ["derive"] }
 rlst = "0.9.0"
 rand_chacha = "0.10"
+# Host threading of the Laplace FMM (Phase 3 T10); nd-fmm-exec only.
+rayon = "1"
 # octree/ does not use these entries yet (a separate decision).
 nd-octree = { path = "octree" }
 nd-fmm-plan = { path = "fmm-plan" }

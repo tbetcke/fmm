@@ -45,10 +45,10 @@
 //!
 //! # Batched execution and order
 //!
-//! Each level call runs serially, target by target in index order, through the plan's
-//! target-centric view: box t of the level for P2M, M2M, M2L, P2L and L2L (row t lines
-//! up with chunk t of the output level), row r, local leaf `leaves.start + r`, for
-//! L2P, M2P and P2P. Each target's contributions are added in the order of its row, as
+//! Each level call runs target by target through the plan's target-centric view: box t
+//! of the level for P2M, M2M, M2L, P2L and L2L (row t lines up with chunk t of the
+//! output level), row r, local leaf `leaves.start + r`, for L2P, M2P and P2P. Each
+//! target's contributions are added in the order of its row, as
 //! the plan's accumulation rule requires (`nd_fmm_plan::operator`): children by octant
 //! (M2M), sources by offset index (M2L), leaves by leaf index (P2L, P2P), boxes by box
 //! index (M2P), and the single parent (L2L) or leaf (P2M, L2P). With the evaluator's
@@ -56,15 +56,45 @@
 //! entry's octant or offset index; debug builds check that it agrees with the keys.
 //!
 //! The body of one target is a function of that target's output slice, the call's
-//! shared inputs and one scratch set (`Kernels::*_target`), so the target loop can be
-//! run by a parallel iterator unchanged (T10).
+//! shared inputs and one scratch set (`Kernels::*_target`), and nothing else.
+//!
+//! # Threads (C3.5)
+//!
+//! Without a pool (the default, [`new`](LaplaceOperator::new)), every level call runs
+//! its targets serially, in index order, on the calling thread. With a pool
+//! ([`with_pool`](LaplaceOperator::with_pool)), every level call runs inside
+//! `ThreadPool::install` and hands each target to one pool thread:
+//!
+//! - box calls (P2M, M2M, M2L, P2L, L2L) split the output level with
+//!   `par_chunks_mut(size)`, one chunk per box;
+//! - leaf calls (L2P, M2P, P2P) split the target output into one mutable slice per
+//!   leaf by its CSR offsets, with `LeafSliceMut::split_at_mut` halving the rows
+//!   recursively under `rayon::join`. Nothing is allocated per call or per pair.
+//!
+//! Each thread writes only its own targets' slices, and each target runs the same body
+//! as in the serial loop, so it sees the same contributions in the same order: the
+//! output is bit-identical to the serial path for every number of threads. The order in
+//! which *targets* are processed varies from run to run, but no target reads another
+//! target's output. Load balance is rayon's work stealing, down to single targets.
+//!
+//! The pool's threads only compute: no level call communicates, so worker threads never
+//! call MPI ([`Fmm`](crate::fmm::Fmm) keeps every collective on the calling thread). Nor
+//! do they call BLAS or LAPACK: the tables are applied by hand-written loops of
+//! `nd-fmm-tables`, the leaf operators by the plain Rust of `nd-fmm-ref`
+//! ([`threading`](crate::threading)).
 //!
 //! # Scratch
 //!
 //! The interface passes `&mut self`, so the operator owns its scratch outright, with
-//! no `RefCell`: an `nd_fmm_ref::Workspace` for p, the [`TableScratch`] of its tables,
-//! and one buffer of `max_leaf_points` points into which P2P maps the sources of
-//! another leaf. All three are sized at construction; no operator allocates.
+//! no `RefCell`. A scratch set is an `nd_fmm_ref::Workspace` for p, the
+//! [`TableScratch`] of its tables, and one buffer of `max_leaf_points` points into
+//! which P2P maps the sources of another leaf. The operator holds one set, or with a
+//! pool one per pool thread, each in its own `Mutex`, created when the pool is given and
+//! selected by `rayon::current_thread_index()`. Only thread i ever locks set i, and only
+//! around one target body, which never yields to rayon, so the lock is uncontended by
+//! construction (a contended lock panics rather than waits). The serial path and the
+//! per-pair methods use set 0 through `Mutex::get_mut`, without locking. Every set is
+//! sized at construction; no operator allocates.
 //!
 //! # Example
 //!
@@ -101,6 +131,7 @@
 //! ```
 
 use core::fmt;
+use std::sync::{Arc, Mutex, PoisonError, TryLockError};
 
 use mpi::traits::Equivalence;
 use nd_fmm_math::RealScalar;
@@ -109,10 +140,12 @@ use nd_fmm_plan::lists::{Children, Csr, Parents, VList};
 use nd_fmm_plan::operator::{
     FmmOperator, FmmSizes, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PairOperator,
 };
-use nd_fmm_plan::store::{LeafSlice, LevelSlice};
+use nd_fmm_plan::store::{LeafSlice, LeafSliceMut, LevelSlice, LevelSliceMut};
 use nd_fmm_ref::{Frame, Workspace, leaf, p2p};
 use nd_fmm_tables::geometry::m2l_offset_index;
 use nd_octree::{MortonKey, morton};
+use rayon::ThreadPool;
+use rayon::prelude::*;
 
 use crate::geometry::relative_frame;
 use crate::tables::{TableScratch, Tables};
@@ -130,7 +163,7 @@ pub const TARGET_INPUT_POINT_SIZE: usize = 3;
 #[derive(Clone, Debug)]
 pub struct LaplaceOperator<T: RealScalar> {
     kernels: Kernels<T>,
-    scratch: Scratch<T>,
+    execution: Execution<T>,
 }
 
 /// The read-only part of the operator: what every target body shares.
@@ -149,6 +182,142 @@ pub(crate) struct Scratch<T: RealScalar> {
     tables: TableScratch<T>,
     /// The sources of another leaf in the target's coordinates (P2P); fixed length.
     mapped: Vec<[T; 3]>,
+}
+
+impl<T: RealScalar> Scratch<T> {
+    /// A scratch set for `kernels`.
+    fn new(kernels: &Kernels<T>) -> Self {
+        Self {
+            workspace: Workspace::new(kernels.p),
+            tables: kernels.tables.scratch(),
+            mapped: vec![[T::zero(); 3]; kernels.max_leaf_points],
+        }
+    }
+}
+
+/// Where the level calls run, and the scratch sets they use (module documentation,
+/// "Threads" and "Scratch").
+#[derive(Debug)]
+struct Execution<T: RealScalar> {
+    /// One set, or one per thread of `pool`, indexed by `rayon::current_thread_index()`.
+    /// Set 0 also serves the serial path and the per-pair methods.
+    scratch: Vec<Mutex<Scratch<T>>>,
+    /// The pool of the level calls, if any.
+    pool: Option<Arc<ThreadPool>>,
+    /// Runs the level calls serially even with a pool.
+    serial: bool,
+}
+
+/// A copy shares the pool and gets its own scratch sets.
+impl<T: RealScalar> Clone for Execution<T> {
+    fn clone(&self) -> Self {
+        Self {
+            scratch: self
+                .scratch
+                .iter()
+                .map(|set| Mutex::new(set.lock().unwrap_or_else(PoisonError::into_inner).clone()))
+                .collect(),
+            pool: self.pool.clone(),
+            serial: self.serial,
+        }
+    }
+}
+
+impl<T: RealScalar> Execution<T> {
+    /// Scratch set 0, without locking.
+    fn first(&mut self) -> &mut Scratch<T> {
+        self.scratch[0]
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Runs `body(t, chunk, scratch)` for every chunk t of `output`: in index order on
+    /// the calling thread, or in the pool with `par_chunks_mut`.
+    fn boxes<F>(&mut self, mut output: LevelSliceMut<'_, T>, body: F)
+    where
+        F: Fn(usize, &mut [T], &mut Scratch<T>) + Sync,
+    {
+        match (&self.pool, self.serial) {
+            (Some(pool), false) => {
+                let (sets, size) = (&self.scratch, output.size());
+                pool.install(|| {
+                    output
+                        .as_mut_slice()
+                        .par_chunks_mut(size)
+                        .enumerate()
+                        .for_each(|(t, chunk)| with_scratch(sets, |s| body(t, chunk, s)));
+                });
+            }
+            _ => {
+                let scratch = self.first();
+                for (t, chunk) in output.chunks_mut().enumerate() {
+                    body(t, chunk, scratch);
+                }
+            }
+        }
+    }
+
+    /// Runs `body(r, chunk, scratch)` for every leaf r of `output`: in index order on the
+    /// calling thread, or in the pool, split by [`split_leaves`].
+    fn leaves<F>(&mut self, mut output: LeafSliceMut<'_, T>, body: F)
+    where
+        F: Fn(usize, &mut [T], &mut Scratch<T>) + Sync,
+    {
+        match (&self.pool, self.serial) {
+            (Some(pool), false) => {
+                let sets = &self.scratch;
+                pool.install(|| split_leaves(output, 0, sets, &body));
+            }
+            _ => {
+                let scratch = self.first();
+                for (r, chunk) in output.chunks_mut().enumerate() {
+                    body(r, chunk, scratch);
+                }
+            }
+        }
+    }
+}
+
+/// Runs `body(first + r, chunk r, scratch)` for every leaf r of `output`, halving the
+/// leaves recursively under `rayon::join`: one disjoint mutable slice per leaf, by the
+/// CSR offsets, without allocation.
+fn split_leaves<T: RealScalar, F>(
+    mut output: LeafSliceMut<'_, T>,
+    first: usize,
+    sets: &[Mutex<Scratch<T>>],
+    body: &F,
+) where
+    F: Fn(usize, &mut [T], &mut Scratch<T>) + Sync,
+{
+    match output.nleaves() {
+        0 => {}
+        1 => with_scratch(sets, |s| body(first, output.chunk_mut(0), s)),
+        n => {
+            let mid = n / 2;
+            let (left, right) = output.split_at_mut(mid);
+            rayon::join(
+                || split_leaves(left, first, sets, body),
+                || split_leaves(right, first + mid, sets, body),
+            );
+        }
+    }
+}
+
+/// Runs `f` with the scratch set of the current pool thread.
+///
+/// # Panics
+///
+/// Outside a pool thread, or if the set is locked: only this thread locks it, and only
+/// around a target body that never yields to rayon, so that would be a defect.
+#[inline]
+fn with_scratch<T: RealScalar>(sets: &[Mutex<Scratch<T>>], f: impl FnOnce(&mut Scratch<T>)) {
+    let i = rayon::current_thread_index().expect("a level call runs on the pool's threads");
+    let mut set = match sets[i].try_lock() {
+        Ok(set) => set,
+        Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        Err(TryLockError::WouldBlock) => panic!("the scratch set of pool thread {i} is in use"),
+    };
+    f(&mut set);
 }
 
 /// The shared inputs of one box call (P2M, M2M, M2L, P2L, L2L): its level, the index,
@@ -181,22 +350,52 @@ impl<T: RealScalar> LaplaceOperator<T> {
     /// local and ghost: on several ranks a global maximum, one all-reduce, taken by the
     /// caller. Allocates the scratch: a `Workspace` for p, the tables' scratch and
     /// 3 `max_leaf_points` values for P2P.
+    ///
+    /// The operator runs serially; [`with_pool`](Self::with_pool) gives it threads.
     pub fn new(tables: Tables<T>, gradients: bool, max_leaf_points: usize) -> Self {
-        let p = tables.p();
-        let scratch = Scratch {
-            workspace: Workspace::new(p),
-            tables: tables.scratch(),
-            mapped: vec![[T::zero(); 3]; max_leaf_points],
+        let kernels = Kernels {
+            p: tables.p(),
+            tables,
+            gradients,
+            max_leaf_points,
         };
-        Self {
-            kernels: Kernels {
-                p,
-                tables,
-                gradients,
-                max_leaf_points,
-            },
-            scratch,
+        let execution = Execution {
+            scratch: vec![Mutex::new(Scratch::new(&kernels))],
+            pool: None,
+            serial: false,
+        };
+        Self { kernels, execution }
+    }
+
+    /// Runs every level call in `pool`, each target on one of its threads ([module
+    /// documentation](self#threads-c35)). Allocates one scratch set per pool thread,
+    /// replacing the operator's sets.
+    ///
+    /// The output is bit-identical to that of the serial operator. Only the threads of
+    /// `pool` run targets; the global rayon pool is never used.
+    pub fn with_pool(mut self, pool: Arc<ThreadPool>) -> Self {
+        let n = pool.current_num_threads().max(1);
+        self.execution.scratch = (0..n)
+            .map(|_| Mutex::new(Scratch::new(&self.kernels)))
+            .collect();
+        self.execution.pool = Some(pool);
+        self
+    }
+
+    /// Returns the number of threads the level calls run on: the pool's, or 1 without a
+    /// pool or when [`set_serial`](Self::set_serial) is on.
+    pub fn threads(&self) -> usize {
+        match (&self.execution.pool, self.execution.serial) {
+            (Some(pool), false) => pool.current_num_threads(),
+            _ => 1,
         }
+    }
+
+    /// With `serial`, runs the level calls on the calling thread even if the operator
+    /// has a pool, with scratch set 0: the serial path of the same operator, for
+    /// comparisons and timings. Without a pool it changes nothing.
+    pub fn set_serial(&mut self, serial: bool) {
+        self.execution.serial = serial;
     }
 
     /// Returns the expansion degree p.
@@ -220,10 +419,25 @@ impl<T: RealScalar> LaplaceOperator<T> {
     }
 
     /// Returns the capacity, in points, of the buffer into which P2P maps the sources
-    /// of another leaf. It is `max_leaf_points` from construction on and never changes:
-    /// no operator allocates (tests check it).
+    /// of another leaf, in scratch set 0. It is `max_leaf_points` from construction on
+    /// and never changes: no operator allocates (tests check it).
     pub fn scratch_capacity(&self) -> usize {
-        self.scratch.mapped.capacity()
+        self.scratch_capacities()[0]
+    }
+
+    /// Returns [`scratch_capacity`](Self::scratch_capacity) for every scratch set: one,
+    /// or one per pool thread. Each is `max_leaf_points` and never changes.
+    pub fn scratch_capacities(&self) -> Vec<usize> {
+        self.execution
+            .scratch
+            .iter()
+            .map(|set| {
+                set.lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .mapped
+                    .capacity()
+            })
+            .collect()
     }
 
     /// P2M: adds the multipole of the source chunk `sources` of a leaf, in the leaf's
@@ -234,7 +448,7 @@ impl<T: RealScalar> LaplaceOperator<T> {
     /// If `sources.len()` is not a multiple of 4, or `multipole` does not have length
     /// (p + 1)².
     pub fn p2m_leaf(&mut self, sources: &[T], multipole: &mut [T]) {
-        self.kernels.p2m(sources, multipole, &mut self.scratch);
+        self.kernels.p2m(sources, multipole, self.execution.first());
     }
 
     /// M2M: adds the multipole of `child` to that of `parent`, with the table of
@@ -254,7 +468,7 @@ impl<T: RealScalar> LaplaceOperator<T> {
         let o = morton::child_index(child);
         debug_check_octant(child, parent, o);
         self.kernels
-            .m2m(o, child_multipole, parent_multipole, &mut self.scratch);
+            .m2m(o, child_multipole, parent_multipole, self.execution.first());
     }
 
     /// M2L: adds the multipole of `source` to the local of `target`, a V-list pair, with
@@ -274,7 +488,7 @@ impl<T: RealScalar> LaplaceOperator<T> {
     ) {
         let d = offset_index(source, target);
         self.kernels
-            .m2l(d, source_multipole, target_local, &mut self.scratch);
+            .m2l(d, source_multipole, target_local, self.execution.first());
     }
 
     /// P2L: adds the sources of the leaf `source` to the local of the box `target`, at
@@ -293,7 +507,7 @@ impl<T: RealScalar> LaplaceOperator<T> {
     ) {
         let frame = relative_frame(target, source);
         self.kernels
-            .p2l(&frame, sources, target_local, &mut self.scratch);
+            .p2l(&frame, sources, target_local, self.execution.first());
     }
 
     /// L2L: adds the local of `parent` to that of `child`, with the table of
@@ -313,7 +527,7 @@ impl<T: RealScalar> LaplaceOperator<T> {
         let o = morton::child_index(child);
         debug_check_octant(child, parent, o);
         self.kernels
-            .l2l(o, parent_local, child_local, &mut self.scratch);
+            .l2l(o, parent_local, child_local, self.execution.first());
     }
 
     /// L2P: adds the local `local` of a leaf at its target points, in the leaf's frame
@@ -326,7 +540,7 @@ impl<T: RealScalar> LaplaceOperator<T> {
     /// (p + 1)².
     pub fn l2p_leaf(&mut self, local: &[T], target_input: &[T], target_output: &mut [T]) {
         self.kernels
-            .l2p(local, target_input, target_output, &mut self.scratch);
+            .l2p(local, target_input, target_output, self.execution.first());
     }
 
     /// M2P: adds the multipole of the box `source` at the target points of the leaf
@@ -349,7 +563,7 @@ impl<T: RealScalar> LaplaceOperator<T> {
             source_multipole,
             target_input,
             target_output,
-            &mut self.scratch,
+            self.execution.first(),
         );
     }
 
@@ -377,7 +591,7 @@ impl<T: RealScalar> LaplaceOperator<T> {
             sources,
             target_input,
             target_output,
-            &mut self.scratch,
+            self.execution.first(),
         );
     }
 }
@@ -811,8 +1025,8 @@ impl<T: RealScalar + Equivalence + Default> FmmSizes for LaplaceOperator<T> {
     }
 }
 
-/// Serial, target by target in index order, each target's row in order; see the
-/// [module documentation](self#batched-execution-and-order).
+/// Target by target, each target's row in order: serially in index order, or in the
+/// operator's pool; see the [module documentation](self#batched-execution-and-order).
 impl<T: RealScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
     fn p2m(&mut self, batch: P2m<'_, T>) {
         let P2m {
@@ -820,7 +1034,7 @@ impl<T: RealScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
             index,
             leaves,
             sources,
-            mut multipoles,
+            multipoles,
         } = batch;
         let call = BoxCall {
             level,
@@ -828,10 +1042,10 @@ impl<T: RealScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
             view: leaves,
             input: sources,
         };
-        for (t, multipole) in multipoles.chunks_mut().enumerate() {
-            self.kernels
-                .p2m_target(&call, t, multipole, &mut self.scratch);
-        }
+        let kernels = &self.kernels;
+        self.execution.boxes(multipoles, |t, multipole, scratch| {
+            kernels.p2m_target(&call, t, multipole, scratch);
+        });
     }
 
     fn m2m(&mut self, batch: M2m<'_, T>) {
@@ -840,7 +1054,7 @@ impl<T: RealScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
             index,
             children,
             child_multipoles,
-            mut multipoles,
+            multipoles,
             ..
         } = batch;
         let call = BoxCall {
@@ -849,10 +1063,10 @@ impl<T: RealScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
             view: children,
             input: child_multipoles,
         };
-        for (t, multipole) in multipoles.chunks_mut().enumerate() {
-            self.kernels
-                .m2m_target(&call, t, multipole, &mut self.scratch);
-        }
+        let kernels = &self.kernels;
+        self.execution.boxes(multipoles, |t, multipole, scratch| {
+            kernels.m2m_target(&call, t, multipole, scratch);
+        });
     }
 
     fn m2l(&mut self, batch: M2l<'_, T>) {
@@ -861,7 +1075,7 @@ impl<T: RealScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
             index,
             pairs,
             multipoles,
-            mut locals,
+            locals,
         } = batch;
         let call = BoxCall {
             level,
@@ -869,9 +1083,10 @@ impl<T: RealScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
             view: pairs,
             input: multipoles,
         };
-        for (t, local) in locals.chunks_mut().enumerate() {
-            self.kernels.m2l_target(&call, t, local, &mut self.scratch);
-        }
+        let kernels = &self.kernels;
+        self.execution.boxes(locals, |t, local, scratch| {
+            kernels.m2l_target(&call, t, local, scratch);
+        });
     }
 
     fn p2l(&mut self, batch: P2l<'_, T>) {
@@ -880,7 +1095,7 @@ impl<T: RealScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
             index,
             x,
             sources,
-            mut locals,
+            locals,
         } = batch;
         let call = BoxCall {
             level,
@@ -888,9 +1103,10 @@ impl<T: RealScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
             view: x,
             input: sources,
         };
-        for (t, local) in locals.chunks_mut().enumerate() {
-            self.kernels.p2l_target(&call, t, local, &mut self.scratch);
-        }
+        let kernels = &self.kernels;
+        self.execution.boxes(locals, |t, local, scratch| {
+            kernels.p2l_target(&call, t, local, scratch);
+        });
     }
 
     fn l2l(&mut self, batch: L2l<'_, T>) {
@@ -899,7 +1115,7 @@ impl<T: RealScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
             index,
             parents,
             parent_locals,
-            mut locals,
+            locals,
         } = batch;
         let call = BoxCall {
             level,
@@ -907,9 +1123,10 @@ impl<T: RealScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
             view: parents,
             input: parent_locals,
         };
-        for (t, local) in locals.chunks_mut().enumerate() {
-            self.kernels.l2l_target(&call, t, local, &mut self.scratch);
-        }
+        let kernels = &self.kernels;
+        self.execution.boxes(locals, |t, local, scratch| {
+            kernels.l2l_target(&call, t, local, scratch);
+        });
     }
 
     fn l2p(&mut self, batch: L2p<'_, T>) {
@@ -920,7 +1137,7 @@ impl<T: RealScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
             boxes,
             locals,
             target_input,
-            mut target_output,
+            target_output,
         } = batch;
         let call = LeafCall {
             level,
@@ -930,9 +1147,10 @@ impl<T: RealScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
             input: locals,
             target_input,
         };
-        for (r, output) in target_output.chunks_mut().enumerate() {
-            self.kernels.l2p_target(&call, r, output, &mut self.scratch);
-        }
+        let kernels = &self.kernels;
+        self.execution.leaves(target_output, |r, output, scratch| {
+            kernels.l2p_target(&call, r, output, scratch);
+        });
     }
 
     fn m2p(&mut self, batch: M2p<'_, T>) {
@@ -943,7 +1161,7 @@ impl<T: RealScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
             w,
             multipoles,
             target_input,
-            mut target_output,
+            target_output,
         } = batch;
         let call = LeafCall {
             level,
@@ -953,9 +1171,10 @@ impl<T: RealScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
             input: multipoles,
             target_input,
         };
-        for (r, output) in target_output.chunks_mut().enumerate() {
-            self.kernels.m2p_target(&call, r, output, &mut self.scratch);
-        }
+        let kernels = &self.kernels;
+        self.execution.leaves(target_output, |r, output, scratch| {
+            kernels.m2p_target(&call, r, output, scratch);
+        });
     }
 
     fn p2p(&mut self, batch: P2p<'_, T>) {
@@ -966,7 +1185,7 @@ impl<T: RealScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
             near,
             sources,
             target_input,
-            mut target_output,
+            target_output,
         } = batch;
         let call = LeafCall {
             level,
@@ -976,9 +1195,10 @@ impl<T: RealScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
             input: sources,
             target_input,
         };
-        for (r, output) in target_output.chunks_mut().enumerate() {
-            self.kernels.p2p_target(&call, r, output, &mut self.scratch);
-        }
+        let kernels = &self.kernels;
+        self.execution.leaves(target_output, |r, output, scratch| {
+            kernels.p2p_target(&call, r, output, scratch);
+        });
     }
 }
 
@@ -999,8 +1219,12 @@ impl<T: RealScalar + Equivalence + Default> PairOperator for LaplaceOperator<T> 
         parent_multipole: &mut [T],
     ) {
         debug_check_octant(child, parent, octant);
-        self.kernels
-            .m2m(octant, child_multipole, parent_multipole, &mut self.scratch);
+        self.kernels.m2m(
+            octant,
+            child_multipole,
+            parent_multipole,
+            self.execution.first(),
+        );
     }
 
     fn m2l(
@@ -1020,7 +1244,7 @@ impl<T: RealScalar + Equivalence + Default> PairOperator for LaplaceOperator<T> 
             offset_index,
             source_multipole,
             target_local,
-            &mut self.scratch,
+            self.execution.first(),
         );
     }
 
@@ -1038,7 +1262,7 @@ impl<T: RealScalar + Equivalence + Default> PairOperator for LaplaceOperator<T> 
     ) {
         debug_check_octant(child, parent, octant);
         self.kernels
-            .l2l(octant, parent_local, child_local, &mut self.scratch);
+            .l2l(octant, parent_local, child_local, self.execution.first());
     }
 
     fn l2p(&mut self, _leaf: MortonKey, local: &[T], target_input: &[T], output: &mut [T]) {

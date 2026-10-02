@@ -16,8 +16,9 @@
 //!
 //! [`FmmBuilder::build`] is collective. In order:
 //!
-//! 1. Checks the settings, the supplied domain ([`Domain::new`]) and that every point is
-//!    finite, and agrees the outcome on every rank (one all-reduce).
+//! 1. Checks the settings, the MPI threading level when `threads` > 1, the supplied
+//!    domain ([`Domain::new`]) and that every point is finite, builds the thread pool if
+//!    `threads` > 1, and agrees the outcome on every rank (one all-reduce).
 //! 2. Counts the points of all ranks (one all-reduce); none at all is an error.
 //! 3. Takes the supplied domain, or `compute_global_bounding_box` over the sources and
 //!    targets of every rank (after one all-reduce pair that rejects points spanning no
@@ -37,6 +38,8 @@
 //! 8. Writes the leaf-scaled source coordinates and target positions into the
 //!    evaluator's stores, once ([`leaf_coordinates`]).
 //!
+//! It also reads the BLAS thread variables once, for [`Fmm::threading`].
+//!
 //! An error that depends on one rank's input is agreed by every rank before the next
 //! collective: the rank that found it returns it, the others [`FmmError::OtherRank`];
 //! errors that every rank sees alike ([`NoPoints`](FmmError::NoPoints),
@@ -52,7 +55,16 @@
 //! "Source chunks"), resets the evaluator and runs its six stages, timing each one
 //! ([`StageTimings`]), and scales the target output into the caller's order. For a fixed
 //! tree, ranks and input, two evaluations are bit-identical (the accumulation order of
-//! `nd_fmm_plan::evaluator`).
+//! `nd_fmm_plan::evaluator`), for every number of threads.
+//!
+//! # Threads (C3.5)
+//!
+//! With [`FmmBuilder::threads`] n > 1, the `Fmm` owns a rayon pool of n threads and the
+//! operator runs every level call in it, each target on one thread
+//! ([`LaplaceOperator::with_pool`]); with n = 1 (the default) there is no pool. Every
+//! collective, and so every MPI call, stays on the calling thread, which needs MPI at
+//! [`Threading::Funneled`] or above. The rules for threads, MPI and BLAS, and how to
+//! launch, are in [`threading`](crate::threading).
 //!
 //! # Redistribution (C5.1)
 //!
@@ -73,8 +85,10 @@ use std::f64::consts::PI;
 use std::fmt;
 use std::marker::PhantomData;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use mpi::Threading;
 use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::{CommunicatorCollectives, Equivalence};
@@ -86,12 +100,14 @@ use nd_fmm_tables::{CacheOutcome, TableCache};
 use nd_octree::constants::DEEPEST_LEVEL;
 use nd_octree::octree::compute_global_bounding_box;
 use nd_octree::{MortonKey, Octree, OctreeOptions, PhysicalBox, points_to_morton};
+use rayon::{ThreadPool, ThreadPoolBuilder};
 use rlst::SliceArray;
 use thiserror::Error;
 
 use crate::geometry::{Domain, GeometryError, leaf_coordinates, radius};
 use crate::operator::LaplaceOperator;
 use crate::tables::{M2lStrategy, Tables};
+use crate::threading::{REQUIRED_MPI_THREADING, ThreadingReport};
 
 /// The largest degree p that [`FmmBuilder::build`] accepts: CONVENTIONS §3.9 covers M2L
 /// up to p = 20 in f64.
@@ -124,6 +140,9 @@ pub enum SettingsError {
     /// `max_points_per_leaf` is zero.
     #[error("max_points_per_leaf must be at least 1")]
     ZeroPointsPerLeaf,
+    /// `threads` is zero.
+    #[error("threads must be at least 1")]
+    ZeroThreads,
 }
 
 /// Which of the two point sets a point belongs to, for error messages.
@@ -212,6 +231,21 @@ pub enum FmmError {
     /// The evaluator could not be built.
     #[error("building the evaluator failed: {0}")]
     Evaluator(#[source] EvaluatorError),
+    /// More than one thread is requested, but MPI provides a threading level below
+    /// `required` ([`Threading::Funneled`]); see [`threading`](crate::threading).
+    #[error(
+        "threads > 1 needs MPI at {required:?} or above, but it provides {provided:?}; \
+         initialise MPI with mpi::initialize_with_threading(Threading::Funneled)"
+    )]
+    MpiThreading {
+        /// The level more than one thread requires.
+        required: Threading,
+        /// The level MPI provides.
+        provided: Threading,
+    },
+    /// The thread pool could not be built.
+    #[error("building the thread pool failed: {0}")]
+    ThreadPool(String),
     /// The input is invalid on another rank.
     #[error("the input is invalid on another rank")]
     OtherRank,
@@ -228,6 +262,7 @@ pub enum FmmError {
 /// | [`max_points_per_leaf`](Self::max_points_per_leaf) | [`DEFAULT_MAX_POINTS_PER_LEAF`], 64 |
 /// | [`domain`](Self::domain) | `compute_global_bounding_box` of all points |
 /// | [`table_cache`](Self::table_cache) | none: tables are built |
+/// | [`threads`](Self::threads) | 1: no pool, the calling thread |
 ///
 /// For `T = f32`, p > 8 is accepted but lies beyond the useful range (design §4): the
 /// error is then at the f32 floor already.
@@ -240,6 +275,7 @@ pub struct FmmBuilder<T> {
     max_points_per_leaf: usize,
     domain: Option<[f64; 6]>,
     table_cache: Option<PathBuf>,
+    threads: usize,
     value: PhantomData<fn() -> T>,
 }
 
@@ -254,6 +290,7 @@ impl<T> FmmBuilder<T> {
             max_points_per_leaf: DEFAULT_MAX_POINTS_PER_LEAF,
             domain: None,
             table_cache: None,
+            threads: 1,
             value: PhantomData,
         }
     }
@@ -301,6 +338,17 @@ impl<T> FmmBuilder<T> {
         self
     }
 
+    /// Sets the number of threads of the level calls, at least 1 (the default).
+    ///
+    /// With n > 1, [`build`](Self::build) creates a rayon pool of n threads that the
+    /// `Fmm` owns, and MPI must provide at least [`Threading::Funneled`]. The output is
+    /// bit-identical for every n. Choose n so that ranks × n stays within the physical
+    /// cores of a node ([`threading`](crate::threading)).
+    pub fn threads(mut self, threads: usize) -> Self {
+        self.threads = threads;
+        self
+    }
+
     /// Checks the settings that do not depend on the input.
     fn check_settings(&self) -> Result<(), SettingsError> {
         if self.p > MAX_DEGREE {
@@ -314,7 +362,30 @@ impl<T> FmmBuilder<T> {
         if self.max_points_per_leaf == 0 {
             return Err(SettingsError::ZeroPointsPerLeaf);
         }
+        if self.threads == 0 {
+            return Err(SettingsError::ZeroThreads);
+        }
         Ok(())
+    }
+
+    /// With more than one thread: checks that MPI provides `provided` ≥
+    /// [`REQUIRED_MPI_THREADING`] and builds the pool.
+    fn pool(&self, provided: Threading) -> Result<Option<Arc<ThreadPool>>, FmmError> {
+        if self.threads == 1 {
+            return Ok(None);
+        }
+        if provided < REQUIRED_MPI_THREADING {
+            return Err(FmmError::MpiThreading {
+                required: REQUIRED_MPI_THREADING,
+                provided,
+            });
+        }
+        ThreadPoolBuilder::new()
+            .num_threads(self.threads)
+            .thread_name(|i| format!("nd-fmm-exec-{i}"))
+            .build()
+            .map(|pool| Some(Arc::new(pool)))
+            .map_err(|error| FmmError::ThreadPool(error.to_string()))
     }
 }
 
@@ -333,7 +404,8 @@ impl<T: Stored + Equivalence + Default> FmmBuilder<T> {
     /// # Errors
     ///
     /// Every [`FmmError`] but [`ChargesLength`](FmmError::ChargesLength); see the
-    /// module documentation for which ranks return which.
+    /// module documentation for which ranks return which. With `threads` > 1,
+    /// [`FmmError::MpiThreading`] if MPI provides less than [`Threading::Funneled`].
     ///
     /// # Panics
     ///
@@ -346,17 +418,27 @@ impl<T: Stored + Equivalence + Default> FmmBuilder<T> {
         comm: &'o C,
     ) -> Result<Fmm<'o, T, C>, FmmError> {
         let start = Instant::now();
-        // Step 1: settings, the supplied domain, finite points.
+        // Step 1: settings, MPI threading and the pool, the supplied domain, finite
+        // points.
+        //
+        // The MPI level is the same on every rank in practice (one library, and every
+        // rank asks for the same level), and so are the settings, so the threading check
+        // needs no collective of its own; it rides on this step's agreement, which also
+        // covers a pool that fails to build on one rank. Every collective of the build
+        // and of `evaluate` runs on this thread; the pool's threads never call MPI.
+        let provided = mpi::environment::threading_support();
         let local = self
             .check_settings()
             .map_err(FmmError::from)
             .and_then(|()| {
+                let pool = self.pool(provided)?;
                 check_finite(sources, PointSet::Sources)?;
                 check_finite(targets, PointSet::Targets)?;
                 let supplied = self.domain.map(|c| Domain::new(&PhysicalBox::new(c)));
-                Ok(supplied.transpose()?)
+                Ok((pool, supplied.transpose()?))
             });
-        let supplied = agree(comm, local)?;
+        let (pool, supplied) = agree(comm, local)?;
+        let threading = ThreadingReport::read(self.threads, provided);
 
         // Step 2: are there points at all?
         let mut total = 0u64;
@@ -443,7 +525,10 @@ impl<T: Stored + Equivalence + Default> FmmBuilder<T> {
         };
         let tables_time = start.elapsed();
         let start = Instant::now();
-        let operator = LaplaceOperator::new(tables, self.gradients, max_leaf_points);
+        let mut operator = LaplaceOperator::new(tables, self.gradients, max_leaf_points);
+        if let Some(pool) = pool {
+            operator = operator.with_pool(pool);
+        }
         let mut evaluator = Evaluator::new(
             plan,
             comm,
@@ -488,6 +573,7 @@ impl<T: Stored + Equivalence + Default> FmmBuilder<T> {
             radii,
             max_leaf_points,
             cache_outcomes,
+            threading,
             build_timings: BuildTimings {
                 domain: domain_time,
                 octree: octree_time,
@@ -707,8 +793,9 @@ pub struct ListSizes {
 /// A built FMM; see the [module documentation](self).
 ///
 /// It owns the octree (which borrows the communicator for `'o`), the plan, the
-/// operator with its tables, and the evaluator with its stores, in which the
-/// leaf-scaled points stay loaded between evaluations.
+/// operator with its tables and, with more than one thread, its thread pool, and the
+/// evaluator with its stores, in which the leaf-scaled points stay loaded between
+/// evaluations.
 pub struct Fmm<'o, T, C = SimpleCommunicator>
 where
     T: Stored + Equivalence + Default,
@@ -724,6 +811,7 @@ where
     radii: Vec<f64>,
     max_leaf_points: usize,
     cache_outcomes: Vec<(TableKind, CacheOutcome)>,
+    threading: ThreadingReport,
     build_timings: BuildTimings,
 }
 
@@ -906,6 +994,19 @@ where
     /// Returns the wall time of each step of the build.
     pub fn build_timings(&self) -> BuildTimings {
         self.build_timings
+    }
+
+    /// Returns the threading report: the rayon threads, the MPI threading level and the
+    /// BLAS thread variables as `build` read them ([`threading`](crate::threading)).
+    pub fn threading(&self) -> &ThreadingReport {
+        &self.threading
+    }
+
+    /// With `serial`, runs the next evaluations on the calling thread even if the FMM
+    /// has a pool ([`LaplaceOperator::set_serial`]): the serial path of the same build,
+    /// for comparisons and timings. The output is the same bit for bit.
+    pub fn set_serial(&mut self, serial: bool) {
+        self.evaluator.operator_mut().set_serial(serial);
     }
 }
 
