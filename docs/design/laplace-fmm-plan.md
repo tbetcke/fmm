@@ -14,6 +14,11 @@ lists, variable-size leaf data and a level-batched operator interface
 ([fmm-plan-redesign.md](fmm-plan-redesign.md)); leaf data are leaf-scaled
 (CONVENTIONS §3.13); the host FMM in `nd-fmm-exec` is checked on uniform and adaptive
 trees, threaded with rayon, and p is calibrated against accuracy.
+Revised again after Phase 3 (2026-10-02; Sections 1, 5, 5.1, 7, 8.1, 8.3, 9.1, 9.2
+and 10): a new Phase 3S, hand-written SIMD P2P on the host (NEON and AVX2 + FMA in a
+new crate `nd-fmm-simd`, benchmarked against green-kernels; AVX-512 deferred), runs between
+Phase 3 and Phase 4. Its design is [simd-p2p.md](simd-p2p.md); its tasks are in
+docs/phase3s/. The numbers of the later phases are unchanged.
 
 > Where this document and `docs/CONVENTIONS.md` differ (normalisation, phases, scaling),
 > **the conventions file takes precedence.** Section 2.4 below now follows the scaling of
@@ -39,7 +44,8 @@ small enough to hand to Claude Code one at a time.
   trees, and P2P for the near field.
 - Precision f64 (reference and high accuracy) and f32 (fast, ≈ 6 digits at best).
 - Backends via CubeCL (CUDA, ROCm/HIP, wgpu, Metal, CPU), plus a plain-Rust CPU
-  reference.
+  reference and a host path whose near field (P2P) uses hand-written SIMD kernels for
+  aarch64 NEON and x86_64 AVX2 + FMA (Phase 3S; AVX-512 later).
 
 **Provided by the existing `nd-octree` and `nd-fmm-plan` crates** (checked in the
 repository; `nd-fmm-plan` as rewritten in Phase 3,
@@ -438,6 +444,7 @@ flowchart TB
   subgraph run["Per run: every FMM evaluation"]
     direction LR
     plan["nd-fmm-plan (rewritten in Phase 3)<br/>box index, U/V/W/X lists, Evaluator pass order,<br/>ghost exchange (MPI)"] --> exec["fmm-exec<br/>batched FmmOperator for Laplace,<br/>box geometry, M2L strategies, autotune"] --> kernels["fmm-kernels (CubeCL)<br/>P2M, M2M, M2L, L2L, L2P, P2P;<br/>M2L as GEMM or rotation"]
+    exec --> simd["fmm-simd (Phase 3S)<br/>host P2P: NEON, AVX2;<br/>runtime dispatch, no MPI"]
   end
   tables -- "tables uploaded once" --> exec
   octree["nd-octree (existing)<br/>Morton keys, ownership, ghost keys"] -- "Octree" --> plan
@@ -458,7 +465,8 @@ operator through `FmmOperator`, once per level and operator kind.
 | `fmm-ref` | CPU reference operators: direct O(p⁴) and rotation O(p³), P2P, direct-sum oracle | `fmm-math` | f64 (f32 for comparison) |
 | `fmm-tables` | Builds M2M/L2L (8 each, by `morton::child_index`), M2L (316 or 16 + symmetry, keyed like `V_LIST_DIRECTIONS`), rotation and coaxial tables; SVD compression (C6.2, later); versioned on-disk cache | `fmm-ref`, `fmm-math`, `thiserror` (cache errors); `rlst` (without its `mpi` feature) only with SVD compression | built in f64, stored in both |
 | `fmm-kernels` | `#[cube]` kernels: P2M, L2P, P2L, M2P, P2P, gather/scatter, M2L-GEMM, M2L-rotation, M2M/L2L | `cubecl`, the CubeCL matmul crate | generic |
-| `fmm-exec` (Phase 3: host path done) | `LaplaceOperator<T>`, the batched `FmmOperator` for Laplace: host path target by target with rayon threads (Phase 3), device path later; box geometry from integer Morton keys (CONVENTIONS §3.13); M2L strategy selection; `FmmBuilder` and `Fmm`, which load leaf-scaled points and apply 1/(4π) once; device buffers and autotune later | `nd-fmm-plan`, `nd-octree`, `nd-fmm-tables`, `nd-fmm-ref`, `nd-fmm-math`, `mpi`, `rlst`, `rayon`, `thiserror`; `fmm-kernels` from Phase 4 | generic |
+| `fmm-exec` (Phase 3: host path done) | `LaplaceOperator<T>`, the batched `FmmOperator` for Laplace: host path target by target with rayon threads (Phase 3), device path later; box geometry from integer Morton keys (CONVENTIONS §3.13); M2L strategy selection; `FmmBuilder` and `Fmm`, which load leaf-scaled points and apply 1/(4π) once; device buffers and autotune later | `nd-fmm-plan`, `nd-octree`, `nd-fmm-tables`, `nd-fmm-ref`, `nd-fmm-math`, `mpi`, `rlst`, `rayon`, `thiserror`; `fmm-simd` from Phase 3S (SIMD P2P); `fmm-kernels` from Phase 4 | generic |
+| `fmm-simd` (Phase 3S) | Hand-written SIMD kernels for the host path, P2P first: `core::arch` intrinsics for NEON and AVX2 + FMA (AVX-512 deferred), a scalar fallback, runtime ISA dispatch, the inverse square root by hardware estimate and Newton steps; the signature and semantics of `nd_fmm_ref::p2p` ([simd-p2p.md](simd-p2p.md)) | `nd-fmm-math`, `thiserror`; no MPI | f32, f64 |
 | `fmm-validate` | Error norms, point distributions, accuracy sweeps of the operators and of the complete FMM, the calibration of p (C3.4), benchmark harness | all | f64 reference |
 | `nd-fmm-plan` (rewritten in Phase 3) | Morton-ordered integer box index, index-based interaction lists (target-centric CSR, and grouped by V-list offset and child octant), level buffers and variable-size CSR leaf stores, ghost exchange, global coarse levels, the level-batched operator interface with a per-pair adapter, the evaluator; designed in [fmm-plan-redesign.md](fmm-plan-redesign.md) | `nd-octree`, `mpi`, `rlst` | generic `Value` |
 
@@ -768,9 +776,12 @@ every target it supports.
 
 ## 7. Phased implementation plan
 
-Seven phases, each ending in a gate that must pass before the next starts: conventions,
-CPU reference, tables, CPU FMM, CubeCL kernels, distribution, optimisation. Every
-component below is sized to be one Claude Code task with a testable acceptance criterion.
+Eight phases, each ending in a gate that must pass before the next starts: conventions,
+CPU reference, tables, CPU FMM, host SIMD P2P, CubeCL kernels, distribution,
+optimisation. Every component below is sized to be one Claude Code task with a testable
+acceptance criterion. The host SIMD phase was added after Phase 3 and is numbered 3S, so
+that the phase and component numbers that code and documents already cite (Phase 4,
+C4.x to C6.x) keep their meaning.
 
 ```mermaid
 flowchart TB
@@ -778,6 +789,7 @@ flowchart TB
   P1["Phase 1 · CPU reference operators<br/>C1.1–C1.4 · fmm-ref · done"]
   P2["Phase 2 · Operator tables<br/>C2.1–C2.4 · fmm-tables · done"]
   P3["Phase 3 · CPU FMM on nd-fmm-plan<br/>C3.0–C3.5, C4.0 · nd-fmm-plan, fmm-exec · done"]
+  P3S["Phase 3S · SIMD P2P on the host<br/>C3S.1–C3S.6 · fmm-simd, fmm-exec"]
   P4["Phase 4 · CubeCL kernels<br/>C4.1–C4.7 · fmm-kernels, fmm-exec"]
   P5["Phase 5 · Distributed<br/>C5.1–C5.3 · nd-fmm-plan, fmm-exec"]
   P6["Phase 6 · Optimisation and extensions<br/>C6.1–C6.5 · optional, benchmark-driven"]
@@ -785,7 +797,8 @@ flowchart TB
   P0 -- "Gate: harmonic identities hold to 1e-14" --> P1
   P1 -- "Gate: fast operators match direct to 1e-13" --> P2
   P2 -- "Gate: tables reproduce fmm-ref at all levels" --> P3
-  P3 -- "Gate: CPU FMM matches direct sum; p calibrated" --> P4
+  P3 -- "Gate: CPU FMM matches direct sum; p calibrated" --> P3S
+  P3S -- "Gate: SIMD P2P matches fmm-ref on every ISA; benchmarked vs green-kernels" --> P4
   P4 -- "Gate: GPU result equals CPU FMM; benchmarks published" --> P5
   P5 -- "Gate: multi-rank equals single-rank; scaling report" --> P6
   S -. "sets dense vs rotation default" .-> P4
@@ -797,7 +810,9 @@ Phases run in order, with two exceptions:
   passed its own test.
 - C5.1 can start right after C3.3. The `Evaluator` is distributed from the start; the
   host path needs only the redistribution of points to their owning ranks
-  ([fmm-plan-redesign.md](fmm-plan-redesign.md) §9) to run on several ranks.
+  ([fmm-plan-redesign.md](fmm-plan-redesign.md) §9) to run on several ranks. It may
+  therefore run alongside Phase 3S. Both change `nd-fmm-exec`, so merge one and rebase
+  the other.
 
 Components marked *(nd-fmm-plan)* are general extensions of that crate. They are done
 under its own `CLAUDE.md` rules and are checked with its `IndexFmm` test operator
@@ -1286,17 +1301,64 @@ mean square over the eight vectors; cube / Plummer):
   cube and Plummer, not the sphere.
 - P2P is the larger stage at p ≤ 3 and stays at 20–51% of an evaluation at p = 8. A GEMM M2L alone
   therefore cannot speed up the low-p runs, and the P2P kernel (C4.2) is benchmarked
-  alongside M2L from the start.
+  alongside M2L from the start. Phase 3S first makes the host P2P fast with SIMD
+  kernels, and C4.2 is then compared with that host kernel as well as with
+  `nd_fmm_ref::p2p`.
 - Dense table building (about 230 ms at p = 8, 8.5 s at p = 16; T8) belongs outside
   timed runs; GPU benchmarks use `table_cache`.
 
+
+### Phase 3S: SIMD P2P on the host (`fmm-simd`, `fmm-exec`)
+
+The design is [simd-p2p.md](simd-p2p.md), and the tasks are in docs/phase3s/README.md.
+At p = 3 the per-pair host path spends 72–81% of an evaluation in the leaf stage, and
+at p = 8 still 20–51% (Phase 3, "Per-pair cost"). Its P2P is the scalar reference loop,
+at about 2.6 ns (10 cycles) per pair on the M3 Max, an estimate from the T12 leaf stage.
+Phase 3S replaces it with hand-written kernels:
+
+- `core::arch` intrinsics for aarch64 NEON and x86_64 AVX2 + FMA, with no portable SIMD
+  library, in a new MPI-free crate `nd-fmm-simd`, with a scalar fallback
+  and runtime dispatch;
+- targets in lanes and sources broadcast, so each target adds its sources in input
+  order, as the reference does. Per-pair and batched calls then stay bit-identical
+  (C3.1), and so does every thread count (C3.5);
+- 1/r from the hardware inverse-square-root estimate, refined by Newton steps (or an
+  equivalent polynomial) to within 4 u_T;
+- coincident pairs excluded by r² = 0, which equals the exact rule of CONVENTIONS §3.13
+  on leaf-scaled data (C3S.1).
+
+The kernels are benchmarked against the Laplace kernels of
+[green-kernels](https://github.com/bempp/green-kernels) (bempp; hand-written kernels
+on the `pulp` portable SIMD layer), on the same workloads and accuracy measures.
+
+No x86_64 machine is available for timings (decided on 2026-10-02). Every timing of the
+phase is NEON on the Apple M3 Max. The x86_64 paths are checked for correctness and
+accuracy on real hardware by a CI job for `nd-fmm-simd` (x86_64 and arm64 runners), and
+for speed only by their inner-loop instruction counts against the operation-count
+model.
+
+| ID | Component | Acceptance criterion | Depends on | Status |
+| --- | --- | --- | --- | --- |
+| C3S.1 | Coincident-pair rule and domain of r² for fast kernels (CONVENTIONS §3.13 addition) | `check_p2p_domain.py` confirms that r² = 0 exactly for coincident leaf-scaled points and bounds every nonzero r²; signed off | C3.1 | Not started |
+| C3S.2 | Spike: loop order, inverse-square-root variants, register blocking, green-kernels baseline | report with NEON measurements, the x86_64 choices from documented bounds and operation counts, and a signed-off recommendation | C3.5 | Not started |
+| C3S.3 | `nd-fmm-simd`: ISA detection and dispatch, scalar path, per-ISA vector layer and inverse square root | inverse square root within 4 u_T on every ISA run (f32 exhaustive over [1, 4), f64 on 10⁷ samples); no out-of-line call in the inner loops | C3S.2 | Not started |
+| C3S.4 | SIMD P2P kernel (NEON, AVX2; potential and gradient; f32, f64) | pair terms within 8 u_T (potential) and 16 u_T (gradient) of `nd_fmm_ref::p2p`; sums within 1e-14 (f64) and 1e-6 (f32) of `direct_sum`; chunk and target-position invariance bit for bit; at least 90% of the spike's throughput | C3S.1, C3S.3 | Not started |
+| C3S.5 | P2P of `LaplaceOperator` through `nd-fmm-simd`, with the reference path selectable | T8 operator check to 1e-13; C3.2 and C3.3 gates pass, within 1% (f64) and 2% (f32) of the reference-P2P errors; bit-identical across threads and between per-pair and batched | C3S.4 | Not started |
+| C3S.6 | Benchmarks: against `nd_fmm_ref::p2p` and green-kernels, FMM timings, leaf size | report published; target: at least green-kernels' throughput at equal or better accuracy in every FMM-shaped and all-pairs cell on NEON (x86_64 not timed); leaf-size default chosen by the T7 rule | C3S.5 | Not started |
+
+Throughput model per core, from the operation count of the kernel ([simd-p2p.md](simd-p2p.md)
+§4.6; **a model, not a measurement**), in pairs per cycle with gradients: NEON on the M3
+Max 0.73 (f32) and 0.32 (f64), AVX2 0.80 and 0.29 (and for a later AVX-512 path 1.60
+and 0.70). Against the
+estimated 0.1 pairs per cycle of the Phase 3 path, this allows about 7× in f32 and 3×
+in f64 on the M3 Max. The spike (C3S.2) measures how much of it is reached.
 
 ### Phase 4: CubeCL kernels (`fmm-kernels`, `fmm-exec` device path)
 
 | ID | Component | Acceptance criterion | Depends on | Status |
 | --- | --- | --- | --- | --- |
 | C4.1 | Device buffers, plan and table upload, precision capability check | round-trip upload/download exact; f64 refused cleanly where unsupported (Metal, wgpu, and CUDA on CubeCL 0.10.0) | C3.1 | Not started |
-| C4.2 | P2P kernel (shared-memory tiling) | matches C1.4 to precision; reaches a stated fraction of peak | C4.1 | Not started |
+| C4.2 | P2P kernel (shared-memory tiling) | matches C1.4 to precision; reaches a stated fraction of peak; timed against the host SIMD P2P (C3S.4) | C4.1 | Not started |
 | C4.3 | P2M and L2P kernels | match C1.1 to precision | C4.1 | Not started |
 | C4.4 | M2M and L2L as batched GEMM | match C2.1 per level | C4.1 | Not started |
 | C4.5 | M2L dense: gather, GEMM (library CMMA for f32 at p ≥ 8; hand-written comptime-p kernel for small p and for f64, per T6), conflict-free scatter-add | matches C2.2; profiled GEMM efficiency reported | C4.4 | Not started |
@@ -1343,6 +1405,7 @@ the GPU FMM, and the direct sum checks everything.
 | Strategy equivalence | dense GEMM, rotation and (later) compressed and plane-wave M2L give the same locals | `fmm-ref` | CI (CubeCL CPU runtime, small shapes only; see below), nightly GPU |
 | End-to-end | full FMM vs direct sum over sampled targets | f64 direct sum | CI small N, nightly large N |
 | Cross-backend | CUDA, HIP, wgpu and CPU runtimes agree to precision | CPU FMM | nightly |
+| ISA equivalence (Phase 3S) | every SIMD path (NEON, AVX2, scalar) of the P2P kernel and its inverse square root; chunk and target-position invariance | `nd_fmm_ref::p2p`, `direct_sum`, exhaustive f32 checks | CI: the `nd-fmm-simd` job on x86_64 (AVX2) and arm64 (NEON) runners, with the release accuracy tests; NEON also on the development machine |
 | Topology | pass order, ghost exchange, lists, and the `nd-fmm-plan` extensions (C3.0, C4.0, C5.2) | `IndexFmm` (every leaf receives every leaf index exactly once), brute-force list oracle | CI on one rank; 2 and 4 ranks by hand |
 | Distributed | multi-rank result equals single-rank result | single-rank FMM | nightly, 2 to 8 ranks |
 
@@ -1390,6 +1453,11 @@ self-hosted runner. Until then they are run by hand, following `fmm-plan/CLAUDE.
   host paths, and report the rayon threads and the BLAS variables with each run.
 - Compare at matched accuracy against FMM3D (analytic Laplace), and against ExaFMM-t and
   kifmm-rs as kernel-independent baselines.
+- Benchmark the host P2P kernels (Phase 3S) in pairs per second, per ISA and precision,
+  on FMM-shaped leaf workloads and all-pairs sets, against `nd_fmm_ref::p2p` and the
+  Laplace kernels of green-kernels, with the accuracy of every row against `direct_sum`
+  ([simd-p2p.md](simd-p2p.md) §8). Use the default target with runtime dispatch, which
+  is what ships.
 - Keep a small benchmark in CI on the CPU runtime to catch performance regressions, and
   full GPU benchmarks nightly. The CPU runtime's throughput is not representative of
   any GPU (Section 6.1), so it only catches relative regressions.
@@ -1418,6 +1486,8 @@ and identity tests, the second with a one-day spike before Phase 4.
 | Adaptive-list edge cases (W, X lists, level jumps) | accuracy loss on clustered data | lists already checked against a brute-force oracle in `nd-fmm-plan`; clustered test distributions in C3.3. **Retired by Phase 3.** The rewritten lists still pass the oracle on 1, 2 and 4 ranks. On the sphere surface, Plummer sphere and Gaussian clusters (leaves on up to seven levels, 37,000–74,000 W and X pairs) the error is 0.40–1.26× the uniform tree's. Masking each list in turn shows the W and X parts at about 1e-6 of a 1–3e-5 total at p = 8 (T11), and graded trees, coincident points and points on box faces pass against the direct sum |
 | `nd-fmm-plan` extensions (C3.0, C4.0) delayed or shaped for one kernel | Phase 3 and the GEMM path are blocked | specify them as general extensions checked with `IndexFmm`; keep the per-pair path as fallback and reference. **Retired by Phase 3, by rewriting the crate instead of extending it** ([fmm-plan-redesign.md](fmm-plan-redesign.md), T1–T7). The rewrite took seven tasks, and the Laplace operator was written once, against the final interface. The interface was checked against a GEMM sketch in the design and by `IndexFmm` walking both views. It is checked against a real GEMM only in Phase 4 |
 | Per-pair `FmmOperator` calls with `HashMap` lookups too slow even on CPU | Phase 3 timings meaningless | Phase 3 gates on accuracy only; performance is measured on the batched path (C4.0 onwards). **Retired by Phase 3.** No hot path looks a key up in a `HashMap`, and the host path runs one level call per kind, target by target. On one thread, an f64 evaluation at N = 10⁵ takes 0.2 s (uniform cube, p = 3) to 12.6 s (Gaussian clusters, p = 18); with 16 threads the whole calibration sweep took 4.8 minutes (Section 7, Phase 3) |
+| SIMD paths not exercised, or x86_64 not timed (Phase 3S) | a fast path that silently breaks on one ISA | every test run prints the ISAs it ran; a CI job for the MPI-free `nd-fmm-simd` on x86_64 and arm64 runners; x86_64 throughput unmeasured, checked by instruction counts ([simd-p2p.md](simd-p2p.md) §7) |
+| Unsafe intrinsic code, and estimates that differ between CPUs (Phase 3S) | undefined behaviour; results outside the accuracy contract on some machine | `unsafe` only in `nd-fmm-simd`'s architecture modules, each block justified; ISA checked at construction; the 4 u_T contract tested exhaustively in f32 on every machine used (simd-p2p.md §5.4, §5.5) |
 | MPI required by every crate above the tables | tests need an MPI runtime; MPI can be initialised once per test executable | keep `fmm-math`, `fmm-ref` and `fmm-tables` MPI-free; follow the one-MPI-test-per-executable rule of the existing crates |
 
 ### 9.2 Open questions
@@ -1459,6 +1529,19 @@ and identity tests, the second with a one-day spike before Phase 4.
   the degrees CONVENTIONS §3.9 tests for M2L and `nd-fmm-exec` accepts
   (`MAX_DEGREE` = 20). Are they needed? If so, extending the tested range (and the
   rotation tables, the only M2L form that stays affordable there) is a separate task.
+- *New with Phase 3S* ([simd-p2p.md](simd-p2p.md) §9):
+  - *Answered on 2026-10-02:* no x86_64 machine is available for timings, so x86_64 is
+    correctness-only, through CI. x86_64 timings, including the green-kernels
+    comparison there, stay open until a machine is available.
+  - *Answered on 2026-10-02:* CI gains a job for `nd-fmm-simd` on arm64 and x86_64
+    runners.
+  - *Answered on 2026-10-02:* AVX-512 is deferred until hardware to test and time it is
+    available ([simd-p2p.md](simd-p2p.md) §4.7).
+  - *Answered on 2026-10-02:* the default leaf size is the one T7's rule picks from the
+    M3 Max timings.
+  - Should a relaxed f64 inverse square root (about 1e-13, as in green-kernels) ship as
+    an opt-in? The FMM's own error is at least 1e-8 at p ≤ 20. Decided after the spike
+    (T2); the recommendation is not to.
 - What accuracy range and N per GPU are typical for your applications?
 - Outputs needed: potential only, gradient, or also Hessians?
 - Should the 1/(4π) factor be part of the kernel or left to the caller? (Provisionally
@@ -1499,6 +1582,8 @@ Done when: tests pass, cargo clippy clean, doc comments cite the equations used
 - N. A. Gumerov, R. Duraiswami (2005). [Comparison of the efficiency of translation operators used in the fast multipole method for the 3D Laplace equation](http://users.umiacs.umd.edu/~ramanid/pubs/Gumerov_Duraiswami_TR_4701.pdf). UMD CS-TR-4701 / UMIACS-TR-2005-09.
 - S. Kailasa, T. Betcke, S. El Kazdadi. [M2L translation operators for kernel-independent fast multipole methods on modern architectures](https://doi.org/10.1145/3820372). ACM Transactions on Mathematical Software; preprint [arXiv 2408.07436](https://arxiv.org/pdf/2408.07436).
 - S. Kailasa (2025). [kifmm-rs: a kernel-independent fast multipole framework in Rust](https://joss.theoj.org/papers/10.21105/joss.07124.pdf). JOSS 10(110), 7124.
+- bempp. [green-kernels](https://github.com/bempp/green-kernels), commit `7d757c5` (2025-11-23): Laplace and Helmholtz kernels on `pulp`, with the inverse square root of rlst's `simd` module. The baseline of Phase 3S ([simd-p2p.md](simd-p2p.md) §2.2).
+- Intel. [Intrinsics Guide](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html) (AVX2, FMA); Arm. [Intrinsics reference](https://developer.arm.com/architectures/instruction-sets/intrinsics/) (NEON).
 - tracel-ai. [CubeCL releases](https://github.com/tracel-ai/cubecl/releases) (v0.10.0, v0.11.0-pre.1); [CubeCL crate documentation](https://lib.rs/crates/cubecl-std); [Burn blog](https://burn.dev/blog/).
 - S. Jiang, L. Greengard. [A dual-space multilevel kernel-splitting framework for discrete and continuous convolution](https://www.citedrive.com/en/discovery/a-dualspace-multilevel-kernelsplitting-framework-for-discrete-and-continuous-convolution).
 
