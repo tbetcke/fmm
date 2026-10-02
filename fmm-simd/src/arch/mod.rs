@@ -141,11 +141,6 @@ pub(crate) trait Simd<T: SimdScalar>: Copy {
 ///
 /// If `x` and `out` have different lengths.
 #[inline(always)]
-#[expect(
-    clippy::chunks_exact_to_as_chunks,
-    reason = "the chunk size is an associated constant of a generic parameter, which \
-              `as_chunks` cannot take as a const argument on stable Rust"
-)]
 pub(crate) fn rsqrt_body<T: SimdScalar, S: Simd<T>>(s: S, x: &[T], out: &mut [T]) {
     const { assert!(S::W <= MAX_LANES) };
     assert_eq!(
@@ -153,20 +148,18 @@ pub(crate) fn rsqrt_body<T: SimdScalar, S: Simd<T>>(s: S, x: &[T], out: &mut [T]
         out.len(),
         "`x` and `out` must have the same length"
     );
-    let mut x_chunks = x.chunks_exact(S::W);
-    let mut out_chunks = out.chunks_exact_mut(S::W);
-    for (xv, ov) in (&mut x_chunks).zip(&mut out_chunks) {
+    let whole = x.len() - x.len() % S::W;
+    let (x_whole, rest) = x.split_at(whole);
+    let (out_whole, out_rest) = out.split_at_mut(whole);
+    for (xv, ov) in x_whole.chunks(S::W).zip(out_whole.chunks_mut(S::W)) {
         s.store(s.rsqrt_masked(s.load(xv)), ov);
     }
-    let rest = x_chunks.remainder();
     if let Some(&last) = rest.last() {
         let mut padded = [last; MAX_LANES];
         padded[..rest.len()].copy_from_slice(rest);
         let mut result = [T::zero(); MAX_LANES];
         s.store(s.rsqrt_masked(s.load(&padded)), &mut result);
-        out_chunks
-            .into_remainder()
-            .copy_from_slice(&result[..rest.len()]);
+        out_rest.copy_from_slice(&result[..rest.len()]);
     }
 }
 

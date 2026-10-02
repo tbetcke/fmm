@@ -100,8 +100,8 @@
 //! ## Toolchain
 //!
 //! The design relies on language features of Rust 1.86, 1.87 and 1.89. Confirmed on
-//! stable rustc 1.98.0 for both `aarch64-apple-darwin` and `x86_64-apple-darwin`, each
-//! with a compiled example in the test module `toolchain`:
+//! stable rustc 1.98.0 and 1.99.0 for both `aarch64-apple-darwin` and
+//! `x86_64-apple-darwin`, each with a compiled example in the test module `toolchain`:
 //!
 //! - **Safe `#[target_feature]` functions** (target_feature 1.1, Rust 1.86): stable. A
 //!   safe function may carry `#[target_feature(enable = "…")]`. Calling it needs no
