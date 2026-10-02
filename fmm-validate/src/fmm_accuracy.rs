@@ -5,8 +5,10 @@
 //! targets, and several charge vectors uniform in [−1, 1). The tree is uniform:
 //! `max_level` = [`Config::max_level`] and one point per leaf as the refinement target,
 //! so with enough points every leaf lies on the maximum level. [`run`] builds an
-//! `nd_fmm_exec::fmm::Fmm` with gradients at degree p, evaluates every charge vector and
-//! measures the output at a fixed sample of the targets against the [`Oracle`].
+//! `nd_fmm_exec::fmm::Fmm` with gradients at degree p, on a given number of threads,
+//! evaluates every charge vector and measures the output at a fixed sample of the
+//! targets against the [`Oracle`]. The output, and so every error, is bit-identical for
+//! every number of threads (C3.5); only the timings change.
 //!
 //! # Error measure
 //!
@@ -32,6 +34,7 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::Equivalence;
 use nd_fmm_exec::fmm::{BuildTimings, FmmBuilder, ListSizes, StageTimings};
 use nd_fmm_exec::tables::M2lStrategy;
+use nd_fmm_exec::threading::ThreadingReport;
 use nd_fmm_math::RealScalar;
 use nd_fmm_ref::p2p::direct_sum;
 use nd_fmm_tables::cache::Stored;
@@ -204,6 +207,8 @@ pub struct Run {
     pub build: BuildTimings,
     /// The wall time of each stage, the mean over the charge vectors.
     pub stages: StageTimings,
+    /// The rayon threads, the MPI threading level and the BLAS thread variables.
+    pub threading: ThreadingReport,
 }
 
 impl Run {
@@ -213,9 +218,9 @@ impl Run {
     }
 }
 
-/// Builds the FMM of `problem` in precision `T` at degree `p` (default strategy,
-/// gradients on), evaluates the charge vectors `charges` and measures the output
-/// against `oracle` (module documentation).
+/// Builds the FMM of `problem` in precision `T` at degree `p` on `threads` threads
+/// (default strategy, gradients on), evaluates the charge vectors `charges` and
+/// measures the output against `oracle` (module documentation).
 ///
 /// `charges` and `oracle` must belong together: the problem's charges for f64, and
 /// for f32 the rounded charges with the oracle of their f64 values.
@@ -226,19 +231,21 @@ impl Run {
 ///
 /// # Panics
 ///
-/// If the FMM does not build or evaluate, for example on several ranks.
+/// If the FMM does not build or evaluate, for example on several ranks, or with
+/// `threads` > 1 when MPI provides less than `Threading::Funneled`.
 pub fn run<T: Stored + Equivalence + Default>(
     config: &Config,
     problem: &Problem,
     charges: &[Vec<T>],
     oracle: &Oracle,
-    p: usize,
+    (p, threads): (usize, usize),
     comm: &SimpleCommunicator,
 ) -> Run {
     let builder = FmmBuilder::<T>::new(p)
         .max_level(config.max_level)
         .max_points_per_leaf(1)
-        .gradients(true);
+        .gradients(true)
+        .threads(threads);
     let mut fmm = builder
         .build(&problem.points, &problem.points, comm)
         .unwrap_or_else(|error| panic!("the FMM does not build: {error}"));
@@ -290,6 +297,7 @@ pub fn run<T: Stored + Equivalence + Default>(
         lists: fmm.list_sizes(),
         build: fmm.build_timings(),
         stages: mean(&stages),
+        threading: fmm.threading().clone(),
     }
 }
 

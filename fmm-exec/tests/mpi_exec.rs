@@ -49,12 +49,32 @@
 //! - **ownership**: every rank passes the same complete point set. On one rank the FMM
 //!   runs; on several, every rank returns `PointsNotOwned` with the same count.
 //!
+//! Threads (T10, C3.5). MPI is initialised with `Threading::Funneled`, so that `Fmm` may
+//! use threads. Error measure: exact equality of the bit patterns.
+//! - Every `Fmm` evaluation above runs at one thread and again in a fresh build at 2, 4
+//!   and 8 threads, through `evaluate_threaded`; every output equals the one-thread
+//!   output bit for bit. Each threaded build reports its threads and MPI level
+//!   (`Fmm::threading`), and the P2P buffer of every per-thread scratch set keeps its
+//!   capacity through the evaluation (no allocation per pair). These builds share a
+//!   table cache in `CARGO_TARGET_TMPDIR`, which loads tables bit for bit, so each
+//!   table set is built once: in debug mode the table builds, not the evaluations,
+//!   would otherwise take most of the minute the test may run.
+//! - **batched against per-pair** also runs the operator with a pool of 2, 4 and 8
+//!   threads (`LaplaceOperator::with_pool`), bit-identical to the serial operator.
+//! - **threads, every strategy and precision**: an adaptive tree with W and X lists, in
+//!   f32 and f64, `Dense`, `Classes` and `Rotation`, gradients off and on, at 1, 2, 4
+//!   and 8 threads.
+//! - **repeatability** also checks that two threaded evaluations agree bit for bit, and
+//!   a threaded evaluation after a serial one (`Fmm::set_serial`) on the same `Fmm`.
+//! - **input errors** also checks that `threads(0)` is rejected.
+//!
 //! Every `Fmm` scenario but the last passes each rank its share of the points (every
 //! `size`-th). On several ranks those points generally lie in leaves of other ranks;
 //! the scenario then checks that every rank returns `PointsNotOwned` and stops, since
 //! points are not redistributed until C5.1. If the build succeeds instead, the
 //! checks run distributed.
 
+use mpi::Threading;
 use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
@@ -70,16 +90,29 @@ use nd_fmm_plan::lists::GroupedCsr;
 use nd_fmm_plan::operator::{FmmOperator, PerPair};
 use nd_fmm_plan::plan::Plan;
 use nd_fmm_ref::p2p::direct_sum;
+use nd_fmm_tables::cache::Stored;
 use nd_fmm_tables::geometry::m2l_offset_index;
 use nd_octree::{MortonKey, Octree, OctreeOptions, PhysicalBox, constants::DEEPEST_LEVEL, morton};
 
 type Scenario = fn(&SimpleCommunicator);
 
+/// The table cache of `evaluate_threaded`, in the scratch directory Cargo provides for
+/// integration tests.
+const TABLE_CACHE: &str = concat!(env!("CARGO_TARGET_TMPDIR"), "/mpi_exec_tables");
+
+/// The thread counts every `Fmm` scenario is repeated at, besides one thread.
+const THREADS: [usize; 3] = [2, 4, 8];
+
 #[test]
 fn distributed_scenarios() {
-    let universe = mpi::initialize().expect("this test owns MPI initialization");
+    let (universe, provided) = mpi::initialize_with_threading(Threading::Funneled)
+        .expect("this test owns MPI initialization");
+    assert!(
+        provided >= Threading::Funneled,
+        "the threaded scenarios need MPI at Funneled, it provides {provided:?}"
+    );
     let comm = universe.world();
-    let cases: [(&str, Scenario); 12] = [
+    let cases: [(&str, Scenario); 13] = [
         ("table order against the plan", table_order),
         ("batched against per-pair", batched_against_per_pair),
         ("uniform cube, every strategy", uniform_cube_strategies),
@@ -92,6 +125,10 @@ fn distributed_scenarios() {
         ("f32 against f64", f32_against_f64),
         ("repeatability", repeatability),
         ("ownership", ownership),
+        (
+            "threads, every strategy and precision",
+            threads_every_strategy,
+        ),
     ];
     for (name, scenario) in cases {
         eprintln!("rank {}: {name}", comm.rank());
@@ -363,6 +400,24 @@ fn batched_against_per_pair(comm: &SimpleCommunicator) {
         input,
         (&targets, &target_leaves),
     );
+    // The same operator with a pool: bit-identical to the serial operator (C3.5).
+    for n in THREADS {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .build()
+            .expect("the pool builds");
+        let threaded = op.clone().with_pool(std::sync::Arc::new(pool));
+        assert_eq!(threaded.threads(), n);
+        let output = evaluate(
+            &plan,
+            comm,
+            threaded,
+            &domain,
+            input,
+            (&targets, &target_leaves),
+        );
+        assert_eq!(bits(&output), bits(&batched), "{n} threads against serial");
+    }
     let per_pair = evaluate(
         &plan,
         comm,
@@ -410,7 +465,8 @@ fn batched_against_per_pair(comm: &SimpleCommunicator) {
     let (potential_error, gradient_error) =
         ((total[0] / total[1]).sqrt(), (total[2] / total[3]).sqrt());
     eprintln!(
-        "rank {}: batched = per-pair bit for bit ({} values); W, X, V pairs {lists:?}; \
+        "rank {}: batched = per-pair = 2, 4, 8 threads bit for bit ({} values); W, X, V \
+         pairs {lists:?}; \
          p = {p}: relative L2 error vs direct sum {potential_error:.3e} (potential), \
          {gradient_error:.3e} (gradient)",
         comm.rank(),
@@ -456,6 +512,72 @@ fn built<'o, T: nd_fmm_tables::cache::Stored + Equivalence + Default>(
         }
         Err(error) => panic!("rank {}: the FMM does not build: {error}", comm.rank()),
     }
+}
+
+/// Builds the FMM of `builder` at one thread and evaluates `charges`, then builds it
+/// again at each count of `threads` and checks the threaded evaluation
+/// (`check_threaded`) against the one-thread output (C3.5). Returns the one-thread FMM
+/// and its output, or `None` if the points are not owned (`built`).
+///
+/// Every build loads its tables from [`TABLE_CACHE`], building and storing them once.
+fn evaluate_threaded<'o, T: Stored + Equivalence + Default>(
+    builder: &FmmBuilder<T>,
+    (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
+    charges: &[T],
+    threads: &[usize],
+    comm: &'o SimpleCommunicator,
+) -> Option<(Fmm<'o, T>, Output<T>)> {
+    let builder = builder.clone().table_cache(TABLE_CACHE);
+    let mut fmm = built(
+        builder.clone().threads(1).build(sources, targets, comm),
+        comm,
+    )?;
+    assert_eq!(fmm.threading().threads, 1);
+    assert_eq!(fmm.operator().threads(), 1);
+    let output = fmm.evaluate(charges).expect("the FMM evaluates");
+    let reference = output_bits(&output);
+    for &n in threads {
+        let builder = builder.clone().threads(n);
+        let mut threaded = built(builder.build(sources, targets, comm), comm)?;
+        check_threaded(&mut threaded, charges, &reference, n);
+    }
+    Some((fmm, output))
+}
+
+/// Evaluates `charges` with `fmm`, built with `n` threads, and checks its threading
+/// report, the capacity of every per-thread scratch set before and after, and the output
+/// bit for bit against `reference`.
+fn check_threaded<T: Stored + Equivalence + Default>(
+    fmm: &mut Fmm<'_, T>,
+    charges: &[T],
+    reference: &[u64],
+    n: usize,
+) {
+    let report = fmm.threading();
+    assert_eq!(report.threads, n, "{report}");
+    assert!(report.mpi >= Threading::Funneled, "{report}");
+    assert_eq!(fmm.operator().threads(), n);
+    let capacities = fmm.operator().scratch_capacities();
+    assert_eq!(
+        capacities,
+        vec![fmm.max_leaf_points(); n],
+        "one scratch set per thread"
+    );
+    let output = fmm.evaluate(charges).expect("the threaded FMM evaluates");
+    assert_eq!(
+        fmm.operator().scratch_capacities(),
+        capacities,
+        "{n} threads: a scratch set reallocated"
+    );
+    let bits = output_bits(&output);
+    assert_eq!(bits.len(), reference.len());
+    let differing = bits.iter().zip(reference).filter(|(a, b)| a != b).count();
+    assert_eq!(
+        differing,
+        0,
+        "{n} threads: {differing} of {} values differ from one thread",
+        bits.len()
+    );
 }
 
 /// The exact potential (and gradient) of `charges` at `sources` at every target:
@@ -539,11 +661,13 @@ fn uniform_cube_strategies(comm: &SimpleCommunicator) {
         let mut outputs: Vec<Vec<f64>> = Vec::new();
         for (s, &strategy) in strategies.iter().enumerate() {
             let builder = FmmBuilder::<f64>::new(p).strategy(strategy);
-            let Some(mut fmm) = built(builder.build(&sources, &sources, comm), comm) else {
+            let sets = (&sources[..], &sources[..]);
+            let Some((fmm, output)) =
+                evaluate_threaded(&builder, sets, &local_charges, &THREADS, comm)
+            else {
                 return;
             };
             assert_eq!(fmm.strategy(), strategy);
-            let output = fmm.evaluate(&local_charges).expect("the FMM evaluates");
             errors[s][k] = relative_l2(&output.potential, &phi, comm);
             outputs.push(output.potential);
         }
@@ -596,7 +720,9 @@ fn distinct_and_nested(comm: &SimpleCommunicator) {
     for (name, targets) in [("disjoint", &others), ("nested", &nested)] {
         let local_targets = share(targets, comm);
         let builder = FmmBuilder::<f64>::new(6);
-        let Some(mut fmm) = built(builder.build(&local_sources, &local_targets, comm), comm) else {
+        let sets = (&local_sources[..], &local_targets[..]);
+        let Some((fmm, output)) = evaluate_threaded(&builder, sets, &local_charges, &THREADS, comm)
+        else {
             return;
         };
         assert_eq!(fmm.strategy(), M2lStrategy::Dense, "Auto at p = 6");
@@ -604,7 +730,6 @@ fn distinct_and_nested(comm: &SimpleCommunicator) {
             (fmm.nsources(), fmm.ntargets()),
             (local_sources.len(), local_targets.len())
         );
-        let output = fmm.evaluate(&local_charges).expect("the FMM evaluates");
         assert_eq!(output.potential.len(), local_targets.len());
         assert!(output.gradient.is_none());
         let (phi, _) = exact(&sources, &charges, &local_targets);
@@ -627,11 +752,12 @@ fn gradients(comm: &SimpleCommunicator) {
     let charges = random_charges(&mut rng, points.len());
     let (sources, local_charges) = (share(&points, comm), share(&charges, comm));
     let builder = FmmBuilder::<f64>::new(6).gradients(true);
-    let Some(mut fmm) = built(builder.build(&sources, &sources, comm), comm) else {
+    let sets = (&sources[..], &sources[..]);
+    let Some((fmm, output)) = evaluate_threaded(&builder, sets, &local_charges, &THREADS, comm)
+    else {
         return;
     };
     assert!(fmm.gradients());
-    let output = fmm.evaluate(&local_charges).expect("the FMM evaluates");
     let gradient = output.gradient.as_ref().expect("gradients requested");
     assert_eq!(gradient.len(), sources.len());
     let (phi, grad) = exact(&points, &charges, &sources);
@@ -648,11 +774,11 @@ fn gradients(comm: &SimpleCommunicator) {
 
     // The potentials do not depend on whether gradients are computed.
     let builder = FmmBuilder::<f64>::new(6);
-    let Some(mut without) = built(builder.build(&sources, &sources, comm), comm) else {
+    let Some((_, without)) = evaluate_threaded(&builder, sets, &local_charges, &THREADS, comm)
+    else {
         return;
     };
-    let potential = without.evaluate(&local_charges).unwrap().potential;
-    assert_eq!(bits(&potential), bits(&output.potential));
+    assert_eq!(bits(&without.potential), bits(&output.potential));
 }
 
 /// A uniform level-3 tree: no W or X list (module documentation).
@@ -673,7 +799,9 @@ fn uniform_tree(comm: &SimpleCommunicator) {
         .max_level(3)
         .max_points_per_leaf(1)
         .domain(PhysicalBox::new([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]));
-    let Some(mut fmm) = built(builder.build(&sources, &sources, comm), comm) else {
+    let sets = (&sources[..], &sources[..]);
+    let Some((fmm, output)) = evaluate_threaded(&builder, sets, &local_charges, &THREADS, comm)
+    else {
         return;
     };
     assert_eq!(fmm.nlevels(), 4);
@@ -687,7 +815,6 @@ fn uniform_tree(comm: &SimpleCommunicator) {
     let (w, x) = (global_sum(sizes.w, comm), global_sum(sizes.x, comm));
     assert_eq!((w, x), (0, 0), "W and X lists of a uniform tree");
     assert!(global_sum(sizes.v, comm) > 0 && global_sum(sizes.u, comm) > 0);
-    let output = fmm.evaluate(&local_charges).expect("the FMM evaluates");
     let (phi, _) = exact(&points, &charges, &sources);
     let error = relative_l2(&output.potential, &phi, comm);
     eprintln!(
@@ -712,11 +839,9 @@ fn single_leaf(comm: &SimpleCommunicator) {
     let points = unit_cube_points(&mut rng, 200);
     let charges = random_charges(&mut rng, points.len());
     let builder = FmmBuilder::<f64>::new(3).max_level(0).gradients(true);
-    let mut fmm = builder
-        .build(&points, &points, comm)
+    let (fmm, output) = evaluate_threaded(&builder, (&points, &points), &charges, &THREADS, comm)
         .expect("the FMM builds");
     assert_eq!((fmm.nlevels(), fmm.nleaves()), (1, 1));
-    let output = fmm.evaluate(&charges).expect("the FMM evaluates");
     let (phi, grad) = exact(&points, &charges, &points);
     let potential_error = relative_l2(&output.potential, &phi, comm);
     let gradient_error = relative_l2_vectors(output.gradient.as_ref().unwrap(), &grad, comm);
@@ -743,10 +868,11 @@ fn no_targets_on_this_rank(comm: &SimpleCommunicator) {
         share(&targets, comm)
     };
     let builder = FmmBuilder::<f64>::new(4).gradients(true);
-    let Some(mut fmm) = built(builder.build(&sources, &local_targets, comm), comm) else {
+    let sets = (&sources[..], &local_targets[..]);
+    let Some((fmm, output)) = evaluate_threaded(&builder, sets, &local_charges, &THREADS, comm)
+    else {
         return;
     };
-    let output = fmm.evaluate(&local_charges).expect("the FMM evaluates");
     assert_eq!(output.potential.len(), local_targets.len());
     assert_eq!(output.gradient.as_ref().unwrap().len(), local_targets.len());
     if comm.rank() == 0 {
@@ -832,6 +958,10 @@ fn input_errors(comm: &SimpleCommunicator) {
             FmmBuilder::<f64>::new(4).max_points_per_leaf(0),
             SettingsError::ZeroPointsPerLeaf,
         ),
+        (
+            FmmBuilder::<f64>::new(4).threads(0),
+            SettingsError::ZeroThreads,
+        ),
     ] {
         let error = builder.build(&points, &points, comm).err();
         assert_eq!(error, Some(FmmError::InvalidSettings(expected)));
@@ -878,24 +1008,15 @@ fn f32_against_f64(comm: &SimpleCommunicator) {
     let charges: Vec<f64> = charges32.iter().map(|&q| f64::from(q)).collect();
     let sources = share(&points, comm);
     let (local32, local64) = (share(&charges32, comm), share(&charges, comm));
-    let Some(mut fmm32) = built(
-        FmmBuilder::<f32>::new(6)
-            .gradients(true)
-            .build(&sources, &sources, comm),
-        comm,
-    ) else {
+    let sets = (&sources[..], &sources[..]);
+    let builder = FmmBuilder::<f32>::new(6).gradients(true);
+    let Some((_, output32)) = evaluate_threaded(&builder, sets, &local32, &THREADS, comm) else {
         return;
     };
-    let Some(mut fmm64) = built(
-        FmmBuilder::<f64>::new(6)
-            .gradients(true)
-            .build(&sources, &sources, comm),
-        comm,
-    ) else {
+    let builder = FmmBuilder::<f64>::new(6).gradients(true);
+    let Some((_, output64)) = evaluate_threaded(&builder, sets, &local64, &THREADS, comm) else {
         return;
     };
-    let output32 = fmm32.evaluate(&local32).expect("the f32 FMM evaluates");
-    let output64 = fmm64.evaluate(&local64).expect("the f64 FMM evaluates");
     let (phi, _) = exact(&points, &charges, &sources);
     let difference = relative_l2(&output32.potential, &output64.potential, comm);
     let gradient_difference = relative_l2_vectors(
@@ -948,8 +1069,34 @@ fn repeatability(comm: &SimpleCommunicator) {
         "a second charge vector differs from a fresh build"
     );
     assert_ne!(output_bits(&a), output_bits(&again));
+
+    // Threaded (C3.5): two evaluations, a serial one on the same `Fmm` in between and a
+    // threaded one after it, and the second charge vector, each bit for bit.
+    let Some(mut threaded) = built(
+        builder.clone().threads(4).build(&sources, &sources, comm),
+        comm,
+    ) else {
+        return;
+    };
+    for (name, serial) in [
+        ("first threaded", false),
+        ("second threaded", false),
+        ("serial", true),
+        ("threaded after serial", false),
+    ] {
+        threaded.set_serial(serial);
+        assert_eq!(threaded.operator().threads(), if serial { 1 } else { 4 });
+        let output = threaded.evaluate(&first).unwrap();
+        assert_eq!(output_bits(&output), output_bits(&a), "{name} evaluation");
+    }
+    let output = threaded.evaluate(&second).unwrap();
+    assert_eq!(
+        output_bits(&output),
+        output_bits(&again),
+        "second charge vector"
+    );
     eprintln!(
-        "rank {}: repeatability: {} values bit for bit",
+        "rank {}: repeatability: {} values bit for bit, serial and at 4 threads",
         comm.rank(),
         output_bits(&a).len()
     );
@@ -961,17 +1108,17 @@ fn ownership(comm: &SimpleCommunicator) {
     let mut rng = SplitMix64(0x789c);
     let points = unit_cube_points(&mut rng, 600);
     let charges = random_charges(&mut rng, points.len());
-    let result = FmmBuilder::<f64>::new(4).build(&points, &points, comm);
+    let builder = FmmBuilder::<f64>::new(4);
     if comm.size() == 1 {
-        let mut fmm = result.expect("on one rank every point is owned");
-        let output = fmm.evaluate(&charges).expect("the FMM evaluates");
+        let (_, output) = evaluate_threaded(&builder, (&points, &points), &charges, &THREADS, comm)
+            .expect("on one rank every point is owned");
         let (phi, _) = exact(&points, &charges, &points);
         let error = relative_l2(&output.potential, &phi, comm);
         eprintln!("rank 0: ownership: one rank, relative L2 error of φ {error:.3e} (p = 4)");
         assert!(error < 1e-2, "{error:e}");
         return;
     }
-    let count = match result {
+    let count = match builder.build(&points, &points, comm) {
         Err(FmmError::PointsNotOwned { count }) => count,
         Err(error) => panic!("rank {}: {error}", comm.rank()),
         Ok(_) => panic!(
@@ -988,4 +1135,56 @@ fn ownership(comm: &SimpleCommunicator) {
         "rank {}: ownership: PointsNotOwned with {count} points, on every rank",
         comm.rank()
     );
+}
+
+/// An adaptive tree with W and X lists, in f32 and f64, every strategy, gradients off
+/// and on, at 1, 2, 4 and 8 threads, bit for bit (module documentation).
+fn threads_every_strategy(comm: &SimpleCommunicator) {
+    let mut rng = SplitMix64(0x789d);
+    // A cloud over the unit cube and a dense blob near one corner: a graded tree.
+    let mut points = unit_cube_points(&mut rng, 200);
+    points.extend((0..200).map(|_| -> [f64; 3] { core::array::from_fn(|_| rng.range(0.02, 0.1)) }));
+    let charges = random_charges(&mut rng, points.len());
+    let (sources, charges64) = (share(&points, comm), share(&charges, comm));
+    let charges32: Vec<f32> = charges64.iter().map(|&q| q as f32).collect();
+    let configurations = threads_every_strategy_in::<f64>(&sources, &charges64, comm)
+        + threads_every_strategy_in::<f32>(&sources, &charges32, comm);
+    eprintln!(
+        "rank {}: threads: {configurations} configurations (f32 and f64, Dense, Classes, \
+         Rotation, gradients off and on) bit for bit at 1, 2, 4 and 8 threads",
+        comm.rank()
+    );
+}
+
+/// The configurations of `threads_every_strategy` in precision `T`; returns how many
+/// ran.
+fn threads_every_strategy_in<T: Stored + Equivalence + Default>(
+    sources: &[[f64; 3]],
+    charges: &[T],
+    comm: &SimpleCommunicator,
+) -> usize {
+    let mut configurations = 0;
+    for strategy in [
+        M2lStrategy::Dense,
+        M2lStrategy::Classes,
+        M2lStrategy::Rotation,
+    ] {
+        for gradients in [false, true] {
+            let builder = FmmBuilder::<T>::new(3)
+                .strategy(strategy)
+                .gradients(gradients)
+                .max_points_per_leaf(8);
+            let Some((fmm, output)) =
+                evaluate_threaded(&builder, (sources, sources), charges, &THREADS, comm)
+            else {
+                return configurations;
+            };
+            let sizes = fmm.list_sizes();
+            let (w, x) = (global_sum(sizes.w, comm), global_sum(sizes.x, comm));
+            assert!(w > 0 && x > 0, "W and X lists: {w}, {x}");
+            assert_eq!(output.gradient.is_some(), gradients);
+            configurations += 1;
+        }
+    }
+    configurations
 }

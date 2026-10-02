@@ -21,6 +21,10 @@
 //! 2.7 (p = 8) across seven seeds, with every pair within its single-translation
 //! error. The mean over several vectors measures the FMM, not the draw.
 //!
+//! Threads (T10, C3.5): at each p the FMM is built again with four threads, and every
+//! evaluation equals the one-thread evaluation bit for bit. MPI is initialised with
+//! `Threading::Funneled` for it.
+//!
 //! Its own executable, because it initialises MPI; ignored, because it needs release
 //! mode:
 //!
@@ -28,6 +32,7 @@
 //! RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --release -- --ignored
 //! ```
 
+use mpi::Threading;
 use mpi::traits::*;
 use nd_fmm_exec::fmm::FmmBuilder;
 use nd_fmm_ref::p2p::direct_sum;
@@ -64,10 +69,15 @@ const SEED: u64 = 0xc32;
 /// The number of charge vectors the error is averaged over.
 const CHARGE_VECTORS: u64 = 8;
 
+/// The thread count compared with one thread.
+const THREADS: usize = 4;
+
 #[test]
 #[ignore = "release mode: N = 10^5 and eight direct sums at 1,000 targets"]
 fn uniform_tree_within_twice_the_prediction() {
-    let universe = mpi::initialize().expect("this test owns MPI initialization");
+    let (universe, provided) = mpi::initialize_with_threading(Threading::Funneled)
+        .expect("this test owns MPI initialization");
+    assert!(provided >= Threading::Funneled, "MPI provides {provided:?}");
     let comm = universe.world();
     assert_eq!(comm.size(), 1, "the gate runs on one rank");
 
@@ -113,9 +123,22 @@ fn uniform_tree_within_twice_the_prediction() {
         let leaves = fmm.plan().index().leaves();
         assert_eq!(fmm.nleaves(), 4096);
         assert!((0..fmm.nleaves()).all(|j| leaves.level(j) == 4), "uniform");
+        let mut threaded = builder
+            .clone()
+            .threads(THREADS)
+            .build(&points, &points, &comm)
+            .expect("the threaded FMM builds");
+        assert_eq!(threaded.threading().threads, THREADS);
         let mut each = Vec::new();
-        for (q, exact) in charges.iter().zip(&exact) {
+        for (k, (q, exact)) in charges.iter().zip(&exact).enumerate() {
             let output = fmm.evaluate(q).expect("the FMM evaluates");
+            let parallel = threaded.evaluate(q).expect("the threaded FMM evaluates");
+            let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+            assert_eq!(
+                bits(&parallel.potential),
+                bits(&output.potential),
+                "p = {p}, charge vector {k}: {THREADS} threads differ from one"
+            );
             let (mut e2, mut r2) = (0.0f64, 0.0f64);
             for (&i, &e) in sample.iter().zip(exact) {
                 e2 += (output.potential[i] - e).powi(2);
@@ -128,9 +151,10 @@ fn uniform_tree_within_twice_the_prediction() {
         eprintln!(
             "uniform level-4 tree, N = {n}, p = {p}: relative L2 error of φ {error:.3e} \
              (root mean square over {CHARGE_VECTORS} charge vectors: {}), prediction \
-             {prediction:.2e}, ratio {:.2}",
+             {prediction:.2e}, ratio {:.2}; {THREADS} threads bit for bit ({})",
             each.join(", "),
-            error / prediction
+            error / prediction,
+            threaded.threading()
         );
         if error > 2.0 * prediction {
             failures.push(format!(

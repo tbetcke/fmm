@@ -37,7 +37,11 @@ device path follows in Phase 4.
 - MPI: the root rules apply.
   - At most one MPI-initialising test per test executable. `tests/mpi_exec.rs` owns it
     for the scenario list; add scenarios to its `cases`, not new `#[test]`s. Large
-    ignored tests get their own executable.
+    ignored tests get their own executable. `tests/mpi_threading.rs` owns MPI at
+    `Threading::Single` (the error path of `threads`); `tests/mpi_exec.rs` and
+    `tests/accuracy.rs` initialise it at `Threading::Funneled`.
+  - New `Fmm` scenarios evaluate through `evaluate_threaded` in `tests/mpi_exec.rs`,
+    which repeats them at 2, 4 and 8 threads and checks the output bit for bit.
   - Operator and geometry tests do not initialise MPI.
   - Every error that depends on one rank's input is agreed by all ranks before the
     next collective.
@@ -56,10 +60,10 @@ device path follows in Phase 4.
 
 ## Allowed dependencies
 nd-fmm-math, nd-fmm-ref, nd-fmm-tables, nd-fmm-plan, nd-octree, mpi, rlst, thiserror,
-all through [workspace.dependencies]; dev-dependencies: proptest.
+rayon (from T10; no other crate gets it), all through [workspace.dependencies];
+dev-dependencies: proptest.
 Not allowed:
 - CubeCL, and nd-fmm-kernels before Phase 4;
-- rayon before T10;
 - nd-fmm-validate, not even as a dev-dependency (it depends on this crate).
 
 Anything else needs a note in the PR.

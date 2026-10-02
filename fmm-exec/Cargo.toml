@@ -18,6 +18,7 @@ nd-fmm-plan = { workspace = true }
 nd-octree = { workspace = true }
 mpi = { workspace = true }
 rlst = { workspace = true }
+rayon = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
