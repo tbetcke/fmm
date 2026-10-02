@@ -6,10 +6,11 @@
 //! SIMD library: the vector code uses `core::arch` intrinsics only. Its design is
 //! [docs/design/simd-p2p.md][design] (Phase 3S).
 //!
-//! **Status.** This version is the scaffold of Phase 3S T3: the public surface,
-//! detection and dispatch work, and every ISA runs the scalar path. The per-ISA vector
-//! layer and inverse square root (T4) and the vector P2P kernel (T5) fill in the
-//! architecture modules behind the same interface.
+//! **Status.** Phase 3S T4: the public surface, detection and dispatch work; each ISA
+//! has its vector layer and the inverse square root of the kernel, which
+//! [`rsqrt::rsqrt_slice`] exposes for tests and reports. [`P2pKernel::evaluate`] still
+//! runs the scalar path on every ISA; the vector P2P kernel (T5) replaces it behind the
+//! same interface.
 //!
 //! ## Instruction sets
 //!
@@ -65,11 +66,13 @@
 //!
 //! `unsafe` is allowed only in the architecture modules and in the dispatch that calls
 //! their `#[target_feature]` entry points (design §5.4): calling an entry point after
-//! [`P2pKernel::new`] has checked the ISA, and vector loads and stores from slices
-//! whose bounds the code has checked. Every block carries a `// SAFETY:` comment, which
-//! the crate-level lints `unsafe_op_in_unsafe_fn` and
+//! [`P2pKernel::new`] or [`rsqrt::rsqrt_slice`] has checked the ISA, intrinsics inside
+//! the vector layer, and vector loads and stores from slices whose bounds the code has
+//! checked. The layer's methods are safe to call: they take a zero-sized token of their
+//! ISA, which can only be made on a CPU that has it. Every block carries a
+//! `// SAFETY:` comment, which the crate-level lints `unsafe_op_in_unsafe_fn` and
 //! `clippy::undocumented_unsafe_blocks` (both denied) enforce. Every public function is
-//! safe. The scaffold has no `unsafe` yet.
+//! safe.
 //!
 //! ## Testing on each architecture
 //!
@@ -89,15 +92,16 @@
 //! - On an Apple silicon Mac with Rosetta 2, `cargo test -p nd-fmm-simd --target
 //!   x86_64-apple-darwin` should run the x86_64 build, for a quick check before CI.
 //!   This is unconfirmed: the development machine had no Rosetta 2 when the crate was
-//!   created, and the binary failed with "Bad CPU type in executable". Rosetta also
+//!   created, nor in Phase 3S T4, and the binary failed with "Bad CPU type in
+//!   executable", so the AVX2 path runs only on the x86_64 CI runner. Rosetta also
 //!   emulates the estimate instructions, so accuracy contracts count only from real
 //!   x86_64 hardware.
 //!
 //! ## Toolchain
 //!
 //! The design relies on language features of Rust 1.86, 1.87 and 1.89. Confirmed on
-//! stable rustc 1.98.0 for both `aarch64-apple-darwin` and `x86_64-apple-darwin`, each
-//! with a compiled example in the test module `toolchain`:
+//! stable rustc 1.98.0 and 1.99.0 for both `aarch64-apple-darwin` and
+//! `x86_64-apple-darwin`, each with a compiled example in the test module `toolchain`:
 //!
 //! - **Safe `#[target_feature]` functions** (target_feature 1.1, Rust 1.86): stable. A
 //!   safe function may carry `#[target_feature(enable = "…")]`. Calling it needs no
@@ -134,6 +138,7 @@
 mod arch;
 mod isa;
 mod kernel;
+pub mod rsqrt;
 #[cfg(test)]
 mod toolchain;
 
@@ -153,11 +158,26 @@ pub trait SimdScalar: RealScalar + sealed::Sealed {}
 impl SimdScalar for f32 {}
 impl SimdScalar for f64 {}
 
-/// Seals [`SimdScalar`].
+/// Seals [`SimdScalar`], and dispatches generic code to the entry points of its
+/// precision.
 mod sealed {
-    /// Implemented only for f32 and f64.
-    pub trait Sealed {}
+    use crate::{Isa, arch};
 
-    impl Sealed for f32 {}
-    impl Sealed for f64 {}
+    /// Implemented only for f32 and f64.
+    pub trait Sealed: Sized {
+        /// [`rsqrt_slice`](crate::rsqrt::rsqrt_slice) in this precision.
+        fn rsqrt_slice(isa: Isa, x: &[Self], out: &mut [Self]);
+    }
+
+    impl Sealed for f32 {
+        fn rsqrt_slice(isa: Isa, x: &[f32], out: &mut [f32]) {
+            arch::rsqrt_slice_f32(isa, x, out);
+        }
+    }
+
+    impl Sealed for f64 {
+        fn rsqrt_slice(isa: Isa, x: &[f64], out: &mut [f64]) {
+            arch::rsqrt_slice_f64(isa, x, out);
+        }
+    }
 }
