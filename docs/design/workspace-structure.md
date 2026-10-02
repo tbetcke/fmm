@@ -4,8 +4,11 @@ As of 2026-09-29; revised the same day after reading the `octree` and `fmm-plan`
 Revised at the end of Phase 3 (2026-10-02; Sections 1.1, 3, 3.1, 4 and 6): `nd-fmm-plan`
 is rewritten around a batched operator interface, and `nd-fmm-exec` and the Phase 3
 parts of `nd-fmm-validate` are built.
+Revised again after Phase 3 (2026-10-02; Sections 2, 3, 3.1, 4, 5.1 and 6): Phase 3S
+adds the crate `nd-fmm-simd`, hand-written SIMD P2P kernels for the host
+([simd-p2p.md](simd-p2p.md)), and a narrow exception to the unsafe rule for it.
 
-Add six new crates to the existing workspace, created phase by phase rather than all at
+Add seven new crates to the existing workspace, created phase by phase rather than all at
 once. The existing `nd-fmm-plan` crate is the integration layer. It already owns the
 interaction lists, the pass order and the ghost exchange on top of `nd-octree`. The new
 Laplace crates plug into it through its `FmmOperator` trait, so the planned octree adapter
@@ -163,11 +166,14 @@ flowchart TB
   ref["nd-fmm-ref<br/>Phase 1 · f64 oracle"]
   math["nd-fmm-math<br/>Phase 0 · harmonics, rotation blocks, layout, RealScalar"]:::phase0
   validate["nd-fmm-validate<br/>Phase 1 · dev tooling; uses every crate"]
+  simd["nd-fmm-simd<br/>Phase 3S · SIMD P2P: NEON, AVX2"]
   exec --> plan
   exec --> octree
   plan --> octree
   exec --> tables
   exec --> kernels
+  exec --> simd
+  simd --> math
   tables --> ref
   ref --> math
   kernels --> math
@@ -175,8 +181,9 @@ flowchart TB
   classDef phase0 stroke:#2b6cb0,stroke-width:2px
 ```
 
-`nd-fmm-math`, `nd-fmm-ref` and `nd-fmm-tables` stay free of MPI and of the octree, so
-Phases 0 to 2 build and test without an MPI runtime. `nd-fmm-exec` inherits the MPI
+`nd-fmm-math`, `nd-fmm-ref`, `nd-fmm-tables` and `nd-fmm-simd` stay free of MPI and of
+the octree, so Phases 0 to 2 and the kernel tests of Phase 3S build and test without an
+MPI runtime. `nd-fmm-exec` inherits the MPI
 requirement from `nd-fmm-plan` and `nd-octree`.
 
 ## 3. Crate specifications
@@ -189,7 +196,8 @@ Each crate has one job and a public surface small enough to describe in a few li
 | `fmm-math` | `nd-fmm-math` | Phase 0 (done) | real solid harmonics and gradients, rotation blocks, index layout, scalar trait | `num-traits` |
 | `fmm-ref` | `nd-fmm-ref` | Phase 1 (done) | f64 reference operators (direct O(p⁴) and rotation O(p³)), P2P, direct-sum oracle | `nd-fmm-math`, `num-traits` |
 | `fmm-tables` | `nd-fmm-tables` | Phase 2 (done) | M2M/L2L (8 octants each), M2L (316 offsets, symmetry classes), rotation tables, versioned cache, later SVD compression | `nd-fmm-math`, `nd-fmm-ref`, `num-traits`, `thiserror` (cache errors); `rlst` (without its `mpi` feature) only with SVD compression (C6.2); no serialiser, as the cache writes its own little-endian format |
-| `fmm-exec` | `nd-fmm-exec` | Phase 3 (host, done), Phase 4 (device) | the level-batched `FmmOperator` for Laplace (`LaplaceOperator`), box geometry from integer Morton keys, user-facing FMM object, M2L strategy selection, host threading | as built in Phase 3: `nd-fmm-math`, `nd-fmm-ref`, `nd-fmm-tables`, `nd-fmm-plan`, `nd-octree`, `mpi` (feature `derive`), `rlst` (no features of its own; `nd-octree` enables `mpi`), `rayon`, `thiserror`; dev-dependency `proptest`. Phase 4 adds `nd-fmm-kernels` (feature `gpu`) |
+| `fmm-exec` | `nd-fmm-exec` | Phase 3 (host, done), Phase 4 (device) | the level-batched `FmmOperator` for Laplace (`LaplaceOperator`), box geometry from integer Morton keys, user-facing FMM object, M2L strategy selection, host threading | as built in Phase 3: `nd-fmm-math`, `nd-fmm-ref`, `nd-fmm-tables`, `nd-fmm-plan`, `nd-octree`, `mpi` (feature `derive`), `rlst` (no features of its own; `nd-octree` enables `mpi`), `rayon`, `thiserror`; dev-dependency `proptest`. Phase 3S adds `nd-fmm-simd`; Phase 4 adds `nd-fmm-kernels` (feature `gpu`) |
+| `fmm-simd` | `nd-fmm-simd` | Phase 3S | hand-written SIMD kernels for the host path, P2P first: `core::arch` intrinsics for aarch64 NEON and x86_64 AVX2 + FMA (AVX-512 deferred), a scalar fallback, runtime ISA dispatch ([simd-p2p.md](simd-p2p.md)) | `nd-fmm-math`, `thiserror`; dev-dependencies `nd-fmm-ref`, `proptest`. No MPI, no external SIMD crate |
 | `fmm-kernels` | `nd-fmm-kernels` | Phase 4 | all `#[cube]` kernels; runtime-generic | `cubecl` (pinned), CubeCL matmul crate, `nd-fmm-math` (constants only) |
 | `fmm-validate` | `nd-fmm-validate` (`publish = false`) | Phase 1 (done), grows with each phase | error norms, point distributions, accuracy sweeps, the FMM accuracy reports and the calibration of p, benchmarks | all of the above, as dev tooling; in Phase 1 `nd-fmm-math` and `nd-fmm-ref`, in Phase 2 also `nd-fmm-tables`, in Phase 3 also `nd-fmm-exec` and `mpi` (so building it needs MPI) |
 | `fmm-plan` | `nd-fmm-plan` (existing; rewritten in Phase 3) | before this plan; rewritten in Phase 3 (T4–T7) | kernel-agnostic plan of a distributed FMM: box index, lists, stores, ghost exchange, batched operator interface, evaluator | as built: `nd-octree`, `rlst` (feature `mpi`), `mpi` (feature `complex`, kept for complex-valued operators downstream), all from `[workspace.dependencies]`; dev-dependency `rand_chacha`. No rayon: threading lives in `nd-fmm-exec` |
@@ -349,6 +357,24 @@ Outside the crates, Phase 0 also adds these folders:
 - Examples `test_index_fmm` (registered with templated-examples), `evaluator_stage_cost`
   and `plan_build_cost`.
 
+**`nd-fmm-simd`** (Phase 3S; MPI-free; planned, [simd-p2p.md](simd-p2p.md) §5)
+
+- `Isa { Scalar, Neon, Avx2 }`, `#[non_exhaustive]` so that AVX-512 can follow, with
+  `detect()` (the best available),
+  `is_available()`, `available()` and `lanes::<T>()`. Every variant exists on every
+  target; those of another architecture are never available.
+- `SimdScalar`, sealed, for f32 and f64.
+- `P2pKernel<T>`: `new(isa) -> Result<_, IsaUnavailable>`, `detect()`, `isa()` and
+  `evaluate(sources, charges, targets, potential, gradient)`, with the signature and
+  semantics of `nd_fmm_ref::p2p::p2p`. It excludes a pair by r² = 0 (CONVENTIONS §3.13
+  addition, Phase 3S T1), adds each target's sources in input order, and is
+  bit-invariant under splitting the sources or moving the targets.
+- `rsqrt::rsqrt_slice(isa, x, out)`: the kernel's inverse square root, within 4 u_T.
+- `nd-fmm-exec` gains `P2pChoice { Auto, Reference, Isa }`,
+  `FmmBuilder::p2p_kernel`, `LaplaceOperator::with_p2p` and `Fmm::p2p_kernel`;
+  `nd-fmm-validate` gains the example `p2p_kernels`. The green-kernels comparison
+  lives in `spikes/p2p-simd`.
+
 **`nd-fmm-kernels`**
 
 - One module per operator. Kernels are generic over `R: Runtime` and the float type, with
@@ -411,6 +437,7 @@ trait is needed. Phase 3 rewrote `nd-fmm-plan` to provide it
 | Redistribution of points to their owning ranks | `nd-fmm-plan` | designed (redesign §9); C5.1 |
 | Overlap of exchange with local work; device-resident buffers | `nd-fmm-plan` | missing; Phase 4–5 |
 | Box geometry from keys, M2L strategies, host threading, 1/(4π) | `nd-fmm-exec` | done in Phase 3 (host path) |
+| SIMD P2P kernels on the host | `nd-fmm-simd`, called by `nd-fmm-exec` | Phase 3S |
 | Device buffers and kernels | `nd-fmm-exec`, `nd-fmm-kernels` | Phase 4 |
 | Operator math and tables | `nd-fmm-math`, `nd-fmm-ref`, `nd-fmm-tables` | done (Phases 0–2) |
 
@@ -449,7 +476,7 @@ another task.
 | Precision | all numeric code generic over `T: RealScalar` (from `nd-fmm-math`); no `f64` hard-coding outside tests and table building. Does not apply to `nd-fmm-plan`, whose `FmmOperator::Value` is deliberately generic (its `IndexFmm` uses `u32`) |
 | Allocation | kernels and hot loops write into caller-provided slices; allocation only in constructors and plan building |
 | Errors | `thiserror` enums in public APIs; panics only for violated internal invariants (`debug_assert!`) |
-| Unsafe | none outside `nd-fmm-kernels`; each unsafe block carries a `// SAFETY:` comment |
+| Unsafe | none outside `nd-fmm-kernels` and, from Phase 3S, the architecture modules and ISA dispatch of `nd-fmm-simd` (intrinsics, `#[target_feature]` calls after detection; [simd-p2p.md](simd-p2p.md) §5.4); spikes are exempt; each unsafe block carries a `// SAFETY:` comment, and every public function stays safe |
 | Docs | every public item documented; operator functions cite the equation they implement in `docs/CONVENTIONS.md` |
 | Tests | unit tests in-crate; property tests with `proptest`; fixtures under `<crate>/fixtures/`, small and committed |
 | MPI tests | only in crates that depend on MPI (`nd-fmm-exec` and later): one MPI-initialising test per test executable, as in `nd-octree` and `nd-fmm-plan`; run tests with `RUST_MIN_STACK=8388608`; multi-rank runs by hand (on macOS with `--mca btl_tcp_if_include lo0 --mca oob_tcp_if_include lo0`) |
@@ -527,6 +554,7 @@ noise without testing anything.
 | 1 | `fmm-ref`, `fmm-validate` |
 | 2 | `fmm-tables` |
 | 3 (done) | the rewrite of `nd-fmm-plan` (box index, lists, variable-size leaf data, batched operator interface; T1, T4–T7); `fmm-exec` (host path on the batched interface, threaded with rayon; T3, T8–T11); the calibration in `fmm-validate` (T12) |
+| 3S | `fmm-simd` (SIMD P2P on the host), its use in `fmm-exec`, kernel benchmarks in `fmm-validate`, `spikes/p2p-simd/` (the spike and the green-kernels comparison) |
 | 4 | `fmm-kernels` and the device backend in `fmm-exec`, on the batched interface that Phase 3 delivered |
 | 5 | multi-rank validation of `fmm-exec`; exchange/compute overlap in `nd-fmm-plan` (no new crate) |
 
