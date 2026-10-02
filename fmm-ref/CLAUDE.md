@@ -15,7 +15,7 @@ Phase and components: Phase 1, C1.1–C1.4 (tasks T1 and T3–T6 in docs/phase1/
   caller-owned `Workspace`.
 - `direct` and `rotation` keep identical signatures.
 - This crate is the oracle: clarity over speed. Optimisation belongs in nd-fmm-tables,
-  nd-fmm-kernels and nd-fmm-exec.
+  nd-fmm-kernels, nd-fmm-simd and nd-fmm-exec.
 - Tests name their error measure (docs/phase1/README.md, "Error measures").
 - Before finishing: `cargo clippy -p nd-fmm-ref --all-targets -- -D warnings`
   and `cargo test -p nd-fmm-ref` must pass.

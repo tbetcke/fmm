@@ -1,10 +1,10 @@
 [workspace]
 # Keep "2"; moving to "3" (MSRV-aware resolution) is a separate decision.
 resolver = "2"
-members = ["fmm-plan", "octree", "fmm-math", "fmm-ref", "fmm-validate", "fmm-tables", "fmm-exec", "spikes/cubecl-gemm", "spikes/p2p-simd"]
+members = ["fmm-plan", "octree", "fmm-math", "fmm-ref", "fmm-validate", "fmm-tables", "fmm-exec", "fmm-simd", "spikes/cubecl-gemm", "spikes/p2p-simd"]
 # Without default-members every member is built; spikes are added to members only,
 # so CI never builds them.
-default-members = ["octree", "fmm-plan", "fmm-math", "fmm-ref", "fmm-validate", "fmm-tables", "fmm-exec"]
+default-members = ["octree", "fmm-plan", "fmm-math", "fmm-ref", "fmm-validate", "fmm-tables", "fmm-exec", "fmm-simd"]
 
 # Every crate but octree/ inherits from this; octree/ keeps its own fields.
 [workspace.package]
@@ -38,6 +38,8 @@ rayon = "1"
 nd-octree = { path = "octree" }
 nd-fmm-plan = { path = "fmm-plan" }
 nd-fmm-exec = { path = "fmm-exec" }
+# Phase 3S: hand-written SIMD kernels of the host path (nd-fmm-exec, nd-fmm-validate).
+nd-fmm-simd = { path = "fmm-simd" }
 # Pinned by commit; only spikes/ may use it (Phase 3S T2 baseline, spikes/p2p-simd).
 green-kernels = { git = "https://github.com/bempp/green-kernels", rev = "7d757c579f8633d58163cd5b2d011a9468541f17" }
 # The SIMD layer green-kernels dispatches through; spikes/p2p-simd names its backend.

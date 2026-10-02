@@ -2284,6 +2284,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nd-fmm-simd"
+version = "0.1.0-dev"
+dependencies = [
+ "nd-fmm-math",
+ "nd-fmm-ref",
+ "proptest",
+ "thiserror",
+]
+
+[[package]]
 name = "nd-fmm-spike-cubecl-gemm"
 version = "0.0.0"
 dependencies = [
