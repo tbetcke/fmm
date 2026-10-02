@@ -69,6 +69,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "approx"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab112f0a86d568ea0e627cc1d6be74a1e9cd55214684db5561995f6dad897c6"
+dependencies = [
+ "num-complex",
+ "num-traits",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1514,6 +1524,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "green-kernels"
+version = "0.2.2-dev"
+source = "git+https://github.com/bempp/green-kernels?rev=7d757c579f8633d58163cd5b2d011a9468541f17#7d757c579f8633d58163cd5b2d011a9468541f17"
+dependencies = [
+ "approx",
+ "bytemuck",
+ "coe-rs",
+ "hexf",
+ "itertools 0.14.0",
+ "libc",
+ "num",
+ "num_cpus",
+ "paste",
+ "pulp",
+ "rand 0.9.5",
+ "rayon",
+ "rlst",
+]
+
+[[package]]
 name = "h2"
 version = "0.4.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1579,6 +1609,16 @@ name = "hermit-abi"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e17592d60ebacc7d5e169f4663c5f84f9161cc90328abcfe8456f41e4dfcb284"
+
+[[package]]
+name = "hexf"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6618f4550dcd7d9ddb5126ab18d48dfa31aa952159cb832390bda464d3bc827e"
+dependencies = [
+ "hexf-parse",
+ "syn 1.0.109",
+]
 
 [[package]]
 name = "hexf-parse"
@@ -2250,6 +2290,16 @@ dependencies = [
  "cubecl",
  "cubek-matmul",
  "cubek-std",
+]
+
+[[package]]
+name = "nd-fmm-spike-p2p-simd"
+version = "0.0.0"
+dependencies = [
+ "green-kernels",
+ "nd-fmm-math",
+ "nd-fmm-ref",
+ "pulp",
 ]
 
 [[package]]
@@ -3410,6 +3460,17 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+
+[[package]]
+name = "syn"
+version = "1.0.109"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b64191b275b66ffe2469e8af2c1cfe3bafa67b529ead792a6d0160888b4237"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
 
 [[package]]
 name = "syn"

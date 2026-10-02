@@ -1,0 +1,14 @@
+[package]
+name = "nd-fmm-spike-p2p-simd"
+version = "0.0.0"
+description = "Throwaway benchmark: SIMD P2P loop orders, inverse square roots and the green-kernels baseline (Phase 3S, T2)."
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+nd-fmm-math.workspace = true
+nd-fmm-ref.workspace = true
+green-kernels.workspace = true
+pulp.workspace = true
