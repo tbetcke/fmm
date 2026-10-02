@@ -1,6 +1,8 @@
 //! A smoke run of the core of the `fmm_accuracy` example at N = 500, p = 2, in f64 and
 //! f32: it runs, is consistent and converges roughly as expected, and on two threads
-//! gives the same errors. The accuracy figures themselves are reported by the example.
+//! gives the same errors. Then each clustered distribution at N = 500 and p = 4 on an
+//! adaptive tree: its leaves span several levels and its W and X lists are non-empty.
+//! The accuracy figures themselves are reported by the example.
 //!
 //! The one test of this executable that initialises MPI (MPI cannot be initialised
 //! twice in one process). Error measure: the root mean squares of the relative L2 and
@@ -8,11 +10,13 @@
 //! plain numbers.
 
 use mpi::Threading;
-use nd_fmm_validate::fmm_accuracy::{Config, Oracle, Problem, prediction, run};
+use nd_fmm_validate::fmm_accuracy::{Config, Distribution, Oracle, Problem, prediction, run};
 
 const SMOKE: Config = Config {
+    distribution: Distribution::Cube,
     n: 500,
     max_level: 2,
+    max_points_per_leaf: 1,
     sampled: 100,
     charge_vectors: 2,
     seed: 7,
@@ -94,4 +98,41 @@ fn smoke_run_at_n_500_and_p_2() {
     // At p = 2 truncation dominates, so f32 and f64 agree to a few per cent.
     assert!((r32.potential.l2 - r64.potential.l2).abs() < 0.05 * r64.potential.l2);
     assert_eq!(prediction(3), Some(1.77e-3));
+    assert_eq!(r64.leaf_levels, vec![0, 0, 64]);
+
+    // The clustered distributions on adaptive trees, as in `Config::c33` but small: 500
+    // points, eight per leaf as the refinement target.
+    for distribution in [
+        Distribution::Sphere,
+        Distribution::Plummer,
+        Distribution::Clusters,
+    ] {
+        assert_eq!(
+            Distribution::from_name(distribution.name()),
+            Some(distribution)
+        );
+        let config = Config {
+            n: 500,
+            max_points_per_leaf: 8,
+            ..Config::c33(distribution)
+        };
+        let config = Config {
+            sampled: 100,
+            charge_vectors: 2,
+            ..config
+        };
+        let problem = Problem::new(&config);
+        let oracle = Oracle::new(&problem, &problem.charges);
+        let r = run::<f64>(&config, &problem, &problem.charges, &oracle, (4, 1), &comm);
+        let name = distribution.name();
+        eprintln!("{name}: {r:?}");
+        assert_eq!(r.distribution, distribution);
+        let levels = r.leaf_levels.iter().filter(|&&n| n > 0).count();
+        assert!(levels >= 3, "{name}: leaves on {levels} levels");
+        assert_eq!(r.leaf_levels.iter().sum::<usize>(), r.nleaves);
+        assert!(r.lists.w > 0 && r.lists.x > 0, "{name}: {:?}", r.lists);
+        // A loose smoke bound: the p = 4 error of the uniform cube in nd-fmm-exec's
+        // tests is 6e-4.
+        assert!(r.potential.l2 < 1e-2, "{name}: {}", r.potential.l2);
+    }
 }

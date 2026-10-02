@@ -1,14 +1,21 @@
-//! The accuracy of the complete FMM on a uniform tree (C3.2): the core of the
-//! `fmm_accuracy` example.
+//! The accuracy of the complete FMM on a uniform tree (C3.2) and on adaptive trees of
+//! clustered points (C3.3): the core of the `fmm_accuracy` example.
 //!
-//! The problem ([`Problem`]): N points uniform in the cube [−1, 1)³, sources equal to
-//! targets, and several charge vectors uniform in [−1, 1). The tree is uniform:
-//! `max_level` = [`Config::max_level`] and one point per leaf as the refinement target,
-//! so with enough points every leaf lies on the maximum level. [`run`] builds an
+//! The problem ([`Problem`]): N points of a [`Distribution`], sources equal to targets,
+//! and several charge vectors uniform in [−1, 1). [`run`] builds an
 //! `nd_fmm_exec::fmm::Fmm` with gradients at degree p, on a given number of threads,
 //! evaluates every charge vector and measures the output at a fixed sample of the
 //! targets against the [`Oracle`]. The output, and so every error, is bit-identical for
 //! every number of threads (C3.5); only the timings change.
+//!
+//! Two kinds of tree ([`Config`]):
+//! - [`Config::C32`]: points uniform in the cube [−1, 1)³ and a uniform tree,
+//!   `max_level` 4 and one point per leaf as the refinement target, so with enough
+//!   points every leaf lies on level 4. Its W and X lists are empty.
+//! - [`Config::c33`]: the sphere surface, the Plummer sphere or the Gaussian clusters
+//!   (design §8.2), `max_level` 16 and a fixed refinement target of 64 points per leaf,
+//!   the same for every distribution. The trees are adaptive, with leaves on many levels
+//!   and non-empty W and X lists, which the C3.3 gate needs.
 //!
 //! # Error measure
 //!
@@ -23,8 +30,10 @@
 //! much as the FMM.
 //!
 //! The C3.2 gate compares the φ L2 error with twice [`PREDICTION`], the single-
-//! translation error (design §7, as re-derived for p = 18 in T9). f32 runs use charges rounded to f32 and an
-//! oracle on the rounded charges, so the input rounding is not counted.
+//! translation error (design §7, as re-derived for p = 18 in T9). The C3.3 gate
+//! compares the φ L2 error of each clustered distribution with twice the error of the
+//! uniform tree of [`Config::C32`] at the same p and N. f32 runs use charges rounded to
+//! f32 and an oracle on the rounded charges, so the input rounding is not counted.
 //!
 //! [`metrics::ErrorNorms`]: crate::metrics::ErrorNorms
 
@@ -42,6 +51,87 @@ use nd_fmm_tables::cache::Stored;
 use crate::metrics::{ErrorAccumulator, ErrorNorms};
 use crate::{SplitMix64, points};
 
+/// A point distribution of the accuracy runs (design §8.2), each in [−1, 1]³.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Distribution {
+    /// Uniform in the cube [−1, 1)³ ([`points::cube`]).
+    Cube,
+    /// Uniform on the unit sphere about the origin ([`points::sphere`]).
+    Sphere,
+    /// The Plummer sphere of scale [`PLUMMER_SCALE`] about the origin, truncated at
+    /// radius 1 ([`points::plummer`]).
+    Plummer,
+    /// Gaussian clusters of width [`CLUSTER_WIDTH`] at [`CLUSTER_CENTRES`], truncated at
+    /// 4 σ ([`points::gaussian_clusters`]).
+    Clusters,
+}
+
+/// The scale a of the Plummer distribution: truncated at 10 a = 1, so the points lie
+/// in the unit ball, half of them within 1.29 a.
+pub const PLUMMER_SCALE: f64 = 0.1;
+
+/// The width σ of each Gaussian cluster: tight, truncated at 4 σ = 0.08.
+pub const CLUSTER_WIDTH: f64 = 0.02;
+
+/// The centres of the five Gaussian clusters, spread irregularly over [−1, 1]³; the
+/// second and the fifth lie 0.21 apart, close enough for their trees to meet.
+pub const CLUSTER_CENTRES: [[f64; 3]; 5] = [
+    [-0.5, -0.5, -0.5],
+    [0.5, -0.4, 0.3],
+    [-0.3, 0.6, 0.2],
+    [0.4, 0.5, -0.6],
+    [0.6, -0.3, 0.45],
+];
+
+impl Distribution {
+    /// Every distribution, the uniform cube first.
+    pub const ALL: [Self; 4] = [Self::Cube, Self::Sphere, Self::Plummer, Self::Clusters];
+
+    /// The name of the distribution: "cube", "sphere", "plummer" or "clusters".
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Cube => "cube",
+            Self::Sphere => "sphere",
+            Self::Plummer => "plummer",
+            Self::Clusters => "clusters",
+        }
+    }
+
+    /// The distribution of a [`name`](Self::name), if there is one.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|d| d.name() == name)
+    }
+
+    /// A description of the distribution and its parameters, for reports.
+    pub fn description(self) -> String {
+        match self {
+            Self::Cube => "uniform in the cube [-1, 1)^3".into(),
+            Self::Sphere => "uniform on the unit sphere about the origin".into(),
+            Self::Plummer => format!(
+                "a Plummer sphere about the origin, scale a = {PLUMMER_SCALE}, truncated at \
+                 {} a",
+                points::PLUMMER_TRUNCATION
+            ),
+            Self::Clusters => format!(
+                "{} Gaussian clusters of width {CLUSTER_WIDTH} at {CLUSTER_CENTRES:?}, \
+                 truncated at {} σ, the points spread evenly over them",
+                CLUSTER_CENTRES.len(),
+                points::GAUSSIAN_TRUNCATION
+            ),
+        }
+    }
+
+    /// Draws `n` points of the distribution from `rng`.
+    pub fn points(self, rng: &mut SplitMix64, n: usize) -> Vec<[f64; 3]> {
+        match self {
+            Self::Cube => points::cube(rng, n, [0.0; 3], 1.0),
+            Self::Sphere => points::sphere(rng, n, [0.0; 3], 1.0),
+            Self::Plummer => points::plummer(rng, n, [0.0; 3], PLUMMER_SCALE),
+            Self::Clusters => points::gaussian_clusters(rng, n, &CLUSTER_CENTRES, CLUSTER_WIDTH),
+        }
+    }
+}
+
 /// The single-translation prediction of the relative L2 error of φ, P2M → M2L → L2P
 /// pooled over the 316 V-list offsets (design §7, "Single-translation accuracy";
 /// docs/phase3/README.md, "Predictions").
@@ -57,13 +147,17 @@ pub fn prediction(p: usize) -> Option<f64> {
     PREDICTION.iter().find(|&&(q, _)| q == p).map(|&(_, e)| e)
 }
 
-/// The size of the problem.
+/// The problem and its tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Config {
+    /// The point distribution.
+    pub distribution: Distribution,
     /// The number of points, sources and targets alike.
     pub n: usize,
-    /// The level of every leaf (`FmmBuilder::max_level`).
+    /// The deepest level of a leaf (`FmmBuilder::max_level`).
     pub max_level: usize,
+    /// The refinement target (`FmmBuilder::max_points_per_leaf`).
+    pub max_points_per_leaf: usize,
     /// The number of targets the error is measured at.
     pub sampled: usize,
     /// The number of charge vectors.
@@ -77,18 +171,35 @@ impl Config {
     /// charge vectors. The same points, sample and charges as the ignored gate test of
     /// nd-fmm-exec (`tests/accuracy.rs`).
     pub const C32: Self = Self {
+        distribution: Distribution::Cube,
         n: 100_000,
         max_level: 4,
+        max_points_per_leaf: 1,
         sampled: 1000,
         charge_vectors: 8,
         seed: 0xc32,
     };
+
+    /// The C3.3 problem of `distribution`: N = 10⁵, an adaptive tree with `max_level` 16
+    /// and 64 points per leaf as the refinement target, 1,000 sampled targets, eight
+    /// charge vectors, seed `0xc33`. The settings are the same for every distribution.
+    pub const fn c33(distribution: Distribution) -> Self {
+        Self {
+            distribution,
+            n: 100_000,
+            max_level: 16,
+            max_points_per_leaf: 64,
+            sampled: 1000,
+            charge_vectors: 8,
+            seed: 0xc33,
+        }
+    }
 }
 
 /// The points, the sampled targets and the charge vectors of a [`Config`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Problem {
-    /// The points, uniform in [−1, 1)³.
+    /// The points of the distribution.
     pub points: Vec<[f64; 3]>,
     /// The positions in `points` of the sampled targets, distinct.
     pub sample: Vec<usize>,
@@ -97,7 +208,8 @@ pub struct Problem {
 }
 
 impl Problem {
-    /// Draws the problem: the points from `seed`, then the sample from the same
+    /// Draws the problem: the points of the distribution from `seed`, then the sample
+    /// from the same
     /// generator (a partial Fisher–Yates shuffle), and charge vector k from
     /// `seed + 1 + k`.
     ///
@@ -107,7 +219,7 @@ impl Problem {
     pub fn new(config: &Config) -> Self {
         assert!(config.sampled <= config.n, "more samples than points");
         let mut rng = SplitMix64::new(config.seed);
-        let points = points::cube(&mut rng, config.n, [0.0; 3], 1.0);
+        let points = config.distribution.points(&mut rng, config.n);
         let mut order: Vec<usize> = (0..config.n).collect();
         for i in 0..config.sampled {
             let j = i + below(&mut rng, config.n - i);
@@ -181,6 +293,8 @@ impl Oracle {
 /// The result of one [`run`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Run {
+    /// The point distribution.
+    pub distribution: Distribution,
     /// "f32" or "f64".
     pub precision: &'static str,
     /// The degree.
@@ -199,7 +313,10 @@ pub struct Run {
     pub nlevels: usize,
     /// The number of leaves.
     pub nleaves: usize,
-    /// Points per leaf: the smallest, the mean and the largest count.
+    /// The number of leaves on each level 0, 1, …, `nlevels` − 1.
+    pub leaf_levels: Vec<usize>,
+    /// Points per leaf, empty leaves included: the smallest, the mean and the largest
+    /// count.
     pub points_per_leaf: (usize, f64, usize),
     /// The sizes of the interaction lists.
     pub lists: ListSizes,
@@ -243,7 +360,7 @@ pub fn run<T: Stored + Equivalence + Default>(
 ) -> Run {
     let builder = FmmBuilder::<T>::new(p)
         .max_level(config.max_level)
-        .max_points_per_leaf(1)
+        .max_points_per_leaf(config.max_points_per_leaf)
         .gradients(true)
         .threads(threads);
     let mut fmm = builder
@@ -255,6 +372,11 @@ pub fn run<T: Stored + Equivalence + Default>(
         counts.iter().sum::<usize>() as f64 / counts.len().max(1) as f64,
         counts.iter().copied().max().unwrap_or(0),
     );
+    let leaves = fmm.plan().index().leaves();
+    let mut leaf_levels = vec![0; fmm.nlevels()];
+    for j in 0..fmm.nleaves() {
+        leaf_levels[leaves.level(j)] += 1;
+    }
     let mut errors = Vec::with_capacity(charges.len());
     let mut stages = Vec::with_capacity(charges.len());
     for ((q, phi), grad) in charges.iter().zip(&oracle.potential).zip(&oracle.gradient) {
@@ -276,6 +398,7 @@ pub fn run<T: Stored + Equivalence + Default>(
     };
     let l2 = errors.iter().map(|e| e.0.l2);
     Run {
+        distribution: config.distribution,
         precision: if size_of::<T>() == 4 { "f32" } else { "f64" },
         p,
         strategy: fmm.strategy(),
@@ -293,6 +416,7 @@ pub fn run<T: Stored + Equivalence + Default>(
         ),
         nlevels: fmm.nlevels(),
         nleaves: fmm.nleaves(),
+        leaf_levels,
         points_per_leaf,
         lists: fmm.list_sizes(),
         build: fmm.build_timings(),

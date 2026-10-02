@@ -38,8 +38,9 @@ device path follows in Phase 4.
   - At most one MPI-initialising test per test executable. `tests/mpi_exec.rs` owns it
     for the scenario list; add scenarios to its `cases`, not new `#[test]`s. Large
     ignored tests get their own executable. `tests/mpi_threading.rs` owns MPI at
-    `Threading::Single` (the error path of `threads`); `tests/mpi_exec.rs` and
-    `tests/accuracy.rs` initialise it at `Threading::Funneled`.
+    `Threading::Single` (the error path of `threads`); `tests/mpi_exec.rs`,
+    `tests/accuracy.rs` (the ignored C3.2 gate) and `tests/adaptive.rs` (the ignored
+    C3.3 error per list) initialise it at `Threading::Funneled`.
   - New `Fmm` scenarios evaluate through `evaluate_threaded` in `tests/mpi_exec.rs`,
     which repeats them at 2, 4 and 8 threads and checks the output bit for bit.
   - Operator and geometry tests do not initialise MPI.

@@ -68,7 +68,43 @@
 //!   a threaded evaluation after a serial one (`Fmm::set_serial`) on the same `Fmm`.
 //! - **input errors** also checks that `threads(0)` is rejected.
 //!
-//! Every `Fmm` scenario but the last passes each rank its share of the points (every
+//! Adaptive trees (T11, C3.3), where the W and X lists (M2P and P2L) are non-empty. Error
+//! measure: as for T9, relative L2 against `direct_sum` divided by 4π over all targets,
+//! unless stated otherwise. The distributions follow the rules of
+//! `nd_fmm_validate::points` (this crate cannot depend on it), scaled to N = 2,000.
+//! - **clustered distributions**: points on a sphere surface, in a Plummer sphere and in
+//!   two Gaussian clusters, sources equal to targets, each with the largest refinement
+//!   target of 16, 32 and 64 points per leaf at which its leaves lie on three levels.
+//!   The leaves span at least three levels and W and X are non-empty. At p = 4 `Dense`,
+//!   `Classes` and `Rotation` agree to 1e-12 (relative L2 between them); at p = 4 and 8
+//!   the error is within twice that of the uniform cube at the same N (the C3.3 rule).
+//!   In debug mode every strategy at p = 8 would take the whole minute, so p = 8 runs
+//!   `Dense` alone here; every strategy at p = 8 on the trees of C3.3 is checked by the
+//!   ignored `tests/adaptive.rs`.
+//! - **strongly graded tree**: a dense blob of side 2⁻⁶ next to a sparse cloud, leaves
+//!   on levels six or more apart, p = 8, φ and ∇φ.
+//! - **coincident points in a level-16 leaf**: four refinement targets of points per
+//!   leaf, and one level-16 leaf with 100 points (ten copies each of four positions, and
+//!   60 points within 10⁻³ of its half-width of its centre) next to its seven siblings,
+//!   in the unit domain, where the leaf-scaled coordinates are exact. The cloud around
+//!   it carries no charge, so at the cluster every contribution is a P2P term: the
+//!   largest error there, relative to the sum of the term magnitudes, is below 1e-14.
+//!   Every output is finite, and copies of a point get the same output bit for bit
+//!   (coincident pairs are excluded, as in `direct_sum`); the far field of the cluster
+//!   at the cloud matches to 1e-2 (p = 4).
+//! - **sources-only next to targets-only leaves**: sources and targets disjoint, by the
+//!   parity of their level-2 cell, so every leaf holds one kind; some of each kind are
+//!   U-list neighbours. p = 6, φ and ∇φ.
+//! - **points on box faces and domain corners**: the points of the unit domain closest
+//!   to its 8 corners, 12 edge midpoints and 6 face centres, and points with dyadic
+//!   coordinates j / 2^m (m = 1–10) on the faces, edges and corners of boxes, half of
+//!   them in a corner blob. p = 6, φ and ∇φ.
+//!
+//! Each runs through `evaluate_threaded` at 2, 4 and 8 threads, except the p = 8
+//! evaluations and `Classes` and `Rotation` at p = 4 (one thread), to keep the debug
+//! run under a minute.
+//!
+//! Every `Fmm` scenario but **ownership** passes each rank its share of the points (every
 //! `size`-th). On several ranks those points generally lie in leaves of other ranks;
 //! the scenario then checks that every rank returns `PointsNotOwned` and stops, since
 //! points are not redistributed until C5.1. If the build succeeds instead, the
@@ -112,7 +148,7 @@ fn distributed_scenarios() {
         "the threaded scenarios need MPI at Funneled, it provides {provided:?}"
     );
     let comm = universe.world();
-    let cases: [(&str, Scenario); 13] = [
+    let cases: [(&str, Scenario); 18] = [
         ("table order against the plan", table_order),
         ("batched against per-pair", batched_against_per_pair),
         ("uniform cube, every strategy", uniform_cube_strategies),
@@ -129,6 +165,11 @@ fn distributed_scenarios() {
             "threads, every strategy and precision",
             threads_every_strategy,
         ),
+        ("clustered distributions", clustered_distributions),
+        ("strongly graded tree", strongly_graded_tree),
+        ("coincident points in a level-16 leaf", coincident_points),
+        ("sources-only next to targets-only leaves", one_sided_leaves),
+        ("points on box faces and domain corners", faces_and_corners),
     ];
     for (name, scenario) in cases {
         eprintln!("rank {}: {name}", comm.rank());
@@ -157,6 +198,23 @@ impl SplitMix64 {
     /// Uniform in [lo, hi).
     fn range(&mut self, lo: f64, hi: f64) -> f64 {
         lo + (hi - lo) * ((self.next_u64() >> 11) as f64 * (1.0 / (1u64 << 53) as f64))
+    }
+
+    /// A standard normal number: Box–Muller, the cosine branch.
+    fn normal(&mut self) -> f64 {
+        let radius = (-2.0 * (1.0 - self.range(0.0, 1.0)).ln()).sqrt();
+        radius * (2.0 * std::f64::consts::PI * self.range(0.0, 1.0)).cos()
+    }
+
+    /// A direction uniform on the unit sphere, by rejection in the unit ball.
+    fn direction(&mut self) -> [f64; 3] {
+        loop {
+            let v: [f64; 3] = core::array::from_fn(|_| self.range(-1.0, 1.0));
+            let norm = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            if (1e-3..=1.0).contains(&norm) {
+                return v.map(|vk| vk / norm);
+            }
+        }
     }
 }
 
@@ -1187,4 +1245,500 @@ fn threads_every_strategy_in<T: Stored + Equivalence + Default>(
         }
     }
     configurations
+}
+
+/// `n` points uniform on the sphere of radius `radius` about `centre`.
+fn sphere_points(rng: &mut SplitMix64, n: usize, centre: [f64; 3], radius: f64) -> Vec<[f64; 3]> {
+    (0..n)
+        .map(|_| {
+            let v = rng.direction();
+            core::array::from_fn(|k| centre[k] + radius * v[k])
+        })
+        .collect()
+}
+
+/// `n` points of a Plummer sphere of scale `a` about `centre`, truncated at 10 a, by
+/// inverse transform of the cumulative mass: the rule of
+/// `nd_fmm_validate::points::plummer`, which this crate cannot depend on.
+fn plummer_points(rng: &mut SplitMix64, n: usize, centre: [f64; 3], a: f64) -> Vec<[f64; 3]> {
+    let mass = 1000.0 / 101.0f64.powf(1.5);
+    (0..n)
+        .map(|_| {
+            let u = mass * rng.range(0.0, 1.0);
+            let r = if u > 0.0 {
+                a / (u.powf(-2.0 / 3.0) - 1.0).sqrt()
+            } else {
+                0.0
+            };
+            let v = rng.direction();
+            core::array::from_fn(|k| centre[k] + r * v[k])
+        })
+        .collect()
+}
+
+/// `n` points spread evenly over Gaussian clusters of width `width` at `centres`,
+/// cluster after cluster, truncated at 4 σ: the rule of
+/// `nd_fmm_validate::points::gaussian_clusters`.
+fn cluster_points(
+    rng: &mut SplitMix64,
+    n: usize,
+    centres: &[[f64; 3]],
+    width: f64,
+) -> Vec<[f64; 3]> {
+    (0..n)
+        .map(|i| {
+            let c = centres[i * centres.len() / n];
+            let z = loop {
+                let z: [f64; 3] = core::array::from_fn(|_| rng.normal());
+                if z[0] * z[0] + z[1] * z[1] + z[2] * z[2] <= 16.0 {
+                    break z;
+                }
+            };
+            core::array::from_fn(|k| c[k] + width * z[k])
+        })
+        .collect()
+}
+
+/// The number of leaves on each level 0–16 and the U, V, W and X list sizes of `fmm`,
+/// over all ranks.
+fn tree_summary<T: Stored + Equivalence + Default>(
+    fmm: &Fmm<'_, T>,
+    comm: &SimpleCommunicator,
+) -> ([usize; 17], [usize; 4]) {
+    let leaves = fmm.plan().index().leaves();
+    let mut local = [0usize; 17];
+    for j in 0..fmm.nleaves() {
+        local[leaves.level(j)] += 1;
+    }
+    let mut histogram = [0usize; 17];
+    comm.all_reduce_into(&local[..], &mut histogram[..], SystemOperation::sum());
+    let sizes = fmm.list_sizes();
+    let local = [sizes.u, sizes.v, sizes.w, sizes.x];
+    let mut lists = [0usize; 4];
+    comm.all_reduce_into(&local[..], &mut lists[..], SystemOperation::sum());
+    (histogram, lists)
+}
+
+/// The levels that hold leaves, from the histogram of `tree_summary`.
+fn leaf_levels(histogram: &[usize; 17]) -> Vec<usize> {
+    (0..17).filter(|&l| histogram[l] > 0).collect()
+}
+
+/// The number of local leaves per level, as "level: count" pairs.
+fn levels_text(histogram: &[usize; 17]) -> String {
+    leaf_levels(histogram)
+        .iter()
+        .map(|&l| format!("{l}: {}", histogram[l]))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The clustered distributions of N = 2,000 points, each with its refinement target:
+/// the largest of 16, 32 and 64 points per leaf at which its tree has leaves on three
+/// levels. The same rules as `nd_fmm_validate::points` (which this crate cannot depend
+/// on), with parameters for a small N.
+fn clustered_points(rng: &mut SplitMix64) -> [(&'static str, Vec<[f64; 3]>, usize); 3] {
+    let centres = [[0.3, 0.3, 0.3], [0.7, 0.6, 0.5]];
+    [
+        ("sphere", sphere_points(rng, 2000, [0.5; 3], 0.4), 16),
+        ("plummer", plummer_points(rng, 2000, [0.5; 3], 0.04), 64),
+        ("clusters", cluster_points(rng, 2000, &centres, 0.05), 64),
+    ]
+}
+
+/// Each clustered distribution at N = 2,000: every strategy at p = 4, Dense at p = 8
+/// (module documentation).
+fn clustered_distributions(comm: &SimpleCommunicator) {
+    let mut rng = SplitMix64(0x789e);
+    let strategies = [
+        M2lStrategy::Dense,
+        M2lStrategy::Classes,
+        M2lStrategy::Rotation,
+    ];
+    for (name, points, leaf) in clustered_points(&mut rng) {
+        let charges = random_charges(&mut rng, points.len());
+        let (sources, local_charges) = (share(&points, comm), share(&charges, comm));
+        let (phi, _) = exact(&points, &charges, &sources);
+        let sets = (&sources[..], &sources[..]);
+        let builder = |p: usize, strategy| {
+            FmmBuilder::<f64>::new(p)
+                .strategy(strategy)
+                .max_points_per_leaf(leaf)
+        };
+        // p = 4: every strategy, Dense also at 2, 4 and 8 threads.
+        let mut outputs: Vec<Vec<f64>> = Vec::new();
+        for strategy in strategies {
+            let threads: &[usize] = if strategy == M2lStrategy::Dense {
+                &THREADS
+            } else {
+                &[]
+            };
+            let Some((fmm, output)) =
+                evaluate_threaded(&builder(4, strategy), sets, &local_charges, threads, comm)
+            else {
+                return;
+            };
+            if strategy == M2lStrategy::Dense {
+                let (histogram, [u, v, w, x]) = tree_summary(&fmm, comm);
+                eprintln!(
+                    "rank {}: {name}, N = {}, {leaf} points per leaf: leaves per level {}; U \
+                     {u}, V {v}, W {w}, X {x} pairs",
+                    comm.rank(),
+                    points.len(),
+                    levels_text(&histogram)
+                );
+                assert!(w > 0 && x > 0, "{name}: W and X lists: {w}, {x}");
+                let levels = leaf_levels(&histogram);
+                assert!(levels.len() >= 3, "{name}: leaves on levels {levels:?}");
+            }
+            outputs.push(output.potential);
+        }
+        for s in 1..strategies.len() {
+            let difference = relative_l2(&outputs[s], &outputs[0], comm);
+            assert!(
+                difference < 1e-12,
+                "{name}, p = 4: {:?} differs from Dense by {difference:e}",
+                strategies[s]
+            );
+        }
+        // p = 8: Dense at one thread.
+        let Some((_, output)) = evaluate_threaded(
+            &builder(8, M2lStrategy::Dense),
+            sets,
+            &local_charges,
+            &[],
+            comm,
+        ) else {
+            return;
+        };
+        let errors = [
+            relative_l2(&outputs[0], &phi, comm),
+            relative_l2(&output.potential, &phi, comm),
+        ];
+        eprintln!(
+            "rank {}: {name}: relative L2 error of φ {:.3e} (p = 4), {:.3e} (p = 8); at p = \
+             4 every strategy within 1e-12 of Dense",
+            comm.rank(),
+            errors[0],
+            errors[1]
+        );
+        for (k, p) in [4, 8].into_iter().enumerate() {
+            assert!(
+                errors[k] < CLUSTERED_TOLERANCE[k],
+                "{name}, p = {p}: {:e}",
+                errors[k]
+            );
+        }
+    }
+}
+
+/// The relative L2 error of φ that the clustered scenarios allow at p = 4 and 8: twice
+/// the uniform-cube errors of `uniform_cube_strategies` at the same N (6.1e-4 and
+/// 1.2e-5), the C3.3 rule, rounded up.
+const CLUSTERED_TOLERANCE: [f64; 2] = [1.3e-3, 2.5e-5];
+
+/// A dense blob next to a sparse cloud, p = 8 (module documentation).
+fn strongly_graded_tree(comm: &SimpleCommunicator) {
+    let mut rng = SplitMix64(0x789f);
+    // 100 points over the unit cube and 400 in a cube of side 2⁻⁶ inside it.
+    let mut points = unit_cube_points(&mut rng, 100);
+    points.extend(
+        (0..400)
+            .map(|_| -> [f64; 3] { core::array::from_fn(|_| 0.3 + rng.range(0.0, 1.0 / 64.0)) }),
+    );
+    let charges = random_charges(&mut rng, points.len());
+    let (sources, local_charges) = (share(&points, comm), share(&charges, comm));
+    let builder = FmmBuilder::<f64>::new(8)
+        .max_points_per_leaf(32)
+        .gradients(true);
+    let sets = (&sources[..], &sources[..]);
+    // One thread only: p = 8 on this tree is among the most expensive evaluations of the debug
+    // run, and the thread counts are covered by the other adaptive scenarios.
+    let Some((fmm, output)) = evaluate_threaded(&builder, sets, &local_charges, &[], comm) else {
+        return;
+    };
+    let (histogram, [u, v, w, x]) = tree_summary(&fmm, comm);
+    let levels = leaf_levels(&histogram);
+    let span = levels.last().unwrap() - levels.first().unwrap();
+    let (phi, grad) = exact(&points, &charges, &sources);
+    let potential_error = relative_l2(&output.potential, &phi, comm);
+    let gradient_error = relative_l2_vectors(output.gradient.as_ref().unwrap(), &grad, comm);
+    eprintln!(
+        "rank {}: strongly graded tree, N = {}, p = 8: leaves per level {}; U {u}, V {v}, \
+         W {w}, X {x} pairs; relative L2 error {potential_error:.3e} (φ), \
+         {gradient_error:.3e} (∇φ)",
+        comm.rank(),
+        points.len(),
+        levels_text(&histogram)
+    );
+    assert!(span >= 6, "leaves on levels {levels:?}");
+    assert!(w > 0 && x > 0, "W and X lists: {w}, {x}");
+    assert!(
+        potential_error < CLUSTERED_TOLERANCE[1],
+        "φ: {potential_error:e}"
+    );
+    assert!(gradient_error < 1e-4, "∇φ: {gradient_error:e}");
+}
+
+/// The unit cube as a supplied domain. With a = 0 and w = 1 the leaf-scaled coordinates
+/// u = x 2^(l+1) − (2i + 1) are exact in f64 (CONVENTIONS §3.13).
+fn unit_domain() -> PhysicalBox {
+    PhysicalBox::new([0.0, 0.0, 0.0, 1.0, 1.0, 1.0])
+}
+
+/// The relative L2 error of φ over the local targets `selected` only, over all ranks.
+fn relative_l2_at(
+    approx: &[f64],
+    exact: &[f64],
+    selected: &[bool],
+    comm: &SimpleCommunicator,
+) -> f64 {
+    let pick = |values: &[f64]| -> Vec<f64> {
+        values
+            .iter()
+            .zip(selected)
+            .filter(|&(_, &s)| s)
+            .map(|(&v, _)| v)
+            .collect()
+    };
+    relative_l2(&pick(approx), &pick(exact), comm)
+}
+
+/// A level-16 leaf with coincident and nearly coincident points beyond
+/// `max_points_per_leaf`, sources equal to targets (module documentation).
+fn coincident_points(comm: &SimpleCommunicator) {
+    let mut rng = SplitMix64(0x78a0);
+    // The level-15 box with index `base`: one point at the centre of each of its
+    // children 1–7, so with four points per leaf it is refined to level 16, and the
+    // cluster in child 0.
+    let base = [2usize, 3, 1];
+    let child_centre = |o: usize| -> [f64; 3] {
+        core::array::from_fn(|k| ((2 * base[k] + ((o >> (2 - k)) & 1)) as f64 + 0.5) / 65536.0)
+    };
+    let mut points: Vec<[f64; 3]> = (1..8).map(child_centre).collect();
+    let (centre, half) = (child_centre(0), 0.5 / 65536.0);
+    // Four positions with ten exact copies each.
+    for d in 0..4 {
+        let x: [f64; 3] = core::array::from_fn(|k| {
+            centre[k] + half * 0.2 * (d as f64 - 1.5) * [1.0, -0.5, 0.25][k]
+        });
+        points.extend(std::iter::repeat_n(x, 10));
+    }
+    // 60 nearly coincident points, within 10⁻³ of the leaf's half-width of its centre.
+    points.extend((0..60).map(|_| -> [f64; 3] {
+        core::array::from_fn(|k| centre[k] + half * 1e-3 * rng.range(-1.0, 1.0))
+    }));
+    let in_cluster = points.len();
+    // A cloud without charge, so that every non-zero contribution at a target of the
+    // cluster is a P2P term (its own leaf and its siblings): the far field of the cloud
+    // cannot hide the error of the near terms. The cloud's targets measure the far
+    // field of the cluster.
+    points.extend(
+        (0..100).map(|_| -> [f64; 3] { core::array::from_fn(|_| rng.range(0.001, 0.999)) }),
+    );
+    let mut charges = random_charges(&mut rng, in_cluster);
+    charges.resize(points.len(), 0.0);
+    let (sources, local_charges) = (share(&points, comm), share(&charges, comm));
+    let builder = FmmBuilder::<f64>::new(4)
+        .max_points_per_leaf(4)
+        .gradients(true)
+        .domain(unit_domain());
+    let sets = (&sources[..], &sources[..]);
+    let Some((fmm, output)) = evaluate_threaded(&builder, sets, &local_charges, &THREADS, comm)
+    else {
+        return;
+    };
+
+    // The leaf of the cluster lies on level 16 and holds every point of the cluster.
+    let fine = morton::from_physical_point(centre, &unit_domain(), DEEPEST_LEVEL as usize);
+    let index = fmm.plan().index();
+    let found = index.local_leaf_containing(fine).map(|j| {
+        let j = j as usize;
+        (index.leaves().level(j), fmm.source_counts()[j])
+    });
+    if let Some((level, count)) = found {
+        assert_eq!((level, count), (16, 100), "the cluster's leaf");
+    }
+    assert_eq!(
+        global_sum(usize::from(found.is_some()), comm),
+        1,
+        "one rank owns it"
+    );
+
+    // Coincident pairs are excluded: every output is finite, and the copies of a point
+    // get the same output bit for bit.
+    let gradient = output.gradient.as_ref().unwrap();
+    assert!(output.potential.iter().all(|v| v.is_finite()));
+    assert!(gradient.iter().flatten().all(|v| v.is_finite()));
+    for i in 0..sources.len() {
+        for j in 0..i {
+            if sources[i] == sources[j] {
+                assert_eq!(output.potential[i].to_bits(), output.potential[j].to_bits());
+                assert_eq!(bits(&gradient[i]), bits(&gradient[j]));
+            }
+        }
+    }
+
+    // The rest matches the direct sum, which skips exactly coincident pairs too.
+    let (phi, grad) = exact(&points, &charges, &sources);
+    let cluster: Vec<bool> = (0..points.len())
+        .skip(comm.rank() as usize)
+        .step_by(comm.size() as usize)
+        .map(|i| (7..in_cluster).contains(&i))
+        .collect();
+    let others: Vec<bool> = cluster.iter().map(|&c| !c).collect();
+    // At a target of the cluster the near terms, of both signs, can cancel, so its error
+    // is measured against the sum of the term magnitudes Σ |q| / (4π |x − y|)
+    // (docs/phase1/README.md, "Error measures"), the largest over the cluster: a few
+    // roundings per term and the plain summation of about 100 terms.
+    let magnitudes: Vec<f64> = charges.iter().map(|q| q.abs()).collect();
+    let (terms, _) = exact(&points, &magnitudes, &sources);
+    let local = (0..sources.len())
+        .filter(|&j| cluster[j])
+        .map(|j| (output.potential[j] - phi[j]).abs() / terms[j])
+        .fold(0.0f64, f64::max);
+    let mut cluster_error = 0.0f64;
+    comm.all_reduce_into(&local, &mut cluster_error, SystemOperation::max());
+    let other_error = relative_l2_at(&output.potential, &phi, &others, comm);
+    let gradient_error = relative_l2_vectors(gradient, &grad, comm);
+    eprintln!(
+        "rank {}: coincident points: 100 in one level-16 leaf (40 as ten copies of four), \
+         {} in all, p = 4: largest error of φ in the cluster {cluster_error:.3e} (terms); \
+         relative L2 error of φ at the other targets {other_error:.3e}, of ∇φ at all \
+         {gradient_error:.3e}",
+        comm.rank(),
+        points.len()
+    );
+    assert!(cluster_error < 1e-14, "cluster: {cluster_error:e}");
+    assert!(other_error < 1e-2, "other targets: {other_error:e}");
+    assert!(gradient_error < 1e-12, "∇φ: {gradient_error:e}");
+}
+
+/// Leaves with sources only next to leaves with targets only (module documentation).
+fn one_sided_leaves(comm: &SimpleCommunicator) {
+    let mut rng = SplitMix64(0x78a1);
+    // A cloud and a blob that straddles level-2 faces, in the unit domain; a point is a
+    // source if the indices of its level-2 cell have an even sum, else a target, so
+    // every leaf on level 2 or below holds only one kind.
+    let mut points: Vec<[f64; 3]> = (0..300)
+        .map(|_| core::array::from_fn(|_| rng.range(0.001, 0.999)))
+        .collect();
+    points.extend((0..300).map(|_| -> [f64; 3] { core::array::from_fn(|_| rng.range(0.2, 0.3)) }));
+    let source = |x: &[f64; 3]| x.iter().map(|&c| (4.0 * c) as usize).sum::<usize>() % 2 == 0;
+    let sources: Vec<[f64; 3]> = points.iter().filter(|x| source(x)).copied().collect();
+    let targets: Vec<[f64; 3]> = points.iter().filter(|x| !source(x)).copied().collect();
+    let charges = random_charges(&mut rng, sources.len());
+    let (local_sources, local_charges) = (share(&sources, comm), share(&charges, comm));
+    let local_targets = share(&targets, comm);
+    let builder = FmmBuilder::<f64>::new(6)
+        .max_points_per_leaf(8)
+        .gradients(true)
+        .domain(unit_domain());
+    let sets = (&local_sources[..], &local_targets[..]);
+    let Some((fmm, output)) = evaluate_threaded(&builder, sets, &local_charges, &THREADS, comm)
+    else {
+        return;
+    };
+
+    // Count the one-sided leaves and the U-list pairs between the two kinds.
+    let (s, t) = (fmm.source_counts(), fmm.target_counts());
+    let leaves = fmm.plan().index().leaves();
+    assert!(
+        (0..fmm.nleaves()).all(|j| s[j] == 0 || t[j] == 0),
+        "a leaf holds both kinds"
+    );
+    let mut adjacent = 0;
+    for level in 0..fmm.nlevels() {
+        let near = fmm.plan().level(level).near();
+        for (r, j) in leaves.local(level).enumerate() {
+            if s[j] > 0 {
+                adjacent += near
+                    .row(r)
+                    .iter()
+                    .filter(|&&k| (k as usize) < fmm.nleaves() && t[k as usize] > 0)
+                    .count();
+            }
+        }
+    }
+    let local = [
+        (0..fmm.nleaves()).filter(|&j| s[j] > 0).count(),
+        (0..fmm.nleaves()).filter(|&j| t[j] > 0).count(),
+        adjacent,
+    ];
+    let mut counts = [0usize; 3];
+    comm.all_reduce_into(&local[..], &mut counts[..], SystemOperation::sum());
+    let (histogram, [_, _, w, x]) = tree_summary(&fmm, comm);
+    let (phi, grad) = exact(&sources, &charges, &local_targets);
+    let potential_error = relative_l2(&output.potential, &phi, comm);
+    let gradient_error = relative_l2_vectors(output.gradient.as_ref().unwrap(), &grad, comm);
+    eprintln!(
+        "rank {}: one-sided leaves: {} sources, {} targets; {} leaves with sources only, {} \
+         with targets only, {} adjacent pairs of the two; leaves per level {}; W {w}, X {x}; \
+         p = 6: relative L2 error {potential_error:.3e} (φ), {gradient_error:.3e} (∇φ)",
+        comm.rank(),
+        sources.len(),
+        targets.len(),
+        counts[0],
+        counts[1],
+        counts[2],
+        levels_text(&histogram)
+    );
+    assert!(counts.iter().all(|&n| n > 0), "{counts:?}");
+    assert!(w > 0 && x > 0, "W and X lists: {w}, {x}");
+    assert!(potential_error < 1e-3, "φ: {potential_error:e}");
+    assert!(gradient_error < 1e-2, "∇φ: {gradient_error:e}");
+}
+
+/// Points on box faces, edges and corners, and at the corners and faces of the domain
+/// (module documentation).
+fn faces_and_corners(comm: &SimpleCommunicator) {
+    let mut rng = SplitMix64(0x78a2);
+    // The coordinates closest to the faces of the unit domain: the smallest positive
+    // double and the largest double below 1.
+    let (lo, hi) = (f64::from_bits(1), 1.0 - f64::EPSILON / 2.0);
+    let ends = [lo, 0.5, hi];
+    // The 8 corners, 12 edge midpoints and 6 face centres of the domain (and its
+    // centre), each just inside it.
+    let mut points: Vec<[f64; 3]> = (0..27)
+        .map(|i| [ends[i / 9], ends[(i / 3) % 3], ends[i % 3]])
+        .collect();
+    // Points with dyadic coordinates j / 2^m, m = 1–10: on the faces, edges and corners
+    // of the boxes of level m and below, half of them in a corner blob of side 2⁻⁴, so
+    // the tree there is deep.
+    for i in 0..400 {
+        let shift = if i % 2 == 0 { 0 } else { 4 };
+        points.push(core::array::from_fn(|_| {
+            let m = 1 + rng.next_u64() % 10;
+            let j = 1 + rng.next_u64() % ((1 << m) - 1);
+            j as f64 / (1u64 << (m + shift)) as f64
+        }));
+    }
+    let charges = random_charges(&mut rng, points.len());
+    let (sources, local_charges) = (share(&points, comm), share(&charges, comm));
+    let builder = FmmBuilder::<f64>::new(6)
+        .max_points_per_leaf(8)
+        .gradients(true)
+        .domain(unit_domain());
+    let sets = (&sources[..], &sources[..]);
+    let Some((fmm, output)) = evaluate_threaded(&builder, sets, &local_charges, &THREADS, comm)
+    else {
+        return;
+    };
+    let (histogram, [_, _, w, x]) = tree_summary(&fmm, comm);
+    let gradient = output.gradient.as_ref().unwrap();
+    assert!(output.potential.iter().all(|v| v.is_finite()));
+    assert!(gradient.iter().flatten().all(|v| v.is_finite()));
+    let (phi, grad) = exact(&points, &charges, &sources);
+    let potential_error = relative_l2(&output.potential, &phi, comm);
+    let gradient_error = relative_l2_vectors(gradient, &grad, comm);
+    eprintln!(
+        "rank {}: faces and corners: {} points, leaves per level {}; W {w}, X {x}; p = 6: \
+         relative L2 error {potential_error:.3e} (φ), {gradient_error:.3e} (∇φ)",
+        comm.rank(),
+        points.len(),
+        levels_text(&histogram)
+    );
+    assert!(w > 0 && x > 0, "W and X lists: {w}, {x}");
+    assert!(potential_error < 1e-3, "φ: {potential_error:e}");
+    assert!(gradient_error < 1e-2, "∇φ: {gradient_error:e}");
 }
