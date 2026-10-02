@@ -409,6 +409,6 @@ In the repository root, start `claude` and say:
 - [x] T8 merged: each operator equals `nd-fmm-ref` on levels 2, 9 and 16 (1e-14 dense; 1e-13 classes, rotation and leaf operators)
 - [x] T9 merged: uniform tree, N = 10⁵, within twice the prediction at p = 3, 8 and 18
 - [x] T10 merged: threaded output bit-identical to serial for 1, 2, 4 and 8 threads; speed-up reported
-- [ ] T11 merged: sphere, Plummer and Gaussian clusters within twice the uniform error
+- [x] T11 merged: sphere, Plummer and Gaussian clusters within twice the uniform error
 - [ ] T12 merged: calibration table in the PR
 - [ ] Design documents updated: laplace-fmm-plan §5.1–§5.3 (the new `nd-fmm-plan` interface, leaf-scaled data), §7 (Phase 3 status and numbers; C3.0, C4.0 and the new C3.5 as delivered; Phase 4 without C4.0), §9.1 and §9.2; workspace-structure §1.1, §3, §3.1, §4 and §6 match the result
