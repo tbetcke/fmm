@@ -441,16 +441,24 @@ path compiles to what it is today.
 | | `cpu`, `metal`, `cuda` | `gpu` plus the matching `nd-fmm-kernels` feature |
 | `nd-fmm-validate` | `gpu`, `cpu`, `metal`, `cuda` | passed through to `nd-fmm-exec`; the device rows of the examples |
 
-None is on by default. CubeCL's `persistence` feature stays off, so no CubeCL database
-is ever written, **only because all three workspace entries set `default-features =
-false`** (root `Cargo.toml`): the facade's `default` enables `cubecl-core/default`,
+None is on by default. CubeCL's `persistence` feature stays off with `cpu` and `cuda`
+**only because all three workspace entries set `default-features = false`** (root
+`Cargo.toml`): the facade's `default` enables `cubecl-core/default`,
 which enables `cubecl-runtime/default`, which includes `persistence`
 (`cubecl-0.11.0-pre.4/Cargo.toml`, `cubecl-core-0.11.0-pre.4/Cargo.toml`,
 `cubecl-runtime-0.11.0-pre.4/Cargo.toml`), and the defaults of `cubek-matmul` and
 `cubek-std` turn on `cubecl/default` (`cubek-matmul-0.3.0-pre.4/Cargo.toml`,
 `cubek-std-0.3.0-pre.4/Cargo.toml`). Cargo unifies features, so any crate in the graph
 that takes one of the three with its defaults turns persistence on; T4 checks with
-`cargo tree -e features`, and `fmm-kernels/CLAUDE.md` keeps the rule. A `metal-native`
+`cargo tree -e features`, and `fmm-kernels/CLAUDE.md` keeps the rule.
+
+**Corrected by T4 (measured, accepted at its sign-off on 2026-10-03):** with `metal`,
+persistence is on whatever the workspace sets. `cubecl-wgpu-0.11.0-pre.4/Cargo.toml`
+takes `cubecl-cpp` without `default-features = false`, and `cubecl-cpp`'s `default`
+enables `cubecl-runtime/default`. Opening a Metal device creates an empty store
+`target/environment/default.db` (schema only). Nothing is recorded in it as long as no
+crate calls CubeCL's autotune or throughput measurement or enables `[compilation]
+cache`, which the workspace never does. A `metal-native`
 feature (`cubecl-metal`) is not added unless the sign-off of question 10 asks for it.
 
 ## 4. Device data and residency
@@ -1157,7 +1165,8 @@ measured):
 
 **Recommendation: a strategy-level tuner in `nd-fmm-exec`** (module `tune`, T12), on
 timing primitives of `nd-fmm-kernels` (`Device::sync` and its counters). CubeCL's
-autotune is never called, and its `persistence` feature stays off (Section 3.4), so the
+autotune is never called, and its `persistence` feature stays off (with `metal` it is
+on but unused, and leaves an empty store; Section 3.4), so the
 rule of the host table cache holds: a directory only when the caller passes one, no
 default directory, no environment variable read by this workspace. CubeCL's own
 configuration file and variables (F24) are documented in `fmm-kernels/CLAUDE.md`, not

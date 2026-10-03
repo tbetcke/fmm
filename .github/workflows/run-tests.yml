@@ -89,3 +89,66 @@ jobs:
 
       - name: Run release accuracy tests (ignored)
         run: cargo test -p nd-fmm-simd --release -- --ignored --show-output
+
+  # nd-fmm-kernels alone on the CubeCL CPU runtime (f32 and f64), without MPI (Phase 4
+  # T4; README decision 7, kept at sign-off on 2026-10-03). Correctness on small shapes only,
+  # never timings of kernels. The tests print the backends they ran; --show-output puts
+  # that into the log. The two measurement steps report, for the T4 sign-off, the
+  # tracel-llvm bundle download (the bundler's build-script run) and the kernel
+  # compilation inside the tests.
+  run-tests-kernels:
+    name: run-tests-kernels (CPU runtime)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: actions/checkout@v6
+
+      - name: Cache the cargo registry, the target directory and the tracel-llvm bundle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cache/tracel/
+            ~/.local/share/tracel/
+            target/
+          key: run-tests-kernels-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: CPU and toolchain
+        run: |
+          lscpu
+          rustc --version
+          rm -rf target/cargo-timings
+
+      - name: Clippy
+        run: cargo clippy -p nd-fmm-kernels --all-targets --features cpu --timings -- -D warnings
+
+      - name: Build the tests
+        run: cargo test -p nd-fmm-kernels --features cpu --release --no-run --timings
+
+      - name: Build measurement (bundle download and slowest units)
+        run: |
+          python3 - <<'PY'
+          import glob, json, re
+          for path in sorted(glob.glob("target/cargo-timings/cargo-timing-*.html")):
+              units = json.loads(re.search(r"const UNIT_DATA = (\[.*?\]);\n", open(path).read(), re.S).group(1))
+              print(f"{path}: {len(units)} units")
+              bundle = [u for u in units if u["name"] == "tracel-llvm-bundler" and u["target"].strip() == "build-script (run)"]
+              print("  tracel-llvm bundle (bundler build-script run):",
+                    f"{bundle[0]['duration']:.1f} s" if bundle else "not run (cached)")
+              for u in sorted(units, key=lambda u: -u["duration"])[:5]:
+                  print(f"  {u['duration']:7.1f} s  {u['name']} {u['target'].strip()}")
+          PY
+
+      - name: Run tests
+        run: cargo test -p nd-fmm-kernels --features cpu --release -- --show-output
+
+      - name: Kernel compilation measurement (CubeCL profiling log)
+        run: |
+          CUBECL_DEBUG_LOG="$RUNNER_TEMP/cubecl.log" cargo test -p nd-fmm-kernels --features cpu --release -q
+          awk -f fmm-kernels/tools/compile_times.awk "$RUNNER_TEMP/cubecl.log"
