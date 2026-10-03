@@ -197,16 +197,18 @@ impl Grid {
         self.units * self.cubes
     }
 
-    /// The shape of an elementwise launch over `work ≥ 1` elements.
+    /// The shape of an elementwise launch over `work ≥ 1` elements, with the CPU
+    /// runtime's units per cube capped at `cpu_units` ([`Device::limit_units`]).
     ///
     /// - GPU: 256 units per cube, one element per unit and stride (coalesced), as many
     ///   cubes as cover `work`, capped at the device's limit (the units then stride).
+    ///   `cpu_units` does not apply.
     /// - CPU runtime: each unit is a task on CubeCL's worker pool and loops over the
     ///   cubes (device-path.md F18), so one cube, and each unit one contiguous block:
     ///   one unit below [`CPU_MIN_CHUNK`] elements, else up to `max_units_per_cube`
-    ///   (at most [`CPU_MAX_UNITS`]). Only two cube sizes occur, so few kernel variants
-    ///   are compiled.
-    pub fn elementwise(info: &DeviceInfo, work: usize) -> Self {
+    ///   (at most [`CPU_MAX_UNITS`] and at most `cpu_units`). Only two cube sizes occur
+    ///   per cap, so few kernel variants are compiled.
+    pub fn elementwise(info: &DeviceInfo, work: usize, cpu_units: u32) -> Self {
         debug_assert!((1..=MAX_ELEMENTS).contains(&work));
         if info.backend.is_gpu() {
             let units = GPU_UNITS.min(info.max_units_per_cube.max(1));
@@ -219,7 +221,10 @@ impl Grid {
                 chunk: 1,
             }
         } else {
-            let max_units = info.max_units_per_cube.clamp(1, CPU_MAX_UNITS);
+            let max_units = info
+                .max_units_per_cube
+                .clamp(1, CPU_MAX_UNITS)
+                .min(cpu_units.max(1));
             let units = if work < CPU_MIN_CHUNK { 1 } else { max_units };
             Self {
                 units,
@@ -234,8 +239,9 @@ impl Grid {
 const GPU_UNITS: u32 = 256;
 /// The most cubes of a GPU elementwise launch (wgpu's limit per dimension).
 const GPU_MAX_CUBES: u32 = 65_535;
-/// The most units of a CPU-runtime elementwise launch (T2, T3: 12–16 units per cube).
-pub(crate) const CPU_MAX_UNITS: u32 = 16;
+/// The most units per cube of a CPU-runtime elementwise launch (T2, T3: 12–16 units
+/// per cube), and the default of [`Device::limit_units`].
+pub const CPU_MAX_UNITS: u32 = 16;
 /// Below this many elements a CPU-runtime elementwise launch uses one unit.
 pub(crate) const CPU_MIN_CHUNK: usize = 1 << 14;
 
@@ -253,6 +259,8 @@ pub struct Device {
     info: DeviceInfo,
     id: u64,
     counters: Counters,
+    /// The cap on the units per cube of the CPU runtime's launches.
+    cpu_units: u32,
 }
 
 impl fmt::Debug for Device {
@@ -261,6 +269,7 @@ impl fmt::Debug for Device {
             .field("info", &self.info)
             .field("id", &self.id)
             .field("counters", &self.counters)
+            .field("cpu_units", &self.cpu_units)
             .finish_non_exhaustive()
     }
 }
@@ -332,6 +341,7 @@ impl Device {
             info,
             id: NEXT_DEVICE_ID.fetch_add(1, Ordering::Relaxed),
             counters: Counters::default(),
+            cpu_units: CPU_MAX_UNITS,
         })
     }
 
@@ -365,6 +375,42 @@ impl Device {
                 precision,
             })
         }
+    }
+
+    /// Caps the units per cube of the CPU runtime's layouts at `units` (at least 1):
+    /// the elementwise launches of [`movement`](crate::movement) use at most that many,
+    /// so that a rank keeps at most `units` of CubeCL's worker threads busy in them
+    /// (device-path.md §11; `nd-fmm-exec` passes its `threads(n)`). The default is
+    /// [`CPU_MAX_UNITS`], 16; a larger cap changes nothing. GPU backends ignore it.
+    /// Kernels with shared memory or `sync_cube` keep their own cube size.
+    pub fn limit_units(&mut self, units: u32) {
+        self.cpu_units = units.clamp(1, CPU_MAX_UNITS);
+    }
+
+    /// The cap of [`limit_units`](Self::limit_units): 1–16, [`CPU_MAX_UNITS`] by
+    /// default.
+    pub fn units_cap(&self) -> u32 {
+        self.cpu_units
+    }
+
+    /// The bytes still available on the device: the limit the backend reports
+    /// ([`DeviceInfo::max_memory`]) less the bytes CubeCL holds, or `None` if the
+    /// backend reports no limit. [`alloc`](Self::alloc) and [`upload`](Self::upload)
+    /// check every request against it; a caller sums its allocations first to refuse a
+    /// configuration before allocating anything (device-path.md §4.6).
+    pub fn available_memory(&self) -> Option<u64> {
+        self.info.max_memory.map(|limit| {
+            let usage = self.client.memory_usage();
+            limit.saturating_sub(usage.bytes_in_use + usage.bytes_padding)
+        })
+    }
+
+    /// The bytes a buffer of `len` elements of `E` occupies on the device: at least one
+    /// element, so that an empty buffer still has a handle to bind. The sum over a
+    /// configuration's buffers is what [`available_memory`](Self::available_memory)
+    /// must cover.
+    pub fn buffer_bytes<E: DeviceElement>(len: usize) -> u64 {
+        storage_bytes::<E>(len) as u64
     }
 
     /// The counters since the device was opened or [`reset_counters`](Self::reset_counters).
@@ -512,6 +558,11 @@ impl Device {
         &self.client
     }
 
+    /// The shape of an elementwise launch over `work ≥ 1` elements on this device.
+    pub(crate) fn elementwise_grid(&self, work: usize) -> Grid {
+        Grid::elementwise(&self.info, work, self.cpu_units)
+    }
+
     /// Counts one kernel launch.
     pub(crate) fn count_launch(&mut self) {
         self.counters.launches += 1;
@@ -542,10 +593,8 @@ impl Device {
                 len,
             });
         }
-        if let Some(limit) = self.info.max_memory {
+        if let Some(available) = self.available_memory() {
             let requested = storage_bytes::<E>(len) as u64;
-            let usage = self.client.memory_usage();
-            let available = limit.saturating_sub(usage.bytes_in_use + usage.bytes_padding);
             if requested > available {
                 return Err(KernelError::OutOfMemory {
                     requested,
@@ -624,7 +673,7 @@ mod tests {
                 100_003,
                 1 << 27,
             ] {
-                let g = Grid::elementwise(&info, work);
+                let g = Grid::elementwise(&info, work, CPU_MAX_UNITS);
                 assert!(g.units >= 1 && g.cubes >= 1 && g.chunk >= 1);
                 assert!(g.threads() as usize * g.chunk as usize >= work.min(g.threads() as usize));
                 if backend.is_gpu() {
@@ -641,6 +690,27 @@ mod tests {
                         }
                     );
                     assert!(g.units as usize * g.chunk as usize >= work);
+                }
+            }
+        }
+    }
+
+    /// A cap on the CPU units bounds the units of every CPU launch and leaves GPU
+    /// launches as they are; the work is still covered.
+    #[test]
+    fn capped_grids_use_at_most_the_cap() {
+        for backend in BackendKind::ALL {
+            let info = info(backend);
+            for cap in [1, 2, 4, 7, 16, 64] {
+                for work in [1, CPU_MIN_CHUNK, 100_003] {
+                    let g = Grid::elementwise(&info, work, cap);
+                    let full = Grid::elementwise(&info, work, CPU_MAX_UNITS);
+                    if backend.is_gpu() {
+                        assert_eq!(g, full);
+                    } else {
+                        assert!(g.units <= cap.max(1) && g.units <= CPU_MAX_UNITS);
+                        assert!(g.units as usize * g.chunk as usize >= work);
+                    }
                 }
             }
         }

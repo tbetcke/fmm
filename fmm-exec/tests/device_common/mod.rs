@@ -1,0 +1,453 @@
+//! The device path against the host path (Phase 4 T5, C4.1), shared by
+//! `tests/mpi_exec.rs` (the CPU runtime) and `tests/device_metal.rs` (Metal, ignored).
+//!
+//! [`check_backend`] builds an `Fmm` on a device backend at one thread, with every
+//! operator kind on the host fallback, and checks, for the scenario it is given:
+//! - the output equals the host path's bit for bit, for the scenario's charges and for
+//!   a second charge vector (the charges reversed), and again for the first charges
+//!   (two evaluations of the device path are bit-identical);
+//! - the transfers, launches and syncs of each evaluation equal the formula of
+//!   docs/design/device-path.md §4.1 and §7.2 for the scenario's plan
+//!   ([`expected_evaluation`]), and no evaluation moves points, plan views, geometry or
+//!   tables, which the build uploaded once;
+//! - the build uploaded the points and the tables the report lists;
+//! - every view on the device equals the plan's view it was uploaded from, the
+//!   row-to-batch maps point at the batch entry of each row entry, and the box and leaf
+//!   indices, point offsets and charge slots are those of the plan and the counts.
+//!
+//! On several ranks the device build returns `DeviceNeedsOneRank` on every rank instead
+//! (device-path.md §4.4), which [`check_backend`] checks and reports.
+//!
+//! Error measure: exact equality (bit patterns, counts and bytes).
+
+use mpi::topology::SimpleCommunicator;
+use mpi::traits::{Communicator, Equivalence};
+use nd_fmm_exec::device::{DataKind, GroupedImage, Traffic};
+use nd_fmm_exec::fmm::{
+    Backend, Fmm, FmmBuilder, FmmError, OperatorKind, Output, Placement, SettingsError,
+};
+use nd_fmm_exec::operator::SimdScalar;
+use nd_fmm_math::RealScalar;
+use nd_fmm_plan::lists::GroupedCsr;
+use nd_fmm_plan::plan::Plan;
+use nd_fmm_tables::cache::Stored;
+use nd_octree::morton;
+
+/// What [`check_backend`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// The device path ran and passed every check.
+    Ran,
+    /// Several ranks: every rank returned `DeviceNeedsOneRank`.
+    OneRankOnly,
+}
+
+/// The values as f64 bit patterns: potentials, then gradients.
+pub fn output_bits<T: RealScalar>(output: &Output<T>) -> Vec<u64> {
+    let mut values: Vec<u64> = output
+        .potential
+        .iter()
+        .map(|&v| RealScalar::to_f64(v).to_bits())
+        .collect();
+    if let Some(gradient) = &output.gradient {
+        values.extend(
+            gradient
+                .as_flattened()
+                .iter()
+                .map(|&v| RealScalar::to_f64(v).to_bits()),
+        );
+    }
+    values
+}
+
+/// Asserts that two outputs agree bit for bit, naming the first difference.
+fn assert_same<T: RealScalar>(what: &str, device: &Output<T>, host: &Output<T>) {
+    let (a, b) = (output_bits(device), output_bits(host));
+    assert_eq!(a.len(), b.len(), "{what}: output lengths");
+    let differing = a.iter().zip(&b).filter(|(x, y)| x != y).count();
+    if let Some(i) = a.iter().zip(&b).position(|(x, y)| x != y) {
+        panic!(
+            "{what}: {differing} of {} values differ from the host path, the first at {i}: \
+             {:e} against {:e}",
+            a.len(),
+            f64::from_bits(a[i]),
+            f64::from_bits(b[i])
+        );
+    }
+}
+
+/// The transfers, launches and syncs of one evaluation with every kind on the host
+/// fallback, by the formula of the device module's documentation: the data kinds in
+/// [`DataKind::ALL`] order, then the launches and the syncs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Expected {
+    /// Transfers per kind of data.
+    pub traffic: [Traffic; 9],
+    /// Kernel launches.
+    pub launches: u64,
+    /// Syncs: one per download.
+    pub syncs: u64,
+}
+
+impl Expected {
+    fn down(&mut self, data: DataKind, bytes: usize) {
+        let t = &mut self.traffic[data as usize];
+        t.downloads += 1;
+        t.download_bytes += bytes as u64;
+        self.syncs += 1;
+    }
+
+    fn up(&mut self, data: DataKind, bytes: usize) {
+        let t = &mut self.traffic[data as usize];
+        t.uploads += 1;
+        t.upload_bytes += bytes as u64;
+    }
+
+    /// The sum over every kind of data.
+    fn total(&self) -> Traffic {
+        self.traffic
+            .iter()
+            .fold(Traffic::default(), |a, b| Traffic {
+                uploads: a.uploads + b.uploads,
+                upload_bytes: a.upload_bytes + b.upload_bytes,
+                downloads: a.downloads + b.downloads,
+                download_bytes: a.download_bytes + b.download_bytes,
+            })
+    }
+}
+
+/// The transfers of one evaluation of `fmm` with every kind on the host fallback
+/// (device-path.md §4.1, §7.2; the device module's tables). With s bytes per value,
+/// n_c = (p + 1)², o values per target, K_l boxes and N_l targets on level l:
+///
+/// - the charges: one upload of N_s s bytes; the output: one download of o N_t s;
+/// - per level call whose view has an entry (and, for L2P, M2P and P2P, whose leaves
+///   have a target): P2M down and up K_l n_c s; M2M (each pass) down (K_l + K_{l+1})
+///   n_c s in one call, up K_l n_c s; M2L down K_l n_c s twice, up once; P2L down and up
+///   K_l n_c s; L2L down (K_{l−1} + K_l) n_c s, up K_l n_c s; L2P down K_l n_c s and
+///   o N_l s, up o N_l s; M2P down K_{l+1} n_c s and o N_l s, up o N_l s; P2P down and
+///   up o N_l s;
+/// - launches: the three zero kernels of non-empty stores and the charge scatter if
+///   there is a source; syncs: one per download.
+pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
+    fmm: &Fmm<'_, T>,
+) -> Expected {
+    let plan = fmm.plan();
+    let index = plan.index();
+    let nlevels = plan.nlevels();
+    let s = size_of::<T>();
+    let nc = (fmm.p() + 1) * (fmm.p() + 1);
+    let o = if fmm.gradients() { 4 } else { 1 };
+    let boxes = |l: usize| index.len(l) * nc * s;
+    let level_targets = |l: usize| -> usize {
+        fmm.target_counts()[index.leaves().local(l)]
+            .iter()
+            .sum::<usize>()
+            * o
+            * s
+    };
+    let mut e = Expected::default();
+    let (multipoles, locals, output) = (
+        DataKind::FallbackMultipoles,
+        DataKind::FallbackLocals,
+        DataKind::FallbackTargetOutput,
+    );
+
+    e.up(DataKind::Charges, fmm.nsources() * s);
+    e.launches += 2 + u64::from(fmm.ntargets() > 0) + u64::from(fmm.nsources() > 0);
+    for l in 0..nlevels {
+        let lists = plan.level(l);
+        if !lists.p2m().is_empty() {
+            e.down(multipoles, boxes(l));
+            e.up(multipoles, boxes(l));
+        }
+    }
+    for l in 0..nlevels.saturating_sub(1) {
+        for view in [plan.level(l).m2m_local(), plan.level(l).m2m_global()] {
+            if !view.is_empty() {
+                e.down(multipoles, boxes(l) + boxes(l + 1));
+                e.up(multipoles, boxes(l));
+            }
+        }
+    }
+    for l in 1..nlevels {
+        let lists = plan.level(l);
+        if !lists.l2l().is_empty() {
+            e.down(locals, boxes(l - 1) + boxes(l));
+            e.up(locals, boxes(l));
+        }
+        if !lists.v().is_empty() {
+            e.down(multipoles, boxes(l));
+            e.down(locals, boxes(l));
+            e.up(locals, boxes(l));
+        }
+        if !lists.x().is_empty() {
+            e.down(locals, boxes(l));
+            e.up(locals, boxes(l));
+        }
+    }
+    for l in 0..nlevels {
+        let lists = plan.level(l);
+        let targets = level_targets(l);
+        if targets == 0 {
+            continue;
+        }
+        if !lists.l2p().is_empty() {
+            e.down(locals, boxes(l));
+            e.down(output, targets);
+            e.up(output, targets);
+        }
+        if !lists.w().is_empty() {
+            e.down(multipoles, boxes(l + 1));
+            e.down(output, targets);
+            e.up(output, targets);
+        }
+        if !lists.near().is_empty() {
+            e.down(output, targets);
+            e.up(output, targets);
+        }
+    }
+    e.down(DataKind::Output, fmm.ntargets() * o * s);
+    e
+}
+
+/// Checks the counters of the last evaluation of `fmm` against `expected`.
+fn check_evaluation_counters<T: Stored + SimdScalar + Equivalence + Default>(
+    what: &str,
+    fmm: &Fmm<'_, T>,
+    expected: &Expected,
+) {
+    let counters = fmm.device_counters().expect("a device backend");
+    for data in DataKind::ALL {
+        assert_eq!(
+            counters.evaluation_traffic.get(data),
+            expected.traffic[data as usize],
+            "{what}: transfers of {data} in an evaluation"
+        );
+    }
+    let total = expected.total();
+    let c = counters.evaluation;
+    assert_eq!(
+        (
+            c.uploads,
+            c.upload_bytes,
+            c.downloads,
+            c.download_bytes,
+            c.launches,
+            c.syncs
+        ),
+        (
+            total.uploads,
+            total.upload_bytes,
+            total.downloads,
+            total.download_bytes,
+            expected.launches,
+            expected.syncs
+        ),
+        "{what}: counters of an evaluation (uploads, bytes, downloads, bytes, launches, \
+         syncs)"
+    );
+}
+
+/// Checks that the device's copy of `view` is the plan's, and that its row-to-batch map
+/// points at the batch entry of each row entry.
+fn check_grouped<G: Copy + Into<usize> + Into<u32>>(
+    what: &str,
+    image: &GroupedImage,
+    view: &GroupedCsr<G>,
+) {
+    assert_eq!(image.row_offsets, view.row_offsets(), "{what}: row offsets");
+    assert_eq!(image.sources, view.sources(), "{what}: sources");
+    let groups: Vec<u32> = view.groups().iter().map(|&g| g.into()).collect();
+    assert_eq!(image.groups, groups, "{what}: groups");
+    assert_eq!(
+        image.batch_offsets,
+        view.batch_offsets(),
+        "{what}: batch offsets"
+    );
+    assert_eq!(
+        image.batch_targets,
+        view.batch_targets(),
+        "{what}: batch targets"
+    );
+    assert_eq!(
+        image.batch_sources,
+        view.batch_sources(),
+        "{what}: batch sources"
+    );
+    for t in 0..view.nrows() {
+        let row = view.row_offsets()[t] as usize..view.row_offsets()[t + 1] as usize;
+        for e in row {
+            let k = image.row_to_batch[e] as usize;
+            let g = groups[e] as usize;
+            let batch = view.batch_offsets()[g] as usize..view.batch_offsets()[g + 1] as usize;
+            assert!(
+                batch.contains(&k)
+                    && view.batch_targets()[k] == t as u32
+                    && view.batch_sources()[k] == view.sources()[e],
+                "{what}: row {t}, entry {e}: the row-to-batch map points at {k}"
+            );
+        }
+    }
+}
+
+/// Checks every array on the device against `plan` and the counts of `fmm`.
+fn check_views<T: Stored + SimdScalar + Equivalence + Default>(fmm: &mut Fmm<'_, T>) {
+    let image = fmm
+        .download_device_views()
+        .expect("a device backend")
+        .expect("the views download");
+    let plan: &Plan = fmm.plan();
+    let index = plan.index();
+    assert_eq!(image.levels.len(), plan.nlevels());
+    for (l, (level, lists)) in image.levels.iter().zip(plan.levels()).enumerate() {
+        for (name, csr, view) in [
+            ("P2M", &level.p2m, lists.p2m()),
+            ("X", &level.x, lists.x()),
+            ("near", &level.near, lists.near()),
+            ("W", &level.w, lists.w()),
+            ("L2P", &level.l2p, lists.l2p()),
+        ] {
+            assert_eq!(csr.row_offsets, view.row_offsets(), "level {l}, {name}");
+            assert_eq!(csr.entries, view.entries(), "level {l}, {name}");
+        }
+        check_grouped(
+            &format!("level {l}, M2M local"),
+            &level.m2m_local,
+            lists.m2m_local(),
+        );
+        check_grouped(
+            &format!("level {l}, M2M global"),
+            &level.m2m_global,
+            lists.m2m_global(),
+        );
+        check_grouped(&format!("level {l}, L2L"), &level.l2l, lists.l2l());
+        check_grouped(&format!("level {l}, V"), &level.v, lists.v());
+    }
+    let decode = |key| {
+        let (level, i) = morton::decode(key);
+        (level as u32, i.map(|c| c as u32))
+    };
+    for (l, boxes) in image.boxes.iter().enumerate() {
+        let want: Vec<[u32; 3]> = index.keys(l).iter().map(|&k| decode(k).1).collect();
+        assert_eq!(boxes, &want, "box indices of level {l}");
+    }
+    let leaves: Vec<(u32, [u32; 3])> = index.leaves().keys().iter().map(|&k| decode(k)).collect();
+    assert_eq!(image.leaves, leaves, "leaf levels and indices");
+    let offsets = |counts: &[usize]| -> Vec<u32> {
+        std::iter::once(0)
+            .chain(counts.iter().scan(0, |total, &n| {
+                *total += n;
+                Some(*total as u32)
+            }))
+            .collect()
+    };
+    assert_eq!(image.source_offsets, offsets(fmm.source_counts()));
+    assert_eq!(image.target_offsets, offsets(fmm.target_counts()));
+    let mut slots = Vec::new();
+    let mut start = 0;
+    for &n in fmm.source_counts() {
+        slots.extend((0..n).map(|k| (start + 3 * n + k) as u32));
+        start += 4 * n;
+    }
+    assert_eq!(image.charge_slots, slots, "charge slots");
+}
+
+/// Builds `builder` on `backend` at one thread and checks it against the host path:
+/// `host` is the one-thread host `Fmm` of the same settings, `host_output` its output
+/// for `charges` (module documentation). Returns what it did; panics on a failed check.
+pub fn check_backend<'o, T: Stored + SimdScalar + Equivalence + Default>(
+    builder: &FmmBuilder<T>,
+    (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
+    charges: &[T],
+    host: &mut Fmm<'o, T>,
+    host_output: &Output<T>,
+    backend: Backend,
+    comm: &'o SimpleCommunicator,
+) -> Outcome {
+    let built = builder
+        .clone()
+        .threads(1)
+        .backend(backend)
+        .build(sources, targets, comm);
+    if comm.size() > 1 {
+        let ranks = comm.size() as usize;
+        match built {
+            Err(FmmError::InvalidSettings(SettingsError::DeviceNeedsOneRank { ranks: r }))
+                if r == ranks => {}
+            Err(error) => panic!("rank {}: {backend} on {ranks} ranks: {error}", comm.rank()),
+            Ok(_) => panic!("rank {}: {backend} builds on {ranks} ranks", comm.rank()),
+        }
+        return Outcome::OneRankOnly;
+    }
+    let mut fmm =
+        built.unwrap_or_else(|error| panic!("{backend}: the FMM does not build: {error}"));
+    assert_eq!(fmm.backend(), backend);
+    assert_eq!(fmm.operator().threads(), 1);
+    let report = fmm.device_report().expect("a device backend");
+    for kind in OperatorKind::ALL {
+        assert_eq!(
+            fmm.placement(kind),
+            Placement::Host,
+            "{kind}: T5 runs every kind on the host"
+        );
+    }
+    assert_eq!(report.info.backend.name(), backend.name());
+
+    // The build: the points in two uploads, the tables the report lists.
+    let s = size_of::<T>();
+    let build = fmm.device_counters().unwrap().build_traffic;
+    assert_eq!(
+        build.get(DataKind::Points),
+        Traffic {
+            uploads: 2,
+            upload_bytes: ((4 * fmm.nsources() + 3 * fmm.ntargets()) * s) as u64,
+            ..Traffic::default()
+        },
+        "{backend}: points uploaded at build"
+    );
+    let tables: u64 = report.tables.iter().map(|t| t.bytes).sum();
+    assert_eq!(
+        build.get(DataKind::Tables),
+        Traffic {
+            uploads: report.tables.len() as u64,
+            upload_bytes: tables,
+            ..Traffic::default()
+        },
+        "{backend}: tables uploaded at build"
+    );
+    assert!(build.get(DataKind::Indices).uploads > 0 && build.get(DataKind::Geometry).uploads == 2);
+    assert_eq!(
+        build.total().downloads,
+        0,
+        "{backend}: the build downloads nothing"
+    );
+
+    let expected = expected_evaluation(&fmm);
+    let second: Vec<T> = charges.iter().rev().copied().collect();
+    let host_second = host.evaluate(&second).expect("the host FMM evaluates");
+    for (what, q, want) in [
+        ("first charges", charges, host_output),
+        ("second charges", &second[..], &host_second),
+        ("first charges again", charges, host_output),
+    ] {
+        let output = fmm.evaluate(q).expect("the device FMM evaluates");
+        assert_same(&format!("{backend}, {what}"), &output, want);
+        check_evaluation_counters(&format!("{backend}, {what}"), &fmm, &expected);
+        let counters = fmm.device_counters().unwrap();
+        for data in [
+            DataKind::Points,
+            DataKind::Indices,
+            DataKind::Geometry,
+            DataKind::Tables,
+        ] {
+            assert_eq!(
+                counters.evaluation_traffic.get(data),
+                Traffic::default(),
+                "{backend}, {what}: {data} moved in an evaluation"
+            );
+        }
+    }
+    check_views(&mut fmm);
+    Outcome::Ran
+}

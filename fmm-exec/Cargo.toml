@@ -10,6 +10,19 @@ repository.workspace = true
 [lib]
 name = "nd_fmm_exec"
 
+# The device path (Phase 4, docs/design/device-path.md §3.4). No feature is on by
+# default, so the host path builds without CubeCL.
+[features]
+default = []
+# The device operator and the device backends' settings, through nd-fmm-kernels.
+gpu = ["dep:nd-fmm-kernels"]
+# The CubeCL CPU runtime; its build downloads the tracel-llvm bundle.
+cpu = ["gpu", "nd-fmm-kernels/cpu"]
+# Metal (wgpu with the MSL compiler): f32 only, run outside the macOS sandbox.
+metal = ["gpu", "nd-fmm-kernels/metal"]
+# CUDA: type-checked only.
+cuda = ["gpu", "nd-fmm-kernels/cuda"]
+
 [dependencies]
 nd-fmm-math = { workspace = true }
 nd-fmm-ref = { workspace = true }
@@ -21,6 +34,7 @@ mpi = { workspace = true }
 rlst = { workspace = true }
 rayon = { workspace = true }
 thiserror = { workspace = true }
+nd-fmm-kernels = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

@@ -2,12 +2,19 @@
 
 Purpose: every CubeCL (`#[cube]`) kernel of the FMM behind safe wrappers: backend
 selection and the f64 capability check, device buffers, the data movement primitives,
-and (from T6) the operator kernels (docs/design/device-path.md §3.1).
-Phase and components: Phase 4, C4.1 (T4) and C4.2–C4.6 (T6–T10) in docs/phase4/.
+the plan's views on the device (`view`, from T5), and (from T6) the operator kernels
+(docs/design/device-path.md §3.1).
+Phase and components: Phase 4, C4.1 (T4, T5) and C4.2–C4.6 (T6–T10) in docs/phase4/.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
   Device kernels follow §3.13, "Device kernels".
+- Views (`view`, T5): uploaded from plain `u32` arrays in the layout of the plan's
+  `Csr` and `GroupedCsr` (no `nd-fmm-plan` dependency), validated on the host, one
+  `IndexBuffer` per array (its bound covers the whole buffer); a malformed view panics.
+- CPU units: `Device::limit_units(n)` caps the units per cube of the CPU runtime's
+  elementwise launches (default `CPU_MAX_UNITS`); `nd-fmm-exec` passes `threads(n)`
+  (device-path.md §11). Every later CPU layout honours the cap.
 - Generic over the float type (`DeviceFloat`: f32, f64) and comptime parameters (p, n,
   layouts); the backend is a run-time value (`BackendKind`, `Device`), never an
   `R: Runtime` type parameter (device-path.md §3.2). Every kernel runs on every runtime;

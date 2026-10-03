@@ -18,8 +18,9 @@
 //!
 //! 1. Checks the settings (among them that this rank's CPU runs the P2P kernel), the MPI
 //!    threading level when `threads` > 1, the supplied domain ([`Domain::new`]) and that
-//!    every point is finite, builds the thread pool if `threads` > 1, and agrees the
-//!    outcome on every rank (one all-reduce).
+//!    every point is finite, builds the thread pool if `threads` > 1, opens the device
+//!    of a device [`Backend`] (compiled in, a device that comes up, the precision
+//!    supported), and agrees the outcome on every rank (one all-reduce).
 //! 2. Counts the points of all ranks (one all-reduce); none at all is an error.
 //! 3. Takes the supplied domain, or `compute_global_bounding_box` over the sources and
 //!    targets of every rank (after one all-reduce pair that rejects points spanning no
@@ -31,13 +32,18 @@
 //!    of its box index and lists.
 //! 5. Finds every point's leaf with `Octree::local_leaf`. If any rank has a point in a
 //!    leaf another rank owns, every rank returns [`FmmError::PointsNotOwned`] with the
-//!    global count (one all-reduce): points are not redistributed until C5.1.
+//!    global count (one all-reduce): points are not redistributed until C5.1. With a
+//!    device backend on more than one rank, every rank then returns
+//!    [`SettingsError::DeviceNeedsOneRank`], without a collective.
 //! 6. Sorts sources and targets into leaf order, stably, and keeps both permutations.
 //! 7. All-reduces the largest number of sources in a leaf, which sizes the P2P scratch;
-//!    builds or loads the tables, the operator, and the evaluator with the per-leaf
-//!    counts (its own collectives).
+//!    builds or loads the tables, the operator (with a device backend the device
+//!    operator around it, which checks that its buffers fit in device memory, allocates
+//!    them and uploads the views and tables), and the evaluator with the per-leaf counts
+//!    (its own collectives).
 //! 8. Writes the leaf-scaled source coordinates and target positions into the
-//!    evaluator's stores, once ([`leaf_coordinates`]).
+//!    evaluator's stores, once ([`leaf_coordinates`]), and with a device backend uploads
+//!    them to the device.
 //!
 //! It also reads the BLAS thread variables once, for [`Fmm::threading`].
 //!
@@ -78,6 +84,19 @@
 //! [`Threading::Funneled`] or above. The rules for threads, MPI and BLAS, and how to
 //! launch, are in [`threading`](crate::threading).
 //!
+//! # Backends (Phase 4)
+//!
+//! [`FmmBuilder::backend`] chooses where the operators run: [`Backend::Host`], the
+//! default and the host path above, or a device backend of the `gpu` feature
+//! ([`Backend::Cpu`], [`Backend::Metal`], [`Backend::Cuda`]). A device backend keeps
+//! the interface, the plan and the evaluator: the operator holds its data on the device,
+//! [`Fmm::evaluate`] tells it where an evaluation starts and reads its output once, and
+//! the output scaling is the same code. Every operator kind can run on the host
+//! fallback ([`OperatorKind`], [`Fmm::placement`]); in Phase 4 T5 every kind does, and
+//! the output equals the host path's bit for bit. The `device` module (feature `gpu`)
+//! documents the residency, the transfers, the fallback, the errors and the threads
+//! rule; docs/design/device-path.md is the design.
+//!
 //! # Redistribution (C5.1)
 //!
 //! Points and charges are taken, and potentials returned, in the caller's order, on the
@@ -97,6 +116,7 @@ use std::f64::consts::PI;
 use std::fmt;
 use std::marker::PhantomData;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -106,7 +126,9 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::{CommunicatorCollectives, Equivalence};
 use nd_fmm_math::RealScalar;
 use nd_fmm_plan::evaluator::{Evaluator, EvaluatorError};
+use nd_fmm_plan::operator::{FmmOperator, FmmSizes, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p};
 use nd_fmm_plan::plan::{Plan, PlanError};
+use nd_fmm_plan::store::LeafStore;
 use nd_fmm_tables::cache::{Stored, TableKind};
 use nd_fmm_tables::{CacheOutcome, TableCache};
 use nd_octree::constants::DEEPEST_LEVEL;
@@ -116,6 +138,8 @@ use rayon::{ThreadPool, ThreadPoolBuilder};
 use rlst::SliceArray;
 use thiserror::Error;
 
+#[cfg(feature = "gpu")]
+use crate::device::{self, DeviceCounters, DeviceDriver, DeviceOptions, DeviceReport, ViewsImage};
 use crate::geometry::{Domain, GeometryError, leaf_coordinates, radius};
 use crate::operator::{Isa, LaplaceOperator, P2pChoice, SimdScalar};
 use crate::tables::{M2lStrategy, Tables};
@@ -133,6 +157,165 @@ pub const DEFAULT_MAX_POINTS_PER_LEAF: usize = 64;
 
 /// The deepest level of a Morton key.
 const DEEPEST: usize = DEEPEST_LEVEL as usize;
+
+/// Where the operators of an FMM run (Phase 4; docs/design/device-path.md §3.3). Text
+/// form, for command lines: `host`, `cpu`, `metal`, `cuda`.
+///
+/// The enum exists without the `gpu` feature, so that a host-only build names a device
+/// backend and refuses it with [`SettingsError::BackendNotCompiled`] rather than failing
+/// to compile. The device path is the `device` module (feature `gpu`).
+///
+/// ```
+/// use nd_fmm_exec::fmm::Backend;
+///
+/// assert_eq!(Backend::default(), Backend::Host);
+/// assert_eq!("metal".parse(), Ok(Backend::Metal));
+/// assert_eq!(Backend::Cpu.to_string(), "cpu");
+/// assert!(Backend::Host.is_compiled());
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Backend {
+    /// The host path: [`LaplaceOperator`] on the calling thread or the `Fmm`'s pool.
+    #[default]
+    Host,
+    /// The CubeCL CPU runtime (feature `cpu`): f32 and f64, the correctness backend.
+    Cpu,
+    /// Metal, wgpu with the MSL compiler (feature `metal`): f32 only.
+    Metal,
+    /// CUDA (feature `cuda`): type-checked, never run here.
+    Cuda,
+}
+
+impl Backend {
+    /// Every backend, in report order.
+    pub const ALL: [Self; 4] = [Self::Host, Self::Cpu, Self::Metal, Self::Cuda];
+
+    /// The text form: `host`, `cpu`, `metal` or `cuda`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Host => "host",
+            Self::Cpu => "cpu",
+            Self::Metal => "metal",
+            Self::Cuda => "cuda",
+        }
+    }
+
+    /// True for every backend but [`Host`](Self::Host).
+    pub fn is_device(self) -> bool {
+        self != Self::Host
+    }
+
+    /// True if this build can run the backend: always for [`Host`](Self::Host), and for
+    /// a device backend if its cargo feature is enabled.
+    pub fn is_compiled(self) -> bool {
+        match self {
+            Self::Host => true,
+            Self::Cpu => cfg!(feature = "cpu"),
+            Self::Metal => cfg!(feature = "metal"),
+            Self::Cuda => cfg!(feature = "cuda"),
+        }
+    }
+}
+
+impl fmt::Display for Backend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// The error of parsing a [`Backend`] from text it does not name.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[error("`{text}` is not a backend; expected `host`, `cpu`, `metal` or `cuda`")]
+pub struct UnknownBackend {
+    /// The text that was parsed.
+    pub text: String,
+}
+
+/// Parses the [`Display`](fmt::Display) form, whether or not the backend is compiled in.
+impl FromStr for Backend {
+    type Err = UnknownBackend;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|backend| backend.name() == s)
+            .ok_or_else(|| UnknownBackend { text: s.to_owned() })
+    }
+}
+
+/// One operator kind, for the placement of the device path and for reports
+/// (docs/design/device-path.md §7.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum OperatorKind {
+    /// P2M.
+    P2m,
+    /// M2M, both passes.
+    M2m,
+    /// M2L.
+    M2l,
+    /// P2L.
+    P2l,
+    /// L2L.
+    L2l,
+    /// L2P.
+    L2p,
+    /// M2P.
+    M2p,
+    /// P2P.
+    P2p,
+}
+
+impl OperatorKind {
+    /// Every kind, in the order of the operator interface.
+    pub const ALL: [Self; 8] = [
+        Self::P2m,
+        Self::M2m,
+        Self::M2l,
+        Self::P2l,
+        Self::L2l,
+        Self::L2p,
+        Self::M2p,
+        Self::P2p,
+    ];
+
+    /// The name: `P2M`, `M2M`, …
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::P2m => "P2M",
+            Self::M2m => "M2M",
+            Self::M2l => "M2L",
+            Self::P2l => "P2L",
+            Self::L2l => "L2L",
+            Self::L2p => "L2P",
+            Self::M2p => "M2P",
+            Self::P2p => "P2P",
+        }
+    }
+}
+
+impl fmt::Display for OperatorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// Where an operator kind runs ([`Fmm::placement`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Placement {
+    /// On the host: the host path, or the host fallback of a device backend.
+    Host,
+    /// On the device, by a kernel of `nd-fmm-kernels`.
+    Device,
+}
+
+impl fmt::Display for Placement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Host => "host",
+            Self::Device => "device",
+        })
+    }
+}
 
 /// A setting of [`FmmBuilder`] that [`FmmBuilder::build`] rejects.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
@@ -161,6 +344,42 @@ pub enum SettingsError {
     P2pIsaUnavailable {
         /// The requested instruction set.
         isa: Isa,
+    },
+    /// The backend's cargo feature is not enabled in this build ([`Backend::is_compiled`]).
+    #[error("backend {backend} is not compiled in (enable the `{backend}` feature)")]
+    BackendNotCompiled {
+        /// The requested backend.
+        backend: Backend,
+    },
+    /// The backend is compiled in, but no device came up (no adapter, Metal inside the
+    /// macOS sandbox, or Metal without the MSL compiler). The reason is not carried, so
+    /// the error stays `Copy`; `Backend::probe` (feature `gpu`) returns it.
+    #[error("no {backend} device could be opened")]
+    NoDevice {
+        /// The requested backend.
+        backend: Backend,
+    },
+    /// The device does no arithmetic in the FMM's precision (f64 on Metal).
+    #[error("the {backend} device does not support this precision")]
+    PrecisionUnsupported {
+        /// The requested backend.
+        backend: Backend,
+    },
+    /// The device buffers of the FMM do not fit in the memory the device reports as
+    /// available; nothing was allocated.
+    #[error("the FMM needs {needed} bytes on the device, {limit} bytes are available")]
+    DeviceMemory {
+        /// The bytes of every device buffer.
+        needed: u64,
+        /// The bytes available.
+        limit: u64,
+    },
+    /// A device backend on more than one rank: the device path runs on one rank until
+    /// C5.1 (docs/design/device-path.md §4.4). Returned on every rank.
+    #[error("a device backend runs on one rank, not {ranks}, until C5.1")]
+    DeviceNeedsOneRank {
+        /// The number of ranks.
+        ranks: usize,
     },
 }
 
@@ -265,6 +484,11 @@ pub enum FmmError {
     /// The thread pool could not be built.
     #[error("building the thread pool failed: {0}")]
     ThreadPool(String),
+    /// A device operation failed after the settings were accepted: an allocation or
+    /// upload at build, or a launch or transfer of an evaluation. An `Fmm` whose
+    /// evaluation failed returns it from every later evaluation.
+    #[error("device error: {0}")]
+    Device(String),
     /// The input is invalid on another rank.
     #[error("the input is invalid on another rank")]
     OtherRank,
@@ -283,6 +507,9 @@ pub enum FmmError {
 /// | [`table_cache`](Self::table_cache) | none: tables are built |
 /// | [`threads`](Self::threads) | 1: no pool, the calling thread |
 /// | [`p2p_kernel`](Self::p2p_kernel) | [`P2pChoice::Auto`]: the kernel of `nd-fmm-simd` on the widest ISA of this machine |
+/// | [`backend`](Self::backend) | [`Backend::Host`]: the host path |
+/// | [`host_fallback`](Self::host_fallback) | none |
+/// | [`synchronous_stages`](Self::synchronous_stages) | off |
 ///
 /// For `T = f32`, p > 8 is accepted but lies beyond the useful range (design §4): the
 /// error is then at the f32 floor already.
@@ -297,6 +524,9 @@ pub struct FmmBuilder<T> {
     table_cache: Option<PathBuf>,
     threads: usize,
     p2p: P2pChoice,
+    backend: Backend,
+    host_fallback: Vec<OperatorKind>,
+    synchronous_stages: bool,
     value: PhantomData<fn() -> T>,
 }
 
@@ -313,6 +543,9 @@ impl<T> FmmBuilder<T> {
             table_cache: None,
             threads: 1,
             p2p: P2pChoice::Auto,
+            backend: Backend::Host,
+            host_fallback: Vec::new(),
+            synchronous_stages: false,
             value: PhantomData,
         }
     }
@@ -384,6 +617,40 @@ impl<T> FmmBuilder<T> {
         self
     }
 
+    /// Sets where the operators run ([`Backend`]; default [`Backend::Host`], the host
+    /// path, which no other setting of a device backend changes).
+    ///
+    /// [`build`](Self::build) refuses a device backend that is not compiled in
+    /// ([`SettingsError::BackendNotCompiled`]), whose device cannot be opened
+    /// ([`SettingsError::NoDevice`]) or does not do arithmetic in `T`
+    /// ([`SettingsError::PrecisionUnsupported`], f64 on Metal), or whose buffers do not
+    /// fit in device memory ([`SettingsError::DeviceMemory`]); on more than one rank it
+    /// returns [`SettingsError::DeviceNeedsOneRank`] (docs/design/device-path.md §4.4).
+    /// With [`Backend::Cpu`], `threads(n)` builds no rayon pool and caps the units per
+    /// cube of the CPU runtime instead (the `device` module, "Threads").
+    pub fn backend(mut self, backend: Backend) -> Self {
+        self.backend = backend;
+        self
+    }
+
+    /// Runs these operator kinds on the host fallback even with a device backend: a
+    /// test aid (requirement 8 of docs/phase4/README.md). Kinds without a device kernel
+    /// yet fall back regardless; in Phase 4 T5 that is every kind. Ignored by
+    /// [`Backend::Host`].
+    pub fn host_fallback(mut self, kinds: impl IntoIterator<Item = OperatorKind>) -> Self {
+        self.host_fallback = kinds.into_iter().collect();
+        self
+    }
+
+    /// With a device backend, synchronises with the device after the charge upload and
+    /// after every stage, so that [`StageTimings`] time each stage rather than its
+    /// enqueueing (docs/design/device-path.md §8.3). Seven more syncs per evaluation, and
+    /// the same output: for reports only, off by default. Ignored by [`Backend::Host`].
+    pub fn synchronous_stages(mut self, on: bool) -> Self {
+        self.synchronous_stages = on;
+        self
+    }
+
     /// Checks the settings that do not depend on the input; whether this machine can
     /// run the P2P kernel depends on the rank's CPU.
     fn check_settings(&self) -> Result<(), SettingsError> {
@@ -407,10 +674,20 @@ impl<T> FmmBuilder<T> {
         Ok(())
     }
 
-    /// With more than one thread: checks that MPI provides `provided` ≥
+    /// The rayon threads of the level calls: `threads`, but 1 with [`Backend::Cpu`],
+    /// which builds no pool (docs/design/device-path.md §11).
+    fn rayon_threads(&self) -> usize {
+        if self.backend == Backend::Cpu {
+            1
+        } else {
+            self.threads
+        }
+    }
+
+    /// With more than one rayon thread: checks that MPI provides `provided` ≥
     /// [`REQUIRED_MPI_THREADING`] and builds the pool.
     fn pool(&self, provided: Threading) -> Result<Option<Arc<ThreadPool>>, FmmError> {
-        if self.threads == 1 {
+        if self.rayon_threads() == 1 {
             return Ok(None);
         }
         if provided < REQUIRED_MPI_THREADING {
@@ -465,7 +742,12 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         // needs no collective of its own; it rides on this step's agreement, which also
         // covers a pool that fails to build on one rank. Every collective of the build
         // and of `evaluate` runs on this thread; the pool's threads never call MPI.
+        //
+        // A device backend is opened here, so that a backend not compiled in, a device
+        // that does not come up and a precision it does not support are input errors of
+        // this rank, agreed by the same all-reduce (docs/design/device-path.md §5.2).
         let provided = mpi::environment::threading_support();
+        let mut open_time = Duration::ZERO;
         let local = self
             .check_settings()
             .map_err(FmmError::from)
@@ -474,10 +756,14 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
                 check_finite(sources, PointSet::Sources)?;
                 check_finite(targets, PointSet::Targets)?;
                 let supplied = self.domain.map(|c| Domain::new(&PhysicalBox::new(c)));
-                Ok((pool, supplied.transpose()?))
+                let supplied = supplied.transpose()?;
+                let start = Instant::now();
+                let device = open_device::<T>(self.backend, self.threads)?;
+                open_time = start.elapsed();
+                Ok((pool, supplied, device))
             });
-        let (pool, supplied) = agree(comm, local)?;
-        let threading = ThreadingReport::read(self.threads, provided);
+        let (pool, supplied, device) = agree(comm, local)?;
+        let threading = ThreadingReport::read(self.rayon_threads(), provided);
 
         // Step 2: are there points at all?
         let mut total = 0u64;
@@ -542,6 +828,14 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         if count > 0 {
             return Err(FmmError::PointsNotOwned { count });
         }
+        // The device path runs on one rank until C5.1. Every rank sees the same size, so
+        // every rank returns here and no collective is skipped (device-path.md §4.4).
+        if self.backend.is_device() && comm.size() > 1 {
+            return Err(SettingsError::DeviceNeedsOneRank {
+                ranks: comm.size() as usize,
+            }
+            .into());
+        }
 
         // Step 6: leaf order, stable.
         let (source_leaves, target_leaves) = leaves.split_at(sources.len());
@@ -570,6 +864,15 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         if let Some(pool) = pool {
             operator = operator.with_pool(pool);
         }
+        let start_device = Instant::now();
+        let operator = self.exec_operator(
+            operator,
+            device,
+            &plan,
+            &sources_by_leaf.counts,
+            &targets_by_leaf.counts,
+        )?;
+        let mut device_time = open_time + start_device.elapsed();
         let mut evaluator = Evaluator::new(
             plan,
             comm,
@@ -578,7 +881,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             &targets_by_leaf.counts,
         )
         .map_err(FmmError::Evaluator)?;
-        let evaluator_time = start.elapsed();
+        let evaluator_time = start.elapsed().saturating_sub(device_time - open_time);
 
         // Step 8: the leaf-scaled coordinates, once.
         let start = Instant::now();
@@ -603,12 +906,31 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             }
         }
         let load_time = start.elapsed();
+        // The device's copy of the points, from copies of the stores: the store accessors
+        // and `operator_mut` cannot borrow the evaluator at once (device-path.md §4.3).
+        let start = Instant::now();
+        if evaluator.operator().is_device() {
+            let stores = (
+                evaluator.source_store().clone(),
+                evaluator.target_input_store().clone(),
+            );
+            evaluator.operator_mut().load_points(&stores.0, &stores.1)?;
+        }
+        device_time += start.elapsed();
 
         Ok(Fmm {
             octree,
             evaluator,
             domain,
             strategy: self.strategy.resolve(self.p),
+            backend: self.backend,
+            synchronous_stages: self.synchronous_stages && self.backend.is_device(),
+            leaf_charges: if self.backend.is_device() {
+                vec![T::default(); sources_by_leaf.len()]
+            } else {
+                Vec::new()
+            },
+            device_error: None,
             sources: sources_by_leaf,
             targets: targets_by_leaf,
             radii,
@@ -616,17 +938,204 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             cache_outcomes,
             threading,
             build_timings: BuildTimings {
-                domain: domain_time,
+                domain: domain_time.saturating_sub(open_time),
                 octree: octree_time,
                 plan: plan_time,
                 sort: sort_time,
                 tables: tables_time,
                 evaluator: evaluator_time,
                 load: load_time,
+                device: device_time,
             },
         })
     }
+
+    /// The operator of the evaluator: the host operator, or with a device backend the
+    /// device operator that wraps it.
+    #[cfg_attr(not(feature = "gpu"), allow(clippy::unnecessary_wraps))]
+    fn exec_operator(
+        &self,
+        operator: LaplaceOperator<T>,
+        device: Option<OpenedDevice>,
+        plan: &Plan,
+        source_counts: &[usize],
+        target_counts: &[usize],
+    ) -> Result<ExecOperator<T>, FmmError> {
+        match device {
+            None => Ok(ExecOperator::Host(operator)),
+            #[cfg(feature = "gpu")]
+            Some(device) => {
+                let options = DeviceOptions {
+                    host_fallback: self.host_fallback.clone(),
+                    table_cache: self.table_cache.clone(),
+                };
+                let driver = device::driver(
+                    operator,
+                    device,
+                    plan,
+                    source_counts,
+                    target_counts,
+                    &options,
+                )?;
+                Ok(ExecOperator::Device(driver))
+            }
+            #[cfg(not(feature = "gpu"))]
+            Some(never) => {
+                let _ = (plan, source_counts, target_counts);
+                match never {}
+            }
+        }
+    }
 }
+
+/// An opened device: `nd_fmm_kernels::Device` with the `gpu` feature; without it no
+/// device can be opened, and the type has no value.
+#[cfg(feature = "gpu")]
+type OpenedDevice = nd_fmm_kernels::Device;
+#[cfg(not(feature = "gpu"))]
+type OpenedDevice = std::convert::Infallible;
+
+/// Opens the device of `backend` at step 1 of the build; `None` for the host.
+#[cfg(feature = "gpu")]
+fn open_device<T: Stored>(
+    backend: Backend,
+    threads: usize,
+) -> Result<Option<OpenedDevice>, SettingsError> {
+    device::open_device::<T>(backend, threads)
+}
+
+/// Without the `gpu` feature only the host runs: every device backend is not compiled
+/// in.
+#[cfg(not(feature = "gpu"))]
+#[expect(
+    clippy::extra_unused_type_parameters,
+    reason = "the signature of the `gpu` build, which checks T's precision"
+)]
+fn open_device<T: Stored>(
+    backend: Backend,
+    _threads: usize,
+) -> Result<Option<OpenedDevice>, SettingsError> {
+    match backend {
+        Backend::Host => Ok(None),
+        _ => Err(SettingsError::BackendNotCompiled { backend }),
+    }
+}
+
+/// The evaluator of an [`Fmm`], which owns its plan.
+type FmmEvaluator<'o, C, T> = Evaluator<'o, C, ExecOperator<T>, Plan>;
+
+/// The operator of the evaluator: [`LaplaceOperator`] on the host path, or the device
+/// operator (feature `gpu`), which wraps one for its host fallback
+/// (docs/design/device-path.md §3.3). Every call is delegated; without `gpu` the enum
+/// has the host variant only.
+#[cfg_attr(
+    feature = "gpu",
+    expect(
+        clippy::large_enum_variant,
+        reason = "one per Fmm; boxing the host operator would add an indirection to every \
+                  level call of the host path"
+    )
+)]
+enum ExecOperator<T: SimdScalar + Stored + Equivalence + Default> {
+    Host(LaplaceOperator<T>),
+    #[cfg(feature = "gpu")]
+    Device(Box<dyn DeviceDriver<T>>),
+}
+
+impl<T: SimdScalar + Stored + Equivalence + Default> ExecOperator<T> {
+    /// The host operator, or the device operator's fallback operator.
+    fn host(&self) -> &LaplaceOperator<T> {
+        match self {
+            Self::Host(operator) => operator,
+            #[cfg(feature = "gpu")]
+            Self::Device(driver) => driver.host(),
+        }
+    }
+
+    /// The host operator, mutably.
+    fn host_mut(&mut self) -> &mut LaplaceOperator<T> {
+        match self {
+            Self::Host(operator) => operator,
+            #[cfg(feature = "gpu")]
+            Self::Device(driver) => driver.host_mut(),
+        }
+    }
+
+    /// True for the device operator.
+    fn is_device(&self) -> bool {
+        !matches!(self, Self::Host(_))
+    }
+
+    /// Uploads the points to the device; nothing on the host.
+    #[cfg_attr(not(feature = "gpu"), allow(clippy::unnecessary_wraps))]
+    fn load_points(
+        &mut self,
+        sources: &LeafStore<T>,
+        target_input: &LeafStore<T>,
+    ) -> Result<(), FmmError> {
+        match self {
+            Self::Host(_) => {
+                let _ = (sources, target_input);
+                Ok(())
+            }
+            #[cfg(feature = "gpu")]
+            Self::Device(driver) => driver.load_points(sources, target_input),
+        }
+    }
+
+    /// Waits for the device; nothing on the host.
+    fn sync(&mut self) {
+        match self {
+            Self::Host(_) => {}
+            #[cfg(feature = "gpu")]
+            Self::Device(driver) => driver.sync(),
+        }
+    }
+}
+
+/// Delegates to the variant.
+impl<T: SimdScalar + Stored + Equivalence + Default> FmmSizes for ExecOperator<T> {
+    type Value = T;
+
+    fn multipole_size(&self, level: usize) -> usize {
+        self.host().multipole_size(level)
+    }
+
+    fn local_size(&self, level: usize) -> usize {
+        self.host().local_size(level)
+    }
+
+    fn source_point_size(&self) -> usize {
+        self.host().source_point_size()
+    }
+
+    fn target_input_point_size(&self) -> usize {
+        self.host().target_input_point_size()
+    }
+
+    fn target_output_point_size(&self) -> usize {
+        self.host().target_output_point_size()
+    }
+}
+
+/// Calls the variant's method of every level call.
+macro_rules! delegate {
+    ($($kind:ident: $batch:ident),* $(,)?) => {
+        impl<T: SimdScalar + Stored + Equivalence + Default> FmmOperator for ExecOperator<T> {
+            $(
+                fn $kind(&mut self, batch: $batch<'_, T>) {
+                    match self {
+                        Self::Host(operator) => operator.$kind(batch),
+                        #[cfg(feature = "gpu")]
+                        Self::Device(driver) => driver.$kind(batch),
+                    }
+                }
+            )*
+        }
+    };
+}
+
+delegate!(p2m: P2m, m2m: M2m, m2l: M2l, p2l: P2l, l2l: L2l, l2p: L2p, m2p: M2p, p2p: P2p);
 
 /// Returns `local` on this rank if every rank's `local` is `Ok`, and otherwise an error
 /// on every rank: this rank's own, or [`FmmError::OtherRank`]. One all-reduce.
@@ -760,12 +1269,22 @@ pub struct BuildTimings {
     pub evaluator: Duration,
     /// Step 8: the leaf-scaled coordinates.
     pub load: Duration,
+    /// With a device backend: opening the device, the device operator (its tables and
+    /// uploads) and the upload of the points; zero on the host.
+    pub device: Duration,
 }
 
 impl BuildTimings {
     /// The sum of all steps.
     pub fn total(&self) -> Duration {
-        self.domain + self.octree + self.plan + self.sort + self.tables + self.evaluator + self.load
+        self.domain
+            + self.octree
+            + self.plan
+            + self.sort
+            + self.tables
+            + self.evaluator
+            + self.load
+            + self.device
     }
 }
 
@@ -773,9 +1292,19 @@ impl BuildTimings {
 ///
 /// The six evaluator stages are those of `nd_fmm_plan::evaluator`; the collective ones
 /// include the time spent waiting for other ranks.
+///
+/// With a device backend each stage is timed on the host as it is called, which
+/// measures the time to *enqueue* its launches, not their run time: the device's work
+/// shows in [`output`](Self::output), which contains the evaluation's one waiting
+/// download (docs/design/device-path.md §8.3).
+/// [`FmmBuilder::synchronous_stages`] waits for the device after every stage, so that
+/// each stage is timed whole, at the cost of a sync per stage. Host-fallback calls wait
+/// for the device themselves (their downloads), and while every kind runs on the host
+/// fallback (Phase 4 T5) their transfers dominate the stages.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct StageTimings {
-    /// Writing the charges into the source chunks.
+    /// Writing the charges into the source chunks; with a device backend also zeroing
+    /// the device stores and uploading and scattering the charges.
     pub load: Duration,
     /// Stage 1: the source exchange (collective).
     pub exchange_sources: Duration,
@@ -789,7 +1318,8 @@ pub struct StageTimings {
     pub downward: Duration,
     /// Stage 6: L2P, M2P and P2P.
     pub evaluate_leaves: Duration,
-    /// Scaling the target output into the caller's order.
+    /// Scaling the target output into the caller's order; with a device backend also
+    /// downloading it.
     pub output: Duration,
 }
 
@@ -843,9 +1373,16 @@ where
     C: CommunicatorCollectives,
 {
     octree: Octree<'o, C>,
-    evaluator: Evaluator<'o, C, LaplaceOperator<T>, Plan>,
+    evaluator: FmmEvaluator<'o, C, T>,
     domain: Domain,
     strategy: M2lStrategy,
+    backend: Backend,
+    /// With a device backend: sync after every stage.
+    synchronous_stages: bool,
+    /// With a device backend: the charges of an evaluation in leaf order, for the upload.
+    leaf_charges: Vec<T>,
+    /// The failure of a device evaluation, returned by every later evaluation.
+    device_error: Option<String>,
     sources: LeafOrder,
     targets: LeafOrder,
     /// r_t of every local leaf.
@@ -875,7 +1412,9 @@ where
     /// # Errors
     ///
     /// [`FmmError::ChargesLength`] on a rank whose `charges` does not have one entry per
-    /// source, [`FmmError::OtherRank`] on the others; nothing is evaluated.
+    /// source, [`FmmError::OtherRank`] on the others; nothing is evaluated. With a
+    /// device backend, [`FmmError::Device`] if a device operation of this or an earlier
+    /// evaluation failed.
     pub fn evaluate(&mut self, charges: &[T]) -> Result<Output<T>, FmmError> {
         let local = if charges.len() == self.sources.len() {
             Ok(())
@@ -886,59 +1425,80 @@ where
             })
         };
         agree(self.evaluator.comm(), local)?;
+        // A device runs on one rank, so this return skips no collective of another rank.
+        if let Some(reason) = &self.device_error {
+            return Err(FmmError::Device(reason.clone()));
+        }
 
         let mut timings = StageTimings::default();
         let start = Instant::now();
         let mut chunks = self.evaluator.local_sources_mut();
+        let mut leaf_charges = self.leaf_charges.iter_mut();
         for (j, chunk) in chunks.chunks_mut().enumerate() {
             let points = self.sources.points(j);
             let (_, values) = chunk.split_at_mut(3 * points.len());
             for (q, &i) in values.iter_mut().zip(points) {
                 *q = charges[i];
+                if let Some(slot) = leaf_charges.next() {
+                    *slot = charges[i];
+                }
             }
         }
         timings.load = start.elapsed();
 
+        let sync = self.synchronous_stages;
         let evaluator = &mut self.evaluator;
         evaluator.reset();
-        timings.exchange_sources = timed(|| evaluator.exchange_sources());
-        timings.upward_local = timed(|| evaluator.upward_local());
-        timings.upward_global = timed(|| evaluator.upward_global());
-        timings.exchange_multipoles = timed(|| evaluator.exchange_multipoles());
-        timings.downward = timed(|| evaluator.downward());
-        timings.evaluate_leaves = timed(|| evaluator.evaluate_leaves());
+        #[cfg(feature = "gpu")]
+        if let ExecOperator::Device(driver) = evaluator.operator_mut() {
+            let leaf_charges = &self.leaf_charges;
+            timings.load += timed(|| {
+                driver.begin_evaluation(leaf_charges);
+                if sync {
+                    driver.sync();
+                }
+            });
+        }
+        let mut stage = |run: &mut dyn FnMut(&mut FmmEvaluator<'o, C, T>)| {
+            timed(|| {
+                run(evaluator);
+                if sync {
+                    evaluator.operator_mut().sync();
+                }
+            })
+        };
+        timings.exchange_sources = stage(&mut |e| e.exchange_sources());
+        timings.upward_local = stage(&mut |e| e.upward_local());
+        timings.upward_global = stage(&mut |e| e.upward_global());
+        timings.exchange_multipoles = stage(&mut |e| e.exchange_multipoles());
+        timings.downward = stage(&mut |e| e.downward());
+        timings.evaluate_leaves = stage(&mut |e| e.evaluate_leaves());
 
         let start = Instant::now();
-        let (potential, gradient) = self.output();
+        let gradients = self.gradients();
+        let (potential, gradient) = match self.evaluator.operator_mut() {
+            ExecOperator::Host(_) => scaled_output(
+                self.evaluator.target_output_store(),
+                &self.targets,
+                &self.radii,
+                gradients,
+            ),
+            #[cfg(feature = "gpu")]
+            ExecOperator::Device(driver) => match driver.read_output() {
+                Ok(store) => scaled_output(store, &self.targets, &self.radii, gradients),
+                Err(error) => {
+                    let reason = error.to_string();
+                    self.device_error = Some(reason.clone());
+                    return Err(FmmError::Device(reason));
+                }
+            },
+        };
         timings.output = start.elapsed();
         Ok(Output {
             potential,
             gradient,
             timings,
         })
-    }
-
-    /// The target output of the last evaluation, scaled (CONVENTIONS §3.13, "Output")
-    /// and in the caller's order.
-    fn output(&self) -> (Vec<T>, Option<Vec<[T; 3]>>) {
-        let ntargets = self.targets.len();
-        let mut potential = vec![T::zero(); ntargets];
-        let mut gradient = self.gradients().then(|| vec![[T::zero(); 3]; ntargets]);
-        let store = self.evaluator.target_output_store();
-        for (j, &r) in self.radii.iter().enumerate() {
-            let points = self.targets.points(j);
-            let (phi_hat, g_hat) = store.chunk(j).split_at(points.len());
-            let (phi_scale, g_scale) = (4.0 * PI * r, 4.0 * PI * r * r);
-            for (&phi, &i) in phi_hat.iter().zip(points) {
-                potential[i] = T::from_f64(RealScalar::to_f64(phi) / phi_scale);
-            }
-            if let Some(gradient) = gradient.as_mut() {
-                for (g, &i) in g_hat.as_chunks::<3>().0.iter().zip(points) {
-                    gradient[i] = g.map(|gk| T::from_f64(RealScalar::to_f64(gk) / g_scale));
-                }
-            }
-        }
-        (potential, gradient)
     }
 
     /// Returns the octree.
@@ -951,9 +1511,29 @@ where
         self.evaluator.plan()
     }
 
-    /// Returns the operator.
+    /// Returns the operator: the host operator, or with a device backend the operator
+    /// of its host fallback.
     pub fn operator(&self) -> &LaplaceOperator<T> {
-        self.evaluator.operator()
+        self.evaluator.operator().host()
+    }
+
+    /// Returns the backend the operators run on ([`FmmBuilder::backend`]).
+    pub fn backend(&self) -> Backend {
+        self.backend
+    }
+
+    /// Returns where `kind` runs: on the host for [`Backend::Host`]; with a device
+    /// backend as its device report says (in Phase 4 T5 every kind runs on the host
+    /// fallback).
+    pub fn placement(&self, kind: OperatorKind) -> Placement {
+        match self.evaluator.operator() {
+            ExecOperator::Host(_) => {
+                let _ = kind;
+                Placement::Host
+            }
+            #[cfg(feature = "gpu")]
+            ExecOperator::Device(driver) => driver.report().placement(kind),
+        }
     }
 
     /// Returns the domain.
@@ -1054,8 +1634,80 @@ where
     /// has a pool ([`LaplaceOperator::set_serial`]): the serial path of the same build,
     /// for comparisons and timings. The output is the same bit for bit.
     pub fn set_serial(&mut self, serial: bool) {
-        self.evaluator.operator_mut().set_serial(serial);
+        self.evaluator.operator_mut().host_mut().set_serial(serial);
     }
+}
+
+/// The device path's reports (feature `gpu`).
+#[cfg(feature = "gpu")]
+impl<'o, T, C> Fmm<'o, T, C>
+where
+    T: Stored + SimdScalar + Equivalence + Default,
+    C: CommunicatorCollectives,
+{
+    /// With a device backend: the device, the placement of every operator kind, the
+    /// tables on the device and the memory ([`DeviceReport`]); `None` on the host.
+    pub fn device_report(&self) -> Option<&DeviceReport> {
+        match self.evaluator.operator() {
+            ExecOperator::Device(driver) => Some(driver.report()),
+            ExecOperator::Host(_) => None,
+        }
+    }
+
+    /// With a device backend: the transfers, launches and syncs of the build and of the
+    /// last evaluation ([`DeviceCounters`]); `None` on the host.
+    pub fn device_counters(&self) -> Option<DeviceCounters> {
+        match self.evaluator.operator() {
+            ExecOperator::Device(driver) => Some(driver.counters()),
+            ExecOperator::Host(_) => None,
+        }
+    }
+
+    /// With a device backend: downloads every plan view, the geometry and the index
+    /// arrays from the device, for tests and reports ([`ViewsImage`]); `None` on the
+    /// host. Its transfers count toward the evaluation counters until the next
+    /// evaluation.
+    ///
+    /// # Errors
+    ///
+    /// [`FmmError::Device`] if a download fails.
+    pub fn download_device_views(&mut self) -> Option<Result<ViewsImage, FmmError>> {
+        match self.evaluator.operator_mut() {
+            ExecOperator::Device(driver) => Some(
+                driver
+                    .download_views()
+                    .map_err(|error| FmmError::Device(error.to_string())),
+            ),
+            ExecOperator::Host(_) => None,
+        }
+    }
+}
+
+/// The target output `store`, scaled (CONVENTIONS §3.13, "Output") and in the caller's
+/// order of `targets`, with r_t of every local leaf in `radii`.
+fn scaled_output<T: SimdScalar + Default>(
+    store: &LeafStore<T>,
+    targets: &LeafOrder,
+    radii: &[f64],
+    gradients: bool,
+) -> (Vec<T>, Option<Vec<[T; 3]>>) {
+    let ntargets = targets.len();
+    let mut potential = vec![T::zero(); ntargets];
+    let mut gradient = gradients.then(|| vec![[T::zero(); 3]; ntargets]);
+    for (j, &r) in radii.iter().enumerate() {
+        let points = targets.points(j);
+        let (phi_hat, g_hat) = store.chunk(j).split_at(points.len());
+        let (phi_scale, g_scale) = (4.0 * PI * r, 4.0 * PI * r * r);
+        for (&phi, &i) in phi_hat.iter().zip(points) {
+            potential[i] = T::from_f64(RealScalar::to_f64(phi) / phi_scale);
+        }
+        if let Some(gradient) = gradient.as_mut() {
+            for (g, &i) in g_hat.as_chunks::<3>().0.iter().zip(points) {
+                gradient[i] = g.map(|gk| T::from_f64(RealScalar::to_f64(gk) / g_scale));
+            }
+        }
+    }
+    (potential, gradient)
 }
 
 /// Runs `stage` and returns its wall time.

@@ -15,3 +15,4 @@ mod capability;
 mod movement;
 mod properties;
 mod round_trip;
+mod views;

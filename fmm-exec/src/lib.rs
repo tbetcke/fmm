@@ -7,7 +7,8 @@
 //! operator on the plan's level-batched interface (from the tables of `nd-fmm-tables`,
 //! the leaf operators of `nd-fmm-ref` and the SIMD P2P kernel of `nd-fmm-simd`), and the
 //! user-facing FMM object. It is generic over f32 and f64 ([`RealScalar`] and
-//! `nd_fmm_simd::SimdScalar`). The device path follows in Phase 4.
+//! `nd_fmm_simd::SimdScalar`). With the `gpu` feature it also has a device path
+//! (Phase 4): the same FMM with its operators on a device of `nd-fmm-kernels`.
 //!
 //! ## Conventions
 //!
@@ -70,6 +71,38 @@
 //!   optionally on several threads (C3.5).
 //! - [`threading`]: the rules for rayon threads, MPI and BLAS, how to launch with one
 //!   BLAS thread, and the [`ThreadingReport`](threading::ThreadingReport) of an FMM.
+//! - `device` (feature `gpu`): the device path, `DeviceOperator`, its report and its
+//!   transfer accounting (C4.1).
+//!
+//! ## Device path (feature `gpu`)
+//!
+//! | Feature | Enables |
+//! | --- | --- |
+//! | `gpu` | `nd-fmm-kernels`, the `device` module and the device backends' settings |
+//! | `cpu` | `gpu` and the CubeCL CPU runtime ([`Backend::Cpu`](fmm::Backend::Cpu)): f32 and f64, the correctness backend |
+//! | `metal` | `gpu` and Metal ([`Backend::Metal`](fmm::Backend::Metal)): f32 only, run outside the macOS sandbox |
+//! | `cuda` | `gpu` and CUDA ([`Backend::Cuda`](fmm::Backend::Cuda)): type-checked only |
+//!
+//! None is on by default, and [`Backend::Host`](fmm::Backend::Host) stays the default
+//! backend, so the host path builds and runs exactly as without the features. The
+//! `device` module documents:
+//!
+//! - **residency**: views, geometry and tables uploaded once per `Fmm`, the points
+//!   once per build, the charges once and the output once per evaluation; nothing is
+//!   allocated on the device during an evaluation;
+//! - **host fallback**: every operator kind can run on the host with explicit
+//!   transfers; in Phase 4 T5 every kind does, and the output equals the host path's
+//!   bit for bit;
+//! - **determinism**: every launch and transfer is issued from the calling thread, in
+//!   order on one stream; two evaluations are bit-identical;
+//! - **errors**: device settings are refused at build with a
+//!   [`SettingsError`](fmm::SettingsError) agreed by step 1's all-reduce; a device runs on
+//!   one rank until C5.1; device failures are [`FmmError::Device`](fmm::FmmError::Device);
+//! - **threads**: with the CPU runtime no rayon pool, `threads(n)` caps its units per
+//!   cube; with Metal or CUDA the pool serves the host-fallback kinds only.
+//!
+//! `nd-fmm-exec` stays free of `unsafe` and reaches CubeCL only through
+//! `nd-fmm-kernels`.
 //!
 //! ## Example
 //!
@@ -115,6 +148,8 @@
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 //! [`RealScalar`]: nd_fmm_math::RealScalar
 
+#[cfg(feature = "gpu")]
+pub mod device;
 pub mod fmm;
 pub mod geometry;
 pub mod operator;
