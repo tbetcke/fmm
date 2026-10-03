@@ -1,0 +1,37 @@
+[package]
+name = "nd-fmm-kernels"
+version = "0.1.0-dev"
+description = "CubeCL device kernels of the nd-project FMM: backends, the f64 capability check, device buffers, and the data movement primitives (Phase 4)."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "nd_fmm_kernels"
+
+# No backend by default: without a feature the crate builds its kernel definitions and
+# host-side types, and `Device::open` reports every backend as not compiled.
+[features]
+default = []
+# The CubeCL CPU runtime (LLVM JIT); its build downloads the tracel-llvm bundle.
+cpu = ["cubecl/cpu"]
+# wgpu with the MSL compiler (CubeCL's `metal` = `wgpu-msl`), not `metal-native`.
+metal = ["cubecl/metal"]
+# Type-checked only; no CUDA device is available.
+cuda = ["cubecl/cuda"]
+
+[dependencies]
+cubecl = { workspace = true }
+cubek-matmul = { workspace = true }
+cubek-std = { workspace = true }
+nd-fmm-math = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+nd-fmm-ref = { workspace = true }
+nd-fmm-tables = { workspace = true }
+proptest = { workspace = true }
+
+[[test]]
+name = "kernels"
+path = "tests/kernels/main.rs"

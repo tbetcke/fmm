@@ -87,6 +87,26 @@ cargo test -p nd-fmm-simd -- --show-output
 cargo test -p nd-fmm-simd --release -- --ignored --show-output
 ```
 
+A third job, `run-tests-kernels` (Phase 4 T4, kept or dropped at its sign-off), runs
+nd-fmm-kernels alone on the CubeCL CPU runtime, without MPI, on `ubuntu-latest`, with
+the cargo registry, the target directory and the `tracel-llvm` bundle cached:
+
+```sh
+cargo clippy -p nd-fmm-kernels --all-targets --features cpu -- -D warnings
+cargo test -p nd-fmm-kernels --features cpu --release -- --show-output
+```
+
+nd-fmm-kernels is a workspace member, not a default member: the default and
+`--workspace` checks build it without a backend. For a change to it, also run
+
+```sh
+cargo clippy -p nd-fmm-kernels --all-targets --features cpu,metal -- -D warnings
+cargo check -p nd-fmm-kernels --features cuda   # CUDA: type-checked, never run
+cargo test -p nd-fmm-kernels --features cpu --release -- --show-output
+# By hand on the M3 Max, outside the sandbox (Metal has no adapter inside it):
+cargo test -p nd-fmm-kernels --release --features metal -- --ignored --show-output
+```
+
 Before finishing any task, also run the stricter
 
 ```sh

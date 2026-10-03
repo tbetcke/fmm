@@ -1,0 +1,98 @@
+# nd-fmm-kernels
+
+Purpose: every CubeCL (`#[cube]`) kernel of the FMM behind safe wrappers: backend
+selection and the f64 capability check, device buffers, the data movement primitives,
+and (from T6) the operator kernels (docs/design/device-path.md §3.1).
+Phase and components: Phase 4, C4.1 (T4) and C4.2–C4.6 (T6–T10) in docs/phase4/.
+
+## Rules
+- Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
+  Device kernels follow §3.13, "Device kernels".
+- Generic over the float type (`DeviceFloat`: f32, f64) and comptime parameters (p, n,
+  layouts); the backend is a run-time value (`BackendKind`, `Device`), never an
+  `R: Runtime` type parameter (device-path.md §3.2). Every kernel runs on every runtime;
+  layouts are chosen per backend from `DeviceInfo`. No allocation per launch: launch
+  wrappers allocate nothing, and buffers are allocated at build.
+- Unsafe (root CLAUDE.md, device-path.md requirement 9): only CubeCL launches
+  (`launch_unchecked`) and buffer views (`BufferArg::from_raw_parts`). Every block has a
+  `// SAFETY:` comment naming the bounds the wrapper checked; the crate denies
+  `unsafe_op_in_unsafe_fn` and `clippy::undocumented_unsafe_blocks`. Every public
+  function is safe: a wrapper checks lengths, owners and index bounds on the host
+  (`IndexBuffer::bound`) before launching unchecked, and panics on a violated
+  precondition.
+- Backend coverage: every runtime test prints the device it ran on and a closing line
+  "backends run: …; not run: …" (`tests/kernels/common.rs`, `run` and the `tests_on!`
+  macro). A task report lists which backends ran, from the test output, and never
+  reports a backend that did not run as passing. CUDA is "type-checked, not run".
+- Accumulation and determinism (README requirements 4–6, device-path.md §6.1):
+  - each output value has one owning unit per launch; the owner loads it, adds its
+    contributions one by one in the target's row order, and stores it, so splitting a
+    row into several launches gives the same bits;
+  - no atomics anywhere; reductions use shared memory or plane operations in a fixed
+    order; scatters require distinct indices per launch (debug builds check);
+  - no kernel or matmul strategy chosen per call (never `Strategy::Auto`), and every
+    launch from the thread that owns the `Device`, so one stream runs them in order.
+- Arithmetic (signed off with T3, CONVENTIONS §3.13 "Device kernels";
+  spikes/device-arith/REPORT.md, "Recommendation"):
+  - assume only what §3.13 lists: `+ − ×` correctly rounded; any lone `a · b ± c` may
+    be fused (cubecl-opt's `InstCombinePass`, every backend), so write `fma` where the
+    result must be pinned; `sqrt`, division, `inverse_sqrt` within 2.5 u_T on normal
+    arguments; subnormals may flush (Metal does in arithmetic, not in copies);
+  - no compensated summation, no `x − x` or `x + 0.0` tricks, nothing that depends on
+    the sign of a zero;
+  - P2P: ŷ = `fma(r̂, u_s, ĉ)`, `inverse_sqrt` without a Newton step, masking by
+    compare and select;
+  - bit identity with host loops only where §3.13 rule 6 allows it (copies, scatters,
+    zeroing, frames, a GEMM in the host order with `mul_add`); tolerances elsewhere.
+- Kernel tests: `nd-fmm-kernels` builds and tests without MPI. Each test process
+  shares one `Device` per backend (`tests/kernels/common.rs`), because CubeCL compiles
+  kernels once per process. Keep comptime variants few per test; reuse the column
+  sizes (p + 1)² for p ∈ {0, 3, 8, 20}.
+- Test budget (T4, measured on the M3 Max): `cargo test -p nd-fmm-kernels --features
+  cpu --release` runs under **2 minutes** warm (test run only, build excluded), no
+  default test over **30 s**; larger shapes and sweeps (p = 20 at full size, B > 10³)
+  are `#[ignore]`. T4's suite: 30 tests in 0.4 s (release), 32 in 1.1 s (debug).
+  `cargo test -p nd-fmm-kernels` without features builds and passes in seconds.
+  Kernel compilation, from CubeCL's profiling log (the first launch of each variant
+  includes its compilation): `CUBECL_DEBUG_LOG=<file> cargo test -p nd-fmm-kernels
+  --features cpu --release -q`, then `awk -f fmm-kernels/tools/compile_times.awk
+  <file>` (T4: 34 variants, 0.27 s on the M3 Max).
+- CubeCL features: the workspace entries set `default-features = false`, so `cpu` and
+  `cuda` build without CubeCL's `persistence`. With `metal` it is on regardless:
+  `cubecl-wgpu` 0.11.0-pre.4 takes `cubecl-cpp` with its defaults, which enable
+  `cubecl-runtime/default`. A Metal run then creates an empty store
+  `target/environment/default.db` (T4). Never call CubeCL's autotune or throughput
+  measurement, and never enable `[compilation] cache`, so that nothing is recorded in
+  it. Check with `cargo tree -p nd-fmm-kernels -e features --features <backend>` after
+  any dependency change.
+- Never read an environment variable to choose a backend or device. CubeCL's own
+  variables (`CUBECL_CPU_STACK_MB`, `CUBECL_DEBUG_LOG`) and `cubecl.toml` are documented,
+  not set.
+- Sandbox (macOS, Claude Code):
+  - the `cpu` feature's first build downloads the `tracel-llvm` bundle into
+    `~/.cache/tracel/` and installs it into `~/Library/Application Support/tracel/`
+    (Linux: `~/.local/share/tracel/`); both are allowed in the sandbox;
+  - Metal needs GPU access and fails inside the sandbox ("No possible adapter
+    available", or `NoDevice`). Build sandboxed with `cargo build --tests -p
+    nd-fmm-kernels --release --features metal`, then run `cargo test -p nd-fmm-kernels
+    --release --features metal -- --ignored --show-output` outside it, and say so.
+- Before finishing:
+  - `cargo clippy -p nd-fmm-kernels --all-targets -- -D warnings` and the same with
+    `--features cpu,metal`;
+  - `cargo check -p nd-fmm-kernels --features cuda`;
+  - `cargo test -p nd-fmm-kernels` and `cargo test -p nd-fmm-kernels --features cpu
+    --release -- --show-output`;
+  - by hand on the M3 Max: `cargo test -p nd-fmm-kernels --release --features metal --
+    --ignored --show-output`;
+  - `cargo doc -p nd-fmm-kernels --no-deps`.
+
+## Allowed dependencies
+cubecl, cubek-matmul, cubek-std (the pinned workspace entries), nd-fmm-math, thiserror;
+dev-dependencies: nd-fmm-ref, nd-fmm-tables, proptest. No MPI, no nd-fmm-plan, no
+rayon. Anything else needs asking first.
+
+## Test oracle
+Plain host loops (buffers, zeroing, gather, scatter), bit for bit; `nd-fmm-ref`
+(`direct`, `leaf`, `p2p`), `nd-fmm-math` and `nd-fmm-tables` (`MatrixSet::apply`,
+`RotationTables`) for the operator kernels, at the canonical frames, levels 2, 9 and 16
+of a dyadic domain.

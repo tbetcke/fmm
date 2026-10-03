@@ -2828,6 +2828,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "nd-fmm-kernels"
+version = "0.1.0-dev"
+dependencies = [
+ "cubecl",
+ "cubek-matmul",
+ "cubek-std",
+ "nd-fmm-math",
+ "nd-fmm-ref",
+ "nd-fmm-tables",
+ "proptest",
+ "thiserror",
+]
+
+[[package]]
 name = "nd-fmm-math"
 version = "0.1.0-dev"
 dependencies = [
