@@ -87,7 +87,7 @@ cargo test -p nd-fmm-simd -- --show-output
 cargo test -p nd-fmm-simd --release -- --ignored --show-output
 ```
 
-A third job, `run-tests-kernels` (Phase 4 T4, kept or dropped at its sign-off), runs
+A third job, `run-tests-kernels` (Phase 4 T4, kept at its sign-off on 2026-10-03), runs
 nd-fmm-kernels alone on the CubeCL CPU runtime, without MPI, on `ubuntu-latest`, with
 the cargo registry, the target directory and the `tracel-llvm` bundle cached:
 

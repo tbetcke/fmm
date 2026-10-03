@@ -61,7 +61,8 @@ Phase and components: Phase 4, C4.1 (T4) and C4.2–C4.6 (T6–T10) in docs/phas
   `cuda` build without CubeCL's `persistence`. With `metal` it is on regardless:
   `cubecl-wgpu` 0.11.0-pre.4 takes `cubecl-cpp` with its defaults, which enable
   `cubecl-runtime/default`. A Metal run then creates an empty store
-  `target/environment/default.db` (T4). Never call CubeCL's autotune or throughput
+  `target/environment/default.db` (T4; accepted at its sign-off, device-path.md §3.4).
+  Never call CubeCL's autotune or throughput
   measurement, and never enable `[compilation] cache`, so that nothing is recorded in
   it. Check with `cargo tree -p nd-fmm-kernels -e features --features <backend>` after
   any dependency change.

@@ -91,7 +91,7 @@ jobs:
         run: cargo test -p nd-fmm-simd --release -- --ignored --show-output
 
   # nd-fmm-kernels alone on the CubeCL CPU runtime (f32 and f64), without MPI (Phase 4
-  # T4; README decision 7, "measure, then decide"). Correctness on small shapes only,
+  # T4; README decision 7, kept at sign-off on 2026-10-03). Correctness on small shapes only,
   # never timings of kernels. The tests print the backends they ran; --show-output puts
   # that into the log. The two measurement steps report, for the T4 sign-off, the
   # tracel-llvm bundle download (the bundler's build-script run) and the kernel

@@ -30,7 +30,7 @@ cubek-std = { version = "=0.3.0-pre.4", default-features = false }
 nd-fmm-math = { path = "fmm-math" }
 nd-fmm-ref = { path = "fmm-ref" }
 nd-fmm-tables = { path = "fmm-tables" }
-# Phase 4: every CubeCL kernel. A member, not a default member (T4's CI decision).
+# Phase 4: every CubeCL kernel. A member, not a default member (signed off with T4).
 nd-fmm-kernels = { path = "fmm-kernels" }
 # Phase 3, at the versions octree/ uses. rlst is never given the "mpi" feature here;
 # the crates that need it (nd-octree, nd-fmm-plan) enable it themselves.
