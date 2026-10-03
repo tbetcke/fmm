@@ -1,8 +1,10 @@
-//! The device path against the host path (Phase 4 T5, C4.1), shared by
+//! The device path against the host path (Phase 4 T5, C4.1; T6, C4.2), shared by
 //! `tests/mpi_exec.rs` (the CPU runtime) and `tests/device_metal.rs` (Metal, ignored).
 //!
-//! [`check_backend`] builds an `Fmm` on a device backend at one thread, with every
-//! operator kind on the host fallback, and checks, for the scenario it is given:
+//! [`check_backend`] builds an `Fmm` on a device backend at one thread twice, and checks,
+//! for the scenario it is given:
+//!
+//! With every operator kind on the host fallback (T5, requirement 8):
 //! - the output equals the host path's bit for bit, for the scenario's charges and for
 //!   a second charge vector (the charges reversed), and again for the first charges
 //!   (two evaluations of the device path are bit-identical);
@@ -15,10 +17,20 @@
 //!   row-to-batch maps point at the batch entry of each row entry, and the box and leaf
 //!   indices, point offsets and charge slots are those of the plan and the counts.
 //!
+//! With P2P on the device and every other kind on the host fallback (T6, the default):
+//! - P2P is placed on the device with the backend's default layout;
+//! - the output lies within the FMM bounds of the host output (docs/phase4/README.md,
+//!   "Accuracy measures"): relative L2 over all targets within 1e-12 (f64) or 1e-5
+//!   (f32), for φ and for ∇φ, for both charge vectors;
+//! - two evaluations of the first charges are bit-identical;
+//! - the transfers, launches and syncs of each evaluation equal the formula with P2P's
+//!   fallback transfers replaced by one launch per level (device-path.md §8.1).
+//!
 //! On several ranks the device build returns `DeviceNeedsOneRank` on every rank instead
 //! (device-path.md §4.4), which [`check_backend`] checks and reports.
 //!
-//! Error measure: exact equality (bit patterns, counts and bytes).
+//! Error measures: exact equality (bit patterns, counts and bytes), and the relative L2
+//! difference from the host output.
 
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, Equivalence};
@@ -27,6 +39,7 @@ use nd_fmm_exec::fmm::{
     Backend, Fmm, FmmBuilder, FmmError, OperatorKind, Output, Placement, SettingsError,
 };
 use nd_fmm_exec::operator::SimdScalar;
+use nd_fmm_kernels::p2p::P2pLayout;
 use nd_fmm_math::RealScalar;
 use nd_fmm_plan::lists::GroupedCsr;
 use nd_fmm_plan::plan::Plan;
@@ -76,9 +89,9 @@ fn assert_same<T: RealScalar>(what: &str, device: &Output<T>, host: &Output<T>) 
     }
 }
 
-/// The transfers, launches and syncs of one evaluation with every kind on the host
-/// fallback, by the formula of the device module's documentation: the data kinds in
-/// [`DataKind::ALL`] order, then the launches and the syncs.
+/// The transfers, launches and syncs of one evaluation, by the formula of the device
+/// module's documentation: the data kinds in [`DataKind::ALL`] order, then the launches
+/// and the syncs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Expected {
     /// Transfers per kind of data.
@@ -129,8 +142,12 @@ impl Expected {
 ///   up o N_l s;
 /// - launches: the three zero kernels of non-empty stores and the charge scatter if
 ///   there is a source; syncs: one per download.
+///
+/// With `p2p_on_device` (T6) P2P moves nothing: each of its level calls is one launch
+/// instead of a download and an upload of the level's target output.
 pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
     fmm: &Fmm<'_, T>,
+    p2p_on_device: bool,
 ) -> Expected {
     let plan = fmm.plan();
     let index = plan.index();
@@ -203,8 +220,12 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
             e.up(output, targets);
         }
         if !lists.near().is_empty() {
-            e.down(output, targets);
-            e.up(output, targets);
+            if p2p_on_device {
+                e.launches += 1;
+            } else {
+                e.down(output, targets);
+                e.up(output, targets);
+            }
         }
     }
     e.down(DataKind::Output, fmm.ntargets() * o * s);
@@ -353,10 +374,139 @@ fn check_views<T: Stored + SimdScalar + Equivalence + Default>(fmm: &mut Fmm<'_,
     assert_eq!(image.charge_slots, slots, "charge slots");
 }
 
+/// The relative L2 difference of `got` from `want` over all targets, for φ and for ∇φ
+/// (0 for an output without gradients or without targets).
+pub fn relative_l2<T: RealScalar>(got: &Output<T>, want: &Output<T>) -> (f64, f64) {
+    let difference = |a: &[T], b: &[T]| -> f64 {
+        let (mut d2, mut r2) = (0.0f64, 0.0f64);
+        for (&x, &y) in a.iter().zip(b) {
+            let (x, y) = (RealScalar::to_f64(x), RealScalar::to_f64(y));
+            d2 += (x - y) * (x - y);
+            r2 += y * y;
+        }
+        if r2 > 0.0 {
+            (d2 / r2).sqrt()
+        } else {
+            d2.sqrt()
+        }
+    };
+    let potential = difference(&got.potential, &want.potential);
+    let gradient = match (&got.gradient, &want.gradient) {
+        (Some(a), Some(b)) => difference(a.as_flattened(), b.as_flattened()),
+        _ => 0.0,
+    };
+    (potential, gradient)
+}
+
+/// The FMM bound of the device output against the host output (docs/phase4/README.md,
+/// "Accuracy measures"): 1e-12 in f64, 1e-5 in f32, relative L2.
+pub fn fmm_bound<T>() -> f64 {
+    if size_of::<T>() == 4 { 1e-5 } else { 1e-12 }
+}
+
 /// Builds `builder` on `backend` at one thread and checks it against the host path:
 /// `host` is the one-thread host `Fmm` of the same settings, `host_output` its output
-/// for `charges` (module documentation). Returns what it did; panics on a failed check.
+/// for `charges` (module documentation): first with every kind on the host fallback,
+/// then with P2P on the device. Returns what it did, and the largest relative L2
+/// difference of the P2P-on-device output from the host's (φ, ∇φ); panics on a failed
+/// check.
 pub fn check_backend<'o, T: Stored + SimdScalar + Equivalence + Default>(
+    builder: &FmmBuilder<T>,
+    (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
+    charges: &[T],
+    host: &mut Fmm<'o, T>,
+    host_output: &Output<T>,
+    backend: Backend,
+    comm: &'o SimpleCommunicator,
+) -> (Outcome, (f64, f64)) {
+    let outcome = check_fallback(
+        builder,
+        (sources, targets),
+        charges,
+        host,
+        host_output,
+        backend,
+        comm,
+    );
+    if outcome == Outcome::OneRankOnly {
+        return (outcome, (0.0, 0.0));
+    }
+    let difference = check_p2p_on_device(
+        builder,
+        (sources, targets),
+        charges,
+        host,
+        host_output,
+        backend,
+        comm,
+    );
+    (outcome, difference)
+}
+
+/// The P2P-on-device half of [`check_backend`] (module documentation), on one rank.
+fn check_p2p_on_device<'o, T: Stored + SimdScalar + Equivalence + Default>(
+    builder: &FmmBuilder<T>,
+    (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
+    charges: &[T],
+    host: &mut Fmm<'o, T>,
+    host_output: &Output<T>,
+    backend: Backend,
+    comm: &'o SimpleCommunicator,
+) -> (f64, f64) {
+    let mut fmm = builder
+        .clone()
+        .threads(1)
+        .backend(backend)
+        .build(sources, targets, comm)
+        .unwrap_or_else(|error| panic!("{backend}: the FMM does not build: {error}"));
+    let report = fmm.device_report().expect("a device backend");
+    for kind in OperatorKind::ALL {
+        let want = if kind == OperatorKind::P2p {
+            Placement::Device
+        } else {
+            Placement::Host
+        };
+        assert_eq!(fmm.placement(kind), want, "{backend}: {kind}");
+    }
+    assert_eq!(
+        report.p2p_layout,
+        P2pLayout::default_for(&report.info),
+        "{backend}: the default P2P layout"
+    );
+    let expected = expected_evaluation(&fmm, true);
+    let second: Vec<T> = charges.iter().rev().copied().collect();
+    let host_second = host.evaluate(&second).expect("the host FMM evaluates");
+    let bound = fmm_bound::<T>();
+    let mut worst = (0.0f64, 0.0f64);
+    let mut first_bits = None;
+    for (what, q, want) in [
+        ("first charges", charges, host_output),
+        ("second charges", &second[..], &host_second),
+        ("first charges again", charges, host_output),
+    ] {
+        let output = fmm.evaluate(q).expect("the device FMM evaluates");
+        let what = format!("{backend}, P2P on the device, {what}");
+        let (potential, gradient) = relative_l2(&output, want);
+        assert!(
+            potential <= bound && gradient <= bound,
+            "{what}: relative L2 difference from the host φ {potential:e}, ∇φ {gradient:e} \
+             exceeds {bound:e}"
+        );
+        worst = (worst.0.max(potential), worst.1.max(gradient));
+        check_evaluation_counters(&what, &fmm, &expected);
+        let bits = output_bits(&output);
+        match (&first_bits, std::ptr::eq(q, charges)) {
+            (None, true) => first_bits = Some(bits),
+            (Some(first), true) => assert_eq!(&bits, first, "{what}: two evaluations differ"),
+            _ => {}
+        }
+    }
+    worst
+}
+
+/// The host-fallback half of [`check_backend`] (module documentation): every kind on the
+/// host fallback, bit for bit the host path.
+fn check_fallback<'o, T: Stored + SimdScalar + Equivalence + Default>(
     builder: &FmmBuilder<T>,
     (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
     charges: &[T],
@@ -369,6 +519,7 @@ pub fn check_backend<'o, T: Stored + SimdScalar + Equivalence + Default>(
         .clone()
         .threads(1)
         .backend(backend)
+        .host_fallback(OperatorKind::ALL)
         .build(sources, targets, comm);
     if comm.size() > 1 {
         let ranks = comm.size() as usize;
@@ -389,7 +540,7 @@ pub fn check_backend<'o, T: Stored + SimdScalar + Equivalence + Default>(
         assert_eq!(
             fmm.placement(kind),
             Placement::Host,
-            "{kind}: T5 runs every kind on the host"
+            "{kind}: every kind on the host fallback"
         );
     }
     assert_eq!(report.info.backend.name(), backend.name());
@@ -423,7 +574,7 @@ pub fn check_backend<'o, T: Stored + SimdScalar + Equivalence + Default>(
         "{backend}: the build downloads nothing"
     );
 
-    let expected = expected_evaluation(&fmm);
+    let expected = expected_evaluation(&fmm, false);
     let second: Vec<T> = charges.iter().rev().copied().collect();
     let host_second = host.evaluate(&second).expect("the host FMM evaluates");
     for (what, q, want) in [

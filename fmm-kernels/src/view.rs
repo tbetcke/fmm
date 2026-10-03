@@ -15,6 +15,7 @@
 //! | [`GroupedView`] | target-centric rows of (source, group), the same pairs in batches by group, and the row-to-batch map | 7 index buffers |
 //! | [`BoxCoordinates`] | the index (i_x, i_y, i_z) of every box of every level | 1 buffer of 3 `u32` per box |
 //! | [`LeafCoordinates`] | the level and index of every leaf | 1 buffer of 4 `u32` per leaf |
+//! | [`PointOffsets`] | the point offsets of a leaf store (T6) | 1 index buffer |
 //!
 //! Each array is a buffer of its own, because an [`IndexBuffer`] records one bound for
 //! the whole buffer (T4), and arrays that address different matrices must not share
@@ -563,6 +564,68 @@ impl LeafCoordinates {
             .iter()
             .map(|&[l, x, y, z]| (l, [x, y, z]))
             .collect())
+    }
+}
+
+/// The point offsets of a leaf store (`nd_fmm_plan::store::LeafStore`): leaf j holds
+/// points `offsets[j]..offsets[j + 1]`, so its chunk of a store with s values per point
+/// is `s offsets[j]..s offsets[j + 1]` (CONVENTIONS §3.13, "Source chunks", "Target
+/// input and output"). Validated at upload (CSR offsets: from 0, never decreasing), so
+/// that a kernel may read a leaf's count and chunk from them without a bounds check:
+/// every chunk lies within `s` [`total`](Self::total) values (T6).
+#[derive(Debug)]
+pub struct PointOffsets {
+    offsets: IndexBuffer,
+    total: usize,
+}
+
+impl PointOffsets {
+    /// Validates `offsets` (one more than the leaves) on the host and uploads them (one
+    /// upload).
+    ///
+    /// # Errors
+    ///
+    /// As [`Device::upload`].
+    ///
+    /// # Panics
+    ///
+    /// If `offsets` is empty, does not start at 0 or decreases.
+    pub fn upload(device: &mut Device, offsets: &[u32]) -> Result<Self, KernelError> {
+        let total = offsets.last().map_or(0, |&t| t as usize);
+        check_offsets("PointOffsets", offsets, total);
+        Ok(Self {
+            offsets: device.upload_indices(offsets)?,
+            total,
+        })
+    }
+
+    /// The number of leaves.
+    pub fn nleaves(&self) -> usize {
+        self.offsets.len() - 1
+    }
+
+    /// The number of points of every leaf together: the last offset.
+    pub fn total(&self) -> usize {
+        self.total
+    }
+
+    /// The `nleaves() + 1` offsets.
+    pub fn offsets(&self) -> IndexSlice<'_> {
+        self.offsets.as_slice()
+    }
+
+    /// The index buffer of the offsets.
+    pub fn buffer(&self) -> &IndexBuffer {
+        &self.offsets
+    }
+
+    /// Downloads the offsets, for tests and reports: one download.
+    ///
+    /// # Errors
+    ///
+    /// As [`Device::download`].
+    pub fn download(&self, device: &mut Device) -> Result<Vec<u32>, KernelError> {
+        download_indices(device, &self.offsets)
     }
 }
 

@@ -55,6 +55,15 @@ pub enum KernelError {
     /// A buffer of another [`Device`](crate::Device).
     #[error("a buffer of another device")]
     WrongDevice,
+    /// A kernel layout the device cannot run (T6): more units per cube or more shared
+    /// memory than it has, or a plane layout on a device whose plane size varies.
+    #[error("layout {layout} does not fit the device: {reason}")]
+    UnsupportedLayout {
+        /// The layout, as displayed.
+        layout: String,
+        /// Why it does not fit.
+        reason: String,
+    },
     /// A launch or transfer failed on the device, with CubeCL's message.
     #[error("device error: {reason}")]
     Device {

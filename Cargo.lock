@@ -2931,6 +2931,7 @@ version = "0.1.0-dev"
 dependencies = [
  "mpi",
  "nd-fmm-exec",
+ "nd-fmm-kernels",
  "nd-fmm-math",
  "nd-fmm-ref",
  "nd-fmm-simd",

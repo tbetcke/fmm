@@ -30,15 +30,27 @@
 //! error with `Auto` lies within 1% of the error with `Reference`, and every output of
 //! `Auto` within 1e-13 of that of `Reference` (relative L2 over all targets).
 //!
+//! Device path (Phase 4 T6, C4.2), with a backend feature: the same gate with P2P on
+//! the device (and every other kind on the host fallback), on the CPU runtime in f64 at
+//! p = 3 and 8 (feature `cpu`) and on Metal in f32 at p = 3 and 8 (feature `metal`, by
+//! hand outside the macOS sandbox). The device run's error lies within 0.1% (f64) or 5%
+//! (f32) of the host run's in the same precision (docs/phase4/README.md, "Accuracy
+//! measures"), its output within 1e-12 (f64) or 1e-5 (f32) of the host output (relative
+//! L2 over all targets), and in f64 it passes the gate itself. The test prints the
+//! backends it ran.
+//!
 //! Its own executable, because it initialises MPI; ignored, because it needs release
 //! mode:
 //!
 //! ```text
 //! RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --release -- --ignored
+//! RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features cpu --release --test accuracy -- --ignored
 //! ```
 
 use mpi::Threading;
 use mpi::traits::*;
+#[cfg(feature = "gpu")]
+use nd_fmm_exec::fmm::Backend;
 use nd_fmm_exec::fmm::FmmBuilder;
 use nd_fmm_exec::operator::{Isa, P2pChoice};
 use nd_fmm_ref::p2p::direct_sum;
@@ -218,5 +230,124 @@ fn uniform_tree_within_twice_the_prediction() {
             ));
         }
     }
+    #[cfg(feature = "gpu")]
+    device_gates((&points, sample), (&charges, &exact), &comm, &mut failures);
     assert!(failures.is_empty(), "{}", failures.join("; "));
+}
+
+/// The relative L2 difference of `a` from `b`.
+#[cfg(feature = "gpu")]
+fn relative_l2(a: &[f64], b: &[f64]) -> f64 {
+    let (d2, r2) = a.iter().zip(b).fold((0.0f64, 0.0f64), |(d2, r2), (x, y)| {
+        (d2 + (x - y).powi(2), r2 + y * y)
+    });
+    (d2 / r2).sqrt()
+}
+
+/// The gate on each device backend compiled in (module documentation, "Device path"):
+/// the CPU runtime in f64, Metal in f32.
+#[cfg(feature = "gpu")]
+fn device_gates(
+    (points, sample): (&[[f64; 3]], &[usize]),
+    (charges, exact): (&[Vec<f64>], &[Vec<f64>]),
+    comm: &mpi::topology::SimpleCommunicator,
+    failures: &mut Vec<String>,
+) {
+    let mut ran = Vec::new();
+    if Backend::Cpu.is_compiled() {
+        device_gate::<f64>(
+            Backend::Cpu,
+            (points, sample),
+            (charges, exact),
+            comm,
+            failures,
+        );
+        ran.push("cpu (f64)");
+    }
+    if Backend::Metal.is_compiled() {
+        device_gate::<f32>(
+            Backend::Metal,
+            (points, sample),
+            (charges, exact),
+            comm,
+            failures,
+        );
+        ran.push("metal (f32)");
+    }
+    eprintln!(
+        "backends run: host (f64), {}; not run: cuda (type-checked, not run)",
+        ran.join(", ")
+    );
+}
+
+/// The gate with P2P on `backend` in `T`, against the host path in `T`.
+#[cfg(feature = "gpu")]
+fn device_gate<
+    T: nd_fmm_tables::cache::Stored
+        + nd_fmm_exec::operator::SimdScalar
+        + Equivalence
+        + Default
+        + nd_fmm_math::RealScalar,
+>(
+    backend: Backend,
+    (points, sample): (&[[f64; 3]], &[usize]),
+    (charges, exact): (&[Vec<f64>], &[Vec<f64>]),
+    comm: &mpi::topology::SimpleCommunicator,
+    failures: &mut Vec<String>,
+) {
+    let f64_run = size_of::<T>() == 8;
+    let (error_ratio, difference_bound) = if f64_run { (1e-3, 1e-12) } else { (5e-2, 1e-5) };
+    for (p, prediction) in PREDICTION {
+        let builder = FmmBuilder::<T>::new(p).max_level(4).max_points_per_leaf(1);
+        let mut host = builder
+            .build(points, points, comm)
+            .expect("the host FMM builds");
+        let mut device = builder
+            .clone()
+            .backend(backend)
+            .build(points, points, comm)
+            .unwrap_or_else(|error| panic!("{backend}: the device FMM does not build: {error}"));
+        let layout = device.device_report().expect("a device backend").p2p_layout;
+        let (mut each_host, mut each_device) = (Vec::new(), Vec::new());
+        let mut largest_difference = 0.0f64;
+        for (q, exact) in charges.iter().zip(exact) {
+            let q: Vec<T> = q.iter().map(|&v| T::from_f64(v)).collect();
+            let widen = |v: &[T]| -> Vec<f64> { v.iter().map(|&x| x.to_f64()).collect() };
+            let h = widen(&host.evaluate(&q).expect("the host FMM evaluates").potential);
+            let d = widen(
+                &device
+                    .evaluate(&q)
+                    .expect("the device FMM evaluates")
+                    .potential,
+            );
+            largest_difference = largest_difference.max(relative_l2(&d, &h));
+            each_host.push(sampled_error(&h, sample, exact));
+            each_device.push(sampled_error(&d, sample, exact));
+        }
+        let (error_host, error_device) = (rms(&each_host), rms(&each_device));
+        let ratio = error_device / error_host;
+        eprintln!(
+            "{backend}, {}, p = {p}, P2P on the device ({}): relative L2 error of φ \
+             {error_device:.4e} against the host's {error_host:.4e} (ratio {ratio:.6}), \
+             prediction {prediction:.2e}; outputs within {largest_difference:.1e} of the host",
+            if f64_run { "f64" } else { "f32" },
+            layout
+        );
+        if (ratio - 1.0).abs() > error_ratio {
+            failures.push(format!(
+                "{backend}, p = {p}: the device error is {ratio} times the host's"
+            ));
+        }
+        if largest_difference > difference_bound {
+            failures.push(format!(
+                "{backend}, p = {p}: the device output differs from the host's by \
+                 {largest_difference:e}"
+            ));
+        }
+        if f64_run && error_device > 2.0 * prediction {
+            failures.push(format!(
+                "{backend}, p = {p}: {error_device:e} exceeds twice the prediction {prediction:e}"
+            ));
+        }
+    }
 }

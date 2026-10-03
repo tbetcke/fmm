@@ -2,7 +2,8 @@
 
 Purpose: every CubeCL (`#[cube]`) kernel of the FMM behind safe wrappers: backend
 selection and the f64 capability check, device buffers, the data movement primitives,
-the plan's views on the device (`view`, from T5), and (from T6) the operator kernels
+the plan's views on the device (`view`, from T5), and (from T6) the operator kernels:
+P2P (`p2p`, T6), then the leaf operators, M2M, L2L and M2L (T7–T10)
 (docs/design/device-path.md §3.1).
 Phase and components: Phase 4, C4.1 (T4, T5) and C4.2–C4.6 (T6–T10) in docs/phase4/.
 
@@ -14,7 +15,20 @@ Phase and components: Phase 4, C4.1 (T4, T5) and C4.2–C4.6 (T6–T10) in docs/
   `IndexBuffer` per array (its bound covers the whole buffer); a malformed view panics.
 - CPU units: `Device::limit_units(n)` caps the units per cube of the CPU runtime's
   elementwise launches (default `CPU_MAX_UNITS`); `nd-fmm-exec` passes `threads(n)`
-  (device-path.md §11). Every later CPU layout honours the cap.
+  (device-path.md §11). Every later CPU layout honours the cap (the CPU layout of P2P
+  does: at most the cap, one unit per contiguous range of target leaves).
+- P2P (T6, `p2p`): one launch per level call, three layouts of one formulation
+  (`P2pLayout`): `Cube` (one cube per target leaf, a shared-memory tile of U sources,
+  default on Metal and CUDA with U = 64), `Plane` (one plane per target leaf, several per
+  cube, `sync_plane`; a candidate for T12) and `Cpu` (targets in `Vector<T, N>` lanes of
+  the host's width, K N = 8 per block, default on the CPU runtime). Every layout adds
+  each target's sources in near-row order and point order from the value in the output,
+  so every test runs on every layout, and the GPU layouts also run on the CPU runtime
+  (correctness only: planes of one unit, at most one unit per core). Frames come from
+  `LeafCoordinates` in integer arithmetic (`near_frames` writes them for tests); the
+  leaf stores' offsets are `PointOffsets`, validated at upload. Do not change the
+  formulation, the tile structure or the order without a sign-off; report a faster
+  variant instead.
 - Generic over the float type (`DeviceFloat`: f32, f64) and comptime parameters (p, n,
   layouts); the backend is a run-time value (`BackendKind`, `Device`), never an
   `R: Runtime` type parameter (device-path.md §3.2). Every kernel runs on every runtime;
@@ -58,7 +72,9 @@ Phase and components: Phase 4, C4.1 (T4, T5) and C4.2–C4.6 (T6–T10) in docs/
 - Test budget (T4, measured on the M3 Max): `cargo test -p nd-fmm-kernels --features
   cpu --release` runs under **2 minutes** warm (test run only, build excluded), no
   default test over **30 s**; larger shapes and sweeps (p = 20 at full size, B > 10³)
-  are `#[ignore]`. T4's suite: 30 tests in 0.4 s (release), 32 in 1.1 s (debug).
+  are `#[ignore]`. T4's suite: 30 tests in 0.4 s (release), 32 in 1.1 s (debug). T6's
+  P2P tests (`tests/kernels/p2p.rs`, every layout in f32 and f64) add 8 runtime tests
+  of a few seconds together.
   `cargo test -p nd-fmm-kernels` without features builds and passes in seconds.
   Kernel compilation, from CubeCL's profiling log (the first launch of each variant
   includes its compilation): `CUBECL_DEBUG_LOG=<file> cargo test -p nd-fmm-kernels

@@ -127,26 +127,34 @@
 //! - **input errors** also checks that a P2P kernel on an ISA the machine cannot run is
 //!   rejected with `SettingsError::P2pIsaUnavailable`.
 //!
-//! Device path (Phase 4 T5, C4.1), with the `gpu` feature. Error measure: exact
-//! equality of the bit patterns, counts and bytes.
+//! Device path (Phase 4 T5, C4.1; T6, C4.2), with the `gpu` feature. Error measures:
+//! exact equality of the bit patterns, counts and bytes, and the relative L2 difference
+//! of φ and ∇φ from the host output over all targets.
 //! - Every `evaluate_threaded` call above, and so every `Fmm` scenario (uniform and
 //!   adaptive trees, gradients on and off, empty leaves, coincident points, every
 //!   strategy, f32 and f64, every P2P kernel of `evaluate_every_kernel`), is repeated at
 //!   one thread on every device backend compiled in (`device_backends`; the CPU
-//!   runtime, while Metal runs in the ignored `tests/device_metal.rs`), with every
-//!   operator kind on the host fallback, through `device_common::check_backend`: the
-//!   output equals the host path's bit for bit for the scenario's charges, a second
-//!   charge vector and the first again; the transfers, launches and syncs of each
-//!   evaluation equal the formula of docs/design/device-path.md §4.1 and §7.2; no
-//!   evaluation moves points, views, geometry or tables; and every view on the device
-//!   equals the plan's. On several ranks the device build returns `DeviceNeedsOneRank`
-//!   on every rank. The test prints the backends it ran at the end.
+//!   runtime, while Metal runs in the ignored `tests/device_metal.rs`), through
+//!   `device_common::check_backend`, twice:
+//!   - with every operator kind on the host fallback: the output equals the host path's
+//!     bit for bit for the scenario's charges, a second charge vector and the first
+//!     again; the transfers, launches and syncs of each evaluation equal the formula of
+//!     docs/design/device-path.md §4.1 and §7.2; no evaluation moves points, views,
+//!     geometry or tables; and every view on the device equals the plan's;
+//!   - with P2P on the device (T6, the default) and every other kind on the host
+//!     fallback: the output within the FMM bounds of the host output (1e-12 in f64, 1e-5
+//!     in f32), two evaluations bit-identical, and the transfers of the formula with
+//!     P2P's fallback transfers replaced by one launch per level.
+//!
+//!   On several ranks the device build returns `DeviceNeedsOneRank` on every rank. The
+//!   test prints the backends it ran, and the largest differences, at the end.
 //! - **device backends**: `Host` is the default and reports every kind on the host; a
 //!   backend not compiled in gives `BackendNotCompiled`, also when only rank 0 asks for
 //!   it (the others return `OtherRank`: the check rides on step 1's agreement); with the
 //!   CPU runtime, `threads(4)` builds no rayon pool and caps the units per cube at 4
-//!   (device-path.md §11); `synchronous_stages` adds seven syncs (after the charge
-//!   upload and each stage) and changes no bit; on several ranks a device build with
+//!   (device-path.md §11), with the output of one unit bit for bit and within 1e-12 of
+//!   the host's; `synchronous_stages` adds seven syncs (after the charge upload and each
+//!   stage) and changes no bit; on several ranks a device build with
 //!   points other ranks own returns `PointsNotOwned`, which wins over
 //!   `DeviceNeedsOneRank`, and one with points every rank owns (each rank passing its
 //!   share of the level-1 octants of a uniform level-3 tree) returns
@@ -186,11 +194,22 @@ mod device_common;
 type Scenario = fn(&SimpleCommunicator);
 
 /// The device runs of `evaluate_threaded` per backend compiled in (`device_backends`),
-/// for the closing report line: (backend, f32 runs, f64 runs, builds refused with
-/// `DeviceNeedsOneRank` on several ranks).
+/// for the closing report line.
 #[cfg(feature = "gpu")]
-static DEVICE_RUNS: std::sync::Mutex<Vec<(Backend, usize, usize, usize)>> =
-    std::sync::Mutex::new(Vec::new());
+#[derive(Clone, Copy, Debug)]
+struct DeviceRuns {
+    backend: Backend,
+    f32_runs: usize,
+    f64_runs: usize,
+    /// Builds refused with `DeviceNeedsOneRank` on several ranks.
+    refused: usize,
+    /// The largest relative L2 difference of the P2P-on-device output from the host's,
+    /// (φ, ∇φ), in f32 and in f64.
+    worst: [(f64, f64); 2],
+}
+
+#[cfg(feature = "gpu")]
+static DEVICE_RUNS: std::sync::Mutex<Vec<DeviceRuns>> = std::sync::Mutex::new(Vec::new());
 
 /// The device backends every `Fmm` scenario is repeated on: the CPU runtime if it is
 /// compiled in. Metal runs in its own ignored executable (`tests/device_metal.rs`),
@@ -203,27 +222,39 @@ fn device_backends() -> Vec<Backend> {
         .collect()
 }
 
+/// The device runs of one backend for [`backends_line`]: the backend, f32 and f64 runs,
+/// refused builds, and the largest P2P-on-device differences in f32 and f64.
+type Runs = (Backend, usize, usize, usize, [(f64, f64); 2]);
+
 /// "backends run: …; not run: …" for this test.
 fn backends_line() -> String {
     #[cfg(feature = "gpu")]
-    let runs = DEVICE_RUNS.lock().unwrap().clone();
+    let runs: Vec<Runs> = DEVICE_RUNS
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| (r.backend, r.f32_runs, r.f64_runs, r.refused, r.worst))
+        .collect();
     #[cfg(not(feature = "gpu"))]
-    let runs: Vec<(Backend, usize, usize, usize)> = Vec::new();
+    let runs: Vec<Runs> = Vec::new();
     let mut ran = vec!["host (every scenario)".to_owned()];
     ran.extend(
         runs.iter()
-            .filter(|(_, f32_runs, f64_runs, _)| f32_runs + f64_runs > 0)
-            .map(|(backend, f32_runs, f64_runs, _)| {
+            .filter(|(_, f32_runs, f64_runs, ..)| f32_runs + f64_runs > 0)
+            .map(|(backend, f32_runs, f64_runs, _, worst)| {
                 format!(
-                    "{backend} ({f32_runs} f32 and {f64_runs} f64 scenarios on the host \
-                     fallback, bit for bit)"
+                    "{backend} ({f32_runs} f32 and {f64_runs} f64 scenarios: on the host \
+                     fallback bit for bit; with P2P on the device within the FMM bounds, \
+                     largest relative L2 difference φ {:.1e} / ∇φ {:.1e} (f32), {:.1e} / \
+                     {:.1e} (f64))",
+                    worst[0].0, worst[0].1, worst[1].0, worst[1].1
                 )
             }),
     );
     let refused: Vec<String> = runs
         .iter()
-        .filter(|(_, f32_runs, f64_runs, refused)| f32_runs + f64_runs == 0 && *refused > 0)
-        .map(|(backend, _, _, refused)| {
+        .filter(|(_, f32_runs, f64_runs, refused, _)| f32_runs + f64_runs == 0 && *refused > 0)
+        .map(|(backend, _, _, refused, _)| {
             format!("{backend} (DeviceNeedsOneRank on every rank, {refused} scenario(s))")
         })
         .collect();
@@ -731,7 +762,7 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
     let reference = output_bits(&output);
     #[cfg(feature = "gpu")]
     for backend in device_backends() {
-        let outcome = device_common::check_backend(
+        let (outcome, difference) = device_common::check_backend(
             &builder,
             (sources, targets),
             charges,
@@ -741,17 +772,26 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
             comm,
         );
         let mut runs = DEVICE_RUNS.lock().unwrap();
-        let entry = match runs.iter().position(|(b, ..)| *b == backend) {
+        let entry = match runs.iter().position(|r| r.backend == backend) {
             Some(i) => &mut runs[i],
             None => {
-                runs.push((backend, 0, 0, 0));
+                runs.push(DeviceRuns {
+                    backend,
+                    f32_runs: 0,
+                    f64_runs: 0,
+                    refused: 0,
+                    worst: [(0.0, 0.0); 2],
+                });
                 runs.last_mut().unwrap()
             }
         };
+        let precision = usize::from(size_of::<T>() == 8);
+        let worst = &mut entry.worst[precision];
+        *worst = (worst.0.max(difference.0), worst.1.max(difference.1));
         match outcome {
-            device_common::Outcome::Ran if size_of::<T>() == 4 => entry.1 += 1,
-            device_common::Outcome::Ran => entry.2 += 1,
-            device_common::Outcome::OneRankOnly => entry.3 += 1,
+            device_common::Outcome::Ran if precision == 0 => entry.f32_runs += 1,
+            device_common::Outcome::Ran => entry.f64_runs += 1,
+            device_common::Outcome::OneRankOnly => entry.refused += 1,
         }
     }
     for &n in threads {
@@ -2150,8 +2190,25 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
                     comm,
                 )
                 .expect("one rank");
-                let want = output_bits(&host.evaluate(&charges).unwrap());
-                assert_eq!(output_bits(&output), want);
+                // P2P on the device (T6): within the FMM bound of the host output, and the
+                // units cap changes no bit (each unit owns whole target leaves).
+                let host_output = host.evaluate(&charges).unwrap();
+                let (potential, _) = device_common::relative_l2(&output, &host_output);
+                assert!(
+                    potential <= 1e-12,
+                    "threads(4): {potential:e} from the host"
+                );
+                let want = output_bits(&output);
+                let mut one_unit = builder
+                    .clone()
+                    .threads(1)
+                    .build(&points, &points, comm)
+                    .expect("one rank");
+                assert_eq!(
+                    output_bits(&one_unit.evaluate(&charges).unwrap()),
+                    want,
+                    "one unit against four"
+                );
                 // Synchronous stages: seven more syncs (after the charge upload and each
                 // of the six stages), the same output.
                 let syncs = fmm.device_counters().unwrap().evaluation.syncs;

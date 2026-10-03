@@ -10,7 +10,9 @@
 //! **Status.** Phase 4 T4: backends, the capability check, device buffers and the data
 //! movement primitives ([`movement`]). T5: the plan's views and the box and leaf
 //! coordinates on the device ([`view`]), and the cap on the CPU runtime's units per
-//! cube ([`Device::limit_units`]). The operator kernels follow in T6–T10.
+//! cube ([`Device::limit_units`]). T6: the P2P kernel ([`p2p`]) in three layouts, and
+//! the leaf stores' point offsets ([`view::PointOffsets`]). The other operator kernels
+//! follow in T7–T10.
 //!
 //! ## Backends and features
 //!
@@ -94,7 +96,18 @@
 //! arrays (the crate does not depend on `nd-fmm-plan`) and validated on the host:
 //! [`view::IndexView`] (a CSR), [`view::GroupedView`] (rows, batches and the
 //! row-to-batch map of the grouped translations), [`view::BoxCoordinates`] and
-//! [`view::LeafCoordinates`] (the integer indices the kernels form frames from).
+//! [`view::LeafCoordinates`] (the integer indices the kernels form frames from), and
+//! [`view::PointOffsets`] (the point offsets of a leaf store, validated as CSR offsets).
+//!
+//! ## P2P (T6)
+//!
+//! [`p2p::p2p`] adds one level's near field into the target output: potentials and,
+//! optionally, gradients, f32 and f64, in the formulation of CONVENTIONS §3.13, "Device
+//! kernels", and in the order of the host path. Three layouts of one kernel
+//! ([`p2p::P2pLayout`]): one cube per target leaf with a shared-memory tile (the default
+//! on Metal and CUDA), one plane per target leaf, and a CPU layout with targets in vector
+//! lanes (the default on the CPU runtime, within 1.5× of `nd-fmm-simd` per pair at one
+//! thread, decision 10). [`p2p::near_frames`] writes the frames the kernels form.
 //!
 //! ## Tests on each backend
 //!
@@ -122,6 +135,7 @@ mod buffer;
 mod device;
 mod error;
 pub mod movement;
+pub mod p2p;
 pub mod view;
 
 pub use buffer::{
