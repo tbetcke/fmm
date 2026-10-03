@@ -127,6 +127,31 @@
 //! - **input errors** also checks that a P2P kernel on an ISA the machine cannot run is
 //!   rejected with `SettingsError::P2pIsaUnavailable`.
 //!
+//! Device path (Phase 4 T5, C4.1), with the `gpu` feature. Error measure: exact
+//! equality of the bit patterns, counts and bytes.
+//! - Every `evaluate_threaded` call above, and so every `Fmm` scenario (uniform and
+//!   adaptive trees, gradients on and off, empty leaves, coincident points, every
+//!   strategy, f32 and f64, every P2P kernel of `evaluate_every_kernel`), is repeated at
+//!   one thread on every device backend compiled in (`device_backends`; the CPU
+//!   runtime, while Metal runs in the ignored `tests/device_metal.rs`), with every
+//!   operator kind on the host fallback, through `device_common::check_backend`: the
+//!   output equals the host path's bit for bit for the scenario's charges, a second
+//!   charge vector and the first again; the transfers, launches and syncs of each
+//!   evaluation equal the formula of docs/design/device-path.md §4.1 and §7.2; no
+//!   evaluation moves points, views, geometry or tables; and every view on the device
+//!   equals the plan's. On several ranks the device build returns `DeviceNeedsOneRank`
+//!   on every rank. The test prints the backends it ran at the end.
+//! - **device backends**: `Host` is the default and reports every kind on the host; a
+//!   backend not compiled in gives `BackendNotCompiled`, also when only rank 0 asks for
+//!   it (the others return `OtherRank`: the check rides on step 1's agreement); with the
+//!   CPU runtime, `threads(4)` builds no rayon pool and caps the units per cube at 4
+//!   (device-path.md §11); `synchronous_stages` adds seven syncs (after the charge
+//!   upload and each stage) and changes no bit; on several ranks a device build with
+//!   points other ranks own returns `PointsNotOwned`, which wins over
+//!   `DeviceNeedsOneRank`, and one with points every rank owns (each rank passing its
+//!   share of the level-1 octants of a uniform level-3 tree) returns
+//!   `DeviceNeedsOneRank` on every rank.
+//!
 //! Every `Fmm` scenario but **ownership** passes each rank its share of the points (every
 //! `size`-th). On several ranks those points generally lie in leaves of other ranks;
 //! the scenario then checks that every rank returns `PointsNotOwned` and stops, since
@@ -137,7 +162,9 @@ use mpi::Threading;
 use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
-use nd_fmm_exec::fmm::{Fmm, FmmBuilder, FmmError, Output, PointSet, SettingsError};
+use nd_fmm_exec::fmm::{
+    Backend, Fmm, FmmBuilder, FmmError, OperatorKind, Output, Placement, PointSet, SettingsError,
+};
 use nd_fmm_exec::geometry::{Domain, GeometryError, leaf_coordinates, radius};
 use nd_fmm_exec::operator::{Isa, LaplaceOperator, P2pChoice, SimdScalar};
 use nd_fmm_exec::tables::{M2lStrategy, Tables};
@@ -153,7 +180,70 @@ use nd_fmm_tables::cache::Stored;
 use nd_fmm_tables::geometry::m2l_offset_index;
 use nd_octree::{MortonKey, Octree, OctreeOptions, PhysicalBox, constants::DEEPEST_LEVEL, morton};
 
+#[cfg(feature = "gpu")]
+mod device_common;
+
 type Scenario = fn(&SimpleCommunicator);
+
+/// The device runs of `evaluate_threaded` per backend compiled in (`device_backends`),
+/// for the closing report line: (backend, f32 runs, f64 runs, builds refused with
+/// `DeviceNeedsOneRank` on several ranks).
+#[cfg(feature = "gpu")]
+static DEVICE_RUNS: std::sync::Mutex<Vec<(Backend, usize, usize, usize)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// The device backends every `Fmm` scenario is repeated on: the CPU runtime if it is
+/// compiled in. Metal runs in its own ignored executable (`tests/device_metal.rs`),
+/// outside the macOS sandbox; CUDA is type-checked only.
+#[cfg(feature = "gpu")]
+fn device_backends() -> Vec<Backend> {
+    [Backend::Cpu]
+        .into_iter()
+        .filter(|b| b.is_compiled())
+        .collect()
+}
+
+/// "backends run: …; not run: …" for this test.
+fn backends_line() -> String {
+    #[cfg(feature = "gpu")]
+    let runs = DEVICE_RUNS.lock().unwrap().clone();
+    #[cfg(not(feature = "gpu"))]
+    let runs: Vec<(Backend, usize, usize, usize)> = Vec::new();
+    let mut ran = vec!["host (every scenario)".to_owned()];
+    ran.extend(
+        runs.iter()
+            .filter(|(_, f32_runs, f64_runs, _)| f32_runs + f64_runs > 0)
+            .map(|(backend, f32_runs, f64_runs, _)| {
+                format!(
+                    "{backend} ({f32_runs} f32 and {f64_runs} f64 scenarios on the host \
+                     fallback, bit for bit)"
+                )
+            }),
+    );
+    let refused: Vec<String> = runs
+        .iter()
+        .filter(|(_, f32_runs, f64_runs, refused)| f32_runs + f64_runs == 0 && *refused > 0)
+        .map(|(backend, _, _, refused)| {
+            format!("{backend} (DeviceNeedsOneRank on every rank, {refused} scenario(s))")
+        })
+        .collect();
+    let not_run: Vec<String> = Backend::ALL
+        .into_iter()
+        .filter(|b| b.is_device() && !runs.iter().any(|(r, ..)| r == b))
+        .map(|b| match (b, b.is_compiled()) {
+            (_, false) => format!("{b} (not compiled)"),
+            (Backend::Metal, true) => format!("{b} (ignored test tests/device_metal.rs)"),
+            (Backend::Cuda, true) => format!("{b} (type-checked, not run)"),
+            _ => format!("{b} (not run)"),
+        })
+        .chain(refused)
+        .collect();
+    format!(
+        "backends run: {}; not run: {}",
+        ran.join(", "),
+        not_run.join(", ")
+    )
+}
 
 /// The table cache of `evaluate_threaded`, in the scratch directory Cargo provides for
 /// integration tests.
@@ -171,7 +261,7 @@ fn distributed_scenarios() {
         "the threaded scenarios need MPI at Funneled, it provides {provided:?}"
     );
     let comm = universe.world();
-    let cases: [(&str, Scenario); 18] = [
+    let cases: [(&str, Scenario); 19] = [
         ("table order against the plan", table_order),
         ("batched against per-pair", batched_against_per_pair),
         ("uniform cube, every strategy", uniform_cube_strategies),
@@ -193,6 +283,7 @@ fn distributed_scenarios() {
         ("coincident points in a level-16 leaf", coincident_points),
         ("sources-only next to targets-only leaves", one_sided_leaves),
         ("points on box faces and domain corners", faces_and_corners),
+        ("device backends", device_backends_scenario),
     ];
     for (name, scenario) in cases {
         eprintln!("rank {}: {name}", comm.rank());
@@ -204,6 +295,7 @@ fn distributed_scenarios() {
             start.elapsed().as_secs_f64()
         );
     }
+    eprintln!("rank {}: {}", comm.rank(), backends_line());
 }
 
 /// The dyadic domain of Phase 2, a = (−1.25, 0.5, 2) and w = 3: every centre, centre
@@ -637,6 +729,31 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
     assert_eq!(fmm.operator().threads(), 1);
     let output = fmm.evaluate(charges).expect("the FMM evaluates");
     let reference = output_bits(&output);
+    #[cfg(feature = "gpu")]
+    for backend in device_backends() {
+        let outcome = device_common::check_backend(
+            &builder,
+            (sources, targets),
+            charges,
+            &mut fmm,
+            &output,
+            backend,
+            comm,
+        );
+        let mut runs = DEVICE_RUNS.lock().unwrap();
+        let entry = match runs.iter().position(|(b, ..)| *b == backend) {
+            Some(i) => &mut runs[i],
+            None => {
+                runs.push((backend, 0, 0, 0));
+                runs.last_mut().unwrap()
+            }
+        };
+        match outcome {
+            device_common::Outcome::Ran if size_of::<T>() == 4 => entry.1 += 1,
+            device_common::Outcome::Ran => entry.2 += 1,
+            device_common::Outcome::OneRankOnly => entry.3 += 1,
+        }
+    }
     for &n in threads {
         let builder = builder.clone().threads(n);
         let mut threaded = built(builder.build(sources, targets, comm), comm)?;
@@ -1380,6 +1497,21 @@ fn ownership(comm: &SimpleCommunicator) {
     comm.all_reduce_into(&count, &mut highest, SystemOperation::max());
     assert_eq!(lowest, highest, "the ranks disagree on the count");
     assert!(count > 0);
+    // A device backend: PointsNotOwned wins over DeviceNeedsOneRank (device-path.md §4.4).
+    #[cfg(feature = "gpu")]
+    for backend in device_backends() {
+        let error = builder
+            .clone()
+            .backend(backend)
+            .build(&points, &points, comm)
+            .err();
+        assert_eq!(
+            error,
+            Some(FmmError::PointsNotOwned { count }),
+            "rank {}: {backend}",
+            comm.rank()
+        );
+    }
     eprintln!(
         "rank {}: ownership: PointsNotOwned with {count} points, on every rank",
         comm.rank()
@@ -1938,4 +2070,159 @@ fn faces_and_corners(comm: &SimpleCommunicator) {
     assert!(w > 0 && x > 0, "W and X lists: {w}, {x}");
     assert!(potential_error < 1e-3, "φ: {potential_error:e}");
     assert!(gradient_error < 1e-2, "∇φ: {gradient_error:e}");
+}
+
+/// The backend setting (module documentation, "device backends"): the default, a
+/// backend not compiled in, its agreement across ranks, and the threads rule of the CPU
+/// runtime.
+fn device_backends_scenario(comm: &SimpleCommunicator) {
+    let rank = comm.rank();
+    let mut rng = SplitMix64(0x78a0);
+    let points = share(&unit_cube_points(&mut rng, 400), comm);
+
+    // `Host` is the default, with every kind on the host.
+    if let Some(fmm) = built(
+        FmmBuilder::<f64>::new(3).build(&points, &points, comm),
+        comm,
+    ) {
+        assert_eq!(fmm.backend(), Backend::Host);
+        for kind in OperatorKind::ALL {
+            assert_eq!(fmm.placement(kind), Placement::Host);
+        }
+    }
+    assert_eq!(
+        FmmBuilder::<f64>::new(3).build(&[], &[], comm).err(),
+        Some(FmmError::NoPoints)
+    );
+
+    // Every backend that is not compiled in is refused at step 1, on every rank; and
+    // when only rank 0 asks for one, rank 0 returns the error and the others `OtherRank`:
+    // the check is an input error of step 1, agreed by its existing all-reduce.
+    let missing: Vec<Backend> = Backend::ALL
+        .into_iter()
+        .filter(|b| !b.is_compiled())
+        .collect();
+    for &backend in &missing {
+        let error = FmmBuilder::<f64>::new(3)
+            .backend(backend)
+            .build(&points, &points, comm)
+            .err();
+        let expected = SettingsError::BackendNotCompiled { backend };
+        assert_eq!(
+            error,
+            Some(FmmError::InvalidSettings(expected)),
+            "{backend}"
+        );
+    }
+    if let Some(&backend) = missing.first() {
+        let mine = if rank == 0 { backend } else { Backend::Host };
+        let error = FmmBuilder::<f64>::new(3)
+            .backend(mine)
+            .build(&points, &points, comm)
+            .err();
+        match (rank, &error) {
+            (
+                0,
+                Some(FmmError::InvalidSettings(SettingsError::BackendNotCompiled { backend: b })),
+            ) if *b == backend => {}
+            (r, Some(FmmError::OtherRank)) if r != 0 => {}
+            _ => panic!("rank {rank}: {backend} on rank 0 only: {error:?}"),
+        }
+    }
+
+    // The threads rule with the CPU runtime: no rayon pool, the units capped at n.
+    #[cfg(feature = "cpu")]
+    {
+        let charges = random_charges(&mut rng, points.len());
+        let builder = FmmBuilder::<f64>::new(3).backend(Backend::Cpu).threads(4);
+        match builder.build(&points, &points, comm) {
+            Ok(mut fmm) => {
+                assert_eq!(fmm.threading().threads, 1, "{}", fmm.threading());
+                assert_eq!(fmm.operator().threads(), 1);
+                let report = fmm.device_report().expect("a device backend");
+                assert_eq!(report.cpu_units, Some(4), "{report}");
+                let report = report.to_string().replace('\n', "; ");
+                let output = fmm
+                    .evaluate(&charges)
+                    .expect("the CPU-runtime FMM evaluates");
+                let mut host = built(
+                    FmmBuilder::<f64>::new(3).build(&points, &points, comm),
+                    comm,
+                )
+                .expect("one rank");
+                let want = output_bits(&host.evaluate(&charges).unwrap());
+                assert_eq!(output_bits(&output), want);
+                // Synchronous stages: seven more syncs (after the charge upload and each
+                // of the six stages), the same output.
+                let syncs = fmm.device_counters().unwrap().evaluation.syncs;
+                let mut synchronous = builder
+                    .clone()
+                    .synchronous_stages(true)
+                    .build(&points, &points, comm)
+                    .expect("one rank");
+                let output = synchronous.evaluate(&charges).unwrap();
+                assert_eq!(output_bits(&output), want, "synchronous stages");
+                let counters = synchronous.device_counters().unwrap().evaluation;
+                assert_eq!(counters.syncs, syncs + 7, "syncs of synchronous stages");
+                eprintln!(
+                    "rank {rank}: threads(4) with the CPU runtime: no pool; synchronous \
+                     stages: {} syncs against {syncs}; {report}",
+                    counters.syncs
+                );
+            }
+            Err(FmmError::PointsNotOwned { .. }) if comm.size() > 1 => {}
+            Err(FmmError::InvalidSettings(SettingsError::DeviceNeedsOneRank { ranks }))
+                if comm.size() > 1 =>
+            {
+                assert_eq!(ranks, comm.size() as usize);
+            }
+            Err(error) => panic!("rank {rank}: CPU runtime with threads(4): {error}"),
+        }
+    }
+    // Points that every rank owns: four in every level-3 box of the unit cube, each rank
+    // passing those of its share of the level-1 octants (2, 4 or 8 ranks; one rank all).
+    // The partition of the octree then falls on octant boundaries, so the host build
+    // succeeds on several ranks, and a device build returns `DeviceNeedsOneRank` on every
+    // rank after step 5 (device-path.md §4.4). On one rank the device path runs.
+    let size = comm.size() as usize;
+    let owned: Vec<[f64; 3]> = (0..512)
+        .filter(|&b: &usize| {
+            let octant = 4 * (b >> 8) + 2 * ((b >> 5) & 1) + ((b >> 2) & 1);
+            8 % size != 0 || octant * size / 8 == rank as usize
+        })
+        .flat_map(|b| {
+            let index = [b >> 6, (b >> 3) & 7, b & 7];
+            (0..4)
+                .map(|_| core::array::from_fn(|k| (index[k] as f64 + rng.range(0.05, 0.95)) / 8.0))
+                .collect::<Vec<[f64; 3]>>()
+        })
+        .collect();
+    let builder = FmmBuilder::<f64>::new(3)
+        .max_level(3)
+        .max_points_per_leaf(1)
+        .domain(PhysicalBox::new([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]));
+    let owned_charges = random_charges(&mut rng, owned.len());
+    match builder.build(&owned, &owned, comm) {
+        Ok(_) => {
+            eprintln!(
+                "rank {rank}: device backends: every point owned on {size} rank(s), the host \
+                 path builds"
+            );
+            evaluate_threaded(&builder, (&owned, &owned), &owned_charges, &[], comm)
+                .expect("the points are owned");
+        }
+        Err(FmmError::PointsNotOwned { count }) if size > 1 => eprintln!(
+            "rank {rank}: device backends: {count} points not owned on {size} ranks; \
+             DeviceNeedsOneRank not reached"
+        ),
+        Err(error) => panic!("rank {rank}: owned points: {error}"),
+    }
+    eprintln!(
+        "rank {rank}: device backends: Host the default; not compiled in and refused: {}",
+        missing
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 }

@@ -263,6 +263,38 @@ impl<T: RealScalar> Tables<T> {
     }
 }
 
+/// The families the device path uploads (device-path.md §3.3, §6.8): crate-private, so
+/// the public surface of [`Tables`] does not change.
+#[cfg(feature = "gpu")]
+impl<T: RealScalar> Tables<T> {
+    /// The dense octant tables of M2M and L2L, under `Dense` and `Classes`; `None` under
+    /// `Rotation`, whose device path builds or loads them itself.
+    pub(crate) fn octant_families(&self) -> Option<(&M2mTables<T>, &L2lTables<T>)> {
+        match &self.families {
+            Families::Dense { m2m, l2l, .. } | Families::Classes { m2m, l2l, .. } => {
+                Some((m2m, l2l))
+            }
+            Families::Rotation(_) => None,
+        }
+    }
+
+    /// The dense M2L tables, under `Dense`.
+    pub(crate) fn dense_m2l(&self) -> Option<&M2lTables<T>> {
+        match &self.families {
+            Families::Dense { m2l, .. } => Some(m2l),
+            _ => None,
+        }
+    }
+
+    /// The class form of M2L, under `Classes`.
+    pub(crate) fn classes_m2l(&self) -> Option<&M2lClasses<T>> {
+        match &self.families {
+            Families::Classes { m2l, .. } => Some(m2l),
+            _ => None,
+        }
+    }
+}
+
 impl<T: Stored> Tables<T> {
     /// Loads the tables that `strategy`, resolved at `p`, needs from `cache`, or builds
     /// and stores those that are missing or rejected ([`TableCache::load_or_build`]),

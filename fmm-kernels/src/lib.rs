@@ -8,7 +8,9 @@
 //! data.
 //!
 //! **Status.** Phase 4 T4: backends, the capability check, device buffers and the data
-//! movement primitives ([`movement`]). The operator kernels follow in T6–T10.
+//! movement primitives ([`movement`]). T5: the plan's views and the box and leaf
+//! coordinates on the device ([`view`]), and the cap on the CPU runtime's units per
+//! cube ([`Device::limit_units`]). The operator kernels follow in T6–T10.
 //!
 //! ## Backends and features
 //!
@@ -75,11 +77,24 @@
 //!   launch distinct (checked on the host in debug builds);
 //! - [`movement::scatter_values`]: `x[idx[j]] = y[j]`, the indices distinct.
 //!
+//! On the CPU runtime the units per cube of these launches are capped by
+//! [`Device::limit_units`] (default [`CPU_MAX_UNITS`]); `nd-fmm-exec` sets the cap from
+//! its `threads(n)`, so that a rank keeps at most n of CubeCL's workers busy in them
+//! (device-path.md §11).
+//!
 //! Index arrays are uploaded as an [`IndexBuffer`], which records on the host the bound
 //! the wrappers check, so the kernels launch without bounds checks. Kernels take whole
 //! buffers and element offsets as scalars; the launch shape is chosen per backend
 //! (GPU: 256 units per cube, coalesced; CPU runtime: one cube, a contiguous block per
 //! unit). No kernel uses atomics.
+//!
+//! ## Views
+//!
+//! [`view`] holds the plan's views on the device, uploaded once per FMM from plain `u32`
+//! arrays (the crate does not depend on `nd-fmm-plan`) and validated on the host:
+//! [`view::IndexView`] (a CSR), [`view::GroupedView`] (rows, batches and the
+//! row-to-batch map of the grouped translations), [`view::BoxCoordinates`] and
+//! [`view::LeafCoordinates`] (the integer indices the kernels form frames from).
 //!
 //! ## Tests on each backend
 //!
@@ -107,11 +122,13 @@ mod buffer;
 mod device;
 mod error;
 pub mod movement;
+pub mod view;
 
 pub use buffer::{
     DeviceBuffer, DeviceElement, DeviceFloat, DeviceSlice, DeviceSliceMut, IndexBuffer, IndexSlice,
 };
 pub use device::{
-    BackendKind, CUBECL_VERSION, Counters, Device, DeviceInfo, MAX_ELEMENTS, Precision,
+    BackendKind, CPU_MAX_UNITS, CUBECL_VERSION, Counters, Device, DeviceInfo, MAX_ELEMENTS,
+    Precision,
 };
 pub use error::KernelError;

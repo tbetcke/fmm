@@ -17,7 +17,7 @@
 use cubecl::prelude::*;
 
 use crate::buffer::{DeviceElement, DeviceFloat, DeviceSlice, DeviceSliceMut, IndexSlice};
-use crate::device::{Device, Grid};
+use crate::device::Device;
 use crate::error::KernelError;
 
 /// x[offset..offset + len] = 0, in blocks of `chunk` elements per unit and stride.
@@ -149,7 +149,7 @@ pub fn zero<E: DeviceElement>(
     if slice.is_empty() {
         return Ok(());
     }
-    let grid = Grid::elementwise(device.info(), slice.len());
+    let grid = device.elementwise_grid(slice.len());
     let (handle, len) = slice.binding();
     // SAFETY: `handle` is the whole buffer of `len` elements (at least one is allocated
     // for an empty buffer), as `from_raw_parts` requires. The kernel writes elements
@@ -195,7 +195,7 @@ pub fn gather_columns<E: DeviceElement>(
     if y.is_empty() {
         return Ok(());
     }
-    let grid = Grid::elementwise(device.info(), y.len());
+    let grid = device.elementwise_grid(y.len());
     let ((xh, xl), (ih, il), (yh, yl)) = (x.binding(), indices.binding(), y.binding());
     // SAFETY: each handle is a whole buffer with its element count, as `from_raw_parts`
     // requires. The kernel reads indices[offset + e / n] for e < y.len() = n ·
@@ -252,7 +252,7 @@ pub fn scatter_add_columns<T: DeviceFloat>(
     if y.is_empty() {
         return Ok(());
     }
-    let grid = Grid::elementwise(device.info(), y.len());
+    let grid = device.elementwise_grid(y.len());
     let ((yh, yl), (ih, il), (xh, xl)) = (y.binding(), indices.binding(), x.binding());
     // SAFETY: as in `gather_columns`, with the roles of x and y exchanged: y is read at
     // y.offset() + e for e < y.len(), x read and written at x.offset() + c n + r with
@@ -306,7 +306,7 @@ pub fn scatter_values<E: DeviceElement>(
     if y.is_empty() {
         return Ok(());
     }
-    let grid = Grid::elementwise(device.info(), y.len());
+    let grid = device.elementwise_grid(y.len());
     let ((yh, yl), (ih, il), (xh, xl)) = (y.binding(), indices.binding(), x.binding());
     // SAFETY: each handle is a whole buffer with its element count. The kernel reads
     // y and the indices at their offsets plus e < y.len() = indices.len(), and writes
