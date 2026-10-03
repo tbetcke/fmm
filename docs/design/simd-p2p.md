@@ -3,6 +3,9 @@
 As of 2026-10-02. Proposed with [docs/phase3s/README.md](../phase3s/README.md), for
 sign-off by hand before Phase 3S T4 starts. Decisions marked *provisional* are confirmed
 or overturned by the spike (T2) and recorded here when it is signed off.
+Revised at the end of Phase 3S (2026-10-03, T7): "Outcome of Phase 3S" below records the
+decisions as taken and the measurements; Sections 4.3, 4.4, 4.6, 5.1, 8 and 9 carry them
+where they replace a model or a question.
 
 Decided on 2026-10-02:
 - No x86_64 machine is available for timings. Every timing is NEON on the Apple M3 Max.
@@ -14,6 +17,50 @@ Decided on 2026-10-02:
 - AVX-512 is deferred until hardware to test and time it is available. Phase 3S ships
   NEON, AVX2 + FMA and scalar. What an AVX-512 path would use is kept, marked
   *deferred*, in Sections 4.3 and 4.6 and summarised in Section 4.7.
+
+## Outcome of Phase 3S
+
+Every timing is NEON on the Apple M3 Max; no x86_64 path was timed. Raw output:
+spikes/p2p-simd/SPIKE_REPORT.md and results-m3max.md (T2),
+spikes/p2p-simd/results-m3max-final.md (T7). Machines that ran the tests: the M3 Max
+(scalar, NEON), the CI arm64 runner (Arm Neoverse-N2: scalar, NEON) and the CI x86_64
+runner (AMD EPYC 7763, Zen 3, from T4 on: scalar, AVX2; T3's run, before the vector
+code existed, had an EPYC 9V45). No Intel CPU and no AVX-512 path ran (Section 5.5).
+
+Decisions as taken:
+
+| decision | taken | evidence |
+| --- | --- | --- |
+| loop order (Section 4.1) | targets in lanes, on every ISA | T2: sources in lanes 1.046× (f32) and 1.041× (f64) faster, geometric mean over W1, against the 1.15 threshold |
+| inverse square root, NEON (Section 4.3) | FSQRT then FDIV, f32 and f64, not the estimate | T2: 19–53% faster inside the kernel than the best estimate route, because the divider runs beside the four FP pipes; 1.50 u_T (T4: 1.500 u_T f32 exhaustive, 1.496 u_T f64 sampled, on the M3 Max and the Neoverse-N2) |
+| inverse square root, AVX2 | `vrsqrtps` + degree-2 correction (f32, 6 ops); `vcvtpd2ps`, `vrsqrtps`, `vcvtps2pd` + degree-5 correction (f64, 11 ops) | T2: derived bound 1.50 u_T from the documented 1.5 · 2⁻¹²; T4 (CI, EPYC 7763): 1.499 u_T and 1.000 u_T |
+| K (Section 4.5) | NEON 2 (f32) and 4 (f64); AVX2 1 | T2: best geometric mean on NEON; on AVX2 the only spill-free choice with 16 registers |
+| relaxed f64 level | not shipped | T2: every relaxed level slower than `sqrt` + division on NEON |
+| coincident pairs and domain (Section 4.4) | r² = 0; domain r² = 0 or 2⁻¹⁰⁸ ≤ r² ≤ 2⁷; f32 gradients from 2⁻⁸⁴ | T1, CONVENTIONS §3.13 "Fast kernels" |
+| sum tolerance (Section 3, requirement 2) | within 1e-6 / 1e-14, or twice the reference's error where that is larger | T5, decided 2026-10-03 |
+| gathered calls in `LaplaceOperator` (Section 6) | not adopted; one call per source leaf | T6: leaf-stage gain 1–6%, one cell above 5% in one of two runs |
+| default leaf size | 64, unchanged | T7: the rule of the brief; 128 is 3.1% faster by its measure, below 5% |
+| C3S.6 accuracy against green-kernels | restated as requirement 2 and 8 / 16 u_T per pair; in-order summation kept | T7: green-kernels' partial sums are more accurate in 57 of 64 cells; ours within 0.76–1.46× of the reference's; decided 2026-10-03 |
+
+Measured, against Section 3:
+
+- Requirement 2, terms (T5, 10⁶ pairs, potential / gradient, limits 8 / 16 u): NEON
+  4.56 / 10.35 u (f32) and 4.37 / 9.48 u (f64), the same on both aarch64 CPUs; AVX2
+  4.18 / 8.70 u and 3.96 / 7.95 u (EPYC 7763).
+- Requirement 2, sums: every T5 test and every T7 cell passes; on the T7 workloads the
+  kernel's error is within 0.76–1.46× of `nd_fmm_ref::p2p`'s.
+- Requirement 4: chunk and target-position invariance bit for bit on every ISA (T5);
+  per-pair = gathered in every T7 cell; bit-identical FMM output for 1, 2, 4 and 8
+  threads and between per-pair and batched (T6), and the same FMM errors on 1 and 12
+  threads (T7).
+- Requirement 10, throughput (T7, one thread, geometric means over the gathered W1
+  cells, Gpairs/s): NEON 4.03 (f32 φ), 2.61 (f32 φ, ∇φ), 2.14 (f64 φ), 1.22 (f64 φ,
+  ∇φ); 7.4×, 8.3×, 4.4× and 4.0× `nd_fmm_ref::p2p`; 1.35×, 1.22×, 1.73× and 1.37×
+  green-kernels. Every one of the 64 cells of W1 and W2 is at least 1.17× green-kernels.
+  green-kernels' sums are more accurate in 57 of them (its W partial sums); the C3S.6
+  accuracy condition is therefore restated (decided 2026-10-03; Section 9, question 8).
+- In the FMM (T7, one thread): a 1.4–2.5× faster evaluation at p = 3 and 1.05–1.2× at
+  p = 8 on the uniform cube and the Plummer sphere.
 
 > Where this document and `docs/CONVENTIONS.md` differ, **the conventions file takes
 > precedence.** Phase 3S changes no convention except the addition to §3.13 that T1
@@ -184,6 +231,10 @@ with reasons, for sign-off.
    `nd-fmm-exec` stays free of `unsafe`.
 10. **Measured, not asserted.** No test asserts a throughput. Examples and the spike
     report it, against `nd_fmm_ref::p2p` and green-kernels, together with accuracy.
+    *Decided on 2026-10-03 (T7):* "at equal or better accuracy" than green-kernels
+    (C3S.6) means within requirement 2, with each pair term within 8 / 16 u_T of
+    `nd_fmm_ref::p2p`. In-order summation (requirement 4) does not match green-kernels'
+    partial sums, and is kept for the bit-identities it carries.
 
 ## 4. Kernel design
 
@@ -295,6 +346,10 @@ within about 1.5 u_T. It is the scalar fallback and the yardstick for the estima
 the cores of interest its throughput is several times lower than the FMA pipes'. T2
 measures it on every ISA; if it is not slower on some core, the dispatch uses it there.
 
+*Outcome (T2, T4):* NEON uses neither the estimate nor these steps, but FSQRT and FDIV
+(previous paragraph), and AVX2 uses the polynomial correction: degree 2 in f32 and
+degree 5 via the f32 estimate in f64, both within 1.50 u_T (Outcome of Phase 3S).
+
 **The contract** (C3S.3): on every ISA and precision, the inverse square root used by
 the kernel is within 4 u_T relative, for 0 and for every r² in the domain of Section
 4.4. It returns 0 at r² = 0 after the mask.
@@ -330,19 +385,23 @@ On the leaf-scaled data of §3.13 that case does not arise. A stored coordinate 
 u = fl(fl(d · 2^(l+1)/w) − (2i + 1)), rounded to T. Its significand lies on a grid no
 finer than that of the operands, which are about 1 in size, and a mapped source
 ŷ = ĉ + r̂ u keeps a comparable grid, because ĉ is a dyadic rational of at most 17 bits
-and r̂ a power of two. A nonzero component of d is therefore bounded below by a small
-power of two, about 2⁻⁶⁰ for leaf-scaled data, and r² is bounded below by about 2⁻¹²⁰,
-which is normal in f32 (2⁻¹²⁶). T1 derives the exact bound and checks it with
-adversarial constructions.
+and r̂ a power of two. *As derived in T1* (CONVENTIONS §3.13, "Fast kernels";
+`tools/fixtures/check_p2p_domain.py`): stored coordinates and mapped sources lie on
+the grid 2⁻⁵³ℤ, so a nonzero |dₖ| is at least 2⁻⁵³ and a nonzero r² at least 2⁻¹⁰⁶,
+both attained, and normal in f32 with a wide margin.
 
-T1 drafts an addition to CONVENTIONS §3.13, "Coincident pairs", for sign-off:
+The addition to CONVENTIONS §3.13, "Fast kernels" (T1, signed off on 2026-10-02):
 
 - the fast kernels exclude a pair by r² = 0;
 - on leaf-scaled data this equals the exact-coincidence rule, with the derivation of
   the bound;
-- the kernel domain: r² = 0 or r² ∈ [2^(−120), 2^(120)] (or the bound T1 finds). Pairs
-  outside it are outside the kernel's contract, whatever the reference does there.
-  Within the FMM, |u| ≤ 1 + β and |ŷ| ≤ 5 under 2:1 balance, so r² < 2⁷.
+- the kernel domain: r² = 0 or 2⁻¹⁰⁸ ≤ r² ≤ 2⁷ (the lower end the assumption-free
+  bound, a factor 4 below the attained 2⁻¹⁰⁶). Pairs outside it are outside the
+  kernel's contract, whatever the reference does there. Within the FMM, |u| ≤ 1 + β
+  and |ŷ| ≤ 5 + 2β′ under 2:1 balance, so r² < 2⁷;
+- in f32 with gradients the per-pair contract holds for 2⁻⁸⁴ ≤ r² ≤ 2⁷ and |q| ≤ 1:
+  below, (q ρ) ρ² of Section 4.2 overflows, as the reference's r² · r underflows
+  (decided on 2026-10-02: accepted as stated, rather than 2 more operations per pair).
 
 Masking happens after the estimate. At r² = 0 the estimate is +∞ and the Newton step
 produces NaN; the bitwise and-not with the mask clears it. No floating-point exception
@@ -393,6 +452,23 @@ the model allows about 3× in f64 and 7× in f32 at full efficiency. On the unif
 at p = 3, where the leaf stage is 158 of 199 ms, a 2.5× faster P2P would bring an
 evaluation to about 105 ms.
 
+*Measured (T2, T5, T7).* With FSQRT and FDIV the NEON row changes: 2 operations for the
+inverse square root instead of 1 + 3k, but the divider takes about 3 cycles per vector
+beside the pipes (FSQRT 0.5 and FDIV 1 per cycle, measured). The corrected bound is
+W / max(ops / 4, 3) pairs per cycle, with 11 (φ) or 17 (φ, ∇φ) operations per pair and
+lane. Measured at 4.05 GHz on the gathered W1 cells (T7, geometric means):
+
+| core | output | f32: corrected model | f32: measured (of model) | f64: corrected model | f64: measured (of model) |
+| --- | --- | --- | --- | --- | --- |
+| M3 Max P-core, NEON, `sqrt` + division | φ | 1.33 | 0.99 (75%) | 0.67 | 0.53 (79%) |
+| M3 Max P-core, NEON, `sqrt` + division | φ, ∇φ | 0.94 | 0.64 (68%) | 0.47 | 0.30 (64%) |
+| AVX2 (model only) | φ / φ, ∇φ | 2 · 8 / 15 = 1.07 / 2 · 8 / 21 = 0.76 | not timed | 2 · 4 / 20 = 0.40 / 2 · 4 / 26 = 0.31 | not timed |
+
+The rest is loop overhead, the broadcasts and the block set-up (T2). The AVX2 inner
+loops hold exactly the FP operations of the model (24, 35, 29 and 42 instructions per
+source for f32 φ, f32 φ and ∇φ, f64 φ, f64 φ and ∇φ; T5). On the uniform cube at p = 3
+an f64 evaluation went from 202 to 101 ms (T7), close to the 105 ms estimated above.
+
 ### 4.7 AVX-512, deferred
 
 AVX-512F is left out of Phase 3S (decided on 2026-10-02), because no hardware is
@@ -420,7 +496,13 @@ It depends only on `nd-fmm-math` (for `RealScalar`) and `thiserror`; `nd-fmm-ref
 `proptest` are dev-dependencies. It is MPI-free, so `cargo test -p nd-fmm-simd` needs no
 MPI runtime.
 
-### 5.1 Public surface (planned)
+### 5.1 Public surface (planned; built as planned in T3–T5)
+
+*As built:* the surface below, plus `Isa::all()` (every variant, for loops over ISAs),
+`Display` for `Isa` (`scalar`, `neon`, `avx2`), and `IsaUnavailable { isa }` as a
+`thiserror` error. `nd-fmm-exec` re-exports `Isa`, `IsaUnavailable` and `SimdScalar`
+from its `operator` module.
+
 
 ```rust
 /// Instruction sets with a P2P path. `Avx2` means AVX2 and FMA. AVX-512 is deferred
@@ -528,6 +610,9 @@ Phase 3S proposes a second, narrow exception:
     vendors in the last bits. The `sqrt` and division path would not.
   - The repository requires bit-identity only on one machine (C3.5), so this is
     recorded, not fixed. T7 notes the CPUs measured.
+  - *CPUs measured in Phase 3S:* the Apple M3 Max (tests and every timing), Arm
+    Neoverse-N2 (CI arm64; NEON results identical to the M3 Max's), AMD EPYC 7763 (CI
+    x86_64; AVX2). No Intel CPU ran the AVX2 path.
 
 ## 6. Integration into `nd-fmm-exec`
 
@@ -593,6 +678,13 @@ The test binary prints the ISAs it ran, and a task report lists them. A path tha
 not run is reported as not run, never as passing.
 
 ## 8. Benchmarking
+
+*Done in T7* (raw output in spikes/p2p-simd/results-m3max-final.md; summary in
+laplace-fmm-plan.md §7, Phase 3S): `nd-fmm-validate`'s examples `p2p_kernels` (W1 and W2,
+every ISA against the reference, Section 8.3's metrics) and `p2p_fmm` (W3: every P2P
+kernel in the FMM, and the leaf-size study), and the spike example `compare` (against
+green-kernels, on the inputs of `p2p_kernels`). The workloads are the T2 spike's, drawn
+with the same seeds. The FMM examples run at 1 thread and at the 12 performance cores.
 
 ### 8.1 Rules
 
@@ -672,17 +764,30 @@ functions with attribution.
 
 Questions for sign-off (Phase 3S README, "Decisions to sign off"):
 
-1. This design, and the unsafe exception of Section 5.4 (with T1).
-2. The §3.13 addition on coincident pairs and the kernel domain (T1).
+1. This design, and the unsafe exception of Section 5.4 (with T1). *Signed off before
+   T4.*
+2. The §3.13 addition on coincident pairs and the kernel domain (T1). *Signed off on
+   2026-10-02.*
 3. The spike's choices: loop order, inverse-square-root formulation, K per ISA and
-   precision, and whether to ship a relaxed f64 level (T2).
+   precision, and whether to ship a relaxed f64 level (T2). *Signed off after T2:*
+   targets in lanes; `sqrt` + division on NEON, the polynomial corrections on AVX2;
+   K = 2 / 4 on NEON and 1 on AVX2; no relaxed level (Outcome of Phase 3S).
 4. A CI job on an arm64 runner for `nd-fmm-simd` (T3). *Decided 2026-10-02: yes,
    together with an x86_64 leg.*
 5. Which x86_64 machines run the x86_64 benchmarks. *Decided 2026-10-02: none; x86_64
    is correctness-only, in CI.*
 6. Whether to change `max_points_per_leaf` after the leaf-size study (T7). *Decided
-   2026-10-02: T7 adopts its own recommendation.*
+   2026-10-02: T7 adopts its own recommendation.* T7's rule keeps 64: 128 is fastest
+   overall but only 3.1% faster (M3 Max, one thread). The best size depends on p
+   (64 at p = 3, 256 at p = 8), which a later task may exploit.
 7. AVX-512. *Decided 2026-10-02: deferred until hardware is available (Section 4.7).*
+8. *New in T7:* the accuracy condition of C3S.6. The kernel is faster than green-kernels
+   in every cell, but green-kernels' sums are more accurate in 57 of 64 cells, because
+   it adds W partial sums where the kernel adds in source order (requirement 4).
+   *Decided on 2026-10-03:* the condition is restated as "within requirement 2, per
+   pair within 8 / 16 u_T", as the spike proposed (Section 3, requirement 10). A
+   compensated or pairwise-summed kernel could follow as an opt-in if a use of P2P
+   outside the FMM needs it.
 
 ## 10. References
 

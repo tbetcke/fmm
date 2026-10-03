@@ -47,10 +47,15 @@
 //!   `fmm_accuracy` example.
 //! - [`calibration`]: the degree p against the accuracy of the complete FMM, per
 //!   precision and distribution, the smallest p for each target accuracy, and a
-//!   leaf-size study (C3.4), run by the `calibrate` example.
+//!   leaf-size study (C3.4), run by the `calibrate` example; and the leaf-size rule of
+//!   Phase 3S T7, which the `p2p_fmm` example applies.
+//! - [`p2p_kernels`]: the P2P kernels of `nd-fmm-simd` against `nd_fmm_ref::p2p` on
+//!   the FMM-shaped and all-pairs workloads of Phase 3S (C3S.6), with their accuracy
+//!   against `direct_sum`, run by the `p2p_kernels` example. It needs no MPI, and the
+//!   green-kernels comparison in `spikes/p2p-simd` takes its inputs from it.
 //!
-//! The examples `accuracy`, `timing`, `tables`, `fmm_accuracy` and `calibrate` print
-//! Markdown reports on stdout:
+//! The examples `accuracy`, `timing`, `tables`, `fmm_accuracy`, `calibrate`,
+//! `p2p_kernels` and `p2p_fmm` print Markdown reports on stdout:
 //!
 //! ```text
 //! cargo run --release -p nd-fmm-validate --example accuracy
@@ -61,15 +66,19 @@
 //! cargo run --release -p nd-fmm-validate --example fmm_accuracy -- --distribution plummer
 //! cargo run --release -p nd-fmm-validate --example fmm_accuracy -- --p2p reference
 //! cargo run --release -p nd-fmm-validate --example calibrate -- --threads 8
+//! cargo run --release -p nd-fmm-validate --example p2p_kernels
+//! cargo run --release -p nd-fmm-validate --example p2p_fmm -- --threads 12
 //! ```
 //!
 //! `fmm_accuracy` and `calibrate` take `--p2p auto|reference|<isa>`, the P2P kernel of
 //! the FMM (`nd_fmm_exec::operator::P2pChoice`, default `auto`), and report the kernel
 //! that ran next to the threading report.
+//! `p2p_fmm` runs every P2P kernel inside the FMM, and the leaf-size study with the
+//! default one.
 //!
 //! Since Phase 3 the crate depends on `nd-fmm-exec`, and so on MPI: building it, and
-//! `cargo test -p nd-fmm-validate`, need an MPI installation. `fmm_accuracy` and
-//! `calibrate` run on one rank.
+//! `cargo test -p nd-fmm-validate`, need an MPI installation. `fmm_accuracy`,
+//! `calibrate` and `p2p_fmm` run on one rank; `p2p_kernels` never initialises MPI.
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 
@@ -78,6 +87,7 @@ pub mod bench;
 pub mod calibration;
 pub mod fmm_accuracy;
 pub mod metrics;
+pub mod p2p_kernels;
 pub mod points;
 mod rng;
 
