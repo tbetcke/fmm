@@ -324,5 +324,5 @@ In the repository root, start `claude` and say:
 - [x] T5 merged: kernel accuracy and invariance on every ISA run; throughput against the spike reported
 - [x] T6 merged: Phase 3 gates pass with every ISA; bit-identity for threads and per-pair; `Auto` default
 - [x] Leaf-size default: T7 adopts its own recommendation (decided 2026-10-02)
-- [ ] T7 merged: NEON benchmark report against the reference and green-kernels; FMM speed-ups; leaf-size recommendation applied
+- [x] T7 merged: NEON benchmark report against the reference and green-kernels; FMM speed-ups; leaf-size recommendation applied
 - [x] Design documents updated: laplace-fmm-plan §7 (Phase 3S status and numbers), §8.3, §9.1 and §9.2; simd-p2p.md (decisions and measurements); workspace-structure §3 and §3.1 match the result
