@@ -533,7 +533,7 @@ In the repository root, start `claude` and say:
 - [x] T4 merged: `nd-fmm-kernels` skeleton, round trips and capability check pass, CPU-runtime CI job measured
 - [x] CPU-runtime CI job: kept / changed / dropped; default-member status of `nd-fmm-kernels` decided: kept, not a default member (signed off 2026-10-03)
 - [x] T4b merged (only if needed): `nd-fmm-plan` device hooks, `IndexFmm` on 1, 2 and 4 ranks, host path bit-identical: not needed (decision 2, 2026-10-03)
-- [ ] T5 merged: device path with full host fallback bit-identical to the host path; transfers counted
+- [x] T5 merged: device path with full host fallback bit-identical to the host path; transfers counted
 - [ ] T6 merged: device P2P within the contract on every backend run; timed against host NEON
 - [ ] T7 merged: P2M, L2P, P2L and M2P within the operator bounds on levels 2, 9 and 16
 - [ ] T8 merged: M2M and L2L equal the C2.1 tables per level and octant, both passes
