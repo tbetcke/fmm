@@ -1,0 +1,31 @@
+[package]
+name = "nd-fmm-spike-device-arith"
+version = "0.0.0"
+description = "Throwaway study: device floating-point arithmetic per CubeCL backend, the CONVENTIONS §3.13 r² = 0 argument on the device, P2P candidates, and a CPU-shaped P2P on the CubeCL CPU runtime against nd-fmm-simd (Phase 4, T3)."
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# No backend by default: `cargo test -p nd-fmm-spike-device-arith` without features
+# builds no runtime. The smoke test needs `--features cpu`.
+default = []
+cpu = ["cubecl/cpu"]
+metal = ["cubecl/metal"]
+# No `metal-native` (`cubecl-metal`, MTLMathMode::Safe): cubecl-metal 0.11.0-pre.4 does not
+# compile (`DebugInformation` is not imported in src/compute/context.rs:139; REPORT.md).
+# Type-checked only; no CUDA device is available.
+cuda = ["cubecl/cuda"]
+
+[dependencies]
+cubecl.workspace = true
+nd-fmm-math.workspace = true
+nd-fmm-ref.workspace = true
+nd-fmm-tables.workspace = true
+nd-fmm-simd.workspace = true
+# The W1 workload, its oracle and measures (`nd_fmm_validate::p2p_kernels`), the timing
+# loop and the machine description. nd-fmm-validate links MPI; nothing here initialises it.
+nd-fmm-validate.workspace = true
+# The 12-thread host baseline of the CPU-runtime comparison.
+rayon.workspace = true

@@ -2875,6 +2875,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nd-fmm-spike-device-arith"
+version = "0.0.0"
+dependencies = [
+ "cubecl",
+ "nd-fmm-math",
+ "nd-fmm-ref",
+ "nd-fmm-simd",
+ "nd-fmm-tables",
+ "nd-fmm-validate",
+ "rayon",
+]
+
+[[package]]
 name = "nd-fmm-spike-p2p-simd"
 version = "0.0.0"
 dependencies = [
