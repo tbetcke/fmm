@@ -41,8 +41,8 @@ use std::arch::x86_64::{
     _mm256_storeu_pd, _mm256_storeu_ps, _mm256_sub_pd, _mm256_sub_ps,
 };
 
-use super::{Simd, rsqrt_body};
-use crate::{Isa, SimdScalar};
+use super::{Simd, p2p::p2p_body, rsqrt_body};
+use crate::Isa;
 
 /// The coefficients cₖ = C(2k, k) / 4ᵏ of (1 − r)^(−½) = Σₖ cₖ rᵏ, from c₁; all exact
 /// in f32.
@@ -360,14 +360,54 @@ macro_rules! rsqrt_entry {
 rsqrt_entry!(rsqrt_slice_f32, f32);
 rsqrt_entry!(rsqrt_slice_f64, f64);
 
-/// P2P on AVX2 + FMA, with lengths already checked by the caller; until Phase 3S T5
-/// the scalar path.
-pub(crate) fn p2p<T: SimdScalar>(
-    sources: &[[T; 3]],
-    charges: &[T],
-    targets: &[[T; 3]],
-    potential: &mut [T],
-    gradient: Option<&mut [[T; 3]]>,
-) {
-    super::scalar::p2p(sources, charges, targets, potential, gradient);
+/// Target vectors per P2P block in f32 (signed off in Phase 3S T2,
+/// spikes/p2p-simd/SPIKE_REPORT.md, "Recommendation", item 3).
+pub(crate) const K_F32: usize = 1;
+/// Target vectors per P2P block in f64 (as [`K_F32`]).
+pub(crate) const K_F64: usize = 1;
+
+/// Generates the P2P entry points of one precision, potential only and with gradients.
+macro_rules! p2p_entries {
+    ($potential:ident, $gradient:ident, $t:ty, $k:expr) => {
+        /// P2P on AVX2 + FMA, potential only (`arch::p2p::p2p_body`), in the precision of
+        /// its name, with lengths checked by the caller.
+        ///
+        /// Not inlined, so that the dispatch stays one call and the inlining check
+        /// finds the function by name.
+        #[target_feature(enable = "avx2,fma")]
+        #[inline(never)]
+        pub(crate) fn $potential(
+            sources: &[[$t; 3]],
+            charges: &[$t],
+            targets: &[[$t; 3]],
+            potential: &mut [$t],
+        ) {
+            // SAFETY: this function enables `avx2` and `fma`, so it runs only on a CPU
+            // with both: a call from outside such a context is `unsafe` and asserts it.
+            let s = unsafe { Avx2::new_unchecked() };
+            p2p_body::<$t, Avx2, { $k }, false>(s, sources, charges, targets, potential, &mut []);
+        }
+
+        /// P2P on AVX2 + FMA, potential and gradient (`arch::p2p::p2p_body`), in the
+        /// precision of its name, with lengths checked by the caller.
+        ///
+        /// Not inlined, as the potential-only entry point.
+        #[target_feature(enable = "avx2,fma")]
+        #[inline(never)]
+        pub(crate) fn $gradient(
+            sources: &[[$t; 3]],
+            charges: &[$t],
+            targets: &[[$t; 3]],
+            potential: &mut [$t],
+            gradient: &mut [[$t; 3]],
+        ) {
+            // SAFETY: this function enables `avx2` and `fma`, so it runs only on a CPU
+            // with both: a call from outside such a context is `unsafe` and asserts it.
+            let s = unsafe { Avx2::new_unchecked() };
+            p2p_body::<$t, Avx2, { $k }, true>(s, sources, charges, targets, potential, gradient);
+        }
+    };
 }
+
+p2p_entries!(p2p_f32, p2p_f32_gradient, f32, K_F32);
+p2p_entries!(p2p_f64, p2p_f64_gradient, f64, K_F64);

@@ -10,6 +10,11 @@
 //! contract here, and exhaustively in `tests/rsqrt`. The estimate is checked against
 //! its documented bound.
 //!
+//! The P2P kernel body is checked here where it is generic: every K gives the same
+//! bits on every ISA, and the body on the scalar layer (W = 1), which the scalar ISA
+//! does not run, is within the term and sum tolerances of the reference. The public
+//! kernel is tested in `tests/p2p`.
+//!
 //! Every test prints the ISAs it ran; run with `--show-output` to see it.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -18,7 +23,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use super::avx2::Avx2;
 #[cfg(target_arch = "aarch64")]
 use super::neon::Neon;
-use super::{Simd, scalar::Scalar};
+use super::{Simd, p2p::p2p_body, scalar::Scalar};
 use crate::{Isa, SimdScalar};
 
 /// Random vectors per ISA, precision and test.
@@ -380,4 +385,168 @@ fn layer_blocks_match_triples() {
 fn layer_rejects_short_slices() {
     on_every_isa!("layer_rejects_short_slices", f32, short_slices_panic);
     on_every_isa!("layer_rejects_short_slices", f64, short_slices_panic);
+}
+
+/// A random P2P problem: `n_s` sources and `n_t` targets in [−1, 1)³, charges and
+/// initial outputs in [−1, 1).
+struct P2pProblem<T> {
+    sources: Vec<[T; 3]>,
+    charges: Vec<T>,
+    targets: Vec<[T; 3]>,
+    potential: Vec<T>,
+    gradient: Vec<[T; 3]>,
+}
+
+impl Rng {
+    /// Uniform in [−1, 1), rounded to `T`.
+    fn signed<T: SimdScalar>(&mut self) -> T {
+        T::from_f64(2.0 * self.unit() - 1.0)
+    }
+
+    /// A random P2P problem.
+    fn p2p_problem<T: SimdScalar>(&mut self, n_s: usize, n_t: usize) -> P2pProblem<T> {
+        let point = |rng: &mut Rng| [0; 3].map(|_| rng.signed::<T>());
+        P2pProblem {
+            sources: (0..n_s).map(|_| point(self)).collect(),
+            charges: (0..n_s).map(|_| self.signed()).collect(),
+            targets: (0..n_t).map(|_| point(self)).collect(),
+            potential: (0..n_t).map(|_| self.signed()).collect(),
+            gradient: (0..n_t).map(|_| point(self)).collect(),
+        }
+    }
+}
+
+/// The generic body with K blocks on `s`, from the initial outputs of `p`; the bits of
+/// the potential and, if `G`, the gradient.
+fn body<T: SimdScalar, S: Simd<T>, const K: usize, const G: bool>(
+    s: S,
+    p: &P2pProblem<T>,
+) -> (Vec<T>, Vec<[T; 3]>) {
+    let mut potential = p.potential.clone();
+    let mut gradient = if G { p.gradient.clone() } else { Vec::new() };
+    p2p_body::<T, S, K, G>(
+        s,
+        &p.sources,
+        &p.charges,
+        &p.targets,
+        &mut potential,
+        &mut gradient,
+    );
+    (potential, gradient)
+}
+
+/// The bits of P2P outputs.
+fn output_bits<T: SimdScalar>((potential, gradient): &(Vec<T>, Vec<[T; 3]>)) -> Vec<u64> {
+    potential
+        .iter()
+        .chain(gradient.iter().flatten())
+        .map(|&x| bits(x))
+        .collect()
+}
+
+/// Every K (1, 2, 4) gives the same bits, at every n_t from 0 to 3 · 4 · W + 1: the
+/// per-lane instruction sequence does not depend on K, which is what lets the tail of
+/// a call run smaller blocks than the whole ones.
+fn p2p_k_invariance<T: SimdScalar, S: Simd<T>>(s: S) {
+    let mut rng = Rng(0x5eed_0006);
+    for n_t in 0..=3 * 4 * S::W + 1 {
+        let p = rng.p2p_problem::<T>(23, n_t);
+        let k1 = output_bits(&body::<T, S, 1, false>(s, &p));
+        assert_eq!(
+            k1,
+            output_bits(&body::<T, S, 2, false>(s, &p)),
+            "{} K = 2",
+            S::ISA
+        );
+        assert_eq!(
+            k1,
+            output_bits(&body::<T, S, 4, false>(s, &p)),
+            "{} K = 4",
+            S::ISA
+        );
+        let k1 = output_bits(&body::<T, S, 1, true>(s, &p));
+        assert_eq!(
+            k1,
+            output_bits(&body::<T, S, 2, true>(s, &p)),
+            "{} K = 2, gradient",
+            S::ISA
+        );
+        assert_eq!(
+            k1,
+            output_bits(&body::<T, S, 4, true>(s, &p)),
+            "{} K = 4, gradient",
+            S::ISA
+        );
+    }
+}
+
+#[test]
+fn p2p_body_is_independent_of_k() {
+    on_every_isa!("p2p_body_is_independent_of_k", f32, p2p_k_invariance);
+    on_every_isa!("p2p_body_is_independent_of_k", f64, p2p_k_invariance);
+}
+
+/// The generic body on the scalar layer (W = 1), which the scalar ISA does not run
+/// (it runs the reference's loop): one pair within 8 u_T (potential) and 16 u_T
+/// relative to |q| / r² (gradient) of the reference's term; sums of 64 sources within
+/// 1e-6 (f32) or 1e-14 (f64) of the reference's relative to the term magnitudes. It
+/// is not the reference bit for bit: it forms r² with fma and the gradient as
+/// (q ρ) ρ² d.
+fn p2p_body_at_w1<T: SimdScalar>() {
+    let mut rng = Rng(0x5eed_0007);
+    let u = unit_roundoff::<T>();
+    let sum_tol = if u < 1e-10 { 1e-14 } else { 1e-6 };
+    let mut differing = 0usize;
+    for trial in 0..TRIALS {
+        let p = rng.p2p_problem::<T>(if trial % 2 == 0 { 1 } else { 64 }, 3);
+        let (potential, gradient) = body::<T, Scalar, 1, true>(Scalar, &p);
+        let mut ref_potential = p.potential.clone();
+        let mut ref_gradient = p.gradient.clone();
+        nd_fmm_ref::p2p::p2p(
+            &p.sources,
+            &p.charges,
+            &p.targets,
+            &mut ref_potential,
+            Some(&mut ref_gradient),
+        );
+        for (i, x) in p.targets.iter().enumerate() {
+            let (mut sp, mut sg) = (p.potential[i].to_f64().abs(), 0.0f64);
+            for g in p.gradient[i] {
+                sg = sg.max(g.to_f64().abs());
+            }
+            for (y, &q) in p.sources.iter().zip(&p.charges) {
+                let r2: f64 = (0..3)
+                    .map(|k| (x[k].to_f64() - y[k].to_f64()).powi(2))
+                    .sum();
+                sp += q.to_f64().abs() / r2.sqrt();
+                sg += q.to_f64().abs() / r2;
+            }
+            let (tol_p, tol_g) = if p.sources.len() == 1 {
+                (8.0 * u, 16.0 * u)
+            } else {
+                (sum_tol, sum_tol)
+            };
+            let ep = (potential[i].to_f64() - ref_potential[i].to_f64()).abs() / sp;
+            assert!(ep <= tol_p, "W = 1 potential: {ep:e}");
+            for k in 0..3 {
+                let eg = (gradient[i][k].to_f64() - ref_gradient[i][k].to_f64()).abs() / sg;
+                assert!(eg <= tol_g, "W = 1 gradient: {eg:e}");
+            }
+            if bits(potential[i]) != bits(ref_potential[i]) {
+                differing += 1;
+            }
+        }
+    }
+    println!(
+        "p2p_body_at_w1 ({}): {differing} of {} potentials differ from the reference's bits",
+        std::any::type_name::<T>(),
+        3 * TRIALS
+    );
+}
+
+#[test]
+fn p2p_body_at_w1_is_within_tolerance() {
+    println!("p2p_body_at_w1_is_within_tolerance: ISAs run: scalar (the layer at W = 1)");
+    p2p_body_at_w1::<f32>();
+    p2p_body_at_w1::<f64>();
 }

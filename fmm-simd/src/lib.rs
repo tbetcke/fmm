@@ -6,11 +6,10 @@
 //! SIMD library: the vector code uses `core::arch` intrinsics only. Its design is
 //! [docs/design/simd-p2p.md][design] (Phase 3S).
 //!
-//! **Status.** Phase 3S T4: the public surface, detection and dispatch work; each ISA
-//! has its vector layer and the inverse square root of the kernel, which
-//! [`rsqrt::rsqrt_slice`] exposes for tests and reports. [`P2pKernel::evaluate`] still
-//! runs the scalar path on every ISA; the vector P2P kernel (T5) replaces it behind the
-//! same interface.
+//! **Status.** Phase 3S T5: [`P2pKernel::evaluate`] runs the vector P2P kernel on
+//! NEON and AVX2 + FMA, and the reference's loop on the scalar path. Each ISA has its
+//! vector layer and the inverse square root of the kernel, which
+//! [`rsqrt::rsqrt_slice`] exposes for tests and reports.
 //!
 //! ## Instruction sets
 //!
@@ -38,6 +37,25 @@
 //!   the branch runs once per call.
 //! - The crate never reads an environment variable to choose an ISA.
 //!
+//! ## The kernel
+//!
+//! Targets in lanes (design §4.1): each lane holds one target, a block holds K vectors
+//! of targets, and each source is broadcast to every lane and visited in input order.
+//! The loop order, the inverse square root and K are those signed off in Phase 3S T2
+//! (spikes/p2p-simd/SPIKE_REPORT.md, "Recommendation"):
+//!
+//! | [`Isa`] | 1/r, f32 | 1/r, f64 | K, f32 / f64 | targets per block |
+//! | --- | --- | --- | --- | --- |
+//! | [`Isa::Scalar`] | `sqrt`, division | `sqrt`, division | — | 1 (the reference's loop) |
+//! | [`Isa::Neon`] | FSQRT, FDIV | FSQRT, FDIV | 2 / 4 | 8 / 8 |
+//! | [`Isa::Avx2`] | `vrsqrtps` + degree-2 correction | `vrsqrtps` via f32 + degree-5 correction | 1 / 1 | 8 / 4 |
+//!
+//! Per pair and lane, with d = x − y: r² = fma(d₂, d₂, fma(d₁, d₁, d₀²)); ρ = 1/√r²,
+//! cleared to +0 where r² = 0; φ += q ρ, and with gradients ∇φ −= (q ρ) ρ² d. A call
+//! runs whole blocks in place, then smaller blocks while whole vectors remain, and
+//! the last partial vector on a stack copy padded with the last target, by the same
+//! vector code: no target ever takes a scalar tail.
+//!
 //! ## Semantics
 //!
 //! [`P2pKernel::evaluate`] has the signature and semantics of `nd_fmm_ref::p2p::p2p`
@@ -56,9 +74,18 @@
 //!   evaluating them at once, and a target's result does not depend on its position
 //!   in `targets` or on how many targets there are, bit for bit.
 //! - **Determinism.** The same inputs on the same machine, ISA and build give the same
-//!   bits. Results differ between ISAs, and from the reference, within the accuracy of
-//!   design §3, requirement 2. The scalar path uses the reference's formulas in the
-//!   reference's order and equals it bit for bit wherever r² ≠ 0.
+//!   bits. Results differ between ISAs, and from the reference, within the accuracy
+//!   below. The scalar path uses the reference's formulas in the reference's order and
+//!   equals it bit for bit wherever r² ≠ 0. On AVX2 the estimate `vrsqrtps` is not
+//!   architecturally defined, so results may also differ between Intel and AMD CPUs in
+//!   the last bits (design §5.5).
+//! - **Accuracy** (design §3, requirement 2), for pairs in the kernel domain: each
+//!   potential term within 8 u_T of the reference's term, relative, and each gradient
+//!   component within 16 u_T relative to |q| / r², with u_T the unit roundoff (2⁻²⁴,
+//!   2⁻⁵³). In f32 the gradient contract holds for 2⁻⁸⁴ ≤ r² ≤ 2⁷ and |q| ≤ 1, where
+//!   the intermediate (q ρ) ρ² stays normal (§3.13, "Range of the terms in f32"). The
+//!   terms are added in input order without compensation, as by the reference, so a
+//!   sum carries the reference's summation error.
 //! - No allocation, no threads, no MPI; the kernel writes only into the caller's
 //!   slices. Mismatched lengths panic, as in the reference.
 //!
@@ -161,23 +188,59 @@ impl SimdScalar for f64 {}
 /// Seals [`SimdScalar`], and dispatches generic code to the entry points of its
 /// precision.
 mod sealed {
-    use crate::{Isa, arch};
+    use crate::Isa;
+    use crate::arch::{self, AvailableIsa};
 
     /// Implemented only for f32 and f64.
     pub trait Sealed: Sized {
         /// [`rsqrt_slice`](crate::rsqrt::rsqrt_slice) in this precision.
         fn rsqrt_slice(isa: Isa, x: &[Self], out: &mut [Self]);
+
+        /// [`P2pKernel::evaluate`](crate::P2pKernel::evaluate) in this precision, with
+        /// lengths already checked.
+        fn p2p(
+            isa: AvailableIsa,
+            sources: &[[Self; 3]],
+            charges: &[Self],
+            targets: &[[Self; 3]],
+            potential: &mut [Self],
+            gradient: Option<&mut [[Self; 3]]>,
+        );
     }
 
     impl Sealed for f32 {
         fn rsqrt_slice(isa: Isa, x: &[f32], out: &mut [f32]) {
             arch::rsqrt_slice_f32(isa, x, out);
         }
+
+        #[inline]
+        fn p2p(
+            isa: AvailableIsa,
+            sources: &[[f32; 3]],
+            charges: &[f32],
+            targets: &[[f32; 3]],
+            potential: &mut [f32],
+            gradient: Option<&mut [[f32; 3]]>,
+        ) {
+            arch::p2p_f32(isa, sources, charges, targets, potential, gradient);
+        }
     }
 
     impl Sealed for f64 {
         fn rsqrt_slice(isa: Isa, x: &[f64], out: &mut [f64]) {
             arch::rsqrt_slice_f64(isa, x, out);
+        }
+
+        #[inline]
+        fn p2p(
+            isa: AvailableIsa,
+            sources: &[[f64; 3]],
+            charges: &[f64],
+            targets: &[[f64; 3]],
+            potential: &mut [f64],
+            gradient: Option<&mut [[f64; 3]]>,
+        ) {
+            arch::p2p_f64(isa, sources, charges, targets, potential, gradient);
         }
     }
 }
