@@ -12,7 +12,9 @@
 mod common;
 
 mod capability;
+mod leaf;
 mod movement;
+mod p2p;
 mod properties;
 mod round_trip;
 mod views;

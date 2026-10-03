@@ -40,11 +40,24 @@
 //! error of the whole FMM lies within 1% of that with `Reference`, and its output within
 //! 1e-13 of the `Reference` output (relative L2 over all points).
 //!
+//! **Device path** (Phase 4 T6, C4.2; T7, C4.3), with a backend feature: the complete
+//! `Fmm` with the default placement (P2M, P2L, L2P, M2P and P2P on the device, M2M, M2L
+//! and L2L on the host fallback), on the CPU runtime in f64
+//! at every p of [`PS`] (feature `cpu`) and on Metal in f32 at p = 3 and 8 (feature
+//! `metal`, by hand outside the macOS sandbox), against the host `Fmm` in the same
+//! precision: the relative L2 error of φ at the sampled targets against the direct sum
+//! (the four exact parts together) within 0.1% (f64) or 5% (f32) of the host's
+//! (docs/phase4/README.md, "Accuracy measures"), and the output within 1e-12 (f64) or 1e-5
+//! (f32) of the host output (relative L2 over all points). The device differs in the U
+//! list (P2P), the W list (M2P), the X list (P2L) and the leaves' own expansions (P2M,
+//! L2P).
+//!
 //! Its own executable, because it initialises MPI (at `Threading::Funneled`, for the
 //! threaded evaluations); ignored, because it needs release mode:
 //!
 //! ```text
 //! RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --release --test adaptive -- --ignored --nocapture
+//! RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features cpu --release --test adaptive -- --ignored --nocapture
 //! ```
 
 use std::collections::HashMap;
@@ -52,6 +65,8 @@ use std::collections::HashMap;
 use mpi::Threading;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
+#[cfg(feature = "gpu")]
+use nd_fmm_exec::fmm::Backend;
 use nd_fmm_exec::fmm::{Fmm, FmmBuilder};
 use nd_fmm_exec::geometry::{Domain, leaf_coordinates, radius};
 use nd_fmm_exec::operator::{Isa, LaplaceOperator, P2pChoice};
@@ -569,6 +584,128 @@ fn strategies_and_threads(
     }
 }
 
+/// The device path on each backend compiled in (module documentation, "Device path"):
+/// the CPU runtime in f64 at every p of [`PS`], Metal in f32 at p = 3 and 8.
+#[cfg(feature = "gpu")]
+fn device_gates(
+    name: &str,
+    (points, charges): (&[[f64; 3]], &[f64]),
+    (sample, exact): (&[usize], &[f64]),
+    comm: &SimpleCommunicator,
+    failures: &mut Vec<String>,
+) {
+    let mut ran = Vec::new();
+    if Backend::Cpu.is_compiled() {
+        for p in PS {
+            device_gate::<f64>(
+                name,
+                Backend::Cpu,
+                p,
+                (points, charges),
+                (sample, exact),
+                comm,
+                failures,
+            );
+        }
+        ran.push("cpu (f64)");
+    }
+    if Backend::Metal.is_compiled() {
+        for p in [3, 8] {
+            device_gate::<f32>(
+                name,
+                Backend::Metal,
+                p,
+                (points, charges),
+                (sample, exact),
+                comm,
+                failures,
+            );
+        }
+        ran.push("metal (f32)");
+    }
+    eprintln!(
+        "{name}: backends run: host, {}; not run: cuda (type-checked, not run)",
+        ran.join(", ")
+    );
+}
+
+/// The host and the device `Fmm` in `T` at degree `p` against the exact potential at the
+/// sample (module documentation, "Device path").
+#[cfg(feature = "gpu")]
+#[allow(clippy::too_many_arguments)]
+fn device_gate<
+    T: nd_fmm_tables::cache::Stored
+        + nd_fmm_exec::operator::SimdScalar
+        + Equivalence
+        + Default
+        + nd_fmm_math::RealScalar,
+>(
+    name: &str,
+    backend: Backend,
+    p: usize,
+    (points, charges): (&[[f64; 3]], &[f64]),
+    (sample, exact): (&[usize], &[f64]),
+    comm: &SimpleCommunicator,
+    failures: &mut Vec<String>,
+) {
+    let f64_run = size_of::<T>() == 8;
+    let (error_ratio, difference_bound) = if f64_run { (1e-3, 1e-12) } else { (5e-2, 1e-5) };
+    let q: Vec<T> = charges.iter().map(|&v| T::from_f64(v)).collect();
+    let widen = |v: &[T]| -> Vec<f64> {
+        v.iter()
+            .map(|&x| 4.0 * std::f64::consts::PI * x.to_f64())
+            .collect()
+    };
+    let builder = FmmBuilder::<T>::new(p);
+    let host = widen(
+        &builder
+            .clone()
+            .threads(THREADS)
+            .build(points, points, comm)
+            .expect("the host FMM builds")
+            .evaluate(&q)
+            .expect("the host FMM evaluates")
+            .potential,
+    );
+    let mut fmm = builder
+        .clone()
+        .backend(backend)
+        .build(points, points, comm)
+        .unwrap_or_else(|error| panic!("{backend}: the device FMM does not build: {error}"));
+    let report = fmm.device_report().expect("a device backend");
+    let layout = format!(
+        "P2P {}, leaf operators {}",
+        report.p2p_layout, report.leaf_layout
+    );
+    let device = widen(
+        &fmm.evaluate(&q)
+            .expect("the device FMM evaluates")
+            .potential,
+    );
+    let at_sample = |v: &[f64]| -> Vec<f64> { sample.iter().map(|&i| v[i]).collect() };
+    let error = |v: &[f64]| relative_l2(&at_sample(v), exact);
+    let (error_host, error_device) = (error(&host), error(&device));
+    let ratio = error_device / error_host;
+    let difference = relative_l2(&device, &host);
+    eprintln!(
+        "{name}, {backend}, {}, p = {p}, P2P and leaf operators on the device ({layout}): relative L2 error of φ \
+         {error_device:.4e} against the host's {error_host:.4e} (ratio {ratio:.6}); output \
+         within {difference:.1e} of the host's",
+        if f64_run { "f64" } else { "f32" }
+    );
+    if (ratio - 1.0).abs() > error_ratio {
+        failures.push(format!(
+            "{name}, {backend}, p = {p}: the device error is {ratio} times the host's"
+        ));
+    }
+    if difference > difference_bound {
+        failures.push(format!(
+            "{name}, {backend}, p = {p}: the device output differs from the host's by \
+             {difference:e}"
+        ));
+    }
+}
+
 #[test]
 #[ignore = "release mode: N = 10^5, four evaluations per p and the direct sums per list"]
 fn errors_per_list_on_clustered_trees() {
@@ -665,6 +802,20 @@ fn errors_per_list_on_clustered_trees() {
                     "{name}, p = {p}: {detected} differs from reference by {difference:e}"
                 ));
             }
+        }
+        #[cfg(feature = "gpu")]
+        {
+            let (parts, _) = parts.as_ref().expect("measured above");
+            let exact: Vec<f64> = (0..sample.len())
+                .map(|r| parts.iter().map(|part| part[r]).sum())
+                .collect();
+            device_gates(
+                name,
+                (&points, &charges),
+                (&sample, &exact),
+                &comm,
+                &mut failures,
+            );
         }
         strategies_and_threads(name, &points, &charges, &comm);
     }

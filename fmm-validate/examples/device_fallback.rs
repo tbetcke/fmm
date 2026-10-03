@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
 use nd_fmm_exec::device::{DataKind, DeviceCounters, Traffic};
-use nd_fmm_exec::fmm::{Backend, FmmBuilder, Output};
+use nd_fmm_exec::fmm::{Backend, FmmBuilder, OperatorKind, Output};
 use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_math::RealScalar;
 use nd_fmm_tables::cache::Stored;
@@ -151,7 +151,14 @@ fn measure<T: Stored + SimdScalar + mpi::traits::Equivalence + Default>(
         .build(points, points, comm)
         .expect("the host FMM builds");
     let start = Instant::now();
-    let mut device = match builder.clone().backend(backend).build(points, points, comm) {
+    // Every kind on the host fallback (from Phase 4 T6 P2P, and from T7 P2M, P2L, L2P and
+    // M2P, run on the device by default).
+    let mut device = match builder
+        .clone()
+        .backend(backend)
+        .host_fallback(OperatorKind::ALL)
+        .build(points, points, comm)
+    {
         Ok(fmm) => fmm,
         Err(error) => {
             eprintln!("{backend}, {}: {error}", T::type_name());

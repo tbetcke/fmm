@@ -10,13 +10,14 @@ repository.workspace = true
 [lib]
 name = "nd_fmm_validate"
 
-# The device path of nd-fmm-exec, passed through (docs/design/device-path.md §3.4).
+# The device path of nd-fmm-exec and the kernels of nd-fmm-kernels, passed through
+# (docs/design/device-path.md §3.4).
 [features]
 default = []
-gpu = ["nd-fmm-exec/gpu"]
-cpu = ["gpu", "nd-fmm-exec/cpu"]
-metal = ["gpu", "nd-fmm-exec/metal"]
-cuda = ["gpu", "nd-fmm-exec/cuda"]
+gpu = ["nd-fmm-exec/gpu", "dep:nd-fmm-kernels"]
+cpu = ["gpu", "nd-fmm-exec/cpu", "nd-fmm-kernels/cpu"]
+metal = ["gpu", "nd-fmm-exec/metal", "nd-fmm-kernels/metal"]
+cuda = ["gpu", "nd-fmm-exec/cuda", "nd-fmm-kernels/cuda"]
 
 [dependencies]
 nd-fmm-math = { workspace = true }
@@ -25,9 +26,17 @@ nd-fmm-tables = { workspace = true }
 nd-fmm-exec = { workspace = true }
 nd-fmm-simd = { workspace = true }
 mpi = { workspace = true }
+# The device P2P rows of `p2p_kernels` (Phase 4 T6), feature `gpu`.
+nd-fmm-kernels = { workspace = true, optional = true }
 
 # The device path on the host fallback (Phase 4 T5): needs a device backend; not run in
 # CI (no templated-examples entry), run by hand on one rank.
 [[example]]
 name = "device_fallback"
+required-features = ["gpu"]
+
+# The device leaf operators per level against the host operator (Phase 4 T7): needs a
+# device backend; not run in CI (no templated-examples entry), run by hand on one rank.
+[[example]]
+name = "leaf_kernels"
 required-features = ["gpu"]
