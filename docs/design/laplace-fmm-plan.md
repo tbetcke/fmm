@@ -19,6 +19,13 @@ and 10): a new Phase 3S, hand-written SIMD P2P on the host (NEON and AVX2 + FMA 
 new crate `nd-fmm-simd`, benchmarked against green-kernels; AVX-512 deferred), runs between
 Phase 3 and Phase 4. Its design is [simd-p2p.md](simd-p2p.md); its tasks are in
 docs/phase3s/. The numbers of the later phases are unchanged.
+Revised at the end of Phase 3S (2026-10-03; Sections 5.1, 7, 8.3, 9.1 and 9.2):
+`nd-fmm-simd` runs P2P on NEON (`sqrt` and division, which the spike found faster than
+the estimate there) and on AVX2 + FMA (estimate and polynomial correction), and is the
+default P2P of `nd-fmm-exec`. On the Apple M3 Max it is 3–8× faster than
+`nd_fmm_ref::p2p` and 1.2–1.8× faster than green-kernels, and it speeds up a one-thread
+evaluation 1.4–2.5× at p = 3 and 1.05–1.2× at p = 8. The default leaf size stays 64.
+x86_64 is checked for correctness in CI and was never timed.
 
 > Where this document and `docs/CONVENTIONS.md` differ (normalisation, phases, scaling),
 > **the conventions file takes precedence.** Section 2.4 below now follows the scaling of
@@ -466,7 +473,7 @@ operator through `FmmOperator`, once per level and operator kind.
 | `fmm-tables` | Builds M2M/L2L (8 each, by `morton::child_index`), M2L (316 or 16 + symmetry, keyed like `V_LIST_DIRECTIONS`), rotation and coaxial tables; SVD compression (C6.2, later); versioned on-disk cache | `fmm-ref`, `fmm-math`, `thiserror` (cache errors); `rlst` (without its `mpi` feature) only with SVD compression | built in f64, stored in both |
 | `fmm-kernels` | `#[cube]` kernels: P2M, L2P, P2L, M2P, P2P, gather/scatter, M2L-GEMM, M2L-rotation, M2M/L2L | `cubecl`, the CubeCL matmul crate | generic |
 | `fmm-exec` (Phase 3: host path done) | `LaplaceOperator<T>`, the batched `FmmOperator` for Laplace: host path target by target with rayon threads (Phase 3), device path later; box geometry from integer Morton keys (CONVENTIONS §3.13); M2L strategy selection; `FmmBuilder` and `Fmm`, which load leaf-scaled points and apply 1/(4π) once; device buffers and autotune later | `nd-fmm-plan`, `nd-octree`, `nd-fmm-tables`, `nd-fmm-ref`, `nd-fmm-math`, `mpi`, `rlst`, `rayon`, `thiserror`; `fmm-simd` from Phase 3S (SIMD P2P); `fmm-kernels` from Phase 4 | generic |
-| `fmm-simd` (Phase 3S) | Hand-written SIMD kernels for the host path, P2P first: `core::arch` intrinsics for NEON and AVX2 + FMA (AVX-512 deferred), a scalar fallback, runtime ISA dispatch, the inverse square root by hardware estimate and Newton steps; the signature and semantics of `nd_fmm_ref::p2p` ([simd-p2p.md](simd-p2p.md)) | `nd-fmm-math`, `thiserror`; no MPI | f32, f64 |
+| `fmm-simd` (Phase 3S, done) | Hand-written SIMD kernels for the host path, P2P first: `core::arch` intrinsics for NEON and AVX2 + FMA (AVX-512 deferred), a scalar fallback, runtime ISA dispatch; 1/r by `sqrt` and division on NEON and by the hardware estimate with a polynomial correction on AVX2, within 4 u_T; the signature and semantics of `nd_fmm_ref::p2p` ([simd-p2p.md](simd-p2p.md)) | `nd-fmm-math`, `thiserror`; no MPI | f32, f64 |
 | `fmm-validate` | Error norms, point distributions, accuracy sweeps of the operators and of the complete FMM, the calibration of p (C3.4), benchmark harness | all | f64 reference |
 | `nd-fmm-plan` (rewritten in Phase 3) | Morton-ordered integer box index, index-based interaction lists (target-centric CSR, and grouped by V-list offset and child octant), level buffers and variable-size CSR leaf stores, ghost exchange, global coarse levels, the level-batched operator interface with a per-pair adapter, the evaluator; designed in [fmm-plan-redesign.md](fmm-plan-redesign.md) | `nd-octree`, `mpi`, `rlst` | generic `Value` |
 
@@ -1304,6 +1311,19 @@ mean square over the eight vectors; cube / Plummer):
   alongside M2L from the start. Phase 3S first makes the host P2P fast with SIMD
   kernels, and C4.2 is then compared with that host kernel as well as with
   `nd_fmm_ref::p2p`.
+- *After Phase 3S* (T7, M3 Max, one thread, the default `P2pChoice::Auto`):
+  - The host P2P baseline for C4.2 is `nd_fmm_simd::P2pKernel` on NEON. At the leaf
+    size of the FMM (W1, n_t = 64, per-pair form) it runs at 4.03 Gpairs/s (f32, φ),
+    2.60 (f32, φ and ∇φ), 2.19 (f64, φ) and 1.22 (f64, φ and ∇φ), one P-core. That is
+    1.3–1.8× green-kernels and 3.7–8.5× `nd_fmm_ref::p2p` (Section 7, Phase 3S).
+    `p2p_kernels` reports both on the same workloads, so the GPU kernel can be added
+    as a row.
+  - The stage shares have moved. At p = 3 the leaf stage is 49–69% of an evaluation
+    (was 78–81% on these problems), at p = 8 10–45% (was 19–49%). On the uniform cube
+    the far field now dominates from p = 8 on (88–90%), and at p = 3 leaves and far
+    field are close in f32 (49%). On the Plummer sphere the leaf stage still holds
+    67–69% at p = 3, of which L2P and M2P are a growing part, so a GPU leaf stage needs
+    them as well as P2P (C4.3).
 - Dense table building (about 230 ms at p = 8, 8.5 s at p = 16; T8) belongs outside
   timed runs; GPU benchmarks use `table_cache`.
 
@@ -1323,7 +1343,9 @@ Phase 3S replaces it with hand-written kernels:
   order, as the reference does. Per-pair and batched calls then stay bit-identical
   (C3.1), and so does every thread count (C3.5);
 - 1/r from the hardware inverse-square-root estimate, refined by Newton steps (or an
-  equivalent polynomial) to within 4 u_T;
+  equivalent polynomial) to within 4 u_T. *As built:* AVX2 does so (`vrsqrtps` and a
+  polynomial correction), but on NEON `sqrt` and division are faster inside the kernel,
+  because they run on the divider beside the four FP pipes (T2);
 - coincident pairs excluded by r² = 0, which equals the exact rule of CONVENTIONS §3.13
   on leaf-scaled data (C3S.1).
 
@@ -1339,12 +1361,12 @@ model.
 
 | ID | Component | Acceptance criterion | Depends on | Status |
 | --- | --- | --- | --- | --- |
-| C3S.1 | Coincident-pair rule and domain of r² for fast kernels (CONVENTIONS §3.13 addition) | `check_p2p_domain.py` confirms that r² = 0 exactly for coincident leaf-scaled points and bounds every nonzero r²; signed off | C3.1 | Not started |
-| C3S.2 | Spike: loop order, inverse-square-root variants, register blocking, green-kernels baseline | report with NEON measurements, the x86_64 choices from documented bounds and operation counts, and a signed-off recommendation | C3.5 | Not started |
-| C3S.3 | `nd-fmm-simd`: ISA detection and dispatch, scalar path, per-ISA vector layer and inverse square root | inverse square root within 4 u_T on every ISA run (f32 exhaustive over [1, 4), f64 on 10⁷ samples); no out-of-line call in the inner loops | C3S.2 | Not started |
-| C3S.4 | SIMD P2P kernel (NEON, AVX2; potential and gradient; f32, f64) | pair terms within 8 u_T (potential) and 16 u_T (gradient) of `nd_fmm_ref::p2p`; sums within 1e-14 (f64) and 1e-6 (f32) of `direct_sum`; chunk and target-position invariance bit for bit; at least 90% of the spike's throughput | C3S.1, C3S.3 | Not started |
-| C3S.5 | P2P of `LaplaceOperator` through `nd-fmm-simd`, with the reference path selectable | T8 operator check to 1e-13; C3.2 and C3.3 gates pass, within 1% (f64) and 2% (f32) of the reference-P2P errors; bit-identical across threads and between per-pair and batched | C3S.4 | Not started |
-| C3S.6 | Benchmarks: against `nd_fmm_ref::p2p` and green-kernels, FMM timings, leaf size | report published; target: at least green-kernels' throughput at equal or better accuracy in every FMM-shaped and all-pairs cell on NEON (x86_64 not timed); leaf-size default chosen by the T7 rule | C3S.5 | Not started |
+| C3S.1 | Coincident-pair rule and domain of r² for fast kernels (CONVENTIONS §3.13 addition) | `check_p2p_domain.py` confirms that r² = 0 exactly for coincident leaf-scaled points and bounds every nonzero r²; signed off | C3.1 | Done (T1, PR #41; signed off 2026-10-02): leaf-scaled coordinates and mapped sources lie on 2⁻⁵³ℤ, so a nonzero r² is at least 2⁻¹⁰⁶ (attained) and r² = 0 exactly for coincident points; kernel domain r² = 0 or 2⁻¹⁰⁸ ≤ r² ≤ 2⁷; the f32 gradient contract holds from r² = 2⁻⁸⁴ |
+| C3S.2 | Spike: loop order, inverse-square-root variants, register blocking, green-kernels baseline | report with NEON measurements, the x86_64 choices from documented bounds and operation counts, and a signed-off recommendation | C3.5 | Done (T2, PR #42; signed off): targets in lanes kept (sources in lanes only 1.046× (f32) and 1.041× (f64) faster against the 1.15 threshold); on NEON `sqrt` + division (1.50 u_T), 19–53% faster in the kernel than the best estimate route; on AVX2 `vrsqrtps` + degree-2 (f32) and via f32 + degree-5 (f64) corrections, 1.50 u_T derived; K = 2 / 4 (NEON f32 / f64) and 1 (AVX2); no relaxed f64 level |
+| C3S.3 | `nd-fmm-simd`: ISA detection and dispatch, scalar path, per-ISA vector layer and inverse square root | inverse square root within 4 u_T on every ISA run (f32 exhaustive over [1, 4), f64 on 10⁷ samples); no out-of-line call in the inner loops | C3S.2 | Done (T3, PR #43; T4, PR #44): f32 exhaustive / f64 sampled, NEON 1.500 / 1.496 u_T (M3 Max and the CI's Neoverse-N2, identical), AVX2 1.499 / 1.000 u_T (CI, AMD EPYC 7763); no call in any inner loop |
+| C3S.4 | SIMD P2P kernel (NEON, AVX2; potential and gradient; f32, f64) | pair terms within 8 u_T (potential) and 16 u_T (gradient) of `nd_fmm_ref::p2p`; sums within 1e-14 (f64) and 1e-6 (f32) of `direct_sum`; chunk and target-position invariance bit for bit; at least 90% of the spike's throughput | C3S.1, C3S.3 | Done (T5, PR #45): terms over 10⁶ pairs, potential / gradient, NEON 4.56 / 10.35 u (f32) and 4.37 / 9.48 u (f64), AVX2 4.18 / 8.70 u and 3.96 / 7.95 u; sums within requirement 2 as amended in T5 (twice the reference's error where that exceeds 1e-6, f32 with gradients); invariance bit for bit on every ISA; NEON at 96–101% of the spike prototype; AVX2 loops at exactly the operation count of simd-p2p.md §4.2 |
+| C3S.5 | P2P of `LaplaceOperator` through `nd-fmm-simd`, with the reference path selectable | T8 operator check to 1e-13; C3.2 and C3.3 gates pass, within 1% (f64) and 2% (f32) of the reference-P2P errors; bit-identical across threads and between per-pair and batched | C3S.4 | Done (T6, PR #46): operator check 4.4e-16 (bound 1e-13); C3.2 and C3.3 errors equal to the `Reference` run's to the printed digits, outputs within 4.4e-16; bit-identical for 1, 2, 4 and 8 threads and per-pair; `P2pChoice::Auto` the default |
+| C3S.6 | Benchmarks: against `nd_fmm_ref::p2p` and green-kernels, FMM timings, leaf size | report published; target: at least green-kernels' throughput at equal or better accuracy in every FMM-shaped and all-pairs cell on NEON (x86_64 not timed); leaf-size default chosen by the T7 rule | C3S.5 | Done (T7), apart from one condition reported for decision: green-kernels' throughput reached in all 64 cells (1.17× or more), but its sums are more accurate in 57 of them (below). FMM speed-ups and the leaf-size study below; the default stays 64. M3 Max timings only; no x86_64 path was timed |
 
 Throughput model per core, from the operation count of the kernel ([simd-p2p.md](simd-p2p.md)
 §4.6; **a model, not a measurement**), in pairs per cycle with gradients: NEON on the M3
@@ -1352,6 +1374,129 @@ Max 0.73 (f32) and 0.32 (f64), AVX2 0.80 and 0.29 (and for a later AVX-512 path 
 and 0.70). Against the
 estimated 0.1 pairs per cycle of the Phase 3 path, this allows about 7× in f32 and 3×
 in f64 on the M3 Max. The spike (C3S.2) measures how much of it is reached.
+*Outcome:* with `sqrt` and division on NEON the spike corrected the model to 4 pipes and
+the divider (about 3 cycles per vector): 1.33 / 0.94 pairs per cycle in f32 (φ / φ and
+∇φ) and 0.67 / 0.47 in f64. The production kernel reaches 75%, 68%, 79% and 64% of it
+on the gathered FMM-shaped cells, 0.65 pairs per cycle in f32 with gradients and 0.30 in
+f64 (at 4.05 GHz).
+
+Every figure below is from the Apple M3 Max (NEON), release build, default target, with
+every BLAS thread variable set to 1, measured in T7 on 2026-10-03; raw output in
+`spikes/p2p-simd/results-m3max-final.md`. Timings are reported, never asserted. **No
+x86_64 path was timed**: there is no x86_64 machine in Phase 3S. The AVX2 path is
+checked for correctness and accuracy in CI (AMD EPYC 7763), and for speed only
+by its inner-loop instruction counts, which equal the operation count of simd-p2p.md
+§4.2.
+
+**Kernels** (T7, `cargo run --release -p nd-fmm-validate --example p2p_kernels` and
+`cargo run --release -p nd-fmm-spike-p2p-simd --example compare`): one thread, Gpairs/s
+(n_s n_t pairs per evaluation, coincident ones included) as geometric means over the
+cells of each group. W1 is FMM-shaped: a target leaf of n_t ∈ {8, …, 128} points and its
+27 neighbour leaves, called per source leaf (per-pair, as `LaplaceOperator` does) or
+once (gathered); W2 is all-pairs, N ∈ {10³, 10⁴}, targets distinct from or equal to the
+sources (simd-p2p.md §8.2). Reference and NEON are from `p2p_kernels`, green-kernels
+(pulp backend `Neon`) and the ratio to it from `compare`, which ran NEON again on the
+same inputs (within 1–2% of the first run).
+
+| precision | output | reference: W1 per-pair / gathered / W2 | NEON | green-kernels | NEON / reference | NEON / green-kernels | of the corrected model (W1 gathered) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| f32 | φ | 0.55 / 0.54 / 0.69 | 3.79 / 4.03 / 4.05 | 2.53 / 2.97 / 2.95 | 6.9 / 7.4 / 5.9 | 1.51 / 1.35 / 1.37 | 75% |
+| f32 | φ, ∇φ | 0.41 / 0.32 / 0.31 | 2.46 / 2.61 / 2.63 | 1.72 / 2.15 / 2.16 | 6.1 / 8.3 / 8.4 | 1.43 / 1.22 / 1.20 | 68% |
+| f64 | φ | 0.53 / 0.49 / 0.45 | 2.10 / 2.14 / 2.18 | 1.16 / 1.26 / 1.27 | 4.0 / 4.4 / 4.8 | 1.82 / 1.73 / 1.73 | 79% |
+| f64 | φ, ∇φ | 0.38 / 0.31 / 0.35 | 1.14 / 1.22 / 1.24 | 0.83 / 0.90 / 0.91 | 3.0 / 4.0 / 3.6 | 1.39 / 1.37 / 1.37 | 64% |
+
+- The reference's speed is bimodal (T2): potential-only cells run at about 0.34 or
+  0.85 Gpairs/s on the same data, depending on the run, because its loop keeps φ in
+  memory. The ratios to it use the values as measured, so they range from about 3×
+  (fast mode) to 8× (slow mode). The scalar ISA (the reference's loop in
+  `nd-fmm-simd`) is 1.0–1.7× the reference for the same reason.
+- The kernel's per-pair form is 2–6% slower than its gathered form (geometric means);
+  T6 found 1–6% in the FMM's leaf stage, and calls stay per source leaf.
+- Accuracy (largest error relative to the term magnitudes, worst over the cells): NEON
+  1.8e-7 (f32 φ), 2.6e-6 (f32 ∇φ), 6.1e-16 (f64 φ), 6.7e-15 (f64 ∇φ); the reference
+  1.6e-7, 2.7e-6, 6.2e-16, 6.8e-15. All 192 rows pass requirement 2, and per-pair calls
+  equal the gathered call bit for bit in every cell.
+
+**The C3S.6 target** (`compare`, the default kernel, NEON). *Speed:* met in all 64
+cells (4 outputs × 16 cells); the smallest margin is 1.17× (f32 with gradients, W2
+N = 10⁴, targets distinct). No cell needs the speed analysis. *Accuracy:* not met as
+written. green-kernels' largest error is smaller in 57 of the 64 cells, by up to 6.9×
+(f32 φ), 3.7× (f32 φ, ∇φ), 8.5× (f64 φ) and 11.9× (f64 φ, ∇φ); ours is smaller in 7
+cells, all with gradients. Cause, as the spike predicted:
+- Targets in lanes adds each target's terms in source order, which requirement 4 and the
+  C3.1 and C3.5 bit-identities need. green-kernels adds them in W partial sums (sources
+  in lanes) and reduces at the end, and in the per-pair form it also sums each call
+  separately before adding it to the output, so its rounding error grows more slowly.
+- The per-pair terms are within 8 and 16 u_T. Our sum error is within 0.76–1.46× of
+  `nd_fmm_ref::p2p`'s on every cell, and both libraries pass requirement 2 on all 64.
+- **For decision:** restate the accuracy condition of C3S.6 as "within requirement 2,
+  per pair within 8 / 16 u_T" (the spike's proposal), or accept the cells as they are.
+  Matching green-kernels' sums would mean giving up in-order summation, and with it
+  the bit-identity of per-pair and batched P2P (C3.1).
+
+**FMM** (T7, `cargo run --release -p nd-fmm-validate --example p2p_fmm`): the T12
+calibration problems (N = 10⁵, sources equal to targets, `max_level` 16, 64 points per
+leaf, eight charge vectors, gradients), mean wall time of one evaluation in ms,
+`Reference` → `Auto` (NEON), and the speed-up. 12 threads is the number of performance
+cores. The errors of `Auto` equal those of `Reference` to the printed digits in f64 and
+within 0.05% in f32 (φ / ref and ∇φ / ref 0.99994–1.00041), the same on 1 and 12
+threads, and equal to T12's (e.g. cube 2.61e-3 at p = 3, Plummer 2.19e-5 at p = 8 in
+f64). `--p2p scalar` runs at the reference's speed (0.92–1.06×).
+
+| distribution | precision | p | leaves, 1 thread | evaluate, 1 thread | near share | leaves, 12 threads | evaluate, 12 threads |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| cube | f64 | 3 | 160 → 60 (2.65×) | 202 → 101 (1.99×) | 80% → 60% | 14.4 → 6.0 (2.39×) | 19.8 → 11.7 (1.70×) |
+| cube | f64 | 8 | 181 → 87 (2.09×) | 942 → 846 (1.11×) | 19% → 10% | 17.3 → 8.8 (1.96×) | 93.2 → 84.0 (1.11×) |
+| cube | f32 | 3 | 151 → 37 (4.12×) | 187 → 74 (2.52×) | 81% → 49% | 13.8 → 3.7 (3.72×) | 18.8 → 8.6 (2.18×) |
+| cube | f32 | 8 | 181 → 62 (2.90×) | 625 → 515 (1.21×) | 29% → 12% | 18.3 → 7.1 (2.59×) | 65.6 → 54.6 (1.20×) |
+| Plummer | f64 | 3 | 305 → 193 (1.58×) | 393 → 280 (1.40×) | 78% → 69% | 30.1 → 20.7 (1.46×) | 42.2 → 32.2 (1.31×) |
+| Plummer | f64 | 8 | 739 → 633 (1.17×) | 1,910 → 1,811 (1.05×) | 39% → 35% | 74.1 → 65.0 (1.14×) | 208 → 196 (1.06×) |
+| Plummer | f32 | 3 | 302 → 165 (1.83×) | 384 → 247 (1.56×) | 79% → 67% | 30.9 → 21.7 (1.42×) | 41.7 → 35.3 (1.18×) |
+| Plummer | f32 | 8 | 741 → 602 (1.23×) | 1,511 → 1,352 (1.12×) | 49% → 45% | 80.4 → 64.0 (1.26×) | 172 → 155 (1.11×) |
+
+- On the uniform cube the leaf stage speeds up 2.1–4.1×, close to the kernel's per-pair
+  speed-up, so P2P dominated it. At p = 3 an evaluation is 2.0× (f64) and 2.5× (f32)
+  faster; the design's estimate (simd-p2p.md §4.6) was 199 → 105 ms for f64.
+- On the Plummer sphere the leaf stage gains only 1.2–1.8×. Its leaves hold 17.6 points
+  on average (many hold none or a few), and the rest of the stage, L2P, M2P (W lists)
+  and the mapping of each source leaf into the target's frame, which the kernel does
+  not touch, is a larger part of it. At p = 8 the evaluation gains 5–12%.
+- With 12 threads the gains are slightly smaller (the leaf stage scales well in both
+  cases, the far field dominates more).
+
+**Leaf size** (T7, `p2p_fmm`, P2P `Auto`): one-thread evaluation time in ms at the
+refinement targets 16, 32, 64, 128 and 256, and T12's (`Reference`, p = 8, f64) for
+comparison. Errors: as in T12 (the P2P kernel does not change them): φ barely moves
+(cube 1.6–1.9e-5, Plummer 2.1–2.3e-5 at p = 8), ∇φ improves with larger leaves.
+
+| distribution | precision | p | 16 | 32 | 64 | 128 | 256 | fastest (64 / fastest) | near share at 64 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| cube | f64 | 3 | 415 | 180 | **102** | 103 | 351 | 64 | 60% |
+| cube | f32 | 3 | 386 | 152 | 75 | **74** | 173 | 128 (1.02, the same tree as 64) | 50% |
+| cube | f64 | 8 | 6,765 | 1,208 | 845 | 853 | **448** | 256 (1.89) | 10% |
+| cube | f32 | 8 | 3,946 | 854 | 499 | 506 | **243** | 256 (2.06) | 12% |
+| Plummer | f64 | 3 | 391 | 309 | **281** | 306 | 386 | 64 | 69% |
+| Plummer | f32 | 3 | 358 | 288 | **246** | 255 | 295 | 64 | 67% |
+| Plummer | f64 | 8 | 4,916 | 2,855 | 1,777 | 1,432 | **1,368** | 256 (1.30) | 35% |
+| Plummer | f32 | 8 | 3,069 | 1,921 | 1,352 | 1,146 | **1,145** | 256 (1.18) | 44% |
+| T12: cube | f64 | 8 | 6,720 | 1,320 | 938 | 941 | 1,380 | 64 / 128 | 19–20% |
+| T12: Plummer | f64 | 8 | 4,858 | 2,899 | 1,943 | 1,694 | 1,874 | 128 (1.15) | 40% |
+
+- The faster P2P moves the optimum at p = 8 from 64–128 to 256 for both distributions:
+  near and far balance at larger leaves. At p = 3 it stays at 64 (128 on the cube's
+  identical tree), and 256 is 1.2–3.4× slower there.
+- On 12 threads the fastest sizes are the same (p = 3: 64, or 128 on the cube's same
+  tree; p = 8: 256).
+- **The rule of T7** (fixed before the runs): the geometric mean of the one-thread
+  evaluation times over cube and Plummer, p = 3 and 8, f32 and f64, is 1,317, 585,
+  390, 379 and 430 ms at 16, 32, 64, 128 and 256. 128 is fastest, but only 3.1% faster
+  than 64, below the 5% the rule requires (its errors equal or improve on 64's). **The
+  default stays 64** (`DEFAULT_MAX_POINTS_PER_LEAF`). On 12 threads 128 would be 4.8%
+  faster, also below the threshold. The choice rests on M3 Max timings only; x86_64,
+  with other P2P and M2L costs, may favour another size and is not measured.
+- Because the best size depends on p (64 at p = 3, 256 at p = 8), a default that
+  depends on p, or on the M2L cost, would gain more than any single size. That is a
+  question for later (Section 9.2), not adopted here.
 
 ### Phase 4: CubeCL kernels (`fmm-kernels`, `fmm-exec` device path)
 
@@ -1447,8 +1592,9 @@ self-hosted runner. Until then they are run by hand, following `fmm-plan/CLAUDE.
   achieved GFLOP/s and GB/s against device peak.
 - Tune leaf size so the near field and far field are roughly balanced, the optimum in
   the classical cost model. Phase 3 measured the balance of the per-pair host path at
-  p = 8 (Section 7, Phase 3, "Leaf size"); the batched paths of Phase 4 shift it, so it
-  is measured again there.
+  p = 8 (Section 7, Phase 3, "Leaf size"), and Phase 3S again with the SIMD P2P at
+  p = 3 and 8 (T7, `p2p_fmm`; the default stays 64 by the T7 rule). The batched paths
+  of Phase 4 shift it, so it is measured again there.
 - Keep every thread pool inside the core budget of Section 6.8 when timing threaded
   host paths, and report the rayon threads and the BLAS variables with each run.
 - Compare at matched accuracy against FMM3D (analytic Laplace), and against ExaFMM-t and
@@ -1457,7 +1603,11 @@ self-hosted runner. Until then they are run by hand, following `fmm-plan/CLAUDE.
   on FMM-shaped leaf workloads and all-pairs sets, against `nd_fmm_ref::p2p` and the
   Laplace kernels of green-kernels, with the accuracy of every row against `direct_sum`
   ([simd-p2p.md](simd-p2p.md) §8). Use the default target with runtime dispatch, which
-  is what ships.
+  is what ships. *Done in Phase 3S T7* on the M3 Max: `nd-fmm-validate`'s examples
+  `p2p_kernels` (every ISA against the reference, with the fraction of the model) and
+  `p2p_fmm` (every kernel inside the FMM, and the leaf-size study), and the spike
+  example `compare` (against green-kernels; the only code that builds green-kernels).
+  All three build on x86_64, where nothing has been timed yet.
 - Keep a small benchmark in CI on the CPU runtime to catch performance regressions, and
   full GPU benchmarks nightly. The CPU runtime's throughput is not representative of
   any GPU (Section 6.1), so it only catches relative regressions.
@@ -1486,8 +1636,10 @@ and identity tests, the second with a one-day spike before Phase 4.
 | Adaptive-list edge cases (W, X lists, level jumps) | accuracy loss on clustered data | lists already checked against a brute-force oracle in `nd-fmm-plan`; clustered test distributions in C3.3. **Retired by Phase 3.** The rewritten lists still pass the oracle on 1, 2 and 4 ranks. On the sphere surface, Plummer sphere and Gaussian clusters (leaves on up to seven levels, 37,000–74,000 W and X pairs) the error is 0.40–1.26× the uniform tree's. Masking each list in turn shows the W and X parts at about 1e-6 of a 1–3e-5 total at p = 8 (T11), and graded trees, coincident points and points on box faces pass against the direct sum |
 | `nd-fmm-plan` extensions (C3.0, C4.0) delayed or shaped for one kernel | Phase 3 and the GEMM path are blocked | specify them as general extensions checked with `IndexFmm`; keep the per-pair path as fallback and reference. **Retired by Phase 3, by rewriting the crate instead of extending it** ([fmm-plan-redesign.md](fmm-plan-redesign.md), T1–T7). The rewrite took seven tasks, and the Laplace operator was written once, against the final interface. The interface was checked against a GEMM sketch in the design and by `IndexFmm` walking both views. It is checked against a real GEMM only in Phase 4 |
 | Per-pair `FmmOperator` calls with `HashMap` lookups too slow even on CPU | Phase 3 timings meaningless | Phase 3 gates on accuracy only; performance is measured on the batched path (C4.0 onwards). **Retired by Phase 3.** No hot path looks a key up in a `HashMap`, and the host path runs one level call per kind, target by target. On one thread, an f64 evaluation at N = 10⁵ takes 0.2 s (uniform cube, p = 3) to 12.6 s (Gaussian clusters, p = 18); with 16 threads the whole calibration sweep took 4.8 minutes (Section 7, Phase 3) |
-| SIMD paths not exercised, or x86_64 not timed (Phase 3S) | a fast path that silently breaks on one ISA | every test run prints the ISAs it ran; a CI job for the MPI-free `nd-fmm-simd` on x86_64 and arm64 runners; x86_64 throughput unmeasured, checked by instruction counts ([simd-p2p.md](simd-p2p.md) §7) |
-| Unsafe intrinsic code, and estimates that differ between CPUs (Phase 3S) | undefined behaviour; results outside the accuracy contract on some machine | `unsafe` only in `nd-fmm-simd`'s architecture modules, each block justified; ISA checked at construction; the 4 u_T contract tested exhaustively in f32 on every machine used (simd-p2p.md §5.4, §5.5) |
+| SIMD paths not exercised, or x86_64 not timed (Phase 3S) | a fast path that silently breaks on one ISA | every test run prints the ISAs it ran; a CI job for the MPI-free `nd-fmm-simd` on x86_64 and arm64 runners; x86_64 throughput unmeasured, checked by instruction counts ([simd-p2p.md](simd-p2p.md) §7). **Retired for correctness by Phase 3S**: every CI run tests scalar and AVX2 on x86_64 (an AMD EPYC 7763 in the T4 and T5 runs) and scalar and NEON on arm64 (Neoverse-N2), with the release accuracy tests, and `nd-fmm-exec`'s debug tests run the FMM with AVX2 there. **Open for speed**: no x86_64 path was timed; the AVX2 inner loops hold exactly the FP operations of the model and no call (T5) |
+| Unsafe intrinsic code, and estimates that differ between CPUs (Phase 3S) | undefined behaviour; results outside the accuracy contract on some machine | `unsafe` only in `nd-fmm-simd`'s architecture modules, each block justified; ISA checked at construction; the 4 u_T contract tested exhaustively in f32 on every machine used (simd-p2p.md §5.4, §5.5). **Retired as far as measured**: `unsafe` is confined to `arch` and its dispatch, behind ISA tokens, with no `unsafe` in `nd-fmm-exec`. NEON's FSQRT and FDIV are correctly rounded and give identical bits on the M3 Max and the Neoverse-N2 (1.50 u_T). AVX2's `vrsqrtps` route measures 1.499 / 1.000 u_T on AMD Zen 3; no Intel CPU has run it, so a vendor difference stays possible within the contract |
+| A faster P2P moves the best leaf size (Phase 3S) | the default of 64 no longer fits | **Measured in T7** (Section 7, Phase 3S): at p = 8 the best size moves to 256, at p = 3 it stays at 64; by the rule fixed in advance the default stays 64 (128 is 3.1% faster overall, below the 5% threshold). M3 Max only |
+| The SIMD kernel's sums less accurate than green-kernels' (Phase 3S) | the accuracy condition of C3S.6 fails | **Realised (T7)**: green-kernels' largest error is smaller in 57 of 64 cells (up to 12×), from its W partial sums; ours equals the reference's error level, which in-order summation and the C3.1 identity require. Within requirement 2 everywhere. Reported for decision (Section 7, Phase 3S) |
 | MPI required by every crate above the tables | tests need an MPI runtime; MPI can be initialised once per test executable | keep `fmm-math`, `fmm-ref` and `fmm-tables` MPI-free; follow the one-MPI-test-per-executable rule of the existing crates |
 
 ### 9.2 Open questions
@@ -1537,11 +1689,20 @@ and identity tests, the second with a one-day spike before Phase 4.
     runners.
   - *Answered on 2026-10-02:* AVX-512 is deferred until hardware to test and time it is
     available ([simd-p2p.md](simd-p2p.md) §4.7).
-  - *Answered on 2026-10-02:* the default leaf size is the one T7's rule picks from the
-    M3 Max timings.
-  - Should a relaxed f64 inverse square root (about 1e-13, as in green-kernels) ship as
-    an opt-in? The FMM's own error is at least 1e-8 at p ≤ 20. Decided after the spike
-    (T2); the recommendation is not to.
+  - *Answered on 2026-10-02 and in T7:* the default leaf size is the one T7's rule picks
+    from the M3 Max timings: 64, unchanged (Section 7, Phase 3S, "Leaf size").
+  - *Answered in T2:* no relaxed f64 inverse square root ships. On NEON every relaxed
+    level was slower than full-precision `sqrt` and division; on AVX2 it would save one
+    operation per pair.
+  - *Still open:* x86_64 timings, including the green-kernels comparison there, until an
+    x86_64 machine is available. `p2p_kernels`, `compare` and `p2p_fmm` run there
+    unchanged.
+  - *New in T7, for decision:* the accuracy condition of C3S.6 against green-kernels'
+    sums, which in-order summation cannot meet (Section 7, Phase 3S); the proposal is
+    "within requirement 2, per pair within 8 / 16 u_T".
+  - *New in T7:* the best leaf size depends on p on the M3 Max (64 at p = 3, 256 at
+    p = 8). Should the default depend on p, or be tuned per machine like the M2L
+    strategy (C4.7)?
 - What accuracy range and N per GPU are typical for your applications?
 - Outputs needed: potential only, gradient, or also Hessians?
 - Should the 1/(4π) factor be part of the kernel or left to the caller? (Provisionally

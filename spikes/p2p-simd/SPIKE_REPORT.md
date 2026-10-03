@@ -616,3 +616,13 @@ as accurate on the sums, because they add W partial sums.
   checks the kernels' inverse square roots on a strided subset.
 - `inner_loops.py`: disassembly counts.
 - `results-m3max.md`: raw output of the final run.
+
+Added in Phase 3S T7 (docs/phase3s/T7-benchmarks.md):
+
+- `examples/compare.rs`: the production kernel of `nd-fmm-simd` against green-kernels, on
+  the inputs of `nd-fmm-validate`'s `p2p_kernels` example (the W1 and W2 inputs of this
+  spike), with a smoke test of its core that `cargo test -p nd-fmm-spike-p2p-simd` runs.
+  The spike now depends on `nd-fmm-simd` and `nd-fmm-validate` (which links MPI;
+  `compare` never initialises it).
+- `results-m3max-final.md`: the T7 runs on the M3 Max (`p2p_kernels`, `compare` and the
+  FMM runs of `p2p_fmm`).

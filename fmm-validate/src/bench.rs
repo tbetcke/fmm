@@ -2,7 +2,7 @@
 //! over repeated batches, the fitted exponent of t ∝ pᵏ and the crossover between two
 //! methods.
 //!
-//! The examples `timing` and `tables` use them. Nothing here asserts a timing; the
+//! The examples `timing`, `tables`, `p2p_kernels` and `p2p_fmm` use them. Nothing here asserts a timing; the
 //! tests cover the fit and the crossover on made-up data only.
 //!
 //! ```
@@ -162,6 +162,29 @@ pub fn cores() -> String {
         }
         _ => format!("{logical} logical"),
     }
+}
+
+/// The number of performance cores: on macOS `hw.perflevel0.physicalcpu` (12 on the
+/// Apple M3 Max), elsewhere `None`, where the cores are not split by kind.
+pub fn performance_cores() -> Option<usize> {
+    if cfg!(target_os = "macos") {
+        sysctl("hw.perflevel0.physicalcpu").and_then(|s| s.parse().ok())
+    } else {
+        None
+    }
+}
+
+/// The version of the `rustc` on the path at run time, e.g. "rustc 1.99.0 (…)", or
+/// "unknown". Under `cargo run` it is the compiler that built the program, unless the
+/// toolchain was overridden for the build only.
+pub fn toolchain() -> String {
+    std::process::Command::new("rustc")
+        .arg("-V")
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .map_or_else(|| "unknown".to_string(), |s| s.trim().to_string())
 }
 
 /// The compilation target and profile, e.g. "aarch64-macos, release build"; a debug

@@ -18,6 +18,8 @@
 //! - [`smallest_p`] and [`worst`] read the calibration off the sweeps; [`floor`] is the
 //!   smallest error a sweep reaches, the f32 rounding floor.
 //! - [`leaf_study`] runs one degree at several refinement targets on the same problem.
+//! - [`leaf_size_rule`] picks the default refinement target from a leaf-size study by
+//!   the rule of Phase 3S T7.
 //!
 //! The error measure is that of [`fmm_accuracy`]: per charge vector the relative L2 and
 //! max errors of φ and ∇φ at the sampled targets, then the root mean square over the
@@ -200,6 +202,106 @@ pub fn leaf_study(
         .collect()
 }
 
+/// The refinement target the leaf-size rule keeps unless another size wins
+/// ([`leaf_size_rule`]): the default of Phase 3, `DEFAULT_MAX_POINTS_PER_LEAF` = 64.
+pub const LEAF_RULE_BASELINE: usize = 64;
+
+/// How much faster than [`LEAF_RULE_BASELINE`] another size must be to win: 5%, as the
+/// ratio of the geometric means of the times.
+pub const LEAF_RULE_GAIN: f64 = 1.05;
+
+/// How much larger than at [`LEAF_RULE_BASELINE`] an error may be at a winning size:
+/// 10%.
+pub const LEAF_RULE_ERROR_GROWTH: f64 = 1.10;
+
+/// The outcome of [`leaf_size_rule`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct LeafSizeChoice {
+    /// The geometric mean of the times at each size, in the order of the sizes.
+    pub geometric_means: Vec<f64>,
+    /// The size with the smallest geometric mean.
+    pub fastest: usize,
+    /// The geometric mean at [`LEAF_RULE_BASELINE`] over that at the fastest size.
+    pub gain: f64,
+    /// The largest ratio of an error at the fastest size to the same error at
+    /// [`LEAF_RULE_BASELINE`], over the configurations and both measures.
+    pub error_growth: f64,
+    /// The size the rule picks.
+    pub chosen: usize,
+}
+
+/// The leaf-size rule of Phase 3S T7 (docs/phase3s/T7-benchmarks.md, "Leaf-size
+/// default"), fixed before the study ran.
+///
+/// `times[i][c]` is the one-thread evaluation time at refinement target `sizes[i]` in
+/// configuration c (the cube and the Plummer sphere, p = 3 and 8, f32 and f64), and
+/// `errors[i][c]` its relative L2 errors of φ and ∇φ. The rule takes the size with the
+/// smallest geometric mean of the times over the configurations, and keeps
+/// [`LEAF_RULE_BASELINE`] unless that size is at least [`LEAF_RULE_GAIN`] faster by
+/// this measure and no error at it exceeds the same error at the baseline by more than
+/// [`LEAF_RULE_ERROR_GROWTH`].
+///
+/// ```
+/// use nd_fmm_validate::calibration::leaf_size_rule;
+///
+/// let sizes = [32, 64, 128];
+/// let times = [vec![3.0, 3.0], vec![2.0, 2.0], vec![1.8, 1.8]];
+/// let errors = [vec![(1e-5, 1e-5); 2], vec![(1e-5, 1e-5); 2], vec![(1.05e-5, 1e-5); 2]];
+/// let choice = leaf_size_rule(&sizes, &times, &errors);
+/// assert_eq!((choice.fastest, choice.chosen), (128, 128));
+/// ```
+///
+/// # Panics
+///
+/// If `sizes` does not contain [`LEAF_RULE_BASELINE`], if the slices differ in length,
+/// or if the sizes have different numbers of configurations or none.
+pub fn leaf_size_rule(
+    sizes: &[usize],
+    times: &[Vec<f64>],
+    errors: &[Vec<(f64, f64)>],
+) -> LeafSizeChoice {
+    assert!(
+        sizes.len() == times.len() && sizes.len() == errors.len(),
+        "one row of times and errors per size"
+    );
+    let configurations = times.first().map_or(0, Vec::len);
+    assert!(
+        configurations > 0
+            && times.iter().all(|t| t.len() == configurations)
+            && errors.iter().all(|e| e.len() == configurations),
+        "the same configurations at every size"
+    );
+    let base = sizes
+        .iter()
+        .position(|&s| s == LEAF_RULE_BASELINE)
+        .expect("the baseline size is measured");
+    let geometric_means: Vec<f64> = times
+        .iter()
+        .map(|t| (t.iter().map(|x| x.ln()).sum::<f64>() / t.len() as f64).exp())
+        .collect();
+    let fast = (0..sizes.len())
+        .min_by(|&a, &b| geometric_means[a].total_cmp(&geometric_means[b]))
+        .expect("at least one size");
+    let gain = geometric_means[base] / geometric_means[fast];
+    let error_growth = errors[fast]
+        .iter()
+        .zip(&errors[base])
+        .flat_map(|(e, b)| [e.0 / b.0, e.1 / b.1])
+        .fold(0.0, f64::max);
+    let chosen = if gain >= LEAF_RULE_GAIN && error_growth <= LEAF_RULE_ERROR_GROWTH {
+        sizes[fast]
+    } else {
+        LEAF_RULE_BASELINE
+    };
+    LeafSizeChoice {
+        geometric_means,
+        fastest: sizes[fast],
+        gain,
+        error_growth,
+        chosen,
+    }
+}
+
 /// Which output a calibration reads: the relative L2 error of φ or of ∇φ.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Measure {
@@ -302,6 +404,39 @@ mod tests {
         );
         assert_eq!(Reached::At(12).to_string(), "12");
         assert_eq!(Reached::Beyond(8).to_string(), "> 8");
+    }
+
+    #[test]
+    fn leaf_size_rule_keeps_the_baseline_unless_a_size_wins_clearly() {
+        let sizes = LEAF_SIZES;
+        let errors = vec![vec![(1e-5, 2e-5); 2]; 5];
+        // 128 is fastest, but only 4% faster than 64: keep 64.
+        let times = [5.0, 3.0, 1.04, 1.0, 2.0].map(|t| vec![t, t]);
+        let choice = leaf_size_rule(&sizes, &times, &errors);
+        assert_eq!((choice.fastest, choice.chosen), (128, 64));
+        assert!((choice.gain - 1.04).abs() < 1e-12);
+        // The geometric mean decides: 32 wins one configuration by far, 128 both.
+        let times = [
+            vec![9.0, 9.0],
+            vec![0.5, 4.0],
+            vec![1.0, 1.0],
+            vec![0.9, 0.9],
+            vec![2.0, 2.0],
+        ];
+        let choice = leaf_size_rule(&sizes, &times, &errors);
+        assert_eq!((choice.fastest, choice.chosen), (128, 128));
+        assert!((choice.geometric_means[1] - 2f64.sqrt()).abs() < 1e-12);
+        // A ∇φ error 11% worse at the fastest size keeps 64.
+        let mut worse = errors.clone();
+        worse[3][1].1 = 1.11 * worse[2][1].1;
+        let choice = leaf_size_rule(&sizes, &times, &worse);
+        assert_eq!((choice.fastest, choice.chosen), (128, 64));
+        assert!((choice.error_growth - 1.11).abs() < 1e-12);
+        // The baseline itself is fastest.
+        let times = [5.0, 3.0, 1.0, 1.0, 2.0].map(|t| vec![t]);
+        let one = vec![vec![(1e-5, 1e-5)]; 5];
+        let choice = leaf_size_rule(&sizes, &times, &one);
+        assert_eq!((choice.fastest, choice.chosen), (64, 64));
     }
 
     #[test]

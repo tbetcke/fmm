@@ -2310,6 +2310,8 @@ dependencies = [
  "green-kernels",
  "nd-fmm-math",
  "nd-fmm-ref",
+ "nd-fmm-simd",
+ "nd-fmm-validate",
  "pulp",
 ]
 
@@ -2332,6 +2334,7 @@ dependencies = [
  "nd-fmm-exec",
  "nd-fmm-math",
  "nd-fmm-ref",
+ "nd-fmm-simd",
  "nd-fmm-tables",
 ]
 
