@@ -530,7 +530,7 @@ In the repository root, start `claude` and say:
 - [x] T3 merged: device arithmetic measured per backend; §3.13 addition and device P2P contract drafted
 - [x] §3.13 addition and device P2P contract signed off (2026-10-03)
 - [x] CPU-runtime target (decision 10): T3's ratio against `nd-fmm-simd` reported; target set (≤ 1.5×, CPU layout in T6) or CPU runtime correctness-only: target set, signed off 2026-10-03 (one thread 1.004×, all cores 2.73×)
-- [ ] T4 merged: `nd-fmm-kernels` skeleton, round trips and capability check pass, CPU-runtime CI job measured
+- [x] T4 merged: `nd-fmm-kernels` skeleton, round trips and capability check pass, CPU-runtime CI job measured
 - [x] CPU-runtime CI job: kept / changed / dropped; default-member status of `nd-fmm-kernels` decided: kept, not a default member (signed off 2026-10-03)
 - [ ] T4b merged (only if needed): `nd-fmm-plan` device hooks, `IndexFmm` on 1, 2 and 4 ranks, host path bit-identical
 - [ ] T5 merged: device path with full host fallback bit-identical to the host path; transfers counted
