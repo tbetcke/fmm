@@ -9,8 +9,10 @@ own CLAUDE.md for crate-specific rules; everything here applies to all of them.
   Never change a convention in code; propose changes in the PR description instead.
 - Cite conventions in doc comments as `CONVENTIONS §3.x`.
 - CONVENTION_VERSION in nd-fmm-math must match the file.
-- Current phase and task briefs: docs/phase3s/README.md (Phase 3S, SIMD P2P on the
-  host; design docs/design/simd-p2p.md). Phase 3 briefs: docs/phase3/README.md.
+- Current phase and task briefs: docs/phase4/README.md (Phase 4, CubeCL kernels; design
+  docs/design/device-path.md). Phase 3S briefs:
+  docs/phase3s/README.md (SIMD P2P on the host; design docs/design/simd-p2p.md).
+  Phase 3 briefs: docs/phase3/README.md.
 - Background: docs/design/laplace-fmm-plan.md (operators, plan) and
   docs/design/workspace-structure.md (crate layout). CONVENTIONS.md wins on any conflict.
 
@@ -37,8 +39,9 @@ own CLAUDE.md for crate-specific rules; everything here applies to all of them.
   (its `IndexFmm` uses `u32`).
 - New dependencies of new crates only through [workspace.dependencies]; octree/
   declares its own directly until migrated (a separate decision). CubeCL only
-  in nd-fmm-kernels and spikes/; it is pinned to `=0.10.0` (matmul: `cubek-matmul`
-  `=0.2.0`) in [workspace.dependencies]. 0.10.0 has no f64 on CUDA; see
+  in nd-fmm-kernels and spikes/; it is pinned to `=0.11.0-pre.4` (matmul: `cubek-matmul`
+  `=0.3.0-pre.4`, with `cubek-std` `=0.3.0-pre.4`) in [workspace.dependencies], a
+  pre-release chosen on 2026-10-03 for f64 on CUDA; see
   spikes/cubecl-gemm/SPIKE_REPORT.md.
 - `unsafe` only in nd-fmm-simd's `arch` modules and its ISA dispatch, in
   nd-fmm-kernels, and in spikes/. Every block carries a `// SAFETY:` comment and

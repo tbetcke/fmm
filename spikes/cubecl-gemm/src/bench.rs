@@ -7,7 +7,9 @@ use cubecl::prelude::*;
 use cubecl::server::Handle;
 use cubecl::zspace::{Shape, Strides};
 use cubek_matmul::definition::MatmulElems;
-use cubek_matmul::launch::{Strategy, launch_ref};
+use cubek_matmul::launch::launch_ref;
+use cubek_matmul::multi_level;
+use cubek_matmul::strategy::Strategy;
 use cubek_std::InputBinding;
 
 use crate::reference::{Real, gemm_f64, rel_max_error, uniform};
@@ -54,10 +56,10 @@ pub struct Settings {
 fn library_strategies() -> Vec<Strategy> {
     vec![
         Strategy::Auto,
-        Strategy::SimpleUnit(Default::default()),
-        Strategy::DoubleUnit(Default::default()),
-        Strategy::SimpleCyclicCmma(Default::default()),
-        Strategy::DoubleCyclicCmma(Default::default()),
+        multi_level::Strategy::SimpleUnit(Default::default()).into(),
+        multi_level::Strategy::DoubleUnit(Default::default()).into(),
+        multi_level::Strategy::SimpleCyclicCmma(Default::default()).into(),
+        multi_level::Strategy::DoubleCyclicCmma(Default::default()).into(),
     ]
 }
 
@@ -66,7 +68,7 @@ fn tolerance<F: Real>() -> f64 {
     if F::NAME == "f64" { 1e-12 } else { 1e-5 }
 }
 
-fn sync<R: Runtime>(client: &ComputeClient<R>) -> Result<(), String> {
+fn sync(client: &Client) -> Result<(), String> {
     cubecl::future::block_on(client.sync()).map_err(|e| format!("{e:?}"))
 }
 
@@ -79,8 +81,8 @@ fn message(panic: Box<dyn std::any::Any + Send>) -> String {
 }
 
 /// Time of `count` back-to-back launches followed by one sync.
-fn time_batch<R: Runtime>(
-    client: &ComputeClient<R>,
+fn time_batch(
+    client: &Client,
     count: usize,
     launch: &mut impl FnMut() -> Result<(), String>,
 ) -> Result<Duration, String> {
@@ -94,15 +96,22 @@ fn time_batch<R: Runtime>(
 
 /// Warms up, then returns the median time per launch and the number of launches timed.
 ///
+/// The warm-up launch includes the kernel's compilation; its time is printed to stderr.
+///
 /// A sync costs about 1.5 ms on wgpu/Metal regardless of the kernel, so launches are
 /// queued in batches (doubled until a batch takes `settings.batch`) with one sync per
 /// batch. This matches an FMM pass, which queues many kernels between syncs.
-fn time<R: Runtime>(
-    client: &ComputeClient<R>,
+fn time(
+    client: &Client,
     settings: Settings,
+    label: &str,
     mut launch: impl FnMut() -> Result<(), String>,
 ) -> Result<(Duration, usize), String> {
-    time_batch(client, 1, &mut launch)?;
+    let first = time_batch(client, 1, &mut launch)?;
+    eprintln!(
+        "  {label}: first launch (compilation included) {:.3} s",
+        first.as_secs_f64()
+    );
     let mut count = 1;
     while count < settings.max_batch && time_batch(client, count, &mut launch)? < settings.batch {
         count *= 2;
@@ -119,8 +128,8 @@ fn time<R: Runtime>(
 }
 
 /// Runs every implementation for one case and checks it against the f64 reference.
-pub fn run_case<R: Runtime, F: Real>(
-    client: &ComputeClient<R>,
+pub fn run_case<F: Real>(
+    client: &Client,
     backend: &'static str,
     p: usize,
     b: usize,
@@ -134,11 +143,11 @@ pub fn run_case<R: Runtime, F: Real>(
     let a = client.create_from_slice(F::as_bytes(&a_host));
     let x = client.create_from_slice(F::as_bytes(&x_host));
     let flops = 2.0 * (nc * nc * b) as f64;
-    let elem = F::as_type_native_unchecked().storage_type();
+    let elem = F::elem_type_native();
 
     // Times a launch closure, turning panics (e.g. from `Strategy::Auto`) into errors.
-    let timed = |launch: &mut dyn FnMut() -> Result<(), String>| {
-        catch_unwind(AssertUnwindSafe(|| time(client, settings, launch)))
+    let timed = |label: &str, launch: &mut dyn FnMut() -> Result<(), String>| {
+        catch_unwind(AssertUnwindSafe(|| time(client, settings, label, launch)))
             .map_err(message)
             .and_then(|r| r)
     };
@@ -176,14 +185,14 @@ pub fn run_case<R: Runtime, F: Real>(
         let name = format!("lib:{strategy}");
         let c = client.empty(nc * b * size_of::<F>());
         let binding = |h: &Handle, rows: usize, cols: usize| unsafe {
-            TensorBinding::<R>::from_raw_parts(
+            TensorBinding::from_raw_parts(
                 h.clone(),
                 Strides::from([cols, 1]),
                 Shape::from([rows, cols]),
             )
         };
-        let outcome = timed(&mut || {
-            let mut dtypes = MatmulElems::from_single_dtype(F::as_type_native_unchecked());
+        let outcome = timed(&name, &mut || {
+            let mut dtypes = MatmulElems::from_single_dtype(F::elem_type_native());
             launch_ref(
                 &strategy,
                 client,
@@ -208,8 +217,8 @@ pub fn run_case<R: Runtime, F: Real>(
         );
     } else {
         let c = client.empty(nc * b * size_of::<F>());
-        let outcome = timed(&mut || {
-            tiled::launch_smem::<R, F>(client, p, b, &a, &x, &c);
+        let outcome = timed(&smem_name, &mut || {
+            tiled::launch_smem::<F>(client, p, b, &a, &x, &c);
             Ok(())
         })
         .map(|(median, reps)| (median, reps, c));
@@ -217,22 +226,20 @@ pub fn run_case<R: Runtime, F: Real>(
     }
 
     for rows_fast in [false, true] {
+        let name = format!(
+            "tiled-reg-{}({}x{}, vec {})",
+            if rows_fast { "rows" } else { "cols" },
+            tiled::REG_TM,
+            tiled::REG_TNV * tiled::REG_VEC,
+            tiled::REG_VEC
+        );
         let c = client.empty(nc * b * size_of::<F>());
-        let outcome = timed(&mut || {
-            tiled::launch_reg::<R, F>(client, p, b, rows_fast, &a, &x, &c);
+        let outcome = timed(&name, &mut || {
+            tiled::launch_reg::<F>(client, p, b, rows_fast, &a, &x, &c);
             Ok(())
         })
         .map(|(median, reps)| (median, reps, c));
-        record(
-            format!(
-                "tiled-reg-{}({}x{}, vec {})",
-                if rows_fast { "rows" } else { "cols" },
-                tiled::REG_TM,
-                tiled::REG_TNV * tiled::REG_VEC,
-                tiled::REG_VEC
-            ),
-            outcome,
-        );
+        record(name, outcome);
     }
 
     rows

@@ -32,9 +32,9 @@ const MAX_TM: usize = 12;
 
 #[cube(launch_unchecked)]
 fn tiled_gemm_kernel<F: Float>(
-    a: &Array<F>,
-    x: &Array<F>,
-    c: &mut Array<F>,
+    a: &[F],
+    x: &[F],
+    c: &mut [F],
     b: u32,
     #[comptime] nc: usize,
     #[comptime] tm: usize,
@@ -48,8 +48,8 @@ fn tiled_gemm_kernel<F: Float>(
     let row0 = CUBE_POS_Y as usize * bm;
 
     // a_s[k * bm + m] holds A[row0 + m, k0 + k]; x_s[k * BN + n] holds X[k0 + k, col0 + n].
-    let mut a_s = SharedMemory::<F>::new(BK * bm);
-    let mut x_s = SharedMemory::<F>::new(BK * BN);
+    let mut a_s = Shared::<[F]>::new_slice(BK * bm);
+    let mut x_s = Shared::<[F]>::new_slice(BK * BN);
     let mut acc = Array::<F>::new(tm * TN);
     #[unroll]
     for i in 0..tm * TN {
@@ -133,8 +133,8 @@ pub fn rows_per_unit(nc: usize) -> usize {
 /// Launches the shared-memory kernel for C = A X, with nc = (p+1)^2 fixed at compile time.
 ///
 /// `a`, `x` and `c` must hold nc * nc, nc * b and nc * b elements of `F`.
-pub fn launch_smem<R: Runtime, F: Real>(
-    client: &ComputeClient<R>,
+pub fn launch_smem<F: Real>(
+    client: &Client,
     p: usize,
     b: usize,
     a: &cubecl::server::Handle,
@@ -148,13 +148,13 @@ pub fn launch_smem<R: Runtime, F: Real>(
     // SAFETY: the array lengths match the allocations made by the caller, and every
     // access in the kernel is guarded by the comptime nc and the runtime b.
     unsafe {
-        tiled_gemm_kernel::launch_unchecked::<F, R>(
+        tiled_gemm_kernel::launch_unchecked::<F>(
             client,
             CubeCount::Static(cubes_x, cubes_y, 1),
             CubeDim::new_2d(UNITS as u32, UNITS as u32),
-            ArrayArg::from_raw_parts(a.clone(), nc * nc),
-            ArrayArg::from_raw_parts(x.clone(), nc * b),
-            ArrayArg::from_raw_parts(c.clone(), nc * b),
+            BufferArg::from_raw_parts(a.clone(), nc * nc),
+            BufferArg::from_raw_parts(x.clone(), nc * b),
+            BufferArg::from_raw_parts(c.clone(), nc * b),
             b as u32,
             nc,
             tm,
@@ -173,9 +173,9 @@ const REG_UNITS: usize = 32;
 
 #[cube(launch_unchecked)]
 fn reg_gemm_kernel<F: Float, N: Size>(
-    a: &Array<F>,
-    x: &Array<Vector<F, N>>,
-    c: &mut Array<Vector<F, N>>,
+    a: &[F],
+    x: &[Vector<F, N>],
+    c: &mut [Vector<F, N>],
     bv: u32,
     #[comptime] nc: usize,
     #[comptime] tm: usize,
@@ -241,8 +241,8 @@ fn reg_gemm_kernel<F: Float, N: Size>(
 /// multiple of [`REG_VEC`]. With `rows_fast`, one cube covers all row blocks of a column
 /// strip; otherwise one cube covers [`REG_UNITS`] column blocks of a row block.
 #[allow(clippy::too_many_arguments)]
-pub fn launch_reg<R: Runtime, F: Real>(
-    client: &ComputeClient<R>,
+pub fn launch_reg<F: Real>(
+    client: &Client,
     p: usize,
     b: usize,
     rows_fast: bool,
@@ -269,14 +269,14 @@ pub fn launch_reg<R: Runtime, F: Real>(
     // SAFETY: the array lengths (in vectors for x and c) match the caller's allocations,
     // and every access is guarded by the comptime nc and the runtime bv.
     unsafe {
-        reg_gemm_kernel::launch_unchecked::<F, R>(
+        reg_gemm_kernel::launch_unchecked::<F>(
             client,
             count,
             dim,
             REG_VEC,
-            ArrayArg::from_raw_parts(a.clone(), nc * nc),
-            ArrayArg::from_raw_parts(x.clone(), nc * bv),
-            ArrayArg::from_raw_parts(c.clone(), nc * bv),
+            BufferArg::from_raw_parts(a.clone(), nc * nc),
+            BufferArg::from_raw_parts(x.clone(), nc * bv),
+            BufferArg::from_raw_parts(c.clone(), nc * bv),
             bv as u32,
             nc,
             REG_TM,
@@ -296,15 +296,15 @@ mod tests {
         p: usize,
         b: usize,
         launch: impl Fn(
-            &ComputeClient<cubecl::cpu::CpuRuntime>,
+            &Client,
             &cubecl::server::Handle,
             &cubecl::server::Handle,
             &cubecl::server::Handle,
         ),
     ) -> f64 {
         use crate::reference::{gemm_f64, rel_max_error, uniform};
-        use cubecl::cpu::{CpuDevice, CpuRuntime};
-        let client = CpuRuntime::client(&CpuDevice);
+        use cubecl::{Device, device::CpuDevice};
+        let client = Device::Cpu(CpuDevice).client();
         let nc = (p + 1) * (p + 1);
         let a_host = uniform::<F>(nc * nc, 7);
         let x_host = uniform::<F>(nc * b, 8);
@@ -322,20 +322,20 @@ mod tests {
     #[test]
     fn kernels_match_reference_on_cpu_runtime() {
         for (p, b) in [(1, 12), (4, 68), (8, 100)] {
-            let e = cpu_error::<f64>(p, b, |cl, a, x, c| launch_smem::<_, f64>(cl, p, b, a, x, c));
+            let e = cpu_error::<f64>(p, b, |cl, a, x, c| launch_smem::<f64>(cl, p, b, a, x, c));
             assert!(e < 1e-12, "smem f64 p = {p}, B = {b}: {e:e}");
-            let e = cpu_error::<f32>(p, b, |cl, a, x, c| launch_smem::<_, f32>(cl, p, b, a, x, c));
+            let e = cpu_error::<f32>(p, b, |cl, a, x, c| launch_smem::<f32>(cl, p, b, a, x, c));
             assert!(e < 1e-5, "smem f32 p = {p}, B = {b}: {e:e}");
             for rows_fast in [false, true] {
                 let e = cpu_error::<f64>(p, b, |cl, a, x, c| {
-                    launch_reg::<_, f64>(cl, p, b, rows_fast, a, x, c)
+                    launch_reg::<f64>(cl, p, b, rows_fast, a, x, c)
                 });
                 assert!(
                     e < 1e-12,
                     "reg f64 p = {p}, B = {b}, rows_fast = {rows_fast}: {e:e}"
                 );
                 let e = cpu_error::<f32>(p, b, |cl, a, x, c| {
-                    launch_reg::<_, f32>(cl, p, b, rows_fast, a, x, c)
+                    launch_reg::<f32>(cl, p, b, rows_fast, a, x, c)
                 });
                 assert!(
                     e < 1e-5,
