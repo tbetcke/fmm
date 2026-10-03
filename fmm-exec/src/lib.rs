@@ -4,9 +4,10 @@
 //! plan supplies the tree, the interaction lists, the data stores and the ghost
 //! exchange, and stays kernel-agnostic; this crate supplies everything that knows about
 //! 1/|x − y|: box geometry from Morton keys, the leaf-scaled point data, the Laplace
-//! operator on the plan's level-batched interface (from the tables of `nd-fmm-tables`
-//! and the leaf operators of `nd-fmm-ref`), and the user-facing FMM object. It is
-//! generic over [`RealScalar`]. The device path follows in Phase 4.
+//! operator on the plan's level-batched interface (from the tables of `nd-fmm-tables`,
+//! the leaf operators of `nd-fmm-ref` and the SIMD P2P kernel of `nd-fmm-simd`), and the
+//! user-facing FMM object. It is generic over f32 and f64 ([`RealScalar`] and
+//! `nd_fmm_simd::SimdScalar`). The device path follows in Phase 4.
 //!
 //! ## Conventions
 //!
@@ -61,7 +62,8 @@
 //!   cache, applied by child index and offset index (§3.11, §3.12).
 //! - [`operator`]: [`LaplaceOperator`](operator::LaplaceOperator), the Laplace kernel on
 //!   the level-batched interface of `nd-fmm-plan` and on its per-pair interface, with
-//!   per-pair kernels for every operator (§3.11–§3.13; C3.1).
+//!   per-pair kernels for every operator (§3.11–§3.13; C3.1), and the choice of its P2P
+//!   kernel, [`P2pChoice`](operator::P2pChoice) (C3S.5).
 //! - [`fmm`]: the user-facing [`FmmBuilder`](fmm::FmmBuilder) and [`Fmm`](fmm::Fmm),
 //!   which load the caller's points into an octree and evaluate potentials and
 //!   gradients in the caller's order, with 1/(4π) applied once (§3.1, §3.13; C3.2),

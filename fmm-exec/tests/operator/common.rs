@@ -34,7 +34,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use nd_fmm_exec::geometry::{Domain, centre, leaf_coordinates, radius};
-use nd_fmm_exec::operator::LaplaceOperator;
+use nd_fmm_exec::operator::{Isa, LaplaceOperator, P2pChoice};
 use nd_fmm_exec::tables::{M2lStrategy, Tables};
 use nd_fmm_math::{Layout, harmonics};
 use nd_fmm_ref::Frame;
@@ -443,9 +443,21 @@ pub fn tables(strategy: M2lStrategy, p: usize) -> &'static Tables<f64> {
         .or_insert_with(|| Box::leak(Box::new(Tables::build(p, strategy))))
 }
 
-/// A potentials-and-gradients operator with the f64 tables of `strategy` at `p`.
+/// A potentials-and-gradients operator with the f64 tables of `strategy` at `p`, and the
+/// default P2P kernel (`P2pChoice::Auto`).
 pub fn operator(strategy: M2lStrategy, p: usize, max_leaf_points: usize) -> LaplaceOperator<f64> {
     LaplaceOperator::new(tables(strategy, p).clone(), true, max_leaf_points)
+}
+
+/// The P2P kernels a test runs: `Reference` and every ISA this machine offers, which it
+/// prints (`--nocapture`), so a test report can list the ISAs that ran.
+pub fn p2p_choices(test: &str) -> Vec<P2pChoice> {
+    let choices: Vec<P2pChoice> = std::iter::once(P2pChoice::Reference)
+        .chain(Isa::available().map(P2pChoice::Isa))
+        .collect();
+    let names: Vec<String> = choices.iter().map(ToString::to_string).collect();
+    eprintln!("{test}: P2P kernels {}", names.join(", "));
+    choices
 }
 
 /// The dense f64 matrices of the three translations at degree p, for the terms.

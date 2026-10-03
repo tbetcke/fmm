@@ -25,6 +25,11 @@
 //! evaluation equals the one-thread evaluation bit for bit. MPI is initialised with
 //! `Threading::Funneled` for it.
 //!
+//! P2P kernels (Phase 3S T6, C3S.5): the FMM runs the default kernel, `P2pChoice::Auto`,
+//! and at each p is built again with `P2pChoice::Reference`. Both pass the gate; the
+//! error with `Auto` lies within 1% of the error with `Reference`, and every output of
+//! `Auto` within 1e-13 of that of `Reference` (relative L2 over all targets).
+//!
 //! Its own executable, because it initialises MPI; ignored, because it needs release
 //! mode:
 //!
@@ -35,6 +40,7 @@
 use mpi::Threading;
 use mpi::traits::*;
 use nd_fmm_exec::fmm::FmmBuilder;
+use nd_fmm_exec::operator::{Isa, P2pChoice};
 use nd_fmm_ref::p2p::direct_sum;
 
 /// The single-translation prediction of the relative L2 error of φ (design §7).
@@ -71,6 +77,27 @@ const CHARGE_VECTORS: u64 = 8;
 
 /// The thread count compared with one thread.
 const THREADS: usize = 4;
+
+/// How far the error with `Auto` may lie from the error with `Reference`, relative.
+const KERNEL_ERROR_RATIO: f64 = 0.01;
+
+/// The largest relative L2 difference of the `Auto` output from the `Reference` output.
+const KERNEL_DIFFERENCE: f64 = 1e-13;
+
+/// The relative L2 error of `potential` at the sampled targets against `exact`.
+fn sampled_error(potential: &[f64], sample: &[usize], exact: &[f64]) -> f64 {
+    let (mut e2, mut r2) = (0.0f64, 0.0f64);
+    for (&i, &e) in sample.iter().zip(exact) {
+        e2 += (potential[i] - e).powi(2);
+        r2 += e * e;
+    }
+    (e2 / r2).sqrt()
+}
+
+/// The root mean square of `errors`.
+fn rms(errors: &[f64]) -> f64 {
+    (errors.iter().map(|e| e * e).sum::<f64>() / errors.len() as f64).sqrt()
+}
 
 #[test]
 #[ignore = "release mode: N = 10^5 and eight direct sums at 1,000 targets"]
@@ -112,6 +139,7 @@ fn uniform_tree_within_twice_the_prediction() {
         .collect();
 
     // Every p is measured and printed before the gate is checked.
+    let detected = P2pChoice::Isa(Isa::detect());
     let mut failures = Vec::new();
     for (p, prediction) in PREDICTION {
         let builder = FmmBuilder::<f64>::new(p)
@@ -120,6 +148,7 @@ fn uniform_tree_within_twice_the_prediction() {
         let mut fmm = builder
             .build(&points, &points, &comm)
             .expect("the FMM builds");
+        assert_eq!(fmm.p2p_kernel(), detected, "Auto by default");
         let leaves = fmm.plan().index().leaves();
         assert_eq!(fmm.nleaves(), 4096);
         assert!((0..fmm.nleaves()).all(|j| leaves.level(j) == 4), "uniform");
@@ -129,7 +158,14 @@ fn uniform_tree_within_twice_the_prediction() {
             .build(&points, &points, &comm)
             .expect("the threaded FMM builds");
         assert_eq!(threaded.threading().threads, THREADS);
-        let mut each = Vec::new();
+        let mut reference = builder
+            .clone()
+            .p2p_kernel(P2pChoice::Reference)
+            .build(&points, &points, &comm)
+            .expect("the FMM builds with the reference P2P");
+        assert_eq!(reference.p2p_kernel(), P2pChoice::Reference);
+        let (mut each, mut each_reference) = (Vec::new(), Vec::new());
+        let mut largest_difference = 0.0f64;
         for (k, (q, exact)) in charges.iter().zip(&exact).enumerate() {
             let output = fmm.evaluate(q).expect("the FMM evaluates");
             let parallel = threaded.evaluate(q).expect("the threaded FMM evaluates");
@@ -139,26 +175,46 @@ fn uniform_tree_within_twice_the_prediction() {
                 bits(&output.potential),
                 "p = {p}, charge vector {k}: {THREADS} threads differ from one"
             );
-            let (mut e2, mut r2) = (0.0f64, 0.0f64);
-            for (&i, &e) in sample.iter().zip(exact) {
-                e2 += (output.potential[i] - e).powi(2);
-                r2 += e * e;
-            }
-            each.push((e2 / r2).sqrt());
+            let slow = reference.evaluate(q).expect("the reference FMM evaluates");
+            let (d2, r2) = output
+                .potential
+                .iter()
+                .zip(&slow.potential)
+                .fold((0.0f64, 0.0f64), |(d2, r2), (a, b)| {
+                    (d2 + (a - b).powi(2), r2 + b * b)
+                });
+            largest_difference = largest_difference.max((d2 / r2).sqrt());
+            each.push(sampled_error(&output.potential, sample, exact));
+            each_reference.push(sampled_error(&slow.potential, sample, exact));
         }
-        let error = (each.iter().map(|e| e * e).sum::<f64>() / each.len() as f64).sqrt();
+        let (error, error_reference) = (rms(&each), rms(&each_reference));
+        let ratio = error / error_reference;
         let each: Vec<String> = each.iter().map(|e| format!("{e:.2e}")).collect();
         eprintln!(
             "uniform level-4 tree, N = {n}, p = {p}: relative L2 error of φ {error:.3e} \
-             (root mean square over {CHARGE_VECTORS} charge vectors: {}), prediction \
-             {prediction:.2e}, ratio {:.2}; {THREADS} threads bit for bit ({})",
+             with {detected} (root mean square over {CHARGE_VECTORS} charge vectors: {}), \
+             {error_reference:.3e} with reference (ratio {ratio:.6}), prediction \
+             {prediction:.2e}, ratio {:.2}; outputs within {largest_difference:.1e} of \
+             reference; {THREADS} threads bit for bit ({})",
             each.join(", "),
             error / prediction,
             threaded.threading()
         );
-        if error > 2.0 * prediction {
+        for (kernel, e) in [(detected, error), (P2pChoice::Reference, error_reference)] {
+            if e > 2.0 * prediction {
+                failures.push(format!(
+                    "p = {p}, {kernel}: {e:e} exceeds twice the prediction {prediction:e}"
+                ));
+            }
+        }
+        if (ratio - 1.0).abs() > KERNEL_ERROR_RATIO {
             failures.push(format!(
-                "p = {p}: {error:e} exceeds twice the prediction {prediction:e}"
+                "p = {p}: the error with {detected} is {ratio} times that with reference"
+            ));
+        }
+        if largest_difference > KERNEL_DIFFERENCE {
+            failures.push(format!(
+                "p = {p}: {detected} differs from reference by {largest_difference:e}"
             ));
         }
     }

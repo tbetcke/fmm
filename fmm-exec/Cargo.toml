@@ -15,6 +15,7 @@ nd-fmm-math = { workspace = true }
 nd-fmm-ref = { workspace = true }
 nd-fmm-tables = { workspace = true }
 nd-fmm-plan = { workspace = true }
+nd-fmm-simd = { workspace = true }
 nd-octree = { workspace = true }
 mpi = { workspace = true }
 rlst = { workspace = true }

@@ -16,9 +16,10 @@
 //!
 //! [`FmmBuilder::build`] is collective. In order:
 //!
-//! 1. Checks the settings, the MPI threading level when `threads` > 1, the supplied
-//!    domain ([`Domain::new`]) and that every point is finite, builds the thread pool if
-//!    `threads` > 1, and agrees the outcome on every rank (one all-reduce).
+//! 1. Checks the settings (among them that this rank's CPU runs the P2P kernel), the MPI
+//!    threading level when `threads` > 1, the supplied domain ([`Domain::new`]) and that
+//!    every point is finite, builds the thread pool if `threads` > 1, and agrees the
+//!    outcome on every rank (one all-reduce).
 //! 2. Counts the points of all ranks (one all-reduce); none at all is an error.
 //! 3. Takes the supplied domain, or `compute_global_bounding_box` over the sources and
 //!    targets of every rank (after one all-reduce pair that rejects points spanning no
@@ -54,8 +55,19 @@
 //! all-reduce), writes the charges after the coordinates of each source chunk (§3.13,
 //! "Source chunks"), resets the evaluator and runs its six stages, timing each one
 //! ([`StageTimings`]), and scales the target output into the caller's order. For a fixed
-//! tree, ranks and input, two evaluations are bit-identical (the accumulation order of
-//! `nd_fmm_plan::evaluator`), for every number of threads.
+//! tree, ranks, input and P2P kernel, two evaluations are bit-identical (the
+//! accumulation order of `nd_fmm_plan::evaluator`), for every number of threads.
+//!
+//! # P2P kernel
+//!
+//! [`FmmBuilder::p2p_kernel`] chooses the kernel of P2P ([`P2pChoice`]): by default
+//! the SIMD kernel of `nd-fmm-simd` on the widest ISA of the machine, or the reference
+//! loop of `nd-fmm-ref`, or an ISA named explicitly. Every other operator is the same.
+//! Kernels differ in the last bits of each near-field term, so outputs of different
+//! choices agree to rounding, not bit for bit; on one machine, ISA and build they are
+//! reproducible ([`operator`](crate::operator#p2p-kernel), "P2P kernel").
+//! [`Fmm::p2p_kernel`] reports the kernel that runs, for reports next to
+//! [`Fmm::threading`].
 //!
 //! # Threads (C3.5)
 //!
@@ -76,10 +88,10 @@
 //!
 //! # Precision
 //!
-//! `T` is f64 or f32 (`Stored + Equivalence`). Coordinates are always f64 and are
-//! rounded to `T` once, as leaf-scaled values; tables are built in f64 and rounded. f32
-//! is accurate to its floor at p ≤ 8 (design §4); a larger p is allowed but gains
-//! nothing.
+//! `T` is f64 or f32 (`Stored + SimdScalar + Equivalence`). Coordinates are always f64
+//! and are rounded to `T` once, as leaf-scaled values; tables are built in f64 and
+//! rounded. f32 is accurate to its floor at p ≤ 8 (design §4); a larger p is allowed but
+//! gains nothing.
 
 use std::f64::consts::PI;
 use std::fmt;
@@ -105,7 +117,7 @@ use rlst::SliceArray;
 use thiserror::Error;
 
 use crate::geometry::{Domain, GeometryError, leaf_coordinates, radius};
-use crate::operator::LaplaceOperator;
+use crate::operator::{Isa, LaplaceOperator, P2pChoice, SimdScalar};
 use crate::tables::{M2lStrategy, Tables};
 use crate::threading::{REQUIRED_MPI_THREADING, ThreadingReport};
 
@@ -143,6 +155,13 @@ pub enum SettingsError {
     /// `threads` is zero.
     #[error("threads must be at least 1")]
     ZeroThreads,
+    /// The P2P kernel is [`P2pChoice::Isa`] with an instruction set this machine cannot
+    /// run ([`Isa::is_available`]).
+    #[error("p2p_kernel: instruction set `{isa}` is not available on this machine")]
+    P2pIsaUnavailable {
+        /// The requested instruction set.
+        isa: Isa,
+    },
 }
 
 /// Which of the two point sets a point belongs to, for error messages.
@@ -263,6 +282,7 @@ pub enum FmmError {
 /// | [`domain`](Self::domain) | `compute_global_bounding_box` of all points |
 /// | [`table_cache`](Self::table_cache) | none: tables are built |
 /// | [`threads`](Self::threads) | 1: no pool, the calling thread |
+/// | [`p2p_kernel`](Self::p2p_kernel) | [`P2pChoice::Auto`]: the kernel of `nd-fmm-simd` on the widest ISA of this machine |
 ///
 /// For `T = f32`, p > 8 is accepted but lies beyond the useful range (design §4): the
 /// error is then at the f32 floor already.
@@ -276,6 +296,7 @@ pub struct FmmBuilder<T> {
     domain: Option<[f64; 6]>,
     table_cache: Option<PathBuf>,
     threads: usize,
+    p2p: P2pChoice,
     value: PhantomData<fn() -> T>,
 }
 
@@ -291,6 +312,7 @@ impl<T> FmmBuilder<T> {
             domain: None,
             table_cache: None,
             threads: 1,
+            p2p: P2pChoice::Auto,
             value: PhantomData,
         }
     }
@@ -349,7 +371,21 @@ impl<T> FmmBuilder<T> {
         self
     }
 
-    /// Checks the settings that do not depend on the input.
+    /// Sets the P2P kernel ([`P2pChoice`]; default [`P2pChoice::Auto`]).
+    ///
+    /// [`build`](Self::build) rejects [`P2pChoice::Isa`] with an ISA this machine cannot
+    /// run with [`SettingsError::P2pIsaUnavailable`]. The check is local, so on a
+    /// cluster with mixed CPUs one rank may fail it; like every input error it is
+    /// agreed by all ranks in step 1, and the others return [`FmmError::OtherRank`].
+    /// The choice changes the output only in the last bits (the accuracy of
+    /// [`P2pChoice`]); [`Fmm::p2p_kernel`] reports the kernel that runs.
+    pub fn p2p_kernel(mut self, choice: P2pChoice) -> Self {
+        self.p2p = choice;
+        self
+    }
+
+    /// Checks the settings that do not depend on the input; whether this machine can
+    /// run the P2P kernel depends on the rank's CPU.
     fn check_settings(&self) -> Result<(), SettingsError> {
         if self.p > MAX_DEGREE {
             return Err(SettingsError::DegreeTooLarge { p: self.p });
@@ -364,6 +400,9 @@ impl<T> FmmBuilder<T> {
         }
         if self.threads == 0 {
             return Err(SettingsError::ZeroThreads);
+        }
+        if let Err(error) = self.p2p.resolve() {
+            return Err(SettingsError::P2pIsaUnavailable { isa: error.isa });
         }
         Ok(())
     }
@@ -389,7 +428,7 @@ impl<T> FmmBuilder<T> {
     }
 }
 
-impl<T: Stored + Equivalence + Default> FmmBuilder<T> {
+impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
     /// Builds the FMM of `sources` and `targets`, in the caller's order; see the
     /// [module documentation](self#build).
     ///
@@ -525,7 +564,9 @@ impl<T: Stored + Equivalence + Default> FmmBuilder<T> {
         };
         let tables_time = start.elapsed();
         let start = Instant::now();
-        let mut operator = LaplaceOperator::new(tables, self.gradients, max_leaf_points);
+        let mut operator = LaplaceOperator::new(tables, self.gradients, max_leaf_points)
+            .with_p2p(self.p2p)
+            .expect("step 1 checked that this machine runs the P2P kernel");
         if let Some(pool) = pool {
             operator = operator.with_pool(pool);
         }
@@ -798,7 +839,7 @@ pub struct ListSizes {
 /// evaluations.
 pub struct Fmm<'o, T, C = SimpleCommunicator>
 where
-    T: Stored + Equivalence + Default,
+    T: Stored + SimdScalar + Equivalence + Default,
     C: CommunicatorCollectives,
 {
     octree: Octree<'o, C>,
@@ -817,7 +858,7 @@ where
 
 impl<'o, T, C> Fmm<'o, T, C>
 where
-    T: Stored + Equivalence + Default,
+    T: Stored + SimdScalar + Equivalence + Default,
     C: CommunicatorCollectives,
 {
     /// Evaluates the potentials, and the gradients if built with them, of the charges
@@ -933,6 +974,13 @@ where
     /// Returns whether the output holds gradients.
     pub fn gradients(&self) -> bool {
         self.operator().gradients()
+    }
+
+    /// Returns the P2P kernel as it runs: [`P2pChoice::Reference`], or
+    /// [`P2pChoice::Isa`] with the ISA of the kernel, for [`P2pChoice::Auto`] the one
+    /// it picked on this machine. For reports, next to [`threading`](Self::threading).
+    pub fn p2p_kernel(&self) -> P2pChoice {
+        self.operator().p2p_kernel()
     }
 
     /// Returns the number of sources on this rank.

@@ -2247,6 +2247,7 @@ dependencies = [
  "nd-fmm-math",
  "nd-fmm-plan",
  "nd-fmm-ref",
+ "nd-fmm-simd",
  "nd-fmm-tables",
  "nd-octree",
  "proptest",

@@ -13,7 +13,9 @@
 //!
 //! Run in release mode, on one rank (the points are not redistributed until C5.1), with
 //! `--distribution d` (`cube`, `sphere`, `plummer`, `clusters` or `all`, the default),
-//! `--threads n` rayon threads (default 1) and one BLAS thread:
+//! `--threads n` rayon threads (default 1), `--p2p k` the P2P kernel (`auto`, the
+//! default, `reference` or an ISA: `scalar`, `neon`, `avx2`;
+//! `nd_fmm_exec::operator::P2pChoice`) and one BLAS thread:
 //!
 //! ```text
 //! OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 BLIS_NUM_THREADS=1 \
@@ -25,16 +27,20 @@
 //! The errors are deterministic for the seed and the same for every number of threads;
 //! the timings are wall times on this machine, reported and never asserted. MPI is
 //! initialised with `Threading::Funneled`, and the threading report (rayon threads, MPI
-//! level, BLAS variables; `nd_fmm_exec::threading`) is printed with the results.
+//! level, BLAS variables; `nd_fmm_exec::threading`) and the P2P kernel that ran
+//! (`Fmm::p2p_kernel`) are printed with the results. The errors change with the P2P
+//! kernel only in the last bits; the leaf stage ("leaves" in the timings) is where its
+//! speed shows.
 
 use std::time::{Duration, Instant};
 
 use mpi::Threading;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
+use nd_fmm_exec::operator::{Isa, P2pChoice};
 use nd_fmm_validate::bench::{cores, cpu_model, target};
 use nd_fmm_validate::fmm_accuracy::{
-    Config, Distribution, Oracle, PREDICTION, Problem, Run, prediction, run,
+    Config, Distribution, Execution, Oracle, PREDICTION, Problem, Run, prediction, run,
 };
 
 /// The degrees in f64: those of the prediction.
@@ -43,32 +49,39 @@ const F64_PS: [usize; 3] = [3, 8, 18];
 /// The degrees in f32, at most 8 (design §4).
 const F32_PS: [usize; 2] = [3, 8];
 
-/// The command line: the distributions besides the cube, and the threads.
+/// The command line: the distributions besides the cube, the threads and the P2P
+/// kernel.
 struct Arguments {
     distributions: Vec<Distribution>,
-    threads: usize,
+    execution: Execution,
 }
 
-/// Parses `--distribution d` and `--threads n`, in any order; exits with a message on
-/// anything else.
+/// Parses `--distribution d`, `--threads n` and `--p2p k`, in any order; exits with a
+/// message on anything else, and on a P2P kernel this machine cannot run.
 fn arguments() -> Arguments {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let usage = || -> ! {
+        let isas: Vec<String> = Isa::available().map(|isa| isa.to_string()).collect();
         eprintln!(
             "usage: fmm_accuracy [--distribution cube|sphere|plummer|clusters|all] \
-             [--threads n], n >= 1; got {args:?}"
+             [--threads n] [--p2p auto|reference|{}], n >= 1; got {args:?}",
+            isas.join("|")
         );
         std::process::exit(2);
     };
     let mut parsed = Arguments {
         distributions: Distribution::ALL.to_vec(),
-        threads: 1,
+        execution: Execution::threads(1),
     };
     let mut rest = args.as_slice();
     while let [flag, value, tail @ ..] = rest {
         match (flag.as_str(), value.as_str()) {
             ("--threads", n) => match n.parse() {
-                Ok(n) if n >= 1 => parsed.threads = n,
+                Ok(n) if n >= 1 => parsed.execution.threads = n,
+                _ => usage(),
+            },
+            ("--p2p", k) => match k.parse::<P2pChoice>() {
+                Ok(p2p) if p2p.resolve().is_ok() => parsed.execution.p2p = p2p,
                 _ => usage(),
             },
             ("--distribution", "all") => parsed.distributions = Distribution::ALL.to_vec(),
@@ -95,7 +108,7 @@ struct Report {
 }
 
 /// Draws the problem of `config`, computes its oracles and runs every p.
-fn report(config: Config, threads: usize, comm: &SimpleCommunicator) -> Report {
+fn report(config: Config, execution: Execution, comm: &SimpleCommunicator) -> Report {
     let start = Instant::now();
     let problem = Problem::new(&config);
     let oracle64 = Oracle::new(&problem, &problem.charges);
@@ -114,16 +127,21 @@ fn report(config: Config, threads: usize, comm: &SimpleCommunicator) -> Report {
                 &problem,
                 &problem.charges,
                 &oracle64,
-                (p, threads),
+                (p, execution),
                 comm,
             )
         })
         .collect();
-    runs.extend(
-        F32_PS
-            .iter()
-            .map(|&p| run::<f32>(&config, &problem, &charges32, &oracle32, (p, threads), comm)),
-    );
+    runs.extend(F32_PS.iter().map(|&p| {
+        run::<f32>(
+            &config,
+            &problem,
+            &charges32,
+            &oracle32,
+            (p, execution),
+            comm,
+        )
+    }));
     Report {
         config,
         runs,
@@ -142,8 +160,9 @@ fn reference<'r>(cube: &'r Report, r: &Run) -> &'r Run {
 fn main() {
     let Arguments {
         distributions,
-        threads,
+        execution,
     } = arguments();
+    let threads = execution.threads;
     let (universe, provided) =
         mpi::initialize_with_threading(Threading::Funneled).expect("MPI initialises");
     let comm = universe.world();
@@ -156,11 +175,11 @@ fn main() {
         std::process::exit(2);
     }
 
-    let cube = report(Config::C32, threads, &comm);
+    let cube = report(Config::C32, execution, &comm);
     let clustered: Vec<Report> = distributions
         .iter()
         .filter(|&&d| d != Distribution::Cube)
-        .map(|&d| report(Config::c33(d), threads, &comm))
+        .map(|&d| report(Config::c33(d), execution, &comm))
         .collect();
     let mut reports: Vec<&Report> = Vec::new();
     if distributions.contains(&Distribution::Cube) {
@@ -245,6 +264,10 @@ fn main() {
                     .join(", ")
             )
         }
+    );
+    println!(
+        "- P2P kernel: {} (`--p2p {}`).",
+        cube.runs[0].p2p, execution.p2p
     );
 
     if !clustered.is_empty() {
