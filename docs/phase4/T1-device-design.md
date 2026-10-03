@@ -44,7 +44,7 @@ Read first:
 - CONVENTIONS §3.6–§3.8, §3.11 ("L2P and M2P", "Coaxial translations", "Rotation of
   coefficients"), §3.12 and §3.13;
 - the CubeCL 0.11.0-pre.4 and `cubek-matmul` 0.3.0-pre.4 sources and docs: the runtime
-  and client API, buffers and handles, launch and comptime parameters, `Line`, shared
+  and client API, buffers and handles, launch and comptime parameters, `Vector`, shared
   memory, plane operations, streams and synchronisation, device properties and
   `supports_type` (or its 0.11 successor), autotune and its cache, compilation options
   (fast math), and the matmul strategies.
@@ -111,10 +111,10 @@ Write `docs/design/device-path.md` with these sections:
      shared memory in near-row order; the mapping ŷ = ĉ + r̂ u_s of §3.13 with exact
      frames, computed on the device from integer keys or uploaded per near entry; the
      r² = 0 rule; leaves larger than a tile; empty leaves. Keep room for a second,
-     CPU-shaped layout on the CubeCL CPU runtime (targets in `Line<T>` lanes, one unit
-     per core, no shared memory), which decision 10 of the README adds to T6 if T3's
-     measurement against `nd-fmm-simd` meets its rule. Say how a per-backend layout is
-     selected; do not design the CPU layout in detail.
+     CPU-shaped layout on the CubeCL CPU runtime (targets in `Vector<T, N>` lanes, one
+     unit per core, no shared memory), which decision 10 of the README adds to T6 if
+     T3's measurement against `nd-fmm-simd` meets its rule. Say how a per-backend
+     layout is selected; do not design the CPU layout in detail.
    - **P2M, L2P, P2L, M2P:** harmonics and their gradients by the Cartesian recursion
      of CONVENTIONS §3.5 in registers. Whether recursion coefficients are precomputed
      on the host (from `nd-fmm-math`) or formed in the kernel. M2P needs I_(p+1).
@@ -162,11 +162,12 @@ Write `docs/design/device-path.md` with these sections:
     - Stale-cache rejection, and the static fallback rule (README, "Strategy
       selection"), with the f64 rule for p = 9–11 stated.
 11. **Threads and BLAS.** The CubeCL CPU runtime's worker pool against `threads(n)`
-    (design §6.8). The runtime starts one OS thread per unit of a cube, and each loops
-    over every cube, so its thread count is the cube size, not a setting. Refuse
-    `threads > 1` with that backend, or keep rayon idle while device work runs.
-    Recommend one, and say how cube sizes keep ranks × runtime threads within the
-    physical cores. Phase 4 makes no BLAS call.
+    (design §6.8). The runtime runs one task per unit of a cube, each looping over
+    every cube, on a pool of one worker per core (a worker per unit for kernels with
+    `sync_cube` or shared memory), so its parallelism is the cube size, not a
+    setting. Refuse `threads > 1` with that backend, or keep rayon idle while device
+    work runs. Recommend one, and say how cube sizes keep ranks × runtime threads
+    within the physical cores. Phase 4 makes no BLAS call.
 12. **Errors.** Device failures at build and during `evaluate`: which are values, which
     are panics, and how they are agreed on every rank without a new collective
     (README, "Errors").

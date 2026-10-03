@@ -65,13 +65,15 @@ Do:
     hand-written kernels were measured at level 0. Also check whether the JIT targets
     the host CPU and its features (for example NEON and the host's `target-cpu`), and
     say how you established it;
-  - how the CPU runtime maps a launch, confirmed from the 0.11 sources: one OS thread
-    per unit of a cube, each looping over every cube in turn; a plane of one unit;
-    `sync_cube` as a spin barrier; SIMD only from `Line<T>` vectors and LLVM's
-    vectorisation inside one unit's code. T3 builds on this.
+  - how the CPU runtime maps a launch, confirmed from the 0.11 sources: one task per
+    unit of a cube, each looping over every cube in turn, on a pool of one worker per
+    core (a dedicated worker per unit for kernels with `sync_cube` or shared memory);
+    a plane of one unit; `sync_cube` as a spin barrier; SIMD only from
+    `Vector<T, N>` vectors and LLVM's vectorisation inside one unit's code. T3 builds
+    on this.
 - **Migration notes** in the same section, for the later tasks. List every API change
   the port met, with the 0.10.0 and the 0.11 form side by side:
-  - kernel and launch macros, comptime parameters, `Line` and vectorisation;
+  - kernel and launch macros, comptime parameters, `Vector` and vectorisation;
   - shared memory and plane operations;
   - the client and buffer API, and the matmul entry points and strategies;
   - device properties and the capability query;

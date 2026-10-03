@@ -13,7 +13,6 @@ Read first:
 - root CLAUDE.md, fmm-exec/CLAUDE.md, fmm-kernels/CLAUDE.md;
 - docs/phase4/README.md ("Requirements", "Design decisions", "Exit gate" C4.1);
 - docs/design/device-path.md, signed off: sections 3, 4, 7, 8, 11, 12 and 15;
-- the T4b brief and its code, if T4b exists;
 - fmm-exec/src/operator.rs (the module docs; `Kernels` and the `*_target` bodies),
   fmm-exec/src/fmm.rs (`FmmBuilder`, `build`, `SettingsError`, `Fmm::evaluate`,
   `StageTimings`, the accessors), fmm-exec/src/tables.rs;
@@ -39,25 +38,46 @@ Do:
     or a configuration that does not fit in device memory gives a `SettingsError`;
   - agree that error by `build`'s existing all-reduce of input errors, with no new
     collective;
-  - the `threads(n)` rule for the CPU runtime as the design decides (refused, or rayon
-    kept idle during device work);
+  - a device backend on more than one rank: `build` runs steps 1–5 as today, so that
+    `PointsNotOwned` still wins where it applies, then every rank returns
+    `SettingsError::DeviceNeedsOneRank { ranks }`. The rank count is the same on every
+    rank, so no collective is needed (device-path.md §2, §4.4);
+  - the threads rule of device-path.md §11: with the CPU backend no rayon pool is
+    built, `threads(n)` caps the units per cube of the CPU layouts, and host-fallback
+    kinds run serially; with Metal or CUDA the pool of `threads(n)` serves the
+    host-fallback kinds only;
   - `Fmm` reports the backend and device, and per operator kind whether it runs on the
-    device or the host.
+    device or the host;
+  - `Backend::probe`, a thin wrapper over `Device::open` that returns the reason a
+    device is unavailable, since `SettingsError::NoDevice` is `Copy` and cannot carry
+    it (device-path.md §3.3, §12).
 - **The device operator**, implementing `FmmSizes` and `FmmOperator`:
   - at construction: upload the plan views, frames and tables it needs (once per
     `Fmm`), and allocate the device level buffers and leaf stores as the design
     specifies;
-  - at each evaluation: upload charges (and points once per build, as designed),
-    keep every intermediate on the device, and download the target output once;
+  - at each evaluation: upload charges, keep every intermediate on the device, and
+    download the target output once. The points are uploaded once per build by
+    `DeviceOperator::load_points`, from copies of the source store and target input
+    that `build` takes after step 8, since the store accessors and `operator_mut()`
+    cannot borrow the evaluator at once (device-path.md §4.3);
   - keep the device copies consistent with every host-side write of the `Evaluator`
-    listed in the design's section 4: through the T4b hook, if there is one, or as the
-    design says otherwise;
+    listed in the design's section 4, without an `nd-fmm-plan` change (device-path.md
+    §4.3, option (a)): `Fmm::evaluate` calls the operator's `begin_evaluation` after
+    `reset` (zero kernels, the charge upload and scatter) and `read_output` after the
+    stages (one download, one sync). `DeviceOperator::new` checks that the plan has no
+    ghost leaf and no ghost box;
   - a host fallback per kind: download the call's inputs, run the `LaplaceOperator`
     body (the same `Kernels::*_target` code, serially or on the `Fmm`'s pool), and
     upload the output. Selectable per kind; in this task every kind uses it;
   - **transfer accounting**: count the bytes and calls of every upload and download
     per evaluation, and every launch and sync, exposed for tests and reports.
-- `StageTimings` on the device path as the design's section 8 specifies. With the host
+- The `view` types of `nd-fmm-kernels` (`IndexView`, `GroupedView`, `BoxCoordinates`,
+  `LeafCoordinates`; device-path.md §3.1) and their upload at build, the index arrays
+  validated on the host.
+- `StageTimings` on the device path as the design's section 8 specifies. Without a
+  sync per stage they measure enqueue time, and the docs say so;
+  `FmmBuilder::synchronous_stages(true)` syncs after every stage so that they time each
+  stage, for reports only, off by default (device-path.md §8.3). With the host
   fallback the stages are dominated by transfers; say so in the docs.
 - Crate docs: the backends, the residency (what lives where, the transfers per
   evaluation), the fallback, determinism (requirement 6), errors, and the threads rule.
@@ -72,8 +92,8 @@ backends it ran; on Metal in f32, `#[ignore]`d and run by hand):
   backend compiled in. Keep the debug run within its budget: run the device repetition
   on the small scenarios only if needed.
 - Transfers:
-  - per evaluation, equal to the design's formula for the scenario, counted by the
-    accounting;
+  - per evaluation, equal to the design's formula for the scenario (device-path.md
+    §4.1, §7.2), counted by the accounting;
   - plan views and tables uploaded only at build: zero bytes of them in a second
     evaluation;
   - two evaluations with different charges both equal the host path.
@@ -81,11 +101,14 @@ backends it ran; on Metal in f32, `#[ignore]`d and run by hand):
   - f64 with the Metal backend is refused with `SettingsError` at build (by hand, on
     the M3 Max);
   - a backend not compiled in is refused;
+  - a device backend on 2 ranks returns `DeviceNeedsOneRank` on both, or
+    `PointsNotOwned` where that applies (in the 2-rank run below);
   - the PR shows that the check goes through `build`'s existing agreement of input
     errors;
   - `Host` stays the default, and with it nothing about the host path changes: the
     existing tests pass unchanged without the `gpu` feature.
-- The threads rule for the CPU runtime, as designed.
+- The threads rule of device-path.md §11: no rayon pool with the CPU backend.
+- The `view` types against the plan's views they are uploaded from.
 
 Must pass:
 - `RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec` without features, unchanged and
@@ -99,7 +122,8 @@ Must pass:
 - `cargo doc -p nd-fmm-exec --no-deps` without warnings, also with `--features cpu`;
 - `tests/mpi_exec.rs` with `--features cpu` on 2 ranks, by hand, under an external
   timeout, as in Phase 3S T6. It must neither hang nor diverge, and the device setting
-  errors must be agreed on both ranks;
+  errors must be agreed on both ranks: each device scenario stops with
+  `PointsNotOwned` or `DeviceNeedsOneRank` (device-path.md §4.4);
 - the CPU-runtime CI job, if T4 kept it. Extend it to `nd-fmm-exec --features cpu` only
   if its budget allows and the job then installs MPI. Say which you did;
 - the root checks and the stricter workspace checks.
@@ -114,5 +138,5 @@ Do not:
 - write operator kernels (T6–T10);
 - add `unsafe` to nd-fmm-exec, or a direct `cubecl` dependency;
 - change the host path, its defaults or its results;
-- change nd-fmm-plan beyond T4b;
+- change nd-fmm-plan (no T4b in Phase 4, device-path.md §4.3);
 - use atomics.

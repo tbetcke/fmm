@@ -1,13 +1,17 @@
 # Phase 4 / T8 — M2M and L2L as batched GEMM (C4.4)
 
 The first translations on the device, and the GEMM machinery that dense M2L (T9)
-reuses. For each (level, octant) batch of the `Children` and `Parents` groupings:
-- gather the input columns;
-- multiply by the octant's dense table with one GEMM;
-- scatter-add into the output columns.
+reuses. Per level, over the (level, octant) batches of the `Children` and `Parents`
+groupings, one grouped translation (device-path.md §6.4):
+- gather the input columns in batch order;
+- multiply each octant's columns by its dense table in one grouped GEMM, into a
+  temporary;
+- add the products into the outputs: a reduction per target in row order for M2M, a
+  scatter-add for L2L.
 
-No atomics are needed, because the targets of a batch are distinct
-(fmm-plan-redesign §6.4). The upward pass runs both the local and the global M2M.
+No atomics are needed: the GEMM writes distinct columns of the temporary, and only the
+reduction, which owns each target, or the scatter-add, whose targets are distinct over
+the level, writes the output. The upward pass runs both the local and the global M2M.
 
 Read first:
 - root CLAUDE.md, fmm-kernels/CLAUDE.md, fmm-exec/CLAUDE.md;
@@ -29,24 +33,34 @@ Read first:
 - the T4 gather and scatter kernels, and the T5 device operator.
 
 Do:
-- **The hand-written GEMM** in `nd-fmm-kernels`: C += A X, with A n × n
-  (n = (p + 1)², comptime), X n × k, column-major as the level buffers and the tables
-  are.
+- **The hand-written GEMM** in `nd-fmm-kernels`: C = A X into a temporary (β = 0),
+  with A n × n (n = (p + 1)², comptime), X n × k, column-major as the level buffers
+  and the tables are.
   - Production-quality from the spike's kernels.
   - The cube layout per backend, as the design fixes it (design §6.5: row blocks on
     Metal, column strips on the CPU runtime). Guard shapes for any k, including 0, 1
     and k not a multiple of the tile.
-  - Accumulating: it adds into C, or writes into a temporary that the scatter-add then
-    adds, as the design chose. The summation order inside each output is fixed and
+  - It sums over k in ascending order into one accumulator per output, starting from
+    zero; the reduction or scatter-add then adds the result into the output once
+    (device-path.md §6.4). Accumulating in the GEMM from a gathered copy of the output
+    (β = 1) is rejected. The summation order inside each output is fixed and
     documented.
 - **The library path**, where the design uses it for these shapes: `cubek-matmul` with
   an explicitly chosen strategy, never the per-call `Auto` (requirement 6).
-- **Octant batches**: for each octant o in order, gather the batch's input columns,
-  apply table o, and scatter-add into the batch's output columns.
+- **The grouped translation** (`translate::grouped`, device-path.md §6.4), per level:
+  - gather the input columns of every octant batch, in batch order;
+  - one grouped GEMM over the level's octants, with a tile schedule (group and first
+    column of every tile) built at build, in chunks of groups whose temporaries fit in
+    the scratch budget;
+  - M2M: a reduction per parent that loads its output, adds Y[:, pos(e)] for each
+    entry e of its row in row order and stores it once, with the row-to-batch map
+    pos(e) built on the host at build and uploaded once. L2L: a scatter-add
+    (`movement::scatter_add_columns`), since a child has one parent;
   - M2M: children on l + 1 → parents on l. L2L: parents on l − 1 → children on l.
-  - Launches per level as the design fixes: one per octant in order, or one launch
-    that keeps each target's octant order.
-  - Each target gets its octants in order, as the accumulation rule requires (M2M rows
+    Both M2M passes use the same code;
+  - three launches per level and chunk: gather, grouped GEMM, reduction or scatter-add
+    (device-path.md §8.1);
+  - each target gets its octants in order, as the accumulation rule requires (M2M rows
     are by octant; L2L has one parent per child).
 - **Tables on the device**: the dense M2M and L2L tables for every strategy (README,
   "Design decisions"). For `Rotation`, the device path builds them in addition to the
@@ -67,11 +81,15 @@ test prints the backends it ran):
   dyadic domain, for every octant, the device M2M and L2L against `nd_fmm_ref::direct`
   at the canonical frames:
   - f64, CPU runtime, p ≤ 20: within 1e-14 relative to the term magnitudes, per degree
-    in the §3.8 weighting;
+    in the §3.8 weighting, or within twice the host operator's measured error on the
+    same cell, whichever is larger (device-path.md §2);
   - f32, p ≤ 8: within 1e-5 against f64.
 - Batches: the result of a level call equals applying every (target, source, octant)
   triple of the rows in row order on the host, within the GEMM tolerance. Each target
   gets every octant once, and ghost and leaf rows stay untouched (bit for bit).
+- Grouped against per-octant: a grouped level call equals one gather, GEMM and
+  scatter-add per octant in octant order, bit for bit with the same GEMM
+  (device-path.md §6.4).
 - The global pass: on the coarse levels, the device M2M with the `m2m_global` view
   equals the host's within tolerance.
 - Determinism: repeated level calls bit-identical.

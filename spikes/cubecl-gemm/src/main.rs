@@ -13,7 +13,10 @@
 //! - `--no-lib` to skip the library matmul (its f32 kernels for B = 1e4 did not finish
 //!   compiling within minutes on the CubeCL CPU runtime)
 //! - `--force-f64` to run f64 even where the runtime does not register the type (CubeCL
-//!   0.10 disables f64 on CUDA; see SPIKE_REPORT.md)
+//!   0.10 disabled f64 on CUDA; 0.11.0-pre.4 registers it again; see SPIKE_REPORT.md)
+//!
+//! The first launch of every implementation (compilation included) is timed and printed
+//! to stderr.
 
 mod bench;
 mod reference;
@@ -133,14 +136,14 @@ fn print_row(row: &Row) -> bool {
 }
 
 /// Prints the device facts the report needs, and whether f64 is supported.
-fn describe<R: Runtime>(client: &ComputeClient<R>, backend: &str) -> bool {
+fn describe(client: &Client, backend: &str) -> bool {
     let props = client.properties();
-    let f64_ok = props.supports_type(f64::as_type_native_unchecked());
+    let f64_ok = props.supports_type(f64::elem_type_native());
     let hw = &props.hardware;
     eprintln!(
         "[{backend}] runtime {}: f64 supported = {f64_ok}, plane size {}..{}, \
          max shared memory {} B, SMs {:?}, CPU cores {:?}, tensor-core min dim {:?}",
-        R::name(client),
+        client.name(),
         hw.plane_size_min,
         hw.plane_size_max,
         hw.max_shared_memory_size,
@@ -151,8 +154,8 @@ fn describe<R: Runtime>(client: &ComputeClient<R>, backend: &str) -> bool {
     f64_ok
 }
 
-fn run_precision<R: Runtime, F: Real>(
-    client: &ComputeClient<R>,
+fn run_precision<F: Real>(
+    client: &Client,
     backend: &'static str,
     options: &Options,
     failures: &mut usize,
@@ -160,7 +163,7 @@ fn run_precision<R: Runtime, F: Real>(
     for &p in &options.ps {
         for &b in &options.bs {
             eprintln!("[{backend}] {} p = {p}, B = {b}", F::NAME);
-            for row in run_case::<R, F>(client, backend, p, b, !options.no_lib, options.settings) {
+            for row in run_case::<F>(client, backend, p, b, !options.no_lib, options.settings) {
                 if !print_row(&row) {
                     *failures += 1;
                 }
@@ -169,17 +172,12 @@ fn run_precision<R: Runtime, F: Real>(
     }
 }
 
-fn run_backend<R: Runtime>(
-    client: ComputeClient<R>,
-    backend: &'static str,
-    options: &Options,
-    failures: &mut usize,
-) {
+fn run_backend(client: Client, backend: &'static str, options: &Options, failures: &mut usize) {
     let f64_ok = describe(&client, backend) || options.force_f64;
     for precision in &options.precisions {
         match precision.as_str() {
-            "f32" => run_precision::<R, f32>(&client, backend, options, failures),
-            "f64" if f64_ok => run_precision::<R, f64>(&client, backend, options, failures),
+            "f32" => run_precision::<f32>(&client, backend, options, failures),
+            "f64" if f64_ok => run_precision::<f64>(&client, backend, options, failures),
             "f64" => eprintln!("[{backend}] f64 not supported by the device: skipped"),
             other => panic!("unknown precision {other}"),
         }
@@ -199,20 +197,22 @@ fn main() {
         match backend.as_str() {
             #[cfg(feature = "metal")]
             "metal" => {
-                use cubecl::wgpu::{WgpuDevice, WgpuRuntime};
-                let client = WgpuRuntime::client(&WgpuDevice::DefaultDevice);
+                use cubecl::{Device, device::WgpuDeviceKind};
+                let client = Device::metal_msl(WgpuDeviceKind::DefaultDevice)
+                    .expect("Metal device")
+                    .client();
                 run_backend(client, "metal", &options, &mut failures);
             }
             #[cfg(feature = "cpu")]
             "cpu" => {
-                use cubecl::cpu::{CpuDevice, CpuRuntime};
-                let client = CpuRuntime::client(&CpuDevice);
+                use cubecl::{Device, device::CpuDevice};
+                let client = Device::Cpu(CpuDevice).client();
                 run_backend(client, "cpu", &options, &mut failures);
             }
             #[cfg(feature = "cuda")]
             "cuda" => {
-                use cubecl::cuda::{CudaDevice, CudaRuntime};
-                let client = CudaRuntime::client(&CudaDevice::default());
+                use cubecl::{Device, device::CudaDevice};
+                let client = Device::Cuda(CudaDevice::default()).client();
                 run_backend(client, "cuda", &options, &mut failures);
             }
             other => panic!("backend {other} is not compiled in (see the crate features)"),

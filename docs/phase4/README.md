@@ -57,7 +57,7 @@ Companion documents:
   the device P2P;
 - `spikes/cubecl-gemm/SPIKE_REPORT.md`.
 
-T1 adds a further companion, `docs/design/device-path.md`.
+T1 adds a further companion, `docs/design/device-path.md`, signed off on 2026-10-03.
 
 Prerequisite: Phase 3S is complete. T7 is merged (PR #47), and the design documents
 carry the Phase 3S outcome. The briefs assume the workspace as it is after that merge.
@@ -87,7 +87,6 @@ In scope:
   accuracy gates, and a device leaf-size study.
 - `.github/workflows/`: a CPU-runtime job for `nd-fmm-kernels`, if T4's measurement and
   the sign-off keep it.
-- An `nd-fmm-plan` extension, only if the signed-off T1 design needs one (see "Tasks").
 
 Out of scope:
 - Multi-rank device runs (C5.1, device part, after C4.7). Also overlap of exchange and
@@ -110,7 +109,8 @@ Out of scope:
   size of 64) or to its results.
 - Changes to `nd-fmm-math`, `nd-fmm-ref`, `nd-fmm-tables`, `nd-fmm-simd` and `nd-octree`
   beyond fixing a defect that a test exposes (stop and report first). Changes to
-  `nd-fmm-plan` beyond the signed-off extension, if there is one.
+  `nd-fmm-plan`: the signed-off design needs none (no T4b, device-path.md §4.3; the
+  C5.1 hook of device-path.md §4.5 is for later).
 - p > 20 (`MAX_DEGREE`).
 
 ## Requirements on the device path
@@ -121,7 +121,9 @@ one, with reasons, for sign-off.
 1. **Same interface.** The device path is an `FmmOperator` driven by `nd-fmm-plan`'s
    `Evaluator`. It does not re-implement the pass order, the lists or the exchanges.
    `Fmm` keeps its API; the backend is one more builder setting, and the host path
-   stays the default.
+   stays the default. Until C5.1 the device backend runs on one rank only: on more
+   than one rank `build` returns `SettingsError::DeviceNeedsOneRank`, after the
+   `PointsNotOwned` check (clarified at sign-off, device-path.md §2 and §4.4).
 2. **Same data and conventions.** The leaf-scaled chunks of §3.13 and the scaled
    coefficients of §3.7 in the real storage of §3.6. The tables are those of
    `nd-fmm-tables`, built in f64 and rounded to T. Frames come from integer keys, and
@@ -183,10 +185,13 @@ These hold for every task, so that no task decides them on its own:
   enables `nd-fmm-kernels`. The feature is off by default, so the default members and
   the existing CI job never build CubeCL. Backend features pass through (`metal`, `cpu`,
   `cuda`). `FmmBuilder` gets a backend setting with `Host` as the default, and `Fmm`
-  reports the backend and device it runs on. T1 fixes the names.
-- **Runtime-generic kernels.** Every kernel is generic over the CubeCL runtime and over
-  f32/f64. p, tile sizes and cube layouts are comptime parameters, and every layout
-  choice is per backend (design §6.5: the best layout differs between Metal and the CPU
+  reports the backend and device it runs on. The names are those of device-path.md
+  §3.3 (`Backend`, `FmmBuilder::backend`, `OperatorKind`, `Fmm::device_report`).
+- **Runtime-generic kernels.** Every kernel runs on every CubeCL runtime and is generic
+  over f32/f64. The runtime is a run-time value (`Device` in `nd-fmm-kernels`, `Backend`
+  in `nd-fmm-exec`), never an `R: Runtime` type parameter (device-path.md §3.2). p,
+  tile sizes and cube layouts are comptime parameters, and every layout choice is per
+  backend (design §6.5: the best layout differs between Metal and the CPU
   runtime by up to 3.4×).
 - **M2M and L2L on the device always use the dense octant tables**, gathered and
   applied as batched GEMM per (level, octant), whatever the M2L strategy (design §4,
@@ -197,8 +202,9 @@ These hold for every task, so that no task decides them on its own:
     at p ≥ 8 where CMMA is available, and the hand-written comptime-p kernel otherwise
     and for every f64 run.
   - `Rotation`, the tables of `RotationTables` in a rotation kernel.
-  - `Classes` is a host memory option. T1 decides whether the device runs it as
-    `Dense`, from `M2lClasses::expand`, or refuses it.
+  - `Classes` is a host memory option. The device runs it as `Dense`, from
+    `M2lClasses::expand`, and reports it as such; the host keeps its class tables for
+    the fallback (device-path.md §6.8).
   - The matmul strategy is always chosen explicitly, never by the library's own
     per-call `Strategy::Auto` (requirement 6).
   - A library matmul strategy is used only if its inputs are multiplied in T itself. A
@@ -208,19 +214,28 @@ These hold for every task, so that no task decides them on its own:
     mantissa, far coarser than the 1e-5 that f32 reaches at p = 8.
 - **Strategy selection.** Before C4.7, the device default follows design §4:
   - f32: dense at every p ≤ 8;
-  - f64: dense for p ≤ 8 and rotation for p ≥ 12, with a rule stated for 9–11.
+  - f64: dense for p ≤ 11 and rotation for p ≥ 12, provisional until a GPU measures
+    rotation (device-path.md §10.5).
 
   C4.7 replaces the rule with autotune where a tuning cache exists. The rule stays as
   the fallback for an untuned (backend, precision, p), including f64 on CUDA, which
   nothing here can measure.
 - **The CubeCL CPU runtime** is the correctness backend for f64, and the CI candidate.
-  - How it maps a launch (CubeCL 0.10.0 and 0.11.0-pre.4 sources; T2 confirms): one OS
-    thread per unit of a cube, each thread looping over every cube in turn; a plane of
-    one unit; `sync_cube` as a spin barrier. SIMD comes only from `Line<T>` vectors and
-    from LLVM's vectorisation inside one unit's code, never from the units. A
-    GPU-shaped kernel therefore runs poorly there by construction.
+  - How it maps a launch (CubeCL 0.11.0-pre.4 sources, docs/design/device-path.md F18
+    and F19; confirmed by T2): one task per unit of a cube, each unit's code looping over
+    every cube in turn. The tasks run on a pool of one worker per logical CPU,
+    efficiency cores included (pinning is only a hint on macOS); only kernels with
+    `sync_cube` or shared memory get a dedicated worker per unit. A plane is one unit,
+    and `sync_cube` is a spin barrier. SIMD comes only from
+    `Vector<T, N>` vectors and from LLVM's vectorisation inside one unit's code, never
+    from the units. A GPU-shaped kernel therefore runs poorly there by construction.
   - 0.10.0 compiled at LLVM optimisation level 0; 0.11 uses the O3 pipeline. The Phase
     0 CPU-runtime figures (design §6.1) are superseded by T2's re-measurement.
+  - In 0.11, cubecl-opt's `InstCombinePass` fuses every product whose only use is an add
+    or subtract into an fma, on every backend, the CPU runtime included, with no switch
+    (T2; device-path.md F16, §5.3). Device kernels are therefore not bit-identical to
+    the unfused host code wherever an inexact product feeds an add, unless T3 finds a
+    formulation that keeps the fusion out.
   - Whether it also gets a performance target is decided from T3's measurement of a
     CPU-shaped P2P against `nd-fmm-simd` (decision 10). Until then, and if the rule
     says no, it is correctness-only and nothing on it is timed as a result.
@@ -228,13 +243,17 @@ These hold for every task, so that no task decides them on its own:
     library f32 kernels took minutes to compile (design §6.1). Library-matmul tests run
     on Metal; the CPU runtime tests the hand-written kernels.
   - It has its own worker pool, so the device path never runs it inside a rayon worker
-    (design §6.8). With the CPU runtime, `threads > 1` is refused, or rayon is idle
-    while device work runs; T1 decides which.
+    (design §6.8). With the CPU backend no rayon pool is built, `threads(n)` caps the
+    units per cube of the CPU layouts, and host-fallback kinds run serially. With
+    Metal or CUDA the pool of `threads(n)` serves host-fallback kinds only and is idle
+    while device work runs (device-path.md §11).
   - Its build downloads the `tracel-llvm` bundle. That fails inside a sandbox; run such
     builds outside it and say so.
 - **Metal** needs a process with GPU access. It fails inside the macOS sandbox ("No
   possible adapter available"); run Metal tests outside it and say so. It reports no
-  f64.
+  f64. The `metal` feature is wgpu with the MSL compiler; a device that comes up
+  without it is refused (device-path.md §3.1). Switching to `metal-native` needs a
+  separate sign-off (decision 11).
 - **Accuracy measures.** Phases 1–3S define the measures, and every test names its own.
   Every f64 bound below applies to the CubeCL CPU runtime, the only backend here that
   runs f64 (and to CUDA, if someone later runs it). Metal runs f32 only, so on Metal
@@ -242,8 +261,10 @@ These hold for every task, so that no task decides them on its own:
   - **Operators**, against `nd-fmm-ref` and the host `LaplaceOperator` at the same
     frames, per degree in the §3.8 weighting, relative to the term magnitudes, on
     levels 2, 9 and 16 of a dyadic domain:
-    - f64 on the CPU runtime: 1e-14 for dense M2M, L2L and M2L, and 1e-13 for rotation
-      and the leaf operators (the C3.1 bounds);
+    - f64 on the CPU runtime: for dense M2M, L2L and M2L, 1e-14, or twice the host
+      operator's measured error on the same cell, whichever is larger (the device GEMM
+      sums in its own order; device-path.md §2); 1e-13 for rotation and the leaf
+      operators (the C3.1 bounds);
     - f32 on Metal and on the CPU runtime: 1e-5 against the f64 reference (the
       Phase 1 f32 bound).
   - **P2P:** the contract that T3 proposes and the sign-off fixes. Provisionally it is
@@ -288,11 +309,15 @@ These hold for every task, so that no task decides them on its own:
   TFLOP/s, derived, not measured; 400 GB/s), restated in every report that uses them.
 - **Errors.** Device failures at build (no adapter, unsupported precision, out of
   memory) are `SettingsError` or `FmmError` values, agreed on every rank by `build`'s
-  existing all-reduce of input errors, with no new collective. T1 decides how a device
-  failure during `evaluate` surfaces.
+  existing all-reduce of input errors, with no new collective. A device failure during
+  `evaluate` surfaces at the evaluation's one download as `FmmError::Device`, and the
+  `Fmm` returns it from every later `evaluate` (device-path.md §12).
 - **MPI.** The root rules apply. Device work never calls MPI, and every collective
   stays on the calling thread. On more than one rank `Fmm` still reports
-  `PointsNotOwned` until C5.1, for either backend. Device tests that build an `Fmm` go
+  `PointsNotOwned` where it applies until C5.1, for either backend. Where it does not
+  (every point in a leaf of its own rank), the host path runs distributed, and a
+  device backend returns `SettingsError::DeviceNeedsOneRank` on every rank, with no
+  collective (device-path.md §4.4). Device tests that build an `Fmm` go
   into the existing MPI-owning executables (`tests/mpi_exec.rs` and the ignored
   `accuracy.rs` and `adaptive.rs`), or a new executable with its own single
   MPI-initialising test.
@@ -330,7 +355,10 @@ These hold for every task, so that no task decides them on its own:
 - C4.2: the device P2P meets the signed-off contract on the CPU runtime (f32, f64) and
   on Metal (f32), with chunk and target-position invariance and determinism. It is
   timed on Metal against the host NEON kernel (C3S.4) at 1 and 12 threads, with its
-  fraction of the stated peak model. If decision 10 set a CPU-runtime target, the CPU
+  fraction of the peak model of device-path.md §13.4 (720 Gpairs/s φ, 480 φ and
+  ∇φ). The target, measured and reported, never asserted: Metal f32 at least 25% of
+  the model on W2 at N = 10⁵, and at least 10% on W1 at n_t = 64 with at least 4,096
+  target leaves per launch. If decision 10 set a CPU-runtime target, the CPU
   layout of the kernel is within 1.5× of `nd_fmm_simd::P2pKernel` per pair at one
   thread on the W1 workload (geometric mean, measured on the M3 Max), and its
   all-cores ratio is reported.
@@ -340,7 +368,8 @@ These hold for every task, so that no task decides them on its own:
   global pass.
 - C4.5: dense M2L matches C2.2 for every offset on levels 2, 9 and 16. The GEMM reaches
   at least 80% of the spike's throughput at the same (p, columns) on Metal (GEMM only,
-  gather and scatter reported separately), and its efficiency is profiled and reported.
+  gather and reduction reported separately), and its efficiency is profiled and
+  reported.
 - C4.6: rotation M2L matches C2.3 (f64 on the CPU runtime to p = 20, f32 to p = 8), and
   is timed against C4.5 across p on Metal f32.
 - C4.8 (new): with every operator on the device, on the cube and the Plummer sphere at
@@ -372,13 +401,10 @@ One pull request each.
   timing comparison, T9.
 - T11 needs T6–T10. T12 needs T9, T10 and T11. T13 needs T11 and T12.
 
-If the signed-off T1 design needs an `nd-fmm-plan` extension (for example a hook that
-routes the evaluator's own data movements, fmm-plan-redesign §10), it becomes task
-**T4b**:
-- T1 writes its brief, `T4b-plan-device-hooks.md`, in its PR;
-- it is done under fmm-plan/CLAUDE.md, checked with `IndexFmm` on 1, 2 and 4 ranks;
-- the host path stays bit-identical through it;
-- T5 then needs T4b.
+The signed-off design needs no `nd-fmm-plan` extension, so there is no task **T4b** in
+Phase 4: on one rank the only evaluator-side write outside operator calls is `reset`'s
+zeroing, which the device operator mirrors (device-path.md §4.3). The hook that C5.1
+needs is sketched in device-path.md §4.5.
 
 | Task | Brief | Delivers | Component | Depends on |
 | --- | --- | --- | --- | --- |
@@ -386,10 +412,10 @@ routes the evaluator's own data movements, fmm-plan-redesign §10), it becomes t
 | T2 | [T2-cubecl-011.md](T2-cubecl-011.md) | CubeCL pin to 0.11.0-pre.4, `spikes/cubecl-gemm` ported and re-measured, migration notes, root `CLAUDE.md` points to Phase 4 | prerequisite of C4.1 | none |
 | T3 | [T3-device-arithmetic.md](T3-device-arithmetic.md) | `spikes/device-arith`: device arithmetic per backend; CONVENTIONS §3.13 addition for device kernels; the device P2P contract; a CPU-shaped P2P on the CPU runtime against `nd-fmm-simd` | prerequisite of C4.2, C4.3 | T2 |
 | T4 | [T4-kernels-scaffold.md](T4-kernels-scaffold.md) | `fmm-kernels` crate, backends and capability check, device buffers, gather/scatter/zero kernels, crate `CLAUDE.md`, the CPU-runtime CI job measured | part of C4.1 | T1 (signed off), T2 |
-| T5 | [T5-exec-device-path.md](T5-exec-device-path.md) | `nd-fmm-exec` feature `gpu`: backend setting, device operator with device-resident data and host fallback per kind, transfer accounting | C4.1 | T4 (and T4b, if any) |
+| T5 | [T5-exec-device-path.md](T5-exec-device-path.md) | `nd-fmm-exec` feature `gpu`: backend setting, device operator with device-resident data and host fallback per kind, transfer accounting | C4.1 | T4 |
 | T6 | [T6-p2p-kernel.md](T6-p2p-kernel.md) | device P2P kernel, potential and gradient, f32 and f64 | C4.2 | T5, T3 (signed off) |
 | T7 | [T7-leaf-kernels.md](T7-leaf-kernels.md) | device P2M, L2P, P2L, M2P with harmonics by recursion | C4.3 | T5, T3 (signed off) |
-| T8 | [T8-m2m-l2l-gemm.md](T8-m2m-l2l-gemm.md) | gather → GEMM → scatter-add per (level, octant); the hand-written comptime-p GEMM | C4.4 | T5 |
+| T8 | [T8-m2m-l2l-gemm.md](T8-m2m-l2l-gemm.md) | grouped translation per level: gather, grouped GEMM over the octants, row-ordered reduction (M2M) or scatter-add (L2L); the hand-written comptime-p GEMM | C4.4 | T5 |
 | T9 | [T9-m2l-dense.md](T9-m2l-dense.md) | dense M2L per (level, offset): library CMMA and hand-written GEMM, launch batching, efficiency profile | C4.5 | T8 |
 | T10 | [T10-m2l-rotation.md](T10-m2l-rotation.md) | rotation M2L kernel; timing against dense across p | C4.6 | T5, T9 |
 | T11 | [T11-device-fmm.md](T11-device-fmm.md) | every operator on the device by default; launch scheduling, syncs, transfers; the device accuracy gates | C4.8 (new) | T6–T10 |
@@ -416,8 +442,10 @@ lock file with the manifest change (root `CLAUDE.md`, "Layout").
 
 Each is recorded in the exit checklist when made:
 1. The design document `docs/design/device-path.md`, including any change it proposes
-   to the requirements or tolerances above (T1; before T4).
+   to the requirements or tolerances above (T1; before T4). **Signed off on
+   2026-10-03**, with every recommendation of device-path.md §16.
 2. An `nd-fmm-plan` extension for the device path, if T1 proposes one (with T1).
+   **Decided on 2026-10-03: none, no T4b** (device-path.md §4.3).
 3. The §3.13 addition for device kernels and the device P2P contract (T3; before T6 and
    T7).
 4. GPU hardware. **Decided on 2026-10-03: none besides the M3 Max.** Metal f32 is the
@@ -437,12 +465,17 @@ Each is recorded in the exit checklist when made:
    in T13.
 10. A performance target for the CubeCL CPU runtime (T3; before T6). **Approved on
     2026-10-03: T3 measures it.** T3 times a CPU-shaped P2P on the 0.11 CPU runtime
-    (targets in `Line<T>` lanes, one unit per core, no shared memory) against
+    (targets in `Vector<T, N>` lanes, one unit per core, no shared memory) against
     `nd_fmm_simd::P2pKernel` on NEON, on the Phase 3S W1 workload. The rule is fixed in
     the T3 brief: if the geometric-mean time ratio at one thread is at most 1.5, the CPU
     runtime gets a target in Phase 4 (its P2P within 1.5× of the host SIMD P2P per
     pair), and T6 adds a CPU layout of the device P2P kernel to meet it. Otherwise it
     stays a correctness backend. Either way, the result is signed off before T6.
+11. The Metal runtime (device-path.md §16, question 10). **Decided on 2026-10-03: keep
+    `metal` = wgpu-msl.** If T3 finds that its default math mode breaks the §3.13
+    argument and no formulation restores it, switching the `metal` feature to
+    `metal-native` (`cubecl-metal`, safe math mode) needs a separate sign-off
+    (device-path.md §5.3).
 
 ## Risks
 
@@ -451,8 +484,8 @@ Each is recorded in the exit checklist when made:
 | CubeCL 0.11.0-pre.4 is a pre-release; its API or behaviour changes again before 0.11.0 | one pin for the whole workspace; CubeCL code only in `nd-fmm-kernels` and spikes, behind thin wrappers; T2 records the API notes; moving to 0.11.0 is a separate, small task |
 | f64 is never run on a GPU, so f64 device performance and the f64 dense/rotation crossover stay unmeasured | f64 correctness on the CPU runtime; the static rule of design §4 as the untuned fallback; the CUDA command documented; T13 states plainly what was not measured |
 | GPU compilers use fast math (reassociation, approximate `rsqrt`, flush to zero) and break the r² = 0 rule or the accuracy contracts | T3 measures each backend before any production kernel; the §3.13 addition states what kernels may assume; every kernel is tested against `nd-fmm-ref` on each backend run |
-| The evaluator writes host buffers outside operator calls, and device-resident data goes stale | T1 lists every such write per stage, on one rank and on several, and designs the consistency (or the T4b hook); T5 tests the device path with host fallback bit for bit against the host path |
-| Launch overhead and syncs dominate at small levels and small N (13 MFLOP took 9–22 µs in the spike; a sync costs 1.5 ms) | many launches per sync, batched offsets (design §6.5), top levels merged or on the host (T11); launch and sync counts reported |
+| The evaluator writes host buffers outside operator calls, and device-resident data goes stale | T1 listed every such write per stage, on one rank and on several (device-path.md §4.2): on one rank only `reset`'s zeroing, which the device operator mirrors, and no T4b; T5 tests the device path with host fallback bit for bit against the host path |
+| Launch overhead and syncs dominate at small levels and small N (13 MFLOP took 9–22 µs in the spike; a sync costs 1.5 ms) | many launches per sync, batched offsets (design §6.5), top levels on the device, merged across levels if measured worthwhile (T11, device-path.md §6.7); launch and sync counts reported |
 | The CPU runtime is too slow to build or to compile kernels for CI | T4 measures it; small shapes; hand-written kernels only there; a dropped CI job means the kernel tests run by hand, as the GPU tests do |
 | The library matmul picks its kernel per call and breaks determinism, or is slow or unavailable for some shapes | explicit strategies only (never the library's per-call `Auto`); the hand-written kernel as the fallback for every shape; determinism tests |
 | Device memory at high p (dense M2L 492 MB in f64 at p = 20) | rotation above the crossover; T1 states memory per (N, p, strategy); `Fmm` refuses a configuration that does not fit, at build |
@@ -466,10 +499,11 @@ In the repository root, start `claude` and say:
 
 ## Exit checklist
 - [ ] T1 merged: `docs/design/device-path.md` drafted, sign-off questions listed
-- [ ] Device-path design signed off, including any requirement or tolerance change; T4b decided (needed or not)
+- [x] Device-path design signed off, including any requirement or tolerance change; T4b decided (needed or not): signed off 2026-10-03 with every recommendation of device-path.md §16; T4b not needed
 - [ ] GPU hardware: none besides the M3 Max; Metal f32 timed, f64 on the CPU runtime untimed, CUDA type-checked (decided 2026-10-03)
 - [ ] CubeCL pin: 0.11.0-pre.4 (decided 2026-10-03)
 - [ ] Host BLAS GEMM path: deferred (decided 2026-10-03)
+- [x] Metal runtime (decision 11): `metal` stays wgpu-msl; `metal-native` only by a separate sign-off (decided 2026-10-03)
 - [ ] T2 merged: pin at 0.11.0-pre.4, `spikes/cubecl-gemm` passing and re-measured, migration notes, root `CLAUDE.md` points to Phase 4
 - [ ] T3 merged: device arithmetic measured per backend; §3.13 addition and device P2P contract drafted
 - [ ] §3.13 addition and device P2P contract signed off

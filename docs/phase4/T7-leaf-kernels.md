@@ -32,22 +32,30 @@ Do:
 - **Harmonics on the device**: regular and irregular solid harmonics of all degrees up
   to p (M2P up to p + 1 for its gradient), with their gradients, at one point. They
   follow the recursion of `nd_fmm_math::harmonics` operation for operation where that
-  is practical, so that host and device agree to rounding. Where the design chose
-  precomputed recursion coefficients, build them on the host from `nd-fmm-math` and
-  upload them once.
-  - Registers or shared memory, as the design fixes per backend.
+  is practical, so that host and device agree to rounding. The recursion coefficients
+  are formed in the kernel as `nd_fmm_math::harmonics` forms them, their integers
+  comptime constants and their divisions in T; they are not precomputed on the host
+  (device-path.md §6.3). For bit identity the irregular recursion multiplies by
+  `inv_r2 = 1/r²`, formed once per point, as `harmonics` does; it does not divide by
+  r².
+  - Into a local array of (p + 1)² values (of degree p + 1 for M2P's gradient), the
+    loops over n and m unrolled (device-path.md §6.3).
   - p comptime, up to 20.
   - Unit tests against `nd-fmm-math` at seeded points inside and outside the unit ball,
     per degree, in the orthonormal weighting of CONVENTIONS §3.8.
-- **Kernels**, each generic over the runtime and f32/f64, with the structure the design
-  fixes. By default:
-  - P2M: one cube per leaf, one unit per point (or per block of points), the
-    per-coefficient sum over the leaf's points reduced in shared memory or by plane
-    operations in a fixed order;
+- **Kernels**, each generic over f32/f64 (the runtime is a run-time value,
+  device-path.md §3.2), with the structure the design fixes. By default:
+  - P2M: one cube per local leaf, unit c owning the coefficient slots c, c + U, …
+    (device-path.md §6.3). The points come in tiles: each unit computes the harmonics
+    of one point of the tile into shared memory, `sync_cube`, then each owner adds
+    q_j conj(R(u_j)) for the tile's points in point order, the order of `leaf::p2m`.
+    No reduction in shared memory or by plane operations;
   - L2P and M2P: one unit per target point. L2P adds its leaf's local, and M2P then
     adds the boxes of its W row in box-index order. The evaluator calls L2P before M2P
     (fmm-plan-redesign §7.5);
-  - P2L: one cube per target box, walking its X row in leaf-index order;
+  - P2L: one cube per target box with a non-empty X row, with P2M's coefficient-owner
+    scheme and irregular harmonics: its X row in leaf-index order, then each leaf's
+    points in point order (`leaf::p2l`);
   - frames (ĉ, r̂) exact from integer keys (§3.13), as T6 forms them; never a
     floating-point shift.
 - Safe launch wrappers per level call, and the device operator running each of the four
@@ -67,7 +75,13 @@ test prints the backends it ran):
   error of the same check, so that a device-only drift shows.
 - Leaves with 0, 1 and many points; points on leaf faces and at leaf centres; M2P and
   P2L with source and target boxes on every level difference the W and X lists allow.
-- Determinism: repeated launches bit-identical, including the reduction of P2M.
+- Bit identity on the CPU runtime, only where T3 finds a formulation that keeps
+  cubecl-opt's fma fusion out (it fuses every product whose only use is an add or
+  subtract, on every backend; device-path.md §5.3, F16): the device harmonics against
+  `nd-fmm-math`, and the four operators against `nd_fmm_ref::leaf`, bit for bit
+  (device-path.md §6.3, §9.2). Otherwise the operator bounds above apply.
+- Determinism: repeated launches bit-identical, including the per-coefficient sums of
+  P2M and P2L.
 - FMM: with these four kinds on the device (and P2P on the device if T6 has merged, else
   on the host), every `tests/mpi_exec.rs` scenario within the README's FMM bounds of
   the host output, and bit-identical across two evaluations. The ignored C3.3 gate

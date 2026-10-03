@@ -19,42 +19,53 @@ Read first:
   files rejected, safe for concurrent writers). The tuning cache follows the same
   rules;
 - `FmmBuilder::table_cache` (no default directory, no environment variable);
-- the T9, T10 and T11 code and their timing reports;
-- CubeCL 0.11's autotune and its cache, if the design uses them.
+- the T9, T10 and T11 code and their timing reports.
 
 Do:
 - **Candidates**, per the design: dense M2L with the library GEMM (f32, where CMMA
-  applies), dense with the hand-written GEMM (per cube layout), and rotation. Also the
-  P2P tile size and the GEMM layouts, if the design includes them. Only candidates that
-  pass T9's input precision guard are registered: no library strategy that rounds f32
-  inputs to TF32, F16 or BF16 is ever timed or chosen, however fast it is.
-- **Key**, per the design: backend, device name, precision, p and a bucketed batch size
-  (boxes or pairs per level). Also the CubeCL version and `CONVENTION_VERSION`, so that
-  a cache from another build is stale.
-- **Tuning** at build, when the backend is a device and tuning is enabled:
-  - time each candidate on representative batches of this `Fmm`'s plan, with kernel
-    compilation excluded and launches queued as T11 queues them;
-  - take the median of repeated batches;
+  applies), dense with the hand-written GEMM (per cube layout), and rotation, with
+  `Dense` only where its tables fit. Also, per level, the GEMM and the offset-chunk
+  budget, and for P2P the units per cube (32, 64, 128) and the plane-per-leaf layout,
+  and the CPU layout's K if decision 10 added it (device-path.md §10.3). Only
+  candidates that pass T9's input precision guard are registered: no library strategy
+  that rounds f32 inputs to TF32, F16 or BF16 is ever timed or chosen, however fast it
+  is.
+- **Key**, per the design (device-path.md §10.2): backend, device name and compiler,
+  precision, p and gradients; for the GEMM and layout choices the level's V (or
+  octant) pairs bucketed to a power of two, and for the P2P layout the mean points per
+  leaf, likewise. Also the CubeCL version, the `nd-fmm-kernels` version,
+  `CONVENTION_VERSION`, the candidate set and the file format, so that a cache from
+  another build is stale.
+- **Tuning** at build, after the uploads, only when the backend is a device, a
+  tuning-cache directory is given and the cache lacks the key (device-path.md §10.4):
+  - time each candidate on this `Fmm`'s own largest level of that kind, with kernel
+    compilation excluded (one warm-up launch) and launches queued as T11 queues them;
+  - take the median of five batches of at least 10 ms each;
   - pick the fastest, and fix it for the `Fmm`'s lifetime.
-  - Tuning time is reported in `BuildTimings` and never inside `evaluate`. It is
-    bounded: state the budget and how it is enforced.
-- **Persistence**: `FmmBuilder` accepts a tuning-cache directory, as `table_cache`
-  does: no default directory, no environment variable.
+  - Tuning time is reported in `BuildTimings::device` and never inside `evaluate`. It
+    is bounded: 10 s per build by default, enforced by a deadline checked between
+    candidates, with the static rule's candidate timed first so that a cut leaves at
+    least it. Without `table_cache`, the dense candidate at p ≥ 12 is skipped.
+- **Persistence**: `FmmBuilder::tuning_cache(dir)` accepts a tuning-cache directory,
+  as `table_cache` does: no default directory, no environment variable. One file per
+  (backend, device, precision, p), with the `TableCache` rules (device-path.md §10.5).
   - Every rank may read and write it safely.
   - A stale entry (another key, CubeCL version, convention version, or corrupted) is
     rejected and re-tuned, never trusted.
-  - Without a directory, results live only as long as the `Fmm`, or tuning is off, as
-    the design says.
+  - Without a directory, no tuning runs and the static rule applies.
 - **Static fallback rule** for an untuned key (README, "Strategy selection"):
   - f32: dense, with the library GEMM where CMMA applies and the hand-written GEMM
     otherwise;
-  - f64: dense for p ≤ 8 and rotation for p ≥ 12, with the signed-off rule for 9–11.
+  - f64: dense for p ≤ 11 and rotation for p ≥ 12 (device-path.md §10.5).
 
   This rule is what f64 on CUDA gets, since nothing here can tune it. Document it as
-  provisional (Phase 0 T6 model).
+  provisional until a GPU measures rotation (Phase 0 T6 model). Enter T10's measured
+  Metal f32 rotation efficiency into the model and report what it implies; moving the
+  boundary is a sign-off decision.
 - **Determinism**: every candidate is chosen at build, and `Fmm` reports the resolved
   strategy, GEMM and layout per level. Two `Fmm`s built from the same cache make the
-  same choices and give bit-identical output. Without a cache, a re-tune can choose
+  same choices and give bit-identical output. Without a directory the static rule
+  applies on every build. A re-tune that replaces a stale entry can choose
   differently, and the docs say so.
 - `nd-fmm-validate`: an example or flag that prints the tuning table (candidate times
   per key) for the cube and the Plummer sphere on Metal f32 at p = 3, 6 and 8, and on
@@ -73,9 +84,9 @@ Tests that define done (CPU runtime, and Metal by hand; each prints the backends
     re-tuned;
   - a corrupted or truncated file is rejected without a panic;
   - two concurrent writers leave a valid file (as `TableCache`'s test does);
-  - no file is written without a directory.
-- The static rule is used exactly when no tuning result exists, and gives the strategies
-  above (unit tests over p and precision).
+  - no file is written, and no tuning runs, without a directory.
+- The static rule is used exactly when no tuning-cache directory is given, and gives
+  the strategies above (unit tests over p and precision).
 - Outputs: every tuned choice gives an output within the README's FMM bounds of the host
   output, on the debug scenarios. Two builds from the same cache are bit-identical.
 - Tuning time stays within the stated budget at the C3.2 size.
@@ -96,5 +107,7 @@ implemented, with what remains unmeasured (f64 on a GPU).
 Do not:
 - tune inside `evaluate`, or let a choice change during an `Fmm`'s lifetime;
 - read environment variables, or write anywhere without a caller-supplied directory;
+- call CubeCL's autotune (`LocalTuner`) or enable its `persistence` feature
+  (device-path.md §10.1, §3.4);
 - change the host strategy `Auto` or its rule;
 - assert timings. Tests use the hook, not real speed differences.

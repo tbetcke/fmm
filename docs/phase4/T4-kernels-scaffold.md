@@ -1,8 +1,8 @@
 # Phase 4 / T4 — nd-fmm-kernels scaffold: backends, capability, buffers, data movement (part of C4.1)
 
 Create the crate that holds every `#[cube]` kernel. Give it backend selection, the f64
-capability check, device buffers, and the primitives every later kernel needs: gather
-by an index array, scatter-add by an index array, and zeroing. Measure whether its
+capability check, device buffers, and the primitives every later kernel needs: gather,
+scatter-add and scatter by an index array, and zeroing. Measure whether its
 CPU-runtime tests fit in CI. T5 then builds the device path of `nd-fmm-exec` on this
 crate, and T6–T10 add kernels behind an interface that already works and is tested.
 
@@ -44,24 +44,37 @@ Do:
     movement primitives, how to run the tests on each backend.
 - **Backend and device**, as the design's section 3 specifies (names may be refined;
   the semantics may not):
-  - selecting a backend and device;
+  - selecting a backend and device: `Device::open` uses CubeCL 0.11's fallible
+    `cubecl::Device` constructors (`cpu`, `metal_msl`, `cuda(0)`), and refuses a Metal
+    device that does not come up with the MSL compiler (a silent WGSL fallback) with
+    the no-device error. Detect it from the features only the MSL path registers
+    (`Plane::Sync` and the CMMA combinations), not from `client.name()`, which is
+    `wgpu<msl>` for every Metal device once `msl` is compiled in (device-path.md §3.1,
+    F4);
   - the capability query for f32 and f64;
   - a typed error when a backend is not compiled in, no adapter is found, or a
     precision is unsupported;
   - a `Display` that names the backend, device and CubeCL version, for reports.
 - **Device buffers**: allocate, upload from a host slice, download into a host slice,
-  for f32, f64, `u32` (index arrays), and `u16` and `u8` if the design needs them (the
-  offset and octant arrays of `GroupedCsr`). Sizes 0 and 1 must work. No
+  for f32, f64 and `u32`. Index arrays are `u32` only on the device: the `u16` offset
+  indices and `u8` octants of `GroupedCsr` are widened at upload, so there are no `u16`
+  or `u8` buffers (device-path.md §3.1). Sizes 0 and 1 must work. No
   allocation per kernel launch beyond what the design allows.
 - **Data movement kernels** (fmm-plan-redesign §10 and the GEMM check of §6.4), each a
-  safe launch wrapper over a `#[cube]` kernel, generic over the runtime and f32/f64:
+  safe launch wrapper over a `#[cube]` kernel, generic over f32/f64 (the runtime is a
+  run-time value, device-path.md §3.2):
   - zero a buffer, or a range of it;
   - gather columns: Y[:, j] = X[:, idx[j]] for column size n (comptime) and an index
     array;
   - scatter-add columns: X[:, idx[j]] += Y[:, j], with the documented precondition that
     the indices of one launch are distinct, and a debug-mode host check of it;
-  - a gather and a scatter by point offsets (CSR), if the design needs them for the
-    leaf stores.
+  - scatter values: x[idx[j]] = y[j] (assign by index), for the charges into their
+    slots of the source store (`scatter_values`, device-path.md §3.1).
+
+  No gather or scatter by point offsets (CSR) is needed.
+- Check with `cargo tree -e features` (with `cpu`, `metal` and `cuda`) that CubeCL's
+  `persistence` feature is off, so that no CubeCL database is ever written, and say so
+  in the PR (device-path.md §3.4, §10.1).
 - Root CLAUDE.md, "Checks": the `nd-fmm-kernels` commands. These are
   `cargo test -p nd-fmm-kernels --features cpu --release` (and with `metal`, by hand,
   outside the sandbox), and the CUDA type-check
@@ -93,11 +106,11 @@ each test prints the backends it ran):
 - Round trip, bit for bit, f32 and f64: sizes 0, 1, 7, 1000 and 10⁶ (the last
   `#[ignore]` on the CPU runtime if slow), with −0, the smallest normal, a subnormal
   (documenting whether the backend flushes it, from T3), the extremes and
-  ±∞; NaN round-trips as NaN. Also `u32` and the other index types.
-- Gather, scatter-add and zero against plain host loops, bit for bit (no arithmetic
-  except the scatter-add, whose single add per element is exact to compare). Column
-  sizes (p + 1)² for p ∈ {0, 3, 8, 20}; index arrays empty, of one element, permuted
-  and repeated (gather only); accumulation onto nonzero data.
+  ±∞; NaN round-trips as NaN. Also `u32`.
+- Gather, scatter-add, scatter and zero against plain host loops, bit for bit (no
+  arithmetic except the scatter-add, whose single add per element is exact to
+  compare). Column sizes (p + 1)² for p ∈ {0, 3, 8, 20}; index arrays empty, of one
+  element, permuted and repeated (gather only); accumulation onto nonzero data.
 - Property tests (`proptest`) over random sizes and index arrays, on the CPU runtime,
   for gather and scatter-add against the host loops.
 
