@@ -498,13 +498,13 @@ In the repository root, start `claude` and say:
 "Read docs/phase4/T<k>-<name>.md and do that task." Review and merge before the next.
 
 ## Exit checklist
-- [ ] T1 merged: `docs/design/device-path.md` drafted, sign-off questions listed
+- [x] T1 merged: `docs/design/device-path.md` drafted, sign-off questions listed
 - [x] Device-path design signed off, including any requirement or tolerance change; T4b decided (needed or not): signed off 2026-10-03 with every recommendation of device-path.md §16; T4b not needed
-- [ ] GPU hardware: none besides the M3 Max; Metal f32 timed, f64 on the CPU runtime untimed, CUDA type-checked (decided 2026-10-03)
-- [ ] CubeCL pin: 0.11.0-pre.4 (decided 2026-10-03)
-- [ ] Host BLAS GEMM path: deferred (decided 2026-10-03)
+- [x] GPU hardware: none besides the M3 Max; Metal f32 timed, f64 on the CPU runtime untimed, CUDA type-checked (decided 2026-10-03)
+- [x] CubeCL pin: 0.11.0-pre.4 (decided 2026-10-03)
+- [x] Host BLAS GEMM path: deferred (decided 2026-10-03)
 - [x] Metal runtime (decision 11): `metal` stays wgpu-msl; `metal-native` only by a separate sign-off (decided 2026-10-03)
-- [ ] T2 merged: pin at 0.11.0-pre.4, `spikes/cubecl-gemm` passing and re-measured, migration notes, root `CLAUDE.md` points to Phase 4
+- [x] T2 merged: pin at 0.11.0-pre.4, `spikes/cubecl-gemm` passing and re-measured, migration notes, root `CLAUDE.md` points to Phase 4
 - [ ] T3 merged: device arithmetic measured per backend; §3.13 addition and device P2P contract drafted
 - [ ] §3.13 addition and device P2P contract signed off
 - [ ] CPU-runtime target (decision 10): T3's ratio against `nd-fmm-simd` reported; target set (≤ 1.5×, CPU layout in T6) or CPU runtime correctness-only
