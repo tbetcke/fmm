@@ -1,4 +1,4 @@
-//! The device path on Metal (Phase 4 T5, C4.1): f32 only, ignored, run by hand on the
+//! The device path on Metal (Phase 4 T5, C4.1; T6, T7): f32 only, ignored, run by hand on the
 //! M3 Max outside the macOS sandbox (Metal has no adapter inside it):
 //!
 //! ```text
@@ -6,12 +6,15 @@
 //! ```
 //!
 //! Its own executable, because its one test initialises MPI (`tests/mpi_exec.rs` owns the
-//! CPU-runtime repetition of every scenario). Every scenario runs at one thread with
-//! every operator kind on the host fallback through `device_common::check_backend`:
-//! bit for bit against the host path for two charge vectors and a repeat, the transfers
-//! of each evaluation against the formula of docs/design/device-path.md §4.1 and §7.2,
-//! nothing re-uploaded in an evaluation, and every view on the device against the
-//! plan's. Error measure: exact equality.
+//! CPU-runtime repetition of every scenario). Every scenario runs at one thread through
+//! `device_common::check_backend`: with every operator kind on the host fallback, bit for
+//! bit against the host path for two charge vectors and a repeat, the transfers of each
+//! evaluation against the formula of docs/design/device-path.md §4.1 and §7.2, nothing
+//! re-uploaded in an evaluation, and every view on the device against the plan's; and
+//! with the default placement (T7: P2M, P2L, L2P, M2P and P2P on the device), within
+//! 1e-5 of the host output (relative L2), two evaluations bit for bit, and the transfers
+//! of the formula with those kinds on the device.
+//! Error measures: exact equality, and the relative L2 difference from the host.
 //!
 //! Scenarios, f32 (Metal does no f64 arithmetic):
 //! - the uniform cube, N = 2,000, sources equal to targets, p = 4: `Dense`, `Classes` and
@@ -23,14 +26,15 @@
 //! - coincident points: 40 positions with five copies each in a cloud, p = 4;
 //! - f64 with Metal is refused with `SettingsError::PrecisionUnsupported` at build;
 //! - `threads(4)` builds the pool of four threads for the host-fallback kinds
-//!   (device-path.md §11), and the output still equals the host path's.
+//!   (device-path.md §11): with every kind there the output still equals the host
+//!   path's, and with the default placement the output of one thread.
 //!
 //! The test prints the device (`Backend::probe`) and the backends it ran.
 #![cfg(feature = "metal")]
 
 use mpi::Threading;
 use mpi::traits::*;
-use nd_fmm_exec::fmm::{Backend, FmmBuilder, FmmError, SettingsError};
+use nd_fmm_exec::fmm::{Backend, FmmBuilder, FmmError, OperatorKind, SettingsError};
 use nd_fmm_exec::tables::M2lStrategy;
 
 mod device_common;
@@ -81,7 +85,7 @@ fn scenario(
         .build(sources, targets, comm)
         .unwrap_or_else(|error| panic!("{name}: the host FMM does not build: {error}"));
     let output = host.evaluate(charges).expect("the host FMM evaluates");
-    let outcome = check_backend(
+    let (outcome, (potential, gradient)) = check_backend(
         &builder,
         (sources, targets),
         charges,
@@ -95,7 +99,9 @@ fn scenario(
         comm.rank(),
         match outcome {
             Outcome::Ran => format!(
-                "metal on the host fallback bit for bit ({} values), transfers as the formula",
+                "metal on the host fallback bit for bit ({} values), transfers as the \
+                 formula; P2M, P2L, L2P, M2P and P2P on the device within {potential:.1e} \
+                 (φ) and {gradient:.1e} (∇φ) of the host, relative L2",
                 output_bits(&output).len()
             ),
             Outcome::OneRankOnly => "DeviceNeedsOneRank on every rank".to_owned(),
@@ -219,6 +225,7 @@ fn metal_device_path() {
             .clone()
             .backend(Backend::Metal)
             .threads(4)
+            .host_fallback(OperatorKind::ALL)
             .build(&points, &points, &comm)
             .unwrap();
         assert_eq!(metal.threading().threads, 4);
@@ -226,7 +233,27 @@ fn metal_device_path() {
         assert_eq!(metal.device_report().unwrap().cpu_units, None);
         let got = metal.evaluate(&q).unwrap();
         assert_eq!(output_bits(&got), output_bits(&want), "metal at 4 threads");
-        eprintln!("rank 0: metal with threads(4): a pool of 4 for the fallback, bit for bit");
+        // With the default placement (T6, T7) the pool serves the host-fallback kinds,
+        // and the output is that of one thread bit for bit.
+        let device = |threads| {
+            builder
+                .clone()
+                .backend(Backend::Metal)
+                .threads(threads)
+                .build(&points, &points, &comm)
+                .unwrap()
+                .evaluate(&q)
+                .unwrap()
+        };
+        assert_eq!(
+            output_bits(&device(4)),
+            output_bits(&device(1)),
+            "metal with the default placement at 4 threads"
+        );
+        eprintln!(
+            "rank 0: metal with threads(4): a pool of 4 for the fallback, bit for bit; with \
+             the default placement bit for bit one thread"
+        );
     }
     eprintln!(
         "rank {}: backends run: metal (f32); not run: cpu (tests/mpi_exec.rs with --features \

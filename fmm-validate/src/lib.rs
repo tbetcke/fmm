@@ -53,6 +53,8 @@
 //!   the FMM-shaped and all-pairs workloads of Phase 3S (C3S.6), with their accuracy
 //!   against `direct_sum`, run by the `p2p_kernels` example. It needs no MPI, and the
 //!   green-kernels comparison in `spikes/p2p-simd` takes its inputs from it.
+//! - `p2p_device` (feature `gpu`, Phase 4 T6): the same workloads as calls of the
+//!   device P2P kernel of `nd-fmm-kernels`, for the device rows of `p2p_kernels`.
 //!
 //! The examples `accuracy`, `timing`, `tables`, `fmm_accuracy`, `calibrate`,
 //! `p2p_kernels` and `p2p_fmm` print Markdown reports on stdout:
@@ -87,6 +89,8 @@ pub mod bench;
 pub mod calibration;
 pub mod fmm_accuracy;
 pub mod metrics;
+#[cfg(feature = "gpu")]
+pub mod p2p_device;
 pub mod p2p_kernels;
 pub mod points;
 mod rng;

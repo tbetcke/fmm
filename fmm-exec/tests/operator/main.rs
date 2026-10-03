@@ -2,7 +2,9 @@
 //! leaf operators and P2P of `LaplaceOperator` against `nd-fmm-ref`, chains against the
 //! direct sum, the strategies and their tables, the generic domain, f32, panics,
 //! allocation and random properties; the choice of the P2P kernel (Phase 3S / T6,
-//! C3S.5).
+//! C3S.5); with the `gpu` feature, the device P2P against the reference (Phase 4 / T6,
+//! C4.2) and the device leaf operators against the reference and the host operator
+//! (Phase 4 / T7, C4.3).
 //!
 //! None of these tests initialises MPI (tests/mpi_exec.rs does). Every test names its
 //! error measure and prints its worst error with `--nocapture`.
@@ -10,6 +12,10 @@
 mod allocation;
 mod chains;
 mod common;
+#[cfg(any(feature = "cpu", feature = "metal"))]
+mod device_leaf;
+#[cfg(any(feature = "cpu", feature = "metal"))]
+mod device_p2p;
 mod generic;
 mod leaf;
 mod p2p_choice;

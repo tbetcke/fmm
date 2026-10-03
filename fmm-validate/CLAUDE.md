@@ -19,8 +19,10 @@ later phase (C3.2–C3.4 calibration, Phase 4 benchmarks).
 
 ## Allowed dependencies
 Phase 1: nd-fmm-math, nd-fmm-ref. Phase 2: nd-fmm-tables. Phase 3: nd-fmm-exec (and so
-MPI: `mpi` from [workspace.dependencies]). Phase 3S: nd-fmm-simd. Later phases add the
-crates they validate.
+MPI: `mpi` from [workspace.dependencies]). Phase 3S: nd-fmm-simd. Phase 4: nd-fmm-kernels
+(optional, feature `gpu`, from T6: the device P2P rows of `p2p_kernels`; T7: the
+`leaf_kernels` example, the device leaf operators per level against the host
+operator). Later phases add the crates they validate.
 
 The only crate that depends on this one is the spike `spikes/p2p-simd` (Phase 3S T7),
 for the inputs of its green-kernels comparison; green-kernels itself never enters here.

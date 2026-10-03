@@ -91,8 +91,9 @@
 //!   once per build, the charges once and the output once per evaluation; nothing is
 //!   allocated on the device during an evaluation;
 //! - **host fallback**: every operator kind can run on the host with explicit
-//!   transfers; in Phase 4 T5 every kind does, and the output equals the host path's
-//!   bit for bit;
+//!   transfers; with every kind there the output equals the host path's bit for bit.
+//!   From Phase 4 T6 P2P runs on the device by default (`fmm::DeviceP2pLayout`), and
+//!   from T7 the leaf operators P2M, L2P, P2L and M2P (`fmm::DeviceLeafLayout`);
 //! - **determinism**: every launch and transfer is issued from the calling thread, in
 //!   order on one stream; two evaluations are bit-identical;
 //! - **errors**: device settings are refused at build with a
