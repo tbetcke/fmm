@@ -521,7 +521,7 @@ In the repository root, start `claude` and say:
 - [x] Host BLAS GEMM path: deferred (decided 2026-10-03)
 - [x] Metal runtime (decision 11): `metal` stays wgpu-msl; `metal-native` only by a separate sign-off (decided 2026-10-03)
 - [x] T2 merged: pin at 0.11.0-pre.4, `spikes/cubecl-gemm` passing and re-measured, migration notes, root `CLAUDE.md` points to Phase 4
-- [ ] T3 merged: device arithmetic measured per backend; §3.13 addition and device P2P contract drafted
+- [x] T3 merged: device arithmetic measured per backend; §3.13 addition and device P2P contract drafted
 - [x] §3.13 addition and device P2P contract signed off (2026-10-03)
 - [x] CPU-runtime target (decision 10): T3's ratio against `nd-fmm-simd` reported; target set (≤ 1.5×, CPU layout in T6) or CPU runtime correctness-only: target set, signed off 2026-10-03 (one thread 1.004×, all cores 2.73×)
 - [ ] T4 merged: `nd-fmm-kernels` skeleton, round trips and capability check pass, CPU-runtime CI job measured
