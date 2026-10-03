@@ -40,10 +40,11 @@
 //! - a matrix product inside a rayon worker runs single-threaded. Large products outside
 //!   rayon may use BLAS threads.
 //!
-//! Phase 3 calls no BLAS or LAPACK routine from a worker, or anywhere in a level call:
+//! Phases 3 and 3S call no BLAS or LAPACK routine from a worker, or anywhere in a level call:
 //! the tables are applied by the hand-written loops of `nd-fmm-tables`, the leaf
-//! operators and P2P are the plain Rust of `nd-fmm-ref`, and `nd-fmm-plan` uses `rlst`
-//! only in its distributed tools, outside the level calls.
+//! operators are the plain Rust of `nd-fmm-ref`, P2P is the `core::arch` code of
+//! `nd-fmm-simd` (or `nd-fmm-ref`'s, with `P2pChoice::Reference`), and `nd-fmm-plan`
+//! uses `rlst` only in its distributed tools, outside the level calls.
 //!
 //! BLAS threads are set by the launcher, before the process starts, through
 //! [`BLAS_VARIABLES`]: OpenBLAS reads them once at initialisation, so setting them later

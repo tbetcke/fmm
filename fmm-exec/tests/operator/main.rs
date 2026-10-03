@@ -1,7 +1,8 @@
 //! Acceptance tests of the Laplace operator (Phase 3 / T8, C3.1): the translations,
 //! leaf operators and P2P of `LaplaceOperator` against `nd-fmm-ref`, chains against the
 //! direct sum, the strategies and their tables, the generic domain, f32, panics,
-//! allocation and random properties.
+//! allocation and random properties; the choice of the P2P kernel (Phase 3S / T6,
+//! C3S.5).
 //!
 //! None of these tests initialises MPI (tests/mpi_exec.rs does). Every test names its
 //! error measure and prints its worst error with `--nocapture`.
@@ -11,6 +12,7 @@ mod chains;
 mod common;
 mod generic;
 mod leaf;
+mod p2p_choice;
 mod panics;
 mod precision;
 mod properties;

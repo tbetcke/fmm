@@ -2,13 +2,13 @@
 //! buffers as they were built. The `Workspace` and the table scratch are fixed-length
 //! buffers that the operators only borrow slices of; the P2P mapping buffer is the one
 //! that a careless implementation would grow, and its capacity is checked before and
-//! after.
+//! after, with every P2P kernel (the kernels of `nd-fmm-simd` have no scratch).
 
 use nd_octree::morton;
 
 use crate::common::{
-    Kind, STRATEGIES, SplitMix64, dyadic_domain, grid_points, len, operator, random_coefficients,
-    source_chunk, target_chunk,
+    Kind, STRATEGIES, SplitMix64, dyadic_domain, grid_points, len, operator, p2p_choices,
+    random_coefficients, source_chunk, target_chunk,
 };
 
 #[test]
@@ -17,9 +17,13 @@ fn a_run_of_every_operator_on_the_largest_leaf_does_not_reallocate() {
     let domain = dyadic_domain();
     let mut rng = SplitMix64::new(0x7851);
     let max = 300;
-    for strategy in STRATEGIES {
+    let choices = p2p_choices("allocation");
+    for (strategy, &choice) in STRATEGIES
+        .iter()
+        .flat_map(|&s| choices.iter().map(move |c| (s, c)))
+    {
         let p = 6;
-        let mut op = operator(strategy, p, max);
+        let mut op = operator(strategy, p, max).with_p2p(choice).unwrap();
         let capacity = op.scratch_capacity();
         assert_eq!(capacity, max);
 
@@ -49,7 +53,7 @@ fn a_run_of_every_operator_on_the_largest_leaf_does_not_reallocate() {
         op.p2p_pair(near, target, &sources, &targets, &mut output);
 
         assert!(output.iter().chain(&expansion).all(|v| v.is_finite()));
-        assert_eq!(op.scratch_capacity(), capacity, "{strategy:?}");
+        assert_eq!(op.scratch_capacity(), capacity, "{strategy:?}, {choice}");
     }
     eprintln!("every operator on a leaf of 300 points: scratch capacity unchanged");
 }

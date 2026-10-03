@@ -20,17 +20,21 @@
 //! - P2P: a random interior leaf t on levels 2, 9 and 16 with itself (the targets are
 //!   the sources plus as many other points, so coincident pairs are excluded), with
 //!   each of its 26 neighbours on its level, with every leaf one level coarser that
-//!   touches it, and (below level 16) with every leaf one level finer that touches it.
+//!   touches it, and (below level 16) with every leaf one level finer that touches it;
+//!   with every P2P kernel the machine offers (`P2pChoice::Reference` and each available
+//!   ISA, Phase 3S / T6), with gradients and without.
 
 use nd_fmm_ref::{Frame, Workspace, leaf, p2p};
 use nd_octree::{MortonKey, morton};
 
 use crate::common::{
     Basis, Kind, LEAF_TOL, LEVELS, SplitMix64, Worst, absolute_frame, degree_error, dyadic_domain,
-    evaluation_terms, grid_points, key_radius, len, neighbours, norm, operator, p2p_terms,
-    point_terms, random_coefficients, source_chunk, split_output, sub, target_chunk, touches,
+    evaluation_terms, grid_points, key_radius, len, neighbours, norm, operator, p2p_choices,
+    p2p_terms, point_terms, random_coefficients, source_chunk, split_output, sub, tables,
+    target_chunk, touches,
 };
 use nd_fmm_exec::geometry::relative_frame;
+use nd_fmm_exec::operator::LaplaceOperator;
 use nd_fmm_exec::tables::M2lStrategy;
 
 /// The degrees of the leaf tests.
@@ -42,14 +46,23 @@ const POINTS: usize = 6;
 /// The worst value and gradient errors of an evaluation.
 struct Evaluation {
     potential: Worst,
-    gradient: Worst,
+    /// `None` for an output without gradients.
+    gradient: Option<Worst>,
 }
 
 impl Evaluation {
     fn new(name: &str) -> Self {
         Self {
             potential: Worst::new(format!("{name}, potential (terms)")),
-            gradient: Worst::new(format!("{name}, gradient (terms)")),
+            gradient: Some(Worst::new(format!("{name}, gradient (terms)"))),
+        }
+    }
+
+    /// For an output without gradients, checked by [`check_potential`](Self::check_potential).
+    fn potential_only(name: &str) -> Self {
+        Self {
+            potential: Worst::new(format!("{name}, potential (terms)")),
+            gradient: None,
         }
     }
 
@@ -64,12 +77,32 @@ impl Evaluation {
         context: impl Fn() -> String,
     ) {
         let (potential, gradient) = split_output(output);
+        self.check_potential(potential, phi, r_t, terms, &context);
+        let worst = self
+            .gradient
+            .as_ref()
+            .expect("an evaluation with gradients");
+        for j in 0..phi.len() {
+            let want = grad[j].map(|g| r_t * r_t * g);
+            let e = relative(norm(sub(gradient[j], want)), terms[j].1);
+            worst.check(e, LEAF_TOL, &context);
+        }
+    }
+
+    /// As [`check`](Self::check), for an output without gradients: the potentials
+    /// `potential` against φ.
+    fn check_potential(
+        &self,
+        potential: &[f64],
+        phi: &[f64],
+        r_t: f64,
+        terms: &[(f64, f64)],
+        context: impl Fn() -> String,
+    ) {
+        assert_eq!(potential.len(), phi.len());
         for j in 0..phi.len() {
             let e = relative((potential[j] - r_t * phi[j]).abs(), terms[j].0);
             self.potential.check(e, LEAF_TOL, &context);
-            let want = grad[j].map(|g| r_t * r_t * g);
-            let e = relative(norm(sub(gradient[j], want)), terms[j].1);
-            self.gradient.check(e, LEAF_TOL, &context);
         }
     }
 }
@@ -268,8 +301,28 @@ fn near_sources(target: MortonKey) -> Vec<MortonKey> {
 fn p2p_equals_the_reference_for_near_pairs() {
     let domain = dyadic_domain();
     let mut rng = SplitMix64::new(0x7814);
-    let worst = Evaluation::new("P2P vs p2p::p2p, self, 26 neighbours, coarser, finer");
-    let mut op = operator(M2lStrategy::Rotation, 0, POINTS);
+    let choices = p2p_choices("P2P vs p2p::p2p, near pairs");
+    // One operator per P2P kernel, with gradients and without.
+    let mut operators: Vec<_> = choices
+        .iter()
+        .flat_map(|&choice| [true, false].map(|gradients| (choice, gradients)))
+        .map(|(choice, gradients)| {
+            let op =
+                LaplaceOperator::new(tables(M2lStrategy::Rotation, 0).clone(), gradients, POINTS);
+            let op = op.with_p2p(choice).expect("an available P2P kernel");
+            assert_eq!(op.p2p_kernel(), choice);
+            let output = if gradients { "φ and ∇φ" } else { "φ only" };
+            let name = format!(
+                "P2P ({choice}, {output}) vs p2p::p2p, self, 26 neighbours, coarser, finer"
+            );
+            let evaluation = if gradients {
+                Evaluation::new(&name)
+            } else {
+                Evaluation::potential_only(&name)
+            };
+            (op, evaluation)
+        })
+        .collect();
     let mut counts = [0usize; 4];
     for level in LEVELS {
         let target = rng.interior_key(level);
@@ -286,14 +339,6 @@ fn p2p_equals_the_reference_for_near_pairs() {
             } else {
                 grid_points(target, &domain, POINTS, &mut rng)
             };
-            let mut output = vec![0.0; 4 * x.len()];
-            op.p2p_pair(
-                source,
-                target,
-                &source_chunk(&u_s, &q),
-                &target_chunk(&u_t),
-                &mut output,
-            );
             let (phi, grad) =
                 reference_values(&x, |phi, grad| p2p::p2p(&y, &q, &x, phi, Some(grad)));
             let terms: Vec<_> = x
@@ -303,9 +348,23 @@ fn p2p_equals_the_reference_for_near_pairs() {
                     (r_t * phi, r_t * r_t * grad)
                 })
                 .collect();
-            worst.check(&output, (&phi, &grad), r_t, &terms, || {
-                format!("level {level}, source {source}, target {target}")
-            });
+            let context = || format!("level {level}, source {source}, target {target}");
+            for (op, worst) in &mut operators {
+                let gradients = op.gradients();
+                let mut output = vec![0.0; if gradients { 4 } else { 1 } * x.len()];
+                op.p2p_pair(
+                    source,
+                    target,
+                    &source_chunk(&u_s, &q),
+                    &target_chunk(&u_t),
+                    &mut output,
+                );
+                if gradients {
+                    worst.check(&output, (&phi, &grad), r_t, &terms, context);
+                } else {
+                    worst.check_potential(&output, &phi, r_t, &terms, context);
+                }
+            }
             let kind = match morton::level(source) {
                 l if source == target => {
                     assert_eq!(l, level);
@@ -319,8 +378,13 @@ fn p2p_equals_the_reference_for_near_pairs() {
         }
     }
     eprintln!(
-        "P2P pairs: {} self, {} same level, {} coarser, {} finer",
-        counts[0], counts[1], counts[2], counts[3]
+        "P2P pairs: {} self, {} same level, {} coarser, {} finer; for each of {} P2P kernels, \
+         with gradients and without",
+        counts[0],
+        counts[1],
+        counts[2],
+        counts[3],
+        choices.len()
     );
     assert_eq!(counts[0], 3);
     assert_eq!(counts[1], 3 * 26);

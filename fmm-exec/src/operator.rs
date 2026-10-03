@@ -3,7 +3,8 @@
 //!
 //! [`LaplaceOperator`] implements [`FmmOperator`] for the kernel 1/|x − y|
 //! (CONVENTIONS §3.1): the translations apply the tables of [`Tables`], looked up by
-//! child index and offset index, and the leaf operators and P2P call `nd_fmm_ref` in the
+//! child index and offset index, the leaf operators call `nd_fmm_ref`, and P2P calls the
+//! SIMD kernel of `nd-fmm-simd` or `nd_fmm_ref::p2p` ([`P2pChoice`]), all in the
 //! leaf-scaled coordinates of CONVENTIONS §3.13. No operator formula is derived here.
 //! It also implements [`PairOperator`], so that `PerPair<LaplaceOperator<T>>` runs the
 //! same kernels pair by pair, for comparison.
@@ -37,7 +38,7 @@
 //! | L2L parent → child c | table of o = `child_index(c)` | (0, 1) → (½ s_o, ½) | (p + 1)⁴, or ≈ 3p³ by rotation |
 //! | L2P at leaf t | `leaf::l2p` | ((0, 0, 0), 1) on u_t | O(n_t p²) |
 //! | M2P box s → leaf t | `leaf::m2p` | (ĉ(s\|t), r̂(s\|t)) on u_t | O(n_t p²) |
-//! | P2P leaf s → leaf t | `p2p::p2p` | ŷ = ĉ(s\|t) + r̂(s\|t) u_s, u_s itself for s = t | O(n_s n_t), plus O(n_s) to map |
+//! | P2P leaf s → leaf t | `P2pKernel::evaluate` of `nd-fmm-simd`, or `p2p::p2p` ([`P2pChoice`]) | ŷ = ĉ(s\|t) + r̂(s\|t) u_s, u_s itself for s = t | O(n_s n_t), plus O(n_s) to map |
 //!
 //! (§3.11, "L2P and M2P", and §3.13, "Operators in scaled coordinates", derive each
 //! line.) The gradient, when wanted, roughly quadruples the cost of L2P, M2P and P2P.
@@ -57,6 +58,37 @@
 //!
 //! The body of one target is a function of that target's output slice, the call's
 //! shared inputs and one scratch set (`Kernels::*_target`), and nothing else.
+//!
+//! # P2P kernel
+//!
+//! P2P runs the kernel of [`P2pChoice`], set by [`with_p2p`](LaplaceOperator::with_p2p)
+//! and by default [`P2pChoice::Auto`]: `nd_fmm_simd::P2pKernel` on the widest ISA of the
+//! machine (NEON on aarch64, AVX2 + FMA on x86_64 if the CPU has it, else its scalar
+//! path). [`P2pChoice::Reference`] keeps `nd_fmm_ref::p2p::p2p`, the P2P of Phase 3, as
+//! the trusted slower path; [`P2pChoice::Isa`] picks an ISA, for tests and benchmarks.
+//! [`p2p_kernel`](LaplaceOperator::p2p_kernel) reports the kernel that runs.
+//!
+//! Only the kernel changes: the mapping of the sources of another leaf into the
+//! scratch buffer, the order of the near list and one kernel call per (target leaf,
+//! source leaf) pair stay those of Phase 3. Every kernel adds each target's sources in
+//! input order into the output (chunk invariance), so the per-pair and batched paths
+//! agree bit for bit for every choice. One call per target leaf over its whole gathered
+//! near field gives the same bits too, but was measured in Phase 3S T6 at 1–6% faster on
+//! the leaf stage (NEON, the uniform level-4 tree of C3.2 at p = 3 and 8, f32 and f64,
+//! with and without gradients; above 5% only for f32 with gradients at p = 3, in one of
+//! two runs), short of the 5% that would justify its buffer and copy, so calls stay per
+//! source leaf.
+//!
+//! Reproducibility (docs/design/simd-p2p.md §5.5): for one machine, ISA and build the
+//! output is bit-identical from run to run, for every thread count and between the
+//! per-pair and batched paths. Between ISAs, and between a kernel and the reference, it
+//! differs in the last bits, within the accuracy of [`P2pChoice`]. The scalar ISA
+//! equals the reference bit for bit wherever r² ≠ 0, and every aarch64 CPU gives the
+//! same NEON results; on AVX2 the estimate `vrsqrtps` is not architecturally defined,
+//! so Intel and AMD CPUs may differ in the last bits. Without gradients the vector
+//! kernels add each potential term with one fma, with gradients with a product and a
+//! sum, so their potentials with and without gradients differ in the last bits; the
+//! reference's do not.
 //!
 //! # Threads (C3.5)
 //!
@@ -80,8 +112,10 @@
 //! The pool's threads only compute: no level call communicates, so worker threads never
 //! call MPI ([`Fmm`](crate::fmm::Fmm) keeps every collective on the calling thread). Nor
 //! do they call BLAS or LAPACK: the tables are applied by hand-written loops of
-//! `nd-fmm-tables`, the leaf operators by the plain Rust of `nd-fmm-ref`
-//! ([`threading`](crate::threading)).
+//! `nd-fmm-tables`, the leaf operators by the plain Rust of `nd-fmm-ref`, and P2P by the
+//! intrinsics of `nd-fmm-simd` or the plain Rust of `nd-fmm-ref`
+//! ([`threading`](crate::threading)). The P2P kernel is stateless and shared by every
+//! thread, one call at a time per thread, so it adds no per-thread state.
 //!
 //! # Scratch
 //!
@@ -94,7 +128,8 @@
 //! around one target body, which never yields to rayon, so the lock is uncontended by
 //! construction (a contended lock panics rather than waits). The serial path and the
 //! per-pair methods use set 0 through `Mutex::get_mut`, without locking. Every set is
-//! sized at construction; no operator allocates.
+//! sized at construction; no operator allocates. The P2P kernels of `nd-fmm-simd` need
+//! no scratch: they read the mapped sources and write only the target output.
 //!
 //! # Example
 //!
@@ -131,6 +166,7 @@
 //! ```
 
 use core::fmt;
+use core::str::FromStr;
 use std::sync::{Arc, Mutex, PoisonError, TryLockError};
 
 use mpi::traits::Equivalence;
@@ -142,10 +178,13 @@ use nd_fmm_plan::operator::{
 };
 use nd_fmm_plan::store::{LeafSlice, LeafSliceMut, LevelSlice, LevelSliceMut};
 use nd_fmm_ref::{Frame, Workspace, leaf, p2p};
+use nd_fmm_simd::P2pKernel;
+pub use nd_fmm_simd::{Isa, IsaUnavailable, SimdScalar};
 use nd_fmm_tables::geometry::m2l_offset_index;
 use nd_octree::{MortonKey, morton};
 use rayon::ThreadPool;
 use rayon::prelude::*;
+use thiserror::Error;
 
 use crate::geometry::relative_frame;
 use crate::tables::{TableScratch, Tables};
@@ -158,21 +197,128 @@ pub const SOURCE_POINT_SIZE: usize = 4;
 /// §3.13, "Target input and output").
 pub const TARGET_INPUT_POINT_SIZE: usize = 3;
 
+/// The P2P kernel of a [`LaplaceOperator`] (docs/design/simd-p2p.md §6).
+///
+/// | Choice | Kernel |
+/// | --- | --- |
+/// | [`Auto`](Self::Auto), the default | `nd_fmm_simd::P2pKernel` on [`Isa::detect`], the widest ISA of this machine |
+/// | [`Reference`](Self::Reference) | `nd_fmm_ref::p2p::p2p`, the scalar loop of Phase 3: the trusted slower path |
+/// | [`Isa`](Self::Isa)`(isa)` | `nd_fmm_simd::P2pKernel` on `isa`, if this machine can run it |
+///
+/// Every choice computes the same operator (CONVENTIONS §3.13): the kernels of
+/// `nd-fmm-simd` exclude a pair by r² = 0 and the reference by exact coincidence, which
+/// agree on leaf-scaled data ("Fast kernels"). Their results differ in the last bits:
+/// each potential term within 8 u_T of the reference's, each gradient component within
+/// 16 u_T relative to |q| / r² (u_T = 2⁻²⁴, 2⁻⁵³). [`Isa::Scalar`] equals the reference
+/// bit for bit wherever r² ≠ 0.
+///
+/// [`resolve`](Self::resolve) replaces `Auto` by the ISA it picks, and is what
+/// [`LaplaceOperator::p2p_kernel`] and `Fmm::p2p_kernel` report. The text form, for
+/// command lines, is `auto`, `reference` or an ISA name (`scalar`, `neon`, `avx2`):
+///
+/// ```
+/// use nd_fmm_exec::operator::{Isa, P2pChoice};
+///
+/// assert_eq!(P2pChoice::default(), P2pChoice::Auto);
+/// assert_eq!("neon".parse(), Ok(P2pChoice::Isa(Isa::Neon)));
+/// assert_eq!(P2pChoice::Reference.to_string(), "reference");
+/// assert_eq!(P2pChoice::Auto.resolve(), Ok(P2pChoice::Isa(Isa::detect())));
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum P2pChoice {
+    /// The kernel of `nd-fmm-simd` on the widest ISA of this machine ([`Isa::detect`]):
+    /// NEON on aarch64, AVX2 + FMA on x86_64 if the CPU has it, else the scalar path.
+    #[default]
+    Auto,
+    /// `nd_fmm_ref::p2p::p2p`, the P2P of Phase 3.
+    Reference,
+    /// The kernel of `nd-fmm-simd` on this ISA.
+    Isa(Isa),
+}
+
+impl P2pChoice {
+    /// The choice as it runs on this machine: `Auto` becomes `Isa(Isa::detect())`; the
+    /// others stay as they are.
+    ///
+    /// # Errors
+    ///
+    /// [`IsaUnavailable`] for `Isa(isa)` if this machine cannot run `isa`
+    /// ([`Isa::is_available`]).
+    pub fn resolve(self) -> Result<Self, IsaUnavailable> {
+        match self {
+            Self::Auto => Ok(Self::Isa(Isa::detect())),
+            Self::Reference => Ok(Self::Reference),
+            Self::Isa(isa) if isa.is_available() => Ok(Self::Isa(isa)),
+            Self::Isa(isa) => Err(IsaUnavailable { isa }),
+        }
+    }
+
+    /// The kernel of the choice, `None` for the reference.
+    fn kernel<T: SimdScalar>(self) -> Result<Option<P2pKernel<T>>, IsaUnavailable> {
+        match self {
+            Self::Auto => Ok(Some(P2pKernel::detect())),
+            Self::Reference => Ok(None),
+            Self::Isa(isa) => P2pKernel::new(isa).map(Some),
+        }
+    }
+}
+
+/// Prints `auto`, `reference` or the ISA's name.
+impl fmt::Display for P2pChoice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Auto => f.write_str("auto"),
+            Self::Reference => f.write_str("reference"),
+            Self::Isa(isa) => isa.fmt(f),
+        }
+    }
+}
+
+/// The error of parsing a [`P2pChoice`] from text it does not name.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[error(
+    "`{text}` is not a P2P kernel; expected `auto`, `reference` or an instruction set: {isas}",
+    isas = Isa::all().map(|isa| format!("`{isa}`")).collect::<Vec<_>>().join(", ")
+)]
+pub struct UnknownP2pChoice {
+    /// The text that was parsed.
+    pub text: String,
+}
+
+/// Parses the [`Display`](fmt::Display) form: `auto`, `reference` or an ISA name
+/// (`scalar`, `neon`, `avx2`), whether or not this machine can run the ISA.
+impl FromStr for P2pChoice {
+    type Err = UnknownP2pChoice;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "auto" => Ok(Self::Auto),
+            "reference" => Ok(Self::Reference),
+            _ => Isa::all()
+                .find(|isa| isa.to_string() == s)
+                .map(Self::Isa)
+                .ok_or_else(|| UnknownP2pChoice { text: s.to_owned() }),
+        }
+    }
+}
+
 /// The Laplace kernel on the batched interface of `nd-fmm-plan`; see the
 /// [module documentation](self).
 #[derive(Clone, Debug)]
-pub struct LaplaceOperator<T: RealScalar> {
+pub struct LaplaceOperator<T: SimdScalar> {
     kernels: Kernels<T>,
     execution: Execution<T>,
 }
 
 /// The read-only part of the operator: what every target body shares.
 #[derive(Clone, Debug)]
-pub(crate) struct Kernels<T: RealScalar> {
+pub(crate) struct Kernels<T: SimdScalar> {
     p: usize,
     tables: Tables<T>,
     gradients: bool,
     max_leaf_points: usize,
+    /// The P2P kernel of `nd-fmm-simd`, or `None` for `nd_fmm_ref::p2p::p2p`.
+    p2p: Option<P2pKernel<T>>,
 }
 
 /// One scratch set: what a target body writes besides its output.
@@ -184,7 +330,7 @@ pub(crate) struct Scratch<T: RealScalar> {
     mapped: Vec<[T; 3]>,
 }
 
-impl<T: RealScalar> Scratch<T> {
+impl<T: SimdScalar> Scratch<T> {
     /// A scratch set for `kernels`.
     fn new(kernels: &Kernels<T>) -> Self {
         Self {
@@ -342,7 +488,7 @@ pub(crate) struct LeafCall<'a, T, I> {
     target_input: LeafSlice<'a, T>,
 }
 
-impl<T: RealScalar> LaplaceOperator<T> {
+impl<T: SimdScalar> LaplaceOperator<T> {
     /// Creates the operator for the degree of `tables`, with gradients in the target
     /// output if `gradients`, for leaves with at most `max_leaf_points` source points.
     ///
@@ -351,13 +497,15 @@ impl<T: RealScalar> LaplaceOperator<T> {
     /// caller. Allocates the scratch: a `Workspace` for p, the tables' scratch and
     /// 3 `max_leaf_points` values for P2P.
     ///
-    /// The operator runs serially; [`with_pool`](Self::with_pool) gives it threads.
+    /// The operator runs serially; [`with_pool`](Self::with_pool) gives it threads. Its
+    /// P2P kernel is [`P2pChoice::Auto`]; [`with_p2p`](Self::with_p2p) chooses another.
     pub fn new(tables: Tables<T>, gradients: bool, max_leaf_points: usize) -> Self {
         let kernels = Kernels {
             p: tables.p(),
             tables,
             gradients,
             max_leaf_points,
+            p2p: Some(P2pKernel::detect()),
         };
         let execution = Execution {
             scratch: vec![Mutex::new(Scratch::new(&kernels))],
@@ -380,6 +528,27 @@ impl<T: RealScalar> LaplaceOperator<T> {
             .collect();
         self.execution.pool = Some(pool);
         self
+    }
+
+    /// Runs P2P with the kernel of `choice` ([`P2pChoice`]). Every other operator, the
+    /// order of every sum and the scratch stay as they are.
+    ///
+    /// # Errors
+    ///
+    /// [`IsaUnavailable`] for `P2pChoice::Isa(isa)` if this machine cannot run `isa`.
+    pub fn with_p2p(mut self, choice: P2pChoice) -> Result<Self, IsaUnavailable> {
+        self.kernels.p2p = choice.kernel()?;
+        Ok(self)
+    }
+
+    /// Returns the P2P kernel as it runs: [`P2pChoice::Reference`] or
+    /// [`P2pChoice::Isa`] with the ISA of the kernel, never [`P2pChoice::Auto`]
+    /// ([`P2pChoice::resolve`]).
+    pub fn p2p_kernel(&self) -> P2pChoice {
+        match &self.kernels.p2p {
+            None => P2pChoice::Reference,
+            Some(kernel) => P2pChoice::Isa(kernel.isa()),
+        }
     }
 
     /// Returns the number of threads the level calls run on: the pool's, or 1 without a
@@ -621,7 +790,7 @@ fn source_points<T>(sources: &[T]) -> (&[[T; 3]], &[T]) {
 /// The potentials and, if wanted, the gradients of a target output chunk.
 type TargetOutput<'a, T> = (&'a mut [T], Option<&'a mut [[T; 3]]>);
 
-impl<T: RealScalar> Kernels<T> {
+impl<T: SimdScalar> Kernels<T> {
     /// Values per target point in the target output.
     fn output_point_size(&self) -> usize {
         if self.gradients { 4 } else { 1 }
@@ -781,7 +950,23 @@ impl<T: RealScalar> Kernels<T> {
                 &*mapped
             }
         };
-        p2p::p2p(points, charges, targets, potential, gradient);
+        self.p2p_points(points, charges, targets, potential, gradient);
+    }
+
+    /// P2P of `sources` with `charges` at `targets`, by the operator's kernel.
+    #[inline]
+    fn p2p_points(
+        &self,
+        sources: &[[T; 3]],
+        charges: &[T],
+        targets: &[[T; 3]],
+        potential: &mut [T],
+        gradient: Option<&mut [[T; 3]]>,
+    ) {
+        match &self.p2p {
+            None => p2p::p2p(sources, charges, targets, potential, gradient),
+            Some(kernel) => kernel.evaluate(sources, charges, targets, potential, gradient),
+        }
     }
 
     /// The P2M body of box t: the source chunk of its leaf, if it has one.
@@ -996,7 +1181,7 @@ fn debug_check_octant(child: MortonKey, parent: MortonKey, o: usize) {
     debug_assert_eq!(morton::child_index(child), o, "octant of {}", Key(child));
 }
 
-impl<T: RealScalar + Equivalence + Default> FmmSizes for LaplaceOperator<T> {
+impl<T: SimdScalar + Equivalence + Default> FmmSizes for LaplaceOperator<T> {
     type Value = T;
 
     /// (p + 1)² on every level.
@@ -1027,7 +1212,7 @@ impl<T: RealScalar + Equivalence + Default> FmmSizes for LaplaceOperator<T> {
 
 /// Target by target, each target's row in order: serially in index order, or in the
 /// operator's pool; see the [module documentation](self#batched-execution-and-order).
-impl<T: RealScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
+impl<T: SimdScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
     fn p2m(&mut self, batch: P2m<'_, T>) {
         let P2m {
             level,
@@ -1205,7 +1390,7 @@ impl<T: RealScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
 /// The same kernels pair by pair, for `nd_fmm_plan::operator::PerPair`: tables by the
 /// given octant or offset index (debug builds check it against the keys), frames from
 /// the keys, the self pair of P2P by `source == target`.
-impl<T: RealScalar + Equivalence + Default> PairOperator for LaplaceOperator<T> {
+impl<T: SimdScalar + Equivalence + Default> PairOperator for LaplaceOperator<T> {
     fn p2m(&mut self, _leaf: MortonKey, sources: &[T], multipole: &mut [T]) {
         self.p2m_leaf(sources, multipole);
     }

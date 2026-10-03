@@ -34,6 +34,12 @@
 //! 1e-12 (relative L2 over all targets), and four threads give the one-thread output bit
 //! for bit (C3.5).
 //!
+//! **P2P kernels** (Phase 3S T6, C3S.5). The errors per list are measured with the
+//! default P2P kernel, `P2pChoice::Auto`, and again with `P2pChoice::Reference` on the
+//! same plan; the table has a row per kernel. Both pass the bounds above; with `Auto` the
+//! error of the whole FMM lies within 1% of that with `Reference`, and its output within
+//! 1e-13 of the `Reference` output (relative L2 over all points).
+//!
 //! Its own executable, because it initialises MPI (at `Threading::Funneled`, for the
 //! threaded evaluations); ignored, because it needs release mode:
 //!
@@ -48,7 +54,7 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
 use nd_fmm_exec::fmm::{Fmm, FmmBuilder};
 use nd_fmm_exec::geometry::{Domain, leaf_coordinates, radius};
-use nd_fmm_exec::operator::LaplaceOperator;
+use nd_fmm_exec::operator::{Isa, LaplaceOperator, P2pChoice};
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_plan::evaluator::Evaluator;
 use nd_fmm_plan::operator::{FmmOperator, FmmSizes, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p};
@@ -84,6 +90,13 @@ const U_BOUND: f64 = 1e-12;
 
 /// The threads of the masked evaluations (the output is the same for every count).
 const THREADS: usize = 8;
+
+/// How far the error of the FMM with `Auto` may lie from that with `Reference`,
+/// relative.
+const KERNEL_ERROR_RATIO: f64 = 0.01;
+
+/// The largest relative L2 difference of the `Auto` output from the `Reference` output.
+const KERNEL_DIFFERENCE: f64 = 1e-13;
 
 /// SplitMix64, as `nd_fmm_validate::SplitMix64`.
 struct SplitMix64(u64);
@@ -451,22 +464,26 @@ fn relative_l2(a: &[f64], b: &[f64]) -> f64 {
     norm(&difference) / norm(b)
 }
 
-/// The per-list errors of one distribution at degree `p` (module documentation), printed
-/// as table rows; returns the contribution ‖A_c − E_c‖₂ / ‖E‖₂ of each list and of all
-/// four, and the relative error ‖A_c − E_c‖₂ / ‖E_c‖₂ of each list.
+/// The errors per list of one distribution at degree `p` (module documentation), with
+/// the operator of `fmm` on the P2P kernel `kernel`, printed as table rows. Returns the
+/// contribution ‖A_c − E_c‖₂ / ‖E‖₂ of each list and of all four, the relative error
+/// ‖A_c − E_c‖₂ / ‖E_c‖₂ of each list, and the full output at every point.
 fn list_errors(
-    name: &str,
+    (name, kernel): (&str, P2pChoice),
     fmm: &Fmm<'_, f64>,
     comm: &SimpleCommunicator,
     (points, charges, sample): (&[[f64; 3]], &[f64], &[usize]),
     (leaves, parts): (&[Vec<usize>], &[Vec<f64>; 4]),
-) -> ([f64; 5], [f64; 4]) {
+) -> ([f64; 5], [f64; 4], Vec<f64>) {
     let plan = fmm.plan();
     let input = (points, charges, fmm.domain());
-    let run = |skip| evaluate_masked(plan, comm, fmm.operator(), skip, input, leaves);
-    let at_sample = |v: Vec<f64>| -> Vec<f64> { sample.iter().map(|&i| v[i]).collect() };
-    let full = at_sample(run(Skip::Nothing));
-    let without = [Skip::M2l, Skip::M2p, Skip::P2l].map(|skip| at_sample(run(skip)));
+    let operator = fmm.operator().clone().with_p2p(kernel).unwrap();
+    assert_eq!(operator.p2p_kernel(), kernel.resolve().unwrap());
+    let run = |skip| evaluate_masked(plan, comm, &operator, skip, input, leaves);
+    let at_sample = |v: &[f64]| -> Vec<f64> { sample.iter().map(|&i| v[i]).collect() };
+    let all = run(Skip::Nothing);
+    let full = at_sample(&all);
+    let without = [Skip::M2l, Skip::M2p, Skip::P2l].map(|skip| at_sample(&run(skip)));
     // A_V, A_W, A_X: the full output minus the masked one; A_U: the rest.
     let mut approx: [Vec<f64>; 4] = Default::default();
     for (c, masked) in without.iter().enumerate() {
@@ -495,7 +512,7 @@ fn list_errors(
         contributions[c] = norm(&error) / exact_norm;
         relative[c] = norm(&error) / norm(&parts[c]);
         rows.push(format!(
-            "| {name} | {} | {} | {:.3e} | {:.3e} | {:.3e} | {:.3e} |",
+            "| {name} | {} | {kernel} | {} | {:.3e} | {:.3e} | {:.3e} | {:.3e} |",
             fmm.p(),
             LISTS[c],
             norm(&parts[c]) / exact_norm,
@@ -507,7 +524,7 @@ fn list_errors(
     let error: Vec<f64> = full.iter().zip(&exact).map(|(a, e)| a - e).collect();
     contributions[4] = norm(&error) / exact_norm;
     rows.push(format!(
-        "| {name} | {} | all | 1 | {:.3e} | {:.3e} | {:.3e} |",
+        "| {name} | {} | {kernel} | all | 1 | {:.3e} | {:.3e} | {:.3e} |",
         fmm.p(),
         contributions[4],
         contributions[4],
@@ -516,7 +533,7 @@ fn list_errors(
     for row in rows {
         println!("{row}");
     }
-    (contributions, relative)
+    (contributions, relative, all)
 }
 
 /// Every strategy at p = 8 agrees with Dense, and four threads give the one-thread
@@ -566,9 +583,10 @@ fn errors_per_list_on_clustered_trees() {
     );
 
     println!(
-        "| distribution | p | list | ‖E_c‖ / ‖E‖ | ‖A_c − E_c‖ / ‖E‖ | ‖A_c − E_c‖ / ‖E_c‖ | max |A_c − E_c| / max |E| |"
+        "| distribution | p | P2P | list | ‖E_c‖ / ‖E‖ | ‖A_c − E_c‖ / ‖E‖ | ‖A_c − E_c‖ / ‖E_c‖ | max |A_c − E_c| / max |E| |"
     );
-    println!("|---|---:|---|---:|---:|---:|---:|");
+    println!("|---|---:|---|---|---:|---:|---:|---:|");
+    let detected = P2pChoice::Isa(Isa::detect());
     let mut failures = Vec::new();
     for name in ["sphere", "plummer", "clusters"] {
         let (points, sample, charges) = problem(name);
@@ -602,20 +620,50 @@ fn errors_per_list_on_clustered_trees() {
             });
             assert!(pairs.iter().all(|&n| n > 0), "{name}: {pairs:?}");
             let input = (&points[..], &charges[..], &sample[..]);
-            let (contributions, relative) = list_errors(name, &fmm, &comm, input, (&leaves, parts));
-            // U is P2P alone, exact up to the rounding of [`U_BOUND`]. Each adaptive
-            // list on its own is within the C3.2 gate, as the V list of a uniform tree.
-            if contributions[0] > U_BOUND {
-                failures.push(format!("{name}, p = {p}: U part {:e}", contributions[0]));
-            }
-            let gate = GATE[PS.iter().position(|&q| q == p).unwrap()];
-            for c in [2, 3] {
-                if relative[c] > gate {
+            assert_eq!(fmm.p2p_kernel(), detected, "Auto by default");
+            let mut alls = Vec::new();
+            let mut totals = Vec::new();
+            for kernel in [P2pChoice::Auto, P2pChoice::Reference] {
+                let (contributions, relative, all) =
+                    list_errors((name, kernel), &fmm, &comm, input, (&leaves, parts));
+                // U is P2P alone, exact up to the rounding of [`U_BOUND`]. Each adaptive
+                // list on its own is within the C3.2 gate, as the V list of a uniform
+                // tree.
+                if contributions[0] > U_BOUND {
                     failures.push(format!(
-                        "{name}, p = {p}: {} part {:e} > {gate:e}",
-                        LISTS[c], relative[c]
+                        "{name}, p = {p}, {kernel}: U part {:e}",
+                        contributions[0]
                     ));
                 }
+                let gate = GATE[PS.iter().position(|&q| q == p).unwrap()];
+                for c in [2, 3] {
+                    if relative[c] > gate {
+                        failures.push(format!(
+                            "{name}, p = {p}, {kernel}: {} part {:e} > {gate:e}",
+                            LISTS[c], relative[c]
+                        ));
+                    }
+                }
+                alls.push(all);
+                totals.push(contributions[4]);
+            }
+            // Auto against Reference: the error of the FMM, and the output.
+            let (ratio, difference) = (totals[0] / totals[1], relative_l2(&alls[0], &alls[1]));
+            eprintln!(
+                "{name}, p = {p}: relative L2 error of φ {:.3e} with {detected}, {:.3e} with \
+                 reference (ratio {ratio:.6}); outputs within {difference:.1e}",
+                totals[0], totals[1]
+            );
+            if (ratio - 1.0).abs() > KERNEL_ERROR_RATIO {
+                failures.push(format!(
+                    "{name}, p = {p}: the error with {detected} is {ratio} times that with \
+                     reference"
+                ));
+            }
+            if difference > KERNEL_DIFFERENCE {
+                failures.push(format!(
+                    "{name}, p = {p}: {detected} differs from reference by {difference:e}"
+                ));
             }
         }
         strategies_and_threads(name, &points, &charges, &comm);

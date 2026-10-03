@@ -8,7 +8,9 @@
 //! the terms of the f64 computation: per degree for coefficients, relative to the
 //! terms of values (gradients as Euclidean norms). Levels 2, 9 and 16 of the dyadic
 //! domain; M2M and L2L for every octant, M2L for every offset; P2L and M2P for one
-//! X-list and one W-list pair, P2P for the self pair and every neighbour on the level.
+//! X-list and one W-list pair, P2P for the self pair and every neighbour on the level,
+//! with `P2pChoice::Reference` and every ISA this machine offers (f32 and f64 with the
+//! same kernel).
 
 use nd_fmm_exec::geometry::relative_frame;
 use nd_fmm_exec::operator::LaplaceOperator;
@@ -19,9 +21,9 @@ use nd_octree::{MortonKey, morton};
 
 use crate::common::{
     Basis, Kind, LEVELS, STRATEGIES, SplitMix64, Worst, degree_error, dense, dyadic_domain,
-    evaluation_terms, grid_points, len, neighbours, norm, operator, p2p_terms, point_terms,
-    random_coefficients, random_pair, source_chunk, split_output, sub, target_chunk, terms,
-    touches,
+    evaluation_terms, grid_points, len, neighbours, norm, operator, p2p_choices, p2p_terms,
+    point_terms, random_coefficients, random_pair, source_chunk, split_output, sub, target_chunk,
+    terms, touches,
 };
 
 const TOL: f64 = 1e-5;
@@ -197,8 +199,19 @@ fn check_leaf_operators(ops: &mut Pair, worst: &Worst, rng: &mut SplitMix64) {
                 .collect();
             value_errors(&got, &want, &scale, worst);
         }
+    }
+}
 
-        // P2P from the leaf itself and from each neighbour.
+/// P2P from the leaf itself and from each neighbour on its level, levels 2, 9 and 16.
+fn check_p2p(ops: &mut Pair, worst: &Worst, rng: &mut SplitMix64) {
+    let domain = dyadic_domain();
+    const POINTS: usize = 5;
+    for level in LEVELS {
+        let target = rng.interior_key(level);
+        let (_, u_t) = grid_points(target, &domain, POINTS, rng);
+        let targets = target_chunk(&u_t);
+        let targets32 = to_f32(&targets);
+        let q = rng.charges(POINTS);
         for source in neighbours(target).into_iter().chain([target]) {
             let (_, u_s) = if source == target {
                 (Vec::new(), u_t.clone())
@@ -230,6 +243,7 @@ fn every_operator_in_f32_matches_f64() {
     let mut rng = SplitMix64::new(0x7871);
     let translations = Worst::new("f32 vs f64, M2M, L2L, M2L, p ∈ {2, 5, 8} (terms)");
     let leaves = Worst::new("f32 vs f64, P2M, P2L, L2P, M2P, P2P, p ∈ {2, 5, 8} (terms)");
+    let choices = p2p_choices("f32 vs f64, P2P");
     for p in DEGREES {
         for strategy in STRATEGIES {
             let mut ops = Pair {
@@ -239,6 +253,14 @@ fn every_operator_in_f32_matches_f64() {
             check_translations(&mut ops, &translations, &mut rng);
             if strategy == M2lStrategy::Rotation {
                 check_leaf_operators(&mut ops, &leaves, &mut rng);
+                // P2P with every kernel, f32 against f64 with the same kernel.
+                for &choice in &choices {
+                    let mut ops = Pair {
+                        single: ops.single.clone().with_p2p(choice).unwrap(),
+                        double: ops.double.clone().with_p2p(choice).unwrap(),
+                    };
+                    check_p2p(&mut ops, &leaves, &mut rng);
+                }
             }
         }
     }

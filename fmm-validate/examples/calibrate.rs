@@ -19,8 +19,9 @@
 //!   64, 128 and 256 points per leaf as the refinement target.
 //!
 //! Run in release mode, on one rank (the points are not redistributed until C5.1), with
-//! `--threads n` rayon threads (default 1), `--n N` points (default 10⁵) and one BLAS
-//! thread:
+//! `--threads n` rayon threads (default 1), `--n N` points (default 10⁵), `--p2p k` the
+//! P2P kernel (`auto`, the default, `reference` or an ISA: `scalar`, `neon`, `avx2`;
+//! `nd_fmm_exec::operator::P2pChoice`) and one BLAS thread:
 //!
 //! ```text
 //! OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 BLIS_NUM_THREADS=1 \
@@ -33,43 +34,60 @@
 //! the same for every number of threads; the timings are wall times on this machine,
 //! reported and never asserted. MPI is initialised with `Threading::Funneled`, and the
 //! threading report (rayon threads, MPI level, BLAS variables;
-//! `nd_fmm_exec::threading`) is printed with the results.
+//! `nd_fmm_exec::threading`) and the P2P kernel that ran (`Fmm::p2p_kernel`) are printed
+//! with the results.
 
 use std::time::{Duration, Instant};
 
 use mpi::Threading;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
+use nd_fmm_exec::operator::{Isa, P2pChoice};
 use nd_fmm_validate::bench::{cores, cpu_model, target};
 use nd_fmm_validate::calibration::{
     LEAF_SIZES, LEAF_STUDY_DEGREE, LEAF_STUDY_DISTRIBUTIONS, Measure, Precision, Reached,
     Reference, TARGET_EXPONENTS, config, floor, leaf_study, smallest_p, sweep, worst,
 };
-use nd_fmm_validate::fmm_accuracy::{Config, Distribution, Run};
+use nd_fmm_validate::fmm_accuracy::{Config, Distribution, Execution, Run};
 
-/// The command line: the threads and the number of points.
+/// The command line: the threads and P2P kernel, and the number of points.
 struct Arguments {
-    threads: usize,
+    execution: Execution,
     n: usize,
 }
 
-/// Parses `--threads n` and `--n N`, in any order; exits with a message on anything
-/// else.
+/// Parses `--threads n`, `--n N` and `--p2p k`, in any order; exits with a message on
+/// anything else, and on a P2P kernel this machine cannot run.
 fn arguments() -> Arguments {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let usage = || -> ! {
-        eprintln!("usage: calibrate [--threads n] [--n N], n >= 1, N >= 1000; got {args:?}");
+        let isas: Vec<String> = Isa::available().map(|isa| isa.to_string()).collect();
+        eprintln!(
+            "usage: calibrate [--threads n] [--n N] [--p2p auto|reference|{}], n >= 1, \
+             N >= 1000; got {args:?}",
+            isas.join("|")
+        );
         std::process::exit(2);
     };
     let mut parsed = Arguments {
-        threads: 1,
+        execution: Execution::threads(1),
         n: 100_000,
     };
     let mut rest = args.as_slice();
     while let [flag, value, tail @ ..] = rest {
-        match (flag.as_str(), value.parse::<usize>()) {
-            ("--threads", Ok(n)) if n >= 1 => parsed.threads = n,
-            ("--n", Ok(n)) if n >= 1000 => parsed.n = n,
+        match (flag.as_str(), value.as_str()) {
+            ("--threads", n) => match n.parse() {
+                Ok(n) if n >= 1 => parsed.execution.threads = n,
+                _ => usage(),
+            },
+            ("--n", n) => match n.parse() {
+                Ok(n) if n >= 1000 => parsed.n = n,
+                _ => usage(),
+            },
+            ("--p2p", k) => match k.parse::<P2pChoice>() {
+                Ok(p2p) if p2p.resolve().is_ok() => parsed.execution.p2p = p2p,
+                _ => usage(),
+            },
             _ => usage(),
         }
         rest = tail;
@@ -103,7 +121,7 @@ fn progress_sweep(
     config: &Config,
     reference: &Reference,
     precision: Precision,
-    threads: usize,
+    execution: Execution,
     comm: &SimpleCommunicator,
 ) -> Vec<Run> {
     precision
@@ -111,7 +129,7 @@ fn progress_sweep(
         .iter()
         .flat_map(|&p| {
             let start = Instant::now();
-            let runs = sweep(config, reference, precision, &[p], threads, comm);
+            let runs = sweep(config, reference, precision, &[p], execution, comm);
             eprintln!(
                 "{} {} p = {p}: φ L2 {:.3e}, ∇φ L2 {:.3e} ({:.1} s)",
                 config.distribution.name(),
@@ -126,7 +144,8 @@ fn progress_sweep(
 }
 
 fn main() {
-    let Arguments { threads, n } = arguments();
+    let Arguments { execution, n } = arguments();
+    let threads = execution.threads;
     let (universe, provided) =
         mpi::initialize_with_threading(Threading::Funneled).expect("MPI initialises");
     let comm = universe.world();
@@ -150,8 +169,8 @@ fn main() {
                 d.name(),
                 reference.time.as_secs_f64()
             );
-            let f64 = progress_sweep(&config, &reference, Precision::F64, threads, &comm);
-            let f32 = progress_sweep(&config, &reference, Precision::F32, threads, &comm);
+            let f64 = progress_sweep(&config, &reference, Precision::F64, execution, &comm);
+            let f32 = progress_sweep(&config, &reference, Precision::F32, execution, &comm);
             Report {
                 config,
                 reference,
@@ -174,7 +193,7 @@ fn main() {
                 &report.reference,
                 LEAF_STUDY_DEGREE,
                 &LEAF_SIZES,
-                threads,
+                execution,
                 &comm,
             );
             eprintln!("{}: leaf-size study done", d.name());
@@ -183,7 +202,7 @@ fn main() {
         .collect();
     let study_time = start.elapsed();
 
-    print_header(&reports, threads, (sweep_time, study_time));
+    print_header(&reports, execution, (sweep_time, study_time));
     print_calibration(&reports);
     for report in &reports {
         print_report(report);
@@ -192,7 +211,8 @@ fn main() {
 }
 
 /// The problem, the error measure, the machine and the threading.
-fn print_header(reports: &[Report], threads: usize, (sweep, study): (Duration, Duration)) {
+fn print_header(reports: &[Report], execution: Execution, (sweep, study): (Duration, Duration)) {
+    let threads = execution.threads;
     let config = &reports[0].config;
     println!("# Calibration of p against the accuracy of the FMM (C3.4)");
     println!();
@@ -259,6 +279,10 @@ fn print_header(reports: &[Report], threads: usize, (sweep, study): (Duration, D
                     .join(", ")
             )
         }
+    );
+    println!(
+        "- P2P kernel: {} (`--p2p {}`).",
+        reports[0].f64[0].p2p, execution.p2p
     );
 }
 

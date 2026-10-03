@@ -32,7 +32,9 @@
 //! - **distinct and nested point sets**: sources and targets disjoint, and the sources
 //!   a subset of the targets, p = 6.
 //! - **gradients**: ∇φ against the `direct_sum` gradient, p = 6; the potentials equal
-//!   those of the FMM without gradients bit for bit.
+//!   those of the FMM without gradients bit for bit with the reference P2P, and to the
+//!   tolerance of an ISA against the reference with the SIMD kernel (its potential-only
+//!   loop contracts φ + q ρ into one fma).
 //! - **uniform tree**: `max_level` 3, `max_points_per_leaf` 1, four points in every
 //!   level-3 box of a supplied unit-cube domain: every leaf lies on level 3, the W and X
 //!   lists are empty.
@@ -104,6 +106,27 @@
 //! evaluations and `Classes` and `Rotation` at p = 4 (one thread), to keep the debug
 //! run under a minute.
 //!
+//! P2P kernels (Phase 3S T6, C3S.5). Every `Fmm` above runs the default kernel,
+//! `P2pChoice::Auto` (the SIMD kernel on the ISA of `Isa::detect`). Error measures: exact
+//! equality of the bit patterns, and the relative L2 difference of potential and
+//! gradient from the `Reference` output over all ranks, 1e-13 in f64 and 1e-6 in f32.
+//! - **batched against per-pair** runs the operator with `Reference` and with every
+//!   ISA the machine offers: per-pair and 2, 4 and 8 threads equal the batched output
+//!   bit for bit for each.
+//! - `evaluate_every_kernel` repeats a scenario with `Reference` and every available
+//!   ISA, each at 1, 2, 4 and 8 threads bit for bit, checks that `Auto` gives the output
+//!   of the detected ISA bit for bit and that every ISA lies within the tolerance of
+//!   `Reference`, and prints the kernels it ran. It runs in **gradients**, **single
+//!   leaf**, **no targets on this rank**, **f32 against f64**, **threads, every
+//!   strategy and precision** (`Dense`, f32 and f64, gradients off and on), **coincident
+//!   points in a level-16 leaf** and **points on box faces and domain corners**: P2P
+//!   alone, both precisions and both outputs, the coincident-pair rule and the extreme
+//!   coordinates. The other scenarios run `Auto` only, to keep the debug run under a
+//!   minute; the ignored `tests/accuracy.rs` and `tests/adaptive.rs` compare `Auto` with
+//!   `Reference` on the large problems of C3.2 and C3.3.
+//! - **input errors** also checks that a P2P kernel on an ISA the machine cannot run is
+//!   rejected with `SettingsError::P2pIsaUnavailable`.
+//!
 //! Every `Fmm` scenario but **ownership** passes each rank its share of the points (every
 //! `size`-th). On several ranks those points generally lie in leaves of other ranks;
 //! the scenario then checks that every rank returns `PointsNotOwned` and stops, since
@@ -116,7 +139,7 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
 use nd_fmm_exec::fmm::{Fmm, FmmBuilder, FmmError, Output, PointSet, SettingsError};
 use nd_fmm_exec::geometry::{Domain, GeometryError, leaf_coordinates, radius};
-use nd_fmm_exec::operator::LaplaceOperator;
+use nd_fmm_exec::operator::{Isa, LaplaceOperator, P2pChoice, SimdScalar};
 use nd_fmm_exec::tables::{M2lStrategy, Tables};
 use nd_fmm_math::RealScalar;
 use nd_fmm_plan::evaluator::Evaluator;
@@ -173,7 +196,13 @@ fn distributed_scenarios() {
     ];
     for (name, scenario) in cases {
         eprintln!("rank {}: {name}", comm.rank());
+        let start = std::time::Instant::now();
         scenario(&comm);
+        eprintln!(
+            "rank {}: {name}: {:.1} s",
+            comm.rank(),
+            start.elapsed().as_secs_f64()
+        );
     }
 }
 
@@ -449,89 +478,103 @@ fn batched_against_per_pair(comm: &SimpleCommunicator) {
 
     let p = 6;
     let op = LaplaceOperator::new(Tables::build(p, M2lStrategy::Auto), true, max_leaf_points);
-    let input = (&sources[..], &charges[..], &source_leaves[..]);
-    let batched = evaluate(
-        &plan,
-        comm,
-        op.clone(),
-        &domain,
-        input,
-        (&targets, &target_leaves),
+    assert_eq!(
+        op.p2p_kernel(),
+        P2pChoice::Isa(Isa::detect()),
+        "Auto by default"
     );
-    // The same operator with a pool: bit-identical to the serial operator (C3.5).
-    for n in THREADS {
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(n)
-            .build()
-            .expect("the pool builds");
-        let threaded = op.clone().with_pool(std::sync::Arc::new(pool));
-        assert_eq!(threaded.threads(), n);
-        let output = evaluate(
+    let input = (&sources[..], &charges[..], &source_leaves[..]);
+    for choice in p2p_choices() {
+        let op = op
+            .clone()
+            .with_p2p(choice)
+            .expect("an available P2P kernel");
+        let batched = evaluate(
             &plan,
             comm,
-            threaded,
+            op.clone(),
             &domain,
             input,
             (&targets, &target_leaves),
         );
-        assert_eq!(bits(&output), bits(&batched), "{n} threads against serial");
-    }
-    let per_pair = evaluate(
-        &plan,
-        comm,
-        PerPair(op),
-        &domain,
-        input,
-        (&targets, &target_leaves),
-    );
-    assert_eq!(batched.len(), per_pair.len());
-    let differing = batched
-        .iter()
-        .zip(&per_pair)
-        .filter(|(a, b)| a.to_bits() != b.to_bits())
-        .count();
-    assert_eq!(
-        differing, 0,
-        "batched and per-pair output differ in {differing} values"
-    );
+        // The same operator with a pool: bit-identical to the serial operator (C3.5).
+        for n in THREADS {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .build()
+                .expect("the pool builds");
+            let threaded = op.clone().with_pool(std::sync::Arc::new(pool));
+            assert_eq!(threaded.threads(), n);
+            let output = evaluate(
+                &plan,
+                comm,
+                threaded,
+                &domain,
+                input,
+                (&targets, &target_leaves),
+            );
+            assert_eq!(
+                bits(&output),
+                bits(&batched),
+                "{choice}: {n} threads against serial"
+            );
+        }
+        let per_pair = evaluate(
+            &plan,
+            comm,
+            PerPair(op),
+            &domain,
+            input,
+            (&targets, &target_leaves),
+        );
+        assert_eq!(batched.len(), per_pair.len());
+        let differing = batched
+            .iter()
+            .zip(&per_pair)
+            .filter(|(a, b)| a.to_bits() != b.to_bits())
+            .count();
+        assert_eq!(
+            differing, 0,
+            "{choice}: batched and per-pair output differ in {differing} values"
+        );
 
-    // Smoke check against the direct sum over all sources: φ = φ̂ / r_t, ∇φ = ĝ / r_t²
-    // (1/|x − y| units, no 4π), relative L2 over the local targets.
-    let mut offset = 0;
-    let mut sums = [0.0f64; 4];
-    for (leaf, in_targets) in target_leaves.iter().enumerate() {
-        let r = radius(index.leaves().level(leaf), &domain);
-        let n = in_targets.len();
-        let (potential, gradient) = batched[offset..offset + 4 * n].split_at(n);
-        offset += 4 * n;
-        let x: Vec<[f64; 3]> = in_targets.iter().map(|&j| targets[j]).collect();
-        let mut phi = vec![0.0; n];
-        let mut grad = vec![[0.0; 3]; n];
-        direct_sum(&sources, &charges, &x, &mut phi, Some(&mut grad));
-        for j in 0..n {
-            sums[0] += (potential[j] / r - phi[j]).powi(2);
-            sums[1] += phi[j].powi(2);
-            for k in 0..3 {
-                sums[2] += (gradient[3 * j + k] / (r * r) - grad[j][k]).powi(2);
-                sums[3] += grad[j][k].powi(2);
+        // Smoke check against the direct sum over all sources: φ = φ̂ / r_t, ∇φ = ĝ / r_t²
+        // (1/|x − y| units, no 4π), relative L2 over the local targets.
+        let mut offset = 0;
+        let mut sums = [0.0f64; 4];
+        for (leaf, in_targets) in target_leaves.iter().enumerate() {
+            let r = radius(index.leaves().level(leaf), &domain);
+            let n = in_targets.len();
+            let (potential, gradient) = batched[offset..offset + 4 * n].split_at(n);
+            offset += 4 * n;
+            let x: Vec<[f64; 3]> = in_targets.iter().map(|&j| targets[j]).collect();
+            let mut phi = vec![0.0; n];
+            let mut grad = vec![[0.0; 3]; n];
+            direct_sum(&sources, &charges, &x, &mut phi, Some(&mut grad));
+            for j in 0..n {
+                sums[0] += (potential[j] / r - phi[j]).powi(2);
+                sums[1] += phi[j].powi(2);
+                for k in 0..3 {
+                    sums[2] += (gradient[3 * j + k] / (r * r) - grad[j][k]).powi(2);
+                    sums[3] += grad[j][k].powi(2);
+                }
             }
         }
+        assert_eq!(offset, batched.len());
+        let mut total = [0.0f64; 4];
+        comm.all_reduce_into(&sums[..], &mut total[..], SystemOperation::sum());
+        let (potential_error, gradient_error) =
+            ((total[0] / total[1]).sqrt(), (total[2] / total[3]).sqrt());
+        eprintln!(
+            "rank {}: P2P kernel {choice}: batched = per-pair = 2, 4, 8 threads bit for bit \
+             ({} values); W, X, V pairs {lists:?}; p = {p}: relative L2 error vs direct sum \
+             {potential_error:.3e} (potential), {gradient_error:.3e} (gradient)",
+            comm.rank(),
+            batched.len()
+        );
+        assert!(potential_error < 1e-3, "potential: {potential_error:e}");
+        assert!(gradient_error < 1e-2, "gradient: {gradient_error:e}");
     }
-    assert_eq!(offset, batched.len());
-    let mut total = [0.0f64; 4];
-    comm.all_reduce_into(&sums[..], &mut total[..], SystemOperation::sum());
-    let (potential_error, gradient_error) =
-        ((total[0] / total[1]).sqrt(), (total[2] / total[3]).sqrt());
-    eprintln!(
-        "rank {}: batched = per-pair = 2, 4, 8 threads bit for bit ({} values); W, X, V \
-         pairs {lists:?}; \
-         p = {p}: relative L2 error vs direct sum {potential_error:.3e} (potential), \
-         {gradient_error:.3e} (gradient)",
-        comm.rank(),
-        batched.len()
-    );
-    assert!(potential_error < 1e-3, "potential: {potential_error:e}");
-    assert!(gradient_error < 1e-2, "gradient: {gradient_error:e}");
 }
 
 /// `n` points uniform in the unit cube [0, 1)³.
@@ -554,7 +597,7 @@ fn share<V: Copy>(items: &[V], comm: &SimpleCommunicator) -> Vec<V> {
 
 /// The FMM, or `None` on several ranks if the points are not owned (module
 /// documentation). Panics on any other error.
-fn built<'o, T: nd_fmm_tables::cache::Stored + Equivalence + Default>(
+fn built<'o, T: Stored + SimdScalar + Equivalence + Default>(
     result: Result<Fmm<'o, T>, FmmError>,
     comm: &SimpleCommunicator,
 ) -> Option<Fmm<'o, T>> {
@@ -578,7 +621,7 @@ fn built<'o, T: nd_fmm_tables::cache::Stored + Equivalence + Default>(
 /// and its output, or `None` if the points are not owned (`built`).
 ///
 /// Every build loads its tables from [`TABLE_CACHE`], building and storing them once.
-fn evaluate_threaded<'o, T: Stored + Equivalence + Default>(
+fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
     builder: &FmmBuilder<T>,
     (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
     charges: &[T],
@@ -602,10 +645,109 @@ fn evaluate_threaded<'o, T: Stored + Equivalence + Default>(
     Some((fmm, output))
 }
 
+/// The P2P kernels besides `Auto` that [`evaluate_every_kernel`] runs: `Reference` and
+/// every ISA this machine offers.
+fn p2p_choices() -> Vec<P2pChoice> {
+    std::iter::once(P2pChoice::Reference)
+        .chain(Isa::available().map(P2pChoice::Isa))
+        .collect()
+}
+
+/// The largest relative L2 difference of an ISA's output from the `Reference` output of
+/// the same settings (C3S.5): 1e-13 in f64, 1e-6 in f32.
+fn kernel_tolerance<T: RealScalar>() -> f64 {
+    if size_of::<T>() == 4 { 1e-6 } else { 1e-13 }
+}
+
+/// [`evaluate_threaded`] with the builder's P2P kernel (`Auto`, unless it sets one), and
+/// again with `Reference` and with every ISA this machine offers (C3S.5). Each kernel's
+/// output is bit-identical at one thread and at every count of `threads`; `Auto` runs
+/// the ISA of `Isa::detect` and gives its output bit for bit, so that ISA repeats only
+/// the one-thread run; and every ISA's potential and gradient lie within
+/// [`kernel_tolerance`] of the `Reference` output (relative L2 over all ranks). Prints
+/// the kernels it ran. Returns the `Auto` run, or `None` if the points are not owned.
+fn evaluate_every_kernel<'o, T: Stored + SimdScalar + Equivalence + Default>(
+    builder: &FmmBuilder<T>,
+    sets: (&[[f64; 3]], &[[f64; 3]]),
+    charges: &[T],
+    threads: &[usize],
+    comm: &'o SimpleCommunicator,
+) -> Option<(Fmm<'o, T>, Output<T>)> {
+    let (fmm, output) = evaluate_threaded(builder, sets, charges, threads, comm)?;
+    let detected = P2pChoice::Isa(Isa::detect());
+    assert_eq!(fmm.p2p_kernel(), detected, "Auto runs the detected ISA");
+    let mut reference = None;
+    let mut isas = Vec::new();
+    for choice in p2p_choices() {
+        let builder = builder.clone().p2p_kernel(choice);
+        let repeats = if choice == detected { &[][..] } else { threads };
+        let (kernel, kernel_output) = evaluate_threaded(&builder, sets, charges, repeats, comm)?;
+        assert_eq!(kernel.p2p_kernel(), choice);
+        if choice == detected {
+            assert_eq!(
+                output_bits(&kernel_output),
+                output_bits(&output),
+                "Auto and {choice} differ"
+            );
+        }
+        match choice {
+            P2pChoice::Reference => reference = Some(kernel_output),
+            _ => isas.push((choice, kernel_output)),
+        }
+    }
+    let reference = reference.expect("`p2p_choices` holds Reference");
+    let tolerance = kernel_tolerance::<T>();
+    let mut differences = Vec::new();
+    for (choice, kernel_output) in &isas {
+        let potential = difference(&kernel_output.potential, &reference.potential, comm);
+        let gradient = match (&kernel_output.gradient, &reference.gradient) {
+            (Some(g), Some(r)) => difference(g.as_flattened(), r.as_flattened(), comm),
+            _ => 0.0,
+        };
+        assert!(
+            potential < tolerance && gradient < tolerance,
+            "{choice}: relative L2 difference from Reference {potential:e} (φ), {gradient:e} \
+             (∇φ), tolerance {tolerance:e}"
+        );
+        differences.push(match kernel_output.gradient {
+            Some(_) => format!("{choice} {potential:.1e} (φ), {gradient:.1e} (∇φ)"),
+            None => format!("{choice} {potential:.1e} (φ)"),
+        });
+    }
+    let names: Vec<String> = isas.iter().map(|(c, _)| c.to_string()).collect();
+    eprintln!(
+        "rank {}: P2P kernels auto ({detected}), reference, {}, each bit for bit at 1 and \
+         {threads:?} threads; relative L2 difference from reference: {}",
+        comm.rank(),
+        names.join(", "),
+        differences.join("; ")
+    );
+    Some((fmm, output))
+}
+
+/// The relative L2 difference ‖a − b‖₂ / ‖b‖₂ over the values of all ranks, or ‖a‖₂
+/// if b is zero on every rank (a scenario without targets).
+fn difference<T: RealScalar>(a: &[T], b: &[T], comm: &SimpleCommunicator) -> f64 {
+    assert_eq!(a.len(), b.len());
+    let mut sums = [0.0f64; 2];
+    for (&x, &y) in a.iter().zip(b) {
+        let (x, y) = (RealScalar::to_f64(x), RealScalar::to_f64(y));
+        sums[0] += (x - y).powi(2);
+        sums[1] += y * y;
+    }
+    let mut total = [0.0f64; 2];
+    comm.all_reduce_into(&sums[..], &mut total[..], SystemOperation::sum());
+    if total[1] > 0.0 {
+        (total[0] / total[1]).sqrt()
+    } else {
+        total[0].sqrt()
+    }
+}
+
 /// Evaluates `charges` with `fmm`, built with `n` threads, and checks its threading
 /// report, the capacity of every per-thread scratch set before and after, and the output
 /// bit for bit against `reference`.
-fn check_threaded<T: Stored + Equivalence + Default>(
+fn check_threaded<T: Stored + SimdScalar + Equivalence + Default>(
     fmm: &mut Fmm<'_, T>,
     charges: &[T],
     reference: &[u64],
@@ -811,7 +953,7 @@ fn gradients(comm: &SimpleCommunicator) {
     let (sources, local_charges) = (share(&points, comm), share(&charges, comm));
     let builder = FmmBuilder::<f64>::new(6).gradients(true);
     let sets = (&sources[..], &sources[..]);
-    let Some((fmm, output)) = evaluate_threaded(&builder, sets, &local_charges, &THREADS, comm)
+    let Some((fmm, output)) = evaluate_every_kernel(&builder, sets, &local_charges, &THREADS, comm)
     else {
         return;
     };
@@ -830,13 +972,39 @@ fn gradients(comm: &SimpleCommunicator) {
     assert!(potential_error < 1e-3, "φ: {potential_error:e}");
     assert!(gradient_error < 1e-2, "∇φ: {gradient_error:e}");
 
-    // The potentials do not depend on whether gradients are computed.
+    // The potentials do not depend on whether gradients are computed: bit for bit with
+    // the reference P2P, which computes each term alike either way. The SIMD kernels
+    // compute φ += q ρ with one fma without gradients, and t = q ρ, φ + t with them
+    // (`nd_fmm_simd`, "The kernel"), so there the potentials agree to rounding, within
+    // the tolerance of an ISA against the reference.
     let builder = FmmBuilder::<f64>::new(6);
     let Some((_, without)) = evaluate_threaded(&builder, sets, &local_charges, &THREADS, comm)
     else {
         return;
     };
-    assert_eq!(bits(&without.potential), bits(&output.potential));
+    let kernel_difference = difference(&without.potential, &output.potential, comm);
+    assert!(
+        kernel_difference < kernel_tolerance::<f64>(),
+        "{kernel_difference:e}"
+    );
+    let mut reference = Vec::new();
+    for gradients in [false, true] {
+        let builder = builder
+            .clone()
+            .gradients(gradients)
+            .p2p_kernel(P2pChoice::Reference);
+        let Some((_, output)) = evaluate_threaded(&builder, sets, &local_charges, &[], comm) else {
+            return;
+        };
+        reference.push(output.potential);
+    }
+    assert_eq!(bits(&reference[0]), bits(&reference[1]), "Reference");
+    eprintln!(
+        "rank {}: gradients: φ with and without gradients bit for bit with the reference \
+         P2P, relative L2 difference {kernel_difference:.1e} with {}",
+        comm.rank(),
+        P2pChoice::Auto.resolve().unwrap()
+    );
 }
 
 /// A uniform level-3 tree: no W or X list (module documentation).
@@ -897,8 +1065,9 @@ fn single_leaf(comm: &SimpleCommunicator) {
     let points = unit_cube_points(&mut rng, 200);
     let charges = random_charges(&mut rng, points.len());
     let builder = FmmBuilder::<f64>::new(3).max_level(0).gradients(true);
-    let (fmm, output) = evaluate_threaded(&builder, (&points, &points), &charges, &THREADS, comm)
-        .expect("the FMM builds");
+    let (fmm, output) =
+        evaluate_every_kernel(&builder, (&points, &points), &charges, &THREADS, comm)
+            .expect("the FMM builds");
     assert_eq!((fmm.nlevels(), fmm.nleaves()), (1, 1));
     let (phi, grad) = exact(&points, &charges, &points);
     let potential_error = relative_l2(&output.potential, &phi, comm);
@@ -927,7 +1096,7 @@ fn no_targets_on_this_rank(comm: &SimpleCommunicator) {
     };
     let builder = FmmBuilder::<f64>::new(4).gradients(true);
     let sets = (&sources[..], &local_targets[..]);
-    let Some((fmm, output)) = evaluate_threaded(&builder, sets, &local_charges, &THREADS, comm)
+    let Some((fmm, output)) = evaluate_every_kernel(&builder, sets, &local_charges, &THREADS, comm)
     else {
         return;
     };
@@ -1025,6 +1194,19 @@ fn input_errors(comm: &SimpleCommunicator) {
         assert_eq!(error, Some(FmmError::InvalidSettings(expected)));
     }
 
+    // A P2P kernel on an ISA this machine cannot run (NEON on x86_64, AVX2 on aarch64
+    // and on x86_64 CPUs without it). The check is local; `build` agrees it with every
+    // other input error of step 1, so on mixed CPUs the ranks that can run the ISA
+    // return `OtherRank`.
+    let unavailable: Vec<Isa> = Isa::all().filter(|isa| !isa.is_available()).collect();
+    assert!(!unavailable.is_empty(), "NEON and AVX2 exclude each other");
+    for &isa in &unavailable {
+        let builder = FmmBuilder::<f64>::new(4).p2p_kernel(P2pChoice::Isa(isa));
+        let error = builder.build(&points, &points, comm).err();
+        let expected = SettingsError::P2pIsaUnavailable { isa };
+        assert_eq!(error, Some(FmmError::InvalidSettings(expected)), "{isa}");
+    }
+
     // No points on any rank, and points that span no volume.
     let error = FmmBuilder::<f64>::new(4).build(&[], &[], comm).err();
     assert_eq!(error, Some(FmmError::NoPoints));
@@ -1049,7 +1231,14 @@ fn input_errors(comm: &SimpleCommunicator) {
         (r, Some(FmmError::OtherRank)) if r != 0 => {}
         _ => panic!("rank {rank}: wrong charge length: {error:?}"),
     }
-    eprintln!("rank {rank}: input errors as expected");
+    eprintln!(
+        "rank {rank}: input errors as expected, the P2P kernel on {} among them",
+        unavailable
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 }
 
 /// f32 at p = 6 against f64 (module documentation). The f64 run and the oracle use the
@@ -1068,11 +1257,13 @@ fn f32_against_f64(comm: &SimpleCommunicator) {
     let (local32, local64) = (share(&charges32, comm), share(&charges, comm));
     let sets = (&sources[..], &sources[..]);
     let builder = FmmBuilder::<f32>::new(6).gradients(true);
-    let Some((_, output32)) = evaluate_threaded(&builder, sets, &local32, &THREADS, comm) else {
+    let Some((_, output32)) = evaluate_every_kernel(&builder, sets, &local32, &THREADS, comm)
+    else {
         return;
     };
     let builder = FmmBuilder::<f64>::new(6).gradients(true);
-    let Some((_, output64)) = evaluate_threaded(&builder, sets, &local64, &THREADS, comm) else {
+    let Some((_, output64)) = evaluate_every_kernel(&builder, sets, &local64, &THREADS, comm)
+    else {
         return;
     };
     let (phi, _) = exact(&points, &charges, &sources);
@@ -1216,7 +1407,7 @@ fn threads_every_strategy(comm: &SimpleCommunicator) {
 
 /// The configurations of `threads_every_strategy` in precision `T`; returns how many
 /// ran.
-fn threads_every_strategy_in<T: Stored + Equivalence + Default>(
+fn threads_every_strategy_in<T: Stored + SimdScalar + Equivalence + Default>(
     sources: &[[f64; 3]],
     charges: &[T],
     comm: &SimpleCommunicator,
@@ -1232,8 +1423,14 @@ fn threads_every_strategy_in<T: Stored + Equivalence + Default>(
                 .strategy(strategy)
                 .gradients(gradients)
                 .max_points_per_leaf(8);
+            // Every P2P kernel with Dense; the strategies do not touch P2P.
+            let evaluate = if strategy == M2lStrategy::Dense {
+                evaluate_every_kernel
+            } else {
+                evaluate_threaded
+            };
             let Some((fmm, output)) =
-                evaluate_threaded(&builder, (sources, sources), charges, &THREADS, comm)
+                evaluate(&builder, (sources, sources), charges, &THREADS, comm)
             else {
                 return configurations;
             };
@@ -1301,7 +1498,7 @@ fn cluster_points(
 
 /// The number of leaves on each level 0–16 and the U, V, W and X list sizes of `fmm`,
 /// over all ranks.
-fn tree_summary<T: Stored + Equivalence + Default>(
+fn tree_summary<T: Stored + SimdScalar + Equivalence + Default>(
     fmm: &Fmm<'_, T>,
     comm: &SimpleCommunicator,
 ) -> ([usize; 17], [usize; 4]) {
@@ -1544,7 +1741,7 @@ fn coincident_points(comm: &SimpleCommunicator) {
         .gradients(true)
         .domain(unit_domain());
     let sets = (&sources[..], &sources[..]);
-    let Some((fmm, output)) = evaluate_threaded(&builder, sets, &local_charges, &THREADS, comm)
+    let Some((fmm, output)) = evaluate_every_kernel(&builder, sets, &local_charges, &THREADS, comm)
     else {
         return;
     };
@@ -1720,7 +1917,7 @@ fn faces_and_corners(comm: &SimpleCommunicator) {
         .gradients(true)
         .domain(unit_domain());
     let sets = (&sources[..], &sources[..]);
-    let Some((fmm, output)) = evaluate_threaded(&builder, sets, &local_charges, &THREADS, comm)
+    let Some((fmm, output)) = evaluate_every_kernel(&builder, sets, &local_charges, &THREADS, comm)
     else {
         return;
     };

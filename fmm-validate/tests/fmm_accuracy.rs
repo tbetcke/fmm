@@ -1,7 +1,9 @@
 //! Smoke runs of the cores of the `fmm_accuracy` and `calibrate` examples at N = 500.
 //!
 //! - `fmm_accuracy`: p = 2 in f64 and f32 on a uniform tree: it runs, is consistent
-//!   and converges roughly as expected, and on two threads gives the same errors. Then
+//!   and converges roughly as expected, and on two threads gives the same errors. It
+//!   reports the P2P kernel that ran, `Auto`'s ISA by default; with
+//!   `P2pChoice::Reference` the errors agree to rounding. Then
 //!   each clustered distribution at p = 4 on an adaptive tree: its leaves span several
 //!   levels and its W and X lists are non-empty.
 //! - `calibrate`: the sweeps of every distribution at p ≤ 3 in f64 and f32, the
@@ -14,10 +16,13 @@
 
 use mpi::Threading;
 use mpi::topology::SimpleCommunicator;
+use nd_fmm_exec::operator::{Isa, P2pChoice};
 use nd_fmm_validate::calibration::{
     self, Measure, Precision, Reached, Reference, floor, leaf_study, smallest_p, sweep,
 };
-use nd_fmm_validate::fmm_accuracy::{Config, Distribution, Oracle, Problem, prediction, run};
+use nd_fmm_validate::fmm_accuracy::{
+    Config, Distribution, Execution, Oracle, Problem, prediction, run,
+};
 
 const SMOKE: Config = Config {
     distribution: Distribution::Cube,
@@ -56,16 +61,39 @@ fn fmm_accuracy_at_p_2_and_4(comm: &SimpleCommunicator) {
     assert_eq!(problem, Problem::new(&SMOKE), "seeded");
 
     let oracle = Oracle::new(&problem, &problem.charges);
-    let r64 = run::<f64>(&SMOKE, &problem, &problem.charges, &oracle, (2, 1), comm);
+    let one = (2, Execution::threads(1));
+    let r64 = run::<f64>(&SMOKE, &problem, &problem.charges, &oracle, one, comm);
     assert_eq!(r64.threading.threads, 1);
+    assert_eq!(r64.p2p, P2pChoice::Isa(Isa::detect()), "Auto by default");
     // Two threads: the output is bit-identical (C3.5), so are the errors.
-    let threaded = run::<f64>(&SMOKE, &problem, &problem.charges, &oracle, (2, 2), comm);
+    let two = (2, Execution::threads(2));
+    let threaded = run::<f64>(&SMOKE, &problem, &problem.charges, &oracle, two, comm);
     assert_eq!(threaded.threading.threads, 2);
     assert_eq!(
         (threaded.potential, threaded.gradient),
         (r64.potential, r64.gradient),
         "two threads"
     );
+    // The reference P2P: the same errors up to rounding (C3S.5).
+    let reference = Execution {
+        p2p: P2pChoice::Reference,
+        ..Execution::threads(1)
+    };
+    let slow = run::<f64>(
+        &SMOKE,
+        &problem,
+        &problem.charges,
+        &oracle,
+        (2, reference),
+        comm,
+    );
+    assert_eq!(slow.p2p, P2pChoice::Reference);
+    for (a, b) in [
+        (slow.potential, r64.potential),
+        (slow.gradient, r64.gradient),
+    ] {
+        assert!((a.l2 - b.l2).abs() <= 1e-10 * b.l2, "{a:?} against {b:?}");
+    }
     let charges32 = problem.charges_as::<f32>();
     let rounded: Vec<Vec<f64>> = charges32
         .iter()
@@ -76,7 +104,7 @@ fn fmm_accuracy_at_p_2_and_4(comm: &SimpleCommunicator) {
         &problem,
         &charges32,
         &Oracle::new(&problem, &rounded),
-        (2, 1),
+        one,
         comm,
     );
     eprintln!("{r64:?}\n{r32:?}");
@@ -136,7 +164,14 @@ fn fmm_accuracy_at_p_2_and_4(comm: &SimpleCommunicator) {
         };
         let problem = Problem::new(&config);
         let oracle = Oracle::new(&problem, &problem.charges);
-        let r = run::<f64>(&config, &problem, &problem.charges, &oracle, (4, 1), comm);
+        let r = run::<f64>(
+            &config,
+            &problem,
+            &problem.charges,
+            &oracle,
+            (4, Execution::threads(1)),
+            comm,
+        );
         let name = distribution.name();
         eprintln!("{name}: {r:?}");
         assert_eq!(r.distribution, distribution);
@@ -172,8 +207,9 @@ fn calibration_at_p_up_to_3(comm: &SimpleCommunicator) {
         assert_eq!(reference.problem, Problem::new(&config), "{name}: seeded");
         assert_eq!(reference.charges32, reference.problem.charges_as::<f32>());
 
-        let f64 = sweep(&config, &reference, Precision::F64, &DEGREES, 1, comm);
-        let f32 = sweep(&config, &reference, Precision::F32, &DEGREES, 1, comm);
+        let one = Execution::threads(1);
+        let f64 = sweep(&config, &reference, Precision::F64, &DEGREES, one, comm);
+        let f32 = sweep(&config, &reference, Precision::F32, &DEGREES, one, comm);
         for (runs, precision) in [(&f64, Precision::F64), (&f32, Precision::F32)] {
             let ps: Vec<usize> = runs.iter().map(|r| r.p).collect();
             assert_eq!(ps, DEGREES, "{name}");
@@ -197,7 +233,8 @@ fn calibration_at_p_up_to_3(comm: &SimpleCommunicator) {
             assert!((a.potential.l2 - b.potential.l2).abs() < 0.05 * a.potential.l2);
         }
         // Two threads: the same errors (C3.5).
-        let threaded = sweep(&config, &reference, Precision::F64, &[2], 2, comm);
+        let two = Execution::threads(2);
+        let threaded = sweep(&config, &reference, Precision::F64, &[2], two, comm);
         assert_eq!(
             (threaded[0].potential, threaded[0].gradient),
             (f64[1].potential, f64[1].gradient),
@@ -223,7 +260,7 @@ fn calibration_at_p_up_to_3(comm: &SimpleCommunicator) {
         // The leaf-size study: the refinement target changes the tree, not the problem;
         // at the sweep's own target it repeats the sweep's run.
         if calibration::LEAF_STUDY_DISTRIBUTIONS.contains(&distribution) {
-            let study = leaf_study(&config, &reference, 2, &[4, 8, 16], 1, comm);
+            let study = leaf_study(&config, &reference, 2, &[4, 8, 16], one, comm);
             assert_eq!(study.len(), 3);
             assert!(study.iter().all(|r| r.p == 2 && r.precision == "f64"));
             assert!(

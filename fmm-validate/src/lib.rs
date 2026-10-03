@@ -59,8 +59,13 @@
 //! cargo run --release -p nd-fmm-validate --example tables
 //! cargo run --release -p nd-fmm-validate --example fmm_accuracy
 //! cargo run --release -p nd-fmm-validate --example fmm_accuracy -- --distribution plummer
+//! cargo run --release -p nd-fmm-validate --example fmm_accuracy -- --p2p reference
 //! cargo run --release -p nd-fmm-validate --example calibrate -- --threads 8
 //! ```
+//!
+//! `fmm_accuracy` and `calibrate` take `--p2p auto|reference|<isa>`, the P2P kernel of
+//! the FMM (`nd_fmm_exec::operator::P2pChoice`, default `auto`), and report the kernel
+//! that ran next to the threading report.
 //!
 //! Since Phase 3 the crate depends on `nd-fmm-exec`, and so on MPI: building it, and
 //! `cargo test -p nd-fmm-validate`, need an MPI installation. `fmm_accuracy` and

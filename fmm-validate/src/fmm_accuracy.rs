@@ -3,10 +3,11 @@
 //!
 //! The problem ([`Problem`]): N points of a [`Distribution`], sources equal to targets,
 //! and several charge vectors uniform in [−1, 1). [`run`] builds an
-//! `nd_fmm_exec::fmm::Fmm` with gradients at degree p, on a given number of threads,
-//! evaluates every charge vector and measures the output at a fixed sample of the
-//! targets against the [`Oracle`]. The output, and so every error, is bit-identical for
-//! every number of threads (C3.5); only the timings change.
+//! `nd_fmm_exec::fmm::Fmm` with gradients at degree p, with a given number of threads
+//! and P2P kernel ([`Execution`]), evaluates every charge vector and measures the output
+//! at a fixed sample of the targets against the [`Oracle`]. The output, and so every
+//! error, is bit-identical for every number of threads (C3.5), and depends on the P2P
+//! kernel only in the last bits (C3S.5); the timings change with both.
 //!
 //! Two kinds of tree ([`Config`]):
 //! - [`Config::C32`]: points uniform in the cube [−1, 1)³ and a uniform tree,
@@ -42,6 +43,7 @@ use std::time::Duration;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::Equivalence;
 use nd_fmm_exec::fmm::{BuildTimings, FmmBuilder, ListSizes, StageTimings};
+use nd_fmm_exec::operator::{P2pChoice, SimdScalar};
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_exec::threading::ThreadingReport;
 use nd_fmm_math::RealScalar;
@@ -196,6 +198,25 @@ impl Config {
     }
 }
 
+/// How the FMM of a [`run`] executes: its threads and its P2P kernel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Execution {
+    /// The number of rayon threads (`FmmBuilder::threads`), at least 1.
+    pub threads: usize,
+    /// The P2P kernel (`FmmBuilder::p2p_kernel`).
+    pub p2p: P2pChoice,
+}
+
+impl Execution {
+    /// `threads` threads and the default P2P kernel, `P2pChoice::Auto`.
+    pub const fn threads(threads: usize) -> Self {
+        Self {
+            threads,
+            p2p: P2pChoice::Auto,
+        }
+    }
+}
+
 /// The points, the sampled targets and the charge vectors of a [`Config`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Problem {
@@ -326,6 +347,9 @@ pub struct Run {
     pub stages: StageTimings,
     /// The rayon threads, the MPI threading level and the BLAS thread variables.
     pub threading: ThreadingReport,
+    /// The P2P kernel as it ran (`Fmm::p2p_kernel`): `Reference` or an ISA, never
+    /// `Auto`.
+    pub p2p: P2pChoice,
 }
 
 impl Run {
@@ -335,9 +359,9 @@ impl Run {
     }
 }
 
-/// Builds the FMM of `problem` in precision `T` at degree `p` on `threads` threads
-/// (default strategy, gradients on), evaluates the charge vectors `charges` and
-/// measures the output against `oracle` (module documentation).
+/// Builds the FMM of `problem` in precision `T` at degree `p` with `execution`'s threads
+/// and P2P kernel (default strategy, gradients on), evaluates the charge vectors
+/// `charges` and measures the output against `oracle` (module documentation).
 ///
 /// `charges` and `oracle` must belong together: the problem's charges for f64, and
 /// for f32 the rounded charges with the oracle of their f64 values.
@@ -348,21 +372,23 @@ impl Run {
 ///
 /// # Panics
 ///
-/// If the FMM does not build or evaluate, for example on several ranks, or with
-/// `threads` > 1 when MPI provides less than `Threading::Funneled`.
-pub fn run<T: Stored + Equivalence + Default>(
+/// If the FMM does not build or evaluate, for example on several ranks, with
+/// `threads` > 1 when MPI provides less than `Threading::Funneled`, or with a P2P
+/// kernel on an ISA this machine cannot run.
+pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
     config: &Config,
     problem: &Problem,
     charges: &[Vec<T>],
     oracle: &Oracle,
-    (p, threads): (usize, usize),
+    (p, execution): (usize, Execution),
     comm: &SimpleCommunicator,
 ) -> Run {
     let builder = FmmBuilder::<T>::new(p)
         .max_level(config.max_level)
         .max_points_per_leaf(config.max_points_per_leaf)
         .gradients(true)
-        .threads(threads);
+        .threads(execution.threads)
+        .p2p_kernel(execution.p2p);
     let mut fmm = builder
         .build(&problem.points, &problem.points, comm)
         .unwrap_or_else(|error| panic!("the FMM does not build: {error}"));
@@ -422,6 +448,7 @@ pub fn run<T: Stored + Equivalence + Default>(
         build: fmm.build_timings(),
         stages: mean(&stages),
         threading: fmm.threading().clone(),
+        p2p: fmm.p2p_kernel(),
     }
 }
 

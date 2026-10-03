@@ -22,7 +22,8 @@
 //! The error measure is that of [`fmm_accuracy`]: per charge vector the relative L2 and
 //! max errors of φ and ∇φ at the sampled targets, then the root mean square over the
 //! vectors. The errors are deterministic for the seed and the same for every number of
-//! threads (C3.5); only the timings change.
+//! threads (C3.5), and change with the P2P kernel only in the last bits (C3S.5); the
+//! timings change with both.
 //!
 //! [`fmm_accuracy`]: crate::fmm_accuracy
 
@@ -31,7 +32,7 @@ use std::time::{Duration, Instant};
 
 use mpi::topology::SimpleCommunicator;
 
-use crate::fmm_accuracy::{self, Config, Distribution, Oracle, Problem, Run};
+use crate::fmm_accuracy::{self, Config, Distribution, Execution, Oracle, Problem, Run};
 
 /// The degrees of the f64 sweep: every degree that CONVENTIONS §3.9 tests for M2L.
 pub const F64_DEGREES: [usize; 20] = [
@@ -126,8 +127,8 @@ impl Precision {
     }
 }
 
-/// Runs the FMM of `reference` in `precision` at every degree of `degrees`, on
-/// `threads` threads, with `config`'s tree.
+/// Runs the FMM of `reference` in `precision` at every degree of `degrees`, with
+/// `execution`'s threads and P2P kernel, with `config`'s tree.
 ///
 /// # Collective operation
 ///
@@ -141,7 +142,7 @@ pub fn sweep(
     reference: &Reference,
     precision: Precision,
     degrees: &[usize],
-    threads: usize,
+    execution: Execution,
     comm: &SimpleCommunicator,
 ) -> Vec<Run> {
     let problem = &reference.problem;
@@ -153,7 +154,7 @@ pub fn sweep(
                 problem,
                 &problem.charges,
                 &reference.oracle64,
-                (p, threads),
+                (p, execution),
                 comm,
             ),
             Precision::F32 => fmm_accuracy::run::<f32>(
@@ -161,7 +162,7 @@ pub fn sweep(
                 problem,
                 &reference.charges32,
                 &reference.oracle32,
-                (p, threads),
+                (p, execution),
                 comm,
             ),
         })
@@ -184,7 +185,7 @@ pub fn leaf_study(
     reference: &Reference,
     p: usize,
     sizes: &[usize],
-    threads: usize,
+    execution: Execution,
     comm: &SimpleCommunicator,
 ) -> Vec<Run> {
     sizes
@@ -194,7 +195,7 @@ pub fn leaf_study(
                 max_points_per_leaf,
                 ..*config
             };
-            sweep(&config, reference, Precision::F64, &[p], threads, comm).remove(0)
+            sweep(&config, reference, Precision::F64, &[p], execution, comm).remove(0)
         })
         .collect()
 }
