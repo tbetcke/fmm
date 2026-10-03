@@ -26,6 +26,13 @@ default P2P of `nd-fmm-exec`. On the Apple M3 Max it is 3–8× faster than
 `nd_fmm_ref::p2p` and 1.2–1.8× faster than green-kernels, and it speeds up a one-thread
 evaluation 1.4–2.5× at p = 3 and 1.05–1.2× at p = 8. The default leaf size stays 64.
 x86_64 is checked for correctness in CI and was never timed.
+Revised at the start of Phase 4 (2026-10-03; Sections 7 and 9.2): the task briefs are in
+docs/phase4/. Decided for the phase: CubeCL moves to 0.11.0-pre.4; no GPU besides the
+M3 Max is available, so Metal f32 is the only timed backend, f64 is checked on the
+CubeCL CPU runtime, and CUDA is type-checked only; the host batched-GEMM path is
+deferred. C4.3 now covers all four leaf expansion operators, and C4.8 (new) is the
+device FMM end to end. Whether the CPU runtime gets a performance target is decided
+from a measurement in T3 (docs/phase4/README.md, decision 10).
 
 > Where this document and `docs/CONVENTIONS.md` differ (normalisation, phases, scaling),
 > **the conventions file takes precedence.** Section 2.4 below now follows the scaling of
@@ -797,7 +804,7 @@ flowchart TB
   P2["Phase 2 · Operator tables<br/>C2.1–C2.4 · fmm-tables · done"]
   P3["Phase 3 · CPU FMM on nd-fmm-plan<br/>C3.0–C3.5, C4.0 · nd-fmm-plan, fmm-exec · done"]
   P3S["Phase 3S · SIMD P2P on the host<br/>C3S.1–C3S.6 · fmm-simd, fmm-exec"]
-  P4["Phase 4 · CubeCL kernels<br/>C4.1–C4.7 · fmm-kernels, fmm-exec"]
+  P4["Phase 4 · CubeCL kernels<br/>C4.1–C4.8 · fmm-kernels, fmm-exec"]
   P5["Phase 5 · Distributed<br/>C5.1–C5.3 · nd-fmm-plan, fmm-exec"]
   P6["Phase 6 · Optimisation and extensions<br/>C6.1–C6.5 · optional, benchmark-driven"]
   S["Spike · CubeCL GEMM<br/>Phase 0 task T6 · done; f64 CUDA run pending"]
@@ -1508,11 +1515,16 @@ comparison. Errors: as in T12 (the P2P kernel does not change them): φ barely m
 | --- | --- | --- | --- | --- |
 | C4.1 | Device buffers, plan and table upload, precision capability check | round-trip upload/download exact; f64 refused cleanly where unsupported (Metal, wgpu, and CUDA on CubeCL 0.10.0) | C3.1 | Not started |
 | C4.2 | P2P kernel (shared-memory tiling) | matches C1.4 to precision; reaches a stated fraction of peak; timed against the host SIMD P2P (C3S.4) | C4.1 | Not started |
-| C4.3 | P2M and L2P kernels | match C1.1 to precision | C4.1 | Not started |
+| C4.3 | P2M, L2P, P2L and M2P kernels (P2L and M2P added at the start of Phase 4: on adaptive trees L2P and M2P are a growing part of the leaf stage) | match C1.1 to precision | C4.1 | Not started |
 | C4.4 | M2M and L2L as batched GEMM | match C2.1 per level | C4.1 | Not started |
 | C4.5 | M2L dense: gather, GEMM (library CMMA for f32 at p ≥ 8; hand-written comptime-p kernel for small p and for f64, per T6), conflict-free scatter-add | matches C2.2; profiled GEMM efficiency reported | C4.4 | Not started |
 | C4.6 | M2L rotation kernel | matches C2.3; timing vs C4.5 across p | C4.1 | Not started |
 | C4.7 | Autotune registration and persistent cache | picks the fastest strategy per (backend, precision, p) | C4.5, C4.6 | Not started |
+| C4.8 | Device FMM end to end (new at the start of Phase 4): every operator on the device, data resident, launches scheduled | GPU output within the stated bounds of the host FMM; errors against the direct sum as the host run's; deterministic; minimal transfers | C4.2–C4.6 | Not started |
+
+The task briefs are in docs/phase4/README.md (T1–T13). Metal f32 is the only timed
+backend; f64 runs on the CubeCL CPU runtime for correctness, and CUDA is type-checked
+only (decided on 2026-10-03).
 
 C4.0, the batched operator hooks, was delivered in Phase 3 by the `nd-fmm-plan` rewrite
 (Section 5.2): the device path plugs into the same `FmmOperator` as the host path, and
@@ -1675,12 +1687,15 @@ and identity tests, the second with a one-day spike before Phase 4.
   (Metal, f32 only), and the f64 targets are NVIDIA data-centre cards (A100, H100
   class).
 - When does the workspace move from CubeCL 0.10.0 to 0.11? The f64 GPU path on CUDA
-  needs it, and the frontend API changes. This is a separate decision, due before
-  Phase 4.
+  needs it, and the frontend API changes. *Answered on 2026-10-03:* at the start of
+  Phase 4, to 0.11.0-pre.4 (docs/phase4/ T2). Moving to the final 0.11.0 is a separate
+  decision.
 - Will someone run the spike's `cuda` feature on an A100 or H100 before Phase 4 fixes
   the f64 default? This is preferred, not required. Without it, Phase 4 proceeds on the
   provisional f64 recommendation of Section 4. The run measures the hand-written f64
   kernel's efficiency, predicted at 19–36% of the roofline, and the dense time per pair.
+  *Answered on 2026-10-03:* no CUDA card is available. Phase 4 proceeds on the
+  provisional rule; the CUDA run stays a documented command.
 - *New in Phase 3:* targets of 1e-9 and below need p > 20 in f64 (Section 4), beyond
   the degrees CONVENTIONS §3.9 tests for M2L and `nd-fmm-exec` accepts
   (`MAX_DEGREE` = 20). Are they needed? If so, extending the tested range (and the
