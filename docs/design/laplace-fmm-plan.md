@@ -1366,7 +1366,7 @@ model.
 | C3S.3 | `nd-fmm-simd`: ISA detection and dispatch, scalar path, per-ISA vector layer and inverse square root | inverse square root within 4 u_T on every ISA run (f32 exhaustive over [1, 4), f64 on 10⁷ samples); no out-of-line call in the inner loops | C3S.2 | Done (T3, PR #43; T4, PR #44): f32 exhaustive / f64 sampled, NEON 1.500 / 1.496 u_T (M3 Max and the CI's Neoverse-N2, identical), AVX2 1.499 / 1.000 u_T (CI, AMD EPYC 7763); no call in any inner loop |
 | C3S.4 | SIMD P2P kernel (NEON, AVX2; potential and gradient; f32, f64) | pair terms within 8 u_T (potential) and 16 u_T (gradient) of `nd_fmm_ref::p2p`; sums within 1e-14 (f64) and 1e-6 (f32) of `direct_sum`; chunk and target-position invariance bit for bit; at least 90% of the spike's throughput | C3S.1, C3S.3 | Done (T5, PR #45): terms over 10⁶ pairs, potential / gradient, NEON 4.56 / 10.35 u (f32) and 4.37 / 9.48 u (f64), AVX2 4.18 / 8.70 u and 3.96 / 7.95 u; sums within requirement 2 as amended in T5 (twice the reference's error where that exceeds 1e-6, f32 with gradients); invariance bit for bit on every ISA; NEON at 96–101% of the spike prototype; AVX2 loops at exactly the operation count of simd-p2p.md §4.2 |
 | C3S.5 | P2P of `LaplaceOperator` through `nd-fmm-simd`, with the reference path selectable | T8 operator check to 1e-13; C3.2 and C3.3 gates pass, within 1% (f64) and 2% (f32) of the reference-P2P errors; bit-identical across threads and between per-pair and batched | C3S.4 | Done (T6, PR #46): operator check 4.4e-16 (bound 1e-13); C3.2 and C3.3 errors equal to the `Reference` run's to the printed digits, outputs within 4.4e-16; bit-identical for 1, 2, 4 and 8 threads and per-pair; `P2pChoice::Auto` the default |
-| C3S.6 | Benchmarks: against `nd_fmm_ref::p2p` and green-kernels, FMM timings, leaf size | report published; target: at least green-kernels' throughput at equal or better accuracy in every FMM-shaped and all-pairs cell on NEON (x86_64 not timed); leaf-size default chosen by the T7 rule | C3S.5 | Done (T7), apart from one condition reported for decision: green-kernels' throughput reached in all 64 cells (1.17× or more), but its sums are more accurate in 57 of them (below). FMM speed-ups and the leaf-size study below; the default stays 64. M3 Max timings only; no x86_64 path was timed |
+| C3S.6 | Benchmarks: against `nd_fmm_ref::p2p` and green-kernels, FMM timings, leaf size | report published; target: at least green-kernels' throughput at equal or better accuracy in every FMM-shaped and all-pairs cell on NEON (x86_64 not timed), accuracy meaning within requirement 2 and 8 / 16 u_T per pair (restated on 2026-10-03); leaf-size default chosen by the T7 rule | C3S.5 | Done (T7): green-kernels' throughput reached in all 64 cells (1.17× or more), at the restated accuracy in all of them; green-kernels' sums are more accurate in 57 (below). FMM speed-ups and the leaf-size study below; the default stays 64. M3 Max timings only; no x86_64 path was timed |
 
 Throughput model per core, from the operation count of the kernel ([simd-p2p.md](simd-p2p.md)
 §4.6; **a model, not a measurement**), in pairs per cycle with gradients: NEON on the M3
@@ -1429,10 +1429,14 @@ cells, all with gradients. Cause, as the spike predicted:
   separately before adding it to the output, so its rounding error grows more slowly.
 - The per-pair terms are within 8 and 16 u_T. Our sum error is within 0.76–1.46× of
   `nd_fmm_ref::p2p`'s on every cell, and both libraries pass requirement 2 on all 64.
-- **For decision:** restate the accuracy condition of C3S.6 as "within requirement 2,
-  per pair within 8 / 16 u_T" (the spike's proposal), or accept the cells as they are.
-  Matching green-kernels' sums would mean giving up in-order summation, and with it
-  the bit-identity of per-pair and batched P2P (C3.1).
+- **Decided on 2026-10-03: the accuracy condition of C3S.6 is restated** as "within
+  requirement 2, and each pair term within 8 / 16 u_T of `nd_fmm_ref::p2p`" (the
+  spike's proposal), which every cell meets. Matching green-kernels' sums would mean
+  giving up in-order summation, and with it the bit-identity of per-pair and batched
+  P2P (C3.1) and across thread counts (C3.5), for a difference at rounding level
+  (at most about 7e-15 in f64 and 3e-6 in f32, relative to the term magnitudes) that
+  no FMM output shows. A compensated or pairwise-summed kernel stays possible as a
+  later opt-in for uses of P2P outside the FMM.
 
 **FMM** (T7, `cargo run --release -p nd-fmm-validate --example p2p_fmm`): the T12
 calibration problems (N = 10⁵, sources equal to targets, `max_level` 16, 64 points per
@@ -1639,7 +1643,7 @@ and identity tests, the second with a one-day spike before Phase 4.
 | SIMD paths not exercised, or x86_64 not timed (Phase 3S) | a fast path that silently breaks on one ISA | every test run prints the ISAs it ran; a CI job for the MPI-free `nd-fmm-simd` on x86_64 and arm64 runners; x86_64 throughput unmeasured, checked by instruction counts ([simd-p2p.md](simd-p2p.md) §7). **Retired for correctness by Phase 3S**: every CI run tests scalar and AVX2 on x86_64 (an AMD EPYC 7763 in the T4 and T5 runs) and scalar and NEON on arm64 (Neoverse-N2), with the release accuracy tests, and `nd-fmm-exec`'s debug tests run the FMM with AVX2 there. **Open for speed**: no x86_64 path was timed; the AVX2 inner loops hold exactly the FP operations of the model and no call (T5) |
 | Unsafe intrinsic code, and estimates that differ between CPUs (Phase 3S) | undefined behaviour; results outside the accuracy contract on some machine | `unsafe` only in `nd-fmm-simd`'s architecture modules, each block justified; ISA checked at construction; the 4 u_T contract tested exhaustively in f32 on every machine used (simd-p2p.md §5.4, §5.5). **Retired as far as measured**: `unsafe` is confined to `arch` and its dispatch, behind ISA tokens, with no `unsafe` in `nd-fmm-exec`. NEON's FSQRT and FDIV are correctly rounded and give identical bits on the M3 Max and the Neoverse-N2 (1.50 u_T). AVX2's `vrsqrtps` route measures 1.499 / 1.000 u_T on AMD Zen 3; no Intel CPU has run it, so a vendor difference stays possible within the contract |
 | A faster P2P moves the best leaf size (Phase 3S) | the default of 64 no longer fits | **Measured in T7** (Section 7, Phase 3S): at p = 8 the best size moves to 256, at p = 3 it stays at 64; by the rule fixed in advance the default stays 64 (128 is 3.1% faster overall, below the 5% threshold). M3 Max only |
-| The SIMD kernel's sums less accurate than green-kernels' (Phase 3S) | the accuracy condition of C3S.6 fails | **Realised (T7)**: green-kernels' largest error is smaller in 57 of 64 cells (up to 12×), from its W partial sums; ours equals the reference's error level, which in-order summation and the C3.1 identity require. Within requirement 2 everywhere. Reported for decision (Section 7, Phase 3S) |
+| The SIMD kernel's sums less accurate than green-kernels' (Phase 3S) | the accuracy condition of C3S.6 fails | **Realised (T7)**: green-kernels' largest error is smaller in 57 of 64 cells (up to 12×), from its W partial sums; ours equals the reference's error level, which in-order summation and the C3.1 identity require. Within requirement 2 everywhere. **Accepted** (2026-10-03): the C3S.6 condition is restated as requirement 2 and 8 / 16 u_T per pair (Section 7, Phase 3S) |
 | MPI required by every crate above the tables | tests need an MPI runtime; MPI can be initialised once per test executable | keep `fmm-math`, `fmm-ref` and `fmm-tables` MPI-free; follow the one-MPI-test-per-executable rule of the existing crates |
 
 ### 9.2 Open questions
@@ -1697,9 +1701,9 @@ and identity tests, the second with a one-day spike before Phase 4.
   - *Still open:* x86_64 timings, including the green-kernels comparison there, until an
     x86_64 machine is available. `p2p_kernels`, `compare` and `p2p_fmm` run there
     unchanged.
-  - *New in T7, for decision:* the accuracy condition of C3S.6 against green-kernels'
-    sums, which in-order summation cannot meet (Section 7, Phase 3S); the proposal is
-    "within requirement 2, per pair within 8 / 16 u_T".
+  - *Answered on 2026-10-03:* the accuracy condition of C3S.6 against green-kernels'
+    sums, which in-order summation cannot meet, is restated as "within requirement 2,
+    per pair within 8 / 16 u_T" (Section 7, Phase 3S).
   - *New in T7:* the best leaf size depends on p on the M3 Max (64 at p = 3, 256 at
     p = 8). Should the default depend on p, or be tuned per machine like the M2L
     strategy (C4.7)?

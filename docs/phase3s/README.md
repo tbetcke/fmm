@@ -217,7 +217,10 @@ These hold for every task, so that no task decides them on its own:
   green-kernels, with accuracy. The performance target: on NEON the default kernel
   reaches at least green-kernels' throughput, at equal or better accuracy, in every cell
   of the FMM-shaped (both forms) and all-pairs workloads. A cell below it is analysed
-  (operation count, disassembly) and reported for a decision, not hidden. The report
+  (operation count, disassembly) and reported for a decision, not hidden. *Decided on
+  2026-10-03 (decision 8):* "equal or better accuracy" means within requirement 2
+  (design §3), with each pair term within 8 u_T (potential) and 16 u_T (gradient) of
+  `nd_fmm_ref::p2p`; not a smaller sum error than green-kernels'. The report
   also gives the FMM speed-ups on the M3 Max, the leaf-size recommendation as adopted,
   and states that no x86_64 path was timed.
 
@@ -278,12 +281,16 @@ checklist when made:
    on M3 Max timings.
 7. AVX-512. **Decided on 2026-10-02: deferred** until hardware to test and time it is
    available; Phase 3S ships NEON, AVX2 + FMA and scalar.
-8. The accuracy condition of C3S.6 (raised in T7; **open**). The default kernel beats
+8. The accuracy condition of C3S.6 (raised in T7). The default kernel beats
    green-kernels' throughput in all 64 cells, but green-kernels' sums are more accurate
    in 57 of them: it adds W partial sums, the kernel adds in source order
-   (requirement 4, the C3.1 identity). Both pass requirement 2 everywhere. Proposed:
-   "within requirement 2, per pair within 8 / 16 u_T" (laplace-fmm-plan.md §7,
-   Phase 3S).
+   (requirement 4, the C3.1 identity). Both pass requirement 2 everywhere.
+   **Decided on 2026-10-03: the condition is restated** as "within requirement 2, and
+   each pair term within 8 / 16 u_T of `nd_fmm_ref::p2p`", which the kernel meets in
+   every cell. In-order summation stays: it carries the bit-identities of C3.1 and
+   C3.5, and the sum error it adds is at rounding level, far below the FMM's own
+   error. A compensated or pairwise-summed kernel could be added later as an opt-in if
+   a use of P2P outside the FMM needs it (laplace-fmm-plan.md §7, Phase 3S).
 
 ## Risks
 

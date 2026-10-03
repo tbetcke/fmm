@@ -40,6 +40,7 @@ Decisions as taken:
 | sum tolerance (Section 3, requirement 2) | within 1e-6 / 1e-14, or twice the reference's error where that is larger | T5, decided 2026-10-03 |
 | gathered calls in `LaplaceOperator` (Section 6) | not adopted; one call per source leaf | T6: leaf-stage gain 1–6%, one cell above 5% in one of two runs |
 | default leaf size | 64, unchanged | T7: the rule of the brief; 128 is 3.1% faster by its measure, below 5% |
+| C3S.6 accuracy against green-kernels | restated as requirement 2 and 8 / 16 u_T per pair; in-order summation kept | T7: green-kernels' partial sums are more accurate in 57 of 64 cells; ours within 0.76–1.46× of the reference's; decided 2026-10-03 |
 
 Measured, against Section 3:
 
@@ -56,8 +57,8 @@ Measured, against Section 3:
   cells, Gpairs/s): NEON 4.03 (f32 φ), 2.61 (f32 φ, ∇φ), 2.14 (f64 φ), 1.22 (f64 φ,
   ∇φ); 7.4×, 8.3×, 4.4× and 4.0× `nd_fmm_ref::p2p`; 1.35×, 1.22×, 1.73× and 1.37×
   green-kernels. Every one of the 64 cells of W1 and W2 is at least 1.17× green-kernels.
-  green-kernels' sums are more accurate in 57 of them (its W partial sums), which is
-  reported for decision (laplace-fmm-plan.md §7, Phase 3S).
+  green-kernels' sums are more accurate in 57 of them (its W partial sums); the C3S.6
+  accuracy condition is therefore restated (decided 2026-10-03; Section 9, question 8).
 - In the FMM (T7, one thread): a 1.4–2.5× faster evaluation at p = 3 and 1.05–1.2× at
   p = 8 on the uniform cube and the Plummer sphere.
 
@@ -230,6 +231,10 @@ with reasons, for sign-off.
    `nd-fmm-exec` stays free of `unsafe`.
 10. **Measured, not asserted.** No test asserts a throughput. Examples and the spike
     report it, against `nd_fmm_ref::p2p` and green-kernels, together with accuracy.
+    *Decided on 2026-10-03 (T7):* "at equal or better accuracy" than green-kernels
+    (C3S.6) means within requirement 2, with each pair term within 8 / 16 u_T of
+    `nd_fmm_ref::p2p`. In-order summation (requirement 4) does not match green-kernels'
+    partial sums, and is kept for the bit-identities it carries.
 
 ## 4. Kernel design
 
@@ -778,9 +783,11 @@ Questions for sign-off (Phase 3S README, "Decisions to sign off"):
 7. AVX-512. *Decided 2026-10-02: deferred until hardware is available (Section 4.7).*
 8. *New in T7:* the accuracy condition of C3S.6. The kernel is faster than green-kernels
    in every cell, but green-kernels' sums are more accurate in 57 of 64 cells, because
-   it adds W partial sums where the kernel adds in source order (requirement 4). For
-   decision: restate the condition as "within requirement 2, per pair within 8 / 16
-   u_T", as the spike proposed, or accept the cells as reported.
+   it adds W partial sums where the kernel adds in source order (requirement 4).
+   *Decided on 2026-10-03:* the condition is restated as "within requirement 2, per
+   pair within 8 / 16 u_T", as the spike proposed (Section 3, requirement 10). A
+   compensated or pairwise-summed kernel could follow as an opt-in if a use of P2P
+   outside the FMM needs it.
 
 ## 10. References
 
