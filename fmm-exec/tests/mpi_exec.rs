@@ -155,8 +155,8 @@
 //!   it (the others return `OtherRank`: the check rides on step 1's agreement); with the
 //!   CPU runtime, `threads(4)` builds no rayon pool and caps the units per cube at 4
 //!   (device-path.md §11), with the output of one unit bit for bit and within 1e-12 of
-//!   the host's; the cube layout of the leaf operators (8 units, tiles of 4 points)
-//!   within 1e-12 of the host's too; `synchronous_stages` adds seven syncs (after the
+//!   the host's; the cube layout of the leaf operators (up to 8 units, one per core,
+//!   tiles of up to 4 points) within 1e-12 of the host's too; `synchronous_stages` adds seven syncs (after the
 //!   charge upload and each stage) and changes no bit; on several ranks a device build with
 //!   points other ranks own returns `PointsNotOwned`, which wins over
 //!   `DeviceNeedsOneRank`, and one with points every rank owns (each rank passing its
@@ -2214,18 +2214,20 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
                     "one unit against four"
                 );
                 // The cube layout of the leaf operators (T7; correctness only on the CPU
-                // runtime): within the FMM bound of the host output too.
+                // runtime, which allows one unit per core): within the FMM bound of the
+                // host output too.
+                let units = std::thread::available_parallelism()
+                    .map_or(1, |n| n.get() as u32)
+                    .min(8);
+                let tile = units.min(4);
                 let mut cube = builder
                     .clone()
-                    .device_leaf_layout(nd_fmm_exec::fmm::DeviceLeafLayout::Cube {
-                        units: 8,
-                        tile: 4,
-                    })
+                    .device_leaf_layout(nd_fmm_exec::fmm::DeviceLeafLayout::Cube { units, tile })
                     .build(&points, &points, comm)
                     .expect("one rank");
                 assert_eq!(
                     cube.device_report().unwrap().leaf_layout.to_string(),
-                    "cube (8 units, tile 4)"
+                    format!("cube ({units} units, tile {tile})")
                 );
                 let (potential, _) =
                     device_common::relative_l2(&cube.evaluate(&charges).unwrap(), &host_output);

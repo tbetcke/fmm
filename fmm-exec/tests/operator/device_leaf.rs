@@ -889,7 +889,12 @@ fn report<T: Real>(cells: &Cells, layout: LeafLayout) {
 fn check_precision<T: Real>(device: &mut Device) {
     let mut layouts = vec![LeafLayout::default_for(device.info(), 8, T::FLOAT)];
     if device.backend() == BackendKind::Cpu {
-        layouts.push(LeafLayout::Cube { units: 8, tile: 4 });
+        // At most one unit per core on the CPU runtime.
+        let units = device.info().max_units_per_cube.clamp(1, 8);
+        layouts.push(LeafLayout::Cube {
+            units,
+            tile: units.min(4),
+        });
     }
     for layout in layouts {
         let mut cells = Cells::new();
