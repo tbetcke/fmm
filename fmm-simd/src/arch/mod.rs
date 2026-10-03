@@ -8,14 +8,18 @@
 //! - `neon` (aarch64): `float32x4_t` and `float64x2_t`;
 //! - `avx2` (x86_64): `__m256` and `__m256d`.
 //!
-//! Code that runs on vectors is written once, generic over [`Simd`] (here
-//! [`rsqrt_body`]; the P2P kernel body of Phase 3S T5), and instantiated inside one
-//! `#[target_feature]` entry point per ISA and precision, so that the layer methods,
-//! all `#[inline(always)]`, and their intrinsics inline into a function that has the
-//! features. [`rsqrt_slice_f32`] and [`rsqrt_slice_f64`] dispatch to the entry points.
+//! Code that runs on vectors is written once, generic over [`Simd`]
+//! ([`rsqrt_body`] and the P2P kernel body [`p2p::p2p_body`]), and instantiated inside
+//! one `#[target_feature]` entry point per ISA, precision and, for P2P, output, so
+//! that the layer methods, all `#[inline(always)]`, and their intrinsics inline into a
+//! function that has the features. [`rsqrt_slice_f32`] and [`rsqrt_slice_f64`]
+//! dispatch to the inverse-square-root entry points, [`p2p_f32`] and [`p2p_f64`] to
+//! the P2P ones.
 //!
-//! [`P2pKernel::evaluate`](crate::P2pKernel::evaluate) still calls the scalar P2P path
-//! ([`scalar::p2p`]) on every ISA; the vector kernel of T5 replaces it.
+//! The scalar ISA runs P2P by the plain loop [`scalar::p2p`], which equals
+//! `nd_fmm_ref::p2p::p2p` bit for bit wherever r² ≠ 0, not by the generic body at
+//! W = 1: that body forms r² with fma and the gradient term as (q ρ) ρ² d, so it
+//! rounds differently. The tests run the generic body on the scalar layer as well.
 //!
 //! # Unsafe
 //!
@@ -31,6 +35,7 @@
 pub(crate) mod avx2;
 #[cfg(target_arch = "aarch64")]
 pub(crate) mod neon;
+pub(crate) mod p2p;
 pub(crate) mod scalar;
 #[cfg(test)]
 mod tests;
@@ -53,11 +58,6 @@ pub(crate) const MAX_LANES: usize = 8;
 /// Every method is `#[inline(always)]` in every implementation: a method that is not
 /// inlined turns its intrinsic into an out-of-line call (crate `CLAUDE.md`, "Inlining
 /// check").
-#[allow(
-    dead_code,
-    reason = "the P2P kernel body of Phase 3S T5 uses the arithmetic, the block \
-              helpers and the estimate; until then only the tests call them"
-)]
 pub(crate) trait Simd<T: SimdScalar>: Copy {
     /// A vector of [`Self::W`] lanes of `T`.
     type V: Copy;
@@ -66,6 +66,10 @@ pub(crate) trait Simd<T: SimdScalar>: Copy {
     /// The number of lanes, [`Isa::lanes`] of [`Self::ISA`].
     const W: usize;
     /// The ISA.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "names the ISA in the tests' messages")
+    )]
     const ISA: Isa;
 
     /// Every lane equal to `x`.
@@ -101,6 +105,10 @@ pub(crate) trait Simd<T: SimdScalar>: Copy {
     /// `vrsqrtps` (at most 1.5 · 2⁻¹², documented) on AVX2, through f32 for f64; on
     /// the scalar path 1/√x itself. Not the kernel's inverse square root; see
     /// [`Self::rsqrt`].
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "a reference for the tests; no kernel uses it")
+    )]
     fn rsqrt_estimate(self, x: Self::V) -> Self::V;
     /// The kernel's inverse square root, 1/√x within 4 u_T relative on the kernel
     /// domain 2⁻¹⁰⁸ ≤ x ≤ 2⁷ (CONVENTIONS §3.13; design §4.3), in the formulation
@@ -198,3 +206,77 @@ macro_rules! rsqrt_dispatch {
 
 rsqrt_dispatch!(rsqrt_slice_f32, f32, rsqrt_slice_f32);
 rsqrt_dispatch!(rsqrt_slice_f64, f64, rsqrt_slice_f64);
+
+/// An [`Isa`] that this machine can run: the proof that makes the dispatch to the
+/// `#[target_feature]` P2P entry points sound.
+///
+/// [`AvailableIsa::new`] checks [`Isa::is_available`] once, so that
+/// [`P2pKernel`](crate::P2pKernel), which holds one, dispatches every call without
+/// checking again (docs/design/simd-p2p.md §5.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AvailableIsa(Isa);
+
+impl AvailableIsa {
+    /// `isa`, if this machine can run it.
+    pub(crate) fn new(isa: Isa) -> Result<Self, IsaUnavailable> {
+        if isa.is_available() {
+            Ok(Self(isa))
+        } else {
+            Err(IsaUnavailable { isa })
+        }
+    }
+
+    /// The ISA.
+    pub(crate) fn isa(self) -> Isa {
+        self.0
+    }
+}
+
+/// Generates the dispatch of the P2P entry points for one precision.
+macro_rules! p2p_dispatch {
+    ($name:ident, $t:ty, $potential:ident, $gradient:ident) => {
+        /// P2P on `isa` ([`P2pKernel::evaluate`](crate::P2pKernel::evaluate)) in the
+        /// precision of its name, with lengths already checked by the caller.
+        pub(crate) fn $name(
+            isa: AvailableIsa,
+            sources: &[[$t; 3]],
+            charges: &[$t],
+            targets: &[[$t; 3]],
+            potential: &mut [$t],
+            gradient: Option<&mut [[$t; 3]]>,
+        ) {
+            match (isa.0, gradient) {
+                (Isa::Scalar, gradient) => {
+                    scalar::p2p(sources, charges, targets, potential, gradient)
+                }
+                #[cfg(target_arch = "aarch64")]
+                // SAFETY: `isa` is available (`AvailableIsa`), so the CPU has NEON, the
+                // feature the entry point enables.
+                (Isa::Neon, None) => unsafe {
+                    neon::$potential(sources, charges, targets, potential)
+                },
+                #[cfg(target_arch = "aarch64")]
+                // SAFETY: as above.
+                (Isa::Neon, Some(gradient)) => unsafe {
+                    neon::$gradient(sources, charges, targets, potential, gradient)
+                },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: `isa` is available (`AvailableIsa`), so the CPU has AVX2 and
+                // FMA, the features the entry point enables.
+                (Isa::Avx2, None) => unsafe {
+                    avx2::$potential(sources, charges, targets, potential)
+                },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: as above.
+                (Isa::Avx2, Some(gradient)) => unsafe {
+                    avx2::$gradient(sources, charges, targets, potential, gradient)
+                },
+                // The ISAs of other architectures, which are never available.
+                (isa, _) => unreachable!("`{isa}` is not available on this machine"),
+            }
+        }
+    };
+}
+
+p2p_dispatch!(p2p_f32, f32, p2p_f32, p2p_f32_gradient);
+p2p_dispatch!(p2p_f64, f64, p2p_f64, p2p_f64_gradient);

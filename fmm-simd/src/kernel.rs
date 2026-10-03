@@ -2,7 +2,8 @@
 
 use std::marker::PhantomData;
 
-use crate::{Isa, IsaUnavailable, SimdScalar, arch};
+use crate::arch::AvailableIsa;
+use crate::{Isa, IsaUnavailable, SimdScalar};
 
 /// A P2P kernel bound to one available [`Isa`].
 ///
@@ -11,8 +12,8 @@ use crate::{Isa, IsaUnavailable, SimdScalar, arch};
 /// stateless: it is `Copy`, `Send` and `Sync`, and one value can serve any number of
 /// threads.
 ///
-/// In this version every ISA runs the scalar path; the NEON and AVX2 vector kernels
-/// follow in Phase 3S T5.
+/// On [`Isa::Neon`] and [`Isa::Avx2`] it runs the vector kernel (crate documentation,
+/// "The kernel"), on [`Isa::Scalar`] the reference's loop.
 ///
 /// ```
 /// use nd_fmm_simd::{Isa, P2pKernel};
@@ -30,7 +31,7 @@ use crate::{Isa, IsaUnavailable, SimdScalar, arch};
 #[derive(Clone, Copy, Debug)]
 pub struct P2pKernel<T: SimdScalar> {
     /// The ISA, checked to be available by every constructor.
-    isa: Isa,
+    isa: AvailableIsa,
     /// The precision.
     precision: PhantomData<T>,
 }
@@ -42,27 +43,20 @@ impl<T: SimdScalar> P2pKernel<T> {
     ///
     /// [`IsaUnavailable`] if this machine cannot run `isa` ([`Isa::is_available`]).
     pub fn new(isa: Isa) -> Result<Self, IsaUnavailable> {
-        if isa.is_available() {
-            Ok(Self {
-                isa,
-                precision: PhantomData,
-            })
-        } else {
-            Err(IsaUnavailable { isa })
-        }
+        Ok(Self {
+            isa: AvailableIsa::new(isa)?,
+            precision: PhantomData,
+        })
     }
 
     /// The kernel on the widest available ISA, [`Isa::detect`].
     pub fn detect() -> Self {
-        Self {
-            isa: Isa::detect(),
-            precision: PhantomData,
-        }
+        Self::new(Isa::detect()).expect("`Isa::detect` returns an available ISA")
     }
 
     /// The ISA the kernel runs on.
     pub fn isa(&self) -> Isa {
-        self.isa
+        self.isa.isa()
     }
 
     /// P2P: adds the potential of point charges, and optionally its gradient, at each
@@ -72,11 +66,27 @@ impl<T: SimdScalar> P2pKernel<T> {
     ///
     /// φᵢ ← φᵢ + qⱼ / |xᵢ − yⱼ|,  ∇φᵢ ← ∇φᵢ − qⱼ (xᵢ − yⱼ) / |xᵢ − yⱼ|³,
     ///
-    /// without the factor 1/(4π). Each target adds its sources in input order,
-    /// starting from the value already in `potential` and `gradient`; `gradient`, if
-    /// given, holds ∂x, ∂y, ∂z per target. A pair with r² = 0 contributes nothing
-    /// (CONVENTIONS §3.13, "Fast kernels"). The kernel neither allocates nor spawns
-    /// threads, and writes only into `potential` and `gradient`.
+    /// without the factor 1/(4π); `gradient`, if given, holds ∂x, ∂y, ∂z per target.
+    /// The kernel neither allocates nor spawns threads, and writes only into
+    /// `potential` and `gradient`.
+    ///
+    /// - **Coincident pairs.** A pair with r² = 0 contributes nothing (CONVENTIONS
+    ///   §3.13, "Fast kernels"); the reference skips xᵢ == yⱼ instead. The rules agree
+    ///   on leaf-scaled data. On the vector paths a skipped pair adds a zero, which can
+    ///   turn an output of −0 into +0.
+    /// - **Order.** Each target adds its sources in input order, starting from the value
+    ///   already in `potential` and `gradient`. So evaluating sources `[..k]` and then
+    ///   `[k..]` gives the bits of evaluating all of them at once, and a target's result
+    ///   does not depend on its position in `targets` or on how many targets there are.
+    /// - **Accuracy.** For pairs in the kernel domain, r² = 0 or 2⁻¹⁰⁸ ≤ r² ≤ 2⁷
+    ///   (CONVENTIONS §3.13), each potential term is within 8 u_T of the reference's
+    ///   term, relative, and each gradient component within 16 u_T relative to
+    ///   |qⱼ| / r², with u_T = 2⁻²⁴ (f32) or 2⁻⁵³ (f64). In f32 the gradient contract
+    ///   holds for 2⁻⁸⁴ ≤ r² ≤ 2⁷ and |qⱼ| ≤ 1. Outside the domain the result is
+    ///   unspecified. The terms are added without compensation, like the reference's.
+    /// - **ISAs.** The results are deterministic for one machine, ISA and build, and
+    ///   differ between ISAs, and from the reference, within the accuracy above; on
+    ///   [`Isa::Scalar`] they equal the reference's bit for bit wherever r² ≠ 0.
     ///
     /// # Panics
     ///
@@ -96,15 +106,7 @@ impl<T: SimdScalar> P2pKernel<T> {
         if let Some(gradient) = gradient.as_deref() {
             check_pair(targets.len(), gradient.len(), "targets", "gradient");
         }
-        match self.isa {
-            Isa::Scalar => arch::scalar::p2p(sources, charges, targets, potential, gradient),
-            #[cfg(target_arch = "aarch64")]
-            Isa::Neon => arch::neon::p2p(sources, charges, targets, potential, gradient),
-            #[cfg(target_arch = "x86_64")]
-            Isa::Avx2 => arch::avx2::p2p(sources, charges, targets, potential, gradient),
-            // The ISAs of other architectures, which no constructor admits.
-            _ => unreachable!("`{}` is not available on this machine", self.isa),
-        }
+        T::p2p(self.isa, sources, charges, targets, potential, gradient);
     }
 }
 

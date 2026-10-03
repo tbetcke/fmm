@@ -156,7 +156,11 @@ with reasons, for sign-off.
    |q| / r². Here u_T is the unit roundoff (2⁻²⁴ for f32, 2⁻⁵³ for f64). Sums agree
    with `direct_sum` to 1e-14 (f64) and 1e-6 (f32) relative to the sum of term
    magnitudes, for up to 4,096 sources (the tolerance of `nd_fmm_ref::p2p` itself in
-   Phase 1 T4).
+   Phase 1 T4). *Decided on 2026-10-03 (T5):* where `nd_fmm_ref::p2p` itself exceeds
+   that tolerance on the same inputs, the sum passes within twice the reference's
+   error. In-order summation (requirement 4) puts f32 sums with gradients above 1e-6 on
+   some FMM-shaped sets of 44 or more points per leaf (1,188 or more sources), for the
+   reference as for the kernel; the f32 terms summed in f64 stay below 1e-7.
 3. **Coincident pairs.** A pair contributes nothing exactly when r² = 0 (Section 4.4).
    On leaf-scaled data this is the rule of §3.13.
 4. **Order.** Each target adds its sources in input order, starting from the value

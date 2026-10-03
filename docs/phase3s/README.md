@@ -196,7 +196,10 @@ These hold for every task, so that no task decides them on its own:
 - C3S.4: on every ISA run, in f32 and f64, with and without gradients:
   - pair terms within 8 u_T (potential) and 16 u_T (gradient) of `nd_fmm_ref::p2p`;
   - sums within 1e-14 (f64) and 1e-6 (f32) of `direct_sum`, relative to term
-    magnitudes, for up to 4,096 sources;
+    magnitudes, for up to 4,096 sources, or within twice the error of
+    `nd_fmm_ref::p2p` on the same inputs where that is larger (decided on 2026-10-03
+    in T5: in-order f32 sums with gradients exceed 1e-6 on some FMM-shaped sets, for
+    the reference too);
   - coincident, empty and accumulating inputs as the reference;
   - chunk and target-position invariance bit for bit;
   - on NEON, at least 90% of the spike prototype's throughput on the gathered

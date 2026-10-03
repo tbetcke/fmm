@@ -41,7 +41,10 @@ Phase and components: Phase 3S, C3S.3 and C3S.4 (tasks T3–T5 in docs/phase3s/)
   slower. From T4 on, inspect the release disassembly of each entry point's inner loop
   and report its instruction count and that it contains no call. The entry points
   are `#[inline(never)]`, so they keep their names (`nd_fmm_simd::arch::neon::
-  rsqrt_slice_f32`, `…::avx2::rsqrt_slice_f64`, …). From the repository root:
+  rsqrt_slice_f32`, `…::avx2::rsqrt_slice_f64`, `…::neon::p2p_f32`,
+  `…::avx2::p2p_f64_gradient`, …). A P2P entry point has one source loop per block
+  size it runs (K, K/2, …, 1, and the padded tail); the source loops are the
+  innermost loops that contain the inverse square root. From the repository root:
 
   ```sh
   # Build the release test binaries; cargo prints their paths ("Executable ...").
