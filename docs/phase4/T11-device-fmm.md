@@ -4,8 +4,8 @@ After T6–T10 every operator kind has a device kernel. This task makes the devi
 what the design promises:
 - every kind on the device by default;
 - data resident for the whole evaluation;
-- many launches per sync, and one sync per evaluation if the design achieves it;
-- the small top levels handled as the design decides.
+- many launches per sync, and one sync per evaluation (device-path.md §8.2);
+- the small top levels on the device (device-path.md §6.7).
 
 Then it runs the phase's accuracy gate: the GPU result equals the CPU FMM. C4.8 is new
 in Phase 4. Design §7 lists C4.1–C4.7 as kernels and infrastructure, but the gate "GPU
@@ -15,7 +15,7 @@ Read first:
 - root CLAUDE.md, fmm-kernels/CLAUDE.md, fmm-exec/CLAUDE.md;
 - docs/phase4/README.md ("Requirements", "Accuracy measures", "Workloads", "Exit gate"
   C4.8);
-- docs/design/device-path.md, signed off: sections 4, 7, 8 and 9;
+- docs/design/device-path.md, signed off: sections 4, 6.7, 7, 8 and 9;
 - docs/design/laplace-fmm-plan.md §6.5 (batching, launch overhead, top levels) and §7
   ("Recommendation for Phase 4": the workloads and expected errors);
 - docs/phase3/README.md ("Error measures", "Predictions", the C3.2 and C3.3 gates);
@@ -31,14 +31,22 @@ Do:
   - queue every level call's launches without intermediate syncs, so that an
     evaluation syncs only where the design requires (the target is once, at the
     download of the output);
-  - the policy for top levels with few boxes (merged launches, or a fixed host
-    fallback for levels below a threshold), fixed at build and reported;
+  - the top levels stay on the device: a host fallback there costs at least one sync,
+    more than it saves (device-path.md §6.7). Optional: one grouped M2L GEMM over every
+    level's V batches at the first `m2l` call, and each level's reduction after its
+    L2L, which leaves the output bit-identical; adopt it only if the per-level launches
+    measure as significant;
   - count launches and syncs per evaluation, and expose them beside the transfers.
 - **Transfers at the minimum**: per evaluation, the charges up and the output down,
   plus whatever else the design's formula states. Check that no fallback transfer
   remains in the default configuration.
 - **Stage timings** on the device as the design specifies, without adding syncs to
-  normal evaluations. A synchronised reporting mode is opt-in.
+  normal evaluations (device-path.md §8.3): device timestamps, one profile window per
+  stage, resolved after the download, where the backend times on the device. Adopt
+  them only after checking that they add no sync and do not change the output;
+  otherwise T5's `synchronous_stages` stays the only stage timing, opt-in. On the CPU
+  runtime a profile window drains the stream, so there it behaves as the synchronous
+  mode (device-path.md F10, §8.2).
 - `nd-fmm-validate`: `fmm_accuracy` (and `calibrate`, where useful) accepts
   `--backend host|cpu|metal` (under the `gpu` features), and prints the backend and
   device, the kinds on the device, the resolved strategies and GEMMs, and transfers,
@@ -53,8 +61,8 @@ Tests that define done (each prints the backends it ran):
     f32, φ and ∇φ);
   - bit-identical across two evaluations and across two `Fmm` builds of the same
     input;
-  - transfers per evaluation equal to the design's minimum; syncs per evaluation as
-    designed.
+  - transfers per evaluation equal to the design's minimum; one sync per evaluation
+    (device-path.md §8.1, §8.2).
 - **The C4.8 gate** (ignored release tests, in `tests/accuracy.rs` and
   `tests/adaptive.rs` or a new executable with its own single MPI test). On the uniform
   cube and the Plummer sphere (N = 10⁵, `max_level` 16, 64 points per leaf, eight
@@ -83,7 +91,8 @@ Must pass:
 - clippy on the three crates, without features and with `--features cpu,metal`;
   `cargo check -p nd-fmm-exec --features cuda`; `cargo doc` without warnings;
 - `tests/mpi_exec.rs` with `--features cpu` on 2 ranks, by hand, under an external
-  timeout;
+  timeout: each device scenario stops with an agreed `PointsNotOwned` or
+  `DeviceNeedsOneRank` (device-path.md §4.4);
 - the CPU-runtime CI job, if kept; the root checks and the stricter workspace checks.
 
 Report:

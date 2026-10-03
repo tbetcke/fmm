@@ -1,10 +1,11 @@
 # Phase 4 / T9 — dense M2L on the device (C4.5)
 
-The step that sets the budget at p ≥ 8: about 189 translations per box. For each level
-and each of the 316 V-list offsets:
-- gather the batch's source multipoles;
-- multiply by the offset's table with one GEMM;
-- scatter-add into the batch's target locals.
+The step that sets the budget at p ≥ 8: about 189 translations per box. For each
+level, over the batches of the 316 V-list offsets, T8's grouped translation (structure
+(B) of device-path.md §6.4):
+- gather the batches' source multipoles in batch order;
+- multiply each offset's columns by its table in one grouped GEMM per offset chunk;
+- add the products into each target's local, in row order, by a reduction.
 
 Each target appears at most once per offset, so a batch needs no atomics. Offsets are
 added in index order, which is the order of every V row. The GEMM is the library matmul
@@ -28,9 +29,14 @@ Read first:
 
 Do:
 - **Dense M2L level call** in `nd-fmm-kernels`, with the launch structure the design
-  chose. By default, per offset in index order on one stream: gather, GEMM, scatter-add.
-  A grouped or stacked variant that the design chose instead must keep each target's
-  offsets in index order and stay conflict-free (requirements 4 and 5).
+  chose: (B) of device-path.md §6.4, through T8's `translate::grouped`.
+  - The offsets in chunks of contiguous groups whose gathered inputs and products fit
+    in the scratch budget S_scr (default 128 MB, a model; measure it), run in ascending
+    offset order; per chunk a gather in batch order, one grouped GEMM and a reduction
+    that adds each target's entries in row order, so each target meets its offsets in
+    index order (requirements 4 and 5).
+  - Keep (A), one gather, GEMM and scatter-add per offset in index order, as the test
+    reference.
   - Batches with zero pairs are skipped.
   - Many launches are queued per sync.
 - **GEMM choice per (precision, p)**, explicit and fixed at construction:
@@ -45,15 +51,19 @@ Do:
   **Input precision guard** (README, "M2L strategies"): the library path is allowed only
   for a strategy whose inputs are multiplied in T, never one that rounds f32 to TF32,
   F16 or BF16 (CUDA's only MMA input types in CubeCL). Check this from the strategy's
-  configuration (its input and compute types), not from the backend's name. Where it
-  cannot be established, the hand-written kernel runs. Document the check, and add a
-  test that a strategy with a lower input precision is rejected for f32.
+  resolved `MatmulElems` (its input and compute types; device-path.md §6.5), not from
+  the backend's name. Where it cannot be established, the hand-written kernel runs.
+  Document the check, and add a test that a strategy with a lower input precision is
+  rejected for f32.
 - **Tables**: the 316 dense tables (`M2lTables`) uploaded once per `Fmm`, through
-  `table_cache` when given; the memory per p and precision stated. `Classes` on the
-  device as the design decided: run as `Dense` from `M2lClasses::expand`, or refused
-  with `SettingsError`.
-- The device operator runs M2L on the device by default for `Dense`; the host fallback
-  stays selectable. For `Rotation`, M2L stays on the host fallback until T10.
+  `table_cache` when given; the memory per p and precision stated. `Classes` runs as
+  `Dense` on the device: the 316 tables from `M2lClasses::expand()`, uploaded once and
+  then dropped on the host, which keeps its class tables for the fallback;
+  `DeviceReport` names the strategy "Classes, run as dense on the device"
+  (device-path.md §6.8).
+- The device operator runs M2L on the device by default for `Dense` and `Classes`; the
+  host fallback stays selectable. For `Rotation`, M2L stays on the host fallback until
+  T10.
 - **Profiling and efficiency**, on Metal f32, reported only:
   - the GEMM alone: GFLOP/s and % of peak per level and offset-batch size (k) for the
     C3.2 cube and the Plummer sphere at p = 3 and 8, and at p = 12 and 16 in f32 for
@@ -61,7 +71,7 @@ Do:
   - against the spike at the same (p, k): the gate is at least 80% of the spike's
     throughput where the batch sizes match the spike's B (10³, 10⁴, 10⁵), GEMM only.
     Below that: analyse it (occupancy, layout, launch overhead) and report;
-  - gather and scatter time, and launches per level;
+  - gather and reduction time, and launches per level;
   - the whole M2L stage time on the device against the host M2L at 1 and 12 threads.
 
 Tests that define done (CPU runtime f32 and f64, hand-written kernel only, small shapes;
@@ -71,11 +81,14 @@ it ran):
   of a dyadic domain, the device M2L against `nd_fmm_ref::direct` at the canonical
   frames:
   - f64, CPU runtime, p ≤ 20: within 1e-14 relative to the term magnitudes, per degree
-    in the §3.8 weighting for locals (Nₘ/Sₘ);
+    in the §3.8 weighting for locals (Nₘ/Sₘ), or within twice the host operator's
+    measured error on the same cell, whichever is larger (device-path.md §2);
   - f32, p ≤ 8: within 1e-5 against f64, with both GEMMs on Metal.
 - Batches: a level call equals applying each target's V row in offset order on the
-  host, within the GEMM tolerance of T8. Each target is written once per offset, and
-  ghost rows stay zero.
+  host, within the GEMM tolerance of T8. Each target gets every entry of its row once,
+  and ghost rows stay zero.
+- Grouped against per-offset: a level call in structure (B) equals (A), bit for bit
+  with the same GEMM (device-path.md §6.4).
 - The library and the hand-written GEMM agree within the GEMM tolerance on the same
   batches (Metal, f32, p = 8).
 - Determinism: repeated level calls bit-identical, with both GEMMs. This confirms

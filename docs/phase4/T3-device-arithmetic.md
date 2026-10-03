@@ -33,8 +33,9 @@ Read first:
   spikes/p2p-simd/SPIKE_REPORT.md (loop order, K, the corrected throughput model);
   `nd_fmm_simd::P2pKernel`; `nd_fmm_validate::p2p_kernels` (workloads and timing
   conventions); and the 0.11.0-pre.4 CPU runtime: `cubecl-cpu`'s
-  `compute/threadpool/` (one thread per unit) and `cubecl-llvm`'s `cpu/entrypoint.rs`
-  (the loop over cubes) and `cpu/jit/engine.rs` (the O3 pipeline);
+  `compute/threadpool/` (one task per unit on a pool of one worker per core) and
+  `cubecl-llvm`'s `cpu/entrypoint.rs` (the loop over cubes) and `cpu/jit/engine.rs`
+  (the O3 pipeline);
 - spikes/cubecl-gemm/ as ported in T2, with its migration notes;
 - the CubeCL 0.11.0-pre.4 sources for the float intrinsics (`sqrt`, `inverse_sqrt`,
   `recip`, division, `fma`, `powf`) and how each backend lowers them:
@@ -111,18 +112,20 @@ Do:
   - whether any compiler option is required, and the reproducibility statement (what
     differs between backends, as simd-p2p.md §5.5 does for ISAs).
 - **A CPU-shaped P2P on the CPU runtime, against `nd-fmm-simd`** (approved on
-  2026-10-03). On the CPU runtime a unit is an OS thread, each thread loops over every
-  cube, and SIMD comes only from `Line<T>` (T2's notes). So a GPU-shaped P2P (one unit
-  per target, tiles in shared memory, `sync_cube`) says nothing about what the runtime
-  can reach on a CPU. From 0.11 on it compiles with LLVM's O3 pipeline, so the Phase 0
-  figures no longer apply. Measure what a CPU-shaped kernel reaches:
+  2026-10-03). On the CPU runtime a unit is a task on a pool of one worker per core,
+  each unit loops over every cube, and SIMD comes only from `Vector<T, N>` (T2's
+  notes). So a GPU-shaped P2P (one unit per target, tiles in shared memory,
+  `sync_cube`) says nothing about what the runtime can reach on a CPU. From 0.11 on it
+  compiles with LLVM's O3 pipeline, so the Phase 0 figures no longer apply. Measure
+  what a CPU-shaped kernel reaches:
   - a P2P written for the CPU runtime, in the spike, mirroring the Phase 3S kernel
     (docs/design/simd-p2p.md §4.1–§4.2, and spikes/p2p-simd/SPIKE_REPORT.md):
-    - targets in `Line<T>` lanes, with the `Line` width of the host's vectors (NEON: 4
-      in f32, 2 in f64), and K line blocks per unit as the Phase 3S recommendation
+    - targets in `Vector<T, N>` lanes, with N the width of the host's vectors (NEON:
+      4 in f32, 2 in f64), and K vector blocks per unit as the Phase 3S recommendation
       chose;
     - sources broadcast, in input order; no shared memory, no `sync_cube`;
-    - explicit `fma` for r² and the terms (the CPU target does not contract);
+    - explicit `fma` for r² and the terms (cubecl-opt's `InstCombinePass` fuses every
+      lone `a * b ± c` on every backend anyway; T2's notes);
     - `sqrt` and division, as the NEON kernel uses;
     - potential only and with gradients, f32 and f64;
   - check it against `direct_sum` before timing it (the T5 sum bounds of Phase 3S), and

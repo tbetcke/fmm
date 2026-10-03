@@ -33,15 +33,17 @@ Do:
   in a device layout the design fixes, uploaded once per `Fmm`, and its memory stated
   per p. M2M and L2L stay the dense octant GEMM of T8 under `Rotation` too (README,
   "Design decisions").
-- **The kernel** in `nd-fmm-kernels`, with the structure the design fixes (per pair or
-  per target; per-degree products in shared memory or registers; p comptime):
+- **The kernel** in `nd-fmm-kernels`, with the structure the design fixes
+  (device-path.md §6.6): one cube per target box with a non-empty V row, with at least
+  (p + 1)² units (rounded up to the plane size), two working vectors of (p + 1)²
+  values in shared memory, each step followed by `sync_cube`; p comptime:
   - the azimuth rotation as plane rotations of the (+m, −m) pairs, the y-rotation by
     the per-degree blocks, the coaxial translation per order m, and the way back, as
     `ShiftTables::apply` does;
   - axis-aligned offsets (`Alignment::Up`, `Down`) by the coaxial step alone;
-  - each target's V row in offset-index order (requirement 4). With one cube per
-    target walking its row, the order is the row's. With per-offset batches, as in
-    T9, it is the batches' index order. No atomics.
+  - each target's V row in offset-index order (requirement 4): the cube walks its row,
+    and the last step of each pair adds into the unit's accumulator, which starts from
+    the local as L2L left it. No atomics.
 - The device operator runs M2L on the device for `Rotation` by default; the host
   fallback stays selectable.
 - **Timing**, on Metal f32, reported only:
@@ -66,6 +68,10 @@ test prints the backends it ran):
   - f32, p ≤ 8: within 1e-5 against f64.
 - Axis-aligned offsets, and the offsets with the largest and smallest polar angles,
   explicitly.
+- On the CPU runtime, bit for bit against `RotationTables::m2l` where the kernel
+  repeats `ShiftTables::apply` step for step and T3's formulation keeps cubecl-opt's
+  fma fusion out (device-path.md §5.3, §6.6, §9.2); say where it does not hold, and
+  why.
 - Rotation against dense on the device (T9) on the same batches: within 1e-13 (f64,
   CPU runtime) and the f32 bound.
 - Determinism: repeated level calls bit-identical.

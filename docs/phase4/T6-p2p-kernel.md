@@ -25,8 +25,8 @@ Read first:
 - the T4 and T5 code.
 
 Do:
-- **The kernel**, in `nd-fmm-kernels`, generic over the runtime and f32/f64, with the
-  structure the design fixes. By default:
+- **The kernel**, in `nd-fmm-kernels`, generic over f32/f64 (the runtime is a run-time
+  value, device-path.md §3.2), with the structure the design fixes. By default:
   - one cube per target leaf (or block of targets), one unit per target point;
   - each source leaf of the target's near row in row order, staged through shared
     memory in tiles (tile size comptime and per backend), and each staged source in
@@ -42,6 +42,11 @@ Do:
   in point order: the order of the host path (requirement 4). Leaves larger than one
   tile, leaves with no points, and the last partial tile all run through the same
   code.
+- **Plane-per-leaf layout**, a second GPU layout for small leaves (the Plummer sphere
+  averages 17.6 points per leaf): one plane per target leaf (32 units on Metal) and
+  several leaves per cube, each plane staging its own tile and syncing with
+  `sync_plane`, with the same order and semantics. Both GPU layouts are candidates,
+  for the timing below and for T12 (device-path.md §6.2).
 - A safe launch wrapper for one level's P2P call: the near CSR, the source and target
   point offsets, the frames (or the keys they come from), and the device leaf stores.
   It adds into the device target output and allocates nothing beyond what the design
@@ -51,10 +56,10 @@ Do:
 - **CPU layout, only if decision 10 set a CPU-runtime target.** A second layout of the
   same kernel for the CPU runtime, selected by backend at construction (design §6.5),
   productionised from T3's CPU-shaped prototype:
-  - targets in `Line<T>` lanes with the host's vector width, K line blocks per unit as
-    T3 found best; one unit per core, each taking a contiguous range of target leaves;
-    sources broadcast in near-row order; no shared memory and no `sync_cube`; explicit
-    `fma`; `sqrt` and division;
+  - targets in `Vector<T, N>` lanes with the host's vector width, K vector blocks per
+    unit as T3 found best; one unit per core, each taking a contiguous range of target
+    leaves; sources broadcast in near-row order; no shared memory and no `sync_cube`;
+    explicit `fma`; `sqrt` and division;
   - the same semantics as the GPU layout: each target adds its sources in near-row and
     point order, the r² = 0 rule, the signed-off contract; the tests below run on both
     layouts;
@@ -75,9 +80,15 @@ Do:
   `gpu` and `metal`), on the workloads of simd-p2p.md §8.2:
   - W1, FMM-shaped (n_t ∈ {8, …, 128}, both forms), and W2, all-pairs (N ∈ {10³, 10⁴},
     and 10⁵ on the GPU), potential and with gradients;
+  - on the GPU, the W1 row launches at least 4,096 target leaves per launch (a
+    level-sized launch, as on the C3.2 cube), not the 64-set pool of Phase 3S, which
+    fills only 64 cubes (device-path.md §13.4);
   - pairs per second; the speed-up over host NEON (`P2pKernel::detect()`) at 1 thread
-    and at 12 threads; the fraction of the peak model that the design states for C4.2,
-    with its flop count per pair;
+    and at 12 threads; the fraction of the C4.2 peak model of device-path.md §13.4
+    (720 Gpairs/s φ and 480 φ and ∇φ, from 10 and 15 operations per pair);
+  - the C4.2 target (device-path.md §13.4): at least 25% of the model on W2 at
+    N = 10⁵ (180 and 120 Gpairs/s), and at least 10% on W1 at n_t = 64 (72 and 48
+    Gpairs/s);
   - the accuracy of every row against `direct_sum`;
   - and the leaf-stage time inside the FMM (device operator, the C3.2 cube and the
     Plummer sphere at p = 3, f32), against the host leaf stage at 1 and 12 threads.
@@ -98,6 +109,8 @@ test prints the backends it ran):
 - Coincident points: targets equal to sources, duplicated sources, a mapped neighbour
   source that rounds onto a target, and the adversarial pairs of T3. Results are finite
   and equal the sum over the non-coincident pairs within tolerance.
+- Frames: the device frames (ĉ, r̂) against `geometry::relative_frame`, bit for bit
+  (device-path.md §6.1).
 - Domain ends: pairs at 2⁻¹⁰⁸ (or the smallest r² the device addition allows) and
   near 2⁷, finite and within tolerance; the f32 gradient range as §3.13 states.
 - Accumulation onto nonzero output; empty rows, empty leaves and an empty level are
@@ -132,9 +145,10 @@ Must pass:
 - the CPU-runtime CI job, if kept; the root checks and the stricter workspace checks.
 
 Report: the backends run; the maximum measured errors per backend and precision (terms
-in u_T, sums); the timing tables; the fraction of the peak model; and, with a CPU
-layout, its ratio to `nd-fmm-simd` at one thread and on all cores, against the 1.5×
-target. State that f64 was not timed on a GPU and that CUDA was type-checked only.
+in u_T, sums); the timing tables; the fraction of the peak model against the C4.2
+target; and, with a CPU layout, its ratio to `nd-fmm-simd` at one thread and on all
+cores, against the 1.5× target. State that f64 was not timed on a GPU and that CUDA
+was type-checked only.
 
 Do not:
 - change the formulation, tile structure or compiler options from what was signed off
