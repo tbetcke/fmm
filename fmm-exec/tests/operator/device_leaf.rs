@@ -33,9 +33,13 @@
 //!   the same scaled points, so its error is zero (P2M, P2L: bit for bit) or only the
 //!   rounding of the reference's own unit conversion, φ̂ = r_t φ with r_t = 3 · 2⁻ˡ⁻¹ (L2P,
 //!   M2P, about 1e-16). The device, whose multiply–adds cubecl-opt fuses
-//!   (spikes/device-arith/REPORT.md, rule 6), cannot be held to twice that; its ratio is
-//!   printed, not asserted, and the 1e-13 bound applies. (Measured on the CPU runtime: L2P
-//!   up to 2.4 times the host operator's 1e-16, all within 2.2e-16; M2P within 1.0.)
+//!   (spikes/device-arith/REPORT.md, rule 6), cannot be held to twice that alone, so the
+//!   comparison has a floor in units of u_T = 2⁻⁵³ (decided at the T7 review): the
+//!   device's error at degree n is within max(2 × host, (n + 2) u_T) for coefficients,
+//!   whose recursion error grows with the degree, and within max(2 × host, 4 u_T) for φ
+//!   and ∇φ: asserted. (Measured on the CPU runtime: P2L up to 10.5 u_T at degree 20,
+//!   P2M 7.1 u_T at degree 19; L2P up to 2.4 times the host operator's 1e-16, all within
+//!   2.2e-16; M2P within 1.0.)
 //!
 //! Frames: the frames the kernels form for the X and W lists (`x_frames`, `w_frames`)
 //! equal `geometry::relative_frame` bit for bit, in f32 and f64.
@@ -135,20 +139,56 @@ fn leaf_points(key: MortonKey, count: usize, special: bool, rng: &mut SplitMix64
     (x, u)
 }
 
+/// A device error against the reference: one value (φ, ∇φ), or one per degree n ≤ p
+/// (coefficients).
+#[derive(Clone, Copy, Debug)]
+enum Errors<'a> {
+    Value(f64),
+    Degrees(&'a [f64]),
+}
+
+impl Errors<'_> {
+    /// The worst error, with its degree for coefficients.
+    fn worst(self) -> (f64, Option<usize>) {
+        match self {
+            Errors::Value(e) => (e, None),
+            Errors::Degrees(errors) => {
+                let mut worst = (0.0f64, 0usize);
+                for (n, &e) in errors.iter().enumerate() {
+                    if e > worst.0 {
+                        worst = (e, n);
+                    }
+                }
+                (worst.0, Some(worst.1))
+            }
+        }
+    }
+}
+
 /// The worst errors of one (operator, precision, level, quantity): the device's with its
-/// degree, and the host operator's.
-#[derive(Clone, Copy, Debug, Default)]
+/// degree and, for coefficients, per degree; and the host operator's.
+#[derive(Clone, Debug, Default)]
 struct Cell {
     device: f64,
     degree: Option<usize>,
+    by_degree: Vec<f64>,
     host: f64,
 }
 
 impl Cell {
-    fn add(&mut self, device: f64, degree: Option<usize>, host: f64) {
-        if device >= self.device {
-            self.device = device;
+    fn add(&mut self, device: Errors, host: f64) {
+        let (worst, degree) = device.worst();
+        if worst >= self.device {
+            self.device = worst;
             self.degree = degree;
+        }
+        if let Errors::Degrees(errors) = device {
+            if self.by_degree.len() < errors.len() {
+                self.by_degree.resize(errors.len(), 0.0);
+            }
+            for (cell, &e) in self.by_degree.iter_mut().zip(errors) {
+                *cell = cell.max(e);
+            }
         }
         self.host = self.host.max(host);
     }
@@ -157,17 +197,18 @@ impl Cell {
 /// Every cell of a run, by (operator, quantity, level).
 type Cells = BTreeMap<(&'static str, &'static str, usize), Cell>;
 
-/// Records `device` (and its degree) and `host`, asserting the operator bound.
+/// Records `device` and `host`, asserting the operator bound.
 fn record<T: Real>(
     cells: &mut Cells,
     key: (&'static str, &'static str, usize),
-    (device, degree): (f64, Option<usize>),
+    device: Errors,
     host: f64,
     context: impl Fn() -> String,
 ) {
+    let (worst, _) = device.worst();
     assert!(
-        device <= tolerance::<T>(),
-        "{}, {}, {}: {} error {device:e} exceeds {:e} (host operator {host:e}); {}",
+        worst <= tolerance::<T>(),
+        "{}, {}, {}: {} error {worst:e} exceeds {:e} (host operator {host:e}); {}",
         key.0,
         T::FLOAT,
         key.2,
@@ -175,7 +216,7 @@ fn record<T: Real>(
         tolerance::<T>(),
         context()
     );
-    cells.entry(key).or_default().add(device, degree, host);
+    cells.entry(key).or_default().add(device, host);
 }
 
 /// The host operator in T at degree p, potentials and gradients if `gradients`.
@@ -416,13 +457,13 @@ fn compare_values<T: Real>(
         let want = r_t * phi[j];
         let e = relative((dp[j] - want).abs(), terms[j].0);
         let h = relative((hp[j] - want).abs(), terms[j].0);
-        record::<T>(cells, (name, "φ", level), (e, None), h, &context);
+        record::<T>(cells, (name, "φ", level), Errors::Value(e), h, &context);
         if gradients {
             let want = grad[j].map(|v| r_t * r_t * v);
             let sub = |a: [f64; 3]| std::array::from_fn(|k| a[k] - want[k]);
             let e = relative(norm(sub(dg[j])), terms[j].1);
             let h = relative(norm(sub(hg[j])), terms[j].1);
-            record::<T>(cells, (name, "∇φ", level), (e, None), h, &context);
+            record::<T>(cells, (name, "∇φ", level), Errors::Value(e), h, &context);
         }
     }
 }
@@ -477,19 +518,20 @@ fn p2m_and_l2p<T: Real>(device: &mut Device, layout: LeafLayout, cells: &mut Cel
                 host.p2m_leaf(&chunk, &mut in_t);
                 let scale = point_terms(Basis::Regular, p, &frame, &sources.x[j], &sources.q[j]);
                 let widen = |v: &[T]| -> Vec<f64> { v.iter().map(|&c| w(c)).collect() };
-                let device_error = degree_error_at(
+                let device_error = degree_errors(
                     Kind::Multipole,
                     p,
                     &widen(&got[j * n..(j + 1) * n]),
                     &want,
                     &scale,
                 );
-                let host_error =
-                    degree_error_at(Kind::Multipole, p, &widen(&in_t), &want, &scale).0;
+                let host_error = degree_errors(Kind::Multipole, p, &widen(&in_t), &want, &scale)
+                    .into_iter()
+                    .fold(0.0, f64::max);
                 record::<T>(
                     cells,
                     ("P2M", "coefficients", level),
-                    (device_error.0, Some(device_error.1)),
+                    Errors::Degrees(&device_error),
                     host_error,
                     || format!("p = {p}, leaf {key}, {} points", counts[j]),
                 );
@@ -553,23 +595,20 @@ fn p2m_and_l2p<T: Real>(device: &mut Device, layout: LeafLayout, cells: &mut Cel
     }
 }
 
-/// `degree_error` with the degree of the worst error.
-fn degree_error_at(kind: Kind, p: usize, got: &[f64], want: &[f64], terms: &[f64]) -> (f64, usize) {
-    let mut worst = (0.0f64, 0usize);
-    for n in 0..=p {
-        let range = n * n..(n + 1) * (n + 1);
-        let mut g = vec![0.0; len(p)];
-        let mut wv = vec![0.0; len(p)];
-        let mut tm = vec![0.0; len(p)];
-        g[range.clone()].copy_from_slice(&got[range.clone()]);
-        wv[range.clone()].copy_from_slice(&want[range.clone()]);
-        tm[range.clone()].copy_from_slice(&terms[range]);
-        let e = degree_error(kind, p, &g, &wv, &tm);
-        if e > worst.0 {
-            worst = (e, n);
-        }
-    }
-    worst
+/// `degree_error` of each degree n ≤ p alone.
+fn degree_errors(kind: Kind, p: usize, got: &[f64], want: &[f64], terms: &[f64]) -> Vec<f64> {
+    (0..=p)
+        .map(|n| {
+            let range = n * n..(n + 1) * (n + 1);
+            let mut g = vec![0.0; len(p)];
+            let mut wv = vec![0.0; len(p)];
+            let mut tm = vec![0.0; len(p)];
+            g[range.clone()].copy_from_slice(&got[range.clone()]);
+            wv[range.clone()].copy_from_slice(&want[range.clone()]);
+            tm[range.clone()].copy_from_slice(&terms[range]);
+            degree_error(kind, p, &g, &wv, &tm)
+        })
+        .collect()
 }
 
 /// The X-list sources of `target`: the leaves on its parent's level that touch the
@@ -652,18 +691,20 @@ fn p2l_x_list<T: Real>(device: &mut Device, layout: LeafLayout, cells: &mut Cell
                     }
                 }
                 let widen = |v: &[T]| -> Vec<f64> { v.iter().map(|&c| w(c)).collect() };
-                let device_error = degree_error_at(
+                let device_error = degree_errors(
                     Kind::Local,
                     p,
                     &widen(&got[r * n..(r + 1) * n]),
                     &want,
                     &scale,
                 );
-                let host_error = degree_error_at(Kind::Local, p, &widen(&in_t), &want, &scale).0;
+                let host_error = degree_errors(Kind::Local, p, &widen(&in_t), &want, &scale)
+                    .into_iter()
+                    .fold(0.0, f64::max);
                 record::<T>(
                     cells,
                     ("P2L", "coefficients", level),
-                    (device_error.0, Some(device_error.1)),
+                    Errors::Degrees(&device_error),
                     host_error,
                     || format!("p = {p}, target {target}, {} sources", rows[r].len()),
                 );
@@ -786,15 +827,39 @@ fn report<T: Real>(cells: &Cells, layout: LeafLayout) {
         let degree = cell
             .degree
             .map_or(String::new(), |n| format!(" at degree {n}"));
-        let comparison = if cell.host == 0.0 {
-            "host operator equals the reference bit for bit; the bound applies".to_owned()
-        } else if T::FLOAT == Precision::F64 {
-            // Reported, not asserted (module documentation, "Against the host operator").
+        let comparison = if T::FLOAT == Precision::F64 {
+            // Within max(2 × host, floor), the floor (n + 2) u_T at degree n for
+            // coefficients and 4 u_T for values (module documentation, "Against the host
+            // operator").
+            let u = f64::EPSILON / 2.0;
+            let check = |e: f64, floor: usize, at: &str| {
+                assert!(
+                    e <= (2.0 * cell.host).max(floor as f64 * u),
+                    "{name}, {}, level {level}, {quantity}{at}, {layout}: the device's {e:e} \
+                     exceeds max(twice the host operator's {:e}, {floor} u_T)",
+                    T::FLOAT,
+                    cell.host
+                );
+            };
+            if cell.by_degree.is_empty() {
+                check(cell.device, 4, "");
+            } else {
+                for (n, &e) in cell.by_degree.iter().enumerate() {
+                    check(e, n + 2, &format!(" at degree {n}"));
+                }
+            }
+            let floor = if cell.by_degree.is_empty() {
+                "4 u_T"
+            } else {
+                "(n + 2) u_T"
+            };
             format!(
-                "host operator {:.2e}, ratio {:.2}, reported only in f64",
+                "host operator {:.2e}, worst {:.1} u_T, within max(2 × host, {floor})",
                 cell.host,
-                cell.device / cell.host
+                cell.device / u
             )
+        } else if cell.host == 0.0 {
+            "host operator equals the reference bit for bit; the bound applies".to_owned()
         } else {
             assert!(
                 cell.device <= 2.0 * cell.host,
