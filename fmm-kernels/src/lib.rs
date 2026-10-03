@@ -11,8 +11,8 @@
 //! movement primitives ([`movement`]). T5: the plan's views and the box and leaf
 //! coordinates on the device ([`view`]), and the cap on the CPU runtime's units per
 //! cube ([`Device::limit_units`]). T6: the P2P kernel ([`p2p`]) in three layouts, and
-//! the leaf stores' point offsets ([`view::PointOffsets`]). The other operator kernels
-//! follow in T7–T10.
+//! the leaf stores' point offsets ([`view::PointOffsets`]). T7: the leaf operators P2M,
+//! L2P, P2L and M2P ([`leaf`]). The translation kernels follow in T8–T10.
 //!
 //! ## Backends and features
 //!
@@ -109,6 +109,19 @@
 //! lanes (the default on the CPU runtime, within 1.5× of `nd-fmm-simd` per pair at one
 //! thread, decision 10). [`p2p::near_frames`] writes the frames the kernels form.
 //!
+//! ## Leaf operators (T7)
+//!
+//! [`leaf::p2m`], [`leaf::p2l`], [`leaf::l2p`] and [`leaf::m2p`] add one level's leaf
+//! expansion operators, `nd_fmm_ref::leaf`'s operators at the exact frames of CONVENTIONS
+//! §3.13, f32 and f64, potentials and optionally gradients, with p comptime up to
+//! [`leaf::MAX_DEGREE`]. The solid harmonics follow the recursion of `nd_fmm_math::harmonics`
+//! operation for operation, unrolled into a local array; they agree with the host to
+//! rounding, not bit for bit (cubecl-opt's contraction). Two layouts
+//! ([`leaf::LeafLayout`]): one cube per box or target leaf with coefficient owners and
+//! shared-memory tiles (the default on Metal and CUDA), and a CPU layout without shared
+//! memory (the default on the CPU runtime). [`leaf::harmonics`], [`leaf::x_frames`] and
+//! [`leaf::w_frames`] expose the harmonics and frames for tests.
+//!
 //! ## Tests on each backend
 //!
 //! From the repository root (`cargo test` prints the backends it ran with
@@ -134,6 +147,8 @@
 mod buffer;
 mod device;
 mod error;
+mod frame;
+pub mod leaf;
 pub mod movement;
 pub mod p2p;
 pub mod view;

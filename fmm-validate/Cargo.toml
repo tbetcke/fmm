@@ -34,3 +34,9 @@ nd-fmm-kernels = { workspace = true, optional = true }
 [[example]]
 name = "device_fallback"
 required-features = ["gpu"]
+
+# The device leaf operators per level against the host operator (Phase 4 T7): needs a
+# device backend; not run in CI (no templated-examples entry), run by hand on one rank.
+[[example]]
+name = "leaf_kernels"
+required-features = ["gpu"]

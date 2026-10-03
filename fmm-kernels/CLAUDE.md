@@ -3,8 +3,8 @@
 Purpose: every CubeCL (`#[cube]`) kernel of the FMM behind safe wrappers: backend
 selection and the f64 capability check, device buffers, the data movement primitives,
 the plan's views on the device (`view`, from T5), and (from T6) the operator kernels:
-P2P (`p2p`, T6), then the leaf operators, M2M, L2L and M2L (T7–T10)
-(docs/design/device-path.md §3.1).
+P2P (`p2p`, T6), the leaf operators P2M, L2P, P2L and M2P (`leaf`, T7), then M2M, L2L
+and M2L (T8–T10) (docs/design/device-path.md §3.1).
 Phase and components: Phase 4, C4.1 (T4, T5) and C4.2–C4.6 (T6–T10) in docs/phase4/.
 
 ## Rules
@@ -29,6 +29,22 @@ Phase and components: Phase 4, C4.1 (T4, T5) and C4.2–C4.6 (T6–T10) in docs/
   leaf stores' offsets are `PointOffsets`, validated at upload. Do not change the
   formulation, the tile structure or the order without a sign-off; report a faster
   variant instead.
+- Leaf operators (T7, `leaf`): P2M, P2L, L2P and M2P, one launch per level call, p
+  comptime up to `MAX_DEGREE` (20). The harmonics follow `nd_fmm_math::harmonics`
+  operation for operation (coefficients formed in the kernel, integers comptime, one
+  `inv_r2` per point, M2P's gradient from the recursion run to p + 1), the loops over n
+  and m unrolled (`#[unroll]`) into a local `Array`; the contractions and gradient
+  ladders are `nd_fmm_ref::leaf`'s and `harmonics`'s, in their order. Frames come from
+  `BoxCoordinates` and `LeafCoordinates` through `frame.rs` (shared with P2P), applied as
+  (u − ĉ) · 2^k, exact. Two layouts (`LeafLayout`): `Cube { units, tile }` (one cube per
+  box or target leaf; P2M and P2L by coefficient owners with `tile` points' harmonics in
+  shared memory, L2P and M2P one unit per target with each entry's coefficients staged in
+  shared memory; default on Metal and CUDA with 64 units and tiles of up to 32 points)
+  and `Cpu` (one unit per core, contiguous rows, no shared memory; default on the CPU
+  runtime, units capped by `Device::limit_units`). Both add every output's
+  contributions in the plan's order; tests run every layout on every backend. Bit
+  identity with the host does not apply (contraction, T3 rule 6): tests use the operator
+  bounds.
 - Generic over the float type (`DeviceFloat`: f32, f64) and comptime parameters (p, n,
   layouts); the backend is a run-time value (`BackendKind`, `Device`), never an
   `R: Runtime` type parameter (device-path.md §3.2). Every kernel runs on every runtime;
@@ -74,7 +90,11 @@ Phase and components: Phase 4, C4.1 (T4, T5) and C4.2–C4.6 (T6–T10) in docs/
   default test over **30 s**; larger shapes and sweeps (p = 20 at full size, B > 10³)
   are `#[ignore]`. T4's suite: 30 tests in 0.4 s (release), 32 in 1.1 s (debug). T6's
   P2P tests (`tests/kernels/p2p.rs`, every layout in f32 and f64) add 8 runtime tests
-  of a few seconds together.
+  of a few seconds together. T7's leaf tests (`tests/kernels/leaf.rs`, p ∈ {0, 3, 8},
+  both layouts, f32 and f64) add 8 runtime tests of about 4 s together (104 kernel
+  variants, 3.9 s of first launches, the slowest 0.24 s); the p = 20 sweep in f64
+  (`degree_20_sweep_on_the_cpu_runtime`, 17 variants, up to 2.5 s each to compile, 20 s)
+  is `#[ignore]`.
   `cargo test -p nd-fmm-kernels` without features builds and passes in seconds.
   Kernel compilation, from CubeCL's profiling log (the first launch of each variant
   includes its compilation): `CUBECL_DEBUG_LOG=<file> cargo test -p nd-fmm-kernels

@@ -77,6 +77,7 @@ use cubecl::prelude::*;
 use crate::buffer::{DeviceFloat, DeviceSlice, DeviceSliceMut};
 use crate::device::{BackendKind, Device, DeviceInfo, Precision};
 use crate::error::KernelError;
+use crate::frame;
 use crate::view::{IndexView, LeafCoordinates, PointOffsets};
 
 /// The units of the [`Cube`](P2pLayout::Cube) layout by default on the GPU backends (and
@@ -246,47 +247,22 @@ pub struct P2pInputs<'a, T: DeviceFloat> {
     pub target_input: DeviceSlice<'a, T>,
 }
 
-/// 2⁻¹⁶, exact in f32 and f64.
-const TWO_TO_MINUS_16: f32 = 1.0 / 65_536.0;
-
-/// 2ᵉ for −16 ≤ e ≤ 16, exactly: an integer power of two converted, times 2⁻¹⁶ below 1.
-#[cube]
-fn pow2<F: Float>(e: i32) -> F {
-    if e >= 0i32 {
-        F::cast_from(1u32 << u32::cast_from(e))
-    } else {
-        F::cast_from(1u32 << u32::cast_from(e + 16i32)) * F::new(TWO_TO_MINUS_16)
-    }
-}
-
-/// The larger of the levels of leaves s and t: the reference level L of §3.13.
-#[cube]
-fn reference_level(leaves: &[u32], s: usize, t: usize) -> u32 {
-    let (ls, lt) = (leaves[4 * s], leaves[4 * t]);
-    let mut big = ls;
-    if lt > ls {
-        big = lt;
-    }
-    big
-}
-
-/// Component k of the frame centre ĉ(s|t) = (C_L(s) − C_L(t)) 2^(l_t − L) (CONVENTIONS
-/// §3.13, "Relative frames"): the integer difference, exact in `i32` (|N| ≤ 131,070),
-/// converted exactly and scaled by an exact power of two. No step rounds.
+/// Component k of the frame centre ĉ(s|t) of leaf s seen from leaf t (CONVENTIONS
+/// §3.13, "Relative frames"), exact ([`frame::centre`]).
 #[cube]
 fn frame_centre<F: Float>(leaves: &[u32], s: usize, t: usize, k: usize) -> F {
-    let big = reference_level(leaves, s, t);
-    let (ls, lt) = (leaves[4 * s], leaves[4 * t]);
-    let cs = (2u32 * leaves[4 * s + 1 + k] + 1u32) << (big - ls);
-    let ct = (2u32 * leaves[4 * t + 1 + k] + 1u32) << (big - lt);
-    let difference = i32::cast_from(cs) - i32::cast_from(ct);
-    F::cast_from(difference) * pow2::<F>(i32::cast_from(lt) - i32::cast_from(big))
+    frame::centre::<F>(
+        leaves[4 * s],
+        leaves[4 * s + 1 + k],
+        leaves[4 * t],
+        leaves[4 * t + 1 + k],
+    )
 }
 
-/// The frame ratio r̂(s|t) = 2^(l_t − l_s), exact.
+/// The frame ratio r̂(s|t) = 2^(l_t − l_s) of leaf s seen from leaf t, exact.
 #[cube]
 fn frame_ratio<F: Float>(leaves: &[u32], s: usize, t: usize) -> F {
-    pow2::<F>(i32::cast_from(leaves[4 * t]) - i32::cast_from(leaves[4 * s]))
+    frame::ratio::<F>(leaves[4 * s], leaves[4 * t])
 }
 
 /// The GPU layouts: one group of `group` units per target leaf, `groups` groups per cube,
@@ -687,8 +663,8 @@ fn check_rows(
 }
 
 /// The cube grid of `cubes ≥ 1` cubes: one dimension up to the device's limit, two above
-/// it (device-path.md §6.2, "Grid").
-fn cube_grid(info: &DeviceInfo, cubes: usize) -> (u32, u32) {
+/// it (device-path.md §6.2, "Grid"). Also the grid of the leaf operators' cube layout.
+pub(crate) fn cube_grid(info: &DeviceInfo, cubes: usize) -> (u32, u32) {
     let max_x = info.max_cube_count.0.max(1) as usize;
     if cubes <= max_x {
         (cubes as u32, 1)

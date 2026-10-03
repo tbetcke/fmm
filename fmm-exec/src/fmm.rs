@@ -94,8 +94,9 @@
 //! the output scaling is the same code. Every operator kind can run on the host
 //! fallback ([`OperatorKind`], [`Fmm::placement`]); with every kind there the output
 //! equals the host path's bit for bit. From Phase 4 T6 P2P runs on the device by
-//! default ([`DeviceP2pLayout`]), and the output agrees with the host path's within the
-//! FMM bounds of docs/phase4/README.md. The `device` module (feature `gpu`)
+//! default ([`DeviceP2pLayout`]), and from T7 so do P2M, L2P, P2L and M2P
+//! ([`DeviceLeafLayout`]); the output agrees with the host path's within the FMM bounds
+//! of docs/phase4/README.md. The `device` module (feature `gpu`)
 //! documents the residency, the transfers, the fallback, the errors and the threads
 //! rule; docs/design/device-path.md is the design.
 //!
@@ -248,6 +249,34 @@ pub enum DeviceP2pLayout {
     /// Targets in vector lanes of the host's width, one unit per core, each a contiguous
     /// range of target leaves: the layout of the CPU runtime, whose units per cube
     /// `threads(n)` caps.
+    Cpu,
+}
+
+/// The layout of the device leaf operators P2M, L2P, P2L and M2P
+/// ([`FmmBuilder::device_leaf_layout`]; Phase 4 T7, docs/design/device-path.md §6.3): the
+/// parallel mapping of the boxes and target leaves of a level onto a device, with the same
+/// arithmetic and order, and so results within the leaf-operator bounds, in each. Every
+/// layout gives the same bits from evaluation to evaluation. Ignored by [`Backend::Host`].
+///
+/// The enum exists without the `gpu` feature, as [`Backend`] does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DeviceLeafLayout {
+    /// By backend: the CPU layout on the CPU runtime; on Metal and CUDA the cube layout of
+    /// 64 units with tiles of 32 points, fewer where the shared memory holds fewer at p.
+    #[default]
+    Auto,
+    /// One cube of `units` units per box (P2M, P2L: coefficient owners, the harmonics of
+    /// `tile` points at a time staged in shared memory) or per target leaf (L2P, M2P: one
+    /// unit per target point). On the CPU runtime correctness only, at most one unit per
+    /// core.
+    Cube {
+        /// Units per cube, at least 1.
+        units: u32,
+        /// Points per tile of P2M and P2L, from 1 to `units`.
+        tile: u32,
+    },
+    /// One unit per core, each a contiguous range of boxes or target leaves, no shared
+    /// memory: the layout of the CPU runtime, whose units per cube `threads(n)` caps.
     Cpu,
 }
 
@@ -539,6 +568,7 @@ pub enum FmmError {
 /// | [`host_fallback`](Self::host_fallback) | none |
 /// | [`synchronous_stages`](Self::synchronous_stages) | off |
 /// | [`device_p2p_layout`](Self::device_p2p_layout) | [`DeviceP2pLayout::Auto`]: by backend |
+/// | [`device_leaf_layout`](Self::device_leaf_layout) | [`DeviceLeafLayout::Auto`]: by backend |
 ///
 /// For `T = f32`, p > 8 is accepted but lies beyond the useful range (design §4): the
 /// error is then at the f32 floor already.
@@ -557,6 +587,7 @@ pub struct FmmBuilder<T> {
     host_fallback: Vec<OperatorKind>,
     synchronous_stages: bool,
     device_p2p_layout: DeviceP2pLayout,
+    device_leaf_layout: DeviceLeafLayout,
     value: PhantomData<fn() -> T>,
 }
 
@@ -577,6 +608,7 @@ impl<T> FmmBuilder<T> {
             host_fallback: Vec::new(),
             synchronous_stages: false,
             device_p2p_layout: DeviceP2pLayout::Auto,
+            device_leaf_layout: DeviceLeafLayout::Auto,
             value: PhantomData,
         }
     }
@@ -666,7 +698,7 @@ impl<T> FmmBuilder<T> {
 
     /// Runs these operator kinds on the host fallback even with a device backend: a
     /// test aid (requirement 8 of docs/phase4/README.md). Kinds without a device kernel
-    /// yet fall back regardless; after Phase 4 T6 that is every kind but P2P. Ignored by
+    /// yet fall back regardless; after Phase 4 T7 those are M2M, M2L and L2L. Ignored by
     /// [`Backend::Host`].
     pub fn host_fallback(mut self, kinds: impl IntoIterator<Item = OperatorKind>) -> Self {
         self.host_fallback = kinds.into_iter().collect();
@@ -681,6 +713,17 @@ impl<T> FmmBuilder<T> {
     /// when P2P runs on the host fallback.
     pub fn device_p2p_layout(mut self, layout: DeviceP2pLayout) -> Self {
         self.device_p2p_layout = layout;
+        self
+    }
+
+    /// Sets the layout of the device leaf operators P2M, L2P, P2L and M2P
+    /// ([`DeviceLeafLayout`]; default [`DeviceLeafLayout::Auto`], by backend).
+    /// [`build`](Self::build) returns [`FmmError::Device`] if the device cannot run it at
+    /// the FMM's degree (more units or shared memory than it has). Fixed at build and
+    /// reported by `Fmm::device_report` (feature `gpu`). Ignored by [`Backend::Host`] and
+    /// when all four run on the host fallback.
+    pub fn device_leaf_layout(mut self, layout: DeviceLeafLayout) -> Self {
+        self.device_leaf_layout = layout;
         self
     }
 
@@ -1011,6 +1054,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
                     host_fallback: self.host_fallback.clone(),
                     table_cache: self.table_cache.clone(),
                     p2p_layout: self.device_p2p_layout,
+                    leaf_layout: self.device_leaf_layout,
                 };
                 let driver = device::driver(
                     operator,
@@ -1566,8 +1610,9 @@ where
     }
 
     /// Returns where `kind` runs: on the host for [`Backend::Host`]; with a device
-    /// backend as its device report says (after Phase 4 T6 P2P runs on the device unless
-    /// [`FmmBuilder::host_fallback`] names it, every other kind on the host fallback).
+    /// backend as its device report says (after Phase 4 T7 P2M, P2L, L2P, M2P and P2P run
+    /// on the device unless [`FmmBuilder::host_fallback`] names them, M2M, M2L and L2L on
+    /// the host fallback).
     pub fn placement(&self, kind: OperatorKind) -> Placement {
         match self.evaluator.operator() {
             ExecOperator::Host(_) => {

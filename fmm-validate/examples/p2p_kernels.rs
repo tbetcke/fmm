@@ -1147,7 +1147,8 @@ mod device {
                 ));
             }
             _ => {
-                // The pool of n threads serves the host-fallback kinds (L2P, M2P).
+                // The pool of n threads serves the host-fallback kinds (M2M, M2L, L2L; from
+                // T7 L2P and M2P run on the device).
                 for (label, layout) in [
                     ("cube 64", DeviceP2pLayout::Auto),
                     ("plane 2", DeviceP2pLayout::Plane(2)),
@@ -1200,7 +1201,7 @@ mod device {
             "p = 3, gradients, N = 10^5 (the C3.2 cube: uniform level-4 tree; the Plummer \
              sphere: max_level 16, 64 points per leaf). Device runs use synchronous stages, \
              so the leaf stage (L2P, M2P and P2P) is timed whole; L2P and M2P run on the \
-             host fallback with their transfers. The median of {} evaluations after a \
+             device (Phase 4 T7). The median of {} evaluations after a \
              warm-up. Difference: relative L2 of the device output from the host output, φ \
              and ∇φ.",
             arguments.repeats

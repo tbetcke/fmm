@@ -127,7 +127,8 @@
 //! - **input errors** also checks that a P2P kernel on an ISA the machine cannot run is
 //!   rejected with `SettingsError::P2pIsaUnavailable`.
 //!
-//! Device path (Phase 4 T5, C4.1; T6, C4.2), with the `gpu` feature. Error measures:
+//! Device path (Phase 4 T5, C4.1; T6, C4.2; T7, C4.3), with the `gpu` feature. Error
+//! measures:
 //! exact equality of the bit patterns, counts and bytes, and the relative L2 difference
 //! of φ and ∇φ from the host output over all targets.
 //! - Every `evaluate_threaded` call above, and so every `Fmm` scenario (uniform and
@@ -141,10 +142,11 @@
 //!     again; the transfers, launches and syncs of each evaluation equal the formula of
 //!     docs/design/device-path.md §4.1 and §7.2; no evaluation moves points, views,
 //!     geometry or tables; and every view on the device equals the plan's;
-//!   - with P2P on the device (T6, the default) and every other kind on the host
-//!     fallback: the output within the FMM bounds of the host output (1e-12 in f64, 1e-5
-//!     in f32), two evaluations bit-identical, and the transfers of the formula with
-//!     P2P's fallback transfers replaced by one launch per level.
+//!   - with the default placement (T7: P2M, P2L, L2P, M2P and P2P on the device, M2M,
+//!     M2L and L2L on the host fallback): the output within the FMM bounds of the host
+//!     output (1e-12 in f64, 1e-5 in f32), two evaluations bit-identical, and the
+//!     transfers of the formula with each device kind's fallback transfers replaced by
+//!     one launch per level call.
 //!
 //!   On several ranks the device build returns `DeviceNeedsOneRank` on every rank. The
 //!   test prints the backends it ran, and the largest differences, at the end.
@@ -153,8 +155,9 @@
 //!   it (the others return `OtherRank`: the check rides on step 1's agreement); with the
 //!   CPU runtime, `threads(4)` builds no rayon pool and caps the units per cube at 4
 //!   (device-path.md §11), with the output of one unit bit for bit and within 1e-12 of
-//!   the host's; `synchronous_stages` adds seven syncs (after the charge upload and each
-//!   stage) and changes no bit; on several ranks a device build with
+//!   the host's; the cube layout of the leaf operators (8 units, tiles of 4 points)
+//!   within 1e-12 of the host's too; `synchronous_stages` adds seven syncs (after the
+//!   charge upload and each stage) and changes no bit; on several ranks a device build with
 //!   points other ranks own returns `PointsNotOwned`, which wins over
 //!   `DeviceNeedsOneRank`, and one with points every rank owns (each rank passing its
 //!   share of the level-1 octants of a uniform level-3 tree) returns
@@ -244,9 +247,9 @@ fn backends_line() -> String {
             .map(|(backend, f32_runs, f64_runs, _, worst)| {
                 format!(
                     "{backend} ({f32_runs} f32 and {f64_runs} f64 scenarios: on the host \
-                     fallback bit for bit; with P2P on the device within the FMM bounds, \
-                     largest relative L2 difference φ {:.1e} / ∇φ {:.1e} (f32), {:.1e} / \
-                     {:.1e} (f64))",
+                     fallback bit for bit; with P2M, P2L, L2P, M2P and P2P on the device \
+                     within the FMM bounds, largest relative L2 difference φ {:.1e} / ∇φ \
+                     {:.1e} (f32), {:.1e} / {:.1e} (f64))",
                     worst[0].0, worst[0].1, worst[1].0, worst[1].1
                 )
             }),
@@ -2190,8 +2193,9 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
                     comm,
                 )
                 .expect("one rank");
-                // P2P on the device (T6): within the FMM bound of the host output, and the
-                // units cap changes no bit (each unit owns whole target leaves).
+                // P2P and the leaf operators on the device (T6, T7): within the FMM bound
+                // of the host output, and the units cap changes no bit (each unit owns
+                // whole boxes and target leaves).
                 let host_output = host.evaluate(&charges).unwrap();
                 let (potential, _) = device_common::relative_l2(&output, &host_output);
                 assert!(
@@ -2208,6 +2212,26 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
                     output_bits(&one_unit.evaluate(&charges).unwrap()),
                     want,
                     "one unit against four"
+                );
+                // The cube layout of the leaf operators (T7; correctness only on the CPU
+                // runtime): within the FMM bound of the host output too.
+                let mut cube = builder
+                    .clone()
+                    .device_leaf_layout(nd_fmm_exec::fmm::DeviceLeafLayout::Cube {
+                        units: 8,
+                        tile: 4,
+                    })
+                    .build(&points, &points, comm)
+                    .expect("one rank");
+                assert_eq!(
+                    cube.device_report().unwrap().leaf_layout.to_string(),
+                    "cube (8 units, tile 4)"
+                );
+                let (potential, _) =
+                    device_common::relative_l2(&cube.evaluate(&charges).unwrap(), &host_output);
+                assert!(
+                    potential <= 1e-12,
+                    "the cube leaf layout: {potential:e} from the host"
                 );
                 // Synchronous stages: seven more syncs (after the charge upload and each
                 // of the six stages), the same output.

@@ -65,10 +65,10 @@
 //!
 //! Every operator kind can run on the host ([`OperatorKind`], [`Placement`]); a kind
 //! runs there if [`FmmBuilder::host_fallback`](crate::fmm::FmmBuilder::host_fallback)
-//! names it or no device kernel exists for it yet. **After T6 only P2P has a device
-//! kernel** (next section), so every other kind runs on the host, and the device path
-//! moves data exactly as it will once T7–T10 replace kinds one at a time. A host-fallback
-//! level call
+//! names it or no device kernel exists for it yet. **After T7, P2M, P2L, L2P, M2P and
+//! P2P have device kernels** (next sections), so M2M, M2L and L2L run on the host, and the
+//! device path moves their data exactly as it will until T8–T10 replace them one at a
+//! time. A host-fallback level call
 //!
 //! 1. downloads its device inputs and its output region into host mirrors (exact
 //!    copies);
@@ -102,14 +102,33 @@
 //! whose near view has an entry and whose leaves have a target, from the level's near view,
 //! the leaf indices, the point offsets and the device stores, adding into the device target
 //! output. It moves no data, so the P2P rows of the table above vanish from an evaluation's
-//! transfers; L2P and M2P before it on the same level still upload their output region
-//! first, and P2P adds to it (the order of `evaluate_leaves`). The layout is fixed at
+//! transfers; L2P and M2P before it on the same level (on the device, or on the host
+//! fallback, which uploads its output region first) add to the target output before P2P
+//! does (the order of `evaluate_leaves`, all on one stream). The layout is fixed at
 //! build ([`DeviceReport::p2p_layout`]): by default the CPU layout on the CPU runtime, whose
 //! units per cube `threads(n)` caps, and the cube layout of 64 units on Metal and CUDA
 //! (device-path.md §6.2). The kernel follows CONVENTIONS §3.13, "Device kernels", and adds
 //! each target's sources in the order of the host path, so its output agrees with the host
 //! P2P within the device P2P contract (docs/phase4/README.md, "Accuracy measures"), not bit
 //! for bit; `host_fallback` with [`OperatorKind::P2p`] restores the host P2P.
+//!
+//! # The leaf operators on the device (T7)
+//!
+//! P2M, P2L, L2P and M2P run on the device by default: one launch of
+//! `nd_fmm_kernels::leaf::{p2m, p2l, l2p, m2p}` per level whose view has an entry (and,
+//! for L2P and M2P, whose leaves have a target), from the level's view, the box and leaf
+//! indices, the point offsets and the device stores, adding into the device multipoles
+//! (P2M), locals (P2L) or target output (L2P, M2P). They move no data, so their rows of
+//! the table above vanish from an evaluation's transfers. The order of every target is
+//! the host path's (the plan's rows, points in point order), the frames are formed on the
+//! device from the integer indices, and the harmonics by the recursion of `nd-fmm-math`
+//! (CONVENTIONS §3.5, §3.13), so the output agrees with the host path within the FMM
+//! bounds, not bit for bit (contraction, device-path.md §9.2). The layout is fixed at
+//! build ([`DeviceReport::leaf_layout`]): by default the CPU layout on the CPU runtime,
+//! whose units per cube `threads(n)` caps, and the cube layout of 64 units with tiles of
+//! 32 points on Metal and CUDA (device-path.md §6.3;
+//! [`FmmBuilder::device_leaf_layout`](crate::fmm::FmmBuilder::device_leaf_layout)).
+//! `host_fallback` with any of the four kinds restores its host operator.
 //!
 //! # Transfer accounting
 //!
@@ -139,7 +158,7 @@
 //! With [`Backend::Cpu`] no rayon pool is built: `threads(n)` caps the units per cube of
 //! the CPU runtime's launches at n ([`nd_fmm_kernels::Device::limit_units`]), so the
 //! rank keeps at most n of CubeCL's workers busy in them (the movement kernels and the
-//! CPU layout of P2P), and host-fallback kinds run serially. Kernels with shared memory
+//! CPU layouts of P2P and the leaf operators), and host-fallback kinds run serially. Kernels with shared memory
 //! or barriers (the GPU layouts of P2P, if chosen there) keep their own cube size on the
 //! CPU runtime. With Metal or CUDA the pool of `threads(n)` is built as on the
 //! host path and serves only host-fallback kinds; a fallback call waits for the device
@@ -184,6 +203,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 
 use mpi::traits::Equivalence;
+use nd_fmm_kernels::leaf::{LeafLayout, SourceInputs, TargetInputs};
 use nd_fmm_kernels::movement::{scatter_values, zero};
 use nd_fmm_kernels::p2p::{P2pInputs, P2pLayout};
 use nd_fmm_kernels::view::{
@@ -203,7 +223,9 @@ use nd_fmm_tables::cache::{Stored, TableKind};
 use nd_fmm_tables::{CacheOutcome, L2lTables, M2mTables, MatrixSet, TableCache};
 use nd_octree::morton;
 
-use crate::fmm::{Backend, DeviceP2pLayout, FmmError, OperatorKind, Placement, SettingsError};
+use crate::fmm::{
+    Backend, DeviceLeafLayout, DeviceP2pLayout, FmmError, OperatorKind, Placement, SettingsError,
+};
 use crate::operator::{LaplaceOperator, SimdScalar};
 use crate::tables::M2lStrategy;
 
@@ -437,6 +459,11 @@ pub struct DeviceReport {
     /// layout on the CPU runtime and the cube layout on the GPUs
     /// ([`FmmBuilder::device_p2p_layout`](crate::fmm::FmmBuilder::device_p2p_layout)).
     pub p2p_layout: P2pLayout,
+    /// The layout of the device leaf operators P2M, L2P, P2L and M2P (T7), fixed at
+    /// build for the FMM's degree and precision: by default the CPU layout on the CPU
+    /// runtime and the cube layout on the GPUs
+    /// ([`FmmBuilder::device_leaf_layout`](crate::fmm::FmmBuilder::device_leaf_layout)).
+    pub leaf_layout: LeafLayout,
     /// The bytes of every buffer the operator allocates on the device.
     pub memory_needed: u64,
     /// The bytes the device reported as available before the allocation, `None` if the
@@ -476,6 +503,7 @@ impl fmt::Display for DeviceReport {
             }
         )?;
         writeln!(f, "P2P layout: {}", self.p2p_layout)?;
+        writeln!(f, "leaf-operator layout: {}", self.leaf_layout)?;
         if let Some(units) = self.cpu_units {
             writeln!(f, "CPU runtime: at most {units} units per cube")?;
         }
@@ -503,6 +531,9 @@ pub struct DeviceOptions {
     pub table_cache: Option<PathBuf>,
     /// The layout of the device P2P (T6); [`DeviceP2pLayout::Auto`] by default.
     pub p2p_layout: DeviceP2pLayout,
+    /// The layout of the device leaf operators (T7); [`DeviceLeafLayout::Auto`] by
+    /// default.
+    pub leaf_layout: DeviceLeafLayout,
 }
 
 impl DeviceP2pLayout {
@@ -521,6 +552,38 @@ impl DeviceP2pLayout {
         }
     }
 }
+
+impl DeviceLeafLayout {
+    /// The kernel layout of this choice on the device `info` at degree p in `T`: for
+    /// [`Auto`](DeviceLeafLayout::Auto) the default of `nd-fmm-kernels`
+    /// (`LeafLayout::default_for`: the CPU layout on the CPU runtime, the cube layout of
+    /// 64 units with tiles of up to 32 points on the GPUs).
+    pub fn resolve<T: DeviceFloat>(self, info: &DeviceInfo, p: usize) -> LeafLayout {
+        match self {
+            Self::Auto => LeafLayout::default_for(info, p, T::FLOAT),
+            Self::Cube { units, tile } => LeafLayout::Cube { units, tile },
+            Self::Cpu => LeafLayout::Cpu,
+        }
+    }
+}
+
+/// The kinds with a device kernel (T6, T7): on the device unless `host_fallback` names
+/// them.
+const DEVICE_KINDS: [OperatorKind; 5] = [
+    OperatorKind::P2m,
+    OperatorKind::P2l,
+    OperatorKind::L2p,
+    OperatorKind::M2p,
+    OperatorKind::P2p,
+];
+
+/// The leaf operators among them (T7).
+const LEAF_KINDS: [OperatorKind; 4] = [
+    OperatorKind::P2m,
+    OperatorKind::P2l,
+    OperatorKind::L2p,
+    OperatorKind::M2p,
+];
 
 /// The views of one level on the device, uploaded from the plan's
 /// (`nd_fmm_plan::lists::LevelLists`). Box views have one row per box of the level,
@@ -773,6 +836,8 @@ pub struct DeviceOperator<T: DeviceScalar> {
     placement: [Placement; 8],
     /// The layout of the device P2P, fixed at build.
     p2p_layout: P2pLayout,
+    /// The layout of the device leaf operators, fixed at build.
+    leaf_layout: LeafLayout,
     stores: DeviceStores<T>,
     /// `nlevels + 1` offsets of the levels in the multipole and local buffers, in values.
     level_offsets: Vec<usize>,
@@ -1100,15 +1165,26 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         };
 
         // The kinds with a device kernel run on the device unless `host_fallback` names
-        // them: P2P from T6; the others follow in T7–T10.
+        // them: P2P from T6, P2M, P2L, L2P and M2P from T7; the others follow in T8–T10.
         let mut placement = [Placement::Host; 8];
-        if !options.host_fallback.contains(&OperatorKind::P2p) {
-            placement[OperatorKind::P2p as usize] = Placement::Device;
+        for kind in DEVICE_KINDS {
+            if !options.host_fallback.contains(&kind) {
+                placement[kind as usize] = Placement::Device;
+            }
         }
         let p2p_layout = options.p2p_layout.resolve(link.device.info());
         p2p_layout
             .check(link.device.info(), T::FLOAT)
             .map_err(device_error)?;
+        let leaf_layout = options.leaf_layout.resolve::<T>(link.device.info(), p);
+        if LEAF_KINDS
+            .iter()
+            .any(|&kind| placement[kind as usize] == Placement::Device)
+        {
+            leaf_layout
+                .check(link.device.info(), p, T::FLOAT)
+                .map_err(device_error)?;
+        }
         let lens: Vec<usize> = (0..nlevels).map(|l| index.len(l)).collect();
         let sizes = vec![n; nlevels];
         let mirrors = placement.contains(&Placement::Host).then(|| Mirrors {
@@ -1129,6 +1205,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             cache_outcomes,
             cpu_units: (backend == BackendKind::Cpu).then(|| link.device.units_cap()),
             p2p_layout,
+            leaf_layout,
             memory_needed: needed,
             memory_available: available,
         };
@@ -1137,6 +1214,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             link,
             placement,
             p2p_layout,
+            leaf_layout,
             stores,
             level_offsets,
             views,
@@ -1452,14 +1530,93 @@ impl<T: DeviceScalar> FmmSizes for DeviceOperator<T> {
     }
 }
 
+impl<T: DeviceScalar> DeviceOperator<T> {
+    /// P2M (`irregular` false) or P2L of `level` on the device: one launch from the
+    /// level's view, adding into the multipoles or locals of the level (T7).
+    fn expand_on_device(&mut self, level: usize, irregular: bool) {
+        let values = self.level_values(level..level + 1);
+        let views = &self.views;
+        let inputs = SourceInputs {
+            view: if irregular {
+                &views.levels[level].x
+            } else {
+                &views.levels[level].p2m
+            },
+            level,
+            boxes: &views.boxes,
+            leaves: &views.leaves,
+            source_offsets: &views.source_offsets,
+            sources: self.stores.sources.as_slice(),
+        };
+        let (layout, p) = (self.leaf_layout, self.host.p());
+        let out = if irregular {
+            &mut self.stores.locals
+        } else {
+            &mut self.stores.multipoles
+        };
+        self.link.run(DataKind::Output, |d| {
+            let out = out.slice_mut(values);
+            if irregular {
+                nd_fmm_kernels::leaf::p2l(d, layout, p, &inputs, out)
+            } else {
+                nd_fmm_kernels::leaf::p2m(d, layout, p, &inputs, out)
+            }
+        });
+    }
+
+    /// L2P (`irregular` false) or M2P of the leaves `leaves` of `level` on the device: one
+    /// launch from the level's view, the locals of the level or the multipoles of the
+    /// level below, adding into the target output (T7).
+    fn evaluate_on_device(&mut self, level: usize, leaves: &Range<usize>, irregular: bool) {
+        let entry_level = level + usize::from(irregular);
+        let values = self.level_values(entry_level..entry_level + 1);
+        let views = &self.views;
+        let view = if irregular {
+            &views.levels[level].w
+        } else {
+            &views.levels[level].l2p
+        };
+        debug_assert_eq!(view.nrows(), leaves.len());
+        let inputs = TargetInputs {
+            view,
+            level,
+            first_leaf: leaves.start,
+            boxes: &views.boxes,
+            leaves: &views.leaves,
+            target_offsets: &views.target_offsets,
+            target_input: self.stores.target_input.as_slice(),
+        };
+        let (layout, p, gradients) = (self.leaf_layout, self.host.p(), self.host.gradients());
+        let coefficients = if irregular {
+            self.stores.multipoles.slice(values)
+        } else {
+            self.stores.locals.slice(values)
+        };
+        let output = &mut self.stores.target_output;
+        self.link.run(DataKind::Output, |d| {
+            let output = output.as_slice_mut();
+            if irregular {
+                nd_fmm_kernels::leaf::m2p(d, layout, p, gradients, &inputs, coefficients, output)
+            } else {
+                nd_fmm_kernels::leaf::l2p(d, layout, p, gradients, &inputs, coefficients, output)
+            }
+        });
+    }
+}
+
 /// Every kind on the host fallback ([module documentation](self#host-fallback-7)):
-/// download, the host operator's own method on the mirrors, upload; P2P on the device
-/// unless it falls back ([module documentation](self#p2p-on-the-device-t6)).
+/// download, the host operator's own method on the mirrors, upload; P2M, P2L, L2P, M2P
+/// and P2P on the device unless they fall back ([module
+/// documentation](self#p2p-on-the-device-t6), [the leaf
+/// operators](self#the-leaf-operators-on-the-device-t7)).
 impl<T: DeviceScalar> FmmOperator for DeviceOperator<T> {
     fn p2m(&mut self, batch: P2m<'_, T>) {
-        debug_assert_eq!(self.placement(OperatorKind::P2m), Placement::Host);
         let level = batch.level;
         if batch.leaves.is_empty() || !self.healthy() {
+            return;
+        }
+        if self.placement(OperatorKind::P2m) == Placement::Device {
+            self.expand_on_device(level, false);
             return;
         }
         self.fetch_levels(Level::Multipoles, level..level + 1);
@@ -1515,9 +1672,12 @@ impl<T: DeviceScalar> FmmOperator for DeviceOperator<T> {
     }
 
     fn p2l(&mut self, batch: P2l<'_, T>) {
-        debug_assert_eq!(self.placement(OperatorKind::P2l), Placement::Host);
         let level = batch.level;
         if batch.x.is_empty() || !self.healthy() {
+            return;
+        }
+        if self.placement(OperatorKind::P2l) == Placement::Device {
+            self.expand_on_device(level, true);
             return;
         }
         self.fetch_levels(Level::Locals, level..level + 1);
@@ -1553,9 +1713,12 @@ impl<T: DeviceScalar> FmmOperator for DeviceOperator<T> {
     }
 
     fn l2p(&mut self, batch: L2p<'_, T>) {
-        debug_assert_eq!(self.placement(OperatorKind::L2p), Placement::Host);
         let (level, leaves) = (batch.level, batch.leaves.clone());
         if batch.boxes.is_empty() || self.output_values(&leaves).is_empty() || !self.healthy() {
+            return;
+        }
+        if self.placement(OperatorKind::L2p) == Placement::Device {
+            self.evaluate_on_device(level, &leaves, false);
             return;
         }
         self.fetch_levels(Level::Locals, level..level + 1);
@@ -1573,9 +1736,13 @@ impl<T: DeviceScalar> FmmOperator for DeviceOperator<T> {
     }
 
     fn m2p(&mut self, batch: M2p<'_, T>) {
-        debug_assert_eq!(self.placement(OperatorKind::M2p), Placement::Host);
         let (level, leaves) = (batch.level, batch.leaves.clone());
         if batch.w.is_empty() || self.output_values(&leaves).is_empty() || !self.healthy() {
+            return;
+        }
+        if self.placement(OperatorKind::M2p) == Placement::Device {
+            // A non-empty W list names boxes of level + 1, which then exists.
+            self.evaluate_on_device(level, &leaves, true);
             return;
         }
         // A non-empty W list names boxes of level + 1, which then exists.

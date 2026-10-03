@@ -1,4 +1,4 @@
-//! The device path on Metal (Phase 4 T5, C4.1): f32 only, ignored, run by hand on the
+//! The device path on Metal (Phase 4 T5, C4.1; T6, T7): f32 only, ignored, run by hand on the
 //! M3 Max outside the macOS sandbox (Metal has no adapter inside it):
 //!
 //! ```text
@@ -11,8 +11,9 @@
 //! bit against the host path for two charge vectors and a repeat, the transfers of each
 //! evaluation against the formula of docs/design/device-path.md §4.1 and §7.2, nothing
 //! re-uploaded in an evaluation, and every view on the device against the plan's; and
-//! with P2P on the device (T6), within 1e-5 of the host output (relative L2), two
-//! evaluations bit for bit, and the transfers of the formula with P2P on the device.
+//! with the default placement (T7: P2M, P2L, L2P, M2P and P2P on the device), within
+//! 1e-5 of the host output (relative L2), two evaluations bit for bit, and the transfers
+//! of the formula with those kinds on the device.
 //! Error measures: exact equality, and the relative L2 difference from the host.
 //!
 //! Scenarios, f32 (Metal does no f64 arithmetic):
@@ -26,7 +27,7 @@
 //! - f64 with Metal is refused with `SettingsError::PrecisionUnsupported` at build;
 //! - `threads(4)` builds the pool of four threads for the host-fallback kinds
 //!   (device-path.md §11): with every kind there the output still equals the host
-//!   path's, and with P2P on the device the output of one thread.
+//!   path's, and with the default placement the output of one thread.
 //!
 //! The test prints the device (`Backend::probe`) and the backends it ran.
 #![cfg(feature = "metal")]
@@ -99,8 +100,8 @@ fn scenario(
         match outcome {
             Outcome::Ran => format!(
                 "metal on the host fallback bit for bit ({} values), transfers as the \
-                 formula; P2P on the device within {potential:.1e} (φ) and {gradient:.1e} \
-                 (∇φ) of the host, relative L2",
+                 formula; P2M, P2L, L2P, M2P and P2P on the device within {potential:.1e} \
+                 (φ) and {gradient:.1e} (∇φ) of the host, relative L2",
                 output_bits(&output).len()
             ),
             Outcome::OneRankOnly => "DeviceNeedsOneRank on every rank".to_owned(),
@@ -232,8 +233,8 @@ fn metal_device_path() {
         assert_eq!(metal.device_report().unwrap().cpu_units, None);
         let got = metal.evaluate(&q).unwrap();
         assert_eq!(output_bits(&got), output_bits(&want), "metal at 4 threads");
-        // With P2P on the device (T6) the pool serves the other kinds, and the output is
-        // that of one thread bit for bit.
+        // With the default placement (T6, T7) the pool serves the host-fallback kinds,
+        // and the output is that of one thread bit for bit.
         let device = |threads| {
             builder
                 .clone()
@@ -247,11 +248,11 @@ fn metal_device_path() {
         assert_eq!(
             output_bits(&device(4)),
             output_bits(&device(1)),
-            "metal with P2P on the device at 4 threads"
+            "metal with the default placement at 4 threads"
         );
         eprintln!(
             "rank 0: metal with threads(4): a pool of 4 for the fallback, bit for bit; with \
-             P2P on the device bit for bit one thread"
+             the default placement bit for bit one thread"
         );
     }
     eprintln!(

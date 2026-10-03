@@ -30,8 +30,9 @@
 //! error with `Auto` lies within 1% of the error with `Reference`, and every output of
 //! `Auto` within 1e-13 of that of `Reference` (relative L2 over all targets).
 //!
-//! Device path (Phase 4 T6, C4.2), with a backend feature: the same gate with P2P on
-//! the device (and every other kind on the host fallback), on the CPU runtime in f64 at
+//! Device path (Phase 4 T6, C4.2; T7, C4.3), with a backend feature: the same gate with
+//! the default placement (P2M, P2L, L2P, M2P and P2P on the device, M2M, M2L and L2L on
+//! the host fallback), on the CPU runtime in f64 at
 //! p = 3 and 8 (feature `cpu`) and on Metal in f32 at p = 3 and 8 (feature `metal`, by
 //! hand outside the macOS sandbox). The device run's error lies within 0.1% (f64) or 5%
 //! (f32) of the host run's in the same precision (docs/phase4/README.md, "Accuracy
@@ -307,7 +308,11 @@ fn device_gate<
             .backend(backend)
             .build(points, points, comm)
             .unwrap_or_else(|error| panic!("{backend}: the device FMM does not build: {error}"));
-        let layout = device.device_report().expect("a device backend").p2p_layout;
+        let report = device.device_report().expect("a device backend");
+        let layout = format!(
+            "P2P {}, leaf operators {}",
+            report.p2p_layout, report.leaf_layout
+        );
         let (mut each_host, mut each_device) = (Vec::new(), Vec::new());
         let mut largest_difference = 0.0f64;
         for (q, exact) in charges.iter().zip(exact) {
@@ -327,7 +332,7 @@ fn device_gate<
         let (error_host, error_device) = (rms(&each_host), rms(&each_device));
         let ratio = error_device / error_host;
         eprintln!(
-            "{backend}, {}, p = {p}, P2P on the device ({}): relative L2 error of φ \
+            "{backend}, {}, p = {p}, P2P and leaf operators on the device ({}): relative L2 error of φ \
              {error_device:.4e} against the host's {error_host:.4e} (ratio {ratio:.6}), \
              prediction {prediction:.2e}; outputs within {largest_difference:.1e} of the host",
             if f64_run { "f64" } else { "f32" },
