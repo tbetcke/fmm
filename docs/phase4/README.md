@@ -236,9 +236,11 @@ These hold for every task, so that no task decides them on its own:
     (T2; device-path.md F16, §5.3). Device kernels are therefore not bit-identical to
     the unfused host code wherever an inexact product feeds an add, unless T3 finds a
     formulation that keeps the fusion out.
-  - Whether it also gets a performance target is decided from T3's measurement of a
-    CPU-shaped P2P against `nd-fmm-simd` (decision 10). Until then, and if the rule
-    says no, it is correctness-only and nothing on it is timed as a result.
+  - It also gets a performance target (decision 10, signed off on 2026-10-03). At one
+    thread, T3's CPU-shaped P2P took 1.004× the time of `nd-fmm-simd`, so T6 adds a CPU
+    layout of the device P2P kernel within 1.5× of `nd_fmm_simd::P2pKernel` per pair at
+    one thread. The all-cores ratio (2.73× in T3) is reported, not targeted. Nothing
+    else on the CPU runtime is timed as a result.
   - Shapes are small: shared-memory kernels are emulated very slowly there, and some
     library f32 kernels took minutes to compile (design §6.1). Library-matmul tests run
     on Metal; the CPU runtime tests the hand-written kernels.
@@ -267,11 +269,14 @@ These hold for every task, so that no task decides them on its own:
       operators (the C3.1 bounds);
     - f32 on Metal and on the CPU runtime: 1e-5 against the f64 reference (the
       Phase 1 f32 bound).
-  - **P2P:** the contract that T3 proposes and the sign-off fixes. Provisionally it is
-    that of C3S.4: pair terms within 8 u_T (potential) and 16 u_T (gradient) of
+  - **P2P:** the contract T3 proposed, signed off on 2026-10-03 (decision 3). It is that
+    of C3S.4, unchanged: pair terms within 8 u_T (potential) and 16 u_T (gradient) of
     `nd_fmm_ref::p2p`, and sums within 1e-14 (f64, CPU runtime) and 1e-6 (f32, Metal
     and CPU runtime) of `direct_sum`, relative to the term magnitudes, or twice the
-    reference's error where that is larger.
+    reference's error where that is larger. On a backend that flushes subnormals
+    (Metal), it applies to charges q = 0 or |q| ≥ 2⁻¹⁰⁰ (CONVENTIONS §3.13, "Device
+    kernels"). Kernels follow T3's formulation rules (spikes/device-arith/REPORT.md,
+    "Recommendation").
   - **FMM:**
     - the device output against the host output of the same settings (precision, p,
       strategy, tree): relative L2 within 1e-12 (f64, CPU runtime) and 1e-5 (f32,
@@ -447,7 +452,14 @@ Each is recorded in the exit checklist when made:
 2. An `nd-fmm-plan` extension for the device path, if T1 proposes one (with T1).
    **Decided on 2026-10-03: none, no T4b** (device-path.md §4.3).
 3. The §3.13 addition for device kernels and the device P2P contract (T3; before T6 and
-   T7).
+   T7). **Signed off on 2026-10-03**, with every recommendation of
+   spikes/device-arith/REPORT.md, "Recommendation":
+   - the addition "Device kernels" to CONVENTIONS §3.13, with `CONVENTION_VERSION`
+     still 1;
+   - the C3S.4 contract unchanged (on flushing backends for q = 0 or |q| ≥ 2⁻¹⁰⁰);
+   - the formulation rules: ŷ by an explicit `fma(r̂, u_s, ĉ)`, `inverse_sqrt` with no
+     Newton step, and masking by compare and select;
+   - no compiler option.
 4. GPU hardware. **Decided on 2026-10-03: none besides the M3 Max.** Metal f32 is the
    only timed backend. f64 is checked on the CubeCL CPU runtime and never timed on a
    GPU. CUDA is type-checked, and its run is documented for later.
@@ -471,6 +483,10 @@ Each is recorded in the exit checklist when made:
     runtime gets a target in Phase 4 (its P2P within 1.5× of the host SIMD P2P per
     pair), and T6 adds a CPU layout of the device P2P kernel to meet it. Otherwise it
     stays a correctness backend. Either way, the result is signed off before T6.
+    **Signed off on 2026-10-03: CPU-runtime target set.** The one-thread geometric mean
+    is 1.004 (24 W1 cells) and the all-cores ratio 2.73 (spikes/device-arith/REPORT.md).
+    T6 adds the CPU layout and meets the 1.5× target at one thread. The all-cores ratio
+    is reported only.
 11. The Metal runtime (device-path.md §16, question 10). **Decided on 2026-10-03: keep
     `metal` = wgpu-msl.** If T3 finds that its default math mode breaks the §3.13
     argument and no formulation restores it, switching the `metal` feature to
@@ -506,8 +522,8 @@ In the repository root, start `claude` and say:
 - [x] Metal runtime (decision 11): `metal` stays wgpu-msl; `metal-native` only by a separate sign-off (decided 2026-10-03)
 - [x] T2 merged: pin at 0.11.0-pre.4, `spikes/cubecl-gemm` passing and re-measured, migration notes, root `CLAUDE.md` points to Phase 4
 - [ ] T3 merged: device arithmetic measured per backend; §3.13 addition and device P2P contract drafted
-- [ ] §3.13 addition and device P2P contract signed off
-- [ ] CPU-runtime target (decision 10): T3's ratio against `nd-fmm-simd` reported; target set (≤ 1.5×, CPU layout in T6) or CPU runtime correctness-only
+- [x] §3.13 addition and device P2P contract signed off (2026-10-03)
+- [x] CPU-runtime target (decision 10): T3's ratio against `nd-fmm-simd` reported; target set (≤ 1.5×, CPU layout in T6) or CPU runtime correctness-only: target set, signed off 2026-10-03 (one thread 1.004×, all cores 2.73×)
 - [ ] T4 merged: `nd-fmm-kernels` skeleton, round trips and capability check pass, CPU-runtime CI job measured
 - [ ] CPU-runtime CI job: kept / changed / dropped; default-member status of `nd-fmm-kernels` decided
 - [ ] T4b merged (only if needed): `nd-fmm-plan` device hooks, `IndexFmm` on 1, 2 and 4 ranks, host path bit-identical

@@ -1,7 +1,7 @@
 [workspace]
 # Keep "2"; moving to "3" (MSRV-aware resolution) is a separate decision.
 resolver = "2"
-members = ["fmm-plan", "octree", "fmm-math", "fmm-ref", "fmm-validate", "fmm-tables", "fmm-exec", "fmm-simd", "spikes/cubecl-gemm", "spikes/p2p-simd"]
+members = ["fmm-plan", "octree", "fmm-math", "fmm-ref", "fmm-validate", "fmm-tables", "fmm-exec", "fmm-simd", "spikes/cubecl-gemm", "spikes/p2p-simd", "spikes/device-arith"]
 # Without default-members every member is built; spikes are added to members only,
 # so CI never builds them.
 default-members = ["octree", "fmm-plan", "fmm-math", "fmm-ref", "fmm-validate", "fmm-tables", "fmm-exec", "fmm-simd"]

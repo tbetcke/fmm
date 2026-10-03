@@ -11,11 +11,12 @@ Read first:
 - docs/phase4/README.md ("Requirements", "Accuracy measures", "Exit gate" C4.2);
 - docs/design/device-path.md, signed off: the P2P part of section 6, sections 9 and 13;
 - CONVENTIONS §3.1 and §3.13, with the signed-off T3 addition ("Device kernels");
-- the outcome of decision 10 (docs/phase4/README.md): whether the CPU runtime has a
-  performance target, and T3's CPU-shaped P2P in `spikes/device-arith` with its
-  measurements;
-- spikes/device-arith/REPORT.md and the signed-off device P2P contract (formulation
-  per backend and precision, required compiler options);
+- decision 10 (docs/phase4/README.md), signed off on 2026-10-03: the CPU runtime has a
+  performance target, and this task adds the CPU layout below. Its prototype is T3's
+  CPU-shaped P2P (`spikes/device-arith/src/cpu_p2p.rs`), with its measurements;
+- spikes/device-arith/REPORT.md, "Recommendation": the device P2P contract and the
+  formulation rules, signed off on 2026-10-03 (decision 3). No compiler option is
+  required, and none exists;
 - docs/design/simd-p2p.md §3 (the requirements of a fast P2P, which this kernel meets in
   its device form) and §8 (workloads);
 - `nd_fmm_ref::p2p`, `nd_fmm_simd::P2pKernel` and their tests;
@@ -31,10 +32,12 @@ Do:
   - each source leaf of the target's near row in row order, staged through shared
     memory in tiles (tile size comptime and per backend), and each staged source in
     point order;
-  - for s ≠ t, ŷ = ĉ(s|t) + r̂(s|t) u_s with the exact frames of §3.13, formed as the
-    T3 rules require; for s = t, u_s itself;
-  - pairs excluded by r² = 0, under the conditions of the T3 addition;
-  - the inverse square root and term formulas of the signed-off contract;
+  - for s ≠ t, ŷ = ĉ(s|t) + r̂(s|t) u_s with the exact frames of §3.13, formed by an
+    explicit `fma(r̂, u_s, ĉ)` and never written inline inside the subtraction; for
+    s = t, u_s itself; then dₖ = u_t,k − ŷₖ (§3.13, "Device kernels");
+  - r² = `fma(d₂, d₂, fma(d₁, d₁, d₀ · d₀))`, and pairs excluded by r² = 0: ρ =
+    `inverse_sqrt(r²)`, then `select(r² == 0, 0, ρ)`, never a multiplication by a mask;
+  - no Newton step; φ += q ρ and ∇φ −= (q ρ)(ρ ρ) d, written as `fma` calls;
   - two variants: potential only, and with gradients, the latter writing the §3.13
     output layout (φ̂ for every point, then the triples ĝ).
 
@@ -53,13 +56,16 @@ Do:
   allows.
 - **In the device operator**: the P2P kind runs the kernel by default on every backend;
   the host fallback stays selectable.
-- **CPU layout, only if decision 10 set a CPU-runtime target.** A second layout of the
-  same kernel for the CPU runtime, selected by backend at construction (design §6.5),
-  productionised from T3's CPU-shaped prototype:
-  - targets in `Vector<T, N>` lanes with the host's vector width, K vector blocks per
-    unit as T3 found best; one unit per core, each taking a contiguous range of target
-    leaves; sources broadcast in near-row order; no shared memory and no `sync_cube`;
-    explicit `fma`; `sqrt` and division;
+- **CPU layout** (decision 10 set a CPU-runtime target, signed off on 2026-10-03). A
+  second layout of the same kernel for the CPU runtime, selected by backend at
+  construction (design §6.5), productionised from T3's CPU-shaped prototype:
+  - targets in `Vector<T, N>` lanes with the host's vector width, and K vector blocks
+    per unit as in T3: N = 4 and K = 2 in f32, N = 2 and K = 4 in f64 on NEON. One unit
+    per core, each taking a contiguous range of target leaves. Sources broadcast in
+    near-row order and mapped as above (the prototype took W1's absolute sources and
+    did not map). No shared memory and no `sync_cube`;
+  - the formulation above. On the CPU runtime `inverse_sqrt` is fl(1 / fl(√r²)), the
+    same bits as the prototype's `sqrt` and division;
   - the same semantics as the GPU layout: each target adds its sources in near-row and
     point order, the r² = 0 rule, the signed-off contract; the tests below run on both
     layouts;
@@ -68,14 +74,16 @@ Do:
   - timed on the M3 Max against `nd_fmm_simd::P2pKernel` (NEON) on the W1 workload,
     gathered form, f32 and f64, potential and gradient, at one thread (one unit) and on
     the 12 performance cores, in `p2p_kernels` (behind `gpu` and `cpu`). The target:
-    the geometric mean of the per-pair time ratio at one thread is at most 1.5. Below
-    it, analyse the JIT output's inner loop (vector width, fma, inline `sqrt`/`fdiv`,
-    spills) against the NEON kernel's, and report; do not change the target. Also time
-    the leaf stage inside the FMM (CPU runtime against the host SIMD path, C3.2 cube
-    at p = 3) and report it.
-
-  If decision 10 left the CPU runtime correctness-only, skip this item: the CPU runtime
-  runs the GPU layout, for correctness only, and is not timed.
+    the geometric mean of the per-pair time ratio at one thread is at most 1.5. T3's
+    prototype measured 1.004. If the production layout misses the target, analyse the
+    JIT output's inner loop (vector width, fma, inline `sqrt`/`fdiv`, spills) against
+    the NEON kernel's, as T3 did (REPORT.md, "The JIT output"), and report; do not
+    change the target;
+  - the all-cores ratio is reported, not targeted. T3 measured 2.73×, dominated by the
+    runtime's scheduling (190–230 µs per queued 12-unit launch, workers on the
+    efficiency cores). Measure it with level-sized launches, not only T3's 768 leaves;
+  - also time the leaf stage inside the FMM (CPU runtime against the host SIMD path,
+    C3.2 cube at p = 3) and report it.
 - **Timing**, on Metal f32 only, by an `nd-fmm-validate` row in `p2p_kernels` (behind
   `gpu` and `metal`), on the workloads of simd-p2p.md §8.2:
   - W1, FMM-shaped (n_t ∈ {8, …, 128}, both forms), and W2, all-pairs (N ∈ {10³, 10⁴},
@@ -99,20 +107,22 @@ Do:
 Tests that define done (CPU runtime f32 and f64; Metal f32 by hand, `#[ignore]`; each
 test prints the backends it ran):
 - Terms: one source and one target over seeded separations across the §3.13 domain,
-  within the signed-off pair-term bounds against `nd_fmm_ref::p2p` (provisionally 8 u_T
-  potential, 16 u_T per gradient component relative to |q| / r²).
+  within the signed-off pair-term bounds against `nd_fmm_ref::p2p`: 8 u_T for the
+  potential and 16 u_T per gradient component relative to |q| / r² (C3S.4, unchanged).
+  On Metal, which flushes subnormals, the bounds apply to q = 0 or |q| ≥ 2⁻¹⁰⁰ (§3.13,
+  "Device kernels"). T3 measured at most 4.6 and 10.3 u_T.
 - Sums: seeded FMM-shaped leaf sets (a target leaf and its 26 neighbours, mapped as
   `LaplaceOperator` maps them, with neighbours on coarser and finer levels), n_t from 0
   to 3 tiles + 1, n_s up to 4,096, within the signed-off sum bounds against
-  `direct_sum` (provisionally 1e-14 and 1e-6 relative to the term magnitudes, or twice
-  the reference's error), plus a cancelling set.
+  `direct_sum` (1e-14 and 1e-6 relative to the term magnitudes, or twice the
+  reference's error), plus a cancelling set.
 - Coincident points: targets equal to sources, duplicated sources, a mapped neighbour
   source that rounds onto a target, and the adversarial pairs of T3. Results are finite
   and equal the sum over the non-coincident pairs within tolerance.
 - Frames: the device frames (ĉ, r̂) against `geometry::relative_frame`, bit for bit
   (device-path.md §6.1).
-- Domain ends: pairs at 2⁻¹⁰⁸ (or the smallest r² the device addition allows) and
-  near 2⁷, finite and within tolerance; the f32 gradient range as §3.13 states.
+- Domain ends: pairs at 2⁻¹⁰⁸ and near 2⁷ (the domain carries over unchanged to device
+  kernels), finite and within tolerance; the f32 gradient range as §3.13 states.
 - Accumulation onto nonzero output; empty rows, empty leaves and an empty level are
   no-ops.
 - Invariance and determinism, bit for bit:
@@ -146,8 +156,8 @@ Must pass:
 
 Report: the backends run; the maximum measured errors per backend and precision (terms
 in u_T, sums); the timing tables; the fraction of the peak model against the C4.2
-target; and, with a CPU layout, its ratio to `nd-fmm-simd` at one thread and on all
-cores, against the 1.5× target. State that f64 was not timed on a GPU and that CUDA
+target; and the CPU layout's ratio to `nd-fmm-simd` at one thread, against the 1.5×
+target, and on all cores. State that f64 was not timed on a GPU and that CUDA
 was type-checked only.
 
 Do not:

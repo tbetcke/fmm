@@ -992,6 +992,70 @@ range on the whole domain.
 Like the rest of §3.13 this describes in-memory data and the kernels that read it. It
 changes no fixture and no table, and `CONVENTION_VERSION` stays 1 (§3.10).
 
+### Device kernels
+
+The device kernels of `nd-fmm-kernels` (CubeCL) take the inputs of "Fast kernels" and
+exclude a pair by r² = 0 too. Their compilers need not keep IEEE semantics. Phase 4 T3
+measured the backends on the Apple M3 Max with CubeCL 0.11.0-pre.4: the CubeCL CPU
+runtime (LLVM; f32 and f64) and Metal through wgpu-msl (f32). CUDA is taken from the
+code generator and was not run (spikes/device-arith/REPORT.md).
+
+**Arithmetic a device kernel may assume.** The minimum over the backends measured:
+
+- `+`, `−` and `×` are each rounded correctly, as written. +0 and −0 compare equal.
+- An explicit `fma(a, b, c)` rounds once.
+- Any a · b ± c whose product has no other use may be fused into an fma. cubecl-opt's
+  `InstCombinePass` does this on every backend, with no switch. A result must not depend
+  on whether such an expression is fused.
+- On normal arguments, `sqrt`, division, `recip` and `inverse_sqrt` are within 2.5 u_T,
+  relative. `1 / sqrt(x)` may be compiled as `inverse_sqrt(x)`.
+- Subnormal inputs, results and compared values may be flushed to zero.
+- An expression that uses one value twice may be simplified algebraically:
+  x − x → 0 and x + 0.0 → x (the latter turns −0 + 0 into −0) on every backend, and
+  (x + b) − x → b on Metal. So no compensated summation, no x − x as a test for NaN or
+  ∞, and no result that depends on the sign of a zero.
+- No reassociation of an expression in distinct values was observed. None is relied
+  on either way: the rule below holds whether or not the compiler reassociates.
+
+| | CPU runtime (f32, f64) | Metal, wgpu-msl (f32) | CUDA (from the code, not run) |
+| --- | --- | --- | --- |
+| `sqrt`, division, `recip` | correctly rounded | ≤ 1.8, 2.3, 1.3 u_T (measured) | `llvm.sqrt` and `fdiv` without fast-math flags |
+| `inverse_sqrt` | fl(1 / fl(√x)), ≤ 1.5 u_T (a polyfill) | ≤ 1.5 u_T; also what 1 / √x compiles to | fl(1 / fl(√x)) (the same polyfill) |
+| contraction | `InstCombinePass`; `fma` lowers to `llvm.fmuladd`, fused on AArch64 | `InstCombinePass`; no further fusion observed | `InstCombinePass`, and `contract` on add, sub and mul |
+| subnormals | kept | flushed in f32 | no flush-to-zero flag set |
+| simplification | cubecl-opt's folds | cubecl-opt's folds and Metal's fast math | cubecl-opt's folds |
+
+**The coincident-pair rule on the device.** r² = 0 exactly when u_t == ŷ, and every
+other r² ≥ 2⁻¹⁰⁶, as in "Fast kernels", if the kernel:
+
+1. passes u_s itself for s = t, and for s ≠ t forms ŷₖ = fma(r̂, u_s,k, ĉₖ) with an
+   explicit fma. r̂ u_s is exact, so this is fl(ĉ + r̂ u_s), the ŷ of "Operators in scaled
+   coordinates", bit for bit. ŷ is never written as ĉ + r̂ u_s inline inside the
+   subtraction, because reassociated to (u_t − ĉ) − r̂ u_s that form would change 26% of
+   the f32 adversarial components of T3 and gain or lose a zero in 20% of them;
+2. forms dₖ = u_t,k − ŷₖ as one subtraction of the two values;
+3. forms r² from the dₖ with squares and additions in any order, fused or not;
+4. tests r² == 0 and selects, ρ = select(r² == 0, 0, ρ), before ρ meets a charge. It
+   never multiplies by a mask, because ∞ · 0 is NaN.
+
+Flushing to zero does not break the rule. Every nonzero stored |u| and every nonzero
+|dₖ| is at least 2⁻⁵³, so dₖ² and r² are at least 2⁻¹⁰⁶, normal in f32 (2⁻¹²⁶) with a
+margin of 2²⁰. No operand or result of steps 1–3 is subnormal, and the inexact `sqrt`,
+division or `inverse_sqrt` act only on r² that passed the test. T3 checked the rule on
+Metal and the CPU runtime in five formulations of ŷ and r²: 209,303 adversarial and
+216,000 random pairs in f32, and on the CPU runtime 439,192 and 216,000 in f64. It
+found no exception, and ŷ and d equal the host's bit for bit in every case.
+
+**Domain and ranges.** The kernel domain (r² = 0, or 2⁻¹⁰⁸ ≤ r² ≤ 2⁷) and the f32
+gradient range (2⁻⁸⁴ ≤ r² ≤ 2⁷ and |q| ≤ 1) carry over unchanged. Where subnormals
+flush, a term below the normal range of T becomes zero instead of subnormal. On the
+domain, ρ ≥ 2⁻³·⁵ and |q| / r² ≥ 2⁻⁷ |q|, so in f32 that happens only for
+|q| < 2⁻¹¹⁹. The accuracy contracts of device kernels therefore hold for q = 0 or
+|q| ≥ 2⁻¹⁰⁰, and smaller nonzero charges are outside them on a backend that flushes.
+
+Like the rest of §3.13, this describes in-memory data and the kernels that read it. It
+changes no fixture and no table, and `CONVENTION_VERSION` stays 1 (§3.10).
+
 ### Output
 
 ```math
@@ -1044,3 +1108,9 @@ rationals:
 - the largest r² at the far corners of corner neighbours on all three levels, against
   3 (6 + 3β′)² (1 + ε_T)⁷ and 2⁷;
 - the f32 range of the gradient intermediates on [2⁻⁸⁴, 2⁷].
+
+`spikes/device-arith` (Phase 4 T3) checks "Device kernels" on each backend that runs:
+the same adversarial and random pairs, rebuilt in Rust, with ŷ, dₖ and r² formed in a
+device kernel in five formulations; the primitive operations against correctly rounded
+host values; and the compiler's contraction, simplification and flushing, with inputs
+chosen so that each shows in the bits.
