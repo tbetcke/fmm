@@ -9,9 +9,9 @@ Phase and components: Phase 3, C3.1–C3.3 and C3.5 (tasks T3 and T8–T11 in do
 Phase 3S, C3S.5 (task T6 in docs/phase3s/); Phase 4, C4.1 (task T5 in docs/phase4/;
 design docs/design/device-path.md), C4.2 (task T6: P2P on the device), C4.3 (task
 T7: P2M, L2P, P2L and M2P on the device), C4.4 (task T8: M2M and L2L on the device),
-C4.5 (task T9: dense M2L on the device), C4.6 (task T10: rotation M2L on the device) and
-C4.8 (task T11: the device FMM end to end, every kind on the device), with C4.7 to
-follow.
+C4.5 (task T9: dense M2L on the device), C4.6 (task T10: rotation M2L on the device),
+C4.8 (task T11: the device FMM end to end, every kind on the device) and C4.7 (task T12:
+autotune with a persistent cache, module `tune`).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -52,7 +52,8 @@ follow.
     `tests/accuracy.rs` (the ignored C3.2 gate), `tests/adaptive.rs` (the ignored
     C3.3 error per list) and `tests/device_metal.rs` (the ignored Metal run of the
     device path, feature `metal`) initialise it at `Threading::Funneled`;
-    `tests/device_fmm.rs` (the ignored C4.8 gate, feature `gpu`) at the default level.
+    `tests/device_fmm.rs` (the ignored C4.8 gate, feature `gpu`) and
+    `tests/device_tune.rs` (the tuner, feature `cpu`) at the default level.
     The device checks shared by `tests/mpi_exec.rs` and `tests/device_metal.rs` live in
     `tests/device_common/`.
   - New `Fmm` scenarios evaluate through `evaluate_threaded` in `tests/mpi_exec.rs`,
@@ -128,6 +129,26 @@ follow.
     `StageTimings::device` (spans that overlap on Metal, not a breakdown); no window on
     the CPU runtime, whose windows drain the stream; `synchronous_stages` disables them. Never add a sync, a download or a host call to a
     default evaluation; a new launch belongs in the formula of `tests/device_common`;
+  - autotune (T12, C4.7; module `tune`, device-path.md §10): `FmmBuilder::tuning_cache`
+    (no default directory, no environment variable) and `tuning_budget` (10 s); the M2L
+    strategy under `Auto` with M2L on the device is decided before the tables are built
+    (`device::tune_strategy`: cache, timing rotation against dense on the largest V level,
+    or the static rule; at p ≥ 12 without `table_cache` the static rule, not stored), the
+    GEMM of each (kind, pair bucket) under `DeviceGemm::Auto` at the end of
+    `DeviceOperator::new`, the P2P layout under `DeviceP2pLayout::Auto` in `load_points`;
+    settings the builder names are never tuned. Static rule (`tune::static_*`): f32
+    `Dense`, f64 `Dense` to p = 11 and `Rotation` from 12 (provisional), the GEMMs of
+    `DeviceGemm::Auto`, `P2pLayout::default_for`; with M2L on the host fallback `Auto`
+    keeps the host rule (requirement 8). Candidates are registered only past the device's
+    checks and the input-precision guard (a library below T's precision never), timed
+    after a warm-up launch as the median of 5 batches of ≥ 10 ms, the static rule's
+    first, no candidate started past the deadline; level calls under 512 pairs keep the
+    static rule. The cache file (one per backend, device, precision, p) is text with a
+    checksum, the key and every version, written atomically; a stale or corrupt file is
+    rejected and re-tuned. Every choice is fixed at build and reported in
+    `DeviceReport::tuning`; never tune inside `evaluate`, never call CubeCL's autotune.
+    The coefficient-major layout is measured and not a candidate (`tune` docs); a change
+    to any candidate set bumps `tune::CANDIDATE_SET_VERSION`;
   - safety (requirement 9): no `unsafe` here and no direct `cubecl` dependency;
     CubeCL only through `nd-fmm-kernels`;
   - threads: with `Backend::Cpu` no rayon pool, `threads(n)` caps the CPU runtime's
@@ -154,7 +175,13 @@ follow.
     C3.2 gate there (T11), and on Metal in f32 with `--features metal`; from T11
     `tests/device_fmm.rs`, the C4.8 gate: the cube and the Plummer sphere at N = 10⁵, f64
     p = 8, 12, 18 on the CPU runtime, f32 p = 3, 8 on Metal (with the Gaussian clusters
-    at p = 8), against the host of the same settings, and the C3.3 gate on the device).
+    at p = 8), against the host of the same settings, and the C3.3 gate on the device;
+    from T12 also the tuning budget at the C3.2 size, the cube at p = 8 tuned with a fresh
+    cache);
+  - from T12, `tests/device_tune.rs`: the tuning cache without MPI (round trip, stale and
+    corrupt files, concurrent writers) and, with `--features cpu`, the scenarios of
+    `tests/tune_common` on the CPU runtime (f64 p = 6 in full, f32 p = 3; about a minute
+    in release), which `tests/device_metal.rs` also runs on Metal (f32 p = 8 and 3).
 
 ## Allowed dependencies
 nd-fmm-math, nd-fmm-ref, nd-fmm-tables, nd-fmm-plan, nd-fmm-simd (from Phase 3S T6),

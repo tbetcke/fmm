@@ -33,7 +33,12 @@
 //! - f64 with Metal is refused with `SettingsError::PrecisionUnsupported` at build;
 //! - `threads(4)` builds the pool of four threads for the host-fallback kinds
 //!   (device-path.md §11): with every kind there the output still equals the host
-//!   path's, and with the default placement the output of one thread.
+//!   path's, and with the default placement the output of one thread;
+//! - the tuner (T12): the scenarios of `tune_common` (static rule without a directory, a
+//!   slowed candidate, the input-precision guard, the cache round trip, stale and
+//!   corrupted files, every candidate's output within the FMM bounds, the budget) at p = 8
+//!   in f32, where the library GEMM and its coefficient-major layout are candidates, and
+//!   at p = 3 without the stale files and the budget.
 //!
 //! The test prints the device (`Backend::probe`) and the backends it ran.
 #![cfg(feature = "metal")]
@@ -45,6 +50,7 @@ use nd_fmm_exec::fmm::{Backend, DeviceGemm, FmmBuilder, FmmError, OperatorKind, 
 use nd_fmm_exec::tables::M2lStrategy;
 
 mod device_common;
+mod tune_common;
 
 use device_common::{Outcome, check_backend, output_bits};
 
@@ -319,6 +325,13 @@ fn metal_device_path() {
              the default placement bit for bit one thread"
         );
     }
+    // The tuner (T12), on one rank.
+    if comm.size() == 1 {
+        let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("device_metal_tune");
+        tune_common::check_tuning::<f32>(Backend::Metal, 8, true, &root, &comm);
+        tune_common::check_tuning::<f32>(Backend::Metal, 3, false, &root, &comm);
+    }
+
     eprintln!(
         "rank {}: backends run: metal (f32); not run: cpu (tests/mpi_exec.rs with --features \
          cpu), cuda (type-checked, not run)",

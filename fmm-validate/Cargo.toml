@@ -60,3 +60,10 @@ required-features = ["gpu"]
 [[example]]
 name = "rotation_kernels"
 required-features = ["gpu"]
+
+# The tuning tables of the device path per problem and degree, a rebuild from the cache,
+# and the evaluation time tuned against the static rule (Phase 4 T12): needs a device
+# backend; not run in CI (no templated-examples entry), run by hand on one rank.
+[[example]]
+name = "autotune"
+required-features = ["gpu"]

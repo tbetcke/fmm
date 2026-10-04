@@ -37,13 +37,16 @@
 //!    [`SettingsError::DeviceNeedsOneRank`], without a collective.
 //! 6. Sorts sources and targets into leaf order, stably, and keeps both permutations.
 //! 7. All-reduces the largest number of sources in a leaf, which sizes the P2P scratch;
-//!    builds or loads the tables, the operator (with a device backend the device
-//!    operator around it, which checks that its buffers fit in device memory, allocates
-//!    them and uploads the views and tables), and the evaluator with the per-leaf counts
-//!    (its own collectives).
+//!    with a device backend resolves the M2L strategy of [`M2lStrategy::Auto`] for the
+//!    device (Phase 4 T12: from the tuning cache, by timing rotation against dense, or by
+//!    the static rule); builds or loads the tables, the operator (with a device backend
+//!    the device operator around it, which checks that its buffers fit in device memory,
+//!    allocates them, uploads the views and tables, and takes its GEMM decisions), and the
+//!    evaluator with the per-leaf counts (its own collectives).
 //! 8. Writes the leaf-scaled source coordinates and target positions into the
 //!    evaluator's stores, once ([`leaf_coordinates`]), and with a device backend uploads
-//!    them to the device.
+//!    them to the device, which then takes its P2P decision and ends its tuning (device
+//!    work only, no collective).
 //!
 //! It also reads the BLAS thread variables once, for [`Fmm::threading`].
 //!
@@ -105,6 +108,16 @@
 //! documents the residency, the transfers, the scheduling, the fallback, the errors and
 //! the threads rule; docs/design/device-path.md is the design.
 //!
+//! **Autotune** (Phase 4 T12, C4.7; the `tune` module, feature `gpu`): with
+//! [`FmmBuilder::tuning_cache`] the device path times its candidates at build (the M2L
+//! strategy under `Auto`, the GEMM of each level call under `DeviceGemm::Auto`, the P2P
+//! layout under `DeviceP2pLayout::Auto`) within [`FmmBuilder::tuning_budget`], keeps the
+//! fastest for the `Fmm`'s lifetime and stores it in the caller's directory; a later
+//! build with the same key reads it. Without a directory the static rule applies: f32
+//! `Dense`, f64 `Dense` to p = 11 and `Rotation` above (provisional), the GEMMs of
+//! `DeviceGemm::Auto` and the backend's P2P layout. Two builds from the same cache give
+//! the same bits; `evaluate` never tunes.
+//!
 //! # Redistribution (C5.1)
 //!
 //! Points and charges are taken, and potentials returned, in the caller's order, on the
@@ -162,6 +175,9 @@ pub const DEFAULT_MAX_LEVEL: usize = DEEPEST_LEVEL as usize;
 
 /// The default `max_points_per_leaf` of [`FmmBuilder`].
 pub const DEFAULT_MAX_POINTS_PER_LEAF: usize = 64;
+
+/// The default [`FmmBuilder::tuning_budget`]: 10 s (docs/design/device-path.md §10.4).
+pub const DEFAULT_TUNING_BUDGET: Duration = Duration::from_secs(10);
 
 /// The deepest level of a Morton key.
 const DEEPEST: usize = DEEPEST_LEVEL as usize;
@@ -606,6 +622,8 @@ pub enum FmmError {
 /// | [`device_leaf_layout`](Self::device_leaf_layout) | [`DeviceLeafLayout::Auto`]: by backend |
 /// | [`device_gemm`](Self::device_gemm) | [`DeviceGemm::Auto`]: by precision, p and backend |
 /// | [`device_scratch_budget`](Self::device_scratch_budget) | 128 MB |
+/// | [`tuning_cache`](Self::tuning_cache) | none: no tuning, the static rule |
+/// | [`tuning_budget`](Self::tuning_budget) | 10 s |
 ///
 /// For `T = f32`, p > 8 is accepted but lies beyond the useful range (design §4): the
 /// error is then at the f32 floor already.
@@ -628,6 +646,10 @@ pub struct FmmBuilder<T> {
     device_leaf_layout: DeviceLeafLayout,
     device_gemm: DeviceGemm,
     device_scratch_budget: Option<u64>,
+    tuning_cache: Option<PathBuf>,
+    tuning_budget: Duration,
+    #[cfg(feature = "gpu")]
+    tuning_hook: crate::tune::TuningHook,
     value: PhantomData<fn() -> T>,
 }
 
@@ -652,6 +674,10 @@ impl<T> FmmBuilder<T> {
             device_leaf_layout: DeviceLeafLayout::Auto,
             device_gemm: DeviceGemm::Auto,
             device_scratch_budget: None,
+            tuning_cache: None,
+            tuning_budget: DEFAULT_TUNING_BUDGET,
+            #[cfg(feature = "gpu")]
+            tuning_hook: crate::tune::TuningHook::default(),
             value: PhantomData,
         }
     }
@@ -808,6 +834,39 @@ impl<T> FmmBuilder<T> {
     /// CPU runtime and with [`synchronous_stages`](Self::synchronous_stages).
     pub fn device_timestamps(mut self, on: bool) -> Self {
         self.device_timestamps = on;
+        self
+    }
+
+    /// With a device backend, tunes the device path's choices against the timings of this
+    /// device and keeps them in the directory `dir` (Phase 4 T12, C4.7;
+    /// docs/design/device-path.md §10): the M2L strategy under [`M2lStrategy::Auto`], the
+    /// GEMM of the M2M, L2L and dense M2L level calls under [`DeviceGemm::Auto`], and the
+    /// P2P layout under [`DeviceP2pLayout::Auto`]. Decisions the cache file of this
+    /// (backend, device, precision, p) holds are taken from it; the others are timed at
+    /// build, within [`tuning_budget`](Self::tuning_budget), and stored. Without it, no
+    /// directory is used and no tuning runs: the static rule applies (the `tune` module,
+    /// feature `gpu`). No default directory, no environment variable. Ignored by
+    /// [`Backend::Host`].
+    pub fn tuning_cache(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.tuning_cache = Some(dir.into());
+        self
+    }
+
+    /// Sets the time the tuner may spend in one build (default 10 s; Phase 4 T12): checked
+    /// before every candidate and between its timed batches, so that no candidate starts
+    /// past it. Decisions it leaves untuned take the static rule and are not stored.
+    /// Ignored without [`tuning_cache`](Self::tuning_cache).
+    pub fn tuning_budget(mut self, budget: Duration) -> Self {
+        self.tuning_budget = budget;
+        self
+    }
+
+    /// A test aid for the tuner (Phase 4 T12; feature `gpu`): `hook` adjusts measured
+    /// times and offers extra candidates, which go through registration like the others
+    /// (`tune::TuningHook`). Not for production runs.
+    #[cfg(feature = "gpu")]
+    pub fn tuning_hook(mut self, hook: crate::tune::TuningHook) -> Self {
+        self.tuning_hook = hook;
         self
     }
 
@@ -1012,9 +1071,17 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         let local_max = sources_by_leaf.counts.iter().copied().max().unwrap_or(0);
         let mut max_leaf_points = 0usize;
         comm.all_reduce_into(&local_max, &mut max_leaf_points, SystemOperation::max());
+        // With a device backend, the tuner (Phase 4 T12) and the M2L strategy: under
+        // `Auto` with M2L on the device, the cached, tuned or static choice of the device
+        // path, for which the tables are built.
+        let mut device = device;
+        let tuning_start = Instant::now();
+        let (strategy, tuner) = self.device_strategy(device.as_mut(), &plan);
+        let tuning_time = tuning_start.elapsed();
+        let start = start + tuning_time;
         let (tables, cache_outcomes) = match &self.table_cache {
-            Some(dir) => Tables::load_or_build(self.p, self.strategy, &TableCache::new(dir)),
-            None => (Tables::build(self.p, self.strategy), Vec::new()),
+            Some(dir) => Tables::load_or_build(self.p, strategy, &TableCache::new(dir)),
+            None => (Tables::build(self.p, strategy), Vec::new()),
         };
         let tables_time = start.elapsed();
         let start = Instant::now();
@@ -1029,10 +1096,10 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             operator,
             device,
             &plan,
-            &sources_by_leaf.counts,
-            &targets_by_leaf.counts,
+            (&sources_by_leaf.counts, &targets_by_leaf.counts),
+            tuner,
         )?;
-        let mut device_time = open_time + start_device.elapsed();
+        let mut device_time = open_time + tuning_time + start_device.elapsed();
         let mut evaluator = Evaluator::new(
             plan,
             comm,
@@ -1041,7 +1108,9 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             &targets_by_leaf.counts,
         )
         .map_err(FmmError::Evaluator)?;
-        let evaluator_time = start.elapsed().saturating_sub(device_time - open_time);
+        let evaluator_time = start
+            .elapsed()
+            .saturating_sub(device_time - open_time - tuning_time);
 
         // Step 8: the leaf-scaled coordinates, once.
         let start = Instant::now();
@@ -1082,7 +1151,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             octree,
             evaluator,
             domain,
-            strategy: self.strategy.resolve(self.p),
+            strategy: strategy.resolve(self.p),
             backend: self.backend,
             synchronous_stages: self.synchronous_stages && self.backend.is_device(),
             leaf_charges: if self.backend.is_device() {
@@ -1118,8 +1187,8 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         operator: LaplaceOperator<T>,
         device: Option<OpenedDevice>,
         plan: &Plan,
-        source_counts: &[usize],
-        target_counts: &[usize],
+        counts: (&[usize], &[usize]),
+        tuner: Option<Tuner>,
     ) -> Result<ExecOperator<T>, FmmError> {
         match device {
             None => Ok(ExecOperator::Host(operator)),
@@ -1140,24 +1209,77 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
                         device::StageTiming::Enqueue
                     },
                 };
-                let driver = device::driver(
-                    operator,
-                    device,
-                    plan,
-                    source_counts,
-                    target_counts,
-                    &options,
-                )?;
+                let tuner = tuner.expect("a device build has a tuner");
+                let driver = device::driver(operator, device, plan, counts, &options, tuner)?;
                 Ok(ExecOperator::Device(driver))
             }
             #[cfg(not(feature = "gpu"))]
             Some(never) => {
-                let _ = (plan, source_counts, target_counts);
+                let _ = (plan, counts, tuner);
                 match never {}
             }
         }
     }
+
+    /// With a device: the tuner of the build (Phase 4 T12) and the M2L strategy to build
+    /// the tables for: the builder's, or under `Auto` with M2L on the device the device
+    /// path's (cached, tuned, or the static rule; `tune::static_strategy`). On the host,
+    /// or with M2L on the host fallback, the builder's strategy, which the tables resolve
+    /// by the host rule.
+    #[cfg(feature = "gpu")]
+    fn device_strategy(
+        &self,
+        device: Option<&mut OpenedDevice>,
+        plan: &Plan,
+    ) -> (M2lStrategy, Option<Tuner>) {
+        let Some(device) = device else {
+            return (self.strategy, None);
+        };
+        let key = crate::tune::TuningKey::new(
+            device.info(),
+            device::precision_of::<T>(),
+            self.p,
+            self.gradients,
+        );
+        let mut tuner = Tuner::new(
+            key,
+            self.tuning_cache.as_deref(),
+            self.tuning_budget,
+            self.tuning_hook.clone(),
+        );
+        let strategy = if self.strategy == M2lStrategy::Auto
+            && !self.host_fallback.contains(&OperatorKind::M2l)
+        {
+            device::tune_strategy::<T>(
+                &mut tuner,
+                device,
+                plan,
+                self.p,
+                self.table_cache.as_deref(),
+            )
+        } else {
+            self.strategy
+        };
+        (strategy, Some(tuner))
+    }
+
+    /// Without the `gpu` feature: the builder's strategy, no tuner.
+    #[cfg(not(feature = "gpu"))]
+    fn device_strategy(
+        &self,
+        device: Option<&mut OpenedDevice>,
+        plan: &Plan,
+    ) -> (M2lStrategy, Option<Tuner>) {
+        let _ = (device, plan);
+        (self.strategy, None)
+    }
 }
+
+/// The tuner of a device build (feature `gpu`); without it, no value.
+#[cfg(feature = "gpu")]
+type Tuner = crate::tune::Tuner;
+#[cfg(not(feature = "gpu"))]
+type Tuner = std::convert::Infallible;
 
 /// An opened device: `nd_fmm_kernels::Device` with the `gpu` feature; without it no
 /// device can be opened, and the type has no value.
@@ -1461,8 +1583,9 @@ pub struct BuildTimings {
     pub evaluator: Duration,
     /// Step 8: the leaf-scaled coordinates.
     pub load: Duration,
-    /// With a device backend: opening the device, the device operator (its tables and
-    /// uploads) and the upload of the points; zero on the host.
+    /// With a device backend: opening the device, the tuning (Phase 4 T12; with
+    /// [`FmmBuilder::tuning_cache`]), the device operator (its tables and uploads) and the
+    /// upload of the points; zero on the host.
     pub device: Duration,
 }
 
@@ -1840,7 +1963,10 @@ where
         self.operator().p()
     }
 
-    /// Returns the resolved strategy, never [`M2lStrategy::Auto`].
+    /// Returns the resolved strategy, never [`M2lStrategy::Auto`]: on the host `Auto` by
+    /// [`M2lStrategy::resolve`]; with a device backend and M2L on the device, `Auto` by the
+    /// device path's choice (Phase 4 T12: from the tuning cache, tuned at build, or the
+    /// static rule of the `tune` module, feature `gpu`), for which the tables were built.
     pub fn strategy(&self) -> M2lStrategy {
         self.strategy
     }

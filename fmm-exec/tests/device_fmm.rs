@@ -41,6 +41,13 @@
 //!   the uniform cube at the same p, N and backend; f32 is reported. The C3.2 gate on the
 //!   device path is in `tests/accuracy.rs`.
 //!
+//! **The tuning budget at the C3.2 size** (Phase 4 T12): the cube at N = 10⁵ and p = 8 (f64
+//! on the CPU runtime, f32 on Metal) is built once more with a fresh tuning cache and the
+//! default budget of 10 s; no candidate may start after the deadline
+//! (`TuningReport::last_start` below the budget), the output of the tuned choices must lie
+//! within the FMM bounds of the host output (one charge vector), and the tuning time and
+//! every decision are printed.
+//!
 //! Every point is measured and printed (a Markdown table, with the host and device
 //! evaluation times at one thread, reported and never asserted) before the checks are
 //! asserted; the test prints the backends it ran. If a check fails, isolate the
@@ -488,6 +495,65 @@ fn run<T: Stored + SimdScalar + Equivalence + Default + RealScalar>(
     }
 }
 
+/// The tuning budget at the C3.2 size (module documentation) on `backend` in T at degree p:
+/// pushes a failed check onto `failures` and returns the report's lines.
+fn tuning_budget<T: Stored + SimdScalar + Equivalence + Default + RealScalar>(
+    backend: Backend,
+    problem: &Problem,
+    p: usize,
+    comm: &SimpleCommunicator,
+    failures: &mut Vec<String>,
+) -> String {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("device_fmm_tuning_{backend}_{}", size_of::<T>()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let builder = FmmBuilder::<T>::new(p).gradients(true);
+    let charges: Vec<T> = problem.charges[0].iter().map(|&v| T::from_f64(v)).collect();
+    let start = Instant::now();
+    let mut device = builder
+        .clone()
+        .backend(backend)
+        .tuning_cache(&dir)
+        .build(&problem.points, &problem.points, comm)
+        .unwrap_or_else(|error| panic!("{backend}: the tuned FMM does not build: {error}"));
+    let build = start.elapsed();
+    let report = device
+        .device_report()
+        .and_then(|r| r.tuning.clone())
+        .expect("a device build reports its tuning");
+    let what = format!("{backend}, cube, p = {p}, tuned");
+    if report.last_start >= report.budget {
+        failures.push(format!(
+            "{what}: a candidate started at {:?}, after the budget {:?}",
+            report.last_start, report.budget
+        ));
+    }
+    let mut host = builder
+        .clone()
+        .strategy(device.strategy())
+        .build(&problem.points, &problem.points, comm)
+        .expect("the host FMM builds");
+    let (d, h) = (
+        device.evaluate(&charges).expect("it evaluates"),
+        host.evaluate(&charges).expect("it evaluates"),
+    );
+    let (dp, dg) = difference(&d, &h);
+    let bound = if size_of::<T>() == 8 { 1e-12 } else { 1e-5 };
+    if dp > bound || dg > bound {
+        failures.push(format!(
+            "{what}: the output differs from the host's by φ {dp:e}, ∇φ {dg:e}"
+        ));
+    }
+    format!(
+        "{what}: build {:.1} s, of which tuning {:.2} s (budget {:.0} s, last candidate started \
+         at {:.2} s); output within {dp:.1e} (φ), {dg:.1e} (∇φ) of the host\n{report}",
+        build.as_secs_f64(),
+        report.time.as_secs_f64(),
+        report.budget.as_secs_f64(),
+        report.last_start.as_secs_f64()
+    )
+}
+
 /// The C3.3 gate on the device path (module documentation): in f64 the φ L2 error of each
 /// clustered distribution at most twice the cube's at the same backend, p and N.
 fn c33_gate(rows: &[Row], failures: &mut Vec<String>) -> Vec<String> {
@@ -619,6 +685,18 @@ fn device_fmm_gate() {
             ms(r.times.0),
             ms(r.times.1)
         );
+    }
+    // The tuning budget at the C3.2 size.
+    let cube = Problem::new("cube", N);
+    if Backend::Cpu.is_compiled() {
+        let line = tuning_budget::<f64>(Backend::Cpu, &cube, 8, &comm, &mut failures);
+        eprintln!("{line}");
+        println!("\n{line}");
+    }
+    if Backend::Metal.is_compiled() {
+        let line = tuning_budget::<f32>(Backend::Metal, &cube, 8, &comm, &mut failures);
+        eprintln!("{line}");
+        println!("\n{line}");
     }
     let gate = c33_gate(&rows, &mut failures);
     if !gate.is_empty() {

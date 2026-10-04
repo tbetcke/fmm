@@ -84,7 +84,9 @@ impl M2lStrategy {
     /// about 20 % of each other in between; rotation also needs far less memory per
     /// rank (5.6 MB against 211 MB for the dense M2L tables at p = 16) and wins for M2M and L2L from p = 8. The
     /// timings were single-threaded, one product or one rotation per pair; the batched
-    /// GEMM path of Phase 4 changes the comparison and will have its own rule.
+    /// GEMM path of Phase 4 changes the comparison and has its own rule: with a device
+    /// backend and M2L on the device, `FmmBuilder::build` resolves `Auto` by the device
+    /// path's choice (Phase 4 T12, the `tune` module, feature `gpu`), not by this.
     pub fn resolve(self, p: usize) -> Self {
         match self {
             Self::Auto if p <= Self::AUTO_DENSE_MAX_P => Self::Dense,

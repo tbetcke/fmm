@@ -31,7 +31,10 @@ pair across p, its efficiency against the spike's break-even values, the M2L sta
 against the host rotation at 1 and 12 threads, and the rotation layouts; T11: `--backend
 host|cpu|metal|cuda` of the `fmm_accuracy` example, with every kind on the device, the
 device report, the transfers, launches, syncs and timing windows per evaluation and the
-device stage times, through `fmm_accuracy::Execution::backend` and `Run::device`).
+device stage times, through `fmm_accuracy::Execution::backend` and `Run::device`; T12:
+the `autotune` example, the tuning tables per problem and degree with a rebuild from the
+cache and the evaluation time tuned against the static rule, and `m2l_kernels
+--orientation`, the coefficient-major layout against the box-major one per V level).
 Later phases add the crates they validate.
 
 The only crate that depends on this one is the spike `spikes/p2p-simd` (Phase 3S T7),

@@ -53,7 +53,7 @@ use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_kernels::movement::gather_columns;
 use nd_fmm_kernels::translate::{
     Accumulate, DEFAULT_SCRATCH_BYTES, Gemm, GemmLayout, GemmPolicy, GroupedPlan, Operands,
-    PlanSettings, Tables, TileSchedule, TranslationScratch, gemm, grouped, library,
+    Orientation, PlanSettings, Tables, TileSchedule, TranslationScratch, gemm, grouped, library,
 };
 use nd_fmm_kernels::view::{GroupedArrays, GroupedView};
 use nd_fmm_kernels::{BackendKind, Device, DeviceBuffer};
@@ -270,6 +270,7 @@ fn measure(
         layout,
         policy: GemmPolicy::Auto,
         budget: DEFAULT_SCRATCH_BYTES,
+        orientation: Orientation::BoxMajor,
     }
     .library_candidate(device.backend(), nd_fmm_kernels::Precision::F32);
     let m2m_tables = Tables::upload(
@@ -302,6 +303,7 @@ fn measure(
             layout,
             policy: GemmPolicy::Auto,
             budget: DEFAULT_SCRATCH_BYTES,
+            orientation: Orientation::BoxMajor,
         };
         let size = settings.size(
             device.backend(),

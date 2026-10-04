@@ -1,11 +1,14 @@
-//! Zero, gather, scatter-add and scatter against plain host loops, bit for bit.
+//! Zero, gather (box-major and, T12, coefficient-major in blocks), scatter-add and scatter
+//! against plain host loops, bit for bit.
 //!
 //! Every launch works on ranges at odd offsets inside larger buffers, and the elements
 //! around them are checked to be untouched. Column sizes are (p + 1)² for
 //! p ∈ {0, 3, 8, 20}; index arrays are empty, of one element, permuted and (gather
 //! only) repeated; the scatter-add accumulates onto nonzero data.
 
-use nd_fmm_kernels::movement::{gather_columns, scatter_add_columns, scatter_values, zero};
+use nd_fmm_kernels::movement::{
+    gather_coefficients, gather_columns, scatter_add_columns, scatter_values, zero,
+};
 use nd_fmm_kernels::{Device, DeviceElement};
 
 use crate::common::{Rng, TestFloat, assert_bits, tests_on};
@@ -173,6 +176,36 @@ fn gather<E: Data>(device: &mut Device) {
                 &download(device, &y),
                 &want,
             );
+            // Coefficient-major, in one block, blocks of one column and blocks of the
+            // smallest divisor above one: coefficient k of column b w + c at (b n + k) w + c.
+            let divisor = (2..m).find(|d| m % d == 0).unwrap_or(m);
+            for block in [m, 1, divisor] {
+                if block == 0 {
+                    continue;
+                }
+                let mut y = device.upload(&y_data).unwrap();
+                gather_coefficients(
+                    device,
+                    n,
+                    x.slice(PAD..PAD + COLUMNS * n),
+                    idx.slice(PAD..PAD + m),
+                    block,
+                    y.slice_mut(PAD..PAD + m * n),
+                )
+                .unwrap();
+                let mut want = y_data.clone();
+                for (j, &c) in indices.iter().enumerate() {
+                    let (b, col) = (j / block, j % block);
+                    for k in 0..n {
+                        want[PAD + (b * n + k) * block + col] = matrix[c as usize * n + k];
+                    }
+                }
+                payloads &= E::check(
+                    &format!("gather coefficient-major, p = {p}, {case}, blocks of {block}"),
+                    &download(device, &y),
+                    &want,
+                );
+            }
         }
     }
     report_copies::<E>("gather", payloads);
@@ -260,6 +293,7 @@ fn empty_launches_nothing(device: &mut Device) {
     device.reset_counters();
     zero(device, y.slice_mut(4..4)).unwrap();
     gather_columns(device, 4, x.as_slice(), idx.as_slice(), y.slice_mut(..0)).unwrap();
+    gather_coefficients(device, 4, x.as_slice(), idx.as_slice(), 1, y.slice_mut(..0)).unwrap();
     scatter_add_columns(device, 4, x.slice(..0), idx.as_slice(), y.as_slice_mut()).unwrap();
     scatter_values(device, x.slice(..0), idx.as_slice(), y.as_slice_mut()).unwrap();
     assert_eq!(device.counters().launches, 0);

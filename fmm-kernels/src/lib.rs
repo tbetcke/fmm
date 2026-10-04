@@ -135,7 +135,10 @@
 //! [`translate::grouped`] runs one level's M2M or L2L (and, from T9, dense M2L) as in
 //! device-path.md §6.4: per chunk of the view's batches a gather of the input columns
 //! in batch order, one grouped GEMM over the level's groups into a temporary, and a
-//! reduction per target in row order or a scatter-add. The hand-written GEMM
+//! reduction per target in row order or a scatter-add; from T12 the gathered inputs and
+//! products may also be laid out coefficient-major ([`translate::Orientation`], the GEMM
+//! spike's orientation; the hand-written kernel's products are the same bits either way).
+//! The hand-written GEMM
 //! ([`translate::gemm`], [`translate::GemmLayout`]: a cube per tile on the GPUs, one unit per
 //! core on the CPU runtime) sums each output from zero with explicit fmas in ascending
 //! order, which a host `mul_add` loop repeats bit for bit; the library GEMM
@@ -196,3 +199,7 @@ pub use device::{
     Precision, TimingWindow, WindowTime,
 };
 pub use error::KernelError;
+
+/// The version of this crate, part of the key of every tuning-cache entry of
+/// `nd-fmm-exec` (Phase 4 T12): a cache written by another version is stale.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

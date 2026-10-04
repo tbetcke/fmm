@@ -105,6 +105,9 @@
 //! - **determinism**: every launch and transfer is issued from the calling thread, in
 //!   order on one stream, and everything is chosen at build; two evaluations, and two
 //!   builds of the same input, are bit-identical;
+//! - **autotune** (`tune`, Phase 4 T12): with a tuning-cache directory the M2L strategy,
+//!   the GEMM of each level call and the P2P layout are timed at build, fixed for the
+//!   `Fmm`'s lifetime and kept in the directory; without one the static rule applies;
 //! - **errors**: device settings are refused at build with a
 //!   [`SettingsError`](fmm::SettingsError) agreed by step 1's all-reduce; a device runs on
 //!   one rank until C5.1; device failures are [`FmmError::Device`](fmm::FmmError::Device);
@@ -165,3 +168,5 @@ pub mod geometry;
 pub mod operator;
 pub mod tables;
 pub mod threading;
+#[cfg(feature = "gpu")]
+pub mod tune;

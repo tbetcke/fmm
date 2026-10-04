@@ -25,7 +25,7 @@
 use nd_fmm_kernels::movement::{gather_columns, scatter_add_columns};
 use nd_fmm_kernels::translate::{
     Accumulate, DEFAULT_SCRATCH_BYTES, Gemm, GemmLayout, GemmPolicy, GroupedPlan, Operands,
-    PlanSettings, Tables, TileSchedule, TranslationScratch, gemm, grouped,
+    Orientation, PlanSettings, Tables, TileSchedule, TranslationScratch, gemm, grouped,
 };
 use nd_fmm_kernels::view::{GroupedArrays, GroupedView};
 use nd_fmm_kernels::{BackendKind, Device, DeviceBuffer, Precision};
@@ -492,27 +492,33 @@ fn check_level_call<T: Real>(device: &mut Device, p: usize, nrows: usize, one_pe
     for layout in layouts(device, n) {
         let what = format!("{} {shape} p = {p}, {nrows} rows, {layout}", T::FLOAT);
         let mut chunks = Vec::new();
-        // One chunk; chunks of 5 columns (cutting batches); chunks of 1 column.
+        // One chunk; chunks of 5 columns (cutting batches); chunks of 1 column; each in both
+        // orientations (T12: the same products, so the same bits).
         for columns in [usize::MAX, 5, 1] {
             let budget = if columns == usize::MAX {
                 DEFAULT_SCRATCH_BYTES
             } else {
                 (2 * n * columns * size_of::<T>()) as u64
             };
-            let settings = PlanSettings {
-                n,
-                layout,
-                policy: GemmPolicy::HandWritten,
-                budget,
-            };
-            let (got, gemm, nchunks) = call.run(device, &settings, columns == usize::MAX);
-            assert_eq!(gemm, Gemm::HandWritten(layout));
-            chunks.push(nchunks);
-            assert_same(
-                &format!("{what}, {nchunks} chunks: the host rows"),
-                &got,
-                &want,
-            );
+            for orientation in [Orientation::BoxMajor, Orientation::CoefficientMajor] {
+                let settings = PlanSettings {
+                    n,
+                    layout,
+                    policy: GemmPolicy::HandWritten,
+                    budget,
+                    orientation,
+                };
+                let (got, gemm, nchunks) = call.run(device, &settings, columns == usize::MAX);
+                assert_eq!(gemm, Gemm::HandWritten(layout));
+                if orientation == Orientation::BoxMajor {
+                    chunks.push(nchunks);
+                }
+                assert_same(
+                    &format!("{what}, {orientation}, {nchunks} chunks: the host rows"),
+                    &got,
+                    &want,
+                );
+            }
         }
         let pairs = call.view.sources.len();
         assert_eq!(chunks[0], usize::from(pairs > 0));
@@ -529,8 +535,9 @@ fn check_level_call<T: Real>(device: &mut Device, p: usize, nrows: usize, one_pe
             }
         }
         println!(
-            "  {what}: bit for bit the host rows with 1, {} and {} chunks, repeated calls \
-             bit-identical, empty rows untouched; ≤ {worst:.2} u_T τ from apply",
+            "  {what}: bit for bit the host rows with 1, {} and {} chunks, box-major and \
+             coefficient-major, repeated calls bit-identical, empty rows untouched; \
+             ≤ {worst:.2} u_T τ from apply",
             chunks[1], chunks[2]
         );
     }
@@ -547,6 +554,7 @@ fn check_per_group<T: Real>(device: &mut Device, p: usize) {
             layout,
             policy: GemmPolicy::HandWritten,
             budget: DEFAULT_SCRATCH_BYTES,
+            orientation: Orientation::BoxMajor,
         };
         let (grouped_result, _, _) = call.run(device, &settings, false);
         let tables = device.upload(call.set.as_slice()).unwrap();
@@ -630,6 +638,7 @@ fn level_calls<T: Real>(device: &mut Device) {
         layout: GemmLayout::default_for(device.info(), 16),
         policy: GemmPolicy::Auto,
         budget: DEFAULT_SCRATCH_BYTES,
+        orientation: Orientation::BoxMajor,
     };
     let (got, _, chunks) = call.run(device, &settings, true);
     assert_eq!(chunks, 0);
@@ -650,19 +659,24 @@ fn grouped_equals_per_octant(device: &mut Device) {
     each_precision!(device, per_group);
 }
 
-/// The library GEMM under `GemmPolicy::Auto` at p = 8 in f32 (Metal): the plan's GEMM is
-/// reported; with the library, a level call is within the GEMM tolerance of the host rows
-/// and bit-identical when repeated. Elsewhere the plan must run the hand-written kernel.
+/// The library GEMM under `GemmPolicy::Auto` at p = 8 in f32 (Metal), in both orientations
+/// (T12): the plan's GEMM is reported; with the library, a level call is within the GEMM
+/// tolerance of the host rows and bit-identical when repeated. Elsewhere the plan must run
+/// the hand-written kernel.
 fn library_level_call(device: &mut Device) {
     let p = 8;
     let n = (p + 1) * (p + 1);
-    for (nrows, one_per_row) in [(40, false), (40, true), (2000, false)] {
+    let shapes = [(40, false), (40, true), (2000, false)];
+    for ((nrows, one_per_row), orientation) in shapes.into_iter().flat_map(|shape| {
+        [Orientation::BoxMajor, Orientation::CoefficientMajor].map(|o| (shape, o))
+    }) {
         let call = Call::<f32>::new(0x7_8300 + nrows as u64, n, nrows, one_per_row);
         let settings = PlanSettings {
             n,
             layout: GemmLayout::default_for(device.info(), n),
             policy: GemmPolicy::Auto,
             budget: DEFAULT_SCRATCH_BYTES,
+            orientation,
         };
         let (got, gemm, _) = call.run(device, &settings, true);
         let (apply, tau) = apply_rows(&call.view, &call.set, &call.input, &call.output);
@@ -679,8 +693,8 @@ fn library_level_call(device: &mut Device) {
             assert!(matches!(gemm, Gemm::HandWritten(_)), "{gemm}");
         }
         println!(
-            "  f32 p = 8, {nrows} rows ({}): GEMM {gemm}; ≤ {worst:.2} u_T τ from apply, \
-             repeated calls bit-identical",
+            "  f32 p = 8, {nrows} rows ({}), {orientation}: GEMM {gemm}; ≤ {worst:.2} u_T τ \
+             from apply, repeated calls bit-identical",
             if one_per_row { "L2L" } else { "M2M" }
         );
     }

@@ -222,7 +222,10 @@ These hold for every task, so that no task decides them on its own:
 
   C4.7 replaces the rule with autotune where a tuning cache exists. The rule stays as
   the fallback for an untuned (backend, precision, p), including f64 on CUDA, which
-  nothing here can measure.
+  nothing here can measure. **From T12 (decision 13):** with a device backend and M2L on
+  the device, `M2lStrategy::Auto` resolves by this rule (f32 dense at every p) or by the
+  tuned choice, and the host tables are built for it; with M2L on the host fallback it
+  keeps the host rule.
 - **The CubeCL CPU runtime** is the correctness backend for f64, and the CI candidate.
   - How it maps a launch (CubeCL 0.11.0-pre.4 sources, docs/design/device-path.md F18
     and F19; confirmed by T2): one task per unit of a cube, each unit's code looping over
@@ -509,6 +512,33 @@ Each is recorded in the exit checklist when made:
     coefficients contiguous), which costs the library 16–29%. **Decided on 2026-10-04:
     the gate is accepted as analysed, and the coefficient-major layout that would give
     the GEMMs the spike's orientation is deferred to T12** (T12 brief, "Do").
+13. The T12 autotune decisions (C4.7). **Signed off on 2026-10-04**, as proposed in the
+    T12 report:
+    - **The coefficient-major GEMM layout is not a tuning candidate.** Measured on Metal
+      f32 it beat no choice the tuner could make instead: the hand-written kernel
+      1.09–1.49× slower on every M2L level (p = 3–16); the library 2–14% faster than the
+      box-major library on M2L but still 1.1–1.8× behind the box-major hand-written
+      kernel, and 1.23–1.26× slower on M2M and L2L. It stays a tested option of
+      `nd_fmm_kernels::translate::PlanSettings` (hand-written products bit for bit those
+      of the box-major layout), and device-path.md §6.4's layout does not change.
+    - **The M2L strategy is tuned before the tables are built**, not after the uploads
+      (device-path.md §10.4): it decides which tables the host and the device build, so
+      rotation is timed against dense on the largest V level with temporary device
+      buffers. The GEMM decisions are tuned after the tables and plans are uploaded, the
+      P2P layout after the points are uploaded.
+    - **The device's `Auto` follows the static rule**, not the host rule: f32 dense at
+      every p, f64 dense to p = 11 and rotation from p = 12. With M2L on the host
+      fallback `Auto` keeps the host rule, so that every kind on the host still equals the
+      host path bit for bit (requirement 8). The host path's `Auto` does not change.
+    - **The f64 boundary stays at p = 12, provisional.** T10's Metal f32 rotation
+      efficiency (1.8–3.0% of peak), entered into the spike's f64 model, would make dense
+      4.5×, 2.4× and 2.1× faster at p = 8, 12 and 16 against the central dense estimate,
+      and about even at p = 12–16 against the low one: the boundary is probably early,
+      but nothing here measures f64 on a GPU. Moving it is a separate decision.
+    - **The budget bounds when candidates start**, not the last candidate's end: no
+      candidate starts after the deadline, and one that is running stops after its
+      current batch. At the C3.2 size Metal tuned in 4.2 s; the CPU runtime in 10.7 s, its
+      last candidate (about 3 s) started at 7.8 s.
 
 ## Risks
 
@@ -538,6 +568,7 @@ In the repository root, start `claude` and say:
 - [x] Host BLAS GEMM path: deferred (decided 2026-10-03)
 - [x] Metal runtime (decision 11): `metal` stays wgpu-msl; `metal-native` only by a separate sign-off (decided 2026-10-03)
 - [x] C4.5 GEMM gate (decision 12): accepted as analysed (met in 2 of 12 cells, cause measured); the coefficient-major GEMM layout deferred to T12 (decided 2026-10-04)
+- [x] T12 autotune decisions (decision 13): coefficient-major layout measured and not a candidate; strategy tuned before the tables; device `Auto` by the static rule; f64 boundary kept at p = 12, provisional; budget bounds candidate starts (signed off 2026-10-04)
 - [x] T2 merged: pin at 0.11.0-pre.4, `spikes/cubecl-gemm` passing and re-measured, migration notes, root `CLAUDE.md` points to Phase 4
 - [x] T3 merged: device arithmetic measured per backend; §3.13 addition and device P2P contract drafted
 - [x] §3.13 addition and device P2P contract signed off (2026-10-03)
