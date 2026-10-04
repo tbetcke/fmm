@@ -28,7 +28,7 @@
 
 use nd_fmm_kernels::translate::{
     Accumulate, DEFAULT_SCRATCH_BYTES, Gemm, GemmLayout, GemmPolicy, GroupedPlan, Operands,
-    PerGroupPlan, PlanSettings, Tables, TranslationScratch, grouped, per_group,
+    Orientation, PerGroupPlan, PlanSettings, Tables, TranslationScratch, grouped, per_group,
 };
 use nd_fmm_kernels::view::{GroupedArrays, GroupedView};
 use nd_fmm_kernels::{BackendKind, Device, Precision};
@@ -348,35 +348,41 @@ fn check_batches<T: Real>(device: &mut Device, p: usize) {
     for layout in layouts(device, n) {
         let what = format!("{} M2L p = {p}, {pairs} pairs, {layout}", T::FLOAT);
         let mut chunks = Vec::new();
-        // One chunk; chunks of 97 columns, which cut batches.
+        // One chunk; chunks of 97 columns, which cut batches; both orientations (T12).
         for columns in [usize::MAX, 97] {
             let budget = if columns == usize::MAX {
                 DEFAULT_SCRATCH_BYTES
             } else {
                 (2 * n * columns * size_of::<T>()) as u64
             };
-            let settings = PlanSettings {
-                n,
-                layout,
-                policy: GemmPolicy::HandWritten,
-                budget,
-            };
-            let repeats = if columns == usize::MAX { 2 } else { 1 };
-            let (got, gemm, nchunks) = call.grouped(device, &settings, repeats);
-            assert_eq!(gemm, Gemm::HandWritten(layout));
-            chunks.push(nchunks);
-            assert_same(
-                &format!("{what}, {nchunks} chunks: the host rows"),
-                &got,
-                &want,
-            );
-            call.empty_rows_zero(&what, &got);
+            for orientation in [Orientation::BoxMajor, Orientation::CoefficientMajor] {
+                let settings = PlanSettings {
+                    n,
+                    layout,
+                    policy: GemmPolicy::HandWritten,
+                    budget,
+                    orientation,
+                };
+                let repeats = if columns == usize::MAX { 2 } else { 1 };
+                let (got, gemm, nchunks) = call.grouped(device, &settings, repeats);
+                assert_eq!(gemm, Gemm::HandWritten(layout));
+                if orientation == Orientation::BoxMajor {
+                    chunks.push(nchunks);
+                }
+                assert_same(
+                    &format!("{what}, {orientation}, {nchunks} chunks: the host rows"),
+                    &got,
+                    &want,
+                );
+                call.empty_rows_zero(&what, &got);
+            }
         }
         assert_eq!(chunks, vec![1, pairs.div_ceil(97)]);
         let worst = call.within_apply(&what, &want, &apply, &tau);
         println!(
-            "  {what}: bit for bit the host rows in 1 and {} chunks, each entry once, \
-             repeated calls bit-identical, empty rows zero; ≤ {worst:.2} u_T τ from apply",
+            "  {what}: bit for bit the host rows in 1 and {} chunks, box-major and \
+             coefficient-major, each entry once, repeated calls bit-identical, empty rows \
+             zero; ≤ {worst:.2} u_T τ from apply",
             chunks[1]
         );
     }
@@ -392,6 +398,7 @@ fn check_per_offset<T: Real>(device: &mut Device, p: usize) {
             layout,
             policy: GemmPolicy::HandWritten,
             budget: DEFAULT_SCRATCH_BYTES,
+            orientation: Orientation::BoxMajor,
         };
         let (b, _, _) = call.grouped(device, &settings, 1);
         let a = call.per_group(device, Gemm::HandWritten(layout));
@@ -450,6 +457,7 @@ fn m2l_library(device: &mut Device) {
         layout,
         policy: GemmPolicy::Auto,
         budget,
+        orientation: Orientation::BoxMajor,
     };
     let (library, gemm, chunks) = call.grouped(device, &auto(DEFAULT_SCRATCH_BYTES), 3);
     if device.backend() == BackendKind::Cpu {
@@ -520,6 +528,27 @@ fn m2l_library(device: &mut Device) {
             "bit for bit"
         } else {
             "not bit for bit (other padded shapes)"
+        }
+    );
+    // The library coefficient-major (T12): the spike's orientation over the same padded
+    // chunks, within the GEMM tolerance of apply.
+    let coefficient_major = PlanSettings {
+        orientation: Orientation::CoefficientMajor,
+        ..auto(DEFAULT_SCRATCH_BYTES)
+    };
+    let (cm, gemm_cm, _) = call.grouped(device, &coefficient_major, 2);
+    let worst_cm = call.within_apply("library M2L p = 8, coefficient-major", &cm, &apply, &tau);
+    let same = cm
+        .iter()
+        .zip(&library)
+        .all(|(a, b)| a.to_bits() == b.to_bits());
+    println!(
+        "  f32 M2L p = 8, coefficient-major: GEMM {gemm_cm}; ≤ {worst_cm:.2} u_T τ from \
+         apply; {} the box-major library",
+        if same {
+            "bit for bit"
+        } else {
+            "not bit for bit"
         }
     );
     // Structure (A) with the library, one launch per offset: bit for bit the grouped call

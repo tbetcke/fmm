@@ -29,7 +29,7 @@
 
 use nd_fmm_kernels::translate::{
     Accumulate, DEFAULT_SCRATCH_BYTES, Gemm, GemmLayout, GemmPolicy, GroupedPlan, Operands,
-    PlanSettings, Tables, TranslationScratch, grouped,
+    Orientation, PlanSettings, Tables, TranslationScratch, grouped,
 };
 use nd_fmm_kernels::view::{GroupedArrays, GroupedView};
 use nd_fmm_kernels::{BackendKind, Device, DeviceFloat, Precision};
@@ -162,6 +162,7 @@ fn run_cell<T: Real>(
         layout,
         policy,
         budget: DEFAULT_SCRATCH_BYTES,
+        orientation: Orientation::BoxMajor,
     };
     let library = settings.library_candidate(device.backend(), T::FLOAT);
     let tables = Tables::upload(device, set.cast::<T>().as_slice(), n, library).unwrap();

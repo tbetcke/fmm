@@ -71,6 +71,44 @@ fn gather_kernel<E: Numeric>(
     }
 }
 
+/// y[y0 + e] = x[x0 + idx[i0 + b w + c] n + k] for e = (b n + k) w + c < work: gathered
+/// columns, coefficient-major in blocks of w columns.
+#[cube(launch_unchecked)]
+#[allow(clippy::too_many_arguments)]
+fn gather_coefficients_kernel<E: Numeric>(
+    x: &[E],
+    x_offset: u32,
+    indices: &[u32],
+    index_offset: u32,
+    y: &mut [E],
+    y_offset: u32,
+    block: u32,
+    work: u32,
+    chunk: u32,
+    threads: u32,
+    #[comptime] n: usize,
+) {
+    let (x_offset, index_offset, y_offset) =
+        (x_offset as usize, index_offset as usize, y_offset as usize);
+    let (block, work, chunk) = (block as usize, work as usize, chunk as usize);
+    let stride = threads as usize * chunk;
+    let mut start = ABSOLUTE_POS * chunk;
+    while start < work {
+        let mut end = start + chunk;
+        if end > work {
+            end = work;
+        }
+        for e in start..end {
+            let row = e / block;
+            let b = row / n;
+            let k = row - b * n;
+            let column = indices[index_offset + b * block + e - row * block] as usize;
+            y[y_offset + e] = x[x_offset + column * n + k];
+        }
+        start += stride;
+    }
+}
+
 /// x[x0 + idx[i0 + e / n] n + e % n] += y[y0 + e] for e < work: one add per element.
 #[cube(launch_unchecked)]
 #[allow(clippy::too_many_arguments)]
@@ -213,6 +251,68 @@ pub fn gather_columns<E: DeviceElement>(
             indices.offset() as u32,
             BufferArg::from_raw_parts(yh, yl),
             y.offset() as u32,
+            y.len() as u32,
+            grid.chunk,
+            grid.threads(),
+            n,
+        );
+    }
+    device.count_launch();
+    Ok(())
+}
+
+/// Gathers columns coefficient-major: for columns of `n` values and blocks of `block`
+/// columns, `y[(b n + k) block + c] = x[k, indices[b block + c]]` (coefficient k of
+/// column `indices[j]` of `x`, j = b block + c): within each block of `block` gathered
+/// columns, each coefficient's values contiguous (the coefficient-major layout of
+/// `translate`, "Orientation", Phase 4 T12). With one block it is the transpose of
+/// [`gather_columns`]'s result. A copy: bit for bit a host loop.
+///
+/// # Errors
+///
+/// [`KernelError::WrongDevice`] if a buffer belongs to another device.
+///
+/// # Panics
+///
+/// As [`gather_columns`]; and if `block` is 0 or does not divide `indices.len()`.
+pub fn gather_coefficients<E: DeviceElement>(
+    device: &mut Device,
+    n: usize,
+    x: DeviceSlice<'_, E>,
+    indices: IndexSlice<'_>,
+    block: usize,
+    y: DeviceSliceMut<'_, E>,
+) -> Result<(), KernelError> {
+    check_owners(device, &[x.device(), indices.device(), y.device()])?;
+    check_columns("gather_coefficients", n, x.len(), indices, y.len());
+    assert!(
+        block > 0 && indices.len().is_multiple_of(block),
+        "gather_coefficients: blocks of {block} columns for {} columns",
+        indices.len()
+    );
+    if y.is_empty() {
+        return Ok(());
+    }
+    let grid = device.elementwise_grid(y.len());
+    let ((xh, xl), (ih, il), (yh, yl)) = (x.binding(), indices.binding(), y.binding());
+    // SAFETY: each handle is a whole buffer with its element count, as `from_raw_parts`
+    // requires. For e < y.len() = n · indices.len() the kernel reads the index
+    // b block + c < indices.len() (b < indices.len() / block, c < block; within the index
+    // slice), reads x at x.offset() + column n + k with column < indices.bound() ≤
+    // x.len() / n and k < n (within x), and writes y[y.offset() + e] (within y);
+    // `check_columns` and the block assertion established these bounds.
+    unsafe {
+        gather_coefficients_kernel::launch_unchecked::<E>(
+            device.client(),
+            CubeCount::Static(grid.cubes, 1, 1),
+            CubeDim::new_1d(grid.units),
+            BufferArg::from_raw_parts(xh, xl),
+            x.offset() as u32,
+            BufferArg::from_raw_parts(ih, il),
+            indices.offset() as u32,
+            BufferArg::from_raw_parts(yh, yl),
+            y.offset() as u32,
+            block as u32,
             y.len() as u32,
             grid.chunk,
             grid.threads(),

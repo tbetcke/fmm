@@ -72,7 +72,7 @@ use nd_fmm_exec::tables::{M2lStrategy, Tables as HostTables};
 use nd_fmm_kernels::rotation::{RotationLayout, RotationPlan, RotationTables, m2l};
 use nd_fmm_kernels::translate::{
     Accumulate, DEFAULT_SCRATCH_BYTES, Gemm, GemmLayout, GemmPolicy, GroupedPlan, Operands,
-    PlanSettings, Stage, Tables, TranslationScratch, grouped, grouped_stage,
+    Orientation, PlanSettings, Stage, Tables, TranslationScratch, grouped, grouped_stage,
 };
 use nd_fmm_kernels::view::{GroupedArrays, GroupedView};
 use nd_fmm_kernels::{BackendKind, Device, DeviceBuffer, Precision};
@@ -368,6 +368,7 @@ fn measure(device: &mut Device, views: &[Level], tables: &DegreeTables) -> Vec<R
         layout: GemmLayout::default_for(device.info(), n),
         policy: GemmPolicy::HandWritten,
         budget: DEFAULT_SCRATCH_BYTES,
+        orientation: Orientation::BoxMajor,
     };
     let library_settings = PlanSettings {
         policy: GemmPolicy::Auto,

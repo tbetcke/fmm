@@ -77,6 +77,15 @@ of C4.8 (T11) in docs/phase4/.
   layouts never change the bits of the hand-written path (tested); on Metal the library
   measured bit for bit the hand-written kernel, across chunkings and against (A) (T9;
   not assumed elsewhere). Do not change the summation order without a sign-off.
+  From T12 `PlanSettings::orientation` (`Orientation`): box-major (the default, §6.4) or
+  coefficient-major (blocks of w columns, coefficient k of column c of block b at
+  (b n + k) w + c; the gather `movement::gather_coefficients`, the same hand-written
+  units, accumulators and k order, so its products are box-major's bit for bit, tested on
+  every layout and chunking; the library reads the tables as column-major A; L2L then
+  takes the reduction). Measured slower than the best box-major choice on every FMM level
+  of Metal f32 (`nd-fmm-exec`'s `tune` docs), so `nd-fmm-exec` does not register it; keep
+  it tested. `Tables::release_library_copy` frees a library copy no plan needs (T12), and
+  `VERSION` keys the tuning cache.
 - Rotation M2L (T10, `rotation`, device-path.md §6.6): the M2L family of the Phase 2
   rotation tables uploaded once as `RotationTables` from plain arrays in the storage of
   `nd_fmm_tables::rotation::ShiftTables` (`RotationArrays`: forward and backward y-blocks
@@ -160,7 +169,8 @@ of C4.8 (T11) in docs/phase4/.
   4 s together; the GEMM of 1000 columns on the CPU runtime is `#[ignore]`. T10's
   rotation tests (`tests/kernels/translate/rotation.rs`: random V rows at p ∈ {0, 3, 8}
   and the special offsets at p ∈ {1, 3, 8}, both layouts, f32 and f64) add 3 runtime
-  tests of about 1.2 s together.
+  tests of about 1.2 s together. T12 runs the level-call tests in both orientations and
+  the gather coefficient-major too (no new test functions).
   `cargo test -p nd-fmm-kernels` without features builds and passes in seconds.
   Kernel compilation, from CubeCL's profiling log (the first launch of each variant
   includes its compilation): `CUBECL_DEBUG_LOG=<file> cargo test -p nd-fmm-kernels

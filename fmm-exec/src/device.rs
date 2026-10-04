@@ -272,15 +272,37 @@
 //! windows off for the later evaluations of the operator. The CPU runtime drains its
 //! stream at both ends of a window, so there no window is opened.
 //!
+//! # Autotune (T12, C4.7; [`crate::tune`])
+//!
+//! Every grouped level call keeps the GEMM choice it was built with (the GEMM, the layout
+//! of its operands and the chunk budget; [`TranslationReport`]), and the P2P layout is one
+//! choice: under `DeviceGemm::Auto` and `DeviceP2pLayout::Auto` each is the choice of its
+//! decision, one per (kind, pair bucket) and one per points-per-leaf bucket. At build the
+//! operator takes them from the decisions taken earlier in the build (the M2L GEMM timed
+//! with the strategy), from the tuning cache, or by the static rule, and builds every plan
+//! with its choice. With a tuning cache that lacks a decision, the operator provides for
+//! every candidate (the library copies of the tables where the library applies, the
+//! scratch of its padded layout), times the candidates at the end of
+//! [`new`](DeviceOperator::new) (the GEMMs, on its own buffers, each on the largest level
+//! call of its bucket) and in [`load_points`](DeviceOperator::load_points) (P2P, after the
+//! points are uploaded), rebuilds the plans whose choice changed, and releases what no
+//! chosen plan needs; the report's tables, scratch and memory follow. The M2L strategy
+//! itself is decided before the operator exists (`tune_strategy`), since it decides
+//! the tables. Every decision, with where its choice came from and its candidates' times,
+//! is in [`DeviceReport::tuning`]. Tuning launches belong to the build counters; an
+//! evaluation zeroes every buffer the tuning wrote, so the output does not depend on it.
+//!
 //! # Determinism (requirement 6)
 //!
 //! Every launch and transfer is issued from the thread that calls the operator, so they
 //! run in order on one CubeCL stream; host-fallback calls are bit-identical for every
 //! thread count. The launch sequence, the chunks, the tile schedules, the layouts and the
-//! GEMM of every level call are fixed at build from the plan and the device, so for a
-//! fixed tree, backend, device and build the output is bit-identical from evaluation to
-//! evaluation, and from build to build of the same input (tested on every
-//! `tests/mpi_exec.rs` scenario). Timing windows change nothing.
+//! GEMM of every level call are fixed at build from the plan, the device and the choices
+//! of the build (static rule, cache or tuning, T12), so for a fixed tree, backend, device,
+//! build and choices the output is bit-identical from evaluation to evaluation, and from
+//! build to build of the same input with the same choices (tested on every
+//! `tests/mpi_exec.rs` scenario, and for builds from one tuning cache in
+//! `tests/device_tune.rs`). Timing windows change nothing.
 //!
 //! # Differences from the host path (§9.2)
 //!
@@ -351,7 +373,8 @@
 use std::any::Any;
 use std::fmt;
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use mpi::traits::Equivalence;
 use nd_fmm_kernels::leaf::{LeafLayout, SourceInputs, TargetInputs};
@@ -363,7 +386,7 @@ use nd_fmm_kernels::rotation::{
     Shift as DeviceShift,
 };
 use nd_fmm_kernels::translate::{
-    Accumulate, DEFAULT_SCRATCH_BYTES, GemmPolicy, GroupedPlan, Operands, PlanSettings, Tables,
+    Accumulate, DEFAULT_SCRATCH_BYTES, GroupedPlan, Operands, Orientation, PlanSettings, Tables,
     TranslationScratch, grouped,
 };
 pub use nd_fmm_kernels::translate::{Gemm, GemmLayout};
@@ -376,15 +399,18 @@ use nd_fmm_kernels::{
     IndexBuffer, KernelError, TimingWindow, WindowTime,
 };
 pub use nd_fmm_kernels::{Counters, DeviceInfo};
-use nd_fmm_plan::lists::{Csr, GroupedCsr};
+use nd_fmm_plan::lists::{Csr, GroupedCsr, VList};
 use nd_fmm_plan::operator::{
     FmmOperator, FmmSizes, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, UpwardPass,
 };
 use nd_fmm_plan::plan::Plan;
 use nd_fmm_plan::store::{LeafStore, LevelBuffers};
 use nd_fmm_tables::cache::{Stored, TableKind};
-use nd_fmm_tables::rotation::{Alignment, ShiftTables};
-use nd_fmm_tables::{CacheOutcome, L2lTables, M2mTables, MatrixSet, TableCache};
+use nd_fmm_tables::rotation::{Alignment, Operator as RotationOperator, ShiftTables};
+use nd_fmm_tables::{
+    CacheOutcome, L2lTables, M2lTables, M2mTables, MatrixSet, RotationTables as HostRotationTables,
+    TableCache,
+};
 use nd_octree::morton;
 
 use crate::fmm::{
@@ -393,6 +419,11 @@ use crate::fmm::{
 };
 use crate::operator::{LaplaceOperator, SimdScalar};
 use crate::tables::M2lStrategy;
+use crate::tune::{
+    Candidate, Decision, GemmChoice, GemmKind, MIN_TUNED_PAIRS, Rejection, Tuner, TuningReport,
+    bucket, gemm_candidates, library_applies, p2p_candidates, static_gemm, static_p2p,
+    static_strategy, time_launches,
+};
 
 /// The precisions of the device operator, f32 and f64: the bounds of the host operator
 /// and of the table cache, and a float type of `nd-fmm-kernels`.
@@ -615,6 +646,11 @@ pub struct TranslationReport {
     pub pairs: usize,
     /// The GEMM that runs.
     pub gemm: Gemm,
+    /// The layout of the gathered inputs and products: box-major (T12: coefficient-major
+    /// is an option of `nd-fmm-kernels` that the tuner does not register, `tune`).
+    pub orientation: Orientation,
+    /// The chunk budget in bytes (T12: the default unless set or tuned).
+    pub budget: u64,
     /// The chunks: three launches each.
     pub chunks: usize,
     /// The columns the GEMMs compute over the chunks: the pairs with the hand-written
@@ -717,7 +753,8 @@ pub struct DeviceReport {
     /// The bytes of the translation scratch: the gathered inputs and the products of
     /// the widest chunk (T8, T9).
     pub scratch_bytes: u64,
-    /// The bytes of every buffer the operator allocates on the device.
+    /// The bytes of every buffer the operator allocates on the device, as summed for the
+    /// check before allocating, less what tuning released after it (T12).
     pub memory_needed: u64,
     /// The bytes the device reported as available before the allocation, `None` if the
     /// backend reports no limit; the check was then skipped.
@@ -726,6 +763,10 @@ pub struct DeviceReport {
     /// `synchronous_stages` asks for a sync per stage or `device_timestamps` for timing
     /// windows (where the device times on itself).
     pub stage_timing: StageTiming,
+    /// What the tuner did (T12, [`crate::tune`]): every decision of the build, with its
+    /// source (the static rule, the cache, or tuned now) and the candidates' times; `None`
+    /// only before the points are loaded.
+    pub tuning: Option<TuningReport>,
 }
 
 impl DeviceReport {
@@ -803,6 +844,21 @@ impl fmt::Display for DeviceReport {
                 calls.len(),
                 self.gemm_layout,
             )?;
+            for t in calls.iter().filter(|t| {
+                t.orientation != Orientation::BoxMajor
+                    || t.budget != DEFAULT_SCRATCH_BYTES
+                    || matches!(t.gemm, Gemm::HandWritten(l) if l != self.gemm_layout)
+            }) {
+                writeln!(
+                    f,
+                    "  {} level {}: {}, {}, {} MB",
+                    t.kind,
+                    t.level,
+                    t.gemm,
+                    t.orientation,
+                    t.budget >> 20
+                )?;
+            }
         }
         if !self.rotations.is_empty() {
             let pairs: usize = self.rotations.iter().map(|r| r.pairs).sum();
@@ -820,6 +876,9 @@ impl fmt::Display for DeviceReport {
             writeln!(f, "CPU runtime: at most {units} units per cube")?;
         }
         writeln!(f, "stage timing: {}", self.stage_timing)?;
+        if let Some(tuning) = &self.tuning {
+            writeln!(f, "{tuning}")?;
+        }
         match self.memory_available {
             Some(available) => write!(
                 f,
@@ -886,18 +945,6 @@ impl DeviceLeafLayout {
             Self::Auto => LeafLayout::default_for(info, p, T::FLOAT),
             Self::Cube { units, tile } => LeafLayout::Cube { units, tile },
             Self::Cpu => LeafLayout::Cpu,
-        }
-    }
-}
-
-impl DeviceGemm {
-    /// The policy of `nd-fmm-kernels`' grouped translations of `kind`: under
-    /// [`Auto`](DeviceGemm::Auto) the library rule for M2M and L2L and the hand-written
-    /// kernel for M2L.
-    fn policy(self, kind: OperatorKind) -> GemmPolicy {
-        match (self, kind) {
-            (Self::Auto, OperatorKind::M2l) | (Self::HandWritten, _) => GemmPolicy::HandWritten,
-            (Self::Auto | Self::Library, _) => GemmPolicy::Auto,
         }
     }
 }
@@ -1102,19 +1149,62 @@ struct DeviceTables<T: DeviceFloat> {
     rotation: Option<DeviceRotation<T>>,
 }
 
+/// One grouped level call on the device: its plan and the GEMM choice it was built with
+/// (T12: the static rule, the cache, or the tuner).
+#[derive(Debug)]
+struct LevelCall {
+    plan: GroupedPlan,
+    choice: GemmChoice,
+}
+
 /// The plans of the device M2M, L2L (T8) and dense M2L (T9) level calls, one per level and
 /// view (empty where the kind runs on the host), their shared scratch, and the plans of the
 /// rotation M2L level calls (T10; empty unless M2L runs on the device under `Rotation`).
 #[derive(Debug)]
 struct Translations<T: DeviceFloat> {
-    m2m_local: Vec<GroupedPlan>,
-    m2m_global: Vec<GroupedPlan>,
-    l2l: Vec<GroupedPlan>,
-    m2l: Vec<GroupedPlan>,
+    m2m_local: Vec<LevelCall>,
+    m2m_global: Vec<LevelCall>,
+    l2l: Vec<LevelCall>,
+    m2l: Vec<LevelCall>,
     scratch: TranslationScratch<T>,
     rotation: Vec<RotationPlan>,
     rotation_layout: RotationLayout,
 }
+
+impl<T: DeviceFloat> Translations<T> {
+    /// The level calls of `kind` (and `pass` for M2M).
+    fn calls(&self, kind: OperatorKind, pass: Option<UpwardPass>) -> &[LevelCall] {
+        match (kind, pass) {
+            (OperatorKind::M2m, Some(UpwardPass::Local)) => &self.m2m_local,
+            (OperatorKind::M2m, Some(UpwardPass::Global)) => &self.m2m_global,
+            (OperatorKind::L2l, None) => &self.l2l,
+            (OperatorKind::M2l, None) => &self.m2l,
+            _ => unreachable!("M2M with a pass, L2L or M2L"),
+        }
+    }
+
+    /// The level calls of `kind` (and `pass` for M2M), mutably.
+    fn calls_mut(&mut self, kind: OperatorKind, pass: Option<UpwardPass>) -> &mut Vec<LevelCall> {
+        match (kind, pass) {
+            (OperatorKind::M2m, Some(UpwardPass::Local)) => &mut self.m2m_local,
+            (OperatorKind::M2m, Some(UpwardPass::Global)) => &mut self.m2m_global,
+            (OperatorKind::L2l, None) => &mut self.l2l,
+            (OperatorKind::M2l, None) => &mut self.m2l,
+            _ => unreachable!("M2M with a pass, L2L or M2L"),
+        }
+    }
+}
+
+/// A grouped level call: (kind, pass of M2M, level).
+type CallId = (OperatorKind, Option<UpwardPass>, usize);
+
+/// The grouped level calls, in report order: (kind, pass).
+const GROUPED: [(OperatorKind, Option<UpwardPass>); 4] = [
+    (OperatorKind::M2m, Some(UpwardPass::Local)),
+    (OperatorKind::M2m, Some(UpwardPass::Global)),
+    (OperatorKind::L2l, None),
+    (OperatorKind::M2l, None),
+];
 
 /// The host copies of the multipoles and locals that host-fallback calls work on.
 #[derive(Debug)]
@@ -1213,6 +1303,17 @@ pub struct DeviceOperator<T: DeviceScalar> {
     pending: Vec<(DeviceStage, WindowTime)>,
     /// The device times of the stages of the last evaluation.
     stage_timings: Option<DeviceStageTimings>,
+    /// The settings the operator was built with.
+    options: DeviceOptions,
+    /// The tuner until the points are loaded (T12): the translations are tuned at the end
+    /// of [`new`](Self::new), P2P in [`load_points`](Self::load_points), which ends it.
+    tuner: Option<Tuner>,
+    /// Per level, the local leaves of its P2P level call and their near-field pairs
+    /// (targets times sources over the near list), for the P2P decision.
+    p2p_levels: Vec<(Range<usize>, usize)>,
+    /// The mean points per local leaf, (N_s + N_t) / (2 leaves) rounded up: the bucket of
+    /// the P2P decision.
+    mean_points: usize,
 }
 
 impl<T: DeviceScalar> fmt::Debug for DeviceOperator<T> {
@@ -1326,6 +1427,86 @@ fn build_plan<G: Copy + Into<usize> + Into<u32>, T: DeviceFloat>(
     })
 }
 
+/// The plan of the grouped level call (`kind`, `pass`, `level`) of `plan` with
+/// `settings`, over the device tables of its family (T8, T9; T12 builds candidates and
+/// tuned choices the same way).
+fn plan_level_call<T: DeviceFloat>(
+    link: &mut Link,
+    plan: &Plan,
+    (kind, pass, level): (OperatorKind, Option<UpwardPass>, usize),
+    settings: &PlanSettings,
+    tables: &DeviceTables<T>,
+    scratch: &mut TranslationScratch<T>,
+) -> Result<GroupedPlan, FmmError> {
+    let lists = plan.level(level);
+    let (index, nlevels) = (plan.index(), plan.nlevels());
+    let bound = |l: usize| if l < nlevels { index.len(l) } else { 0 };
+    match (kind, pass) {
+        (OperatorKind::M2m, Some(UpwardPass::Local)) => build_plan(
+            link,
+            lists.m2m_local(),
+            bound(level + 1),
+            settings,
+            &tables.m2m,
+            scratch,
+        ),
+        (OperatorKind::M2m, _) => build_plan(
+            link,
+            lists.m2m_global(),
+            bound(level + 1),
+            settings,
+            &tables.m2m,
+            scratch,
+        ),
+        (OperatorKind::L2l, _) => build_plan(
+            link,
+            lists.l2l(),
+            bound(level.wrapping_sub(1)),
+            settings,
+            &tables.l2l,
+            scratch,
+        ),
+        _ => build_plan(
+            link,
+            lists.v(),
+            bound(level),
+            settings,
+            tables
+                .m2l
+                .as_ref()
+                .expect("M2L on the device has its tables"),
+            scratch,
+        ),
+    }
+}
+
+/// The report of every grouped level call with a pair, in the order local M2M, global
+/// M2M, L2L, M2L and by level.
+fn translation_reports<T: DeviceFloat>(translations: &Translations<T>) -> Vec<TranslationReport> {
+    GROUPED
+        .iter()
+        .flat_map(|&(kind, pass)| {
+            translations
+                .calls(kind, pass)
+                .iter()
+                .enumerate()
+                .filter(|(_, call)| !call.plan.is_empty())
+                .map(move |(level, call)| TranslationReport {
+                    kind,
+                    pass,
+                    level,
+                    pairs: call.plan.len(),
+                    gemm: call.plan.gemm(),
+                    orientation: call.plan.orientation(),
+                    budget: call.choice.budget,
+                    chunks: call.plan.nchunks(),
+                    gemm_columns: call.plan.gemm_columns(),
+                    library_rejection: call.plan.library_rejection().map(str::to_owned),
+                })
+        })
+        .collect()
+}
+
 /// A key's index on its level as `u32`.
 fn key_index(key: morton::MortonKey) -> (u32, [u32; 3]) {
     let (level, index) = morton::decode(key);
@@ -1410,7 +1591,10 @@ impl<T: DeviceScalar> DeviceOperator<T> {
     ///
     /// `host` must be built as the host path builds its operator (its tables, gradients,
     /// `max_leaf_points`, P2P kernel and pool), so that host-fallback kinds give the
-    /// host path's bits.
+    /// host path's bits. `tuner` holds the build's tuning key, cache and budget (T12): the
+    /// level calls' GEMMs and the P2P layout come from its decisions, cache or static rule,
+    /// and the GEMM decisions it lacks are tuned at the end of this call ([module
+    /// documentation](self#autotune-t12-c47-cratetune)).
     ///
     /// # Errors
     ///
@@ -1429,6 +1613,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         source_counts: &[usize],
         target_counts: &[usize],
         options: &DeviceOptions,
+        tuner: Tuner,
     ) -> Result<Self, FmmError> {
         let index = plan.index();
         let nlevels = plan.nlevels();
@@ -1497,18 +1682,86 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         let rotation = rotation.filter(|_| on_device(OperatorKind::M2l));
         debug_assert!(!on_device(OperatorKind::M2l) || dense_m2l != rotation.is_some());
 
-        // The settings of the device translations; a family whose level calls may take the
-        // library GEMM also gets the library copy of its tables (T8, T9).
-        let backend = device.backend();
-        let gemm_layout = GemmLayout::default_for(device.info(), n);
-        let plan_settings = |kind: OperatorKind| PlanSettings {
-            n,
-            layout: gemm_layout,
-            policy: options.gemm.policy(kind),
-            budget: options.scratch_budget.unwrap_or(DEFAULT_SCRATCH_BYTES),
+        // The GEMM of each grouped level call (T8, T9, T12): the builder's `device_gemm`
+        // and scratch budget where it names them; under `DeviceGemm::Auto` the choice of the
+        // call's decision, taken earlier in this build (the M2L GEMM tuned with the
+        // strategy) or found in the tuning cache, else the static rule. A family whose level
+        // calls may take the library GEMM gets the library copy of its tables; with
+        // decisions to tune, every candidate is provided for (the library copies where the
+        // library applies, the scratch of its padded layout), and what no chosen plan needs
+        // is released after tuning.
+        let info = device.info().clone();
+        let backend = info.backend;
+        let gemm_layout = GemmLayout::default_for(&info, n);
+        let tunable_gemm = options.gemm == DeviceGemm::Auto;
+        let choice_of = |kind: OperatorKind, pairs: usize| -> GemmChoice {
+            let fixed = static_gemm(
+                &info,
+                T::FLOAT,
+                n,
+                kind,
+                options.gemm,
+                options.scratch_budget,
+            );
+            if !tunable_gemm {
+                return fixed;
+            }
+            let decision = Decision::Gemm {
+                kind,
+                bucket: bucket(pairs),
+            };
+            let mut choice = tuner
+                .decided(decision)
+                .or_else(|| tuner.cached(decision))
+                .and_then(|c| c.gemm())
+                .unwrap_or(fixed);
+            if let Some(budget) = options.scratch_budget {
+                choice.budget = budget;
+            }
+            choice
         };
+        let grouped_on_device =
+            |kind: OperatorKind| on_device(kind) && (kind != OperatorKind::M2l || dense_m2l);
+        // Every grouped level call with a pair: (kind, pass, level, pairs, batch offsets).
+        let calls: Vec<(CallId, usize, &[u32])> = GROUPED
+            .iter()
+            .filter(|(kind, _)| grouped_on_device(*kind))
+            .flat_map(|&(kind, pass)| {
+                plan.levels().iter().enumerate().map(move |(level, lists)| {
+                    let (len, offsets) = match (kind, pass) {
+                        (OperatorKind::M2m, Some(UpwardPass::Local)) => {
+                            (lists.m2m_local().len(), lists.m2m_local().batch_offsets())
+                        }
+                        (OperatorKind::M2m, _) => {
+                            (lists.m2m_global().len(), lists.m2m_global().batch_offsets())
+                        }
+                        (OperatorKind::L2l, _) => (lists.l2l().len(), lists.l2l().batch_offsets()),
+                        _ => (lists.v().len(), lists.v().batch_offsets()),
+                    };
+                    ((kind, pass, level), len, offsets)
+                })
+            })
+            .collect();
+        // Whether a GEMM decision is left to tune: a level call large enough whose decision
+        // the build has not taken and the cache does not hold.
+        let tuning = tuner.enabled()
+            && tunable_gemm
+            && calls.iter().any(|&((kind, _, _), pairs, _)| {
+                let decision = Decision::Gemm {
+                    kind,
+                    bucket: bucket(pairs),
+                };
+                pairs >= MIN_TUNED_PAIRS
+                    && tuner.decided(decision).is_none()
+                    && tuner.cached(decision).is_none()
+            });
+        let tuning_library = tuning && library_applies(backend, T::FLOAT, n);
         let library = |kind: OperatorKind| {
-            on_device(kind) && plan_settings(kind).library_candidate(backend, T::FLOAT)
+            grouped_on_device(kind)
+                && (tuning_library
+                    || calls
+                        .iter()
+                        .any(|c| c.0.0 == kind && c.1 > 0 && choice_of(kind, c.1).is_library()))
         };
         let mut tables_report = Vec::new();
         let mut table = |name: &'static str, set: &MatrixSet<T>, library: bool| {
@@ -1549,26 +1802,24 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         }
 
         // The plans of the device M2M, L2L and M2L level calls: their index buffers and the
-        // widest chunk, at most, before anything is allocated (T8, T9).
+        // widest chunk, at most, before anything is allocated (T8, T9); with decisions to
+        // tune, also the widest chunk of any candidate (T12).
         let (mut plan_bytes, mut scratch_columns) = (0u64, 0usize);
-        for kind in [OperatorKind::M2m, OperatorKind::L2l, OperatorKind::M2l] {
-            if !on_device(kind) || (kind == OperatorKind::M2l && !dense_m2l) {
-                continue;
-            }
-            for lists in plan.levels() {
-                let offsets: Vec<&[u32]> = match kind {
-                    OperatorKind::M2m => vec![
-                        lists.m2m_local().batch_offsets(),
-                        lists.m2m_global().batch_offsets(),
-                    ],
-                    OperatorKind::L2l => vec![lists.l2l().batch_offsets()],
-                    _ => vec![lists.v().batch_offsets()],
-                };
-                for batch_offsets in offsets {
-                    let size = plan_settings(kind).size(backend, T::FLOAT, batch_offsets);
-                    plan_bytes += size.bytes;
-                    scratch_columns = scratch_columns.max(size.columns);
-                }
+        let tuning_settings = GemmChoice {
+            budget: options.scratch_budget.unwrap_or(DEFAULT_SCRATCH_BYTES),
+            ..GemmChoice::library(T::FLOAT)
+        }
+        .settings(&info, n);
+        for &((kind, _, _), pairs, batch_offsets) in &calls {
+            let size =
+                choice_of(kind, pairs)
+                    .settings(&info, n)
+                    .size(backend, T::FLOAT, batch_offsets);
+            plan_bytes += size.bytes;
+            scratch_columns = scratch_columns.max(size.columns);
+            if tuning {
+                let size = tuning_settings.size(backend, T::FLOAT, batch_offsets);
+                scratch_columns = scratch_columns.max(size.columns);
             }
         }
         let scratch_bytes = TranslationScratch::<T>::bytes(scratch_columns * n);
@@ -1703,98 +1954,47 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             },
         };
 
-        // The scratch and the plans of the device translations (T8, T9); a library
-        // candidate probes its shapes here, so the choice is fixed before the first
-        // evaluation.
+        // The scratch and the plans of the device translations (T8, T9, T12); a library
+        // choice probes its shapes here, so the GEMM is fixed before the first evaluation.
         let mut scratch = link.build(DataKind::Points, |d| {
             TranslationScratch::<T>::new(d, scratch_columns * n)
         })?;
         gemm_layout
             .check(link.device.info())
             .map_err(device_error)?;
-        let bound = |level: usize| if level < nlevels { index.len(level) } else { 0 };
-        let mut translation_report = Vec::new();
-        let mut plans = |link: &mut Link,
-                         kind: OperatorKind,
-                         pass: Option<UpwardPass>|
-         -> Result<Vec<GroupedPlan>, FmmError> {
-            if !on_device(kind) || (kind == OperatorKind::M2l && !dense_m2l) {
-                return Ok(Vec::new());
-            }
-            let family = match kind {
-                OperatorKind::M2m => &tables.m2m,
-                OperatorKind::L2l => &tables.l2l,
-                _ => tables
-                    .m2l
-                    .as_ref()
-                    .expect("M2L on the device has its tables"),
-            };
-            let plan_settings = plan_settings(kind);
-            let mut out = Vec::with_capacity(nlevels);
-            for (level, lists) in plan.levels().iter().enumerate() {
-                let grouped_plan = match (kind, pass) {
-                    (OperatorKind::M2m, Some(UpwardPass::Local)) => {
-                        let view = lists.m2m_local();
-                        build_plan(
-                            link,
-                            view,
-                            bound(level + 1),
-                            &plan_settings,
-                            family,
-                            &mut scratch,
-                        )
-                    }
-                    (OperatorKind::M2m, Some(UpwardPass::Global)) => {
-                        let view = lists.m2m_global();
-                        build_plan(
-                            link,
-                            view,
-                            bound(level + 1),
-                            &plan_settings,
-                            family,
-                            &mut scratch,
-                        )
-                    }
-                    (OperatorKind::L2l, None) => {
-                        let view = lists.l2l();
-                        let sources = bound(level.wrapping_sub(1));
-                        build_plan(link, view, sources, &plan_settings, family, &mut scratch)
-                    }
-                    _ => {
-                        let view = lists.v();
-                        build_plan(
-                            link,
-                            view,
-                            bound(level),
-                            &plan_settings,
-                            family,
-                            &mut scratch,
-                        )
-                    }
-                }?;
-                if !grouped_plan.is_empty() {
-                    translation_report.push(TranslationReport {
-                        kind,
-                        pass,
-                        level,
-                        pairs: grouped_plan.len(),
-                        gemm: grouped_plan.gemm(),
-                        chunks: grouped_plan.nchunks(),
-                        gemm_columns: grouped_plan.gemm_columns(),
-                        library_rejection: grouped_plan.library_rejection().map(str::to_owned),
-                    });
-                }
-                out.push(grouped_plan);
-            }
-            Ok(out)
+        let mut level_calls: [Vec<LevelCall>; 4] = Default::default();
+        for &((kind, pass, level), pairs, _) in &calls {
+            let choice = choice_of(kind, pairs);
+            let grouped_plan = plan_level_call(
+                &mut link,
+                plan,
+                (kind, pass, level),
+                &choice.settings(&info, n),
+                &tables,
+                &mut scratch,
+            )?;
+            let slot = GROUPED
+                .iter()
+                .position(|&g| g == (kind, pass))
+                .expect("a grouped level call");
+            level_calls[slot].push(LevelCall {
+                plan: grouped_plan,
+                choice,
+            });
+        }
+        let [m2m_local, m2m_global, l2l_calls, m2l_calls] = level_calls;
+        let mut translations = Translations {
+            m2m_local,
+            m2m_global,
+            l2l: l2l_calls,
+            m2l: m2l_calls,
+            scratch,
+            rotation: Vec::new(),
+            rotation_layout: RotationLayout::default_for(link.device.info(), p),
         };
-        let m2m_local = plans(&mut link, OperatorKind::M2m, Some(UpwardPass::Local))?;
-        let m2m_global = plans(&mut link, OperatorKind::M2m, Some(UpwardPass::Global))?;
-        let l2l_plans = plans(&mut link, OperatorKind::L2l, None)?;
-        let m2l_plans = plans(&mut link, OperatorKind::M2l, None)?;
 
         // The rows of the rotation M2L level calls and the layout (T10).
-        let rotation_layout = RotationLayout::default_for(link.device.info(), p);
+        let rotation_layout = translations.rotation_layout;
         let mut rotation_plans = Vec::new();
         let mut rotation_report = Vec::new();
         if rotation.is_some() {
@@ -1816,17 +2016,38 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                 rotation_plans.push(rotation_plan);
             }
         }
-        let translations = Translations {
-            m2m_local,
-            m2m_global,
-            l2l: l2l_plans,
-            m2l: m2l_plans,
-            scratch,
-            rotation: rotation_plans,
-            rotation_layout,
-        };
+        translations.rotation = rotation_plans;
 
-        let p2p_layout = options.p2p_layout.resolve(link.device.info());
+        // P2P: the near-field pairs of each level's leaves and the mean points per leaf,
+        // for the P2P decision (T12); the layout of the builder, or under
+        // `DeviceP2pLayout::Auto` the cached choice or the static rule.
+        let p2p_levels: Vec<(Range<usize>, usize)> = plan
+            .levels()
+            .iter()
+            .enumerate()
+            .map(|(level, lists)| {
+                let range = leaves.local(level);
+                let near = lists.near();
+                let pairs = (0..near.nrows())
+                    .map(|r| {
+                        let sources: usize =
+                            near.row(r).iter().map(|&s| source_counts[s as usize]).sum();
+                        target_counts[range.start + r] * sources
+                    })
+                    .sum();
+                (range, pairs)
+            })
+            .collect();
+        let mean_points = (nsources + ntargets).div_ceil(2 * leaves.nlocal().max(1));
+        let p2p_layout = match options.p2p_layout {
+            DeviceP2pLayout::Auto => tuner
+                .cached(Decision::P2p {
+                    bucket: bucket(mean_points),
+                })
+                .and_then(|c| c.p2p())
+                .unwrap_or_else(|| static_p2p(link.device.info())),
+            layout => layout.resolve(link.device.info()),
+        };
         p2p_layout
             .check(link.device.info(), T::FLOAT)
             .map_err(device_error)?;
@@ -1865,15 +2086,16 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             p2p_layout,
             leaf_layout,
             gemm_layout,
-            translations: translation_report,
+            translations: translation_reports(&translations),
             rotation_layout,
             rotations: rotation_report,
             scratch_bytes,
             memory_needed: needed,
             memory_available: available,
             stage_timing,
+            tuning: None,
         };
-        Ok(Self {
+        let mut operator = Self {
             host,
             link,
             placement,
@@ -1894,12 +2116,20 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             window: None,
             pending: Vec::with_capacity(DeviceStage::ALL.len()),
             stage_timings: None,
-        })
+            options: options.clone(),
+            tuner: Some(tuner),
+            p2p_levels,
+            mean_points,
+        };
+        operator.tune_translations(plan)?;
+        Ok(operator)
     }
 
     /// Uploads the leaf-scaled source store (coordinates, with any charges) and target
     /// input, as `build` writes them in its step 8 (CONVENTIONS §3.13): two uploads, once
-    /// per build. The charges of each evaluation overwrite their slots.
+    /// per build. The charges of each evaluation overwrite their slots. Then takes the P2P
+    /// decision (timed on the loaded points with a tuning cache that lacks it, T12), ends
+    /// the tuning (storing what was tuned) and records the build's counters.
     ///
     /// # Errors
     ///
@@ -1920,6 +2150,10 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         self.link.build(DataKind::Points, |d| {
             d.write(stores.target_input.as_slice_mut(), target_input.as_slice())
         })?;
+        self.tune_p2p();
+        if let Some(tuner) = self.tuner.take() {
+            self.report.tuning = Some(tuner.finish());
+        }
         self.finish_build();
         Ok(())
     }
@@ -1929,6 +2163,360 @@ impl<T: DeviceScalar> DeviceOperator<T> {
     fn finish_build(&mut self) {
         self.build_counters = self.link.device.counters();
         self.build_traffic = self.link.traffic;
+    }
+
+    /// The GEMM decisions of the grouped level calls (T12, [`crate::tune`]): under
+    /// `DeviceGemm::Auto`, one decision per (kind, pair bucket) with a level call, M2L
+    /// first, then M2M and L2L, larger buckets first, each timed on its bucket's largest
+    /// level call (with a tuning cache that lacks it) or taken from the cache or the
+    /// static rule; then the plans of the level calls whose choice changed are rebuilt, and
+    /// what no chosen plan needs (library copies, scratch) is released.
+    fn tune_translations(&mut self, plan: &Plan) -> Result<(), FmmError> {
+        let Some(mut tuner) = self.tuner.take() else {
+            return Ok(());
+        };
+        if self.options.gemm != DeviceGemm::Auto {
+            self.tuner = Some(tuner);
+            return Ok(());
+        }
+        tuner.start_phase();
+        let info = self.link.device.info().clone();
+        let n = self.n();
+        let budget = self.options.scratch_budget;
+        // The largest level call of each decision.
+        let mut decisions: Vec<(Decision, CallId, usize)> = Vec::new();
+        for &(kind, pass) in &GROUPED {
+            for (level, call) in self.translations.calls(kind, pass).iter().enumerate() {
+                let pairs = call.plan.len();
+                if pairs == 0 {
+                    continue;
+                }
+                let decision = Decision::Gemm {
+                    kind,
+                    bucket: bucket(pairs),
+                };
+                match decisions.iter_mut().find(|d| d.0 == decision) {
+                    Some(entry) if entry.2 >= pairs => {}
+                    Some(entry) => *entry = (decision, (kind, pass, level), pairs),
+                    None => decisions.push((decision, (kind, pass, level), pairs)),
+                }
+            }
+        }
+        let rank = |kind: OperatorKind| match kind {
+            OperatorKind::M2l => 0,
+            OperatorKind::M2m => 1,
+            _ => 2,
+        };
+        decisions.sort_by_key(|&(decision, (kind, _, _), _)| {
+            let Decision::Gemm { bucket, .. } = decision else {
+                unreachable!("GEMM decisions")
+            };
+            (rank(kind), std::cmp::Reverse(bucket))
+        });
+        for &(decision, call, pairs) in &decisions {
+            let candidates: Vec<Candidate> =
+                gemm_candidates(&info, T::FLOAT, n, call.0, budget.is_none())
+                    .into_iter()
+                    .map(|mut choice| {
+                        if let Some(budget) = budget {
+                            choice.budget = budget;
+                        }
+                        Candidate::Gemm(choice)
+                    })
+                    .collect();
+            tuner.decide(
+                decision,
+                (Some(call.2), pairs),
+                candidates,
+                |candidate, deadline| {
+                    let choice = candidate.gemm().expect("a GEMM candidate");
+                    self.time_grouped(plan, call, &choice, deadline)
+                },
+            );
+        }
+        tuner.end_phase();
+        // Every level call takes its decision's choice.
+        for &(kind, pass) in &GROUPED {
+            for level in 0..self.translations.calls(kind, pass).len() {
+                let call = &self.translations.calls(kind, pass)[level];
+                let pairs = call.plan.len();
+                if pairs == 0 {
+                    continue;
+                }
+                let decision = Decision::Gemm {
+                    kind,
+                    bucket: bucket(pairs),
+                };
+                let Some(choice) = tuner.decided(decision).and_then(|c| c.gemm()) else {
+                    continue;
+                };
+                if choice == call.choice {
+                    continue;
+                }
+                let Self {
+                    link,
+                    tables,
+                    translations,
+                    ..
+                } = self;
+                let rebuilt = plan_level_call(
+                    link,
+                    plan,
+                    (kind, pass, level),
+                    &choice.settings(&info, n),
+                    tables,
+                    &mut translations.scratch,
+                )?;
+                translations.calls_mut(kind, pass)[level] = LevelCall {
+                    plan: rebuilt,
+                    choice,
+                };
+            }
+        }
+        self.tuner = Some(tuner);
+        self.release_unused()?;
+        self.report.translations = translation_reports(&self.translations);
+        Ok(())
+    }
+
+    /// The order n = (p + 1)² of the tables.
+    fn n(&self) -> usize {
+        let p = self.host.p();
+        (p + 1) * (p + 1)
+    }
+
+    /// Times the grouped level call (`kind`, `pass`, `level`) with a plan built for
+    /// `choice` (T12), on the operator's own buffers (their values do not matter: every
+    /// evaluation zeroes them first).
+    fn time_grouped(
+        &mut self,
+        plan: &Plan,
+        (kind, pass, level): (OperatorKind, Option<UpwardPass>, usize),
+        choice: &GemmChoice,
+        deadline: Instant,
+    ) -> Result<Duration, Rejection> {
+        let info = self.link.device.info().clone();
+        let n = self.n();
+        if let GemmKind::HandWritten(layout) = choice.gemm {
+            layout
+                .check(&info)
+                .map_err(|e| Rejection::Unregistered(e.to_string()))?;
+        }
+        let input = match kind {
+            OperatorKind::M2m => level + 1,
+            OperatorKind::L2l => level - 1,
+            _ => level,
+        };
+        let (input, output) = (
+            self.level_values(input..input + 1),
+            self.level_values(level..level + 1),
+        );
+        let Self {
+            link,
+            views,
+            tables,
+            stores,
+            translations,
+            ..
+        } = self;
+        let family = match kind {
+            OperatorKind::M2m => &tables.m2m,
+            OperatorKind::L2l => &tables.l2l,
+            _ => tables
+                .m2l
+                .as_ref()
+                .expect("M2L on the device has its tables"),
+        };
+        if choice.is_library() && !family.has_library_copy() {
+            return Err(Rejection::Unregistered(
+                "the tables have no library copy".into(),
+            ));
+        }
+        let candidate = plan_level_call(
+            link,
+            plan,
+            (kind, pass, level),
+            &choice.settings(&info, n),
+            tables,
+            &mut translations.scratch,
+        )
+        .map_err(|e| Rejection::Failed(e.to_string()))?;
+        if choice.is_library() && candidate.gemm() != Gemm::Library {
+            return Err(Rejection::Unregistered(format!(
+                "the library does not take the level's shapes: {}",
+                candidate.library_rejection().unwrap_or("not a candidate")
+            )));
+        }
+        if choice.budget < DEFAULT_SCRATCH_BYTES && candidate.nchunks() <= 1 {
+            return Err(Rejection::Unregistered(
+                "one chunk under either budget: the default budget's plan".into(),
+            ));
+        }
+        let level_views = &views.levels[level];
+        let (view, accumulate) = match (kind, pass) {
+            (OperatorKind::M2m, Some(UpwardPass::Local)) => {
+                (&level_views.m2m_local, Accumulate::Rows)
+            }
+            (OperatorKind::M2m, _) => (&level_views.m2m_global, Accumulate::Rows),
+            (OperatorKind::L2l, _) => (&level_views.l2l, Accumulate::Scatter),
+            _ => (&level_views.v, Accumulate::Rows),
+        };
+        let scratch = &mut translations.scratch;
+        time_launches(&mut link.device, deadline, |d| {
+            let operands = match kind {
+                OperatorKind::M2m => Operands::Shared {
+                    buffer: &mut stores.multipoles,
+                    input: input.clone(),
+                    output: output.clone(),
+                },
+                OperatorKind::L2l => Operands::Shared {
+                    buffer: &mut stores.locals,
+                    input: input.clone(),
+                    output: output.clone(),
+                },
+                _ => Operands::Separate {
+                    input: stores.multipoles.slice(input.clone()),
+                    output: stores.locals.slice_mut(output.clone()),
+                },
+            };
+            grouped(d, &candidate, view, accumulate, family, operands, scratch)
+        })
+        .map_err(Rejection::from)
+    }
+
+    /// Releases what no chosen plan needs after tuning (T12): the library copy of a family
+    /// whose level calls all run the hand-written kernel, and the scratch beyond the widest
+    /// chunk of the chosen plans; the report's tables, scratch and memory follow.
+    fn release_unused(&mut self) -> Result<(), FmmError> {
+        let n = self.n();
+        let uses_library = |translations: &Translations<T>, kinds: &[OperatorKind]| {
+            GROUPED.iter().any(|&(kind, pass)| {
+                kinds.contains(&kind)
+                    && translations
+                        .calls(kind, pass)
+                        .iter()
+                        .any(|c| c.plan.gemm() == Gemm::Library)
+            })
+        };
+        let mut freed = 0u64;
+        for (kinds, name) in [
+            (&[OperatorKind::M2m][..], "M2M (library copy)"),
+            (&[OperatorKind::L2l][..], "L2L (library copy)"),
+            (&[OperatorKind::M2l][..], "M2L (library copy)"),
+        ] {
+            if uses_library(&self.translations, kinds) {
+                continue;
+            }
+            let family = match kinds[0] {
+                OperatorKind::M2m => Some(&mut self.tables.m2m),
+                OperatorKind::L2l => Some(&mut self.tables.l2l),
+                _ => self.tables.m2l.as_mut(),
+            };
+            if let Some(family) = family
+                && family.has_library_copy()
+            {
+                freed += family.release_library_copy();
+                self.report.tables.retain(|t| t.name != name);
+            }
+        }
+        let columns = GROUPED
+            .iter()
+            .flat_map(|&(kind, pass)| self.translations.calls(kind, pass))
+            .map(|c| c.plan.columns())
+            .max()
+            .unwrap_or(0);
+        if columns * n < self.translations.scratch.len() {
+            let old = TranslationScratch::<T>::bytes(self.translations.scratch.len());
+            self.translations.scratch = self.link.build(DataKind::Points, |d| {
+                TranslationScratch::<T>::new(d, columns * n)
+            })?;
+            let new = TranslationScratch::<T>::bytes(columns * n);
+            freed += old - new;
+            self.report.scratch_bytes = new;
+        }
+        self.report.memory_needed = self.report.memory_needed.saturating_sub(freed);
+        Ok(())
+    }
+
+    /// The P2P decision (T12, [`crate::tune`]): under `DeviceP2pLayout::Auto` with P2P on
+    /// the device, timed on the level with the most near-field pairs (with a tuning cache
+    /// that lacks it), after the points are loaded; else from the cache or the static rule.
+    fn tune_p2p(&mut self) {
+        let Some(mut tuner) = self.tuner.take() else {
+            return;
+        };
+        let best = self
+            .p2p_levels
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, pairs))| *pairs > 0)
+            .max_by_key(|(_, (_, pairs))| *pairs)
+            .map(|(level, (leaves, pairs))| (level, leaves.clone(), *pairs));
+        if self.placement(OperatorKind::P2p) == Placement::Device
+            && self.options.p2p_layout == DeviceP2pLayout::Auto
+            && let Some((level, leaves, pairs)) = best
+        {
+            tuner.start_phase();
+            let info = self.link.device.info().clone();
+            let candidates = p2p_candidates(&info)
+                .into_iter()
+                .map(Candidate::P2p)
+                .collect();
+            let decision = Decision::P2p {
+                bucket: bucket(self.mean_points),
+            };
+            let choice = tuner.decide(
+                decision,
+                (Some(level), pairs),
+                candidates,
+                |candidate, deadline| {
+                    let layout = candidate.p2p().expect("a P2P candidate");
+                    self.time_p2p(level, &leaves, layout, deadline)
+                },
+            );
+            tuner.end_phase();
+            if let Some(layout) = choice.p2p() {
+                self.p2p_layout = layout;
+                self.report.p2p_layout = layout;
+            }
+        }
+        self.tuner = Some(tuner);
+    }
+
+    /// Times the P2P level call of `level` (its local leaves `leaves`) in `layout` (T12),
+    /// on the operator's loaded points; the target output it adds into is zeroed by every
+    /// evaluation.
+    fn time_p2p(
+        &mut self,
+        level: usize,
+        leaves: &Range<usize>,
+        layout: P2pLayout,
+        deadline: Instant,
+    ) -> Result<Duration, Rejection> {
+        layout
+            .check(self.link.device.info(), T::FLOAT)
+            .map_err(|e| Rejection::Unregistered(e.to_string()))?;
+        let gradients = self.host.gradients();
+        let Self {
+            link,
+            views,
+            stores,
+            ..
+        } = self;
+        let inputs = P2pInputs {
+            near: &views.levels[level].near,
+            first_leaf: leaves.start,
+            leaves: &views.leaves,
+            source_offsets: &views.source_offsets,
+            sources: stores.sources.as_slice(),
+            target_offsets: &views.target_offsets,
+            target_input: stores.target_input.as_slice(),
+        };
+        let output = &mut stores.target_output;
+        time_launches(&mut link.device, deadline, |d| {
+            nd_fmm_kernels::p2p::p2p(d, layout, gradients, &inputs, output.as_slice_mut())
+        })
+        .map_err(Rejection::from)
     }
 
     /// Starts an evaluation, after the evaluator's `reset`: zeroes the multipoles, the
@@ -2273,12 +2861,12 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         let (translations, views) = (&self.translations, &self.views.levels[level]);
         match (kind, pass) {
             (OperatorKind::M2m, Some(UpwardPass::Local)) => {
-                (&translations.m2m_local[level], &views.m2m_local)
+                (&translations.m2m_local[level].plan, &views.m2m_local)
             }
             (OperatorKind::M2m, Some(UpwardPass::Global)) => {
-                (&translations.m2m_global[level], &views.m2m_global)
+                (&translations.m2m_global[level].plan, &views.m2m_global)
             }
-            (OperatorKind::L2l, None) => (&translations.l2l[level], &views.l2l),
+            (OperatorKind::L2l, None) => (&translations.l2l[level].plan, &views.l2l),
             _ => unreachable!("M2M with a pass or L2L"),
         }
     }
@@ -2304,19 +2892,19 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         let views = &views.levels[level];
         let (plan, view, table, buffer) = match (kind, pass) {
             (OperatorKind::M2m, Some(UpwardPass::Local)) => (
-                &translations.m2m_local[level],
+                &translations.m2m_local[level].plan,
                 &views.m2m_local,
                 &tables.m2m,
                 &mut stores.multipoles,
             ),
             (OperatorKind::M2m, Some(UpwardPass::Global)) => (
-                &translations.m2m_global[level],
+                &translations.m2m_global[level].plan,
                 &views.m2m_global,
                 &tables.m2m,
                 &mut stores.multipoles,
             ),
             (OperatorKind::L2l, None) => (
-                &translations.l2l[level],
+                &translations.l2l[level].plan,
                 &views.l2l,
                 &tables.l2l,
                 &mut stores.locals,
@@ -2375,7 +2963,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             .m2l
             .as_ref()
             .expect("M2L on the device has its tables");
-        let (plan, view) = (&translations.m2l[level], &views.levels[level].v);
+        let (plan, view) = (&translations.m2l[level].plan, &views.levels[level].v);
         let scratch = &mut translations.scratch;
         link.run(DataKind::Output, |d| {
             grouped(
@@ -2534,7 +3122,7 @@ impl<T: DeviceScalar> FmmOperator for DeviceOperator<T> {
                 batch.pairs.len(),
                 match self.tables.rotation {
                     Some(_) => self.translations.rotation[level].len(),
-                    None => self.translations.m2l[level].len(),
+                    None => self.translations.m2l[level].plan.len(),
                 }
             );
             self.m2l_on_device(level);
@@ -2771,31 +3359,306 @@ pub(crate) fn driver<T: SimdScalar + Stored + Equivalence + Default>(
     host: LaplaceOperator<T>,
     device: Device,
     plan: &Plan,
-    source_counts: &[usize],
-    target_counts: &[usize],
+    (source_counts, target_counts): (&[usize], &[usize]),
     options: &DeviceOptions,
+    tuner: Tuner,
 ) -> Result<Box<dyn DeviceDriver<T>>, FmmError> {
     fn concrete<E: DeviceScalar, T: SimdScalar>(
         host: LaplaceOperator<T>,
         device: Device,
         plan: &Plan,
-        source_counts: &[usize],
-        target_counts: &[usize],
+        (source_counts, target_counts): (&[usize], &[usize]),
         options: &DeviceOptions,
+        tuner: Tuner,
     ) -> Result<Box<dyn DeviceDriver<T>>, FmmError> {
         let host: LaplaceOperator<E> = same_type(host);
-        let operator =
-            DeviceOperator::new(host, device, plan, source_counts, target_counts, options)?;
+        let operator = DeviceOperator::new(
+            host,
+            device,
+            plan,
+            source_counts,
+            target_counts,
+            options,
+            tuner,
+        )?;
         let boxed: Box<dyn DeviceDriver<E>> = Box::new(operator);
         Ok(same_type(boxed))
     }
+    let counts = (source_counts, target_counts);
     match T::PRECISION {
         nd_fmm_tables::cache::Precision::F32 => {
-            concrete::<f32, T>(host, device, plan, source_counts, target_counts, options)
+            concrete::<f32, T>(host, device, plan, counts, options, tuner)
         }
         nd_fmm_tables::cache::Precision::F64 => {
-            concrete::<f64, T>(host, device, plan, source_counts, target_counts, options)
+            concrete::<f64, T>(host, device, plan, counts, options, tuner)
         }
+    }
+}
+
+/// The precision of `T` in `nd-fmm-kernels`' terms.
+pub(crate) fn precision_of<T: Stored>() -> nd_fmm_kernels::Precision {
+    match T::PRECISION {
+        nd_fmm_tables::cache::Precision::F32 => nd_fmm_kernels::Precision::F32,
+        nd_fmm_tables::cache::Precision::F64 => nd_fmm_kernels::Precision::F64,
+    }
+}
+
+/// The M2L strategy of a device FMM of degree p under `M2lStrategy::Auto` with M2L on the
+/// device (T12, [`crate::tune`], "When tuning runs"), decided before the tables are built,
+/// since it decides which tables the host and the device build: from the cache, by the
+/// static rule, or by timing rotation against dense with each M2L GEMM candidate on the
+/// plan's largest V level, standalone on `device` (the level's multipoles and locals, its
+/// V view, and the candidate's tables through `table_cache` when given, uploaded for the
+/// timing and freed after). At p ≥ 12 without `table_cache` the dense candidate would
+/// take seconds to build, so the strategy keeps the static rule there and is not stored.
+/// Where dense wins, the GEMM it won with becomes the decision of the M2L level calls of
+/// the largest level's bucket.
+pub(crate) fn tune_strategy<T: Stored>(
+    tuner: &mut Tuner,
+    device: &mut Device,
+    plan: &Plan,
+    p: usize,
+    table_cache: Option<&Path>,
+) -> M2lStrategy {
+    match T::PRECISION {
+        nd_fmm_tables::cache::Precision::F32 => {
+            strategy::<f32>(tuner, device, plan, p, table_cache)
+        }
+        nd_fmm_tables::cache::Precision::F64 => {
+            strategy::<f64>(tuner, device, plan, p, table_cache)
+        }
+    }
+}
+
+/// [`tune_strategy`] in `T`.
+fn strategy<T: DeviceScalar>(
+    tuner: &mut Tuner,
+    device: &mut Device,
+    plan: &Plan,
+    p: usize,
+    table_cache: Option<&Path>,
+) -> M2lStrategy {
+    let precision = T::FLOAT;
+    let info = device.info().clone();
+    let n = (p + 1) * (p + 1);
+    let fixed = static_strategy(precision, p);
+    let dense: Vec<Candidate> = gemm_candidates(&info, precision, n, OperatorKind::M2l, false)
+        .into_iter()
+        .map(Candidate::Dense)
+        .collect();
+    let first = match fixed {
+        M2lStrategy::Rotation => Candidate::Rotation,
+        _ => dense[0],
+    };
+    let candidates: Vec<Candidate> = if fixed == M2lStrategy::Rotation {
+        std::iter::once(Candidate::Rotation).chain(dense).collect()
+    } else {
+        dense.into_iter().chain([Candidate::Rotation]).collect()
+    };
+    if tuner.enabled()
+        && tuner.cached(Decision::Strategy).is_none()
+        && p >= 12
+        && table_cache.is_none()
+    {
+        tuner.record_static(
+            Decision::Strategy,
+            first,
+            "the dense candidate at p ≥ 12 needs a table cache: not tuned, not stored".to_owned(),
+        );
+        return fixed;
+    }
+    let (level, pairs) = (0..plan.nlevels())
+        .map(|l| (l, plan.level(l).v().len()))
+        .max_by_key(|&(l, k)| (k, std::cmp::Reverse(l)))
+        .unwrap_or((0, 0));
+    tuner.start_phase();
+    let mut bench: Option<StrategyBench<'_, T>> = None;
+    let choice = tuner.decide(
+        Decision::Strategy,
+        (Some(level), pairs),
+        candidates,
+        |candidate, deadline| {
+            if bench.is_none() {
+                bench = Some(StrategyBench::new(device, plan, level)?);
+            }
+            let bench = bench.as_mut().expect("created above");
+            match candidate {
+                Candidate::Dense(choice) => {
+                    bench.time_dense(device, (p, table_cache), choice, deadline)
+                }
+                _ => bench.time_rotation(device, (p, table_cache), deadline),
+            }
+        },
+    );
+    drop(bench);
+    tuner.end_phase();
+    if choice.strategy() == Some(M2lStrategy::Dense) {
+        tuner.record_dense_gemm(bucket(pairs));
+    }
+    choice.strategy().unwrap_or(fixed)
+}
+
+/// The device data of the strategy decision (T12): the largest V level's multipoles and
+/// locals (zero), its V view (host and device), and each candidate's tables, created when
+/// first timed.
+struct StrategyBench<'a, T: DeviceFloat> {
+    boxes: usize,
+    host_view: &'a VList,
+    view: GroupedView,
+    multipoles: DeviceBuffer<T>,
+    locals: DeviceBuffer<T>,
+    dense: Option<(Tables<T>, TranslationScratch<T>)>,
+    rotation: Option<(DeviceRotation<T>, RotationPlan)>,
+}
+
+impl<'a, T: DeviceScalar> StrategyBench<'a, T> {
+    fn new(device: &mut Device, plan: &'a Plan, level: usize) -> Result<Self, Rejection> {
+        let boxes = plan.index().len(level);
+        let host_view = plan.level(level).v();
+        let view = GroupedView::upload(device, &grouped_arrays(host_view), boxes)?;
+        Ok(Self {
+            boxes,
+            host_view,
+            view,
+            multipoles: device.alloc(0)?,
+            locals: device.alloc(0)?,
+            dense: None,
+            rotation: None,
+        })
+    }
+
+    /// Allocates the level's multipoles and locals for order n, once.
+    fn buffers(&mut self, device: &mut Device, n: usize) -> Result<(), Rejection> {
+        if self.multipoles.len() != self.boxes * n {
+            self.multipoles = device.alloc(self.boxes * n)?;
+            self.locals = device.alloc(self.boxes * n)?;
+        }
+        Ok(())
+    }
+
+    /// Times the level's dense M2L with `choice`.
+    fn time_dense(
+        &mut self,
+        device: &mut Device,
+        (p, table_cache): (usize, Option<&Path>),
+        choice: &GemmChoice,
+        deadline: Instant,
+    ) -> Result<Duration, Rejection> {
+        let n = (p + 1) * (p + 1);
+        let info = device.info().clone();
+        if let GemmKind::HandWritten(layout) = choice.gemm {
+            layout
+                .check(&info)
+                .map_err(|e| Rejection::Unregistered(e.to_string()))?;
+        }
+        self.buffers(device, n)?;
+        if self.dense.is_none() {
+            let library = library_applies(info.backend, T::FLOAT, n);
+            let batch_offsets = self.host_view.batch_offsets();
+            let columns = [
+                GemmChoice::hand_written(GemmLayout::default_for(&info, n)),
+                GemmChoice::library(T::FLOAT),
+            ]
+            .iter()
+            .map(|c| {
+                c.settings(&info, n)
+                    .size(info.backend, T::FLOAT, batch_offsets)
+                    .columns
+            })
+            .max()
+            .unwrap_or(0);
+            let needed =
+                Tables::<T>::bytes(n, 316, library) + TranslationScratch::<T>::bytes(columns * n);
+            if let Some(limit) = device.available_memory()
+                && needed > limit
+            {
+                return Err(Rejection::Skipped(format!(
+                    "the dense tables and scratch need {needed} bytes, {limit} are available"
+                )));
+            }
+            let tables: M2lTables<T> = match table_cache {
+                Some(dir) => TableCache::new(dir).load_or_build(p).0,
+                None => M2lTables::build(p),
+            };
+            let tables = Tables::upload(device, tables.matrices().as_slice(), n, library)?;
+            let scratch = TranslationScratch::<T>::new(device, columns * n)?;
+            self.dense = Some((tables, scratch));
+        }
+        let (tables, scratch) = self.dense.as_mut().expect("created above");
+        if choice.is_library() && !tables.has_library_copy() {
+            return Err(Rejection::Unregistered(
+                "the tables have no library copy".into(),
+            ));
+        }
+        let plan = GroupedPlan::new(
+            device,
+            &grouped_arrays(self.host_view),
+            self.boxes,
+            &choice.settings(&info, n),
+            tables,
+            scratch,
+        )?;
+        if choice.is_library() && plan.gemm() != Gemm::Library {
+            return Err(Rejection::Unregistered(format!(
+                "the library does not take the level's shapes: {}",
+                plan.library_rejection().unwrap_or("not a candidate")
+            )));
+        }
+        let (view, multipoles, locals) = (&self.view, &self.multipoles, &mut self.locals);
+        time_launches(device, deadline, |d| {
+            grouped(
+                d,
+                &plan,
+                view,
+                Accumulate::Rows,
+                tables,
+                Operands::Separate {
+                    input: multipoles.as_slice(),
+                    output: locals.as_slice_mut(),
+                },
+                scratch,
+            )
+        })
+        .map_err(Rejection::from)
+    }
+
+    /// Times the level's rotation M2L in the backend's default layout.
+    fn time_rotation(
+        &mut self,
+        device: &mut Device,
+        (p, table_cache): (usize, Option<&Path>),
+        deadline: Instant,
+    ) -> Result<Duration, Rejection> {
+        let n = (p + 1) * (p + 1);
+        let layout = RotationLayout::default_for(device.info(), p);
+        layout
+            .check(device.info(), p, T::FLOAT)
+            .map_err(|e| Rejection::Unregistered(e.to_string()))?;
+        self.buffers(device, n)?;
+        if self.rotation.is_none() {
+            let tables: HostRotationTables<T> = match table_cache {
+                Some(dir) => TableCache::new(dir).load_or_build(p).0,
+                None => HostRotationTables::build(p),
+            };
+            let arrays = RotationHostArrays::new(tables.tables(RotationOperator::M2l));
+            let rotation = DeviceRotation::upload(device, &arrays.arrays())?;
+            let plan = RotationPlan::new(device, &grouped_arrays(self.host_view), self.boxes)?;
+            self.rotation = Some((rotation, plan));
+        }
+        let (rotation, plan) = self.rotation.as_ref().expect("created above");
+        let (view, multipoles, locals) = (&self.view, &self.multipoles, &mut self.locals);
+        time_launches(device, deadline, |d| {
+            nd_fmm_kernels::rotation::m2l(
+                d,
+                layout,
+                plan,
+                view,
+                rotation,
+                multipoles.as_slice(),
+                locals.as_slice_mut(),
+            )
+        })
+        .map_err(Rejection::from)
     }
 }
 

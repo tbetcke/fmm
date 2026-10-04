@@ -34,7 +34,14 @@
 //!   p ≥ 8, the hand-written kernel at p = 4) against the spike's figure for that GEMM at
 //!   the same (p, B), met at 80% or more; the hand-written kernel at p ≥ 8 for reference;
 //! - **the scratch budget**: the level call of the cube's deepest V level at p = 8 under
-//!   budgets of 8 to 512 MB (chunks and time).
+//!   budgets of 8 to 512 MB (chunks and time);
+//! - **the orientation** (Phase 4 T12, README decision 12): for both problems at
+//!   p ∈ {3, 6, 8} (the f32 FMM degrees) and p ∈ {12, 16}, per V level, the whole level
+//!   call box-major (the layout of device-path.md §6.4) and coefficient-major (the spike's
+//!   orientation, `Orientation::CoefficientMajor`), with the hand-written GEMM and, where
+//!   it takes the level's shapes, the library; the coefficient-major results are checked
+//!   against the box-major ones first (relative L2; the hand-written kernel's are equal
+//!   bit for bit by construction). `--orientation` runs this table alone.
 //!
 //! Timing: before each table the device runs half a second of other work (its clocks ramp
 //! down while the host builds); launches are queued between syncs, after a warm-up launch
@@ -69,8 +76,8 @@ use nd_fmm_exec::operator::LaplaceOperator;
 use nd_fmm_exec::tables::{M2lStrategy, Tables as HostTables};
 use nd_fmm_kernels::translate::{
     Accumulate, DEFAULT_SCRATCH_BYTES, Gemm, GemmLayout, GemmPolicy, GroupedPlan, Operands,
-    PerGroupPlan, PlanSettings, Stage, Tables, TileSchedule, TranslationScratch, gemm, grouped,
-    grouped_stage, library, per_group,
+    Orientation, PerGroupPlan, PlanSettings, Stage, Tables, TileSchedule, TranslationScratch, gemm,
+    grouped, grouped_stage, library, per_group,
 };
 use nd_fmm_kernels::view::{GroupedArrays, GroupedView};
 use nd_fmm_kernels::{BackendKind, Device, DeviceBuffer, Precision};
@@ -108,6 +115,7 @@ struct Arguments {
     device: String,
     threads: usize,
     quick: bool,
+    orientation_only: bool,
     table_cache: Option<String>,
 }
 
@@ -116,7 +124,7 @@ fn arguments() -> Arguments {
     let usage = || -> ! {
         eprintln!(
             "usage: m2l_kernels --device cpu|metal|cuda [--threads n] [--quick] \
-             [--table-cache DIR]; got {args:?}"
+             [--orientation] [--table-cache DIR]; got {args:?}"
         );
         std::process::exit(2);
     };
@@ -124,6 +132,7 @@ fn arguments() -> Arguments {
         device: String::new(),
         threads: 12,
         quick: false,
+        orientation_only: false,
         table_cache: None,
     };
     let mut rest = args.as_slice();
@@ -143,6 +152,10 @@ fn arguments() -> Arguments {
             }
             ("--quick", _) => {
                 parsed.quick = true;
+                tail
+            }
+            ("--orientation", _) => {
+                parsed.orientation_only = true;
                 tail
             }
             _ => usage(),
@@ -282,6 +295,7 @@ fn main() {
         &[3, 8, 12, 16]
     };
     let mut budget_levels = None;
+    let mut orientation_views = Vec::new();
     for (name, config) in problems {
         let problem = Problem::new(&config);
         eprintln!("{name}: building the host FMM for its plan");
@@ -293,6 +307,10 @@ fn main() {
             .build(&problem.points, &problem.points, &comm)
             .expect("the host FMM builds on one rank");
         let views = levels(&fmm);
+        if arguments.orientation_only {
+            orientation_views.push((name, views));
+            continue;
+        }
         let mut totals = Vec::new();
         for &p in degrees {
             let (host_tables, m2l) = tables(p, cache.as_ref());
@@ -312,13 +330,157 @@ fn main() {
             budget_levels = Some(views);
         }
     }
+    if arguments.orientation_only {
+        let degrees: &[usize] = if arguments.quick {
+            &[3]
+        } else {
+            &[3, 6, 8, 12, 16]
+        };
+        orientations(&mut device, &orientation_views, degrees, cache.as_ref());
+        return;
+    }
     if !arguments.quick {
         gate(&mut device);
-        let views = budget_levels.expect("the cube ran");
+        let views = budget_levels.as_ref().expect("the cube ran");
         let deepest = views.last().expect("a V level");
         let (_, m2l) = tables(8, cache.as_ref());
         budgets(&mut device, deepest, &m2l);
+        let mut cube = budget_levels;
+        let plummer = {
+            let config = Config::c33(Distribution::Plummer);
+            let problem = Problem::new(&config);
+            let fmm = FmmBuilder::<f32>::new(3)
+                .strategy(M2lStrategy::Rotation)
+                .max_level(config.max_level)
+                .max_points_per_leaf(config.max_points_per_leaf)
+                .build(&problem.points, &problem.points, &comm)
+                .expect("the host FMM builds on one rank");
+            levels(&fmm)
+        };
+        let views = vec![
+            ("C3.2 cube", cube.take().expect("the cube ran")),
+            ("Plummer sphere", plummer),
+        ];
+        orientations(&mut device, &views, &[3, 6, 8, 12, 16], cache.as_ref());
     }
+}
+
+/// The level call of every V level of `views` box-major and coefficient-major, with the
+/// hand-written GEMM and the library (module documentation, "the orientation").
+fn orientations(
+    device: &mut Device,
+    views: &[(&str, Vec<Level>)],
+    degrees: &[usize],
+    cache: Option<&TableCache>,
+) {
+    println!("## The orientation of X and Y (T12): box-major against coefficient-major");
+    println!();
+    println!(
+        "Whole level call (gather, GEMM, reduction per chunk), µs; `cm/bm` < 1 means the \
+         coefficient-major layout is faster. Library columns where the library takes the \
+         level's shapes in that orientation (f32, p ≥ 8, a GPU)."
+    );
+    println!();
+    println!(
+        "| problem | p | level | pairs | hand bm | hand cm | cm/bm | library bm | library cm \
+         | cm/bm | best |"
+    );
+    println!("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |");
+    for &p in degrees {
+        let n = (p + 1) * (p + 1);
+        let (_, m2l) = tables(p, cache);
+        let auto = settings(device, n, GemmPolicy::Auto, DEFAULT_SCRATCH_BYTES);
+        let library_copy = auto.library_candidate(device.backend(), Precision::F32);
+        let tables = Tables::upload(device, &m2l, n, library_copy).unwrap();
+        warm_up(device);
+        for (problem, levels) in views {
+            for level in levels {
+                eprintln!("orientation: {problem}, p = {p}, level {}", level.level);
+                let boxes = level.boxes();
+                let mut rng = SplitMix64::new(0x7e_9300 + p as u64);
+                let multipoles_host: Vec<f32> = (0..boxes * n)
+                    .map(|_| rng.range(-1.0, 1.0) as f32)
+                    .collect();
+                let multipoles = device.upload(&multipoles_host).unwrap();
+                let mut locals = device.alloc::<f32>(boxes * n).unwrap();
+                let view = GroupedView::upload(device, &level.arrays(), boxes).unwrap();
+                // (time, result) per (policy, orientation); None where the library refused.
+                let mut cells: Vec<Option<(f64, Vec<f32>)>> = Vec::new();
+                for policy in [GemmPolicy::HandWritten, GemmPolicy::Auto] {
+                    for orientation in [Orientation::BoxMajor, Orientation::CoefficientMajor] {
+                        let s = PlanSettings {
+                            orientation,
+                            ..settings(device, n, policy, DEFAULT_SCRATCH_BYTES)
+                        };
+                        let (plan, mut scratch) = plan_of(device, level, &s, &tables);
+                        if policy == GemmPolicy::Auto && plan.gemm() != Gemm::Library {
+                            cells.push(None);
+                            continue;
+                        }
+                        let mut run = |d: &mut Device, locals: &mut DeviceBuffer<f32>| {
+                            grouped(
+                                d,
+                                &plan,
+                                &view,
+                                Accumulate::Rows,
+                                &tables,
+                                Operands::Separate {
+                                    input: multipoles.as_slice(),
+                                    output: locals.as_slice_mut(),
+                                },
+                                &mut scratch,
+                            )
+                            .unwrap();
+                        };
+                        nd_fmm_kernels::movement::zero(device, locals.as_slice_mut()).unwrap();
+                        run(device, &mut locals);
+                        let mut result = vec![0.0f32; boxes * n];
+                        device.download(locals.as_slice(), &mut result).unwrap();
+                        let seconds = time(device, |d| run(d, &mut locals));
+                        cells.push(Some((seconds, result)));
+                    }
+                }
+                let reference = &cells[0].as_ref().expect("the hand-written kernel runs").1;
+                let mut worst = 0.0f64;
+                for cell in cells.iter().flatten() {
+                    worst = worst.max(relative_l2(&cell.1, reference));
+                }
+                assert!(
+                    worst < 1e-5,
+                    "{problem}, p = {p}, level {}: the orientations differ by {worst:e}",
+                    level.level
+                );
+                let us = |c: &Option<(f64, Vec<f32>)>| {
+                    c.as_ref()
+                        .map_or("–".to_owned(), |(t, _)| format!("{:.1}", t * 1e6))
+                };
+                let ratio = |a: &Option<(f64, Vec<f32>)>, b: &Option<(f64, Vec<f32>)>| match (a, b)
+                {
+                    (Some((ta, _)), Some((tb, _))) => format!("{:.2}", tb / ta),
+                    _ => "–".to_owned(),
+                };
+                let names = ["hand bm", "hand cm", "library bm", "library cm"];
+                let best = cells
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, c)| c.as_ref().map(|(t, _)| (i, *t)))
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .map_or("–", |(i, _)| names[i]);
+                println!(
+                    "| {problem} | {p} | {} | {} | {} | {} | {} | {} | {} | {} | {best} |",
+                    level.level,
+                    level.pairs(),
+                    us(&cells[0]),
+                    us(&cells[1]),
+                    ratio(&cells[0], &cells[1]),
+                    us(&cells[2]),
+                    us(&cells[3]),
+                    ratio(&cells[2], &cells[3]),
+                );
+            }
+        }
+    }
+    println!();
 }
 
 /// The host tables at p ≤ 8 (dense, for the host operator) and the 316 dense f32 M2L
@@ -370,6 +532,7 @@ fn settings(device: &Device, n: usize, policy: GemmPolicy, budget: u64) -> PlanS
         layout: GemmLayout::default_for(device.info(), n),
         policy,
         budget,
+        orientation: Orientation::BoxMajor,
     }
 }
 
