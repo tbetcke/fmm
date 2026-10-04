@@ -490,7 +490,8 @@ Each is recorded in the exit checklist when made:
    1.9% faster than 64, below 5%), so no device default is added
    (fmm-validate/results/phase4-m3max.md).
 9. External baselines (FMM3D, ExaFMM-t, kifmm-rs; design §8.3). Recommended: later, not
-   in T13.
+   in T13. **Decided on 2026-10-04: FMM3D only, in a later phase**; ExaFMM-t and kifmm-rs
+   are dropped as baselines. T13 ran none.
 10. A performance target for the CubeCL CPU runtime (T3; before T6). **Approved on
     2026-10-03: T3 measures it.** T3 times a CPU-shaped P2P on the 0.11 CPU runtime
     (targets in `Vector<T, N>` lanes, one unit per core, no shared memory) against
@@ -588,6 +589,6 @@ In the repository root, start `claude` and say:
 - [x] T11 merged: every operator on the device; C4.8 gates on cube and Plummer; deterministic; minimal transfers
 - [x] T12 merged: autotune with persistent cache; static fallback rule; choice resolved at build and reported
 - [x] Device leaf-size default decided (T13): the rule picked 64 on Metal f32 (128 only 1.9% faster, below 5%), so no device default is added; the host default stays 64
-- [ ] External baselines: later / in T13
+- [x] External baselines: later / in T13: FMM3D only, in a later phase (decided 2026-10-04)
 - [ ] T13 merged: device benchmark report published
 - [x] Design documents updated: laplace-fmm-plan §4, §6, §7 (Phase 4 status and numbers), §8.3, §9.1 and §9.2; workspace-structure §2, §3, §3.1, §5 and §6; device-path.md decisions and measurements recorded (T13, §17)

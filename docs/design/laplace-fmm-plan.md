@@ -1873,9 +1873,9 @@ self-hosted runner. Until then they are run by hand, following `fmm-plan/CLAUDE.
   (`device_fmm --part leaf`; Section 7, Phase 4, "Leaf size").
 - Keep every thread pool inside the core budget of Section 6.8 when timing threaded
   host paths, and report the rayon threads and the BLAS variables with each run.
-- Compare at matched accuracy against FMM3D (analytic Laplace), and against ExaFMM-t and
-  kifmm-rs as kernel-independent baselines. *Not done in Phase 4* (decision 9 recommends
-  later).
+- Compare at matched accuracy against FMM3D (analytic Laplace), the one external
+  baseline. *Decided on 2026-10-04 (decision 9):* FMM3D only, not the kernel-independent
+  ExaFMM-t and kifmm-rs, and in a later phase, not in Phase 4.
 - Benchmark the host P2P kernels (Phase 3S) in pairs per second, per ISA and precision,
   on FMM-shaped leaf workloads and all-pairs sets, against `nd_fmm_ref::p2p` and the
   Laplace kernels of green-kernels, with the accuracy of every row against `direct_sum`
@@ -1992,8 +1992,10 @@ and identity tests, the second with a one-day spike before Phase 4.
   spike in f32 and f64, is one command in `fmm-validate/results/phase4-m3max.md` ("The
   CUDA run"); it measures the f64 GEMM efficiency of the hand-written kernel, the f64
   dense/rotation crossover, and so the static rule.
-- *New in Phase 4:* external baselines (FMM3D, ExaFMM-t, kifmm-rs; Section 8.3).
-  *Recommended (decision 9 of docs/phase4/README.md):* later; Phase 4 ran none.
+- *New in Phase 4:* external baselines (Section 8.3). *Answered on 2026-10-04
+  (decision 9 of docs/phase4/README.md):* FMM3D only (analytic Laplace, at matched
+  accuracy), in a later phase; ExaFMM-t and kifmm-rs are dropped as baselines. Phase 4
+  ran none.
 - *New in Phase 3:* targets of 1e-9 and below need p > 20 in f64 (Section 4), beyond
   the degrees CONVENTIONS §3.9 tests for M2L and `nd-fmm-exec` accepts
   (`MAX_DEGREE` = 20). Are they needed? If so, extending the tested range (and the

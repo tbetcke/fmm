@@ -16,7 +16,7 @@ The peak used for "% of peak" is the spike report's: 14.3 TFLOP/s f32 for the M3
 - **CUDA.** It is type-checked only (`cargo check -p nd-fmm-validate --features cuda
   --examples`, done for this report). The run that would measure it is one command
   ("The CUDA run" below), and no result is claimed from it.
-- x86_64 hosts, external baselines (decision 9 recommends later), and multi-rank device
+- x86_64 hosts, the external baseline (decision 9: FMM3D only, in a later phase), and multi-rank device
   runs (C5.1).
 
 ## Setup
