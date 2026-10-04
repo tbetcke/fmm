@@ -190,8 +190,8 @@ fn main() {
                 if part != Part::Leaf {
                     for choice in kernels() {
                         let execution = Execution {
-                            threads,
                             p2p: choice,
+                            ..Execution::threads(threads)
                         };
                         kernel_runs.push(one(&base, &reference, (precision, p), execution, &comm));
                     }

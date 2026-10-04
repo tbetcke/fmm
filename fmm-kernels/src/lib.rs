@@ -14,7 +14,7 @@
 //! the leaf stores' point offsets ([`view::PointOffsets`]). T7: the leaf operators P2M,
 //! L2P, P2L and M2P ([`leaf`]). T8: the grouped translations with dense tables
 //! ([`translate`]: the hand-written GEMM, the library GEMM, M2M and L2L; T9 adds dense
-//! M2L). T10: rotation M2L ([`rotation`]).
+//! M2L). T10: rotation M2L ([`rotation`]). T11: timing windows ([`Device::open_window`]).
 //!
 //! ## Backends and features
 //!
@@ -62,7 +62,13 @@
 //! panics on a failed allocation. [`Device::write`] overwrites a range without a sync;
 //! [`Device::download`] waits for the queued launches (one sync) and reports a failed
 //! launch that wrote the buffer as [`KernelError::Device`]. [`Device::counters`] counts
-//! transfers (calls and bytes), launches and syncs.
+//! transfers (calls and bytes), launches, syncs and timing windows.
+//!
+//! [`Device::open_window`] and [`Device::close_window`] bracket queued work in a timing
+//! window ([`TimingWindow`], [`WindowTime`]; device-path.md §8.3), read after the work has
+//! run. On a device that [times on itself](Device::times_on_device) (Metal with timestamp
+//! queries, CUDA) a window waits for nothing; on the CPU runtime it drains the stream at
+//! both ends, counted as two syncs.
 //!
 //! Transfers are copies: every bit pattern round-trips, −0, subnormals, ±∞ and NaN
 //! payloads included, on every backend run (Metal flushes subnormals in arithmetic
@@ -187,6 +193,6 @@ pub use buffer::{
 };
 pub use device::{
     BackendKind, CPU_MAX_UNITS, CUBECL_VERSION, Counters, Device, DeviceInfo, MAX_ELEMENTS,
-    Precision,
+    Precision, TimingWindow, WindowTime,
 };
 pub use error::KernelError;

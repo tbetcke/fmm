@@ -15,13 +15,24 @@
 //! `--distribution d` (`cube`, `sphere`, `plummer`, `clusters` or `all`, the default),
 //! `--threads n` rayon threads (default 1), `--p2p k` the P2P kernel (`auto`, the
 //! default, `reference` or an ISA: `scalar`, `neon`, `avx2`;
-//! `nd_fmm_exec::operator::P2pChoice`) and one BLAS thread:
+//! `nd_fmm_exec::operator::P2pChoice`), `--backend b` where the operators run (`host`,
+//! the default, or with the feature of that backend `cpu`, `metal` or `cuda`; Phase 4
+//! T11) and one BLAS thread:
 //!
 //! ```text
 //! OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 BLIS_NUM_THREADS=1 \
 //!     VECLIB_MAXIMUM_THREADS=1 \
 //!     cargo run --release -p nd-fmm-validate --example fmm_accuracy -- --threads 4
+//! cargo run --release -p nd-fmm-validate --features metal --example fmm_accuracy -- --backend metal
 //! ```
+//!
+//! On a device backend every operator kind runs on the device. The report then names the
+//! backend and the device, and per run the kinds on the device, the M2L strategy as the
+//! device runs it, the GEMMs of the translations, and the transfers, launches, syncs and
+//! timing windows of an evaluation; where the device times on itself (Metal) also the
+//! device time of each stage. f64 runs only where the device does f64 arithmetic: on
+//! Metal the f64 rows are left out, and the C3.3 gate is reported in f32 only. Metal
+//! needs a process with GPU access (outside the macOS sandbox).
 //!
 //! The problems and the error measure are described in `nd_fmm_validate::fmm_accuracy`.
 //! The errors are deterministic for the seed and the same for every number of threads;
@@ -37,6 +48,7 @@ use std::time::{Duration, Instant};
 use mpi::Threading;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
+use nd_fmm_exec::fmm::Backend;
 use nd_fmm_exec::operator::{Isa, P2pChoice};
 use nd_fmm_validate::bench::{cores, cpu_model, target};
 use nd_fmm_validate::fmm_accuracy::{
@@ -49,23 +61,31 @@ const F64_PS: [usize; 3] = [3, 8, 18];
 /// The degrees in f32, at most 8 (design §4).
 const F32_PS: [usize; 2] = [3, 8];
 
-/// The command line: the distributions besides the cube, the threads and the P2P
-/// kernel.
+/// The command line: the distributions besides the cube, the threads, the P2P kernel
+/// and the backend.
 struct Arguments {
     distributions: Vec<Distribution>,
     execution: Execution,
 }
 
-/// Parses `--distribution d`, `--threads n` and `--p2p k`, in any order; exits with a
-/// message on anything else, and on a P2P kernel this machine cannot run.
+/// Parses `--distribution d`, `--threads n`, `--p2p k` and `--backend b`, in any order;
+/// exits with a message on anything else, on a P2P kernel this machine cannot run, and
+/// on a backend that is not compiled in.
 fn arguments() -> Arguments {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let usage = || -> ! {
         let isas: Vec<String> = Isa::available().map(|isa| isa.to_string()).collect();
         eprintln!(
             "usage: fmm_accuracy [--distribution cube|sphere|plummer|clusters|all] \
-             [--threads n] [--p2p auto|reference|{}], n >= 1; got {args:?}",
-            isas.join("|")
+             [--threads n] [--p2p auto|reference|{}] [--backend {}], n >= 1; a device \
+             backend needs its feature (--features cpu, metal or cuda); got {args:?}",
+            isas.join("|"),
+            Backend::ALL
+                .iter()
+                .filter(|b| b.is_compiled())
+                .map(|b| b.name())
+                .collect::<Vec<_>>()
+                .join("|")
         );
         std::process::exit(2);
     };
@@ -82,6 +102,10 @@ fn arguments() -> Arguments {
             },
             ("--p2p", k) => match k.parse::<P2pChoice>() {
                 Ok(p2p) if p2p.resolve().is_ok() => parsed.execution.p2p = p2p,
+                _ => usage(),
+            },
+            ("--backend", b) => match b.parse::<Backend>() {
+                Ok(backend) if backend.is_compiled() => parsed.execution.backend = backend,
                 _ => usage(),
             },
             ("--distribution", "all") => parsed.distributions = Distribution::ALL.to_vec(),
@@ -107,8 +131,27 @@ struct Report {
     oracle_time: Duration,
 }
 
-/// Draws the problem of `config`, computes its oracles and runs every p.
-fn report(config: Config, execution: Execution, comm: &SimpleCommunicator) -> Report {
+/// Whether `backend` does f64 arithmetic, and its device line ("host" for the host).
+/// Exits with a message if the device does not come up.
+fn device_of(backend: Backend) -> (bool, String) {
+    if !backend.is_device() {
+        return (true, "host".to_owned());
+    }
+    #[cfg(feature = "gpu")]
+    match backend.probe() {
+        Ok(info) => (info.f64, info.to_string()),
+        Err(reason) => {
+            eprintln!("--backend {backend}: {reason}");
+            std::process::exit(2);
+        }
+    }
+    #[cfg(not(feature = "gpu"))]
+    unreachable!("arguments() accepts only compiled backends")
+}
+
+/// Draws the problem of `config`, computes its oracles and runs every p, in f64 only if
+/// `f64` (the backend does f64 arithmetic).
+fn report(config: Config, execution: Execution, f64: bool, comm: &SimpleCommunicator) -> Report {
     let start = Instant::now();
     let problem = Problem::new(&config);
     let oracle64 = Oracle::new(&problem, &problem.charges);
@@ -119,7 +162,8 @@ fn report(config: Config, execution: Execution, comm: &SimpleCommunicator) -> Re
         .collect();
     let oracle32 = Oracle::new(&problem, &rounded);
     let oracle_time = start.elapsed();
-    let mut runs: Vec<Run> = F64_PS
+    let f64_ps: &[usize] = if f64 { &F64_PS } else { &[] };
+    let mut runs: Vec<Run> = f64_ps
         .iter()
         .map(|&p| {
             run::<f64>(
@@ -175,11 +219,12 @@ fn main() {
         std::process::exit(2);
     }
 
-    let cube = report(Config::C32, execution, &comm);
+    let (f64, device) = device_of(execution.backend);
+    let cube = report(Config::C32, execution, f64, &comm);
     let clustered: Vec<Report> = distributions
         .iter()
         .filter(|&&d| d != Distribution::Cube)
-        .map(|&d| report(Config::c33(d), execution, &comm))
+        .map(|&d| report(Config::c33(d), execution, f64, &comm))
         .collect();
     let mut reports: Vec<&Report> = Vec::new();
     if distributions.contains(&Distribution::Cube) {
@@ -268,6 +313,32 @@ fn main() {
     println!(
         "- P2P kernel: {} (`--p2p {}`).",
         cube.runs[0].p2p, execution.p2p
+    );
+    println!(
+        "- Backend: {} (`--backend {}`), device: {device}.{}",
+        execution.backend,
+        execution.backend,
+        match &cube.runs[0].device {
+            Some(d) => format!(
+                " Kinds on the device: {}; stage timing: {}.{}",
+                if d.on_device.len() == nd_fmm_exec::fmm::OperatorKind::ALL.len() {
+                    "all eight".to_owned()
+                } else {
+                    d.on_device
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                },
+                d.stage_timing,
+                if f64 {
+                    ""
+                } else {
+                    " The device does no f64 arithmetic: f64 rows are left out."
+                }
+            ),
+            None => String::new(),
+        }
     );
 
     if !clustered.is_empty() {
@@ -396,6 +467,34 @@ fn print_report(report: &Report, cube: &Report) {
         );
     }
 
+    if report.runs.iter().any(|r| r.device.is_some()) {
+        println!();
+        println!("### Device");
+        println!();
+        println!(
+            "Per evaluation (the last one of each row): transfers, kernel launches, syncs \
+             (waits for the device) and timing windows."
+        );
+        println!();
+        println!(
+            "| precision | p | strategy on the device | kinds on the device | GEMMs | uploads | upload bytes | downloads | download bytes | launches | syncs | windows |"
+        );
+        println!("|---|---:|---|---:|---|---:|---:|---:|---:|---:|---:|---:|");
+        for r in &report.runs {
+            if let Some(d) = &r.device {
+                let [up, up_bytes, down, down_bytes, launches, syncs, windows] = d.evaluation;
+                println!(
+                    "| {} | {} | {} | {} | {} | {up} | {up_bytes} | {down} | {down_bytes} | {launches} | {syncs} | {windows} |",
+                    r.precision,
+                    r.p,
+                    d.strategy,
+                    d.on_device.len(),
+                    d.gemms
+                );
+            }
+        }
+    }
+
     println!();
     println!("### Timings");
     println!();
@@ -431,5 +530,33 @@ fn print_report(report: &Report, cube: &Report) {
             ms(s.evaluate_leaves),
             ms(s.output)
         );
+    }
+    if report.runs.iter().any(|r| r.stages.device.is_some()) {
+        println!();
+        println!(
+            "Device time in ms, from the device's timestamps (one timing window per stage, \
+             no sync), the mean over the charge vectors; on the host clock above, a device \
+             stage times its enqueueing and \"output\" waits for the device."
+        );
+        println!();
+        println!(
+            "| precision | p | device total | load | upward local | upward global | downward | leaves |"
+        );
+        println!("|---|---:|---:|---:|---:|---:|---:|---:|");
+        for r in &report.runs {
+            if let Some(d) = &r.stages.device {
+                println!(
+                    "| {} | {} | {} | {} | {} | {} | {} | {} |",
+                    r.precision,
+                    r.p,
+                    ms(d.total()),
+                    ms(d.load),
+                    ms(d.upward_local),
+                    ms(d.upward_global),
+                    ms(d.downward),
+                    ms(d.evaluate_leaves)
+                );
+            }
+        }
     }
 }

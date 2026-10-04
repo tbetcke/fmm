@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use cubecl::client::Client;
 use cubecl::features::Plane;
 use cubecl::prelude::*;
+use cubecl::profile::{ProfileDuration, TimingMethod};
+use cubecl::server::ProfileError;
 
 use crate::buffer::{DeviceBuffer, DeviceElement, DeviceSlice, DeviceSliceMut, IndexBuffer};
 use crate::error::KernelError;
@@ -177,8 +179,49 @@ pub struct Counters {
     pub downloads: u64,
     /// Kernel launches. A call with nothing to do launches nothing.
     pub launches: u64,
-    /// Waits for the device: one per [`Device::download`] and per [`Device::sync`].
+    /// Waits for the device: one per [`Device::download`] and per [`Device::sync`], and
+    /// two per timing window not timed on the device ([`Device::close_window`]).
     pub syncs: u64,
+    /// Timing windows closed ([`Device::close_window`]).
+    pub windows: u64,
+}
+
+/// A timing window open on a device's stream ([`Device::open_window`]).
+#[derive(Debug)]
+pub struct TimingWindow(cubecl::client::ProfileWindow);
+
+/// The time of a closed [`TimingWindow`] ([`Device::close_window`]), read with
+/// [`resolve`](Self::resolve) once the window's work has run.
+pub struct WindowTime {
+    /// `None` for a window without device work.
+    duration: Option<ProfileDuration>,
+    on_device: bool,
+}
+
+impl fmt::Debug for WindowTime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WindowTime")
+            .field("on_device", &self.on_device)
+            .finish_non_exhaustive()
+    }
+}
+
+impl WindowTime {
+    /// Whether the device timed the window without waiting for the stream
+    /// ([`Device::times_on_device`]).
+    pub fn on_device(&self) -> bool {
+        self.on_device
+    }
+
+    /// The time of the window: on a device that times on the device, from its
+    /// timestamps, which waits for the buffer that carries them (call it after the
+    /// download that ends the work, when the stream is idle); elsewhere the host time
+    /// between the window's two waits. `None` if the runtime measured nothing (a window
+    /// without device work).
+    pub fn resolve(self) -> Option<std::time::Duration> {
+        let duration = self.duration?;
+        cubecl::future::block_on(duration.resolve()).map(|ticks| ticks.duration())
+    }
 }
 
 /// A launch shape for kernels that cover `work` elements: `cubes` cubes of `units`
@@ -551,6 +594,65 @@ impl Device {
     pub fn sync(&mut self) -> Result<(), KernelError> {
         self.counters.syncs += 1;
         cubecl::future::block_on(self.client.sync()).map_err(device_error)
+    }
+
+    /// Whether a [timing window](Self::open_window) is timed by the device itself,
+    /// without waiting for it (device-path.md §8.3, F14): on a GPU backend whose runtime
+    /// times on the device (wgpu with timestamp queries, which Metal has; CUDA by
+    /// events). False on the CPU runtime: it reports device timing, but its windows
+    /// drain the stream at both ends and read the host clock, so each window costs two
+    /// waits.
+    pub fn times_on_device(&self) -> bool {
+        self.backend().is_gpu() && self.client.properties().timing_method == TimingMethod::Device
+    }
+
+    /// Opens a timing window at the current position of the stream
+    /// (`Client::profile_start`). On a device that [times on the
+    /// device](Self::times_on_device) it submits the queued work and returns without
+    /// waiting; elsewhere it waits for the stream. Close it with
+    /// [`close_window`](Self::close_window) on the same thread.
+    ///
+    /// # Errors
+    ///
+    /// [`KernelError::Device`] if the runtime cannot open a window.
+    pub fn open_window(&mut self) -> Result<TimingWindow, KernelError> {
+        self.client
+            .profile_start()
+            .map(TimingWindow)
+            .map_err(device_error)
+    }
+
+    /// Closes `window` at the current position of the stream (`Client::profile_end`):
+    /// the time from its opening to here, of the work queued in between, to
+    /// [`resolve`](WindowTime::resolve) once that work has run. A window without device
+    /// work (no launch between its ends) measures nothing. Counts one window, and two
+    /// syncs if the window was not timed on the device (the runtime waited for the stream
+    /// at both ends: the CPU runtime, or a wgpu stream that found the device's
+    /// timestamp-query budget spent).
+    ///
+    /// # Errors
+    ///
+    /// [`KernelError::Device`] if the runtime cannot close the window.
+    pub fn close_window(&mut self, window: TimingWindow) -> Result<WindowTime, KernelError> {
+        let duration = match self.client.profile_end(window.0) {
+            Ok(duration) => Some(duration),
+            Err(ProfileError::NotMeasured { .. }) => None,
+            Err(error) => return Err(device_error(error)),
+        };
+        self.counters.windows += 1;
+        let on_device = match &duration {
+            Some(duration) => {
+                self.backend().is_gpu() && duration.timing_method() == TimingMethod::Device
+            }
+            None => self.times_on_device(),
+        };
+        if !on_device {
+            self.counters.syncs += 2;
+        }
+        Ok(WindowTime {
+            duration,
+            on_device,
+        })
     }
 
     /// The CubeCL client, for the launch wrappers.

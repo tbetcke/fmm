@@ -9,8 +9,9 @@ Phase and components: Phase 3, C3.1–C3.3 and C3.5 (tasks T3 and T8–T11 in do
 Phase 3S, C3S.5 (task T6 in docs/phase3s/); Phase 4, C4.1 (task T5 in docs/phase4/;
 design docs/design/device-path.md), C4.2 (task T6: P2P on the device), C4.3 (task
 T7: P2M, L2P, P2L and M2P on the device), C4.4 (task T8: M2M and L2L on the device),
-C4.5 (task T9: dense M2L on the device) and C4.6 (task T10: rotation M2L on the device),
-with C4.7 and C4.8 to follow.
+C4.5 (task T9: dense M2L on the device), C4.6 (task T10: rotation M2L on the device) and
+C4.8 (task T11: the device FMM end to end, every kind on the device), with C4.7 to
+follow.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -50,8 +51,9 @@ with C4.7 and C4.8 to follow.
     `Threading::Single` (the error path of `threads`); `tests/mpi_exec.rs`,
     `tests/accuracy.rs` (the ignored C3.2 gate), `tests/adaptive.rs` (the ignored
     C3.3 error per list) and `tests/device_metal.rs` (the ignored Metal run of the
-    device path, feature `metal`) initialise it at `Threading::Funneled`. The device
-    checks shared by `tests/mpi_exec.rs` and `tests/device_metal.rs` live in
+    device path, feature `metal`) initialise it at `Threading::Funneled`;
+    `tests/device_fmm.rs` (the ignored C4.8 gate, feature `gpu`) at the default level.
+    The device checks shared by `tests/mpi_exec.rs` and `tests/device_metal.rs` live in
     `tests/device_common/`.
   - New `Fmm` scenarios evaluate through `evaluate_threaded` in `tests/mpi_exec.rs`,
     which repeats them at 2, 4 and 8 threads and checks the output bit for bit, or
@@ -115,6 +117,17 @@ with C4.7 and C4.8 to follow.
     device the output agrees with the host path within the FMM bounds of
     docs/phase4/README.md, not bit for bit: `tests/device_common` checks both, every kind on the fallback bit for
     bit and the default within the bounds, with the transfer formula of each;
+  - the device FMM (T11, C4.8): every kind on the device by default under every
+    strategy; an evaluation moves the charges up and the output down and syncs once, at
+    that download (`tests/device_common` asserts it on every scenario, with two builds
+    bit for bit); level calls queue their launches without a sync, the top levels stay
+    on the device, dense M2L is not merged across levels (measured negligible); stage
+    timing (`device::StageTiming`, `FmmBuilder::device_timestamps`, opt-in): one
+    timing window per stage with device work (`DeviceStage`, five per evaluation) where
+    the device times on itself (Metal, CUDA), read after the download, in
+    `StageTimings::device` (spans that overlap on Metal, not a breakdown); no window on
+    the CPU runtime, whose windows drain the stream; `synchronous_stages` disables them. Never add a sync, a download or a host call to a
+    default evaluation; a new launch belongs in the formula of `tests/device_common`;
   - safety (requirement 9): no `unsafe` here and no direct `cubecl` dependency;
     CubeCL only through `nd-fmm-kernels`;
   - threads: with `Backend::Cpu` no rayon pool, `threads(n)` caps the CPU runtime's
@@ -137,8 +150,11 @@ with C4.7 and C4.8 to follow.
   - from T6, the ignored gates on the device path too: `RUST_MIN_STACK=8388608 cargo
     test -p nd-fmm-exec --features cpu --release -- --ignored` (`tests/accuracy.rs` and
     `tests/adaptive.rs` repeat their problems with every kind on the device: on the CPU
-    runtime in f64, `tests/accuracy.rs` also at p = 18 under `Rotation` (T10), and on
-    Metal in f32 with `--features metal`).
+    runtime in f64, `tests/accuracy.rs` also at p = 18 under `Rotation` (T10) with the
+    C3.2 gate there (T11), and on Metal in f32 with `--features metal`; from T11
+    `tests/device_fmm.rs`, the C4.8 gate: the cube and the Plummer sphere at N = 10⁵, f64
+    p = 8, 12, 18 on the CPU runtime, f32 p = 3, 8 on Metal (with the Gaussian clusters
+    at p = 8), against the host of the same settings, and the C3.3 gate on the device).
 
 ## Allowed dependencies
 nd-fmm-math, nd-fmm-ref, nd-fmm-tables, nd-fmm-plan, nd-fmm-simd (from Phase 3S T6),

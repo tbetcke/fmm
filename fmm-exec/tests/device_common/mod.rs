@@ -33,12 +33,20 @@
 //!   path's (relative L2 per level): on one rank the root's multipole comes from the
 //!   global pass, so this checks the device M2M of the `m2m_global` view against the
 //!   host's;
-//! - two evaluations of the first charges are bit-identical;
+//! - two evaluations of the first charges are bit-identical, and so is the output of a
+//!   second `Fmm` built from the same input (T11, requirement 6);
 //! - the transfers, launches and syncs of each evaluation equal the formula with the
 //!   fallback transfers of each device kind replaced by one launch per level call, or for
 //!   M2M, L2L and dense M2L three per chunk (gather, GEMM, reduction or scatter-add;
 //!   device-path.md §8.1; rotation M2L is one launch per level call); with every kind on
-//!   the device, an evaluation moves only the charges and the output.
+//!   the device, an evaluation moves only the charges (one upload of N_s s bytes) and the
+//!   output (one download of o N_t s bytes) and syncs once, at that download
+//!   (device-path.md §4.1, §8.2; T11);
+//! - the stages are timed by the host clock, with no timing window (T11, device-path.md
+//!   §8.3); a build with `device_timestamps(true)` gives the same bits and, where the
+//!   device times on itself (Metal), opens one timing window per stage with device work
+//!   (five) with no sync of its own and returns the device times with the output, while
+//!   on the CPU runtime, whose windows wait for it, it opens none.
 //!
 //! On several ranks the device build returns `DeviceNeedsOneRank` on every rank instead
 //! (device-path.md §4.4), which [`check_backend`] checks and reports.
@@ -48,7 +56,7 @@
 
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, Equivalence};
-use nd_fmm_exec::device::{DataKind, GroupedImage, Traffic};
+use nd_fmm_exec::device::{DataKind, GroupedImage, StageTiming, Traffic};
 use nd_fmm_exec::fmm::{
     Backend, Fmm, FmmBuilder, FmmError, OperatorKind, Output, Placement, SettingsError,
 };
@@ -332,6 +340,38 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
     }
     e.down(DataKind::Output, fmm.ntargets() * o * s);
     e
+}
+
+/// With every kind on the device, `expected` is the design's minimum (device-path.md
+/// §4.1, §8.1, §8.2): one upload of the charges, one download of the output, one sync,
+/// and nothing moved by a host-fallback call.
+fn check_minimum<T: Stored + SimdScalar + Equivalence + Default>(
+    backend: Backend,
+    fmm: &Fmm<'_, T>,
+    expected: &Expected,
+) {
+    let s = size_of::<T>() as u64;
+    let o = if fmm.gradients() { 4 } else { 1 };
+    for data in DataKind::ALL {
+        let want = match data {
+            DataKind::Charges => Traffic {
+                uploads: 1,
+                upload_bytes: fmm.nsources() as u64 * s,
+                ..Traffic::default()
+            },
+            DataKind::Output => Traffic {
+                downloads: 1,
+                download_bytes: fmm.ntargets() as u64 * o * s,
+                ..Traffic::default()
+            },
+            _ => Traffic::default(),
+        };
+        assert_eq!(
+            expected.traffic[data as usize], want,
+            "{backend}: every kind on the device, {data} per evaluation"
+        );
+    }
+    assert_eq!(expected.syncs, 1, "{backend}: one sync per evaluation");
 }
 
 /// Checks the counters of the last evaluation of `fmm` against `expected`.
@@ -679,6 +719,14 @@ fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
         "{backend}: one M2L report entry per V view with a pair"
     );
     let expected = expected_evaluation(&fmm, &kinds);
+    if kinds.len() == OperatorKind::ALL.len() {
+        check_minimum(backend, &fmm, &expected);
+    }
+    assert_eq!(
+        report.stage_timing,
+        StageTiming::Enqueue,
+        "{backend}: the stage timing"
+    );
     let second: Vec<T> = charges.iter().rev().copied().collect();
     let host_second = host.evaluate(&second).expect("the host FMM evaluates");
     let bound = fmm_bound::<T>();
@@ -699,11 +747,70 @@ fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
         );
         worst = (worst.0.max(potential), worst.1.max(gradient));
         check_evaluation_counters(&what, &fmm, &expected);
+        let windows = fmm.device_counters().unwrap().evaluation.windows;
+        assert_eq!(windows, 0, "{what}: no timing window");
+        assert!(
+            output.timings.device.is_none(),
+            "{what}: no device stage times"
+        );
         let bits = output_bits(&output);
         match (&first_bits, std::ptr::eq(q, charges)) {
             (None, true) => first_bits = Some(bits),
             (Some(first), true) => assert_eq!(&bits, first, "{what}: two evaluations differ"),
             _ => {}
+        }
+    }
+    // A second build of the same input gives the same bits (requirement 6), and so does
+    // one with device timestamps (device-path.md §8.3), which adds timing windows where
+    // the device times on itself and no sync.
+    let first_bits = first_bits.expect("the first charges ran");
+    let timestamps = fmm
+        .device_report()
+        .expect("a device backend")
+        .info
+        .backend
+        .is_gpu();
+    for (what, builder) in [
+        ("a second build", builder.clone()),
+        (
+            "device_timestamps(true)",
+            builder.clone().device_timestamps(true),
+        ),
+    ] {
+        let mut again = builder
+            .threads(1)
+            .backend(backend)
+            .build(sources, targets, comm)
+            .unwrap_or_else(|error| panic!("{backend}: {what} does not build: {error}"));
+        let output = again.evaluate(charges).expect("the device FMM evaluates");
+        assert_eq!(
+            output_bits(&output),
+            first_bits,
+            "{backend}, default placement: {what} differs from the first build"
+        );
+        if what.starts_with("device_timestamps") {
+            let windowed = timestamps;
+            let report = again.device_report().expect("a device backend");
+            assert_eq!(
+                report.stage_timing,
+                if windowed {
+                    StageTiming::DeviceTimestamps
+                } else {
+                    StageTiming::Enqueue
+                },
+                "{backend}, {what}: the stage timing"
+            );
+            let counters = again.device_counters().unwrap().evaluation;
+            assert_eq!(
+                (counters.windows, counters.syncs, counters.launches),
+                (if windowed { 5 } else { 0 }, 1, expected.launches),
+                "{backend}, {what}: windows, syncs and launches of an evaluation"
+            );
+            assert_eq!(
+                output.timings.device.is_some(),
+                windowed,
+                "{backend}, {what}: the device stage times"
+            );
         }
     }
     // The expansions after the first charges on both paths (the host last evaluated the

@@ -141,5 +141,52 @@ fn counts_transfers_launches_and_syncs(device: &mut Device) {
     assert_eq!(device.counters(), Default::default());
 }
 
-tests_on!(cpu: reports_f32, reports_f64, refuses_foreign_buffers, counts_transfers_launches_and_syncs);
-tests_on!(metal: reports_f32, refuses_f64, refuses_foreign_buffers, counts_transfers_launches_and_syncs);
+/// A timing window around a launch (device-path.md §8.3): on a device that times on the
+/// device (Metal) it adds no sync, and its time resolves after the download that ends
+/// the work; on the CPU runtime it waits at both ends, counted as two syncs. Either way
+/// the window changes no value.
+fn times_windows(device: &mut Device) {
+    let on_device = device.times_on_device();
+    assert!(
+        device.backend().is_gpu() || !on_device,
+        "the CPU runtime drains its stream at a window"
+    );
+    let mut buffer = device.upload(&vec![1.0f32; 1 << 16]).unwrap();
+    device.reset_counters();
+    let window = device.open_window().unwrap();
+    nd_fmm_kernels::movement::zero(device, buffer.slice_mut(1..)).unwrap();
+    let time = device.close_window(window).unwrap();
+    assert_eq!(time.on_device(), on_device);
+    let c = device.counters();
+    assert_eq!((c.windows, c.launches), (1, 1));
+    assert_eq!(c.syncs, if on_device { 0 } else { 2 }, "{c:?}");
+    let mut out = vec![0.0f32; 1 << 16];
+    device.download(buffer.as_slice(), &mut out).unwrap();
+    assert_eq!(out[0], 1.0);
+    assert!(out[1..].iter().all(|&v| v.to_bits() == 0));
+    let elapsed = time.resolve().expect("the window measured its work");
+    // A window without device work measures nothing, and still waits for nothing where
+    // the device times on itself.
+    device.reset_counters();
+    let window = device.open_window().unwrap();
+    let empty = device.close_window(window).unwrap();
+    assert_eq!(empty.on_device(), on_device);
+    let c = device.counters();
+    assert_eq!((c.windows, c.launches), (1, 0));
+    assert_eq!(c.syncs, if on_device { 0 } else { 2 }, "{c:?}");
+    let empty = empty.resolve();
+    if on_device {
+        assert_eq!(empty, None, "an empty window measures nothing");
+    }
+    println!(
+        "  timing window: {} the device, {elapsed:?} for one zero launch of 65,535 values",
+        if on_device {
+            "timed on"
+        } else {
+            "not timed on"
+        }
+    );
+}
+
+tests_on!(cpu: reports_f32, reports_f64, refuses_foreign_buffers, counts_transfers_launches_and_syncs, times_windows);
+tests_on!(metal: reports_f32, refuses_f64, refuses_foreign_buffers, counts_transfers_launches_and_syncs, times_windows);

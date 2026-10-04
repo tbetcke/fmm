@@ -215,16 +215,83 @@
 //!
 //! # Transfer accounting
 //!
-//! The operator counts every upload and download (calls and bytes), every launch and
-//! every sync, of the build and of the last evaluation ([`DeviceCounters`]), and splits
-//! the transfers by the data they move ([`DataKind`], [`Traffic`]).
+//! The operator counts every upload and download (calls and bytes), every launch, every
+//! sync and every timing window, of the build and of the last evaluation
+//! ([`DeviceCounters`]), and splits the transfers by the data they move ([`DataKind`],
+//! [`Traffic`]).
+//!
+//! # The device FMM (T11): scheduling, syncs and stage timing (§8)
+//!
+//! **By default every operator kind runs on the device**, under every strategy, and
+//! [`DeviceReport::placement`] says so; [`host_fallback`](crate::fmm::FmmBuilder::host_fallback)
+//! stays as a test aid. The data stay on the device for the whole evaluation, and an
+//! evaluation moves the design's minimum: the charges up (one upload of N_s s bytes) and
+//! the output down (one download of o N_t s bytes), nothing else.
+//!
+//! Every level call queues its launches on the one stream and returns: no launch waits
+//! for another, and **an evaluation syncs once**, at the download of the output, where
+//! launch errors also surface (§8.2). The top levels stay on the device, since a host
+//! call there would cost a sync (§6.7). The launches per evaluation (§8.1), with c the
+//! offset chunks of a dense M2L level call (one with the default scratch budget, unless
+//! a level's V batches exceed it):
+//!
+//! | Stage | Launches |
+//! | --- | --- |
+//! | `begin_evaluation` | 3 zero kernels (multipoles, locals, target output; none for an empty store) and the charge scatter |
+//! | upward, local pass | per level: P2M 1; M2M 3 per chunk (gather, GEMM, reduction) |
+//! | upward, global pass | on one rank the root's M2M: 3, none if the root is a leaf |
+//! | downward | per level: L2L 3 per chunk (gather, GEMM, scatter-add); M2L 3 c (dense) or 1 (rotation); P2L 1 |
+//! | leaves | per level: L2P 1, M2P 1, P2P 1 |
+//!
+//! A level call whose view has no entry launches nothing. The level calls of dense M2L
+//! are not merged into one GEMM over every level (§6.7 allows it): it would save at most
+//! two launches per level with a V list, which T11 measured as a negligible share of an
+//! evaluation. On Metal and CUDA neither uploads nor launches wait; on the CPU runtime
+//! the stream drains before a host write and before every launch with shared memory
+//! (F10), which costs time but no extra sync of the operator and changes no value.
+//!
+//! **Stage timing** ([`StageTiming`], [`DeviceReport::stage_timing`]): `Fmm` times every
+//! stage on the host, which on a device measures the enqueueing of its launches (the
+//! default, [`StageTiming::Enqueue`]); [`synchronous_stages`](crate::fmm::FmmBuilder::synchronous_stages)
+//! times them whole on every backend, at a sync per stage. With
+//! [`device_timestamps`](crate::fmm::FmmBuilder::device_timestamps), where the device
+//! times on itself (Metal with timestamp queries, CUDA by events;
+//! `nd_fmm_kernels::Device::times_on_device`), each stage with device work also runs in a
+//! timing window ([`open_stage`](DeviceOperator::open_stage),
+//! [`close_stage`](DeviceOperator::close_stage); five per evaluation, one per
+//! [`DeviceStage`]), which submits the queued work without waiting for it; the windows
+//! are read after the download, and `Fmm` returns their times in
+//! [`StageTimings::device`](crate::fmm::StageTimings::device). They add no sync, launch
+//! nothing and change no bit (tested on Metal), but they are opt-in: on Metal the device
+//! runs independent passes of neighbouring stages concurrently, so the windows overlap
+//! and their sum exceeds the evaluation's wall time (T11 measured 11.9 ms of stage spans
+//! in a 7.3 ms evaluation), adjacent windows sometimes report the same span, and the
+//! flushes double the enqueue time (about 0.3–0.6 ms). A stage's time is its span on the
+//! device, not its share of the evaluation. A window the device did not time itself (it
+//! waited: a wgpu stream that found the device's timestamp queries spent) turns the
+//! windows off for the later evaluations of the operator. The CPU runtime drains its
+//! stream at both ends of a window, so there no window is opened.
 //!
 //! # Determinism (requirement 6)
 //!
 //! Every launch and transfer is issued from the thread that calls the operator, so they
 //! run in order on one CubeCL stream; host-fallback calls are bit-identical for every
-//! thread count. For a fixed tree, backend, device and build the output is
-//! bit-identical from evaluation to evaluation.
+//! thread count. The launch sequence, the chunks, the tile schedules, the layouts and the
+//! GEMM of every level call are fixed at build from the plan and the device, so for a
+//! fixed tree, backend, device and build the output is bit-identical from evaluation to
+//! evaluation, and from build to build of the same input (tested on every
+//! `tests/mpi_exec.rs` scenario). Timing windows change nothing.
+//!
+//! # Differences from the host path (§9.2)
+//!
+//! With every kind on the device the output agrees with the host path's within the FMM
+//! bounds of docs/phase4/README.md (relative L2 1e-12 in f64, 1e-5 in f32, φ and ∇φ),
+//! not bit for bit: the device GEMMs add each product into the output once, in their own
+//! order, the rotation and leaf kernels fuse multiply–adds, and P2P follows the device
+//! formulation of CONVENTIONS §3.13, "Device kernels". The errors against the direct sum
+//! are those of the host path (`tests/device_fmm.rs`, the C4.8 gate). Under `Rotation`
+//! the host translates M2M and L2L by rotation and the device by the dense octant
+//! tables; `Classes` runs as dense on the device.
 //!
 //! # Errors (§12)
 //!
@@ -306,7 +373,7 @@ use nd_fmm_kernels::view::{
 pub use nd_fmm_kernels::view::{CsrImage, GroupedImage};
 use nd_fmm_kernels::{
     BackendKind, Device, DeviceBuffer, DeviceElement, DeviceFloat, DeviceSlice, DeviceSliceMut,
-    IndexBuffer, KernelError,
+    IndexBuffer, KernelError, TimingWindow, WindowTime,
 };
 pub use nd_fmm_kernels::{Counters, DeviceInfo};
 use nd_fmm_plan::lists::{Csr, GroupedCsr};
@@ -321,8 +388,8 @@ use nd_fmm_tables::{CacheOutcome, L2lTables, M2mTables, MatrixSet, TableCache};
 use nd_octree::morton;
 
 use crate::fmm::{
-    Backend, DeviceGemm, DeviceLeafLayout, DeviceP2pLayout, FmmError, OperatorKind, Placement,
-    SettingsError,
+    Backend, DeviceGemm, DeviceLeafLayout, DeviceP2pLayout, DeviceStage, DeviceStageTimings,
+    FmmError, OperatorKind, Placement, SettingsError,
 };
 use crate::operator::{LaplaceOperator, SimdScalar};
 use crate::tables::M2lStrategy;
@@ -570,6 +637,36 @@ pub struct RotationReport {
     pub rows: usize,
 }
 
+/// How [`StageTimings`](crate::fmm::StageTimings) time the stages of a device
+/// evaluation (docs/design/device-path.md §8.3), fixed at build.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum StageTiming {
+    /// One timing window per stage with device work, timed by the device itself and read
+    /// after the evaluation's one download: no sync of its own
+    /// ([`FmmBuilder::device_timestamps`](crate::fmm::FmmBuilder::device_timestamps), on
+    /// Metal and CUDA; opt-in).
+    DeviceTimestamps,
+    /// A sync after the charge upload and after every stage
+    /// ([`FmmBuilder::synchronous_stages`](crate::fmm::FmmBuilder::synchronous_stages)):
+    /// each stage timed whole on the host.
+    Synchronous,
+    /// The host clock only, which times the enqueueing of each stage: the default, and on
+    /// the CPU runtime also with `device_timestamps(true)`, since its timing windows wait
+    /// for it.
+    #[default]
+    Enqueue,
+}
+
+impl fmt::Display for StageTiming {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::DeviceTimestamps => "device timestamps, one window per stage, no sync",
+            Self::Synchronous => "synchronous stages, a sync after each",
+            Self::Enqueue => "host clock, enqueue time only",
+        })
+    }
+}
+
 /// What a device operator runs on and how, fixed at build, for reports.
 #[derive(Debug)]
 pub struct DeviceReport {
@@ -625,6 +722,10 @@ pub struct DeviceReport {
     /// The bytes the device reported as available before the allocation, `None` if the
     /// backend reports no limit; the check was then skipped.
     pub memory_available: Option<u64>,
+    /// How the stages of an evaluation are timed: by the host clock, unless
+    /// `synchronous_stages` asks for a sync per stage or `device_timestamps` for timing
+    /// windows (where the device times on itself).
+    pub stage_timing: StageTiming,
 }
 
 impl DeviceReport {
@@ -718,6 +819,7 @@ impl fmt::Display for DeviceReport {
         if let Some(units) = self.cpu_units {
             writeln!(f, "CPU runtime: at most {units} units per cube")?;
         }
+        writeln!(f, "stage timing: {}", self.stage_timing)?;
         match self.memory_available {
             Some(available) => write!(
                 f,
@@ -751,6 +853,10 @@ pub struct DeviceOptions {
     /// The scratch budget of the device translations in bytes; `None` for
     /// [`DEFAULT_SCRATCH_BYTES`].
     pub scratch_budget: Option<u64>,
+    /// How to time the stages; [`StageTiming::Enqueue`] by default.
+    /// [`StageTiming::DeviceTimestamps`] falls back to it on a device that does not time on
+    /// itself.
+    pub stage_timing: StageTiming,
 }
 
 impl DeviceP2pLayout {
@@ -1098,6 +1204,15 @@ pub struct DeviceOperator<T: DeviceScalar> {
     build_counters: Counters,
     build_traffic: TrafficByData,
     evaluation_counters: Counters,
+    /// Whether stages are timed by timing windows ([`StageTiming::DeviceTimestamps`]);
+    /// turned off for good if a window was not timed on the device.
+    stage_windows: bool,
+    /// The open timing window of the current stage.
+    window: Option<TimingWindow>,
+    /// The closed windows of this evaluation, resolved by `read_output`.
+    pending: Vec<(DeviceStage, WindowTime)>,
+    /// The device times of the stages of the last evaluation.
+    stage_timings: Option<DeviceStageTimings>,
 }
 
 impl<T: DeviceScalar> fmt::Debug for DeviceOperator<T> {
@@ -1735,6 +1850,10 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                 .as_ref()
                 .is_none_or(|m| m.multipoles.offsets() == &level_offsets[..nlevels])
         );
+        let stage_timing = match options.stage_timing {
+            StageTiming::DeviceTimestamps if !link.device.times_on_device() => StageTiming::Enqueue,
+            timing => timing,
+        };
         let report = DeviceReport {
             info: link.device.info().clone(),
             placement,
@@ -1752,6 +1871,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             scratch_bytes,
             memory_needed: needed,
             memory_available: available,
+            stage_timing,
         };
         Ok(Self {
             host,
@@ -1770,6 +1890,10 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             build_counters: Counters::default(),
             build_traffic: TrafficByData::default(),
             evaluation_counters: Counters::default(),
+            stage_windows: stage_timing == StageTiming::DeviceTimestamps,
+            window: None,
+            pending: Vec::with_capacity(DeviceStage::ALL.len()),
+            stage_timings: None,
         })
     }
 
@@ -1811,7 +1935,9 @@ impl<T: DeviceScalar> DeviceOperator<T> {
     /// locals and the target output on the device (+0.0, the bits of `reset`), uploads
     /// `charges` (one per source, in leaf order: the k-th source of the source store in
     /// leaf order has the k-th charge) and scatters them into their slots of the source
-    /// store. Four launches and one upload, no sync. Resets the evaluation counters.
+    /// store. Four launches and one upload, no sync. Resets the evaluation counters. With
+    /// [`StageTiming::DeviceTimestamps`] it runs in the timing window of
+    /// [`DeviceStage::Load`].
     ///
     /// A failure is kept and returned by [`read_output`](Self::read_output).
     ///
@@ -1826,6 +1952,9 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         );
         self.link.device.reset_counters();
         self.link.traffic = TrafficByData::default();
+        self.pending.clear();
+        self.stage_timings = None;
+        self.open_stage();
         let (stores, views) = (&mut self.stores, &self.views);
         // The zero kernels transfer nothing; they are counted with the output they clear.
         for buffer in [
@@ -1847,6 +1976,36 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                 stores.sources.as_slice_mut(),
             )
         });
+        self.close_stage(DeviceStage::Load);
+    }
+
+    /// Opens the timing window of a stage, with [`StageTiming::DeviceTimestamps`]: no
+    /// sync on a device that times on itself (device-path.md §8.3). `Fmm` calls it before
+    /// each stage with device work.
+    pub fn open_stage(&mut self) {
+        if self.stage_windows {
+            self.window = self.link.run(DataKind::Output, Device::open_window);
+        }
+    }
+
+    /// Closes the timing window of `stage`, opened by [`open_stage`](Self::open_stage);
+    /// its time is read by [`read_output`](Self::read_output). A window the device did not
+    /// time itself (it waited for the stream: a wgpu stream that found the device's
+    /// timestamp queries spent) turns the windows off for every later evaluation.
+    pub fn close_stage(&mut self, stage: DeviceStage) {
+        let Some(window) = self.window.take() else {
+            return;
+        };
+        if let Some(time) = self.link.run(DataKind::Output, |d| d.close_window(window)) {
+            self.stage_windows &= time.on_device();
+            self.pending.push((stage, time));
+        }
+    }
+
+    /// The device times of the stages of the last evaluation, with
+    /// [`StageTiming::DeviceTimestamps`] and if every window was timed on the device.
+    pub fn stage_timings(&self) -> Option<DeviceStageTimings> {
+        self.stage_timings
     }
 
     /// Waits for every queued launch and transfer: one sync. `Fmm` calls it after every
@@ -1868,6 +2027,17 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         self.link.run(DataKind::Output, |d| {
             d.download(stores.target_output.as_slice(), output.as_mut_slice())
         });
+        // The stage windows, read after the download: the stream is idle. A window
+        // without device work measures nothing and times zero.
+        if self.link.error.is_none() && !self.pending.is_empty() {
+            let mut timings = DeviceStageTimings::default();
+            let mut on_device = true;
+            for (stage, time) in self.pending.drain(..) {
+                on_device &= time.on_device();
+                timings.set(stage, time.resolve().unwrap_or_default());
+            }
+            self.stage_timings = on_device.then_some(timings);
+        }
         self.evaluation_counters = self.link.device.counters();
         match &self.link.error {
             Some(error) => Err(error.clone()),
@@ -2530,6 +2700,9 @@ pub(crate) trait DeviceDriver<T: SimdScalar>: FmmOperator<Value = T> + Send {
         target_input: &LeafStore<T>,
     ) -> Result<(), FmmError>;
     fn begin_evaluation(&mut self, charges: &[T]);
+    fn open_stage(&mut self);
+    fn close_stage(&mut self, stage: DeviceStage);
+    fn stage_timings(&self) -> Option<DeviceStageTimings>;
     fn sync(&mut self);
     fn read_output(&mut self) -> Result<&LeafStore<T>, KernelError>;
     fn report(&self) -> &DeviceReport;
@@ -2554,6 +2727,15 @@ impl<T: DeviceScalar> DeviceDriver<T> for DeviceOperator<T> {
     }
     fn begin_evaluation(&mut self, charges: &[T]) {
         DeviceOperator::begin_evaluation(self, charges);
+    }
+    fn open_stage(&mut self) {
+        DeviceOperator::open_stage(self);
+    }
+    fn close_stage(&mut self, stage: DeviceStage) {
+        DeviceOperator::close_stage(self, stage);
+    }
+    fn stage_timings(&self) -> Option<DeviceStageTimings> {
+        DeviceOperator::stage_timings(self)
     }
     fn sync(&mut self) {
         DeviceOperator::sync(self);

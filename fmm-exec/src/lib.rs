@@ -72,7 +72,7 @@
 //! - [`threading`]: the rules for rayon threads, MPI and BLAS, how to launch with one
 //!   BLAS thread, and the [`ThreadingReport`](threading::ThreadingReport) of an FMM.
 //! - `device` (feature `gpu`): the device path, `DeviceOperator`, its report and its
-//!   transfer accounting (C4.1).
+//!   accounting of transfers, launches and syncs (C4.1–C4.8).
 //!
 //! ## Device path (feature `gpu`)
 //!
@@ -90,13 +90,21 @@
 //! - **residency**: views, geometry and tables uploaded once per `Fmm`, the points
 //!   once per build, the charges once and the output once per evaluation; nothing is
 //!   allocated on the device during an evaluation;
+//! - **every kind on the device** (T11): by default all eight operator kinds run on
+//!   the device, under every strategy (P2P, `fmm::DeviceP2pLayout`; P2M, L2P, P2L and
+//!   M2P, `fmm::DeviceLeafLayout`; M2M, L2L and dense M2L as grouped GEMMs,
+//!   `fmm::DeviceGemm`; rotation M2L); the output agrees with the host path's within the
+//!   FMM bounds of docs/phase4/README.md;
+//! - **scheduling**: every level call queues its launches without waiting, so an
+//!   evaluation syncs once, at the download of its output; on request the stages are
+//!   also timed by the device's own timestamps where it has them
+//!   (`fmm::FmmBuilder::device_timestamps`), without a sync;
 //! - **host fallback**: every operator kind can run on the host with explicit
-//!   transfers; with every kind there the output equals the host path's bit for bit.
-//!   From Phase 4 T6 P2P runs on the device by default (`fmm::DeviceP2pLayout`), and
-//!   from T7 the leaf operators P2M, L2P, P2L and M2P (`fmm::DeviceLeafLayout`), and
-//!   from T8 M2M and L2L as grouped GEMMs (`fmm::DeviceGemm`), and from T9 dense M2L;
+//!   transfers, a test aid; with every kind there the output equals the host path's bit
+//!   for bit;
 //! - **determinism**: every launch and transfer is issued from the calling thread, in
-//!   order on one stream; two evaluations are bit-identical;
+//!   order on one stream, and everything is chosen at build; two evaluations, and two
+//!   builds of the same input, are bit-identical;
 //! - **errors**: device settings are refused at build with a
 //!   [`SettingsError`](fmm::SettingsError) agreed by step 1's all-reduce; a device runs on
 //!   one rank until C5.1; device failures are [`FmmError::Device`](fmm::FmmError::Device);
