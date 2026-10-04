@@ -40,3 +40,9 @@ required-features = ["gpu"]
 [[example]]
 name = "leaf_kernels"
 required-features = ["gpu"]
+
+# The device M2M and L2L per level, GEMM throughput against the spike (Phase 4 T8): needs a
+# device backend; not run in CI (no templated-examples entry), run by hand on one rank.
+[[example]]
+name = "translation_kernels"
+required-features = ["gpu"]

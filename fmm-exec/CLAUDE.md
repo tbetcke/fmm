@@ -7,8 +7,9 @@ from Morton keys, and the user-facing `FmmBuilder` and `Fmm`; behind the feature
 the device path (`device`: `DeviceOperator`, its report and transfer accounting).
 Phase and components: Phase 3, C3.1–C3.3 and C3.5 (tasks T3 and T8–T11 in docs/phase3/);
 Phase 3S, C3S.5 (task T6 in docs/phase3s/); Phase 4, C4.1 (task T5 in docs/phase4/;
-design docs/design/device-path.md), C4.2 (task T6: P2P on the device) and C4.3 (task
-T7: P2M, L2P, P2L and M2P on the device), with C4.4–C4.8 to follow.
+design docs/design/device-path.md), C4.2 (task T6: P2P on the device), C4.3 (task
+T7: P2M, L2P, P2L and M2P on the device) and C4.4 (task T8: M2M and L2L on the device),
+with C4.5–C4.8 to follow.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -87,9 +88,15 @@ T7: P2M, L2P, P2L and M2P on the device), with C4.4–C4.8 to follow.
   - device kernels (from T6): P2P runs on the device by default (`nd_fmm_kernels::p2p`,
     one launch per level, the layout by backend or `FmmBuilder::device_p2p_layout`), and
     from T7 so do P2M, L2P, P2L and M2P (`nd_fmm_kernels::leaf`, one launch per level
-    call, the layout by backend or `FmmBuilder::device_leaf_layout`); `host_fallback`
+    call, the layout by backend or `FmmBuilder::device_leaf_layout`), and from T8 M2M
+    (both passes) and L2L (`nd_fmm_kernels::translate::grouped` with the dense octant
+    tables under every strategy, three launches per chunk, plans and scratch built at
+    build, the GEMM by `FmmBuilder::device_gemm` and the chunks by
+    `device_scratch_budget`, reported in `DeviceReport::translations`); `host_fallback`
     names a kind to keep it on the host. `tests/operator/device_leaf.rs` checks the four
-    against `nd_fmm_ref::leaf` (p ≤ 20 in f64) and the host operator. With a kind on the
+    leaf operators against `nd_fmm_ref::leaf` (p ≤ 20 in f64) and the host operator;
+    `tests/operator/device_translate.rs` checks M2M and L2L against `nd_fmm_ref::direct`
+    and the host operator's error (p ≤ 20 in f64, the sweep ignored). With a kind on the
     device the output agrees with the host path within the FMM bounds of
     docs/phase4/README.md, not bit for bit: `tests/device_common` checks both, every kind on the fallback bit for
     bit and the default within the bounds, with the transfer formula of each;

@@ -1,4 +1,5 @@
-//! The device path against the host path (Phase 4 T5, C4.1; T6, C4.2; T7, C4.3), shared by
+//! The device path against the host path (Phase 4 T5, C4.1; T6, C4.2; T7, C4.3; T8, C4.4),
+//! shared by
 //! `tests/mpi_exec.rs` (the CPU runtime) and `tests/device_metal.rs` (Metal, ignored).
 //!
 //! [`check_backend`] builds an `Fmm` on a device backend at one thread twice, and checks,
@@ -17,17 +18,23 @@
 //!   row-to-batch maps point at the batch entry of each row entry, and the box and leaf
 //!   indices, point offsets and charge slots are those of the plan and the counts.
 //!
-//! With the default placement (T7): P2M, P2L, L2P, M2P and P2P on the device, M2M, M2L
-//! and L2L on the host fallback:
-//! - the five kinds are placed on the device, with the backend's default P2P and
-//!   leaf-operator layouts;
+//! With the default placement (T8): every kind but M2L on the device, M2L on the host
+//! fallback:
+//! - the seven kinds are placed on the device, with the backend's default P2P,
+//!   leaf-operator and GEMM layouts, and the report lists one M2M (local and global
+//!   pass) or L2L level call for each view with a pair, with its pairs and chunks;
 //! - the output lies within the FMM bounds of the host output (docs/phase4/README.md,
 //!   "Accuracy measures"): relative L2 over all targets within 1e-12 (f64) or 1e-5
 //!   (f32), for φ and for ∇φ, for both charge vectors;
+//! - the multipoles and the locals of every level lie within the same bounds of the host
+//!   path's (relative L2 per level): on one rank the root's multipole comes from the
+//!   global pass, so this checks the device M2M of the `m2m_global` view against the
+//!   host's;
 //! - two evaluations of the first charges are bit-identical;
 //! - the transfers, launches and syncs of each evaluation equal the formula with the
-//!   fallback transfers of each device kind replaced by one launch per level call
-//!   (device-path.md §8.1).
+//!   fallback transfers of each device kind replaced by one launch per level call, or for
+//!   M2M and L2L three per chunk (gather, GEMM, reduction or scatter-add; device-path.md
+//!   §8.1).
 //!
 //! On several ranks the device build returns `DeviceNeedsOneRank` on every rank instead
 //! (device-path.md §4.4), which [`check_backend`] checks and reports.
@@ -45,11 +52,30 @@ use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_kernels::Precision;
 use nd_fmm_kernels::leaf::LeafLayout;
 use nd_fmm_kernels::p2p::P2pLayout;
+use nd_fmm_kernels::translate::GemmLayout;
 use nd_fmm_math::RealScalar;
 use nd_fmm_plan::lists::GroupedCsr;
+use nd_fmm_plan::operator::UpwardPass;
 use nd_fmm_plan::plan::Plan;
 use nd_fmm_tables::cache::Stored;
 use nd_octree::morton;
+
+/// The largest differences of the default placement from the host path (relative L2):
+/// of the output (φ, ∇φ), and per level of the multipoles and the locals, with the
+/// root's multipole (the global pass on one rank) on its own.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Differences {
+    /// φ over all targets.
+    pub potential: f64,
+    /// ∇φ over all targets.
+    pub gradient: f64,
+    /// The multipoles, the worst level.
+    pub multipoles: f64,
+    /// The locals, the worst level.
+    pub locals: f64,
+    /// The multipole of the root.
+    pub root: f64,
+}
 
 /// What [`check_backend`] did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,8 +174,10 @@ impl Expected {
 /// - launches: the three zero kernels of non-empty stores and the charge scatter if
 ///   there is a source; syncs: one per download.
 ///
-/// A kind in `on_device` (T6: P2P; T7: P2M, P2L, L2P, M2P) moves nothing: each of its
-/// level calls is one launch instead of its downloads and uploads.
+/// A kind in `on_device` (T6: P2P; T7: P2M, P2L, L2P, M2P; T8: M2M, L2L) moves nothing:
+/// each of its level calls is one launch instead of its downloads and uploads, or for M2M
+/// and L2L three launches per chunk, with the chunks of the device report (which this
+/// checks against the plan's views).
 pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
     fmm: &Fmm<'_, T>,
     on_device: &[OperatorKind],
@@ -189,19 +217,50 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
             }
         }
     }
+    // The chunks of a device M2M or L2L level call, from the report.
+    let chunks = |kind: OperatorKind, pass: Option<UpwardPass>, level: usize, pairs: usize| {
+        let report = fmm.device_report().expect("a device backend");
+        let calls: Vec<_> = report
+            .translations
+            .iter()
+            .filter(|t| t.kind == kind && t.pass == pass && t.level == level)
+            .collect();
+        assert_eq!(
+            calls.len(),
+            1,
+            "{kind} {pass:?} level {level}: one report entry"
+        );
+        assert_eq!(
+            calls[0].pairs, pairs,
+            "{kind} {pass:?} level {level}: pairs"
+        );
+        assert!(calls[0].chunks >= 1);
+        calls[0].chunks as u64
+    };
     for l in 0..nlevels.saturating_sub(1) {
-        for view in [plan.level(l).m2m_local(), plan.level(l).m2m_global()] {
+        for (pass, view) in [
+            (UpwardPass::Local, plan.level(l).m2m_local()),
+            (UpwardPass::Global, plan.level(l).m2m_global()),
+        ] {
             if !view.is_empty() {
-                e.down(multipoles, boxes(l) + boxes(l + 1));
-                e.up(multipoles, boxes(l));
+                if device(OperatorKind::M2m) {
+                    e.launches += 3 * chunks(OperatorKind::M2m, Some(pass), l, view.len());
+                } else {
+                    e.down(multipoles, boxes(l) + boxes(l + 1));
+                    e.up(multipoles, boxes(l));
+                }
             }
         }
     }
     for l in 1..nlevels {
         let lists = plan.level(l);
         if !lists.l2l().is_empty() {
-            e.down(locals, boxes(l - 1) + boxes(l));
-            e.up(locals, boxes(l));
+            if device(OperatorKind::L2l) {
+                e.launches += 3 * chunks(OperatorKind::L2l, None, l, lists.l2l().len());
+            } else {
+                e.down(locals, boxes(l - 1) + boxes(l));
+                e.up(locals, boxes(l));
+            }
         }
         if !lists.v().is_empty() {
             e.down(multipoles, boxes(l));
@@ -430,8 +489,8 @@ pub fn fmm_bound<T>() -> f64 {
 /// `host` is the one-thread host `Fmm` of the same settings, `host_output` its output
 /// for `charges` (module documentation): first with every kind on the host fallback,
 /// then with the default placement ([`DEVICE_KINDS`] on the device). Returns what it did,
-/// and the largest relative L2 difference of the default output from the host's
-/// (φ, ∇φ); panics on a failed check.
+/// and the largest relative L2 differences of the default placement from the host path
+/// ([`Differences`]); panics on a failed check.
 pub fn check_backend<'o, T: Stored + SimdScalar + Equivalence + Default>(
     builder: &FmmBuilder<T>,
     (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
@@ -440,7 +499,7 @@ pub fn check_backend<'o, T: Stored + SimdScalar + Equivalence + Default>(
     host_output: &Output<T>,
     backend: Backend,
     comm: &'o SimpleCommunicator,
-) -> (Outcome, (f64, f64)) {
+) -> (Outcome, Differences) {
     let outcome = check_fallback(
         builder,
         (sources, targets),
@@ -451,7 +510,7 @@ pub fn check_backend<'o, T: Stored + SimdScalar + Equivalence + Default>(
         comm,
     );
     if outcome == Outcome::OneRankOnly {
-        return (outcome, (0.0, 0.0));
+        return (outcome, Differences::default());
     }
     let difference = check_default(
         builder,
@@ -465,14 +524,66 @@ pub fn check_backend<'o, T: Stored + SimdScalar + Equivalence + Default>(
     (outcome, difference)
 }
 
-/// The kinds the device runs by default after T7.
-pub const DEVICE_KINDS: [OperatorKind; 5] = [
+/// The kinds the device runs by default after T8.
+pub const DEVICE_KINDS: [OperatorKind; 7] = [
     OperatorKind::P2m,
+    OperatorKind::M2m,
     OperatorKind::P2l,
+    OperatorKind::L2l,
     OperatorKind::L2p,
     OperatorKind::M2p,
     OperatorKind::P2p,
 ];
+
+/// The worst relative L2 difference per level of the device's multipoles and locals
+/// from the host path's, after an evaluation of the same charges on both: (multipoles,
+/// locals, the root's multipole). Asserts each within `bound`.
+fn check_expansions<T: Stored + SimdScalar + Equivalence + Default>(
+    what: &str,
+    device: &mut Fmm<'_, T>,
+    host: &mut Fmm<'_, T>,
+    bound: f64,
+) -> (f64, f64, f64) {
+    let (dm, dl) = device.expansions().expect("the device expansions download");
+    let (hm, hl) = host.expansions().expect("the host expansions");
+    let plan = host.plan();
+    let n = (host.p() + 1) * (host.p() + 1);
+    let mut offsets = vec![0];
+    for l in 0..plan.nlevels() {
+        offsets.push(offsets[l] + plan.index().len(l) * n);
+    }
+    let mut worst = (0.0f64, 0.0f64, 0.0f64);
+    for (name, got, want) in [("multipoles", &dm, &hm), ("locals", &dl, &hl)] {
+        assert_eq!(got.len(), want.len(), "{what}: {name}");
+        for l in 0..plan.nlevels() {
+            let range = offsets[l]..offsets[l + 1];
+            let (mut d2, mut r2) = (0.0f64, 0.0f64);
+            for (&x, &y) in got[range.clone()].iter().zip(&want[range]) {
+                let (x, y) = (RealScalar::to_f64(x), RealScalar::to_f64(y));
+                d2 += (x - y) * (x - y);
+                r2 += y * y;
+            }
+            let e = if r2 > 0.0 {
+                (d2 / r2).sqrt()
+            } else {
+                d2.sqrt()
+            };
+            assert!(
+                e <= bound,
+                "{what}: {name} of level {l} {e:e} from the host path's (bound {bound:e})"
+            );
+            if name == "multipoles" {
+                worst.0 = worst.0.max(e);
+                if l == 0 {
+                    worst.2 = e;
+                }
+            } else {
+                worst.1 = worst.1.max(e);
+            }
+        }
+    }
+    worst
+}
 
 /// The default-placement half of [`check_backend`] (module documentation), on one rank.
 fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
@@ -483,7 +594,7 @@ fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
     host_output: &Output<T>,
     backend: Backend,
     comm: &'o SimpleCommunicator,
-) -> (f64, f64) {
+) -> Differences {
     let mut fmm = builder
         .clone()
         .threads(1)
@@ -514,6 +625,12 @@ fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
         LeafLayout::default_for(&report.info, fmm.p(), precision),
         "{backend}: the default leaf-operator layout"
     );
+    let n = (fmm.p() + 1) * (fmm.p() + 1);
+    assert_eq!(
+        report.gemm_layout,
+        GemmLayout::default_for(&report.info, n),
+        "{backend}: the default GEMM layout"
+    );
     let expected = expected_evaluation(&fmm, &DEVICE_KINDS);
     let second: Vec<T> = charges.iter().rev().copied().collect();
     let host_second = host.evaluate(&second).expect("the host FMM evaluates");
@@ -542,7 +659,22 @@ fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
             _ => {}
         }
     }
-    worst
+    // The expansions after the first charges on both paths (the host last evaluated the
+    // second charges).
+    host.evaluate(charges).expect("the host FMM evaluates");
+    let (multipoles, locals, root) = check_expansions(
+        &format!("{backend}, default placement"),
+        &mut fmm,
+        host,
+        bound,
+    );
+    Differences {
+        potential: worst.0,
+        gradient: worst.1,
+        multipoles,
+        locals,
+        root,
+    }
 }
 
 /// The host-fallback half of [`check_backend`] (module documentation): every kind on the

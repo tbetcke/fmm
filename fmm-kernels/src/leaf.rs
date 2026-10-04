@@ -725,7 +725,7 @@ fn expand_cpu_kernel<F: Float>(
 /// The contiguous range of `rows` of this unit, (first, count): the rows split as evenly
 /// as possible over the units of the one cube, the first `rows % units` units one more.
 #[cube]
-fn unit_rows(rows: usize) -> (usize, usize) {
+pub(crate) fn unit_rows(rows: usize) -> (usize, usize) {
     let units = CUBE_DIM as usize;
     let unit = UNIT_POS as usize;
     let share = rows / units;
