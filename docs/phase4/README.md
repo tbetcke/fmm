@@ -377,7 +377,8 @@ These hold for every task, so that no task decides them on its own:
 - C4.5: dense M2L matches C2.2 for every offset on levels 2, 9 and 16. The GEMM reaches
   at least 80% of the spike's throughput at the same (p, columns) on Metal (GEMM only,
   gather and reduction reported separately), and its efficiency is profiled and
-  reported.
+  reported. (T9 met the 80% in 2 of 12 cells; accepted as analysed on 2026-10-04,
+  decision 12.)
 - C4.6: rotation M2L matches C2.3 (f64 on the CPU runtime to p = 20, f32 to p = 8), and
   is timed against C4.5 across p on Metal f32.
 - C4.8 (new): with every operator on the device, on the cube and the Plummer sphere at
@@ -501,6 +502,13 @@ Each is recorded in the exit checklist when made:
     argument and no formulation restores it, switching the `metal` feature to
     `metal-native` (`cubecl-metal`, safe math mode) needs a separate sign-off
     (device-path.md §5.3).
+12. The C4.5 GEMM gate (T9, PR #55). T9 measured the GEMM alone on the spike's shapes
+    at 67–87% of a same-day spike run for the library (p ≥ 8) and 38–102% for the
+    hand-written kernel (p = 4): met in 2 of 12 cells. The cause, measured in the same
+    process, is the operand orientation fixed by device-path.md §6.4 (each box's n
+    coefficients contiguous), which costs the library 16–29%. **Decided on 2026-10-04:
+    the gate is accepted as analysed, and the coefficient-major layout that would give
+    the GEMMs the spike's orientation is deferred to T12** (T12 brief, "Do").
 
 ## Risks
 
@@ -529,6 +537,7 @@ In the repository root, start `claude` and say:
 - [x] CubeCL pin: 0.11.0-pre.4 (decided 2026-10-03)
 - [x] Host BLAS GEMM path: deferred (decided 2026-10-03)
 - [x] Metal runtime (decision 11): `metal` stays wgpu-msl; `metal-native` only by a separate sign-off (decided 2026-10-03)
+- [x] C4.5 GEMM gate (decision 12): accepted as analysed (met in 2 of 12 cells, cause measured); the coefficient-major GEMM layout deferred to T12 (decided 2026-10-04)
 - [x] T2 merged: pin at 0.11.0-pre.4, `spikes/cubecl-gemm` passing and re-measured, migration notes, root `CLAUDE.md` points to Phase 4
 - [x] T3 merged: device arithmetic measured per backend; §3.13 addition and device P2P contract drafted
 - [x] §3.13 addition and device P2P contract signed off (2026-10-03)
