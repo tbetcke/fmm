@@ -313,6 +313,22 @@ pub struct IndexSlice<'a> {
     len: usize,
 }
 
+impl<'a> IndexSlice<'a> {
+    /// The indices in `range` of this range (T8: a chunk's part of a batch array).
+    ///
+    /// # Panics
+    ///
+    /// If `range` is not within `0..len`.
+    pub fn slice(&self, range: impl RangeBounds<usize>) -> IndexSlice<'a> {
+        let range = to_range(range, self.len);
+        IndexSlice {
+            indices: self.indices,
+            start: self.start + range.start,
+            len: range.len(),
+        }
+    }
+}
+
 impl IndexSlice<'_> {
     /// The number of indices.
     pub fn len(&self) -> usize {

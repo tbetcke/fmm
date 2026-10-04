@@ -94,8 +94,9 @@
 //! the output scaling is the same code. Every operator kind can run on the host
 //! fallback ([`OperatorKind`], [`Fmm::placement`]); with every kind there the output
 //! equals the host path's bit for bit. From Phase 4 T6 P2P runs on the device by
-//! default ([`DeviceP2pLayout`]), and from T7 so do P2M, L2P, P2L and M2P
-//! ([`DeviceLeafLayout`]); the output agrees with the host path's within the FMM bounds
+//! default ([`DeviceP2pLayout`]), from T7 so do P2M, L2P, P2L and M2P
+//! ([`DeviceLeafLayout`]), and from T8 M2M (both passes) and L2L as grouped GEMMs
+//! ([`DeviceGemm`]); the output agrees with the host path's within the FMM bounds
 //! of docs/phase4/README.md. The `device` module (feature `gpu`)
 //! documents the residency, the transfers, the fallback, the errors and the threads
 //! rule; docs/design/device-path.md is the design.
@@ -278,6 +279,23 @@ pub enum DeviceLeafLayout {
     /// One unit per core, each a contiguous range of boxes or target leaves, no shared
     /// memory: the layout of the CPU runtime, whose units per cube `threads(n)` caps.
     Cpu,
+}
+
+/// The GEMM of the device translations M2M and L2L ([`FmmBuilder::device_gemm`]; Phase 4
+/// T8, docs/design/device-path.md §6.4, §6.5). Every choice adds each target's products
+/// in row order and gives the same bits from evaluation to evaluation. Ignored by
+/// [`Backend::Host`].
+///
+/// The enum exists without the `gpu` feature, as [`Backend`] does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DeviceGemm {
+    /// The rule of the design: the library matmul (CMMA, named explicitly) in f32 at
+    /// p ≥ 8 on a GPU where it accepts the level's shape and keeps f32 inputs, the
+    /// hand-written kernel otherwise; decided per level call at build and reported.
+    #[default]
+    Auto,
+    /// The hand-written kernel everywhere, in the backend's layout.
+    HandWritten,
 }
 
 /// The error of parsing a [`Backend`] from text it does not name.
@@ -569,6 +587,8 @@ pub enum FmmError {
 /// | [`synchronous_stages`](Self::synchronous_stages) | off |
 /// | [`device_p2p_layout`](Self::device_p2p_layout) | [`DeviceP2pLayout::Auto`]: by backend |
 /// | [`device_leaf_layout`](Self::device_leaf_layout) | [`DeviceLeafLayout::Auto`]: by backend |
+/// | [`device_gemm`](Self::device_gemm) | [`DeviceGemm::Auto`]: by precision, p and backend |
+/// | [`device_scratch_budget`](Self::device_scratch_budget) | 128 MB |
 ///
 /// For `T = f32`, p > 8 is accepted but lies beyond the useful range (design §4): the
 /// error is then at the f32 floor already.
@@ -588,6 +608,8 @@ pub struct FmmBuilder<T> {
     synchronous_stages: bool,
     device_p2p_layout: DeviceP2pLayout,
     device_leaf_layout: DeviceLeafLayout,
+    device_gemm: DeviceGemm,
+    device_scratch_budget: Option<u64>,
     value: PhantomData<fn() -> T>,
 }
 
@@ -609,6 +631,8 @@ impl<T> FmmBuilder<T> {
             synchronous_stages: false,
             device_p2p_layout: DeviceP2pLayout::Auto,
             device_leaf_layout: DeviceLeafLayout::Auto,
+            device_gemm: DeviceGemm::Auto,
+            device_scratch_budget: None,
             value: PhantomData,
         }
     }
@@ -698,7 +722,7 @@ impl<T> FmmBuilder<T> {
 
     /// Runs these operator kinds on the host fallback even with a device backend: a
     /// test aid (requirement 8 of docs/phase4/README.md). Kinds without a device kernel
-    /// yet fall back regardless; after Phase 4 T7 those are M2M, M2L and L2L. Ignored by
+    /// yet fall back regardless; after Phase 4 T8 that is M2L. Ignored by
     /// [`Backend::Host`].
     pub fn host_fallback(mut self, kinds: impl IntoIterator<Item = OperatorKind>) -> Self {
         self.host_fallback = kinds.into_iter().collect();
@@ -724,6 +748,25 @@ impl<T> FmmBuilder<T> {
     /// when all four run on the host fallback.
     pub fn device_leaf_layout(mut self, layout: DeviceLeafLayout) -> Self {
         self.device_leaf_layout = layout;
+        self
+    }
+
+    /// Sets the GEMM of the device translations M2M and L2L ([`DeviceGemm`]; default
+    /// [`DeviceGemm::Auto`]). Fixed at build and reported by `Fmm::device_report`
+    /// (feature `gpu`). Ignored by [`Backend::Host`] and when both run on the host
+    /// fallback.
+    pub fn device_gemm(mut self, gemm: DeviceGemm) -> Self {
+        self.device_gemm = gemm;
+        self
+    }
+
+    /// Sets the scratch budget of the device translations in bytes: the gathered inputs
+    /// and the products of one chunk of a level call together (default 128 MB,
+    /// docs/design/device-path.md §6.4). A level call whose batches need more runs in
+    /// several chunks, with the same bits. Allocated once at build and counted in the
+    /// device memory check. Ignored by [`Backend::Host`].
+    pub fn device_scratch_budget(mut self, bytes: u64) -> Self {
+        self.device_scratch_budget = Some(bytes);
         self
     }
 
@@ -1055,6 +1098,8 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
                     table_cache: self.table_cache.clone(),
                     p2p_layout: self.device_p2p_layout,
                     leaf_layout: self.device_leaf_layout,
+                    gemm: self.device_gemm,
+                    scratch_budget: self.device_scratch_budget,
                 };
                 let driver = device::driver(
                     operator,
@@ -1610,9 +1655,9 @@ where
     }
 
     /// Returns where `kind` runs: on the host for [`Backend::Host`]; with a device
-    /// backend as its device report says (after Phase 4 T7 P2M, P2L, L2P, M2P and P2P run
-    /// on the device unless [`FmmBuilder::host_fallback`] names them, M2M, M2L and L2L on
-    /// the host fallback).
+    /// backend as its device report says (after Phase 4 T8 every kind but M2L runs on
+    /// the device unless [`FmmBuilder::host_fallback`] names it, M2L on the host
+    /// fallback).
     pub fn placement(&self, kind: OperatorKind) -> Placement {
         match self.evaluator.operator() {
             ExecOperator::Host(_) => {
@@ -1723,6 +1768,28 @@ where
     /// for comparisons and timings. The output is the same bit for bit.
     pub fn set_serial(&mut self, serial: bool) {
         self.evaluator.operator_mut().host_mut().set_serial(serial);
+    }
+
+    /// The multipoles and locals of the last evaluation, in the `LevelBuffers` layout of
+    /// `nd-fmm-plan` (level after level, (p + 1)² values per box), for tests and reports:
+    /// copies of the evaluator's stores on the host path; with a device backend, downloaded
+    /// from the device (two downloads, counted toward the evaluation's device counters
+    /// until the next evaluation). The values are unscaled (CONVENTIONS §3.7).
+    ///
+    /// # Errors
+    ///
+    /// [`FmmError::Device`] if a download fails.
+    pub fn expansions(&mut self) -> Result<(Vec<T>, Vec<T>), FmmError> {
+        match self.evaluator.operator_mut() {
+            ExecOperator::Host(_) => Ok((
+                self.evaluator.multipoles().as_slice().to_vec(),
+                self.evaluator.locals().as_slice().to_vec(),
+            )),
+            #[cfg(feature = "gpu")]
+            ExecOperator::Device(driver) => driver
+                .download_expansions()
+                .map_err(|error| FmmError::Device(error.to_string())),
+        }
     }
 }
 

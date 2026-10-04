@@ -1,4 +1,4 @@
-//! The device path on Metal (Phase 4 T5, C4.1; T6, T7): f32 only, ignored, run by hand on the
+//! The device path on Metal (Phase 4 T5, C4.1; T6, T7, T8): f32 only, ignored, run by hand on the
 //! M3 Max outside the macOS sandbox (Metal has no adapter inside it):
 //!
 //! ```text
@@ -11,14 +11,18 @@
 //! bit against the host path for two charge vectors and a repeat, the transfers of each
 //! evaluation against the formula of docs/design/device-path.md §4.1 and §7.2, nothing
 //! re-uploaded in an evaluation, and every view on the device against the plan's; and
-//! with the default placement (T7: P2M, P2L, L2P, M2P and P2P on the device), within
-//! 1e-5 of the host output (relative L2), two evaluations bit for bit, and the transfers
-//! of the formula with those kinds on the device.
+//! with the default placement (T8: every kind but M2L on the device), within 1e-5 of the
+//! host output (relative L2), and so the multipoles and locals of every level, two
+//! evaluations bit for bit, and the transfers of the formula with those kinds on the
+//! device.
 //! Error measures: exact equality, and the relative L2 difference from the host.
 //!
 //! Scenarios, f32 (Metal does no f64 arithmetic):
 //! - the uniform cube, N = 2,000, sources equal to targets, p = 4: `Dense`, `Classes` and
 //!   `Rotation` with gradients, and `Dense` without;
+//! - the uniform cube, N = 20,000, p = 8, gradients: M2M and L2L with the GEMM of
+//!   `DeviceGemm::Auto` (the library where it takes a level's shape; each level call's
+//!   GEMM printed) and with `DeviceGemm::HandWritten`;
 //! - an adaptive tree with W and X lists (a cloud and a dense blob), p = 3, eight points
 //!   per leaf, gradients off and on;
 //! - sources and targets disjoint by the parity of their level-2 cell, so that leaves
@@ -34,7 +38,7 @@
 
 use mpi::Threading;
 use mpi::traits::*;
-use nd_fmm_exec::fmm::{Backend, FmmBuilder, FmmError, OperatorKind, SettingsError};
+use nd_fmm_exec::fmm::{Backend, DeviceGemm, FmmBuilder, FmmError, OperatorKind, SettingsError};
 use nd_fmm_exec::tables::M2lStrategy;
 
 mod device_common;
@@ -85,7 +89,7 @@ fn scenario(
         .build(sources, targets, comm)
         .unwrap_or_else(|error| panic!("{name}: the host FMM does not build: {error}"));
     let output = host.evaluate(charges).expect("the host FMM evaluates");
-    let (outcome, (potential, gradient)) = check_backend(
+    let (outcome, difference) = check_backend(
         &builder,
         (sources, targets),
         charges,
@@ -100,9 +104,15 @@ fn scenario(
         match outcome {
             Outcome::Ran => format!(
                 "metal on the host fallback bit for bit ({} values), transfers as the \
-                 formula; P2M, P2L, L2P, M2P and P2P on the device within {potential:.1e} \
-                 (φ) and {gradient:.1e} (∇φ) of the host, relative L2",
-                output_bits(&output).len()
+                 formula; every kind but M2L on the device within {:.1e} (φ) and {:.1e} \
+                 (∇φ) of the host, relative L2; per level multipoles {:.1e} (root, the \
+                 global M2M: {:.1e}), locals {:.1e}",
+                output_bits(&output).len(),
+                difference.potential,
+                difference.gradient,
+                difference.multipoles,
+                difference.root,
+                difference.locals
             ),
             Outcome::OneRankOnly => "DeviceNeedsOneRank on every rank".to_owned(),
         }
@@ -141,6 +151,44 @@ fn metal_device_path() {
             &q,
             &comm,
         );
+    }
+
+    // p = 8 (T8): M2M and L2L take the library GEMM where it accepts a level's shape, the
+    // hand-written kernel elsewhere (the report says which); and the hand-written kernel
+    // everywhere (`DeviceGemm::HandWritten`).
+    let large = cube(&mut rng, 20_000);
+    let q8 = charges(&mut rng, large.len());
+    for gemm in [DeviceGemm::Auto, DeviceGemm::HandWritten] {
+        let builder = FmmBuilder::<f32>::new(8).gradients(true).device_gemm(gemm);
+        scenario(
+            &format!("uniform cube, N = 20,000, p = 8, {gemm:?} GEMM"),
+            builder.clone(),
+            &large,
+            &large,
+            &q8,
+            &comm,
+        );
+        if comm.size() == 1 {
+            let fmm = builder
+                .backend(Backend::Metal)
+                .build(&large, &large, &comm)
+                .unwrap();
+            let report = fmm.device_report().unwrap();
+            for t in &report.translations {
+                eprintln!(
+                    "rank 0:   {} {:?} level {}: {} pairs, {}, {} chunk(s){}",
+                    t.kind,
+                    t.pass,
+                    t.level,
+                    t.pairs,
+                    t.gemm,
+                    t.chunks,
+                    t.library_rejection
+                        .as_deref()
+                        .map_or(String::new(), |r| format!("; library rejected: {r}"))
+                );
+            }
+        }
     }
 
     // A cloud and a dense blob near a corner: leaves on several levels, W and X lists.

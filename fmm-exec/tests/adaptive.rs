@@ -40,17 +40,17 @@
 //! error of the whole FMM lies within 1% of that with `Reference`, and its output within
 //! 1e-13 of the `Reference` output (relative L2 over all points).
 //!
-//! **Device path** (Phase 4 T6, C4.2; T7, C4.3), with a backend feature: the complete
-//! `Fmm` with the default placement (P2M, P2L, L2P, M2P and P2P on the device, M2M, M2L
-//! and L2L on the host fallback), on the CPU runtime in f64
+//! **Device path** (Phase 4 T6, C4.2; T7, C4.3; T8, C4.4), with a backend feature: the
+//! complete `Fmm` with the default placement (every kind but M2L on the device, M2L on
+//! the host fallback), on the CPU runtime in f64
 //! at every p of [`PS`] (feature `cpu`) and on Metal in f32 at p = 3 and 8 (feature
 //! `metal`, by hand outside the macOS sandbox), against the host `Fmm` in the same
 //! precision: the relative L2 error of φ at the sampled targets against the direct sum
 //! (the four exact parts together) within 0.1% (f64) or 5% (f32) of the host's
 //! (docs/phase4/README.md, "Accuracy measures"), and the output within 1e-12 (f64) or 1e-5
 //! (f32) of the host output (relative L2 over all points). The device differs in the U
-//! list (P2P), the W list (M2P), the X list (P2L) and the leaves' own expansions (P2M,
-//! L2P).
+//! list (P2P), the W list (M2P), the X list (P2L), the leaves' own expansions (P2M,
+//! L2P) and the translations between levels (M2M, L2L).
 //!
 //! Its own executable, because it initialises MPI (at `Threading::Funneled`, for the
 //! threaded evaluations); ignored, because it needs release mode:
@@ -674,8 +674,16 @@ fn device_gate<
         .unwrap_or_else(|error| panic!("{backend}: the device FMM does not build: {error}"));
     let report = fmm.device_report().expect("a device backend");
     let layout = format!(
-        "P2P {}, leaf operators {}",
-        report.p2p_layout, report.leaf_layout
+        "P2P {}, leaf operators {}, M2M/L2L GEMM {} ({} of {} level calls on the library)",
+        report.p2p_layout,
+        report.leaf_layout,
+        report.gemm_layout,
+        report
+            .translations
+            .iter()
+            .filter(|t| t.gemm == nd_fmm_exec::device::Gemm::Library)
+            .count(),
+        report.translations.len()
     );
     let device = widen(
         &fmm.evaluate(&q)
@@ -688,7 +696,7 @@ fn device_gate<
     let ratio = error_device / error_host;
     let difference = relative_l2(&device, &host);
     eprintln!(
-        "{name}, {backend}, {}, p = {p}, P2P and leaf operators on the device ({layout}): relative L2 error of φ \
+        "{name}, {backend}, {}, p = {p}, every kind but M2L on the device ({layout}): relative L2 error of φ \
          {error_device:.4e} against the host's {error_host:.4e} (ratio {ratio:.6}); output \
          within {difference:.1e} of the host's",
         if f64_run { "f64" } else { "f32" }

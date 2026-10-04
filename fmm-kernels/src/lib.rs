@@ -12,7 +12,9 @@
 //! coordinates on the device ([`view`]), and the cap on the CPU runtime's units per
 //! cube ([`Device::limit_units`]). T6: the P2P kernel ([`p2p`]) in three layouts, and
 //! the leaf stores' point offsets ([`view::PointOffsets`]). T7: the leaf operators P2M,
-//! L2P, P2L and M2P ([`leaf`]). The translation kernels follow in T8–T10.
+//! L2P, P2L and M2P ([`leaf`]). T8: the grouped translations with dense tables
+//! ([`translate`]: the hand-written GEMM, the library GEMM, M2M and L2L; T9 adds dense
+//! M2L). Rotation M2L follows in T10.
 //!
 //! ## Backends and features
 //!
@@ -122,6 +124,20 @@
 //! memory (the default on the CPU runtime). [`leaf::harmonics`], [`leaf::x_frames`] and
 //! [`leaf::w_frames`] expose the harmonics and frames for tests.
 //!
+//! ## Grouped translations (T8)
+//!
+//! [`translate::grouped`] runs one level's M2M or L2L (and, from T9, dense M2L) as in
+//! device-path.md §6.4: per chunk of the view's batches a gather of the input columns
+//! in batch order, one grouped GEMM over the level's groups into a temporary, and a
+//! reduction per target in row order or a scatter-add. The hand-written GEMM
+//! ([`translate::gemm`], [`translate::GemmLayout`]: a cube per tile on the GPUs, one unit per
+//! core on the CPU runtime) sums each output from zero with explicit fmas in ascending
+//! order, which a host `mul_add` loop repeats bit for bit; the library GEMM
+//! (`cubek-matmul`, `SimpleCyclicCmma` named explicitly) runs f32 at p ≥ 8 on a GPU where
+//! a probe at build accepts the shape and the input-precision guard passes
+//! ([`translate::GroupedPlan`]). No atomics: the GEMM writes distinct columns, and the
+//! reduction owns each target.
+//!
 //! ## Tests on each backend
 //!
 //! From the repository root (`cargo test` prints the backends it ran with
@@ -151,6 +167,7 @@ mod frame;
 pub mod leaf;
 pub mod movement;
 pub mod p2p;
+pub mod translate;
 pub mod view;
 
 pub use buffer::{

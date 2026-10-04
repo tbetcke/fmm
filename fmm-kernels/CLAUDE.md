@@ -3,8 +3,9 @@
 Purpose: every CubeCL (`#[cube]`) kernel of the FMM behind safe wrappers: backend
 selection and the f64 capability check, device buffers, the data movement primitives,
 the plan's views on the device (`view`, from T5), and (from T6) the operator kernels:
-P2P (`p2p`, T6), the leaf operators P2M, L2P, P2L and M2P (`leaf`, T7), then M2M, L2L
-and M2L (T8–T10) (docs/design/device-path.md §3.1).
+P2P (`p2p`, T6), the leaf operators P2M, L2P, P2L and M2P (`leaf`, T7), the grouped
+translations M2M and L2L (`translate`, T8; dense M2L joins in T9), then rotation M2L
+(T10) (docs/design/device-path.md §3.1).
 Phase and components: Phase 4, C4.1 (T4, T5) and C4.2–C4.6 (T6–T10) in docs/phase4/.
 
 ## Rules
@@ -45,6 +46,26 @@ Phase and components: Phase 4, C4.1 (T4, T5) and C4.2–C4.6 (T6–T10) in docs/
   contributions in the plan's order; tests run every layout on every backend. Bit
   identity with the host does not apply (contraction, T3 rule 6): tests use the operator
   bounds.
+- Grouped translations (T8, `translate`): structure (B) of device-path.md §6.4. Per
+  level call and chunk (contiguous batch entries within the scratch budget, default
+  128 MB), three launches: `movement::gather_columns` in batch order, one grouped GEMM
+  over a tile schedule built at build (`TileSchedule`: group, first column, columns per
+  tile), and `Accumulate::Rows` (a reduction per target in row order, reading the view's
+  row-to-batch map; M2M, M2L) or `Accumulate::Scatter` (`scatter_add_columns`; L2L).
+  The hand-written GEMM (`GemmLayout`): `Cube { rows, columns, per_unit }` (one cube per
+  tile; default on Metal and CUDA: up to 32 units along the rows, 64 in all, 4 columns
+  per unit) and `Cpu { block, per_unit }` (one cube, units capped by
+  `Device::units_cap`, contiguous tiles; default on the CPU runtime); each output one
+  accumulator from zero, `fma` with k ascending, stored once (β = 0): bit for bit a host
+  `mul_add` loop in that order, on Metal and the CPU runtime (T3 rule 6; tested). The
+  library GEMM (`GemmPolicy::Auto`, f32, p ≥ 8, GPU only): `cubek-matmul`'s
+  `Strategy::MultiLevel(SimpleCyclicCmma)` named explicitly, on batches padded to the
+  widest ([G, k_max, n]), only if the view fits one chunk, a probe launch at build
+  succeeds and the resolved `MatmulElems` keep T for every stage and register type
+  (the input-precision guard); else the hand-written kernel, decided at build by the
+  shape alone (`GroupedPlan::gemm`, `library_rejection`). Chunks and layouts never
+  change the bits of the hand-written path (tested); do not change the summation order
+  without a sign-off.
 - Generic over the float type (`DeviceFloat`: f32, f64) and comptime parameters (p, n,
   layouts); the backend is a run-time value (`BackendKind`, `Device`), never an
   `R: Runtime` type parameter (device-path.md §3.2). Every kernel runs on every runtime;
@@ -94,7 +115,10 @@ Phase and components: Phase 4, C4.1 (T4, T5) and C4.2–C4.6 (T6–T10) in docs/
   both layouts, f32 and f64) add 8 runtime tests of about 4 s together (104 kernel
   variants, 3.9 s of first launches, the slowest 0.24 s); the p = 20 sweep in f64
   (`degree_20_sweep_on_the_cpu_runtime`, 17 variants, up to 2.5 s each to compile, 20 s)
-  is `#[ignore]`.
+  is `#[ignore]`. T8's translation tests (`tests/kernels/translate.rs`: the GEMM at
+  p ∈ {0, 1, 3, 8, 12, 20} and k ∈ {0, 1, 7, 64}, level calls, chunks and per-octant
+  structure at p ∈ {0, 3, 8}, both layouts, f32 and f64) add 4 runtime tests of about
+  4 s together; the GEMM of 1000 columns on the CPU runtime is `#[ignore]`.
   `cargo test -p nd-fmm-kernels` without features builds and passes in seconds.
   Kernel compilation, from CubeCL's profiling log (the first launch of each variant
   includes its compilation): `CUBECL_DEBUG_LOG=<file> cargo test -p nd-fmm-kernels

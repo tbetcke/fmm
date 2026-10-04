@@ -127,7 +127,7 @@
 //! - **input errors** also checks that a P2P kernel on an ISA the machine cannot run is
 //!   rejected with `SettingsError::P2pIsaUnavailable`.
 //!
-//! Device path (Phase 4 T5, C4.1; T6, C4.2; T7, C4.3), with the `gpu` feature. Error
+//! Device path (Phase 4 T5, C4.1; T6, C4.2; T7, C4.3; T8, C4.4), with the `gpu` feature. Error
 //! measures:
 //! exact equality of the bit patterns, counts and bytes, and the relative L2 difference
 //! of φ and ∇φ from the host output over all targets.
@@ -142,11 +142,13 @@
 //!     again; the transfers, launches and syncs of each evaluation equal the formula of
 //!     docs/design/device-path.md §4.1 and §7.2; no evaluation moves points, views,
 //!     geometry or tables; and every view on the device equals the plan's;
-//!   - with the default placement (T7: P2M, P2L, L2P, M2P and P2P on the device, M2M,
-//!     M2L and L2L on the host fallback): the output within the FMM bounds of the host
-//!     output (1e-12 in f64, 1e-5 in f32), two evaluations bit-identical, and the
-//!     transfers of the formula with each device kind's fallback transfers replaced by
-//!     one launch per level call.
+//!   - with the default placement (T8: every kind but M2L on the device, M2L on the host
+//!     fallback): the output within the FMM bounds of the host output (1e-12 in f64,
+//!     1e-5 in f32), and so the multipoles and locals of every level (relative L2 per
+//!     level; on one rank the root's multipole is the global pass's M2M), two
+//!     evaluations bit-identical, and the transfers of the formula with each device
+//!     kind's fallback transfers replaced by one launch per level call, three per chunk
+//!     for M2M and L2L.
 //!
 //!   On several ranks the device build returns `DeviceNeedsOneRank` on every rank. The
 //!   test prints the backends it ran, and the largest differences, at the end.
@@ -156,7 +158,9 @@
 //!   CPU runtime, `threads(4)` builds no rayon pool and caps the units per cube at 4
 //!   (device-path.md §11), with the output of one unit bit for bit and within 1e-12 of
 //!   the host's; the cube layout of the leaf operators (up to 8 units, one per core,
-//!   tiles of up to 4 points) within 1e-12 of the host's too; `synchronous_stages` adds seven syncs (after the
+//!   tiles of up to 4 points) within 1e-12 of the host's too; M2M and L2L with a scratch
+//!   budget of one column per chunk (as many chunks as pairs) and with the hand-written
+//!   GEMM bit for bit the default; `synchronous_stages` adds seven syncs (after the
 //!   charge upload and each stage) and changes no bit; on several ranks a device build with
 //!   points other ranks own returns `PointsNotOwned`, which wins over
 //!   `DeviceNeedsOneRank`, and one with points every rank owns (each rank passing its
@@ -206,9 +210,9 @@ struct DeviceRuns {
     f64_runs: usize,
     /// Builds refused with `DeviceNeedsOneRank` on several ranks.
     refused: usize,
-    /// The largest relative L2 difference of the P2P-on-device output from the host's,
-    /// (φ, ∇φ), in f32 and in f64.
-    worst: [(f64, f64); 2],
+    /// The largest relative L2 differences of the default placement from the host path,
+    /// [φ, ∇φ, multipoles, locals, the root's multipole], in f32 and in f64.
+    worst: [[f64; 5]; 2],
 }
 
 #[cfg(feature = "gpu")]
@@ -226,8 +230,9 @@ fn device_backends() -> Vec<Backend> {
 }
 
 /// The device runs of one backend for [`backends_line`]: the backend, f32 and f64 runs,
-/// refused builds, and the largest P2P-on-device differences in f32 and f64.
-type Runs = (Backend, usize, usize, usize, [(f64, f64); 2]);
+/// refused builds, and the largest differences of the default placement in f32 and f64
+/// ([φ, ∇φ, multipoles, locals, root]).
+type Runs = (Backend, usize, usize, usize, [[f64; 5]; 2]);
 
 /// "backends run: …; not run: …" for this test.
 fn backends_line() -> String {
@@ -247,10 +252,20 @@ fn backends_line() -> String {
             .map(|(backend, f32_runs, f64_runs, _, worst)| {
                 format!(
                     "{backend} ({f32_runs} f32 and {f64_runs} f64 scenarios: on the host \
-                     fallback bit for bit; with P2M, P2L, L2P, M2P and P2P on the device \
-                     within the FMM bounds, largest relative L2 difference φ {:.1e} / ∇φ \
-                     {:.1e} (f32), {:.1e} / {:.1e} (f64))",
-                    worst[0].0, worst[0].1, worst[1].0, worst[1].1
+                     fallback bit for bit; with every kind but M2L on the device within the \
+                     FMM bounds, largest relative L2 difference φ {:.1e} / ∇φ {:.1e}, per \
+                     level multipoles {:.1e} (root, the global M2M: {:.1e}) / locals {:.1e} \
+                     (f32); {:.1e} / {:.1e}, {:.1e} ({:.1e}) / {:.1e} (f64))",
+                    worst[0][0],
+                    worst[0][1],
+                    worst[0][2],
+                    worst[0][4],
+                    worst[0][3],
+                    worst[1][0],
+                    worst[1][1],
+                    worst[1][2],
+                    worst[1][4],
+                    worst[1][3]
                 )
             }),
     );
@@ -783,14 +798,22 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
                     f32_runs: 0,
                     f64_runs: 0,
                     refused: 0,
-                    worst: [(0.0, 0.0); 2],
+                    worst: [[0.0; 5]; 2],
                 });
                 runs.last_mut().unwrap()
             }
         };
         let precision = usize::from(size_of::<T>() == 8);
         let worst = &mut entry.worst[precision];
-        *worst = (worst.0.max(difference.0), worst.1.max(difference.1));
+        for (w, d) in worst.iter_mut().zip([
+            difference.potential,
+            difference.gradient,
+            difference.multipoles,
+            difference.locals,
+            difference.root,
+        ]) {
+            *w = w.max(d);
+        }
         match outcome {
             device_common::Outcome::Ran if precision == 0 => entry.f32_runs += 1,
             device_common::Outcome::Ran => entry.f64_runs += 1,
@@ -2235,6 +2258,37 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
                     potential <= 1e-12,
                     "the cube leaf layout: {potential:e} from the host"
                 );
+                // The scratch budget of M2M and L2L (T8): with room for one column per
+                // chunk, every level call runs in as many chunks as it has pairs (three
+                // launches each), with the same output bit for bit; and the hand-written
+                // GEMM, which the CPU runtime runs anyway, gives the same bits.
+                let mut chunked = builder
+                    .clone()
+                    .device_scratch_budget(1)
+                    .build(&points, &points, comm)
+                    .expect("one rank");
+                let translations = &chunked.device_report().unwrap().translations;
+                assert!(!translations.is_empty());
+                assert!(
+                    translations.iter().all(|t| t.chunks == t.pairs),
+                    "one column per chunk: {translations:?}"
+                );
+                let calls = translations.len();
+                assert_eq!(
+                    output_bits(&chunked.evaluate(&charges).unwrap()),
+                    want,
+                    "M2M and L2L in chunks of one column"
+                );
+                let mut hand = builder
+                    .clone()
+                    .device_gemm(nd_fmm_exec::fmm::DeviceGemm::HandWritten)
+                    .build(&points, &points, comm)
+                    .expect("one rank");
+                assert_eq!(
+                    output_bits(&hand.evaluate(&charges).unwrap()),
+                    want,
+                    "the hand-written GEMM"
+                );
                 // Synchronous stages: seven more syncs (after the charge upload and each
                 // of the six stages), the same output.
                 let syncs = fmm.device_counters().unwrap().evaluation.syncs;
@@ -2248,7 +2302,8 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
                 let counters = synchronous.device_counters().unwrap().evaluation;
                 assert_eq!(counters.syncs, syncs + 7, "syncs of synchronous stages");
                 eprintln!(
-                    "rank {rank}: threads(4) with the CPU runtime: no pool; synchronous \
+                    "rank {rank}: threads(4) with the CPU runtime: no pool; M2M and L2L in \
+                     chunks of one column ({calls} level calls) bit for bit; synchronous \
                      stages: {} syncs against {syncs}; {report}",
                     counters.syncs
                 );
