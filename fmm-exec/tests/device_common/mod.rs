@@ -1,5 +1,5 @@
 //! The device path against the host path (Phase 4 T5, C4.1; T6, C4.2; T7, C4.3; T8, C4.4;
-//! T9, C4.5), shared by
+//! T9, C4.5; T10, C4.6), shared by
 //! `tests/mpi_exec.rs` (the CPU runtime) and `tests/device_metal.rs` (Metal, ignored).
 //!
 //! [`check_backend`] builds an `Fmm` on a device backend at one thread twice, and checks,
@@ -18,12 +18,14 @@
 //!   row-to-batch maps point at the batch entry of each row entry, and the box and leaf
 //!   indices, point offsets and charge slots are those of the plan and the counts.
 //!
-//! With the default placement (T9): every kind on the device, but M2L under `Rotation` on
-//! the host fallback ([`device_kinds`]):
-//! - the kinds are placed so, with the backend's default P2P, leaf-operator and GEMM
-//!   layouts, and the report lists one M2M (local and global pass), L2L or (under `Dense`
-//!   and `Classes`) M2L level call for each view with a pair, with its pairs and chunks,
-//!   and names the strategy as the device runs it ("Classes, run as dense on the device");
+//! With the default placement (T10): every kind on the device under every strategy
+//! ([`device_kinds`]):
+//! - the kinds are placed so, with the backend's default P2P, leaf-operator, GEMM and
+//!   rotation layouts, and the report lists one M2M (local and global pass), L2L or (under
+//!   `Dense` and `Classes`) M2L level call for each view with a pair, with its pairs and
+//!   chunks, or under `Rotation` one rotation M2L level call for each V view with a pair,
+//!   with its pairs, and names the strategy as the device runs it ("Classes, run as dense
+//!   on the device");
 //! - the output lies within the FMM bounds of the host output (docs/phase4/README.md,
 //!   "Accuracy measures"): relative L2 over all targets within 1e-12 (f64) or 1e-5
 //!   (f32), for φ and for ∇φ, for both charge vectors;
@@ -34,9 +36,9 @@
 //! - two evaluations of the first charges are bit-identical;
 //! - the transfers, launches and syncs of each evaluation equal the formula with the
 //!   fallback transfers of each device kind replaced by one launch per level call, or for
-//!   M2M, L2L and M2L three per chunk (gather, GEMM, reduction or scatter-add;
-//!   device-path.md §8.1); with every kind on the device, an evaluation moves only the
-//!   charges and the output.
+//!   M2M, L2L and dense M2L three per chunk (gather, GEMM, reduction or scatter-add;
+//!   device-path.md §8.1; rotation M2L is one launch per level call); with every kind on
+//!   the device, an evaluation moves only the charges and the output.
 //!
 //! On several ranks the device build returns `DeviceNeedsOneRank` on every rank instead
 //! (device-path.md §4.4), which [`check_backend`] checks and reports.
@@ -55,6 +57,7 @@ use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_kernels::Precision;
 use nd_fmm_kernels::leaf::LeafLayout;
 use nd_fmm_kernels::p2p::P2pLayout;
+use nd_fmm_kernels::rotation::RotationLayout;
 use nd_fmm_kernels::translate::GemmLayout;
 use nd_fmm_math::RealScalar;
 use nd_fmm_plan::lists::GroupedCsr;
@@ -266,7 +269,18 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
             }
         }
         if !lists.v().is_empty() {
-            if device(OperatorKind::M2l) {
+            if device(OperatorKind::M2l) && fmm.strategy() == M2lStrategy::Rotation {
+                // One launch of the rotation kernel (T10), reported with its pairs.
+                let report = fmm.device_report().expect("a device backend");
+                let calls: Vec<_> = report.rotations.iter().filter(|r| r.level == l).collect();
+                assert_eq!(calls.len(), 1, "rotation M2L level {l}: one report entry");
+                assert_eq!(
+                    calls[0].pairs,
+                    lists.v().len(),
+                    "rotation M2L level {l}: pairs"
+                );
+                e.launches += 1;
+            } else if device(OperatorKind::M2l) {
                 e.launches += 3 * chunks(OperatorKind::M2l, None, l, lists.v().len());
             } else {
                 e.down(multipoles, boxes(l));
@@ -531,13 +545,11 @@ pub fn check_backend<'o, T: Stored + SimdScalar + Equivalence + Default>(
     (outcome, difference)
 }
 
-/// The kinds the device runs by default after T9 under `strategy`: every kind, but M2L
-/// under `Rotation` (its device kernel follows in T10).
+/// The kinds the device runs by default from T10 under `strategy`: every kind, M2L by the
+/// dense tables or (under `Rotation`) by the rotation kernel.
 pub fn device_kinds(strategy: M2lStrategy) -> Vec<OperatorKind> {
-    OperatorKind::ALL
-        .into_iter()
-        .filter(|&kind| kind != OperatorKind::M2l || strategy != M2lStrategy::Rotation)
-        .collect()
+    let _ = strategy;
+    OperatorKind::ALL.to_vec()
 }
 
 /// The worst relative L2 difference per level of the device's multipoles and locals
@@ -637,10 +649,15 @@ fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
         GemmLayout::default_for(&report.info, n),
         "{backend}: the default GEMM layout"
     );
+    assert_eq!(
+        report.rotation_layout,
+        RotationLayout::default_for(&report.info, fmm.p()),
+        "{backend}: the default rotation layout"
+    );
     let strategy_name = match fmm.strategy() {
         M2lStrategy::Dense => "Dense",
         M2lStrategy::Classes => "Classes, run as dense on the device",
-        _ => "Rotation, M2L on the host fallback",
+        _ => "Rotation",
     };
     assert_eq!(
         report.strategy_name(),
@@ -651,12 +668,13 @@ fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
     let v_views = (0..fmm.nlevels())
         .filter(|&l| !fmm.plan().level(l).v().is_empty())
         .count();
+    let rotation = fmm.strategy() == M2lStrategy::Rotation;
     assert_eq!(
-        m2l_calls,
-        if kinds.contains(&OperatorKind::M2l) {
-            v_views
-        } else {
-            0
+        (m2l_calls, report.rotations.len()),
+        match (kinds.contains(&OperatorKind::M2l), rotation) {
+            (false, _) => (0, 0),
+            (true, false) => (v_views, 0),
+            (true, true) => (0, v_views),
         },
         "{backend}: one M2L report entry per V view with a pair"
     );

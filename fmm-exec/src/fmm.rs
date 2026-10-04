@@ -734,9 +734,8 @@ impl<T> FmmBuilder<T> {
     }
 
     /// Runs these operator kinds on the host fallback even with a device backend: a
-    /// test aid (requirement 8 of docs/phase4/README.md). Kinds without a device kernel
-    /// yet fall back regardless; after Phase 4 T9 that is M2L under
-    /// [`M2lStrategy::Rotation`]. Ignored by [`Backend::Host`].
+    /// test aid (requirement 8 of docs/phase4/README.md). From Phase 4 T10 every kind has
+    /// a device kernel under every strategy. Ignored by [`Backend::Host`].
     pub fn host_fallback(mut self, kinds: impl IntoIterator<Item = OperatorKind>) -> Self {
         self.host_fallback = kinds.into_iter().collect();
         self
@@ -1668,9 +1667,8 @@ where
     }
 
     /// Returns where `kind` runs: on the host for [`Backend::Host`]; with a device
-    /// backend as its device report says (after Phase 4 T9 every kind runs on the device
-    /// unless [`FmmBuilder::host_fallback`] names it, but M2L under
-    /// [`M2lStrategy::Rotation`], which runs on the host fallback until T10).
+    /// backend as its device report says (from Phase 4 T10 every kind runs on the device
+    /// unless [`FmmBuilder::host_fallback`] names it).
     pub fn placement(&self, kind: OperatorKind) -> Placement {
         match self.evaluator.operator() {
             ExecOperator::Host(_) => {

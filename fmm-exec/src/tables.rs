@@ -43,6 +43,8 @@
 
 use nd_fmm_math::RealScalar;
 use nd_fmm_tables::cache::{Stored, TableKind};
+#[cfg(feature = "gpu")]
+use nd_fmm_tables::rotation::{Operator, ShiftTables};
 use nd_fmm_tables::{
     CacheOutcome, L2lTables, M2lClasses, M2lScratch, M2lTables, M2mTables, RotationScratch,
     RotationTables, TableCache,
@@ -290,6 +292,14 @@ impl<T: RealScalar> Tables<T> {
     pub(crate) fn classes_m2l(&self) -> Option<&M2lClasses<T>> {
         match &self.families {
             Families::Classes { m2l, .. } => Some(m2l),
+            _ => None,
+        }
+    }
+
+    /// The M2L family of the rotation tables, under `Rotation` (Phase 4 T10).
+    pub(crate) fn rotation_m2l(&self) -> Option<&ShiftTables<T>> {
+        match &self.families {
+            Families::Rotation(rotation) => Some(rotation.tables(Operator::M2l)),
             _ => None,
         }
     }

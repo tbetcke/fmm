@@ -1,4 +1,4 @@
-//! The device path on Metal (Phase 4 T5, C4.1; T6, T7, T8, T9): f32 only, ignored, run by hand on the
+//! The device path on Metal (Phase 4 T5, C4.1; T6, T7, T8, T9, T10): f32 only, ignored, run by hand on the
 //! M3 Max outside the macOS sandbox (Metal has no adapter inside it):
 //!
 //! ```text
@@ -11,8 +11,8 @@
 //! bit against the host path for two charge vectors and a repeat, the transfers of each
 //! evaluation against the formula of docs/design/device-path.md §4.1 and §7.2, nothing
 //! re-uploaded in an evaluation, and every view on the device against the plan's; and
-//! with the default placement (T9: every kind on the device, but M2L under `Rotation`),
-//! within 1e-5 of the
+//! with the default placement (T10: every kind on the device, M2L under `Rotation` by the
+//! rotation kernel), within 1e-5 of the
 //! host output (relative L2), and so the multipoles and locals of every level, two
 //! evaluations bit for bit, and the transfers of the formula with those kinds on the
 //! device.
