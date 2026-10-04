@@ -1,7 +1,11 @@
 # The device path: design for Phase 4
 
 As of 2026-10-03. Written for [docs/phase4/README.md](../phase4/README.md) (T1), and
-**signed off on 2026-10-03** with every recommendation of Section 16 accepted. It is
+**signed off on 2026-10-03** with every recommendation of Section 16 accepted.
+**Updated at the end of Phase 4 (2026-10-04, T13):** Section 17 records the decisions as
+taken in T2–T13 and the measured numbers that replace this document's models where
+they differ; short notes in Sections 6.5, 8.1, 10.5 and 13.4 point to it. The design
+sections are otherwise left as signed off. It is
 the Phase 4 counterpart of [simd-p2p.md](simd-p2p.md) and of the Phase 3 design
 [fmm-plan-redesign.md](fmm-plan-redesign.md), and it ties together what
 [laplace-fmm-plan.md](laplace-fmm-plan.md) §6 sketches: where data lives during an
@@ -895,7 +899,7 @@ Details:
 | Precision | p | GEMM | Why |
 | --- | --- | --- | --- |
 | f32 | ≤ 7 | hand-written | the signed-off rule (README): library CMMA from p = 8. The spike found CMMA rejected at p = 4 (n_c = 25; it "needs Nc ≳ 64") and the unit path 10× slower there; p = 5–7 were not measured |
-| f32 | ≥ 8 | library, `Strategy::MultiLevel(SimpleCyclicCmma)` named explicitly, where the input-precision guard passes; else hand-written | 3.5–4.4 TFLOP/s on Metal (spike); the strategy `Auto` tries first (F20) |
+| f32 | ≥ 8 | library, `Strategy::MultiLevel(SimpleCyclicCmma)` named explicitly, where the input-precision guard passes; else hand-written | 3.5–4.4 TFLOP/s on Metal (spike); the strategy `Auto` tries first (F20). *Changed after T9 for M2L* (Section 17): M2L runs the hand-written kernel at every p by default; M2M and L2L keep this rule |
 | f64 | all | hand-written | no f64 MMA (F21); the library's unit path is 2.2–2.6× below the hand-written kernel (spike model) |
 
 - Never `Strategy::Auto`: it can change with the setup error it meets, and it panics on
@@ -1051,7 +1055,10 @@ level call with an empty view launches nothing:
 That is about 50 launches for the uniform cube at p = 8 (levels 0–4, one leaf level, no
 W or X: 4 + `p2m` 1 + local M2M 9 + global M2M 3 + L2L 12 + M2L 18 with four offset
 chunks on level 4 + L2P and P2P 2 = 49) and about 150 for the Plummer sphere (leaves on
-six levels) (*model*), against roughly 3,000 with one launch per offset. At about 10 µs
+six levels) (*model*), against roughly 3,000 with one launch per offset. *Measured
+(T13, Metal f32, N = 10⁵):* 40, 43 and 46 launches on the cube at p = 3, 6 and 8 (34 under
+`Rotation`), 101–107 on the Plummer sphere (87 under `Rotation`); 64–133 on the cube at
+N = 10⁶ (Section 17). At about 10 µs
 a launch (*estimate*), launch overhead is 0.5–1.5 ms per evaluation, about one sync's
 cost. wgpu submits the queued work every 32 tasks (F10), so the device starts before the
 evaluation's one sync.
@@ -1238,7 +1245,9 @@ make plausible but nothing measures. The rule as signed off, `Dense` through p =
 `Rotation` from p = 12, is therefore **provisional**: it stays the static fallback for an
 untuned key (f64 on CUDA included), and autotune (C4.7) replaces it wherever it can
 measure. T10's Metal f32 rotation efficiency enters the model in T12; moving the
-boundary is a sign-off decision. The dense tables are small at these degrees (52 MB in
+boundary is a sign-off decision. *As built (T12, decision 13):* the rule is kept, and the
+device's `Auto` follows it rather than the host rule; Section 17 adds what T13 measured
+for f32 at N = 10⁶. The dense tables are small at these degrees (52 MB in
 f64 at p = 11), so memory does not decide it.
 
 ## 11. Threads and BLAS
@@ -1342,7 +1351,8 @@ columns) on Metal f32, GEMM only; gather and reduction reported separately (READ
 - so **720 Gpairs/s (φ) and 480 Gpairs/s (φ, ∇φ)**. If the inverse square root takes 4
   issue slots, 550 and 400 (*assumption*, which T6 checks).
 
-Proposed targets, measured and reported in T6, never asserted:
+Proposed targets, measured and reported in T6, never asserted (*measured:* met with a
+wide margin, 45–60% of the model; Section 17):
 - W2 all-pairs, N = 10⁵, f32: at least **25%** of the model (180 and 120 Gpairs/s);
 - W1 FMM-shaped, n_t = 64, f32, with at least 4,096 target leaves per launch: at least
   **10%** (72 and 48 Gpairs/s). That is at least 1.5× the 12 performance cores of host
@@ -1423,3 +1433,50 @@ Signed off on 2026-10-03: every recommendation below is accepted as stated.
 | 8 | Autotune and its persistence | A strategy-level tuner in `nd-fmm-exec` at build; a cache file only in a caller-supplied directory, with the `TableCache` rules; CubeCL's autotune unused and its persistence feature off (Section 10) |
 | 9 | The C4.2 performance target | At least 25% of the P2P peak model (720 / 480 Gpairs/s) on W2 at N = 10⁵, and at least 10% on W1 at n_t = 64 with at least 4,096 target leaves per launch, Metal f32 (Section 13.4) |
 | 10 | (new) The Metal runtime | Keep `metal` = wgpu-msl (README). If T3 finds that its default math mode breaks the §3.13 argument and no formulation restores it, switch the `metal` feature to `metal-native` (`cubecl-metal`, safe math mode) by a separate sign-off (Section 5.3) |
+
+## 17. Outcome: decisions as taken and measured numbers (Phase 4, T2–T13)
+
+Every number here is measured on the Apple M3 Max (Metal f32 for timings; the CubeCL
+CPU runtime for f64 correctness) unless marked *model*; no f64 GPU run and no CUDA run
+was made, and CUDA is type-checked only. The full tables are in
+`fmm-validate/results/phase4-m3max.md` (T13) and the task reports (the T2–T12 pull requests);
+laplace-fmm-plan.md §7, Phase 4, carries the status per component.
+
+### 17.1 Decisions as taken
+
+| Topic (section) | As designed | As taken |
+| --- | --- | --- |
+| CubeCL (1.2) | 0.11.0-pre.4 | pinned (T2), with `cubek-matmul`/`cubek-std` 0.3.0-pre.4; the spike ported and re-measured (Metal unchanged within noise; CPU runtime at O3) |
+| fma (F16, 5.3) | measure whether a formulation keeps cubecl-opt's fusion out | none found (T3): device kernels write `fma` explicitly where a result is pinned, and match the host within tolerances, not bit for bit, except copies, scatters, frames and GEMMs/rotations written as host `mul_add` replicas |
+| §3.13 addition (9.3) | drafted by T3 | signed off (decision 3): the C3S.4 P2P contract unchanged, on flushing backends for q = 0 or \|q\| ≥ 2⁻¹⁰⁰; ŷ by an explicit fma, `inverse_sqrt` without a Newton step, masking by compare and select |
+| Metal runtime (5.3) | keep wgpu-msl | kept (decision 11); no `metal-native` |
+| persistence (3.4) | off | off with `cpu` and `cuda`; on with `metal` through CubeCL's manifests, an empty store, unused (T4 sign-off) |
+| CI (13.2) | T4 measures the CPU-runtime job | kept as built (`run-tests-kernels`: 4 min 53 s cold, 51 s warm); `nd-fmm-kernels` a member, not a default member (decision 7) |
+| CPU runtime target (decision 10) | if T3's ratio ≤ 1.5 | set (T3: 1.004); T6's CPU layout of P2P at 1.16× `nd_fmm_simd::P2pKernel` per pair at one thread (target 1.5), 2.2× on all cores (reported) |
+| frames (6.1) | a table of exact powers of two | the powers formed exactly in the kernel from integer keys (T6), bit for bit `relative_frame` |
+| P2P layouts (6.2) | cube; plane per leaf a candidate; CPU layout if decision 10 | all three built and tested on every backend; cube 64 by default on GPUs; the tuner picks plane (2 per cube) or cube 32 on small leaves |
+| P2M, P2L (6.3) | coefficient owners in point order | as designed; tiles of up to 32 points' harmonics in shared memory (18 at p = 20 in f64) |
+| M2M, L2L, dense M2L (6.4) | structure (B) | as designed (T8, T9); (B) equals (A) bit for bit with the same GEMM, and on Metal the library equals the hand-written kernel bit for bit |
+| library for M2L (6.5) | f32, p ≥ 8 | **changed after T9 (2026-10-04):** M2L runs the hand-written kernel at every p by default; the library pads each offset run to its widest batch (44–66% useful columns) and was slower on every FMM level measured; `DeviceGemm::Library` keeps it selectable. M2M and L2L keep the library rule (equal batches, 1.3–4.2× faster where it applies) |
+| C4.5 gate (13.4) | 80% of the spike's GEMM | met in 2 of 12 cells; the cause measured (operand orientation, 16–29% for the library); accepted as analysed (decision 12). The coefficient-major layout that would give the spike's orientation was measured in T12 and is not a candidate (decision 13) |
+| rotation (6.6) | one cube per target box | as designed (T10), plus slots u, u + U, … so that fewer units than (p + 1)² also run (needed on the CPU runtime); bit for bit a host `mul_add` replica |
+| top levels, merge (6.7) | on the device; merge M2L across levels if significant | on the device; not merged: an evaluation enqueues in 0.26–0.68 ms for 40–107 launches (T11) |
+| stage timing (8.3) | device timestamps if they add no sync | built (T11) and opt-in (`device_timestamps`): no sync, same bits, but the windows of neighbouring stages overlap on Metal; `synchronous_stages` is the per-stage measure, used by T13 |
+| autotune (10) | strategy-level tuner | as designed (T12, decision 13): the strategy tuned before the tables are built; the device's `Auto` by the static rule; the budget bounds candidate starts; the coefficient-major layout not a candidate |
+| leaf size (decision 8) | the Phase 3S rule on the device | applied in T13: it picks 64 (128 is 1.9% faster, below 5%), so no device default is added |
+
+### 17.2 Measured numbers against the models
+
+| Item (section) | Model or estimate | Measured |
+| --- | --- | --- |
+| launches per evaluation, every kind on the device (8.1) | about 49 (cube, p = 8), about 150 (Plummer) | cube N = 10⁵: 40 / 43 / 46 at p = 3 / 6 / 8 (34 under `Rotation`); Plummer: 101 / 101 / 107 (87); cube N = 10⁶: 64 / 97 / 133 (41) |
+| launch overhead (8.1) | about 10 µs a launch, 0.5–1.5 ms per evaluation | enqueueing a whole evaluation 0.26–0.68 ms (T11) |
+| transfers per evaluation (4.1) | the charges up, the output down, one sync | exactly that on every run: 0.4 MB up and 1.6 MB down at N = 10⁵ in f32 with gradients (4 / 16 MB at N = 10⁶) |
+| P2P, Metal f32 (13.4) | peak model 720 / 480 Gpairs/s; targets 25% (W2) and 10% (W1) | W1 n_t = 64: 352 / 286 Gpairs/s (49% / 60% of the model); W2 N = 10⁵: 326 / 269 (45% / 56%) (T6) |
+| M2L stage (6.4) | 8.4 GFLOP at 3.5 TFLOP/s ≈ 2.4 ms (cube, p = 8) | 8.5 ms in 24 launches (T9; GEMM 72%, gather 13%, reduction 12%); the downward stage of the device FMM 6.1 ms at N = 10⁵ (T13) |
+| rotation against dense (6.6, 10.5) | rotation needs 10–14% of f32 peak to compete (spike) | 1.8–3.0% of f32 peak; dense faster per pair at every p from 2 to 16 on the C3.2 cube (1.4–3.3×, T10); at N = 10⁵ the tuner chose dense at every f32 p. **At N = 10⁶ (cube) it chose rotation at p = 6 and 8**: the evaluation 74 ms against 82 ms dense at p = 8, a tie at p = 6 (T13), because the dense downward stage per V pair grows from 9.5 ns at N = 10⁵ to 11.6 ns at N = 10⁶ while rotation's falls from 11.8 to 10.3 ns (synchronous stages; the cause is not analysed) |
+| device memory (4.6) | dense M2L 13 MB (f32, p = 8) plus scratch 128 MB | 95–172 MB per `Fmm` at N = 10⁵ (dense), 20–30 MB (rotation); 322–358 MB at N = 10⁶ |
+| evaluation, Metal f32 against the host (README target: none) | — | tuned device 2.1–10.9 ms at N = 10⁵ (15–73 ms at N = 10⁶): 35–125× the host at one thread, 4.0–12.9× at 12 threads (T13) |
+| tuning time (10.4) | about 6 candidates × 0.3 s plus a few per bucket, within 10 s | 2.9–6.7 s per build on Metal f32 (T12, T13); a rebuild from the cache 0.08–0.12 s |
+| CPU-runtime suite (13.3) | under 5 minutes | 16 s warm for `nd-fmm-kernels` (T12) |
+

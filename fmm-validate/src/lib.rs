@@ -55,6 +55,9 @@
 //!   green-kernels comparison in `spikes/p2p-simd` takes its inputs from it.
 //! - `p2p_device` (feature `gpu`, Phase 4 T6): the same workloads as calls of the
 //!   device P2P kernel of `nd-fmm-kernels`, for the device rows of `p2p_kernels`.
+//! - `device_fmm` (feature `gpu`, Phase 4 T13): the device FMM against the host path,
+//!   stage by stage, with its build, transfers, launches and syncs and its errors, run
+//!   by the `device_fmm` example (with the device leaf-size study).
 //!
 //! The examples `accuracy`, `timing`, `tables`, `fmm_accuracy`, `calibrate`,
 //! `p2p_kernels` and `p2p_fmm` print Markdown reports on stdout:
@@ -87,6 +90,8 @@
 pub mod accuracy;
 pub mod bench;
 pub mod calibration;
+#[cfg(feature = "gpu")]
+pub mod device_fmm;
 pub mod fmm_accuracy;
 pub mod metrics;
 #[cfg(feature = "gpu")]

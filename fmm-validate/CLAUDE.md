@@ -34,16 +34,23 @@ device report, the transfers, launches, syncs and timing windows per evaluation 
 device stage times, through `fmm_accuracy::Execution::backend` and `Run::device`; T12:
 the `autotune` example, the tuning tables per problem and degree with a rebuild from the
 cache and the evaluation time tuned against the static rule, and `m2l_kernels
---orientation`, the coefficient-major layout against the box-major one per V level).
-Later phases add the crates they validate.
+--orientation`, the coefficient-major layout against the box-major one per V level;
+T13: the `device_fmm` module and example, the device FMM against the host path at 1 and
+n threads stage by stage (synchronous stages), with its build, transfers, launches,
+syncs and errors, under the tuned and every fixed strategy, and the device leaf-size
+study and rule, with `fmm_accuracy::{builder, measure}`). Later phases add the crates
+they validate.
 
 The only crate that depends on this one is the spike `spikes/p2p-simd` (Phase 3S T7),
 for the inputs of its green-kernels comparison; green-kernels itself never enters here.
 
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
-executable (`tests/fmm_accuracy.rs`). Tests that run P2P kernels only
-(`tests/p2p_kernels.rs`) need no MPI initialisation.
+executable (`tests/fmm_accuracy.rs`; `tests/device_fmm.rs`, feature `cpu`, the smoke run
+of the `device_fmm` core on the CPU runtime). Tests that run P2P kernels only
+(`tests/p2p_kernels.rs`) need no MPI initialisation. Device results of a phase are kept
+as one Markdown report under `results/` (Phase 4: `results/phase4-m3max.md`), never as
+CSV or raw output beside it.
 
 Anything else (criterion, rand, plotting) needs a note in the PR.
 

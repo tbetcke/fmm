@@ -67,3 +67,10 @@ required-features = ["gpu"]
 [[example]]
 name = "autotune"
 required-features = ["gpu"]
+
+# The device FMM against the host path stage by stage, and the device leaf-size study
+# (Phase 4 T13): needs a device backend; not run in CI (no templated-examples entry), run
+# by hand on one rank.
+[[example]]
+name = "device_fmm"
+required-features = ["gpu"]
