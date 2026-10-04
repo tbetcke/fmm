@@ -3,11 +3,14 @@
 //!
 //! The problem ([`Problem`]): N points of a [`Distribution`], sources equal to targets,
 //! and several charge vectors uniform in [−1, 1). [`run`] builds an
-//! `nd_fmm_exec::fmm::Fmm` with gradients at degree p, with a given number of threads
-//! and P2P kernel ([`Execution`]), evaluates every charge vector and measures the output
-//! at a fixed sample of the targets against the [`Oracle`]. The output, and so every
-//! error, is bit-identical for every number of threads (C3.5), and depends on the P2P
-//! kernel only in the last bits (C3S.5); the timings change with both.
+//! `nd_fmm_exec::fmm::Fmm` with gradients at degree p, with a given number of threads,
+//! P2P kernel and backend ([`Execution`]), evaluates every charge vector and measures the
+//! output at a fixed sample of the targets against the [`Oracle`]. The output, and so
+//! every error, is bit-identical for every number of threads (C3.5), and depends on the
+//! P2P kernel only in the last bits (C3S.5); the timings change with both. On a device
+//! backend (feature `gpu`, Phase 4 T11) every operator kind runs on the device and the
+//! output agrees with the host's within the FMM bounds of docs/phase4/README.md; the
+//! [`Run`] then also says what ran where ([`DeviceRun`]).
 //!
 //! Two kinds of tree ([`Config`]):
 //! - [`Config::C32`]: points uniform in the cube [−1, 1)³ and a uniform tree,
@@ -42,7 +45,10 @@ use std::time::Duration;
 
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::Equivalence;
-use nd_fmm_exec::fmm::{BuildTimings, FmmBuilder, ListSizes, StageTimings};
+use nd_fmm_exec::fmm::{
+    Backend, BuildTimings, DeviceStage, DeviceStageTimings, Fmm, FmmBuilder, ListSizes,
+    OperatorKind, StageTimings,
+};
 use nd_fmm_exec::operator::{P2pChoice, SimdScalar};
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_exec::threading::ThreadingReport;
@@ -198,22 +204,110 @@ impl Config {
     }
 }
 
-/// How the FMM of a [`run`] executes: its threads and its P2P kernel.
+/// How the FMM of a [`run`] executes: its threads, its P2P kernel and its backend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Execution {
-    /// The number of rayon threads (`FmmBuilder::threads`), at least 1.
+    /// The number of rayon threads (`FmmBuilder::threads`), at least 1. With
+    /// `Backend::Cpu` they cap the CPU runtime's units per cube instead.
     pub threads: usize,
-    /// The P2P kernel (`FmmBuilder::p2p_kernel`).
+    /// The P2P kernel of the host path and of host-fallback calls
+    /// (`FmmBuilder::p2p_kernel`).
     pub p2p: P2pChoice,
+    /// Where the operators run (`FmmBuilder::backend`): the host, or a device backend
+    /// compiled in (feature `gpu`) with every kind on the device.
+    pub backend: Backend,
 }
 
 impl Execution {
-    /// `threads` threads and the default P2P kernel, `P2pChoice::Auto`.
+    /// `threads` threads, the default P2P kernel, `P2pChoice::Auto`, and the host.
     pub const fn threads(threads: usize) -> Self {
         Self {
             threads,
             p2p: P2pChoice::Auto,
+            backend: Backend::Host,
         }
+    }
+}
+
+/// What a [`run`] on a device backend ran where, fixed at build, and what its last
+/// evaluation moved (`Fmm::device_report`, `Fmm::device_counters`; feature `gpu`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceRun {
+    /// The device: backend, compiler, name, CubeCL version and precisions.
+    pub device: String,
+    /// The operator kinds on the device, in `OperatorKind::ALL` order.
+    pub on_device: Vec<OperatorKind>,
+    /// The M2L strategy as the device runs it (`DeviceReport::strategy_name`).
+    pub strategy: String,
+    /// The GEMMs of the device translations and the rotation M2L: for each family its
+    /// level calls, chunks and GEMM.
+    pub gemms: String,
+    /// How the stages are timed (`DeviceReport::stage_timing`).
+    pub stage_timing: String,
+    /// The last evaluation's uploads, upload bytes, downloads, download bytes, launches,
+    /// syncs and timing windows.
+    pub evaluation: [u64; 7],
+}
+
+impl DeviceRun {
+    /// What `fmm` runs on its device; `None` on the host.
+    #[cfg(feature = "gpu")]
+    fn of<T: Stored + SimdScalar + Equivalence + Default>(fmm: &Fmm<'_, T>) -> Option<Self> {
+        use nd_fmm_exec::device::Gemm;
+        use nd_fmm_exec::fmm::Placement;
+        let (report, counters) = (fmm.device_report()?, fmm.device_counters()?);
+        let mut gemms = Vec::new();
+        for (name, kind) in [
+            ("M2M", OperatorKind::M2m),
+            ("L2L", OperatorKind::L2l),
+            ("M2L", OperatorKind::M2l),
+        ] {
+            let calls: Vec<_> = report.translations_of(kind).collect();
+            if calls.is_empty() {
+                continue;
+            }
+            let library = calls.iter().filter(|t| t.gemm == Gemm::Library).count();
+            let chunks: usize = calls.iter().map(|t| t.chunks).sum();
+            gemms.push(format!(
+                "{name} {} calls in {chunks} chunks ({library} library, {} hand-written {})",
+                calls.len(),
+                calls.len() - library,
+                report.gemm_layout
+            ));
+        }
+        if !report.rotations.is_empty() {
+            gemms.push(format!(
+                "M2L rotation {} calls ({})",
+                report.rotations.len(),
+                report.rotation_layout
+            ));
+        }
+        let c = counters.evaluation;
+        Some(Self {
+            device: report.info.to_string(),
+            on_device: OperatorKind::ALL
+                .into_iter()
+                .filter(|&k| report.placement(k) == Placement::Device)
+                .collect(),
+            strategy: report.strategy_name(),
+            gemms: gemms.join("; "),
+            stage_timing: report.stage_timing.to_string(),
+            evaluation: [
+                c.uploads,
+                c.upload_bytes,
+                c.downloads,
+                c.download_bytes,
+                c.launches,
+                c.syncs,
+                c.windows,
+            ],
+        })
+    }
+
+    /// Without the `gpu` feature every run is on the host.
+    #[cfg(not(feature = "gpu"))]
+    fn of<T: Stored + SimdScalar + Equivalence + Default>(_fmm: &Fmm<'_, T>) -> Option<Self> {
+        None
     }
 }
 
@@ -350,6 +444,11 @@ pub struct Run {
     /// The P2P kernel as it ran (`Fmm::p2p_kernel`): `Reference` or an ISA, never
     /// `Auto`.
     pub p2p: P2pChoice,
+    /// The backend.
+    pub backend: Backend,
+    /// On a device backend, what ran where and what an evaluation moved; `None` on the
+    /// host.
+    pub device: Option<DeviceRun>,
 }
 
 impl Run {
@@ -359,8 +458,8 @@ impl Run {
     }
 }
 
-/// Builds the FMM of `problem` in precision `T` at degree `p` with `execution`'s threads
-/// and P2P kernel (default strategy, gradients on), evaluates the charge vectors
+/// Builds the FMM of `problem` in precision `T` at degree `p` with `execution`'s threads,
+/// P2P kernel and backend (default strategy, gradients on), evaluates the charge vectors
 /// `charges` and measures the output against `oracle` (module documentation).
 ///
 /// `charges` and `oracle` must belong together: the problem's charges for f64, and
@@ -373,8 +472,9 @@ impl Run {
 /// # Panics
 ///
 /// If the FMM does not build or evaluate, for example on several ranks, with
-/// `threads` > 1 when MPI provides less than `Threading::Funneled`, or with a P2P
-/// kernel on an ISA this machine cannot run.
+/// `threads` > 1 when MPI provides less than `Threading::Funneled`, with a P2P
+/// kernel on an ISA this machine cannot run, or on a device backend that is not compiled
+/// in or does no arithmetic in `T` (f64 on Metal).
 pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
     config: &Config,
     problem: &Problem,
@@ -388,8 +488,9 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         .max_points_per_leaf(config.max_points_per_leaf)
         .gradients(true)
         .threads(execution.threads)
-        .p2p_kernel(execution.p2p);
-    let mut fmm = builder
+        .p2p_kernel(execution.p2p)
+        .backend(execution.backend);
+    let mut fmm: Fmm<'_, T> = builder
         .build(&problem.points, &problem.points, comm)
         .unwrap_or_else(|error| panic!("the FMM does not build: {error}"));
     let counts = fmm.source_counts();
@@ -449,6 +550,8 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         stages: mean(&stages),
         threading: fmm.threading().clone(),
         p2p: fmm.p2p_kernel(),
+        backend: execution.backend,
+        device: DeviceRun::of(&fmm),
     }
 }
 
@@ -467,5 +570,21 @@ fn mean(timings: &[StageTimings]) -> StageTimings {
         downward: average(|t| t.downward),
         evaluate_leaves: average(|t| t.evaluate_leaves),
         output: average(|t| t.output),
+        device: mean_device(timings),
     }
+}
+
+/// The mean of each device stage over `timings`, if every evaluation has device times.
+fn mean_device(timings: &[StageTimings]) -> Option<DeviceStageTimings> {
+    let device: Vec<DeviceStageTimings> =
+        timings.iter().map(|t| t.device).collect::<Option<_>>()?;
+    let n = device.len().max(1) as u32;
+    let mut mean = DeviceStageTimings::default();
+    for stage in DeviceStage::ALL {
+        mean.set(
+            stage,
+            device.iter().map(|t| t.get(stage)).sum::<Duration>() / n,
+        );
+    }
+    Some(mean)
 }

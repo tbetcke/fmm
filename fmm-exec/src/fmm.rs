@@ -93,14 +93,17 @@
 //! [`Fmm::evaluate`] tells it where an evaluation starts and reads its output once, and
 //! the output scaling is the same code. Every operator kind can run on the host
 //! fallback ([`OperatorKind`], [`Fmm::placement`]); with every kind there the output
-//! equals the host path's bit for bit. From Phase 4 T6 P2P runs on the device by
-//! default ([`DeviceP2pLayout`]), from T7 so do P2M, L2P, P2L and M2P
-//! ([`DeviceLeafLayout`]), from T8 M2M (both passes) and L2L as grouped GEMMs
-//! ([`DeviceGemm`]), and from T9 M2L under `Dense` and `Classes` as grouped GEMMs over the
-//! 316 offsets; the output agrees with the host path's within the FMM bounds of
-//! docs/phase4/README.md. The `device` module (feature `gpu`)
-//! documents the residency, the transfers, the fallback, the errors and the threads
-//! rule; docs/design/device-path.md is the design.
+//! equals the host path's bit for bit. By default (Phase 4 T11) every kind runs on the
+//! device under every strategy: P2P ([`DeviceP2pLayout`]), P2M, L2P, P2L and M2P
+//! ([`DeviceLeafLayout`]), M2M, L2L and dense M2L as grouped GEMMs ([`DeviceGemm`]) and
+//! M2L under `Rotation` by the rotation kernel. The data stay on the device for the whole
+//! evaluation, which moves the charges up and the output down and syncs once, at that
+//! download; the output agrees with the host path's within the FMM bounds of
+//! docs/phase4/README.md, and its errors against the direct sum are the host path's.
+//! [`StageTimings`] time each stage on the host and, on request and where the device
+//! times on itself, on the device ([`FmmBuilder::device_timestamps`]). The `device` module (feature `gpu`)
+//! documents the residency, the transfers, the scheduling, the fallback, the errors and
+//! the threads rule; docs/design/device-path.md is the design.
 //!
 //! # Redistribution (C5.1)
 //!
@@ -598,6 +601,7 @@ pub enum FmmError {
 /// | [`backend`](Self::backend) | [`Backend::Host`]: the host path |
 /// | [`host_fallback`](Self::host_fallback) | none |
 /// | [`synchronous_stages`](Self::synchronous_stages) | off |
+/// | [`device_timestamps`](Self::device_timestamps) | off |
 /// | [`device_p2p_layout`](Self::device_p2p_layout) | [`DeviceP2pLayout::Auto`]: by backend |
 /// | [`device_leaf_layout`](Self::device_leaf_layout) | [`DeviceLeafLayout::Auto`]: by backend |
 /// | [`device_gemm`](Self::device_gemm) | [`DeviceGemm::Auto`]: by precision, p and backend |
@@ -619,6 +623,7 @@ pub struct FmmBuilder<T> {
     backend: Backend,
     host_fallback: Vec<OperatorKind>,
     synchronous_stages: bool,
+    device_timestamps: bool,
     device_p2p_layout: DeviceP2pLayout,
     device_leaf_layout: DeviceLeafLayout,
     device_gemm: DeviceGemm,
@@ -642,6 +647,7 @@ impl<T> FmmBuilder<T> {
             backend: Backend::Host,
             host_fallback: Vec::new(),
             synchronous_stages: false,
+            device_timestamps: false,
             device_p2p_layout: DeviceP2pLayout::Auto,
             device_leaf_layout: DeviceLeafLayout::Auto,
             device_gemm: DeviceGemm::Auto,
@@ -788,6 +794,20 @@ impl<T> FmmBuilder<T> {
     /// the same output: for reports only, off by default. Ignored by [`Backend::Host`].
     pub fn synchronous_stages(mut self, on: bool) -> Self {
         self.synchronous_stages = on;
+        self
+    }
+
+    /// With a device backend that times on the device itself (Metal, CUDA; not the CPU
+    /// runtime, whose timing windows wait for it), times every stage with device work by
+    /// the device's timestamps: one timing window per stage, resolved after the
+    /// evaluation's one download, with no sync of its own ([`DeviceStageTimings`],
+    /// docs/design/device-path.md §8.3). Off by default: on Metal the windows of
+    /// neighbouring stages overlap, so the stage times are spans, not a breakdown of the
+    /// evaluation, and the windows add some enqueue time (the `device` module, "Stage
+    /// timing"). The output is the same either way. Ignored by [`Backend::Host`], on the
+    /// CPU runtime and with [`synchronous_stages`](Self::synchronous_stages).
+    pub fn device_timestamps(mut self, on: bool) -> Self {
+        self.device_timestamps = on;
         self
     }
 
@@ -1112,6 +1132,13 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
                     leaf_layout: self.device_leaf_layout,
                     gemm: self.device_gemm,
                     scratch_budget: self.device_scratch_budget,
+                    stage_timing: if self.synchronous_stages {
+                        device::StageTiming::Synchronous
+                    } else if self.device_timestamps {
+                        device::StageTiming::DeviceTimestamps
+                    } else {
+                        device::StageTiming::Enqueue
+                    },
                 };
                 let driver = device::driver(
                     operator,
@@ -1233,6 +1260,27 @@ impl<T: SimdScalar + Stored + Equivalence + Default> ExecOperator<T> {
             Self::Host(_) => {}
             #[cfg(feature = "gpu")]
             Self::Device(driver) => driver.sync(),
+        }
+    }
+
+    /// Opens the timing window of a stage on the device, if it times stages; nothing on
+    /// the host.
+    fn open_stage(&mut self) {
+        match self {
+            Self::Host(_) => {}
+            #[cfg(feature = "gpu")]
+            Self::Device(driver) => driver.open_stage(),
+        }
+    }
+
+    /// Closes the timing window of `stage`; nothing on the host.
+    fn close_stage(&mut self, stage: DeviceStage) {
+        match self {
+            Self::Host(_) => {
+                let _ = stage;
+            }
+            #[cfg(feature = "gpu")]
+            Self::Device(driver) => driver.close_stage(stage),
         }
     }
 }
@@ -1440,11 +1488,15 @@ impl BuildTimings {
 /// With a device backend each stage is timed on the host as it is called, which
 /// measures the time to *enqueue* its launches, not their run time: the device's work
 /// shows in [`output`](Self::output), which contains the evaluation's one waiting
-/// download (docs/design/device-path.md §8.3).
-/// [`FmmBuilder::synchronous_stages`] waits for the device after every stage, so that
-/// each stage is timed whole, at the cost of a sync per stage. Host-fallback calls wait
-/// for the device themselves (their downloads), and while most kinds run on the host
-/// fallback (Phase 4 T5–T10) their transfers dominate the stages.
+/// download (docs/design/device-path.md §8.3). Two ways to time the device's work:
+/// - [`device`](Self::device): with [`FmmBuilder::device_timestamps`], where the device
+///   times on itself (Metal, CUDA), the span of each stage on the device, from one timing
+///   window per stage, without a sync;
+/// - [`FmmBuilder::synchronous_stages`] waits for the device after every stage, so that
+///   each stage is timed whole on the host, at the cost of a sync per stage (the only
+///   way on the CPU runtime).
+///
+/// Host-fallback calls wait for the device themselves (their downloads).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct StageTimings {
     /// Writing the charges into the source chunks; with a device backend also zeroing
@@ -1465,6 +1517,9 @@ pub struct StageTimings {
     /// Scaling the target output into the caller's order; with a device backend also
     /// downloading it.
     pub output: Duration,
+    /// With a device backend that times on the device: the device time of each stage
+    /// with device work ([`FmmBuilder::device_timestamps`]); `None` otherwise.
+    pub device: Option<DeviceStageTimings>,
 }
 
 impl StageTimings {
@@ -1478,6 +1533,84 @@ impl StageTimings {
             + self.downward
             + self.evaluate_leaves
             + self.output
+    }
+}
+
+/// A stage of [`Fmm::evaluate`] that runs device work, timed by one timing window
+/// ([`DeviceStageTimings`]). The exchanges move nothing on the one rank a device runs on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DeviceStage {
+    /// Zeroing the device stores, uploading and scattering the charges.
+    Load,
+    /// Stage 2: P2M and the local M2M.
+    UpwardLocal,
+    /// Stage 3: the global M2M.
+    UpwardGlobal,
+    /// Stage 5: L2L, M2L and P2L.
+    Downward,
+    /// Stage 6: L2P, M2P and P2P.
+    EvaluateLeaves,
+}
+
+impl DeviceStage {
+    /// Every stage, in evaluation order.
+    pub const ALL: [Self; 5] = [
+        Self::Load,
+        Self::UpwardLocal,
+        Self::UpwardGlobal,
+        Self::Downward,
+        Self::EvaluateLeaves,
+    ];
+}
+
+/// The device time of each [`DeviceStage`] of one [`Fmm::evaluate`], from the device's
+/// own timestamps, for reports only (docs/design/device-path.md §8.3): one timing window
+/// per stage, opened before its first launch and closed after its last, with no sync;
+/// the times are read after the evaluation's one download. A window spans the device
+/// work of its stage from the start of its first pass to the end of its last; the device
+/// may run passes of neighbouring stages concurrently (Metal does), so the spans can
+/// overlap and their sum can exceed the evaluation's wall time. A stage without device
+/// work times zero.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DeviceStageTimings {
+    /// [`DeviceStage::Load`].
+    pub load: Duration,
+    /// [`DeviceStage::UpwardLocal`].
+    pub upward_local: Duration,
+    /// [`DeviceStage::UpwardGlobal`].
+    pub upward_global: Duration,
+    /// [`DeviceStage::Downward`].
+    pub downward: Duration,
+    /// [`DeviceStage::EvaluateLeaves`].
+    pub evaluate_leaves: Duration,
+}
+
+impl DeviceStageTimings {
+    /// The time of `stage`.
+    pub fn get(&self, stage: DeviceStage) -> Duration {
+        match stage {
+            DeviceStage::Load => self.load,
+            DeviceStage::UpwardLocal => self.upward_local,
+            DeviceStage::UpwardGlobal => self.upward_global,
+            DeviceStage::Downward => self.downward,
+            DeviceStage::EvaluateLeaves => self.evaluate_leaves,
+        }
+    }
+
+    /// Sets the time of `stage`.
+    pub fn set(&mut self, stage: DeviceStage, time: Duration) {
+        *match stage {
+            DeviceStage::Load => &mut self.load,
+            DeviceStage::UpwardLocal => &mut self.upward_local,
+            DeviceStage::UpwardGlobal => &mut self.upward_global,
+            DeviceStage::Downward => &mut self.downward,
+            DeviceStage::EvaluateLeaves => &mut self.evaluate_leaves,
+        } = time;
+    }
+
+    /// The sum of all stages.
+    pub fn total(&self) -> Duration {
+        DeviceStage::ALL.iter().map(|&stage| self.get(stage)).sum()
     }
 }
 
@@ -1603,20 +1736,33 @@ where
                 }
             });
         }
-        let mut stage = |run: &mut dyn FnMut(&mut FmmEvaluator<'o, C, T>)| {
+        // A stage with device work runs in a timing window (`device_timestamps`); the
+        // exchanges have none.
+        let mut stage = |device: Option<DeviceStage>,
+                         run: &mut dyn FnMut(&mut FmmEvaluator<'o, C, T>)| {
             timed(|| {
+                if device.is_some() {
+                    evaluator.operator_mut().open_stage();
+                }
                 run(evaluator);
+                if let Some(device) = device {
+                    evaluator.operator_mut().close_stage(device);
+                }
                 if sync {
                     evaluator.operator_mut().sync();
                 }
             })
         };
-        timings.exchange_sources = stage(&mut |e| e.exchange_sources());
-        timings.upward_local = stage(&mut |e| e.upward_local());
-        timings.upward_global = stage(&mut |e| e.upward_global());
-        timings.exchange_multipoles = stage(&mut |e| e.exchange_multipoles());
-        timings.downward = stage(&mut |e| e.downward());
-        timings.evaluate_leaves = stage(&mut |e| e.evaluate_leaves());
+        timings.exchange_sources = stage(None, &mut |e| e.exchange_sources());
+        timings.upward_local = stage(Some(DeviceStage::UpwardLocal), &mut |e| e.upward_local());
+        timings.upward_global = stage(Some(DeviceStage::UpwardGlobal), &mut |e| {
+            e.upward_global();
+        });
+        timings.exchange_multipoles = stage(None, &mut |e| e.exchange_multipoles());
+        timings.downward = stage(Some(DeviceStage::Downward), &mut |e| e.downward());
+        timings.evaluate_leaves = stage(Some(DeviceStage::EvaluateLeaves), &mut |e| {
+            e.evaluate_leaves();
+        });
 
         let start = Instant::now();
         let gradients = self.gradients();
@@ -1629,7 +1775,11 @@ where
             ),
             #[cfg(feature = "gpu")]
             ExecOperator::Device(driver) => match driver.read_output() {
-                Ok(store) => scaled_output(store, &self.targets, &self.radii, gradients),
+                Ok(store) => {
+                    let output = scaled_output(store, &self.targets, &self.radii, gradients);
+                    timings.device = driver.stage_timings();
+                    output
+                }
                 Err(error) => {
                     let reason = error.to_string();
                     self.device_error = Some(reason.clone());

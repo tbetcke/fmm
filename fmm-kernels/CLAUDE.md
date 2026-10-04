@@ -6,7 +6,8 @@ the plan's views on the device (`view`, from T5), and (from T6) the operator ker
 P2P (`p2p`, T6), the leaf operators P2M, L2P, P2L and M2P (`leaf`, T7), the grouped
 translations M2M and L2L (`translate`, T8), dense M2L (`translate`, T9) and rotation M2L
 (`rotation`, T10) (docs/design/device-path.md §3.1).
-Phase and components: Phase 4, C4.1 (T4, T5) and C4.2–C4.6 (T6–T10) in docs/phase4/.
+Phase and components: Phase 4, C4.1 (T4, T5), C4.2–C4.6 (T6–T10) and the timing windows
+of C4.8 (T11) in docs/phase4/.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -95,6 +96,15 @@ Phase and components: Phase 4, C4.1 (T4, T5) and C4.2–C4.6 (T6–T10) in docs/
   runtime and Metal), not `RotationTables::m2l`, which rounds each product (tolerance,
   T3 rule 6; 35–100% of the values agree bit for bit). Do not change the step order or
   the device table layout without a sign-off.
+- Timing windows (T11, device-path.md §8.3): `Device::open_window` and `close_window`
+  wrap CubeCL's `profile_start`/`profile_end`; `WindowTime::resolve` reads the time after
+  the work has run. `Device::times_on_device` is true only on a GPU backend whose runtime
+  times on the device (Metal with timestamp queries, CUDA): there a window submits the
+  queued work without waiting. The CPU runtime reports device timing but drains its
+  stream at both ends of a window, so `close_window` counts two syncs for every window
+  not timed on the device (`Counters::windows`, `Counters::syncs`). A window without a
+  launch measures nothing (`resolve` gives `None`). Never call CubeCL's `profile`
+  closure form, autotune or throughput measurement for this.
 - Generic over the float type (`DeviceFloat`: f32, f64) and comptime parameters (p, n,
   layouts); the backend is a run-time value (`BackendKind`, `Device`), never an
   `R: Runtime` type parameter (device-path.md §3.2). Every kernel runs on every runtime;

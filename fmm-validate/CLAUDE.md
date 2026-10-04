@@ -28,7 +28,10 @@ example, the dense M2L per level, stage by stage, against the spike, structure (
 the host operator, the C4.5 gate on the spike's shapes and the scratch-budget sweep;
 T10: the `rotation_kernels` example, the device rotation M2L against the dense M2L per
 pair across p, its efficiency against the spike's break-even values, the M2L stage
-against the host rotation at 1 and 12 threads, and the rotation layouts).
+against the host rotation at 1 and 12 threads, and the rotation layouts; T11: `--backend
+host|cpu|metal|cuda` of the `fmm_accuracy` example, with every kind on the device, the
+device report, the transfers, launches, syncs and timing windows per evaluation and the
+device stage times, through `fmm_accuracy::Execution::backend` and `Run::device`).
 Later phases add the crates they validate.
 
 The only crate that depends on this one is the spike `spikes/p2p-simd` (Phase 3S T7),

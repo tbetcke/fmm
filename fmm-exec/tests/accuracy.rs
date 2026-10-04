@@ -35,12 +35,13 @@
 //! p ≤ 8 resolves to `Dense`, so M2L runs as dense GEMMs), on the CPU runtime in f64 at
 //! p = 3 and 8 (feature `cpu`) and on Metal in f32 at p = 3 and 8 (feature `metal`, by
 //! hand outside the macOS sandbox); on the CPU runtime also in f64 at p = 18, which
-//! resolves to `Rotation`, so M2L runs the device rotation kernel (T10; no prediction
-//! exists at p = 18, so only the comparison with the host applies). The device run's
+//! resolves to `Rotation`, so M2L runs the device rotation kernel (T10). The device run's
 //! error lies within 0.1% (f64) or 5% (f32) of the host run's in the same precision
 //! (docs/phase4/README.md, "Accuracy measures"), its output within 1e-12 (f64) or 1e-5
-//! (f32) of the host output (relative L2 over all targets), and in f64 at p = 3 and 8 it
-//! passes the gate itself. The test prints the backends it ran.
+//! (f32) of the host output (relative L2 over all targets), and in f64 it passes the C3.2
+//! gate itself at p = 3, 8 and 18 (T11, C4.8): twice the prediction, at p = 18 the T9
+//! re-derivation 6.74e-9 (docs/phase3/README.md, "Predictions"; the host's p = 18 run is
+//! the `fmm_accuracy` example of nd-fmm-validate). The test prints the backends it ran.
 //!
 //! Its own executable, because it initialises MPI; ignored, because it needs release
 //! mode:
@@ -62,9 +63,10 @@ use nd_fmm_ref::p2p::direct_sum;
 const PREDICTION: [(usize, f64); 2] = [(3, 1.77e-3), (8, 1.08e-5)];
 
 /// The degrees of the device gate on the CPU runtime in f64: those of the prediction, and
-/// p = 18 under `Rotation` (T10), which has none.
+/// p = 18 under `Rotation` (T10) with the prediction re-derived in Phase 3 T9 (T11).
 #[cfg(feature = "gpu")]
-const DEVICE_F64: [(usize, Option<f64>); 3] = [(3, Some(1.77e-3)), (8, Some(1.08e-5)), (18, None)];
+const DEVICE_F64: [(usize, Option<f64>); 3] =
+    [(3, Some(1.77e-3)), (8, Some(1.08e-5)), (18, Some(6.74e-9))];
 
 /// SplitMix64, as in the other tests.
 struct SplitMix64(u64);
