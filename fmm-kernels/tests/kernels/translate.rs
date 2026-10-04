@@ -715,3 +715,6 @@ mod gpu {
 
 /// Dense M2L (T9, C4.5): level calls over V-list-shaped views of the 316 offsets.
 mod m2l;
+
+/// Rotation M2L (T10, C4.6): level calls over V-list-shaped views with the rotation tables.
+mod rotation;

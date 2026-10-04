@@ -14,7 +14,7 @@
 //! the leaf stores' point offsets ([`view::PointOffsets`]). T7: the leaf operators P2M,
 //! L2P, P2L and M2P ([`leaf`]). T8: the grouped translations with dense tables
 //! ([`translate`]: the hand-written GEMM, the library GEMM, M2M and L2L; T9 adds dense
-//! M2L). Rotation M2L follows in T10.
+//! M2L). T10: rotation M2L ([`rotation`]).
 //!
 //! ## Backends and features
 //!
@@ -138,6 +138,17 @@
 //! ([`translate::GroupedPlan`]). No atomics: the GEMM writes distinct columns, and the
 //! reduction owns each target.
 //!
+//! ## Rotation M2L (T10)
+//!
+//! [`rotation::m2l`] runs one level's M2L by point and shoot (device-path.md §6.6): the M2L
+//! family of the Phase 2 rotation tables uploaded once in its own storage
+//! ([`rotation::RotationTables`]), one cube per box with a V pair (or a unit's share of
+//! the boxes on the CPU runtime), each pair `ShiftTables::apply` step for step (z-rotation,
+//! y-blocks, coaxial step, y-blocks back, z-rotation back, each followed by `sync_cube`;
+//! the coaxial step alone on the z axis), the last step added into the box's accumulator
+//! in row order. Every multiply–add is an explicit fma, so the kernel equals a host
+//! `mul_add` loop in its order bit for bit, and `RotationTables::m2l` to rounding.
+//!
 //! ## Tests on each backend
 //!
 //! From the repository root (`cargo test` prints the backends it ran with
@@ -167,6 +178,7 @@ mod frame;
 pub mod leaf;
 pub mod movement;
 pub mod p2p;
+pub mod rotation;
 pub mod translate;
 pub mod view;
 

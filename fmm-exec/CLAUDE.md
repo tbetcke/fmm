@@ -8,8 +8,9 @@ the device path (`device`: `DeviceOperator`, its report and transfer accounting)
 Phase and components: Phase 3, C3.1–C3.3 and C3.5 (tasks T3 and T8–T11 in docs/phase3/);
 Phase 3S, C3S.5 (task T6 in docs/phase3s/); Phase 4, C4.1 (task T5 in docs/phase4/;
 design docs/design/device-path.md), C4.2 (task T6: P2P on the device), C4.3 (task
-T7: P2M, L2P, P2L and M2P on the device), C4.4 (task T8: M2M and L2L on the device) and
-C4.5 (task T9: dense M2L on the device), with C4.6–C4.8 to follow.
+T7: P2M, L2P, P2L and M2P on the device), C4.4 (task T8: M2M and L2L on the device),
+C4.5 (task T9: dense M2L on the device) and C4.6 (task T10: rotation M2L on the device),
+with C4.7 and C4.8 to follow.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -95,16 +96,22 @@ C4.5 (task T9: dense M2L on the device), with C4.6–C4.8 to follow.
     `device_scratch_budget`, reported in `DeviceReport::translations`), and from T9 M2L
     under `Dense` and `Classes` (the same grouped translation over the level's V view
     and the 316 dense tables, `Classes` from `M2lClasses::expand` and reported as
-    "Classes, run as dense on the device"; `Rotation`'s M2L stays on the host fallback
-    until T10; under the default `DeviceGemm::Auto` M2L runs the hand-written GEMM, the
-    library only under `DeviceGemm::Library`, decided after T9's measurement);
+    "Classes, run as dense on the device"; under the default `DeviceGemm::Auto` M2L runs
+    the hand-written GEMM, the library only under `DeviceGemm::Library`, decided after
+    T9's measurement), and from T10 M2L under `Rotation` (`nd_fmm_kernels::rotation::m2l`,
+    one launch per level, the M2L family of the host's `RotationTables` uploaded once in
+    its own storage through `device::RotationHostArrays`, the rows of each V view at
+    build, the layout by backend in `DeviceReport::rotation_layout`, the calls in
+    `DeviceReport::rotations`; M2M and L2L stay the dense octant GEMMs);
     `host_fallback` names a kind to keep it on the host.
     `tests/operator/device_leaf.rs` checks the four leaf operators against
     `nd_fmm_ref::leaf` (p ≤ 20 in f64) and the host operator;
     `tests/operator/device_translate.rs` checks M2M and L2L, and
     `tests/operator/device_m2l.rs` M2L for all 316 offsets on levels 2, 9 and 16, against
     `nd_fmm_ref::direct` and the host operator's error (p ≤ 20 in f64, the sweeps
-    ignored). With a kind on the
+    ignored), and `tests/operator/device_rotation.rs` rotation M2L the same way, against
+    `direct`, the host's `RotationTables::m2l` and the device dense M2L (p ≤ 20 in f64,
+    the sweep ignored). With a kind on the
     device the output agrees with the host path within the FMM bounds of
     docs/phase4/README.md, not bit for bit: `tests/device_common` checks both, every kind on the fallback bit for
     bit and the default within the bounds, with the transfer formula of each;
@@ -129,7 +136,8 @@ C4.5 (task T9: dense M2L on the device), with C4.6–C4.8 to follow.
     --ignored`;
   - from T6, the ignored gates on the device path too: `RUST_MIN_STACK=8388608 cargo
     test -p nd-fmm-exec --features cpu --release -- --ignored` (`tests/accuracy.rs` and
-    `tests/adaptive.rs` repeat their problems with P2P on the CPU runtime in f64, and on
+    `tests/adaptive.rs` repeat their problems with every kind on the device: on the CPU
+    runtime in f64, `tests/accuracy.rs` also at p = 18 under `Rotation` (T10), and on
     Metal in f32 with `--features metal`).
 
 ## Allowed dependencies

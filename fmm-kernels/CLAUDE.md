@@ -4,8 +4,8 @@ Purpose: every CubeCL (`#[cube]`) kernel of the FMM behind safe wrappers: backen
 selection and the f64 capability check, device buffers, the data movement primitives,
 the plan's views on the device (`view`, from T5), and (from T6) the operator kernels:
 P2P (`p2p`, T6), the leaf operators P2M, L2P, P2L and M2P (`leaf`, T7), the grouped
-translations M2M and L2L (`translate`, T8) and dense M2L (`translate`, T9), then rotation
-M2L (T10) (docs/design/device-path.md §3.1).
+translations M2M and L2L (`translate`, T8), dense M2L (`translate`, T9) and rotation M2L
+(`rotation`, T10) (docs/design/device-path.md §3.1).
 Phase and components: Phase 4, C4.1 (T4, T5) and C4.2–C4.6 (T6–T10) in docs/phase4/.
 
 ## Rules
@@ -76,6 +76,25 @@ Phase and components: Phase 4, C4.1 (T4, T5) and C4.2–C4.6 (T6–T10) in docs/
   layouts never change the bits of the hand-written path (tested); on Metal the library
   measured bit for bit the hand-written kernel, across chunkings and against (A) (T9;
   not assumed elsewhere). Do not change the summation order without a sign-off.
+- Rotation M2L (T10, `rotation`, device-path.md §6.6): the M2L family of the Phase 2
+  rotation tables uploaded once as `RotationTables` from plain arrays in the storage of
+  `nd_fmm_tables::rotation::ShiftTables` (`RotationArrays`: forward and backward y-blocks
+  per polar angle, azimuth factors, coaxial factors, and per offset four `u32`: alignment,
+  polar, azimuth, distance; no `nd-fmm-tables` dependency, no conversion of the storage).
+  `RotationPlan` uploads the rows of a V view with a pair; `m2l` is one launch per level.
+  Two layouts (`RotationLayout`): `Cube { units }` (one cube per row with a pair, unit u
+  the owner of slots u, u + U, …, two working vectors of (p + 1)² values in shared memory,
+  `sync_cube` after each step; default on Metal and CUDA: (p + 1)² units rounded up to the
+  plane size, one slot each) and `Cpu` (one unit per core, at most `Device::units_cap`,
+  contiguous rows, local arrays; default on the CPU runtime). Each pair repeats
+  `ShiftTables::apply` step for step (z-rotation, forward y-blocks, coaxial step, backward
+  y-blocks, z-rotation back added into the owner's accumulator; `Up`/`Down` the coaxial
+  step alone, added term by term into the accumulator, with the parity for `Down`), each
+  output one accumulator from zero with an explicit `fma` per term in the host's order:
+  bit for bit a host `mul_add` replica on every layout and backend (tested on the CPU
+  runtime and Metal), not `RotationTables::m2l`, which rounds each product (tolerance,
+  T3 rule 6; 35–100% of the values agree bit for bit). Do not change the step order or
+  the device table layout without a sign-off.
 - Generic over the float type (`DeviceFloat`: f32, f64) and comptime parameters (p, n,
   layouts); the backend is a run-time value (`BackendKind`, `Device`), never an
   `R: Runtime` type parameter (device-path.md §3.2). Every kernel runs on every runtime;
@@ -128,7 +147,10 @@ Phase and components: Phase 4, C4.1 (T4, T5) and C4.2–C4.6 (T6–T10) in docs/
   is `#[ignore]`. T8's translation tests (`tests/kernels/translate.rs`: the GEMM at
   p ∈ {0, 1, 3, 8, 12, 20} and k ∈ {0, 1, 7, 64}, level calls, chunks and per-octant
   structure at p ∈ {0, 3, 8}, both layouts, f32 and f64) add 4 runtime tests of about
-  4 s together; the GEMM of 1000 columns on the CPU runtime is `#[ignore]`.
+  4 s together; the GEMM of 1000 columns on the CPU runtime is `#[ignore]`. T10's
+  rotation tests (`tests/kernels/translate/rotation.rs`: random V rows at p ∈ {0, 3, 8}
+  and the special offsets at p ∈ {1, 3, 8}, both layouts, f32 and f64) add 3 runtime
+  tests of about 1.2 s together.
   `cargo test -p nd-fmm-kernels` without features builds and passes in seconds.
   Kernel compilation, from CubeCL's profiling log (the first launch of each variant
   includes its compilation): `CUBECL_DEBUG_LOG=<file> cargo test -p nd-fmm-kernels
@@ -172,5 +194,6 @@ rayon. Anything else needs asking first.
 ## Test oracle
 Plain host loops (buffers, zeroing, gather, scatter), bit for bit; `nd-fmm-ref`
 (`direct`, `leaf`, `p2p`), `nd-fmm-math` and `nd-fmm-tables` (`MatrixSet::apply`,
-`RotationTables`) for the operator kernels, at the canonical frames, levels 2, 9 and 16
-of a dyadic domain.
+`RotationTables`; for rotation M2L also a host `mul_add` replica of the kernel, bit for
+bit) for the operator kernels, at the canonical frames, levels 2, 9 and 16 of a dyadic
+domain.

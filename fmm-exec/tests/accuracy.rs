@@ -30,15 +30,17 @@
 //! error with `Auto` lies within 1% of the error with `Reference`, and every output of
 //! `Auto` within 1e-13 of that of `Reference` (relative L2 over all targets).
 //!
-//! Device path (Phase 4 T6, C4.2; T7, C4.3; T8, C4.4; T9, C4.5), with a backend feature:
-//! the same gate with the default placement (every kind on the device; the gate's p ≤ 8
-//! resolves to `Dense`, so M2L runs as dense GEMMs), on the CPU runtime in f64 at
+//! Device path (Phase 4 T6, C4.2; T7, C4.3; T8, C4.4; T9, C4.5; T10, C4.6), with a backend
+//! feature: the same gate with the default placement (every kind on the device; the gate's
+//! p ≤ 8 resolves to `Dense`, so M2L runs as dense GEMMs), on the CPU runtime in f64 at
 //! p = 3 and 8 (feature `cpu`) and on Metal in f32 at p = 3 and 8 (feature `metal`, by
-//! hand outside the macOS sandbox). The device run's error lies within 0.1% (f64) or 5%
-//! (f32) of the host run's in the same precision (docs/phase4/README.md, "Accuracy
-//! measures"), its output within 1e-12 (f64) or 1e-5 (f32) of the host output (relative
-//! L2 over all targets), and in f64 it passes the gate itself. The test prints the
-//! backends it ran.
+//! hand outside the macOS sandbox); on the CPU runtime also in f64 at p = 18, which
+//! resolves to `Rotation`, so M2L runs the device rotation kernel (T10; no prediction
+//! exists at p = 18, so only the comparison with the host applies). The device run's
+//! error lies within 0.1% (f64) or 5% (f32) of the host run's in the same precision
+//! (docs/phase4/README.md, "Accuracy measures"), its output within 1e-12 (f64) or 1e-5
+//! (f32) of the host output (relative L2 over all targets), and in f64 at p = 3 and 8 it
+//! passes the gate itself. The test prints the backends it ran.
 //!
 //! Its own executable, because it initialises MPI; ignored, because it needs release
 //! mode:
@@ -58,6 +60,11 @@ use nd_fmm_ref::p2p::direct_sum;
 
 /// The single-translation prediction of the relative L2 error of φ (design §7).
 const PREDICTION: [(usize, f64); 2] = [(3, 1.77e-3), (8, 1.08e-5)];
+
+/// The degrees of the device gate on the CPU runtime in f64: those of the prediction, and
+/// p = 18 under `Rotation` (T10), which has none.
+#[cfg(feature = "gpu")]
+const DEVICE_F64: [(usize, Option<f64>); 3] = [(3, Some(1.77e-3)), (8, Some(1.08e-5)), (18, None)];
 
 /// SplitMix64, as in the other tests.
 struct SplitMix64(u64);
@@ -258,6 +265,7 @@ fn device_gates(
     if Backend::Cpu.is_compiled() {
         device_gate::<f64>(
             Backend::Cpu,
+            &DEVICE_F64,
             (points, sample),
             (charges, exact),
             comm,
@@ -266,8 +274,10 @@ fn device_gates(
         ran.push("cpu (f64)");
     }
     if Backend::Metal.is_compiled() {
+        let degrees = PREDICTION.map(|(p, prediction)| (p, Some(prediction)));
         device_gate::<f32>(
             Backend::Metal,
+            &degrees,
             (points, sample),
             (charges, exact),
             comm,
@@ -281,7 +291,8 @@ fn device_gates(
     );
 }
 
-/// The gate with P2P on `backend` in `T`, against the host path in `T`.
+/// The gate with every kind on `backend` in `T` at each degree of `degrees` (with its
+/// prediction, if any), against the host path in `T`.
 #[cfg(feature = "gpu")]
 fn device_gate<
     T: nd_fmm_tables::cache::Stored
@@ -291,6 +302,7 @@ fn device_gate<
         + nd_fmm_math::RealScalar,
 >(
     backend: Backend,
+    degrees: &[(usize, Option<f64>)],
     (points, sample): (&[[f64; 3]], &[usize]),
     (charges, exact): (&[Vec<f64>], &[Vec<f64>]),
     comm: &mpi::topology::SimpleCommunicator,
@@ -298,7 +310,8 @@ fn device_gate<
 ) {
     let f64_run = size_of::<T>() == 8;
     let (error_ratio, difference_bound) = if f64_run { (1e-3, 1e-12) } else { (5e-2, 1e-5) };
-    for (p, prediction) in PREDICTION {
+    for &(p, prediction) in degrees {
+        let start = std::time::Instant::now();
         let builder = FmmBuilder::<T>::new(p).max_level(4).max_points_per_leaf(1);
         let mut host = builder
             .build(points, points, comm)
@@ -310,7 +323,9 @@ fn device_gate<
             .unwrap_or_else(|error| panic!("{backend}: the device FMM does not build: {error}"));
         let report = device.device_report().expect("a device backend");
         let layout = format!(
-            "P2P {}, leaf operators {}, M2M/L2L/M2L GEMM {} ({} of {} level calls on the library)",
+            "{}; P2P {}, leaf operators {}, M2M/L2L/M2L GEMM {} ({} of {} level calls on the \
+             library), rotation M2L {} ({} level calls)",
+            report.strategy_name(),
             report.p2p_layout,
             report.leaf_layout,
             report.gemm_layout,
@@ -319,7 +334,9 @@ fn device_gate<
                 .iter()
                 .filter(|t| t.gemm == nd_fmm_exec::device::Gemm::Library)
                 .count(),
-            report.translations.len()
+            report.translations.len(),
+            report.rotation_layout,
+            report.rotations.len()
         );
         let (mut each_host, mut each_device) = (Vec::new(), Vec::new());
         let mut largest_difference = 0.0f64;
@@ -342,9 +359,13 @@ fn device_gate<
         eprintln!(
             "{backend}, {}, p = {p}, every kind on the device ({}): relative L2 error of φ \
              {error_device:.4e} against the host's {error_host:.4e} (ratio {ratio:.6}), \
-             prediction {prediction:.2e}; outputs within {largest_difference:.1e} of the host",
+             prediction {}; outputs within {largest_difference:.1e} of the host; host and \
+             device built and evaluated {} times in {:.1?}",
             if f64_run { "f64" } else { "f32" },
-            layout
+            layout,
+            prediction.map_or("none".to_owned(), |e| format!("{e:.2e}")),
+            charges.len(),
+            start.elapsed()
         );
         if (ratio - 1.0).abs() > error_ratio {
             failures.push(format!(
@@ -357,7 +378,10 @@ fn device_gate<
                  {largest_difference:e}"
             ));
         }
-        if f64_run && error_device > 2.0 * prediction {
+        if let Some(prediction) = prediction
+            && f64_run
+            && error_device > 2.0 * prediction
+        {
             failures.push(format!(
                 "{backend}, p = {p}: {error_device:e} exceeds twice the prediction {prediction:e}"
             ));

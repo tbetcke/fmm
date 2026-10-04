@@ -142,13 +142,13 @@
 //!     again; the transfers, launches and syncs of each evaluation equal the formula of
 //!     docs/design/device-path.md §4.1 and §7.2; no evaluation moves points, views,
 //!     geometry or tables; and every view on the device equals the plan's;
-//!   - with the default placement (T9: every kind on the device, but M2L under `Rotation`
-//!     on the host fallback; `Classes` runs as dense on the device): the output within
-//!     the FMM bounds of the host output (1e-12 in f64, 1e-5 in f32), and so the
-//!     multipoles and locals of every level (relative L2 per level; on one rank the
-//!     root's multipole is the global pass's M2M), two evaluations bit-identical, and the
-//!     transfers of the formula with each device kind's fallback transfers replaced by
-//!     one launch per level call, three per chunk for M2M, L2L and M2L.
+//!   - with the default placement (T10: every kind on the device under every strategy;
+//!     `Classes` runs as dense on the device, `Rotation` M2L by the rotation kernel): the
+//!     output within the FMM bounds of the host output (1e-12 in f64, 1e-5 in f32), and
+//!     so the multipoles and locals of every level (relative L2 per level; on one rank
+//!     the root's multipole is the global pass's M2M), two evaluations bit-identical, and
+//!     the transfers of the formula with each device kind's fallback transfers replaced by
+//!     one launch per level call, three per chunk for M2M, L2L and dense M2L.
 //!
 //!   On several ranks the device build returns `DeviceNeedsOneRank` on every rank. The
 //!   test prints the backends it ran, and the largest differences, at the end.
@@ -252,7 +252,7 @@ fn backends_line() -> String {
             .map(|(backend, f32_runs, f64_runs, _, worst)| {
                 format!(
                     "{backend} ({f32_runs} f32 and {f64_runs} f64 scenarios: on the host \
-                     fallback bit for bit; with every kind on the device (M2L on the host \
+                     fallback bit for bit; with every kind on the device (M2L by rotation \
                      under Rotation) within the FMM bounds, largest relative L2 difference φ {:.1e} / ∇φ {:.1e}, per \
                      level multipoles {:.1e} (root, the global M2M: {:.1e}) / locals {:.1e} \
                      (f32); {:.1e} / {:.1e}, {:.1e} ({:.1e}) / {:.1e} (f64))",

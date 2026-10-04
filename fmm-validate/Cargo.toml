@@ -53,3 +53,10 @@ required-features = ["gpu"]
 [[example]]
 name = "m2l_kernels"
 required-features = ["gpu"]
+
+# The device rotation M2L against the dense M2L across p, its efficiency against the spike's
+# break-even values, and the M2L stage against the host rotation (Phase 4 T10): needs a
+# device backend; not run in CI (no templated-examples entry), run by hand on one rank.
+[[example]]
+name = "rotation_kernels"
+required-features = ["gpu"]

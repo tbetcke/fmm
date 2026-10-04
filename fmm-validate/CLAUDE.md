@@ -25,7 +25,10 @@ MPI: `mpi` from [workspace.dependencies]). Phase 3S: nd-fmm-simd. Phase 4: nd-fm
 operator; T8: the `translation_kernels` example, the M2M and L2L GEMM per level against
 the peak and the GEMM spike, with the gather and the accumulation; T9: the `m2l_kernels`
 example, the dense M2L per level, stage by stage, against the spike, structure (A) and
-the host operator, the C4.5 gate on the spike's shapes and the scratch-budget sweep).
+the host operator, the C4.5 gate on the spike's shapes and the scratch-budget sweep;
+T10: the `rotation_kernels` example, the device rotation M2L against the dense M2L per
+pair across p, its efficiency against the spike's break-even values, the M2L stage
+against the host rotation at 1 and 12 threads, and the rotation layouts).
 Later phases add the crates they validate.
 
 The only crate that depends on this one is the spike `spikes/p2p-simd` (Phase 3S T7),
