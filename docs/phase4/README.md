@@ -590,5 +590,5 @@ In the repository root, start `claude` and say:
 - [x] T12 merged: autotune with persistent cache; static fallback rule; choice resolved at build and reported
 - [x] Device leaf-size default decided (T13): the rule picked 64 on Metal f32 (128 only 1.9% faster, below 5%), so no device default is added; the host default stays 64
 - [x] External baselines: later / in T13: FMM3D only, in a later phase (decided 2026-10-04)
-- [ ] T13 merged: device benchmark report published
+- [x] T13 merged: device benchmark report published
 - [x] Design documents updated: laplace-fmm-plan §4, §6, §7 (Phase 4 status and numbers), §8.3, §9.1 and §9.2; workspace-structure §2, §3, §3.1, §5 and §6; device-path.md decisions and measurements recorded (T13, §17)
