@@ -8,8 +8,8 @@ the device path (`device`: `DeviceOperator`, its report and transfer accounting)
 Phase and components: Phase 3, C3.1–C3.3 and C3.5 (tasks T3 and T8–T11 in docs/phase3/);
 Phase 3S, C3S.5 (task T6 in docs/phase3s/); Phase 4, C4.1 (task T5 in docs/phase4/;
 design docs/design/device-path.md), C4.2 (task T6: P2P on the device), C4.3 (task
-T7: P2M, L2P, P2L and M2P on the device) and C4.4 (task T8: M2M and L2L on the device),
-with C4.5–C4.8 to follow.
+T7: P2M, L2P, P2L and M2P on the device), C4.4 (task T8: M2M and L2L on the device) and
+C4.5 (task T9: dense M2L on the device), with C4.6–C4.8 to follow.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -92,11 +92,19 @@ with C4.5–C4.8 to follow.
     (both passes) and L2L (`nd_fmm_kernels::translate::grouped` with the dense octant
     tables under every strategy, three launches per chunk, plans and scratch built at
     build, the GEMM by `FmmBuilder::device_gemm` and the chunks by
-    `device_scratch_budget`, reported in `DeviceReport::translations`); `host_fallback`
-    names a kind to keep it on the host. `tests/operator/device_leaf.rs` checks the four
-    leaf operators against `nd_fmm_ref::leaf` (p ≤ 20 in f64) and the host operator;
-    `tests/operator/device_translate.rs` checks M2M and L2L against `nd_fmm_ref::direct`
-    and the host operator's error (p ≤ 20 in f64, the sweep ignored). With a kind on the
+    `device_scratch_budget`, reported in `DeviceReport::translations`), and from T9 M2L
+    under `Dense` and `Classes` (the same grouped translation over the level's V view
+    and the 316 dense tables, `Classes` from `M2lClasses::expand` and reported as
+    "Classes, run as dense on the device"; `Rotation`'s M2L stays on the host fallback
+    until T10; under the default `DeviceGemm::Auto` M2L runs the hand-written GEMM, the
+    library only under `DeviceGemm::Library`, decided after T9's measurement);
+    `host_fallback` names a kind to keep it on the host.
+    `tests/operator/device_leaf.rs` checks the four leaf operators against
+    `nd_fmm_ref::leaf` (p ≤ 20 in f64) and the host operator;
+    `tests/operator/device_translate.rs` checks M2M and L2L, and
+    `tests/operator/device_m2l.rs` M2L for all 316 offsets on levels 2, 9 and 16, against
+    `nd_fmm_ref::direct` and the host operator's error (p ≤ 20 in f64, the sweeps
+    ignored). With a kind on the
     device the output agrees with the host path within the FMM bounds of
     docs/phase4/README.md, not bit for bit: `tests/device_common` checks both, every kind on the fallback bit for
     bit and the default within the bounds, with the transfer formula of each;

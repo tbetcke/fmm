@@ -30,6 +30,15 @@ Do:
   candidates that pass T9's input precision guard are registered: no library strategy
   that rounds f32 inputs to TF32, F16 or BF16 is ever timed or chosen, however fast it
   is.
+- **The coefficient-major GEMM layout** (deferred from T9 on 2026-10-04, README decision
+  12): a gather that writes X with each coefficient's values across the batch
+  contiguous, so that the library and the hand-written GEMM see the spike's orientation
+  (M = n, N = columns) instead of device-path.md §6.4's (M = columns, N = n), with the
+  reduction reading Y in the same layout. T9 measured the orientation alone at 71–84%
+  of the spike's for the library (spikes/cubecl-gemm, same process); its
+  `m2l_kernels` example is the baseline. Add it as a candidate layout for M2M, L2L and
+  M2L if it is faster, keeping the summation order inside each product fixed and
+  documented; it changes §6.4's layout, so record the outcome for the design update.
 - **Key**, per the design (device-path.md §10.2): backend, device name and compiler,
   precision, p and gradients; for the GEMM and layout choices the level's V (or
   octant) pairs bucketed to a power of two, and for the P2P layout the mean points per
@@ -54,8 +63,9 @@ Do:
     rejected and re-tuned, never trusted.
   - Without a directory, no tuning runs and the static rule applies.
 - **Static fallback rule** for an untuned key (README, "Strategy selection"):
-  - f32: dense, with the library GEMM where CMMA applies and the hand-written GEMM
-    otherwise;
+  - f32: dense; M2M and L2L with the library GEMM where CMMA applies and the
+    hand-written GEMM otherwise, M2L with the hand-written GEMM (README, "M2L
+    strategies", changed on 2026-10-04 after T9);
   - f64: dense for p ≤ 11 and rotation for p ≥ 12 (device-path.md §10.5).
 
   This rule is what f64 on CUDA gets, since nothing here can tune it. Document it as

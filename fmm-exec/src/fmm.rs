@@ -95,9 +95,10 @@
 //! fallback ([`OperatorKind`], [`Fmm::placement`]); with every kind there the output
 //! equals the host path's bit for bit. From Phase 4 T6 P2P runs on the device by
 //! default ([`DeviceP2pLayout`]), from T7 so do P2M, L2P, P2L and M2P
-//! ([`DeviceLeafLayout`]), and from T8 M2M (both passes) and L2L as grouped GEMMs
-//! ([`DeviceGemm`]); the output agrees with the host path's within the FMM bounds
-//! of docs/phase4/README.md. The `device` module (feature `gpu`)
+//! ([`DeviceLeafLayout`]), from T8 M2M (both passes) and L2L as grouped GEMMs
+//! ([`DeviceGemm`]), and from T9 M2L under `Dense` and `Classes` as grouped GEMMs over the
+//! 316 offsets; the output agrees with the host path's within the FMM bounds of
+//! docs/phase4/README.md. The `device` module (feature `gpu`)
 //! documents the residency, the transfers, the fallback, the errors and the threads
 //! rule; docs/design/device-path.md is the design.
 //!
@@ -281,19 +282,31 @@ pub enum DeviceLeafLayout {
     Cpu,
 }
 
-/// The GEMM of the device translations M2M and L2L ([`FmmBuilder::device_gemm`]; Phase 4
-/// T8, docs/design/device-path.md §6.4, §6.5). Every choice adds each target's products
-/// in row order and gives the same bits from evaluation to evaluation. Ignored by
-/// [`Backend::Host`].
+/// The GEMM of the device translations M2M, L2L and dense M2L ([`FmmBuilder::device_gemm`];
+/// Phase 4 T8 and T9, docs/design/device-path.md §6.4, §6.5). Every choice adds each
+/// target's products in row order and gives the same bits from evaluation to evaluation.
+/// Ignored by [`Backend::Host`].
 ///
 /// The enum exists without the `gpu` feature, as [`Backend`] does.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum DeviceGemm {
-    /// The rule of the design: the library matmul (CMMA, named explicitly) in f32 at
-    /// p ≥ 8 on a GPU where it accepts the level's shape and keeps f32 inputs, the
-    /// hand-written kernel otherwise; decided per level call at build and reported.
+    /// The default: for M2M and L2L the rule of the design, the library matmul (CMMA,
+    /// named explicitly) in f32 at p ≥ 8 on a GPU where it accepts the level's shape and
+    /// keeps f32 inputs, the hand-written kernel otherwise; for M2L the hand-written
+    /// kernel. Decided per level call at build and reported.
+    ///
+    /// M2L departs from the design's rule (decided after Phase 4 T9): its library GEMM
+    /// needs one shape per launch, so it pads each run of offsets to the run's widest
+    /// batch, and on the M3 Max only 44–66% of the padded columns were useful on the C3.2
+    /// cube and the Plummer sphere; there the hand-written kernel was faster on every
+    /// level the library took (for example 3.5 ms against 5.5 ms on the cube's level 4 at
+    /// p = 8). [`Library`](Self::Library) keeps the library M2L selectable.
     #[default]
     Auto,
+    /// The design's rule for every translation, M2L included: the library matmul in f32
+    /// at p ≥ 8 on a GPU where it accepts the level's shape and keeps f32 inputs, the
+    /// hand-written kernel otherwise.
+    Library,
     /// The hand-written kernel everywhere, in the backend's layout.
     HandWritten,
 }
@@ -722,8 +735,8 @@ impl<T> FmmBuilder<T> {
 
     /// Runs these operator kinds on the host fallback even with a device backend: a
     /// test aid (requirement 8 of docs/phase4/README.md). Kinds without a device kernel
-    /// yet fall back regardless; after Phase 4 T8 that is M2L. Ignored by
-    /// [`Backend::Host`].
+    /// yet fall back regardless; after Phase 4 T9 that is M2L under
+    /// [`M2lStrategy::Rotation`]. Ignored by [`Backend::Host`].
     pub fn host_fallback(mut self, kinds: impl IntoIterator<Item = OperatorKind>) -> Self {
         self.host_fallback = kinds.into_iter().collect();
         self
@@ -751,9 +764,9 @@ impl<T> FmmBuilder<T> {
         self
     }
 
-    /// Sets the GEMM of the device translations M2M and L2L ([`DeviceGemm`]; default
-    /// [`DeviceGemm::Auto`]). Fixed at build and reported by `Fmm::device_report`
-    /// (feature `gpu`). Ignored by [`Backend::Host`] and when both run on the host
+    /// Sets the GEMM of the device translations M2M, L2L and dense M2L ([`DeviceGemm`];
+    /// default [`DeviceGemm::Auto`]). Fixed at build and reported by `Fmm::device_report`
+    /// (feature `gpu`). Ignored by [`Backend::Host`] and when all three run on the host
     /// fallback.
     pub fn device_gemm(mut self, gemm: DeviceGemm) -> Self {
         self.device_gemm = gemm;
@@ -1655,9 +1668,9 @@ where
     }
 
     /// Returns where `kind` runs: on the host for [`Backend::Host`]; with a device
-    /// backend as its device report says (after Phase 4 T8 every kind but M2L runs on
-    /// the device unless [`FmmBuilder::host_fallback`] names it, M2L on the host
-    /// fallback).
+    /// backend as its device report says (after Phase 4 T9 every kind runs on the device
+    /// unless [`FmmBuilder::host_fallback`] names it, but M2L under
+    /// [`M2lStrategy::Rotation`], which runs on the host fallback until T10).
     pub fn placement(&self, kind: OperatorKind) -> Placement {
         match self.evaluator.operator() {
             ExecOperator::Host(_) => {

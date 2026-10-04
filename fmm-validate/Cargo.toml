@@ -46,3 +46,10 @@ required-features = ["gpu"]
 [[example]]
 name = "translation_kernels"
 required-features = ["gpu"]
+
+# The device dense M2L per level, GEMM throughput against the spike and the C4.5 gate, the
+# stage against the host (Phase 4 T9): needs a device backend; not run in CI (no
+# templated-examples entry), run by hand on one rank.
+[[example]]
+name = "m2l_kernels"
+required-features = ["gpu"]

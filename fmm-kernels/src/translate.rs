@@ -1,6 +1,6 @@
-//! The grouped translations with dense tables (Phase 4 T8, C4.4; T9 adds dense M2L): one
-//! level's M2M, L2L or M2L as gathers, a grouped GEMM and a reduction or scatter-add
-//! (docs/design/device-path.md §6.4, §6.5).
+//! The grouped translations with dense tables (Phase 4 T8, C4.4: M2M and L2L; T9, C4.5:
+//! dense M2L): one level's M2M, L2L or M2L as gathers, a grouped GEMM and a reduction or
+//! scatter-add (docs/design/device-path.md §6.4, §6.5).
 //!
 //! # What a level call computes
 //!
@@ -14,7 +14,13 @@
 //! | --- | --- | --- | --- | --- |
 //! | M2M (either pass) | parents on l | children on l + 1 | octants | [`Rows`](Accumulate::Rows) |
 //! | L2L | children on l | the parent on l − 1 | octants | [`Scatter`](Accumulate::Scatter): one entry per row |
-//! | M2L (T9) | boxes on l | V-list sources on l | offsets | [`Rows`](Accumulate::Rows) |
+//! | M2L (T9) | boxes on l | V-list sources on l | the 316 offsets, in index order | [`Rows`](Accumulate::Rows) |
+//!
+//! The tables of a view ([`Tables`]) are uploaded once: the 8 octant matrices of M2M or
+//! L2L, or the 316 offset matrices of `M2lTables` (or of `M2lClasses::expand`), n² values
+//! each. A target meets each group at most once (a parent has one child per octant, a box
+//! one V-list source per offset), and a row's groups ascend, which for M2L is the offset
+//! order of every V row (requirement 4).
 //!
 //! # Structure (device-path.md §6.4, structure (B))
 //!
@@ -38,8 +44,15 @@
 //! No atomics anywhere: the GEMM writes distinct columns of Y, and only the reduction,
 //! which owns each target, or the scatter-add, whose targets are distinct, writes the
 //! output. Chunks run in ascending batch order and a row's entries ascend in group, so
-//! every target meets its entries in row order whichever chunks they fall in; the
-//! result does not depend on the budget (bit for bit).
+//! every target meets its entries in row order whichever chunks they fall in; with the
+//! hand-written GEMM the result does not depend on the budget (bit for bit). Batches
+//! without a column have no tile and no padded column, and a view without pairs launches
+//! nothing.
+//!
+//! **Structure (A)**, one gather, GEMM and scatter-add per group in group order
+//! ([`per_group`], [`PerGroupPlan`]), adds the same products in the same order into each
+//! target: it is the test reference of (B), bit for bit with the same GEMM, at three
+//! launches per group with a column (up to 948 per M2L level, against three per chunk).
 //!
 //! # The hand-written GEMM ([`GemmLayout`])
 //!
@@ -69,32 +82,43 @@
 //! Under [`GemmPolicy::Auto`], a view in f32 at p ≥ 8 (n ≥ 81) on a GPU backend tries
 //! `cubek-matmul` with the strategy named explicitly,
 //! `Strategy::MultiLevel(SimpleCyclicCmma)` (never the per-call `Strategy::Auto`,
-//! requirement 6; design §6.5). The library needs one shape per launch, so the batches are
-//! padded to the largest, k_max columns each: X and Y are [G, k_max, n] row-major
-//! (strides [k_max n, n, 1]) and the tables [G, n, n] (strides [n², n, 1]), one batched
-//! launch for the whole view (numpy-style batches, device-path.md F22). It is used only
-//! where, at build ([`GroupedPlan::new`]), decided by the shape alone:
-//! - the padded X and Y fit in the scratch budget, so the view is one chunk (the tables
-//!   are bound whole, from group 0; wgpu binds no unaligned offset);
-//! - a probe launch of that shape succeeds (`Unavailable` and every other setup error
-//!   send the view to the hand-written kernel);
-//! - **the input-precision guard**: the probe's resolved `MatmulElems` keep T for the
+//! requirement 6; design §6.5). The library needs one shape per launch, so each chunk is
+//! a run of contiguous groups padded to the run's widest batch, k columns each: X and Y
+//! are [G_c, k, n] row-major (strides [k n, n, 1]) and the tables [G_c, n, n] from the
+//! chunk's first group, one batched launch per chunk (numpy-style batches, device-path.md
+//! §6.4 and F22):
+//! - **chunks**: runs of groups from a group with a column to the last one with a column
+//!   whose padded width G_c k fits the budget's columns, in ascending group order; a group
+//!   wider than that alone, in pieces of the budget's columns. The padding columns gather
+//!   a valid source and their products are never read;
+//! - **tables**: the library reads the second copy of [`Tables`], with matrix g at g s and
+//!   s = n² rounded up to [`LIBRARY_TABLE_ALIGNMENT`] bytes ([`library_stride`]), so that
+//!   each chunk binds its first table at an aligned offset (wgpu binds storage buffers
+//!   only at aligned offsets; device-path.md F6). The hand-written kernel reads the
+//!   compact copy;
+//! - **a probe launch** of every chunk shape at build must succeed (`Unavailable` and every
+//!   other setup error send the view to the hand-written kernel);
+//! - **the input-precision guard**: each probe's resolved `MatmulElems` keep T for the
 //!   stage and register types of both inputs and of the accumulator. A strategy that
 //!   rounds f32 inputs to TF32, F16 or BF16 (as the accelerated routines do on a backend
 //!   that registers TF32, CUDA) is never used (docs/phase4/README.md, "M2L strategies").
+//!   The guard reads the resolved element types, never the backend's name; where a probe
+//!   fails, the guard cannot be established and the hand-written kernel runs.
 //!
-//! Otherwise the hand-written kernel runs. The choice is fixed per view at build and
-//! reported ([`GroupedPlan::gemm`], [`GroupedPlan::library_rejection`]). The library sums
-//! in its own tiles' order, fixed for a shape, device and driver (device-path.md §9.1); the
-//! padding columns gather a valid source and their products are never read.
+//! Otherwise the hand-written kernel runs, for the whole view. The choice is fixed per
+//! view at build and reported ([`GroupedPlan::gemm`], [`GroupedPlan::library_rejection`]).
+//! The library sums in its own tiles' order, fixed for a shape, device and driver
+//! (device-path.md §9.1).
 //!
 //! # Launch
 //!
-//! [`GroupedPlan::new`] validates the host arrays and builds the chunks, the tile schedule
-//! and (for the library) the padded gather indices, uploading each once.
-//! [`TranslationScratch`] holds X and Y, allocated once for every view. [`grouped`] runs a
-//! level call and allocates nothing; [`gemm`] runs one GEMM over a [`TileSchedule`], for
-//! tests and the per-group reference (structure (A) of the design).
+//! [`Tables::upload`] uploads a view's tables once (with the library copy where the policy
+//! may take the library). [`GroupedPlan::new`] validates the host arrays and builds the
+//! chunks, the tile schedule and (for the library) the padded gather indices, uploading
+//! each once. [`TranslationScratch`] holds X and Y, allocated once for every view.
+//! [`grouped`] runs a level call and allocates nothing; [`per_group`] runs structure (A);
+//! [`gemm`] runs one GEMM over a [`TileSchedule`] and [`library`] one library GEMM, for
+//! tests and reports.
 
 use std::fmt;
 use std::ops::Range;
@@ -132,6 +156,17 @@ pub const GEMM_COLUMNS_PER_UNIT: u32 = 4;
 
 /// The rows per block of the [`Cpu`](GemmLayout::Cpu) layout by default (at most n).
 pub const CPU_GEMM_BLOCK: u32 = 8;
+
+/// The alignment in bytes of each matrix of the library copy of [`Tables`]: 256, the
+/// largest storage-buffer offset alignment wgpu asks of a backend
+/// (`min_storage_buffer_offset_alignment`; 32 on Metal) and its default memory alignment.
+pub const LIBRARY_TABLE_ALIGNMENT: usize = 256;
+
+/// The values from one matrix of the library copy of [`Tables`] to the next: n² rounded
+/// up to [`LIBRARY_TABLE_ALIGNMENT`] bytes in `precision`.
+pub fn library_stride(n: usize, precision: Precision) -> usize {
+    (n * n).next_multiple_of(LIBRARY_TABLE_ALIGNMENT / value_bytes(precision))
+}
 
 /// The order of the tables, (p + 1)² for p up to the largest degree of the FMM.
 fn check_order(what: &str, n: usize) {
@@ -422,6 +457,106 @@ impl TileSchedule {
     }
 }
 
+/// The tables of grouped translations on the device, uploaded once (module documentation):
+/// `count` matrices of order n, matrix g at g n², column-major as `MatrixSet` stores them
+/// (CONVENTIONS §3.12, "Matrix layout"), which the hand-written kernel reads; and, where the
+/// library GEMM may run, a second copy with matrix g at g s, s = [`library_stride`] (zero
+/// padding between the matrices), which the library reads.
+#[derive(Debug)]
+pub struct Tables<T: DeviceFloat> {
+    compact: DeviceBuffer<T>,
+    library: Option<DeviceBuffer<T>>,
+    n: usize,
+    count: usize,
+}
+
+impl<T: DeviceFloat> Tables<T> {
+    /// Uploads the matrices of order n in `matrices` (matrix g at g n²), and with `library`
+    /// also the library copy: one upload, or two.
+    ///
+    /// # Errors
+    ///
+    /// As [`Device::upload`].
+    ///
+    /// # Panics
+    ///
+    /// If n is not an order 1 to 441, or `matrices` is not a whole number of matrices.
+    pub fn upload(
+        device: &mut Device,
+        matrices: &[T],
+        n: usize,
+        library: bool,
+    ) -> Result<Self, KernelError> {
+        check_order("Tables", n);
+        assert!(
+            matrices.len().is_multiple_of(n * n),
+            "Tables: {} values are not whole matrices of order {n}",
+            matrices.len()
+        );
+        let count = matrices.len() / (n * n);
+        let compact = device.upload(matrices)?;
+        let library = if library {
+            let stride = library_stride(n, T::FLOAT);
+            let mut padded = vec![T::from_int(0); count * stride];
+            for (g, matrix) in matrices.chunks_exact(n * n).enumerate() {
+                padded[g * stride..g * stride + n * n].copy_from_slice(matrix);
+            }
+            Some(device.upload(&padded)?)
+        } else {
+            None
+        };
+        Ok(Self {
+            compact,
+            library,
+            n,
+            count,
+        })
+    }
+
+    /// The bytes [`upload`](Self::upload) allocates for `count` matrices of order n.
+    pub fn bytes(n: usize, count: usize, library: bool) -> u64 {
+        Device::buffer_bytes::<T>(count * n * n)
+            + if library {
+                Device::buffer_bytes::<T>(count * library_stride(n, T::FLOAT))
+            } else {
+                0
+            }
+    }
+
+    /// The compact copy: matrix g at g n².
+    pub fn compact(&self) -> DeviceSlice<'_, T> {
+        self.compact.as_slice()
+    }
+
+    /// True if the library copy was uploaded.
+    pub fn has_library_copy(&self) -> bool {
+        self.library.is_some()
+    }
+
+    /// The order n of the matrices.
+    pub fn n(&self) -> usize {
+        self.n
+    }
+
+    /// The number of matrices.
+    pub fn count(&self) -> usize {
+        self.count
+    }
+
+    /// The library copy of the `groups` matrices from `first`, and its stride.
+    fn library_run(&self, first: usize, groups: usize) -> (DeviceSlice<'_, T>, usize) {
+        let stride = library_stride(self.n, T::FLOAT);
+        let copy = self
+            .library
+            .as_ref()
+            .expect("the tables have a library copy");
+        (
+            copy.slice(first * stride..(first + groups) * stride),
+            stride,
+        )
+    }
+}
+
 /// The gathered inputs X and the products Y of a chunk, allocated once and shared by
 /// every view of an FMM.
 #[derive(Debug)]
@@ -471,9 +606,15 @@ struct Chunk {
     entries: Range<usize>,
     /// Its columns of X and Y.
     width: usize,
-    /// The padded layout of the library: the columns per group, k_max (0: compact,
-    /// column c of the chunk is entry `entries.start + c`).
+    /// The padded layout of the library: the columns per group, the widest batch of the
+    /// chunk's groups (0: compact, column c of the chunk is entry `entries.start + c`).
     padded: usize,
+    /// The library's first group (0 for a compact chunk).
+    first_group: usize,
+    /// The library's batches: groups `first_group..first_group + groups`.
+    groups: usize,
+    /// The library's padded gather indices of the chunk, in the plan's padded sources.
+    sources: Range<usize>,
 }
 
 /// The facts of a chunk layout, computed on the host (module documentation): the chunks,
@@ -505,6 +646,9 @@ fn compact_layout(batch_offsets: &[u32], max_columns: usize) -> Layout {
             entries: start..end,
             width: end - start,
             padded: 0,
+            first_group: 0,
+            groups: 0,
+            sources: 0..0,
         });
         runs.push(segment);
         start = end;
@@ -517,13 +661,69 @@ fn compact_layout(batch_offsets: &[u32], max_columns: usize) -> Layout {
     }
 }
 
-/// The columns of a view's widest group, k_max.
-fn widest(batch_offsets: &[u32]) -> usize {
-    batch_offsets
-        .windows(2)
-        .map(|w| (w[1] - w[0]) as usize)
-        .max()
-        .unwrap_or(0)
+/// The library's padded chunks of `batch_offsets` with at most `max_columns` columns each
+/// (module documentation, "The library GEMM"): runs of contiguous groups, from a group with
+/// a column to the last one with a column, padded to the run's widest batch; a group wider
+/// than `max_columns` alone, in pieces. No tiles.
+fn library_layout(batch_offsets: &[u32], max_columns: usize) -> Layout {
+    let ngroups = batch_offsets.len() - 1;
+    let k = |g: usize| (batch_offsets[g + 1] - batch_offsets[g]) as usize;
+    let at = |g: usize| batch_offsets[g] as usize;
+    let mut chunks = Vec::new();
+    let mut sources = 0;
+    let mut g = 0;
+    while g < ngroups {
+        if k(g) == 0 {
+            g += 1;
+            continue;
+        }
+        if k(g) > max_columns {
+            let mut c = 0;
+            while c < k(g) {
+                let len = max_columns.min(k(g) - c);
+                chunks.push(Chunk {
+                    entries: at(g) + c..at(g) + c + len,
+                    width: len,
+                    padded: len,
+                    first_group: g,
+                    groups: 1,
+                    sources: sources..sources + len,
+                });
+                sources += len;
+                c += len;
+            }
+            g += 1;
+            continue;
+        }
+        let (first, mut last, mut widest) = (g, g, k(g));
+        for h in g + 1..ngroups {
+            let wider = widest.max(k(h));
+            if (h + 1 - first) * wider > max_columns {
+                break;
+            }
+            if k(h) > 0 {
+                (last, widest) = (h, wider);
+            }
+        }
+        let groups = last + 1 - first;
+        let width = groups * widest;
+        chunks.push(Chunk {
+            entries: at(first)..at(last + 1),
+            width,
+            padded: widest,
+            first_group: first,
+            groups,
+            sources: sources..sources + width,
+        });
+        sources += width;
+        g = last + 1;
+    }
+    let columns = chunks.iter().map(|c| c.width).max().unwrap_or(0);
+    Layout {
+        runs: vec![Vec::new(); chunks.len()],
+        chunks,
+        columns,
+    }
 }
 
 /// What a [`GroupedPlan`] for a view of these batches needs on the device at most,
@@ -563,27 +763,25 @@ impl PlanSettings {
     }
 
     /// Whether the policy lets a view in `precision` on `backend` try the library: f32,
-    /// p ≥ 8, a GPU backend (module documentation).
-    fn library_candidate(&self, backend: BackendKind, precision: Precision) -> bool {
+    /// p ≥ 8, a GPU backend (module documentation). Its tables then need the library copy
+    /// ([`Tables::upload`] with `library`).
+    pub fn library_candidate(&self, backend: BackendKind, precision: Precision) -> bool {
         self.policy == GemmPolicy::Auto
             && precision == Precision::F32
             && self.n >= 81
             && backend.is_gpu()
     }
 
-    /// The padded width of a library chunk over `batch_offsets`, if the policy allows the
-    /// library and it fits the budget as one chunk.
-    fn library_width(
+    /// The library's padded layout over `batch_offsets`, if the policy lets the view try
+    /// the library and it has a pair.
+    fn library_layout(
         &self,
         backend: BackendKind,
         precision: Precision,
         batch_offsets: &[u32],
-    ) -> Option<usize> {
-        let width = (batch_offsets.len() - 1) * widest(batch_offsets);
-        (self.library_candidate(backend, precision)
-            && width > 0
-            && width <= self.max_columns(precision))
-        .then_some(width)
+    ) -> Option<Layout> {
+        (self.library_candidate(backend, precision) && *batch_offsets.last().unwrap() > 0)
+            .then(|| library_layout(batch_offsets, self.max_columns(precision)))
     }
 
     /// The size of a plan over `batch_offsets` for `backend` and `precision`, at most
@@ -596,11 +794,20 @@ impl PlanSettings {
     ) -> PlanSize {
         let compact = compact_layout(batch_offsets, self.max_columns(precision));
         let (tiles, _) = tiles_of(self.layout.tile(), &compact.runs);
-        let library = self.library_width(backend, precision, batch_offsets);
+        let library = self.library_layout(backend, precision, batch_offsets);
+        let padded = library
+            .as_ref()
+            .map_or(0, |l| l.chunks.last().map_or(0, |c| c.sources.end));
         PlanSize {
             bytes: Device::buffer_bytes::<u32>(tiles.len())
-                + library.map_or(0, Device::buffer_bytes::<u32>),
-            columns: compact.columns.max(library.unwrap_or(0)),
+                + if library.is_some() {
+                    Device::buffer_bytes::<u32>(padded)
+                } else {
+                    0
+                },
+            columns: compact
+                .columns
+                .max(library.map_or(0, |l: Layout| l.columns)),
         }
     }
 }
@@ -630,10 +837,9 @@ impl GroupedPlan {
     /// [`GroupedView`] was uploaded from; `sources_bound` the columns of the input) for
     /// tables of order `settings.n` in `T`, and uploads its index arrays (one or two
     /// uploads). With a library candidate (module documentation) it probes the library
-    /// with one launch of the view's padded shape, into `scratch` and the first groups
-    /// of `tables`, and keeps the library only if the launch succeeds and passes the
-    /// input-precision guard; [`library_rejection`](Self::library_rejection) says why not
-    /// otherwise.
+    /// with one launch of each distinct chunk shape, into `scratch` and the chunk's tables,
+    /// and keeps the library only if every launch succeeds and passes the input-precision
+    /// guard; [`library_rejection`](Self::library_rejection) says why not otherwise.
     ///
     /// # Errors
     ///
@@ -642,93 +848,72 @@ impl GroupedPlan {
     /// # Panics
     ///
     /// If the arrays are not a valid grouped view (as [`row_to_batch`]), n is not an order
-    /// 1 to 441, or a library candidate's `scratch` is shorter than
-    /// [`PlanSettings::size`] states or `tables` holds fewer than one matrix per group.
+    /// 1 to 441 or not the tables' order, `tables` holds fewer than one matrix per group,
+    /// or a library candidate's `scratch` is shorter than [`PlanSettings::size`] states.
     pub fn new<G: Copy + Into<u32>, T: DeviceFloat>(
         device: &mut Device,
         arrays: &GroupedArrays<'_, G>,
         sources_bound: usize,
         settings: &PlanSettings,
-        tables: DeviceSlice<'_, T>,
+        tables: &Tables<T>,
         scratch: &mut TranslationScratch<T>,
     ) -> Result<Self, KernelError> {
         let n = settings.n;
         check_order("GroupedPlan", n);
+        assert_eq!(tables.n, n, "GroupedPlan: tables of order {}", tables.n);
         // Validates the rows and batches (the map itself lives in the view).
         row_to_batch(arrays, sources_bound);
         let batch_offsets = arrays.batch_offsets;
         let ngroups = batch_offsets.len() - 1;
-        let compact = compact_layout(batch_offsets, settings.max_columns(T::FLOAT));
+        assert!(
+            tables.count >= ngroups,
+            "GroupedPlan: {} tables for {ngroups} groups",
+            tables.count
+        );
         let mut library_rejection = None;
-        let library = match settings.library_width(device.backend(), T::FLOAT, batch_offsets) {
-            Some(width) => {
-                check_owners(device, &[tables.device(), scratch.x.as_slice().device()])?;
+        let library = match settings.library_layout(device.backend(), T::FLOAT, batch_offsets) {
+            Some(layout) => {
+                check_owners(
+                    device,
+                    &[tables.compact().device(), scratch.x.as_slice().device()],
+                )?;
                 assert!(
-                    tables.len() >= ngroups * n * n,
-                    "GroupedPlan: {} table values for {ngroups} groups of order {n}",
-                    tables.len()
+                    scratch.len() >= layout.columns * n,
+                    "GroupedPlan: a scratch of {} values for {} columns of {n}",
+                    scratch.len(),
+                    layout.columns
                 );
-                assert!(
-                    scratch.len() >= width * n,
-                    "GroupedPlan: a scratch of {} values for {width} columns of {n}",
-                    scratch.len()
-                );
-                if tables.offset() != 0 {
-                    library_rejection = Some("the tables do not start their buffer".into());
-                    None
-                } else {
-                    let k_max = width / ngroups;
-                    let probe = library_gemm(
-                        device,
-                        (ngroups, k_max, n),
-                        tables,
-                        scratch.x.as_slice(),
-                        scratch.y.as_slice_mut(),
-                    );
-                    match probe {
-                        Ok(()) => Some(k_max),
-                        Err(reason) => {
-                            library_rejection = Some(reason);
-                            None
-                        }
-                    }
-                }
+                library_rejection = probe_library(device, &layout.chunks, n, tables, scratch);
+                library_rejection.is_none().then_some(layout)
             }
             None => None,
         };
-        let (gemm, chunks, runs, columns, padded_sources) = match library {
-            Some(k_max) => {
-                let width = ngroups * k_max;
-                // Each group's columns, then copies of a valid source up to k_max.
-                let filler = arrays.batch_sources[0];
-                let mut sources = vec![filler; width];
-                for (g, w) in batch_offsets.windows(2).enumerate() {
-                    let batch = &arrays.batch_sources[w[0] as usize..w[1] as usize];
-                    sources[g * k_max..g * k_max + batch.len()].copy_from_slice(batch);
+        let (gemm, layout, padded_sources) = match library {
+            Some(layout) => {
+                // Each group's columns of the chunk, then copies of a valid source up to the
+                // chunk's widest batch.
+                let mut sources = Vec::with_capacity(layout.chunks.last().unwrap().sources.end);
+                for chunk in &layout.chunks {
+                    let filler = arrays.batch_sources[chunk.entries.start];
+                    for g in chunk.first_group..chunk.first_group + chunk.groups {
+                        let lo = (batch_offsets[g] as usize).max(chunk.entries.start);
+                        let hi = (batch_offsets[g + 1] as usize).min(chunk.entries.end);
+                        sources.extend_from_slice(&arrays.batch_sources[lo..hi]);
+                        sources.extend(std::iter::repeat_n(filler, chunk.padded - (hi - lo)));
+                    }
+                    debug_assert_eq!(sources.len(), chunk.sources.end);
                 }
-                let chunk = Chunk {
-                    entries: 0..arrays.batch_sources.len(),
-                    width,
-                    padded: k_max,
-                };
-                (
-                    Gemm::Library,
-                    vec![chunk],
-                    vec![Vec::new()],
-                    width,
-                    Some(device.upload_indices(&sources)?),
-                )
+                let padded = device.upload_indices(&sources)?;
+                (Gemm::Library, layout, Some(padded))
             }
             None => (
                 Gemm::HandWritten(settings.layout),
-                compact.chunks,
-                compact.runs,
-                compact.columns,
+                compact_layout(batch_offsets, settings.max_columns(T::FLOAT)),
                 None,
             ),
         };
-        let widths = chunks.iter().map(|c| c.width).collect();
-        let tiles = TileSchedule::upload(device, settings.layout.tile(), &runs, widths)?;
+        let widths = layout.chunks.iter().map(|c| c.width).collect();
+        let tiles = TileSchedule::upload(device, settings.layout.tile(), &layout.runs, widths)?;
         Ok(Self {
             n,
             nrows: arrays.row_offsets.len() - 1,
@@ -737,10 +922,10 @@ impl GroupedPlan {
             sources_bound,
             precision: T::FLOAT,
             gemm,
-            chunks,
+            chunks: layout.chunks,
             tiles,
             padded_sources,
-            columns,
+            columns: layout.columns,
             library_rejection,
         })
     }
@@ -781,6 +966,51 @@ impl GroupedPlan {
     pub fn ntiles(&self) -> usize {
         self.tiles.len()
     }
+
+    /// The columns the GEMMs of a level call compute, over every chunk: the pairs with the
+    /// hand-written kernel; with the library also its padding columns, whose products are
+    /// never read (the useful share is [`len`](Self::len) over this).
+    pub fn gemm_columns(&self) -> usize {
+        self.chunks.iter().map(|c| c.width).sum()
+    }
+}
+
+/// Probes the library once per distinct (groups, columns per group) shape of `chunks`, at
+/// the first chunk of each shape, into the scratch; `None` if every probe launched and
+/// passed the input-precision guard, else why not.
+fn probe_library<T: DeviceFloat>(
+    device: &mut Device,
+    chunks: &[Chunk],
+    n: usize,
+    tables: &Tables<T>,
+    scratch: &mut TranslationScratch<T>,
+) -> Option<String> {
+    if !tables.has_library_copy() {
+        return Some("the tables have no library copy".into());
+    }
+    let mut probed: Vec<(usize, usize)> = Vec::new();
+    for chunk in chunks {
+        let shape = (chunk.groups, chunk.padded);
+        if probed.contains(&shape) {
+            continue;
+        }
+        probed.push(shape);
+        let (rhs, stride) = tables.library_run(chunk.first_group, chunk.groups);
+        let values = chunk.width * n;
+        if let Err(reason) = library_gemm(
+            device,
+            (chunk.groups, chunk.padded, n),
+            (rhs, stride),
+            scratch.x.slice(..values),
+            scratch.y.slice_mut(..values),
+        ) {
+            return Some(format!(
+                "[{}, {}, {n}] (groups, columns per group, order): {reason}",
+                chunk.groups, chunk.padded
+            ));
+        }
+    }
+    None
 }
 
 /// The input and output of a level call: in different buffers (M2L: multipoles to
@@ -834,9 +1064,9 @@ impl<T: DeviceFloat> Operands<'_, T> {
 
 /// One level call of a grouped translation (module documentation): adds, for every
 /// target t of `view`, A_g input[:, s] of each entry (s, g) of its row into output[:, t],
-/// in row order, through the chunks of `plan`, the tables `tables` (matrix g at g n²,
-/// column-major) and `scratch`. Three launches per chunk; nothing for a view without
-/// pairs. Allocates nothing.
+/// in row order, through the chunks of `plan`, the tables `tables` (matrix g for group g)
+/// and `scratch`. Three launches per chunk; nothing for a view without pairs. Allocates
+/// nothing.
 ///
 /// # Errors
 ///
@@ -848,18 +1078,87 @@ impl<T: DeviceFloat> Operands<'_, T> {
 /// # Panics
 ///
 /// If `plan` was not built for `view` (rows, groups, pairs or source bound differ) or for
-/// `T`, the tables hold fewer than one matrix per group, the input or output does not
-/// hold n values per column of the view, `scratch` is shorter than the plan needs, the
-/// two ranges of [`Operands::Shared`] overlap, or (debug builds) an
-/// [`Accumulate::Scatter`] chunk repeats a target.
+/// `T`, the tables are not of order n or hold fewer than one matrix per group (or, for a
+/// library plan, have no library copy), the input or output does not hold n values per
+/// column of the view, `scratch` is shorter than the plan needs, the two ranges of
+/// [`Operands::Shared`] overlap, or (debug builds) an [`Accumulate::Scatter`] chunk repeats
+/// a target.
 pub fn grouped<T: DeviceFloat>(
     device: &mut Device,
     plan: &GroupedPlan,
     view: &GroupedView,
     accumulate: Accumulate,
-    tables: DeviceSlice<'_, T>,
+    tables: &Tables<T>,
+    operands: Operands<'_, T>,
+    scratch: &mut TranslationScratch<T>,
+) -> Result<(), KernelError> {
+    level_call(
+        device,
+        (plan, view, accumulate),
+        tables,
+        operands,
+        scratch,
+        &Stage::ALL,
+    )
+}
+
+/// One launch of each chunk of a level call (module documentation, "Structure").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Stage {
+    /// 1. The gather of the chunk's inputs into X.
+    Gather,
+    /// 2. The grouped GEMM into Y.
+    Gemm,
+    /// 3. The reduction or scatter-add of Y into the output.
+    Accumulate,
+}
+
+impl Stage {
+    /// The three stages in the order of a level call.
+    pub const ALL: [Self; 3] = [Self::Gather, Self::Gemm, Self::Accumulate];
+}
+
+/// For profiling: the launch of `stage` for every chunk of a level call of [`grouped`]
+/// (same arguments, same checks), one launch per chunk; the other stages do not run, so
+/// the output means nothing unless the three run in a level call's order. Allocates
+/// nothing.
+///
+/// # Errors
+///
+/// As [`grouped`].
+///
+/// # Panics
+///
+/// As [`grouped`].
+#[allow(clippy::too_many_arguments)]
+pub fn grouped_stage<T: DeviceFloat>(
+    device: &mut Device,
+    plan: &GroupedPlan,
+    view: &GroupedView,
+    accumulate: Accumulate,
+    tables: &Tables<T>,
+    operands: Operands<'_, T>,
+    scratch: &mut TranslationScratch<T>,
+    stage: Stage,
+) -> Result<(), KernelError> {
+    level_call(
+        device,
+        (plan, view, accumulate),
+        tables,
+        operands,
+        scratch,
+        &[stage],
+    )
+}
+
+/// [`grouped`] with only the launches of `stages`.
+fn level_call<T: DeviceFloat>(
+    device: &mut Device,
+    (plan, view, accumulate): (&GroupedPlan, &GroupedView, Accumulate),
+    tables: &Tables<T>,
     mut operands: Operands<'_, T>,
     scratch: &mut TranslationScratch<T>,
+    stages: &[Stage],
 ) -> Result<(), KernelError> {
     let n = plan.n;
     assert_eq!(
@@ -894,10 +1193,15 @@ pub fn grouped<T: DeviceFloat>(
         );
     }
     assert!(
-        tables.len() >= plan.ngroups * n * n,
-        "grouped: {} table values for {} groups of order {n}",
-        tables.len(),
+        tables.n == n && tables.count >= plan.ngroups,
+        "grouped: {} tables of order {} for {} groups of order {n}",
+        tables.count,
+        tables.n,
         plan.ngroups
+    );
+    assert!(
+        plan.gemm != Gemm::Library || tables.has_library_copy(),
+        "grouped: a library plan needs the library copy of the tables"
     );
     assert!(
         scratch.len() >= plan.columns * n,
@@ -908,7 +1212,7 @@ pub fn grouped<T: DeviceFloat>(
     check_owners(
         device,
         &[
-            tables.device(),
+            tables.compact().device(),
             operands.input().device(),
             scratch.x.as_slice().device(),
         ],
@@ -922,24 +1226,27 @@ pub fn grouped<T: DeviceFloat>(
     for (index, chunk) in plan.chunks.iter().enumerate() {
         let values = chunk.width * n;
         // 1. Gather.
-        let sources = match &plan.padded_sources {
-            Some(padded) => padded.as_slice(),
-            None => view.batch_sources().slice(chunk.entries.clone()),
-        };
-        gather_columns(
-            device,
-            n,
-            operands.input(),
-            sources,
-            scratch.x.slice_mut(..values),
-        )?;
+        if stages.contains(&Stage::Gather) {
+            let sources = match &plan.padded_sources {
+                Some(padded) => padded.slice(chunk.sources.clone()),
+                None => view.batch_sources().slice(chunk.entries.clone()),
+            };
+            gather_columns(
+                device,
+                n,
+                operands.input(),
+                sources,
+                scratch.x.slice_mut(..values),
+            )?;
+        }
         // 2. The grouped GEMM.
         match plan.gemm {
+            _ if !stages.contains(&Stage::Gemm) => {}
             Gemm::HandWritten(layout) => gemm_segment(
                 device,
                 layout,
                 n,
-                tables,
+                tables.compact(),
                 &plan.tiles,
                 index,
                 scratch.x.slice(..values),
@@ -947,14 +1254,17 @@ pub fn grouped<T: DeviceFloat>(
             )?,
             Gemm::Library => library_gemm(
                 device,
-                (plan.ngroups, chunk.padded, n),
-                tables,
-                scratch.x.as_slice(),
-                scratch.y.as_slice_mut(),
+                (chunk.groups, chunk.padded, n),
+                tables.library_run(chunk.first_group, chunk.groups),
+                scratch.x.slice(..values),
+                scratch.y.slice_mut(..values),
             )
             .map_err(|reason| KernelError::Device { reason })?,
         }
         // 3. Accumulate.
+        if !stages.contains(&Stage::Accumulate) {
+            continue;
+        }
         match (accumulate, chunk.padded) {
             (Accumulate::Scatter, 0) => scatter_add_columns(
                 device,
@@ -972,6 +1282,238 @@ pub fn grouped<T: DeviceFloat>(
                 operands.output(),
             )?,
         }
+    }
+    Ok(())
+}
+
+/// The schedule of structure (A) for one grouped view, built once ([`per_group`]): per
+/// group its batch range and, for the hand-written kernel, its tiles (one segment per
+/// group, columns from 0).
+#[derive(Debug)]
+pub struct PerGroupPlan {
+    n: usize,
+    nrows: usize,
+    len: usize,
+    sources_bound: usize,
+    precision: Precision,
+    gemm: Gemm,
+    batch_offsets: Vec<u32>,
+    tiles: TileSchedule,
+    widest: usize,
+}
+
+impl PerGroupPlan {
+    /// Builds structure (A) of the grouped view with the host `arrays` (`sources_bound` the
+    /// columns of the input) for tables of order n in `T` with `gemm`, and uploads its tile
+    /// schedule (one upload). For [`Gemm::Library`] it probes each group's shape once, into
+    /// `scratch`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Device::upload`]; [`KernelError::UnsupportedLayout`] if the device cannot run
+    /// the hand-written layout, or for the library if the tables have no library copy or
+    /// a probe fails (the library's reason, or the input-precision guard's).
+    ///
+    /// # Panics
+    ///
+    /// As [`GroupedPlan::new`]; also if `scratch` holds fewer than n values per column of
+    /// the widest group.
+    pub fn new<G: Copy + Into<u32>, T: DeviceFloat>(
+        device: &mut Device,
+        arrays: &GroupedArrays<'_, G>,
+        sources_bound: usize,
+        n: usize,
+        gemm: Gemm,
+        tables: &Tables<T>,
+        scratch: &mut TranslationScratch<T>,
+    ) -> Result<Self, KernelError> {
+        check_order("PerGroupPlan", n);
+        assert_eq!(tables.n, n, "PerGroupPlan: tables of order {}", tables.n);
+        row_to_batch(arrays, sources_bound);
+        let batch_offsets = arrays.batch_offsets;
+        let ngroups = batch_offsets.len() - 1;
+        assert!(
+            tables.count >= ngroups,
+            "PerGroupPlan: {} tables for {ngroups} groups",
+            tables.count
+        );
+        let widths: Vec<usize> = batch_offsets
+            .windows(2)
+            .map(|w| (w[1] - w[0]) as usize)
+            .collect();
+        let widest = widths.iter().copied().max().unwrap_or(0);
+        assert!(
+            scratch.len() >= widest * n,
+            "PerGroupPlan: a scratch of {} values for {widest} columns of {n}",
+            scratch.len()
+        );
+        let refuse = |reason: String| KernelError::UnsupportedLayout {
+            layout: gemm.to_string(),
+            reason,
+        };
+        let (width, runs) = match gemm {
+            Gemm::HandWritten(layout) => {
+                layout.check(device.info())?;
+                let runs: Vec<Vec<(usize, usize, usize)>> = widths
+                    .iter()
+                    .enumerate()
+                    .map(|(g, &k)| vec![(g, 0, k)])
+                    .collect();
+                (layout.tile(), runs)
+            }
+            Gemm::Library => {
+                // One chunk per group with a column, from column 0, for the probe.
+                let chunks: Vec<Chunk> = widths
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &k)| k > 0)
+                    .map(|(g, &k)| Chunk {
+                        entries: 0..k,
+                        width: k,
+                        padded: k,
+                        first_group: g,
+                        groups: 1,
+                        sources: 0..k,
+                    })
+                    .collect();
+                if let Some(reason) = probe_library(device, &chunks, n, tables, scratch) {
+                    return Err(refuse(reason));
+                }
+                (1, vec![Vec::new(); ngroups])
+            }
+        };
+        let tiles = TileSchedule::upload(device, width, &runs, widths)?;
+        Ok(Self {
+            n,
+            nrows: arrays.row_offsets.len() - 1,
+            len: arrays.batch_sources.len(),
+            sources_bound,
+            precision: T::FLOAT,
+            gemm,
+            batch_offsets: batch_offsets.to_vec(),
+            tiles,
+            widest,
+        })
+    }
+
+    /// The GEMM it runs.
+    pub fn gemm(&self) -> Gemm {
+        self.gemm
+    }
+
+    /// The columns of the widest group: the scratch needs `columns() · n` values each.
+    pub fn columns(&self) -> usize {
+        self.widest
+    }
+
+    /// The groups with a column: each is three launches.
+    pub fn nonempty_groups(&self) -> usize {
+        self.batch_offsets
+            .windows(2)
+            .filter(|w| w[1] > w[0])
+            .count()
+    }
+}
+
+/// Structure (A) of device-path.md §6.4 (module documentation), the test reference of
+/// [`grouped`]: for each group g in group order with a column, one gather of its batch's
+/// inputs, one GEMM with table g (the plan's) and one scatter-add of the products into
+/// the batch's targets, which are distinct within a batch. Each target therefore meets its
+/// entries in row order and adds each product once, as in [`grouped`]. Three launches per
+/// group with a column. Allocates nothing.
+///
+/// # Errors
+///
+/// [`KernelError::WrongDevice`] if a buffer belongs to another device;
+/// [`KernelError::Device`] if a library launch fails (it passed its probe at build).
+///
+/// # Panics
+///
+/// As [`grouped`] (a batch that repeats a target panics in debug builds).
+pub fn per_group<T: DeviceFloat>(
+    device: &mut Device,
+    plan: &PerGroupPlan,
+    view: &GroupedView,
+    tables: &Tables<T>,
+    mut operands: Operands<'_, T>,
+    scratch: &mut TranslationScratch<T>,
+) -> Result<(), KernelError> {
+    let n = plan.n;
+    assert_eq!(
+        T::FLOAT,
+        plan.precision,
+        "per_group: a plan of another precision"
+    );
+    assert!(
+        view.nrows() == plan.nrows
+            && view.ngroups() + 1 == plan.batch_offsets.len()
+            && view.len() == plan.len
+            && view.sources_bound() == plan.sources_bound,
+        "per_group: the plan was built for another view"
+    );
+    let (input_len, output_len) = operands.lens();
+    assert!(
+        input_len == plan.sources_bound * n && output_len == plan.nrows * n,
+        "per_group: the input or output does not hold n = {n} values per column"
+    );
+    assert!(
+        tables.n == n && tables.count + 1 >= plan.batch_offsets.len(),
+        "per_group: the tables do not fit the plan"
+    );
+    assert!(
+        scratch.len() >= plan.widest * n,
+        "per_group: a scratch of {} values for {} columns of {n}",
+        scratch.len(),
+        plan.widest
+    );
+    check_owners(
+        device,
+        &[
+            tables.compact().device(),
+            operands.input().device(),
+            scratch.x.as_slice().device(),
+        ],
+    )?;
+    for (g, w) in plan.batch_offsets.windows(2).enumerate() {
+        let batch = w[0] as usize..w[1] as usize;
+        let values = batch.len() * n;
+        if values == 0 {
+            continue;
+        }
+        gather_columns(
+            device,
+            n,
+            operands.input(),
+            view.batch_sources().slice(batch.clone()),
+            scratch.x.slice_mut(..values),
+        )?;
+        match plan.gemm {
+            Gemm::HandWritten(layout) => gemm_segment(
+                device,
+                layout,
+                n,
+                tables.compact(),
+                &plan.tiles,
+                g,
+                scratch.x.slice(..values),
+                scratch.y.slice_mut(..values),
+            )?,
+            Gemm::Library => library_gemm(
+                device,
+                (1, batch.len(), n),
+                tables.library_run(g, 1),
+                scratch.x.slice(..values),
+                scratch.y.slice_mut(..values),
+            )
+            .map_err(|reason| KernelError::Device { reason })?,
+        }
+        scatter_add_columns(
+            device,
+            n,
+            scratch.y.slice(..values),
+            view.batch_targets().slice(batch),
+            operands.output(),
+        )?;
     }
     Ok(())
 }
@@ -1045,7 +1587,7 @@ pub fn library<T: DeviceFloat>(
         tables.len() >= groups * n * n && x.len() >= groups * k * n && y.len() >= groups * k * n,
         "library: the buffers are shorter than the shape [{groups}, {k}, {n}]"
     );
-    library_gemm(device, (groups, k, n), tables, x, y).map_err(|reason| {
+    library_gemm(device, (groups, k, n), (tables, n * n), x, y).map_err(|reason| {
         KernelError::UnsupportedLayout {
             layout: Gemm::Library.to_string(),
             reason,
@@ -1192,7 +1734,10 @@ fn gemm_segment<T: DeviceFloat>(
 /// The reduction of one chunk (module documentation): for every row t of the view and
 /// every coefficient i, `acc = output[t n + i]`, then for each entry e of row t in row
 /// order whose batch position k lies in the chunk, `acc = acc + y[col(e) n + i]`, and the
-/// value is stored if an entry was added. One launch.
+/// value is stored if an entry was added. col(e) is k − start for a compact chunk, and
+/// (g − g₀) k_c + k − max(start, b_g) for a padded one (group g of the entry, g₀ the
+/// chunk's first group, k_c its columns per group, b_g the group's first batch position).
+/// One launch.
 fn reduce_rows<T: DeviceFloat>(
     device: &mut Device,
     n: usize,
@@ -1222,7 +1767,8 @@ fn reduce_rows<T: DeviceFloat>(
     // view's pairs), and for a padded chunk the batch offset of the entry's group
     // (groups < ngroups, validated at upload). An entry is added only if its batch
     // position lies in the chunk, whose columns (compact: position − start; padded:
-    // (g − g0) k_max + position − batch offset, below the chunk's width) lie within y
+    // (g − g0) k_c + position − max(start, batch offset), with g in the chunk's groups
+    // and at most k_c entries of g in the chunk, so below the chunk's width) lie within y
     // (y.len() = width n). The output is read and written at its offset plus t n + i
     // < output.len() = nrows n (asserted by `grouped`); each unit owns its items.
     unsafe {
@@ -1241,6 +1787,7 @@ fn reduce_rows<T: DeviceFloat>(
             chunk.entries.start as u32,
             chunk.entries.end as u32,
             chunk.padded as u32,
+            chunk.first_group as u32,
             work as u32,
             grid.chunk,
             grid.threads(),
@@ -1252,36 +1799,39 @@ fn reduce_rows<T: DeviceFloat>(
 }
 
 /// The library GEMM of `shape` = (groups G, columns per group k, order n): Y[g] = X[g]
-/// Bᵀ[g] for the row-major [G, k, n] arrays x and y and the tables read as [G, n, n]
-/// row-major (module documentation, "The library GEMM"), with the input-precision guard.
-/// One launch; the error is the library's, or the guard's finding.
+/// Bᵀ[g] for the row-major [G, k, n] arrays x and y and the tables `rhs` = (tables,
+/// stride), matrix g at g · stride of the slice, read as [G, n, n] row-major (module
+/// documentation, "The library GEMM"), with the input-precision guard. Each operand is
+/// bound from its slice's first value: the callers pass slices at offset 0 or, for the
+/// tables' library copy, at an aligned offset. One launch; the error is the library's, or
+/// the guard's finding.
 fn library_gemm<T: DeviceFloat>(
     device: &mut Device,
     (groups, k, n): (usize, usize, usize),
-    tables: DeviceSlice<'_, T>,
+    (tables, stride): (DeviceSlice<'_, T>, usize),
     x: DeviceSlice<'_, T>,
     y: DeviceSliceMut<'_, T>,
 ) -> Result<(), String> {
-    debug_assert!(tables.len() >= groups * n * n && x.len() >= groups * k * n);
-    debug_assert!(y.len() >= groups * k * n && tables.offset() == 0);
-    debug_assert!(x.offset() == 0 && y.offset() == 0);
+    debug_assert!(stride >= n * n && tables.len() >= (groups - 1) * stride + n * n);
+    debug_assert!(x.len() >= groups * k * n && y.len() >= groups * k * n);
     let elem = T::elem_type_native();
     let strategy: Strategy = multi_level::Strategy::SimpleCyclicCmma(Default::default()).into();
-    let binding = |handle, strides: [usize; 3]| {
-        // SAFETY: the strides and shape [G, rows, n] describe at most the elements the
-        // buffer holds (asserted by the callers: tables ≥ G n², x and y ≥ G k n), from
-        // offset 0, so the library reads and writes within the buffer.
+    let binding = |handle, strides: [usize; 3], rows: usize| {
+        // SAFETY: each handle is restricted to its slice's bytes, and the strides and shape
+        // [G, rows, n] address at most (G − 1) strides[0] + (rows − 1) n + n values of it:
+        // for x and y G k n ≤ their lengths, for the tables (G − 1) stride + n² ≤ its
+        // length (asserted by the callers), so the library reads and writes within them.
         unsafe {
             TensorBinding::from_raw_parts(
                 handle,
                 Strides::from(strides),
-                Shape::from([groups, strides[0] / n, n]),
+                Shape::from([groups, rows, n]),
             )
         }
     };
-    let lhs = binding(x.binding().0, [k * n, n, 1]);
-    let rhs = binding(tables.binding().0, [n * n, n, 1]);
-    let out = binding(y.binding().0, [k * n, n, 1]);
+    let lhs = binding(x.byte_range_handle(), [k * n, n, 1], k);
+    let rhs = binding(tables.byte_range_handle(), [stride, n, 1], n);
+    let out = binding(y.byte_range_handle(), [k * n, n, 1], k);
     let mut dtypes = MatmulElems::from_single_dtype(elem);
     let result = launch_ref(
         &strategy,
@@ -1601,6 +2151,7 @@ fn reduce_kernel<F: Float>(
     k_first: u32,
     k_end: u32,
     padded: u32,
+    first_group: u32,
     work: u32,
     chunk: u32,
     threads: u32,
@@ -1627,7 +2178,11 @@ fn reduce_kernel<F: Float>(
                     let mut column = k - k_first;
                     if padded > 0 {
                         let g = groups[e] as usize;
-                        column = g * padded + k - batch_offsets[g] as usize;
+                        let mut first = batch_offsets[g] as usize;
+                        if first < k_first {
+                            first = k_first;
+                        }
+                        column = (g - first_group as usize) * padded + k - first;
                     }
                     acc += y[y_offset as usize + column * n + i];
                     added = true;
@@ -1726,37 +2281,86 @@ mod tests {
         };
         let offsets = [0, 3, 3, 10];
         let s = settings(81, GemmPolicy::Auto);
-        assert_eq!(
-            s.library_width(BackendKind::Metal, Precision::F32, &offsets),
-            Some(21)
+        assert!(s.library_candidate(BackendKind::Metal, Precision::F32));
+        assert!(!s.library_candidate(BackendKind::Metal, Precision::F64));
+        assert!(!s.library_candidate(BackendKind::Cpu, Precision::F32));
+        assert!(
+            !settings(64, GemmPolicy::Auto).library_candidate(BackendKind::Metal, Precision::F32)
         );
-        assert_eq!(
-            s.library_width(BackendKind::Metal, Precision::F64, &offsets),
-            None
+        assert!(
+            !settings(81, GemmPolicy::HandWritten)
+                .library_candidate(BackendKind::Metal, Precision::F32)
         );
-        assert_eq!(
-            s.library_width(BackendKind::Cpu, Precision::F32, &offsets),
-            None
-        );
-        assert_eq!(
-            settings(64, GemmPolicy::Auto).library_width(
-                BackendKind::Metal,
-                Precision::F32,
-                &offsets
-            ),
-            None
-        );
-        assert_eq!(
-            settings(81, GemmPolicy::HandWritten).library_width(
-                BackendKind::Metal,
-                Precision::F32,
-                &offsets
-            ),
-            None
+        // One chunk of the three groups padded to 7 columns each.
+        let layout = s
+            .library_layout(BackendKind::Metal, Precision::F32, &offsets)
+            .unwrap();
+        assert_eq!(layout.chunks.len(), 1);
+        assert_eq!(layout.columns, 21);
+        assert!(
+            s.library_layout(BackendKind::Metal, Precision::F32, &[0, 0, 0])
+                .is_none()
         );
         let size = s.size(BackendKind::Metal, Precision::F32, &offsets);
         assert_eq!(size.columns, 21);
         assert_eq!(size.bytes, 4 * (3 * 3 + 21));
+    }
+
+    /// The library's chunks: contiguous runs of groups from a group with a column to the
+    /// last with one, padded to the run's widest batch within the budget; a group wider
+    /// than the budget alone, in pieces.
+    #[test]
+    fn library_chunks_pad_runs_of_groups() {
+        // Groups of 0, 4, 2, 0, 3, 0, 9 and 0 columns.
+        let offsets = [0, 0, 4, 6, 6, 9, 9, 18, 18];
+        // (entries, first group, groups, columns per group, padded sources) per chunk.
+        type Summary = (Range<usize>, usize, usize, usize, Range<usize>);
+        let summary = |max: usize| -> Vec<Summary> {
+            library_layout(&offsets, max)
+                .chunks
+                .into_iter()
+                .map(|c| (c.entries, c.first_group, c.groups, c.padded, c.sources))
+                .collect()
+        };
+        // Everything fits: groups 1 to 6, six groups of 9 columns.
+        assert_eq!(summary(100), vec![(0..18, 1, 6, 9, 0..54)]);
+        // At most 16 columns: groups 1 to 4 (4 groups of 4); group 6 alone (9).
+        assert_eq!(
+            summary(16),
+            vec![(0..9, 1, 4, 4, 0..16), (9..18, 6, 1, 9, 16..25)]
+        );
+        // At most 4 columns: group 1 alone; group 2 alone (groups 2 to 4 would be three
+        // groups of 3); group 4 alone; group 6, wider than 4, in pieces of 4, 4 and 1.
+        assert_eq!(
+            summary(4),
+            vec![
+                (0..4, 1, 1, 4, 0..4),
+                (4..6, 2, 1, 2, 4..6),
+                (6..9, 4, 1, 3, 6..9),
+                (9..13, 6, 1, 4, 9..13),
+                (13..17, 6, 1, 4, 13..17),
+                (17..18, 6, 1, 1, 17..18),
+            ]
+        );
+        let layout = library_layout(&offsets, 4);
+        assert_eq!(layout.columns, 4);
+        assert!(layout.runs.iter().all(Vec::is_empty));
+        assert!(library_layout(&[0, 0, 0], 4).chunks.is_empty());
+    }
+
+    #[test]
+    fn library_strides_align_every_matrix() {
+        assert_eq!(library_stride(81, Precision::F32), 6592);
+        assert_eq!(library_stride(81, Precision::F64), 6592);
+        assert_eq!(library_stride(16, Precision::F32), 256);
+        assert_eq!(library_stride(1, Precision::F64), 32);
+        for n in [1, 4, 81, 169, 441] {
+            for precision in [Precision::F32, Precision::F64] {
+                let bytes = library_stride(n, precision) * value_bytes(precision);
+                assert_eq!(bytes % LIBRARY_TABLE_ALIGNMENT, 0);
+                assert!(library_stride(n, precision) >= n * n);
+            }
+        }
     }
 
     /// The guard rejects a strategy whose resolved inputs or accumulator lose precision:

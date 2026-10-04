@@ -30,9 +30,9 @@
 //! error with `Auto` lies within 1% of the error with `Reference`, and every output of
 //! `Auto` within 1e-13 of that of `Reference` (relative L2 over all targets).
 //!
-//! Device path (Phase 4 T6, C4.2; T7, C4.3; T8, C4.4), with a backend feature: the same
-//! gate with the default placement (every kind but M2L on the device, M2L on the host
-//! fallback), on the CPU runtime in f64 at
+//! Device path (Phase 4 T6, C4.2; T7, C4.3; T8, C4.4; T9, C4.5), with a backend feature:
+//! the same gate with the default placement (every kind on the device; the gate's p ≤ 8
+//! resolves to `Dense`, so M2L runs as dense GEMMs), on the CPU runtime in f64 at
 //! p = 3 and 8 (feature `cpu`) and on Metal in f32 at p = 3 and 8 (feature `metal`, by
 //! hand outside the macOS sandbox). The device run's error lies within 0.1% (f64) or 5%
 //! (f32) of the host run's in the same precision (docs/phase4/README.md, "Accuracy
@@ -310,7 +310,7 @@ fn device_gate<
             .unwrap_or_else(|error| panic!("{backend}: the device FMM does not build: {error}"));
         let report = device.device_report().expect("a device backend");
         let layout = format!(
-            "P2P {}, leaf operators {}, M2M/L2L GEMM {} ({} of {} level calls on the library)",
+            "P2P {}, leaf operators {}, M2M/L2L/M2L GEMM {} ({} of {} level calls on the library)",
             report.p2p_layout,
             report.leaf_layout,
             report.gemm_layout,
@@ -340,7 +340,7 @@ fn device_gate<
         let (error_host, error_device) = (rms(&each_host), rms(&each_device));
         let ratio = error_device / error_host;
         eprintln!(
-            "{backend}, {}, p = {p}, every kind but M2L on the device ({}): relative L2 error of φ \
+            "{backend}, {}, p = {p}, every kind on the device ({}): relative L2 error of φ \
              {error_device:.4e} against the host's {error_host:.4e} (ratio {ratio:.6}), \
              prediction {prediction:.2e}; outputs within {largest_difference:.1e} of the host",
             if f64_run { "f64" } else { "f32" },

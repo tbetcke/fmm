@@ -1,5 +1,5 @@
-//! The device path against the host path (Phase 4 T5, C4.1; T6, C4.2; T7, C4.3; T8, C4.4),
-//! shared by
+//! The device path against the host path (Phase 4 T5, C4.1; T6, C4.2; T7, C4.3; T8, C4.4;
+//! T9, C4.5), shared by
 //! `tests/mpi_exec.rs` (the CPU runtime) and `tests/device_metal.rs` (Metal, ignored).
 //!
 //! [`check_backend`] builds an `Fmm` on a device backend at one thread twice, and checks,
@@ -18,11 +18,12 @@
 //!   row-to-batch maps point at the batch entry of each row entry, and the box and leaf
 //!   indices, point offsets and charge slots are those of the plan and the counts.
 //!
-//! With the default placement (T8): every kind but M2L on the device, M2L on the host
-//! fallback:
-//! - the seven kinds are placed on the device, with the backend's default P2P,
-//!   leaf-operator and GEMM layouts, and the report lists one M2M (local and global
-//!   pass) or L2L level call for each view with a pair, with its pairs and chunks;
+//! With the default placement (T9): every kind on the device, but M2L under `Rotation` on
+//! the host fallback ([`device_kinds`]):
+//! - the kinds are placed so, with the backend's default P2P, leaf-operator and GEMM
+//!   layouts, and the report lists one M2M (local and global pass), L2L or (under `Dense`
+//!   and `Classes`) M2L level call for each view with a pair, with its pairs and chunks,
+//!   and names the strategy as the device runs it ("Classes, run as dense on the device");
 //! - the output lies within the FMM bounds of the host output (docs/phase4/README.md,
 //!   "Accuracy measures"): relative L2 over all targets within 1e-12 (f64) or 1e-5
 //!   (f32), for φ and for ∇φ, for both charge vectors;
@@ -33,8 +34,9 @@
 //! - two evaluations of the first charges are bit-identical;
 //! - the transfers, launches and syncs of each evaluation equal the formula with the
 //!   fallback transfers of each device kind replaced by one launch per level call, or for
-//!   M2M and L2L three per chunk (gather, GEMM, reduction or scatter-add; device-path.md
-//!   §8.1).
+//!   M2M, L2L and M2L three per chunk (gather, GEMM, reduction or scatter-add;
+//!   device-path.md §8.1); with every kind on the device, an evaluation moves only the
+//!   charges and the output.
 //!
 //! On several ranks the device build returns `DeviceNeedsOneRank` on every rank instead
 //! (device-path.md §4.4), which [`check_backend`] checks and reports.
@@ -49,6 +51,7 @@ use nd_fmm_exec::fmm::{
     Backend, Fmm, FmmBuilder, FmmError, OperatorKind, Output, Placement, SettingsError,
 };
 use nd_fmm_exec::operator::SimdScalar;
+use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_kernels::Precision;
 use nd_fmm_kernels::leaf::LeafLayout;
 use nd_fmm_kernels::p2p::P2pLayout;
@@ -174,10 +177,10 @@ impl Expected {
 /// - launches: the three zero kernels of non-empty stores and the charge scatter if
 ///   there is a source; syncs: one per download.
 ///
-/// A kind in `on_device` (T6: P2P; T7: P2M, P2L, L2P, M2P; T8: M2M, L2L) moves nothing:
-/// each of its level calls is one launch instead of its downloads and uploads, or for M2M
-/// and L2L three launches per chunk, with the chunks of the device report (which this
-/// checks against the plan's views).
+/// A kind in `on_device` (T6: P2P; T7: P2M, P2L, L2P, M2P; T8: M2M, L2L; T9: M2L) moves
+/// nothing: each of its level calls is one launch instead of its downloads and uploads, or
+/// for M2M, L2L and M2L three launches per chunk, with the chunks of the device report
+/// (which this checks against the plan's views).
 pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
     fmm: &Fmm<'_, T>,
     on_device: &[OperatorKind],
@@ -263,9 +266,13 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
             }
         }
         if !lists.v().is_empty() {
-            e.down(multipoles, boxes(l));
-            e.down(locals, boxes(l));
-            e.up(locals, boxes(l));
+            if device(OperatorKind::M2l) {
+                e.launches += 3 * chunks(OperatorKind::M2l, None, l, lists.v().len());
+            } else {
+                e.down(multipoles, boxes(l));
+                e.down(locals, boxes(l));
+                e.up(locals, boxes(l));
+            }
         }
         if !lists.x().is_empty() {
             if device(OperatorKind::P2l) {
@@ -488,7 +495,7 @@ pub fn fmm_bound<T>() -> f64 {
 /// Builds `builder` on `backend` at one thread and checks it against the host path:
 /// `host` is the one-thread host `Fmm` of the same settings, `host_output` its output
 /// for `charges` (module documentation): first with every kind on the host fallback,
-/// then with the default placement ([`DEVICE_KINDS`] on the device). Returns what it did,
+/// then with the default placement ([`device_kinds`] on the device). Returns what it did,
 /// and the largest relative L2 differences of the default placement from the host path
 /// ([`Differences`]); panics on a failed check.
 pub fn check_backend<'o, T: Stored + SimdScalar + Equivalence + Default>(
@@ -524,16 +531,14 @@ pub fn check_backend<'o, T: Stored + SimdScalar + Equivalence + Default>(
     (outcome, difference)
 }
 
-/// The kinds the device runs by default after T8.
-pub const DEVICE_KINDS: [OperatorKind; 7] = [
-    OperatorKind::P2m,
-    OperatorKind::M2m,
-    OperatorKind::P2l,
-    OperatorKind::L2l,
-    OperatorKind::L2p,
-    OperatorKind::M2p,
-    OperatorKind::P2p,
-];
+/// The kinds the device runs by default after T9 under `strategy`: every kind, but M2L
+/// under `Rotation` (its device kernel follows in T10).
+pub fn device_kinds(strategy: M2lStrategy) -> Vec<OperatorKind> {
+    OperatorKind::ALL
+        .into_iter()
+        .filter(|&kind| kind != OperatorKind::M2l || strategy != M2lStrategy::Rotation)
+        .collect()
+}
 
 /// The worst relative L2 difference per level of the device's multipoles and locals
 /// from the host path's, after an evaluation of the same charges on both: (multipoles,
@@ -602,8 +607,9 @@ fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
         .build(sources, targets, comm)
         .unwrap_or_else(|error| panic!("{backend}: the FMM does not build: {error}"));
     let report = fmm.device_report().expect("a device backend");
+    let kinds = device_kinds(fmm.strategy());
     for kind in OperatorKind::ALL {
-        let want = if DEVICE_KINDS.contains(&kind) {
+        let want = if kinds.contains(&kind) {
             Placement::Device
         } else {
             Placement::Host
@@ -631,7 +637,30 @@ fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
         GemmLayout::default_for(&report.info, n),
         "{backend}: the default GEMM layout"
     );
-    let expected = expected_evaluation(&fmm, &DEVICE_KINDS);
+    let strategy_name = match fmm.strategy() {
+        M2lStrategy::Dense => "Dense",
+        M2lStrategy::Classes => "Classes, run as dense on the device",
+        _ => "Rotation, M2L on the host fallback",
+    };
+    assert_eq!(
+        report.strategy_name(),
+        strategy_name,
+        "{backend}: the strategy"
+    );
+    let m2l_calls = report.translations_of(OperatorKind::M2l).count();
+    let v_views = (0..fmm.nlevels())
+        .filter(|&l| !fmm.plan().level(l).v().is_empty())
+        .count();
+    assert_eq!(
+        m2l_calls,
+        if kinds.contains(&OperatorKind::M2l) {
+            v_views
+        } else {
+            0
+        },
+        "{backend}: one M2L report entry per V view with a pair"
+    );
+    let expected = expected_evaluation(&fmm, &kinds);
     let second: Vec<T> = charges.iter().rev().copied().collect();
     let host_second = host.evaluate(&second).expect("the host FMM evaluates");
     let bound = fmm_bound::<T>();

@@ -4,8 +4,8 @@ Purpose: every CubeCL (`#[cube]`) kernel of the FMM behind safe wrappers: backen
 selection and the f64 capability check, device buffers, the data movement primitives,
 the plan's views on the device (`view`, from T5), and (from T6) the operator kernels:
 P2P (`p2p`, T6), the leaf operators P2M, L2P, P2L and M2P (`leaf`, T7), the grouped
-translations M2M and L2L (`translate`, T8; dense M2L joins in T9), then rotation M2L
-(T10) (docs/design/device-path.md §3.1).
+translations M2M and L2L (`translate`, T8) and dense M2L (`translate`, T9), then rotation
+M2L (T10) (docs/design/device-path.md §3.1).
 Phase and components: Phase 4, C4.1 (T4, T5) and C4.2–C4.6 (T6–T10) in docs/phase4/.
 
 ## Rules
@@ -46,12 +46,18 @@ Phase and components: Phase 4, C4.1 (T4, T5) and C4.2–C4.6 (T6–T10) in docs/
   contributions in the plan's order; tests run every layout on every backend. Bit
   identity with the host does not apply (contraction, T3 rule 6): tests use the operator
   bounds.
-- Grouped translations (T8, `translate`): structure (B) of device-path.md §6.4. Per
-  level call and chunk (contiguous batch entries within the scratch budget, default
-  128 MB), three launches: `movement::gather_columns` in batch order, one grouped GEMM
-  over a tile schedule built at build (`TileSchedule`: group, first column, columns per
-  tile), and `Accumulate::Rows` (a reduction per target in row order, reading the view's
-  row-to-batch map; M2M, M2L) or `Accumulate::Scatter` (`scatter_add_columns`; L2L).
+- Grouped translations (T8, T9, `translate`): structure (B) of device-path.md §6.4, for
+  M2M and L2L (8 octant groups) and dense M2L (the 316 offsets in index order, `u16`
+  groups, multipoles and locals in separate buffers). Tables are uploaded once as
+  `Tables` (matrix g at g n²; with `library` also the library copy at 256-byte aligned
+  strides, `library_stride`). Per level call and chunk (contiguous batch entries within
+  the scratch budget, default 128 MB), three launches: `movement::gather_columns` in
+  batch order, one grouped GEMM over a tile schedule built at build (`TileSchedule`:
+  group, first column, columns per tile), and `Accumulate::Rows` (a reduction per target
+  in row order, reading the view's row-to-batch map; M2M, M2L) or `Accumulate::Scatter`
+  (`scatter_add_columns`; L2L). Structure (A) (`PerGroupPlan`, `per_group`: one gather,
+  GEMM and scatter-add per group with a column) is the test reference, bit for bit (B)
+  with the same GEMM; `grouped_stage` runs one stage of every chunk, for profiling.
   The hand-written GEMM (`GemmLayout`): `Cube { rows, columns, per_unit }` (one cube per
   tile; default on Metal and CUDA: up to 32 units along the rows, 64 in all, 4 columns
   per unit) and `Cpu { block, per_unit }` (one cube, units capped by
@@ -59,13 +65,17 @@ Phase and components: Phase 4, C4.1 (T4, T5) and C4.2–C4.6 (T6–T10) in docs/
   accumulator from zero, `fma` with k ascending, stored once (β = 0): bit for bit a host
   `mul_add` loop in that order, on Metal and the CPU runtime (T3 rule 6; tested). The
   library GEMM (`GemmPolicy::Auto`, f32, p ≥ 8, GPU only): `cubek-matmul`'s
-  `Strategy::MultiLevel(SimpleCyclicCmma)` named explicitly, on batches padded to the
-  widest ([G, k_max, n]), only if the view fits one chunk, a probe launch at build
-  succeeds and the resolved `MatmulElems` keep T for every stage and register type
-  (the input-precision guard); else the hand-written kernel, decided at build by the
-  shape alone (`GroupedPlan::gemm`, `library_rejection`). Chunks and layouts never
-  change the bits of the hand-written path (tested); do not change the summation order
-  without a sign-off.
+  `Strategy::MultiLevel(SimpleCyclicCmma)` named explicitly, one batched launch per
+  chunk: runs of contiguous groups padded to the run's widest batch ([G_c, k, n]; a
+  group wider than the budget in pieces), reading the library copy of the tables from
+  the chunk's first group (wgpu binds only aligned offsets), only if a probe launch of
+  every chunk shape succeeds at build and the resolved `MatmulElems` keep T for every
+  stage and register type (the input-precision guard; tested with lowered types); else
+  the hand-written kernel for the whole view, decided at build by the shape alone
+  (`GroupedPlan::gemm`, `library_rejection`, `gemm_columns` for the padding). Chunks and
+  layouts never change the bits of the hand-written path (tested); on Metal the library
+  measured bit for bit the hand-written kernel, across chunkings and against (A) (T9;
+  not assumed elsewhere). Do not change the summation order without a sign-off.
 - Generic over the float type (`DeviceFloat`: f32, f64) and comptime parameters (p, n,
   layouts); the backend is a run-time value (`BackendKind`, `Device`), never an
   `R: Runtime` type parameter (device-path.md §3.2). Every kernel runs on every runtime;
