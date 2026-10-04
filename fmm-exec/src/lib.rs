@@ -94,7 +94,7 @@
 //!   transfers; with every kind there the output equals the host path's bit for bit.
 //!   From Phase 4 T6 P2P runs on the device by default (`fmm::DeviceP2pLayout`), and
 //!   from T7 the leaf operators P2M, L2P, P2L and M2P (`fmm::DeviceLeafLayout`), and
-//!   from T8 M2M and L2L as grouped GEMMs (`fmm::DeviceGemm`);
+//!   from T8 M2M and L2L as grouped GEMMs (`fmm::DeviceGemm`), and from T9 dense M2L;
 //! - **determinism**: every launch and transfer is issued from the calling thread, in
 //!   order on one stream; two evaluations are bit-identical;
 //! - **errors**: device settings are refused at build with a

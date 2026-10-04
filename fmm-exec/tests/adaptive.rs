@@ -40,9 +40,9 @@
 //! error of the whole FMM lies within 1% of that with `Reference`, and its output within
 //! 1e-13 of the `Reference` output (relative L2 over all points).
 //!
-//! **Device path** (Phase 4 T6, C4.2; T7, C4.3; T8, C4.4), with a backend feature: the
-//! complete `Fmm` with the default placement (every kind but M2L on the device, M2L on
-//! the host fallback), on the CPU runtime in f64
+//! **Device path** (Phase 4 T6, C4.2; T7, C4.3; T8, C4.4; T9, C4.5), with a backend
+//! feature: the complete `Fmm` with the default placement (every kind on the device; at
+//! the gate's p ≤ 8 the strategy resolves to `Dense`, so M2L runs as dense GEMMs), on the CPU runtime in f64
 //! at every p of [`PS`] (feature `cpu`) and on Metal in f32 at p = 3 and 8 (feature
 //! `metal`, by hand outside the macOS sandbox), against the host `Fmm` in the same
 //! precision: the relative L2 error of φ at the sampled targets against the direct sum
@@ -674,7 +674,7 @@ fn device_gate<
         .unwrap_or_else(|error| panic!("{backend}: the device FMM does not build: {error}"));
     let report = fmm.device_report().expect("a device backend");
     let layout = format!(
-        "P2P {}, leaf operators {}, M2M/L2L GEMM {} ({} of {} level calls on the library)",
+        "P2P {}, leaf operators {}, M2M/L2L/M2L GEMM {} ({} of {} level calls on the library)",
         report.p2p_layout,
         report.leaf_layout,
         report.gemm_layout,
@@ -696,7 +696,7 @@ fn device_gate<
     let ratio = error_device / error_host;
     let difference = relative_l2(&device, &host);
     eprintln!(
-        "{name}, {backend}, {}, p = {p}, every kind but M2L on the device ({layout}): relative L2 error of φ \
+        "{name}, {backend}, {}, p = {p}, every kind on the device ({layout}): relative L2 error of φ \
          {error_device:.4e} against the host's {error_host:.4e} (ratio {ratio:.6}); output \
          within {difference:.1e} of the host's",
         if f64_run { "f64" } else { "f32" }

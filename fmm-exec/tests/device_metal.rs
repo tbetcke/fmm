@@ -1,4 +1,4 @@
-//! The device path on Metal (Phase 4 T5, C4.1; T6, T7, T8): f32 only, ignored, run by hand on the
+//! The device path on Metal (Phase 4 T5, C4.1; T6, T7, T8, T9): f32 only, ignored, run by hand on the
 //! M3 Max outside the macOS sandbox (Metal has no adapter inside it):
 //!
 //! ```text
@@ -11,7 +11,8 @@
 //! bit against the host path for two charge vectors and a repeat, the transfers of each
 //! evaluation against the formula of docs/design/device-path.md §4.1 and §7.2, nothing
 //! re-uploaded in an evaluation, and every view on the device against the plan's; and
-//! with the default placement (T8: every kind but M2L on the device), within 1e-5 of the
+//! with the default placement (T9: every kind on the device, but M2L under `Rotation`),
+//! within 1e-5 of the
 //! host output (relative L2), and so the multipoles and locals of every level, two
 //! evaluations bit for bit, and the transfers of the formula with those kinds on the
 //! device.
@@ -20,9 +21,10 @@
 //! Scenarios, f32 (Metal does no f64 arithmetic):
 //! - the uniform cube, N = 2,000, sources equal to targets, p = 4: `Dense`, `Classes` and
 //!   `Rotation` with gradients, and `Dense` without;
-//! - the uniform cube, N = 20,000, p = 8, gradients: M2M and L2L with the GEMM of
-//!   `DeviceGemm::Auto` (the library where it takes a level's shape; each level call's
-//!   GEMM printed) and with `DeviceGemm::HandWritten`;
+//! - the uniform cube, N = 20,000, p = 8, gradients: M2M, L2L and M2L with the GEMM of
+//!   `DeviceGemm::Auto` (M2M and L2L on the library where it takes a level's shape, M2L
+//!   hand-written), `DeviceGemm::Library` (M2L on the library too) and
+//!   `DeviceGemm::HandWritten`, each level call's GEMM printed;
 //! - an adaptive tree with W and X lists (a cloud and a dense blob), p = 3, eight points
 //!   per leaf, gradients off and on;
 //! - sources and targets disjoint by the parity of their level-2 cell, so that leaves
@@ -38,6 +40,7 @@
 
 use mpi::Threading;
 use mpi::traits::*;
+use nd_fmm_exec::device::Gemm;
 use nd_fmm_exec::fmm::{Backend, DeviceGemm, FmmBuilder, FmmError, OperatorKind, SettingsError};
 use nd_fmm_exec::tables::M2lStrategy;
 
@@ -104,7 +107,7 @@ fn scenario(
         match outcome {
             Outcome::Ran => format!(
                 "metal on the host fallback bit for bit ({} values), transfers as the \
-                 formula; every kind but M2L on the device within {:.1e} (φ) and {:.1e} \
+                 formula; the default placement within {:.1e} (φ) and {:.1e} \
                  (∇φ) of the host, relative L2; per level multipoles {:.1e} (root, the \
                  global M2M: {:.1e}), locals {:.1e}",
                 output_bits(&output).len(),
@@ -153,12 +156,17 @@ fn metal_device_path() {
         );
     }
 
-    // p = 8 (T8): M2M and L2L take the library GEMM where it accepts a level's shape, the
-    // hand-written kernel elsewhere (the report says which); and the hand-written kernel
-    // everywhere (`DeviceGemm::HandWritten`).
+    // p = 8 (T8, T9): under `DeviceGemm::Auto` M2M and L2L take the library GEMM where it
+    // accepts a level's shape and M2L runs the hand-written kernel; under
+    // `DeviceGemm::Library` M2L takes the library too (the report says where); and the
+    // hand-written kernel everywhere (`DeviceGemm::HandWritten`).
     let large = cube(&mut rng, 20_000);
     let q8 = charges(&mut rng, large.len());
-    for gemm in [DeviceGemm::Auto, DeviceGemm::HandWritten] {
+    for gemm in [
+        DeviceGemm::Auto,
+        DeviceGemm::Library,
+        DeviceGemm::HandWritten,
+    ] {
         let builder = FmmBuilder::<f32>::new(8).gradients(true).device_gemm(gemm);
         scenario(
             &format!("uniform cube, N = 20,000, p = 8, {gemm:?} GEMM"),
@@ -187,6 +195,14 @@ fn metal_device_path() {
                         .as_deref()
                         .map_or(String::new(), |r| format!("; library rejected: {r}"))
                 );
+            }
+            let m2l_library = report
+                .translations_of(OperatorKind::M2l)
+                .filter(|t| t.gemm == Gemm::Library)
+                .count();
+            match gemm {
+                DeviceGemm::Library => assert!(m2l_library > 0, "{gemm:?}: no M2L on the library"),
+                _ => assert_eq!(m2l_library, 0, "{gemm:?}: M2L on the library"),
             }
         }
     }

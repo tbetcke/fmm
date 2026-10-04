@@ -23,8 +23,10 @@ MPI: `mpi` from [workspace.dependencies]). Phase 3S: nd-fmm-simd. Phase 4: nd-fm
 (optional, feature `gpu`, from T6: the device P2P rows of `p2p_kernels`; T7: the
 `leaf_kernels` example, the device leaf operators per level against the host
 operator; T8: the `translation_kernels` example, the M2M and L2L GEMM per level against
-the peak and the GEMM spike, with the gather and the accumulation). Later phases add the
-crates they validate.
+the peak and the GEMM spike, with the gather and the accumulation; T9: the `m2l_kernels`
+example, the dense M2L per level, stage by stage, against the spike, structure (A) and
+the host operator, the C4.5 gate on the spike's shapes and the scratch-budget sweep).
+Later phases add the crates they validate.
 
 The only crate that depends on this one is the spike `spikes/p2p-simd` (Phase 3S T7),
 for the inputs of its green-kernels comparison; green-kernels itself never enters here.

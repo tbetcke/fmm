@@ -25,7 +25,7 @@
 use nd_fmm_kernels::movement::{gather_columns, scatter_add_columns};
 use nd_fmm_kernels::translate::{
     Accumulate, DEFAULT_SCRATCH_BYTES, Gemm, GemmLayout, GemmPolicy, GroupedPlan, Operands,
-    PlanSettings, TileSchedule, TranslationScratch, gemm, grouped,
+    PlanSettings, Tables, TileSchedule, TranslationScratch, gemm, grouped,
 };
 use nd_fmm_kernels::view::{GroupedArrays, GroupedView};
 use nd_fmm_kernels::{BackendKind, Device, DeviceBuffer, Precision};
@@ -422,7 +422,8 @@ impl<T: Real> Call<T> {
         repeat: bool,
     ) -> (Vec<T>, Gemm, usize) {
         let n = self.set.n();
-        let tables = device.upload(self.set.as_slice()).unwrap();
+        let library = settings.library_candidate(device.backend(), T::FLOAT);
+        let tables = Tables::upload(device, self.set.as_slice(), n, library).unwrap();
         let view = self.view.upload(device);
         let size = settings.size(device.backend(), T::FLOAT, &self.view.batch_offsets);
         let mut scratch = TranslationScratch::<T>::new(device, size.columns * n).unwrap();
@@ -431,7 +432,7 @@ impl<T: Real> Call<T> {
             &self.view.arrays(),
             self.view.nsources,
             settings,
-            tables.as_slice(),
+            &tables,
             &mut scratch,
         )
         .unwrap();
@@ -451,7 +452,7 @@ impl<T: Real> Call<T> {
                 &plan,
                 &view,
                 self.accumulate(),
-                tables.as_slice(),
+                &tables,
                 Operands::Shared {
                     buffer: &mut store,
                     input: input.clone(),
@@ -711,3 +712,6 @@ mod gpu {
     tests_on!(metal: gemm_on_metal, level_calls_equal_the_host_rows,
         grouped_equals_per_octant, library_level_call);
 }
+
+/// Dense M2L (T9, C4.5): level calls over V-list-shaped views of the 316 offsets.
+mod m2l;

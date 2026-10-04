@@ -200,7 +200,10 @@ These hold for every task, so that no task decides them on its own:
 - **M2L strategies on the device:**
   - `Dense`, the 316 offset tables as GEMM. The library matmul (CMMA) is used for f32
     at p ≥ 8 where CMMA is available, and the hand-written comptime-p kernel otherwise
-    and for every f64 run.
+    and for every f64 run. **Changed on 2026-10-04 (after T9's measurement):** by
+    default M2L runs the hand-written kernel at every p (the library pads each offset
+    chunk to its widest batch and was slower on every FMM level measured on Metal);
+    the library stays selectable as `DeviceGemm::Library`, and M2M and L2L keep the rule.
   - `Rotation`, the tables of `RotationTables` in a rotation kernel.
   - `Classes` is a host memory option. The device runs it as `Dense`, from
     `M2lClasses::expand`, and reports it as such; the host keeps its class tables for

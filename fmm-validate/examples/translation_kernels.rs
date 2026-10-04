@@ -53,7 +53,7 @@ use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_kernels::movement::gather_columns;
 use nd_fmm_kernels::translate::{
     Accumulate, DEFAULT_SCRATCH_BYTES, Gemm, GemmLayout, GemmPolicy, GroupedPlan, Operands,
-    PlanSettings, TileSchedule, TranslationScratch, gemm, grouped, library,
+    PlanSettings, Tables, TileSchedule, TranslationScratch, gemm, grouped, library,
 };
 use nd_fmm_kernels::view::{GroupedArrays, GroupedView};
 use nd_fmm_kernels::{BackendKind, Device, DeviceBuffer};
@@ -263,14 +263,29 @@ fn measure(
 ) -> Vec<Row> {
     let n = (p + 1) * (p + 1);
     let index = fmm.plan().index();
-    let m2m_tables = device
-        .upload(M2mTables::<f32>::build(p).matrices().as_slice())
-        .unwrap();
-    let l2l_tables = device
-        .upload(L2lTables::<f32>::build(p).matrices().as_slice())
-        .unwrap();
     let mut rng = SplitMix64::new(0x7e_8001);
     let layout = GemmLayout::default_for(device.info(), n);
+    let library_copy = PlanSettings {
+        n,
+        layout,
+        policy: GemmPolicy::Auto,
+        budget: DEFAULT_SCRATCH_BYTES,
+    }
+    .library_candidate(device.backend(), nd_fmm_kernels::Precision::F32);
+    let m2m_tables = Tables::upload(
+        device,
+        M2mTables::<f32>::build(p).matrices().as_slice(),
+        n,
+        library_copy,
+    )
+    .unwrap();
+    let l2l_tables = Tables::upload(
+        device,
+        L2lTables::<f32>::build(p).matrices().as_slice(),
+        n,
+        library_copy,
+    )
+    .unwrap();
     warm_up(device);
     let mut rows = Vec::new();
     for view in views(fmm) {
@@ -299,7 +314,7 @@ fn measure(
             &view.arrays(),
             inputs,
             &settings,
-            tables.as_slice(),
+            tables,
             &mut scratch,
         )
         .unwrap();
@@ -335,7 +350,7 @@ fn measure(
                 device,
                 layout,
                 n,
-                tables.as_slice(),
+                tables.compact(),
                 &schedule,
                 x.as_slice(),
                 y.as_slice_mut(),
@@ -370,7 +385,7 @@ fn measure(
                 library(
                     device,
                     (groups, k_max, n),
-                    tables.as_slice(),
+                    tables.compact(),
                     xp.as_slice(),
                     yp.as_slice_mut(),
                 )
@@ -418,7 +433,7 @@ fn measure(
                 &plan,
                 &device_view,
                 accumulate,
-                tables.as_slice(),
+                tables,
                 Operands::Shared {
                     buffer,
                     input: 0..inputs * n,

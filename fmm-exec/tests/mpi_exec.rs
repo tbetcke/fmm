@@ -142,13 +142,13 @@
 //!     again; the transfers, launches and syncs of each evaluation equal the formula of
 //!     docs/design/device-path.md §4.1 and §7.2; no evaluation moves points, views,
 //!     geometry or tables; and every view on the device equals the plan's;
-//!   - with the default placement (T8: every kind but M2L on the device, M2L on the host
-//!     fallback): the output within the FMM bounds of the host output (1e-12 in f64,
-//!     1e-5 in f32), and so the multipoles and locals of every level (relative L2 per
-//!     level; on one rank the root's multipole is the global pass's M2M), two
-//!     evaluations bit-identical, and the transfers of the formula with each device
-//!     kind's fallback transfers replaced by one launch per level call, three per chunk
-//!     for M2M and L2L.
+//!   - with the default placement (T9: every kind on the device, but M2L under `Rotation`
+//!     on the host fallback; `Classes` runs as dense on the device): the output within
+//!     the FMM bounds of the host output (1e-12 in f64, 1e-5 in f32), and so the
+//!     multipoles and locals of every level (relative L2 per level; on one rank the
+//!     root's multipole is the global pass's M2M), two evaluations bit-identical, and the
+//!     transfers of the formula with each device kind's fallback transfers replaced by
+//!     one launch per level call, three per chunk for M2M, L2L and M2L.
 //!
 //!   On several ranks the device build returns `DeviceNeedsOneRank` on every rank. The
 //!   test prints the backends it ran, and the largest differences, at the end.
@@ -158,8 +158,8 @@
 //!   CPU runtime, `threads(4)` builds no rayon pool and caps the units per cube at 4
 //!   (device-path.md §11), with the output of one unit bit for bit and within 1e-12 of
 //!   the host's; the cube layout of the leaf operators (up to 8 units, one per core,
-//!   tiles of up to 4 points) within 1e-12 of the host's too; M2M and L2L with a scratch
-//!   budget of one column per chunk (as many chunks as pairs) and with the hand-written
+//!   tiles of up to 4 points) within 1e-12 of the host's too; M2M, L2L and M2L with a
+//!   scratch budget of one column per chunk (as many chunks as pairs) and with the hand-written
 //!   GEMM bit for bit the default; `synchronous_stages` adds seven syncs (after the
 //!   charge upload and each stage) and changes no bit; on several ranks a device build with
 //!   points other ranks own returns `PointsNotOwned`, which wins over
@@ -252,8 +252,8 @@ fn backends_line() -> String {
             .map(|(backend, f32_runs, f64_runs, _, worst)| {
                 format!(
                     "{backend} ({f32_runs} f32 and {f64_runs} f64 scenarios: on the host \
-                     fallback bit for bit; with every kind but M2L on the device within the \
-                     FMM bounds, largest relative L2 difference φ {:.1e} / ∇φ {:.1e}, per \
+                     fallback bit for bit; with every kind on the device (M2L on the host \
+                     under Rotation) within the FMM bounds, largest relative L2 difference φ {:.1e} / ∇φ {:.1e}, per \
                      level multipoles {:.1e} (root, the global M2M: {:.1e}) / locals {:.1e} \
                      (f32); {:.1e} / {:.1e}, {:.1e} ({:.1e}) / {:.1e} (f64))",
                     worst[0][0],
@@ -2258,7 +2258,7 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
                     potential <= 1e-12,
                     "the cube leaf layout: {potential:e} from the host"
                 );
-                // The scratch budget of M2M and L2L (T8): with room for one column per
+                // The scratch budget of M2M, L2L and M2L (T8, T9): with room for one column per
                 // chunk, every level call runs in as many chunks as it has pairs (three
                 // launches each), with the same output bit for bit; and the hand-written
                 // GEMM, which the CPU runtime runs anyway, gives the same bits.
@@ -2277,7 +2277,7 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
                 assert_eq!(
                     output_bits(&chunked.evaluate(&charges).unwrap()),
                     want,
-                    "M2M and L2L in chunks of one column"
+                    "M2M, L2L and M2L in chunks of one column"
                 );
                 let mut hand = builder
                     .clone()
@@ -2302,7 +2302,7 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
                 let counters = synchronous.device_counters().unwrap().evaluation;
                 assert_eq!(counters.syncs, syncs + 7, "syncs of synchronous stages");
                 eprintln!(
-                    "rank {rank}: threads(4) with the CPU runtime: no pool; M2M and L2L in \
+                    "rank {rank}: threads(4) with the CPU runtime: no pool; M2M, L2L and M2L in \
                      chunks of one column ({calls} level calls) bit for bit; synchronous \
                      stages: {} syncs against {syncs}; {report}",
                     counters.syncs

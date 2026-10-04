@@ -38,9 +38,9 @@
 //! | target output | the `LeafStore` layout | never (zeroed) | once per evaluation, and by host-fallback calls |
 //! | plan views | one index buffer per array ([`DeviceViews`]) | once at build | never |
 //! | geometry | box and leaf indices ([`BoxCoordinates`], [`LeafCoordinates`]) | once at build | never |
-//! | tables | the dense octant tables of M2M and L2L; the dense M2L tables under `Dense`, expanded from the classes under `Classes` (§6.8) | once at build | never |
-//! | translation plans (T8) | per M2M and L2L level call on the device: the tile schedule of the hand-written GEMM, or the padded gather indices of the library GEMM | once at build | never |
-//! | translation scratch (T8) | the gathered inputs and products of the widest chunk, shared by every level call | never (allocated at build) | never |
+//! | tables | the dense octant tables of M2M and L2L; the dense M2L tables under `Dense`, expanded from the classes under `Classes` (§6.8); for a family whose level calls may take the library GEMM, also its library copy (matrices at 256-byte aligned strides) | once at build | never |
+//! | translation plans (T8, T9) | per M2M, L2L and M2L level call on the device: the tile schedule of the hand-written GEMM, or the padded gather indices of the library GEMM | once at build | never |
+//! | translation scratch (T8, T9) | the gathered inputs and products of the widest chunk, shared by every level call | never (allocated at build) | never |
 //!
 //! The rotation tables of M2L are not uploaded yet: the rotation kernel fixes their
 //! layout (T10). Before allocating, [`DeviceOperator::new`] sums the bytes of every
@@ -67,9 +67,9 @@
 //!
 //! Every operator kind can run on the host ([`OperatorKind`], [`Placement`]); a kind
 //! runs there if [`FmmBuilder::host_fallback`](crate::fmm::FmmBuilder::host_fallback)
-//! names it or no device kernel exists for it yet. **After T8, every kind but M2L has a
-//! device kernel** (next sections), so M2L runs on the host, and the device path moves
-//! its data exactly as it will until T9 and T10 replace it. A host-fallback level call
+//! names it or no device kernel exists for it yet. **After T9, every kind has a device
+//! kernel but M2L under `Rotation`** (next sections), which runs on the host until T10. A
+//! host-fallback level call
 //!
 //! 1. downloads its device inputs and its output region into host mirrors (exact
 //!    copies);
@@ -145,7 +145,7 @@
 //! default 128 MB); the chunks do not change the bits. The GEMM is fixed per level call at
 //! build ([`DeviceReport::translations`]): the hand-written kernel in the backend's layout
 //! ([`DeviceReport::gemm_layout`]), or, under
-//! [`DeviceGemm::Auto`] in f32 at p ≥ 8 on a GPU, the library
+//! [`DeviceGemm::Auto`] and [`DeviceGemm::Library`] in f32 at p ≥ 8 on a GPU, the library
 //! matmul (CMMA, named explicitly) where a probe at build accepts the level's shape and
 //! its element types keep f32 (the input-precision guard). The hand-written GEMM sums each
 //! product in a fixed order with explicit fmas and adds it into the output once, so the
@@ -154,6 +154,39 @@
 //! bit for bit; under `Rotation` the host's M2M and L2L are rotations, the device's dense.
 //! `host_fallback` with [`OperatorKind::M2m`] or [`OperatorKind::L2l`] restores the host
 //! operator.
+//!
+//! # Dense M2L on the device (T9)
+//!
+//! M2L runs on the device by default under `Dense` and `Classes`: per level the same
+//! grouped translation with the level's V view, grouped by the 316 offsets in index
+//! order, and the dense M2L tables (`M2lTables`, through `table_cache` when given; under
+//! `Classes` the 316 matrices of `M2lClasses::expand`, uploaded once and dropped on the
+//! host, which keeps its class tables for the fallback; [`DeviceReport::strategy_name`]
+//! says "Classes, run as dense on the device"; §6.8). Per chunk of offsets within the
+//! scratch budget: a gather of the source multipoles in batch order, one grouped GEMM and
+//! a reduction that adds each box's products into its local in row order, so each box
+//! meets its offsets in index order; three launches per chunk, no transfer. The GEMM is
+//! fixed per level at build ([`DeviceReport::translations`]): by default
+//! ([`DeviceGemm::Auto`]) the hand-written kernel at every p and precision, because the
+//! library's padding made it slower on every FMM level measured (see [`DeviceGemm`]);
+//! under [`DeviceGemm::Library`], in f32 at p ≥ 8 on a GPU, the library matmul (CMMA,
+//! named explicitly) where every chunk shape passes a probe and the input-precision
+//! guard, padded per chunk to its widest offset batch
+//! ([`TranslationReport::gemm_columns`]), and the hand-written kernel otherwise. The output
+//! agrees with the host path within the FMM bounds, not bit for bit (the GEMM adds each
+//! product into the local once, the host each term). Under `Rotation` M2L stays on the
+//! host fallback until T10; `host_fallback` with [`OperatorKind::M2l`] restores the host
+//! operator under every strategy.
+//!
+//! The 316 dense tables take 316 (p + 1)⁴ values on the device, in MB (10⁶ bytes); the
+//! library copy, uploaded only where the library may run (f32, p ≥ 8, a GPU, under
+//! [`DeviceGemm::Library`]), as much
+//! again (each matrix padded to 256 bytes):
+//!
+//! | p | 3 | 8 | 12 | 16 | 18 | 20 |
+//! | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+//! | f32 | 0.32 | 8.29 | 36.1 | 106 | 165 | 246 |
+//! | f64 | 0.65 | 16.6 | 72.2 | 211 | 329 | 492 |
 //!
 //! # Transfer accounting
 //!
@@ -233,7 +266,7 @@ use nd_fmm_kernels::leaf::{LeafLayout, SourceInputs, TargetInputs};
 use nd_fmm_kernels::movement::{scatter_values, zero};
 use nd_fmm_kernels::p2p::{P2pInputs, P2pLayout};
 use nd_fmm_kernels::translate::{
-    Accumulate, DEFAULT_SCRATCH_BYTES, GemmPolicy, GroupedPlan, Operands, PlanSettings,
+    Accumulate, DEFAULT_SCRATCH_BYTES, GemmPolicy, GroupedPlan, Operands, PlanSettings, Tables,
     TranslationScratch, grouped,
 };
 pub use nd_fmm_kernels::translate::{Gemm, GemmLayout};
@@ -330,7 +363,7 @@ pub enum DataKind {
     /// once per build.
     Points,
     /// The plan views, the point offsets of the leaf stores, the charge slots and the
-    /// plans of the device translations (T8): once per build.
+    /// plans of the device translations (T8, T9): once per build.
     Indices,
     /// The box and leaf indices: once per build.
     Geometry,
@@ -467,14 +500,16 @@ pub struct DeviceTable {
     pub bytes: u64,
 }
 
-/// One device level call of M2M or L2L (T8), fixed at build, for [`DeviceReport`].
+/// One device level call of M2M, L2L (T8) or M2L (T9), fixed at build, for
+/// [`DeviceReport`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TranslationReport {
-    /// [`OperatorKind::M2m`] or [`OperatorKind::L2l`].
+    /// [`OperatorKind::M2m`], [`OperatorKind::L2l`] or [`OperatorKind::M2l`].
     pub kind: OperatorKind,
-    /// The pass of an M2M call; `None` for L2L.
+    /// The pass of an M2M call; `None` for L2L and M2L.
     pub pass: Option<UpwardPass>,
-    /// The level of the call (of the parents for M2M, of the children for L2L).
+    /// The level of the call (of the parents for M2M, of the children for L2L, of the
+    /// targets and sources for M2L).
     pub level: usize,
     /// The pairs of the view.
     pub pairs: usize,
@@ -482,6 +517,10 @@ pub struct TranslationReport {
     pub gemm: Gemm,
     /// The chunks: three launches each.
     pub chunks: usize,
+    /// The columns the GEMMs compute over the chunks: the pairs with the hand-written
+    /// kernel, and with the library also its padding columns
+    /// ([`GroupedPlan::gemm_columns`]).
+    pub gemm_columns: usize,
     /// Why the library does not run where the rule would choose it
     /// ([`GroupedPlan::library_rejection`]).
     pub library_rejection: Option<String>,
@@ -498,7 +537,8 @@ pub struct DeviceReport {
     ///
     /// [`FmmBuilder::host_fallback`]: crate::fmm::FmmBuilder::host_fallback
     pub requested_fallback: Vec<OperatorKind>,
-    /// The resolved M2L strategy of the host operator.
+    /// The resolved M2L strategy of the host operator; [`strategy_name`](Self::strategy_name)
+    /// says how the device runs it.
     pub strategy: M2lStrategy,
     /// The table families on the device.
     pub tables: Vec<DeviceTable>,
@@ -518,15 +558,15 @@ pub struct DeviceReport {
     /// runtime and the cube layout on the GPUs
     /// ([`FmmBuilder::device_leaf_layout`](crate::fmm::FmmBuilder::device_leaf_layout)).
     pub leaf_layout: LeafLayout,
-    /// The layout of the hand-written GEMM of the device translations (T8), fixed at
+    /// The layout of the hand-written GEMM of the device translations (T8, T9), fixed at
     /// build for the FMM's degree: by default the CPU layout on the CPU runtime and the
     /// cube layout on the GPUs ([`GemmLayout::default_for`]).
     pub gemm_layout: GemmLayout,
-    /// The device level calls of M2M and L2L with a pair, in the order local M2M,
-    /// global M2M, L2L and by level: the GEMM and chunks of each (T8).
+    /// The device level calls of M2M, L2L and M2L with a pair, in the order local M2M,
+    /// global M2M, L2L, M2L and by level: the GEMM and chunks of each (T8, T9).
     pub translations: Vec<TranslationReport>,
     /// The bytes of the translation scratch: the gathered inputs and the products of
-    /// the widest chunk (T8).
+    /// the widest chunk (T8, T9).
     pub scratch_bytes: u64,
     /// The bytes of every buffer the operator allocates on the device.
     pub memory_needed: u64,
@@ -539,6 +579,26 @@ impl DeviceReport {
     /// Where `kind` runs.
     pub fn placement(&self, kind: OperatorKind) -> Placement {
         self.placement[kind as usize]
+    }
+
+    /// How the device runs the strategy (device-path.md §6.8): `Dense`, "Classes, run as
+    /// dense on the device" (the 316 tables of `M2lClasses::expand` on the device, the
+    /// class tables on the host for the fallback), or `Rotation`, whose M2L runs on the
+    /// host fallback until T10; with M2L on the host fallback by request, the strategy
+    /// and "M2L on the host fallback".
+    pub fn strategy_name(&self) -> String {
+        match (self.strategy, self.placement(OperatorKind::M2l)) {
+            (M2lStrategy::Dense, Placement::Device) => "Dense".to_owned(),
+            (M2lStrategy::Classes, Placement::Device) => {
+                "Classes, run as dense on the device".to_owned()
+            }
+            (strategy, _) => format!("{strategy:?}, M2L on the host fallback"),
+        }
+    }
+
+    /// The device level calls of `kind`.
+    pub fn translations_of(&self, kind: OperatorKind) -> impl Iterator<Item = &TranslationReport> {
+        self.translations.iter().filter(move |t| t.kind == kind)
     }
 }
 
@@ -558,8 +618,8 @@ impl fmt::Display for DeviceReport {
             .collect();
         writeln!(
             f,
-            "strategy {:?}; tables on the device: {}",
-            self.strategy,
+            "strategy {}; tables on the device: {}",
+            self.strategy_name(),
             if tables.is_empty() {
                 "none".to_owned()
             } else {
@@ -568,21 +628,30 @@ impl fmt::Display for DeviceReport {
         )?;
         writeln!(f, "P2P layout: {}", self.p2p_layout)?;
         writeln!(f, "leaf-operator layout: {}", self.leaf_layout)?;
-        if !self.translations.is_empty() {
-            let library = self
+        for (name, kinds) in [
+            ("M2M/L2L", &[OperatorKind::M2m, OperatorKind::L2l][..]),
+            ("M2L", &[OperatorKind::M2l][..]),
+        ] {
+            let calls: Vec<&TranslationReport> = self
                 .translations
                 .iter()
-                .filter(|t| t.gemm == Gemm::Library)
-                .count();
-            let chunks: usize = self.translations.iter().map(|t| t.chunks).sum();
+                .filter(|t| kinds.contains(&t.kind))
+                .collect();
+            if calls.is_empty() {
+                continue;
+            }
+            let library = calls.iter().filter(|t| t.gemm == Gemm::Library).count();
+            let chunks: usize = calls.iter().map(|t| t.chunks).sum();
             writeln!(
                 f,
-                "M2M/L2L: {} level calls in {chunks} chunks, the library GEMM in {library}, \
-                 the hand-written {} in the others; scratch {} B",
-                self.translations.len(),
+                "{name}: {} level calls in {chunks} chunks, the library GEMM in {library}, \
+                 the hand-written {} in the others",
+                calls.len(),
                 self.gemm_layout,
-                self.scratch_bytes
             )?;
+        }
+        if !self.translations.is_empty() {
+            writeln!(f, "translation scratch: {} B", self.scratch_bytes)?;
         }
         if let Some(units) = self.cpu_units {
             writeln!(f, "CPU runtime: at most {units} units per cube")?;
@@ -614,7 +683,8 @@ pub struct DeviceOptions {
     /// The layout of the device leaf operators (T7); [`DeviceLeafLayout::Auto`] by
     /// default.
     pub leaf_layout: DeviceLeafLayout,
-    /// The GEMM of the device translations (T8); [`DeviceGemm::Auto`] by default.
+    /// The GEMM of the device translations M2M, L2L and M2L (T8, T9); [`DeviceGemm::Auto`]
+    /// by default.
     pub gemm: DeviceGemm,
     /// The scratch budget of the device translations in bytes; `None` for
     /// [`DEFAULT_SCRATCH_BYTES`].
@@ -653,20 +723,23 @@ impl DeviceLeafLayout {
 }
 
 impl DeviceGemm {
-    /// The policy of `nd-fmm-kernels`' grouped translations.
-    fn policy(self) -> GemmPolicy {
-        match self {
-            Self::Auto => GemmPolicy::Auto,
-            Self::HandWritten => GemmPolicy::HandWritten,
+    /// The policy of `nd-fmm-kernels`' grouped translations of `kind`: under
+    /// [`Auto`](DeviceGemm::Auto) the library rule for M2M and L2L and the hand-written
+    /// kernel for M2L.
+    fn policy(self, kind: OperatorKind) -> GemmPolicy {
+        match (self, kind) {
+            (Self::Auto, OperatorKind::M2l) | (Self::HandWritten, _) => GemmPolicy::HandWritten,
+            (Self::Auto | Self::Library, _) => GemmPolicy::Auto,
         }
     }
 }
 
-/// The kinds with a device kernel (T6, T7, T8): on the device unless `host_fallback`
-/// names them.
-const DEVICE_KINDS: [OperatorKind; 7] = [
+/// The kinds with a device kernel (T6, T7, T8, T9): on the device unless `host_fallback`
+/// names them, M2L only under `Dense` and `Classes` (T9; `Rotation` from T10).
+const DEVICE_KINDS: [OperatorKind; 8] = [
     OperatorKind::P2m,
     OperatorKind::M2m,
+    OperatorKind::M2l,
     OperatorKind::P2l,
     OperatorKind::L2l,
     OperatorKind::L2p,
@@ -848,26 +921,24 @@ struct DeviceStores<T: DeviceFloat> {
     charges: DeviceBuffer<T>,
 }
 
-/// The translation tables on the device.
+/// The translation tables on the device, with their library copies where a level call may
+/// take the library GEMM (`nd_fmm_kernels::translate::Tables`).
 #[derive(Debug)]
 struct DeviceTables<T: DeviceFloat> {
-    m2m: DeviceBuffer<T>,
-    l2l: DeviceBuffer<T>,
-    /// The dense M2L tables, under `Dense` and `Classes`.
-    #[expect(
-        dead_code,
-        reason = "uploaded at build (T5), read by the kernels of T9"
-    )]
-    m2l: Option<DeviceBuffer<T>>,
+    m2m: Tables<T>,
+    l2l: Tables<T>,
+    /// The dense M2L tables, under `Dense` and `Classes` (expanded from the classes).
+    m2l: Option<Tables<T>>,
 }
 
-/// The plans of the device M2M and L2L level calls (T8), one per level and view (empty
-/// where the kind runs on the host), and their shared scratch.
+/// The plans of the device M2M, L2L (T8) and M2L (T9) level calls, one per level and view
+/// (empty where the kind runs on the host), and their shared scratch.
 #[derive(Debug)]
 struct Translations<T: DeviceFloat> {
     m2m_local: Vec<GroupedPlan>,
     m2m_global: Vec<GroupedPlan>,
     l2l: Vec<GroupedPlan>,
+    m2l: Vec<GroupedPlan>,
     scratch: TranslationScratch<T>,
 }
 
@@ -1049,6 +1120,29 @@ fn grouped_arrays<G: Copy + Into<usize>>(view: &GroupedCsr<G>) -> GroupedArrays<
     }
 }
 
+/// The plan of one grouped level call on the device (T8, T9), built through `link` as
+/// index data: `GroupedPlan::new` for the plan's `view` (octant or offset groups) with
+/// `sources_bound` input columns.
+fn build_plan<G: Copy + Into<usize> + Into<u32>, T: DeviceFloat>(
+    link: &mut Link,
+    view: &GroupedCsr<G>,
+    sources_bound: usize,
+    settings: &PlanSettings,
+    tables: &Tables<T>,
+    scratch: &mut TranslationScratch<T>,
+) -> Result<GroupedPlan, FmmError> {
+    link.build(DataKind::Indices, |d| {
+        GroupedPlan::new(
+            d,
+            &grouped_arrays(view),
+            sources_bound,
+            settings,
+            tables,
+            scratch,
+        )
+    })
+}
+
 /// A key's index on its level as `u32`.
 fn key_index(key: morton::MortonKey) -> (u32, [u32; 3]) {
     let (level, index) = morton::decode(key);
@@ -1134,71 +1228,86 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             .dense_m2l()
             .or(expanded.as_ref())
             .map(|tables| tables.matrices());
-        let mut tables_report = vec![
-            DeviceTable {
-                name: "M2M",
-                matrices: m2m.count(),
-                bytes: Device::buffer_bytes::<T>(m2m.as_slice().len()),
-            },
-            DeviceTable {
-                name: "L2L",
-                matrices: l2l.count(),
-                bytes: Device::buffer_bytes::<T>(l2l.as_slice().len()),
-            },
-        ];
-        if let Some(m2l) = m2l {
-            tables_report.push(DeviceTable {
-                name: if expanded.is_some() {
-                    "M2L (expanded from the classes)"
-                } else {
-                    "M2L"
-                },
-                matrices: m2l.count(),
-                bytes: Device::buffer_bytes::<T>(m2l.as_slice().len()),
-            });
-        }
 
         // The kinds with a device kernel run on the device unless `host_fallback` names
-        // them: P2P from T6, P2M, P2L, L2P and M2P from T7, M2M and L2L from T8; M2L
-        // follows in T9 and T10.
+        // them: P2P from T6, P2M, P2L, L2P and M2P from T7, M2M and L2L from T8, M2L under
+        // `Dense` and `Classes` from T9 (`Rotation`'s M2L follows in T10).
         let mut placement = [Placement::Host; 8];
         for kind in DEVICE_KINDS {
-            if !options.host_fallback.contains(&kind) {
+            if !options.host_fallback.contains(&kind)
+                && (kind != OperatorKind::M2l || m2l.is_some())
+            {
                 placement[kind as usize] = Placement::Device;
             }
         }
         let on_device = |kind: OperatorKind| placement[kind as usize] == Placement::Device;
 
-        // The plans of the device M2M and L2L level calls: their index buffers and the
-        // widest chunk, at most, before anything is allocated (T8).
+        // The settings of the device translations; a family whose level calls may take the
+        // library GEMM also gets the library copy of its tables (T8, T9).
         let backend = device.backend();
         let gemm_layout = GemmLayout::default_for(device.info(), n);
-        let plan_settings = PlanSettings {
+        let plan_settings = |kind: OperatorKind| PlanSettings {
             n,
             layout: gemm_layout,
-            policy: options.gemm.policy(),
+            policy: options.gemm.policy(kind),
             budget: options.scratch_budget.unwrap_or(DEFAULT_SCRATCH_BYTES),
         };
-        let translation_views = |kind: OperatorKind| -> Vec<&GroupedCsr<u8>> {
-            if !on_device(kind) {
-                return Vec::new();
-            }
-            plan.levels()
-                .iter()
-                .flat_map(|lists| match kind {
-                    OperatorKind::M2m => vec![lists.m2m_local(), lists.m2m_global()],
-                    _ => vec![lists.l2l()],
-                })
-                .collect()
+        let library = |kind: OperatorKind| {
+            on_device(kind) && plan_settings(kind).library_candidate(backend, T::FLOAT)
         };
+        let mut tables_report = Vec::new();
+        let mut table = |name: &'static str, set: &MatrixSet<T>, library: bool| {
+            tables_report.push(DeviceTable {
+                name,
+                matrices: set.count(),
+                bytes: Device::buffer_bytes::<T>(set.as_slice().len()),
+            });
+            if library {
+                tables_report.push(DeviceTable {
+                    name: match name {
+                        "M2M" => "M2M (library copy)",
+                        "L2L" => "L2L (library copy)",
+                        _ => "M2L (library copy)",
+                    },
+                    matrices: set.count(),
+                    bytes: Tables::<T>::bytes(n, set.count(), true)
+                        - Tables::<T>::bytes(n, set.count(), false),
+                });
+            }
+        };
+        table("M2M", m2m, library(OperatorKind::M2m));
+        table("L2L", l2l, library(OperatorKind::L2l));
+        if let Some(m2l) = m2l {
+            let name = if expanded.is_some() {
+                "M2L (expanded from the classes)"
+            } else {
+                "M2L"
+            };
+            table(name, m2l, library(OperatorKind::M2l));
+        }
+
+        // The plans of the device M2M, L2L and M2L level calls: their index buffers and the
+        // widest chunk, at most, before anything is allocated (T8, T9).
         let (mut plan_bytes, mut scratch_columns) = (0u64, 0usize);
-        for view in translation_views(OperatorKind::M2m)
-            .into_iter()
-            .chain(translation_views(OperatorKind::L2l))
-        {
-            let size = plan_settings.size(backend, T::FLOAT, view.batch_offsets());
-            plan_bytes += size.bytes;
-            scratch_columns = scratch_columns.max(size.columns);
+        for kind in [OperatorKind::M2m, OperatorKind::L2l, OperatorKind::M2l] {
+            if !on_device(kind) {
+                continue;
+            }
+            for lists in plan.levels() {
+                let offsets: Vec<&[u32]> = match kind {
+                    OperatorKind::M2m => vec![
+                        lists.m2m_local().batch_offsets(),
+                        lists.m2m_global().batch_offsets(),
+                    ],
+                    OperatorKind::L2l => vec![lists.l2l().batch_offsets()],
+                    _ => vec![lists.v().batch_offsets()],
+                };
+                for batch_offsets in offsets {
+                    let size = plan_settings(kind).size(backend, T::FLOAT, batch_offsets);
+                    plan_bytes += size.bytes;
+                    scratch_columns = scratch_columns.max(size.columns);
+                }
+            }
         }
         let scratch_bytes = TranslationScratch::<T>::bytes(scratch_columns * n);
 
@@ -1304,50 +1413,89 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             })?,
         };
 
+        let upload = |link: &mut Link, set: &MatrixSet<T>, library: bool| {
+            link.build(DataKind::Tables, |d| {
+                Tables::upload(d, set.as_slice(), n, library)
+            })
+        };
         let tables = DeviceTables {
-            m2m: link.build(DataKind::Tables, |d| d.upload(m2m.as_slice()))?,
-            l2l: link.build(DataKind::Tables, |d| d.upload(l2l.as_slice()))?,
+            m2m: upload(&mut link, m2m, library(OperatorKind::M2m))?,
+            l2l: upload(&mut link, l2l, library(OperatorKind::L2l))?,
             m2l: match m2l {
-                Some(m2l) => Some(link.build(DataKind::Tables, |d| d.upload(m2l.as_slice()))?),
+                Some(m2l) => Some(upload(&mut link, m2l, library(OperatorKind::M2l))?),
                 None => None,
             },
         };
 
-        // The scratch and the plans of the device translations (T8); a library candidate
-        // probes its shape here, so the choice is fixed before the first evaluation.
+        // The scratch and the plans of the device translations (T8, T9); a library
+        // candidate probes its shapes here, so the choice is fixed before the first
+        // evaluation.
         let mut scratch = link.build(DataKind::Points, |d| {
             TranslationScratch::<T>::new(d, scratch_columns * n)
         })?;
         gemm_layout
             .check(link.device.info())
             .map_err(device_error)?;
+        let bound = |level: usize| if level < nlevels { index.len(level) } else { 0 };
         let mut translation_report = Vec::new();
         let mut plans = |link: &mut Link,
                          kind: OperatorKind,
-                         pass: Option<UpwardPass>,
-                         tables: &DeviceBuffer<T>|
+                         pass: Option<UpwardPass>|
          -> Result<Vec<GroupedPlan>, FmmError> {
             if !on_device(kind) {
                 return Ok(Vec::new());
             }
+            let family = match kind {
+                OperatorKind::M2m => &tables.m2m,
+                OperatorKind::L2l => &tables.l2l,
+                _ => tables
+                    .m2l
+                    .as_ref()
+                    .expect("M2L on the device has its tables"),
+            };
+            let plan_settings = plan_settings(kind);
             let mut out = Vec::with_capacity(nlevels);
             for (level, lists) in plan.levels().iter().enumerate() {
-                let (view, bound) = match pass {
-                    Some(UpwardPass::Local) => (lists.m2m_local(), level + 1),
-                    Some(UpwardPass::Global) => (lists.m2m_global(), level + 1),
-                    None => (lists.l2l(), level.wrapping_sub(1)),
-                };
-                let sources_bound = if bound < nlevels { index.len(bound) } else { 0 };
-                let grouped_plan = link.build(DataKind::Indices, |d| {
-                    GroupedPlan::new(
-                        d,
-                        &grouped_arrays(view),
-                        sources_bound,
-                        &plan_settings,
-                        tables.as_slice(),
-                        &mut scratch,
-                    )
-                })?;
+                let grouped_plan = match (kind, pass) {
+                    (OperatorKind::M2m, Some(UpwardPass::Local)) => {
+                        let view = lists.m2m_local();
+                        build_plan(
+                            link,
+                            view,
+                            bound(level + 1),
+                            &plan_settings,
+                            family,
+                            &mut scratch,
+                        )
+                    }
+                    (OperatorKind::M2m, Some(UpwardPass::Global)) => {
+                        let view = lists.m2m_global();
+                        build_plan(
+                            link,
+                            view,
+                            bound(level + 1),
+                            &plan_settings,
+                            family,
+                            &mut scratch,
+                        )
+                    }
+                    (OperatorKind::L2l, None) => {
+                        let view = lists.l2l();
+                        let sources = bound(level.wrapping_sub(1));
+                        build_plan(link, view, sources, &plan_settings, family, &mut scratch)
+                    }
+                    _ => {
+                        let view = lists.v();
+                        build_plan(
+                            link,
+                            view,
+                            bound(level),
+                            &plan_settings,
+                            family,
+                            &mut scratch,
+                        )
+                    }
+                }?;
                 if !grouped_plan.is_empty() {
                     translation_report.push(TranslationReport {
                         kind,
@@ -1356,6 +1504,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                         pairs: grouped_plan.len(),
                         gemm: grouped_plan.gemm(),
                         chunks: grouped_plan.nchunks(),
+                        gemm_columns: grouped_plan.gemm_columns(),
                         library_rejection: grouped_plan.library_rejection().map(str::to_owned),
                     });
                 }
@@ -1363,23 +1512,15 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             }
             Ok(out)
         };
-        let m2m_local = plans(
-            &mut link,
-            OperatorKind::M2m,
-            Some(UpwardPass::Local),
-            &tables.m2m,
-        )?;
-        let m2m_global = plans(
-            &mut link,
-            OperatorKind::M2m,
-            Some(UpwardPass::Global),
-            &tables.m2m,
-        )?;
-        let l2l_plans = plans(&mut link, OperatorKind::L2l, None, &tables.l2l)?;
+        let m2m_local = plans(&mut link, OperatorKind::M2m, Some(UpwardPass::Local))?;
+        let m2m_global = plans(&mut link, OperatorKind::M2m, Some(UpwardPass::Global))?;
+        let l2l_plans = plans(&mut link, OperatorKind::L2l, None)?;
+        let m2l_plans = plans(&mut link, OperatorKind::M2l, None)?;
         let translations = Translations {
             m2m_local,
             m2m_global,
             l2l: l2l_plans,
+            m2l: m2l_plans,
             scratch,
         };
 
@@ -1830,11 +1971,46 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                 plan,
                 view,
                 accumulate,
-                table.as_slice(),
+                table,
                 Operands::Shared {
                     buffer,
                     input,
                     output,
+                },
+                scratch,
+            )
+        });
+    }
+
+    /// M2L of `level` on the device (T9): the grouped translation of the level's V view with
+    /// the 316 dense offset tables, from the multipoles into the locals of the level, three
+    /// launches per chunk (device-path.md §6.4).
+    fn m2l_on_device(&mut self, level: usize) {
+        let values = self.level_values(level..level + 1);
+        let Self {
+            translations,
+            views,
+            tables,
+            stores,
+            link,
+            ..
+        } = self;
+        let table = tables
+            .m2l
+            .as_ref()
+            .expect("M2L on the device has its tables");
+        let (plan, view) = (&translations.m2l[level], &views.levels[level].v);
+        let scratch = &mut translations.scratch;
+        link.run(DataKind::Output, |d| {
+            grouped(
+                d,
+                plan,
+                view,
+                Accumulate::Rows,
+                table,
+                Operands::Separate {
+                    input: stores.multipoles.slice(values.clone()),
+                    output: stores.locals.slice_mut(values),
                 },
                 scratch,
             )
@@ -1915,10 +2091,11 @@ impl<T: DeviceScalar> DeviceOperator<T> {
 }
 
 /// Every kind on the host fallback ([module documentation](self#host-fallback-7)):
-/// download, the host operator's own method on the mirrors, upload; P2M, P2L, L2P, M2P
-/// and P2P on the device unless they fall back ([module
+/// download, the host operator's own method on the mirrors, upload; every kind with a
+/// device kernel on the device unless it falls back ([module
 /// documentation](self#p2p-on-the-device-t6), [the leaf
-/// operators](self#the-leaf-operators-on-the-device-t7)).
+/// operators](self#the-leaf-operators-on-the-device-t7), [M2M and
+/// L2L](self#m2m-and-l2l-on-the-device-t8), [dense M2L](self#dense-m2l-on-the-device-t9)).
 impl<T: DeviceScalar> FmmOperator for DeviceOperator<T> {
     fn p2m(&mut self, batch: P2m<'_, T>) {
         let level = batch.level;
@@ -1971,9 +2148,13 @@ impl<T: DeviceScalar> FmmOperator for DeviceOperator<T> {
     }
 
     fn m2l(&mut self, batch: M2l<'_, T>) {
-        debug_assert_eq!(self.placement(OperatorKind::M2l), Placement::Host);
         let level = batch.level;
         if batch.pairs.is_empty() || !self.healthy() {
+            return;
+        }
+        if self.placement(OperatorKind::M2l) == Placement::Device {
+            debug_assert_eq!(batch.pairs.len(), self.translations.m2l[level].len());
+            self.m2l_on_device(level);
             return;
         }
         self.fetch_levels(Level::Multipoles, level..level + 1);
