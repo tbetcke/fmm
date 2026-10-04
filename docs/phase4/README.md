@@ -536,7 +536,7 @@ In the repository root, start `claude` and say:
 - [x] T5 merged: device path with full host fallback bit-identical to the host path; transfers counted
 - [x] T6 merged: device P2P within the contract on every backend run; timed against host NEON
 - [x] T7 merged: P2M, L2P, P2L and M2P within the operator bounds on levels 2, 9 and 16
-- [ ] T8 merged: M2M and L2L equal the C2.1 tables per level and octant, both passes
+- [x] T8 merged: M2M and L2L equal the C2.1 tables per level and octant, both passes
 - [ ] T9 merged: dense M2L equals C2.2; GEMM at least 80% of the spike's throughput; efficiency profiled
 - [ ] T10 merged: rotation M2L equals C2.3; timed against dense across p
 - [ ] T11 merged: every operator on the device; C4.8 gates on cube and Plummer; deterministic; minimal transfers
