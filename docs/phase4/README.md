@@ -551,7 +551,7 @@ In the repository root, start `claude` and say:
 - [x] T8 merged: M2M and L2L equal the C2.1 tables per level and octant, both passes
 - [x] T9 merged: dense M2L equals C2.2; GEMM at least 80% of the spike's throughput; efficiency profiled
 - [x] T10 merged: rotation M2L equals C2.3; timed against dense across p
-- [ ] T11 merged: every operator on the device; C4.8 gates on cube and Plummer; deterministic; minimal transfers
+- [x] T11 merged: every operator on the device; C4.8 gates on cube and Plummer; deterministic; minimal transfers
 - [ ] T12 merged: autotune with persistent cache; static fallback rule; choice resolved at build and reported
 - [ ] Device leaf-size default decided (T13)
 - [ ] External baselines: later / in T13
