@@ -46,7 +46,7 @@ use std::time::Duration;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::Equivalence;
 use nd_fmm_exec::fmm::{
-    Backend, BuildTimings, DeviceStage, DeviceStageTimings, Fmm, FmmBuilder, ListSizes,
+    Backend, BuildTimings, DeviceStage, DeviceStageTimings, Fmm, FmmBuilder, FmmError, ListSizes,
     OperatorKind, StageTimings,
 };
 use nd_fmm_exec::operator::{P2pChoice, SimdScalar};
@@ -252,7 +252,7 @@ pub struct DeviceRun {
 impl DeviceRun {
     /// What `fmm` runs on its device; `None` on the host.
     #[cfg(feature = "gpu")]
-    fn of<T: Stored + SimdScalar + Equivalence + Default>(fmm: &Fmm<'_, T>) -> Option<Self> {
+    pub fn of<T: Stored + SimdScalar + Equivalence + Default>(fmm: &Fmm<'_, T>) -> Option<Self> {
         use nd_fmm_exec::device::Gemm;
         use nd_fmm_exec::fmm::Placement;
         let (report, counters) = (fmm.device_report()?, fmm.device_counters()?);
@@ -306,7 +306,7 @@ impl DeviceRun {
 
     /// Without the `gpu` feature every run is on the host.
     #[cfg(not(feature = "gpu"))]
-    fn of<T: Stored + SimdScalar + Equivalence + Default>(_fmm: &Fmm<'_, T>) -> Option<Self> {
+    pub fn of<T: Stored + SimdScalar + Equivalence + Default>(_fmm: &Fmm<'_, T>) -> Option<Self> {
         None
     }
 }
@@ -483,16 +483,52 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
     (p, execution): (usize, Execution),
     comm: &SimpleCommunicator,
 ) -> Run {
-    let builder = FmmBuilder::<T>::new(p)
+    let builder = builder::<T>(config, p, execution);
+    measure(config, problem, charges, oracle, &builder, comm)
+        .unwrap_or_else(|error| panic!("the FMM does not build: {error}"))
+        .0
+}
+
+/// The settings of a [`run`]: `config`'s tree, degree `p` with gradients, and
+/// `execution`'s threads, P2P kernel and backend; every other setting at its default.
+pub fn builder<T>(config: &Config, p: usize, execution: Execution) -> FmmBuilder<T> {
+    FmmBuilder::<T>::new(p)
         .max_level(config.max_level)
         .max_points_per_leaf(config.max_points_per_leaf)
         .gradients(true)
         .threads(execution.threads)
         .p2p_kernel(execution.p2p)
-        .backend(execution.backend);
-    let mut fmm: Fmm<'_, T> = builder
-        .build(&problem.points, &problem.points, comm)
-        .unwrap_or_else(|error| panic!("the FMM does not build: {error}"));
+        .backend(execution.backend)
+}
+
+/// Builds the FMM of `builder` on `problem`, evaluates the charge vectors `charges` and
+/// measures the output against `oracle`, as [`run`] does with its own settings; returns
+/// the [`Run`] and the FMM, for further evaluations (the `device_fmm` benchmark, Phase 4
+/// T13). `builder` must have gradients on and `config`'s tree.
+///
+/// # Errors
+///
+/// The error of [`FmmBuilder::build`], for example a configuration that does not fit in
+/// the device's memory.
+///
+/// # Collective operation
+///
+/// On `comm`, which must have one rank: the points are not redistributed (C5.1).
+///
+/// # Panics
+///
+/// If the FMM does not evaluate, or was built without gradients.
+pub fn measure<'o, T: Stored + SimdScalar + Equivalence + Default>(
+    config: &Config,
+    problem: &'o Problem,
+    charges: &[Vec<T>],
+    oracle: &Oracle,
+    builder: &FmmBuilder<T>,
+    comm: &'o SimpleCommunicator,
+) -> Result<(Run, Fmm<'o, T>), FmmError> {
+    let mut fmm: Fmm<'o, T> = builder
+        .clone()
+        .build(&problem.points, &problem.points, comm)?;
     let counts = fmm.source_counts();
     let points_per_leaf = (
         counts.iter().copied().min().unwrap_or(0),
@@ -524,10 +560,10 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         (errors.iter().map(|e| f(e).powi(2)).sum::<f64>() / errors.len() as f64).sqrt()
     };
     let l2 = errors.iter().map(|e| e.0.l2);
-    Run {
+    let run = Run {
         distribution: config.distribution,
         precision: if size_of::<T>() == 4 { "f32" } else { "f64" },
-        p,
+        p: fmm.p(),
         strategy: fmm.strategy(),
         potential: ErrorNorms {
             l2: rms(&|e| e.0.l2),
@@ -550,9 +586,10 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         stages: mean(&stages),
         threading: fmm.threading().clone(),
         p2p: fmm.p2p_kernel(),
-        backend: execution.backend,
+        backend: fmm.backend(),
         device: DeviceRun::of(&fmm),
-    }
+    };
+    Ok((run, fmm))
 }
 
 /// The mean of each stage over `timings`.

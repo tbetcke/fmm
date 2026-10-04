@@ -9,6 +9,11 @@ adds the crate `nd-fmm-simd`, hand-written SIMD P2P kernels for the host
 ([simd-p2p.md](simd-p2p.md)), and a narrow exception to the unsafe rule for it.
 Revised at the end of Phase 3S (2026-10-03; Sections 3, 3.1 and 6): `nd-fmm-simd` is
 built and used by `nd-fmm-exec`, and `nd-fmm-validate` gains the P2P benchmarks.
+Revised at the end of Phase 4 (2026-10-04; Sections 2, 3, 3.1, 5 and 6): `nd-fmm-kernels`
+is built on CubeCL 0.11.0-pre.4, a workspace member but not a default member, tested on
+the CubeCL CPU runtime by its own CI job; `nd-fmm-exec` gains the device path behind the
+feature `gpu`, and `nd-fmm-validate` the device benchmarks
+([device-path.md](device-path.md)).
 
 Add seven new crates to the existing workspace, created phase by phase rather than all at
 once. The existing `nd-fmm-plan` crate is the integration layer. It already owns the
@@ -164,7 +169,7 @@ flowchart TB
   plan["nd-fmm-plan<br/>existing · lists, pass order, ghost exchange"]:::existing
   octree["nd-octree<br/>existing · mature"]:::existing
   tables["nd-fmm-tables<br/>Phase 2 · op. tables"]
-  kernels["nd-fmm-kernels<br/>Phase 4 · CubeCL"]
+  kernels["nd-fmm-kernels<br/>Phase 4 · CubeCL 0.11.0-pre.4; member, not default"]
   ref["nd-fmm-ref<br/>Phase 1 · f64 oracle"]
   math["nd-fmm-math<br/>Phase 0 · harmonics, rotation blocks, layout, RealScalar"]:::phase0
   validate["nd-fmm-validate<br/>Phase 1 · dev tooling; uses every crate"]
@@ -173,7 +178,7 @@ flowchart TB
   exec --> octree
   plan --> octree
   exec --> tables
-  exec --> kernels
+  exec -. "feature gpu" .-> kernels
   exec --> simd
   simd --> math
   tables --> ref
@@ -183,10 +188,17 @@ flowchart TB
   classDef phase0 stroke:#2b6cb0,stroke-width:2px
 ```
 
-`nd-fmm-math`, `nd-fmm-ref`, `nd-fmm-tables` and `nd-fmm-simd` stay free of MPI and of
-the octree, so Phases 0 to 2 and the kernel tests of Phase 3S build and test without an
-MPI runtime. `nd-fmm-exec` inherits the MPI
+`nd-fmm-math`, `nd-fmm-ref`, `nd-fmm-tables`, `nd-fmm-simd` and `nd-fmm-kernels` stay
+free of MPI and of the octree, so Phases 0 to 2 and the kernel tests of Phases 3S and 4
+build and test without an MPI runtime. `nd-fmm-exec` inherits the MPI
 requirement from `nd-fmm-plan` and `nd-octree`.
+
+*As built in Phase 4:* `nd-fmm-exec` depends on `nd-fmm-kernels` only through its
+optional feature `gpu` (the dashed arrow), and `nd-fmm-validate` the same way. Neither
+feature is on by default, and `nd-fmm-kernels` is a workspace member but not a default
+member (decision 7 of docs/phase4/README.md, signed off with T4). The default members and
+the root CI job therefore never build CubeCL; the CI job `run-tests-kernels` builds and
+tests `nd-fmm-kernels` alone on the CubeCL CPU runtime, without MPI.
 
 ## 3. Crate specifications
 
@@ -198,10 +210,10 @@ Each crate has one job and a public surface small enough to describe in a few li
 | `fmm-math` | `nd-fmm-math` | Phase 0 (done) | real solid harmonics and gradients, rotation blocks, index layout, scalar trait | `num-traits` |
 | `fmm-ref` | `nd-fmm-ref` | Phase 1 (done) | f64 reference operators (direct O(p⁴) and rotation O(p³)), P2P, direct-sum oracle | `nd-fmm-math`, `num-traits` |
 | `fmm-tables` | `nd-fmm-tables` | Phase 2 (done) | M2M/L2L (8 octants each), M2L (316 offsets, symmetry classes), rotation tables, versioned cache, later SVD compression | `nd-fmm-math`, `nd-fmm-ref`, `num-traits`, `thiserror` (cache errors); `rlst` (without its `mpi` feature) only with SVD compression (C6.2); no serialiser, as the cache writes its own little-endian format |
-| `fmm-exec` | `nd-fmm-exec` | Phase 3 (host, done), Phase 3S (SIMD P2P, done), Phase 4 (device) | the level-batched `FmmOperator` for Laplace (`LaplaceOperator`), box geometry from integer Morton keys, user-facing FMM object, M2L strategy selection, host threading, the choice of P2P kernel | as built in Phase 3: `nd-fmm-math`, `nd-fmm-ref`, `nd-fmm-tables`, `nd-fmm-plan`, `nd-octree`, `mpi` (feature `derive`), `rlst` (no features of its own; `nd-octree` enables `mpi`), `rayon`, `thiserror`; dev-dependency `proptest`. Phase 3S added `nd-fmm-simd`; Phase 4 adds `nd-fmm-kernels` (feature `gpu`) |
+| `fmm-exec` | `nd-fmm-exec` | Phase 3 (host, done), Phase 3S (SIMD P2P, done), Phase 4 (device, done) | the level-batched `FmmOperator` for Laplace (`LaplaceOperator`), box geometry from integer Morton keys, user-facing FMM object, M2L strategy selection, host threading, the choice of P2P kernel; behind `gpu` the device path (`DeviceOperator` with a host fallback per kind) and the autotune of its choices | as built in Phase 3: `nd-fmm-math`, `nd-fmm-ref`, `nd-fmm-tables`, `nd-fmm-plan`, `nd-octree`, `mpi` (feature `derive`), `rlst` (no features of its own; `nd-octree` enables `mpi`), `rayon`, `thiserror`; dev-dependency `proptest`. Phase 3S added `nd-fmm-simd`; Phase 4 added `nd-fmm-kernels` (optional, feature `gpu`; features `cpu`, `metal` and `cuda` enable `gpu` and the backend). No direct CubeCL dependency and no `unsafe` |
 | `fmm-simd` | `nd-fmm-simd` | Phase 3S (done) | hand-written SIMD kernels for the host path, P2P first: `core::arch` intrinsics for aarch64 NEON and x86_64 AVX2 + FMA (AVX-512 deferred), a scalar fallback, runtime ISA dispatch ([simd-p2p.md](simd-p2p.md)) | `nd-fmm-math`, `thiserror`; dev-dependencies `nd-fmm-ref`, `proptest`. No MPI, no external SIMD crate |
-| `fmm-kernels` | `nd-fmm-kernels` | Phase 4 | all `#[cube]` kernels; runtime-generic | `cubecl` (pinned), CubeCL matmul crate, `nd-fmm-math` (constants only) |
-| `fmm-validate` | `nd-fmm-validate` (`publish = false`) | Phase 1 (done), grows with each phase | error norms, point distributions, accuracy sweeps, the FMM accuracy reports and the calibration of p, benchmarks | all of the above, as dev tooling; in Phase 1 `nd-fmm-math` and `nd-fmm-ref`, in Phase 2 also `nd-fmm-tables`, in Phase 3 also `nd-fmm-exec` and `mpi` (so building it needs MPI), in Phase 3S also `nd-fmm-simd`. No library crate depends on it; the spike `spikes/p2p-simd` does (Phase 3S T7) |
+| `fmm-kernels` | `nd-fmm-kernels` | Phase 4 (done) | every `#[cube]` kernel behind safe wrappers: backends and the f64 capability check, device buffers, data movement, the plan's views on the device, P2P, the leaf operators, the grouped translations (M2M, L2L, dense M2L), rotation M2L, timing windows; every kernel on every runtime, the runtime a run-time value | `cubecl` =0.11.0-pre.4, `cubek-matmul` and `cubek-std` =0.3.0-pre.4 (the pinned workspace entries), `nd-fmm-math`, `thiserror`; dev-dependencies `nd-fmm-ref`, `nd-fmm-tables`, `proptest`. No MPI, no `nd-fmm-plan`, no rayon. Features `cpu`, `metal` (wgpu with the MSL compiler), `cuda` (type-checked only), none by default. A workspace member, not a default member |
+| `fmm-validate` | `nd-fmm-validate` (`publish = false`) | Phase 1 (done), grows with each phase | error norms, point distributions, accuracy sweeps, the FMM accuracy reports and the calibration of p, benchmarks | all of the above, as dev tooling; in Phase 1 `nd-fmm-math` and `nd-fmm-ref`, in Phase 2 also `nd-fmm-tables`, in Phase 3 also `nd-fmm-exec` and `mpi` (so building it needs MPI), in Phase 3S also `nd-fmm-simd`, in Phase 4 also `nd-fmm-kernels` (optional, feature `gpu`, with `cpu`, `metal` and `cuda` passed through). No library crate depends on it; the spike `spikes/p2p-simd` does (Phase 3S T7) |
 | `fmm-plan` | `nd-fmm-plan` (existing; rewritten in Phase 3) | before this plan; rewritten in Phase 3 (T4–T7) | kernel-agnostic plan of a distributed FMM: box index, lists, stores, ghost exchange, batched operator interface, evaluator | as built: `nd-octree`, `rlst` (feature `mpi`), `mpi` (feature `complex`, kept for complex-valued operators downstream), all from `[workspace.dependencies]`; dev-dependency `rand_chacha`. No rayon: threading lives in `nd-fmm-exec` |
 
 Dropped after scouting:
@@ -222,7 +234,10 @@ Outside the crates, Phase 0 also adds these folders:
   CubeCL.
 
 Phase 3S adds `spikes/p2p-simd/`, also outside the default members: the T2 spike and
-the T7 example `compare`, the only code that uses green-kernels.
+the T7 example `compare`, the only code that uses green-kernels. Phase 4 adds
+`spikes/device-arith/` (T3: device arithmetic per backend, and a CPU-shaped P2P on the
+CPU runtime against `nd-fmm-simd`), likewise outside the default members, and ports
+`spikes/cubecl-gemm/` to CubeCL 0.11.0-pre.4 (T2).
 
 ### 3.1 Public surface per crate
 
@@ -352,8 +367,31 @@ the T7 example `compare`, the only code that uses green-kernels.
   re-exports `Isa`, `IsaUnavailable` and `SimdScalar`, and `LaplaceOperator<T>` has
   the bound `T: SimdScalar`. P2P stays one kernel call per source leaf; the module
   has no `unsafe`.
-- As built in Phase 3 there is no backend parameter: the host path is the only one
-  until Phase 4 adds the device path behind the same operator interface.
+- As built in Phase 3 there was no backend parameter: the host path was the only one
+  until Phase 4 added the device path behind the same operator interface.
+- Phase 4 (T5–T12; feature `gpu`; [device-path.md](device-path.md) §3.3), with
+  `Backend::Host` the default and the host path unchanged without the feature:
+  - `fmm`: `Backend { Host, Cpu, Metal, Cuda }` (`FromStr`, `probe()`), `OperatorKind`,
+    `Placement`; `FmmBuilder::{backend, host_fallback, device_p2p_layout,
+    device_leaf_layout, device_gemm, device_scratch_budget, synchronous_stages,
+    device_timestamps, tuning_cache, tuning_budget, tuning_hook}` with
+    `DeviceP2pLayout`, `DeviceLeafLayout` and `DeviceGemm { Auto, Library, HandWritten }`;
+    `SettingsError::{BackendNotCompiled, NoDevice, PrecisionUnsupported, DeviceMemory,
+    DeviceNeedsOneRank}` and `FmmError::Device`; `Fmm::{backend, placement,
+    device_report, device_counters, download_device_views, expansions}`;
+    `BuildTimings::device`; `StageTimings::device` with `DeviceStage` and
+    `DeviceStageTimings` (T11).
+  - `device`: `DeviceOperator` (every kind on the device by default, a host fallback per
+    kind through the wrapped `LaplaceOperator`), `DeviceReport` (device, placement,
+    tables, layouts, the GEMM of every translation level call, memory, stage timing,
+    tuning), `DeviceCounters` with `Counters` and the traffic by kind of data
+    (`DataKind`, `Traffic`), `TranslationReport`, `RotationReport`, `StageTiming`,
+    `RotationHostArrays`.
+  - `tune` (T12): the strategy-level tuner and its cache (`TuningKey`, `TuningReport`,
+    `Decision`, `Candidate`, `Source`, `Timing`, `CacheState`, `TuningCache`, `Tuner`,
+    `TuningHook`), the static rule (`static_strategy`, `static_gemm`, `static_p2p`,
+    `STATIC_F64_DENSE_MAX_P` = 11), `CANDIDATE_SET_VERSION`.
+  - No direct CubeCL dependency and no `unsafe`: CubeCL only through `nd-fmm-kernels`.
 
 **`nd-fmm-plan`** (existing; rewritten in Phase 3, see Section 1.1)
 
@@ -394,11 +432,50 @@ the T7 example `compare`, the only code that uses green-kernels.
   `arch::{neon, avx2}::p2p_f{32,64}[_gradient]`; `unsafe` only there and in their
   dispatch. `tools/inner_loops.awk` counts the instructions of their inner loops.
 
-**`nd-fmm-kernels`**
+**`nd-fmm-kernels`** (Phase 4, T4–T12; MPI-free; as built, [device-path.md](device-path.md) §3.1)
 
-- One module per operator. Kernels are generic over `R: Runtime` and the float type, with
-  p as a comptime parameter.
-- Backend features `cuda`, `hip`, `wgpu` and `cpu`, forwarded by `nd-fmm-exec`.
+- The runtime is a run-time value, never an `R: Runtime` type parameter (CubeCL 0.11's
+  `Client` is not generic; device-path.md §3.2). `BackendKind { Cpu, Metal, Cuda }`,
+  `Device::open(kind)` (a Metal device that comes up without the MSL compiler is refused
+  as `NoDevice`), `DeviceInfo` (backend, compiler, name, CubeCL version, plane size,
+  precisions; one-line `Display`), `Precision`, the capability check `supports` /
+  `require` (f64 on Metal: `KernelError::UnsupportedPrecision`), `Counters` (transfers,
+  bytes, launches, syncs, timing windows), `limit_units` / `units_cap` (the CPU
+  runtime's units per cube, default `CPU_MAX_UNITS`), `available_memory`,
+  `open_window` / `close_window` / `times_on_device` and `WindowTime` (T11),
+  `CUBECL_VERSION` and `VERSION` (keys of the tuning cache, T12).
+- Buffers: `DeviceBuffer<E>` of f32, f64 or u32 (`DeviceElement`, `DeviceFloat`), with
+  `DeviceSlice` / `DeviceSliceMut`; `IndexBuffer` with one bound over the whole buffer,
+  checked before every unchecked launch. Round trips are bit for bit (−0, subnormals,
+  extremes, NaN payloads).
+- `movement`: `zero`, `gather_columns`, `gather_coefficients`, `scatter_add_columns`,
+  `scatter_values`; no atomics, distinct scatter indices per launch (checked in debug).
+- `view`: the plan's arrays on the device without an `nd-fmm-plan` dependency
+  (`IndexView`, `GroupedView` with its row-to-batch map, `BoxCoordinates`,
+  `LeafCoordinates`, `PointOffsets`), validated on the host at upload.
+- `p2p`: `p2p` (one launch per level call), `P2pLayout { Cube, Plane, Cpu }`,
+  `P2pInputs`, `near_frames`.
+- `leaf`: `p2m`, `p2l`, `l2p`, `m2p` (one launch per level call, p comptime up to
+  `MAX_DEGREE` = 20), `LeafLayout { Cube, Cpu }`, `SourceInputs`, `TargetInputs`,
+  `harmonics`, `x_frames`, `w_frames`.
+- `translate`: the grouped translation of device-path.md §6.4 (gather, one grouped GEMM,
+  row-ordered reduction or scatter-add, in chunks within a scratch budget, default
+  `DEFAULT_SCRATCH_BYTES` = 128 MB): `Tables`, `GroupedPlan` (`PlanSettings`, `PlanSize`,
+  `TileSchedule`), `TranslationScratch`, `grouped`, `grouped_stage` (one stage, for
+  profiling), `PerGroupPlan` / `per_group` (structure (A), the test reference), the
+  hand-written GEMM `gemm` (`GemmLayout { Cube, Cpu }`) and the library GEMM `library`
+  (`cubek-matmul`'s `SimpleCyclicCmma`, named explicitly; `GemmPolicy`, `Gemm`,
+  `library_stride`), `Accumulate { Rows, Scatter }`, `Orientation` (box-major, the
+  default; coefficient-major, tested, not used by `nd-fmm-exec`).
+- `rotation`: `RotationTables` (the M2L family of the Phase 2 rotation tables, uploaded
+  in their own storage from `RotationArrays`), `RotationPlan`, `m2l` (one launch per
+  level), `RotationLayout { Cube, Cpu }`.
+- `KernelError` for every refusal; every public function is safe, and `unsafe` is
+  confined to CubeCL launches and buffer views, each block with `// SAFETY:`.
+- Backend features `cpu`, `metal` and `cuda` (no `hip`, Vulkan or WebGPU build), none by
+  default; `nd-fmm-exec` and `nd-fmm-validate` pass them through. Kernels are generic
+  over f32 and f64, with p, tile sizes and layouts as comptime parameters, and every
+  layout is chosen per backend from `DeviceInfo`.
 
 **`nd-fmm-validate`** (Phase 1; MPI since Phase 3, and no library crate depends on it)
 
@@ -432,7 +509,7 @@ the T7 example `compare`, the only code that uses green-kernels.
   `F32_DEGREES` (1..=8), `TARGET_EXPONENTS` (3..=12), `LEAF_SIZES`. Phase 3S (T7) adds
   `leaf_size_rule` and `LeafSizeChoice`, the rule that set the default leaf size.
   `fmm_accuracy::run`, `sweep` and `leaf_study` take an `Execution { threads, p2p }`
-  since T6.
+  since T6, with `backend` since Phase 4 T11.
 - `p2p_kernels` (Phase 3S, T7; no MPI): the workloads W1 and W2 of simd-p2p.md §8.2
   (`Cell`, `Form`, `Set`, `w1`, `w2`; the inputs of the T2 spike), `Kernel` (the
   reference or `P2pKernel` on an ISA), `Oracle`, `Accuracy`, `accuracy`, `passes`
@@ -448,6 +525,21 @@ the T7 example `compare`, the only code that uses green-kernels.
   leaf-size study. `fmm_accuracy`, `calibrate` and `p2p_fmm` initialise MPI and run on
   one rank; they are not registered with templated-examples. The one MPI-initialising
   test is `tests/fmm_accuracy.rs`; `tests/p2p_kernels.rs` needs no MPI.
+- Phase 4 (feature `gpu`, with a backend; every device example takes `--device` or
+  `--backend` and runs on one rank, by hand, never in CI):
+  - `p2p_device` (T6): the W1 and W2 workloads as device P2P calls, for `p2p_kernels
+    --device` (and `--fmm`, the leaf stage inside the FMM);
+  - `fmm_accuracy::{Execution::backend, Run::device, DeviceRun}` (T11), and since T13
+    `fmm_accuracy::{builder, measure}`, which return the built `Fmm` too;
+  - `device_fmm` (T13): `Settings`, `Measurement`, `measure`, `compare`, `error_ratios`,
+    `bounds`: the device FMM against the host path, stage by stage, with its build,
+    transfers, launches and syncs, and the device-against-host check of C4.8;
+  - examples `device_fallback` (T5), `leaf_kernels` (T7), `translation_kernels` (T8),
+    `m2l_kernels` (T9, T12 `--orientation`), `rotation_kernels` (T10), `fmm_accuracy
+    --backend` (T11), `autotune` (T12) and `device_fmm` (T13: the device FMM against the
+    host and the device leaf-size study); `p2p_kernels --device` (T6). The test
+    `tests/device_fmm.rs` (feature `cpu`) is a smoke run of the `device_fmm` core on the
+    CPU runtime, in its own MPI-initialising executable.
 
 ## 4. How `nd-fmm-plan` and the octree connect
 
@@ -508,16 +600,26 @@ another task.
 | Precision | all numeric code generic over `T: RealScalar` (from `nd-fmm-math`); no `f64` hard-coding outside tests and table building. Does not apply to `nd-fmm-plan`, whose `FmmOperator::Value` is deliberately generic (its `IndexFmm` uses `u32`) |
 | Allocation | kernels and hot loops write into caller-provided slices; allocation only in constructors and plan building |
 | Errors | `thiserror` enums in public APIs; panics only for violated internal invariants (`debug_assert!`) |
-| Unsafe | none outside `nd-fmm-kernels` and, from Phase 3S, the architecture modules and ISA dispatch of `nd-fmm-simd` (intrinsics, `#[target_feature]` calls after detection; [simd-p2p.md](simd-p2p.md) §5.4); spikes are exempt; each unsafe block carries a `// SAFETY:` comment, and every public function stays safe |
+| Unsafe | none outside `nd-fmm-kernels` (as built in Phase 4: CubeCL launches and buffer views only) and, from Phase 3S, the architecture modules and ISA dispatch of `nd-fmm-simd` (intrinsics, `#[target_feature]` calls after detection; [simd-p2p.md](simd-p2p.md) §5.4); spikes are exempt; each unsafe block carries a `// SAFETY:` comment, and every public function stays safe |
 | Docs | every public item documented; operator functions cite the equation they implement in `docs/CONVENTIONS.md` |
 | Tests | unit tests in-crate; property tests with `proptest`; fixtures under `<crate>/fixtures/`, small and committed |
 | MPI tests | only in crates that depend on MPI (`nd-fmm-exec` and later): one MPI-initialising test per test executable, as in `nd-octree` and `nd-fmm-plan`; run tests with `RUST_MIN_STACK=8388608`; multi-rank runs by hand (on macOS with `--mca btl_tcp_if_include lo0 --mca oob_tcp_if_include lo0`) |
 | Formatting and lints | `cargo fmt` after every edit; `cargo clippy --workspace --all-targets -- -D warnings` locally (stricter than CI, which omits `--all-targets`) |
-| CI | the root GitHub Actions workflow runs fmt, clippy, tests and docs for default members on CPU and one rank; GPU tests are run locally and never block CI |
+| CI | the root GitHub Actions workflow runs fmt, clippy, tests and docs for default members on CPU and one rank; since Phase 3S a job tests `nd-fmm-simd` alone on x86_64 and arm64, and since Phase 4 (T4) a job `run-tests-kernels` tests `nd-fmm-kernels` alone on the CubeCL CPU runtime, without MPI; GPU tests are run locally and never block CI |
 
 ### 5.2 Root `Cargo.toml` additions
 
-Before Phase 0 the root manifest had only `members` and `resolver = "2"`. Phase 0 added:
+Before Phase 0 the root manifest had only `members` and `resolver = "2"`. Phase 0 added
+the block below. *As of Phase 4* the CubeCL entries are pinned to `cubecl =0.11.0-pre.4`
+(features `std`, `stdlib`), `cubek-matmul =0.3.0-pre.4` (features `std`, `multi-level`)
+and `cubek-std =0.3.0-pre.4`, all with `default-features = false`: a pre-release, chosen
+on 2026-10-03 because 0.10.0 disabled f64 on CUDA (Phase 4 T2;
+`spikes/cubecl-gemm/SPIKE_REPORT.md`, "CubeCL 0.11.0-pre.4"). Only `nd-fmm-kernels` and
+spikes use them. With `metal`, CubeCL's own manifests turn on its `persistence` feature
+(an empty store `target/environment/default.db` appears; accepted at the T4 sign-off).
+Moving to the final 0.11.0 is a separate decision. The workspace also has entries for
+every `nd-fmm-*` crate, `mpi`, `rlst`, `rand_chacha`, `rayon`, and for the spikes only
+`green-kernels` and `pulp`; `nd-fmm-kernels` is in `members`, not `default-members`.
 
 ```toml
 [workspace]
@@ -587,7 +689,7 @@ noise without testing anything.
 | 2 | `fmm-tables` |
 | 3 (done) | the rewrite of `nd-fmm-plan` (box index, lists, variable-size leaf data, batched operator interface; T1, T4–T7); `fmm-exec` (host path on the batched interface, threaded with rayon; T3, T8–T11); the calibration in `fmm-validate` (T12) |
 | 3S (done) | `fmm-simd` (SIMD P2P on the host; T3–T5), its use in `fmm-exec` (T6), kernel and FMM benchmarks in `fmm-validate` (T7), `spikes/p2p-simd/` (the T2 spike and the T7 green-kernels comparison) |
-| 4 | `fmm-kernels` and the device backend in `fmm-exec`, on the batched interface that Phase 3 delivered |
+| 4 (done) | the CubeCL pin moved to 0.11.0-pre.4 and `spikes/cubecl-gemm/` ported (T2); `spikes/device-arith/` (T3); `fmm-kernels` (T4, kernels in T6–T10; a member, not a default member, with the CI job `run-tests-kernels`); the device backend in `fmm-exec` on the batched interface that Phase 3 delivered, with no `nd-fmm-plan` change (T5–T11) and autotune (T12); device examples and benchmarks in `fmm-validate` (T5–T13) |
 | 5 | multi-rank validation of `fmm-exec`; exchange/compute overlap in `nd-fmm-plan` (no new crate) |
 
 ### Answered by scouting

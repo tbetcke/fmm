@@ -485,7 +485,10 @@ Each is recorded in the exit checklist when made:
    Metal run creates an empty store `target/environment/default.db` (device-path.md
    §3.4).
 8. The device leaf-size default (T13). Recommended: T13 applies the Phase 3S rule to the
-   device backend only, and the host default stays 64.
+   device backend only, and the host default stays 64. **T13: the rule picked 64** (the
+   geometric means 18.8, 6.40, 4.98, 4.89 and 5.66 ms at 16 to 256 on Metal f32; 128 is
+   1.9% faster than 64, below 5%), so no device default is added
+   (fmm-validate/results/phase4-m3max.md).
 9. External baselines (FMM3D, ExaFMM-t, kifmm-rs; design §8.3). Recommended: later, not
    in T13.
 10. A performance target for the CubeCL CPU runtime (T3; before T6). **Approved on
@@ -584,7 +587,7 @@ In the repository root, start `claude` and say:
 - [x] T10 merged: rotation M2L equals C2.3; timed against dense across p
 - [x] T11 merged: every operator on the device; C4.8 gates on cube and Plummer; deterministic; minimal transfers
 - [x] T12 merged: autotune with persistent cache; static fallback rule; choice resolved at build and reported
-- [ ] Device leaf-size default decided (T13)
+- [x] Device leaf-size default decided (T13): the rule picked 64 on Metal f32 (128 only 1.9% faster, below 5%), so no device default is added; the host default stays 64
 - [ ] External baselines: later / in T13
 - [ ] T13 merged: device benchmark report published
-- [ ] Design documents updated: laplace-fmm-plan §4, §6, §7 (Phase 4 status and numbers), §8.3, §9.1 and §9.2; workspace-structure §2, §3, §3.1, §5 and §6; device-path.md decisions and measurements recorded
+- [x] Design documents updated: laplace-fmm-plan §4, §6, §7 (Phase 4 status and numbers), §8.3, §9.1 and §9.2; workspace-structure §2, §3, §3.1, §5 and §6; device-path.md decisions and measurements recorded (T13, §17)
