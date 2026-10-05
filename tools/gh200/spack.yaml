@@ -1,0 +1,87 @@
+# The spack environment of locust (NVIDIA GH200, RHEL 9.3 aarch64; Phase 4S T1).
+#
+# It provides the native libraries the workspace builds against, the ones the CI
+# `apt-get` line installs on Ubuntu (root CLAUDE.md, "Build environment"), plus the
+# CUDA toolkit for `--features cuda`. setup.sh creates it in
+# /data/ucahtbe/envs/fmm-gh200 from this file and spack.lock beside it, which pins
+# every hash. Spack itself (v1.2.2) and the package repository are pinned in setup.sh;
+# the repository pin is repeated below so that the file says what it was concretised
+# against, and setup.sh checks that the two agree.
+#
+# Phase 4S decision 3: the compiler (gcc 11.4.1) and libclang (clang 17.0.6) come from
+# the system as externals; spack builds everything else. Rust is not in here: spack's
+# newest `rust` was older than the current stable, so setup.sh installs rustup
+# (decision 1).
+spack:
+  specs:
+  # MPI for nd-octree and nd-fmm-plan (rsmpi). mpi-sys finds it through `mpicc -show`
+  # and pkg-config, and runs bindgen over mpi.h. Open MPI 5 serves the one-rank runs of
+  # Phase 4S and the multi-rank runs of Phase 5 on this one node. No Fortran bindings:
+  # nothing here uses them.
+  - openmpi@5 ~fortran
+  # BLAS and LAPACK (CI: libopenblas-dev), for rlst's `blas`/`lapack` bindings. No
+  # workspace crate links BLAS at Phase 4 (Cargo.lock has no *-src crate); this matches
+  # CI so that one that does finds it. Single-threaded, as every timing run asks.
+  - openblas threads=none
+  # FFTW (CI: libfftw3-dev), for rlst's optional `fftw_system` feature through
+  # pkg-config. Not linked by the workspace at Phase 4; kept to match CI.
+  - fftw
+  # cmake (CI: cmake), for build scripts that drive cmake (the `cmake` crate is a build
+  # dependency of rlst). The system has 3.26; spack's is newer and pinned here.
+  - cmake
+  # pkg-config, for mpi-sys (build-probe-mpi) and rlst's `fftw_system` probe.
+  - pkgconf
+  # The CUDA toolkit for `--features cuda` (cubecl-cuda, cudarc). cudarc's build script
+  # reads the toolkit version from `nvcc --version` (env.sh also sets
+  # CUDARC_CUDA_VERSION=12060). 12.6 is the newest toolkit the driver (565.57.01,
+  # CUDA 12.7) supports. Built by spack, not taken from /usr/local, for reproducibility.
+  - cuda@12.6
+  # libclang for bindgen (mpi-sys, rlst), from the system clang 17.0.6 (clang-devel).
+  # An external: it is recorded in the lock, never built. env.sh sets LIBCLANG_PATH to
+  # its prefix's lib64.
+  - llvm@17.0.6
+
+  concretizer:
+    unify: true
+
+  # The view env.sh puts on PATH, LD_LIBRARY_PATH, PKG_CONFIG_PATH and
+  # CMAKE_PREFIX_PATH: envs/fmm-gh200/.spack-env/view.
+  view: true
+
+  # The package repository at the commit spack v1.2.2 ships with (its default
+  # `releases/v2026.06` branch, tag v2026.06.0).
+  repos:
+    builtin:
+      git: https://github.com/spack/spack-packages.git
+      commit: d4f7c711a6a42f1c4d551c8fd10fce9a11340a81
+
+  packages:
+    all:
+      # Grace is Neoverse-V2; the system gcc 11.4.1 targets it (-mcpu=neoverse-v2).
+      require: target=neoverse_v2
+    # Compilers: the system gcc for C, C++ and Fortran, never built.
+    c:
+      require: [gcc]
+    cxx:
+      require: [gcc]
+    fortran:
+      require: [gcc]
+    gcc:
+      buildable: false
+      externals:
+      - spec: gcc@11.4.1 languages:='c,c++,fortran'
+        prefix: /usr
+        extra_attributes:
+          compilers:
+            c: /usr/bin/gcc
+            cxx: /usr/bin/g++
+            fortran: /usr/bin/gfortran
+    llvm:
+      buildable: false
+      externals:
+      - spec: llvm@17.0.6 +clang ~lld ~lldb
+        prefix: /usr
+        extra_attributes:
+          compilers:
+            c: /usr/bin/clang
+            cxx: /usr/bin/clang++

@@ -9,8 +9,10 @@ own CLAUDE.md for crate-specific rules; everything here applies to all of them.
   Never change a convention in code; propose changes in the PR description instead.
 - Cite conventions in doc comments as `CONVENTIONS §3.x`.
 - CONVENTION_VERSION in nd-fmm-math must match the file.
-- Current phase and task briefs: docs/phase4/README.md (Phase 4, CubeCL kernels; design
-  docs/design/device-path.md). Phase 3S briefs:
+- Current phase and task briefs: docs/phase4s/README.md (Phase 4S, CUDA on NVIDIA Grace
+  Hopper; the device path of Phase 4 on locust's H100, design docs/design/device-path.md).
+  Phase 5 (the distributed FMM, docs/phase5/README.md) follows it. Phase 4 briefs:
+  docs/phase4/README.md (CubeCL kernels). Phase 3S briefs:
   docs/phase3s/README.md (SIMD P2P on the host; design docs/design/simd-p2p.md).
   Phase 3 briefs: docs/phase3/README.md.
 - Background: docs/design/laplace-fmm-plan.md (operators, plan) and
@@ -65,6 +67,18 @@ installed in Linux CI: `libclang-dev cmake libfftw3-dev libopenblas-dev openmpi-
 libopenmpi-dev`. `mpi` and `rlst` build against a real MPI installation and
 BLAS/LAPACK, so a dependency build failure is far more often a missing native library
 than a defect in a crate.
+
+locust (`ssh locust`, an NVIDIA GH200: 72 Grace cores, one H100) builds and runs in an
+environment made by `tools/gh200/` (README.md there): a pinned spack environment
+(`spack.yaml`, `spack.lock`) with Open MPI, OpenBLAS, FFTW, cmake, pkgconf and CUDA
+12.6, plus rustup with the toolchain pinned in `env.sh`. Everything on locust lives
+under `/data/ucahtbe`, never in the home directory; `env.sh` moves `HOME` and every
+cache there, and `check-home.sh` verifies it. It also links with rust-lld: GNU ld
+cannot link CubeCL's LLVM on aarch64 Linux (README.md there). A session on the M3 Max drives locust
+with `tools/gh200/sync.sh` (copies the working tree, uncommitted work included) and
+`tools/gh200/remote.sh <command>` (runs it in that copy inside the environment). Both
+use `ssh`, which the sandbox denies, so they run outside it. locust never commits or
+pushes; it is a shared node, so check `nvidia-smi` and `uptime` before timing anything.
 
 ## Checks
 CI (GitHub Actions, `.github/workflows/run-tests.yml`, pull requests to `main`) runs exactly this for
@@ -121,6 +135,11 @@ For a change to nd-fmm-simd, also clippy the other architecture's code, after
 ```sh
 cargo clippy -p nd-fmm-simd --all-targets --target <other> -- -D warnings
 ```
+
+On locust (by hand, Phase 4S): after `tools/gh200/sync.sh`, the checks above that are
+not Metal run there too, each as `tools/gh200/remote.sh '<command>'`; Linux needs no
+loopback flags for `mpirun`. The CUDA tests (`--features cuda`, `#[ignore]`d) are
+added here by Phase 4S T2 (nd-fmm-kernels) and T4 (nd-fmm-exec).
 
 `cargo test --workspace` needs a working MPI runtime, because nd-octree and
 nd-fmm-plan tests initialise MPI; crates without MPI (e.g. `cargo test -p nd-fmm-math`)
