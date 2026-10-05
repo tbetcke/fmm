@@ -32,6 +32,12 @@ documented as a single command for whoever later has a cluster, as CUDA was in P
 CI adds a multi-rank job on GitHub's `ubuntu-latest` runners (decision 4), for
 correctness only.
 
+**Revised on 2026-10-05:** Phase 5 tests on both the M3 Max and **locust**, an NVIDIA
+GH200 node with 72 Grace cores and one H100 (docs/phase4s/README.md, decision 8).
+Phase 4S runs before Phase 5 and sets locust up. Its T8 updates these briefs to match:
+the machines, decision 2, requirements 9 and 10, device ranks, and the T1, T3, T8 and
+T10 briefs. Until then, read "the M3 Max only" below as superseded by this note.
+
 The device path goes to several ranks in this phase (decided on 2026-10-04), **for
 correctness only**: each rank opens its own device. On the M3 Max that means the CubeCL
 CPU runtime per rank, or Metal with every rank sharing the one GPU. No device scaling
@@ -352,7 +358,8 @@ Each is recorded in the exit checklist when made:
 1. The design document `docs/design/distributed-fmm.md`, including any change it proposes
    to the requirements or tolerances above (T1; before T4).
 2. Hardware. **Decided on 2026-10-04: the M3 Max only.** Every multi-rank run is one
-   node. The inter-node scaling run is a documented command.
+   node. The inter-node scaling run is a documented command. **Revised on 2026-10-05:
+   the M3 Max and locust (GH200)**, both single nodes. Phase 4S T8 updates the briefs.
 3. The device on several ranks. **Decided on 2026-10-04: in Phase 5, correctness only**
    (T7, T8). It is never timed as a scaling figure.
 4. A multi-rank CI job. **Decided on 2026-10-04: add one.** T3 builds and measures it,
@@ -402,7 +409,7 @@ In the repository root, start `claude` and say:
 ## Exit checklist
 - [ ] T1 merged: `docs/design/distributed-fmm.md` drafted, sign-off questions listed
 - [ ] Distributed design signed off, including the `nd-octree` changes, the tolerance of requirement 2, the redistribution API, the overlap order and the non-blocking mechanism
-- [x] Hardware: the M3 Max only; inter-node run documented for later (decided 2026-10-04)
+- [x] Hardware: the M3 Max only; inter-node run documented for later (decided 2026-10-04); revised to the M3 Max and locust (decided 2026-10-05; briefs updated by Phase 4S T8)
 - [x] Device on several ranks: in Phase 5, correctness only (decided 2026-10-04)
 - [x] Multi-rank CI job: add one, measured in T3 (decided 2026-10-04)
 - [x] Index FMM: removed from `nd-fmm-plan` (decided 2026-10-04)
