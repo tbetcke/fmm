@@ -433,7 +433,7 @@ Before T1 has merged, T1 itself uses `ssh locust` directly, outside the sandbox.
 - [x] CUDA compiler path (decision 4): LLVM NVPTX (decided 2026-10-05)
 - [x] Benchmark home (decision 5): `nd-fmm-bench` crate; "degree" = expansion degree p; unit cube [0, 1]³ (decided 2026-10-05)
 - [x] CUDA type-check in CI (decision 6): add it, in T2 (decided 2026-10-05)
-- [ ] T1 merged: environment rebuilt from the lock; home check clean; CPU-side checks on Grace reported; root `CLAUDE.md` points to Phase 4S
+- [x] T1 merged: environment rebuilt from the lock; home check clean; CPU-side checks on Grace reported; root `CLAUDE.md` points to Phase 4S
 - [ ] T5 merged: per-kind timings on the host, the CPU runtime and Metal, bit-identical, syncs as documented
 - [ ] T2 merged: every kernel test on CUDA in f32 and f64; GEMM spike on CUDA; §18.1 facts
 - [ ] T3 merged: device arithmetic on CUDA measured; recommendation drafted
