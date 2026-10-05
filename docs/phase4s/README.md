@@ -160,8 +160,8 @@ These hold for every task, so that no task decides them on its own:
   - on locust, write only under `/data/ucahtbe`. No `sudo`, no `dnf`, no files in
     `/home/ucahtbe`;
   - locust is a shared, interactive node with no scheduler. Before a timing run check
-    `nvidia-smi` and `uptime`, and state the load in the report. Run long jobs under
-    `timeout`, and never leave processes behind.
+    for other users' jobs ("Timing" below), and state the load in the report. Run long
+    jobs under `timeout`, and never leave processes behind.
 - **The CUDA compiler path.** CubeCL's default, LLVM to NVPTX through the `tracel-llvm`
   bundle (F17). On it `inverse_sqrt` is the accurate `1 / sqrt(x)` polyfill, and fadd,
   fsub and fmul carry LLVM's `contract` flag. NVRTC (`cubecl/cuda-cpp`) is not enabled
@@ -202,7 +202,21 @@ These hold for every task, so that no task decides them on its own:
     the repeats, with the number of repeats stated;
   - kind timings from a separate set of evaluations with T5's mode on, since a sync per
     call perturbs the total;
-  - host comparisons on Grace at 1 thread and at 72 threads (NEON, `P2pChoice::Auto`).
+  - host comparisons on Grace at 1 thread and at 72 threads (NEON, `P2pChoice::Auto`);
+  - **locust is a multi-user machine.** Before every benchmark or timing run, check
+    whether other users run jobs that can influence it, then decide:
+    - what to check: on the GPU, `nvidia-smi` (other processes, utilisation, memory,
+      power). On the CPU, `uptime` and `ps -eo user,pcpu,pmem,etime,cmd --sort=-pcpu`
+      (other users' processes); a busy host also skews GPU runs, and the 72-thread host
+      runs need every core;
+    - if a job of someone else's could influence the result: take no timings. Wait and
+      check again, or stop and report. On 2026-10-05, during T1, another user's job
+      held the GPU at 100% utilisation and 74 GB at every check from 20:09 to 21:16;
+    - after the run, check again. If the picture changed during the run, repeat the
+      run;
+    - the report states what was checked, when, and what was found.
+
+  Correctness runs that need little memory may share the GPU; timings may not.
 
   The GPU clocks are not locked (no administrator access): the report prints them
   (`nvidia-smi -q -d CLOCK`) and states that. Timings are never asserted and never taken
