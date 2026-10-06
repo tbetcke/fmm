@@ -184,3 +184,4 @@ fn available_memory_shrinks(device: &mut Device) {
 
 tests_on!(cpu: views_round_trip, coordinates_round_trip, units_cap_changes_no_result, available_memory_shrinks);
 tests_on!(metal: views_round_trip, coordinates_round_trip, units_cap_changes_no_result, available_memory_shrinks);
+tests_on!(cuda: views_round_trip, coordinates_round_trip, units_cap_changes_no_result, available_memory_shrinks);

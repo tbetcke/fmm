@@ -1,15 +1,15 @@
 //! Shared devices, the backend report of every test, and host data.
 
-#[cfg(any(feature = "cpu", feature = "metal"))]
+#[cfg(any(feature = "cpu", feature = "metal", feature = "cuda"))]
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
-#[cfg(any(feature = "cpu", feature = "metal"))]
+#[cfg(any(feature = "cpu", feature = "metal", feature = "cuda"))]
 use nd_fmm_kernels::Device;
 use nd_fmm_kernels::{BackendKind, DeviceFloat};
 
 /// One device per backend and process: CubeCL caches compiled kernels per process
 /// only (device-path.md §13.3, F23), and a test holds the device for its whole body.
-#[cfg(any(feature = "cpu", feature = "metal"))]
+#[cfg(any(feature = "cpu", feature = "metal", feature = "cuda"))]
 static DEVICES: [OnceLock<Mutex<Device>>; 3] = [OnceLock::new(), OnceLock::new(), OnceLock::new()];
 
 /// The shared device of `kind`, opened on first use.
@@ -18,7 +18,7 @@ static DEVICES: [OnceLock<Mutex<Device>>; 3] = [OnceLock::new(), OnceLock::new()
 ///
 /// If the device cannot be opened: a test asked for a backend, so a backend that does
 /// not come up fails the test rather than passing it.
-#[cfg(any(feature = "cpu", feature = "metal"))]
+#[cfg(any(feature = "cpu", feature = "metal", feature = "cuda"))]
 pub fn device(kind: BackendKind) -> MutexGuard<'static, Device> {
     let slot = &DEVICES[BackendKind::ALL.iter().position(|&k| k == kind).unwrap()];
     slot.get_or_init(|| {
@@ -30,7 +30,7 @@ pub fn device(kind: BackendKind) -> MutexGuard<'static, Device> {
 
 /// Runs `body` on the shared device of `kind`, printing the device before and the
 /// backends run and not run after.
-#[cfg(any(feature = "cpu", feature = "metal"))]
+#[cfg(any(feature = "cpu", feature = "metal", feature = "cuda"))]
 pub fn run(kind: BackendKind, test: &str, body: fn(&mut Device)) {
     let mut device = device(kind);
     println!("{test}: on {}", device.info());
@@ -47,8 +47,7 @@ pub fn backends_line(run: &[BackendKind]) -> String {
         .map(|k| {
             let why = match (k, k.is_compiled()) {
                 (_, false) => "not compiled",
-                (BackendKind::Cuda, true) => "type-checked, not run",
-                (BackendKind::Metal, true) => "in its own ignored test",
+                (BackendKind::Metal | BackendKind::Cuda, true) => "in its own ignored test",
                 (BackendKind::Cpu, true) => "in its own test",
             };
             format!("{k} ({why})")
@@ -65,9 +64,10 @@ pub fn backends_line(run: &[BackendKind]) -> String {
     )
 }
 
-/// Test functions on the CPU runtime (`cpu: …`, plain tests) or on Metal (`metal: …`,
-/// ignored, run by hand outside the sandbox). Each names a `fn(&mut Device)` of the
-/// enclosing module, which is referenced even when its backend is not compiled in.
+/// Test functions on the CPU runtime (`cpu: …`, plain tests), on Metal (`metal: …`,
+/// ignored, run by hand outside the sandbox) or on CUDA (`cuda: …`, ignored, run by hand
+/// on locust). Each names a `fn(&mut Device)` of the enclosing module, which is
+/// referenced even when its backend is not compiled in.
 macro_rules! tests_on {
     (cpu: $($name:ident),* $(,)?) => {
         const _: &[fn(&mut nd_fmm_kernels::Device)] = &[$($name),*];
@@ -95,6 +95,23 @@ macro_rules! tests_on {
                 fn $name() {
                     crate::common::run(
                         nd_fmm_kernels::BackendKind::Metal,
+                        concat!(module_path!(), "::", stringify!($name)),
+                        super::$name,
+                    );
+                }
+            )*
+        }
+    };
+    (cuda: $($name:ident),* $(,)?) => {
+        const _: &[fn(&mut nd_fmm_kernels::Device)] = &[$($name),*];
+        #[cfg(feature = "cuda")]
+        mod cuda {
+            $(
+                #[test]
+                #[ignore = "CUDA: run by hand on locust"]
+                fn $name() {
+                    crate::common::run(
+                        nd_fmm_kernels::BackendKind::Cuda,
                         concat!(module_path!(), "::", stringify!($name)),
                         super::$name,
                     );

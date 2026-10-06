@@ -1581,6 +1581,16 @@ tests_on!(
     invariance_and_determinism,
     layouts_agree,
 );
+tests_on!(
+    cuda: harmonics_match_nd_fmm_math,
+    p2m_and_l2p,
+    p2l_x_list,
+    m2p_w_list,
+    frames,
+    accumulation_and_empty_calls,
+    invariance_and_determinism,
+    layouts_agree,
+);
 
 /// The p = 20 sweep on the CPU runtime: ignored (compile time; fmm-kernels/CLAUDE.md, test
 /// budget).

@@ -4,7 +4,7 @@
 //!
 //! - **GEMM**: y = A x for one table of order n = (p + 1)², p ∈ {0, 1, 3, 8, 12, 20},
 //!   k ∈ {0, 1, 7, 64} columns (k = 1000 in the ignored test on the CPU runtime, and on
-//!   Metal): bit for bit a host loop `acc = x_k.mul_add(a_ik, acc)` from zero, k
+//!   Metal and CUDA): bit for bit a host loop `acc = x_k.mul_add(a_ik, acc)` from zero, k
 //!   ascending (the kernel's documented order; spikes/device-arith/REPORT.md, rule 6), and
 //!   within n u_T of `MatrixSet::apply` relative to the terms Σₖ |A_ik x_k|.
 //! - **Level calls** (M2M-shaped rows with up to eight octants, some rows empty; L2L-shaped
@@ -17,7 +17,8 @@
 //!   per octant in octant order (structure (A) of device-path.md §6.4), bit for bit.
 //! - **Library** (Metal, f32, p = 8): the plan of a level call under `GemmPolicy::Auto`
 //!   reports its GEMM; with the library, the call is within the GEMM tolerance of the host
-//!   rows and bit-identical when repeated.
+//!   rows and bit-identical when repeated. On the CPU runtime and CUDA the plan must take
+//!   the hand-written kernel (on CUDA the library is rejected at build, and why is printed).
 //!
 //! u_T = 2⁻²⁴ (f32), 2⁻⁵³ (f64). Values are uniform in [−1, 1] (normal, so a flushing
 //! backend adds them exactly as the host).
@@ -662,7 +663,9 @@ fn grouped_equals_per_octant(device: &mut Device) {
 /// The library GEMM under `GemmPolicy::Auto` at p = 8 in f32 (Metal), in both orientations
 /// (T12): the plan's GEMM is reported; with the library, a level call is within the GEMM
 /// tolerance of the host rows and bit-identical when repeated. Elsewhere the plan must run
-/// the hand-written kernel.
+/// the hand-written kernel: the CPU runtime has no CMMA, and on CUDA the probe or the
+/// input-precision guard rejects the library (TF32 stages, f16-only CMMA on LLVM NVPTX;
+/// device-path.md §6.5).
 fn library_level_call(device: &mut Device) {
     let p = 8;
     let n = (p + 1) * (p + 1);
@@ -689,7 +692,7 @@ fn library_level_call(device: &mut Device) {
                 worst = worst.max(e / (unit::<f32>() * tau));
             }
         }
-        if !device.backend().is_gpu() {
+        if device.backend() != BackendKind::Metal {
             assert!(matches!(gemm, Gemm::HandWritten(_)), "{gemm}");
         }
         println!(
@@ -718,12 +721,14 @@ fn gemm_of_1000_columns_on_the_cpu_runtime() {
 mod gpu {
     use super::*;
 
-    fn gemm_on_metal(device: &mut Device) {
+    fn gemm_on_the_gpu(device: &mut Device) {
         gemm_equals_the_host_loop(device);
         gemm_of_1000_columns(device);
     }
 
-    tests_on!(metal: gemm_on_metal, level_calls_equal_the_host_rows,
+    tests_on!(metal: gemm_on_the_gpu, level_calls_equal_the_host_rows,
+        grouped_equals_per_octant, library_level_call);
+    tests_on!(cuda: gemm_on_the_gpu, level_calls_equal_the_host_rows,
         grouped_equals_per_octant, library_level_call);
 }
 

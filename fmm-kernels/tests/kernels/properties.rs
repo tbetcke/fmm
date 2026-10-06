@@ -1,4 +1,4 @@
-//! Property tests on the CPU runtime: gather and scatter-add over random column sizes,
+//! Property tests on the CPU runtime and CUDA: gather and scatter-add over random column sizes,
 //! matrix sizes, offsets and index arrays, against the host loops, bit for bit.
 
 use std::cell::RefCell;
@@ -115,3 +115,4 @@ fn scatter_add_properties(device: &mut Device) {
 }
 
 tests_on!(cpu: gather_properties, scatter_add_properties);
+tests_on!(cuda: gather_properties, scatter_add_properties);

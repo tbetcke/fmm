@@ -357,6 +357,20 @@ tests_on!(
     scatter_u32,
     empty_launches_nothing,
 );
+tests_on!(
+    cuda: zero_f32,
+    zero_f64,
+    zero_u32,
+    gather_f32,
+    gather_f64,
+    gather_u32,
+    scatter_add_f32,
+    scatter_add_f64,
+    scatter_f32,
+    scatter_f64,
+    scatter_u32,
+    empty_launches_nothing,
+);
 
 /// The wrappers refuse what would make a kernel read or write out of bounds, before
 /// launching.

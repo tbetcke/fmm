@@ -64,7 +64,7 @@ fn reports_f32(device: &mut Device) {
     );
 }
 
-/// The CPU runtime reports f64 and allocates f64 buffers.
+/// The CPU runtime and CUDA report f64 and allocate f64 buffers.
 fn reports_f64(device: &mut Device) {
     assert!(device.supports(Precision::F64));
     device.require(Precision::F64).unwrap();
@@ -142,9 +142,9 @@ fn counts_transfers_launches_and_syncs(device: &mut Device) {
 }
 
 /// A timing window around a launch (device-path.md §8.3): on a device that times on the
-/// device (Metal) it adds no sync, and its time resolves after the download that ends
-/// the work; on the CPU runtime it waits at both ends, counted as two syncs. Either way
-/// the window changes no value.
+/// device (Metal, CUDA) it adds no sync, and its time resolves after the download that
+/// ends the work; on the CPU runtime it waits at both ends, counted as two syncs. Either
+/// way the window changes no value.
 fn times_windows(device: &mut Device) {
     let on_device = device.times_on_device();
     assert!(
@@ -190,3 +190,4 @@ fn times_windows(device: &mut Device) {
 
 tests_on!(cpu: reports_f32, reports_f64, refuses_foreign_buffers, counts_transfers_launches_and_syncs, times_windows);
 tests_on!(metal: reports_f32, refuses_f64, refuses_foreign_buffers, counts_transfers_launches_and_syncs, times_windows);
+tests_on!(cuda: reports_f32, reports_f64, refuses_foreign_buffers, counts_transfers_launches_and_syncs, times_windows);

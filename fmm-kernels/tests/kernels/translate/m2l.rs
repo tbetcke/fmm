@@ -24,7 +24,8 @@
 //!   tolerance of `MatrixSet::apply` in row order, also in several chunks; repeated level
 //!   calls are bit-identical with both GEMMs (the library strategy is fixed); structure
 //!   (A) with the library equals (B) bit for bit where the library takes every offset's
-//!   shape. On the CPU runtime the plan must take the hand-written kernel.
+//!   shape. On the CPU runtime and CUDA the plan must take the hand-written kernel (on
+//!   CUDA the library is rejected at build, and why is printed).
 
 use nd_fmm_kernels::translate::{
     Accumulate, DEFAULT_SCRATCH_BYTES, Gemm, GemmLayout, GemmPolicy, GroupedPlan, Operands,
@@ -438,8 +439,8 @@ fn m2l_grouped_equals_per_offset(device: &mut Device) {
     each_precision!(device, per_offset);
 }
 
-/// The library at p = 8 in f32 (module documentation). On the CPU runtime the plan under
-/// `GemmPolicy::Auto` must take the hand-written kernel.
+/// The library at p = 8 in f32 (module documentation). On the CPU runtime and CUDA the plan
+/// under `GemmPolicy::Auto` must take the hand-written kernel.
 fn m2l_library(device: &mut Device) {
     let p = 8;
     let n = (p + 1) * (p + 1);
@@ -460,13 +461,17 @@ fn m2l_library(device: &mut Device) {
         orientation: Orientation::BoxMajor,
     };
     let (library, gemm, chunks) = call.grouped(device, &auto(DEFAULT_SCRATCH_BYTES), 3);
-    if device.backend() == BackendKind::Cpu {
+    if device.backend() != BackendKind::Metal {
         assert_eq!(
             gemm,
             Gemm::HandWritten(layout),
-            "the CPU runtime has no CMMA"
+            "the CPU runtime has no CMMA, and on CUDA the probe or the input-precision guard \
+             rejects the library"
         );
-        println!("  f32 M2L p = 8, {pairs} pairs: the plan takes {gemm} on the CPU runtime");
+        println!(
+            "  f32 M2L p = 8, {pairs} pairs: the plan takes {gemm} on {}",
+            device.backend()
+        );
         return;
     }
     let worst = call.within_apply("library M2L p = 8", &library, &apply, &tau);
@@ -574,5 +579,7 @@ mod gpu {
     use super::*;
 
     tests_on!(metal: m2l_level_calls_equal_the_host_rows, m2l_grouped_equals_per_offset,
+        m2l_library);
+    tests_on!(cuda: m2l_level_calls_equal_the_host_rows, m2l_grouped_equals_per_offset,
         m2l_library);
 }
