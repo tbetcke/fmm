@@ -17,7 +17,7 @@ default = []
 cpu = ["cubecl/cpu"]
 # wgpu with the MSL compiler (CubeCL's `metal` = `wgpu-msl`), not `metal-native`.
 metal = ["cubecl/metal"]
-# Type-checked only; no CUDA device is available.
+# CUDA through LLVM NVPTX: f32 and f64, run by hand on locust (Phase 4S); type-checked in CI.
 cuda = ["cubecl/cuda"]
 
 [dependencies]

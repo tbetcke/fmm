@@ -22,8 +22,9 @@ of C4.8 (T11) in docs/phase4/.
 - P2P (T6, `p2p`): one launch per level call, three layouts of one formulation
   (`P2pLayout`): `Cube` (one cube per target leaf, a shared-memory tile of U sources,
   default on Metal and CUDA with U = 64), `Plane` (one plane per target leaf, several per
-  cube, `sync_plane`; a candidate for T12) and `Cpu` (targets in `Vector<T, N>` lanes of
-  the host's width, K N = 8 per block, default on the CPU runtime). Every layout adds
+  cube, `sync_plane`, plane and lane from `UNIT_POS` (CUDA, below); a candidate for
+  T12) and `Cpu` (targets in `Vector<T, N>` lanes of the host's width, K N = 8 per
+  block, default on the CPU runtime). Every layout adds
   each target's sources in near-row order and point order from the value in the output,
   so every test runs on every layout, and the GPU layouts also run on the CPU runtime
   (correctness only: planes of one unit, at most one unit per core). Frames come from
@@ -64,8 +65,8 @@ of C4.8 (T11) in docs/phase4/.
   per unit) and `Cpu { block, per_unit }` (one cube, units capped by
   `Device::units_cap`, contiguous tiles; default on the CPU runtime); each output one
   accumulator from zero, `fma` with k ascending, stored once (β = 0): bit for bit a host
-  `mul_add` loop in that order, on Metal and the CPU runtime (T3 rule 6; tested). The
-  library GEMM (`GemmPolicy::Auto`, f32, p ≥ 8, GPU only): `cubek-matmul`'s
+  `mul_add` loop in that order, on Metal, CUDA and the CPU runtime (T3 rule 6;
+  tested). The library GEMM (`GemmPolicy::Auto`, f32, p ≥ 8, GPU only): `cubek-matmul`'s
   `Strategy::MultiLevel(SimpleCyclicCmma)` named explicitly, one batched launch per
   chunk: runs of contiguous groups padded to the run's widest batch ([G_c, k, n]; a
   group wider than the budget in pieces), reading the library copy of the tables from
@@ -102,8 +103,8 @@ of C4.8 (T11) in docs/phase4/.
   step alone, added term by term into the accumulator, with the parity for `Down`), each
   output one accumulator from zero with an explicit `fma` per term in the host's order:
   bit for bit a host `mul_add` replica on every layout and backend (tested on the CPU
-  runtime and Metal), not `RotationTables::m2l`, which rounds each product (tolerance,
-  T3 rule 6; 35–100% of the values agree bit for bit). Do not change the step order or
+  runtime, Metal and CUDA), not `RotationTables::m2l`, which rounds each product
+  (tolerance, T3 rule 6; 35–100% of the values agree bit for bit). Do not change the step order or
   the device table layout without a sign-off.
 - Timing windows (T11, device-path.md §8.3): `Device::open_window` and `close_window`
   wrap CubeCL's `profile_start`/`profile_end`; `WindowTime::resolve` reads the time after
@@ -112,8 +113,10 @@ of C4.8 (T11) in docs/phase4/.
   queued work without waiting. The CPU runtime reports device timing but drains its
   stream at both ends of a window, so `close_window` counts two syncs for every window
   not timed on the device (`Counters::windows`, `Counters::syncs`). A window without a
-  launch measures nothing (`resolve` gives `None`). Never call CubeCL's `profile`
-  closure form, autotune or throughput measurement for this.
+  launch measures nothing (`resolve` gives `None`) on every backend: `Device` counts the
+  launches inside it and drops the time CUDA's events and the CPU runtime's clock give
+  an empty window (Phase 4S T2). Never call CubeCL's `profile` closure form, autotune or
+  throughput measurement for this.
 - Generic over the float type (`DeviceFloat`: f32, f64) and comptime parameters (p, n,
   layouts); the backend is a run-time value (`BackendKind`, `Device`), never an
   `R: Runtime` type parameter (device-path.md §3.2). Every kernel runs on every runtime;
@@ -129,7 +132,8 @@ of C4.8 (T11) in docs/phase4/.
 - Backend coverage: every runtime test prints the device it ran on and a closing line
   "backends run: …; not run: …" (`tests/kernels/common.rs`, `run` and the `tests_on!`
   macro). A task report lists which backends ran, from the test output, and never
-  reports a backend that did not run as passing. CUDA is "type-checked, not run".
+  reports a backend that did not run as passing. A backend compiled in but not run by a
+  test is "in its own test" (CPU) or "in its own ignored test" (Metal, CUDA).
 - Accumulation and determinism (README requirements 4–6, device-path.md §6.1):
   - each output value has one owning unit per launch; the owner loads it, adds its
     contributions one by one in the target's row order, and stores it, so splitting a
@@ -205,6 +209,44 @@ of C4.8 (T11) in docs/phase4/.
   - by hand on the M3 Max: `cargo test -p nd-fmm-kernels --release --features metal --
     --ignored --show-output`;
   - `cargo doc -p nd-fmm-kernels --no-deps`.
+
+## CUDA (Phase 4S)
+Measured on locust's H100 (GH200) on 2026-10-06 (Phase 4S T2; docs/design/device-path.md
+§18.1 has the facts with their sources).
+- Running the suite: on the M3 Max, outside the sandbox, `tools/gh200/sync.sh`, then
+  `tools/gh200/remote.sh 'cargo test -p nd-fmm-kernels --release --features cpu,cuda --
+  --ignored --show-output'` (the CUDA tests and the ignored CPU ones); without
+  `--ignored`, the CPU runtime's tests on Grace. `cpu` and `cuda` combine in one build.
+  Clippy: `--features cpu,cuda`. CUDA tests are `#[ignore = "CUDA: run by hand on
+  locust"]` and are registered with `tests_on!(cuda: …)`: Metal's list plus every f64
+  test and the property tests, 56 tests.
+- `DeviceInfo`: `cuda (cuda), NVIDIA GH200 480GB, CubeCL 0.11.0-pre.4, f32 f64`; plane
+  size 32 (fixed), shared memory 232,448 B per cube (the opt-in maximum; Metal 32 KB),
+  1024 units per cube, cube counts (2³¹ − 1, 65,535, 65,535), memory 102,005,473,280 B.
+  `GPU_MAX_CUBES` stays 65,535 for every backend (a T7 question).
+- Precisions: f32 and f64 registered with arithmetic. TF32 is registered for
+  conversion; it does not come into play, because the library probe already fails:
+  `cubek-matmul`'s `SimpleCyclicCmma` refuses every f32 shape the tests build ("No tile
+  size is available for the problem"), so `GemmPolicy::Auto` takes the hand-written
+  kernel (tested on CUDA: `library_level_call`, `m2l_library`).
+- Compiler path: LLVM to NVPTX (`client.name()` is `"cuda"`; it does not name the
+  path). `PLANE_POS` is not lowered for NVPTX: compiling a kernel that reads it panics on
+  CubeCL's server thread, and the launch is dropped silently (a later download returns
+  the buffer's old contents, no error). Do not use `PLANE_POS`; derive it from
+  `UNIT_POS` in a 1-D cube. `UNIT_POS_PLANE` (the reproducer), `sync_plane` and
+  `sync_cube` (the tests) work.
+- Every bit-for-bit test holds on CUDA in f32 and f64 (copies, scatters, frames, the
+  hand-written GEMM, (B) against (A), rotation against its `mul_add` replica, P2P and
+  leaf layouts against each other), and every operator stays within the Phase 4 bounds.
+  The P2P pair-terms test passes on CUDA without Metal's subnormal-flushing allowance
+  (CUDA's subnormal arithmetic itself is T3's to measure).
+- Test budget (release, H100, one process per test file): the 56 CUDA tests in 34 s
+  wall, 537 kernel variants and 18 s of first launches (compilation included), the
+  slowest 0.54 s (`HarmonicsKernel`, f64). On the first run the leaf tests' first
+  launches took 11.1 s against 7.2 s on the second (the driver's PTX cache in
+  `CUDA_CACHE_PATH`, presumably). The whole ignored run (CUDA plus the CPU runtime's
+  p = 20 sweep and GEMM of 1000 columns) in 55 s; the CPU runtime's 91 default tests on
+  Grace in 24 s.
 
 ## Allowed dependencies
 cubecl, cubek-matmul, cubek-std (the pinned workspace entries), nd-fmm-math, thiserror;

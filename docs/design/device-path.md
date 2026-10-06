@@ -1480,3 +1480,33 @@ laplace-fmm-plan.md §7, Phase 4, carries the status per component.
 | tuning time (10.4) | about 6 candidates × 0.3 s plus a few per bucket, within 10 s | 2.9–6.7 s per build on Metal f32 (T12, T13); a rebuild from the cache 0.08–0.12 s |
 | CPU-runtime suite (13.3) | under 5 minutes | 16 s warm for `nd-fmm-kernels` (T12) |
 
+
+## 18. CUDA on Grace Hopper (Phase 4S)
+
+Phase 4S runs this design on CUDA, on the H100 of locust's GH200 (docs/phase4s/). No new
+structure: CUDA takes the existing `Backend`/`BackendKind` values and the GPU defaults it
+shares with Metal (`Metal | Cuda` arms) until T7. This section records what was read and
+confirmed on the device. §18.1 is T2's (draft, for review with T2); T3 adds the device
+arithmetic and T7 the measured layouts and rules (§18.2).
+
+### 18.1 CUDA facts (T2, measured on locust, 2026-10-06)
+
+The facts continue the F-table of §1.2. "Measured" means on the GH200 with
+`nd-fmm-kernels`' tests (`--features cuda`), the GEMM spike or a minimal reproducer;
+CubeCL 0.11.0-pre.4 through its default LLVM NVPTX path, CUDA 12.6.3, driver 565.57.01.
+
+| # | Fact | Source |
+| --- | --- | --- |
+| F25 | `cubecl::Device::cuda(0)` opens the GPU; `client.name()` is `"cuda"`, which does not name the compiler path (LLVM NVPTX here, NVRTC with `cuda-cpp`). `DeviceInfo`: `cuda (cuda), NVIDIA GH200 480GB, CubeCL 0.11.0-pre.4, f32 f64` | measured; `cubecl-cuda-0.11.0-pre.4/src/runtime.rs`, `src/compiler.rs` (`CudaBackend::Llvm`) |
+| F26 | Hardware properties come from driver attributes: plane size the warp size, 32 (fixed); shared memory per cube the opt-in maximum (`MAX_SHARED_MEMORY_PER_BLOCK_OPTIN`), 232,448 B (Metal 32 KB); 1024 units per cube; cube counts (2³¹ − 1, 65,535, 65,535); memory `cuDeviceTotalMem`, 102,005,473,280 B; buffers aligned to 512 B. `GPU_MAX_CUBES` (65,535, wgpu's limit) caps the x dimension on CUDA too; raising it is T7's | measured (`capability` tests); `cubecl-cuda-0.11.0-pre.4/src/runtime.rs` (`DeviceService::init`) |
+| F27 | f64 registered with arithmetic, f32 likewise (`does_arithmetic`); TF32 registered for conversion only | measured; `cubecl-cuda-0.11.0-pre.4/src/runtime.rs` (`register_supported_types`, `register_type_usage(TF32, Conversion)`) |
+| F28 | No CMMA strategy launches on the LLVM path: `SimpleCyclicCmma` and `DoubleCyclicCmma` are `Unavailable` ("No tile size is available for the problem") at every shape tried, f32 and f64, p from 4 to 16. `Strategy::Auto` falls back to `SimpleUnit`. So `GemmPolicy::Auto`'s probe fails before the input-precision guard is reached, and the hand-written GEMM runs at every p and precision, as decided (README, "Precisions on CUDA") | measured (spike; `library_level_call`, `m2l_library`) |
+| F29 | `PLANE_POS` is not lowered for NVPTX: compiling a kernel that reads it panics (`unimplemented!`) on the server's compile thread. The launch is dropped and no error reaches the client: a later `read_one` returns the buffer's previous contents as `Ok`. `UNIT_POS_PLANE` (the lane id), `sync_plane` and `sync_cube` work. The P2P plane layout derives its plane and lane from `UNIT_POS` (T2) | measured (reproducer; P2P tests before and after); `cubecl-llvm-0.11.0-pre.4/src/nvptx/builtins.rs` |
+| F30 | Timing by CUDA events (`TimingMethod::Device`): a window adds no sync. An empty window measures (6.6 µs here) where wgpu reports nothing; `Device::close_window` drops the time of a window without a launch on every backend (T2) | measured (`times_windows`); `cubecl-cuda-0.11.0-pre.4/src/runtime.rs` |
+| F31 | Every bit-for-bit test of `nd-fmm-kernels` holds on CUDA in f32 and f64: copies, scatters, zeroing, frames, the hand-written GEMM against its host `mul_add` loop, (B) against (A), rotation M2L against its host replica, P2P and leaf layouts against each other. LLVM's `contract` flag (F17) changed none of these results; every operator test stays within the Phase 4 bounds | measured (the suite, 56 CUDA tests) |
+| F32 | Kernel compilation (first launches, LLVM to PTX plus the driver's JIT): 537 variants of the kernel suite in 18 s, the slowest 0.54 s (`HarmonicsKernel`, f64); on the first run, the leaf tests' 7.2 s were 11.1 s (the driver's PTX cache in `CUDA_CACHE_PATH`, presumably). The GEMM spike: 144 variants, 4.4 s | measured (`CUBECL_DEBUG_LOG`, `fmm-kernels/tools/compile_times.awk`) |
+
+The GEMM spike's CUDA run (spikes/cubecl-gemm/SPIKE_REPORT.md, "CUDA on GH200") puts the
+hand-written f64 GEMM at 7.8–9.9 TFLOP/s for p = 8 to 16 at B = 1e5, 23–29% of the
+datasheet's 34 TFLOP/s; the library's scalar path at 5.5–7.8. That spike's kernels are
+not the Phase 4 GEMM; T7 measures that one.

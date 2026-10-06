@@ -102,11 +102,15 @@ cargo test -p nd-fmm-simd --release -- --ignored --show-output
 ```
 
 A third job, `run-tests-kernels` (Phase 4 T4, kept at its sign-off on 2026-10-03), runs
-nd-fmm-kernels alone on the CubeCL CPU runtime, without MPI, on `ubuntu-latest`, with
-the cargo registry, the target directory and the `tracel-llvm` bundle cached:
+nd-fmm-kernels alone on the CubeCL CPU runtime on `ubuntu-latest`, with the cargo
+registry, the target directory and the `tracel-llvm` bundle cached. Since Phase 4S T2
+(decision 6) it also type-checks CUDA, never runs it; for the nd-fmm-exec check it
+installs MPI and libclang, and its tests still run without MPI:
 
 ```sh
 cargo clippy -p nd-fmm-kernels --all-targets --features cpu -- -D warnings
+cargo check -p nd-fmm-kernels --features cuda
+cargo check -p nd-fmm-exec --features cuda
 cargo test -p nd-fmm-kernels --features cpu --release -- --show-output
 ```
 
@@ -115,7 +119,7 @@ nd-fmm-kernels is a workspace member, not a default member: the default and
 
 ```sh
 cargo clippy -p nd-fmm-kernels --all-targets --features cpu,metal -- -D warnings
-cargo check -p nd-fmm-kernels --features cuda   # CUDA: type-checked, never run
+cargo check -p nd-fmm-kernels --features cuda   # CUDA: type-checked here, run on locust
 cargo test -p nd-fmm-kernels --features cpu --release -- --show-output
 # By hand on the M3 Max, outside the sandbox (Metal has no adapter inside it):
 cargo test -p nd-fmm-kernels --release --features metal -- --ignored --show-output
@@ -138,8 +142,13 @@ cargo clippy -p nd-fmm-simd --all-targets --target <other> -- -D warnings
 
 On locust (by hand, Phase 4S): after `tools/gh200/sync.sh`, the checks above that are
 not Metal run there too, each as `tools/gh200/remote.sh '<command>'`; Linux needs no
-loopback flags for `mpirun`. The CUDA tests (`--features cuda`, `#[ignore]`d) are
-added here by Phase 4S T2 (nd-fmm-kernels) and T4 (nd-fmm-exec).
+loopback flags for `mpirun`. The CUDA tests are `#[ignore]`d and run there by hand;
+for nd-fmm-kernels (Phase 4S T2; nd-fmm-exec follows in T4):
+
+```sh
+cargo test -p nd-fmm-kernels --release --features cpu,cuda -- --include-ignored --show-output
+cargo clippy -p nd-fmm-kernels --all-targets --features cpu,cuda -- -D warnings
+```
 
 `cargo test --workspace` needs a working MPI runtime, because nd-octree and
 nd-fmm-plan tests initialise MPI; crates without MPI (e.g. `cargo test -p nd-fmm-math`)

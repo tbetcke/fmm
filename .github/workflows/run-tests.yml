@@ -95,7 +95,8 @@ jobs:
   # never timings of kernels. The tests print the backends they ran; --show-output puts
   # that into the log. The two measurement steps report, for the T4 sign-off, the
   # tracel-llvm bundle download (the bundler's build-script run) and the kernel
-  # compilation inside the tests.
+  # compilation inside the tests. Since Phase 4S T2 (decision 6) the job also type-checks
+  # CUDA (nd-fmm-kernels and nd-fmm-exec); CUDA never runs in CI.
   run-tests-kernels:
     name: run-tests-kernels (CPU runtime)
     runs-on: ubuntu-latest
@@ -127,6 +128,18 @@ jobs:
 
       - name: Clippy
         run: cargo clippy -p nd-fmm-kernels --all-targets --features cpu --timings -- -D warnings
+
+      # CUDA is type-checked here, never run (Phase 4S decision 6). The runner has no
+      # nvcc, so cudarc assumes its default CUDA version, which is enough for a check.
+      - name: Type-check nd-fmm-kernels with CUDA
+        run: cargo check -p nd-fmm-kernels --features cuda
+
+      # nd-fmm-exec depends on mpi (mpi-sys runs bindgen against an MPI installation).
+      - name: Install MPI and libclang (for nd-fmm-exec)
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev openmpi-bin libopenmpi-dev
+
+      - name: Type-check nd-fmm-exec with CUDA
+        run: cargo check -p nd-fmm-exec --features cuda
 
       - name: Build the tests
         run: cargo test -p nd-fmm-kernels --features cpu --release --no-run --timings
