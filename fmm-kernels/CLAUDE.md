@@ -232,8 +232,9 @@ Measured on locust's H100 (GH200) on 2026-10-06 (Phase 4S T2; docs/design/device
 - Compiler path: LLVM to NVPTX (`client.name()` is `"cuda"`; it does not name the
   path). `PLANE_POS` is not lowered for NVPTX: compiling a kernel that reads it panics on
   CubeCL's server thread, and the launch is dropped silently (a later download returns
-  the buffer's old contents, no error). Do not use `PLANE_POS`; derive it from
-  `UNIT_POS` in a 1-D cube. `UNIT_POS_PLANE` (the reproducer), `sync_plane` and
+  the buffer's old contents, no error). Fixed upstream after 0.11.0-pre.4
+  (tracel-ai/cubecl#1714, merged 2026-09-25, not yet released). Until the pin includes
+  it, do not use `PLANE_POS`; derive it from `UNIT_POS` in a 1-D cube. `UNIT_POS_PLANE` (the reproducer), `sync_plane` and
   `sync_cube` (the tests) work.
 - Every bit-for-bit test holds on CUDA in f32 and f64 (copies, scatters, frames, the
   hand-written GEMM, (B) against (A), rotation against its `mul_add` replica, P2P and
