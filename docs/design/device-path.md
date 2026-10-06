@@ -1486,7 +1486,7 @@ laplace-fmm-plan.md §7, Phase 4, carries the status per component.
 Phase 4S runs this design on CUDA, on the H100 of locust's GH200 (docs/phase4s/). No new
 structure: CUDA takes the existing `Backend`/`BackendKind` values and the GPU defaults it
 shares with Metal (`Metal | Cuda` arms) until T7. This section records what was read and
-confirmed on the device. §18.1 is T2's (draft, for review with T2); T3 adds the device
+confirmed on the device. §18.1 is T2's, signed off on 2026-10-06; T3 adds the device
 arithmetic and T7 the measured layouts and rules (§18.2).
 
 ### 18.1 CUDA facts (T2, measured on locust, 2026-10-06)
@@ -1510,3 +1510,22 @@ The GEMM spike's CUDA run (spikes/cubecl-gemm/SPIKE_REPORT.md, "CUDA on GH200") 
 hand-written f64 GEMM at 7.8–9.9 TFLOP/s for p = 8 to 16 at B = 1e5, 23–29% of the
 datasheet's 34 TFLOP/s; the library's scalar path at 5.5–7.8. That spike's kernels are
 not the Phase 4 GEMM; T7 measures that one.
+
+**Signed off on 2026-10-06** (with T2, PR #63): the facts F25–F32 as recorded, and:
+1. **The `PLANE_POS` workaround (F29) is accepted.** It is a small workaround in
+   `nd-fmm-kernels` under the brief's rule. The P2P plane layout takes its plane and lane
+   as `UNIT_POS / group` and `UNIT_POS % group`. That is exact under three conditions,
+   all guaranteed: a 1-D cube, one fixed plane size (`P2pLayout::check`), and planes made
+   of consecutive units (CUDA documents this; the CPU runtime's planes are one unit;
+   Metal is tested bit for bit). No result changes on Metal or the CPU runtime. The
+   CubeCL defect is not yet reported upstream; the reproducer is in PR #63.
+2. **An empty timing window measures nothing on every backend (F30).** This is a change
+   on the CPU runtime too: its empty windows resolved to about 10 µs and now resolve to
+   `None`, so nd-fmm-exec's stage timings there read zero for a stage without a launch,
+   as that code already documents. No computed value changes.
+3. **F31 covers only the kernels tested.** "LLVM's `contract` flag changed none of
+   these results" holds for kernels whose results are pinned by explicit `fma` in a
+   fixed order. It is not a statement about CUDA arithmetic in general: that is T3's to
+   measure, and decision 10's to sign off, before T4's f64 gates rely on it.
+
+Left open: `GPU_MAX_CUBES` stays 65,535 on every backend; raising it on CUDA is T7's.
