@@ -160,3 +160,12 @@ tests_on!(
     round_trip_large_u32,
     widened_indices,
 );
+tests_on!(
+    cuda: round_trip_f32,
+    round_trip_f64,
+    round_trip_u32,
+    round_trip_large_f32,
+    round_trip_large_f64,
+    round_trip_large_u32,
+    widened_indices,
+);

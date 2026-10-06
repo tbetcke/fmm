@@ -634,4 +634,6 @@ mod gpu {
 
     tests_on!(metal: rotation_level_calls_equal_the_host_replica, rotation_special_offsets,
         rotation_empty_and_refused);
+    tests_on!(cuda: rotation_level_calls_equal_the_host_replica, rotation_special_offsets,
+        rotation_empty_and_refused);
 }

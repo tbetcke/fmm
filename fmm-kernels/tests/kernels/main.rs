@@ -5,6 +5,8 @@
 //! - `--features cpu`: every runtime test on the CubeCL CPU runtime, in f32 and f64.
 //! - `--features metal`: the same tests on Metal in f32, `#[ignore]`d, run by hand
 //!   outside the macOS sandbox with `-- --ignored`.
+//! - `--features cuda`: the tests on CUDA in f32 and f64, `#[ignore]`d, run by hand on
+//!   locust's H100 with `-- --ignored` (fmm-kernels/CLAUDE.md, "CUDA (Phase 4S)").
 //!
 //! Every runtime test prints the device it ran on and a closing line "backends run:
 //! …; not run: …"; run with `--show-output` to see them.

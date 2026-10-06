@@ -27,7 +27,7 @@
 //! | none | — | none: kernel definitions and host-side types only | — | [`Device::open`] gives [`KernelError::NotCompiled`] |
 //! | `cpu` | [`BackendKind::Cpu`] | the CPU runtime (LLVM JIT; its build downloads the `tracel-llvm` bundle) | f32, f64 | yes: the correctness backend, and the CI candidate |
 //! | `metal` | [`BackendKind::Metal`] | wgpu with the MSL compiler (`cubecl/metal` = `wgpu-msl`) | f32 | by hand, outside the macOS sandbox |
-//! | `cuda` | [`BackendKind::Cuda`] | CUDA (LLVM NVPTX) | f32, f64 (registered) | never: type-checked only |
+//! | `cuda` | [`BackendKind::Cuda`] | CUDA (LLVM NVPTX) | f32, f64 | by hand on locust (an H100); type-checked in CI |
 //!
 //! [`Device::open`] uses CubeCL's fallible device constructors and refuses a Metal
 //! device that came up without the MSL compiler (a silent WGSL fallback), recognised by
@@ -167,7 +167,8 @@
 //! cargo test -p nd-fmm-kernels                                   # no runtime: seconds
 //! cargo test -p nd-fmm-kernels --features cpu --release          # the CPU runtime
 //! cargo test -p nd-fmm-kernels --features metal --release -- --ignored   # Metal, by hand
-//! cargo check -p nd-fmm-kernels --features cuda                  # CUDA: type-checked only
+//! cargo check -p nd-fmm-kernels --features cuda                  # CUDA: the CI type-check
+//! cargo test -p nd-fmm-kernels --features cuda --release -- --ignored    # CUDA, on locust
 //! ```
 //!
 //! Metal needs a process with GPU access: it fails inside the macOS sandbox ("No

@@ -301,8 +301,15 @@ fn p2p_tiled_kernel<F: Float>(
     let mut member = 0usize;
     let mut lane = UNIT_POS as usize;
     if plane_sync {
-        member = PLANE_POS as usize;
-        lane = UNIT_POS_PLANE as usize;
+        // The plane and the lane from UNIT_POS, not PLANE_POS and UNIT_POS_PLANE: the
+        // cube is 1-D and `group` is the device's one plane size (`P2pLayout::check`),
+        // and every backend forms its planes from consecutive units, so these are the
+        // same values. cubecl-llvm 0.11.0-pre.4 does not lower PLANE_POS for NVPTX (it
+        // panics at compilation; Phase 4S T2); fixed upstream after that release
+        // (tracel-ai/cubecl#1714), so this can go back to the builtins once the pin
+        // includes the fix.
+        member = UNIT_POS as usize / group;
+        lane = UNIT_POS as usize % group;
     }
     let cube = CUBE_POS_Y as usize * CUBE_COUNT_X as usize + CUBE_POS_X as usize;
     let row = cube * groups + member;

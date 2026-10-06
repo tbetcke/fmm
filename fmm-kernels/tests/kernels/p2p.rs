@@ -1244,3 +1244,13 @@ tests_on!(
     invariance_and_determinism,
     layouts_agree,
 );
+tests_on!(
+    cuda: pair_terms,
+    sums,
+    coincident,
+    frames,
+    domain_ends,
+    accumulation_and_empty_calls,
+    invariance_and_determinism,
+    layouts_agree,
+);

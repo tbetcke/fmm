@@ -31,7 +31,8 @@ pub enum BackendKind {
     Cpu,
     /// wgpu with the MSL compiler, feature `metal`: f32 only.
     Metal,
-    /// CUDA, feature `cuda`: type-checked, never run here.
+    /// CUDA (LLVM NVPTX), feature `cuda`: f32 and f64, run by hand on locust's H100
+    /// (Phase 4S T2); type-checked in CI.
     Cuda,
 }
 
@@ -188,7 +189,11 @@ pub struct Counters {
 
 /// A timing window open on a device's stream ([`Device::open_window`]).
 #[derive(Debug)]
-pub struct TimingWindow(cubecl::client::ProfileWindow);
+pub struct TimingWindow {
+    window: cubecl::client::ProfileWindow,
+    /// The device's launches before the window opened ([`Device`]'s `launched`).
+    launched: u64,
+}
 
 /// The time of a closed [`TimingWindow`] ([`Device::close_window`]), read with
 /// [`resolve`](Self::resolve) once the window's work has run.
@@ -302,6 +307,9 @@ pub struct Device {
     info: DeviceInfo,
     id: u64,
     counters: Counters,
+    /// Every launch since the device was opened, never reset: a timing window with none
+    /// in it measures nothing.
+    launched: u64,
     /// The cap on the units per cube of the CPU runtime's launches.
     cpu_units: u32,
 }
@@ -384,6 +392,7 @@ impl Device {
             info,
             id: NEXT_DEVICE_ID.fetch_add(1, Ordering::Relaxed),
             counters: Counters::default(),
+            launched: 0,
             cpu_units: CPU_MAX_UNITS,
         })
     }
@@ -616,29 +625,32 @@ impl Device {
     ///
     /// [`KernelError::Device`] if the runtime cannot open a window.
     pub fn open_window(&mut self) -> Result<TimingWindow, KernelError> {
+        let launched = self.launched;
         self.client
             .profile_start()
-            .map(TimingWindow)
+            .map(|window| TimingWindow { window, launched })
             .map_err(device_error)
     }
 
     /// Closes `window` at the current position of the stream (`Client::profile_end`):
     /// the time from its opening to here, of the work queued in between, to
     /// [`resolve`](WindowTime::resolve) once that work has run. A window without device
-    /// work (no launch between its ends) measures nothing. Counts one window, and two
-    /// syncs if the window was not timed on the device (the runtime waited for the stream
-    /// at both ends: the CPU runtime, or a wgpu stream that found the device's
-    /// timestamp-query budget spent).
+    /// work (no launch between its ends) measures nothing on every backend: wgpu reports
+    /// nothing for it, and the time CUDA's events or the CPU runtime's host clock give it
+    /// is dropped. Counts one window, and two syncs if the window was not timed on the
+    /// device (the runtime waited for the stream at both ends: the CPU runtime, or a wgpu
+    /// stream that found the device's timestamp-query budget spent).
     ///
     /// # Errors
     ///
     /// [`KernelError::Device`] if the runtime cannot close the window.
     pub fn close_window(&mut self, window: TimingWindow) -> Result<WindowTime, KernelError> {
-        let duration = match self.client.profile_end(window.0) {
+        let duration = match self.client.profile_end(window.window) {
             Ok(duration) => Some(duration),
             Err(ProfileError::NotMeasured { .. }) => None,
             Err(error) => return Err(device_error(error)),
         };
+        let empty = self.launched == window.launched;
         self.counters.windows += 1;
         let on_device = match &duration {
             Some(duration) => {
@@ -650,7 +662,7 @@ impl Device {
             self.counters.syncs += 2;
         }
         Ok(WindowTime {
-            duration,
+            duration: duration.filter(|_| !empty),
             on_device,
         })
     }
@@ -668,6 +680,7 @@ impl Device {
     /// Counts one kernel launch.
     pub(crate) fn count_launch(&mut self) {
         self.counters.launches += 1;
+        self.launched += 1;
     }
 
     /// Fails with [`KernelError::WrongDevice`] unless `device` is this device's id.
