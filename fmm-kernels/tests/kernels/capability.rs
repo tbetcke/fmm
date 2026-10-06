@@ -144,7 +144,8 @@ fn counts_transfers_launches_and_syncs(device: &mut Device) {
 /// A timing window around a launch (device-path.md §8.3): on a device that times on the
 /// device (Metal, CUDA) it adds no sync, and its time resolves after the download that
 /// ends the work; on the CPU runtime it waits at both ends, counted as two syncs. Either
-/// way the window changes no value.
+/// way the window changes no value, and a window without a launch measures nothing on
+/// every backend (CUDA's events would time the empty gap).
 fn times_windows(device: &mut Device) {
     let on_device = device.times_on_device();
     assert!(
@@ -174,10 +175,7 @@ fn times_windows(device: &mut Device) {
     let c = device.counters();
     assert_eq!((c.windows, c.launches), (1, 0));
     assert_eq!(c.syncs, if on_device { 0 } else { 2 }, "{c:?}");
-    let empty = empty.resolve();
-    if on_device {
-        assert_eq!(empty, None, "an empty window measures nothing");
-    }
+    assert_eq!(empty.resolve(), None, "an empty window measures nothing");
     println!(
         "  timing window: {} the device, {elapsed:?} for one zero launch of 65,535 values",
         if on_device {
