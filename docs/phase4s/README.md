@@ -26,7 +26,7 @@ has three goals:
      (P2P, M2L, …);
    - written as a Markdown table.
 
-The phase has five parts:
+The phase has six parts:
 1. **Environment** (T1). The spack environment, the Rust toolchain, the scripts that keep
    everything under `/data/ucahtbe`, the sync-and-run loop from the M3 Max, and the
    existing CPU-side checks run on Grace.
@@ -41,6 +41,9 @@ The phase has five parts:
 5. **The host part of an evaluation** (T9, added on 2026-10-07 after T8's report). The
    output pass, the charge load and the output buffers, which T8 found to dominate the
    device at large N; bit for bit.
+6. **CI time** (T10, added on 2026-10-07). Package installs without the mirror, one
+   kernel test run instead of two, and caches warm for every pull request; every check
+   kept.
 
 Companion documents:
 - [docs/design/device-path.md](../design/device-path.md): all of it, especially §1.2
@@ -89,7 +92,8 @@ In scope:
 - Root CLAUDE.md: Phase 4S as the current phase, locust's build environment and checks
   (T1, T2, T4); `nd-fmm-bench` (T6).
 - `.github/workflows/run-tests.yml`: a `--features cuda` type-check step in
-  `run-tests-kernels` (decision 6, T2).
+  `run-tests-kernels` (decision 6, T2); cached package installs, one kernel test run,
+  warm caches, every check kept (T10; decision 13).
 
 Out of scope:
 - Multi-GPU, multi-node and multi-rank device runs (Phase 5 and later). locust has one
@@ -117,7 +121,7 @@ Out of scope:
 
 ## Requirements
 
-T1–T9 are accepted against these. A task may propose changing one, with reasons, for
+T1–T10 are accepted against these. A task may propose changing one, with reasons, for
 sign-off.
 
 1. **Reproducible environment.** locust's environment is built by one script from files
@@ -283,6 +287,9 @@ These hold for every task, so that no task decides them on its own:
   zero fill, `evaluate_into` (decision 11) and the device output pass (decision 12), each
   bit for bit the code before it on the host, the CPU runtime, Metal and CUDA; the
   host part of an evaluation measured before and after on locust and the M3 Max.
+- C4S.9 (T10): CI with every check of before, the package installs cached, one kernel
+  test run with the compile-time table, and caches restored on a pull request's first
+  run; the job and step times before and after, cold and warm.
 - The T8 report, `fmm-bench/results/phase4s-gh200.md`, gives on the GH200:
   - the device FMM in f32 and f64 against Grace at 1 and 72 threads, per kind;
   - kernel efficiency against the datasheet peaks;
@@ -309,6 +316,9 @@ One pull request each.
 - **T9** needs T8 (its numbers are T9's "before"). It changes `nd-fmm-exec`,
   `nd-fmm-kernels` and `nd-fmm-bench`; decisions 11 and 12 are signed off before their
   parts are built.
+- **T10** needs nothing and can run at any time; decision 13 is signed off before the
+  trigger changes. It changes only `.github/workflows/` and the documents. Phase 5 T3
+  also changes `.github/workflows/` (a multi-rank job): merge one, then rebase the other.
 - **Overlaps.** T4, T5 and T7 all change `nd-fmm-exec`: merge one, then rebase the next.
   T2 and T7 both change `nd-fmm-kernels`. T2 changes `.github/workflows/run-tests.yml`.
   T1 and T6 change the root CLAUDE.md and `.gitignore`. T6 changes the root `Cargo.toml` and `Cargo.lock` (a new member);
@@ -325,6 +335,7 @@ One pull request each.
 | T7 | [T7-hopper-tuning.md](T7-hopper-tuning.md) | CUDA layouts, limits and tuner candidates by measurement; H100 peaks and P2P model; the static M2L rule on CUDA; device-path.md §18.2 | C4S.7 | T4, T5, T6 |
 | T8 | [T8-benchmarks.md](T8-benchmarks.md) | `fmm-bench/results/phase4s-gh200.md`: the GH200 report, the Phase 4 "CUDA run", the CUDA leaf-size study; design-document update | gate: benchmarks published | T7 |
 | T9 | [T9-output-pass.md](T9-output-pass.md) | the host part of an evaluation: `load` and `output` timed, the output pass and the charge load in parallel, no zero fill, `Fmm::evaluate_into`, the output pass on devices with f64; bit for bit; before and after on locust and the M3 Max; device-path.md §18.4 | C4S.8 | T8 |
+| T10 | [T10-ci-time.md](T10-ci-time.md) | CI time: the package installs cached (first-party `actions/cache`), the kernel job's second test run folded into its first, warm caches from runs on `main`, a cargo cache for the root job, timeouts; every check kept; times before and after | C4S.9 | none |
 
 Review T1's environment and T3's recommendation yourself before the tasks that build on
 them. T4's f64 gates and T7's rules rest on T3.
@@ -443,6 +454,11 @@ Each is recorded in the exit checklist when made:
     download and one sync. T9 proposes the control that lets tests choose the host pass
     on the same build, and any change to the transfer formula (device-path.md §4.1).
     Recommended: on by default where the device has f64.
+13. **CI triggers and actions** (T10). Run the workflow on pushes to `main` as well as on
+    pull requests, so that `main` holds caches every pull request restores (one more CI
+    run per merge); and whether any third-party action is used (for example to cache
+    apt packages), or only first-party `actions/cache`. Recommended: pushes to `main`
+    yes; first-party actions only.
 
 ## Risks
 
@@ -490,4 +506,6 @@ Before T1 has merged, T1 itself uses `ssh locust` directly, outside the sandbox.
 - [ ] Reusable outputs (decision 11): `Fmm::evaluate_into` (T9)
 - [ ] Output pass on the device (decision 12): on devices with f64 (T9)
 - [ ] T9 merged: the host part of an evaluation, bit for bit; before and after measured; device-path.md §18.4
+- [ ] CI triggers and actions (decision 13): pushes to `main`; first-party actions only (T10)
+- [ ] T10 merged: CI with every check, cached installs, one kernel test run, warm caches; times before and after
 - [x] Design documents updated: laplace-fmm-plan §6.1, §6.2, §7 (Phase 4S), §8.3, §9.1, §9.2; device-path.md §17 note and §18 (§18.3 added); workspace-structure §2, §3, §3.1, §6 (T8)
