@@ -447,18 +447,19 @@ Each is recorded in the exit checklist when made:
 11. **Reusable outputs** (T9). `Fmm::evaluate_into(&mut self, charges, &mut Output<T>)`,
     an addition to `Fmm`'s API (requirement 2): the caller's buffers reused across
     evaluations, `evaluate` unchanged as a wrapper, every output bit the same. T9 proposes
-    the exact signature and its behaviour on a wrongly sized `Output`. Recommended: add it.
+    the exact signature and its behaviour on a wrongly sized `Output`. **Decided on
+    2026-10-07: add it**, as recommended.
 12. **The output pass on the device** (T9). On devices with f64 arithmetic (CUDA, the CPU
     runtime; not Metal), a kernel makes the caller-ordered, scaled φ and ∇φ on the device,
     in f64 arithmetic rounded once to T, so that the output stays bit for bit; still one
     download and one sync. T9 proposes the control that lets tests choose the host pass
     on the same build, and any change to the transfer formula (device-path.md §4.1).
-    Recommended: on by default where the device has f64.
+    **Decided on 2026-10-07: on by default where the device has f64**, as recommended.
 13. **CI triggers and actions** (T10). Run the workflow on pushes to `main` as well as on
     pull requests, so that `main` holds caches every pull request restores (one more CI
     run per merge); and whether any third-party action is used (for example to cache
-    apt packages), or only first-party `actions/cache`. Recommended: pushes to `main`
-    yes; first-party actions only.
+    apt packages), or only first-party `actions/cache`. **Decided on 2026-10-07: run on
+    pushes to `main`; first-party actions only**, as recommended.
 
 ## Risks
 
@@ -503,9 +504,9 @@ Before T1 has merged, T1 itself uses `ssh locust` directly, outside the sandbox.
 - [x] CUDA leaf-size default (decision 7): none (T8: the rule picks 64; decided 2026-10-07)
 - [x] Phase 5 hardware (decision 8): the M3 Max and locust (decided 2026-10-05)
 - [ ] Phase 5 briefs updated for decision 8 (T8; updated, review pending), reviewed
-- [ ] Reusable outputs (decision 11): `Fmm::evaluate_into` (T9)
-- [ ] Output pass on the device (decision 12): on devices with f64 (T9)
+- [x] Reusable outputs (decision 11): `Fmm::evaluate_into` (T9; decided 2026-10-07)
+- [x] Output pass on the device (decision 12): on by default on devices with f64 (T9; decided 2026-10-07)
 - [ ] T9 merged: the host part of an evaluation, bit for bit; before and after measured; device-path.md §18.4
-- [ ] CI triggers and actions (decision 13): pushes to `main`; first-party actions only (T10)
+- [x] CI triggers and actions (decision 13): pushes to `main`; first-party actions only (T10; decided 2026-10-07)
 - [ ] T10 merged: CI with every check, cached installs, one kernel test run, warm caches; times before and after
 - [x] Design documents updated: laplace-fmm-plan §6.1, §6.2, §7 (Phase 4S), §8.3, §9.1, §9.2; device-path.md §17 note and §18 (§18.3 added); workspace-structure §2, §3, §3.1, §6 (T8)
