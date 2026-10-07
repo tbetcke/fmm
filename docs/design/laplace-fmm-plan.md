@@ -1973,6 +1973,19 @@ tested on Metal. `nd-fmm-kernels` stays a member but not a default member, so th
 job never builds CubeCL. The CPU-runtime suite ran in 16 s warm on the M3 Max (T12;
 budget 2 minutes). The device path of `nd-fmm-exec` is not in CI: its tests need MPI
 and CubeCL together, and run by hand.
+*Since Phase 4S T10:* the workflow also runs on pushes to `main`, so that `main` holds
+the caches every pull request restores; `run-tests` has a cargo cache as well; both jobs
+that install packages install them from cached `.deb` files (offline on a hit); and the
+kernel job runs its suite once, with CubeCL's profiling log on, from which the
+compile-time table comes. Measured on PR #71 (2026-10-07; three cold and four warm runs):
+`run-tests-kernels` 676 s cold (671–703) and 314 s warm (300–339), against 951 s cold
+(796–1763) and 636 and 1460 s warm for the suite as it has been since Phase 4S T7 (runs
+#80–#86, with a second test run of 186–273 s and package installs of up to 900 s on a
+slow mirror); `run-tests` 426 s cold (384–438) and 356 s warm (343–372), against 434 s
+(259–931) without a cache. The tests themselves now take most of both jobs: about 4
+minutes of kernel tests on the CPU runtime (the slowest kernel variant, a
+`GemmCubeKernel`, compiles for 95–120 s there) and about 270 s of debug tests in
+`run-tests`.
 
 The root CI workflow runs everything on a single MPI rank. No nightly or multi-rank job
 exists yet: `run-examples` runs weekly at 3 ranks and covers only `nd-octree`'s

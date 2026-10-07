@@ -82,8 +82,9 @@ use `ssh`, which the sandbox denies, so they run outside it. locust never commit
 pushes; it is a shared node, so check `nvidia-smi` and `uptime` before timing anything.
 
 ## Checks
-CI (GitHub Actions, `.github/workflows/run-tests.yml`, pull requests to `main`) runs exactly this for
-the default members:
+CI (GitHub Actions, `.github/workflows/run-tests.yml`, on pull requests to `main` and on
+pushes to `main`, so that `main` holds the caches every pull request restores; Phase 4S
+T10) runs exactly this for the default members:
 
 ```sh
 cargo fmt -- --check
@@ -114,6 +115,14 @@ cargo check -p nd-fmm-kernels --features cuda
 cargo check -p nd-fmm-exec --features cuda
 cargo test -p nd-fmm-kernels --features cpu --release -- --show-output
 ```
+
+Its one test run (since Phase 4S T10) sets `CUBECL_DEBUG_LOG`, and the next step prints
+the kernel compile times from that log with `fmm-kernels/tools/compile_times.awk`.
+`run-tests` and `run-tests-kernels` cache cargo (keyed on the rustc version and
+`Cargo.lock`, with a prefix fallback) and the `.deb` files of their packages (keyed on the
+runner image and the package list; `.github/scripts/apt-install.sh` installs them offline
+on a hit). Every job has a `timeout-minutes`, and so has each package install; a failed
+install is a mirror problem, and its error says to re-run.
 
 nd-fmm-kernels is a workspace member, not a default member: the default and
 `--workspace` checks build it without a backend. For a change to it, also run

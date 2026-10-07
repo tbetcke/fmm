@@ -184,7 +184,10 @@ of C4.8 (T11) in docs/phase4/.
   Kernel compilation, from CubeCL's profiling log (the first launch of each variant
   includes its compilation): `CUBECL_DEBUG_LOG=<file> cargo test -p nd-fmm-kernels
   --features cpu --release -q`, then `awk -f fmm-kernels/tools/compile_times.awk
-  <file>` (T4: 34 variants, 0.27 s on the M3 Max).
+  <file>` (T4: 34 variants, 0.27 s on the M3 Max). In CI the log comes from the job's
+  one test run, which sets `CUBECL_DEBUG_LOG` (Phase 4S T10: the test output, the test
+  count and the "backends run" lines are the same with the log on), and the awk summary
+  is the next step.
 - CubeCL features: the workspace entries set `default-features = false`, so `cpu` and
   `cuda` build without CubeCL's `persistence`. With `metal` it is on regardless:
   `cubecl-wgpu` 0.11.0-pre.4 takes `cubecl-cpp` with its defaults, which enable
