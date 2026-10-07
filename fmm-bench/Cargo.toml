@@ -1,0 +1,34 @@
+[package]
+name = "nd-fmm-bench"
+version = "0.1.0-dev"
+description = "One-command benchmark of the nd-project FMM: N points in the unit cube, f32/f64, a degree, a backend; Markdown tables."
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "nd_fmm_bench"
+
+# The benchmark binary, run by tools/bench/run.sh (Phase 4S T6). A timing run: not
+# registered with templated-examples or CI.
+[[bin]]
+name = "nd-fmm-bench"
+path = "src/main.rs"
+
+# The device path of nd-fmm-exec, passed through as in nd-fmm-validate
+# (docs/design/device-path.md §3.4). tools/bench/run.sh picks them from `--backend`.
+[features]
+default = []
+gpu = ["nd-fmm-exec/gpu", "nd-fmm-validate/gpu"]
+cpu = ["gpu", "nd-fmm-exec/cpu", "nd-fmm-validate/cpu"]
+metal = ["gpu", "nd-fmm-exec/metal", "nd-fmm-validate/metal"]
+cuda = ["gpu", "nd-fmm-exec/cuda", "nd-fmm-validate/cuda"]
+
+[dependencies]
+nd-fmm-exec = { workspace = true }
+nd-fmm-validate = { workspace = true }
+# Only for the `Stored` bound that `Fmm<T>` carries, which nd-fmm-exec does not
+# re-export: the measurement is generic over f32 and f64.
+nd-fmm-tables = { workspace = true }
+mpi = { workspace = true }
