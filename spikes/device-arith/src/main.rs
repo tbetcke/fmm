@@ -5,16 +5,18 @@
 //! OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 BLIS_NUM_THREADS=1 \
 //!     VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 \
 //!     cargo run --release -p nd-fmm-spike-device-arith --features cpu,metal -- \
-//!     [--backends metal,cpu] [--sections primitives,compiler,domain,p2p,cpu-p2p,leafops] [--quick]
+//!     [--backends metal,cuda,cpu] [--sections primitives,compiler,domain,p2p,cpu-p2p,leafops] [--quick]
 //! ```
 //!
-//! Metal needs a process with GPU access (outside the macOS sandbox). Timings are
-//! reported, never asserted.
+//! Metal needs a process with GPU access (outside the macOS sandbox). CUDA runs on locust
+//! (Phase 4S T3): `--no-default-features --features cuda -- --backends cuda`; with
+//! `CUBECL_CUDA_DUMP_PTX=<dir>` the PTX of each kernel variant lands in a subdirectory
+//! named after it (`backend::keep_ptx`). Timings are reported, never asserted.
 
 use std::time::Instant;
 
 use nd_fmm_simd::P2pKernel;
-use nd_fmm_spike_device_arith::backend::{Backend, describe, supports_f64};
+use nd_fmm_spike_device_arith::backend::{Backend, describe, keep_ptx, supports_f64};
 use nd_fmm_spike_device_arith::real::Real;
 use nd_fmm_spike_device_arith::{compiler, cpu_p2p, domain, leafops, p2p, pairs, primitives};
 use nd_fmm_validate::bench::{cores, cpu_model, performance_cores, target, toolchain};
@@ -144,6 +146,7 @@ fn primitives_for<T: Real>(client: &cubecl::prelude::Client, backend: Backend, s
     for inputs in &sets {
         for op in primitives::Op::ALL {
             let a = primitives::measure(client, backend, op, inputs);
+            keep_ptx(&format!("primitives {} {}", T::NAME, op.name()));
             println!(
                 "| {} | {} | `{}` | {} | {} | {:.6e} | {} of {} |",
                 backend.name(),
@@ -176,7 +179,9 @@ fn primitives_for<T: Real>(client: &cubecl::prelude::Client, backend: Backend, s
 fn compiler_for<T: Real>(client: &cubecl::prelude::Client, backend: Backend) {
     println!("| backend | precision | probe | device | IEEE as written | verdict |");
     println!("| --- | --- | --- | --- | --- | --- |");
-    for (p, y, verdict) in compiler::run::<T>(client) {
+    let results = compiler::run::<T>(client);
+    keep_ptx(&format!("compiler {}", T::NAME));
+    for (p, y, verdict) in results {
         println!(
             "| {} | {} | {} | {:e} | {:e} | {} |",
             backend.name(),
@@ -200,6 +205,7 @@ fn domain_for<T: Real>(client: &cubecl::prelude::Client, backend: Backend, sizes
     ] {
         let t = Instant::now();
         let dev = domain::run(client, backend, &list);
+        keep_ptx(&format!("domain {}", T::NAME));
         let o = domain::check(&list, &dev);
         eprintln!(
             "  {label} {}: {} pairs in {:.1} s",
@@ -275,6 +281,7 @@ fn p2p_for<T: Real>(client: &cubecl::prelude::Client, backend: Backend, sizes: &
             acc = nd_fmm_validate::p2p_kernels::Accuracy::worst(acc, a);
             refacc = nd_fmm_validate::p2p_kernels::Accuracy::worst(refacc, r);
         }
+        keep_ptx(&format!("p2p {} {}", T::NAME, c.name()));
         ok &= pass;
         println!(
             "| {} | {} | {} | {} | {} | {}, {} | {:.2e} [{:.2e}] | {:.2e} [{:.2e}] | {} |",
@@ -461,6 +468,11 @@ fn leafops_for<T: Real>(client: &cubecl::prelude::Client, backend: Backend, size
     for p in [8, 20] {
         for irregular in [false, true] {
             let r = leafops::harmonics::<T>(client, backend, p, irregular, sizes.harmonic_points);
+            keep_ptx(&format!(
+                "harmonics {} p{p} {}",
+                T::NAME,
+                if irregular { "irregular" } else { "regular" }
+            ));
             println!(
                 "| {} | {} | {} harmonics, p = {p} | {} of {} | {} ({} where normal; {} host values subnormal) | {} | {} |",
                 backend.name(),
@@ -477,6 +489,7 @@ fn leafops_for<T: Real>(client: &cubecl::prelude::Client, backend: Backend, size
         }
     }
     let g = leafops::gemm::<T>(client, backend, 8, 512);
+    keep_ptx(&format!("gemm {}", T::NAME));
     println!(
         "| {} | {} | y += A x, n = 81, 512 columns | {} of {} (= fused host: {}) | {} | – | – |",
         backend.name(),

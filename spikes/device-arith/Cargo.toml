@@ -15,8 +15,11 @@ cpu = ["cubecl/cpu"]
 metal = ["cubecl/metal"]
 # No `metal-native` (`cubecl-metal`, MTLMathMode::Safe): cubecl-metal 0.11.0-pre.4 does not
 # compile (`DebugInformation` is not imported in src/compute/context.rs:139; REPORT.md).
-# Type-checked only; no CUDA device is available.
+# CubeCL's default LLVM NVPTX path; run on locust's H100 (Phase 4S T3, REPORT.md).
 cuda = ["cubecl/cuda"]
+# CUDA through NVRTC instead (CubeCL's `cuda-cpp`), for the Phase 4S T3 comparison only.
+# Production code stays on LLVM NVPTX (docs/phase4s/README.md, decision 4).
+cuda-cpp = ["cuda", "cubecl/cuda-cpp"]
 
 [dependencies]
 cubecl.workspace = true

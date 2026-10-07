@@ -33,14 +33,14 @@ mod slot {
     pub const NEG_A: usize = 14; // −(1 + e)
     /// Eight more copies of 1 + e, one per contraction probe: LLVM's CSE runs before
     /// cubecl-opt's InstCombine on the CPU runtime, so a shared a·b would have several
-    /// uses and never fuse.
+    /// uses and never fuse. The last one is the product of the fma-chain probe.
     pub const A_COPIES: usize = 15;
     pub const ONE2: usize = 23; // 1 again, a distinct load
     pub const COUNT: usize = 24;
 }
 
 /// The number of probes.
-pub const PROBES: usize = 23;
+pub const PROBES: usize = 24;
 
 // `(one - one)` and `inf - inf` repeat an operand on purpose: they probe cubecl-opt's folds.
 #[allow(clippy::eq_op)]
@@ -106,6 +106,12 @@ fn probe_kernel<F: Float>(v: &[F], out: &mut [F]) {
     let one2 = v[23];
     out[21] = (one + tiny) - one2;
     out[22] = one - (one2 + tiny);
+    // An fma chain: fma(z, z, p) + c with z = 0 and p = a·a is fl(fl(a·a) + c) = 0 as
+    // written; folded into fma(z, z, fma(a, a, c)) (LLVM's aggressive FMA combine with
+    // reassociation, Phase 4S T3) it is e².
+    let a7 = v[22];
+    let p7 = a7 * a7;
+    out[23] = fma(zero, zero, p7) + neg_c;
 }
 
 /// One probe: what it computes, the IEEE value as written, and the value of the effect.
@@ -274,6 +280,11 @@ pub fn probes<T: Real>() -> (Vec<T>, Vec<Probe<T>>) {
             name: "x − (y + z) (x = y = 1, distinct loads)",
             ieee: zero,
             effect: (zero - tiny, "reassociated"),
+        },
+        Probe {
+            name: "fma(z, z, a·b) + c (z = 0)",
+            ieee: zero,
+            effect: (e2, "folded into fma(z, z, fma(a, b, c))"),
         },
     ];
     assert_eq!(probes.len(), PROBES);
