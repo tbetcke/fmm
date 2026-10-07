@@ -378,6 +378,7 @@ fn median_stages(timings: &[StageTimings]) -> StageTimings {
         evaluate_leaves: stage(|t| t.evaluate_leaves),
         output: stage(|t| t.output),
         device: None,
+        kinds: None,
     }
 }
 

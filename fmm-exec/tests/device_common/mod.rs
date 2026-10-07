@@ -47,7 +47,14 @@
 //!   §8.3); a build with `device_timestamps(true)` gives the same bits and, where the
 //!   device times on itself (Metal, CUDA), opens one timing window per stage with device work
 //!   (five) with no sync of its own and returns the device times with the output, while
-//!   on the CPU runtime, whose windows wait for it, it opens none.
+//!   on the CPU runtime, whose windows wait for it, it opens none;
+//! - per-kind timings (Phase 4S T5, `tests/kind_common`): a build with
+//!   `kind_timings(Synchronous)` gives the same bits, two evaluations, each with one sync
+//!   after the charge upload and one after every level call with a pair besides the
+//!   download's, no window, the launches of the formula, and the calls of the plan per
+//!   kind and level; where the device times on itself, so do builds with
+//!   `kind_timings(Device)`, one window per call and the one sync, alone and with
+//!   `device_timestamps(true)` (its five stage windows around the call windows).
 //!
 //! On several ranks the device build returns `DeviceNeedsOneRank` on every rank instead
 //! (device-path.md §4.4), which [`check_backend`] checks and reports.
@@ -59,7 +66,7 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, Equivalence};
 use nd_fmm_exec::device::{DataKind, GroupedImage, StageTiming, Traffic};
 use nd_fmm_exec::fmm::{
-    Backend, Fmm, FmmBuilder, FmmError, OperatorKind, Output, Placement, SettingsError,
+    Backend, Fmm, FmmBuilder, FmmError, KindTiming, OperatorKind, Output, Placement, SettingsError,
 };
 use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_exec::tables::M2lStrategy;
@@ -812,6 +819,53 @@ fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
                 windowed,
                 "{backend}, {what}: the device stage times"
             );
+        }
+    }
+    // Per-kind timings (Phase 4S T5): the same bits in every mode. `Synchronous` adds one
+    // sync after the charge upload and one after every level call with a pair, and no
+    // window; `Device`, where the device times on itself, one window per such call and no
+    // sync, also inside the stage windows of `device_timestamps`.
+    let mut modes = vec![(KindTiming::Synchronous, false)];
+    if timestamps {
+        modes.extend([(KindTiming::Device, false), (KindTiming::Device, true)]);
+    }
+    for (mode, stage_windows) in modes {
+        let what = format!(
+            "{backend}, default placement, kind_timings({mode:?}){}",
+            if stage_windows {
+                " with device_timestamps(true)"
+            } else {
+                ""
+            }
+        );
+        let mut timed = builder
+            .clone()
+            .threads(1)
+            .backend(backend)
+            .kind_timings(mode)
+            .device_timestamps(stage_windows)
+            .build(sources, targets, comm)
+            .unwrap_or_else(|error| panic!("{what} does not build: {error}"));
+        for _ in 0..2 {
+            let output = timed.evaluate(charges).expect("the device FMM evaluates");
+            assert_eq!(output_bits(&output), first_bits, "{what}: differs from Off");
+            let calls = crate::kind_common::check_kinds(&what, &timed, &output, mode);
+            let counters = timed.device_counters().unwrap().evaluation;
+            let (windows, syncs) = match mode {
+                KindTiming::Synchronous => (0, 1 + 1 + calls as u64),
+                _ => (calls as u64 + if stage_windows { 5 } else { 0 }, 1),
+            };
+            assert_eq!(
+                (counters.windows, counters.syncs, counters.launches),
+                (windows, syncs, expected.launches),
+                "{what}: windows, syncs and launches of an evaluation ({calls} calls)"
+            );
+            assert_eq!(
+                output.timings.device.is_some(),
+                stage_windows,
+                "{what}: the device stage times"
+            );
+            crate::kind_common::record(&format!("{backend} {mode:?}"), calls);
         }
     }
     // The expansions after the first charges on both paths (the host last evaluated the

@@ -54,7 +54,13 @@
 //!   bit, and per evaluation the host's wall time of `evaluate`, the sum of the five
 //!   device spans and each span printed. Whether the windows overlap is read from the
 //!   numbers (on Metal, T11, the spans added up to more than the evaluation's wall time),
-//!   never asserted: timings are reported, not asserted.
+//!   never asserted: timings are reported, not asserted;
+//! - per-kind timings (Phase 4S T5): in every scenario `check_backend` also builds the
+//!   default placement with `kind_timings(Synchronous)` and `kind_timings(Device)` (alone
+//!   and inside the stage windows), each bit for bit the default with the syncs and
+//!   windows its mode documents (`tests/kind_common`); and the call windows of
+//!   `kind_timings(Device)` against the stage windows on the same cube in f32 and f64,
+//!   printed (`tests/kind_common/windows.rs`).
 //!
 //! The test prints the device (`Backend::probe`) and the backends it ran.
 #![cfg(feature = "cuda")]
@@ -72,6 +78,9 @@ use nd_fmm_exec::tune::{CacheState, Decision, Source, library_applies};
 use nd_fmm_kernels::Precision;
 
 mod device_common;
+mod kind_common;
+#[path = "kind_common/windows.rs"]
+mod kind_windows;
 mod tune_common;
 
 use device_common::{Outcome, check_backend, output_bits};
@@ -530,7 +539,14 @@ fn cuda_device_path() {
         // The stage windows.
         stage_windows::<f32>(&mut rng, &comm);
         stage_windows::<f64>(&mut rng, &comm);
+        // The call windows of `KindTiming::Device` against them (Phase 4S T5).
+        let points = cube(&mut rng, 100_000);
+        let q32 = charges::<f32>(&mut rng, points.len());
+        kind_windows::call_windows::<f32>(Backend::Cuda, (&points, &q32), 8, &comm);
+        let q64 = charges::<f64>(&mut rng, points.len());
+        kind_windows::call_windows::<f64>(Backend::Cuda, (&points, &q64), 8, &comm);
     }
+    eprintln!("rank {}: {}", comm.rank(), kind_common::summary());
 
     eprintln!(
         "rank {}: backends run: cuda (f32, f64); not run: cpu (tests/mpi_exec.rs with \

@@ -67,6 +67,11 @@
 //! tree, ranks, input and P2P kernel, two evaluations are bit-identical (the
 //! accumulation order of `nd_fmm_plan::evaluator`), for every number of threads.
 //!
+//! On request ([`FmmBuilder::kind_timings`], [`Fmm::set_kind_timings`]; Phase 4S T5) it
+//! also times every level call by operator kind and level ([`KindTiming`],
+//! [`StageTimings::kinds`]), on the host path and every device backend, with the same
+//! output bit for bit.
+//!
 //! # P2P kernel
 //!
 //! [`FmmBuilder::p2p_kernel`] chooses the kernel of P2P ([`P2pChoice`]): by default
@@ -158,6 +163,9 @@ use nd_octree::{MortonKey, Octree, OctreeOptions, PhysicalBox, points_to_morton}
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use rlst::SliceArray;
 use thiserror::Error;
+
+#[cfg(feature = "gpu")]
+use nd_fmm_kernels::{TimingWindow, WindowTime};
 
 #[cfg(feature = "gpu")]
 use crate::device::{self, DeviceCounters, DeviceDriver, DeviceOptions, DeviceReport, ViewsImage};
@@ -489,6 +497,13 @@ pub enum SettingsError {
         /// The number of ranks.
         ranks: usize,
     },
+    /// [`KindTiming::Device`] on a backend that does not time on the device: the host,
+    /// and the CPU runtime, whose timing windows wait for it (Phase 4S T5).
+    #[error("kind_timings(Device) needs a device that times on itself; {backend} does not")]
+    KindTimingUnsupported {
+        /// The requested backend.
+        backend: Backend,
+    },
 }
 
 /// Which of the two point sets a point belongs to, for error messages.
@@ -619,6 +634,7 @@ pub enum FmmError {
 /// | [`host_fallback`](Self::host_fallback) | none |
 /// | [`synchronous_stages`](Self::synchronous_stages) | off |
 /// | [`device_timestamps`](Self::device_timestamps) | off |
+/// | [`kind_timings`](Self::kind_timings) | [`KindTiming::Off`] |
 /// | [`device_p2p_layout`](Self::device_p2p_layout) | [`DeviceP2pLayout::Auto`]: by backend |
 /// | [`device_leaf_layout`](Self::device_leaf_layout) | [`DeviceLeafLayout::Auto`]: by backend |
 /// | [`device_gemm`](Self::device_gemm) | [`DeviceGemm::Auto`]: by precision, p and backend |
@@ -643,6 +659,7 @@ pub struct FmmBuilder<T> {
     host_fallback: Vec<OperatorKind>,
     synchronous_stages: bool,
     device_timestamps: bool,
+    kind_timing: KindTiming,
     device_p2p_layout: DeviceP2pLayout,
     device_leaf_layout: DeviceLeafLayout,
     device_gemm: DeviceGemm,
@@ -671,6 +688,7 @@ impl<T> FmmBuilder<T> {
             host_fallback: Vec::new(),
             synchronous_stages: false,
             device_timestamps: false,
+            kind_timing: KindTiming::Off,
             device_p2p_layout: DeviceP2pLayout::Auto,
             device_leaf_layout: DeviceLeafLayout::Auto,
             device_gemm: DeviceGemm::Auto,
@@ -838,6 +856,21 @@ impl<T> FmmBuilder<T> {
         self
     }
 
+    /// Times every level call by operator kind ([`KindTiming`]; default
+    /// [`KindTiming::Off`]; Phase 4S T5), into [`StageTimings::kinds`]. For reports only:
+    /// the output is the same bit for bit in every mode, and only the syncs and windows
+    /// [`KindTiming`] documents are added.
+    ///
+    /// It composes with [`synchronous_stages`](Self::synchronous_stages) and
+    /// [`device_timestamps`](Self::device_timestamps) and implies neither: each adds its
+    /// own syncs or windows. [`build`](Self::build) refuses [`KindTiming::Device`] on a
+    /// backend that does not time on the device (the host and the CPU runtime) with
+    /// [`SettingsError::KindTimingUnsupported`], agreed by step 1's all-reduce.
+    pub fn kind_timings(mut self, mode: KindTiming) -> Self {
+        self.kind_timing = mode;
+        self
+    }
+
     /// With a device backend, tunes the device path's choices against the timings of this
     /// device and keeps them in the directory `dir` (Phase 4 T12, C4.7;
     /// docs/design/device-path.md §10): the M2L strategy under [`M2lStrategy::Auto`], the
@@ -980,6 +1013,8 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
                 let start = Instant::now();
                 let device = open_device::<T>(self.backend, self.threads)?;
                 open_time = start.elapsed();
+                let on_device = device.as_ref().is_some_and(times_on_device);
+                check_kind_timing(self.kind_timing, self.backend, on_device)?;
                 Ok((pool, supplied, device))
             });
         let (pool, supplied, device) = agree(comm, local)?;
@@ -1139,12 +1174,15 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         // The device's copy of the points, from copies of the stores: the store accessors
         // and `operator_mut` cannot borrow the evaluator at once (device-path.md §4.3).
         let start = Instant::now();
-        if evaluator.operator().is_device() {
+        if evaluator.operator().engine.is_device() {
             let stores = (
                 evaluator.source_store().clone(),
                 evaluator.target_input_store().clone(),
             );
-            evaluator.operator_mut().load_points(&stores.0, &stores.1)?;
+            evaluator
+                .operator_mut()
+                .engine
+                .load_points(&stores.0, &stores.1)?;
         }
         device_time += start.elapsed();
 
@@ -1192,7 +1230,11 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         tuner: Option<Tuner>,
     ) -> Result<ExecOperator<T>, FmmError> {
         match device {
-            None => Ok(ExecOperator::Host(operator)),
+            None => Ok(ExecOperator::new(
+                Engine::Host(operator),
+                self.kind_timing,
+                false,
+            )),
             #[cfg(feature = "gpu")]
             Some(device) => {
                 let options = DeviceOptions {
@@ -1211,8 +1253,13 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
                     },
                 };
                 let tuner = tuner.expect("a device build has a tuner");
+                let on_device = device.times_on_device();
                 let driver = device::driver(operator, device, plan, counts, &options, tuner)?;
-                Ok(ExecOperator::Device(driver))
+                Ok(ExecOperator::new(
+                    Engine::Device(driver),
+                    self.kind_timing,
+                    on_device,
+                ))
             }
             #[cfg(not(feature = "gpu"))]
             Some(never) => {
@@ -1298,6 +1345,32 @@ fn open_device<T: Stored>(
     device::open_device::<T>(backend, threads)
 }
 
+/// Refuses [`KindTiming::Device`] on `backend` unless its device times on itself
+/// (`on_device`).
+fn check_kind_timing(
+    mode: KindTiming,
+    backend: Backend,
+    on_device: bool,
+) -> Result<(), SettingsError> {
+    if mode == KindTiming::Device && !on_device {
+        return Err(SettingsError::KindTimingUnsupported { backend });
+    }
+    Ok(())
+}
+
+/// Whether `device` times on itself (`nd_fmm_kernels::Device::times_on_device`: Metal,
+/// CUDA), for [`KindTiming::Device`].
+#[cfg(feature = "gpu")]
+fn times_on_device(device: &OpenedDevice) -> bool {
+    device.times_on_device()
+}
+
+/// Without the `gpu` feature no device is opened.
+#[cfg(not(feature = "gpu"))]
+fn times_on_device(device: &OpenedDevice) -> bool {
+    match *device {}
+}
+
 /// Without the `gpu` feature only the host runs: every device backend is not compiled
 /// in.
 #[cfg(not(feature = "gpu"))]
@@ -1318,10 +1391,9 @@ fn open_device<T: Stored>(
 /// The evaluator of an [`Fmm`], which owns its plan.
 type FmmEvaluator<'o, C, T> = Evaluator<'o, C, ExecOperator<T>, Plan>;
 
-/// The operator of the evaluator: [`LaplaceOperator`] on the host path, or the device
-/// operator (feature `gpu`), which wraps one for its host fallback
-/// (docs/design/device-path.md §3.3). Every call is delegated; without `gpu` the enum
-/// has the host variant only.
+/// Where the level calls of the evaluator run: [`LaplaceOperator`] on the host path, or
+/// the device operator (feature `gpu`), which wraps one for its host fallback
+/// (docs/design/device-path.md §3.3). Without `gpu` the enum has the host variant only.
 #[cfg_attr(
     feature = "gpu",
     expect(
@@ -1330,13 +1402,13 @@ type FmmEvaluator<'o, C, T> = Evaluator<'o, C, ExecOperator<T>, Plan>;
                   level call of the host path"
     )
 )]
-enum ExecOperator<T: SimdScalar + Stored + Equivalence + Default> {
+enum Engine<T: SimdScalar + Stored + Equivalence + Default> {
     Host(LaplaceOperator<T>),
     #[cfg(feature = "gpu")]
     Device(Box<dyn DeviceDriver<T>>),
 }
 
-impl<T: SimdScalar + Stored + Equivalence + Default> ExecOperator<T> {
+impl<T: SimdScalar + Stored + Equivalence + Default> Engine<T> {
     /// The host operator, or the device operator's fallback operator.
     fn host(&self) -> &LaplaceOperator<T> {
         match self {
@@ -1406,43 +1478,243 @@ impl<T: SimdScalar + Stored + Equivalence + Default> ExecOperator<T> {
             Self::Device(driver) => driver.close_stage(stage),
         }
     }
+
+    /// Where `kind` runs: on the host for the host path, as the device report says for a
+    /// device.
+    fn placement(&self, kind: OperatorKind) -> Placement {
+        match self {
+            Self::Host(_) => {
+                let _ = kind;
+                Placement::Host
+            }
+            #[cfg(feature = "gpu")]
+            Self::Device(driver) => driver.report().placement(kind),
+        }
+    }
 }
 
-/// Delegates to the variant.
+/// The operator of the evaluator: the [`Engine`] that runs the level calls, and the
+/// per-kind timer of [`FmmBuilder::kind_timings`] around them (Phase 4S T5). Every level
+/// call passes through the [`FmmOperator`] implementation below, the one place where it
+/// is timed; with [`KindTiming::Off`] it only checks the mode and delegates.
+struct ExecOperator<T: SimdScalar + Stored + Equivalence + Default> {
+    engine: Engine<T>,
+    kinds: KindRecorder,
+}
+
+impl<T: SimdScalar + Stored + Equivalence + Default> ExecOperator<T> {
+    /// The operator of `engine`, timing its level calls by `mode`; `on_device` if its
+    /// device times on itself.
+    fn new(engine: Engine<T>, mode: KindTiming, on_device: bool) -> Self {
+        let placement = OperatorKind::ALL.map(|kind| engine.placement(kind));
+        Self {
+            engine,
+            kinds: KindRecorder::new(mode, placement, on_device),
+        }
+    }
+
+    /// Starts the timer of a level call of `kind` with a pair: a timing window for a
+    /// device kind with [`KindTiming::Device`], the host clock otherwise.
+    fn start_call(&mut self, kind: OperatorKind) -> CallClock {
+        match &mut self.engine {
+            #[cfg(feature = "gpu")]
+            Engine::Device(driver)
+                if self.kinds.timings.mode == KindTiming::Device
+                    && self.kinds.timings.get(kind).placement == Placement::Device =>
+            {
+                CallClock::Window(driver.open_call_window())
+            }
+            _ => {
+                let _ = kind;
+                CallClock::Host(Instant::now())
+            }
+        }
+    }
+
+    /// Stops the timer of the level call of `kind` on `level` and adds its time: with
+    /// [`KindTiming::Synchronous`] after a sync of the device (nothing on the host); a
+    /// window is closed and resolved after the evaluation's download.
+    fn end_call(&mut self, kind: OperatorKind, level: usize, clock: CallClock) {
+        match clock {
+            CallClock::Host(start) => {
+                if self.kinds.timings.mode == KindTiming::Synchronous {
+                    self.engine.sync();
+                }
+                self.kinds.add(kind, level, start.elapsed());
+            }
+            #[cfg(feature = "gpu")]
+            CallClock::Window(window) => {
+                let Engine::Device(driver) = &mut self.engine else {
+                    unreachable!("windows are opened on a device")
+                };
+                let time = window.and_then(|window| driver.close_call_window(window));
+                self.kinds.add(kind, level, Duration::ZERO);
+                if let Some(time) = time {
+                    self.kinds.windows.push((kind, level, time));
+                }
+            }
+        }
+    }
+}
+
+/// The timer of one level call ([`ExecOperator::start_call`]).
+enum CallClock {
+    /// The host clock at the start of the call.
+    Host(Instant),
+    /// The timing window of a device call; `None` after a device failure, which
+    /// `read_output` returns.
+    #[cfg(feature = "gpu")]
+    Window(Option<TimingWindow>),
+}
+
+/// The per-kind times of the current evaluation ([`FmmBuilder::kind_timings`]).
+struct KindRecorder {
+    timings: KindTimings,
+    /// Whether the device times on itself, for [`KindTiming::Device`].
+    on_device: bool,
+    /// With [`KindTiming::Device`]: the windows of this evaluation's device calls, with
+    /// their kind and level, resolved after its download.
+    #[cfg(feature = "gpu")]
+    windows: Vec<(OperatorKind, usize, WindowTime)>,
+}
+
+impl KindRecorder {
+    /// The recorder of `mode`, with the placement of every kind in
+    /// [`OperatorKind::ALL`] order.
+    fn new(mode: KindTiming, placement: [Placement; 8], on_device: bool) -> Self {
+        Self {
+            on_device,
+            timings: KindTimings {
+                mode,
+                kinds: placement.map(|placement| KindTime {
+                    placement,
+                    calls: 0,
+                    levels: [Duration::ZERO; MAX_LEVELS],
+                }),
+            },
+            #[cfg(feature = "gpu")]
+            windows: Vec::new(),
+        }
+    }
+
+    /// Clears the times of the last evaluation.
+    fn begin(&mut self) {
+        for kind in &mut self.timings.kinds {
+            kind.calls = 0;
+            kind.levels = [Duration::ZERO; MAX_LEVELS];
+        }
+        #[cfg(feature = "gpu")]
+        self.windows.clear();
+    }
+
+    /// The times of the evaluation; `None` with [`KindTiming::Off`].
+    fn timings(&self) -> Option<KindTimings> {
+        (self.timings.mode != KindTiming::Off).then_some(self.timings)
+    }
+
+    /// Counts a call of `kind` on `level` and adds `time` to it.
+    fn add(&mut self, kind: OperatorKind, level: usize, time: Duration) {
+        let entry = &mut self.timings.kinds[kind as usize];
+        entry.calls += 1;
+        entry.levels[level] += time;
+    }
+
+    /// With a device, after the evaluation's download: adds the times of the windows to
+    /// their calls. False if a window was not timed on the device (it waited for the
+    /// stream), so that its times are not the device's.
+    #[cfg(feature = "gpu")]
+    fn resolve_windows(&mut self) -> bool {
+        let mut on_device = true;
+        for (kind, level, time) in self.windows.drain(..) {
+            on_device &= time.on_device();
+            self.timings.kinds[kind as usize].levels[level] += time.resolve().unwrap_or_default();
+        }
+        on_device
+    }
+}
+
+/// Delegates to the engine's host operator.
 impl<T: SimdScalar + Stored + Equivalence + Default> FmmSizes for ExecOperator<T> {
     type Value = T;
 
     fn multipole_size(&self, level: usize) -> usize {
-        self.host().multipole_size(level)
+        self.engine.host().multipole_size(level)
     }
 
     fn local_size(&self, level: usize) -> usize {
-        self.host().local_size(level)
+        self.engine.host().local_size(level)
     }
 
     fn source_point_size(&self) -> usize {
-        self.host().source_point_size()
+        self.engine.host().source_point_size()
     }
 
     fn target_input_point_size(&self) -> usize {
-        self.host().target_input_point_size()
+        self.engine.host().target_input_point_size()
     }
 
     fn target_output_point_size(&self) -> usize {
-        self.host().target_output_point_size()
+        self.engine.host().target_output_point_size()
     }
 }
 
-/// Calls the variant's method of every level call.
+/// A batch of the operator interface, for the per-kind timer: its kind, and whether its
+/// view has a pair (a call with an empty view does nothing and is not timed).
+trait LevelCall {
+    /// The operator kind of the call.
+    const KIND: OperatorKind;
+
+    /// True if the call's view has an entry.
+    fn has_pairs(&self) -> bool;
+}
+
+/// Implements [`LevelCall`] for each batch, with its kind and its view.
+macro_rules! level_call {
+    ($($batch:ident: $kind:ident, $view:ident);* $(;)?) => {
+        $(
+            impl<T> LevelCall for $batch<'_, T> {
+                const KIND: OperatorKind = OperatorKind::$kind;
+
+                fn has_pairs(&self) -> bool {
+                    !self.$view.is_empty()
+                }
+            }
+        )*
+    };
+}
+
+level_call!(
+    P2m: P2m, leaves;
+    M2m: M2m, children;
+    M2l: M2l, pairs;
+    P2l: P2l, x;
+    L2l: L2l, parents;
+    L2p: L2p, boxes;
+    M2p: M2p, w;
+    P2p: P2p, near;
+);
+
+/// Calls the engine's method of every level call; with a [`KindTiming`] other than `Off`,
+/// a call with a pair runs between [`ExecOperator::start_call`] and
+/// [`ExecOperator::end_call`].
 macro_rules! delegate {
     ($($kind:ident: $batch:ident),* $(,)?) => {
         impl<T: SimdScalar + Stored + Equivalence + Default> FmmOperator for ExecOperator<T> {
             $(
                 fn $kind(&mut self, batch: $batch<'_, T>) {
-                    match self {
-                        Self::Host(operator) => operator.$kind(batch),
+                    let timed = (self.kinds.timings.mode != KindTiming::Off
+                        && batch.has_pairs())
+                    .then(|| {
+                        let kind = <$batch<'_, T> as LevelCall>::KIND;
+                        (kind, batch.level, self.start_call(kind))
+                    });
+                    match &mut self.engine {
+                        Engine::Host(operator) => operator.$kind(batch),
                         #[cfg(feature = "gpu")]
-                        Self::Device(driver) => driver.$kind(batch),
+                        Engine::Device(driver) => driver.$kind(batch),
+                    }
+                    if let Some((kind, level, clock)) = timed {
+                        self.end_call(kind, level, clock);
                     }
                 }
             )*
@@ -1621,6 +1893,10 @@ impl BuildTimings {
 ///   way on the CPU runtime).
 ///
 /// Host-fallback calls wait for the device themselves (their downloads).
+///
+/// With [`FmmBuilder::kind_timings`] (Phase 4S T5), [`kinds`](Self::kinds) holds the time
+/// of every level call by operator kind and level ([`KindTimings`]), and
+/// [`remainder`](Self::remainder) what the stages spent outside the level calls.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct StageTimings {
     /// Writing the charges into the source chunks; with a device backend also zeroing
@@ -1644,6 +1920,11 @@ pub struct StageTimings {
     /// With a device backend that times on the device: the device time of each stage
     /// with device work ([`FmmBuilder::device_timestamps`]); `None` otherwise.
     pub device: Option<DeviceStageTimings>,
+    /// The time of every level call by operator kind and level
+    /// ([`FmmBuilder::kind_timings`], [`KindTiming`]); `None` with [`KindTiming::Off`],
+    /// and with [`KindTiming::Device`] for an evaluation in which a window was not timed
+    /// on the device.
+    pub kinds: Option<KindTimings>,
 }
 
 impl StageTimings {
@@ -1657,6 +1938,138 @@ impl StageTimings {
             + self.downward
             + self.evaluate_leaves
             + self.output
+    }
+
+    /// [`total`](Self::total) less [`KindTimings::total`], at least zero: the time outside
+    /// the level calls (loading the charges, the exchanges, the download and the scaling
+    /// of the output, and on a device the enqueueing between calls). `None` without
+    /// [`kinds`](Self::kinds). With [`KindTiming::Device`] it subtracts device time from
+    /// host time, so it is the host's time beyond the device work, not a stage.
+    pub fn remainder(&self) -> Option<Duration> {
+        self.kinds
+            .map(|kinds| self.total().saturating_sub(kinds.total()))
+    }
+}
+
+/// How [`Fmm::evaluate`] times its level calls by operator kind
+/// ([`FmmBuilder::kind_timings`], [`StageTimings::kinds`]; Phase 4S T5), for reports only.
+///
+/// Every level call passes through one place, the operator of the evaluator, which in a
+/// mode other than `Off` times each call whose view has an entry and adds its time to its
+/// kind and level ([`KindTimings`]); a call with an empty view does nothing, and is neither
+/// timed nor counted. An evaluation makes at most 148 such calls (eight kinds, levels 0 to
+/// 16, M2M in two passes): 14 on the uniform level-4 tree of the C3.2 gate, 3–119 on the
+/// trees of `tests/mpi_exec.rs`. In every mode the output is the same bit for bit: no
+/// call or launch moves, and no kind changes where it runs.
+///
+/// The modes compose with [`FmmBuilder::synchronous_stages`] and
+/// [`FmmBuilder::device_timestamps`]: each adds its own syncs or windows, and none implies
+/// another.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum KindTiming {
+    /// No timing: the default. The evaluation adds no timer, sync or window; each level
+    /// call checks the mode and is delegated.
+    #[default]
+    Off,
+    /// Every call timed by the host clock on the calling thread, one `Instant::now` pair
+    /// per call, the only cost on the host path. There the call is synchronous already
+    /// (with threads, the rayon pool joins before it returns), so its time is its whole
+    /// run; on the C3.2 tree at p = 6 and one thread the kinds add up to 0.9999 of the
+    /// stages that call them.
+    ///
+    /// On a device backend `Fmm` syncs the device after every call (on the device or the
+    /// host fallback), and once after the charge upload so that the first call starts on
+    /// an idle device: one sync per call plus one per evaluation, besides the evaluation's
+    /// own (and those of `synchronous_stages`, if set). A call's time is then the wall
+    /// time of its device work, its enqueueing and one sync; the sum over the kinds
+    /// exceeds what an evaluation without the syncs spends by about the sync cost times
+    /// the calls. Report-only, never the default; on the CPU runtime the only mode, and on
+    /// Metal the one whose kinds are a breakdown.
+    Synchronous,
+    /// Every call of a kind on the device timed by the device itself: one timing window
+    /// per call (`nd_fmm_kernels::Device::open_window`), with no sync, read after the
+    /// evaluation's download. Device time only: no launch, enqueue or sync time. A kind on
+    /// the host fallback is timed by the host clock, and so includes the wait of its first
+    /// download for the device work queued before it.
+    ///
+    /// Only where the device times on itself (Metal with timestamp queries, CUDA by
+    /// events): [`FmmBuilder::build`] refuses it on the host and on the CPU runtime with
+    /// [`SettingsError::KindTimingUnsupported`]. Each window flushes the queued work on
+    /// Metal, which adds enqueue time to the evaluation.
+    ///
+    /// **Not a breakdown on Metal.** There the windows of neighbouring calls overlap and
+    /// misattribute the device's time between calls (Phase 4S T5, the M3 Max, f32, the
+    /// uniform cube at N = 10⁵, p = 8): M2L 0.25 ms against 6.15 ms with `Synchronous`
+    /// and L2P 4.67 ms against 0.37 ms (medians of ten); in every evaluation the call
+    /// windows of some stage added up to more than that stage's own window, and their sum
+    /// ranged from 0.71 to 1.59 of the evaluation's wall time. Use `Synchronous` there.
+    ///
+    /// **A breakdown on CUDA** (one stream, events in order; Phase 4S T5, locust's H100,
+    /// the same cube in f32 and f64): the call windows of every stage added up to less
+    /// than its own window in every evaluation (f32 downward 1.64 ms of calls in a 1.65 ms
+    /// span), and per kind they lie at or below the `Synchronous` times, which carry a sync
+    /// each (f32 M2L 1.48 ms against 1.56 ms, P2P 0.31 against 0.33 ms; medians of ten).
+    Device,
+}
+
+impl fmt::Display for KindTiming {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Off => "off",
+            Self::Synchronous => "synchronous, a sync after each call on a device",
+            Self::Device => "device timestamps, one window per device call",
+        })
+    }
+}
+
+/// The most levels of a tree: levels 0 to 16, the deepest level of a Morton key.
+pub const MAX_LEVELS: usize = DEEPEST + 1;
+
+/// The level calls of one operator kind in one [`Fmm::evaluate`] ([`KindTimings`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KindTime {
+    /// Where the kind ran ([`Fmm::placement`]); with [`KindTiming::Device`], a kind on
+    /// the device has device times, one on the host host times.
+    pub placement: Placement,
+    /// The level calls with an entry in their view; for M2M both passes.
+    pub calls: usize,
+    /// The time of each level's calls, by level (of the targets; of the parents for M2M,
+    /// of the children for L2L); zero for a level without a call.
+    pub levels: [Duration; MAX_LEVELS],
+}
+
+impl KindTime {
+    /// The time over every level.
+    pub fn total(&self) -> Duration {
+        self.levels.iter().sum()
+    }
+}
+
+/// The time of every level call of one [`Fmm::evaluate`] by operator kind and level
+/// ([`FmmBuilder::kind_timings`], Phase 4S T5), for reports only. What a time measures is
+/// the mode's ([`KindTiming`]); a kind without a call has zero calls and zero time.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KindTimings {
+    /// The mode that measured the times; never [`KindTiming::Off`].
+    pub mode: KindTiming,
+    /// By kind, in [`OperatorKind::ALL`] order.
+    kinds: [KindTime; 8],
+}
+
+impl KindTimings {
+    /// The calls of `kind`.
+    pub fn get(&self, kind: OperatorKind) -> &KindTime {
+        &self.kinds[kind as usize]
+    }
+
+    /// Every kind with its calls, in [`OperatorKind::ALL`] order.
+    pub fn iter(&self) -> impl Iterator<Item = (OperatorKind, &KindTime)> {
+        OperatorKind::ALL.into_iter().zip(&self.kinds)
+    }
+
+    /// The sum over every kind.
+    pub fn total(&self) -> Duration {
+        self.kinds.iter().map(KindTime::total).sum()
     }
 }
 
@@ -1850,12 +2263,23 @@ where
         let sync = self.synchronous_stages;
         let evaluator = &mut self.evaluator;
         evaluator.reset();
+        evaluator.operator_mut().kinds.begin();
         #[cfg(feature = "gpu")]
-        if let ExecOperator::Device(driver) = evaluator.operator_mut() {
+        if let ExecOperator {
+            engine: Engine::Device(driver),
+            kinds,
+        } = evaluator.operator_mut()
+        {
+            // With synchronous kind timings, the first level call starts on an idle
+            // device: its own sync, beside that of `synchronous_stages` (each documents it).
+            let sync_kinds = kinds.timings.mode == KindTiming::Synchronous;
             let leaf_charges = &self.leaf_charges;
             timings.load += timed(|| {
                 driver.begin_evaluation(leaf_charges);
                 if sync {
+                    driver.sync();
+                }
+                if sync_kinds {
                     driver.sync();
                 }
             });
@@ -1866,14 +2290,14 @@ where
                          run: &mut dyn FnMut(&mut FmmEvaluator<'o, C, T>)| {
             timed(|| {
                 if device.is_some() {
-                    evaluator.operator_mut().open_stage();
+                    evaluator.operator_mut().engine.open_stage();
                 }
                 run(evaluator);
                 if let Some(device) = device {
-                    evaluator.operator_mut().close_stage(device);
+                    evaluator.operator_mut().engine.close_stage(device);
                 }
                 if sync {
-                    evaluator.operator_mut().sync();
+                    evaluator.operator_mut().engine.sync();
                 }
             })
         };
@@ -1890,18 +2314,25 @@ where
 
         let start = Instant::now();
         let gradients = self.gradients();
-        let (potential, gradient) = match self.evaluator.operator_mut() {
-            ExecOperator::Host(_) => scaled_output(
-                self.evaluator.target_output_store(),
-                &self.targets,
-                &self.radii,
-                gradients,
-            ),
+        let ExecOperator { engine, kinds } = self.evaluator.operator_mut();
+        let (potential, gradient) = match engine {
+            Engine::Host(_) => {
+                timings.kinds = kinds.timings();
+                scaled_output(
+                    self.evaluator.target_output_store(),
+                    &self.targets,
+                    &self.radii,
+                    gradients,
+                )
+            }
             #[cfg(feature = "gpu")]
-            ExecOperator::Device(driver) => match driver.read_output() {
+            Engine::Device(driver) => match driver.read_output() {
                 Ok(store) => {
                     let output = scaled_output(store, &self.targets, &self.radii, gradients);
                     timings.device = driver.stage_timings();
+                    // The call windows, read after the download, like the stage windows.
+                    let on_device = kinds.resolve_windows();
+                    timings.kinds = kinds.timings().filter(|_| on_device);
                     output
                 }
                 Err(error) => {
@@ -1932,7 +2363,7 @@ where
     /// Returns the operator: the host operator, or with a device backend the operator
     /// of its host fallback.
     pub fn operator(&self) -> &LaplaceOperator<T> {
-        self.evaluator.operator().host()
+        self.evaluator.operator().engine.host()
     }
 
     /// Returns the backend the operators run on ([`FmmBuilder::backend`]).
@@ -1944,14 +2375,7 @@ where
     /// backend as its device report says (from Phase 4 T10 every kind runs on the device
     /// unless [`FmmBuilder::host_fallback`] names it).
     pub fn placement(&self, kind: OperatorKind) -> Placement {
-        match self.evaluator.operator() {
-            ExecOperator::Host(_) => {
-                let _ = kind;
-                Placement::Host
-            }
-            #[cfg(feature = "gpu")]
-            ExecOperator::Device(driver) => driver.report().placement(kind),
-        }
+        self.evaluator.operator().engine.placement(kind)
     }
 
     /// Returns the domain.
@@ -2051,11 +2475,32 @@ where
         &self.threading
     }
 
+    /// Sets how the next evaluations time their level calls by operator kind
+    /// ([`FmmBuilder::kind_timings`], [`KindTiming`]; Phase 4S T5): the same build, for
+    /// comparisons and for timing the evaluation and its kinds in separate evaluations
+    /// without a second build. The output is the same bit for bit in every mode. Local:
+    /// no collective.
+    ///
+    /// # Errors
+    ///
+    /// [`SettingsError::KindTimingUnsupported`] for [`KindTiming::Device`] where the
+    /// device does not time on itself (the host, the CPU runtime); the mode is unchanged.
+    pub fn set_kind_timings(&mut self, mode: KindTiming) -> Result<(), SettingsError> {
+        let kinds = &mut self.evaluator.operator_mut().kinds;
+        check_kind_timing(mode, self.backend, kinds.on_device)?;
+        kinds.timings.mode = mode;
+        Ok(())
+    }
+
     /// With `serial`, runs the next evaluations on the calling thread even if the FMM
     /// has a pool ([`LaplaceOperator::set_serial`]): the serial path of the same build,
     /// for comparisons and timings. The output is the same bit for bit.
     pub fn set_serial(&mut self, serial: bool) {
-        self.evaluator.operator_mut().host_mut().set_serial(serial);
+        self.evaluator
+            .operator_mut()
+            .engine
+            .host_mut()
+            .set_serial(serial);
     }
 
     /// The multipoles and locals of the last evaluation, in the `LevelBuffers` layout of
@@ -2068,13 +2513,13 @@ where
     ///
     /// [`FmmError::Device`] if a download fails.
     pub fn expansions(&mut self) -> Result<(Vec<T>, Vec<T>), FmmError> {
-        match self.evaluator.operator_mut() {
-            ExecOperator::Host(_) => Ok((
+        match &mut self.evaluator.operator_mut().engine {
+            Engine::Host(_) => Ok((
                 self.evaluator.multipoles().as_slice().to_vec(),
                 self.evaluator.locals().as_slice().to_vec(),
             )),
             #[cfg(feature = "gpu")]
-            ExecOperator::Device(driver) => driver
+            Engine::Device(driver) => driver
                 .download_expansions()
                 .map_err(|error| FmmError::Device(error.to_string())),
         }
@@ -2091,18 +2536,18 @@ where
     /// With a device backend: the device, the placement of every operator kind, the
     /// tables on the device and the memory ([`DeviceReport`]); `None` on the host.
     pub fn device_report(&self) -> Option<&DeviceReport> {
-        match self.evaluator.operator() {
-            ExecOperator::Device(driver) => Some(driver.report()),
-            ExecOperator::Host(_) => None,
+        match &self.evaluator.operator().engine {
+            Engine::Device(driver) => Some(driver.report()),
+            Engine::Host(_) => None,
         }
     }
 
     /// With a device backend: the transfers, launches and syncs of the build and of the
     /// last evaluation ([`DeviceCounters`]); `None` on the host.
     pub fn device_counters(&self) -> Option<DeviceCounters> {
-        match self.evaluator.operator() {
-            ExecOperator::Device(driver) => Some(driver.counters()),
-            ExecOperator::Host(_) => None,
+        match &self.evaluator.operator().engine {
+            Engine::Device(driver) => Some(driver.counters()),
+            Engine::Host(_) => None,
         }
     }
 
@@ -2115,13 +2560,13 @@ where
     ///
     /// [`FmmError::Device`] if a download fails.
     pub fn download_device_views(&mut self) -> Option<Result<ViewsImage, FmmError>> {
-        match self.evaluator.operator_mut() {
-            ExecOperator::Device(driver) => Some(
+        match &mut self.evaluator.operator_mut().engine {
+            Engine::Device(driver) => Some(
                 driver
                     .download_views()
                     .map_err(|error| FmmError::Device(error.to_string())),
             ),
-            ExecOperator::Host(_) => None,
+            Engine::Host(_) => None,
         }
     }
 }

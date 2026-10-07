@@ -21,6 +21,12 @@
 //! 2.7 (p = 8) across seven seeds, with every pair within its single-translation
 //! error. The mean over several vectors measures the FMM, not the draw.
 //!
+//! Per-kind timings (Phase 4S T5, C4S.5): on the tree of the gate at p = 6 and one
+//! thread, five evaluations with `KindTiming::Synchronous` give the bits of `Off`, the
+//! calls of the plan per kind and level, and a sum over the kinds of at most the stages
+//! that call operators; the test prints that sum against those stages, expected within
+//! 10% (reported, never asserted), and the time per kind.
+//!
 //! Threads (T10, C3.5): at each p the FMM is built again with four threads, and every
 //! evaluation equals the one-thread evaluation bit for bit. MPI is initialised with
 //! `Threading::Funneled` for it.
@@ -58,9 +64,11 @@ use mpi::Threading;
 use mpi::traits::*;
 #[cfg(feature = "gpu")]
 use nd_fmm_exec::fmm::Backend;
-use nd_fmm_exec::fmm::FmmBuilder;
+use nd_fmm_exec::fmm::{FmmBuilder, KindTiming};
 use nd_fmm_exec::operator::{Isa, P2pChoice};
 use nd_fmm_ref::p2p::direct_sum;
+
+mod kind_common;
 
 /// The single-translation prediction of the relative L2 error of φ (design §7).
 const PREDICTION: [(usize, f64); 2] = [(3, 1.77e-3), (8, 1.08e-5)];
@@ -108,6 +116,12 @@ const KERNEL_ERROR_RATIO: f64 = 0.01;
 
 /// The largest relative L2 difference of the `Auto` output from the `Reference` output.
 const KERNEL_DIFFERENCE: f64 = 1e-13;
+
+/// The degree of the per-kind timing report (Phase 4S T5).
+const KIND_DEGREE: usize = 6;
+
+/// The timed evaluations of the per-kind timing report.
+const KIND_EVALUATIONS: usize = 5;
 
 /// The relative L2 error of `potential` at the sampled targets against `exact`.
 fn sampled_error(potential: &[f64], sample: &[usize], exact: &[f64]) -> f64 {
@@ -243,9 +257,75 @@ fn uniform_tree_within_twice_the_prediction() {
             ));
         }
     }
+    kind_timings(&points, &charges[0], &comm);
     #[cfg(feature = "gpu")]
     device_gates((&points, sample), (&charges, &exact), &comm, &mut failures);
     assert!(failures.is_empty(), "{}", failures.join("; "));
+    eprintln!("{}", kind_common::summary());
+}
+
+/// The per-kind timings on the C3.2 tree at p = 6, one thread (Phase 4S T5; module
+/// documentation): after an `Off` evaluation, five with `KindTiming::Synchronous` on the
+/// same build, each bit for bit the first, with the calls of the plan and the sum over the
+/// kinds at most the stages that call operators (`kind_common::check_kinds`); prints the
+/// sum against those stages (expected within 10% at one thread; reported, not asserted)
+/// and the time of each kind.
+fn kind_timings(points: &[[f64; 3]], charges: &[f64], comm: &mpi::topology::SimpleCommunicator) {
+    let mut fmm = FmmBuilder::<f64>::new(KIND_DEGREE)
+        .max_level(4)
+        .max_points_per_leaf(1)
+        .build(points, points, comm)
+        .expect("the FMM builds");
+    let off = fmm.evaluate(charges).expect("the FMM evaluates");
+    fmm.set_kind_timings(KindTiming::Synchronous)
+        .expect("the host times synchronously");
+    let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+    let mut ratios = Vec::new();
+    let mut last = None;
+    for _ in 0..KIND_EVALUATIONS {
+        let output = fmm.evaluate(charges).expect("the FMM evaluates");
+        assert_eq!(
+            output
+                .potential
+                .iter()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>(),
+            off.potential
+                .iter()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>(),
+            "kind_timings(Synchronous) changes the output"
+        );
+        let calls = kind_common::check_kinds("C3.2 tree", &fmm, &output, KindTiming::Synchronous);
+        kind_common::record("host, C3.2 tree", calls);
+        let t = output.timings;
+        let operators = t.upward_local + t.upward_global + t.downward + t.evaluate_leaves;
+        let kinds = t.kinds.expect("kind timings");
+        ratios.push(kinds.total().as_secs_f64() / operators.as_secs_f64());
+        last = Some(output.timings);
+    }
+    ratios.sort_by(f64::total_cmp);
+    let last = last.expect("five evaluations");
+    let kinds = last.kinds.expect("kind timings");
+    let by_kind: Vec<String> = kinds
+        .iter()
+        .filter(|(_, time)| time.calls > 0)
+        .map(|(kind, time)| format!("{kind} {:.2} ({} calls)", ms(time.total()), time.calls))
+        .collect();
+    eprintln!(
+        "uniform level-4 tree, N = {}, p = {KIND_DEGREE}, one thread, \
+         kind_timings(Synchronous): the sum over the kinds is {:.4}–{:.4} of the operator \
+         stages (median {:.4}; {KIND_EVALUATIONS} evaluations, each bit for bit Off); the \
+         last evaluation in ms: total {:.2}, kinds {:.2}, remainder {:.2}; {}",
+        points.len(),
+        ratios[0],
+        ratios[KIND_EVALUATIONS - 1],
+        ratios[KIND_EVALUATIONS / 2],
+        ms(last.total()),
+        ms(kinds.total()),
+        ms(last.remainder().expect("kind timings")),
+        by_kind.join(", ")
+    );
 }
 
 /// The relative L2 difference of `a` from `b`.

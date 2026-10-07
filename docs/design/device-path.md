@@ -1094,6 +1094,25 @@ waiting download. The docs of `StageTimings` say so. Two ways to time stages pro
   synchronous mode. T11 adopts it only after
   checking that it adds no sync and does not change the output; otherwise the
   synchronous mode stays the only stage timing.
+- **Per-kind timings** (added in Phase 4S T5, C4S.5): `FmmBuilder::kind_timings(KindTiming)`
+  (or `Fmm::set_kind_timings` on a built `Fmm`), `Off` by default, times every level call
+  with an entry in its view by operator kind and level, into `StageTimings::kinds`, on the
+  host path and every device backend, with the output of `Off` bit for bit. The
+  operator of the evaluator (`ExecOperator`'s `delegate!`) is the one place that times;
+  the operators and kernels do not change. `Synchronous` times each call by the host
+  clock (one `Instant::now` pair per call, at most 148 calls per evaluation) and on a
+  device adds one sync after the charge upload and one after every call, so the sum over
+  the kinds carries a sync per call. `Device` opens one timing window per call of a
+  device kind, with no sync, resolved after the download: device time only. It is
+  refused at build where the device does not time on itself (the host, the CPU runtime).
+  Both compose with the two stage modes above. On the M3 Max the host's kinds add up to
+  0.9999 of the stages that call them (C3.2 tree, p = 6, one thread), and on Metal the
+  call windows overlap and misattribute time between calls (M2L 0.25 ms in its windows
+  against 6.15 ms synchronously, the cube at N = 10⁵, p = 8, f32), so on Metal
+  `Synchronous` is the per-kind measure. On CUDA (one stream, events in order; locust's
+  H100) the call windows do not overlap: each stage's call windows add up to less than
+  its window (f32 downward 1.64 ms of calls in a 1.65 ms span), so there `Device` is a
+  breakdown of the device time without added syncs.
 
 `BuildTimings` gains a `device` field: opening the device, uploads, the device's extra
 tables and tuning.
