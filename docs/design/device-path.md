@@ -1121,8 +1121,8 @@ two such builds agree within the FMM bounds, not bit for bit; the docs say so (T
 | Source | Where | Effect |
 | --- | --- | --- |
 | summation inside a product | GEMM translations (Section 6.4): k-order, blocking, CMMA tiles; one addition into the output instead of one per product | rounding-level differences, ≤ (p + 1)² u_T relative to the terms (worst case), typically √n_c u_T |
-| fma contraction | CUDA: the default LLVM path marks fadd, fsub and fmul `contract` (F17, read); Metal under fast math (*inferred*, F16); on every backend, the CPU runtime included, cubecl-opt's `InstCombinePass` fuses each product whose only use is an add or subtract (F16, read; T2 measured it) | one rounding fewer per multiply–add |
-| inverse square root and division | P2P, harmonics, rotation | per T3: correctly rounded on the CPU runtime (*inferred*), approximate under Metal's fast math (*inferred*) |
+| fma contraction | CUDA: the default LLVM path marks fadd, fsub and fmul `contract` (F17, read), and LLVM fuses every remaining multiply–add, products with other uses included (F34, measured); Metal under fast math (*inferred*, F16); on every backend, the CPU runtime included, cubecl-opt's `InstCombinePass` fuses each product whose only use is an add or subtract (F16, read; T2 measured it) | one rounding fewer per multiply–add |
+| inverse square root and division | P2P, harmonics, rotation | per T3: correctly rounded on the CPU runtime (*inferred*), approximate under Metal's fast math (*inferred*); on CUDA correctly rounded, `inverse_sqrt` fl(1 / fl(√x)) (F33, measured in Phase 4S) |
 | reassociation, flush to zero | Metal under fast math (*inferred*) | T3 decides the formulation or the runtime (Section 5.3) |
 
 Where none applies, a device kernel that repeats the host's operations in the host's
@@ -1486,8 +1486,9 @@ laplace-fmm-plan.md §7, Phase 4, carries the status per component.
 Phase 4S runs this design on CUDA, on the H100 of locust's GH200 (docs/phase4s/). No new
 structure: CUDA takes the existing `Backend`/`BackendKind` values and the GPU defaults it
 shares with Metal (`Metal | Cuda` arms) until T7. This section records what was read and
-confirmed on the device. §18.1 is T2's, signed off on 2026-10-06; T3 adds the device
-arithmetic and T7 the measured layouts and rules (§18.2).
+confirmed on the device. §18.1 holds T2's facts (F25–F32, signed off on 2026-10-06) and
+T3's device arithmetic (F33–F36, signed off on 2026-10-07); T7 adds the measured layouts
+and rules (§18.2).
 
 ### 18.1 CUDA facts (T2, measured on locust, 2026-10-06)
 
@@ -1532,3 +1533,27 @@ not the Phase 4 GEMM; T7 measures that one.
    measure, and decision 10's to sign off, before T4's f64 gates rely on it.
 
 Left open: `GPU_MAX_CUBES` stays 65,535 on every backend; raising it on CUDA is T7's.
+
+**Device arithmetic (T3, measured on locust, 2026-10-07).** The device-arithmetic spike
+on CUDA in f32 and f64, with the CPU runtime on Grace as the control
+(spikes/device-arith/REPORT.md, "CUDA on GH200 (Phase 4S)"; same versions as above).
+
+| # | Fact | Source |
+| --- | --- | --- |
+| F33 | CUDA (LLVM NVPTX) arithmetic is IEEE in everything §3.13 asks about: `+ − ×` and `fma` correctly rounded; `sqrt`, division and `recip` correctly rounded in f32 and f64 (PTX `sqrt.rn`, `div.rn`, `rcp.rn`; 0 of 16.8 M f32 and 0 of 10⁷ f64 values differ from the host); `inverse_sqrt` the polyfill fl(1 / fl(√x)), ≤ 1.5 u_T; subnormals kept (no `.ftz` and no `.approx` in the PTX of any of the spike's 53 kernels) | measured (spike); PTX read (`CUBECL_CUDA_DUMP_PTX`) |
+| F34 | Contraction: cubecl-opt fuses each lone product (`llvm.fmuladd` in the IR), and LLVM's NVPTX back end fuses every remaining `contract` multiply–add, a product with other uses included: it keeps `mul` for the other uses and emits `fma.rn` for the add. No multiply feeding an add or subtract survives into the PTX, so ptxas has nothing left to contract. No fma chain is reassociated. Metal and the CPU runtime leave a product with another use unfused | measured (compiler probes); IR (`CUBECL_DEBUG_LOG`) and PTX read |
+| F35 | §3.13 holds on CUDA: the coincident-pair rule on 425,303 f32 and 655,192 f64 pairs in five formulations, ŷ and d bit for bit the host's; the signed-off P2P formulation at 4.05 / 9.66 u_T (φ / ∇φ) per term in f64 and 3.99 / 10.21 in f32 (C3S.4: 8 / 16), W1 sums passing; the GEMM equal to its host `mul_add` loop. Every measured value equals the CPU runtime's on Grace, except where a product with another use meets an add (F34). The production P2P writes every multiply–add as `fma` and is not affected | measured (spike) |
+| F36 | NVRTC (`cuda-cpp`, run in the spike only): `inverse_sqrt` is CUDA's `rsqrt.approx`, 2.09 u_T in f32 and 1.01 u_T in f64; products with other uses stay unfused; `sqrt`, division, subnormals and the §3.13 rule as on the LLVM path. The spike's naive P2P runs about 1.5× faster there, from `inverse_sqrt` alone (on the LLVM path two IEEE sequences, `sqrt.rn` and `rcp.rn`) | measured (spike); PTX and SASS read |
+
+**Signed off on 2026-10-07** (decision 10, with T3), every item as recommended:
+1. **Option (b), a CUDA note in CONVENTIONS §3.13 "Device kernels".** CUDA added to the
+   backends measured; products with other uses may be fused on CUDA; the CUDA column of
+   the table measured (F33, F34); the coincident-pair check extended to CUDA.
+   `CONVENTION_VERSION` stays 1. No formulation change and no compiler option.
+2. **`fmm-kernels/CLAUDE.md`, "Arithmetic"**, says that any `a · b ± c` may be fused, a
+   lone one on every backend and any one on CUDA.
+3. **NVRTC stays off (decision 4).** T7 measures the production P2P on the LLVM path. Only
+   if `inverse_sqrt` proves a large share of the FMM's time does NVRTC, an in-kernel
+   inverse square root (a formulation change), or an upstream request for an approximate
+   `rsqrt` lowering on NVPTX come up, each by its own decision. No request for a switch of
+   LLVM's `contract` flag: nothing needs one.

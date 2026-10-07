@@ -149,7 +149,8 @@ As drafted in `docs/CONVENTIONS.md` §3.13, "Device kernels" (this PR):
    fused (`InstCombinePass`, every backend). Where the result must be pinned, write the
    `fma`. A product with another use stays unfused on both backends, but CSE can merge
    two identical products into one value with two uses on the CPU runtime (CSE runs
-   before InstCombine there).
+   before InstCombine there). *Phase 4S:* on CUDA a product with another use is fused
+   too (LLVM's NVPTX back end; "CUDA on GH200 (Phase 4S)").
 5. **Assume nothing about subnormals.** Metal flushes them, the CPU runtime keeps them.
    Kernels whose intermediates can leave the normal range of f32 (high-degree harmonics
    at small |x|, p ≥ 20) lose those values on Metal (section "Leaf operators and GEMM").
@@ -721,6 +722,11 @@ prec-sqrt on, no ftz by NVRTC's defaults.
 
 ### Recommendation, for sign-off (decision 10)
 
+**Status: signed off on 2026-10-07**, every item as recommended (docs/phase4s/README.md,
+decision 10; the outcomes are under "Sign-off questions"). The §3.13 text, the
+`fmm-kernels/CLAUDE.md` edit, formulation rule 4 above and device-path.md §18.1 landed in
+a follow-up commit to the T3 PR.
+
 **(b) The rules hold on CUDA with one CUDA note.** Every rule of §3.13 "Device kernels"
 holds on CUDA as measured. The coincident-pair rule, the domain, the P2P contract and
 the bit-identity cases need no change. One assumption in the list is stated too
@@ -728,8 +734,7 @@ narrowly for CUDA, and the table's CUDA column is still "from the code, not run"
 formulation change (c) is needed, and no compiler option: none exists (F16, F17), and
 none is required. `CONVENTION_VERSION` stays 1.
 
-Drafted §3.13 text, to land after sign-off (in T4, or in a follow-up commit to this PR if
-the sign-off says so):
+Drafted §3.13 text, landed after sign-off in a follow-up commit to this PR:
 
 1. The opening paragraph of "Device kernels", second sentence on: "Phase 4 T3 measured the
    backends on the Apple M3 Max with CubeCL 0.11.0-pre.4: the CubeCL CPU runtime (LLVM;
@@ -760,7 +765,7 @@ the sign-off says so):
 
 Nothing else in §3.13 changes. CONVENTIONS §3.10 is unchanged.
 
-Follow-on edits, after sign-off and outside this task:
+Follow-on edits (landed with the sign-off, in the follow-up commit):
 - **`fmm-kernels/CLAUDE.md`, "Arithmetic".** "any lone `a · b ± c` may be fused" becomes
   "any `a · b ± c` may be fused (a lone one on every backend, any one on CUDA)". The rule
   "write `fma` where the result must be pinned" already covers the consequence.
@@ -779,6 +784,10 @@ What CUDA does to the Phase 4 results:
   difference does not reach them (F31).
 
 ### Sign-off questions
+
+Decided on 2026-10-07, each as recommended: 1–3 accepted and landed in a follow-up commit
+to this PR; 4 and 5 left to T7's measurement of the production P2P (NVRTC stays off, no
+upstream request yet, and no request for a `contract` switch).
 
 1. **The CUDA note (b).** Accept the drafted §3.13 text: items 1–4 above, with
    `CONVENTION_VERSION` at 1. Land it in T4, or in a follow-up commit to this PR?
