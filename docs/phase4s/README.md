@@ -443,7 +443,7 @@ Before T1 has merged, T1 itself uses `ssh locust` directly, outside the sandbox.
 - [x] T2 merged: every kernel test on CUDA in f32 and f64; GEMM spike on CUDA; §18.1 facts
 - [x] T3 merged: device arithmetic on CUDA measured; recommendation drafted
 - [x] T3 recommendation signed off (decision 10): a CUDA note in §3.13 (decided 2026-10-07)
-- [ ] T4 merged: Phase 4 device gates on CUDA in f32 and f64; device timestamps on CUDA checked
+- [x] T4 merged: Phase 4 device gates on CUDA in f32 and f64; device timestamps on CUDA checked
 - [ ] T6 merged: `nd-fmm-bench` and `tools/bench/run.sh`; reports from the M3 Max and locust
 - [ ] Static M2L rule on CUDA signed off (decision 9)
 - [ ] T7 merged: CUDA layouts and candidates by measurement; H100 peaks; Metal and CPU runtime unchanged bit for bit
