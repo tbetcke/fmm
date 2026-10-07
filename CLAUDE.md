@@ -1,8 +1,9 @@
 # nd-project/fmm
 
 Fast multipole methods in Rust. Workspace crates: octree (distributed octree),
-fmm-plan (nd-fmm-plan), and the nd-fmm-* transfer-operator crates. Each crate has its
-own CLAUDE.md for crate-specific rules; everything here applies to all of them.
+fmm-plan (nd-fmm-plan), the nd-fmm-* transfer-operator crates, and fmm-bench
+(nd-fmm-bench, the one-command benchmark; Phase 4S T6). Each crate has its own CLAUDE.md
+for crate-specific rules; everything here applies to all of them.
 
 ## Source of truth
 - docs/CONVENTIONS.md defines every basis function, phase, storage layout and scaling.
@@ -194,3 +195,6 @@ implementation and tests rather than trusting prose when checking how an API beh
 ## Commands
 - Test one crate: cargo test -p nd-fmm-<name>
 - Regenerate fixtures: see tools/fixtures/README.md
+- Benchmark (a Markdown report in bench-results/, ignored by git; fmm-bench/CLAUDE.md):
+  `tools/bench/run.sh --backend host,metal --precision f32 --degree 6`; on locust
+  `tools/gh200/remote.sh 'tools/bench/run.sh --backend host,cuda --precision f32,f64'`

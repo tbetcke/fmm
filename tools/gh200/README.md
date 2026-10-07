@@ -120,6 +120,24 @@ Long runs: under `timeout`, detached (`setsid nohup … &`), with the output in
 `/data/ucahtbe/logs/`. An MPI run on Linux needs no loopback flags:
 `timeout 300 mpirun -n 2 target/release/examples/<example>`.
 
+## The benchmark
+
+`tools/bench/run.sh` (Phase 4S T6, fmm-bench/CLAUDE.md) builds `nd-fmm-bench` with the
+features of its `--backend` list, sets every BLAS thread variable to 1, sources
+`env.sh` if it is not active, and writes a Markdown report to `bench-results/` under the
+current directory. From the M3 Max, outside the sandbox, after the checks of "GPU
+etiquette" below:
+
+```sh
+tools/gh200/sync.sh
+tools/gh200/remote.sh 'nvidia-smi; uptime; ps -eo user,pcpu,pmem,etime,cmd --sort=-pcpu | head'
+tools/gh200/remote.sh 'timeout 3600 tools/bench/run.sh --backend host,cuda --precision f32,f64 --degree 6'
+tools/gh200/remote.sh 'cat bench-results/*.md'
+```
+
+`sync.sh` deletes what exists only on locust (`rsync --delete`), `bench-results/`
+included: fetch a report before the next sync.
+
 ## GPU etiquette
 
 The node and its one GPU are shared:

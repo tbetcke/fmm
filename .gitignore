@@ -24,3 +24,7 @@ target
 
 # Written by tools/gh200/sync.sh (the source revision copied to locust)
 .source-revision
+
+# Reports of tools/bench/run.sh (nd-fmm-bench); phase reports are copied by hand into
+# fmm-bench/results/
+bench-results/
