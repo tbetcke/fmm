@@ -483,7 +483,7 @@ Before T1 has merged, T1 itself uses `ssh locust` directly, outside the sandbox.
 - [x] T6 merged: `nd-fmm-bench` and `tools/bench/run.sh`; reports from the M3 Max and locust
 - [x] Static M2L rule on CUDA signed off (decision 9): `Dense` at every p, f32 and f64 (decided 2026-10-07)
 - [x] T7 merged: CUDA layouts and candidates by measurement; H100 peaks; Metal and CPU runtime unchanged bit for bit
-- [ ] T8 merged: `fmm-bench/results/phase4s-gh200.md` published
+- [x] T8 merged: `fmm-bench/results/phase4s-gh200.md` published
 - [x] CUDA leaf-size default (decision 7): none (T8: the rule picks 64; decided 2026-10-07)
 - [x] Phase 5 hardware (decision 8): the M3 Max and locust (decided 2026-10-05)
 - [ ] Phase 5 briefs updated for decision 8 (T8; updated, review pending), reviewed
