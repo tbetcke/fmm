@@ -9,15 +9,18 @@ evaluator. It can then keep its stores on the device on any rank count:
 This task does that, opens a device per rank, agrees device errors across ranks, and
 removes `DeviceNeedsOneRank`.
 
-The M3 Max has one GPU, so this is a **correctness task** (docs/phase5/README.md,
-decision 3):
-- every rank opens the CubeCL CPU runtime, or the ranks share Metal;
+The M3 Max and locust each have one GPU, so this is a **correctness task**
+(docs/phase5/README.md, decisions 2 and 3):
+- every rank opens the CubeCL CPU runtime, or the ranks share the one GPU: Metal on the
+  M3 Max, CUDA (the H100) on locust;
 - transfers and syncs are counted, not timed as scaling figures.
 
 Read first:
 - root CLAUDE.md, fmm-exec/CLAUDE.md, fmm-kernels/CLAUDE.md;
-- docs/phase5/README.md ("Requirements" 3, 4, 7, 9; "Design decisions": "Device ranks",
-  "Threads and BLAS", "Errors"; "Exit gate" C5.1 device and C5.2);
+- docs/phase5/README.md ("Requirements" 3, 4, 7, 9; "Design decisions": "Ranks on
+  locust", "Device ranks", "Threads and BLAS", "Errors"; "Exit gate" C5.1 device and
+  C5.2);
+- tools/gh200/README.md ("MPI at n ranks", "GPU etiquette");
 - docs/design/distributed-fmm.md, signed off: §7 (the device on several ranks), §9, §10,
   and §12 for T8;
 - docs/design/device-path.md §4 (residency, the one-rank argument), §8 (syncs), §11
@@ -54,6 +57,8 @@ Do:
     `threads(n)` cap per rank). A layout that would exceed it is capped, and the report
     says so.
   - With Metal, every rank opens the one GPU.
+  - With CUDA on locust, every rank opens the one H100 (`Device::open` per process),
+    time-sliced between the ranks (no MPS is configured).
 - **Errors** (requirement 4, decision 12): a device error at a mid-evaluation sync is
   agreed as the design fixes, so that no rank blocks in an exchange while another has
   failed. The `Fmm` returns the error on every rank from that `evaluate` on, as in
@@ -87,7 +92,9 @@ Tests that define done (every test prints the backends and the ranks it ran):
   executable with one MPI test): the cube and the Plummer sphere at N = 10⁴ (CPU runtime,
   f64 p = 8; f32 p = 3) on 2 and 4 ranks, against the host on the same ranks and against
   the one-rank host run (requirement 2's tolerance). Metal f32 p = 3 and 8 at N = 10⁵ on
-  2 ranks sharing the GPU, by hand, outside the sandbox.
+  2 ranks sharing the GPU, by hand, outside the sandbox. CUDA f32 p = 3 and 8 and f64
+  p = 8 at N = 10⁵ on 2 and 4 ranks sharing the H100, by hand on locust (`#[ignore]`d,
+  feature `cuda`).
 - **Errors**: a device error injected on one rank at a mid-evaluation sync, through a
   test hook, gives the agreed error on every rank within the external timeout. With no
   test hook available, say how else it was checked.
@@ -107,6 +114,10 @@ Must pass:
   CI job) if a kernel was added;
 - by hand on the M3 Max, outside the sandbox: `--features metal --release -- --ignored`
   at 1 rank, and the Metal gate at 2 ranks;
+- by hand on locust (root CLAUDE.md, "Checks"): `cargo clippy -p nd-fmm-exec
+  --all-targets --features cpu,cuda -- -D warnings`, `RUST_MIN_STACK=8388608 cargo test
+  -p nd-fmm-exec --features cuda --release -- --ignored` at 1 rank, and the CUDA gate at
+  2 and 4 ranks under an external timeout, without the loopback flags;
 - the multi-rank CI job, if kept (it builds without device features; nothing changes
   there).
 

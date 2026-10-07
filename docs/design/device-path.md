@@ -1463,6 +1463,13 @@ was made, and CUDA is type-checked only. The full tables are in
 `fmm-validate/results/phase4-m3max.md` (T13) and the task reports (the T2–T12 pull requests);
 laplace-fmm-plan.md §7, Phase 4, carries the status per component.
 
+*Phase 4S note (2026-10-07).* Section 18 runs this design on CUDA (the H100 of locust's
+GH200). What changes the tables below: f64 and CUDA are now run and timed; CUDA has its
+own layouts (§18.2) and the static rule `Dense` at every p in f32 and f64, which T8 found
+confirmed at every p measured (§18.3); the library GEMM never runs on CUDA (F28); the
+transfers, launches and syncs per evaluation follow the same formulas on CUDA; and the
+device leaf-size rule picks 64 on CUDA as well. The M3 Max figures below stand.
+
 ### 17.1 Decisions as taken
 
 | Topic (section) | As designed | As taken |
@@ -1510,7 +1517,8 @@ shares with Metal (`Metal | Cuda` arms) until T7, which gives CUDA its own arms 
 measured better. This section records what was read and confirmed on the device. §18.1
 holds T2's facts (F25–F32, signed off on 2026-10-06) and T3's device arithmetic
 (F33–F36, signed off on 2026-10-07); §18.2 T7's measured layouts and rules, with the
-static M2L rule on CUDA (decision 9, signed off on 2026-10-07).
+static M2L rule on CUDA (decision 9, signed off on 2026-10-07); §18.3 T8's benchmarks of
+the whole device FMM on the GH200, which complete the section.
 
 ### 18.1 CUDA facts (T2, measured on locust, 2026-10-06)
 
@@ -1718,3 +1726,35 @@ above. f64 p = 12 under the rule before decision 9: rotation 89% of the GPU's ti
   question is raised. The C4.2 targets (`p2p_kernels`): W1 at n_t = 64 met (21–28% f32,
   26–34% f64 of the model, target 10%), W2 at N = 10⁵ met in f64 and with gradients
   (26–33%) and not in f32 for φ alone (21.5% of the model against 25%).
+
+### 18.3 The device FMM on the GH200 as measured (T8, locust, 2026-10-07)
+
+`fmm-bench/results/phase4s-gh200.md` has every table; the GPU had no other process
+before or after each step, and its clocks were not locked. Same versions as §18.2.
+*Measured (locust, CUDA)* unless marked; the host is NEON on the Grace cores.
+
+| Item (section) | Model or earlier figure | Measured |
+| --- | --- | --- |
+| evaluation, tuned (`nd-fmm-bench`, the unit cube, gradients) | §18.2 at N = 10⁶ (static rule) | N = 10⁵: 1.6–2.6 ms (f32, p = 3–8), 2.0–26.5 ms (f64, p = 3–18); N = 10⁶: 12.8–21.7 and 20.5–243 ms; N = 10⁷: 221–315 ms and 0.36–3.1 s. Bit-identical repeats, one upload, one download, one sync |
+| against the Grace host | — | 2.2–6.2× the host at 72 threads at N = 10⁵ and 10⁶ (2.0–7.5× on the Phase 4 problems, `device_fmm`) and 1.5–4.2× at N = 10⁷; the level calls alone 2.3–9.8×; 59–291× the host at one thread (N = 10⁵ and 10⁶) |
+| against the M3 Max (f32, the Phase 4 problems; two runs) | Metal 2.1–73.5 ms (Phase 4 T13) | CUDA 1.6–22.9 ms: 1.1–3.2× Metal, most at p = 8 on the cube at N = 10⁶ |
+| f64 accuracy (§9) | the CPU runtime's bounds | device − host at most 1.2e-14 (bound 1e-12), error ratios 1.0000 |
+| f64 against f32 per evaluation | 2× (peaks) | 1.59–1.64× (N = 10⁶ and 10⁷, p = 3–8) |
+| dense M2L, whole level calls (6.4) | the spike: 19–36% of the roofline (f64, central) | 14–23% of the f64 peak at N = 10⁶, p = 6–18; 11–16% at N = 10⁷ (more chunks, `Accumulate::Rows`); 10–13% of the f32 peak (p = 6, 8) |
+| rotation M2L (6.6, 10.5) | break-even 13.2% (p = 8) and 5.4% (p = 12) of the f64 peak (*model*) | 3.1–3.4% of the f64 peak at p = 6–18 (model flops); rotation/dense end to end 1.11–1.33 (N = 10⁶, f64 p = 3–18) and 1.18–1.26 (f32 p = 3–8); 1.53–2.05 at the tuner's largest level (f64 p = 4–16): **no crossover**, decision 9 confirmed |
+| autotune (10) | — | `Dense` chosen at every (problem, precision, p) tuned (f32 p = 3–8, f64 p = 4–18); tuned evaluations 0.83–0.99× the static rule's (`autotune`, N = 10⁵); tuning 3.6–6.3 s, the 10 s budget reached once (cube, f64 p = 16) |
+| device memory (4.6) | — | 0.07–6.4 GB per `Fmm` under dense (N = 10⁵ to 10⁷, f64 p = 18 at 10⁷ the most); N = 10⁷ fits at every p measured |
+| launches per evaluation (8.1) | about 49 (cube, p = 8) | the cube: 40–43 at N = 10⁵, 49–94 at 10⁶, 75–486 at 10⁷ (more levels and chunks); the Plummer sphere at N = 10⁵ 87–101 |
+| the host part of an evaluation (8, 4.1) | the charges up and the output down, small | outside the level calls 8.4 / 13 ms (f32 / f64) at N = 10⁶ and 183–189 / 298–303 ms at N = 10⁷, at every p: 58–83% of an evaluation at N = 10⁷ for p ≤ 8. In it the serial output pass `scaled_output` (each value divided by its leaf's scale and scattered into the caller's order, into output vectors allocated afresh) is the largest part the `nsys` CPU samples identify at N = 10⁷ (at least 29% in f32, 32% in f64 of the samples inside `Fmm::evaluate`; half could not be attributed), then the download path (3–4%) and the per-evaluation pinned host buffer (`cuMemAllocHost`, median 2.3–2.5 ms, up to 53 ms); the copies themselves take microseconds to enqueue. |
+| leaf size (decision 8 of Phase 4; decision 7 of Phase 4S) | the T13 rule picked 64 on Metal | applied on CUDA (T8, `device_fmm --part leaf`, the cube and the Plummer sphere, p = 3 and 8): **64** in f32 and f64 at N = 10⁵ and 10⁶; by the geometric mean 128 within 1.0–1.7% of 64 at N = 10⁶, 32 within 3.3–5.3% at N = 10⁵. No CUDA default (decision 7 of Phase 4S, decided on 2026-10-07); per configuration 128 is up to 14% faster (Plummer, p = 8) and 32 up to 17% (Plummer, p = 3) |
+
+**Findings reported, not built** (T8 changes no code; in addition to §18.2's):
+- the host part of an evaluation (row above) is the largest single cost of the device
+  FMM at N ≥ 10⁶ for p ≤ 8 on CUDA; it is per-point host work, so a threaded charge
+  gather and output scatter, and a persistent pinned download buffer (CubeCL's read
+  path), are the candidates; for Phase 5, where the redistribution adds the same kind of
+  work;
+- the strategy of a tuning cache tuned at one N is reused at another N with the same p
+  (the cache key holds no size): harmless on CUDA, where dense wins at every N measured,
+  but on Metal the f32 choice changed with N (Phase 4 T13).
+

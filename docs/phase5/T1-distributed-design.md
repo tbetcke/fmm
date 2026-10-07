@@ -14,17 +14,19 @@ change code:
 - what "equal to one rank" means numerically;
 - how a device operator sees the evaluator's data movements;
 - how exchanges overlap computation without breaking determinism;
-- how the result is tested and measured on the one machine available.
+- how the result is tested and measured on the two machines available, each one node.
 
 This task writes that design as `docs/design/distributed-fmm.md`, for sign-off by hand
 before T4. It is the Phase 5 counterpart of Phase 3 T1 and Phase 4 T1. It writes no
 Rust, apart from throwaway measurements in the scratch directory, which are not
 committed.
 
-The machine is the Apple M3 Max, and multi-rank means one node over shared memory
-(docs/phase5/README.md, decision 2). `IndexFmm` is retired (decision 5), so do not use
-it as an oracle or a check anywhere in the design. `nd-octree` may change where the FMM
-needs it (decision 6).
+The machines are the Apple M3 Max (12 performance cores) and locust (a GH200: 72 Grace
+cores, one H100), and multi-rank means one node over shared memory on either
+(docs/phase5/README.md, decision 2, revised on 2026-10-05). The design measures and
+models on both. `IndexFmm` is retired (decision 5), so do not use it as an oracle or a
+check anywhere in the design. `nd-octree` may change where the FMM needs it (decision
+6).
 
 Read first:
 - root CLAUDE.md, octree/CLAUDE.md, fmm-plan/CLAUDE.md, fmm-exec/CLAUDE.md,
@@ -36,6 +38,8 @@ Read first:
 - docs/design/device-path.md §4 (all of it), §8, §11, §12, §14 and §17;
 - docs/design/laplace-fmm-plan.md §5, §6.8, §7 (the Phase 4 "Recommendation for Phase 5"
   and the Phase 5 table), §8 and §9;
+- tools/gh200/README.md ("MPI at n ranks", "GPU etiquette") and tools/gh200/machine.md
+  (locust);
 - the code:
   - `nd_octree`: `Octree::new`, `OctreeOptions`, `owner_rank`, `local_leaf`,
     `lookup_leaves`, `coarse_tree_bounds`, `points_to_morton`,
@@ -64,7 +68,9 @@ Read first:
 Measure before you design where a decision rests on a number. The tree and plan
 statistics below need no FMM evaluation, only `Octree::new` and `Plan::new` on 2, 4 and
 8 ranks under `mpirun`: write a throwaway example in the scratch directory, or run an
-existing one with printing. Report each number with how it was obtained:
+existing one with printing. Take them on the M3 Max and on locust; on locust, also take
+the replicated sizes and the build times at 16, 32, 64 and 72 ranks, since they grow
+with P. Report each number with how it was obtained, the machine included:
 - the load imbalance of the current partition on the workloads (the cube, the Plummer
   sphere and the Gaussian clusters at N = 10⁵ and 10⁶; and a set with many coincident
   points): leaves, points and near-field pairs per rank, max over mean;
@@ -169,7 +175,8 @@ Write `docs/design/distributed-fmm.md` with these sections:
    - Which `nd-fmm-kernels` launches it uses (the existing `movement` gather and scatter,
      or new ones), and the device memory added for the ghost slots and packed buffers.
    - The device per rank (`split_shared`, local rank modulo device count), the CPU
-     runtime's cores per rank, and Metal with ranks sharing the GPU.
+     runtime's cores per rank, Metal with ranks sharing the GPU, and CUDA on locust with
+     ranks sharing the one H100.
    - Errors (requirement 4): a device failure at a sync in the middle of an evaluation
      must not leave other ranks blocked in the next exchange. Weigh agreeing it at the end
      of `evaluate` (one all-reduce per evaluation) against carrying a flag in an
@@ -182,10 +189,10 @@ Write `docs/design/distributed-fmm.md` with these sections:
      behind the downward pass of level l. Which evaluator methods change. How the public
      stages and their debug-checked order change, or which new combined stage they gain.
    - Its expected gain, as a model from the measured exchange sizes and the Phase 3S
-     and Phase 4 stage times, at shared-memory bandwidth and at a stated network
-     bandwidth (for example 10 and 100 Gbit/s). Mark it *model*. Say whether the
-     multipole exchange can be hidden at all: the coarse levels hold little downward
-     work.
+     and Phase 4 stage times (the M3 Max) and the Phase 4S host times (Grace), at each
+     machine's shared-memory bandwidth and at a stated network bandwidth (for example 10
+     and 100 Gbit/s). Mark it *model*. Say whether the multipole exchange can be hidden
+     at all: the coarse levels hold little downward work.
    - The reordering options (P2P before L2P; local before ghost parts of near and X rows;
      P2P into its own buffer added at the end) and what each does to the accumulation
      order of fmm-plan-redesign §7.5. Recommend whether any is offered, and as what
@@ -225,12 +232,14 @@ Write `docs/design/distributed-fmm.md` with these sections:
       4 ranks as T3 measures.
     - How a test skips a rank count it cannot run.
 11. **Scaling method (C5.3).**
-    - Strong and weak scaling on the M3 Max: problems, ranks (1, 2, 4, 8, 12), ranks ×
-      threads mixes at 12 cores, precisions and p, repetitions, statistics.
+    - Strong and weak scaling on the M3 Max and on locust: problems, ranks (1, 2, 4, 8,
+      12 on the M3 Max; up to 64 or 72 on locust), ranks × threads mixes at 12 cores on
+      the M3 Max and 72 on locust, precisions and p, repetitions, statistics.
     - What is reported per stage and per rank: max, min and mean, load imbalance,
       exchange bytes and messages, exposed wait, build time by part, memory.
-    - How shared memory and the missing process binding on macOS bias the numbers, and
-      what the report says about them.
+    - How shared memory and the missing process binding on macOS bias the numbers, how
+      locust's binding (`--report-bindings`) and its other users do, and what the report
+      says about them.
     - The inter-node command, and the numbers it would settle.
 12. **Task check.** Map the design onto T2–T10. Name each task's modules and tests. Say
     where a brief needs changing, and propose the change; do not rewrite the briefs.
@@ -267,7 +276,9 @@ The PR description must contain:
 Must pass: nothing builds differently. Run `cargo fmt -- --check`,
 `RUST_MIN_STACK=8388608 cargo test -p nd-fmm-plan` and `RUST_MIN_STACK=8388608 cargo test
 -p nd-fmm-exec` once, to confirm the starting point, and report the results. Run every
-multi-rank measurement under an external timeout with the macOS loopback flags.
+multi-rank measurement under an external timeout, with the macOS loopback flags on the
+M3 Max and without them on locust; on locust, check the load first (README, "Ranks on
+locust").
 
 Do not:
 - write or change any Rust in the workspace, or any brief except to fix a factual error

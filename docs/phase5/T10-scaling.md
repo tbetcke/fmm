@@ -1,7 +1,9 @@
-# Phase 5 / T10 — scaling on the M3 Max, design-document update (C5.3; gate: scaling report)
+# Phase 5 / T10 — scaling on the M3 Max and locust, design-document update (C5.3; gate: scaling report)
 
-This task measures what the phase delivered, on the only machine available: the M3 Max,
-one node, ranks over shared memory (docs/phase5/README.md, decision 2). It covers:
+This task measures what the phase delivered, on the two machines available, each one
+node with ranks over shared memory (docs/phase5/README.md, decision 2, revised on
+2026-10-05): the M3 Max at 1–12 ranks, and locust (72 Grace cores) up to 64 or 72. It
+covers:
 - strong and weak scaling of the host path, stage by stage;
 - load balance and communication per rank;
 - the cost of redistribution;
@@ -14,8 +16,11 @@ It ends the phase with the design-document update, as Phase 4 T13 did.
 
 Read first:
 - root CLAUDE.md, fmm-validate/CLAUDE.md, fmm-exec/CLAUDE.md, fmm-plan/CLAUDE.md;
-- docs/phase5/README.md ("Requirements" 8–10, "Ranks on the M3 Max", "Threads and BLAS",
-  "Exit gate", "Decisions to sign off", "Exit checklist");
+- docs/phase5/README.md ("Requirements" 8–10, "Ranks on the M3 Max", "Ranks on
+  locust", "Threads and BLAS", "Exit gate", "Decisions to sign off", "Exit checklist");
+- tools/gh200/README.md ("MPI at n ranks", "GPU etiquette") and
+  `fmm-bench/results/phase4s-gh200.md` (the Grace host times and how locust's load was
+  stated);
 - docs/design/distributed-fmm.md, signed off: §9 (memory per rank, replicated data), §11
   (scaling method) and every decision as signed off;
 - docs/design/laplace-fmm-plan.md §7 (Phase 3 "C3.5, threads", Phase 3S "FMM", Phase 4
@@ -39,10 +44,11 @@ Do:
   - Per exchange: bytes and messages per rank.
   - Peak memory per rank, or the design's formula evaluated, and say which.
   - Medians over repeated evaluations, with the repetition count printed.
-  - A driver script (or documented loop) launches the sweep under `mpirun` with the
-    loopback flags and an external timeout per launch.
-- **Runs** (release, outside the sandbox, so the machine line is known; every BLAS
-  thread variable set to 1; at most 12 ranks × threads):
+  - A driver script (or documented loop) launches the sweep under `mpirun` with an
+    external timeout per launch, with the loopback flags on the M3 Max and without them
+    on locust.
+- **Runs on the M3 Max** (release, outside the sandbox, so the machine line is known;
+  every BLAS thread variable set to 1; at most 12 ranks × threads):
   - **Strong scaling**: the cube and the Plummer sphere at N = 10⁶ (and N = 10⁵, to show
     where the problem runs out of work), f64 p = 3 and 8, f32 p = 8, the default strategy,
     1, 2, 4, 8 and 12 ranks with one thread each. Overlap off and on (T9). Input from a
@@ -62,6 +68,18 @@ Do:
   - Every run's errors against the direct sum at the sampled targets match the one-rank
     run's to the printed digits (f64) and within 1% (f32). Use T6's machinery; say which
     runs were checked.
+- **Runs on locust** (release, by hand through `tools/gh200/remote.sh`; every BLAS
+  thread variable set to 1; at most 72 ranks × threads, one rank per core; the binding
+  printed with `--report-bindings`; the load checked before and after every run and
+  stated, with no timings while another user's job could influence them):
+  - **Strong and weak scaling**: the problems, precisions and p of the M3 Max runs, at 1,
+    2, 4, 8, 16, 32 and 64 or 72 ranks with one thread each. Say whether 64 or 72, and
+    why.
+  - **Ranks against threads at 72 cores**: for example 1 × 72, 8 × 9 and 72 × 1, on the
+    same problems as on the M3 Max.
+  - **Redistribution and load balance**: as on the M3 Max, at 8 ranks and at the largest
+    rank count.
+  - The errors against the direct sum checked as on the M3 Max.
 - **Device on several ranks**: a correctness table only (T8's gate results, the
   transfers and syncs per evaluation at 1, 2 and 4 ranks). No device time is presented
   as scaling (decision 3).
@@ -69,10 +87,12 @@ Do:
   sweep on a cluster with Open MPI or MPICH. Name the numbers it would settle: exchange
   cost at network bandwidth, the value of overlap there, and scaling beyond one node
   (the replicated coarse data at large P, design §9). Check that it builds on Linux,
-  for example through the CI job's environment. Claim no result from it.
+  for example on locust or through the CI job's environment. Claim no result from it:
+  locust's 72 ranks are still one node.
 - **The report**: paste the output into the PR and keep it as
-  `fmm-validate/results/phase5-m3max.md`, in the format of the Phase 4 report. It states
-  that every figure is one node of the M3 Max over shared memory.
+  `fmm-validate/results/phase5-m3max.md` and `fmm-validate/results/phase5-gh200.md`, in
+  the format of the Phase 4 report. Each states that every figure is one node over
+  shared memory, of the M3 Max or of locust.
 - **Design documents**, with the Phase 5 outcome:
   - laplace-fmm-plan.md:
     - the revision note at the top;
@@ -106,7 +126,7 @@ Must pass:
 - `cargo fmt --all`, the root checks and the stricter workspace checks;
 - `RUST_MIN_STACK=8388608 cargo test -p nd-fmm-validate` at 1 rank, and the smoke test at 2
   ranks by hand;
-- the sweep on the M3 Max, as above;
+- the sweeps on the M3 Max and on locust, as above;
 - the multi-rank CI job, if kept.
 
 Do not:
@@ -114,5 +134,5 @@ Do not:
 - change the library to improve a number. A defect found here is reported, and fixed in
   its own commit with its test;
 - present a model as a measurement, or a one-node figure as inter-node scaling. Every
-  number is labelled "measured (M3 Max, ranks × threads, build)" or "model";
+  number is labelled "measured (M3 Max or locust, ranks × threads, build)" or "model";
 - add criterion or any other dependency without asking.
