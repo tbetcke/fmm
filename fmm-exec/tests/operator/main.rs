@@ -15,15 +15,15 @@
 mod allocation;
 mod chains;
 mod common;
-#[cfg(any(feature = "cpu", feature = "metal"))]
+#[cfg(any(feature = "cpu", feature = "metal", feature = "cuda"))]
 mod device_leaf;
-#[cfg(any(feature = "cpu", feature = "metal"))]
+#[cfg(any(feature = "cpu", feature = "metal", feature = "cuda"))]
 mod device_m2l;
-#[cfg(any(feature = "cpu", feature = "metal"))]
+#[cfg(any(feature = "cpu", feature = "metal", feature = "cuda"))]
 mod device_p2p;
-#[cfg(any(feature = "cpu", feature = "metal"))]
+#[cfg(any(feature = "cpu", feature = "metal", feature = "cuda"))]
 mod device_rotation;
-#[cfg(any(feature = "cpu", feature = "metal"))]
+#[cfg(any(feature = "cpu", feature = "metal", feature = "cuda"))]
 mod device_translate;
 mod generic;
 mod leaf;

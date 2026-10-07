@@ -143,11 +143,15 @@ cargo clippy -p nd-fmm-simd --all-targets --target <other> -- -D warnings
 On locust (by hand, Phase 4S): after `tools/gh200/sync.sh`, the checks above that are
 not Metal run there too, each as `tools/gh200/remote.sh '<command>'`; Linux needs no
 loopback flags for `mpirun`. The CUDA tests are `#[ignore]`d and run there by hand;
-for nd-fmm-kernels (Phase 4S T2; nd-fmm-exec follows in T4):
+for nd-fmm-kernels (Phase 4S T2) and nd-fmm-exec (Phase 4S T4; `tests/device_cuda.rs`,
+the CUDA blocks of the ignored gates and the operator tests):
 
 ```sh
 cargo test -p nd-fmm-kernels --release --features cpu,cuda -- --include-ignored --show-output
 cargo clippy -p nd-fmm-kernels --all-targets --features cpu,cuda -- -D warnings
+cargo clippy -p nd-fmm-exec --all-targets --features cpu,cuda -- -D warnings
+RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features cuda --release
+RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features cuda --release -- --ignored
 ```
 
 `cargo test --workspace` needs a working MPI runtime, because nd-octree and

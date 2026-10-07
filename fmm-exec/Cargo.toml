@@ -20,7 +20,7 @@ gpu = ["dep:nd-fmm-kernels"]
 cpu = ["gpu", "nd-fmm-kernels/cpu"]
 # Metal (wgpu with the MSL compiler): f32 only, run outside the macOS sandbox.
 metal = ["gpu", "nd-fmm-kernels/metal"]
-# CUDA: type-checked only.
+# CUDA: f32 and f64; type-checked in CI, run by hand on locust's H100 (Phase 4S).
 cuda = ["gpu", "nd-fmm-kernels/cuda"]
 
 [dependencies]

@@ -45,7 +45,9 @@
 //! equal `geometry::relative_frame` bit for bit, in f32 and f64.
 //!
 //! The CPU runtime runs with the `cpu` feature (its default layout and the cube layout);
-//! Metal (f32) with `metal`, ignored, by hand outside the macOS sandbox. Each test prints
+//! Metal (f32) with `metal`, ignored, by hand outside the macOS sandbox; CUDA (f32 and
+//! f64, its default layout) with `cuda`, ignored, by hand on locust (Phase 4S T4). Each
+//! test prints
 //! the device, the worst errors per operator, precision and level (with the worst degree
 //! for coefficients) and the backends it ran.
 
@@ -919,13 +921,13 @@ fn run(kind: BackendKind) {
         eprintln!("  f64: not supported by this device, not run");
     }
     eprintln!("  frames: every X and W pair bit for bit against relative_frame");
-    let not_run: Vec<&str> = BackendKind::ALL
+    let not_run: Vec<String> = BackendKind::ALL
         .into_iter()
         .filter(|&k| k != kind)
-        .map(|k| match k {
-            BackendKind::Cuda => "cuda (type-checked, not run)",
-            BackendKind::Metal => "metal (its own ignored test)",
-            BackendKind::Cpu => "cpu (its own test)",
+        .map(|k| match (k, k.is_compiled()) {
+            (_, false) => format!("{k} (not compiled)"),
+            (BackendKind::Cpu, true) => format!("{k} (its own test)"),
+            _ => format!("{k} (its own ignored test)"),
         })
         .collect();
     eprintln!("backends run: {kind}; not run: {}", not_run.join(", "));
@@ -942,4 +944,11 @@ fn device_leaf_operators_equal_the_reference_on_the_cpu_runtime() {
 #[ignore = "Metal: run by hand, outside the sandbox"]
 fn device_leaf_operators_equal_the_reference_on_metal() {
     run(BackendKind::Metal);
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[ignore = "CUDA: run by hand on locust"]
+fn device_leaf_operators_equal_the_reference_on_cuda() {
+    run(BackendKind::Cuda);
 }

@@ -206,7 +206,8 @@ pub enum Backend {
     Cpu,
     /// Metal, wgpu with the MSL compiler (feature `metal`): f32 only.
     Metal,
-    /// CUDA (feature `cuda`): type-checked, never run here.
+    /// CUDA (feature `cuda`): f32 and f64; type-checked in CI, run by hand on an H100
+    /// (Phase 4S).
     Cuda,
 }
 

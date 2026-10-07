@@ -220,7 +220,8 @@ static DEVICE_RUNS: std::sync::Mutex<Vec<DeviceRuns>> = std::sync::Mutex::new(Ve
 
 /// The device backends every `Fmm` scenario is repeated on: the CPU runtime if it is
 /// compiled in. Metal runs in its own ignored executable (`tests/device_metal.rs`),
-/// outside the macOS sandbox; CUDA is type-checked only.
+/// outside the macOS sandbox, and CUDA in its own (`tests/device_cuda.rs`), by hand on
+/// locust.
 #[cfg(feature = "gpu")]
 fn device_backends() -> Vec<Backend> {
     [Backend::Cpu]
@@ -282,7 +283,7 @@ fn backends_line() -> String {
         .map(|b| match (b, b.is_compiled()) {
             (_, false) => format!("{b} (not compiled)"),
             (Backend::Metal, true) => format!("{b} (ignored test tests/device_metal.rs)"),
-            (Backend::Cuda, true) => format!("{b} (type-checked, not run)"),
+            (Backend::Cuda, true) => format!("{b} (ignored test tests/device_cuda.rs)"),
             _ => format!("{b} (not run)"),
         })
         .chain(refused)

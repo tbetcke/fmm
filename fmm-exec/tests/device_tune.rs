@@ -15,7 +15,9 @@
 //! precision), and the strategy at p = 12 in f64, which without `table_cache` keeps the static rule
 //! (`Rotation`; the dense candidate would take seconds to build) and is not stored, and
 //! with it is tuned. The test prints the backends it ran. Metal runs the same scenarios in
-//! `tests/device_metal.rs` (ignored, by hand).
+//! `tests/device_metal.rs` (ignored, by hand), CUDA in `tests/device_cuda.rs` (ignored, by
+//! hand on locust; f32 p = 8 and f64 p = 6 in full, f32 p = 3, and the strategy at f64
+//! p = 12), since this executable's one MPI test is the CPU runtime's.
 //!
 //! ```text
 //! RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features cpu --release --test device_tune -- --nocapture
@@ -376,6 +378,7 @@ fn tuning_on_the_cpu_runtime() {
         report.time.as_secs_f64()
     );
     eprintln!(
-        "backends run: cpu (f32, f64); not run: metal (tests/device_metal.rs, by hand), cuda (type-checked, not run)"
+        "backends run: cpu (f32, f64); not run: metal (tests/device_metal.rs, by hand), cuda \
+         (tests/device_cuda.rs, by hand on locust)"
     );
 }

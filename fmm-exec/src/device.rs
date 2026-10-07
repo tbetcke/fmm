@@ -14,7 +14,7 @@
 //! | --- | --- | --- | --- |
 //! | [`Cpu`](Backend::Cpu) | `cpu` | f32, f64 | the CubeCL CPU runtime: the correctness backend |
 //! | [`Metal`](Backend::Metal) | `metal` | f32 | wgpu with the MSL compiler, outside the macOS sandbox |
-//! | [`Cuda`](Backend::Cuda) | `cuda` | f32, f64 | never: type-checked only |
+//! | [`Cuda`](Backend::Cuda) | `cuda` | f32, f64 | LLVM to NVPTX; type-checked in CI, run by hand on an H100 (Phase 4S) |
 //!
 //! Each feature enables `gpu`. A backend that is not compiled in, a device that cannot be
 //! opened and a precision the device does not do arithmetic in (f64 on Metal) are

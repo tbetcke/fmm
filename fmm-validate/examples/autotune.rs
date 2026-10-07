@@ -246,7 +246,7 @@ fn main() {
         [
             (backend != Backend::Cpu).then_some("cpu"),
             (backend != Backend::Metal).then_some("metal"),
-            Some("cuda (type-checked, not run)"),
+            (backend != Backend::Cuda).then_some("cuda"),
         ]
         .into_iter()
         .flatten()
