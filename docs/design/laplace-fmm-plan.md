@@ -42,6 +42,14 @@ host path at one thread and 4–13× at 12 threads, with the host's errors. Dens
 the hand-written GEMM is the f32 default; rotation wins only on large trees, where the
 tuner picks it. The f64 GPU rule stays provisional (no f64 GPU, no CUDA run); f64 is
 checked on the CubeCL CPU runtime. The device leaf size stays 64.
+Revised at the end of Phase 4S (2026-10-07; Sections 6.1, 6.2, 7, 8.3, 9.1 and 9.2): the
+device path runs on CUDA, on the H100 of locust's GH200, through CubeCL's LLVM NVPTX path
+(docs/phase4s/). f32 and f64 pass the Phase 4 gates there with the CPU runtime's f64
+bounds; CUDA has its own layouts and the static rule `Dense` at every p, which every
+measurement confirms (no f64 crossover up to p = 18 end to end, 20 per level). The new
+crate `nd-fmm-bench` is the one-command benchmark. On the GH200 the device FMM is 2–7.5×
+the 72-core Grace host at N ≤ 10⁶ (1.5–4.2× at 10⁷) and 1.1–3.2× the M3 Max GPU (f32); at large N the host part of an
+evaluation dominates the device (`fmm-bench/results/phase4s-gh200.md`).
 
 > Where this document and `docs/CONVENTIONS.md` differ (normalisation, phases, scaling),
 > **the conventions file takes precedence.** Section 2.4 below now follows the scaling of
@@ -663,7 +671,7 @@ Three CubeCL facts shape the design: f64 is not available on every backend, the 
 still changing between minor versions, and its strengths (comptime specialisation,
 vectorised lines, autotune, a tuned matmul engine) favour a GEMM-centred M2L.
 
-### 6.1 Version and backend facts (confirmed by the Phase 0 spike and Phase 4)
+### 6.1 Version and backend facts (confirmed by the Phase 0 spike, Phase 4 and Phase 4S)
 
 - **Pinned (Phase 4, T2):** `cubecl =0.11.0-pre.4`, with the matmul engine
   `cubek-matmul =0.3.0-pre.4` (feature `multi-level`) and `cubek-std =0.3.0-pre.4`, in
@@ -677,19 +685,25 @@ vectorised lines, autotune, a tuned matmul engine) favour a GEMM-centred M2L.
   `Strategy::MultiLevel` and `Strategy::Tiled`.
 - **CubeCL 0.10.0 cannot run f64 on CUDA.** `cubecl-cpp` 0.10.0 removes f64 from the
   CUDA backend's supported types ("Causes CUDA_ERROR_INVALID_VALUE for matmul").
-  0.11.0-pre.4 registers it again (read in the source; never run here, as no CUDA card
-  is available). 0.11 also brings a frontend "mega-refactor"
-  ([release notes](https://github.com/tracel-ai/cubecl/releases)).
+  0.11.0-pre.4 registers it again (read in the source in Phase 4; *run in Phase 4S* on
+  the H100 of locust's GH200, where f64 is registered with arithmetic and every kernel
+  test passes in f64, device-path.md §18.1, F27 and F31). 0.11 also brings a frontend
+  "mega-refactor" ([release notes](https://github.com/tracel-ai/cubecl/releases)).
 - **f64 per backend, as built** (Phase 4): Metal reports no f64 (measured), and
   `nd-fmm-exec` refuses f64 there at build with `SettingsError::PrecisionUnsupported`,
   agreed on every rank; the CubeCL CPU runtime reports and runs it (measured); CUDA
-  registers it (source; type-checked, never run).
+  registers and runs it (measured on the H100 in Phase 4S: the device FMM within 6.7e-15
+  of the host in f64 in T4's gates, 1.2e-14 at p = 18 in T8's runs).
 - **0.11 fuses products into fmas everywhere.** `cubecl-opt`'s `InstCombinePass` rewrites
   every `a * b ± c` whose product has no other use into an fma, on every backend, the CPU
   runtime included, with no switch (T2). Device kernels are therefore not bit-identical
   to unfused host loops; T3 found no formulation that keeps the fusion out, so device
   kernels write `fma` explicitly where a result must be pinned, and are compared with the
-  host within tolerances (CONVENTIONS §3.13, "Device kernels").
+  host within tolerances (CONVENTIONS §3.13, "Device kernels"). *On CUDA (Phase 4S T3):*
+  LLVM's NVPTX back end also fuses a product that has other uses (it keeps the `mul` for
+  them and emits `fma.rn` for the add); no fma chain is reassociated. This is the CUDA
+  note of §3.13 (Phase 4S decision 10); `CONVENTION_VERSION` stays 1, and the production
+  kernels, which write every pinned multiply–add as `fma`, are unaffected.
 - **No FP64 tensor cores.** Neither 0.10.0 nor 0.11.0-pre.4 has an F64 MMA combination
   (CUDA MMA is F16, BF16 and TF32 only). f64 GEMM runs on plain FMA units, so the A100
   and H100 reach at most their non-tensor-core f64 peak, half the datasheet figure.
@@ -698,11 +712,32 @@ vectorised lines, autotune, a tuned matmul engine) favour a GEMM-centred M2L.
   features ([crate docs](https://lib.rs/crates/cubecl-std)). Metal reports no f64
   (`supports_type(f64) = false`). *Built in Phase 4:* Metal (wgpu with the MSL compiler;
   a device that comes up without it is refused), the CPU runtime, and CUDA
-  (type-checked only). HIP, Vulkan and WebGPU are not built, although every kernel stays
-  runtime-generic.
+  (type-checked only in Phase 4; run on the H100 in Phase 4S). HIP, Vulkan and WebGPU are
+  not built, although every kernel stays runtime-generic.
+- *CUDA as run (Phase 4S, locust's GH200: CUDA 12.6.3, driver 565.57.01; device-path.md
+  §18):*
+  - the compiler path is CubeCL's default, LLVM to NVPTX through the `tracel-llvm`
+    bundle (decision 4 of docs/phase4s/README.md); NVRTC (`cuda-cpp`) stays off. On it
+    `sqrt`, division and `recip` are correctly rounded (`sqrt.rn`, `div.rn`, `rcp.rn`),
+    `inverse_sqrt` is the polyfill fl(1 / fl(√x)), and subnormals are kept (no `.ftz`, no
+    `.approx`);
+  - `PLANE_POS` is not lowered for NVPTX in 0.11.0-pre.4: the launch is dropped silently
+    and a later read returns stale data. The P2P plane layout derives plane and lane
+    from `UNIT_POS` (a workaround, bit for bit on every backend); fixed upstream after
+    the pin (tracel-ai/cubecl#1714);
+  - the hardware the device reports: plane size 32, 232,448 B of shared memory and 1,024
+    units per cube, 96 GB; CUDA gets its own layouts where T7 measured a gain of at least
+    10% (P2P and leaf cubes of 32 units, larger GEMM register blocks, a 2 GB chunk budget);
+  - kernel compilation (LLVM to PTX, then the driver's JIT, cached in
+    `CUDA_CACHE_PATH`) takes 18 s for the 537 variants of the kernel suite;
+  - on aarch64 Linux, GNU ld cannot link the `tracel-llvm` archives (link order), so
+    locust links with rust-lld (tools/gh200/README.md).
 - The matmul engine's CMMA strategies (simdgroup matrices on Metal) need
   Nc = (p+1)² ≳ 64. At p = 4 they are rejected and `Strategy::Auto` falls back to a
-  scalar path that is 10× slower than a hand-written kernel.
+  scalar path that is 10× slower than a hand-written kernel. *On CUDA's LLVM path (Phase
+  4S):* no CMMA strategy launches at any shape or precision ("No tile size is available
+  for the problem"), so the library's probe fails and the hand-written GEMM runs at
+  every p and precision.
 - The CPU runtime is the correctness backend for f64. *Phase 0, on 0.10.0* (MLIR/LLVM at
   optimisation level 0, superseded): f64 bit for bit the reference, the library matmul
   about 1% of CPU peak, the hand-written kernels 4–26%, some library f32 kernels over 5
@@ -734,8 +769,12 @@ vectorised lines, autotune, a tuned matmul engine) favour a GEMM-centred M2L.
   *As built:* precision is a capability (README requirement 7). `nd-fmm-kernels` refuses
   an f64 buffer or launch on a device that reports no f64, and `FmmBuilder::build`
   returns `SettingsError::PrecisionUnsupported` for f64 on Metal, never a panic or a
-  cast. f64 runs on the CPU runtime (every f64 device test and gate) and, untested, on
-  CUDA.
+  cast. f64 runs on the CPU runtime (every f64 device test and gate) and, since Phase 4S,
+  on CUDA: every kernel test, the device-arithmetic spike and the Phase 4 FMM gates pass
+  in f64 on the H100 with the f64 bounds of the CPU runtime (device output within 6.7e-15
+  of the host's in T4's gates and 1.2e-14 at p = 18 in T8's runs, bound 1e-12; error
+  ratios 1.0000), so f64 on a GPU needs no looser
+  tolerance (Phase 4S requirement 5, T4).
 - f32 path: every backend, p ≤ 8, scaled coefficients mandatory.
 - Tables are always computed in f64 on the host (`fmm-tables`) and down-cast when stored.
   The device uploads the host's tables in T, once per `Fmm`.
@@ -745,10 +784,14 @@ vectorised lines, autotune, a tuned matmul engine) favour a GEMM-centred M2L.
   used only if its inputs are multiplied in T: an input-precision guard checks the
   resolved `MatmulElems` at build and refuses any strategy that would round f32 to TF32,
   F16 or BF16, by default and in autotune. On Metal the CMMA path keeps f32. CUDA
-  offers only F16, BF16 and TF32 MMA, so there the guard is expected to leave f32 on the
-  hand-written kernel (not run).
+  offers only F16, BF16 and TF32 MMA, so there the guard was expected to leave f32 on
+  the hand-written kernel. *As run in Phase 4S:* the guard is never reached on CUDA,
+  because the LLVM path launches no CMMA strategy at all (Section 6.1) and the library's
+  probe fails first; f32 and f64 run the hand-written GEMM at every p, and the tests
+  assert that no level call runs the library there. No f32 value is rounded to TF32.
 - Device kernels assume only what CONVENTIONS §3.13, "Device kernels" lists (signed off
-  with T3): correctly rounded `+ − ×`, any lone product-add possibly fused, `sqrt`,
+  with T3; the CUDA note signed off with Phase 4S T3): correctly rounded `+ − ×`, any lone
+  product-add possibly fused (on CUDA any product-add), `sqrt`,
   division and `inverse_sqrt` within 2.5 u_T on normal arguments, subnormals possibly
   flushed (Metal does in arithmetic). P2P computes ŷ by an explicit fma, `inverse_sqrt`
   without a Newton step, and masks by compare and select.
@@ -1778,6 +1821,90 @@ evaluation time in ms; Phase 3S T7's host times in the Phase 3S section above):
 - **CubeCL 0.11.0.** Move from the pre-release when it is published, as a small task
   (CubeCL code lives only in `nd-fmm-kernels`), and re-run the kernel harnesses.
 
+### Phase 4S: CUDA on NVIDIA Grace Hopper (`tools/gh200`, `fmm-kernels`, `fmm-exec`, `fmm-bench`)
+
+Phase 4S ran the Phase 4 device path on CUDA, on the H100 of locust's GH200 (72 Grace
+cores, one H100, 96 GB; docs/phase4s/), between Phase 4 and Phase 5. It added no new
+structure: CUDA takes the existing `Backend` values and kernels, with its own layouts and
+static rule where measured better (device-path.md §18). Timings on locust, labelled as
+such; the M3 Max keeps its Phase 4 figures.
+
+| ID | Component | Acceptance criterion | Status |
+| --- | --- | --- | --- |
+| C4S.1 | locust's environment (T1) | rebuilds from the committed spack lock and pinned toolchain into an empty prefix; home check clean; the root, `nd-fmm-simd` and CPU-runtime kernel checks pass on Grace | Done (T1, PR #62): spack v1.2.2 with Open MPI 5.0.10, OpenBLAS 0.3.33, CUDA 12.6.3 built from the lock (14 min 50 s; an empty second prefix in 8 min 14 s with the same 55 hashes); rustup with 1.99.0; rust-lld, because GNU ld cannot link CubeCL's LLVM on aarch64; 715 workspace tests pass on Grace; 64 KiB pages broke nothing; the home check clean |
+| C4S.2 | the kernels on CUDA (T2) | every `nd-fmm-kernels` test passes on CUDA in f32 and f64; the GEMM spike runs; the CUDA facts recorded | Done (T2, PR #63): 56 CUDA tests, every bit-for-bit test holding in f32 and f64; two defects fixed (`PLANE_POS` not lowered for NVPTX, a launch dropped silently; empty timing windows), facts F25–F32 (device-path.md §18.1); the spike's hand-written f64 GEMM at 7.8–9.9 TFLOP/s (23–29% of the 34 TFLOP/s *datasheet* peak); no CMMA strategy launches on the LLVM path |
+| C4S.3 | device arithmetic on CUDA (T3) | the spike runs in f32 and f64; §3.13 confirmed for CUDA or a CUDA note signed off | Done (T3, PR #64): IEEE rounding of `+ − ×`, `fma`, `sqrt`, division; subnormals kept; LLVM's NVPTX back end fuses products with other uses too; a CUDA note in CONVENTIONS §3.13 (decision 10), `CONVENTION_VERSION` 1; NVRTC off (F33–F36) |
+| C4S.4 | the Phase 4 device gates on CUDA (T4) | host fallback bit for bit; C4.8 on the cube, the Plummer sphere and the clusters at N = 10⁵ and the cube at 10⁶; determinism and transfers; the tuner; the ignored gates; f32 and f64 | Done (T4, PR #65): device − host within 6.7e-15 (f64, bound 1e-12) and 2.9e-6 (f32, bound 1e-5), error ratios 1.0000 (f64) and 0.991–1.010 (f32); the fallback bit for bit; one upload, one download, one sync; f64 on a GPU needs no looser tolerance (requirement 5) |
+| C4S.5 | per-kind timings (T5) | on the host and every device backend, off by default, bit-identical, the syncs documented | Done (T5, PR #66): `FmmBuilder::kind_timings` with `KindTiming::{Off, Synchronous, Device}` and `StageTimings::kinds`; bit for bit `Off` in every mode; `Device` (CUDA events) gives a breakdown on CUDA, overlapping windows on Metal |
+| C4S.6 | the benchmark (T6) | `tools/bench/run.sh` gives the Markdown report on the M3 Max (host, Metal) and on locust (host, CUDA) | Done (T6, PR #67): `nd-fmm-bench`, a default member; one command, N points in [0, 1]³, f32/f64, p, backend; min, median, mean, max and standard deviation, per-kind tables, errors against the direct sum |
+| C4S.7 | Hopper tuning (T7) | CUDA layouts and candidates adopted by measurement; the static M2L rule on CUDA signed off; Metal and the CPU runtime bit for bit | Done (T7, PR #68): P2P and leaf cubes of 32 units, larger GEMM register blocks, a 2 GB chunk budget, CUDA tuner candidates; `Dense` at every p on CUDA in f32 and f64 (decision 9); evaluations 1.09–1.40× faster at N = 10⁶; Metal and CPU-runtime outputs unchanged bit for bit |
+
+**Benchmarks** (T8, `fmm-bench/results/phase4s-gh200.md`; `nd-fmm-bench` and the Phase 4
+CUDA run of phase4-m3max.md §4; measured on locust, CUDA for the device and NEON on the
+Grace cores for the host, the GPU otherwise idle and its clocks not locked):
+
+| N | precision | p | host 1 thread | host 72 threads | CUDA (tuned) | x 1 thread | x 72 threads |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 10⁶ | f32 | 3 | 1,063 | 27.5 | 12.8 | 82.9 | 2.15 |
+| 10⁶ | f32 | 6 | 2,766 | 58.8 | 16.0 | 173 | 3.67 |
+| 10⁶ | f32 | 8 | 5,281 | 111 | 21.7 | 244 | 5.10 |
+| 10⁷ | f32 | 3 | – | 338 | 221 | – | 1.52 |
+| 10⁷ | f32 | 8 | – | 1,095 | 315 | – | 3.47 |
+| 10⁶ | f64 | 3 | 2,441 | 54.5 | 20.5 | 119 | 2.66 |
+| 10⁶ | f64 | 6 | 5,059 | 109 | 25.4 | 199 | 4.27 |
+| 10⁶ | f64 | 8 | 9,653 | 216 | 35.1 | 275 | 6.17 |
+| 10⁶ | f64 | 12 | 22,138 | 355 | 76.2 | 291 | 4.66 |
+| 10⁶ | f64 | 18 | 60,782 | 958 | 243 | 250 | 3.94 |
+| 10⁷ | f64 | 3 | – | 689 | 364 | – | 1.90 |
+| 10⁷ | f64 | 8 | – | 2,145 | 517 | – | 4.15 |
+| 10⁷ | f64 | 18 | – | 8,718 | 3,080 | – | 2.83 |
+
+- **The device's lead over a 72-core server host is 2–7.5×** (f32 and f64, N = 10⁵ to
+  10⁶; 1.5–4.2× at N = 10⁷, where the host part of the device's evaluation dominates), against 4–13× for Metal over the M3 Max's 12 performance cores. The H100 is
+  1.1–3.2× the M3 Max GPU on the Phase 4 problems (f32), most at p = 8.
+- **f64 on a GPU** costs 1.6× f32 per evaluation (N = 10⁶ and 10⁷, p = 3–8) and meets the
+  f64 bounds of the CPU runtime (device − host 1.2e-14, error ratios 1.0000). The
+  hand-written f64 GEMM reaches 13–24% of the f64 peak alone (T7) and 14–23% as whole M2L
+  level calls; rotation 2.0–3.4% (p = 3–18; T7 1.5–3.4% to p = 20), below every break-even of the spike's model. **Dense
+  M2L wins at every p from 3 to 18 end to end** (rotation 1.11–1.51× slower) and to 20
+  per level (T7), and the tuner chose dense in every case: decision 9 (`Dense` at every
+  p on CUDA) is confirmed, and the Phase 4 f64 rule (rotation from p = 12) does not hold
+  on Hopper.
+- **N = 10⁷ fits** in f32 and f64 to p = 18 (at most 6.4 GB): 221–315 ms (f32, p = 3–8)
+  and 0.36–3.1 s (f64, p = 3–18) per evaluation.
+- **The host part of an evaluation dominates the device at large N**: 8.4 ms (f32) and
+  13 ms (f64) at N = 10⁶ and 183–303 ms at N = 10⁷, the same at every p, outside every
+  level call: the serial output pass `scaled_output` (each value divided by its leaf's scale and scattered into the caller's order, into output vectors allocated afresh) is the largest part the `nsys` CPU samples identify at N = 10⁷ (at least 29% in f32, 32% in f64 of the samples inside `Fmm::evaluate`; half could not be attributed), then the download path (3–4%) and the per-evaluation pinned host buffer (`cuMemAllocHost`, median 2.3–2.5 ms, up to 53 ms); the copies themselves take microseconds to enqueue. At N = 10⁷ that is 58–83% of an evaluation for p ≤ 8.
+- The library GEMM never runs on CUDA (no CMMA tile on the LLVM path); f32 and f64 use the
+  hand-written kernel, 9–18.5% of the f32 peak alone.
+
+**Leaf size** (T8, `device_fmm --part leaf`, the Phase 4 rule of T13 on CUDA): the cube and the Plummer sphere at N = 10⁶ (and N = 10⁵), p = 3 and 8, f32 and f64, refinement targets 16 to 256. **The rule picks 64 in every case** (the geometric mean at 128 within 1.0–1.7% at N = 10⁶, at 32 within 3.3–5.3% at N = 10⁵), so CUDA gets no default of its own (decision 7 of docs/phase4s/README.md, decided on 2026-10-07). As on the host and Metal, the best size per configuration depends on p and the distribution (128 up to 14% faster on the Plummer sphere at p = 8, 32 up to 17% at p = 3); large leaves cost CUDA more than Metal, since its far field is cheap relative to P2P.
+
+**Recommendation for Phase 5** (T8):
+- **Measure on both machines, and report the host part.** On the device, the work outside
+  the level calls (the charge gather into leaf order, the download and the output's
+  scaling and order) is 38–83% of an evaluation at N = 10⁶–10⁷ for p ≤ 8 and scales with the points
+  per rank, not with p (at N = 10⁷ the serial output pass `scaled_output` is the largest part the `nsys` samples identify). A multi-rank run divides it by the ranks, but the
+  redistribution adds per-point host work of the same kind; time it per stage, and treat a
+  threaded gather and scatter (and a persistent pinned download buffer, a CubeCL read
+  path question) as candidates before reading device scaling figures. On the host path at
+  72 threads the same part is 10–21 ms at N = 10⁶ (2–37% of an evaluation).
+- **locust's host is a real baseline.** 72 Grace cores in one NUMA node come within 2–7.5×
+  of the H100; host strong scaling to 64 or 72 ranks there is meaningful, and MPI runs at
+  1–72 ranks without flags (T8, docs/phase5/README.md).
+- **Device ranks share one H100** on locust as on the M3 Max: correctness only (Phase 5
+  decision 3). Each process compiles its kernels on first launch (seconds; the driver
+  caches PTX in `CUDA_CACHE_PATH`), so multi-rank device tests pay it per rank once.
+- **Tuning caches are keyed by p, not N**, and a strategy tuned at one size is reused at
+  others (observed in T8). On CUDA the choice does not depend on N up to 10⁷ (dense
+  everywhere), on Metal it did (Phase 4, rotation at N = 10⁶): build per-rank tuning caches
+  at the per-rank size.
+- **Dense tables at high p** are built on the host once per process without a table cache
+  (seconds at p ≥ 12): every rank should load them from a shared table cache.
+- Kernel work found and left for later (device-path.md §18.2): a shared-memory-tiled GEMM,
+  the per-chunk row walk of `Accumulate::Rows` (the M2L efficiency drops from 23% to 16%
+  between N = 10⁶ and 10⁷ at f64 p = 18), and L2P at high p.
+
 ### Phase 5: distributed (`nd-fmm-plan`, `fmm-exec`)
 
 The ghost exchange itself already exists in `nd-fmm-plan`'s `Evaluator`, so there is no
@@ -1906,6 +2033,20 @@ self-hosted runner. Until then they are run by hand, following `fmm-plan/CLAUDE.
   timestamps (`device_timestamps`) give overlapping spans, not a breakdown. Per-kind
   times (M2L, P2P alone) come from the kernel harnesses. No f64 GPU run and no CUDA run
   was timed; the CUDA run is one documented command (Section 9.2).
+- *Done in Phase 4S* on locust's GH200 (H100, CUDA; Grace host): per-kind timings in
+  `nd-fmm-exec` (`FmmBuilder::kind_timings`: synchronous on every backend, CUDA events on
+  CUDA; T5), and the crate **`nd-fmm-bench`** (T6), the one-command benchmark:
+  `tools/bench/run.sh --backend host,cuda --precision f32,f64 --degree 3,6,8` gives a
+  Markdown report of N points uniform in [0, 1]³ (default 10⁶, f32, p = 6) with the
+  evaluation time (min, median, mean, max, standard deviation), the time per operator
+  kind and the errors against the direct sum, and a header that names everything needed
+  to repeat it (machine, devices, software, source revision, command line, thread
+  variables). Reports go to `bench-results/`; phase reports are kept in
+  `fmm-bench/results/` (T8: `phase4s-gh200.md`, with the Phase 4 CUDA run of
+  phase4-m3max.md §4 and the device leaf-size rule on CUDA). The kernel examples take
+  per-device peaks (`nd_fmm_validate::peaks`: the H100's *datasheet* values) and f64
+  (T7). Still by hand: locust is shared and its clocks are not locked, so every timing run
+  checks the GPU and the CPU for other users' jobs before and after and states the load.
 
 ## 9. Risks, open questions and working with Claude Code
 
@@ -1918,9 +2059,9 @@ and identity tests, the second with a one-day spike before Phase 4.
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
 | Sign or phase convention error in harmonics or translations | wrong results that still converge in p, found late | single conventions spec (C0.1); identity and commutation tests; cross-check against FMM3D. **Retired for harmonics and rotations** by Phase 0 (mpmath fixtures, identities, SciPy cross-check). **Retired for the translations** by Phase 1: signs and shift directions are fixed in CONVENTIONS §3.11 and checked in mpmath by `tools/fixtures/check_translations.py`; the T5 tests check the direct operators against P2M, P2L and the direct sum, and the T6 tests check the independent rotation operators against the direct ones to 1e-13, which also catches the M2L sign errors at orders ≤ −39 that no truncation-bound test can see |
-| f64 GEMM slow or unavailable in the CubeCL matmul engine | dense M2L loses its advantage in f64 | **Partly realised (T6).** CubeCL 0.10.0 has no f64 on CUDA and no FP64 tensor-core path in 0.10 or 0.11-pre. Plan a hand-written comptime-p f64 kernel; keep rotation as the f64 default above p ≈ 10; move the pin to 0.11 before Phase 4; measure on an A100/H100. **Phase 4:** the pin moved to 0.11.0-pre.4 and the hand-written f64 GEMM is built and checked on the CPU runtime (within 4.7e-15 of the direct operators to p = 20), but **still open for speed**: no f64 GPU was available, so f64 throughput and the dense/rotation crossover are unmeasured; the static rule (dense to p = 11, rotation from 12) stays provisional, and the CUDA run is one documented command (Section 9.2) |
+| f64 GEMM slow or unavailable in the CubeCL matmul engine | dense M2L loses its advantage in f64 | **Partly realised (T6).** CubeCL 0.10.0 has no f64 on CUDA and no FP64 tensor-core path in 0.10 or 0.11-pre. Plan a hand-written comptime-p f64 kernel; keep rotation as the f64 default above p ≈ 10; move the pin to 0.11 before Phase 4; measure on an A100/H100. **Phase 4:** the pin moved to 0.11.0-pre.4 and the hand-written f64 GEMM is built and checked on the CPU runtime (within 4.7e-15 of the direct operators to p = 20), but **still open for speed**: no f64 GPU was available, so f64 throughput and the dense/rotation crossover are unmeasured; the static rule (dense to p = 11, rotation from 12) stays provisional, and the CUDA run is one documented command (Section 9.2). **Answered in Phase 4S** on the H100: the hand-written f64 GEMM reaches 13–24% of the f64 peak (the spike's model: 19–36% of the roofline), and dense M2L beats rotation (2.0–3.4% of peak at p = 3–18, T7 1.5–3.4% to p = 20) at every p from 3 to 20; CUDA's static rule is `Dense` at every p (decision 9 of docs/phase4s/README.md). Open: a shared-memory-tiled GEMM for the rest of the gap (device-path.md §18.2) |
 | CubeCL API churn between minor versions | rework of kernels | pin one version; keep CubeCL-specific code inside `fmm-kernels` behind thin wrappers. **Realised once (Phase 4 T2):** 0.10 → 0.11.0-pre.4 changed the client, kernel arguments, shared memory and matmul strategies, and fused every product-add into an fma; the port touched only the spike, before any kernel existed. All CubeCL code is in `nd-fmm-kernels`. The pin is a pre-release, so the move to 0.11.0 is a separate task |
-| f64 missing on some backends (WGSL, Metal; CUDA on CubeCL 0.10.0) | f64 features unavailable there | capability check at start-up; f32 path with scaled coefficients; CubeCL 0.11 for f64 on CUDA. **Retired as built (Phase 4):** f64 on Metal is refused at build with `SettingsError::PrecisionUnsupported`, agreed on every rank (tested); f64 runs on the CPU runtime |
+| f64 missing on some backends (WGSL, Metal; CUDA on CubeCL 0.10.0) | f64 features unavailable there | capability check at start-up; f32 path with scaled coefficients; CubeCL 0.11 for f64 on CUDA. **Retired as built (Phase 4):** f64 on Metal is refused at build with `SettingsError::PrecisionUnsupported`, agreed on every rank (tested); f64 runs on the CPU runtime, and since Phase 4S on CUDA (measured on the H100) |
 | CubeCL CPU runtime too slow to build or compile kernels for CI | kernel tests cannot run in CI | small shapes only; cache the LLVM bundle; otherwise run kernel tests by hand like the GPU tests. **Retired (Phase 4 T4):** the job `run-tests-kernels` takes 4 min 53 s cold and 51 s warm, with hand-written kernels and small shapes; the library GEMM is tested on Metal by hand |
 | Dense M2L memory at high p (~400 MB at p = 19) | out of memory next to large particle sets | symmetry reduction, SVD compression, or rotation M2L above a p threshold. **Phase 4:** the device operator sums every buffer before allocating and refuses a configuration that does not fit with `SettingsError::DeviceMemory` (CubeCL panics on a failed allocation); `Classes` saves memory on the host only (the device runs it as dense); f64 uses rotation from p = 12 by the static rule |
 | Launch overhead on small top levels | GPU idle, poor scaling at small N | host execution or merged launches for top levels. **Retired (Phase 4 T8–T11):** grouped launches (three per chunk of offsets or octants) and one sync per evaluation; the top levels stay on the device, and enqueueing a whole evaluation takes 0.26–0.68 ms on Metal for 40–107 launches, so merging levels was not worth it |
@@ -1935,8 +2076,9 @@ and identity tests, the second with a one-day spike before Phase 4.
 | GPU compilers use fast math (reassociation, approximate `rsqrt`, flush to zero) and break the r² = 0 rule or the accuracy contracts (Phase 4) | wrong near-field sums, accuracy outside the contracts on some backend | **Retired as far as measured (T3, T6–T10):** the spike `device-arith` measured each backend; CONVENTIONS §3.13 "Device kernels" states what kernels may assume (signed off). The real finding was 0.11's unconditional fma fusion (Section 6.1), not fast math; Metal flushes subnormals in arithmetic, so the P2P contract holds there for q = 0 or \|q\| ≥ 2⁻¹⁰⁰. Every kernel is tested against `nd-fmm-ref` on the CPU runtime (f32, f64) and Metal (f32) |
 | The evaluator writes host buffers outside operator calls, and device-resident data goes stale (Phase 4) | wrong results only on the device path | **Retired (T1, T5):** on one rank only `reset`'s zeroing writes outside operator calls, which the device operator mirrors, so no `nd-fmm-plan` change was needed; with every kind on the host fallback the device path equals the host path bit for bit on every `tests/mpi_exec.rs` scenario |
 | The library matmul picks its kernel per call and breaks determinism (Phase 4) | output differs between evaluations | **Retired (T8, T9):** strategies are always named explicitly (never `Strategy::Auto`), decided at build by shape and a probe launch, with an input-precision guard; two evaluations and two builds are bit-identical on every scenario; on Metal the library measured bit for bit the hand-written kernel |
-| f64 never run on a GPU (Phase 4) | f64 device performance and the f64 dense/rotation crossover unknown | **Open:** f64 is checked on the CPU runtime only (every gate at ratio 1.000000 to the host); the static rule is the fallback; the CUDA run is documented (Section 9.2) |
-| Unified memory on the M3 Max hides transfer costs a discrete GPU would pay (Phase 4) | device timings optimistic for discrete cards | transfers counted in calls and bytes: per evaluation one upload of the charges and one download of the output (N s and 4 N s bytes with gradients; 0.4 MB and 1.6 MB at N = 10⁵ in f32), the design's minimum; build-time uploads once per `Fmm` (Section 7, Phase 4) |
+| f64 never run on a GPU (Phase 4) | f64 device performance and the f64 dense/rotation crossover unknown | **Retired (Phase 4S):** on the H100, f64 passes every kernel test and the Phase 4 gates within the CPU runtime's f64 bounds (device − host 1.2e-14, error ratios 1.0000); an evaluation costs 1.6× f32; no dense/rotation crossover up to p = 18 end to end and p = 20 per level, so CUDA uses `Dense` at every p; Metal and the CPU runtime keep their rules |
+| Unified memory on the M3 Max hides transfer costs a discrete GPU would pay (Phase 4) | device timings optimistic for discrete cards | transfers counted in calls and bytes: per evaluation one upload of the charges and one download of the output (N s and 4 N s bytes with gradients; 0.4 MB and 1.6 MB at N = 10⁵ in f32), the design's minimum; build-time uploads once per `Fmm` (Section 7, Phase 4). **Measured in Phase 4S** (the GH200, explicit copies over NVLink-C2C): the copies are small (the 16 MB download 56 µs at N = 10⁶, T7), but the host work around them is not (next row) |
+| The host part of a device evaluation grows with N and dominates at large N (Phase 4S) | the device's lead shrinks with N; device scaling figures misleading | **Open (measured in T8):** outside the level calls an evaluation spends 8.4 ms (f32) and 13 ms (f64) at N = 10⁶ and 183–303 ms at N = 10⁷ on the host, 58–83% of an evaluation at N = 10⁷ for p ≤ 8: the serial output pass `scaled_output` (each value divided by its leaf's scale and scattered into the caller's order, into output vectors allocated afresh) is the largest part the `nsys` CPU samples identify at N = 10⁷ (at least 29% in f32, 32% in f64 of the samples inside `Fmm::evaluate`; half could not be attributed), then the download path (3–4%) and the per-evaluation pinned host buffer (`cuMemAllocHost`, median 2.3–2.5 ms, up to 53 ms); the copies themselves take microseconds to enqueue. Not redesigned in Phase 4S (transfers out of scope); for Phase 5 (Section 7, Phase 4S, "Recommendation") |
 | The leaf-operator kernels drift from `nd-fmm-math`'s recursion at high p (Phase 4) | accuracy loss at p ≤ 20 | **Retired (T7):** the recursion is ported operation for operation; f64 within 1.2e-15 of `nd_fmm_ref::leaf` to p = 20 on the CPU runtime, f32 within 4.1e-7 (bound 1e-5) |
 
 
@@ -1969,7 +2111,8 @@ and identity tests, the second with a one-day spike before Phase 4.
   (Metal, f32 only), and the f64 targets are NVIDIA data-centre cards (A100, H100
   class). *Answered for Phase 4 on 2026-10-03:* no GPU besides the M3 Max is available.
   Metal f32 is the only timed backend, f64 is checked on the CubeCL CPU runtime, and
-  CUDA is type-checked only. AMD (HIP) is not built.
+  CUDA is type-checked only. AMD (HIP) is not built. *Phase 4S:* an NVIDIA H100 (locust's
+  GH200) runs CUDA in f32 and f64, timed; f64 is a first-class target there.
 - When does the workspace move from CubeCL 0.10.0 to 0.11? The f64 GPU path on CUDA
   needs it, and the frontend API changes. *Answered on 2026-10-03:* at the start of
   Phase 4, to 0.11.0-pre.4 (docs/phase4/ T2). Moving to the final 0.11.0 is a separate
@@ -1982,7 +2125,10 @@ and identity tests, the second with a one-day spike before Phase 4.
   kernel's efficiency, predicted at 19–36% of the roofline, and the dense time per pair.
   *Answered on 2026-10-03:* no CUDA card is available. Phase 4 proceeds on the
   provisional rule; the CUDA run stays a documented command.
-- *Still open after Phase 4:* the f64 default on a GPU. Without a CUDA run, the static
+- *Answered in Phase 4S* (the H100 of locust's GH200): the f64 default on a GPU is
+  `Dense` at every p on CUDA (decision 9; T7, confirmed by T8 to p = 18 end to end and by
+  every tuner decision). The text below is the Phase 4 state.
+  *Still open after Phase 4:* the f64 default on a GPU. Without a CUDA run, the static
   rule (dense to p = 11, rotation from p = 12; decision 13) is provisional. T10's Metal
   f32 rotation efficiency (1.8–3.0% of peak), entered into the spike's f64 model, would
   make dense 4.5×, 2.4× and 2.1× faster at p = 8, 12 and 16 against the central dense
@@ -2023,7 +2169,7 @@ and identity tests, the second with a one-day spike before Phase 4.
     p = 8). Should the default depend on p, or be tuned per machine like the M2L
     strategy (C4.7)? *Phase 4 (T13):* the same holds on the device (64 at p = 3, 128–256
     at p = 8); the device rule kept 64 (decision 8), and the question stays open for
-    both backends.
+    both backends. *Phase 4S (T8):* on CUDA too the rule keeps 64 (f32 and f64, N = 10⁵ and 10⁶), with the same dependence on p and the distribution (up to 17% to gain per configuration); still open for every backend.
 - What accuracy range and N per GPU are typical for your applications?
 - Outputs needed: potential only, gradient, or also Hessians?
 - Should the 1/(4π) factor be part of the kernel or left to the caller? (Provisionally

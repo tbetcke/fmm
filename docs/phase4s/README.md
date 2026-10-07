@@ -388,6 +388,11 @@ Each is recorded in the exit checklist when made:
    - T8 applies the Phase 4 rule on CUDA and reports it;
    - a CUDA leaf-size default is added only by a separate sign-off with T8's numbers;
    - the host default stays 64.
+
+   *T8's numbers (2026-10-07, fmm-bench/results/phase4s-gh200.md §8):* the rule picks 64
+   on CUDA in f32 and f64, at N = 10⁶ and at N = 10⁵ (the geometric mean at 128 within
+   1.0–1.7% of 64's at N = 10⁶). **Decided on 2026-10-07: no CUDA leaf-size default**, as
+   recommended; 64 stays the default on every backend.
 8. **Phase 5 hardware.** **Decided on 2026-10-05: Phase 5 tests on both the M3 Max and
    locust.** This revises Phase 5's decision 2 of 2026-10-04 (the M3 Max only).
    - locust adds 72 Grace cores for multi-rank runs and an H100 for device ranks.
@@ -453,7 +458,7 @@ Before T1 has merged, T1 itself uses `ssh locust` directly, outside the sandbox.
 - [x] Static M2L rule on CUDA signed off (decision 9): `Dense` at every p, f32 and f64 (decided 2026-10-07)
 - [x] T7 merged: CUDA layouts and candidates by measurement; H100 peaks; Metal and CPU runtime unchanged bit for bit
 - [ ] T8 merged: `fmm-bench/results/phase4s-gh200.md` published
-- [ ] CUDA leaf-size default (decision 7): none / added by sign-off
+- [x] CUDA leaf-size default (decision 7): none (T8: the rule picks 64; decided 2026-10-07)
 - [x] Phase 5 hardware (decision 8): the M3 Max and locust (decided 2026-10-05)
-- [ ] Phase 5 briefs updated for decision 8 (T8), reviewed
-- [ ] Design documents updated: laplace-fmm-plan §6.1, §6.2, §7 (Phase 4S), §8.3, §9.1, §9.2; device-path.md §17 note and §18; workspace-structure §2, §3, §3.1, §6
+- [ ] Phase 5 briefs updated for decision 8 (T8; updated, review pending), reviewed
+- [x] Design documents updated: laplace-fmm-plan §6.1, §6.2, §7 (Phase 4S), §8.3, §9.1, §9.2; device-path.md §17 note and §18 (§18.3 added); workspace-structure §2, §3, §3.1, §6 (T8)
