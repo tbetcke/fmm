@@ -14,6 +14,11 @@ is built on CubeCL 0.11.0-pre.4, a workspace member but not a default member, te
 the CubeCL CPU runtime by its own CI job; `nd-fmm-exec` gains the device path behind the
 feature `gpu`, and `nd-fmm-validate` the device benchmarks
 ([device-path.md](device-path.md)).
+Revised at the end of Phase 4S (2026-10-07; Sections 2, 3, 3.1 and 6): the device path
+runs on CUDA (locust's GH200, by hand) with CUDA layouts and a backend-keyed static rule;
+`nd-fmm-exec` gains per-kind timings and `tests/device_cuda.rs`; the new default member
+`nd-fmm-bench` is the one-command benchmark; `tools/gh200/` builds locust's environment
+(docs/phase4s/).
 
 Add seven new crates to the existing workspace, created phase by phase rather than all at
 once. The existing `nd-fmm-plan` crate is the integration layer. It already owns the
@@ -174,6 +179,9 @@ flowchart TB
   math["nd-fmm-math<br/>Phase 0 · harmonics, rotation blocks, layout, RealScalar"]:::phase0
   validate["nd-fmm-validate<br/>Phase 1 · dev tooling; uses every crate"]
   simd["nd-fmm-simd<br/>Phase 3S · SIMD P2P: NEON, AVX2"]
+  bench["nd-fmm-bench<br/>Phase 4S · the one-command benchmark"]
+  bench --> exec
+  bench --> validate
   exec --> plan
   exec --> octree
   plan --> octree
@@ -200,6 +208,14 @@ member (decision 7 of docs/phase4/README.md, signed off with T4). The default me
 the root CI job therefore never build CubeCL; the CI job `run-tests-kernels` builds and
 tests `nd-fmm-kernels` alone on the CubeCL CPU runtime, without MPI.
 
+*As built in Phase 4S:* `nd-fmm-bench` is a default member (decision 5 of
+docs/phase4s/README.md), a binary over a small library that depends on `nd-fmm-exec` and
+`nd-fmm-validate` (and `mpi`, and `nd-fmm-tables` for a trait bound) and passes the
+backend features through, as `nd-fmm-validate` does; without a feature it builds and
+runs the host path only, so the default members still never build CubeCL. Since
+Phase 4S T2 `run-tests-kernels` also type-checks `nd-fmm-kernels` and `nd-fmm-exec` with
+`--features cuda`; CUDA runs only by hand on locust.
+
 ## 3. Crate specifications
 
 Each crate has one job and a public surface small enough to describe in a few lines. Only
@@ -210,10 +226,11 @@ Each crate has one job and a public surface small enough to describe in a few li
 | `fmm-math` | `nd-fmm-math` | Phase 0 (done) | real solid harmonics and gradients, rotation blocks, index layout, scalar trait | `num-traits` |
 | `fmm-ref` | `nd-fmm-ref` | Phase 1 (done) | f64 reference operators (direct O(p⁴) and rotation O(p³)), P2P, direct-sum oracle | `nd-fmm-math`, `num-traits` |
 | `fmm-tables` | `nd-fmm-tables` | Phase 2 (done) | M2M/L2L (8 octants each), M2L (316 offsets, symmetry classes), rotation tables, versioned cache, later SVD compression | `nd-fmm-math`, `nd-fmm-ref`, `num-traits`, `thiserror` (cache errors); `rlst` (without its `mpi` feature) only with SVD compression (C6.2); no serialiser, as the cache writes its own little-endian format |
-| `fmm-exec` | `nd-fmm-exec` | Phase 3 (host, done), Phase 3S (SIMD P2P, done), Phase 4 (device, done) | the level-batched `FmmOperator` for Laplace (`LaplaceOperator`), box geometry from integer Morton keys, user-facing FMM object, M2L strategy selection, host threading, the choice of P2P kernel; behind `gpu` the device path (`DeviceOperator` with a host fallback per kind) and the autotune of its choices | as built in Phase 3: `nd-fmm-math`, `nd-fmm-ref`, `nd-fmm-tables`, `nd-fmm-plan`, `nd-octree`, `mpi` (feature `derive`), `rlst` (no features of its own; `nd-octree` enables `mpi`), `rayon`, `thiserror`; dev-dependency `proptest`. Phase 3S added `nd-fmm-simd`; Phase 4 added `nd-fmm-kernels` (optional, feature `gpu`; features `cpu`, `metal` and `cuda` enable `gpu` and the backend). No direct CubeCL dependency and no `unsafe` |
+| `fmm-exec` | `nd-fmm-exec` | Phase 3 (host, done), Phase 3S (SIMD P2P, done), Phase 4 (device, done), Phase 4S (CUDA, per-kind timings, done) | the level-batched `FmmOperator` for Laplace (`LaplaceOperator`), box geometry from integer Morton keys, user-facing FMM object, M2L strategy selection, host threading, the choice of P2P kernel; behind `gpu` the device path (`DeviceOperator` with a host fallback per kind) and the autotune of its choices | as built in Phase 3: `nd-fmm-math`, `nd-fmm-ref`, `nd-fmm-tables`, `nd-fmm-plan`, `nd-octree`, `mpi` (feature `derive`), `rlst` (no features of its own; `nd-octree` enables `mpi`), `rayon`, `thiserror`; dev-dependency `proptest`. Phase 3S added `nd-fmm-simd`; Phase 4 added `nd-fmm-kernels` (optional, feature `gpu`; features `cpu`, `metal` and `cuda` enable `gpu` and the backend). No direct CubeCL dependency and no `unsafe`. Phase 4S added no dependency |
 | `fmm-simd` | `nd-fmm-simd` | Phase 3S (done) | hand-written SIMD kernels for the host path, P2P first: `core::arch` intrinsics for aarch64 NEON and x86_64 AVX2 + FMA (AVX-512 deferred), a scalar fallback, runtime ISA dispatch ([simd-p2p.md](simd-p2p.md)) | `nd-fmm-math`, `thiserror`; dev-dependencies `nd-fmm-ref`, `proptest`. No MPI, no external SIMD crate |
-| `fmm-kernels` | `nd-fmm-kernels` | Phase 4 (done) | every `#[cube]` kernel behind safe wrappers: backends and the f64 capability check, device buffers, data movement, the plan's views on the device, P2P, the leaf operators, the grouped translations (M2M, L2L, dense M2L), rotation M2L, timing windows; every kernel on every runtime, the runtime a run-time value | `cubecl` =0.11.0-pre.4, `cubek-matmul` and `cubek-std` =0.3.0-pre.4 (the pinned workspace entries), `nd-fmm-math`, `thiserror`; dev-dependencies `nd-fmm-ref`, `nd-fmm-tables`, `proptest`. No MPI, no `nd-fmm-plan`, no rayon. Features `cpu`, `metal` (wgpu with the MSL compiler), `cuda` (type-checked only), none by default. A workspace member, not a default member |
+| `fmm-kernels` | `nd-fmm-kernels` | Phase 4 (done); CUDA layouts in Phase 4S (done) | every `#[cube]` kernel behind safe wrappers: backends and the f64 capability check, device buffers, data movement, the plan's views on the device, P2P, the leaf operators, the grouped translations (M2M, L2L, dense M2L), rotation M2L, timing windows; every kernel on every runtime, the runtime a run-time value | `cubecl` =0.11.0-pre.4, `cubek-matmul` and `cubek-std` =0.3.0-pre.4 (the pinned workspace entries), `nd-fmm-math`, `thiserror`; dev-dependencies `nd-fmm-ref`, `nd-fmm-tables`, `proptest`. No MPI, no `nd-fmm-plan`, no rayon. Features `cpu`, `metal` (wgpu with the MSL compiler), `cuda` (LLVM NVPTX; type-checked in CI, run by hand on locust's H100 since Phase 4S), none by default. A workspace member, not a default member |
 | `fmm-validate` | `nd-fmm-validate` (`publish = false`) | Phase 1 (done), grows with each phase | error norms, point distributions, accuracy sweeps, the FMM accuracy reports and the calibration of p, benchmarks | all of the above, as dev tooling; in Phase 1 `nd-fmm-math` and `nd-fmm-ref`, in Phase 2 also `nd-fmm-tables`, in Phase 3 also `nd-fmm-exec` and `mpi` (so building it needs MPI), in Phase 3S also `nd-fmm-simd`, in Phase 4 also `nd-fmm-kernels` (optional, feature `gpu`, with `cpu`, `metal` and `cuda` passed through). No library crate depends on it; the spike `spikes/p2p-simd` does (Phase 3S T7) |
+| `fmm-bench` | `nd-fmm-bench` (`publish = false`) | Phase 4S (done; T6) | the one-command benchmark: N points uniform in the unit cube, f32 or f64, a degree p and a backend; the evaluation time (min, median, mean, max, standard deviation), the time per operator kind and the error against the direct sum, as one Markdown file (`tools/bench/run.sh`). A binary over a small library | `nd-fmm-exec`, `nd-fmm-validate`, `mpi`, and `nd-fmm-tables` for the `Stored` bound of `Fmm<T>` only, all from `[workspace.dependencies]`; features `gpu`, `cpu`, `metal` and `cuda` passed through. No external dependency (the command line is parsed by hand). A default member, never in CI beyond the default checks and its smoke test |
 | `fmm-plan` | `nd-fmm-plan` (existing; rewritten in Phase 3) | before this plan; rewritten in Phase 3 (T4–T7) | kernel-agnostic plan of a distributed FMM: box index, lists, stores, ghost exchange, batched operator interface, evaluator | as built: `nd-octree`, `rlst` (feature `mpi`), `mpi` (feature `complex`, kept for complex-valued operators downstream), all from `[workspace.dependencies]`; dev-dependency `rand_chacha`. No rayon: threading lives in `nd-fmm-exec` |
 
 Dropped after scouting:
@@ -238,6 +255,13 @@ the T7 example `compare`, the only code that uses green-kernels. Phase 4 adds
 `spikes/device-arith/` (T3: device arithmetic per backend, and a CPU-shaped P2P on the
 CPU runtime against `nd-fmm-simd`), likewise outside the default members, and ports
 `spikes/cubecl-gemm/` to CubeCL 0.11.0-pre.4 (T2).
+
+Phase 4S adds `tools/gh200/` (T1: the spack environment `spack.yaml` and `spack.lock`,
+the setup, environment, sync, remote-run and home-check scripts, and the machine facts of
+locust), `tools/bench/run.sh` (T6: the benchmark's one command) and the crate
+`fmm-bench/` with its phase reports in `fmm-bench/results/` (T8:
+`results/phase4s-gh200.md`). The CUDA runs of the spikes are recorded beside their
+Metal ones (`spikes/cubecl-gemm/results-gh200-0.11.md`, `spikes/device-arith/results-gh200*.md`).
 
 ### 3.1 Public surface per crate
 
@@ -392,6 +416,21 @@ CPU runtime against `nd-fmm-simd`), likewise outside the default members, and po
     `TuningHook`), the static rule (`static_strategy`, `static_gemm`, `static_p2p`,
     `STATIC_F64_DENSE_MAX_P` = 11), `CANDIDATE_SET_VERSION`.
   - No direct CubeCL dependency and no `unsafe`: CubeCL only through `nd-fmm-kernels`.
+- Phase 4S (T4, T5, T7; [device-path.md](device-path.md) §18):
+  - `fmm`: `KindTiming { Off, Synchronous, Device }` and `FmmBuilder::kind_timings`
+    (T5, off by default, the output bit-identical in every mode); `StageTimings::kinds`
+    with `KindTimings` and `KindTime`, the time and calls of every level call by
+    operator kind and level;
+  - `tune` (T7): `static_strategy` keyed by backend (`Dense` at every p in f32 and f64
+    on CUDA, decision 9 of docs/phase4s/README.md; Metal and the CPU runtime unchanged),
+    the CUDA candidates `cuda_gemm_layouts` and `p2p_candidates`,
+    `CANDIDATE_SET_VERSION` = 2; the CUDA defaults themselves live in `nd-fmm-kernels`;
+  - tests: `tests/device_cuda.rs` (T4), the scenarios of `tests/device_metal.rs` and of
+    `tests/tune_common` on CUDA in f32 and f64, ignored, behind `cuda`, run by hand on
+    locust in their own MPI-initialising executable; the CUDA blocks of the ignored gates
+    (`tests/accuracy.rs`, `tests/adaptive.rs`, `tests/device_fmm.rs`); `tests/kind_common`
+    (T5), the kind-timing checks shared by `tests/mpi_exec.rs` and the Metal and CUDA
+    executables.
 
 **`nd-fmm-plan`** (existing; rewritten in Phase 3, see Section 1.1)
 
@@ -476,6 +515,14 @@ CPU runtime against `nd-fmm-simd`), likewise outside the default members, and po
   default; `nd-fmm-exec` and `nd-fmm-validate` pass them through. Kernels are generic
   over f32 and f64, with p, tile sizes and layouts as comptime parameters, and every
   layout is chosen per backend from `DeviceInfo`.
+- Phase 4S (T2, T7): the CUDA arm of the test harness (`tests/kernels/common.rs`; every
+  kernel test on CUDA in f32 and f64, ignored, run by hand on locust); the P2P plane
+  layout takes its plane and lane from `UNIT_POS` (`PLANE_POS` is not lowered for
+  NVPTX, device-path.md §18.1, F29); the CUDA defaults, looked up from `DeviceInfo`:
+  `CUDA_CUBE_UNITS` (P2P, 32), `CUDA_LEAF_UNITS` (32), the GEMM layout
+  `CUDA_GEMM_{MIN_ROWS, MAX_ROWS, ROWS_PER_UNIT, UNITS, COLUMNS_PER_UNIT}` and the chunk
+  budget `CUDA_SCRATCH_BYTES` (2 GB, at most an eighth of the device memory) through
+  `default_scratch_bytes`. Metal and the CPU runtime keep their layouts bit for bit.
 
 **`nd-fmm-validate`** (Phase 1; MPI since Phase 3, and no library crate depends on it)
 
@@ -540,6 +587,30 @@ CPU runtime against `nd-fmm-simd`), likewise outside the default members, and po
     host and the device leaf-size study); `p2p_kernels --device` (T6). The test
     `tests/device_fmm.rs` (feature `cpu`) is a smoke run of the `device_fmm` core on the
     CPU runtime, in its own MPI-initialising executable.
+- Phase 4S (T4, T7): the machine lines on Linux aarch64; `peaks` (T7), the per-device
+  peaks and the P2P peak model of the kernel examples keyed by `DeviceInfo::name` (the
+  M3 Max and the GH200's H100, *datasheet* or derived, "unknown peak" elsewhere);
+  `--precision`, `--n` and `--degrees` in `m2l_kernels`, `translation_kernels` and
+  `rotation_kernels`, `--gemm` in the first two, the CUDA layouts and f64 rows of
+  `p2p_kernels`; the example `layout_sweep`, every layout candidate of the device
+  kernels on the FMM's own level calls.
+
+**`nd-fmm-bench`** (Phase 4S, T6; `publish = false`; fmm-bench/CLAUDE.md)
+
+- A binary `nd-fmm-bench` over a library of four modules: `options` (`Options`,
+  `Combination`, `Command`, `parse`, `count`, `HELP`, `USAGE` and the defaults
+  `DEFAULT_N` = 10⁶, `DEFAULT_DEGREE` = 6, `DEFAULT_REPEATS` = 10, `DEFAULT_WARMUP` = 2,
+  `DEFAULT_ACCURACY_TARGETS` = 1,000), `measure` (`Problem`, `SEED`, `builder`, `run`),
+  `report` (`Report`, `Header`, `Stats`, `Kinds`, `KindRow`, `DeviceFacts`, `Outcome`,
+  `markdown`) and `machine` (the host, the source revision, the thread variables, UTC
+  times).
+- Every list option (`--n`, `--precision`, `--degree`, `--backend`) is a Cartesian
+  product; a combination the backend refuses is a "refused" row, never a number. Reports
+  go to `bench-results/` (ignored by git); a phase report is copied by hand into
+  `fmm-bench/results/`.
+- Tests: the parser, the Markdown writer against a golden string, and `tests/smoke.rs`
+  (one MPI-initialising test: a smoke run's structure on the host, and on the CPU
+  runtime with `cpu`). Nothing asserts a timing.
 
 ## 4. How `nd-fmm-plan` and the octree connect
 
@@ -690,6 +761,7 @@ noise without testing anything.
 | 3 (done) | the rewrite of `nd-fmm-plan` (box index, lists, variable-size leaf data, batched operator interface; T1, T4–T7); `fmm-exec` (host path on the batched interface, threaded with rayon; T3, T8–T11); the calibration in `fmm-validate` (T12) |
 | 3S (done) | `fmm-simd` (SIMD P2P on the host; T3–T5), its use in `fmm-exec` (T6), kernel and FMM benchmarks in `fmm-validate` (T7), `spikes/p2p-simd/` (the T2 spike and the T7 green-kernels comparison) |
 | 4 (done) | the CubeCL pin moved to 0.11.0-pre.4 and `spikes/cubecl-gemm/` ported (T2); `spikes/device-arith/` (T3); `fmm-kernels` (T4, kernels in T6–T10; a member, not a default member, with the CI job `run-tests-kernels`); the device backend in `fmm-exec` on the batched interface that Phase 3 delivered, with no `nd-fmm-plan` change (T5–T11) and autotune (T12); device examples and benchmarks in `fmm-validate` (T5–T13) |
+| 4S (done) | `tools/gh200/` (locust's environment, T1); the CUDA arm of `fmm-kernels`' tests (T2); the device-arithmetic spike on CUDA (T3); `tests/device_cuda.rs` and the CUDA blocks in `fmm-exec` (T4); per-kind timings in `fmm-exec` (T5); `fmm-bench` and `tools/bench/run.sh` (T6); CUDA layouts, tuner candidates and the backend-keyed static rule (T7); the GH200 report `fmm-bench/results/phase4s-gh200.md` (T8) |
 | 5 | multi-rank validation of `fmm-exec`; exchange/compute overlap in `nd-fmm-plan` (no new crate) |
 
 ### Answered by scouting
