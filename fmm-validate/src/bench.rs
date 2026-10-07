@@ -136,32 +136,91 @@ fn sysctl(key: &str) -> Option<String> {
 }
 
 /// The CPU model, from `sysctl` on macOS and `/proc/cpuinfo` on Linux, or "unknown".
+/// On Linux the `model name` line names it (x86_64); where there is none (aarch64, e.g.
+/// NVIDIA Grace), the `CPU implementer` and `CPU part` lines do ([`cpuinfo_model`]).
 pub fn cpu_model() -> String {
-    let from_proc = || {
-        let info = std::fs::read_to_string("/proc/cpuinfo").ok()?;
-        info.lines()
-            .find(|l| l.starts_with("model name") || l.starts_with("Model"))
-            .and_then(|l| l.split(':').nth(1))
-            .map(|s| s.trim().to_string())
-    };
     let model = if cfg!(target_os = "macos") {
         sysctl("machdep.cpu.brand_string")
     } else {
-        from_proc()
+        std::fs::read_to_string("/proc/cpuinfo")
+            .ok()
+            .and_then(|info| cpuinfo_model(&info))
     };
     model.unwrap_or_else(|| "unknown".to_string())
 }
 
-/// The core count: logical CPUs from `std::thread::available_parallelism`, and on
-/// macOS the physical cores from `sysctl`.
+/// The CPU model in the text of `/proc/cpuinfo`: its `model name` (or `Model`) line, else
+/// the first `CPU implementer` and `CPU part` of an Arm core, named where the part is known
+/// ("Neoverse-V2 (implementer 0x41, part 0xd4f)" on NVIDIA Grace), else by the numbers
+/// alone; `None` if the text has neither.
+pub fn cpuinfo_model(info: &str) -> Option<String> {
+    let value = |key: &str| {
+        info.lines()
+            .find(|l| l.split(':').next().is_some_and(|k| k.trim() == key))
+            .and_then(|l| l.split(':').nth(1))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    if let Some(model) = value("model name").or_else(|| value("Model")) {
+        return Some(model);
+    }
+    let (implementer, part) = (value("CPU implementer")?, value("CPU part")?);
+    let parse = |s: &str| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok();
+    // Arm Ltd's (0x41) server and recent cores, from the Arm technical reference manuals'
+    // MIDR_EL1 part numbers.
+    let name = match (parse(&implementer), parse(&part)) {
+        (Some(0x41), Some(0xd0c)) => Some("Neoverse-N1"),
+        (Some(0x41), Some(0xd40)) => Some("Neoverse-V1"),
+        (Some(0x41), Some(0xd49)) => Some("Neoverse-N2"),
+        (Some(0x41), Some(0xd4f)) => Some("Neoverse-V2"),
+        (Some(0x41), Some(0xd84)) => Some("Neoverse-V3"),
+        (Some(0x41), Some(0xd8e)) => Some("Neoverse-N3"),
+        _ => None,
+    };
+    let numbers = format!("implementer {implementer}, part {part}");
+    Some(name.map_or_else(
+        || format!("Arm CPU ({numbers})"),
+        |name| format!("{name} ({numbers})"),
+    ))
+}
+
+/// The core count: logical CPUs from `std::thread::available_parallelism`, and the
+/// physical cores from `sysctl` on macOS and from `/sys/devices/system/cpu` on Linux
+/// (the distinct `core_cpus_list` of the CPUs' topologies).
 pub fn cores() -> String {
     let logical = std::thread::available_parallelism().map_or(0, |n| n.get());
-    match sysctl("hw.physicalcpu") {
-        Some(physical) if cfg!(target_os = "macos") => {
-            format!("{physical} physical, {logical} logical")
-        }
-        _ => format!("{logical} logical"),
+    let physical = if cfg!(target_os = "macos") {
+        sysctl("hw.physicalcpu")
+    } else {
+        linux_physical_cores().map(|n| n.to_string())
+    };
+    match physical {
+        Some(physical) => format!("{physical} physical, {logical} logical"),
+        None => format!("{logical} logical"),
     }
+}
+
+/// The physical cores of a Linux machine: the distinct sets of logical CPUs that share a
+/// core (`topology/core_cpus_list`, or `thread_siblings_list` on older kernels) over
+/// `/sys/devices/system/cpu/cpu<n>`; `None` where they cannot be read.
+fn linux_physical_cores() -> Option<usize> {
+    let mut cores = std::collections::BTreeSet::new();
+    for entry in std::fs::read_dir("/sys/devices/system/cpu").ok()? {
+        let path = entry.ok()?.path();
+        let name = path.file_name()?.to_str()?;
+        if !name
+            .strip_prefix("cpu")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        {
+            continue;
+        }
+        let topology = path.join("topology");
+        let siblings = std::fs::read_to_string(topology.join("core_cpus_list"))
+            .or_else(|_| std::fs::read_to_string(topology.join("thread_siblings_list")))
+            .ok()?;
+        cores.insert(siblings.trim().to_string());
+    }
+    (!cores.is_empty()).then_some(cores.len())
 }
 
 /// The number of performance cores: on macOS `hw.perflevel0.physicalcpu` (12 on the
@@ -205,6 +264,33 @@ pub fn target() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cpu_model_comes_from_cpuinfo() {
+        // Error measure: exact strings. Excerpts of /proc/cpuinfo: x86_64 with a model
+        // name, NVIDIA Grace (locust, Phase 4S T4) without one, an unknown Arm part, and
+        // neither.
+        let x86 = "processor\t: 0\nvendor_id\t: GenuineIntel\nmodel\t\t: 85\n\
+                   model name\t: Intel(R) Xeon(R) Gold 6248\n";
+        assert_eq!(
+            cpuinfo_model(x86).as_deref(),
+            Some("Intel(R) Xeon(R) Gold 6248")
+        );
+        let grace = "processor\t: 0\nBogoMIPS\t: 2000.00\nFeatures\t: fp asimd sve2\n\
+                     CPU implementer\t: 0x41\nCPU architecture: 8\nCPU variant\t: 0x0\n\
+                     CPU part\t: 0xd4f\nCPU revision\t: 0\n\nprocessor\t: 1\n\
+                     CPU implementer\t: 0x41\nCPU part\t: 0xd4f\n";
+        assert_eq!(
+            cpuinfo_model(grace).as_deref(),
+            Some("Neoverse-V2 (implementer 0x41, part 0xd4f)")
+        );
+        let other = "CPU implementer\t: 0x61\nCPU part\t: 0x022\n";
+        assert_eq!(
+            cpuinfo_model(other).as_deref(),
+            Some("Arm CPU (implementer 0x61, part 0x022)")
+        );
+        assert_eq!(cpuinfo_model("processor\t: 0\n"), None);
+    }
 
     #[test]
     fn fit_recovers_the_exponent_of_a_power_law() {

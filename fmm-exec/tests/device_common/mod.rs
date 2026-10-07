@@ -1,6 +1,7 @@
 //! The device path against the host path (Phase 4 T5, C4.1; T6, C4.2; T7, C4.3; T8, C4.4;
 //! T9, C4.5; T10, C4.6), shared by
-//! `tests/mpi_exec.rs` (the CPU runtime) and `tests/device_metal.rs` (Metal, ignored).
+//! `tests/mpi_exec.rs` (the CPU runtime), `tests/device_metal.rs` (Metal, ignored) and
+//! `tests/device_cuda.rs` (CUDA, ignored; Phase 4S T4).
 //!
 //! [`check_backend`] builds an `Fmm` on a device backend at one thread twice, and checks,
 //! for the scenario it is given:
@@ -44,7 +45,7 @@
 //!   (device-path.md §4.1, §8.2; T11);
 //! - the stages are timed by the host clock, with no timing window (T11, device-path.md
 //!   §8.3); a build with `device_timestamps(true)` gives the same bits and, where the
-//!   device times on itself (Metal), opens one timing window per stage with device work
+//!   device times on itself (Metal, CUDA), opens one timing window per stage with device work
 //!   (five) with no sync of its own and returns the device times with the output, while
 //!   on the CPU runtime, whose windows wait for it, it opens none.
 //!

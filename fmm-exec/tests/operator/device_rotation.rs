@@ -26,8 +26,10 @@
 //!   same precision: within 1e-13 (f64) and 1e-5 (f32).
 //!
 //! Layouts: the backend's default and one other (the CPU runtime: its CPU layout and a cube
-//! of at most (p + 1)² units, as many as the device allows, correctness only; Metal: its
-//! cube layout and the CPU layout). Each test prints the device, the worst errors per
+//! of at most (p + 1)² units, as many as the device allows, correctness only; Metal and
+//! CUDA: the cube layout and the CPU layout). CUDA (Phase 4S T4, ignored, by hand on
+//! locust) runs f32 at p ∈ {0, 1, 3, 8} and f64 at every degree, the sweep's included,
+//! with the f64 bounds above. Each test prints the device, the worst errors per
 //! precision, degree, level and layout against the host operator's own error, and the
 //! backends it ran.
 
@@ -365,8 +367,8 @@ fn run(kind: BackendKind, test: &str, degrees_f64: &[usize], degrees_f32: &[usiz
         .map(|b| {
             let why = match (b, b.is_compiled()) {
                 (_, false) => "not compiled",
-                (BackendKind::Cuda, true) => "type-checked, not run",
-                _ => "in its own test",
+                (BackendKind::Cpu, true) => "in its own test",
+                _ => "in its own ignored test",
             };
             format!("{b} ({why})")
         })
@@ -408,6 +410,18 @@ fn device_rotation_equals_direct_on_metal() {
         BackendKind::Metal,
         "device_rotation_equals_direct_on_metal",
         &[],
+        &DEGREES,
+    );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[ignore = "CUDA: run by hand on locust"]
+fn device_rotation_equals_direct_on_cuda() {
+    run(
+        BackendKind::Cuda,
+        "device_rotation_equals_direct_on_cuda",
+        &[0, 1, 3, 8, 12, 16, 20],
         &DEGREES,
     );
 }

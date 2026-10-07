@@ -16,10 +16,14 @@
 //! - Metal (feature `metal`, by hand outside the macOS sandbox): f32 at p = 3 and 8;
 //! - the CPU runtime (feature `cpu`): f64 at p = 8, 12 and 18, each at N = 10⁵, since
 //!   none took more than the README's ten minutes on the M3 Max ([`F64_POINTS`]; the
-//!   test prints N per row).
+//!   test prints N per row);
+//! - CUDA (feature `cuda`, by hand on locust; Phase 4S T4, C4S.4): f32 at p = 3 and 8 and
+//!   f64 at p = 8, 12 and 18, and the cube alone at N = 10⁶ ([`LARGE`]) in f32 and f64 at
+//!   p = 8 (the H100 has 96 GB, and the direct sum at 1,000 targets stays cheap).
 //!
 //! The optional third distribution, the Gaussian clusters (five clusters of width 0.02),
-//! runs at f32 p = 8 on Metal, reported and checked like the others.
+//! runs at f32 p = 8 on Metal and at p = 8 in f32 and f64 on CUDA, reported and checked
+//! like the others.
 //!
 //! Error measures (docs/phase3/README.md, "Error measures"): per charge vector, the
 //! relative L2 and max errors of φ and of ∇φ (the Euclidean norm per target) at the
@@ -42,7 +46,7 @@
 //!   device path is in `tests/accuracy.rs`.
 //!
 //! **The tuning budget at the C3.2 size** (Phase 4 T12): the cube at N = 10⁵ and p = 8 (f64
-//! on the CPU runtime, f32 on Metal) is built once more with a fresh tuning cache and the
+//! on the CPU runtime, f32 on Metal, f32 and f64 on CUDA) is built once more with a fresh tuning cache and the
 //! default budget of 10 s; no candidate may start after the deadline
 //! (`TuningReport::last_start` below the budget), the output of the tuned choices must lie
 //! within the FMM bounds of the host output (one charge vector), and the tuning time and
@@ -59,6 +63,7 @@
 //! ```text
 //! RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features cpu --release --test device_fmm -- --ignored --nocapture
 //! RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features metal --release --test device_fmm -- --ignored --nocapture
+//! tools/gh200/remote.sh 'RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features cuda --release --test device_fmm -- --ignored --nocapture'
 //! ```
 #![cfg(feature = "gpu")]
 
@@ -92,6 +97,9 @@ const F32_POINTS: [(usize, usize); 2] = [(3, N), (8, N)];
 /// point, the Plummer sphere at p = 18 with host and device, took 2.6 minutes, within the
 /// README's ten.
 const F64_POINTS: [(usize, usize); 3] = [(8, N), (12, N), (18, N)];
+
+/// The cube's extra size on CUDA, at p = 8 in f32 and f64.
+const LARGE: usize = 1_000_000;
 
 /// SplitMix64, as `nd_fmm_validate::SplitMix64`.
 struct SplitMix64(u64);
@@ -634,6 +642,38 @@ fn device_fmm_gate() {
         }
         ran.push("metal (f32)");
     }
+    // CUDA in f32 and f64, with the Gaussian clusters at p = 8, and the cube at N = 10⁶.
+    if Backend::Cuda.is_compiled() {
+        for name in ["cube", "plummer", "clusters"] {
+            let problem = Problem::new(name, N);
+            for (p, n) in F32_POINTS {
+                assert_eq!(n, problem.points.len());
+                if name == "clusters" && p != 8 {
+                    continue;
+                }
+                let row = run::<f32>(Backend::Cuda, &problem, p, &comm, &mut failures);
+                eprintln!("{}: {:.1?}", describe(&row), row.wall);
+                rows.push(row);
+            }
+            for (p, n) in F64_POINTS {
+                assert_eq!(n, problem.points.len());
+                if name == "clusters" && p != 8 {
+                    continue;
+                }
+                let row = run::<f64>(Backend::Cuda, &problem, p, &comm, &mut failures);
+                eprintln!("{}: {:.1?}", describe(&row), row.wall);
+                rows.push(row);
+            }
+        }
+        let large = Problem::new("cube", LARGE);
+        let row = run::<f32>(Backend::Cuda, &large, 8, &comm, &mut failures);
+        eprintln!("{}: {:.1?}", describe(&row), row.wall);
+        rows.push(row);
+        let row = run::<f64>(Backend::Cuda, &large, 8, &comm, &mut failures);
+        eprintln!("{}: {:.1?}", describe(&row), row.wall);
+        rows.push(row);
+        ran.push("cuda (f32, f64)");
+    }
 
     println!();
     println!(
@@ -698,6 +738,15 @@ fn device_fmm_gate() {
         eprintln!("{line}");
         println!("\n{line}");
     }
+    if Backend::Cuda.is_compiled() {
+        for line in [
+            tuning_budget::<f32>(Backend::Cuda, &cube, 8, &comm, &mut failures),
+            tuning_budget::<f64>(Backend::Cuda, &cube, 8, &comm, &mut failures),
+        ] {
+            eprintln!("{line}");
+            println!("\n{line}");
+        }
+    }
     let gate = c33_gate(&rows, &mut failures);
     if !gate.is_empty() {
         println!();
@@ -720,7 +769,7 @@ fn device_fmm_gate() {
         [
             (!Backend::Cpu.is_compiled()).then_some("cpu (not compiled)"),
             (!Backend::Metal.is_compiled()).then_some("metal (not compiled)"),
-            Some("cuda (type-checked, not run)"),
+            (!Backend::Cuda.is_compiled()).then_some("cuda (not compiled)"),
         ]
         .into_iter()
         .flatten()

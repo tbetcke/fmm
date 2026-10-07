@@ -1,7 +1,7 @@
 //! The tuner of the device path (Phase 4 T12, C4.7) through `FmmBuilder::build` on one
-//! backend, shared by `tests/device_tune.rs` (the CPU runtime) and `tests/device_metal.rs`
-//! (Metal, ignored). The tests of the brief, docs/phase4/T12-autotune.md, "Tests that
-//! define done", that need a device:
+//! backend, shared by `tests/device_tune.rs` (the CPU runtime), `tests/device_metal.rs`
+//! (Metal, ignored) and `tests/device_cuda.rs` (CUDA, ignored; Phase 4S T4). The tests of
+//! the brief, docs/phase4/T12-autotune.md, "Tests that define done", that need a device:
 //!
 //! - **the static rule without a directory**: no tuning, no file, every decision from the
 //!   static rule, and the static strategy, GEMMs and P2P layout in the device report;

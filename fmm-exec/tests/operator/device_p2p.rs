@@ -19,7 +19,8 @@
 //! levels 0–16, the opposite corners of level 16 included (device-path.md §6.1).
 //!
 //! The CPU runtime runs with the `cpu` feature; Metal (f32) with `metal`, ignored, by
-//! hand outside the macOS sandbox. Each test prints the device and the backends it ran.
+//! hand outside the macOS sandbox; CUDA (f32 and f64) with `cuda`, ignored, by hand on
+//! locust (Phase 4S T4). Each test prints the device and the backends it ran.
 
 use nd_fmm_exec::geometry::relative_frame;
 use nd_fmm_kernels::p2p::{P2pInputs, P2pLayout, near_frames, p2p};
@@ -358,13 +359,13 @@ fn run(kind: BackendKind) {
         "  frames: every near pair and {rows} random key pairs bit for bit against \
          relative_frame"
     );
-    let not_run: Vec<&str> = BackendKind::ALL
+    let not_run: Vec<String> = BackendKind::ALL
         .into_iter()
         .filter(|&k| k != kind)
-        .map(|k| match k {
-            BackendKind::Cuda => "cuda (type-checked, not run)",
-            BackendKind::Metal => "metal (its own ignored test)",
-            BackendKind::Cpu => "cpu (its own test)",
+        .map(|k| match (k, k.is_compiled()) {
+            (_, false) => format!("{k} (not compiled)"),
+            (BackendKind::Cpu, true) => format!("{k} (its own test)"),
+            _ => format!("{k} (its own ignored test)"),
         })
         .collect();
     eprintln!("backends run: {kind}; not run: {}", not_run.join(", "));
@@ -381,4 +382,11 @@ fn device_p2p_equals_the_reference_on_the_cpu_runtime() {
 #[ignore = "Metal: run by hand, outside the sandbox"]
 fn device_p2p_equals_the_reference_on_metal() {
     run(BackendKind::Metal);
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[ignore = "CUDA: run by hand on locust"]
+fn device_p2p_equals_the_reference_on_cuda() {
+    run(BackendKind::Cuda);
 }

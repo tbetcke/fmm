@@ -22,10 +22,15 @@
 //! - f32, p ∈ {0, 1, 3, 8}: within 1e-5 against the f64 reference.
 //!
 //! GEMMs: the hand-written kernel in the backend's default layout and one other (the CPU
-//! runtime: its CPU layout and a cube of up to 8 units, correctness only; Metal: its cube
-//! layout and the CPU layout); on Metal also the library GEMM under `GemmPolicy::Auto` at
-//! p = 8 with 128 pairs per offset, asserted to run (the library rejects narrow padded
-//! shapes such as 16 or 32 columns per offset; the plan reports why).
+//! runtime: its CPU layout and a cube of up to 8 units, correctness only; Metal and CUDA:
+//! the cube layout and the CPU layout); on a GPU also `GemmPolicy::Auto` at p = 8 in f32
+//! with 128 pairs per offset: on Metal the library GEMM, asserted to run (the library
+//! rejects narrow padded shapes such as 16 or 32 columns per offset; the plan reports
+//! why), on CUDA the hand-written kernel, the library asserted rejected (its probe fails
+//! on the LLVM NVPTX path, device-path.md §18.1, F28).
+//!
+//! CUDA (Phase 4S T4, ignored, by hand on locust) runs f32 at p ∈ {0, 1, 3, 8} and f64 at
+//! every degree, the sweep's included, with the f64 bounds above.
 //! Each test prints the device, the worst errors per precision, degree, level and GEMM
 //! against the host operator's, and the backends it ran.
 
@@ -156,12 +161,21 @@ fn run_cell<T: Real>(
         println!("    library not used, the hand-written kernel runs: {reason}");
     }
     if policy == GemmPolicy::Auto && library {
-        assert_eq!(
-            plan.gemm(),
-            Gemm::Library,
-            "the library must take [316, {pairs}, {n}]: {:?}",
-            plan.library_rejection()
-        );
+        if device.backend() == BackendKind::Cuda {
+            // The library's probe fails on the LLVM NVPTX path (device-path.md §18.1, F28).
+            assert!(
+                plan.gemm() == Gemm::HandWritten(layout) && plan.library_rejection().is_some(),
+                "on CUDA the library must be rejected for [316, {pairs}, {n}]: {}",
+                plan.gemm()
+            );
+        } else {
+            assert_eq!(
+                plan.gemm(),
+                Gemm::Library,
+                "the library must take [316, {pairs}, {n}]: {:?}",
+                plan.library_rejection()
+            );
+        }
     }
     let input = device.upload(&multipoles).unwrap();
     let mut output = device.upload(&locals).unwrap();
@@ -280,8 +294,8 @@ fn run(kind: BackendKind, test: &str, degrees_f64: &[usize], degrees_f32: &[usiz
         .map(|b| {
             let why = match (b, b.is_compiled()) {
                 (_, false) => "not compiled",
-                (BackendKind::Cuda, true) => "type-checked, not run",
-                _ => "in its own test",
+                (BackendKind::Cpu, true) => "in its own test",
+                _ => "in its own ignored test",
             };
             format!("{b} ({why})")
         })
@@ -323,6 +337,18 @@ fn device_m2l_equals_direct_on_metal() {
         BackendKind::Metal,
         "device_m2l_equals_direct_on_metal",
         &[],
+        &DEGREES,
+    );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[ignore = "CUDA: run by hand on locust"]
+fn device_m2l_equals_direct_on_cuda() {
+    run(
+        BackendKind::Cuda,
+        "device_m2l_equals_direct_on_cuda",
+        &[0, 1, 3, 8, 12, 16, 20],
         &DEGREES,
     );
 }

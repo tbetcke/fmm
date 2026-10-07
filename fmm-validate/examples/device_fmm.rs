@@ -57,8 +57,9 @@
 //! needs a process with GPU access (outside the macOS sandbox). It initialises MPI at
 //! `Threading::Funneled` and runs on one rank.
 //!
-//! The CUDA run (never run here; no CUDA machine in Phase 4): see
-//! fmm-validate/results/phase4-m3max.md, "The CUDA run".
+//! The CUDA run: fmm-validate/results/phase4-m3max.md, "The CUDA run". On locust's H100
+//! (Phase 4S, by hand: `tools/gh200/remote.sh`, feature `cuda`), `--device cuda` runs in
+//! f32 and f64; on Linux `--threads` defaults to `available_parallelism` (72 on Grace).
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -243,7 +244,7 @@ fn main() {
         [
             (arguments.backend != Backend::Cpu).then_some("cpu"),
             (arguments.backend != Backend::Metal).then_some("metal"),
-            (arguments.backend != Backend::Cuda).then_some("cuda (type-checked, not run)"),
+            (arguments.backend != Backend::Cuda).then_some("cuda"),
         ]
         .into_iter()
         .flatten()

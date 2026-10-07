@@ -21,10 +21,14 @@
 //! - f32, p ∈ {0, 1, 3, 8}: within 1e-5 against the f64 reference.
 //!
 //! Layouts: the backend's default GEMM layout and one other (the CPU runtime: its CPU
-//! layout and a cube of up to 8 units, correctness only; Metal: its cube layout and the
-//! CPU layout), the hand-written kernel; on Metal also the library GEMM under
-//! `GemmPolicy::Auto` at p = 8 with 256 parents per octant (the plan reports whether the
-//! library took the shape). Each test prints the device, the worst errors per kind,
+//! layout and a cube of up to 8 units, correctness only; Metal and CUDA: the cube layout
+//! and the CPU layout), the hand-written kernel; on a GPU also `GemmPolicy::Auto` at p = 8
+//! in f32 with 256 parents per octant: on Metal the library GEMM (the plan reports
+//! whether the library took the shape), on CUDA the hand-written kernel, the library
+//! asserted rejected (its probe fails on the LLVM NVPTX path, device-path.md §18.1, F28).
+//!
+//! CUDA (Phase 4S T4, ignored, by hand on locust) runs f32 at p ∈ {0, 1, 3, 8} and f64 at
+//! every degree, the sweep's included, with the f64 bounds above. Each test prints the device, the worst errors per kind,
 //! precision, degree and level against the host operator's, and the backends it ran.
 
 use nd_fmm_kernels::translate::{
@@ -169,6 +173,15 @@ fn run_cell<T: Real>(
     let size = settings.size(device.backend(), T::FLOAT, &batch_offsets);
     let mut scratch = TranslationScratch::<T>::new(device, size.columns * n).unwrap();
     let plan = GroupedPlan::new(device, &arrays, rows, &settings, &tables, &mut scratch).unwrap();
+    if policy == GemmPolicy::Auto && library && device.backend() == BackendKind::Cuda {
+        // The library's probe fails on the LLVM NVPTX path (device-path.md §18.1, F28).
+        assert!(
+            plan.gemm() == Gemm::HandWritten(layout) && plan.library_rejection().is_some(),
+            "on CUDA the library must be rejected for {} parents per octant: {}",
+            pairs,
+            plan.gemm()
+        );
+    }
     let mut buffer = device.upload(&store).unwrap();
     grouped(
         device,
@@ -308,8 +321,8 @@ fn run(kind: BackendKind, test: &str, degrees_f64: &[usize], degrees_f32: &[usiz
         .map(|b| {
             let why = match (b, b.is_compiled()) {
                 (_, false) => "not compiled",
-                (BackendKind::Cuda, true) => "type-checked, not run",
-                _ => "in its own test",
+                (BackendKind::Cpu, true) => "in its own test",
+                _ => "in its own ignored test",
             };
             format!("{b} ({why})")
         })
@@ -351,6 +364,18 @@ fn device_translations_equal_direct_on_metal() {
         BackendKind::Metal,
         "device_translations_equal_direct_on_metal",
         &[],
+        &DEGREES,
+    );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[ignore = "CUDA: run by hand on locust"]
+fn device_translations_equal_direct_on_cuda() {
+    run(
+        BackendKind::Cuda,
+        "device_translations_equal_direct_on_cuda",
+        &[0, 1, 3, 8, 12, 16, 20],
         &DEGREES,
     );
 }

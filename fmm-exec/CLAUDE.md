@@ -50,12 +50,14 @@ autotune with a persistent cache, module `tune`).
     ignored tests get their own executable. `tests/mpi_threading.rs` owns MPI at
     `Threading::Single` (the error path of `threads`); `tests/mpi_exec.rs`,
     `tests/accuracy.rs` (the ignored C3.2 gate), `tests/adaptive.rs` (the ignored
-    C3.3 error per list) and `tests/device_metal.rs` (the ignored Metal run of the
-    device path, feature `metal`) initialise it at `Threading::Funneled`;
+    C3.3 error per list), `tests/device_metal.rs` (the ignored Metal run of the
+    device path, feature `metal`) and `tests/device_cuda.rs` (the ignored CUDA run,
+    feature `cuda`; Phase 4S T4) initialise it at `Threading::Funneled`;
     `tests/device_fmm.rs` (the ignored C4.8 gate, feature `gpu`) and
     `tests/device_tune.rs` (the tuner, feature `cpu`) at the default level.
-    The device checks shared by `tests/mpi_exec.rs` and `tests/device_metal.rs` live in
-    `tests/device_common/`.
+    The device checks shared by `tests/mpi_exec.rs`, `tests/device_metal.rs` and
+    `tests/device_cuda.rs` live in `tests/device_common/`, the tuner's in
+    `tests/tune_common/`.
   - New `Fmm` scenarios evaluate through `evaluate_threaded` in `tests/mpi_exec.rs`,
     which repeats them at 2, 4 and 8 threads and checks the output bit for bit, or
     through `evaluate_every_kernel`, which also repeats them with `Reference` and every
@@ -126,7 +128,8 @@ autotune with a persistent cache, module `tune`).
     timing (`device::StageTiming`, `FmmBuilder::device_timestamps`, opt-in): one
     timing window per stage with device work (`DeviceStage`, five per evaluation) where
     the device times on itself (Metal, CUDA), read after the download, in
-    `StageTimings::device` (spans that overlap on Metal, not a breakdown); no window on
+    `StageTimings::device` (spans that overlap on Metal, not a breakdown; on CUDA, one
+    stream, they do not overlap: "CUDA (Phase 4S)" below); no window on
     the CPU runtime, whose windows drain the stream; `synchronous_stages` disables them. Never add a sync, a download or a host call to a
     default evaluation; a new launch belongs in the formula of `tests/device_common`;
   - autotune (T12, C4.7; module `tune`, device-path.md §10): `FmmBuilder::tuning_cache`
@@ -154,14 +157,17 @@ autotune with a persistent cache, module `tune`).
   - threads: with `Backend::Cpu` no rayon pool, `threads(n)` caps the CPU runtime's
     units per cube; with Metal and CUDA the pool serves host-fallback kinds only;
   - every device test prints the backends it ran; Metal tests are ignored and run by
-    hand outside the macOS sandbox (`tests/device_metal.rs`); CUDA is type-checked.
+    hand outside the macOS sandbox (`tests/device_metal.rs`); CUDA tests are ignored,
+    type-checked in CI and run by hand on locust (`tests/device_cuda.rs`, the CUDA blocks
+    of `tests/device_fmm.rs`, `tests/accuracy.rs` and `tests/adaptive.rs`, and
+    `tests/operator/device_*.rs`; "CUDA (Phase 4S)" below).
 - Before finishing: `cargo clippy -p nd-fmm-exec --all-targets -- -D warnings` and
   `RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec` must pass. Tasks that add
   ignored tests must also pass
   `RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --release -- --ignored`. A change to
   the device path also needs:
   - `cargo clippy -p nd-fmm-exec --all-targets --features cpu,metal -- -D warnings`;
-  - `cargo check -p nd-fmm-exec --features cuda` (type-checked, never run);
+  - `cargo check -p nd-fmm-exec --features cuda` (type-checked here; run on locust);
   - `RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features cpu --release` (every
     `tests/mpi_exec.rs` scenario repeated on the CPU runtime);
   - `cargo doc -p nd-fmm-exec --no-deps --features cpu`;
@@ -181,7 +187,49 @@ autotune with a persistent cache, module `tune`).
   - from T12, `tests/device_tune.rs`: the tuning cache without MPI (round trip, stale and
     corrupt files, concurrent writers) and, with `--features cpu`, the scenarios of
     `tests/tune_common` on the CPU runtime (f64 p = 6 in full, f32 p = 3; about a minute
-    in release), which `tests/device_metal.rs` also runs on Metal (f32 p = 8 and 3).
+    in release), which `tests/device_metal.rs` also runs on Metal (f32 p = 8 and 3) and
+    `tests/device_cuda.rs` on CUDA (f32 p = 8 and f64 p = 6 in full, f32 p = 3);
+  - from Phase 4S T4, by hand on locust (root CLAUDE.md, "Checks"; after
+    `tools/gh200/sync.sh`, each as `tools/gh200/remote.sh '<command>'`):
+    `cargo clippy -p nd-fmm-exec --all-targets --features cpu,cuda -- -D warnings`,
+    `RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features cuda --release`, and the
+    same with `-- --ignored` (every CUDA test: `tests/device_cuda.rs`, the CUDA blocks of
+    the gates and the operator tests).
+
+## CUDA (Phase 4S)
+Measured on locust's H100 (GH200) on 2026-10-07 (Phase 4S T4, C4S.4; CubeCL
+0.11.0-pre.4 through LLVM NVPTX, CUDA 12.6; docs/design/device-path.md §18.1).
+- Running: on the M3 Max, outside the sandbox, `tools/gh200/sync.sh`, then
+  `tools/gh200/remote.sh 'RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features
+  cuda --release -- --ignored --nocapture'`. CUDA tests are `#[ignore = "CUDA: run by
+  hand on locust"]`: `tests/device_cuda.rs` (its own MPI test, at `Funneled`), the CUDA
+  blocks of `tests/device_fmm.rs`, `tests/accuracy.rs` and `tests/adaptive.rs` (behind
+  `Backend::Cuda.is_compiled()`), and `tests/operator/device_*.rs` (`…_on_cuda`). The
+  tuner scenarios and the strategy at f64 p = 12 run in `tests/device_cuda.rs`, not in
+  `tests/device_tune.rs`, whose one MPI test is the CPU runtime's.
+- Both precisions run on CUDA, every check with the f64 bounds in f64 and the f32 bounds
+  in f32. Every kind on the host fallback is bit for bit the host path, with the
+  transfers of the formula; the default placement (every kind on the device) stays within
+  the FMM bounds, two evaluations and two builds bit for bit.
+- The library GEMM never runs on CUDA: its probe fails on the LLVM path (F28), so every
+  level call the static rule gives the library (f32, n ≥ 81: M2M and L2L under `Auto`,
+  every kind under `Library`) reports a `library_rejection` and runs the hand-written
+  kernel; the tests assert it. The tuner's candidates are the hand-written layouts, the
+  chunk budget and the P2P layouts; a library candidate is unregistered.
+- C4.8 (`tests/device_fmm.rs`): the device output within 6.7e-15 (f64) and 2.9e-6 (f32)
+  of the host's (relative L2, φ), the errors against the direct sum within a ratio of
+  1.0000 of the host's in f64 and 0.991–1.010 in f32, over the cube, the Plummer sphere
+  and the clusters at N = 10⁵ and the cube at N = 10⁶; every evaluation moves the
+  charges up and the output down with one sync. The tuning budget at the C3.2 size: 3.2 s
+  (f32) and 3.4 s (f64) of the 10 s.
+- Stage windows (`device_timestamps(true)`, `tests/device_cuda.rs`, the cube at N = 10⁵,
+  p = 8): five windows and one sync per evaluation, the output bit for bit the default's.
+  On CUDA the windows do not overlap (one stream, events in order): the five spans add up
+  to 0.71–0.77 of the wall time of `evaluate` in f32 and f64 (on Metal, T11, they added
+  up to more than it). `KindTiming::Device` (T5) was not checked: T5 had not merged.
+- Test budget (release, H100, one process per test file): `tests/device_cuda.rs` 95 s,
+  `tests/device_fmm.rs` 656 s (its slowest point the host at f64 p = 18), `accuracy.rs`
+  91 s, `adaptive.rs` 71 s, the five operator tests 57 s; the whole ignored run 16 min.
 
 ## Allowed dependencies
 nd-fmm-math, nd-fmm-ref, nd-fmm-tables, nd-fmm-plan, nd-fmm-simd (from Phase 3S T6),

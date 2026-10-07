@@ -334,7 +334,7 @@ fn metal_device_path() {
 
     eprintln!(
         "rank {}: backends run: metal (f32); not run: cpu (tests/mpi_exec.rs with --features \
-         cpu), cuda (type-checked, not run)",
+         cpu), cuda (tests/device_cuda.rs, by hand on locust)",
         comm.rank()
     );
 }

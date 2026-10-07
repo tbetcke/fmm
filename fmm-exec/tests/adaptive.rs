@@ -50,7 +50,8 @@
 //! (docs/phase4/README.md, "Accuracy measures"), and the output within 1e-12 (f64) or 1e-5
 //! (f32) of the host output (relative L2 over all points). The device differs in the U
 //! list (P2P), the W list (M2P), the X list (P2L), the leaves' own expansions (P2M,
-//! L2P) and the translations between levels (M2M, L2L).
+//! L2P) and the translations between levels (M2M, L2L). On CUDA (feature `cuda`, Phase 4S
+//! T4, by hand on locust) both: f32 at p = 3 and 8 and f64 at every p of [`PS`].
 //!
 //! Its own executable, because it initialises MPI (at `Threading::Funneled`, for the
 //! threaded evaluations); ignored, because it needs release mode:
@@ -58,6 +59,7 @@
 //! ```text
 //! RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --release --test adaptive -- --ignored --nocapture
 //! RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features cpu --release --test adaptive -- --ignored --nocapture
+//! tools/gh200/remote.sh 'RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features cuda --release --test adaptive -- --ignored --nocapture'
 //! ```
 
 use std::collections::HashMap;
@@ -585,7 +587,7 @@ fn strategies_and_threads(
 }
 
 /// The device path on each backend compiled in (module documentation, "Device path"):
-/// the CPU runtime in f64 at every p of [`PS`], Metal in f32 at p = 3 and 8.
+/// the CPU runtime in f64 at every p of [`PS`], Metal in f32 at p = 3 and 8, CUDA in both.
 #[cfg(feature = "gpu")]
 fn device_gates(
     name: &str,
@@ -623,9 +625,44 @@ fn device_gates(
         }
         ran.push("metal (f32)");
     }
+    if Backend::Cuda.is_compiled() {
+        for p in [3, 8] {
+            device_gate::<f32>(
+                name,
+                Backend::Cuda,
+                p,
+                (points, charges),
+                (sample, exact),
+                comm,
+                failures,
+            );
+        }
+        for p in PS {
+            device_gate::<f64>(
+                name,
+                Backend::Cuda,
+                p,
+                (points, charges),
+                (sample, exact),
+                comm,
+                failures,
+            );
+        }
+        ran.push("cuda (f32, f64)");
+    }
+    let not_run: Vec<String> = [Backend::Cpu, Backend::Metal, Backend::Cuda]
+        .into_iter()
+        .filter(|b| !b.is_compiled())
+        .map(|b| format!("{b} (not compiled)"))
+        .collect();
     eprintln!(
-        "{name}: backends run: host, {}; not run: cuda (type-checked, not run)",
-        ran.join(", ")
+        "{name}: backends run: host, {}; not run: {}",
+        ran.join(", "),
+        if not_run.is_empty() {
+            "none".to_owned()
+        } else {
+            not_run.join(", ")
+        }
     );
 }
 

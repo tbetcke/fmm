@@ -81,7 +81,7 @@
 //! | `gpu` | `nd-fmm-kernels`, the `device` module and the device backends' settings |
 //! | `cpu` | `gpu` and the CubeCL CPU runtime ([`Backend::Cpu`](fmm::Backend::Cpu)): f32 and f64, the correctness backend |
 //! | `metal` | `gpu` and Metal ([`Backend::Metal`](fmm::Backend::Metal)): f32 only, run outside the macOS sandbox |
-//! | `cuda` | `gpu` and CUDA ([`Backend::Cuda`](fmm::Backend::Cuda)): type-checked only |
+//! | `cuda` | `gpu` and CUDA ([`Backend::Cuda`](fmm::Backend::Cuda)): f32 and f64; type-checked in CI, run by hand on an H100 (Phase 4S) |
 //!
 //! None is on by default, and [`Backend::Host`](fmm::Backend::Host) stays the default
 //! backend, so the host path builds and runs exactly as without the features. The
