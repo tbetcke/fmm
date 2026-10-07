@@ -1479,7 +1479,7 @@ device leaf-size rule picks 64 on CUDA as well. The M3 Max figures below stand.
 | §3.13 addition (9.3) | drafted by T3 | signed off (decision 3): the C3S.4 P2P contract unchanged, on flushing backends for q = 0 or \|q\| ≥ 2⁻¹⁰⁰; ŷ by an explicit fma, `inverse_sqrt` without a Newton step, masking by compare and select |
 | Metal runtime (5.3) | keep wgpu-msl | kept (decision 11); no `metal-native` |
 | persistence (3.4) | off | off with `cpu` and `cuda`; on with `metal` through CubeCL's manifests, an empty store, unused (T4 sign-off) |
-| CI (13.2) | T4 measures the CPU-runtime job | kept as built (`run-tests-kernels`: 4 min 53 s cold, 51 s warm); `nd-fmm-kernels` a member, not a default member (decision 7) |
+| CI (13.2) | T4 measures the CPU-runtime job | kept as built (`run-tests-kernels`: 4 min 53 s cold, 51 s warm); `nd-fmm-kernels` a member, not a default member (decision 7). Phase 4S T10: one test run with CubeCL's profiling log, cached package installs, caches restored from `main`: 11 min 16 s cold, 5 min 14 s warm, of which about 4 min are the kernel tests of the grown suite (PR #71) |
 | CPU runtime target (decision 10) | if T3's ratio ≤ 1.5 | set (T3: 1.004); T6's CPU layout of P2P at 1.16× `nd_fmm_simd::P2pKernel` per pair at one thread (target 1.5), 2.2× on all cores (reported) |
 | frames (6.1) | a table of exact powers of two | the powers formed exactly in the kernel from integer keys (T6), bit for bit `relative_frame` |
 | P2P layouts (6.2) | cube; plane per leaf a candidate; CPU layout if decision 10 | all three built and tested on every backend; cube 64 by default on GPUs; the tuner picks plane (2 per cube) or cube 32 on small leaves |

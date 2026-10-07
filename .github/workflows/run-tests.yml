@@ -20,6 +20,8 @@ permissions:
 #   (`restore-keys`). A hit on the exact key saves nothing.
 # - packages: the .deb files of the job's package list, keyed on the runner image and the
 #   list, exact keys only; .github/scripts/apt-install.sh installs them offline on a hit.
+#   While GitHub rolls out a runner image, jobs land on either of two, so each job
+#   downloads once per image before its runs hit.
 # A failed or timed-out package install is a mirror problem; the next step says to re-run.
 # timeout-minutes (T10, from the measured times): about twice a job's warm time and above
 # its worst cold time with a slow mirror (an install step stops at 5 minutes).

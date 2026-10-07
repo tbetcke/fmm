@@ -346,7 +346,7 @@ them. T4's f64 gates and T7's rules rest on T3.
 | --- | --- | --- |
 | Apple M3 Max (development; 12 performance and 4 efficiency cores, 64 GB) | host (NEON); Metal (f32); CubeCL CPU runtime (f32, f64) | every task's editing, commits and M3 checks; T5 and T6 development; Metal by hand |
 | **locust** (`ssh locust`, `locust.rc.ucl.ac.uk`): NVIDIA GH200 480GB, shared interactive node, no scheduler | host (NEON on 72 Neoverse-V2 cores); CUDA (f32, f64) on one H100 (sm_90, 96 GB HBM3); CubeCL CPU runtime | every CUDA test and timing; the Grace host baseline; T1–T4, T7, T8 runs |
-| GitHub Actions `ubuntu-latest`, `ubuntu-24.04-arm` | host; CubeCL CPU runtime | CI as today, plus the CUDA type-check step (decision 6); never CUDA runs |
+| GitHub Actions `ubuntu-latest`, `ubuntu-24.04-arm` | host; CubeCL CPU runtime | CI as today, plus the CUDA type-check step (decision 6); since T10 also on pushes to `main`, with cached package installs and one kernel test run (`run-tests-kernels` 676 s cold, 314 s warm; `run-tests` 426 s cold, 356 s warm; PR #71); never CUDA runs |
 
 ### locust, as probed read-only on 2026-10-05
 
