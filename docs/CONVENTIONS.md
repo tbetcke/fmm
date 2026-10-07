@@ -997,16 +997,20 @@ changes no fixture and no table, and `CONVENTION_VERSION` stays 1 (§3.10).
 The device kernels of `nd-fmm-kernels` (CubeCL) take the inputs of "Fast kernels" and
 exclude a pair by r² = 0 too. Their compilers need not keep IEEE semantics. Phase 4 T3
 measured the backends on the Apple M3 Max with CubeCL 0.11.0-pre.4: the CubeCL CPU
-runtime (LLVM; f32 and f64) and Metal through wgpu-msl (f32). CUDA is taken from the
-code generator and was not run (spikes/device-arith/REPORT.md).
+runtime (LLVM; f32 and f64) and Metal through wgpu-msl (f32). Phase 4S T3 measured CUDA
+on the H100 of an NVIDIA GH200 (LLVM NVPTX, CubeCL's default; f32 and f64)
+(spikes/device-arith/REPORT.md).
 
 **Arithmetic a device kernel may assume.** The minimum over the backends measured:
 
 - `+`, `−` and `×` are each rounded correctly, as written. +0 and −0 compare equal.
 - An explicit `fma(a, b, c)` rounds once.
 - Any a · b ± c whose product has no other use may be fused into an fma. cubecl-opt's
-  `InstCombinePass` does this on every backend, with no switch. A result must not depend
-  on whether such an expression is fused.
+  `InstCombinePass` does this on every backend, with no switch. On CUDA a product with
+  other uses may be fused as well: LLVM's NVPTX back end fuses each multiply–add it is
+  given and keeps the rounded product for the other uses. A result must not depend on
+  whether such an expression is fused. A product that only feeds an explicit `fma` was
+  not fused on any backend.
 - On normal arguments, `sqrt`, division, `recip` and `inverse_sqrt` are within 2.5 u_T,
   relative. `1 / sqrt(x)` may be compiled as `inverse_sqrt(x)`.
 - Subnormal inputs, results and compared values may be flushed to zero.
@@ -1017,12 +1021,12 @@ code generator and was not run (spikes/device-arith/REPORT.md).
 - No reassociation of an expression in distinct values was observed. None is relied
   on either way: the rule below holds whether or not the compiler reassociates.
 
-| | CPU runtime (f32, f64) | Metal, wgpu-msl (f32) | CUDA (from the code, not run) |
+| | CPU runtime (f32, f64) | Metal, wgpu-msl (f32) | CUDA, LLVM NVPTX (f32, f64) |
 | --- | --- | --- | --- |
-| `sqrt`, division, `recip` | correctly rounded | ≤ 1.8, 2.3, 1.3 u_T (measured) | `llvm.sqrt` and `fdiv` without fast-math flags |
-| `inverse_sqrt` | fl(1 / fl(√x)), ≤ 1.5 u_T (a polyfill) | ≤ 1.5 u_T; also what 1 / √x compiles to | fl(1 / fl(√x)) (the same polyfill) |
-| contraction | `InstCombinePass`; `fma` lowers to `llvm.fmuladd`, fused on AArch64 | `InstCombinePass`; no further fusion observed | `InstCombinePass`, and `contract` on add, sub and mul |
-| subnormals | kept | flushed in f32 | no flush-to-zero flag set |
+| `sqrt`, division, `recip` | correctly rounded | ≤ 1.8, 2.3, 1.3 u_T (measured) | correctly rounded (`sqrt.rn`, `div.rn`, `rcp.rn`) |
+| `inverse_sqrt` | fl(1 / fl(√x)), ≤ 1.5 u_T (a polyfill) | ≤ 1.5 u_T; also what 1 / √x compiles to | fl(1 / fl(√x)), ≤ 1.5 u_T (a polyfill) |
+| contraction | `InstCombinePass`; `fma` lowers to `llvm.fmuladd`, fused on AArch64 | `InstCombinePass`; no further fusion observed | `InstCombinePass`, and LLVM fuses every remaining multiply–add, products with other uses included |
+| subnormals | kept | flushed in f32 | kept |
 | simplification | cubecl-opt's folds | cubecl-opt's folds and Metal's fast math | cubecl-opt's folds |
 
 **The coincident-pair rule on the device.** r² = 0 exactly when u_t == ŷ, and every
@@ -1043,8 +1047,9 @@ Flushing to zero does not break the rule. Every nonzero stored |u| and every non
 margin of 2²⁰. No operand or result of steps 1–3 is subnormal, and the inexact `sqrt`,
 division or `inverse_sqrt` act only on r² that passed the test. T3 checked the rule on
 Metal and the CPU runtime in five formulations of ŷ and r²: 209,303 adversarial and
-216,000 random pairs in f32, and on the CPU runtime 439,192 and 216,000 in f64. It
-found no exception, and ŷ and d equal the host's bit for bit in every case.
+216,000 random pairs in f32, and on the CPU runtime 439,192 and 216,000 in f64. Phase 4S
+T3 checked it on CUDA with the same pairs in f32 and f64. Neither found an exception, and
+ŷ and d equal the host's bit for bit in every case.
 
 **Domain and ranges.** The kernel domain (r² = 0, or 2⁻¹⁰⁸ ≤ r² ≤ 2⁷) and the f32
 gradient range (2⁻⁸⁴ ≤ r² ≤ 2⁷ and |q| ≤ 1) carry over unchanged. Where subnormals

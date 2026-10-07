@@ -9,7 +9,7 @@ pub enum Backend {
     Cpu,
     /// wgpu with the MSL compiler (the `metal` feature of `nd-fmm-kernels`).
     Metal,
-    /// CUDA: type-checked only.
+    /// CUDA through CubeCL's default LLVM NVPTX path (run on locust's H100, Phase 4S T3).
     Cuda,
 }
 
@@ -39,12 +39,23 @@ impl Backend {
         }
     }
 
-    /// Every backend compiled in, CUDA excluded (it cannot run here).
+    /// Every backend compiled in.
     pub fn runnable() -> Vec<Self> {
-        [Self::Metal, Self::Cpu]
+        [Self::Metal, Self::Cuda, Self::Cpu]
             .into_iter()
             .filter(|b| b.compiled())
             .collect()
+    }
+
+    /// The compiler path behind the runtime: `client.name()` says only `cuda` on CUDA,
+    /// whichever path compiled the kernels (device-path.md F25).
+    pub fn compiler(self) -> &'static str {
+        match self {
+            Self::Cpu => "LLVM JIT",
+            Self::Metal => "MSL",
+            Self::Cuda if cfg!(feature = "cuda-cpp") => "NVRTC (cuda-cpp)",
+            Self::Cuda => "LLVM NVPTX",
+        }
     }
 
     /// Whether the backend is a GPU (timings are taken only there, and on the CPU runtime
@@ -58,7 +69,7 @@ impl Backend {
     /// # Panics
     ///
     /// If the backend is not compiled in or the device cannot be created (for Metal,
-    /// inside the macOS sandbox).
+    /// inside the macOS sandbox; for CUDA, without a GPU or driver).
     pub fn client(self) -> Client {
         match self {
             #[cfg(feature = "cpu")]
@@ -85,10 +96,12 @@ pub fn describe(client: &Client, backend: Backend) -> String {
     let props = client.properties();
     let hw = &props.hardware;
     format!(
-        "{}: runtime `{}`, f64 supported = {}, plane size {}..{}, max shared memory {} B, \
-         max units per cube {}",
+        "{}: device `{}`, runtime `{}`, compiler {}, f64 supported = {}, plane size {}..{}, \
+         max shared memory {} B, max units per cube {}",
         backend.name(),
+        props.identity.name,
         client.name(),
+        backend.compiler(),
         supports_f64(client),
         hw.plane_size_min,
         hw.plane_size_max,
@@ -112,4 +125,33 @@ pub fn read_u32(client: &Client, handle: cubecl::server::Handle) -> Vec<u32> {
 /// Waits for every queued launch.
 pub fn sync(client: &Client) {
     cubecl::future::block_on(client.sync()).expect("device sync");
+}
+
+/// Files the PTX that CUDA dumped since the last call under `label`.
+///
+/// With `CUBECL_CUDA_DUMP_PTX=<dir>`, cubecl-cuda writes the PTX of every kernel it loads
+/// into `<dir>`, named after the last 180 characters of the kernel id. Those omit the
+/// precision and the comptime arguments, so variants overwrite each other. Called after
+/// the launches of one variant, this moves the new files into `<dir>/<label>/`. Without
+/// the variable, or on another backend, it does nothing.
+pub fn keep_ptx(label: &str) {
+    let Some(dir) = std::env::var_os("CUBECL_CUDA_DUMP_PTX") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let label: String = label
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let target = dir.join(label);
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "ptx") {
+            std::fs::create_dir_all(&target).expect("create the PTX label directory");
+            std::fs::rename(&path, target.join(entry.file_name())).expect("move a PTX dump");
+        }
+    }
 }

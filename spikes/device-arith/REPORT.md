@@ -7,6 +7,11 @@ CPU-shaped P2P on the CubeCL CPU runtime against `nd-fmm-simd` (decision 10). Th
 output of the full run is in `results-m3max.md`. Every table below comes from it unless
 marked otherwise.
 
+Phase 4S T3 (docs/phase4s/T3-cuda-arithmetic.md) ran the spike on CUDA, on the H100 of
+locust's GH200. Section "CUDA on GH200 (Phase 4S)" below has its results, the
+recommendation for CUDA and the sign-off questions. It supersedes every statement about
+CUDA in the Phase 4 sections, which were read from the code and never run.
+
 ## Summary
 
 - **The §3.13 rule survives on both backends that ran.** r² = 0 exactly for coincident
@@ -144,7 +149,8 @@ As drafted in `docs/CONVENTIONS.md` §3.13, "Device kernels" (this PR):
    fused (`InstCombinePass`, every backend). Where the result must be pinned, write the
    `fma`. A product with another use stays unfused on both backends, but CSE can merge
    two identical products into one value with two uses on the CPU runtime (CSE runs
-   before InstCombine there).
+   before InstCombine there). *Phase 4S:* on CUDA a product with another use is fused
+   too (LLVM's NVPTX back end; "CUDA on GH200 (Phase 4S)").
 5. **Assume nothing about subnormals.** Metal flushes them, the CPU runtime keeps them.
    Kernels whose intermediates can leave the normal range of f32 (high-degree harmonics
    at small |x|, p ≥ 20) lose those values on Metal (section "Leaf operators and GEMM").
@@ -495,6 +501,313 @@ even on Metal), far inside the C4.4/C4.5 tolerances.
   fusion. It fuses on AArch64. On an x86_64 CPU without FMA (the CI runner has it), the
   CPU runtime's "fma" would round twice. T4's CI job should print the CPU features.
 
+## CUDA on GH200 (Phase 4S)
+
+Phase 4S T3 ran every section of the spike on CUDA in f32 and f64 (`cpu-p2p` is
+CPU-only). It also ran the CPU runtime on Grace as the control, and once NVRTC for
+comparison. The raw outputs are:
+- `results-gh200.md`: CUDA through CubeCL's default LLVM NVPTX path, the path the
+  production kernels use (Phase 4S decision 4);
+- `results-gh200-cpu.md`: the CPU runtime on Grace;
+- `results-gh200-nvrtc.md`: CUDA through NVRTC (`cuda-cpp`, spike feature only).
+
+Every check passed in each of them. Every number below is measured on locust (GH200, CUDA
+or the CPU runtime) unless marked "PTX read" or "source read".
+
+### Summary
+
+- **CUDA (LLVM NVPTX) is IEEE in everything the rules ask about**, in f32 and f64:
+  - `+ − ×` and an explicit `fma` are correctly rounded;
+  - `sqrt`, division and `recip` are correctly rounded: 0 of 16.8 M f32 and 0 of 10⁷ f64
+    results differ from the host. The PTX has `sqrt.rn`, `div.rn` and `rcp.rn`, in f32
+    and f64;
+  - `inverse_sqrt` is fl(1 / fl(√x)), at most 1.50 u_T, bit for bit the CPU runtime's;
+  - subnormals are kept in arithmetic, inputs and comparisons. No `.ftz` and no `.approx`
+    appear in any of the 53 kernels' PTX;
+  - no reassociation; cubecl-opt's two folds (`x − x → 0`, `x + 0.0 → x`) as on every
+    backend.
+- **One difference from the other backends: on CUDA a product with another use is fused
+  too.** cubecl-opt leaves `p = a · b; out = p + c` (p also stored) unfused, as on the
+  CPU runtime. LLVM's NVPTX back end then fuses it: it keeps `mul` for the store and
+  emits `fma.rn` for p + c (IR and PTX read; measured: e² instead of 0).
+  - In the PTX of all 53 spike kernels, LLVM left no multiply whose result feeds an add
+    or subtract. So ptxas has nothing left to contract, although PTX `mul`/`add` without
+    `.rn` would permit it.
+  - LLVM does not fold an fma chain: fma(z, z, a · b) + c stays as written (new probe;
+    as written on Metal and the CPU runtime too).
+- **The §3.13 coincident-pair rule holds on CUDA**: 209,303 + 216,000 f32 and
+  439,192 + 216,000 f64 pairs in five formulations, no exception. ŷ and d equal the host's
+  bit for bit, and the extremes are 2⁻⁵³ and 2⁻¹⁰⁶ as on the M3 Max.
+- **The signed-off formulation meets C3S.4 in f64 on CUDA**: 4.05 u_T (φ) and 9.66 u_T
+  (∇φ) per term, against 8 and 16, over 10⁶ domain pairs. The W1 sums pass. f32: 3.99 and
+  10.21.
+- **CUDA (LLVM) equals the CPU runtime on Grace in every measured value** except the
+  two-use probe and the W1 sums of the "as written" P2P candidates, where that fusion
+  shows. Pair terms, harmonics, GEMM and the §3.13 check give the same counts and errors.
+  The production P2P pins every multiply–add with `fma` and is not affected.
+- **Bit identity (rule 6) holds**: ŷ and d (frames), and the GEMM against the host
+  `mul_add` loop (41,472 of 41,472, f32 and f64). T2 measured copies, scatters, zeroing,
+  frames, GEMM and rotation replicas in `nd-fmm-kernels` (device-path.md F31).
+- **Recommendation: (b), a CUDA note in §3.13.** It covers the multi-use fusion and the
+  CUDA column of the table, now measured. No formulation change, no compiler switch,
+  `CONVENTION_VERSION` stays 1.
+- **NVRTC** would not fuse the two-use product. It replaces `inverse_sqrt` with CUDA's
+  `rsqrt.approx`: 2.09 u_T in f32 (within 2.5), 1.01 u_T in f64. It is 1.5× faster in
+  the quick P2P ranking. It is not needed for correctness; switching is decision 4's, not
+  this task's.
+
+### Setup
+
+- **Machine:** locust, NVIDIA GH200 480GB: one H100 (sm_90, 96 GB HBM3) and 72
+  Neoverse-V2 cores. Driver 565.57.01 (CUDA 12.7); the environment of `tools/gh200/` with
+  CUDA 12.6.3, Rust 1.99.0 and rust-lld.
+- **The spike's machine line reads "Machine: unknown" on Grace**, where `/proc/cpuinfo`
+  has no model name. The CPU runtime's `DeviceInfo` names the CPU, "Neoverse-V2".
+  `nd-fmm-validate`'s Linux aarch64 machine line is T4's.
+- **CubeCL `=0.11.0-pre.4`.**
+  - The LLVM path emits PTX 8.5 for `sm_90a` ("Generated by LLVM NVPTX Back-End").
+  - NVRTC (`cuda-cpp`) also emits PTX 8.5 for `sm_90a` (NVVM 7.0.1, CUDA 12.6
+    `CL-35059454`).
+  - The driver JITs both.
+- **Load** (`nvidia-smi`, `uptime`, `ps` before and after each run; 2026-10-07):
+  - at every check the GPU had no other compute process, and before each run 0%
+    utilisation, 1–2 MiB used;
+  - the host load average was below 1 apart from this task's own builds. The only other
+    users' processes were a monitor (`nvitop`, 0.8% CPU) and the site's endpoint agents;
+  - the final runs were the LLVM path 08:25:24–08:26:16 BST, NVRTC 08:26:20–08:27:13,
+    then the CPU runtime;
+  - the GPU clocks are not locked: SM 1980 MHz, memory 2619 MHz at the end of the CUDA
+    run (`nvidia-smi -q -d CLOCK`, the maximum and default application clocks).
+- **Throughput figures** are the Phase 4 spike's quick ranking (one run, a naive kernel).
+  They are not timings of the production kernels (T7's).
+- **PTX:** `CUBECL_CUDA_DUMP_PTX=<dir>` (cubecl-cuda) writes the PTX of every loaded
+  kernel. The file names keep only the last 180 characters of the kernel id, without the
+  precision or the comptime arguments, so the spike's `backend::keep_ptx` files each
+  variant under its own label.
+  - `CUBECL_DEBUG_LOG=<file>` gave the LLVM IR that pliron hands to LLVM, before O3.
+  - SASS: `ptxas -arch=sm_90a -O3` and `cuobjdump -sass` from CUDA 12.6, on the dumped
+    PTX. This approximates the driver's JIT, which is the 12.7 driver's own ptxas.
+  - Nothing of the dumps is committed. "Reproducing" has the commands.
+
+### How CUDA lowers the float operations (0.11.0-pre.4, LLVM NVPTX)
+
+Read from the sources and the dumped IR and PTX, and confirmed by the measurements.
+
+| operation | IR (`CUBECL_DEBUG_LOG`) | PTX | measured |
+| --- | --- | --- | --- |
+| `x.sqrt()` | `llvm.sqrt` | `sqrt.rn.f32`, `sqrt.rn.f64` | correctly rounded |
+| `a / x` | `fdiv`, no flags | `div.rn.f32`, `div.rn.f64` | correctly rounded |
+| `1 / x`, `x.recip()` | `fdiv` 1, x | `rcp.rn.f32`, `rcp.rn.f64` | correctly rounded |
+| `x.inverse_sqrt()` | polyfill `1 / sqrt(x)` (`cubecl-llvm/src/shared/polyfill/math.rs:185`) | `sqrt.rn` + `rcp.rn` | fl(1/fl(√x)), ≤ 1.50 u_T |
+| `fma(a, b, c)` | `llvm.fmuladd` | `fma.rn` | one rounding |
+| a · b ± c, product used once | `llvm.fmuladd` (cubecl-opt's `InstCombinePass`) | `fma.rn` | fused |
+| a · b ± c, product with another use | `fmul contract` + `fadd contract` | `mul` for the other use, `fma.rn` for the add | **fused** |
+| other `+ − ×` | `fadd`/`fsub`/`fmul contract` (`fma_contraction`, `math.rs:336–345`) | `add`/`sub`/`mul` without `.rn` (ptxas may contract) | correctly rounded |
+| comparisons, select | `fcmp oeq`, `select` | `setp.eq`, `selp` | IEEE (−0 == 0; subnormal ≠ 0) |
+| denormals | no `denormal-fp-math` or `nvptx-f32ftz` attribute | no `.ftz` anywhere | kept |
+
+`libdevice` is linked only for transcendental functions (`nvptx/libdevice.rs`), none of
+which the spike or the P2P uses.
+
+The fusion of a product with another use comes from LLVM, after cubecl-opt:
+- The f32 IR of the probe kernel still has `%v532 = fmul contract float %v509, %v509`,
+  used by `fadd contract` and by a store. cubecl-opt turned the lone products around it
+  into `llvm.fmuladd`.
+- The f64 PTX has `mul.f64 %rd30, %rd21, %rd21` for the store and
+  `fma.rn.f64 %rd31, %rd21, %rd21, %rd4` for the sum (likewise in f32).
+- So LLVM fuses a `contract` fmul–fadd pair on NVPTX whatever the product's other uses.
+  That LLVM's NVPTX target enables its DAG combiner's aggressive FMA fusion is
+  *inferred*; LLVM's sources were not read here. Measured and read: no multiply feeding
+  an add or subtract survives into the PTX of any of the 53 spike kernels, with or
+  without `.rn`.
+- CubeCL sets only `contract` (source read, `fma_contraction`). The fma-chain probe
+  shows that no reassociating fold such as (fma x, y, (fmul u, v)) + z →
+  fma(x, y, fma(u, v, z)) happens (measured).
+
+### The six questions
+
+| # | question | f32 | f64 | how |
+| --- | --- | --- | --- | --- |
+| 1 | `+ − ×` correctly rounded? | yes (probes as written; `(x − y) − z` control, reassociation probes) | yes | measured |
+| 1 | lone a · b + c | fused, always (four forms: a·b + c, c + a·b, a·b − c, c − a·b) | fused, always | measured; IR (`llvm.fmuladd` from cubecl-opt) |
+| 1 | product with another use | **fused** by LLVM (e² for `p + c`; `p` itself stored rounded) | **fused** | measured; IR and PTX read |
+| 1 | cubecl-opt and LLVM told apart | cubecl-opt fuses lone products (IR has `llvm.fmuladd`); LLVM's `contract` fuses the rest (IR has `fmul contract` + `fadd contract`, PTX has `fma.rn`); no mul → add left for ptxas | same | IR and PTX read |
+| 2 | `sqrt` | 1.000 u_T, 0 of 16,777,216 (exhaustive [1, 4)) and 0 of 51,968 (2ᵏ m) differ | 1.000 u_T, 0 of 10⁷ and 0 of 51,968 | measured; PTX `sqrt.rn` |
+| 2 | `a / x`, `1 / x`, `recip` | 1.000 u_T, 0 differ | 1.000 u_T, 0 differ | measured; PTX `div.rn`, `rcp.rn` |
+| 2 | `inverse_sqrt` | 1.500 u_T, = fl(1/fl(√x)) in every value | 1.497 (log-uniform), 1.500 (2ᵏ m), = fl(1/fl(√x)) | measured; PTX `sqrt.rn` + `rcp.rn` |
+| 2 | within §3.13's 2.5 u_T? | yes | yes | measured |
+| 3 | subnormals | kept: 1.5 min − 1.25 min, small · small, subnormal · 1, subnormal + subnormal all IEEE; `select(subnormal == 0)` false; `sqrt`, `inverse_sqrt` of a subnormal IEEE | kept (same probes) | measured; no `.ftz` in the PTX |
+| 3 | charge condition (q = 0 or \|q\| ≥ 2⁻¹⁰⁰) | holds; not needed on CUDA, which flushes nothing | holds | measured |
+| 4 | r² = 0 rule, adversarial + random | 209,303 + 216,000 pairs; 30,403 + 3,526 coincident; rule holds in all five formulations; ŷ, d ≠ host: 0; smallest nonzero \|d\| 2⁻⁵³, r² 2⁻¹⁰⁶; largest r² 72.65 | 439,192 + 216,000; 484 + 3,526 coincident; holds in all five; 0 differ; 2⁻⁵³, 2⁻¹⁰⁶, 72.65 | measured |
+| 5 | signed-off P2P (ŷ by fma, `inverse_sqrt`, no Newton, select), per term | φ 3.986, ∇φ 10.210 u_T | **φ 4.054, ∇φ 9.657 u_T** (contract 8 / 16) | measured, 10⁶ domain pairs |
+| 5 | its W1 sums [reference] | φ 1.23e-7 [1.28e-7], ∇φ 5.93e-7 [6.23e-7]: pass | φ 2.42e-16 [3.08e-16], ∇φ 1.89e-15 [1.75e-15]: pass | measured |
+| 5 | leaf operators against the host | harmonics within 35–306 u_T of the host at p = 8 and 20 (CPU-runtime values) | harmonics 40–214 u_T (p = 20: 2.4e-14 relative per degree, inside 1e-13) | measured |
+| 6 | ŷ, d (frames) bit for bit | 0 of 1,275,909 components differ | 0 of 1,965,576 differ | measured |
+| 6 | GEMM against the host `mul_add` loop | 41,472 of 41,472 | 41,472 of 41,472 | measured |
+| 6 | copies, scatters, zeroing, rotation replicas | in `nd-fmm-kernels`, bit for bit (F31) | same | measured in T2 |
+
+On question 1: every lone multiply–add is fused on every backend. CUDA fuses the
+multi-use ones too, so on CUDA **every** `contract` multiply–add can be fused. What CUDA
+does not do: fuse an explicit fma's addend product into a following add (fma-chain
+probe), or fuse a product that only feeds an fma's multiplicands.
+
+On question 6: the multi-use fusion breaks a host replica only where the replica rounds a
+product that has another use and also feeds an add or subtract. The rotation replica
+(`fma(C, u, −(S v))`) feeds S · v to an fma as its addend, which is not fused (measured:
+`a · a + (−a) · a`, and the fma-chain probe). The production P2P writes φ̂ =
+`fma(q, ρ, φ̂)` and ĝ = `fma(−w, d, ĝ)` (`fmm-kernels/src/p2p.rs`), so q · ρ meets no
+plain add. The spike's "as written" candidates do have one, `p += q · ρ` with q · ρ also
+in the gradient weight. There CUDA fuses where the CPU runtime does not: W1 φ sum 1.17e-7
+against 1.28e-7 in f32, 2.53e-16 against 2.86e-16 in f64. Every other measured value is
+equal:
+
+| | CPU runtime, Grace (control) | CUDA, LLVM NVPTX |
+| --- | --- | --- |
+| primitives, f32 and f64: max error and "≠ host" counts | as on the M3 Max | **equal to the control in every row** |
+| compiler probes | as on the M3 Max | equal, except `p = a·b (two uses); p + c`: as written / **fused** |
+| §3.13 check, all formulations and counts | as on the M3 Max | equal |
+| P2P pair terms, every candidate | as on the M3 Max | equal |
+| P2P W1 sums, "explicit fma" candidates | as on the M3 Max | equal |
+| P2P W1 φ sums, "as written" candidates | f32 1.28e-7, f64 2.86e-16 | f32 1.17e-7, f64 2.53e-16 |
+| harmonics and GEMM, bit-identical counts and errors | as on the M3 Max | equal |
+
+The control on Grace equals the M3 Max's CPU runtime in every value but one count: f64
+`inverse_sqrt` + Newton differs from the host in 3,427,247 of 10⁷ values on Grace and in
+3,427,150 on the M3 Max, at the same maximum error (1.248 u_T). LLVM's code generation
+for the two CPUs differs there (not pursued); CUDA gives Grace's count.
+
+The f64 `inverse_sqrt` + Newton edge case at a subnormal x differs from IEEE in its last
+digits on CUDA, as on the CPU runtime (the Newton step, not a flush).
+
+### NVRTC (`cuda-cpp`) for comparison
+
+The brief asks for this comparison when (b) or (c) arises, so the spike was built once
+with CubeCL's `cuda-cpp` (spike feature `cuda-cpp`) and run in full. NVRTC's options are
+the architecture, the include paths and `-lineinfo` (source read): fmad on, prec-div and
+prec-sqrt on, no ftz by NVRTC's defaults.
+
+| | LLVM NVPTX (default) | NVRTC |
+| --- | --- | --- |
+| `sqrt`, division, `recip` | correctly rounded (`sqrt.rn`, `div.rn`, `rcp.rn`) | the same instructions, correctly rounded |
+| `inverse_sqrt` f32 | fl(1/fl(√x)), 1.500 u_T | `rsqrt.approx.f32`: **2.092** u_T (exhaustive [1, 4)), 2.027 (2ᵏ m); 33% of values ≠ fl(1/fl(√x)) |
+| `inverse_sqrt` f64 | fl(1/fl(√x)), 1.497 u_T | `rsqrt.approx.f64` in the PTX: **1.009** u_T (10⁷ log-uniform), 1.000 (2ᵏ m) |
+| lone a · b ± c | fused | fused (cubecl-opt, before CSE on the C++ path) |
+| product with another use | **fused** (LLVM) | **as written**; PTX keeps `mul` + `add` without `.rn`, and ptxas did not contract it (measured) |
+| fma chain | as written | as written |
+| subnormals | kept | kept |
+| §3.13 rule | holds | holds (all formulations; ŷ, d = host) |
+| P2P, signed-off formulation, per term | f32 3.986 / 10.210, f64 4.054 / 9.657 u_T | f32 4.312 / 9.714, f64 3.982 / 8.780 u_T |
+| its W1 sums | pass | pass |
+| harmonics, GEMM | as the CPU runtime | as the LLVM path (equal counts and errors) |
+| quick P2P rate, signed-off formulation, φ, n_t = 128 | f32 477, f64 299 Gpairs/s | f32 712, f64 443 Gpairs/s |
+| the same with ∇φ | f32 415, f64 264 | f32 602, f64 396 |
+
+- **Would NVRTC avoid the problem?** Yes for the multi-use fusion. It changes no result
+  that a test pins, and the C++ path's own pass order (InstCombine before CSE, as on
+  Metal) fuses duplicated lone products anyway. NVRTC still contracts every lone
+  multiply–add, and its `inverse_sqrt` is the approximate `rsqrt` decision 4 expected.
+  Both stay within §3.13 as written.
+- **The rate difference is `inverse_sqrt`** (SASS from `ptxas -O3` of the dumped PTX,
+  for the primitive kernel):
+  - on the LLVM path it is two correctly rounded IEEE sequences, `sqrt.rn` and `rcp.rn`.
+    In f64 that is 30 DFMA, 10 DMUL and three `MUFU.RCP64H`/two `MUFU.RSQ64H` seeds, plus
+    two slow-path subroutine calls; in f32, 14 FFMA, 5 FMUL, 5 FADD, `MUFU.RSQ`/`MUFU.RCP`
+    and two calls;
+  - NVRTC's f32 `rsqrt.approx.f32` is one `MUFU.RSQ` with two FMUL for scaling. Its f64
+    `rsqrt.approx.f64` is `MUFU.RSQ64H` and a refinement of 6 DFMA and 6 DMUL, hence
+    1.01 u_T;
+  - `sqrt` + division runs at about the same rate on both paths (475 against 484 Gpairs/s
+    in f32).
+  - This matters for T7, not for correctness. It is listed under the sign-off questions.
+
+### Recommendation, for sign-off (decision 10)
+
+**Status: signed off on 2026-10-07**, every item as recommended (docs/phase4s/README.md,
+decision 10; the outcomes are under "Sign-off questions"). The §3.13 text, the
+`fmm-kernels/CLAUDE.md` edit, formulation rule 4 above and device-path.md §18.1 landed in
+a follow-up commit to the T3 PR.
+
+**(b) The rules hold on CUDA with one CUDA note.** Every rule of §3.13 "Device kernels"
+holds on CUDA as measured. The coincident-pair rule, the domain, the P2P contract and
+the bit-identity cases need no change. One assumption in the list is stated too
+narrowly for CUDA, and the table's CUDA column is still "from the code, not run". No
+formulation change (c) is needed, and no compiler option: none exists (F16, F17), and
+none is required. `CONVENTION_VERSION` stays 1.
+
+Drafted §3.13 text, landed after sign-off in a follow-up commit to this PR:
+
+1. The opening paragraph of "Device kernels", second sentence on: "Phase 4 T3 measured the
+   backends on the Apple M3 Max with CubeCL 0.11.0-pre.4: the CubeCL CPU runtime (LLVM;
+   f32 and f64) and Metal through wgpu-msl (f32). Phase 4S T3 measured CUDA on the H100
+   of an NVIDIA GH200 (LLVM NVPTX, CubeCL's default; f32 and f64)
+   (spikes/device-arith/REPORT.md)."
+2. The third item of "Arithmetic a device kernel may assume" becomes:
+   > - Any a · b ± c whose product has no other use may be fused into an fma.
+   >   cubecl-opt's `InstCombinePass` does this on every backend, with no switch. On
+   >   CUDA a product with other uses may be fused as well: LLVM's NVPTX back end fuses
+   >   each multiply–add it is given and keeps the rounded product for the other uses.
+   >   A result must not depend on whether such an expression is fused. A product that
+   >   only feeds an explicit `fma` was not fused on any backend.
+3. The table's last column, headed "CUDA, LLVM NVPTX (f32, f64)":
+
+   | | CUDA, LLVM NVPTX (f32, f64) |
+   | --- | --- |
+   | `sqrt`, division, `recip` | correctly rounded (`sqrt.rn`, `div.rn`, `rcp.rn`) |
+   | `inverse_sqrt` | fl(1 / fl(√x)), ≤ 1.5 u_T (a polyfill) |
+   | contraction | `InstCombinePass`, and LLVM fuses every remaining multiply–add, products with other uses included |
+   | subnormals | kept |
+   | simplification | cubecl-opt's folds |
+4. The paragraph after the rule, last sentence: "T3 checked the rule on Metal and the CPU
+   runtime in five formulations of ŷ and r²: 209,303 adversarial and 216,000 random pairs
+   in f32, and on the CPU runtime 439,192 and 216,000 in f64. Phase 4S T3 checked it on
+   CUDA with the same pairs in f32 and f64. Neither found an exception, and ŷ and d equal
+   the host's bit for bit in every case."
+
+Nothing else in §3.13 changes. CONVENTIONS §3.10 is unchanged.
+
+Follow-on edits (landed with the sign-off, in the follow-up commit):
+- **`fmm-kernels/CLAUDE.md`, "Arithmetic".** "any lone `a · b ± c` may be fused" becomes
+  "any `a · b ± c` may be fused (a lone one on every backend, any one on CUDA)". The rule
+  "write `fma` where the result must be pinned" already covers the consequence.
+- **This report's formulation rule 4** says that a product with another use stays
+  unfused. That holds only on the CPU runtime and Metal: on CUDA it is fused.
+- **device-path.md §18:** the CUDA arithmetic facts of this section, as T2's are recorded
+  in §18.1, and the CUDA column of §9.2's table.
+
+What CUDA does to the Phase 4 results:
+- **f64 on a GPU meets the f64 bounds (README requirement 5).** CUDA f64 equals the CPU
+  runtime's f64 in every operator measure here, and its P2P meets C3S.4. Nothing in the
+  arithmetic stands in the way of T4's f64 gates.
+- **CUDA results differ from the CPU runtime's** wherever a kernel leaves a multiply–add
+  with a multi-use product to the compiler. They agree within the tolerances that §3.13
+  rule 6 already prescribes. The kernels whose bits a test pins write `fma`, so the
+  difference does not reach them (F31).
+
+### Sign-off questions
+
+Decided on 2026-10-07, each as recommended: 1–3 accepted and landed in a follow-up commit
+to this PR; 4 and 5 left to T7's measurement of the production P2P (NVRTC stays off, no
+upstream request yet, and no request for a `contract` switch).
+
+1. **The CUDA note (b).** Accept the drafted §3.13 text: items 1–4 above, with
+   `CONVENTION_VERSION` at 1. Land it in T4, or in a follow-up commit to this PR?
+2. **The CUDA column is measured, not read.** Record that CUDA (LLVM NVPTX) is correctly
+   rounded in `sqrt`, division and `recip`, gives fl(1/fl(√x)) for `inverse_sqrt` and
+   keeps subnormals, in f32 and f64. Rule 1 ("the minimum over the backends") stays as
+   written, because Metal sets it.
+3. **The follow-on edits.** Accept the edits to `fmm-kernels/CLAUDE.md` and to rule 4 of
+   this report's Phase 4 recommendation, and record this section in device-path.md §18,
+   all after sign-off.
+4. **NVRTC stays off (decision 4).** NVRTC avoids the multi-use fusion, but nothing needs
+   it avoided. Its `inverse_sqrt` is about 1.5× faster in the quick ranking, in f32
+   (approximate, 2.09 u_T) and in f64 (1.01 u_T). Keep the LLVM path, and leave the P2P
+   rate to T7, which measures the production kernel? Or should T7 also measure NVRTC?
+5. **An upstream question, not a patch.** On NVPTX, CubeCL lowers `inverse_sqrt` to the
+   correctly rounded `sqrt.rn` + `rcp.rn` rather than `rsqrt.approx` with a refinement.
+   Should T7, after measuring the production P2P, raise this upstream (tracel-ai/cubecl)
+   as a request for an approximate-rsqrt lowering on NVPTX? A CubeCL switch for LLVM's
+   `contract` flag would be a second request. Nothing here needs one.
+
 ## Reproducing
 
 ```sh
@@ -506,9 +819,30 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 BLIS_NUM_THREADS=1 \
     cargo run --release -p nd-fmm-spike-device-arith --features cpu,metal -- \
     --backends metal,cpu > spikes/device-arith/results-m3max.md
 # One section, quick: --sections primitives,compiler,domain,p2p,cpu-p2p,leafops --quick
-# CUDA, type-check only
-cargo check -p nd-fmm-spike-device-arith --no-default-features --features cuda
 ```
+
+On locust (Phase 4S T3), after `tools/gh200/sync.sh`, each line through
+`tools/gh200/remote.sh` (or in a shell that sourced `tools/gh200/env.sh`), with every
+BLAS thread variable and `RAYON_NUM_THREADS` at 1. Check the load first (README.md of
+`tools/gh200/`, "GPU etiquette"):
+
+```sh
+cargo test -p nd-fmm-spike-device-arith --features cpu
+# CUDA through LLVM NVPTX (the default path); the PTX of each variant under <dir>/<label>/
+CUBECL_CUDA_DUMP_PTX=<dir> cargo run --release -p nd-fmm-spike-device-arith \
+    --no-default-features --features cuda -- --backends cuda > spikes/device-arith/results-gh200.md
+# The CPU runtime on Grace, the control
+cargo run --release -p nd-fmm-spike-device-arith --features cpu -- --backends cpu \
+    --sections primitives,compiler,domain,p2p,leafops > spikes/device-arith/results-gh200-cpu.md
+# CUDA through NVRTC, for comparison only
+cargo run --release -p nd-fmm-spike-device-arith --no-default-features --features cuda-cpp \
+    -- --backends cuda > spikes/device-arith/results-gh200-nvrtc.md
+# The LLVM IR before O3: CUBECL_DEBUG_LOG=<file>; SASS from a dumped PTX:
+ptxas -arch=sm_90a -O3 <file>.ptx -o k.cubin && cuobjdump -sass k.cubin
+```
+
+`tools/gh200/sync.sh` deletes files on locust that are not in the local tree: fetch the
+results before the next sync.
 
 The JIT dump needs a scratch crate outside the workspace with
 `cubecl = { version = "=0.11.0-pre.4", features = ["cpu", "pliron-dump"] }`, the kernel of
@@ -520,9 +854,12 @@ The JIT dump needs a scratch crate outside the workspace with
 - `src/compiler.rs`: compiler probes.
 - `src/geometry.rs`, `src/pairs.rs`: the §3.13 pairs.
 - `src/domain.rs`: the device check of the r² rule.
-- `src/p2p.rs`: P2P candidates (pair terms, sums, Metal rate).
+- `src/p2p.rs`: P2P candidates (pair terms, sums, GPU rate).
 - `src/cpu_p2p.rs`: the CPU-shaped kernel and the comparison with `nd-fmm-simd`.
 - `src/leafops.rs`: harmonics and GEMM.
 - `src/main.rs`: the report driver.
 - `src/lib.rs`: the smoke test.
-- `results-m3max.md`: the raw output of the full run.
+- `src/backend.rs`: the backends, their clients and the PTX filing for CUDA (`keep_ptx`).
+- `results-m3max.md`: the raw output of the full run on the M3 Max (Phase 4).
+- `results-gh200.md`, `results-gh200-cpu.md`, `results-gh200-nvrtc.md`: the raw outputs on
+  locust (Phase 4S): CUDA through LLVM NVPTX, the CPU runtime, CUDA through NVRTC.

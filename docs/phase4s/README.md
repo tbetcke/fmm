@@ -402,6 +402,11 @@ Each is recorded in the exit checklist when made:
    code.
 10. **T3's recommendation.** The §3.13 "Device kernels" rules for CUDA: confirmed as
     written, a CUDA note, or a formulation change. Signed off before T4's f64 gates.
+    **Decided on 2026-10-07: a CUDA note, as recommended** (spikes/device-arith/REPORT.md,
+    "CUDA on GH200 (Phase 4S)"; device-path.md §18.1, F33–F36). On CUDA a product with
+    other uses may be fused too; the CUDA column of §3.13 is measured; no formulation
+    change; `CONVENTION_VERSION` stays 1. NVRTC stays off, and T7 measures the production
+    P2P before any NVRTC or upstream question.
 
 ## Risks
 
@@ -437,7 +442,7 @@ Before T1 has merged, T1 itself uses `ssh locust` directly, outside the sandbox.
 - [ ] T5 merged: per-kind timings on the host, the CPU runtime and Metal, bit-identical, syncs as documented
 - [x] T2 merged: every kernel test on CUDA in f32 and f64; GEMM spike on CUDA; §18.1 facts
 - [ ] T3 merged: device arithmetic on CUDA measured; recommendation drafted
-- [ ] T3 recommendation signed off (decision 10)
+- [x] T3 recommendation signed off (decision 10): a CUDA note in §3.13 (decided 2026-10-07)
 - [ ] T4 merged: Phase 4 device gates on CUDA in f32 and f64; device timestamps on CUDA checked
 - [ ] T6 merged: `nd-fmm-bench` and `tools/bench/run.sh`; reports from the M3 Max and locust
 - [ ] Static M2L rule on CUDA signed off (decision 9)

@@ -144,9 +144,10 @@ of C4.8 (T11) in docs/phase4/.
     launch from the thread that owns the `Device`, so one stream runs them in order.
 - Arithmetic (signed off with T3, CONVENTIONS §3.13 "Device kernels";
   spikes/device-arith/REPORT.md, "Recommendation"):
-  - assume only what §3.13 lists: `+ − ×` correctly rounded; any lone `a · b ± c` may
-    be fused (cubecl-opt's `InstCombinePass`, every backend), so write `fma` where the
-    result must be pinned; `sqrt`, division, `inverse_sqrt` within 2.5 u_T on normal
+  - assume only what §3.13 lists: `+ − ×` correctly rounded; any `a · b ± c` may be
+    fused (a lone one by cubecl-opt's `InstCombinePass` on every backend, any one on
+    CUDA, where LLVM's NVPTX back end also fuses products with other uses; Phase 4S T3),
+    so write `fma` where the result must be pinned; `sqrt`, division, `inverse_sqrt` within 2.5 u_T on normal
     arguments; subnormals may flush (Metal does in arithmetic, not in copies);
   - no compensated summation, no `x − x` or `x + 0.0` tricks, nothing that depends on
     the sign of a zero;
