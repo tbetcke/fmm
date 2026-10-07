@@ -503,7 +503,7 @@ Before T1 has merged, T1 itself uses `ssh locust` directly, outside the sandbox.
 - [x] T8 merged: `fmm-bench/results/phase4s-gh200.md` published
 - [x] CUDA leaf-size default (decision 7): none (T8: the rule picks 64; decided 2026-10-07)
 - [x] Phase 5 hardware (decision 8): the M3 Max and locust (decided 2026-10-05)
-- [ ] Phase 5 briefs updated for decision 8 (T8; updated, review pending), reviewed
+- [x] Phase 5 briefs updated for decision 8 (T8; updated, review pending), reviewed
 - [x] Reusable outputs (decision 11): `Fmm::evaluate_into` (T9; decided 2026-10-07)
 - [x] Output pass on the device (decision 12): on by default on devices with f64 (T9; decided 2026-10-07)
 - [ ] T9 merged: the host part of an evaluation, bit for bit; before and after measured; device-path.md §18.4
