@@ -1,6 +1,12 @@
 name: 🧪 run-tests
 
+# Pull requests to main, and pushes to main so that main holds the caches every pull
+# request restores from its first run on (Phase 4S decision 13, T10): a cache saved by
+# a pull request is visible to that pull request only.
 on:
+  push:
+    branches:
+      - main
   pull_request:
     branches:
       - main
@@ -8,12 +14,24 @@ on:
 permissions:
   contents: read
 
+# Caches (actions/cache, first-party only; Phase 4S decision 13):
+# - cargo: keyed on the job, the rustc version (dtolnay/rust-toolchain's `cachekey`) and
+#   Cargo.lock; a changed Cargo.lock restores the newest cache of the same job and rustc
+#   (`restore-keys`). A hit on the exact key saves nothing.
+# - packages: the .deb files of the job's package list, keyed on the runner image and the
+#   list, exact keys only; .github/scripts/apt-install.sh installs them offline on a hit.
+# A failed or timed-out package install is a mirror problem; the next step says to re-run.
+
 jobs:
   run-tests-rust:
     name: run-tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      APT_PACKAGES: libclang-dev cmake libfftw3-dev libopenblas-dev openmpi-bin libopenmpi-dev
     steps:
       - name: Install Rust
+        id: toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -22,23 +40,35 @@ jobs:
         with:
           submodules: "true"
 
-      - name: Update package list
-        run: sudo apt-get update
+      - name: Cache the cargo registry and the target directory
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: run-tests-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: run-tests-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-
 
-      - name: Install libclang
-        run: sudo apt-get install -y libclang-dev
+      - name: Package cache key (runner image and package list)
+        id: apt-key
+        run: echo "key=apt-$ImageOS-$ImageVersion-${{ runner.arch }}-$(echo "$APT_PACKAGES" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
 
-      - name: Install CMake
-        run: sudo apt-get install -y cmake
+      - name: Cache the downloaded packages
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-archives
+          key: ${{ steps.apt-key.outputs.key }}
 
-      - name: Install FFTW
-        run: sudo apt-get install -y libfftw3-dev
+      - name: Install libclang, CMake, FFTW, BLAS and MPI
+        id: apt
+        timeout-minutes: 5
+        run: .github/scripts/apt-install.sh ~/apt-archives $APT_PACKAGES
 
-      - name: Install Blas
-        run: sudo apt-get install -y libopenblas-dev
-
-      - name: Install MPI
-        run: sudo apt-get install -y openmpi-bin libopenmpi-dev
+      - name: Explain a failed package install
+        if: failure() && steps.apt.outcome == 'failure'
+        run: echo "::error title=Package install failed::apt-get failed or timed out (5 minutes), most likely on a slow or failing Ubuntu mirror. Re-run the failed jobs."
 
       - name: Format
         run: cargo fmt -- --check
@@ -59,6 +89,7 @@ jobs:
   # --show-output puts that into the log. Correctness and accuracy only, never timings.
   run-tests-simd:
     name: run-tests-simd (${{ matrix.arch }})
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -93,15 +124,20 @@ jobs:
   # nd-fmm-kernels alone on the CubeCL CPU runtime (f32 and f64), without MPI (Phase 4
   # T4; README decision 7, kept at sign-off on 2026-10-03). Correctness on small shapes only,
   # never timings of kernels. The tests print the backends they ran; --show-output puts
-  # that into the log. The two measurement steps report, for the T4 sign-off, the
-  # tracel-llvm bundle download (the bundler's build-script run) and the kernel
-  # compilation inside the tests. Since Phase 4S T2 (decision 6) the job also type-checks
-  # CUDA (nd-fmm-kernels and nd-fmm-exec); CUDA never runs in CI.
+  # that into the log. The two measurement steps report the tracel-llvm bundle download
+  # (the bundler's build-script run) and, from CubeCL's profiling log of the test run
+  # (Phase 4S T10), the kernel compilation inside the tests. Since Phase 4S T2
+  # (decision 6) the job also type-checks CUDA (nd-fmm-kernels and nd-fmm-exec); CUDA
+  # never runs in CI.
   run-tests-kernels:
     name: run-tests-kernels (CPU runtime)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      APT_PACKAGES: libclang-dev openmpi-bin libopenmpi-dev
     steps:
       - name: Install Rust
+        id: toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -118,7 +154,8 @@ jobs:
             ~/.cache/tracel/
             ~/.local/share/tracel/
             target/
-          key: run-tests-kernels-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          key: run-tests-kernels-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: run-tests-kernels-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-
 
       - name: CPU and toolchain
         run: |
@@ -135,8 +172,24 @@ jobs:
         run: cargo check -p nd-fmm-kernels --features cuda
 
       # nd-fmm-exec depends on mpi (mpi-sys runs bindgen against an MPI installation).
+      - name: Package cache key (runner image and package list)
+        id: apt-key
+        run: echo "key=apt-$ImageOS-$ImageVersion-${{ runner.arch }}-$(echo "$APT_PACKAGES" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the downloaded packages
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-archives
+          key: ${{ steps.apt-key.outputs.key }}
+
       - name: Install MPI and libclang (for nd-fmm-exec)
-        run: sudo apt-get update && sudo apt-get install -y libclang-dev openmpi-bin libopenmpi-dev
+        id: apt
+        timeout-minutes: 5
+        run: .github/scripts/apt-install.sh ~/apt-archives $APT_PACKAGES
+
+      - name: Explain a failed package install
+        if: failure() && steps.apt.outcome == 'failure'
+        run: echo "::error title=Package install failed::apt-get failed or timed out (5 minutes), most likely on a slow or failing Ubuntu mirror. Re-run the failed jobs."
 
       - name: Type-check nd-fmm-exec with CUDA
         run: cargo check -p nd-fmm-exec --features cuda
@@ -158,10 +211,12 @@ jobs:
                   print(f"  {u['duration']:7.1f} s  {u['name']} {u['target'].strip()}")
           PY
 
+      # CubeCL writes its profiling log to the file; the test output is unchanged
+      # (Phase 4S T10).
       - name: Run tests
+        env:
+          CUBECL_DEBUG_LOG: ${{ runner.temp }}/cubecl.log
         run: cargo test -p nd-fmm-kernels --features cpu --release -- --show-output
 
-      - name: Kernel compilation measurement (CubeCL profiling log)
-        run: |
-          CUBECL_DEBUG_LOG="$RUNNER_TEMP/cubecl.log" cargo test -p nd-fmm-kernels --features cpu --release -q
-          awk -f fmm-kernels/tools/compile_times.awk "$RUNNER_TEMP/cubecl.log"
+      - name: Kernel compilation measurement (CubeCL profiling log of the test run)
+        run: awk -f fmm-kernels/tools/compile_times.awk "$RUNNER_TEMP/cubecl.log"
