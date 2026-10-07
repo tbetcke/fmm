@@ -26,7 +26,7 @@ has three goals:
      (P2P, M2L, …);
    - written as a Markdown table.
 
-The phase has four parts:
+The phase has six parts:
 1. **Environment** (T1). The spack environment, the Rust toolchain, the scripts that keep
    everything under `/data/ucahtbe`, the sync-and-run loop from the M3 Max, and the
    existing CPU-side checks run on Grace.
@@ -38,6 +38,12 @@ The phase has four parts:
    part 2.
 4. **Tuning and measurement** (T7, T8). CUDA layouts and tuner candidates, the static
    rules on CUDA, the GH200 benchmark report and the design-document update.
+5. **The host part of an evaluation** (T9, added on 2026-10-07 after T8's report). The
+   output pass, the charge load and the output buffers, which T8 found to dominate the
+   device at large N; bit for bit.
+6. **CI time** (T10, added on 2026-10-07). Package installs without the mirror, one
+   kernel test run instead of two, and caches warm for every pull request; every check
+   kept.
 
 Companion documents:
 - [docs/design/device-path.md](../design/device-path.md): all of it, especially §1.2
@@ -67,22 +73,27 @@ In scope:
 - `nd-fmm-kernels`:
   - a CUDA arm in the test harness and every kernel test on CUDA (T2);
   - fixes for defects that CUDA exposes (T2, T4);
-  - CUDA-specific layouts and limits, where measured better (T7).
+  - CUDA-specific layouts and limits, where measured better (T7);
+  - the caller-ordered output gather and scaling, on devices with f64 (T9).
 - `nd-fmm-exec`:
   - CUDA test executables and blocks beside the Metal ones (T4);
   - `FmmBuilder::kind_timings` and `StageTimings::kinds` (T5);
-  - CUDA tuner candidates and a backend-keyed static rule (T7).
+  - CUDA tuner candidates and a backend-keyed static rule (T7);
+  - the parallel output pass and charge load, `Fmm::evaluate_into`, the output pass on
+    the device (T9; decisions 11 and 12).
 - `nd-fmm-validate`:
   - the machine lines on Linux aarch64 (T4);
   - per-device peaks in the kernel examples (T7).
-- `nd-fmm-bench` (new crate, `fmm-bench/`): the benchmark binary and its library (T6).
+- `nd-fmm-bench` (new crate, `fmm-bench/`): the benchmark binary and its library (T6);
+  the `load` and `output` columns and `--reuse-output` (T9).
 - `spikes/device-arith`, `spikes/cubecl-gemm`: their CUDA runs and reports (T2, T3).
 - CONVENTIONS §3.13, "Device kernels": a CUDA note, only if T3 shows one is needed and
   the sign-off accepts it.
 - Root CLAUDE.md: Phase 4S as the current phase, locust's build environment and checks
   (T1, T2, T4); `nd-fmm-bench` (T6).
 - `.github/workflows/run-tests.yml`: a `--features cuda` type-check step in
-  `run-tests-kernels` (decision 6, T2).
+  `run-tests-kernels` (decision 6, T2); cached package installs, one kernel test run,
+  warm caches, every check kept (T10; decision 13).
 
 Out of scope:
 - Multi-GPU, multi-node and multi-rank device runs (Phase 5 and later). locust has one
@@ -110,7 +121,7 @@ Out of scope:
 
 ## Requirements
 
-T1–T8 are accepted against these. A task may propose changing one, with reasons, for
+T1–T10 are accepted against these. A task may propose changing one, with reasons, for
 sign-off.
 
 1. **Reproducible environment.** locust's environment is built by one script from files
@@ -120,7 +131,8 @@ sign-off.
    nothing went into the home directory.
 2. **One device path, one more backend.** CUDA runs through the existing `Backend`/
    `BackendKind` values and the existing kernels. There is no CUDA-only kernel, no
-   `R: Runtime` parameter, and no change to `Fmm`'s API beyond T5's opt-in setting.
+   `R: Runtime` parameter, and no change to `Fmm`'s API beyond T5's opt-in setting (and
+   T9's `evaluate_into` and output-pass control, decisions 11 and 12).
    Per-backend choices are layouts, limits and rules looked up from `DeviceInfo`, as in
    Phase 4.
 3. **Metal and the CPU runtime unchanged.** Every Phase 4 test still passes. With the
@@ -271,6 +283,13 @@ These hold for every task, so that no task decides them on its own:
     justified it;
   - the static M2L rule on CUDA signed off (decision 9);
   - the Metal and CPU-runtime outputs unchanged bit for bit.
+- C4S.8 (T9): the output pass and the charge load in parallel, the outputs without a
+  zero fill, `evaluate_into` (decision 11) and the device output pass (decision 12), each
+  bit for bit the code before it on the host, the CPU runtime, Metal and CUDA; the
+  host part of an evaluation measured before and after on locust and the M3 Max.
+- C4S.9 (T10): CI with every check of before, the package installs cached, one kernel
+  test run with the compile-time table, and caches restored on a pull request's first
+  run; the job and step times before and after, cold and warm.
 - The T8 report, `fmm-bench/results/phase4s-gh200.md`, gives on the GH200:
   - the device FMM in f32 and f64 against Grace at 1 and 72 threads, per kind;
   - kernel efficiency against the datasheet peaks;
@@ -294,6 +313,12 @@ One pull request each.
 - **T7** needs T4, T5 and T6. It changes the static rule only after decision 9 is signed
   off.
 - **T8** needs T7.
+- **T9** needs T8 (its numbers are T9's "before"). It changes `nd-fmm-exec`,
+  `nd-fmm-kernels` and `nd-fmm-bench`; decisions 11 and 12 are signed off before their
+  parts are built.
+- **T10** needs nothing and can run at any time; decision 13 is signed off before the
+  trigger changes. It changes only `.github/workflows/` and the documents. Phase 5 T3
+  also changes `.github/workflows/` (a multi-rank job): merge one, then rebase the other.
 - **Overlaps.** T4, T5 and T7 all change `nd-fmm-exec`: merge one, then rebase the next.
   T2 and T7 both change `nd-fmm-kernels`. T2 changes `.github/workflows/run-tests.yml`.
   T1 and T6 change the root CLAUDE.md and `.gitignore`. T6 changes the root `Cargo.toml` and `Cargo.lock` (a new member);
@@ -309,6 +334,8 @@ One pull request each.
 | T6 | [T6-bench-crate.md](T6-bench-crate.md) | `nd-fmm-bench` crate and `tools/bench/run.sh`: N points in the unit cube, f32/f64, degree, backend; min/max/mean and per-kind tables in Markdown | C4S.6 | T5 (T1, T4 for the locust rows) |
 | T7 | [T7-hopper-tuning.md](T7-hopper-tuning.md) | CUDA layouts, limits and tuner candidates by measurement; H100 peaks and P2P model; the static M2L rule on CUDA; device-path.md §18.2 | C4S.7 | T4, T5, T6 |
 | T8 | [T8-benchmarks.md](T8-benchmarks.md) | `fmm-bench/results/phase4s-gh200.md`: the GH200 report, the Phase 4 "CUDA run", the CUDA leaf-size study; design-document update | gate: benchmarks published | T7 |
+| T9 | [T9-output-pass.md](T9-output-pass.md) | the host part of an evaluation: `load` and `output` timed, the output pass and the charge load in parallel, no zero fill, `Fmm::evaluate_into`, the output pass on devices with f64; bit for bit; before and after on locust and the M3 Max; device-path.md §18.4 | C4S.8 | T8 |
+| T10 | [T10-ci-time.md](T10-ci-time.md) | CI time: the package installs cached (first-party `actions/cache`), the kernel job's second test run folded into its first, warm caches from runs on `main`, a cargo cache for the root job, timeouts; every check kept; times before and after | C4S.9 | none |
 
 Review T1's environment and T3's recommendation yourself before the tasks that build on
 them. T4's f64 gates and T7's rules rest on T3.
@@ -417,6 +444,22 @@ Each is recorded in the exit checklist when made:
     other uses may be fused too; the CUDA column of §3.13 is measured; no formulation
     change; `CONVENTION_VERSION` stays 1. NVRTC stays off, and T7 measures the production
     P2P before any NVRTC or upstream question.
+11. **Reusable outputs** (T9). `Fmm::evaluate_into(&mut self, charges, &mut Output<T>)`,
+    an addition to `Fmm`'s API (requirement 2): the caller's buffers reused across
+    evaluations, `evaluate` unchanged as a wrapper, every output bit the same. T9 proposes
+    the exact signature and its behaviour on a wrongly sized `Output`. **Decided on
+    2026-10-07: add it**, as recommended.
+12. **The output pass on the device** (T9). On devices with f64 arithmetic (CUDA, the CPU
+    runtime; not Metal), a kernel makes the caller-ordered, scaled φ and ∇φ on the device,
+    in f64 arithmetic rounded once to T, so that the output stays bit for bit; still one
+    download and one sync. T9 proposes the control that lets tests choose the host pass
+    on the same build, and any change to the transfer formula (device-path.md §4.1).
+    **Decided on 2026-10-07: on by default where the device has f64**, as recommended.
+13. **CI triggers and actions** (T10). Run the workflow on pushes to `main` as well as on
+    pull requests, so that `main` holds caches every pull request restores (one more CI
+    run per merge); and whether any third-party action is used (for example to cache
+    apt packages), or only first-party `actions/cache`. **Decided on 2026-10-07: run on
+    pushes to `main`; first-party actions only**, as recommended.
 
 ## Risks
 
@@ -457,8 +500,13 @@ Before T1 has merged, T1 itself uses `ssh locust` directly, outside the sandbox.
 - [x] T6 merged: `nd-fmm-bench` and `tools/bench/run.sh`; reports from the M3 Max and locust
 - [x] Static M2L rule on CUDA signed off (decision 9): `Dense` at every p, f32 and f64 (decided 2026-10-07)
 - [x] T7 merged: CUDA layouts and candidates by measurement; H100 peaks; Metal and CPU runtime unchanged bit for bit
-- [ ] T8 merged: `fmm-bench/results/phase4s-gh200.md` published
+- [x] T8 merged: `fmm-bench/results/phase4s-gh200.md` published
 - [x] CUDA leaf-size default (decision 7): none (T8: the rule picks 64; decided 2026-10-07)
 - [x] Phase 5 hardware (decision 8): the M3 Max and locust (decided 2026-10-05)
 - [ ] Phase 5 briefs updated for decision 8 (T8; updated, review pending), reviewed
+- [x] Reusable outputs (decision 11): `Fmm::evaluate_into` (T9; decided 2026-10-07)
+- [x] Output pass on the device (decision 12): on by default on devices with f64 (T9; decided 2026-10-07)
+- [ ] T9 merged: the host part of an evaluation, bit for bit; before and after measured; device-path.md §18.4
+- [x] CI triggers and actions (decision 13): pushes to `main`; first-party actions only (T10; decided 2026-10-07)
+- [ ] T10 merged: CI with every check, cached installs, one kernel test run, warm caches; times before and after
 - [x] Design documents updated: laplace-fmm-plan §6.1, §6.2, §7 (Phase 4S), §8.3, §9.1, §9.2; device-path.md §17 note and §18 (§18.3 added); workspace-structure §2, §3, §3.1, §6 (T8)
