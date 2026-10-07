@@ -4,15 +4,20 @@
 //! device against the host rotation at 1 and 12 threads. Prints Markdown on stdout and
 //! progress on stderr. Feature `gpu` (with a backend).
 //!
-//! The problem is the C3.2 cube (N = 10⁵, a uniform level-4 tree, 4,096 leaves), in f32.
-//! The host `Fmm` is built once, for its plan (the V views do not depend on p); the
-//! multipoles are seeded random coefficients (the timing does not depend on the values).
-//! For each p ∈ {2, 4, 6, 8, 12, 16} (`--degrees` to change), per level with a V pair:
+//! The problem is the C3.2 cube (N = 10⁵, a uniform level-4 tree, 4,096 leaves), in f32 by
+//! default. With `--n N` other than 10⁵ it is N points uniform in a cube with the adaptive
+//! tree of the benchmark and C3.3 (`max_level` 16, 64 points per leaf as the refinement
+//! target): at N = 10⁶ a tree like `nd-fmm-bench`'s default problem (Phase 4S T7, decision
+//! 9). `--precision f64` runs every table in f64 (on a device with f64: the CPU runtime,
+//! CUDA). The host `Fmm` is built once, for its plan (the V views do not depend on p or the
+//! precision); the multipoles are seeded random coefficients (the timing does not depend
+//! on the values). For each p (`--degrees` to change; by default {2, 4, 6, 8, 12, 16} in
+//! f32 and {4, 6, 8, 10, 11, 12, 14, 16, 18, 20} in f64), per level with a V pair:
 //!
 //! - **rotation**: the level call as the device operator runs it under `Rotation`
 //!   (`nd_fmm_kernels::rotation::m2l` with the M2L family of `RotationTables`, the
-//!   backend's default layout: on Metal a cube of (p + 1)² units rounded up to the plane
-//!   size); one launch;
+//!   backend's default layout: on Metal and CUDA a cube of (p + 1)² units rounded up to the
+//!   plane size); one launch;
 //! - **dense**: the T9 level call as the device operator runs it under `Dense` with the
 //!   default `DeviceGemm::Auto` (`translate::grouped` with the 316 tables of `M2lTables` and
 //!   the hand-written GEMM in the backend's default layout; three launches per chunk), and
@@ -26,23 +31,30 @@
 //! against rotation M2L in f64"): (20/3)(p + 1)³ for rotation (2 per multiply–add of
 //! (10/3)(p + 1)³; a model: the four offsets on the z axis need less, and the exact count
 //! of `ShiftTables::apply` is (p + 1)(10p² + 32p + 9)/3 multiply–adds), 2 (p + 1)⁴ for
-//! dense. % of peak against 14.3 TFLOP/s (the M3 Max GPU in f32, derived in the spike
-//! report, not measured). The rotation efficiency is compared with the spike's
+//! dense. % of peak against the device's peak in the run's precision
+//! (`nd_fmm_validate::peaks`: 14.3 TFLOP/s f32 on the M3 Max, derived in the spike report,
+//! not measured; 67 and 34 TFLOP/s f32 and f64 on the GH200's H100, datasheet); "–" for a
+//! device the table does not name. The rotation efficiency is compared with the spike's
 //! break-even efficiencies: the measured f32 case on the M3 Max (13.9%, 9.8%, 7.1% and
 //! 4.8% at p = 4, 8, 12 and 16: rotation would match the spike's best dense GEMM at
-//! B = 10⁵ there), and the f64 model for data-centre cards (A100 and H100: 13.2%, 5.4% and
-//! 3.8% at p = 8, 12 and 16, central). The f64 comparison is a model statement: no f64 GPU
-//! run is possible here (Metal has no f64; CUDA is type-checked only).
+//! B = 10⁵ there; shown on the M3 Max only), and the f64 model for data-centre cards (A100
+//! and H100: 13.2%, 5.4% and 3.8% at p = 8, 12 and 16, central). The summary across p
+//! totals both over every V level, and names the smallest p from which rotation is faster
+//! at every larger measured p (the crossover of the static M2L rule, Phase 4S decision 9).
 //!
-//! **The M2L stage at p = 8** (every V level, f32): the device rotation against the host
-//! rotation (`LaplaceOperator::m2l_pair` with the f32 rotation tables, the body of its level
-//! call) on one thread and on `--threads` scoped threads (default 12, the performance
-//! cores), each a contiguous share of the level's boxes, with every BLAS thread variable
-//! set to 1 by the launcher; the device result is checked against the host's (relative L2).
+//! **The M2L stage at p = 8** (every V level, in the run's precision): the device rotation
+//! against the host rotation (`LaplaceOperator::m2l_pair` with the rotation tables of that
+//! precision, the body of its level call) on one thread and on `--threads` scoped threads
+//! (default 12, the performance cores), each a contiguous share of the level's boxes, with
+//! every BLAS thread variable set to 1 by the launcher; the device result is checked
+//! against the host's (relative L2).
 //!
-//! **Layouts at p = 8** (the deepest V level): the rotation cube with 96 (the default),
-//! 128 and 192 units, and a cube of 32 units (three slots per unit). The CPU layout, one
-//! cube of at most 16 units on a GPU, is left out: one call took 9.5 s on Metal.
+//! **Layouts** (the deepest V level), at p = 8, and in f64 also at p = 12 and 16: on Metal
+//! the rotation cube with 96 (the default at p = 8), 128 and 192 units, and a cube of 32
+//! units (three slots per unit); on CUDA the default ((p + 1)² units rounded up to the
+//! plane), twice and four times as many (at most 1,024), and cubes of 32 and 64 units.
+//! Each is marked bit for bit against the default or not. The CPU layout, one cube of at
+//! most 16 units on a GPU, is left out: one call took 9.5 s on Metal.
 //!
 //! Timing: before each table the device runs half a second of other work (its clocks ramp
 //! down while the host builds); launches are queued between syncs, after a warm-up launch
@@ -56,40 +68,53 @@
 //!     --device metal [--table-cache DIR]
 //! ```
 //!
-//! `--device cpu` runs the same on the CubeCL CPU runtime (correctness backend; its
-//! timings are not a Phase 4 target; use `--quick` there). `--quick` runs p = 4 only and
-//! skips the stage and the layouts. `--table-cache DIR` loads and stores the tables there
-//! (`nd_fmm_tables::TableCache`). Metal needs a process with GPU access (outside the macOS
-//! sandbox). It initialises MPI and runs on one rank.
+//! CUDA (Phase 4S, by hand on locust's H100 through `tools/gh200/remote.sh`, feature
+//! `cuda`): f32 and f64, for example `--device cuda --precision f64 --n 1000000
+//! --table-cache DIR`. Building the dense tables takes long at high p in f64 (p = 18 and
+//! 20): pass `--table-cache DIR` so that they are built once.
+//!
+//! Options: `--device cpu|metal|cuda` (required), `--precision f32|f64` (default f32; f64
+//! refused on a device without f64), `--n N` (default 10⁵; `1e6` is accepted),
+//! `--degrees p,p,…`, `--threads n`, `--table-cache DIR` (`nd_fmm_tables::TableCache`:
+//! the tables are loaded from it, or built and stored), `--quick`. `--device cpu` runs
+//! the same on the CubeCL CPU runtime (correctness backend; its timings are not a Phase 4
+//! target; use `--quick` there). `--quick` runs p = 4 only and skips the stage and the
+//! layouts. Metal needs a process with GPU access (outside the macOS sandbox). It
+//! initialises MPI and runs on one rank.
 
 use std::time::Instant;
 
 use mpi::Threading;
-use nd_fmm_exec::device::RotationHostArrays;
+use nd_fmm_exec::device::{DeviceScalar, RotationHostArrays};
 use nd_fmm_exec::fmm::FmmBuilder;
 use nd_fmm_exec::operator::LaplaceOperator;
 use nd_fmm_exec::tables::{M2lStrategy, Tables as HostTables};
 use nd_fmm_kernels::rotation::{RotationLayout, RotationPlan, RotationTables, m2l};
 use nd_fmm_kernels::translate::{
-    Accumulate, DEFAULT_SCRATCH_BYTES, Gemm, GemmLayout, GemmPolicy, GroupedPlan, Operands,
-    Orientation, PlanSettings, Stage, Tables, TranslationScratch, grouped, grouped_stage,
+    Accumulate, Gemm, GemmLayout, GemmPolicy, GroupedPlan, Operands, Orientation, PlanSettings,
+    Stage, Tables, TranslationScratch, default_scratch_bytes, grouped, grouped_stage,
 };
 use nd_fmm_kernels::view::{GroupedArrays, GroupedView};
 use nd_fmm_kernels::{BackendKind, Device, DeviceBuffer, Precision};
+use nd_fmm_math::RealScalar;
 use nd_fmm_tables::rotation::Operator;
 use nd_fmm_tables::{M2lTables, TableCache};
 use nd_fmm_validate::SplitMix64;
 use nd_fmm_validate::bench::{cores, cpu_model, median_time_per_call, target, toolchain};
-use nd_fmm_validate::fmm_accuracy::{Config, Problem};
-
-/// The f32 peak of the M3 Max GPU (spikes/cubecl-gemm/SPIKE_REPORT.md, derived).
-const PEAK_GFLOPS: f64 = 14_300.0;
+use nd_fmm_validate::fmm_accuracy::{Config, Distribution, Problem};
+use nd_fmm_validate::peaks::{self, Peaks};
 
 /// The spike's break-even rotation efficiencies (fraction of peak): the measured f32 case
 /// on the M3 Max (best dense GEMM, B = 10⁵), and the f64 model for the A100 and H100
 /// (central; the H100's within 0.1 point of the A100's), per p.
 const BREAK_EVEN_F32_M3: [(usize, f64); 4] = [(4, 0.139), (8, 0.098), (12, 0.071), (16, 0.048)];
 const BREAK_EVEN_F64_MODEL: [(usize, f64); 3] = [(8, 0.132), (12, 0.054), (16, 0.038)];
+
+/// The device whose measured f32 break-even values `BREAK_EVEN_F32_M3` holds.
+const M3_MAX: &str = "Apple M3 Max";
+
+/// The points of the C3.2 cube, the default problem.
+const C32_POINTS: usize = 100_000;
 
 /// The command line.
 struct Arguments {
@@ -98,14 +123,16 @@ struct Arguments {
     quick: bool,
     degrees: Vec<usize>,
     table_cache: Option<String>,
+    precision: Precision,
+    n: usize,
 }
 
 fn arguments() -> Arguments {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let usage = || -> ! {
         eprintln!(
-            "usage: rotation_kernels --device cpu|metal|cuda [--threads n] [--quick] \
-             [--degrees p,p,...] [--table-cache DIR]; got {args:?}"
+            "usage: rotation_kernels --device cpu|metal|cuda [--precision f32|f64] [--n N] \
+             [--threads n] [--quick] [--degrees p,p,...] [--table-cache DIR]; got {args:?}"
         );
         std::process::exit(2);
     };
@@ -113,9 +140,12 @@ fn arguments() -> Arguments {
         device: String::new(),
         threads: 12,
         quick: false,
-        degrees: vec![2, 4, 6, 8, 12, 16],
+        degrees: Vec::new(),
         table_cache: None,
+        precision: Precision::F32,
+        n: C32_POINTS,
     };
+    let mut degrees = None;
     let mut rest = args.as_slice();
     while let [flag, tail @ ..] = rest {
         rest = match (flag.as_str(), tail) {
@@ -128,10 +158,29 @@ fn arguments() -> Arguments {
                 tail
             }
             ("--degrees", [value, tail @ ..]) => {
-                parsed.degrees = value
-                    .split(',')
-                    .map(|p| p.parse().unwrap_or_else(|_| usage()))
-                    .collect();
+                degrees = Some(
+                    value
+                        .split(',')
+                        .map(|p| p.parse().unwrap_or_else(|_| usage()))
+                        .collect(),
+                );
+                tail
+            }
+            ("--precision", [value, tail @ ..]) => {
+                parsed.precision = match value.as_str() {
+                    "f32" => Precision::F32,
+                    "f64" => Precision::F64,
+                    _ => usage(),
+                };
+                tail
+            }
+            ("--n", [value, tail @ ..]) => {
+                // An integer, or a number such as 1e6 with an integral value.
+                let n: f64 = value.parse().unwrap_or_else(|_| usage());
+                if !(n >= 1.0 && n.fract() == 0.0 && n <= usize::MAX as f64) {
+                    usage();
+                }
+                parsed.n = n as usize;
                 tail
             }
             ("--table-cache", [value, tail @ ..]) => {
@@ -145,6 +194,10 @@ fn arguments() -> Arguments {
             _ => usage(),
         };
     }
+    parsed.degrees = degrees.unwrap_or_else(|| match parsed.precision {
+        Precision::F32 => vec![2, 4, 6, 8, 12, 16],
+        Precision::F64 => vec![4, 6, 8, 10, 11, 12, 14, 16, 18, 20],
+    });
     if parsed.device.is_empty() || parsed.threads == 0 || parsed.degrees.is_empty() {
         usage();
     }
@@ -152,6 +205,40 @@ fn arguments() -> Arguments {
         parsed.degrees = vec![4];
     }
     parsed
+}
+
+/// The name of a precision.
+fn precision_name(precision: Precision) -> &'static str {
+    match precision {
+        Precision::F32 => "f32",
+        Precision::F64 => "f64",
+    }
+}
+
+/// What the reports print about the device's peak in the run's precision.
+struct Peak {
+    /// The peak, GFLOP/s, if the device's is known.
+    gflops: Option<f64>,
+    /// Its source, as `nd_fmm_validate::peaks` words it.
+    source: &'static str,
+    /// Whether the device is the M3 Max and the run f32: its measured f32 break-even values
+    /// apply.
+    m3: bool,
+}
+
+impl Peak {
+    fn of(device: &Device, precision: Precision) -> Self {
+        let precision = match precision {
+            Precision::F32 => peaks::Precision::F32,
+            Precision::F64 => peaks::Precision::F64,
+        };
+        let peaks = Peaks::of_info(device.info());
+        Self {
+            gflops: peaks.and_then(|p| p.gflops(precision)),
+            source: peaks.map_or("", |p| p.source(precision)),
+            m3: device.info().name == M3_MAX && precision == peaks::Precision::F32,
+        }
+    }
 }
 
 /// The V view of one level of the plan, copied, with the box keys of the level.
@@ -211,18 +298,18 @@ fn levels(fmm: &nd_fmm_exec::fmm::Fmm<'_, f32>) -> Vec<Level> {
     out
 }
 
-/// The tables of one degree in f32: the M2L family of the rotation tables and the 316 dense
+/// The tables of one degree in T: the M2L family of the rotation tables and the 316 dense
 /// M2L matrices (with a cache, both load).
-struct DegreeTables {
+struct DegreeTables<T: DeviceScalar> {
     p: usize,
-    rotation: nd_fmm_tables::RotationTables<f32>,
-    dense: Vec<f32>,
+    rotation: nd_fmm_tables::RotationTables<T>,
+    dense: Vec<T>,
 }
 
-impl DegreeTables {
+impl<T: DeviceScalar> DegreeTables<T> {
     fn new(p: usize, cache: Option<&TableCache>) -> Self {
         eprintln!("p = {p}: building the tables");
-        let (rotation, dense): (nd_fmm_tables::RotationTables<f32>, M2lTables<f32>) = match cache {
+        let (rotation, dense): (nd_fmm_tables::RotationTables<T>, M2lTables<T>) = match cache {
             Some(cache) => (cache.load_or_build(p).0, cache.load_or_build(p).0),
             None => (nd_fmm_tables::RotationTables::build(p), M2lTables::build(p)),
         };
@@ -266,11 +353,11 @@ fn warm_up(device: &mut Device) {
 }
 
 /// The relative L2 difference of `a` from `b`.
-fn relative_l2(a: &[f32], b: &[f32]) -> f64 {
+fn relative_l2<T: DeviceScalar>(a: &[T], b: &[T]) -> f64 {
     let (mut d, mut r) = (0.0f64, 0.0f64);
     for (&x, &y) in a.iter().zip(b) {
-        d += (f64::from(x) - f64::from(y)).powi(2);
-        r += f64::from(y).powi(2);
+        d += (RealScalar::to_f64(x) - RealScalar::to_f64(y)).powi(2);
+        r += RealScalar::to_f64(y).powi(2);
     }
     if r > 0.0 { (d / r).sqrt() } else { d.sqrt() }
 }
@@ -287,26 +374,26 @@ fn dense_flops(p: usize) -> f64 {
 
 /// The data of one level on the device: the view, the rotation plan, the multipoles and
 /// the locals.
-struct DeviceLevel {
+struct DeviceLevel<T: DeviceScalar> {
     view: GroupedView,
     plan: RotationPlan,
-    multipoles: DeviceBuffer<f32>,
-    multipoles_host: Vec<f32>,
-    locals: DeviceBuffer<f32>,
+    multipoles: DeviceBuffer<T>,
+    multipoles_host: Vec<T>,
+    locals: DeviceBuffer<T>,
 }
 
-impl DeviceLevel {
+impl<T: DeviceScalar> DeviceLevel<T> {
     fn new(device: &mut Device, level: &Level, n: usize, rng: &mut SplitMix64) -> Self {
         let boxes = level.boxes();
-        let multipoles_host: Vec<f32> = (0..boxes * n)
-            .map(|i| rng.range(-1.0, 1.0) as f32 / (1.0 + (i % n) as f32))
+        let multipoles_host: Vec<T> = (0..boxes * n)
+            .map(|i| T::from_f64(rng.range(-1.0, 1.0)) / T::from_f64(1.0 + (i % n) as f64))
             .collect();
         Self {
             view: GroupedView::upload(device, &level.arrays(), boxes).unwrap(),
             plan: RotationPlan::new(device, &level.arrays(), boxes).unwrap(),
             multipoles: device.upload(&multipoles_host).unwrap(),
             multipoles_host,
-            locals: device.alloc::<f32>(boxes * n).unwrap(),
+            locals: device.alloc::<T>(boxes * n).unwrap(),
         }
     }
 
@@ -315,7 +402,7 @@ impl DeviceLevel {
         &mut self,
         device: &mut Device,
         layout: RotationLayout,
-        tables: &RotationTables<f32>,
+        tables: &RotationTables<T>,
     ) {
         m2l(
             device,
@@ -334,8 +421,8 @@ impl DeviceLevel {
         &mut self,
         device: &mut Device,
         run: impl FnOnce(&mut Device, &mut Self),
-    ) -> Vec<f32> {
-        let zeros = vec![0.0f32; self.locals.len()];
+    ) -> Vec<T> {
+        let zeros = vec![T::from_f64(0.0); self.locals.len()];
         device.write(self.locals.as_slice_mut(), &zeros).unwrap();
         run(device, self);
         let mut out = zeros;
@@ -357,8 +444,19 @@ struct Row {
     difference: f64,
 }
 
+impl Row {
+    /// The faster dense level call: the hand-written kernel or the library.
+    fn best(&self) -> f64 {
+        self.library.map_or(self.dense, |l| l.min(self.dense))
+    }
+}
+
 /// Times every V level at the degree of `tables`.
-fn measure(device: &mut Device, views: &[Level], tables: &DegreeTables) -> Vec<Row> {
+fn measure<T: DeviceScalar>(
+    device: &mut Device,
+    views: &[Level],
+    tables: &DegreeTables<T>,
+) -> Vec<Row> {
     let (p, n) = (tables.p, tables.n());
     let host_arrays = RotationHostArrays::new(tables.rotation.tables(Operator::M2l));
     let rotation_tables = RotationTables::upload(device, &host_arrays.arrays()).unwrap();
@@ -367,24 +465,24 @@ fn measure(device: &mut Device, views: &[Level], tables: &DegreeTables) -> Vec<R
         n,
         layout: GemmLayout::default_for(device.info(), n),
         policy: GemmPolicy::HandWritten,
-        budget: DEFAULT_SCRATCH_BYTES,
+        budget: default_scratch_bytes(device.info()),
         orientation: Orientation::BoxMajor,
     };
     let library_settings = PlanSettings {
         policy: GemmPolicy::Auto,
         ..hand_settings
     };
-    let library_copy = library_settings.library_candidate(device.backend(), Precision::F32);
+    let library_copy = library_settings.library_candidate(device.backend(), T::FLOAT);
     let dense_tables = Tables::upload(device, &tables.dense, n, library_copy).unwrap();
     let mut rng = SplitMix64::new(0x7e_a001 + p as u64);
     warm_up(device);
     let mut rows = Vec::new();
     for level in views {
         eprintln!("p = {p}: M2L on level {}", level.level);
-        let mut data = DeviceLevel::new(device, level, n, &mut rng);
+        let mut data = DeviceLevel::<T>::new(device, level, n, &mut rng);
         let plan_of = |device: &mut Device, settings: &PlanSettings| {
-            let size = settings.size(device.backend(), Precision::F32, &level.batch_offsets);
-            let mut scratch = TranslationScratch::<f32>::new(device, size.columns * n).unwrap();
+            let size = settings.size(device.backend(), T::FLOAT, &level.batch_offsets);
+            let mut scratch = TranslationScratch::<T>::new(device, size.columns * n).unwrap();
             let plan = GroupedPlan::new(
                 device,
                 &level.arrays(),
@@ -397,9 +495,9 @@ fn measure(device: &mut Device, views: &[Level], tables: &DegreeTables) -> Vec<R
             (plan, scratch)
         };
         let dense_call = |device: &mut Device,
-                          data: &mut DeviceLevel,
+                          data: &mut DeviceLevel<T>,
                           plan: &GroupedPlan,
-                          scratch: &mut TranslationScratch<f32>,
+                          scratch: &mut TranslationScratch<T>,
                           stage: Option<Stage>| {
             let operands = Operands::Separate {
                 input: data.multipoles.as_slice(),
@@ -474,7 +572,23 @@ fn measure(device: &mut Device, views: &[Level], tables: &DegreeTables) -> Vec<R
     rows
 }
 
-fn print_header(device: &Device, arguments: &Arguments) {
+/// The problem line of the header.
+fn problem_text(n: usize, views: &[Level]) -> String {
+    if n == C32_POINTS {
+        "the C3.2 cube: N = 10⁵ uniform in a cube, a uniform level-4 tree; its V levels 2 to 4"
+            .to_owned()
+    } else {
+        format!(
+            "the cube: N = {n} uniform in a cube, an adaptive tree (max_level 16, 64 points per \
+             leaf as the refinement target, as the benchmark's); its V levels {} to {}",
+            views.first().map_or(0, |l| l.level),
+            views.last().map_or(0, |l| l.level),
+        )
+    }
+}
+
+fn print_header(device: &Device, arguments: &Arguments, peak: &Peak, problem: &str) {
+    let precision = precision_name(arguments.precision);
     println!("# The device rotation M2L against dense (Phase 4 T10, C4.6)");
     println!();
     println!("| item | value |");
@@ -483,32 +597,45 @@ fn print_header(device: &Device, arguments: &Arguments) {
     println!("| target | {} |", target());
     println!("| toolchain | {} |", toolchain());
     println!("| device | {} |", device.info());
-    println!(
-        "| problem | the C3.2 cube: N = 10⁵ uniform in a cube, a uniform level-4 tree; its V \
-         levels 2 to 4 |"
-    );
+    println!("| problem | {problem} |");
     println!(
         "| timing | median of 15 batches of >= 20 ms; launches queued between syncs, a \
          warm-up launch and a sync first (compilation excluded) |"
     );
+    match peak.gflops {
+        Some(gflops) => println!(
+            "| flops | rotation (20/3)(p + 1)³ per pair (the spike's count), dense 2 (p + 1)⁴ per \
+             pair; peak {gflops} GFLOP/s ({}) |",
+            peak.source
+        ),
+        None => println!(
+            "| flops | rotation (20/3)(p + 1)³ per pair (the spike's count), dense 2 (p + 1)⁴ per \
+             pair; peak unknown for this device in {precision} |"
+        ),
+    }
     println!(
-        "| flops | rotation (20/3)(p + 1)³ per pair (the spike's count), dense 2 (p + 1)⁴ per \
-         pair; peak {PEAK_GFLOPS} GFLOP/s (M3 Max GPU f32, derived in the spike report, not \
-         measured) |"
-    );
-    println!(
-        "| host | `LaplaceOperator::m2l_pair` with the f32 rotation tables, 1 and {} scoped \
-         threads |",
+        "| host | `LaplaceOperator::m2l_pair` with the {precision} rotation tables, 1 and {} \
+         scoped threads |",
         arguments.threads
     );
-    println!(
-        "| precision | f32 (f64 not timed: Metal has no f64, CUDA is type-checked only; the \
-         f64 comparison is a model) |"
-    );
+    match arguments.precision {
+        Precision::F32 if !device.info().supports(Precision::F64) => println!(
+            "| precision | f32 (f64 not timed: Metal has no f64, CUDA is type-checked only; the \
+             f64 comparison is a model) |"
+        ),
+        Precision::F32 => println!(
+            "| precision | f32 (`--precision f64` times f64; the f64 break-even column is the \
+             spike's model) |"
+        ),
+        Precision::F64 => println!(
+            "| precision | f64 (the f64 break-even column is the spike's model for the A100 and \
+             H100) |"
+        ),
+    }
     println!();
 }
 
-fn print_degree(p: usize, rows: &[Row], device: &Device) {
+fn print_degree(p: usize, rows: &[Row], device: &Device, peak: &Peak) {
     let rotation_rate = |t: f64, pairs: usize| rotation_flops(p) * pairs as f64 / t / 1e9;
     let dense_rate = |t: f64, pairs: usize| dense_flops(p) * pairs as f64 / t / 1e9;
     println!(
@@ -528,10 +655,9 @@ fn print_degree(p: usize, rows: &[Row], device: &Device) {
          | ---: |"
     );
     for r in rows {
-        let best = r.library.map_or(r.dense, |l| l.min(r.dense));
         let g = rotation_rate(r.rotation, r.pairs);
         println!(
-            "| {} | {} | {} | {:.1} | {:.2} | {:.0} | {:.2} | {:.1} ({}) | {:.2} | {:.1} | {:.0} | \
+            "| {} | {} | {} | {:.1} | {:.2} | {:.0} | {} | {:.1} ({}) | {:.2} | {:.1} | {:.0} | \
              {} | {:.2} | {:.1e} |",
             r.level,
             r.boxes,
@@ -539,7 +665,7 @@ fn print_degree(p: usize, rows: &[Row], device: &Device) {
             r.rotation * 1e6,
             r.rotation / r.pairs as f64 * 1e9,
             g,
-            100.0 * g / PEAK_GFLOPS,
+            peaks::percent(g, peak.gflops),
             r.dense * 1e6,
             3 * r.dense_chunks,
             r.dense / r.pairs as f64 * 1e9,
@@ -547,16 +673,25 @@ fn print_degree(p: usize, rows: &[Row], device: &Device) {
             dense_rate(r.dense_gemm, r.pairs),
             r.library
                 .map_or("–".to_owned(), |l| format!("{:.1}", l * 1e6)),
-            r.rotation / best,
+            r.rotation / r.best(),
             r.difference,
         );
     }
     println!();
 }
 
-/// The summary across p: the whole M2L stage (every V level) per pair.
-fn print_summary(totals: &[(usize, Vec<Row>)]) {
-    println!("## Rotation against dense across p (every V level of the cube, f32)");
+/// The summary across p: the whole M2L stage (every V level) per pair, and the crossover.
+fn print_summary(totals: &[(usize, Vec<Row>)], arguments: &Arguments, peak: &Peak) {
+    let precision = precision_name(arguments.precision);
+    if arguments.n == C32_POINTS {
+        println!("## Rotation against dense across p (every V level of the cube, {precision})");
+    } else {
+        println!(
+            "## Rotation against dense across p (every V level of the cube at N = {}, \
+             {precision})",
+            arguments.n
+        );
+    }
     println!();
     println!(
         "| p | pairs | rotation µs | ns/pair | % peak (model flops) | dense (hand-written) µs | \
@@ -564,21 +699,21 @@ fn print_summary(totals: &[(usize, Vec<Row>)]) {
          break-even, A100/H100 f64 model |"
     );
     println!("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |");
+    let mut ratios = Vec::new();
     for (p, rows) in totals {
         let pairs: usize = rows.iter().map(|r| r.pairs).sum();
         let rotation: f64 = rows.iter().map(|r| r.rotation).sum();
         let dense: f64 = rows.iter().map(|r| r.dense).sum();
-        let best: f64 = rows
-            .iter()
-            .map(|r| r.library.map_or(r.dense, |l| l.min(r.dense)))
-            .sum();
-        let efficiency = rotation_flops(*p) * pairs as f64 / rotation / 1e9 / PEAK_GFLOPS;
+        let best: f64 = rows.iter().map(Row::best).sum();
+        let efficiency = peak
+            .gflops
+            .map(|g| rotation_flops(*p) * pairs as f64 / rotation / 1e9 / g);
         let lookup = |table: &[(usize, f64)]| {
             table
                 .iter()
                 .find(|(q, _)| q == p)
-                .map_or("–".to_owned(), |(_, e)| {
-                    format!(
+                .map_or("–".to_owned(), |(_, e)| match efficiency {
+                    Some(efficiency) => format!(
                         "{:.1}% ({})",
                         100.0 * e,
                         if efficiency >= *e {
@@ -586,40 +721,63 @@ fn print_summary(totals: &[(usize, Vec<Row>)]) {
                         } else {
                             "rotation below"
                         }
-                    )
+                    ),
+                    None => format!("{:.1}%", 100.0 * e),
                 })
         };
         println!(
-            "| {p} | {pairs} | {:.1} | {:.2} | {:.2}% | {:.1} | {:.2} | {:.1} | {:.2} | {} | {} |",
+            "| {p} | {pairs} | {:.1} | {:.2} | {} | {:.1} | {:.2} | {:.1} | {:.2} | {} | {} |",
             rotation * 1e6,
             rotation / pairs as f64 * 1e9,
-            100.0 * efficiency,
+            efficiency.map_or("–".to_owned(), |e| format!("{:.2}%", 100.0 * e)),
             dense * 1e6,
             dense / pairs as f64 * 1e9,
             best * 1e6,
             rotation / best,
-            lookup(&BREAK_EVEN_F32_M3),
+            if peak.m3 {
+                lookup(&BREAK_EVEN_F32_M3)
+            } else {
+                "–".to_owned()
+            },
             lookup(&BREAK_EVEN_F64_MODEL),
         );
+        ratios.push((*p, rotation / best));
+    }
+    println!();
+    ratios.sort_by_key(|&(p, _)| p);
+    // The smallest measured p from which rotation is faster at every larger measured p.
+    let from = (0..ratios.len())
+        .find(|&i| ratios[i..].iter().all(|&(_, r)| r < 1.0))
+        .map(|i| ratios[i].0);
+    match from {
+        Some(p) => println!(
+            "Crossover ({precision}, N = {}): rotation faster than the best dense from p = {p} at \
+             every larger measured p.",
+            arguments.n
+        ),
+        None => println!(
+            "Crossover ({precision}, N = {}): dense at every measured p.",
+            arguments.n
+        ),
     }
     println!();
 }
 
 /// The host rotation M2L of `level` from zero locals on `threads` scoped threads, each a
 /// contiguous share of the boxes: its locals and its median time per call.
-fn host_level(
+fn host_level<T: DeviceScalar>(
     level: &Level,
     p: usize,
-    multipoles: &[f32],
-    host: &LaplaceOperator<f32>,
+    multipoles: &[T],
+    host: &LaplaceOperator<T>,
     threads: usize,
-) -> (Vec<f32>, f64) {
+) -> (Vec<T>, f64) {
     let n = (p + 1) * (p + 1);
     let boxes = level.boxes();
-    let mut operators: Vec<LaplaceOperator<f32>> = (0..threads).map(|_| host.clone()).collect();
-    let mut out = vec![0.0f32; boxes * n];
-    let run = |out: &mut [f32], operators: &mut [LaplaceOperator<f32>]| {
-        out.fill(0.0);
+    let mut operators: Vec<LaplaceOperator<T>> = (0..threads).map(|_| host.clone()).collect();
+    let mut out = vec![T::from_f64(0.0); boxes * n];
+    let run = |out: &mut [T], operators: &mut [LaplaceOperator<T>]| {
+        out.fill(T::from_f64(0.0));
         let mut rest = out;
         let mut pieces = Vec::with_capacity(threads);
         for k in 0..threads {
@@ -663,16 +821,22 @@ fn host_level(
 
 /// The M2L stage at p = 8: the device rotation against the host rotation (module
 /// documentation).
-fn stage(device: &mut Device, views: &[Level], tables: &DegreeTables, threads: usize) {
+fn stage<T: DeviceScalar>(
+    device: &mut Device,
+    views: &[Level],
+    tables: &DegreeTables<T>,
+    threads: usize,
+) {
     let (p, n) = (tables.p, tables.n());
-    let host_tables = HostTables::<f32>::build(p, M2lStrategy::Rotation);
+    let precision = precision_name(T::FLOAT);
+    let host_tables = HostTables::<T>::build(p, M2lStrategy::Rotation);
     let host = LaplaceOperator::new(host_tables, false, 64);
     let host_arrays = RotationHostArrays::new(tables.rotation.tables(Operator::M2l));
     let rotation_tables = RotationTables::upload(device, &host_arrays.arrays()).unwrap();
     let layout = RotationLayout::default_for(device.info(), p);
     let mut rng = SplitMix64::new(0x7e_a100);
     warm_up(device);
-    println!("## The M2L stage at p = {p}: device rotation against host rotation (f32)");
+    println!("## The M2L stage at p = {p}: device rotation against host rotation ({precision})");
     println!();
     println!(
         "| level | pairs | device µs | host 1 thread µs | host {threads} threads µs | x host 1 | \
@@ -682,7 +846,7 @@ fn stage(device: &mut Device, views: &[Level], tables: &DegreeTables, threads: u
     let (mut sum_device, mut sum_one, mut sum_many, mut pairs) = (0.0, 0.0, 0.0, 0);
     for level in views {
         eprintln!("stage: level {}", level.level);
-        let mut data = DeviceLevel::new(device, level, n, &mut rng);
+        let mut data = DeviceLevel::<T>::new(device, level, n, &mut rng);
         let got = data.locals_after(device, |d, data| data.rotation(d, layout, &rotation_tables));
         let device_time = time(device, |d| data.rotation(d, layout, &rotation_tables));
         let (want, one) = host_level(level, p, &data.multipoles_host, &host, 1);
@@ -714,13 +878,45 @@ fn stage(device: &mut Device, views: &[Level], tables: &DegreeTables, threads: u
     println!();
 }
 
-/// The rotation layouts at p = 8 on the deepest V level (module documentation).
-fn layouts(device: &mut Device, level: &Level, tables: &DegreeTables) {
+/// The layouts of the rotation at degree p on a backend, the default first (module
+/// documentation).
+fn layout_candidates(device: &Device, p: usize) -> Vec<RotationLayout> {
+    let default = RotationLayout::default_for(device.info(), p);
+    let mut candidates = vec![default];
+    match (device.backend(), default) {
+        (BackendKind::Metal, _) => candidates.extend([
+            RotationLayout::Cube { units: 128 },
+            RotationLayout::Cube { units: 192 },
+            RotationLayout::Cube { units: 32 },
+        ]),
+        (BackendKind::Cuda, RotationLayout::Cube { units }) => {
+            for units in [2 * units, 4 * units, 32, 64] {
+                let layout = RotationLayout::Cube {
+                    units: units.min(1024),
+                };
+                if !candidates.contains(&layout) {
+                    candidates.push(layout);
+                }
+            }
+        }
+        _ => {}
+    }
+    candidates
+}
+
+/// The rotation layouts at the degree of `tables` on the deepest V level (module
+/// documentation).
+fn layouts<T: DeviceScalar>(
+    device: &mut Device,
+    level: &Level,
+    tables: &DegreeTables<T>,
+    peak: &Peak,
+) {
     let (p, n) = (tables.p, tables.n());
     let host_arrays = RotationHostArrays::new(tables.rotation.tables(Operator::M2l));
     let rotation_tables = RotationTables::upload(device, &host_arrays.arrays()).unwrap();
     let mut rng = SplitMix64::new(0x7e_a200);
-    let mut data = DeviceLevel::new(device, level, n, &mut rng);
+    let mut data = DeviceLevel::<T>::new(device, level, n, &mut rng);
     let default = RotationLayout::default_for(device.info(), p);
     let reference = data.locals_after(device, |d, data| {
         data.rotation(d, default, &rotation_tables)
@@ -734,16 +930,8 @@ fn layouts(device: &mut Device, level: &Level, tables: &DegreeTables) {
     println!();
     println!("| layout | µs | ns/pair | % peak (model) | bit for bit the default |");
     println!("| --- | ---: | ---: | ---: | --- |");
-    let mut candidates = vec![default];
-    if device.backend().is_gpu() {
-        candidates.extend([
-            RotationLayout::Cube { units: 128 },
-            RotationLayout::Cube { units: 192 },
-            RotationLayout::Cube { units: 32 },
-        ]);
-    }
-    for layout in candidates {
-        if let Err(error) = layout.check(device.info(), p, Precision::F32) {
+    for layout in layout_candidates(device, p) {
+        if let Err(error) = layout.check(device.info(), p, T::FLOAT) {
             println!("| {layout} | refused: {error} | | | |");
             continue;
         }
@@ -751,14 +939,14 @@ fn layouts(device: &mut Device, level: &Level, tables: &DegreeTables) {
         let seconds = time(device, |d| data.rotation(d, layout, &rotation_tables));
         let g = rotation_flops(p) * level.pairs() as f64 / seconds / 1e9;
         println!(
-            "| {layout} | {:.1} | {:.2} | {:.2} | {} |",
+            "| {layout} | {:.1} | {:.2} | {} | {} |",
             seconds * 1e6,
             seconds / level.pairs() as f64 * 1e9,
-            100.0 * g / PEAK_GFLOPS,
+            peaks::percent(g, peak.gflops),
             if got
                 .iter()
                 .zip(&reference)
-                .all(|(a, b)| a.to_bits() == b.to_bits())
+                .all(|(a, b)| RealScalar::to_f64(*a).to_bits() == RealScalar::to_f64(*b).to_bits())
             {
                 "yes"
             } else {
@@ -767,6 +955,36 @@ fn layouts(device: &mut Device, level: &Level, tables: &DegreeTables) {
         );
     }
     println!();
+}
+
+/// Every table of the run in T.
+fn run<T: DeviceScalar>(
+    device: &mut Device,
+    arguments: &Arguments,
+    views: &[Level],
+    cache: Option<&TableCache>,
+    peak: &Peak,
+) {
+    let mut totals = Vec::new();
+    for &p in &arguments.degrees {
+        let tables = DegreeTables::<T>::new(p, cache);
+        let rows = measure(device, views, &tables);
+        print_degree(p, &rows, device, peak);
+        totals.push((p, rows));
+    }
+    print_summary(&totals, arguments, peak);
+    if !arguments.quick {
+        let tables = DegreeTables::<T>::new(8, cache);
+        stage(device, views, &tables, arguments.threads);
+        let deepest = views.last().expect("a V level");
+        layouts(device, deepest, &tables, peak);
+        if T::FLOAT == Precision::F64 {
+            for p in [12, 16] {
+                let tables = DegreeTables::<T>::new(p, cache);
+                layouts(device, deepest, &tables, peak);
+            }
+        }
+    }
 }
 
 fn main() {
@@ -782,14 +1000,30 @@ fn main() {
         );
         std::process::exit(1);
     });
+    if !device.info().supports(arguments.precision) {
+        eprintln!(
+            "--precision {}: {} does no arithmetic in it",
+            precision_name(arguments.precision),
+            device.info()
+        );
+        std::process::exit(2);
+    }
     let (universe, _) =
         mpi::initialize_with_threading(Threading::Funneled).expect("MPI initialises once");
     let comm = universe.world();
     let cache = arguments.table_cache.as_deref().map(TableCache::new);
-    print_header(&device, &arguments);
-    let config = Config::C32;
+    let config = if arguments.n == C32_POINTS {
+        Config::C32
+    } else {
+        Config {
+            n: arguments.n,
+            sampled: 1,
+            charge_vectors: 1,
+            ..Config::c33(Distribution::Cube)
+        }
+    };
     let problem = Problem::new(&config);
-    eprintln!("C3.2 cube: building the host FMM for its plan");
+    eprintln!("cube, N = {}: building the host FMM for its plan", config.n);
     let fmm = FmmBuilder::<f32>::new(3)
         .strategy(M2lStrategy::Rotation)
         .max_level(config.max_level)
@@ -797,17 +1031,15 @@ fn main() {
         .build(&problem.points, &problem.points, &comm)
         .expect("the host FMM builds on one rank");
     let views = levels(&fmm);
-    let mut totals = Vec::new();
-    for &p in &arguments.degrees {
-        let tables = DegreeTables::new(p, cache.as_ref());
-        let rows = measure(&mut device, &views, &tables);
-        print_degree(p, &rows, &device);
-        totals.push((p, rows));
-    }
-    print_summary(&totals);
-    if !arguments.quick {
-        let tables = DegreeTables::new(8, cache.as_ref());
-        stage(&mut device, &views, &tables, arguments.threads);
-        layouts(&mut device, views.last().expect("a V level"), &tables);
+    let peak = Peak::of(&device, arguments.precision);
+    print_header(
+        &device,
+        &arguments,
+        &peak,
+        &problem_text(arguments.n, &views),
+    );
+    match arguments.precision {
+        Precision::F32 => run::<f32>(&mut device, &arguments, &views, cache.as_ref(), &peak),
+        Precision::F64 => run::<f64>(&mut device, &arguments, &views, cache.as_ref(), &peak),
     }
 }

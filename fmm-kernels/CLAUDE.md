@@ -21,7 +21,7 @@ of C4.8 (T11) in docs/phase4/.
   does: at most the cap, one unit per contiguous range of target leaves).
 - P2P (T6, `p2p`): one launch per level call, three layouts of one formulation
   (`P2pLayout`): `Cube` (one cube per target leaf, a shared-memory tile of U sources,
-  default on Metal and CUDA with U = 64), `Plane` (one plane per target leaf, several per
+  default on Metal with U = 64 and on CUDA with U = 32, Phase 4S T7), `Plane` (one plane per target leaf, several per
   cube, `sync_plane`, plane and lane from `UNIT_POS` (CUDA, below); a candidate for
   T12) and `Cpu` (targets in `Vector<T, N>` lanes of the host's width, K N = 8 per
   block, default on the CPU runtime). Every layout adds
@@ -42,7 +42,8 @@ of C4.8 (T11) in docs/phase4/.
   (u − ĉ) · 2^k, exact. Two layouts (`LeafLayout`): `Cube { units, tile }` (one cube per
   box or target leaf; P2M and P2L by coefficient owners with `tile` points' harmonics in
   shared memory, L2P and M2P one unit per target with each entry's coefficients staged in
-  shared memory; default on Metal and CUDA with 64 units and tiles of up to 32 points)
+  shared memory; default on Metal with 64 units and on CUDA with 32 (Phase 4S T7), tiles
+  of up to 32 points)
   and `Cpu` (one unit per core, contiguous rows, no shared memory; default on the CPU
   runtime, units capped by `Device::limit_units`). Both add every output's
   contributions in the plan's order; tests run every layout on every backend. Bit
@@ -53,16 +54,19 @@ of C4.8 (T11) in docs/phase4/.
   groups, multipoles and locals in separate buffers). Tables are uploaded once as
   `Tables` (matrix g at g n²; with `library` also the library copy at 256-byte aligned
   strides, `library_stride`). Per level call and chunk (contiguous batch entries within
-  the scratch budget, default 128 MB), three launches: `movement::gather_columns` in
+  the scratch budget, `default_scratch_bytes`), three launches: `movement::gather_columns` in
   batch order, one grouped GEMM over a tile schedule built at build (`TileSchedule`:
   group, first column, columns per tile), and `Accumulate::Rows` (a reduction per target
   in row order, reading the view's row-to-batch map; M2M, M2L) or `Accumulate::Scatter`
-  (`scatter_add_columns`; L2L). Structure (A) (`PerGroupPlan`, `per_group`: one gather,
+  (`scatter_add_columns`; L2L); the budget by device, `default_scratch_bytes` (128 MB, on
+  CUDA 2 GB, at most an eighth of the device memory; Phase 4S T7: the reduction walks
+  every entry of each row once per chunk, so its cost grows with the chunks). Structure (A) (`PerGroupPlan`, `per_group`: one gather,
   GEMM and scatter-add per group with a column) is the test reference, bit for bit (B)
   with the same GEMM; `grouped_stage` runs one stage of every chunk, for profiling.
   The hand-written GEMM (`GemmLayout`): `Cube { rows, columns, per_unit }` (one cube per
-  tile; default on Metal and CUDA: up to 32 units along the rows, 64 in all, 4 columns
-  per unit) and `Cpu { block, per_unit }` (one cube, units capped by
+  tile; default on Metal: up to 32 units along the rows, 64 in all, 4 columns per unit;
+  on CUDA (Phase 4S T7): the power of two at or above n / 4 units along the rows, 16 to
+  128, 64 units in all (more where the rows need them), 8 columns per unit) and `Cpu { block, per_unit }` (one cube, units capped by
   `Device::units_cap`, contiguous tiles; default on the CPU runtime); each output one
   accumulator from zero, `fma` with k ascending, stored once (β = 0): bit for bit a host
   `mul_add` loop in that order, on Metal, CUDA and the CPU runtime (T3 rule 6;
@@ -96,7 +100,7 @@ of C4.8 (T11) in docs/phase4/.
   Two layouts (`RotationLayout`): `Cube { units }` (one cube per row with a pair, unit u
   the owner of slots u, u + U, …, two working vectors of (p + 1)² values in shared memory,
   `sync_cube` after each step; default on Metal and CUDA: (p + 1)² units rounded up to the
-  plane size, one slot each) and `Cpu` (one unit per core, at most `Device::units_cap`,
+  plane size, one slot each, the fastest of the layouts measured on CUDA, Phase 4S T7) and `Cpu` (one unit per core, at most `Device::units_cap`,
   contiguous rows, local arrays; default on the CPU runtime). Each pair repeats
   `ShiftTables::apply` step for step (z-rotation, forward y-blocks, coaxial step, backward
   y-blocks, z-rotation back added into the owner's accumulator; `Up`/`Down` the coaxial
@@ -224,7 +228,17 @@ Measured on locust's H100 (GH200) on 2026-10-06 (Phase 4S T2; docs/design/device
 - `DeviceInfo`: `cuda (cuda), NVIDIA GH200 480GB, CubeCL 0.11.0-pre.4, f32 f64`; plane
   size 32 (fixed), shared memory 232,448 B per cube (the opt-in maximum; Metal 32 KB),
   1024 units per cube, cube counts (2³¹ − 1, 65,535, 65,535), memory 102,005,473,280 B.
-  `GPU_MAX_CUBES` stays 65,535 for every backend (a T7 question).
+  `GPU_MAX_CUBES` stays 65,535 for every backend: measured in Phase 4S T7, lifting it on
+  CUDA made `zero` and `gather_columns` 1.2–1.7× slower over 2²⁶–2²⁸ values (striding
+  units win; device-path.md §18.2).
+- Defaults on CUDA (Phase 4S T7, measured on the H100, device-path.md §18.2): P2P `Cube`
+  of 32 units (`CUDA_CUBE_UNITS`), the leaf operators `Cube` of 32 units with tiles of 32
+  (`CUDA_LEAF_UNITS`), the GEMM with the power of two at or above n / 4 rows (16 to 128),
+  64 units and 8 columns per unit (`CUDA_GEMM_*`), the chunk budget 2 GB
+  (`CUDA_SCRATCH_BYTES`, `default_scratch_bytes`), the rotation layout as on Metal. Each
+  is an existing layout parameterised, tested on every backend by the kernel tests (the
+  CPU runtime with fewer units: the GEMM with 8 columns per unit, the P2P and leaf cube
+  layouts), and on CUDA with its own values. Metal and the CPU runtime keep theirs.
 - Precisions: f32 and f64 registered with arithmetic. TF32 is registered for
   conversion; it does not come into play, because the library probe already fails:
   `cubek-matmul`'s `SimpleCyclicCmma` refuses every f32 shape the tests build ("No tile

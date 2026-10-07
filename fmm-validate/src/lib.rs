@@ -97,6 +97,7 @@ pub mod metrics;
 #[cfg(feature = "gpu")]
 pub mod p2p_device;
 pub mod p2p_kernels;
+pub mod peaks;
 pub mod points;
 mod rng;
 

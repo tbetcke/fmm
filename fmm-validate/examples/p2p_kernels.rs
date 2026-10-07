@@ -42,6 +42,15 @@
 //!   cell the pairs per second, the speed-up over the host kernel at 1 and n threads, the
 //!   fraction of the C4.2 peak model of device-path.md §13.4 (720 Gpairs/s φ, 480 φ and
 //!   ∇φ), and the C4.2 target (25% on W2 at N = 10⁵, 10% on W1 at n_t = 64);
+//! - `--device cuda` (Phase 4S T7, by hand on locust's H100, feature `cuda`): the same
+//!   cells, with the cube layout at 32, 64, 128 and 256 units and the plane layout at 2,
+//!   4 and 8 planes per cube, in f32 and, since the device does f64 arithmetic, in f64;
+//!   the fraction of the device's P2P model from `nd_fmm_validate::peaks` (on the GH200's
+//!   H100 132 SMs × 128 (f32) or 64 (f64) lanes × 1.98 GHz over 10 or 15 operations per
+//!   pair: 3,345 and 2,230 Gpairs/s in f32, 1,673 and 1,115 in f64), and the C4.2 target
+//!   per precision. On a device the table does not name, the model is unknown and its
+//!   columns print "–". Every GPU's model comes from that table, the M3 Max's included
+//!   (its figures unchanged);
 //! - `--device cpu`: f32 and f64, the CPU layout, W1 gathered, at one unit against one
 //!   thread (`--leaves` / 4 target leaves, at least 768) and at n units against n
 //!   threads (`--leaves`), with the geometric mean of the per-pair time ratio at one
@@ -539,11 +548,9 @@ mod device {
         Accuracy, CHECKED_SETS, Form, Kernel, Oracle, Set, W1_SEED, W1_TARGETS, W2_SEED, check,
         oracles, passes, precision_name, w1, w2,
     };
+    use nd_fmm_validate::peaks::{self, Peaks};
 
     use super::{Arguments, cores, cpu_model, geomean, performance_cores, target, toolchain};
-
-    /// The C4.2 peak model of device-path.md §13.4, pairs per second: φ, then φ and ∇φ.
-    const MODEL: [f64; 2] = [720e9, 480e9];
 
     /// The C4.2 targets, fractions of the model: W2 at N = 10⁵ and W1 at n_t = 64.
     const TARGET_W2: f64 = 0.25;
@@ -590,7 +597,15 @@ mod device {
             }
             _ => {
                 rows.extend(gpu_rows::<f32>(&mut device, arguments));
-                print_gpu(&rows, arguments.threads);
+                if device.info().f64 {
+                    rows.extend(gpu_rows::<f64>(&mut device, arguments));
+                }
+                print_gpu(
+                    &rows,
+                    arguments.threads,
+                    &device.info().name,
+                    P2pLayout::default_for(device.info()),
+                );
             }
         }
         if arguments.fmm {
@@ -645,18 +660,29 @@ mod device {
     }
 
     /// The layouts a GPU runs: the cube layout with 32, 64 (the default) and 128 units,
-    /// the plane layout with 2 and 4 planes per cube.
+    /// the plane layout with 2 and 4 planes per cube; on CUDA also the cube layout with
+    /// 256 units and the plane layout with 8 planes (Phase 4S T7). Those the device
+    /// refuses are left out.
     fn gpu_layouts(device: &Device, precision: Precision) -> Vec<P2pLayout> {
-        [
+        let mut layouts = vec![
             P2pLayout::Cube { units: 64 },
             P2pLayout::Cube { units: 32 },
             P2pLayout::Cube { units: 128 },
+        ];
+        if device.backend() == BackendKind::Cuda {
+            layouts.push(P2pLayout::Cube { units: 256 });
+        }
+        layouts.extend([
             P2pLayout::Plane { planes: 2 },
             P2pLayout::Plane { planes: 4 },
-        ]
-        .into_iter()
-        .filter(|l| l.check(device.info(), precision).is_ok())
-        .collect()
+        ]);
+        if device.backend() == BackendKind::Cuda {
+            layouts.push(P2pLayout::Plane { planes: 8 });
+        }
+        layouts
+            .into_iter()
+            .filter(|l| l.check(device.info(), precision).is_ok())
+            .collect()
     }
 
     /// Every GPU cell: W1 in both forms, W2 at each N, φ and φ with ∇φ, each layout.
@@ -933,94 +959,175 @@ mod device {
         println!();
     }
 
-    fn print_gpu(rows: &[Row], threads: usize) {
-        println!("## The GPU layouts, f32");
-        println!();
-        println!(
-            "Model: the C4.2 peak model of device-path.md §13.4, 720 Gpairs/s (φ) and 480 \
-             (φ, ∇φ), from 40 cores × 128 lanes × 1.4 GHz and 10 or 15 operations per pair. \
-             Speed-ups over nd-fmm-simd on the same cell at 1 and {threads} threads. W1 rows \
+    /// The precision of a row's name ("f32" or "f64") for the peak table.
+    fn peak_precision(name: &str) -> peaks::Precision {
+        if name == "f64" {
+            peaks::Precision::F64
+        } else {
+            peaks::Precision::F32
+        }
+    }
+
+    /// The model paragraph of the GPU tables of `precision` on `device` (the device name):
+    /// the M3 Max's Phase 4 wording, the table's source on another named device, or an
+    /// unknown model.
+    fn model_text(device: &str, precision: &str, threads: usize) -> String {
+        let tail = format!(
+            "Speed-ups over nd-fmm-simd on the same cell at 1 and {threads} threads. W1 rows \
              launch the stated leaves per launch; W2 rows split the targets into rows of one \
              tile."
         );
-        println!();
-        for gradients in [false, true] {
-            println!(
-                "### {}",
-                if gradients {
-                    "potential and gradient"
-                } else {
-                    "potential"
-                }
-            );
-            println!();
-            println!(
-                "| cell | layout | Gpairs/s | of model | x simd 1 thread | x simd {threads} \
-                 threads | max φ | max ∇φ | check |"
-            );
-            println!("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |");
-            for r in rows.iter().filter(|r| r.gradients == gradients) {
-                println!(
-                    "| {} | {} | {} | {:.1}% | {:.1} | {:.2} | {} |",
-                    r.cell,
-                    r.layout,
-                    gpairs(r.rate),
-                    100.0 * r.rate / MODEL[usize::from(gradients)],
-                    r.rate / r.host_one,
-                    r.rate / r.host_many,
-                    accuracy_columns(r)
-                );
+        let peaks = Peaks::of(device);
+        let model =
+            |gradients| peaks.and_then(|p| p.p2p_model(peak_precision(precision), gradients));
+        match (peaks, model(false), model(true)) {
+            (Some(p), Some(_), Some(_)) if p.name == "Apple M3 Max" && precision == "f32" => {
+                format!(
+                    "Model: the C4.2 peak model of device-path.md §13.4, 720 Gpairs/s (φ) and \
+                     480 (φ, ∇φ), from 40 cores × 128 lanes × 1.4 GHz and 10 or 15 operations \
+                     per pair. {tail}"
+                )
             }
-            println!();
+            (Some(p), Some(phi), Some(both)) => format!(
+                "Model ({precision}): {:.0} Gpairs/s (φ) and {:.0} (φ, ∇φ); {}. {tail}",
+                phi / 1e9,
+                both / 1e9,
+                p.p2p_source
+            ),
+            _ => format!(
+                "Model ({precision}): none for {device} (not in `nd_fmm_validate::peaks`); the \
+                 fractions of the model are not printed. {tail}"
+            ),
         }
-        println!("## The C4.2 target (measured, never asserted)");
-        println!();
-        println!("| cell | output | target | best layout | Gpairs/s | of model | met |");
-        println!("| --- | --- | ---: | --- | ---: | ---: | --- |");
-        for (prefix, target) in [("W2 N=100000", TARGET_W2), ("W1 n_t=64 ", TARGET_W1)] {
+    }
+
+    /// The precisions of `rows`, in order of first appearance.
+    fn precisions(rows: &[Row]) -> Vec<&'static str> {
+        let mut out: Vec<&'static str> = Vec::new();
+        for r in rows {
+            if !out.contains(&r.precision) {
+                out.push(r.precision);
+            }
+        }
+        out
+    }
+
+    /// The GPU tables: per precision the layouts per output, then the C4.2 target per
+    /// precision, each against the P2P model of `device` (the device name) where the peak
+    /// table has one.
+    fn print_gpu(rows: &[Row], threads: usize, device: &str, default_layout: P2pLayout) {
+        // The default's label: `cube 64` on Metal, as in Phase 4, `cube 32` on CUDA.
+        let default_label = match default_layout {
+            P2pLayout::Cube { units } => format!("cube {units}"),
+            other => other.to_string(),
+        };
+        let precisions = precisions(rows);
+        let model = |precision: &str, gradients: bool| {
+            Peaks::of(device).and_then(|p| p.p2p_model(peak_precision(precision), gradients))
+        };
+        let of_model = |rate: f64, model: Option<f64>| {
+            model.map_or("–".to_owned(), |m| format!("{:.1}%", 100.0 * rate / m))
+        };
+        for &precision in &precisions {
+            let rows: Vec<&Row> = rows.iter().filter(|r| r.precision == precision).collect();
+            println!("## The GPU layouts, {precision}");
+            println!();
+            println!("{}", model_text(device, precision, threads));
+            println!();
             for gradients in [false, true] {
-                let model = MODEL[usize::from(gradients)];
-                for r in rows
-                    .iter()
-                    .filter(|r| r.gradients == gradients && r.cell.starts_with(prefix))
-                {
-                    let best = rows
-                        .iter()
-                        .filter(|q| q.gradients == gradients && q.cell == r.cell)
-                        .max_by(|a, b| a.rate.total_cmp(&b.rate))
-                        .unwrap();
-                    if !std::ptr::eq(best, r) {
-                        continue;
+                println!(
+                    "### {}",
+                    if gradients {
+                        "potential and gradient"
+                    } else {
+                        "potential"
                     }
-                    let default = rows
-                        .iter()
-                        .find(|q| {
-                            q.gradients == gradients
-                                && q.cell == r.cell
-                                && q.layout == P2pLayout::Cube { units: 64 }
-                        })
-                        .unwrap();
+                );
+                println!();
+                println!(
+                    "| cell | layout | Gpairs/s | of model | x simd 1 thread | x simd {threads} \
+                     threads | max φ | max ∇φ | check |"
+                );
+                println!("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |");
+                for r in rows.iter().filter(|r| r.gradients == gradients) {
                     println!(
-                        "| {} | {} | {:.0}% ({:.0} Gpairs/s) | {} (default cube 64: {:.1}%) | \
-                         {} | {:.1}% | {} |",
+                        "| {} | {} | {} | {} | {:.1} | {:.2} | {} |",
                         r.cell,
-                        if gradients { "φ, ∇φ" } else { "φ" },
-                        100.0 * target,
-                        target * model / 1e9,
                         r.layout,
-                        100.0 * default.rate / model,
                         gpairs(r.rate),
-                        100.0 * r.rate / model,
-                        if r.rate >= target * model {
-                            "yes"
-                        } else {
-                            "NO"
-                        }
+                        of_model(r.rate, model(precision, gradients)),
+                        r.rate / r.host_one,
+                        r.rate / r.host_many,
+                        accuracy_columns(r)
                     );
                 }
+                println!();
             }
         }
-        println!();
+        for &precision in &precisions {
+            let rows: Vec<&Row> = rows.iter().filter(|r| r.precision == precision).collect();
+            if precisions.len() > 1 {
+                println!("## The C4.2 target, {precision} (measured, never asserted)");
+            } else {
+                println!("## The C4.2 target (measured, never asserted)");
+            }
+            println!();
+            println!("| cell | output | target | best layout | Gpairs/s | of model | met |");
+            println!("| --- | --- | ---: | --- | ---: | ---: | --- |");
+            for (prefix, target) in [("W2 N=100000", TARGET_W2), ("W1 n_t=64 ", TARGET_W1)] {
+                for gradients in [false, true] {
+                    let model = model(precision, gradients);
+                    for r in rows
+                        .iter()
+                        .filter(|r| r.gradients == gradients && r.cell.starts_with(prefix))
+                    {
+                        let best = rows
+                            .iter()
+                            .filter(|q| q.gradients == gradients && q.cell == r.cell)
+                            .max_by(|a, b| a.rate.total_cmp(&b.rate))
+                            .unwrap();
+                        if !std::ptr::eq(*best, *r) {
+                            continue;
+                        }
+                        let default = rows.iter().find(|q| {
+                            q.gradients == gradients
+                                && q.cell == r.cell
+                                && q.layout == default_layout
+                        });
+                        let output = if gradients { "φ, ∇φ" } else { "φ" };
+                        let Some(model) = model else {
+                            println!(
+                                "| {} | {output} | no model | {} | {} | – | – |",
+                                r.cell,
+                                r.layout,
+                                gpairs(r.rate)
+                            );
+                            continue;
+                        };
+                        println!(
+                            "| {} | {output} | {:.0}% ({:.0} Gpairs/s) | {} (default \
+                             {default_label}: {}) | {} | {:.1}% | {} |",
+                            r.cell,
+                            100.0 * target,
+                            target * model / 1e9,
+                            r.layout,
+                            default.map_or("not run".to_owned(), |d| format!(
+                                "{:.1}%",
+                                100.0 * d.rate / model
+                            )),
+                            gpairs(r.rate),
+                            100.0 * r.rate / model,
+                            if r.rate >= target * model {
+                                "yes"
+                            } else {
+                                "NO"
+                            }
+                        );
+                    }
+                }
+            }
+            println!();
+        }
     }
 
     /// One FMM configuration of the leaf-stage table.

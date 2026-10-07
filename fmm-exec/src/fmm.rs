@@ -119,7 +119,8 @@
 //! layout under `DeviceP2pLayout::Auto`) within [`FmmBuilder::tuning_budget`], keeps the
 //! fastest for the `Fmm`'s lifetime and stores it in the caller's directory; a later
 //! build with the same key reads it. Without a directory the static rule applies: f32
-//! `Dense`, f64 `Dense` to p = 11 and `Rotation` above (provisional), the GEMMs of
+//! `Dense`; f64 `Dense` at every p on CUDA (Phase 4S decision 9), and on Metal and the CPU
+//! runtime `Dense` to p = 11 and `Rotation` above (provisional); the GEMMs of
 //! `DeviceGemm::Auto` and the backend's P2P layout. Two builds from the same cache give
 //! the same bits; `evaluate` never tunes.
 //!
@@ -638,7 +639,7 @@ pub enum FmmError {
 /// | [`device_p2p_layout`](Self::device_p2p_layout) | [`DeviceP2pLayout::Auto`]: by backend |
 /// | [`device_leaf_layout`](Self::device_leaf_layout) | [`DeviceLeafLayout::Auto`]: by backend |
 /// | [`device_gemm`](Self::device_gemm) | [`DeviceGemm::Auto`]: by precision, p and backend |
-/// | [`device_scratch_budget`](Self::device_scratch_budget) | 128 MB |
+/// | [`device_scratch_budget`](Self::device_scratch_budget) | 128 MB; 2 GB on CUDA |
 /// | [`tuning_cache`](Self::tuning_cache) | none: no tuning, the static rule |
 /// | [`tuning_budget`](Self::tuning_budget) | 10 s |
 ///
@@ -825,9 +826,11 @@ impl<T> FmmBuilder<T> {
 
     /// Sets the scratch budget of the device translations in bytes: the gathered inputs
     /// and the products of one chunk of a level call together (default 128 MB,
-    /// docs/design/device-path.md §6.4). A level call whose batches need more runs in
-    /// several chunks, with the same bits. Allocated once at build and counted in the
-    /// device memory check. Ignored by [`Backend::Host`].
+    /// docs/design/device-path.md §6.4; on CUDA 2 GB, at most an eighth of the device's
+    /// memory, measured in Phase 4S T7, `nd_fmm_kernels::translate::default_scratch_bytes`).
+    /// A level call whose batches need more runs in several chunks, with the same bits.
+    /// Allocated once at build, no larger than the widest chunk, and counted in the device
+    /// memory check. Ignored by [`Backend::Host`].
     pub fn device_scratch_budget(mut self, bytes: u64) -> Self {
         self.device_scratch_budget = Some(bytes);
         self
@@ -1304,6 +1307,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
                 plan,
                 self.p,
                 self.table_cache.as_deref(),
+                self.device_scratch_budget,
             )
         } else {
             self.strategy

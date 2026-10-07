@@ -26,7 +26,7 @@
 //!
 //! The batch entries of a view are cut into **chunks**, contiguous ranges of entries in
 //! batch order whose gathered inputs X and products Y fit in the scratch budget
-//! ([`DEFAULT_SCRATCH_BYTES`], 128 MB by default). Per chunk, three launches:
+//! ([`default_scratch_bytes`]: 128 MB by default, 2 GB on CUDA). Per chunk, three launches:
 //!
 //! 1. **gather**: X[:, c] = input[:, s] for the chunk's entries in batch order
 //!    ([`movement::gather_columns`](crate::movement::gather_columns));
@@ -158,8 +158,31 @@ use crate::p2p::cube_grid;
 use crate::view::{GroupedArrays, GroupedView, row_to_batch};
 
 /// The scratch budget of the gathered inputs and products of one chunk together, X and Y,
-/// by default: 128 MB (device-path.md §6.4, a model that T9 measures).
+/// by default on Metal and the CPU runtime: 128 MB (device-path.md §6.4, a model that T9
+/// measures). [`default_scratch_bytes`] gives each device's.
 pub const DEFAULT_SCRATCH_BYTES: u64 = 128 << 20;
+
+/// The scratch budget by default on CUDA: 2 GB, at most an eighth of the device's memory
+/// (Phase 4S T7, device-path.md §18.2). On the H100 (the uniform cube at N = 10⁶, f32 and
+/// f64, p = 3 to 8) M2L took 0.57–0.76 of its time under 128 MB: the reduction of
+/// [`Accumulate::Rows`] walks every entry of each target's row once per chunk, so its cost
+/// grows with the chunks (27 under 128 MB on the largest level at p = 8 in f32, 2 under
+/// 2 GB), 1 GB was 0–7% slower than 2 GB and 4 GB at most 3.4% faster.
+pub const CUDA_SCRATCH_BYTES: u64 = 2 << 30;
+
+/// The scratch budget of a device by default: [`DEFAULT_SCRATCH_BYTES`] on Metal and the
+/// CPU runtime, [`CUDA_SCRATCH_BYTES`] on CUDA, at most an eighth of the memory the device
+/// reports (never below [`DEFAULT_SCRATCH_BYTES`]). Chosen from the backend, as the
+/// layouts are.
+pub fn default_scratch_bytes(info: &DeviceInfo) -> u64 {
+    match info.backend {
+        BackendKind::Cpu | BackendKind::Metal => DEFAULT_SCRATCH_BYTES,
+        // Measured on the H100 (CUDA_SCRATCH_BYTES).
+        BackendKind::Cuda => CUDA_SCRATCH_BYTES
+            .min(info.max_memory.map_or(u64::MAX, |m| m / 8))
+            .max(DEFAULT_SCRATCH_BYTES),
+    }
+}
 
 /// The units along the rows of the [`Cube`](GemmLayout::Cube) layout by default: at most
 /// one plane of 32, fewer for small n (the next power of two above n).
@@ -171,6 +194,30 @@ pub const GPU_GEMM_UNITS: u32 = 64;
 
 /// The columns per unit of the default layouts.
 pub const GEMM_COLUMNS_PER_UNIT: u32 = 4;
+
+/// The rows each unit owns, at most, in the [`Cube`](GemmLayout::Cube) layout by default on
+/// CUDA: the units along the rows are the power of two at or above n / 4 (from
+/// [`CUDA_GEMM_MIN_ROWS`] to [`CUDA_GEMM_MAX_ROWS`]), so that each unit holds 4 rows or
+/// fewer of [`CUDA_GEMM_COLUMNS_PER_UNIT`] columns (Phase 4S T7, device-path.md §18.2).
+pub const CUDA_GEMM_ROWS_PER_UNIT: usize = 4;
+
+/// The fewest units along the rows of the CUDA default.
+pub const CUDA_GEMM_MIN_ROWS: u32 = 16;
+
+/// The most units along the rows of the CUDA default.
+pub const CUDA_GEMM_MAX_ROWS: u32 = 128;
+
+/// The units per cube of the CUDA default: 64, the rows times the columns.
+pub const CUDA_GEMM_UNITS: u32 = 64;
+
+/// The columns per unit of the CUDA default: 8. On the H100 (the uniform cube at N = 10⁶,
+/// every level call of M2M, L2L and dense M2L at p = 3, 6 and 8 in f32 and p = 3, 6, 8 and
+/// 12 in f64, under the 2 GB chunk budget) register blocks of up to 4 rows of 8 columns
+/// were within 8% of the fastest layout measured on every large level call, where the
+/// Metal default (up to 32 rows, 4 columns) was up to 1.45× slower (the largest V level at
+/// p = 6 in f64; 1.27× in f32) and, at n = 169, 2–3.9× slower on M2M and L2L (6 rows per
+/// unit), and at most 6% faster (the largest V level at p = 8 in f64).
+pub const CUDA_GEMM_COLUMNS_PER_UNIT: u32 = 8;
 
 /// The rows per block of the [`Cpu`](GemmLayout::Cpu) layout by default (at most n).
 pub const CPU_GEMM_BLOCK: u32 = 8;
@@ -229,18 +276,23 @@ pub enum GemmLayout {
 impl GemmLayout {
     /// The default layout of a device for tables of order n: [`Cpu`](Self::Cpu) on the
     /// CPU runtime with blocks of [`CPU_GEMM_BLOCK`] rows (at most n) and
-    /// [`GEMM_COLUMNS_PER_UNIT`] columns; otherwise [`Cube`](Self::Cube) with up to
+    /// [`GEMM_COLUMNS_PER_UNIT`] columns; on Metal [`Cube`](Self::Cube) with up to
     /// [`GPU_GEMM_ROWS`] units along the rows (the next power of two at or above n, if
     /// smaller), [`GPU_GEMM_UNITS`] units in all and [`GEMM_COLUMNS_PER_UNIT`] columns per
-    /// unit (design §6.5).
+    /// unit (design §6.5); on CUDA [`Cube`](Self::Cube) with the power of two at or above
+    /// n / [`CUDA_GEMM_ROWS_PER_UNIT`] units along the rows (from [`CUDA_GEMM_MIN_ROWS`] to
+    /// [`CUDA_GEMM_MAX_ROWS`]), [`CUDA_GEMM_UNITS`] units in all (more if the rows need
+    /// them) and [`CUDA_GEMM_COLUMNS_PER_UNIT`] columns per unit (Phase 4S T7). Every
+    /// layout gives the same bits (one accumulator per output, k ascending).
     pub fn default_for(info: &DeviceInfo, n: usize) -> Self {
+        let max_units = info.max_units_per_cube.max(1);
         match info.backend {
             BackendKind::Cpu => Self::Cpu {
                 block: CPU_GEMM_BLOCK.min(n.max(1) as u32),
                 per_unit: GEMM_COLUMNS_PER_UNIT,
             },
-            BackendKind::Metal | BackendKind::Cuda => {
-                let units = GPU_GEMM_UNITS.min(info.max_units_per_cube.max(1));
+            BackendKind::Metal => {
+                let units = GPU_GEMM_UNITS.min(max_units);
                 let rows = GPU_GEMM_ROWS
                     .min(n.max(1).next_power_of_two() as u32)
                     .min(units);
@@ -248,6 +300,20 @@ impl GemmLayout {
                     rows,
                     columns: (units / rows).max(1),
                     per_unit: GEMM_COLUMNS_PER_UNIT,
+                }
+            }
+            // Measured on the H100 (CUDA_GEMM_COLUMNS_PER_UNIT).
+            BackendKind::Cuda => {
+                let rows = (n
+                    .max(1)
+                    .div_ceil(CUDA_GEMM_ROWS_PER_UNIT)
+                    .next_power_of_two() as u32)
+                    .clamp(CUDA_GEMM_MIN_ROWS, CUDA_GEMM_MAX_ROWS)
+                    .min(max_units);
+                Self::Cube {
+                    rows,
+                    columns: (CUDA_GEMM_UNITS.min(max_units) / rows).max(1),
+                    per_unit: CUDA_GEMM_COLUMNS_PER_UNIT,
                 }
             }
         }
@@ -811,7 +877,7 @@ pub struct PlanSettings {
     pub layout: GemmLayout,
     /// Which GEMMs the plan may use.
     pub policy: GemmPolicy,
-    /// The bytes X and Y of a chunk may take together, [`DEFAULT_SCRATCH_BYTES`] by
+    /// The bytes X and Y of a chunk may take together, [`default_scratch_bytes`] by
     /// default.
     pub budget: u64,
     /// The layout of X and Y ([`Orientation::BoxMajor`] by default).
@@ -2412,7 +2478,47 @@ mod tests {
             };
             assert!(rows as usize >= n.min(32) && rows * columns == 64 && per_unit == 4);
             gpu.check(&info(BackendKind::Metal)).unwrap();
+            let cuda = GemmLayout::default_for(&info(BackendKind::Cuda), n);
+            let GemmLayout::Cube {
+                rows,
+                columns,
+                per_unit,
+            } = cuda
+            else {
+                panic!("{cuda}")
+            };
+            assert!(
+                (16..=128).contains(&rows) && rows.is_power_of_two(),
+                "{cuda}"
+            );
+            assert!(
+                n.div_ceil(rows as usize) <= 4 || rows == 128,
+                "{cuda} for n = {n}"
+            );
+            assert_eq!((rows * columns).max(rows), 64.max(rows), "{cuda}");
+            assert_eq!(per_unit, 8);
+            cuda.check(&info(BackendKind::Cuda)).unwrap();
         }
+    }
+
+    #[test]
+    fn scratch_budgets_follow_the_backend() {
+        assert_eq!(
+            default_scratch_bytes(&info(BackendKind::Cpu)),
+            DEFAULT_SCRATCH_BYTES
+        );
+        assert_eq!(
+            default_scratch_bytes(&info(BackendKind::Metal)),
+            DEFAULT_SCRATCH_BYTES
+        );
+        let mut cuda = info(BackendKind::Cuda);
+        assert_eq!(default_scratch_bytes(&cuda), CUDA_SCRATCH_BYTES);
+        cuda.max_memory = Some(102_005_473_280);
+        assert_eq!(default_scratch_bytes(&cuda), CUDA_SCRATCH_BYTES);
+        cuda.max_memory = Some(8 << 30);
+        assert_eq!(default_scratch_bytes(&cuda), 1 << 30);
+        cuda.max_memory = Some(256 << 20);
+        assert_eq!(default_scratch_bytes(&cuda), DEFAULT_SCRATCH_BYTES);
     }
 
     #[test]

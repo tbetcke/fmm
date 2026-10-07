@@ -38,7 +38,14 @@ cache and the evaluation time tuned against the static rule, and `m2l_kernels
 T13: the `device_fmm` module and example, the device FMM against the host path at 1 and
 n threads stage by stage (synchronous stages), with its build, transfers, launches,
 syncs and errors, under the tuned and every fixed strategy, and the device leaf-size
-study and rule, with `fmm_accuracy::{builder, measure}`). Later phases add the crates
+study and rule, with `fmm_accuracy::{builder, measure}`; Phase 4S T7: the `peaks` module,
+the per-device peaks and P2P model of the kernel examples keyed by the GPU's
+`DeviceInfo::name`, with "unknown peak" elsewhere (the CPU runtime included) and the M3
+Max's Metal output unchanged; `--precision`, `--n` and `--degrees` in `m2l_kernels`,
+`translation_kernels` and `rotation_kernels`, `--gemm` in the first two, CUDA layouts
+and f64 rows in `p2p_kernels`; the `layout_sweep` example, every layout candidate of the device kernels
+on the FMM's own level calls through the tuner's hook and the per-kind timings, the
+chunk budgets, and the launch, sync and elementwise costs). Later phases add the crates
 they validate.
 
 The only crate that depends on this one is the spike `spikes/p2p-simd` (Phase 3S T7),

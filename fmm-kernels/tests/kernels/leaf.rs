@@ -77,8 +77,9 @@ type Key = (u32, [u32; 3]);
 
 /// The layouts a backend runs in these tests: on the CPU runtime the CPU layout (its
 /// default) and the cube layout with up to 8 units and tiles of up to 4 points (at most
-/// one unit per core there: 4 on the CI runner); on a GPU the default cube layout, a
-/// smaller one and the CPU layout.
+/// one unit per core there: 4 on the CI runner); on a GPU the default cube layouts of
+/// Metal (64 units, tiles of 32) and CUDA (32 units, tiles of 32; Phase 4S T7), a smaller
+/// one and the CPU layout.
 fn layouts(device: &Device) -> Vec<LeafLayout> {
     match device.backend() {
         BackendKind::Cpu => {
@@ -94,6 +95,10 @@ fn layouts(device: &Device) -> Vec<LeafLayout> {
         _ => vec![
             LeafLayout::Cube {
                 units: 64,
+                tile: 32,
+            },
+            LeafLayout::Cube {
+                units: 32,
                 tile: 32,
             },
             LeafLayout::Cube { units: 32, tile: 8 },

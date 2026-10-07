@@ -74,3 +74,10 @@ required-features = ["gpu"]
 [[example]]
 name = "device_fmm"
 required-features = ["gpu"]
+
+# The layout sweep of the device path (Phase 4S T7): every layout candidate of the device
+# kernels on the FMM's own level calls; needs a device backend; not run in CI (no
+# templated-examples entry), run by hand on one rank.
+[[example]]
+name = "layout_sweep"
+required-features = ["gpu"]

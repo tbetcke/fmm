@@ -62,7 +62,7 @@
 //!
 //! | Layout | Default on | P2M, P2L | L2P, M2P |
 //! | --- | --- | --- | --- |
-//! | [`Cube`](LeafLayout::Cube) | Metal, CUDA | one cube of U units per box; unit c owns the coefficient slots c, c + U, …; the points in tiles of P: each of the first P units computes the harmonics of one point of the tile into shared memory (P (p + 1)² values and P charges), `sync_cube`, then each owner adds q_j conj(X(u_j)) for the tile's points in point order | one cube of U units per target leaf, unit u owning the targets u, u + U, …; each entry's coefficients staged once in shared memory ((p + 1)² values), `sync_cube` around each |
+//! | [`Cube`](LeafLayout::Cube) | Metal (64 units), CUDA (32 units) | one cube of U units per box; unit c owns the coefficient slots c, c + U, …; the points in tiles of P: each of the first P units computes the harmonics of one point of the tile into shared memory (P (p + 1)² values and P charges), `sync_cube`, then each owner adds q_j conj(X(u_j)) for the tile's points in point order | one cube of U units per target leaf, unit u owning the targets u, u + U, …; each entry's coefficients staged once in shared memory ((p + 1)² values), `sync_cube` around each |
 //! | [`Cpu`](LeafLayout::Cpu) | the CPU runtime | one cube, one unit per core (at most [`Device::units_cap`]), each a contiguous range of boxes, every coefficient of a box in a local array | the same, each a contiguous range of target leaves, each entry's coefficients copied to a local array once per target leaf |
 //!
 //! Both layouts add every output's contributions in the same order, so every test runs on
@@ -104,6 +104,13 @@ pub const GPU_LEAF_UNITS: u32 = 64;
 /// at p = 8 in f32).
 pub const GPU_LEAF_TILE: u32 = 32;
 
+/// The units per cube of the [`Cube`](LeafLayout::Cube) layout by default on CUDA: 32, one
+/// plane (Phase 4S T7, device-path.md §18.2). On the H100 (the uniform cube at N = 10⁶,
+/// 30.5 points per leaf, f32 and f64, p = 3 to 12) 32 units with tiles of 32 points took
+/// 0.50–0.80 of the time of 64 units with tiles of 32 over P2M and L2P, L2P alone about
+/// half: with 64 units most target blocks leave half the cube idle.
+pub const CUDA_LEAF_UNITS: u32 = 32;
+
 /// The number of coefficients of degree ≤ p, (p + 1)².
 pub const fn coefficients(p: usize) -> usize {
     (p + 1) * (p + 1)
@@ -140,23 +147,24 @@ pub enum LeafLayout {
 
 impl LeafLayout {
     /// The default layout of a device at degree p in `precision`: [`Cpu`](Self::Cpu) on
-    /// the CPU runtime, otherwise [`Cube`](Self::Cube) with [`GPU_LEAF_UNITS`] units (fewer
-    /// if the device allows fewer per cube) and a tile of [`GPU_LEAF_TILE`] points, fewer
-    /// if the shared memory holds fewer. Chosen at build from the backend
-    /// (device-path.md §6.1, §6.3).
+    /// the CPU runtime, otherwise [`Cube`](Self::Cube) with [`GPU_LEAF_UNITS`] units on
+    /// Metal and [`CUDA_LEAF_UNITS`] on CUDA (fewer if the device allows fewer per cube)
+    /// and a tile of [`GPU_LEAF_TILE`] points, fewer if the shared memory holds fewer.
+    /// Chosen at build from the backend (device-path.md §6.1, §6.3, §18.2).
     pub fn default_for(info: &DeviceInfo, p: usize, precision: Precision) -> Self {
-        match info.backend {
-            BackendKind::Cpu => Self::Cpu,
-            BackendKind::Metal | BackendKind::Cuda => {
-                let units = GPU_LEAF_UNITS.min(info.max_units_per_cube.max(1));
-                let per_point = (coefficients(p) + 1) * value_bytes(precision);
-                let fit = (info.max_shared_memory / per_point).max(1);
-                let tile = (GPU_LEAF_TILE as usize).min(units as usize).min(fit);
-                Self::Cube {
-                    units,
-                    tile: tile as u32,
-                }
-            }
+        let units = match info.backend {
+            BackendKind::Cpu => return Self::Cpu,
+            BackendKind::Metal => GPU_LEAF_UNITS,
+            // Measured on the H100 (CUDA_LEAF_UNITS).
+            BackendKind::Cuda => CUDA_LEAF_UNITS,
+        }
+        .min(info.max_units_per_cube.max(1));
+        let per_point = (coefficients(p) + 1) * value_bytes(precision);
+        let fit = (info.max_shared_memory / per_point).max(1);
+        let tile = (GPU_LEAF_TILE as usize).min(units as usize).min(fit);
+        Self::Cube {
+            units,
+            tile: tile as u32,
         }
     }
 

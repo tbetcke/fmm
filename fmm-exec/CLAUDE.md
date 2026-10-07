@@ -164,8 +164,10 @@ FMM on CUDA) and C4S.5 (task T5: per-kind timings, `FmmBuilder::kind_timings`).
     or the static rule; at p ≥ 12 without `table_cache` the static rule, not stored), the
     GEMM of each (kind, pair bucket) under `DeviceGemm::Auto` at the end of
     `DeviceOperator::new`, the P2P layout under `DeviceP2pLayout::Auto` in `load_points`;
-    settings the builder names are never tuned. Static rule (`tune::static_*`): f32
-    `Dense`, f64 `Dense` to p = 11 and `Rotation` from 12 (provisional), the GEMMs of
+    settings the builder names are never tuned. Static rule (`tune::static_*`, keyed by
+    backend since Phase 4S T7): f32 `Dense`; f64 `Dense` at every p on CUDA (decision 9,
+    signed off on 2026-10-07), on Metal and the CPU runtime `Dense` to p = 11 and
+    `Rotation` from 12 (provisional); the GEMMs of
     `DeviceGemm::Auto`, `P2pLayout::default_for`; with M2L on the host fallback `Auto`
     keeps the host rule (requirement 8). Candidates are registered only past the device's
     checks and the input-precision guard (a library below T's precision never), timed
@@ -264,6 +266,29 @@ Measured on locust's H100 (GH200) on 2026-10-07 (Phase 4S T4, C4S.4; CubeCL
   0.078 / 0.176, P2P 0.307 / 0.328; f64: P2M 0.063 / 0.068, M2M 0.135 / 0.226, M2L
   2.244 / 2.342, L2L 0.149 / 0.302, L2P 0.135 / 0.181, P2P 0.480 / 0.666. The ignored
   run took 989 s (`device_fmm.rs` 659 s, `device_cuda.rs` 104 s).
+- Defaults and tuner candidates (Phase 4S T7, C4S.7; measured on 2026-10-07 with
+  `nd-fmm-validate`'s `layout_sweep`, the uniform cube at N = 10⁶; device-path.md §18.2):
+  - the CUDA defaults come from `nd-fmm-kernels` by backend: P2P `Cube` of 32 units, the
+    leaf operators `Cube` of 32 units with tiles of 32, the GEMM's CUDA rule
+    (`GemmLayout::default_for`), the rotation layout as on Metal, and the chunk budget
+    `default_scratch_bytes` (2 GB on CUDA; `FmmBuilder::device_scratch_budget` names
+    another), which `tune::static_gemm` and the scratch sizing take. Metal and the CPU
+    runtime keep theirs;
+  - CUDA GEMM candidates (`tune::gemm_candidates`, `cuda_gemm_layouts`): the CUDA default,
+    the Metal default, one plane of 32 units with 2 columns each (small level calls) and
+    the default's rows with 128 units and 4 columns, all at the device's budget; no
+    16 MB candidate on CUDA (a smaller budget only adds chunks). CUDA P2P candidates:
+    cube 32 (the default) and 64, planes 2 and 4 (128 units measured slower everywhere).
+    The library stays unregistered (F28). `CANDIDATE_SET_VERSION` is 2;
+  - the static M2L rule on CUDA (decision 9, signed off on 2026-10-07): `Dense` at every p
+    in f32 and f64; measured dense faster than rotation at every p (f64 p = 4 to 20, f32
+    p = 2 to 10) per level and end to end, rotation/dense 1.05–1.90 in f64 and 1.15–1.56
+    in f32 (`nd-fmm-bench`, N = 10⁵ and 10⁶). `tests/device_cuda.rs` asserts `Dense` at
+    f64 p = 12 without a table cache;
+  - the tuning hook may offer a GEMM candidate with wider chunks than the operator's
+    scratch: the strategy decision times it on a scratch of its own, a GEMM decision skips
+    it (`Timing::Skipped`, "scratch"), and a budget the builder names holds for every
+    level call (`tests/tune_common`, "a wider candidate").
 - Test budget (release, H100, one process per test file): `tests/device_cuda.rs` 95 s,
   `tests/device_fmm.rs` 656 s (its slowest point the host at f64 p = 18), `accuracy.rs`
   91 s, `adaptive.rs` 71 s, the five operator tests 57 s; the whole ignored run 16 min.
