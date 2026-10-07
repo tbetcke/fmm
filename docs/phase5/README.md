@@ -24,24 +24,28 @@ What is missing (design §7, "Phase 5"; laplace-fmm-plan §7, "Recommendation fo
   `MPI_Neighbor_alltoallv`, and nothing overlaps communication with computation (C5.2).
 - **Nothing has been measured on several ranks**, and CI runs one rank only.
 
-Hardware (decided on 2026-10-04): **the Apple M3 Max is the only machine.** It has 12
-performance and 4 efficiency cores, 64 GB, and Open MPI 5.0.10 from Homebrew. Every
-multi-rank run and every scaling figure of the phase is therefore one node over shared
-memory, with at most 12 ranks × threads on the performance cores. Inter-node scaling is
-documented as a single command for whoever later has a cluster, as CUDA was in Phase 4.
-CI adds a multi-rank job on GitHub's `ubuntu-latest` runners (decision 4), for
-correctness only.
+Hardware: decided on 2026-10-04 as **the Apple M3 Max only**; revised on 2026-10-05
+(docs/phase4s/README.md, decision 8) to **the M3 Max and locust**; briefs updated by
+Phase 4S T8 on 2026-10-07. Two machines, each one node:
+- the M3 Max has 12 performance and 4 efficiency cores, 64 GB, and Open MPI 5.0.10 from
+  Homebrew;
+- locust (`ssh locust`, tools/gh200/README.md and machine.md) is an NVIDIA GH200 480GB
+  node: 72 Neoverse-V2 (Grace) cores, one thread per core, one socket, 572 GB, and one
+  H100 (96 GB HBM3). It runs RHEL 9.3 with 64 KiB pages, and Open MPI 5.0.10 from the
+  spack environment of tools/gh200/. It is shared and multi-user, with no scheduler,
+  and a session on the M3 Max drives it with `tools/gh200/sync.sh` and `remote.sh`.
 
-**Revised on 2026-10-05:** Phase 5 tests on both the M3 Max and **locust**, an NVIDIA
-GH200 node with 72 Grace cores and one H100 (docs/phase4s/README.md, decision 8).
-Phase 4S runs before Phase 5 and sets locust up. Its T8 updates these briefs to match:
-the machines, decision 2, requirements 9 and 10, device ranks, and the T1, T3, T8 and
-T10 briefs. Until then, read "the M3 Max only" below as superseded by this note.
+Every multi-rank run and every scaling figure of the phase is therefore one node over
+shared memory: at most 12 ranks × threads on the M3 Max's performance cores, and at most
+72 on locust. Inter-node scaling is documented as a single command for whoever later has
+a cluster, as CUDA was in Phase 4. CI adds a multi-rank job on GitHub's `ubuntu-latest`
+runners (decision 4), for correctness only.
 
 The device path goes to several ranks in this phase (decided on 2026-10-04), **for
 correctness only**: each rank opens its own device. On the M3 Max that means the CubeCL
-CPU runtime per rank, or Metal with every rank sharing the one GPU. No device scaling
-figure is claimed.
+CPU runtime per rank, or Metal with every rank sharing the one GPU. On locust it means
+the CPU runtime per rank, or CUDA with every rank sharing the one H100. No device
+scaling figure is claimed.
 
 `IndexFmm` is retired (decided on 2026-10-04). The index FMM in `nd-fmm-plan`
 (`IndexFmm`, `BatchedIndexFmm`, `run_index_fmm` and their tests and examples) was a
@@ -66,7 +70,8 @@ The phase has four parts:
    in `nd-fmm-plan`, and the device operator on several ranks with device-resident ghost
    buffers.
 4. **Overlap and scaling (C5.2, C5.3).** Non-blocking exchanges overlapped with local
-   work, then strong and weak scaling on the M3 Max, and the design-document update.
+   work, then strong and weak scaling on the M3 Max and on locust, and the
+   design-document update.
 
 Companion documents:
 - [docs/design/laplace-fmm-plan.md](../design/laplace-fmm-plan.md): Sections 5, 6.8, 7
@@ -110,8 +115,8 @@ In scope:
 - `.github/workflows/`: a multi-rank job (T3), kept, changed or dropped at its sign-off.
 
 Out of scope:
-- Clusters, inter-node runs, and any GPU besides the M3 Max's (decision 2). The
-  inter-node scaling run is one documented command.
+- Clusters, inter-node runs, and any GPU besides the M3 Max's and locust's H100
+  (decision 2). The inter-node scaling run is one documented command.
 - Device scaling. Multi-rank device runs are checked for correctness and their transfers
   counted. They are not timed as scaling figures, since every rank shares one GPU.
 - Overlapping P2P with the far field on a second device stream (device-path.md §14:
@@ -168,12 +173,17 @@ one, with reasons, for sign-off.
    ghost layer. The design states what is replicated on every rank (the coarse tree and
    coarse blocks, `Global` boxes, the O(P) partition data) and how it grows with P.
 9. **Tested on what can run.** Every multi-rank test runs at 1, 2 and 4 ranks (in the CI
-   job, if kept) and at 8 by hand on the M3 Max, under an external timeout, with the
-   macOS loopback flags. Every report states the rank counts, threads per rank, the
-   cores used, and the backends.
-10. **Measured, never asserted.** Timings are reported from the M3 Max in release
-    builds, with every BLAS thread variable set to 1 and ranks × threads at most 12 (the
-    performance cores). No timing is asserted in a test or taken in CI.
+   job, if kept), and by hand under an external timeout at 1, 2, 4 and 8 ranks on both
+   machines: on the M3 Max with the macOS loopback flags, on locust without them (Linux
+   needs none). Larger counts on locust, up to 72 (one rank per core), run where a brief
+   asks for them, as T10's scaling does. Every report states the machine, the rank
+   counts, threads per rank, the cores used, and the backends.
+10. **Measured, never asserted.** Timings are reported from the M3 Max and from locust in
+    release builds, with every BLAS thread variable set to 1, and ranks × threads at
+    most 12 on the M3 Max (the performance cores) and at most 72 on locust (every core).
+    Every timing names its machine. On locust, the load is checked before and after
+    every timing run and stated, as in Phase 4S ("Ranks on locust" below). No timing is
+    asserted in a test or taken in CI.
 
 ## Design decisions for this phase
 
@@ -216,15 +226,41 @@ These hold for every task, so that no task decides them on its own:
   --mca oob_tcp_if_include lo0` (root `CLAUDE.md`). Open MPI 5 uses its shared-memory
   transport between ranks on one node; the TCP flags only stop it from hanging on
   interface selection.
+- **Ranks on locust.** At most 72 ranks × threads per rank, one rank per core: 72
+  Neoverse-V2 cores, one thread each (no SMT), no efficiency cores, one socket, and every
+  core in NUMA node 0. Every run is built and launched inside `tools/gh200/env.sh` (the
+  spack Open MPI 5.0.10), through `tools/gh200/remote.sh` from the M3 Max.
+  - `mpirun` always runs under an external `timeout` and without the macOS loopback
+    flags (tools/gh200/README.md, "MPI at n ranks").
+  - Linux binds processes: every report prints the binding (`--report-bindings`), the
+    rank count, threads per rank and the BLAS variables. OpenBLAS is built
+    `threads=none` there, and every BLAS thread variable is still set to 1.
+  - locust is multi-user, and its GPU clocks are not locked. Before and after every
+    timing run, check `nvidia-smi`, `uptime` and `ps -eo user,pcpu,pmem,etime,cmd
+    --sort=-pcpu`, and state the load; take no timings while another user's job could
+    influence them (docs/phase4s/README.md, "Timing"). Correctness runs that need little
+    memory may share the machine.
+  - Measured on 2026-10-07 (Phase 4S T8; release; `timeout 300 mpirun -n <n>`, no extra
+    flags): `nd-octree`'s MPI examples `test_mpi_complete_tree`,
+    `test_mpi_construction_edge_cases` and `test_mpi_leaf_lookup`, and `nd-fmm-plan`'s
+    `test_index_fmm` (which T2 removes), pass at 1, 2, 4, 8, 16, 32, 64 and 72 ranks,
+    in 0.11–0.19 s per run at 1–8 ranks and 0.59–2.64 s at 72 (start-up dominated).
+    `nd-fmm-exec`'s `tests/mpi_exec.rs` passes at 1, 2, 4 and 8 ranks.
 - **Device ranks.** One device per rank, opened by the local rank index (a
   `split_shared` communicator). On the CPU runtime the cores are shared: ranks × units
   per cube stay within the cores (device-path.md §11), and the `threads(n)` cap applies
   per rank. Metal runs with several ranks share the GPU and run by hand, outside the
-  sandbox, `#[ignore]`d.
+  sandbox, `#[ignore]`d. On locust, CUDA ranks each open the one H100 (`Device::open` per
+  process) and share it, time-sliced (no MPS is configured, and there is no
+  administrator access). They run by hand, `#[ignore]`d behind the feature `cuda`, and
+  are correctness checks only, unless decision 3 is revisited. Kernel compilation on a
+  process's first launch takes seconds and is cached by the driver in
+  `CUDA_CACHE_PATH`.
 - **Threads and BLAS.** The Phase 3 rule stands: ranks × rayon threads × BLAS threads
-  (× CubeCL CPU-runtime workers) stay within the physical cores. With threads > 1, MPI
-  is initialised at `Threading::Funneled`, and every MPI call, the non-blocking ones
-  included, is made on the calling thread.
+  (× CubeCL CPU-runtime workers) stay within the physical cores: 12 performance cores on
+  the M3 Max, 72 cores on locust. With threads > 1, MPI is initialised at
+  `Threading::Funneled`, and every MPI call, the non-blocking ones included, is made on
+  the calling thread.
 - **Non-blocking communication.** rsmpi 0.8.2 has no neighbourhood collectives (rlst's
   blocking `MPI_Neighbor_alltoallv` wraps them with its own `unsafe`). It has scoped
   point-to-point requests (`request::scope`, `immediate_send`, `immediate_receive_into`)
@@ -276,8 +312,8 @@ These hold for every task, so that no task decides them on its own:
 - Every acceptance test in the task briefs passes:
   - in CI for the default members, on one rank;
   - in the multi-rank CI job at 2 and 4 ranks, if it is kept;
-  - on the M3 Max at 1, 2, 4 and 8 ranks by hand, reported with the ranks, threads and
-    backends run.
+  - by hand at 1, 2, 4 and 8 ranks on the M3 Max and on locust, reported with the
+    machine, ranks, threads and backends run.
 - `docs/design/distributed-fmm.md` is signed off before T4 starts, including the
   `nd-octree` changes, the tolerance of requirement 2 and the overlap order.
 - `IndexFmm` and its tests, examples and registrations are gone (T2). The scenario set
@@ -297,18 +333,19 @@ These hold for every task, so that no task decides them on its own:
   - the hook covers every host-side write and read of the evaluator. A shadow operator
     that learns of host data only through the hook equals the plain operator bit for bit
     on 1, 2 and 4 ranks, and with the hook disabled it differs on 2 ranks;
-  - the device on 2 and 4 ranks (CPU runtime; Metal by hand) is within Phase 4's FMM
-    bounds of the host on the same ranks, and bit for bit with every kind on the host
-    fallback;
+  - the device on 2 and 4 ranks (CPU runtime; Metal and CUDA by hand) is within Phase
+    4's FMM bounds of the host on the same ranks, and bit for bit with every kind on the
+    host fallback;
   - its transfers per evaluation equal the design's formula;
   - `DeviceNeedsOneRank` is gone.
 - C5.2 (T8, T9): exchanges overlap local work as the design specifies, with the output
   as decision 9 fixes, and the communication is hidden for the benchmark case by the
   measure T1 defines. Device ghost buffers are packed and unpacked on the device.
-- C5.3 (T10): the scaling report (strong and weak, 1–12 ranks, host path, stage by
-  stage, with load imbalance and communication) is in `fmm-validate/results/` and the
-  design documents. It states that every figure is one node of the M3 Max, and gives the
-  inter-node run as a documented command.
+- C5.3 (T10): the scaling report (strong and weak, 1–12 ranks on the M3 Max and up to
+  64 or 72 on locust, host path, stage by stage, with load imbalance and communication)
+  is in `fmm-validate/results/` and the design documents. It states that every figure is
+  one node, of the M3 Max or of locust, and gives the inter-node run as a documented
+  command.
 
 ## Tasks
 
@@ -335,7 +372,7 @@ One pull request each.
 | T7 | [T7-host-data-hook.md](T7-host-data-hook.md) | `FmmOperator::host_data`, a kernel-agnostic hook around the evaluator's data movements; the shadow-operator check | part of C5.1 (device) | T6 |
 | T8 | [T8-device-multi-rank.md](T8-device-multi-rank.md) | the device operator on several ranks: packed exchange buffers on the device, device per rank, errors agreed; `DeviceNeedsOneRank` removed | C5.1 (device), C5.2 (device-resident ghost buffers) | T7 |
 | T9 | [T9-overlap.md](T9-overlap.md) | non-blocking exchanges and overlapped stages in `nd-fmm-plan`; `Fmm` option; communication-hidden measurement | C5.2 | T6, T7; T8 for a device part |
-| T10 | [T10-scaling.md](T10-scaling.md) | strong and weak scaling on the M3 Max, load balance and communication by stage, the inter-node command, design-document update | C5.3; gate: scaling report | T6, T8, T9 |
+| T10 | [T10-scaling.md](T10-scaling.md) | strong and weak scaling on the M3 Max and on locust, load balance and communication by stage, the inter-node command, design-document update | C5.3; gate: scaling report | T6, T8, T9 |
 
 Review T1 yourself before the tasks that build on it. T4–T9 encode its decisions on the
 octree, the redistribution, the hook and the overlap order.
@@ -348,7 +385,8 @@ T9 all change `fmm-exec/src/fmm.rs` and `tests/mpi_exec.rs`.
 
 | Machine | Ranks | Used for |
 | --- | --- | --- |
-| Apple M3 Max (development; 12 performance and 4 efficiency cores, 64 GB, Open MPI 5.0.10) | 1–12 on the performance cores; 16 only labelled in the scaling report | every task's multi-rank tests by hand; every timing; Metal with ranks sharing the GPU |
+| Apple M3 Max (development; 12 performance and 4 efficiency cores, 64 GB, Open MPI 5.0.10) | 1–12 on the performance cores; 16 only labelled in the scaling report | every task's multi-rank tests by hand; timings; Metal with ranks sharing the GPU |
+| locust (NVIDIA GH200 480GB, `ssh locust`; 72 Neoverse-V2 cores, one thread each, 572 GB, one H100 with 96 GB HBM3, Open MPI 5.0.10 from spack; shared, multi-user, no scheduler; tools/gh200/) | 1–72, one rank per core | every task's multi-rank tests by hand, without loopback flags; timings, with the load checked and stated; the host path (NEON); CUDA device ranks, every rank sharing the one H100, correctness only; the CubeCL CPU runtime |
 | GitHub Actions `ubuntu-latest` (4 vCPUs), if T3's job is kept | 2 and 4 | the MPI test executables, debug, correctness only |
 | A cluster | none available (decided on 2026-10-04) | the inter-node run, documented as one command for later |
 
@@ -357,9 +395,11 @@ T9 all change `fmm-exec/src/fmm.rs` and `tests/mpi_exec.rs`.
 Each is recorded in the exit checklist when made:
 1. The design document `docs/design/distributed-fmm.md`, including any change it proposes
    to the requirements or tolerances above (T1; before T4).
-2. Hardware. **Decided on 2026-10-04: the M3 Max only.** Every multi-rank run is one
-   node. The inter-node scaling run is a documented command. **Revised on 2026-10-05:
-   the M3 Max and locust (GH200)**, both single nodes. Phase 4S T8 updates the briefs.
+2. Hardware. **Decided on 2026-10-04: the M3 Max only.** **Revised on 2026-10-05
+   (Phase 4S decision 8): the M3 Max and locust (GH200)**, both single nodes: up to 12
+   ranks × threads on the M3 Max, up to 72 on locust. Every multi-rank run is one node.
+   The inter-node scaling run is a documented command. Briefs updated by Phase 4S T8 on
+   2026-10-07.
 3. The device on several ranks. **Decided on 2026-10-04: in Phase 5, correctness only**
    (T7, T8). It is never timed as a scaling figure.
 4. A multi-rank CI job. **Decided on 2026-10-04: add one.** T3 builds and measures it,
@@ -391,15 +431,16 @@ Each is recorded in the exit checklist when made:
 | Risk | Mitigation |
 | --- | --- |
 | A multi-rank defect hangs a collective, in a test or in CI | every `mpirun` under an external `timeout`; errors agreed before the next collective (requirement 4); T3's job has a step timeout; scenarios fail on every rank or on none |
-| One node over shared memory hides communication costs that a network would show, so overlap looks unnecessary or scaling looks better than it is | T10 reports bytes and messages per exchange next to the times, so a network's cost can be estimated; T1 models the exchanges at network bandwidths; the inter-node command is documented |
+| One node over shared memory hides communication costs that a network would show, so overlap looks unnecessary or scaling looks better than it is. Both machines are one node; on locust every core is also in one NUMA node, so even 72 ranks see no NUMA distance | T10 reports bytes and messages per exchange next to the times, so a network's cost can be estimated; T1 models the exchanges at network bandwidths; the inter-node command is documented; no figure from either machine is presented as inter-node scaling |
 | Load imbalance from coarse-block granularity or from weighting distinct keys instead of points (`nd-octree` counts each finest key once, so coincident points weigh as one) | T1 measures the imbalance on the workloads before T4; T4 adds the weighting the sign-off accepts; T10 reports per-rank work |
 | Small problems on many ranks: `nd-octree` panics if the coarse tree has fewer blocks than ranks | T1 decides between an error agreed on every rank and a refinement that makes enough blocks; T4 implements it; tests cover a tiny problem on 8 ranks |
 | The multi-rank result differs from one rank by more than rounding, and the cause is a ghost or global-level defect hidden behind the tolerance | the tolerance is derived, not tuned (T1); breakdown by kind and by list on failure; the recording operator checks every list pair once on every rank count; bit identity on a fixed rank count |
 | Retiring `IndexFmm` leaves the evaluator's values unchecked in `nd-fmm-plan` | the Laplace FMM against one rank and the direct sum in `nd-fmm-exec` (T6) is the value check; the recording operator and the exchange checks stay in `nd-fmm-plan`; T2 lists every check it removes and what replaces it |
 | Non-blocking exchanges do not progress while the rank computes, so the overlap gains nothing | T1 designs the progress (test calls between level calls), and T9 measures the exposed wait per exchange |
-| Several ranks share the one GPU on the M3 Max and time-slice it | device multi-rank runs are correctness checks only (decision 3); transfers are counted, not timed |
+| Several ranks share the one GPU on the M3 Max, or the one H100 on locust, and time-slice it. On locust another user's job may hold the GPU too (on 2026-10-05 one held it at 100% for over an hour), and the host-side part of a device evaluation (about 8–13 ms of 12–35 ms at N = 10⁶, measured on locust in Phase 4S T7 and T8) is sensitive to host load | device multi-rank runs are correctness checks only (decision 3); transfers are counted, not timed; correctness runs that need little memory may share the GPU |
 | macOS schedules ranks on efficiency cores without binding, so timings vary | at most 12 ranks × threads; medians over repeated runs; every report prints the placement settings and labels 16-rank runs |
-| The O(P) replicated data (coarse tree, coarse gather) dominates at large P | T1 states the growth with P (requirement 8); irrelevant at P ≤ 12, recorded for a cluster run |
+| locust is a multi-user node with no scheduler and unlocked GPU clocks, so host and device timings vary with other users' jobs; 72 ranks need every core | the load checked before and after every timing run and stated (docs/phase4s/README.md, "Timing"); no timings while another job could influence them; medians over repeated runs; every report prints the binding (`--report-bindings`) |
+| The O(P) replicated data (coarse tree, coarse gather) dominates at large P | T1 states the growth with P (requirement 8); irrelevant at P ≤ 12; T10 reports memory per rank up to 64 or 72 ranks on locust; recorded for a cluster run |
 
 ## How to run a task with Claude Code
 
@@ -409,7 +450,7 @@ In the repository root, start `claude` and say:
 ## Exit checklist
 - [ ] T1 merged: `docs/design/distributed-fmm.md` drafted, sign-off questions listed
 - [ ] Distributed design signed off, including the `nd-octree` changes, the tolerance of requirement 2, the redistribution API, the overlap order and the non-blocking mechanism
-- [x] Hardware: the M3 Max only; inter-node run documented for later (decided 2026-10-04); revised to the M3 Max and locust (decided 2026-10-05; briefs updated by Phase 4S T8)
+- [x] Hardware: the M3 Max only; inter-node run documented for later (decided 2026-10-04); revised to the M3 Max and locust (decided 2026-10-05); briefs updated by Phase 4S T8 (2026-10-07)
 - [x] Device on several ranks: in Phase 5, correctness only (decided 2026-10-04)
 - [x] Multi-rank CI job: add one, measured in T3 (decided 2026-10-04)
 - [x] Index FMM: removed from `nd-fmm-plan` (decided 2026-10-04)

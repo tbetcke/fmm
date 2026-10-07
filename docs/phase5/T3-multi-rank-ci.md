@@ -6,14 +6,16 @@ exist only on several ranks, and so far they have been checked only by hand
 rank count. A defect there should fail a pull request, not wait for a hand run. It was
 decided on 2026-10-04 to add a multi-rank job (docs/phase5/README.md, decision 4). This
 task builds it and measures it, so that the sign-off can keep, change or drop it, as
-Phase 4 T4 did for `run-tests-kernels`.
+Phase 4 T4 did for `run-tests-kernels`. The job runs on GitHub's runners only; locust
+(decision 2, revised on 2026-10-05) adds by-hand runs beside it, never CI runs.
 
 Read first:
 - root CLAUDE.md ("Checks", "MPI"), fmm-plan/CLAUDE.md ("Multi-rank runs"),
   fmm-exec/CLAUDE.md (the MPI-owning test executables), octree/CLAUDE.md ("MPI
   examples");
 - docs/phase5/README.md ("Requirements" 4 and 9, "Design decisions": "Tests and MPI",
-  "Machines");
+  "Ranks on locust", "Machines");
+- tools/gh200/README.md ("MPI at n ranks");
 - `.github/workflows/run-tests.yml` (the three jobs and how `run-tests-kernels` caches)
   and `.github/workflows/run-examples.yml`;
 - fmm-plan/tests/mpi_regressions.rs and fmm-exec/tests/mpi_exec.rs: how they behave on
@@ -45,7 +47,7 @@ Do:
     the interface or use the shared-memory transport, and say what was needed.
 - Make every multi-rank test fail on every rank or on none, so a failure never leaves a
   rank blocked. If a test fails or hangs at 2 or 4 ranks on the runner but not on the
-  M3 Max, report it and stop. Do not mark it ignored to get the job green.
+  M3 Max or locust, report it and stop. Do not mark it ignored to get the job green.
 - **Measure**, over at least three runs of the job (re-run it on the PR):
   - the cold and the cached wall time of the job, and of build and run separately;
   - the time of each executable at 2 and 4 ranks;
@@ -59,7 +61,8 @@ Do:
   than one rank" under "MPI" accordingly. Keep the rule that every multi-rank run by
   hand has an external timeout.
 - fmm-plan/CLAUDE.md and fmm-exec/CLAUDE.md: say that CI now runs their MPI executables
-  at 2 and 4 ranks, and that 8 ranks and the ignored tests stay by hand.
+  at 2 and 4 ranks, and that 8 ranks and the ignored tests stay by hand, on the M3 Max
+  and on locust.
 
 Tests that define done:
 - The job passes on the PR at 2 and 4 ranks, three times.
@@ -72,6 +75,9 @@ Must pass:
 - the four CI jobs on the PR;
 - the multi-rank runs by hand on the M3 Max at 2 and 4 ranks, with the loopback flags
   and an external timeout, to compare with the runner;
+- the same runs by hand on locust at 2, 4 and 8 ranks, under an external timeout and
+  without the loopback flags (tools/gh200/README.md, "MPI at n ranks"), a Linux run to
+  compare with the runner;
 - the root checks.
 
 Report:

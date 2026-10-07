@@ -118,7 +118,49 @@ Interactively on locust: `cd /data/ucahtbe/fmm/<branch> && . tools/gh200/env.sh`
 
 Long runs: under `timeout`, detached (`setsid nohup … &`), with the output in
 `/data/ucahtbe/logs/`. An MPI run on Linux needs no loopback flags:
-`timeout 300 mpirun -n 2 target/release/examples/<example>`.
+`timeout 300 mpirun -n 2 target/release/examples/<example>` ("MPI at n ranks").
+
+## MPI at n ranks
+
+Open MPI 5.0.10 comes from the spack environment, so every MPI run happens inside
+`env.sh`: through `remote.sh`, or interactively after sourcing it. Build first, then
+launch the binary under an external `timeout`, without the macOS loopback flags. An
+example:
+
+```sh
+tools/gh200/remote.sh 'cargo build --release -p nd-octree --examples &&
+    timeout 300 mpirun -n 8 target/release/examples/test_mpi_complete_tree'
+```
+
+A test executable that initialises MPI: build it without running it, take its path from
+cargo's `Executable` line, and keep `RUST_MIN_STACK`:
+
+```sh
+tools/gh200/remote.sh 'cargo test --release -p nd-fmm-exec --test mpi_exec --no-run'
+tools/gh200/remote.sh 'RUST_MIN_STACK=8388608 timeout 600 mpirun -n 4 target/release/deps/mpi_exec-<hash>'
+```
+
+- n goes up to 72, one rank per core (72 cores, one thread each); 72 ranks need no
+  extra flag. Ranks × threads per rank × BLAS threads stay within the 72 cores.
+- An assertion on one rank leaves the others blocked in a collective: the `timeout` ends
+  the run. Afterwards, check `ps -u $USER` and leave no rank behind.
+- Open MPI binds processes on Linux (macOS has no binding). A timing run reports the
+  binding (`mpirun --report-bindings`), and follows "GPU etiquette" below: the load
+  checked before and after, and stated.
+- Every MPI-initialising executable leaves a 16 MiB `sm_segment.*` in `$TMPDIR`
+  ("Checking the home directory"); after a sweep over rank counts, delete
+  `/data/ucahtbe/tmp/sm_segment.*`.
+
+Measured on 2026-10-07 (Phase 4S T8), release builds, with these launch commands:
+`nd-octree`'s examples `test_mpi_complete_tree`, `test_mpi_construction_edge_cases` and
+`test_mpi_leaf_lookup`, and `nd-fmm-plan`'s `test_index_fmm`, pass at 1, 2, 4, 8, 16,
+32, 64 and 72 ranks; `nd-fmm-exec`'s `mpi_exec` passes at 1, 2, 4 and 8 (3.8 s at 1
+rank, where every scenario runs; 0.3 s at 2–8, where only the multi-rank scenario runs).
+Wall time per example run, start-up dominated:
+
+| Ranks | 1–8 | 16 | 32 | 64 | 72 |
+| --- | --- | --- | --- | --- | --- |
+| Wall time | 0.11–0.19 s | 0.23–0.47 s | 0.30–0.74 s | 0.42–1.87 s | 0.59–2.64 s |
 
 ## The benchmark
 
@@ -137,6 +179,11 @@ tools/gh200/remote.sh 'cat bench-results/*.md'
 
 `sync.sh` deletes what exists only on locust (`rsync --delete`), `bench-results/`
 included: fetch a report before the next sync.
+
+`run.sh` rebuilds `target/release/nd-fmm-bench` with the features of its own `--backend`
+list, so after a host-only run that binary has no CUDA. To run it directly (under `nsys`,
+for example), build it first with `cargo build --release -p nd-fmm-bench --features cuda`;
+otherwise every CUDA combination is a "refused" row (Phase 4S T8 found this).
 
 ## GPU etiquette
 
