@@ -508,5 +508,5 @@ Before T1 has merged, T1 itself uses `ssh locust` directly, outside the sandbox.
 - [x] Output pass on the device (decision 12): on by default on devices with f64 (T9; decided 2026-10-07)
 - [ ] T9 merged: the host part of an evaluation, bit for bit; before and after measured; device-path.md §18.4
 - [x] CI triggers and actions (decision 13): pushes to `main`; first-party actions only (T10; decided 2026-10-07)
-- [ ] T10 merged: CI with every check, cached installs, one kernel test run, warm caches; times before and after
+- [x] T10 merged: CI with every check, cached installs, one kernel test run, warm caches; times before and after
 - [x] Design documents updated: laplace-fmm-plan §6.1, §6.2, §7 (Phase 4S), §8.3, §9.1, §9.2; device-path.md §17 note and §18 (§18.3 added); workspace-structure §2, §3, §3.1, §6 (T8)
