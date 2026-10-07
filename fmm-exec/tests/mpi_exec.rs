@@ -167,6 +167,26 @@
 //!   share of the level-1 octants of a uniform level-3 tree) returns
 //!   `DeviceNeedsOneRank` on every rank.
 //!
+//! Per-kind timings (Phase 4S T5, C4S.5; `tests/kind_common`). Error measures: exact
+//! equality of the bit patterns and of the call counts.
+//! - In `evaluate_threaded` with repeats, the one-thread evaluation runs with
+//!   `KindTiming::Synchronous` (`Fmm::set_kind_timings` on the same build) and so does the
+//!   four-thread repeat (`kind_timings`), while the repeats at 2 and 8 threads run `Off`:
+//!   all four outputs are bit for bit the same. Every scenario has such a call, except
+//!   **strongly graded tree** and the owned build of **device backends**, which evaluate
+//!   again with `Synchronous` and compare with their `Off` output (`check_synchronous`).
+//!   Each timed evaluation has the calls of the plan per kind and level (the non-empty
+//!   views), zero time where there is none, each kind's placement, and a sum over the
+//!   kinds of at most the stages that call operators; each `Off` evaluation has none.
+//! - With the CPU runtime, `device_common::check_backend` repeats it on the device:
+//!   `Synchronous` bit for bit the default placement, with one sync after the charge
+//!   upload and one per call besides the download's.
+//! - **device backends**: `KindTiming::Device` is refused with
+//!   `SettingsError::KindTimingUnsupported` on the host and on the CPU runtime at build,
+//!   on every rank, and by `Fmm::set_kind_timings` on the host, which leaves the mode.
+//!
+//! The test prints the evaluations with kind timings and their calls at the end.
+//!
 //! Every `Fmm` scenario but **ownership** passes each rank its share of the points (every
 //! `size`-th). On several ranks those points generally lie in leaves of other ranks;
 //! the scenario then checks that every rank returns `PointsNotOwned` and stops, since
@@ -178,7 +198,8 @@ use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
 use nd_fmm_exec::fmm::{
-    Backend, Fmm, FmmBuilder, FmmError, OperatorKind, Output, Placement, PointSet, SettingsError,
+    Backend, Fmm, FmmBuilder, FmmError, KindTiming, OperatorKind, Output, Placement, PointSet,
+    SettingsError,
 };
 use nd_fmm_exec::geometry::{Domain, GeometryError, leaf_coordinates, radius};
 use nd_fmm_exec::operator::{Isa, LaplaceOperator, P2pChoice, SimdScalar};
@@ -197,6 +218,7 @@ use nd_octree::{MortonKey, Octree, OctreeOptions, PhysicalBox, constants::DEEPES
 
 #[cfg(feature = "gpu")]
 mod device_common;
+mod kind_common;
 
 type Scenario = fn(&SimpleCommunicator);
 
@@ -302,6 +324,10 @@ const TABLE_CACHE: &str = concat!(env!("CARGO_TARGET_TMPDIR"), "/mpi_exec_tables
 /// The thread counts every `Fmm` scenario is repeated at, besides one thread.
 const THREADS: [usize; 3] = [2, 4, 8];
 
+/// The thread count of `THREADS` whose repeat runs with `KindTiming::Synchronous`
+/// (Phase 4S T5).
+const KIND_THREADS: usize = 4;
+
 #[test]
 fn distributed_scenarios() {
     let (universe, provided) = mpi::initialize_with_threading(Threading::Funneled)
@@ -346,6 +372,7 @@ fn distributed_scenarios() {
         );
     }
     eprintln!("rank {}: {}", comm.rank(), backends_line());
+    eprintln!("rank {}: {}", comm.rank(), kind_common::summary());
 }
 
 /// The dyadic domain of Phase 2, a = (−1.25, 0.5, 2) and w = 3: every centre, centre
@@ -777,8 +804,25 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
     )?;
     assert_eq!(fmm.threading().threads, 1);
     assert_eq!(fmm.operator().threads(), 1);
+    // Per-kind timings (Phase 4S T5): with repeats, the one-thread evaluation runs with
+    // `KindTiming::Synchronous` (`set_kind_timings`, the same build), and the `Off`
+    // repeats at 2 and 8 threads must give its bits. A scenario whose calls have no
+    // repeats checks it with `check_synchronous`.
+    let mode = if threads.is_empty() {
+        KindTiming::Off
+    } else {
+        KindTiming::Synchronous
+    };
+    fmm.set_kind_timings(mode)
+        .expect("the host times synchronously");
     let output = fmm.evaluate(charges).expect("the FMM evaluates");
     let reference = output_bits(&output);
+    let calls = kind_common::check_kinds("host, one thread", &fmm, &output, mode);
+    if mode != KindTiming::Off {
+        kind_common::record("host", calls);
+    }
+    fmm.set_kind_timings(KindTiming::Off)
+        .expect("Off is always accepted");
     #[cfg(feature = "gpu")]
     for backend in device_backends() {
         let (outcome, difference) = device_common::check_backend(
@@ -821,12 +865,55 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
             device_common::Outcome::OneRankOnly => entry.refused += 1,
         }
     }
+    assert!(
+        threads.is_empty() || threads.iter().any(|&n| n != KIND_THREADS),
+        "a repeat without kind timings"
+    );
     for &n in threads {
-        let builder = builder.clone().threads(n);
+        // At four threads with `Synchronous` kind timings (Phase 4S T5).
+        let mode = if n == KIND_THREADS {
+            KindTiming::Synchronous
+        } else {
+            KindTiming::Off
+        };
+        let builder = builder.clone().threads(n).kind_timings(mode);
         let mut threaded = built(builder.build(sources, targets, comm), comm)?;
-        check_threaded(&mut threaded, charges, &reference, n);
+        let output = check_threaded(&mut threaded, charges, &reference, n);
+        let calls = kind_common::check_kinds(
+            &format!("host, {mode:?}, {n} threads"),
+            &threaded,
+            &output,
+            mode,
+        );
+        if mode != KindTiming::Off {
+            kind_common::record("host", calls);
+        }
     }
     Some((fmm, output))
+}
+
+/// Evaluates `charges` again on `fmm`, at one thread, with `KindTiming::Synchronous`
+/// (Phase 4S T5), for a scenario whose `evaluate_threaded` calls have no repeats: the
+/// bits of `output`, its `Off` evaluation of the same charges, and the calls of the plan
+/// (`kind_common::check_kinds`). Leaves the mode `Off`.
+fn check_synchronous<T: Stored + SimdScalar + Equivalence + Default>(
+    what: &str,
+    fmm: &mut Fmm<'_, T>,
+    charges: &[T],
+    output: &Output<T>,
+) {
+    fmm.set_kind_timings(KindTiming::Synchronous)
+        .expect("the host times synchronously");
+    let timed = fmm.evaluate(charges).expect("the FMM evaluates");
+    fmm.set_kind_timings(KindTiming::Off)
+        .expect("Off is always accepted");
+    assert_eq!(
+        output_bits(&timed),
+        output_bits(output),
+        "{what}: kind_timings(Synchronous) differs from Off"
+    );
+    let calls = kind_common::check_kinds(what, fmm, &timed, KindTiming::Synchronous);
+    kind_common::record("host", calls);
 }
 
 /// The P2P kernels besides `Auto` that [`evaluate_every_kernel`] runs: `Reference` and
@@ -930,13 +1017,13 @@ fn difference<T: RealScalar>(a: &[T], b: &[T], comm: &SimpleCommunicator) -> f64
 
 /// Evaluates `charges` with `fmm`, built with `n` threads, and checks its threading
 /// report, the capacity of every per-thread scratch set before and after, and the output
-/// bit for bit against `reference`.
+/// bit for bit against `reference`. Returns the output.
 fn check_threaded<T: Stored + SimdScalar + Equivalence + Default>(
     fmm: &mut Fmm<'_, T>,
     charges: &[T],
     reference: &[u64],
     n: usize,
-) {
+) -> Output<T> {
     let report = fmm.threading();
     assert_eq!(report.threads, n, "{report}");
     assert!(report.mpi >= Threading::Funneled, "{report}");
@@ -962,6 +1049,7 @@ fn check_threaded<T: Stored + SimdScalar + Equivalence + Default>(
         "{n} threads: {differing} of {} values differ from one thread",
         bits.len()
     );
+    output
 }
 
 /// The exact potential (and gradient) of `charges` at `sources` at every target:
@@ -1850,9 +1938,11 @@ fn strongly_graded_tree(comm: &SimpleCommunicator) {
     let sets = (&sources[..], &sources[..]);
     // One thread only: p = 8 on this tree is among the most expensive evaluations of the debug
     // run, and the thread counts are covered by the other adaptive scenarios.
-    let Some((fmm, output)) = evaluate_threaded(&builder, sets, &local_charges, &[], comm) else {
+    let Some((mut fmm, output)) = evaluate_threaded(&builder, sets, &local_charges, &[], comm)
+    else {
         return;
     };
+    check_synchronous("strongly graded tree", &mut fmm, &local_charges, &output);
     let (histogram, [u, v, w, x]) = tree_summary(&fmm, comm);
     let levels = leaf_levels(&histogram);
     let span = levels.last().unwrap() - levels.first().unwrap();
@@ -2162,6 +2252,40 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
         Some(FmmError::NoPoints)
     );
 
+    // `KindTiming::Device` needs a device that times on itself (Phase 4S T5): refused on
+    // the host and on the CPU runtime at step 1, on every rank.
+    for backend in [Backend::Host, Backend::Cpu]
+        .into_iter()
+        .filter(|b| b.is_compiled())
+    {
+        let error = FmmBuilder::<f64>::new(3)
+            .backend(backend)
+            .kind_timings(KindTiming::Device)
+            .build(&points, &points, comm)
+            .err();
+        assert_eq!(
+            error,
+            Some(FmmError::InvalidSettings(
+                SettingsError::KindTimingUnsupported { backend }
+            )),
+            "rank {rank}: kind_timings(Device) on {backend}"
+        );
+    }
+    if let Some(mut fmm) = built(
+        FmmBuilder::<f64>::new(3).build(&points, &points, comm),
+        comm,
+    ) {
+        assert_eq!(
+            fmm.set_kind_timings(KindTiming::Device),
+            Err(SettingsError::KindTimingUnsupported {
+                backend: Backend::Host
+            }),
+            "set_kind_timings(Device) on the host"
+        );
+        let output = fmm.evaluate(&vec![1.0; points.len()]).unwrap();
+        assert_eq!(output.timings.kinds, None, "the refused mode is not set");
+    }
+
     // Every backend that is not compiled in is refused at step 1, on every rank; and
     // when only rank 0 asks for one, rank 0 returns the error and the others `OtherRank`:
     // the check is an input error of step 1, agreed by its existing all-reduce.
@@ -2347,8 +2471,10 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
                 "rank {rank}: device backends: every point owned on {size} rank(s), the host \
                  path builds"
             );
-            evaluate_threaded(&builder, (&owned, &owned), &owned_charges, &[], comm)
-                .expect("the points are owned");
+            let (mut fmm, output) =
+                evaluate_threaded(&builder, (&owned, &owned), &owned_charges, &[], comm)
+                    .expect("the points are owned");
+            check_synchronous("device backends", &mut fmm, &owned_charges, &output);
         }
         Err(FmmError::PointsNotOwned { count }) if size > 1 => eprintln!(
             "rank {rank}: device backends: {count} points not owned on {size} ranks; \

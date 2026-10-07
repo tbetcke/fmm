@@ -608,6 +608,7 @@ fn mean(timings: &[StageTimings]) -> StageTimings {
         evaluate_leaves: average(|t| t.evaluate_leaves),
         output: average(|t| t.output),
         device: mean_device(timings),
+        kinds: None,
     }
 }
 

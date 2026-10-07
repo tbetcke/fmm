@@ -34,6 +34,12 @@
 //! - `threads(4)` builds the pool of four threads for the host-fallback kinds
 //!   (device-path.md §11): with every kind there the output still equals the host
 //!   path's, and with the default placement the output of one thread;
+//! - per-kind timings (Phase 4S T5): in every scenario `check_backend` also builds the
+//!   default placement with `kind_timings(Synchronous)` and `kind_timings(Device)` (alone
+//!   and inside the stage windows of `device_timestamps(true)`), each bit for bit the
+//!   default with the syncs and windows its mode documents (`tests/kind_common`); and at
+//!   N = 10⁵, p = 8, the call windows against the stage windows, printed
+//!   (`tests/kind_common/windows.rs`);
 //! - the tuner (T12): the scenarios of `tune_common` (static rule without a directory, a
 //!   slowed candidate, the input-precision guard, the cache round trip, stale and
 //!   corrupted files, every candidate's output within the FMM bounds, the budget) at p = 8
@@ -50,6 +56,9 @@ use nd_fmm_exec::fmm::{Backend, DeviceGemm, FmmBuilder, FmmError, OperatorKind, 
 use nd_fmm_exec::tables::M2lStrategy;
 
 mod device_common;
+mod kind_common;
+#[path = "kind_common/windows.rs"]
+mod kind_windows;
 mod tune_common;
 
 use device_common::{Outcome, check_backend, output_bits};
@@ -331,6 +340,13 @@ fn metal_device_path() {
         tune_common::check_tuning::<f32>(Backend::Metal, 8, true, &root, &comm);
         tune_common::check_tuning::<f32>(Backend::Metal, 3, false, &root, &comm);
     }
+    // The call windows of `KindTiming::Device` against the stage windows (Phase 4S T5).
+    if comm.size() == 1 {
+        let points = cube(&mut rng, 100_000);
+        let q = charges(&mut rng, points.len());
+        kind_windows::call_windows::<f32>(Backend::Metal, (&points, &q), 8, &comm);
+    }
+    eprintln!("rank {}: {}", comm.rank(), kind_common::summary());
 
     eprintln!(
         "rank {}: backends run: metal (f32); not run: cpu (tests/mpi_exec.rs with --features \

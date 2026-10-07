@@ -11,7 +11,8 @@ design docs/design/device-path.md), C4.2 (task T6: P2P on the device), C4.3 (tas
 T7: P2M, L2P, P2L and M2P on the device), C4.4 (task T8: M2M and L2L on the device),
 C4.5 (task T9: dense M2L on the device), C4.6 (task T10: rotation M2L on the device),
 C4.8 (task T11: the device FMM end to end, every kind on the device) and C4.7 (task T12:
-autotune with a persistent cache, module `tune`).
+autotune with a persistent cache, module `tune`); Phase 4S, C4S.4 (task T4: the device
+FMM on CUDA) and C4S.5 (task T5: per-kind timings, `FmmBuilder::kind_timings`).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -57,7 +58,9 @@ autotune with a persistent cache, module `tune`).
     `tests/device_tune.rs` (the tuner, feature `cpu`) at the default level.
     The device checks shared by `tests/mpi_exec.rs`, `tests/device_metal.rs` and
     `tests/device_cuda.rs` live in `tests/device_common/`, the tuner's in
-    `tests/tune_common/`.
+    `tests/tune_common/`, the per-kind timings' (Phase 4S T5) in `tests/kind_common/`
+    (also used by `tests/accuracy.rs`), with the call-window measurement of the Metal and
+    CUDA executables in `tests/kind_common/windows.rs`.
   - New `Fmm` scenarios evaluate through `evaluate_threaded` in `tests/mpi_exec.rs`,
     which repeats them at 2, 4 and 8 threads and checks the output bit for bit, or
     through `evaluate_every_kernel`, which also repeats them with `Reference` and every
@@ -132,6 +135,28 @@ autotune with a persistent cache, module `tune`).
     stream, they do not overlap: "CUDA (Phase 4S)" below); no window on
     the CPU runtime, whose windows drain the stream; `synchronous_stages` disables them. Never add a sync, a download or a host call to a
     default evaluation; a new launch belongs in the formula of `tests/device_common`;
+  - per-kind timings (Phase 4S T5, C4S.5; `fmm::KindTiming`, `FmmBuilder::kind_timings`,
+    `Fmm::set_kind_timings`, `StageTimings::kinds`, device-path.md §8.3): off by default,
+    and with `Off` each level call only checks the mode. The one place that times is the
+    `FmmOperator` implementation of `fmm::ExecOperator` (its `delegate!` macro), around
+    the engine's method: `LaplaceOperator`, the device operator and the kernels do not
+    change. Only calls with an entry in their view are timed and counted (at most 148 per
+    evaluation; 3–119 on the `tests/mpi_exec.rs` trees). `Synchronous`: the host clock per
+    call, and on a device one sync after the charge upload and one after every such call;
+    `Device`: one window per call of a device kind (`DeviceOperator::{open_call_window,
+    close_call_window}`), no sync, resolved after the download, refused at build
+    (`SettingsError::KindTimingUnsupported`, step 1's agreement) where the device does not
+    time on itself (the host, the CPU runtime). Both compose with `synchronous_stages`
+    and `device_timestamps`. Every mode gives the bits of `Off`: `tests/mpi_exec.rs`
+    checks `Synchronous` on every scenario at 1 and 4 threads and on the CPU runtime,
+    `tests/device_common` both modes on Metal and CUDA with the syncs and windows of
+    each, `tests/accuracy.rs` reports the sum over the kinds against the operator stages
+    on the C3.2 tree at p = 6 (0.9999 at one thread on the M3 Max). On Metal the `Device`
+    windows overlap and misattribute time between calls, so they are not a breakdown
+    there (M2L 0.25 ms against 6.15 ms with `Synchronous`, L2P 4.67 against 0.37 ms; the
+    cube at N = 10⁵, p = 8, f32; `tests/kind_common/windows.rs`); use `Synchronous`.
+    On CUDA they do not overlap and are a breakdown ("CUDA (Phase 4S)" below).
+    Never time inside `nd-fmm-plan` or `nd-fmm-kernels`, and never assert a timing;
   - autotune (T12, C4.7; module `tune`, device-path.md §10): `FmmBuilder::tuning_cache`
     (no default directory, no environment variable) and `tuning_budget` (10 s); the M2L
     strategy under `Auto` with M2L on the device is decided before the tables are built
@@ -227,6 +252,18 @@ Measured on locust's H100 (GH200) on 2026-10-07 (Phase 4S T4, C4S.4; CubeCL
   On CUDA the windows do not overlap (one stream, events in order): the five spans add up
   to 0.71–0.77 of the wall time of `evaluate` in f32 and f64 (on Metal, T11, they added
   up to more than it). `KindTiming::Device` (T5) was not checked: T5 had not merged.
+- Kind timings (Phase 4S T5, run on 2026-10-07; GPU idle before and after, clocks not
+  locked): `Synchronous` and `Device` (alone and inside the stage windows) bit for bit
+  the default in every `tests/device_cuda.rs` scenario, with the syncs and windows of
+  each (44 and 88 evaluations, 8–40 calls). On the cube at N = 10⁵, p = 8
+  (`tests/kind_common/windows.rs`) the call windows do not overlap: every stage's call
+  windows add up to less than its own window in all 10 evaluations (f32 downward
+  1.64 ms of calls in a 1.65 ms span), and their sum is 0.68–0.71 (f32) and 0.72–0.74
+  (f64) of the wall time of `evaluate`. Medians per kind, ms, `Device` / `Synchronous`,
+  f32: P2M 0.036 / 0.039, M2M 0.145 / 0.219, M2L 1.475 / 1.556, L2L 0.152 / 0.374, L2P
+  0.078 / 0.176, P2P 0.307 / 0.328; f64: P2M 0.063 / 0.068, M2M 0.135 / 0.226, M2L
+  2.244 / 2.342, L2L 0.149 / 0.302, L2P 0.135 / 0.181, P2P 0.480 / 0.666. The ignored
+  run took 989 s (`device_fmm.rs` 659 s, `device_cuda.rs` 104 s).
 - Test budget (release, H100, one process per test file): `tests/device_cuda.rs` 95 s,
   `tests/device_fmm.rs` 656 s (its slowest point the host at f64 p = 18), `accuracy.rs`
   91 s, `adaptive.rs` 71 s, the five operator tests 57 s; the whole ignored run 16 min.

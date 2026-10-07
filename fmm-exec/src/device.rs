@@ -272,6 +272,19 @@
 //! windows off for the later evaluations of the operator. The CPU runtime drains its
 //! stream at both ends of a window, so there no window is opened.
 //!
+//! **Kind timing** (Phase 4S T5, [`KindTiming`](crate::fmm::KindTiming)): `Fmm` times
+//! every level call with an entry in its view around the operator's method, which does not
+//! change. With `Synchronous` it calls [`sync`](DeviceOperator::sync) after each such call
+//! (on the device or the host fallback) and once after
+//! [`begin_evaluation`](DeviceOperator::begin_evaluation); with `Device`, where the device
+//! times on itself, it brackets each call of a device kind with
+//! [`open_call_window`](DeviceOperator::open_call_window) and
+//! [`close_call_window`](DeviceOperator::close_call_window), one window per call and no
+//! sync, and resolves the windows after [`read_output`](DeviceOperator::read_output). Both
+//! are counted in [`DeviceCounters::evaluation`] (syncs, windows). On Metal the call
+//! windows overlap and misattribute time between calls, so they are not a breakdown
+//! there; on CUDA they do not overlap (`KindTiming::Device`).
+//!
 //! # Autotune (T12, C4.7; [`crate::tune`])
 //!
 //! Every grouped level call keeps the GEMM choice it was built with (the GEMM, the layout
@@ -2603,6 +2616,21 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         self.link.run(DataKind::Output, Device::sync);
     }
 
+    /// Opens a timing window of one level call, for `FmmBuilder::kind_timings` with
+    /// `KindTiming::Device` (Phase 4S T5): `Device::open_window` at the current position
+    /// of the stream, no sync on a device that times on itself. `None` after a failure,
+    /// which is kept for [`read_output`](Self::read_output).
+    pub fn open_call_window(&mut self) -> Option<TimingWindow> {
+        self.link.run(DataKind::Output, Device::open_window)
+    }
+
+    /// Closes `window`, opened by [`open_call_window`](Self::open_call_window), after the
+    /// level call's launches: its time, to resolve after the evaluation's download.
+    /// `None` after a failure, which is kept for [`read_output`](Self::read_output).
+    pub fn close_call_window(&mut self, window: TimingWindow) -> Option<WindowTime> {
+        self.link.run(DataKind::Output, |d| d.close_window(window))
+    }
+
     /// Ends an evaluation: downloads the target output (one download, one sync) and
     /// returns it, in the evaluator's layout, unscaled.
     ///
@@ -3292,6 +3320,8 @@ pub(crate) trait DeviceDriver<T: SimdScalar>: FmmOperator<Value = T> + Send {
     fn close_stage(&mut self, stage: DeviceStage);
     fn stage_timings(&self) -> Option<DeviceStageTimings>;
     fn sync(&mut self);
+    fn open_call_window(&mut self) -> Option<TimingWindow>;
+    fn close_call_window(&mut self, window: TimingWindow) -> Option<WindowTime>;
     fn read_output(&mut self) -> Result<&LeafStore<T>, KernelError>;
     fn report(&self) -> &DeviceReport;
     fn counters(&self) -> DeviceCounters;
@@ -3327,6 +3357,12 @@ impl<T: DeviceScalar> DeviceDriver<T> for DeviceOperator<T> {
     }
     fn sync(&mut self) {
         DeviceOperator::sync(self);
+    }
+    fn open_call_window(&mut self) -> Option<TimingWindow> {
+        DeviceOperator::open_call_window(self)
+    }
+    fn close_call_window(&mut self, window: TimingWindow) -> Option<WindowTime> {
+        DeviceOperator::close_call_window(self, window)
     }
     fn read_output(&mut self) -> Result<&LeafStore<T>, KernelError> {
         DeviceOperator::read_output(self)
