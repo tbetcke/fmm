@@ -21,12 +21,14 @@ permissions:
 # - packages: the .deb files of the job's package list, keyed on the runner image and the
 #   list, exact keys only; .github/scripts/apt-install.sh installs them offline on a hit.
 # A failed or timed-out package install is a mirror problem; the next step says to re-run.
+# timeout-minutes (T10, from the measured times): about twice a job's warm time and above
+# its worst cold time with a slow mirror (an install step stops at 5 minutes).
 
 jobs:
   run-tests-rust:
     name: run-tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     env:
       APT_PACKAGES: libclang-dev cmake libfftw3-dev libopenblas-dev openmpi-bin libopenmpi-dev
     steps:
@@ -89,7 +91,7 @@ jobs:
   # --show-output puts that into the log. Correctness and accuracy only, never timings.
   run-tests-simd:
     name: run-tests-simd (${{ matrix.arch }})
-    timeout-minutes: 10
+    timeout-minutes: 5
     strategy:
       fail-fast: false
       matrix:
@@ -132,7 +134,7 @@ jobs:
   run-tests-kernels:
     name: run-tests-kernels (CPU runtime)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     env:
       APT_PACKAGES: libclang-dev openmpi-bin libopenmpi-dev
     steps:

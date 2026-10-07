@@ -5,8 +5,7 @@
 # Usage: apt-install.sh <archive directory> <package>...
 #
 # Cache hit (the directory holds .deb files): installs exactly those files, offline
-# (`--no-download`) and without `apt-get update`, then checks that every named package
-# is installed. The files are the ones a miss downloaded for the same runner image and
+# and without `apt-get update`, then checks that every named package is installed. The files are the ones a miss downloaded for the same runner image and
 # package list (the cache key), so the versions are the same as on that miss. If the
 # offline install fails, the script falls through to the miss path.
 #
@@ -27,7 +26,12 @@ apt=(sudo apt-get -y --no-install-recommends
 debs=("$archives"/*.deb)
 if ((${#debs[@]})); then
     echo "Cache hit: installing ${#debs[@]} cached packages offline"
-    if "${apt[@]}" --no-download install "${debs[@]}" && dpkg -s "$@" > /dev/null; then
+    # An empty package-list directory: apt knows no repository package, so it can only
+    # install the given files and what is installed already, and never downloads.
+    # (`--no-download` refuses the given files too.)
+    lists=$(mktemp -d)
+    if "${apt[@]}" -o Dir::State::Lists="$lists" install "${debs[@]}" &&
+        dpkg -s "$@" > /dev/null; then
         dpkg-query -W "$@"
         exit 0
     fi
