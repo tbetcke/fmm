@@ -441,7 +441,7 @@ Before T1 has merged, T1 itself uses `ssh locust` directly, outside the sandbox.
 - [x] T1 merged: environment rebuilt from the lock; home check clean; CPU-side checks on Grace reported; root `CLAUDE.md` points to Phase 4S
 - [ ] T5 merged: per-kind timings on the host, the CPU runtime and Metal, bit-identical, syncs as documented
 - [x] T2 merged: every kernel test on CUDA in f32 and f64; GEMM spike on CUDA; §18.1 facts
-- [ ] T3 merged: device arithmetic on CUDA measured; recommendation drafted
+- [x] T3 merged: device arithmetic on CUDA measured; recommendation drafted
 - [x] T3 recommendation signed off (decision 10): a CUDA note in §3.13 (decided 2026-10-07)
 - [ ] T4 merged: Phase 4 device gates on CUDA in f32 and f64; device timestamps on CUDA checked
 - [ ] T6 merged: `nd-fmm-bench` and `tools/bench/run.sh`; reports from the M3 Max and locust
