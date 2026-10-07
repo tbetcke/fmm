@@ -12,6 +12,11 @@
 //! - **the input-precision guard**: a library strategy with TF32 inputs, offered to every
 //!   GEMM and strategy decision by the hook and made the fastest by it, is never
 //!   registered (its timing says why), never timed and never chosen;
+//! - **a wider candidate** (Phase 4S T7): with a 1 MB chunk budget named in the builder
+//!   and a hook offering every GEMM and strategy decision a 1 GB candidate, no panic: the
+//!   strategy decision times it on its own scratch, a GEMM decision whose level call it
+//!   would overrun the operator's scratch on skips it (at f64 p = 6 at least once), the
+//!   named budget holds for every level call, and the output is within the FMM bounds;
 //! - **the cache round trip**: a second and a third build from the directory take every
 //!   tuned decision from the cache with the same choice, and all three outputs are equal
 //!   bit for bit;
@@ -50,9 +55,10 @@ use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_exec::tune::{
     CacheState, Candidate, Decision, GemmChoice, GemmKind, InputPrecision, Source, Timing,
-    TuningCache, TuningHook, TuningKey, TuningReport, gemm_candidates, p2p_candidates, static_gemm,
-    static_p2p, static_strategy,
+    TuningCache, TuningHook, TuningKey, TuningReport, gemm_candidates, library_applies,
+    p2p_candidates, static_gemm, static_p2p, static_strategy,
 };
+use nd_fmm_kernels::translate::GemmLayout;
 use nd_fmm_kernels::{DeviceInfo, Precision};
 use nd_fmm_math::RealScalar;
 use nd_fmm_tables::cache::Stored;
@@ -135,7 +141,7 @@ fn static_candidate(
 ) -> Candidate {
     let n = (p + 1) * (p + 1);
     match decision {
-        Decision::Strategy => match static_strategy(precision, p) {
+        Decision::Strategy => match static_strategy(info.backend, precision, p) {
             M2lStrategy::Rotation => Candidate::Rotation,
             _ => Candidate::Dense(static_gemm(
                 info,
@@ -171,7 +177,7 @@ fn candidates(
             let dense = gemm_candidates(info, precision, n, OperatorKind::M2l, false)
                 .into_iter()
                 .map(Candidate::Dense);
-            if static_strategy(precision, p) == M2lStrategy::Rotation {
+            if static_strategy(info.backend, precision, p) == M2lStrategy::Rotation {
                 std::iter::once(Candidate::Rotation).chain(dense).collect()
             } else {
                 dense.chain([Candidate::Rotation]).collect()
@@ -279,7 +285,11 @@ pub fn check_tuning<T: Real>(
                 && d.choice == static_candidate(&info, precision, p, d.decision)),
             "{label}: every decision from the static rule: {report}"
         );
-        assert_eq!(fmm.strategy(), static_strategy(precision, p), "{label}");
+        assert_eq!(
+            fmm.strategy(),
+            static_strategy(info.backend, precision, p),
+            "{label}"
+        );
         let device_report = fmm.device_report().unwrap();
         assert_eq!(device_report.p2p_layout, static_p2p(&info), "{label}");
         let n = (p + 1) * (p + 1);
@@ -410,6 +420,74 @@ pub fn check_tuning<T: Real>(
         eprintln!(
             "  {label}: a TF32 library offered to {offered} decisions and made the fastest by \
              the hook: never registered (input-precision guard), never chosen"
+        );
+    }
+
+    // A candidate with wider chunks than the operator's scratch (Phase 4S T7): with a
+    // budget of 1 MB named in the builder the scratch is sized for 1 MB chunks, and a hook
+    // offers every GEMM and strategy decision the hand-written kernel in the backend's
+    // default layout with a budget of 1 GB, and where the library applies (f32, p ≥ 8, a
+    // GPU) the library with that budget. The strategy decision times them on a scratch of
+    // its own; a GEMM decision whose level call they would overrun the operator's scratch
+    // on skips them with the reason, before building their plan, without a panic; the
+    // budget the builder names holds for the tuner's own candidates and for every level
+    // call whatever was chosen.
+    {
+        let dir = fresh(root, "wide");
+        let small = 1u64 << 20;
+        let n = (p + 1) * (p + 1);
+        let hand = GemmChoice {
+            budget: 1 << 30,
+            ..GemmChoice::hand_written(GemmLayout::default_for(&info, n))
+        };
+        let library = library_applies(info.backend, precision, n).then_some(GemmChoice {
+            budget: 1 << 30,
+            ..GemmChoice::library(precision)
+        });
+        let wide: Vec<GemmChoice> = std::iter::once(hand).chain(library).collect();
+        let is_wide = |c: &Candidate| c.gemm().is_some_and(|g| g.budget == 1 << 30);
+        let offers = wide.clone();
+        let hook = TuningHook::new().offer(move |decision| match decision {
+            Decision::Strategy => offers.iter().copied().map(Candidate::Dense).collect(),
+            Decision::Gemm { .. } => offers.iter().copied().map(Candidate::Gemm).collect(),
+            Decision::P2p { .. } => Vec::new(),
+        });
+        let mut fmm = build(
+            &device
+                .clone()
+                .device_scratch_budget(small)
+                .tuning_cache(&dir)
+                .tuning_hook(hook),
+        );
+        let report = tuning(&fmm);
+        let (mut timed, mut skipped) = (0, 0);
+        for d in report
+            .decisions
+            .iter()
+            .filter(|d| d.source == Source::Tuned)
+        {
+            for (c, t) in d.times.iter().filter(|(c, _)| is_wide(c)) {
+                match t {
+                    Timing::Measured(_) => timed += 1,
+                    Timing::Skipped(reason) if reason.contains("scratch") => skipped += 1,
+                    // The library may refuse the shapes (on CUDA always, F28).
+                    Timing::Unregistered(_) if c.gemm().is_some_and(|g| g.is_library()) => {}
+                    other => panic!("{label}: {} the wide candidate {c}: {other}", d.decision),
+                }
+            }
+        }
+        // At f64 p = 6 (`full`) the M2L level calls below the largest V level (timed by the
+        // strategy decision) have more than one 1 MB chunk, so the wide candidate overruns
+        // the operator's scratch there.
+        assert!(
+            timed + skipped >= 2 && (skipped >= 1 || !full),
+            "{label}: the wide candidate was not offered or not skipped: {report}"
+        );
+        let got = fmm.evaluate(&problem.charges).unwrap();
+        hosts.check(&format!("{label}, wide hook"), fmm.strategy(), &got);
+        eprintln!(
+            "  {label}: a 1 GB candidate offered over a 1 MB scratch: timed in {timed} \
+             decisions, skipped for its scratch in {skipped}; the output within the bounds"
         );
     }
 

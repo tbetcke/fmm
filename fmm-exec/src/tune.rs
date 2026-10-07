@@ -9,8 +9,8 @@
 //! | Decision | When | Candidates ([`Candidate`]), the static rule's first | Timed on |
 //! | --- | --- | --- | --- |
 //! | [`Strategy`](Decision::Strategy) | the builder's strategy is `M2lStrategy::Auto` and M2L runs on the device | `Dense` with each M2L GEMM candidate, `Rotation` | the `Fmm`'s largest V level |
-//! | [`Gemm`](Decision::Gemm) of M2M, L2L or dense M2L, per pair bucket | `DeviceGemm::Auto` and the kind on the device | the hand-written GEMM in the backend's default layout and two others, the library (f32, p ≥ 8, a GPU), the default chunk budget and 16 MB | the largest level call of the kind in the bucket |
-//! | [`P2p`](Decision::P2p), per points-per-leaf bucket | `DeviceP2pLayout::Auto` and P2P on the device | GPU: cube of 64 (the default), 32 and 128 units, plane layouts of 2 and 4 planes; CPU runtime: vectors of the host's width, 64, 128 and 256 bits | the level with the most near-field pairs |
+//! | [`Gemm`](Decision::Gemm) of M2M, L2L or dense M2L, per pair bucket | `DeviceGemm::Auto` and the kind on the device | the hand-written GEMM in the backend's default layout and two others (on CUDA three, [`cuda_gemm_layouts`]), the library (f32, p ≥ 8, a GPU), the device's default chunk budget and (but on CUDA) 16 MB | the largest level call of the kind in the bucket |
+//! | [`P2p`](Decision::P2p), per points-per-leaf bucket | `DeviceP2pLayout::Auto` and P2P on the device | Metal: cube of 64 (the default), 32 and 128 units, plane layouts of 2 and 4 planes; CUDA: cube of 32 (the default) and 64 units, plane layouts of 2 and 4 planes; CPU runtime: vectors of the host's width, 64, 128 and 256 bits | the level with the most near-field pairs |
 //!
 //! A setting the builder names explicitly (a strategy other than `Auto`,
 //! `DeviceGemm::Library` or `HandWritten`, a scratch budget, a P2P layout) is never tuned:
@@ -53,12 +53,23 @@
 //! - f32: `Dense` at every p; M2M and L2L with the library GEMM where CMMA applies (f32,
 //!   p ≥ 8, a GPU, the probe and the guard passed) and the hand-written GEMM otherwise;
 //!   M2L with the hand-written GEMM (decided after T9, `DeviceGemm::Auto`);
-//! - f64: `Dense` for p ≤ [`STATIC_F64_DENSE_MAX_P`] = 11 and `Rotation` from p = 12,
-//!   the hand-written GEMM;
-//! - the P2P layout of `P2pLayout::default_for`, the default chunk budget, box-major.
+//! - f64: on CUDA `Dense` at every p (Phase 4S decision 9, signed off on 2026-10-07); on
+//!   Metal and the CPU runtime `Dense` for p ≤ [`STATIC_F64_DENSE_MAX_P`] = 11 and
+//!   `Rotation` from p = 12; the hand-written GEMM;
+//! - the P2P layout of `P2pLayout::default_for`, the device's default chunk budget,
+//!   box-major.
 //!
-//! The f64 boundary is **provisional**: nothing here can time f64 on a GPU, so this rule
-//! is what f64 on CUDA gets (device-path.md §10.5). T10 measured the Metal f32 rotation at
+//! **CUDA** (Phase 4S T7, device-path.md §18.2): on the H100 the dense M2L under the CUDA
+//! defaults was faster than rotation at every p measured, per level (the whole M2L stage,
+//! `rotation_kernels`: rotation/dense 1.06–3.3 in f64 for p = 4 to 20, 1.27–3.7 in f32
+//! for p = 2 to 10) and end to end (`nd-fmm-bench`, the uniform cube at N = 10⁵ and 10⁶:
+//! 1.05–1.90 in f64, 1.15–1.56 in f32). Without a table cache a dense build at p ≥ 12
+//! computes the 316 dense tables on the host first (1.8 s at p = 12, 8.7 s at p = 16, 29 s
+//! at p = 20 on the M3 Max), which the rule accepts: an FMM is built once and evaluated
+//! many times.
+//!
+//! On Metal and the CPU runtime the f64 boundary stays **provisional** (device-path.md
+//! §10.5; neither times f64 on a GPU). T10 measured the Metal f32 rotation at
 //! 0.7–3.0% of f32 peak (1.8–3.0% for p = 4–16), below every break-even efficiency of the
 //! spike's f64 model (13.2%, 5.4% and 3.8% of f64 peak at p = 8, 12 and 16 on an A100 or
 //! H100, central); if a CUDA f64 rotation reached the same share of its peak, dense would
@@ -139,6 +150,7 @@ use std::time::{Duration, Instant};
 use nd_fmm_kernels::p2p::{CPU_VECTOR_BITS, P2pLayout};
 use nd_fmm_kernels::translate::{
     CPU_GEMM_BLOCK, DEFAULT_SCRATCH_BYTES, GemmLayout, GemmPolicy, Orientation, PlanSettings,
+    default_scratch_bytes,
 };
 use nd_fmm_kernels::{BackendKind, Device, DeviceInfo, KernelError, Precision};
 use nd_fmm_math::CONVENTION_VERSION;
@@ -151,7 +163,7 @@ pub const FORMAT_VERSION: u32 = 1;
 
 /// The version of the candidate sets of this module. Any change to a candidate set (or
 /// to what a candidate means) bumps it, which makes every cached entry stale.
-pub const CANDIDATE_SET_VERSION: u32 = 1;
+pub const CANDIDATE_SET_VERSION: u32 = 2;
 
 /// The tuning budget of one build by default (device-path.md §10.4).
 pub const DEFAULT_BUDGET: Duration = Duration::from_secs(10);
@@ -162,15 +174,15 @@ pub const MIN_BATCH: Duration = Duration::from_millis(10);
 /// The timed batches of a candidate; its time is their median.
 pub const BATCHES: usize = 5;
 
-/// The largest degree at which the static rule takes `Dense` in f64 (device-path.md
-/// §10.5, provisional).
+/// The largest degree at which the static rule takes `Dense` in f64 on Metal and the CPU
+/// runtime (device-path.md §10.5, provisional); on CUDA it takes `Dense` at every p.
 pub const STATIC_F64_DENSE_MAX_P: usize = 11;
 
 /// Level calls with fewer pairs keep the static rule.
 pub const MIN_TUNED_PAIRS: usize = 512;
 
-/// The smaller chunk budget among the GEMM candidates (the default is
-/// `DEFAULT_SCRATCH_BYTES`, 128 MB).
+/// The smaller chunk budget among the GEMM candidates (the default is the device's,
+/// `nd_fmm_kernels::translate::default_scratch_bytes`: 128 MB, 2 GB on CUDA).
 pub const SMALL_SCRATCH_BYTES: u64 = 16 << 20;
 
 /// The magic first line of a tuning-cache file.
@@ -689,13 +701,17 @@ impl TuningHook {
     }
 }
 
-/// The static strategy of the device path for `Auto` (module documentation, "The static
-/// rule"): `Dense` in f32; in f64 `Dense` for p ≤ 11 and `Rotation` from p = 12.
-pub fn static_strategy(precision: Precision, p: usize) -> M2lStrategy {
-    match precision {
-        Precision::F32 => M2lStrategy::Dense,
-        Precision::F64 if p <= STATIC_F64_DENSE_MAX_P => M2lStrategy::Dense,
-        Precision::F64 => M2lStrategy::Rotation,
+/// The static strategy of the device path for `Auto` on `backend` (module documentation,
+/// "The static rule"): `Dense` in f32; in f64 `Dense` at every p on CUDA (Phase 4S
+/// decision 9), and on Metal and the CPU runtime `Dense` for p ≤ 11 and `Rotation` from
+/// p = 12.
+pub fn static_strategy(backend: BackendKind, precision: Precision, p: usize) -> M2lStrategy {
+    match (backend, precision) {
+        (_, Precision::F32) => M2lStrategy::Dense,
+        // Measured on the H100 (module documentation, "CUDA").
+        (BackendKind::Cuda, Precision::F64) => M2lStrategy::Dense,
+        (_, Precision::F64) if p <= STATIC_F64_DENSE_MAX_P => M2lStrategy::Dense,
+        (_, Precision::F64) => M2lStrategy::Rotation,
     }
 }
 
@@ -709,8 +725,8 @@ pub fn library_applies(backend: BackendKind, precision: Precision, n: usize) -> 
 /// documentation, "The static rule"): under `DeviceGemm::Auto` the library for M2M and
 /// L2L where it applies and the hand-written kernel otherwise and for M2L; under
 /// `Library` the library wherever it applies; under `HandWritten` the hand-written
-/// kernel; always box-major, in the backend's default layout and with the default chunk
-/// budget (or `budget`).
+/// kernel; always box-major, in the backend's default layout and with the device's
+/// default chunk budget (`default_scratch_bytes`: 128 MB, 2 GB on CUDA) or `budget`.
 pub fn static_gemm(
     info: &DeviceInfo,
     precision: Precision,
@@ -725,15 +741,15 @@ pub fn static_gemm(
             DeviceGemm::Library => true,
             DeviceGemm::HandWritten => false,
         };
-    let mut choice = if library {
+    let choice = if library {
         GemmChoice::library(precision)
     } else {
         GemmChoice::hand_written(GemmLayout::default_for(info, n))
     };
-    if let Some(budget) = budget {
-        choice.budget = budget;
+    GemmChoice {
+        budget: budget.unwrap_or_else(|| default_scratch_bytes(info)),
+        ..choice
     }
-    choice
 }
 
 /// The P2P layout of the static rule: `P2pLayout::default_for`.
@@ -743,11 +759,11 @@ pub fn static_p2p(info: &DeviceInfo) -> P2pLayout {
 
 /// The GEMM candidates of a grouped level call of `kind` for tables of order n, the
 /// static rule's first (module documentation, "What is chosen"): the hand-written kernel
-/// in the backend's default layout and two others (on a GPU 2 and 8 columns per unit; on
-/// the CPU runtime blocks of 4 rows of 8 columns and of 16 rows of 2 columns); the library
-/// where it applies; with `budget_tunable`, the static choice with a chunk budget of
-/// [`SMALL_SCRATCH_BYTES`]. Box-major throughout (module documentation, "The
-/// coefficient-major layout").
+/// in the backend's default layout and others (on Metal 2 and 8 columns per unit; on the
+/// CPU runtime blocks of 4 rows of 8 columns and of 16 rows of 2 columns; on CUDA
+/// [`cuda_gemm_layouts`]); the library where it applies; with `budget_tunable`, except on
+/// CUDA, the static choice with a chunk budget of [`SMALL_SCRATCH_BYTES`]. Box-major
+/// throughout (module documentation, "The coefficient-major layout").
 pub fn gemm_candidates(
     info: &DeviceInfo,
     precision: Precision,
@@ -757,8 +773,14 @@ pub fn gemm_candidates(
 ) -> Vec<GemmChoice> {
     let first = static_gemm(info, precision, n, kind, DeviceGemm::Auto, None);
     let default = GemmLayout::default_for(info, n);
-    let mut out = vec![first, GemmChoice::hand_written(default)];
+    // Every candidate with the device's chunk budget, but the smaller one.
+    let budget = |choice: GemmChoice| GemmChoice {
+        budget: first.budget,
+        ..choice
+    };
+    let mut out = vec![first, budget(GemmChoice::hand_written(default))];
     let others = match default {
+        GemmLayout::Cube { .. } if info.backend == BackendKind::Cuda => cuda_gemm_layouts(info, n),
         GemmLayout::Cube {
             rows,
             columns,
@@ -789,17 +811,63 @@ pub fn gemm_candidates(
             ]
         }
     };
-    out.extend(others.into_iter().map(GemmChoice::hand_written));
+    out.extend(
+        others
+            .into_iter()
+            .map(|layout| budget(GemmChoice::hand_written(layout))),
+    );
     if library_applies(info.backend, precision, n) {
-        out.push(GemmChoice::library(precision));
+        out.push(budget(GemmChoice::library(precision)));
     }
-    if budget_tunable {
+    // On CUDA a smaller budget only adds chunks, and each chunk a pass of the reduction
+    // over every row: 128 MB was 1.4–1.9× slower than 2 GB on the largest M2L level call
+    // (Phase 4S T7).
+    if budget_tunable && info.backend != BackendKind::Cuda {
         out.push(GemmChoice {
             budget: SMALL_SCRATCH_BYTES,
             ..first
         });
     }
     dedup(out)
+}
+
+/// The hand-written layouts the tuner adds on CUDA to the default for tables of order n
+/// (Phase 4S T7, device-path.md §18.2), from the fastest layouts of the sweep on the H100
+/// (`layout_sweep`, the uniform cube at N = 10⁶, f32 and f64, p = 3 to 12):
+/// - the Metal default (up to 32 rows, 64 units, 4 columns per unit): 6% faster than the
+///   CUDA default on the largest V level in f64 at p = 8;
+/// - one plane of 32 units (fewer rows for small n) with 2 columns each: the fastest or
+///   within 5% of it on every level call of 4,096 pairs or fewer, 1.2–1.9× faster than the
+///   default layouts there;
+/// - the CUDA default's rows with 128 units and 4 columns per unit: the fastest on the
+///   largest V level in f64 at p = 12 (6% ahead of the default).
+pub fn cuda_gemm_layouts(info: &DeviceInfo, n: usize) -> Vec<GemmLayout> {
+    let max_units = info.max_units_per_cube.max(1);
+    let plane_rows = 32.min(n.max(1).next_power_of_two() as u32).max(16);
+    let metal = GemmLayout::default_for(
+        &DeviceInfo {
+            backend: BackendKind::Metal,
+            ..info.clone()
+        },
+        n,
+    );
+    let small = GemmLayout::Cube {
+        rows: plane_rows,
+        columns: (32 / plane_rows).max(1),
+        per_unit: 2,
+    };
+    let wide = match GemmLayout::default_for(info, n) {
+        GemmLayout::Cube { rows, .. } => GemmLayout::Cube {
+            rows,
+            columns: (128.min(max_units) / rows).max(1),
+            per_unit: 4,
+        },
+        other => other,
+    };
+    [metal, small, wide]
+        .into_iter()
+        .filter(|l| l.check(info).is_ok())
+        .collect()
 }
 
 /// The P2P candidates of a device, the static rule's first (module documentation).
@@ -814,10 +882,19 @@ pub fn p2p_candidates(info: &DeviceInfo) -> Vec<P2pLayout> {
                 }
             }
         }
-        BackendKind::Metal | BackendKind::Cuda => {
+        BackendKind::Metal => {
             for units in [32, 64, 128] {
                 out.push(P2pLayout::Cube { units });
             }
+            for planes in [2, 4] {
+                out.push(P2pLayout::Plane { planes });
+            }
+        }
+        // Measured on the H100 (Phase 4S T7): 128 units were 1.07–1.15× slower than 64
+        // on every problem, so they are left out; two planes per cube came within 1–4% of
+        // the default's 32 units.
+        BackendKind::Cuda => {
+            out.push(P2pLayout::Cube { units: 64 });
             for planes in [2, 4] {
                 out.push(P2pLayout::Plane { planes });
             }
@@ -1649,17 +1726,31 @@ mod tests {
     #[test]
     fn the_static_strategy_follows_the_readme_rule() {
         for p in 0..=20 {
-            assert_eq!(
-                static_strategy(Precision::F32, p),
-                M2lStrategy::Dense,
-                "f32 p = {p}"
-            );
+            for backend in BackendKind::ALL {
+                assert_eq!(
+                    static_strategy(backend, Precision::F32, p),
+                    M2lStrategy::Dense,
+                    "{backend} f32 p = {p}"
+                );
+            }
             let want = if p <= 11 {
                 M2lStrategy::Dense
             } else {
                 M2lStrategy::Rotation
             };
-            assert_eq!(static_strategy(Precision::F64, p), want, "f64 p = {p}");
+            for backend in [BackendKind::Cpu, BackendKind::Metal] {
+                assert_eq!(
+                    static_strategy(backend, Precision::F64, p),
+                    want,
+                    "{backend} f64 p = {p}"
+                );
+            }
+            // Phase 4S decision 9.
+            assert_eq!(
+                static_strategy(BackendKind::Cuda, Precision::F64, p),
+                M2lStrategy::Dense,
+                "cuda f64 p = {p}"
+            );
         }
     }
 
@@ -1669,19 +1760,30 @@ mod tests {
             let info = info(backend);
             for p in 0..=20usize {
                 let n = (p + 1) * (p + 1);
-                let hand = GemmChoice::hand_written(GemmLayout::default_for(&info, n));
+                let device_budget = default_scratch_bytes(&info);
+                let hand = GemmChoice {
+                    budget: device_budget,
+                    ..GemmChoice::hand_written(GemmLayout::default_for(&info, n))
+                };
                 for precision in [Precision::F32, Precision::F64] {
                     let library = precision == Precision::F32 && p >= 8 && backend.is_gpu();
                     for kind in [OperatorKind::M2m, OperatorKind::L2l, OperatorKind::M2l] {
                         let got = static_gemm(&info, precision, n, kind, DeviceGemm::Auto, None);
                         let want = if library && kind != OperatorKind::M2l {
-                            GemmChoice::library(precision)
+                            GemmChoice {
+                                budget: device_budget,
+                                ..GemmChoice::library(precision)
+                            }
                         } else {
                             hand
                         };
                         assert_eq!(got, want, "{backend} {precision} p = {p} {kind}");
                         assert_eq!(got.orientation, Orientation::BoxMajor);
-                        assert_eq!(got.budget, DEFAULT_SCRATCH_BYTES);
+                        // 128 MB but on CUDA (2 GB, Phase 4S T7).
+                        assert_eq!(
+                            got.budget == DEFAULT_SCRATCH_BYTES,
+                            backend != BackendKind::Cuda
+                        );
                         let forced =
                             static_gemm(&info, precision, n, kind, DeviceGemm::HandWritten, None);
                         assert_eq!(forced, hand);
@@ -1692,6 +1794,55 @@ mod tests {
             }
             assert_eq!(static_p2p(&info), P2pLayout::default_for(&info));
         }
+    }
+
+    #[test]
+    fn cuda_candidates_are_the_measured_layouts() {
+        let info = info(BackendKind::Cuda);
+        let metal = DeviceInfo {
+            backend: BackendKind::Metal,
+            ..info.clone()
+        };
+        for p in [0usize, 3, 6, 8, 12, 20] {
+            let n = (p + 1) * (p + 1);
+            for precision in [Precision::F32, Precision::F64] {
+                for kind in [OperatorKind::M2m, OperatorKind::L2l, OperatorKind::M2l] {
+                    let all = gemm_candidates(&info, precision, n, kind, true);
+                    let first = static_gemm(&info, precision, n, kind, DeviceGemm::Auto, None);
+                    assert_eq!(all[0], first, "p = {p}");
+                    assert_eq!(first.budget, default_scratch_bytes(&info));
+                    assert!(
+                        all.iter().all(|c| c.budget == first.budget),
+                        "no smaller budget on CUDA: {all:?}"
+                    );
+                    let layouts: Vec<GemmLayout> = all
+                        .iter()
+                        .filter_map(|c| match c.gemm {
+                            GemmKind::HandWritten(l) => Some(l),
+                            GemmKind::Library { .. } => None,
+                        })
+                        .collect();
+                    assert!(layouts.contains(&GemmLayout::default_for(&info, n)));
+                    assert!(layouts.contains(&GemmLayout::default_for(&metal, n)));
+                    for layout in cuda_gemm_layouts(&info, n) {
+                        assert!(layouts.contains(&layout), "{layout} at p = {p}");
+                        layout.check(&info).unwrap();
+                    }
+                    for (i, c) in all.iter().enumerate() {
+                        assert!(!all[..i].contains(c), "no repeats: {c}");
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            p2p_candidates(&info),
+            vec![
+                P2pLayout::Cube { units: 32 },
+                P2pLayout::Cube { units: 64 },
+                P2pLayout::Plane { planes: 2 },
+                P2pLayout::Plane { planes: 4 },
+            ]
+        );
     }
 
     #[test]
@@ -1713,7 +1864,7 @@ mod tests {
                         let libraries: Vec<_> = all.iter().filter(|c| c.is_library()).collect();
                         let defaults = libraries
                             .iter()
-                            .filter(|c| c.budget == DEFAULT_SCRATCH_BYTES)
+                            .filter(|c| c.budget == default_scratch_bytes(&info))
                             .count();
                         assert_eq!(
                             defaults,

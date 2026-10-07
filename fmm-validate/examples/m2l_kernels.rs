@@ -6,7 +6,7 @@
 //! progress on stderr. Feature `gpu` (with a backend).
 //!
 //! For each problem (the C3.2 cube: N = 10⁵, a uniform level-4 tree; the Plummer sphere of
-//! C3.3: N = 10⁵, `max_level` 16, 64 points per leaf), in f32:
+//! C3.3: N = 10⁵, `max_level` 16, 64 points per leaf), in f32 (or f64, `--precision`):
 //!
 //! - the host `Fmm` is built once, for its plan (the V views do not depend on p); the
 //!   multipoles are seeded random coefficients (the timing does not depend on the values);
@@ -23,7 +23,7 @@
 //!   - structure (A), one gather, GEMM and scatter-add per offset (`per_group`), with the
 //!     plan's GEMM: its time and launches;
 //!   - at p ≤ 8, the host operator's M2L of the level (`LaplaceOperator::m2l_pair`, the
-//!     body of its level call, with the dense f32 tables) on one thread and on `--threads`
+//!     body of its level call, with the dense tables) on one thread and on `--threads`
 //!     scoped threads (default 12, the performance cores), each a contiguous share of the
 //!     level's boxes, with every BLAS thread variable set to 1 by the launcher;
 //!   - first, the level call from zero locals is compared with the host's (p ≤ 8) or, at
@@ -47,13 +47,16 @@
 //! down while the host builds); launches are queued between syncs, after a warm-up launch
 //! and a sync (compilation excluded); each figure is the median of 15 batches of at least
 //! 20 ms. GFLOP/s counts 2 n² flops per pair (useful flops; the library's padding columns
-//! are not counted), n = (p + 1)²; % of peak against 14.3 TFLOP/s (the M3 Max GPU in f32,
-//! derived in the spike report, not measured). The spike's figures are the Metal f32 GEMM
-//! of one table and B columns (spikes/cubecl-gemm/results-m3max-0.11.md, CubeCL
-//! 0.11.0-pre.4): the best hand-written kernel and the library CMMA. Per level, the spike
-//! cell is the one at the nearest p of {4, 8, 12, 16} and the B nearest the level's mean
-//! columns per offset (log scale). Nothing is asserted. f64 is not timed on a GPU (Metal
-//! has none) and CUDA is type-checked only.
+//! are not counted), n = (p + 1)²; % of peak against the device's peak in the run's
+//! precision from `nd_fmm_validate::peaks` (Phase 4S T7): on the M3 Max 14.3 TFLOP/s in f32
+//! (derived in the spike report, not measured), on locust's GH200 the H100's datasheet
+//! figures without tensor cores (67 TFLOP/s in f32, 34 TFLOP/s in f64); any other device
+//! has an unknown peak and no percentage. The spike's figures are the Metal f32 GEMM of one
+//! table and B columns (spikes/cubecl-gemm/results-m3max-0.11.md, CubeCL 0.11.0-pre.4):
+//! the best hand-written kernel and the library CMMA. They are compared only on the M3 Max
+//! in f32 ("–" elsewhere). Per level, the spike cell is the one at the nearest p of
+//! {4, 8, 12, 16} and the B nearest the level's mean columns per offset (log scale).
+//! Nothing is asserted.
 //!
 //! ```text
 //! OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 BLIS_NUM_THREADS=1 \
@@ -67,6 +70,23 @@
 //! at p = 3 only and skips the gate and the budget sweep. `--table-cache DIR` loads and
 //! stores the tables there (`nd_fmm_tables::TableCache`). Metal needs a process with GPU
 //! access (outside the macOS sandbox). It initialises MPI and runs on one rank.
+//!
+//! Options of Phase 4S T7 (without them a run is as before):
+//! - `--precision f32|f64` (default f32): the precision of the tables, multipoles and
+//!   locals, and of the host comparison; f64 is refused on a device without f64 (Metal);
+//! - `--n N`: both problems at N points with the C3.3 tree settings (an adaptive tree,
+//!   `max_level` 16, 64 points per leaf), the uniform cube in place of the C3.2 cube, so
+//!   that the cube can run at N = 10⁶;
+//! - `--degrees p,p,…`: the degrees of the level tables and of the orientation table
+//!   (default 3, 8, 12, 16 and 3, 6, 8, 12, 16);
+//! - `--gemm rows,columns,per_unit`: the hand-written GEMM in the layout
+//!   `GemmLayout::Cube { rows, columns, per_unit }` instead of the backend's default
+//!   (`GemmLayout::default_for`), everywhere the hand-written kernel runs; the header
+//!   names it.
+//!
+//! On locust's GH200 (Phase 4S, by hand: `tools/gh200/remote.sh`, feature `cuda`),
+//! `--device cuda` runs in f32 and f64; the library takes no shape there (device-path.md
+//! F28), so every row is the hand-written kernel.
 
 use std::time::Instant;
 
@@ -75,19 +95,34 @@ use nd_fmm_exec::fmm::FmmBuilder;
 use nd_fmm_exec::operator::LaplaceOperator;
 use nd_fmm_exec::tables::{M2lStrategy, Tables as HostTables};
 use nd_fmm_kernels::translate::{
-    Accumulate, DEFAULT_SCRATCH_BYTES, Gemm, GemmLayout, GemmPolicy, GroupedPlan, Operands,
-    Orientation, PerGroupPlan, PlanSettings, Stage, Tables, TileSchedule, TranslationScratch, gemm,
+    Accumulate, Gemm, GemmLayout, GemmPolicy, GroupedPlan, Operands, Orientation, PerGroupPlan,
+    PlanSettings, Stage, Tables, TileSchedule, TranslationScratch, default_scratch_bytes, gemm,
     grouped, grouped_stage, library, per_group,
 };
 use nd_fmm_kernels::view::{GroupedArrays, GroupedView};
-use nd_fmm_kernels::{BackendKind, Device, DeviceBuffer, Precision};
+use nd_fmm_kernels::{BackendKind, Device, DeviceBuffer, DeviceFloat, Precision};
+use nd_fmm_math::RealScalar;
+use nd_fmm_simd::SimdScalar;
+use nd_fmm_tables::cache::Stored;
 use nd_fmm_tables::{M2lTables, TableCache};
 use nd_fmm_validate::SplitMix64;
 use nd_fmm_validate::bench::{cores, cpu_model, median_time_per_call, target, toolchain};
 use nd_fmm_validate::fmm_accuracy::{Config, Distribution, Problem};
+use nd_fmm_validate::peaks::{self, Peaks};
 
-/// The f32 peak of the M3 Max GPU (spikes/cubecl-gemm/SPIKE_REPORT.md, derived).
-const PEAK_GFLOPS: f64 = 14_300.0;
+/// The float types the example times, f32 and f64: on the device, in the tables and in the
+/// host operator.
+trait Value: DeviceFloat + Stored + SimdScalar {}
+
+impl<T: DeviceFloat + Stored + SimdScalar> Value for T {}
+
+/// `x` in the precision of T, rounded to nearest.
+fn value<T: Value>(x: f64) -> T {
+    <T as RealScalar>::from_f64(x)
+}
+
+/// The device whose figures the spike measured (results-m3max-0.11.md).
+const SPIKE_DEVICE: &str = "Apple M3 Max";
 
 /// The spike's Metal f32 GFLOP/s (results-m3max-0.11.md): per p of [`SPIKE_DEGREES`] and B
 /// of [`SPIKE_COLUMNS`], the best hand-written kernel (`tiled-smem`, `tiled-reg-cols`,
@@ -117,6 +152,14 @@ struct Arguments {
     quick: bool,
     orientation_only: bool,
     table_cache: Option<String>,
+    /// `--precision`: f32 by default.
+    precision: Precision,
+    /// `--n`: the problems at N points with the C3.3 tree settings.
+    n: Option<usize>,
+    /// `--degrees`: the degrees of the level and orientation tables.
+    degrees: Option<Vec<usize>>,
+    /// `--gemm`: the hand-written GEMM's layout instead of the backend's default.
+    gemm: Option<GemmLayout>,
 }
 
 fn arguments() -> Arguments {
@@ -124,7 +167,8 @@ fn arguments() -> Arguments {
     let usage = || -> ! {
         eprintln!(
             "usage: m2l_kernels --device cpu|metal|cuda [--threads n] [--quick] \
-             [--orientation] [--table-cache DIR]; got {args:?}"
+             [--orientation] [--table-cache DIR] [--precision f32|f64] [--n N] \
+             [--degrees p,p,...] [--gemm rows,columns,per_unit]; got {args:?}"
         );
         std::process::exit(2);
     };
@@ -134,6 +178,10 @@ fn arguments() -> Arguments {
         quick: false,
         orientation_only: false,
         table_cache: None,
+        precision: Precision::F32,
+        n: None,
+        degrees: None,
+        gemm: None,
     };
     let mut rest = args.as_slice();
     while let [flag, tail @ ..] = rest {
@@ -158,10 +206,51 @@ fn arguments() -> Arguments {
                 parsed.orientation_only = true;
                 tail
             }
+            ("--precision", [value, tail @ ..]) => {
+                parsed.precision = match value.as_str() {
+                    "f32" => Precision::F32,
+                    "f64" => Precision::F64,
+                    _ => usage(),
+                };
+                tail
+            }
+            ("--n", [value, tail @ ..]) => {
+                let n: f64 = value.parse().unwrap_or_else(|_| usage());
+                parsed.n = Some(n as usize);
+                tail
+            }
+            ("--degrees", [value, tail @ ..]) => {
+                parsed.degrees = Some(
+                    value
+                        .split(',')
+                        .map(|p| p.parse().unwrap_or_else(|_| usage()))
+                        .collect(),
+                );
+                tail
+            }
+            ("--gemm", [value, tail @ ..]) => {
+                let v: Vec<u32> = value
+                    .split(',')
+                    .map(|x| x.parse().unwrap_or_else(|_| usage()))
+                    .collect();
+                let [rows, columns, per_unit] = v[..] else {
+                    usage()
+                };
+                parsed.gemm = Some(GemmLayout::Cube {
+                    rows,
+                    columns,
+                    per_unit,
+                });
+                tail
+            }
             _ => usage(),
         };
     }
-    if parsed.device.is_empty() || parsed.threads == 0 {
+    if parsed.device.is_empty()
+        || parsed.threads == 0
+        || parsed.n == Some(0)
+        || parsed.degrees.as_ref().is_some_and(Vec::is_empty)
+    {
         usage();
     }
     parsed
@@ -280,22 +369,94 @@ fn main() {
         );
         std::process::exit(1);
     });
+    if !device.supports(arguments.precision) {
+        eprintln!(
+            "--precision {}: {} does no arithmetic in it",
+            precision_name(arguments.precision),
+            device.info()
+        );
+        std::process::exit(1);
+    }
+    if let Some(layout) = arguments.gemm
+        && let Err(error) = layout.check(device.info())
+    {
+        eprintln!("--gemm: {error}");
+        std::process::exit(1);
+    }
+    match arguments.precision {
+        Precision::F32 => run::<f32>(&mut device, &arguments),
+        Precision::F64 => run::<f64>(&mut device, &arguments),
+    }
+}
+
+/// The name of a precision.
+fn precision_name(precision: Precision) -> &'static str {
+    match precision {
+        Precision::F32 => "f32",
+        Precision::F64 => "f64",
+    }
+}
+
+/// The peak of the device in the precision of T, GFLOP/s, if the table knows the device.
+fn peak<T: Value>(device: &Device) -> Option<f64> {
+    Peaks::of_info(device.info()).and_then(|p| p.gflops(peak_precision::<T>()))
+}
+
+/// The precision of T in the peak table.
+fn peak_precision<T: Value>() -> peaks::Precision {
+    match T::FLOAT {
+        Precision::F32 => peaks::Precision::F32,
+        Precision::F64 => peaks::Precision::F64,
+    }
+}
+
+/// Whether the spike's figures (the M3 Max, Metal, f32) compare with this run.
+fn spike_applies<T: Value>(device: &Device) -> bool {
+    device.info().name == SPIKE_DEVICE && T::FLOAT == Precision::F32
+}
+
+/// The problems: the C3.2 cube and the C3.3 Plummer sphere, or with `--n` both at N with
+/// the C3.3 tree settings.
+fn problems(arguments: &Arguments) -> Vec<(&'static str, Config)> {
+    let mut problems = match arguments.n {
+        None => vec![("C3.2 cube", Config::C32)],
+        Some(n) => vec![(
+            "uniform cube",
+            Config {
+                n,
+                ..Config::c33(Distribution::Cube)
+            },
+        )],
+    };
+    if !arguments.quick {
+        problems.push((
+            "Plummer sphere",
+            Config {
+                n: arguments.n.unwrap_or(Config::C32.n),
+                ..Config::c33(Distribution::Plummer)
+            },
+        ));
+    }
+    problems
+}
+
+/// The whole run in the precision of T.
+fn run<T: Value>(device: &mut Device, arguments: &Arguments) {
     let (universe, _) =
         mpi::initialize_with_threading(Threading::Funneled).expect("MPI initialises once");
     let comm = universe.world();
     let cache = arguments.table_cache.as_deref().map(TableCache::new);
-    print_header(&device, &arguments);
-    let mut problems = vec![("C3.2 cube", Config::C32)];
-    if !arguments.quick {
-        problems.push(("Plummer sphere", Config::c33(Distribution::Plummer)));
-    }
-    let degrees: &[usize] = if arguments.quick {
-        &[3]
-    } else {
-        &[3, 8, 12, 16]
+    let gemm = arguments.gemm;
+    print_header::<T>(device, arguments);
+    let problems = problems(arguments);
+    let degrees: Vec<usize> = match (&arguments.degrees, arguments.quick) {
+        (Some(degrees), _) => degrees.clone(),
+        (None, true) => vec![3],
+        (None, false) => vec![3, 8, 12, 16],
     };
     let mut budget_levels = None;
     let mut orientation_views = Vec::new();
+    let mut all_views = Vec::new();
     for (name, config) in problems {
         let problem = Problem::new(&config);
         eprintln!("{name}: building the host FMM for its plan");
@@ -312,66 +473,70 @@ fn main() {
             continue;
         }
         let mut totals = Vec::new();
-        for &p in degrees {
-            let (host_tables, m2l) = tables(p, cache.as_ref());
+        for &p in &degrees {
+            let (host_tables, m2l) = tables::<T>(p, cache.as_ref());
             let rows = measure(
-                &mut device,
+                device,
                 (name, p),
                 &views,
                 &m2l,
                 host_tables.map(|t| LaplaceOperator::new(t, false, 64)),
                 arguments.threads,
+                gemm,
             );
-            print_levels(name, p, &rows, &device, arguments.threads);
+            print_levels::<T>(name, p, &rows, device, arguments.threads);
             totals.push((p, rows));
         }
         print_totals(name, &totals, arguments.threads);
         if budget_levels.is_none() {
             budget_levels = Some(views);
+        } else {
+            all_views.push((name, views));
         }
     }
+    let orientation_degrees: Vec<usize> = match (&arguments.degrees, arguments.quick) {
+        (Some(degrees), _) => degrees.clone(),
+        (None, true) => vec![3],
+        (None, false) => vec![3, 6, 8, 12, 16],
+    };
     if arguments.orientation_only {
-        let degrees: &[usize] = if arguments.quick {
-            &[3]
-        } else {
-            &[3, 6, 8, 12, 16]
-        };
-        orientations(&mut device, &orientation_views, degrees, cache.as_ref());
+        orientations::<T>(
+            device,
+            &orientation_views,
+            &orientation_degrees,
+            cache.as_ref(),
+            gemm,
+        );
         return;
     }
     if !arguments.quick {
-        gate(&mut device);
+        gate::<T>(device, gemm);
         let views = budget_levels.as_ref().expect("the cube ran");
         let deepest = views.last().expect("a V level");
-        let (_, m2l) = tables(8, cache.as_ref());
-        budgets(&mut device, deepest, &m2l);
-        let mut cube = budget_levels;
-        let plummer = {
-            let config = Config::c33(Distribution::Plummer);
-            let problem = Problem::new(&config);
-            let fmm = FmmBuilder::<f32>::new(3)
-                .strategy(M2lStrategy::Rotation)
-                .max_level(config.max_level)
-                .max_points_per_leaf(config.max_points_per_leaf)
-                .build(&problem.points, &problem.points, &comm)
-                .expect("the host FMM builds on one rank");
-            levels(&fmm)
-        };
-        let views = vec![
-            ("C3.2 cube", cube.take().expect("the cube ran")),
-            ("Plummer sphere", plummer),
-        ];
-        orientations(&mut device, &views, &[3, 6, 8, 12, 16], cache.as_ref());
+        let (_, m2l) = tables::<T>(8, cache.as_ref());
+        budgets(device, deepest, &m2l, gemm);
+        let mut views = vec![(
+            problems_first_name(arguments),
+            budget_levels.take().expect("the cube ran"),
+        )];
+        views.extend(all_views);
+        orientations::<T>(device, &views, &orientation_degrees, cache.as_ref(), gemm);
     }
+}
+
+/// The name of the first problem.
+fn problems_first_name(arguments: &Arguments) -> &'static str {
+    problems(arguments)[0].0
 }
 
 /// The level call of every V level of `views` box-major and coefficient-major, with the
 /// hand-written GEMM and the library (module documentation, "the orientation").
-fn orientations(
+fn orientations<T: Value>(
     device: &mut Device,
     views: &[(&str, Vec<Level>)],
     degrees: &[usize],
     cache: Option<&TableCache>,
+    gemm: Option<GemmLayout>,
 ) {
     println!("## The orientation of X and Y (T12): box-major against coefficient-major");
     println!();
@@ -388,9 +553,15 @@ fn orientations(
     println!("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |");
     for &p in degrees {
         let n = (p + 1) * (p + 1);
-        let (_, m2l) = tables(p, cache);
-        let auto = settings(device, n, GemmPolicy::Auto, DEFAULT_SCRATCH_BYTES);
-        let library_copy = auto.library_candidate(device.backend(), Precision::F32);
+        let (_, m2l) = tables::<T>(p, cache);
+        let auto = settings(
+            device,
+            n,
+            GemmPolicy::Auto,
+            default_scratch_bytes(device.info()),
+            gemm,
+        );
+        let library_copy = auto.library_candidate(device.backend(), T::FLOAT);
         let tables = Tables::upload(device, &m2l, n, library_copy).unwrap();
         warm_up(device);
         for (problem, levels) in views {
@@ -398,26 +569,32 @@ fn orientations(
                 eprintln!("orientation: {problem}, p = {p}, level {}", level.level);
                 let boxes = level.boxes();
                 let mut rng = SplitMix64::new(0x7e_9300 + p as u64);
-                let multipoles_host: Vec<f32> = (0..boxes * n)
-                    .map(|_| rng.range(-1.0, 1.0) as f32)
+                let multipoles_host: Vec<T> = (0..boxes * n)
+                    .map(|_| value(rng.range(-1.0, 1.0)))
                     .collect();
                 let multipoles = device.upload(&multipoles_host).unwrap();
-                let mut locals = device.alloc::<f32>(boxes * n).unwrap();
+                let mut locals = device.alloc::<T>(boxes * n).unwrap();
                 let view = GroupedView::upload(device, &level.arrays(), boxes).unwrap();
                 // (time, result) per (policy, orientation); None where the library refused.
-                let mut cells: Vec<Option<(f64, Vec<f32>)>> = Vec::new();
+                let mut cells: Vec<Option<(f64, Vec<T>)>> = Vec::new();
                 for policy in [GemmPolicy::HandWritten, GemmPolicy::Auto] {
                     for orientation in [Orientation::BoxMajor, Orientation::CoefficientMajor] {
                         let s = PlanSettings {
                             orientation,
-                            ..settings(device, n, policy, DEFAULT_SCRATCH_BYTES)
+                            ..settings(
+                                device,
+                                n,
+                                policy,
+                                default_scratch_bytes(device.info()),
+                                gemm,
+                            )
                         };
                         let (plan, mut scratch) = plan_of(device, level, &s, &tables);
                         if policy == GemmPolicy::Auto && plan.gemm() != Gemm::Library {
                             cells.push(None);
                             continue;
                         }
-                        let mut run = |d: &mut Device, locals: &mut DeviceBuffer<f32>| {
+                        let mut run = |d: &mut Device, locals: &mut DeviceBuffer<T>| {
                             grouped(
                                 d,
                                 &plan,
@@ -434,7 +611,7 @@ fn orientations(
                         };
                         nd_fmm_kernels::movement::zero(device, locals.as_slice_mut()).unwrap();
                         run(device, &mut locals);
-                        let mut result = vec![0.0f32; boxes * n];
+                        let mut result = vec![value::<T>(0.0); boxes * n];
                         device.download(locals.as_slice(), &mut result).unwrap();
                         let seconds = time(device, |d| run(d, &mut locals));
                         cells.push(Some((seconds, result)));
@@ -450,12 +627,11 @@ fn orientations(
                     "{problem}, p = {p}, level {}: the orientations differ by {worst:e}",
                     level.level
                 );
-                let us = |c: &Option<(f64, Vec<f32>)>| {
+                let us = |c: &Option<(f64, Vec<T>)>| {
                     c.as_ref()
                         .map_or("–".to_owned(), |(t, _)| format!("{:.1}", t * 1e6))
                 };
-                let ratio = |a: &Option<(f64, Vec<f32>)>, b: &Option<(f64, Vec<f32>)>| match (a, b)
-                {
+                let ratio = |a: &Option<(f64, Vec<T>)>, b: &Option<(f64, Vec<T>)>| match (a, b) {
                     (Some((ta, _)), Some((tb, _))) => format!("{:.2}", tb / ta),
                     _ => "–".to_owned(),
                 };
@@ -483,23 +659,23 @@ fn orientations(
     println!();
 }
 
-/// The host tables at p ≤ 8 (dense, for the host operator) and the 316 dense f32 M2L
-/// matrices of the device (built apart: the host's are not public; with a cache both
-/// load).
-fn tables(p: usize, cache: Option<&TableCache>) -> (Option<HostTables<f32>>, Vec<f32>) {
+/// The host tables at p ≤ 8 (dense, for the host operator) and the 316 dense M2L
+/// matrices of the device in the precision of T (built apart: the host's are not public;
+/// with a cache both load).
+fn tables<T: Value>(p: usize, cache: Option<&TableCache>) -> (Option<HostTables<T>>, Vec<T>) {
     eprintln!("p = {p}: building the tables");
     let host = (p <= 8).then(|| match cache {
-        Some(cache) => HostTables::<f32>::load_or_build(p, M2lStrategy::Dense, cache).0,
-        None => HostTables::<f32>::build(p, M2lStrategy::Dense),
+        Some(cache) => HostTables::<T>::load_or_build(p, M2lStrategy::Dense, cache).0,
+        None => HostTables::<T>::build(p, M2lStrategy::Dense),
     });
-    let m2l: M2lTables<f32> = match cache {
+    let m2l: M2lTables<T> = match cache {
         Some(cache) => cache.load_or_build(p).0,
         None => M2lTables::build(p),
     };
     (host, m2l.matrices().as_slice().to_vec())
 }
 
-fn print_header(device: &Device, arguments: &Arguments) {
+fn print_header<T: Value>(device: &Device, arguments: &Arguments) {
     println!("# The device dense M2L per level (Phase 4 T9, C4.5)");
     println!();
     println!("| item | value |");
@@ -513,23 +689,64 @@ fn print_header(device: &Device, arguments: &Arguments) {
          warm-up launch and a sync first (compilation excluded) |"
     );
     println!(
-        "| peak | {PEAK_GFLOPS} GFLOP/s (M3 Max GPU f32, derived in the spike report, not \
-         measured); GFLOP/s counts 2 n² per pair (useful flops) |"
+        "| peak | {}; GFLOP/s counts 2 n² per pair (useful flops) |",
+        peak_line::<T>(device)
     );
     println!(
-        "| host | `LaplaceOperator::m2l_pair` with the dense f32 tables, 1 and {} scoped \
+        "| host | `LaplaceOperator::m2l_pair` with the dense {} tables, 1 and {} scoped \
          threads |",
+        precision_name(T::FLOAT),
         arguments.threads
     );
-    println!("| precision | f32 (f64 not timed: Metal has no f64; CUDA type-checked only) |");
+    println!("| precision | {} |", precision_line::<T>(device));
+    if let Some(n) = arguments.n {
+        println!(
+            "| problems | N = {n}, the C3.3 tree settings (`max_level` 16, 64 points per leaf) \
+             |"
+        );
+    }
+    if let Some(layout) = arguments.gemm {
+        println!("| hand-written GEMM | {layout} (`--gemm`) at every p |");
+    }
     println!();
 }
 
-/// The settings of a level's plan in f32 at order n.
-fn settings(device: &Device, n: usize, policy: GemmPolicy, budget: u64) -> PlanSettings {
+/// The peak of the header: the figure and its source, or "unknown peak".
+fn peak_line<T: Value>(device: &Device) -> String {
+    match Peaks::of_info(device.info()) {
+        Some(p) => match p.gflops(peak_precision::<T>()) {
+            Some(g) => format!("{g} GFLOP/s ({})", p.source(peak_precision::<T>())),
+            None => format!("unknown peak ({})", p.source(peak_precision::<T>())),
+        },
+        None => format!(
+            "unknown peak ({} is not in `nd_fmm_validate::peaks`)",
+            device.info().name
+        ),
+    }
+}
+
+/// The precision line of the header: as in Phase 4 for f32 off CUDA.
+fn precision_line<T: Value>(device: &Device) -> String {
+    match (T::FLOAT, device.backend()) {
+        (Precision::F32, BackendKind::Cpu | BackendKind::Metal) => {
+            "f32 (f64 not timed: Metal has no f64; CUDA type-checked only)".to_owned()
+        }
+        (precision, backend) => format!("{} on {backend}", precision_name(precision)),
+    }
+}
+
+/// The settings of a level's plan at order n: the hand-written layout `gemm`, or the
+/// backend's default.
+fn settings(
+    device: &Device,
+    n: usize,
+    policy: GemmPolicy,
+    budget: u64,
+    gemm: Option<GemmLayout>,
+) -> PlanSettings {
     PlanSettings {
         n,
-        layout: GemmLayout::default_for(device.info(), n),
+        layout: gemm.unwrap_or_else(|| GemmLayout::default_for(device.info(), n)),
         policy,
         budget,
         orientation: Orientation::BoxMajor,
@@ -537,15 +754,15 @@ fn settings(device: &Device, n: usize, policy: GemmPolicy, budget: u64) -> PlanS
 }
 
 /// A level's plan with `settings`, its scratch.
-fn plan_of(
+fn plan_of<T: Value>(
     device: &mut Device,
     level: &Level,
     settings: &PlanSettings,
-    tables: &Tables<f32>,
-) -> (GroupedPlan, TranslationScratch<f32>) {
+    tables: &Tables<T>,
+) -> (GroupedPlan, TranslationScratch<T>) {
     let n = settings.n;
-    let size = settings.size(device.backend(), Precision::F32, &level.batch_offsets);
-    let mut scratch = TranslationScratch::<f32>::new(device, size.columns * n).unwrap();
+    let size = settings.size(device.backend(), T::FLOAT, &level.batch_offsets);
+    let mut scratch = TranslationScratch::<T>::new(device, size.columns * n).unwrap();
     let plan = GroupedPlan::new(
         device,
         &level.arrays(),
@@ -573,27 +790,35 @@ fn time(device: &mut Device, mut run: impl FnMut(&mut Device)) -> f64 {
 }
 
 /// The relative L2 difference of `a` from `b`.
-fn relative_l2(a: &[f32], b: &[f32]) -> f64 {
+fn relative_l2<T: Value>(a: &[T], b: &[T]) -> f64 {
     let (mut d, mut r) = (0.0f64, 0.0f64);
     for (&x, &y) in a.iter().zip(b) {
-        d += (f64::from(x) - f64::from(y)).powi(2);
-        r += f64::from(y).powi(2);
+        let (x, y) = (RealScalar::to_f64(x), RealScalar::to_f64(y));
+        d += (x - y).powi(2);
+        r += y.powi(2);
     }
     if r > 0.0 { (d / r).sqrt() } else { d.sqrt() }
 }
 
 /// Times every V level at degree p.
-fn measure(
+fn measure<T: Value>(
     device: &mut Device,
     (problem, p): (&'static str, usize),
     views: &[Level],
-    m2l: &[f32],
-    host: Option<LaplaceOperator<f32>>,
+    m2l: &[T],
+    host: Option<LaplaceOperator<T>>,
     threads: usize,
+    gemm: Option<GemmLayout>,
 ) -> Vec<Row> {
     let n = (p + 1) * (p + 1);
-    let auto = settings(device, n, GemmPolicy::Auto, DEFAULT_SCRATCH_BYTES);
-    let library_copy = auto.library_candidate(device.backend(), Precision::F32);
+    let auto = settings(
+        device,
+        n,
+        GemmPolicy::Auto,
+        default_scratch_bytes(device.info()),
+        gemm,
+    );
+    let library_copy = auto.library_candidate(device.backend(), T::FLOAT);
     let tables = Tables::upload(device, m2l, n, library_copy).unwrap();
     let mut rng = SplitMix64::new(0x7e_9001 + p as u64);
     warm_up(device);
@@ -601,11 +826,11 @@ fn measure(
     for level in views {
         eprintln!("{problem}, p = {p}: M2L on level {}", level.level);
         let boxes = level.boxes();
-        let multipoles_host: Vec<f32> = (0..boxes * n)
-            .map(|i| rng.range(-1.0, 1.0) as f32 / (1.0 + (i % n) as f32))
+        let multipoles_host: Vec<T> = (0..boxes * n)
+            .map(|i| value::<T>(rng.range(-1.0, 1.0)) / value::<T>(1.0 + (i % n) as f64))
             .collect();
         let multipoles = device.upload(&multipoles_host).unwrap();
-        let zeros = vec![0.0f32; boxes * n];
+        let zeros = vec![value::<T>(0.0); boxes * n];
         let mut locals = device.upload(&zeros).unwrap();
         let view = GroupedView::upload(device, &level.arrays(), boxes).unwrap();
         let (plan, mut scratch) = plan_of(device, level, &auto, &tables);
@@ -613,8 +838,8 @@ fn measure(
         // The level call from zero, for the check.
         let call = |device: &mut Device,
                     plan: &GroupedPlan,
-                    scratch: &mut TranslationScratch<f32>,
-                    locals: &mut DeviceBuffer<f32>| {
+                    scratch: &mut TranslationScratch<T>,
+                    locals: &mut DeviceBuffer<T>| {
             grouped(
                 device,
                 plan,
@@ -630,11 +855,17 @@ fn measure(
             .unwrap();
         };
         call(device, &plan, &mut scratch, &mut locals);
-        let mut got = vec![0.0f32; boxes * n];
+        let mut got = vec![value::<T>(0.0); boxes * n];
         device.download(locals.as_slice(), &mut got).unwrap();
 
         // The hand-written GEMM on the same batches, where the plan took the library.
-        let hand_settings = settings(device, n, GemmPolicy::HandWritten, DEFAULT_SCRATCH_BYTES);
+        let hand_settings = settings(
+            device,
+            n,
+            GemmPolicy::HandWritten,
+            default_scratch_bytes(device.info()),
+            gemm,
+        );
         let mut hand =
             (plan.gemm() == Gemm::Library).then(|| plan_of(device, level, &hand_settings, &tables));
 
@@ -649,7 +880,7 @@ fn measure(
                 Some((hand_plan, hand_scratch)) => {
                     device.write(locals.as_slice_mut(), &zeros).unwrap();
                     call(device, hand_plan, hand_scratch, &mut locals);
-                    let mut want = vec![0.0f32; boxes * n];
+                    let mut want = vec![value::<T>(0.0); boxes * n];
                     device.download(locals.as_slice(), &mut want).unwrap();
                     (relative_l2(&got, &want), "hand-written", None)
                 }
@@ -660,8 +891,8 @@ fn measure(
         // The stages and the whole call.
         let stage_time = |device: &mut Device,
                           plan: &GroupedPlan,
-                          scratch: &mut TranslationScratch<f32>,
-                          locals: &mut DeviceBuffer<f32>,
+                          scratch: &mut TranslationScratch<T>,
+                          locals: &mut DeviceBuffer<T>,
                           stage: Stage| {
             time(device, |d| {
                 grouped_stage(
@@ -696,7 +927,7 @@ fn measure(
 
         // Structure (A) with the plan's GEMM.
         let (offsets, k_mean, k_max) = level.batches();
-        let mut scratch_a = TranslationScratch::<f32>::new(device, k_max.max(1) * n).unwrap();
+        let mut scratch_a = TranslationScratch::<T>::new(device, k_max.max(1) * n).unwrap();
         // The library rejects some narrow per-offset shapes; (A) then runs the hand-written
         // kernel, and the row says so.
         let mut plan_a = |gemm| {
@@ -760,18 +991,18 @@ fn measure(
 
 /// The host operator's M2L of `level` from zero locals on `threads` scoped threads, each a
 /// contiguous share of the boxes: its locals and its median time per call.
-fn host_level(
+fn host_level<T: Value>(
     level: &Level,
     p: usize,
-    multipoles: &[f32],
-    host: &LaplaceOperator<f32>,
+    multipoles: &[T],
+    host: &LaplaceOperator<T>,
     threads: usize,
-) -> (Vec<f32>, f64) {
+) -> (Vec<T>, f64) {
     let n = (p + 1) * (p + 1);
     let boxes = level.boxes();
-    let mut operators: Vec<LaplaceOperator<f32>> = (0..threads).map(|_| host.clone()).collect();
-    let mut out = vec![0.0f32; boxes * n];
-    let run = |out: &mut [f32], operators: &mut [LaplaceOperator<f32>]| {
+    let mut operators: Vec<LaplaceOperator<T>> = (0..threads).map(|_| host.clone()).collect();
+    let mut out = vec![value::<T>(0.0); boxes * n];
+    let run = |out: &mut [T], operators: &mut [LaplaceOperator<T>]| {
         let mut rest = out;
         let mut pieces = Vec::with_capacity(threads);
         for k in 0..threads {
@@ -847,6 +1078,13 @@ fn spike(p: usize, columns: f64) -> (usize, usize, f64, Option<f64>) {
     )
 }
 
+/// `100 · value / peak` with one decimal, or "–" for an unknown peak.
+fn percent1(value: f64, peak: Option<f64>) -> String {
+    peak.map_or("–".to_owned(), |peak| {
+        format!("{:.1}", 100.0 * value / peak)
+    })
+}
+
 fn gemm_name(gemm: Gemm) -> &'static str {
     match gemm {
         Gemm::Library => "library",
@@ -854,8 +1092,10 @@ fn gemm_name(gemm: Gemm) -> &'static str {
     }
 }
 
-fn print_levels(problem: &str, p: usize, rows: &[Row], device: &Device, threads: usize) {
+fn print_levels<T: Value>(problem: &str, p: usize, rows: &[Row], device: &Device, threads: usize) {
     let n = (p + 1) * (p + 1);
+    let peak = peak::<T>(device);
+    let spike_applies = spike_applies::<T>(device);
     let flops = |pairs: usize| 2.0 * (n * n * pairs) as f64;
     println!("## {problem}, p = {p} (n = {n}), {}", device.backend());
     println!();
@@ -879,9 +1119,20 @@ fn print_levels(problem: &str, p: usize, rows: &[Row], device: &Device, threads:
             Gemm::Library => slib,
             Gemm::HandWritten(_) => Some(shand),
         };
+        let (spike_cell, of_spike) = if spike_applies {
+            (
+                format!(
+                    "({sp}, {sb}): {}",
+                    reference.map_or("rejected".to_owned(), |v| format!("{v:.0}"))
+                ),
+                reference.map_or("–".to_owned(), |v| format!("{:.0}%", 100.0 * g / v)),
+            )
+        } else {
+            ("–".to_owned(), "–".to_owned())
+        };
         println!(
-            "| {} | {} | {} | {} | {:.0} / {} | {} ({}) | {:.0}% | {:.1} | {:.0} | {:.1} | {} | \
-             ({sp}, {sb}): {} | {} |",
+            "| {} | {} | {} | {} | {:.0} / {} | {} ({}) | {:.0}% | {:.1} | {:.0} | {} | {} | \
+             {spike_cell} | {of_spike} |",
             r.level,
             r.boxes,
             r.pairs,
@@ -893,14 +1144,12 @@ fn print_levels(problem: &str, p: usize, rows: &[Row], device: &Device, threads:
             100.0 * r.pairs as f64 / r.gemm_columns.max(1) as f64,
             r.gemm_time * 1e6,
             g,
-            100.0 * g / PEAK_GFLOPS,
+            percent1(g, peak),
             r.hand.map_or("–".to_owned(), |t| format!(
                 "{:.1} ({:.0})",
                 t * 1e6,
                 flops(r.pairs) / t / 1e9
             )),
-            reference.map_or("rejected".to_owned(), |v| format!("{v:.0}")),
-            reference.map_or("–".to_owned(), |v| format!("{:.0}%", 100.0 * g / v)),
         );
         if let Some(reason) = &r.rejection {
             println!("|  | library rejected: {reason} | | | | | | | | | | | |");
@@ -997,7 +1246,9 @@ fn print_totals(problem: &str, totals: &[(usize, Vec<Row>)], threads: usize) {
 }
 
 /// The C4.5 gate: the GEMM alone on the spike's shapes (module documentation).
-fn gate(device: &mut Device) {
+fn gate<T: Value>(device: &mut Device, chosen: Option<GemmLayout>) {
+    let peak = peak::<T>(device);
+    let spike_applies = spike_applies::<T>(device);
     warm_up(device);
     println!("## The gate: the GEMM alone on the spike's shapes (one table, B columns)");
     println!();
@@ -1011,14 +1262,14 @@ fn gate(device: &mut Device) {
     let mut rng = SplitMix64::new(0x7e_9100);
     for (i, &p) in SPIKE_DEGREES.iter().enumerate() {
         let n = (p + 1) * (p + 1);
-        let table: Vec<f32> = (0..n * n).map(|_| rng.range(-1.0, 1.0) as f32).collect();
+        let table: Vec<T> = (0..n * n).map(|_| value(rng.range(-1.0, 1.0))).collect();
         let tables = Tables::upload(device, &table, n, false).unwrap();
-        let layout = GemmLayout::default_for(device.info(), n);
+        let layout = chosen.unwrap_or_else(|| GemmLayout::default_for(device.info(), n));
         for (j, &b) in SPIKE_COLUMNS.iter().enumerate() {
             eprintln!("gate: p = {p}, B = {b}");
-            let x_host: Vec<f32> = (0..b * n).map(|_| rng.range(-1.0, 1.0) as f32).collect();
+            let x_host: Vec<T> = (0..b * n).map(|_| value(rng.range(-1.0, 1.0))).collect();
             let x = device.upload(&x_host).unwrap();
-            let mut y = device.alloc::<f32>(b * n).unwrap();
+            let mut y = device.alloc::<T>(b * n).unwrap();
             let schedule = TileSchedule::new(device, layout, &[0, b as u32]).unwrap();
             let hand = time(device, |d| {
                 gemm(
@@ -1032,7 +1283,7 @@ fn gate(device: &mut Device) {
                 )
                 .unwrap();
             });
-            let rule_library = p >= 8 && device.backend().is_gpu();
+            let rule_library = p >= 8 && device.backend().is_gpu() && T::FLOAT == Precision::F32;
             let library_time = if rule_library {
                 let probe = library(
                     device,
@@ -1066,21 +1317,29 @@ fn gate(device: &mut Device) {
                 Some(t) => ("library", t, SPIKE_LIBRARY[i][j]),
                 None => ("hand-written", hand, Some(SPIKE_HAND[i][j])),
             };
+            // The spike's figures are the M3 Max's in f32: no reference elsewhere.
+            let reference = reference.filter(|_| spike_applies);
             let ratio = reference.map(|r| g(t) / r);
+            let (spike_hand, of_it) = if spike_applies {
+                (
+                    format!("{:.0}", SPIKE_HAND[i][j]),
+                    format!("{:.0}%", 100.0 * g(hand) / SPIKE_HAND[i][j]),
+                )
+            } else {
+                ("–".to_owned(), "–".to_owned())
+            };
             println!(
-                "| {p} | {b} | {name} | {:.1} | {:.0} | {:.1} | {} | {} | {} | {:.1} | {:.0} | {:.0} \
-                 | {:.0}% |",
+                "| {p} | {b} | {name} | {:.1} | {:.0} | {} | {} | {} | {} | {:.1} | {:.0} | \
+                 {spike_hand} | {of_it} |",
                 t * 1e6,
                 g(t),
-                100.0 * g(t) / PEAK_GFLOPS,
+                percent1(g(t), peak),
                 reference.map_or("–".into(), |r| format!("{r:.0}")),
                 ratio.map_or("–".into(), |r| format!("{:.0}%", 100.0 * r)),
                 ratio.map_or("–".into(), |r| if r >= GATE { "met" } else { "not met" }
                     .to_owned()),
                 hand * 1e6,
                 g(hand),
-                SPIKE_HAND[i][j],
-                100.0 * g(hand) / SPIKE_HAND[i][j],
             );
         }
     }
@@ -1089,7 +1348,7 @@ fn gate(device: &mut Device) {
 
 /// The level call of `level` at p = 8 under several scratch budgets (module
 /// documentation).
-fn budgets(device: &mut Device, level: &Level, m2l: &[f32]) {
+fn budgets<T: Value>(device: &mut Device, level: &Level, m2l: &[T], gemm: Option<GemmLayout>) {
     let p = 8;
     let n = (p + 1) * (p + 1);
     warm_up(device);
@@ -1101,20 +1360,26 @@ fn budgets(device: &mut Device, level: &Level, m2l: &[f32]) {
     println!();
     println!("| budget MB | GEMM | chunks | scratch MB | level call µs | launches |");
     println!("| ---: | --- | ---: | ---: | ---: | ---: |");
-    let auto = settings(device, n, GemmPolicy::Auto, DEFAULT_SCRATCH_BYTES);
-    let library_copy = auto.library_candidate(device.backend(), Precision::F32);
+    let auto = settings(
+        device,
+        n,
+        GemmPolicy::Auto,
+        default_scratch_bytes(device.info()),
+        gemm,
+    );
+    let library_copy = auto.library_candidate(device.backend(), T::FLOAT);
     let tables = Tables::upload(device, m2l, n, library_copy).unwrap();
     let boxes = level.boxes();
     let mut rng = SplitMix64::new(0x7e_9200);
-    let multipoles_host: Vec<f32> = (0..boxes * n)
-        .map(|_| rng.range(-1.0, 1.0) as f32)
+    let multipoles_host: Vec<T> = (0..boxes * n)
+        .map(|_| value(rng.range(-1.0, 1.0)))
         .collect();
     let multipoles = device.upload(&multipoles_host).unwrap();
-    let mut locals = device.alloc::<f32>(boxes * n).unwrap();
+    let mut locals = device.alloc::<T>(boxes * n).unwrap();
     let view = GroupedView::upload(device, &level.arrays(), boxes).unwrap();
     for mb in [8u64, 16, 32, 64, 128, 256, 512] {
         eprintln!("budget: {mb} MB");
-        let s = settings(device, n, GemmPolicy::Auto, mb << 20);
+        let s = settings(device, n, GemmPolicy::Auto, mb << 20, gemm);
         let (plan, mut scratch) = plan_of(device, level, &s, &tables);
         let seconds = time(device, |d| {
             grouped(
@@ -1135,7 +1400,7 @@ fn budgets(device: &mut Device, level: &Level, m2l: &[f32]) {
             "| {mb} | {} | {} | {:.1} | {:.1} | {} |",
             gemm_name(plan.gemm()),
             plan.nchunks(),
-            TranslationScratch::<f32>::bytes(plan.columns() * n) as f64 / f64::from(1 << 20),
+            TranslationScratch::<T>::bytes(plan.columns() * n) as f64 / f64::from(1 << 20),
             seconds * 1e6,
             3 * plan.nchunks()
         );

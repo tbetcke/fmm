@@ -45,7 +45,8 @@
 //!   and corrupted files, every candidate's output within the FMM bounds, the budget) at
 //!   f32 p = 8 and f64 p = 6 in full, and at f32 p = 3 without the stale files and the
 //!   budget, as on Metal, and the strategy at f64 p = 12 of `tests/device_tune.rs` (the
-//!   static rule without a table cache, tuned with one). On CUDA the library GEMM is never
+//!   static rule without a table cache, `Dense` on CUDA since Phase 4S decision 9, tuned
+//!   with one). On CUDA the library GEMM is never
 //!   registered (its probe fails), so the hand-written layouts, the chunk budget and the
 //!   P2P layouts are the candidates;
 //! - the stage windows of `device_timestamps(true)` (device-path.md §8.3), the uniform cube
@@ -365,9 +366,10 @@ fn scenarios<T: Real>(rng: &mut SplitMix64, comm: &SimpleCommunicator) {
 }
 
 /// The strategy at f64 p = 12, as `tests/device_tune.rs` checks it on the CPU runtime:
-/// without `table_cache` it keeps the static rule (`Rotation`; the dense candidate would
-/// take seconds to build) and is not stored, and with a table cache it is tuned. The
-/// tuning cache goes to `dir`, emptied first.
+/// without `table_cache` it keeps the static rule and is not stored (the dense candidate
+/// would take seconds to build; on CUDA the static rule is `Dense` at every p, Phase 4S
+/// decision 9, so that build makes the dense tables once), and with a table cache it is
+/// tuned. The tuning cache goes to `dir`, emptied first.
 fn strategy_at_12(dir: &Path, comm: &SimpleCommunicator) {
     let points: Vec<[f64; 3]> = (0..4000)
         .map(|i| {
@@ -391,7 +393,7 @@ fn strategy_at_12(dir: &Path, comm: &SimpleCommunicator) {
         .expect("a strategy decision");
     assert_eq!(strategy.source, Source::Static, "{report}");
     assert!(strategy.note.as_deref().unwrap().contains("table cache"));
-    assert_eq!(fmm.strategy(), M2lStrategy::Rotation);
+    assert_eq!(fmm.strategy(), M2lStrategy::Dense, "Phase 4S decision 9");
     drop(fmm);
     let tables = Path::new(env!("CARGO_TARGET_TMPDIR")).join("device_cuda_tables");
     let fmm = builder
@@ -406,7 +408,7 @@ fn strategy_at_12(dir: &Path, comm: &SimpleCommunicator) {
     let strategy = report.decision(Decision::Strategy).unwrap();
     assert_eq!(strategy.source, Source::Tuned, "{report}");
     eprintln!(
-        "  cuda f64 p = 12: without a table cache the static rule (Rotation, not stored); \
+        "  cuda f64 p = 12: without a table cache the static rule (Dense, not stored); \
          with one tuned: {} ({:.2} s)",
         strategy.choice,
         report.time.as_secs_f64()

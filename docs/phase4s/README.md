@@ -399,7 +399,12 @@ Each is recorded in the exit checklist when made:
    from 12) is provisional (Phase 4 decision 13), and the f32 rule is "dense at every
    p". T7 measures the crossover on the H100 and proposes a CUDA rule, keyed by
    backend, with Metal's unchanged. Signed off with T7's numbers before T7 changes the
-   code.
+   code. **Decided on 2026-10-07: `Dense` at every p on CUDA, in f32 and f64** (T7's
+   measurement, device-path.md §18.2: dense faster than rotation at every p measured,
+   f64 p = 4 to 20 and f32 p = 2 to 10, per level and end to end, rotation/dense
+   1.05–1.90 in f64 and 1.15–1.56 in f32 at N = 10⁵ and 10⁶). Without a table cache a
+   dense build at p ≥ 12 makes the dense tables on the host once (seconds at high p),
+   which is accepted. Metal and the CPU runtime keep their rules.
 10. **T3's recommendation.** The §3.13 "Device kernels" rules for CUDA: confirmed as
     written, a CUDA note, or a formulation change. Signed off before T4's f64 gates.
     **Decided on 2026-10-07: a CUDA note, as recommended** (spikes/device-arith/REPORT.md,
@@ -445,7 +450,7 @@ Before T1 has merged, T1 itself uses `ssh locust` directly, outside the sandbox.
 - [x] T3 recommendation signed off (decision 10): a CUDA note in §3.13 (decided 2026-10-07)
 - [x] T4 merged: Phase 4 device gates on CUDA in f32 and f64; device timestamps on CUDA checked
 - [x] T6 merged: `nd-fmm-bench` and `tools/bench/run.sh`; reports from the M3 Max and locust
-- [ ] Static M2L rule on CUDA signed off (decision 9)
+- [x] Static M2L rule on CUDA signed off (decision 9): `Dense` at every p, f32 and f64 (decided 2026-10-07)
 - [ ] T7 merged: CUDA layouts and candidates by measurement; H100 peaks; Metal and CPU runtime unchanged bit for bit
 - [ ] T8 merged: `fmm-bench/results/phase4s-gh200.md` published
 - [ ] CUDA leaf-size default (decision 7): none / added by sign-off

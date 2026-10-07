@@ -29,7 +29,7 @@ use nd_fmm_kernels::translate::{
     Orientation, PlanSettings, Tables, TileSchedule, TranslationScratch, gemm, grouped,
 };
 use nd_fmm_kernels::view::{GroupedArrays, GroupedView};
-use nd_fmm_kernels::{BackendKind, Device, DeviceBuffer, Precision};
+use nd_fmm_kernels::{BackendKind, Device, DeviceBuffer, DeviceInfo, Precision};
 use nd_fmm_math::RealScalar;
 use nd_fmm_tables::MatrixSet;
 
@@ -79,11 +79,13 @@ macro_rules! each_precision {
 }
 
 /// The hand-written layouts a backend runs in these tests: on the CPU runtime its default
-/// and a small cube layout (at most 8 units: one per core on the CI runner, correctness
-/// only); on a GPU its default, a 1-D cube and the CPU layout.
+/// and small cube layouts (at most 8 units: one per core on the CI runner, correctness
+/// only), one of them with the 8 columns per unit of the CUDA default (Phase 4S T7); on a
+/// GPU the defaults of Metal and CUDA (Phase 4S T7) whichever it is, the layouts the CUDA
+/// tuner adds (`nd_fmm_exec::tune::cuda_gemm_layouts`), a 1-D cube and the CPU layout.
 fn layouts(device: &Device, n: usize) -> Vec<GemmLayout> {
     let default = GemmLayout::default_for(device.info(), n);
-    match device.backend() {
+    let mut out = match device.backend() {
         BackendKind::Cpu => {
             let units = device.info().max_units_per_cube.clamp(1, 8);
             vec![
@@ -93,21 +95,67 @@ fn layouts(device: &Device, n: usize) -> Vec<GemmLayout> {
                     columns: 2.min(units),
                     per_unit: 3,
                 },
+                GemmLayout::Cube {
+                    rows: (units / 2).max(1),
+                    columns: 1,
+                    per_unit: 8,
+                },
             ]
         }
-        _ => vec![
-            default,
-            GemmLayout::Cube {
-                rows: 64,
-                columns: 1,
-                per_unit: 2,
-            },
-            GemmLayout::Cpu {
-                block: 4,
-                per_unit: 3,
-            },
-        ],
+        _ => {
+            let on = |backend| {
+                GemmLayout::default_for(
+                    &DeviceInfo {
+                        backend,
+                        ..device.info().clone()
+                    },
+                    n,
+                )
+            };
+            let cuda = on(BackendKind::Cuda);
+            let GemmLayout::Cube { rows, .. } = cuda else {
+                panic!("{cuda}: a cube layout on a GPU")
+            };
+            vec![
+                default,
+                on(BackendKind::Metal),
+                cuda,
+                // The CUDA tuner's wide candidate: the default's rows, 128 units, 4 columns.
+                GemmLayout::Cube {
+                    rows,
+                    columns: (128 / rows).max(1),
+                    per_unit: 4,
+                },
+                GemmLayout::Cube {
+                    rows: 64,
+                    columns: 1,
+                    per_unit: 2,
+                },
+                // The CUDA tuner's small-call candidates: one plane, 2 columns per unit.
+                GemmLayout::Cube {
+                    rows: 32,
+                    columns: 1,
+                    per_unit: 2,
+                },
+                GemmLayout::Cube {
+                    rows: 16,
+                    columns: 2,
+                    per_unit: 2,
+                },
+                GemmLayout::Cpu {
+                    block: 4,
+                    per_unit: 3,
+                },
+            ]
+        }
+    };
+    let mut unique = Vec::with_capacity(out.len());
+    for layout in out.drain(..) {
+        if !unique.contains(&layout) {
+            unique.push(layout);
+        }
     }
+    unique
 }
 
 /// The product of the column-major table `a` (order n) with `x`, as the kernel forms it:

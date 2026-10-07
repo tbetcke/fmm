@@ -41,7 +41,8 @@
 //! p ≤ 8 resolves to `Dense`, so M2L runs as dense GEMMs), on the CPU runtime in f64 at
 //! p = 3 and 8 (feature `cpu`) and on Metal in f32 at p = 3 and 8 (feature `metal`, by
 //! hand outside the macOS sandbox); on the CPU runtime also in f64 at p = 18, which
-//! resolves to `Rotation`, so M2L runs the device rotation kernel (T10). The device run's
+//! resolves to `Rotation`, so M2L runs the device rotation kernel (T10; on CUDA the device
+//! resolves it to `Dense` since Phase 4S decision 9). The device run's
 //! error lies within 0.1% (f64) or 5% (f32) of the host run's in the same precision
 //! (docs/phase4/README.md, "Accuracy measures"), its output within 1e-12 (f64) or 1e-5
 //! (f32) of the host output (relative L2 over all targets), and in f64 it passes the C3.2

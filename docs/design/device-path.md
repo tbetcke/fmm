@@ -54,7 +54,7 @@ caller passes; CubeCL's own autotune is not used.
 | 3. Generic or enum | run-time value (`Backend` in exec, `Device` in kernels); no `R: Runtime` anywhere | 3.2 |
 | 4. Dense M2L launches | grouped GEMM per level and offset chunk, then a row-ordered reduction | 6.4 |
 | 5. `Classes` on the device | run as `Dense` from `M2lClasses::expand` | 6.8 |
-| 6. f64 rule for p = 9–11 | dense through p = 11, rotation from p = 12 (provisional) | 10.5 |
+| 6. f64 rule for p = 9–11 | dense through p = 11, rotation from p = 12 (provisional); on CUDA dense at every p (Phase 4S decision 9, §18.2) | 10.5 |
 | 7. CPU runtime and `threads(n)` | no rayon pool with the CPU backend; `threads(n)` caps the units per cube of the CPU layouts | 11 |
 | 8. Autotune | strategy-level tuner in `nd-fmm-exec`, cache only in a caller-supplied directory | 10 |
 | 9. C4.2 target | ≥ 25% of the P2P peak model on W2 (N = 10⁵), ≥ 10% on W1 at n_t = 64 with ≥ 4,096 target leaves per launch | 13.4 |
@@ -1239,7 +1239,9 @@ to build at p = 16, Phase 3 T8).
 - Without a directory: no tuning, and the static rule applies:
   - **f32**: `Dense`; the library GEMM where p ≥ 8 and the guard passes, the
     hand-written GEMM otherwise;
-  - **f64**: `Dense` for p ≤ 11, `Rotation` for p ≥ 12 (**provisional**).
+  - **f64**: `Dense` for p ≤ 11, `Rotation` for p ≥ 12 (**provisional**). *Phase 4S:* on
+    CUDA `Dense` at every p, measured (decision 9, §18.2); Metal and the CPU runtime keep
+    this rule.
 
 **The f64 rule for p = 9–11.** Nothing here can time f64 on a GPU. The spike's roofline
 model (central, A100) gives the rotation efficiency that would tie with the hand-written
@@ -1447,7 +1449,7 @@ Signed off on 2026-10-03: every recommendation below is accepted as stated.
 | 3 | Runtime-generic code or a run-time enum | A run-time value: `Backend` in `nd-fmm-exec`, `Device` over `cubecl::Device` in `nd-fmm-kernels`; CubeCL 0.11 removed `R` from the client (Section 3.2) |
 | 4 | The dense M2L launch structure | (B): grouped GEMM per level and offset chunk, then a row-ordered reduction per target; bit-identical to per-offset launches at about 1% of their launches (Section 6.4) |
 | 5 | `Classes` on the device | Run as `Dense` from `M2lClasses::expand`, reported as such (Section 6.8) |
-| 6 | The f64 static rule for p = 9–11 | `Dense` through p = 11, `Rotation` from p = 12, provisional until a GPU measures rotation (Section 10.5) |
+| 6 | The f64 static rule for p = 9–11 | `Dense` through p = 11, `Rotation` from p = 12, provisional until a GPU measures rotation (Section 10.5); measured on CUDA in Phase 4S: `Dense` at every p there (§18.2) |
 | 7 | The CPU runtime and `threads(n)` | No rayon pool with the CPU backend; `threads(n)` caps the units per cube of the CPU layouts. With Metal and CUDA the pool serves host-fallback kinds only, and is idle during device work by construction (Section 11) |
 | 8 | Autotune and its persistence | A strategy-level tuner in `nd-fmm-exec` at build; a cache file only in a caller-supplied directory, with the `TableCache` rules; CubeCL's autotune unused and its persistence feature off (Section 10) |
 | 9 | The C4.2 performance target | At least 25% of the P2P peak model (720 / 480 Gpairs/s) on W2 at N = 10⁵, and at least 10% on W1 at n_t = 64 with at least 4,096 target leaves per launch, Metal f32 (Section 13.4) |
@@ -1504,10 +1506,11 @@ laplace-fmm-plan.md §7, Phase 4, carries the status per component.
 
 Phase 4S runs this design on CUDA, on the H100 of locust's GH200 (docs/phase4s/). No new
 structure: CUDA takes the existing `Backend`/`BackendKind` values and the GPU defaults it
-shares with Metal (`Metal | Cuda` arms) until T7. This section records what was read and
-confirmed on the device. §18.1 holds T2's facts (F25–F32, signed off on 2026-10-06) and
-T3's device arithmetic (F33–F36, signed off on 2026-10-07); T7 adds the measured layouts
-and rules (§18.2).
+shares with Metal (`Metal | Cuda` arms) until T7, which gives CUDA its own arms where
+measured better. This section records what was read and confirmed on the device. §18.1
+holds T2's facts (F25–F32, signed off on 2026-10-06) and T3's device arithmetic
+(F33–F36, signed off on 2026-10-07); §18.2 T7's measured layouts and rules, with the
+static M2L rule on CUDA (decision 9, signed off on 2026-10-07).
 
 ### 18.1 CUDA facts (T2, measured on locust, 2026-10-06)
 
@@ -1576,3 +1579,142 @@ on CUDA in f32 and f64, with the CPU runtime on Grace as the control
    inverse square root (a formulation change), or an upstream request for an approximate
    `rsqrt` lowering on NVPTX come up, each by its own decision. No request for a switch of
    LLVM's `contract` flag: nothing needs one.
+
+### 18.2 Layouts and rules on CUDA as measured (T7, locust, 2026-10-07)
+
+Measured on the GH200's H100 with CubeCL 0.11.0-pre.4 through LLVM NVPTX, CUDA 12.6,
+driver 565.57.01, release builds, kernel compilation excluded. Before every run the GPU
+showed no other process and 0% utilisation and the host a load below 3 (`nvidia-smi`,
+`uptime`, `ps`; a root `find /data` job used about one core during round 3); the clocks
+are not locked (the SM clock idles at 345 MHz and runs at its 1,980 MHz maximum under
+load). Every number is *measured (locust, CUDA)* unless marked *datasheet* or *model*.
+
+**Peaks** (`nd_fmm_validate::peaks`, keyed by `DeviceInfo::name`, "NVIDIA GH200 480GB"):
+f32 67 TFLOP/s and f64 34 TFLOP/s without tensor cores, HBM3 4.0 TB/s (*datasheet*, at
+the 1,980 MHz maximum SM clock of `nvidia-smi -q -d CLOCK`). The f64 figure agrees with
+132 SMs × 64 FP64 lanes × 2 × 1.98 GHz = 33.5 TFLOP/s. **P2P peak model** (as §13.4 for
+the M3 Max, *model*): 132 SMs × 128 f32 lanes × 1.98 GHz = 33.5 × 10¹² lane-operations per
+second (f64: 64 lanes, 16.7 × 10¹²) over 10 operations per pair (φ) or 15 (φ, ∇φ):
+**3,345 and 2,230 Gpairs/s in f32, 1,673 and 1,115 in f64**. On the LLVM path the inverse
+square root is two IEEE sequences (`sqrt.rn`, `rcp.rn`; F33, F36), so the model is an
+upper bound the kernel cannot reach.
+
+**Method.** `nd-fmm-validate`'s `layout_sweep` (new in T7) measures every layout on the
+level calls of an FMM's own plan, the uniform cube of C3.3 at N = 10⁶ (32,768 leaves,
+30.5 points per leaf on average, 5.4 × 10⁶ V pairs on level 5), gradients on: the GEMM
+and P2P candidates through `tune::TuningHook::offer`, timed by the tuner itself (median of
+five batches of ≥ 10 ms of the whole level call), and the leaf layouts, the P2P layouts and
+the chunk budgets by `KindTiming::Device` (CUDA events, a breakdown on CUDA). The kernel
+examples (`p2p_kernels`, `m2l_kernels`, `translation_kernels`, `rotation_kernels`) take
+`--precision f64` and `--n` from T7, and `nd-fmm-bench` gives the evaluation end to end.
+
+| Kernel (§) | Metal default | CUDA default (T7) | The measurement behind it |
+| --- | --- | --- | --- |
+| P2P (6.2) | cube of 64 units | **cube of 32 units** (`CUDA_CUBE_UNITS`) | the P2P level call at 0.78 (f32) and 0.75 (f64) of cube 64's time; planes of 2 and 4 within 1–4% of it, 8 planes 0.82–0.84, cube 128 1.07–1.15, cube 256 1.9–2.1 (the uniform cube at N = 10⁶, every p). Leaves of 64 points favour cube 64 by 11–15% (W1, `p2p_kernels`), but the FMM's leaves average 30 |
+| P2M, L2P, P2L, M2P (6.3) | cube of 64 units, tiles of 32 | **cube of 32 units, tiles of 32** (`CUDA_LEAF_UNITS`) | P2M and L2P together at 0.50–0.80 of the 64-unit time (f32 p = 3–8), 0.64–0.76 (f64 p = 3–12); L2P alone about half. 128 and 256 units 1.6–4.7× slower |
+| GEMM of M2M, L2L, dense M2L (6.4, 6.5) | up to 32 rows, 64 units, 4 columns per unit | **rows the power of two at or above n / 4 (16 to 128), 64 units, 8 columns per unit** (`CUDA_GEMM_*`) | the largest V level (5.4 × 10⁶ pairs) at 2 GB: 1.06× (f32 p = 3), 1.27× (p = 6), 1.14× (p = 8) faster than the Metal layout, 1.05× (f64 p = 3), 1.45× (p = 6), 0.94× (p = 8); at f64 p = 12 M2M, L2L and the V levels 2–4 2.0–3.9× faster (6 rows per unit under the Metal layout). Within 8% of the fastest of 40–75 layouts on every large level call |
+| chunk budget (6.4) | 128 MB | **2 GB**, at most an eighth of the device memory (`CUDA_SCRATCH_BYTES`) | M2L at 0.57–0.76 of its 128 MB time (f32 and f64, p = 3–8); 1 GB 0–7% slower than 2 GB, 4 GB at most 3.4% faster (not adopted, below 10%). Cause: `Accumulate::Rows` walks every entry of each target's row once per chunk, so the reduction grows with the chunks (27 under 128 MB on the largest level at f32 p = 8, 53 at f64 p = 8) |
+| rotation M2L (6.6) | (p + 1)² units rounded up to the plane | unchanged | the default fastest at p = 8, 12 and 16 in f64: twice the units 1.17–1.25× slower, 32 or 64 units slower still. Several targets per cube at small p not built: below p = 10 rotation is 2–3.7× slower than dense, so it cannot change the rule |
+| elementwise launches (3.1) | at most 65,535 cubes (`GPU_MAX_CUBES`), 256 units each, the units then stride | unchanged | the cap costs nothing: a build with the cap lifted (one element per unit) was slower, `zero` over 2²⁸ values 413 → 716 µs (f32) and 554 → 715 µs (f64), `gather_columns` 944 → 1,343 µs and 1,339 → 1,600 µs; with the cap `zero` reaches 2.6 TB/s (f32) and 3.9 TB/s (f64, 97% of the datasheet bandwidth) at 2²⁸ values |
+
+**Tuner candidates on CUDA** (`tune::gemm_candidates`, `cuda_gemm_layouts`,
+`p2p_candidates`; `CANDIDATE_SET_VERSION` 2): the CUDA default GEMM, the Metal default
+(6% faster on the largest V level at f64 p = 8), one plane of 32 units with 2 columns each
+(the fastest or within 5% of it on every level call of ≤ 4,096 pairs, 1.2–1.9× the
+default layouts there) and the default's rows with 128 units and 4 columns (the fastest on
+the largest V level at f64 p = 12); no 16 MB budget. P2P: cube 32 and 64, planes 2 and 4.
+With these, a tuned build of the cube at N = 10⁶ evaluated 1.02–1.16× faster than the
+static rule (f32 and f64, p = 3–8).
+
+**The static M2L rule on CUDA (decision 9, signed off on 2026-10-07): `Dense` at every
+p in f32 and f64.** Dense against rotation under the CUDA defaults, the cube:
+
+| | p | rotation / dense |
+| --- | --- | --- |
+| per level, every V level (`rotation_kernels`), f64, N = 10⁵ / 10⁶ | 4–20 | 1.17–3.28 / 1.06–2.24 |
+| per level, f32, N = 10⁵ / 10⁶ | 2–10 | 1.55–3.24 / 1.27–3.72 |
+| end to end (`nd-fmm-bench`, mean of 5), f64, N = 10⁵ / 10⁶ | 4–20 | 1.15–1.90 / 1.05–1.50 |
+| end to end, f32, N = 10⁵ / 10⁶ | 2–10 | 1.25–1.56 / 1.15–1.38 |
+
+The rotation kernel reaches 1.5–3.4% of the f64 peak (model flops, (20/3)(p + 1)³ per
+pair), below every break-even efficiency of the spike's model (§10.5); the dense level call
+of the largest V level 14.7–19.4% of the f64 peak at p = 6–12 under the CUDA default
+(useful flops, whole level call: gather, GEMM and reduction). Rotation is closest at
+p = 16 and 20, where the dense GEMM's register blocks are largest. Without a table cache a
+dense build at p ≥ 12 first makes the 316 dense tables on the host (1.8 s at p = 12,
+8.7 s at p = 16, 29 s at p = 20 on the M3 Max, against under 0.03 s for rotation); the
+sign-off accepts that. Metal keeps its f32 rule and the CPU runtime its provisional f64
+rule (`tune::static_strategy` is keyed by backend).
+
+**End to end** (`tools/bench/run.sh --backend cuda`, N = 10⁶, the uniform cube,
+gradients, mean of 10 evaluations, static rule, no tuning cache), before T7 and after it
+(before decision 9 changed f64 p = 12, which ran rotation in both columns):
+
+| precision, p | before ms | after ms | speed-up | M2L before / after | P2P before / after | L2P before / after |
+| --- | ---: | ---: | ---: | --- | --- | --- |
+| f32, 3 | 13.39 | 12.25 | 1.09 | 1.78 / 1.29 | 2.57 / 2.00 | 0.074 / 0.067 |
+| f32, 6 | 19.99 | 15.75 | 1.27 | 8.07 / 4.36 | 2.74 / 2.14 | 0.475 / 0.235 |
+| f32, 8 | 29.19 | 21.45 | 1.36 | 16.45 / 9.38 | 2.70 / 2.14 | 0.636 / 0.429 |
+| f64, 3 | 21.87 | 19.69 | 1.11 | 2.58 / 1.65 | 4.32 / 3.13 | 0.299 / 0.192 |
+| f64, 6 | 33.92 | 25.38 | 1.34 | 13.47 / 6.03 | 4.23 / 3.32 | 0.565 / 0.511 |
+| f64, 8 | 47.75 | 35.51 | 1.34 | 26.17 / 15.55 | 4.22 / 3.23 | 1.065 / 0.776 |
+| f64, 12 | 110.26 | 105.65 | 1.04 | 79.35 / 78.74 (rotation) | 4.33 / 3.21 | 6.92 / 4.75 |
+
+The kind times (ms, `KindTiming::Synchronous`, a second build) carry one sync per call. With
+decision 9, f64 p = 12 runs dense: 78.9 ms in `nd-fmm-bench --strategy dense` (1.40× the
+110.3 ms before), its M2L 52.6 ms against 78.7 ms under rotation. A rerun of the benchmark
+with the final code gave the same device time per kind (within 1–3%) but evaluations
+1.6–5.7 ms slower, all of it in `other`, while a root file-system audit (`find`, `rpm -V`)
+ran on the host with the GPU otherwise idle: the host part of an evaluation is sensitive to
+host load, so the table keeps the earlier run on a quiet host. M2M and L2L together moved by −55% (f64 p = 12, 2.3 ms saved) to +11% (f64 p = 3, 46 µs)
+per evaluation; at p = 3 and 8 the Metal layout was up to 4% faster on their largest
+calls. About 8.4 ms (f32) and 13.3 ms (f64) of each evaluation lie outside the level
+calls (charge upload, output download and scaling; `other` in the report), unchanged by T7
+and reported for T8 (transfers are not redesigned in this phase).
+
+**Launches and syncs** (`layout_sweep --part overheads`): enqueueing a launch 3.7 µs; a
+launch queued and run 3.7 µs; a sync on an idle device 9.2–9.4 µs; a launch and a sync
+17.3–17.8 µs. A `Synchronous` kind timing therefore adds about 18 µs per level call:
+evaluations with it took 0.99–1.05× the time of those without at N = 10⁶ (cheap enough
+to leave the total nearly unperturbed).
+
+**The GEMM alone** (`m2l_kernels --n 1000000`, the cube's largest V level, the CUDA
+default layout, useful flops): 6.7, 10.9 and 12.2 TFLOP/s in f32 at p = 3, 6 and 8 (10%,
+16% and 18% of the peak) and 4.3, 7.8, 7.0 and 8.0 TFLOP/s in f64 at p = 3, 6, 8 and 12
+(13–24%). At p = 3 it streams X and Y at about 1.7 TB/s (42% of the bandwidth; the
+arithmetic intensity n / 4 flops per byte in f32 is low): bandwidth-limited in part. At
+p ≥ 6 it uses 15–25% of the bandwidth and under a quarter of the compute peak: neither
+memory- nor compute-bound, but limited inside the SM by the loads and issue of its
+register blocks (A and X are read through L1 for every k step; no shared-memory staging).
+A larger, shared-memory-tiled variant (227 KB per cube) would be the next step; it keeps
+one accumulator per output and k ascending, so it is a comptime variant in the sense of
+the brief, but it is a new kernel path, not a layout of the existing one, and is left to a
+later task. At p = 8 in f32 the largest level call splits into gather 1.2 ms, GEMM 5.8 ms
+and reduction 1.1 ms.
+
+**Profile** (`nsys`, CUDA events; `ncu` refused with `ERR_NVGPUCTRPERM`: the driver
+restricts performance counters to administrators, `RmProfilingAdminOnly: 1`, so no
+hardware counters were read). f32 p = 8 at N = 10⁶ (static rule): the dense M2L is the
+slowest kind, its GEMM 55% of the GPU's time (6.9 ms per evaluation), P2P 16%, the gather
+and the reduction 11% each, L2P 3%; the GPU is busy about 12.4 ms of a 21.4 ms evaluation.
+The copies are small (the 16 MB download 56 µs, the uploads 0.25 ms per evaluation); a
+pinned host buffer is allocated per evaluation (`cuMemAllocHost`, 1.0–15.6 ms, median
+1.4 ms), which with the host work around the download makes up most of the `other` time
+above. f64 p = 12 under the rule before decision 9: rotation 89% of the GPU's time.
+
+**Findings reported, not built** (layouts and choices only in T7):
+- the row reduction of `Accumulate::Rows` visits every entry of each target's row in every
+  chunk; walking only the chunk's sub-range (its start per row and chunk is known at
+  build) keeps the order and the bits and would make the budget matter less;
+- the per-evaluation pinned allocation of the download and the host time around it
+  (8–14 ms of `other` per evaluation at N = 10⁶, more than every level call together at
+  f32 p = 3) are CubeCL's read path and the output scaling; for T8 and Phase 5;
+- L2P at high p in f64 (4.7 ms at p = 12 under the new default, 0.3% of the f64 peak) is
+  bound by its per-unit harmonics arrays;
+- a shared-memory-tiled GEMM (above);
+- NVRTC (decision 10, item 3): P2P is 10–17% of an evaluation at N = 10⁶ (2.0–2.1 ms in
+  f32, 3.1–3.3 ms in f64) at 20–34% of the P2P model; the T3 spike's 1.5× from NVRTC's
+  `rsqrt` would save at most about a third of it, 3–6% of the evaluation, so no NVRTC
+  question is raised. The C4.2 targets (`p2p_kernels`): W1 at n_t = 64 met (21–28% f32,
+  26–34% f64 of the model, target 10%), W2 at N = 10⁵ met in f64 and with gradients
+  (26–33%) and not in f32 for φ alone (21.5% of the model against 25%).

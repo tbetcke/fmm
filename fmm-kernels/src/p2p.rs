@@ -41,7 +41,7 @@
 //!
 //! | Layout | Default on | Parallel unit | Sources |
 //! | --- | --- | --- | --- |
-//! | [`Cube`](P2pLayout::Cube) | Metal, CUDA | one cube of U units per target leaf; unit u owns targets u, u + U, … | staged in tiles of U mapped sources and charges in shared memory, `sync_cube` around each tile |
+//! | [`Cube`](P2pLayout::Cube) | Metal (U = 64), CUDA (U = 32) | one cube of U units per target leaf; unit u owns targets u, u + U, … | staged in tiles of U mapped sources and charges in shared memory, `sync_cube` around each tile |
 //! | [`Plane`](P2pLayout::Plane) | none (a candidate, T12) | one plane per target leaf, several leaves per cube; lane l owns targets l, l + P, … | each plane stages its own tile of P sources, `sync_plane` around it |
 //! | [`Cpu`](P2pLayout::Cpu) | the CPU runtime | one unit per core, each a contiguous range of target leaves; targets in `Vector<T, N>` lanes, K vectors per block | broadcast one by one, no shared memory, no barrier |
 //!
@@ -80,9 +80,16 @@ use crate::error::KernelError;
 use crate::frame;
 use crate::view::{IndexView, LeafCoordinates, PointOffsets};
 
-/// The units of the [`Cube`](P2pLayout::Cube) layout by default on the GPU backends (and
-/// so its source tile): 64 (device-path.md §6.2; candidates 32, 64, 128).
+/// The units of the [`Cube`](P2pLayout::Cube) layout by default on Metal (and so its
+/// source tile): 64 (device-path.md §6.2; candidates 32, 64, 128).
 pub const GPU_CUBE_UNITS: u32 = 64;
+
+/// The units of the [`Cube`](P2pLayout::Cube) layout by default on CUDA: 32, one plane
+/// (Phase 4S T7, device-path.md §18.2). On the H100 (the uniform cube at N = 10⁶, 30.5
+/// points per leaf, with gradients) the P2P level call took 0.78 (f32) and 0.75 (f64) of
+/// the time of 64 units, the best of every layout measured in f64 and within 1% of the
+/// best in f32 (two planes per cube).
+pub const CUDA_CUBE_UNITS: u32 = 32;
 
 /// The vector width of the [`Cpu`](P2pLayout::Cpu) layout by default, in bits: the host's,
 /// 256 (AVX2) on x86_64 and 128 (NEON) elsewhere. Only the M3 Max (NEON) timed it.
@@ -119,16 +126,22 @@ pub enum P2pLayout {
 impl P2pLayout {
     /// The default layout of a device: [`Cpu`](Self::Cpu) with the host's vector width
     /// ([`CPU_VECTOR_BITS`]) on the CPU runtime, otherwise [`Cube`](Self::Cube) with
-    /// [`GPU_CUBE_UNITS`] units (fewer if the device allows fewer per cube). Chosen at
-    /// build from the backend (device-path.md §6.2, §6.5).
+    /// [`GPU_CUBE_UNITS`] units on Metal and [`CUDA_CUBE_UNITS`] on CUDA (fewer if the
+    /// device allows fewer per cube). Chosen at build from the backend (device-path.md
+    /// §6.2, §6.5, §18.2).
     pub fn default_for(info: &DeviceInfo) -> Self {
-        match info.backend {
-            BackendKind::Cpu => Self::Cpu {
-                vector_bits: CPU_VECTOR_BITS,
-            },
-            BackendKind::Metal | BackendKind::Cuda => Self::Cube {
-                units: GPU_CUBE_UNITS.min(info.max_units_per_cube.max(1)),
-            },
+        let units = match info.backend {
+            BackendKind::Cpu => {
+                return Self::Cpu {
+                    vector_bits: CPU_VECTOR_BITS,
+                };
+            }
+            BackendKind::Metal => GPU_CUBE_UNITS,
+            // Measured on the H100 (CUDA_CUBE_UNITS).
+            BackendKind::Cuda => CUDA_CUBE_UNITS,
+        };
+        Self::Cube {
+            units: units.min(info.max_units_per_cube.max(1)),
         }
     }
 
@@ -941,12 +954,14 @@ mod tests {
                 vector_bits: CPU_VECTOR_BITS
             }
         );
-        for backend in [BackendKind::Metal, BackendKind::Cuda] {
-            assert_eq!(
-                P2pLayout::default_for(&info(backend, (32, 32))),
-                P2pLayout::Cube { units: 64 }
-            );
-        }
+        assert_eq!(
+            P2pLayout::default_for(&info(BackendKind::Metal, (32, 32))),
+            P2pLayout::Cube { units: 64 }
+        );
+        assert_eq!(
+            P2pLayout::default_for(&info(BackendKind::Cuda, (32, 32))),
+            P2pLayout::Cube { units: 32 }
+        );
     }
 
     #[test]

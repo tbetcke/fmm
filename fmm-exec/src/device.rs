@@ -140,7 +140,7 @@
 //! tile schedules) are built and uploaded at build, one per level and view, and the
 //! scratch is allocated once, sized by the widest chunk under the scratch budget
 //! ([`FmmBuilder::device_scratch_budget`](crate::fmm::FmmBuilder::device_scratch_budget),
-//! default 128 MB); the chunks do not change the bits. The GEMM is fixed per level call at
+//! default 128 MB, 2 GB on CUDA); the chunks do not change the bits. The GEMM is fixed per level call at
 //! build ([`DeviceReport::translations`]): the hand-written kernel in the backend's layout
 //! ([`DeviceReport::gemm_layout`]), or, under
 //! [`DeviceGemm::Auto`] and [`DeviceGemm::Library`] in f32 at p ≥ 8 on a GPU, the library
@@ -399,8 +399,8 @@ use nd_fmm_kernels::rotation::{
     Shift as DeviceShift,
 };
 use nd_fmm_kernels::translate::{
-    Accumulate, DEFAULT_SCRATCH_BYTES, GroupedPlan, Operands, Orientation, PlanSettings, Tables,
-    TranslationScratch, grouped,
+    Accumulate, GroupedPlan, Operands, Orientation, PlanSettings, Tables, TranslationScratch,
+    default_scratch_bytes, grouped,
 };
 pub use nd_fmm_kernels::translate::{Gemm, GemmLayout};
 use nd_fmm_kernels::view::{
@@ -859,7 +859,7 @@ impl fmt::Display for DeviceReport {
             )?;
             for t in calls.iter().filter(|t| {
                 t.orientation != Orientation::BoxMajor
-                    || t.budget != DEFAULT_SCRATCH_BYTES
+                    || t.budget != default_scratch_bytes(&self.info)
                     || matches!(t.gemm, Gemm::HandWritten(l) if l != self.gemm_layout)
             }) {
                 writeln!(
@@ -922,8 +922,9 @@ pub struct DeviceOptions {
     /// The GEMM of the device translations M2M, L2L and M2L (T8, T9); [`DeviceGemm::Auto`]
     /// by default.
     pub gemm: DeviceGemm,
-    /// The scratch budget of the device translations in bytes; `None` for
-    /// [`DEFAULT_SCRATCH_BYTES`].
+    /// The scratch budget of the device translations in bytes; `None` for the device's
+    /// default, `nd_fmm_kernels::translate::default_scratch_bytes` (128 MB on Metal and the CPU
+    /// runtime, 2 GB on CUDA; Phase 4S T7).
     pub scratch_budget: Option<u64>,
     /// How to time the stages; [`StageTiming::Enqueue`] by default.
     /// [`StageTiming::DeviceTimestamps`] falls back to it on a device that does not time on
@@ -1819,7 +1820,9 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         // tune, also the widest chunk of any candidate (T12).
         let (mut plan_bytes, mut scratch_columns) = (0u64, 0usize);
         let tuning_settings = GemmChoice {
-            budget: options.scratch_budget.unwrap_or(DEFAULT_SCRATCH_BYTES),
+            budget: options
+                .scratch_budget
+                .unwrap_or_else(|| default_scratch_bytes(&info)),
             ..GemmChoice::library(T::FLOAT)
         }
         .settings(&info, n);
@@ -2260,9 +2263,14 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                     kind,
                     bucket: bucket(pairs),
                 };
-                let Some(choice) = tuner.decided(decision).and_then(|c| c.gemm()) else {
+                let Some(mut choice) = tuner.decided(decision).and_then(|c| c.gemm()) else {
                     continue;
                 };
+                // A budget the builder names holds for every level call, as in the plans
+                // built before tuning (the scratch is sized for it).
+                if let Some(budget) = self.options.scratch_budget {
+                    choice.budget = budget;
+                }
                 if choice == call.choice {
                     continue;
                 }
@@ -2310,6 +2318,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
     ) -> Result<Duration, Rejection> {
         let info = self.link.device.info().clone();
         let n = self.n();
+        let budget_named = self.options.scratch_budget;
         if let GemmKind::HandWritten(layout) = choice.gemm {
             layout
                 .check(&info)
@@ -2345,6 +2354,27 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                 "the tables have no library copy".into(),
             ));
         }
+        // The operator's scratch is sized at build for every candidate the tuner registers
+        // itself; an offered candidate with wider chunks (a `TuningHook`) is not timed, and
+        // is checked before its plan is built (which asserts that the scratch holds it).
+        let lists = plan.level(level);
+        let batch_offsets = match (kind, pass) {
+            (OperatorKind::M2m, Some(UpwardPass::Local)) => lists.m2m_local().batch_offsets(),
+            (OperatorKind::M2m, _) => lists.m2m_global().batch_offsets(),
+            (OperatorKind::L2l, _) => lists.l2l().batch_offsets(),
+            _ => lists.v().batch_offsets(),
+        };
+        let wanted = choice
+            .settings(&info, n)
+            .size(info.backend, T::FLOAT, batch_offsets)
+            .columns
+            * n;
+        if wanted > translations.scratch.len() {
+            return Err(Rejection::Skipped(format!(
+                "its chunks need a scratch of {wanted} values, the operator's holds {}",
+                translations.scratch.len()
+            )));
+        }
         let candidate = plan_level_call(
             link,
             plan,
@@ -2360,7 +2390,11 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                 candidate.library_rejection().unwrap_or("not a candidate")
             )));
         }
-        if choice.budget < DEFAULT_SCRATCH_BYTES && candidate.nchunks() <= 1 {
+        // The smaller budget of the tuner's own candidates, when the builder names none.
+        if budget_named.is_none()
+            && choice.budget < default_scratch_bytes(&info)
+            && candidate.nchunks() <= 1
+        {
             return Err(Rejection::Unregistered(
                 "one chunk under either budget: the default budget's plan".into(),
             ));
@@ -3455,13 +3489,14 @@ pub(crate) fn tune_strategy<T: Stored>(
     plan: &Plan,
     p: usize,
     table_cache: Option<&Path>,
+    budget: Option<u64>,
 ) -> M2lStrategy {
     match T::PRECISION {
         nd_fmm_tables::cache::Precision::F32 => {
-            strategy::<f32>(tuner, device, plan, p, table_cache)
+            strategy::<f32>(tuner, device, plan, p, table_cache, budget)
         }
         nd_fmm_tables::cache::Precision::F64 => {
-            strategy::<f64>(tuner, device, plan, p, table_cache)
+            strategy::<f64>(tuner, device, plan, p, table_cache, budget)
         }
     }
 }
@@ -3473,14 +3508,21 @@ fn strategy<T: DeviceScalar>(
     plan: &Plan,
     p: usize,
     table_cache: Option<&Path>,
+    budget: Option<u64>,
 ) -> M2lStrategy {
     let precision = T::FLOAT;
     let info = device.info().clone();
     let n = (p + 1) * (p + 1);
-    let fixed = static_strategy(precision, p);
+    let fixed = static_strategy(info.backend, precision, p);
+    // A budget the builder names holds for the dense candidates, as for the plans.
     let dense: Vec<Candidate> = gemm_candidates(&info, precision, n, OperatorKind::M2l, false)
         .into_iter()
-        .map(Candidate::Dense)
+        .map(|choice| {
+            Candidate::Dense(GemmChoice {
+                budget: budget.unwrap_or(choice.budget),
+                ..choice
+            })
+        })
         .collect();
     let first = match fixed {
         M2lStrategy::Rotation => Candidate::Rotation,
@@ -3591,9 +3633,14 @@ impl<'a, T: DeviceScalar> StrategyBench<'a, T> {
         if self.dense.is_none() {
             let library = library_applies(info.backend, T::FLOAT, n);
             let batch_offsets = self.host_view.batch_offsets();
+            // The scratch of the first candidate timed (with the budget of every candidate the
+            // tuner registers, the static rule's) and of the library at that budget.
             let columns = [
-                GemmChoice::hand_written(GemmLayout::default_for(&info, n)),
-                GemmChoice::library(T::FLOAT),
+                *choice,
+                GemmChoice {
+                    budget: choice.budget,
+                    ..GemmChoice::library(T::FLOAT)
+                },
             ]
             .iter()
             .map(|c| {
@@ -3625,6 +3672,27 @@ impl<'a, T: DeviceScalar> StrategyBench<'a, T> {
             return Err(Rejection::Unregistered(
                 "the tables have no library copy".into(),
             ));
+        }
+        // A candidate with chunks wider than the scratch so far (a larger budget, offered by
+        // a `TuningHook`) gets a scratch of its own width: the scratch is this bench's, and
+        // temporary.
+        let wanted = choice
+            .settings(&info, n)
+            .size(info.backend, T::FLOAT, self.host_view.batch_offsets())
+            .columns
+            * n;
+        if wanted > scratch.len() {
+            let extra = TranslationScratch::<T>::bytes(wanted)
+                .saturating_sub(TranslationScratch::<T>::bytes(scratch.len()));
+            if let Some(limit) = device.available_memory()
+                && extra > limit
+            {
+                return Err(Rejection::Skipped(format!(
+                    "its chunks need a scratch of {wanted} values, {limit} bytes are available"
+                )));
+            }
+            *scratch = TranslationScratch::<T>::new(device, 0)?;
+            *scratch = TranslationScratch::<T>::new(device, wanted)?;
         }
         let plan = GroupedPlan::new(
             device,

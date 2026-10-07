@@ -43,7 +43,7 @@ use mpi::traits::Equivalence;
 use nd_fmm_exec::fmm::{Backend, FmmBuilder};
 use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_exec::tune::{STATIC_F64_DENSE_MAX_P, Source, Timing, TuningReport, static_strategy};
-use nd_fmm_kernels::Precision;
+use nd_fmm_kernels::{BackendKind, Precision};
 use nd_fmm_math::RealScalar;
 use nd_fmm_tables::cache::Stored;
 use nd_fmm_validate::bench::{cores, cpu_model, target, toolchain};
@@ -189,9 +189,10 @@ fn main() {
     println!();
     println!(
         "Static rule (no tuning cache): {precision} `Dense` at every p{}.",
-        match precision {
-            Precision::F32 => String::new(),
-            Precision::F64 => format!(
+        match (precision, info.backend) {
+            (Precision::F32, _) => String::new(),
+            (Precision::F64, BackendKind::Cuda) => " (Phase 4S decision 9)".to_owned(),
+            (Precision::F64, _) => format!(
                 " ≤ {STATIC_F64_DENSE_MAX_P}, `Rotation` from p = {} (provisional)",
                 STATIC_F64_DENSE_MAX_P + 1
             ),
@@ -353,7 +354,11 @@ impl Run<'_> {
              {static_ms} | {tuned_ms} |",
             self.name,
             self.p,
-            static_strategy(precision, self.p),
+            static_strategy(
+                tuned.device_report().expect("a device build").info.backend,
+                precision,
+                self.p
+            ),
             tuned.strategy(),
             report.time.as_secs_f64(),
             build.as_secs_f64(),

@@ -58,7 +58,8 @@ fn sum_tolerance<T: Real>() -> f64 {
     }
 }
 
-/// The layouts a backend runs in these tests: its default and the others. On the CPU
+/// The layouts a backend runs in these tests: its default and the others (on a GPU the
+/// cube layouts of Metal, 64 units, and CUDA, 32 units; Phase 4S T7). On the CPU
 /// runtime the CPU layout runs with 128- and 256-bit vectors (the defaults of aarch64 and
 /// x86_64, so that either host tests both), the cube layout has up to 8 units (it allows
 /// at most one unit per core: 4 on the CI runner) and the plane layout's planes are one
@@ -78,6 +79,7 @@ fn layouts(device: &Device) -> Vec<P2pLayout> {
         }
         _ => vec![
             P2pLayout::Cube { units: 64 },
+            P2pLayout::Cube { units: 32 },
             P2pLayout::Plane { planes: 2 },
             P2pLayout::Cpu { vector_bits: 128 },
         ],
