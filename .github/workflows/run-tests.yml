@@ -287,7 +287,7 @@ jobs:
       - name: CPU, cores and MPI
         run: |
           lscpu
-          echo "nproc: $(nproc)"
+          echo "nproc --all: $(nproc --all) (plain nproc reports OMP_NUM_THREADS=1)"
           echo "ptrace_scope: $(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo n/a)"
           mpirun --version
           rustc --version
