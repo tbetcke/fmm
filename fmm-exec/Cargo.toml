@@ -38,3 +38,12 @@ nd-fmm-kernels = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+
+# How to call the FMM: build, evaluate several charge vectors, check against the direct
+# sum. Registered for the weekly `run-examples` job (3 ranks), where it reports the
+# refusal of points other ranks own (no redistribution before C5.1) and exits normally.
+[[example]]
+name = "basic_evaluation"
+
+[package.metadata.example.basic_evaluation.templated-examples]
+command = "mpirun -n {{NPROCESSES}}"

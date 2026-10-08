@@ -76,6 +76,10 @@ pass on the device, `FmmBuilder::output_pass`).
   - Doctests that initialise MPI are `no_run`.
   - Until C5.1, `Fmm` does not redistribute points; on several ranks it reports
     `PointsNotOwned` on every rank.
+  - `examples/basic_evaluation.rs` is the user-facing example of calling `Fmm`
+    (registered with `templated-examples`, so the weekly job runs it at 3 ranks): it
+    must run on any number of ranks, reporting `PointsNotOwned` and exiting normally on
+    several until C5.1, and keep to the public API of `fmm`.
 - Tests name their error measure (docs/phase1/README.md, "Error measures", and
   docs/phase3/README.md). Operators are compared with nd-fmm-ref in a dyadic domain for
   tight tolerances.
