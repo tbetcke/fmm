@@ -28,9 +28,23 @@ fn check_tree<'c, C: mpi::traits::CommunicatorCollectives>(
     let rank = comm.rank() as usize;
 
     assert!(is_complete_linear_and_balanced(tree.leaf_keys(), comm));
-    // Every rank owns a leaf and at least one coarse block.
-    assert!(!tree.leaf_keys().is_empty());
-    assert!(!tree.coarse_tree_leafs().is_empty());
+    // A rank owns leaves exactly when it owns coarse blocks, and some rank does. A
+    // rank without blocks is allowed (Phase 5 T4): its bound is never an owner's.
+    assert_eq!(
+        tree.leaf_keys().is_empty(),
+        tree.coarse_tree_leafs().is_empty()
+    );
+    let nblocks = gather_to_all(&[tree.coarse_tree_leafs().len()], comm);
+    assert!(nblocks.iter().any(|&n| n > 0));
+    for leaf in tree.leaf_keys() {
+        let first = morton::from_index_and_level(
+            morton::decode(*leaf)
+                .1
+                .map(|i| i << (DEEPEST_LEVEL as usize - morton::level(*leaf))),
+            DEEPEST_LEVEL as usize,
+        );
+        assert_eq!(tree.owner_rank(first), Ok(rank));
+    }
     // No leaf is deeper than requested, whatever the rank count.
     assert!(tree.global_max_level() <= max_level.min(DEEPEST_LEVEL as usize));
     // Neighbour lists carry each key once, and only non-ghost keys have lists.
@@ -50,6 +64,39 @@ fn check_tree<'c, C: mpi::traits::CommunicatorCollectives>(
         }
     }
     tree
+}
+
+/// Check the partition's bound: every rank's weight (the input keys it owns,
+/// duplicates included) is at most a fair share plus the heaviest coarse block.
+///
+/// # Collective operation
+/// Gathers the keys and the blocks of every rank, so every rank must call it.
+fn check_weight_bound<C: mpi::traits::CommunicatorCollectives>(
+    tree: &Octree<'_, C>,
+    fine_keys: &[morton::MortonKey],
+    comm: &C,
+) {
+    let size = comm.size() as usize;
+    let mut keys = gather_to_all(fine_keys, comm);
+    keys.sort_unstable();
+    let blocks = gather_to_all(tree.coarse_tree_leafs(), comm);
+    let heaviest = blocks
+        .iter()
+        .map(|&block| {
+            keys.iter()
+                .filter(|&&key| morton::is_ancestor(block, key))
+                .count()
+        })
+        .max()
+        .unwrap();
+    let mut per_rank = vec![0; size];
+    for &key in &keys {
+        per_rank[tree.owner_rank(key).unwrap()] += 1;
+    }
+    let total = keys.len();
+    for &weight in &per_rank {
+        assert!(weight * size <= total + heaviest * size);
+    }
 }
 
 /// Check that every ghost of `tree` is consistent with the rank it names: it
@@ -103,7 +150,10 @@ fn main() {
 
     // One distinct key per rank, each duplicated: the parallel sort splits runs of
     // equal keys across ranks, and load balancing must still give every rank a block.
-    let key = morton::from_index_and_level([10000 * (rank + 1); 3], deepest);
+    // The spacing comes from the rank count, so that every index stays within the
+    // 2^16 cells of level 16 on any number of ranks.
+    let spacing = (1 << deepest) / (size + 1);
+    let key = morton::from_index_and_level([spacing * (rank + 1); 3], deepest);
     let tree = check_tree(&[key, key, key, key], OctreeOptions::default(), &comm);
     let leaves = gather_to_all(tree.leaf_keys(), &comm);
     assert!(morton::is_complete_linear_octree(&leaves));
@@ -132,9 +182,11 @@ fn main() {
         let far = morton::from_index_and_level([60000 - 100 * rank; 3], deepest);
         keys.extend(std::iter::repeat_n(far, 600));
     }
+    // The heavy block goes whole to one rank, which may leave another without
+    // blocks (Phase 5 T4); the cut keeps every rank within the heaviest block of a
+    // fair share.
     let tree = check_tree(&keys, OctreeOptions::new().with_max_fine_keys(4), &comm);
-    let nleaves = gather_to_all(&[tree.leaf_keys().len()], &comm);
-    assert!(nleaves.iter().all(|&n| n > 0));
+    check_weight_bound(&tree, &keys, &comm);
 
     // Clustered points far from the domain corner make the natural coarse tree deep;
     // `max_level` must still bound the leaves and the result must be usable.
@@ -166,11 +218,21 @@ fn main() {
         );
         if max_level == 3 {
             // With the level cap the coarse tree is small, so the ownership
-            // partition is coarse but every rank is still represented.
+            // partition is coarse: a level-3 block holding every cluster cannot be
+            // split, and ranks may own no block. Every rank with blocks has its own
+            // bound, and a rank without blocks shares the bound of a later rank.
+            let nblocks = gather_to_all(&[tree.coarse_tree_leafs().len()], &comm);
             let owners = (0..size)
+                .filter(|&r| nblocks[r] > 0)
                 .map(|r| tree.coarse_tree_bounds()[r])
                 .collect::<HashSet<_>>();
-            assert_eq!(owners.len(), size);
+            assert_eq!(owners.len(), nblocks.iter().filter(|&&n| n > 0).count());
+            for r in (0..size).filter(|&r| nblocks[r] == 0) {
+                assert!(
+                    r + 1 == size
+                        || tree.coarse_tree_bounds()[r] == tree.coarse_tree_bounds()[r + 1]
+                );
+            }
         }
     }
 

@@ -93,10 +93,16 @@
 //! retains topology only; maintain application data and any corresponding
 //! redistribution outside the crate. Keys must be valid and at level 16; a rank
 //! may contribute no keys at all. Ownership is partitioned over a coarse tree
-//! whose depth is bounded by `max_level`, and every rank needs at least one of
-//! its blocks, so construction panics with a descriptive message when very few
-//! distinct keys, a small `max_level`, or many ranks leave fewer blocks than
-//! ranks. See [`Octree::new`].
+//! whose depth is bounded by `max_level` and which is replicated on every rank.
+//! On several ranks it is built by weight from the root, so its blocks are nodes
+//! of the one-rank tree and the leaves are the one-rank leaves on every rank
+//! count; [`OctreeOptions::with_partition_weight`] sets what a block weighs
+//! (every key, duplicates included, by default) and
+//! [`OctreeOptions::with_block_refinement`] how finely heavy blocks are split.
+//! Each rank receives a contiguous range of blocks, cut at the block boundaries
+//! nearest to equal weight. A range may be empty, for example when there are
+//! fewer blocks than ranks: such a rank owns no leaves but takes part in every
+//! collective. See [`Octree::new`].
 //!
 //! ## Morton keys
 //!
@@ -150,7 +156,7 @@
 //! | --- | --- | --- |
 //! | [`points_to_morton`] | local | Maps `[3, n]` points using an explicit box. |
 //! | [`octree::compute_global_bounding_box`] | collective | All ranks contribute a padded cubic box. |
-//! | [`Octree::new`] | collective | All ranks in the communicator construct one distributed topology. Optional layers selected by [`OctreeOptions`] enlarge the exchanged payload but add no round. |
+//! | [`Octree::new`] | collective | All ranks in the communicator construct one distributed topology, also ranks without keys or blocks. The coarse tree costs one all-reduce per refinement round. Optional layers selected by [`OctreeOptions`] enlarge the exchanged payload but add no round. |
 //! | [`Octree::owner_rank`] | local | Valid finest-level key to its owner, without communication. |
 //! | [`Octree::local_leaf`] | local | Finds a containing leaf only when this rank owns the key. |
 //! | [`Octree::lookup_leaves`] | collective | Routes batch queries to owners and preserves input order. |
@@ -205,6 +211,8 @@ pub mod types;
 pub mod vtk;
 
 pub use crate::geometry::PhysicalBox;
-pub use crate::octree::{LeafLocation, LookupBatchError, LookupError, Octree, OctreeOptions};
+pub use crate::octree::{
+    LeafLocation, LookupBatchError, LookupError, Octree, OctreeOptions, PartitionWeight,
+};
 pub use morton::MortonKey;
 pub use octree::points_to_morton;

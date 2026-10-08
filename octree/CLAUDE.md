@@ -24,8 +24,8 @@ on them, live outside this crate.
 | `src/morton.rs` | `MortonKey = u64`, encode/decode, ancestry, children/siblings/neighbours, and **serial** linearization, completion, and balancing. Most unit tests live here (~31). |
 | `src/constants.rs` | `DEEPEST_LEVEL = 16`, `NLEVELS`, `LEVEL_SIZE`, bit masks/displacements, the 26 `DIRECTIONS`, and the X/Y/Z encode/decode lookup tables. |
 | `src/geometry.rs` | `PhysicalBox` and physical/reference coordinate transforms. |
-| `src/octree.rs` | Public `Octree`, `OctreeOptions`, `KeyType`, `LeafLocation`, `LookupError`, `LookupBatchError`, `compute_global_bounding_box`, `points_to_morton`, `is_complete_linear_and_balanced`. |
-| `src/octree/implementation.rs` | Private module with the distributed machinery: input validation, parallel sort/linearization, the replicated coarse tree (capped at `max_level`) with weighting and block partitioning, redistribution, refinement, distributed balancing, ghost discovery, neighbour maps, and the leaf-lookup helpers. |
+| `src/octree.rs` | Public `Octree`, `OctreeOptions`, `PartitionWeight`, `KeyType`, `LeafLocation`, `LookupError`, `LookupBatchError`, `compute_global_bounding_box`, `points_to_morton`, `is_complete_linear_and_balanced`. |
+| `src/octree/implementation.rs` | Private module with the distributed machinery: input validation, parallel sort/linearization, the replicated coarse tree (capped at `max_level`), built by weight from the root, with the nearest-boundary cut and the partition bounds (ranges may be empty), redistribution, refinement, distributed balancing, ghost discovery, neighbour maps, and the leaf-lookup helpers. |
 | `src/tools.rs` | `seeded_rng` (ChaCha8) and `generate_random_keys`. |
 | `src/types.rs` | Placeholder module (doc comment only). |
 | `src/vtk.rs` | Dependency-free ASCII VTK/PVTU writer: serial `write_vtu` and collective `write_pvtu`. |
@@ -60,7 +60,7 @@ MPI-using unit test has to reuse it, or move to `tests/` or `examples/`.
 
 `cargo test` does **not** run the example executables. CI runs them in debug at 2 and 4
 ranks on every pull request (the `run-tests-mpi` job, Phase 5 T3) and in release weekly
-at 3 ranks (all five are registered with `templated-examples`), never on one rank. For
+at 3 ranks (all six are registered with `templated-examples`), never on one rank. For
 any change touching distributed code, run them by hand with one rank and with multiple
 ranks (on macOS add the loopback flags from the root `CLAUDE.md`):
 
@@ -73,7 +73,13 @@ mpirun -n 1 target/debug/examples/test_mpi_construction_edge_cases
 mpirun -n 3 target/debug/examples/test_mpi_construction_edge_cases
 mpirun -n 3 target/debug/examples/test_mpi_leaf_lookup
 mpirun -n 3 target/debug/examples/test_mpi_vtk target/vtk-example
+mpirun -n 3 target/debug/examples/test_mpi_weighted_partition
 ```
+
+`test_mpi_weighted_partition` (Phase 5 T4) checks the partition by weight on four
+workloads: the leaves against the one-rank tree, the weight bound, independence of the
+input distribution, and a tree whose only block is the root. Run it also at 2, 4 and 8
+ranks for a change to the partition; `test_mpi_construction_edge_cases` at 1–8.
 
 ## Invariants and domain rules
 
@@ -121,24 +127,37 @@ neighbouring cell, either its same-level neighbour or that neighbour's parent,
 one level coarser, with each key listed once.
 
 **Construction contract.** `Octree::new(fine_keys, options, comm)` panics on keys
-that are invalid or not at `DEEPEST_LEVEL`. Every setting other than the keys and
-the communicator lives on `OctreeOptions`: `with_max_level` (default
-`DEEPEST_LEVEL`), `with_max_fine_keys` (default 1) and `with_ghost_children`. The
-coarse tree is replicated on every rank, capped at `max_level`, and partitioned
-so every rank owns at least one block; it panics with a message when there are
-fewer blocks than ranks. A rank may contribute no keys, and a rank may own
-blocks that contain no keys. No leaf is deeper than `max_level` on any rank
-count.
+that are invalid or not at `DEEPEST_LEVEL`, and on nothing else. Every setting other
+than the keys and the communicator lives on `OctreeOptions`: `with_max_level`
+(default `DEEPEST_LEVEL`), `with_max_fine_keys` (default 1), `with_ghost_children`,
+and, for several ranks, `with_partition_weight` (default `PartitionWeight::Keys`,
+every key with its duplicates) and `with_block_refinement` (default 8). On several
+ranks the coarse tree is built by weight from the root (docs/design/distributed-fmm.md
+§3.2, O1): a block splits while it weighs more than W/(kP), holds more than
+`max_fine_keys` distinct keys and lies above `max_level`, one all-reduce per round;
+it is then 2:1 balanced serially. Its blocks are therefore nodes of the one-rank tree,
+and the leaves equal the one-rank leaves on every rank count and input distribution;
+keep it so. The coarse tree is replicated on every rank and cut into contiguous
+ranges at the block boundaries nearest to W p/P (O3; ties to the later boundary).
+A range may be empty (O4): such a rank owns no blocks or leaves, holds only `Global`
+keys and ghosts, and still enters every collective. The partition bounds are
+computed locally from the replicated tree; an empty rank takes the next non-empty
+rank's bound, or `morton::invalid_key()` after the last one. When the root is the only
+block (few distinct keys, `max_level` 0, or no keys at all, then on rank 0) it is a
+local key of its owner and a ghost elsewhere, never `Global`. A rank may contribute
+no keys. No leaf is deeper than `max_level` on any rank count. On one rank the coarse
+tree is the root and none of this changes the tree.
 
 **Lookup semantics.** `owner_rank` and `local_leaf` are communication-free; both
 reject the invalid marker first, then non-finest-level keys with `LookupError`.
 `local_leaf` returns `Ok(None)` for a valid key owned by another rank, even when
-a matching ghost is stored locally. `lookup_leaves` returns
+a matching ghost is stored locally. `owner_rank` never names a rank without blocks. `lookup_leaves` returns
 `Result<Vec<Result<LeafLocation, LookupError>>, LookupBatchError>`: per-query
 errors stay in the inner result, while the outer error signals an MPI
 count/displacement overflow that prevents the exchange and is returned
 consistently on every rank. Partition intervals are lower-inclusive and
-upper-exclusive, with the final rank extending through the last finest key.
+upper-exclusive, with the final rank that has blocks extending through the last
+finest key.
 
 **Debug vs release.** Debug construction performs expensive distributed
 invariant checks. Use release builds for performance measurement — never as a

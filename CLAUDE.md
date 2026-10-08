@@ -128,7 +128,7 @@ their paths from cargo's `--message-format=json` output, and launches each under
 `timeout` (300 s), the tests with `--test-threads=1 --nocapture`, with
 `RUST_MIN_STACK=8388608` and the BLAS thread variables at 1; the run steps have their own
 `timeout-minutes`. It covers `nd-fmm-plan`'s `mpi_regressions`, `nd-fmm-exec`'s
-`mpi_exec` and `mpi_threading`, and the five registered nd-octree examples. The runner's
+`mpi_exec` and `mpi_threading`, and the six registered nd-octree examples. The runner's
 4 vCPUs are 2 cores, so the ranks oversubscribe (`OMPI_MCA_rmaps_base_oversubscribe=1`);
 it needs no interface flags. By hand, the same script runs a list at any rank count
 (`run-mpi-tests.sh build <list>`, then `run-mpi-tests.sh run <list> 2 4`, on macOS with
