@@ -597,7 +597,6 @@ release builds, `timeout 300 mpirun -n <n> …` inside `tools/gh200/env.sh`, no 
 | program | ranks | result | wall time per run |
 | --- | --- | --- | --- |
 | `nd-octree`'s `test_mpi_complete_tree`, `test_mpi_construction_edge_cases`, `test_mpi_leaf_lookup` | 1, 2, 4, 8, 16, 32, 64, 72 | all pass | 0.11–0.19 s at 1–8 ranks, 0.23–0.41 s at 16, 0.30–0.65 s at 32, 0.42–1.09 s at 64, 0.59–1.24 s at 72 |
-| `nd-fmm-plan`'s `test_index_fmm` | 1, 2, 4, 8, 16, 32, 64, 72 | passes | 0.11–0.13 s at 1–8 ranks, 0.47 s at 16, 0.74 s at 32, 1.87 s at 64, 2.64 s at 72 |
 | `nd-fmm-exec`'s `tests/mpi_exec.rs` (release, `RUST_MIN_STACK=8388608`) | 1, 2, 4, 8 | passes | 3.8 s at 1 rank (every scenario), 0.29–0.34 s at 2–8 (the one multi-rank scenario) |
 
 On the M3 Max (sandboxed unless stated), all passed:

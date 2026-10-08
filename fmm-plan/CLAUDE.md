@@ -15,13 +15,11 @@ kernel evaluations, or translation operators (M2M / M2L / L2L / near-field arith
 kernel-specific arithmetic out. The design is `docs/design/fmm-plan-redesign.md`
 (signed off; the decisions are recorded in its §12).
 
-The one exception is the index FMM in `src/index_fmm.rs` (`IndexFmm`,
-`BatchedIndexFmm`). It is a test FMM, not a real kernel: its operators propagate leaf
-indices, with variable counts per leaf, so the distributed FMM topology workflow
-(upward and downward passes, the global levels, ghost exchanges, U/V/W/X lists) can be
-checked exactly. It is included only to test those workflows. Real FMM operators
-belong outside this crate (the Laplace operator in `nd-fmm-exec`) and plug in through
-the `FmmOperator` trait, or `PairOperator` with the `PerPair` adapter.
+Real FMM operators belong outside this crate (the Laplace operator in `nd-fmm-exec`)
+and plug in through the `FmmOperator` trait, or `PairOperator` with the `PerPair`
+adapter. The crate's own tests use test operators whose values do not matter: they
+record and check the calls, the batches and the slices they are handed. The values of
+the distributed passes are checked by the Laplace FMM in `nd-fmm-exec`.
 
 - Library only, no binaries.
 - Version `0.1.0-dev`; the public API is unstable. Redistribution of points to their
@@ -40,14 +38,11 @@ the `FmmOperator` trait, or `PairOperator` with the `PerPair` adapter.
 | `src/exchange.rs` | `SourceExchange`, `MultipoleExchange`, `CoarseExchange`, `ExchangeError`: variable-size source exchange into the ghost tail, per-level multipole exchange, coarse-block gather. |
 | `src/operator.rs` | `FmmSizes`, the level-batched `FmmOperator` with its batch types `P2m` … `P2p` and `UpwardPass`, the per-pair `PairOperator` and its `PerPair` adapter. |
 | `src/evaluator.rs` | `Evaluator`, `EvaluatorError`: the pass order on the plan, stores and exchanges, public stages, debug-checked stage order. |
-| `src/index_fmm.rs` | `IndexFmm` on `PairOperator`, `BatchedIndexFmm` with `Walk::{Rows, Groupings}`, `GlobalLeaves`, `check_counts`, `run_index_fmm` with `IndexPath`. |
 | `src/interaction_manager_tests.rs` | 7 serial unit tests of the per-key rule on synthetic key maps (hand counts, W/X on a refined octant, brute-force oracle, invariants, adjacency, ghost classification, V-list offsets), through the test helper `ListMaps`, included via `#[path]`. No MPI. |
 | `src/plan_tests.rs` | 12 serial unit tests of the index and the index-form lists against `ListMaps` on the trees of `interaction_manager_tests.rs`. No MPI. |
 | `src/store_tests.rs`, `src/exchange_tests.rs` | 9 serial unit tests of the store layouts and 6 of the ghost bucketing and per-key chunk sizes (on the trees of `plan_tests.rs`). No MPI. |
-| `src/operator_tests.rs`, `src/index_fmm_tests.rs`, `src/evaluator_tests.rs` | 3 serial unit tests of the `PerPair` adapter on hand-made batches, 7 of the index operators (adapter and both batched walks) on hand-made chunks with several points per leaf, and 4 of the evaluator passes (the full index FMM with variable counts on the ghost-free trees of `plan_tests.rs`, reset and repeat, call order, validation errors). No MPI. |
-| `tests/mpi_regressions.rs` | One `#[test]` that owns MPI init and runs 12 named scenarios sequentially. Each builds an `Octree` from the union of a source and a target point set (with the ghost-children layer) and computes brute-force U/V/W/X lists of every non-ghost key over the gathered global tree (`oracle_lists`). It then builds a `Plan` and checks the numbering, the leaves, the index-form lists against the oracle and the view invariants; runs the exchanges (sources with counts of one, `hash(key) % 5` and the real source points per leaf; multipoles with per-level sizes, exactly the ghosts of the oracle's V- and W-lists; the coarse gather); and runs the `Evaluator` with the index FMM: with counts of one every leaf must receive every leaf index once, on every path; with `hash(key) % 5` counts it must pass the count check on every path, give bit-identical values on a second evaluation and agree across the paths; and a recording operator checks the call order, the groupings of every batch and that every oracle pair is issued exactly once. On the graded and the dense-leaf scenarios rank 0 prints the exchange traffic (`--nocapture`). |
-| `examples/test_index_fmm.rs` | Seeded-random MPI run of the index FMM, with one point per leaf and with random counts, on every path. Registered for the weekly `run-examples` job. |
-| `examples/evaluator_stage_cost.rs` | Release-mode wall time per stage of the evaluator with the index FMM, per pair and both batched walks, on a 10⁴-leaf tree, on one rank (nothing asserted; about 1.3 GB per evaluator). |
+| `src/operator_tests.rs`, `src/evaluator_tests.rs` | 3 serial unit tests of the `PerPair` adapter on hand-made batches, and 4 of the evaluator passes: a marker operator checks that every batch hands the views and slices of its level and leaves (variable counts, on the ghost-free trees of `plan_tests.rs`), reset and repeat, call order, validation errors. No MPI. |
+| `tests/mpi_regressions.rs` | One `#[test]` that owns MPI init and runs 12 named scenarios sequentially. Each builds an `Octree` from the union of a source and a target point set (with the ghost-children layer) and computes brute-force U/V/W/X lists of every non-ghost key over the gathered global tree (`oracle_lists`). It then builds a `Plan` and checks the numbering, the leaves, the index-form lists against the oracle and the view invariants; runs the exchanges (sources with counts of one, `hash(key) % 5` and the real source points per leaf; multipoles with per-level sizes, exactly the ghosts of the oracle's V- and W-lists; the coarse gather); and runs the `Evaluator`: with `hash(key) % 5` counts a per-pair operator whose values do not matter (`Mixer`) must give bit-identical stores on a second evaluation and on an evaluator that owns its plan; and a recording operator checks the call order, the groupings of every batch and that every oracle pair is issued exactly once. On the graded and the dense-leaf scenarios rank 0 prints the exchange traffic (`--nocapture`). |
 | `examples/plan_build_cost.rs` | Release-mode timing and heap use of `Plan::new`, on one rank (nothing asserted). |
 
 Read `src/plan.rs`, `src/lists.rs`, `src/evaluator.rs` and `tests/mpi_regressions.rs`
@@ -99,20 +94,15 @@ the contract; the points that matter most when changing them:
   switch to a git or crates.io source, which can diverge from the workspace copy.
 - `rlst` 0.9.0 and `mpi` 0.8.2 (rsmpi) come from crates.io. The crate uses rlst's
   `distributed_tools::{GhostCommunicator, GhostCommunicatorBuilder, ChunkSizes}` in
-  `exchange.rs`, and `distributed_tools::array_tools::gather_to_all` in `index_fmm.rs`
-  and the tests. Tests and examples also use `rlst_dynamic_array` and `println_mpi`;
+  `exchange.rs`, and `distributed_tools::array_tools::gather_to_all` in the tests. Tests and examples also use `rlst_dynamic_array` and `println_mpi`;
   `rand_chacha` is a dev-dependency.
 
 ## Crate checks
 
 The root checks cover this crate. For this crate alone, add `-p nd-fmm-plan` (e.g.
-`RUST_MIN_STACK=8388608 cargo test -p nd-fmm-plan`). Also useful locally:
+`RUST_MIN_STACK=8388608 cargo test -p nd-fmm-plan`).
 
-```sh
-cargo run -p nd-fmm-plan --example test_index_fmm
-```
-
-`cargo test -p nd-fmm-plan` gives 48 unit tests plus the integration test **on one rank
+`cargo test -p nd-fmm-plan` gives 41 unit tests plus the integration test **on one rank
 only**. It exercises no ghost exchange and no ghost layer, which is where the
 interesting bugs are.
 
@@ -143,10 +133,10 @@ pass:
 mpiexec --mca btl_tcp_if_include lo0 --mca oob_tcp_if_include lo0 -n 4 <exe> --test-threads=1
 ```
 
-`Cargo.toml` registers `test_index_fmm` with `[[example]]` and
-`[package.metadata.example.test_index_fmm.templated-examples]`, so the weekly
-`run-examples` job runs it at 3 ranks; register further examples the same way if they
-should run there.
+`tests/mpi_regressions.rs` is the crate's multi-rank run. No example of this crate is
+registered for the weekly `run-examples` job; to have one run there at 3 ranks,
+register it with `[[example]]` and `[package.metadata.example.<name>.templated-examples]`
+as the root `CLAUDE.md` describes.
 
 ## Octree input and MPI discipline
 
@@ -180,7 +170,8 @@ be assumed to work.
   scenarios only reach leaf level 3; `graded corner blob` adds a dense corner at leaf
   level 6 against coarse remote neighbours, and `dense max-level leaf` puts 1,000
   duplicate points into one leaf at `max_level`, so one source chunk dwarfs the others.
-  Every scenario also runs the exchanges and the index FMM on every path. Scenarios
+  Every scenario also runs the exchanges, a repeated evaluation and the recording
+  operator. Scenarios
   cover refinement caps, duplicate keys, empty populations, and uneven and empty ranks.
 - Add new `tests/mpi_regressions.rs` scenarios to the existing `cases` array rather
   than as new `#[test]` functions, so MPI ownership stays with one test. The scenario
@@ -191,3 +182,7 @@ be assumed to work.
   per-pair `FmmOperator`) was removed in T7, after T6 showed that the new evaluator
   reproduces it on every scenario. Changes now go to the code as it is; there is no
   parallel reference implementation to keep.
+- Phase 5 T2 removed the index FMM (a test FMM that propagated leaf indices) with its
+  tests and examples. Do not add a replacement test FMM that propagates values exactly:
+  the values of the passes are `nd-fmm-exec`'s to check, against the direct sum and, on
+  several ranks, against one rank (docs/phase5/README.md).
