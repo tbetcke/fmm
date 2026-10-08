@@ -459,8 +459,8 @@ In the repository root, start `claude` and say:
 - [x] Multi-rank CI job: add one, measured in T3 (decided 2026-10-04)
 - [x] Index FMM: removed from `nd-fmm-plan` (decided 2026-10-04)
 - [x] `nd-octree` changes: allowed where the distributed FMM needs them, each signed off with T1 (decided 2026-10-04)
-- [ ] T2 merged: `IndexFmm` removed; the scenario set unchanged; list, exchange and recording-operator checks pass on 1, 2 and 4 ranks
-- [ ] T3 merged: multi-rank CI job measured
+- [x] T2 merged: `IndexFmm` removed; the scenario set unchanged; list, exchange and recording-operator checks pass on 1, 2 and 4 ranks
+- [x] T3 merged: multi-rank CI job measured
 - [x] Multi-rank CI job: kept, budget 15 minutes cached, re-measured at T6 (decided 2026-10-08)
 - [ ] T4 merged: `nd-octree` changes as signed off; MPI examples pass on 1 and 3 ranks; `test_mpi_construction_edge_cases` fixed and passing at 1–8 ranks in debug
 - [ ] T5 merged: `Redistribution` round-trips on 1, 2 and 4 ranks for every input distribution
