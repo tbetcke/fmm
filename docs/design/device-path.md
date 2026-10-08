@@ -507,6 +507,14 @@ the caller-ordered, scaled output instead of the target output: the same o N_t s
 call and sync, and one launch more (the gather), so this formula and its tests change only
 in the launch count.
 
+On the host (Phase 4S T11, §18.5) the download is read in place: it lands in CubeCL's host
+memory (pinned memory from CUDA's pool, a mapped staging buffer on wgpu), which
+`Device::download_view` lends to the output pass without a copy. The device operator no
+longer holds a host copy of the target output (o N_t s bytes before T11); a mirror of it
+exists only with L2P, M2P or P2P on the host fallback. The charges are uploaded from the
+`Vec` the charge load fills, without a copy (`Device::write_owned`). The formula above
+does not change.
+
 **Per build**: the source store and target input ((4 N_s + 3 N_t) s, 2 calls), the index
 arena and the geometry (2 calls), the tables (one call per family: 1–3). About 7 calls;
 the bytes are those of the table above.
@@ -1837,7 +1845,8 @@ On the host at 72 threads load and output went from 3.2–78.7 and 5.0–207.8 m
   24.6 ms (f64): the copy itself takes 0.54 ms on the GPU, the rest is CubeCL's read path
   on the host, a pinned host buffer allocated per download (`cuMemAllocHost`, median
   2.5 ms, up to 54 ms in the trace, as in T8) and its copy into the operator's buffer on
-  one thread. The load is now the upload, the zeroing and their sync (6.6 / 13.6 ms). An
+  one thread. (T11 measured otherwise for the pinned buffer: CubeCL's pool allocates only
+  when it grows, and the copy was nearly all of the download; §18.5.) The load is now the upload, the zeroing and their sync (6.6 / 13.6 ms). An
   `nsys` trace at N = 10⁷, f32, p = 3 (60.7 ms per evaluation under the profiler) samples
   the copy into the `Output` and the charge load on the pool threads (197 and 179 samples
   over 72 threads in four evaluations, under 1 ms of wall time each). The main thread is
@@ -1852,3 +1861,85 @@ On the host at 72 threads load and output went from 3.2–78.7 and 5.0–207.8 m
   output 3.15 → 2.15, of it the download 0.7). At p = 8 it measured 82.2 against 84.0 ms,
   a difference within the M2L level calls' noise (71.3 against 72.7 ms). `--reuse-output`
   gave 14.09 and 83.2 ms.
+
+### 18.5 The download and upload paths (T11, locust and the M3 Max, 2026-10-08)
+
+T9 left the download as most of the host part of a CUDA evaluation. T11 measured both
+transfers step by step (spikes/download-path/REPORT.md) and removed the copies this
+repository made (C4S.10; decisions 14 and 15 of docs/phase4s/README.md). Every change is a
+copy or the removal of one: no output bit changes, and an evaluation keeps its one upload,
+one download and one sync (§4.1).
+
+**The spike** (*measured (locust, CUDA)* and *(M3 Max, Metal)*, before any change):
+- the download of 160 MB (N = 10⁷, f32, gradients): `Device::download` 11.66 ms, of it
+  CubeCL's `read_one` 0.55 ms (the GPU's copy into pinned memory, 289 GB/s) and the serial
+  `copy_from_slice` into the caller's slice 11.03 ms (14.5 GB/s on one Grace core): the copy
+  was 93–97% of the download at 16, 160 and 320 MB, in f32 and f64. On Metal it was 45–66%
+  (0.25 of 0.56 ms at 16 MB);
+- CubeCL's host pools allocate only when they grow: one `cuMemAllocHost` (58–61 ms) for the
+  first download of a size in a process and none after it (`nsys`, 1 against 10
+  downloads), the staging pool of wgpu likewise (by time).
+  `Client::memory_persistent_allocation` sets the device pool's mode only and does not reach
+  either host pool. Nothing in CubeCL needed changing (decision 15);
+- the upload of 40 MB (the charges of N = 10⁷, f32): `to_vec` 2.97 ms of `Device::write`'s
+  5.68 ms with its sync; the rest is the transfer, which below 100 MiB includes CubeCL's own
+  copy into a pinned staging buffer (an observation for upstream,
+  docs/design/cubecl-upstream.md, entry 1). On Metal `to_vec` is 7–12% of wgpu's write;
+- the zeroing of `begin_evaluation`: 0.03–0.20 ms on CUDA, 0.25–0.31 ms on Metal at
+  N = 10⁶.
+
+**The changes**:
+- `nd_fmm_kernels::Device::download_view` returns a `HostValues<E>` that owns CubeCL's host
+  buffer of the download and derefs to `&[E]` (CubeCL's safe `bytemuck` cast, no `unsafe`),
+  with `download`'s counters, checks and errors; `download` is the copy of a view.
+  `Device::write_owned` hands a `Vec` to CubeCL without the copy `write` makes;
+- `DeviceOperator::read_output` returns `DeviceOutput` with the view (`OutputValues`,
+  borrowing the operator): `copy_output` copies it into the `Output` on the pool after the
+  device pass, `gather_output` reads it as a slice in the `LeafStore` layout for the host
+  pass. The operator no longer holds the target output on the host (o N_t s bytes): its
+  mirror exists only with L2P, M2P or P2P on the host fallback
+  (`DeviceReport::host_mirror_bytes`);
+- `Fmm` gathers the charges in leaf order into a fresh `Vec` on its pool, without a zero
+  fill, and `begin_evaluation` hands it to `write_owned`.
+
+**Before and after** (`nd-fmm-bench`, the unit cube with gradients, `Dense`, 2 warm-ups and
+10 timed evaluations, medians in ms; load and output means from a second build with
+`KindTiming::Synchronous`; before = main `a12d9d6`; locust idle at every check, clocks not
+locked; fmm-bench/results/phase4s-t11-download-path.md has every table, the trace and the
+raw output). *Measured (locust, CUDA)*:
+
+| N | precision | p | before | after | load before → after | output before → after (of it the download) |
+| --- | --- | ---: | ---: | ---: | --- | --- |
+| 10⁶ | f32 | 3 | 6.66 | 5.49 | 0.70 → 0.61 | 2.31 (1.25) → 1.32 (0.28) |
+| 10⁶ | f32 | 8 | 15.47 | 14.52 | 0.69 → 0.63 | 2.25 (1.26) → 1.36 (0.26) |
+| 10⁷ | f32 | 3 | 60.40 | 45.78 | 6.60 → 3.64 | 15.32 (12.69) → 3.71 (1.16) |
+| 10⁷ | f32 | 8 | 153.91 | 139.44 | 6.63 → 3.64 | 15.35 (12.66) → 3.80 (1.16) |
+| 10⁶ | f64 | 3 | 10.17 | 7.79 | 1.23 → 0.75 | 3.41 (2.32) → 1.42 (0.31) |
+| 10⁶ | f64 | 8 | 25.60 | 23.21 | 1.22 → 0.74 | 3.47 (2.34) → 1.45 (0.29) |
+| 10⁷ | f64 | 3 | 103.43 | 74.10 | 13.51 → 7.27 | 28.74 (24.72) → 5.70 (1.80) |
+| 10⁷ | f64 | 8 | 269.20 | 240.22 | 13.45 → 7.30 | 28.70 (24.75) → 6.67 (1.81) |
+
+- **The download** fell from 12.7 to 1.16 ms (f32) and from 24.7 to 1.80 ms (f64) at
+  N = 10⁷: what is left is the wait for the last level calls and CubeCL's read, mostly the
+  GPU's copy. The parallel copy into the `Output` reads CubeCL's pinned buffer at the cost
+  it had reading the operator's (2.6 → 2.5 ms, f32).
+- **The load** fell by the `to_vec` the spike measured: 6.6 → 3.6 ms (f32) and 13.5 → 7.3 ms
+  (f64) at N = 10⁷. Gathering into a fresh buffer instead of a reused one cost nothing
+  measurable.
+- **Evaluations**: 1.32× (f32) and 1.40× (f64) faster at N = 10⁷ and p = 3, 1.10–1.12× at
+  p = 8; 1.21× and 1.31× at N = 10⁶ and p = 3, 1.07–1.10× at p = 8. Since T8 (§18.3) the
+  N = 10⁷, p = 3 evaluation went from 221 to 46 ms in f32 and from 358 to 74 ms in f64.
+- **`--reuse-output`** changes the medians by −1.0% to +1.4%: noise.
+- **The `nsys` trace after** (N = 10⁷, f32, p = 3; 46.1 ms per evaluation under the
+  profiler): `cuMemAllocHost` 6 calls in the whole run (the build and the warm-up), as in
+  T9's trace; one device-to-host copy per evaluation.
+- **Metal** (the M3 Max, f32, the host pass; *measured (M3 Max, Metal)*, indicative on a
+  desktop session): the download fell from 0.76 to 0.51 ms at N = 10⁶ and from 3.9 to
+  1.2 ms at N = 10⁷; evaluations 14.20 → 13.89 ms (N = 10⁶, p = 3) and 221.5 → 217.0 ms
+  (N = 10⁷, p = 3); p = 8 within the M2L level calls' noise (80.6 → 80.3 ms). The load is
+  wgpu's write, which T11 leaves as it was.
+
+Every output is unchanged bit for bit: the C3.2 hashes of the ignored gates equal T9's on
+the host, the CPU runtime (both passes), Metal and CUDA (f32 and f64), and every scenario
+of `tests/mpi_exec.rs` and `tests/device_common` still equals `Fmm::reference_output` with
+both output passes.

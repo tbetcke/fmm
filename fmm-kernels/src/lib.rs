@@ -200,8 +200,8 @@ pub use buffer::{
     DeviceBuffer, DeviceElement, DeviceFloat, DeviceSlice, DeviceSliceMut, IndexBuffer, IndexSlice,
 };
 pub use device::{
-    BackendKind, CPU_MAX_UNITS, CUBECL_VERSION, Counters, Device, DeviceInfo, MAX_ELEMENTS,
-    Precision, TimingWindow, WindowTime,
+    BackendKind, CPU_MAX_UNITS, CUBECL_VERSION, Counters, Device, DeviceInfo, HostValues,
+    MAX_ELEMENTS, Precision, TimingWindow, WindowTime,
 };
 pub use error::KernelError;
 
