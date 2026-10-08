@@ -44,7 +44,8 @@ example nd-octree test_mpi_complete_tree
 example nd-octree test_mpi_global_bounding_box
 example nd-octree test_mpi_leaf_lookup
 example nd-octree test_mpi_vtk
-example nd-octree test_mpi_construction_edge_cases"
+example nd-octree test_mpi_construction_edge_cases
+example nd-octree test_mpi_weighted_partition"
 
 now() {
     python3 -c 'import time; print(f"{time.time():.3f}")'

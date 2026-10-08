@@ -68,3 +68,9 @@ name = "test_mpi_construction_edge_cases"
 
 [package.metadata.example.test_mpi_construction_edge_cases.templated-examples]
 command = "mpirun -n {{NPROCESSES}}"
+
+[[example]]
+name = "test_mpi_weighted_partition"
+
+[package.metadata.example.test_mpi_weighted_partition.templated-examples]
+command = "mpirun -n {{NPROCESSES}}"

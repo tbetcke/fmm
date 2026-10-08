@@ -1,7 +1,8 @@
 # The distributed FMM: design for Phase 5
 
 Phase 5, task T1 (docs/phase5/T1-distributed-design.md). Drafted on 2026-10-08 for
-sign-off by hand before T4. It answers the requirements of docs/phase5/README.md
+sign-off by hand before T4. **Signed off on 2026-10-08: every recommendation of §13
+accepted** (docs/phase5/README.md, decisions 1 and 6–13). It answers the requirements of docs/phase5/README.md
 ("Requirements on the distributed FMM") and settles the decisions that change code in
 T2–T10.
 
@@ -1372,7 +1373,7 @@ no collective sits in a branch only some ranks take.
 
 | Call | Collectives, in order | Changed by |
 | --- | --- | --- |
-| `Octree::new` (P > 1) | `linearize`: the sample sort (all-reduce of sizes; two `gather_to_all` of samples and weights, each an all-gather of counts and an all-gather-v; the global minimum; an all-to-all of counts, an agreement and an all-to-all-v), the successor exchange; **O1: one all-reduce per refinement round and one after balancing** (replacing the `gather_to_all` of `compute_coarse_tree` and the weights' all-reduce); bins (`gather_to_all`) and the key move (all-to-all-v); `balance` (all-reduce of the deepest level, `linearize` again); the key move again; `get_tree_bins` (`gather_to_all`); `generate_all_keys` (two `gather_to_all`, one all-to-all-v) | T4 |
+| `Octree::new` (P > 1) | `linearize`: the sample sort (all-reduce of sizes; two `gather_to_all` of samples and weights, each an all-gather of counts and an all-gather-v; the global minimum; an all-to-all of counts, an agreement and an all-to-all-v), the successor exchange; **O1: one all-reduce per refinement round, and one more if 2:1 balancing changes the blocks** (replacing the `gather_to_all` of `compute_coarse_tree` and the weights' all-reduce); the key move (all-to-all-v); `balance` (all-reduce of the deepest level, `linearize` again); the key move again; `generate_all_keys` (two `gather_to_all`, one all-to-all-v). The partition bounds come from the replicated coarse tree without communication, so the two bound `gather_to_all`s of the draft (the bins and `get_tree_bins`) are gone (T4, accepted 2026-10-08) | T4 |
 | `Plan::new` | all-reduce (level count), all-reduce (validity) | — |
 | `Redistribution::new` | all-to-all (counts), all-reduce (errors, `max_per_item`), all-to-all-v (key, position) | T5 |
 | `Redistribution::forward`, `backward` | one all-to-all-v | T5 |
@@ -1535,6 +1536,10 @@ the sign-off):
   `wait`, `test_all` or `wait_all`.
 
 ## 13. Questions for sign-off
+
+**Signed off on 2026-10-08: every recommendation below is accepted, questions 1–14, and so
+are the further choices listed after the table.** docs/phase5/README.md records the
+answers as decisions 1 and 6–13.
 
 | # | Question | Recommendation |
 | --- | --- | --- |

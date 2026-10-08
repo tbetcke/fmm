@@ -1056,11 +1056,6 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
     /// Every [`FmmError`] but [`ChargesLength`](FmmError::ChargesLength); see the
     /// module documentation for which ranks return which. With `threads` > 1,
     /// [`FmmError::MpiThreading`] if MPI provides less than [`Threading::Funneled`].
-    ///
-    /// # Panics
-    ///
-    /// If `Octree::new` panics: on several ranks when the coarse tree has fewer blocks
-    /// than ranks (too few distinct points, or a small `max_level`).
     pub fn build<'o, C: CommunicatorCollectives>(
         &self,
         sources: &[[f64; 3]],

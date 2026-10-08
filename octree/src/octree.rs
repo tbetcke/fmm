@@ -111,6 +111,31 @@ impl KeyType {
     }
 }
 
+/// What the partition of the coarse blocks over the ranks weighs (Phase 5;
+/// [`OctreeOptions::with_partition_weight`]).
+///
+/// The weight decides which coarse blocks are refined and where the ranks' ranges
+/// are cut (see [`Octree::new`]). It never changes the leaves, which depend only on
+/// the distinct keys, `max_level` and `max_fine_keys`. On one rank it has no effect.
+///
+/// # Examples
+///
+/// ```
+/// use nd_octree::octree::{OctreeOptions, PartitionWeight};
+/// assert_eq!(PartitionWeight::default(), PartitionWeight::Keys);
+/// let options = OctreeOptions::new().with_partition_weight(PartitionWeight::DistinctKeys);
+/// assert_eq!(options.partition_weight(), PartitionWeight::DistinctKeys);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PartitionWeight {
+    /// Every key passed to [`Octree::new`], duplicates included: for an FMM that
+    /// passes one key per source and one per target, the points. The default.
+    #[default]
+    Keys,
+    /// Every distinct finest-level key once (the weight up to Phase 4).
+    DistinctKeys,
+}
+
 /// Options that select the shape of an [`Octree`] and the optional topology it
 /// stores.
 ///
@@ -119,37 +144,49 @@ impl KeyType {
 /// The default refines to [`DEEPEST_LEVEL`] with a target of one finest-level
 /// key per leaf and requests no optional layer, which is the smallest tree
 /// satisfying the documented invariants. Every enabled layer widens the stored
-/// key map and the payload exchanged during construction.
+/// key map and the payload exchanged during construction. On several ranks the
+/// default partition weighs every key ([`PartitionWeight::Keys`]) and refines the
+/// coarse tree until no splittable block weighs more than an eighth of a rank's
+/// fair share ([`OctreeOptions::with_block_refinement`]).
 ///
 /// # Examples
 ///
 /// ```
-/// use nd_octree::octree::OctreeOptions;
+/// use nd_octree::octree::{OctreeOptions, PartitionWeight};
 /// let options = OctreeOptions::new()
 ///     .with_max_level(12)
 ///     .with_max_fine_keys(4)
-///     .with_ghost_children(true);
+///     .with_ghost_children(true)
+///     .with_partition_weight(PartitionWeight::Keys)
+///     .with_block_refinement(8);
 /// assert_eq!(options.max_level(), 12);
 /// assert_eq!(options.max_fine_keys(), 4);
 /// assert!(options.ghost_children());
+/// assert_eq!(options.partition_weight(), PartitionWeight::Keys);
+/// assert_eq!(options.block_refinement(), 8);
 /// ```
 #[derive(PartialEq, Eq, Hash, Copy, Clone, Debug)]
 pub struct OctreeOptions {
     max_level: usize,
     max_fine_keys: usize,
     ghost_children: bool,
+    partition_weight: PartitionWeight,
+    block_refinement: usize,
 }
 
 impl Default for OctreeOptions {
     /// Return the deepest tree with no optional layer.
     /// # Returns
-    /// Options with `max_level` at [`DEEPEST_LEVEL`], `max_fine_keys` at one, and
-    /// the ghost-children layer disabled.
+    /// Options with `max_level` at [`DEEPEST_LEVEL`], `max_fine_keys` at one, the
+    /// ghost-children layer disabled, the partition weighing every key
+    /// ([`PartitionWeight::Keys`]) and a block refinement factor of 8.
     fn default() -> Self {
         Self {
             max_level: DEEPEST_LEVEL as usize,
             max_fine_keys: 1,
             ghost_children: false,
+            partition_weight: PartitionWeight::Keys,
+            block_refinement: 8,
         }
     }
 }
@@ -294,6 +331,88 @@ impl OctreeOptions {
     pub fn ghost_children(&self) -> bool {
         self.ghost_children
     }
+
+    /// Set what the partition of the coarse blocks weighs; see [`PartitionWeight`].
+    ///
+    /// The weight selects the blocks that [`OctreeOptions::with_block_refinement`]
+    /// refines and the cut of the blocks into the ranks' ranges. It does not change
+    /// the leaves, and on one rank it has no effect.
+    /// # Arguments
+    /// - `weight`: What a coarse block weighs.
+    ///
+    /// # Returns
+    /// The options with the partition weight set to `weight`.
+    /// # Examples
+    ///
+    /// ```
+    /// use nd_octree::octree::{OctreeOptions, PartitionWeight};
+    /// let options = OctreeOptions::new().with_partition_weight(PartitionWeight::DistinctKeys);
+    /// assert_eq!(options.partition_weight(), PartitionWeight::DistinctKeys);
+    /// ```
+    pub fn with_partition_weight(self, weight: PartitionWeight) -> Self {
+        Self {
+            partition_weight: weight,
+            ..self
+        }
+    }
+
+    /// Return what the partition of the coarse blocks weighs.
+    /// # Returns
+    /// The requested [`PartitionWeight`].
+    /// # Examples
+    ///
+    /// ```
+    /// use nd_octree::octree::{OctreeOptions, PartitionWeight};
+    /// assert_eq!(OctreeOptions::default().partition_weight(), PartitionWeight::Keys);
+    /// ```
+    pub fn partition_weight(&self) -> PartitionWeight {
+        self.partition_weight
+    }
+
+    /// Refine the coarse tree until no block weighs more than 1/`factor` of a rank's
+    /// fair share, wherever the one-rank tree refines too (more than `max_fine_keys`
+    /// distinct keys) and above `max_level`. Default 8; 1 gives the coarsest blocks.
+    ///
+    /// On `P` ranks with total weight `W`, a block is split into its eight children
+    /// while it weighs more than `W / (factor P)`, holds more than
+    /// [`OctreeOptions::max_fine_keys`] distinct keys and lies above
+    /// [`OctreeOptions::max_level`]. A block that cannot be split stays whole however
+    /// heavy it is, so the busiest rank's weight is at most the mean times
+    /// `1 + w_max / (W / P)`, `w_max` the heaviest block. Finer blocks mean more
+    /// coarse blocks and `Global` keys, which every rank holds (the replicated
+    /// coarse tree, and with [`OctreeOptions::with_ghost_children`] every block).
+    /// The factor never changes the leaves, and on one rank it has no effect.
+    /// A factor of 0 acts as 1.
+    /// # Arguments
+    /// - `factor`: How many blocks a rank's fair share should at least be split into.
+    ///
+    /// # Returns
+    /// The options with the block refinement factor set to `factor`.
+    /// # Examples
+    ///
+    /// ```
+    /// use nd_octree::octree::OctreeOptions;
+    /// assert_eq!(OctreeOptions::new().with_block_refinement(16).block_refinement(), 16);
+    /// ```
+    pub fn with_block_refinement(self, factor: usize) -> Self {
+        Self {
+            block_refinement: factor,
+            ..self
+        }
+    }
+
+    /// Return the block refinement factor.
+    /// # Returns
+    /// The requested factor, see [`OctreeOptions::with_block_refinement`].
+    /// # Examples
+    ///
+    /// ```
+    /// use nd_octree::octree::OctreeOptions;
+    /// assert_eq!(OctreeOptions::default().block_refinement(), 8);
+    /// ```
+    pub fn block_refinement(&self) -> usize {
+        self.block_refinement
+    }
 }
 
 /// A general structure for octrees.
@@ -317,37 +436,64 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
     /// - `options`: Every other construction setting, see [`OctreeOptions`]: the
     ///   maximum leaf level ([`OctreeOptions::with_max_level`]), the target number
     ///   of finest-level keys per leaf ([`OctreeOptions::with_max_fine_keys`]),
-    ///   and the optional topology layers. Pass [`OctreeOptions::default`] for a
-    ///   tree refined to [`DEEPEST_LEVEL`] with one key per leaf and no optional
-    ///   layer.
+    ///   the optional topology layers, and on several ranks the partition weight
+    ///   ([`OctreeOptions::with_partition_weight`]) and block refinement
+    ///   ([`OctreeOptions::with_block_refinement`]). Pass [`OctreeOptions::default`]
+    ///   for a tree refined to [`DEEPEST_LEVEL`] with one key per leaf and no
+    ///   optional layer.
     /// - `comm`: The communicator that participates in construction and must
     ///   outlive the returned tree.
     ///
     /// # Collective operation
-    /// Every rank in `comm` must call this method. Construction linearizes the
-    /// keys, builds a coarse tree no deeper than `max_level` that is replicated on
-    /// every rank, assigns each rank a contiguous, non-empty range of its blocks
-    /// weighted by key count, refines, and 2:1-balances the result. Keys are
-    /// redistributed internally while building the distributed topology. The
+    /// Every rank in `comm` must call this method, also a rank without keys.
+    /// Construction linearizes the keys, builds a coarse tree no deeper than
+    /// `max_level` that is replicated on every rank, assigns each rank a
+    /// contiguous range of its blocks, refines, and 2:1-balances the result. Keys
+    /// are redistributed internally while building the distributed topology. The
     /// resulting tree stores Morton-key topology and ownership metadata, not input
     /// points or application data.
+    ///
+    /// On several ranks the coarse tree is built by weight from the root: every
+    /// block that weighs more than `W / (k P)` (total weight `W`, `P` ranks,
+    /// `k` = [`OctreeOptions::block_refinement`]), holds more than `max_fine_keys`
+    /// distinct keys and lies above `max_level` is split into its children, round
+    /// by round, and the blocks are then 2:1 balanced. A block is therefore a node of
+    /// the one-rank tree, and the leaves are the one-rank leaves on every rank count
+    /// and for every distribution of the keys over the ranks. The weight is set by
+    /// [`OctreeOptions::with_partition_weight`]: every key, duplicates included, by
+    /// default. Boundary `p` of the ranges is the block boundary, at or after
+    /// boundary `p - 1`, whose prefix weight is closest to `W p / P` (ties go to the
+    /// later boundary), so the busiest rank holds at most the mean times
+    /// `1 + w_max / (W / P)`, `w_max` the heaviest block. A range may be empty: a
+    /// rank without blocks has no leaves, no local keys and no ghosts of its own,
+    /// and it still enters every collective. With fewer blocks than ranks, for
+    /// example a tree whose only block is the root, some ranks are therefore empty.
+    /// The partition depends on the rank count and the weights, never on which
+    /// rank passed which key.
+    ///
+    /// The collectives on several ranks, in order: those of the parallel sort and
+    /// the successor exchange of the linearization; one all-reduce per refinement
+    /// round of the coarse tree, and one more if 2:1 balancing the blocks changes
+    /// them; the key move to the owners (an all-to-all-v); those of the distributed
+    /// 2:1 balance (an all-reduce of the deepest level and a linearization); the key
+    /// move again; and the ghost exchange (two all-gathers and an all-to-all-v).
+    /// Debug builds add the collectives of their invariant checks. The partition
+    /// bounds come from the replicated coarse tree and need no communication.
     ///
     /// Enabling [`OctreeOptions::with_ghost_children`] does not add a communication
     /// round: the additional keys travel inside the two collectives that the ghost
     /// exchange already performs.
     ///
-    /// The coarse tree needs at least one block per rank. Its granularity is bounded
-    /// by `max_level` and by how the distinct keys are spread, so with very few
-    /// distinct keys, a small `max_level`, or many ranks it can have fewer blocks
-    /// than ranks. A single rank always works, since its coarse tree is the root.
+    /// On one rank the coarse tree is the root, and the options that shape the
+    /// partition have no effect.
     ///
     /// # Panics
-    /// Panics when a key is invalid or not at [`DEEPEST_LEVEL`], when no rank
-    /// contributes a key, or when the coarse tree has fewer blocks than `comm` has
-    /// ranks. Each message names the condition.
+    /// Panics when a key is invalid or not at [`DEEPEST_LEVEL`]. The message names
+    /// the key and its position.
     ///
     /// # Returns
-    /// A new distributed `Octree`.
+    /// A new distributed `Octree`. When no rank passes a key, its only leaf is the
+    /// root, on rank 0.
     /// # Examples
     ///
     /// ```no_run
@@ -371,53 +517,40 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
 
         let max_level = options.max_level();
         let max_fine_keys = options.max_fine_keys();
+        let rank = comm.rank() as usize;
+        let size = comm.size() as usize;
 
         // We need a random number generator for sorting. For simplicity we use a ChaCha8 random number generator
         // seeded with the rank of the process.
         let mut rng = ChaCha8Rng::seed_from_u64(comm.rank() as u64);
 
-        // Generate the coarse tree
+        // Linearize the keys.
+        let linear_keys = linearize(fine_keys, &mut rng, comm);
 
-        let (coarse_tree, leaf_tree) = {
-            // Linearize the keys.
-            let linear_keys = linearize(fine_keys, &mut rng, comm);
+        // Build the complete, 2:1 balanced coarse tree by weight, no deeper than
+        // `max_level`, with the weight of each block. Both are replicated on every
+        // rank, so the partition and its bounds are computed locally and agree.
+        let (global_coarse_tree, weights) =
+            compute_coarse_tree(fine_keys, &linear_keys, options, comm);
+        let partition = partition_blocks(&weights, size);
+        let coarse_tree = global_coarse_tree[partition[rank]..partition[rank + 1]].to_vec();
+        let coarse_tree_bounds = tree_bins(&global_coarse_tree, &partition);
+        debug_assert!(is_complete_linear_tree(&coarse_tree, comm));
 
-            // Compute the complete, 2:1 balanced coarse tree, no deeper than
-            // `max_level`. It is replicated on every rank.
-            let global_coarse_tree = compute_coarse_tree(&linear_keys, max_level, comm);
+        // Redistribute the fine keys with respect to the partitioned coarse tree.
+        let local_fine_keys =
+            redistribute_with_respect_to_coarse_tree(&linear_keys, &coarse_tree_bounds, comm);
 
-            // Weight each block by the number of keys it contains and assign every
-            // rank a contiguous, non-empty range of blocks. This forms our final
-            // coarse tree that is used from now on.
-
-            let weights = compute_coarse_tree_weights(&linear_keys, &global_coarse_tree, comm);
-            let coarse_tree = load_balance(&global_coarse_tree, &weights, comm);
-            debug_assert!(is_complete_linear_tree(&coarse_tree, comm));
-
-            // We also want to redistribute the fine keys with respect to the load balanced coarse trees.
-
-            let fine_keys =
-                redistribute_with_respect_to_coarse_tree(&linear_keys, &coarse_tree, comm);
-
-            // We now create the refined tree by recursing the coarse tree until we are at max level
-            // or the fine tree keys per coarse tree box is small enough.
-            let refined_tree =
-                create_local_tree(&fine_keys, &coarse_tree, max_level, max_fine_keys);
-
-            // We now need to 2:1 balance the refined tree and then redistribute again with respect to the coarse tree.
-
-            let refined_tree = redistribute_with_respect_to_coarse_tree(
-                &balance(&refined_tree, &mut rng, comm),
-                &coarse_tree,
-                comm,
-            );
-
-            (coarse_tree, refined_tree)
-
-            // redistribute the balanced tree according to coarse tree
-        };
-
-        let coarse_tree_bounds = get_tree_bins(&coarse_tree, comm);
+        // Refine the blocks until we are at max level or the fine keys per box are
+        // few enough, then 2:1 balance the refined tree and redistribute it again
+        // with respect to the coarse tree.
+        let refined_tree =
+            create_local_tree(&local_fine_keys, &coarse_tree, max_level, max_fine_keys);
+        let leaf_tree = redistribute_with_respect_to_coarse_tree(
+            &balance(&refined_tree, &mut rng, comm),
+            &coarse_tree_bounds,
+            comm,
+        );
 
         let all_keys =
             generate_all_keys(&leaf_tree, &coarse_tree, &coarse_tree_bounds, options, comm);
@@ -459,6 +592,11 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
     }
 
     /// Return the coarse tree leafs.
+    ///
+    /// These are this rank's coarse blocks, a contiguous range of the replicated
+    /// coarse tree; every local leaf is one of them or descends from one. On
+    /// several ranks the range may be empty, and the rank then owns no leaves. On
+    /// one rank the only block is the root.
     /// # Examples
     ///
     /// ```no_run
@@ -505,9 +643,13 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
     /// This returns an array of size the number of ranks, where each element is
     /// the first coarse-tree block of the corresponding rank. Every key owned by
     /// a rank is one of its blocks or descends from one, so the bounds partition
-    /// the Morton range.
+    /// the Morton range. The bounds are non-decreasing. A rank without blocks has
+    /// the bound of the next rank that has blocks, or, after the last such rank,
+    /// [`morton::invalid_key`], which sorts above every valid key.
     ///
-    /// If a Morton key is on rank i with i not the last rank then
+    /// A key is owned by the last rank whose bound is at most the key, which is
+    /// never a rank without blocks. If rank i owns a key and is not the last rank
+    /// then
     /// ```text
     /// coarse_tree_bounds[i] <= key < coarse_tree_bounds[i+1]
     /// ```
@@ -579,7 +721,10 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
     /// Global keys are keys that are not uniquely assigned to a rank but exist on all ranks.
     /// The global keys are those that are close to the root of the tree. By construction these
     /// are the ancestors of the coarse tree leafs, where as the coarse tree leafs themselves are
-    /// the first level of keys distributed across ranks. Ghost keys are keys that are not local to
+    /// the first level of keys distributed across ranks. When the root is the only coarse
+    /// block on several ranks, there is no global key: the root is local to the rank that
+    /// owns it and a ghost of that rank on every other rank. A rank without coarse blocks
+    /// holds only global keys and ghosts. Ghost keys are keys that are not local to
     /// the current rank but lie along the interface to the current rank. Their identifiers store the value
     /// of the rank that they originate from.
     /// # Examples
@@ -634,8 +779,9 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
     /// Return the rank owning a valid finest-level Morton key without communication.
     ///
     /// Partition intervals are lower-inclusive and upper-exclusive, except that the
-    /// final rank includes all remaining finest-level keys. Invalid keys are reported
-    /// before level validation. This lookup costs `O(log P)` for `P` ranks.
+    /// final rank with blocks includes all remaining finest-level keys; a rank
+    /// without blocks owns no key ([`Octree::coarse_tree_bounds`]). Invalid keys are
+    /// reported before level validation. This lookup costs `O(log P)` for `P` ranks.
     /// # Parameters
     ///
     /// - `key`: Morton key to inspect or transform.
