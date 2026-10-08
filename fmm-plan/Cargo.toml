@@ -21,9 +21,3 @@ mpi = { workspace = true, features = ["complex"] }
 
 [dev-dependencies]
 rand_chacha = { workspace = true }
-
-[[example]]
-name = "test_index_fmm"
-
-[package.metadata.example.test_index_fmm.templated-examples]
-command = "mpirun -n {{NPROCESSES}}"

@@ -39,8 +39,8 @@ for crate-specific rules; everything here applies to all of them.
 - Tests first: write the acceptance tests from the task brief, then the implementation.
 - Every fast path is tested against a slower trusted path (fixtures, identities, nd-fmm-ref).
 - Numeric code is generic over `T: RealScalar`; no allocation in hot loops. This does
-  not apply to nd-fmm-plan, whose `FmmOperator::Value` is deliberately generic
-  (its `IndexFmm` uses `u32`).
+  not apply to nd-fmm-plan, whose `FmmOperator::Value` is deliberately generic, not
+  bound to `RealScalar` (its test operators use `u32`).
 - New dependencies of new crates only through [workspace.dependencies]; octree/
   declares its own directly until migrated (a separate decision). CubeCL only
   in nd-fmm-kernels and spikes/; it is pinned to `=0.11.0-pre.4` (matmul: `cubek-matmul`
