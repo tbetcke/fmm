@@ -448,7 +448,7 @@ In the repository root, start `claude` and say:
 "Read docs/phase5/T<k>-<name>.md and do that task." Review and merge before the next.
 
 ## Exit checklist
-- [ ] T1 merged: `docs/design/distributed-fmm.md` drafted, sign-off questions listed
+- [x] T1 merged: `docs/design/distributed-fmm.md` drafted, sign-off questions listed
 - [ ] Distributed design signed off, including the `nd-octree` changes, the tolerance of requirement 2, the redistribution API, the overlap order and the non-blocking mechanism
 - [x] Hardware: the M3 Max only; inter-node run documented for later (decided 2026-10-04); revised to the M3 Max and locust (decided 2026-10-05); briefs updated by Phase 4S T8 (2026-10-07)
 - [x] Device on several ranks: in Phase 5, correctness only (decided 2026-10-04)
