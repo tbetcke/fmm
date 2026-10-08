@@ -1018,6 +1018,10 @@ fn distributed_tree_regressions() {
     let universe = mpi::initialize().expect("this test owns MPI initialization");
     let comm = universe.world();
     let rank = comm.rank() as usize;
+    // THROWAWAY (Phase 5 T3, do not merge): fails on rank 1 only, while the other ranks
+    // go on into the collectives below, to show that run-tests-mpi fails within its
+    // timeout instead of hanging.
+    assert_ne!(rank, 1, "deliberate failure on rank 1 only (T3 throwaway branch)");
     let cloud: Vec<_> = (0..48)
         .map(|i| {
             let j = i + 17 * rank;
