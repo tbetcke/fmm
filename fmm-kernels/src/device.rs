@@ -983,13 +983,31 @@ mod tests {
 
         /// A launch error surfaces at `download_view` as at `download` (device-path.md §12,
         /// F9), as `KernelError::Device`, with the same counters (one download, one sync, no
-        /// bytes).
+        /// bytes); also when CubeCL's profiling logger makes the launch itself panic.
         fn launch_errors_surface_at_the_view(kind: BackendKind) {
             let mut device = Device::open(kind).unwrap();
             println!("{}", device.info());
             for view in [false, true] {
                 let buffer = device.upload(&[1.0f32; 4]).unwrap();
-                queue_failing_launch(&mut device, &buffer);
+                // With CubeCL's profiling logger on (`CUBECL_DEBUG_LOG`, as in the CI job
+                // that reports compile times), CubeCL profiles every launch and panics on
+                // a failed one by design (cubecl-runtime `Client::launch_inner`); the error
+                // is still attached to the buffer. Any other panic fails the test.
+                let launch = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    queue_failing_launch(&mut device, &buffer)
+                }));
+                if let Err(payload) = launch {
+                    let message = payload
+                        .downcast_ref::<String>()
+                        .map(String::as_str)
+                        .or_else(|| payload.downcast_ref::<&str>().copied())
+                        .unwrap_or_default();
+                    assert!(
+                        message.contains("during profiling"),
+                        "the launch panicked: {message}"
+                    );
+                    println!("  the launch panicked in CubeCL's profiler (its log is on)");
+                }
                 device.reset_counters();
                 let error = if view {
                     device.download_view(buffer.as_slice()).unwrap_err()

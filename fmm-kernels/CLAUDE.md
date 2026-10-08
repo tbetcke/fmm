@@ -31,7 +31,11 @@ host copy) in docs/phase4s/.
   (`tests/kernels/round_trip.rs`: f32, f64 and u32, 0, 1, 7 and 10⁵ values at an odd
   offset and whole), the refusals of a foreign buffer (`capability.rs`), and a launch
   error at both (the unit tests of `device`: a plane sum on the CPU runtime, which does
-  not lower it, and a cube larger than the device allows on Metal and CUDA).
+  not lower it, and a cube larger than the device allows on Metal and CUDA). With
+  CubeCL's profiling log on (`CUBECL_DEBUG_LOG`, as in the CPU-runtime CI job), CubeCL
+  profiles every launch and a failed launch panics in the launch itself, by design
+  (cubecl-runtime `Client::launch_inner`); the error is still attached to the buffer, and
+  the test accepts that panic and no other.
 - The output gather (Phase 4S T9, `movement::gather_output`, device-path.md §18.4): φ and
   ∇φ in the caller's order from the leaf-ordered target output, each value converted to
   f64, divided by its leaf's f64 scale and rounded once to T (`F::cast_from(f64::cast_from(x)

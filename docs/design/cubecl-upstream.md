@@ -58,6 +58,22 @@ upstream-worthy; keep the source document as the place for the full numbers.
   worth documenting, or a way to reserve a host-pool size up front.
 - **Full numbers:** spikes/download-path/REPORT.md, "CubeCL's host pools".
 
+### 3. With the profiling log on, a failed launch panics at the launch
+
+- **Version:** 0.11.0-pre.4; seen on the CPU runtime (CI, then the M3 Max) and Metal.
+- **Observation:** with `CUBECL_DEBUG_LOG` set, the profiling logger is at a timing level
+  and `Client::launch_inner` profiles every launch synchronously; a launch that fails (a
+  kernel that does not compile, a cube larger than the device allows) panics there with
+  "An execution error happened during profiling", by design ("the logger's timing levels
+  opted into profiling and keep their loud failure"). Without the log the same failure is
+  attached to the output buffer and returned by the next `read_one` (F9). The failure is
+  attached in both cases, so a caller that catches the panic still sees the error at the
+  download. Turning on a debug log thus changes the error behaviour of a program that
+  handles launch errors; worth documenting, or a non-panicking mode for logging.
+- **Where it showed:** `nd-fmm-kernels`'s launch-error test (Phase 4S T11), which failed
+  in the CPU-runtime CI job (it sets `CUBECL_DEBUG_LOG` for the compile-time report) and
+  passed locally without the log; PR #74.
+
 ### Earlier observations, recorded elsewhere (pointers; re-check before quoting)
 
 - `PLANE_POS` not lowered for NVPTX; the compile panic is dropped and the launch fails
