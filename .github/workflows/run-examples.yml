@@ -1,5 +1,10 @@
 name: 🧪 run-examples
 
+# Weekly: every example registered with templated-examples metadata, at 3 ranks
+# (root CLAUDE.md, "Checks" and "MPI"). `.github/scripts/run-examples.sh` finds them with
+# `cargo metadata` under their real package names; it replaced `cargo templated-examples`
+# and `cargo mpirun`, which looked packages up by directory name and so ran none.
+
 on:
   workflow_dispatch:
   schedule:
@@ -12,6 +17,7 @@ jobs:
   run-examples:
     name: run-examples
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -21,12 +27,15 @@ jobs:
           submodules: "true"
 
       - name: Install native dependencies
+        timeout-minutes: 15
         run: |
           sudo apt-get update
           sudo apt-get install -y libclang-dev cmake libfftw3-dev libopenblas-dev openmpi-bin libopenmpi-dev
 
-      - name: Install cargo-templated-examples
-        run: cargo install cargo-templated-examples
-
       - name: Run examples
-        run: cargo templated-examples NPROCESSES 3
+        timeout-minutes: 40
+        env:
+          RUST_MIN_STACK: "8388608"
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+        run: .github/scripts/run-examples.sh 3
