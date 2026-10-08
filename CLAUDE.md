@@ -10,9 +10,10 @@ for crate-specific rules; everything here applies to all of them.
   Never change a convention in code; propose changes in the PR description instead.
 - Cite conventions in doc comments as `CONVENTIONS §3.x`.
 - CONVENTION_VERSION in nd-fmm-math must match the file.
-- Current phase and task briefs: docs/phase4s/README.md (Phase 4S, CUDA on NVIDIA Grace
-  Hopper; the device path of Phase 4 on locust's H100, design docs/design/device-path.md).
-  Phase 5 (the distributed FMM, docs/phase5/README.md) follows it. Phase 4 briefs:
+- Current phase and task briefs: docs/phase5/README.md (Phase 5, the distributed FMM;
+  design docs/design/distributed-fmm.md, from T1). Phase 4S briefs:
+  docs/phase4s/README.md (CUDA on NVIDIA Grace Hopper; the device path of Phase 4 on
+  locust's H100, design docs/design/device-path.md). Phase 4 briefs:
   docs/phase4/README.md (CubeCL kernels). Phase 3S briefs:
   docs/phase3s/README.md (SIMD P2P on the host; design docs/design/simd-p2p.md).
   Phase 3 briefs: docs/phase3/README.md.
