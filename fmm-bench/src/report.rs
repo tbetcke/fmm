@@ -10,7 +10,7 @@ use std::fmt::Write;
 use nd_fmm_exec::fmm::{Backend, DEFAULT_MAX_LEVEL, DEFAULT_MAX_POINTS_PER_LEAF, KindTiming};
 use nd_fmm_validate::calibration::Precision;
 
-use crate::options::{Combination, Options, kinds_name, strategy_name};
+use crate::options::{Combination, Options, kinds_name, output_pass_name, strategy_name};
 
 /// The machine and the software of a run: the report's header.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -132,7 +132,18 @@ pub struct Kinds {
     pub mode: KindTiming,
     /// Every kind, in [`KIND_ORDER`] order.
     pub rows: Vec<KindRow>,
-    /// The mean of the stages' remainder outside the level calls, seconds.
+    /// Loading the charges (`StageTimings::load`): writing them into leaf order, and on
+    /// a device also uploading and scattering them, seconds (Phase 4S T9).
+    pub load: Stats,
+    /// The output pass (`StageTimings::output`): on a device the download, then the
+    /// scaling into the caller's order, seconds (Phase 4S T9).
+    pub output: Stats,
+    /// The mean of the download's part of [`output`](Self::output)
+    /// (`StageTimings::download`), seconds; zero on the host.
+    pub download: f64,
+    /// The mean of the stages' remainder outside the level calls, less
+    /// [`load`](Self::load) and [`output`](Self::output) (at least zero per evaluation),
+    /// seconds: the exchanges and, on a device, the enqueueing between calls.
     pub other: f64,
     /// The mean of the sum over the kinds, seconds.
     pub sum: f64,
@@ -323,8 +334,8 @@ pub fn summary_table(rows: &[Row]) -> String {
 
 /// The header of the kind table, with its alignment row.
 pub const KIND_HEADER: &str = "| backend | precision | N | p | P2M | M2M | M2L | L2L | P2L | M2P \
-| L2P | P2P | other | sum | evaluation | sum / mean |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
+| L2P | P2P | load | output | other | sum | evaluation | sum / mean |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
 
 /// The kind table: one row per combination, mean ms per kind.
 pub fn kind_table(rows: &[Row]) -> String {
@@ -333,14 +344,16 @@ pub fn kind_table(rows: &[Row]) -> String {
     for row in rows {
         let key = key(&row.combination);
         let rest = match &row.outcome {
-            Outcome::Refused(_) | Outcome::Failed(_) => " – |".repeat(12),
+            Outcome::Refused(_) | Outcome::Failed(_) => " – |".repeat(14),
             Outcome::Measured(m) => match &m.kinds {
-                KindOutcome::Off => format!(" off |{}", " – |".repeat(11)),
+                KindOutcome::Off => format!(" off |{}", " – |".repeat(13)),
                 KindOutcome::Refused(error) => {
-                    format!(" refused: {} |{}", cell(error), " – |".repeat(11))
+                    format!(" refused: {} |{}", cell(error), " – |".repeat(13))
                 }
                 KindOutcome::Measured(k) => {
                     let mut cells: Vec<String> = k.rows.iter().map(|r| ms(r.mean)).collect();
+                    cells.push(ms(k.load.mean));
+                    cells.push(ms(k.output.mean));
                     cells.push(ms(k.other));
                     cells.push(ms(k.sum));
                     cells.push(ms(k.evaluation));
@@ -354,6 +367,16 @@ pub fn kind_table(rows: &[Row]) -> String {
         out.push('\n');
     }
     out
+}
+
+/// The call the evaluations time: `Fmm::evaluate`, or with `--reuse-output`
+/// `Fmm::evaluate_into` with one reused `Output` (Phase 4S T9).
+fn evaluation_call(options: &Options) -> &'static str {
+    if options.reuse_output {
+        "`Fmm::evaluate_into` (one reused `Output`)"
+    } else {
+        "`Fmm::evaluate`"
+    }
 }
 
 /// Text for a table cell: no `|` or line breaks.
@@ -375,10 +398,11 @@ pub fn markdown(report: &Report) -> String {
     out.push_str("## Summary\n\n");
     let _ = writeln!(
         out,
-        "Evaluation: the wall time of `Fmm::evaluate` over {} timed evaluations with kind \
+        "Evaluation: the wall time of {} over {} timed evaluations with kind \
          timings off, in ms. Build: the whole build, in s. Errors: relative L2 at the sampled \
          targets against the f64 direct sum, from one evaluation. Bit-identical: every timed \
          evaluation gave the bits of the first.",
+        evaluation_call(o),
         o.repeats
     );
     out.push('\n');
@@ -388,8 +412,11 @@ pub fn markdown(report: &Report) -> String {
     let _ = writeln!(
         out,
         "Mean ms per evaluation over a second build's evaluations with kind timings `{}` \
-         (min and max in each combination's section). Other: the rest of the stages (loading \
-         the charges, transfers, the download, scaling). Sum: the kinds together. \
+         (min and max in each combination's section). Load: writing the charges into leaf \
+         order, on a device with their upload and scatter. Output: the output pass into the \
+         caller's order, on a device with the download, the evaluation's one wait for the \
+         device. Other: the rest of the stages outside the level calls (the exchanges, on a \
+         device the enqueueing). Sum: the kinds together, without load, output and other. \
          Evaluation: the mean wall time of those evaluations. Sum / mean: the sum against the \
          summary's mean, the overhead of the mode.",
         kinds_name(o.kinds)
@@ -478,6 +505,19 @@ fn header_table(report: &Report) -> String {
                 o.warmup,
                 o.repeats,
                 kinds_name(o.kinds)
+            ),
+        ),
+        (
+            "output",
+            format!(
+                "{}; output pass `{}`",
+                if o.reuse_output {
+                    "one `Output` reused by every evaluation (`Fmm::evaluate_into`, \
+                     `--reuse-output`)"
+                } else {
+                    "a fresh `Output` per evaluation (`Fmm::evaluate`)"
+                },
+                output_pass_name(o.output_pass)
             ),
         ),
         (
@@ -636,8 +676,25 @@ fn section(row: &Row, options: &Options) -> String {
                     ms(r.max)
                 );
             }
+            for (name, stats) in [("load", &k.load), ("output", &k.output)] {
+                let _ = writeln!(
+                    out,
+                    "| {name} | | | {} | {} | {} | |",
+                    ms(stats.min),
+                    ms(stats.mean),
+                    ms(stats.max)
+                );
+            }
             let _ = writeln!(out, "| other | | | | {} | | |", ms(k.other));
             let _ = writeln!(out, "| sum | | | | {} | | 100.0% |", ms(k.sum));
+            if row.combination.backend.is_device() {
+                out.push('\n');
+                let _ = writeln!(
+                    out,
+                    "Output: of it the download (`read_output`, with its sync) {} ms on average.",
+                    ms(k.download)
+                );
+            }
         }
     }
     out
@@ -677,13 +734,14 @@ fn footer(report: &Report) -> String {
         out,
         "Each combination builds the FMM once and runs {} warm-up evaluations, which compile \
          the device kernels and are not counted, then times {} evaluations of the same charges \
-         by the wall clock around `Fmm::evaluate`, with kind timings off. The kind times come \
+         by the wall clock around {}, with kind timings off. The kind times come \
          from a second build with kind timings `{}`, which runs its own warm-up and {} timed \
          evaluations; in `sync` mode every level call on a device carries a sync, so the kinds \
          may add up to more than the summary's mean. The errors come from one evaluation \
          against the f64 direct sum, as a sanity check, not a gate.",
         o.warmup,
         o.repeats,
+        evaluation_call(o),
         kinds_name(o.kinds),
         o.repeats
     );
@@ -742,6 +800,8 @@ mod tests {
             kinds: KindTiming::Synchronous,
             accuracy: Some(100),
             gradients: true,
+            reuse_output: false,
+            output_pass: nd_fmm_exec::fmm::OutputPass::Auto,
             leaf_size: None,
             max_level: Some(8),
             table_cache: None,
@@ -813,7 +873,10 @@ mod tests {
                     kind("L2P", "host", 1, 0.0001),
                     kind("P2P", "host", 1, 0.0003),
                 ],
-                other: 0.0001,
+                load: Stats::of(&[0.00002, 0.00003]),
+                output: Stats::of(&[0.00004, 0.00006]),
+                download: 0.0,
+                other: 0.00002,
                 sum: 0.001,
                 evaluation: 0.00115,
                 timed: 2,
@@ -886,6 +949,39 @@ mod tests {
     }
 
     #[test]
+    fn reused_outputs_and_the_download() {
+        // Phase 4S T9: `--reuse-output` named in the header, the summary and the method;
+        // a device row's kinds with the download's part of the output.
+        let mut report = fixture();
+        report.options.reuse_output = true;
+        let host_kinds = match &report.rows[0].outcome {
+            Outcome::Measured(m) => m.kinds.clone(),
+            _ => unreachable!("the fixture's host row is measured"),
+        };
+        if let Outcome::Measured(m) = &mut report.rows[2].outcome {
+            m.kinds = host_kinds;
+            if let KindOutcome::Measured(k) = &mut m.kinds {
+                k.download = 0.00001;
+            }
+        }
+        let text = markdown(&report);
+        assert!(text.contains(
+            "| output | one `Output` reused by every evaluation (`Fmm::evaluate_into`, \
+             `--reuse-output`); output pass `auto` |\n"
+        ));
+        assert!(text.contains(
+            "Evaluation: the wall time of `Fmm::evaluate_into` (one reused `Output`) over 2"
+        ));
+        assert!(text.contains("by the wall clock around `Fmm::evaluate_into` (one reused"));
+        assert_eq!(
+            text.matches("Output: of it the download (`read_output`, with its sync) 0.010 ms")
+                .count(),
+            1,
+            "the device row alone"
+        );
+    }
+
+    #[test]
     fn failed_rows_and_kinds_off() {
         let mut report = fixture();
         report.rows[0].outcome = Outcome::Failed("device lost".into());
@@ -900,7 +996,7 @@ mod tests {
         assert!(summary.contains("| 0.500 | 0.000 | – | – | **no** |\n"));
         let kinds = kind_table(&report.rows);
         assert!(kinds.contains(
-            "| metal | f32 | 2000 | 3 | off | – | – | – | – | – | – | – | – | – | – | – |\n"
+            "| metal | f32 | 2000 | 3 | off | – | – | – | – | – | – | – | – | – | – | – | – | – |\n"
         ));
         let text = markdown(&report);
         assert!(text.contains("## host, f32, N = 2000, p = 3\n\nFailed: device lost\n"));
@@ -937,6 +1033,7 @@ mod tests {
 | M2L strategy | auto |
 | threads | 2; host and host-fallback threads (on the CPU runtime, its units per cube) |
 | timing | 1 warm-up, then 2 timed evaluations; kind timings `sync` in a second build |
+| output | a fresh `Output` per evaluation (`Fmm::evaluate`); output pass `auto` |
 | accuracy | relative L2 at 100 sampled targets against the f64 direct sum |
 | table cache | none |
 | tuning cache | `tune` |
@@ -953,13 +1050,13 @@ Evaluation: the wall time of `Fmm::evaluate` over 2 timed evaluations with kind 
 
 ## Per operator kind
 
-Mean ms per evaluation over a second build's evaluations with kind timings `sync` (min and max in each combination's section). Other: the rest of the stages (loading the charges, transfers, the download, scaling). Sum: the kinds together. Evaluation: the mean wall time of those evaluations. Sum / mean: the sum against the summary's mean, the overhead of the mode.
+Mean ms per evaluation over a second build's evaluations with kind timings `sync` (min and max in each combination's section). Load: writing the charges into leaf order, on a device with their upload and scatter. Output: the output pass into the caller's order, on a device with the download, the evaluation's one wait for the device. Other: the rest of the stages outside the level calls (the exchanges, on a device the enqueueing). Sum: the kinds together, without load, output and other. Evaluation: the mean wall time of those evaluations. Sum / mean: the sum against the summary's mean, the overhead of the mode.
 
-| backend | precision | N | p | P2M | M2M | M2L | L2L | P2L | M2P | L2P | P2P | other | sum | evaluation | sum / mean |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| host | f32 | 2000 | 3 | 0.100 | 0.050 | 0.400 | 0.050 | 0.000 | 0.000 | 0.100 | 0.300 | 0.100 | 1.000 | 1.150 | 0.833 |
-| metal | f64 | 2000 | 3 | – | – | – | – | – | – | – | – | – | – | – | – |
-| metal | f32 | 2000 | 3 | refused: kind timings refused / here | – | – | – | – | – | – | – | – | – | – | – |
+| backend | precision | N | p | P2M | M2M | M2L | L2L | P2L | M2P | L2P | P2P | load | output | other | sum | evaluation | sum / mean |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| host | f32 | 2000 | 3 | 0.100 | 0.050 | 0.400 | 0.050 | 0.000 | 0.000 | 0.100 | 0.300 | 0.025 | 0.050 | 0.020 | 1.000 | 1.150 | 0.833 |
+| metal | f64 | 2000 | 3 | – | – | – | – | – | – | – | – | – | – | – | – | – | – |
+| metal | f32 | 2000 | 3 | refused: kind timings refused / here | – | – | – | – | – | – | – | – | – | – | – | – | – |
 
 ## host, f32, N = 2000, p = 3
 
@@ -981,7 +1078,9 @@ Kind timings `sync` (synchronous, a sync after each call on a device), over 2 ev
 | M2P | host | 0 | 0.000 | 0.000 | 0.000 | 0.0% |
 | L2P | host | 1 | 0.050 | 0.100 | 0.150 | 10.0% |
 | P2P | host | 1 | 0.150 | 0.300 | 0.450 | 30.0% |
-| other | | | | 0.100 | | |
+| load | | | 0.020 | 0.025 | 0.030 | |
+| output | | | 0.040 | 0.050 | 0.060 | |
+| other | | | | 0.020 | | |
 | sum | | | | 1.000 | | 100.0% |
 
 ## metal, f64, N = 2000, p = 3

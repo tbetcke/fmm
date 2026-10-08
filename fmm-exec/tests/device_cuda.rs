@@ -35,6 +35,10 @@
 //! - sources and targets disjoint by the parity of their level-2 cell, so that leaves
 //!   hold sources only or targets only (empty target and source leaves), p = 4;
 //! - coincident points: 40 positions with five copies each in a cloud, p = 4;
+//! - the output pass (Phase 4S T9): in every scenario `check_backend` checks the output
+//!   against the pass before T9 bit for bit, with the pass on the device (the default on
+//!   CUDA) and on the host (`output_pass(Host)`); also the uniform cube at p = 6 with
+//!   gradients, and `output_pass` `Auto` and `Device` on the device, `Host` on the host;
 //! - f64 is accepted on CUDA (Metal refuses it with `PrecisionUnsupported`): the build
 //!   succeeds and the device reports f64 arithmetic;
 //! - `threads(4)` builds the pool of four threads for the host-fallback kinds
@@ -73,7 +77,9 @@ use mpi::Threading;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
 use nd_fmm_exec::device::{Gemm, StageTiming};
-use nd_fmm_exec::fmm::{Backend, DeviceGemm, DeviceStage, FmmBuilder, OperatorKind};
+use nd_fmm_exec::fmm::{
+    Backend, DeviceGemm, DeviceStage, FmmBuilder, OperatorKind, OutputPass, Placement,
+};
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_exec::tune::{CacheState, Decision, Source, library_applies};
 use nd_fmm_kernels::Precision;
@@ -193,6 +199,33 @@ fn scenarios<T: Real>(rng: &mut SplitMix64, comm: &SimpleCommunicator) {
             &q,
             comm,
         );
+    }
+
+    // The output pass (Phase 4S T9): on the device by default (CUDA does f64), on the host
+    // with `output_pass(Host)`, bit for bit each other and the pass before T9
+    // (`check_backend`, at p = 4 and 8 above and below), here also at p = 6 with
+    // gradients.
+    scenario(
+        "uniform cube, p = 6, gradients",
+        FmmBuilder::<T>::new(6).gradients(true),
+        &points,
+        &points,
+        &q,
+        comm,
+    );
+    if comm.size() == 1 {
+        for (pass, want) in [
+            (OutputPass::Auto, Placement::Device),
+            (OutputPass::Device, Placement::Device),
+            (OutputPass::Host, Placement::Host),
+        ] {
+            let fmm = FmmBuilder::<T>::new(4)
+                .backend(Backend::Cuda)
+                .output_pass(pass)
+                .build(&points, &points, comm)
+                .unwrap();
+            assert_eq!(fmm.output_pass(), want, "output_pass({pass:?}) on CUDA");
+        }
     }
 
     // p = 8: every GEMM setting runs the hand-written kernel on CUDA (F28); the level

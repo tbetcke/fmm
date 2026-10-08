@@ -27,6 +27,10 @@
 //! that call operators; the test prints that sum against those stages, expected within
 //! 10% (reported, never asserted), and the time per kind.
 //!
+//! The whole output (Phase 4S T9, `tests/output_common`): on the same tree at p = 6, f64,
+//! gradients off and on, one and four threads, the default build's output equals the output
+//! pass before T9 on the same build bit for bit; the test prints a hash of each output.
+//!
 //! Threads (T10, C3.5): at each p the FMM is built again with four threads, and every
 //! evaluation equals the one-thread evaluation bit for bit. MPI is initialised with
 //! `Threading::Funneled` for it.
@@ -70,6 +74,7 @@ use nd_fmm_exec::operator::{Isa, P2pChoice};
 use nd_fmm_ref::p2p::direct_sum;
 
 mod kind_common;
+mod output_common;
 
 /// The single-translation prediction of the relative L2 error of φ (design §7).
 const PREDICTION: [(usize, f64); 2] = [(3, 1.77e-3), (8, 1.08e-5)];
@@ -259,6 +264,15 @@ fn uniform_tree_within_twice_the_prediction() {
         }
     }
     kind_timings(&points, &charges[0], &comm);
+    // The whole output at p = 6, unchanged by Phase 4S T9.
+    for line in output_common::check_whole_output::<f64>(
+        nd_fmm_exec::fmm::Backend::Host,
+        &[1, THREADS],
+        (&points, &charges[0]),
+        &comm,
+    ) {
+        eprintln!("{line}");
+    }
     #[cfg(feature = "gpu")]
     device_gates((&points, sample), (&charges, &exact), &comm, &mut failures);
     assert!(failures.is_empty(), "{}", failures.join("; "));

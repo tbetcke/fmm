@@ -198,8 +198,8 @@ use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
 use nd_fmm_exec::fmm::{
-    Backend, Fmm, FmmBuilder, FmmError, KindTiming, OperatorKind, Output, Placement, PointSet,
-    SettingsError,
+    Backend, Fmm, FmmBuilder, FmmError, KindTiming, OperatorKind, Output, OutputPass, Placement,
+    PointSet, SettingsError,
 };
 use nd_fmm_exec::geometry::{Domain, GeometryError, leaf_coordinates, radius};
 use nd_fmm_exec::operator::{Isa, LaplaceOperator, P2pChoice, SimdScalar};
@@ -337,7 +337,7 @@ fn distributed_scenarios() {
         "the threaded scenarios need MPI at Funneled, it provides {provided:?}"
     );
     let comm = universe.world();
-    let cases: [(&str, Scenario); 19] = [
+    let cases: [(&str, Scenario); 20] = [
         ("table order against the plan", table_order),
         ("batched against per-pair", batched_against_per_pair),
         ("uniform cube, every strategy", uniform_cube_strategies),
@@ -349,6 +349,7 @@ fn distributed_scenarios() {
         ("input errors", input_errors),
         ("f32 against f64", f32_against_f64),
         ("repeatability", repeatability),
+        ("reusable outputs", reusable_outputs),
         ("ownership", ownership),
         (
             "threads, every strategy and precision",
@@ -373,6 +374,32 @@ fn distributed_scenarios() {
     }
     eprintln!("rank {}: {}", comm.rank(), backends_line());
     eprintln!("rank {}: {}", comm.rank(), kind_common::summary());
+    eprintln!(
+        "rank {}: output pass (Phase 4S T9): {} host evaluations at one and four threads bit \
+         for bit the pass before T9",
+        comm.rank(),
+        REFERENCE_CHECKS.load(std::sync::atomic::Ordering::Relaxed)
+    );
+}
+
+/// The host evaluations [`check_reference`] compared, for the closing line.
+static REFERENCE_CHECKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Checks `output`, the last evaluation of `fmm`, against the output pass before Phase 4S
+/// T9 (`Fmm::reference_output`, the test oracle) bit for bit.
+fn check_reference<T: Stored + SimdScalar + Equivalence + Default>(
+    what: &str,
+    fmm: &mut Fmm<'_, T>,
+    output: &Output<T>,
+) {
+    let reference = fmm.reference_output().expect("the reference output");
+    assert_eq!(
+        output_bits(output),
+        output_bits(&reference),
+        "{what}: the output pass differs from the pass before T9"
+    );
+    assert_eq!(output.gradient.is_some(), reference.gradient.is_some());
+    REFERENCE_CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// The dyadic domain of Phase 2, a = (−1.25, 0.5, 2) and w = 3: every centre, centre
@@ -816,6 +843,7 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
     fmm.set_kind_timings(mode)
         .expect("the host times synchronously");
     let output = fmm.evaluate(charges).expect("the FMM evaluates");
+    check_reference("host, one thread", &mut fmm, &output);
     let reference = output_bits(&output);
     let calls = kind_common::check_kinds("host, one thread", &fmm, &output, mode);
     if mode != KindTiming::Off {
@@ -879,6 +907,9 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
         let builder = builder.clone().threads(n).kind_timings(mode);
         let mut threaded = built(builder.build(sources, targets, comm), comm)?;
         let output = check_threaded(&mut threaded, charges, &reference, n);
+        if n == KIND_THREADS {
+            check_reference(&format!("host, {n} threads"), &mut threaded, &output);
+        }
         let calls = kind_common::check_kinds(
             &format!("host, {mode:?}, {n} threads"),
             &threaded,
@@ -1623,6 +1654,111 @@ fn repeatability(comm: &SimpleCommunicator) {
     );
 }
 
+/// `Fmm::evaluate_into` (Phase 4S T9, decision 11; module documentation), in f64 and f32.
+fn reusable_outputs(comm: &SimpleCommunicator) {
+    reusable_outputs_in::<f64>(comm);
+    reusable_outputs_in::<f32>(comm);
+}
+
+/// [`reusable_outputs`] in `T`: on the host at one and four threads and, if compiled in,
+/// on the CPU runtime with the output pass on the device and on the host; gradients off
+/// and on.
+fn reusable_outputs_in<T: Stored + SimdScalar + Equivalence + Default>(comm: &SimpleCommunicator) {
+    let rank = comm.rank();
+    let mut rng = SplitMix64(0x78a1);
+    let points = share(&unit_cube_points(&mut rng, 800), comm);
+    let charges: Vec<Vec<T>> = (0..3)
+        .map(|_| {
+            share(&random_charges(&mut rng, 800), comm)
+                .iter()
+                .map(|&q| T::from_f64(q))
+                .collect()
+        })
+        .collect();
+    let mut builds = vec![
+        ("host, one thread", FmmBuilder::<T>::new(4).threads(1)),
+        ("host, four threads", FmmBuilder::<T>::new(4).threads(4)),
+    ];
+    if comm.size() == 1 && Backend::Cpu.is_compiled() {
+        let cpu = FmmBuilder::<T>::new(4).backend(Backend::Cpu);
+        builds.push(("CPU runtime, device pass", cpu.clone()));
+        builds.push(("CPU runtime, host pass", cpu.output_pass(OutputPass::Host)));
+    }
+    let mut checked = 0;
+    for (name, builder) in builds {
+        for gradients in [false, true] {
+            let what = format!("{name}, gradients {gradients}");
+            let builder = builder
+                .clone()
+                .gradients(gradients)
+                .table_cache(TABLE_CACHE);
+            let Some(mut fmm) = built(builder.build(&points, &points, comm), comm) else {
+                return;
+            };
+            // Wrong lengths, and gradients present where there are none and absent where
+            // there are: resized, not refused.
+            let mut reused = Output {
+                potential: vec![T::zero(); 3],
+                gradient: (!gradients).then(|| vec![[T::zero(); 3]; 5]),
+                timings: Default::default(),
+            };
+            let mut buffers = None;
+            for (e, q) in charges.iter().enumerate() {
+                fmm.evaluate_into(q, &mut reused)
+                    .expect("the FMM evaluates into the output");
+                let fresh = fmm.evaluate(q).expect("the FMM evaluates");
+                assert_eq!(
+                    output_bits(&reused),
+                    output_bits(&fresh),
+                    "rank {rank}: {what}: evaluation {e} into a reused output differs from \
+                     evaluate"
+                );
+                assert_eq!(reused.potential.len(), fmm.ntargets(), "{what}");
+                assert_eq!(
+                    reused.gradient.as_ref().map(Vec::len),
+                    gradients.then_some(fmm.ntargets()),
+                    "{what}: the gradients"
+                );
+                // From the second evaluation on, the buffers are reused, not reallocated.
+                let pointers = (
+                    reused.potential.as_ptr(),
+                    reused.gradient.as_ref().map(|g| g.as_ptr()),
+                );
+                if e > 0 {
+                    assert_eq!(Some(pointers), buffers, "{what}: the buffers moved");
+                }
+                buffers = Some(pointers);
+                checked += 1;
+            }
+            // Charges of the wrong length on rank 0: `ChargesLength` there, `OtherRank`
+            // on the others, as from `evaluate`; the output is left as it was.
+            let before = output_bits(&reused);
+            let mut wrong = charges[0].clone();
+            if rank == 0 {
+                wrong.push(T::zero());
+            }
+            let errors = [
+                fmm.evaluate_into(&wrong, &mut reused).err(),
+                fmm.evaluate(&wrong).err(),
+            ];
+            for error in errors {
+                match (rank, error) {
+                    (0, Some(FmmError::ChargesLength { expected, actual }))
+                        if expected == points.len() && actual == points.len() + 1 => {}
+                    (r, Some(FmmError::OtherRank)) if r != 0 => {}
+                    (_, error) => panic!("rank {rank}: {what}: wrong charges gave {error:?}"),
+                }
+            }
+            assert_eq!(output_bits(&reused), before, "{what}: the output changed");
+        }
+    }
+    eprintln!(
+        "rank {rank}: reusable outputs ({}): {checked} evaluations into a reused output bit \
+         for bit `evaluate`, wrong sizes resized, wrong charges refused",
+        if size_of::<T>() == 4 { "f32" } else { "f64" }
+    );
+}
+
 /// Every rank passes the complete point set: the FMM runs on one rank, and on several
 /// every rank returns `PointsNotOwned` with the same count (module documentation).
 fn ownership(comm: &SimpleCommunicator) {
@@ -2286,6 +2422,32 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
         assert_eq!(output.timings.kinds, None, "the refused mode is not set");
     }
 
+    // `OutputPass::Device` needs a device with f64 arithmetic (Phase 4S T9): refused on the
+    // host at step 1, on every rank; the host path runs the output pass on the host.
+    let error = FmmBuilder::<f64>::new(3)
+        .output_pass(OutputPass::Device)
+        .build(&points, &points, comm)
+        .err();
+    assert_eq!(
+        error,
+        Some(FmmError::InvalidSettings(
+            SettingsError::OutputPassUnsupported {
+                backend: Backend::Host
+            }
+        )),
+        "rank {rank}: output_pass(Device) on the host"
+    );
+    for pass in [OutputPass::Auto, OutputPass::Host] {
+        if let Some(fmm) = built(
+            FmmBuilder::<f64>::new(3)
+                .output_pass(pass)
+                .build(&points, &points, comm),
+            comm,
+        ) {
+            assert_eq!(fmm.output_pass(), Placement::Host, "{pass:?} on the host");
+        }
+    }
+
     // Every backend that is not compiled in is refused at step 1, on every rank; and
     // when only rank 0 asks for one, rank 0 returns the error and the others `OtherRank`:
     // the check is an input error of step 1, agreed by its existing all-reduce.
@@ -2414,6 +2576,28 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
                     want,
                     "the hand-written GEMM"
                 );
+                // The host's source store (Phase 4S T9): an evaluation fills it only when
+                // P2M, P2L or P2P runs on the host fallback. Each alone on the host reads the
+                // charges there (P2L where the tree has an X list): the output within the
+                // FMM bound of the host's, and bit for bit the old output pass.
+                for kind in [OperatorKind::P2m, OperatorKind::P2l, OperatorKind::P2p] {
+                    let mut partial = builder
+                        .clone()
+                        .host_fallback([kind])
+                        .build(&points, &points, comm)
+                        .expect("one rank");
+                    let output = partial.evaluate(&charges).unwrap();
+                    let (potential, _) = device_common::relative_l2(&output, &host_output);
+                    assert!(
+                        potential <= 1e-12,
+                        "{kind} on the host fallback: {potential:e} from the host"
+                    );
+                    device_common::check_reference(
+                        &format!("{kind} on the host fallback"),
+                        &mut partial,
+                        &output,
+                    );
+                }
                 // Synchronous stages: seven more syncs (after the charge upload and each
                 // of the six stages), the same output.
                 let syncs = fmm.device_counters().unwrap().evaluation.syncs;

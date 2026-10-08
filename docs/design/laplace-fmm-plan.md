@@ -1838,6 +1838,7 @@ such; the M3 Max keeps its Phase 4 figures.
 | C4S.5 | per-kind timings (T5) | on the host and every device backend, off by default, bit-identical, the syncs documented | Done (T5, PR #66): `FmmBuilder::kind_timings` with `KindTiming::{Off, Synchronous, Device}` and `StageTimings::kinds`; bit for bit `Off` in every mode; `Device` (CUDA events) gives a breakdown on CUDA, overlapping windows on Metal |
 | C4S.6 | the benchmark (T6) | `tools/bench/run.sh` gives the Markdown report on the M3 Max (host, Metal) and on locust (host, CUDA) | Done (T6, PR #67): `nd-fmm-bench`, a default member; one command, N points in [0, 1]³, f32/f64, p, backend; min, median, mean, max and standard deviation, per-kind tables, errors against the direct sum |
 | C4S.7 | Hopper tuning (T7) | CUDA layouts and candidates adopted by measurement; the static M2L rule on CUDA signed off; Metal and the CPU runtime bit for bit | Done (T7, PR #68): P2P and leaf cubes of 32 units, larger GEMM register blocks, a 2 GB chunk budget, CUDA tuner candidates; `Dense` at every p on CUDA in f32 and f64 (decision 9); evaluations 1.09–1.40× faster at N = 10⁶; Metal and CPU-runtime outputs unchanged bit for bit |
+| C4S.8 | the host part of an evaluation (T9) | the output pass and the charge load in parallel, no zero fill, `evaluate_into` (decision 11), the output pass on devices with f64 (decision 12), each bit for bit on the host, the CPU runtime, Metal and CUDA; measured before and after | Done (T9): the host part of a CUDA evaluation 2.7–8.3× smaller (at N = 10⁷ 183 → 22 ms in f32, 297 → 42–46 ms in f64), evaluations 1.4–3.7× faster (221 → 60 ms, f32, p = 3, N = 10⁷); the device 3.1–6.9× Grace at 72 threads at N = 10⁷ (before 1.5–4.1×); one download and one sync as before; every output bit unchanged (device-path.md §18.4) |
 
 **Benchmarks** (T8, `fmm-bench/results/phase4s-gh200.md`; `nd-fmm-bench` and the Phase 4
 CUDA run of phase4-m3max.md §4; measured on locust, CUDA for the device and NEON on the
@@ -1888,7 +1889,11 @@ Grace cores for the host, the GPU otherwise idle and its clocks not locked):
   redistribution adds per-point host work of the same kind; time it per stage, and treat a
   threaded gather and scatter (and a persistent pinned download buffer, a CubeCL read
   path question) as candidates before reading device scaling figures. On the host path at
-  72 threads the same part is 10–21 ms at N = 10⁶ (2–37% of an evaluation).
+  72 threads the same part is 10–21 ms at N = 10⁶ (2–37% of an evaluation). Phase 4S T9
+  (C4S.8, device-path.md §18.4) built the threaded gather and scatter and the output pass
+  on the device: the part is now 22–46 ms on CUDA at N = 10⁷, most of it CubeCL's
+  download path, so Phase 5's per-rank redistribution and output return should use the
+  same parallel, allocation-free pattern (`evaluate_into`) from the start.
 - **locust's host is a real baseline.** 72 Grace cores in one NUMA node come within 2–7.5×
   of the H100; host strong scaling to 64 or 72 ranks there is meaningful, and MPI runs at
   1–72 ranks without flags (T8, docs/phase5/README.md).

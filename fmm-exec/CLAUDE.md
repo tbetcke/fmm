@@ -12,7 +12,9 @@ T7: P2M, L2P, P2L and M2P on the device), C4.4 (task T8: M2M and L2L on the devi
 C4.5 (task T9: dense M2L on the device), C4.6 (task T10: rotation M2L on the device),
 C4.8 (task T11: the device FMM end to end, every kind on the device) and C4.7 (task T12:
 autotune with a persistent cache, module `tune`); Phase 4S, C4S.4 (task T4: the device
-FMM on CUDA) and C4S.5 (task T5: per-kind timings, `FmmBuilder::kind_timings`).
+FMM on CUDA), C4S.5 (task T5: per-kind timings, `FmmBuilder::kind_timings`) and C4S.8
+(task T9: the output pass and the charge load in parallel, `Fmm::evaluate_into`, the output
+pass on the device, `FmmBuilder::output_pass`).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -60,7 +62,9 @@ FMM on CUDA) and C4S.5 (task T5: per-kind timings, `FmmBuilder::kind_timings`).
     `tests/device_cuda.rs` live in `tests/device_common/`, the tuner's in
     `tests/tune_common/`, the per-kind timings' (Phase 4S T5) in `tests/kind_common/`
     (also used by `tests/accuracy.rs`), with the call-window measurement of the Metal and
-    CUDA executables in `tests/kind_common/windows.rs`.
+    CUDA executables in `tests/kind_common/windows.rs`, and the whole-output check of the
+    C3.2 tree (Phase 4S T9) in `tests/output_common/` (used by `tests/accuracy.rs` and
+    `tests/device_fmm.rs`).
   - New `Fmm` scenarios evaluate through `evaluate_threaded` in `tests/mpi_exec.rs`,
     which repeats them at 2, 4 and 8 threads and checks the output bit for bit, or
     through `evaluate_every_kernel`, which also repeats them with `Reference` and every
@@ -182,7 +186,30 @@ FMM on CUDA) and C4S.5 (task T5: per-kind timings, `FmmBuilder::kind_timings`).
   - safety (requirement 9): no `unsafe` here and no direct `cubecl` dependency;
     CubeCL only through `nd-fmm-kernels`;
   - threads: with `Backend::Cpu` no rayon pool, `threads(n)` caps the CPU runtime's
-    units per cube; with Metal and CUDA the pool serves host-fallback kinds only;
+    units per cube; with Metal and CUDA the pool serves host-fallback kinds, the charge
+    load and the host output pass only (Phase 4S T9);
+  - the output pass and the charge load (Phase 4S T9, C4S.8; `fmm` module docs, "The
+    output pass", device-path.md §18.4): `build` stores per target (caller's order) its
+    leaf-order point and leaf (`u32`, 8 N_t bytes) and per leaf 4π r and 4π r²; the host
+    pass is one loop over the targets on the `Fmm`'s pool (serially without one), collected
+    into the output buffers without a zero fill (`collect_into_vec`, `unzip_into_vecs`),
+    each value `T::from_f64(x.to_f64() / scale)`; the charge load splits the source chunks
+    by leaves and the device's upload buffer by ranges on the pool, and skips the host's
+    source store when P2M, P2L and P2P run on the device. `OutputPass` (decision 12,
+    `FmmBuilder::output_pass`): `Auto` runs the pass on the device where it does f64
+    arithmetic (`nd_fmm_kernels::movement::gather_output` on an `OutputOrder` uploaded
+    once, f64 division, one rounding; the CPU runtime and CUDA), the host pass otherwise
+    (Metal); `Host` on every backend; `Device` refused without f64
+    (`SettingsError::OutputPassUnsupported`, step 1's agreement). The device pass is one
+    launch more and the same download (o N_t values) and sync; `DeviceReport::output_pass`
+    and `Fmm::output_pass` say where it ran. `Fmm::evaluate_into` (decision 11) writes into
+    the caller's `Output` (wrong lengths and gradients resized, the output untouched on an
+    error); `evaluate` wraps it. `StageTimings::download` is the part of `output` in
+    `read_output`. Every pass is bit for bit the pass before T9, kept as the doc-hidden test
+    oracle `Fmm::reference_output` (`tests/mpi_exec.rs` at 1 and 4 threads and on the CPU
+    runtime with both passes, `tests/device_common` on every device scenario, the unit tests
+    of `fmm`, and the C3.2 tree at p = 6 in the ignored gates). Never change the scales'
+    arithmetic, the division or the rounding;
   - every device test prints the backends it ran; Metal tests are ignored and run by
     hand outside the macOS sandbox (`tests/device_metal.rs`); CUDA tests are ignored,
     type-checked in CI and run by hand on locust (`tests/device_cuda.rs`, the CUDA blocks
@@ -216,6 +243,9 @@ FMM on CUDA) and C4S.5 (task T5: per-kind timings, `FmmBuilder::kind_timings`).
     `tests/tune_common` on the CPU runtime (f64 p = 6 in full, f32 p = 3; about a minute
     in release), which `tests/device_metal.rs` also runs on Metal (f32 p = 8 and 3) and
     `tests/device_cuda.rs` on CUDA (f32 p = 8 and f64 p = 6 in full, f32 p = 3);
+  - from Phase 4S T9, the whole output on the C3.2 tree in the ignored gates
+    (`tests/output_common`): the host in `tests/accuracy.rs`, the device backends in
+    `tests/device_fmm.rs`, each with the output hash printed;
   - from Phase 4S T4, by hand on locust (root CLAUDE.md, "Checks"; after
     `tools/gh200/sync.sh`, each as `tools/gh200/remote.sh '<command>'`):
     `cargo clippy -p nd-fmm-exec --all-targets --features cpu,cuda -- -D warnings`,

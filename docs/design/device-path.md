@@ -479,7 +479,9 @@ E_U (near entries), E_W, E_X pairs per view, summed over levels.
 | multipoles, locals | 2 K n_c s, one buffer each, the `LevelBuffers` layout | never (zeroed by a kernel) | never (fallback only, Section 7) |
 | source store | 4 N_s s, the `LeafStore` layout of §3.13 | coordinates once at build; charges every evaluation (N_s s, scattered by `charge_slots`) | never |
 | target input | 3 N_t s | once at build | never |
-| target output | o N_t s | never (zeroed) | once per evaluation |
+| target output | o N_t s | never (zeroed) | once per evaluation (without the output pass on the device) |
+| output order (Phase 4S T9, §18.4) | with the output pass on the device: 8 N_t + 4 (J_loc + 1) (u32: every target's point in leaf order and leaf, the leaves' offsets) + 16 J_loc (two f64 scales per leaf) | once at build | never |
+| caller-ordered output (Phase 4S T9) | with the output pass on the device: o N_t s, φ then ∇φ in the caller's order | never (written by the gather) | once per evaluation, instead of the target output |
 | index arena (u32) | about 12 E_V + 12 (E_M + E_L) + 4 (E_U + E_W + E_X) + 8 J + 8 K + 4 N_s: views, row-to-batch maps (Section 6.4), point offsets, `charge_slots` | once at build, one call | never |
 | geometry (u32) | 16 J (level and index per leaf) + 12 K (index per box) | once at build | never |
 | tables | dense: (316 + 16) n_c² s; rotation: the M2L `ShiftTables` (94 B + 64 p + 15 C) s plus 16 n_c² s for the dense octants (B, C as in `nd_fmm_tables::rotation`) | once at build | never |
@@ -499,7 +501,11 @@ because wgpu binding offsets must be aligned (F6) and level offsets are not.
 | syncs | | 1 (the download) |
 
 For the C3.2 cube (N_s = N_t = 10⁵, gradients) that is 2.0 MB in f32 and 4.0 MB in f64.
-The README's minimum is met: nothing else crosses.
+The README's minimum is met: nothing else crosses. With the output pass on the device
+(Phase 4S T9, the default where the device does f64 arithmetic; §18.4) the download is
+the caller-ordered, scaled output instead of the target output: the same o N_t s bytes,
+call and sync, and one launch more (the gather), so this formula and its tests change only
+in the launch count.
 
 **Per build**: the source store and target input ((4 N_s + 3 N_t) s, 2 calls), the index
 arena and the geometry (2 calls), the tables (one call per family: 1–3). About 7 calls;
@@ -1518,7 +1524,8 @@ measured better. This section records what was read and confirmed on the device.
 holds T2's facts (F25–F32, signed off on 2026-10-06) and T3's device arithmetic
 (F33–F36, signed off on 2026-10-07); §18.2 T7's measured layouts and rules, with the
 static M2L rule on CUDA (decision 9, signed off on 2026-10-07); §18.3 T8's benchmarks of
-the whole device FMM on the GH200, which complete the section.
+the whole device FMM on the GH200; §18.4 T9's host part of an evaluation, before and
+after.
 
 ### 18.1 CUDA facts (T2, measured on locust, 2026-10-06)
 
@@ -1753,8 +1760,95 @@ before or after each step, and its clocks were not locked. Same versions as §18
   FMM at N ≥ 10⁶ for p ≤ 8 on CUDA; it is per-point host work, so a threaded charge
   gather and output scatter, and a persistent pinned download buffer (CubeCL's read
   path), are the candidates; for Phase 5, where the redistribution adds the same kind of
-  work;
+  work (T9 built the first two and moved the output pass to the device: §18.4);
 - the strategy of a tuning cache tuned at one N is reused at another N with the same p
   (the cache key holds no size): harmless on CUDA, where dense wins at every N measured,
   but on Metal the f32 choice changed with N (Phase 4 T13).
 
+
+### 18.4 The host part of an evaluation (T9, locust and the M3 Max, 2026-10-08)
+
+§18.3 found the host's work outside the level calls to be the largest cost of the device
+FMM at large N. T9 made it parallel and moved the output pass to the device, without
+changing a bit of the output (C4S.8; decisions 11 and 12 of docs/phase4s/README.md):
+- **the output pass** (`nd_fmm_exec::fmm`, "The output pass"): `build` stores, per target
+  in the caller's order, its point in leaf order and its leaf (`u32`, 8 N_t bytes on the
+  host) and per leaf the two scales (16 bytes). On the host it is one loop over the
+  targets on the `Fmm`'s pool, collected into the output buffers without a zero fill. On
+  a device with f64 arithmetic (CUDA, the CPU runtime) it runs by default on the device:
+  `nd_fmm_kernels::movement::gather_output` reads an `OutputOrder` uploaded once
+  (8 N_t + 20 J_loc + 4 bytes) into a caller-ordered output (o N_t s bytes), divides in
+  f64 and rounds once to T. That buffer is downloaded instead of the target output: one
+  download, one sync, the same o N_t s bytes and one launch more (§4.1). Metal, without
+  f64, keeps the host pass. `FmmBuilder::output_pass` chooses (`Auto`, `Host`, `Device`);
+- **the charge load**: the source chunks split by leaves and the upload buffer by ranges,
+  on the pool; with P2M, P2L and P2P on the device the host's source store, which only
+  host-fallback calls of those kinds read, is not written;
+- **`Fmm::evaluate_into`** writes into the caller's `Output`, reusing its buffers;
+- **`StageTimings::download`**: the part of `output` in `read_output`, the evaluation's
+  one wait for the device.
+
+Every pass equals the pass before T9 bit for bit. The doc-hidden `Fmm::reference_output`
+keeps the old pass as the test oracle: `tests/mpi_exec.rs` (the host at 1 and 4 threads,
+f32 and f64, gradients off and on; the CPU runtime with both passes), `tests/device_common`
+(every device scenario, the CPU runtime, Metal and CUDA) and the C3.2 tree at p = 6 in the
+ignored gates. The whole output there also has the hash of the code before T9, on the host
+(M3 Max and Grace), the CPU runtime, Metal and CUDA (f32 and f64).
+
+`fmm-bench/results/phase4s-t9-host-part.md` has every table, the whole-output hashes
+before and after, the `nsys` trace and the raw output. The measurements: `nd-fmm-bench`,
+the unit cube with gradients, the static rule (`Dense`),
+2 warm-ups and 10 timed evaluations; load and output from a second build with
+`KindTiming::Synchronous`. In that mode `load` includes the sync after the upload, so on
+a device it holds the upload and the zeroing too. The "before" is the code before T9 with
+the timing columns alone (main `efdcb8d` plus T9 item 1). On locust the GPU had no other
+process and the host no other user's job at any check, and the clocks were not locked
+(SM 1,980 MHz under load). The host ran 72 threads. Means in ms, *measured (locust, CUDA)*
+unless marked:
+
+| N | precision | p | CUDA before | CUDA after | load before → after | output before → after (of it the download) | host 72 threads before → after |
+| --- | --- | ---: | ---: | ---: | --- | --- | --- |
+| 10⁶ | f32 | 3 | 12.30 | 6.63 | 3.17 → 0.72 | 5.23 → 2.33 (1.25) | 27.4 → 20.4 |
+| 10⁶ | f32 | 8 | 21.43 | 15.62 | 3.24 → 0.71 | 5.26 → 2.40 (1.26) | 110.1 → 101.2 |
+| 10⁷ | f32 | 3 | 221.3 | 60.3 | 63.2 → 6.6 | 119.6 → 15.4 (12.7) | 339.9 → 186.7 |
+| 10⁷ | f32 | 8 | 314.6 | 154.0 | 62.9 → 6.7 | 120.3 → 15.3 (12.7) | 1,085.6 → 903.1 |
+| 10⁶ | f64 | 3 | 20.10 | 10.19 | 5.07 → 1.17 | 7.87 → 3.27 (2.25) | 52.6 → 40.3 |
+| 10⁶ | f64 | 8 | 35.43 | 25.79 | 5.20 → 1.25 | 7.96 → 3.31 (2.28) | 217.4 → 200.9 |
+| 10⁷ | f64 | 3 | 357.6 | 103.0 | 92.5 → 13.6 | 203.8 → 28.6 (24.6) | 690.3 → 436.3 |
+| 10⁷ | f64 | 8 | 523.9 | 268.8 | 92.9 → 13.3 | 203.6 → 32.8 (24.8) | 2,121.7 → 1,846.8 |
+
+On the host at 72 threads load and output went from 3.2–78.7 and 5.0–207.8 ms to
+0.13–2.4 and 0.95–13.0 ms.
+
+- **The host part (load, output and other) is 2.7–8.3× smaller on CUDA**: at N = 10⁷ it
+  went from 183 to 22 ms (f32) and from 297 to 42–46 ms (f64), and an evaluation from
+  221–524 to 60–269 ms (1.9–3.7× faster). At N = 10⁶ it went from 8.4–8.5 to 3.1 ms (f32)
+  and from 13.0–13.2 to 4.5–4.6 ms (f64), and evaluations got 1.4–2.0× faster. The level
+  calls did not change.
+- **The device against Grace at 72 threads** at N = 10⁷: 3.1–5.9× in f32 and 4.2–6.9× in
+  f64 (before 1.5–3.5× and 1.9–4.1×); at N = 10⁶ 3.1–6.5× and 4.0–7.8× (before 2.2–5.1×
+  and 2.6–6.1×). The host path gained too: 1.6–1.8× at N = 10⁷ and 1.3× at N = 10⁶ for
+  p = 3, 1.1–1.2× at p = 8.
+- **The device pass against the host pass** on CUDA at N = 10⁷ (`--output-pass host`,
+  the host pass on the 72-thread pool): output 15.4 against 20.4 ms (f32) and 28.6–32.8
+  against 36.2–36.3 ms (f64); evaluations 60.3 against 65.5 and 103.0 against 111.2 ms at
+  p = 3. The default stays the device pass (decision 12).
+- **What is left** is mostly the download. At N = 10⁷ it is 12.7 ms (f32, 160 MB) and
+  24.6 ms (f64): the copy itself takes 0.54 ms on the GPU, the rest is CubeCL's read path
+  on the host, a pinned host buffer allocated per download (`cuMemAllocHost`, median
+  2.5 ms, up to 54 ms in the trace, as in T8) and its copy into the operator's buffer on
+  one thread. The load is now the upload, the zeroing and their sync (6.6 / 13.6 ms). An
+  `nsys` trace at N = 10⁷, f32, p = 3 (60.7 ms per evaluation under the profiler) samples
+  the copy into the `Output` and the charge load on the pool threads (197 and 179 samples
+  over 72 threads in four evaluations, under 1 ms of wall time each). The main thread is
+  rarely sampled (it waits in the sync); its samples are memcpy and the download.
+  A persistent pinned download buffer and a download into caller memory are CubeCL
+  read-path questions, as in §18.3.
+- **`--reuse-output`** (`evaluate_into` with one `Output`) changes evaluations by −1.1%
+  to +2.2%, within the noise: the parallel collection into fresh buffers already touches
+  every page once, in parallel.
+- **Metal** (the M3 Max, f32, N = 10⁶; the host pass; load average 6–8 from desktop
+  processes, so reported only): p = 3 went from 16.04 to 14.06 ms (load 2.45 → 1.67,
+  output 3.15 → 2.15, of it the download 0.7). At p = 8 it measured 82.2 against 84.0 ms,
+  a difference within the M2L level calls' noise (71.3 against 72.7 ms). `--reuse-output`
+  gave 14.09 and 83.2 ms.

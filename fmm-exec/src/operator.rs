@@ -560,6 +560,16 @@ impl<T: SimdScalar> LaplaceOperator<T> {
         }
     }
 
+    /// The pool the level calls run on: `None` without a pool or when
+    /// [`set_serial`](Self::set_serial) is on. `Fmm` runs its charge load and output pass
+    /// on it too (Phase 4S T9).
+    pub(crate) fn pool(&self) -> Option<&Arc<ThreadPool>> {
+        self.execution
+            .pool
+            .as_ref()
+            .filter(|_| !self.execution.serial)
+    }
+
     /// With `serial`, runs the level calls on the calling thread even if the operator
     /// has a pool, with scratch set 0: the serial path of the same operator, for
     /// comparisons and timings. Without a pool it changes nothing.

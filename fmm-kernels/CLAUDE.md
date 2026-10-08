@@ -5,9 +5,10 @@ selection and the f64 capability check, device buffers, the data movement primit
 the plan's views on the device (`view`, from T5), and (from T6) the operator kernels:
 P2P (`p2p`, T6), the leaf operators P2M, L2P, P2L and M2P (`leaf`, T7), the grouped
 translations M2M and L2L (`translate`, T8), dense M2L (`translate`, T9) and rotation M2L
-(`rotation`, T10) (docs/design/device-path.md §3.1).
+(`rotation`, T10) (docs/design/device-path.md §3.1), and (Phase 4S T9) the output pass of
+`nd-fmm-exec` on the device (`movement::gather_output`).
 Phase and components: Phase 4, C4.1 (T4, T5), C4.2–C4.6 (T6–T10) and the timing windows
-of C4.8 (T11) in docs/phase4/.
+of C4.8 (T11) in docs/phase4/; Phase 4S, C4S.8 (T9) in docs/phase4s/.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -15,6 +16,19 @@ of C4.8 (T11) in docs/phase4/.
 - Views (`view`, T5): uploaded from plain `u32` arrays in the layout of the plan's
   `Csr` and `GroupedCsr` (no `nd-fmm-plan` dependency), validated on the host, one
   `IndexBuffer` per array (its bound covers the whole buffer); a malformed view panics.
+- The output gather (Phase 4S T9, `movement::gather_output`, device-path.md §18.4): φ and
+  ∇φ in the caller's order from the leaf-ordered target output, each value converted to
+  f64, divided by its leaf's f64 scale and rounded once to T (`F::cast_from(f64::cast_from(x)
+  / s)`), so bit for bit `nd-fmm-exec`'s host pass `T::from_f64(x.to_f64() / s)` where the
+  device divides f64 correctly rounded (the CPU runtime, CUDA, F33). Its input is a
+  `movement::OutputOrder` (the leaves' offsets, every target's point and leaf, two f64
+  scales per leaf), validated at upload (every point within its leaf) so that the launch
+  reads without bounds checks; its upload and the gather need f64 arithmetic and refuse
+  without it (`KernelError::UnsupportedPrecision`, Metal). One elementwise launch, the
+  units capped on the CPU runtime. Never fuse the scaling, multiply by a reciprocal or
+  divide in f32: that changes output bits. Tested against the host loop bit for bit
+  (`tests/kernels/movement.rs`: f32 and f64, 0, 1, 7 and 10⁵ targets, an empty leaf, with
+  and without gradients; the bound checks; the refusal on Metal).
 - CPU units: `Device::limit_units(n)` caps the units per cube of the CPU runtime's
   elementwise launches (default `CPU_MAX_UNITS`); `nd-fmm-exec` passes `threads(n)`
   (device-path.md §11). Every later CPU layout honours the cap (the CPU layout of P2P
@@ -227,7 +241,8 @@ Measured on locust's H100 (GH200) on 2026-10-06 (Phase 4S T2; docs/design/device
   `--ignored`, the CPU runtime's tests on Grace. `cpu` and `cuda` combine in one build.
   Clippy: `--features cpu,cuda`. CUDA tests are `#[ignore = "CUDA: run by hand on
   locust"]` and are registered with `tests_on!(cuda: …)`: Metal's list plus every f64
-  test and the property tests, 56 tests.
+  test and the property tests, 56 tests (58 from Phase 4S T9, with the output gather in
+  f32 and f64; Metal's list gains its f64 refusal instead).
 - `DeviceInfo`: `cuda (cuda), NVIDIA GH200 480GB, CubeCL 0.11.0-pre.4, f32 f64`; plane
   size 32 (fixed), shared memory 232,448 B per cube (the opt-in maximum; Metal 32 KB),
   1024 units per cube, cube counts (2³¹ − 1, 65,535, 65,535), memory 102,005,473,280 B.
