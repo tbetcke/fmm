@@ -38,4 +38,7 @@ jobs:
           RUST_MIN_STACK: "8388608"
           OPENBLAS_NUM_THREADS: "1"
           OMP_NUM_THREADS: "1"
+          # The runner has 2 physical cores, and Open MPI gives one slot per core: allow
+          # the 3 ranks on them (first run of this script, 2026-10-08).
+          OMPI_MCA_rmaps_base_oversubscribe: "1"
         run: .github/scripts/run-examples.sh 3
