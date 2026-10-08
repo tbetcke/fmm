@@ -60,7 +60,12 @@
 //! [`read_output`](DeviceOperator::read_output) downloads the target output once, or with
 //! the output pass on the device (Phase 4S T9, [`OutputPass`]) first makes φ and ∇φ in the
 //! caller's order on the device (`nd_fmm_kernels::movement::gather_output`, one launch) and
-//! downloads those instead: as many values, so the transfers below do not change.
+//! downloads those instead: as many values, so the transfers below do not change. Since
+//! Phase 4S T11 the download is read in place in CubeCL's host memory
+//! ([`DeviceOutput`], [`OutputValues`], `Device::download_view`): the operator keeps no
+//! host copy of the target output, only a mirror for host-fallback calls of L2P, M2P and
+//! P2P ([`DeviceReport::host_mirror_bytes`]); and the charges are uploaded from the
+//! caller's buffer without a copy (`Device::write_owned`).
 //!
 //! **Per evaluation**, with every kind on the device (T11): one upload of N_s s bytes
 //! (the charges), one download of o N_t s bytes (the target output) and one sync (the
@@ -391,7 +396,7 @@
 
 use std::any::Any;
 use std::fmt;
-use std::ops::Range;
+use std::ops::{Deref, Range};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -415,7 +420,7 @@ use nd_fmm_kernels::view::{
 pub use nd_fmm_kernels::view::{CsrImage, GroupedImage};
 use nd_fmm_kernels::{
     BackendKind, Device, DeviceBuffer, DeviceElement, DeviceFloat, DeviceSlice, DeviceSliceMut,
-    IndexBuffer, KernelError, TimingWindow, WindowTime,
+    HostValues, IndexBuffer, KernelError, TimingWindow, WindowTime,
 };
 pub use nd_fmm_kernels::{Counters, DeviceInfo};
 use nd_fmm_plan::lists::{Csr, GroupedCsr, VList};
@@ -792,6 +797,11 @@ pub struct DeviceReport {
     /// (`nd_fmm_kernels::movement::gather_output`) where it does f64 arithmetic unless
     /// `FmmBuilder::output_pass` asks for the host, on the host otherwise.
     pub output_pass: Placement,
+    /// The bytes the operator holds on the host as mirrors of host-fallback calls: the
+    /// multipoles and the locals with any kind on the host, and the target output (o N_t
+    /// values) with L2P, M2P or P2P on the host; 0 with every kind on the device. The
+    /// evaluation's download lands in CubeCL's host memory, not here (Phase 4S T11).
+    pub host_mirror_bytes: u64,
 }
 
 impl DeviceReport {
@@ -962,14 +972,55 @@ pub struct CallerOrder<'a> {
     pub scales: &'a [f64],
 }
 
-/// The output of an evaluation, as [`DeviceOperator::read_output`] downloads it.
-#[derive(Clone, Copy, Debug)]
+/// The output of an evaluation, as [`DeviceOperator::read_output`] downloads it: read in
+/// place in CubeCL's host memory (Phase 4S T11), borrowing the operator until it is
+/// dropped.
+#[derive(Debug)]
 pub enum DeviceOutput<'a, T> {
     /// The target output in the evaluator's layout, unscaled: the host pass follows.
-    LeafOrder(&'a LeafStore<T>),
+    LeafOrder {
+        /// The target output in the `LeafStore` layout: leaf j's values from o
+        /// `offsets[j]`, o values per point.
+        values: OutputValues<'a, T>,
+        /// The point offsets of the target leaves, `nleaves + 1` of them.
+        offsets: &'a [usize],
+    },
     /// With the output pass on the device: φ of every target in the caller's order, then
     /// three values of ∇φ per target with gradients, scaled.
-    CallerOrder(&'a [T]),
+    CallerOrder(OutputValues<'a, T>),
+}
+
+/// The values of a [`DeviceOutput`]: the evaluation's one download, read in place in
+/// CubeCL's host memory (an `nd_fmm_kernels::HostValues`, pinned memory on CUDA), without
+/// a copy into a host buffer of the operator (Phase 4S T11, decision 14). Derefs to
+/// `&[T]`. It borrows the operator, so it is dropped, and the memory returned to CubeCL's
+/// pool, before the next evaluation.
+pub struct OutputValues<'a, T> {
+    values: Box<dyn Deref<Target = [T]> + 'a>,
+}
+
+impl<'a, T: DeviceElement> OutputValues<'a, T> {
+    fn new(values: HostValues<T>) -> Self {
+        Self {
+            values: Box::new(values),
+        }
+    }
+}
+
+impl<T> Deref for OutputValues<'_, T> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        &self.values
+    }
+}
+
+impl<T> fmt::Debug for OutputValues<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OutputValues")
+            .field("len", &self.len())
+            .finish_non_exhaustive()
+    }
 }
 
 /// The output pass on the device (Phase 4S T9): the output order, uploaded once, and the
@@ -1273,6 +1324,9 @@ const GROUPED: [(OperatorKind, Option<UpwardPass>); 4] = [
 struct Mirrors<T> {
     multipoles: LevelBuffers<T>,
     locals: LevelBuffers<T>,
+    /// The target output, with L2P, M2P or P2P on the host: the kinds that write it
+    /// (Phase 4S T11; before, the operator always held it, as the download target).
+    target_output: Option<LeafStore<T>>,
 }
 
 /// The device with the accounting of its transfers and the first failure of an
@@ -1349,11 +1403,11 @@ pub struct DeviceOperator<T: DeviceScalar> {
     tables: DeviceTables<T>,
     translations: Translations<T>,
     mirrors: Option<Mirrors<T>>,
-    /// The target output on the host: the mirror of host-fallback calls, and where
-    /// [`read_output`](Self::read_output) downloads to. With the output pass on the
-    /// device, the download is the caller-ordered output (as many values); a host-fallback
-    /// call downloads its region before it reads it, so it never sees them.
-    output: LeafStore<T>,
+    /// The point offsets of the target leaves (`nleaves + 1`) in the target output's
+    /// `LeafStore` layout, on the device and in [`DeviceOutput::LeafOrder`].
+    output_offsets: Vec<usize>,
+    /// The values per target point of the target output: 4 with gradients, else 1.
+    output_point_size: usize,
     /// With the output pass on the device (Phase 4S T9): its order and output buffer.
     pass: Option<DevicePass<T>>,
     report: DeviceReport,
@@ -2159,10 +2213,26 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         }
         let lens: Vec<usize> = (0..nlevels).map(|l| index.len(l)).collect();
         let sizes = vec![n; nlevels];
+        let writes_output = [OperatorKind::L2p, OperatorKind::M2p, OperatorKind::P2p]
+            .iter()
+            .any(|&kind| placement[kind as usize] == Placement::Host);
         let mirrors = placement.contains(&Placement::Host).then(|| Mirrors {
             multipoles: LevelBuffers::new(&lens, &sizes),
             locals: LevelBuffers::new(&lens, &sizes),
+            target_output: writes_output.then(|| LeafStore::new(target_counts, o)),
         });
+        let host_mirror_bytes = mirrors.as_ref().map_or(0, |m| {
+            let values = m.multipoles.as_slice().len()
+                + m.locals.as_slice().len()
+                + m.target_output.as_ref().map_or(0, |t| t.as_slice().len());
+            (values * size_of::<T>()) as u64
+        });
+        let output_offsets: Vec<usize> = std::iter::once(0)
+            .chain(target_counts.iter().scan(0, |end, &count| {
+                *end += count;
+                Some(*end)
+            }))
+            .collect();
         debug_assert!(
             mirrors
                 .as_ref()
@@ -2196,6 +2266,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             } else {
                 Placement::Host
             },
+            host_mirror_bytes,
         };
         let mut operator = Self {
             host,
@@ -2209,7 +2280,8 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             tables,
             translations,
             mirrors,
-            output: LeafStore::new(target_counts, o),
+            output_offsets,
+            output_point_size: o,
             pass,
             report,
             build_counters: Counters::default(),
@@ -2657,7 +2729,8 @@ impl<T: DeviceScalar> DeviceOperator<T> {
     /// locals and the target output on the device (+0.0, the bits of `reset`), uploads
     /// `charges` (one per source, in leaf order: the k-th source of the source store in
     /// leaf order has the k-th charge) and scatters them into their slots of the source
-    /// store. Four launches and one upload, no sync. Resets the evaluation counters. With
+    /// store. Four launches and one upload, no sync; the upload takes `charges` without a
+    /// copy (`Device::write_owned`, Phase 4S T11). Resets the evaluation counters. With
     /// [`StageTiming::DeviceTimestamps`] it runs in the timing window of
     /// [`DeviceStage::Load`].
     ///
@@ -2666,7 +2739,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
     /// # Panics
     ///
     /// If `charges` does not hold one value per source.
-    pub fn begin_evaluation(&mut self, charges: &[T]) {
+    pub fn begin_evaluation(&mut self, charges: Vec<T>) {
         assert_eq!(
             charges.len(),
             self.stores.charges.len(),
@@ -2688,7 +2761,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                 .run(DataKind::Output, |d| zero(d, buffer.as_slice_mut()));
         }
         self.link.run(DataKind::Charges, |d| {
-            d.write(stores.charges.as_slice_mut(), charges)
+            d.write_owned(stores.charges.as_slice_mut(), charges)
         });
         self.link.run(DataKind::Charges, |d| {
             scatter_values(
@@ -2756,7 +2829,9 @@ impl<T: DeviceScalar> DeviceOperator<T> {
     /// returns it: in the evaluator's layout, unscaled; or with the output pass on the
     /// device (Phase 4S T9) first launches `gather_output`, which makes φ and ∇φ in the
     /// caller's order, scaled, and downloads those instead (one launch more, the same
-    /// download and sync, o N_t values either way).
+    /// download and sync, o N_t values either way). The values are read in place in
+    /// CubeCL's host memory (`Device::download_view`, Phase 4S T11): the operator keeps
+    /// no host copy of the output.
     ///
     /// # Errors
     ///
@@ -2764,26 +2839,23 @@ impl<T: DeviceScalar> DeviceOperator<T> {
     /// error surfaces at this download, §12).
     pub fn read_output(&mut self) -> Result<DeviceOutput<'_, T>, KernelError> {
         let gradients = self.host.gradients();
-        let (stores, output) = (&self.stores, &mut self.output);
-        match &mut self.pass {
-            None => self.link.run(DataKind::Output, |d| {
-                d.download(stores.target_output.as_slice(), output.as_mut_slice())
-            }),
-            Some(pass) => {
-                self.link.run(DataKind::Output, |d| {
-                    gather_output(
-                        d,
-                        &pass.order,
-                        stores.target_output.as_slice(),
-                        gradients,
-                        pass.values.as_slice_mut(),
-                    )
-                });
-                self.link.run(DataKind::Output, |d| {
-                    d.download(pass.values.as_slice(), output.as_mut_slice())
-                })
-            }
+        let stores = &self.stores;
+        if let Some(pass) = &mut self.pass {
+            self.link.run(DataKind::Output, |d| {
+                gather_output(
+                    d,
+                    &pass.order,
+                    stores.target_output.as_slice(),
+                    gradients,
+                    pass.values.as_slice_mut(),
+                )
+            });
+        }
+        let source = match &self.pass {
+            None => stores.target_output.as_slice(),
+            Some(pass) => pass.values.as_slice(),
         };
+        let values = self.link.run(DataKind::Output, |d| d.download_view(source));
         // The stage windows, read after the download: the stream is idle. A window
         // without device work measures nothing and times zero.
         if self.link.error.is_none() && !self.pending.is_empty() {
@@ -2796,10 +2868,16 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             self.stage_timings = on_device.then_some(timings);
         }
         self.evaluation_counters = self.link.device.counters();
-        match (&self.link.error, &self.pass) {
+        match (&self.link.error, values) {
             (Some(error), _) => Err(error.clone()),
-            (None, None) => Ok(DeviceOutput::LeafOrder(&self.output)),
-            (None, Some(_)) => Ok(DeviceOutput::CallerOrder(self.output.as_slice())),
+            (None, Some(values)) => Ok(match self.pass {
+                None => DeviceOutput::LeafOrder {
+                    values: OutputValues::new(values),
+                    offsets: &self.output_offsets,
+                },
+                Some(_) => DeviceOutput::CallerOrder(OutputValues::new(values)),
+            }),
+            (None, None) => unreachable!("a download without a failure gives its values"),
         }
     }
 
@@ -2812,7 +2890,12 @@ impl<T: DeviceScalar> DeviceOperator<T> {
     ///
     /// As `Device::download`.
     pub fn download_target_output(&mut self) -> Result<LeafStore<T>, KernelError> {
-        let mut store = self.output.clone();
+        let counts: Vec<usize> = self
+            .output_offsets
+            .windows(2)
+            .map(|w| w[1] - w[0])
+            .collect();
+        let mut store = LeafStore::new(&counts, self.output_point_size);
         self.link
             .device
             .download(self.stores.target_output.as_slice(), store.as_mut_slice())?;
@@ -2893,8 +2976,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
 
     /// The value range of the local leaves `leaves` in the target output.
     fn output_values(&self, leaves: &Range<usize>) -> Range<usize> {
-        let offsets = self.output.point_offsets();
-        let o = self.output.point_size();
+        let (offsets, o) = (&self.output_offsets, self.output_point_size);
         offsets[leaves.start] * o..offsets[leaves.end] * o
     }
 
@@ -2952,28 +3034,30 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         );
     }
 
-    /// Downloads the target output of `leaves` into the host output.
+    /// Downloads the target output of `leaves` into its mirror.
     fn fetch_output(&mut self, leaves: &Range<usize>) {
         let values = self.output_values(leaves);
         if !values.is_empty() {
+            let mirror = output_mirror(&mut self.mirrors);
             self_fetch(
                 &mut self.link,
                 DataKind::FallbackTargetOutput,
                 self.stores.target_output.slice(values.clone()),
-                &mut self.output.as_mut_slice()[values],
+                &mut mirror.as_mut_slice()[values],
             );
         }
     }
 
-    /// Uploads the target output of `leaves` from the host output.
+    /// Uploads the target output of `leaves` from its mirror.
     fn send_output(&mut self, leaves: &Range<usize>) {
         let values = self.output_values(leaves);
         if !values.is_empty() {
+            let mirror = output_mirror(&mut self.mirrors);
             self_send(
                 &mut self.link,
                 DataKind::FallbackTargetOutput,
                 self.stores.target_output.slice_mut(values.clone()),
-                &self.output.as_slice()[values],
+                &mirror.as_slice()[values],
             );
         }
     }
@@ -3390,10 +3474,11 @@ impl<T: DeviceScalar> FmmOperator for DeviceOperator<T> {
         if !self.healthy() {
             return;
         }
-        let mirrors = self.mirrors.as_ref().expect(MIRRORS);
+        let mirrors = self.mirrors.as_mut().expect(MIRRORS);
+        let target_output = mirrors.target_output.as_mut().expect(MIRRORS);
         self.host.l2p(L2p {
             locals: mirrors.locals.level(level),
-            target_output: self.output.range_mut(leaves.clone()),
+            target_output: target_output.range_mut(leaves.clone()),
             ..batch
         });
         self.send_output(&leaves);
@@ -3415,10 +3500,11 @@ impl<T: DeviceScalar> FmmOperator for DeviceOperator<T> {
         if !self.healthy() {
             return;
         }
-        let mirrors = self.mirrors.as_ref().expect(MIRRORS);
+        let mirrors = self.mirrors.as_mut().expect(MIRRORS);
+        let target_output = mirrors.target_output.as_mut().expect(MIRRORS);
         self.host.m2p(M2p {
             multipoles: mirrors.multipoles.level(level + 1),
-            target_output: self.output.range_mut(leaves.clone()),
+            target_output: target_output.range_mut(leaves.clone()),
             ..batch
         });
         self.send_output(&leaves);
@@ -3455,11 +3541,20 @@ impl<T: DeviceScalar> FmmOperator for DeviceOperator<T> {
             return;
         }
         self.host.p2p(P2p {
-            target_output: self.output.range_mut(leaves.clone()),
+            target_output: output_mirror(&mut self.mirrors).range_mut(leaves.clone()),
             ..batch
         });
         self.send_output(&leaves);
     }
+}
+
+/// The target-output mirror of host-fallback calls, which exists with L2P, M2P or P2P on
+/// the host, the only kinds that call for it.
+fn output_mirror<T>(mirrors: &mut Option<Mirrors<T>>) -> &mut LeafStore<T> {
+    mirrors
+        .as_mut()
+        .and_then(|m| m.target_output.as_mut())
+        .expect(MIRRORS)
 }
 
 /// What [`Fmm`](crate::fmm::Fmm) needs of a device operator, for either precision: the
@@ -3473,7 +3568,7 @@ pub(crate) trait DeviceDriver<T: SimdScalar>: FmmOperator<Value = T> + Send {
         sources: &LeafStore<T>,
         target_input: &LeafStore<T>,
     ) -> Result<(), FmmError>;
-    fn begin_evaluation(&mut self, charges: &[T]);
+    fn begin_evaluation(&mut self, charges: Vec<T>);
     fn open_stage(&mut self);
     fn close_stage(&mut self, stage: DeviceStage);
     fn stage_timings(&self) -> Option<DeviceStageTimings>;
@@ -3502,7 +3597,7 @@ impl<T: DeviceScalar> DeviceDriver<T> for DeviceOperator<T> {
     ) -> Result<(), FmmError> {
         DeviceOperator::load_points(self, sources, target_input)
     }
-    fn begin_evaluation(&mut self, charges: &[T]) {
+    fn begin_evaluation(&mut self, charges: Vec<T>) {
         DeviceOperator::begin_evaluation(self, charges);
     }
     fn open_stage(&mut self) {

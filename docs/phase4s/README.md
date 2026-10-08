@@ -482,11 +482,22 @@ Each is recorded in the exit checklist when made:
     device operator's host output buffer goes away; whether `Device::write` gains an
     owned variant. Recommended: yes to the view if T11's spike shows the copy to be a
     material part of the download, with the API proposed in the spike's report.
-    *Open; signed off with `spikes/download-path/REPORT.md`.*
+    **Decided on 2026-10-08: as recommended** (spikes/download-path/REPORT.md, "Proposal
+    for decision 14"): `Device::download_view` returning a `HostValues` guard over
+    CubeCL's downloaded bytes; the device operator's host output buffer moves into the
+    host-fallback mirrors; `Device::write_owned` for the charges. As built, `HostValues<E>`
+    owns the bytes without borrowing the `Device` (a borrow defeats the operator's
+    counting and error bookkeeping in safe code); `nd-fmm-exec`'s `DeviceOutput` borrows the
+    operator instead, so no view outlives its evaluation. The spike measured the
+    serial copy at 93–97% of `Device::download` on CUDA and `to_vec` at about half of
+    `Device::write` at 40–80 MB.
 15. **CubeCL's host pools** (T11). If the spike shows CubeCL's pinned (CUDA) or staging
     (wgpu) pool allocating again in steady state: change it only through CubeCL's
     public API at the pinned version, or write the upstream question and change nothing.
-    *Open; only if the spike shows the need.*
+    **Decided on 2026-10-08: not needed.** Neither pool allocates again in steady state
+    (`nsys`: one `cuMemAllocHost` per growth, none per later download), and
+    `memory_persistent_allocation` does not reach the host pools. CubeCL is not changed;
+    the CUDA staging observation went to docs/design/cubecl-upstream.md.
 
 ## Risks
 
@@ -536,8 +547,8 @@ Before T1 has merged, T1 itself uses `ssh locust` directly, outside the sandbox.
 - [x] T9 merged: the host part of an evaluation, bit for bit; before and after measured; device-path.md §18.4 (the host part on CUDA 2.7–8.3× smaller, evaluations 1.4–3.7× faster at N = 10⁶–10⁷; every output bit unchanged on the host, the CPU runtime, Metal and CUDA)
 - [x] CI triggers and actions (decision 13): pushes to `main`; first-party actions only (T10; decided 2026-10-07)
 - [x] T10 merged: CI with every check, cached installs, one kernel test run, warm caches; times before and after
-- [ ] T11 spike: the download and upload paths measured per step on Metal and CUDA (`spikes/download-path/REPORT.md`)
-- [ ] The download's host memory (decision 14): signed off with the spike's report
-- [ ] CubeCL's host pools (decision 15): signed off, or not needed (the spike)
-- [ ] T11 merged: the copies removed, bit for bit; before and after measured; device-path.md §18.5
-- [x] Design documents updated: laplace-fmm-plan §6.1, §6.2, §7 (Phase 4S), §8.3, §9.1, §9.2; device-path.md §17 note and §18 (§18.3 added); workspace-structure §2, §3, §3.1, §6 (T8); device-path.md §4.1 and §18.4, laplace-fmm-plan §7 (C4S.8, Phase 5 recommendation) (T9)
+- [x] T11 spike: the download and upload paths measured per step on Metal and CUDA (`spikes/download-path/REPORT.md`)
+- [x] The download's host memory (decision 14): a view (`Device::download_view`), the host output buffer removed, `Device::write_owned` (decided 2026-10-08)
+- [x] CubeCL's host pools (decision 15): not needed, no reallocation in steady state (decided 2026-10-08)
+- [ ] T11 merged: the copies removed, bit for bit; before and after measured; device-path.md §18.5 (the download at N = 10⁷ 12.7 → 1.2 ms in f32 and 24.7 → 1.8 ms in f64, the load 6.6 → 3.6 and 13.5 → 7.3 ms, evaluations 1.07–1.40× faster on CUDA; the operator's host output buffer gone; every output bit unchanged on the host, the CPU runtime, Metal and CUDA)
+- [x] Design documents updated: laplace-fmm-plan §6.1, §6.2, §7 (Phase 4S), §8.3, §9.1, §9.2; device-path.md §17 note and §18 (§18.3 added); workspace-structure §2, §3, §3.1, §6 (T8); device-path.md §4.1 and §18.4, laplace-fmm-plan §7 (C4S.8, Phase 5 recommendation) (T9); device-path.md §4.1 and §18.5, laplace-fmm-plan §7 (C4S.10), docs/design/cubecl-upstream.md started (T11)
