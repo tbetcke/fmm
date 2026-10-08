@@ -1,5 +1,7 @@
 //! Device buffers round-trip bit for bit: upload, allocation, writes and downloads of
-//! whole buffers and ranges, for f32, f64 and u32 (README exit gate C4.1).
+//! whole buffers and ranges, for f32, f64 and u32 (README exit gate C4.1); and (Phase 4S
+//! T11) `Device::download_view` equals `download`, and `write_owned` equals `write`, bit
+//! for bit and in their counters.
 
 use nd_fmm_kernels::{Device, DeviceElement};
 
@@ -46,6 +48,113 @@ fn round_trip<E: DeviceElement + Default + std::fmt::Debug>(
     device.write(zeroed.as_slice_mut(), data).unwrap();
     device.download(zeroed.as_slice(), &mut out).unwrap();
     check("alloc, write", &out, data);
+}
+
+/// The sizes of the view and owned-write tests (Phase 4S T11).
+const VIEW_SIZES: [usize; 4] = [0, 1, 7, 100_000];
+
+/// `data` at the odd offset 3 of a larger buffer: `download_view` of that range and of the
+/// whole buffer equals `download` bit for bit, with the same counters (one download of
+/// the range's bytes, one sync); `write_owned` into the range equals `write`, with the same
+/// counters (one upload of the range's bytes).
+fn views_and_owned_writes<E: DeviceElement + Default + std::fmt::Debug>(
+    device: &mut Device,
+    data: &[E],
+    check: &mut impl FnMut(&str, &[E], &[E]),
+) {
+    let n = data.len();
+    let pad = data.first().copied().unwrap_or_default();
+    let mut padded = vec![pad; n + 5];
+    padded[3..3 + n].copy_from_slice(data);
+    let size = size_of::<E>() as u64;
+    let buffer = device.upload(&padded).unwrap();
+    for (what, range) in [("range", 3..3 + n), ("whole buffer", 0..n + 5)] {
+        let mut out = vec![E::default(); range.len()];
+        device.reset_counters();
+        device
+            .download(buffer.slice(range.clone()), &mut out)
+            .unwrap();
+        let by_download = device.counters();
+        device.reset_counters();
+        let view = device.download_view(buffer.slice(range.clone())).unwrap();
+        assert_eq!(view.len(), range.len());
+        let got = view.to_vec();
+        drop(view);
+        let by_view = device.counters();
+        check(&format!("view of the {what}"), &got, &out);
+        check(
+            &format!("download of the {what}"),
+            &out,
+            &padded[range.clone()],
+        );
+        assert_eq!(by_view, by_download, "{what}");
+        assert_eq!(
+            (by_view.downloads, by_view.syncs, by_view.download_bytes),
+            (1, 1, range.len() as u64 * size),
+            "{what}"
+        );
+        assert_eq!((by_view.uploads, by_view.launches), (0, 0), "{what}");
+    }
+
+    let new: Vec<E> = data.iter().rev().copied().collect();
+    let mut want = padded.clone();
+    want[3..3 + n].copy_from_slice(&new);
+    let mut written = device.upload(&padded).unwrap();
+    let mut owned = device.upload(&padded).unwrap();
+    device.reset_counters();
+    device.write(written.slice_mut(3..3 + n), &new).unwrap();
+    let by_write = device.counters();
+    device.reset_counters();
+    device
+        .write_owned(owned.slice_mut(3..3 + n), new.clone())
+        .unwrap();
+    let by_owned = device.counters();
+    assert_eq!(by_owned, by_write);
+    assert_eq!(
+        (by_owned.uploads, by_owned.upload_bytes, by_owned.syncs),
+        (1, n as u64 * size, 0)
+    );
+    let mut out = vec![E::default(); n + 5];
+    let mut out_owned = vec![E::default(); n + 5];
+    device.download(written.as_slice(), &mut out).unwrap();
+    device.download(owned.as_slice(), &mut out_owned).unwrap();
+    check("write into a range", &out, &want);
+    check("write_owned into a range", &out_owned, &want);
+}
+
+fn views_float<T: TestFloat>(device: &mut Device) {
+    let mut payloads = true;
+    for n in VIEW_SIZES {
+        for data in float_patterns::<T>(n, 29 + n as u64) {
+            views_and_owned_writes(device, &data, &mut |what, got, want| {
+                payloads &= assert_bits(&format!("n = {n}: {what}"), got, want);
+            });
+        }
+    }
+    println!(
+        "  {}: download_view = download and write_owned = write, bit for bit and in their \
+         counters, sizes {VIEW_SIZES:?} at offset 3 and whole; NaN payloads {}",
+        std::any::type_name::<T>(),
+        if payloads { "kept" } else { "NOT kept" }
+    );
+}
+
+fn views_f32(device: &mut Device) {
+    views_float::<f32>(device);
+}
+
+fn views_f64(device: &mut Device) {
+    views_float::<f64>(device);
+}
+
+fn views_u32(device: &mut Device) {
+    for n in VIEW_SIZES {
+        let data = Rng::new(41 + n as u64).u32s(n);
+        views_and_owned_writes(device, &data, &mut |what, got, want| {
+            assert_eq!(got, want, "n = {n}: {what}");
+        });
+    }
+    println!("  u32: download_view = download and write_owned = write, sizes {VIEW_SIZES:?}");
 }
 
 /// Float data of length n: the special values cycled, then any bit pattern.
@@ -148,6 +257,9 @@ tests_on!(
     cpu: round_trip_f32,
     round_trip_f64,
     round_trip_u32,
+    views_f32,
+    views_f64,
+    views_u32,
     round_trip_large_f32,
     round_trip_large_f64,
     round_trip_large_u32,
@@ -156,6 +268,8 @@ tests_on!(
 tests_on!(
     metal: round_trip_f32,
     round_trip_u32,
+    views_f32,
+    views_u32,
     round_trip_large_f32,
     round_trip_large_u32,
     widened_indices,
@@ -164,6 +278,9 @@ tests_on!(
     cuda: round_trip_f32,
     round_trip_f64,
     round_trip_u32,
+    views_f32,
+    views_f64,
+    views_u32,
     round_trip_large_f32,
     round_trip_large_f64,
     round_trip_large_u32,

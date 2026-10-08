@@ -8,7 +8,8 @@ translations M2M and L2L (`translate`, T8), dense M2L (`translate`, T9) and rota
 (`rotation`, T10) (docs/design/device-path.md §3.1), and (Phase 4S T9) the output pass of
 `nd-fmm-exec` on the device (`movement::gather_output`).
 Phase and components: Phase 4, C4.1 (T4, T5), C4.2–C4.6 (T6–T10) and the timing windows
-of C4.8 (T11) in docs/phase4/; Phase 4S, C4S.8 (T9) in docs/phase4s/.
+of C4.8 (T11) in docs/phase4/; Phase 4S, C4S.8 (T9) and C4S.10 (T11: transfers without a
+host copy) in docs/phase4s/.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -16,6 +17,25 @@ of C4.8 (T11) in docs/phase4/; Phase 4S, C4S.8 (T9) in docs/phase4s/.
 - Views (`view`, T5): uploaded from plain `u32` arrays in the layout of the plan's
   `Csr` and `GroupedCsr` (no `nd-fmm-plan` dependency), validated on the host, one
   `IndexBuffer` per array (its bound covers the whole buffer); a malformed view panics.
+- Transfers without a host copy (Phase 4S T11, C4S.10, decision 14;
+  spikes/download-path/REPORT.md): `Device::download_view(slice)` returns a
+  `HostValues<E>` that owns CubeCL's host buffer of the download (pinned memory from
+  CUDA's pool, a mapped staging buffer on wgpu) and derefs to `&[E]` through
+  `CubeElement::from_bytes` (no `unsafe`); it counts one download and one sync and has
+  `download`'s checks and errors (a launch error surfaces at it, device-path.md §12).
+  `download` is the copy of a view. `Device::write_owned(slice, Vec<E>)` hands the `Vec`
+  to `Bytes::from_elems` without the copy `write` makes (`write` is `write_owned` of a
+  `to_vec`), with `write`'s counters and checks. Drop a view before the next download:
+  held across one, it makes CubeCL's host pool keep a second buffer. Tests: the view
+  equals `download` and `write_owned` equals `write` bit for bit and in their counters
+  (`tests/kernels/round_trip.rs`: f32, f64 and u32, 0, 1, 7 and 10⁵ values at an odd
+  offset and whole), the refusals of a foreign buffer (`capability.rs`), and a launch
+  error at both (the unit tests of `device`: a plane sum on the CPU runtime, which does
+  not lower it, and a cube larger than the device allows on Metal and CUDA). With
+  CubeCL's profiling log on (`CUBECL_DEBUG_LOG`, as in the CPU-runtime CI job), CubeCL
+  profiles every launch and a failed launch panics in the launch itself, by design
+  (cubecl-runtime `Client::launch_inner`); the error is still attached to the buffer, and
+  the test accepts that panic and no other.
 - The output gather (Phase 4S T9, `movement::gather_output`, device-path.md §18.4): φ and
   ∇φ in the caller's order from the leaf-ordered target output, each value converted to
   f64, divided by its leaf's f64 scale and rounded once to T (`F::cast_from(f64::cast_from(x)

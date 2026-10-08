@@ -101,8 +101,22 @@ fn refuses_foreign_buffers(device: &mut Device) {
         Err(KernelError::WrongDevice)
     );
     assert_eq!(
+        other.download_view(buffer.as_slice()).unwrap_err(),
+        KernelError::WrongDevice
+    );
+    assert_eq!(
         other.write(buffer.as_slice_mut(), &[0.0, 0.0]),
         Err(KernelError::WrongDevice)
+    );
+    assert_eq!(
+        other.write_owned(buffer.as_slice_mut(), vec![0.0, 0.0]),
+        Err(KernelError::WrongDevice)
+    );
+    let c = other.counters();
+    assert_eq!(
+        (c.downloads, c.uploads, c.syncs),
+        (0, 0, 0),
+        "refusals count nothing"
     );
     assert_eq!(
         nd_fmm_kernels::movement::zero(&mut other, buffer.as_slice_mut()),

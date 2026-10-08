@@ -2913,6 +2913,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nd-fmm-spike-download-path"
+version = "0.0.0"
+dependencies = [
+ "cubecl",
+ "nd-fmm-kernels",
+ "nd-fmm-validate",
+ "rayon",
+]
+
+[[package]]
 name = "nd-fmm-spike-p2p-simd"
 version = "0.0.0"
 dependencies = [
