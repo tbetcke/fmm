@@ -224,3 +224,91 @@ jobs:
 
       - name: Kernel compilation measurement (CubeCL profiling log of the test run)
         run: awk -f fmm-kernels/tools/compile_times.awk "$RUNNER_TEMP/cubecl.log"
+
+  # The MPI-owning test executables and the nd-octree MPI examples at 2 and 4 ranks
+  # (Phase 5 T3; README decision 4). Debug builds, correctness only, never timings; no
+  # ignored or release tests, never more than 4 ranks. .github/scripts/run-mpi-tests.sh
+  # builds them without running them, takes their paths from cargo's JSON output, and
+  # runs each under `timeout` (RUN_TIMEOUT seconds per launch), the tests with
+  # --test-threads=1 --nocapture. A failure on one rank can leave the others blocked in
+  # a collective: the per-launch timeout ends that launch, and the step and job
+  # timeouts bound the rest. The runner has 4 vCPUs on 2 cores and Open MPI gives one
+  # slot per core, so the ranks oversubscribe (as in run-examples). No interface flags:
+  # the ranks talk over shared memory on the one node.
+  run-tests-mpi:
+    name: run-tests-mpi (2 and 4 ranks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      APT_PACKAGES: libclang-dev cmake libfftw3-dev libopenblas-dev openmpi-bin libopenmpi-dev
+      RUST_MIN_STACK: "8388608"
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+      RUN_TIMEOUT: "300"
+    steps:
+      - name: Install Rust
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/checkout@v6
+
+      - name: Cache the cargo registry and the target directory
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: run-tests-mpi-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: run-tests-mpi-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-
+
+      - name: Package cache key (runner image and package list)
+        id: apt-key
+        run: echo "key=apt-$ImageOS-$ImageVersion-${{ runner.arch }}-$(echo "$APT_PACKAGES" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the downloaded packages
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-archives
+          key: ${{ steps.apt-key.outputs.key }}
+
+      - name: Install libclang, CMake, FFTW, BLAS and MPI
+        id: apt
+        timeout-minutes: 5
+        run: .github/scripts/apt-install.sh ~/apt-archives $APT_PACKAGES
+
+      - name: Explain a failed package install
+        if: failure() && steps.apt.outcome == 'failure'
+        run: echo "::error title=Package install failed::apt-get failed or timed out (5 minutes), most likely on a slow or failing Ubuntu mirror. Re-run the failed jobs."
+
+      # What Open MPI makes of the runner: 4 ranks without oversubscription show whether
+      # it refuses them for lack of slots (reported, never failing the step).
+      - name: CPU, cores and MPI
+        run: |
+          lscpu
+          echo "nproc: $(nproc)"
+          echo "ptrace_scope: $(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo n/a)"
+          mpirun --version
+          rustc --version
+          echo "4 ranks without oversubscription:"
+          timeout 60 mpirun -n 4 true && echo "  accepted" || echo "  refused (exit $?)"
+
+      - name: Build the MPI test executables and examples (debug)
+        id: build
+        timeout-minutes: 20
+        run: .github/scripts/run-mpi-tests.sh build "$RUNNER_TEMP/mpi-executables.txt"
+
+      - name: Run at 2 ranks
+        timeout-minutes: 15
+        env:
+          OMPI_MCA_rmaps_base_oversubscribe: "1"
+        run: .github/scripts/run-mpi-tests.sh run "$RUNNER_TEMP/mpi-executables.txt" 2
+
+      # Also after a failure at 2 ranks, so that one run shows both counts.
+      - name: Run at 4 ranks
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 15
+        env:
+          OMPI_MCA_rmaps_base_oversubscribe: "1"
+        run: .github/scripts/run-mpi-tests.sh run "$RUNNER_TEMP/mpi-executables.txt" 4

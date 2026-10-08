@@ -71,6 +71,12 @@ place, the charges uploaded without a copy).
     through `evaluate_every_kernel`, which also repeats them with `Reference` and every
     available ISA and compares each ISA with `Reference`. It roughly triples the cost
     of a scenario, so it runs on the small ones only (debug run under a minute).
+  - CI runs `tests/mpi_exec.rs` and `tests/mpi_threading.rs` in debug at 2 and 4 ranks
+    on every pull request (the `run-tests-mpi` job, root `CLAUDE.md`, "Checks";
+    `mpi_threading` checks there that its `MpiThreading` error, carried by step 1's
+    agreement all-reduce, reaches every rank). 8 ranks and the ignored tests
+    (`accuracy`, `adaptive`, the device executables) stay by hand, on the M3 Max and on
+    locust, under an external timeout.
   - Operator and geometry tests do not initialise MPI.
   - Every error that depends on one rank's input is agreed by all ranks before the
     next collective.

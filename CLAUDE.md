@@ -119,10 +119,26 @@ cargo test -p nd-fmm-kernels --features cpu --release -- --show-output
 
 Its one test run (since Phase 4S T10) sets `CUBECL_DEBUG_LOG`, and the next step prints
 the kernel compile times from that log with `fmm-kernels/tools/compile_times.awk`.
-`run-tests` and `run-tests-kernels` cache cargo (keyed on the rustc version and
-`Cargo.lock`, with a prefix fallback) and the `.deb` files of their packages (keyed on the
-runner image and the package list; `.github/scripts/apt-install.sh` installs them offline
-on a hit). Every job has a `timeout-minutes`, and so has each package install; a failed
+A fourth job, `run-tests-mpi` (Phase 5 T3; README decision 4), runs the MPI test
+executables and the nd-octree MPI examples at 2 and at 4 ranks on `ubuntu-latest`, for
+correctness only, never timings, never ignored or release tests and never more than 4
+ranks. `.github/scripts/run-mpi-tests.sh` builds them in debug without running them
+(`cargo test -p … --test … --no-run`, `cargo build -p nd-octree --example …`), takes
+their paths from cargo's `--message-format=json` output, and launches each under
+`timeout` (300 s), the tests with `--test-threads=1 --nocapture`, with
+`RUST_MIN_STACK=8388608` and the BLAS thread variables at 1; the run steps have their own
+`timeout-minutes`. It covers `nd-fmm-plan`'s `mpi_regressions`, `nd-fmm-exec`'s
+`mpi_exec` and `mpi_threading`, and the five registered nd-octree examples. The runner's
+4 vCPUs are 2 cores, so the ranks oversubscribe (`OMPI_MCA_rmaps_base_oversubscribe=1`);
+it needs no interface flags. By hand, the same script runs a list at any rank count
+(`run-mpi-tests.sh build <list>`, then `run-mpi-tests.sh run <list> 2 4`, on macOS with
+`MPIRUN_FLAGS` set to the loopback flags below).
+
+`run-tests`, `run-tests-kernels` and `run-tests-mpi` cache cargo (keyed on the job, the
+rustc version and `Cargo.lock`, with a prefix fallback); `run-tests` and `run-tests-mpi`
+also cache the `.deb` files of their packages (keyed on the runner image and the package
+list, which the two share; `.github/scripts/apt-install.sh` installs them offline on a
+hit). Every job has a `timeout-minutes`, and so has each package install; a failed
 install is a mirror problem, and its error says to re-run.
 
 nd-fmm-kernels is a workspace member, not a default member: the default and
@@ -186,9 +202,13 @@ runs `cargo upgrades` (not `cargo audit`).
   re-initialised after finalisation in one process. Add scenarios to the existing
   MPI-owning test, or move them to `tests/` or `examples/`.
 - Doctests that initialise MPI are marked `no_run`.
-- CI never runs anything on more than one rank. For changes to distributed code, run
-  multi-rank by hand, and always under an external timeout: an assertion on one rank
-  leaves the others blocked in a collective.
+- CI runs the MPI test executables and the nd-octree MPI examples at 2 and 4 ranks on
+  every pull request (`run-tests-mpi`, correctness only), and the registered examples
+  weekly at 3; everything else in CI runs on one rank. For changes to distributed code,
+  still run multi-rank by hand (8 ranks and the ignored tests run only by hand, on the
+  M3 Max and on locust), and always under an external timeout: an assertion on one rank
+  leaves the others blocked in a collective. Write a multi-rank test to fail on every
+  rank or on none.
 - On macOS, plain `mpiexec`/`mpirun -n 2 …` hangs or aborts because Open MPI picks a
   non-loopback interface. Add `--mca btl_tcp_if_include lo0 --mca oob_tcp_if_include lo0`.
   This is environmental, not a bug to chase.

@@ -118,6 +118,11 @@ interesting bugs are.
 
 ### Multi-rank runs
 
+CI runs `mpi_regressions` in debug at 2 and 4 ranks on every pull request (the
+`run-tests-mpi` job, root `CLAUDE.md`, "Checks"). 8 ranks and any ignored test stay by
+hand, on the M3 Max and on locust (tools/gh200/README.md, "MPI at n ranks"), and so does
+the run before you push.
+
 For any change touching the plan, the lists, the exchanges or the evaluator (whose
 ghost-dependent and global-level paths only exist on more than one rank), build the
 test binary and launch it under MPI, under an external timeout:
