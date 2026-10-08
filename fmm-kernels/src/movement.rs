@@ -1,12 +1,16 @@
 //! Data movement kernels: zeroing, gathering and scattering columns, and scattering
-//! values by index (fmm-plan-redesign §10, the GEMM check of §6.4; device-path.md §3.1).
+//! values by index (fmm-plan-redesign §10, the GEMM check of §6.4; device-path.md §3.1),
+//! and (Phase 4S T9) the output pass of `nd-fmm-exec`, [`gather_output`], which gathers
+//! the leaf-ordered target output into the caller's order and scales it, in f64 on a
+//! device with f64 arithmetic.
 //!
 //! Each function is a safe launch wrapper over one `#[cube]` kernel, generic over the
 //! element type. It checks its arguments on the host (lengths, the owning device, the
 //! index bound of [`IndexSlice::bound`], distinct indices in debug builds), so the
 //! kernel launches without bounds checks, and it allocates nothing. A call with nothing
 //! to do launches nothing. Every operation is a copy, except the single add per
-//! element of [`scatter_add_columns`]; the results equal plain host loops bit for bit
+//! element of [`scatter_add_columns`] and the f64 division and rounding of
+//! [`gather_output`]; the results equal plain host loops bit for bit
 //! on every backend (spikes/device-arith/REPORT.md, "Recommendation", rule 6), where the
 //! scatter-add's operands and sum are normal (Metal flushes subnormal sums,
 //! CONVENTIONS §3.13, "Device kernels").
@@ -16,8 +20,10 @@
 
 use cubecl::prelude::*;
 
-use crate::buffer::{DeviceElement, DeviceFloat, DeviceSlice, DeviceSliceMut, IndexSlice};
-use crate::device::Device;
+use crate::buffer::{
+    DeviceBuffer, DeviceElement, DeviceFloat, DeviceSlice, DeviceSliceMut, IndexBuffer, IndexSlice,
+};
+use crate::device::{Device, Precision};
 use crate::error::KernelError;
 
 /// x[offset..offset + len] = 0, in blocks of `chunk` elements per unit and stride.
@@ -172,6 +178,249 @@ fn scatter_values_kernel<E: Numeric>(
         }
         start += stride;
     }
+}
+
+/// The caller-ordered output of [`gather_output`]: for every target i < `work`, with
+/// j = leaves[i], P = offsets[j] and k = points[i] − P, out[i] = F(f64(store[o P + k]) /
+/// scales[2 j]), and with gradients (o = 4, n = offsets[j + 1] − P) out[work + 3 i + c] =
+/// F(f64(store[4 P + n + 3 k + c]) / scales[2 j + 1]) for c < 3. One f64 division and
+/// one rounding to F per value.
+#[cube(launch_unchecked)]
+#[allow(clippy::too_many_arguments)]
+fn gather_output_kernel<F: Float>(
+    store: &[F],
+    store_offset: u32,
+    offsets: &[u32],
+    points: &[u32],
+    leaves: &[u32],
+    scales: &[f64],
+    out: &mut [F],
+    out_offset: u32,
+    work: u32,
+    chunk: u32,
+    threads: u32,
+    #[comptime] gradients: bool,
+) {
+    let (store_offset, out_offset) = (store_offset as usize, out_offset as usize);
+    let (work, chunk) = (work as usize, chunk as usize);
+    let stride = threads as usize * chunk;
+    let mut start = ABSOLUTE_POS * chunk;
+    while start < work {
+        let mut end = start + chunk;
+        if end > work {
+            end = work;
+        }
+        for i in start..end {
+            let j = leaves[i] as usize;
+            let first = offsets[j] as usize;
+            let k = points[i] as usize - first;
+            if gradients {
+                let count = offsets[j + 1] as usize - first;
+                let base = store_offset + 4 * first;
+                out[out_offset + i] = F::cast_from(f64::cast_from(store[base + k]) / scales[2 * j]);
+                let g = base + count + 3 * k;
+                let scale = scales[2 * j + 1];
+                let o = out_offset + work + 3 * i;
+                out[o] = F::cast_from(f64::cast_from(store[g]) / scale);
+                out[o + 1] = F::cast_from(f64::cast_from(store[g + 1]) / scale);
+                out[o + 2] = F::cast_from(f64::cast_from(store[g + 2]) / scale);
+            } else {
+                out[out_offset + i] =
+                    F::cast_from(f64::cast_from(store[store_offset + first + k]) / scales[2 * j]);
+            }
+        }
+        start += stride;
+    }
+}
+
+/// Where every target's output lies in a leaf-ordered target output, and the scales
+/// of its leaf: the input of [`gather_output`] (Phase 4S T9), uploaded once per FMM.
+///
+/// For every target in the caller's order, its point in leaf order (u32) and its leaf
+/// (u32); for every leaf, its point offsets (u32, as [`PointOffsets`](crate::view::PointOffsets)
+/// holds them) and its two scales in f64. Validated at upload, so that
+/// [`gather_output`] reads every target's values without a bounds check: the offsets
+/// start at 0 and never decrease, every leaf index is below the number of leaves, and
+/// every target's point lies within its leaf.
+#[derive(Debug)]
+pub struct OutputOrder {
+    offsets: IndexBuffer,
+    points: IndexBuffer,
+    leaves: IndexBuffer,
+    scales: DeviceBuffer<f64>,
+    total: usize,
+}
+
+impl OutputOrder {
+    /// Validates the arrays on the host and uploads them (four uploads): `offsets`, one
+    /// more than the leaves, the point offsets of the leaf-ordered store (CSR, from 0);
+    /// `points[i]` and `leaves[i]`, target i's point in leaf order and its leaf; and
+    /// `scales`, two per leaf (`[2 j]` divides φ, `[2 j + 1]` ∇φ). The targets need not
+    /// be every point, nor distinct.
+    ///
+    /// # Errors
+    ///
+    /// [`KernelError::UnsupportedPrecision`] on a device without f64 arithmetic (Metal),
+    /// before anything is uploaded; otherwise as [`Device::upload`].
+    ///
+    /// # Panics
+    ///
+    /// If `offsets` is empty, does not start at 0 or decreases; if `points` and `leaves`
+    /// differ in length or `scales` does not hold two values per leaf; if a leaf index is
+    /// not below the number of leaves, or a point does not lie within its leaf.
+    pub fn upload(
+        device: &mut Device,
+        offsets: &[u32],
+        points: &[u32],
+        leaves: &[u32],
+        scales: &[f64],
+    ) -> Result<Self, KernelError> {
+        device.require(Precision::F64)?;
+        assert!(
+            offsets.first() == Some(&0) && offsets.windows(2).all(|w| w[0] <= w[1]),
+            "OutputOrder: the offsets must start at 0 and never decrease"
+        );
+        let nleaves = offsets.len() - 1;
+        assert_eq!(
+            points.len(),
+            leaves.len(),
+            "OutputOrder: one leaf per target"
+        );
+        assert_eq!(
+            scales.len(),
+            2 * nleaves,
+            "OutputOrder: two scales per leaf"
+        );
+        for (i, (&s, &j)) in points.iter().zip(leaves).enumerate() {
+            let j = j as usize;
+            assert!(
+                j < nleaves && offsets[j] <= s && s < offsets[j + 1],
+                "OutputOrder: target {i} at point {s} does not lie in its leaf {j}"
+            );
+        }
+        Ok(Self {
+            offsets: device.upload_indices(offsets)?,
+            points: device.upload_indices(points)?,
+            leaves: device.upload_indices(leaves)?,
+            scales: device.upload(scales)?,
+            total: offsets[nleaves] as usize,
+        })
+    }
+
+    /// The number of targets.
+    pub fn len(&self) -> usize {
+        self.points.len()
+    }
+
+    /// True if there is no target.
+    pub fn is_empty(&self) -> bool {
+        self.points.is_empty()
+    }
+
+    /// The number of leaves.
+    pub fn nleaves(&self) -> usize {
+        self.offsets.len() - 1
+    }
+
+    /// The points of every leaf together: the last offset.
+    pub fn total(&self) -> usize {
+        self.total
+    }
+
+    /// The bytes of the four buffers on the device, for a memory check before uploading:
+    /// `targets` targets and `nleaves` leaves.
+    pub fn bytes(targets: usize, nleaves: usize) -> u64 {
+        Device::buffer_bytes::<u32>(nleaves + 1)
+            + 2 * Device::buffer_bytes::<u32>(targets)
+            + Device::buffer_bytes::<f64>(2 * nleaves)
+    }
+
+    fn device(&self) -> u64 {
+        self.scales.as_slice().device()
+    }
+}
+
+/// The output pass on the device (Phase 4S T9): φ and ∇φ of every target of `order` in
+/// its order, from the leaf-ordered target output `store` (CONVENTIONS §3.13, "Target
+/// input and output": per leaf, the φ̂ of its points, then with `gradients` their ĝ, three
+/// values each), each value divided by its leaf's scale in f64 and rounded once to T:
+/// `out[i] = T(f64(φ̂) / scales[2 j])`, and with `gradients` `out[n + 3 i + c] =
+/// T(f64(ĝ_c) / scales[2 j + 1])` for the n targets. Bit for bit the host loop
+/// `T::from_f64(x.to_f64() / scale)` where the device divides f64 correctly rounded and
+/// rounds to nearest (the CPU runtime and CUDA, device-path.md F27, F33), and subnormal
+/// results are not flushed.
+///
+/// # Errors
+///
+/// [`KernelError::UnsupportedPrecision`] on a device without f64 arithmetic (an
+/// [`OutputOrder`] cannot be uploaded there either); [`KernelError::WrongDevice`] if a
+/// buffer belongs to another device.
+///
+/// # Panics
+///
+/// If `store` does not hold o values per point of `order` (o = 4 with `gradients`, else
+/// 1), or `out` does not hold o values per target.
+pub fn gather_output<T: DeviceFloat>(
+    device: &mut Device,
+    order: &OutputOrder,
+    store: DeviceSlice<'_, T>,
+    gradients: bool,
+    out: DeviceSliceMut<'_, T>,
+) -> Result<(), KernelError> {
+    device.require(Precision::F64)?;
+    check_owners(device, &[order.device(), store.device(), out.device()])?;
+    let o = if gradients { 4 } else { 1 };
+    assert_eq!(
+        store.len(),
+        o * order.total(),
+        "gather_output: a store of {} points of {o} values",
+        order.total()
+    );
+    assert_eq!(
+        out.len(),
+        o * order.len(),
+        "gather_output: an output of {} targets of {o} values",
+        order.len()
+    );
+    if order.is_empty() {
+        return Ok(());
+    }
+    let grid = device.elementwise_grid(order.len());
+    let (sh, sl) = store.binding();
+    let (oh, ol) = order.offsets.as_slice().binding();
+    let (ph, pl) = order.points.as_slice().binding();
+    let (lh, ll) = order.leaves.as_slice().binding();
+    let (ch, cl) = order.scales.as_slice().binding();
+    let (yh, yl) = out.binding();
+    // SAFETY: each handle is a whole buffer with its element count, as `from_raw_parts`
+    // requires. For i < order.len() the kernel reads points[i] and leaves[i] (within
+    // their buffers); `OutputOrder::upload` checked j = leaves[i] < nleaves and
+    // offsets[j] ≤ points[i] < offsets[j + 1], so offsets[j], offsets[j + 1] and
+    // scales[2 j + 1] lie within their buffers, and the store index o P + k (and with
+    // gradients 4 P + n + 3 k + 2 < 4 offsets[j + 1]) is below o total = store.len(),
+    // offset by store.offset() within the store's buffer. The writes out.offset() + i and
+    // out.offset() + n + 3 i + 2 are below out.offset() + o n = the end of `out`.
+    unsafe {
+        gather_output_kernel::launch_unchecked::<T>(
+            device.client(),
+            CubeCount::Static(grid.cubes, 1, 1),
+            CubeDim::new_1d(grid.units),
+            BufferArg::from_raw_parts(sh, sl),
+            store.offset() as u32,
+            BufferArg::from_raw_parts(oh, ol),
+            BufferArg::from_raw_parts(ph, pl),
+            BufferArg::from_raw_parts(lh, ll),
+            BufferArg::from_raw_parts(ch, cl),
+            BufferArg::from_raw_parts(yh, yl),
+            out.offset() as u32,
+            order.len() as u32,
+            grid.chunk,
+            grid.threads(),
+            gradients,
+        );
+    }
+    device.count_launch();
+    Ok(())
 }
 
 /// Sets every element of `slice` to zero: +0.0 for floats (the bit pattern 0).

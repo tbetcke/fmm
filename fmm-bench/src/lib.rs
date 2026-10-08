@@ -31,14 +31,16 @@
 //! 2. **Warm up** with `--warmup` evaluations, which compile the device kernels and are
 //!    not counted.
 //! 3. **Time** `--repeats` evaluations with kind timings off: the wall time of
-//!    `Fmm::evaluate`, as min, median, mean, max and sample standard deviation. Every
+//!    `Fmm::evaluate` (with `--reuse-output`, of `Fmm::evaluate_into` into one reused
+//!    `Output`; Phase 4S T9), as min, median, mean, max and sample standard deviation. Every
 //!    output is compared bit for bit with the first; a difference flags the row
 //!    ("bit-identical: **no**") rather than aborting.
 //! 4. **Per kind**, unless `--kinds off`: a second `Fmm` with
 //!    `FmmBuilder::kind_timings` (`sync` = `KindTiming::Synchronous`, `device` =
 //!    `KindTiming::Device`), its own warm-up and `--repeats` evaluations; per kind the
 //!    min, mean and max of its per-evaluation total, its share and calls, the remainder
-//!    of the stages ("other") and the sum against step 3's mean.
+//!    of the stages split into the charge load, the output pass and the rest ("load",
+//!    "output", "other"; Phase 4S T9) and the sum against step 3's mean.
 //! 5. **Accuracy**: the relative L2 error of φ and ∇φ of the first timed evaluation at
 //!    `--accuracy` sampled targets against the f64 direct sum
 //!    (`nd_fmm_validate::fmm_accuracy::Oracle`). A sanity column, not a gate.

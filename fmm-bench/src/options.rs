@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use nd_fmm_exec::fmm::{Backend, DEFAULT_MAX_LEVEL, KindTiming, MAX_DEGREE};
+use nd_fmm_exec::fmm::{Backend, DEFAULT_MAX_LEVEL, KindTiming, MAX_DEGREE, OutputPass};
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_validate::calibration::Precision;
 
@@ -38,9 +38,9 @@ pub const QUICK_REPEATS: usize = 2;
 pub const USAGE: &str = "usage: nd-fmm-bench [--n N,...] [--precision f32|f64,...] \
 [--degree p,...] [--backend host|cpu|metal|cuda,...] [--threads n] \
 [--strategy auto|dense|classes|rotation] [--repeats r] [--warmup w] \
-[--kinds sync|device|off] [--accuracy TARGETS|off] [--no-gradients] [--leaf-size n] \
-[--max-level l] [--table-cache DIR] [--tuning-cache DIR] [--output FILE.md] [--quick] \
-[--help]";
+[--kinds sync|device|off] [--accuracy TARGETS|off] [--no-gradients] [--reuse-output] \
+[--output-pass auto|host|device] [--leaf-size n] [--max-level l] [--table-cache DIR] [--tuning-cache DIR] [--output FILE.md] \
+[--quick] [--help]";
 
 /// The text of `--help`.
 pub const HELP: &str = "\
@@ -60,6 +60,10 @@ option takes one value or a comma-separated list; the run is their Cartesian pro
   --kinds sync|device|off  per-kind timing mode (default sync)
   --accuracy TARGETS|off   sampled targets of the error columns (default 1000)
   --no-gradients           potentials only (gradients are on by default)
+  --reuse-output           evaluate into one reused output (Fmm::evaluate_into) rather
+                           than a fresh one per evaluation (Fmm::evaluate, the default)
+  --output-pass P          auto, host or device: where the output pass runs (default
+                           auto: on the device where it does f64 arithmetic)
   --leaf-size n            refinement target, points per leaf (default: the library's, 64)
   --max-level l            deepest leaf level, 0 to 16 (default: the library's, 16)
   --table-cache DIR        load and store the operator tables there (default: none)
@@ -98,6 +102,11 @@ pub struct Options {
     pub accuracy: Option<usize>,
     /// Whether the FMM computes gradients.
     pub gradients: bool,
+    /// Whether the evaluations go through `Fmm::evaluate_into` with one `Output` reused
+    /// (`--reuse-output`, Phase 4S T9) rather than `Fmm::evaluate`, the default.
+    pub reuse_output: bool,
+    /// Where the output pass runs (`FmmBuilder::output_pass`, Phase 4S T9).
+    pub output_pass: OutputPass,
     /// The refinement target (`FmmBuilder::max_points_per_leaf`); `None` for the
     /// library's default.
     pub leaf_size: Option<usize>,
@@ -131,6 +140,8 @@ impl Default for Options {
             kinds: KindTiming::Synchronous,
             accuracy: Some(DEFAULT_ACCURACY_TARGETS),
             gradients: true,
+            reuse_output: false,
+            output_pass: OutputPass::Auto,
             leaf_size: None,
             max_level: None,
             table_cache: None,
@@ -216,14 +227,14 @@ pub fn parse<S: AsRef<str>>(args: &[S]) -> Result<Command, String> {
         }
         match name {
             "--help" | "-h" => return Ok(Command::Help),
-            "--quick" | "--no-gradients" => {
+            "--quick" | "--no-gradients" | "--reuse-output" => {
                 if inline.is_some() {
                     return Err(format!("`{name}` takes no value"));
                 }
-                if name == "--quick" {
-                    options.quick = true;
-                } else {
-                    options.gradients = false;
+                match name {
+                    "--quick" => options.quick = true,
+                    "--no-gradients" => options.gradients = false,
+                    _ => options.reuse_output = true,
                 }
                 continue;
             }
@@ -260,6 +271,7 @@ pub fn parse<S: AsRef<str>>(args: &[S]) -> Result<Command, String> {
             "--repeats" => repeats = Some(positive(value).map_err(|e| at(&e))?),
             "--warmup" => options.warmup = count(value).map_err(|e| at(&e))?,
             "--kinds" => options.kinds = kinds(value).map_err(|e| at(&e))?,
+            "--output-pass" => options.output_pass = output_pass(value).map_err(|e| at(&e))?,
             "--accuracy" => {
                 options.accuracy = match value {
                     "off" => None,
@@ -371,6 +383,27 @@ fn kinds(s: &str) -> Result<KindTiming, String> {
     }
 }
 
+/// `auto`, `host` or `device`.
+fn output_pass(s: &str) -> Result<OutputPass, String> {
+    match s {
+        "auto" => Ok(OutputPass::Auto),
+        "host" => Ok(OutputPass::Host),
+        "device" => Ok(OutputPass::Device),
+        _ => Err(format!(
+            "`{s}` is not an output pass; expected `auto`, `host` or `device`"
+        )),
+    }
+}
+
+/// The name of an [`OutputPass`] on the command line: `auto`, `host` or `device`.
+pub fn output_pass_name(pass: OutputPass) -> &'static str {
+    match pass {
+        OutputPass::Auto => "auto",
+        OutputPass::Host => "host",
+        OutputPass::Device => "device",
+    }
+}
+
 /// A non-empty path.
 fn path(s: &str) -> Result<PathBuf, String> {
     if s.is_empty() {
@@ -431,7 +464,7 @@ mod tests {
         assert_eq!((options.repeats, options.warmup), (10, 2));
         assert_eq!(options.kinds, KindTiming::Synchronous);
         assert_eq!(options.accuracy, Some(1000));
-        assert!(options.gradients && !options.quick);
+        assert!(options.gradients && !options.quick && !options.reuse_output);
         assert_eq!((options.leaf_size, options.max_level), (None, None));
         assert_eq!(
             (options.table_cache, options.tuning_cache, options.output),
@@ -463,6 +496,9 @@ mod tests {
             "--accuracy",
             "50",
             "--no-gradients",
+            "--reuse-output",
+            "--output-pass",
+            "host",
             "--leaf-size",
             "32",
             "--max-level",
@@ -488,6 +524,8 @@ mod tests {
                 kinds: KindTiming::Device,
                 accuracy: Some(50),
                 gradients: false,
+                reuse_output: true,
+                output_pass: OutputPass::Host,
                 leaf_size: Some(32),
                 max_level: Some(12),
                 table_cache: Some("tables".into()),
@@ -552,7 +590,16 @@ mod tests {
         assert_eq!(error(&["--n"]), "`--n` needs a value");
         assert_eq!(error(&["--n", "5", "--n", "6"]), "`--n` is given twice");
         assert_eq!(error(&["--quick=yes"]), "`--quick` takes no value");
+        assert_eq!(
+            error(&["--reuse-output=yes"]),
+            "`--reuse-output` takes no value"
+        );
         assert!(error(&["--n", "abc"]).starts_with("`--n abc`: `abc` is not a count"));
+        assert_eq!(
+            error(&["--output-pass", "gpu"]),
+            "`--output-pass gpu`: `gpu` is not an output pass; expected `auto`, `host` or \
+             `device`"
+        );
         assert_eq!(error(&["--n", "0"]), "`--n 0`: N must be at least 1");
         assert_eq!(
             error(&["--n", "10,,20"]),
@@ -650,6 +697,9 @@ mod tests {
             M2lStrategy::Rotation,
         ] {
             assert_eq!(strategy(strategy_name(s)), Ok(s));
+        }
+        for pass in [OutputPass::Auto, OutputPass::Host, OutputPass::Device] {
+            assert_eq!(output_pass(output_pass_name(pass)), Ok(pass));
         }
     }
 }

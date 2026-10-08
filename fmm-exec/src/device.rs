@@ -35,7 +35,9 @@
 //! | multipoles, locals | one buffer each, the `LevelBuffers` layout | never (zeroed by a kernel) | never, but by host-fallback calls |
 //! | source store | the `LeafStore` layout of CONVENTIONS §3.13 | coordinates once at build; the charges every evaluation, scattered into their slots | never |
 //! | target input | the `LeafStore` layout | once at build | never |
-//! | target output | the `LeafStore` layout | never (zeroed) | once per evaluation, and by host-fallback calls |
+//! | target output | the `LeafStore` layout | never (zeroed) | once per evaluation (without the output pass on the device), and by host-fallback calls |
+//! | output order (Phase 4S T9) | with the output pass on the device: every target's point in leaf order and leaf, the leaves' offsets (u32) and scales (f64), [`OutputOrder`] | once at build | never |
+//! | caller-ordered output (Phase 4S T9) | with the output pass on the device: φ, then ∇φ, of every target in the caller's order, o N_t values | never (written by `gather_output`) | once per evaluation, instead of the target output |
 //! | plan views | one index buffer per array ([`DeviceViews`]) | once at build | never |
 //! | geometry | box and leaf indices ([`BoxCoordinates`], [`LeafCoordinates`]) | once at build | never |
 //! | tables | the dense octant tables of M2M and L2L; the dense M2L tables under `Dense`, expanded from the classes under `Classes` (§6.8); the M2L family of the rotation tables under `Rotation` (T10); for a family whose level calls may take the library GEMM, also its library copy (matrices at 256-byte aligned strides) | once at build | never |
@@ -55,7 +57,10 @@
 //! ghost leaf and no ghost box, the condition under which none writes. The points are
 //! uploaded once per build by [`load_points`](DeviceOperator::load_points), from copies
 //! of the evaluator's source store and target input that `build` takes after its step 8.
-//! [`read_output`](DeviceOperator::read_output) downloads the target output once.
+//! [`read_output`](DeviceOperator::read_output) downloads the target output once, or with
+//! the output pass on the device (Phase 4S T9, [`OutputPass`]) first makes φ and ∇φ in the
+//! caller's order on the device (`nd_fmm_kernels::movement::gather_output`, one launch) and
+//! downloads those instead: as many values, so the transfers below do not change.
 //!
 //! **Per evaluation**, with every kind on the device (T11): one upload of N_s s bytes
 //! (the charges), one download of o N_t s bytes (the target output) and one sync (the
@@ -242,6 +247,7 @@
 //! | upward, global pass | on one rank the root's M2M: 3, none if the root is a leaf |
 //! | downward | per level: L2L 3 per chunk (gather, GEMM, scatter-add); M2L 3 c (dense) or 1 (rotation); P2L 1 |
 //! | leaves | per level: L2P 1, M2P 1, P2P 1 |
+//! | `read_output` | with the output pass on the device (Phase 4S T9): the gather, if there is a target |
 //!
 //! A level call whose view has no entry launches nothing. The level calls of dense M2L
 //! are not merged into one GEMM over every level (§6.7 allows it): it would save at most
@@ -391,7 +397,7 @@ use std::time::{Duration, Instant};
 
 use mpi::traits::Equivalence;
 use nd_fmm_kernels::leaf::{LeafLayout, SourceInputs, TargetInputs};
-use nd_fmm_kernels::movement::{scatter_values, zero};
+use nd_fmm_kernels::movement::{OutputOrder, gather_output, scatter_values, zero};
 use nd_fmm_kernels::p2p::{P2pInputs, P2pLayout};
 pub use nd_fmm_kernels::rotation::RotationLayout;
 use nd_fmm_kernels::rotation::{
@@ -428,7 +434,7 @@ use nd_octree::morton;
 
 use crate::fmm::{
     Backend, DeviceGemm, DeviceLeafLayout, DeviceP2pLayout, DeviceStage, DeviceStageTimings,
-    FmmError, OperatorKind, Placement, SettingsError,
+    FmmError, OperatorKind, OutputPass, Placement, SettingsError,
 };
 use crate::operator::{LaplaceOperator, SimdScalar};
 use crate::tables::M2lStrategy;
@@ -504,8 +510,10 @@ pub enum DataKind {
     /// The leaf-scaled source coordinates (with zero charges) and target positions:
     /// once per build.
     Points,
-    /// The plan views, the point offsets of the leaf stores, the charge slots and the
-    /// plans of the device translations (T8, T9): once per build.
+    /// The plan views, the point offsets of the leaf stores, the charge slots, the plans
+    /// of the device translations (T8, T9) and, with the output pass on the device, the
+    /// output order (Phase 4S T9: every target's point and leaf, the leaves' offsets and
+    /// scales): once per build.
     Indices,
     /// The box and leaf indices: once per build.
     Geometry,
@@ -780,6 +788,10 @@ pub struct DeviceReport {
     /// source (the static rule, the cache, or tuned now) and the candidates' times; `None`
     /// only before the points are loaded.
     pub tuning: Option<TuningReport>,
+    /// Where the output pass runs (Phase 4S T9, [`OutputPass`]): on the device
+    /// (`nd_fmm_kernels::movement::gather_output`) where it does f64 arithmetic unless
+    /// `FmmBuilder::output_pass` asks for the host, on the host otherwise.
+    pub output_pass: Placement,
 }
 
 impl DeviceReport {
@@ -889,6 +901,7 @@ impl fmt::Display for DeviceReport {
             writeln!(f, "CPU runtime: at most {units} units per cube")?;
         }
         writeln!(f, "stage timing: {}", self.stage_timing)?;
+        writeln!(f, "output pass: {}", self.output_pass)?;
         if let Some(tuning) = &self.tuning {
             writeln!(f, "{tuning}")?;
         }
@@ -930,6 +943,41 @@ pub struct DeviceOptions {
     /// [`StageTiming::DeviceTimestamps`] falls back to it on a device that does not time on
     /// itself.
     pub stage_timing: StageTiming,
+    /// Where the output pass runs (Phase 4S T9); [`OutputPass::Auto`] by default, on the
+    /// device where it does f64 arithmetic.
+    pub output_pass: OutputPass,
+}
+
+/// The caller's order of the targets, for the output pass on the device (Phase 4S T9,
+/// [`OutputPass`]): every target's point in leaf order and local leaf, in the caller's
+/// order, and two scales per local leaf, 4π r_t and 4π r_t² (CONVENTIONS §3.13,
+/// "Output"), as `Fmm` forms them for its host pass.
+#[derive(Clone, Copy, Debug)]
+pub struct CallerOrder<'a> {
+    /// For every target in the caller's order: its point in leaf order.
+    pub points: &'a [u32],
+    /// For every target in the caller's order: its local leaf.
+    pub leaves: &'a [u32],
+    /// For every local leaf j: `[2 j]` divides φ̂, `[2 j + 1]` ĝ.
+    pub scales: &'a [f64],
+}
+
+/// The output of an evaluation, as [`DeviceOperator::read_output`] downloads it.
+#[derive(Clone, Copy, Debug)]
+pub enum DeviceOutput<'a, T> {
+    /// The target output in the evaluator's layout, unscaled: the host pass follows.
+    LeafOrder(&'a LeafStore<T>),
+    /// With the output pass on the device: φ of every target in the caller's order, then
+    /// three values of ∇φ per target with gradients, scaled.
+    CallerOrder(&'a [T]),
+}
+
+/// The output pass on the device (Phase 4S T9): the output order, uploaded once, and the
+/// buffer of the caller-ordered output, o N_t values.
+#[derive(Debug)]
+struct DevicePass<T: DeviceFloat> {
+    order: OutputOrder,
+    values: DeviceBuffer<T>,
 }
 
 impl DeviceP2pLayout {
@@ -1302,8 +1350,12 @@ pub struct DeviceOperator<T: DeviceScalar> {
     translations: Translations<T>,
     mirrors: Option<Mirrors<T>>,
     /// The target output on the host: the mirror of host-fallback calls, and where
-    /// [`read_output`](Self::read_output) downloads to.
+    /// [`read_output`](Self::read_output) downloads to. With the output pass on the
+    /// device, the download is the caller-ordered output (as many values); a host-fallback
+    /// call downloads its region before it reads it, so it never sees them.
     output: LeafStore<T>,
+    /// With the output pass on the device (Phase 4S T9): its order and output buffer.
+    pass: Option<DevicePass<T>>,
     report: DeviceReport,
     build_counters: Counters,
     build_traffic: TrafficByData,
@@ -1601,7 +1653,10 @@ impl<T: DeviceScalar> DeviceOperator<T> {
     /// `target_counts` points per local leaf: checks that everything fits in the memory
     /// the device reports, then allocates the stores (zeroed), uploads the plan views,
     /// the geometry and the tables, and keeps `host` for the host-fallback kinds. The
-    /// points follow with [`load_points`](Self::load_points).
+    /// points follow with [`load_points`](Self::load_points). With the output pass on the
+    /// device (Phase 4S T9: `options.output_pass` not [`OutputPass::Host`], on a device
+    /// with f64 arithmetic) it also uploads the output order of `caller` and allocates the
+    /// caller-ordered output.
     ///
     /// `host` must be built as the host path builds its operator (its tables, gradients,
     /// `max_leaf_points`, P2P kernel and pool), so that host-fallback kinds give the
@@ -1619,13 +1674,14 @@ impl<T: DeviceScalar> DeviceOperator<T> {
     /// # Panics
     ///
     /// If the plan has a ghost leaf or a ghost box (the device runs on one rank, §4.3),
-    /// the counts do not have one entry per local leaf, or a view is malformed.
+    /// the counts do not have one entry per local leaf, a view is malformed, or (with the
+    /// output pass on the device) `caller` does not place every target in its leaf.
     pub fn new(
         host: LaplaceOperator<T>,
         device: Device,
         plan: &Plan,
-        source_counts: &[usize],
-        target_counts: &[usize],
+        (source_counts, target_counts): (&[usize], &[usize]),
+        caller: CallerOrder<'_>,
         options: &DeviceOptions,
         tuner: Tuner,
     ) -> Result<Self, FmmError> {
@@ -1848,11 +1904,19 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                 .sum::<u64>();
         }
 
-        // Every buffer, summed before anything is allocated (§4.6).
+        // Every buffer, summed before anything is allocated (§4.6); with the output pass on
+        // the device (Phase 4S T9) also its order and its output.
         let nboxes: usize = (0..nlevels).map(|l| index.len(l)).sum();
         let (nsources, ntargets): (usize, usize) =
             (source_counts.iter().sum(), target_counts.iter().sum());
         let nleaves = leaves.len();
+        let device_pass = options.output_pass != OutputPass::Host
+            && device.supports(nd_fmm_kernels::Precision::F64);
+        let pass_bytes = if device_pass {
+            OutputOrder::bytes(ntargets, leaves.nlocal()) + Device::buffer_bytes::<T>(o * ntargets)
+        } else {
+            0
+        };
         let needed = 2 * Device::buffer_bytes::<T>(nboxes * n)
             + Device::buffer_bytes::<T>(4 * nsources)
             + Device::buffer_bytes::<T>(3 * ntargets)
@@ -1866,7 +1930,8 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             + Device::buffer_bytes::<u32>(4 * nleaves)
             + tables_report.iter().map(|t| t.bytes).sum::<u64>()
             + plan_bytes
-            + scratch_bytes;
+            + scratch_bytes
+            + pass_bytes;
         let available = device.available_memory();
         if let Some(limit) = available
             && needed > limit
@@ -1948,6 +2013,22 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             leaves: link.build(DataKind::Geometry, |d| {
                 LeafCoordinates::upload(d, &leaf_indices)
             })?,
+        };
+        let pass = if device_pass {
+            Some(DevicePass {
+                order: link.build(DataKind::Indices, |d| {
+                    OutputOrder::upload(
+                        d,
+                        &target_offsets,
+                        caller.points,
+                        caller.leaves,
+                        caller.scales,
+                    )
+                })?,
+                values: link.build(DataKind::Points, |d| d.alloc::<T>(o * ntargets))?,
+            })
+        } else {
+            None
         };
 
         let upload = |link: &mut Link, set: &MatrixSet<T>, library: bool| {
@@ -2110,6 +2191,11 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             memory_available: available,
             stage_timing,
             tuning: None,
+            output_pass: if device_pass {
+                Placement::Device
+            } else {
+                Placement::Host
+            },
         };
         let mut operator = Self {
             host,
@@ -2124,6 +2210,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             translations,
             mirrors,
             output: LeafStore::new(target_counts, o),
+            pass,
             report,
             build_counters: Counters::default(),
             build_traffic: TrafficByData::default(),
@@ -2666,17 +2753,37 @@ impl<T: DeviceScalar> DeviceOperator<T> {
     }
 
     /// Ends an evaluation: downloads the target output (one download, one sync) and
-    /// returns it, in the evaluator's layout, unscaled.
+    /// returns it: in the evaluator's layout, unscaled; or with the output pass on the
+    /// device (Phase 4S T9) first launches `gather_output`, which makes φ and ∇φ in the
+    /// caller's order, scaled, and downloads those instead (one launch more, the same
+    /// download and sync, o N_t values either way).
     ///
     /// # Errors
     ///
     /// The first failure of the evaluation, if any device operation failed (a launch
     /// error surfaces at this download, §12).
-    pub fn read_output(&mut self) -> Result<&LeafStore<T>, KernelError> {
+    pub fn read_output(&mut self) -> Result<DeviceOutput<'_, T>, KernelError> {
+        let gradients = self.host.gradients();
         let (stores, output) = (&self.stores, &mut self.output);
-        self.link.run(DataKind::Output, |d| {
-            d.download(stores.target_output.as_slice(), output.as_mut_slice())
-        });
+        match &mut self.pass {
+            None => self.link.run(DataKind::Output, |d| {
+                d.download(stores.target_output.as_slice(), output.as_mut_slice())
+            }),
+            Some(pass) => {
+                self.link.run(DataKind::Output, |d| {
+                    gather_output(
+                        d,
+                        &pass.order,
+                        stores.target_output.as_slice(),
+                        gradients,
+                        pass.values.as_slice_mut(),
+                    )
+                });
+                self.link.run(DataKind::Output, |d| {
+                    d.download(pass.values.as_slice(), output.as_mut_slice())
+                })
+            }
+        };
         // The stage windows, read after the download: the stream is idle. A window
         // without device work measures nothing and times zero.
         if self.link.error.is_none() && !self.pending.is_empty() {
@@ -2689,10 +2796,27 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             self.stage_timings = on_device.then_some(timings);
         }
         self.evaluation_counters = self.link.device.counters();
-        match &self.link.error {
-            Some(error) => Err(error.clone()),
-            None => Ok(&self.output),
+        match (&self.link.error, &self.pass) {
+            (Some(error), _) => Err(error.clone()),
+            (None, None) => Ok(DeviceOutput::LeafOrder(&self.output)),
+            (None, Some(_)) => Ok(DeviceOutput::CallerOrder(self.output.as_slice())),
         }
+    }
+
+    /// Downloads the target output of the last evaluation in the evaluator's layout,
+    /// unscaled, for the test oracle of the output pass (`Fmm::reference_output`, Phase 4S
+    /// T9): one download, counted toward the evaluation counters until the next
+    /// [`begin_evaluation`](Self::begin_evaluation).
+    ///
+    /// # Errors
+    ///
+    /// As `Device::download`.
+    pub fn download_target_output(&mut self) -> Result<LeafStore<T>, KernelError> {
+        let mut store = self.output.clone();
+        self.link
+            .device
+            .download(self.stores.target_output.as_slice(), store.as_mut_slice())?;
+        Ok(store)
     }
 
     /// Downloads the multipoles and the locals of every level, in the `LevelBuffers`
@@ -3356,7 +3480,8 @@ pub(crate) trait DeviceDriver<T: SimdScalar>: FmmOperator<Value = T> + Send {
     fn sync(&mut self);
     fn open_call_window(&mut self) -> Option<TimingWindow>;
     fn close_call_window(&mut self, window: TimingWindow) -> Option<WindowTime>;
-    fn read_output(&mut self) -> Result<&LeafStore<T>, KernelError>;
+    fn read_output(&mut self) -> Result<DeviceOutput<'_, T>, KernelError>;
+    fn download_target_output(&mut self) -> Result<LeafStore<T>, KernelError>;
     fn report(&self) -> &DeviceReport;
     fn counters(&self) -> DeviceCounters;
     fn download_views(&mut self) -> Result<ViewsImage, KernelError>;
@@ -3398,8 +3523,11 @@ impl<T: DeviceScalar> DeviceDriver<T> for DeviceOperator<T> {
     fn close_call_window(&mut self, window: TimingWindow) -> Option<WindowTime> {
         DeviceOperator::close_call_window(self, window)
     }
-    fn read_output(&mut self) -> Result<&LeafStore<T>, KernelError> {
+    fn read_output(&mut self) -> Result<DeviceOutput<'_, T>, KernelError> {
         DeviceOperator::read_output(self)
+    }
+    fn download_target_output(&mut self) -> Result<LeafStore<T>, KernelError> {
+        DeviceOperator::download_target_output(self)
     }
     fn report(&self) -> &DeviceReport {
         DeviceOperator::report(self)
@@ -3429,7 +3557,8 @@ pub(crate) fn driver<T: SimdScalar + Stored + Equivalence + Default>(
     host: LaplaceOperator<T>,
     device: Device,
     plan: &Plan,
-    (source_counts, target_counts): (&[usize], &[usize]),
+    counts: (&[usize], &[usize]),
+    caller: CallerOrder<'_>,
     options: &DeviceOptions,
     tuner: Tuner,
 ) -> Result<Box<dyn DeviceDriver<T>>, FmmError> {
@@ -3437,30 +3566,22 @@ pub(crate) fn driver<T: SimdScalar + Stored + Equivalence + Default>(
         host: LaplaceOperator<T>,
         device: Device,
         plan: &Plan,
-        (source_counts, target_counts): (&[usize], &[usize]),
+        counts: (&[usize], &[usize]),
+        caller: CallerOrder<'_>,
         options: &DeviceOptions,
         tuner: Tuner,
     ) -> Result<Box<dyn DeviceDriver<T>>, FmmError> {
         let host: LaplaceOperator<E> = same_type(host);
-        let operator = DeviceOperator::new(
-            host,
-            device,
-            plan,
-            source_counts,
-            target_counts,
-            options,
-            tuner,
-        )?;
+        let operator = DeviceOperator::new(host, device, plan, counts, caller, options, tuner)?;
         let boxed: Box<dyn DeviceDriver<E>> = Box::new(operator);
         Ok(same_type(boxed))
     }
-    let counts = (source_counts, target_counts);
     match T::PRECISION {
         nd_fmm_tables::cache::Precision::F32 => {
-            concrete::<f32, T>(host, device, plan, counts, options, tuner)
+            concrete::<f32, T>(host, device, plan, counts, caller, options, tuner)
         }
         nd_fmm_tables::cache::Precision::F64 => {
-            concrete::<f64, T>(host, device, plan, counts, options, tuner)
+            concrete::<f64, T>(host, device, plan, counts, caller, options, tuner)
         }
     }
 }

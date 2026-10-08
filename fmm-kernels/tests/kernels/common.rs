@@ -168,6 +168,8 @@ pub trait TestFloat: DeviceFloat + std::fmt::Debug {
     fn from_bits(bits: u64) -> Self;
     /// Rounds an f64.
     fn from_f64(x: f64) -> Self;
+    /// Widens to f64, exactly.
+    fn to_f64(self) -> f64;
     /// Whether the value is a NaN.
     fn nan(self) -> bool;
     /// −0, the smallest normal, the smallest and largest subnormal, the largest finite
@@ -199,6 +201,9 @@ impl TestFloat for f32 {
     fn from_f64(x: f64) -> Self {
         x as f32
     }
+    fn to_f64(self) -> f64 {
+        f64::from(self)
+    }
     fn nan(self) -> bool {
         self.is_nan()
     }
@@ -229,6 +234,9 @@ impl TestFloat for f64 {
     }
     fn from_f64(x: f64) -> Self {
         x
+    }
+    fn to_f64(self) -> f64 {
+        self
     }
     fn nan(self) -> bool {
         self.is_nan()

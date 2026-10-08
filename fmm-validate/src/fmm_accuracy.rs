@@ -607,6 +607,7 @@ fn mean(timings: &[StageTimings]) -> StageTimings {
         downward: average(|t| t.downward),
         evaluate_leaves: average(|t| t.evaluate_leaves),
         output: average(|t| t.output),
+        download: average(|t| t.download),
         device: mean_device(timings),
         kinds: None,
     }

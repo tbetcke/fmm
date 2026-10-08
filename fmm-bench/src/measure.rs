@@ -11,11 +11,13 @@
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::Equivalence;
-use nd_fmm_exec::fmm::{Fmm, FmmBuilder, KindTiming, OperatorKind, Output};
+use nd_fmm_exec::fmm::{
+    Fmm, FmmBuilder, FmmError, KindTiming, KindTimings, OperatorKind, Output, StageTimings,
+};
 use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_tables::cache::{CacheOutcome, Stored};
 use nd_fmm_validate::calibration::Precision;
@@ -120,7 +122,8 @@ pub fn builder<T>(options: &Options, combination: &Combination) -> FmmBuilder<T>
         .gradients(options.gradients)
         .threads(options.threads())
         .strategy(options.strategy)
-        .backend(combination.backend);
+        .backend(combination.backend)
+        .output_pass(options.output_pass);
     if let Some(level) = options.max_level {
         builder = builder.max_level(level);
     }
@@ -228,9 +231,10 @@ fn measure<T: Value>(
             .cache_outcomes()
             .iter()
             .all(|(_, outcome)| matches!(outcome, CacheOutcome::Loaded));
-    // Step 2: the warm-up.
+    // Step 2: the warm-up, into the reused output with `--reuse-output`.
+    let mut reused = empty_output();
     for _ in 0..options.warmup {
-        if let Err(error) = fmm.evaluate(&charges) {
+        if let Err(error) = evaluate(&mut fmm, &charges, options.reuse_output, &mut reused) {
             return Outcome::Failed(error.to_string());
         }
     }
@@ -240,11 +244,12 @@ fn measure<T: Value>(
     let mut identical = true;
     for _ in 0..options.repeats {
         let start = Instant::now();
-        let output = match fmm.evaluate(&charges) {
+        let output = match evaluate(&mut fmm, &charges, options.reuse_output, &mut reused) {
             Ok(output) => output,
             Err(error) => return Outcome::Failed(error.to_string()),
         };
         times.push(start.elapsed().as_secs_f64());
+        let output = output.unwrap_or_else(|| reused.clone());
         match &first {
             None => first = Some(output),
             Some(first) => identical &= same_bits(first, &output),
@@ -302,6 +307,31 @@ fn measure<T: Value>(
     }))
 }
 
+/// An output without values, for [`evaluate`] to fill.
+fn empty_output<T>() -> Output<T> {
+    Output {
+        potential: Vec::new(),
+        gradient: None,
+        timings: StageTimings::default(),
+    }
+}
+
+/// One evaluation of `charges`: with `reuse` (`--reuse-output`) into `reused` by
+/// `Fmm::evaluate_into`, returning `None`; otherwise by `Fmm::evaluate`, returning the
+/// fresh output, so that the timed region holds the evaluation alone, as before T9.
+fn evaluate<T: Value>(
+    fmm: &mut Fmm<'_, T>,
+    charges: &[T],
+    reuse: bool,
+    reused: &mut Output<T>,
+) -> Result<Option<Output<T>>, FmmError> {
+    if reuse {
+        fmm.evaluate_into(charges, reused).map(|()| None)
+    } else {
+        fmm.evaluate(charges).map(Some)
+    }
+}
+
 /// Whether two outputs have the same bits, φ and ∇φ.
 fn same_bits<T: Value>(a: &Output<T>, b: &Output<T>) -> bool {
     let bits = |v: &T| (*v).to_f64().to_bits();
@@ -346,8 +376,9 @@ fn kinds<T: Value>(
         Ok(fmm) => fmm,
         Err(error) => return KindOutcome::Refused(error.to_string()),
     };
+    let mut reused = empty_output();
     for _ in 0..options.warmup {
-        if let Err(error) = fmm.evaluate(charges) {
+        if let Err(error) = evaluate(&mut fmm, charges, options.reuse_output, &mut reused) {
             return KindOutcome::Refused(error.to_string());
         }
     }
@@ -355,19 +386,19 @@ fn kinds<T: Value>(
     let mut timings = Vec::with_capacity(options.repeats);
     for _ in 0..options.repeats {
         let start = Instant::now();
-        match fmm.evaluate(charges) {
+        match evaluate(&mut fmm, charges, options.reuse_output, &mut reused) {
             Ok(output) => {
                 walls.push(start.elapsed().as_secs_f64());
-                timings.push(output.timings);
+                timings.push(output.map_or(reused.timings, |o| o.timings));
             }
             Err(error) => return KindOutcome::Refused(error.to_string()),
         }
     }
     let timed: Vec<_> = timings
         .iter()
-        .filter_map(|t| Some((t.kinds?, t.remainder()?)))
+        .filter_map(|t| Some((t.kinds?, t.remainder()?, t)))
         .collect();
-    let Some((last, _)) = timed.last() else {
+    let Some((last, _, _)) = timed.last() else {
         return KindOutcome::Refused(
             "no evaluation had kind times (a timing window was not timed)".to_owned(),
         );
@@ -382,7 +413,7 @@ fn kinds<T: Value>(
                 .expect("every kind of the report order is a kind");
             let times: Vec<f64> = timed
                 .iter()
-                .map(|(k, _)| k.get(kind).total().as_secs_f64())
+                .map(|(k, _, _)| k.get(kind).total().as_secs_f64())
                 .collect();
             let stats = Stats::of(&times);
             KindRow {
@@ -395,14 +426,25 @@ fn kinds<T: Value>(
             }
         })
         .collect();
-    let mean = |f: &dyn Fn(&(nd_fmm_exec::fmm::KindTimings, std::time::Duration)) -> f64| {
+    let mean = |f: &dyn Fn(&(KindTimings, Duration, &StageTimings)) -> f64| {
         timed.iter().map(f).sum::<f64>() / timed.len() as f64
+    };
+    let stats = |f: fn(&StageTimings) -> Duration| {
+        Stats::of(
+            &timed
+                .iter()
+                .map(|(_, _, t)| f(t).as_secs_f64())
+                .collect::<Vec<_>>(),
+        )
     };
     KindOutcome::Measured(Kinds {
         mode,
         rows,
-        other: mean(&|(_, other)| other.as_secs_f64()),
-        sum: mean(&|(k, _)| k.total().as_secs_f64()),
+        load: stats(|t| t.load),
+        output: stats(|t| t.output),
+        download: mean(&|(_, _, t)| t.download.as_secs_f64()),
+        other: mean(&|(_, remainder, t)| remainder.saturating_sub(t.load + t.output).as_secs_f64()),
+        sum: mean(&|(k, _, _)| k.total().as_secs_f64()),
         evaluation: walls.iter().sum::<f64>() / walls.len() as f64,
         timed: timed.len(),
     })

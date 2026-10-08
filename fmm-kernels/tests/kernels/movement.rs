@@ -1,5 +1,6 @@
-//! Zero, gather (box-major and, T12, coefficient-major in blocks), scatter-add and scatter
-//! against plain host loops, bit for bit.
+//! Zero, gather (box-major and, T12, coefficient-major in blocks), scatter-add, scatter
+//! and (Phase 4S T9) the caller-ordered output gather against plain host loops, bit for
+//! bit.
 //!
 //! Every launch works on ranges at odd offsets inside larger buffers, and the elements
 //! around them are checked to be untouched. Column sizes are (p + 1)² for
@@ -7,9 +8,10 @@
 //! only) repeated; the scatter-add accumulates onto nonzero data.
 
 use nd_fmm_kernels::movement::{
-    gather_coefficients, gather_columns, scatter_add_columns, scatter_values, zero,
+    OutputOrder, gather_coefficients, gather_columns, gather_output, scatter_add_columns,
+    scatter_values, zero,
 };
-use nd_fmm_kernels::{Device, DeviceElement};
+use nd_fmm_kernels::{BackendKind, Device, DeviceElement, KernelError, Precision};
 
 use crate::common::{Rng, TestFloat, assert_bits, tests_on};
 
@@ -285,6 +287,141 @@ fn scatter<E: Data>(device: &mut Device) {
     report_copies::<E>("scatter", payloads);
 }
 
+/// A leaf-ordered target output of `targets` points in leaves of random size, leaf 1
+/// empty, and the caller's order of its targets (Phase 4S T9): the leaves' point offsets,
+/// every target's point and leaf in the caller's order, and two scales per leaf.
+struct Targets {
+    offsets: Vec<u32>,
+    points: Vec<u32>,
+    leaves: Vec<u32>,
+    scales: Vec<f64>,
+}
+
+impl Targets {
+    fn new(rng: &mut Rng, targets: usize) -> Self {
+        let nleaves = targets / 5 + 2;
+        let mut leaf_of: Vec<u32> = (0..targets)
+            .map(|_| {
+                // Every leaf but leaf 1, which stays empty.
+                let j = rng.below(nleaves - 1);
+                (if j >= 1 { j + 1 } else { j }) as u32
+            })
+            .collect();
+        leaf_of.sort_unstable();
+        let mut offsets = vec![0u32; nleaves + 1];
+        for &j in &leaf_of {
+            offsets[j as usize + 1] += 1;
+        }
+        for j in 0..nleaves {
+            offsets[j + 1] += offsets[j];
+        }
+        assert_eq!(offsets[1], offsets[2], "leaf 1 is empty");
+        let points = rng.permutation(targets);
+        let leaves = points.iter().map(|&s| leaf_of[s as usize]).collect();
+        // Scales in [2⁻⁸, 2⁸), any f64 mantissa: the divisions round.
+        let scales = (0..2 * nleaves)
+            .map(|_| {
+                let m = 1.0 + (rng.next_u64() >> 11) as f64 / (1u64 << 53) as f64;
+                m * 2f64.powi(rng.below(16) as i32 - 8)
+            })
+            .collect();
+        Self {
+            offsets,
+            points,
+            leaves,
+            scales,
+        }
+    }
+
+    /// The host loop of `nd-fmm-exec`'s output pass: per target, φ then (with
+    /// gradients) ∇φ after every φ, each `T::from_f64(x.to_f64() / scale)`.
+    fn host<T: TestFloat>(&self, store: &[T], gradients: bool) -> Vec<T> {
+        let n = self.points.len();
+        let o = if gradients { 4 } else { 1 };
+        let mut out = vec![T::from_f64(0.0); o * n];
+        for (i, (&s, &j)) in self.points.iter().zip(&self.leaves).enumerate() {
+            let (s, j) = (s as usize, j as usize);
+            let first = self.offsets[j] as usize;
+            let (count, k) = (self.offsets[j + 1] as usize - first, s - first);
+            let divide = |x: T, scale: f64| T::from_f64(x.to_f64() / scale);
+            out[i] = divide(store[o * first + k], self.scales[2 * j]);
+            if gradients {
+                for c in 0..3 {
+                    let x = store[4 * first + count + 3 * k + c];
+                    out[n + 3 * i + c] = divide(x, self.scales[2 * j + 1]);
+                }
+            }
+        }
+        out
+    }
+}
+
+/// The output gather against the host loop, bit for bit: 0, 1, 7 and 10⁵ targets with an
+/// empty leaf, with and without gradients, store and output at odd offsets inside larger
+/// buffers whose other elements stay untouched; one launch, none for no target.
+fn output_gather<T: TestFloat + Data>(device: &mut Device) {
+    let mut rng = Rng::new(6);
+    for targets in [0, 1, 7, 100_000] {
+        let case = Targets::new(&mut rng, targets);
+        let order = OutputOrder::upload(
+            device,
+            &case.offsets,
+            &case.points,
+            &case.leaves,
+            &case.scales,
+        )
+        .unwrap();
+        assert_eq!((order.len(), order.total()), (targets, targets));
+        for gradients in [false, true] {
+            let o = if gradients { 4 } else { 1 };
+            let inner: Vec<T> = (0..o * targets)
+                .map(|_| T::random_normal(&mut rng))
+                .collect();
+            let store = device.upload(&padded(&mut rng, &inner)).unwrap();
+            let fill = samples::<T>(&mut rng, o * targets);
+            let before = padded(&mut rng, &fill);
+            let mut out = device.upload(&before).unwrap();
+            device.reset_counters();
+            gather_output(
+                device,
+                &order,
+                store.slice(PAD..PAD + o * targets),
+                gradients,
+                out.slice_mut(PAD..PAD + o * targets),
+            )
+            .unwrap();
+            assert_eq!(device.counters().launches, u64::from(targets > 0));
+            let mut want = before.clone();
+            want[PAD..PAD + o * targets].copy_from_slice(&case.host(&inner, gradients));
+            T::check(
+                &format!("gather_output of {targets} targets, gradients {gradients}"),
+                &download(device, &out),
+                &want,
+            );
+        }
+    }
+}
+
+fn output_gather_f32(device: &mut Device) {
+    output_gather::<f32>(device);
+}
+fn output_gather_f64(device: &mut Device) {
+    output_gather::<f64>(device);
+}
+
+/// Without f64 arithmetic (Metal) the order cannot be uploaded and the gather is
+/// refused, with the capability error.
+fn output_gather_needs_f64(device: &mut Device) {
+    assert!(!device.supports(Precision::F64));
+    let refused = KernelError::UnsupportedPrecision {
+        backend: device.backend(),
+        precision: Precision::F64,
+    };
+    let error = OutputOrder::upload(device, &[0, 1], &[0], &[0], &[1.0, 1.0]).unwrap_err();
+    assert_eq!(error, refused);
+    assert_eq!(device.backend(), BackendKind::Metal);
+}
+
 /// A launch with nothing to do launches nothing.
 fn empty_launches_nothing(device: &mut Device) {
     let x = device.upload(&[1.0f32; 8]).unwrap();
@@ -345,6 +482,8 @@ tests_on!(
     scatter_f32,
     scatter_f64,
     scatter_u32,
+    output_gather_f32,
+    output_gather_f64,
     empty_launches_nothing,
 );
 tests_on!(
@@ -355,6 +494,7 @@ tests_on!(
     scatter_add_f32,
     scatter_f32,
     scatter_u32,
+    output_gather_needs_f64,
     empty_launches_nothing,
 );
 tests_on!(
@@ -369,6 +509,8 @@ tests_on!(
     scatter_f32,
     scatter_f64,
     scatter_u32,
+    output_gather_f32,
+    output_gather_f64,
     empty_launches_nothing,
 );
 
@@ -407,6 +549,70 @@ mod refusals {
                 let mut y = device.alloc::<f64>(4).unwrap();
                 let idx = device.upload_indices(&[0, 1]).unwrap();
                 let _ = gather_columns(device, 4, x.as_slice(), idx.as_slice(), y.as_slice_mut());
+            },
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "target 1 at point 3 does not lie in its leaf 0")]
+    fn output_order_refuses_a_point_outside_its_leaf() {
+        run(
+            BackendKind::Cpu,
+            "output_order_refuses_a_point_outside_its_leaf",
+            |device| {
+                let _ = nd_fmm_kernels::movement::OutputOrder::upload(
+                    device,
+                    &[0, 2, 4],
+                    &[0, 3],
+                    &[0, 0],
+                    &[1.0; 4],
+                );
+            },
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "target 0 at point 1 does not lie in its leaf 2")]
+    fn output_order_refuses_a_leaf_out_of_range() {
+        run(
+            BackendKind::Cpu,
+            "output_order_refuses_a_leaf_out_of_range",
+            |device| {
+                let _ = nd_fmm_kernels::movement::OutputOrder::upload(
+                    device,
+                    &[0, 2, 4],
+                    &[1],
+                    &[2],
+                    &[1.0; 4],
+                );
+            },
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "gather_output: a store of 2 points of 4 values")]
+    fn output_gather_refuses_a_short_store() {
+        run(
+            BackendKind::Cpu,
+            "output_gather_refuses_a_short_store",
+            |device| {
+                let order = nd_fmm_kernels::movement::OutputOrder::upload(
+                    device,
+                    &[0, 2],
+                    &[1, 0],
+                    &[0, 0],
+                    &[1.0; 2],
+                )
+                .unwrap();
+                let store = device.upload(&[1.0f32; 2]).unwrap();
+                let mut out = device.alloc::<f32>(8).unwrap();
+                let _ = nd_fmm_kernels::movement::gather_output(
+                    device,
+                    &order,
+                    store.as_slice(),
+                    true,
+                    out.as_slice_mut(),
+                );
             },
         );
     }

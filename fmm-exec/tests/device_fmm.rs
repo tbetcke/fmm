@@ -47,6 +47,12 @@
 //!   the uniform cube at the same p, N and backend; f32 is reported. The C3.2 gate on the
 //!   device path is in `tests/accuracy.rs`.
 //!
+//! **The whole output at the C3.2 size** (Phase 4S T9, `tests/output_common`): on the
+//! C3.2 tree of `tests/accuracy.rs` at p = 6, gradients off and on (f64 on the CPU runtime,
+//! f32 on Metal, f32 and f64 on CUDA), the default build's output equals the output pass
+//! before T9 on the same build bit for bit, and where the default runs the pass on the
+//! device so does a build with the host pass; the test prints a hash of each output.
+//!
 //! **The tuning budget at the C3.2 size** (Phase 4 T12): the cube at N = 10⁵ and p = 8 (f64
 //! on the CPU runtime, f32 on Metal, f32 and f64 on CUDA) is built once more with a fresh tuning cache and the
 //! default budget of 10 s; no candidate may start after the deadline
@@ -79,6 +85,8 @@ use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_math::RealScalar;
 use nd_fmm_ref::p2p::direct_sum;
 use nd_fmm_tables::cache::Stored;
+
+mod output_common;
 
 /// The number of points of a full-size run.
 const N: usize = 100_000;
@@ -612,6 +620,37 @@ fn device_fmm_gate() {
     let mut rows = Vec::new();
     let mut failures = Vec::new();
     let mut ran = Vec::new();
+    // The whole output at the C3.2 size, unchanged by Phase 4S T9: the CPU runtime in f64,
+    // Metal in f32, CUDA in f32 and f64.
+    let c32 = output_common::c32_problem();
+    let mut whole = Vec::new();
+    if Backend::Cpu.is_compiled() {
+        whole.extend(output_common::check_whole_output::<f64>(
+            Backend::Cpu,
+            &[1],
+            (&c32.0, &c32.1),
+            &comm,
+        ));
+    }
+    if Backend::Metal.is_compiled() {
+        whole.extend(output_common::check_whole_output::<f32>(
+            Backend::Metal,
+            &[1],
+            (&c32.0, &c32.1),
+            &comm,
+        ));
+    }
+    if Backend::Cuda.is_compiled() {
+        for lines in [
+            output_common::check_whole_output::<f32>(Backend::Cuda, &[1], (&c32.0, &c32.1), &comm),
+            output_common::check_whole_output::<f64>(Backend::Cuda, &[1], (&c32.0, &c32.1), &comm),
+        ] {
+            whole.extend(lines);
+        }
+    }
+    for line in &whole {
+        eprintln!("{line}");
+    }
     // The CPU runtime in f64; each problem is drawn once per N.
     if Backend::Cpu.is_compiled() {
         for name in ["cube", "plummer"] {
@@ -759,6 +798,10 @@ fn device_fmm_gate() {
         for line in gate {
             println!("{line}");
         }
+    }
+    println!();
+    for line in &whole {
+        println!("{line}");
     }
     println!();
     println!(

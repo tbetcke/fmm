@@ -63,9 +63,39 @@
 //! [`Fmm::evaluate`] is collective: it agrees the length of the charge vector (one
 //! all-reduce), writes the charges after the coordinates of each source chunk (§3.13,
 //! "Source chunks"), resets the evaluator and runs its six stages, timing each one
-//! ([`StageTimings`]), and scales the target output into the caller's order. For a fixed
-//! tree, ranks, input and P2P kernel, two evaluations are bit-identical (the
-//! accumulation order of `nd_fmm_plan::evaluator`), for every number of threads.
+//! ([`StageTimings`]), and scales the target output into the caller's order (the output
+//! pass, next section). For a fixed tree, ranks, input and P2P kernel, two evaluations are
+//! bit-identical (the accumulation order of `nd_fmm_plan::evaluator`), for every number of
+//! threads. [`Fmm::evaluate_into`] (Phase 4S T9, decision 11) does the same into the
+//! buffers of an [`Output`] the caller reuses, with the same bits; `evaluate` evaluates
+//! into a fresh one.
+//!
+//! # The output pass (Phase 4S T9)
+//!
+//! The evaluator leaves the target output in leaf order and leaf-scaled (§3.13); the
+//! output pass turns it into φ and ∇φ in the caller's order, dividing each value by
+//! 4π r_t or 4π r_t² in f64 and rounding once to `T`: 1/(4π) and the leaf radius applied
+//! once, here (§3.1, §3.13, "Output"). At build `Fmm` stores, for every target in the
+//! caller's order, its point in leaf order and its local leaf (`u32` each: 8 N_t bytes),
+//! and for every local leaf the two scales (16 bytes), formed as the pass before T9 formed
+//! them. Where it runs ([`OutputPass`], [`FmmBuilder::output_pass`], [`Fmm::output_pass`]):
+//! - **on the host** (the host path, Metal, and every backend with [`OutputPass::Host`]):
+//!   one loop over the targets, on the `Fmm`'s pool when it has one (threads > 1, not
+//!   [`set_serial`](Fmm::set_serial)) and serially otherwise, each thread writing a
+//!   contiguous range of the outputs and gathering its values from the store; the outputs
+//!   are collected into their buffers without a zero fill. On Metal and CUDA the pool is
+//!   idle by then (device-path.md §11);
+//! - **on the device** (by default on a device with f64 arithmetic: the CPU runtime and
+//!   CUDA): `nd_fmm_kernels::movement::gather_output` makes the same values on the device
+//!   from a copy of the order uploaded once, with the same f64 division and one rounding to
+//!   `T`; the evaluation still downloads o N_t values once and syncs once, and the host
+//!   copies them into the output (one more launch per evaluation, device-path.md §4.1).
+//!
+//! Both give the bits of the pass before T9, which the tests keep as their oracle
+//! (`Fmm::reference_output`). The charge load is parallel the same way: the charges into
+//! the host's source chunks (by leaves) and, on a device, into the upload buffer in leaf
+//! order, on the pool; with P2M, P2L and P2P on the device the host's source store, which
+//! feeds only host-fallback calls of those kinds, is not written at all.
 //!
 //! On request ([`FmmBuilder::kind_timings`], [`Fmm::set_kind_timings`]; Phase 4S T5) it
 //! also times every level call by operator kind and level ([`KindTiming`],
@@ -155,12 +185,13 @@ use nd_fmm_math::RealScalar;
 use nd_fmm_plan::evaluator::{Evaluator, EvaluatorError};
 use nd_fmm_plan::operator::{FmmOperator, FmmSizes, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p};
 use nd_fmm_plan::plan::{Plan, PlanError};
-use nd_fmm_plan::store::LeafStore;
+use nd_fmm_plan::store::{LeafSliceMut, LeafStore};
 use nd_fmm_tables::cache::{Stored, TableKind};
 use nd_fmm_tables::{CacheOutcome, TableCache};
 use nd_octree::constants::DEEPEST_LEVEL;
 use nd_octree::octree::compute_global_bounding_box;
 use nd_octree::{MortonKey, Octree, OctreeOptions, PhysicalBox, points_to_morton};
+use rayon::prelude::*;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use rlst::SliceArray;
 use thiserror::Error;
@@ -169,7 +200,9 @@ use thiserror::Error;
 use nd_fmm_kernels::{TimingWindow, WindowTime};
 
 #[cfg(feature = "gpu")]
-use crate::device::{self, DeviceCounters, DeviceDriver, DeviceOptions, DeviceReport, ViewsImage};
+use crate::device::{
+    self, DeviceCounters, DeviceDriver, DeviceOptions, DeviceOutput, DeviceReport, ViewsImage,
+};
 use crate::geometry::{Domain, GeometryError, leaf_coordinates, radius};
 use crate::operator::{Isa, LaplaceOperator, P2pChoice, SimdScalar};
 use crate::tables::{M2lStrategy, Tables};
@@ -340,6 +373,27 @@ pub enum DeviceGemm {
     HandWritten,
 }
 
+/// Where the output pass of an evaluation runs ([`FmmBuilder::output_pass`]; Phase 4S T9,
+/// decision 12): the pass that turns the leaf-ordered, leaf-scaled target output into φ
+/// and ∇φ in the caller's order, dividing by 4π r_t and 4π r_t² in f64 and rounding once
+/// to `T` (CONVENTIONS §3.1, §3.13, "Output"). Both passes give the same bits; the
+/// [module documentation](self#the-output-pass-phase-4s-t9) describes them.
+///
+/// The enum exists without the `gpu` feature, as [`Backend`] does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum OutputPass {
+    /// The default: on the device where the backend is a device with f64 arithmetic (the
+    /// CPU runtime, CUDA), on the host otherwise (the host path, Metal).
+    #[default]
+    Auto,
+    /// On the host, on every backend: the host pass, which a device backend runs on the
+    /// downloaded leaf-ordered output.
+    Host,
+    /// On the device: [`FmmBuilder::build`] refuses it on the host backend and on a device
+    /// without f64 arithmetic (Metal) with [`SettingsError::OutputPassUnsupported`].
+    Device,
+}
+
 /// The error of parsing a [`Backend`] from text it does not name.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 #[error("`{text}` is not a backend; expected `host`, `cpu`, `metal` or `cuda`")]
@@ -505,6 +559,13 @@ pub enum SettingsError {
         /// The requested backend.
         backend: Backend,
     },
+    /// [`OutputPass::Device`] on a backend without a device that does f64 arithmetic: the
+    /// host, and Metal (Phase 4S T9).
+    #[error("output_pass(Device) needs a device with f64 arithmetic; {backend} has none")]
+    OutputPassUnsupported {
+        /// The requested backend.
+        backend: Backend,
+    },
 }
 
 /// Which of the two point sets a point belongs to, for error messages.
@@ -636,6 +697,7 @@ pub enum FmmError {
 /// | [`synchronous_stages`](Self::synchronous_stages) | off |
 /// | [`device_timestamps`](Self::device_timestamps) | off |
 /// | [`kind_timings`](Self::kind_timings) | [`KindTiming::Off`] |
+/// | [`output_pass`](Self::output_pass) | [`OutputPass::Auto`]: on the device where it does f64 arithmetic |
 /// | [`device_p2p_layout`](Self::device_p2p_layout) | [`DeviceP2pLayout::Auto`]: by backend |
 /// | [`device_leaf_layout`](Self::device_leaf_layout) | [`DeviceLeafLayout::Auto`]: by backend |
 /// | [`device_gemm`](Self::device_gemm) | [`DeviceGemm::Auto`]: by precision, p and backend |
@@ -661,6 +723,7 @@ pub struct FmmBuilder<T> {
     synchronous_stages: bool,
     device_timestamps: bool,
     kind_timing: KindTiming,
+    output_pass: OutputPass,
     device_p2p_layout: DeviceP2pLayout,
     device_leaf_layout: DeviceLeafLayout,
     device_gemm: DeviceGemm,
@@ -690,6 +753,7 @@ impl<T> FmmBuilder<T> {
             synchronous_stages: false,
             device_timestamps: false,
             kind_timing: KindTiming::Off,
+            output_pass: OutputPass::Auto,
             device_p2p_layout: DeviceP2pLayout::Auto,
             device_leaf_layout: DeviceLeafLayout::Auto,
             device_gemm: DeviceGemm::Auto,
@@ -874,6 +938,17 @@ impl<T> FmmBuilder<T> {
         self
     }
 
+    /// Sets where the output pass runs ([`OutputPass`]; default [`OutputPass::Auto`], on
+    /// the device where it does f64 arithmetic; Phase 4S T9, decision 12). The output is
+    /// the same bit for bit either way; [`Fmm::output_pass`] reports where it runs.
+    /// [`build`](Self::build) refuses [`OutputPass::Device`] on the host backend and on a
+    /// device without f64 arithmetic (Metal) with [`SettingsError::OutputPassUnsupported`],
+    /// agreed by step 1's all-reduce.
+    pub fn output_pass(mut self, pass: OutputPass) -> Self {
+        self.output_pass = pass;
+        self
+    }
+
     /// With a device backend, tunes the device path's choices against the timings of this
     /// device and keeps them in the directory `dir` (Phase 4 T12, C4.7;
     /// docs/design/device-path.md §10): the M2L strategy under [`M2lStrategy::Auto`], the
@@ -1018,6 +1093,8 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
                 open_time = start.elapsed();
                 let on_device = device.as_ref().is_some_and(times_on_device);
                 check_kind_timing(self.kind_timing, self.backend, on_device)?;
+                let f64_device = device.as_ref().is_some_and(does_f64);
+                check_output_pass(self.output_pass, self.backend, f64_device)?;
                 Ok((pool, supplied, device))
             });
         let (pool, supplied, device) = agree(comm, local)?;
@@ -1103,6 +1180,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         let radii: Vec<f64> = (0..nlocal)
             .map(|j| radius(plan.index().leaves().level(j), &domain))
             .collect();
+        let outputs = OutputOrder::new(&targets_by_leaf, &radii);
         let sort_time = start.elapsed();
 
         // Step 7: tables, operator, evaluator.
@@ -1136,6 +1214,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             device,
             &plan,
             (&sources_by_leaf.counts, &targets_by_leaf.counts),
+            &outputs,
             tuner,
         )?;
         let mut device_time = open_time + tuning_time + start_device.elapsed();
@@ -1189,6 +1268,15 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         }
         device_time += start.elapsed();
 
+        // The host's source store feeds the host path and host-fallback calls of the kinds
+        // that read sources; with those on the device, the charges go to the device alone
+        // (Phase 4S T9).
+        let engine = &evaluator.operator().engine;
+        let host_sources = !engine.is_device()
+            || [OperatorKind::P2m, OperatorKind::P2l, OperatorKind::P2p]
+                .into_iter()
+                .any(|kind| engine.placement(kind) == Placement::Host);
+
         Ok(Fmm {
             octree,
             evaluator,
@@ -1201,9 +1289,11 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             } else {
                 Vec::new()
             },
+            host_sources,
             device_error: None,
             sources: sources_by_leaf,
             targets: targets_by_leaf,
+            outputs,
             radii,
             max_leaf_points,
             cache_outcomes,
@@ -1230,6 +1320,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         device: Option<OpenedDevice>,
         plan: &Plan,
         counts: (&[usize], &[usize]),
+        outputs: &OutputOrder,
         tuner: Option<Tuner>,
     ) -> Result<ExecOperator<T>, FmmError> {
         match device {
@@ -1254,10 +1345,17 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
                     } else {
                         device::StageTiming::Enqueue
                     },
+                    output_pass: self.output_pass,
                 };
                 let tuner = tuner.expect("a device build has a tuner");
                 let on_device = device.times_on_device();
-                let driver = device::driver(operator, device, plan, counts, &options, tuner)?;
+                let caller = device::CallerOrder {
+                    points: &outputs.points,
+                    leaves: &outputs.leaves,
+                    scales: outputs.scales.as_flattened(),
+                };
+                let driver =
+                    device::driver(operator, device, plan, counts, caller, &options, tuner)?;
                 Ok(ExecOperator::new(
                     Engine::Device(driver),
                     self.kind_timing,
@@ -1266,7 +1364,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             }
             #[cfg(not(feature = "gpu"))]
             Some(never) => {
-                let _ = (plan, counts, tuner);
+                let _ = (plan, counts, outputs, tuner);
                 match never {}
             }
         }
@@ -1360,6 +1458,32 @@ fn check_kind_timing(
         return Err(SettingsError::KindTimingUnsupported { backend });
     }
     Ok(())
+}
+
+/// Refuses [`OutputPass::Device`] on `backend` unless its device does f64 arithmetic
+/// (`f64_device`).
+fn check_output_pass(
+    pass: OutputPass,
+    backend: Backend,
+    f64_device: bool,
+) -> Result<(), SettingsError> {
+    if pass == OutputPass::Device && !f64_device {
+        return Err(SettingsError::OutputPassUnsupported { backend });
+    }
+    Ok(())
+}
+
+/// Whether `device` does f64 arithmetic (CUDA, the CPU runtime), for the output pass on the
+/// device ([`OutputPass`]).
+#[cfg(feature = "gpu")]
+fn does_f64(device: &OpenedDevice) -> bool {
+    device.supports(nd_fmm_kernels::Precision::F64)
+}
+
+/// Without the `gpu` feature no device is opened.
+#[cfg(not(feature = "gpu"))]
+fn does_f64(device: &OpenedDevice) -> bool {
+    match *device {}
 }
 
 /// Whether `device` times on itself (`nd_fmm_kernels::Device::times_on_device`: Metal,
@@ -1843,6 +1967,259 @@ impl LeafOrder {
     }
 }
 
+/// The points per task below which the charge load ([`load_source_charges`],
+/// [`gather_charges`]) stops splitting its work.
+const LOAD_GRAIN: usize = 4096;
+
+/// Where the output pass of an evaluation finds every target (Phase 4S T9): for every
+/// target, in the caller's order, its point in leaf order and its local leaf, and for every
+/// local leaf the two scales of CONVENTIONS §3.13, "Output". Built once by
+/// [`FmmBuilder::build`]: 8 N_t bytes for N_t targets, and 16 bytes per local leaf. With
+/// the output pass on the device (`OutputPass`) the device holds a copy, which the device
+/// report's memory counts.
+#[derive(Clone, Debug)]
+struct OutputOrder {
+    /// For every target in the caller's order: its point in leaf order.
+    points: Vec<u32>,
+    /// For every target in the caller's order: its local leaf.
+    leaves: Vec<u32>,
+    /// For every local leaf: 4π r_t and 4π r_t², formed as the pass before T9 formed them.
+    scales: Vec<[f64; 2]>,
+}
+
+impl OutputOrder {
+    /// The order of the targets `targets`, whose local leaf j has r_t = `radii[j]`.
+    ///
+    /// # Panics
+    ///
+    /// If this rank has more than `u32::MAX` targets.
+    fn new(targets: &LeafOrder, radii: &[f64]) -> Self {
+        let n = targets.len();
+        let index = |i: usize| u32::try_from(i).expect("at most u32::MAX targets on a rank");
+        let (mut points, mut leaves) = (vec![0; n], vec![0; n]);
+        for j in 0..radii.len() {
+            let first = targets.offsets[j];
+            for (k, &i) in targets.points(j).iter().enumerate() {
+                points[i] = index(first + k);
+                leaves[i] = index(j);
+            }
+        }
+        let scales = radii
+            .iter()
+            .map(|&r| [4.0 * PI * r, 4.0 * PI * r * r])
+            .collect();
+        Self {
+            points,
+            leaves,
+            scales,
+        }
+    }
+}
+
+/// Writes `charges` into the charge slots of the source chunks `chunks` of the local
+/// leaves (CONVENTIONS §3.13, "Source chunks"): point k of leaf j gets the charge of
+/// `sources.points(j)[k]`. On `pool` when given, the leaves split in halves under
+/// `rayon::join` into disjoint parts of at most [`LOAD_GRAIN`] points (or one leaf);
+/// serially otherwise. Copies only, so the same values either way (Phase 4S T9).
+fn load_source_charges<T: Copy + Send + Sync>(
+    chunks: LeafSliceMut<'_, T>,
+    sources: &LeafOrder,
+    charges: &[T],
+    pool: Option<&ThreadPool>,
+) {
+    match pool {
+        Some(pool) => pool.install(|| split_source_charges(chunks, 0, sources, charges)),
+        None => write_source_charges(chunks, 0, sources, charges),
+    }
+}
+
+/// [`load_source_charges`] on the calling thread, for the leaves of `chunks`, the first
+/// of which is local leaf `first`.
+fn write_source_charges<T: Copy>(
+    mut chunks: LeafSliceMut<'_, T>,
+    first: usize,
+    sources: &LeafOrder,
+    charges: &[T],
+) {
+    for (r, chunk) in chunks.chunks_mut().enumerate() {
+        let points = sources.points(first + r);
+        let (_, values) = chunk.split_at_mut(3 * points.len());
+        for (q, &i) in values.iter_mut().zip(points) {
+            *q = charges[i];
+        }
+    }
+}
+
+/// [`load_source_charges`] on the current pool, halving the leaves of `chunks` (the
+/// first local leaf `first`) until a half holds at most [`LOAD_GRAIN`] points or one leaf.
+fn split_source_charges<T: Copy + Send + Sync>(
+    mut chunks: LeafSliceMut<'_, T>,
+    first: usize,
+    sources: &LeafOrder,
+    charges: &[T],
+) {
+    let n = chunks.nleaves();
+    let points = sources.offsets[first + n] - sources.offsets[first];
+    if n < 2 || points <= LOAD_GRAIN {
+        write_source_charges(chunks, first, sources, charges);
+        return;
+    }
+    let mid = n / 2;
+    let (left, right) = chunks.split_at_mut(mid);
+    rayon::join(
+        || split_source_charges(left, first, sources, charges),
+        || split_source_charges(right, first + mid, sources, charges),
+    );
+}
+
+/// The charges in leaf order, the upload buffer of a device evaluation (empty on the host
+/// path): `leaf_charges[s] = charges[order[s]]`. On `pool` when given, in ranges of at
+/// least [`LOAD_GRAIN`] points; serially otherwise. Copies only (Phase 4S T9).
+fn gather_charges<T: Copy + Send + Sync>(
+    leaf_charges: &mut [T],
+    order: &[usize],
+    charges: &[T],
+    pool: Option<&ThreadPool>,
+) {
+    match pool {
+        Some(pool) => pool.install(|| {
+            leaf_charges
+                .par_iter_mut()
+                .zip(order)
+                .with_min_len(LOAD_GRAIN)
+                .for_each(|(q, &i)| *q = charges[i]);
+        }),
+        None => {
+            for (q, &i) in leaf_charges.iter_mut().zip(order) {
+                *q = charges[i];
+            }
+        }
+    }
+}
+
+/// The output pass on the host (Phase 4S T9): φ and ∇φ of every target of `order` from
+/// the leaf-ordered target output `store`, into `output`'s buffers. Each value is
+/// `T::from_f64(x.to_f64() / scale)`, as the pass before T9 ([`scaled_output`]) computes
+/// it, so the output is that pass's bit for bit.
+///
+/// One loop over the targets in the caller's order: on `pool` when given, rayon's split
+/// of the targets into ranges that each thread writes in sequence, reading the store
+/// gathered; on the calling thread otherwise. The values are collected into the buffers,
+/// cleared first and their allocations reused (`collect_into_vec`, `unzip_into_vecs`):
+/// every element is written once, with no zero fill. `gradient` becomes `Some` with
+/// gradients and `None` without.
+fn gather_output<T: SimdScalar + Default>(
+    store: &LeafStore<T>,
+    order: &OutputOrder,
+    gradients: bool,
+    pool: Option<&ThreadPool>,
+    output: &mut Output<T>,
+) {
+    let (data, offsets) = (store.as_slice(), store.point_offsets());
+    let n = order.points.len();
+    // Target i's leaf j, the leaf's first point and the target's place k in the leaf.
+    let place = |i: usize| {
+        let j = order.leaves[i] as usize;
+        let first = offsets[j];
+        (j, first, order.points[i] as usize - first)
+    };
+    let scaled = |x: T, scale: f64| T::from_f64(RealScalar::to_f64(x) / scale);
+    if gradients {
+        // Leaf j holds φ̂ of its n_j points, then their ĝ, from 4 P_j.
+        let both = |i: usize| {
+            let (j, first, k) = place(i);
+            let [phi_scale, g_scale] = order.scales[j];
+            let base = 4 * first;
+            let g = base + (offsets[j + 1] - first) + 3 * k;
+            (
+                scaled(data[base + k], phi_scale),
+                [0, 1, 2].map(|c| scaled(data[g + c], g_scale)),
+            )
+        };
+        let (potential, gradient) = (
+            &mut output.potential,
+            output.gradient.get_or_insert_with(Vec::new),
+        );
+        match pool {
+            Some(pool) => pool.install(|| {
+                (0..n)
+                    .into_par_iter()
+                    .map(both)
+                    .unzip_into_vecs(potential, gradient);
+            }),
+            None => {
+                potential.clear();
+                gradient.clear();
+                potential.reserve(n);
+                gradient.reserve(n);
+                for (phi, g) in (0..n).map(both) {
+                    potential.push(phi);
+                    gradient.push(g);
+                }
+            }
+        }
+    } else {
+        output.gradient = None;
+        let phi = |i: usize| {
+            let (j, first, k) = place(i);
+            scaled(data[first + k], order.scales[j][0])
+        };
+        let potential = &mut output.potential;
+        match pool {
+            Some(pool) => {
+                pool.install(|| (0..n).into_par_iter().map(phi).collect_into_vec(potential));
+            }
+            None => {
+                potential.clear();
+                potential.extend((0..n).map(phi));
+            }
+        }
+    }
+}
+
+/// After the output pass on the device (Phase 4S T9): `values`, φ of every target in the
+/// caller's order and then, with gradients, ∇φ in the `[T; 3]` order of [`Output`], copied
+/// into `output`'s buffers as [`gather_output`] writes them (on `pool` when given, each
+/// element once, the allocations reused).
+#[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+fn copy_output<T: SimdScalar>(
+    values: &[T],
+    gradients: bool,
+    pool: Option<&ThreadPool>,
+    output: &mut Output<T>,
+) {
+    let n = if gradients {
+        values.len() / 4
+    } else {
+        values.len()
+    };
+    let (phi, g) = values.split_at(n);
+    let g = g.as_chunks::<3>().0;
+    if !gradients {
+        output.gradient = None;
+    }
+    let (potential, gradient) = (
+        &mut output.potential,
+        gradients.then(|| output.gradient.get_or_insert_with(Vec::new)),
+    );
+    match pool {
+        Some(pool) => pool.install(|| {
+            phi.par_iter().copied().collect_into_vec(potential);
+            if let Some(gradient) = gradient {
+                g.par_iter().copied().collect_into_vec(gradient);
+            }
+        }),
+        None => {
+            potential.clear();
+            potential.extend_from_slice(phi);
+            if let Some(gradient) = gradient {
+                gradient.clear();
+                gradient.extend_from_slice(g);
+            }
+        }
+    }
+}
+
 /// The wall time of each step of [`FmmBuilder::build`] on this rank, for reports only.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BuildTimings {
@@ -1903,7 +2280,9 @@ impl BuildTimings {
 /// [`remainder`](Self::remainder) what the stages spent outside the level calls.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct StageTimings {
-    /// Writing the charges into the source chunks; with a device backend also zeroing
+    /// Writing the charges into leaf order: the host's source chunks (on a device only
+    /// with P2M, P2L or P2P on the host fallback) and, on a device, the upload buffer, on
+    /// the `Fmm`'s pool when it has one (Phase 4S T9); with a device backend also zeroing
     /// the device stores and uploading and scattering the charges.
     pub load: Duration,
     /// Stage 1: the source exchange (collective).
@@ -1918,9 +2297,16 @@ pub struct StageTimings {
     pub downward: Duration,
     /// Stage 6: L2P, M2P and P2P.
     pub evaluate_leaves: Duration,
-    /// Scaling the target output into the caller's order; with a device backend also
-    /// downloading it.
+    /// The output pass: scaling the target output into the caller's order, on the host or
+    /// on the device ([`OutputPass`]; Phase 4S T9), and with a device backend downloading
+    /// it ([`download`](Self::download)).
     pub output: Duration,
+    /// With a device backend: the part of [`output`](Self::output) spent in
+    /// `read_output`, the evaluation's one download and its sync, by the host clock
+    /// (Phase 4S T9). It is the evaluation's one wait for the device, so in a default
+    /// evaluation it also holds the device work still queued. Zero on the host.
+    /// `output` less `download` is the host's part of the output pass.
+    pub download: Duration,
     /// With a device backend that times on the device: the device time of each stage
     /// with device work ([`FmmBuilder::device_timestamps`]); `None` otherwise.
     pub device: Option<DeviceStageTimings>,
@@ -2155,7 +2541,8 @@ impl DeviceStageTimings {
     }
 }
 
-/// The result of one [`Fmm::evaluate`], in the caller's target order on this rank.
+/// The result of one [`Fmm::evaluate`] or [`Fmm::evaluate_into`], in the caller's target
+/// order on this rank.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Output<T> {
     /// φ(xᵢ) = Σⱼ qⱼ / (4π |xᵢ − yⱼ|) at every target.
@@ -2199,11 +2586,16 @@ where
     synchronous_stages: bool,
     /// With a device backend: the charges of an evaluation in leaf order, for the upload.
     leaf_charges: Vec<T>,
+    /// Whether an evaluation writes the charges into the host's source store: on the host
+    /// path, and on a device with P2M, P2L or P2P on the host fallback (Phase 4S T9).
+    host_sources: bool,
     /// The failure of a device evaluation, returned by every later evaluation.
     device_error: Option<String>,
     sources: LeafOrder,
     targets: LeafOrder,
-    /// r_t of every local leaf.
+    /// The output pass's position and leaf of every target, and the scales of every leaf.
+    outputs: OutputOrder,
+    /// r_t of every local leaf, for the test oracle ([`Fmm::reference_output`]).
     radii: Vec<f64>,
     max_leaf_points: usize,
     cache_outcomes: Vec<(TableKind, CacheOutcome)>,
@@ -2220,7 +2612,8 @@ where
     /// `charges` at every target; see the [module documentation](self#evaluation).
     ///
     /// `charges[i]` is the charge of source i of [`FmmBuilder::build`], on this rank.
-    /// Allocates the output.
+    /// Allocates the output: [`evaluate_into`](Self::evaluate_into) a fresh [`Output`],
+    /// with the same bits.
     ///
     /// # Collective operation
     ///
@@ -2234,6 +2627,34 @@ where
     /// device backend, [`FmmError::Device`] if a device operation of this or an earlier
     /// evaluation failed.
     pub fn evaluate(&mut self, charges: &[T]) -> Result<Output<T>, FmmError> {
+        let mut output = Output {
+            potential: Vec::new(),
+            gradient: None,
+            timings: StageTimings::default(),
+        };
+        self.evaluate_into(charges, &mut output)?;
+        Ok(output)
+    }
+
+    /// [`evaluate`](Self::evaluate) into `output`, whose buffers are reused (Phase 4S T9,
+    /// decision 11): the same bits, without allocating the output where its buffers have
+    /// the capacity.
+    ///
+    /// `output` may hold anything: [`potential`](Output::potential) is rewritten to one
+    /// value per target, [`gradient`](Output::gradient) to one per target if the FMM was
+    /// built with gradients (its buffer reused if present, allocated if absent) and to
+    /// `None` otherwise, and [`timings`](Output::timings) to this evaluation's. A buffer of
+    /// the wrong length is resized, never refused; every element is written once, with no
+    /// zero fill first. On an error `output` is left as it was.
+    ///
+    /// # Collective operation
+    ///
+    /// As [`evaluate`](Self::evaluate).
+    ///
+    /// # Errors
+    ///
+    /// As [`evaluate`](Self::evaluate), agreed on every rank alike.
+    pub fn evaluate_into(&mut self, charges: &[T], output: &mut Output<T>) -> Result<(), FmmError> {
         let local = if charges.len() == self.sources.len() {
             Ok(())
         } else {
@@ -2248,20 +2669,25 @@ where
             return Err(FmmError::Device(reason.clone()));
         }
 
+        // The pool of the charge load and the output pass: the operator's, unless it runs
+        // serially (Phase 4S T9).
+        let pool = self.evaluator.operator().engine.host().pool().cloned();
         let mut timings = StageTimings::default();
         let start = Instant::now();
-        let mut chunks = self.evaluator.local_sources_mut();
-        let mut leaf_charges = self.leaf_charges.iter_mut();
-        for (j, chunk) in chunks.chunks_mut().enumerate() {
-            let points = self.sources.points(j);
-            let (_, values) = chunk.split_at_mut(3 * points.len());
-            for (q, &i) in values.iter_mut().zip(points) {
-                *q = charges[i];
-                if let Some(slot) = leaf_charges.next() {
-                    *slot = charges[i];
-                }
-            }
+        if self.host_sources {
+            load_source_charges(
+                self.evaluator.local_sources_mut(),
+                &self.sources,
+                charges,
+                pool.as_deref(),
+            );
         }
+        gather_charges(
+            &mut self.leaf_charges,
+            &self.sources.order,
+            charges,
+            pool.as_deref(),
+        );
         timings.load = start.elapsed();
 
         let sync = self.synchronous_stages;
@@ -2319,39 +2745,41 @@ where
         let start = Instant::now();
         let gradients = self.gradients();
         let ExecOperator { engine, kinds } = self.evaluator.operator_mut();
-        let (potential, gradient) = match engine {
+        match engine {
             Engine::Host(_) => {
                 timings.kinds = kinds.timings();
-                scaled_output(
+                gather_output(
                     self.evaluator.target_output_store(),
-                    &self.targets,
-                    &self.radii,
+                    &self.outputs,
                     gradients,
-                )
+                    pool.as_deref(),
+                    output,
+                );
             }
             #[cfg(feature = "gpu")]
-            Engine::Device(driver) => match driver.read_output() {
-                Ok(store) => {
-                    let output = scaled_output(store, &self.targets, &self.radii, gradients);
-                    timings.device = driver.stage_timings();
-                    // The call windows, read after the download, like the stage windows.
-                    let on_device = kinds.resolve_windows();
-                    timings.kinds = kinds.timings().filter(|_| on_device);
-                    output
+            Engine::Device(driver) => {
+                match timed_value(|| driver.read_output(), &mut timings.download) {
+                    Ok(DeviceOutput::LeafOrder(store)) => {
+                        gather_output(store, &self.outputs, gradients, pool.as_deref(), output);
+                    }
+                    Ok(DeviceOutput::CallerOrder(values)) => {
+                        copy_output(values, gradients, pool.as_deref(), output);
+                    }
+                    Err(error) => {
+                        let reason = error.to_string();
+                        self.device_error = Some(reason.clone());
+                        return Err(FmmError::Device(reason));
+                    }
                 }
-                Err(error) => {
-                    let reason = error.to_string();
-                    self.device_error = Some(reason.clone());
-                    return Err(FmmError::Device(reason));
-                }
-            },
-        };
+                timings.device = driver.stage_timings();
+                // The call windows, read after the download, like the stage windows.
+                let on_device = kinds.resolve_windows();
+                timings.kinds = kinds.timings().filter(|_| on_device);
+            }
+        }
         timings.output = start.elapsed();
-        Ok(Output {
-            potential,
-            gradient,
-            timings,
-        })
+        output.timings = timings;
+        Ok(())
     }
 
     /// Returns the octree.
@@ -2528,6 +2956,56 @@ where
                 .map_err(|error| FmmError::Device(error.to_string())),
         }
     }
+
+    /// Returns where the output pass runs ([`FmmBuilder::output_pass`], Phase 4S T9): on
+    /// the host for [`Backend::Host`]; with a device backend as its device report says
+    /// (by default on the device where it does f64 arithmetic, the CPU runtime and CUDA,
+    /// and on the host on Metal).
+    pub fn output_pass(&self) -> Placement {
+        match &self.evaluator.operator().engine {
+            Engine::Host(_) => Placement::Host,
+            #[cfg(feature = "gpu")]
+            Engine::Device(driver) => driver.report().output_pass,
+        }
+    }
+
+    /// The test oracle of the output pass (Phase 4S T9), for tests only: φ and ∇φ of the
+    /// last evaluation by the pass before T9, one serial loop over the leaves that divides
+    /// each value of the leaf-ordered target output by 4π r_t or 4π r_t² in f64 and
+    /// scatters it into the caller's order. On the host it reads the evaluator's target
+    /// output; with a device backend it downloads the device's (one download, counted
+    /// toward the evaluation's device counters until the next evaluation). The output of
+    /// [`evaluate`](Self::evaluate) equals it bit for bit, on every backend and with
+    /// either [`OutputPass`]. Before the first evaluation it holds zeros. Its timings are
+    /// zero. Local: no collective.
+    ///
+    /// # Errors
+    ///
+    /// [`FmmError::Device`] if the download fails.
+    #[doc(hidden)]
+    pub fn reference_output(&mut self) -> Result<Output<T>, FmmError> {
+        let gradients = self.gradients();
+        let (potential, gradient) = match &mut self.evaluator.operator_mut().engine {
+            Engine::Host(_) => scaled_output(
+                self.evaluator.target_output_store(),
+                &self.targets,
+                &self.radii,
+                gradients,
+            ),
+            #[cfg(feature = "gpu")]
+            Engine::Device(driver) => {
+                let store = driver
+                    .download_target_output()
+                    .map_err(|error| FmmError::Device(error.to_string()))?;
+                scaled_output(&store, &self.targets, &self.radii, gradients)
+            }
+        };
+        Ok(Output {
+            potential,
+            gradient,
+            timings: StageTimings::default(),
+        })
+    }
 }
 
 /// The device path's reports (feature `gpu`).
@@ -2576,7 +3054,9 @@ where
 }
 
 /// The target output `store`, scaled (CONVENTIONS §3.13, "Output") and in the caller's
-/// order of `targets`, with r_t of every local leaf in `radii`.
+/// order of `targets`, with r_t of every local leaf in `radii`: the output pass before
+/// Phase 4S T9, one serial loop over the leaves into zeroed vectors, kept as the test
+/// oracle of [`gather_output`] and [`copy_output`] ([`Fmm::reference_output`]).
 fn scaled_output<T: SimdScalar + Default>(
     store: &LeafStore<T>,
     targets: &LeafOrder,
@@ -2607,4 +3087,185 @@ fn timed(stage: impl FnOnce()) -> Duration {
     let start = Instant::now();
     stage();
     start.elapsed()
+}
+
+/// Runs `f`, stores its wall time in `time` and returns its value.
+#[cfg(feature = "gpu")]
+fn timed_value<R>(f: impl FnOnce() -> R, time: &mut Duration) -> R {
+    let start = Instant::now();
+    let value = f();
+    *time = start.elapsed();
+    value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// SplitMix64, for test data.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+
+        /// Uniform in [−1, 1).
+        fn value(&mut self) -> f64 {
+            (self.next() >> 11) as f64 / (1u64 << 52) as f64 - 1.0
+        }
+    }
+
+    /// The leaf of each of `n` points in caller's order: random leaves of `nleaves`, leaf
+    /// 1 empty.
+    fn random_leaves(rng: &mut Rng, n: usize, nleaves: usize) -> Vec<u32> {
+        (0..n)
+            .map(|_| {
+                let j = rng.below(nleaves - 1);
+                (if j >= 1 { j + 1 } else { j }) as u32
+            })
+            .collect()
+    }
+
+    /// No pool for one thread, a pool of `threads` otherwise.
+    fn pool(threads: usize) -> Option<ThreadPool> {
+        (threads > 1).then(|| {
+            ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+        })
+    }
+
+    fn bits<T: SimdScalar>(values: &[T]) -> Vec<u64> {
+        values
+            .iter()
+            .map(|&v| RealScalar::to_f64(v).to_bits())
+            .collect()
+    }
+
+    /// The charge load (Phase 4S T9) at one and four threads, against the serial loop
+    /// before T9, bit for bit: the charges of the host's source store (the coordinates
+    /// untouched) and the device's upload buffer in leaf order. 20,000 sources in 700
+    /// leaves, so that the load splits below [`LOAD_GRAIN`].
+    #[test]
+    fn the_charge_load_is_bit_identical_at_any_thread_count() {
+        let mut rng = Rng(1);
+        let (n, nleaves) = (20_000, 700);
+        let sources = LeafOrder::new(&random_leaves(&mut rng, n, nleaves), nleaves);
+        let charges: Vec<f64> = (0..n).map(|_| rng.value()).collect();
+        let mut store = LeafStore::<f64>::new(&sources.counts, 4);
+        for x in store.as_mut_slice() {
+            *x = rng.value();
+        }
+        // The loop before T9.
+        let mut want = store.clone();
+        let mut want_charges = vec![0.0; n];
+        let mut slots = want_charges.iter_mut();
+        let mut range = want.range_mut(0..nleaves);
+        for (j, chunk) in range.chunks_mut().enumerate() {
+            let points = sources.points(j);
+            let (_, values) = chunk.split_at_mut(3 * points.len());
+            for (q, &i) in values.iter_mut().zip(points) {
+                *q = charges[i];
+                *slots.next().unwrap() = charges[i];
+            }
+        }
+        for threads in [1, 4] {
+            let pool = pool(threads);
+            let mut got = store.clone();
+            let mut leaf_charges = vec![0.0; n];
+            load_source_charges(got.range_mut(0..nleaves), &sources, &charges, pool.as_ref());
+            gather_charges(&mut leaf_charges, &sources.order, &charges, pool.as_ref());
+            assert_eq!(
+                bits(got.as_slice()),
+                bits(want.as_slice()),
+                "{threads} threads: the source store"
+            );
+            assert_eq!(
+                bits(&leaf_charges),
+                bits(&want_charges),
+                "{threads} threads: the upload buffer"
+            );
+        }
+    }
+
+    /// The output passes (Phase 4S T9) against the pass before T9 ([`scaled_output`]),
+    /// bit for bit: the host pass ([`gather_output`]) at one and four threads, into a fresh
+    /// output and into one of the wrong size and gradients, and the copy after the device
+    /// pass ([`copy_output`]); f32 and f64, gradients off and on.
+    #[test]
+    fn the_output_passes_are_the_pass_before_t9_bit_for_bit() {
+        output_passes::<f64>();
+        output_passes::<f32>();
+    }
+
+    fn output_passes<T: SimdScalar + Default>() {
+        let mut rng = Rng(2);
+        let (n, nleaves) = (20_000, 700);
+        let targets = LeafOrder::new(&random_leaves(&mut rng, n, nleaves), nleaves);
+        // Radii of levels 0 to 16 of domains of any size.
+        let radii: Vec<f64> = (0..nleaves)
+            .map(|_| (1.5 + rng.value()) * 2f64.powi(-(rng.below(17) as i32)))
+            .collect();
+        let order = OutputOrder::new(&targets, &radii);
+        for gradients in [false, true] {
+            let o = if gradients { 4 } else { 1 };
+            let mut store = LeafStore::<T>::new(&targets.counts, o);
+            for x in store.as_mut_slice() {
+                *x = T::from_f64(rng.value());
+            }
+            let (potential, gradient) = scaled_output(&store, &targets, &radii, gradients);
+            let want = Output {
+                potential,
+                gradient,
+                timings: StageTimings::default(),
+            };
+            let want_bits = |output: &Output<T>| {
+                assert_eq!(output.gradient.is_some(), gradients);
+                let mut values = bits(&output.potential);
+                if let Some(gradient) = &output.gradient {
+                    values.extend(bits(gradient.as_flattened()));
+                }
+                values
+            };
+            let reference = want_bits(&want);
+            for threads in [1, 4] {
+                let pool = pool(threads);
+                let what = format!("{threads} threads, gradients {gradients}");
+                let mut fresh = Output {
+                    potential: Vec::new(),
+                    gradient: None,
+                    timings: StageTimings::default(),
+                };
+                gather_output(&store, &order, gradients, pool.as_ref(), &mut fresh);
+                assert_eq!(want_bits(&fresh), reference, "{what}: the host pass");
+                let mut wrong = Output {
+                    potential: vec![T::zero(); 3],
+                    gradient: (!gradients).then(|| vec![[T::zero(); 3]; 5]),
+                    timings: StageTimings::default(),
+                };
+                gather_output(&store, &order, gradients, pool.as_ref(), &mut wrong);
+                assert_eq!(want_bits(&wrong), reference, "{what}: a resized output");
+                // The device pass's values: φ, then ∇φ, in the caller's order.
+                let mut values = want.potential.clone();
+                values.extend(want.gradient.iter().flatten().flatten());
+                let mut copied = Output {
+                    potential: vec![T::zero(); 3],
+                    gradient: (!gradients).then(Vec::new),
+                    timings: StageTimings::default(),
+                };
+                copy_output(&values, gradients, pool.as_ref(), &mut copied);
+                assert_eq!(want_bits(&copied), reference, "{what}: the copy");
+            }
+        }
+    }
 }

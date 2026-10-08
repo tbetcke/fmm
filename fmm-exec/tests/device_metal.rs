@@ -30,7 +30,11 @@
 //! - sources and targets disjoint by the parity of their level-2 cell, so that leaves
 //!   hold sources only or targets only (empty target and source leaves), p = 4;
 //! - coincident points: 40 positions with five copies each in a cloud, p = 4;
-//! - f64 with Metal is refused with `SettingsError::PrecisionUnsupported` at build;
+//! - f64 with Metal is refused with `SettingsError::PrecisionUnsupported` at build, and so
+//!   is the output pass on the device (`OutputPass::Device`, Phase 4S T9) with
+//!   `SettingsError::OutputPassUnsupported`; by default the output pass runs on the host,
+//!   and in every scenario `check_backend` checks it against the pass before T9 bit for
+//!   bit;
 //! - `threads(4)` builds the pool of four threads for the host-fallback kinds
 //!   (device-path.md §11): with every kind there the output still equals the host
 //!   path's, and with the default placement the output of one thread;
@@ -52,7 +56,9 @@
 use mpi::Threading;
 use mpi::traits::*;
 use nd_fmm_exec::device::Gemm;
-use nd_fmm_exec::fmm::{Backend, DeviceGemm, FmmBuilder, FmmError, OperatorKind, SettingsError};
+use nd_fmm_exec::fmm::{
+    Backend, DeviceGemm, FmmBuilder, FmmError, OperatorKind, OutputPass, Placement, SettingsError,
+};
 use nd_fmm_exec::tables::M2lStrategy;
 
 mod device_common;
@@ -293,6 +299,38 @@ fn metal_device_path() {
         ))
     );
     eprintln!("rank {}: f64 with Metal: {}", comm.rank(), error.unwrap());
+
+    // The output pass on the device needs f64 arithmetic (Phase 4S T9): `Device` is
+    // refused at build, on every rank; `Auto` runs the host pass.
+    let error = FmmBuilder::<f32>::new(4)
+        .backend(Backend::Metal)
+        .output_pass(OutputPass::Device)
+        .build(&points, &points, &comm)
+        .err();
+    assert_eq!(
+        error,
+        Some(FmmError::InvalidSettings(
+            SettingsError::OutputPassUnsupported {
+                backend: Backend::Metal
+            }
+        ))
+    );
+    if comm.size() == 1 {
+        let fmm = FmmBuilder::<f32>::new(4)
+            .backend(Backend::Metal)
+            .build(&points, &points, &comm)
+            .unwrap();
+        assert_eq!(
+            fmm.output_pass(),
+            Placement::Host,
+            "the output pass on Metal"
+        );
+    }
+    eprintln!(
+        "rank {}: output_pass(Device) with Metal: {}",
+        comm.rank(),
+        error.unwrap()
+    );
 
     // threads(4): the pool serves the host-fallback kinds.
     if comm.size() == 1 {

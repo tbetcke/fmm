@@ -17,7 +17,10 @@
 //! - the build uploaded the points and the tables the report lists;
 //! - every view on the device equals the plan's view it was uploaded from, the
 //!   row-to-batch maps point at the batch entry of each row entry, and the box and leaf
-//!   indices, point offsets and charge slots are those of the plan and the counts.
+//!   indices, point offsets and charge slots are those of the plan and the counts;
+//! - the output pass (Phase 4S T9) runs on the device where it does f64 arithmetic (the
+//!   CPU runtime, CUDA) and on the host otherwise (Metal), and every output equals the
+//!   pass before T9 (`Fmm::reference_output`) bit for bit.
 //!
 //! With the default placement (T10): every kind on the device under every strategy
 //! ([`device_kinds`]):
@@ -36,6 +39,9 @@
 //!   host's;
 //! - two evaluations of the first charges are bit-identical, and so is the output of a
 //!   second `Fmm` built from the same input (T11, requirement 6);
+//! - the output pass (Phase 4S T9): every output equals the pass before T9 bit for bit,
+//!   and a build with `output_pass(OutputPass::Host)` gives the same bits, with one launch
+//!   fewer where the default ran the pass on the device;
 //! - the transfers, launches and syncs of each evaluation equal the formula with the
 //!   fallback transfers of each device kind replaced by one launch per level call, or for
 //!   M2M, L2L and dense M2L three per chunk (gather, GEMM, reduction or scatter-add;
@@ -66,7 +72,8 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, Equivalence};
 use nd_fmm_exec::device::{DataKind, GroupedImage, StageTiming, Traffic};
 use nd_fmm_exec::fmm::{
-    Backend, Fmm, FmmBuilder, FmmError, KindTiming, OperatorKind, Output, Placement, SettingsError,
+    Backend, Fmm, FmmBuilder, FmmError, KindTiming, OperatorKind, Output, OutputPass, Placement,
+    SettingsError,
 };
 use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_exec::tables::M2lStrategy;
@@ -194,7 +201,8 @@ impl Expected {
 ///   o N_l s, up o N_l s; M2P down K_{l+1} n_c s and o N_l s, up o N_l s; P2P down and
 ///   up o N_l s;
 /// - launches: the three zero kernels of non-empty stores and the charge scatter if
-///   there is a source; syncs: one per download.
+///   there is a source, and with the output pass on the device (Phase 4S T9) its gather
+///   if there is a target; syncs: one per download.
 ///
 /// A kind in `on_device` (T6: P2P; T7: P2M, P2L, L2P, M2P; T8: M2M, L2L; T9: M2L) moves
 /// nothing: each of its level calls is one launch instead of its downloads and uploads, or
@@ -346,8 +354,38 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
             }
         }
     }
+    if fmm.output_pass() == Placement::Device && fmm.ntargets() > 0 {
+        e.launches += 1;
+    }
     e.down(DataKind::Output, fmm.ntargets() * o * s);
     e
+}
+
+/// Where the output pass runs on `backend` by default (Phase 4S T9): on the device where
+/// it does f64 arithmetic.
+fn default_output_pass<T: Stored + SimdScalar + Equivalence + Default>(
+    fmm: &Fmm<'_, T>,
+) -> Placement {
+    if fmm.device_report().expect("a device backend").info.f64 {
+        Placement::Device
+    } else {
+        Placement::Host
+    }
+}
+
+/// Checks `output`, the last evaluation of `fmm`, against the output pass before Phase 4S
+/// T9 (`Fmm::reference_output`, the test oracle) bit for bit.
+pub fn check_reference<T: Stored + SimdScalar + Equivalence + Default>(
+    what: &str,
+    fmm: &mut Fmm<'_, T>,
+    output: &Output<T>,
+) {
+    let reference = fmm.reference_output().expect("the reference output");
+    assert_same(
+        &format!("{what}, against the pass before T9"),
+        output,
+        &reference,
+    );
 }
 
 /// With every kind on the device, `expected` is the design's minimum (device-path.md
@@ -767,7 +805,13 @@ fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
             (Some(first), true) => assert_eq!(&bits, first, "{what}: two evaluations differ"),
             _ => {}
         }
+        check_reference(&what, &mut fmm, &output);
     }
+    assert_eq!(
+        fmm.output_pass(),
+        default_output_pass(&fmm),
+        "{backend}: the output pass"
+    );
     // A second build of the same input gives the same bits (requirement 6), and so does
     // one with device timestamps (device-path.md §8.3), which adds timing windows where
     // the device times on itself and no sync.
@@ -784,6 +828,10 @@ fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
             "device_timestamps(true)",
             builder.clone().device_timestamps(true),
         ),
+        (
+            "output_pass(Host)",
+            builder.clone().output_pass(OutputPass::Host),
+        ),
     ] {
         let mut again = builder
             .threads(1)
@@ -796,6 +844,22 @@ fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
             first_bits,
             "{backend}, default placement: {what} differs from the first build"
         );
+        if what.starts_with("output_pass") {
+            // The host pass: one launch fewer where the default ran it on the device.
+            assert_eq!(again.output_pass(), Placement::Host);
+            let gather = u64::from(fmm.output_pass() == Placement::Device && fmm.ntargets() > 0);
+            let counters = again.device_counters().unwrap().evaluation;
+            assert_eq!(
+                (counters.syncs, counters.launches, counters.download_bytes),
+                (
+                    1,
+                    expected.launches - gather,
+                    expected.total().download_bytes
+                ),
+                "{backend}, {what}: syncs, launches and download bytes of an evaluation"
+            );
+            check_reference(&format!("{backend}, {what}"), &mut again, &output);
+        }
         if what.starts_with("device_timestamps") {
             let windowed = timestamps;
             let report = again.device_report().expect("a device backend");
@@ -917,6 +981,11 @@ fn check_fallback<'o, T: Stored + SimdScalar + Equivalence + Default>(
         built.unwrap_or_else(|error| panic!("{backend}: the FMM does not build: {error}"));
     assert_eq!(fmm.backend(), backend);
     assert_eq!(fmm.operator().threads(), 1);
+    assert_eq!(
+        fmm.output_pass(),
+        default_output_pass(&fmm),
+        "{backend}: the output pass"
+    );
     let report = fmm.device_report().expect("a device backend");
     for kind in OperatorKind::ALL {
         assert_eq!(
@@ -980,6 +1049,7 @@ fn check_fallback<'o, T: Stored + SimdScalar + Equivalence + Default>(
                 "{backend}, {what}: {data} moved in an evaluation"
             );
         }
+        check_reference(&format!("{backend}, {what}"), &mut fmm, &output);
     }
     check_views(&mut fmm);
     Outcome::Ran
