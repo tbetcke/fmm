@@ -202,8 +202,10 @@ These hold for every task, so that no task decides them on its own:
 - **Accuracy measures.** As in Phase 3 ("Error measures") and Phase 4:
   - **multi-rank against one rank:** relative L2 of the output difference over every
     target, for φ and ∇φ, summed over ranks. Provisional bounds until T1's sign-off:
-    1e-12 in f64 and 1e-5 in f32, the device-versus-host bounds of Phase 4. The relative
-    max difference is reported;
+    1e-12 in f64 and 1e-5 in f32, the device-versus-host bounds of Phase 4. Signed off
+    on 2026-10-08 (decision 7): bit for bit on the host path against the one-rank `Fmm`
+    over the union in rank order, and 100 u_T (1.1e-14 in f64, 6.0e-6 in f32) between
+    input distributions. The relative max difference is reported;
   - **against the direct sum:** the root mean square over eight charge vectors at 1,000
     sampled targets, within 0.1% (f64) and 1% (f32) of the one-rank run's;
   - if a check fails, the task reports the measured differences and their breakdown and
@@ -394,7 +396,11 @@ T9 all change `fmm-exec/src/fmm.rs` and `tests/mpi_exec.rs`.
 
 Each is recorded in the exit checklist when made:
 1. The design document `docs/design/distributed-fmm.md`, including any change it proposes
-   to the requirements or tolerances above (T1; before T4).
+   to the requirements or tolerances above (T1; before T4). **Signed off on 2026-10-08:
+   every recommendation of the design's §13 accepted** (questions 1–14, and the further
+   choices listed after its table: k = 8, `movement::scatter_columns`, every rank opening
+   device 0 with rank 0 tuning and broadcasting, and the names). Decisions 6–12 below
+   record the answers; questions 5, 10–14 are decision 13.
 2. Hardware. **Decided on 2026-10-04: the M3 Max only.** **Revised on 2026-10-05
    (Phase 4S decision 8): the M3 Max and locust (GH200)**, both single nodes: up to 12
    ranks × threads on the M3 Max, up to 72 on locust. Every multi-rank run is one node.
@@ -413,22 +419,71 @@ Each is recorded in the exit checklist when made:
    Phase 5 is checked with it.
 6. `nd-octree` changes. **Decided on 2026-10-04: allowed where the distributed FMM needs
    them.** T1 lists each change with its reason, and the sign-off accepts or rejects each
-   one.
+   one. **Decided on 2026-10-08 (design §3, §13 question 2): O1 (a coarse tree by weight
+   from the root, its blocks nodes of the one-rank tree, refinement factor k = 8), O2
+   (points as the default weight), O3 (the cut at the nearest block boundary) and O4
+   (ranks without blocks instead of the panic) accepted; O5, no new lookup.** The
+   defaults change on several ranks; one rank is unchanged. The changes to the T4 brief
+   that the design's §12 proposes are accepted too (T4, 2026-10-08): the weights do not
+   travel through the parallel sort (each rank counts its own input keys per block);
+   `Octree::new` returns no `Result` and has no agreed error; acceptance adds that the
+   leaves equal the one-rank leaves. T4 computes the partition bounds locally, without
+   the two bound `gather_to_all`s of the design's §9.1 draft, which is corrected.
 7. The tolerance of requirement 2 (multi-rank against one rank), with T1's derivation,
    and whether a rank-count-independent order within leaves is worth providing (T1).
+   **Decided on 2026-10-08 (design §5, §13 questions 1 and 3):** on the host path bit for
+   bit the one-rank `Fmm` over the union of the points in rank order (with O1 and P1: near
+   and X rows by the entry's (level, key), in T5); 100 u_T relative L2 (1.1e-14 in f64,
+   6.0e-6 in f32) between input distributions, and for the device against the host on
+   the same ranks Phase 4's bounds. The order within a leaf is (origin rank, origin
+   position); no rank-count-independent point order. Requirements 1–10 are accepted
+   with T1's notes: requirement 7, the source exchange's sends need no download (§7.1);
+   requirement 8, the replicated part grows linearly in P and is stated (§9.2).
 8. The redistribution API as refined by T1, and whether `build` keeps a cheap path for
-   callers whose points are already on their owners (T1).
+   callers whose points are already on their owners (T1). **Decided on 2026-10-08 (design
+   §4.1, §13 question 4):** (key, position) on the wire, `_into` variants, `max_per_item`
+   agreed at `new`, a payload of the wrong length takes part and panics; **no cheap
+   path** (0.2–0.8 µs measured).
 9. The overlap order (T1). The default recommendation is the order-preserving overlap of
    "Accumulation order", bit-identical to the blocking path. A reordering (P2P before
    L2P, local before ghost row parts) is opt-in at most, with its order documented, and
    only if T1's model shows the order-preserving overlap leaves communication exposed.
+   **Decided on 2026-10-08 (design §8.1–§8.3, §13 question 7): order-preserving only**,
+   with the multipole exchange posted before the coarse gather; no reordering in Phase 5.
 10. The non-blocking mechanism: scoped rsmpi point-to-point, or an rlst addition (T1;
-    an rlst addition needs asking).
+    an rlst addition needs asking). **Decided on 2026-10-08 (design §8.4, §13 question
+    8): scoped rsmpi point-to-point** on each exchange's graph communicator, with
+    `Request::test` after every level call; no rlst change.
 11. The C5.2 criterion "communication hidden", made measurable (T1). For example: the
     exposed wait of every exchange in an overlapped evaluation at most 10% of the
-    blocking exchange time, at 8 ranks on the benchmark case.
+    blocking exchange time, at 8 ranks on the benchmark case. **Decided on 2026-10-08
+    (design §8.6, §13 question 9):** the exposed waits of the source and multipole
+    exchanges at most 10% of their blocking time, on the cube and the Plummer sphere at
+    N = 10⁶, f64 p = 8, 8 ranks × 1 thread, on each machine.
 12. Device errors on several ranks: how an error at a mid-evaluation sync is agreed
-    without a hang, and whether that costs a collective per evaluation (T1).
+    without a hang, and whether that costs a collective per evaluation (T1). **Decided on
+    2026-10-08 (design §7.5, §13 question 6):** one all-reduce at the end of `evaluate`
+    on the device path with P > 1, and a kept error folded into the charge-length
+    agreement.
+13. The questions T1 added (design §13). **Decided on 2026-10-08, each as recommended:**
+    - the hook (question 5): six events (design §6.2), the multipole "send" once before
+      the coarse gather; `CoarseExchange::{sent_blocks, received_blocks}`; the shadow
+      check drives `Evaluator` directly, no new public constructor (§6.4);
+    - a device overlap part in T9 (question 10): none in Phase 5; the device runs the
+      overlapped stages with the same events, for correctness;
+    - the replicated global pass (question 11): **P2 in T5**, a rank computes only the
+      `Global` locals its own blocks descend from, bit for bit the same values; the
+      global M2M stays whole;
+    - the partition weight at 16–72 ranks (question 12): points (O2) for Phase 5; a
+      second cut by modelled work is a Phase 6 candidate, decided by T10's per-rank work;
+    - the top tree (question 13): Phase 5 keeps the replicated top tree with P2; its
+      replacement is the scale-out phase's second package;
+    - cluster scale (question 14): design §14 accepted as the direction. Phase 5 keeps
+      §14.5's constraints (no new P-growing per-rank structure; P2 written for S2; the
+      harness's per-rank point generation and rank-count invariance; an oversubscribed
+      locust run at 256–512 ranks). A scale-out phase follows Phase 5, ahead of the
+      Phase 6 list; without a cluster it is accepted on oversubscribed one-node runs and
+      estimated scaling, marked as such.
 
 ## Risks
 
@@ -453,7 +508,7 @@ In the repository root, start `claude` and say:
 
 ## Exit checklist
 - [x] T1 merged: `docs/design/distributed-fmm.md` drafted, sign-off questions listed
-- [ ] Distributed design signed off, including the `nd-octree` changes, the tolerance of requirement 2, the redistribution API, the overlap order and the non-blocking mechanism
+- [x] Distributed design signed off, including the `nd-octree` changes, the tolerance of requirement 2, the redistribution API, the overlap order and the non-blocking mechanism (2026-10-08: every recommendation of design §13 accepted; decisions 1, 6–13)
 - [x] Hardware: the M3 Max only; inter-node run documented for later (decided 2026-10-04); revised to the M3 Max and locust (decided 2026-10-05); briefs updated by Phase 4S T8 (2026-10-07)
 - [x] Device on several ranks: in Phase 5, correctness only (decided 2026-10-04)
 - [x] Multi-rank CI job: add one, measured in T3 (decided 2026-10-04)
