@@ -21,8 +21,6 @@
 //! - [`operator`]: the level-batched operator interface, with a per-pair adapter.
 //! - [`evaluator`]: [`Evaluator`](evaluator::Evaluator) runs the distributed pass order
 //!   on a plan, its stores and its exchanges.
-//! - [`index_fmm`]: a test FMM that propagates leaf indices instead of numbers, which
-//!   checks the complete distributed compute graph without any numerical error.
 //!
 //! # Compute graph
 //!
@@ -53,6 +51,14 @@
 //! The [`evaluator`] module documents the calls, the collectives and the accumulation
 //! order of every value.
 //!
+//! # Testing
+//!
+//! The crate checks topology and data flow, not values. The lists are compared with a
+//! brute-force geometric oracle, the exchanges with values seeded from the keys, and
+//! the evaluator with test operators that record the calls, the batches and the pairs
+//! they are handed (`tests/mpi_regressions.rs`, on any number of ranks). The values of
+//! the passes are checked by the Laplace FMM in `nd-fmm-exec` against the direct sum.
+//!
 //! # Future extensions
 //!
 //! - Overlapping the exchanges with the computation that does not need ghost data
@@ -63,7 +69,6 @@
 pub mod evaluator;
 pub mod exchange;
 pub mod index;
-pub mod index_fmm;
 pub mod interaction_manager;
 pub mod lists;
 pub mod operator;

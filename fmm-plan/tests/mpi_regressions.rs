@@ -1,19 +1,19 @@
 //! Public-API regression tests. Keep MPI initialization in one test: MPI cannot
 //! be initialized again after finalization within the same process.
-use std::collections::HashMap;
+use std::{borrow::Borrow, collections::HashMap};
 
 use mpi::{collective::SystemOperation, traits::*};
 use nd_fmm_plan::{
     evaluator::Evaluator,
     exchange::{CoarseExchange, MultipoleExchange, SourceExchange},
-    index_fmm::{self, BatchedIndexFmm, GlobalLeaves, IndexFmm, IndexPath, Walk},
     interaction_manager::V_LIST_DIRECTIONS,
     lists::{GroupedCsr, offset_index},
     operator::{
-        FmmOperator, FmmSizes, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PerPair, UpwardPass,
+        FmmOperator, FmmSizes, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PairOperator, PerPair,
+        UpwardPass,
     },
     plan::Plan,
-    store::LevelBuffers,
+    store::{LeafSliceMut, LeafStore, LevelBuffers},
 };
 use nd_octree::{
     Octree, OctreeOptions, PhysicalBox, constants::DEEPEST_LEVEL, morton, morton::is_ancestor,
@@ -559,84 +559,135 @@ fn hashed_target_count(key: u64) -> usize {
     hashed_count(key ^ 0x5bd1_e995)
 }
 
-/// Run the index FMM with counts of one, per pair and batched with both walks: every
-/// leaf must receive every leaf index exactly once, on every path. The global numbering
-/// of the leaves is their position in the global Morton order.
-fn check_counts_of_one<C: CommunicatorCollectives>(
-    name: &str,
-    comm: &C,
-    plan: &Plan,
-    global_leaves: &[u64],
-) {
+/// A per-pair test operator whose values do not matter. Every call adds to each output
+/// value a hash of all its inputs and of the keys of the pair, so the values depend on
+/// every input, ghost sources and ghost multipoles included, and a stale or doubled
+/// value shows. It checks that an evaluation repeats bit for bit, not that it is right.
+#[derive(Clone, Copy, Debug)]
+struct Mixer;
+
+/// The start of [`mix`]'s hash (FNV-1a), so that the root key and empty inputs still
+/// give a nonzero hash.
+const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// Add a hash of `inputs` and `keys` to every value of `output`.
+fn mix(inputs: [&[u32]; 2], keys: [u64; 2], output: &mut [u32]) {
+    let hash = inputs.iter().flat_map(|input| input.iter()).fold(
+        OFFSET_BASIS ^ keys[0] ^ keys[1].rotate_left(32),
+        |hash, &value| (hash ^ u64::from(value)).wrapping_mul(0x0100_0000_01b3),
+    );
+    for (k, value) in output.iter_mut().enumerate() {
+        *value = value.wrapping_add((hash >> (k % 32)) as u32);
+    }
+}
+
+impl FmmSizes for Mixer {
+    type Value = u32;
+
+    fn multipole_size(&self, level: usize) -> usize {
+        1 + level % 3
+    }
+
+    fn local_size(&self, _level: usize) -> usize {
+        2
+    }
+
+    fn source_point_size(&self) -> usize {
+        2
+    }
+
+    fn target_input_point_size(&self) -> usize {
+        1
+    }
+
+    fn target_output_point_size(&self) -> usize {
+        2
+    }
+}
+
+impl PairOperator for Mixer {
+    fn p2m(&mut self, leaf: u64, sources: &[u32], multipole: &mut [u32]) {
+        mix([sources, &[]], [leaf, leaf], multipole);
+    }
+
+    fn m2m(&mut self, child: u64, parent: u64, _: usize, input: &[u32], output: &mut [u32]) {
+        mix([input, &[]], [child, parent], output);
+    }
+
+    fn m2l(&mut self, source: u64, target: u64, _: usize, input: &[u32], output: &mut [u32]) {
+        mix([input, &[]], [source, target], output);
+    }
+
+    fn p2l(&mut self, source: u64, target: u64, sources: &[u32], local: &mut [u32]) {
+        mix([sources, &[]], [source, target], local);
+    }
+
+    fn l2l(&mut self, parent: u64, child: u64, _: usize, input: &[u32], output: &mut [u32]) {
+        mix([input, &[]], [parent, child], output);
+    }
+
+    fn l2p(&mut self, leaf: u64, local: &[u32], target_input: &[u32], output: &mut [u32]) {
+        mix([local, target_input], [leaf, leaf], output);
+    }
+
+    fn m2p(
+        &mut self,
+        source: u64,
+        target: u64,
+        multipole: &[u32],
+        target_input: &[u32],
+        output: &mut [u32],
+    ) {
+        mix([multipole, target_input], [source, target], output);
+    }
+
+    fn p2p(
+        &mut self,
+        source: u64,
+        target: u64,
+        sources: &[u32],
+        target_input: &[u32],
+        output: &mut [u32],
+    ) {
+        mix([sources, target_input], [source, target], output);
+    }
+}
+
+/// Fill every local leaf's chunk of `values` from its key and `salt`.
+fn fill_by_key(plan: &Plan, mut values: LeafSliceMut<'_, u32>, salt: u64) {
     let leaves = plan.index().leaves();
-    let numbering = GlobalLeaves::new(plan, comm);
-    let nleaves = numbering.nleaves();
-    assert_eq!(nleaves, global_leaves.len(), "{name}: number of leaves");
-    for j in 0..leaves.nlocal() {
-        assert_eq!(
-            global_leaves[numbering.indices()[j] as usize],
-            leaves.key(j),
-            "{name}: global index of leaf {}",
-            leaves.key(j)
-        );
-    }
-
-    let ones = vec![1; leaves.nlocal()];
-    let per_pair = evaluate_index(
-        plan,
-        comm,
-        PerPair(IndexFmm::new(nleaves)),
-        &numbering,
-        &ones,
-    );
-    let rows = evaluate_index(
-        plan,
-        comm,
-        BatchedIndexFmm::new(nleaves, Walk::Rows),
-        &numbering,
-        &ones,
-    );
-    let groupings = evaluate_index(
-        plan,
-        comm,
-        BatchedIndexFmm::new(nleaves, Walk::Groupings),
-        &numbering,
-        &ones,
-    );
-    let expected = vec![1u32; nleaves];
-    for j in 0..leaves.nlocal() {
-        let key = leaves.key(j);
-        assert_eq!(per_pair[j], expected, "{name}: per pair, leaf {key}");
-        assert_eq!(rows[j], expected, "{name}: batched rows, leaf {key}");
-        assert_eq!(
-            groupings[j], expected,
-            "{name}: batched groupings, leaf {key}"
-        );
+    for (j, chunk) in values.chunks_mut().enumerate() {
+        for (k, value) in chunk.iter_mut().enumerate() {
+            *value = ghost_value(leaves.key(j) ^ salt, k) as u32;
+        }
     }
 }
 
-/// Evaluate the index FMM with `operator`, counts `counts` for sources and targets, and
-/// return the target output of every local leaf. Collective.
-fn evaluate_index<C: CommunicatorCollectives, Op: FmmOperator<Value = u32>>(
-    plan: &Plan,
-    comm: &C,
-    operator: Op,
-    numbering: &GlobalLeaves,
-    counts: &[usize],
-) -> Vec<Vec<u32>> {
-    let mut evaluator = Evaluator::new(plan, comm, operator, counts, counts)
-        .unwrap_or_else(|error| panic!("evaluator: {error}"));
-    numbering.fill_sources(evaluator.local_sources_mut());
-    evaluator.evaluate();
-    (0..counts.len())
-        .map(|j| evaluator.target_output(j).to_vec())
-        .collect()
+/// The stores an evaluation writes: target output, multipoles, locals and sources
+/// (ghosts included).
+type Stores = (
+    LeafStore<u32>,
+    LevelBuffers<u32>,
+    LevelBuffers<u32>,
+    LeafStore<u32>,
+);
+
+/// Return the [`Stores`] of `evaluator`.
+fn stores<C: CommunicatorCollectives, P: Borrow<Plan>>(
+    evaluator: &Evaluator<'_, C, PerPair<Mixer>, P>,
+) -> Stores {
+    (
+        evaluator.target_output_store().clone(),
+        evaluator.multipoles().clone(),
+        evaluator.locals().clone(),
+        evaluator.source_store().clone(),
+    )
 }
 
-/// Run the index FMM with seeded variable counts (zeros included) on every path, check
-/// the counts, and check that evaluations are bit-identical: twice on one evaluator, and
-/// across the walks and the adapter.
-fn check_variable_counts<C: CommunicatorCollectives>(name: &str, comm: &C, plan: &Plan) {
+/// Evaluate with [`Mixer`] and seeded variable counts (zeros included), and check that
+/// evaluations are bit-identical: twice on one evaluator, and on an evaluator that owns
+/// a copy of the plan. Collective.
+fn check_repeated_evaluation<C: CommunicatorCollectives>(name: &str, comm: &C, plan: &Plan) {
     let leaves = plan.index().leaves();
     let sources: Vec<usize> = (0..leaves.nlocal())
         .map(|j| hashed_count(leaves.key(j)))
@@ -644,91 +695,34 @@ fn check_variable_counts<C: CommunicatorCollectives>(name: &str, comm: &C, plan:
     let targets: Vec<usize> = (0..leaves.nlocal())
         .map(|j| hashed_target_count(leaves.key(j)))
         .collect();
-    for path in [
-        IndexPath::PerPair,
-        IndexPath::Batched(Walk::Rows),
-        IndexPath::Batched(Walk::Groupings),
-    ] {
-        if let Err(message) = index_fmm::run_index_fmm(plan, comm, path, &sources, &targets) {
-            panic!("{name}: variable counts, {path:?}: {message}");
-        }
-    }
+    let mut borrowing = Evaluator::new(plan, comm, PerPair(Mixer), &sources, &targets)
+        .unwrap_or_else(|error| panic!("{name}: evaluator: {error}"));
+    // This one owns a copy of the plan; it must agree with the borrowing one.
+    let mut owning = Evaluator::new(plan.clone(), comm, PerPair(Mixer), &sources, &targets)
+        .unwrap_or_else(|error| panic!("{name}: evaluator: {error}"));
+    fill_by_key(plan, borrowing.local_sources_mut(), 0);
+    fill_by_key(plan, borrowing.local_target_inputs_mut(), 1);
+    fill_by_key(plan, owning.local_sources_mut(), 0);
+    fill_by_key(plan, owning.local_target_inputs_mut(), 1);
+    borrowing.evaluate();
+    owning.evaluate();
+    let first = stores(&borrowing);
 
-    let numbering = GlobalLeaves::new(plan, comm);
-    let global = numbering.gather_counts(comm, &sources);
-    let nleaves = numbering.nleaves();
-    let mut groupings = Evaluator::new(
-        plan,
-        comm,
-        BatchedIndexFmm::new(nleaves, Walk::Groupings),
-        &sources,
-        &targets,
-    )
-    .unwrap();
-    // This one owns a copy of the plan; it must agree with the borrowing ones.
-    let mut rows = Evaluator::new(
-        plan.clone(),
-        comm,
-        BatchedIndexFmm::new(nleaves, Walk::Rows),
-        &sources,
-        &targets,
-    )
-    .unwrap();
-    let mut per_pair = Evaluator::new(
-        plan,
-        comm,
-        PerPair(IndexFmm::new(nleaves)),
-        &sources,
-        &targets,
-    )
-    .unwrap();
-    numbering.fill_sources(groupings.local_sources_mut());
-    numbering.fill_sources(rows.local_sources_mut());
-    numbering.fill_sources(per_pair.local_sources_mut());
-    groupings.evaluate();
-    rows.evaluate();
-    per_pair.evaluate();
-    if let Err(message) =
-        index_fmm::check_counts(plan.index(), groupings.target_output_store(), &global)
-    {
-        panic!("{name}: variable counts: {message}");
-    }
+    // The check is not vacuous: some rank holds a nonzero multipole.
+    let local_nonzero = first.1.as_slice().iter().any(|&value| value != 0);
+    let mut nonzero = false;
+    comm.all_reduce_into(&local_nonzero, &mut nonzero, SystemOperation::logical_or());
+    assert!(nonzero, "{name}: every multipole is zero");
 
-    let first = (
-        groupings.target_output_store().clone(),
-        groupings.multipoles().clone(),
-        groupings.locals().clone(),
-        groupings.source_store().clone(),
+    borrowing.evaluate();
+    assert!(
+        stores(&borrowing) == first,
+        "{name}: two evaluations differ"
     );
-    groupings.evaluate();
-    let second = (
-        groupings.target_output_store().clone(),
-        groupings.multipoles().clone(),
-        groupings.locals().clone(),
-        groupings.source_store().clone(),
+    assert!(
+        stores(&owning) == first,
+        "{name}: the evaluator that owns its plan differs"
     );
-    assert!(first == second, "{name}: two evaluations differ");
-
-    // A walk over the target-centric rows, a walk over the groupings and the per-pair
-    // adapter give the same values everywhere.
-    for (other, label) in [
-        (
-            (rows.target_output_store(), rows.multipoles(), rows.locals()),
-            "rows",
-        ),
-        (
-            (
-                per_pair.target_output_store(),
-                per_pair.multipoles(),
-                per_pair.locals(),
-            ),
-            "per pair",
-        ),
-    ] {
-        assert!(other.0 == &first.0, "{name}: {label}: target output");
-        assert!(other.1 == &first.1, "{name}: {label}: multipoles");
-        assert!(other.2 == &first.2, "{name}: {label}: locals");
-    }
 }
 
 /// One level call: (method, level, pass of an M2M).
@@ -1238,11 +1232,8 @@ fn distributed_tree_regressions() {
             println!("  coarse gather, per rank: {coarse:?}");
         }
 
-        // The evaluator with the index FMM: every leaf receives every leaf index once with
-        // counts of one, the count check with variable counts on every path, the batches
-        // it issues, and determinism.
-        check_counts_of_one(name, &comm, &plan, &global_leaves);
-        check_variable_counts(name, &comm, &plan);
+        // The evaluator: determinism with variable counts, and the batches it issues.
+        check_repeated_evaluation(name, &comm, &plan);
         check_batches(name, &octree, &oracle, &plan);
     }
 }
