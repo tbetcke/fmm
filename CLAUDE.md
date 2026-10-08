@@ -170,8 +170,10 @@ test without one. Keep `RUST_MIN_STACK=8388608` on every test invocation of an M
 crate; some tests need it. Crate CLAUDE.md files add crate-specific checks. Keep clippy
 clean without blanket `#[allow]`s.
 
-Weekly jobs: `run-examples` runs `cargo templated-examples NPROCESSES 3` (examples
-registered with templated-examples metadata, at 3 ranks only); `run-dependency-checks`
+Weekly jobs: `run-examples` runs `.github/scripts/run-examples.sh 3` (the examples
+registered with templated-examples metadata, found through `cargo metadata`, at 3 ranks
+only; locally on macOS export `OMPI_MCA_btl_tcp_if_include=lo0` and
+`OMPI_MCA_oob_tcp_if_include=lo0` first); `run-dependency-checks`
 runs `cargo upgrades` (not `cargo audit`).
 
 ## MPI
