@@ -517,7 +517,7 @@ In the repository root, start `claude` and say:
 - [x] T2 merged: `IndexFmm` removed; the scenario set unchanged; list, exchange and recording-operator checks pass on 1, 2 and 4 ranks
 - [x] T3 merged: multi-rank CI job measured
 - [x] Multi-rank CI job: kept, budget 15 minutes cached, re-measured at T6 (decided 2026-10-08)
-- [ ] T4 merged: `nd-octree` changes as signed off; MPI examples pass on 1 and 3 ranks; `test_mpi_construction_edge_cases` fixed and passing at 1–8 ranks in debug
+- [x] T4 merged: `nd-octree` changes as signed off; MPI examples pass on 1 and 3 ranks; `test_mpi_construction_edge_cases` fixed and passing at 1–8 ranks in debug
 - [ ] T5 merged: `Redistribution` round-trips on 1, 2 and 4 ranks for every input distribution
 - [ ] T6 merged: `Fmm` on any rank count; equal to one rank within requirement 2 on 2, 4 and 8 ranks; C5.1 host gate
 - [ ] T7 merged: `host_data` hook; shadow operator bit for bit on 1, 2 and 4 ranks, and differs with the hook disabled
