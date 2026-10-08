@@ -438,8 +438,17 @@ fn target_centric_rows_match_the_groupings_in_group_order() {
             assert_eq!(v.offset_indices(), v.groups());
             assert_eq!(lists.l2l().octants(), lists.l2l().groups());
 
-            // CSR rows are strictly ascending.
-            for view in [lists.x(), lists.p2m(), lists.near(), lists.w(), lists.l2p()] {
+            // CSR rows are strictly ascending: X and near rows in the entry leaf's
+            // (level, key) (P1), the others in their entry.
+            let leaves = index.leaves();
+            let level_and_key = |&j: &u32| (leaves.level(j as usize), leaves.key(j as usize));
+            for view in [lists.x(), lists.near()] {
+                for t in 0..view.nrows() {
+                    let row: Vec<_> = view.row(t).iter().map(level_and_key).collect();
+                    assert!(row.windows(2).all(|pair| pair[0] < pair[1]), "{name}");
+                }
+            }
+            for view in [lists.p2m(), lists.w(), lists.l2p()] {
                 for t in 0..view.nrows() {
                     assert!(
                         view.row(t).windows(2).all(|pair| pair[0] < pair[1]),
@@ -507,6 +516,45 @@ fn rows_cover_the_targets_of_a_level_once_each() {
             assert_eq!(lists.p2m().len(), local.len(), "{name}");
         }
     }
+}
+
+/// P1 (distributed-fmm §5.1): X and near rows are in the entry leaf's (level, key). With
+/// a ghost half some rows mix local and ghost leaves in an order that leaf indices
+/// (local first) would change; without ghosts, as on one rank, the rows are ascending in
+/// leaf index, so one-rank sums keep their order.
+#[test]
+fn x_and_near_rows_follow_the_entry_level_and_key() {
+    let mut reordered = 0;
+    for (name, map) in cases() {
+        let plan = plan(&map);
+        let index = plan.index();
+        let leaves = index.leaves();
+        let has_ghosts = !leaves.ghosts().is_empty();
+        for level in 0..index.nlevels() {
+            let lists = plan.level(level);
+            for view in [lists.x(), lists.near()] {
+                for t in 0..view.nrows() {
+                    let row = view.row(t);
+                    let mut by_index = row.to_vec();
+                    by_index.sort_unstable();
+                    if has_ghosts {
+                        reordered += usize::from(by_index != row);
+                    } else {
+                        assert_eq!(by_index, row, "{name}: level {level}, row {t}");
+                    }
+                    let mut by_key = row.to_vec();
+                    by_key.sort_unstable_by_key(|&j| {
+                        (leaves.level(j as usize), leaves.key(j as usize))
+                    });
+                    assert_eq!(by_key, row, "{name}: level {level}, row {t}");
+                }
+            }
+        }
+    }
+    assert!(
+        reordered > 0,
+        "no row places a ghost leaf before a local one"
+    );
 }
 
 #[test]
@@ -608,6 +656,87 @@ fn the_root_multipole_is_formed_by_the_matching_pass() {
     let plan_global = plan(&with_global_root(&local));
     assert_eq!(root_row(&plan_global, true), all_octants);
     assert!(root_row(&plan_global, false).is_empty());
+}
+
+/// P2 (distributed-fmm §3.6): with `Global` boxes on levels 0–2, a rank whose blocks lie
+/// below one level-2 `Global` box (the first, then the last) keeps the rows of that box
+/// and its ancestors as they are when every `Global` box is needed, and gets empty V, X
+/// and L2L rows for every other `Global` box. Every other row, the global M2M rows
+/// included, is unchanged.
+#[test]
+fn global_boxes_above_other_ranks_blocks_get_no_downward_rows() {
+    let mut pruned_v = 0;
+    let mut pruned_x = 0;
+    // Two refined opposite corners: each level-2 `Global` box has an X row.
+    let corners = [
+        morton::from_index_and_level([0, 0, 0], 3),
+        morton::from_index_and_level([7, 7, 7], 3),
+    ];
+    let mut trees = all_trees();
+    trees.push(uniform_leaves(3));
+    trees.push(morton::balance(&corners, morton::root()));
+    for (t, leaves) in trees.into_iter().enumerate() {
+        let mut map = key_types(&leaves);
+        let mut globals: Vec<MortonKey> = map
+            .iter()
+            .filter(|&(&key, &kind)| kind == KeyType::LocalInterior && morton::level(key) <= 2)
+            .map(|(&key, _)| key)
+            .collect();
+        globals.sort_unstable();
+        for &key in &globals {
+            map.insert(key, KeyType::Global);
+        }
+        // Blocks below every `Global` box: then every `Global` box is needed.
+        let mut every_block: Vec<MortonKey> = globals
+            .iter()
+            .flat_map(|&key| morton::children(key).unwrap())
+            .filter(|child| map[child] != KeyType::Global)
+            .collect();
+        every_block.sort_unstable();
+        let nlevels = nlevels(&map);
+        let full = Plan::from_key_types(&map, nlevels, &every_block).unwrap();
+
+        let level_two: Vec<MortonKey> = globals
+            .iter()
+            .copied()
+            .filter(|&key| morton::level(key) == 2)
+            .collect();
+        for anchor in level_two
+            .first()
+            .into_iter()
+            .chain(level_two.last())
+            .copied()
+        {
+            let mine =
+                Plan::from_key_types(&map, nlevels, &morton::children(anchor).unwrap()).unwrap();
+            let needed = [Some(anchor), morton::parent(anchor), Some(morton::root())];
+            let index = mine.index();
+            assert_eq!(index, full.index(), "tree {t}");
+            for level in 0..nlevels {
+                let (a, b) = (mine.level(level), full.level(level));
+                assert_eq!(a.m2m_global(), b.m2m_global(), "tree {t}");
+                assert_eq!(a.m2m_local(), b.m2m_local(), "tree {t}");
+                assert_eq!(a.near(), b.near(), "tree {t}");
+                assert_eq!(a.w(), b.w(), "tree {t}");
+                for (i, &key) in index.keys(level).iter().enumerate() {
+                    let (v, x, l2l) = (a.v().row(i), a.x().row(i), a.l2l().row(i));
+                    if index.kind(level, i) == KeyType::Global && !needed.contains(&Some(key)) {
+                        assert!(v.0.is_empty(), "tree {t}: V row of {key}");
+                        assert!(x.is_empty(), "tree {t}: X row of {key}");
+                        assert!(l2l.0.is_empty(), "tree {t}: L2L row of {key}");
+                        pruned_v += b.v().row(i).0.len();
+                        pruned_x += b.x().row(i).len();
+                    } else {
+                        assert_eq!(v, b.v().row(i), "tree {t}: V row of {key}");
+                        assert_eq!(x, b.x().row(i), "tree {t}: X row of {key}");
+                        assert_eq!(l2l, b.l2l().row(i), "tree {t}: L2L row of {key}");
+                    }
+                }
+            }
+        }
+    }
+    assert!(pruned_v > 0, "no V row was pruned");
+    assert!(pruned_x > 0, "no X row was pruned");
 }
 
 #[test]

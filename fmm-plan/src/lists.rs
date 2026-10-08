@@ -13,12 +13,12 @@
 //! | View of level l | Rows | Row entries, in this order | Grouping |
 //! | --- | --- | --- | --- |
 //! | [`v`](LevelLists::v) | boxes of l | (source box on l, offset index), by offset index | per offset index: (targets, sources) |
-//! | [`x`](LevelLists::x) | boxes of l | source leaf, by leaf index | – |
+//! | [`x`](LevelLists::x) | boxes of l | source leaf, by the leaf's (level, key) | – |
 //! | [`m2m_local`](LevelLists::m2m_local) | boxes of l (parents) | (child box on l + 1, octant), by octant; rows only for `LocalInterior` parents | per octant: (parents, children) |
 //! | [`m2m_global`](LevelLists::m2m_global) | boxes of l (parents) | the same; rows only for `Global` parents | per octant: (parents, children) |
 //! | [`l2l`](LevelLists::l2l) | boxes of l (children) | (parent box on l − 1, octant); rows for non-ghost boxes on l ≥ 1 | per octant: (children, parents) |
 //! | [`p2m`](LevelLists::p2m) | boxes of l | the local leaf of the box, if any | – |
-//! | [`near`](LevelLists::near) | local leaves of l | source leaf, by leaf index, the leaf itself included | – |
+//! | [`near`](LevelLists::near) | local leaves of l | source leaf, by the leaf's (level, key), the leaf itself included | – |
 //! | [`w`](LevelLists::w) | local leaves of l | source box on l + 1, by box index | – |
 //! | [`l2p`](LevelLists::l2p) | local leaves of l | the box of the leaf | – |
 //!
@@ -38,13 +38,19 @@
 //! - **The lists are those of the per-key rule.** For every non-ghost box, `v`, `w`, `x`
 //!   and `near` minus the box itself hold exactly its V-, W-, X- and U-list of the
 //!   per-key rule of [`interaction_manager`](crate::interaction_manager), translated to
-//!   indices. Ghost boxes have empty rows in every view.
+//!   indices. Ghost boxes have empty rows in every view. The exception is a `Global`
+//!   box that is not an ancestor of one of the rank's own coarse blocks: its `v`, `x`
+//!   and `l2l` rows are empty (P2; see [`plan`](super::plan)).
 //! - **Entry levels.** V entries lie on l, W entries on l + 1, X entries on l − 1 and U
 //!   entries on l − 1, l or l + 1 (2:1 balance). V and W entries are boxes of any kind,
 //!   U and X entries are leaves.
 //! - **Sorted rows.** Rows of a grouped view are strictly ascending in their group (offset
-//!   index or octant), so a target meets each group at most once. Rows of a [`Csr`] view
-//!   are strictly ascending in their entry.
+//!   index or octant), so a target meets each group at most once. Rows of `x` and `near`
+//!   are strictly ascending in the entry leaf's (level, key) (P1,
+//!   `docs/design/distributed-fmm.md` §5.1): on one rank that is ascending leaf index,
+//!   and on several ranks it puts a ghost leaf where the one-rank row has it, so the
+//!   sums of P2L and P2P are those of one rank. The rows of the other [`Csr`] views are
+//!   strictly ascending in their entry.
 //! - **At most once per batch.** For a fixed offset index d the source of a V pair is the
 //!   target minus d, so each target, and each source, appears at most once in batch
 //!   (l, d). A parent has one child per octant, so it appears at most once in each
@@ -294,7 +300,8 @@ impl LevelLists {
         &self.v
     }
 
-    /// Return the X-list sources, as leaf indices, of every box of this level (P2L).
+    /// Return the X-list sources, as leaf indices, of every box of this level (P2L), by
+    /// the leaf's (level, key).
     pub fn x(&self) -> &Csr {
         &self.x
     }
@@ -320,7 +327,7 @@ impl LevelLists {
     }
 
     /// Return the near list (U-list and the leaf itself), as leaf indices, of every
-    /// local leaf of this level (P2P).
+    /// local leaf of this level (P2P), by the leaf's (level, key).
     pub fn near(&self) -> &Csr {
         &self.near
     }

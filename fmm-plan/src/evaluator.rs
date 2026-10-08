@@ -28,9 +28,10 @@
 //! Every rank gathers the multipoles of every rank's coarse blocks into their slots of
 //! its level buffers, and then forms the multipoles of the `Global` boxes itself, with
 //! the ordinary `m2m` call of the global pass, deepest level first. The downward pass
-//! forms the locals of `Global` boxes on every rank from identical inputs in identical
-//! order, so they agree bit for bit across ranks (design §7.4). The root multipole is
-//! formed on every rank count.
+//! forms the locals of the `Global` boxes that are ancestors of the rank's own coarse
+//! blocks (P2, [`plan`](super::plan)) from identical inputs in identical order, so they
+//! agree bit for bit across the ranks that form them (design §7.4); the locals of the
+//! other `Global` boxes stay zero. The root multipole is formed on every rank count.
 //!
 //! # Accumulation order
 //!
@@ -44,11 +45,14 @@
 //! | multipole of a `LocalInterior` box | `m2m` (local pass), children by octant |
 //! | multipole of a `Global` box | `m2m` (global pass), children by octant |
 //! | multipole of a ghost box | overwritten by the coarse gather or the multipole exchange |
-//! | local of a non-ghost box on level ≥ 1 | `l2l` from the parent; then the V-list by offset index; then the X-list by leaf index |
-//! | target output of a local leaf | `l2p`; then the W-list by box index; then the near list (U-list and the leaf itself) by leaf index |
+//! | local of a non-ghost box on level ≥ 1 | `l2l` from the parent; then the V-list by offset index; then the X-list by the source leaf's (level, key) |
+//! | target output of a local leaf | `l2p`; then the W-list by box index; then the near list (U-list and the leaf itself) by the source leaf's (level, key) |
 //!
 //! With a fixed tree, ranks and counts this fixes every floating-point sum, so two
-//! evaluations are bit-identical.
+//! evaluations are bit-identical. None of these orders depends on the rank count: the
+//! X and near rows follow the source leaf's (level, key), not its leaf index (P1,
+//! `docs/design/distributed-fmm.md` §5.1), so on several ranks every value receives
+//! its contributions in the order of one rank over the same tree.
 //!
 //! # Collectives
 //!
@@ -562,7 +566,9 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator, P: Borrow<Plan>> Evaluator
         &self.data.multipoles
     }
 
-    /// Return the locals of every box; those of ghost boxes stay zero.
+    /// Return the locals of every box; those of ghost boxes stay zero, and so do those
+    /// of the `Global` boxes that are not an ancestor of one of this rank's coarse blocks
+    /// (P2, [`plan`](super::plan)).
     pub fn locals(&self) -> &LevelBuffers<Op::Value> {
         &self.data.locals
     }
