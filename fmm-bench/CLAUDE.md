@@ -6,7 +6,8 @@ evaluation time (min, median, mean, max, standard deviation), the time per opera
 and the error against the direct sum, as one Markdown file. A binary (`src/main.rs`,
 `nd-fmm-bench`) over a small library (`src/lib.rs`: `options`, `measure`, `report`,
 `machine`) that holds the configuration, the measurement and the Markdown writer.
-Phase and components: Phase 4S, C4S.6 (task T6 in docs/phase4s/; decision 5).
+Phase and components: Phase 4S, C4S.6 (task T6 in docs/phase4s/; decision 5); the `load`
+and `output` columns, `--reuse-output` and `--output-pass` (task T9, C4S.8).
 
 ## Running it
 
@@ -46,6 +47,18 @@ the run is their Cartesian product; `--threads` (default every core), `--strateg
 TARGETS|off` (1,000), `--no-gradients`, `--leaf-size`, `--max-level`, `--table-cache`,
 `--tuning-cache`, `--output` (default `bench-results/<host>-<date>-<time>.md`, UTC, so
 two runs on one day do not overwrite each other) and `--quick` (N = 10⁴, 2 repeats).
+From Phase 4S T9: `--reuse-output` (every evaluation, warm-ups and kind-timed ones
+included, through `Fmm::evaluate_into` into one `Output`; the default stays
+`Fmm::evaluate`, so older reports stay comparable) and `--output-pass auto|host|device`
+(`FmmBuilder::output_pass`, default `auto`); the header's "output" row records both.
+
+The kind table splits "other" (Phase 4S T9): `load` (`StageTimings::load`: the charges
+into leaf order, on a device with their upload and scatter, and in `sync` mode the sync
+after them), `output` (`StageTimings::output`: the output pass, on a device with the
+download, the evaluation's one wait for the device), and "other", the rest outside the
+level calls (the stages' remainder less load and output). Each combination's section
+gives load and output with min, mean and max, and on a device the download's part of
+output (`StageTimings::download`). They come from the kind-timed evaluations.
 
 ## Rules
 - `publish = false`. A timing tool: never registered with templated-examples or CI, and
@@ -64,8 +77,8 @@ two runs on one day do not overwrite each other) and `--quick` (N = 10⁴, 2 rep
   come from `SplitMix64` with `measure::SEED`. Changing the problem or the seed makes
   old reports incomparable; say so in the PR.
 - Reports: `bench-results/` is ignored. A phase report is copied by hand into
-  `fmm-bench/results/` (Phase 4S T8: `results/phase4s-gh200.md`); no other output is
-  committed.
+  `fmm-bench/results/` (Phase 4S T8: `results/phase4s-gh200.md`; T9:
+  `results/phase4s-t9-host-part.md`); no other output is committed.
 - MPI: the binary initialises it once at `Threading::Funneled` and runs on one rank.
   `tests/smoke.rs` owns the test executable's one MPI initialisation; add checks to its
   one test, not new `#[test]`s.

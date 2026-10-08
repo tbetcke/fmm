@@ -506,7 +506,7 @@ Before T1 has merged, T1 itself uses `ssh locust` directly, outside the sandbox.
 - [x] Phase 5 briefs updated for decision 8 (T8; updated, review pending), reviewed
 - [x] Reusable outputs (decision 11): `Fmm::evaluate_into` (T9; decided 2026-10-07)
 - [x] Output pass on the device (decision 12): on by default on devices with f64 (T9; decided 2026-10-07)
-- [ ] T9 merged: the host part of an evaluation, bit for bit; before and after measured; device-path.md §18.4
+- [x] T9 merged: the host part of an evaluation, bit for bit; before and after measured; device-path.md §18.4 (the host part on CUDA 2.7–8.3× smaller, evaluations 1.4–3.7× faster at N = 10⁶–10⁷; every output bit unchanged on the host, the CPU runtime, Metal and CUDA)
 - [x] CI triggers and actions (decision 13): pushes to `main`; first-party actions only (T10; decided 2026-10-07)
 - [x] T10 merged: CI with every check, cached installs, one kernel test run, warm caches; times before and after
-- [x] Design documents updated: laplace-fmm-plan §6.1, §6.2, §7 (Phase 4S), §8.3, §9.1, §9.2; device-path.md §17 note and §18 (§18.3 added); workspace-structure §2, §3, §3.1, §6 (T8)
+- [x] Design documents updated: laplace-fmm-plan §6.1, §6.2, §7 (Phase 4S), §8.3, §9.1, §9.2; device-path.md §17 note and §18 (§18.3 added); workspace-structure §2, §3, §3.1, §6 (T8); device-path.md §4.1 and §18.4, laplace-fmm-plan §7 (C4S.8, Phase 5 recommendation) (T9)
