@@ -44,11 +44,14 @@
 //! | multipole of a `LocalInterior` box | `m2m` (local pass), children by octant |
 //! | multipole of a `Global` box | `m2m` (global pass), children by octant |
 //! | multipole of a ghost box | overwritten by the coarse gather or the multipole exchange |
-//! | local of a non-ghost box on level ≥ 1 | `l2l` from the parent; then the V-list by offset index; then the X-list by leaf index |
-//! | target output of a local leaf | `l2p`; then the W-list by box index; then the near list (U-list and the leaf itself) by leaf index |
+//! | local of a non-ghost box on level ≥ 1 | `l2l` from the parent; then the V-list by offset index; then the X-list by the source leaf's (level, key) |
+//! | target output of a local leaf | `l2p`; then the W-list by box index; then the near list (U-list and the leaf itself) by the source leaf's (level, key) |
 //!
 //! With a fixed tree, ranks and counts this fixes every floating-point sum, so two
-//! evaluations are bit-identical.
+//! evaluations are bit-identical. None of these orders depends on the rank count: the
+//! X and near rows follow the source leaf's (level, key), not its leaf index (P1,
+//! `docs/design/distributed-fmm.md` §5.1), so on several ranks every value receives
+//! its contributions in the order of one rank over the same tree.
 //!
 //! # Collectives
 //!

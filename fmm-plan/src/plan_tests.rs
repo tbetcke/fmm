@@ -438,8 +438,17 @@ fn target_centric_rows_match_the_groupings_in_group_order() {
             assert_eq!(v.offset_indices(), v.groups());
             assert_eq!(lists.l2l().octants(), lists.l2l().groups());
 
-            // CSR rows are strictly ascending.
-            for view in [lists.x(), lists.p2m(), lists.near(), lists.w(), lists.l2p()] {
+            // CSR rows are strictly ascending: X and near rows in the entry leaf's
+            // (level, key) (P1), the others in their entry.
+            let leaves = index.leaves();
+            let level_and_key = |&j: &u32| (leaves.level(j as usize), leaves.key(j as usize));
+            for view in [lists.x(), lists.near()] {
+                for t in 0..view.nrows() {
+                    let row: Vec<_> = view.row(t).iter().map(level_and_key).collect();
+                    assert!(row.windows(2).all(|pair| pair[0] < pair[1]), "{name}");
+                }
+            }
+            for view in [lists.p2m(), lists.w(), lists.l2p()] {
                 for t in 0..view.nrows() {
                     assert!(
                         view.row(t).windows(2).all(|pair| pair[0] < pair[1]),
@@ -507,6 +516,45 @@ fn rows_cover_the_targets_of_a_level_once_each() {
             assert_eq!(lists.p2m().len(), local.len(), "{name}");
         }
     }
+}
+
+/// P1 (distributed-fmm §5.1): X and near rows are in the entry leaf's (level, key). With
+/// a ghost half some rows mix local and ghost leaves in an order that leaf indices
+/// (local first) would change; without ghosts, as on one rank, the rows are ascending in
+/// leaf index, so one-rank sums keep their order.
+#[test]
+fn x_and_near_rows_follow_the_entry_level_and_key() {
+    let mut reordered = 0;
+    for (name, map) in cases() {
+        let plan = plan(&map);
+        let index = plan.index();
+        let leaves = index.leaves();
+        let has_ghosts = !leaves.ghosts().is_empty();
+        for level in 0..index.nlevels() {
+            let lists = plan.level(level);
+            for view in [lists.x(), lists.near()] {
+                for t in 0..view.nrows() {
+                    let row = view.row(t);
+                    let mut by_index = row.to_vec();
+                    by_index.sort_unstable();
+                    if has_ghosts {
+                        reordered += usize::from(by_index != row);
+                    } else {
+                        assert_eq!(by_index, row, "{name}: level {level}, row {t}");
+                    }
+                    let mut by_key = row.to_vec();
+                    by_key.sort_unstable_by_key(|&j| {
+                        (leaves.level(j as usize), leaves.key(j as usize))
+                    });
+                    assert_eq!(by_key, row, "{name}: level {level}, row {t}");
+                }
+            }
+        }
+    }
+    assert!(
+        reordered > 0,
+        "no row places a ghost leaf before a local one"
+    );
 }
 
 #[test]

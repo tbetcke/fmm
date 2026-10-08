@@ -37,7 +37,8 @@
 //! An operator may execute the targets of a call in any order and on any number of
 //! threads, provided it adds the contributions of each target in the order of that
 //! target's row in the target-centric view: by offset index (V), by octant (M2M), by
-//! leaf index (X, near) or by box index (W). A walk over the batches of a grouped view in
+//! the source leaf's (level, key) (X, near; the leaf index on one rank) or by box index
+//! (W). A walk over the batches of a grouped view in
 //! group order meets each target in that order too. With every operator following the
 //! rule, the evaluator's fixed call order fixes every sum, and results are bit-identical
 //! from run to run ([`Evaluator`](super::evaluator::Evaluator), design §7.5). Operators
@@ -159,7 +160,8 @@ pub struct P2l<'a, T> {
     pub level: usize,
     /// The box index, for keys.
     pub index: &'a BoxIndex,
-    /// Row t: the X-list of box t, as leaf indices (leaves on `level − 1`), ascending.
+    /// Row t: the X-list of box t, as leaf indices (leaves on `level − 1`), ascending in
+    /// the leaf's key.
     pub x: &'a Csr,
     /// Source data of every leaf, by leaf index.
     pub sources: LeafSlice<'a, T>,
@@ -235,8 +237,9 @@ pub struct P2p<'a, T> {
     pub index: &'a BoxIndex,
     /// The leaf indices of the rows: row r is leaf `leaves.start + r`.
     pub leaves: Range<usize>,
-    /// Row r: the near list of leaf `leaves.start + r`, as leaf indices, ascending; it
-    /// holds the leaf itself, which an operator recognises by source = target.
+    /// Row r: the near list of leaf `leaves.start + r`, as leaf indices, ascending in the
+    /// leaf's (level, key); it holds the leaf itself, which an operator recognises by
+    /// source = target.
     pub near: &'a Csr,
     /// Source data of every leaf, by leaf index.
     pub sources: LeafSlice<'a, T>,
@@ -287,8 +290,8 @@ pub trait FmmOperator: FmmSizes {
 
     /// Add the X-list sources of the level's boxes to their locals.
     ///
-    /// For every target t and every leaf j of its row, by leaf index:
-    /// `locals[t] += P2L(sources[j])`.
+    /// For every target t and every leaf j of its row, in row order (by the leaf's
+    /// (level, key)): `locals[t] += P2L(sources[j])`.
     fn p2l(&mut self, batch: P2l<'_, Self::Value>);
 
     /// Add the locals of the parents to their children.
@@ -311,8 +314,8 @@ pub trait FmmOperator: FmmSizes {
     /// Add the direct interactions of the near list at the target points of the level's
     /// local leaves.
     ///
-    /// For every row r and every leaf j of its row, by leaf index:
-    /// `target_output[r] += P2P(sources[j], target_input[r])`.
+    /// For every row r and every leaf j of its row, in row order (by the leaf's
+    /// (level, key)): `target_output[r] += P2P(sources[j], target_input[r])`.
     fn p2p(&mut self, batch: P2p<'_, Self::Value>);
 }
 

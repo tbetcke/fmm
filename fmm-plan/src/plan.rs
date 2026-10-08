@@ -492,9 +492,14 @@ impl PartialLevel {
                 .expect("every leaf named by a U- or X-list has a leaf index")
         };
 
+        // P1 (distributed-fmm §5.1): rows by the entry leaf's (level, key), which is the
+        // leaf index on one rank and places a ghost leaf where the one-rank row has it.
+        let leaves = index.leaves();
+        let by_level_and_key = |&j: &u32| (leaves.level(j as usize), leaves.key(j as usize));
+
         let mut near = CsrBuilder::default();
         let mut row = Vec::new();
-        let local = index.leaves().local(level);
+        let local = leaves.local(level);
         for (r, bounds) in self.u_offsets.windows(2).enumerate() {
             row.clear();
             row.push((local.start + r) as u32);
@@ -503,7 +508,7 @@ impl PartialLevel {
                     .iter()
                     .map(|&e| leaf_of(e)),
             );
-            row.sort_unstable();
+            row.sort_unstable_by_key(by_level_and_key);
             near.push_row(row.iter().copied());
         }
 
@@ -515,7 +520,7 @@ impl PartialLevel {
                     .iter()
                     .map(|&e| leaf_of(e)),
             );
-            row.sort_unstable();
+            row.sort_unstable_by_key(by_level_and_key);
             x.push_row(row.iter().copied());
         }
 

@@ -314,6 +314,21 @@ fn check_plan(
         for (r, leaf) in local.enumerate() {
             assert_eq!(lists.l2p().row(r), [leaves.box_index(leaf)]);
         }
+
+        // P1: X and near rows in the entry leaf's (level, key), on every rank count.
+        for view in [lists.x(), lists.near()] {
+            for t in 0..view.nrows() {
+                let row: Vec<(usize, u64)> = view
+                    .row(t)
+                    .iter()
+                    .map(|&j| (leaves.level(j as usize), leaves.key(j as usize)))
+                    .collect();
+                assert!(
+                    row.windows(2).all(|pair| pair[0] < pair[1]),
+                    "{name}: X or near row {t} of level {level} not in (level, key) order"
+                );
+            }
+        }
     }
 
     named.sort_unstable();
