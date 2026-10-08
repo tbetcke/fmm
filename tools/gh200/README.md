@@ -153,14 +153,14 @@ tools/gh200/remote.sh 'RUST_MIN_STACK=8388608 timeout 600 mpirun -n 4 target/rel
 
 Measured on 2026-10-07 (Phase 4S T8), release builds, with these launch commands:
 `nd-octree`'s examples `test_mpi_complete_tree`, `test_mpi_construction_edge_cases` and
-`test_mpi_leaf_lookup`, and `nd-fmm-plan`'s `test_index_fmm`, pass at 1, 2, 4, 8, 16,
-32, 64 and 72 ranks; `nd-fmm-exec`'s `mpi_exec` passes at 1, 2, 4 and 8 (3.8 s at 1
-rank, where every scenario runs; 0.3 s at 2–8, where only the multi-rank scenario runs).
-Wall time per example run, start-up dominated:
+`test_mpi_leaf_lookup` pass at 1, 2, 4, 8, 16, 32, 64 and 72 ranks; `nd-fmm-exec`'s
+`mpi_exec` passes at 1, 2, 4 and 8 (3.8 s at 1 rank, where every scenario runs; 0.3 s at
+2–8, where only the multi-rank scenario runs). Wall time per example run, start-up
+dominated:
 
 | Ranks | 1–8 | 16 | 32 | 64 | 72 |
 | --- | --- | --- | --- | --- | --- |
-| Wall time | 0.11–0.19 s | 0.23–0.47 s | 0.30–0.74 s | 0.42–1.87 s | 0.59–2.64 s |
+| Wall time | 0.11–0.19 s | 0.23–0.41 s | 0.30–0.65 s | 0.42–1.09 s | 0.59–1.24 s |
 
 ## The benchmark
 
