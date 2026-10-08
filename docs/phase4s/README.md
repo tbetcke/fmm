@@ -26,7 +26,7 @@ has three goals:
      (P2P, M2L, …);
    - written as a Markdown table.
 
-The phase has six parts:
+The phase has seven parts:
 1. **Environment** (T1). The spack environment, the Rust toolchain, the scripts that keep
    everything under `/data/ucahtbe`, the sync-and-run loop from the M3 Max, and the
    existing CPU-side checks run on Grace.
@@ -44,6 +44,9 @@ The phase has six parts:
 6. **CI time** (T10, added on 2026-10-07). Package installs without the mirror, one
    kernel test run instead of two, and caches warm for every pull request; every check
    kept.
+7. **The download and upload paths** (T11, added on 2026-10-08 after T9's report). The
+   host copies of the output after the GPU and of the charges before it, measured on
+   Metal and CUDA, then removed where they are this repository's code; bit for bit.
 
 Companion documents:
 - [docs/design/device-path.md](../design/device-path.md): all of it, especially §1.2
@@ -74,19 +77,24 @@ In scope:
   - a CUDA arm in the test harness and every kernel test on CUDA (T2);
   - fixes for defects that CUDA exposes (T2, T4);
   - CUDA-specific layouts and limits, where measured better (T7);
-  - the caller-ordered output gather and scaling, on devices with f64 (T9).
+  - the caller-ordered output gather and scaling, on devices with f64 (T9);
+  - a download that lends CubeCL's host memory instead of copying it, and an upload
+    without the extra copy (T11; decision 14).
 - `nd-fmm-exec`:
   - CUDA test executables and blocks beside the Metal ones (T4);
   - `FmmBuilder::kind_timings` and `StageTimings::kinds` (T5);
   - CUDA tuner candidates and a backend-keyed static rule (T7);
   - the parallel output pass and charge load, `Fmm::evaluate_into`, the output pass on
-    the device (T9; decisions 11 and 12).
+    the device (T9; decisions 11 and 12);
+  - the output copied from the downloaded memory straight into the `Output`, and the
+    charges uploaded without the extra copy (T11; decisions 14 and 15).
 - `nd-fmm-validate`:
   - the machine lines on Linux aarch64 (T4);
   - per-device peaks in the kernel examples (T7).
 - `nd-fmm-bench` (new crate, `fmm-bench/`): the benchmark binary and its library (T6);
   the `load` and `output` columns and `--reuse-output` (T9).
-- `spikes/device-arith`, `spikes/cubecl-gemm`: their CUDA runs and reports (T2, T3).
+- `spikes/device-arith`, `spikes/cubecl-gemm`: their CUDA runs and reports (T2, T3);
+  `spikes/download-path` (new): the measurement of the download and upload paths (T11).
 - CONVENTIONS §3.13, "Device kernels": a CUDA note, only if T3 shows one is needed and
   the sign-off accepts it.
 - Root CLAUDE.md: Phase 4S as the current phase, locust's build environment and checks
@@ -290,6 +298,10 @@ These hold for every task, so that no task decides them on its own:
 - C4S.9 (T10): CI with every check of before, the package installs cached, one kernel
   test run with the compile-time table, and caches restored on a pull request's first
   run; the job and step times before and after, cold and warm.
+- C4S.10 (T11): the download and upload paths measured step by step on Metal and CUDA
+  (`spikes/download-path/REPORT.md`); the copies in this repository's code removed
+  (decision 14), CubeCL's pools changed only through its public API (decision 15); every
+  output bit, transfer and sync unchanged; before and after on locust and the M3 Max.
 - The T8 report, `fmm-bench/results/phase4s-gh200.md`, gives on the GH200:
   - the device FMM in f32 and f64 against Grace at 1 and 72 threads, per kind;
   - kernel efficiency against the datasheet peaks;
@@ -319,6 +331,9 @@ One pull request each.
 - **T10** needs nothing and can run at any time; decision 13 is signed off before the
   trigger changes. It changes only `.github/workflows/` and the documents. Phase 5 T3
   also changes `.github/workflows/` (a multi-rank job): merge one, then rebase the other.
+- **T11** needs T9. Its measurement (item 1, a spike) comes first; decisions 14 and 15
+  are signed off with its report before the library changes. It changes
+  `nd-fmm-kernels`, `nd-fmm-exec` and `spikes/download-path`.
 - **Overlaps.** T4, T5 and T7 all change `nd-fmm-exec`: merge one, then rebase the next.
   T2 and T7 both change `nd-fmm-kernels`. T2 changes `.github/workflows/run-tests.yml`.
   T1 and T6 change the root CLAUDE.md and `.gitignore`. T6 changes the root `Cargo.toml` and `Cargo.lock` (a new member);
@@ -336,6 +351,7 @@ One pull request each.
 | T8 | [T8-benchmarks.md](T8-benchmarks.md) | `fmm-bench/results/phase4s-gh200.md`: the GH200 report, the Phase 4 "CUDA run", the CUDA leaf-size study; design-document update | gate: benchmarks published | T7 |
 | T9 | [T9-output-pass.md](T9-output-pass.md) | the host part of an evaluation: `load` and `output` timed, the output pass and the charge load in parallel, no zero fill, `Fmm::evaluate_into`, the output pass on devices with f64; bit for bit; before and after on locust and the M3 Max; device-path.md §18.4 | C4S.8 | T8 |
 | T10 | [T10-ci-time.md](T10-ci-time.md) | CI time: the package installs cached (first-party `actions/cache`), the kernel job's second test run folded into its first, warm caches from runs on `main`, a cargo cache for the root job, timeouts; every check kept; times before and after | C4S.9 | none |
+| T11 | [T11-download-path.md](T11-download-path.md) | the download and upload paths: measured per step on Metal and CUDA; a zero-copy download into the `Output`; an upload without the extra copy; CubeCL's pools through its public API only; bit for bit; before and after; device-path.md §18.5 | C4S.10 | T9 |
 
 Review T1's environment and T3's recommendation yourself before the tasks that build on
 them. T4's f64 gates and T7's rules rest on T3.
@@ -460,6 +476,17 @@ Each is recorded in the exit checklist when made:
     run per merge); and whether any third-party action is used (for example to cache
     apt packages), or only first-party `actions/cache`. **Decided on 2026-10-07: run on
     pushes to `main`; first-party actions only**, as recommended.
+14. **The download's host memory** (T11). Whether `nd-fmm-kernels` lends CubeCL's
+    downloaded memory (a guard over CubeCL's `Bytes`) instead of copying it into a
+    caller's slice, and the exact API (`Device::download_view` or another); whether the
+    device operator's host output buffer goes away; whether `Device::write` gains an
+    owned variant. Recommended: yes to the view if T11's spike shows the copy to be a
+    material part of the download, with the API proposed in the spike's report.
+    *Open; signed off with `spikes/download-path/REPORT.md`.*
+15. **CubeCL's host pools** (T11). If the spike shows CubeCL's pinned (CUDA) or staging
+    (wgpu) pool allocating again in steady state: change it only through CubeCL's
+    public API at the pinned version, or write the upstream question and change nothing.
+    *Open; only if the spike shows the need.*
 
 ## Risks
 
@@ -509,4 +536,8 @@ Before T1 has merged, T1 itself uses `ssh locust` directly, outside the sandbox.
 - [x] T9 merged: the host part of an evaluation, bit for bit; before and after measured; device-path.md §18.4 (the host part on CUDA 2.7–8.3× smaller, evaluations 1.4–3.7× faster at N = 10⁶–10⁷; every output bit unchanged on the host, the CPU runtime, Metal and CUDA)
 - [x] CI triggers and actions (decision 13): pushes to `main`; first-party actions only (T10; decided 2026-10-07)
 - [x] T10 merged: CI with every check, cached installs, one kernel test run, warm caches; times before and after
+- [ ] T11 spike: the download and upload paths measured per step on Metal and CUDA (`spikes/download-path/REPORT.md`)
+- [ ] The download's host memory (decision 14): signed off with the spike's report
+- [ ] CubeCL's host pools (decision 15): signed off, or not needed (the spike)
+- [ ] T11 merged: the copies removed, bit for bit; before and after measured; device-path.md §18.5
 - [x] Design documents updated: laplace-fmm-plan §6.1, §6.2, §7 (Phase 4S), §8.3, §9.1, §9.2; device-path.md §17 note and §18 (§18.3 added); workspace-structure §2, §3, §3.1, §6 (T8); device-path.md §4.1 and §18.4, laplace-fmm-plan §7 (C4S.8, Phase 5 recommendation) (T9)
