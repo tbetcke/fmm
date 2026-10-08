@@ -13,8 +13,21 @@ distributed FMM needs more from it:
 Changes to `nd-octree` are allowed where the distributed FMM needs them (decided on
 2026-10-04, docs/phase5/README.md decision 6). T1 lists them, and the sign-off accepts
 or rejects each one. **This task implements exactly the changes the sign-off accepted,
-as `docs/design/distributed-fmm.md` §3 specifies them.** If the sign-off accepted none,
-this task is not needed. Record that in the exit checklist.
+as `docs/design/distributed-fmm.md` §3 specifies them.** It also fixes a defect in an
+MPI example that T3 found (below, scheduled here on 2026-10-08). If the sign-off accepted
+no octree change, this task is only that fix.
+
+**The defect in `test_mpi_construction_edge_cases` (found by T3, PR #79).** Line 106,
+`morton::from_index_and_level([10000 * (rank + 1); 3], deepest)`, asks for index 70000 on
+rank 6, beyond the 2^16 = 65536 cells of level 16. In debug the `debug_assert!` in
+`from_index_and_level` (octree/src/morton.rs) panics on ranks 6 and up, which then block
+in `MPI_Finalize` while the others wait in a collective: the example times out at 7 and 8
+ranks on the M3 Max and at 8 on locust. In release the assertion is off and the key
+silently runs into the level bits, so the "passes at 8–72 ranks" of Phase 4S T8
+(docs/phase5/README.md, "Ranks on locust"; tools/gh200/README.md) checked a wrong key.
+The fix is in the example only: indices that stay within level `deepest` on every rank
+count (for example a spacing derived from the rank count), with what the scenario checks
+unchanged. Do not change `from_index_and_level` or its assertion.
 
 Read first:
 - root CLAUDE.md, octree/CLAUDE.md (all of it: the construction contract, ownership and
@@ -74,7 +87,8 @@ Tests that define done:
   - every existing invariant: completeness, linearity and 2:1 balance, ghosts and
     neighbours, coarse blocks replicated with the ghost-children layer.
 - The existing examples unchanged at default options. Run them at 1 and 3 ranks, and
-  `test_mpi_construction_edge_cases` also at 2 and 4.
+  `test_mpi_construction_edge_cases` also at 2, 4, 7 and 8 in debug (the defect above),
+  and in release on locust up to 72.
 - `nd-fmm-plan`'s `tests/mpi_regressions.rs` on 1, 2 and 4 ranks, and
   `nd-fmm-exec`'s `tests/mpi_exec.rs` on 1 and 2 ranks, pass. With a signature change
   they are adapted; otherwise they are untouched.

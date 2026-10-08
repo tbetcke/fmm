@@ -366,7 +366,7 @@ One pull request each.
 | T1 | [T1-distributed-design.md](T1-distributed-design.md) | `docs/design/distributed-fmm.md`: redistribution, `nd-octree` changes, multi-rank tolerance, the data-movement hook, device ranks, overlap, collectives, memory per rank, tests, scaling method, task check | design for C5.1–C5.3 | Phase 4 complete |
 | T2 | [T2-remove-index-fmm.md](T2-remove-index-fmm.md) | `nd-fmm-plan` without `IndexFmm`: code, tests, examples, registration and docs removed; the recording operator and the exchange checks keep the coverage | retirement of the Phase 3 test FMM | none |
 | T3 | [T3-multi-rank-ci.md](T3-multi-rank-ci.md) | a CI job that runs the MPI test executables at 2 and 4 ranks under a timeout; measured; root `CLAUDE.md` checks updated | test infrastructure for C5.1–C5.2 | none |
-| T4 | [T4-octree-adaptations.md](T4-octree-adaptations.md) | the `nd-octree` changes T1 specifies (load balance by weight, partition granularity, errors instead of panics), with MPI examples | part of C5.1 | T1 (signed off) |
+| T4 | [T4-octree-adaptations.md](T4-octree-adaptations.md) | the `nd-octree` changes T1 specifies (load balance by weight, partition granularity, errors instead of panics), with MPI examples; the fix of `test_mpi_construction_edge_cases` at 7 or more ranks (found by T3) | part of C5.1 | T1 (signed off) |
 | T5 | [T5-redistribution.md](T5-redistribution.md) | `nd_fmm_plan::redistribute::Redistribution`: points to owning ranks and results back, collective, deterministic | part of C5.1 | T1 (signed off), T2 |
 | T6 | [T6-multi-rank-fmm.md](T6-multi-rank-fmm.md) | `Fmm` on any number of ranks through `Redistribution`; multi-rank against one-rank checks in every scenario; the C5.1 host gate at N = 10⁵ | C5.1 (host) | T5; T4 if it changes the octree API |
 | T7 | [T7-host-data-hook.md](T7-host-data-hook.md) | `FmmOperator::host_data`, a kernel-agnostic hook around the evaluator's data movements; the shadow-operator check | part of C5.1 (device) | T6 |
@@ -404,7 +404,11 @@ Each is recorded in the exit checklist when made:
    (T7, T8). It is never timed as a scaling figure.
 4. A multi-rank CI job. **Decided on 2026-10-04: add one.** T3 builds and measures it,
    and it is kept, changed or dropped at sign-off with T3's numbers (time per job, flakes
-   over repeated runs).
+   over repeated runs). **Kept on 2026-10-08** with T3's numbers (PR #79): about 2
+   minutes cached (2.3 cold), in parallel with `run-tests`, three passes out of three and
+   no flake. Budget: 15 minutes wall for the cached job; T6 reports against it and drops,
+   in this order, the thread-count repeats on several ranks, `mpi_exec` at 2 ranks, then
+   `mpi_exec` to a nightly schedule, if it exceeds it.
 5. The index FMM. **Decided on 2026-10-04: removed from `nd-fmm-plan`** (T2). Nothing in
    Phase 5 is checked with it.
 6. `nd-octree` changes. **Decided on 2026-10-04: allowed where the distributed FMM needs
@@ -457,8 +461,8 @@ In the repository root, start `claude` and say:
 - [x] `nd-octree` changes: allowed where the distributed FMM needs them, each signed off with T1 (decided 2026-10-04)
 - [ ] T2 merged: `IndexFmm` removed; the scenario set unchanged; list, exchange and recording-operator checks pass on 1, 2 and 4 ranks
 - [ ] T3 merged: multi-rank CI job measured
-- [ ] Multi-rank CI job: kept / changed / dropped
-- [ ] T4 merged: `nd-octree` changes as signed off; MPI examples pass on 1 and 3 ranks
+- [x] Multi-rank CI job: kept, budget 15 minutes cached, re-measured at T6 (decided 2026-10-08)
+- [ ] T4 merged: `nd-octree` changes as signed off; MPI examples pass on 1 and 3 ranks; `test_mpi_construction_edge_cases` fixed and passing at 1–8 ranks in debug
 - [ ] T5 merged: `Redistribution` round-trips on 1, 2 and 4 ranks for every input distribution
 - [ ] T6 merged: `Fmm` on any rank count; equal to one rank within requirement 2 on 2, 4 and 8 ranks; C5.1 host gate
 - [ ] T7 merged: `host_data` hook; shadow operator bit for bit on 1, 2 and 4 ranks, and differs with the hook disabled

@@ -58,11 +58,11 @@ MPI-using unit test has to reuse it, or move to `tests/` or `examples/`.
 
 ### MPI examples
 
-`cargo test` does **not** run the example executables, and CI runs them only weekly at
-3 ranks (all five are registered with `templated-examples`), never on one rank and
-never on pull requests. For any change touching distributed code, run them by hand
-with one rank and with multiple ranks (on macOS add the loopback flags from the root
-`CLAUDE.md`):
+`cargo test` does **not** run the example executables. CI runs them in debug at 2 and 4
+ranks on every pull request (the `run-tests-mpi` job, Phase 5 T3) and in release weekly
+at 3 ranks (all five are registered with `templated-examples`), never on one rank. For
+any change touching distributed code, run them by hand with one rank and with multiple
+ranks (on macOS add the loopback flags from the root `CLAUDE.md`):
 
 ```sh
 cargo build -p nd-octree --examples
