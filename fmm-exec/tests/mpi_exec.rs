@@ -2,11 +2,14 @@
 //! cannot be initialised again after finalisation within the same process. Add
 //! scenarios to `cases`, not new `#[test]`s (T9, T10 and T11 extend it).
 //!
-//! CI runs the scenarios on one rank. Each one is written for any rank count: every
-//! rank generates the same global point set, passes its share of the keys to the
-//! octree, and loads the points that fall into its own leaves, so a run by hand on
-//! several ranks (under an external timeout, with the loopback flags of the root
-//! `CLAUDE.md` on macOS) exercises ghosts and the global levels.
+//! Every scenario runs on any rank count: CI's root job runs one rank, its `run-tests-mpi`
+//! job 2 and 4, and 8 run by hand (under an external timeout, with the loopback flags of
+//! the root `CLAUDE.md` on macOS). Every rank generates the same global point set. The
+//! two scenarios that drive the plan's evaluator directly pass the octree each rank's
+//! share of the keys and load the points that fall into the rank's own leaves; the `Fmm`
+//! scenarios pass each rank its share of the points, which `Fmm` moves to the ranks that
+//! own their leaves (Phase 5 T6). "Several ranks (Phase 5 T6)" below lists what runs only
+//! there.
 //!
 //! Scenarios:
 //! - **table order against the plan** (CONVENTIONS §3.12): on a uniform level-3 tree in
@@ -39,8 +42,10 @@
 //!   level-3 box of a supplied unit-cube domain: every leaf lies on level 3, the W and X
 //!   lists are empty.
 //! - **single leaf**: `max_level` 0, the root the only leaf: P2P alone, equal to the
-//!   direct sum to 1e-14. One rank only (a root-only coarse tree has one block).
-//! - **no targets on this rank**: rank 0 passes no targets and gets empty output.
+//!   direct sum to 1e-14. On several ranks the root is the one coarse block: one rank
+//!   owns the leaf and every point, the others have no leaf (O4, Phase 5 T4).
+//! - **no targets on this rank**: rank 0 passes no targets and gets empty output; on
+//!   several ranks it still owns the targets other ranks passed in its leaves.
 //! - **input errors**: a supplied non-cubic domain, a point outside a supplied domain,
 //!   p > 20, a non-finite point and a charge vector of the wrong length each give
 //!   their `FmmError`, agreed on every rank.
@@ -48,8 +53,9 @@
 //!   against the direct sum.
 //! - **repeatability**: `evaluate` twice gives bit-identical output, and a second charge
 //!   vector gives bit for bit the output of a fresh build with it.
-//! - **ownership**: every rank passes the same complete point set. On one rank the FMM
-//!   runs; on several, every rank returns `PointsNotOwned` with the same count.
+//! - **ownership**: the same 600 points in two distributions that keep the order within
+//!   every leaf, all on rank 0 and in consecutive blocks by rank: the outputs, gathered in
+//!   point order, are equal bit for bit (Phase 5 T6; on one rank one run).
 //!
 //! Threads (T10, C3.5). MPI is initialised with `Threading::Funneled`, so that `Fmm` may
 //! use threads. Error measure: exact equality of the bit patterns.
@@ -161,11 +167,12 @@
 //!   tiles of up to 4 points) within 1e-12 of the host's too; M2M, L2L and M2L with a
 //!   scratch budget of one column per chunk (as many chunks as pairs) and with the hand-written
 //!   GEMM bit for bit the default; `synchronous_stages` adds seven syncs (after the
-//!   charge upload and each stage) and changes no bit; on several ranks a device build with
-//!   points other ranks own returns `PointsNotOwned`, which wins over
-//!   `DeviceNeedsOneRank`, and one with points every rank owns (each rank passing its
-//!   share of the level-1 octants of a uniform level-3 tree) returns
-//!   `DeviceNeedsOneRank` on every rank.
+//!   charge upload and each stage) and changes no bit. On several ranks a device build
+//!   returns `DeviceNeedsOneRank` on every rank after the redistribution (until Phase 5
+//!   T8): the CPU runtime with `threads(4)` here, and through `device_common` every
+//!   scenario's device repeat, among them the octree's own partition (each rank passing
+//!   its share of the level-1 octants of a uniform level-3 tree), on which the host path
+//!   builds and evaluates.
 //!
 //! Per-kind timings (Phase 4S T5, C4S.5; `tests/kind_common`). Error measures: exact
 //! equality of the bit patterns and of the call counts.
@@ -187,14 +194,42 @@
 //!
 //! The test prints the evaluations with kind timings and their calls at the end.
 //!
-//! Every `Fmm` scenario but **ownership** passes each rank its share of the points (every
-//! `size`-th). On several ranks those points generally lie in leaves of other ranks;
-//! the scenario then checks that every rank returns `PointsNotOwned` and stops, since
-//! points are not redistributed until C5.1. If the build succeeds instead, the
-//! checks run distributed.
+//! Several ranks (Phase 5 T6, C5.1; docs/phase5/README.md, "The oracles", "Accuracy
+//! measures", "Workloads"; docs/design/distributed-fmm.md §5, §10). Every `Fmm` scenario
+//! but **ownership** and **input distributions** passes each rank its share of the
+//! points (every `size`-th), which generally lie in leaves of other ranks; `Fmm` moves
+//! them. The checks against the direct sum run as on one rank, over every rank's targets.
+//! Error measures: exact equality of the bit patterns; relative L2 over every target, φ
+//! and ∇φ, between input distributions.
+//! - **The one-rank reference.** Every evaluation of `evaluate_threaded` (so every `Fmm`
+//!   scenario, and in `evaluate_every_kernel` every P2P kernel) is checked against the
+//!   `Fmm` of the same settings at one thread over the union of every rank's sources,
+//!   targets and charges in rank order, built by every rank on
+//!   `SimpleCommunicator::self_comm()`: the output at the rank's own targets must be bit
+//!   for bit the reference's (decision 7). The union is gathered (two all-gathers per
+//!   point set); the reference needs no communication. Not on one rank, where a run is its
+//!   own reference, so the one-rank debug run costs nothing more.
+//! - Threads: `evaluate_threaded` repeats every scenario at 2, 4 and 8 threads per rank,
+//!   bit for bit the one-thread output, on every rank count.
+//! - **input distributions** (several ranks; on one rank every distribution is the same
+//!   input, and the scenario says so): the uniform cube (f64 and f32) and the Plummer
+//!   sphere (f64), N = 1,500, p = 6 with gradients, from four distributions of the
+//!   README: every point on rank 0, a seeded random share, that share with the last rank's
+//!   points on rank 0 (one empty rank), and the octree's own partition (every point on the
+//!   rank that owns its leaf, from an octree of the same keys; it moves no point). Each is
+//!   bit for bit its own one-rank reference, each within 100 u_T (1.1e-14 in f64, 6.0e-6
+//!   in f32; design §5.4) of the one-rank `Fmm` over the points in their order, and the
+//!   random share within 100 u_T of each of the other three; the relative max is printed.
+//! - **tiny problem**: three points, one per rank on the first three, default settings:
+//!   one coarse block, so on more than one rank every rank but the root's owner has no
+//!   leaf (O4; no error, no hang); P2P alone, equal to the direct sum to 1e-14. It also
+//!   runs on one rank.
+//!
+//! The test prints, at the end, how many evaluations matched their one-rank reference.
 
 use mpi::Threading;
 use mpi::collective::SystemOperation;
+use mpi::datatype::PartitionMut;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
 use nd_fmm_exec::fmm::{
@@ -337,7 +372,7 @@ fn distributed_scenarios() {
         "the threaded scenarios need MPI at Funneled, it provides {provided:?}"
     );
     let comm = universe.world();
-    let cases: [(&str, Scenario); 20] = [
+    let cases: [(&str, Scenario); 22] = [
         ("table order against the plan", table_order),
         ("batched against per-pair", batched_against_per_pair),
         ("uniform cube, every strategy", uniform_cube_strategies),
@@ -361,6 +396,8 @@ fn distributed_scenarios() {
         ("sources-only next to targets-only leaves", one_sided_leaves),
         ("points on box faces and domain corners", faces_and_corners),
         ("device backends", device_backends_scenario),
+        ("input distributions", input_distributions),
+        ("tiny problem", tiny_problem),
     ];
     for (name, scenario) in cases {
         eprintln!("rank {}: {name}", comm.rank());
@@ -379,6 +416,20 @@ fn distributed_scenarios() {
          for bit the pass before T9",
         comm.rank(),
         REFERENCE_CHECKS.load(std::sync::atomic::Ordering::Relaxed)
+    );
+    let checks = ONE_RANK_CHECKS.load(std::sync::atomic::Ordering::Relaxed);
+    eprintln!(
+        "rank {}: one-rank reference (Phase 5 T6): {}",
+        comm.rank(),
+        if comm.size() == 1 {
+            "one rank, every run its own reference".to_owned()
+        } else {
+            format!(
+                "{checks} evaluations on {} ranks bit for bit the one-rank FMM over the union \
+                 in rank order",
+                comm.size()
+            )
+        }
     );
 }
 
@@ -791,24 +842,129 @@ fn share<V: Copy>(items: &[V], comm: &SimpleCommunicator) -> Vec<V> {
     items.iter().skip(rank).step_by(size).copied().collect()
 }
 
-/// The FMM, or `None` on several ranks if the points are not owned (module
-/// documentation). Panics on any other error.
+/// The FMM; panics on an error. On several ranks every scenario runs distributed: the FMM
+/// moves the points to the ranks that own their leaves (Phase 5 T6). An `Option`, so that
+/// a scenario could still stop where a rank count cannot run it.
 fn built<'o, T: Stored + SimdScalar + Equivalence + Default>(
     result: Result<Fmm<'o, T>, FmmError>,
     comm: &SimpleCommunicator,
 ) -> Option<Fmm<'o, T>> {
     match result {
         Ok(fmm) => Some(fmm),
-        Err(FmmError::PointsNotOwned { count }) if comm.size() > 1 => {
-            eprintln!(
-                "rank {}: {count} points not owned; not redistributed until C5.1, scenario \
-                 stops",
-                comm.rank()
-            );
-            None
-        }
         Err(error) => panic!("rank {}: the FMM does not build: {error}", comm.rank()),
     }
+}
+
+/// The values of every rank's `local`, in rank order, and the position of this rank's
+/// first value among them (an all-gather of the counts and one of the values).
+fn union<V: Equivalence + Copy + Default>(
+    local: &[V],
+    comm: &SimpleCommunicator,
+) -> (Vec<V>, usize) {
+    let size = comm.size() as usize;
+    let mut counts = vec![0i32; size];
+    comm.all_gather_into(&(local.len() as i32), &mut counts[..]);
+    let displacements: Vec<i32> = counts
+        .iter()
+        .scan(0, |start, &count| {
+            let first = *start;
+            *start += count;
+            Some(first)
+        })
+        .collect();
+    let total = counts.iter().map(|&n| n as usize).sum();
+    let mut all = vec![V::default(); total];
+    let mut partition = PartitionMut::new(&mut all[..], &counts[..], &displacements[..]);
+    comm.all_gather_varcount_into(local, &mut partition);
+    (all, displacements[comm.rank() as usize] as usize)
+}
+
+/// The points of every rank in rank order, and the position of this rank's first point.
+fn union_points(local: &[[f64; 3]], comm: &SimpleCommunicator) -> (Vec<[f64; 3]>, usize) {
+    let (flat, first) = union(local.as_flattened(), comm);
+    (flat.as_chunks::<3>().0.to_vec(), first / 3)
+}
+
+/// The one-rank `Fmm`s [`check_one_rank`] compared, for the closing line.
+static ONE_RANK_CHECKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// On several ranks, the one-rank reference (docs/phase5/README.md, "The oracles"): the
+/// `Fmm` of `builder` at one thread over the union of every rank's sources, targets and
+/// charges in rank order, built by rank 0 on `SimpleCommunicator::self_comm()`, whose
+/// output at each rank's targets must equal `output`, the multi-rank output, bit for bit
+/// (requirement 2, decision 7: docs/design/distributed-fmm.md §5.3, §5.4). The union is
+/// gathered on every rank (all-gathers), rank 0 broadcasts the reference's output, each
+/// rank compares its own targets, and an all-reduce agrees the verdict, so the check fails
+/// on every rank or on none. Nothing on one rank, where a run is its own reference.
+fn check_one_rank<T: Stored + SimdScalar + Equivalence + Default>(
+    what: &str,
+    builder: &FmmBuilder<T>,
+    (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
+    charges: &[T],
+    output: &Output<T>,
+    comm: &SimpleCommunicator,
+) {
+    if comm.size() == 1 {
+        return;
+    }
+    let rank = comm.rank();
+    let (all_sources, _) = union_points(sources, comm);
+    let (all_targets, first) = union_points(targets, comm);
+    let (all_charges, _) = union(charges, comm);
+    // φ of every target, then ∇φ, as bit patterns.
+    let gradients = output.gradient.is_some();
+    let n = all_targets.len();
+    let mut reference = vec![0u64; if gradients { 4 * n } else { n }];
+    if rank == 0 {
+        let one = SimpleCommunicator::self_comm();
+        let mut fmm = builder
+            .clone()
+            .threads(1)
+            .build(&all_sources, &all_targets, &one)
+            .unwrap_or_else(|error| panic!("rank 0: {what}: the one-rank FMM: {error}"));
+        let all = fmm
+            .evaluate(&all_charges)
+            .expect("the one-rank FMM evaluates");
+        reference.copy_from_slice(&output_bits(&all));
+    }
+    comm.process_at_rank(0).broadcast_into(&mut reference[..]);
+    let (phi, grad) = reference.split_at(n);
+    let local = targets.len();
+    let mut want = phi[first..first + local].to_vec();
+    if gradients {
+        want.extend_from_slice(&grad[3 * first..3 * (first + local)]);
+    }
+    let got = output_bits(output);
+    assert_eq!(got.len(), want.len(), "{what}");
+    let differing = got.iter().zip(&want).filter(|(a, b)| a != b).count();
+    if differing > 0 {
+        let as_f64 =
+            |bits: &[u64]| -> Vec<f64> { bits.iter().map(|&b| f64::from_bits(b)).collect() };
+        eprintln!(
+            "rank {rank}: {what}: {differing} of {} values differ from the one-rank FMM over \
+             the union in rank order (relative L2 on this rank {:.1e})",
+            got.len(),
+            local_difference(&as_f64(&got), &as_f64(&want))
+        );
+    }
+    let total = global_sum(differing, comm);
+    assert_eq!(
+        total, 0,
+        "rank {rank}: {what}: {total} values of all ranks differ from the one-rank FMM over \
+         the union in rank order"
+    );
+    ONE_RANK_CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The relative L2 difference ‖a − b‖₂ / ‖b‖₂ over this rank's values only.
+fn local_difference<T: RealScalar>(a: &[T], b: &[T]) -> f64 {
+    let mut sums = [0.0f64; 2];
+    for (&x, &y) in a.iter().zip(b) {
+        let (x, y) = (RealScalar::to_f64(x), RealScalar::to_f64(y));
+        sums[0] += (x - y).powi(2);
+        sums[1] += y * y;
+    }
+    (sums[0] / sums[1].max(f64::MIN_POSITIVE)).sqrt()
 }
 
 /// Builds the FMM of `builder` at one thread and evaluates `charges`, then builds it
@@ -844,6 +1000,14 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
         .expect("the host times synchronously");
     let output = fmm.evaluate(charges).expect("the FMM evaluates");
     check_reference("host, one thread", &mut fmm, &output);
+    check_one_rank(
+        "host, one thread",
+        &builder,
+        (sources, targets),
+        charges,
+        &output,
+        comm,
+    );
     let reference = output_bits(&output);
     let calls = kind_common::check_kinds("host, one thread", &fmm, &output, mode);
     if mode != KindTiming::Off {
@@ -1360,26 +1524,29 @@ fn uniform_tree(comm: &SimpleCommunicator) {
 /// The root as the only leaf: P2P alone (module documentation). Error measure: relative
 /// L2 against the direct sum, 1e-14.
 fn single_leaf(comm: &SimpleCommunicator) {
-    if comm.size() > 1 {
-        eprintln!("rank {}: single leaf: one rank only", comm.rank());
-        return;
-    }
     let mut rng = SplitMix64(0x7897);
     let points = unit_cube_points(&mut rng, 200);
     let charges = random_charges(&mut rng, points.len());
+    let (sources, local_charges) = (share(&points, comm), share(&charges, comm));
     let builder = FmmBuilder::<f64>::new(3).max_level(0).gradients(true);
-    let (fmm, output) =
-        evaluate_every_kernel(&builder, (&points, &points), &charges, &THREADS, comm)
-            .expect("the FMM builds");
-    assert_eq!((fmm.nlevels(), fmm.nleaves()), (1, 1));
-    let (phi, grad) = exact(&points, &charges, &points);
+    let sets = (&sources[..], &sources[..]);
+    let (fmm, output) = evaluate_every_kernel(&builder, sets, &local_charges, &THREADS, comm)
+        .expect("the FMM builds");
+    // One block, the root: one rank owns the leaf and every point, the others none (O4).
+    assert_eq!(fmm.nlevels(), 1);
+    assert_eq!(global_sum(fmm.nleaves(), comm), 1);
+    if fmm.nleaves() == 1 {
+        assert_eq!(fmm.owned_points(), (points.len(), points.len()));
+    }
+    let (phi, grad) = exact(&points, &charges, &sources);
     let potential_error = relative_l2(&output.potential, &phi, comm);
     let gradient_error = relative_l2_vectors(output.gradient.as_ref().unwrap(), &grad, comm);
     eprintln!(
-        "rank {}: single leaf, N = {}: relative L2 error {potential_error:.3e} (φ), \
-         {gradient_error:.3e} (∇φ)",
+        "rank {}: single leaf, N = {}: {} leaf here; relative L2 error {potential_error:.3e} \
+         (φ), {gradient_error:.3e} (∇φ)",
         comm.rank(),
-        points.len()
+        points.len(),
+        fmm.nleaves()
     );
     assert!(potential_error < 1e-14, "φ: {potential_error:e}");
     assert!(gradient_error < 1e-14, "∇φ: {gradient_error:e}");
@@ -1407,8 +1574,16 @@ fn no_targets_on_this_rank(comm: &SimpleCommunicator) {
     assert_eq!(output.gradient.as_ref().unwrap().len(), local_targets.len());
     if comm.rank() == 0 {
         assert_eq!(fmm.ntargets(), 0);
+    }
+    // On one rank no leaf holds a target; on several, rank 0 owns the targets other ranks
+    // passed in its leaves.
+    if comm.size() == 1 {
         assert!(fmm.target_counts().iter().all(|&n| n == 0));
     }
+    assert_eq!(
+        global_sum(fmm.owned_points().1, comm),
+        global_sum(local_targets.len(), comm)
+    );
     eprintln!(
         "rank {}: no targets on rank 0: {} targets here",
         comm.rank(),
@@ -1759,54 +1934,57 @@ fn reusable_outputs_in<T: Stored + SimdScalar + Equivalence + Default>(comm: &Si
     );
 }
 
-/// Every rank passes the complete point set: the FMM runs on one rank, and on several
-/// every rank returns `PointsNotOwned` with the same count (module documentation).
+/// The same points in two distributions that keep their order within every leaf, all on
+/// rank 0 and in consecutive blocks by rank: equal outputs bit for bit (module
+/// documentation).
 fn ownership(comm: &SimpleCommunicator) {
+    let (rank, size) = (comm.rank() as usize, comm.size() as usize);
     let mut rng = SplitMix64(0x789c);
     let points = unit_cube_points(&mut rng, 600);
     let charges = random_charges(&mut rng, points.len());
     let builder = FmmBuilder::<f64>::new(4);
-    if comm.size() == 1 {
-        let (_, output) = evaluate_threaded(&builder, (&points, &points), &charges, &THREADS, comm)
-            .expect("on one rank every point is owned");
-        let (phi, _) = exact(&points, &charges, &points);
-        let error = relative_l2(&output.potential, &phi, comm);
-        eprintln!("rank 0: ownership: one rank, relative L2 error of φ {error:.3e} (p = 4)");
-        assert!(error < 1e-2, "{error:e}");
-        return;
-    }
-    let count = match builder.build(&points, &points, comm) {
-        Err(FmmError::PointsNotOwned { count }) => count,
-        Err(error) => panic!("rank {}: {error}", comm.rank()),
-        Ok(_) => panic!(
-            "rank {}: every rank holds every point, yet the build succeeds",
-            comm.rank()
-        ),
+    let mut outputs = Vec::new();
+    // On one rank the two are the same input: run it once.
+    let distributions: &[&str] = if size == 1 {
+        &["all on rank 0"]
+    } else {
+        &["all on rank 0", "blocks"]
     };
-    let (mut lowest, mut highest) = (0u64, 0u64);
-    comm.all_reduce_into(&count, &mut lowest, SystemOperation::min());
-    comm.all_reduce_into(&count, &mut highest, SystemOperation::max());
-    assert_eq!(lowest, highest, "the ranks disagree on the count");
-    assert!(count > 0);
-    // A device backend: PointsNotOwned wins over DeviceNeedsOneRank (device-path.md §4.4).
-    #[cfg(feature = "gpu")]
-    for backend in device_backends() {
-        let error = builder
-            .clone()
-            .backend(backend)
-            .build(&points, &points, comm)
-            .err();
+    for &name in distributions {
+        let mine: Vec<usize> = (0..points.len())
+            .filter(|&i| match name {
+                "blocks" => i * size / points.len() == rank,
+                _ => rank == 0,
+            })
+            .collect();
+        let local: Vec<[f64; 3]> = mine.iter().map(|&i| points[i]).collect();
+        let local_charges: Vec<f64> = mine.iter().map(|&i| charges[i]).collect();
+        let (_, output) =
+            evaluate_threaded(&builder, (&local, &local), &local_charges, &THREADS, comm)
+                .expect("the FMM builds");
+        let (phi, _) = exact(&points, &charges, &local);
+        let error = relative_l2(&output.potential, &phi, comm);
+        eprintln!(
+            "rank {rank}: ownership: {name}, {} points here, relative L2 error of φ \
+             {error:.3e} (p = 4)",
+            local.len()
+        );
+        assert!(error < 1e-2, "{name}: {error:e}");
+        // Every rank's output in the order of `points`: the union in rank order.
+        outputs.push(union(&output.potential, comm).0);
+    }
+    if let [first, second] = &outputs[..] {
         assert_eq!(
-            error,
-            Some(FmmError::PointsNotOwned { count }),
-            "rank {}: {backend}",
-            comm.rank()
+            bits(first),
+            bits(second),
+            "all on rank 0 and in blocks: the outputs differ"
+        );
+        eprintln!(
+            "rank {rank}: ownership: all on rank 0 and in blocks over {size} ranks: {} \
+             values bit for bit",
+            first.len()
         );
     }
-    eprintln!(
-        "rank {}: ownership: PointsNotOwned with {count} points, on every rank",
-        comm.rank()
-    );
 }
 
 /// An adaptive tree with W and X lists, in f32 and f64, every strategy, gradients off
@@ -2365,6 +2543,248 @@ fn faces_and_corners(comm: &SimpleCommunicator) {
     assert!(gradient_error < 1e-2, "∇φ: {gradient_error:e}");
 }
 
+/// A seeded hash of `i`, for the random share of [`distribute`] (SplitMix64's finaliser).
+fn hash(seed: u64, i: usize) -> u64 {
+    let mut z = seed ^ (i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
+}
+
+/// The input distributions of docs/phase5/README.md ("Workloads") and design §10.2, each
+/// derived locally on every rank.
+const DISTRIBUTIONS: [&str; 4] = ["all on rank 0", "random share", "one empty rank", "owners"];
+
+/// The positions in `points` this rank passes under the distribution `name`
+/// ([`DISTRIBUTIONS`]): every point on rank 0; point i on rank `hash(seed, i) % P`; that
+/// share with the last rank's points given to rank 0; or every point on the rank that owns
+/// its leaf, by an octree of every point's key twice (as a source and as a target) with the
+/// settings of the FMM in `domain` (the partition does not depend on the input, Phase 5
+/// T4, so this is the FMM's own).
+fn distribute(
+    name: &str,
+    points: &[[f64; 3]],
+    (domain, max_points_per_leaf): (&Domain, usize),
+    comm: &SimpleCommunicator,
+) -> Vec<usize> {
+    let (rank, size) = (comm.rank() as usize, comm.size());
+    let share = |i: usize| (hash(0x5eed, i) % size as u64) as usize;
+    match name {
+        "all on rank 0" => (0..points.len()).filter(|_| rank == 0).collect(),
+        "random share" => (0..points.len()).filter(|&i| share(i) == rank).collect(),
+        "one empty rank" => (0..points.len())
+            .filter(|&i| {
+                let owner = share(i);
+                (if owner == size as usize - 1 { 0 } else { owner }) == rank
+            })
+            .collect(),
+        "owners" => {
+            let keys: Vec<MortonKey> = points
+                .iter()
+                .map(|&x| {
+                    morton::from_physical_point(x, &domain.physical_box(), DEEPEST_LEVEL as usize)
+                })
+                .collect();
+            let mine: Vec<MortonKey> = if rank == 0 {
+                keys.iter().chain(&keys).copied().collect()
+            } else {
+                Vec::new()
+            };
+            let options = OctreeOptions::new()
+                .with_max_level(16)
+                .with_max_fine_keys(max_points_per_leaf)
+                .with_ghost_children(true);
+            let octree = Octree::new(&mine, options, comm);
+            (0..points.len())
+                .filter(|&i| octree.owner_rank(keys[i]).expect("a valid key") == rank)
+                .collect()
+        }
+        _ => unreachable!("{name} is not a distribution"),
+    }
+}
+
+/// Every input distribution of [`DISTRIBUTIONS`] on the uniform cube (f64 and f32) and on
+/// the Plummer sphere (f64), p = 6 with gradients: each bit for bit its own one-rank
+/// reference (`evaluate_threaded`), each within 100 u_T of the one-rank `Fmm` over the
+/// points in their order, and the random share within it of every other distribution
+/// (module documentation). On one rank every distribution is the same input, so the
+/// scenario says so and stops.
+fn input_distributions(comm: &SimpleCommunicator) {
+    if comm.size() == 1 {
+        eprintln!(
+            "rank 0: input distributions: one rank, every distribution the same input (the \
+             other scenarios run it)"
+        );
+        return;
+    }
+    let mut rng = SplitMix64(0x78a3);
+    let cube = unit_cube_points(&mut rng, 1500);
+    let plummer = plummer_points(&mut rng, 1500, [0.5; 3], 0.04);
+    let charges = random_charges(&mut rng, 1500);
+    let domain = Domain::new(&PhysicalBox::new([-0.5, -0.5, -0.5, 1.5, 1.5, 1.5])).unwrap();
+    distributions_in::<f64>("cube", &cube, &charges, &domain, comm);
+    distributions_in::<f32>("cube", &cube, &charges, &domain, comm);
+    distributions_in::<f64>("plummer", &plummer, &charges, &domain, comm);
+}
+
+/// [`input_distributions`] for one point set in precision `T`.
+fn distributions_in<T: Stored + SimdScalar + Equivalence + Default>(
+    workload: &str,
+    points: &[[f64; 3]],
+    charges: &[f64],
+    domain: &Domain,
+    comm: &SimpleCommunicator,
+) {
+    let rank = comm.rank();
+    let precision = if size_of::<T>() == 4 { "f32" } else { "f64" };
+    let charges: Vec<T> = charges.iter().map(|&q| T::from_f64(q)).collect();
+    let leaf = 32;
+    let builder = FmmBuilder::<T>::new(6)
+        .gradients(true)
+        .max_points_per_leaf(leaf)
+        .domain(domain.physical_box());
+    // The one-rank FMM over the points in their order, on rank 0, broadcast.
+    let n = points.len();
+    let (mut reference_phi, mut reference_grad) = (vec![T::zero(); n], vec![T::zero(); 3 * n]);
+    if rank == 0 {
+        let one = SimpleCommunicator::self_comm();
+        let mut fmm = builder
+            .clone()
+            .build(points, points, &one)
+            .expect("the one-rank FMM builds");
+        let output = fmm.evaluate(&charges).expect("it evaluates");
+        reference_phi.copy_from_slice(&output.potential);
+        reference_grad.copy_from_slice(output.gradient.expect("gradients").as_flattened());
+    }
+    comm.process_at_rank(0)
+        .broadcast_into(&mut reference_phi[..]);
+    comm.process_at_rank(0)
+        .broadcast_into(&mut reference_grad[..]);
+    // Each distribution, as every point's output in the order of `points`.
+    let mut outputs: Vec<(Vec<T>, Vec<T>)> = Vec::new();
+    // u_T: 2⁻⁵³ in f64, 2⁻²⁴ in f32.
+    let unit = if size_of::<T>() == 4 {
+        2f64.powi(-24)
+    } else {
+        2f64.powi(-53)
+    };
+    let tolerance = 100.0 * unit;
+    let mut report = Vec::new();
+    for name in DISTRIBUTIONS {
+        let mine = distribute(name, points, (domain, leaf), comm);
+        let local: Vec<[f64; 3]> = mine.iter().map(|&i| points[i]).collect();
+        let local_charges: Vec<T> = mine.iter().map(|&i| charges[i]).collect();
+        let (fmm, output) =
+            evaluate_threaded(&builder, (&local, &local), &local_charges, &[], comm)
+                .expect("the FMM builds");
+        if name == "owners" {
+            assert_eq!(
+                fmm.owned_points(),
+                (local.len(), local.len()),
+                "rank {rank}: {workload}: the octree's partition moves no point"
+            );
+        }
+        let empty = match name {
+            "all on rank 0" => rank != 0,
+            "one empty rank" => rank == comm.size() - 1,
+            _ => false,
+        };
+        assert!(
+            !empty || local.is_empty(),
+            "rank {rank}: {name}: an empty rank"
+        );
+        // Every point's output in the order of `points`: scattered by position, summed.
+        let mut phi = vec![0.0f64; n];
+        let mut grad = vec![0.0f64; 3 * n];
+        for (r, &i) in mine.iter().enumerate() {
+            phi[i] = RealScalar::to_f64(output.potential[r]);
+            for (c, &g) in output.gradient.as_ref().unwrap()[r].iter().enumerate() {
+                grad[3 * i + c] = RealScalar::to_f64(g);
+            }
+        }
+        let (mut all_phi, mut all_grad) = (vec![0.0f64; n], vec![0.0f64; 3 * n]);
+        comm.all_reduce_into(&phi[..], &mut all_phi[..], SystemOperation::sum());
+        comm.all_reduce_into(&grad[..], &mut all_grad[..], SystemOperation::sum());
+        let as_t = |v: &[f64]| -> Vec<T> { v.iter().map(|&x| T::from_f64(x)).collect() };
+        let (all_phi, all_grad) = (as_t(&all_phi), as_t(&all_grad));
+        let [phi_l2, grad_l2, phi_max] = [
+            local_difference(&all_phi, &reference_phi),
+            local_difference(&all_grad, &reference_grad),
+            relative_max(&all_phi, &reference_phi),
+        ];
+        report.push(format!(
+            "{name} {phi_l2:.1e} / {grad_l2:.1e} (max φ {phi_max:.1e})"
+        ));
+        assert!(
+            phi_l2 <= tolerance && grad_l2 <= tolerance,
+            "rank {rank}: {workload}, {precision}, {name}: φ {phi_l2:e}, ∇φ {grad_l2:e} from \
+             the one-rank FMM, tolerance 100 u_T = {tolerance:e}"
+        );
+        outputs.push((all_phi, all_grad));
+    }
+    // Between distributions: the random share against every other.
+    let between: Vec<String> = (0..outputs.len())
+        .filter(|&k| k != 1)
+        .map(|k| {
+            let phi = local_difference(&outputs[1].0, &outputs[k].0);
+            let grad = local_difference(&outputs[1].1, &outputs[k].1);
+            assert!(
+                phi <= tolerance && grad <= tolerance,
+                "rank {rank}: {workload}, {precision}: random share against {}: φ {phi:e}, \
+                 ∇φ {grad:e}, tolerance {tolerance:e}",
+                DISTRIBUTIONS[k]
+            );
+            format!("{} {phi:.1e} / {grad:.1e}", DISTRIBUTIONS[k])
+        })
+        .collect();
+    eprintln!(
+        "rank {rank}: input distributions, {workload}, {precision}, p = 6, {} ranks: each bit \
+         for bit its one-rank reference; relative L2 φ / ∇φ from the one-rank FMM in point \
+         order: {}; random share against {}; tolerance 100 u_T = {tolerance:.1e}",
+        comm.size(),
+        report.join(", "),
+        between.join(", ")
+    );
+}
+
+/// The relative max difference max |a − b| / max |b| over this rank's values.
+fn relative_max<T: RealScalar>(a: &[T], b: &[T]) -> f64 {
+    let (mut difference, mut size) = (0.0f64, 0.0f64);
+    for (&x, &y) in a.iter().zip(b) {
+        let (x, y) = (RealScalar::to_f64(x), RealScalar::to_f64(y));
+        difference = difference.max((x - y).abs());
+        size = size.max(y.abs());
+    }
+    difference / size.max(f64::MIN_POSITIVE)
+}
+
+/// Three points on any number of ranks: one coarse block, the root, so every rank but its
+/// owner has no leaf (O4, Phase 5 T4), on every rank count; P2P alone, against the direct
+/// sum (module documentation).
+fn tiny_problem(comm: &SimpleCommunicator) {
+    let points = [[0.1, 0.2, 0.3], [0.7, 0.5, 0.9], [0.4, 0.8, 0.2]];
+    let charges = [1.0, -0.5, 0.25];
+    // Point i on rank i % P.
+    let (sources, local_charges) = (share(&points, comm), share(&charges, comm));
+    let builder = FmmBuilder::<f64>::new(3).gradients(true);
+    let sets = (&sources[..], &sources[..]);
+    let (fmm, output) =
+        evaluate_threaded(&builder, sets, &local_charges, &[], comm).expect("the FMM builds");
+    let with_leaves = global_sum(usize::from(fmm.nleaves() > 0), comm);
+    assert_eq!((fmm.nlevels(), global_sum(fmm.nleaves(), comm)), (1, 1));
+    assert_eq!(with_leaves, 1, "one rank holds the root");
+    let (phi, grad) = exact(&points, &charges, &sources);
+    let potential_error = relative_l2(&output.potential, &phi, comm);
+    let gradient_error = relative_l2_vectors(output.gradient.as_ref().unwrap(), &grad, comm);
+    eprintln!(
+        "rank {}: tiny problem: 3 points on {} ranks, {with_leaves} rank with a leaf; \
+         relative L2 error {potential_error:.1e} (φ), {gradient_error:.1e} (∇φ)",
+        comm.rank(),
+        comm.size()
+    );
+    assert!(potential_error < 1e-14 && gradient_error < 1e-14);
+}
+
 /// The backend setting (module documentation, "device backends"): the default, a
 /// backend not compiled in, its agreement across ranks, and the threads rule of the CPU
 /// runtime.
@@ -2489,7 +2909,7 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
         let charges = random_charges(&mut rng, points.len());
         let builder = FmmBuilder::<f64>::new(3).backend(Backend::Cpu).threads(4);
         match builder.build(&points, &points, comm) {
-            Ok(mut fmm) => {
+            Ok(mut fmm) if comm.size() == 1 => {
                 assert_eq!(fmm.threading().threads, 1, "{}", fmm.threading());
                 assert_eq!(fmm.operator().threads(), 1);
                 let report = fmm.device_report().expect("a device backend");
@@ -2617,20 +3037,28 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
                     counters.syncs
                 );
             }
-            Err(FmmError::PointsNotOwned { .. }) if comm.size() > 1 => {}
+            // On several ranks, after the redistribution (step 5), on every rank.
             Err(FmmError::InvalidSettings(SettingsError::DeviceNeedsOneRank { ranks }))
                 if comm.size() > 1 =>
             {
                 assert_eq!(ranks, comm.size() as usize);
+                eprintln!(
+                    "rank {rank}: the CPU runtime on {ranks} ranks: DeviceNeedsOneRank, as \
+                     expected until Phase 5 T8"
+                );
             }
+            Ok(_) => panic!("rank {rank}: a device backend built on several ranks"),
             Err(error) => panic!("rank {rank}: CPU runtime with threads(4): {error}"),
         }
     }
-    // Points that every rank owns: four in every level-3 box of the unit cube, each rank
-    // passing those of its share of the level-1 octants (2, 4 or 8 ranks; one rank all).
-    // The partition of the octree then falls on octant boundaries, so the host build
-    // succeeds on several ranks, and a device build returns `DeviceNeedsOneRank` on every
-    // rank after step 5 (device-path.md §4.4). On one rank the device path runs.
+    // The octree's own partition (the input of Phase 4's `device backends`): four points in
+    // every level-3 box of the unit cube, each rank passing those of its share of the
+    // level-1 octants (2, 4 or 8 ranks; one rank, or a count that does not divide 8, all
+    // of them, so that every rank passes every point). On several ranks the host path
+    // builds (no point moves where the partition falls on octant boundaries) and a device
+    // build returns `DeviceNeedsOneRank` on every rank after step 5, in
+    // `device_common::check_backend` (device-path.md §4.4). On one rank the device path
+    // runs.
     let size = comm.size() as usize;
     let owned: Vec<[f64; 3]> = (0..512)
         .filter(|&b: &usize| {
@@ -2649,23 +3077,16 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
         .max_points_per_leaf(1)
         .domain(PhysicalBox::new([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]));
     let owned_charges = random_charges(&mut rng, owned.len());
-    match builder.build(&owned, &owned, comm) {
-        Ok(_) => {
-            eprintln!(
-                "rank {rank}: device backends: every point owned on {size} rank(s), the host \
-                 path builds"
-            );
-            let (mut fmm, output) =
-                evaluate_threaded(&builder, (&owned, &owned), &owned_charges, &[], comm)
-                    .expect("the points are owned");
-            check_synchronous("device backends", &mut fmm, &owned_charges, &output);
-        }
-        Err(FmmError::PointsNotOwned { count }) if size > 1 => eprintln!(
-            "rank {rank}: device backends: {count} points not owned on {size} ranks; \
-             DeviceNeedsOneRank not reached"
-        ),
-        Err(error) => panic!("rank {rank}: owned points: {error}"),
-    }
+    let (mut fmm, output) =
+        evaluate_threaded(&builder, (&owned, &owned), &owned_charges, &[], comm)
+            .expect("the FMM builds");
+    check_synchronous("device backends", &mut fmm, &owned_charges, &output);
+    eprintln!(
+        "rank {rank}: device backends: the octant shares on {size} rank(s), {} of {} \
+         sources passed here owned here",
+        fmm.owned_points().0,
+        owned.len()
+    );
     eprintln!(
         "rank {rank}: device backends: Host the default; not compiled in and refused: {}",
         missing

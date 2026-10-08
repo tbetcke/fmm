@@ -18,9 +18,11 @@
 //! - the leaf-size study: p = 8 in f64 on the cube and the Plummer sphere with 16, 32,
 //!   64, 128 and 256 points per leaf as the refinement target.
 //!
-//! Run in release mode, on one rank (the points are not redistributed until C5.1), with
-//! `--threads n` rayon threads (default 1), `--n N` points (default 10⁵), `--p2p k` the
-//! P2P kernel (`auto`, the default, `reference` or an ISA: `scalar`, `neon`, `avx2`;
+//! Run in release mode, on any number of ranks (Phase 5 T6: each rank passes every P-th
+//! point, the errors are reduced over the ranks, the oracles computed once, each rank a
+//! share of the sampled targets, and rank 0 prints), with `--threads n` rayon threads
+//! (default 1), `--n N` points (default 10⁵), `--p2p k` the P2P kernel (`auto`, the
+//! default, `reference` or an ISA: `scalar`, `neon`, `avx2`;
 //! `nd_fmm_exec::operator::P2pChoice`) and one BLAS thread:
 //!
 //! ```text
@@ -130,6 +132,9 @@ fn progress_sweep(
         .flat_map(|&p| {
             let start = Instant::now();
             let runs = sweep(config, reference, precision, &[p], execution, comm);
+            if comm.rank() != 0 {
+                return runs;
+            }
             eprintln!(
                 "{} {} p = {p}: φ L2 {:.3e}, ∇φ L2 {:.3e} ({:.1} s)",
                 config.distribution.name(),
@@ -153,22 +158,19 @@ fn main() {
         eprintln!("--threads {threads} needs MPI at Funneled; it provides {provided:?}");
         std::process::exit(2);
     }
-    if comm.size() != 1 {
-        eprintln!("calibrate runs on one rank; points are not redistributed until C5.1");
-        std::process::exit(2);
-    }
-
     let start = Instant::now();
     let reports: Vec<Report> = Distribution::ALL
         .iter()
         .map(|&d| {
             let config = config(d, n);
-            let reference = Reference::new(&config);
-            eprintln!(
-                "{}: oracles in {:.1} s",
-                d.name(),
-                reference.time.as_secs_f64()
-            );
+            let reference = Reference::sharded(&config, &comm);
+            if comm.rank() == 0 {
+                eprintln!(
+                    "{}: oracles in {:.1} s",
+                    d.name(),
+                    reference.time.as_secs_f64()
+                );
+            }
             let f64 = progress_sweep(&config, &reference, Precision::F64, execution, &comm);
             let f32 = progress_sweep(&config, &reference, Precision::F32, execution, &comm);
             Report {
@@ -196,11 +198,17 @@ fn main() {
                 execution,
                 &comm,
             );
-            eprintln!("{}: leaf-size study done", d.name());
+            if comm.rank() == 0 {
+                eprintln!("{}: leaf-size study done", d.name());
+            }
             (d, runs)
         })
         .collect();
     let study_time = start.elapsed();
+    // Every rank has run every collective; rank 0 prints.
+    if comm.rank() != 0 {
+        return;
+    }
 
     print_header(&reports, execution, (sweep_time, study_time));
     print_calibration(&reports);
@@ -213,6 +221,7 @@ fn main() {
 /// The problem, the error measure, the machine and the threading.
 fn print_header(reports: &[Report], execution: Execution, (sweep, study): (Duration, Duration)) {
     let threads = execution.threads;
+    let ranks = reports[0].f64[0].ranks;
     let config = &reports[0].config;
     println!("# Calibration of p against the accuracy of the FMM (C3.4)");
     println!();
@@ -243,11 +252,13 @@ fn print_header(reports: &[Report], execution: Execution, (sweep, study): (Durat
         config.sampled
     );
     println!(
-        "- Machine: {}; {}; {}; one rank, {threads} thread{}. Wall time: sweeps {:.1} s, \
-         leaf-size study {:.1} s; the oracles (one thread) {} s.",
+        "- Machine: {}; {}; {}; {ranks} rank{} × {threads} thread{}. Wall time: sweeps \
+         {:.1} s, leaf-size study {:.1} s; the oracles (one thread per rank, each a share \
+         of the sampled targets) {} s.",
         cpu_model(),
         cores(),
         target(),
+        if ranks == 1 { "" } else { "s" },
         if threads == 1 { "" } else { "s" },
         sweep.as_secs_f64(),
         study.as_secs_f64(),

@@ -47,6 +47,12 @@
 //!   rank with empty input, and an error that depends on one rank's input is agreed by
 //!   all ranks before the next collective. Operator and geometry code never calls MPI;
 //!   at most one test per test executable initialises it.
+//! - **Several ranks** (Phase 5, C5.1). Each rank passes any subset of the points, none
+//!   included, and gets the output of its own targets in its own order. The FMM moves
+//!   every point to the rank that owns its leaf at build, and the charges and the output
+//!   on every evaluation (`nd_fmm_plan::redistribute`); the output is bit for bit that of
+//!   the one-rank FMM over the union of every rank's points in rank order
+//!   ([`fmm`](fmm#several-ranks-c51)).
 //! - **Threads.** Opt-in ([`FmmBuilder::threads`](fmm::FmmBuilder::threads), default 1):
 //!   rayon over the targets of each level call, in a pool the FMM owns, bit-identical to
 //!   the serial path for every thread count. Worker threads never call MPI or BLAS. To
@@ -68,7 +74,8 @@
 //! - [`fmm`]: the user-facing [`FmmBuilder`](fmm::FmmBuilder) and [`Fmm`](fmm::Fmm),
 //!   which load the caller's points into an octree and evaluate potentials and
 //!   gradients in the caller's order, with 1/(4π) applied once (§3.1, §3.13; C3.2),
-//!   optionally on several threads (C3.5).
+//!   optionally on several threads (C3.5), on any number of MPI ranks with the points
+//!   passed on any of them (C5.1; [`fmm`](fmm#several-ranks-c51)).
 //! - [`threading`]: the rules for rayon threads, MPI and BLAS, how to launch with one
 //!   BLAS thread, and the [`ThreadingReport`](threading::ThreadingReport) of an FMM.
 //! - `device` (feature `gpu`): the device path, `DeviceOperator`, its report and its
@@ -110,7 +117,8 @@
 //!   `Fmm`'s lifetime and kept in the directory; without one the static rule applies;
 //! - **errors**: device settings are refused at build with a
 //!   [`SettingsError`](fmm::SettingsError) agreed by step 1's all-reduce; a device runs on
-//!   one rank until C5.1; device failures are [`FmmError::Device`](fmm::FmmError::Device);
+//!   one rank until Phase 5 T8; device failures are
+//!   [`FmmError::Device`](fmm::FmmError::Device);
 //! - **threads**: with the CPU runtime no rayon pool, `threads(n)` caps its units per
 //!   cube; with Metal or CUDA the pool serves the host-fallback kinds only.
 //!
@@ -119,8 +127,10 @@
 //!
 //! ## Example
 //!
-//! A complete evaluation on one rank: potentials and gradients of random charges at the
-//! sources themselves (a point does not act on itself).
+//! A complete evaluation: potentials and gradients of random charges at the sources
+//! themselves (a point does not act on itself). Each rank passes the points it holds,
+//! here every point on rank 0 and none on the others; the FMM moves them to the ranks
+//! that own their leaves, and returns the output to rank 0.
 //!
 //! ```no_run
 //! use mpi::traits::Communicator;
@@ -129,7 +139,8 @@
 //! let universe = mpi::initialize().expect("MPI initialises once");
 //! let comm = universe.world();
 //!
-//! let points: Vec<[f64; 3]> = (0..10_000)
+//! let n = if comm.rank() == 0 { 10_000 } else { 0 };
+//! let points: Vec<[f64; 3]> = (0..n)
 //!     .map(|i| {
 //!         let t = i as f64;
 //!         [(0.37 * t).sin(), (0.71 * t).cos(), (0.13 * t).sin()]
@@ -141,17 +152,17 @@
 //! let mut fmm = FmmBuilder::<f64>::new(8)
 //!     .gradients(true)
 //!     .build(&points, &points, &comm)
-//!     .expect("on one rank every point is owned");
+//!     .expect("the FMM builds");
 //! let output = fmm.evaluate(&charges).expect("one charge per source");
 //!
 //! // φ(xᵢ) = Σⱼ qⱼ / (4π |xᵢ − yⱼ|), in the order of `points`.
 //! assert_eq!(output.potential.len(), points.len());
 //! let gradient = output.gradient.expect("built with gradients");
 //! println!(
-//!     "rank {}: φ(x₀) = {:e}, ∇φ(x₀) = {:?}, {} leaves on {} levels, M2L {:?}",
+//!     "rank {}: φ(x₀) = {:?}, ∇φ(x₀) = {:?}, {} leaves on {} levels, M2L {:?}",
 //!     comm.rank(),
-//!     output.potential[0],
-//!     gradient[0],
+//!     output.potential.first(),
+//!     gradient.first(),
 //!     fmm.nleaves(),
 //!     fmm.nlevels(),
 //!     fmm.strategy()

@@ -51,6 +51,13 @@ they validate.
 The only crate that depends on this one is the spike `spikes/p2p-simd` (Phase 3S T7),
 for the inputs of its green-kernels comparison; green-kernels itself never enters here.
 
+Since Phase 5 T6, `fmm_accuracy::{run, measure}` and the `fmm_accuracy` and `calibrate`
+examples run on any number of ranks: each rank passes its share of the points
+(`Problem::share`), the errors, the tree and the timings are reduced over the ranks, the
+oracle is computed once (`Oracle::sharded`, `calibration::Reference::sharded`), and rank 0
+prints. `tests/fmm_accuracy.rs` passes at 1 and 2 ranks; `fmm_accuracy` is registered for
+the weekly `run-examples` job (3 ranks).
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/device_fmm.rs`, feature `cpu`, the smoke run

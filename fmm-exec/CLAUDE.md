@@ -15,7 +15,9 @@ autotune with a persistent cache, module `tune`); Phase 4S, C4S.4 (task T4: the 
 FMM on CUDA), C4S.5 (task T5: per-kind timings, `FmmBuilder::kind_timings`) and C4S.8
 (task T9: the output pass and the charge load in parallel, `Fmm::evaluate_into`, the output
 pass on the device, `FmmBuilder::output_pass`) and C4S.10 (task T11: the download read in
-place, the charges uploaded without a copy).
+place, the charges uploaded without a copy); Phase 5, C5.1 host (task T6 in docs/phase5/:
+`Fmm` on any number of ranks through `nd_fmm_plan::redistribute::Redistribution`; design
+docs/design/distributed-fmm.md).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -58,7 +60,8 @@ place, the charges uploaded without a copy).
     device path, feature `metal`) and `tests/device_cuda.rs` (the ignored CUDA run,
     feature `cuda`; Phase 4S T4) initialise it at `Threading::Funneled`;
     `tests/device_fmm.rs` (the ignored C4.8 gate, feature `gpu`) and
-    `tests/device_tune.rs` (the tuner, feature `cpu`) at the default level.
+    `tests/device_tune.rs` (the tuner, feature `cpu`) at the default level, and
+    `tests/multi_rank.rs` (the ignored C5.1 host gate, Phase 5 T6) at `Funneled`.
     The device checks shared by `tests/mpi_exec.rs`, `tests/device_metal.rs` and
     `tests/device_cuda.rs` live in `tests/device_common/`, the tuner's in
     `tests/tune_common/`, the per-kind timings' (Phase 4S T5) in `tests/kind_common/`
@@ -71,22 +74,41 @@ place, the charges uploaded without a copy).
     through `evaluate_every_kernel`, which also repeats them with `Reference` and every
     available ISA and compares each ISA with `Reference`. It roughly triples the cost
     of a scenario, so it runs on the small ones only (debug run under a minute).
+  - Every scenario runs on every rank count (Phase 5 T6). Each rank passes its share of
+    the points (`share`, every P-th), or a distribution of the README (`distribute`);
+    `Fmm` moves them. A test that needs a rank count says so on every rank and returns
+    before any collective (as `input distributions` does on one rank).
+  - The one-rank reference (docs/phase5/README.md, "The oracles"; design §5): on several
+    ranks `evaluate_threaded` checks every one-thread evaluation bit for bit against the
+    `Fmm` of the same settings at one thread over the union of every rank's points and
+    charges in rank order, which every rank builds on `SimpleCommunicator::self_comm()`
+    (`check_one_rank`; the union gathered by all-gathers). Two input distributions agree
+    within 100 u_T relative L2 (1.1e-14 f64, 6.0e-6 f32), not bit for bit: the order
+    within a leaf is (origin rank, origin position). Not run on one rank, where a run is
+    its own reference, so the one-rank debug run costs nothing more.
   - CI runs `tests/mpi_exec.rs` and `tests/mpi_threading.rs` in debug at 2 and 4 ranks
     on every pull request (the `run-tests-mpi` job, root `CLAUDE.md`, "Checks";
     `mpi_threading` checks there that its `MpiThreading` error, carried by step 1's
     agreement all-reduce, reaches every rank). 8 ranks and the ignored tests
-    (`accuracy`, `adaptive`, the device executables) stay by hand, on the M3 Max and on
-    locust, under an external timeout.
+    (`accuracy`, `adaptive`, `multi_rank`, the device executables) stay by hand, on the
+    M3 Max and on locust, under an external timeout; `multi_rank` at 1, 2, 4 and 8 ranks
+    in release (its module docs give the command).
   - Operator and geometry tests do not initialise MPI.
   - Every error that depends on one rank's input is agreed by all ranks before the
     next collective.
   - Doctests that initialise MPI are `no_run`.
-  - Until C5.1, `Fmm` does not redistribute points; on several ranks it reports
-    `PointsNotOwned` on every rank.
+  - Since Phase 5 T6 `Fmm` runs on any number of ranks: `build` moves every point to the
+    rank that owns its leaf (two `Redistribution`s, the coordinates forwarded), and
+    `evaluate` forwards the charges and moves the output back (one all-to-all-v each;
+    `StageTimings::{forward_charges, backward_output}`, `BuildTimings::redistribute`).
+    `PointsNotOwned` is gone; `FmmError::Redistribution` carries a redistribution that
+    overflows MPI's counts. On P ranks the host output is bit for bit the one-rank `Fmm`
+    over the union of the points in rank order; keep it so (the `fmm` module docs,
+    "Several ranks").
   - `examples/basic_evaluation.rs` is the user-facing example of calling `Fmm`
     (registered with `templated-examples`, so the weekly job runs it at 3 ranks): it
-    must run on any number of ranks, reporting `PointsNotOwned` and exiting normally on
-    several until C5.1, and keep to the public API of `fmm`.
+    must run on any number of ranks, each passing its own points, and keep to the
+    public API of `fmm`.
 - Tests name their error measure (docs/phase1/README.md, "Error measures", and
   docs/phase3/README.md). Operators are compared with nd-fmm-ref in a dyadic domain for
   tight tolerances.
@@ -100,7 +122,7 @@ place, the charges uploaded without a copy).
     points once per build, charges and output once per evaluation; `Fmm::evaluate`
     drives `begin_evaluation` (after `reset`) and `read_output`. No `nd-fmm-plan`
     change (no T4b); a device backend runs on one rank (`DeviceNeedsOneRank` after
-    step 5) until C5.1;
+    step 5, the redistribution, on every rank) until Phase 5 T8;
   - accumulation, no atomics, determinism (requirements 4–6): the kernels' rules in
     fmm-kernels/CLAUDE.md; every launch and transfer from the calling thread; nothing
     chosen per call;
@@ -245,6 +267,9 @@ place, the charges uploaded without a copy).
   `RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec` must pass. Tasks that add
   ignored tests must also pass
   `RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --release -- --ignored`. A change to
+  `Fmm`, the moves or the evaluator also runs `tests/mpi_exec.rs` at 2, 4 and 8 ranks and
+  the ignored `tests/multi_rank.rs` at 2, 4 and 8 ranks in release, by hand under an
+  external timeout (root `CLAUDE.md`, "MPI"). A change to
   the device path also needs:
   - `cargo clippy -p nd-fmm-exec --all-targets --features cpu,metal -- -D warnings`;
   - `cargo check -p nd-fmm-exec --features cuda` (type-checked here; run on locust);
@@ -363,6 +388,8 @@ Anything else needs a note in the PR.
 ## Test oracle
 - `nd_fmm_ref::{direct, rotation, leaf, p2p}` at the absolute frames of §3.12, for
   every operator; for P2P with every `P2pChoice` the machine offers.
+- On several ranks, the one-rank `Fmm` of the same settings over the union of every
+  rank's points in rank order, bit for bit (Phase 5 T6, decision 7).
 - The `P2pChoice::Reference` run of the same `Fmm` settings, for every ISA's output.
 - `nd_fmm_ref::p2p::direct_sum` in f64 over the original coordinates, for every
   complete FMM.

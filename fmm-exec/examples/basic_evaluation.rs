@@ -6,17 +6,17 @@
 //! mpirun -n 3 target/release/examples/basic_evaluation
 //! ```
 //!
-//! Each rank passes its own points and charges, and gets the potentials of its own
-//! targets back, in its own order. Until points are redistributed (C5.1), a build on
-//! several ranks whose points lie in leaves other ranks own is refused on every rank with
-//! `FmmError::PointsNotOwned`; the example reports that and exits normally, so that it
-//! runs on any number of ranks (the weekly `run-examples` job uses three).
+//! Each rank passes its own points and charges, anywhere in the domain, and gets the
+//! potentials of its own targets back, in its own order: the FMM moves the points to the
+//! ranks that own their leaves and the output back (Phase 5 T6). It runs on any number of
+//! ranks (the weekly `run-examples` job uses three); on one rank it also checks a few
+//! targets against the direct sum, which needs every point.
 
 use std::f64::consts::PI;
 
 use mpi::Threading;
 use mpi::traits::Communicator;
-use nd_fmm_exec::fmm::{FmmBuilder, FmmError, Output, StageTimings};
+use nd_fmm_exec::fmm::{FmmBuilder, Output, StageTimings};
 
 /// Points per rank.
 const N: usize = 100_000;
@@ -41,33 +41,22 @@ fn main() {
 
     // Build once: degree 8, with gradients; every other setting at its default (the host
     // backend, 64 points per leaf, the M2L strategy chosen from p). `build` is collective.
-    let built = FmmBuilder::<f64>::new(8)
+    let mut fmm = FmmBuilder::<f64>::new(8)
         .gradients(true)
         .threads(threads)
-        .build(&points, &points, &comm);
-    let mut fmm = match built {
-        Ok(fmm) => fmm,
-        Err(FmmError::PointsNotOwned { count }) => {
-            if rank == 0 {
-                println!(
-                    "{size} ranks: {count} points lie in leaves other ranks own; the FMM does \
-                     not redistribute points yet (C5.1), so every rank stops here"
-                );
-            }
-            return;
-        }
-        Err(error) => panic!("rank {rank}: build failed: {error}"),
-    };
-    if rank == 0 {
-        println!(
-            "built on {size} rank(s), {threads} thread(s) each: {} leaves on {} levels, \
-             M2L {:?}, in {:?}",
-            fmm.nleaves(),
-            fmm.nlevels(),
-            fmm.strategy(),
-            fmm.build_timings().total()
-        );
-    }
+        .build(&points, &points, &comm)
+        .unwrap_or_else(|error| panic!("rank {rank}: build failed: {error}"));
+    // The points this rank owns after the build: those in its leaves, from every rank.
+    let (owned, _) = fmm.owned_points();
+    println!(
+        "rank {rank} of {size}, {threads} thread(s): {} leaves on {} levels, {owned} of all \
+         ranks' sources in them, M2L {:?}, built in {:?} ({:?} moving the points)",
+        fmm.nleaves(),
+        fmm.nlevels(),
+        fmm.strategy(),
+        fmm.build_timings().total(),
+        fmm.build_timings().redistribute
+    );
 
     // Evaluate (collective): φ and ∇φ at this rank's targets, in the order of `points`.
     let output = fmm
