@@ -22,8 +22,9 @@ record and check the calls, the batches and the slices they are handed. The valu
 the distributed passes are checked by the Laplace FMM in `nd-fmm-exec`.
 
 - Library only, no binaries.
-- Version `0.1.0-dev`; the public API is unstable. Redistribution of points to their
-  owning ranks is designed (design §9) but not implemented (C5.1).
+- Version `0.1.0-dev`; the public API is unstable. `redistribute::Redistribution`
+  moves points to the ranks that own their leaves and results back (Phase 5 T5,
+  `docs/design/distributed-fmm.md` §4); `nd-fmm-exec`'s `Fmm` uses it from T6.
 
 ## Code map
 
@@ -33,20 +34,23 @@ the distributed passes are checked by the Laplace FMM in `nd-fmm-exec`.
 | `src/index.rs` | `BoxIndex`, `LeafNumbering`: Morton-ordered `u32` box indices per level for every held key (local, `Global`, ghost), and the leaf numbering (local leaves by (level, key), then the ghost leaves named by U or X, by key). |
 | `src/interaction_manager.rs` | `V_LIST_DIRECTIONS` (the 316 V-list offsets, CONVENTIONS §3.12) and the private per-key list rule `key_lists`, with its helpers. See the section below. |
 | `src/lists.rs` | `Csr`, `GroupedCsr` as `VList`/`Children`/`Parents`, `LevelLists` (the views of one level), `offset_index`, `NOFFSETS`, `NOCTANTS`. |
-| `src/plan.rs` | `Plan::new` (collective), `Plan::from_key_types` (local), `PlanError`. |
+| `src/plan.rs` | `Plan::new` (collective), `Plan::from_key_types` (local), `PlanError`. Near and X rows by the entry leaf's (level, key) (P1), and no V, X or L2L rows for a `Global` box that is not an ancestor of the rank's own coarse blocks (P2); distributed-fmm §5.1, §3.6. |
 | `src/store.rs` | `LevelBuffers`, `LeafStore` and their slice types: one buffer per level kind, CSR leaf data with variable counts. |
 | `src/exchange.rs` | `SourceExchange`, `MultipoleExchange`, `CoarseExchange`, `ExchangeError`: variable-size source exchange into the ghost tail, per-level multipole exchange, coarse-block gather. |
 | `src/operator.rs` | `FmmSizes`, the level-batched `FmmOperator` with its batch types `P2m` … `P2p` and `UpwardPass`, the per-pair `PairOperator` and its `PerPair` adapter. |
 | `src/evaluator.rs` | `Evaluator`, `EvaluatorError`: the pass order on the plan, stores and exchanges, public stages, debug-checked stage order. |
+| `src/redistribute.rs` | `Redistribution`, `RedistributionError`: items routed by finest key to the owners of their leaves (`new`: all-to-all of counts, all-reduce of errors and `max_per_item`, communicator duplicate, all-to-all-v of key and position), payloads `forward` into leaf order and `backward` into the caller's order (one all-to-all-v each, `_into` variants, in-place cycle permutations). Within a leaf, items are ordered by (origin rank, origin position). |
 | `src/interaction_manager_tests.rs` | 7 serial unit tests of the per-key rule on synthetic key maps (hand counts, W/X on a refined octant, brute-force oracle, invariants, adjacency, ghost classification, V-list offsets), through the test helper `ListMaps`, included via `#[path]`. No MPI. |
-| `src/plan_tests.rs` | 12 serial unit tests of the index and the index-form lists against `ListMaps` on the trees of `interaction_manager_tests.rs`. No MPI. |
+| `src/plan_tests.rs` | 14 serial unit tests of the index and the index-form lists against `ListMaps` on the trees of `interaction_manager_tests.rs`, among them the row order of P1 and the pruned `Global` rows of P2. No MPI. |
 | `src/store_tests.rs`, `src/exchange_tests.rs` | 9 serial unit tests of the store layouts and 6 of the ghost bucketing and per-key chunk sizes (on the trees of `plan_tests.rs`). No MPI. |
+| `src/redistribute_tests.rs` | 5 serial unit tests of the local parts of `Redistribution`: bucketing, in-place cycle permutations against a naive permutation, value counts and `max_per_item`, and the grouping by leaf, the order within a leaf, the counts, the origins and the round trip of `Sender` and `Receiver` on hand-made and random routing data, with the all-to-all-v simulated. No MPI. |
 | `src/operator_tests.rs`, `src/evaluator_tests.rs` | 3 serial unit tests of the `PerPair` adapter on hand-made batches, and 4 of the evaluator passes: a marker operator checks that every batch hands the views and slices of its level and leaves (variable counts, on the ghost-free trees of `plan_tests.rs`), reset and repeat, call order, validation errors. No MPI. |
-| `tests/mpi_regressions.rs` | One `#[test]` that owns MPI init and runs 12 named scenarios sequentially. Each builds an `Octree` from the union of a source and a target point set (with the ghost-children layer) and computes brute-force U/V/W/X lists of every non-ghost key over the gathered global tree (`oracle_lists`). It then builds a `Plan` and checks the numbering, the leaves, the index-form lists against the oracle and the view invariants; runs the exchanges (sources with counts of one, `hash(key) % 5` and the real source points per leaf; multipoles with per-level sizes, exactly the ghosts of the oracle's V- and W-lists; the coarse gather); and runs the `Evaluator`: with `hash(key) % 5` counts a per-pair operator whose values do not matter (`Mixer`) must give bit-identical stores on a second evaluation and on an evaluator that owns its plan; and a recording operator checks the call order, the groupings of every batch and that every oracle pair is issued exactly once. On the graded and the dense-leaf scenarios rank 0 prints the exchange traffic (`--nocapture`). |
+| `tests/mpi_regressions.rs` | One `#[test]` that owns MPI init and runs 12 named scenarios sequentially. Each builds an `Octree` from the union of a source and a target point set (with the ghost-children layer) and computes brute-force U/V/W/X lists of every non-ghost key over the gathered global tree (`oracle_lists`). It then builds a `Plan` and checks the numbering, the leaves, the index-form lists against the oracle and the view invariants; runs the exchanges (sources with counts of one, `hash(key) % 5` and the real source points per leaf; multipoles with per-level sizes, exactly the ghosts of the oracle's V- and W-lists; the coarse gather); and runs the `Evaluator`: with `hash(key) % 5` counts a per-pair operator whose values do not matter (`Mixer`) must give bit-identical stores on a second evaluation and on an evaluator that owns its plan; and a recording operator checks the call order, the groupings of every batch and that every oracle pair is issued exactly once. The oracle knows P2 (a `Global` box that is not an ancestor of an own block has no V, X or L2L pairs), and `check_plan` checks P1's row order. Finally it redistributes the scenario's global sources and targets (every rank's points, in rank order) from four input distributions (all on rank 0, a seeded share, the owners, the share with the last rank empty): every item arrives once, on its owner, in its leaf (`octree.local_leaf`, `local_leaf_containing`), in (origin rank, position) order, with the counts of the plan's leaves; `f64` × 3 and `u32` × 1 payloads that name their origin round-trip; two forwards agree bit for bit. It also checks the agreed errors (invalid keys on one rank, a plan of another tree), the panic on every rank of a `per_item` above `max_per_item`, and that a payload of the wrong length on rank 0 panics there after taking part while the other ranks complete. On the graded and the dense-leaf scenarios rank 0 prints the exchange traffic (`--nocapture`). |
 | `examples/plan_build_cost.rs` | Release-mode timing and heap use of `Plan::new`, on one rank (nothing asserted). |
+| `examples/redistribution_cost.rs` | Release-mode time and traffic of `Redistribution::new`, `forward` and `backward` for N points of the cube, all on rank 0 or a random share, on any number of ranks (nothing asserted; not registered for `run-examples`). |
 
-Read `src/plan.rs`, `src/lists.rs`, `src/evaluator.rs` and `tests/mpi_regressions.rs`
-for how the API actually behaves; prose is a summary, they are the contract.
+Read `src/plan.rs`, `src/lists.rs`, `src/evaluator.rs`, `src/redistribute.rs` and
+`tests/mpi_regressions.rs` for how the API actually behaves; prose is a summary, they are the contract.
 
 ### Navigating the code
 
@@ -102,7 +106,7 @@ the contract; the points that matter most when changing them:
 The root checks cover this crate. For this crate alone, add `-p nd-fmm-plan` (e.g.
 `RUST_MIN_STACK=8388608 cargo test -p nd-fmm-plan`).
 
-`cargo test -p nd-fmm-plan` gives 41 unit tests plus the integration test **on one rank
+`cargo test -p nd-fmm-plan` gives 48 unit tests plus the integration test **on one rank
 only**. It exercises no ghost exchange and no ghost layer, which is where the
 interesting bugs are.
 
@@ -113,7 +117,8 @@ CI runs `mpi_regressions` in debug at 2 and 4 ranks on every pull request (the
 hand, on the M3 Max and on locust (tools/gh200/README.md, "MPI at n ranks"), and so does
 the run before you push.
 
-For any change touching the plan, the lists, the exchanges or the evaluator (whose
+For any change touching the plan, the lists, the exchanges, the evaluator or the
+redistribution (whose
 ghost-dependent and global-level paths only exist on more than one rank), build the
 test binary and launch it under MPI, under an external timeout:
 

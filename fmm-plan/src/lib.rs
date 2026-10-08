@@ -21,6 +21,9 @@
 //! - [`operator`]: the level-batched operator interface, with a per-pair adapter.
 //! - [`evaluator`]: [`Evaluator`](evaluator::Evaluator) runs the distributed pass order
 //!   on a plan, its stores and its exchanges.
+//! - [`redistribute`]: [`Redistribution`](redistribute::Redistribution) moves per-item
+//!   values (points) from the ranks that hold them to the ranks that own their leaves,
+//!   grouped by leaf, and results back to the caller's order.
 //!
 //! # Compute graph
 //!
@@ -52,13 +55,21 @@
 //! The [`evaluator`] module documents the calls, the collectives and the accumulation
 //! order of every value.
 //!
+//! The evaluator works on the points of the local leaves, grouped by leaf. A caller
+//! whose points lie on any rank moves them to their owners with a
+//! [`Redistribution`](redistribute::Redistribution) (`forward`, one all-to-all-v), which
+//! also gives the counts per leaf, and moves the results back with `backward`
+//! (`docs/design/distributed-fmm.md` §4).
+//!
 //! # Testing
 //!
 //! The crate checks topology and data flow, not values. The lists are compared with a
 //! brute-force geometric oracle, the exchanges with values seeded from the keys, and
 //! the evaluator with test operators that record the calls, the batches and the pairs
-//! they are handed (`tests/mpi_regressions.rs`, on any number of ranks). The values of
-//! the passes are checked by the Laplace FMM in `nd-fmm-exec` against the direct sum.
+//! they are handed (`tests/mpi_regressions.rs`, on any number of ranks). The
+//! redistribution is checked by round trips of payloads that name their origin, for
+//! several input distributions of every scenario. The values of the passes are checked
+//! by the Laplace FMM in `nd-fmm-exec` against the direct sum.
 //!
 //! # Future extensions
 //!
@@ -74,4 +85,5 @@ pub mod interaction_manager;
 pub mod lists;
 pub mod operator;
 pub mod plan;
+pub mod redistribute;
 pub mod store;

@@ -13,6 +13,7 @@ use nd_fmm_plan::{
         UpwardPass,
     },
     plan::Plan,
+    redistribute::{Redistribution, RedistributionError},
     store::{LeafSliceMut, LeafStore, LevelBuffers},
 };
 use nd_octree::{
@@ -1048,6 +1049,286 @@ fn check_batches<C: CommunicatorCollectives>(
     );
 }
 
+/// The input distributions of docs/phase5/README.md ("Workloads"), each derived on every
+/// rank from the scenario's global items (docs/design/distributed-fmm.md §10.2).
+#[derive(Clone, Copy, Debug)]
+enum Distribution {
+    /// Rank 0 holds every item.
+    RankZero,
+    /// Item i goes to rank `hash(seed, i) % P`.
+    Share,
+    /// Every item is on the rank that owns its leaf.
+    Owners,
+    /// The share, with the last rank's items given to rank 0.
+    OneEmptyRank,
+}
+
+const DISTRIBUTIONS: [Distribution; 4] = [
+    Distribution::RankZero,
+    Distribution::Share,
+    Distribution::Owners,
+    Distribution::OneEmptyRank,
+];
+
+/// The rank of item `i` in the seeded share.
+fn share_rank(i: usize, nranks: usize) -> usize {
+    ((i as u64 ^ 0x2545_f491_4f6c_dd1d).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 32) as usize % nranks
+}
+
+/// For every rank, the indices into `global` of the items it holds, ascending.
+fn inputs<C: CommunicatorCollectives>(
+    distribution: Distribution,
+    global: &[u64],
+    octree: &Octree<'_, C>,
+) -> Vec<Vec<usize>> {
+    let nranks = octree.comm().size() as usize;
+    let mut inputs = vec![Vec::new(); nranks];
+    for (i, &key) in global.iter().enumerate() {
+        let rank = match distribution {
+            Distribution::RankZero => 0,
+            Distribution::Share => share_rank(i, nranks),
+            Distribution::Owners => octree.owner_rank(key).unwrap(),
+            Distribution::OneEmptyRank => match share_rank(i, nranks) {
+                last if last + 1 == nranks => 0,
+                rank => rank,
+            },
+        };
+        inputs[rank].push(i);
+    }
+    inputs
+}
+
+/// The minimum and the maximum of `value` over the ranks.
+fn extremes<C: CommunicatorCollectives>(comm: &C, value: usize) -> (usize, usize) {
+    let mut min = 0usize;
+    let mut max = 0usize;
+    comm.all_reduce_into(&value, &mut min, SystemOperation::min());
+    comm.all_reduce_into(&value, &mut max, SystemOperation::max());
+    (min, max)
+}
+
+/// The bits of `values`, for bit-for-bit comparisons.
+fn bits(values: &[f64]) -> Vec<u64> {
+    values.iter().map(|value| value.to_bits()).collect()
+}
+
+/// Redistribute the items `global` (every rank's keys of one population, in rank order)
+/// from every input distribution, and check that every item arrives exactly once, on the
+/// rank that owns its leaf, in that leaf, in (origin rank, position) order; that the
+/// counts are those the plan's leaves imply; that payloads which name their origin
+/// arrive with it and round-trip through `backward`, for `f64` with three values per
+/// item and `u32` with one; and that two forwards agree bit for bit. Collective.
+fn check_redistribution<C: CommunicatorCollectives>(
+    name: &str,
+    octree: &Octree<'_, C>,
+    plan: &Plan,
+    population: &str,
+    global: &[u64],
+) {
+    let comm = octree.comm();
+    let rank = comm.rank() as usize;
+    let leaves = plan.index().leaves();
+    let mut sorted = global.to_vec();
+    sorted.sort_unstable();
+    let expected_counts: Vec<usize> = (0..leaves.nlocal())
+        .map(|j| points_in(&sorted, leaves.key(j)))
+        .collect();
+
+    for distribution in DISTRIBUTIONS {
+        let label = format!("{name}, {population}, {distribution:?}");
+        let inputs = inputs(distribution, global, octree);
+        let mine: Vec<u64> = inputs[rank].iter().map(|&i| global[i]).collect();
+        let redistribution = Redistribution::new(octree, plan, &mine)
+            .unwrap_or_else(|error| panic!("{label}: {error}"));
+        assert_eq!(redistribution.nsent(), mine.len(), "{label}");
+        let (min, max) = extremes(comm, redistribution.max_per_item());
+        assert_eq!(min, max, "{label}: max_per_item differs between ranks");
+        assert!(min >= 3, "{label}: max_per_item {min}");
+
+        // The counts: those of the plan's leaves, summing to this rank's items and, over
+        // the ranks, to every item.
+        assert_eq!(redistribution.counts(), expected_counts, "{label}: counts");
+        let nreceived = redistribution.nreceived();
+        assert_eq!(redistribution.counts().iter().sum::<usize>(), nreceived);
+        let mut total = 0usize;
+        comm.all_reduce_into(&nreceived, &mut total, SystemOperation::sum());
+        assert_eq!(total, global.len(), "{label}: items received");
+
+        // Payloads that name their origin (rank, position).
+        let named = |r: usize, p: usize| [r as f64, p as f64, (r * 1_000_000 + p) as f64];
+        let tag = |r: usize, p: usize| ((r as u32) << 20) | p as u32;
+        let f64_payload: Vec<f64> = (0..mine.len()).flat_map(|p| named(rank, p)).collect();
+        let u32_payload: Vec<u32> = (0..mine.len()).map(|p| tag(rank, p)).collect();
+        let forwarded = redistribution.forward(&f64_payload, 3);
+        let forwarded_u32 = redistribution.forward(&u32_payload, 1);
+        assert_eq!(forwarded.len(), 3 * nreceived, "{label}");
+        let again = redistribution.forward(&f64_payload, 3);
+        assert_eq!(bits(&again), bits(&forwarded), "{label}: two forwards");
+        let mut into = vec![0.0; forwarded.len()];
+        redistribution.forward_into(&f64_payload, 3, &mut into);
+        assert_eq!(bits(&into), bits(&forwarded), "{label}: forward_into");
+
+        // Every received item: on the owner of its leaf, in that leaf, after the items of
+        // lower (origin rank, position) in the leaf, with its origin's payload.
+        let mut start = 0;
+        for (j, &count) in redistribution.counts().iter().enumerate() {
+            let leaf = leaves.key(j);
+            let origins = &redistribution.origins()[start..start + count];
+            assert!(
+                origins.windows(2).all(|pair| pair[0] < pair[1]),
+                "{label}: order within leaf {leaf}"
+            );
+            for (r, &(origin, position)) in (start..start + count).zip(origins) {
+                let (o, p) = (origin as usize, position as usize);
+                assert_eq!(
+                    bits(&forwarded[3 * r..3 * r + 3]),
+                    bits(&named(o, p)),
+                    "{label}: payload of received item {r}"
+                );
+                assert_eq!(forwarded_u32[r], tag(o, p), "{label}: u32 payload");
+                let key = global[inputs[o][p]];
+                assert_eq!(octree.owner_rank(key), Ok(rank), "{label}: owner of {key}");
+                assert_eq!(
+                    octree.local_leaf(key),
+                    Ok(Some(leaf)),
+                    "{label}: leaf of {key}"
+                );
+                assert_eq!(
+                    plan.index().local_leaf_containing(key),
+                    Some(j as u32),
+                    "{label}: leaf index of {key}"
+                );
+            }
+            start += count;
+        }
+
+        // Forward then backward is the identity.
+        let returned = redistribution.backward(&forwarded, 3);
+        assert_eq!(
+            bits(&returned),
+            bits(&f64_payload),
+            "{label}: f64 round trip"
+        );
+        let returned_u32 = redistribution.backward(&forwarded_u32, 1);
+        assert_eq!(returned_u32, u32_payload, "{label}: u32 round trip");
+        let mut into = vec![0.0; f64_payload.len()];
+        redistribution.backward_into(&forwarded, 3, &mut into);
+        assert_eq!(bits(&into), bits(&f64_payload), "{label}: backward_into");
+    }
+}
+
+/// Whether `f` panics, without printing the panic.
+fn panics(f: impl FnOnce()) -> bool {
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    std::panic::set_hook(hook);
+    result.is_err()
+}
+
+/// The errors of a redistribution, each agreed on every rank without a hang: invalid keys
+/// on one rank, a plan of another tree, a `per_item` above the maximum, and a payload of
+/// the wrong length on one rank, which still lets the others complete. Collective.
+fn check_redistribution_errors<C: CommunicatorCollectives>(
+    name: &str,
+    octree: &Octree<'_, C>,
+    plan: &Plan,
+    global: &[u64],
+) {
+    let comm = octree.comm();
+    let rank = comm.rank() as usize;
+    let nranks = comm.size() as usize;
+    let mine: Vec<u64> = inputs(Distribution::Share, global, octree)[rank]
+        .iter()
+        .map(|&i| global[i])
+        .collect();
+
+    // A key off the finest level on the last rank, an invalid key on rank 0.
+    for (bad_rank, bad_key) in [(nranks - 1, morton::root()), (0, morton::invalid_key())] {
+        let mut keys = mine.clone();
+        let position = keys.len() / 2;
+        if rank == bad_rank {
+            keys.insert(position, bad_key);
+        }
+        let error = Redistribution::new(octree, plan, &keys).err();
+        let expected = if rank == bad_rank {
+            RedistributionError::InvalidKey { index: position }
+        } else {
+            RedistributionError::OtherRank
+        };
+        assert_eq!(error, Some(expected), "{name}: invalid key {bad_key}");
+    }
+
+    // The plan of a uniform level-1 tree, not of this octree (unless it is one).
+    let root = morton::root();
+    let mut map: HashMap<u64, KeyType> = morton::children(root)
+        .unwrap()
+        .into_iter()
+        .map(|child| (child, KeyType::LocalLeaf))
+        .collect();
+    map.insert(root, KeyType::LocalInterior);
+    let other = Plan::from_key_types(&map, 2, &[root]).unwrap();
+    let local_mismatch = octree.leaf_keys()[..] != morton::children(root).unwrap()[..];
+    let mut any_mismatch = false;
+    comm.all_reduce_into(
+        &local_mismatch,
+        &mut any_mismatch,
+        SystemOperation::logical_or(),
+    );
+    let expected = match (local_mismatch, any_mismatch) {
+        (true, _) => Some(RedistributionError::PlanMismatch),
+        (false, true) => Some(RedistributionError::OtherRank),
+        (false, false) => None,
+    };
+    let error = Redistribution::new(octree, &other, &mine).err();
+    assert_eq!(error, expected, "{name}: plan of another tree");
+
+    let redistribution =
+        Redistribution::new(octree, plan, &mine).unwrap_or_else(|error| panic!("{name}: {error}"));
+    // Too many values per item: every rank panics alike, before communicating.
+    let too_many = redistribution.max_per_item() + 1;
+    assert!(
+        panics(|| {
+            redistribution.forward::<u8>(&[], too_many);
+        }),
+        "{name}: forward with too many values per item"
+    );
+    assert!(
+        panics(|| {
+            redistribution.backward::<u8>(&[], too_many);
+        }),
+        "{name}: backward with too many values per item"
+    );
+
+    // A payload of the wrong length on rank 0: it takes part and then panics, and the
+    // other ranks complete the exchange and the next one.
+    let payload: Vec<u32> = (0..mine.len() as u32).collect();
+    let forwarded = if rank == 0 {
+        let wrong = vec![0u32; mine.len() + 1];
+        assert!(
+            panics(|| {
+                redistribution.forward(&wrong, 1);
+            }),
+            "{name}: a payload of the wrong length"
+        );
+        let results = vec![0u32; redistribution.nreceived() + 1];
+        assert!(
+            panics(|| {
+                redistribution.backward(&results, 1);
+            }),
+            "{name}: results of the wrong length"
+        );
+        redistribution.forward(&payload, 1)
+    } else {
+        redistribution.forward(&payload, 1);
+        let results = vec![0u32; redistribution.nreceived()];
+        redistribution.backward(&results, 1);
+        redistribution.forward(&payload, 1)
+    };
+    let returned = redistribution.backward(&forwarded, 1);
+    assert_eq!(returned, payload, "{name}: round trip after a panic");
+}
+
 #[test]
 fn distributed_tree_regressions() {
     let universe = mpi::initialize().expect("this test owns MPI initialization");
@@ -1292,5 +1573,13 @@ fn distributed_tree_regressions() {
         // The evaluator: determinism with variable counts, and the batches it issues.
         check_repeated_evaluation(name, &comm, &plan);
         check_batches(name, &octree, &oracle, &plan);
+
+        // The redistribution of the sources and of the targets, from every input
+        // distribution of the scenario's global points (every rank's, in rank order).
+        let global_sources = gather_to_all(&keys(&sources), &comm);
+        let global_targets = gather_to_all(&keys(&targets), &comm);
+        check_redistribution(name, &octree, &plan, "sources", &global_sources);
+        check_redistribution(name, &octree, &plan, "targets", &global_targets);
+        check_redistribution_errors(name, &octree, &plan, &global_sources);
     }
 }
