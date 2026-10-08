@@ -43,8 +43,9 @@
 //! 4. **Multipole exchange** (collective). The multipole of every ghost box in a V- or
 //!    W-list is fetched from its owner, one exchange per level.
 //! 5. **Downward pass.** Level by level from level 1: `l2l` from the parents, `m2l` over
-//!    the V-list and `p2l` over the X-list. The locals of the `Global` boxes are
-//!    computed redundantly on every rank, so no communication is needed.
+//!    the V-list and `p2l` over the X-list. Every rank computes the locals of the
+//!    `Global` boxes above its own coarse blocks itself, so no communication is needed;
+//!    the other `Global` boxes get no downward rows (P2, [`plan`]).
 //! 6. **Leaf evaluation.** Level by level: `l2p`, `m2p` over the W-list, and `p2p` over
 //!    the near list (the U-list and the leaf itself) of the local leaves.
 //!

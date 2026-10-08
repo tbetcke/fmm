@@ -11,6 +11,14 @@
 //! - Every non-ghost box has rows in every view that applies to it; ghost boxes have
 //!   empty rows. See the [`lists`](super::lists) module for the guarantees of the views
 //!   and [`index`](super::index) for those of the numbering.
+//! - **Only the `Global` locals this rank needs** (P2, `docs/design/distributed-fmm.md`
+//!   §3.6). A rank's locals descend only from the `Global` boxes above its own coarse
+//!   blocks, so a `Global` box that is not an ancestor of one of them has empty V, X and
+//!   L2L rows, and its local stays zero. Its M2M row of the global pass stays, because
+//!   the V rows that remain read the multipoles of any `Global` box. Every row that
+//!   stays is the row it would be without P2, so every value of a needed box is the
+//!   same, bit for bit. One rank has no `Global` box with a row to drop, and a rank
+//!   without coarse blocks keeps no `Global` downward row.
 //! - Every list entry, every child of a non-ghost interior box (in particular every child
 //!   of a `Global` box, which is a coarse block or `Global` itself) and every own coarse
 //!   block is a held key. [`Plan::new`] checks this and fails on every rank otherwise.
@@ -233,12 +241,31 @@ impl Plan {
             }
         }
 
+        // P2: the `Global` boxes whose locals this rank needs, the ancestors of its own
+        // coarse blocks, ascending.
+        let mut needed_globals = Vec::new();
+        for &block in &coarse_blocks {
+            let mut key = block;
+            while let Some(parent) = morton::parent(key) {
+                needed_globals.push(parent);
+                key = parent;
+            }
+        }
+        needed_globals.sort_unstable();
+        needed_globals.dedup();
+
         // First pass: every view that needs only box indices, and the U- and X-entries
         // as boxes, which become leaf indices once the ghost leaves are numbered.
         let mut partial = Vec::with_capacity(nlevels);
         let mut ghost_leaves = Vec::new();
         for level in 0..nlevels {
-            partial.push(first_pass(&index, all_keys, level, &mut ghost_leaves)?);
+            partial.push(first_pass(
+                &index,
+                all_keys,
+                &needed_globals,
+                level,
+                &mut ghost_leaves,
+            )?);
         }
         index.set_ghost_leaves(ghost_leaves);
 
@@ -344,9 +371,14 @@ struct PartialLevel {
 
 /// Build the views of `level` that need only box indices, and collect the U- and
 /// X-entries, recording every ghost leaf among them in `ghost_leaves`.
+///
+/// A `Global` box that is not in `needed_globals` (ascending) gets empty V, X and L2L
+/// rows (P2); its lists are still resolved, so that the errors do not depend on the
+/// rank's coarse blocks.
 fn first_pass(
     index: &BoxIndex,
     all_keys: &HashMap<MortonKey, KeyType>,
+    needed_globals: &[MortonKey],
     level: usize,
     ghost_leaves: &mut Vec<(usize, u32)>,
 ) -> Result<PartialLevel, PlanError> {
@@ -378,6 +410,9 @@ fn first_pass(
         }
 
         let [u, v, w, x] = key_lists(key, kind, all_keys);
+        // P2 (distributed-fmm §3.6): this rank's locals descend only from the `Global`
+        // boxes above its own coarse blocks, so the others get no downward rows.
+        let pruned = kind == KeyType::Global && needed_globals.binary_search(&key).is_err();
         let resolve = |entry| {
             index
                 .find(entry)
@@ -397,6 +432,9 @@ fn first_pass(
                 "a V-list offset is not one of V_LIST_DIRECTIONS",
             ))?;
             v_row.push((d as u16, j));
+        }
+        if pruned {
+            v_row.clear();
         }
         v_row.sort_unstable();
         partial.v.push_row(v_row.iter().copied());
@@ -435,6 +473,9 @@ fn first_pass(
                     "an X-list entry is not a leaf one level coarser",
                 ));
             }
+            if pruned {
+                continue;
+            }
             partial.x_entries.push(entry);
             if index.kind(entry.0, entry.1 as usize).is_ghost() {
                 ghost_leaves.push(entry);
@@ -464,7 +505,11 @@ fn first_pass(
                 let Some((_, j)) = index.find(parent) else {
                     return Err(malformed(key, "the parent of a non-ghost key is not held"));
                 };
-                partial.l2l.push_row([(morton::child_index(key) as u8, j)]);
+                if pruned {
+                    partial.l2l.push_row([]);
+                } else {
+                    partial.l2l.push_row([(morton::child_index(key) as u8, j)]);
+                }
             }
             None => partial.l2l.push_row([]),
         }

@@ -28,9 +28,10 @@
 //! Every rank gathers the multipoles of every rank's coarse blocks into their slots of
 //! its level buffers, and then forms the multipoles of the `Global` boxes itself, with
 //! the ordinary `m2m` call of the global pass, deepest level first. The downward pass
-//! forms the locals of `Global` boxes on every rank from identical inputs in identical
-//! order, so they agree bit for bit across ranks (design §7.4). The root multipole is
-//! formed on every rank count.
+//! forms the locals of the `Global` boxes that are ancestors of the rank's own coarse
+//! blocks (P2, [`plan`](super::plan)) from identical inputs in identical order, so they
+//! agree bit for bit across the ranks that form them (design §7.4); the locals of the
+//! other `Global` boxes stay zero. The root multipole is formed on every rank count.
 //!
 //! # Accumulation order
 //!
@@ -565,7 +566,9 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator, P: Borrow<Plan>> Evaluator
         &self.data.multipoles
     }
 
-    /// Return the locals of every box; those of ghost boxes stay zero.
+    /// Return the locals of every box; those of ghost boxes stay zero, and so do those
+    /// of the `Global` boxes that are not an ancestor of one of this rank's coarse blocks
+    /// (P2, [`plan`](super::plan)).
     pub fn locals(&self) -> &LevelBuffers<Op::Value> {
         &self.data.locals
     }

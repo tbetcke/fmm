@@ -38,7 +38,9 @@
 //! - **The lists are those of the per-key rule.** For every non-ghost box, `v`, `w`, `x`
 //!   and `near` minus the box itself hold exactly its V-, W-, X- and U-list of the
 //!   per-key rule of [`interaction_manager`](crate::interaction_manager), translated to
-//!   indices. Ghost boxes have empty rows in every view.
+//!   indices. Ghost boxes have empty rows in every view. The exception is a `Global`
+//!   box that is not an ancestor of one of the rank's own coarse blocks: its `v`, `x`
+//!   and `l2l` rows are empty (P2; see [`plan`](super::plan)).
 //! - **Entry levels.** V entries lie on l, W entries on l + 1, X entries on l − 1 and U
 //!   entries on l − 1, l or l + 1 (2:1 balance). V and W entries are boxes of any kind,
 //!   U and X entries are leaves.

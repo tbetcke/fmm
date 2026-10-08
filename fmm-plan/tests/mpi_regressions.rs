@@ -108,8 +108,23 @@ fn oracle_lists(keys: &[u64], leaves: &[u64], key: u64) -> [Vec<u64>; 4] {
 /// the pairs that an evaluation issues.
 type OracleLists = HashMap<u64, [Vec<u64>; 4]>;
 
-/// Compute the [`OracleLists`] from the local key map and the sorted global leaves.
-fn oracle_of(all_keys: &HashMap<u64, KeyType>, global_leaves: &[u64]) -> OracleLists {
+/// Whether this rank needs the local of the non-ghost `key`: every key but a `Global` box
+/// that is not an ancestor of one of the rank's own coarse blocks (P2).
+fn needs_local(all_keys: &HashMap<u64, KeyType>, own_blocks: &[u64], key: u64) -> bool {
+    all_keys[&key] != KeyType::Global
+        || own_blocks
+            .iter()
+            .any(|&block| block != key && is_ancestor(key, block))
+}
+
+/// Compute the [`OracleLists`] from the local key map and the sorted global leaves. A
+/// `Global` box whose local this rank does not need ([`needs_local`]) has empty V- and
+/// X-lists (P2).
+fn oracle_of(
+    all_keys: &HashMap<u64, KeyType>,
+    global_leaves: &[u64],
+    own_blocks: &[u64],
+) -> OracleLists {
     let mut keys: Vec<u64> = morton::get_interior_keys(global_leaves)
         .into_iter()
         .collect();
@@ -119,7 +134,14 @@ fn oracle_of(all_keys: &HashMap<u64, KeyType>, global_leaves: &[u64]) -> OracleL
     all_keys
         .iter()
         .filter(|(_, kind)| !kind.is_ghost())
-        .map(|(&key, _)| (key, oracle_lists(&keys, global_leaves, key)))
+        .map(|(&key, _)| {
+            let [u, v, w, x] = oracle_lists(&keys, global_leaves, key);
+            if needs_local(all_keys, own_blocks, key) {
+                (key, [u, v, w, x])
+            } else {
+                (key, [u, Vec::new(), w, Vec::new()])
+            }
+        })
         .collect()
 }
 
@@ -272,10 +294,12 @@ fn check_plan(
             } else {
                 assert!(children.is_empty());
             }
+            // P2: no parent for a `Global` box whose local this rank does not need.
             let (parents, octants) = lists.l2l().row(i);
             let parents: Vec<u64> = parents.iter().map(key_on(level.wrapping_sub(1))).collect();
-            assert_eq!(parents, morton::parent(key).into_iter().collect::<Vec<_>>());
-            if level > 0 {
+            let parent = morton::parent(key).filter(|_| needs_local(all_keys, &own_blocks, key));
+            assert_eq!(parents, parent.into_iter().collect::<Vec<_>>(), "{name}");
+            if parent.is_some() {
                 assert_eq!(octants, [morton::child_index(key) as u8]);
             }
         }
@@ -991,7 +1015,9 @@ fn check_batches<C: CommunicatorCollectives>(
         let [u, v, w, x] = &oracle[&key];
         expected.extend(entries("m2l", v));
         expected.extend(entries("p2l", x));
-        if let Some(parent) = morton::parent(key) {
+        if let Some(parent) = morton::parent(key)
+            && needs_local(octree.all_keys(), octree.coarse_tree_leafs(), key)
+        {
             expected.push(("l2l", key, parent));
         }
         let children = morton::children(key)
@@ -1161,7 +1187,11 @@ fn distributed_tree_regressions() {
         let mut global_leaves = gather_to_all(leaves, &comm);
         global_leaves.sort_unstable();
         assert!(morton::is_complete_linear_and_balanced(&global_leaves));
-        let oracle = oracle_of(octree.all_keys(), &global_leaves);
+        let oracle = oracle_of(
+            octree.all_keys(),
+            &global_leaves,
+            octree.coarse_tree_leafs(),
+        );
 
         // The index-form plan, against the oracle. Building it is collective.
         let plan =
@@ -1182,11 +1212,23 @@ fn distributed_tree_regressions() {
             &mut ghost_leaves,
             SystemOperation::sum(),
         );
+        // P2 drops the downward rows of some `Global` box on some rank.
+        let local_pruned = octree
+            .all_keys()
+            .keys()
+            .filter(|&&key| !needs_local(octree.all_keys(), octree.coarse_tree_leafs(), key))
+            .count();
+        let mut pruned = 0usize;
+        comm.all_reduce_into(&local_pruned, &mut pruned, SystemOperation::sum());
         if name == "graded corner blob" {
             assert!(global_pairs > 0, "{name}: no global M2M pair");
             assert!(
                 comm.size() == 1 || ghost_leaves > 0,
                 "{name}: no ghost leaf"
+            );
+            assert!(
+                comm.size() == 1 || pruned > 0,
+                "{name}: no `Global` box without downward rows"
             );
         }
 

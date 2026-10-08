@@ -658,6 +658,87 @@ fn the_root_multipole_is_formed_by_the_matching_pass() {
     assert!(root_row(&plan_global, false).is_empty());
 }
 
+/// P2 (distributed-fmm §3.6): with `Global` boxes on levels 0–2, a rank whose blocks lie
+/// below one level-2 `Global` box (the first, then the last) keeps the rows of that box
+/// and its ancestors as they are when every `Global` box is needed, and gets empty V, X
+/// and L2L rows for every other `Global` box. Every other row, the global M2M rows
+/// included, is unchanged.
+#[test]
+fn global_boxes_above_other_ranks_blocks_get_no_downward_rows() {
+    let mut pruned_v = 0;
+    let mut pruned_x = 0;
+    // Two refined opposite corners: each level-2 `Global` box has an X row.
+    let corners = [
+        morton::from_index_and_level([0, 0, 0], 3),
+        morton::from_index_and_level([7, 7, 7], 3),
+    ];
+    let mut trees = all_trees();
+    trees.push(uniform_leaves(3));
+    trees.push(morton::balance(&corners, morton::root()));
+    for (t, leaves) in trees.into_iter().enumerate() {
+        let mut map = key_types(&leaves);
+        let mut globals: Vec<MortonKey> = map
+            .iter()
+            .filter(|&(&key, &kind)| kind == KeyType::LocalInterior && morton::level(key) <= 2)
+            .map(|(&key, _)| key)
+            .collect();
+        globals.sort_unstable();
+        for &key in &globals {
+            map.insert(key, KeyType::Global);
+        }
+        // Blocks below every `Global` box: then every `Global` box is needed.
+        let mut every_block: Vec<MortonKey> = globals
+            .iter()
+            .flat_map(|&key| morton::children(key).unwrap())
+            .filter(|child| map[child] != KeyType::Global)
+            .collect();
+        every_block.sort_unstable();
+        let nlevels = nlevels(&map);
+        let full = Plan::from_key_types(&map, nlevels, &every_block).unwrap();
+
+        let level_two: Vec<MortonKey> = globals
+            .iter()
+            .copied()
+            .filter(|&key| morton::level(key) == 2)
+            .collect();
+        for anchor in level_two
+            .first()
+            .into_iter()
+            .chain(level_two.last())
+            .copied()
+        {
+            let mine =
+                Plan::from_key_types(&map, nlevels, &morton::children(anchor).unwrap()).unwrap();
+            let needed = [Some(anchor), morton::parent(anchor), Some(morton::root())];
+            let index = mine.index();
+            assert_eq!(index, full.index(), "tree {t}");
+            for level in 0..nlevels {
+                let (a, b) = (mine.level(level), full.level(level));
+                assert_eq!(a.m2m_global(), b.m2m_global(), "tree {t}");
+                assert_eq!(a.m2m_local(), b.m2m_local(), "tree {t}");
+                assert_eq!(a.near(), b.near(), "tree {t}");
+                assert_eq!(a.w(), b.w(), "tree {t}");
+                for (i, &key) in index.keys(level).iter().enumerate() {
+                    let (v, x, l2l) = (a.v().row(i), a.x().row(i), a.l2l().row(i));
+                    if index.kind(level, i) == KeyType::Global && !needed.contains(&Some(key)) {
+                        assert!(v.0.is_empty(), "tree {t}: V row of {key}");
+                        assert!(x.is_empty(), "tree {t}: X row of {key}");
+                        assert!(l2l.0.is_empty(), "tree {t}: L2L row of {key}");
+                        pruned_v += b.v().row(i).0.len();
+                        pruned_x += b.x().row(i).len();
+                    } else {
+                        assert_eq!(v, b.v().row(i), "tree {t}: V row of {key}");
+                        assert_eq!(x, b.x().row(i), "tree {t}: X row of {key}");
+                        assert_eq!(l2l, b.l2l().row(i), "tree {t}: L2L row of {key}");
+                    }
+                }
+            }
+        }
+    }
+    assert!(pruned_v > 0, "no V row was pruned");
+    assert!(pruned_x > 0, "no X row was pruned");
+}
+
 #[test]
 fn malformed_maps_are_errors_not_panics() {
     let at = |index: [usize; 3], level: usize| morton::from_index_and_level(index, level);
