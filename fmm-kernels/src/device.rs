@@ -2,6 +2,8 @@
 //! (device-path.md §3.1, §5.1).
 
 use std::fmt;
+use std::marker::PhantomData;
+use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use cubecl::client::Client;
@@ -172,16 +174,18 @@ pub struct Counters {
     /// Bytes copied from the host to the device.
     pub upload_bytes: u64,
     /// Host-to-device copies ([`Device::upload`], [`Device::upload_indices`],
-    /// [`Device::write`]), empty ones included.
+    /// [`Device::write`], [`Device::write_owned`]), empty ones included.
     pub uploads: u64,
     /// Bytes copied from the device to the host.
     pub download_bytes: u64,
-    /// Device-to-host copies ([`Device::download`]), empty ones included.
+    /// Device-to-host copies ([`Device::download`], [`Device::download_view`]), empty
+    /// ones included.
     pub downloads: u64,
     /// Kernel launches. A call with nothing to do launches nothing.
     pub launches: u64,
-    /// Waits for the device: one per [`Device::download`] and per [`Device::sync`], and
-    /// two per timing window not timed on the device ([`Device::close_window`]).
+    /// Waits for the device: one per [`Device::download`], [`Device::download_view`] and
+    /// [`Device::sync`], and two per timing window not timed on the device
+    /// ([`Device::close_window`]).
     pub syncs: u64,
     /// Timing windows closed ([`Device::close_window`]).
     pub windows: u64,
@@ -292,6 +296,49 @@ const GPU_MAX_CUBES: u32 = 65_535;
 pub const CPU_MAX_UNITS: u32 = 16;
 /// Below this many elements a CPU-runtime elementwise launch uses one unit.
 pub(crate) const CPU_MIN_CHUNK: usize = 1 << 14;
+
+/// Values downloaded from a device ([`Device::download_view`]), read in place in
+/// CubeCL's host memory: pinned memory from the CUDA runtime's pool, a mapped staging
+/// buffer on wgpu, host memory on the CPU runtime. Derefs to `&[E]`, without a copy into a
+/// caller's slice.
+///
+/// It owns CubeCL's host buffer, which goes back to CubeCL's pool when it is dropped.
+/// Drop it before the next download: a view held across a later download makes the pool
+/// keep a second buffer beside it (spikes/download-path/REPORT.md, "CubeCL's host pools").
+/// `nd-fmm-exec` ties its views to a borrow of the operator, so none outlives its
+/// evaluation.
+pub struct HostValues<E: DeviceElement> {
+    /// `None` for an empty range.
+    bytes: Option<cubecl::bytes::Bytes>,
+    _element: PhantomData<E>,
+}
+
+impl<E: DeviceElement> HostValues<E> {
+    fn new(bytes: Option<cubecl::bytes::Bytes>) -> Self {
+        Self {
+            bytes,
+            _element: PhantomData,
+        }
+    }
+}
+
+impl<E: DeviceElement> Deref for HostValues<E> {
+    type Target = [E];
+
+    fn deref(&self) -> &[E] {
+        self.bytes
+            .as_ref()
+            .map_or(&[], |bytes| E::from_bytes(bytes))
+    }
+}
+
+impl<E: DeviceElement> fmt::Debug for HostValues<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HostValues")
+            .field("len", &self.len())
+            .finish_non_exhaustive()
+    }
+}
 
 /// The source of [`Device`] identities, so that buffers can name their device.
 static NEXT_DEVICE_ID: AtomicU64 = AtomicU64::new(0);
@@ -538,7 +585,9 @@ impl Device {
     }
 
     /// Overwrites `slice` with `data`, without a sync: one upload, ordered after the
-    /// launches already queued.
+    /// launches already queued. The data is copied first (CubeCL takes an owned buffer);
+    /// a caller that can give up its buffer uses [`write_owned`](Self::write_owned),
+    /// which does not copy.
     ///
     /// # Errors
     ///
@@ -553,18 +602,40 @@ impl Device {
         data: &[E],
     ) -> Result<(), KernelError> {
         assert_eq!(slice.len(), data.len(), "write: slice and data lengths");
+        self.write_owned(slice, data.to_vec())
+    }
+
+    /// [`write`](Self::write) of a buffer the caller gives up: `data` is handed to CubeCL
+    /// as it is (`Bytes::from_elems`), without the copy `write` makes. One upload, no
+    /// sync, the same counters, checks and errors as `write` (Phase 4S T11).
+    ///
+    /// # Errors
+    ///
+    /// [`KernelError::WrongDevice`] for a buffer of another device.
+    ///
+    /// # Panics
+    ///
+    /// If `data` and `slice` differ in length.
+    pub fn write_owned<E: DeviceElement>(
+        &mut self,
+        slice: DeviceSliceMut<'_, E>,
+        data: Vec<E>,
+    ) -> Result<(), KernelError> {
+        assert_eq!(slice.len(), data.len(), "write: slice and data lengths");
         self.check_owner(slice.device())?;
+        let bytes = size_of_val(data.as_slice());
         if !data.is_empty() {
             let handle = slice.byte_range_handle();
             self.client
-                .write(&handle, cubecl::bytes::Bytes::from_elems(data.to_vec()));
+                .write(&handle, cubecl::bytes::Bytes::from_elems(data));
         }
-        self.count_upload(size_of_val(data));
+        self.count_upload(bytes);
         Ok(())
     }
 
     /// Copies `slice` into `out`: waits for every queued launch (one sync) and returns
-    /// any launch error attached to the buffer (device-path.md F9).
+    /// any launch error attached to the buffer (device-path.md F9). The copy of
+    /// [`download_view`](Self::download_view)'s values, with its counters and errors.
     ///
     /// # Errors
     ///
@@ -580,18 +651,46 @@ impl Device {
         out: &mut [E],
     ) -> Result<(), KernelError> {
         assert_eq!(slice.len(), out.len(), "download: slice and output lengths");
+        let values = self.download_view(slice)?;
+        out.copy_from_slice(&values);
+        Ok(())
+    }
+
+    /// Downloads `slice` and lends CubeCL's host copy of it, without copying it into a
+    /// caller's slice (Phase 4S T11, decision 14): waits for every queued launch (one
+    /// sync) and returns any launch error attached to the buffer (device-path.md F9,
+    /// §12). Counts one download of `slice`'s bytes and one sync, as
+    /// [`download`](Self::download) does.
+    ///
+    /// The values stay in CubeCL's host memory (pinned memory from CUDA's pool, a mapped
+    /// staging buffer on wgpu) until the [`HostValues`] is dropped; drop it before the next
+    /// download.
+    ///
+    /// # Errors
+    ///
+    /// [`KernelError::WrongDevice`]; [`KernelError::Device`] with CubeCL's message if a
+    /// launch that wrote the buffer, or the copy, failed.
+    pub fn download_view<E: DeviceElement>(
+        &mut self,
+        slice: DeviceSlice<'_, E>,
+    ) -> Result<HostValues<E>, KernelError> {
         self.check_owner(slice.device())?;
         self.counters.downloads += 1;
         self.counters.syncs += 1;
         let handle = slice.byte_range_handle();
-        if out.is_empty() {
-            return cubecl::future::block_on(self.client.sync_buffers([&handle]))
-                .map_err(device_error);
+        let len = slice.len();
+        if len == 0 {
+            cubecl::future::block_on(self.client.sync_buffers([&handle])).map_err(device_error)?;
+            return Ok(HostValues::new(None));
         }
         let bytes = self.client.read_one(handle).map_err(device_error)?;
-        out.copy_from_slice(E::from_bytes(&bytes));
-        self.counters.download_bytes += size_of_val(out) as u64;
-        Ok(())
+        assert_eq!(
+            E::from_bytes(&bytes).len(),
+            len,
+            "download: CubeCL returned another length"
+        );
+        self.counters.download_bytes += (len * size_of::<E>()) as u64;
+        Ok(HostValues::new(Some(bytes)))
     }
 
     /// Waits for every queued launch and transfer: one sync.
@@ -828,6 +927,138 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// A launch error surfaces at a view (Phase 4S T11), on every backend compiled in.
+    #[cfg(any(feature = "cpu", feature = "metal", feature = "cuda"))]
+    mod launch_errors {
+        use super::*;
+
+        /// Kernels whose launch fails, to see a launch error surface at a download: a plane
+        /// sum, which the CPU runtime does not lower (device-path.md F19), and an increment
+        /// launched on a GPU with a cube of more units than the device allows.
+        #[cube(launch_unchecked)]
+        fn plane_sum_kernel(x: &mut [f32]) {
+            let i = UNIT_POS as usize;
+            x[i] = plane_sum(x[i]);
+        }
+
+        #[cube(launch_unchecked)]
+        fn increment_kernel(x: &mut [f32]) {
+            let i = ABSOLUTE_POS;
+            if i < x.len() {
+                x[i] += 1.0;
+            }
+        }
+
+        /// Queues a launch into `buffer` that fails on `device`'s backend.
+        fn queue_failing_launch(device: &mut Device, buffer: &DeviceBuffer<f32>) {
+            let (handle, len) = buffer.as_slice().binding();
+            let client = device.client();
+            if device.backend().is_gpu() {
+                let units = device.info().max_units_per_cube.saturating_mul(2).max(2048);
+                // SAFETY: each unit writes x[ABSOLUTE_POS] only below `len`, the buffer's
+                // length; the cube is larger than the device allows, so the launch fails.
+                unsafe {
+                    increment_kernel::launch_unchecked(
+                        client,
+                        CubeCount::Static(1, 1, 1),
+                        CubeDim::new_1d(units),
+                        BufferArg::from_raw_parts(handle, len),
+                    );
+                }
+            } else {
+                // SAFETY: one cube of `len` units, unit u reads and writes x[u] < len.
+                unsafe {
+                    plane_sum_kernel::launch_unchecked(
+                        client,
+                        CubeCount::Static(1, 1, 1),
+                        CubeDim::new_1d(len as u32),
+                        BufferArg::from_raw_parts(handle, len),
+                    );
+                }
+            }
+        }
+
+        /// A launch error surfaces at `download_view` as at `download` (device-path.md §12,
+        /// F9), as `KernelError::Device`, with the same counters (one download, one sync, no
+        /// bytes); also when CubeCL's profiling logger makes the launch itself panic.
+        fn launch_errors_surface_at_the_view(kind: BackendKind) {
+            let mut device = Device::open(kind).unwrap();
+            println!("{}", device.info());
+            for view in [false, true] {
+                let buffer = device.upload(&[1.0f32; 4]).unwrap();
+                // With CubeCL's profiling logger on (`CUBECL_DEBUG_LOG`, as in the CI job
+                // that reports compile times), CubeCL profiles every launch and panics on
+                // a failed one by design (cubecl-runtime `Client::launch_inner`); the error
+                // is still attached to the buffer. Any other panic fails the test.
+                let launch = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    queue_failing_launch(&mut device, &buffer)
+                }));
+                if let Err(payload) = launch {
+                    let message = payload
+                        .downcast_ref::<String>()
+                        .map(String::as_str)
+                        .or_else(|| payload.downcast_ref::<&str>().copied())
+                        .unwrap_or_default();
+                    assert!(
+                        message.contains("during profiling"),
+                        "the launch panicked: {message}"
+                    );
+                    println!("  the launch panicked in CubeCL's profiler (its log is on)");
+                }
+                device.reset_counters();
+                let error = if view {
+                    device.download_view(buffer.as_slice()).unwrap_err()
+                } else {
+                    let mut out = [0.0f32; 4];
+                    device.download(buffer.as_slice(), &mut out).unwrap_err()
+                };
+                assert!(matches!(error, KernelError::Device { .. }), "{error}");
+                let c = device.counters();
+                assert_eq!((c.downloads, c.syncs, c.download_bytes), (1, 1, 0));
+                println!(
+                    "  {}: {}",
+                    if view { "download_view" } else { "download" },
+                    root_cause(&error.to_string())
+                );
+            }
+        }
+
+        /// The innermost cause of CubeCL's error chain ("Caused by:" lines), for the report.
+        fn root_cause(message: &str) -> &str {
+            let lines: Vec<&str> = message.lines().map(str::trim).collect();
+            lines
+                .iter()
+                .rposition(|l| *l == "Caused by:")
+                .and_then(|i| lines.get(i + 1))
+                .or(lines.first())
+                .copied()
+                .unwrap_or_default()
+        }
+
+        #[cfg(feature = "cpu")]
+        #[test]
+        fn launch_errors_surface_at_the_view_cpu() {
+            launch_errors_surface_at_the_view(BackendKind::Cpu);
+            println!("backends run: cpu; not run: metal, cuda (in their own ignored tests)");
+        }
+
+        #[cfg(feature = "metal")]
+        #[test]
+        #[ignore = "Metal: run by hand, outside the sandbox"]
+        fn launch_errors_surface_at_the_view_metal() {
+            launch_errors_surface_at_the_view(BackendKind::Metal);
+            println!("backends run: metal; not run: cpu, cuda (in their own tests)");
+        }
+
+        #[cfg(feature = "cuda")]
+        #[test]
+        #[ignore = "CUDA: run by hand on locust"]
+        fn launch_errors_surface_at_the_view_cuda() {
+            launch_errors_surface_at_the_view(BackendKind::Cuda);
+            println!("backends run: cuda; not run: cpu, metal (in their own tests)");
         }
     }
 

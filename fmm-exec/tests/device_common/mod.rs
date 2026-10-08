@@ -21,6 +21,8 @@
 //! - the output pass (Phase 4S T9) runs on the device where it does f64 arithmetic (the
 //!   CPU runtime, CUDA) and on the host otherwise (Metal), and every output equals the
 //!   pass before T9 (`Fmm::reference_output`) bit for bit.
+//! - the operator holds the host mirrors of the fallback, the target output's included
+//!   (Phase 4S T11, [`expected_mirror_bytes`]).
 //!
 //! With the default placement (T10): every kind on the device under every strategy
 //! ([`device_kinds`]):
@@ -39,6 +41,8 @@
 //!   host's;
 //! - two evaluations of the first charges are bit-identical, and so is the output of a
 //!   second `Fmm` built from the same input (T11, requirement 6);
+//! - the operator holds no host mirror, and so no host copy of the target output: the
+//!   evaluation's download is read in place (Phase 4S T11);
 //! - the output pass (Phase 4S T9): every output equals the pass before T9 bit for bit,
 //!   and a build with `output_pass(OutputPass::Host)` gives the same bits, with one launch
 //!   fewer where the default ran the pass on the device;
@@ -208,6 +212,35 @@ impl Expected {
 /// nothing: each of its level calls is one launch instead of its downloads and uploads, or
 /// for M2M, L2L and M2L three launches per chunk, with the chunks of the device report
 /// (which this checks against the plan's views).
+/// The bytes of the host mirrors a device `Fmm` holds (Phase 4S T11,
+/// `DeviceReport::host_mirror_bytes`): the multipoles and the locals of every level with any
+/// kind on the host fallback, and the target output (o N_t values) with L2P, M2P or P2P on
+/// it; nothing with every kind on the device, where the evaluation's download is read in
+/// place and the operator keeps no host copy of the output.
+pub fn expected_mirror_bytes<T: Stored + SimdScalar + Equivalence + Default>(
+    fmm: &Fmm<'_, T>,
+) -> u64 {
+    let host = |kind: OperatorKind| fmm.placement(kind) == Placement::Host;
+    let index = fmm.plan().index();
+    let nc = (fmm.p() + 1) * (fmm.p() + 1);
+    let o = if fmm.gradients() { 4 } else { 1 };
+    let mut values = 0;
+    if OperatorKind::ALL.into_iter().any(host) {
+        values += 2
+            * nc
+            * (0..fmm.plan().nlevels())
+                .map(|l| index.len(l))
+                .sum::<usize>();
+    }
+    if [OperatorKind::L2p, OperatorKind::M2p, OperatorKind::P2p]
+        .into_iter()
+        .any(host)
+    {
+        values += o * fmm.ntargets();
+    }
+    (values * size_of::<T>()) as u64
+}
+
 pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
     fmm: &Fmm<'_, T>,
     on_device: &[OperatorKind],
@@ -715,6 +748,17 @@ fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
         assert_eq!(fmm.placement(kind), want, "{backend}: {kind}");
     }
     assert_eq!(
+        report.host_mirror_bytes,
+        expected_mirror_bytes(&fmm),
+        "{backend}: the host mirrors"
+    );
+    if kinds.len() == OperatorKind::ALL.len() {
+        assert_eq!(
+            report.host_mirror_bytes, 0,
+            "{backend}: no host copy of the output with every kind on the device"
+        );
+    }
+    assert_eq!(
         report.p2p_layout,
         P2pLayout::default_for(&report.info),
         "{backend}: the default P2P layout"
@@ -995,6 +1039,11 @@ fn check_fallback<'o, T: Stored + SimdScalar + Equivalence + Default>(
         );
     }
     assert_eq!(report.info.backend.name(), backend.name());
+    assert_eq!(
+        report.host_mirror_bytes,
+        expected_mirror_bytes(&fmm),
+        "{backend}: the host mirrors, the target output's included"
+    );
 
     // The build: the points in two uploads, the tables the report lists.
     let s = size_of::<T>();

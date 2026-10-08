@@ -1,0 +1,25 @@
+[package]
+name = "nd-fmm-spike-download-path"
+version = "0.0.0"
+description = "Throwaway study: the device download and upload paths per step (CubeCL's read and write, its host pools, the host copies of nd-fmm-kernels' Device) and the zeroing of an evaluation's load, on the CPU runtime, Metal and CUDA (Phase 4S T11)."
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# No backend by default: `cargo build -p nd-fmm-spike-download-path` without features
+# builds no runtime.
+default = []
+cpu = ["cubecl/cpu", "nd-fmm-kernels/cpu"]
+metal = ["cubecl/metal", "nd-fmm-kernels/metal"]
+cuda = ["cubecl/cuda", "nd-fmm-kernels/cuda"]
+
+[dependencies]
+cubecl.workspace = true
+nd-fmm-kernels.workspace = true
+# The parallel copy compared with the serial one (T9's output pass copies on a rayon pool).
+rayon.workspace = true
+# The machine description of the report. nd-fmm-validate links MPI; nothing here
+# initialises it.
+nd-fmm-validate.workspace = true

@@ -14,7 +14,8 @@ C4.8 (task T11: the device FMM end to end, every kind on the device) and C4.7 (t
 autotune with a persistent cache, module `tune`); Phase 4S, C4S.4 (task T4: the device
 FMM on CUDA), C4S.5 (task T5: per-kind timings, `FmmBuilder::kind_timings`) and C4S.8
 (task T9: the output pass and the charge load in parallel, `Fmm::evaluate_into`, the output
-pass on the device, `FmmBuilder::output_pass`).
+pass on the device, `FmmBuilder::output_pass`) and C4S.10 (task T11: the download read in
+place, the charges uploaded without a copy).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -210,6 +211,21 @@ pass on the device, `FmmBuilder::output_pass`).
     runtime with both passes, `tests/device_common` on every device scenario, the unit tests
     of `fmm`, and the C3.2 tree at p = 6 in the ignored gates). Never change the scales'
     arithmetic, the division or the rounding;
+  - the output's path from the device to the `Output` (Phase 4S T11, C4S.10, decision 14;
+    device-path.md §4.1, §18.5): `read_output` downloads with
+    `nd_fmm_kernels::Device::download_view` and returns `DeviceOutput` carrying
+    `OutputValues` (CubeCL's host copy, pinned memory on CUDA, behind a box, since
+    `DeviceDriver` knows only `T: SimdScalar`), borrowing the operator: `CallerOrder(values)`
+    after the device pass, which `copy_output` copies into the `Output` on the pool;
+    `LeafOrder { values, offsets }` for the host pass, which `gather_output` reads as a
+    slice in the `LeafStore` layout with the target leaves' point offsets. The operator
+    keeps no host copy of the target output: its host-fallback mirror exists only with
+    L2P, M2P or P2P on the host (`Mirrors::target_output`), and `DeviceReport::host_mirror_bytes`
+    says what the mirrors hold (0 with every kind on the device; checked in
+    `tests/device_common`). The charges: `gather_charges` collects them in leaf order into
+    a fresh `Vec` on the pool (no zero fill), which `begin_evaluation` hands to
+    `Device::write_owned` (no copy). Still one upload, one download and one sync per
+    evaluation, and the output bit for bit as before;
   - every device test prints the backends it ran; Metal tests are ignored and run by
     hand outside the macOS sandbox (`tests/device_metal.rs`); CUDA tests are ignored,
     type-checked in CI and run by hand on locust (`tests/device_cuda.rs`, the CUDA blocks

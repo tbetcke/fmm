@@ -95,7 +95,10 @@
 //! (`Fmm::reference_output`). The charge load is parallel the same way: the charges into
 //! the host's source chunks (by leaves) and, on a device, into the upload buffer in leaf
 //! order, on the pool; with P2M, P2L and P2P on the device the host's source store, which
-//! feeds only host-fallback calls of those kinds, is not written at all.
+//! feeds only host-fallback calls of those kinds, is not written at all. Since Phase 4S
+//! T11 the upload buffer is a fresh `Vec` per evaluation that the upload takes over without
+//! a copy, and the output is read in place from CubeCL's host copy of the download (no
+//! host buffer of the operator in between).
 //!
 //! On request ([`FmmBuilder::kind_timings`], [`Fmm::set_kind_timings`]; Phase 4S T5) it
 //! also times every level call by operator kind and level ([`KindTiming`],
@@ -1284,11 +1287,6 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             strategy: strategy.resolve(self.p),
             backend: self.backend,
             synchronous_stages: self.synchronous_stages && self.backend.is_device(),
-            leaf_charges: if self.backend.is_device() {
-                vec![T::default(); sources_by_leaf.len()]
-            } else {
-                Vec::new()
-            },
             host_sources,
             device_error: None,
             sources: sources_by_leaf,
@@ -2072,33 +2070,34 @@ fn split_source_charges<T: Copy + Send + Sync>(
     );
 }
 
-/// The charges in leaf order, the upload buffer of a device evaluation (empty on the host
-/// path): `leaf_charges[s] = charges[order[s]]`. On `pool` when given, in ranges of at
-/// least [`LOAD_GRAIN`] points; serially otherwise. Copies only (Phase 4S T9).
+/// The charges in leaf order, the upload buffer of a device evaluation: `charges[order[s]]`
+/// at s, in a fresh `Vec` that the upload takes over without a copy (`Device::write_owned`,
+/// Phase 4S T11). On `pool` when given, in ranges of at least [`LOAD_GRAIN`] points,
+/// collected without a zero fill; serially otherwise. Copies only (Phase 4S T9).
+#[cfg_attr(not(feature = "gpu"), allow(dead_code))]
 fn gather_charges<T: Copy + Send + Sync>(
-    leaf_charges: &mut [T],
     order: &[usize],
     charges: &[T],
     pool: Option<&ThreadPool>,
-) {
+) -> Vec<T> {
     match pool {
         Some(pool) => pool.install(|| {
-            leaf_charges
-                .par_iter_mut()
-                .zip(order)
+            let mut leaf_charges = Vec::new();
+            order
+                .par_iter()
                 .with_min_len(LOAD_GRAIN)
-                .for_each(|(q, &i)| *q = charges[i]);
+                .map(|&i| charges[i])
+                .collect_into_vec(&mut leaf_charges);
+            leaf_charges
         }),
-        None => {
-            for (q, &i) in leaf_charges.iter_mut().zip(order) {
-                *q = charges[i];
-            }
-        }
+        None => order.iter().map(|&i| charges[i]).collect(),
     }
 }
 
 /// The output pass on the host (Phase 4S T9): φ and ∇φ of every target of `order` from
-/// the leaf-ordered target output `store`, into `output`'s buffers. Each value is
+/// the leaf-ordered target output `data` (the `LeafStore` layout with the point offsets
+/// `offsets`: the host's store, or since Phase 4S T11 the device's download read in place),
+/// into `output`'s buffers. Each value is
 /// `T::from_f64(x.to_f64() / scale)`, as the pass before T9 ([`scaled_output`]) computes
 /// it, so the output is that pass's bit for bit.
 ///
@@ -2109,13 +2108,13 @@ fn gather_charges<T: Copy + Send + Sync>(
 /// every element is written once, with no zero fill. `gradient` becomes `Some` with
 /// gradients and `None` without.
 fn gather_output<T: SimdScalar + Default>(
-    store: &LeafStore<T>,
+    data: &[T],
+    offsets: &[usize],
     order: &OutputOrder,
     gradients: bool,
     pool: Option<&ThreadPool>,
     output: &mut Output<T>,
 ) {
-    let (data, offsets) = (store.as_slice(), store.point_offsets());
     let n = order.points.len();
     // Target i's leaf j, the leaf's first point and the target's place k in the leaf.
     let place = |i: usize| {
@@ -2584,8 +2583,6 @@ where
     backend: Backend,
     /// With a device backend: sync after every stage.
     synchronous_stages: bool,
-    /// With a device backend: the charges of an evaluation in leaf order, for the upload.
-    leaf_charges: Vec<T>,
     /// Whether an evaluation writes the charges into the host's source store: on the host
     /// path, and on a device with P2M, P2L or P2P on the host fallback (Phase 4S T9).
     host_sources: bool,
@@ -2682,12 +2679,6 @@ where
                 pool.as_deref(),
             );
         }
-        gather_charges(
-            &mut self.leaf_charges,
-            &self.sources.order,
-            charges,
-            pool.as_deref(),
-        );
         timings.load = start.elapsed();
 
         let sync = self.synchronous_stages;
@@ -2703,9 +2694,9 @@ where
             // With synchronous kind timings, the first level call starts on an idle
             // device: its own sync, beside that of `synchronous_stages` (each documents it).
             let sync_kinds = kinds.timings.mode == KindTiming::Synchronous;
-            let leaf_charges = &self.leaf_charges;
+            let order = &self.sources.order;
             timings.load += timed(|| {
-                driver.begin_evaluation(leaf_charges);
+                driver.begin_evaluation(gather_charges(order, charges, pool.as_deref()));
                 if sync {
                     driver.sync();
                 }
@@ -2748,8 +2739,10 @@ where
         match engine {
             Engine::Host(_) => {
                 timings.kinds = kinds.timings();
+                let store = self.evaluator.target_output_store();
                 gather_output(
-                    self.evaluator.target_output_store(),
+                    store.as_slice(),
+                    store.point_offsets(),
                     &self.outputs,
                     gradients,
                     pool.as_deref(),
@@ -2759,11 +2752,18 @@ where
             #[cfg(feature = "gpu")]
             Engine::Device(driver) => {
                 match timed_value(|| driver.read_output(), &mut timings.download) {
-                    Ok(DeviceOutput::LeafOrder(store)) => {
-                        gather_output(store, &self.outputs, gradients, pool.as_deref(), output);
+                    Ok(DeviceOutput::LeafOrder { values, offsets }) => {
+                        gather_output(
+                            &values,
+                            offsets,
+                            &self.outputs,
+                            gradients,
+                            pool.as_deref(),
+                            output,
+                        );
                     }
                     Ok(DeviceOutput::CallerOrder(values)) => {
-                        copy_output(values, gradients, pool.as_deref(), output);
+                        copy_output(&values, gradients, pool.as_deref(), output);
                     }
                     Err(error) => {
                         let reason = error.to_string();
@@ -3182,9 +3182,8 @@ mod tests {
         for threads in [1, 4] {
             let pool = pool(threads);
             let mut got = store.clone();
-            let mut leaf_charges = vec![0.0; n];
             load_source_charges(got.range_mut(0..nleaves), &sources, &charges, pool.as_ref());
-            gather_charges(&mut leaf_charges, &sources.order, &charges, pool.as_ref());
+            let leaf_charges = gather_charges(&sources.order, &charges, pool.as_ref());
             assert_eq!(
                 bits(got.as_slice()),
                 bits(want.as_slice()),
@@ -3246,14 +3245,15 @@ mod tests {
                     gradient: None,
                     timings: StageTimings::default(),
                 };
-                gather_output(&store, &order, gradients, pool.as_ref(), &mut fresh);
+                let (data, offsets) = (store.as_slice(), store.point_offsets());
+                gather_output(data, offsets, &order, gradients, pool.as_ref(), &mut fresh);
                 assert_eq!(want_bits(&fresh), reference, "{what}: the host pass");
                 let mut wrong = Output {
                     potential: vec![T::zero(); 3],
                     gradient: (!gradients).then(|| vec![[T::zero(); 3]; 5]),
                     timings: StageTimings::default(),
                 };
-                gather_output(&store, &order, gradients, pool.as_ref(), &mut wrong);
+                gather_output(data, offsets, &order, gradients, pool.as_ref(), &mut wrong);
                 assert_eq!(want_bits(&wrong), reference, "{what}: a resized output");
                 // The device pass's values: φ, then ∇φ, in the caller's order.
                 let mut values = want.potential.clone();
