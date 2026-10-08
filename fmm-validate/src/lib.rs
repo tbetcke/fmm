@@ -82,8 +82,10 @@
 //! default one.
 //!
 //! Since Phase 3 the crate depends on `nd-fmm-exec`, and so on MPI: building it, and
-//! `cargo test -p nd-fmm-validate`, need an MPI installation. `fmm_accuracy`,
-//! `calibrate` and `p2p_fmm` run on one rank; `p2p_kernels` never initialises MPI.
+//! `cargo test -p nd-fmm-validate`, need an MPI installation. `fmm_accuracy` and
+//! `calibrate` run on any number of ranks (Phase 5 T6; each rank passes a share of the
+//! points, and rank 0 prints), `p2p_fmm` on one rank; `p2p_kernels` never initialises
+//! MPI.
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 

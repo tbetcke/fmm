@@ -122,6 +122,46 @@ impl ErrorAccumulator {
         self.reference_max = self.reference_max.max(reference);
     }
 
+    /// The sums and maxima added so far: [Σ error², Σ reference², max error,
+    /// max reference]. To combine accumulators, of several ranks for example, add the
+    /// first two of each and take the largest of the last two, and rebuild one with
+    /// [`from_parts`](Self::from_parts).
+    ///
+    /// ```
+    /// use nd_fmm_validate::metrics::ErrorAccumulator;
+    ///
+    /// let (mut a, mut b) = (ErrorAccumulator::new(), ErrorAccumulator::new());
+    /// a.add_values(&[3.0_f64], &[3.0]);
+    /// b.add_values(&[4.5_f64], &[4.0]);
+    /// let [pa, pb] = [a.parts(), b.parts()];
+    /// let both = ErrorAccumulator::from_parts([
+    ///     pa[0] + pb[0],
+    ///     pa[1] + pb[1],
+    ///     pa[2].max(pb[2]),
+    ///     pa[3].max(pb[3]),
+    /// ]);
+    /// a.add_values(&[4.5_f64], &[4.0]);
+    /// assert_eq!(both.finish(), a.finish());
+    /// ```
+    pub fn parts(&self) -> [f64; 4] {
+        [
+            self.error_sq,
+            self.reference_sq,
+            self.error_max,
+            self.reference_max,
+        ]
+    }
+
+    /// The accumulator of [`parts`](Self::parts).
+    pub fn from_parts([error_sq, reference_sq, error_max, reference_max]: [f64; 4]) -> Self {
+        Self {
+            error_sq,
+            reference_sq,
+            error_max,
+            reference_max,
+        }
+    }
+
     /// The relative L2 and max errors of everything added so far.
     pub fn finish(&self) -> ErrorNorms {
         ErrorNorms {

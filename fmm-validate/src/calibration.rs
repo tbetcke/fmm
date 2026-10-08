@@ -83,15 +83,33 @@ pub struct Reference {
 impl Reference {
     /// Draws the problem of `config` and computes both oracles.
     pub fn new(config: &Config) -> Self {
+        Self::with_oracle(config, Oracle::new)
+    }
+
+    /// [`new`](Self::new), with the oracles computed once over the ranks of `comm`, each
+    /// rank a share of the sampled targets ([`Oracle::sharded`]; Phase 5 T6): the same
+    /// values on every rank.
+    ///
+    /// # Collective operation
+    ///
+    /// On `comm`, every rank with the same `config`.
+    pub fn sharded(config: &Config, comm: &SimpleCommunicator) -> Self {
+        Self::with_oracle(config, |problem, charges| {
+            Oracle::sharded(problem, charges, comm)
+        })
+    }
+
+    /// Draws the problem of `config` and computes both oracles with `oracle`.
+    fn with_oracle(config: &Config, oracle: impl Fn(&Problem, &[Vec<f64>]) -> Oracle) -> Self {
         let start = Instant::now();
         let problem = Problem::new(config);
-        let oracle64 = Oracle::new(&problem, &problem.charges);
+        let oracle64 = oracle(&problem, &problem.charges);
         let charges32 = problem.charges_as::<f32>();
         let rounded: Vec<Vec<f64>> = charges32
             .iter()
             .map(|q| q.iter().map(|&v| f64::from(v)).collect())
             .collect();
-        let oracle32 = Oracle::new(&problem, &rounded);
+        let oracle32 = oracle(&problem, &rounded);
         Self {
             problem,
             charges32,
@@ -134,7 +152,8 @@ impl Precision {
 ///
 /// # Collective operation
 ///
-/// On `comm`, which must have one rank ([`fmm_accuracy::run`]).
+/// On every rank of `comm`, with the same arguments ([`fmm_accuracy::run`]): each rank
+/// passes its share of the points, and every rank returns the same runs.
 ///
 /// # Panics
 ///
@@ -177,7 +196,8 @@ pub fn sweep(
 ///
 /// # Collective operation
 ///
-/// On `comm`, which must have one rank ([`fmm_accuracy::run`]).
+/// On every rank of `comm`, with the same arguments ([`fmm_accuracy::run`]): each rank
+/// passes its share of the points, and every rank returns the same runs.
 ///
 /// # Panics
 ///

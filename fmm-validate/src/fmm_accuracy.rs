@@ -12,6 +12,17 @@
 //! output agrees with the host's within the FMM bounds of docs/phase4/README.md; the
 //! [`Run`] then also says what ran where ([`DeviceRun`]).
 //!
+//! On several ranks (Phase 5 T6) each rank passes its share of the points
+//! ([`Problem::share`], every P-th point) and of every charge vector; the FMM moves them to
+//! the ranks that own their leaves. Each rank measures the sampled targets it passed, and
+//! [`measure`] reduces the errors, the tree and the timings over the ranks (sums, extremes,
+//! the slowest rank), so every rank reports the same [`Run`]. The output, and so every
+//! error, is the one-rank FMM's over the union of the shares in rank order, which differs
+//! from the one-rank run of the points in their order only in the order of the points
+//! within a leaf: within 100 u_T, and the errors to the printed digits
+//! (docs/design/distributed-fmm.md §5). [`Oracle::sharded`] computes the oracle once, each
+//! rank a share of the sampled targets.
+//!
 //! Two kinds of tree ([`Config`]):
 //! - [`Config::C32`]: points uniform in the cube [−1, 1)³ and a uniform tree,
 //!   `max_level` 4 and one point per leaf as the refinement target, so with enough
@@ -43,8 +54,9 @@
 
 use std::time::Duration;
 
+use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
-use mpi::traits::Equivalence;
+use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_exec::fmm::{
     Backend, BuildTimings, DeviceStage, DeviceStageTimings, Fmm, FmmBuilder, FmmError, ListSizes,
     OperatorKind, StageTimings,
@@ -356,6 +368,13 @@ impl Problem {
         self.sample.iter().map(|&i| self.points[i]).collect()
     }
 
+    /// The positions in [`points`](Self::points) of the points that rank `rank` of `size`
+    /// passes to the FMM, ascending: every `size`-th point from `rank` (Phase 5 T6). On one
+    /// rank every point, in order. The same positions index every charge vector.
+    pub fn share(&self, rank: usize, size: usize) -> Vec<usize> {
+        (rank..self.points.len()).step_by(size.max(1)).collect()
+    }
+
     /// The charge vectors rounded to `T`.
     pub fn charges_as<T: RealScalar>(&self) -> Vec<Vec<T>> {
         self.charges
@@ -384,14 +403,52 @@ impl Oracle {
     /// The oracle of `problem` for the charge vectors `charges` (the problem's own, or
     /// their rounded values in f64). O(K N n_sampled).
     pub fn new(problem: &Problem, charges: &[Vec<f64>]) -> Self {
-        let targets = problem.sampled_points();
+        Self::of_targets(problem, charges, &problem.sampled_points())
+    }
+
+    /// [`new`](Self::new), computed once over the ranks of `comm` (Phase 5 T6): each rank
+    /// computes every `size`-th sampled target from its rank, and two all-reduces (sums,
+    /// with zeros elsewhere) give every rank the whole oracle, the values of
+    /// [`new`](Self::new) bit for bit. O(K N n_sampled / P) per rank.
+    ///
+    /// # Collective operation
+    ///
+    /// On `comm`, every rank with the same `problem` and `charges`.
+    pub fn sharded(problem: &Problem, charges: &[Vec<f64>], comm: &SimpleCommunicator) -> Self {
+        let (rank, size) = (comm.rank() as usize, comm.size() as usize);
+        let sampled = problem.sampled_points();
+        let mine: Vec<usize> = (rank..sampled.len()).step_by(size).collect();
+        let targets: Vec<[f64; 3]> = mine.iter().map(|&s| sampled[s]).collect();
+        let part = Self::of_targets(problem, charges, &targets);
+        let n = sampled.len();
+        let (mut potential, mut gradient) = (Vec::new(), Vec::new());
+        for (phi, grad) in part.potential.iter().zip(&part.gradient) {
+            let (mut local_phi, mut local_grad) = (vec![0.0f64; n], vec![0.0f64; 3 * n]);
+            for (k, &s) in mine.iter().enumerate() {
+                local_phi[s] = phi[k];
+                local_grad[3 * s..3 * s + 3].copy_from_slice(&grad[k]);
+            }
+            let (mut all_phi, mut all_grad) = (vec![0.0f64; n], vec![0.0f64; 3 * n]);
+            comm.all_reduce_into(&local_phi[..], &mut all_phi[..], SystemOperation::sum());
+            comm.all_reduce_into(&local_grad[..], &mut all_grad[..], SystemOperation::sum());
+            potential.push(all_phi);
+            gradient.push(all_grad.as_chunks::<3>().0.to_vec());
+        }
+        Self {
+            potential,
+            gradient,
+        }
+    }
+
+    /// The oracle at `targets`.
+    fn of_targets(problem: &Problem, charges: &[Vec<f64>], targets: &[[f64; 3]]) -> Self {
         let scale = 4.0 * std::f64::consts::PI;
         let (potential, gradient) = charges
             .iter()
             .map(|q| {
                 let mut phi = vec![0.0; targets.len()];
                 let mut grad = vec![[0.0; 3]; targets.len()];
-                direct_sum(&problem.points, q, &targets, &mut phi, Some(&mut grad));
+                direct_sum(&problem.points, q, targets, &mut phi, Some(&mut grad));
                 (
                     phi.iter().map(|v| v / scale).collect(),
                     grad.iter().map(|g| g.map(|gk| gk / scale)).collect(),
@@ -426,20 +483,23 @@ pub struct Run {
     pub potential_l2_range: (f64, f64),
     /// The number of levels.
     pub nlevels: usize,
-    /// The number of leaves.
+    /// The number of leaves, over every rank.
     pub nleaves: usize,
-    /// The number of leaves on each level 0, 1, …, `nlevels` − 1.
+    /// The number of leaves on each level 0, 1, …, `nlevels` − 1, over every rank.
     pub leaf_levels: Vec<usize>,
-    /// Points per leaf, empty leaves included: the smallest, the mean and the largest
-    /// count.
+    /// Points per leaf, empty leaves included, over every rank's leaves: the smallest,
+    /// the mean and the largest count.
     pub points_per_leaf: (usize, f64, usize),
-    /// The sizes of the interaction lists.
+    /// The sizes of the interaction lists, summed over the ranks.
     pub lists: ListSizes,
-    /// The wall time of the build.
+    /// The number of ranks (Phase 5 T6).
+    pub ranks: usize,
+    /// The wall time of each step of the build, the slowest rank's.
     pub build: BuildTimings,
-    /// The wall time of each stage, the mean over the charge vectors.
+    /// The wall time of each stage, the mean over the charge vectors, the slowest rank's.
     pub stages: StageTimings,
-    /// The rayon threads, the MPI threading level and the BLAS thread variables.
+    /// The rayon threads (per rank), the MPI threading level and the BLAS thread
+    /// variables.
     pub threading: ThreadingReport,
     /// The P2P kernel as it ran (`Fmm::p2p_kernel`): `Reference` or an ISA, never
     /// `Auto`.
@@ -467,14 +527,16 @@ impl Run {
 ///
 /// # Collective operation
 ///
-/// On `comm`, which must have one rank: the points are not redistributed (C5.1).
+/// On every rank of `comm`, with the same arguments: each rank passes its
+/// [share](Problem::share) of the points and charges (Phase 5 T6), and every rank returns
+/// the same [`Run`].
 ///
 /// # Panics
 ///
-/// If the FMM does not build or evaluate, for example on several ranks, with
-/// `threads` > 1 when MPI provides less than `Threading::Funneled`, with a P2P
-/// kernel on an ISA this machine cannot run, or on a device backend that is not compiled
-/// in or does no arithmetic in `T` (f64 on Metal).
+/// If the FMM does not build or evaluate, for example with `threads` > 1 when MPI
+/// provides less than `Threading::Funneled`, with a P2P kernel on an ISA this machine
+/// cannot run, or on a device backend that is not compiled in, does no arithmetic in `T`
+/// (f64 on Metal) or runs on several ranks (until Phase 5 T8).
 pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
     config: &Config,
     problem: &Problem,
@@ -504,7 +566,9 @@ pub fn builder<T>(config: &Config, p: usize, execution: Execution) -> FmmBuilder
 /// Builds the FMM of `builder` on `problem`, evaluates the charge vectors `charges` and
 /// measures the output against `oracle`, as [`run`] does with its own settings; returns
 /// the [`Run`] and the FMM, for further evaluations (the `device_fmm` benchmark, Phase 4
-/// T13). `builder` must have gradients on and `config`'s tree.
+/// T13). `builder` must have gradients on and `config`'s tree. Each rank passes its
+/// [share](Problem::share) of the points, so further evaluations take the share of the
+/// charges; on one rank, every charge in order.
 ///
 /// # Errors
 ///
@@ -513,7 +577,9 @@ pub fn builder<T>(config: &Config, p: usize, execution: Execution) -> FmmBuilder
 ///
 /// # Collective operation
 ///
-/// On `comm`, which must have one rank: the points are not redistributed (C5.1).
+/// On every rank of `comm`, with the same arguments: the build, every evaluation, and
+/// the reductions of the errors, the tree and the timings (Phase 5 T6). Every rank
+/// returns the same [`Run`], apart from [`Run::device`] (a device runs on one rank).
 ///
 /// # Panics
 ///
@@ -526,34 +592,67 @@ pub fn measure<'o, T: Stored + SimdScalar + Equivalence + Default>(
     builder: &FmmBuilder<T>,
     comm: &'o SimpleCommunicator,
 ) -> Result<(Run, Fmm<'o, T>), FmmError> {
-    let mut fmm: Fmm<'o, T> = builder
-        .clone()
-        .build(&problem.points, &problem.points, comm)?;
+    let (rank, size) = (comm.rank() as usize, comm.size() as usize);
+    let mine = problem.share(rank, size);
+    let points: Vec<[f64; 3]> = mine.iter().map(|&i| problem.points[i]).collect();
+    let mut fmm: Fmm<'o, T> = builder.clone().build(&points, &points, comm)?;
+    // The tree over every rank.
     let counts = fmm.source_counts();
-    let points_per_leaf = (
-        counts.iter().copied().min().unwrap_or(0),
-        counts.iter().sum::<usize>() as f64 / counts.len().max(1) as f64,
-        counts.iter().copied().max().unwrap_or(0),
-    );
+    let local = [
+        counts.iter().copied().min().unwrap_or(usize::MAX) as u64,
+        counts.iter().copied().max().unwrap_or(0) as u64,
+    ];
+    let (mut smallest, mut largest) = (0u64, 0u64);
+    comm.all_reduce_into(&local[0], &mut smallest, SystemOperation::min());
+    comm.all_reduce_into(&local[1], &mut largest, SystemOperation::max());
     let leaves = fmm.plan().index().leaves();
-    let mut leaf_levels = vec![0; fmm.nlevels()];
+    let mut local_levels = vec![0u64; fmm.nlevels()];
     for j in 0..fmm.nleaves() {
-        leaf_levels[leaves.level(j)] += 1;
+        local_levels[leaves.level(j)] += 1;
     }
+    let sizes = fmm.list_sizes();
+    let local_sizes = [sizes.u, sizes.v, sizes.w, sizes.x].map(|n| n as u64);
+    let mut leaf_levels = vec![0u64; fmm.nlevels()];
+    let mut lists = [0u64; 4];
+    comm.all_reduce_into(
+        &local_levels[..],
+        &mut leaf_levels[..],
+        SystemOperation::sum(),
+    );
+    comm.all_reduce_into(&local_sizes[..], &mut lists[..], SystemOperation::sum());
+    let leaf_levels: Vec<usize> = leaf_levels.iter().map(|&n| n as usize).collect();
+    let nleaves: usize = leaf_levels.iter().sum();
+    let points_per_leaf = (
+        if nleaves == 0 { 0 } else { smallest as usize },
+        problem.points.len() as f64 / nleaves.max(1) as f64,
+        largest as usize,
+    );
+    // The sampled targets this rank passed: their places in the sample and in its share.
+    let local_sample: Vec<(usize, usize)> = problem
+        .sample
+        .iter()
+        .enumerate()
+        .filter(|&(_, &i)| i % size == rank)
+        .map(|(s, &i)| (s, i / size))
+        .collect();
     let mut errors = Vec::with_capacity(charges.len());
     let mut stages = Vec::with_capacity(charges.len());
     for ((q, phi), grad) in charges.iter().zip(&oracle.potential).zip(&oracle.gradient) {
+        let q: Vec<T> = mine.iter().map(|&i| q[i]).collect();
         let output = fmm
-            .evaluate(q)
+            .evaluate(&q)
             .unwrap_or_else(|error| panic!("the FMM does not evaluate: {error}"));
         let gradient = output.gradient.as_ref().expect("built with gradients");
         let mut potential_errors = ErrorAccumulator::new();
         let mut gradient_errors = ErrorAccumulator::new();
-        for (r, &i) in problem.sample.iter().enumerate() {
-            potential_errors.add_values(&output.potential[i..=i], &phi[r..=r]);
-            gradient_errors.add_vectors(&gradient[i..=i], &grad[r..=r]);
+        for &(s, r) in &local_sample {
+            potential_errors.add_values(&output.potential[r..=r], &phi[s..=s]);
+            gradient_errors.add_vectors(&gradient[r..=r], &grad[s..=s]);
         }
-        errors.push((potential_errors.finish(), gradient_errors.finish()));
+        errors.push((
+            reduce(&potential_errors, comm).finish(),
+            reduce(&gradient_errors, comm).finish(),
+        ));
         stages.push(output.timings);
     }
     let rms = |f: &dyn Fn(&(ErrorNorms, ErrorNorms)) -> f64| {
@@ -578,18 +677,74 @@ pub fn measure<'o, T: Stored + SimdScalar + Equivalence + Default>(
             l2.fold(0.0, f64::max),
         ),
         nlevels: fmm.nlevels(),
-        nleaves: fmm.nleaves(),
+        nleaves,
         leaf_levels,
         points_per_leaf,
-        lists: fmm.list_sizes(),
-        build: fmm.build_timings(),
-        stages: mean(&stages),
+        lists: ListSizes {
+            u: lists[0] as usize,
+            v: lists[1] as usize,
+            w: lists[2] as usize,
+            x: lists[3] as usize,
+        },
+        ranks: size,
+        build: slowest_build(&fmm.build_timings(), comm),
+        stages: slowest_stages(&mean(&stages), comm),
         threading: fmm.threading().clone(),
         p2p: fmm.p2p_kernel(),
         backend: fmm.backend(),
         device: DeviceRun::of(&fmm),
     };
     Ok((run, fmm))
+}
+
+/// The accumulator of every rank's `local`: its sums added and its maxima taken over the
+/// ranks (two all-reduces).
+fn reduce(local: &ErrorAccumulator, comm: &SimpleCommunicator) -> ErrorAccumulator {
+    let parts = local.parts();
+    let (mut sums, mut maxima) = ([0.0f64; 2], [0.0f64; 2]);
+    comm.all_reduce_into(&parts[..2], &mut sums[..], SystemOperation::sum());
+    comm.all_reduce_into(&parts[2..], &mut maxima[..], SystemOperation::max());
+    ErrorAccumulator::from_parts([sums[0], sums[1], maxima[0], maxima[1]])
+}
+
+/// The largest of every rank's `local` (one all-reduce per call).
+fn slowest(local: Duration, comm: &SimpleCommunicator) -> Duration {
+    let mut max = 0.0f64;
+    comm.all_reduce_into(&local.as_secs_f64(), &mut max, SystemOperation::max());
+    Duration::from_secs_f64(max)
+}
+
+/// Each step of `build` on the slowest rank for that step.
+fn slowest_build(build: &BuildTimings, comm: &SimpleCommunicator) -> BuildTimings {
+    BuildTimings {
+        domain: slowest(build.domain, comm),
+        octree: slowest(build.octree, comm),
+        plan: slowest(build.plan, comm),
+        redistribute: slowest(build.redistribute, comm),
+        tables: slowest(build.tables, comm),
+        evaluator: slowest(build.evaluator, comm),
+        load: slowest(build.load, comm),
+        device: slowest(build.device, comm),
+    }
+}
+
+/// Each stage of `stages` on the slowest rank for that stage; the device stages as they
+/// are (a device runs on one rank).
+fn slowest_stages(stages: &StageTimings, comm: &SimpleCommunicator) -> StageTimings {
+    StageTimings {
+        forward_charges: slowest(stages.forward_charges, comm),
+        load: slowest(stages.load, comm),
+        exchange_sources: slowest(stages.exchange_sources, comm),
+        upward_local: slowest(stages.upward_local, comm),
+        upward_global: slowest(stages.upward_global, comm),
+        exchange_multipoles: slowest(stages.exchange_multipoles, comm),
+        downward: slowest(stages.downward, comm),
+        evaluate_leaves: slowest(stages.evaluate_leaves, comm),
+        output: slowest(stages.output, comm),
+        backward_output: slowest(stages.backward_output, comm),
+        download: slowest(stages.download, comm),
+        ..*stages
+    }
 }
 
 /// The mean of each stage over `timings`.
@@ -599,6 +754,7 @@ fn mean(timings: &[StageTimings]) -> StageTimings {
         timings.iter().map(f).sum::<Duration>() / n
     };
     StageTimings {
+        forward_charges: average(|t| t.forward_charges),
         load: average(|t| t.load),
         exchange_sources: average(|t| t.exchange_sources),
         upward_local: average(|t| t.upward_local),
@@ -607,6 +763,7 @@ fn mean(timings: &[StageTimings]) -> StageTimings {
         downward: average(|t| t.downward),
         evaluate_leaves: average(|t| t.evaluate_leaves),
         output: average(|t| t.output),
+        backward_output: average(|t| t.backward_output),
         download: average(|t| t.download),
         device: mean_device(timings),
         kinds: None,

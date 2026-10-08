@@ -40,8 +40,8 @@ nd-fmm-kernels = { workspace = true, optional = true }
 proptest = { workspace = true }
 
 # How to call the FMM: build, evaluate several charge vectors, check against the direct
-# sum. Registered for the weekly `run-examples` job (3 ranks), where it reports the
-# refusal of points other ranks own (no redistribution before C5.1) and exits normally.
+# sum. Registered for the weekly `run-examples` job (3 ranks), where every rank passes
+# its own points and the FMM moves them to the ranks that own their leaves (Phase 5 T6).
 [[example]]
 name = "basic_evaluation"
 

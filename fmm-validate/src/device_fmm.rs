@@ -369,6 +369,7 @@ fn median(mut times: Vec<Duration>) -> Duration {
 fn median_stages(timings: &[StageTimings]) -> StageTimings {
     let stage = |f: fn(&StageTimings) -> Duration| median(timings.iter().map(f).collect());
     StageTimings {
+        forward_charges: stage(|t| t.forward_charges),
         load: stage(|t| t.load),
         exchange_sources: stage(|t| t.exchange_sources),
         upward_local: stage(|t| t.upward_local),
@@ -377,6 +378,7 @@ fn median_stages(timings: &[StageTimings]) -> StageTimings {
         downward: stage(|t| t.downward),
         evaluate_leaves: stage(|t| t.evaluate_leaves),
         output: stage(|t| t.output),
+        backward_output: stage(|t| t.backward_output),
         download: stage(|t| t.download),
         device: None,
         kinds: None,

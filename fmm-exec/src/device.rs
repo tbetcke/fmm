@@ -21,10 +21,10 @@
 //! refused by [`FmmBuilder::build`](crate::fmm::FmmBuilder::build) with a
 //! [`SettingsError`], agreed on every rank by step 1's
 //! existing all-reduce of input errors. [`Backend::probe`] opens a device and returns
-//! why it is unavailable, which the `Copy` error cannot carry. Until C5.1 a device runs
-//! on one rank only: on several, `build` returns
+//! why it is unavailable, which the `Copy` error cannot carry. Until Phase 5 T8 a device
+//! runs on one rank only: on several, `build` returns
 //! [`DeviceNeedsOneRank`](crate::fmm::SettingsError::DeviceNeedsOneRank) on every rank
-//! after its step 5, so that `PointsNotOwned` still wins where it applies (§4.4).
+//! after its step 5, the redistribution of the points (§4.4).
 //!
 //! # Residency (§4.1, §4.3 option (a))
 //!
@@ -961,7 +961,9 @@ pub struct DeviceOptions {
 /// The caller's order of the targets, for the output pass on the device (Phase 4S T9,
 /// [`OutputPass`]): every target's point in leaf order and local leaf, in the caller's
 /// order, and two scales per local leaf, 4π r_t and 4π r_t² (CONVENTIONS §3.13,
-/// "Output"), as `Fmm` forms them for its host pass.
+/// "Output"), as `Fmm` forms them for its host pass. Since Phase 5 T6 `Fmm` passes the
+/// received order of the targets the rank owns (leaf order) as the caller's order, and
+/// moves the output to the caller's ranks and order after the download.
 #[derive(Clone, Copy, Debug)]
 pub struct CallerOrder<'a> {
     /// For every target in the caller's order: its point in leaf order.

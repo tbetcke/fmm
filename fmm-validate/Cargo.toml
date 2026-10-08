@@ -29,6 +29,15 @@ mpi = { workspace = true }
 # The device P2P rows of `p2p_kernels` (Phase 4 T6), feature `gpu`.
 nd-fmm-kernels = { workspace = true, optional = true }
 
+# The accuracy of the FMM on uniform and adaptive trees (C3.2, C3.3) on any number of ranks
+# (Phase 5 T6): registered for the weekly `run-examples` job, which runs it at 3 ranks
+# (136 s on the M3 Max at 3 ranks × 1 thread, 401 CPU-seconds).
+[[example]]
+name = "fmm_accuracy"
+
+[package.metadata.example.fmm_accuracy.templated-examples]
+command = "mpirun -n {{NPROCESSES}}"
+
 # The device path on the host fallback (Phase 4 T5): needs a device backend; not run in
 # CI (no templated-examples entry), run by hand on one rank.
 [[example]]

@@ -9,6 +9,11 @@
 //! - `calibrate`: the sweeps of every distribution at p ≤ 3 in f64 and f32, the
 //!   calibration read off them, and a leaf-size study at p = 2.
 //!
+//! It runs on any number of ranks (Phase 5 T6; CI's root job runs one, by hand also 2):
+//! each rank passes its share of the points (`Problem::share`), every rank gets the same
+//! [`Run`](nd_fmm_validate::fmm_accuracy::Run), and the oracle computed over the ranks
+//! (`Oracle::sharded`) equals the serial one bit for bit.
+//!
 //! The accuracy figures themselves are reported by the examples. One test initialises
 //! MPI and runs both (MPI cannot be initialised twice in one process). Error measure:
 //! the root mean squares of the relative L2 and max errors over the charge vectors that
@@ -16,6 +21,7 @@
 
 use mpi::Threading;
 use mpi::topology::SimpleCommunicator;
+use mpi::traits::Communicator;
 use nd_fmm_exec::operator::{Isa, P2pChoice};
 use nd_fmm_validate::calibration::{
     self, Measure, Precision, Reached, Reference, floor, leaf_study, smallest_p, sweep,
@@ -60,9 +66,17 @@ fn fmm_accuracy_at_p_2_and_4(comm: &SimpleCommunicator) {
     );
     assert_eq!(problem, Problem::new(&SMOKE), "seeded");
 
+    // Every point in exactly one rank's share; the oracle over the ranks bit for bit the
+    // serial one.
+    let size = comm.size() as usize;
+    let mut shares: Vec<usize> = (0..size).flat_map(|r| problem.share(r, size)).collect();
+    shares.sort_unstable();
+    assert_eq!(shares, (0..SMOKE.n).collect::<Vec<_>>());
     let oracle = Oracle::new(&problem, &problem.charges);
+    assert_eq!(Oracle::sharded(&problem, &problem.charges, comm), oracle);
     let one = (2, Execution::threads(1));
     let r64 = run::<f64>(&SMOKE, &problem, &problem.charges, &oracle, one, comm);
+    assert_eq!(r64.ranks, size);
     assert_eq!(r64.threading.threads, 1);
     assert_eq!(r64.p2p, P2pChoice::Isa(Isa::detect()), "Auto by default");
     // Two threads: the output is bit-identical (C3.5), so are the errors.

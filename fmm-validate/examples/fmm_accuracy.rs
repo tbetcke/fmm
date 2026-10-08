@@ -11,18 +11,21 @@
 //! Each clustered distribution is compared with the uniform cube at the same p, N and
 //! precision, so the cube always runs.
 //!
-//! Run in release mode, on one rank (the points are not redistributed until C5.1), with
-//! `--distribution d` (`cube`, `sphere`, `plummer`, `clusters` or `all`, the default),
-//! `--threads n` rayon threads (default 1), `--p2p k` the P2P kernel (`auto`, the
-//! default, `reference` or an ISA: `scalar`, `neon`, `avx2`;
-//! `nd_fmm_exec::operator::P2pChoice`), `--backend b` where the operators run (`host`,
-//! the default, or with the feature of that backend `cpu`, `metal` or `cuda`; Phase 4
-//! T11) and one BLAS thread:
+//! Run in release mode, on any number of ranks (Phase 5 T6: each rank passes every P-th
+//! point, the FMM moves the points to the ranks that own their leaves, the errors are
+//! reduced over the ranks and rank 0 prints the report), with `--distribution d`
+//! (`cube`, `sphere`, `plummer`, `clusters` or `all`, the default), `--threads n` rayon
+//! threads (default 1), `--p2p k` the P2P kernel (`auto`, the default, `reference` or an
+//! ISA: `scalar`, `neon`, `avx2`; `nd_fmm_exec::operator::P2pChoice`), `--backend b`
+//! where the operators run (`host`, the default, or with the feature of that backend
+//! `cpu`, `metal` or `cuda`; Phase 4 T11; a device on one rank until Phase 5 T8) and one
+//! BLAS thread:
 //!
 //! ```text
 //! OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 BLIS_NUM_THREADS=1 \
 //!     VECLIB_MAXIMUM_THREADS=1 \
 //!     cargo run --release -p nd-fmm-validate --example fmm_accuracy -- --threads 4
+//! mpirun -n 4 target/release/examples/fmm_accuracy --distribution plummer
 //! cargo run --release -p nd-fmm-validate --features metal --example fmm_accuracy -- --backend metal
 //! ```
 //!
@@ -35,7 +38,11 @@
 //! needs a process with GPU access (outside the macOS sandbox).
 //!
 //! The problems and the error measure are described in `nd_fmm_validate::fmm_accuracy`.
-//! The errors are deterministic for the seed and the same for every number of threads;
+//! The oracle is computed once, each rank a share of the sampled targets. The errors are
+//! deterministic for the seed and the rank count, the same for every number of threads,
+//! and on several ranks those of one rank to the printed digits (the order of the points
+//! within a leaf changes the last bits; docs/design/distributed-fmm.md §5); the timings
+//! are the slowest rank's;
 //! the timings are wall times on this machine, reported and never asserted. MPI is
 //! initialised with `Threading::Funneled`, and the threading report (rayon threads, MPI
 //! level, BLAS variables; `nd_fmm_exec::threading`) and the P2P kernel that ran
@@ -154,13 +161,13 @@ fn device_of(backend: Backend) -> (bool, String) {
 fn report(config: Config, execution: Execution, f64: bool, comm: &SimpleCommunicator) -> Report {
     let start = Instant::now();
     let problem = Problem::new(&config);
-    let oracle64 = Oracle::new(&problem, &problem.charges);
+    let oracle64 = Oracle::sharded(&problem, &problem.charges, comm);
     let charges32 = problem.charges_as::<f32>();
     let rounded: Vec<Vec<f64>> = charges32
         .iter()
         .map(|q| q.iter().map(|&v| f64::from(v)).collect())
         .collect();
-    let oracle32 = Oracle::new(&problem, &rounded);
+    let oracle32 = Oracle::sharded(&problem, &rounded, comm);
     let oracle_time = start.elapsed();
     let f64_ps: &[usize] = if f64 { &F64_PS } else { &[] };
     let mut runs: Vec<Run> = f64_ps
@@ -214,11 +221,6 @@ fn main() {
         eprintln!("--threads {threads} needs MPI at Funneled; it provides {provided:?}");
         std::process::exit(2);
     }
-    if comm.size() != 1 {
-        eprintln!("fmm_accuracy runs on one rank; points are not redistributed until C5.1");
-        std::process::exit(2);
-    }
-
     let (f64, device) = device_of(execution.backend);
     let cube = report(Config::C32, execution, f64, &comm);
     let clustered: Vec<Report> = distributions
@@ -231,6 +233,11 @@ fn main() {
         reports.push(&cube);
     }
     reports.extend(&clustered);
+    // Every rank has run every collective; rank 0 prints.
+    if comm.rank() != 0 {
+        return;
+    }
+    let ranks = comm.size();
 
     println!("# Accuracy of the FMM on uniform and adaptive trees (C3.2, C3.3)");
     println!();
@@ -275,12 +282,18 @@ fn main() {
          uniform cube at the same p and N, in f64; f32 is reported next to it."
     );
     println!(
-        "- Machine: {}; {}; {}; one rank, {threads} thread{}. The direct sums took {} s \
-         (one thread).",
+        "- Machine: {}; {}; {}; {ranks} rank{} × {threads} thread{}{}. The direct sums took \
+         {} s (one thread per rank, each rank a share of the sampled targets).",
         cpu_model(),
         cores(),
         target(),
+        if ranks == 1 { "" } else { "s" },
         if threads == 1 { "" } else { "s" },
+        if ranks == 1 {
+            String::new()
+        } else {
+            "; rank r passes points r, r + P, …, and the timings are the slowest rank's".to_owned()
+        },
         std::iter::once(&cube)
             .chain(&clustered)
             .map(|r| format!(
