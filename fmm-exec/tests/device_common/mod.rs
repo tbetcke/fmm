@@ -66,8 +66,13 @@
 //!   `kind_timings(Device)`, one window per call and the one sync, alone and with
 //!   `device_timestamps(true)` (its five stage windows around the call windows).
 //!
-//! On several ranks the device build returns `DeviceNeedsOneRank` on every rank instead
-//! (device-path.md §4.4), which [`check_backend`] checks and reports.
+//! On several ranks (Phase 5 T8, docs/design/distributed-fmm.md §7) every check runs as on
+//! one rank, against the host path on the same ranks: the host output and expansions there,
+//! and the formula extended by the exchanges' transfers on this rank
+//! ([`expected_evaluation`], from `Fmm::exchange_sizes`): the ghost tail of the sources up,
+//! the sent multipoles down in one download (one more sync), the other ranks' coarse
+//! blocks up, and each level's received ghost multipoles up, with a gather and a scatter
+//! launch each. On one rank these are all zero, and the Phase 4 formula holds unchanged.
 //!
 //! Error measures: exact equality (bit patterns, counts and bytes), and the relative L2
 //! difference from the host output.
@@ -76,8 +81,7 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, Equivalence};
 use nd_fmm_exec::device::{DataKind, GroupedImage, StageTiming, Traffic};
 use nd_fmm_exec::fmm::{
-    Backend, Fmm, FmmBuilder, FmmError, KindTiming, OperatorKind, Output, OutputPass, Placement,
-    SettingsError,
+    Backend, Fmm, FmmBuilder, KindTiming, OperatorKind, Output, OutputPass, Placement,
 };
 use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_exec::tables::M2lStrategy;
@@ -108,15 +112,6 @@ pub struct Differences {
     pub locals: f64,
     /// The multipole of the root.
     pub root: f64,
-}
-
-/// What [`check_backend`] did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Outcome {
-    /// The device path ran and passed every check.
-    Ran,
-    /// Several ranks: every rank returned `DeviceNeedsOneRank`.
-    OneRankOnly,
 }
 
 /// The values as f64 bit patterns: potentials, then gradients.
@@ -159,7 +154,7 @@ fn assert_same<T: RealScalar>(what: &str, device: &Output<T>, host: &Output<T>) 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Expected {
     /// Transfers per kind of data.
-    pub traffic: [Traffic; 9],
+    pub traffic: [Traffic; DataKind::ALL.len()],
     /// Kernel launches.
     pub launches: u64,
     /// Syncs: one per download.
@@ -206,7 +201,13 @@ impl Expected {
 ///   up o N_l s;
 /// - launches: the three zero kernels of non-empty stores and the charge scatter if
 ///   there is a source, and with the output pass on the device (Phase 4S T9) its gather
-///   if there is a target; syncs: one per download.
+///   if there is a target; syncs: one per download;
+/// - on several ranks (Phase 5 T8, design §7.2), with G_s ghost source points, B_o and B_r
+///   sent and received coarse blocks and S_l and R_l sent and received boxes of level l
+///   (`Fmm::exchange_sizes`): up 4 G_s s (the ghost tail, if G_s > 0); down (B_o +
+///   Σ_l S_l) n_c s in one download after one gather launch (if anything is sent); up
+///   B_r n_c s and one scatter launch (if B_r > 0); per level with R_l > 0 up R_l n_c s
+///   and one scatter launch. Every placement moves them, the host fallback as the device.
 ///
 /// A kind in `on_device` (T6: P2P; T7: P2M, P2L, L2P, M2P; T8: M2M, L2L; T9: M2L) moves
 /// nothing: each of its level calls is one launch instead of its downloads and uploads, or
@@ -236,7 +237,7 @@ pub fn expected_mirror_bytes<T: Stored + SimdScalar + Equivalence + Default>(
         .into_iter()
         .any(host)
     {
-        values += o * fmm.ntargets();
+        values += o * fmm.owned_points().1;
     }
     (values * size_of::<T>()) as u64
 }
@@ -266,9 +267,32 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
         DataKind::FallbackLocals,
         DataKind::FallbackTargetOutput,
     );
+    // The points this rank owns: the device holds those (Phase 5 T6, T8).
+    let (nsources, ntargets) = fmm.owned_points();
+    let nboxes: usize = (0..nlevels).map(|l| index.len(l)).sum();
 
-    e.up(DataKind::Charges, fmm.nsources() * s);
-    e.launches += 2 + u64::from(fmm.ntargets() > 0) + u64::from(fmm.nsources() > 0);
+    e.up(DataKind::Charges, nsources * s);
+    e.launches += 2 * u64::from(nboxes > 0) + u64::from(ntargets > 0) + u64::from(nsources > 0);
+    // The exchanges (Phase 5 T8): none on one rank.
+    let x = fmm.exchange_sizes();
+    if x.ghost_sources > 0 {
+        e.up(DataKind::GhostSources, 4 * x.ghost_sources * s);
+    }
+    let sent = x.sent_blocks + x.sent_boxes.iter().sum::<usize>();
+    if sent > 0 {
+        e.launches += 1;
+        e.down(DataKind::SentMultipoles, sent * nc * s);
+    }
+    if x.received_blocks > 0 {
+        e.up(DataKind::CoarseMultipoles, x.received_blocks * nc * s);
+        e.launches += 1;
+    }
+    for &r in &x.received_boxes {
+        if r > 0 {
+            e.up(DataKind::ReceivedMultipoles, r * nc * s);
+            e.launches += 1;
+        }
+    }
     for l in 0..nlevels {
         let lists = plan.level(l);
         if !lists.p2m().is_empty() {
@@ -387,12 +411,20 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
             }
         }
     }
-    if fmm.output_pass() == Placement::Device && fmm.ntargets() > 0 {
+    if fmm.output_pass() == Placement::Device && ntargets > 0 {
         e.launches += 1;
     }
-    e.down(DataKind::Output, fmm.ntargets() * o * s);
+    e.down(DataKind::Output, ntargets * o * s);
     e
 }
+
+/// The exchanges' kinds of data (Phase 5 T8), which move only on several ranks.
+const EXCHANGES: [DataKind; 4] = [
+    DataKind::GhostSources,
+    DataKind::SentMultipoles,
+    DataKind::CoarseMultipoles,
+    DataKind::ReceivedMultipoles,
+];
 
 /// Where the output pass runs on `backend` by default (Phase 4S T9): on the device where
 /// it does f64 arithmetic.
@@ -423,7 +455,8 @@ pub fn check_reference<T: Stored + SimdScalar + Equivalence + Default>(
 
 /// With every kind on the device, `expected` is the design's minimum (device-path.md
 /// §4.1, §8.1, §8.2): one upload of the charges, one download of the output, one sync,
-/// and nothing moved by a host-fallback call.
+/// and nothing moved by a host-fallback call; on several ranks (Phase 5 T8, design §7.2)
+/// besides the exchanges' transfers, and one more sync where the rank sends multipoles.
 fn check_minimum<T: Stored + SimdScalar + Equivalence + Default>(
     backend: Backend,
     fmm: &Fmm<'_, T>,
@@ -431,16 +464,20 @@ fn check_minimum<T: Stored + SimdScalar + Equivalence + Default>(
 ) {
     let s = size_of::<T>() as u64;
     let o = if fmm.gradients() { 4 } else { 1 };
+    let (nsources, ntargets) = fmm.owned_points();
     for data in DataKind::ALL {
+        if EXCHANGES.contains(&data) {
+            continue;
+        }
         let want = match data {
             DataKind::Charges => Traffic {
                 uploads: 1,
-                upload_bytes: fmm.nsources() as u64 * s,
+                upload_bytes: nsources as u64 * s,
                 ..Traffic::default()
             },
             DataKind::Output => Traffic {
                 downloads: 1,
-                download_bytes: fmm.ntargets() as u64 * o * s,
+                download_bytes: ntargets as u64 * o * s,
                 ..Traffic::default()
             },
             _ => Traffic::default(),
@@ -450,7 +487,41 @@ fn check_minimum<T: Stored + SimdScalar + Equivalence + Default>(
             "{backend}: every kind on the device, {data} per evaluation"
         );
     }
-    assert_eq!(expected.syncs, 1, "{backend}: one sync per evaluation");
+    let sends = expected.traffic[DataKind::SentMultipoles as usize].downloads;
+    assert!(
+        sends <= 1,
+        "{backend}: at most one download of the sent multipoles"
+    );
+    assert_eq!(
+        expected.syncs,
+        1 + sends,
+        "{backend}: one sync per evaluation, one more where the rank sends"
+    );
+}
+
+/// Checks the received multipoles of the last evaluation of `fmm` level by level
+/// (`DeviceCounters::received_levels`, Phase 5 T8): one upload of R_l n_c s bytes on each
+/// level with a ghost box, nothing elsewhere and nothing downloaded.
+fn check_received_levels<T: Stored + SimdScalar + Equivalence + Default>(
+    what: &str,
+    fmm: &Fmm<'_, T>,
+) {
+    let counters = fmm.device_counters().expect("a device backend");
+    let nc = ((fmm.p() + 1) * (fmm.p() + 1)) as u64;
+    let s = size_of::<T>() as u64;
+    let received = fmm.exchange_sizes().received_boxes;
+    for (level, traffic) in counters.received_levels.iter().enumerate() {
+        let r = received.get(level).copied().unwrap_or(0) as u64;
+        let want = Traffic {
+            uploads: u64::from(r > 0),
+            upload_bytes: r * nc * s,
+            ..Traffic::default()
+        };
+        assert_eq!(
+            *traffic, want,
+            "{what}: received multipoles of level {level}"
+        );
+    }
 }
 
 /// Checks the counters of the last evaluation of `fmm` against `expected`.
@@ -489,6 +560,7 @@ fn check_evaluation_counters<T: Stored + SimdScalar + Equivalence + Default>(
         "{what}: counters of an evaluation (uploads, bytes, downloads, bytes, launches, \
          syncs)"
     );
+    check_received_levels(what, fmm);
 }
 
 /// Checks that the device's copy of `view` is the plan's, and that its row-to-batch map
@@ -584,7 +656,22 @@ fn check_views<T: Stored + SimdScalar + Equivalence + Default>(fmm: &mut Fmm<'_,
             }))
             .collect()
     };
-    assert_eq!(image.source_offsets, offsets(fmm.source_counts()));
+    // The source offsets cover every leaf of the numbering: the local leaves', then the
+    // ghost leaves' (Phase 5 T8), whose counts come with the source exchange.
+    let local = offsets(fmm.source_counts());
+    let nlocal = fmm.source_counts().len();
+    assert_eq!(image.source_offsets.len(), index.leaves().len() + 1);
+    assert_eq!(
+        image.source_offsets[..=nlocal],
+        local[..],
+        "local source offsets"
+    );
+    assert!(image.source_offsets.windows(2).all(|w| w[0] <= w[1]));
+    assert_eq!(
+        *image.source_offsets.last().unwrap() as usize - local[nlocal] as usize,
+        fmm.exchange_sizes().ghost_sources,
+        "the ghost leaves' source offsets"
+    );
     assert_eq!(image.target_offsets, offsets(fmm.target_counts()));
     let mut slots = Vec::new();
     let mut start = 0;
@@ -628,9 +715,9 @@ pub fn fmm_bound<T>() -> f64 {
 /// Builds `builder` on `backend` at one thread and checks it against the host path:
 /// `host` is the one-thread host `Fmm` of the same settings, `host_output` its output
 /// for `charges` (module documentation): first with every kind on the host fallback,
-/// then with the default placement ([`device_kinds`] on the device). Returns what it did,
-/// and the largest relative L2 differences of the default placement from the host path
-/// ([`Differences`]); panics on a failed check.
+/// then with the default placement ([`device_kinds`] on the device), on every rank count
+/// (Phase 5 T8). Returns the largest relative L2 differences of the default placement from
+/// the host path ([`Differences`]); panics on a failed check.
 pub fn check_backend<'o, T: Stored + SimdScalar + Equivalence + Default>(
     builder: &FmmBuilder<T>,
     (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
@@ -639,8 +726,8 @@ pub fn check_backend<'o, T: Stored + SimdScalar + Equivalence + Default>(
     host_output: &Output<T>,
     backend: Backend,
     comm: &'o SimpleCommunicator,
-) -> (Outcome, Differences) {
-    let outcome = check_fallback(
+) -> Differences {
+    check_fallback(
         builder,
         (sources, targets),
         charges,
@@ -649,10 +736,7 @@ pub fn check_backend<'o, T: Stored + SimdScalar + Equivalence + Default>(
         backend,
         comm,
     );
-    if outcome == Outcome::OneRankOnly {
-        return (outcome, Differences::default());
-    }
-    let difference = check_default(
+    check_default(
         builder,
         (sources, targets),
         charges,
@@ -660,8 +744,7 @@ pub fn check_backend<'o, T: Stored + SimdScalar + Equivalence + Default>(
         host_output,
         backend,
         comm,
-    );
-    (outcome, difference)
+    )
 }
 
 /// The kinds the device runs by default from T10 under `strategy`: every kind, M2L by the
@@ -891,12 +974,13 @@ fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
         if what.starts_with("output_pass") {
             // The host pass: one launch fewer where the default ran it on the device.
             assert_eq!(again.output_pass(), Placement::Host);
-            let gather = u64::from(fmm.output_pass() == Placement::Device && fmm.ntargets() > 0);
+            let gather =
+                u64::from(fmm.output_pass() == Placement::Device && fmm.owned_points().1 > 0);
             let counters = again.device_counters().unwrap().evaluation;
             assert_eq!(
                 (counters.syncs, counters.launches, counters.download_bytes),
                 (
-                    1,
+                    expected.syncs,
                     expected.launches - gather,
                     expected.total().download_bytes
                 ),
@@ -919,7 +1003,11 @@ fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
             let counters = again.device_counters().unwrap().evaluation;
             assert_eq!(
                 (counters.windows, counters.syncs, counters.launches),
-                (if windowed { 5 } else { 0 }, 1, expected.launches),
+                (
+                    if windowed { 5 } else { 0 },
+                    expected.syncs,
+                    expected.launches
+                ),
                 "{backend}, {what}: windows, syncs and launches of an evaluation"
             );
             assert_eq!(
@@ -960,8 +1048,11 @@ fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
             let calls = crate::kind_common::check_kinds(&what, &timed, &output, mode);
             let counters = timed.device_counters().unwrap().evaluation;
             let (windows, syncs) = match mode {
-                KindTiming::Synchronous => (0, 1 + 1 + calls as u64),
-                _ => (calls as u64 + if stage_windows { 5 } else { 0 }, 1),
+                KindTiming::Synchronous => (0, expected.syncs + 1 + calls as u64),
+                _ => (
+                    calls as u64 + if stage_windows { 5 } else { 0 },
+                    expected.syncs,
+                ),
             };
             assert_eq!(
                 (counters.windows, counters.syncs, counters.launches),
@@ -1004,25 +1095,20 @@ fn check_fallback<'o, T: Stored + SimdScalar + Equivalence + Default>(
     host_output: &Output<T>,
     backend: Backend,
     comm: &'o SimpleCommunicator,
-) -> Outcome {
-    let built = builder
+) {
+    let mut fmm = builder
         .clone()
         .threads(1)
         .backend(backend)
         .host_fallback(OperatorKind::ALL)
-        .build(sources, targets, comm);
-    if comm.size() > 1 {
-        let ranks = comm.size() as usize;
-        match built {
-            Err(FmmError::InvalidSettings(SettingsError::DeviceNeedsOneRank { ranks: r }))
-                if r == ranks => {}
-            Err(error) => panic!("rank {}: {backend} on {ranks} ranks: {error}", comm.rank()),
-            Ok(_) => panic!("rank {}: {backend} builds on {ranks} ranks", comm.rank()),
-        }
-        return Outcome::OneRankOnly;
-    }
-    let mut fmm =
-        built.unwrap_or_else(|error| panic!("{backend}: the FMM does not build: {error}"));
+        .build(sources, targets, comm)
+        .unwrap_or_else(|error| {
+            panic!(
+                "rank {}: {backend} on {} rank(s): the FMM does not build: {error}",
+                comm.rank(),
+                comm.size()
+            )
+        });
     assert_eq!(fmm.backend(), backend);
     assert_eq!(fmm.operator().threads(), 1);
     assert_eq!(
@@ -1045,14 +1131,17 @@ fn check_fallback<'o, T: Stored + SimdScalar + Equivalence + Default>(
         "{backend}: the host mirrors, the target output's included"
     );
 
-    // The build: the points in two uploads, the tables the report lists.
+    // The build: the points in two uploads, the source store with its ghost tail (zero
+    // until the first source exchange; Phase 5 T8), the tables the report lists.
     let s = size_of::<T>();
     let build = fmm.device_counters().unwrap().build_traffic;
+    let (nsources, ntargets) = fmm.owned_points();
+    let stored = nsources + fmm.exchange_sizes().ghost_sources;
     assert_eq!(
         build.get(DataKind::Points),
         Traffic {
             uploads: 2,
-            upload_bytes: ((4 * fmm.nsources() + 3 * fmm.ntargets()) * s) as u64,
+            upload_bytes: ((4 * stored + 3 * ntargets) * s) as u64,
             ..Traffic::default()
         },
         "{backend}: points uploaded at build"
@@ -1101,5 +1190,4 @@ fn check_fallback<'o, T: Stored + SimdScalar + Equivalence + Default>(
         check_reference(&format!("{backend}, {what}"), &mut fmm, &output);
     }
     check_views(&mut fmm);
-    Outcome::Ran
 }

@@ -85,6 +85,9 @@
 //!   comptime); indices may repeat;
 //! - [`movement::scatter_add_columns`]: `x[:, idx[j]] += y[:, j]`, the indices of one
 //!   launch distinct (checked on the host in debug builds);
+//! - [`movement::scatter_columns`] (Phase 5 T8): `x[:, idx[j]] = y[:, j]`, columns of n
+//!   values, the indices distinct (checked in debug builds): an exchange's packed
+//!   receive buffer into its slots;
 //! - [`movement::scatter_values`]: `x[idx[j]] = y[j]`, the indices distinct;
 //! - [`movement::gather_output`] (Phase 4S T9): `out[i] = T(f64(store[pos(i)]) /
 //!   scale(leaf(i)))`, φ and ∇φ in the caller's order from the leaf-ordered target

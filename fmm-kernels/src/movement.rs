@@ -1,8 +1,10 @@
 //! Data movement kernels: zeroing, gathering and scattering columns, and scattering
 //! values by index (fmm-plan-redesign §10, the GEMM check of §6.4; device-path.md §3.1),
-//! and (Phase 4S T9) the output pass of `nd-fmm-exec`, [`gather_output`], which gathers
+//! (Phase 4S T9) the output pass of `nd-fmm-exec`, [`gather_output`], which gathers
 //! the leaf-ordered target output into the caller's order and scales it, in f64 on a
-//! device with f64 arithmetic.
+//! device with f64 arithmetic, and (Phase 5 T8) [`scatter_columns`], which writes packed
+//! columns received by an exchange into their slots (docs/design/distributed-fmm.md
+//! §7.3).
 //!
 //! Each function is a safe launch wrapper over one `#[cube]` kernel, generic over the
 //! element type. It checks its arguments on the host (lengths, the owning device, the
@@ -144,6 +146,39 @@ fn scatter_add_kernel<F: Float>(
             let column = indices[index_offset + e / n] as usize;
             let k = x_offset + column * n + e % n;
             x[k] += y[y_offset + e];
+        }
+        start += stride;
+    }
+}
+
+/// x[x0 + idx[i0 + e / n] n + e % n] = y[y0 + e] for e < work: scattered columns.
+#[cube(launch_unchecked)]
+#[allow(clippy::too_many_arguments)]
+fn scatter_columns_kernel<E: Numeric>(
+    y: &[E],
+    y_offset: u32,
+    indices: &[u32],
+    index_offset: u32,
+    x: &mut [E],
+    x_offset: u32,
+    work: u32,
+    chunk: u32,
+    threads: u32,
+    #[comptime] n: usize,
+) {
+    let (x_offset, index_offset, y_offset) =
+        (x_offset as usize, index_offset as usize, y_offset as usize);
+    let (work, chunk) = (work as usize, chunk as usize);
+    let stride = threads as usize * chunk;
+    let mut start = ABSOLUTE_POS * chunk;
+    while start < work {
+        let mut end = start + chunk;
+        if end > work {
+            end = work;
+        }
+        for e in start..end {
+            let column = indices[index_offset + e / n] as usize;
+            x[x_offset + column * n + e % n] = y[y_offset + e];
         }
         start += stride;
     }
@@ -609,6 +644,66 @@ pub fn scatter_add_columns<T: DeviceFloat>(
     // precondition) make the writes of different units disjoint.
     unsafe {
         scatter_add_kernel::launch_unchecked::<T>(
+            device.client(),
+            CubeCount::Static(grid.cubes, 1, 1),
+            CubeDim::new_1d(grid.units),
+            BufferArg::from_raw_parts(yh, yl),
+            y.offset() as u32,
+            BufferArg::from_raw_parts(ih, il),
+            indices.offset() as u32,
+            BufferArg::from_raw_parts(xh, xl),
+            x.offset() as u32,
+            y.len() as u32,
+            grid.chunk,
+            grid.threads(),
+            n,
+        );
+    }
+    device.count_launch();
+    Ok(())
+}
+
+/// Scatters columns: `x[:, indices[j]] = y[:, j]` (assignment) for columns of `n`
+/// values, e.g. the received ghost multipoles of an exchange, packed, into their slots of
+/// the multipole buffer (Phase 5 T8; docs/design/distributed-fmm.md §7.3). A copy: bit
+/// for bit a host loop, −0.0 and NaN payloads included, which a [`scatter_add_columns`]
+/// into zeroed slots would not keep.
+///
+/// **Precondition:** the indices of one launch are distinct, so that the result does
+/// not depend on which unit writes last. Debug builds check it on the host and panic.
+///
+/// # Errors
+///
+/// [`KernelError::WrongDevice`] if a buffer belongs to another device.
+///
+/// # Panics
+///
+/// As [`gather_columns`], with `y` the input and `x` the output; and in debug builds,
+/// if an index repeats.
+pub fn scatter_columns<E: DeviceElement>(
+    device: &mut Device,
+    n: usize,
+    y: DeviceSlice<'_, E>,
+    indices: IndexSlice<'_>,
+    x: DeviceSliceMut<'_, E>,
+) -> Result<(), KernelError> {
+    check_owners(device, &[y.device(), indices.device(), x.device()])?;
+    check_columns("scatter_columns", n, x.len(), indices, y.len());
+    #[cfg(debug_assertions)]
+    assert_distinct("scatter_columns", indices);
+    if y.is_empty() {
+        return Ok(());
+    }
+    let grid = device.elementwise_grid(y.len());
+    let ((yh, yl), (ih, il), (xh, xl)) = (y.binding(), indices.binding(), x.binding());
+    // SAFETY: as in `gather_columns`, with the roles of x and y exchanged: y is read at
+    // y.offset() + e for e < y.len() = n · indices.len(), the indices at their offset plus
+    // e / n < indices.len(), and x written at x.offset() + c n + r with c <
+    // indices.bound() ≤ x.len() / n and r < n; `check_columns` asserted these bounds.
+    // Distinct indices (the documented precondition) make the writes of different units
+    // disjoint.
+    unsafe {
+        scatter_columns_kernel::launch_unchecked::<E>(
             device.client(),
             CubeCount::Static(grid.cubes, 1, 1),
             CubeDim::new_1d(grid.units),

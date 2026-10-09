@@ -133,7 +133,8 @@
 //! - **input errors** also checks that a P2P kernel on an ISA the machine cannot run is
 //!   rejected with `SettingsError::P2pIsaUnavailable`.
 //!
-//! Device path (Phase 4 T5, C4.1; T6, C4.2; T7, C4.3; T8, C4.4), with the `gpu` feature. Error
+//! Device path (Phase 4 T5, C4.1; T6, C4.2; T7, C4.3; T8, C4.4; Phase 5 T8, C5.1 device),
+//! with the `gpu` feature. Error
 //! measures:
 //! exact equality of the bit patterns, counts and bytes, and the relative L2 difference
 //! of φ and ∇φ from the host output over all targets.
@@ -156,8 +157,11 @@
 //!     the transfers of the formula with each device kind's fallback transfers replaced by
 //!     one launch per level call, three per chunk for M2M, L2L and dense M2L.
 //!
-//!   On several ranks the device build returns `DeviceNeedsOneRank` on every rank. The
-//!   test prints the backends it ran, and the largest differences, at the end.
+//!   On several ranks (Phase 5 T8) every check runs as on one rank, against the host path
+//!   on the same ranks, with the formula extended by the exchanges' transfers on the rank
+//!   (`Fmm::exchange_sizes`: the ghost tail up, the sent multipoles down in one more sync,
+//!   the coarse blocks and each level's ghost multipoles up, a launch each). The test
+//!   prints the backends and the ranks it ran, and the largest differences, at the end.
 //! - **device backends**: `Host` is the default and reports every kind on the host; a
 //!   backend not compiled in gives `BackendNotCompiled`, also when only rank 0 asks for
 //!   it (the others return `OtherRank`: the check rides on step 1's agreement); with the
@@ -167,12 +171,21 @@
 //!   tiles of up to 4 points) within 1e-12 of the host's too; M2M, L2L and M2L with a
 //!   scratch budget of one column per chunk (as many chunks as pairs) and with the hand-written
 //!   GEMM bit for bit the default; `synchronous_stages` adds seven syncs (after the
-//!   charge upload and each stage) and changes no bit. On several ranks a device build
-//!   returns `DeviceNeedsOneRank` on every rank after the redistribution (until Phase 5
-//!   T8): the CPU runtime with `threads(4)` here, and through `device_common` every
-//!   scenario's device repeat, among them the octree's own partition (each rank passing
-//!   its share of the level-1 octants of a uniform level-3 tree), on which the host path
-//!   builds and evaluates.
+//!   charge upload and each stage) and changes no bit. On several ranks (Phase 5 T8) all
+//!   of it runs too, every rank with its place on the node in the report, and the units
+//!   per cube capped at min(4, the node's cores over its ranks); through `device_common`
+//!   so does the device repeat of the octree's own partition (each rank passing its share
+//!   of the level-1 octants of a uniform level-3 tree).
+//! - **device errors and tuning on several ranks** (Phase 5 T8, decision 12; design §7.5,
+//!   §7.6; the CPU runtime): a device error injected on one rank at the mid-evaluation
+//!   sync (`Fmm::inject_device_error`, on the lowest rank that sends multipoles) gives
+//!   `FmmError::Device` there and `FmmError::OtherRank` on every other rank, in that
+//!   evaluation and the next, without a hang, and a new build evaluates bit for bit as
+//!   before; with a tuning cache (f64, p = 6, `Auto`), rank 0 tunes (or, where its largest
+//!   V level has fewer than 512 pairs, takes the static rule in both builds), the other
+//!   ranks follow (`RankPlacement::follows_rank0`, no cache of their own), every rank
+//!   resolves the same strategy, and a second build from the cache gives the same bits on
+//!   every rank; the verdict is agreed on every rank.
 //!
 //! Per-kind timings (Phase 4S T5, C4S.5; `tests/kind_common`). Error measures: exact
 //! equality of the bit patterns and of the call counts.
@@ -292,8 +305,6 @@ struct DeviceRuns {
     backend: Backend,
     f32_runs: usize,
     f64_runs: usize,
-    /// Builds refused with `DeviceNeedsOneRank` on several ranks.
-    refused: usize,
     /// The largest relative L2 differences of the default placement from the host path,
     /// [φ, ∇φ, multipoles, locals, the root's multipole], in f32 and in f64.
     worst: [[f64; 5]; 2],
@@ -315,26 +326,26 @@ fn device_backends() -> Vec<Backend> {
 }
 
 /// The device runs of one backend for [`backends_line`]: the backend, f32 and f64 runs,
-/// refused builds, and the largest differences of the default placement in f32 and f64
-/// ([φ, ∇φ, multipoles, locals, root]).
-type Runs = (Backend, usize, usize, usize, [[f64; 5]; 2]);
+/// and the largest differences of the default placement in f32 and f64 ([φ, ∇φ,
+/// multipoles, locals, root]).
+type Runs = (Backend, usize, usize, [[f64; 5]; 2]);
 
-/// "backends run: …; not run: …" for this test.
-fn backends_line() -> String {
+/// "backends run on P rank(s): …; not run: …" for this test.
+fn backends_line(ranks: i32) -> String {
     #[cfg(feature = "gpu")]
     let runs: Vec<Runs> = DEVICE_RUNS
         .lock()
         .unwrap()
         .iter()
-        .map(|r| (r.backend, r.f32_runs, r.f64_runs, r.refused, r.worst))
+        .map(|r| (r.backend, r.f32_runs, r.f64_runs, r.worst))
         .collect();
     #[cfg(not(feature = "gpu"))]
     let runs: Vec<Runs> = Vec::new();
     let mut ran = vec!["host (every scenario)".to_owned()];
     ran.extend(
         runs.iter()
-            .filter(|(_, f32_runs, f64_runs, ..)| f32_runs + f64_runs > 0)
-            .map(|(backend, f32_runs, f64_runs, _, worst)| {
+            .filter(|(_, f32_runs, f64_runs, _)| f32_runs + f64_runs > 0)
+            .map(|(backend, f32_runs, f64_runs, worst)| {
                 format!(
                     "{backend} ({f32_runs} f32 and {f64_runs} f64 scenarios: on the host \
                      fallback bit for bit; with every kind on the device (M2L by rotation \
@@ -354,13 +365,6 @@ fn backends_line() -> String {
                 )
             }),
     );
-    let refused: Vec<String> = runs
-        .iter()
-        .filter(|(_, f32_runs, f64_runs, refused, _)| f32_runs + f64_runs == 0 && *refused > 0)
-        .map(|(backend, _, _, refused, _)| {
-            format!("{backend} (DeviceNeedsOneRank on every rank, {refused} scenario(s))")
-        })
-        .collect();
     let not_run: Vec<String> = Backend::ALL
         .into_iter()
         .filter(|b| b.is_device() && !runs.iter().any(|(r, ..)| r == b))
@@ -370,10 +374,9 @@ fn backends_line() -> String {
             (Backend::Cuda, true) => format!("{b} (ignored test tests/device_cuda.rs)"),
             _ => format!("{b} (not run)"),
         })
-        .chain(refused)
         .collect();
     format!(
-        "backends run: {}; not run: {}",
+        "backends run on {ranks} rank(s): {}; not run: {}",
         ran.join(", "),
         not_run.join(", ")
     )
@@ -399,7 +402,7 @@ fn distributed_scenarios() {
         "the threaded scenarios need MPI at Funneled, it provides {provided:?}"
     );
     let comm = universe.world();
-    let cases: [(&str, Scenario); 23] = [
+    let cases: [(&str, Scenario); 24] = [
         ("table order against the plan", table_order),
         ("batched against per-pair", batched_against_per_pair),
         ("uniform cube, every strategy", uniform_cube_strategies),
@@ -423,6 +426,7 @@ fn distributed_scenarios() {
         ("sources-only next to targets-only leaves", one_sided_leaves),
         ("points on box faces and domain corners", faces_and_corners),
         ("device backends", device_backends_scenario),
+        ("device errors and tuning on several ranks", device_ranks),
         ("input distributions", input_distributions),
         ("tiny problem", tiny_problem),
         ("host-data hook", host_data_hook),
@@ -438,7 +442,7 @@ fn distributed_scenarios() {
             start.elapsed().as_secs_f64()
         );
     }
-    eprintln!("rank {}: {}", comm.rank(), backends_line());
+    eprintln!("rank {}: {}", comm.rank(), backends_line(comm.size()));
     eprintln!("rank {}: {}", comm.rank(), kind_common::summary());
     eprintln!(
         "rank {}: output pass (Phase 4S T9): {} host evaluations at one and four threads bit \
@@ -1110,7 +1114,7 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
         .expect("Off is always accepted");
     #[cfg(feature = "gpu")]
     for backend in device_backends() {
-        let (outcome, difference) = device_common::check_backend(
+        let difference = device_common::check_backend(
             &builder,
             (sources, targets),
             charges,
@@ -1127,7 +1131,6 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
                     backend,
                     f32_runs: 0,
                     f64_runs: 0,
-                    refused: 0,
                     worst: [[0.0; 5]; 2],
                 });
                 runs.last_mut().unwrap()
@@ -1144,10 +1147,10 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
         ]) {
             *w = w.max(d);
         }
-        match outcome {
-            device_common::Outcome::Ran if precision == 0 => entry.f32_runs += 1,
-            device_common::Outcome::Ran => entry.f64_runs += 1,
-            device_common::Outcome::OneRankOnly => entry.refused += 1,
+        if precision == 0 {
+            entry.f32_runs += 1;
+        } else {
+            entry.f64_runs += 1;
         }
     }
     assert!(
@@ -3068,17 +3071,28 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
         }
     }
 
-    // The threads rule with the CPU runtime: no rayon pool, the units capped at n.
+    // The threads rule with the CPU runtime: no rayon pool, the units capped at n, and on
+    // several ranks at the node's cores over its ranks (Phase 5 T8, design §7.4).
     #[cfg(feature = "cpu")]
     {
         let charges = random_charges(&mut rng, points.len());
         let builder = FmmBuilder::<f64>::new(3).backend(Backend::Cpu).threads(4);
         match builder.build(&points, &points, comm) {
-            Ok(mut fmm) if comm.size() == 1 => {
+            Ok(mut fmm) => {
                 assert_eq!(fmm.threading().threads, 1, "{}", fmm.threading());
                 assert_eq!(fmm.operator().threads(), 1);
                 let report = fmm.device_report().expect("a device backend");
-                assert_eq!(report.cpu_units, Some(4), "{report}");
+                let placement = report.ranks;
+                assert_eq!(
+                    (placement.rank, placement.ranks, placement.threads),
+                    (rank as usize, comm.size() as usize, 4),
+                    "{report}"
+                );
+                assert!(placement.local_rank < placement.local_ranks);
+                assert!(placement.local_ranks <= placement.ranks);
+                let cores = std::thread::available_parallelism().map_or(1, usize::from);
+                let units = 4.min((cores / placement.local_ranks).max(1));
+                assert_eq!(report.cpu_units, Some(units as u32), "{report}");
                 let report = report.to_string().replace('\n', "; ");
                 let output = fmm
                     .evaluate(&charges)
@@ -3087,7 +3101,7 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
                     FmmBuilder::<f64>::new(3).build(&points, &points, comm),
                     comm,
                 )
-                .expect("one rank");
+                .expect("the host FMM builds");
                 // P2P and the leaf operators on the device (T6, T7): within the FMM bound
                 // of the host output, and the units cap changes no bit (each unit owns
                 // whole boxes and target leaves).
@@ -3102,7 +3116,7 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
                     .clone()
                     .threads(1)
                     .build(&points, &points, comm)
-                    .expect("one rank");
+                    .expect("the FMM builds");
                 assert_eq!(
                     output_bits(&one_unit.evaluate(&charges).unwrap()),
                     want,
@@ -3119,7 +3133,7 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
                     .clone()
                     .device_leaf_layout(nd_fmm_exec::fmm::DeviceLeafLayout::Cube { units, tile })
                     .build(&points, &points, comm)
-                    .expect("one rank");
+                    .expect("the FMM builds");
                 assert_eq!(
                     cube.device_report().unwrap().leaf_layout.to_string(),
                     format!("cube ({units} units, tile {tile})")
@@ -3138,7 +3152,7 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
                     .clone()
                     .device_scratch_budget(1)
                     .build(&points, &points, comm)
-                    .expect("one rank");
+                    .expect("the FMM builds");
                 let translations = &chunked.device_report().unwrap().translations;
                 assert!(!translations.is_empty());
                 assert!(
@@ -3155,7 +3169,7 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
                     .clone()
                     .device_gemm(nd_fmm_exec::fmm::DeviceGemm::HandWritten)
                     .build(&points, &points, comm)
-                    .expect("one rank");
+                    .expect("the FMM builds");
                 assert_eq!(
                     output_bits(&hand.evaluate(&charges).unwrap()),
                     want,
@@ -3170,7 +3184,7 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
                         .clone()
                         .host_fallback([kind])
                         .build(&points, &points, comm)
-                        .expect("one rank");
+                        .expect("the FMM builds");
                     let output = partial.evaluate(&charges).unwrap();
                     let (potential, _) = device_common::relative_l2(&output, &host_output);
                     assert!(
@@ -3190,7 +3204,7 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
                     .clone()
                     .synchronous_stages(true)
                     .build(&points, &points, comm)
-                    .expect("one rank");
+                    .expect("the FMM builds");
                 let output = synchronous.evaluate(&charges).unwrap();
                 assert_eq!(output_bits(&output), want, "synchronous stages");
                 let counters = synchronous.device_counters().unwrap().evaluation;
@@ -3202,28 +3216,15 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
                     counters.syncs
                 );
             }
-            // On several ranks, after the redistribution (step 5), on every rank.
-            Err(FmmError::InvalidSettings(SettingsError::DeviceNeedsOneRank { ranks }))
-                if comm.size() > 1 =>
-            {
-                assert_eq!(ranks, comm.size() as usize);
-                eprintln!(
-                    "rank {rank}: the CPU runtime on {ranks} ranks: DeviceNeedsOneRank, as \
-                     expected until Phase 5 T8"
-                );
-            }
-            Ok(_) => panic!("rank {rank}: a device backend built on several ranks"),
             Err(error) => panic!("rank {rank}: CPU runtime with threads(4): {error}"),
         }
     }
     // The octree's own partition (the input of Phase 4's `device backends`): four points in
     // every level-3 box of the unit cube, each rank passing those of its share of the
     // level-1 octants (2, 4 or 8 ranks; one rank, or a count that does not divide 8, all
-    // of them, so that every rank passes every point). On several ranks the host path
-    // builds (no point moves where the partition falls on octant boundaries) and a device
-    // build returns `DeviceNeedsOneRank` on every rank after step 5, in
-    // `device_common::check_backend` (device-path.md §4.4). On one rank the device path
-    // runs.
+    // of them, so that every rank passes every point). No point moves where the partition
+    // falls on octant boundaries; the device path runs on it on every rank count, in
+    // `device_common::check_backend` (Phase 5 T8).
     let size = comm.size() as usize;
     let owned: Vec<[f64; 3]> = (0..512)
         .filter(|&b: &usize| {
@@ -3259,6 +3260,201 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ")
+    );
+}
+
+/// The device path's errors and tuning on several ranks (Phase 5 T8, decision 12; module
+/// documentation, "device errors and tuning on several ranks"), on the CPU runtime.
+fn device_ranks(comm: &SimpleCommunicator) {
+    #[cfg(feature = "cpu")]
+    {
+        device_errors(comm);
+        device_tuning(comm);
+    }
+    #[cfg(not(feature = "cpu"))]
+    eprintln!(
+        "rank {}: device errors and tuning: skipped, the CPU runtime is not compiled in",
+        comm.rank()
+    );
+}
+
+/// The lowest rank for which `mine` holds, agreed on every rank (`size` if none).
+#[cfg(feature = "cpu")]
+fn lowest_rank_with(mine: bool, comm: &SimpleCommunicator) -> i32 {
+    let mut lowest = 0i32;
+    let candidate = if mine { comm.rank() } else { comm.size() };
+    comm.all_reduce_into(&candidate, &mut lowest, SystemOperation::min());
+    lowest
+}
+
+/// A device error injected on one rank at the mid-evaluation sync (the download of the
+/// sent multipoles; `Fmm::inject_device_error`) is agreed on every rank: that rank returns
+/// `FmmError::Device`, the others `FmmError::OtherRank`, from that evaluation on, and no
+/// rank blocks (the external timeout of the run).
+#[cfg(feature = "cpu")]
+fn device_errors(comm: &SimpleCommunicator) {
+    let (rank, size) = (comm.rank(), comm.size());
+    let mut rng = SplitMix64(0x7808);
+    let points = share(&unit_cube_points(&mut rng, 1200), comm);
+    let charges = random_charges(&mut rng, points.len());
+    let mut fmm = FmmBuilder::<f64>::new(4)
+        .gradients(true)
+        .backend(Backend::Cpu)
+        .build(&points, &points, comm)
+        .unwrap_or_else(|error| panic!("rank {rank}: the CPU-runtime FMM does not build: {error}"));
+    let first = fmm.evaluate(&charges).expect("the device FMM evaluates");
+    // The failing rank: the lowest that sends multipoles, so that its injection lands on a
+    // real mid-evaluation sync (on one rank, rank 0 without one).
+    let sizes = fmm.exchange_sizes();
+    let sends = sizes.sent_blocks + sizes.sent_boxes.iter().sum::<usize>() > 0;
+    let failing = if size == 1 {
+        0
+    } else {
+        lowest_rank_with(sends, comm)
+    };
+    assert!(
+        failing < size,
+        "a rank that sends multipoles on {size} ranks"
+    );
+    // Every check is a defect agreed on every rank, so that a failure stops every rank.
+    let mut defects = Vec::new();
+    let syncs = fmm.device_counters().unwrap().evaluation.syncs;
+    if syncs != 1 + u64::from(sends) {
+        defects.push(format!("{syncs} syncs in an evaluation"));
+    }
+    if rank == failing {
+        fmm.inject_device_error();
+    }
+    for round in ["the evaluation with the error", "the next evaluation"] {
+        match (rank == failing, fmm.evaluate(&charges)) {
+            (true, Err(FmmError::Device(reason)))
+                if round != "the evaluation with the error" || reason.contains("injected") => {}
+            (false, Err(FmmError::OtherRank)) => {}
+            (_, other) => defects.push(format!(
+                "{round} (failing rank {failing}): {:?}",
+                other.map(|o| o.potential.len())
+            )),
+        }
+    }
+    // A new build evaluates again, bit for bit the first output.
+    let mut again = FmmBuilder::<f64>::new(4)
+        .gradients(true)
+        .backend(Backend::Cpu)
+        .build(&points, &points, comm)
+        .expect("the CPU-runtime FMM builds");
+    let output = again.evaluate(&charges).expect("the device FMM evaluates");
+    if output_bits(&output) != output_bits(&first) {
+        defects.push("a new build after the error differs".into());
+    }
+    let mut failed = 0usize;
+    comm.all_reduce_into(&defects.len(), &mut failed, SystemOperation::sum());
+    assert!(
+        failed == 0,
+        "rank {rank}: device errors: {failed} defects on all ranks, here: {defects:?}"
+    );
+    eprintln!(
+        "rank {rank}: device errors: injected on rank {failing} of {size} at the \
+         mid-evaluation sync ({}): Device there{}, twice, without a hang",
+        if sends {
+            "the download of the sent multipoles"
+        } else {
+            "one rank: no download"
+        },
+        if size > 1 {
+            ", OtherRank elsewhere"
+        } else {
+            ""
+        }
+    );
+}
+
+/// Tuning on several ranks (docs/design/distributed-fmm.md §7.6): with a tuning cache,
+/// rank 0 tunes and stores, and broadcasts its M2L strategy; the other ranks take it,
+/// with the static rule for the rest, and read and write no cache. Every rank resolves
+/// the same strategy, and a second build from the same cache gives the same bits on
+/// every rank.
+#[cfg(feature = "cpu")]
+fn device_tuning(comm: &SimpleCommunicator) {
+    use nd_fmm_exec::tune::{CacheState, Decision, Source};
+    let (rank, size) = (comm.rank(), comm.size());
+    let dir = std::path::PathBuf::from(concat!(env!("CARGO_TARGET_TMPDIR"), "/mpi_exec_tuning"))
+        .join(format!("ranks{size}"));
+    // Only rank 0 touches the directory, so it may start afresh.
+    if rank == 0 {
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the tuning directory");
+    }
+    comm.barrier();
+    let mut rng = SplitMix64(0x7806);
+    let points = share(&unit_cube_points(&mut rng, 2000), comm);
+    let charges = random_charges(&mut rng, points.len());
+    let builder = FmmBuilder::<f64>::new(6)
+        .backend(Backend::Cpu)
+        .tuning_cache(&dir)
+        .tuning_budget(std::time::Duration::from_secs(5));
+    // Every check is a defect agreed on every rank, so that a failure stops every rank.
+    let mut defects = Vec::new();
+    let mut bits = Vec::new();
+    let mut strategies = Vec::new();
+    let mut sources = Vec::new();
+    for build in ["first", "second"] {
+        let mut fmm = builder
+            .build(&points, &points, comm)
+            .unwrap_or_else(|error| panic!("rank {rank}, {build}: {error}"));
+        let report = fmm.device_report().expect("a device backend");
+        let follower = size > 1 && rank != 0;
+        if report.ranks.follows_rank0 != follower {
+            defects.push(format!("{build} build: follows rank 0: {report}"));
+        }
+        let tuning = report.tuning.as_ref().expect("the tuning report");
+        if follower && tuning.cache != CacheState::NoDirectory {
+            defects.push(format!("{build} build: a follower read a cache: {tuning}"));
+        }
+        sources.push(tuning.decision(Decision::Strategy).map(|d| d.source));
+        strategies.push(fmm.strategy());
+        bits.push(output_bits(
+            &fmm.evaluate(&charges).expect("the device FMM evaluates"),
+        ));
+    }
+    // Rank 0 tunes the strategy and the second build reads it from the cache, unless its
+    // largest V level is too small to tune (fewer than 512 pairs, as at 8 ranks here):
+    // then both builds take the static rule.
+    let tuned = sources[0] == Some(Source::Tuned);
+    if rank == 0
+        && sources[..] != [Some(Source::Tuned), Some(Source::Cached)]
+        && sources[..] != [Some(Source::Static), Some(Source::Static)]
+    {
+        defects.push(format!("rank 0's strategy decisions: {sources:?}"));
+    }
+    let code = |s: M2lStrategy| s as i32;
+    let (mut lo, mut hi) = (0i32, 0i32);
+    comm.all_reduce_into(&code(strategies[0]), &mut lo, SystemOperation::min());
+    comm.all_reduce_into(&code(strategies[0]), &mut hi, SystemOperation::max());
+    if lo != hi {
+        defects.push("the ranks resolve different strategies".into());
+    }
+    if strategies[0] != strategies[1] {
+        defects.push("the second build's strategy differs".into());
+    }
+    if bits[0] != bits[1] {
+        defects.push("two builds from one tuning cache differ".into());
+    }
+    let mut failed = 0usize;
+    comm.all_reduce_into(&defects.len(), &mut failed, SystemOperation::sum());
+    assert!(
+        failed == 0,
+        "rank {rank}: device tuning: {failed} defects on all ranks, here: {defects:?}"
+    );
+    eprintln!(
+        "rank {rank}: device tuning on {size} rank(s): {:?} on every rank ({}); the second \
+         build bit for bit the first",
+        strategies[0],
+        match (size == 1, rank == 0, tuned) {
+            (true, _, true) => "tuned here, then cached",
+            (false, true, true) => "tuned here and broadcast, then cached",
+            (_, true, false) => "the static rule here: too few V pairs to tune",
+            _ => "rank 0's, the static rule for the rest",
+        }
     );
 }
 

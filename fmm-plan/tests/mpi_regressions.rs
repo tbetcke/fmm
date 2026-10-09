@@ -1233,6 +1233,39 @@ fn check_batches<C: CommunicatorCollectives>(
     if recorder.calls != expected_calls(plan.nlevels()) {
         defects.push("the order of the calls and events".into());
     }
+    // The evaluator's exchanges, read through its accessors (Phase 5 T8), name the lists
+    // its events carried.
+    let as_usize = |values: &[u32]| values.iter().map(|&v| v as usize).collect::<Vec<_>>();
+    let sources = evaluator.source_exchange();
+    let multipoles = evaluator.multipole_exchange();
+    let coarse = evaluator.coarse_exchange();
+    let mut sends = vec![coarse.sent_blocks().collect::<Vec<usize>>()];
+    sends.extend((0..plan.nlevels()).map(|l| as_usize(multipoles.send_boxes(l))));
+    let mut accessed = vec![
+        ("reset", 0, Vec::new()),
+        ("send sources", 0, vec![as_usize(sources.send_leaves())]),
+        (
+            "received sources",
+            0,
+            vec![sources.ghost_leaves().collect()],
+        ),
+        ("send multipoles", 0, sends),
+        (
+            "received coarse",
+            0,
+            vec![coarse.received_blocks().collect()],
+        ),
+    ];
+    accessed.extend((0..plan.nlevels()).map(|l| {
+        (
+            "received multipoles",
+            l,
+            vec![as_usize(multipoles.receive_boxes(l))],
+        )
+    }));
+    if accessed != recorder.events || sources.leaf_counts()[..nlocal] != counts[..] {
+        defects.push("the exchanges' accessors and the events' lists differ".into());
+    }
     let mut per_rank = [0usize; 2];
     comm.all_reduce_into(
         &recorder.events.len(),
