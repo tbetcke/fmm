@@ -64,8 +64,10 @@ docs/design/distributed-fmm.md).
     `tests/multi_rank.rs` (the ignored C5.1 host gate, Phase 5 T6) at `Funneled`.
     The device checks shared by `tests/mpi_exec.rs`, `tests/device_metal.rs` and
     `tests/device_cuda.rs` live in `tests/device_common/`, the tuner's in
-    `tests/tune_common/`, the per-kind timings' (Phase 4S T5) in `tests/kind_common/`
-    (also used by `tests/accuracy.rs`), with the call-window measurement of the Metal and
+    `tests/tune_common/`, the shadow operator of the host-data hook (Phase 5 T7) in
+    `tests/shadow/` (used by `tests/mpi_exec.rs`), the per-kind timings' (Phase 4S T5)
+    in `tests/kind_common/` (also used by `tests/accuracy.rs`), with the call-window
+    measurement of the Metal and
     CUDA executables in `tests/kind_common/windows.rs`, and the whole-output check of the
     C3.2 tree (Phase 4S T9) in `tests/output_common/` (used by `tests/accuracy.rs` and
     `tests/device_fmm.rs`).
@@ -105,6 +107,15 @@ docs/design/distributed-fmm.md).
     overflows MPI's counts. On P ranks the host output is bit for bit the one-rank `Fmm`
     over the union of the points in rank order; keep it so (the `fmm` module docs,
     "Several ranks").
+  - The host-data hook (Phase 5 T7; `nd_fmm_plan::operator::HostData`, design §6): the
+    evaluator tells the operator of `reset` and of every exchange's reads and writes.
+    `LaplaceOperator` and `ExecOperator` keep the default (nothing), so the host path is
+    unchanged bit for bit. `tests/mpi_exec.rs` checks the coverage with a shadow operator
+    (`tests/shadow/`) that keeps its own stores and learns of host data only through the
+    events: bit for bit the `Fmm` on every scenario (once per tree, precision and output
+    kind) on every rank count, and different with the hook disabled on several ranks
+    (**host-data hook**). Keep it so when the evaluator, the exchanges or `Fmm`'s stages
+    change; the device operator uses the events from T8.
   - `examples/basic_evaluation.rs` is the user-facing example of calling `Fmm`
     (registered with `templated-examples`, so the weekly job runs it at 3 ranks): it
     must run on any number of ranks, each passing its own points, and keep to the

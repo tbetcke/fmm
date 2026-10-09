@@ -9,8 +9,8 @@ use nd_fmm_plan::{
     interaction_manager::V_LIST_DIRECTIONS,
     lists::{GroupedCsr, offset_index},
     operator::{
-        FmmOperator, FmmSizes, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PairOperator, PerPair,
-        UpwardPass,
+        FmmOperator, FmmSizes, HostData, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PairOperator,
+        PerPair, UpwardPass,
     },
     plan::Plan,
     redistribute::{Redistribution, RedistributionError},
@@ -556,6 +556,13 @@ fn check_coarse_gather<C: CommunicatorCollectives>(
         &gather.keys()[gather.rank_blocks(rank)],
         plan.coarse_blocks()
     );
+    // What the gather reads (none on one rank, where it gathers to itself) and writes.
+    let own = gather.rank_blocks(rank);
+    let sent = if comm.size() == 1 { 0..0 } else { own.clone() };
+    assert_eq!(gather.sent_blocks(), sent, "{name}: sent blocks");
+    let received: Vec<usize> = gather.received_blocks().collect();
+    let others: Vec<usize> = (0..all_blocks.len()).filter(|b| !own.contains(b)).collect();
+    assert_eq!(received, others, "{name}: received blocks");
 
     let mut multipoles = LevelBuffers::<u64>::from_index(index, sizes);
     for &key in plan.coarse_blocks() {
@@ -765,17 +772,30 @@ fn check_repeated_evaluation<C: CommunicatorCollectives>(name: &str, comm: &C, p
     );
 }
 
-/// One level call: (method, level, pass of an M2M).
+/// One level call: (method, level, pass of an M2M), or one host-data event: (event,
+/// level of a `ReceivedMultipoles`, else 0, `None`).
 type Call = (&'static str, usize, Option<UpwardPass>);
+
+/// The index lists of one host-data event as the recorder saw them: (event, level, the
+/// lists). `SendSources`: the leaves; `ReceivedSources`: the ghost leaves;
+/// `SendMultipoles`: the sent coarse blocks, then the sent boxes of every level;
+/// `ReceivedCoarse`: the received blocks; `ReceivedMultipoles`: the received boxes.
+type EventLists = (&'static str, usize, Vec<Vec<usize>>);
 
 /// A test operator that computes nothing. It checks every batch it receives (the
 /// groupings of design §4.4, both views, buffer shapes) and records every call and every
-/// pair, by key.
+/// pair, by key, and every host-data event with its index lists
+/// (`docs/design/distributed-fmm.md` §6).
 struct Recorder<'p> {
     plan: &'p Plan,
     calls: Vec<Call>,
     /// (method, target key, source key) of every pair issued.
     pairs: Vec<(&'static str, u64, u64)>,
+    /// The index lists of every host-data event, in order.
+    events: Vec<EventLists>,
+    /// The events whose stores or buffers had the wrong shape, or whose packed values or
+    /// sent blocks were not as documented.
+    shape_errors: Vec<&'static str>,
 }
 
 impl Recorder<'_> {
@@ -943,20 +963,110 @@ impl FmmOperator for Recorder<'_> {
         }
         self.calls.push(("p2p", b.level, None));
     }
+
+    fn host_data(&mut self, event: HostData<'_, u32>) {
+        let nleaves = self.plan.index().leaves().len();
+        let index = self.plan.index();
+        let (name, level, lists, shaped) = match event {
+            HostData::Reset => ("reset", 0, Vec::new(), true),
+            HostData::SendSources { leaves, sources } => (
+                "send sources",
+                0,
+                vec![leaves.iter().map(|&j| j as usize).collect()],
+                sources.nleaves() == nleaves,
+            ),
+            HostData::ReceivedSources { leaves, sources } => (
+                "received sources",
+                0,
+                vec![leaves.collect()],
+                sources.nleaves() == nleaves,
+            ),
+            HostData::SendMultipoles {
+                coarse,
+                exchange,
+                multipoles,
+            } => {
+                let mut lists = vec![coarse.sent_blocks().collect::<Vec<_>>()];
+                lists.extend(
+                    (0..exchange.nlevels())
+                        .map(|l| exchange.send_boxes(l).iter().map(|&i| i as usize).collect()),
+                );
+                // The sent blocks are final after the local upward pass: local leaves or
+                // local interior boxes, never `Global`.
+                let shaped = multipoles.nlevels() == index.nlevels()
+                    && (0..index.nlevels()).all(|l| multipoles.len(l) == index.len(l))
+                    && coarse.sent_blocks().all(|b| {
+                        let (l, i) = coarse.block(b);
+                        matches!(
+                            index.kind(l, i as usize),
+                            KeyType::LocalLeaf | KeyType::LocalInterior
+                        )
+                    });
+                ("send multipoles", 0, lists, shaped)
+            }
+            HostData::ReceivedCoarse { coarse, multipoles } => {
+                // The packed values are the slots' values.
+                let shaped = coarse.received_blocks().all(|b| {
+                    let (l, i) = coarse.block(b);
+                    coarse.chunk(b) == multipoles.chunk(l, i as usize)
+                });
+                (
+                    "received coarse",
+                    0,
+                    vec![coarse.received_blocks().collect()],
+                    shaped,
+                )
+            }
+            HostData::ReceivedMultipoles {
+                level,
+                exchange,
+                multipoles,
+            } => {
+                let boxes = exchange.receive_boxes(level);
+                let size = exchange.size(level);
+                let buffer = exchange.receive_buffer(level);
+                let shaped = buffer.len() == boxes.len() * size
+                    && boxes
+                        .iter()
+                        .zip(buffer.chunks_exact(size))
+                        .all(|(&i, chunk)| multipoles.chunk(level, i as usize) == chunk);
+                (
+                    "received multipoles",
+                    level,
+                    vec![boxes.iter().map(|&i| i as usize).collect()],
+                    shaped,
+                )
+            }
+        };
+        if !shaped {
+            self.shape_errors.push(name);
+        }
+        self.calls.push((name, level, None));
+        self.events.push((name, level, lists));
+    }
 }
 
-/// The level calls of one evaluation, in the order of design §7.2.
+/// The level calls and host-data events of one evaluation, in the order of design §7.2
+/// and of `docs/design/distributed-fmm.md` §6.2.
 fn expected_calls(nlevels: usize) -> Vec<Call> {
     let deepest = nlevels - 1;
-    let mut calls = Vec::new();
+    let mut calls = vec![
+        ("reset", 0, None),
+        ("send sources", 0, None),
+        ("received sources", 0, None),
+    ];
     for level in (0..=deepest).rev() {
         calls.push(("p2m", level, None));
         if level > 0 {
             calls.push(("m2m", level - 1, Some(UpwardPass::Local)));
         }
     }
+    calls.extend([("send multipoles", 0, None), ("received coarse", 0, None)]);
     for level in (0..deepest).rev() {
         calls.push(("m2m", level, Some(UpwardPass::Global)));
+    }
+    for level in 0..=deepest {
+        calls.push(("received multipoles", level, None));
     }
     for level in 1..=deepest {
         calls.extend([
@@ -983,9 +1093,117 @@ fn pairs_of(method: &'static str, target: u64, sources: &[u64]) -> Vec<(&'static
         .collect()
 }
 
+/// The index lists the host-data events of one evaluation must carry, in order (see
+/// [`EventLists`]), from exchanges built independently of the evaluator's, with the
+/// recorder's sizes and `counts`. Collective.
+fn expected_events<C: CommunicatorCollectives>(
+    name: &str,
+    comm: &C,
+    plan: &Plan,
+    counts: &[usize],
+) -> Vec<EventLists> {
+    let nlevels = plan.nlevels();
+    let sizes = vec![1; nlevels];
+    let sources = SourceExchange::<u32>::new(plan, comm, counts, 1)
+        .unwrap_or_else(|error| panic!("{name}: source exchange: {error}"));
+    let multipoles = MultipoleExchange::<u32>::new(plan, comm, &sizes)
+        .unwrap_or_else(|error| panic!("{name}: multipole exchange: {error}"));
+    let coarse = CoarseExchange::<u32>::new(plan, comm, &sizes)
+        .unwrap_or_else(|error| panic!("{name}: coarse gather: {error}"));
+    let rank = comm.rank() as usize;
+    let own = coarse.rank_blocks(rank);
+    let as_usize = |values: &[u32]| values.iter().map(|&v| v as usize).collect::<Vec<_>>();
+    // One rank gathers to itself: no block is sent or received.
+    let sent: Vec<usize> = if comm.size() == 1 {
+        Vec::new()
+    } else {
+        own.clone().collect()
+    };
+    let received: Vec<usize> = (0..coarse.keys().len())
+        .filter(|b| !own.contains(b))
+        .collect();
+    let mut sends = vec![sent];
+    sends.extend((0..nlevels).map(|l| as_usize(multipoles.send_boxes(l))));
+    let mut events = vec![
+        ("reset", 0, Vec::new()),
+        ("send sources", 0, vec![as_usize(sources.send_leaves())]),
+        (
+            "received sources",
+            0,
+            vec![sources.ghost_leaves().collect()],
+        ),
+        ("send multipoles", 0, sends),
+        ("received coarse", 0, vec![received]),
+    ];
+    events.extend((0..nlevels).map(|l| {
+        (
+            "received multipoles",
+            l,
+            vec![as_usize(multipoles.receive_boxes(l))],
+        )
+    }));
+    events
+}
+
+/// Check the recorded host-data events of `recorder` against `expected`, and the kinds of
+/// what they name: the sent blocks are this rank's coarse blocks, every box sent is a local
+/// leaf or local interior box (final after the local upward pass), every slot written is
+/// a ghost. Returns the defects found, so that the verdict can be agreed on every rank.
+fn event_defects(recorder: &Recorder<'_>, expected: &[EventLists]) -> Vec<String> {
+    let index = recorder.plan.index();
+    let mut defects: Vec<String> = recorder
+        .shape_errors
+        .iter()
+        .map(|event| format!("{event}: a store, a buffer or a sent block"))
+        .collect();
+    if recorder.events.len() != expected.len() {
+        defects.push(format!(
+            "{} events, expected {}",
+            recorder.events.len(),
+            expected.len()
+        ));
+    }
+    for (got, want) in recorder.events.iter().zip(expected) {
+        if got != want {
+            defects.push(format!("{} (level {}): index lists differ", want.0, want.1));
+        }
+    }
+    let local = |l: usize, i: usize| {
+        matches!(
+            index.kind(l, i),
+            KeyType::LocalLeaf | KeyType::LocalInterior
+        )
+    };
+    for (event, level, lists) in &recorder.events {
+        match *event {
+            "send sources" if lists[0].iter().any(|&j| j >= index.leaves().nlocal()) => {
+                defects.push("send sources: a leaf that is not local".into());
+            }
+            "send multipoles" => {
+                for (l, boxes) in lists[1..].iter().enumerate() {
+                    if boxes.iter().any(|&i| !local(l, i)) {
+                        defects.push(format!("send multipoles: a box on level {l} not local"));
+                    }
+                }
+            }
+            "received multipoles"
+                if lists[0].iter().any(|&i| !index.kind(*level, i).is_ghost()) =>
+            {
+                defects.push(format!(
+                    "received multipoles: a box on level {level} not a ghost"
+                ));
+            }
+            _ => {}
+        }
+    }
+    defects
+}
+
 /// Evaluate with a recording operator: every level gets every call once, in pass order;
 /// every batch honours its grouping; and the pairs issued are exactly the pairs of the
-/// oracle lists, each once.
+/// oracle lists, each once. The host-data events (`docs/design/distributed-fmm.md` §6)
+/// come in their place among the level calls, on every rank, with the index lists of the
+/// exchanges; their verdict is agreed on every rank.
 fn check_batches<C: CommunicatorCollectives>(
     name: &str,
     octree: &Octree<'_, C>,
@@ -996,15 +1214,49 @@ fn check_batches<C: CommunicatorCollectives>(
     let counts: Vec<usize> = (0..nlocal)
         .map(|j| hashed_count(plan.index().leaf_key(j)))
         .collect();
+    let comm = octree.comm();
+    let expected_events = expected_events(name, comm, plan, &counts);
     let recorder = Recorder {
         plan,
         calls: Vec::new(),
         pairs: Vec::new(),
+        events: Vec::new(),
+        shape_errors: Vec::new(),
     };
-    let mut evaluator = Evaluator::new(plan, octree.comm(), recorder, &counts, &counts)
+    let mut evaluator = Evaluator::new(plan, comm, recorder, &counts, &counts)
         .unwrap_or_else(|error| panic!("{name}: evaluator: {error}"));
     evaluator.evaluate();
     let recorder = evaluator.operator();
+
+    // The events, agreed: every rank receives each of them, in order, with its lists.
+    let mut defects = event_defects(recorder, &expected_events);
+    if recorder.calls != expected_calls(plan.nlevels()) {
+        defects.push("the order of the calls and events".into());
+    }
+    let mut per_rank = [0usize; 2];
+    comm.all_reduce_into(
+        &recorder.events.len(),
+        &mut per_rank[0],
+        SystemOperation::min(),
+    );
+    comm.all_reduce_into(
+        &recorder.events.len(),
+        &mut per_rank[1],
+        SystemOperation::max(),
+    );
+    if per_rank != [5 + plan.nlevels(); 2] {
+        defects.push(format!(
+            "events per rank between {} and {}",
+            per_rank[0], per_rank[1]
+        ));
+    }
+    let mut failed = 0usize;
+    comm.all_reduce_into(&defects.len(), &mut failed, SystemOperation::sum());
+    assert!(
+        failed == 0,
+        "rank {}: {name}: {failed} host-data defects on all ranks, here: {defects:?}",
+        comm.rank()
+    );
     assert_eq!(recorder.calls, expected_calls(plan.nlevels()), "{name}");
 
     let mut expected = Vec::new();

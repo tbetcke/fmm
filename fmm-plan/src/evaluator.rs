@@ -23,6 +23,34 @@
 //!
 //! Every call is made on every rank for every level, also when its view is empty.
 //!
+//! # Host data
+//!
+//! Outside the level calls the evaluator reads and writes its stores in these places
+//! only, and tells the operator about each with an event of
+//! [`FmmOperator::host_data`] ([`HostData`], [Host data](super::operator#host-data);
+//! `docs/design/distributed-fmm.md` §6):
+//!
+//! | Stage | Reads | Writes | Events, in order with the movement |
+//! | --- | --- | --- | --- |
+//! | [`new`](Evaluator::new) | — | allocates the five stores zeroed | none |
+//! | [`reset`](Evaluator::reset) | — | every multipole, local and target output (zeroed) | the zeroing; `Reset` |
+//! | 1 [`exchange_sources`](Evaluator::exchange_sources) | the source chunks of `send_leaves` | the ghost tail of the sources (`ghost_leaves`) | `SendSources`; the exchange; `ReceivedSources` |
+//! | 2 [`upward_local`](Evaluator::upward_local) | — | — | none |
+//! | 3 [`upward_global`](Evaluator::upward_global) | the multipoles of this rank's coarse blocks (`sent_blocks`) | the multipoles of the other ranks' blocks (`received_blocks`) | `SendMultipoles` (also for step 4's sends); the gather; `ReceivedCoarse`; then the global `m2m` calls |
+//! | 4 [`exchange_multipoles`](Evaluator::exchange_multipoles) | per level, the multipoles of `send_boxes(l)` | per level, the multipoles of `receive_boxes(l)` | for l = 0 to L: the exchange of level l; `ReceivedMultipoles` of level l |
+//! | 5, 6 | — | — | none |
+//!
+//! So an evaluation fires 5 + `plan.nlevels()` events, on every rank, also when an
+//! exchange moves nothing; on one rank every index list is empty. On one rank the coarse
+//! gather still reads the root's multipole (the one coarse block, before the global M2M
+//! forms it) for a gather to the rank itself, whose value nobody uses, so `sent_blocks`
+//! is empty there. The caller writes the sources and the target input through
+//! [`sources_mut`](Evaluator::sources_mut),
+//! [`local_sources_mut`](Evaluator::local_sources_mut),
+//! [`target_input_mut`](Evaluator::target_input_mut) and
+//! [`local_target_inputs_mut`](Evaluator::local_target_inputs_mut); the level calls
+//! write only their batch's output. Nothing else in the crate reads or writes a store.
+//!
 //! # Global coarse levels
 //!
 //! Every rank gathers the multipoles of every rank's coarse blocks into their slots of
@@ -81,7 +109,7 @@ use std::{borrow::Borrow, error::Error, fmt};
 use mpi::{collective::SystemOperation, traits::CommunicatorCollectives};
 
 use super::exchange::{CoarseExchange, ExchangeError, MultipoleExchange, SourceExchange};
-use super::operator::{FmmOperator, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, UpwardPass};
+use super::operator::{FmmOperator, HostData, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, UpwardPass};
 use super::plan::Plan;
 use super::store::{LeafSliceMut, LeafStore, LevelBuffers, LevelSlice};
 
@@ -575,9 +603,12 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator, P: Borrow<Plan>> Evaluator
 
     /// Zero the multipoles, the locals and the target output. Sources and target input
     /// are kept.
+    ///
+    /// The operator then receives [`HostData::Reset`].
     pub fn reset(&mut self) {
         self.data.reset();
         self.completed = Stage::Reset;
+        self.operator.host_data(HostData::Reset);
     }
 
     /// [`reset`](Self::reset), then run every stage in order.
@@ -596,11 +627,22 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator, P: Borrow<Plan>> Evaluator
 
     /// Step 1: fetch the sources of the ghost leaves of the U- and X-lists.
     ///
+    /// The operator receives [`HostData::SendSources`] before the exchange and
+    /// [`HostData::ReceivedSources`] after it.
+    ///
     /// # Collective operation
     /// One neighbour all-to-all; every rank must call it.
     pub fn exchange_sources(&mut self) {
         self.enter(Stage::ExchangeSources);
+        self.operator.host_data(HostData::SendSources {
+            leaves: self.source_exchange.send_leaves(),
+            sources: &mut self.data.sources,
+        });
         self.source_exchange.forward(&mut self.data.sources);
+        self.operator.host_data(HostData::ReceivedSources {
+            leaves: self.source_exchange.ghost_leaves(),
+            sources: &self.data.sources,
+        });
     }
 
     /// Step 2: P2M on the local leaves and M2M into the `LocalInterior` boxes, deepest
@@ -614,11 +656,24 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator, P: Borrow<Plan>> Evaluator
     /// Step 3: gather every rank's coarse-block multipoles and form the multipoles of
     /// the `Global` boxes, deepest level first.
     ///
+    /// The operator receives [`HostData::SendMultipoles`] before the gather, for every
+    /// multipole the evaluation sends (the coarse blocks and every level's multipole
+    /// exchange), and [`HostData::ReceivedCoarse`] after it.
+    ///
     /// # Collective operation
     /// One all-gather-v; every rank must call it.
     pub fn upward_global(&mut self) {
         self.enter(Stage::UpwardGlobal);
+        self.operator.host_data(HostData::SendMultipoles {
+            coarse: &self.coarse_exchange,
+            exchange: &self.multipole_exchange,
+            multipoles: &mut self.data.multipoles,
+        });
         self.coarse_exchange.gather(&mut self.data.multipoles);
+        self.operator.host_data(HostData::ReceivedCoarse {
+            coarse: &self.coarse_exchange,
+            multipoles: &self.data.multipoles,
+        });
         self.data
             .upward_global(self.plan.borrow(), &mut self.operator);
     }
@@ -626,12 +681,22 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator, P: Borrow<Plan>> Evaluator
     /// Step 4: fetch the multipoles of the ghost boxes of the V- and W-lists, level by
     /// level.
     ///
+    /// The operator receives [`HostData::ReceivedMultipoles`] after the exchange of each
+    /// level.
+    ///
     /// # Collective operation
     /// One neighbour all-to-all per level, in level order; every rank must call it.
     pub fn exchange_multipoles(&mut self) {
         self.enter(Stage::ExchangeMultipoles);
-        self.multipole_exchange
-            .forward_all(&mut self.data.multipoles);
+        for level in 0..self.multipole_exchange.nlevels() {
+            self.multipole_exchange
+                .forward(level, &mut self.data.multipoles);
+            self.operator.host_data(HostData::ReceivedMultipoles {
+                level,
+                exchange: &self.multipole_exchange,
+                multipoles: &self.data.multipoles,
+            });
+        }
     }
 
     /// Step 5: L2L, M2L and P2L, level by level from level 1. Local.

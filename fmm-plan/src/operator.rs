@@ -52,6 +52,54 @@
 //! operators treat such a pair as a no-op. The number of target points of a leaf is
 //! `target_output.count(r)`, or the length of its output chunk divided by
 //! [`target_output_point_size`](FmmSizes::target_output_point_size).
+//!
+//! # Host data
+//!
+//! Outside the level calls the [`Evaluator`](super::evaluator::Evaluator) moves data in
+//! its host stores itself: `reset` zeroes them, and the three exchanges read the values
+//! they send and write the values they receive. It tells the operator about every such
+//! movement with [`FmmOperator::host_data`] and one [`HostData`] event, with the index
+//! lists the movement uses (`docs/design/distributed-fmm.md` §6). An operator that keeps
+//! its own copies of the stores, for example on a device, stays consistent with the
+//! evaluator through these events alone. The default does nothing, so an operator that
+//! works on the evaluator's slices needs none of it.
+//!
+//! The events of one evaluation, in order (L the deepest level):
+//!
+//! | Stage | Events and movements, in order |
+//! | --- | --- |
+//! | `reset` | the zeroing; [`Reset`](HostData::Reset) |
+//! | `exchange_sources` | [`SendSources`](HostData::SendSources); the source exchange; [`ReceivedSources`](HostData::ReceivedSources) |
+//! | `upward_local` | level calls only |
+//! | `upward_global` | [`SendMultipoles`](HostData::SendMultipoles); the coarse gather; [`ReceivedCoarse`](HostData::ReceivedCoarse); the `m2m` calls of the global pass |
+//! | `exchange_multipoles` | for l = 0 to L: the multipole exchange of level l; [`ReceivedMultipoles`](HostData::ReceivedMultipoles) of level l |
+//! | `downward`, `evaluate_leaves` | level calls only |
+//!
+//! That is 5 + nlevels events per evaluation, on every rank and every rank count, also
+//! when a movement moves nothing: on one rank every index list is empty (no ghost leaf,
+//! no ghost box, no block sent or received), so an operator handles one and several ranks
+//! alike.
+//!
+//! The guarantees:
+//! - **Coverage.** The evaluator reads or writes a host store outside the level calls
+//!   only in these movements; everything else that touches a store is the caller's
+//!   (`sources_mut`, `local_sources_mut`, `target_input_mut`,
+//!   `local_target_inputs_mut`).
+//! - **"Send" events** come before the exchange reads the host store, with mutable
+//!   access to it: an operator writes the values to send there. Every value an
+//!   evaluation sends is final when [`SendMultipoles`](HostData::SendMultipoles) fires
+//!   (after the local upward pass): the exchanges send only local leaves and local
+//!   interior boxes, never a `Global` box or a ghost.
+//! - **"Received" events** come after the exchange wrote the received values into the
+//!   host store; the event names the slots, and the exchange's packed receive buffer
+//!   holds the same values.
+//! - No communication is pending when an event fires.
+//!
+//! An operator that keeps its own copies must therefore, besides computing every batch
+//! on its copies: zero its multipoles, locals and target output at `Reset`; write the
+//! values of the listed leaves, blocks and boxes into the host store at the "send"
+//! events; and copy the listed slots from the host store (or the packed buffers) at the
+//! "received" events. The caller's data (points, charges) it learns from the caller.
 
 #[cfg(test)]
 #[path = "operator_tests.rs"]
@@ -62,9 +110,10 @@ use std::ops::Range;
 use mpi::traits::Equivalence;
 use nd_octree::MortonKey;
 
+use super::exchange::{CoarseExchange, MultipoleExchange};
 use super::index::BoxIndex;
 use super::lists::{Children, Csr, Parents, VList};
-use super::store::{LeafSlice, LeafSliceMut, LevelSlice, LevelSliceMut};
+use super::store::{LeafSlice, LeafSliceMut, LeafStore, LevelBuffers, LevelSlice, LevelSliceMut};
 
 /// The data sizes of an FMM, shared by the batched and the per-pair interface.
 ///
@@ -249,6 +298,68 @@ pub struct P2p<'a, T> {
     pub target_output: LeafSliceMut<'a, T>,
 }
 
+/// A data movement of the evaluator outside the level calls, with the index lists it
+/// uses (`docs/design/distributed-fmm.md` §6; [Host data](self#host-data)).
+///
+/// A "send" event comes before the evaluator reads the host store to send; a "received"
+/// event after it wrote the received values into the host store. No communication is
+/// pending when an event fires. Every index list is empty on one rank.
+pub enum HostData<'a, T> {
+    /// `reset` zeroed every multipole, local and target output.
+    Reset,
+    /// The source exchange is about to read the local chunks of `leaves`
+    /// ([`SourceExchange::send_leaves`](super::exchange::SourceExchange::send_leaves),
+    /// local leaf indices in send order; a leaf sent to two ranks appears twice).
+    SendSources {
+        /// The local leaves whose source chunks the exchange sends.
+        leaves: &'a [u32],
+        /// The source store, every leaf of the numbering.
+        sources: &'a mut LeafStore<T>,
+    },
+    /// The source exchange wrote the ghost tail of the source store: the leaves `leaves`
+    /// of the numbering
+    /// ([`SourceExchange::ghost_leaves`](super::exchange::SourceExchange::ghost_leaves)).
+    ReceivedSources {
+        /// The ghost leaves, the tail of the numbering.
+        leaves: Range<usize>,
+        /// The source store, every leaf of the numbering.
+        sources: &'a LeafStore<T>,
+    },
+    /// Every multipole the evaluation sends is final: this rank's coarse blocks
+    /// ([`CoarseExchange::sent_blocks`], empty on one rank; the slot of block b is
+    /// [`CoarseExchange::block`]) and the boxes
+    /// [`MultipoleExchange::send_boxes`] of every level. Once per evaluation, before the
+    /// coarse gather.
+    SendMultipoles {
+        /// The coarse gather, for the blocks it sends.
+        coarse: &'a CoarseExchange<T>,
+        /// The multipole exchange, for the boxes it sends on each level.
+        exchange: &'a MultipoleExchange<T>,
+        /// The multipoles of every box.
+        multipoles: &'a mut LevelBuffers<T>,
+    },
+    /// The coarse gather wrote every other rank's blocks
+    /// ([`CoarseExchange::received_blocks`]) into their slots; the values, packed block
+    /// after block, are [`CoarseExchange::gathered`].
+    ReceivedCoarse {
+        /// The coarse gather.
+        coarse: &'a CoarseExchange<T>,
+        /// The multipoles of every box.
+        multipoles: &'a LevelBuffers<T>,
+    },
+    /// The multipole exchange of `level` wrote the slots
+    /// [`MultipoleExchange::receive_boxes`] of the level; the values, packed in that
+    /// order, are [`MultipoleExchange::receive_buffer`].
+    ReceivedMultipoles {
+        /// The level exchanged.
+        level: usize,
+        /// The multipole exchange.
+        exchange: &'a MultipoleExchange<T>,
+        /// The multipoles of every box.
+        multipoles: &'a LevelBuffers<T>,
+    },
+}
+
 /// Level-batched operators.
 ///
 /// The [`Evaluator`](super::evaluator::Evaluator) calls each method once per level of
@@ -270,6 +381,9 @@ pub struct P2p<'a, T> {
 /// row. It may read every input of its batch and the keys of the index, and write only
 /// its output. `&mut self` lets the operator own scratch space; it must not keep state
 /// that changes its results from one evaluation to the next.
+///
+/// Between the stages the evaluator also calls [`host_data`](Self::host_data) with each
+/// of its own data movements ([Host data](self#host-data)).
 pub trait FmmOperator: FmmSizes {
     /// Add the multipole of every local leaf of the level from its source points.
     ///
@@ -317,6 +431,17 @@ pub trait FmmOperator: FmmSizes {
     /// For every row r and every leaf j of its row, in row order (by the leaf's
     /// (level, key)): `target_output[r] += P2P(sources[j], target_input[r])`.
     fn p2p(&mut self, batch: P2p<'_, Self::Value>);
+
+    /// Learn of a data movement of the evaluator outside the level calls
+    /// ([Host data](self#host-data), `docs/design/distributed-fmm.md` §6).
+    ///
+    /// The default does nothing: right for an operator that reads and writes only the
+    /// slices of its batches. An operator that keeps its own copies of the stores writes
+    /// the values to send into the host store at a "send" event and copies the received
+    /// values at a "received" event.
+    fn host_data(&mut self, event: HostData<'_, Self::Value>) {
+        let _ = event;
+    }
 }
 
 /// Operators with one method per pair of boxes; [`PerPair`] turns them into an
