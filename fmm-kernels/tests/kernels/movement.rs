@@ -1,15 +1,16 @@
-//! Zero, gather (box-major and, T12, coefficient-major in blocks), scatter-add, scatter
-//! and (Phase 4S T9) the caller-ordered output gather against plain host loops, bit for
-//! bit.
+//! Zero, gather (box-major and, T12, coefficient-major in blocks), scatter-add, scatter,
+//! (Phase 4S T9) the caller-ordered output gather and (Phase 5 T8) the column scatter
+//! against plain host loops, bit for bit.
 //!
 //! Every launch works on ranges at odd offsets inside larger buffers, and the elements
 //! around them are checked to be untouched. Column sizes are (p + 1)² for
 //! p ∈ {0, 3, 8, 20}; index arrays are empty, of one element, permuted and (gather
-//! only) repeated; the scatter-add accumulates onto nonzero data.
+//! only) repeated; the scatter-add accumulates onto nonzero data, and the column scatter
+//! overwrites it.
 
 use nd_fmm_kernels::movement::{
     OutputOrder, gather_coefficients, gather_columns, gather_output, scatter_add_columns,
-    scatter_values, zero,
+    scatter_columns, scatter_values, zero,
 };
 use nd_fmm_kernels::{BackendKind, Device, DeviceElement, KernelError, Precision};
 
@@ -253,6 +254,47 @@ fn scatter_add<T: TestFloat + Data>(device: &mut Device) {
     }
 }
 
+/// The column scatter (Phase 5 T8): `x[:, idx[j]] = y[:, j]` onto a matrix of other
+/// values, every non-NaN bit pattern copied, the columns not named untouched.
+fn scatter_cols<E: Data>(device: &mut Device) {
+    let mut rng = Rng::new(5);
+    let mut payloads = true;
+    for p in DEGREES {
+        let n = (p + 1) * (p + 1);
+        let x_data = {
+            let inner = samples::<E>(&mut rng, COLUMNS * n);
+            padded(&mut rng, &inner)
+        };
+        for (case, indices) in index_cases(&mut rng, COLUMNS, false) {
+            let m = indices.len();
+            let y_packed = samples::<E>(&mut rng, m * n);
+            let y = device.upload(&padded(&mut rng, &y_packed)).unwrap();
+            let mut x = device.upload(&x_data).unwrap();
+            let idx = upload_indices(device, &indices);
+            scatter_columns(
+                device,
+                n,
+                y.slice(PAD..PAD + m * n),
+                idx.slice(PAD..PAD + m),
+                x.slice_mut(PAD..PAD + COLUMNS * n),
+            )
+            .unwrap();
+            let mut want = x_data.clone();
+            for (j, &c) in indices.iter().enumerate() {
+                for r in 0..n {
+                    want[PAD + c as usize * n + r] = y_packed[j * n + r];
+                }
+            }
+            payloads &= E::check(
+                &format!("column scatter, p = {p}, {case}"),
+                &download(device, &x),
+                &want,
+            );
+        }
+    }
+    report_copies::<E>("column scatter", payloads);
+}
+
 fn scatter<E: Data>(device: &mut Device) {
     let mut rng = Rng::new(4);
     let len = 1000;
@@ -432,6 +474,7 @@ fn empty_launches_nothing(device: &mut Device) {
     gather_columns(device, 4, x.as_slice(), idx.as_slice(), y.slice_mut(..0)).unwrap();
     gather_coefficients(device, 4, x.as_slice(), idx.as_slice(), 1, y.slice_mut(..0)).unwrap();
     scatter_add_columns(device, 4, x.slice(..0), idx.as_slice(), y.as_slice_mut()).unwrap();
+    scatter_columns(device, 4, x.slice(..0), idx.as_slice(), y.as_slice_mut()).unwrap();
     scatter_values(device, x.slice(..0), idx.as_slice(), y.as_slice_mut()).unwrap();
     assert_eq!(device.counters().launches, 0);
 }
@@ -460,6 +503,15 @@ fn scatter_add_f32(device: &mut Device) {
 fn scatter_add_f64(device: &mut Device) {
     scatter_add::<f64>(device);
 }
+fn scatter_columns_f32(device: &mut Device) {
+    scatter_cols::<f32>(device);
+}
+fn scatter_columns_f64(device: &mut Device) {
+    scatter_cols::<f64>(device);
+}
+fn scatter_columns_u32(device: &mut Device) {
+    scatter_cols::<u32>(device);
+}
 fn scatter_f32(device: &mut Device) {
     scatter::<f32>(device);
 }
@@ -479,6 +531,9 @@ tests_on!(
     gather_u32,
     scatter_add_f32,
     scatter_add_f64,
+    scatter_columns_f32,
+    scatter_columns_f64,
+    scatter_columns_u32,
     scatter_f32,
     scatter_f64,
     scatter_u32,
@@ -492,6 +547,8 @@ tests_on!(
     gather_f32,
     gather_u32,
     scatter_add_f32,
+    scatter_columns_f32,
+    scatter_columns_u32,
     scatter_f32,
     scatter_u32,
     output_gather_needs_f64,
@@ -506,6 +563,9 @@ tests_on!(
     gather_u32,
     scatter_add_f32,
     scatter_add_f64,
+    scatter_columns_f32,
+    scatter_columns_f64,
+    scatter_columns_u32,
     scatter_f32,
     scatter_f64,
     scatter_u32,
@@ -631,6 +691,49 @@ mod refusals {
                 let _ = nd_fmm_kernels::movement::scatter_add_columns(
                     device,
                     1,
+                    y.as_slice(),
+                    idx.as_slice(),
+                    x.as_slice_mut(),
+                );
+            },
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "scatter_columns: index 2 repeats")]
+    fn scatter_columns_refuses_repeated_indices_in_debug_builds() {
+        run(
+            BackendKind::Cpu,
+            "scatter_columns_refuses_repeated_indices",
+            |device| {
+                let y = device.upload(&[1.0f64; 4]).unwrap();
+                let mut x = device.alloc::<f64>(6).unwrap();
+                let idx = device.upload_indices(&[2, 2]).unwrap();
+                let _ = nd_fmm_kernels::movement::scatter_columns(
+                    device,
+                    2,
+                    y.as_slice(),
+                    idx.as_slice(),
+                    x.as_slice_mut(),
+                );
+            },
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "scatter_columns: indices up to 3 address a matrix of 3 columns")]
+    fn scatter_columns_refuses_an_index_out_of_range() {
+        run(
+            BackendKind::Cpu,
+            "scatter_columns_refuses_an_index_out_of_range",
+            |device| {
+                let y = device.upload(&[1.0f32; 2]).unwrap();
+                let mut x = device.alloc::<f32>(6).unwrap();
+                let idx = device.upload_indices(&[3]).unwrap();
+                let _ = nd_fmm_kernels::movement::scatter_columns(
+                    device,
+                    2,
                     y.as_slice(),
                     idx.as_slice(),
                     x.as_slice_mut(),

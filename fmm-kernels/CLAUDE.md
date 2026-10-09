@@ -5,11 +5,13 @@ selection and the f64 capability check, device buffers, the data movement primit
 the plan's views on the device (`view`, from T5), and (from T6) the operator kernels:
 P2P (`p2p`, T6), the leaf operators P2M, L2P, P2L and M2P (`leaf`, T7), the grouped
 translations M2M and L2L (`translate`, T8), dense M2L (`translate`, T9) and rotation M2L
-(`rotation`, T10) (docs/design/device-path.md §3.1), and (Phase 4S T9) the output pass of
-`nd-fmm-exec` on the device (`movement::gather_output`).
+(`rotation`, T10) (docs/design/device-path.md §3.1), (Phase 4S T9) the output pass of
+`nd-fmm-exec` on the device (`movement::gather_output`), and (Phase 5 T8) the scatter of
+an exchange's packed receive buffer (`movement::scatter_columns`).
 Phase and components: Phase 4, C4.1 (T4, T5), C4.2–C4.6 (T6–T10) and the timing windows
 of C4.8 (T11) in docs/phase4/; Phase 4S, C4S.8 (T9) and C4S.10 (T11: transfers without a
-host copy) in docs/phase4s/.
+host copy) in docs/phase4s/; Phase 5, C5.2's device-resident ghost buffers (T8) in
+docs/phase5/.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -49,6 +51,14 @@ host copy) in docs/phase4s/.
   divide in f32: that changes output bits. Tested against the host loop bit for bit
   (`tests/kernels/movement.rs`: f32 and f64, 0, 1, 7 and 10⁵ targets, an empty leaf, with
   and without gradients; the bound checks; the refusal on Metal).
+- The column scatter (Phase 5 T8, `movement::scatter_columns`, docs/design/
+  distributed-fmm.md §7.3): `x[:, idx[j]] = y[:, j]`, the assignment counterpart of
+  `scatter_add_columns`, the indices of one launch distinct (checked in debug builds);
+  `nd-fmm-exec` writes the packed coarse blocks and ghost multipoles an exchange received
+  into their slots with it. A copy, so a received −0.0 stays −0.0 (a scatter-add into
+  zeroed slots would not). Tested against the host loop bit for bit
+  (`tests/kernels/movement.rs`: f32, f64 and u32, every column size, empty, one and
+  permuted indices onto other values; the bound check and the repeated-index refusal).
 - CPU units: `Device::limit_units(n)` caps the units per cube of the CPU runtime's
   elementwise launches (default `CPU_MAX_UNITS`); `nd-fmm-exec` passes `threads(n)`
   (device-path.md §11). Every later CPU layout honours the cap (the CPU layout of P2P

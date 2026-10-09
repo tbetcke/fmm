@@ -67,7 +67,7 @@ mod kind_common;
 mod kind_windows;
 mod tune_common;
 
-use device_common::{Outcome, check_backend, output_bits};
+use device_common::{check_backend, output_bits};
 
 /// SplitMix64, as in the other tests.
 struct SplitMix64(u64);
@@ -113,7 +113,7 @@ fn scenario(
         .build(sources, targets, comm)
         .unwrap_or_else(|error| panic!("{name}: the host FMM does not build: {error}"));
     let output = host.evaluate(charges).expect("the host FMM evaluates");
-    let (outcome, difference) = check_backend(
+    let difference = check_backend(
         &builder,
         (sources, targets),
         charges,
@@ -122,25 +122,19 @@ fn scenario(
         Backend::Metal,
         comm,
     );
-    eprintln!(
-        "rank {}: {name}: {}",
-        comm.rank(),
-        match outcome {
-            Outcome::Ran => format!(
-                "metal on the host fallback bit for bit ({} values), transfers as the \
-                 formula; the default placement within {:.1e} (φ) and {:.1e} \
-                 (∇φ) of the host, relative L2; per level multipoles {:.1e} (root, the \
-                 global M2M: {:.1e}), locals {:.1e}",
-                output_bits(&output).len(),
-                difference.potential,
-                difference.gradient,
-                difference.multipoles,
-                difference.root,
-                difference.locals
-            ),
-            Outcome::OneRankOnly => "DeviceNeedsOneRank on every rank".to_owned(),
-        }
+    let summary = format!(
+        "metal on the host fallback bit for bit ({} values), transfers as the \
+         formula; the default placement within {:.1e} (φ) and {:.1e} \
+         (∇φ) of the host, relative L2; per level multipoles {:.1e} (root, the \
+         global M2M: {:.1e}), locals {:.1e}",
+        output_bits(&output).len(),
+        difference.potential,
+        difference.gradient,
+        difference.multipoles,
+        difference.root,
+        difference.locals
     );
+    eprintln!("rank {}: {name}: {summary}", comm.rank());
 }
 
 #[test]

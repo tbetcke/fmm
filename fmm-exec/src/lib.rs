@@ -115,12 +115,17 @@
 //! - **autotune** (`tune`, Phase 4 T12): with a tuning-cache directory the M2L strategy,
 //!   the GEMM of each level call and the P2P layout are timed at build, fixed for the
 //!   `Fmm`'s lifetime and kept in the directory; without one the static rule applies;
+//! - **several ranks** (Phase 5 T8): a device runs on any number of ranks, every rank
+//!   opening the default device of its backend, which the ranks of a node share; the
+//!   device mirrors the evaluator's exchanges, moving exactly what each sends and
+//!   receives, packed on the device;
 //! - **errors**: device settings are refused at build with a
-//!   [`SettingsError`](fmm::SettingsError) agreed by step 1's all-reduce; a device runs on
-//!   one rank until Phase 5 T8; device failures are
-//!   [`FmmError::Device`](fmm::FmmError::Device);
+//!   [`SettingsError`](fmm::SettingsError) agreed by step 1's all-reduce, device build
+//!   failures by one more all-reduce; device failures are
+//!   [`FmmError::Device`](fmm::FmmError::Device), agreed on every rank;
 //! - **threads**: with the CPU runtime no rayon pool, `threads(n)` caps its units per
-//!   cube; with Metal or CUDA the pool serves the host-fallback kinds only.
+//!   cube (at most the node's cores over its ranks); with Metal or CUDA the pool serves
+//!   the host-fallback kinds only.
 //!
 //! `nd-fmm-exec` stays free of `unsafe` and reaches CubeCL only through
 //! `nd-fmm-kernels`.

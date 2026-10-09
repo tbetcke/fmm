@@ -17,7 +17,9 @@ FMM on CUDA), C4S.5 (task T5: per-kind timings, `FmmBuilder::kind_timings`) and 
 pass on the device, `FmmBuilder::output_pass`) and C4S.10 (task T11: the download read in
 place, the charges uploaded without a copy); Phase 5, C5.1 host (task T6 in docs/phase5/:
 `Fmm` on any number of ranks through `nd_fmm_plan::redistribute::Redistribution`; design
-docs/design/distributed-fmm.md).
+docs/design/distributed-fmm.md) and C5.1 device with C5.2's device-resident ghost
+buffers (task T8: the device operator on any number of ranks through the host-data
+hook).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -61,7 +63,9 @@ docs/design/distributed-fmm.md).
     feature `cuda`; Phase 4S T4) initialise it at `Threading::Funneled`;
     `tests/device_fmm.rs` (the ignored C4.8 gate, feature `gpu`) and
     `tests/device_tune.rs` (the tuner, feature `cpu`) at the default level, and
-    `tests/multi_rank.rs` (the ignored C5.1 host gate, Phase 5 T6) at `Funneled`.
+    `tests/multi_rank.rs` (the ignored C5.1 host gate, Phase 5 T6) and
+    `tests/device_ranks.rs` (the ignored C5.1 device gate, Phase 5 T8, feature `gpu`) at
+    `Funneled`.
     The device checks shared by `tests/mpi_exec.rs`, `tests/device_metal.rs` and
     `tests/device_cuda.rs` live in `tests/device_common/`, the tuner's in
     `tests/tune_common/`, the shadow operator of the host-data hook (Phase 5 T7) in
@@ -109,13 +113,14 @@ docs/design/distributed-fmm.md).
     "Several ranks").
   - The host-data hook (Phase 5 T7; `nd_fmm_plan::operator::HostData`, design §6): the
     evaluator tells the operator of `reset` and of every exchange's reads and writes.
-    `LaplaceOperator` and `ExecOperator` keep the default (nothing), so the host path is
-    unchanged bit for bit. `tests/mpi_exec.rs` checks the coverage with a shadow operator
+    `LaplaceOperator` keeps the default (nothing), and `ExecOperator` forwards the events
+    to its engine, so the host path is unchanged bit for bit; the device operator mirrors
+    them (from T8, below). `tests/mpi_exec.rs` checks the coverage with a shadow operator
     (`tests/shadow/`) that keeps its own stores and learns of host data only through the
     events: bit for bit the `Fmm` on every scenario (once per tree, precision and output
     kind) on every rank count, and different with the hook disabled on several ranks
     (**host-data hook**). Keep it so when the evaluator, the exchanges or `Fmm`'s stages
-    change; the device operator uses the events from T8.
+    change; the device operator uses the events since T8.
   - `examples/basic_evaluation.rs` is the user-facing example of calling `Fmm`
     (registered with `templated-examples`, so the weekly job runs it at 3 ranks): it
     must run on any number of ranks, each passing its own points, and keep to the
@@ -130,10 +135,39 @@ docs/design/distributed-fmm.md).
     and the backend of `nd-fmm-kernels`; none on by default. `Backend::Host` stays the
     default, and without the features the host path builds and runs unchanged;
   - residency (requirement 3): plan views, geometry and tables uploaded once per `Fmm`,
-    points once per build, charges and output once per evaluation; `Fmm::evaluate`
-    drives `begin_evaluation` (after `reset`) and `read_output`. No `nd-fmm-plan`
-    change (no T4b); a device backend runs on one rank (`DeviceNeedsOneRank` after
-    step 5, the redistribution, on every rank) until Phase 5 T8;
+    points once per build, charges and output once per evaluation; the device zeroes its
+    stores at the evaluator's `HostData::Reset`, and `Fmm::evaluate` drives
+    `begin_evaluation` (the charges, after `reset`) and `read_output`;
+  - several ranks (Phase 5 T8, C5.1 device, C5.2's device-resident ghost buffers;
+    docs/design/distributed-fmm.md §7; the `device` module docs, "Several ranks"): a
+    device backend runs on any number of ranks; `DeviceNeedsOneRank` is gone. The device
+    stores have the plan's layouts, ghost slots included, so `build` builds the device
+    operator after the evaluator, from its source exchange's counts (every leaf of the
+    numbering) and `device::ExchangeLists` (copied from the evaluator's exchanges through
+    `Evaluator::{source_exchange, multipole_exchange, coarse_exchange}`), swaps it in for
+    the host operator, loads the points and agrees the outcome (one all-reduce). At each
+    event the device moves exactly what the exchange sends and receives, packed on the
+    device in buffers allocated at build: `SendMultipoles` one `gather_columns` and one
+    download (the evaluation's second sync), `ReceivedCoarse` and each
+    `ReceivedMultipoles(l)` one upload and one `nd_fmm_kernels::movement::scatter_columns`
+    (assignment, so a −0.0 stays −0.0), `ReceivedSources` one upload of the ghost tail;
+    `SendSources` nothing (`Fmm` writes the sent leaves' charges into the host chunks).
+    The counters split them by `DataKind` (`GhostSources`, `SentMultipoles`,
+    `CoarseMultipoles`, `ReceivedMultipoles`, per level in
+    `DeviceCounters::received_levels`); `Fmm::exchange_sizes` gives the sizes, and
+    `tests/device_common::expected_evaluation` the formula, checked on every scenario and
+    rank count. One rank is unchanged: every list empty, Phase 4's formula. A device per
+    rank: one `split_shared` per build (`DeviceReport::ranks`, `device::RankPlacement`);
+    every rank opens the default device (`Device::open` takes no index); on the CPU
+    runtime the units per cube are `threads(n)` capped at the node's cores over its
+    ranks. Errors (decision 12): one all-reduce after the output's download agrees a
+    device error of any rank (`Device` on the rank, `OtherRank` elsewhere), and the kept
+    error rides on the charge-length agreement of later evaluations;
+    `Fmm::inject_device_error` (doc-hidden) is the test hook. Tuning (design §7.6): with a
+    tuning cache on several ranks rank 0 alone tunes and uses the cache and broadcasts its
+    M2L strategy; the others take it and the static rule for the rest
+    (`RankPlacement::follows_rank0`). Ranks sharing one GPU are correctness only, never
+    timed as scaling (docs/phase5/README.md, decision 3);
   - accumulation, no atomics, determinism (requirements 4–6): the kernels' rules in
     fmm-kernels/CLAUDE.md; every launch and transfer from the calling thread; nothing
     chosen per call;
@@ -269,8 +303,8 @@ docs/design/distributed-fmm.md).
     a fresh `Vec` on the pool (no zero fill), which `begin_evaluation` hands to
     `Device::write_owned` (no copy). Still one upload, one download and one sync per
     evaluation, and the output bit for bit as before;
-  - every device test prints the backends it ran; Metal tests are ignored and run by
-    hand outside the macOS sandbox (`tests/device_metal.rs`); CUDA tests are ignored,
+  - every device test prints the backends it ran, and on several ranks the ranks; Metal
+    tests are ignored and run by hand outside the macOS sandbox (`tests/device_metal.rs`); CUDA tests are ignored,
     type-checked in CI and run by hand on locust (`tests/device_cuda.rs`, the CUDA blocks
     of `tests/device_fmm.rs`, `tests/accuracy.rs` and `tests/adaptive.rs`, and
     `tests/operator/device_*.rs`; "CUDA (Phase 4S)" below).
@@ -285,7 +319,11 @@ docs/design/distributed-fmm.md).
   - `cargo clippy -p nd-fmm-exec --all-targets --features cpu,metal -- -D warnings`;
   - `cargo check -p nd-fmm-exec --features cuda` (type-checked here; run on locust);
   - `RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features cpu --release` (every
-    `tests/mpi_exec.rs` scenario repeated on the CPU runtime);
+    `tests/mpi_exec.rs` scenario repeated on the CPU runtime), and from Phase 5 T8 by hand
+    at 2 and 4 ranks under an external timeout (every scenario's device repeat runs on
+    every rank count, with **device errors and tuning on several ranks**), and the
+    ignored `tests/device_ranks.rs` at 2 and 4 ranks (its module docs give the commands;
+    Metal at 2 ranks outside the sandbox, CUDA at 2 and 4 on locust);
   - `cargo doc -p nd-fmm-exec --no-deps --features cpu`;
   - by hand on the M3 Max, outside the sandbox (build the tests sandboxed first):
     `RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features metal --release --

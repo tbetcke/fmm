@@ -22,7 +22,10 @@
 //!    threading level when `threads` > 1, the supplied domain ([`Domain::new`]) and that
 //!    every point is finite, builds the thread pool if `threads` > 1, opens the device
 //!    of a device [`Backend`] (compiled in, a device that comes up, the precision
-//!    supported), and agrees the outcome on every rank (one all-reduce).
+//!    supported), and agrees the outcome on every rank (one all-reduce). With a device
+//!    backend it splits the communicator by node once (`split_shared`, Phase 5 T8): the
+//!    rank's place there is in the device report, and on the CPU runtime the units per
+//!    cube are capped at the node's cores over its ranks.
 //! 2. Counts the points of all ranks (one all-reduce); none at all is an error.
 //! 3. Takes the supplied domain, or `compute_global_bounding_box` over the sources and
 //!    targets of every rank (after one all-reduce pair that rejects points spanning no
@@ -38,22 +41,24 @@
 //!    `nd_fmm_plan::redistribute::Redistribution` for the sources and one for the
 //!    targets, routed by the keys of step 4, then the f64 coordinates of each forwarded
 //!    to the owners, into leaf order. Within a leaf the points lie in the order (origin
-//!    rank, position on that rank). With a device backend on more than one rank, every
-//!    rank then returns [`SettingsError::DeviceNeedsOneRank`], without a collective, until
-//!    Phase 5 T8.
+//!    rank, position on that rank).
 //! 6. Takes the points of every local leaf from the redistributions, the radius of every
 //!    local leaf, and the output order (local).
 //! 7. All-reduces the largest number of sources in a leaf, which sizes the P2P scratch;
 //!    with a device backend resolves the M2L strategy of [`M2lStrategy::Auto`] for the
 //!    device (Phase 4 T12: from the tuning cache, by timing rotation against dense, or by
-//!    the static rule); builds or loads the tables, the operator (with a device backend
-//!    the device operator around it, which checks that its buffers fit in device memory,
-//!    allocates them, uploads the views and tables, and takes its GEMM decisions), and the
-//!    evaluator with the per-leaf counts (its own collectives).
+//!    the static rule; on several ranks with a tuning cache rank 0's, broadcast, Phase 5
+//!    T8); builds or loads the tables, the host operator, and the evaluator with the
+//!    per-leaf counts (its own collectives).
 //! 8. Writes the leaf-scaled source coordinates and target positions, from the forwarded
-//!    f64 coordinates, into the evaluator's stores, once ([`leaf_coordinates`]), and with
-//!    a device backend uploads them to the device, which then takes its P2P decision and
-//!    ends its tuning (device work only, no collective).
+//!    f64 coordinates, into the evaluator's stores, once ([`leaf_coordinates`]). With a
+//!    device backend (Phase 5 T8) it then builds the device operator around the host
+//!    operator, from the evaluator's source counts (the ghost leaves' included) and the
+//!    index lists of its exchanges: it checks that its buffers fit in device memory,
+//!    allocates them, uploads the views, the exchanges' columns and the tables, and takes
+//!    its GEMM decisions; swaps it in for the host operator; uploads the points, after
+//!    which the device takes its P2P decision and ends its tuning (device work only); and
+//!    agrees the outcome on every rank (one all-reduce).
 //!
 //! It also reads the BLAS thread variables once, for [`Fmm::threading`].
 //!
@@ -204,8 +209,13 @@
 //!   the moves included, is made on the calling thread.
 //! - **Errors.** `PointsNotOwned` (until Phase 5 T6) is gone; a redistribution that does
 //!   not fit MPI's `i32` counts is [`FmmError::Redistribution`], on every rank.
-//! - **The device** runs on one rank until Phase 5 T8
-//!   ([`SettingsError::DeviceNeedsOneRank`] on several, after step 5).
+//! - **The device** (Phase 5 T8) runs on any number of ranks: every rank opens the default
+//!   device of its backend, and the device operator mirrors the evaluator's exchanges
+//!   (the `device` module, "Several ranks"). Per evaluation it adds one all-reduce, after
+//!   the output's download, that agrees a device error of any rank; the rank that failed
+//!   returns [`FmmError::Device`], the others [`FmmError::OtherRank`], and from then on
+//!   the charge-length agreement carries the kept error. [`Fmm::exchange_sizes`] says
+//!   what the exchanges move on the rank.
 //!
 //! # Precision
 //!
@@ -225,10 +235,14 @@ use std::time::{Duration, Instant};
 use mpi::Threading;
 use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
+#[cfg(feature = "gpu")]
+use mpi::traits::{Communicator, Root};
 use mpi::traits::{CommunicatorCollectives, Equivalence};
 use nd_fmm_math::RealScalar;
 use nd_fmm_plan::evaluator::{Evaluator, EvaluatorError};
-use nd_fmm_plan::operator::{FmmOperator, FmmSizes, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p};
+use nd_fmm_plan::operator::{
+    FmmOperator, FmmSizes, HostData, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p,
+};
 use nd_fmm_plan::plan::{Plan, PlanError};
 use nd_fmm_plan::redistribute::{Redistribution, RedistributionError};
 use nd_fmm_plan::store::{LeafSliceMut, LeafStore};
@@ -591,14 +605,6 @@ pub enum SettingsError {
         /// The bytes available.
         limit: u64,
     },
-    /// A device backend on more than one rank: the device path runs on one rank until
-    /// Phase 5 T8 (docs/design/device-path.md §4.4, docs/design/distributed-fmm.md §7).
-    /// Returned on every rank, after the points are redistributed (step 5).
-    #[error("a device backend runs on one rank, not {ranks}, until Phase 5 T8")]
-    DeviceNeedsOneRank {
-        /// The number of ranks.
-        ranks: usize,
-    },
     /// [`KindTiming::Device`] on a backend that does not time on the device: the host,
     /// and the CPU runtime, whose timing windows wait for it (Phase 4S T5).
     #[error("kind_timings(Device) needs a device that times on itself; {backend} does not")]
@@ -888,10 +894,12 @@ impl<T> FmmBuilder<T> {
     /// ([`SettingsError::BackendNotCompiled`]), whose device cannot be opened
     /// ([`SettingsError::NoDevice`]) or does not do arithmetic in `T`
     /// ([`SettingsError::PrecisionUnsupported`], f64 on Metal), or whose buffers do not
-    /// fit in device memory ([`SettingsError::DeviceMemory`]); on more than one rank it
-    /// returns [`SettingsError::DeviceNeedsOneRank`] (docs/design/device-path.md §4.4).
-    /// With [`Backend::Cpu`], `threads(n)` builds no rayon pool and caps the units per
-    /// cube of the CPU runtime instead (the `device` module, "Threads").
+    /// fit in device memory ([`SettingsError::DeviceMemory`]). It runs on any number of
+    /// ranks, every rank opening the default device of the backend, which the ranks of a
+    /// node share (Phase 5 T8; the `device` module, "Several ranks"). With
+    /// [`Backend::Cpu`], `threads(n)` builds no rayon pool and caps the units per cube of
+    /// the CPU runtime instead, at most the node's cores over its ranks (the `device`
+    /// module, "Threads").
     pub fn backend(mut self, backend: Backend) -> Self {
         self.backend = backend;
         self
@@ -1140,8 +1148,13 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
                 check_output_pass(self.output_pass, self.backend, f64_device)?;
                 Ok((pool, supplied, device))
             });
-        let (pool, supplied, device) = agree(comm, local)?;
+        let (pool, supplied, mut device) = agree(comm, local)?;
         let threading = ThreadingReport::read(self.rayon_threads(), provided);
+        // A device per rank (Phase 5 T8, docs/design/distributed-fmm.md §7.4): every rank of
+        // a device build opens the default device of the backend (above), and the ranks of
+        // a node share it. One split of the communicator by node places the rank there;
+        // every rank has the same backend (agreed above), so every rank splits or none.
+        let ranks = self.place_rank(comm, device.as_mut());
 
         // Step 2: are there points at all?
         let mut total = 0u64;
@@ -1205,14 +1218,6 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         let (source_coordinates, target_coordinates) = coordinates.split_at(3 * sources.len());
         let owned_sources = source_route.forward(source_coordinates, 3);
         let owned_targets = target_route.forward(target_coordinates, 3);
-        // The device path runs on one rank until Phase 5 T8. Every rank sees the same size,
-        // so every rank returns here and no collective is skipped (device-path.md §4.4).
-        if self.backend.is_device() && comm.size() > 1 {
-            return Err(SettingsError::DeviceNeedsOneRank {
-                ranks: comm.size() as usize,
-            }
-            .into());
-        }
 
         // Step 6: the points of every local leaf, its radius, and the output order.
         let source_leaves = LeafRanges::new(source_route.counts());
@@ -1230,10 +1235,10 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         comm.all_reduce_into(&local_max, &mut max_leaf_points, SystemOperation::max());
         // With a device backend, the tuner (Phase 4 T12) and the M2L strategy: under
         // `Auto` with M2L on the device, the cached, tuned or static choice of the device
-        // path, for which the tables are built.
-        let mut device = device;
+        // path, for which the tables are built; on several ranks with a tuning cache rank
+        // 0's, broadcast (Phase 5 T8).
         let tuning_start = Instant::now();
-        let (strategy, tuner) = self.device_strategy(device.as_mut(), &plan);
+        let (strategy, tuner) = self.device_strategy(device.as_mut(), &plan, comm);
         let tuning_time = tuning_start.elapsed();
         let start = start + tuning_time;
         let (tables, cache_outcomes) = match &self.table_cache {
@@ -1248,16 +1253,9 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         if let Some(pool) = pool {
             operator = operator.with_pool(pool);
         }
-        let start_device = Instant::now();
-        let operator = self.exec_operator(
-            operator,
-            device,
-            &plan,
-            (&source_leaves.counts, &target_leaves.counts),
-            &outputs,
-            tuner,
-        )?;
-        let mut device_time = open_time + tuning_time + start_device.elapsed();
+        // The evaluator is built with the host engine; a device engine replaces it below,
+        // once the evaluator's exchanges know the ghost leaves and the slots they move.
+        let operator = ExecOperator::new(Engine::Host(operator), self.kind_timing, false);
         let mut evaluator = Evaluator::new(
             plan,
             comm,
@@ -1266,9 +1264,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             &target_leaves.counts,
         )
         .map_err(FmmError::Evaluator)?;
-        let evaluator_time = start
-            .elapsed()
-            .saturating_sub(device_time - open_time - tuning_time);
+        let evaluator_time = start.elapsed();
 
         // Step 8: the leaf-scaled coordinates, once, from the forwarded coordinates in
         // leaf order (CONVENTIONS §3.13).
@@ -1288,29 +1284,44 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             }
         }
         let load_time = start.elapsed();
-        // The device's copy of the points, from copies of the stores: the store accessors
-        // and `operator_mut` cannot borrow the evaluator at once (device-path.md §4.3).
+
+        // With a device backend (Phase 5 T8, docs/design/distributed-fmm.md §7.1): the
+        // device operator, built from the evaluator's source counts (the ghost leaves'
+        // included) and exchanges, swapped in for the host engine (the sizes are the same),
+        // and the points uploaded. A failure on any rank is agreed by one all-reduce, so
+        // that every rank returns here alike.
         let start = Instant::now();
-        if evaluator.operator().engine.is_device() {
-            let stores = (
-                evaluator.source_store().clone(),
-                evaluator.target_input_store().clone(),
+        let mut device_time = open_time + tuning_time;
+        if let Some(device) = device {
+            let attached = self.attach_device(
+                &mut evaluator,
+                device,
+                &target_leaves.counts,
+                &outputs,
+                tuner,
+                ranks,
             );
-            evaluator
-                .operator_mut()
-                .engine
-                .load_points(&stores.0, &stores.1)?;
+            agree(comm, attached)?;
         }
         device_time += start.elapsed();
 
         // The host's source store feeds the host path and host-fallback calls of the kinds
         // that read sources; with those on the device, the charges go to the device alone
-        // (Phase 4S T9).
+        // (Phase 4S T9), but for the local leaves the source exchange sends, whose charges
+        // the exchange reads from the host store (Phase 5 T8).
         let engine = &evaluator.operator().engine;
         let host_sources = !engine.is_device()
             || [OperatorKind::P2m, OperatorKind::P2l, OperatorKind::P2p]
                 .into_iter()
                 .any(|kind| engine.placement(kind) == Placement::Host);
+        let sent_leaves = if host_sources {
+            Vec::new()
+        } else {
+            let mut leaves = evaluator.source_exchange().send_leaves().to_vec();
+            leaves.sort_unstable();
+            leaves.dedup();
+            leaves
+        };
 
         // The values per target the output pass forms and the backward move returns: φ,
         // or φ and ∇φ.
@@ -1323,6 +1334,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             backend: self.backend,
             synchronous_stages: self.synchronous_stages && self.backend.is_device(),
             host_sources,
+            sent_leaves,
             device_error: None,
             charges: vec![T::zero(); source_route.nreceived()],
             received_output: vec![T::zero(); output_values * target_route.nreceived()],
@@ -1349,63 +1361,142 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         })
     }
 
-    /// The operator of the evaluator: the host operator, or with a device backend the
-    /// device operator that wraps it.
-    #[cfg_attr(not(feature = "gpu"), allow(clippy::unnecessary_wraps))]
-    fn exec_operator(
+    /// With a device backend (feature `gpu`): where this rank sits among the ranks and on
+    /// its node (Phase 5 T8, docs/design/distributed-fmm.md §7.4), from one
+    /// `split_shared` of `comm`; on the CPU runtime it caps the units per cube of `device`
+    /// at `threads(n)` and at the node's cores over its ranks. Nothing on the host.
+    #[cfg(feature = "gpu")]
+    fn place_rank<C: CommunicatorCollectives>(
         &self,
-        operator: LaplaceOperator<T>,
-        device: Option<OpenedDevice>,
-        plan: &Plan,
-        counts: (&[usize], &[usize]),
+        comm: &C,
+        device: Option<&mut OpenedDevice>,
+    ) -> device::RankPlacement {
+        let Some(device) = device else {
+            return device::RankPlacement::default();
+        };
+        let node = comm.split_shared(comm.rank());
+        let placement = device::RankPlacement {
+            rank: comm.rank() as usize,
+            ranks: comm.size() as usize,
+            local_rank: node.rank() as usize,
+            local_ranks: node.size() as usize,
+            cores: std::thread::available_parallelism().map_or(1, usize::from),
+            threads: self.threads,
+            follows_rank0: self.tuning_cache.is_some() && comm.size() > 1 && comm.rank() != 0,
+        };
+        device.limit_units(u32::try_from(placement.cpu_units()).unwrap_or(u32::MAX));
+        placement
+    }
+
+    /// Without the `gpu` feature no device is opened.
+    #[cfg(not(feature = "gpu"))]
+    fn place_rank<C: CommunicatorCollectives>(
+        &self,
+        comm: &C,
+        device: Option<&mut OpenedDevice>,
+    ) -> RankPlacement {
+        let _ = comm;
+        if let Some(never) = device {
+            match *never {}
+        }
+        RankPlacement
+    }
+
+    /// Replaces the host engine of `evaluator` by the device operator around its host
+    /// operator (Phase 5 T8, docs/design/distributed-fmm.md §7.1): built on `device` from
+    /// the evaluator's source counts (every leaf of the numbering, the ghost leaves'
+    /// included), the index lists of its exchanges and `target_counts`, and loaded with the
+    /// points of the evaluator's stores. Device work only, no collective.
+    ///
+    /// # Errors
+    ///
+    /// As [`DeviceOperator::new`](crate::device::DeviceOperator::new) and `load_points`;
+    /// the evaluator is left with a placeholder engine, to be dropped.
+    #[cfg(feature = "gpu")]
+    fn attach_device<C: CommunicatorCollectives>(
+        &self,
+        evaluator: &mut FmmEvaluator<'_, C, T>,
+        device: OpenedDevice,
+        target_counts: &[usize],
         outputs: &OutputOrder,
         tuner: Option<Tuner>,
-    ) -> Result<ExecOperator<T>, FmmError> {
-        match device {
-            None => Ok(ExecOperator::new(
-                Engine::Host(operator),
-                self.kind_timing,
-                false,
-            )),
-            #[cfg(feature = "gpu")]
-            Some(device) => {
-                let options = DeviceOptions {
-                    host_fallback: self.host_fallback.clone(),
-                    table_cache: self.table_cache.clone(),
-                    p2p_layout: self.device_p2p_layout,
-                    leaf_layout: self.device_leaf_layout,
-                    gemm: self.device_gemm,
-                    scratch_budget: self.device_scratch_budget,
-                    stage_timing: if self.synchronous_stages {
-                        device::StageTiming::Synchronous
-                    } else if self.device_timestamps {
-                        device::StageTiming::DeviceTimestamps
-                    } else {
-                        device::StageTiming::Enqueue
-                    },
-                    output_pass: self.output_pass,
-                };
-                let tuner = tuner.expect("a device build has a tuner");
-                let on_device = device.times_on_device();
-                let caller = device::CallerOrder {
-                    points: &outputs.points,
-                    leaves: &outputs.leaves,
-                    scales: outputs.scales.as_flattened(),
-                };
-                let driver =
-                    device::driver(operator, device, plan, counts, caller, &options, tuner)?;
-                Ok(ExecOperator::new(
-                    Engine::Device(driver),
-                    self.kind_timing,
-                    on_device,
-                ))
-            }
-            #[cfg(not(feature = "gpu"))]
-            Some(never) => {
-                let _ = (plan, counts, outputs, tuner);
-                match never {}
-            }
-        }
+        ranks: device::RankPlacement,
+    ) -> Result<(), FmmError> {
+        let options = DeviceOptions {
+            host_fallback: self.host_fallback.clone(),
+            table_cache: self.table_cache.clone(),
+            p2p_layout: self.device_p2p_layout,
+            leaf_layout: self.device_leaf_layout,
+            gemm: self.device_gemm,
+            scratch_budget: self.device_scratch_budget,
+            stage_timing: if self.synchronous_stages {
+                device::StageTiming::Synchronous
+            } else if self.device_timestamps {
+                device::StageTiming::DeviceTimestamps
+            } else {
+                device::StageTiming::Enqueue
+            },
+            output_pass: self.output_pass,
+            ranks,
+        };
+        let tuner = tuner.expect("a device build has a tuner");
+        let on_device = device.times_on_device();
+        let caller = device::CallerOrder {
+            points: &outputs.points,
+            leaves: &outputs.leaves,
+            scales: outputs.scales.as_flattened(),
+        };
+        // The host operator moves into the device operator; until the swap the evaluator
+        // holds a placeholder of degree 0, never called.
+        let engine = std::mem::replace(
+            &mut evaluator.operator_mut().engine,
+            Engine::Host(detached_operator()),
+        );
+        let Engine::Host(host) = engine else {
+            unreachable!("the evaluator is built with the host engine")
+        };
+        let lists =
+            device::ExchangeLists::new(evaluator.multipole_exchange(), evaluator.coarse_exchange());
+        let counts = (evaluator.source_exchange().leaf_counts(), target_counts);
+        let driver = device::driver(
+            host,
+            device,
+            evaluator.plan(),
+            counts,
+            &lists,
+            caller,
+            &options,
+            tuner,
+        )?;
+        *evaluator.operator_mut() =
+            ExecOperator::new(Engine::Device(driver), self.kind_timing, on_device);
+        // The device's copy of the points, from copies of the stores: the store accessors
+        // and `operator_mut` cannot borrow the evaluator at once (device-path.md §4.3). The
+        // source store holds every leaf of the numbering; its ghost tail is zero until the
+        // first source exchange.
+        let stores = (
+            evaluator.source_store().clone(),
+            evaluator.target_input_store().clone(),
+        );
+        evaluator
+            .operator_mut()
+            .engine
+            .load_points(&stores.0, &stores.1)
+    }
+
+    /// Without the `gpu` feature no device is opened.
+    #[cfg(not(feature = "gpu"))]
+    fn attach_device<C: CommunicatorCollectives>(
+        &self,
+        evaluator: &mut FmmEvaluator<'_, C, T>,
+        device: OpenedDevice,
+        target_counts: &[usize],
+        outputs: &OutputOrder,
+        tuner: Option<Tuner>,
+        ranks: RankPlacement,
+    ) -> Result<(), FmmError> {
+        let _ = (evaluator, target_counts, outputs, tuner, ranks);
+        match device {}
     }
 
     /// With a device: the tuner of the build (Phase 4 T12) and the M2L strategy to build
@@ -1413,11 +1504,18 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
     /// path's (cached, tuned, or the static rule; `tune::static_strategy`). On the host,
     /// or with M2L on the host fallback, the builder's strategy, which the tables resolve
     /// by the host rule.
+    ///
+    /// On several ranks with a tuning cache (Phase 5 T8, docs/design/distributed-fmm.md
+    /// §7.6) rank 0 alone tunes, reads and writes the cache, and broadcasts its strategy
+    /// (one broadcast, on every rank); the other ranks take it, and the static rule for
+    /// the GEMMs and the P2P layout, so that two runs with the same cache give the same
+    /// bits on every rank and no rank times while another tunes on the shared device.
     #[cfg(feature = "gpu")]
-    fn device_strategy(
+    fn device_strategy<C: CommunicatorCollectives>(
         &self,
         device: Option<&mut OpenedDevice>,
         plan: &Plan,
+        comm: &C,
     ) -> (M2lStrategy, Option<Tuner>) {
         let Some(device) = device else {
             return (self.strategy, None);
@@ -1428,15 +1526,17 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             self.p,
             self.gradients,
         );
+        let shared = self.tuning_cache.is_some() && comm.size() > 1;
+        let follower = shared && comm.rank() != 0;
         let mut tuner = Tuner::new(
             key,
-            self.tuning_cache.as_deref(),
+            self.tuning_cache.as_deref().filter(|_| !follower),
             self.tuning_budget,
             self.tuning_hook.clone(),
         );
-        let strategy = if self.strategy == M2lStrategy::Auto
-            && !self.host_fallback.contains(&OperatorKind::M2l)
-        {
+        let tuned =
+            self.strategy == M2lStrategy::Auto && !self.host_fallback.contains(&OperatorKind::M2l);
+        let mut strategy = if tuned && !follower {
             device::tune_strategy::<T>(
                 &mut tuner,
                 device,
@@ -1448,20 +1548,61 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         } else {
             self.strategy
         };
+        if shared {
+            let mut code = strategy_code(strategy);
+            comm.process_at_rank(0).broadcast_into(&mut code);
+            strategy = strategy_from_code(code);
+        }
         (strategy, Some(tuner))
     }
 
     /// Without the `gpu` feature: the builder's strategy, no tuner.
     #[cfg(not(feature = "gpu"))]
-    fn device_strategy(
+    fn device_strategy<C: CommunicatorCollectives>(
         &self,
         device: Option<&mut OpenedDevice>,
         plan: &Plan,
+        comm: &C,
     ) -> (M2lStrategy, Option<Tuner>) {
-        let _ = (device, plan);
+        let _ = (device, plan, comm);
         (self.strategy, None)
     }
 }
+
+/// The M2L strategy as one byte, for the broadcast of rank 0's tuned strategy.
+#[cfg(feature = "gpu")]
+fn strategy_code(strategy: M2lStrategy) -> u8 {
+    match strategy {
+        M2lStrategy::Dense => 0,
+        M2lStrategy::Classes => 1,
+        M2lStrategy::Rotation => 2,
+        M2lStrategy::Auto => 3,
+    }
+}
+
+/// The M2L strategy of [`strategy_code`].
+#[cfg(feature = "gpu")]
+fn strategy_from_code(code: u8) -> M2lStrategy {
+    match code {
+        0 => M2lStrategy::Dense,
+        1 => M2lStrategy::Classes,
+        2 => M2lStrategy::Rotation,
+        _ => M2lStrategy::Auto,
+    }
+}
+
+/// The operator the evaluator holds while its host operator moves into the device
+/// operator ([`FmmBuilder::attach_device`]): degree 0, built in microseconds, never
+/// called.
+#[cfg(feature = "gpu")]
+fn detached_operator<T: SimdScalar + Stored>() -> LaplaceOperator<T> {
+    LaplaceOperator::new(Tables::build(0, M2lStrategy::Dense), false, 1)
+}
+
+/// Where a rank sits, without the `gpu` feature: no device, so nothing to say.
+#[cfg(not(feature = "gpu"))]
+#[derive(Clone, Copy, Debug)]
+struct RankPlacement;
 
 /// The tuner of a device build (feature `gpu`); without it, no value.
 #[cfg(feature = "gpu")]
@@ -1599,18 +1740,14 @@ impl<T: SimdScalar + Stored + Equivalence + Default> Engine<T> {
     }
 
     /// Uploads the points to the device; nothing on the host.
-    #[cfg_attr(not(feature = "gpu"), allow(clippy::unnecessary_wraps))]
+    #[cfg(feature = "gpu")]
     fn load_points(
         &mut self,
         sources: &LeafStore<T>,
         target_input: &LeafStore<T>,
     ) -> Result<(), FmmError> {
         match self {
-            Self::Host(_) => {
-                let _ = (sources, target_input);
-                Ok(())
-            }
-            #[cfg(feature = "gpu")]
+            Self::Host(_) => Ok(()),
             Self::Device(driver) => driver.load_points(sources, target_input),
         }
     }
@@ -1884,6 +2021,16 @@ macro_rules! delegate {
                     }
                 }
             )*
+
+            /// The evaluator's data movements, to the engine: nothing on the host path; the
+            /// device operator mirrors them (Phase 5 T8).
+            fn host_data(&mut self, event: HostData<'_, T>) {
+                match &mut self.engine {
+                    Engine::Host(operator) => operator.host_data(event),
+                    #[cfg(feature = "gpu")]
+                    Engine::Device(driver) => driver.host_data(event),
+                }
+            }
         }
     };
 }
@@ -2487,10 +2634,13 @@ impl KindTimings {
 }
 
 /// A stage of [`Fmm::evaluate`] that runs device work, timed by one timing window
-/// ([`DeviceStageTimings`]). The exchanges move nothing on the one rank a device runs on.
+/// ([`DeviceStageTimings`]). The exchanges have no window: on one rank they move nothing,
+/// on several the device's part of them is a few transfers and launches (Phase 5 T8),
+/// and the coarse gather's download falls in [`UpwardGlobal`](Self::UpwardGlobal).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DeviceStage {
-    /// Zeroing the device stores, uploading and scattering the charges.
+    /// Zeroing the device stores (at the evaluator's `reset`), uploading and scattering
+    /// the charges.
     Load,
     /// Stage 2: P2M and the local M2M.
     UpwardLocal,
@@ -2589,6 +2739,29 @@ pub struct ListSizes {
     pub x: usize,
 }
 
+/// What the evaluator's exchanges move on this rank per evaluation, in points and boxes
+/// ([`Fmm::exchange_sizes`], Phase 5 T8; docs/design/distributed-fmm.md §7.2): the sizes
+/// behind the device path's transfers on several ranks. Every count is zero on one rank.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExchangeSizes {
+    /// The source points of the ghost leaves, which the source exchange receives (G_s).
+    pub ghost_sources: usize,
+    /// The source points of the local leaves it sends, a leaf sent to two ranks twice.
+    pub sent_sources: usize,
+    /// The local leaves it sends, each once: the leaves whose charges a device
+    /// evaluation writes into the host store.
+    pub sent_leaves: usize,
+    /// This rank's coarse blocks, which the coarse gather sends (B_o); none on one rank.
+    pub sent_blocks: usize,
+    /// The other ranks' coarse blocks, which it receives (B_r).
+    pub received_blocks: usize,
+    /// Per level, the boxes the multipole exchange sends (S_l), a box sent to two ranks
+    /// twice.
+    pub sent_boxes: Vec<usize>,
+    /// Per level, the ghost boxes it receives (R_l).
+    pub received_boxes: Vec<usize>,
+}
+
 /// A built FMM; see the [module documentation](self).
 ///
 /// It owns the octree (which borrows the communicator for `'o`), the plan, the
@@ -2610,6 +2783,10 @@ where
     /// Whether an evaluation writes the charges into the host's source store: on the host
     /// path, and on a device with P2M, P2L or P2P on the host fallback (Phase 4S T9).
     host_sources: bool,
+    /// Otherwise the local leaves the source exchange sends, ascending, whose charges an
+    /// evaluation writes into the host's source store for it (Phase 5 T8); none on one
+    /// rank.
+    sent_leaves: Vec<u32>,
     /// The failure of a device evaluation, returned by every later evaluation.
     device_error: Option<String>,
     /// The route of the sources from the caller's ranks to their owners (Phase 5 T6).
@@ -2653,14 +2830,15 @@ where
     /// # Collective operation
     ///
     /// Every rank must call it: one all-reduce, then the collectives of the evaluator's
-    /// stages.
+    /// stages; with a device backend on several ranks one more all-reduce after the
+    /// output's download, which agrees the device errors (Phase 5 T8).
     ///
     /// # Errors
     ///
     /// [`FmmError::ChargesLength`] on a rank whose `charges` does not have one entry per
     /// source, [`FmmError::OtherRank`] on the others; nothing is evaluated. With a
     /// device backend, [`FmmError::Device`] if a device operation of this or an earlier
-    /// evaluation failed.
+    /// evaluation failed on this rank, and [`FmmError::OtherRank`] on the other ranks.
     pub fn evaluate(&mut self, charges: &[T]) -> Result<Output<T>, FmmError> {
         let mut output = Output {
             potential: Vec::new(),
@@ -2690,7 +2868,12 @@ where
     ///
     /// As [`evaluate`](Self::evaluate), agreed on every rank alike.
     pub fn evaluate_into(&mut self, charges: &[T], output: &mut Output<T>) -> Result<(), FmmError> {
-        let local = if charges.len() == self.sources.nsent() {
+        // A kept device error rides on the agreement of the charge length (Phase 5 T8,
+        // decision 12): the rank that failed returns it, the others `OtherRank`, before any
+        // other collective of the evaluation.
+        let local = if let Some(reason) = &self.device_error {
+            Err(FmmError::Device(reason.clone()))
+        } else if charges.len() == self.sources.nsent() {
             Ok(())
         } else {
             Err(FmmError::ChargesLength {
@@ -2699,10 +2882,6 @@ where
             })
         };
         agree(self.evaluator.comm(), local)?;
-        // A device runs on one rank, so this return skips no collective of another rank.
-        if let Some(reason) = &self.device_error {
-            return Err(FmmError::Device(reason.clone()));
-        }
 
         // The pool of the charge load and the output pass: the operator's, unless it runs
         // serially (Phase 4S T9).
@@ -2727,6 +2906,14 @@ where
                 upload.as_deref().unwrap_or(&self.charges),
                 pool.as_deref(),
             );
+        } else if let Some(upload) = &upload {
+            // The charges of the leaves the source exchange sends, which it reads from the
+            // host store (Phase 5 T8, docs/design/distributed-fmm.md §7.1).
+            for &j in &self.sent_leaves {
+                let points = self.source_leaves.range(j as usize);
+                let chunk = self.evaluator.sources_mut(j as usize);
+                chunk[3 * points.len()..].copy_from_slice(&upload[points]);
+            }
         }
         timings.load = start.elapsed();
 
@@ -2801,9 +2988,7 @@ where
             }
             #[cfg(feature = "gpu")]
             Engine::Device(driver) => {
-                // An error returns before the backward move: a device runs on one rank
-                // until Phase 5 T8, so no other rank waits in it.
-                match timed_value(|| driver.read_output(), &mut timings.download) {
+                let failed = match timed_value(|| driver.read_output(), &mut timings.download) {
                     Ok(DeviceOutput::LeafOrder { values, offsets }) => {
                         gather_output(
                             &values,
@@ -2813,6 +2998,7 @@ where
                             pool.as_deref(),
                             &mut self.received_output,
                         );
+                        None
                     }
                     Ok(DeviceOutput::CallerOrder(values)) => {
                         interleave_output(
@@ -2821,17 +3007,37 @@ where
                             pool.as_deref(),
                             &mut self.received_output,
                         );
+                        None
                     }
-                    Err(error) => {
-                        let reason = error.to_string();
-                        self.device_error = Some(reason.clone());
-                        return Err(FmmError::Device(reason));
-                    }
-                }
+                    Err(error) => Some(error.to_string()),
+                };
                 timings.device = driver.stage_timings();
                 // The call windows, read after the download, like the stage windows.
                 let on_device = kinds.resolve_windows();
                 timings.kinds = kinds.timings().filter(|_| on_device);
+                // A device error of any rank, at any sync of the evaluation (the
+                // mid-evaluation download on several ranks included), is agreed before the
+                // backward move: one all-reduce with a device on several ranks (Phase 5 T8,
+                // decision 12; design §7.5). Every rank finished the stages, so none waits.
+                let comm = self.evaluator.comm();
+                let ok = if comm.size() > 1 {
+                    let mut ok = false;
+                    comm.all_reduce_into(
+                        &failed.is_none(),
+                        &mut ok,
+                        SystemOperation::logical_and(),
+                    );
+                    ok
+                } else {
+                    failed.is_none()
+                };
+                if let Some(reason) = failed {
+                    self.device_error = Some(reason.clone());
+                    return Err(FmmError::Device(reason));
+                }
+                if !ok {
+                    return Err(FmmError::OtherRank);
+                }
             }
         }
         timings.output = start.elapsed();
@@ -2965,6 +3171,35 @@ where
             })
     }
 
+    /// Returns what the evaluator's exchanges move on this rank per evaluation
+    /// ([`ExchangeSizes`], Phase 5 T8), from their index lists.
+    pub fn exchange_sizes(&self) -> ExchangeSizes {
+        let sources = self.evaluator.source_exchange();
+        let multipoles = self.evaluator.multipole_exchange();
+        let coarse = self.evaluator.coarse_exchange();
+        let mut sent_leaves = sources.send_leaves().to_vec();
+        sent_leaves.sort_unstable();
+        sent_leaves.dedup();
+        let nlevels = multipoles.nlevels();
+        ExchangeSizes {
+            ghost_sources: sources.ghost_counts().iter().sum(),
+            sent_sources: sources
+                .send_leaves()
+                .iter()
+                .map(|&j| sources.leaf_counts()[j as usize])
+                .sum(),
+            sent_leaves: sent_leaves.len(),
+            sent_blocks: coarse.sent_blocks().len(),
+            received_blocks: coarse.received_blocks().count(),
+            sent_boxes: (0..nlevels)
+                .map(|l| multipoles.send_boxes(l).len())
+                .collect(),
+            received_boxes: (0..nlevels)
+                .map(|l| multipoles.receive_boxes(l).len())
+                .collect(),
+        }
+    }
+
     /// Returns what the table cache did for each table family, in the order of
     /// [`Tables::kinds`]; empty without a cache.
     pub fn cache_outcomes(&self) -> &[(TableKind, CacheOutcome)] {
@@ -3057,11 +3292,13 @@ where
     ///
     /// # Collective operation
     ///
-    /// Every rank must call it: one all-to-all-v, two with gradients.
+    /// Every rank must call it: one all-to-all-v, two with gradients; with a device
+    /// backend first one all-reduce, which agrees the download.
     ///
     /// # Errors
     ///
-    /// [`FmmError::Device`] if the download fails (a device runs on one rank).
+    /// [`FmmError::Device`] if the download fails, on that rank, and
+    /// [`FmmError::OtherRank`] on the others.
     #[doc(hidden)]
     pub fn reference_output(&mut self) -> Result<Output<T>, FmmError> {
         let gradients = self.gradients();
@@ -3076,7 +3313,8 @@ where
             Engine::Device(driver) => {
                 let store = driver
                     .download_target_output()
-                    .map_err(|error| FmmError::Device(error.to_string()))?;
+                    .map_err(|error| FmmError::Device(error.to_string()));
+                let store = agree(self.evaluator.comm(), store)?;
                 scaled_output(&store, &self.target_leaves, &self.radii, gradients)
             }
         };
@@ -3115,6 +3353,18 @@ where
         match &self.evaluator.operator().engine {
             Engine::Device(driver) => Some(driver.counters()),
             Engine::Host(_) => None,
+        }
+    }
+
+    /// A test hook (Phase 5 T8, decision 12): with a device backend, the next evaluation
+    /// fails on this rank with a device error at its mid-evaluation sync (the download of
+    /// the sent multipoles, `HostData::SendMultipoles`), which every rank then agrees:
+    /// this rank returns [`FmmError::Device`], the others [`FmmError::OtherRank`], from that
+    /// evaluation on. Nothing on the host.
+    #[doc(hidden)]
+    pub fn inject_device_error(&mut self) {
+        if let Engine::Device(driver) = &mut self.evaluator.operator_mut().engine {
+            driver.inject_error();
         }
     }
 

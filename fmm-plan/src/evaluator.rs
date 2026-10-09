@@ -528,6 +528,25 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator, P: Borrow<Plan>> Evaluator
         &mut self.operator
     }
 
+    /// Return the source exchange, for its index lists: an operator that keeps its own
+    /// stores can size its buffers from them before the first evaluation, where the
+    /// [`HostData`] events hand it the same lists.
+    pub fn source_exchange(&self) -> &SourceExchange<Op::Value> {
+        &self.source_exchange
+    }
+
+    /// Return the multipole exchange, for its index lists (as
+    /// [`source_exchange`](Self::source_exchange)).
+    pub fn multipole_exchange(&self) -> &MultipoleExchange<Op::Value> {
+        &self.multipole_exchange
+    }
+
+    /// Return the coarse gather, for its blocks (as
+    /// [`source_exchange`](Self::source_exchange)).
+    pub fn coarse_exchange(&self) -> &CoarseExchange<Op::Value> {
+        &self.coarse_exchange
+    }
+
     /// Return the source data of the local leaf `leaf` mutably: `count · point_size`
     /// values.
     ///
