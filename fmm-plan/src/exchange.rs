@@ -69,6 +69,12 @@
 //! - **Exact copies.** Every received chunk is the owner's chunk, value for value; no
 //!   exchange combines values, so results are bit-identical from run to run.
 //! - **Variable chunks.** Source chunks have the owner's count, zero included.
+//! - **Named slots.** Each exchange names what it reads and writes in the stores:
+//!   [`SourceExchange::send_leaves`] and [`ghost_leaves`](SourceExchange::ghost_leaves),
+//!   [`MultipoleExchange::send_boxes`] and [`receive_boxes`](MultipoleExchange::receive_boxes),
+//!   [`CoarseExchange::sent_blocks`] and [`received_blocks`](CoarseExchange::received_blocks).
+//!   It reads and writes nothing else, which is what the evaluator's
+//!   [host-data events](super::operator#host-data) pass on to the operator.
 
 #[cfg(test)]
 #[path = "exchange_tests.rs"]
@@ -726,6 +732,26 @@ impl<T: Equivalence + Copy + Default> CoarseExchange<T> {
         self.rank_blocks[rank]..self.rank_blocks[rank + 1]
     }
 
+    /// Return the blocks whose multipoles [`gather`](Self::gather) reads from this rank's
+    /// store and sends, as a range of indices into [`keys`](Self::keys): this rank's
+    /// blocks, or none on a one-rank communicator, where the gather goes to the rank
+    /// itself and nobody uses the value it reads.
+    pub fn sent_blocks(&self) -> Range<usize> {
+        if self.rank_blocks.len() == 2 {
+            0..0
+        } else {
+            self.rank_blocks(self.rank)
+        }
+    }
+
+    /// Return the blocks whose multipoles [`gather`](Self::gather) writes into this rank's
+    /// store, every other rank's, as indices into [`keys`](Self::keys), ascending; none on
+    /// a one-rank communicator.
+    pub fn received_blocks(&self) -> impl Iterator<Item = usize> + use<T> {
+        let own = self.rank_blocks(self.rank);
+        (0..own.start).chain(own.end..self.keys.len())
+    }
+
     /// Return the multipole of coarse block `b` in the gathered buffer, as of the last
     /// [`gather`](Self::gather).
     pub fn chunk(&self, b: usize) -> &[T] {
@@ -773,7 +799,7 @@ impl<T: Equivalence + Copy + Default> CoarseExchange<T> {
             layout,
             "the multipole buffers do not have the exchange layout"
         );
-        for b in (0..self.keys.len()).filter(|b| !own.contains(b)) {
+        for b in self.received_blocks() {
             let (level, i) = self.blocks[b];
             multipoles
                 .chunk_mut(level, i as usize)

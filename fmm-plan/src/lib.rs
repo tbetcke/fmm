@@ -55,6 +55,14 @@
 //! The [`evaluator`] module documents the calls, the collectives and the accumulation
 //! order of every value.
 //!
+//! Besides the level calls, the evaluator tells the operator of each of its own data
+//! movements, `reset`'s zeroing and the three exchanges, with an event of
+//! [`FmmOperator::host_data`](operator::FmmOperator::host_data) that carries the index
+//! lists the movement uses ([Host data](operator#host-data),
+//! `docs/design/distributed-fmm.md` §6). An operator that keeps its own copies of the
+//! stores, for example on a device, stays consistent through these events alone; the
+//! default does nothing.
+//!
 //! The evaluator works on the points of the local leaves, grouped by leaf. A caller
 //! whose points lie on any rank moves them to their owners with a
 //! [`Redistribution`](redistribute::Redistribution) (`forward`, one all-to-all-v), which

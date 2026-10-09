@@ -225,7 +225,33 @@
 //!   leaf (O4; no error, no hang); P2P alone, equal to the direct sum to 1e-14. It also
 //!   runs on one rank.
 //!
-//! The test prints, at the end, how many evaluations matched their one-rank reference.
+//! The host-data hook (Phase 5 T7, C5.1 device; docs/design/distributed-fmm.md §6.4;
+//! `tests/shadow`). A shadow operator wraps `LaplaceOperator`, keeps its own copies of the
+//! five stores, computes every batch on them, and learns of the evaluator's data movements
+//! only through `FmmOperator::host_data`. Error measure: exact equality of the bit
+//! patterns, agreed on every rank.
+//! - Every `Fmm` scenario: the one-thread evaluation of `evaluate_threaded` is repeated
+//!   by the plan's `Evaluator` with the shadow on the `Fmm`'s octree and plan (the points
+//!   and charges moved by the test's own `Redistribution`s, the leaf-scaled points and the
+//!   charges handed to the shadow alone), and its output, scaled as `Fmm` scales it and
+//!   moved back, equals the `Fmm`'s bit for bit; the evaluator's own target output and
+//!   locals stay zero, and every evaluation fires 5 + nlevels events. Once per tree,
+//!   precision and output kind of each scenario (`check_shadow_once`: which data move
+//!   depends on those, not on p, the strategy or the P2P kernel), to keep the debug run
+//!   under a minute.
+//! - **batched against per-pair** runs the shadow on its hand-loaded tree, bit for bit
+//!   the batched operator's target output.
+//! - **host-data hook**: the cube, N = 1,500, p = 4 with gradients, shared by rank. The
+//!   shadow equals the `Fmm` through two evaluations of different charges on one
+//!   evaluator (the second relies on `Reset`). With the hook disabled (the shadow ignores
+//!   every event) one evaluation is still exact on one rank, where no event carries data,
+//!   and differs on several ranks, where the ghosts and the other ranks' coarse blocks stay
+//!   zero (the test asserts that the tree has ghost leaves and boxes there); two
+//!   evaluations differ on every rank count. It prints the ghosts and how many values
+//!   differ.
+//!
+//! The test prints, at the end, how many shadow evaluations matched, and how many
+//! evaluations matched their one-rank reference.
 
 use mpi::Threading;
 use mpi::collective::SystemOperation;
@@ -254,6 +280,7 @@ use nd_octree::{MortonKey, Octree, OctreeOptions, PhysicalBox, constants::DEEPES
 #[cfg(feature = "gpu")]
 mod device_common;
 mod kind_common;
+mod shadow;
 
 type Scenario = fn(&SimpleCommunicator);
 
@@ -372,7 +399,7 @@ fn distributed_scenarios() {
         "the threaded scenarios need MPI at Funneled, it provides {provided:?}"
     );
     let comm = universe.world();
-    let cases: [(&str, Scenario); 22] = [
+    let cases: [(&str, Scenario); 23] = [
         ("table order against the plan", table_order),
         ("batched against per-pair", batched_against_per_pair),
         ("uniform cube, every strategy", uniform_cube_strategies),
@@ -398,8 +425,10 @@ fn distributed_scenarios() {
         ("device backends", device_backends_scenario),
         ("input distributions", input_distributions),
         ("tiny problem", tiny_problem),
+        ("host-data hook", host_data_hook),
     ];
     for (name, scenario) in cases {
+        *SCENARIO.lock().unwrap() = name;
         eprintln!("rank {}: {name}", comm.rank());
         let start = std::time::Instant::now();
         scenario(&comm);
@@ -416,6 +445,11 @@ fn distributed_scenarios() {
          for bit the pass before T9",
         comm.rank(),
         REFERENCE_CHECKS.load(std::sync::atomic::Ordering::Relaxed)
+    );
+    eprintln!(
+        "rank {}: host-data hook (Phase 5 T7): {} shadow evaluations bit for bit the FMM",
+        comm.rank(),
+        SHADOW_CHECKS.load(std::sync::atomic::Ordering::Relaxed)
     );
     let checks = ONE_RANK_CHECKS.load(std::sync::atomic::Ordering::Relaxed);
     eprintln!(
@@ -681,6 +715,51 @@ fn evaluate<Op: FmmOperator<Value = f64>>(
     evaluator.target_output_store().as_slice().to_vec()
 }
 
+/// Runs the evaluator with a [`shadow::Shadow`] of `operator` (the host-data hook on) on
+/// the points loaded by leaf, which only the shadow holds; returns the shadow's target
+/// output, every local leaf after another (Phase 5 T7).
+fn evaluate_shadow(
+    plan: &Plan,
+    comm: &SimpleCommunicator,
+    operator: LaplaceOperator<f64>,
+    domain: &Domain,
+    (sources, charges, source_leaves): (&[[f64; 3]], &[f64], &[Vec<usize>]),
+    (targets, target_leaves): (&[[f64; 3]], &[Vec<usize>]),
+) -> Vec<f64> {
+    let index = plan.index();
+    let source_counts: Vec<usize> = source_leaves.iter().map(Vec::len).collect();
+    let target_counts: Vec<usize> = target_leaves.iter().map(Vec::len).collect();
+    let shadow = shadow::Shadow::new(operator, true);
+    let mut evaluator = Evaluator::new(plan, comm, shadow, &source_counts, &target_counts)
+        .expect("the evaluator builds");
+    let (mut points, mut leaf_charges, mut target_points) = (Vec::new(), Vec::new(), Vec::new());
+    for (leaf, (in_sources, in_targets)) in source_leaves.iter().zip(target_leaves).enumerate() {
+        let key = index.leaf_key(leaf);
+        for &j in in_sources {
+            points.extend(leaf_coordinates::<f64>(sources[j], key, domain));
+            leaf_charges.push(charges[j]);
+        }
+        for &j in in_targets {
+            target_points.extend(leaf_coordinates::<f64>(targets[j], key, domain));
+        }
+    }
+    let counts = shadow::counts(evaluator.source_store());
+    let shadow = evaluator.operator_mut();
+    shadow.attach(index, &counts, &target_counts);
+    shadow.load_points(&points, &target_points);
+    shadow.begin_evaluation(&leaf_charges);
+    evaluator.evaluate();
+    assert!(
+        evaluator
+            .target_output_store()
+            .as_slice()
+            .iter()
+            .all(|&v| v == 0.0),
+        "the shadow writes the evaluator's target output"
+    );
+    evaluator.operator().target_output().as_slice().to_vec()
+}
+
 /// The batched operator against the per-pair adapter, and a smoke check against the
 /// direct sum (module documentation).
 fn batched_against_per_pair(comm: &SimpleCommunicator) {
@@ -765,6 +844,19 @@ fn batched_against_per_pair(comm: &SimpleCommunicator) {
                 bits(&batched),
                 "{choice}: {n} threads against serial"
             );
+        }
+        // The shadow check of the host-data hook (Phase 5 T7), with one kernel.
+        if choice == P2pChoice::Reference {
+            let shadowed = evaluate_shadow(
+                &plan,
+                comm,
+                op.clone(),
+                &domain,
+                input,
+                (&targets, &target_leaves),
+            );
+            assert_eq!(bits(&shadowed), bits(&batched), "the shadow operator");
+            SHADOW_CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         let per_pair = evaluate(
             &plan,
@@ -1000,6 +1092,7 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
         .expect("the host times synchronously");
     let output = fmm.evaluate(charges).expect("the FMM evaluates");
     check_reference("host, one thread", &mut fmm, &output);
+    check_shadow_once((sources, targets), charges, &output, &fmm, comm);
     check_one_rank(
         "host, one thread",
         &builder,
@@ -1085,6 +1178,78 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
         }
     }
     Some((fmm, output))
+}
+
+/// The shadow evaluations [`check_shadow`] compared, for the closing line.
+static SHADOW_CHECKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The shadow check of the host-data hook (Phase 5 T7, docs/design/distributed-fmm.md
+/// §6.4; `shadow::check_fmm`): the plan's evaluator with a shadow of `fmm`'s operator that
+/// learns of the evaluator's data movements only through its events gives, for every
+/// `(charges, output)` in turn, the output of `fmm` bit for bit. The verdict is agreed on
+/// every rank.
+fn check_shadow<T: Stored + SimdScalar + Equivalence + Default>(
+    sets: (&[[f64; 3]], &[[f64; 3]]),
+    evaluations: &[(&[T], &Output<T>)],
+    fmm: &Fmm<'_, T>,
+    comm: &SimpleCommunicator,
+) {
+    let verdict = shadow::check_fmm(fmm, sets, evaluations, true, comm);
+    assert_eq!(
+        verdict,
+        shadow::Verdict {
+            values: verdict.values,
+            ..Default::default()
+        },
+        "rank {}: the shadow operator differs from the FMM",
+        comm.rank()
+    );
+    SHADOW_CHECKS.fetch_add(evaluations.len(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The scenario running, for [`check_shadow_once`].
+static SCENARIO: std::sync::Mutex<&str> = std::sync::Mutex::new("");
+
+/// What [`check_shadow_once`] has checked: (scenario, bytes per value, gradients, levels,
+/// largest leaf, and over every rank the leaves, sources and targets).
+type ShadowKey = (&'static str, usize, bool, usize, usize, [usize; 3]);
+
+/// The keys [`check_shadow_once`] has checked.
+static SHADOWED: std::sync::Mutex<Vec<ShadowKey>> = std::sync::Mutex::new(Vec::new());
+
+/// [`check_shadow`] of the one-thread evaluation of `evaluate_threaded`, once per tree,
+/// precision and output kind of each scenario: which data the evaluator moves depends on
+/// the tree and the value type, not on p, the strategy or the P2P kernel, and a check
+/// of every evaluation would take the debug run past its minute. The key is the same on
+/// every rank (one all-reduce), so every rank decides alike.
+fn check_shadow_once<T: Stored + SimdScalar + Equivalence + Default>(
+    sets: (&[[f64; 3]], &[[f64; 3]]),
+    charges: &[T],
+    output: &Output<T>,
+    fmm: &Fmm<'_, T>,
+    comm: &SimpleCommunicator,
+) {
+    let mut tree = [0usize; 3];
+    comm.all_reduce_into(
+        &[fmm.nleaves(), sets.0.len(), sets.1.len()][..],
+        &mut tree[..],
+        SystemOperation::sum(),
+    );
+    let key = (
+        *SCENARIO.lock().unwrap(),
+        size_of::<T>(),
+        fmm.gradients(),
+        fmm.nlevels(),
+        fmm.max_leaf_points(),
+        tree,
+    );
+    let mut shadowed = SHADOWED.lock().unwrap();
+    if shadowed.contains(&key) {
+        return;
+    }
+    shadowed.push(key);
+    drop(shadowed);
+    check_shadow(sets, &[(charges, output)], fmm, comm);
 }
 
 /// Evaluates `charges` again on `fmm`, at one thread, with `KindTiming::Synchronous`
@@ -3094,5 +3259,70 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ")
+    );
+}
+
+/// The host-data hook (Phase 5 T7; module documentation): the shadow with the hook through
+/// two evaluations, and without it.
+fn host_data_hook(comm: &SimpleCommunicator) {
+    let mut rng = SplitMix64(0x7a07);
+    let points = unit_cube_points(&mut rng, 1500);
+    let first = random_charges(&mut rng, points.len());
+    let second = random_charges(&mut rng, points.len());
+    let sources = share(&points, comm);
+    let (first, second) = (share(&first, comm), share(&second, comm));
+    let builder = FmmBuilder::<f64>::new(4).gradients(true);
+    let sets = (&sources[..], &sources[..]);
+    let (mut fmm, output) =
+        evaluate_threaded(&builder, sets, &first, &[], comm).expect("the FMM builds");
+    let again = fmm.evaluate(&second).expect("the FMM evaluates");
+
+    // The data the exchanges move on this tree, over every rank.
+    let index = fmm.plan().index();
+    let ghost_boxes = (0..index.nlevels())
+        .map(|l| {
+            (0..index.len(l))
+                .filter(|&i| index.kind(l, i).is_ghost())
+                .count()
+        })
+        .sum::<usize>();
+    let ghosts = [
+        global_sum(index.leaves().ghosts().len(), comm),
+        global_sum(ghost_boxes, comm),
+    ];
+    assert!(
+        comm.size() == 1 || ghosts.iter().all(|&n| n > 0),
+        "ghost leaves and boxes on several ranks: {ghosts:?}"
+    );
+
+    // With the hook, two evaluations in turn: the second relies on `Reset`.
+    let both = [(&first[..], &output), (&second[..], &again)];
+    check_shadow(sets, &both, &fmm, comm);
+    // Without it, one evaluation: on one rank no event carries data; on several the
+    // ghosts and the other ranks' coarse blocks stay zero.
+    let off = shadow::check_fmm(&fmm, sets, &both[..1], false, comm);
+    // Without it, two evaluations: the second adds to the first on every rank count.
+    let off_twice = shadow::check_fmm(&fmm, sets, &both, false, comm);
+    eprintln!(
+        "rank {}: host-data hook: {} ghost leaves and {} ghost boxes on {} ranks; the \
+         shadow equals the FMM bit for bit through two evaluations; without the hook {} of \
+         {} values differ after one evaluation, {} of {} after two",
+        comm.rank(),
+        ghosts[0],
+        ghosts[1],
+        comm.size(),
+        off.differing,
+        off.values,
+        off_twice.differing,
+        off_twice.values
+    );
+    if comm.size() == 1 {
+        assert_eq!(off.differing, 0, "one rank: no event carries data");
+    } else {
+        assert!(off.differing > 0, "without the hook the shadow must differ");
+    }
+    assert!(
+        off_twice.differing > 0,
+        "without `Reset` the shadow must differ"
     );
 }
