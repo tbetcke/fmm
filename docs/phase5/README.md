@@ -248,6 +248,21 @@ These hold for every task, so that no task decides them on its own:
     `test_index_fmm` (which T2 removes), pass at 1, 2, 4, 8, 16, 32, 64 and 72 ranks,
     in 0.11–0.19 s per run at 1–8 ranks and 0.59–2.64 s at 72 (start-up dominated).
     `nd-fmm-exec`'s `tests/mpi_exec.rs` passes at 1, 2, 4 and 8 ranks.
+  - Measured on 2026-10-09 (the locust runs of T5 and T6, deferred at #83's merge; at
+    `d22e87c`; `timeout`, no extra flags; BLAS variables at 1; no other user's job
+    running). In debug (`.github/scripts/run-mpi-tests.sh run <list> 1 2 4 8`),
+    `nd-fmm-plan`'s `mpi_regressions`, `nd-fmm-exec`'s `mpi_exec` and `mpi_threading`,
+    and the six `nd-octree` MPI examples pass at 1, 2, 4 and 8 ranks, except
+    `test_mpi_leaf_lookup` at 8. Its fixture assumed that rank 1 owns leaves, which T4's
+    empty ranks (O4) broke, on the M3 Max as well; #84 fixes it, passing at 1–72 ranks.
+    `nd-fmm-validate`'s tests pass at one rank, and its `fmm_accuracy` test at two. In
+    release, `nd-fmm-exec`'s ignored tests pass at one rank, and the C5.1 host gate
+    (`tests/multi_rank.rs`, one thread per rank) passes at 2, 4 and 8. No output value
+    differs from that of the one-rank `Fmm` over the union in rank order. The relative
+    L2 difference from the one-rank run in point order is at most 2.0e-15 (f64) and
+    7.1e-7 (f32), and the errors against the direct sum are within 0.06% of the one-rank
+    run's. The f64 cube at p = 18 evaluates in 6264, 3204, 1607 and 838 ms at 1, 2, 4
+    and 8 ranks (reported, not asserted).
 - **Device ranks.** One device per rank, opened by the local rank index (a
   `split_shared` communicator). On the CPU runtime the cores are shared: ranks × units
   per cube stay within the cores (device-path.md §11), and the `threads(n)` cap applies
