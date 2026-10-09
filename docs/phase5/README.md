@@ -536,7 +536,7 @@ In the repository root, start `claude` and say:
 - [x] T5 merged: `Redistribution` round-trips on 1, 2 and 4 ranks for every input distribution
 - [x] T6 merged: `Fmm` on any rank count; equal to one rank within requirement 2 on 2, 4 and 8 ranks; C5.1 host gate
 - [x] T7 merged: `host_data` hook; shadow operator bit for bit on 1, 2 and 4 ranks, and differs with the hook disabled
-- [ ] T8 merged: device on 2 and 4 ranks within the FMM bounds of the host; transfers as the formula; `DeviceNeedsOneRank` removed
+- [x] T8 merged: device on 2 and 4 ranks within the FMM bounds of the host; transfers as the formula; `DeviceNeedsOneRank` removed
 - [ ] T9 merged: overlapped exchanges, output as decision 9 fixes; communication hidden by the T1 measure
 - [ ] T10 merged: scaling report published
 - [ ] Design documents updated: laplace-fmm-plan §5, §7 (Phase 5 status and numbers), §8.1, §8.3, §9.1 and §9.2; fmm-plan-redesign §9 and §10 outcome notes; device-path.md §14; workspace-structure §3, §4 and §6; distributed-fmm.md decisions and measurements recorded
