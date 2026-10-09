@@ -107,31 +107,39 @@ fn main() {
         assert_eq!(result, Ok(oracle(query, &owned_leaves)));
     }
     if comm.size() > 1 {
-        // Rank 1 has only invalid input but must still serve rank 0's requests.
-        let rank_one_queries = representatives
+        // The first rank after rank 0 that owns leaves has only invalid input but must
+        // still serve rank 0's requests. A rank may own no leaves (an empty range), so
+        // it is not always rank 1; every rank picks the same one from the gathered
+        // leaves.
+        let server = owned_leaves
+            .iter()
+            .map(|&(_, owner)| owner)
+            .find(|&owner| owner != 0)
+            .expect("a rank other than 0 owns leaves");
+        let server_queries = representatives
             .iter()
             .copied()
-            .filter(|&query| tree.owner_rank(query).unwrap() == 1)
+            .filter(|&query| tree.owner_rank(query).unwrap() == server)
             .take(4)
             .collect_vec();
-        assert!(!rank_one_queries.is_empty());
-        let invalid_only = if rank == 1 {
+        assert!(!server_queries.is_empty());
+        let invalid_only = if rank == server {
             &[morton::root()][..]
         } else if rank == 0 {
-            rank_one_queries.as_slice()
+            server_queries.as_slice()
         } else {
             &[]
         };
         let invalid_only_results = tree.lookup_leaves(invalid_only).unwrap();
         assert_eq!(invalid_only_results.len(), invalid_only.len());
-        if rank == 1 {
+        if rank == server {
             assert_eq!(
                 invalid_only_results,
                 vec![Err(LookupError::NotFinestLevel { level: 0 })]
             );
         } else if rank == 0 {
             for (&query, result) in invalid_only.iter().zip(invalid_only_results) {
-                assert_eq!(tree.owner_rank(query), Ok(1));
+                assert_eq!(tree.owner_rank(query), Ok(server));
                 assert_eq!(result, Ok(oracle(query, &owned_leaves)));
             }
         }

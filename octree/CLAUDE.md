@@ -79,7 +79,8 @@ mpirun -n 3 target/debug/examples/test_mpi_weighted_partition
 `test_mpi_weighted_partition` (Phase 5 T4) checks the partition by weight on four
 workloads: the leaves against the one-rank tree, the weight bound, independence of the
 input distribution, and a tree whose only block is the root. Run it also at 2, 4 and 8
-ranks for a change to the partition; `test_mpi_construction_edge_cases` at 1–8.
+ranks for a change to the partition; `test_mpi_construction_edge_cases` at 1–8, and
+`test_mpi_leaf_lookup` at 8, where rank 1 owns no leaves.
 
 ## Invariants and domain rules
 
