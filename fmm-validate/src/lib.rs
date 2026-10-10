@@ -58,6 +58,11 @@
 //! - `device_fmm` (feature `gpu`, Phase 4 T13): the device FMM against the host path,
 //!   stage by stage, with its build, transfers, launches and syncs and its errors, run
 //!   by the `device_fmm` example (with the device leaf-size study).
+//! - [`scaling`] (Phase 5 T10, C5.3): the distributed host FMM on any number of ranks,
+//!   per rank and reduced over the ranks: the work, the build by part, the evaluation
+//!   stage by stage with the load imbalance, the traffic per exchange, the memory per
+//!   rank, the errors and the one-rank reference; run by the `scaling` example (not
+//!   registered for `run-examples`: it times) and the sweeps of `tools/scaling/run.sh`.
 //!
 //! The examples `accuracy`, `timing`, `tables`, `fmm_accuracy`, `calibrate`,
 //! `p2p_kernels` and `p2p_fmm` print Markdown reports on stdout:
@@ -102,5 +107,6 @@ pub mod p2p_kernels;
 pub mod peaks;
 pub mod points;
 mod rng;
+pub mod scaling;
 
 pub use rng::SplitMix64;

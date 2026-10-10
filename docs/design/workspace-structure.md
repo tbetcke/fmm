@@ -19,6 +19,13 @@ runs on CUDA (locust's GH200, by hand) with CUDA layouts and a backend-keyed sta
 `nd-fmm-exec` gains per-kind timings and `tests/device_cuda.rs`; the new default member
 `nd-fmm-bench` is the one-command benchmark; `tools/gh200/` builds locust's environment
 (docs/phase4s/).
+Revised at the end of Phase 5 (2026-10-10; Sections 3, 3.1, 4 and 6): the FMM runs on any
+number of ranks. `nd-octree` partitions by weight with ranks allowed to hold no block
+(T4); `nd-fmm-plan` loses the index FMM (T2) and gains the redistribution (T5), the
+host-data hook (T7) and the overlapped exchanges (T9); `nd-fmm-exec`'s `Fmm` redistributes
+its points (T6), runs the device on several ranks (T8) and overlaps the exchanges on
+request (T9); `nd-fmm-validate` gains the multi-rank accuracy runs (T6) and the scaling
+harness (T10). No new crate ([distributed-fmm.md](distributed-fmm.md), docs/phase5/).
 
 Add seven new crates to the existing workspace, created phase by phase rather than all at
 once. The existing `nd-fmm-plan` crate is the integration layer. It already owns the
@@ -226,12 +233,12 @@ Each crate has one job and a public surface small enough to describe in a few li
 | `fmm-math` | `nd-fmm-math` | Phase 0 (done) | real solid harmonics and gradients, rotation blocks, index layout, scalar trait | `num-traits` |
 | `fmm-ref` | `nd-fmm-ref` | Phase 1 (done) | f64 reference operators (direct O(p⁴) and rotation O(p³)), P2P, direct-sum oracle | `nd-fmm-math`, `num-traits` |
 | `fmm-tables` | `nd-fmm-tables` | Phase 2 (done) | M2M/L2L (8 octants each), M2L (316 offsets, symmetry classes), rotation tables, versioned cache, later SVD compression | `nd-fmm-math`, `nd-fmm-ref`, `num-traits`, `thiserror` (cache errors); `rlst` (without its `mpi` feature) only with SVD compression (C6.2); no serialiser, as the cache writes its own little-endian format |
-| `fmm-exec` | `nd-fmm-exec` | Phase 3 (host, done), Phase 3S (SIMD P2P, done), Phase 4 (device, done), Phase 4S (CUDA, per-kind timings, done) | the level-batched `FmmOperator` for Laplace (`LaplaceOperator`), box geometry from integer Morton keys, user-facing FMM object, M2L strategy selection, host threading, the choice of P2P kernel; behind `gpu` the device path (`DeviceOperator` with a host fallback per kind) and the autotune of its choices | as built in Phase 3: `nd-fmm-math`, `nd-fmm-ref`, `nd-fmm-tables`, `nd-fmm-plan`, `nd-octree`, `mpi` (feature `derive`), `rlst` (no features of its own; `nd-octree` enables `mpi`), `rayon`, `thiserror`; dev-dependency `proptest`. Phase 3S added `nd-fmm-simd`; Phase 4 added `nd-fmm-kernels` (optional, feature `gpu`; features `cpu`, `metal` and `cuda` enable `gpu` and the backend). No direct CubeCL dependency and no `unsafe`. Phase 4S added no dependency |
+| `fmm-exec` | `nd-fmm-exec` | Phase 3 (host, done), Phase 3S (SIMD P2P, done), Phase 4 (device, done), Phase 4S (CUDA, per-kind timings, done), Phase 5 (any number of ranks, host and device; overlap; done) | the level-batched `FmmOperator` for Laplace (`LaplaceOperator`), box geometry from integer Morton keys, user-facing FMM object, M2L strategy selection, host threading, the choice of P2P kernel; behind `gpu` the device path (`DeviceOperator` with a host fallback per kind) and the autotune of its choices | as built in Phase 3: `nd-fmm-math`, `nd-fmm-ref`, `nd-fmm-tables`, `nd-fmm-plan`, `nd-octree`, `mpi` (feature `derive`), `rlst` (no features of its own; `nd-octree` enables `mpi`), `rayon`, `thiserror`; dev-dependency `proptest`. Phase 3S added `nd-fmm-simd`; Phase 4 added `nd-fmm-kernels` (optional, feature `gpu`; features `cpu`, `metal` and `cuda` enable `gpu` and the backend). No direct CubeCL dependency and no `unsafe`. Phase 4S and Phase 5 added no dependency |
 | `fmm-simd` | `nd-fmm-simd` | Phase 3S (done) | hand-written SIMD kernels for the host path, P2P first: `core::arch` intrinsics for aarch64 NEON and x86_64 AVX2 + FMA (AVX-512 deferred), a scalar fallback, runtime ISA dispatch ([simd-p2p.md](simd-p2p.md)) | `nd-fmm-math`, `thiserror`; dev-dependencies `nd-fmm-ref`, `proptest`. No MPI, no external SIMD crate |
 | `fmm-kernels` | `nd-fmm-kernels` | Phase 4 (done); CUDA layouts in Phase 4S (done) | every `#[cube]` kernel behind safe wrappers: backends and the f64 capability check, device buffers, data movement, the plan's views on the device, P2P, the leaf operators, the grouped translations (M2M, L2L, dense M2L), rotation M2L, timing windows; every kernel on every runtime, the runtime a run-time value | `cubecl` =0.11.0-pre.4, `cubek-matmul` and `cubek-std` =0.3.0-pre.4 (the pinned workspace entries), `nd-fmm-math`, `thiserror`; dev-dependencies `nd-fmm-ref`, `nd-fmm-tables`, `proptest`. No MPI, no `nd-fmm-plan`, no rayon. Features `cpu`, `metal` (wgpu with the MSL compiler), `cuda` (LLVM NVPTX; type-checked in CI, run by hand on locust's H100 since Phase 4S), none by default. A workspace member, not a default member |
-| `fmm-validate` | `nd-fmm-validate` (`publish = false`) | Phase 1 (done), grows with each phase | error norms, point distributions, accuracy sweeps, the FMM accuracy reports and the calibration of p, benchmarks | all of the above, as dev tooling; in Phase 1 `nd-fmm-math` and `nd-fmm-ref`, in Phase 2 also `nd-fmm-tables`, in Phase 3 also `nd-fmm-exec` and `mpi` (so building it needs MPI), in Phase 3S also `nd-fmm-simd`, in Phase 4 also `nd-fmm-kernels` (optional, feature `gpu`, with `cpu`, `metal` and `cuda` passed through). No library crate depends on it; the spike `spikes/p2p-simd` does (Phase 3S T7) |
+| `fmm-validate` | `nd-fmm-validate` (`publish = false`) | Phase 1 (done), grows with each phase (Phase 5: multi-rank accuracy runs and the scaling harness) | error norms, point distributions, accuracy sweeps, the FMM accuracy reports and the calibration of p, benchmarks | all of the above, as dev tooling; in Phase 1 `nd-fmm-math` and `nd-fmm-ref`, in Phase 2 also `nd-fmm-tables`, in Phase 3 also `nd-fmm-exec` and `mpi` (so building it needs MPI), in Phase 3S also `nd-fmm-simd`, in Phase 4 also `nd-fmm-kernels` (optional, feature `gpu`, with `cpu`, `metal` and `cuda` passed through). No library crate depends on it; the spike `spikes/p2p-simd` does (Phase 3S T7) |
 | `fmm-bench` | `nd-fmm-bench` (`publish = false`) | Phase 4S (done; T6) | the one-command benchmark: N points uniform in the unit cube, f32 or f64, a degree p and a backend; the evaluation time (min, median, mean, max, standard deviation), the time per operator kind and the error against the direct sum, as one Markdown file (`tools/bench/run.sh`). A binary over a small library | `nd-fmm-exec`, `nd-fmm-validate`, `mpi`, and `nd-fmm-tables` for the `Stored` bound of `Fmm<T>` only, all from `[workspace.dependencies]`; features `gpu`, `cpu`, `metal` and `cuda` passed through. No external dependency (the command line is parsed by hand). A default member, never in CI beyond the default checks and its smoke test |
-| `fmm-plan` | `nd-fmm-plan` (existing; rewritten in Phase 3) | before this plan; rewritten in Phase 3 (T4–T7) | kernel-agnostic plan of a distributed FMM: box index, lists, stores, ghost exchange, batched operator interface, evaluator | as built: `nd-octree`, `rlst` (feature `mpi`), `mpi` (feature `complex`, kept for complex-valued operators downstream), all from `[workspace.dependencies]`; dev-dependency `rand_chacha`. No rayon: threading lives in `nd-fmm-exec` |
+| `fmm-plan` | `nd-fmm-plan` (existing; rewritten in Phase 3) | before this plan; rewritten in Phase 3 (T4–T7); Phase 5 (T2, T5, T7, T9; done) | kernel-agnostic plan of a distributed FMM: box index, lists, stores, ghost exchange, batched operator interface, evaluator; since Phase 5 the redistribution of points, the host-data hook and the overlapped exchanges | as built: `nd-octree`, `rlst` (feature `mpi`), `mpi` (feature `complex`, kept for complex-valued operators downstream), all from `[workspace.dependencies]`; dev-dependency `rand_chacha`. No rayon: threading lives in `nd-fmm-exec` |
 
 Dropped after scouting:
 
@@ -241,7 +248,8 @@ Dropped after scouting:
   `nd-fmm-plan` (`FmmEvaluator` then, `Evaluator` since the Phase 3 rewrite). What
   remains of Phase 5 is the redistribution of points (C5.1), multi-rank validation of
   the Laplace operator, and overlap of communication and computation. The overlap
-  belongs in `nd-fmm-plan`.
+  belongs in `nd-fmm-plan`. *Phase 5 as built:* no crate was added; the redistribution,
+  the hook and the overlap are in `nd-fmm-plan`, the Laplace side in `nd-fmm-exec`.
 
 Outside the crates, Phase 0 also adds these folders:
 
@@ -262,6 +270,13 @@ locust), `tools/bench/run.sh` (T6: the benchmark's one command) and the crate
 `fmm-bench/` with its phase reports in `fmm-bench/results/` (T8:
 `results/phase4s-gh200.md`). The CUDA runs of the spikes are recorded beside their
 Metal ones (`spikes/cubecl-gemm/results-gh200-0.11.md`, `spikes/device-arith/results-gh200*.md`).
+
+Phase 5 adds the CI job `run-tests-mpi` with `.github/scripts/run-mpi-tests.sh` (T3: the
+MPI test executables and the `nd-octree` MPI examples at 2 and 4 ranks),
+`tools/scaling/run.sh` (T10: the scaling sweeps, one launch of `nd-fmm-validate`'s
+`scaling` example per configuration under `mpirun` and a timeout, with the documented
+inter-node command) and the reports `fmm-validate/results/phase5-m3max.md` and
+`fmm-validate/results/phase5-gh200.md` (T10).
 
 ### 3.1 Public surface per crate
 
@@ -431,6 +446,32 @@ Metal ones (`spikes/cubecl-gemm/results-gh200-0.11.md`, `spikes/device-arith/res
     (`tests/accuracy.rs`, `tests/adaptive.rs`, `tests/device_fmm.rs`); `tests/kind_common`
     (T5), the kind-timing checks shared by `tests/mpi_exec.rs` and the Metal and CUDA
     executables.
+- Phase 5 (T6, T8, T9; [distributed-fmm.md](distributed-fmm.md) §4, §7, §8): `build` and
+  `evaluate` keep their signatures and run on any number of ranks, each rank passing any
+  subset of the points, empty included:
+  - `fmm` (T6): `build` routes the sources and the targets through two
+    `nd_fmm_plan::redistribute::Redistribution`s and forwards the f64 coordinates;
+    `evaluate` forwards the charges and moves the output back into the caller's order
+    (one all-to-all-v each). On P ranks the host output is bit for bit the one-rank
+    `Fmm` over the union of the points in rank order. `PointsNotOwned` is gone;
+    `FmmError::Redistribution` carries a redistribution that overflows MPI's counts.
+    `BuildTimings::redistribute` (was `sort`), `StageTimings::{forward_charges,
+    backward_output}`, `Fmm::owned_points`;
+  - the device on several ranks (T8): `DeviceNeedsOneRank` is gone; the device operator
+    mirrors the evaluator's `HostData` events with packed exchange buffers on the device
+    (`device::ExchangeLists`, `DataKind::{GhostSources, SentMultipoles,
+    CoarseMultipoles, ReceivedMultipoles}`, `DeviceCounters::received_levels`,
+    `DeviceReport::ranks`, `device::RankPlacement`); `Fmm::exchange_sizes`
+    (`ExchangeSizes`); the doc-hidden `Fmm::inject_device_error`;
+  - overlap (T9): `FmmBuilder::overlap` (off by default) and `Fmm::set_overlap`, bit for
+    bit the blocking path; `StageTimings::overlap` (`OverlapTimes`, re-exported with
+    `ExchangeTimes` and `Traffic`); `Fmm::exchange_traffic` (`ExchangeTraffic`);
+  - tests: every `tests/mpi_exec.rs` scenario on every rank count against the one-rank
+    `Fmm` (T6), the shadow check of the hook (`tests/shadow/`, T7), the device repeats on
+    several ranks (T8), every scenario overlapped (T9); the ignored gates
+    `tests/multi_rank.rs` (C5.1 host, T6) and `tests/device_ranks.rs` (C5.1 device, T8);
+    the example `overlap_timing` (T9, the C5.2 measurement; not registered) and the
+    registered user-facing example `basic_evaluation`.
 
 **`nd-fmm-plan`** (existing; rewritten in Phase 3, see Section 1.1)
 
@@ -448,6 +489,39 @@ Metal ones (`spikes/cubecl-gemm/results-gh200-0.11.md`, `spikes/device-arith/res
   run_index_fmm, IndexPath}`; `interaction_manager::V_LIST_DIRECTIONS`.
 - Examples `test_index_fmm` (registered with templated-examples), `evaluator_stage_cost`
   and `plan_build_cost`.
+- Phase 5 ([distributed-fmm.md](distributed-fmm.md)):
+  - T2: `index_fmm` and the example `test_index_fmm` removed with their registration;
+    the recording operator of `tests/mpi_regressions.rs` keeps the call order, the
+    groupings and every pair once (12 scenarios, as before);
+  - T5: `redistribute::{Redistribution, RedistributionError}` (`new`, `nsent`,
+    `nreceived`, `counts`, `origins`, `max_per_item`, `forward(_into)`,
+    `backward(_into)`); in `Plan`, near and X rows by the entry's (level, key) (P1) and no
+    V, X or L2L rows for a `Global` box that is not an ancestor of the rank's own coarse
+    blocks (P2); the example `redistribution_cost`;
+  - T7: `operator::HostData` and `FmmOperator::host_data` (default nothing), six events
+    around `reset` and the exchanges; `CoarseExchange::{sent_blocks, received_blocks}`;
+  - T8: `Evaluator::{source_exchange, multipole_exchange, coarse_exchange}`, read-only;
+  - T9: `SourceExchange::forward_overlapped`, `MultipoleExchange::forward_all_overlapped`
+    (`SourcesInFlight`, `MultipolesInFlight`, `ExchangeTimes`), `Traffic` and each
+    exchange's `traffic`; `Evaluator::{evaluate_overlapped,
+    exchange_sources_and_upward_local, far_field, overlap_times}` with `OverlapTimes` and
+    `MAX_LEVELS`; the ignored `tests/overlap_stress.rs`.
+  The examples are now `plan_build_cost` and `redistribution_cost` (T2 also removed
+  `evaluator_stage_cost`, which timed the index FMM); none is registered for
+  `run-examples`.
+
+**`nd-octree`** (existing; changed in Phase 5 T4, as distributed-fmm.md §3.2 signed off)
+
+- O1: the coarse tree by weight from the root, its blocks nodes of the one-rank tree, so
+  the leaves equal the one-rank leaves on every rank count and input distribution;
+  `OctreeOptions::with_block_refinement(k)` (default 8).
+- O2: `PartitionWeight { Keys, DistinctKeys }` (default `Keys`, the points),
+  `OctreeOptions::with_partition_weight`; each rank counts its own input keys per block.
+- O3: the cut at the nearest block boundary.
+- O4: ranks without blocks instead of the panic; `Octree::new` keeps its signature and
+  panics only on malformed keys. One rank is unchanged.
+- Lookups as before: `owner_rank`, `local_leaf`, `lookup_leaves`. New registered example
+  `test_mpi_weighted_partition` (six registered MPI examples in all).
 
 **`nd-fmm-simd`** (Phase 3S, T3–T5; MPI-free; as built, [simd-p2p.md](simd-p2p.md) §5)
 
@@ -594,6 +668,21 @@ Metal ones (`spikes/cubecl-gemm/results-gh200-0.11.md`, `spikes/device-arith/res
   `rotation_kernels`, `--gemm` in the first two, the CUDA layouts and f64 rows of
   `p2p_kernels`; the example `layout_sweep`, every layout candidate of the device
   kernels on the FMM's own level calls.
+- Phase 5:
+  - T6: `fmm_accuracy::{run, measure}` and the `fmm_accuracy` and `calibrate` examples on
+    any number of ranks (`Problem::share`, every P-th point; the errors, the tree and the
+    timings reduced over the ranks; `Oracle::sharded`, `calibration::Reference::sharded`);
+    `ErrorAccumulator::{parts, from_parts}`; `fmm_accuracy` registered for the weekly
+    `run-examples` job;
+  - T10: `scaling` (`Workload`, every point and charge generated by index; `Input`
+    `{Rank0, Share, Owners}`; `Overlap { Off, On, Both }`; `Settings`; `run`; `Report`
+    with `RankRow`, `RankTraffic`, `MemoryModel`, `PathTimes`, `Errors`, `Reference`,
+    `summaries`; `STAGES`, `COMPUTE`, `BUILD_PARTS`; `resident_memory`, `machine`): the
+    work, the build by part, the evaluation stage by stage with the load imbalance, the
+    traffic per exchange, the memory per rank (distributed-fmm.md §9.2 evaluated, and the
+    resident size), the errors against the direct sum and the difference from the
+    one-rank `Fmm`; the example `scaling` (not registered: it times) and
+    `tests/scaling.rs`, its smoke run at 1 and 2 ranks.
 
 **`nd-fmm-bench`** (Phase 4S, T6; `publish = false`; fmm-bench/CLAUDE.md)
 
@@ -629,11 +718,12 @@ trait is needed. Phase 3 rewrote `nd-fmm-plan` to provide it
 | Ghost exchange of sources and multipoles, global coarse levels | `nd-fmm-plan` (`exchange`, `Evaluator`) | done in Phase 3 (T5); host buffers, flat per level |
 | Variable-size source and target data per leaf | `nd-fmm-plan` (`LeafStore`) | done in Phase 3 (T5, C3.0) |
 | Batched operator hooks (per level, per octant, per V-list offset) | `nd-fmm-plan` (`FmmOperator`, batch types) | done in Phase 3 (T6, C4.0) |
-| Redistribution of points to their owning ranks | `nd-fmm-plan` | designed (redesign §9); C5.1 |
-| Overlap of exchange with local work; device-resident buffers | `nd-fmm-plan` | missing; Phase 4–5 |
+| Redistribution of points to their owning ranks | `nd-fmm-plan` (`Redistribution`), used by `nd-fmm-exec`'s `Fmm` | done in Phase 5 (T5, T6) |
+| Overlap of exchange with local work | `nd-fmm-plan` (`Evaluator::evaluate_overlapped`) | done in Phase 5 (T9): order-preserving, opt-in (`FmmBuilder::overlap`) |
+| Device-resident buffers, ghost slots and packed exchange buffers | `nd-fmm-exec` (device operator), through `nd-fmm-plan`'s `HostData` events | done in Phase 4 (one rank) and Phase 5 (T7, T8) |
 | Box geometry from keys, M2L strategies, host threading, 1/(4π) | `nd-fmm-exec` | done in Phase 3 (host path) |
-| SIMD P2P kernels on the host | `nd-fmm-simd`, called by `nd-fmm-exec` | Phase 3S |
-| Device buffers and kernels | `nd-fmm-exec`, `nd-fmm-kernels` | Phase 4 |
+| SIMD P2P kernels on the host | `nd-fmm-simd`, called by `nd-fmm-exec` | done in Phase 3S |
+| Device buffers and kernels | `nd-fmm-exec`, `nd-fmm-kernels` | done in Phase 4 (CUDA in Phase 4S) |
 | Operator math and tables | `nd-fmm-math`, `nd-fmm-ref`, `nd-fmm-tables` | done (Phases 0–2) |
 
 How Phase 3 closed the two gaps of the original crate:
@@ -650,7 +740,9 @@ How Phase 3 closed the two gaps of the original crate:
   per-pair form for `IndexFmm`, tests and reference paths.
 
 Both are general, not Laplace-specific, and are checked with `IndexFmm` on 1, 2 and 4
-ranks, with counts of one and with seeded variable counts.
+ranks, with counts of one and with seeded variable counts. *Since Phase 5 T2* the index
+FMM is gone: the recording operator of `tests/mpi_regressions.rs` checks the topology, and
+the Laplace FMM against one rank and the direct sum checks the values.
 
 Phases 0 to 2 depend on none of this, because they never touch a tree.
 
@@ -762,7 +854,7 @@ noise without testing anything.
 | 3S (done) | `fmm-simd` (SIMD P2P on the host; T3–T5), its use in `fmm-exec` (T6), kernel and FMM benchmarks in `fmm-validate` (T7), `spikes/p2p-simd/` (the T2 spike and the T7 green-kernels comparison) |
 | 4 (done) | the CubeCL pin moved to 0.11.0-pre.4 and `spikes/cubecl-gemm/` ported (T2); `spikes/device-arith/` (T3); `fmm-kernels` (T4, kernels in T6–T10; a member, not a default member, with the CI job `run-tests-kernels`); the device backend in `fmm-exec` on the batched interface that Phase 3 delivered, with no `nd-fmm-plan` change (T5–T11) and autotune (T12); device examples and benchmarks in `fmm-validate` (T5–T13) |
 | 4S (done) | `tools/gh200/` (locust's environment, T1); the CUDA arm of `fmm-kernels`' tests (T2); the device-arithmetic spike on CUDA (T3); `tests/device_cuda.rs` and the CUDA blocks in `fmm-exec` (T4); per-kind timings in `fmm-exec` (T5); `fmm-bench` and `tools/bench/run.sh` (T6); CUDA layouts, tuner candidates and the backend-keyed static rule (T7); the GH200 report `fmm-bench/results/phase4s-gh200.md` (T8) |
-| 5 | multi-rank validation of `fmm-exec`; exchange/compute overlap in `nd-fmm-plan` (no new crate) |
+| 5 (done) | the multi-rank CI job (T3); `nd-octree`'s partition by weight (T4); in `nd-fmm-plan` the index FMM removed (T2), the redistribution with P1 and P2 (T5), the host-data hook (T7) and the overlapped exchanges (T9); in `fmm-exec` `Fmm` on any number of ranks (T6) and the device on several ranks (T8); in `fmm-validate` the multi-rank accuracy runs (T6) and the scaling harness, `tools/scaling/run.sh` and the reports (T10); no new crate |
 
 ### Answered by scouting
 

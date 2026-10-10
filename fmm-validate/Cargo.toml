@@ -38,6 +38,12 @@ name = "fmm_accuracy"
 [package.metadata.example.fmm_accuracy.templated-examples]
 command = "mpirun -n {{NPROCESSES}}"
 
+# Strong and weak scaling of the distributed host FMM (Phase 5 T10, C5.3): on any number
+# of ranks, but a timing example, so not registered with templated-examples; run by hand
+# under `mpirun` (tools/scaling/run.sh).
+[[example]]
+name = "scaling"
+
 # The device path on the host fallback (Phase 4 T5): needs a device backend; not run in
 # CI (no templated-examples entry), run by hand on one rank.
 [[example]]

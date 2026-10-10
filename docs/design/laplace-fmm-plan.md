@@ -50,6 +50,20 @@ measurement confirms (no f64 crossover up to p = 18 end to end, 20 per level). T
 crate `nd-fmm-bench` is the one-command benchmark. On the GH200 the device FMM is 2–7.5×
 the 72-core Grace host at N ≤ 10⁶ (1.5–4.2× at 10⁷) and 1.1–3.2× the M3 Max GPU (f32); at large N the host part of an
 evaluation dominates the device (`fmm-bench/results/phase4s-gh200.md`).
+Revised at the end of Phase 5 (2026-10-10; Sections 5.2, 5.4 (new), 7, 8.1, 8.3, 9.1 and
+9.2): the FMM runs on any number of ranks (docs/phase5/, design
+[distributed-fmm.md](distributed-fmm.md)): `nd-octree` partitions by weight from a coarse
+tree of one-rank nodes, `nd-fmm-plan` redistributes the points and orders rows by (level,
+key), the index FMM is gone, a host-data hook carries the device on several ranks, and the
+exchanges may overlap the computation without changing a bit. The host output on P ranks
+is bit for bit the one-rank FMM over the union of the points in rank order, and from any
+input distribution within 12 u_T of the one-rank run (measured to 72 ranks and at 256).
+Measured on one node only (the M3 Max to 12 ranks, locust's 72 Grace cores to 72): p = 3
+scales to an efficiency of 0.76–0.79 at 12 ranks (M3 Max) and 0.69–0.85 at 72 (locust); at
+p = 8 the per-rank dense M2L
+tables limit strong scaling (fastest at 4 ranks on the M3 Max, flat beyond 32 on locust),
+which Rotation, Classes or threads per rank remove; overlap gains nothing measurable on
+one node. Inter-node scaling and the device on several GPUs stay open.
 
 > Where this document and `docs/CONVENTIONS.md` differ (normalisation, phases, scaling),
 > **the conventions file takes precedence.** Section 2.4 below now follows the scaling of
@@ -591,9 +605,9 @@ pub trait FmmOperator: FmmSizes {
   groupings in index order adds each target's contributions in the same order as
   walking the rows.
 - `&mut self` lets the operator own its scratch, so it needs no `RefCell`.
-- `PairOperator` and the `PerPair<P>` adapter let a simple operator (`IndexFmm`, tests,
-  a reference path) implement one method per pair. `LaplaceOperator` implements both,
-  and the two paths are bit-identical.
+- `PairOperator` and the `PerPair<P>` adapter let a simple operator (tests, a reference
+  path; `IndexFmm` until Phase 5 T2 removed it) implement one method per pair.
+  `LaplaceOperator` implements both, and the two paths are bit-identical.
 - `Plan::new(&octree)` builds the index and lists. `Evaluator::new(plan, comm, op,
   source_counts, target_counts)` and `evaluate()` then run the distributed pass in six
   public stages (§7 of the redesign), with the same order, global coarse levels and
@@ -618,7 +632,9 @@ Extensions of `nd-fmm-plan` that the original design asked for:
    as the reference path.
 3. **Device-resident buffers and exchange/compute overlap** (Phases 4–5). The views
    are flat index arrays and every store is one allocation, so both can be uploaded
-   once (redesign §10).
+   once (redesign §10). *Done:* device-resident stores in Phase 4, on several ranks with
+   packed exchange buffers through the host-data hook in Phase 5 (T7, T8), and the
+   order-preserving overlap in Phase 5 (T9); Section 5.4.
 
 The M2L strategies (dense GEMM, compressed GEMM, rotation, plane-wave) sit behind the
 batched interface in `fmm-exec`: a strategy plans its gathers from the groupings on the
@@ -664,6 +680,49 @@ host and applies them on the device.
   parallel arrays of target and source box indices. For a fixed offset each target has
   at most one source, so the scatter-add after a GEMM has no write conflicts within
   that batch, and no atomics are needed.
+
+### 5.4 The distributed `Fmm` (Phase 5, as built)
+
+Designed in [distributed-fmm.md](distributed-fmm.md) (signed off on 2026-10-08) and built in
+Phase 5 T2–T9. `FmmBuilder::build(sources, targets, comm)` and `Fmm::evaluate(charges)`
+keep their signatures: each rank passes any subset of the points, empty included, and gets
+the output of its own targets in the order it passed them.
+
+- **The tree** (`nd-octree`, T4). The coarse tree is built by weight from the root (O1),
+  its blocks nodes of the one-rank tree, so the leaves are the one-rank leaves on every
+  rank count and input distribution. Blocks weigh their points (O2), the cut falls on the
+  nearest block boundary (O3), and a rank may hold no block (O4). Points per rank are
+  within 1.06 of the mean at 2–8 ranks on the Phase 5 workloads (T4).
+- **Redistribution** (`nd-fmm-plan::redistribute`, T5; used by `Fmm` in T6). `build` routes
+  the sources and the targets each through a `Redistribution` (an all-to-all of counts, an
+  all-reduce, an all-to-all-v of key and position) and forwards the f64 coordinates, which
+  the owner leaf-scales (CONVENTIONS §3.13). `evaluate` forwards the charges into leaf
+  order and moves φ and ∇φ back into the caller's order: one all-to-all-v each. Within a
+  leaf the points are ordered by (origin rank, origin position); there is no cheap path
+  for points already on their owners.
+- **Equal to one rank.** With P1 (near and X rows by the entry's (level, key)) and the
+  tree of O1, the host output on P ranks is **bit for bit** the one-rank `Fmm` over the
+  union of the points in rank order (README decision 7); two input distributions differ
+  only in the order within a leaf, within 100 u_T relative L2. P2 removes the downward
+  work on `Global` boxes no own block descends from, without changing a value. Checked on
+  every `tests/mpi_exec.rs` scenario at 1, 2, 4 and 8 ranks and by the C5.1 gate
+  (`tests/multi_rank.rs`) at N = 10⁵.
+- **The host-data hook** (T7). `FmmOperator::host_data` receives six `HostData` events
+  around `reset` and the three exchanges, with the index lists each movement uses; the
+  host operator ignores them. The device operator (T8) mirrors them with packed buffers
+  on the device: on several ranks an evaluation moves exactly what the exchanges send and
+  receive and syncs twice (device-path.md §14). Correctness only: ranks share one GPU.
+- **Overlap** (T9). `FmmBuilder::overlap` (off by default) runs the source exchange behind
+  the local upward pass and the multipole exchange behind the coarse gather, the global
+  pass and the coarser downward levels, on scoped rsmpi point-to-point requests with a
+  `test` after every level call; the same level calls in the same order, so the output is
+  bit for bit the blocking path's (decision 9: order-preserving only).
+- **Collectives and memory.** distributed-fmm.md §9: per evaluation two all-to-all-v's
+  (charges, output), the source exchange, the coarse all-gather-v and one multipole
+  exchange per level, plus one all-reduce on the device path with P > 1. What is
+  replicated on every rank (the coarse blocks, the `Global` boxes and the keys around
+  them, the gathered multipoles) grows linearly in P; Section 7, Phase 5, gives it as
+  measured.
 
 ## 6. CubeCL design considerations
 
@@ -1915,12 +1974,83 @@ Grace cores for the host, the GPU otherwise idle and its clocks not locked):
 
 The ghost exchange itself already exists in `nd-fmm-plan`'s `Evaluator`, so there is no
 `fmm-dist` crate. This phase validates the Laplace operator on several ranks and adds overlap.
+Built in T2–T10 (docs/phase5/; design [distributed-fmm.md](distributed-fmm.md), signed off
+on 2026-10-08, its outcome in §15; Section 5.4 as built). **Every multi-rank figure is one
+node over shared memory**: the Apple M3 Max at up to 12 ranks × threads (16 once), and
+locust's 72 Grace cores at up to 72 (256 and 512 oversubscribed, never timed). None is
+inter-node scaling.
 
 | ID | Component | Acceptance criterion | Depends on | Status |
 | --- | --- | --- | --- | --- |
-| C5.1 | Multi-rank Laplace FMM through the existing exchange (ghost sources for U/X, ghost multipoles for V/W, replicated global levels) | distributed result equals single-rank result to precision on 2, 4 and 8 ranks; host path first, device path after C4.7 | C3.3 (host), C4.7 (device) | Not started |
-| C5.2 | *(nd-fmm-plan)* Overlap of exchanges with P2P and the local upward pass; device-resident ghost buffers | communication hidden for the benchmark case | C5.1 | Not started |
-| C5.3 | Weak and strong scaling runs | scaling report checked in | C5.2 | Not started |
+| C5.1 | Multi-rank Laplace FMM through the existing exchange (ghost sources for U/X, ghost multipoles for V/W, replicated global levels) | distributed result equals single-rank result to precision on 2, 4 and 8 ranks; host path first, device path after C4.7 | C3.3 (host), C4.7 (device) | Done (T2–T8, PRs #78–#87; checked again in T10). Host: `Fmm` on any rank count from any input distribution (T6); **bit for bit** the one-rank `Fmm` over the union of the points in rank order (0 of 3.2 million values differ in the C5.1 gate at 2, 4 and 8 ranks); from a random share within 100 u_T of the one-rank run in point order: measured at most 1.07e-15 (f64) and 7.3e-7 (f32) relative L2, at most 12.2 u_T, on 2–12 ranks (M3 Max), 2–72 and 256 (locust; T10, 103 checked runs); the errors against the direct sum equal to the one-rank run's to 4 digits in f64 and within 0.24% in f32. Device (T8): within 5.8e-15 (f64) and 2.9e-6 (f32) of the host on the same ranks (the CPU runtime to 8 ranks, Metal at 2, CUDA at 2 and 4, ranks sharing one GPU), every transfer the formula, two syncs per evaluation; correctness only (decision 3) |
+| C5.2 | *(nd-fmm-plan)* Overlap of exchanges with P2P and the local upward pass; device-resident ghost buffers | communication hidden for the benchmark case | C5.1 | Done (T8, T9, PRs #87, #88). Device-resident ghost buffers: the exchanges packed on the device through the host-data hook (T7, T8). Overlap: order-preserving (decision 9), off by default, bit for bit the blocking path; exposed waits 0.04–0.4% of the blocking exchange time on the M3 Max and the locust Plummer sphere, 53–62% on the locust cube (about 0.6 ms of 2 s, accepted). T10: **no measurable gain on one node**, overlapped over blocking wall time 0.96–1.02 on every strong-scaling run, as the exchanges are at most 0.5% of an evaluation at p = 8 |
+| C5.3 | Weak and strong scaling runs | scaling report checked in | C5.2 | Done (T10): `fmm-validate/results/phase5-m3max.md` and `phase5-gh200.md`, the `scaling` example of `nd-fmm-validate` and `tools/scaling/run.sh` |
+
+**Strong scaling** (T10; blocking path, ms per evaluation, the median over 10
+evaluations of the max over ranks; efficiency against one rank in brackets; one thread
+per rank, a random share of the points; measured on the M3 Max and on locust, release):
+
+| N = 10⁶ | M3 Max, 1 rank | M3 Max, 4 | M3 Max, 12 | locust, 1 rank | locust, 8 | locust, 32 | locust, 72 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| cube, f64 p = 3 | 1,207 | 310 (0.97) | 133 (0.76) | 2,506 | 316 (0.99) | 83 (0.94) | 41 (0.85) |
+| Plummer, f64 p = 3 | 2,440 | 653 (0.93) | 257 (0.79) | 4,009 | 521 (0.96) | 148 (0.84) | 81 (0.69) |
+| cube, f64 p = 8 | 8,169 | 2,326 (0.88) | 2,752 (0.25) | 9,851 | 2,025 (0.61) | 971 (0.32) | 940 (0.15) |
+| Plummer, f64 p = 8 | 17,163 | 4,669 (0.92) | 4,626 (0.31) | 20,488 | 3,770 (0.68) | 1,708 (0.37) | 1,534 (0.19) |
+| cube, f32 p = 8 | 4,809 | 1,282 (0.94) | 1,285 (0.31) | 5,260 | 736 (0.89) | 388 (0.42) | 371 (0.20)¹ |
+| Plummer, f32 p = 8 | 12,121 | 3,318 (0.91) | 2,294 (0.44) | 14,202 | 1,895 (0.94) | 832 (0.53) | 690 (0.29) |
+| cube, f64 p = 8, Rotation | 6,436 | 1,688 (0.95) | 688 (0.78) | 9,340 | 1,174 (0.99) | 318 (0.92) | 164 (0.79) |
+| Plummer, f64 p = 8, Rotation | 14,622 | 3,843 (0.95) | 1,616 (0.75) | 19,656 | 2,517 (0.98) | 696 (0.88) | 356 (0.77) |
+
+¹ The repeat: the first run (755 ms) shared a core with a root `find` job
+(`phase5-gh200.md` §1, "Repeats"); the other 64- and 72-rank runs repeated within 2%.
+
+- **p = 3 scales to the machine**: 0.76–0.79 at 12 ranks on the M3 Max, 0.85 (cube) and
+  0.69 (Plummer) at 72 on locust. The leaves scale perfectly on both machines (their
+  total over the ranks within 0.97–1.02 of one rank on locust at every count).
+- **At p = 8 the dense M2L does not scale beyond 4–8 ranks per machine**: the downward
+  pass's total over the ranks grows 2.4–4.4× by 8–12 ranks (M3 Max, f64) and 5.8–6.9× by
+  72 (locust), so the f64 evaluation is fastest at 4 ranks on the M3 Max and stops
+  improving at 32 on locust. Every rank holds its own 316 dense tables (16.6 MB in f64);
+  with small tables the loss goes: Rotation keeps 0.75–0.79 at 12 and 72 ranks, Classes
+  (Dense's products from 16 class matrices, slower on one rank) 0.69–0.77, and threads,
+  which share one copy, beat ranks (1 × 12 is 3.0× faster than 12 × 1 on the M3 Max;
+  4 × 18 is 4.1× faster than 72 × 1 on locust). At 72 ranks Rotation evaluates the cube in
+  164 ms against Dense's 940. Neither the exchanges (at most 0.5% of an evaluation at
+  p = 8) nor the balance (compute max/mean within 1.05 at 8 ranks) is the cause.
+- **Weak scaling** (N = 10⁵ per rank, to 7.2 million points on locust): at p = 3 the
+  cost per V pair stays constant (0.06–0.13 µs on both machines) and the Plummer sphere
+  keeps an efficiency of 0.86–1.09 to 72 ranks; at p = 8 the cost per V pair grows
+  with the ranks (1.2 → 9.7 µs on the locust cube at 72), the same limit.
+- **Balance at 72 ranks**: the points stay within 1.07 of the mean, the M2L work does
+  not (V pairs max/mean 1.17 cube, 1.39 Plummer, 1.29 clusters; compute stages
+  1.17–1.26), as distributed-fmm.md §3.6 modelled (1.174, 1.511, 1.328).
+- **Redistribution**: from every point on rank 0 the build costs 170 ms (M3 Max) to
+  340 ms (locust) more than from the owners; the evaluation stays within 2.9% (8 ranks)
+  and 5.9% (72) of the owners' input.
+- **Memory per rank**: the replicated part (held boxes not local) grows from 37% at 8
+  ranks to 92% at 72 and 97% at 256 (cube); the coarse gather receives 2.6 MB per rank
+  and evaluation at 72 and 256 ranks. The peak resident size per rank on locust falls from
+  604 MB at one rank to 114 MB at 16 and stays at 121–137 MB at 32–72.
+
+**Recommendation for Phase 6** (T10):
+- **Share or shrink the M2L tables on a node first.** At p = 8 the per-rank dense tables,
+  not communication or balance, limit strong scaling on both machines. Candidates, in
+  order of effort: run several threads per rank (4 × 18 on locust is the fastest dense
+  split); make the host strategy rule see the ranks per node, since `Auto` picks Dense up
+  to p = 8 while Rotation is faster at every rank count measured on both machines (by
+  4–5% on one locust rank and 15–21% on one M3 Max rank, by 2.9–5.7× at 12 and 72 ranks); keep one copy of the tables per node in MPI shared
+  memory; and a batched host M2L (C6.1-like, the GEMM form of Phase 4 on the host) that
+  reads each table once per level instead of once per target. The tables are also
+  computed on every rank at build (216 ms at p = 8, 83% of the build at 72 ranks on
+  locust): a shared table cache removes that.
+- **The cut by work** (distributed-fmm.md §3.6, decision 13) for 16 ranks and more: the
+  M2L imbalance at 72 ranks (1.17–1.39) is what the model predicted.
+- **Scale-out before C6.x if a cluster is the target** (distributed-fmm.md §14): the
+  replicated top tree dominates the held boxes from 16–32 ranks at N = 10⁶, and the
+  coarse gather is the cube's largest exchange at 72 ranks. Inter-node scaling is
+  unmeasured; the command that measures it is in `tools/scaling/run.sh`.
+- **Overlap stays off by default**: on one node it gains nothing measurable. Its value at
+  network bandwidth is the open question the inter-node run settles.
 
 ### Phase 6: optimisation and extensions
 
@@ -1948,8 +2078,8 @@ the GPU FMM, and the direct sum checks everything.
 | End-to-end | full FMM vs direct sum over sampled targets | f64 direct sum | CI small N, nightly large N |
 | Cross-backend | CUDA, HIP, wgpu and CPU runtimes agree to precision | CPU FMM | nightly |
 | ISA equivalence (Phase 3S) | every SIMD path (NEON, AVX2, scalar) of the P2P kernel and its inverse square root; chunk and target-position invariance | `nd_fmm_ref::p2p`, `direct_sum`, exhaustive f32 checks | CI: the `nd-fmm-simd` job on x86_64 (AVX2) and arm64 (NEON) runners, with the release accuracy tests; NEON also on the development machine |
-| Topology | pass order, ghost exchange, lists, and the `nd-fmm-plan` extensions (C3.0, C4.0, C5.2) | `IndexFmm` (every leaf receives every leaf index exactly once), brute-force list oracle | CI on one rank; 2 and 4 ranks by hand |
-| Distributed | multi-rank result equals single-rank result | single-rank FMM | nightly, 2 to 8 ranks |
+| Topology (as built in Phase 5) | pass order, lists, the exchanges (blocking and overlapped), the host-data events, the redistribution, and the `nd-fmm-plan` extensions (C3.0, C4.0, C5.2) | the brute-force list oracle; the recording operator of `tests/mpi_regressions.rs` (call order, groupings, every list pair exactly once, the events and their lists; `IndexFmm` until Phase 5 T2 removed it); the exchange checks; the overlapped exchanges against the blocking ones bit for bit; the redistribution's owners, order within leaves and round trips | CI on one rank; the `run-tests-mpi` job at 2 and 4 ranks (Phase 5 T3, debug, on every pull request); 8 ranks and the ignored `overlap_stress` by hand on the M3 Max and locust |
+| Distributed (as built in Phase 5) | the multi-rank result equals the single-rank result; input distributions agree; overlap and the hook change no bit; the device on several ranks | the one-rank `Fmm` of the same settings over the union of every rank's points in rank order, built on `SimpleCommunicator::self_comm()`: **bit for bit** on the host path (decision 7); 100 u_T relative L2 between input distributions; `direct_sum` within 0.1% (f64) and 1% (f32) of the one-rank errors; the blocking path for overlap, bit for bit; a shadow operator that learns of host data only through the events, bit for bit; the host on the same ranks for the device (Phase 4's bounds; the fallback bit for bit) and the transfer formula | every `tests/mpi_exec.rs` scenario on every rank count: CI on one rank and in `run-tests-mpi` at 2 and 4 ranks; 8 ranks, the ignored gates `tests/multi_rank.rs` (C5.1 host, N = 10⁵) and `tests/device_ranks.rs` (C5.1 device) by hand on both machines; the reference and error checks of the `scaling` harness up to 72 ranks on locust and 512 oversubscribed (T10) |
 | Device (Phase 4, as built) | buffers, data movement and views bit for bit; each kernel per operator; the device operator per kind against the host operator; the device FMM against the host FMM and the direct sum; transfers, launches and syncs per evaluation; the tuner and its cache | host loops (bit for bit); `nd-fmm-ref`, `nd-fmm-math`, `nd-fmm-tables` at the canonical frames on levels 2, 9 and 16; the host `LaplaceOperator`; the host `Fmm` of the same settings (every kind on the host fallback: bit for bit; on the device: the FMM bounds); `direct_sum`; the formulas of device-path.md §4.1 and §8.1 | `nd-fmm-kernels` on the CPU runtime in CI (`run-tests-kernels`, f32 and f64, small shapes); `nd-fmm-exec` on the CPU runtime by hand (every `tests/mpi_exec.rs` scenario, the ignored C3.2, C3.3 and C4.8 gates); Metal f32 by hand, `#[ignore]`d, outside the macOS sandbox; CUDA type-checked only. Every run prints the backends it ran |
 
 Use property-based tests (e.g. `proptest`) for random points, offsets and levels, so
@@ -1997,6 +2127,14 @@ The root CI workflow runs everything on a single MPI rank. No nightly or multi-r
 exists yet: `run-examples` runs weekly at 3 ranks and covers only `nd-octree`'s
 examples. The nightly, GPU and multi-rank rows above need a new workflow or a
 self-hosted runner. Until then they are run by hand, following `fmm-plan/CLAUDE.md`.
+*Since Phase 5 T3* (decision 4 of docs/phase5/README.md, kept on 2026-10-08) the job
+`run-tests-mpi` runs the MPI test executables (`nd-fmm-plan`'s `mpi_regressions`,
+`nd-fmm-exec`'s `mpi_exec` and `mpi_threading`) and the six registered `nd-octree` MPI
+examples at 2 and at 4 ranks on every pull request, in debug, for correctness only, each
+launch under a 300 s timeout (`.github/scripts/run-mpi-tests.sh`): about 4 minutes after
+T6 against a 15-minute budget. `run-examples` runs `fmm_accuracy` and
+`basic_evaluation` at 3 ranks weekly besides the `nd-octree` examples. 8 ranks, the
+ignored gates and every timing stay by hand, on the M3 Max and on locust.
 
 ### 8.2 Error metrics and workloads
 
@@ -2066,6 +2204,20 @@ self-hosted runner. Until then they are run by hand, following `fmm-plan/CLAUDE.
   per-device peaks (`nd_fmm_validate::peaks`: the H100's *datasheet* values) and f64
   (T7). Still by hand: locust is shared and its clocks are not locked, so every timing run
   checks the GPU and the CPU for other users' jobs before and after and states the load.
+- *Done in Phase 5* (T10, C5.3), on several ranks of one node: `nd-fmm-validate`'s
+  `scaling` example (one configuration per launch, any rank count; not registered with
+  `run-examples`, since it times) and `tools/scaling/run.sh` (the sweeps under `mpirun`
+  and a timeout; on macOS the loopback flags and a wait for a quiet machine, on Linux the
+  binding printed and the load recorded before and after every launch). Every point and
+  charge is generated by index, so a workload is the same on every rank count. Per rank:
+  the work, the build by part, every evaluation stage (each exchange as total and exposed
+  wait), the bytes and messages per exchange and the memory (distributed-fmm.md §9.2 as a
+  *model*, and the resident size); reduced over the ranks to max, min, mean and the
+  compute stages' imbalance; overlap off and on from one build, alternating; optionally
+  the errors against a distributed direct sum and the output against the one-rank `Fmm`.
+  The reports are `fmm-validate/results/phase5-m3max.md` and `phase5-gh200.md`; the
+  numbers are in Section 7, Phase 5. Every figure is one node over shared memory; the
+  inter-node command is documented in `tools/scaling/run.sh` and not run.
 
 ## 9. Risks, open questions and working with Claude Code
 
@@ -2099,6 +2251,18 @@ and identity tests, the second with a one-day spike before Phase 4.
 | Unified memory on the M3 Max hides transfer costs a discrete GPU would pay (Phase 4) | device timings optimistic for discrete cards | transfers counted in calls and bytes: per evaluation one upload of the charges and one download of the output (N s and 4 N s bytes with gradients; 0.4 MB and 1.6 MB at N = 10⁵ in f32), the design's minimum; build-time uploads once per `Fmm` (Section 7, Phase 4). **Measured in Phase 4S** (the GH200, explicit copies over NVLink-C2C): the copies are small (the 16 MB download 56 µs at N = 10⁶, T7), but the host work around them is not (next row) |
 | The host part of a device evaluation grows with N and dominates at large N (Phase 4S) | the device's lead shrinks with N; device scaling figures misleading | **Open (measured in T8):** outside the level calls an evaluation spends 8.4 ms (f32) and 13 ms (f64) at N = 10⁶ and 183–303 ms at N = 10⁷ on the host, 58–83% of an evaluation at N = 10⁷ for p ≤ 8: the serial output pass `scaled_output` (each value divided by its leaf's scale and scattered into the caller's order, into output vectors allocated afresh) is the largest part the `nsys` CPU samples identify at N = 10⁷ (at least 29% in f32, 32% in f64 of the samples inside `Fmm::evaluate`; half could not be attributed), then the download path (3–4%) and the per-evaluation pinned host buffer (`cuMemAllocHost`, median 2.3–2.5 ms, up to 53 ms); the copies themselves take microseconds to enqueue. Not redesigned in Phase 4S (transfers out of scope); for Phase 5 (Section 7, Phase 4S, "Recommendation") |
 | The leaf-operator kernels drift from `nd-fmm-math`'s recursion at high p (Phase 4) | accuracy loss at p ≤ 20 | **Retired (T7):** the recursion is ported operation for operation; f64 within 1.2e-15 of `nd_fmm_ref::leaf` to p = 20 on the CPU runtime, f32 within 4.1e-7 (bound 1e-5) |
+| A multi-rank defect hangs a collective, in a test or in CI (Phase 5) | a hung CI job or run, with no cause in the log | **Retired as built:** every `mpirun` under an external `timeout`, errors agreed before the next collective (requirement 4), scenarios that fail on every rank or on none, `--nocapture` in the CI job so a panic's message reaches the log; the `run-tests-mpi` job has step timeouts. T10's launches (about 470 on the two machines) each ran under a timeout, and none hung |
+| One node over shared memory hides communication costs that a network would show (Phase 5) | overlap looks unnecessary, scaling looks better than on a cluster | **Realised as expected, and stated:** both machines are one node, and on locust one NUMA node; an exchange is a memory copy, at most 0.5% of an evaluation at p = 8 (T10), and overlap gains nothing measurable. Every figure is labelled one node; bytes and messages per exchange are reported so a network's cost can be estimated (distributed-fmm.md §8.2); the inter-node command is documented, not run. **Open** until a cluster run |
+| Load imbalance from coarse-block granularity or from counting distinct keys (Phase 5) | the slowest rank sets the evaluation time | **Retired to 8 ranks, open beyond (T4, T10):** the partition by points from a coarse tree of one-rank nodes (O1–O4) keeps the work within 1.09 of the mean at 8 ranks and the compute stages within 1.05; at 72 ranks the points stay within 1.07 but the M2L work reaches 1.17–1.39 times the mean (compute 1.17–1.26), as distributed-fmm.md §3.6 modelled. A cut by modelled work is a Phase 6 candidate (decision 13) |
+| Small problems on many ranks: `nd-octree` panicked with fewer coarse blocks than ranks (Phase 5) | a panic on a valid input | **Retired (T4, O4):** a rank may hold no block; tests cover a tiny problem on 8 ranks; T10 ran 256 ranks at about 3,900 points per rank with the errors of one rank |
+| The multi-rank result differs from one rank by more than rounding, behind the tolerance (Phase 5) | a ghost or global-level defect found late | **Retired (T5, T6, T10):** the host output on P ranks is bit for bit the one-rank `Fmm` over the union in rank order; from a random share at most 12.2 u_T from the one-rank run on 2–72 and 256 ranks (103 checked runs), the direct-sum errors those of one rank to 4 digits (f64) |
+| Retiring `IndexFmm` leaves the evaluator's values unchecked in `nd-fmm-plan` (Phase 5) | evaluator defects found only through the Laplace operator | **Retired (T2, T6):** the recording operator checks the call order, the groupings and every list pair once on every rank count; the Laplace FMM against one rank and the direct sum in `nd-fmm-exec` is the value check |
+| Non-blocking exchanges do not progress while the rank computes (Phase 5) | overlap hides nothing | **Realised in part (T9):** the exposed waits are 0.04–0.4% of the blocking exchange time on the M3 Max and the locust Plummer sphere, but 53–62% on the locust cube, whose local upward pass is one long P2M call with no `test` point, on an Open MPI without the single-copy `smsc` component; about 0.6 ms of a 2 s evaluation, accepted. No wall-time effect on one node either way (T10) |
+| Several ranks share the one GPU, and locust's host load disturbs device timings (Phase 5) | device scaling figures misleading | **As planned (T8, decision 3):** the device on several ranks is a correctness check, the transfers counted, never timed. Open: the device on several GPUs (Section 9.2) |
+| macOS schedules ranks on efficiency cores, and background jobs share the cores (Phase 5) | M3 Max timings vary | **Mitigated (T10):** at most 12 ranks × threads, the one 16-rank run labelled; `tools/scaling/run.sh` waits before each launch until other processes use at most two cores and records it, after a first sweep was discarded while Microsoft Defender's scanner used 3.5–6 cores |
+| locust is a multi-user node, and 72 ranks need every core (Phase 5) | locust timings vary | **Mitigated (T10):** the load recorded before and after every launch and the binding printed; no other user's job ran during any timing run; two root system jobs (`find /`, `dnf makecache`) ran during some runs, and the 64- and 72-rank strong runs were repeated |
+| The O(P) replicated data (coarse tree, coarse gather) dominates at large P (Phase 5) | memory and traffic per rank stop falling with P | **Measured (T10):** at N = 10⁶ the replicated part dominates the held boxes from 16–32 ranks (92% at 72, 97% at 256) and the coarse gather (2.6 MB per rank and evaluation at 72) is the cube's largest exchange; irrelevant at P ≤ 12. distributed-fmm.md §14 plans its replacement for a cluster |
+| Per-rank copies of read-only data compete for one node's caches and memory bandwidth (found in T10) | strong scaling at high p stops at a few ranks per node | **Open (found in T10):** at p = 8 every rank holds its own 316 dense M2L tables (16.6 MB in f64), and the downward pass stops scaling beyond 4–8 ranks on the M3 Max and 32 on locust, while Rotation, Classes (small tables) and threads per rank (one copy) scale. For Phase 6 (Section 7, Phase 5, "Recommendation") |
 
 
 ### 9.2 Open questions
@@ -2189,6 +2353,43 @@ and identity tests, the second with a one-day spike before Phase 4.
     strategy (C4.7)? *Phase 4 (T13):* the same holds on the device (64 at p = 3, 128–256
     at p = 8); the device rule kept 64 (decision 8), and the question stays open for
     both backends. *Phase 4S (T8):* on CUDA too the rule keeps 64 (f32 and f64, N = 10⁵ and 10⁶), with the same dependence on p and the distribution (up to 17% to gain per configuration); still open for every backend.
+- *New with Phase 5* ([distributed-fmm.md](distributed-fmm.md) §13, §14):
+  - *Answered in Phase 5:* the multi-rank tolerance. With the tree of O1 and P1's row
+    order the host output on P ranks is bit for bit the one-rank `Fmm` over the union in
+    rank order; only the order within a leaf depends on the input distribution, within
+    100 u_T (decision 7; measured at most 2.0e-15 in f64 and 7.1e-7 in f32 against the
+    one-rank run in point order, T6, and as reported in Section 7, Phase 5, by T10 up to
+    72 ranks).
+  - *Answered in Phase 5:* the non-blocking mechanism (scoped rsmpi point-to-point, no
+    rlst change; decision 10) and the overlap order (order-preserving only; decision 9).
+    On one node an exchange is a CPU memory copy, so overlap hides waits but saves no time
+    measurably (T9, T10); it stays off by default.
+  - *Answered in Phase 5:* `nd-octree` partitions by points from a coarse tree of
+    one-rank nodes (O1–O4), within 1.06 of the mean at 2–8 ranks; the per-rank work at
+    16–72 ranks is in Section 7, Phase 5 (T10), and decides a second cut by modelled work
+    (a Phase 6 or scale-out candidate, decision 13).
+  - *Still open:* **inter-node scaling.** Every Phase 5 figure is one node over shared
+    memory (the M3 Max at up to 12 ranks, locust at up to 72); no cluster was available
+    (decision 2). The exchanges at network bandwidth and latency, the value of overlap
+    there, and scaling beyond one node with the replicated top tree (coarse blocks,
+    `Global` boxes, the coarse gather, all growing linearly in P) are unmeasured. The run
+    that would settle them is one command (`tools/scaling/run.sh`, header; design §11),
+    and distributed-fmm.md §14 plans the scale-out phase that replaces the replicated top
+    tree.
+  - *New in T10:* **the host M2L strategy on several ranks per node.** `Auto` picks Dense
+    up to p = 8 from one-rank measurements, but with 8 or more ranks on one node the
+    per-rank dense tables (16.6 MB each at p = 8 in f64) stop the downward pass from
+    scaling, and Rotation (or Classes, or threads per rank) is several times faster: at
+    72 ranks on locust the cube takes 164 ms with Rotation against 940 ms with Dense
+    (Section 7, Phase 5). Should the rule see the ranks per node, should the tables be
+    shared per node, or should the host M2L read each table once per level (a batched
+    host M2L)? For Phase 6.
+  - *Still open:* **the device on several GPUs.** The device runs on several ranks for
+    correctness only: on both machines every rank shares the one GPU, so no device
+    scaling figure exists. Every rank opens the default device (`Device::open` takes no
+    index); a node with several GPUs needs a device index from the local rank (design
+    §7.4), and the overlap of P2P with the far field on a second stream stays a later
+    question (device-path.md §14).
 - What accuracy range and N per GPU are typical for your applications?
 - Outputs needed: potential only, gradient, or also Hessians?
 - Should the 1/(4π) factor be part of the kernel or left to the caller? (Provisionally

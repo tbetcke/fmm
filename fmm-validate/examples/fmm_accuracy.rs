@@ -18,7 +18,7 @@
 //! threads (default 1), `--p2p k` the P2P kernel (`auto`, the default, `reference` or an
 //! ISA: `scalar`, `neon`, `avx2`; `nd_fmm_exec::operator::P2pChoice`), `--backend b`
 //! where the operators run (`host`, the default, or with the feature of that backend
-//! `cpu`, `metal` or `cuda`; Phase 4 T11; a device on one rank until Phase 5 T8) and one
+//! `cpu`, `metal` or `cuda`; Phase 4 T11; on several ranks since Phase 5 T8) and one
 //! BLAS thread:
 //!
 //! ```text

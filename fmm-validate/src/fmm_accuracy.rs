@@ -535,8 +535,8 @@ impl Run {
 ///
 /// If the FMM does not build or evaluate, for example with `threads` > 1 when MPI
 /// provides less than `Threading::Funneled`, with a P2P kernel on an ISA this machine
-/// cannot run, or on a device backend that is not compiled in, does no arithmetic in `T`
-/// (f64 on Metal) or runs on several ranks (until Phase 5 T8).
+/// cannot run, or on a device backend that is not compiled in or does no arithmetic in
+/// `T` (f64 on Metal).
 pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
     config: &Config,
     problem: &Problem,
@@ -579,7 +579,7 @@ pub fn builder<T>(config: &Config, p: usize, execution: Execution) -> FmmBuilder
 ///
 /// On every rank of `comm`, with the same arguments: the build, every evaluation, and
 /// the reductions of the errors, the tree and the timings (Phase 5 T6). Every rank
-/// returns the same [`Run`], apart from [`Run::device`] (a device runs on one rank).
+/// returns the same [`Run`], apart from [`Run::device`] (each rank's own device).
 ///
 /// # Panics
 ///
@@ -729,7 +729,7 @@ fn slowest_build(build: &BuildTimings, comm: &SimpleCommunicator) -> BuildTiming
 }
 
 /// Each stage of `stages` on the slowest rank for that stage; the device stages as they
-/// are (a device runs on one rank).
+/// are (this rank's own device).
 fn slowest_stages(stages: &StageTimings, comm: &SimpleCommunicator) -> StageTimings {
     StageTimings {
         forward_charges: slowest(stages.forward_charges, comm),

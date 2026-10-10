@@ -170,7 +170,7 @@ fn main() {
         std::process::exit(2);
     }
     if comm.size() != 1 {
-        eprintln!("p2p_fmm runs on one rank; points are not redistributed until C5.1");
+        eprintln!("p2p_fmm runs on one rank (a one-rank benchmark)");
         std::process::exit(2);
     }
 

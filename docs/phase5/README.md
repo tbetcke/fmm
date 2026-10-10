@@ -538,5 +538,5 @@ In the repository root, start `claude` and say:
 - [x] T7 merged: `host_data` hook; shadow operator bit for bit on 1, 2 and 4 ranks, and differs with the hook disabled
 - [x] T8 merged: device on 2 and 4 ranks within the FMM bounds of the host; transfers as the formula; `DeviceNeedsOneRank` removed
 - [x] T9 merged: overlapped exchanges, output as decision 9 fixes; communication hidden by the T1 measure
-- [ ] T10 merged: scaling report published
-- [ ] Design documents updated: laplace-fmm-plan §5, §7 (Phase 5 status and numbers), §8.1, §8.3, §9.1 and §9.2; fmm-plan-redesign §9 and §10 outcome notes; device-path.md §14; workspace-structure §3, §4 and §6; distributed-fmm.md decisions and measurements recorded
+- [x] T10 merged: scaling report published
+- [x] Design documents updated: laplace-fmm-plan §5, §7 (Phase 5 status and numbers), §8.1, §8.3, §9.1 and §9.2; fmm-plan-redesign §9 and §10 outcome notes; device-path.md §14; workspace-structure §3, §4 and §6; distributed-fmm.md decisions and measurements recorded

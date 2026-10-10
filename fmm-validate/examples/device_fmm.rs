@@ -192,7 +192,9 @@ fn main() {
         mpi::initialize_with_threading(Threading::Funneled).expect("MPI initialises");
     let comm = universe.world();
     if comm.size() != 1 {
-        eprintln!("device_fmm runs on one rank: a device backend needs one until C5.1");
+        eprintln!(
+            "device_fmm runs on one rank (a one-rank benchmark; ranks would share the device)"
+        );
         std::process::exit(2);
     }
     if arguments.threads > 1 && provided < Threading::Funneled {
