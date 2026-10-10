@@ -220,9 +220,9 @@ priority 40 over `ofi` at 25), both between the nodes and within one node, and w
 either launcher; `ob1` with the `vader` BTL initialises but is not selected. Nothing uses
 TCP. The module sets `OMPI_MCA_btl=self,vader`.
 
-**Proposal for decision 4: `mpirun` inside the allocation**, with `--bind-to core` and
-the placement explicit: `--map-by core` for one thread per rank,
-`--map-by ppr:<ranks per socket>:socket:PE=<threads> --bind-to core` for ranks with
+**Decision 4 (signed off by the user, 2026-10-10): `mpirun` inside the allocation**,
+with `--bind-to core` and the placement explicit: `--map-by core` for one thread per
+rank, `--map-by ppr:<ranks per socket>:socket:PE=<threads> --bind-to core` for ranks with
 threads (for example `ppr:1:socket:PE=20`, one rank per socket, as `jobs/scaling.sbatch`
 runs). Reasons: it starts 0.4 s faster at 80 ranks; `.github/scripts/run-mpi-tests.sh`
 and `tools/scaling/run.sh` launch with `mpirun` already; its mapping names the ranks ×
@@ -255,9 +255,10 @@ jobs of T1:
 | `logs/` | 1.2 MB |
 | **`lquota`** | **21.85 GiB of 250 GiB** (from 100 KiB before) |
 
-Decision 2 proposal: at most two trees with their `target/` (about 20 GB each), plus
-about 2 GB of toolchain and caches, so under 50 GB of the 250 GB; the rest stays free
-for T2's and T3's outputs (raw output is kept in `logs/`, never in a tree).
+Decision 2 (signed off by the user, 2026-10-10): at most two trees with their `target/`
+(about 20 GB each), plus about 2 GB of toolchain and caches, so under 50 GB of the
+250 GB; the rest stays free for T2's and T3's outputs (raw output is kept in `logs/`,
+never in a tree).
 
 ## Checking for writes outside the root
 

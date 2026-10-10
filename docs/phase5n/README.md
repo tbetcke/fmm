@@ -337,10 +337,10 @@ Commands on Kathleen need `ssh`, so the session runs them outside the sandbox.
 ## Exit checklist
 - [x] T1's queue probe reported; Kathleen usable or not (decision 0: usable, every job at most 2 nodes for now; the user, 2026-10-10; docs/phase5n/kathleen-probe.md)
 - [ ] Phase order and names: 5N, then 5S, then 6 (decision 1)
-- [ ] Kathleen as the third machine; root, layout and quota use (decision 2)
+- [x] Kathleen as the third machine; root, layout and quota use (decision 2: everything under `/scratch/scratch/ucahtbe/fmm`, at most two source trees with their `target/`, about 20 GB each, under 50 GB of the 250 GB quota in all; the user, 2026-10-10; tools/kathleen/README.md)
 - [ ] Node-hour budget (decision 3)
 - [ ] T1 merged: the probe report; with Kathleen, `tools/kathleen/`, the environment rebuilt from the repository, every CPU-side check passing on Kathleen and the MPI tests at 2 nodes (without Kathleen: not applicable)
-- [ ] Launcher and binding on Kathleen (decision 4)
+- [x] Launcher and binding on Kathleen (decision 4: `mpirun` inside the allocation, `--bind-to core` with an explicit `--map-by` (`core`, or `ppr:<r>:socket:PE=<t>` with threads); `srun --mpi=pmix --cpu-bind=cores` the tested alternative; the user, 2026-10-10; tools/kathleen/README.md)
 - [ ] T2 merged: `fmm-validate/results/phase5n-kathleen.md` published (without Kathleen: skipped)
 - [ ] T3 merged: `docs/design/node-m2l.md` drafted, sign-off questions listed
 - [ ] Strategy rule (decision 5), shared tables (decision 6), table cache (decision 7) and margin (decision 8) signed off
