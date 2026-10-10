@@ -20,13 +20,14 @@ Step 1 is the Phase 5N counterpart of Phase 4S T1 (docs/phase4s/T1-locust-enviro
 Timings, scaling and the strategy study are T2 and T3; this task records no timing beyond
 the probe's queue times and the build times.
 
-**No Kathleen job in this task, or in this phase, is larger than 4 nodes (160 cores)**
-(README, "Working on Kathleen").
+**No Kathleen job in this task, or in this phase, is larger than 2 nodes (80 cores), for
+now** (README, "Working on Kathleen"; the user's rule from 2026-10-10, which replaced the
+earlier cap of 4 nodes while the probe ran).
 
 ## Step 0 — the queue probe (report and stop)
 
-Measure how long Kathleen's queue makes small multi-node jobs wait, before anything is
-set up. Run from the M3 Max over `ssh kathleen` (outside the sandbox), on the login node
+Measure how long Kathleen's queue makes small 2-node jobs wait, before anything is set
+up. Run from the M3 Max over `ssh kathleen` (outside the sandbox), on the login node
 only for submitting and reading.
 
 - **Where.** Job scripts and their output under `~/Scratch/fmm-probe/` only: the probe
@@ -35,26 +36,28 @@ only for submitting and reading.
   files, submits them and collects `sacct`; POSIX `sh`, header comment), so the probe can
   be repeated later.
 - **The jobs.** Each runs `srun hostname` (one line per node) and `sleep 30`, nothing else,
-  with `--time=00:05:00`, `--ntasks-per-node=1`, `--exclusive` implied:
-  - 2 nodes in the `test` QoS (at most 2 such jobs at a time, by the QoS);
-  - 4 nodes in the `small` QoS.
-  Submit a pair at intervals over up to a day (for example every 2–3 hours, and at least
-  once in the evening and once overnight; at most 12 pairs), never more than the QoS
-  allows at once, and cancel any job still pending after 12 hours, recording that.
+  with `--time=00:05:00`, `--ntasks-per-node=1`, `--exclusive` implied, on 2 nodes in the
+  `test` QoS (at most 2 such jobs at a time, by the QoS). Never more than the QoS allows at
+  once; cancel any job still pending after 12 hours, recording that.
+  - As run on 2026-10-10: the probe first submitted pairs of a 2-node `test` job and a
+    4-node `small` job, to repeat every 2.5 hours over a day. After the first pair (the
+    2-node job waited 2 min 24 s) the user stopped the repeats and capped every job at 2
+    nodes; the 4-node job, still pending after 7 minutes, was cancelled and is reported
+    as cancelled, not as a wait. `probe.sh` now submits only the 2-node shape; its
+    `drive` loop repeats it, for a later probe.
 - **The estimates**, at each submission: `sbatch --test-only` for both shapes (the
   scheduler's predicted start), `squeue --start -j <id>` once the job is pending, and the
   queue depth by QoS (`squeue -h -t PD -o %q | sort | uniq -c`, and the running jobs and
   idle nodes from `sinfo -s`).
 - **The record**, from `sacct -X -j <ids> --format=JobID,QOS,NNodes,Submit,Start,End,
   Elapsed,State,NodeList`: per job the wait (Start − Submit), the run time and the state;
-  per shape the minimum, median and maximum wait; whether the 4-node `small` jobs wait
-  much longer than the 2-node `test` jobs; and how the estimates compared with the actual
-  starts.
+  per shape the minimum, median and maximum wait; and how the estimates compared with the
+  actual starts.
 - **The report** (`docs/phase5n/kathleen-probe.md`, short; or the PR description and a
   section of `tools/kathleen/README.md`, stated): the table of jobs, the waits per shape
   and time of day, the queue depth at each submission, the node-hours used (trivial: about
   2 × 5 minutes × nodes per job), what the waits mean for the phase (T1's build and test
-  jobs, T2's sweeps at 1–4 nodes, T3's runs, Phase 5S), and a recommendation for decision
+  jobs, T2's sweeps at 1 and 2 nodes, T3's runs, Phase 5S), and a recommendation for decision
   0 with its reason. Then **stop**: open the PR with the probe script and the report, and
   ask the user for decision 0. Do not start Step 1 in the same session unless the user has
   answered.
@@ -189,7 +192,7 @@ Do:
     downloads the x86_64 Linux `tracel-llvm` bundle; report where it landed and its size;
   - the MPI test list (`.github/scripts/run-mpi-tests.sh build`, then `run <list> 1 2 4 8`)
     on one node, and the same list at 2 nodes × 40 ranks (80) in the `test` QoS (no job
-    above 4 nodes), under
+    above 2 nodes), under
     `timeout`, with the launcher of decision 4. Report every executable's result and time;
   - one `nd-fmm-validate` `scaling` launch at 2 nodes × 2 ranks × 20 threads on the N =
     10⁶ cube, f64, p = 3, with `--reference` and `--errors 8`, to show threads, binding
@@ -226,7 +229,7 @@ Must pass:
 Do not:
 - install, clone or build anything on Kathleen before decision 0, or write outside
   `~/Scratch/fmm-probe/` during Step 0;
-- submit any job larger than 4 nodes (160 cores), in Step 0 or Step 1;
+- submit any job larger than 2 nodes (80 cores), in Step 0 or Step 1;
 - build or run tests on the login node beyond short, light commands; request `tmpfs`; use
   hyperthreading;
 - write outside the recorded root on Kathleen, install system software, or store

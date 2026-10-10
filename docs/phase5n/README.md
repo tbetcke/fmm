@@ -27,8 +27,8 @@ left three things open that a cluster now makes urgent:
   dominate any cluster measurement taken before this is fixed.
 
 This phase therefore comes before the scale-out (Phase 5S) and before Phase 6. It first
-finds out whether Kathleen is usable at all: a queue probe of trivial 2- and 4-node jobs
-over up to a day, then a stop for the user's decision 0 (Kathleen usable?). If yes, it
+finds out whether Kathleen is usable at all: a queue probe of trivial 2-node jobs, then a
+stop for the user's decision 0 (Kathleen usable?). If yes, it
 builds the Kathleen environment, measures the Phase 5 code there on one node and on a few
 nodes, studies M2L on a node on all three machines, and fixes the default for many ranks
 per node. The deep fix of table pressure, a batched host M2L that reads each table once
@@ -36,15 +36,15 @@ per level (Phase 4 decision 6, "a host batched-GEMM path through BLAS, deferred;
 candidate for Phase 6"), stays in Phase 6 as C6.6.
 
 The phase has three parts, after a probe:
-0. **The queue probe (T1, first step).** Trivial jobs at 2 nodes (`test` QoS) and 4 nodes
-   (`small` QoS), repeated over up to a day, with the scheduler's start estimates and the
-   queue depth by QoS; a report; then **stop** for decision 0. No environment is set up
-   before that decision.
+0. **The queue probe (T1, first step).** Trivial jobs at 2 nodes (`test` QoS), with the
+   scheduler's start estimates and the queue depth by QoS; a report; then **stop** for
+   decision 0. No environment is set up before that decision. (The 4-node `small` jobs and
+   the day of repeats first planned were dropped on 2026-10-10 with the 2-node cap, below.)
 1. **Kathleen (C5N.1).** A reproducible environment from files in the repository
    (`tools/kathleen/`), how a session on the M3 Max drives builds and Slurm jobs there,
    and every existing CPU-side check run on Kathleen.
 2. **The baseline (C5N.2).** Phase 5's code on Kathleen: one node at 1–40 ranks and the
-   ranks × threads splits, a first multi-node look at 1, 2 and 4 nodes, the exchanges at
+   ranks × threads splits, a first multi-node look at 1 and 2 nodes, the exchanges at
    network bandwidth against the model, overlap where it can matter, and the x86 host
    profile (P2P on AVX2).
 3. **M2L on a node (C5N.3).** A measured study on the three machines and a short design
@@ -72,7 +72,7 @@ T3 adds a further companion, `docs/design/node-m2l.md`.
 
 T1 starts with the queue probe and stops with its report. The user then decides:
 - **Kathleen usable:** T1 continues with the environment (C5N.1), and T2–T4 run as written,
-  Kathleen included, every job at most 4 nodes.
+  Kathleen included, every job at most 2 nodes.
 - **Without Kathleen (for now):** T1 ends with the probe report (merged as such: the
   probe script and the report, no environment); T2 is skipped, since Phase 5 T10's reports
   are the M3 Max and locust baseline, unless the user asks for a specific M3 Max or
@@ -146,7 +146,7 @@ sign-off.
 6. **Tested on what can run.** With Kathleen, every existing multi-rank test passes there
    at 1, 2, 4 and 8 ranks on one node and at 2 nodes × 40 ranks; every multi-rank test
    still passes by hand on the M3 Max and locust; the CI job stays at 2 and 4 ranks on
-   GitHub's runners. No Kathleen job exceeds 4 nodes.
+   GitHub's runners. No Kathleen job exceeds 2 nodes.
 7. **Defaults by measurement.** The strategy rule rests on T3's measurements on every
    machine available after decision 0 (three with Kathleen, the M3 Max and locust without), at the ranks-per-node counts each machine runs, with the rule and its source
    stated in `M2lStrategy::resolve`'s documentation.
@@ -176,9 +176,11 @@ These hold for every task:
   - **Jobs:** whole nodes only (jobs never share nodes). QoS as probed: `test` (1 h, ≤ 2
     nodes, ≤ 2 jobs), `singlenode` (6 h), `small` (48 h, ≤ 6 nodes), `medium` (24 h, ≤ 12
     nodes), `large` (12 h, any size; at most 144 nodes per job by the documentation).
-    **No Kathleen job is larger than 4 nodes (160 cores), ever** (the user's rule, from
-    2026-10-10): correctness runs use `test` (≤ 2 nodes); multi-node runs use `small`
-    (≤ 4 nodes here); `medium` and `large` are not used.
+    **No Kathleen job is larger than 2 nodes (80 cores), for now** (the user's rule, from
+    2026-10-10; it replaces the earlier cap of 4 nodes, and only the user lifts it):
+    correctness and multi-node runs use `test` (≤ 2 nodes, 1 h) or, for longer 2-node runs,
+    `small`; `medium` and `large` are not used. Figures at more than 2 nodes are "not
+    measured" in this phase.
   - **Node-hours:** every report states the node-hours its jobs used. The budget is
     decision 3.
 - **Ranks on Kathleen.** Ranks × threads per rank at most 40 per node (the physical
@@ -219,7 +221,7 @@ These hold for every task:
 - The Kathleen environment rebuilds from the repository into an empty root by one script,
   and every existing CPU-side check passes there (T1).
 - The baseline report `fmm-validate/results/phase5n-kathleen.md` is published, with the
-  one-node sweeps, the multi-node first look at 1, 2 and 4 nodes, the exchanges against the
+  one-node sweeps, the multi-node first look at 1 and 2 nodes, the exchanges against the
   network model, and the x86 P2P profile (T2).
 - `docs/design/node-m2l.md` is signed off before T4 starts (T3).
 - The strategy rule is built as signed off; on each machine, at every ranks-per-node
@@ -240,8 +242,8 @@ One pull request each.
 
 | Task | Brief | Delivers | Component | Depends on |
 | --- | --- | --- | --- | --- |
-| T1 | [T1-kathleen-environment.md](T1-kathleen-environment.md) | first the queue probe (2- and 4-node trivial jobs over up to a day; report; stop for decision 0); then, if Kathleen is usable, `tools/kathleen/` (setup, env, sync, remote, Slurm job scripts, machine facts, README), root `CLAUDE.md`, every CPU-side check on Kathleen in jobs, including the MPI tests at 2 nodes | C5N.1 | none |
-| T2 | [T2-kathleen-baseline.md](T2-kathleen-baseline.md) | the sweeps on Slurm; Phase 5's code on one Kathleen node (1–40 ranks, splits, strategies) and on 1, 2 and 4 nodes; the exchanges at network bandwidth against distributed-fmm.md §8.2; overlap; replicated data and memory to 160 ranks; the x86 P2P profile; `fmm-validate/results/phase5n-kathleen.md` | C5N.2 | T1; skipped without Kathleen |
+| T1 | [T1-kathleen-environment.md](T1-kathleen-environment.md) | first the queue probe (2-node trivial jobs; report; stop for decision 0); then, if Kathleen is usable, `tools/kathleen/` (setup, env, sync, remote, Slurm job scripts, machine facts, README), root `CLAUDE.md`, every CPU-side check on Kathleen in jobs, including the MPI tests at 2 nodes | C5N.1 | none |
+| T2 | [T2-kathleen-baseline.md](T2-kathleen-baseline.md) | the sweeps on Slurm; Phase 5's code on one Kathleen node (1–40 ranks, splits, strategies) and on 1 and 2 nodes; the exchanges at network bandwidth against distributed-fmm.md §8.2; overlap; replicated data and memory to 80 ranks; the x86 P2P profile; `fmm-validate/results/phase5n-kathleen.md` | C5N.2 | T1; skipped without Kathleen |
 | T3 | [T3-m2l-node-study.md](T3-m2l-node-study.md) | the M2L study on a node on the three machines (strategies × p × precision × ranks per node × threads), table sizes against the caches, table build and cache load at scale; `docs/design/node-m2l.md` with the proposed rule and the sign-off questions | C5N.3 (design) | decision 0; T2 for the Kathleen numbers |
 | T4 | [T4-node-m2l.md](T4-node-m2l.md) | the signed-off strategy rule in `nd-fmm-exec`, table loading at scale, the ranks × threads guidance, the harness knobs; before/after runs on the three machines; the design-document update | C5N.3 | T3 (signed off) |
 
@@ -255,7 +257,7 @@ T1 changes `tools/`, the root `CLAUDE.md` and `.gitignore` only. T2 and T4 both 
 | --- | --- | --- |
 | Apple M3 Max (development; 12 performance and 4 efficiency cores, 64 GB, Open MPI 5.0.10) | 1–12 | development; every task's multi-rank tests by hand; T3's study |
 | locust (NVIDIA GH200: 72 Neoverse-V2 cores in one NUMA node, 572 GB, one H100; Open MPI 5.0.10 from spack; shared, no scheduler; tools/gh200/) | 1–72, one rank per core | T3's study, with the load checked and stated; regression runs |
-| **Kathleen** (UCL; `ssh kathleen`, Slurm; tools/kathleen/ from T1) | 1–40 per node; 2 nodes for correctness, at most 4 nodes (160 cores) for any job | the queue probe and decision 0 (T1); if usable: builds and checks in jobs (T1), the baseline (T2), T3's study and T4's runs |
+| **Kathleen** (UCL; `ssh kathleen`, Slurm; tools/kathleen/ from T1) | 1–40 per node; at most 2 nodes (80 cores) for any job, for now | the queue probe and decision 0 (T1); if usable: builds and checks in jobs (T1), the baseline (T2), T3's study and T4's runs |
 | GitHub Actions `ubuntu-latest` (4 vCPUs) | 2 and 4 | the `run-tests-mpi` job, unchanged |
 
 ### Kathleen, as probed read-only on 2026-10-10
@@ -280,8 +282,8 @@ the facts in `tools/kathleen/machine.md`.
 ## Decisions to sign off
 
 Each is recorded in the exit checklist when made:
-0. **Kathleen usable?** From T1's probe report (start delays at 2 and 4 nodes over up to a
-   day, the scheduler's estimates, the queue depth by QoS): proceed with Kathleen, or
+0. **Kathleen usable?** From T1's probe report (start delays at 2 nodes, the scheduler's
+   estimates, the queue depth by QoS): proceed with Kathleen, or
    proceed without it (the M3 Max and locust; "Decision 0 and the path without
    Kathleen") and revisit later.
 1. **The order and the names.** Phase 5N (this phase) before Phase 5S (the scale-out on
@@ -292,7 +294,7 @@ Each is recorded in the exit checklist when made:
    directories (T1 proposes).
 3. **The node-hour budget:** per task and for the phase. Proposed: T1 at most 20
    node-hours (the probe's trivial jobs included), T2 at most 100, T3 at most 50 on
-   Kathleen, T4 at most 30, every job at most 4 nodes; each report
+   Kathleen, T4 at most 30, every job at most 2 nodes; each report
    states its use.
 4. **The launcher on Kathleen:** `srun` (PMIx) or `mpirun` inside an allocation, and the
    binding options (T1 measures both on 2 nodes and proposes one).
@@ -319,12 +321,12 @@ Each is recorded in the exit checklist when made:
 | --- | --- |
 | Builds on the login node break the machine's rules, or fill the quota | builds in Slurm jobs; target directories counted and limited (T1); `lquota` in every report |
 | Diskless nodes: Open MPI, cargo or rustc write to a `/tmp` that is RAM, or to a path that does not exist | T1 sets `TMPDIR` and Open MPI's session directory explicitly and measures what lands where |
-| The queue delays jobs so long that work on Kathleen stalls | T1's probe measures the delays at 2 and 4 nodes before any setup, and decision 0 can drop Kathleen; correctness in the `test` QoS (≤ 2 nodes, 1 h); no job above 4 nodes; jobs batched so one allocation runs a sweep |
+| The queue delays jobs so long that work on Kathleen stalls | T1's probe measures the delays at 2 nodes before any setup, and decision 0 can drop Kathleen; correctness in the `test` QoS (≤ 2 nodes, 1 h); no job above 2 nodes; jobs batched so one allocation runs a sweep |
 | Open MPI 4.1.6 behaves differently from the 5.0.10 of the M3 Max and locust (transport selection, `srun` launch, threading level) | T1 runs the MPI test list at 1–8 ranks on one node and 2 × 40 across nodes; records the transport; MPI initialised at `Funneled` checked |
 | The AVX2 kernels behave differently on Intel (the `rsqrtps` estimate is not architecturally defined) | T1 runs `run-tests-simd` with `--ignored` on Kathleen; the 4 u_T contract is tested exhaustively in f32 (simd-p2p.md §5.5) |
 | A strategy rule that depends on the node gives different bits at different launch configurations of the same input | the rule's inputs are agreed and reported (`Fmm::strategy()`, the threading report); bit identity is required at fixed resolved strategy, and decision 5 states what may change |
 | Kathleen's cache hierarchy (two sockets, 1 MB L2 per core, 27.5 MB L3) gives a different crossover from the M3 Max and Grace | the rule is measured on all three machines (requirement 7) and may name the machine class |
-| Inter-node numbers at 4 nodes (160 ranks) say little about 1,000+ ranks | T2 is a first look for the scale-out design; beyond 4 nodes the evidence is oversubscribed locust runs (correctness, memory, counts) and models, marked as such (distributed-fmm.md §14.5, "A cluster may not be available") |
+| Inter-node numbers at 2 nodes (80 ranks) say little about 1,000+ ranks | T2 is a first look for the scale-out design; beyond 2 nodes the evidence is oversubscribed locust runs (correctness, memory, counts) and models, marked as such (distributed-fmm.md §14.5, "A cluster may not be available") |
 
 ## How to run a task with Claude Code
 
@@ -333,7 +335,7 @@ In the repository root, start `claude` and say:
 Commands on Kathleen need `ssh`, so the session runs them outside the sandbox.
 
 ## Exit checklist
-- [ ] T1's queue probe reported; Kathleen usable or not (decision 0)
+- [x] T1's queue probe reported; Kathleen usable or not (decision 0: usable, every job at most 2 nodes for now; the user, 2026-10-10; docs/phase5n/kathleen-probe.md)
 - [ ] Phase order and names: 5N, then 5S, then 6 (decision 1)
 - [ ] Kathleen as the third machine; root, layout and quota use (decision 2)
 - [ ] Node-hour budget (decision 3)
