@@ -57,10 +57,54 @@
 //! | [`MultipoleExchange::forward_all`] | [`forward`](MultipoleExchange::forward) for l = 0..nlevels, in order |
 //! | [`CoarseExchange::gather`] | one all-gather-v, counts fixed at construction |
 //!
+//! | [`SourceExchange::forward_overlapped`] | none: point-to-point requests on the exchange's graph communicator |
+//! | [`MultipoleExchange::forward_all_overlapped`] | none: point-to-point requests on every level's graph communicator |
+//!
 //! Every rank must call the exchange methods in the same order. A rank that passes a
 //! store of the wrong layout still takes part in the communication, with default values
 //! in place of its data, and then panics, so its neighbours are not stranded in the
 //! collective. rlst panics on every rank if a buffer outgrows MPI's `i32` counts.
+//!
+//! # Non-blocking exchanges
+//!
+//! [`SourceExchange::forward_overlapped`] and [`MultipoleExchange::forward_all_overlapped`]
+//! move the same values as [`SourceExchange::forward`] and
+//! [`MultipoleExchange::forward_all`], bit for bit, while the caller works
+//! (`docs/design/distributed-fmm.md` §8.4, decision 10 of docs/phase5/README.md). rsmpi
+//! has no non-blocking neighbourhood collective, so they post safe scoped point-to-point
+//! requests instead:
+//!
+//! - **Messages.** On the exchange's own graph communicator (rlst's `forward_comm`,
+//!   created without reordering, so its ranks are the plan communicator's): per
+//!   neighbour with values, one receive and one send, tag 0, the value ranges rebuilt
+//!   from the public counts and offsets of the [`GhostCommunicator`] (neighbour k's
+//!   indices are the k-th block of `send_counts`, its values the range of `send_offsets`
+//!   over them; likewise for receiving). Each exchange, and each level of the multipole
+//!   exchange, has its own communicator, so messages of different exchanges never match
+//!   each other, and within one MPI's non-overtaking order and one message per
+//!   neighbour and direction pair them. A neighbour whose value count is zero (a source
+//!   exchange of empty leaves) is skipped on both sides, which both know from the build.
+//!   No rank messages itself: a ghost is never owned by its holder.
+//! - **Scope.** A scoped request cannot outlive its scope, so each method posts, runs
+//!   the caller's work and waits, in one `mpi::request::scope`. The receives land in a
+//!   staging buffer of the exchange (allocated at the first non-blocking call), not in
+//!   the store, so that the work can read the stores while messages are pending; the
+//!   send buffers are packed before posting and not touched until every request has
+//!   completed. A panic inside the work, with requests pending, aborts the process
+//!   (rsmpi).
+//! - **Progress.** MPI moves a message only inside MPI calls (design §1.2: 64 kB and
+//!   more do not progress at all without them). The work calls `test` on its in-flight
+//!   handle ([`SourcesInFlight`], [`MultipolesInFlight`]) between its own calls: one pass
+//!   of `MPI_Test` over the pending requests, on the calling thread
+//!   (`Request::test`, not `RequestCollection::test_some`, which panics once every request
+//!   has completed in rsmpi 0.8.2). The waits block in `MPI_Wait`.
+//! - **Times.** Each returns its [`ExchangeTimes`]: from the first post to the
+//!   completion of the last request as the test or wait that found it saw it, the time
+//!   blocked in waits, and the time in `test` calls, read on the calling thread for
+//!   reports; nothing depends on them.
+//! - **Determinism.** The values are copied, never combined, so the stores receive the
+//!   same bits as from the blocking exchanges, whatever the order in which messages
+//!   arrive.
 //!
 //! # Guarantees
 //!
@@ -80,13 +124,20 @@
 #[path = "exchange_tests.rs"]
 mod tests;
 
-use std::{cell::Cell, error::Error, fmt, ops::Range};
+use std::{
+    cell::Cell,
+    error::Error,
+    fmt,
+    ops::Range,
+    time::{Duration, Instant},
+};
 
 use mpi::{
     collective::SystemOperation,
     datatype::PartitionMut,
+    request::{self, LocalScope, Request},
     topology::SimpleCommunicator,
-    traits::{Communicator, CommunicatorCollectives, Equivalence},
+    traits::{Communicator, CommunicatorCollectives, Destination, Equivalence, Source},
 };
 use nd_octree::{MortonKey, morton};
 use rlst::distributed_tools::{ChunkSizes, GhostCommunicator, GhostCommunicatorBuilder};
@@ -267,6 +318,366 @@ fn multipole_ghosts(plan: &Plan, level: usize) -> Vec<(u32, usize)> {
         .collect()
 }
 
+/// Wall times of one non-blocking exchange in an evaluation
+/// (`docs/design/distributed-fmm.md` §8.6), read on the calling thread, for reports.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ExchangeTimes {
+    /// From the first post to the completion of the last request, as seen by the `test`
+    /// or wait that found it complete.
+    pub total: Duration,
+    /// Blocked in waits: the communication the work did not hide.
+    pub exposed: Duration,
+    /// The part of [`exposed`](Self::exposed) in the final wait for the sends, once the
+    /// work is done: a send completes when its receiver has taken the message, so this
+    /// also holds the time a faster rank waits for a slower neighbour to reach an MPI
+    /// call (load imbalance, not transfer).
+    pub sends: Duration,
+    /// In the `test` calls between the work's calls.
+    pub progress: Duration,
+}
+
+/// What one exchange moves on this rank per call: the messages of the non-blocking
+/// exchange (one per neighbour with values) and the values, sent and received.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Traffic {
+    /// Messages sent: neighbours this rank sends values to.
+    pub messages_sent: usize,
+    /// Messages received: neighbours this rank receives values from.
+    pub messages_received: usize,
+    /// Values sent, over every neighbour (a chunk sent to two ranks counts twice).
+    pub values_sent: usize,
+    /// Values received.
+    pub values_received: usize,
+}
+
+/// The neighbours `ranks`, each with the range of its values in a buffer laid out by
+/// `offsets`; the indices of neighbour k are the k-th block of `counts`.
+fn neighbour_values<'g>(
+    ranks: &'g [i32],
+    counts: &'g [i32],
+    offsets: &'g [usize],
+) -> impl Iterator<Item = (i32, Range<usize>)> + 'g {
+    let mut first = 0usize;
+    ranks.iter().zip(counts).map(move |(&rank, &count)| {
+        let last = first + count as usize;
+        let values = offsets[first]..offsets[last];
+        first = last;
+        (rank, values)
+    })
+}
+
+/// The out-neighbours of `communicator` with their ranges in the send buffer.
+fn sends(
+    communicator: &GhostCommunicator<MortonKey>,
+) -> impl Iterator<Item = (i32, Range<usize>)> + '_ {
+    neighbour_values(
+        communicator.out_ranks(),
+        communicator.send_counts(),
+        communicator.send_offsets(),
+    )
+}
+
+/// The in-neighbours of `communicator` with their ranges in the receive buffer.
+fn receives(
+    communicator: &GhostCommunicator<MortonKey>,
+) -> impl Iterator<Item = (i32, Range<usize>)> + '_ {
+    neighbour_values(
+        communicator.in_ranks(),
+        communicator.receive_counts(),
+        communicator.receive_offsets(),
+    )
+}
+
+/// The [`Traffic`] of one forward exchange on `communicator`.
+fn traffic(communicator: &GhostCommunicator<MortonKey>) -> Traffic {
+    Traffic {
+        messages_sent: sends(communicator).filter(|(_, v)| !v.is_empty()).count(),
+        messages_received: receives(communicator)
+            .filter(|(_, v)| !v.is_empty())
+            .count(),
+        values_sent: communicator.send_buffer_len(),
+        values_received: communicator.receive_buffer_len(),
+    }
+}
+
+/// A request of a non-blocking exchange, registered with the scope of its stage.
+type Pending<'a, 's, T> = Request<'a, [T], &'s LocalScope<'a>>;
+
+/// One message of a non-blocking exchange.
+enum Message<'a, 's, T> {
+    /// A send in flight.
+    Sending(Pending<'a, 's, T>),
+    /// A receive in flight, with the offset of its values in the receive buffer.
+    Receiving(usize, Pending<'a, 's, T>),
+    /// A completed receive whose values are not yet copied out.
+    Received(usize, &'a [T]),
+    /// Completed, and copied out if a receive.
+    Done,
+}
+
+/// The messages of one forward exchange (the sources, or one level of multipoles),
+/// posted in one scope: a receive and a send per neighbour with values.
+struct Posted<'a, 's, T> {
+    messages: Vec<Message<'a, 's, T>>,
+    /// Messages not yet complete.
+    pending: usize,
+}
+
+impl<'a, 's, T: Equivalence + Copy> Posted<'a, 's, T> {
+    /// Post the receives of `communicator` into `receive` and then its sends from `send`,
+    /// both laid out as its buffers, skipping the neighbours without values.
+    fn new(
+        scope: &'s LocalScope<'a>,
+        communicator: &GhostCommunicator<MortonKey>,
+        send: &'a [T],
+        receive: &'a mut [T],
+    ) -> Self {
+        let comm = communicator.forward_comm();
+        let mut messages =
+            Vec::with_capacity(communicator.in_ranks().len() + communicator.out_ranks().len());
+        let mut rest = receive;
+        for (rank, values) in receives(communicator) {
+            debug_assert_ne!(rank, comm.rank(), "a rank holds no ghost of its own");
+            let (piece, tail) = std::mem::take(&mut rest).split_at_mut(values.len());
+            rest = tail;
+            if !piece.is_empty() {
+                let request = comm
+                    .process_at_rank(rank)
+                    .immediate_receive_into(scope, piece);
+                messages.push(Message::Receiving(values.start, request));
+            }
+        }
+        for (rank, values) in sends(communicator) {
+            if !values.is_empty() {
+                let request = comm
+                    .process_at_rank(rank)
+                    .immediate_send(scope, &send[values]);
+                messages.push(Message::Sending(request));
+            }
+        }
+        Self {
+            pending: messages.len(),
+            messages,
+        }
+    }
+
+    /// One `MPI_Test` per message in flight.
+    fn test(&mut self) {
+        for message in &mut self.messages {
+            *message = match std::mem::replace(message, Message::Done) {
+                Message::Sending(request) => match request.test() {
+                    Ok(_) => {
+                        self.pending -= 1;
+                        Message::Done
+                    }
+                    Err(request) => Message::Sending(request),
+                },
+                Message::Receiving(offset, request) => match request.test_with_data() {
+                    Ok((_, values)) => {
+                        self.pending -= 1;
+                        Message::Received(offset, values)
+                    }
+                    Err(request) => Message::Receiving(offset, request),
+                },
+                other => other,
+            };
+        }
+    }
+
+    /// Wait for every receive.
+    fn wait_receives(&mut self) {
+        for message in &mut self.messages {
+            if matches!(message, Message::Receiving(..)) {
+                let Message::Receiving(offset, request) = std::mem::replace(message, Message::Done)
+                else {
+                    unreachable!()
+                };
+                *message = Message::Received(offset, request.wait_for_data());
+                self.pending -= 1;
+            }
+        }
+    }
+
+    /// Copy the values received, and not yet copied, into `into`, laid out as the receive
+    /// buffer.
+    fn copy_received(&mut self, into: &mut [T]) {
+        for message in &mut self.messages {
+            if let Message::Received(offset, values) = *message {
+                into[offset..offset + values.len()].copy_from_slice(values);
+                *message = Message::Done;
+            }
+        }
+    }
+
+    /// Wait for every send.
+    fn wait_sends(&mut self) {
+        for message in &mut self.messages {
+            if matches!(message, Message::Sending(_)) {
+                let Message::Sending(request) = std::mem::replace(message, Message::Done) else {
+                    unreachable!()
+                };
+                request.wait_without_status();
+                self.pending -= 1;
+            }
+        }
+    }
+}
+
+/// The posted exchanges of one non-blocking call, with their times.
+struct Flight<'a, 's, T> {
+    /// One per exchange: the sources, or every level of multipoles.
+    groups: Vec<Posted<'a, 's, T>>,
+    /// When posting began.
+    posted: Instant,
+    /// When the last message was seen complete.
+    completed: Option<Instant>,
+    times: ExchangeTimes,
+}
+
+impl<'a, 's, T: Equivalence + Copy> Flight<'a, 's, T> {
+    fn new(groups: usize) -> Self {
+        Self {
+            groups: Vec::with_capacity(groups),
+            posted: Instant::now(),
+            completed: None,
+            times: ExchangeTimes::default(),
+        }
+    }
+
+    /// Record `now` as the completion if no message is left in flight.
+    fn note(&mut self, now: Instant) {
+        if self.completed.is_none() && self.groups.iter().all(|g| g.pending == 0) {
+            self.completed = Some(now);
+        }
+    }
+
+    /// Wait for every send, and return the times.
+    fn finish(&mut self) -> ExchangeTimes {
+        let start = Instant::now();
+        for group in &mut self.groups {
+            group.wait_sends();
+        }
+        let end = Instant::now();
+        self.times.exposed += end - start;
+        self.times.sends = end - start;
+        self.note(end);
+        debug_assert!(self.groups.iter().all(|g| g.pending == 0));
+        self.times.total = self.completed.unwrap_or(end) - self.posted;
+        self.times
+    }
+}
+
+/// A [`Flight`] as the work of a non-blocking call sees it, without the lifetimes of its
+/// scope.
+trait InFlight<T> {
+    /// One pass of `MPI_Test` over every message in flight.
+    fn test(&mut self);
+    /// Wait for the receives of `group` and copy them into `into`; returns the time
+    /// blocked in the wait (the copy not included).
+    fn receive(&mut self, group: usize, into: &mut [T]) -> Duration;
+    /// The times so far.
+    fn times(&self) -> ExchangeTimes;
+}
+
+impl<T: Equivalence + Copy> InFlight<T> for Flight<'_, '_, T> {
+    fn test(&mut self) {
+        if self.completed.is_some() {
+            return;
+        }
+        let start = Instant::now();
+        for group in &mut self.groups {
+            group.test();
+        }
+        let end = Instant::now();
+        self.times.progress += end - start;
+        self.note(end);
+    }
+
+    fn receive(&mut self, group: usize, into: &mut [T]) -> Duration {
+        let start = Instant::now();
+        self.groups[group].wait_receives();
+        let end = Instant::now();
+        self.times.exposed += end - start;
+        self.note(end);
+        self.groups[group].copy_received(into);
+        end - start
+    }
+
+    fn times(&self) -> ExchangeTimes {
+        self.times
+    }
+}
+
+/// A source exchange in flight, as the work of
+/// [`SourceExchange::forward_overlapped`] sees it.
+pub struct SourcesInFlight<'f, T> {
+    flight: &'f mut (dyn InFlight<T> + 'f),
+}
+
+impl<T> SourcesInFlight<'_, T> {
+    /// Let MPI progress the exchange: one `MPI_Test` per message in flight, on the
+    /// calling thread. Call it between the work's own calls.
+    pub fn test(&mut self) {
+        self.flight.test();
+    }
+
+    /// The times of the exchange so far ([`ExchangeTimes::total`] is set at the end).
+    pub fn times(&self) -> ExchangeTimes {
+        self.flight.times()
+    }
+}
+
+/// A multipole exchange in flight, as the work of
+/// [`MultipoleExchange::forward_all_overlapped`] sees it.
+pub struct MultipolesInFlight<'f, T> {
+    exchange: &'f mut MultipoleExchange<T>,
+    flight: &'f mut (dyn InFlight<T> + 'f),
+    /// The levels whose ghost slots [`wait`](Self::wait) wrote.
+    written: Vec<bool>,
+    /// Whether every store handed to [`wait`](Self::wait) had the exchange's layout.
+    layout: bool,
+}
+
+impl<T: Equivalence + Copy + Default> MultipolesInFlight<'_, T> {
+    /// Let MPI progress the exchange of every level: one `MPI_Test` per message in
+    /// flight, on the calling thread. Call it between the work's own calls.
+    pub fn test(&mut self) {
+        self.flight.test();
+    }
+
+    /// Wait for the multipoles of `level`, write them into
+    /// [`receive_buffer`](MultipoleExchange::receive_buffer)`(level)` and into their
+    /// slots of `multipoles`, as [`MultipoleExchange::forward`] does. Returns the time
+    /// blocked. A second call for a level writes the slots again, with the same values.
+    ///
+    /// A store without the exchange's layout is not written; the exchange then panics at
+    /// the end of [`MultipoleExchange::forward_all_overlapped`], once nothing is in
+    /// flight.
+    pub fn wait(&mut self, level: usize, multipoles: &mut LevelBuffers<T>) -> Duration {
+        let exposed = self
+            .flight
+            .receive(level, &mut self.exchange.levels[level].receive_buffer);
+        if self.exchange.has_layout(level, multipoles) {
+            self.exchange.scatter(level, multipoles);
+        } else {
+            self.layout = false;
+        }
+        self.written[level] = true;
+        exposed
+    }
+
+    /// Return the exchange, for its index lists and the receive buffers of the levels
+    /// waited for.
+    pub fn exchange(&self) -> &MultipoleExchange<T> {
+        self.exchange
+    }
+
+    /// The times of the exchange so far ([`ExchangeTimes::total`] is set at the end).
+    pub fn times(&self) -> ExchangeTimes {
+        self.flight.times()
+    }
+}
+
 /// The exchange of source data for the ghost leaves of the U- and X-lists.
 ///
 /// See the [module documentation](self).
@@ -279,6 +690,9 @@ pub struct SourceExchange<T> {
     /// Leaf index of every chunk of the send buffer.
     send_leaves: Vec<u32>,
     send_buffer: Vec<T>,
+    /// The receives of [`forward_overlapped`](Self::forward_overlapped), allocated at its
+    /// first call.
+    staging: Vec<T>,
 }
 
 impl<T: Equivalence + Copy + Default> SourceExchange<T> {
@@ -360,6 +774,7 @@ impl<T: Equivalence + Copy + Default> SourceExchange<T> {
         leaf_counts.extend(counts.unwrap());
         Ok(Self {
             send_buffer: vec![T::default(); communicator.send_buffer_len()],
+            staging: Vec::new(),
             communicator,
             point_size,
             nlocal,
@@ -405,6 +820,25 @@ impl<T: Equivalence + Copy + Default> SourceExchange<T> {
         &self.communicator
     }
 
+    /// Return the messages and values of one exchange on this rank.
+    pub fn traffic(&self) -> Traffic {
+        traffic(&self.communicator)
+    }
+
+    /// Whether `sources` has the layout of [`new_store`](Self::new_store).
+    fn has_layout(&self, sources: &LeafStore<T>) -> bool {
+        sources.point_size() == self.point_size && sources.has_counts(&self.leaf_counts)
+    }
+
+    /// Gather the chunks of [`send_leaves`](Self::send_leaves) into the send buffer.
+    fn pack(&mut self, sources: &LeafStore<T>) {
+        let offsets = self.communicator.send_offsets();
+        for (k, &leaf) in self.send_leaves.iter().enumerate() {
+            self.send_buffer[offsets[k]..offsets[k + 1]]
+                .copy_from_slice(sources.chunk(leaf as usize));
+        }
+    }
+
     /// Send the local chunks that other ranks hold as ghosts, and receive the ghost
     /// chunks straight into the ghost tail of `sources`.
     ///
@@ -415,14 +849,9 @@ impl<T: Equivalence + Copy + Default> SourceExchange<T> {
     /// Panics, after taking part in the exchange, if `sources` does not have the layout
     /// of [`new_store`](Self::new_store).
     pub fn forward(&mut self, sources: &mut LeafStore<T>) {
-        let layout =
-            sources.point_size() == self.point_size && sources.has_counts(&self.leaf_counts);
+        let layout = self.has_layout(sources);
         if layout {
-            let offsets = self.communicator.send_offsets();
-            for (k, &leaf) in self.send_leaves.iter().enumerate() {
-                self.send_buffer[offsets[k]..offsets[k + 1]]
-                    .copy_from_slice(sources.chunk(leaf as usize));
-            }
+            self.pack(sources);
             let mut tail = sources.range_mut(self.ghost_leaves());
             self.communicator
                 .forward_send_values(&self.send_buffer, tail.as_mut_slice());
@@ -432,6 +861,64 @@ impl<T: Equivalence + Copy + Default> SourceExchange<T> {
                 .forward_send_values(&self.send_buffer, &mut scratch);
         }
         assert!(layout, "the source store does not have the exchange layout");
+    }
+
+    /// [`forward`](Self::forward) without blocking: pack the send buffer from `sources`,
+    /// post the exchange, run `work` while the messages travel, wait, and write the ghost
+    /// chunks into the ghost tail of `sources`, bit for bit as `forward` does (see
+    /// [Non-blocking exchanges](self#non-blocking-exchanges)).
+    ///
+    /// `work` gets `sources` to read, with the ghost tail as it was before the call, and
+    /// the exchange in flight, on which it calls [`test`](SourcesInFlight::test) between
+    /// its own calls so that MPI progresses the messages. It must not call MPI on the
+    /// plan's communicator in a way that waits for another rank's part of this exchange.
+    /// Returns its result and the [`ExchangeTimes`].
+    ///
+    /// Every rank must call it, as [`forward`](Self::forward) (no collective: one
+    /// point-to-point receive and send per neighbour with values).
+    ///
+    /// # Panics
+    ///
+    /// Panics, after the exchange has completed, if `sources` does not have the layout of
+    /// [`new_store`](Self::new_store); the rank sends what its send buffer held before.
+    pub fn forward_overlapped<R>(
+        &mut self,
+        sources: &mut LeafStore<T>,
+        work: impl FnOnce(&LeafStore<T>, &mut SourcesInFlight<'_, T>) -> R,
+    ) -> (R, ExchangeTimes) {
+        let layout = self.has_layout(sources);
+        if layout {
+            self.pack(sources);
+        }
+        let mut staging = std::mem::take(&mut self.staging);
+        staging.resize(self.communicator.receive_buffer_len(), T::default());
+        let ghosts = self.ghost_leaves();
+        let (result, times) = request::scope(|scope| {
+            let mut flight = Flight::new(1);
+            flight.groups.push(Posted::new(
+                scope,
+                &self.communicator,
+                &self.send_buffer,
+                &mut staging,
+            ));
+            let result = work(
+                sources,
+                &mut SourcesInFlight {
+                    flight: &mut flight,
+                },
+            );
+            if layout {
+                let mut tail = sources.range_mut(ghosts);
+                flight.receive(0, tail.as_mut_slice());
+            } else {
+                let mut scratch = vec![T::default(); self.communicator.receive_buffer_len()];
+                flight.receive(0, &mut scratch);
+            }
+            (result, flight.finish())
+        });
+        self.staging = staging;
+        assert!(layout, "the source store does not have the exchange layout");
+        (result, times)
     }
 }
 
@@ -444,6 +931,10 @@ struct LevelExchange<T> {
     receive_boxes: Vec<u32>,
     send_buffer: Vec<T>,
     receive_buffer: Vec<T>,
+    /// The receives of
+    /// [`forward_all_overlapped`](MultipoleExchange::forward_all_overlapped), allocated at
+    /// its first call.
+    staging: Vec<T>,
 }
 
 /// The exchange of multipoles for the ghost boxes of the V- and W-lists, one per level.
@@ -507,6 +998,7 @@ impl<T: Equivalence + Copy + Default> MultipoleExchange<T> {
             levels.push(LevelExchange {
                 send_buffer: vec![T::default(); communicator.send_buffer_len()],
                 receive_buffer: vec![T::default(); communicator.receive_buffer_len()],
+                staging: Vec::new(),
                 communicator,
                 size,
                 len: index.len(level),
@@ -550,6 +1042,48 @@ impl<T: Equivalence + Copy + Default> MultipoleExchange<T> {
         &self.levels[level].communicator
     }
 
+    /// Return the messages and values of the exchange of `level` on this rank.
+    pub fn traffic(&self, level: usize) -> Traffic {
+        traffic(&self.levels[level].communicator)
+    }
+
+    /// Whether level `level` of `multipoles` has the plan's number of levels and boxes and
+    /// this exchange's size.
+    fn has_layout(&self, level: usize, multipoles: &LevelBuffers<T>) -> bool {
+        let exchange = &self.levels[level];
+        multipoles.nlevels() == self.levels.len()
+            && multipoles.len(level) == exchange.len
+            && multipoles.size(level) == exchange.size
+    }
+
+    /// Gather the multipoles of [`send_boxes`](Self::send_boxes)`(level)` into the send
+    /// buffer of `level`.
+    fn pack(&mut self, level: usize, multipoles: &LevelBuffers<T>) {
+        let exchange = &mut self.levels[level];
+        let source = multipoles.level(level);
+        for (chunk, &i) in exchange
+            .send_buffer
+            .chunks_exact_mut(exchange.size)
+            .zip(&exchange.send_boxes)
+        {
+            chunk.copy_from_slice(source.chunk(i as usize));
+        }
+    }
+
+    /// Write the receive buffer of `level` into the slots of
+    /// [`receive_boxes`](Self::receive_boxes)`(level)`.
+    fn scatter(&self, level: usize, multipoles: &mut LevelBuffers<T>) {
+        let exchange = &self.levels[level];
+        let mut target = multipoles.level_mut(level);
+        for (chunk, &i) in exchange
+            .receive_buffer
+            .chunks_exact(exchange.size)
+            .zip(&exchange.receive_boxes)
+        {
+            target.chunk_mut(i as usize).copy_from_slice(chunk);
+        }
+    }
+
     /// Send the multipoles of `level` that other ranks hold as ghosts, and write the
     /// received ghost multipoles into their slots of `multipoles`.
     ///
@@ -561,22 +1095,11 @@ impl<T: Equivalence + Copy + Default> MultipoleExchange<T> {
     /// Panics, after taking part in the exchange, if `multipoles` does not have the
     /// plan's number of levels and boxes and this exchange's sizes.
     pub fn forward(&mut self, level: usize, multipoles: &mut LevelBuffers<T>) {
-        let nlevels = self.levels.len();
-        let exchange = &mut self.levels[level];
-        let layout = multipoles.nlevels() == nlevels
-            && multipoles.len(level) == exchange.len
-            && multipoles.size(level) == exchange.size;
-        let size = exchange.size;
+        let layout = self.has_layout(level, multipoles);
         if layout {
-            let source = multipoles.level(level);
-            for (chunk, &i) in exchange
-                .send_buffer
-                .chunks_exact_mut(size)
-                .zip(&exchange.send_boxes)
-            {
-                chunk.copy_from_slice(source.chunk(i as usize));
-            }
+            self.pack(level, multipoles);
         }
+        let exchange = &mut self.levels[level];
         exchange
             .communicator
             .forward_send_values(&exchange.send_buffer, &mut exchange.receive_buffer);
@@ -584,14 +1107,7 @@ impl<T: Equivalence + Copy + Default> MultipoleExchange<T> {
             layout,
             "the multipole buffers do not have the exchange layout"
         );
-        let mut target = multipoles.level_mut(level);
-        for (chunk, &i) in exchange
-            .receive_buffer
-            .chunks_exact(size)
-            .zip(&exchange.receive_boxes)
-        {
-            target.chunk_mut(i as usize).copy_from_slice(chunk);
-        }
+        self.scatter(level, multipoles);
     }
 
     /// Call [`forward`](Self::forward) for every level, in ascending order.
@@ -599,6 +1115,95 @@ impl<T: Equivalence + Copy + Default> MultipoleExchange<T> {
         for level in 0..self.nlevels() {
             self.forward(level, multipoles);
         }
+    }
+
+    /// [`forward_all`](Self::forward_all) without blocking: pack every level's send
+    /// buffer from `multipoles`, post the exchange of every level, and run `work` while
+    /// the messages travel (see [Non-blocking exchanges](self#non-blocking-exchanges)).
+    ///
+    /// `work` gets `multipoles` back and the exchange in flight. It waits for each level
+    /// with [`MultipolesInFlight::wait`], which writes the level's receive buffer and
+    /// ghost slots bit for bit as [`forward`](Self::forward) does, in any order, and calls
+    /// [`test`](MultipolesInFlight::test) between its own calls so that MPI progresses the
+    /// messages. It must not call MPI on the plan's communicator in a way that waits for
+    /// another rank's part of this exchange; a collective that every rank enters (the
+    /// coarse gather) is fine. When `work` returns, every send is waited for. Returns its
+    /// result and the [`ExchangeTimes`].
+    ///
+    /// Every rank must call it, as [`forward_all`](Self::forward_all) (no collective: one
+    /// point-to-point receive and send per level and neighbour with values).
+    ///
+    /// # Panics
+    ///
+    /// Panics, after the exchange has completed, if `work` did not wait for every level
+    /// (whose values then reach only the receive buffer), or if a store passed here or to
+    /// `wait` does not have the plan's number of levels and boxes and this exchange's
+    /// sizes; the rank sends what its send buffers held before.
+    pub fn forward_all_overlapped<R>(
+        &mut self,
+        multipoles: &mut LevelBuffers<T>,
+        work: impl FnOnce(&mut MultipolesInFlight<'_, T>, &mut LevelBuffers<T>) -> R,
+    ) -> (R, ExchangeTimes) {
+        let nlevels = self.levels.len();
+        let layout = (0..nlevels).all(|level| self.has_layout(level, multipoles));
+        if layout {
+            for level in 0..nlevels {
+                self.pack(level, multipoles);
+            }
+        }
+        // The buffers the requests borrow live outside the exchange while they are in
+        // flight, so that the work can read the exchange.
+        let sends: Vec<Vec<T>> = self
+            .levels
+            .iter_mut()
+            .map(|level| std::mem::take(&mut level.send_buffer))
+            .collect();
+        let mut staging: Vec<Vec<T>> = self
+            .levels
+            .iter_mut()
+            .map(|level| {
+                let mut staging = std::mem::take(&mut level.staging);
+                staging.resize(level.receive_buffer.len(), T::default());
+                staging
+            })
+            .collect();
+        let (result, times, written) = request::scope(|scope| {
+            let mut flight = Flight::new(nlevels);
+            for ((level, send), receive) in self.levels.iter().zip(&sends).zip(&mut staging) {
+                flight
+                    .groups
+                    .push(Posted::new(scope, &level.communicator, send, receive));
+            }
+            let mut in_flight = MultipolesInFlight {
+                exchange: &mut *self,
+                flight: &mut flight,
+                written: vec![false; nlevels],
+                layout,
+            };
+            let result = work(&mut in_flight, multipoles);
+            let MultipolesInFlight {
+                written, layout, ..
+            } = in_flight;
+            // What the work did not wait for reaches the receive buffers only.
+            for (level, _) in written.iter().enumerate().filter(|(_, w)| !**w) {
+                flight.receive(level, &mut self.levels[level].receive_buffer);
+            }
+            let written = layout && written.iter().all(|&w| w);
+            (result, flight.finish(), written)
+        });
+        for ((level, send), staging) in self.levels.iter_mut().zip(sends).zip(staging) {
+            level.send_buffer = send;
+            level.staging = staging;
+        }
+        assert!(
+            layout,
+            "the multipole buffers do not have the exchange layout"
+        );
+        assert!(
+            written,
+            "every level must be waited for, with buffers of the exchange layout"
+        );
+        (result, times)
     }
 }
 

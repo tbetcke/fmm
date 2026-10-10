@@ -74,7 +74,8 @@
 //! [`Fmm::evaluate`] is collective: it agrees the length of the charge vector (one
 //! all-reduce), forwards the charges to the ranks that own their sources, into leaf order
 //! (one all-to-all-v), writes them after the coordinates of each source chunk (§3.13,
-//! "Source chunks"), resets the evaluator and runs its six stages, scales the target
+//! "Source chunks"), resets the evaluator and runs its six stages (or, with
+//! [`FmmBuilder::overlap`], its overlapped stages: [Overlap](#overlap-c52)), scales the target
 //! output of the owned targets in leaf order (the output pass, next section), and moves
 //! it back to the caller's ranks and order (one all-to-all-v), timing each step
 //! ([`StageTimings`]). For a fixed input on every rank, a fixed rank count and fixed
@@ -217,6 +218,31 @@
 //!   the charge-length agreement carries the kept error. [`Fmm::exchange_sizes`] says
 //!   what the exchanges move on the rank.
 //!
+//! # Overlap (C5.2)
+//!
+//! With [`FmmBuilder::overlap`] (or [`Fmm::set_overlap`]; Phase 5 T9, off by default)
+//! `evaluate` runs the evaluator's overlapped stages: the source exchange travels behind
+//! P2M and the local M2M, and the multipole exchange of every level, posted before the
+//! coarse gather, behind the gather, the global M2M and the downward pass of the coarser
+//! levels, each level waited for just before the first call that reads it
+//! (`nd_fmm_plan::evaluator`, "Overlap"; docs/design/distributed-fmm.md §8). The
+//! exchanges are scoped point-to-point requests, progressed by a `test` after every level
+//! call on the calling thread; the coarse gather stays blocking.
+//! - **Output.** No level call moves, so the output is bit for bit the blocking path's,
+//!   for every rank count and number of threads (no reordering is offered, decision 9).
+//! - **Collectives.** The same per evaluation, except that the source and multipole
+//!   exchanges are point-to-point (no neighbourhood collective); every rank must use the
+//!   same setting.
+//! - **Times.** [`StageTimings`] keeps its stages, split as its documentation says, and
+//!   adds [`StageTimings::overlap`]: per exchange the time from post to completion, the
+//!   exposed wait and the `test` calls, the wait per level and the coarse gather.
+//! - **The device** runs the overlapped stages with the same events and transfers
+//!   (design §13, question 10), for correctness only: no device time is a scaling
+//!   figure (decision 3). With [`FmmBuilder::device_timestamps`] the first overlapped
+//!   stage is timed in the window of [`DeviceStage::UpwardLocal`] and the second (the
+//!   global M2M and the downward pass) in that of [`DeviceStage::Downward`];
+//!   [`DeviceStage::UpwardGlobal`] times zero.
+//!
 //! # Precision
 //!
 //! `T` is f64 or f32 (`Stored + SimdScalar + Equivalence`). Coordinates are always f64
@@ -239,7 +265,9 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, Root};
 use mpi::traits::{CommunicatorCollectives, Equivalence};
 use nd_fmm_math::RealScalar;
+pub use nd_fmm_plan::evaluator::OverlapTimes;
 use nd_fmm_plan::evaluator::{Evaluator, EvaluatorError};
+pub use nd_fmm_plan::exchange::{ExchangeTimes, Traffic};
 use nd_fmm_plan::operator::{
     FmmOperator, FmmSizes, HostData, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p,
 };
@@ -758,6 +786,7 @@ pub enum FmmError {
 /// | [`device_scratch_budget`](Self::device_scratch_budget) | 128 MB; 2 GB on CUDA |
 /// | [`tuning_cache`](Self::tuning_cache) | none: no tuning, the static rule |
 /// | [`tuning_budget`](Self::tuning_budget) | 10 s |
+/// | [`overlap`](Self::overlap) | off: the blocking exchanges |
 ///
 /// For `T = f32`, p > 8 is accepted but lies beyond the useful range (design §4): the
 /// error is then at the f32 floor already.
@@ -784,6 +813,7 @@ pub struct FmmBuilder<T> {
     device_scratch_budget: Option<u64>,
     tuning_cache: Option<PathBuf>,
     tuning_budget: Duration,
+    overlap: bool,
     #[cfg(feature = "gpu")]
     tuning_hook: crate::tune::TuningHook,
     value: PhantomData<fn() -> T>,
@@ -814,6 +844,7 @@ impl<T> FmmBuilder<T> {
             device_scratch_budget: None,
             tuning_cache: None,
             tuning_budget: DEFAULT_TUNING_BUDGET,
+            overlap: false,
             #[cfg(feature = "gpu")]
             tuning_hook: crate::tune::TuningHook::default(),
             value: PhantomData,
@@ -1026,6 +1057,18 @@ impl<T> FmmBuilder<T> {
     /// Ignored without [`tuning_cache`](Self::tuning_cache).
     pub fn tuning_budget(mut self, budget: Duration) -> Self {
         self.tuning_budget = budget;
+        self
+    }
+
+    /// Overlaps the source and multipole exchanges with local work (Phase 5 T9, C5.2;
+    /// [Overlap](self#overlap-c52)): each evaluation runs the evaluator's overlapped
+    /// stages (`Evaluator::evaluate_overlapped`) instead of the six blocking ones. The
+    /// output is the same bit for bit; [`StageTimings::overlap`] reports the exposed waits.
+    /// Off by default. Every rank must pass the same setting. With a device backend the
+    /// device runs the overlapped stages with the same transfers (docs/design/
+    /// distributed-fmm.md §13, question 10), for correctness: it hides nothing there.
+    pub fn overlap(mut self, on: bool) -> Self {
+        self.overlap = on;
         self
     }
 
@@ -1333,6 +1376,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             strategy: strategy.resolve(self.p),
             backend: self.backend,
             synchronous_stages: self.synchronous_stages && self.backend.is_device(),
+            overlap: self.overlap,
             host_sources,
             sent_leaves,
             device_error: None,
@@ -2437,6 +2481,18 @@ impl BuildTimings {
 /// With [`FmmBuilder::kind_timings`] (Phase 4S T5), [`kinds`](Self::kinds) holds the time
 /// of every level call by operator kind and level ([`KindTimings`]), and
 /// [`remainder`](Self::remainder) what the stages spent outside the level calls.
+///
+/// With [`FmmBuilder::overlap`] (Phase 5 T9) the evaluator runs two overlapped stages in
+/// place of stages 1–5, and the five fields are their parts, so that the two paths compare
+/// and [`total`](Self::total) is still the wall time: [`upward_local`](Self::upward_local),
+/// [`upward_global`](Self::upward_global) and [`downward`](Self::downward) the same work as
+/// in the blocking path (level calls, the coarse gather and its events), and
+/// [`exchange_sources`](Self::exchange_sources) and
+/// [`exchange_multipoles`](Self::exchange_multipoles) the rest of each overlapped stage:
+/// packing, posting, the `test` calls, the waits, unpacking and the exchanges' events.
+/// [`overlap`](Self::overlap) has the times of the exchanges themselves: from post to
+/// completion, the exposed wait and the `test` calls, the wait per level and the coarse
+/// gather ([`OverlapTimes`], docs/design/distributed-fmm.md §8.6).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct StageTimings {
     /// Moving the charges to the ranks that own their sources, into leaf order: the
@@ -2448,15 +2504,18 @@ pub struct StageTimings {
     /// (Phase 4S T9); with a device backend also zeroing the device stores and uploading
     /// and scattering the charges.
     pub load: Duration,
-    /// Stage 1: the source exchange (collective).
+    /// Stage 1: the source exchange (collective). With overlap, the time of the first
+    /// overlapped stage outside the level calls of stage 2.
     pub exchange_sources: Duration,
-    /// Stage 2: P2M and the local M2M.
+    /// Stage 2: P2M and the local M2M. With overlap, their level calls.
     pub upward_local: Duration,
-    /// Stage 3: the coarse gather (collective) and the global M2M.
+    /// Stage 3: the coarse gather (collective) and the global M2M. With overlap, the
+    /// same, inside the second overlapped stage.
     pub upward_global: Duration,
-    /// Stage 4: the multipole exchange (collective).
+    /// Stage 4: the multipole exchange (collective). With overlap, the time of the second
+    /// overlapped stage outside stages 3 and 5.
     pub exchange_multipoles: Duration,
-    /// Stage 5: L2L, M2L and P2L.
+    /// Stage 5: L2L, M2L and P2L. With overlap, their level calls.
     pub downward: Duration,
     /// Stage 6: L2P, M2P and P2P.
     pub evaluate_leaves: Duration,
@@ -2483,6 +2542,11 @@ pub struct StageTimings {
     /// and with [`KindTiming::Device`] for an evaluation in which a window was not timed
     /// on the device.
     pub kinds: Option<KindTimings>,
+    /// With [`FmmBuilder::overlap`], the times of the overlapped exchanges
+    /// ([`OverlapTimes`]: per exchange from post to completion, the exposed wait and the
+    /// `test` calls; the wait per level; the coarse gather); `None` in a blocking
+    /// evaluation.
+    pub overlap: Option<OverlapTimes>,
 }
 
 impl StageTimings {
@@ -2636,7 +2700,10 @@ impl KindTimings {
 /// A stage of [`Fmm::evaluate`] that runs device work, timed by one timing window
 /// ([`DeviceStageTimings`]). The exchanges have no window: on one rank they move nothing,
 /// on several the device's part of them is a few transfers and launches (Phase 5 T8),
-/// and the coarse gather's download falls in [`UpwardGlobal`](Self::UpwardGlobal).
+/// and the coarse gather's download falls in [`UpwardGlobal`](Self::UpwardGlobal). With
+/// [`FmmBuilder::overlap`] the first overlapped stage falls in
+/// [`UpwardLocal`](Self::UpwardLocal) and the second in [`Downward`](Self::Downward),
+/// which then spans the global M2M too ([Overlap](self#overlap-c52)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DeviceStage {
     /// Zeroing the device stores (at the evaluator's `reset`), uploading and scattering
@@ -2762,6 +2829,23 @@ pub struct ExchangeSizes {
     pub received_boxes: Vec<usize>,
 }
 
+/// What the evaluator's exchanges send and receive on this rank per evaluation, in
+/// messages and values ([`Fmm::exchange_traffic`], Phase 5 T9): the input to an estimate
+/// of the exchanges at a network's bandwidth and latency (docs/design/distributed-fmm.md
+/// §8.2). A value is `size_of::<T>()` bytes. Every count is zero on one rank.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExchangeTraffic {
+    /// The source exchange: one message per neighbour with values, four values per point.
+    pub sources: Traffic,
+    /// The multipole exchange of each level: one message per neighbour with values.
+    pub multipoles: Vec<Traffic>,
+    /// The values of this rank's coarse blocks, which the coarse gather sends to every
+    /// other rank; none on one rank.
+    pub coarse_sent: usize,
+    /// The values of the other ranks' coarse blocks, which it receives.
+    pub coarse_received: usize,
+}
+
 /// A built FMM; see the [module documentation](self).
 ///
 /// It owns the octree (which borrows the communicator for `'o`), the plan, the
@@ -2780,6 +2864,8 @@ where
     backend: Backend,
     /// With a device backend: sync after every stage.
     synchronous_stages: bool,
+    /// Run the overlapped stages (Phase 5 T9).
+    overlap: bool,
     /// Whether an evaluation writes the charges into the host's source store: on the host
     /// path, and on a device with P2M, P2L or P2P on the host fallback (Phase 4S T9).
     host_sources: bool,
@@ -2958,13 +3044,34 @@ where
                 }
             })
         };
-        timings.exchange_sources = stage(None, &mut |e| e.exchange_sources());
-        timings.upward_local = stage(Some(DeviceStage::UpwardLocal), &mut |e| e.upward_local());
-        timings.upward_global = stage(Some(DeviceStage::UpwardGlobal), &mut |e| {
-            e.upward_global();
-        });
-        timings.exchange_multipoles = stage(None, &mut |e| e.exchange_multipoles());
-        timings.downward = stage(Some(DeviceStage::Downward), &mut |e| e.downward());
+        if self.overlap {
+            // The overlapped stages (Phase 5 T9): each part named after the blocking stage
+            // it replaces, the exchanges' parts being what the stage spent outside the
+            // level calls (`OverlapTimes`).
+            let near = stage(Some(DeviceStage::UpwardLocal), &mut |e| {
+                e.exchange_sources_and_upward_local();
+            });
+            let mut overlap = OverlapTimes::default();
+            let far = stage(Some(DeviceStage::Downward), &mut |e| {
+                e.far_field();
+                overlap = e.overlap_times();
+            });
+            timings.upward_local = overlap.upward_local;
+            timings.exchange_sources = near.saturating_sub(overlap.upward_local);
+            timings.upward_global = overlap.upward_global;
+            timings.downward = overlap.downward;
+            timings.exchange_multipoles =
+                far.saturating_sub(overlap.upward_global + overlap.downward);
+            timings.overlap = Some(overlap);
+        } else {
+            timings.exchange_sources = stage(None, &mut |e| e.exchange_sources());
+            timings.upward_local = stage(Some(DeviceStage::UpwardLocal), &mut |e| e.upward_local());
+            timings.upward_global = stage(Some(DeviceStage::UpwardGlobal), &mut |e| {
+                e.upward_global();
+            });
+            timings.exchange_multipoles = stage(None, &mut |e| e.exchange_multipoles());
+            timings.downward = stage(Some(DeviceStage::Downward), &mut |e| e.downward());
+        }
         timings.evaluate_leaves = stage(Some(DeviceStage::EvaluateLeaves), &mut |e| {
             e.evaluate_leaves();
         });
@@ -3200,6 +3307,25 @@ where
         }
     }
 
+    /// Returns what the evaluator's exchanges send and receive on this rank per
+    /// evaluation, in messages and values ([`ExchangeTraffic`], Phase 5 T9), from their
+    /// index lists and counts.
+    pub fn exchange_traffic(&self) -> ExchangeTraffic {
+        let multipoles = self.evaluator.multipole_exchange();
+        let coarse = self.evaluator.coarse_exchange();
+        ExchangeTraffic {
+            sources: self.evaluator.source_exchange().traffic(),
+            multipoles: (0..multipoles.nlevels())
+                .map(|l| multipoles.traffic(l))
+                .collect(),
+            coarse_sent: coarse.sent_blocks().map(|b| coarse.chunk(b).len()).sum(),
+            coarse_received: coarse
+                .received_blocks()
+                .map(|b| coarse.chunk(b).len())
+                .sum(),
+        }
+    }
+
     /// Returns what the table cache did for each table family, in the order of
     /// [`Tables::kinds`]; empty without a cache.
     pub fn cache_outcomes(&self) -> &[(TableKind, CacheOutcome)] {
@@ -3232,6 +3358,18 @@ where
         check_kind_timing(mode, self.backend, kinds.on_device)?;
         kinds.timings.mode = mode;
         Ok(())
+    }
+
+    /// Whether evaluations overlap the exchanges with local work ([`FmmBuilder::overlap`]).
+    pub fn overlap(&self) -> bool {
+        self.overlap
+    }
+
+    /// Sets whether the next evaluations overlap the exchanges with local work
+    /// ([`FmmBuilder::overlap`]), on the same build: the output is the same bit for bit.
+    /// Every rank must set the same value before its next evaluation.
+    pub fn set_overlap(&mut self, on: bool) {
+        self.overlap = on;
     }
 
     /// With `serial`, runs the next evaluations on the calling thread even if the FMM

@@ -727,8 +727,10 @@ pub fn check_backend<'o, T: Stored + SimdScalar + Equivalence + Default>(
     backend: Backend,
     comm: &'o SimpleCommunicator,
 ) -> Differences {
+    // Every kind on the fallback with the exchanges overlapped (Phase 5 T9): bit for bit
+    // the blocking host path, with the same transfers.
     check_fallback(
-        builder,
+        &builder.clone().overlap(true),
         (sources, targets),
         charges,
         host,

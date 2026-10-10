@@ -19,7 +19,7 @@ place, the charges uploaded without a copy); Phase 5, C5.1 host (task T6 in docs
 `Fmm` on any number of ranks through `nd_fmm_plan::redistribute::Redistribution`; design
 docs/design/distributed-fmm.md) and C5.1 device with C5.2's device-resident ghost
 buffers (task T8: the device operator on any number of ranks through the host-data
-hook).
+hook) and C5.2 (task T9: the exchanges overlapped with local work, `FmmBuilder::overlap`).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -121,6 +121,22 @@ hook).
     kind) on every rank count, and different with the hook disabled on several ranks
     (**host-data hook**). Keep it so when the evaluator, the exchanges or `Fmm`'s stages
     change; the device operator uses the events since T8.
+  - Overlap (Phase 5 T9, C5.2; docs/design/distributed-fmm.md §8; the `fmm` module docs,
+    "Overlap (C5.2)"): `FmmBuilder::overlap` (off by default until T9's sign-off decides
+    the default) and `Fmm::set_overlap` run `Evaluator::exchange_sources_and_upward_local`
+    and `far_field` in place of stages 1–5: the same level calls and events, bit for bit
+    the blocking output. `StageTimings` keeps its fields, split so that the two paths
+    compare (the work parts from `OverlapTimes`, the rest of each overlapped stage in
+    `exchange_sources` and `exchange_multipoles`), and adds `overlap: Option<OverlapTimes>`
+    (per exchange post to completion, exposed wait, `test` calls; the wait per level; the
+    coarse gather). `Fmm::exchange_traffic` gives the messages and values per exchange.
+    The device runs the overlapped stages too, for correctness (design §13, question 10;
+    the stage windows `UpwardLocal` and `Downward`). `tests/mpi_exec.rs` checks overlap on
+    every scenario that evaluates (its module docs, "Overlap"), the shadow check runs
+    overlapped, and the device's fallback check runs with `overlap(true)`.
+    `examples/overlap_timing.rs` (not registered; release, by hand) measures the C5.2
+    criterion: blocking and overlapped evaluations of one build in turn, the medians over
+    evaluations of the maxima over ranks, the traffic per rank and the copy bandwidth.
   - `examples/basic_evaluation.rs` is the user-facing example of calling `Fmm`
     (registered with `templated-examples`, so the weekly job runs it at 3 ranks): it
     must run on any number of ranks, each passing its own points, and keep to the
@@ -238,7 +254,9 @@ hook).
     there (M2L 0.25 ms against 6.15 ms with `Synchronous`, L2P 4.67 against 0.37 ms; the
     cube at N = 10⁵, p = 8, f32; `tests/kind_common/windows.rs`); use `Synchronous`.
     On CUDA they do not overlap and are a breakdown ("CUDA (Phase 4S)" below).
-    Never time inside `nd-fmm-plan` or `nd-fmm-kernels`, and never assert a timing;
+    Never time a level call inside `nd-fmm-plan` or `nd-fmm-kernels`, and never assert a
+    timing (the overlapped stages of `nd-fmm-plan` read the clock around their `test`
+    calls, waits and work parts for `OverlapTimes`, Phase 5 T9: the one exception);
   - autotune (T12, C4.7; module `tune`, device-path.md §10): `FmmBuilder::tuning_cache`
     (no default directory, no environment variable) and `tuning_budget` (10 s); the M2L
     strategy under `Auto` with M2L on the device is decided before the tables are built
