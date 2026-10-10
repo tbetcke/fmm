@@ -30,6 +30,21 @@
 #                   p = 8, correctness and memory only (never a timing); the soft limit
 #                   of open files is raised to the hard limit for these launches
 #
+# Sweeps under Slurm only (Phase 5N T2, docs/phase5n/T2-kathleen-baseline.md), at the
+# job's node count, with SPLITS ranks x threads per node (default "40x1 2x20"):
+#   host            one rank on one node, at 1 thread and at every core: the N = 10^6
+#                   cube and Plummer, f64 p = 3 and 8 with Dense and with Rotation, f32
+#                   p = 8 (the default); overlap off. The runs that strong, strategy and
+#                   threads already make (one rank, one thread, the default; Rotation at
+#                   p = 8 on one thread; Dense at p = 8 on 1 x 40) are left out
+#   nodes-strong    the cube and the Plummer sphere at N = 10^6 and 10^7, f64 p = 3 and 8
+#                   (the default) and Rotation at p = 8, every split of SPLITS, overlap
+#                   both
+#   nodes-weak      the same at N = 10^6 x nodes (on one node, nodes-strong's N = 10^6)
+#   nodes-check     the errors (8 vectors, 1,000 targets) at N = 10^6 with the one-rank
+#                   reference, f64 p = 3 and 8 and f32 p = 8, and at N = 10^7 without it,
+#                   f64 p = 3 and 8; one rank per core, two timed evaluations
+#
 # Environment:
 #   OUT      output directory (default bench-results/scaling-<host>-<date>); one file per
 #            launch, with the load before and after on Linux
@@ -42,12 +57,29 @@
 #            they use less (a laptop's background jobs, such as a virus scanner, would
 #            otherwise share the cores), and the file records the wait
 #   DRY_RUN  if set, print the commands only
+#   CARGO_TARGET_DIR, RUSTFLAGS  as for cargo: the example is built and run from
+#            $CARGO_TARGET_DIR (default target/), so a labelled build with other flags
+#            (for example RUSTFLAGS="-C target-cpu=cascadelake", Phase 5N T2) keeps its own
+#            directory; under Slurm each file records RUSTFLAGS
 #
 # Every BLAS thread variable is set to 1. On macOS `mpirun` gets the loopback flags (root
 # CLAUDE.md, "MPI"); on Linux it reports the binding and binds each rank to its cores
 # (`--map-by slot:PE=<threads> --bind-to core`). On locust it first sources
 # tools/gh200/env.sh if that environment is not active. Timings go into the report only
 # with the load stated (docs/phase5/README.md, "Ranks on locust").
+#
+# Under Slurm (SLURM_JOB_ID set; Kathleen, Phase 5N T2) the sweep runs inside the job's
+# allocation: `mpirun` (decision 4 of docs/phase5n/README.md) with the ranks spread
+# evenly over the job's nodes and over the SOCKETS sockets of each (default 2):
+# `--map-by ppr:<ranks per socket>:socket:PE=<threads> --bind-to core` when the ranks per
+# node divide by the sockets, else `--map-by ppr:<ranks per node>:node:PE=<threads>`; so
+# rank r of a node with k ranks per socket sits on socket r / k, and 2 ranks on one node
+# take one core of each socket. CORES_PER_NODE (default 40) bounds ranks x threads per
+# node, and RANKS defaults to "1 2 4 8 10 16 20 40", the thread splits to 1x40 ... 40x1.
+# Kathleen's nodes are exclusive, so there is no load check: each file records instead
+# the job id, the QoS, the node list, the mapping, and (from mpirun --report-bindings,
+# and the report's placement per rank) the binding. tools/kathleen/jobs/sweep.sbatch
+# submits a sweep; tools/kathleen/README.md, "Scaling sweeps", has the commands.
 #
 # The inter-node run (docs/design/distributed-fmm.md §11), documented and not run in
 # Phase 5, on a cluster with Open MPI (8 ranks per node on 8 nodes):
@@ -77,6 +109,8 @@ OUT=${OUT:-bench-results/scaling-$host-$(date +%Y%m%d-%H%M)}
 EVALS=${EVALS:-10}
 TIMEOUT=${TIMEOUT:-3600}
 QUIET=${QUIET:-200}
+SOCKETS=${SOCKETS:-2}
+NODES=1
 case "$(uname -s)" in
 Darwin)
     os=macos
@@ -86,19 +120,44 @@ Darwin)
     LARGEST=12
     ;;
 *)
-    os=linux
-    RANKS=${RANKS:-"1 2 4 8 16 32 64 72"}
-    CORES=72
-    THREAD_SPLITS="1x72 4x18 8x9 18x4 72x1"
-    LARGEST=72
+    if [ -n "${SLURM_JOB_ID:-}" ]; then
+        os=slurm
+        NODES=${SLURM_JOB_NUM_NODES:-1}
+        CORES_PER_NODE=${CORES_PER_NODE:-40}
+        RANKS=${RANKS:-"1 2 4 8 10 16 20 40"}
+        CORES=$CORES_PER_NODE
+        THREAD_SPLITS="1x40 2x20 4x10 8x5 10x4 20x2 40x1"
+        LARGEST=$((CORES_PER_NODE * NODES))
+        SPLITS=${SPLITS:-"40x1 2x20"}
+    else
+        os=linux
+        RANKS=${RANKS:-"1 2 4 8 16 32 64 72"}
+        CORES=72
+        THREAD_SPLITS="1x72 4x18 8x9 18x4 72x1"
+        LARGEST=72
+    fi
     ;;
 esac
 
-exe=target/release/examples/scaling
+exe=${CARGO_TARGET_DIR:-target}/release/examples/scaling
 if [ -z "${DRY_RUN:-}" ]; then
     mkdir -p "$OUT"
     cargo build --release -p nd-fmm-validate --example scaling
 fi
+
+# Under Slurm: the job and the mapping of a launch, in place of the load.
+job() {
+    echo "### job"
+    echo
+    echo "job $SLURM_JOB_ID (${SLURM_JOB_NAME:-}), QoS ${SLURM_JOB_QOS:-?}, partition \
+${SLURM_JOB_PARTITION:-?}, $NODES node(s): ${SLURM_JOB_NODELIST:-?}; launched \
+$(date '+%Y-%m-%d %H:%M:%S'); nodes exclusive, so no load check"
+    echo
+    echo "build: release, RUSTFLAGS ${RUSTFLAGS:-unset} (the default target unless set)"
+    echo
+    echo "mapping: $1 rank(s) per node x $2 thread(s), \`$3\`; the binding of every rank: \
+mpirun's --report-bindings lines (stderr, below) and the report's \"Placement per rank\""
+}
 
 # The load of the machine: before and after every launch on Linux.
 load() {
@@ -142,6 +201,19 @@ launch() {
     if [ "$os" = macos ]; then
         flags="--mca btl_tcp_if_include lo0 --mca oob_tcp_if_include lo0"
         if [ "$ranks" -gt 16 ]; then flags="$flags --oversubscribe"; fi
+    elif [ "$os" = slurm ]; then
+        per_node=$((ranks / NODES))
+        if [ $((per_node * NODES)) -ne "$ranks" ] || [ $((per_node * threads)) -gt "$CORES" ]; then
+            echo "SKIPPED: $name: $ranks ranks x $threads threads do not fit $NODES node(s) \
+of $CORES cores evenly" | tee -a "${OUT}/skipped.txt"
+            return
+        fi
+        if [ $((per_node % SOCKETS)) -eq 0 ]; then
+            map="ppr:$((per_node / SOCKETS)):socket:PE=$threads"
+        else
+            map="ppr:$per_node:node:PE=$threads"
+        fi
+        flags="--report-bindings --map-by $map --bind-to core"
     else
         if [ $((ranks * threads)) -gt "$CORES" ]; then
             flags="--report-bindings --map-by :OVERSUBSCRIBE --bind-to none"
@@ -166,14 +238,16 @@ launch() {
         echo "command: \`$command\`"
         echo
         if [ -n "$gate" ]; then echo "$gate"; echo; fi
-        load before
+        if [ "$os" = slurm ]; then job "$per_node" "$threads" "$flags"; else load before; fi
         echo
     } >"$file"
     # mpirun's binding report goes to stderr; keep it in the file.
-    if ! $command >>"$file" 2>&1; then
-        echo "FAILED (exit $?): $name" | tee -a "$file"
+    status=0
+    $command >>"$file" 2>&1 || status=$?
+    if [ "$status" -ne 0 ]; then
+        echo "FAILED (exit $status): $name" | tee -a "$file"
     fi
-    { echo; load after; } >>"$file"
+    if [ "$os" != slurm ]; then { echo; load after; } >>"$file"; fi
 }
 
 degrees="f64:3 f64:8 f32:8"
@@ -282,6 +356,65 @@ for sweep in "$@"; do
                 --dist cube --n 1000000 --precision f64 --p 8 --overlap both \
                 --errors 8 --reference --evals 1
         done
+        ;;
+    host | nodes-strong | nodes-weak | nodes-check)
+        if [ "$os" != slurm ]; then
+            echo "$sweep: under Slurm only" >&2
+            continue
+        fi
+        case "$sweep" in
+        host)
+            # Dense is the default at p <= 8: "auto" is Dense here, named as such.
+            for t in 1 "$CORES"; do
+                for dist in cube plummer; do
+                    for run in f64:3:dense f64:3:rotation f64:8:dense f64:8:rotation f32:8:auto; do
+                        prec=${run%%:*} rest=${run#*:}
+                        p=${rest%%:*} strategy=${rest#*:}
+                        case "$t:$run" in
+                        1:f64:3:dense | 1:f64:8:dense | 1:f32:8:auto | 1:f64:8:rotation | "$CORES":f64:8:dense)
+                            continue
+                            ;;
+                        esac
+                        launch "host-$dist-n1000000-$prec-p$p-$strategy-r1x$t" 1 "$t" \
+                            --dist $dist --n 1000000 --precision "$prec" --p "$p" \
+                            --strategy "$strategy" --overlap off
+                    done
+                done
+            done
+            ;;
+        nodes-strong | nodes-weak)
+            ns="1000000 10000000"
+            if [ "$sweep" = nodes-weak ]; then ns=$((1000000 * NODES)); fi
+            for n in $ns; do
+                for split in $SPLITS; do
+                    per=${split%x*} t=${split#*x}
+                    for dist in cube plummer; do
+                        for run in 3:auto 8:auto 8:rotation; do
+                            p=${run%%:*} strategy=${run#*:}
+                            launch "$sweep-$dist-n$n-f64-p$p-$strategy-N$NODES-${per}x$t" \
+                                $((per * NODES)) "$t" --dist $dist --n "$n" --precision f64 \
+                                --p "$p" --strategy "$strategy" --overlap both
+                        done
+                    done
+                done
+            done
+            ;;
+        nodes-check)
+            r=$((CORES * NODES))
+            for dist in cube plummer; do
+                for dp in $degrees; do
+                    launch "nodes-check-$dist-n1000000-${dp%%:*}-p${dp##*:}-N$NODES-${CORES}x1" \
+                        "$r" 1 --dist $dist --n 1000000 --precision "${dp%%:*}" \
+                        --p "${dp##*:}" --overlap off --errors 8 --reference --evals 2
+                done
+                for dp in f64:3 f64:8; do
+                    launch "nodes-check-$dist-n10000000-${dp%%:*}-p${dp##*:}-N$NODES-${CORES}x1" \
+                        "$r" 1 --dist $dist --n 10000000 --precision "${dp%%:*}" \
+                        --p "${dp##*:}" --overlap off --errors 8 --evals 2
+                done
+            done
+            ;;
+        esac
         ;;
     *)
         echo "unknown sweep $sweep" >&2
