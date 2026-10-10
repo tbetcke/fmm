@@ -354,7 +354,7 @@ Commands on Kathleen need `ssh`, so the session runs them outside the sandbox.
 - [x] T1's queue probe reported; Kathleen usable or not (decision 0: usable, every job at most 2 nodes for now; the user, 2026-10-10; docs/phase5n/kathleen-probe.md)
 - [x] Phase order and names: 5N, then 5S, then 6 (decision 1)
 - [x] Kathleen as the third machine; root, layout and quota use (decision 2: everything under `/scratch/scratch/ucahtbe/fmm`, at most two source trees with their `target/`, about 20 GB each, under 50 GB of the 250 GB quota in all; the user, 2026-10-10; tools/kathleen/README.md)
-- [ ] Node-hour budget (decision 3)
+- [x] Node-hour budget (decision 3: as proposed, T1 at most 20 node-hours, T2 at most 100, T3 at most 50 on Kathleen, T4 at most 30, 200 for the phase; every job at most 2 nodes; each report states its use; the user, 2026-10-10. Used: T1 1.54, T2 7.31, fmm-validate/results/phase5n-kathleen.md §13)
 - [x] T1 merged: the probe report; with Kathleen, `tools/kathleen/`, the environment rebuilt from the repository, every CPU-side check passing on Kathleen and the MPI tests at 2 nodes (without Kathleen: not applicable)
 - [x] Launcher and binding on Kathleen (decision 4: `mpirun` inside the allocation, `--bind-to core` with an explicit `--map-by` (`core`, or `ppr:<r>:socket:PE=<t>` with threads); `srun --mpi=pmix --cpu-bind=cores` the tested alternative; the user, 2026-10-10; tools/kathleen/README.md)
 - [ ] T2 merged: `fmm-validate/results/phase5n-kathleen.md` published (without Kathleen: skipped)
