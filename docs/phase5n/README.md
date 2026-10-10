@@ -357,7 +357,7 @@ Commands on Kathleen need `ssh`, so the session runs them outside the sandbox.
 - [x] Node-hour budget (decision 3: as proposed, T1 at most 20 node-hours, T2 at most 100, T3 at most 50 on Kathleen, T4 at most 30, 200 for the phase; every job at most 2 nodes; each report states its use; the user, 2026-10-10. Used: T1 1.54, T2 7.31, fmm-validate/results/phase5n-kathleen.md §13)
 - [x] T1 merged: the probe report; with Kathleen, `tools/kathleen/`, the environment rebuilt from the repository, every CPU-side check passing on Kathleen and the MPI tests at 2 nodes (without Kathleen: not applicable)
 - [x] Launcher and binding on Kathleen (decision 4: `mpirun` inside the allocation, `--bind-to core` with an explicit `--map-by` (`core`, or `ppr:<r>:socket:PE=<t>` with threads); `srun --mpi=pmix --cpu-bind=cores` the tested alternative; the user, 2026-10-10; tools/kathleen/README.md)
-- [ ] T2 merged: `fmm-validate/results/phase5n-kathleen.md` published (without Kathleen: skipped)
+- [x] T2 merged: `fmm-validate/results/phase5n-kathleen.md` published (without Kathleen: skipped)
 - [ ] T3 merged: `docs/design/node-m2l.md` drafted, sign-off questions listed
 - [ ] Strategy rule (decision 5), shared tables (decision 6), table cache (decision 7) and margin (decision 8) signed off
 - [ ] T4 merged: the rule built; before/after on the three machines; Phase 5 tests pass
