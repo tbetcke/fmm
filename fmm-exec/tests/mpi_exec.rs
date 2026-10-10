@@ -263,8 +263,30 @@
 //!   evaluations differ on every rank count. It prints the ghosts and how many values
 //!   differ.
 //!
-//! The test prints, at the end, how many shadow evaluations matched, and how many
-//! evaluations matched their one-rank reference.
+//! Overlap (Phase 5 T9, C5.2; docs/design/distributed-fmm.md §8; `FmmBuilder::overlap`,
+//! `Fmm::set_overlap`). Error measure: exact equality of the bit patterns.
+//! - Every scenario that evaluates an `Fmm`: in `evaluate_threaded` the repeats at 2, 4
+//!   and 8 threads run with `overlap(true)` against the blocking one-thread output, and a
+//!   call without repeats evaluates once more on the same build with the exchanges
+//!   overlapped (`check_overlapped`); **repeatability** alternates blocking and
+//!   overlapped evaluations, serial and at 4 threads; **reusable outputs** evaluates
+//!   into the reused output overlapped once; **input errors** refuses a wrong charge
+//!   length overlapped as blocking; every overlapped evaluation reports
+//!   `StageTimings::overlap`, every blocking one none. **table order against the plan**
+//!   evaluates nothing.
+//! - **batched against per-pair**: the evaluator with the operator at 2, 4 and 8 threads
+//!   runs `Evaluator::evaluate_overlapped`, bit for bit the serial blocking output.
+//! - The shadow check (above) runs the shadow's evaluator overlapped in every scenario,
+//!   and both ways in **batched against per-pair** and **host-data hook**: the events of
+//!   the overlapped stages keep the shadow bit for bit the `Fmm`.
+//! - The device (feature `gpu`): every kind on the host fallback with `overlap(true)` is
+//!   bit for bit the blocking host path, with the transfers of the formula (the device
+//!   runs the overlapped stages with the same events; design §13, question 10); **device
+//!   errors and tuning on several ranks** runs the injected error with overlap off and on.
+//!
+//! The test prints, at the end, how many shadow evaluations matched, how many overlapped
+//! evaluations matched the blocking path, and how many evaluations matched their one-rank
+//! reference.
 
 use mpi::Threading;
 use mpi::collective::SystemOperation;
@@ -454,6 +476,12 @@ fn distributed_scenarios() {
         "rank {}: host-data hook (Phase 5 T7): {} shadow evaluations bit for bit the FMM",
         comm.rank(),
         SHADOW_CHECKS.load(std::sync::atomic::Ordering::Relaxed)
+    );
+    eprintln!(
+        "rank {}: overlap (Phase 5 T9): {} overlapped evaluations bit for bit the blocking \
+         path",
+        comm.rank(),
+        OVERLAP_CHECKS.load(std::sync::atomic::Ordering::Relaxed)
     );
     let checks = ONE_RANK_CHECKS.load(std::sync::atomic::Ordering::Relaxed);
     eprintln!(
@@ -685,12 +713,13 @@ fn points_by_leaf(points: &[[f64; 3]], index: &BoxIndex, domain: &Domain) -> Vec
     leaves
 }
 
-/// Runs the evaluator with `operator` on the points loaded by leaf; returns the target
-/// output store, every local leaf after another.
+/// Runs the evaluator with `operator` on the points loaded by leaf, its overlapped stages
+/// with `overlapped` (Phase 5 T9); returns the target output store, every local leaf
+/// after another.
 fn evaluate<Op: FmmOperator<Value = f64>>(
     plan: &Plan,
     comm: &SimpleCommunicator,
-    operator: Op,
+    (operator, overlapped): (Op, bool),
     domain: &Domain,
     (sources, charges, source_leaves): (&[[f64; 3]], &[f64], &[Vec<usize>]),
     (targets, target_leaves): (&[[f64; 3]], &[Vec<usize>]),
@@ -715,17 +744,22 @@ fn evaluate<Op: FmmOperator<Value = f64>>(
                 .copy_from_slice(&leaf_coordinates::<f64>(targets[j], key, domain));
         }
     }
-    evaluator.evaluate();
+    if overlapped {
+        evaluator.evaluate_overlapped();
+    } else {
+        evaluator.evaluate();
+    }
     evaluator.target_output_store().as_slice().to_vec()
 }
 
 /// Runs the evaluator with a [`shadow::Shadow`] of `operator` (the host-data hook on) on
-/// the points loaded by leaf, which only the shadow holds; returns the shadow's target
-/// output, every local leaf after another (Phase 5 T7).
+/// the points loaded by leaf, which only the shadow holds, its overlapped stages with
+/// `overlapped` (Phase 5 T9); returns the shadow's target output, every local leaf after
+/// another (Phase 5 T7).
 fn evaluate_shadow(
     plan: &Plan,
     comm: &SimpleCommunicator,
-    operator: LaplaceOperator<f64>,
+    (operator, overlapped): (LaplaceOperator<f64>, bool),
     domain: &Domain,
     (sources, charges, source_leaves): (&[[f64; 3]], &[f64], &[Vec<usize>]),
     (targets, target_leaves): (&[[f64; 3]], &[Vec<usize>]),
@@ -752,7 +786,11 @@ fn evaluate_shadow(
     shadow.attach(index, &counts, &target_counts);
     shadow.load_points(&points, &target_points);
     shadow.begin_evaluation(&leaf_charges);
-    evaluator.evaluate();
+    if overlapped {
+        evaluator.evaluate_overlapped();
+    } else {
+        evaluator.evaluate();
+    }
     assert!(
         evaluator
             .target_output_store()
@@ -822,12 +860,13 @@ fn batched_against_per_pair(comm: &SimpleCommunicator) {
         let batched = evaluate(
             &plan,
             comm,
-            op.clone(),
+            (op.clone(), false),
             &domain,
             input,
             (&targets, &target_leaves),
         );
-        // The same operator with a pool: bit-identical to the serial operator (C3.5).
+        // The same operator with a pool: bit-identical to the serial operator (C3.5), with
+        // the exchanges overlapped (Phase 5 T9).
         for n in THREADS {
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(n)
@@ -838,7 +877,7 @@ fn batched_against_per_pair(comm: &SimpleCommunicator) {
             let output = evaluate(
                 &plan,
                 comm,
-                threaded,
+                (threaded, true),
                 &domain,
                 input,
                 (&targets, &target_leaves),
@@ -849,23 +888,30 @@ fn batched_against_per_pair(comm: &SimpleCommunicator) {
                 "{choice}: {n} threads against serial"
             );
         }
-        // The shadow check of the host-data hook (Phase 5 T7), with one kernel.
+        // The shadow check of the host-data hook (Phase 5 T7), with one kernel, blocking
+        // and overlapped (Phase 5 T9).
         if choice == P2pChoice::Reference {
-            let shadowed = evaluate_shadow(
-                &plan,
-                comm,
-                op.clone(),
-                &domain,
-                input,
-                (&targets, &target_leaves),
-            );
-            assert_eq!(bits(&shadowed), bits(&batched), "the shadow operator");
-            SHADOW_CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            for overlapped in [false, true] {
+                let shadowed = evaluate_shadow(
+                    &plan,
+                    comm,
+                    (op.clone(), overlapped),
+                    &domain,
+                    input,
+                    (&targets, &target_leaves),
+                );
+                assert_eq!(
+                    bits(&shadowed),
+                    bits(&batched),
+                    "the shadow operator, overlapped {overlapped}"
+                );
+                SHADOW_CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
         }
         let per_pair = evaluate(
             &plan,
             comm,
-            PerPair(op),
+            (PerPair(op), false),
             &domain,
             input,
             (&targets, &target_leaves),
@@ -909,8 +955,8 @@ fn batched_against_per_pair(comm: &SimpleCommunicator) {
         let (potential_error, gradient_error) =
             ((total[0] / total[1]).sqrt(), (total[2] / total[3]).sqrt());
         eprintln!(
-            "rank {}: P2P kernel {choice}: batched = per-pair = 2, 4, 8 threads bit for bit \
-             ({} values); W, X, V pairs {lists:?}; p = {p}: relative L2 error vs direct sum \
+            "rank {}: P2P kernel {choice}: batched = per-pair = 2, 4, 8 threads overlapped bit \
+             for bit ({} values); W, X, V pairs {lists:?}; p = {p}: relative L2 error vs direct sum \
              {potential_error:.3e} (potential), {gradient_error:.3e} (gradient)",
             comm.rank(),
             batched.len()
@@ -1112,6 +1158,15 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
     }
     fmm.set_kind_timings(KindTiming::Off)
         .expect("Off is always accepted");
+    assert!(
+        !fmm.overlap() && output.timings.overlap.is_none(),
+        "blocking by default"
+    );
+    // Overlap (Phase 5 T9): the repeats at 2, 4 and 8 threads overlap the exchanges, and
+    // without repeats one more evaluation on this build does; bit for bit either way.
+    if threads.is_empty() {
+        check_overlapped(&mut fmm, charges, &reference);
+    }
     #[cfg(feature = "gpu")]
     for backend in device_backends() {
         let difference = device_common::check_backend(
@@ -1164,9 +1219,11 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
         } else {
             KindTiming::Off
         };
-        let builder = builder.clone().threads(n).kind_timings(mode);
+        let builder = builder.clone().threads(n).kind_timings(mode).overlap(true);
         let mut threaded = built(builder.build(sources, targets, comm), comm)?;
         let output = check_threaded(&mut threaded, charges, &reference, n);
+        assert!(output.timings.overlap.is_some(), "{n} threads: overlapped");
+        OVERLAP_CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if n == KIND_THREADS {
             check_reference(&format!("host, {n} threads"), &mut threaded, &output);
         }
@@ -1183,31 +1240,62 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
     Some((fmm, output))
 }
 
+/// The overlapped evaluations compared with the blocking path, for the closing line.
+static OVERLAP_CHECKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Evaluates `charges` again on `fmm` with the exchanges overlapped (Phase 5 T9,
+/// `Fmm::set_overlap`): the bits of `reference`, the blocking evaluation's, and the times
+/// of the overlapped exchanges reported. Leaves overlap off.
+fn check_overlapped<T: Stored + SimdScalar + Equivalence + Default>(
+    fmm: &mut Fmm<'_, T>,
+    charges: &[T],
+    reference: &[u64],
+) {
+    fmm.set_overlap(true);
+    let output = fmm.evaluate(charges).expect("the FMM evaluates");
+    fmm.set_overlap(false);
+    assert!(output.timings.overlap.is_some(), "overlapped");
+    let bits = output_bits(&output);
+    assert_eq!(bits.len(), reference.len());
+    let differing = bits.iter().zip(reference).filter(|(a, b)| a != b).count();
+    assert_eq!(
+        differing,
+        0,
+        "overlap: {differing} of {} values differ from the blocking evaluation",
+        bits.len()
+    );
+    OVERLAP_CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// The shadow evaluations [`check_shadow`] compared, for the closing line.
 static SHADOW_CHECKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// The shadow check of the host-data hook (Phase 5 T7, docs/design/distributed-fmm.md
 /// §6.4; `shadow::check_fmm`): the plan's evaluator with a shadow of `fmm`'s operator that
 /// learns of the evaluator's data movements only through its events gives, for every
-/// `(charges, output)` in turn, the output of `fmm` bit for bit. The verdict is agreed on
-/// every rank.
+/// `(charges, output)` in turn, the output of `fmm` bit for bit, by the blocking stages
+/// and by the overlapped ones (Phase 5 T9) as `paths` says. The verdict is agreed on every
+/// rank.
 fn check_shadow<T: Stored + SimdScalar + Equivalence + Default>(
     sets: (&[[f64; 3]], &[[f64; 3]]),
     evaluations: &[(&[T], &Output<T>)],
     fmm: &Fmm<'_, T>,
+    paths: &[bool],
     comm: &SimpleCommunicator,
 ) {
-    let verdict = shadow::check_fmm(fmm, sets, evaluations, true, comm);
-    assert_eq!(
-        verdict,
-        shadow::Verdict {
-            values: verdict.values,
-            ..Default::default()
-        },
-        "rank {}: the shadow operator differs from the FMM",
-        comm.rank()
-    );
-    SHADOW_CHECKS.fetch_add(evaluations.len(), std::sync::atomic::Ordering::Relaxed);
+    for &overlapped in paths {
+        let verdict = shadow::check_fmm(fmm, sets, evaluations, (true, overlapped), comm);
+        assert_eq!(
+            verdict,
+            shadow::Verdict {
+                values: verdict.values,
+                ..Default::default()
+            },
+            "rank {}: the shadow operator differs from the FMM, overlapped {overlapped}",
+            comm.rank()
+        );
+        SHADOW_CHECKS.fetch_add(evaluations.len(), std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// The scenario running, for [`check_shadow_once`].
@@ -1220,11 +1308,12 @@ type ShadowKey = (&'static str, usize, bool, usize, usize, [usize; 3]);
 /// The keys [`check_shadow_once`] has checked.
 static SHADOWED: std::sync::Mutex<Vec<ShadowKey>> = std::sync::Mutex::new(Vec::new());
 
-/// [`check_shadow`] of the one-thread evaluation of `evaluate_threaded`, once per tree,
-/// precision and output kind of each scenario: which data the evaluator moves depends on
-/// the tree and the value type, not on p, the strategy or the P2P kernel, and a check
-/// of every evaluation would take the debug run past its minute. The key is the same on
-/// every rank (one all-reduce), so every rank decides alike.
+/// [`check_shadow`] of the one-thread evaluation of `evaluate_threaded`, by the overlapped
+/// stages (Phase 5 T9; the blocking ones in **host-data hook** and **batched against
+/// per-pair**), once per tree, precision and output kind of each scenario: which data the
+/// evaluator moves depends on the tree and the value type, not on p, the strategy or the
+/// P2P kernel, and a check of every evaluation would take the debug run past its minute.
+/// The key is the same on every rank (one all-reduce), so every rank decides alike.
 fn check_shadow_once<T: Stored + SimdScalar + Equivalence + Default>(
     sets: (&[[f64; 3]], &[[f64; 3]]),
     charges: &[T],
@@ -1252,7 +1341,7 @@ fn check_shadow_once<T: Stored + SimdScalar + Equivalence + Default>(
     }
     shadowed.push(key);
     drop(shadowed);
-    check_shadow(sets, &[(charges, output)], fmm, comm);
+    check_shadow(sets, &[(charges, output)], fmm, &[true], comm);
 }
 
 /// Evaluates `charges` again on `fmm`, at one thread, with `KindTiming::Synchronous`
@@ -1869,13 +1958,17 @@ fn input_errors(comm: &SimpleCommunicator) {
         return;
     };
     let charges = vec![1.0; points.len() - usize::from(rank == 0)];
-    let error = fmm.evaluate(&charges).err();
-    match (rank, &error) {
-        (0, Some(FmmError::ChargesLength { expected, actual })) => {
-            assert_eq!((*expected, *actual), (points.len(), points.len() - 1));
+    // The same with the exchanges overlapped (Phase 5 T9): refused before any stage.
+    for overlap in [false, true] {
+        fmm.set_overlap(overlap);
+        let error = fmm.evaluate(&charges).err();
+        match (rank, &error) {
+            (0, Some(FmmError::ChargesLength { expected, actual })) => {
+                assert_eq!((*expected, *actual), (points.len(), points.len() - 1));
+            }
+            (r, Some(FmmError::OtherRank)) if r != 0 => {}
+            _ => panic!("rank {rank}: wrong charge length, overlap {overlap}: {error:?}"),
         }
-        (r, Some(FmmError::OtherRank)) if r != 0 => {}
-        _ => panic!("rank {rank}: wrong charge length: {error:?}"),
     }
     eprintln!(
         "rank {rank}: input errors as expected, the P2P kernel on {} among them",
@@ -1953,6 +2046,17 @@ fn repeatability(comm: &SimpleCommunicator) {
     let a = fmm.evaluate(&first).unwrap();
     let b = fmm.evaluate(&first).unwrap();
     assert_eq!(output_bits(&a), output_bits(&b), "two evaluations differ");
+    // Overlapped (Phase 5 T9), twice, between blocking evaluations.
+    fmm.set_overlap(true);
+    for round in ["first", "second"] {
+        let c = fmm.evaluate(&first).unwrap();
+        assert_eq!(
+            output_bits(&c),
+            output_bits(&a),
+            "the {round} overlapped evaluation differs"
+        );
+    }
+    fmm.set_overlap(false);
     let again = fmm.evaluate(&second).unwrap();
     let Some(mut fresh) = built(builder.build(&sources, &sources, comm), comm) else {
         return;
@@ -1973,13 +2077,17 @@ fn repeatability(comm: &SimpleCommunicator) {
     ) else {
         return;
     };
-    for (name, serial) in [
-        ("first threaded", false),
-        ("second threaded", false),
-        ("serial", true),
-        ("threaded after serial", false),
+    for (name, serial, overlap) in [
+        ("first threaded", false, false),
+        ("second threaded", false, false),
+        ("serial", true, false),
+        ("threaded after serial", false, false),
+        ("threaded, overlapped", false, true),
+        ("serial, overlapped", true, true),
+        ("threaded after overlapped", false, false),
     ] {
         threaded.set_serial(serial);
+        threaded.set_overlap(overlap);
         assert_eq!(threaded.operator().threads(), if serial { 1 } else { 4 });
         let output = threaded.evaluate(&first).unwrap();
         assert_eq!(output_bits(&output), output_bits(&a), "{name} evaluation");
@@ -1991,7 +2099,8 @@ fn repeatability(comm: &SimpleCommunicator) {
         "second charge vector"
     );
     eprintln!(
-        "rank {}: repeatability: {} values bit for bit, serial and at 4 threads",
+        "rank {}: repeatability: {} values bit for bit, serial and at 4 threads, blocking and \
+         overlapped",
         comm.rank(),
         output_bits(&a).len()
     );
@@ -2047,8 +2156,12 @@ fn reusable_outputs_in<T: Stored + SimdScalar + Equivalence + Default>(comm: &Si
             };
             let mut buffers = None;
             for (e, q) in charges.iter().enumerate() {
+                // The second evaluation into the reused output overlaps the exchanges
+                // (Phase 5 T9).
+                fmm.set_overlap(e == 1);
                 fmm.evaluate_into(q, &mut reused)
                     .expect("the FMM evaluates into the output");
+                fmm.set_overlap(false);
                 let fresh = fmm.evaluate(q).expect("the FMM evaluates");
                 assert_eq!(
                     output_bits(&reused),
@@ -3290,9 +3403,18 @@ fn lowest_rank_with(mine: bool, comm: &SimpleCommunicator) -> i32 {
 /// A device error injected on one rank at the mid-evaluation sync (the download of the
 /// sent multipoles; `Fmm::inject_device_error`) is agreed on every rank: that rank returns
 /// `FmmError::Device`, the others `FmmError::OtherRank`, from that evaluation on, and no
-/// rank blocks (the external timeout of the run).
+/// rank blocks (the external timeout of the run). Blocking, and with the exchanges
+/// overlapped (Phase 5 T9), whose first output equals the blocking build's bit for bit.
 #[cfg(feature = "cpu")]
 fn device_errors(comm: &SimpleCommunicator) {
+    for overlap in [false, true] {
+        device_errors_with(comm, overlap);
+    }
+}
+
+/// [`device_errors`] with `overlap` on the build that fails.
+#[cfg(feature = "cpu")]
+fn device_errors_with(comm: &SimpleCommunicator, overlap: bool) {
     let (rank, size) = (comm.rank(), comm.size());
     let mut rng = SplitMix64(0x7808);
     let points = share(&unit_cube_points(&mut rng, 1200), comm);
@@ -3300,6 +3422,7 @@ fn device_errors(comm: &SimpleCommunicator) {
     let mut fmm = FmmBuilder::<f64>::new(4)
         .gradients(true)
         .backend(Backend::Cpu)
+        .overlap(overlap)
         .build(&points, &points, comm)
         .unwrap_or_else(|error| panic!("rank {rank}: the CPU-runtime FMM does not build: {error}"));
     let first = fmm.evaluate(&charges).expect("the device FMM evaluates");
@@ -3353,8 +3476,8 @@ fn device_errors(comm: &SimpleCommunicator) {
         "rank {rank}: device errors: {failed} defects on all ranks, here: {defects:?}"
     );
     eprintln!(
-        "rank {rank}: device errors: injected on rank {failing} of {size} at the \
-         mid-evaluation sync ({}): Device there{}, twice, without a hang",
+        "rank {rank}: device errors (overlap {overlap}): injected on rank {failing} of {size} \
+         at the mid-evaluation sync ({}): Device there{}, twice, without a hang",
         if sends {
             "the download of the sent multipoles"
         } else {
@@ -3493,12 +3616,12 @@ fn host_data_hook(comm: &SimpleCommunicator) {
 
     // With the hook, two evaluations in turn: the second relies on `Reset`.
     let both = [(&first[..], &output), (&second[..], &again)];
-    check_shadow(sets, &both, &fmm, comm);
+    check_shadow(sets, &both, &fmm, &[false, true], comm);
     // Without it, one evaluation: on one rank no event carries data; on several the
     // ghosts and the other ranks' coarse blocks stay zero.
-    let off = shadow::check_fmm(&fmm, sets, &both[..1], false, comm);
+    let off = shadow::check_fmm(&fmm, sets, &both[..1], (false, false), comm);
     // Without it, two evaluations: the second adds to the first on every rank count.
-    let off_twice = shadow::check_fmm(&fmm, sets, &both, false, comm);
+    let off_twice = shadow::check_fmm(&fmm, sets, &both, (false, false), comm);
     eprintln!(
         "rank {}: host-data hook: {} ghost leaves and {} ghost boxes on {} ranks; the \
          shadow equals the FMM bit for bit through two evaluations; without the hook {} of \

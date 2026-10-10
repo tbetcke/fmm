@@ -75,6 +75,14 @@
 //! | `exchange_multipoles` | for l = 0 to L: the multipole exchange of level l; [`ReceivedMultipoles`](HostData::ReceivedMultipoles) of level l |
 //! | `downward`, `evaluate_leaves` | level calls only |
 //!
+//! The overlapped evaluation (`Evaluator::evaluate_overlapped`, Phase 5 T9; the
+//! `evaluator` module, "Overlap") fires the same events with the same lists, in the same
+//! order among themselves and at the same logical points; only their place among the
+//! level calls changes: `ReceivedSources` comes after the `upward_local` calls (the source
+//! exchange travels behind them), and each `ReceivedMultipoles` of level l after the
+//! global M2M and the downward calls of the levels above l, just before the first call
+//! that reads level l's ghosts.
+//!
 //! That is 5 + nlevels events per evaluation, on every rank and every rank count, also
 //! when a movement moves nothing: on one rank every index list is empty (no ghost leaf,
 //! no ghost box, no block sent or received), so an operator handles one and several ranks
@@ -93,7 +101,10 @@
 //! - **"Received" events** come after the exchange wrote the received values into the
 //!   host store; the event names the slots, and the exchange's packed receive buffer
 //!   holds the same values.
-//! - No communication is pending when an event fires.
+//! - No communication is pending on what an event hands out when it fires: the send
+//!   buffers are packed after a "send" event returns, and a "received" event comes after
+//!   its wait. In the overlapped evaluation the exchanges of other levels may still be in
+//!   flight, in buffers of their own.
 //!
 //! An operator that keeps its own copies must therefore, besides computing every batch
 //! on its copies: zero its multipoles, locals and target output at `Reset`; write the
@@ -303,7 +314,8 @@ pub struct P2p<'a, T> {
 ///
 /// A "send" event comes before the evaluator reads the host store to send; a "received"
 /// event after it wrote the received values into the host store. No communication is
-/// pending when an event fires. Every index list is empty on one rank.
+/// pending on what an event hands out when it fires. Every index list is empty on one
+/// rank.
 pub enum HostData<'a, T> {
     /// `reset` zeroed every multipole, local and target output.
     Reset,
@@ -372,6 +384,9 @@ pub enum HostData<'a, T> {
 /// | `upward_global` | for l = L − 1 down to 0: `m2m(l)` of the [global pass](UpwardPass::Global) |
 /// | `downward` | for l = 1 to L: `l2l(l)`, `m2l(l)`, `p2l(l)` |
 /// | `evaluate_leaves` | for l = 0 to L: `l2p(l)`, `m2p(l)`, `p2p(l)` |
+///
+/// The overlapped evaluation (`Evaluator::evaluate_overlapped`) makes the same calls in
+/// the same order, with the exchanges in flight between them.
 ///
 /// So `m2m` is called for the levels 0..L once per pass, `l2l`, `m2l` and `p2l` for
 /// 1..=L, and the others for 0..=L.

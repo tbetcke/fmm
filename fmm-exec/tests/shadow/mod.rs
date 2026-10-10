@@ -352,13 +352,14 @@ fn keys(
 /// The shadow check of `fmm`, built from this rank's `sources` and `targets` with one
 /// thread on the host: the evaluator with a [`Shadow`] of `fmm`'s operator (`hook` on or
 /// off) on `fmm`'s plan, every `(charges, output)` of `evaluations` evaluated in turn on
-/// the same evaluator (so a second one depends on `Reset`), each output compared with the
-/// `Fmm`'s bit for bit. Collective; the verdict is the same on every rank.
+/// the same evaluator (so a second one depends on `Reset`), by its overlapped stages with
+/// `overlapped` (Phase 5 T9), each output compared with the `Fmm`'s bit for bit.
+/// Collective; the verdict is the same on every rank.
 pub fn check_fmm<T: Stored + SimdScalar + Equivalence + Default>(
     fmm: &Fmm<'_, T>,
     (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
     evaluations: &[(&[T], &Output<T>)],
-    hook: bool,
+    (hook, overlapped): (bool, bool),
     comm: &SimpleCommunicator,
 ) -> Verdict {
     let (octree, plan, domain) = (fmm.octree(), fmm.plan(), fmm.domain());
@@ -410,7 +411,11 @@ pub fn check_fmm<T: Stored + SimdScalar + Equivalence + Default>(
         let charges = source_route.forward(charges, 1);
         let before = evaluator.operator().events();
         evaluator.operator_mut().begin_evaluation(&charges);
-        evaluator.evaluate();
+        if overlapped {
+            evaluator.evaluate_overlapped();
+        } else {
+            evaluator.evaluate();
+        }
         let events = evaluator.operator().events() - before;
         verdict.event_counts += usize::from(events != 5 + plan.nlevels());
         let host = evaluator.target_output_store().as_slice().iter();

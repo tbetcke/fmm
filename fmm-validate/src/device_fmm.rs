@@ -382,6 +382,7 @@ fn median_stages(timings: &[StageTimings]) -> StageTimings {
         download: stage(|t| t.download),
         device: None,
         kinds: None,
+        overlap: None,
     }
 }
 

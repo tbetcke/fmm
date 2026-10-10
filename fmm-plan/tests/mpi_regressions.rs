@@ -5,7 +5,7 @@ use std::{borrow::Borrow, collections::HashMap};
 use mpi::{collective::SystemOperation, traits::*};
 use nd_fmm_plan::{
     evaluator::Evaluator,
-    exchange::{CoarseExchange, MultipoleExchange, SourceExchange},
+    exchange::{self, CoarseExchange, MultipoleExchange, SourceExchange},
     interaction_manager::V_LIST_DIRECTIONS,
     lists::{GroupedCsr, offset_index},
     operator::{
@@ -20,7 +20,10 @@ use nd_octree::{
     Octree, OctreeOptions, PhysicalBox, constants::DEEPEST_LEVEL, morton, morton::is_ancestor,
     octree::KeyType, points_to_morton,
 };
-use rlst::{distributed_tools::array_tools::gather_to_all, rlst_dynamic_array};
+use rlst::{
+    distributed_tools::{GhostCommunicator, array_tools::gather_to_all},
+    rlst_dynamic_array,
+};
 
 fn keys(points: &[[f64; 3]]) -> Vec<u64> {
     let mut array = rlst_dynamic_array!(f64, [3, points.len()]);
@@ -403,6 +406,48 @@ impl Traffic {
     }
 }
 
+/// Check the [`exchange::Traffic`] of one exchange against its communicator, and that the
+/// messages and values sent over all ranks are those received: a neighbour without values
+/// is skipped on both sides. Collective.
+fn check_traffic<C: CommunicatorCollectives>(
+    name: &str,
+    comm: &C,
+    traffic: exchange::Traffic,
+    communicator: &GhostCommunicator<u64>,
+) {
+    assert_eq!(
+        traffic.values_sent,
+        communicator.send_buffer_len(),
+        "{name}"
+    );
+    assert_eq!(
+        traffic.values_received,
+        communicator.receive_buffer_len(),
+        "{name}"
+    );
+    assert!(
+        traffic.messages_sent <= communicator.out_ranks().len(),
+        "{name}"
+    );
+    assert!(
+        traffic.messages_received <= communicator.in_ranks().len(),
+        "{name}"
+    );
+    let local = [
+        traffic.messages_sent,
+        traffic.messages_received,
+        traffic.values_sent,
+        traffic.values_received,
+    ];
+    let mut total = [0usize; 4];
+    comm.all_reduce_into(&local[..], &mut total[..], SystemOperation::sum());
+    assert_eq!(
+        [total[0], total[2]],
+        [total[1], total[3]],
+        "{name}: messages and values sent and received over all ranks"
+    );
+}
+
 /// Forward seeded source chunks with `count(key)` points of every local leaf, and check
 /// that every ghost leaf receives its owner's count and values.
 fn check_source_exchange<C: CommunicatorCollectives>(
@@ -441,6 +486,7 @@ fn check_source_exchange<C: CommunicatorCollectives>(
             *value = ghost_value(key, k);
         }
     }
+    let mut overlapped = sources.clone();
     exchange.forward(&mut sources);
     for j in 0..leaves.len() {
         let key = leaves.key(j);
@@ -453,6 +499,34 @@ fn check_source_exchange<C: CommunicatorCollectives>(
             "{name}: source chunk of leaf {key}"
         );
     }
+
+    // The non-blocking exchange (Phase 5 T9) delivers the same bits, into a ghost tail
+    // that holds other values until the wait, with `test` calls during the work.
+    let ghosts = exchange.ghost_leaves();
+    overlapped
+        .range_mut(ghosts.clone())
+        .as_mut_slice()
+        .fill(u64::MAX);
+    let (untouched, _) = exchange.forward_overlapped(&mut overlapped, |store, flight| {
+        let untouched = store
+            .range(ghosts.clone())
+            .as_slice()
+            .iter()
+            .all(|&value| value == u64::MAX);
+        for _ in 0..3 {
+            flight.test();
+        }
+        untouched
+    });
+    assert!(
+        untouched,
+        "{name}: the ghost tail is written after the wait"
+    );
+    assert!(
+        overlapped == sources,
+        "{name}: the non-blocking source exchange differs from the blocking one"
+    );
+    check_traffic(name, comm, exchange.traffic(), exchange.communicator());
     Traffic {
         keys: exchange.communicator().total_receive_count(),
         values: exchange.communicator().receive_buffer_len(),
@@ -484,7 +558,43 @@ fn check_multipole_exchange<C: CommunicatorCollectives>(
             }
         }
     }
+    let mut overlapped = multipoles.clone();
     exchange.forward_all(&mut multipoles);
+
+    // The non-blocking exchange (Phase 5 T9), on an exchange of its own whose receive
+    // buffers start zeroed, with the levels waited for deepest first and `test` calls in
+    // between, delivers the same bits into the slots and the receive buffers; a level's
+    // receive buffer is current once it is waited for.
+    let nlevels = index.nlevels();
+    let mut second = MultipoleExchange::<u64>::new(plan, comm, sizes)
+        .unwrap_or_else(|error| panic!("{name}: multipole exchange: {error}"));
+    let (current, _) = second.forward_all_overlapped(&mut overlapped, |flight, multipoles| {
+        let mut current = true;
+        for level in (0..nlevels).rev() {
+            flight.test();
+            flight.wait(level, multipoles);
+            current &= flight.exchange().receive_buffer(level) == exchange.receive_buffer(level);
+        }
+        current
+    });
+    assert!(current, "{name}: a receive buffer after its wait");
+    assert!(
+        overlapped == multipoles,
+        "{name}: the non-blocking multipole exchange differs from the blocking one"
+    );
+    for level in 0..nlevels {
+        assert_eq!(
+            second.receive_buffer(level),
+            exchange.receive_buffer(level),
+            "{name}: receive buffer of level {level}"
+        );
+        check_traffic(
+            name,
+            comm,
+            second.traffic(level),
+            second.communicator(level),
+        );
+    }
 
     // The ghosts of the V- and W-lists, by level.
     let mut expected = vec![Vec::new(); index.nlevels()];
@@ -769,6 +879,25 @@ fn check_repeated_evaluation<C: CommunicatorCollectives>(name: &str, comm: &C, p
     assert!(
         stores(&owning) == first,
         "{name}: the evaluator that owns its plan differs"
+    );
+
+    // The overlapped evaluation (Phase 5 T9) gives the same stores bit for bit, after a
+    // blocking one, after itself, and followed by a blocking one.
+    borrowing.evaluate_overlapped();
+    assert!(
+        stores(&borrowing) == first,
+        "{name}: the overlapped evaluation differs from the blocking one"
+    );
+    owning.evaluate_overlapped();
+    owning.evaluate_overlapped();
+    assert!(
+        stores(&owning) == first,
+        "{name}: two overlapped evaluations differ"
+    );
+    owning.evaluate();
+    assert!(
+        stores(&owning) == first,
+        "{name}: a blocking evaluation after an overlapped one differs"
     );
 }
 
@@ -1085,6 +1214,46 @@ fn expected_calls(nlevels: usize) -> Vec<Call> {
     calls
 }
 
+/// The level calls and host-data events of one overlapped evaluation
+/// (`Evaluator::evaluate_overlapped`, `docs/design/distributed-fmm.md` §6.5, §8.1): the
+/// calls of [`expected_calls`] in the same order, `ReceivedSources` after the local upward
+/// pass, and each `ReceivedMultipoles` of level l just before the downward calls of l.
+fn expected_overlapped_calls(nlevels: usize) -> Vec<Call> {
+    let deepest = nlevels - 1;
+    let mut calls = vec![("reset", 0, None), ("send sources", 0, None)];
+    for level in (0..=deepest).rev() {
+        calls.push(("p2m", level, None));
+        if level > 0 {
+            calls.push(("m2m", level - 1, Some(UpwardPass::Local)));
+        }
+    }
+    calls.extend([
+        ("received sources", 0, None),
+        ("send multipoles", 0, None),
+        ("received coarse", 0, None),
+    ]);
+    for level in (0..deepest).rev() {
+        calls.push(("m2m", level, Some(UpwardPass::Global)));
+    }
+    calls.push(("received multipoles", 0, None));
+    for level in 1..=deepest {
+        calls.extend([
+            ("received multipoles", level, None),
+            ("l2l", level, None),
+            ("m2l", level, None),
+            ("p2l", level, None),
+        ]);
+    }
+    for level in 0..=deepest {
+        calls.extend([
+            ("l2p", level, None),
+            ("m2p", level, None),
+            ("p2p", level, None),
+        ]);
+    }
+    calls
+}
+
 /// The pairs (method, target, source) of `target` with every one of `sources`.
 fn pairs_of(method: &'static str, target: u64, sources: &[u64]) -> Vec<(&'static str, u64, u64)> {
     sources
@@ -1203,13 +1372,21 @@ fn event_defects(recorder: &Recorder<'_>, expected: &[EventLists]) -> Vec<String
 /// every batch honours its grouping; and the pairs issued are exactly the pairs of the
 /// oracle lists, each once. The host-data events (`docs/design/distributed-fmm.md` §6)
 /// come in their place among the level calls, on every rank, with the index lists of the
-/// exchanges; their verdict is agreed on every rank.
+/// exchanges; their verdict is agreed on every rank. With `overlapped`, through
+/// `Evaluator::evaluate_overlapped` (Phase 5 T9): the same calls, groupings, pairs, events
+/// and lists, the events in the overlapped places.
 fn check_batches<C: CommunicatorCollectives>(
     name: &str,
     octree: &Octree<'_, C>,
     oracle: &OracleLists,
     plan: &Plan,
+    overlapped: bool,
 ) {
+    let (name, expected_calls): (&str, fn(usize) -> Vec<Call>) = if overlapped {
+        (&format!("{name}, overlapped"), expected_overlapped_calls)
+    } else {
+        (name, expected_calls)
+    };
     let nlocal = plan.index().leaves().nlocal();
     let counts: Vec<usize> = (0..nlocal)
         .map(|j| hashed_count(plan.index().leaf_key(j)))
@@ -1225,7 +1402,11 @@ fn check_batches<C: CommunicatorCollectives>(
     };
     let mut evaluator = Evaluator::new(plan, comm, recorder, &counts, &counts)
         .unwrap_or_else(|error| panic!("{name}: evaluator: {error}"));
-    evaluator.evaluate();
+    if overlapped {
+        evaluator.evaluate_overlapped();
+    } else {
+        evaluator.evaluate();
+    }
     let recorder = evaluator.operator();
 
     // The events, agreed: every rank receives each of them, in order, with its lists.
@@ -1857,7 +2038,8 @@ fn distributed_tree_regressions() {
 
         // The evaluator: determinism with variable counts, and the batches it issues.
         check_repeated_evaluation(name, &comm, &plan);
-        check_batches(name, &octree, &oracle, &plan);
+        check_batches(name, &octree, &oracle, &plan, false);
+        check_batches(name, &octree, &oracle, &plan, true);
 
         // The redistribution of the sources and of the targets, from every input
         // distribution of the scenario's global points (every rank's, in rank order).

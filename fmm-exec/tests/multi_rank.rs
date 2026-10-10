@@ -10,7 +10,8 @@
 //!   sphere of scale 0.1, seed `0xc33`, `max_level` 16 and 64 points per leaf.
 //!
 //! Sources equal targets, gradients on, eight charge vectors uniform in [−1, 1) (vector k
-//! from the seed + 1 + k, as `nd_fmm_validate::fmm_accuracy::Problem`), 1,000 sampled
+//! from the seed + 1 + k, as `nd_fmm_validate::fmm_accuracy::Problem`; the odd vectors
+//! evaluated with the exchanges overlapped, `Fmm::set_overlap`, Phase 5 T9), 1,000 sampled
 //! targets; f64 at p = 3, 8 and 18, f32 at p = 3 and 8 (the f32 charges rounded, with an
 //! oracle on the rounded charges); one thread per rank. Point i is passed on rank
 //! `hash(i) % P` (a seeded random share). On every rank count, for every point:
@@ -373,7 +374,9 @@ fn run<T: Stored + SimdScalar + Equivalence + Default>(
     let build = fmm.build_timings();
     let mut outputs = Vec::new();
     let (mut totals, mut moves) = (Vec::new(), Vec::new());
-    for q in &local_charges {
+    for (k, q) in local_charges.iter().enumerate() {
+        // Every second charge vector with the exchanges overlapped (Phase 5 T9).
+        fmm.set_overlap(k % 2 == 1);
         let output = fmm.evaluate(q).expect("the FMM evaluates");
         let t = output.timings;
         totals.push(t.total());

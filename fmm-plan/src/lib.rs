@@ -55,6 +55,12 @@
 //! The [`evaluator`] module documents the calls, the collectives and the accumulation
 //! order of every value.
 //!
+//! [`Evaluator::evaluate_overlapped`](evaluator::Evaluator::evaluate_overlapped) makes
+//! the same calls in the same order with the exchanges non-blocking (Phase 5 T9): the
+//! source exchange travels behind stage 2, and the multipole exchange of every level,
+//! posted before the coarse gather, behind stages 3 and 5 until the level that reads it;
+//! the output is bit for bit that of `evaluate` ([Overlap](evaluator#overlap)).
+//!
 //! Besides the level calls, the evaluator tells the operator of each of its own data
 //! movements, `reset`'s zeroing and the three exchanges, with an event of
 //! [`FmmOperator::host_data`](operator::FmmOperator::host_data) that carries the index
@@ -81,8 +87,9 @@
 //!
 //! # Future extensions
 //!
-//! - Overlapping the exchanges with the computation that does not need ghost data
-//!   (design §10).
+//! - Reordering the accumulation to overlap more (P2P before L2P, local before ghost row
+//!   parts; `docs/design/distributed-fmm.md` §8.3): not offered, since the
+//!   order-preserving overlap leaves nothing exposed that a reordering would hide.
 //! - Device-resident data: the views are flat index arrays and the stores flat buffers,
 //!   so both can be uploaded once (design §10).
 

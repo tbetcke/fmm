@@ -22,6 +22,8 @@
 //! | 6 | [`evaluate_leaves`](Evaluator::evaluate_leaves) | for l = 0 to L: `l2p(l)`, `m2p(l)`, `p2p(l)` |
 //!
 //! Every call is made on every rank for every level, also when its view is empty.
+//! [`evaluate_overlapped`](Evaluator::evaluate_overlapped) runs the same calls in the same
+//! order with the exchanges non-blocking ([Overlap](#overlap)).
 //!
 //! # Host data
 //!
@@ -39,6 +41,15 @@
 //! | 3 [`upward_global`](Evaluator::upward_global) | the multipoles of this rank's coarse blocks (`sent_blocks`) | the multipoles of the other ranks' blocks (`received_blocks`) | `SendMultipoles` (also for step 4's sends); the gather; `ReceivedCoarse`; then the global `m2m` calls |
 //! | 4 [`exchange_multipoles`](Evaluator::exchange_multipoles) | per level, the multipoles of `send_boxes(l)` | per level, the multipoles of `receive_boxes(l)` | for l = 0 to L: the exchange of level l; `ReceivedMultipoles` of level l |
 //! | 5, 6 | — | — | none |
+//!
+//! The overlapped stages ([Overlap](#overlap)) fire the same events with the same lists
+//! at the same logical points (design §6.5): `SendSources` before the source exchange is
+//! posted, `ReceivedSources` after its wait; `SendMultipoles` before the multipole
+//! exchange is posted, ahead of the gather; `ReceivedCoarse` after the gather;
+//! `ReceivedMultipoles` of level l after level l's wait, before the first call of level l
+//! that reads ghosts, so between the downward calls of levels l − 1 and l. No event fires
+//! while a request is pending on a buffer it hands out: the send buffers are packed after
+//! the "send" event returns, and a "received" event comes after its wait.
 //!
 //! So an evaluation fires 5 + `plan.nlevels()` events, on every rank, also when an
 //! exchange moves nothing; on one rank every index list is empty. On one rank the coarse
@@ -91,6 +102,9 @@
 //! | [`upward_global`](Evaluator::upward_global) | one all-gather-v |
 //! | [`exchange_multipoles`](Evaluator::exchange_multipoles) | one neighbour all-to-all per level, in level order |
 //! | [`evaluate`](Evaluator::evaluate) | all of the above stages, in order |
+//! | [`exchange_sources_and_upward_local`](Evaluator::exchange_sources_and_upward_local) | none: point-to-point requests |
+//! | [`far_field`](Evaluator::far_field) | one all-gather-v, with the multipole exchange's point-to-point requests in flight |
+//! | [`evaluate_overlapped`](Evaluator::evaluate_overlapped) | the overlapped stages, in order |
 //!
 //! No collective sits in a branch that only some ranks take: the level loops run over
 //! the global level count, and validation is agreed before any exchange is built. Ranks
@@ -98,17 +112,59 @@
 //!
 //! The stages are public so that a caller can time each one. Called out of order they
 //! give wrong results, but every rank still enters the same collectives as long as all
-//! ranks call the same stages; debug builds panic on a stage called out of order.
+//! ranks call the same stages; debug builds panic on a stage called out of order, and on
+//! a mix of the two paths in one evaluation. Every rank must take the same path.
+//!
+//! # Overlap
+//!
+//! [`evaluate_overlapped`](Evaluator::evaluate_overlapped) hides the exchanges behind
+//! work that does not need their data, without moving a level call
+//! (`docs/design/distributed-fmm.md` §8.1, decisions 9 and 10 of docs/phase5/README.md):
+//!
+//! | Step | Stage | Replaces | Does, in order |
+//! | --- | --- | --- | --- |
+//! | 1, 2 | [`exchange_sources_and_upward_local`](Evaluator::exchange_sources_and_upward_local) | `exchange_sources`, `upward_local` | `SendSources`; post the source exchange; the calls of `upward_local`, a `test` after each; wait; `ReceivedSources` |
+//! | 3, 4, 5 | [`far_field`](Evaluator::far_field) | `upward_global`, `exchange_multipoles`, `downward` | `SendMultipoles`; post the multipole exchange of every level; the coarse gather (blocking) and `ReceivedCoarse`; the global M2M calls; for l = 0 to L: wait for level l, `ReceivedMultipoles` of l, and for l ≥ 1 the calls of `downward` on level l; a `test` after every call |
+//! | 6 | [`evaluate_leaves`](Evaluator::evaluate_leaves) | — | unchanged |
+//!
+//! - **Why it is correct.** P2M and the local M2M read local sources only, so the
+//!   ghost sources can travel behind them. Every multipole an exchange sends is a local
+//!   leaf or local interior box, final after the local upward pass, so the multipole
+//!   exchange is posted before the gather. Level l of the downward pass reads ghost
+//!   multipoles of level l only (V); stage 6 reads those of every level (W), all received
+//!   by the end of the far field. The coarse gather stays blocking: its inputs are final
+//!   only after the local upward pass and its outputs feed the global M2M (design §8.5).
+//! - **Determinism.** No level call moves, so every value receives its contributions in
+//!   the order of [Accumulation order](#accumulation-order), and the output, the stores
+//!   and the events are bit for bit those of [`evaluate`](Evaluator::evaluate); messages
+//!   are copied, never combined, in whatever order they arrive. No reordering is offered
+//!   (decision 9).
+//! - **Progress.** MPI moves a message only inside MPI calls, so a `test` of the pending
+//!   requests follows every level call (2L + 1 in the upward pass; L global M2M and 3L
+//!   downward calls in the far field), on the calling thread; operators that use threads
+//!   run them inside the level calls, and no worker calls MPI. A message larger than the
+//!   work between two calls can hide is finished in the wait.
+//! - **Times.** [`overlap_times`](Evaluator::overlap_times) gives, per exchange, the time
+//!   from post to completion, the exposed wait and the time in `test` calls, the wait per
+//!   level, the coarse gather, and the work of each part ([`OverlapTimes`]).
 
 #[cfg(test)]
 #[path = "evaluator_tests.rs"]
 pub(crate) mod tests;
 
-use std::{borrow::Borrow, error::Error, fmt};
+use std::{
+    borrow::Borrow,
+    error::Error,
+    fmt,
+    time::{Duration, Instant},
+};
 
 use mpi::{collective::SystemOperation, traits::CommunicatorCollectives};
+use nd_octree::constants::DEEPEST_LEVEL;
 
-use super::exchange::{CoarseExchange, ExchangeError, MultipoleExchange, SourceExchange};
+use super::exchange::{
+    CoarseExchange, ExchangeError, ExchangeTimes, MultipoleExchange, SourceExchange,
+};
 use super::operator::{FmmOperator, HostData, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, UpwardPass};
 use super::plan::Plan;
 use super::store::{LeafSliceMut, LeafStore, LevelBuffers, LevelSlice};
@@ -175,7 +231,9 @@ impl Error for EvaluatorError {
     }
 }
 
-/// The stages of an evaluation, in order; `Reset` is the state before the first.
+/// The stages of an evaluation; `Reset` is the state before the first. The blocking
+/// path runs `ExchangeSources` to `Downward`, the overlapped path `SourcesAndUpward` and
+/// `FarField` in their place; both end with `EvaluateLeaves`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Stage {
     Reset,
@@ -185,6 +243,63 @@ enum Stage {
     ExchangeMultipoles,
     Downward,
     EvaluateLeaves,
+    SourcesAndUpward,
+    FarField,
+}
+
+impl Stage {
+    /// The stages `self` may follow.
+    fn after(self) -> &'static [Stage] {
+        match self {
+            Self::Reset => &[],
+            Self::ExchangeSources | Self::SourcesAndUpward => &[Self::Reset],
+            Self::UpwardLocal => &[Self::ExchangeSources],
+            Self::UpwardGlobal => &[Self::UpwardLocal],
+            Self::ExchangeMultipoles => &[Self::UpwardGlobal],
+            Self::Downward => &[Self::ExchangeMultipoles],
+            Self::FarField => &[Self::SourcesAndUpward],
+            Self::EvaluateLeaves => &[Self::Downward, Self::FarField],
+        }
+    }
+}
+
+/// The number of levels an octree can have, 0 to `DEEPEST_LEVEL`: the length of
+/// [`OverlapTimes::level_waits`].
+pub const MAX_LEVELS: usize = DEEPEST_LEVEL as usize + 1;
+
+/// Wall times of the overlapped stages of the last evaluation
+/// ([`Evaluator::overlap_times`]; `docs/design/distributed-fmm.md` §8.6), read on the
+/// calling thread, for reports; nothing depends on them. Zero after a blocking
+/// evaluation.
+///
+/// The parts of a stage that are not communication are named after the blocking stages
+/// they replace, so that the two paths can be compared:
+/// [`exchange_sources_and_upward_local`](Evaluator::exchange_sources_and_upward_local)
+/// lasts [`upward_local`](Self::upward_local) plus the time of the source exchange outside
+/// it (packing, posting, `test` calls, the wait, the copy into the ghost tail and the
+/// events), and [`far_field`](Evaluator::far_field) lasts
+/// [`upward_global`](Self::upward_global) plus [`downward`](Self::downward) plus that of the
+/// multipole exchange.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct OverlapTimes {
+    /// The source exchange ([`SourceExchange::forward_overlapped`]).
+    pub sources: ExchangeTimes,
+    /// The multipole exchange of every level
+    /// ([`MultipoleExchange::forward_all_overlapped`]).
+    pub multipoles: ExchangeTimes,
+    /// The part of [`multipoles`](Self::multipoles)`.exposed` spent waiting for each
+    /// level, `level_waits[l]` for level l; the final wait for the sends is the rest.
+    pub level_waits: [Duration; MAX_LEVELS],
+    /// The coarse gather (blocking, inside the far field).
+    pub coarse_gather: Duration,
+    /// The level calls of the local upward pass (P2M, local M2M), without the `test`
+    /// calls between them.
+    pub upward_local: Duration,
+    /// The `SendMultipoles` event, the coarse gather, the `ReceivedCoarse` event and the
+    /// global M2M calls, without the `test` calls: what the blocking `upward_global` does.
+    pub upward_global: Duration,
+    /// The level calls of the downward pass (L2L, M2L, P2L), without the `test` calls.
+    pub downward: Duration,
 }
 
 /// The stores of one evaluation, and the level calls that need no communication.
@@ -231,78 +346,26 @@ impl<V: Copy + Default> Data<V> {
 
     /// Step 2: P2M and the local M2M pass, deepest level first.
     pub(crate) fn upward_local<Op: FmmOperator<Value = V>>(&mut self, plan: &Plan, op: &mut Op) {
-        let index = plan.index();
-        for level in (0..plan.nlevels()).rev() {
-            op.p2m(P2m {
-                level,
-                index,
-                leaves: plan.level(level).p2m(),
-                sources: self.sources.range(0..self.sources.nleaves()),
-                multipoles: self.multipoles.level_mut(level),
-            });
-            if level > 0 {
-                self.m2m(plan, op, level - 1, UpwardPass::Local);
-            }
-        }
+        upward_local(plan, op, &self.sources, &mut self.multipoles, || {});
     }
 
     /// The M2M pass of step 3, deepest level first, once the coarse blocks are in place.
     pub(crate) fn upward_global<Op: FmmOperator<Value = V>>(&mut self, plan: &Plan, op: &mut Op) {
-        for level in (0..plan.nlevels().saturating_sub(1)).rev() {
-            self.m2m(plan, op, level, UpwardPass::Global);
-        }
-    }
-
-    /// One M2M call: the parents of `level` from their children on `level + 1`.
-    fn m2m<Op: FmmOperator<Value = V>>(
-        &mut self,
-        plan: &Plan,
-        op: &mut Op,
-        level: usize,
-        pass: UpwardPass,
-    ) {
-        let lists = plan.level(level);
-        let (multipoles, child_multipoles) = self.multipoles.parent_child_mut(level);
-        op.m2m(M2m {
-            level,
-            index: plan.index(),
-            pass,
-            children: match pass {
-                UpwardPass::Local => lists.m2m_local(),
-                UpwardPass::Global => lists.m2m_global(),
-            },
-            child_multipoles,
-            multipoles,
-        });
+        upward_global(plan, op, &mut self.multipoles, || {});
     }
 
     /// Step 5: L2L, M2L and P2L, from level 1 down.
     pub(crate) fn downward<Op: FmmOperator<Value = V>>(&mut self, plan: &Plan, op: &mut Op) {
-        let index = plan.index();
         for level in 1..plan.nlevels() {
-            let lists = plan.level(level);
-            let (locals, parent_locals) = self.locals.child_parent_mut(level - 1);
-            op.l2l(L2l {
+            downward_level(
+                plan,
+                op,
                 level,
-                index,
-                parents: lists.l2l(),
-                parent_locals,
-                locals,
-            });
-            op.m2l(M2l {
-                level,
-                index,
-                pairs: lists.v(),
-                multipoles: self.multipoles.level(level),
-                locals: self.locals.level_mut(level),
-            });
-            op.p2l(P2l {
-                level,
-                index,
-                x: lists.x(),
-                sources: self.sources.range(0..self.sources.nleaves()),
-                locals: self.locals.level_mut(level),
-            });
+                &self.multipoles,
+                &mut self.locals,
+                &self.sources,
+                || {},
+            );
         }
     }
 
@@ -346,6 +409,109 @@ impl<V: Copy + Default> Data<V> {
             });
         }
     }
+}
+
+/// Step 2 on `sources` and `multipoles`: P2M and the local M2M pass, deepest level first,
+/// with `between` after every level call.
+fn upward_local<V: Copy + Default, Op: FmmOperator<Value = V>>(
+    plan: &Plan,
+    op: &mut Op,
+    sources: &LeafStore<V>,
+    multipoles: &mut LevelBuffers<V>,
+    mut between: impl FnMut(),
+) {
+    let index = plan.index();
+    for level in (0..plan.nlevels()).rev() {
+        op.p2m(P2m {
+            level,
+            index,
+            leaves: plan.level(level).p2m(),
+            sources: sources.range(0..sources.nleaves()),
+            multipoles: multipoles.level_mut(level),
+        });
+        between();
+        if level > 0 {
+            m2m(plan, op, multipoles, level - 1, UpwardPass::Local);
+            between();
+        }
+    }
+}
+
+/// The M2M pass of step 3 on `multipoles`, deepest level first, with `between` after
+/// every level call.
+fn upward_global<V: Copy + Default, Op: FmmOperator<Value = V>>(
+    plan: &Plan,
+    op: &mut Op,
+    multipoles: &mut LevelBuffers<V>,
+    mut between: impl FnMut(),
+) {
+    for level in (0..plan.nlevels().saturating_sub(1)).rev() {
+        m2m(plan, op, multipoles, level, UpwardPass::Global);
+        between();
+    }
+}
+
+/// One M2M call: the parents of `level` from their children on `level + 1`.
+fn m2m<V: Copy + Default, Op: FmmOperator<Value = V>>(
+    plan: &Plan,
+    op: &mut Op,
+    multipoles: &mut LevelBuffers<V>,
+    level: usize,
+    pass: UpwardPass,
+) {
+    let lists = plan.level(level);
+    let (multipoles, child_multipoles) = multipoles.parent_child_mut(level);
+    op.m2m(M2m {
+        level,
+        index: plan.index(),
+        pass,
+        children: match pass {
+            UpwardPass::Local => lists.m2m_local(),
+            UpwardPass::Global => lists.m2m_global(),
+        },
+        child_multipoles,
+        multipoles,
+    });
+}
+
+/// Step 5 on one level (≥ 1): L2L, M2L and P2L into `locals`, with `between` after every
+/// level call.
+fn downward_level<V: Copy + Default, Op: FmmOperator<Value = V>>(
+    plan: &Plan,
+    op: &mut Op,
+    level: usize,
+    multipoles: &LevelBuffers<V>,
+    all_locals: &mut LevelBuffers<V>,
+    sources: &LeafStore<V>,
+    mut between: impl FnMut(),
+) {
+    let index = plan.index();
+    let lists = plan.level(level);
+    let (locals, parent_locals) = all_locals.child_parent_mut(level - 1);
+    op.l2l(L2l {
+        level,
+        index,
+        parents: lists.l2l(),
+        parent_locals,
+        locals,
+    });
+    between();
+    op.m2l(M2l {
+        level,
+        index,
+        pairs: lists.v(),
+        multipoles: multipoles.level(level),
+        locals: all_locals.level_mut(level),
+    });
+    between();
+    op.p2l(P2l {
+        level,
+        index,
+        x: lists.x(),
+        sources: sources.range(0..sources.nleaves()),
+        locals: all_locals.level_mut(level),
+    });
+    between();
 }
 
 /// The multipole and local sizes of `operator` on the levels `0..nlevels`.
@@ -436,6 +602,7 @@ pub struct Evaluator<'p, C: CommunicatorCollectives, Op: FmmOperator, P: Borrow<
     multipole_exchange: MultipoleExchange<Op::Value>,
     coarse_exchange: CoarseExchange<Op::Value>,
     completed: Stage,
+    overlap: OverlapTimes,
 }
 
 impl<'p, C: CommunicatorCollectives, Op: FmmOperator, P: Borrow<Plan>> Evaluator<'p, C, Op, P> {
@@ -504,6 +671,7 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator, P: Borrow<Plan>> Evaluator
             multipole_exchange,
             coarse_exchange,
             completed: Stage::Reset,
+            overlap: OverlapTimes::default(),
         })
     }
 
@@ -627,7 +795,14 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator, P: Borrow<Plan>> Evaluator
     pub fn reset(&mut self) {
         self.data.reset();
         self.completed = Stage::Reset;
+        self.overlap = OverlapTimes::default();
         self.operator.host_data(HostData::Reset);
+    }
+
+    /// Return the times of the overlapped stages of the last evaluation ([`OverlapTimes`]);
+    /// zero after a blocking one.
+    pub fn overlap_times(&self) -> OverlapTimes {
+        self.overlap
     }
 
     /// [`reset`](Self::reset), then run every stage in order.
@@ -641,6 +816,20 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator, P: Borrow<Plan>> Evaluator
         self.upward_global();
         self.exchange_multipoles();
         self.downward();
+        self.evaluate_leaves();
+    }
+
+    /// [`reset`](Self::reset), then the overlapped stages: the same level calls, events and
+    /// output bit for bit as [`evaluate`](Self::evaluate), with the source and multipole
+    /// exchanges non-blocking behind local work ([Overlap](self#overlap)).
+    ///
+    /// # Collective operation
+    /// Every rank must call it, or every rank [`evaluate`](Self::evaluate); see the
+    /// [module documentation](self).
+    pub fn evaluate_overlapped(&mut self) {
+        self.reset();
+        self.exchange_sources_and_upward_local();
+        self.far_field();
         self.evaluate_leaves();
     }
 
@@ -724,6 +913,135 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator, P: Borrow<Plan>> Evaluator
         self.data.downward(self.plan.borrow(), &mut self.operator);
     }
 
+    /// Steps 1 and 2 overlapped: the source exchange in flight behind P2M and the local
+    /// M2M ([Overlap](self#overlap)).
+    ///
+    /// The operator receives [`HostData::SendSources`] before the exchange is posted and
+    /// [`HostData::ReceivedSources`] after its wait, as in
+    /// [`exchange_sources`](Self::exchange_sources); in between come the level calls of
+    /// [`upward_local`](Self::upward_local), with a `test` of the exchange after each.
+    ///
+    /// # Collective operation
+    /// No collective: one point-to-point receive and send per neighbour; every rank must
+    /// call it, in place of [`exchange_sources`](Self::exchange_sources) and
+    /// [`upward_local`](Self::upward_local).
+    pub fn exchange_sources_and_upward_local(&mut self) {
+        self.enter(Stage::SourcesAndUpward);
+        let Self {
+            plan,
+            operator,
+            data,
+            source_exchange,
+            overlap,
+            ..
+        } = self;
+        let plan: &Plan = (*plan).borrow();
+        operator.host_data(HostData::SendSources {
+            leaves: source_exchange.send_leaves(),
+            sources: &mut data.sources,
+        });
+        let multipoles = &mut data.multipoles;
+        let (work, times) =
+            source_exchange.forward_overlapped(&mut data.sources, |sources, flight| {
+                let start = Instant::now();
+                upward_local(plan, operator, sources, multipoles, || flight.test());
+                start.elapsed().saturating_sub(flight.times().progress)
+            });
+        overlap.sources = times;
+        overlap.upward_local = work;
+        operator.host_data(HostData::ReceivedSources {
+            leaves: source_exchange.ghost_leaves(),
+            sources: &data.sources,
+        });
+    }
+
+    /// Steps 3, 4 and 5 overlapped: the multipole exchange of every level in flight
+    /// behind the coarse gather, the global M2M and the downward pass of the coarser
+    /// levels ([Overlap](self#overlap)).
+    ///
+    /// In order: [`HostData::SendMultipoles`]; the exchange of every level posted; the
+    /// coarse gather (blocking) and [`HostData::ReceivedCoarse`]; the global M2M calls;
+    /// then for l = 0 to L the wait for level l and [`HostData::ReceivedMultipoles`] of
+    /// level l, and for l ≥ 1 the L2L, M2L and P2L calls of level l. A `test` of the
+    /// exchange follows every level call. The level calls and the events come in the
+    /// order of the blocking stages; only the `ReceivedMultipoles` events move, each to
+    /// just before the first call that reads its level's ghosts.
+    ///
+    /// # Collective operation
+    /// One all-gather-v (the coarse gather) between posting and waiting for the multipole
+    /// exchange, point-to-point otherwise; every rank must call it, in place of
+    /// [`upward_global`](Self::upward_global),
+    /// [`exchange_multipoles`](Self::exchange_multipoles) and
+    /// [`downward`](Self::downward).
+    pub fn far_field(&mut self) {
+        self.enter(Stage::FarField);
+        let Self {
+            plan,
+            operator,
+            data,
+            multipole_exchange,
+            coarse_exchange,
+            overlap,
+            ..
+        } = self;
+        let plan: &Plan = (*plan).borrow();
+        let start = Instant::now();
+        operator.host_data(HostData::SendMultipoles {
+            coarse: coarse_exchange,
+            exchange: multipole_exchange,
+            multipoles: &mut data.multipoles,
+        });
+        let mut upward_global_time = start.elapsed();
+        let (mut downward, mut waits, mut gather) =
+            (Duration::ZERO, [Duration::ZERO; MAX_LEVELS], Duration::ZERO);
+        let Data {
+            multipoles,
+            locals,
+            sources,
+            ..
+        } = data;
+        let ((), times) =
+            multipole_exchange.forward_all_overlapped(multipoles, |flight, multipoles| {
+                let start = Instant::now();
+                coarse_exchange.gather(multipoles);
+                gather = start.elapsed();
+                operator.host_data(HostData::ReceivedCoarse {
+                    coarse: coarse_exchange,
+                    multipoles,
+                });
+                upward_global(plan, operator, multipoles, || flight.test());
+                upward_global_time += start.elapsed().saturating_sub(flight.times().progress);
+                for level in 0..plan.nlevels() {
+                    let exposed = flight.wait(level, multipoles);
+                    if let Some(wait) = waits.get_mut(level) {
+                        *wait = exposed;
+                    }
+                    operator.host_data(HostData::ReceivedMultipoles {
+                        level,
+                        exchange: flight.exchange(),
+                        multipoles,
+                    });
+                    if level > 0 {
+                        let (start, progress) = (Instant::now(), flight.times().progress);
+                        downward_level(plan, operator, level, multipoles, locals, sources, || {
+                            flight.test()
+                        });
+                        downward += start
+                            .elapsed()
+                            .saturating_sub(flight.times().progress - progress);
+                    }
+                }
+            });
+        *overlap = OverlapTimes {
+            multipoles: times,
+            level_waits: waits,
+            coarse_gather: gather,
+            upward_global: upward_global_time,
+            downward,
+            ..*overlap
+        };
+    }
+
     /// Step 6: L2P, M2P and P2P on the local leaves of every level. Local.
     pub fn evaluate_leaves(&mut self) {
         self.enter(Stage::EvaluateLeaves);
@@ -734,8 +1052,9 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator, P: Borrow<Plan>> Evaluator
     /// Record that `stage` runs; debug builds check that it follows the last one.
     fn enter(&mut self, stage: Stage) {
         debug_assert!(
-            stage as u8 == self.completed as u8 + 1,
-            "stage {stage:?} called after {:?}; call the stages in order, after reset",
+            stage.after().contains(&self.completed),
+            "stage {stage:?} called after {:?}; call the stages of one path in order, after \
+             reset",
             self.completed
         );
         self.completed = stage;
