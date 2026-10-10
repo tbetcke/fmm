@@ -1878,6 +1878,13 @@ measured; the strategy and thread runs are the evidence.
 
 ### 15.3 For the next phase
 
+*Planned on 2026-10-10:* the node first (Phase 5N, docs/phase5n/: Kathleen's environment
+and baseline, the M2L strategy rule per node, table loading at scale), then this
+section's scale-out on Kathleen (Phase 5S, docs/phase5s/: S7, S1, S2, S3, and S4/S5 if
+measured), then Phase 6 (docs/phase6/: C6.6 host batched M2L, C6.2, C6.7 and the rest).
+Shared tables through MPI shared memory need an rsmpi addition (rsmpi 0.8.2 has no RMA
+windows) and are a Phase 5N sign-off question.
+
 - **Shared or smaller tables on a node** before any other host-side scaling work at
   p ≥ 6: one copy of the dense tables per node (MPI shared memory, `MPI_Win_allocate_shared`),
   threads per rank (the 4 × 18 split), or a strategy rule that sees the ranks per node

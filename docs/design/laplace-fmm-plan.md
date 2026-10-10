@@ -64,6 +64,11 @@ p = 8 the per-rank dense M2L
 tables limit strong scaling (fastest at 4 ranks on the M3 Max, flat beyond 32 on locust),
 which Rotation, Classes or threads per rank remove; overlap gains nothing measurable on
 one node. Inter-node scaling and the device on several GPUs stay open.
+Revised after Phase 5 (2026-10-10, planning; Section 7): with UCL's Kathleen cluster
+available, two phases are inserted before Phase 6: Phase 5N (Kathleen's environment and
+baseline, and the M2L tables per node; docs/phase5n/) and Phase 5S (the scale-out of
+distributed-fmm.md §14; docs/phase5s/). Phase 6 gains C6.6 (host batched M2L), C6.7
+(AVX-512 P2P) and C6.8 (FMM3D comparison), and its briefs are in docs/phase6/.
 
 > Where this document and `docs/CONVENTIONS.md` differ (normalisation, phases, scaling),
 > **the conventions file takes precedence.** Section 2.4 below now follows the scaling of
@@ -1040,12 +1045,16 @@ every target it supports.
 
 ## 7. Phased implementation plan
 
-Eight phases, each ending in a gate that must pass before the next starts: conventions,
-CPU reference, tables, CPU FMM, host SIMD P2P, CubeCL kernels, distribution,
-optimisation. Every component below is sized to be one Claude Code task with a testable
-acceptance criterion. The host SIMD phase was added after Phase 3 and is numbered 3S, so
-that the phase and component numbers that code and documents already cite (Phase 4,
-C4.x to C6.x) keep their meaning.
+Eleven phases, each ending in a gate that must pass before the next starts: conventions,
+CPU reference, tables, CPU FMM, host SIMD P2P, CubeCL kernels, CUDA on Grace Hopper,
+distribution, the node on a cluster, scale-out, optimisation. Every component below is
+sized to be one Claude Code task with a testable acceptance criterion. The host SIMD phase
+was added after Phase 3 and is numbered 3S, so that the phase and component numbers that
+code and documents already cite (Phase 4, C4.x to C6.x) keep their meaning; 4S, 5N and 5S
+were inserted the same way. *Planned on 2026-10-10* (after Phase 5, with the Kathleen
+cluster available): Phase 5N (Kathleen, and the M2L tables per node), then Phase 5S
+(scale-out, distributed-fmm.md §14), then Phase 6; the order and its reasons are in
+docs/phase5n/README.md.
 
 ```mermaid
 flowchart TB
@@ -1055,16 +1064,22 @@ flowchart TB
   P3["Phase 3 · CPU FMM on nd-fmm-plan<br/>C3.0–C3.5, C4.0 · nd-fmm-plan, fmm-exec · done"]
   P3S["Phase 3S · SIMD P2P on the host<br/>C3S.1–C3S.6 · fmm-simd, fmm-exec"]
   P4["Phase 4 · CubeCL kernels<br/>C4.1–C4.8 · fmm-kernels, fmm-exec"]
-  P5["Phase 5 · Distributed<br/>C5.1–C5.3 · nd-fmm-plan, fmm-exec"]
-  P6["Phase 6 · Optimisation and extensions<br/>C6.1–C6.5 · optional, benchmark-driven"]
+  P4S["Phase 4S · CUDA on Grace Hopper<br/>C4S.1–C4S.10 · tools/gh200, fmm-kernels, fmm-exec · done"]
+  P5["Phase 5 · Distributed<br/>C5.1–C5.3 · nd-fmm-plan, fmm-exec · done"]
+  P5N["Phase 5N · The node: Kathleen, M2L tables per node<br/>C5N.1–C5N.3 · tools/kathleen, fmm-exec"]
+  P5S["Phase 5S · Scale-out<br/>C5S.1–C5S.6 · nd-octree, nd-fmm-plan, fmm-exec"]
+  P6["Phase 6 · Optimisation and extensions<br/>C6.1–C6.8 · benchmark-driven"]
   S["Spike · CubeCL GEMM<br/>Phase 0 task T6 · done; f64 CUDA run pending"]
   P0 -- "Gate: harmonic identities hold to 1e-14" --> P1
   P1 -- "Gate: fast operators match direct to 1e-13" --> P2
   P2 -- "Gate: tables reproduce fmm-ref at all levels" --> P3
   P3 -- "Gate: CPU FMM matches direct sum; p calibrated" --> P3S
   P3S -- "Gate: SIMD P2P matches fmm-ref on every ISA; benchmarked vs green-kernels" --> P4
-  P4 -- "Gate: GPU result equals CPU FMM; benchmarks published" --> P5
-  P5 -- "Gate: multi-rank equals single-rank; scaling report" --> P6
+  P4 -- "Gate: GPU result equals CPU FMM; benchmarks published" --> P4S
+  P4S -- "Gate: Phase 4 gates on CUDA; GH200 benchmarks" --> P5
+  P5 -- "Gate: multi-rank equals single-rank; scaling report" --> P5N
+  P5N -- "Gate: Kathleen decided (and baselined if usable); M2L rule per node signed off and built" --> P5S
+  P5S -- "Gate: per-rank cost bounded in P; invariance at scale; scaling report (≤ 4 nodes, models beyond)" --> P6
   S -. "sets dense vs rotation default" .-> P4
 ```
 
@@ -2052,6 +2067,42 @@ per rank, a random share of the points; measured on the M3 Max and on locust, re
 - **Overlap stays off by default**: on one node it gains nothing measurable. Its value at
   network bandwidth is the open question the inter-node run settles.
 
+### Phase 5N: the node — Kathleen, and the M2L tables per node (`tools/kathleen`, `fmm-exec`)
+
+Planned on 2026-10-10 (docs/phase5n/). It starts with a probe of Kathleen's queue (about
+2,000 jobs were pending on 2026-10-10) and the user's decision whether the cluster is
+usable; without it, the phase runs on the M3 Max and locust. UCL's Kathleen cluster (190 nodes, 2 × 20-core
+Intel Xeon Gold 6248 each, Omni-Path, Slurm) becomes the third machine and the first with
+more than one node and an Intel CPU. The phase sets up a reproducible environment there,
+measures Phase 5's code on it (one node and a first multi-node look), and fixes what
+Phase 5 found on a node before any cluster scaling is measured: at p = 8 the per-rank
+dense M2L tables stop strong scaling at 4–32 ranks per node (Section 7, Phase 5).
+
+| ID | Component | Acceptance criterion | Depends on | Status |
+| --- | --- | --- | --- | --- |
+| C5N.1 | Kathleen's queue and environment (`tools/kathleen/`) | first a queue probe (the wait for 2- and 4-node jobs) and the user's decision whether Kathleen is usable; if so, the environment rebuilds from the repository and every existing CPU-side check passes in Slurm jobs, the MPI tests on one and two nodes | Phase 5 | Not started |
+| C5N.2 | Kathleen baseline (only if Kathleen is usable) | Phase 5's scaling sweeps on one, two and four nodes (never more than four), the x86 host profile, the inter-node exchanges against distributed-fmm.md §8.2; report published | C5N.1 | Not started |
+| C5N.3 | M2L on a node | a measured strategy rule that sees ranks per node and threads per rank (signed off), table loading safe at scale, ranks × threads guidance; the default within a stated margin of the best strategy at every ranks-per-node count on the three machines | C5N.2 | Not started |
+
+### Phase 5S: scale-out (`nd-octree`, `nd-fmm-plan`, `fmm-exec`)
+
+Planned on 2026-10-10 (docs/phase5s/), distributed-fmm.md §14's packages, measured on
+Kathleen at no more than four nodes (the queue is busy; decided 2026-10-10) and beyond
+that by oversubscribed runs and models (§14.5, "A cluster may not be available"): a locally essential top tree (S1), an owned top tree with an order-preserving
+reduction and a fixed replicated top (S2), validation at scale (S7), a work-weighted cut
+(S3), and construction and collectives at scale (S4, S5) only where measured to be needed.
+Phase 5 measured the need: at 512 ranks on N = 10⁶ every rank holds every box of the tree
+and gathers 11.6 MB per evaluation (phase5-gh200.md §10).
+
+| ID | Component | Acceptance criterion | Depends on | Status |
+| --- | --- | --- | --- | --- |
+| C5S.1 | Validation at scale (S7) | rank-count invariance (P against P/k, bit for bit) in CI at ≤ 4 ranks, on Kathleen at up to four nodes and oversubscribed at hundreds of ranks; distributed direct-sum errors at N ≥ 10⁸ | C5N.3 | Not started |
+| C5S.2 | Locally essential top tree (S1) | held boxes per rank independent of P at fixed N/P; bit for bit Phase 5's results | C5S.1 | Not started |
+| C5S.3 | Owned top tree (S2) | no per-rank evaluation cost that grows with P; the coarse gather removed; bit for bit; hook, overlap and device kept | C5S.2 | Not started |
+| C5S.4 | Work-weighted cut (S3) | per-rank work max/mean within the design's target on the workloads, measured at up to 160 ranks and counted on oversubscribed runs beyond | C5S.2 | Not started |
+| C5S.5 | Construction and collectives at scale (S4, S5) | built only where counts, bytes and models from oversubscribed runs show the need, otherwise closed by measurement | C5S.3, C5S.4 | Not started |
+| C5S.6 | Scaling report | strong and weak scaling on Kathleen at one to four nodes (if usable) and locust, oversubscribed per-rank counts beyond, *model* times at larger P; Phase 5 against 5S; report published | C5S.3–C5S.5 | Not started |
+
 ### Phase 6: optimisation and extensions
 
 | ID | Component | Acceptance criterion | Depends on | Status |
@@ -2061,6 +2112,13 @@ per rank, a random share of the points; measured on the M3 Max and on locust, re
 | C6.3 | Multiple right-hand sides (charge vectors as extra GEMM columns) | throughput per RHS improves with batch size | C4.5 | Not started |
 | C6.4 | Dipole sources and other source types | matches direct sum | C3.2 | Not started |
 | C6.5 | Plane-wave M2L (optional) | beats C4.5/C4.6 on some configuration, else dropped | C4.7 | Not started |
+| C6.6 | Host batched M2L (per-level GEMMs over gathered columns; Phase 4 decision 6, deferred) | faster than the per-target host M2L at equal accuracy, bit for bit across thread counts, and scaling with ranks per node | C3.4, C5N.3 | Not started |
+| C6.7 | AVX-512 P2P (`nd-fmm-simd`; deferred until hardware, simd-p2p.md) | within the P2P accuracy contract; faster than AVX2 on Kathleen | C3S.6 | Not started |
+| C6.8 | FMM3D comparison at matched accuracy (Phase 4 decision 9) | time and memory against FMM3D on one node, documented build | C6.6 | Not started |
+
+*Planned on 2026-10-10* (docs/phase6/): after Phase 5S, benchmark-driven on the M3 Max,
+locust and Kathleen; C6.6 first, as the deep fix for per-rank table pressure; Phase 5S T9
+revises the briefs.
 
 ## 8. Validation and benchmarking
 
