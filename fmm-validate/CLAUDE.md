@@ -69,7 +69,13 @@ one-rank reference. `tools/scaling/run.sh` runs the sweeps of the T10 brief unde
 and a timeout (on macOS with the loopback flags and a gate that waits for a quiet
 machine). The example times, so it is not registered for `run-examples`; its smoke run
 `tests/scaling.rs` passes at 1 and 2 ranks. The reports are `results/phase5-m3max.md` and
-`results/phase5-gh200.md`.
+`results/phase5-gh200.md`. Since Phase 5N T2 every report also names where its ranks ran
+(`scaling::Placement`: nodes and ranks per node from one `split_shared`, each rank's host
+and `Cpus_allowed_list`, the MPI library, and under Slurm the job, QoS, node list and
+binding, `SlurmJob`), and `tools/scaling/run.sh` runs the sweeps inside a Slurm allocation
+(`tools/kathleen/jobs/sweep.sbatch`; the Kathleen sweeps `host`, `nodes-strong`,
+`nodes-weak`, `nodes-check`). The Kathleen report, one node at 1–40 ranks, 1 and 2 nodes
+and the x86 P2P profile, is `results/phase5n-kathleen.md`.
 
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
@@ -78,7 +84,8 @@ core; `tests/device_fmm.rs`, feature `cpu`, the smoke run of the `device_fmm` co
 CPU runtime). Tests that run P2P kernels only
 (`tests/p2p_kernels.rs`) need no MPI initialisation. Device results of a phase are kept
 as one Markdown report under `results/` (Phase 4: `results/phase4-m3max.md`; Phase 5:
-`results/phase5-m3max.md` and `results/phase5-gh200.md`), never as CSV or raw output
+`results/phase5-m3max.md` and `results/phase5-gh200.md`; Phase 5N:
+`results/phase5n-kathleen.md`), never as CSV or raw output
 beside it.
 
 Anything else (criterion, rand, plotting) needs a note in the PR.

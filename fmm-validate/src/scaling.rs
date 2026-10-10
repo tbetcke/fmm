@@ -16,7 +16,10 @@
 //!   ([`MemoryModel`], a *model*), and the resident size where the machine reports it
 //!   without a new dependency ([`resident_memory`]);
 //! - optionally the errors against the direct sum at sampled targets ([`Errors`]) and the
-//!   difference from the one-rank `Fmm` over every point in index order ([`Reference`]).
+//!   difference from the one-rank `Fmm` over every point in index order ([`Reference`]);
+//! - where the ranks ran ([`Placement`], Phase 5N T2): the nodes and the ranks per node
+//!   (from `split_shared`), each rank's host and CPUs, the MPI library, and on a cluster
+//!   the Slurm job with its QoS, node list and binding ([`SlurmJob`]).
 //!
 //! Nothing here asserts a timing; the smoke test checks the fields and the errors.
 //!
@@ -732,6 +735,9 @@ pub struct Report {
     pub reference: Option<Reference>,
     /// How [`RankRow::resident`] was read.
     pub resident_kind: &'static str,
+    /// Where the ranks ran: nodes, ranks per node, hosts and CPUs, the MPI library and
+    /// the Slurm job (Phase 5N T2).
+    pub placement: Placement,
 }
 
 /// The resident size of this process in bytes and how it was read: the peak (`VmHWM`) from
@@ -773,6 +779,195 @@ pub fn machine() -> String {
         target(),
         toolchain()
     )
+}
+
+/// The Slurm job a run is part of, from the environment of rank 0 (Phase 5N T2): what a
+/// report on a cluster names beside its figures.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SlurmJob {
+    /// `SLURM_JOB_ID`.
+    pub id: String,
+    /// `SLURM_JOB_QOS`, if set.
+    pub qos: Option<String>,
+    /// `SLURM_JOB_PARTITION`, if set.
+    pub partition: Option<String>,
+    /// `SLURM_JOB_NODELIST`, if set.
+    pub nodelist: Option<String>,
+    /// The binding as Slurm reports it: `SLURM_CPU_BIND` (set inside an `srun` step with
+    /// `--cpu-bind`), with `SLURM_CPU_BIND_LIST` if set; `None` when Slurm did not bind
+    /// (for example `mpirun` inside the allocation, which binds itself).
+    pub cpu_bind: Option<String>,
+}
+
+impl SlurmJob {
+    /// The job of the variables that `var` returns, if `SLURM_JOB_ID` is among them.
+    /// [`from_env`](Self::from_env) reads the process's environment; tests pass their own.
+    pub fn from_variables(var: impl Fn(&str) -> Option<String>) -> Option<Self> {
+        let id = var("SLURM_JOB_ID").filter(|id| !id.is_empty())?;
+        let cpu_bind = var("SLURM_CPU_BIND").map(|bind| match var("SLURM_CPU_BIND_LIST") {
+            Some(list) => format!("{bind} (list {list})"),
+            None => bind,
+        });
+        Some(Self {
+            id,
+            qos: var("SLURM_JOB_QOS"),
+            partition: var("SLURM_JOB_PARTITION"),
+            nodelist: var("SLURM_JOB_NODELIST"),
+            cpu_bind,
+        })
+    }
+
+    /// The job of this process's environment, if it runs under Slurm.
+    pub fn from_env() -> Option<Self> {
+        Self::from_variables(|name| std::env::var(name).ok())
+    }
+}
+
+impl fmt::Display for SlurmJob {
+    /// For example `job 238836, QoS test, partition kathleen, nodes node-a[01-02];
+    /// binding by Slurm: not set (the launcher binds)`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let or = |v: &Option<String>| v.clone().unwrap_or_else(|| "unknown".to_string());
+        write!(
+            f,
+            "job {}, QoS {}, partition {}, nodes {}; binding by Slurm: {}",
+            self.id,
+            or(&self.qos),
+            or(&self.partition),
+            or(&self.nodelist),
+            self.cpu_bind
+                .clone()
+                .unwrap_or_else(|| "not set (the launcher binds)".to_string())
+        )
+    }
+}
+
+/// Where the ranks of a run ran (Phase 5N T2): the nodes, from one `split_shared` of the
+/// communicator, each rank's host and CPUs, the MPI library and the Slurm job.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Placement {
+    /// The shared-memory domains (nodes) of the communicator.
+    pub nodes: usize,
+    /// The ranks of each node, the nodes in the order of their lowest rank.
+    pub ranks_per_node: Vec<usize>,
+    /// Per rank, its node in that order.
+    pub node: Vec<usize>,
+    /// Per rank, the processor name MPI gives (the host).
+    pub hosts: Vec<String>,
+    /// Per rank, the CPUs it may run on as the kernel reports them ([`cpus_allowed`]),
+    /// "–" where they cannot be read.
+    pub cpus: Vec<String>,
+    /// The MPI library (`MPI_Get_library_version`, its first line) on rank 0.
+    pub mpi_library: String,
+    /// The Slurm job, if rank 0 runs in one.
+    pub slurm: Option<SlurmJob>,
+}
+
+impl Placement {
+    /// The fewest and the most ranks on a node.
+    pub fn ranks_per_node_range(&self) -> (usize, usize) {
+        let min = self.ranks_per_node.iter().copied().min().unwrap_or(0);
+        let max = self.ranks_per_node.iter().copied().max().unwrap_or(0);
+        (min, max)
+    }
+}
+
+/// The CPUs this process may run on, `Cpus_allowed_list` of `/proc/self/status` (Linux),
+/// for example "0-19" or "3"; `None` elsewhere. Rayon's threads inherit it, so it is the
+/// binding of the whole rank.
+pub fn cpus_allowed() -> Option<String> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    status
+        .lines()
+        .find_map(|l| l.strip_prefix("Cpus_allowed_list:"))
+        .map(|v| v.trim().to_string())
+}
+
+/// The [`Placement`] of the ranks of `comm`.
+///
+/// # Collective operation
+///
+/// On every rank of `comm`: one `split_shared`, a broadcast on each node, two
+/// all-gathers and one all-gather-v.
+/// They run after the timed evaluations (requirement 5 of docs/phase5n/README.md:
+/// counted here, and in the harness only).
+fn placement(comm: &SimpleCommunicator) -> Placement {
+    let size = comm.size() as usize;
+    // With the rank as key, a node's rank 0 is its lowest rank, which names the node.
+    let node = comm.split_shared(comm.rank());
+    let mut leader = comm.rank() as u64;
+    node.process_at_rank(0).broadcast_into(&mut leader);
+    drop(node);
+    let mut leader_of = vec![0u64; size];
+    comm.all_gather_into(&leader, &mut leader_of[..]);
+    let mut leaders = leader_of.clone();
+    leaders.sort_unstable();
+    leaders.dedup();
+    let node_of: Vec<usize> = leader_of
+        .iter()
+        .map(|l| leaders.binary_search(l).expect("every leader is listed"))
+        .collect();
+    let mut ranks_per_node = vec![0usize; leaders.len()];
+    for &k in &node_of {
+        ranks_per_node[k] += 1;
+    }
+    let host = mpi::environment::processor_name().unwrap_or_else(|_| "unknown".to_string());
+    let cpus = cpus_allowed().unwrap_or_else(|| "–".to_string());
+    let text = format!("{host}\n{cpus}");
+    let gathered = gather_strings(text.as_bytes(), comm);
+    let (hosts, cpus) = gathered
+        .iter()
+        .map(|s| {
+            let (h, c) = s.split_once('\n').unwrap_or((s.as_str(), "–"));
+            (h.to_string(), c.to_string())
+        })
+        .unzip();
+    let mpi_library = mpi::environment::library_version()
+        .ok()
+        .and_then(|v| {
+            v.trim_matches(char::from(0))
+                .lines()
+                .next()
+                .map(|l| l.trim().to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    Placement {
+        nodes: leaders.len(),
+        ranks_per_node,
+        node: node_of,
+        hosts,
+        cpus,
+        mpi_library,
+        slurm: SlurmJob::from_env(),
+    }
+}
+
+/// Every rank's `bytes`, in rank order, as strings (an all-gather of the lengths and an
+/// all-gather-v).
+fn gather_strings(bytes: &[u8], comm: &SimpleCommunicator) -> Vec<String> {
+    let size = comm.size() as usize;
+    let length = bytes.len() as i32;
+    let mut lengths = vec![0i32; size];
+    comm.all_gather_into(&length, &mut lengths[..]);
+    let offsets: Vec<i32> = lengths
+        .iter()
+        .scan(0, |acc, &c| {
+            let o = *acc;
+            *acc += c;
+            Some(o)
+        })
+        .collect();
+    let mut all = vec![0u8; lengths.iter().sum::<i32>() as usize];
+    comm.all_gather_varcount_into(
+        bytes,
+        &mut PartitionMut::new(&mut all[..], &lengths[..], &offsets[..]),
+    );
+    (0..size)
+        .map(|r| {
+            let (o, l) = (offsets[r] as usize, lengths[r] as usize);
+            String::from_utf8_lossy(&all[o..o + l]).into_owned()
+        })
+        .collect()
 }
 
 /// The positions of the points this rank passes under `input`, ascending.
@@ -1085,6 +1280,7 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         .chunks_exact(local.len())
         .map(RankRow::decode)
         .collect();
+    let placement = placement(comm);
 
     Report {
         machine: if rank == 0 { machine() } else { String::new() },
@@ -1101,6 +1297,7 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         errors,
         reference,
         resident_kind: resident.map_or("not available", |(_, kind)| kind),
+        placement,
     }
 }
 
@@ -1384,6 +1581,15 @@ impl Report {
                     mb(max(&|r: &RankRow| r.memory.total()))
                 ));
                 fields.push(format!("resident_max_mb={}", mb(resident)));
+                let placement = &self.placement;
+                fields.push(format!("nodes={}", placement.nodes));
+                fields.push(format!(
+                    "ranks_per_node={}",
+                    placement.ranks_per_node_range().1
+                ));
+                if let Some(job) = &placement.slurm {
+                    fields.push(format!("job={}", job.id));
+                }
                 format!("summary: {}", fields.join(" "))
             })
             .collect()
@@ -1431,13 +1637,49 @@ impl fmt::Display for Report {
             s.builds.max(1),
             s.evaluations
         )?;
+        let placement = &self.placement;
+        if placement.nodes <= 1 {
+            writeln!(
+                f,
+                "- every time is measured on this machine ({} ranks x {} threads, release \
+                 build unless the machine line says otherwise), one node over shared memory; \
+                 memory is the formula of distributed-fmm.md §9.2 (*model*) and {}",
+                self.ranks, s.threads, self.resident_kind
+            )?;
+        } else {
+            writeln!(
+                f,
+                "- every time is measured on these {} nodes ({} ranks x {} threads, release \
+                 build unless the machine line says otherwise), over the network between the \
+                 nodes and shared memory within each; memory is the formula of \
+                 distributed-fmm.md §9.2 (*model*) and {}",
+                placement.nodes, self.ranks, s.threads, self.resident_kind
+            )?;
+        }
+        let (fewest, most) = placement.ranks_per_node_range();
+        let mut hosts: Vec<&str> = Vec::new();
+        for (r, host) in placement.hosts.iter().enumerate() {
+            if placement.node[r] == hosts.len() {
+                hosts.push(host);
+            }
+        }
         writeln!(
             f,
-            "- every time is measured on this machine ({} ranks x {} threads, release build \
-             unless the machine line says otherwise), one node over shared memory; memory is \
-             the formula of distributed-fmm.md §9.2 (*model*) and {}",
-            self.ranks, s.threads, self.resident_kind
+            "- placement: {} node(s) ({}), ranks per node {}, threads per rank {}; MPI \
+             library: {}",
+            placement.nodes,
+            hosts.join(", "),
+            if fewest == most {
+                format!("{most}")
+            } else {
+                format!("{fewest}–{most}")
+            },
+            s.threads,
+            placement.mpi_library
         )?;
+        if let Some(job) = &placement.slurm {
+            writeln!(f, "- Slurm: {job}")?;
+        }
         writeln!(f)?;
 
         let per_rank = self.ranks <= PER_RANK_ROWS;
@@ -1517,6 +1759,18 @@ impl fmt::Display for Report {
                     b(t.charges[1]),
                     b(t.output[0]),
                     b(t.output[1])
+                )?;
+            }
+            writeln!(f)?;
+            writeln!(f, "### Placement per rank")?;
+            writeln!(f)?;
+            writeln!(f, "| rank | node | host | CPUs (Cpus_allowed_list) |")?;
+            writeln!(f, "| --- | --- | --- | --- |")?;
+            for r in 0..self.ranks.min(placement.hosts.len()) {
+                writeln!(
+                    f,
+                    "| {r} | {} | {} | {} |",
+                    placement.node[r], placement.hosts[r], placement.cpus[r]
                 )?;
             }
             writeln!(f)?;

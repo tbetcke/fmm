@@ -29,6 +29,7 @@ than 2 nodes (80 cores)** for now (docs/phase5n/README.md, "Working on Kathleen"
 | `jobs/launcher.sbatch` | 2 nodes, `test` | decision 4: `mpirun` against `srun --mpi=pmix` at 2 × 40 ranks, the bindings, the transport between and within nodes |
 | `jobs/scaling.sbatch` | 2 nodes, `test` | one `scaling` launch, 2 nodes × 2 ranks × 20 threads, the N = 10⁶ cube, f64, p = 3, `--reference --errors 8` |
 | `jobs/run.sbatch` | 1 node, `singlenode` (40 tasks, so `mpirun` has slots) | each argument as one step, for anything else |
+| `jobs/sweep.sbatch` | 1 node `singlenode` 6 h, or 2 nodes `test`/`small` | sweeps of `tools/scaling/run.sh` in one allocation, and `p2p` (the x86 P2P examples); one file per launch in `logs/scaling-<job id>/` (Phase 5N T2; "Scaling sweeps") |
 | `check-root.sh` | login node | lists what was written outside the root since the setup |
 | `machine.md` | | the machine's facts, measured, and what the environment resolved to |
 
@@ -240,6 +241,31 @@ a job (job 238833). `mpirun` and `srun` launches work either way.
 **Timeouts.** `jobs/mpi.sbatch` runs every launch under `timeout`, 900 s by default:
 `mpi_exec` at 80 ranks in debug took 242 s in one job and more than CI's 300 s in
 another.
+
+## Scaling sweeps
+
+Phase 5N T2 (docs/phase5n/T2-kathleen-baseline.md, the report
+`fmm-validate/results/phase5n-kathleen.md`). `jobs/sweep.sbatch` runs sweeps of
+`tools/scaling/run.sh` inside one allocation, one step per sweep, with every launch under
+`timeout`; under Slurm, `run.sh` maps the ranks evenly over the job's nodes and each
+node's two sockets (`mpirun --map-by ppr:<ranks per socket>:socket:PE=<threads>
+--bind-to core`, or `ppr:<ranks per node>:node` when the ranks per node are odd), and
+writes in each file, in place of the load check, the job id, QoS, node list and mapping;
+mpirun's `--report-bindings` lines and the report's "Placement per rank" give the binding.
+A core binding includes both hardware threads of the core (`Cpus_allowed_list` "0,40"):
+a rank's threads are placed by the kernel, one per core while cores are idle.
+
+```sh
+tools/kathleen/submit.sh sweep.sbatch strong threads p2p          # one node, ~2.5 h
+tools/kathleen/submit.sh sweep.sbatch strategy check host         # one node, ~2 h
+tools/kathleen/submit.sh sweep.sbatch nodes-strong nodes-check    # one node, N = 10^7
+tools/kathleen/submit.sh --qos=test --nodes=2 '--export=ALL,SPLITS=40x1' -- sweep.sbatch nodes-strong
+tools/kathleen/submit.sh --qos=test --nodes=2 -- sweep.sbatch nodes-weak nodes-check
+```
+
+`singlenode` and `test` take two jobs per user each, so two one-node and two two-node
+sweeps run at once. The output stays in the root's `logs/`, never in a tree; the report
+quotes what it needs.
 
 ## Quota
 

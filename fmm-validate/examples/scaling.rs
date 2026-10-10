@@ -25,12 +25,19 @@
 //!
 //! On locust the same without the `--mca` flags, with `--report-bindings` (tools/gh200/
 //! README.md, "MPI at n ranks"). `tools/scaling/run.sh` runs the sweeps of the T10 brief.
-//! On a cluster (docs/design/distributed-fmm.md §11; not run in Phase 5):
+//! On a cluster (docs/design/distributed-fmm.md §11), for example 2 Kathleen nodes × 40
+//! ranks inside a Slurm allocation (Phase 5N T2; `tools/kathleen/jobs/sweep.sbatch` runs
+//! the sweeps):
 //!
 //! ```sh
-//! mpirun -n 64 --map-by ppr:8:node --bind-to core target/release/examples/scaling \
-//!   --dist cube --n 1000000 --precision f64 --p 8 --overlap both
+//! mpirun -n 80 --map-by ppr:20:socket:PE=1 --bind-to core --report-bindings \
+//!   target/release/examples/scaling --dist cube --n 10000000 --precision f64 --p 8 \
+//!   --overlap both
 //! ```
+//!
+//! Every report names where its ranks ran (`scaling::Placement`): the nodes and the ranks
+//! per node from one `split_shared`, each rank's host and CPUs, the MPI library, and under
+//! Slurm the job id, QoS, node list and the binding Slurm reports.
 //!
 //! Options:
 //! - `--dist cube|sphere|plummer|clusters` (cube);
