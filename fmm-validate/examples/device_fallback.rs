@@ -236,7 +236,7 @@ fn main() {
     let universe = mpi::initialize().expect("MPI initialises");
     let comm = universe.world();
     if comm.size() != 1 {
-        eprintln!("device_fallback runs on one rank: the device path needs one (until C5.1)");
+        eprintln!("device_fallback runs on one rank (a one-rank check)");
         std::process::exit(2);
     }
     let mut rng = SplitMix64::new(0xc32);

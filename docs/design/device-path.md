@@ -5,7 +5,9 @@ As of 2026-10-03. Written for [docs/phase4/README.md](../phase4/README.md) (T1),
 **Updated at the end of Phase 4 (2026-10-04, T13):** Section 17 records the decisions as
 taken in T2–T13 and the measured numbers that replace this document's models where
 they differ; short notes in Sections 6.5, 8.1, 10.5 and 13.4 point to it. The design
-sections are otherwise left as signed off. It is
+sections are otherwise left as signed off. **Updated at the end of Phase 5 (2026-10-10,
+T10):** Section 14 describes the device on several ranks as built (Phase 5 T7, T8), with
+a short note in Section 17. It is
 the Phase 4 counterpart of [simd-p2p.md](simd-p2p.md) and of the Phase 3 design
 [fmm-plan-redesign.md](fmm-plan-redesign.md), and it ties together what
 [laplace-fmm-plan.md](laplace-fmm-plan.md) §6 sketches: where data lives during an
@@ -1415,6 +1417,62 @@ and the stage boundaries where the hook fires are the ones `Fmm` already sees.
 finish (redesign §10) and device buffers the operator owns instead of the evaluator's
 host stores; Section 4.3 names the latter. Neither conflicts with this design.
 
+**As built in Phase 5** (T7, T8; [distributed-fmm.md](distributed-fmm.md) §6, §7 and §15;
+the `device` module docs of `nd-fmm-exec`, "Several ranks"). The device runs on any number
+of ranks, for correctness only (Phase 5 decision 3); `DeviceNeedsOneRank` is gone.
+- **The hook** (T7): `nd_fmm_plan::operator::HostData`, six events around `reset` and the
+  three exchanges, each with the index lists its movement uses: `Reset`, `SendSources`,
+  `ReceivedSources`, `SendMultipoles` (once, before the coarse gather, for the coarse
+  blocks and every level's multipole sends), `ReceivedCoarse` and `ReceivedMultipoles(l)`
+  per level; 5 + nlevels events per evaluation on every rank count, with empty lists on one
+  rank. The host operator ignores them, so the host path is unchanged bit for bit; a
+  shadow operator that learns of host data only through them equals the plain operator
+  bit for bit on 1, 2, 4 and 8 ranks and differs with them disabled (`tests/mpi_exec.rs`,
+  **host-data hook**).
+- **The device operator at each event** (T8): the device stores keep the plan's layouts,
+  ghost slots included, and the exchanges move exactly what they send and receive, packed
+  on the device in buffers allocated at build from the exchanges' index lists
+  (`device::ExchangeLists`): `SendMultipoles` one `gather_columns` and one download (the
+  evaluation's second sync); `ReceivedCoarse` and each `ReceivedMultipoles(l)` one upload
+  and one `movement::scatter_columns` (an assignment, so a received −0.0 stays −0.0);
+  `ReceivedSources` one upload of the ghost tail; `SendSources` nothing (`Fmm` writes the
+  charges of the sent leaves into the host chunks, since with every source kind on the
+  device the host store holds no charges).
+- **Transfers and syncs per evaluation**: on P > 1 the charges up, the ghost sources up,
+  the sent multipoles down, the coarse blocks up, the received multipoles up per level and
+  the output down, with **two syncs** (one on one rank, Phase 4's formula, unchanged).
+  `tests/device_common::expected_evaluation` states the formula and checks it on every
+  `tests/mpi_exec.rs` scenario and rank count; the counters split the traffic by
+  `DataKind` (`GhostSources`, `SentMultipoles`, `CoarseMultipoles`, `ReceivedMultipoles`,
+  per level in `DeviceCounters::received_levels`).
+- **A device per rank**: one `split_shared` per build (`DeviceReport::ranks`); every rank
+  opens the default device (`Device::open` takes no index), so ranks on one node share one
+  GPU, time-sliced; on the CPU runtime the units per cube are the node's cores over its
+  ranks.
+- **Errors** (decision 12): one all-reduce after the output's download agrees a device
+  error of any rank (`Device` on the failing rank, `OtherRank` elsewhere); a kept error
+  rides on the charge-length agreement of later evaluations.
+- **Tuning**: with a tuning cache on several ranks, rank 0 alone tunes and broadcasts its
+  M2L strategy before the tables; the others take it and the static rule for the GEMMs
+  and the P2P layout.
+- **Overlap** (T9): the device runs the overlapped stages with the same events, for
+  correctness; no device overlap was designed in Phase 5 (distributed-fmm.md §13,
+  question 10).
+- **Measured** (T8, the cube at N = 10⁵, f32, p = 8, CPU runtime; Metal at 2 ranks and
+  CUDA at 2 and 4 ranks the same): every transfer count equals the formula; per rank at
+  2 ranks ≈ 200 kB of charges up, ≈ 100 kB of ghost sources up, 228 kB of sent
+  multipoles down, 10.4 kB of coarse blocks up, 218 kB of received multipoles up (3
+  levels), ≈ 800 kB of output down, 2 syncs; device memory added per rank at most 806 kB
+  of exchange buffers and 1.49 MB of ghost slots (the Plummer sphere, N = 10⁵, 2 ranks).
+  The device on P ranks is within 5.8e-15 (f64) and 2.9e-6 (f32) of the host on the
+  same ranks (relative L2), and bit for bit with every kind on the host fallback. No
+  device time is presented as scaling: every rank shares the one GPU. **Rerun in T10**
+  (2026-10-10) at 1, 2 and 4 ranks on the CPU runtime (M3 Max) and on CUDA (locust, N =
+  10⁵, f32 p = 3 and 8, f64 p = 8): every point passes, f64 within 5.8e-15 and f32
+  within 2.9e-6 of the host on the same ranks, every transfer the formula, one sync on
+  one rank and two on several (tables in `fmm-validate/results/phase5-m3max.md` §11 and
+  `phase5-gh200.md` §12).
+
 **Overlapping P2P with the far field on a second stream** (README, out of scope). On
 Metal it would gain little as built: all of a device's wgpu streams submit to one ordered
 queue (F10; stated in `cubecl-wgpu-0.11.0-pre.4/src/compute/timings.rs`), so there is no
@@ -1483,6 +1541,11 @@ own layouts (§18.2) and the static rule `Dense` at every p in f32 and f64, whic
 confirmed at every p measured (§18.3); the library GEMM never runs on CUDA (F28); the
 transfers, launches and syncs per evaluation follow the same formulas on CUDA; and the
 device leaf-size rule picks 64 on CUDA as well. The M3 Max figures below stand.
+
+*Phase 5 note (2026-10-10).* The device runs on several ranks since Phase 5 T8 (§14, "As
+built in Phase 5"): with P > 1 an evaluation moves the exchanged data packed on the device
+and syncs twice; on one rank every number below stands, transfers included. Ranks share
+the one GPU, so no device figure of Phase 5 is a timing.
 
 ### 17.1 Decisions as taken
 

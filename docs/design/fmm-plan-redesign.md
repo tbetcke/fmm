@@ -3,6 +3,10 @@
 As of 2026-10-01. Phase 3 / T1. Status: **signed off** on 2026-10-01 by Timo Betcke, with
 every recommendation accepted. The decisions are recorded in Section 12. This document is
 the specification for T4–T7.
+**Phase 5 notes (2026-10-10, T10):** §9 and §10 end with short outcome notes (the
+redistribution and the overlap as built), and the index FMM of §1.6 and §11 was removed
+in Phase 5 T2. The signed-off text is otherwise unchanged; the distributed design is
+[distributed-fmm.md](distributed-fmm.md).
 
 This document designs the replacement of `nd-fmm-plan` (`fmm-plan/`). It answers the
 ten requirements of `docs/phase3/README.md` ("Requirements on the new nd-fmm-plan") and
@@ -192,6 +196,13 @@ source's leaf index; the others add their input), the global leaf numbering, the
 collective pass/fail agreement, the compute-graph documentation.
 **Replace.** The check for counts of one by the check for variable counts (Section
 11.2).
+
+*Phase 5 note:* the index FMM (`IndexFmm`, `BatchedIndexFmm`, `run_index_fmm`, their
+tests and the example `test_index_fmm`) was removed in Phase 5 T2 (PR #78;
+docs/phase5/README.md, decision 5). Its checks moved: the call order, the groupings and
+every list pair once to the recording operator of `tests/mpi_regressions.rs`, and the
+values of the distributed passes to the Laplace FMM of `nd-fmm-exec` against the one-rank
+`Fmm` and the direct sum (distributed-fmm.md §1.3).
 
 ### 1.7 `tests/mpi_regressions.rs` and the example
 
@@ -912,6 +923,24 @@ impl Redistribution {
 - Every rank calls `new`, `forward` and `backward` in the same order, with empty slices
   if it has no items.
 
+*Outcome (Phase 5 T5, PR #82; distributed-fmm.md §4 and §15).* Built as designed, in
+`nd_fmm_plan::redistribute`, with the refinements of the distributed design: (key,
+position) on the wire (12 B per item), `nsent`, `nreceived`, `counts`, `origins`,
+`max_per_item` agreed at `new`, `forward_into` and `backward_into`, and a payload of the
+wrong length that takes part and then panics. Within a leaf the items are ordered by
+(origin rank, origin position). Departures, accepted: `new` also duplicates the
+communicator (one collective more), a plan of another octree is an error agreed on every
+rank (`RedistributionError::PlanMismatch`), the permutations are stored as cycles and
+applied in place (at most 6 B per sent and 14 B per received item), and the type is not
+`Sync`. `Fmm` (T6) builds one for the sources and one for the targets, forwards the f64
+coordinates at build, and per evaluation forwards the charges and moves the output back
+(one all-to-all-v each); there is no cheap path for points already on their owners. As
+measured in T10 (distributed-fmm.md §15.2; N = 10⁶, f64, p = 8, 8 ranks on the M3 Max and
+on locust): the build's redistribution takes 18–37 ms from the owners or a random share
+and 77–157 ms with every point on rank 0; per evaluation the forward of the charges takes
+0.4–3.2 ms and 3.9–18 ms respectively, against evaluations of 2.0–4.5 s. The evaluation
+time stays within 2.9% of the owners' input at 8 ranks and within 5.9% at 72 (locust).
+
 ## 10. Device and overlap compatibility
 
 **Phase 4 (device-resident buffers, uploaded index arrays).**
@@ -943,6 +972,25 @@ impl Redistribution {
 - Moving P2P before L2P (to overlap the multipole exchange) changes the stage order and
   hence the documented accumulation order (§7.5), though it stays deterministic. C5.2
   documents the new order.
+
+*Outcome (Phase 4 and Phase 5).* Phase 4 needed no hook on one rank: only `reset`'s
+zeroing writes outside the operator calls there (device-path.md §4). The hook for several
+ranks was designed in Phase 5 (distributed-fmm.md §6) and built in T7: six `HostData`
+events around `reset` and the three exchanges, with the index lists each movement uses,
+which the device operator mirrors since T8. The overlap (T9, distributed-fmm.md §8) is
+**order-preserving only** (decision 9 of docs/phase5/README.md): no exchange is split
+into a start and a finish method, because a scoped rsmpi request cannot outlive its
+scope; each overlapped stage is one method that posts, works and waits
+(`Evaluator::exchange_sources_and_upward_local`, `far_field`), on scoped point-to-point
+requests over each exchange's graph communicator (no rlst change), with a `test` after
+every level call. The source exchange runs behind the local upward pass, the multipole
+exchange behind the coarse gather, the global pass and the coarser downward levels; the
+output is bit for bit the blocking path's. The split of rows into a local and a ghost
+part was not used, and P1 (Phase 5 T5) orders near and X rows by the entry's (level,
+key), so rows no longer list local sources first; P2P before L2P was not done. Both stay
+reorderings for a later phase. Measured on one node (T9, T10; distributed-fmm.md §15),
+an exchange is a memory copy and overlap changes the evaluation time by less than the
+noise.
 
 ## 11. Migration and tests
 
@@ -1019,6 +1067,10 @@ and `IndexFmm` check stays on the new API. The scenario set does not shrink: 11 
 | T4, T5 | `mpi_regressions` on 1, 2 and 4 ranks |
 | T6 | `mpi_regressions` on 1, 2 and 4 ranks; `test_index_fmm` on 2, 3 and 4 ranks |
 | T7 | `mpi_regressions` on 1, 2 and 4 ranks; `test_index_fmm` |
+
+*Phase 5 note:* the index FMM and its tests, examples and registration were removed in
+Phase 5 T2 (§1.6). The scenario set of `tests/mpi_regressions.rs` did not shrink (12
+scenarios), and the recording operator and the exchange checks keep its coverage.
 
 ### 11.4 Risk: `IndexFmm` memory in T6's timing
 

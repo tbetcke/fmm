@@ -4,7 +4,9 @@ Phase 5, task T1 (docs/phase5/T1-distributed-design.md). Drafted on 2026-10-08 f
 sign-off by hand before T4. **Signed off on 2026-10-08: every recommendation of §13
 accepted** (docs/phase5/README.md, decisions 1 and 6–13). It answers the requirements of docs/phase5/README.md
 ("Requirements on the distributed FMM") and settles the decisions that change code in
-T2–T10.
+T2–T10. **Outcome (2026-10-10, T10):** §15 records the decisions as taken in T2–T10 and
+the measured numbers against this document's models; the sections before it stay as
+signed off.
 
 Companion documents, cited by section:
 - **redesign**: [fmm-plan-redesign.md](fmm-plan-redesign.md) (the plan, the exchanges,
@@ -1804,3 +1806,88 @@ Cube, N = 10⁸ (12,200 points per rank), p = 8, f64; *model* from §14.2:
 | coarse gather / top-tree traffic | 170 MB | 170 MB | ≈ 0.6 MB of needed multipoles + a fixed top of a few MB |
 | replicated coefficient memory | ≈ 1.5 GB | ≈ 1.5 GB | ≈ MBs (≈ 10³ top-tree boxes) |
 | bit for bit across rank counts | yes (O1, P1) | yes | yes |
+
+## 15. Outcome: decisions as taken and measured numbers (Phase 5, T2–T10)
+
+Written at the end of Phase 5 (T10, 2026-10-10), as device-path.md §17 does for Phase 4.
+The design sections above stay as signed off; this section records what T2–T10 built
+where it differs, and the measured numbers that replace this document's models. Every
+number is *measured* (the machine, ranks × threads and build named) or marked *model*.
+**Every multi-rank figure is one node over shared memory**: the Apple M3 Max at up to 12
+ranks × threads (16 once, labelled) and locust's 72 Grace cores at up to 72 (256 and 512
+oversubscribed, never timed). None is inter-node scaling. The full tables are in
+`fmm-validate/results/phase5-m3max.md` and `fmm-validate/results/phase5-gh200.md`, and
+laplace-fmm-plan.md §7, Phase 5, carries the status per component.
+
+### 15.1 Decisions as taken
+
+| Topic (section) | As designed | As taken |
+| --- | --- | --- |
+| the index FMM (§1.3, T2) | removed; the recording operator and a count FMM keep its checks | removed (PR #78) with `evaluator_stage_cost`; the recording operator keeps the call order, the groupings and every pair once on all 12 scenarios; the second-evaluation and owned-plan identity checks run with a minimal per-pair operator |
+| the multi-rank CI job (§10.3, T3) | measured, then kept or dropped | kept (decision 4): about 2 minutes at T3, 3 min 58 s after T6 (`mpi_exec` 85 s at 2 ranks, 100 s at 4) against a 15-minute budget; nothing dropped |
+| O1–O4 (§3.2, T4) | coarse tree by weight from the root, k = 8; points; nearest-boundary cut; ranks without blocks | as designed (PR #81), with the §12 changes accepted: the weights counted per rank, no `Result` from `Octree::new`, the bounds computed locally without the two `gather_to_all`s; all 24 multi-rank trees measured equal the one-rank tree; points max/mean at most 1.055 at 2–8 ranks (1.97 → 1.004 for the Plummer sphere at N = 10⁵ on 8 ranks); construction time unchanged |
+| P1, P2 (§5.3, §3.6, T5) | in T5, each in its own commit, one rank unchanged | as designed (PR #82): every one-rank output bit for bit unchanged |
+| `Redistribution` (§4.1, T5) | the API of §4.1, 4 B per sent and 12 B per received item | as designed, plus `RedistributionError::PlanMismatch` (a plan of another octree agreed as an error), a communicator duplicate in `new` (one collective more than §4.2), permutations stored as cycles (at most 6 B per sent and 14 B per received item), not `Sync`; no new scenario |
+| `Fmm` on any rank count (§4.4, T6) | two redistributions, coordinates forwarded at build, charges and output per evaluation | as designed (PR #83); `BuildTimings::redistribute`, `StageTimings::{forward_charges, backward_output}`, `Fmm::owned_points`; the test reference built on rank 0 only and broadcast, its verdict all-reduced (§5.5 had every rank build it), so a failure is seen on every rank |
+| the tolerance (§5.4) | bit for bit against the union in rank order; 100 u_T between distributions | met: 0 of 3.2 million values differ from the reference in the C5.1 gate at 2, 4 and 8 ranks (T6, and with overlap at 4 ranks in T9); the random share against the one-rank run in point order at most 2.0e-15 (f64) and 7.1e-7 (f32) at N = 10⁵, and as §15.2 gives up to 72 ranks |
+| the hook (§6, T7) | six events, one combined send before the gather | as designed (PR #86); 5 + nlevels events per evaluation; the shadow operator bit for bit on 1, 2, 4 and 8 ranks, different in 6,000 of 6,000 values with the hook disabled on 2, 4 and 8; the no-op hook costs nothing measurable |
+| the device on several ranks (§7, T8) | packed buffers, two syncs, one agreement all-reduce | as designed (PR #87); `Evaluator::{source_exchange, multipole_exchange, coarse_exchange}` added (read-only) so the device operator sizes its buffers at build; the device within 5.8e-15 (f64) and 2.9e-6 (f32) of the host on the same ranks; every transfer count equals the formula (device-path.md §14) |
+| tuning on several ranks (§7.6) | rank 0 tunes and broadcasts the decision record | **changed:** rank 0 broadcasts its M2L strategy before the tables (one broadcast); the other ranks take the static rule for the GEMMs and the P2P layout, which rank 0 decides later on its own level calls; two runs from one cache give the same bits |
+| overlap (§8, T9) | order-preserving; scoped point-to-point; `test` after every level call | as designed (PR #88), off by default; the C5.2 criterion met on the M3 Max (cube 0.04%, Plummer 0.05% of the blocking exchange time) and on the locust Plummer sphere (0.3–0.4%), **not on the locust cube** (53–62%): the uniform tree's local upward pass is one P2M call of about 25 ms, which leaves no `test` point, and locust's Open MPI has no single-copy `smsc` component, so the shared-memory transport moves 32 kB fragments only while the sender is inside MPI; about 0.6 ms of a 2 s evaluation, accepted at T9's merge |
+| the scaling method (§11, T10) | one warm-up and ten evaluations per build; max, min, mean over the ranks; memory by §9.2 and the peak where readable | as designed, with: overlap off and on from one build, the evaluations alternating (`--overlap both`), so both paths see the same tree and machine state; one build per configuration, three for the redistribution runs; the coarse gather timed separately in the overlapped path only (`OverlapTimes::coarse_gather`; in the blocking path it stays inside `upward_global`); the errors against the direct sum (8 vectors, 1,000 targets) and the one-rank reference on chosen runs (`check`); the peak resident size (`VmHWM`) on locust, the resident size at the end (`ps`) on the M3 Max, which has no peak without a new dependency; 64 and 72 ranks both run on locust |
+| §14.5's constraints (T10) | points per rank by index, rank-count invariance, an oversubscribed run at 256–512 ranks | the `scaling` harness generates every point and charge by index (a hash of the seed and the index) and compares the output with the one-rank `Fmm` over every point in index order, built on rank 0 (`--reference`); oversubscribed runs at 256 and 512 ranks on locust for correctness and memory (§15.2) |
+
+### 15.2 Measured numbers against the models
+
+Measured in T10 (2026-10-10; the M3 Max at 1–12 ranks, locust at 1–72 and 256; one
+thread per rank unless stated; release; N = 10⁶ and f64 unless stated). The design set
+no scaling target (§11); where it modelled or measured a quantity before T4–T9, both are
+given.
+
+| Quantity (section) | Model or earlier measurement | Measured in T10 |
+| --- | --- | --- |
+| equal to one rank (§5.4) | 100 u_T relative L2 between input distributions; the direct-sum errors those of one rank | at most 1.07e-15 (f64) and 7.3e-7 (f32), **at most 12.2 u_T**, against the one-rank `Fmm` in point order, on 2–12 ranks (M3 Max), 2–72 and 256 (locust), 103 checked runs; the direct-sum errors equal to the one-rank run's to 4 digits in f64 and within 0.24% in f32 |
+| points per rank (§3.6, O1 k = 8, cut by points) | max/mean 1.017 (cube), 1.083 (Plummer), 1.065 (clusters) at 72 ranks (*model*) | 1.015, 1.050, 1.063 at 72; 1.004–1.032 at 8 |
+| the busiest rank's M2L work over a fair share (§3.6, O1 k = 8 with P2) | 1.174 (cube), 1.511 (Plummer), 1.328 (clusters) at 72 ranks (*model*) | V pairs max/mean 1.172, 1.391, 1.287 at 72; the compute stages' max/mean 1.255, 1.165, 1.194; at 8 ranks at most 1.081 and 1.041 |
+| held boxes not local (§9.2) | 40% at 8 ranks, 92% at 72 (cube, today's partition before T4) | 37% at 8, 52% at 16, 92% at 72, 97% at 256 (cube); Plummer 51% at 8, 93% at 72 |
+| coefficient memory per rank (§9.2, crossover at P ≈ 15 for N = 10⁶, *model*) | 8.5 MB at 72 ranks (cube, p = 8, today's partition) | falls to 4.9 MB at 32 ranks and rises to 8.6 MB at 64–72 (cube; Plummer 15.3 → 16.4 MB): the replicated part dominates from about 16–32 ranks, as modelled |
+| coarse gather received per rank and evaluation (§1.2, §9.2) | cube 141 kB at 8 ranks and 0.88 MB at 72; Plummer 209 kB and 1.07 MB (today's blocks) | with O1's blocks (k = 8): cube 0.19 MB at 8, **2.6 MB at 72** (4,096 blocks of 648 B, the block count §3.6 gives for O1) and 2.6 MB at 256 (still 4,096 blocks); Plummer 0.17 MB at 8 and 1.8 MB at 72. At 72 ranks it is the cube's largest exchange |
+| multipole exchange per rank (§1.2) | sent, max over ranks: 2.6 MB (cube) and 4.9 MB (Plummer) at 8; 9.9 and 15.6 MB at 72, rank 0 sending 7–8× the median (today's partition) | received, max over ranks: 1.6 and 4.9 MB at 8, 1.3 and 2.3 MB at 72; 63 (cube) and 219 (Plummer) messages per rank over the levels at 72 |
+| the exchanges' share of an evaluation (§8.2) | 0.4–1.2% at 8 ranks (p = 8; measured with a no-op operator, T1) | at p = 8: 0.05–0.07% at 8 ranks on locust, 0.29–0.38% on the M3 Max; at most 0.5% at 12 (M3 Max) and 72 (locust) ranks; at p = 3 up to 5.1% (M3 Max, 12 ranks) |
+| the gain from overlap (§8.2) | at most the exchanges' share, less on one node (*model*) | **none measurable**: overlapped over blocking wall time 0.982–1.014 (M3 Max) and 0.957–1.016 (locust) on every strong-scaling run, within run-to-run noise; both paths bit for bit equal in every run |
+| redistribution (§4.2) | linear in the points moved | at 8 ranks (p = 8): the build's redistribution 18–37 ms from the owners or a random share, 77–157 ms with every point on rank 0; per evaluation the forward of the charges 0.4–3.2 ms against 3.9–18 ms from rank 0 (22 ms at 72 ranks); the evaluation within 2.9% (8 ranks) and 5.9% (72) of the owners' input |
+| build (§1.2) | locust at 8 ranks: `Octree::new` 35 ms, `Plan::new` 101 ms, `Evaluator::new` 16 ms (cube) | locust at 8 ranks (cube, p = 8): octree 37 ms, plan 52 ms, evaluator 14 ms, redistribution 28 ms, **tables 216 ms**; at 72: 27, 9, 7, 5 and 215 ms. The dense tables (computed on every rank, no table cache) are 63% of the build at 8 ranks and 83% at 72 |
+| memory per rank (§9.2 formula) | the formula's parts (*model*) | the formula gives 40.1 MB per rank at 8 ranks (cube, p = 8) against a peak resident size of 132 MB (locust; 145 MB resident on the M3 Max): the formula leaves out the tables (16.6 MB of dense M2L tables per rank at p = 8 in f64), the octree, the plan and the process; the peak falls to 114 MB at 16 ranks and stays at 121–137 MB at 32–72 |
+| above 72 ranks (§14.5) | oversubscribed runs at 256 and 512 ranks, correctness and memory | both correct: the direct-sum errors the one-rank run's to 4 digits, the output within 9.3 u_T of the one-rank `Fmm`; at 256 ranks 97% of the held boxes not local and 2.6 MB of coarse gather per rank and evaluation; **at 512 ranks (about 2,000 points per rank) every rank holds every box of the one-rank tree (37,449; 48.5 MB of coefficients, the one-rank figure) and receives 11.6 MB of coarse gather per evaluation**, as §14.2's growth predicts for small N/P; never timed. 512 ranks needed the soft open-file limit raised (`tools/scaling/run.sh` does it) |
+
+**Not modelled here, found in T10: the per-rank copies of the dense M2L tables limit
+strong scaling at p = 8.** Every rank holds its own 316 dense tables (16.6 MB at p = 8 in
+f64, 8.3 MB in f32, 0.65 MB at p = 3). The leaves scale perfectly on both machines and
+the downward pass scales at p = 3, but at p = 8 the downward pass's total over the ranks
+grows (in f64) 2.4–4.4× by 8–12 ranks on the M3 Max and 5.8–6.9× by 72 on locust: the evaluation
+is fastest at 4 ranks (M3 Max, f64) and stops improving at 32 (locust). With small tables
+the limit goes: Rotation keeps an efficiency of 0.75–0.78 at 12 ranks (M3 Max) and
+0.77–0.79 at 72 (locust), Classes (Dense's products from 16 class matrices,
+slower on one rank) 0.69–0.70 and 0.72–0.77, and a rank with many threads shares
+one copy (1 × 12 is 3.0× faster than 12 × 1 on the M3 Max; 4 × 18 is 4.1× faster than
+72 × 1 on locust). At 72 ranks Rotation evaluates the cube in 164 ms against Dense's
+940 ms. The design's communication and balance models hold; the cost it did not model is
+per-rank replicated *read-only* data that competes for the shared caches and the memory
+bandwidth of one node. No cache counters were read, so the mechanism is inferred, not
+measured; the strategy and thread runs are the evidence.
+
+### 15.3 For the next phase
+
+- **Shared or smaller tables on a node** before any other host-side scaling work at
+  p ≥ 6: one copy of the dense tables per node (MPI shared memory, `MPI_Win_allocate_shared`),
+  threads per rank (the 4 × 18 split), or a strategy rule that sees the ranks per node
+  (Rotation or Classes when several ranks share a node's caches). `Auto` picks Dense up
+  to p = 8 from one-rank measurements. The tables are also computed on every rank at
+  build (216 ms at p = 8, 83% of the build at 72 ranks); a shared table cache removes
+  that.
+- **The cut by work** (§3.6, decision 13): at 72 ranks the busiest rank holds 1.17–1.39
+  times the mean M2L work and the compute stages follow (1.17–1.26); the model above
+  predicted it within 0.12.
+- **The replicated top tree** (§14): measured where it starts to dominate (16–32 ranks at
+  N = 10⁶), with the coarse gather the cube's largest exchange at 72 ranks; S1 and S2
+  stay the scale-out plan, and inter-node scaling stays unmeasured.
