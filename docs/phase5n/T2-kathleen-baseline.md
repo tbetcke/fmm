@@ -1,4 +1,4 @@
-# Phase 5N / T2 — the Phase 5 code on Kathleen: one node, 2 and 4 nodes, the x86 host (C5N.2; skipped without Kathleen)
+# Phase 5N / T2 — the Phase 5 code on Kathleen: one node, 2 nodes, the x86 host (C5N.2; skipped without Kathleen)
 
 Phase 5 T10 measured the distributed FMM on two single nodes (the M3 Max to 12 ranks,
 locust to 72; `fmm-validate/results/phase5-m3max.md`, `phase5-gh200.md`). Every figure was
@@ -8,9 +8,10 @@ unchanged in what it computes, and measures:
 - one Kathleen node (40 Cascade Lake cores in two sockets) at 1–40 ranks, the ranks ×
   threads splits and the M2L strategies, to set the node's baseline beside the M3 Max and
   locust;
-- 1, 2 and 4 nodes, the first inter-node figures of the code: exchanges over Omni-Path
+- 1 and 2 nodes, the first inter-node figures of the code: exchanges over Omni-Path
   against §8.2's model, overlap where the network makes it matter, the replicated data and
-  memory per rank up to 160 ranks (no Kathleen job is larger than 4 nodes, README);
+  memory per rank up to 80 ranks (no Kathleen job is larger than 2 nodes for now, README;
+  4 nodes are "not measured" until the user lifts the cap);
 - the x86 host on one rank: the AVX2 + FMA P2P kernels, never timed on Intel, and the
   one-rank evaluation against the M3 Max and Grace.
 
@@ -62,10 +63,10 @@ Do:
     strong sweep (T10's `strategy` sweep);
   - the stage table against ranks (T10's "Stages against ranks"): does the downward pass
     stop scaling as on the M3 Max and locust, and at how many ranks per socket?
-- **Across nodes** (the first inter-node figures; `test` for 2 nodes, `small` for 4;
-  never more than 4 nodes):
+- **Across nodes** (the first inter-node figures; `test` for 2 nodes, or `small` for a
+  2-node run longer than an hour; never more than 2 nodes):
   - strong scaling of the N = 10⁷ cube and Plummer sphere (and N = 10⁶ for comparison with
-    one node) at 1, 2 and 4 nodes, at 40 × 1 and 2 × 20 per node, f64 p = 3 and 8
+    one node) at 1 and 2 nodes, at 40 × 1 and 2 × 20 per node, f64 p = 3 and 8
     (the default strategy, and Rotation at p = 8 so that the table effect is separable);
   - weak scaling at 10⁶ points per node (N = 10⁶ × nodes), the same configurations;
   - per run, as in T10: the stages by rank (max, min, mean), the compute imbalance, the
@@ -76,12 +77,12 @@ Do:
     state the latency you assume) and the bytes measured; where they differ by more than
     a factor of two, say what the per-message cost explains;
   - **overlap across nodes:** overlapped over blocking wall time, and the exposed waits
-    against the blocking exchange times (the C5.2 measure, design §8.6), at 2 and 4 nodes;
-  - **the replicated data at 80–160 ranks:** held boxes not local, the coarse gather's
+    against the blocking exchange times (the C5.2 measure, design §8.6), at 2 nodes;
+  - **the replicated data at 40–80 ranks:** held boxes not local, the coarse gather's
     bytes, `Plan::new`'s time and peak memory, against T10's locust figures at 64–72 ranks
     (and its oversubscribed 256 and 512) and design §14.2;
   - the errors against the direct sum and the one-rank reference (`--errors 8
-    --reference`) at 2 and 4 nodes at N = 10⁶ (f64 to the printed digits, f32 within 1%,
+    --reference`) at 2 nodes at N = 10⁶ (f64 to the printed digits, f32 within 1%,
     and within 100 u_T of the one-rank `Fmm`), and with `--errors 8` alone at N = 10⁷.
 - **The x86 host on one rank** (one node, one rank, release, BLAS variables at 1):
   - `p2p_kernels` (every ISA the machine runs: AVX2 + FMA, scalar, the reference; φ and
@@ -113,7 +114,7 @@ Tests that define done:
 - Every launch of the sweeps above has a file, or the report lists the missing ones with
   the reason (a failed launch is reported, never retried silently).
 - The error checks of the sweeps match the one-rank run as T10's did (f64 to the printed
-  digits, f32 within 1%, reference within 100 u_T), at 2 and 4 nodes.
+  digits, f32 within 1%, reference within 100 u_T), at 2 nodes.
 
 Must pass: `cargo fmt --all`, the root checks and the stricter workspace checks on the
 M3 Max; `RUST_MIN_STACK=8388608 cargo test -p nd-fmm-validate`; the smoke test at 2 ranks
@@ -123,7 +124,7 @@ Do not:
 - change any library crate, or a default, to improve a number; a defect found here is
   reported and fixed in its own commit with its test, after asking;
 - assert timings, or commit CSV or raw output beyond the report;
-- submit any job larger than 4 nodes (160 cores), or exceed the node-hours of decision 3
+- submit any job larger than 2 nodes (80 cores), or exceed the node-hours of decision 3
   (proposed: 100); report the use;
-- present a model as a measurement, or a Kathleen figure at 4 nodes as scaling to
+- present a model as a measurement, or a Kathleen figure at 2 nodes as scaling to
   thousands of ranks.

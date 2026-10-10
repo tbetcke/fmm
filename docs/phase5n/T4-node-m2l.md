@@ -87,7 +87,7 @@ Do:
     strategy at every count measured;
   - errors against the direct sum for the new default (f64 to the printed digits of the
     explicit strategy's run, f32 within 1%);
-  - with Kathleen: in jobs of at most 4 nodes, within the node-hours of decision 3
+  - with Kathleen: in jobs of at most 2 nodes, within the node-hours of decision 3
     (proposed 30); locust with the load checked before and after and stated.
   - Report them in a "Phase 5N, T4" section of `fmm-validate/results/phase5n-kathleen.md`,
     or, without Kathleen, of a new `fmm-validate/results/phase5n-node-m2l.md` (and short
@@ -133,4 +133,4 @@ Do not:
 - change a test's tolerance to make it pass; a bit-level change outside what decision 5
   allows is a defect;
 - assert timings, or commit CSV or raw output beyond the report;
-- submit any Kathleen job larger than 4 nodes (160 cores).
+- submit any Kathleen job larger than 2 nodes (80 cores).

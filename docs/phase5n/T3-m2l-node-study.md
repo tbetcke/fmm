@@ -87,7 +87,7 @@ build, command):
     distributed-fmm.md §15.2).
   - The time to load each from `TableCache` cold and warm: on the M3 Max's local disk, on
     locust's `/data` (1, 8 and 72 ranks loading at once), and, with Kathleen, on its
-    Lustre with 1, 40 (one node) and 160 (4 nodes, the largest job allowed) ranks loading
+    Lustre with 1, 40 (one node) and 80 (2 nodes, the largest job allowed for now) ranks loading
     at once.
   - Concurrent stores into one cache directory: two processes on one node and two on
     different nodes storing the same key at once (Lustre). `TableCache::store` is designed
@@ -95,7 +95,7 @@ build, command):
     then a rename); confirm it on Lustre, where two nodes may share a process id.
 - **The node context.** The cost of a `split_shared` (and of agreeing its result) inside
   `build` on the host path, at 1, 12 and 72 ranks on the M3 Max and locust, and at 40 and
-  160 ranks on Kathleen if it is usable; today only the device path
+  80 ranks on Kathleen if it is usable; today only the device path
   splits (`build`'s `RankPlacement`).
 
 Write `docs/design/node-m2l.md`, short, in the style of the other design documents, with
@@ -132,7 +132,7 @@ these sections:
 5. **Tables at build and at scale.** Every rank building (as today), `TableCache` warmed by
    one job, or one rank per node building and storing while the others wait at a barrier
    and then load (one collective more); recommend one (decision 7), with the measured
-   times and, with Kathleen, the I/O load on Lustre at 160 ranks.
+   times and, with Kathleen, the I/O load on Lustre at 80 ranks.
 6. **One copy per node.** The options and their verdicts:
    - MPI shared memory (`MPI_Win_allocate_shared`): rsmpi 0.8.2 offers no RMA windows
      (checked in the registry source), so it needs an rsmpi addition behind a safe API,
@@ -173,4 +173,4 @@ Do not:
 - commit measurement code or raw output (examples' additions excepted);
 - propose a rule without the measurements behind it on every machine available after
   decision 0, or a new external dependency or `unsafe` outside the allowed crates;
-- submit any Kathleen job larger than 4 nodes (160 cores).
+- submit any Kathleen job larger than 2 nodes (80 cores).

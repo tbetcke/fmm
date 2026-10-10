@@ -10,8 +10,10 @@ for crate-specific rules; everything here applies to all of them.
   Never change a convention in code; propose changes in the PR description instead.
 - Cite conventions in doc comments as `CONVENTIONS §3.x`.
 - CONVENTION_VERSION in nd-fmm-math must match the file.
-- Current phase and task briefs: docs/phase5/README.md (Phase 5, the distributed FMM;
-  design docs/design/distributed-fmm.md, from T1). Phase 4S briefs:
+- Current phase and task briefs: docs/phase5n/README.md (Phase 5N, one node: Kathleen,
+  and the M2L tables per node; Kathleen jobs at most 2 nodes for now). Phase 5 briefs:
+  docs/phase5/README.md (the distributed FMM; design docs/design/distributed-fmm.md,
+  from T1). Phase 4S briefs:
   docs/phase4s/README.md (CUDA on NVIDIA Grace Hopper; the device path of Phase 4 on
   locust's H100, design docs/design/device-path.md). Phase 4 briefs:
   docs/phase4/README.md (CubeCL kernels). Phase 3S briefs:
@@ -81,6 +83,19 @@ with `tools/gh200/sync.sh` (copies the working tree, uncommitted work included) 
 `tools/gh200/remote.sh <command>` (runs it in that copy inside the environment). Both
 use `ssh`, which the sandbox denies, so they run outside it. locust never commits or
 pushes; it is a shared node, so check `nvidia-smi` and `uptime` before timing anything.
+
+Kathleen (`ssh kathleen`, UCL's Slurm cluster: diskless nodes of 2 × 20 Cascade Lake
+cores, Omni-Path; Phase 5N) builds and runs in an environment made by `tools/kathleen/`
+(README.md there): the pinned modules of `env.sh` (gcc 12.3.0, Open MPI 4.1.6, llvm
+17.0.6 for libclang, …) plus rustup with the toolchain pinned there. Everything lives
+under `/scratch/scratch/ucahtbe/fmm` (`check-root.sh` verifies it), inside the 250 GB
+quota that home and Scratch share (`lquota`). The login node takes only short, light
+commands (syncing, `sbatch`, `squeue`, `sacct`, reading output, `cargo fmt`); every
+build, test and run is a Slurm job (`tools/kathleen/jobs/`), and no job is larger than
+2 nodes for now. A session on the M3 Max drives it with `tools/kathleen/sync.sh`, then
+`tools/kathleen/submit.sh <job>` (submits and waits) or `tools/kathleen/remote.sh
+<command>` (login node only). All use `ssh`, so they run outside the sandbox. Kathleen
+never commits or pushes; its nodes are exclusive, so a report names the job and nodes.
 
 ## Checks
 CI (GitHub Actions, `.github/workflows/run-tests.yml`, on pull requests to `main` and on
@@ -179,6 +194,16 @@ cargo clippy -p nd-fmm-kernels --all-targets --features cpu,cuda -- -D warnings
 cargo clippy -p nd-fmm-exec --all-targets --features cpu,cuda -- -D warnings
 RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features cuda --release
 RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features cuda --release -- --ignored
+```
+
+On Kathleen (by hand, in jobs, Phase 5N): after `tools/kathleen/sync.sh`, the CPU-side
+checks above run as Slurm jobs, never on the login node (tools/kathleen/README.md):
+
+```sh
+tools/kathleen/submit.sh build.sbatch                       # build, nd-fmm-math tests
+tools/kathleen/submit.sh check.sbatch                       # root, strict, simd, kernels
+tools/kathleen/submit.sh mpi.sbatch 1 2 4 8                 # MPI test list on one node
+tools/kathleen/submit.sh --qos=test --nodes=2 -- mpi.sbatch 80   # 2 nodes x 40 ranks
 ```
 
 `cargo test --workspace` needs a working MPI runtime, because nd-octree and
