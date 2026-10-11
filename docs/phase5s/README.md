@@ -478,7 +478,7 @@ In the repository root, start `claude` and say:
 ## Exit checklist
 - [x] T0 merged: the code at 1, 2 and 4 Kathleen nodes and the 4-node queue waits reported (`phase5n-kathleen.md`, "Phase 5S, T0"); `tools/kathleen/` runs 4-node jobs
 - [x] 4 nodes in practice (decision 0; 2026-10-11, as recommended in scale-out.md §12, question 10)
-- [ ] T1 merged: `docs/design/scale-out.md` drafted, sign-off questions listed
+- [x] T1 merged: `docs/design/scale-out.md` drafted, sign-off questions listed
 - [x] Scale-out design signed off, including L_r, the work weight, the S4/S5 triggers, CI and the node-hour budget (decisions 1–6; 2026-10-11: every recommendation of scale-out.md §12 accepted, questions 1–11)
 - [ ] T1s merged: rlst 0.10.0 and CubeCL 0.11.0; host outputs bit for bit, device within Phase 4's bounds; `Octree::new` before and after
 - [ ] T2 merged: rank-count invariance at 1, 2 and 4 ranks in CI, at 512 against 64 on locust, and at 160 against 20 on Kathleen; the harness at N = 10⁸
