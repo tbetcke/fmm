@@ -1,7 +1,8 @@
 # Scale-out: a locally essential, owned top tree (design for Phase 5S)
 
 Phase 5S, task T1 (docs/phase5s/T1-scale-out-design.md). Drafted on 2026-10-11 for
-sign-off by hand before T3. It answers "Requirements on the scale-out" of
+sign-off by hand before T3. **Signed off on 2026-10-11: every recommendation of §12
+accepted** (questions 1–11; docs/phase5s/README.md, decisions 0–6). It answers "Requirements on the scale-out" of
 docs/phase5s/README.md and settles the decisions that change code in T2–T9: what a rank
 holds of the top of the tree (S1), who forms each top-tree multipole and how it reaches
 the ranks that read it (S2), how results are checked where no one-rank run fits (S7),
@@ -1262,6 +1263,9 @@ model (§10.2) with α_e and β_e at the stated alternatives.
   is the first sample sort (§1.4).
 
 ## 12. Questions for sign-off
+
+**Signed off on 2026-10-11 by the user: every recommendation below is accepted, questions
+1–11.** docs/phase5s/README.md records the answers as decisions 0–6.
 
 | # | Question | Recommendation |
 | --- | --- | --- |

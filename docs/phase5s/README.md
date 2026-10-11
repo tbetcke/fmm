@@ -403,25 +403,54 @@ Each is recorded in the exit checklist when made:
 0. **4 nodes in practice?** From T0's report (the 4-node `small` waits, the 4-node runs):
    whether the phase's Kathleen work runs at 4 nodes as the briefs plan, or at 1–2 nodes
    with the 4-node runs reduced to the ones T9 needs, or (no 4-node job started) at 1–2
-   nodes with the 4-node runs "when the queue allows" (T0; before T1).
+   nodes with the 4-node runs "when the queue allows" (T0; before T1). **Signed off on
+   2026-10-11 (scale-out.md §12, question 10): 4 nodes as planned**, from T0's waits and
+   T1's (2 s, 2 s and 33 minutes for its 4-node jobs).
 1. The design document `docs/design/scale-out.md`, including any change it proposes to
-   the requirements above (T1; before T3).
+   the requirements above (T1; before T3). **Signed off on 2026-10-11: every
+   recommendation of the design's §12 accepted** (questions 1–11). Requirements 1–10
+   stand with the readings of question 1 (the invariance check names the strategy; T4
+   meets the bound on H, T5/T6 on the total; "bounded" fan-out below R is at most
+   max(2, ⌈P/16⌉) readers while |R| ≤ R_max). S1 as question 2: H = N(S) ∪ C(N(S)) from
+   a public `PartitionMap` and one push, `Global` meaning "shared ancestor",
+   `with_ghost_children` kept without block replication, the old path removed. The events
+   of question 4 (`SendReduction`, `ReceivedReduction`, `ReceivedTop`; `ReceivedCoarse`
+   removed; the device's syncs 2 + r_s). The time model of question 9 (§10.2, Kathleen's
+   measured constants, every figure *model*). Kathleen's oversubscribed ceiling of
+   question 11: 640 ranks, the briefs amended from 1,280.
 2. The replicated top: its fixed size L_r (a few thousand boxes, chosen once, independent
-   of P) and how it is formed and replicated (T1).
+   of P) and how it is formed and replicated (T1). **Signed off on 2026-10-11 (question
+   3): not a level L_r but R = the top-tree boxes read by at least max(2, ⌈P/16⌉) ranks,
+   at most R_max = 4,096 of them** (≤ 2.65 MB at p = 8 in f64), chosen at build and
+   replicated by one all-gather-v per evaluation; below R, the multipole exchange
+   (scale-out.md §4.3).
 3. The work weight of S3: the cost model, where its constants come from (per-kind timings
    per machine, precision and p), the balance target (of the modelled cost at 512–640
    oversubscribed ranks, and of the measured compute stages at 72 and 160), and whether the
    second cut is the default on several ranks (bits do not change; only the partition
-   does) (T1, T7).
+   does) (T1, T7). **Signed off on 2026-10-11 (question 5):** the plan's counts per block
+   weighed by per-kind constants per strategy, precision and p, a second cut by
+   `Octree::repartition` after `Plan::new`; the target ≤ 1.10 modelled at 512 (locust) and
+   640 (Kathleen) oversubscribed ranks with blocks refined by cost, or ≤ 1.12 without that
+   refinement; the second cut on by default on several ranks.
 4. The triggers of S4 and S5, stated on what can be measured: counts, bytes and memory at
    512–640 oversubscribed ranks and times to 160 ranks, with a model beyond (for example
    the sample sorts' message volume or a count all-to-all's modelled time at 10⁴ ranks
    above a stated share of the build); whether either needs an rsmpi addition (T1, T8).
-   Their timing at scale stays open.
+   Their timing at scale stays open. **Signed off on 2026-10-11 (question 6): S4 has
+   fired** and is built as T3a before T3, after T1s adopts rlst 0.10.0 (the splitter fix
+   of rlst #40); **S5's evaluation part fires on the model** (point-to-point
+   redistribution on the build's routes, built in T8); its build part (non-blocking
+   consensus) only if the count all-to-alls exceed a quarter of a modelled build at 10⁴
+   ranks; no rsmpi addition needed.
 5. CI: which new checks run at 2 and 4 ranks in `run-tests-mpi`, and what runs only by
-   hand on Kathleen and locust (T1, T2).
+   hand on Kathleen and locust (T1, T2). **Signed off on 2026-10-11 (question 7):**
+   `run-tests-mpi` adds T2's invariance executable and T3's example; everything else by
+   hand (scale-out.md §9.2).
 6. The node-hour budget per task and for the phase, within the standing limit of 4 nodes
-   per job, and T9's job plan (T1; T9).
+   per job, and T9's job plan (T1; T9). **Signed off on 2026-10-11 (question 8):** about
+   120 node-hours for the phase within the 240 budgeted, per task as scale-out.md §10.5;
+   T9 one 4-node job per sweep. T1 used 10.4.
 7. The Phase 6 briefs as revised by T9 (T9).
 
 ## Risks
@@ -448,9 +477,9 @@ In the repository root, start `claude` and say:
 
 ## Exit checklist
 - [x] T0 merged: the code at 1, 2 and 4 Kathleen nodes and the 4-node queue waits reported (`phase5n-kathleen.md`, "Phase 5S, T0"); `tools/kathleen/` runs 4-node jobs
-- [ ] 4 nodes in practice (decision 0)
+- [x] 4 nodes in practice (decision 0; 2026-10-11, as recommended in scale-out.md §12, question 10)
 - [ ] T1 merged: `docs/design/scale-out.md` drafted, sign-off questions listed
-- [ ] Scale-out design signed off, including L_r, the work weight, the S4/S5 triggers, CI and the node-hour budget (decisions 1–6)
+- [x] Scale-out design signed off, including L_r, the work weight, the S4/S5 triggers, CI and the node-hour budget (decisions 1–6; 2026-10-11: every recommendation of scale-out.md §12 accepted, questions 1–11)
 - [ ] T1s merged: rlst 0.10.0 and CubeCL 0.11.0; host outputs bit for bit, device within Phase 4's bounds; `Octree::new` before and after
 - [ ] T2 merged: rank-count invariance at 1, 2 and 4 ranks in CI, at 512 against 64 on locust, and at 160 against 20 on Kathleen; the harness at N = 10⁸
 - [ ] T3a merged: the sample sorts of `Octree::new` replaced by routing; the octree key for key unchanged at 1–8, 512 (locust) and 160/640 (Kathleen) ranks; `Octree::new` by step before and after
