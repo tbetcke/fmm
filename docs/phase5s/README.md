@@ -435,7 +435,7 @@ In the repository root, start `claude` and say:
 "Read docs/phase5s/T<k>-<name>.md and do that task." Review and merge before the next.
 
 ## Exit checklist
-- [ ] T0 merged: the code at 1, 2 and 4 Kathleen nodes and the 4-node queue waits reported (`phase5n-kathleen.md`, "Phase 5S, T0"); `tools/kathleen/` runs 4-node jobs
+- [x] T0 merged: the code at 1, 2 and 4 Kathleen nodes and the 4-node queue waits reported (`phase5n-kathleen.md`, "Phase 5S, T0"); `tools/kathleen/` runs 4-node jobs
 - [ ] 4 nodes in practice (decision 0)
 - [ ] T1 merged: `docs/design/scale-out.md` drafted, sign-off questions listed
 - [ ] Scale-out design signed off, including L_r, the work weight, the S4/S5 triggers, CI and the node-hour budget (decisions 1–6)
