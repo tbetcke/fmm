@@ -45,7 +45,7 @@ Do:
   `tools/scaling/run.sh` and its Kathleen counterpart unchanged in their interface.
 - **Measured** (release; reported, not asserted): T10's sweeps at 8 and 72 ranks on locust
   and (Kathleen) at 40, 80 and 160 ranks, Phase 5 against Phase 5S: evaluation time stage
-  by stage, traffic and memory per rank; traffic and memory at 512 (locust) and 1,280
+  by stage, traffic and memory per rank; traffic and memory at 512 (locust) and 640
   (Kathleen) oversubscribed ranks, not timed; the device gate's transfer table at 2 and 4
   ranks.
 

@@ -7,7 +7,7 @@ each labelled:
 - **timed across nodes** on Kathleen at 1, 2 and 4 nodes (40, 80 and 160 cores), and
   **timed on one node** on locust (to 72 ranks) and the M3 Max (to 12);
 - **counted, never timed**, on oversubscribed runs: memory, held boxes, messages and bytes
-  per rank on locust to 512 ranks and on Kathleen's 4 nodes to 1,280;
+  per rank on locust to 512 ranks and on Kathleen's 4 nodes to 640;
 - **modelled** times beyond 160 ranks, from the measured per-rank compute, the counted
   messages and bytes at a stated latency and bandwidth, and the measured imbalance
   (distributed-fmm.md §14.5, "A cluster may not be available"; `scale-out.md` §10).
@@ -56,7 +56,7 @@ Do:
   ranks on locust, 1–12 on the M3 Max) on the Phase 5S code, as regression checks
   against `phase5-gh200.md` and `phase5-m3max.md`, with the load stated on locust.
 - **Counted runs, never timed**: oversubscribed on locust at 128, 256 and 512 ranks and
-  (Kathleen) on the 4 nodes at 320, 640 and 1,280 ranks, on the cube and the Plummer
+  (Kathleen) on the 4 nodes at 320 and 640 ranks, on the cube and the Plummer
   sphere at fixed N (10⁶, 10⁷) and at fixed N/P where memory allows: held boxes by kind,
   the reduction's and the multipole exchange's messages and bytes, the replicated top's
   bytes, the memory model and the peak resident size, the modelled per-rank cost's
@@ -66,7 +66,7 @@ Do:
   their inputs and method stated, each figure marked *model*, and the effects a model
   misses listed as open.
 - **Correctness**: T2's invariance check at 512 against 64 on locust and (Kathleen) at 160
-  against 20 and 1,280 against 160 oversubscribed; the direct-sum errors at every timed
+  against 20 and 640 against 80 oversubscribed; the direct-sum errors at every timed
   configuration against the smallest run (f64 to the printed digits, f32 within 1%),
   stating which runs were checked.
 - **Node-hours**: state the node-hours per sweep and in total (budget for this task: at

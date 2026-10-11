@@ -66,7 +66,7 @@ Do:
   check covers the reduction; the overlap stress test (ignored) passes at 8 ranks.
 - **Measured** (release; reported): per rank, the global M2M count, the reduction's
   messages and bytes per level, the replicated top's bytes, the multipole exchange's
-  bytes and neighbours, at 2–512 ranks on locust and (Kathleen) 40–1,280 ranks (above 72
+  bytes and neighbours, at 2–512 ranks on locust and (Kathleen) 40–640 ranks (above 72
   and 160 respectively oversubscribed: counted, not timed), against Phase 5's coarse
   gather and global pass.
 
@@ -78,7 +78,7 @@ Tests that define done:
   against 64 on locust and (Kathleen) at 160 against 20. If the device operator cannot follow the new events before T6,
   device-backend scenarios may be marked as T6's (say which), never silently skipped.
 - No per-evaluation item grows with P at fixed N/P (requirement 5), counted to 512 ranks
-  on locust and (Kathleen) 1,280 ranks.
+  on locust and (Kathleen) 640 ranks.
 
 Must pass:
 - `cargo fmt --all`, the root checks and the stricter workspace checks; `cargo doc

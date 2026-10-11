@@ -66,7 +66,7 @@ Do:
   launch under `timeout`. Its output is a short table (result and wall time per launch).
 - **Runs**: the test at 1, 2, 4 and 8 ranks on the M3 Max and on locust; the at-scale
   check on locust at 512 against 64 ranks oversubscribed (not timed), and (Kathleen) at 160
-  against 20 ranks in one 4-node job and at 1,280 against 160 oversubscribed on the same 4
+  against 20 ranks in one 4-node job and at 640 against 80 oversubscribed on the same 4
   nodes; the harness at N = 10⁸ (Kathleen, 4 nodes; without Kathleen at N = 10⁷ on
   locust). No job larger than 4 nodes.
 - fmm-validate/CLAUDE.md, fmm-exec/CLAUDE.md and the root CLAUDE.md "Checks" ("On
@@ -77,7 +77,7 @@ Tests that define done:
   on, f32 and f64. A deliberately broken input order (concatenation in the wrong order)
   makes it fail on every rank (shown once, by hand; not committed as a failing test).
 - The at-scale check reports 0 differing values at 512 against 64 ranks on locust and
-  (Kathleen) at 160 against 20 and 1,280 against 160.
+  (Kathleen) at 160 against 20 and 640 against 80.
 - The harness runs at N = 10⁸ (N = 10⁷ without Kathleen) without `--reference`, with
   errors against the direct sum matching a run at a quarter of the ranks within 0.1%
   (f64).
