@@ -1,11 +1,13 @@
 #!/bin/bash -l
 # tools/kathleen/jobs/sweep.sbatch: sweeps of tools/scaling/run.sh inside one allocation,
 # and the x86 host's P2P examples (Phase 5N T2, docs/phase5n/T2-kathleen-baseline.md).
-# One node, `singlenode`, 6 hours, unless the submission says otherwise.
+# One node, `singlenode`, 6 hours, unless the submission says otherwise; at most 4 nodes,
+# in `small` (Phase 5S T0, the cap of the user, 2026-10-11; `test` takes exactly 2):
 #
 #     tools/kathleen/submit.sh sweep.sbatch strong threads strategy check host p2p
 #     tools/kathleen/submit.sh --qos=test --nodes=2 -- sweep.sbatch nodes-strong
 #     tools/kathleen/submit.sh --qos=small --nodes=2 --time=03:00:00 -- sweep.sbatch nodes-weak nodes-check
+#     tools/kathleen/submit.sh --qos=small --nodes=4 --time=01:00:00 -- sweep.sbatch nodes-strong
 #
 # Each argument is one step: a sweep of tools/scaling/run.sh (its header lists them; under
 # Slurm it maps the ranks over the job's nodes and sockets with `mpirun --map-by ppr:…

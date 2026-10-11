@@ -8,7 +8,9 @@ distributed-fmm.md §8.2's network model, overlap, the replicated data and memor
 80 ranks, the errors; and the x86 host on one rank, the AVX2 + FMA P2P kernels timed on
 Intel for the first time (docs/phase5n/T2-kathleen-baseline.md). Run on 2026-10-10,
 17:09–20:18, in 8 jobs (§13). The section "Phase 5N, T4" at the end (2026-10-11) adds the
-strategy rule of T4 before and after, on Kathleen, the M3 Max and locust.
+strategy rule of T4 before and after, on Kathleen, the M3 Max and locust. The part "Phase 5S, T0: four nodes"
+after it (2026-10-11) extends Part B to 4 nodes (160 ranks) and N = 10⁸, with the 4-node
+queue and a transport defect found there (PSM2's TID path).
 
 **Every figure below is measured on Kathleen**, in Slurm jobs on whole nodes (nodes are
 exclusive, so there is no load check), named nodes × ranks per node × threads per rank,
@@ -21,7 +23,7 @@ figure says anything measured about thousands of ranks.
 
 **Not measured:**
 - **More than 2 nodes**: the user's cap of 2 nodes per job (from 2026-10-10). 4 nodes
-  and beyond are "not measured" in this phase.
+  and beyond are "not measured" in this phase. (Phase 5S T0 measures 4 nodes: "Phase 5S, T0" below.)
 - **AVX-512**: the CPU has it, `nd-fmm-simd` has no AVX-512 path (deferred, simd-p2p.md
   §4.7); every P2P here is AVX2 + FMA.
 - **Cache or frequency counters**: none were read. Where a cause (the cache pressure of
@@ -1996,3 +1998,667 @@ Against the one-rank FMM: not checked in this run
 
 summary: dist=cube n=10000000 precision=f64 p=8 ranks=80 threads=1 input=share overlap=off strategy=Dense wall_ms=7377.424 build_ms=1534.933 redistribution_build_ms=93.803 forward_max_ms=5.462 upward_local_max_ms=91.077 upward_global_max_ms=24.462 gather_max_ms=– downward_max_ms=6736.642 leaves_max_ms=515.172 backward_max_ms=1136.747 total_max_ms=7377.104 compute_max_ms=7316.844 compute_mean_ms=6907.003 compute_imbalance=1.059 exposed_ms=12.794 exchanges_ms=12.794 overlap_differing=0 memory_model_max_mb=62.0 resident_max_mb=242.1 nodes=2 ranks_per_node=40 job=238860
 summary: dist=cube n=10000000 precision=f64 p=8 ranks=80 threads=1 input=share overlap=on strategy=Dense wall_ms=7373.674 build_ms=1534.933 redistribution_build_ms=93.803 forward_max_ms=5.572 upward_local_max_ms=91.266 upward_global_max_ms=27.273 gather_max_ms=14.854 downward_max_ms=6737.084 leaves_max_ms=517.459 backward_max_ms=1131.157 total_max_ms=7373.517 compute_max_ms=7317.614 compute_mean_ms=6907.041 compute_imbalance=1.059 exposed_ms=0.013 exchanges_ms=9.604 overlap_differing=0 memory_model_max_mb=62.0 resident_max_mb=242.1 nodes=2 ranks_per_node=40 job=238860
+
+# Phase 5S, T0: four nodes
+
+Phase 5S T0 (docs/phase5s/T0-four-node-baseline.md, C5S.0): the code as Phase 5N left it
+(Phase 5 with T4's strategy rule) at 1, 2 and 4 Kathleen nodes, on 2026-10-11, the day
+the user lifted the cap to 4 nodes. Strong scaling at N = 10⁶ and 10⁷, the first
+N = 10⁸ runs, weak scaling at 10⁶ points per node, per run at 4 nodes, the replicated
+part against P, the errors at 4 nodes, repeats; the 4-node queue; and two defects the
+first 4-node job found, one in Kathleen's Omni-Path transport (S0.1) and one in a test
+(S0.2). **Every figure is measured on Kathleen**; §8.2's exchange model, §9.2's memory
+formula and crossover, and anything derived from them are marked *model*. 4 nodes
+(160 cores) is the most measured; nothing here is a measurement of thousands of ranks.
+
+**Setup.** As Part B (§7–§9) unless stated: `tools/kathleen/jobs/sweep.sbatch` with
+`tools/scaling/run.sh`'s `nodes-strong`, `nodes-weak`, `nodes-check` and the new
+`nodes-large` (N = 10⁸: overlap off, two timed evaluations, the errors of one charge
+vector against the distributed direct sum, no one-rank reference), `mpirun --map-by
+ppr:<k>:socket:PE=<t> --bind-to core` inside the allocation, every launch under
+`timeout 3600`, release, every BLAS variable at 1, the harness's budget of 96 MB. Splits
+per node: 40 × 1 (40, 80, 160 ranks) and 2 × 20 (2, 4, 8 ranks of 20 threads). Strategy:
+`nodes-strong` runs p = 3 under `auto` (Dense under T4's rule, 0.7 MB per rank) and p = 8
+with Dense and with Rotation by name; Rotation is what `auto` resolves to at p = 8 in both
+splits (17.4 MB per rank > 9 MB), so "Rotation (auto)" is the rule's strategy. 10 timed
+evaluations per path after one warm-up (N = 10⁸: 2), the median per rank of the max over
+ranks.
+
+**Revision.** Library code at `7acb6fb` (main after #96, Phase 5N complete) in every run;
+the trees on Kathleen were `7acb6fb-dirty` (this task's `tools/` changes) and, from job
+245668 on, `1d226c2-dirty` (S0.2's commit, a test only: the `scaling` example is the same
+build). Every row of 1, 2 and 4 nodes below comes from this revision; Part B's 1- and
+2-node figures (2026-10-10) predate T4 and are not mixed in.
+
+**Transport setting.** Every 2- and 4-node row runs with `PSM2_TID=0` (S0.1; jobs from
+243010 on). The one-node rows (job 241948) ran before it; on one node PSM2 copies through
+shared memory and does not use TIDs. S0.10 compares it with the other workaround.
+
+## S0.1 Wrong data between nodes over PSM2's TID path (a transport defect)
+
+The first 4-node job (241946, `mpi.sbatch`'s list at 4 × 40 ranks) failed in two test
+executables that passed at 2 × 40 in Phase 5N: `mpi_regressions` ("large leaf capacity,
+targets, RankZero: two forwards": the first of two identical `Redistribution::forward`
+calls, one `MPI_Alltoallv`, left the 648 items from rank 0 at zero on one rank, the second
+delivered them) and `mpi_exec` (the avx2 batched and per-pair outputs differed in every
+value of 2 of 160 ranks). Both ended at the 900 s timeout, the other ranks blocked in the
+next collective. Two diagnostic jobs (`mpi_regressions` alone, 120 s per run):
+
+| job | configuration | ranks, nodes | runs | result |
+| --- | --- | --- | ---: | --- |
+| 242295 | default: PML `cm`, MTL `psm2` | 160 on 4 | 5 | failed 5 (rank 79) |
+| 242295 | `--mca mtl ofi` (libfabric's psm2 provider) | 160 on 4 | 4 | failed 4 |
+| 242295 | `coll_tuned_alltoallv_algorithm` 1 (linear), 2 (pairwise) | 160 on 4 | 8 | failed 8 |
+| 242295 | `--mca pml ob1 --mca btl self,vader,tcp` | 160 on 4 | 3 | **passed 3** |
+| 242295 | `--host` 80 + 80, oversubscribed: rank 79 beside rank 0 | 160 on 2 | 3 | **passed 3** |
+| 242295 | `--map-by ppr:10:socket` | 80 on 4 | 3 | failed 3 (rank 39) |
+| 242474 | control | 80 on 4 | 2 | failed 2 |
+| 242474 | `PSM2_TID=0` | 80 on 4; 160 on 4 | 3; 2 | **passed 5** |
+| 242474 | `PSM2_MQ_RNDV_HFI_THRESH=1073741824` (no rendezvous) | 80 on 4; 160 on 4 | 3; 2 | **passed 5** |
+| 242474 | `PSM2_SDMA=0` | 80 on 4; 160 on 4 | 3; 2 | failed 5 |
+
+- **Always the same rank, P/2 − 1**: the last rank of the second node, which receives
+  the largest block (7,680 items, 184 KB, above PSM2's default rendezvous threshold of
+  64,000 bytes) from rank 0 on another node. On 2 nodes that rank shares rank 0's node,
+  which is why Phase 5N's 2 × 40 runs passed. The other symptom, in `Redistribution::new`:
+  "a received key is a valid finest-level key: NotFinestLevel { level: 2112 }" (garbage).
+- **The fault is in PSM2's expected-receive (TID) path or the hfi1 driver**, not in the
+  code or Open MPI's collectives: independent of the MTL and the `alltoallv` algorithm,
+  gone over TCP, through shared memory, with TIDs off and with rendezvous off; failing on
+  three different node sets. Versions: libpsm2-12.0.1-1.el9 (PSM2 v2.2, built 2024-10-30,
+  driver interface v6.3), kernel 5.14.0-570.140.1.el9_6, Open MPI 4.1.6.
+- **A stand-alone C reproducer did not reproduce it** (jobs 243658, 243780: `MPI_Alltoallv`
+  from rank 0 with 64 KB – 1 MB blocks into fresh, reused and repeatedly freed buffers, a
+  struct datatype and a duplicated communicator per call, 400 calls, at 80 and 160 ranks
+  with TIDs on: all data correct, while `mpi_regressions` failed in the same job). The
+  test binary is the reproducer; the text for UCL Research Computing is with the user.
+- **Workaround**: `tools/kathleen/env.sh` exports `PSM2_TID=0` for every job (README,
+  "MPI and the launcher"); it reaches every rank (printed per node in job 243007). With it
+  the MPI list passes at 4 × 40 (S0.9). Its cost and S0.6's stalls: S0.10.
+
+## S0.2 A test that assumed at most 133 ranks
+
+With `PSM2_TID=0` (job 243007) `mpi_regressions` passed at 160 ranks, but `mpi_exec`
+panicked in its `input_errors` scenario: 400 points shared round-robin leave rank 0 three
+points above 133 ranks, and the scenario moves rank 0's point 3 ("index out of bounds:
+the len is 3 but the index is 3"). Fixed in its own commit (`1d226c2`, after asking: the
+scenario takes max(400, 4 P) points, unchanged at up to 100 ranks), checked at 1, 2 and
+4 ranks on the M3 Max and in the list at 160 (S0.9). Not a library defect.
+
+## S0.3 Jobs, the 4-node queue, node-hours
+
+From `sacct -X` (Start − Submit; node-hours = nodes × elapsed):
+
+| job | QoS | nodes | node list | what | submitted | wait | elapsed | node-hours | launches (failed) |
+| --- | --- | ---: | --- | --- | --- | ---: | ---: | ---: | --- |
+| 241945 | singlenode | 1 | node-c11b-046 | build (release `scaling`, the MPI test list) | 12:24:05 | 0 s | 2 min 30 s | 0.04 | – |
+| 241946 | small | 4 | node-c11a-[054,082,103,108] | smoke: `mpi.sbatch`'s list at 4 × 40, then `scaling` at 4 × 2 × 20 (S0.1) | 12:24:05 | 27 min 15 s | 32 min 41 s | 2.18 | 2 of 9 executables failed (S0.1); `scaling` passed |
+| 241948 | singlenode | 1 | node-c11b-046 | `nodes-strong`, `nodes-large` at 1 node | 12:27:24 | 1 s | 2 h 9 min 47 s | 2.16 | 32 (0) |
+| 242295 | small | 4 | node-c11a-[037,043,086,100] | diagnosis: `mpi_regressions` at 160 and 80 ranks, transports and algorithms (S0.1) | 13:24:04 | 55 s | 43 min 38 s | 2.91 | 26 runs (22 failed, as S0.1) |
+| 242474 | small | 4 | node-c11a-[053,055,106,136] | diagnosis: PSM2 settings (S0.1) | 14:09:02 | 4 min 47 s | 16 min 5 s | 1.07 | 17 runs (7 failed, as S0.1) |
+| 243007 | small | 4 | node-c11a-[050-051,136,143] | `mpi.sbatch`'s list at 4 × 40 with `PSM2_TID=0` | 14:57:54 | 3 min 5 s | 17 min 27 s | 1.16 | 1 of 9 failed (S0.2) |
+| 243010 | test | 2 | node-c11b-[024,046] | `nodes-strong`, `nodes-weak` at 2 nodes | 14:57:55 | 2 s | 33 min 0 s | 1.10 | 36 (0) |
+| 243658 | small | 4 | node-c11a-[039,123-124,136] | stand-alone C reproducer (S0.1) | 15:19:07 | 12 s | 22 s | 0.02 | 7 runs, all correct |
+| 243780 | small | 4 | node-c11a-[050-051,124,140] | C reproducer, history mode; `mpi_regressions` control (S0.1) | 15:21:34 | 0 s | 2 min 21 s | 0.16 | control failed; reproducer correct |
+| 244324 | small | 4 | node-c11a-[050,123-124,136] | `nodes-strong` at 4 nodes | 15:31:37 | 6 s | 14 min 12 s | 0.95 | 24 (0) |
+| 244325 | small | 2 | node-c11b-[021,027] | `nodes-large` at 2 nodes | 15:31:37 | 1 s | 41 min 27 s | 1.38 | 8 (0) |
+| 245668 | small | 4 | node-c11a-[037,039,123,143] | `mpi.sbatch 160` after S0.1 and S0.2 | 15:51:49 | 4 s | 11 min 42 s | 0.78 | 9 of 9 passed |
+| 246423 | small | 4 | node-c11a-[037,039,123,136] | `nodes-large` at 4 nodes | 16:04:34 | 10 s | 21 min 23 s | 1.43 | 8 (0) |
+| 247053 | small | 4 | node-c11b-[021,024,033,046] | `nodes-weak` at 4 nodes | 16:13:33 | 40 s | 6 min 52 s | 0.46 | 12 (0) |
+| 247606 | small | 4 | node-c11a-[051,054,099,143] | `nodes-check` at 4 nodes | 16:22:11 | 5 s | 5 min 31 s | 0.37 | 10 (0) |
+| 247939 | small | 4 | node-c11a-[037,039,082,107] | repeats (four of `nodes-strong`) and `nodes-weak` at 40 × 1, other nodes | 16:26:24 | 1 s | 6 min 38 s | 0.44 | 10 (0) |
+| 248448 | small | 4 | node-c11a-[081-082,088,140] | S0.10: no rendezvous, TIDs on (`nodes-weak` at 40 × 1, two of `nodes-strong`) | 16:35:32 | 1 h 0 min 5 s | 7 min 0 s | 0.47 | 8 (0) |
+| **all** | | | | | | | | **17.08** | |
+
+- **The 4-node queue is usable**: 13 jobs in `small` at 4 nodes started after a median
+  wait of 12 s, 11 of them within 5 minutes (0 s – 4 min 47 s). Two waited longer: the
+  first, 27 min 15 s (241946, 12:24–12:51 on Sunday 2026-10-11, all 188 nodes allocated
+  and about 1,600 two-node `small` jobs pending; Slurm gave it the highest priority in the
+  partition, 48,843, and it waited for nodes to free), and the last, 60 min 5 s (248448,
+  16:35–17:35, its priority down to 43,352 behind 6-node `small` jobs at 66,098: the day's
+  node-hours lowered the fair-share factor from 47,843 to 42,353). Two-node `small` and
+  `test` jobs started in 1–2 s, `singlenode` in 0–1 s. One Sunday is one sample, not a
+  guarantee; a phase that runs many 4-node jobs in a day should expect its own fair share
+  to lengthen the waits.
+- **17.08 node-hours** of the 20 the brief allows (`small` 4 nodes 12.39, 2 nodes 2.48,
+  1 node 2.20), of which 7.50 node-hours went to S0.1's diagnosis and the failed 4-node
+  test runs (241946, 242295, 242474, 243007, 243658, 243780). No job exceeded 4 nodes;
+  every launch of the sweeps has its file (148 launches in 9 jobs, none failed, none
+  skipped; 18 of them the reruns of S0.6, S0.10 and S0.11).
+
+## S0.4 Strong scaling at 1, 2 and 4 nodes
+
+Blocking-path wall time (ms), the speed-up from 1 to 2 and 4 nodes and from 2 to 4, the
+efficiency in brackets (speed-up over 4 and over 2). 1 node: job 241948 (node-c11b-046);
+2 nodes: 243010 (node-c11b-[024,046]); 4 nodes: 244324 (node-c11a-[050,123-124,136]):
+
+| problem (f64) | ranks × threads per node | 1 node (ms) | 2 nodes (ms) | 4 nodes (ms) | speed-up 1→2 | 1→4 (eff.) | 2→4 (eff.) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| cube, N = 1,000,000, p = 3, Dense (auto) | 40 × 1 | 94.5 | 52.1 | 29.4 | 1.81 | 3.22 (0.80) | 1.77 (0.89) |
+| cube, N = 1,000,000, p = 3, Dense (auto) | 2 × 20 | 116.6 | 60.8 | 36.3 | 1.92 | 3.21 (0.80) | 1.67 (0.84) |
+| cube, N = 1,000,000, p = 8, Dense | 40 × 1 | 1,667.3 | 867.1 | 456.9 | 1.92 | 3.65 (0.91) | 1.90 (0.95) |
+| cube, N = 1,000,000, p = 8, Dense | 2 × 20 | 766.0 | 354.6 | 189.6 | 2.16 | 4.04 (1.01) | 1.87 (0.93) |
+| cube, N = 1,000,000, p = 8, Rotation (auto) | 40 × 1 | 602.2 | 321.4 | 173.4 | 1.87 | 3.47 (0.87) | 1.85 (0.93) |
+| cube, N = 1,000,000, p = 8, Rotation (auto) | 2 × 20 | 553.4 | 283.0 | 149.3 | 1.96 | 3.71 (0.93) | 1.90 (0.95) |
+| plummer, N = 1,000,000, p = 3, Dense (auto) | 40 × 1 | 247.2 | 159.4 | 84.8 | 1.55 | 2.91 (0.73) | 1.88 (0.94) |
+| plummer, N = 1,000,000, p = 3, Dense (auto) | 2 × 20 | 260.1 | 143.7 | 81.2 | 1.81 | 3.20 (0.80) | 1.77 (0.88) |
+| plummer, N = 1,000,000, p = 8, Dense | 40 × 1 | 3,168.1 | 1,729.4 | 936.4 | 1.83 | 3.38 (0.85) | 1.85 (0.92) |
+| plummer, N = 1,000,000, p = 8, Dense | 2 × 20 | 1,580.1 | 841.6 | 457.0 | 1.88 | 3.46 (0.86) | 1.84 (0.92) |
+| plummer, N = 1,000,000, p = 8, Rotation (auto) | 40 × 1 | 1,467.8 | 820.1 | 459.8 | 1.79 | 3.19 (0.80) | 1.78 (0.89) |
+| plummer, N = 1,000,000, p = 8, Rotation (auto) | 2 × 20 | 1,367.4 | 731.2 | 395.1 | 1.87 | 3.46 (0.87) | 1.85 (0.93) |
+| cube, N = 10,000,000, p = 3, Dense (auto) | 40 × 1 | 1,053.1 | 534.2 | 269.8 | 1.97 | 3.90 (0.98) | 1.98 (0.99) |
+| cube, N = 10,000,000, p = 3, Dense (auto) | 2 × 20 | 1,482.2 | 725.8 | 346.1 | 2.04 | 4.28 (1.07) | 2.10 (1.05) |
+| cube, N = 10,000,000, p = 8, Dense | 40 × 1 | 14,726.4 | 7,325.6 | 3,829.6 | 2.01 | 3.85 (0.96) | 1.91 (0.96) |
+| cube, N = 10,000,000, p = 8, Dense | 2 × 20 | 6,836.6 | 3,386.5 | 1,709.4 | 2.02 | 4.00 (1.00) | 1.98 (0.99) |
+| cube, N = 10,000,000, p = 8, Rotation (auto) | 40 × 1 | 5,209.6 | 2,643.1 | 1,357.5 | 1.97 | 3.84 (0.96) | 1.95 (0.97) |
+| cube, N = 10,000,000, p = 8, Rotation (auto) | 2 × 20 | 5,403.4 | 2,672.7 | 1,338.1 | 2.02 | 4.04 (1.01) | 2.00 (1.00) |
+| plummer, N = 10,000,000, p = 3, Dense (auto) | 40 × 1 | 2,091.6 | 1,230.0 | 674.8 | 1.70 | 3.10 (0.77) | 1.82 (0.91) |
+| plummer, N = 10,000,000, p = 3, Dense (auto) | 2 × 20 | 2,364.9 | 1,169.3 | 619.3 | 2.02 | 3.82 (0.95) | 1.89 (0.94) |
+| plummer, N = 10,000,000, p = 8, Dense | 40 × 1 | 34,021.1 | 17,529.1 | 9,202.0 | 1.94 | 3.70 (0.92) | 1.90 (0.95) |
+| plummer, N = 10,000,000, p = 8, Dense | 2 × 20 | 15,974.7 | 7,656.8 | 4,090.8 | 2.09 | 3.91 (0.98) | 1.87 (0.94) |
+| plummer, N = 10,000,000, p = 8, Rotation (auto) | 40 × 1 | 15,046.3 | 7,895.0 | 4,408.1 | 1.91 | 3.41 (0.85) | 1.79 (0.90) |
+| plummer, N = 10,000,000, p = 8, Rotation (auto) | 2 × 20 | 12,773.6 | 6,427.3 | 3,409.6 | 1.99 | 3.75 (0.94) | 1.89 (0.94) |
+
+- **From 2 to 4 nodes the evaluation scales at 0.84–1.05**, at N = 10⁷ at 0.90–1.05: the
+  cube at N = 10⁷ keeps 0.96–1.05 in every configuration; the Plummer sphere 0.90–0.95.
+  From 1 to 4 nodes: 0.73–1.07, at N = 10⁷ 0.77–1.07.
+- **Where it loses**: N = 10⁶ at 160 ranks (6,250 points per rank; the cube at p = 3 runs in
+  29 ms) and the Plummer sphere at 40 × 1, whose compute imbalance reaches 1.31–1.62 at 160
+  ranks (S0.7), shown as the wait in the backward of the output.
+- **The splits order as at 2 nodes**: at p = 8 with Dense 2 × 20 is 2.05–2.41× faster than
+  40 × 1; with Rotation, the rule's strategy, 2 × 20 is ahead in all four configurations at
+  4 nodes, by 1% (the N = 10⁷ cube) to 29% (the N = 10⁷ Plummer sphere); at p = 3, 40 × 1
+  is faster on the cube (29 against 36 ms at N = 10⁶, 270 against 346 ms at N = 10⁷).
+- **The best N = 10⁷ times on 4 nodes**: cube p = 3 270 ms (40 × 1), p = 8 1,338 ms
+  (Rotation, 2 × 20); Plummer p = 3 619 ms (2 × 20), p = 8 3,410 ms (Rotation, 2 × 20).
+- Against Part B's 1- and 2-node figures (2026-10-10, before T4; there Dense at p = 8 was
+  named `auto`): the 48 runs both measured agree within 0.94–1.05 of Part B's time, 37 of
+  them faster now (the cube at p = 8 with Dense, 40 × 1, N = 10⁷, 2 nodes: 7,326 ms here,
+  7,377 ms then).
+
+## S0.5 N = 10⁸
+
+The first N = 10⁸ runs of the code: the cube and the Plummer sphere, f64, p = 3 and 8 under
+`auto` (Dense at p = 3, Rotation at p = 8), at 2 × 20 and 40 × 1 per node, two timed
+evaluations, overlap off. 1 node: job 241948; 2 nodes: 244325 (node-c11b-[021,027]); 4
+nodes: 246423 (node-c11a-[037,039,123,136]). Resident is `VmHWM` per rank; per node, the
+largest sum over a node's ranks where the per-rank tables are printed (up to 80 ranks),
+and at 160 ranks the bound ranks per node × the largest rank, marked ≤:
+
+| problem (f64), N = 10⁸ | split | nodes | ranks | strategy | evaluation (ms) | speed-up vs 1 node | vs 2 nodes | build wall (ms) | build: octree / plan / tables (ms, max) | compute max/mean | resident per rank, max / mean (MB) | per node, max (GB) | φ L2 / ∇φ L2 vs direct sum |
+| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- | ---: | --- | ---: | --- |
+| cube, p = 3 | 2 × 20 | 1 | 2 | Dense | 18,468.0 | 1.00 | – | 137,874 | 30,676 / 32,993 / 18 | 1.004 | 20,429.0 / 20,428.2 | 40.9 | 3.781e-3 / 1.377e-3 |
+| cube, p = 3 | 2 × 20 | 2 | 4 | Dense | 9,386.6 | 1.97 | – | 67,005 | 15,897 / 16,402 / 46 | 1.016 | 10,313.4 / 10,297.2 | 20.6 | 3.781e-3 / 1.377e-3 |
+| cube, p = 3 | 2 × 20 | 4 | 8 | Dense | 4,667.2 | 3.96 | 2.01 | 31,926 | 8,307 / 8,041 / 56 | 1.014 | 5,204.4 / 5,197.7 | 10.4 | 3.781e-3 / 1.377e-3 |
+| cube, p = 3 | 40 × 1 | 1 | 40 | Dense | 13,308.7 | 1.00 | – | 12,116 | 6,304 / 2,130 / 24 | 1.030 | 2,220.7 / 1,268.0 | 50.7 | 3.781e-3 / 1.377e-3 |
+| cube, p = 3 | 40 × 1 | 2 | 80 | Dense | 6,805.6 | 1.96 | – | 8,757 | 5,950 / 1,067 / 12 | 1.033 | 2,043.7 / 732.6 | 30.7 | 3.781e-3 / 1.377e-3 |
+| cube, p = 3 | 40 × 1 | 4 | 160 | Dense | 3,378.1 | 3.94 | 2.01 | 11,065 | 9,687 / 535 / 14 | 1.045 | 1,936.6 / 409.0 | ≤ 77.5 | 3.781e-3 / 1.377e-3 |
+| cube, p = 8 | 2 × 20 | 1 | 2 | Rotation | 56,527.5 | 1.00 | – | 140,279 | 30,942 / 33,115 / 5 | 1.001 | 21,851.2 / 21,850.5 | 43.7 | 2.468e-5 / 1.669e-5 |
+| cube, p = 8 | 2 × 20 | 2 | 4 | Rotation | 30,252.5 | 1.87 | – | 67,125 | 16,114 / 16,336 / 31 | 1.054 | 11,061.9 / 11,055.9 | 22.1 | 2.468e-5 / 1.669e-5 |
+| cube, p = 8 | 2 × 20 | 4 | 8 | Rotation | 14,915.7 | 3.79 | 2.03 | 31,966 | 8,283 / 8,092 / 39 | 1.054 | 5,607.7 / 5,601.4 | 11.2 | 2.468e-5 / 1.669e-5 |
+| cube, p = 8 | 40 × 1 | 1 | 40 | Rotation | 53,146.2 | 1.00 | – | 12,118 | 6,314 / 2,129 / 20 | 1.042 | 2,221.0 / 1,370.9 | 54.8 | 2.468e-5 / 1.669e-5 |
+| cube, p = 8 | 40 × 1 | 2 | 80 | Rotation | 27,271.2 | 1.95 | – | 8,768 | 5,969 / 1,073 / 8 | 1.048 | 2,037.1 / 802.1 | 33.5 | 2.468e-5 / 1.669e-5 |
+| cube, p = 8 | 40 × 1 | 4 | 160 | Rotation | 13,503.7 | 3.94 | 2.02 | 11,080 | 9,714 / 536 / 13 | 1.057 | 1,934.7 / 453.6 | ≤ 77.4 | 2.468e-5 / 1.669e-5 |
+| plummer, p = 3 | 2 × 20 | 1 | 2 | Dense | 22,584.0 | 1.00 | – | 229,948 | 44,077 / 81,797 / 29 | 1.024 | 26,803.8 / 26,787.0 | 53.6 | 5.264e-3 / 3.196e-3 |
+| plummer, p = 3 | 2 × 20 | 2 | 4 | Dense | 12,040.2 | 1.88 | – | 105,767 | 22,140 / 40,321 / 27 | 1.096 | 13,551.0 / 13,522.9 | 27.1 | 5.264e-3 / 3.196e-3 |
+| plummer, p = 3 | 2 × 20 | 4 | 8 | Dense | 6,079.1 | 3.72 | 1.98 | 49,395 | 10,650 / 19,931 / 55 | 1.152 | 6,873.1 / 6,839.9 | 13.7 | 5.264e-3 / 3.196e-3 |
+| plummer, p = 3 | 40 × 1 | 1 | 40 | Dense | 17,989.1 | 1.00 | – | 20,870 | 7,501 / 7,183 / 26 | 1.140 | 2,219.6 / 1,587.6 | 63.5 | 5.264e-3 / 3.196e-3 |
+| plummer, p = 3 | 40 × 1 | 2 | 80 | Dense | 10,748.4 | 1.67 | – | 13,288 | 6,747 / 3,846 / 20 | 1.334 | 2,042.4 / 904.8 | 37.4 | 5.264e-3 / 3.196e-3 |
+| plummer, p = 3 | 40 × 1 | 4 | 160 | Dense | 6,347.1 | 2.83 | 1.69 | 13,725 | 10,281 / 2,049 / 14 | 1.624 | 1,937.5 / 502.5 | ≤ 77.5 | 5.264e-3 / 3.196e-3 |
+| plummer, p = 8 | 2 × 20 | 1 | 2 | Rotation | 126,665.3 | 1.00 | – | 228,008 | 43,958 / 81,239 / 11 | 1.036 | 30,321.4 / 30,320.5 | 60.6 | 3.973e-5 / 4.003e-5 |
+| plummer, p = 8 | 2 × 20 | 2 | 4 | Rotation | 65,292.8 | 1.94 | – | 105,366 | 22,048 / 40,398 / 32 | 1.078 | 15,475.7 / 15,453.8 | 30.9 | 3.973e-5 / 4.003e-5 |
+| plummer, p = 8 | 2 × 20 | 4 | 8 | Rotation | 32,727.9 | 3.87 | 2.00 | 49,784 | 10,666 / 19,966 / 55 | 1.102 | 7,939.3 / 7,892.0 | 15.8 | 3.973e-5 / 4.003e-5 |
+| plummer, p = 8 | 40 × 1 | 1 | 40 | Rotation | 142,544.0 | 1.00 | – | 20,952 | 7,523 / 7,205 / 25 | 1.285 | 2,221.1 / 1,841.4 | 73.7 | 3.973e-5 / 4.003e-5 |
+| plummer, p = 8 | 40 × 1 | 2 | 80 | Rotation | 81,833.8 | 1.74 | – | 13,229 | 6,671 / 3,844 / 15 | 1.443 | 2,041.4 / 1,063.7 | 43.6 | 3.973e-5 / 4.003e-5 |
+| plummer, p = 8 | 40 × 1 | 4 | 160 | Rotation | 44,302.1 | 3.22 | 1.85 | 14,173 | 10,256 / 2,546 / 11 | 1.596 | 1,937.9 / 607.2 | ≤ 77.5 | 3.973e-5 / 4.003e-5 |
+
+- **Every N = 10⁸ run completes on one node** at both splits: memory is not the limit
+  (at most 73.7 GB per node of 188 GB at 40 × 1, 60.6 GB at 2 × 20). Every error agrees in
+  all printed digits across splits and node counts.
+- **Strong scaling at N = 10⁸** from 1 to 4 nodes: the cube 3.79–3.96 (efficiency
+  0.95–0.99), the Plummer sphere at 2 × 20 3.72–3.87; at 40 × 1 only 2.83–3.22, its
+  compute imbalance growing from 1.14–1.29 at 40 ranks to 1.60–1.62 at 160.
+- **The build is single-threaded per rank**: at 2 × 20 the tree and the plan take 138 s
+  (cube) and 230 s (Plummer) on one node, 32–50 s on 4, the 20 threads of a rank idle;
+  at 40 × 1 12–21 s on one node.
+- **Four ranks peak at about 2 GB at 40 × 1 on every node count**: at one node ranks 9,
+  20, 29 and 39 hold 2.22 GB, the other 36 1.10–1.20 GB; at two nodes ranks 19, 40, 59 and
+  79 hold 2.03–2.04 GB, the others 0.62–0.69 GB; at four nodes the maximum is 1.94 GB
+  against a mean of 0.41–0.61 GB. The peak does not fall with P, so it scales with N
+  (about 20 bytes per point), on ranks near the quarters of the rank order; it is not in
+  §9.2's model (151–423 MB at 160 ranks). Not traced here: a transient of the construction
+  is the likely place (the octree's sample sorts, rlst's `parsort`, or the redistribution).
+  At N = 10⁹ it would be about 20 GB on a rank; T1 should locate it.
+- **The octree build at 40 × 1 is slower on 4 nodes than on 1 or 2**: 9.7–10.3 s against
+  6.0–7.5 s (S0.10).
+
+## S0.6 Weak scaling, 10⁶ points per node
+
+N = 10⁶ on one node (the strong runs), 2·10⁶ on two (job 243010), 4·10⁶ on four (247053),
+the efficiency (one node's time over P nodes'), and beside each row the tree: levels,
+leaves, near, V and W + X pairs per rank (max over ranks) at 1 / 2 / 4 nodes:
+
+| problem (f64), 10⁶ points per node | split | 1 node (ms) | 2 nodes (ms) | 4 nodes (ms) | eff. 1→2 | eff. 1→4 | eff. 2→4 | levels (1 / 2 / 4) | leaves per rank, max (1 / 2 / 4) | near pairs, max | V pairs, max | W + X pairs, max |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- | --- |
+| cube, p = 3, Dense (auto) | 40 × 1 | 94.5 | 440.9 | 262.6 | 0.21 | 0.36 | 1.68 | 6 / 7 / 7 | 832 / 1,521 / 1,664 | 21,344 / 31,630 / 43,264 | 173,702 / 169,988 / 359,515 | 0 / 29,564 / 0 |
+| cube, p = 3, Dense (auto) | 2 × 20 | 116.6 | 439.1 | 138.7 | 0.27 | 0.84 | 3.17 | 6 / 7 / 7 | 16,384 / 27,057 / 32,768 | 398,908 / 560,887 / 824,607 | 3,019,752 / 2,754,108 / 6,542,235 | 0 / 512,423 / 0 |
+| cube, p = 8, Dense | 40 × 1 | 1,667.3 | 2,995.1 | 3,716.0 | 0.56 | 0.45 | 0.81 | 6 / 7 / 7 | 832 / 1,521 / 1,664 | 21,344 / 31,630 / 43,264 | 173,702 / 169,988 / 359,515 | 0 / 29,564 / 0 |
+| cube, p = 8, Dense | 2 × 20 | 766.0 | 2,031.7 | 1,476.2 | 0.38 | 0.52 | 1.38 | 6 / 7 / 7 | 16,384 / 27,057 / 32,768 | 398,908 / 560,887 / 824,607 | 3,019,752 / 2,754,108 / 6,542,235 | 0 / 512,423 / 0 |
+| cube, p = 8, Rotation (auto) | 40 × 1 | 602.2 | 2,091.2 | 1,242.4 | 0.29 | 0.48 | 1.68 | 6 / 7 / 7 | 832 / 1,521 / 1,664 | 21,344 / 31,630 / 43,264 | 173,702 / 169,988 / 359,515 | 0 / 29,564 / 0 |
+| cube, p = 8, Rotation (auto) | 2 × 20 | 553.4 | 1,892.4 | 1,066.0 | 0.29 | 0.52 | 1.78 | 6 / 7 / 7 | 16,384 / 27,057 / 32,768 | 398,908 / 560,887 / 824,607 | 3,019,752 / 2,754,108 / 6,542,235 | 0 / 512,423 / 0 |
+| plummer, p = 3, Dense (auto) | 40 × 1 | 247.2 | 241.2 | 420.7 | 1.02 | 0.59 | 0.57 | 10 / 10 / 11 | 1,672 / 1,944 / 1,781 | 41,539 / 49,076 / 45,181 | 311,842 / 384,685 / 363,313 | 17,494 / 16,356 / 15,923 |
+| plummer, p = 3, Dense (auto) | 2 × 20 | 260.1 | 252.7 | 264.3 | 1.03 | 0.98 | 0.96 | 10 / 10 / 11 | 27,045 / 27,721 / 25,824 | 666,732 / 691,502 / 646,999 | 4,839,132 / 5,189,915 / 4,911,980 | 206,060 / 169,033 / 131,958 |
+| plummer, p = 8, Dense | 40 × 1 | 3,168.1 | 3,255.3 | 3,555.7 | 0.97 | 0.89 | 0.92 | 10 / 10 / 11 | 1,672 / 1,944 / 1,781 | 41,539 / 49,076 / 45,181 | 311,842 / 384,685 / 363,313 | 17,494 / 16,356 / 15,923 |
+| plummer, p = 8, Dense | 2 × 20 | 1,580.1 | 1,594.9 | 1,605.0 | 0.99 | 0.98 | 0.99 | 10 / 10 / 11 | 27,045 / 27,721 / 25,824 | 666,732 / 691,502 / 646,999 | 4,839,132 / 5,189,915 / 4,911,980 | 206,060 / 169,033 / 131,958 |
+| plummer, p = 8, Rotation (auto) | 40 × 1 | 1,467.8 | 1,443.8 | 1,737.4 | 1.02 | 0.84 | 0.83 | 10 / 10 / 11 | 1,672 / 1,944 / 1,781 | 41,539 / 49,076 / 45,181 | 311,842 / 384,685 / 363,313 | 17,494 / 16,356 / 15,923 |
+| plummer, p = 8, Rotation (auto) | 2 × 20 | 1,367.4 | 1,368.1 | 1,365.0 | 1.00 | 1.00 | 1.00 | 10 / 10 / 11 | 27,045 / 27,721 / 25,824 | 666,732 / 691,502 / 646,999 | 4,839,132 / 5,189,915 / 4,911,980 | 206,060 / 169,033 / 131,958 |
+
+- **The cube is still its tree**: 6, 7 and 7 levels; at 2·10⁶ the tree is partly refined to
+  the seventh level, with 29,564 W and X pairs per rank at 40 × 1 (none at 10⁶ or 4·10⁶);
+  at 4·10⁶ the seventh level is complete and uniform again. So the cube's weak efficiency
+  (0.36–0.84 at 4 nodes, 0.21–0.56 at 2) compares different work and says nothing about the network, as
+  in Part B. The near and V pairs per rank at 40 × 1 double from 2 to 4 nodes (V 169,988 →
+  359,515) at the same 25,000 points per rank.
+- **The Plummer sphere at 2 × 20 scales weakly**: 0.96–1.00 from 2 to 4 nodes, 0.98–1.00
+  from 1 to 4.
+- **At 40 × 1 on 4 nodes it does not**: 0.57 (p = 3), 0.92 (Dense) and 0.83 (Rotation)
+  from 2 to 4 nodes. Part of it is the compute imbalance (1.26–1.55 at 160 ranks against
+  1.16–1.32 at 80), part a stall measured in no other configuration:
+
+| run (4 × 40 ranks, N = 4·10⁶) | job | wall blocking (ms) | wall overlapped (ms) | forward charges max / mean (ms) | source exchange max / mean (ms) | upward global max / mean (ms) | octree build max (ms) |
+| --- | --- | ---: | ---: | --- | --- | --- | ---: |
+| cube, p = 3, Dense (auto) | 247053 | 262.6 | 262.4 | 1.4 / 1.4 | 160.1 / 56.5 | 161.0 / 5.0 | 2,316.5 |
+| cube, p = 3, Dense (auto) | 247939 | 262.2 | 261.1 | 161.6 / 12.4 | 160.3 / 23.3 | 161.8 / 36.9 | 2,299.8 |
+| cube, p = 3, Dense (auto) | 248448 | 282.8 | 273.3 | 161.4 / 18.4 | 160.5 / 44.2 | 161.1 / 40.9 | 2,316.2 |
+| cube, p = 8, Dense | 247053 | 3,716.0 | 3,560.1 | 81.4 / 1.9 | 158.7 / 19.6 | 23.1 / 19.8 | 2,316.9 |
+| cube, p = 8, Dense | 247939 | 3,518.7 | 3,530.8 | 1.4 / 1.4 | 1.9 / 1.1 | 20.9 / 18.6 | 2,299.9 |
+| cube, p = 8, Dense | 248448 | 3,708.3 | 3,701.2 | 161.4 / 11.4 | 159.9 / 30.5 | 99.0 / 27.6 | 2,311.1 |
+| cube, p = 8, Rotation (auto) | 247053 | 1,242.4 | 1,161.3 | 1.4 / 1.4 | 80.6 / 8.1 | 19.9 / 17.4 | 2,309.2 |
+| cube, p = 8, Rotation (auto) | 247939 | 1,292.1 | 1,291.6 | 161.6 / 25.0 | 161.0 / 39.1 | 176.3 / 57.3 | 2,301.1 |
+| cube, p = 8, Rotation (auto) | 248448 | 1,298.2 | 1,298.4 | 161.4 / 5.9 | 159.2 / 52.8 | 174.7 / 36.8 | 2,302.0 |
+| plummer, p = 3, Dense (auto) | 247053 | 420.7 | 419.8 | 81.5 / 3.9 | 160.6 / 68.4 | 161.0 / 5.3 | 2,320.6 |
+| plummer, p = 3, Dense (auto) | 247939 | 422.6 | 422.4 | 161.7 / 58.5 | 160.9 / 53.5 | 162.1 / 29.2 | 2,317.5 |
+| plummer, p = 3, Dense (auto) | 248448 | 421.2 | 420.9 | 161.6 / 39.9 | 160.9 / 57.4 | 82.2 / 3.3 | 2,318.6 |
+| plummer, p = 8, Dense | 247053 | 3,555.7 | 3,398.9 | 81.5 / 4.9 | 160.6 / 61.0 | 26.0 / 23.0 | 2,319.5 |
+| plummer, p = 8, Dense | 247939 | 3,507.3 | 3,347.0 | 81.5 / 15.5 | 81.7 / 26.6 | 179.4 / 49.3 | 2,317.4 |
+| plummer, p = 8, Dense | 248448 | 3,564.3 | 3,552.5 | 81.5 / 4.4 | 158.9 / 46.5 | 25.6 / 22.2 | 2,316.4 |
+| plummer, p = 8, Rotation (auto) | 247053 | 1,737.4 | 1,734.1 | 81.4 / 2.4 | 158.3 / 51.4 | 100.4 / 21.3 | 2,319.8 |
+| plummer, p = 8, Rotation (auto) | 247939 | 1,698.9 | 1,698.6 | 161.5 / 25.9 | 159.5 / 44.8 | 177.9 / 29.5 | 2,315.9 |
+| plummer, p = 8, Rotation (auto) | 248448 | 1,724.2 | 1,713.4 | 161.6 / 56.5 | 161.6 / 57.6 | 179.4 / 25.9 | 2,318.6 |
+
+- **The stalls come in steps of about 80 ms**: in 11 of the 12 runs at 4 × 40 ranks, in
+  both jobs on disjoint node sets (247053: node-c11b-[021,024,033,046]; 247939:
+  node-c11a-[037,039,082,107]), the slowest rank waits 80.6–81.7 ms or 158.3–161.7 ms in
+  the forward of the charges or the source exchange on the blocking path, and up to 179 ms
+  in the upward global pass, where the mean rank waits 1–69 ms and the 2 × 20 runs of the same jobs at most
+  10 ms. The second job was submitted with `--exclude` of the first's nodes, so the
+  stalls do not follow a node. They do not show
+  in the strong runs at 160 ranks (N = 10⁶ and 10⁷), nor at 1 or 2 nodes in any run.
+  **In the same configurations the octree build takes 2.3 s** at 160 ranks, against
+  0.11–0.12 s at N = 2·10⁶ on 80 ranks. S0.10 measures both with the other workaround.
+
+## S0.7 Per run at 4 nodes: stages, imbalance, exchanges, overlap
+
+Per run at 4 nodes (job 244324): wall times, the compute stages (upward local + downward
++ leaves) and two of them by rank (max, min, mean), the compute imbalance (max over mean),
+the blocking exchange stages (max over ranks), the exposed waits of the overlapped path
+and the C5.2 measure (exposed over the blocking exchanges, design §8.6), the coarse
+gather (overlapped path) and the backward of the output (the wait for the slowest rank):
+
+| run (4 nodes) | wall blocking (ms) | wall overlapped (ms) | compute max / min / mean (ms) | compute max/mean | downward max / min (ms) | leaves max / min (ms) | source exchange, blocking max (ms) | multipole exchange, blocking max (ms) | exposed waits, overlapped max (ms) | C5.2 | coarse gather, overlapped max (ms) | backward output max (ms) |
+| --- | ---: | ---: | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| cube-n1000000-p3-auto-40 × 1 | 29.4 | 31.3 | 25.5 / 18.9 / 22.6 | 1.130 | 6.3 / 3.5 | 18.7 / 14.6 | 0.52 | 0.50 | 0.120 | 12.3% | 1.25 | 7.8 |
+| cube-n1000000-p3-auto-2 × 20 | 36.3 | 36.7 | 26.5 / 22.5 / 24.3 | 1.088 | 7.5 / 5.8 | 18.0 / 15.1 | 0.58 | 0.29 | 0.002 | 0.2% | 0.28 | 10.7 |
+| cube-n1000000-p8-dense-40 × 1 | 456.9 | 456.3 | 434.6 / 281.1 / 378.1 | 1.150 | 408.2 / 257.3 | 22.7 / 19.4 | 0.64 | 4.55 | 0.137 | 2.7% | 5.42 | 154.4 |
+| cube-n1000000-p8-dense-2 × 20 | 189.6 | 191.4 | 178.1 / 161.2 / 167.7 | 1.062 | 152.5 / 136.4 | 20.4 / 18.8 | 0.66 | 1.35 | 0.002 | 0.1% | 1.42 | 21.6 |
+| cube-n1000000-p8-rotation-40 × 1 | 173.4 | 173.3 | 154.5 / 98.9 / 131.9 | 1.172 | 128.2 / 76.5 | 21.9 / 18.2 | 0.67 | 1.52 | 0.003 | 0.1% | 5.05 | 56.8 |
+| cube-n1000000-p8-rotation-2 × 20 | 149.3 | 151.4 | 136.8 / 128.5 / 133.7 | 1.023 | 109.0 / 105.3 | 23.2 / 18.6 | 0.73 | 1.33 | 0.002 | 0.1% | 1.29 | 15.0 |
+| plummer-n1000000-p3-auto-40 × 1 | 84.8 | 85.4 | 79.3 / 25.1 / 49.0 | 1.617 | 23.1 / 6.4 | 57.9 / 12.6 | 0.72 | 1.43 | 0.005 | 0.2% | 1.74 | 54.7 |
+| plummer-n1000000-p3-auto-2 × 20 | 81.2 | 82.2 | 71.5 / 56.0 / 61.8 | 1.157 | 28.1 / 15.6 | 41.8 / 38.5 | 1.02 | 0.88 | 0.003 | 0.1% | 0.77 | 19.8 |
+| plummer-n1000000-p8-dense-40 × 1 | 936.4 | 932.3 | 905.8 / 456.6 / 680.7 | 1.331 | 798.3 / 364.5 | 198.1 / 17.9 | 1.29 | 8.27 | 0.011 | 0.1% | 7.95 | 449.8 |
+| plummer-n1000000-p8-dense-2 × 20 | 457.0 | 457.7 | 440.2 / 379.7 / 399.7 | 1.101 | 314.6 / 261.1 | 119.0 / 102.9 | 1.10 | 4.21 | 0.004 | 0.1% | 5.51 | 60.6 |
+| plummer-n1000000-p8-rotation-40 × 1 | 459.8 | 571.2 | 432.6 / 164.0 / 306.1 | 1.413 | 335.5 / 122.4 | 194.6 / 17.9 | 1.15 | 5.24 | 0.007 | 0.1% | 7.76 | 268.4 |
+| plummer-n1000000-p8-rotation-2 × 20 | 395.1 | 395.1 | 380.7 / 317.9 / 335.3 | 1.135 | 255.5 / 202.2 | 119.3 / 102.6 | 1.15 | 3.93 | 0.003 | 0.1% | 2.65 | 67.7 |
+| cube-n10000000-p3-auto-40 × 1 | 269.8 | 270.5 | 254.1 / 220.5 / 239.2 | 1.062 | 48.9 / 36.4 | 200.4 / 177.3 | 2.10 | 1.11 | 0.904 | 28.6% | 4.11 | 38.0 |
+| cube-n10000000-p3-auto-2 × 20 | 346.1 | 346.8 | 226.0 / 217.2 / 222.5 | 1.016 | 45.6 / 43.2 | 173.1 / 166.8 | 4.05 | 1.11 | 2.115 | 42.7% | 2.83 | 94.6 |
+| cube-n10000000-p8-dense-40 × 1 | 3,829.6 | 3,753.1 | 3,709.7 / 3,016.6 / 3,439.0 | 1.079 | 3,417.2 / 2,741.5 | 262.4 / 231.9 | 2.70 | 8.11 | 3.508 | 34.5% | 16.91 | 695.4 |
+| cube-n10000000-p8-dense-2 × 20 | 1,709.4 | 1,714.0 | 1,583.9 / 1,393.1 / 1,515.9 | 1.045 | 1,299.5 / 1,130.7 | 239.9 / 222.1 | 4.04 | 4.44 | 0.872 | 10.5% | 9.41 | 286.9 |
+| cube-n10000000-p8-rotation-40 × 1 | 1,357.5 | 1,359.1 | 1,322.4 / 1,071.9 / 1,209.2 | 1.094 | 1,031.3 / 798.2 | 250.3 / 222.0 | 2.59 | 5.09 | 2.137 | 29.3% | 15.30 | 255.4 |
+| cube-n10000000-p8-rotation-2 × 20 | 1,338.1 | 1,345.4 | 1,215.9 / 1,160.7 / 1,183.9 | 1.027 | 939.3 / 901.4 | 235.3 / 219.7 | 4.16 | 4.50 | 1.882 | 21.9% | 7.74 | 130.4 |
+| plummer-n10000000-p3-auto-40 × 1 | 674.8 | 675.5 | 656.5 / 231.2 / 412.8 | 1.590 | 210.8 / 62.8 | 485.9 / 135.1 | 2.41 | 3.00 | 0.863 | 16.5% | 5.22 | 429.9 |
+| plummer-n10000000-p3-auto-2 × 20 | 619.3 | 623.3 | 501.8 / 390.5 / 427.9 | 1.173 | 210.6 / 126.9 | 282.4 / 255.6 | 5.49 | 3.20 | 0.004 | 0.0% | 4.17 | 187.0 |
+| plummer-n10000000-p8-dense-40 × 1 | 9,202.0 | 9,206.7 | 9,147.5 / 4,425.4 / 7,005.0 | 1.306 | 8,235.4 / 3,981.0 | 1,530.2 / 207.2 | 4.06 | 19.62 | 0.671 | 3.0% | 26.16 | 4,716.1 |
+| plummer-n10000000-p8-dense-2 × 20 | 4,090.8 | 4,105.1 | 3,951.7 / 3,283.8 / 3,582.9 | 1.103 | 3,145.1 / 2,546.2 | 752.6 / 690.2 | 5.49 | 13.81 | 0.006 | 0.0% | 18.46 | 746.3 |
+| plummer-n10000000-p8-rotation-40 × 1 | 4,408.1 | 4,395.2 | 4,353.2 / 1,598.8 / 2,858.2 | 1.523 | 3,276.8 / 1,174.3 | 1,447.2 / 192.9 | 3.76 | 15.74 | 1.322 | 7.2% | 23.10 | 2,753.5 |
+| plummer-n10000000-p8-rotation-2 × 20 | 3,409.6 | 3,414.1 | 3,274.5 / 2,754.2 / 2,897.3 | 1.130 | 2,469.1 / 2,040.5 | 753.2 / 668.2 | 4.81 | 13.72 | 0.005 | 0.0% | 14.61 | 601.9 |
+
+- **The exchanges stay small at 160 ranks**: the source exchange at most 5.5 ms, the
+  multipole exchange at most 19.6 ms (Plummer N = 10⁷, p = 8, Dense, 40 × 1), at most 3.5%
+  of an evaluation (the cube at N = 10⁶, p = 3, 40 × 1: 1.0 of 29.4 ms) and under 0.7% at
+  N = 10⁷ with p = 8.
+- **The imbalance is the Plummer sphere's at 40 ranks per node**: compute max/mean
+  1.31–1.62 at 160 ranks (1.22–1.50 at 80, Part B), 1.10–1.17 at 2 × 20; the cube within
+  1.17. The backward of the output holds the wait: up to 4.7 s of a 9.2 s evaluation
+  (Plummer N = 10⁷, p = 8, Dense, 4 × 40).
+- **Overlap**: overlapped over blocking 0.98–1.24 (the 1.24, Plummer N = 10⁶ with
+  Rotation at 40 × 1, 571 against 460 ms, is the overlapped path's spread on that run, not
+  explained further); C5.2 (at most 10%) holds in 16 of 24 runs (0.0–7.2%); it fails on the
+  cube at p = 3 (12.3% at N = 10⁶; 28.6% and 42.7% at 10⁷), on the cube at N = 10⁷ with p = 8
+  (10.5–34.5%, 0.9–3.5 ms exposed of 4–11 ms of exchanges) and on the Plummer sphere at
+  N = 10⁷, p = 3, 40 × 1 (16.5%): 8 failures against 5 at 2 nodes. Every run gives the same
+  bits on both paths (0 values differ).
+- **The coarse gather** takes 0.3–26 ms per evaluation at 4 nodes (up to 29 ms at 2).
+
+### The exchanges against the network model, 40 to 160 ranks
+
+The blocking exchanges at 40 × 1 per node on 1, 2 and 4 nodes: the busiest rank's
+messages and received bytes (max over ranks; at 160 ranks the per-rank tables are not
+printed, so the busiest rank's bytes and messages may belong to different ranks), the
+measured blocking stage (max over ranks), distributed-fmm.md §8.2's model at Omni-Path's
+100 Gbit/s (β = 12.5 GB/s) with an assumed α = 1 µs per message, *model*, and Part B's
+0.5 GB/s per rank, *model*:
+
+| run | exchange | ranks | messages sent, max rank | bytes received, max rank | measured, blocking max (ms) | §8.2 model α m + B/β (ms, *model*) | measured / model | at 0.5 GB/s per rank (ms, *model*) | measured / 0.5 GB/s | bytes / measured (GB/s) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| cube-n1000000-p3-auto | sources | 40 | 22 | 754,400 | 0.98 | 0.082 | 11.9 | 1.51 | 0.65 | 0.77 |
+| cube-n1000000-p3-auto | multipoles | 40 | 68 | 328,064 | 0.52 | 0.094 | 5.5 | 0.66 | 0.79 | 0.63 |
+| cube-n1000000-p3-auto | sources | 80 | 30 | 568,064 | 0.66 | 0.075 | 8.8 | 1.14 | 0.58 | 0.86 |
+| cube-n1000000-p3-auto | multipoles | 80 | 64 | 244,352 | 0.62 | 0.084 | 7.4 | 0.49 | 1.27 | 0.39 |
+| cube-n1000000-p3-auto | sources | 160 | 36 | 415,552 | 0.52 | 0.069 | 7.6 | 0.83 | 0.63 | 0.79 |
+| cube-n1000000-p3-auto | multipoles | 160 | 80 | 194,176 | 0.50 | 0.096 | 5.2 | 0.39 | 1.28 | 0.39 |
+| cube-n1000000-p8-dense | sources | 40 | 22 | 754,400 | 1.32 | 0.082 | 16.0 | 1.51 | 0.87 | 0.57 |
+| cube-n1000000-p8-dense | multipoles | 40 | 68 | 1,660,824 | 2.45 | 0.201 | 12.2 | 3.32 | 0.74 | 0.68 |
+| cube-n1000000-p8-dense | sources | 80 | 30 | 568,064 | 0.85 | 0.075 | 11.3 | 1.14 | 0.75 | 0.67 |
+| cube-n1000000-p8-dense | multipoles | 80 | 64 | 1,237,032 | 4.62 | 0.163 | 28.3 | 2.47 | 1.87 | 0.27 |
+| cube-n1000000-p8-dense | sources | 160 | 36 | 415,552 | 0.64 | 0.069 | 9.3 | 0.83 | 0.77 | 0.65 |
+| cube-n1000000-p8-dense | multipoles | 160 | 80 | 983,016 | 4.55 | 0.159 | 28.7 | 1.97 | 2.32 | 0.22 |
+| cube-n1000000-p8-rotation | sources | 40 | 22 | 754,400 | 1.26 | 0.082 | 15.3 | 1.51 | 0.83 | 0.60 |
+| cube-n1000000-p8-rotation | multipoles | 40 | 68 | 1,660,824 | 2.21 | 0.201 | 11.0 | 3.32 | 0.67 | 0.75 |
+| cube-n1000000-p8-rotation | sources | 80 | 30 | 568,064 | 0.88 | 0.075 | 11.7 | 1.14 | 0.77 | 0.65 |
+| cube-n1000000-p8-rotation | multipoles | 80 | 64 | 1,237,032 | 1.89 | 0.163 | 11.6 | 2.47 | 0.76 | 0.65 |
+| cube-n1000000-p8-rotation | sources | 160 | 36 | 415,552 | 0.67 | 0.069 | 9.6 | 0.83 | 0.80 | 0.62 |
+| cube-n1000000-p8-rotation | multipoles | 160 | 80 | 983,016 | 1.52 | 0.159 | 9.6 | 1.97 | 0.77 | 0.65 |
+| plummer-n1000000-p3-auto | sources | 40 | 29 | 893,952 | 1.38 | 0.101 | 13.7 | 1.79 | 0.77 | 0.65 |
+| plummer-n1000000-p3-auto | multipoles | 40 | 198 | 565,376 | 1.55 | 0.243 | 6.4 | 1.13 | 1.37 | 0.37 |
+| plummer-n1000000-p3-auto | sources | 80 | 36 | 617,984 | 0.86 | 0.085 | 10.1 | 1.24 | 0.70 | 0.72 |
+| plummer-n1000000-p3-auto | multipoles | 80 | 240 | 440,832 | 1.58 | 0.275 | 5.8 | 0.88 | 1.80 | 0.28 |
+| plummer-n1000000-p3-auto | sources | 160 | 35 | 405,504 | 0.72 | 0.067 | 10.7 | 0.81 | 0.89 | 0.56 |
+| plummer-n1000000-p3-auto | multipoles | 160 | 342 | 345,088 | 1.43 | 0.370 | 3.9 | 0.69 | 2.07 | 0.24 |
+| plummer-n1000000-p8-dense | sources | 40 | 29 | 893,952 | 1.95 | 0.101 | 19.4 | 1.79 | 1.09 | 0.46 |
+| plummer-n1000000-p8-dense | multipoles | 40 | 198 | 2,862,216 | 7.42 | 0.427 | 17.4 | 5.72 | 1.30 | 0.39 |
+| plummer-n1000000-p8-dense | sources | 80 | 36 | 617,984 | 1.33 | 0.085 | 15.6 | 1.24 | 1.08 | 0.46 |
+| plummer-n1000000-p8-dense | multipoles | 80 | 240 | 2,231,712 | 7.50 | 0.419 | 17.9 | 4.46 | 1.68 | 0.30 |
+| plummer-n1000000-p8-dense | sources | 160 | 35 | 405,504 | 1.29 | 0.067 | 19.1 | 0.81 | 1.59 | 0.32 |
+| plummer-n1000000-p8-dense | multipoles | 160 | 342 | 1,747,008 | 8.27 | 0.482 | 17.2 | 3.49 | 2.37 | 0.21 |
+| plummer-n1000000-p8-rotation | sources | 40 | 29 | 893,952 | 1.75 | 0.101 | 17.4 | 1.79 | 0.98 | 0.51 |
+| plummer-n1000000-p8-rotation | multipoles | 40 | 198 | 2,862,216 | 6.23 | 0.427 | 14.6 | 5.72 | 1.09 | 0.46 |
+| plummer-n1000000-p8-rotation | sources | 80 | 36 | 617,984 | 1.15 | 0.085 | 13.4 | 1.24 | 0.93 | 0.54 |
+| plummer-n1000000-p8-rotation | multipoles | 80 | 240 | 2,231,712 | 5.39 | 0.419 | 12.9 | 4.46 | 1.21 | 0.41 |
+| plummer-n1000000-p8-rotation | sources | 160 | 35 | 405,504 | 1.15 | 0.067 | 17.0 | 0.81 | 1.42 | 0.35 |
+| plummer-n1000000-p8-rotation | multipoles | 160 | 342 | 1,747,008 | 5.24 | 0.482 | 10.9 | 3.49 | 1.50 | 0.33 |
+| cube-n10000000-p3-auto | sources | 40 | 22 | 3,541,696 | 6.10 | 0.305 | 20.0 | 7.08 | 0.86 | 0.58 |
+| cube-n10000000-p3-auto | multipoles | 40 | 90 | 1,129,856 | 1.62 | 0.180 | 9.0 | 2.26 | 0.72 | 0.70 |
+| cube-n10000000-p3-auto | sources | 80 | 30 | 2,531,680 | 3.22 | 0.233 | 13.9 | 5.06 | 0.64 | 0.79 |
+| cube-n10000000-p3-auto | multipoles | 80 | 96 | 844,416 | 1.36 | 0.164 | 8.3 | 1.69 | 0.81 | 0.62 |
+| cube-n10000000-p3-auto | sources | 160 | 35 | 1,743,104 | 2.10 | 0.174 | 12.1 | 3.49 | 0.60 | 0.83 |
+| cube-n10000000-p3-auto | multipoles | 160 | 115 | 618,240 | 1.11 | 0.164 | 6.7 | 1.24 | 0.90 | 0.56 |
+| cube-n10000000-p8-dense | sources | 40 | 22 | 3,541,696 | 6.34 | 0.305 | 20.8 | 7.08 | 0.90 | 0.56 |
+| cube-n10000000-p8-dense | multipoles | 40 | 90 | 5,719,896 | 8.82 | 0.548 | 16.1 | 11.44 | 0.77 | 0.65 |
+| cube-n10000000-p8-dense | sources | 80 | 30 | 2,531,680 | 3.84 | 0.233 | 16.5 | 5.06 | 0.76 | 0.66 |
+| cube-n10000000-p8-dense | multipoles | 80 | 96 | 4,274,856 | 9.85 | 0.438 | 22.5 | 8.55 | 1.15 | 0.43 |
+| cube-n10000000-p8-dense | sources | 160 | 35 | 1,743,104 | 2.70 | 0.174 | 15.5 | 3.49 | 0.78 | 0.64 |
+| cube-n10000000-p8-dense | multipoles | 160 | 115 | 3,129,840 | 8.11 | 0.365 | 22.2 | 6.26 | 1.30 | 0.39 |
+| cube-n10000000-p8-rotation | sources | 40 | 22 | 3,541,696 | 6.32 | 0.305 | 20.7 | 7.08 | 0.89 | 0.56 |
+| cube-n10000000-p8-rotation | multipoles | 40 | 90 | 5,719,896 | 8.21 | 0.548 | 15.0 | 11.44 | 0.72 | 0.70 |
+| cube-n10000000-p8-rotation | sources | 80 | 30 | 2,531,680 | 3.56 | 0.233 | 15.3 | 5.06 | 0.70 | 0.71 |
+| cube-n10000000-p8-rotation | multipoles | 80 | 96 | 4,274,856 | 6.40 | 0.438 | 14.6 | 8.55 | 0.75 | 0.67 |
+| cube-n10000000-p8-rotation | sources | 160 | 35 | 1,743,104 | 2.59 | 0.174 | 14.8 | 3.49 | 0.74 | 0.67 |
+| cube-n10000000-p8-rotation | multipoles | 160 | 115 | 3,129,840 | 5.09 | 0.365 | 13.9 | 6.26 | 0.81 | 0.62 |
+| plummer-n10000000-p3-auto | sources | 40 | 26 | 3,760,352 | 5.93 | 0.327 | 18.1 | 7.52 | 0.79 | 0.63 |
+| plummer-n10000000-p3-auto | multipoles | 40 | 222 | 2,068,736 | 4.63 | 0.387 | 11.9 | 4.14 | 1.12 | 0.45 |
+| plummer-n10000000-p3-auto | sources | 80 | 36 | 2,360,032 | 4.39 | 0.225 | 19.5 | 4.72 | 0.93 | 0.54 |
+| plummer-n10000000-p3-auto | multipoles | 80 | 289 | 1,467,776 | 4.34 | 0.406 | 10.7 | 2.94 | 1.48 | 0.34 |
+| plummer-n10000000-p3-auto | sources | 160 | 38 | 1,578,528 | 2.41 | 0.164 | 14.7 | 3.16 | 0.76 | 0.66 |
+| plummer-n10000000-p3-auto | multipoles | 160 | 377 | 1,076,992 | 3.00 | 0.463 | 6.5 | 2.15 | 1.40 | 0.36 |
+| plummer-n10000000-p8-dense | sources | 40 | 26 | 3,760,352 | 6.48 | 0.327 | 19.8 | 7.52 | 0.86 | 0.58 |
+| plummer-n10000000-p8-dense | multipoles | 40 | 222 | 10,472,976 | 23.09 | 1.060 | 21.8 | 20.95 | 1.10 | 0.45 |
+| plummer-n10000000-p8-dense | sources | 80 | 36 | 2,360,032 | 4.82 | 0.225 | 21.4 | 4.72 | 1.02 | 0.49 |
+| plummer-n10000000-p8-dense | multipoles | 80 | 289 | 7,430,616 | 22.07 | 0.883 | 25.0 | 14.86 | 1.49 | 0.34 |
+| plummer-n10000000-p8-dense | sources | 160 | 38 | 1,578,528 | 4.06 | 0.164 | 24.7 | 3.16 | 1.29 | 0.39 |
+| plummer-n10000000-p8-dense | multipoles | 160 | 377 | 5,452,272 | 19.62 | 0.813 | 24.1 | 10.90 | 1.80 | 0.28 |
+| plummer-n10000000-p8-rotation | sources | 40 | 26 | 3,760,352 | 6.70 | 0.327 | 20.5 | 7.52 | 0.89 | 0.56 |
+| plummer-n10000000-p8-rotation | multipoles | 40 | 222 | 10,472,976 | 22.50 | 1.060 | 21.2 | 20.95 | 1.07 | 0.47 |
+| plummer-n10000000-p8-rotation | sources | 80 | 36 | 2,360,032 | 4.61 | 0.225 | 20.5 | 4.72 | 0.98 | 0.51 |
+| plummer-n10000000-p8-rotation | multipoles | 80 | 289 | 7,430,616 | 16.87 | 0.883 | 19.1 | 14.86 | 1.14 | 0.44 |
+| plummer-n10000000-p8-rotation | sources | 160 | 38 | 1,578,528 | 3.76 | 0.164 | 22.9 | 3.16 | 1.19 | 0.42 |
+| plummer-n10000000-p8-rotation | multipoles | 160 | 377 | 5,452,272 | 15.74 | 0.813 | 19.4 | 10.90 | 1.44 | 0.35 |
+
+- **Per byte the exchanges get slower with P**: the busiest rank's bytes over the measured
+  time is 0.37–0.77 GB/s at 40 ranks (median 0.58), 0.27–0.86 at 80 (0.54) and 0.21–0.83
+  at 160 (0.42). The multipole exchange is the slow end at 160 ranks (0.21–0.65 GB/s, below
+  0.4 in 9 of 12 runs),
+  with up to 342 messages from one rank (Plummer, N = 10⁶).
+- **Against §8.2's model the measurement is 3.9–28.7× slower at 160 ranks** (5.5–21.8× at
+  40, 5.8–28.3× at 80). Against Part B's 0.5 GB/s per rank, measured over model is
+  0.60–2.37 at 160 (median 1.28), 0.58–1.87 at 80 (0.98), 0.65–1.37 at 40 (0.87).
+- At these sizes the exchanges are still a small part of an evaluation (S0.7); what grows
+  with P is the per-message share (the Plummer sphere's multipole exchange at 160 ranks
+  moves 345 kB in 342 messages in 1.43 ms).
+
+## S0.8 The replicated part against P
+
+Per run at 40 × 1 per node (40, 80, 160 ranks; p = 8, Rotation, the rule's strategy; and
+N = 10⁸ at p = 3 and 8): the tree's levels, held boxes (max), the fraction not local
+(mean), the coarse gather received per rank and evaluation, `Plan::new`, the octree, the
+build, §9.2's memory model and its coefficient part (*model*) and the peak resident size:
+
+| run | ranks | levels | held boxes max | held not local (mean) | coarse gather received, max (bytes) | build: plan max (ms) | build: octree max (ms) | build wall max (ms) | memory model max (MB, *model*) | coefficients max (MB, *model*) | resident max / mean (MB) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| cube-n1000000-p8-rotation | 40 | 6 | 3,881 | 0.714 | 324,000 | 28.8 | 59.8 | 124.2 | 16.3 | 5.0 | 116.4 / 107.4 |
+| cube-n1000000-p8-rotation | 80 | 6 | 6,505 | 0.925 | 2,621,808 | 20.6 | 60.7 | 110.5 | 18.1 | 8.4 | 141.0 / 135.7 |
+| cube-n1000000-p8-rotation | 160 | 6 | 6,001 | 0.959 | 2,638,008 | 14.4 | 58.5 | 99.4 | 15.2 | 7.8 | 136.9 / 131.8 |
+| plummer-n1000000-p8-rotation | 40 | 10 | 11,561 | 0.858 | 1,233,792 | 57.2 | 68.0 | 174.2 | 31.1 | 15.0 | 142.5 / 133.8 |
+| plummer-n1000000-p8-rotation | 80 | 10 | 12,801 | 0.936 | 1,897,992 | 40.1 | 67.2 | 146.6 | 27.8 | 16.6 | 153.2 / 148.5 |
+| plummer-n1000000-p8-rotation | 160 | 10 | 16,449 | 0.976 | 3,019,680 | 32.2 | 68.3 | 136.4 | 31.4 | 21.3 | 157.7 / 150.5 |
+| cube-n10000000-p8-rotation | 40 | 8 | 16,801 | 0.487 | 324,000 | 234.6 | 567.1 | 1,059.2 | 92.8 | 21.8 | 251.9 / 232.2 |
+| cube-n10000000-p8-rotation | 80 | 8 | 14,457 | 0.709 | 2,621,160 | 120.8 | 534.9 | 805.5 | 62.0 | 18.7 | 240.5 / 207.7 |
+| cube-n10000000-p8-rotation | 160 | 8 | 10,969 | 0.808 | 2,638,008 | 69.3 | 2,622.8 | 2,781.4 | 40.7 | 14.2 | 229.4 / 176.3 |
+| plummer-n10000000-p8-rotation | 40 | 11 | 39,489 | 0.556 | 1,190,376 | 613.5 | 639.6 | 1,638.5 | 153.3 | 51.2 | 350.9 / 317.7 |
+| plummer-n10000000-p8-rotation | 80 | 11 | 30,193 | 0.701 | 1,853,280 | 347.1 | 587.6 | 1,146.0 | 100.3 | 39.1 | 274.1 / 249.0 |
+| plummer-n10000000-p8-rotation | 160 | 11 | 27,993 | 0.840 | 3,041,064 | 205.1 | 2,665.1 | 3,009.0 | 74.9 | 36.3 | 231.8 / 209.8 |
+
+| run, N = 10⁸, 40 × 1 per node | ranks | levels | held boxes max | held not local (mean) | coarse gather received, max (bytes) | build: plan max (ms) | build: octree max (ms) | build wall max (ms) | memory model max (MB, *model*) | coefficients max (MB, *model*) | resident max / mean (MB) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| cube-n100000000-p3-dense | 40 | 9 | 98,489 | 0.287 | 64,000 | 2,130.2 | 6,304.0 | 12,116.3 | 535.7 | 25.2 | 2,220.7 / 1,268.0 |
+| cube-n100000000-p3-dense | 80 | 9 | 60,841 | 0.406 | 517,760 | 1,066.9 | 5,949.9 | 8,757.3 | 284.9 | 15.6 | 2,043.7 / 732.6 |
+| cube-n100000000-p3-dense | 160 | 9 | 37,305 | 0.509 | 521,088 | 534.9 | 9,687.0 | 11,065.2 | 151.4 | 9.6 | 1,936.6 / 409.0 |
+| cube-n100000000-p8-rotation | 40 | 9 | 98,489 | 0.287 | 324,000 | 2,128.6 | 6,314.3 | 12,117.9 | 672.7 | 127.6 | 2,221.0 / 1,370.9 |
+| cube-n100000000-p8-rotation | 80 | 9 | 60,841 | 0.406 | 2,621,160 | 1,073.0 | 5,968.8 | 8,767.8 | 375.2 | 78.8 | 2,037.1 / 802.1 |
+| cube-n100000000-p8-rotation | 160 | 9 | 37,305 | 0.509 | 2,638,008 | 536.5 | 9,714.2 | 11,080.4 | 209.3 | 48.3 | 1,934.7 / 453.6 |
+| plummer-n100000000-p3-dense | 40 | 12 | 269,785 | 0.288 | 235,008 | 7,182.6 | 7,501.0 | 20,869.8 | 904.4 | 69.1 | 2,219.6 / 1,587.6 |
+| plummer-n100000000-p3-dense | 80 | 12 | 166,977 | 0.378 | 376,448 | 3,845.9 | 6,747.4 | 13,287.8 | 484.3 | 42.7 | 2,042.4 / 904.8 |
+| plummer-n100000000-p3-dense | 160 | 12 | 107,905 | 0.504 | 604,416 | 2,048.7 | 10,281.4 | 13,725.1 | 272.2 | 27.6 | 1,937.5 / 502.5 |
+| plummer-n100000000-p8-rotation | 40 | 12 | 269,785 | 0.288 | 1,189,728 | 7,205.3 | 7,523.4 | 20,951.6 | 1,239.9 | 349.6 | 2,221.1 / 1,841.4 |
+| plummer-n100000000-p8-rotation | 80 | 12 | 166,977 | 0.378 | 1,905,768 | 3,844.5 | 6,670.6 | 13,229.2 | 706.4 | 216.4 | 2,041.4 / 1,063.7 |
+| plummer-n100000000-p8-rotation | 160 | 12 | 107,905 | 0.504 | 3,059,856 | 2,545.5 | 10,256.3 | 14,173.3 | 422.9 | 139.8 | 1,937.9 / 607.2 |
+
+- **At N = 10⁶ the replicated part has taken over**: 95.9% (cube) and 97.6% (Plummer) of the
+  held boxes are not local at 160 ranks (92.5% and 93.6% at 80); the coarse gather
+  receives 2.64 MB (cube, every one of 4,096 blocks, as at 80) and 3.02 MB (Plummer, from
+  1.90 at 80) per rank and evaluation; the Plummer sphere's coefficient memory rises from
+  15.0 (40) to 16.6 (80) to 21.3 MB (160) per rank, *model*.
+- **At N = 10⁷ it holds most of a rank's boxes from 80 ranks**: 80.8% (cube) and 84.0%
+  (Plummer) not local at 160 ranks (70.9% and 70.1% at 80); the held boxes and the
+  coefficient memory still fall with P (cube 16,801 → 14,457 → 10,969 boxes).
+- **At N = 10⁸ it is half at 160 ranks**: 50.9% (cube) and 50.4% (Plummer) not local, where
+  §9.2's crossover *model*, P ≈ √(N / 4,700), gives 146. The three sizes agree with the
+  model: about half not local at P ≈ 15, 46 and 146 for N = 10⁶, 10⁷ and 10⁸ (Part B §9 and
+  above).
+- **`Plan::new` keeps falling with P at these sizes**: 14–32 ms at N = 10⁶, 69–205 ms at
+  N = 10⁷, 0.54–2.5 s at N = 10⁸ at 160 ranks, halving from 40 to 80 and falling by about
+  40% from 80 to 160; at N = 10⁶ it falls more slowly than N/P (28.8 → 20.6 → 14.4 ms,
+  cube), the replicated keys' share.
+- **The coarse gather and the global M2M** are a small part of the evaluation at 160 ranks
+  (`upward_global` 1.5–41 ms at N ≤ 10⁷ at 40 × 1; 14–139 ms at N = 10⁸, against 3.4–44 s),
+  and the
+  gather's bytes are what §14.2 grows: 2.64 MB per rank at 160 ranks and every N for the
+  cube (every block), 3.0–3.1 MB for the Plummer sphere.
+- Against §14.2: at 160 ranks and N = 10⁸ the replicated part is half of what a rank holds
+  and the gather 2.6–3.1 MB per evaluation, as the model's growth puts it between its 72
+  and 1,024-rank columns; nothing here measures 1,024 or 8,192 ranks.
+
+## S0.9 Errors and checks at 4 nodes
+
+`nodes-check` at 4 × 40 ranks (job 247606, node-c11a-[051,054,099,143]): 8 charge vectors,
+1,000 targets, the root mean squares of the relative errors against the direct sum, and at
+N = 10⁶ the one-rank `Fmm` (rank 0) of the resolved strategy over every point in index
+order; beside each, Part B's 2 × 40 run (§12, job 238865, before T4):
+
+| run (4 × 40 ranks) | strategy | φ L2 | φ max | ∇φ L2 | ∇φ max | ref φ L2 | ref ∇φ L2 | ref max rel | values differing | 2 × 40 (Phase 5N T2): strategy, φ L2 · ∇φ L2 · ref φ L2 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| cube-n1000000-f64-p3 | Dense | 2.913e-3 | 4.796e-3 | 4.673e-3 | 1.512e-3 | 9.69e-16 | 2.11e-16 | 2.93e-16 | 3485414 | Dense: 2.9130e-03 · 4.6730e-03 · 9.58e-16 |
+| cube-n1000000-f64-p8 | Rotation | 1.889e-5 | 4.908e-5 | 5.942e-5 | 3.981e-5 | 9.32e-16 | 2.47e-16 | 3.91e-16 | 3474707 | Dense: 1.8890e-05 · 5.9420e-05 · 9.59e-16 |
+| cube-n1000000-f32-p8 | Rotation | 1.891e-5 | 4.902e-5 | 5.941e-5 | 3.981e-5 | 4.95e-7 | 1.13e-7 | 1.05e-7 | 3474065 | Dense: 1.9110e-05 · 5.9410e-05 · 7.03e-07 |
+| cube-n10000000-f64-p3 | Dense | 2.720e-3 | 4.226e-3 | 2.679e-3 | 8.455e-4 | – | – | – | – | Dense: 2.7200e-03 · 2.6790e-03 · – |
+| cube-n10000000-f64-p8 | Rotation | 1.741e-5 | 3.688e-5 | 3.491e-5 | 2.223e-5 | – | – | – | – | Dense: 1.7410e-05 · 3.4910e-05 · – |
+| plummer-n1000000-f64-p3 | Dense | 4.007e-3 | 6.300e-3 | 3.384e-3 | 1.203e-3 | 1.07e-15 | 2.07e-16 | 1.83e-16 | 3465271 | Dense: 4.0070e-03 · 3.3840e-03 · 1.10e-15 |
+| plummer-n1000000-f64-p8 | Rotation | 2.754e-5 | 5.001e-5 | 4.087e-5 | 2.073e-5 | 1.02e-15 | 2.04e-16 | 2.44e-16 | 3452360 | Dense: 2.7540e-05 · 4.0870e-05 · 1.06e-15 |
+| plummer-n1000000-f32-p8 | Rotation | 2.755e-5 | 5.011e-5 | 4.087e-5 | 2.073e-5 | 5.76e-7 | 1.32e-7 | 1.31e-7 | 3458472 | Dense: 2.7740e-05 · 4.0870e-05 · 5.75e-07 |
+| plummer-n10000000-f64-p3 | Dense | 3.585e-3 | 5.387e-3 | 5.592e-3 | 3.288e-3 | – | – | – | – | Dense: 3.5850e-03 · 5.5920e-03 · – |
+| plummer-n10000000-f64-p8 | Rotation | 2.414e-5 | 4.429e-5 | 7.161e-5 | 6.984e-5 | – | – | – | – | Dense: 2.4140e-05 · 7.1610e-05 · – |
+
+- **f64**: the errors at 4 nodes equal the 2-node and one-rank runs' in every printed digit
+  (Part B §12; at p = 8 the resolved strategy is now Rotation, T4.4: Dense and Rotation give
+  the same four digits in f64).
+- **f32 p = 8**: T4's rule resolves Rotation at 40 ranks per node; its φ errors are 1%
+  smaller than Dense's at 2 nodes (cube 1.891e-5 against 1.911e-5, as T4.4 found at 40
+  ranks on one node), ∇φ equal.
+- **Against the one-rank `Fmm`**: at most 1.07e-15 (f64, 9.6 u_T) and 5.76e-7 (f32, 9.7
+  u_T) relative L2, within 100 u_T; the random share reorders the points within a leaf, so
+  most values differ in their last bits (3.45–3.49 million of 4 million), as at 2 nodes.
+- **The MPI test list at 4 × 40 ranks** (`mpi.sbatch 160`, job 245668, after S0.1 and S0.2):
+  every executable passes: `mpi_regressions` 11.4 s, `mpi_exec` 514.3 s, `mpi_threading`
+  1.1 s, the six nd-octree examples 0.9–83.0 s (debug, under `timeout 900`).
+- **The `scaling` smoke run at 4 × 2 × 20** (job 241946, the cube at N = 10⁶, f64, p = 3,
+  `--reference --errors 8`): φ L2 2.913e-3, ∇φ 4.673e-3 against the direct sum, 9.55e-16
+  against the one-rank `Fmm`, overlap and blocking identical in every bit.
+
+## S0.10 PSM2_TID=0 against no rendezvous at 4 nodes
+
+Both workarounds of S0.1 avoid PSM2's TID path; with it (the default) the data are wrong,
+so no correct run with TIDs and rendezvous exists to compare with. Job 248448
+(node-c11a-[081-082,088,140], `run.sbatch` with `env -u PSM2_TID
+PSM2_MQ_RNDV_HFI_THRESH=1073741824` around `tools/scaling/run.sh`, the setting printed on
+every node) reran the six 40 × 1 weak runs and the two strong N = 10⁷ runs with Rotation at
+4 × 40 with the other workaround, no rendezvous and TIDs on, against the `PSM2_TID=0`
+runs of S0.4 and S0.6 (jobs 244324, 247053, 247939):
+
+| run (4 × 40 ranks) | job | PSM2 | wall blocking (ms) | wall overlapped (ms) | forward charges max / mean (ms) | source exchange max / mean (ms) | upward global max / mean (ms) | octree build max (ms) |
+| --- | --- | --- | ---: | ---: | --- | --- | --- | ---: |
+| strong-cube-n10000000-p8-rotation | 244324 | `PSM2_TID=0` | 1,357.5 | 1,359.1 | 3.4 / 3.3 | 2.6 / 2.1 | 24.5 / 19.1 | 2,622.8 |
+| strong-cube-n10000000-p8-rotation | 247939 | `PSM2_TID=0` | 1,356.0 | 1,354.3 | 3.4 / 3.3 | 3.1 / 2.1 | 21.2 / 18.6 | 2,630.5 |
+| strong-cube-n10000000-p8-rotation | 248448 | no rendezvous, TIDs on | 1,376.0 | 1,368.3 | 3.4 / 3.2 | 2.5 / 2.0 | 20.6 / 18.6 | 2,632.0 |
+| strong-plummer-n10000000-p8-rotation | 244324 | `PSM2_TID=0` | 4,408.1 | 4,395.2 | 3.5 / 3.4 | 3.8 / 2.6 | 33.1 / 26.8 | 2,665.1 |
+| strong-plummer-n10000000-p8-rotation | 248448 | no rendezvous, TIDs on | 4,494.9 | 4,400.7 | 3.5 / 3.4 | 79.4 / 5.2 | 105.5 / 35.5 | 2,682.4 |
+| weak-cube-n4000000-p3-auto | 247053 | `PSM2_TID=0` | 262.6 | 262.4 | 1.4 / 1.4 | 160.1 / 56.5 | 161.0 / 5.0 | 2,316.5 |
+| weak-cube-n4000000-p3-auto | 247939 | `PSM2_TID=0` | 262.2 | 261.1 | 161.6 / 12.4 | 160.3 / 23.3 | 161.8 / 36.9 | 2,299.8 |
+| weak-cube-n4000000-p3-auto | 248448 | no rendezvous, TIDs on | 282.8 | 273.3 | 161.4 / 18.4 | 160.5 / 44.2 | 161.1 / 40.9 | 2,316.2 |
+| weak-cube-n4000000-p8-dense | 247053 | `PSM2_TID=0` | 3,716.0 | 3,560.1 | 81.4 / 1.9 | 158.7 / 19.6 | 23.1 / 19.8 | 2,316.9 |
+| weak-cube-n4000000-p8-dense | 247939 | `PSM2_TID=0` | 3,518.7 | 3,530.8 | 1.4 / 1.4 | 1.9 / 1.1 | 20.9 / 18.6 | 2,299.9 |
+| weak-cube-n4000000-p8-dense | 248448 | no rendezvous, TIDs on | 3,708.3 | 3,701.2 | 161.4 / 11.4 | 159.9 / 30.5 | 99.0 / 27.6 | 2,311.1 |
+| weak-cube-n4000000-p8-rotation | 247053 | `PSM2_TID=0` | 1,242.4 | 1,161.3 | 1.4 / 1.4 | 80.6 / 8.1 | 19.9 / 17.4 | 2,309.2 |
+| weak-cube-n4000000-p8-rotation | 247939 | `PSM2_TID=0` | 1,292.1 | 1,291.6 | 161.6 / 25.0 | 161.0 / 39.1 | 176.3 / 57.3 | 2,301.1 |
+| weak-cube-n4000000-p8-rotation | 248448 | no rendezvous, TIDs on | 1,298.2 | 1,298.4 | 161.4 / 5.9 | 159.2 / 52.8 | 174.7 / 36.8 | 2,302.0 |
+| weak-plummer-n4000000-p3-auto | 247053 | `PSM2_TID=0` | 420.7 | 419.8 | 81.5 / 3.9 | 160.6 / 68.4 | 161.0 / 5.3 | 2,320.6 |
+| weak-plummer-n4000000-p3-auto | 247939 | `PSM2_TID=0` | 422.6 | 422.4 | 161.7 / 58.5 | 160.9 / 53.5 | 162.1 / 29.2 | 2,317.5 |
+| weak-plummer-n4000000-p3-auto | 248448 | no rendezvous, TIDs on | 421.2 | 420.9 | 161.6 / 39.9 | 160.9 / 57.4 | 82.2 / 3.3 | 2,318.6 |
+| weak-plummer-n4000000-p8-dense | 247053 | `PSM2_TID=0` | 3,555.7 | 3,398.9 | 81.5 / 4.9 | 160.6 / 61.0 | 26.0 / 23.0 | 2,319.5 |
+| weak-plummer-n4000000-p8-dense | 247939 | `PSM2_TID=0` | 3,507.3 | 3,347.0 | 81.5 / 15.5 | 81.7 / 26.6 | 179.4 / 49.3 | 2,317.4 |
+| weak-plummer-n4000000-p8-dense | 248448 | no rendezvous, TIDs on | 3,564.3 | 3,552.5 | 81.5 / 4.4 | 158.9 / 46.5 | 25.6 / 22.2 | 2,316.4 |
+| weak-plummer-n4000000-p8-rotation | 247053 | `PSM2_TID=0` | 1,737.4 | 1,734.1 | 81.4 / 2.4 | 158.3 / 51.4 | 100.4 / 21.3 | 2,319.8 |
+| weak-plummer-n4000000-p8-rotation | 247939 | `PSM2_TID=0` | 1,698.9 | 1,698.6 | 161.5 / 25.9 | 159.5 / 44.8 | 177.9 / 29.5 | 2,315.9 |
+| weak-plummer-n4000000-p8-rotation | 248448 | no rendezvous, TIDs on | 1,724.2 | 1,713.4 | 161.6 / 56.5 | 161.6 / 57.6 | 179.4 / 25.9 | 2,318.6 |
+
+- **The two workarounds cost the same**: the walls agree within 2% (the strong cube at
+  N = 10⁷: 1,376 against 1,357 ms; the weak runs within 0.3–5%, inside the spread of the
+  `PSM2_TID=0` runs themselves); the cost of either against a correct TID path cannot be
+  measured on this machine.
+- **The 80 ms steps are not the setting's**: with rendezvous off they appear in all six
+  weak runs again (81.5 ms and 159.2–161.6 ms in the forward and the source exchange, up
+  to 179 ms in the upward global pass), and this time also in the strong Plummer run
+  (79.4 ms in the source exchange, 105.5 ms in the upward global pass; not in the two
+  `PSM2_TID=0` runs of it). They occur only at 4 × 40 ranks, in every one of four jobs on
+  four node sets, never at 1–2 nodes or at 2 × 20 per node. A fixed 80 ms quantum is the
+  signature of a timeout or retransmission in the transport, inferred, not measured
+  (PSM2's counters were not read).
+- **The octree build is not the setting's either**: 2.30–2.32 s at N = 4·10⁶ and 2.63–2.68 s
+  at N = 10⁷ with both workarounds. It is the construction at 160 ranks (40 per node on 4
+  nodes) for N ≥ 4·10⁶, a fixed 2–4 s at these sizes; at N = 10⁶ (59–82 ms) and at 2 × 20
+  per node (0.33 s at 4·10⁶) it does not appear. For T1, S4's trigger: its messages, bytes
+  and the 80 ms steps inside it are to be measured (the harness times the octree as one
+  part).
+
+## S0.11 Repeats
+
+Four configurations of the strong sweep at 4 nodes ran twice, in different jobs on
+disjoint node sets (244324: node-c11a-[050,123-124,136]; 247939:
+node-c11a-[037,039,082,107], submitted with `--exclude` of the first and of 247053's
+nodes):
+
+| configuration (4 nodes) | first: job, wall (ms) | repeat: job, wall (ms) | repeat / first | octree build max (ms), first / repeat |
+| --- | --- | --- | ---: | --- |
+| cube-n1000000-f64-p3-auto-N4-40x1 | 244324, 29.4 | 247939, 29.3 | 0.996 | 74.3 / 72.3 |
+| cube-n10000000-f64-p8-rotation-N4-40x1 | 244324, 1,357.5 | 247939, 1,356.0 | 0.999 | 2,622.8 / 2,630.5 |
+| plummer-n1000000-f64-p8-dense-N4-40x1 | 244324, 936.4 | 247939, 932.4 | 0.996 | 67.8 / 82.3 |
+| plummer-n10000000-f64-p8-rotation-N4-2x20 | 244324, 3,409.6 | 247939, 3,403.4 | 0.998 | 892.7 / 885.5 |
+
+- **All four within 0.4%** (Part B §7: seven of eight within 5% on one node); the octree's
+  build time repeats too, 2.6 s at N = 10⁷ in both jobs.
+
+## S0.12 For T1
+
+- **4 nodes in practice (decision 0)**: 13 of 13 four-node `small` jobs started, 11 within
+  5 minutes (median 12 s), the first after 27 min on a fully allocated machine and the last
+  after 60 min once the day's use had lowered the fair share. Proposed: the phase's
+  Kathleen work runs at 4 nodes as the briefs plan, with jobs packed so that a day's
+  4-node work is a few jobs, not many. The user decides.
+- **What changed from 2 to 4 nodes**:
+  - a transport defect: wrong data between nodes through PSM2's TID path (S0.1); every
+    job runs with `PSM2_TID=0`, and every 4-node result here is with it. Any later change
+    of Kathleen's PSM2 or driver should be rechecked with `mpi_regressions` at 4 × 20;
+  - the evaluation scales at 0.84–1.05 from 2 to 4 nodes (0.90–1.05 at N = 10⁷), at 160
+    ranks still bound by the downward pass and, on the Plummer sphere at 40 ranks per
+    node, by the compute imbalance (1.31–1.62), which grows with P: design §3.6's cut by
+    work (S3) is the next limit after the tables, as Part B said;
+  - the octree build at 40 × 1 jumps at 160 ranks for N ≥ 4·10⁶: 2.3 s at 4·10⁶ (0.11–0.12 s
+    at 2·10⁶ on 80 ranks), 2.6–2.7 s at 10⁷ (0.53–0.59 s on 80), 9.7–10.3 s at 10⁸ (6.0–6.7 s
+    on 80), while at N = 10⁶ it stays at 59–82 ms and at 2 × 20 it halves with the nodes;
+    and the weak runs at 160 ranks stall in steps of about 80 ms (S0.6); neither is the
+    transport setting's (S0.10);
+  - the exchanges move less per byte at 160 ranks (median 0.42 GB/s per rank).
+- **The exchange rate to model with**: at 160 ranks the busiest rank's bytes over the
+  blocking exchange time are 0.21–0.83 GB/s (median 0.42), the multipole exchange at the
+  slow end (0.21–0.65); model an exchange at **0.4 GB/s per rank, 0.2 GB/s for the
+  multipole exchange**, when every rank of a node exchanges at once, plus the 80 ms
+  steps where they occur (S0.6, S0.10), not at the link rate (§8.2's model is 4–29× too
+  fast). A per-message cost is still not separable (up to 342 messages per rank).
+- **The replicated part at 160 ranks against §9.2 and §14.2**: §9.2's crossover *model*
+  P ≈ √(N / 4,700) holds at all three sizes (half of the held boxes not local at about 15,
+  46 and 146 ranks for N = 10⁶, 10⁷, 10⁸); at 160 ranks 96–98% of the held boxes are not
+  local at N = 10⁶, 81–84% at 10⁷, 50–51% at 10⁸. The coarse gather is 2.64 MB per rank
+  and evaluation for the cube (every block, any N) and 3.0–3.1 MB for the Plummer sphere
+  at 160 ranks; §14.2's growth (2.7 MB at 72 ranks, 170 MB at 8,192, *model*) is consistent
+  with it. `Plan::new` still falls with P to 160 ranks; the held boxes at N = 10⁶ do not
+  (6,001 cube, 16,449 Plummer at 160 against 6,505 and 12,801 at 80).
+- **What T1 still has to time at 4 nodes**:
+  - the construction: the octree's sample sorts and the redistribution at 160 ranks with
+    their messages and bytes (S4's trigger), the 4 ranks that peak at about 2 GB at
+    N = 10⁸ (S0.5), and the 80 ms steps (S0.6, S0.10);
+  - the multipole exchange's messages per rank and their cost at 160 ranks (S5);
+  - the per-kind times at the per-rank sizes of 160 ranks for S3's cost model (the
+    imbalance is measured here, its cause per kind is not);
+  - `srun` against `mpirun` under load, AVX-512, and the per-message cost of Omni-Path
+    remain unmeasured.
+- **Not settled here**: anything above 160 ranks; whether the PSM2 defect also affects
+  messages other than those of `mpi_regressions` (every FMM run here with TIDs off was
+  correct; with TIDs on, the 4 × 2 × 20 smoke run matched the one-rank reference).

@@ -1,10 +1,11 @@
 #!/bin/bash -l
 # tools/kathleen/jobs/mpi.sbatch: the MPI test list of .github/scripts/run-mpi-tests.sh
 # at the given rank counts (Phase 5N T1). One node, `singlenode`, unless the submission
-# says otherwise.
+# says otherwise; at most 4 nodes, in `small` (Phase 5S T0; `test` takes exactly 2):
 #
 #     tools/kathleen/submit.sh mpi.sbatch 1 2 4 8                           # one node
 #     tools/kathleen/submit.sh --qos=test --nodes=2 -- mpi.sbatch 80        # 2 x 40
+#     tools/kathleen/submit.sh --qos=small --nodes=4 --time=00:45:00 -- mpi.sbatch 160   # 4 x 40
 #
 # Builds the list (debug, as in CI), then runs every executable at each rank count under
 # `timeout` (RUN_TIMEOUT, here 900 s unless the submission exports another; CI's 300 s

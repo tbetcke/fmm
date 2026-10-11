@@ -80,6 +80,15 @@ export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 BLIS_NUM_THREA
 export GOTO_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1
 # Some tests of the MPI crates need it (root CLAUDE.md, "Checks").
 export RUST_MIN_STACK=8388608
+# PSM2 (Omni-Path's transport under Open MPI 4.1.6; libpsm2 12.0.1, PSM2 v2.2) delivers
+# wrong data between nodes through its expected-receive (TID) path: on 4 nodes an
+# MPI_Alltoallv left one rank's block from rank 0 at zero, or garbage, in every run, with
+# the psm2 and the ofi MTL and every alltoallv algorithm; over TCP, through shared memory
+# and with TIDs off it passed (Phase 5S T0, jobs 241946, 242295, 242474;
+# fmm-validate/results/phase5n-kathleen.md, "Phase 5S, T0"). With TIDs off, large
+# messages go through PSM2's other paths. Every rank inherits it: mpirun's daemons start
+# through srun with this environment.
+export PSM2_TID=0
 
 # Prepends a directory to a colon-separated variable, once.
 _fmm_kathleen_prepend() {
