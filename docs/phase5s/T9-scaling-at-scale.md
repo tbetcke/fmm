@@ -30,7 +30,8 @@ Read first:
   every decision as signed off;
 - distributed-fmm.md §11, §14 and §15; laplace-fmm-plan.md §7 (Phase 5, Phase 5N);
 - `fmm-validate/results/phase5-m3max.md`, `phase5-gh200.md` and `phase5n-kathleen.md`
-  (the format, and the numbers to compare against);
+  (the format, and the numbers to compare against; its part "Phase 5S, T0: four nodes" is
+  the Phase 5 code at 1, 2 and 4 Kathleen nodes);
 - `nd_fmm_validate::scaling` and `tools/scaling/` (the Kathleen driver of Phase 5N T2);
 - docs/phase6/README.md and its briefs (to revise).
 
@@ -45,7 +46,9 @@ Do:
     1, 2 and 4 nodes.
   - **Phase 5 against Phase 5S**: the Phase 5 code (its merge commit, built in its own
     directory) on the same configurations, to show what S1 and S2 changed (held boxes,
-    the gather, `upward_global`, evaluation time).
+    the gather, `upward_global`, evaluation time). T0's runs are that side at 1, 2 and 4
+    nodes where the configuration matches; rerun only the rest, and a few of T0's as
+    repeats.
   - **The model's inputs**: the per-rank compute at the per-rank sizes of large runs
     (N/P = 10⁴–10⁶) on one node, and the Omni-Path latency and bandwidth seen by the
     exchanges at 2 and 4 nodes.

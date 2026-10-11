@@ -10,8 +10,10 @@ for crate-specific rules; everything here applies to all of them.
   Never change a convention in code; propose changes in the PR description instead.
 - Cite conventions in doc comments as `CONVENTIONS §3.x`.
 - CONVENTION_VERSION in nd-fmm-math must match the file.
-- Current phase and task briefs: docs/phase5n/README.md (Phase 5N, one node: Kathleen,
-  and the M2L tables per node; Kathleen jobs at most 2 nodes for now). Phase 5 briefs:
+- Current phase and task briefs: docs/phase5s/README.md (Phase 5S, the scale-out on
+  Kathleen; Kathleen jobs at most 4 nodes, the user, 2026-10-11; T0 first, a 4-node
+  baseline). Phase 5N briefs: docs/phase5n/README.md (one node: Kathleen, and the M2L
+  tables per node; it ran under a 2-node cap). Phase 5 briefs:
   docs/phase5/README.md (the distributed FMM; design docs/design/distributed-fmm.md,
   from T1). Phase 4S briefs:
   docs/phase4s/README.md (CUDA on NVIDIA Grace Hopper; the device path of Phase 4 on
@@ -92,7 +94,8 @@ under `/scratch/scratch/ucahtbe/fmm` (`check-root.sh` verifies it), inside the 2
 quota that home and Scratch share (`lquota`). The login node takes only short, light
 commands (syncing, `sbatch`, `squeue`, `sacct`, reading output, `cargo fmt`); every
 build, test and run is a Slurm job (`tools/kathleen/jobs/`), and no job is larger than
-2 nodes for now. A session on the M3 Max drives it with `tools/kathleen/sync.sh`, then
+4 nodes (Phase 5S; Phase 5N's cap was 2): 1 node in `singlenode`, 2 in `test`, 4 in
+`small`. A session on the M3 Max drives it with `tools/kathleen/sync.sh`, then
 `tools/kathleen/submit.sh <job>` (submits and waits) or `tools/kathleen/remote.sh
 <command>` (login node only). All use `ssh`, so they run outside the sandbox. Kathleen
 never commits or pushes; its nodes are exclusive, so a report names the job and nodes.
