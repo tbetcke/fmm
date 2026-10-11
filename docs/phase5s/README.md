@@ -261,7 +261,16 @@ These hold for every task, so that no task decides them on its own:
 - **Ranks on Kathleen.**
   - Configurations: 40 ranks × 1 thread per node (flat MPI), and 2 ranks × 20 threads per
     node (one rank per socket, distributed-fmm.md §14.4, S6), with the strategy that
-    Phase 5N's rule picks. Others only where a brief asks.
+    Phase 5N's rule picks (`M2lStrategy::resolve_on_node` with `tools/scaling/run.sh`'s
+    budget of 96 MB on Kathleen: Rotation at f64 p = 8 in both configurations, Dense at
+    f64 p = 3 in both, at f32 p = 8 Rotation at 40 × 1 and Dense at 2 × 20; every
+    report names it, `Fmm::strategy` and the threading line). Phase 5N measured 4 × 10 as
+    the fastest split on one node at f64 p = 8 (docs/design/node-m2l.md §7). Others only
+    where a brief asks.
+  - Tables: with `FmmBuilder::table_cache` on Lustre, one rank per node builds and stores
+    the tables while the others wait at a node barrier, then load (Phase 5N T4, decision
+    7); a warm cache loads in 19–30 ms at p = 8. Runs that time the build use a warm
+    cache or say that they build.
   - Launch with the launcher Phase 5N T1 chose (`srun` or `mpirun` inside the
     allocation), cores bound, the binding printed, every BLAS thread variable at 1.
   - Builds and runs go in jobs, never on the login nodes (UCL's rule: login nodes only

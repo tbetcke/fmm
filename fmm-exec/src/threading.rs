@@ -29,6 +29,34 @@
 //!
 //! `mpi::initialize()` asks for [`Threading::Single`], with which only `threads(1)` builds.
 //!
+//! # Ranks × threads on a node (Phase 5N)
+//!
+//! On a node with many cores, run **a few ranks with threads**: one rank per socket or
+//! NUMA domain, or a few per socket, with ranks × threads × BLAS threads within the
+//! physical cores (docs/design/distributed-fmm.md §14.4, S6, measured in Phase 5N T3,
+//! docs/design/node-m2l.md §7). Threads share their rank's tables, tree and buffers;
+//! ranks each hold their own, so every replicated per-rank structure (the M2L tables,
+//! the top tree, distributed-fmm.md §9.2) grows with the ranks, not the cores. Measured
+//! at N = 10⁶, f64 p = 8, the cube (release, every BLAS variable at 1):
+//!
+//! | machine | best split | its time | one rank per core |
+//! | --- | --- | ---: | ---: |
+//! | Apple M3 Max, 12 performance cores | 1 × 12 | 607 ms | 12 × 1: 613 ms |
+//! | locust (GH200), 72 cores, one NUMA domain | 8 × 9 | 143 ms | 72 × 1: 160 ms |
+//! | Kathleen, 2 × 20 Cascade Lake cores | 4 × 10 | 573 ms | 40 × 1: 638 ms |
+//!
+//! (Rotation in every cell, the strategy [`M2lStrategy::Auto`](crate::tables::M2lStrategy)
+//! now resolves to at f64 p = 8.) With Dense, which `Auto` keeps where the tables are small
+//! (f32 p = 8, f64 p ≤ 6), the gap is larger, since the threads of a rank share one copy
+//! of the tables: 481 ms at 1 × 12 against 1,268 at 12 × 1 on the M3 Max, 108 against 388
+//! at 8 × 9 and 72 × 1 on locust, 392 against 788 at 4 × 10 and 40 × 1 on Kathleen
+//! (node-m2l.md §7). With one rank per core the strategy rule
+//! ([`M2lStrategy::resolve_on_node`](crate::tables::M2lStrategy::resolve_on_node)) keeps
+//! the default within 10 % of the best strategy at p = 8, but not the tree and buffers per
+//! rank. Kathleen's step from 20 to 40 ranks (1.4× in every stage, phase5n-kathleen.md
+//! §1) is the all-core clock and is paid by every split. [`ThreadingReport`] gives the
+//! ranks per node and the strategy's reason for every report.
+//!
 //! # BLAS
 //!
 //! A matrix product called from inside a rayon worker would start its own BLAS threads
@@ -75,6 +103,8 @@ use std::fmt;
 
 use mpi::Threading;
 
+use crate::tables::StrategyChoice;
+
 /// The MPI threading level that more than one thread requires: the pool's threads never
 /// call MPI.
 pub const REQUIRED_MPI_THREADING: Threading = Threading::Funneled;
@@ -110,8 +140,9 @@ impl BlasVariable {
 
 /// How an [`Fmm`](crate::fmm::Fmm) runs: its rayon threads, the MPI threading level
 /// provided, and the BLAS thread variables, read once by
-/// [`FmmBuilder::build`](crate::fmm::FmmBuilder::build); see the [module
-/// documentation](self).
+/// [`FmmBuilder::build`](crate::fmm::FmmBuilder::build), and the node context of the M2L
+/// strategy (Phase 5N T4): the ranks per node and the strategy with its reason; see the
+/// [module documentation](self).
 ///
 /// Its `Display` is one line, for reports.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -122,11 +153,20 @@ pub struct ThreadingReport {
     pub mpi: Threading,
     /// The [`BLAS_VARIABLES`], in that order.
     pub blas: [BlasVariable; 5],
+    /// The ranks per node, the largest over the nodes of the run, which every rank agrees
+    /// (one `split_shared` and the all-reduce of `build`'s step 7); 1 from
+    /// [`read`](Self::read).
+    pub ranks_per_node: usize,
+    /// The M2L strategy of the build and why it was chosen
+    /// ([`M2lStrategy::choose`](crate::tables::M2lStrategy::choose)); `None` from
+    /// [`read`](Self::read), set by `build`.
+    pub m2l: Option<StrategyChoice>,
 }
 
 impl ThreadingReport {
     /// Reads the [`BLAS_VARIABLES`] from this process's environment, for `threads` rayon
-    /// threads and the MPI level `mpi`. Reads only; never sets a variable.
+    /// threads and the MPI level `mpi`, with one rank per node and no strategy. Reads
+    /// only; never sets a variable.
     pub fn read(threads: usize, mpi: Threading) -> Self {
         Self {
             threads,
@@ -135,6 +175,8 @@ impl ThreadingReport {
                 name,
                 value: std::env::var_os(name).map(|value| value.to_string_lossy().into_owned()),
             }),
+            ranks_per_node: 1,
+            m2l: None,
         }
     }
 
@@ -156,7 +198,8 @@ impl ThreadingReport {
 
 impl fmt::Display for ThreadingReport {
     /// For example `rayon threads 4; MPI Funneled; OPENBLAS_NUM_THREADS=1,
-    /// OMP_NUM_THREADS unset (warning), …`.
+    /// OMP_NUM_THREADS unset (warning), …; ranks per node 12; M2L Auto → Rotation: 12
+    /// ranks per node × 8.7 MB > 64 MB` (the M2L part only once `build` set it).
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "rayon threads {}; MPI {:?}; ", self.threads, self.mpi)?;
         let warnings = self.warnings();
@@ -171,6 +214,10 @@ impl fmt::Display for ThreadingReport {
             if warnings.contains(&variable) {
                 f.write_str(" (warning)")?;
             }
+        }
+        write!(f, "; ranks per node {}", self.ranks_per_node)?;
+        if let Some(choice) = &self.m2l {
+            write!(f, "; M2L {choice}")?;
         }
         Ok(())
     }

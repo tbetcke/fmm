@@ -31,8 +31,11 @@ Read first:
   - `nd_fmm_exec::operator`: `LaplaceOperator`, its `m2l` level call and `m2l_target`
     (the target-by-target body over a V row), the per-thread `Scratch` sets, the
     `Execution` that splits a level with `par_chunks_mut`;
-  - `nd_fmm_exec::tables`: `Tables`, `M2lStrategy` (`resolve`, `AUTO_DENSE_MAX_P`),
-    `load_or_build`;
+  - `nd_fmm_exec::tables`: `Tables`, `M2lStrategy` (`resolve_on_node`, `choose`, the
+    constants `AUTO_DENSE_RANK_BYTES` and `AUTO_DENSE_NODE_BYTES`; `resolve` and
+    `AUTO_DENSE_MAX_P` deprecated in Phase 5N T4), `NodeContext`, `StrategyChoice`,
+    `load_or_build`; `FmmBuilder::dense_node_budget`, and `table_cache` (one rank per node
+    builds and stores first since Phase 5N T4);
   - `nd_fmm_tables`: `MatrixSet::apply` (the hand-written product), `M2lTables`,
     `M2lClasses` (`expand`), `RotationTables`, the `cache` module (`TableKind`,
     `CacheKey`, `TableCache`);

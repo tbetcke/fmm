@@ -69,6 +69,17 @@ available, two phases are inserted before Phase 6: Phase 5N (Kathleen's environm
 baseline, and the M2L tables per node; docs/phase5n/) and Phase 5S (the scale-out of
 distributed-fmm.md §14; docs/phase5s/). Phase 6 gains C6.6 (host batched M2L), C6.7
 (AVX-512 P2P) and C6.8 (FMM3D comparison), and its briefs are in docs/phase6/.
+Revised at the end of Phase 5N (2026-10-11; Sections 7, 8.3, 9.1 and 9.2): UCL's Kathleen
+cluster is the third machine (docs/phase5n/; `tools/kathleen/`, every job at most 2
+nodes): its environment rebuilds from the repository and every CPU-side check passes in
+Slurm jobs; Phase 5's code was measured on one node and two
+(`fmm-validate/results/phase5n-kathleen.md`), with an inter-node efficiency of 0.99–1.04
+from 1 to 2 nodes at N = 10⁷; and the host M2L strategy now sees the node
+([node-m2l.md](node-m2l.md)): `Auto` resolves to Dense only while the dense tables of a
+rank (at most 9 MB) and of all the ranks of a node (at most a budget per machine class) are
+small, and to Rotation otherwise. At p = 8 the default is within 1.03 of the best strategy
+at every ranks-per-node count measured on the three machines, where the rule of Phases 2–5
+was up to 6.45× slower. With a table cache one rank per node builds the tables first.
 
 > Where this document and `docs/CONVENTIONS.md` differ (normalisation, phases, scaling),
 > **the conventions file takes precedence.** Section 2.4 below now follows the scaling of
@@ -442,9 +453,9 @@ The Phase 0 spike (task T6, `spikes/cubecl-gemm/SPIKE_REPORT.md`) put numbers on
 | Method | M2L cost per pair | Per-box conversion | Precomputed data | GPU fit | Accuracy control | Role in this library |
 | --- | --- | --- | --- | --- | --- | --- |
 | Direct matrices | O(p⁴), bandwidth-bound per pair | none | none (or 316 matrices) | poor unless batched | exact truncation at p | f64 oracle; source of dense tables |
-| Dense precomputed + GEMM | O(p⁴) flops, compute-bound | none | 316 × (p+1)⁴ values, or 16 with symmetry | excellent | exact truncation at p | GPU default in f32 (p ≤ 8, measured; hand-written kernel, Phase 4); provisional f64 GPU default for p ≤ 11; CPU per-pair default for p ≤ 8 (Phase 2, measured) |
+| Dense precomputed + GEMM | O(p⁴) flops, compute-bound | none | 316 × (p+1)⁴ values, or 16 with symmetry | excellent | exact truncation at p | GPU default in f32 (p ≤ 8, measured; hand-written kernel, Phase 4); provisional f64 GPU default for p ≤ 11; CPU per-pair default for p ≤ 8 (Phase 2, measured), since Phase 5N only while the dense tables of a rank (≤ 9 MB: f64 p ≤ 6, f32 p ≤ 8) and of a node are small ([node-m2l.md](node-m2l.md)) |
 | Dense + SVD compression | O(k²) with k < (p+1)², plus basis changes | O(p² k) | shared bases + small cores | excellent | truncation at p and SVD tolerance | optimisation after the default works |
-| Rotation (point-and-shoot) | ≈ (10/3)(p+1)³ multiply-adds | none | rotation and coaxial tables, O(p³) | good; irregular inner loops | exact truncation at p | CPU per-pair default for p ≥ 10 (Phase 2, measured); provisional f64 GPU default for p ≥ 12; chosen by the tuner in f32 on large trees (N = 10⁶, p ≥ 6; Phase 4) |
+| Rotation (point-and-shoot) | ≈ (10/3)(p+1)³ multiply-adds | none | rotation and coaxial tables, O(p³) | good; irregular inner loops | exact truncation at p | CPU per-pair default for p ≥ 10 (Phase 2, measured), since Phase 5N for every p whose dense tables exceed 9 MB per rank (f64 p ≥ 7) and wherever the node's exceed the budget; provisional f64 GPU default for p ≥ 12; chosen by the tuner in f32 on large trees (N = 10⁶, p ≥ 6; Phase 4) |
 | Plane-wave | O(p²) diagonal | O(p³) × 6 directions | quadrature tables; ~2.5× expansion memory | good, complex bookkeeping | fixed quadrature levels | optional phase 6 |
 | FFT / Toeplitz | O(p² log p), large constant | FFT setup | FFT plans | fair | stability concerns | not planned |
 | Cartesian Taylor | O(p⁴)–O(p⁶) | none | none | excellent at low p | exact truncation at p | optional low-accuracy f32 path |
@@ -2080,9 +2091,74 @@ dense M2L tables stop strong scaling at 4–32 ranks per node (Section 7, Phase 
 
 | ID | Component | Acceptance criterion | Depends on | Status |
 | --- | --- | --- | --- | --- |
-| C5N.1 | Kathleen's queue and environment (`tools/kathleen/`) | first a queue probe (the wait for 2- and 4-node jobs) and the user's decision whether Kathleen is usable; if so, the environment rebuilds from the repository and every existing CPU-side check passes in Slurm jobs, the MPI tests on one and two nodes | Phase 5 | Not started |
-| C5N.2 | Kathleen baseline (only if Kathleen is usable) | Phase 5's scaling sweeps on one, two and four nodes (never more than four), the x86 host profile, the inter-node exchanges against distributed-fmm.md §8.2; report published | C5N.1 | Not started |
-| C5N.3 | M2L on a node | a measured strategy rule that sees ranks per node and threads per rank (signed off), table loading safe at scale, ranks × threads guidance; the default within a stated margin of the best strategy at every ranks-per-node count on the three machines | C5N.2 | Not started |
+| C5N.1 | Kathleen's queue and environment (`tools/kathleen/`) | first a queue probe (the wait for 2- and 4-node jobs) and the user's decision whether Kathleen is usable; if so, the environment rebuilds from the repository and every existing CPU-side check passes in Slurm jobs, the MPI tests on one and two nodes | Phase 5 | **Done** (T1: the probe and decision 0, Kathleen usable with every job at most 2 nodes; `tools/kathleen/`; 4-node jobs dropped with the 2-node cap) |
+| C5N.2 | Kathleen baseline (only if Kathleen is usable) | Phase 5's scaling sweeps on one, two and four nodes (never more than four), the x86 host profile, the inter-node exchanges against distributed-fmm.md §8.2; report published | C5N.1 | **Done at one and two nodes** (T2; four nodes not measured, the 2-node cap) |
+| C5N.3 | M2L on a node | a measured strategy rule that sees ranks per node and threads per rank (signed off), table loading safe at scale, ranks × threads guidance; the default within a stated margin of the best strategy at every ranks-per-node count on the three machines | C5N.2 | **Done** (T3 the study and node-m2l.md, signed off; T4 the rule, the table loading, the guidance; the margin met at p = 8) |
+
+**Status at the end of Phase 5N** (2026-10-11; the reports
+`fmm-validate/results/phase5n-kathleen.md`, with its section "Phase 5N, T4", and
+[node-m2l.md](node-m2l.md) §10; decisions 0–8 of docs/phase5n/README.md):
+- **C5N.1** (T1). The queue probe's 2-node `test` job waited minutes (one job, a weak
+  sample; docs/phase5n/kathleen-probe.md); decision 0: Kathleen usable, every job at most
+  2 nodes (the user's cap from 2026-10-10).
+  `tools/kathleen/` rebuilds the environment from the repository (pinned modules: gcc
+  12.3.0, Open MPI 4.1.6, OpenBLAS 0.3.28, llvm 17.0.6; rustup with the toolchain of
+  `env.sh`) under one root inside the 250 GB quota; builds, tests and runs are Slurm jobs
+  (`submit.sh`), the login node takes only short commands. Open MPI runs over PSM2
+  (Omni-Path) between and within nodes; the launcher is `mpirun` inside the allocation,
+  `--bind-to core` with an explicit `--map-by` (decision 4). Diskless nodes: `TMPDIR` per
+  job in `/dev/shm`. Every CPU-side check passes in jobs, the MPI test list at 1–8 ranks
+  and at 2 × 40, except two tests of the Phase 3S spike `spikes/p2p-simd` (its "est+S2"
+  f64 estimate and green-kernels' f64 gradient, outside their bounds on Intel; the
+  library's AVX2 kernels pass their contract exhaustively). 1.54 node-hours.
+- **C5N.2** (T2). One node at 1–40 ranks: p = 3 scales to an efficiency of 0.93 / 0.89
+  (cube / Plummer) at 20 ranks; at p = 8 the per-rank dense tables limit the downward pass
+  from 2 ranks per socket (its total over the ranks 3.21× one rank's at 40), Rotation
+  being the fastest strategy at every count (0.72–0.81× Dense's time on one rank). The
+  step from 20 to 40 ranks costs 1.4× in every stage (the all-core clock, inferred). From
+  1 to 2 nodes the efficiency is 0.99–1.04 at N = 10⁷; the blocking exchanges move
+  0.27–0.86 GB/s per rank, 5–29× below distributed-fmm.md §8.2's 100 Gbit/s *model*, about
+  as on one node (the node's copies and the neighbour synchronisation, not the link). The
+  x86 host: the AVX2 + FMA P2P kernels timed on Intel for the first time; a build for the
+  CPU (`-C target-cpu=cascadelake`) makes Dense 1.19–1.24× faster on one rank and
+  Rotation 1.05–1.12× slower (a Phase 6 question). 7.31 node-hours.
+- **C5N.3** (T3, T4). T3 measured the strategies over 194 cells on the three machines,
+  isolated the cause (Dense neighbours on the same socket triple a rank's M2L time per
+  pair; on the other socket nothing), and proposed rule B, signed off on 2026-10-11 with
+  the budget per machine class. T4 built it (`M2lStrategy::resolve_on_node`,
+  `NodeContext`, `FmmBuilder::dense_node_budget`; the ranks per node from one
+  `split_shared` and step 7's all-reduce; the reason in `ThreadingReport`), and with
+  `table_cache` one rank per node builds and stores the tables first (decision 7;
+  `TableCache` unchanged); no shared window (decision 6). Measured before and after at
+  N = 10⁶: at p = 8 the default is within 1.015 (M3 Max), 1.011 (locust) and 1.029
+  (Kathleen) of the best strategy at every ranks × threads of T3's grid, against 4.03,
+  6.45 and 2.83× for the old rule at the largest one-thread count; f64 p = 8 resolves to
+  Rotation, the best in every cell; the errors equal Dense's to four digits in f64 (1%
+  smaller in f32). Where the budget decides, the default is within 1.16 (f32 p = 8 at 12
+  ranks per node on Kathleen, decision 8's known exception) and 1.12 (f64 p = 6 on the M3
+  Max, whose harness budget the user set to 56 MB after T4's runs); the 9 MB cap stays
+  (f64 p = 7 splits by machine). 3.94 (T3) and 2.39 (T4) node-hours.
+- **The guarantee** is restated per resolved strategy: on P ranks the output is bit for
+  bit the one-rank `Fmm` of the same resolved strategy over the union in rank order
+  (checked at 1–8 ranks on the three machines and at 2 × 40). One-rank results changed
+  only where `Auto` now resolves differently (f64 p = 7 and 8: Rotation).
+
+**Recommendation for Phase 5S** (T4):
+- **Assume the rule's strategy and few ranks per node with threads.** On Kathleen with the
+  harness's 96 MB: Rotation at f64 p = 8 in every configuration, Dense at f64 p = 3, and at
+  f32 p = 8 Dense at 2 × 20 and Rotation at 40 × 1; the fastest split at f64 p = 8 on one
+  node is 4 × 10 (573 ms; 2 × 20 587, 40 × 1 638), so 2 × 20 (S6) loses little and holds
+  20× fewer copies of every replicated structure than 40 × 1.
+- **Model an exchange at the measured per-rank rate**, about 0.5 GB/s per rank when every
+  rank of a node exchanges at once, not at the link rate, until a run above 2 nodes says
+  otherwise (T2).
+- **Pass a `table_cache` on Lustre** for builds at scale: a warm cache loads Dense p = 8 in
+  19–30 ms per rank, and a cold one is filled once per node.
+- **Start S1/S2 from the replicated top tree**, which dominates the held boxes from about
+  16 ranks at N = 10⁶ (T2); a node window for it is the one place where the `mpi-sys`
+  permission (decision 6) may pay.
+- Beyond 2 nodes everything stays unmeasured until the cap is lifted (the user's decision).
+
 
 ### Phase 5S: scale-out (`nd-octree`, `nd-fmm-plan`, `fmm-exec`)
 
@@ -2276,6 +2352,18 @@ ignored gates and every timing stay by hand, on the M3 Max and on locust.
   The reports are `fmm-validate/results/phase5-m3max.md` and `phase5-gh200.md`; the
   numbers are in Section 7, Phase 5. Every figure is one node over shared memory; the
   inter-node command is documented in `tools/scaling/run.sh` and not run.
+- *Done in Phase 5N* on Kathleen (T2–T4): `tools/scaling/run.sh` runs the sweeps inside a
+  Slurm allocation (`tools/kathleen/jobs/sweep.sbatch`; `mpirun --map-by
+  ppr:<k>:socket:PE=<t> --bind-to core`; each file names the job, QoS, node list and
+  binding instead of a load check, the nodes being exclusive), and every report names
+  where its ranks ran (`scaling::Placement`). T3 added the per-kind M2L time per V pair
+  (`--kinds`), the reference of another strategy (`--reference-strategy`) and the table
+  build and cache examples (`tables`, `node_tables`); T4 the node budget (`--budget`, set
+  per machine class by `run.sh`), the strategy's reason in every report, and the sweeps
+  `node-rule` (T3's grid, `auto` against the other strategy) and `crossover`. Every job
+  states its node-hours. Reports: `fmm-validate/results/phase5n-kathleen.md` (with the T4
+  section for all three machines) and [node-m2l.md](node-m2l.md); numbers in Section 7,
+  Phase 5N.
 
 ## 9. Risks, open questions and working with Claude Code
 
@@ -2320,7 +2408,15 @@ and identity tests, the second with a one-day spike before Phase 4.
 | macOS schedules ranks on efficiency cores, and background jobs share the cores (Phase 5) | M3 Max timings vary | **Mitigated (T10):** at most 12 ranks × threads, the one 16-rank run labelled; `tools/scaling/run.sh` waits before each launch until other processes use at most two cores and records it, after a first sweep was discarded while Microsoft Defender's scanner used 3.5–6 cores |
 | locust is a multi-user node, and 72 ranks need every core (Phase 5) | locust timings vary | **Mitigated (T10):** the load recorded before and after every launch and the binding printed; no other user's job ran during any timing run; two root system jobs (`find /`, `dnf makecache`) ran during some runs, and the 64- and 72-rank strong runs were repeated |
 | The O(P) replicated data (coarse tree, coarse gather) dominates at large P (Phase 5) | memory and traffic per rank stop falling with P | **Measured (T10):** at N = 10⁶ the replicated part dominates the held boxes from 16–32 ranks (92% at 72, 97% at 256) and the coarse gather (2.6 MB per rank and evaluation at 72) is the cube's largest exchange; irrelevant at P ≤ 12. distributed-fmm.md §14 plans its replacement for a cluster |
-| Per-rank copies of read-only data compete for one node's caches and memory bandwidth (found in T10) | strong scaling at high p stops at a few ranks per node | **Open (found in T10):** at p = 8 every rank holds its own 316 dense M2L tables (16.6 MB in f64), and the downward pass stops scaling beyond 4–8 ranks on the M3 Max and 32 on locust, while Rotation, Classes (small tables) and threads per rank (one copy) scale. For Phase 6 (Section 7, Phase 5, "Recommendation") |
+| Per-rank copies of read-only data compete for one node's caches and memory bandwidth (found in T10) | strong scaling at high p stops at a few ranks per node | **Mitigated in Phase 5N (T3, T4):** the cause measured (Dense neighbours on the same socket triple a rank's M2L time per pair, T3), and `Auto` resolves with the ranks per node: within 1.03 of the best strategy at p = 8 at every count measured on the three machines, within 1.16 in the band where the budget decides. The dense tables still cost one copy per rank; the deep fix, the batched host M2L (C6.6), stays in Phase 6 |
+| Builds on Kathleen's login node, or a full quota (Phase 5N) | the machine's rules broken, jobs failing | **Retired as built (T1):** every build, test and run is a Slurm job (`tools/kathleen/submit.sh`); the login node only syncs, submits and reads; 22.7 of the 250 GiB quota in use after T2 |
+| Diskless nodes: Open MPI, cargo or rustc write to a `/tmp` that is RAM or missing (Phase 5N) | jobs fail or fill memory | **Retired (T1):** `TMPDIR` and Open MPI's session directory per job in `/dev/shm`, measured empty at every job's end |
+| Kathleen's queue stalls the work (Phase 5N) | tasks wait for days | **Not realised:** 2-node `test` jobs started within 37 s–13 min, one-node `singlenode` jobs within 1 s–1 h 36 min (behind the task's own two running jobs) |
+| Open MPI 4.1.6 behaves differently from 5.0.10 (Phase 5N) | hangs or wrong transports on the cluster | **Retired as far as measured (T1–T4):** PSM2 over Omni-Path, `mpirun` inside the allocation; the MPI test list passes at 1–8 ranks on a node and at 2 × 40 |
+| The AVX2 kernels behave differently on Intel (Phase 5N) | P2P outside its contract on Intel | **Retired for the library (T1):** `nd-fmm-simd`'s AVX2 + FMA kernels pass the 4 u_T contract exhaustively in f32 on Cascade Lake; the spike's "est+S2" f64 estimate (289 u) and green-kernels' f64 gradient do not, which the library does not use |
+| A strategy rule that depends on the node gives different bits at different launch configurations (Phase 5N) | runs at different rank counts disagree in the last bits | **As designed (T4):** the inputs are agreed (step 7's all-reduce) and reported (`Fmm::strategy`, `ThreadingReport::m2l`); bit identity holds per resolved strategy; a caller who needs the same bits across rank counts names the strategy |
+| Kathleen's cache hierarchy gives another crossover (Phase 5N) | one rule wrong on one machine | **Realised (T3, T4):** the crossover in bytes per node differs by machine and by precision (f64 p = 6 about 51–64 MB, f32 p = 8 140–175 MB on Kathleen; 38–51 and 52–70 MB on the M3 Max), so the budget is set per machine class (64 MB in the library, 56 on the M3 Max, 96 on locust and Kathleen) and the band keeps a measured miss of at most 1.16 |
+| Two nodes say little about 1,000+ ranks (Phase 5N) | the scale-out designed on a small sample | **Open (stated):** the 2-node cap stays; beyond 2 nodes the evidence is oversubscribed locust runs and *models* (distributed-fmm.md §14.5); Phase 5S starts from T2's per-rank exchange rate |
 
 
 ### 9.2 Open questions
@@ -2426,7 +2522,10 @@ and identity tests, the second with a one-day spike before Phase 4.
     one-rank nodes (O1–O4), within 1.06 of the mean at 2–8 ranks; the per-rank work at
     16–72 ranks is in Section 7, Phase 5 (T10), and decides a second cut by modelled work
     (a Phase 6 or scale-out candidate, decision 13).
-  - *Still open:* **inter-node scaling.** Every Phase 5 figure is one node over shared
+  - *Partly answered in Phase 5N:* **inter-node scaling.** Kathleen measured 1 and 2 nodes
+    (T2): an efficiency of 0.99–1.04 from 1 to 2 nodes at N = 10⁷, the exchanges at
+    0.27–0.86 GB/s per rank, as on one node; beyond 2 nodes still unmeasured (the
+    user's cap). Every Phase 5 figure is one node over shared
     memory (the M3 Max at up to 12 ranks, locust at up to 72); no cluster was available
     (decision 2). The exchanges at network bandwidth and latency, the value of overlap
     there, and scaling beyond one node with the replicated top tree (coarse blocks,
@@ -2434,14 +2533,15 @@ and identity tests, the second with a one-day spike before Phase 4.
     that would settle them is one command (`tools/scaling/run.sh`, header; design §11),
     and distributed-fmm.md §14 plans the scale-out phase that replaces the replicated top
     tree.
-  - *New in T10:* **the host M2L strategy on several ranks per node.** `Auto` picks Dense
-    up to p = 8 from one-rank measurements, but with 8 or more ranks on one node the
-    per-rank dense tables (16.6 MB each at p = 8 in f64) stop the downward pass from
-    scaling, and Rotation (or Classes, or threads per rank) is several times faster: at
-    72 ranks on locust the cube takes 164 ms with Rotation against 940 ms with Dense
-    (Section 7, Phase 5). Should the rule see the ranks per node, should the tables be
-    shared per node, or should the host M2L read each table once per level (a batched
-    host M2L)? For Phase 6.
+  - *Answered in Phase 5N:* **the host M2L strategy on several ranks per node.** The
+    rule sees the ranks per node ([node-m2l.md](node-m2l.md) §4, built in T4): Dense iff
+    the dense tables of a rank are at most 9 MB and those of the node at most a budget per
+    machine class, Rotation otherwise; at p = 8 within 1.03 of the best strategy at every
+    count measured on the three machines (Section 7, Phase 5N). No tables are shared per
+    node in this phase (decision 6: a shared window measured, its gain over the rule and
+    threads at most 25% of M2L); the batched host M2L (C6.6) stays the deep fix, for
+    Phase 6. *Still open:* a rule that weighs the precision (the crossover in bytes differs
+    between f32 and f64 on every machine; node-m2l.md §10.2), for Phase 6 with C6.6.
   - *Still open:* **the device on several GPUs.** The device runs on several ranks for
     correctness only: on both machines every rank shares the one GPU, so no device
     scaling figure exists. Every rank opens the default device (`Device::open` takes no

@@ -68,7 +68,7 @@ use mpi::Threading;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
 use nd_fmm_exec::fmm::Backend;
-use nd_fmm_exec::tables::M2lStrategy;
+use nd_fmm_exec::tables::{M2lStrategy, NodeContext};
 use nd_fmm_validate::bench::{cores, cpu_model, performance_cores, target, toolchain};
 use nd_fmm_validate::calibration::{
     LEAF_RULE_BASELINE, LEAF_RULE_ERROR_GROWTH, LEAF_RULE_GAIN, LEAF_SIZES, Precision, Reference,
@@ -457,10 +457,13 @@ fn host_of(host: &[Measurement], strategy: M2lStrategy, threads: usize) -> &Meas
         .expect("every fixed strategy runs on the host at both thread counts")
 }
 
-/// The host path's default: `Auto`, as the host resolves it at this p.
+/// The host path's default: `Auto`, as the host resolves it at this p and precision on
+/// one rank (the example runs on one; Phase 5N T4, `M2lStrategy::resolve_on_node`).
 fn host_default(host: &[Measurement], threads: usize) -> &Measurement {
-    let p = host[0].run.p;
-    host_of(host, M2lStrategy::Auto.resolve(p), threads)
+    let run = &host[0].run;
+    let value_bytes = if run.precision == "f32" { 4 } else { 8 };
+    let node = NodeContext::new(run.p, value_bytes, 1, M2lStrategy::AUTO_DENSE_NODE_BYTES);
+    host_of(host, M2lStrategy::Auto.resolve_on_node(&node), threads)
 }
 
 /// The tables of one problem.

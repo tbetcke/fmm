@@ -54,8 +54,10 @@ Do:
 - **M2M and L2L** in the same form if T1 found it pays (decision 2); otherwise unchanged.
 - **Classes** through the batched form if T1 recommends it (the class matrices with the
   coefficient transforms around the product), else unchanged.
-- **The strategy rule**: `Auto` unchanged in this task. Report how the batched M2L
-  compares to every strategy so that T11 (and Phase 5N's rule) can be revisited.
+- **The strategy rule**: `Auto` unchanged in this task (Phase 5N T4's rule:
+  `M2lStrategy::resolve_on_node`, Dense while the dense tables of a rank and of a node are
+  small, Rotation otherwise; docs/design/node-m2l.md). Report how the batched M2L compares
+  to every strategy so that T11 (and Phase 5N's rule) can be revisited.
 - **Accounting**: the per-kind timings (`KindTiming`) and the scaling harness's stage
   times cover the new path; `Fmm::strategy()` (or the build report) names it.
 - **Measurements** (release, BLAS variables 1, the machine named), against the

@@ -90,6 +90,15 @@ directory at once or one rank per node first, the check bit for bit and the warm
 any number of ranks. `tests/scaling.rs` covers the kind timings and the reference of
 another strategy.
 
+Phase 5N T4 (the strategy rule on the node) added `Settings::dense_node_budget`
+(`--budget MB`, the node budget of `Auto`), the reference of the resolved strategy by
+default (`Fmm::strategy`; under `Auto` a one-rank `Fmm` may resolve another), the
+summary's `requested`, `budget_mb`, `dense_rank_mb` and `dense_node_mb` (the reason is in
+the threading line), and in `tools/scaling/run.sh` the budget per machine class
+(`BUDGET`: 56 on the M3 Max, set by the user after T4's runs, 96 on locust and Kathleen) and the sweeps `node-rule` (T3's
+grid, `auto` against the other strategy, the cap and the errors) and `crossover`. The
+before/after report is in `results/phase5n-kathleen.md`, "Phase 5N, T4".
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

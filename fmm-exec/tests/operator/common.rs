@@ -35,7 +35,7 @@ use std::sync::{Mutex, OnceLock};
 
 use nd_fmm_exec::geometry::{Domain, centre, leaf_coordinates, radius};
 use nd_fmm_exec::operator::{Isa, LaplaceOperator, P2pChoice};
-use nd_fmm_exec::tables::{M2lStrategy, Tables};
+use nd_fmm_exec::tables::{M2lStrategy, NodeContext, Tables};
 use nd_fmm_math::{Layout, harmonics};
 use nd_fmm_ref::Frame;
 use nd_fmm_tables::MatrixSet;
@@ -439,7 +439,10 @@ pub fn tables(strategy: M2lStrategy, p: usize) -> &'static Tables<f64> {
     let cache = CACHE.get_or_init(Default::default);
     let mut cache = cache.lock().unwrap();
     cache
-        .entry((strategy.resolve(p), p))
+        .entry((
+            strategy.resolve_on_node(&NodeContext::one_rank::<f64>(p)),
+            p,
+        ))
         .or_insert_with(|| Box::leak(Box::new(Tables::build(p, strategy))))
 }
 

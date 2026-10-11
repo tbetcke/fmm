@@ -1,6 +1,6 @@
 # M2L on a node: design for Phase 5N T4 (C5N.3)
 
-As of 2026-10-10. Written in Phase 5N T3 ([docs/phase5n/T3-m2l-node-
+As of 2026-10-11 (Section 10, the outcome of T4, added). Written in Phase 5N T3 ([docs/phase5n/T3-m2l-node-
 study.md](../phase5n/T3-m2l-node-study.md)); signed off by the user on 2026-10-11, every
 recommendation as proposed, with the budget set per machine class and the far-field build
 for the CPU in Phase 6 (Section 9; docs/phase5n/README.md, decisions 5–8). It
@@ -548,3 +548,62 @@ S1/S2 measure it worth it.
 per machine class (the library default 64 MB, the harness 64 MB on the M3 Max and 96 MB on
 locust and Kathleen; Section 4); question 7 a far-field build for the CPU, in Phase 6
 (Section 8).
+
+## 10. Outcome (Phase 5N T4)
+
+Built and measured in T4 on 2026-10-11 (docs/phase5n/T4-node-m2l.md; the report is
+`fmm-validate/results/phase5n-kathleen.md`, "Phase 5N, T4": the M3 Max, locust, and one
+Kathleen node in job 241833). The sections above stay as signed off; this one records what
+was built where it differs, and the numbers.
+
+### 10.1 Decisions as taken
+
+| Topic (section) | As signed off | As built |
+| --- | --- | --- |
+| the rule (§4, decision 5) | B: Dense iff D(p, T) ≤ 9 MB and r · D ≤ the node budget | as designed: `M2lStrategy::resolve_on_node` over a `NodeContext` (p, value bytes, ranks per node, budget) and `M2lStrategy::choose`, which also returns the reason (`StrategyChoice`: named, the node rule with its inputs, or the device path); `AUTO_DENSE_RANK_BYTES` = 9 MB and `AUTO_DENSE_NODE_BYTES` = 64 MB; `AUTO_DENSE_MAX_P` and `resolve(p)` deprecated (`resolve` is the one-rank f64 case of the rule); `Tables::build` and `load_or_build` resolve `Auto` on one rank in their own precision |
+| the 9 MB cap (§4: f64 p = 7 and f32 p = 9 extrapolated) | T4 to confirm or move it | **kept, by the user (2026-10-11)**: at one rank f64 p = 7 splits by machine (Dense 6–10% faster on the M3 Max and locust, 10–15% slower on Kathleen), f32 p = 9 is Dense's by 14–31% everywhere but beyond f32's useful degree |
+| the node context (§4, §8) | one `split_shared` on the host path; ranks per node in step 7's all-reduce | as designed: one split on every backend in step 1 (the device path's `RankPlacement` takes the same communicator, so the device path splits once as before), step 7's all-reduce of two maxima; threads do not enter |
+| what is reported (§4) | `ThreadingReport` with the ranks per node and the reason | as designed: `ThreadingReport::{ranks_per_node, m2l}`, the `Display` ending "ranks per node 40; M2L Auto → Rotation: 40 ranks per node × 8.7 MB > 96 MB"; `Fmm::strategy` the resolved strategy, as before |
+| the budget per machine class (§4, question 5) | the library 64 MB; the harness 64 MB on the M3 Max, 96 MB on locust and Kathleen | `FmmBuilder::dense_node_budget`, the library default 64 MB; the harness (`tools/scaling/run.sh`, `BUDGET`) **56 MB on the M3 Max, set by the user on 2026-10-11** after T4 measured f64 p = 6 at 8 and 10 ranks per node (Dense 1.11 and 1.83× Rotation's time under 64 MB; §10.2), and 96 MB on locust and Kathleen |
+| tables at scale (§5, decision 7) | with `table_cache`, one rank per node first, a node barrier, the others load; `TableCache` unchanged | as designed: the node's lowest rank `load_or_build`s, `barrier` on the node's communicator, the others `load_or_build` (a load, unless a file was rejected); with no cache every rank builds. A warm cache costs one load more on the first rank. `nd-fmm-tables` unchanged |
+| one copy per node (§6, decision 6) | none in this phase | none; nothing built |
+| the guarantee (§4) | per resolved strategy | as designed: the one-rank references of `tests/mpi_exec.rs`, `tests/multi_rank.rs` and the `scaling` harness name the strategy the multi-rank run resolved |
+| the harness (§8) | the summary gains ranks per node and the reason; the crossover sweep; `--budget` | `scaling --budget MB`; the summary's `requested`, `budget_mb`, `dense_rank_mb`, `dense_node_mb` (the reason in the threading line); the sweeps `node-rule` (T3's grid: `auto` and the other strategy, the cap, the errors) and `crossover`; the T2 sweep `nodes-strong` names `8:dense` for its former `8:auto` |
+
+### 10.2 Measured
+
+| quantity | M3 Max | locust | Kathleen |
+| --- | --- | --- | --- |
+| the exit gate: the default over the best at p = 8, every count of T3's grid, f64 / f32 | 1.000 / 1.015 (64 MB) | 1.000 / 1.011 | 1.000 / 1.029 |
+| the old default (Dense) over the best at f64 p = 8: one rank / largest one-thread count | 1.28 / 4.03 | 1.02 / 6.45 | 1.34 / 2.83 |
+| the f32 p = 8 band (the budget's switch; decision 8's exception) | 1.000 at 6, 8, 10 ranks (64 and 56 MB) | 1.058 / 1.101 at 12 ranks per node | 1.158 / 1.144 at 12, 1.017 / 1.067 at 16 |
+| f64 p = 6 where the budget decides | 1.111 / 1.019 at 8, 1.832 / 1.312 at 10 (64 MB); 1.118 / 1.010 and 1.000 / 1.001 (56 MB) | 1.000 at 8–24 | 1.044 / 1.000 to 1.092 / 1.038 at 8–12; 1.000 at 16, 20 |
+| f64 p = 3; f64 p = 12 | Dense, the best everywhere; Rotation, as before | the same | the same |
+| errors, f64 p = 8 (φ L2) | 1.889e-5, Dense's to 4 digits | the same | the same |
+| errors, f32 p = 8 at the largest count (φ L2, Rotation / Dense) | 1.891e-5 / 1.910e-5 | 1.891e-5 / 1.911e-5 | 1.891e-5 / 1.910e-5 |
+
+(cube / Plummer where two values; ratios of wall time per evaluation, N = 10⁶.) The model of
+§3 holds where it was tested: at f64 p = 8 Rotation wins on one rank and at every count; in
+the band the crossover moves with the machine and the precision: in bytes per node about
+38–51 MB for f64 p = 6 and 52–70 MB for f32 p = 8 on the M3 Max, 76–102 and 105–139 MB on
+locust, about 51–64 and 140–175 MB on Kathleen. So no budget in bytes fits both precisions on any of
+the three machines (on locust the two windows just miss), and the rule keeps one budget per
+machine, which costs at most 1.12 on the M3 Max (56 MB), 1.10 on locust and 1.16 on
+Kathleen (96 MB) in the measured band; a rule that weighs the
+precision, or the batched M2L of Phase 6 (C6.6), which removes the per-pair table traffic,
+is the next step, not this phase's.
+
+**Collectives.** One communicator split more per build on the host path (§2.5: at most
+1.6 ms on locust and Kathleen, 6.4 ms on the M3 Max at 12 ranks), one barrier of the node's
+communicator with a table cache; the step 7 all-reduce carries two values. The evaluation is
+unchanged. **Tests.** The rule's unit tests (both precisions, p = 0–20, 1–128 ranks per node,
+six budgets, the reasons); `tests/mpi_exec.rs`'s **the strategy rule on the node** at 1, 2,
+4, 8 ranks (M3 Max, locust at 8, Kathleen at 1–8 and 2 × 40): the agreement, named
+strategies kept, the cold cache filled once per node (twice on two Kathleen nodes sharing
+Lustre). The debug run at one rank: 67.5 s (69.6 s before T4).
+
+**For Phase 5S** (laplace-fmm-plan §7, Phase 5N): take the strategy the rule picks with the
+harness's budget (Kathleen 96 MB: Rotation at f64 p = 8 in every configuration, Dense at
+f64 p = 3; f32 p = 8 Dense at 2 × 20 and Rotation at 40 × 1), prefer a few ranks per node
+with threads (4 × 10 the fastest split at f64 p = 8 on one Kathleen node), and pass a
+`table_cache` on Lustre for builds at scale.

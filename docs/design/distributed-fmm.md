@@ -1380,13 +1380,18 @@ no collective sits in a branch only some ranks take.
 | `Redistribution::new` | all-to-all (counts), all-reduce (errors, `max_per_item`), all-to-all-v (key, position) | T5 |
 | `Redistribution::forward`, `backward` | one all-to-all-v | T5 |
 | `Evaluator::new` | all-reduce (validity); `SourceExchange::new` (all-reduce; rlst: three validity all-reduces, an all-to-all, two graph creates, two neighbour all-to-alls; all-reduce); `MultipoleExchange::new` (all-reduce; the rlst build per level; all-reduce); `CoarseExchange::new` (all-reduce; communicator duplicate; all-gather; all-gather-v; all-reduce) | — |
-| `Fmm::build` | step 1 all-reduce (agreement, which also agrees the backend); step 2 all-reduce; step 3 (extent pair, the bounding box, agreement); `Octree::new`; `Plan::new`; two `Redistribution::new`, two coordinate `forward`s; step 7 all-reduce (max leaf points); with a tuning cache and a device, one broadcast of rank 0's decisions; `Evaluator::new`; **one all-reduce agreeing the device operator's build (every backend)**. Step 5's all-reduce (`PointsNotOwned`) goes | T6, T8 |
+| `Fmm::build` | step 1 all-reduce (agreement, which also agrees the backend); **one `split_shared` (on every backend since Phase 5N T4; on the device path since T8)**; step 2 all-reduce; step 3 (extent pair, the bounding box, agreement); `Octree::new`; `Plan::new`; two `Redistribution::new`, two coordinate `forward`s; step 7 all-reduce (max leaf points, **and since Phase 5N T4 the max ranks per node, one all-reduce of two values**); with a tuning cache and a device, one broadcast of rank 0's decisions; **with a table cache, one barrier of the node's communicator (Phase 5N T4)**; `Evaluator::new`; **one all-reduce agreeing the device operator's build (every backend)**. Step 5's all-reduce (`PointsNotOwned`) goes | T6, T8, 5N T4 |
 | `Fmm::evaluate`, blocking | all-reduce (charge length and a kept device error); `forward` of the charges; neighbour all-to-all (sources); all-gather-v (coarse); L + 1 neighbour all-to-alls (multipoles); `backward` of the output; with a device on P > 1, one all-reduce (device errors) | T6, T8 |
 | `Fmm::evaluate`, overlapped | the same, with the source and multipole exchanges as point-to-point requests inside the two overlapped stages (§8.1); the coarse gather stays an all-gather-v, between posting and waiting for the multipole exchange | T9 |
 
 New collectives per build: two `Redistribution`s (six), two forwards, the device
 agreement (one), the tuning broadcast (device with a cache); minus one (step 5). Per
 evaluation: two all-to-all-v's, and on the device path with P > 1 one all-reduce.
+Phase 5N T4 (docs/design/node-m2l.md §4, §5) adds on the host path one communicator split
+per build (`split_shared`, whose size is the ranks per node of the M2L strategy rule;
+1.6 ms at most on locust and Kathleen, node-m2l.md §2.5) and, with a table cache, one
+barrier of the node's communicator; the ranks per node ride on step 7's existing
+all-reduce, so the evaluation is unchanged.
 
 ### 9.2 Memory per rank
 
@@ -1875,6 +1880,35 @@ one copy (1 × 12 is 3.0× faster than 12 × 1 on the M3 Max; 4 × 18 is 4.1× f
 per-rank replicated *read-only* data that competes for the shared caches and the memory
 bandwidth of one node. No cache counters were read, so the mechanism is inferred, not
 measured; the strategy and thread runs are the evidence.
+
+### 15.4 Phase 5N: the node rule and the first inter-node numbers (note)
+
+Added at the end of Phase 5N (2026-10-11; docs/phase5n/, laplace-fmm-plan.md §7, Phase
+5N). Two of §15.3's items were taken up:
+- **The tables on a node** (§15.2, "Not modelled here"). The cause was measured on locust
+  and Kathleen (docs/design/node-m2l.md §2.3: Dense neighbours on the same socket triple a
+  rank's M2L time per pair, those on the other socket cost nothing), and the host strategy
+  rule now sees the ranks per node: `Auto` resolves to Dense only while the dense tables
+  of a rank (at most 9 MB) and of all the ranks of a node (at most a budget per machine
+  class) are small, Rotation otherwise (node-m2l.md §4, §10). The ranks per node come from
+  one `split_shared` per build and ride on step 7's all-reduce (§9.1). At p = 8 the default
+  is now within 1.03 of the best strategy at every ranks-per-node count measured on the
+  M3 Max, locust and a Kathleen node; at 72 ranks on locust the cube's f64 p = 8 evaluation
+  takes 161 ms (Rotation, the default) where the rule of Phase 5 took 1,041 ms (Dense).
+  The guarantee of §5 holds per *resolved* strategy. With a table cache one rank per node
+  builds the tables first. No shared-memory window was built (decision 6); the batched host
+  M2L (C6.6) stays the deep fix.
+- **Inter-node scaling: a first look at 2 nodes** (Kathleen, Omni-Path, PSM2; T2,
+  `fmm-validate/results/phase5n-kathleen.md` §7–§9; at most 2 nodes per job, the user's cap).
+  From 1 to 2 nodes the efficiency is 0.99–1.04 at N = 10⁷ (5·10⁶ points per node) and
+  0.84–0.99 at N = 10⁶ with 40 ranks per node. The blocking exchanges move 0.27–0.86 GB/s
+  per rank at 2 × 40 ranks and 0.42–0.81 GB/s on one node × 40: the cost is the node's
+  copies and the neighbour synchronisation, about the same with or without the network,
+  and 5–29× below §8.2's 100 Gbit/s *model*; a per-message cost is not separable at these
+  counts. Overlap (§8) gains no more across two nodes than on one. The replicated part
+  dominates the held boxes from about 16 ranks at N = 10⁶ and holds 71–94% at 40–80, as
+  §9.2's crossover *model* (P ≈ √(N / 4,700)) gives. Everything beyond 2 nodes stays
+  unmeasured; Phase 5S (§14) starts from these numbers.
 
 ### 15.3 For the next phase
 

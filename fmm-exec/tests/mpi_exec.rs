@@ -284,6 +284,27 @@
 //!   runs the overlapped stages with the same events; design §13, question 10); **device
 //!   errors and tuning on several ranks** runs the injected error with overlap off and on.
 //!
+//! The strategy rule on the node (Phase 5N T4, decisions 5 and 7; docs/design/node-m2l.md
+//! §4, §5). Since T4 `Auto` resolves with the ranks per node (`M2lStrategy::resolve_on_node`),
+//! so the one-rank reference of every scenario (`check_one_rank`) is built with the strategy
+//! the multi-rank `Fmm` resolved (`Fmm::strategy`): Phase 5's guarantee, per resolved
+//! strategy. Error measures: exact equality of strategies, counts, outcomes, tables and bit
+//! patterns, agreed on every rank.
+//! - **the strategy rule on the node**: the cube, N = 600, f64 p = 4 (1.7 MB of dense tables
+//!   per rank), shared by rank. The ranks per node of `Fmm::threading` equal the largest
+//!   `split_shared` size, which the test computes itself; under `Auto` with the default
+//!   budget and with a budget of one rank's dense tables (Dense on one rank per node,
+//!   Rotation on two or more) every rank resolves the strategy of the rule for those ranks
+//!   per node, with the same reason (`ThreadingReport::m2l`), and through
+//!   `evaluate_threaded` the output is bit for bit the one-rank `Fmm` of that strategy; a
+//!   named `Dense` with a budget of zero and a named `Rotation` stay as named
+//!   (`StrategyChoice::Named`). With a cold table cache (a fresh directory, f64 p = 4,
+//!   `Dense` and `Rotation`) the lowest rank of each node reports every family `Built`,
+//!   and every other rank `Loaded` (decision 7: one rank per node first, the others after
+//!   the node's barrier), so on one node the directory is filled once; every rank then
+//!   loads tables equal to a fresh build, and the cached build's output equals the
+//!   uncached one's bit for bit.
+//!
 //! The test prints, at the end, how many shadow evaluations matched, how many overlapped
 //! evaluations matched the blocking path, and how many evaluations matched their one-rank
 //! reference.
@@ -299,7 +320,7 @@ use nd_fmm_exec::fmm::{
 };
 use nd_fmm_exec::geometry::{Domain, GeometryError, leaf_coordinates, radius};
 use nd_fmm_exec::operator::{Isa, LaplaceOperator, P2pChoice, SimdScalar};
-use nd_fmm_exec::tables::{M2lStrategy, Tables};
+use nd_fmm_exec::tables::{M2lStrategy, NodeContext, StrategyChoice, Tables};
 use nd_fmm_math::RealScalar;
 use nd_fmm_plan::evaluator::Evaluator;
 use nd_fmm_plan::index::BoxIndex;
@@ -310,6 +331,7 @@ use nd_fmm_plan::plan::Plan;
 use nd_fmm_ref::p2p::direct_sum;
 use nd_fmm_tables::cache::Stored;
 use nd_fmm_tables::geometry::m2l_offset_index;
+use nd_fmm_tables::{CacheOutcome, TableCache};
 use nd_octree::{MortonKey, Octree, OctreeOptions, PhysicalBox, constants::DEEPEST_LEVEL, morton};
 
 #[cfg(feature = "gpu")]
@@ -424,7 +446,7 @@ fn distributed_scenarios() {
         "the threaded scenarios need MPI at Funneled, it provides {provided:?}"
     );
     let comm = universe.world();
-    let cases: [(&str, Scenario); 24] = [
+    let cases: [(&str, Scenario); 25] = [
         ("table order against the plan", table_order),
         ("batched against per-pair", batched_against_per_pair),
         ("uniform cube, every strategy", uniform_cube_strategies),
@@ -452,6 +474,7 @@ fn distributed_scenarios() {
         ("input distributions", input_distributions),
         ("tiny problem", tiny_problem),
         ("host-data hook", host_data_hook),
+        ("the strategy rule on the node", strategy_on_the_node),
     ];
     for (name, scenario) in cases {
         *SCENARIO.lock().unwrap() = name;
@@ -1143,9 +1166,11 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
     let output = fmm.evaluate(charges).expect("the FMM evaluates");
     check_reference("host, one thread", &mut fmm, &output);
     check_shadow_once((sources, targets), charges, &output, &fmm, comm);
+    // The one-rank reference of the resolved strategy (Phase 5N T4): under `Auto` the
+    // strategy depends on the ranks per node.
     check_one_rank(
         "host, one thread",
-        &builder,
+        &builder.clone().strategy(fmm.strategy()),
         (sources, targets),
         charges,
         &output,
@@ -1649,7 +1674,18 @@ fn distinct_and_nested(comm: &SimpleCommunicator) {
         else {
             return;
         };
-        assert_eq!(fmm.strategy(), M2lStrategy::Dense, "Auto at p = 6");
+        // Auto at p = 6 (6.4 MB per rank): Dense up to 10 ranks per node (Phase 5N T4).
+        let ranks = fmm.threading().ranks_per_node;
+        let want = if ranks <= 10 {
+            M2lStrategy::Dense
+        } else {
+            M2lStrategy::Rotation
+        };
+        assert_eq!(
+            fmm.strategy(),
+            want,
+            "Auto at p = 6 on {ranks} ranks per node"
+        );
         assert_eq!(
             (fmm.nsources(), fmm.ntargets()),
             (local_sources.len(), local_targets.len())
@@ -3064,6 +3100,176 @@ fn tiny_problem(comm: &SimpleCommunicator) {
         comm.size()
     );
     assert!(potential_error < 1e-14 && gradient_error < 1e-14);
+}
+
+/// The strategy code of `strategy`, for agreements over the ranks.
+fn strategy_code(strategy: M2lStrategy) -> u8 {
+    match strategy {
+        M2lStrategy::Dense => 0,
+        M2lStrategy::Classes => 1,
+        M2lStrategy::Rotation => 2,
+        M2lStrategy::Auto => 3,
+    }
+}
+
+/// Whether `value` is the same on every rank (an all-reduce of the minimum and one of the
+/// maximum).
+fn same_on_every_rank(value: u64, comm: &SimpleCommunicator) -> bool {
+    let (mut least, mut most) = (0u64, 0u64);
+    comm.all_reduce_into(&value, &mut least, SystemOperation::min());
+    comm.all_reduce_into(&value, &mut most, SystemOperation::max());
+    least == most
+}
+
+/// The rule of `M2lStrategy::Auto` on the node and the table loading with a cache (Phase 5N
+/// T4; module documentation, "The strategy rule on the node").
+fn strategy_on_the_node(comm: &SimpleCommunicator) {
+    let rank = comm.rank();
+    let p = 4;
+    let mut rng = SplitMix64(0x5a0de);
+    let points = unit_cube_points(&mut rng, 600);
+    let charges = random_charges(&mut rng, points.len());
+    let (local_points, local_charges) = (share(&points, comm), share(&charges, comm));
+    let sets = (&local_points[..], &local_points[..]);
+
+    // The ranks per node as the test sees them: the largest `split_shared` size, and the
+    // nodes (the ranks that are first on theirs).
+    let node = comm.split_shared(rank);
+    let mut ranks_per_node = 0usize;
+    comm.all_reduce_into(
+        &(node.size() as usize),
+        &mut ranks_per_node,
+        SystemOperation::max(),
+    );
+    let nodes = global_sum(usize::from(node.rank() == 0), comm);
+    let first_on_node = node.rank() == 0;
+    drop(node);
+
+    let rank_bytes = NodeContext::one_rank::<f64>(p).dense_rank_bytes();
+    let default = M2lStrategy::AUTO_DENSE_NODE_BYTES;
+    let mut lines = Vec::new();
+    for (budget, named) in [
+        (default, M2lStrategy::Auto),
+        (rank_bytes, M2lStrategy::Auto),
+        (0, M2lStrategy::Dense),
+        (usize::MAX, M2lStrategy::Rotation),
+    ] {
+        let builder = FmmBuilder::<f64>::new(p)
+            .strategy(named)
+            .dense_node_budget(budget);
+        let (fmm, _) =
+            evaluate_threaded(&builder, sets, &local_charges, &[], comm).expect("the FMM builds");
+        let report = fmm.threading();
+        assert_eq!(report.ranks_per_node, ranks_per_node, "rank {rank}");
+        let node_context = NodeContext::new(p, 8, ranks_per_node, budget);
+        let want = if named == M2lStrategy::Auto {
+            M2lStrategy::Auto.choose(&node_context)
+        } else {
+            StrategyChoice::Named(named)
+        };
+        assert_eq!(report.m2l, Some(want), "rank {rank}, budget {budget}");
+        assert_eq!(fmm.strategy(), want.strategy(), "rank {rank}");
+        assert_ne!(fmm.strategy(), M2lStrategy::Auto);
+        if named == M2lStrategy::Auto && budget == rank_bytes {
+            let expected = if ranks_per_node == 1 {
+                M2lStrategy::Dense
+            } else {
+                M2lStrategy::Rotation
+            };
+            assert_eq!(fmm.strategy(), expected, "one rank's tables as the budget");
+        }
+        let agreed = same_on_every_rank(u64::from(strategy_code(fmm.strategy())), comm)
+            && same_on_every_rank(report.ranks_per_node as u64, comm)
+            && same_on_every_rank(report.to_string().len() as u64, comm);
+        assert!(
+            agreed,
+            "rank {rank}: the ranks resolve different strategies"
+        );
+        lines.push(format!("{named:?}, budget {budget}: {}", want));
+    }
+
+    // A cold cache: a fresh directory, named by rank 0's process id.
+    let mut id = u64::from(std::process::id());
+    comm.process_at_rank(0).broadcast_into(&mut id);
+    let dir = std::path::PathBuf::from(format!(
+        "{}/mpi_exec_cold_cache_{id}",
+        env!("CARGO_TARGET_TMPDIR")
+    ));
+    if rank == 0 {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    comm.barrier();
+    let mut filled = Vec::new();
+    for strategy in [M2lStrategy::Dense, M2lStrategy::Rotation] {
+        let builder = FmmBuilder::<f64>::new(p).strategy(strategy);
+        let mut cached = built(
+            builder
+                .clone()
+                .table_cache(&dir)
+                .build(sets.0, sets.1, comm),
+            comm,
+        )
+        .expect("the FMM builds");
+        let outcomes = cached.cache_outcomes();
+        assert!(!outcomes.is_empty());
+        let is_loaded = |outcome: &CacheOutcome| matches!(outcome, CacheOutcome::Loaded);
+        let is_built = |outcome: &CacheOutcome| matches!(outcome, CacheOutcome::Built);
+        // On several nodes that share the directory, a later node's first rank may load
+        // what an earlier one stored.
+        let fine = outcomes.iter().all(|(_, outcome)| {
+            if first_on_node {
+                is_built(outcome) || (nodes > 1 && is_loaded(outcome))
+            } else {
+                is_loaded(outcome)
+            }
+        });
+        let built_here = outcomes.iter().filter(|(_, o)| is_built(o)).count();
+        let builds = global_sum(built_here, comm);
+        let wrong = global_sum(usize::from(!fine), comm);
+        assert_eq!(
+            wrong, 0,
+            "rank {rank}: {strategy:?}: outcomes {outcomes:?} (first on its node: \
+             {first_on_node})"
+        );
+        assert!(
+            builds >= outcomes.len() && builds <= nodes * outcomes.len(),
+            "{strategy:?}: {builds} families built on {nodes} node(s)"
+        );
+        // Every rank loads tables equal to a fresh build.
+        let (loaded, loads) = Tables::<f64>::load_or_build(p, strategy, &TableCache::new(&dir));
+        let equal =
+            loads.iter().all(|(_, o)| is_loaded(o)) && loaded == Tables::<f64>::build(p, strategy);
+        assert_eq!(
+            global_sum(usize::from(!equal), comm),
+            0,
+            "rank {rank}: {strategy:?}: the cached tables differ from a build"
+        );
+        // And the cached build evaluates as the uncached one, bit for bit.
+        let mut plain = built(builder.build(sets.0, sets.1, comm), comm).expect("the FMM builds");
+        let a = cached.evaluate(&local_charges).expect("the FMM evaluates");
+        let b = plain.evaluate(&local_charges).expect("the FMM evaluates");
+        let differing = output_bits(&a)
+            .iter()
+            .zip(output_bits(&b))
+            .filter(|(x, y)| **x != *y)
+            .count();
+        assert_eq!(
+            global_sum(differing, comm),
+            0,
+            "{strategy:?}: cached against built"
+        );
+        filled.push(format!("{strategy:?} {builds} families built"));
+    }
+    comm.barrier();
+    if rank == 0 {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    eprintln!(
+        "rank {rank}: strategy rule: {ranks_per_node} rank(s) per node on {nodes} node(s); {}; \
+         cold cache filled once per node ({}), every rank loading tables equal to a build",
+        lines.join("; "),
+        filled.join(", ")
+    );
 }
 
 /// The backend setting (module documentation, "device backends"): the default, a

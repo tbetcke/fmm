@@ -17,7 +17,13 @@
 //!   without a new dependency ([`resident_memory`]);
 //! - optionally the errors against the direct sum at sampled targets ([`Errors`]) and the
 //!   difference from the one-rank `Fmm` over every point in index order ([`Reference`]),
-//!   of the same strategy or of another ([`Settings::reference_strategy`], Phase 5N T3);
+//!   of the strategy the run resolved or of another ([`Settings::reference_strategy`],
+//!   Phase 5N T3);
+//! - the M2L strategy as resolved and why (Phase 5N T4): under `Auto` the rule of
+//!   `M2lStrategy::resolve_on_node` with the agreed ranks per node and the node budget
+//!   ([`Settings::dense_node_budget`]; the harness sets it per machine class), in the
+//!   threading line of the report and as `requested`, `budget_mb`, `dense_rank_mb` and
+//!   `dense_node_mb` in the summary;
 //! - optionally the time of every level call by operator kind ([`Settings::kinds`], Phase
 //!   5N T3): per rank and kind the median over the evaluations ([`KINDS`]), and the M2L
 //!   and downward time per V pair of the slowest rank;
@@ -70,7 +76,7 @@ use nd_fmm_exec::fmm::{
 };
 use nd_fmm_exec::geometry::{contains, integer_centre};
 use nd_fmm_exec::operator::SimdScalar;
-use nd_fmm_exec::tables::M2lStrategy;
+use nd_fmm_exec::tables::{M2lStrategy, NodeContext};
 use nd_fmm_exec::threading::ThreadingReport;
 use nd_fmm_math::RealScalar;
 use nd_fmm_ref::p2p::direct_sum;
@@ -262,6 +268,9 @@ pub struct Settings {
     pub threads: usize,
     /// The M2L strategy (`FmmBuilder::strategy`; the default `Auto`).
     pub strategy: M2lStrategy,
+    /// The node budget of `Auto` in bytes (`FmmBuilder::dense_node_budget`; Phase 5N T4),
+    /// or the library's default (`M2lStrategy::AUTO_DENSE_NODE_BYTES`, 64 MB) if `None`.
+    pub dense_node_budget: Option<usize>,
     /// The evaluation paths.
     pub overlap: Overlap,
     /// Where the points are passed in.
@@ -277,8 +286,10 @@ pub struct Settings {
     /// Whether to compare with the one-rank `Fmm` over every point in index order, built
     /// on rank 0 alone ([`Reference`]).
     pub reference: bool,
-    /// The strategy of that one-rank `Fmm`, if not [`strategy`](Self::strategy) (Phase 5N
-    /// T3): the difference between two strategies at otherwise fixed settings.
+    /// The strategy of that one-rank `Fmm` (Phase 5N T3): the difference between two
+    /// strategies at otherwise fixed settings. Without it, the strategy the run resolved
+    /// (`Fmm::strategy`), whose output the run must equal bit for bit with the points in
+    /// rank order; under `Auto` a one-rank `Fmm` could resolve another (Phase 5N T4).
     pub reference_strategy: Option<M2lStrategy>,
     /// Whether every level call is timed by operator kind (`KindTiming::Synchronous`, one
     /// clock pair per call on the host; Phase 5N T3), into [`PathTimes::kinds`].
@@ -293,6 +304,7 @@ impl Settings {
             p,
             threads: 1,
             strategy: M2lStrategy::Auto,
+            dense_node_budget: None,
             overlap: Overlap::Off,
             input: Input::Share,
             builds: 1,
@@ -1216,7 +1228,7 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
     comm: &SimpleCommunicator,
 ) -> Report {
     let (rank, size) = (comm.rank() as usize, comm.size() as usize);
-    let builder = FmmBuilder::<T>::new(settings.p)
+    let mut builder = FmmBuilder::<T>::new(settings.p)
         .max_level(MAX_LEVEL)
         .max_points_per_leaf(MAX_POINTS_PER_LEAF)
         .gradients(true)
@@ -1228,6 +1240,9 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         } else {
             KindTiming::Off
         });
+    if let Some(bytes) = settings.dense_node_budget {
+        builder = builder.dense_node_budget(bytes);
+    }
     let mine = input_points(workload, settings.input, &builder, comm);
     let points: Vec<[f64; 3]> = mine.iter().map(|&i| workload.point(i)).collect();
 
@@ -1329,10 +1344,8 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
     let errors = (settings.vectors > 0)
         .then(|| errors(workload, settings, (&mine, &points), &mut fmm, comm));
     let reference = settings.reference.then(|| {
-        let builder = match settings.reference_strategy {
-            Some(strategy) => builder.clone().strategy(strategy),
-            None => builder.clone(),
-        };
+        let strategy = settings.reference_strategy.unwrap_or(fmm.strategy());
+        let builder = builder.clone().strategy(strategy);
         reference(workload, &builder, (&mine, &points), &last, comm)
     });
 
@@ -1568,6 +1581,14 @@ fn mb(bytes: f64) -> String {
 pub const PER_RANK_ROWS: usize = 128;
 
 impl Report {
+    /// The private dense tables of `ranks` ranks at this p and precision, in bytes:
+    /// `ranks` × 332 (p + 1)⁴ values (`NodeContext::dense_node_bytes`), whatever the
+    /// strategy.
+    fn dense_bytes(&self, ranks: usize) -> f64 {
+        let value_bytes = if self.precision == "f32" { 4 } else { 8 };
+        NodeContext::new(self.settings.p, value_bytes, ranks, 0).dense_node_bytes() as f64
+    }
+
     /// The heading of the report: the problem, the ranks and the settings.
     fn heading(&self) -> String {
         format!(
@@ -1610,6 +1631,20 @@ impl Report {
                     format!("input={}", self.settings.input.name()),
                     format!("overlap={}", if path.overlapped { "on" } else { "off" }),
                     format!("strategy={:?}", self.strategy),
+                    format!("requested={:?}", self.settings.strategy),
+                    format!(
+                        "budget_mb={}",
+                        mb(self
+                            .settings
+                            .dense_node_budget
+                            .unwrap_or(M2lStrategy::AUTO_DENSE_NODE_BYTES)
+                            as f64)
+                    ),
+                    format!("dense_rank_mb={}", mb(self.dense_bytes(1))),
+                    format!(
+                        "dense_node_mb={}",
+                        mb(self.dense_bytes(self.threading.ranks_per_node))
+                    ),
                     format!("wall_ms={}", ms(path.wall)),
                     format!("build_ms={}", ms(build_max[8])),
                     format!("redistribution_build_ms={}", ms(build_max[3])),

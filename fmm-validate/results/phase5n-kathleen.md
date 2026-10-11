@@ -7,7 +7,8 @@ N = 10⁶ and 10⁷, weak scaling at 10⁶ points per node), the exchanges again
 distributed-fmm.md §8.2's network model, overlap, the replicated data and memory up to
 80 ranks, the errors; and the x86 host on one rank, the AVX2 + FMA P2P kernels timed on
 Intel for the first time (docs/phase5n/T2-kathleen-baseline.md). Run on 2026-10-10,
-17:09–20:18, in 8 jobs (§13).
+17:09–20:18, in 8 jobs (§13). The section "Phase 5N, T4" at the end (2026-10-11) adds the
+strategy rule of T4 before and after, on Kathleen, the M3 Max and locust.
 
 **Every figure below is measured on Kathleen**, in Slurm jobs on whole nodes (nodes are
 exclusive, so there is no load check), named nodes × ranks per node × threads per rank,
@@ -1067,6 +1068,230 @@ tree); T1's tree (20 GB) is the second of decision 2's two.
   of a Dense build at 40–80 ranks (decision 7).
 - **Not settled here**: anything above 2 nodes; the per-message cost of Omni-Path; srun
   against mpirun under load; AVX-512.
+
+# Phase 5N, T4: the strategy rule on the node, before and after
+
+Phase 5N T4 (docs/phase5n/T4-node-m2l.md) built rule B of docs/design/node-m2l.md §4 as
+signed off: under `Auto` the host resolves Dense iff the dense tables of a rank, 332
+(p + 1)⁴ values, are at most 9 MB and ranks per node × those at most the node budget,
+Rotation otherwise (`M2lStrategy::resolve_on_node`); the ranks per node come from one
+`split_shared` and step 7's all-reduce. This section measures it on the three machines
+against the rule before (Dense for p ≤ 8, Rotation above; "before" is therefore the
+Dense run at p ≤ 8 and the default at p = 12) and against the best explicit strategy.
+
+**Setup.** `tools/scaling/run.sh node-rule crossover` (EVALS = 5; one rank 3), release,
+every BLAS variable at 1, overlap off, N = 10⁶, the cube and the Plummer sphere, at the
+ranks × threads of T3's grid (`NODE_GRID`) and the counts in between (`CROSSOVER`): per
+cell `auto` and the strategy auto does not resolve to (f64 p = 12: `auto` alone, Rotation
+before and after; Classes was never the best in T3's 194 cells and is not run); the
+crossover runs Dense and Rotation, and its default is the one the rule picks (marked by
+the budget's numbers). Wall time per evaluation, the median of the slowest rank. Budgets
+per machine class (decision 5, the harness): 96 MB on locust and Kathleen; on the M3 Max
+the signed-off 64 MB, then 56 MB (below).
+- **M3 Max** (12 + 4 cores, Open MPI 5.0.10, unbound): 2026-10-11, 10:24–11:10, outside the
+  sandbox with `run.sh`'s quiet gate (other processes at most 198% CPU at any launch, the
+  virus scanner's), 138 launches, plus 24 launches at budget 56 (11:38–11:41, other
+  processes at most 216%).
+- **locust** (GH200, 72 Neoverse-V2 cores, Open MPI 5.0.10, bound per core): 2026-10-11,
+  09:56–10:39, 174 launches; in every load record before and after each launch no other
+  process above 5% CPU and the GPU idle (0 %, 1 MiB).
+- **Kathleen** (one node, 2 × 20 Cascade Lake cores, Open MPI 4.1.6, `mpirun --map-by
+  ppr:<k>:socket:PE=<t> --bind-to core`): job 241833, node-c11b-015, `singlenode`,
+  09:55–11:35, 168 launches; exclusive node.
+
+The summary line of each launch names the resolved strategy, the requested one, the budget
+and the dense megabytes per rank and node; the threading line the reason, for example
+`ranks per node 40; M2L Auto → Rotation: 40 ranks per node × 8.7 MB > 96 MB`.
+
+## T4.1 The exit gate: p = 8 at every count of T3's grid
+
+"default" is the new `Auto` as it resolved, with its time; "before / best" the old default
+(Dense) over the best strategy of the cell; in f64 the default is the best in every cell
+(its ratio is 1.000 unless shown).
+
+### M3 Max (budget 64 MB, as signed off)
+
+| ranks × threads | f64 cube: default, ms | before / best | f64 Plummer: default, ms | before / best | f32 cube: default, ms | default / best | before / best | f32 Plummer: default, ms | default / best | before / best |
+| --- | --- | ---: | --- | ---: | --- | ---: | ---: | --- | ---: | ---: |
+| 1 × 1 | Rotation 6,365 | 1.28 | Rotation 14,336 | 1.19 | Dense 4,798 | 1.000 | 1.00 | Dense 12,089 | 1.000 | 1.00 |
+| 2 × 1 | Rotation 3,232 | 1.30 | Rotation 7,295 | 1.22 | Dense 2,449 | 1.000 | 1.00 | Dense 6,173 | 1.000 | 1.00 |
+| 4 × 1 | Rotation 1,670 | 1.39 | Rotation 3,793 | 1.22 | Dense 1,305 | 1.000 | 1.00 | Dense 3,205 | 1.000 | 1.00 |
+| 8 × 1 | Rotation 854 | 3.01 | Rotation 2,063 | 2.14 | Rotation 797 | 1.015 | 1.38 | Rotation 1,923 | 1.000 | 1.07 |
+| 12 × 1 | Rotation 683 | 4.03 | Rotation 1,443 | 3.17 | Rotation 572 | 1.000 | 2.22 | Rotation 1,376 | 1.000 | 1.64 |
+| 1 × 12 | Rotation 643 | 1.40 | Rotation 1,506 | 1.27 | Dense 508 | 1.000 | 1.00 | Dense 1,305 | 1.000 | 1.00 |
+| 2 × 6 | Rotation 655 | 1.88 | Rotation 1,489 | 1.54 | Dense 503 | 1.000 | 1.00 | Dense 1,323 | 1.000 | 1.00 |
+
+### locust (budget 96 MB)
+
+| ranks × threads | f64 cube: default, ms | before / best | f64 Plummer: default, ms | before / best | f32 cube: default, ms | default / best | before / best | f32 Plummer: default, ms | default / best | before / best |
+| --- | --- | ---: | --- | ---: | --- | ---: | ---: | --- | ---: | ---: |
+| 1 × 1 | Rotation 9,554 | 1.02 | Rotation 19,302 | 1.03 | Dense 5,369 | 1.000 | 1.00 | Dense 14,080 | 1.000 | 1.00 |
+| 8 × 1 | Rotation 1,177 | 1.74 | Rotation 2,453 | 1.52 | Dense 741 | 1.011 | 1.00 | Dense 1,871 | 1.008 | 1.00 |
+| 16 × 1 | Rotation 602 | 2.30 | Rotation 1,271 | 1.92 | Rotation 494 | 1.000 | 1.06 | Rotation 1,168 | 1.000 | 1.02 |
+| 32 × 1 | Rotation 319 | 3.44 | Rotation 690 | 2.77 | Rotation 260 | 1.000 | 1.66 | Rotation 634 | 1.000 | 1.40 |
+| 64 × 1 | Rotation 181 | 5.61 | Rotation 406 | 4.09 | Rotation 146 | 1.000 | 2.76 | Rotation 377 | 1.000 | 2.02 |
+| 72 × 1 | Rotation 161 | 6.45 | Rotation 354 | 4.72 | Rotation 131 | 1.000 | 3.09 | Rotation 322 | 1.000 | 2.28 |
+| 1 × 72 | Rotation 177 | 1.39 | Rotation 349 | 1.28 | Dense 131 | 1.000 | 1.00 | Dense 295 | 1.000 | 1.00 |
+| 4 × 18 | Rotation 156 | 1.46 | Rotation 336 | 1.27 | Dense 115 | 1.000 | 1.00 | Dense 284 | 1.000 | 1.00 |
+| 8 × 9 | Rotation 145 | 1.78 | Rotation 334 | 1.38 | Dense 109 | 1.000 | 1.00 | Dense 282 | 1.000 | 1.00 |
+
+### Kathleen, one node (budget 96 MB)
+
+| ranks × threads | f64 cube: default, ms | before / best | f64 Plummer: default, ms | before / best | f32 cube: default, ms | default / best | before / best | f32 Plummer: default, ms | default / best | before / best |
+| --- | --- | ---: | --- | ---: | --- | ---: | ---: | --- | ---: | ---: |
+| 1 × 1 | Rotation 15,527 | 1.34 | Rotation 35,797 | 1.23 | Dense 10,824 | 1.000 | 1.00 | Dense 29,366 | 1.000 | 1.00 |
+| 2 × 1 | Rotation 7,798 | 1.38 | Rotation 17,977 | 1.24 | Dense 5,411 | 1.000 | 1.00 | Dense 14,745 | 1.000 | 1.00 |
+| 10 × 1 | Rotation 1,753 | 1.85 | Rotation 4,123 | 1.61 | Dense 1,448 | 1.000 | 1.00 | Dense 3,594 | 1.000 | 1.00 |
+| 20 × 1 | Rotation 931 | 2.15 | Rotation 2,224 | 1.75 | Rotation 922 | 1.000 | 1.02 | Rotation 2,287 | 1.029 | 1.00 |
+| 40 × 1 | Rotation 606 | 2.83 | Rotation 1,482 | 2.16 | Rotation 599 | 1.000 | 1.34 | Rotation 1,514 | 1.000 | 1.15 |
+| 1 × 40 | Rotation 640 | 1.27 | Rotation 1,386 | 1.19 | Dense 433 | 1.000 | 1.00 | Dense 1,143 | 1.000 | 1.00 |
+| 2 × 20 | Rotation 562 | 1.32 | Rotation 1,383 | 1.23 | Dense 396 | 1.000 | 1.00 | Dense 1,177 | 1.000 | 1.00 |
+| 4 × 10 | Rotation 547 | 1.55 | Rotation 1,389 | 1.39 | Dense 386 | 1.000 | 1.00 | Dense 1,160 | 1.000 | 1.00 |
+
+**The gate is met on every machine**: at p = 8 the default lies within **1.015** (M3 Max),
+**1.011** (locust) and **1.029** (Kathleen) of the best strategy at every ranks × threads of
+T3's grid, both distributions, f64 and f32 (decision 8: 10%). In f64 it is Rotation, the
+best in all 48 cells; the old default was 1.02–1.34× the best on one rank and 4.03×
+(M3 Max, 12 × 1), 6.45× (locust, 72 × 1) and 2.83× (Kathleen, 40 × 1) at the largest
+one-thread count. In f32 it keeps Dense where Dense is the best (one rank, the splits with
+threads, up to 6 ranks per node on the M3 Max, 8 on locust, 10 on Kathleen) and takes
+Rotation beyond, where Dense was up to 2.22× (M3 Max), 3.09× (locust) and 1.34× (Kathleen)
+the best. The cells within 3% of each other (1.008–1.029) differ by run-to-run noise or
+lie at the crossover.
+
+## T4.2 Where the budget decides: the band
+
+The counts between T3's grid points (the crossover sweep; the default from the rule):
+
+M3 Max (64 MB):
+
+| case | ranks per node | dense MB per node | default | cube: default / best | Plummer: default / best |
+| --- | ---: | ---: | --- | ---: | ---: |
+| f32 p = 8 | 6 | 52.3 | Dense | 1.000 | 1.000 |
+| f32 p = 8 | 10 | 87.1 | Rotation | 1.000 | 1.000 |
+| f64 p = 6 | 6 | 38.3 | Dense | 1.000 | 1.000 |
+| f64 p = 6 | 8 | 51.0 | Dense | 1.111 | 1.019 |
+| f64 p = 6 | 10 | 63.8 | Dense | 1.832 | 1.312 |
+
+locust (96 MB):
+
+| case | ranks per node | dense MB per node | default | cube: default / best | Plummer: default / best |
+| --- | ---: | ---: | --- | ---: | ---: |
+| f32 p = 8 | 12 | 104.6 | Rotation | 1.058 | 1.101 |
+| f32 p = 8 | 24 | 209.1 | Rotation | 1.000 | 1.000 |
+| f64 p = 6 | 8 | 51.0 | Dense | 1.000 | 1.000 |
+| f64 p = 6 | 12 | 76.5 | Dense | 1.000 | 1.000 |
+| f64 p = 6 | 16 | 102.0 | Rotation | 1.000 | 1.000 |
+| f64 p = 6 | 24 | 153.0 | Rotation | 1.000 | 1.000 |
+
+Kathleen (96 MB):
+
+| case | ranks per node | dense MB per node | default | cube: default / best | Plummer: default / best |
+| --- | ---: | ---: | --- | ---: | ---: |
+| f32 p = 8 | 8 | 69.7 | Dense | 1.000 | 1.000 |
+| f32 p = 8 | 12 | 104.6 | Rotation | 1.158 | 1.144 |
+| f32 p = 8 | 16 | 139.4 | Rotation | 1.017 | 1.067 |
+| f64 p = 6 | 8 | 51.0 | Dense | 1.044 | 1.000 |
+| f64 p = 6 | 10 | 63.8 | Dense | 1.055 | 1.030 |
+| f64 p = 6 | 12 | 76.5 | Dense | 1.092 | 1.038 |
+| f64 p = 6 | 16 | 102.0 | Rotation | 1.000 | 1.000 |
+| f64 p = 6 | 20 | 127.5 | Rotation | 1.000 | 1.000 |
+
+- **The f32 p = 8 band** (decision 8's known exception): at 12 ranks per node, where the
+  96 MB budget switches to Rotation, the default is 1.058 / 1.101 (locust) and 1.158 /
+  1.144 (Kathleen) of Dense; on Kathleen 1.017 / 1.067 at 16. Dense still wins there to
+  16–20 ranks per node (Kathleen) and 12 (locust); a larger budget would move the switch
+  but put f64 p = 6 at 16–20 ranks per node on Dense, where Rotation is 1.10–1.30× faster
+  (Kathleen), and f64 p = 6 already loses 1.03–1.09 at 8–12 ranks with 96 MB there.
+- **f64 p = 6 on the M3 Max** at the signed-off 64 MB: Dense up to 10 ranks per node
+  (63.8 MB), but Rotation is faster from 8 ranks: Dense 1.111 / 1.019 at 8 and **1.832 /
+  1.312 at 10** (T3 had put this crossover at 38–51 MB and run no 10-rank cell at p = 6).
+  **Changed by the user on 2026-10-11:** the harness budget on the M3 Max is 56 MB
+  (`tools/scaling/run.sh`, `BUDGET`); the library default stays 64 MB, which locust and
+  Kathleen would not want lower (f32 p = 8 at 8 ranks on Kathleen: Rotation 1.27× Dense).
+  Re-measured at 56 MB with `auto` itself (24 launches: auto, Dense and Rotation per cell):
+
+| cell | 56 MB: auto → | auto, ms (cube / Plummer) | Dense | Rotation | auto / best |
+| --- | --- | --- | --- | --- | --- |
+| f64 p = 6, 8 × 1 (51.0 MB) | Dense | 577 / 1,210 | 574 / 1,223 | 516 / 1,199 | 1.118 / 1.010 |
+| f64 p = 6, 10 × 1 (63.8 MB) | Rotation | 442 / 1,007 | 835 / 1,317 | 451 / 1,006 | 1.000 / 1.001 |
+| f32 p = 8, 6 × 1 (52.3 MB) | Dense | 969 / 2,182 | 931 / 2,186 | 1,093 / 3,230 | 1.040 / 1.000 |
+| f32 p = 8, 8 × 1 (69.7 MB) | Rotation | 784 / 1,916 | 1,090 / 2,049 | 785 / 1,911 | 1.000 / 1.002 |
+
+  The worst measured M3 Max cell under 56 MB is 1.12 (f64 p = 6, the cube at 8 ranks),
+  against 1.83 under 64 MB; f32 p = 8 resolves as under 64 MB at every measured count
+  (the 4% at 6 ranks is the difference between two runs of Dense; the Plummer Rotation
+  run at 6 ranks, 3,230 ms, is an outlier against 2,489 ms in the main sweep).
+
+## T4.3 The other degrees, and the 9 MB cap
+
+- **f64 p = 3**: Dense before and after in every cell (up to 94 ranks per node at 64 MB),
+  the best everywhere: Rotation 1.29–1.52× (M3 Max), 1.11–1.26× (locust) and 1.24–1.63×
+  (Kathleen) the default's time.
+- **f64 p = 12**: Rotation before and after (the dense tables are 75.9 MB per rank), the
+  best everywhere in T3 (Dense 1.70–10.19×); here `auto` alone, 14–18 cells per machine.
+- **The cap** (node-m2l.md §4: f64 p = 7 and f32 p = 9 were extrapolated), one rank, N = 10⁶,
+  Rotation's time over Dense's (cube / Plummer):
+
+| case (dense MB per rank) | M3 Max | locust | Kathleen | the rule |
+| --- | --- | --- | --- | --- |
+| f64 p = 7 (10.9 MB) | 1.088 / 1.064 | 1.113 / 1.096 | 0.873 / 0.913 | Rotation |
+| f32 p = 9 (13.3 MB) | 1.411 / 1.251 | 1.449 / 1.278 | 1.268 / 1.165 | Rotation |
+| f64 p = 8 (17.4 MB, for comparison) | 0.780 / 0.838 | 0.977 / 0.969 | 0.747 / 0.813 | Rotation |
+
+  At f64 p = 7 the machines split: Dense is 6–10% faster on the M3 Max and locust, 10–15%
+  slower on Kathleen; at f32 p = 9, a degree beyond f32's useful range (design §4), Dense
+  is 14–31% faster everywhere. **Decided by the user on 2026-10-11: the cap stays at 9 MB**
+  (as signed off; no single byte cap fits the three machines at f64 p = 7).
+
+## T4.4 Errors against the direct sum, and the one-rank reference
+
+The cube, N = 10⁶, 8 charge vectors, 1,000 targets, at one rank and the largest count
+(`--errors 8 --reference`); the reference is the one-rank `Fmm` of the resolved strategy
+over every point in index order (on one rank the run itself):
+
+| machine, ranks | f64 p = 8: new default (Rotation) / Dense, φ L2 · ∇φ L2 | f32 p = 8: new default / Dense, φ L2 · ∇φ L2 | reference difference, φ (f64 / f32 default) |
+| --- | --- | --- | --- |
+| M3 Max, 1 | 1.889e-5 · 5.942e-5 / the same | Dense: 1.911e-5 · 5.940e-5 / the same | 0 / 0 |
+| M3 Max, 12 | 1.889e-5 · 5.942e-5 / the same | Rotation 1.891e-5 · 5.941e-5 / 1.910e-5 · 5.941e-5 | 9.3e-16 / 4.8e-7 |
+| locust, 72 | 1.889e-5 · 5.942e-5 / the same | Rotation 1.891e-5 · 5.941e-5 / 1.911e-5 · 5.941e-5 | 9.3e-16 / 4.9e-7 |
+| Kathleen, 40 | 1.889e-5 · 5.942e-5 / the same | Rotation 1.891e-5 · 5.941e-5 / 1.910e-5 · 5.941e-5 | 9.2e-16 / 5.7e-7 |
+
+In f64 the new default's errors equal Dense's to the four printed digits at every count; in
+f32, where it resolves to Rotation, its φ error is 1% smaller (T3 §2.1: the f32 dense
+matrices are rounded once each) and ∇φ equal. The one-rank reference of the resolved
+strategy differs by at most 9.3e-16 (f64) and 5.7e-7 (f32), within 100 u_T (1.1e-14,
+6.0e-6) at 12, 40 and 72 ranks (the point order differs; bit for bit holds against the
+union in rank order, below).
+
+## T4.5 Checks
+
+- `tests/mpi_exec.rs` (debug): at 1 rank 67.5 s (69.6 s before T4 on the same machine,
+  warm table cache; the new scenario 1.0 s); at 2, 4 and 8 ranks on the M3 Max, 8 on
+  locust, 1, 2, 4, 8 on one Kathleen node (job 241841) and 2 × 40 (job 241835): every rank
+  resolves the same strategy with the same reason, named strategies stay, 105 evaluations
+  bit for bit the one-rank `Fmm` of the resolved strategy over the union in rank order, and
+  the cold cache filled once per node (on two Kathleen nodes sharing Lustre, 6 = 2 × 3
+  families built).
+- `tests/multi_rank.rs` (release) at 1, 2, 4, 8 ranks on the M3 Max: 0 of 3.2 million
+  values differ from the one-rank `Fmm` of the resolved strategy in every run.
+- `tests/device_ranks.rs` on the CPU runtime at 2 and 4 ranks, `tests/mpi_exec.rs` with
+  `--features cpu` in release at 1, 2 and 4, nd-fmm-validate's `tests/scaling.rs` at 1 and
+  2: passed (M3 Max).
+- Kathleen job 241834 (`check.sbatch`, the root and stricter checks on the final code):
+  every group passed except `cargo test --workspace`, whose only failures are the two
+  known ones of the spike `spikes/p2p-simd` (tools/kathleen/README.md, T1).
+
+## T4.6 Jobs and node-hours
+
+| job | QoS, nodes | what | elapsed |
+| --- | --- | --- | ---: |
+| 241833 | singlenode, 1 (node-c11b-015) | `sweep.sbatch node-rule crossover` | 1 h 40 min |
+| 241834 | singlenode, 1 (node-c11a-078) | `check.sbatch` | 19 min |
+| 241835 | test, 2 (node-c11a-[131,134]) | `mpi.sbatch 80` | 7 min |
+| 241841 | singlenode, 1 (node-c11a-078) | `mpi.sbatch 1 2 4 8` | 11 min |
+
+**2.39 node-hours** of the 30 that decision 3 gives T4; every job at most 2 nodes.
 
 ## Raw output
 
