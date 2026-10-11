@@ -1,8 +1,10 @@
 #!/bin/bash -l
 # tools/kathleen/jobs/run.sbatch: runs each argument as one step, in the environment
-# (Phase 5N T1). One node, `singlenode`, unless the submission says otherwise.
+# (Phase 5N T1). One node, `singlenode`, unless the submission says otherwise (at most 4
+# nodes, in `small`; Phase 5S T0).
 #
 #     tools/kathleen/submit.sh run.sbatch 'cargo test -p nd-fmm-exec' 'du -sh target'
+#     tools/kathleen/submit.sh --qos=small --nodes=4 --time=00:30:00 -- run.sbatch 'srun hostname'
 #
 # For the commands the other job scripts do not cover. Never on the login node: a build
 # or a test is a job (README.md, "The login-node rule"). The allocation has 40 tasks per

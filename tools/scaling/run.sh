@@ -56,6 +56,11 @@
 #   nodes-check     the errors (8 vectors, 1,000 targets) at N = 10^6 with the one-rank
 #                   reference, f64 p = 3 and 8 and f32 p = 8, and at N = 10^7 without it,
 #                   f64 p = 3 and 8; one rank per core, two timed evaluations
+#   nodes-large     Phase 5S T0: the cube and the Plummer sphere at N = 10^8, f64 p = 3
+#                   and 8 with the strategy of the rule (`auto`), every split of SPLITS
+#                   (2x20 first, then 40x1, where the memory runs out first), overlap off,
+#                   two timed evaluations, the errors of one charge vector (1,000 targets,
+#                   the distributed direct sum; no one-rank reference)
 #
 # Environment:
 #   OUT      output directory (default bench-results/scaling-<host>-<date>); one file per
@@ -79,6 +84,9 @@
 #            starts (default 200, two cores): each launch waits, up to an hour, until
 #            they use less (a laptop's background jobs, such as a virus scanner, would
 #            otherwise share the cores), and the file records the wait
+#   ONLY     if set, an extended regular expression: only the launches whose names match
+#            it run (for example the repeats of Phase 5S T0); the others are left out
+#            without a file
 #   DRY_RUN  if set, print the commands only
 #   CARGO_TARGET_DIR, RUSTFLAGS  as for cargo: the example is built and run from
 #            $CARGO_TARGET_DIR (default target/), so a labelled build with other flags
@@ -230,6 +238,9 @@ quiet() {
 launch() {
     name=$1 ranks=$2 threads=$3
     shift 3
+    if [ -n "${ONLY:-}" ] && ! printf '%s\n' "$name" | grep -Eq -- "$ONLY"; then
+        return
+    fi
     if [ "$os" = macos ]; then
         flags="--mca btl_tcp_if_include lo0 --mca oob_tcp_if_include lo0"
         if [ "$ranks" -gt 16 ]; then flags="$flags --oversubscribe"; fi
@@ -463,7 +474,7 @@ for sweep in "$@"; do
                 --errors 8 --reference --evals 1
         done
         ;;
-    host | nodes-strong | nodes-weak | nodes-check)
+    host | nodes-strong | nodes-weak | nodes-check | nodes-large)
         if [ "$os" != slurm ]; then
             echo "$sweep: under Slurm only" >&2
             continue
@@ -519,6 +530,19 @@ for sweep in "$@"; do
                     launch "nodes-check-$dist-n10000000-${dp%%:*}-p${dp##*:}-N$NODES-${CORES}x1" \
                         "$r" 1 --dist $dist --n 10000000 --precision "${dp%%:*}" \
                         --p "${dp##*:}" --overlap off --errors 8 --evals 2
+                done
+            done
+            ;;
+        nodes-large)
+            n=100000000
+            for split in $(printf '%s\n' $SPLITS | sort -t x -k 1,1n); do
+                per=${split%x*} t=${split#*x}
+                for dist in cube plummer; do
+                    for p in 3 8; do
+                        launch "$sweep-$dist-n$n-f64-p$p-auto-N$NODES-${per}x$t" \
+                            $((per * NODES)) "$t" --dist $dist --n "$n" --precision f64 \
+                            --p "$p" --strategy auto --overlap off --evals 2 --errors 1
+                    done
                 done
             done
             ;;

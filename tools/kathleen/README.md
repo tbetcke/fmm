@@ -10,7 +10,8 @@ documentation: https://www.rc.ucl.ac.uk/docs/Clusters/Kathleen/.
 
 **Everything lives under `/scratch/scratch/ucahtbe/fmm`** (the root; `~/Scratch` points
 to `/scratch/scratch/ucahtbe`). Nothing goes into the home directory. **No job is larger
-than 2 nodes (80 cores)** for now (docs/phase5n/README.md, "Working on Kathleen").
+than 4 nodes (160 cores)**: the user's cap for Phase 5S (2026-10-11, docs/phase5s/README.md),
+lifted from Phase 5N's 2 nodes. 4-node jobs run in `small` ("Jobs and QoS").
 
 ## Files
 
@@ -25,11 +26,11 @@ than 2 nodes (80 cores)** for now (docs/phase5n/README.md, "Working on Kathleen"
 | `jobs/lib.sh` | jobs | shared by the job scripts: `env.sh`, the per-job `TMPDIR` on every node, the batch shell bound to the physical cores, `step` (timed, recorded, carries on), the summary table at exit |
 | `jobs/build.sbatch` | 1 node, `singlenode` | fetch, release build, `cargo test -p nd-fmm-math`, every test executable, the release examples, sizes |
 | `jobs/check.sbatch` | 1 node, `singlenode` | the CPU-side checks of root CLAUDE.md in groups: `root`, `strict`, `simd`, `kernels` |
-| `jobs/mpi.sbatch` | 1 node `singlenode`, or 2 nodes `test` | `.github/scripts/run-mpi-tests.sh` build, then run at the given rank counts with `mpirun --bind-to core` |
-| `jobs/launcher.sbatch` | 2 nodes, `test` | decision 4: `mpirun` against `srun --mpi=pmix` at 2 × 40 ranks, the bindings, the transport between and within nodes |
-| `jobs/scaling.sbatch` | 2 nodes, `test` | one `scaling` launch, 2 nodes × 2 ranks × 20 threads, the N = 10⁶ cube, f64, p = 3, `--reference --errors 8` |
-| `jobs/run.sbatch` | 1 node, `singlenode` (40 tasks, so `mpirun` has slots) | each argument as one step, for anything else |
-| `jobs/sweep.sbatch` | 1 node `singlenode` 6 h, or 2 nodes `test`/`small` | sweeps of `tools/scaling/run.sh` in one allocation, and `p2p` (the x86 P2P examples); one file per launch in `logs/scaling-<job id>/` (Phase 5N T2; "Scaling sweeps") |
+| `jobs/mpi.sbatch` | 1 node `singlenode`, 2 nodes `test`, or 4 nodes `small` | `.github/scripts/run-mpi-tests.sh` build, then run at the given rank counts with `mpirun --bind-to core` |
+| `jobs/launcher.sbatch` | 2 nodes, `test` (2 × 40 ranks fixed: a record of decision 4, not run at 4 nodes) | decision 4: `mpirun` against `srun --mpi=pmix` at 2 × 40 ranks, the bindings, the transport between and within nodes |
+| `jobs/scaling.sbatch` | 2 nodes `test`, or 4 nodes `small` | one `scaling` launch, 2 ranks × 20 threads on each node of the job, the N = 10⁶ cube, f64, p = 3, `--reference --errors 8` |
+| `jobs/run.sbatch` | 1 node, `singlenode` (40 tasks per node, so `mpirun` has slots); any node count the submission names | each argument as one step, for anything else |
+| `jobs/sweep.sbatch` | 1 node `singlenode` 6 h, 2 nodes `test`/`small`, or 4 nodes `small` | sweeps of `tools/scaling/run.sh` in one allocation, and `p2p` (the x86 P2P examples); one file per launch in `logs/scaling-<job id>/` (Phase 5N T2; "Scaling sweeps") |
 | `check-root.sh` | login node | lists what was written outside the root since the setup |
 | `machine.md` | | the machine's facts, measured, and what the environment resolved to |
 
@@ -121,6 +122,7 @@ tools/kathleen/submit.sh build.sbatch                      # build; nd-fmm-math'
 tools/kathleen/submit.sh check.sbatch root                 # the root checks
 tools/kathleen/submit.sh run.sbatch 'cargo test -p nd-fmm-exec'
 tools/kathleen/submit.sh --qos=test --nodes=2 -- mpi.sbatch 80
+tools/kathleen/submit.sh --qos=small --nodes=4 --time=00:45:00 -- mpi.sbatch 160
 tools/kathleen/remote.sh 'cargo fmt -- --check; lquota'   # login node: light only
 ```
 
@@ -179,7 +181,7 @@ cores per node, no hyperthreads). From `sacctmgr show qos` (2026-10-10):
 | --- | --- | --- | --- | --- | --- |
 | `test` | exactly 2 | 1 h | 2 jobs | 1000 | 2-node MPI tests and runs |
 | `singlenode` | 1 | 6 h | 2 jobs | 0 | builds, checks, one-node tests and runs |
-| `small` | 2–6 | 48 h | | 100 | 2-node runs longer than an hour (≤ 2 nodes here) |
+| `small` | 2–6 | 48 h | | 100 | 4-node jobs (at most 4 here, Phase 5S), and 2-node runs longer than an hour |
 | `medium` | 7–12 | 24 h | | 200 | not used |
 | `large` | 13+ | 12 h | | 400 | not used |
 
@@ -191,6 +193,17 @@ cores per node, no hyperthreads). From `sacctmgr show qos` (2026-10-10):
 | `singlenode` (1 node) | 9 | 1–2 s for eight; 5 min 38 s (238825), when no node was idle; median 1 s |
 | `test` (2 nodes) | 6 | 2 min 24 s, 3 min 43 s, 3 min 43 s, 4 min 10 s, 3 min 32 s, 4 min 5 s; median 3 min 43 s |
 | `small` (4 nodes, probe only) | 1 | still pending after 7 min 34 s, cancelled (docs/phase5n/kathleen-probe.md) |
+
+Phase 5S T0, Sunday 2026-10-11, 12:24–17:43, with all 188 nodes allocated and about 1,600
+two-node `small` jobs pending at noon (fmm-validate/results/phase5n-kathleen.md, "Phase
+5S, T0", S0.3):
+
+| QoS | Jobs | Waits |
+| --- | --- | --- |
+| `small` (4 nodes) | 13 | 0, 1, 4, 5, 6, 10, 12, 40 and 55 s, 3 min 5 s, 4 min 47 s; 27 min 15 s (the first, 241946); 60 min 5 s (the last, 248448, the fair share lowered by the day's 17 node-hours); median 12 s |
+| `small` (2 nodes) | 1 | 1 s |
+| `test` (2 nodes) | 1 | 2 s |
+| `singlenode` (1 node) | 2 | 0 s, 1 s |
 
 A job's binding: the batch shell is bound to the 40 physical cores by `jobs/lib.sh`
 (Slurm gives it all 80 hardware threads); MPI ranks are bound per core by the launcher
@@ -220,6 +233,16 @@ The transport, from the selection messages (`OMPI_MCA_pml_base_verbose=10`,
 priority 40 over `ofi` at 25), both between the nodes and within one node, and with
 either launcher; `ob1` with the `vader` BTL initialises but is not selected. Nothing uses
 TCP. The module sets `OMPI_MCA_btl=self,vader`.
+
+**`PSM2_TID=0`** (`env.sh`, Phase 5S T0): on 4 nodes PSM2's expected-receive (TID) path
+delivered wrong data between nodes (an `MPI_Alltoallv` block from rank 0 left at zero or
+garbage on the last rank of the second node, in every run of `mpi_regressions` at 4 × 20
+and 4 × 40 ranks, with the `psm2` and the `ofi` MTL and every `alltoallv` algorithm). It
+passed over TCP, through shared memory (160 ranks on 2 nodes), with `PSM2_TID=0` and with
+rendezvous off (`PSM2_MQ_RNDV_HFI_THRESH` above every message), and failed with
+`PSM2_SDMA=0` (jobs 241946, 242295, 242474). Every job runs with TIDs off.
+Versions: libpsm2-12.0.1-1.el9 (PSM2 v2.2, driver interface
+v6.3), kernel 5.14.0-570.140.1.el9_6.
 
 **Decision 4 (signed off by the user, 2026-10-10): `mpirun` inside the allocation**,
 with `--bind-to core` and the placement explicit: `--map-by core` for one thread per
@@ -263,8 +286,23 @@ tools/kathleen/submit.sh --qos=test --nodes=2 '--export=ALL,SPLITS=40x1' -- swee
 tools/kathleen/submit.sh --qos=test --nodes=2 -- sweep.sbatch nodes-weak nodes-check
 ```
 
+At 4 nodes (Phase 5S T0; `small`, 2–6 nodes, 48 h, at most 4 nodes here), one job per
+sweep, the time limits sized from that task's runs (in brackets; a short limit backfills
+sooner), and the N = 10⁸ sweep `nodes-large` (one node: 80 min; 2 nodes: 41 min):
+
+```sh
+tools/kathleen/submit.sh --qos=small --nodes=4 --time=00:45:00 -- sweep.sbatch nodes-strong  # (14 min)
+tools/kathleen/submit.sh --qos=small --nodes=4 --time=01:00:00 -- sweep.sbatch nodes-large   # (21 min)
+tools/kathleen/submit.sh --qos=small --nodes=4 --time=00:30:00 -- sweep.sbatch nodes-weak    # (7 min)
+tools/kathleen/submit.sh --qos=small --nodes=4 --time=00:45:00 -- sweep.sbatch nodes-check   # (6 min)
+tools/kathleen/submit.sh --qos=small --nodes=2 --time=01:30:00 -- sweep.sbatch nodes-large   # (41 min)
+# a subset on other nodes (the repeats of T0): ONLY selects launches by name
+tools/kathleen/submit.sh --qos=small --nodes=4 --time=00:40:00 '--exclude=node-c11a-[050,123-124,136]' \
+    '--export=ALL,ONLY=^nodes-strong-cube-n1000000-f64-p3-auto-N4-40x1$' -- sweep.sbatch nodes-strong
+```
+
 `singlenode` and `test` take two jobs per user each, so two one-node and two two-node
-sweeps run at once. The output stays in the root's `logs/`, never in a tree; the report
+sweeps run at once; Phase 5S T0 kept at most two jobs pending or running in all. The output stays in the root's `logs/`, never in a tree; the report
 quotes what it needs.
 
 ## Quota

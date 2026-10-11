@@ -1888,7 +1888,10 @@ fn no_targets_on_this_rank(comm: &SimpleCommunicator) {
 fn input_errors(comm: &SimpleCommunicator) {
     let (rank, last) = (comm.rank(), comm.size() - 1);
     let mut rng = SplitMix64(0x7899);
-    let points = share(&unit_cube_points(&mut rng, 400), comm);
+    // Rank 0 needs at least 4 points (its point 3 is moved outside the domain below):
+    // 400 up to 100 ranks, 4 per rank beyond (a round-robin share gives rank 0 the most).
+    let npoints = 400.max(4 * comm.size() as usize);
+    let points = share(&unit_cube_points(&mut rng, npoints), comm);
     let unit = PhysicalBox::new([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
 
     // A supplied domain that is not a cube: the same on every rank.

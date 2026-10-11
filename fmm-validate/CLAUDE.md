@@ -99,6 +99,16 @@ the threading line), and in `tools/scaling/run.sh` the budget per machine class
 grid, `auto` against the other strategy, the cap and the errors) and `crossover`. The
 before/after report is in `results/phase5n-kathleen.md`, "Phase 5N, T4".
 
+Phase 5S T0 (the code at 1, 2 and 4 Kathleen nodes) added to `tools/scaling/run.sh` the
+sweep `nodes-large` (N = 10⁸, the cube and the Plummer sphere, f64 p = 3 and 8 under
+`auto`, two timed evaluations, the errors of one charge vector, no one-rank reference)
+and `ONLY` (a regular expression on launch names, for repeats and subsets); no library or
+harness code changed. Its report is the part "Phase 5S, T0: four nodes" of
+`results/phase5n-kathleen.md`: strong scaling at 1, 2 and 4 nodes, N = 10⁸, weak scaling,
+per run at 4 nodes, the replicated part against P to 160 ranks, the errors at 4 nodes,
+repeats, the 4-node queue, and the PSM2 defect (wrong data between nodes through PSM2's
+TID path; every Kathleen job runs with `PSM2_TID=0`, `tools/kathleen/env.sh`).
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`
