@@ -59,7 +59,7 @@ Do:
     time at 8 and 72 ranks on locust (N = 10⁶–10⁷) and (Kathleen) at 40, 80 and 160 ranks,
     40 × 1 and 2 × 20 per node (N = 10⁷, 10⁸);
   - counted, not timed: per-rank points, leaves, V pairs and the modelled cost (counts
-    times the fitted constants) at 512 ranks on locust and 640 and 1,280 on Kathleen's 4
+    times the fitted constants) at 512 ranks on locust and 320 and 640 on Kathleen's 4
     nodes, oversubscribed (N = 10⁶–10⁷).
 
 Tests that define done:
@@ -67,7 +67,7 @@ Tests that define done:
   (`mpi_exec`, `multi_rank`) at 1, 2, 4 and 8 ranks, and T2's invariance check at 1, 2, 4
   ranks, at 512 against 64 on locust and (Kathleen) at 160 against 20.
 - The leaves equal the first cut's on every workload (the `nd-octree` example).
-- The modelled per-rank cost's max over mean at 512–1,280 oversubscribed ranks within the
+- The modelled per-rank cost's max over mean at 512 (locust) and 640 (Kathleen) oversubscribed ranks within the
   signed-off target (distributed-fmm.md §14.5: ≤ 1.10 at 1,024 ranks) on the three
   workloads, and the measured compute stages at 72 and 160 ranks improved against the
   first cut, or a report of how far it stays and why (then the target is a sign-off

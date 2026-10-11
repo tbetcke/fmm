@@ -48,8 +48,8 @@ Do:
   invariance test of T2 and the one-rank comparisons of `mpi_exec` pass unchanged.
 - **Measured** (release; reported, not asserted):
   - held boxes per rank (max, mean) against P at fixed N/P: locust 2–72 timed runs and
-    up to 512 oversubscribed; (Kathleen) 40, 80 and 160 ranks (40 × 1 per node) and 320,
-    640 and 1,280 oversubscribed on the 4 nodes, on the cube, the Plummer sphere and the
+    up to 512 oversubscribed; (Kathleen) 40, 80 and 160 ranks (40 × 1 per node) and 320
+    and 640 oversubscribed on the 4 nodes, on the cube, the Plummer sphere and the
     clusters at 2.5 × 10⁴ points per rank where memory allows (else 10⁴);
   - `Plan::new`'s memory per rank at those P, and its time to 72 (locust) and 160
     (Kathleen) ranks, against Phase 5;
@@ -64,7 +64,7 @@ Tests that define done:
 - T2's invariance check: 0 differing values at 1, 2, 4 ranks (CI), at 512 against 64 on
   locust and (Kathleen) at 160 against 20.
 - Held boxes per rank bounded at fixed N/P within T1's bound, from 2 to 512 ranks on
-  locust and (Kathleen) from 40 to 1,280 ranks (measured table), against the Phase 5
+  locust and (Kathleen) from 40 to 640 ranks (measured table), against the Phase 5
   growth; at 512 oversubscribed ranks far below the 37,449 of Phase 5.
 
 Must pass:

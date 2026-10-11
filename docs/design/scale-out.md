@@ -703,7 +703,7 @@ values, so the check fails on every rank or on none.
 N ≈ 10⁴, f64 p = 8 and f32 p = 3, overlap off and on (T2 brief). **At scale:** P against
 P/8, 160 against 20 on Kathleen's 4 nodes (the small run's ranks are one in eight, spread
 over the nodes), 640 against 80 oversubscribed on the same 4 nodes (1,280 against 160,
-as the T2 brief says, did not start, §10.1), 512 against 64
+the T2 brief's first plan, did not start, §10.1), 512 against 64
 oversubscribed on locust, N = 10⁶–10⁷. The small run holds k times the points per rank:
 at 160 against 20 and N = 10⁷, 5 × 10⁵ points per small rank (under 2 GB).
 
@@ -1116,8 +1116,8 @@ needs no skip (k runs over the divisors of P, k = 1 included).
   (`-x PSM2_SHAREDCONTEXTS=1`) 640 runs, but at 1,280 every launch died within 6 s (exit
   139), and a node whose contexts the crash left busy ("assign_context command failed:
   Device or resource busy") failed every later launch of the job (job 252846; rerun
-  without that node in 255188). The briefs' 1,280 on Kathleen (T2–T9) would become 640,
-  and the P/8 invariance at scale 640 against 80 (§12, question 11).
+  without that node in 255188). The briefs' 1,280 on Kathleen (T2–T9) became 640, and the
+  P/8 invariance at scale 640 against 80 (amended at the user's request; §12, question 11).
 
 ### 10.2 The time model beyond 160 ranks (*model*)
 
@@ -1275,7 +1275,7 @@ model (§10.2) with α_e and β_e at the stated alternatives.
 | 8 | The node-hour budget and T9's plan (decision 6) | About 120 node-hours for the phase within 240 budgeted (§10.5); T9 one 4-node job per sweep |
 | 9 | The time model beyond 160 ranks | §10.2, with Kathleen's measured α_e, β_e and β_g (§10.3) and the README's 1–2 µs and 10–100 Gbit/s beside them; every figure *model*, the open effects listed |
 | 10 | (new) Decision 0, 4 nodes in practice | The phase runs at 4 nodes as planned (T0's S0.12): of T1's four 4-node jobs two waited 2 s, one 33 minutes (Sunday evening), and one, submitted 20 s after that one, started when it ended; 10.4 node-hours in all (Appendix A) |
-| 11 | (new) Oversubscription on Kathleen | **640 ranks (160 per node) is Kathleen's ceiling**, over PSM2 with shared contexts; 1,280 did not start (§10.1). Amend the briefs' 1,280 on Kathleen (T2–T9) to 640 and the invariance at scale to 640 against 80 at sign-off; locust's 512 remains the largest count elsewhere |
+| 11 | (new) Oversubscription on Kathleen | **640 ranks (160 per node) is Kathleen's ceiling**, over PSM2 with shared contexts; 1,280 did not start (§10.1). The briefs' 1,280 on Kathleen (T2–T9) amended to 640 and the invariance at scale to 640 against 80 (done at the user's request); locust's 512 remains the largest count elsewhere |
 
 ## Appendix A. How the numbers were measured
 

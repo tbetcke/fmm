@@ -24,7 +24,7 @@ need them at 1,000 or more ranks:
 No job in this phase is larger than 4 nodes, so nothing can be timed at 1,000 ranks. T1
 states each trigger on what can be measured (decision 4 of docs/phase5s/README.md):
 message counts, bytes and memory on oversubscribed runs (locust to 512 ranks, Kathleen's
-4 nodes to 1,280), times to 72 ranks (locust) and 160 (Kathleen), and a model beyond.
+4 nodes to 640), times to 72 ranks (locust) and 160 (Kathleen), and a model beyond.
 This task measures the final structure (after T6 and T7), evaluates the triggers, and
 **builds only what the triggers and the sign-off require**. The expected outcome is that
 both close on counts, bytes and models, with their timing at scale left open; a report
@@ -46,7 +46,7 @@ Read first:
 Do:
 1. **Measure** (release; BLAS variables at 1), on the cube and the Plummer sphere:
    - **counted, not timed**, on oversubscribed runs (locust 128, 256, 512 ranks; Kathleen's
-     4 nodes 320, 640, 1,280 ranks) at N = 10⁶–10⁷: the messages and bytes per rank of
+     4 nodes 320 and 640 ranks) at N = 10⁶–10⁷: the messages and bytes per rank of
      each sample sort, of the coarse tree's rounds, of each O(P) count all-to-all (in
      `Redistribution::new`, rlst's graph builds, T3's advertisements), and the
      intermediate imbalance of the sample sorts (keys per rank after each sort, max over
@@ -83,7 +83,7 @@ Tests that define done:
   nodes).
 - For a package built: its own tests as above; the Phase 5 suites and T2's invariance check
   pass unchanged (bit for bit) at 1, 2, 4, 8 ranks, at 512 against 64 on locust and
-  (Kathleen) at 160 against 20; its counted messages and bytes below the trigger at 1,280
+  (Kathleen) at 160 against 20; its counted messages and bytes below the trigger at 640
   ranks.
 - For a package not built: the report, and nothing else changed.
 

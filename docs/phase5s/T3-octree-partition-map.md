@@ -75,7 +75,7 @@ Do:
   examples are.
 - **Measured**: held keys per rank old against new on the cube, the Plummer sphere and the
   clusters at fixed N/P from 2 to 512 ranks on locust (oversubscribed above 72, not
-  timed) and (Kathleen) from 40 to 160 ranks on 1–4 nodes and to 1,280 oversubscribed on
+  timed) and (Kathleen) from 40 to 160 ranks on 1–4 nodes and to 640 oversubscribed on
   the 4 nodes; `Octree::new`'s time with and without the change, timed to 72 ranks on
   locust and 160 on Kathleen (release, reported, not asserted), and the messages and bytes
   of its collectives on the oversubscribed runs. The plan itself does not run on the new

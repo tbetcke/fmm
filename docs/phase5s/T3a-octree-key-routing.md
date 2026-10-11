@@ -88,7 +88,7 @@ Tests that define done:
   (with every `KeyType`) equal those of the Phase 5 construction. The Phase 5 path stays
   in the MPI example as a private reference copy (as T1's probe did) until T3 lands, and
   is then removed. Run at 1, 2, 3, 4 and 8 ranks on the M3 Max and locust, at 512
-  oversubscribed on locust, and (Kathleen) at 160 ranks and 1,280 oversubscribed.
+  oversubscribed on locust, and (Kathleen) at 160 ranks and 640 oversubscribed.
 - Unit tests:
   - the routing rounds on hand-made counts (heavy blocks, `max_level`, a single block);
   - the merge of (key, multiplicity) runs (duplicates across runs, empty runs);
@@ -108,7 +108,7 @@ sphere and the clusters with the random share and with every point on rank 0:
   - at 8–72 ranks on locust (N = 10⁶–10⁷);
   - (Kathleen) at 40, 80 and 160 ranks (N = 10⁷, 10⁸);
 - counted, not timed: the messages and bytes of each collective of `Octree::new` at 512
-  oversubscribed ranks on locust and (Kathleen) 1,280;
+  oversubscribed ranks on locust and (Kathleen) 640;
 - "before" is rlst 0.10.0 (T1s), whose `parsort` already balances exactly; T1's probe
   numbers with rlst 0.9.0 are quoted beside it, so the report separates the splitter fix
   from the removal of the sorts.
