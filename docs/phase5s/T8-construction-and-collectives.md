@@ -1,5 +1,10 @@
 # Phase 5S / T8 — construction and collectives at scale, conditional (C5S.5; S4, S5)
 
+**Changed on 2026-10-11 (T1, at the user's request):** S4 is built in T3a
+([T3a-octree-key-routing.md](T3a-octree-key-routing.md)), because T1 measured its trigger
+fired at 8 ranks (`docs/design/scale-out.md` §1.4, §7.1). T8 keeps S5 and re-measures the
+construction after T3a; where this brief says "build S4", read "re-measure T3a's routing".
+
 distributed-fmm.md §14.4 keeps two packages in reserve, to be built only if measured to
 need them at 1,000 or more ranks:
 - **S4, construction at scale** (`nd-octree`). `Octree::new` sorts keys with the sample

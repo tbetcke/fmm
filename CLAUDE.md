@@ -12,7 +12,9 @@ for crate-specific rules; everything here applies to all of them.
 - CONVENTION_VERSION in nd-fmm-math must match the file.
 - Current phase and task briefs: docs/phase5s/README.md (Phase 5S, the scale-out on
   Kathleen; Kathleen jobs at most 4 nodes, the user, 2026-10-11; T0 first, a 4-node
-  baseline). Phase 5N briefs: docs/phase5n/README.md (one node: Kathleen, and the M2L
+  baseline); its design docs/design/scale-out.md (from T1: the locally essential and
+  owned top tree, the replicated top, the cut by modelled cost, the S4/S5 triggers).
+  Phase 5N briefs: docs/phase5n/README.md (one node: Kathleen, and the M2L
   tables per node; it ran under a 2-node cap). Phase 5 briefs:
   docs/phase5/README.md (the distributed FMM; design docs/design/distributed-fmm.md,
   from T1). Phase 4S briefs:

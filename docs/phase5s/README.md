@@ -96,7 +96,9 @@ The phase has four parts:
    nodes and the 4-node queue (T0), a design document for the scale-out, measured on
    Kathleen with the Phase 5 code (T1, signed off by hand), then validation at scale (S7) before any
    structural change, so that every later task is checked by rank-count invariance (T2).
-2. **A locally essential top tree (S1)** in `nd-octree` (T3) and `nd-fmm-plan` (T4).
+2. **The construction without sample sorts (S4, T3a; added 2026-10-11 from T1's
+   measurements)**, then **a locally essential top tree (S1)** in `nd-octree` (T3) and
+   `nd-fmm-plan` (T4).
 3. **An owned top tree (S2)** in `nd-fmm-plan` (T5) and `nd-fmm-exec` (T6), and the
    **work-weighted cut (S3)** (T7).
 4. **Construction and collectives (S4, S5), conditional (T8), and scaling at scale (T9)**,
@@ -161,8 +163,9 @@ In scope:
     replacing the all-gathers of `generate_all_keys` and the ghost-children layer's
     replication of every block (S1, T3);
   - the second cut by modelled work after the local refinement (S3, T7);
-  - keys routed to block owners instead of the sample sorts (S4, T8), only if T8's trigger
-    fires and the sign-off accepts it.
+  - keys routed to block owners instead of the sample sorts (S4, **T3a**: T1 measured
+    the trigger fired at 8 ranks already, `docs/design/scale-out.md` §7.1; scheduled at
+    the user's request on 2026-10-11).
 - `nd-fmm-plan`:
   - `Plan::new` over the locally essential set, the held-key check replacing "every coarse
     block held" (S1, T4);
@@ -305,7 +308,9 @@ These hold for every task, so that no task decides them on its own:
   otherwise. One MPI-initialising test per test executable.
 - **Errors.** No new collective for agreement where an existing one can carry the error;
   a new one is justified in T1 and counted in the collectives table.
-- **Dependencies.** No new external dependency. rlst 0.9.0 and mpi 0.8.2 stay pinned.
+- **Dependencies.** No new external dependency. rlst 0.10.0 (from T1s; 0.9.0 until then)
+  and mpi 0.8.2 stay pinned, and CubeCL `=0.11.0` with `cubek-matmul`/`cubek-std`
+  `=0.3.0` (from T1s; the pre-releases until then).
   rsmpi 0.8.2 already has what a sparse exchange needs (`immediate_synchronous_send`,
   `immediate_barrier`, scoped requests). An rlst or rsmpi addition (for example a
   neighbourhood collective, or replacing rlst's ghost-communicator build) is asked for
@@ -347,32 +352,38 @@ These hold for every task, so that no task decides them on its own:
 ## Tasks
 
 One pull request each.
-- T0 needs Phase 5N complete. T1 needs T0 (its report, and decision 0). T2 needs T1
-  signed off.
-- T3 needs T1 signed off and T2 (its acceptance runs T2's invariance check).
+- T0 needs Phase 5N complete. T1 needs T0 (its report, and decision 0). T1s (added
+  2026-10-11 at the user's request) needs T0; it changes no algorithm and may run while
+  T1 awaits sign-off. T2 needs T1 signed off and T1s.
+- T3a needs T1 signed off; it changes no output and is checked key for key, so it may run
+  beside T2.
+- T3 needs T1 signed off, T2 (its acceptance runs T2's invariance check) and T3a (both
+  change `Octree::new`).
 - T4 needs T3. T5 needs T4. T6 needs T5.
 - T7 needs T4 (the held set and the plan it re-cuts), and T6 for timing the cost model's
   constants on the final structure.
-- T8 needs T6 and T7 (it measures the final construction and collectives).
+- T8 needs T6 and T7 (it measures the final construction and collectives; S4 is T3a's).
 - T9 needs T6, T7 and T8.
 
 | Task | Brief | Delivers | Component | Depends on |
 | --- | --- | --- | --- | --- |
 | T0 | [T0-four-node-baseline.md](T0-four-node-baseline.md) | the code as Phase 5N left it at 1, 2 and 4 Kathleen nodes (`nodes-strong`, N = 10⁸, `nodes-weak`, `nodes-check`; per run at 4 nodes: imbalance, exchanges, replicated part, memory), the 4-node queue waits, `tools/kathleen/` for 4-node jobs; a new part of `phase5n-kathleen.md` | C5S.0 | Phase 5N complete |
 | T1 | [T1-scale-out-design.md](T1-scale-out-design.md) | `docs/design/scale-out.md`: S1, S2, S3, S7, the S4/S5 triggers, collectives and memory per rank at 10²–10⁴ ranks, testing and scaling method, the time model beyond 160 ranks, task check, sign-off questions; measured with the Phase 5 code on Kathleen at 1–4 nodes (from T0 and its own runs) and in oversubscribed counts (locust to 512, Kathleen to 1,280) | design for C5S.1–C5S.6 | T0 |
-| T2 | [T2-validation-at-scale.md](T2-validation-at-scale.md) | S7: the rank-count-invariance check (a test within 4 ranks, an example at P against P/8), the `scaling` harness at N ≥ 10⁸ without a one-rank reference, a Kathleen correctness job | C5S.1 | T1 (signed off) |
-| T3 | [T3-octree-partition-map.md](T3-octree-partition-map.md) | S1 in `nd-octree`: the partition map as keys, local owner and kind of any top-tree key, the locally essential key set replacing `generate_all_keys`'s all-gathers by sparse advertisements | C5S.2 | T1 (signed off), T2 |
+| T1s | [T1s-dependency-upgrade.md](T1s-dependency-upgrade.md) | rlst 0.9.0 → 0.10.0 (the histogram sort of rlst #40) and CubeCL `=0.11.0-pre.4` → `=0.11.0` (`cubek-matmul`, `cubek-std` `=0.3.0`), one commit each; host outputs bit for bit, device within Phase 4's bounds, the octree key for key; `Octree::new` before and after | prerequisite of C5S.1 | T0 |
+| T2 | [T2-validation-at-scale.md](T2-validation-at-scale.md) | S7: the rank-count-invariance check (a test within 4 ranks, an example at P against P/8), the `scaling` harness at N ≥ 10⁸ without a one-rank reference, a Kathleen correctness job | C5S.1 | T1 (signed off), T1s |
+| T3a | [T3a-octree-key-routing.md](T3a-octree-key-routing.md) | S4 in `nd-octree`: the input keys routed by O1-style weight rounds instead of the first sample sort, the 2:1 closure routed by the partition bounds instead of the second; one local sort; the octree key for key unchanged; `Octree::new` by step before and after | C5S.2 | T1 (signed off) |
+| T3 | [T3-octree-partition-map.md](T3-octree-partition-map.md) | S1 in `nd-octree`: the partition map as keys, local owner and kind of any top-tree key, the locally essential key set replacing `generate_all_keys`'s all-gathers by sparse advertisements | C5S.2 | T1 (signed off), T2, T3a |
 | T4 | [T4-plan-locally-essential.md](T4-plan-locally-essential.md) | S1 in `nd-fmm-plan`: `Plan::new` over the locally essential set, the held-key check, the exchanges built from it; held boxes measured bounded in P | C5S.2 | T3 |
 | T5 | [T5-owned-top-tree.md](T5-owned-top-tree.md) | S2 in `nd-fmm-plan`: owners, the order-preserving upward reduction, the replicated top of fixed size, the coarse gather removed, new `HostData` events, overlap of the reduction | C5S.3 | T4 |
 | T6 | [T6-owned-top-tree-exec.md](T6-owned-top-tree-exec.md) | S2 in `nd-fmm-exec`: `Fmm`, the device operator's events, overlap, timings and traffic, the harness's new measures | C5S.3 | T5 |
 | T7 | [T7-work-weighted-cut.md](T7-work-weighted-cut.md) | S3: the cost model from per-kind timings, the second cut after the local refinement, an `Fmm` option; the modelled cost balance at 512–1,280 oversubscribed ranks, the measured balance at 72 and 160 | C5S.4 | T4; T6 for timing |
-| T8 | [T8-construction-and-collectives.md](T8-construction-and-collectives.md) | S4 and S5, conditional: evaluated on oversubscribed counts and bytes (to 512–1,280 ranks) and models; built only where T1's trigger fires and the sign-off accepts, else closed by a report | C5S.5 | T6, T7 |
+| T8 | [T8-construction-and-collectives.md](T8-construction-and-collectives.md) | S5 (S4 moved to T3a; T8 re-measures it), conditional: evaluated on oversubscribed counts and bytes (to 512–1,280 ranks) and models; built only where T1's trigger fires and the sign-off accepts, else closed by a report | C5S.5 | T6, T7 |
 | T9 | [T9-scaling-at-scale.md](T9-scaling-at-scale.md) | scaling on Kathleen at 1, 2 and 4 nodes and on locust to 72 ranks, Phase 5 against Phase 5S, counts and memory to 512–1,280 oversubscribed ranks, *model* times beyond, design-document update, Phase 6 briefs revised | C5S.6; gate: scaling report | T6, T7, T8 |
 
 Review T1 yourself before the tasks that build on it: T3–T8 encode its decisions on the
 held set, the owners, L_r and the cost model.
 
-T3 and T7 both change `nd-octree`; T4, T5 and T8 change `nd-fmm-plan`; T6 and T7 change
+T3a, T3 and T7 change `nd-octree`; T4, T5 and T8 change `nd-fmm-plan`; T6 and T7 change
 `fmm-exec/src/fmm.rs` and `tests/mpi_exec.rs`. Merge one, then rebase the next. T2 and T9
 change `nd-fmm-validate`'s `scaling` module and `tools/`.
 
@@ -439,7 +450,9 @@ In the repository root, start `claude` and say:
 - [ ] 4 nodes in practice (decision 0)
 - [ ] T1 merged: `docs/design/scale-out.md` drafted, sign-off questions listed
 - [ ] Scale-out design signed off, including L_r, the work weight, the S4/S5 triggers, CI and the node-hour budget (decisions 1–6)
+- [ ] T1s merged: rlst 0.10.0 and CubeCL 0.11.0; host outputs bit for bit, device within Phase 4's bounds; `Octree::new` before and after
 - [ ] T2 merged: rank-count invariance at 1, 2 and 4 ranks in CI, at 512 against 64 on locust, and at 160 against 20 on Kathleen; the harness at N = 10⁸
+- [ ] T3a merged: the sample sorts of `Octree::new` replaced by routing; the octree key for key unchanged at 1–8, 512 (locust) and 160/1,280 (Kathleen) ranks; `Octree::new` by step before and after
 - [ ] T3 merged: the partition map as keys and the locally essential key set in `nd-octree`; MPI examples pass on 1, 3 and 8 ranks
 - [ ] T4 merged: `Plan::new` over the locally essential set; bit for bit; held boxes bounded in P to 512 (locust) and 1,280 (Kathleen) oversubscribed ranks
 - [ ] T5 merged: the owned top tree in `nd-fmm-plan`; the coarse gather removed; bit for bit
