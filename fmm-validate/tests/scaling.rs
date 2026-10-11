@@ -21,6 +21,10 @@
 //! `split_shared` (one node here), every rank's host and CPUs, the MPI library and the new
 //! report lines; the Slurm fields are checked on given variables, without Slurm.
 //!
+//! And the additions of Phase 5N T3: the kind timings (a median per rank and kind, M2L
+//! within the downward stage, a time per V pair) and the reference of another strategy
+//! (Dense against Rotation, to rounding).
+//!
 //! One test initialises MPI (at `Threading::Funneled`). Error measures: as named at each
 //! check; the timings are only checked to be finite and non-negative.
 
@@ -28,6 +32,7 @@ use mpi::Threading;
 use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, CommunicatorCollectives};
+use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::scaling::{
     COMPUTE, Input, Overlap, Report, STAGES, Settings, SlurmJob, Workload, run,
@@ -112,6 +117,7 @@ fn smoke_run_of_the_scaling_core() {
         }
     }
     inputs_rank0_and_owners(&comm);
+    kinds_and_reference_strategy(&comm);
 }
 
 /// Every point and charge depends on its index and the seed only; the sample is distinct.
@@ -329,5 +335,48 @@ fn inputs_rank0_and_owners(comm: &SimpleCommunicator) {
                 assert_eq!(any, 0);
             }
         }
+    }
+}
+
+/// The kind timings and the reference of another strategy (Phase 5N T3): per rank and kind
+/// a median, M2L timed where there are V pairs and within the downward stage, and Dense
+/// against Rotation to rounding.
+fn kinds_and_reference_strategy(comm: &SimpleCommunicator) {
+    let settings = Settings {
+        strategy: M2lStrategy::Dense,
+        evaluations: 2,
+        reference: true,
+        reference_strategy: Some(M2lStrategy::Rotation),
+        kinds: true,
+        ..Settings::new(3)
+    };
+    let report = run::<f64>(&WORKLOAD, &settings, comm);
+    let path = &report.paths[0];
+    assert_eq!(path.kinds.len(), report.ranks);
+    for (r, kinds) in path.kinds.iter().enumerate() {
+        let (m2l, downward) = (kinds[2], path.medians[r][11]);
+        if report.rows[r].lists.v > 0 {
+            assert!(m2l > 0.0, "rank {r}: M2L {m2l}");
+        }
+        assert!(
+            m2l <= downward,
+            "rank {r}: M2L {m2l} s in a downward stage of {downward} s"
+        );
+    }
+    assert!(path.per_v_pair(&report.rows, |r| path.kinds[r][2]) > 0.0);
+    // Error measure: relative L2 of φ and ∇φ between the two strategies, which apply the
+    // same truncated translations and differ in rounding only.
+    let reference = report.reference.unwrap();
+    assert!(
+        reference.potential_l2 <= 1e-11 && reference.gradient_l2 <= 1e-11,
+        "Dense against Rotation: {reference:?}"
+    );
+    let summary = &report.summaries()[0];
+    for key in [
+        "m2l_us_per_pair=",
+        "reference_strategy=Rotation",
+        "tables_ms=",
+    ] {
+        assert!(summary.contains(key), "{key} missing from {summary}");
     }
 }
