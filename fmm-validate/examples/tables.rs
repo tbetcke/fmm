@@ -23,6 +23,20 @@
 //! The cache is timed in a new directory next to the example binary under `target/`,
 //! which the example removes afterwards. Timings vary with the machine and its load;
 //! this example only reports them and asserts nothing.
+//!
+//! Options (Phase 5N T3, for the table study of docs/phase5n/T3-m2l-node-study.md):
+//! - `--ps 3,6,8,10,12` the degrees of the build and memory tables (default
+//!   4, 8, 12, 16, 20, and the octant tables alone at 30);
+//! - `--parts build,apply,cache` the sections to run (default all three; the
+//!   recommendation needs `apply`);
+//! - `--cache-ps 8,12` the degrees of the cache section (default 8, 16);
+//! - `--cache-dir DIR` time the cache in a new directory inside DIR (for example on a
+//!   cluster's parallel file system), removed afterwards, instead of under `target/`.
+//!
+//! ```text
+//! cargo run --release -p nd-fmm-validate --example tables -- --ps 3,6,8,10,12 \
+//!     --parts build,cache --cache-ps 3,8,12
+//! ```
 
 use std::hint::black_box;
 use std::path::PathBuf;
@@ -287,18 +301,86 @@ fn cold_and_warm<F: CachedTable + PartialEq>(
     }
 }
 
-/// A new cache directory next to the example binary, under the target directory:
-/// `target/<profile>/tables-example-cache-<process id>`.
-fn cache_dir() -> PathBuf {
+/// A new cache directory inside `parent`, or next to the example binary under the target
+/// directory: `<parent or target/<profile>>/tables-example-cache-<process id>`.
+fn cache_dir(parent: Option<&PathBuf>) -> PathBuf {
+    let name = format!("tables-example-cache-{}", std::process::id());
+    if let Some(parent) = parent {
+        return parent.join(name);
+    }
     let exe = std::env::current_exe().expect("the path of the example binary");
     let profile = exe
         .parent()
         .and_then(|examples| examples.parent())
         .expect("the example binary lies in target/<profile>/examples");
-    profile.join(format!("tables-example-cache-{}", std::process::id()))
+    profile.join(name)
+}
+
+/// The command line (module documentation).
+struct Options {
+    build_ps: Vec<usize>,
+    octant_extra: Option<usize>,
+    apply: bool,
+    cache: bool,
+    cache_ps: Vec<usize>,
+    cache_dir: Option<PathBuf>,
+}
+
+/// Parses the options; exits with a message on anything else.
+fn options() -> Options {
+    let mut options = Options {
+        build_ps: BUILD_PS.to_vec(),
+        octant_extra: Some(OCTANT_EXTRA),
+        apply: true,
+        cache: true,
+        cache_ps: CACHE_PS.to_vec(),
+        cache_dir: None,
+    };
+    let fail = |message: String| -> ! {
+        eprintln!("tables: {message}");
+        std::process::exit(2);
+    };
+    let degrees = |flag: &str, value: &str| -> Vec<usize> {
+        value
+            .split(',')
+            .map(|p| {
+                p.trim()
+                    .parse()
+                    .unwrap_or_else(|_| fail(format!("{flag}: {p} is not a degree")))
+            })
+            .collect()
+    };
+    let mut it = std::env::args().skip(1);
+    while let Some(flag) = it.next() {
+        let value = it
+            .next()
+            .unwrap_or_else(|| fail(format!("{flag} needs a value")));
+        match flag.as_str() {
+            "--ps" => {
+                options.build_ps = degrees(&flag, &value);
+                options.octant_extra = None;
+            }
+            "--cache-ps" => options.cache_ps = degrees(&flag, &value),
+            "--cache-dir" => options.cache_dir = Some(PathBuf::from(value)),
+            "--parts" => {
+                let parts: Vec<&str> = value.split(',').map(str::trim).collect();
+                if let Some(part) = parts
+                    .iter()
+                    .find(|p| !["build", "apply", "cache"].contains(p))
+                {
+                    fail(format!("--parts: build, apply or cache, not {part}"));
+                }
+                options.apply = parts.contains(&"apply");
+                options.cache = parts.contains(&"cache");
+            }
+            other => fail(format!("unknown option {other}")),
+        }
+    }
+    options
 }
 
 fn main() {
+    let options = options();
     println!("# Operator tables of nd-fmm-tables: build, memory, application, cache");
     println!();
     println!("- CPU: {}", cpu_model());
@@ -306,8 +388,11 @@ fn main() {
     println!("- Target: {}", target());
     println!("- f64 unless stated. Tables are built in f64; an f32 table is its rounding.");
 
-    let mut all_ps: Vec<usize> = BUILD_PS.iter().chain(&APPLY_PS).copied().collect();
-    all_ps.push(OCTANT_EXTRA);
+    let mut all_ps = options.build_ps.clone();
+    if options.apply {
+        all_ps.extend(APPLY_PS);
+    }
+    all_ps.extend(options.octant_extra);
     all_ps.sort_unstable();
     all_ps.dedup();
 
@@ -321,7 +406,7 @@ fn main() {
             m2m.matrices().as_slice().len(),
             l2l.matrices().as_slice().len(),
         );
-        if p == OCTANT_EXTRA {
+        if Some(p) == options.octant_extra {
             builds.push((
                 p,
                 BuildTimes {
@@ -342,7 +427,7 @@ fn main() {
         let (m2l, m2l_time) = timed(|| M2lTables::<f64>::build(p));
         let (classes, classes_time) = timed(|| M2lClasses::<f64>::build(p));
         let (rot, rotation_time) = timed(|| RotationTables::<f64>::build(p));
-        if BUILD_PS.contains(&p) {
+        if options.build_ps.contains(&p) {
             builds.push((
                 p,
                 BuildTimes {
@@ -366,7 +451,7 @@ fn main() {
                 },
             ));
         }
-        if APPLY_PS.contains(&p) {
+        if options.apply && APPLY_PS.contains(&p) {
             eprintln!("p = {p}: timing");
             applications.push(time_applications(p, (&m2m, &l2l, &m2l), &classes, &rot));
         }
@@ -374,9 +459,15 @@ fn main() {
 
     report_builds(&builds);
     report_memory(&memory);
-    let m2l_crossover = report_applications(&applications);
-    report_cache();
-    report_recommendation(m2l_crossover, &memory);
+    if options.apply {
+        let m2l_crossover = report_applications(&applications);
+        if options.cache {
+            report_cache(&options);
+        }
+        report_recommendation(m2l_crossover, &memory);
+    } else if options.cache {
+        report_cache(&options);
+    }
 }
 
 fn report_builds(builds: &[(usize, BuildTimes)]) {
@@ -532,13 +623,13 @@ fn report_applications(applications: &[ApplyTimes]) -> Crossover {
     m2l_crossover
 }
 
-fn report_cache() {
-    let dir = cache_dir();
+fn report_cache(options: &Options) {
+    let dir = cache_dir(options.cache_dir.as_ref());
     // A directory left by a crashed run of the same process id would hold warm files.
     let _ = std::fs::remove_dir_all(&dir);
     let cache = TableCache::new(&dir);
     let mut rows = Vec::new();
-    for p in CACHE_PS {
+    for &p in &options.cache_ps {
         eprintln!("p = {p}: cache");
         rows.push(cold_and_warm::<M2mTables<f64>>(&cache, "M2M", p));
         rows.push(cold_and_warm::<L2lTables<f64>>(&cache, "L2L", p));

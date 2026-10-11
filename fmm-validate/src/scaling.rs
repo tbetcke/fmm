@@ -16,7 +16,11 @@
 //!   ([`MemoryModel`], a *model*), and the resident size where the machine reports it
 //!   without a new dependency ([`resident_memory`]);
 //! - optionally the errors against the direct sum at sampled targets ([`Errors`]) and the
-//!   difference from the one-rank `Fmm` over every point in index order ([`Reference`]);
+//!   difference from the one-rank `Fmm` over every point in index order ([`Reference`]),
+//!   of the same strategy or of another ([`Settings::reference_strategy`], Phase 5N T3);
+//! - optionally the time of every level call by operator kind ([`Settings::kinds`], Phase
+//!   5N T3): per rank and kind the median over the evaluations ([`KINDS`]), and the M2L
+//!   and downward time per V pair of the slowest rank;
 //! - where the ranks ran ([`Placement`], Phase 5N T2): the nodes and the ranks per node
 //!   (from `split_shared`), each rank's host and CPUs, the MPI library, and on a cluster
 //!   the Slurm job with its QoS, node list and binding ([`SlurmJob`]).
@@ -60,7 +64,10 @@ use mpi::collective::SystemOperation;
 use mpi::datatype::PartitionMut;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence, Root};
-use nd_fmm_exec::fmm::{BuildTimings, Fmm, FmmBuilder, ListSizes, Output, StageTimings, Traffic};
+use nd_fmm_exec::fmm::{
+    BuildTimings, Fmm, FmmBuilder, KindTiming, ListSizes, OperatorKind, Output, StageTimings,
+    Traffic,
+};
 use nd_fmm_exec::geometry::{contains, integer_centre};
 use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_exec::tables::M2lStrategy;
@@ -270,11 +277,17 @@ pub struct Settings {
     /// Whether to compare with the one-rank `Fmm` over every point in index order, built
     /// on rank 0 alone ([`Reference`]).
     pub reference: bool,
+    /// The strategy of that one-rank `Fmm`, if not [`strategy`](Self::strategy) (Phase 5N
+    /// T3): the difference between two strategies at otherwise fixed settings.
+    pub reference_strategy: Option<M2lStrategy>,
+    /// Whether every level call is timed by operator kind (`KindTiming::Synchronous`, one
+    /// clock pair per call on the host; Phase 5N T3), into [`PathTimes::kinds`].
+    pub kinds: bool,
 }
 
 impl Settings {
     /// Degree `p` on one thread, the default strategy, overlap off, the random share, one
-    /// build, ten evaluations, no checks.
+    /// build, ten evaluations, no checks, no kind timings.
     pub const fn new(p: usize) -> Self {
         Self {
             p,
@@ -287,6 +300,8 @@ impl Settings {
             vectors: 0,
             sampled: 1000,
             reference: false,
+            reference_strategy: None,
+            kinds: false,
         }
     }
 }
@@ -322,6 +337,9 @@ pub const STAGES: [&str; 16] = [
 /// The positions in [`STAGES`] of the compute stages, whose imbalance a [`Report`] gives:
 /// upward local, downward and leaves.
 pub const COMPUTE: [usize; 3] = [5, 11, 12];
+
+/// The operator kinds of [`PathTimes::kinds`], in `OperatorKind::ALL` order.
+pub const KINDS: [&str; 8] = ["P2M", "M2M", "M2L", "P2L", "L2L", "L2P", "M2P", "P2P"];
 
 /// The positions in [`STAGES`] of the exposed waits and of the blocking exchange stages.
 const EXPOSED: [usize; 2] = [4, 10];
@@ -376,6 +394,15 @@ fn stage_values(t: &StageTimings, overlapped: bool) -> [f64; 16] {
         s(&t.backward_output),
         s(&t.total()),
     ]
+}
+
+/// The time of each kind of [`KINDS`] in one evaluation, seconds; NaN without kind
+/// timings.
+fn kind_values(t: &StageTimings) -> [f64; 8] {
+    match &t.kinds {
+        Some(kinds) => OperatorKind::ALL.map(|kind| kinds.get(kind).total().as_secs_f64()),
+        None => [f64::NAN; 8],
+    }
 }
 
 /// The values of [`BUILD_PARTS`] for one build.
@@ -628,12 +655,30 @@ pub struct PathTimes {
     /// The median over the evaluations of the maximum over the ranks of the total: the
     /// evaluation's wall time.
     pub wall: f64,
+    /// With [`Settings::kinds`], per rank the median of each of [`KINDS`] over the
+    /// evaluations, seconds; empty otherwise.
+    pub kinds: Vec<[f64; 8]>,
 }
 
 impl PathTimes {
     /// The maximum, minimum and mean over the ranks of stage `k`.
     pub fn reduced(&self, k: usize) -> [f64; 3] {
         reduce_over(self.medians.iter().map(|m| m[k]))
+    }
+
+    /// The maximum, minimum and mean over the ranks of kind `k` of [`KINDS`]; NaN without
+    /// kind timings.
+    pub fn kind(&self, k: usize) -> [f64; 3] {
+        reduce_over(self.kinds.iter().map(|t| t[k]))
+    }
+
+    /// The time per V pair, in seconds, of the rank whose `time` is the largest: its
+    /// `time` over its V pairs (`rows` in rank order); NaN if `time` is NaN everywhere.
+    pub fn per_v_pair(&self, rows: &[RankRow], time: impl Fn(usize) -> f64) -> f64 {
+        (0..rows.len())
+            .filter(|&r| !time(r).is_nan())
+            .max_by(|&a, &b| time(a).total_cmp(&time(b)))
+            .map_or(f64::NAN, |r| time(r) / rows[r].lists.v.max(1) as f64)
     }
 
     /// The maximum, minimum and mean over the ranks of the sum of the [`COMPUTE`] stages.
@@ -1177,7 +1222,12 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         .gradients(true)
         .threads(settings.threads)
         .strategy(settings.strategy)
-        .overlap(settings.overlap == Overlap::On);
+        .overlap(settings.overlap == Overlap::On)
+        .kind_timings(if settings.kinds {
+            KindTiming::Synchronous
+        } else {
+            KindTiming::Off
+        });
     let mine = input_points(workload, settings.input, &builder, comm);
     let points: Vec<[f64; 3]> = mine.iter().map(|&i| workload.point(i)).collect();
 
@@ -1206,6 +1256,7 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         .collect();
     let paths = settings.overlap.paths();
     let mut times: Vec<Vec<[f64; 16]>> = vec![Vec::new(); paths.len()];
+    let mut kinds: Vec<Vec<[f64; 8]>> = vec![Vec::new(); paths.len()];
     let mut differing = 0usize;
     let mut last = None;
     for e in 0..=settings.evaluations {
@@ -1218,6 +1269,7 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
                 .unwrap_or_else(|error| panic!("rank {rank}: the FMM does not evaluate: {error}"));
             if e > 0 {
                 times[path].push(stage_values(&output.timings, overlapped));
+                kinds[path].push(kind_values(&output.timings));
             }
             outputs.push(output);
         }
@@ -1252,10 +1304,20 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
                 })
                 .collect(),
         );
+        let kind_medians = if settings.kinds {
+            let local: [f64; 8] =
+                core::array::from_fn(|k| median(kinds[path].iter().map(|t| t[k]).collect()));
+            let mut every = vec![0.0f64; 8 * size];
+            comm.all_gather_into(&local[..], &mut every[..]);
+            every.as_chunks::<8>().0.to_vec()
+        } else {
+            Vec::new()
+        };
         path_times.push(PathTimes {
             overlapped,
             medians: every.as_chunks::<16>().0.to_vec(),
             wall,
+            kinds: kind_medians,
         });
     }
     let differing = (paths.len() == 2).then(|| {
@@ -1266,9 +1328,13 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
 
     let errors = (settings.vectors > 0)
         .then(|| errors(workload, settings, (&mine, &points), &mut fmm, comm));
-    let reference = settings
-        .reference
-        .then(|| reference(workload, &builder, (&mine, &points), &last, comm));
+    let reference = settings.reference.then(|| {
+        let builder = match settings.reference_strategy {
+            Some(strategy) => builder.clone().strategy(strategy),
+            None => builder.clone(),
+        };
+        reference(workload, &builder, (&mine, &points), &last, comm)
+    });
 
     // Every rank's row, with the resident size at the end.
     let resident = resident_memory();
@@ -1560,6 +1626,24 @@ impl Report {
                 ] {
                     fields.push(format!("{key}_max_ms={}", ms(path.reduced(k)[0])));
                 }
+                fields.push(format!("tables_ms={}", ms(build_max[4])));
+                fields.push(format!(
+                    "v_pairs_max={}",
+                    rows.iter().map(|r| r.lists.v).max().unwrap_or(0)
+                ));
+                fields.push(format!(
+                    "downward_us_per_pair={:.4}",
+                    1e6 * path.per_v_pair(rows, |r| path.medians[r][11])
+                ));
+                if !path.kinds.is_empty() {
+                    for (k, key) in [(1, "m2m"), (2, "m2l"), (4, "l2l")] {
+                        fields.push(format!("{key}_max_ms={}", ms(path.kind(k)[0])));
+                    }
+                    fields.push(format!(
+                        "m2l_us_per_pair={:.4}",
+                        1e6 * path.per_v_pair(rows, |r| path.kinds[r][2])
+                    ));
+                }
                 fields.push(format!("compute_max_ms={}", ms(compute[0])));
                 fields.push(format!("compute_mean_ms={}", ms(compute[2])));
                 fields.push(format!("compute_imbalance={:.3}", compute[0] / compute[2]));
@@ -1570,6 +1654,9 @@ impl Report {
                     fields.push(format!("grad_l2={:.3e}", e.gradient.l2));
                 }
                 if let Some(r) = &self.reference {
+                    if let Some(strategy) = self.settings.reference_strategy {
+                        fields.push(format!("reference_strategy={strategy:?}"));
+                    }
                     fields.push(format!("reference_phi_l2={:.2e}", r.potential_l2));
                     fields.push(format!("reference_grad_l2={:.2e}", r.gradient_l2));
                 }
@@ -1622,12 +1709,14 @@ impl fmt::Display for Report {
         )?;
         writeln!(
             f,
-            "- precision {}, p = {}, strategy {:?}, gradients; input: {}; overlap: {}",
+            "- precision {}, p = {}, strategy {:?}, gradients; input: {}; overlap: {}; kind \
+             timings: {}",
             self.precision,
             s.p,
             self.strategy,
             s.input.description(),
-            s.overlap.name()
+            s.overlap.name(),
+            if s.kinds { "Synchronous" } else { "off" }
         )?;
         writeln!(
             f,
@@ -1962,6 +2051,37 @@ impl fmt::Display for Report {
                 max / mean
             )?;
             writeln!(f)?;
+            if !path.kinds.is_empty() {
+                writeln!(
+                    f,
+                    "| kind, ms (median per rank; `KindTiming::Synchronous`) | max | min | mean \
+                     | max / mean |"
+                )?;
+                writeln!(f, "| --- | --- | --- | --- | --- |")?;
+                for (k, kind) in KINDS.iter().enumerate() {
+                    let [max, min, mean] = path.kind(k);
+                    writeln!(
+                        f,
+                        "| {kind} | {} | {} | {} | {} |",
+                        ms(max),
+                        ms(min),
+                        ms(mean),
+                        if mean > 0.0 {
+                            format!("{:.3}", max / mean)
+                        } else {
+                            "–".to_string()
+                        }
+                    )?;
+                }
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "Per V pair, of the slowest rank in each: M2L {:.4} µs, downward {:.4} µs",
+                    1e6 * path.per_v_pair(rows, |r| path.kinds[r][2]),
+                    1e6 * path.per_v_pair(rows, |r| path.medians[r][11])
+                )?;
+                writeln!(f)?;
+            }
             // The slowest rank in compute, and its share of the work.
             let slowest = path
                 .medians
@@ -2021,10 +2141,15 @@ impl fmt::Display for Report {
         match &self.reference {
             Some(r) => writeln!(
                 f,
-                "Against the one-rank FMM over every point in index order (charge vector 0, \
-                 every target): relative L2 of φ {:.2e}, of ∇φ {:.2e}; max relative {:.2e}; \
-                 {} values differ in any bit",
-                r.potential_l2, r.gradient_l2, r.max_relative, r.differing
+                "Against the one-rank FMM{} over every point in index order (charge vector \
+                 0, every target): relative L2 of φ {:.2e}, of ∇φ {:.2e}; max relative \
+                 {:.2e}; {} values differ in any bit",
+                s.reference_strategy
+                    .map_or(String::new(), |strategy| format!(" with {strategy:?}")),
+                r.potential_l2,
+                r.gradient_l2,
+                r.max_relative,
+                r.differing
             )?,
             None => writeln!(f, "Against the one-rank FMM: not checked in this run")?,
         }

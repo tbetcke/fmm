@@ -44,6 +44,12 @@ command = "mpirun -n {{NPROCESSES}}"
 [[example]]
 name = "scaling"
 
+# The tables at scale and the node context (Phase 5N T3): every rank building, loading
+# from `TableCache` at once (or one rank per node first) and the cost of `split_shared`; a
+# timing example on any number of ranks, so not registered with templated-examples.
+[[example]]
+name = "node_tables"
+
 # The device path on the host fallback (Phase 4 T5): needs a device backend; not run in
 # CI (no templated-examples entry), run by hand on one rank.
 [[example]]

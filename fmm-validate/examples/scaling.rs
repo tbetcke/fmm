@@ -50,7 +50,11 @@
 //! - `--evals k` timed evaluations per path (10), `--builds b` (1);
 //! - `--errors k` charge vectors of the errors against the direct sum at `--sampled s`
 //!   targets (0, not checked; 1,000 targets);
-//! - `--reference` the one-rank FMM over every point on rank 0, against the output.
+//! - `--reference` the one-rank FMM over every point on rank 0, against the output;
+//! - `--reference-strategy auto|dense|classes|rotation` that FMM with another M2L
+//!   strategy (the difference between strategies; Phase 5N T3);
+//! - `--kinds` every level call timed by operator kind (`KindTiming::Synchronous`): the
+//!   M2M, M2L and L2L parts per rank and the time per V pair (Phase 5N T3).
 
 use mpi::Threading;
 use mpi::traits::Communicator;
@@ -81,6 +85,10 @@ fn arguments() -> Arguments {
             args.settings.reference = true;
             continue;
         }
+        if flag == "--kinds" {
+            args.settings.kinds = true;
+            continue;
+        }
         let value = it
             .next()
             .unwrap_or_else(|| fail(&format!("{flag} needs a value")));
@@ -100,17 +108,8 @@ fn arguments() -> Arguments {
             "--precision" => args.precision = value.clone(),
             "--p" => s.p = number(),
             "--threads" => s.threads = number().max(1),
-            "--strategy" => {
-                s.strategy = match value.as_str() {
-                    "auto" => M2lStrategy::Auto,
-                    "dense" => M2lStrategy::Dense,
-                    "classes" => M2lStrategy::Classes,
-                    "rotation" => M2lStrategy::Rotation,
-                    _ => fail(&format!(
-                        "--strategy: auto, dense, classes or rotation, not {value}"
-                    )),
-                };
-            }
+            "--strategy" => s.strategy = strategy(&flag, &value),
+            "--reference-strategy" => s.reference_strategy = Some(strategy(&flag, &value)),
             "--overlap" => {
                 s.overlap = Overlap::from_name(&value)
                     .unwrap_or_else(|| fail(&format!("--overlap: off, on or both, not {value}")));
@@ -131,6 +130,19 @@ fn arguments() -> Arguments {
         fail(&format!("--precision: f64 or f32, not {}", args.precision));
     }
     args
+}
+
+/// The M2L strategy named `value` of option `flag`.
+fn strategy(flag: &str, value: &str) -> M2lStrategy {
+    match value {
+        "auto" => M2lStrategy::Auto,
+        "dense" => M2lStrategy::Dense,
+        "classes" => M2lStrategy::Classes,
+        "rotation" => M2lStrategy::Rotation,
+        _ => fail(&format!(
+            "{flag}: auto, dense, classes or rotation, not {value}"
+        )),
+    }
 }
 
 fn fail(message: &str) -> ! {

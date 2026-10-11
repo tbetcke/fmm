@@ -77,6 +77,19 @@ binding, `SlurmJob`), and `tools/scaling/run.sh` runs the sweeps inside a Slurm 
 `nodes-weak`, `nodes-check`). The Kathleen report, one node at 1–40 ranks, 1 and 2 nodes
 and the x86 P2P profile, is `results/phase5n-kathleen.md`.
 
+Phase 5N T3 (the M2L study on a node, docs/design/node-m2l.md) added: `scaling`'s
+`Settings::kinds` (`--kinds`: every level call timed by operator kind with
+`KindTiming::Synchronous`, the M2M, M2L and L2L parts per rank, and the M2L and downward
+time per V pair of the slowest rank in the report and the summary) and
+`Settings::reference_strategy` (`--reference-strategy`: the one-rank reference with another
+strategy, the difference between strategies); the `tables` example's `--ps`, `--parts`,
+`--cache-ps` and `--cache-dir` (a cache on a cluster's file system); and the
+`node_tables` example (not registered; it times): `split_shared` and the agreement of the
+ranks per node, every rank building the tables, storing them into one `TableCache`
+directory at once or one rank per node first, the check bit for bit and the warm loads, on
+any number of ranks. `tests/scaling.rs` covers the kind timings and the reference of
+another strategy.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`
