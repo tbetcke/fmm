@@ -1908,7 +1908,9 @@ Added at the end of Phase 5N (2026-10-11; docs/phase5n/, laplace-fmm-plan.md §7
   counts. Overlap (§8) gains no more across two nodes than on one. The replicated part
   dominates the held boxes from about 16 ranks at N = 10⁶ and holds 71–94% at 40–80, as
   §9.2's crossover *model* (P ≈ √(N / 4,700)) gives. Everything beyond 2 nodes stays
-  unmeasured; Phase 5S (§14) starts from these numbers.
+  unmeasured; Phase 5S (§14) starts from these numbers. (The user lifted the cap to 4
+  nodes for Phase 5S on 2026-10-11; its T0 extends these runs to 4 nodes, 160 ranks,
+  before the scale-out design.)
 
 ### 15.3 For the next phase
 

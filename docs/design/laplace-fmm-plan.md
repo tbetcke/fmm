@@ -2158,12 +2158,16 @@ dense M2L tables stop strong scaling at 4–32 ranks per node (Section 7, Phase 
   16 ranks at N = 10⁶ (T2); a node window for it is the one place where the `mpi-sys`
   permission (decision 6) may pay.
 - Beyond 2 nodes everything stays unmeasured until the cap is lifted (the user's decision).
+  *Lifted to 4 nodes for Phase 5S on 2026-10-11 (the user)*: Phase 5S T0 measures the code
+  as Phase 5N left it at 1, 2 and 4 nodes, and the 4-node queue, before T1 designs.
 
 
 ### Phase 5S: scale-out (`nd-octree`, `nd-fmm-plan`, `fmm-exec`)
 
 Planned on 2026-10-10 (docs/phase5s/), distributed-fmm.md §14's packages, measured on
-Kathleen at no more than four nodes (the queue is busy; decided 2026-10-10) and beyond
+Kathleen at no more than four nodes (the queue is busy; decided 2026-10-10; Phase 5N then
+ran at most 2, and the user restored 4 for this phase on 2026-10-11, starting with a 4-node
+baseline of the code, T0) and beyond
 that by oversubscribed runs and models (§14.5, "A cluster may not be available"): a locally essential top tree (S1), an owned top tree with an order-preserving
 reduction and a fixed replicated top (S2), validation at scale (S7), a work-weighted cut
 (S3), and construction and collectives at scale (S4, S5) only where measured to be needed.
@@ -2172,7 +2176,8 @@ and gathers 11.6 MB per evaluation (phase5-gh200.md §10).
 
 | ID | Component | Acceptance criterion | Depends on | Status |
 | --- | --- | --- | --- | --- |
-| C5S.1 | Validation at scale (S7) | rank-count invariance (P against P/k, bit for bit) in CI at ≤ 4 ranks, on Kathleen at up to four nodes and oversubscribed at hundreds of ranks; distributed direct-sum errors at N ≥ 10⁸ | C5N.3 | Not started |
+| C5S.0 | Four-node baseline (Kathleen) | the code as Phase 5N left it at one, two and four nodes (strong at N = 10⁶–10⁸, weak, exchanges, the replicated part and memory per rank to 160 ranks, errors) and the 4-node queue waits; report published (`phase5n-kathleen.md`, "Phase 5S, T0") | C5N.3 | Not started |
+| C5S.1 | Validation at scale (S7) | rank-count invariance (P against P/k, bit for bit) in CI at ≤ 4 ranks, on Kathleen at up to four nodes and oversubscribed at hundreds of ranks; distributed direct-sum errors at N ≥ 10⁸ | C5S.0 | Not started |
 | C5S.2 | Locally essential top tree (S1) | held boxes per rank independent of P at fixed N/P; bit for bit Phase 5's results | C5S.1 | Not started |
 | C5S.3 | Owned top tree (S2) | no per-rank evaluation cost that grows with P; the coarse gather removed; bit for bit; hook, overlap and device kept | C5S.2 | Not started |
 | C5S.4 | Work-weighted cut (S3) | per-rank work max/mean within the design's target on the workloads, measured at up to 160 ranks and counted on oversubscribed runs beyond | C5S.2 | Not started |

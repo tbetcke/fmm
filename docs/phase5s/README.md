@@ -4,7 +4,9 @@ Phase 5S makes the distributed FMM of Phase 5 run on thousands of MPI ranks acro
 nodes of a cluster. It builds the packages of docs/design/distributed-fmm.md §14 (S1, S2,
 S7 and S3; S4 and S5 only if measured to be needed). It measures them on Kathleen, UCL's
 Omni-Path cluster, at 1, 2 and 4 nodes (40, 80 and 160 cores; **no job is larger than 4
-nodes, ever**, decided on 2026-10-10). Beyond 160 ranks it measures correctness, memory,
+nodes, ever**). Phase 5N ran under a cap of 2 nodes per job ("for now", the user,
+2026-10-10); on 2026-10-11 the user lifted it to 4 nodes for this phase, and T0 takes the
+first 4-node measurements, of the code as Phase 5N left it, before T1 designs. Beyond 160 ranks it measures correctness, memory,
 message counts and bytes on oversubscribed runs (locust to 512 ranks, Kathleen's 4 nodes
 to 640–1,280 ranks), never timed, and gives times there as *models*, the way
 distributed-fmm.md §14.5 ("A cluster may not be available") describes.
@@ -61,8 +63,9 @@ What is missing:
 - **Construction and collectives at scale (S4, S5)**, if measured to need it: two sample
   sorts per `Octree::new` and the O(P) count all-to-alls of `Redistribution` and of rlst's
   ghost-communicator builds (32 kB per rank at 8,192 ranks, *model*).
-- **Inter-node measurements of the new structures.** Phase 5N (T2) runs the Phase 5 code
-  on Kathleen at up to 4 nodes, if Kathleen is usable (Phase 5N decision 0). Nothing will
+- **Inter-node measurements of the new structures.** Phase 5N T2 ran the Phase 5 code on
+  Kathleen at 1 and 2 nodes (the 2-node cap; `phase5n-kathleen.md` §7–§9), and T0 extends
+  those runs to 4 nodes before the design. Nothing will
   run timed at 1,000 or more ranks: per-rank structures and traffic beyond 160 ranks come
   from oversubscribed runs, and times there from models whose inputs (per-rank compute,
   counted messages and bytes, an assumed latency and bandwidth, the measured imbalance)
@@ -74,10 +77,13 @@ regressions (see "Without Kathleen" below for the other case):
 - Kathleen (`ssh kathleen`, Slurm; tools/kathleen/ from Phase 5N T1): 190 nodes, each two
   Intel Xeon Gold 6248 (Cascade Lake, 20 cores each, AVX-512, 2.5 GHz), 40 cores per node
   in two NUMA domains (27.5 MB L3 each), 188 GB, Intel Omni-Path; diskless nodes, no
-  local `$TMPDIR`; RHEL 9.6; no GPUs. Whole nodes per job. **At most 4 nodes per job**:
-  1–2 nodes in the `test` QoS (1 h), 4 nodes in `small` (48 h, at most 6 nodes); the
-  larger QoS are not used. The queue is busy (about 2,000 jobs pending on 2026-10-10);
-  Phase 5N T1's probe measured the wait for 2- and 4-node jobs.
+  local `$TMPDIR`; RHEL 9.6; no GPUs. Whole nodes per job. **At most 4 nodes per job**
+  (the user, 2026-10-11, lifting Phase 5N's 2-node cap): 1 node in `singlenode` (6 h),
+  2 nodes in `test` (1 h; it takes exactly 2), 4 nodes in `small` (48 h, 2–6 nodes); the
+  larger QoS are not used. The queue is busy (about 2,000 jobs pending on 2026-10-10):
+  Phase 5N measured waits of minutes for 2-node `test` jobs (median 3 min 43 s), but its
+  one 4-node `small` probe was cancelled after 7 min 34 s pending, so the 4-node wait is
+  T0's first measurement.
   Oversubscribed runs on the 4 nodes (for example 640–1,280 ranks, `--oversubscribe`)
   serve correctness, memory and counts only, never timings.
 - locust (tools/gh200/): 72 Neoverse-V2 cores, one NUMA node; up to 72 ranks timed, up to
@@ -86,8 +92,9 @@ regressions (see "Without Kathleen" below for the other case):
 - the M3 Max: development and multi-rank tests by hand up to 12 ranks.
 
 The phase has four parts:
-1. **Design and oracles.** A design document for the scale-out, measured on Kathleen with
-   the Phase 5 code (T1, signed off by hand), then validation at scale (S7) before any
+1. **Baseline, design and oracles.** The code as Phase 5N left it at 1, 2 and 4 Kathleen
+   nodes and the 4-node queue (T0), a design document for the scale-out, measured on
+   Kathleen with the Phase 5 code (T1, signed off by hand), then validation at scale (S7) before any
    structural change, so that every later task is checked by rank-count invariance (T2).
 2. **A locally essential top tree (S1)** in `nd-octree` (T3) and `nd-fmm-plan` (T4).
 3. **An owned top tree (S2)** in `nd-fmm-plan` (T5) and `nd-fmm-exec` (T6), and the
@@ -139,10 +146,14 @@ distributed-fmm.md §14.5 ("A cluster may not be available") describes:
 
 Every brief's Kathleen runs are then skipped, and the task states it; the briefs mark
 them "(Kathleen)".
+If Kathleen is usable but 4-node jobs are not (decision 0, from T0's waits), the 1- and
+2-node runs stay as the briefs say, and the 4-node runs (160 ranks timed, 320–1,280
+oversubscribed) become "when the queue allows": each task reports which it ran.
 
 ## Scope
 
 In scope:
+- The 4-node baseline of the code as Phase 5N left it, and the 4-node queue (T0).
 - `docs/design/scale-out.md`, signed off; the design-document updates at the end of the
   phase.
 - `nd-octree` (octree/CLAUDE.md applies):
@@ -164,7 +175,8 @@ In scope:
   (T6, T7).
 - `nd-fmm-validate`: the rank-count-invariance check, the `scaling` harness at N ≥ 10⁸
   without a one-rank reference, the per-rank measures of the new structures (T2, T6, T9).
-- `tools/kathleen/` and `tools/scaling/`: correctness and scaling jobs at scale (T2, T9).
+- `tools/kathleen/` and `tools/scaling/`: 4-node jobs (T0), correctness and scaling jobs at
+  scale (T2, T9).
 
 Out of scope:
 - Phase 6 operator work: the host batched M2L, SVD compression, AVX-512 P2P, several
@@ -302,6 +314,9 @@ These hold for every task, so that no task decides them on its own:
   hook's six events (T7) and the overlap order (T9) stay, extended rather than replaced.
 
 ## Exit gate
+- C5S.0 (T0): the code as Phase 5N left it measured at 1, 2 and 4 Kathleen nodes (strong at
+  N = 10⁶–10⁸, weak, per run at 4 nodes, errors) and the 4-node queue waits, in
+  `phase5n-kathleen.md`, "Phase 5S, T0"; decision 0 made.
 - Every acceptance test in the task briefs passes: in CI for the default members on one
   rank; in `run-tests-mpi` at 2 and 4 ranks; by hand at 1, 2, 4 and 8 ranks on the M3 Max
   and on locust; (Kathleen) at 2 nodes.
@@ -332,7 +347,8 @@ These hold for every task, so that no task decides them on its own:
 ## Tasks
 
 One pull request each.
-- T1 needs Phase 5N complete. T2 needs T1 signed off.
+- T0 needs Phase 5N complete. T1 needs T0 (its report, and decision 0). T2 needs T1
+  signed off.
 - T3 needs T1 signed off and T2 (its acceptance runs T2's invariance check).
 - T4 needs T3. T5 needs T4. T6 needs T5.
 - T7 needs T4 (the held set and the plan it re-cuts), and T6 for timing the cost model's
@@ -342,7 +358,8 @@ One pull request each.
 
 | Task | Brief | Delivers | Component | Depends on |
 | --- | --- | --- | --- | --- |
-| T1 | [T1-scale-out-design.md](T1-scale-out-design.md) | `docs/design/scale-out.md`: S1, S2, S3, S7, the S4/S5 triggers, collectives and memory per rank at 10²–10⁴ ranks, testing and scaling method, the time model beyond 160 ranks, task check, sign-off questions; measured with the Phase 5 code on Kathleen at 1–4 nodes and in oversubscribed counts (locust to 512, Kathleen to 1,280) | design for C5S.1–C5S.6 | Phase 5N complete |
+| T0 | [T0-four-node-baseline.md](T0-four-node-baseline.md) | the code as Phase 5N left it at 1, 2 and 4 Kathleen nodes (`nodes-strong`, N = 10⁸, `nodes-weak`, `nodes-check`; per run at 4 nodes: imbalance, exchanges, replicated part, memory), the 4-node queue waits, `tools/kathleen/` for 4-node jobs; a new part of `phase5n-kathleen.md` | C5S.0 | Phase 5N complete |
+| T1 | [T1-scale-out-design.md](T1-scale-out-design.md) | `docs/design/scale-out.md`: S1, S2, S3, S7, the S4/S5 triggers, collectives and memory per rank at 10²–10⁴ ranks, testing and scaling method, the time model beyond 160 ranks, task check, sign-off questions; measured with the Phase 5 code on Kathleen at 1–4 nodes (from T0 and its own runs) and in oversubscribed counts (locust to 512, Kathleen to 1,280) | design for C5S.1–C5S.6 | T0 |
 | T2 | [T2-validation-at-scale.md](T2-validation-at-scale.md) | S7: the rank-count-invariance check (a test within 4 ranks, an example at P against P/8), the `scaling` harness at N ≥ 10⁸ without a one-rank reference, a Kathleen correctness job | C5S.1 | T1 (signed off) |
 | T3 | [T3-octree-partition-map.md](T3-octree-partition-map.md) | S1 in `nd-octree`: the partition map as keys, local owner and kind of any top-tree key, the locally essential key set replacing `generate_all_keys`'s all-gathers by sparse advertisements | C5S.2 | T1 (signed off), T2 |
 | T4 | [T4-plan-locally-essential.md](T4-plan-locally-essential.md) | S1 in `nd-fmm-plan`: `Plan::new` over the locally essential set, the held-key check, the exchanges built from it; held boxes measured bounded in P | C5S.2 | T3 |
@@ -363,7 +380,7 @@ change `nd-fmm-validate`'s `scaling` module and `tools/`.
 
 | Machine | Ranks | Used for |
 | --- | --- | --- |
-| Kathleen (190 nodes × 40 cores, 2 sockets, 188 GB, Omni-Path; Slurm; `ssh kathleen`, tools/kathleen/), if Phase 5N decision 0 found it usable | 2 nodes routinely (`test` QoS), 4 nodes at most (`small`), timed to 160 ranks; oversubscribed on the 4 nodes to 1,280 ranks, never timed | every task's multi-node tests, the measurements of T1, T4, T6–T9, the scaling report |
+| Kathleen (190 nodes × 40 cores, 2 sockets, 188 GB, Omni-Path; Slurm; `ssh kathleen`, tools/kathleen/), if Phase 5N decision 0 found it usable | 2 nodes routinely (`test` QoS), 4 nodes at most (`small`; the cap lifted from 2 on 2026-10-11), timed to 160 ranks; oversubscribed on the 4 nodes to 1,280 ranks, never timed | every task's multi-node tests, the 4-node baseline (T0), the measurements of T1, T4, T6–T9, the scaling report |
 | locust (GH200, 72 Neoverse-V2 cores, one H100; shared, no scheduler; tools/gh200/) | 1–72 timed; up to 512 oversubscribed, never timed | multi-rank tests by hand at 1, 2, 4, 8; held boxes and memory beyond 72 ranks; the device on several ranks (CUDA, correctness only) |
 | Apple M3 Max (12 performance cores) | 1–12 | development; multi-rank tests by hand at 1, 2, 4, 8; Metal device ranks (correctness) |
 | GitHub Actions `ubuntu-latest` (`run-tests-mpi`) | 2 and 4 | the MPI test executables, debug, correctness only |
@@ -371,6 +388,10 @@ change `nd-fmm-validate`'s `scaling` module and `tools/`.
 ## Decisions to sign off
 
 Each is recorded in the exit checklist when made:
+0. **4 nodes in practice?** From T0's report (the 4-node `small` waits, the 4-node runs):
+   whether the phase's Kathleen work runs at 4 nodes as the briefs plan, or at 1–2 nodes
+   with the 4-node runs reduced to the ones T9 needs, or (no 4-node job started) at 1–2
+   nodes with the 4-node runs "when the queue allows" (T0; before T1).
 1. The design document `docs/design/scale-out.md`, including any change it proposes to
    the requirements above (T1; before T3).
 2. The replicated top: its fixed size L_r (a few thousand boxes, chosen once, independent
@@ -402,7 +423,7 @@ Each is recorded in the exit checklist when made:
 | The locally essential set misses a key that a list names | the plan's held-key check (every listed key held) replaces "every coarse block held", fails on every rank, and is tested with the list oracle on graded trees, coincident points and one empty rank |
 | The replicated top L_r is chosen badly: too small leaves many senders per needed multipole near the root, too large replicates more than needed | T1 measures the needed top-tree multipoles and their owners per rank on oversubscribed runs to 512–1,280 ranks (with the Phase 5 plan's lists) and §14.2's simulation beyond, and proposes L_r for sign-off; T9 reports the traffic split |
 | The work-weighted cut moves points and changes nothing measurable, or unbalances P2P | the cost model is fitted to per-kind timings and checked against measured per-rank stage times before it becomes the default; the target is stated (≤ 1.10) and the point balance reported |
-| Kathleen's busy queue delays even 2- and 4-node runs | Phase 5N T1's probe and decision 0; many configurations packed into each job; the "Without Kathleen" path: acceptance on locust's oversubscribed runs and models, with Kathleen's runs added when the queue allows |
+| Kathleen's busy queue delays even 2- and 4-node runs | Phase 5N T1's probe (2 nodes) and decision 0; T0's 4-node waits and this phase's decision 0, before any design rests on 4-node runs; many configurations packed into each job; the "Without Kathleen" path: acceptance on locust's oversubscribed runs and models, with Kathleen's runs added when the queue allows |
 | The 250 GB quota fills with build trees and outputs, and jobs fail | one target directory per branch in Scratch, deleted after merge; summarised outputs only; no per-rank files |
 | Omni-Path and Open MPI 4.1 behave differently from the one-node runs (progress, eager limits, PSM2 settings) | Phase 5N T1 and T2 record the transport and its settings; T1 measures the exchanges at network bandwidth; overlap's value there is reported, not assumed |
 | `Plan::new`, rlst's graph communicators or the octree's sample sorts become the bottleneck at thousands of ranks | T1 times each to 160 ranks and counts their messages and bytes to 1,280 oversubscribed ranks; T8 evaluates the triggers on those counts and models and builds S4/S5 only where they fire |
@@ -414,6 +435,8 @@ In the repository root, start `claude` and say:
 "Read docs/phase5s/T<k>-<name>.md and do that task." Review and merge before the next.
 
 ## Exit checklist
+- [ ] T0 merged: the code at 1, 2 and 4 Kathleen nodes and the 4-node queue waits reported (`phase5n-kathleen.md`, "Phase 5S, T0"); `tools/kathleen/` runs 4-node jobs
+- [ ] 4 nodes in practice (decision 0)
 - [ ] T1 merged: `docs/design/scale-out.md` drafted, sign-off questions listed
 - [ ] Scale-out design signed off, including L_r, the work weight, the S4/S5 triggers, CI and the node-hour budget (decisions 1–6)
 - [ ] T2 merged: rank-count invariance at 1, 2 and 4 ranks in CI, at 512 against 64 on locust, and at 160 against 20 on Kathleen; the harness at N = 10⁸
