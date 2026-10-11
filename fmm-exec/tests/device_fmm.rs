@@ -9,8 +9,8 @@
 //! points per leaf (the cube's tree is then uniform on level 4), gradients on, eight
 //! charge vectors uniform in [−1, 1) (seeds `0xc33 + 1 + k`) and 1,000 targets sampled
 //! from the points' generator: `fmm_accuracy::Config::c33` of the cube and of the Plummer
-//! sphere, draw for draw. The default strategy (on the host `Dense` at p ≤ 8, `Rotation`
-//! above; on the device the static rule of `tune::static_strategy`, on CUDA `Dense` at
+//! sphere, draw for draw. The default strategy (on the host the rule of
+//! `M2lStrategy::resolve_on_node`, since Phase 5N T4; on the device the static rule of `tune::static_strategy`, on CUDA `Dense` at
 //! every p since Phase 4S decision 9, the host then run with the device's strategy for
 //! the comparison of outputs), the default device layouts, one thread.
 //!

@@ -176,6 +176,12 @@ one-rank time):
 
 ### The M2L strategy at p = 8
 
+> **Since Phase 5N T4 (2026-10-11)** `Auto` no longer resolves to Dense at p = 8: under the
+> node rule of docs/design/node-m2l.md §4 it is Rotation at f64 p = 8 on every rank count
+> here (the best strategy in every cell), and at f32 p = 8 Dense up to 11 ranks per node and
+> Rotation beyond (the harness budget of 96 MB). This section's "Auto" and "Dense" runs are
+> the rule before T4; the before and after are in `phase5n-kathleen.md`, "Phase 5N, T4".
+
 N = 10⁶, f64, p = 8, overlap off; Dense is the default's run from the strong sweep:
 
 | problem | ranks | strategy | wall (ms) | speed-up | efficiency | downward max (ms) | downward mean (ms) | leaves max (ms) | build (ms) | resident max (MB) |

@@ -3,10 +3,14 @@
 Phase 6 ends as Phase 4 T13 and Phase 5 T10 did: the components measured together on the
 three machines, the defaults revisited with those numbers, and the design documents
 updated. The defaults in question:
-- **the M2L strategy rule**: `Auto` (`nd_fmm_exec::tables::M2lStrategy`) picks Dense up to
-  p = 8 and Rotation above on the host; Phase 5N made it see the ranks per node
-  (docs/design/node-m2l.md). With the batched host M2L (C6.6) and compressed M2L (C6.2)
-  the rule changes again;
+- **the M2L strategy rule**: since Phase 5N T4, `Auto` (`nd_fmm_exec::tables::M2lStrategy::
+  resolve_on_node`) picks Dense on the host iff the dense tables of a rank are at most
+  `AUTO_DENSE_RANK_BYTES` and ranks per node × those at most the node budget
+  (`FmmBuilder::dense_node_budget`, 64 MB by default; the harness 56 MB on the M3 Max, 96 MB
+  on locust and Kathleen), Rotation otherwise: Rotation at f64 p = 8, Dense at f64 p = 3
+  and at f32 p = 8 with few ranks per node (docs/design/node-m2l.md §4 and its outcome
+  section). With the batched host M2L (C6.6) and compressed M2L (C6.2) the rule changes
+  again;
 - **the leaf size per p**: open since Phase 3S T7 ("the best leaf size depends on p ...
   64 at p = 3, 256 at p = 8"), confirmed on Metal (Phase 4 T13) and CUDA (Phase 4S T8),
   "still open for every backend" (laplace-fmm-plan §9.2);

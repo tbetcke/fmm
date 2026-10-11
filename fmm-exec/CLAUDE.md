@@ -19,7 +19,9 @@ place, the charges uploaded without a copy); Phase 5, C5.1 host (task T6 in docs
 `Fmm` on any number of ranks through `nd_fmm_plan::redistribute::Redistribution`; design
 docs/design/distributed-fmm.md) and C5.1 device with C5.2's device-resident ghost
 buffers (task T8: the device operator on any number of ranks through the host-data
-hook) and C5.2 (task T9: the exchanges overlapped with local work, `FmmBuilder::overlap`).
+hook) and C5.2 (task T9: the exchanges overlapped with local work, `FmmBuilder::overlap`);
+Phase 5N, C5N.3 (task T4 in docs/phase5n/: the M2L strategy rule on the node, the table
+loading with a cache at scale, the ranks × threads guidance; design docs/design/node-m2l.md).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -137,6 +139,25 @@ hook) and C5.2 (task T9: the exchanges overlapped with local work, `FmmBuilder::
     `examples/overlap_timing.rs` (not registered; release, by hand) measures the C5.2
     criterion: blocking and overlapped evaluations of one build in turn, the medians over
     evaluations of the maxima over ranks, the traffic per rank and the copy bandwidth.
+  - The strategy rule on the node (Phase 5N T4, C5N.3; docs/design/node-m2l.md §4, §5;
+    `tables` and `fmm` module docs): under `Auto` the host resolves the strategy by
+    `M2lStrategy::resolve_on_node` (rule B: Dense iff the dense tables of a rank, 332
+    (p + 1)⁴ values, are at most `AUTO_DENSE_RANK_BYTES` = 9 MB and ranks per node × those
+    at most the node budget, `FmmBuilder::dense_node_budget`, default
+    `AUTO_DENSE_NODE_BYTES` = 64 MB; Rotation otherwise), with a `NodeContext` of p, the
+    value's bytes, the ranks per node and the budget. `build` splits the communicator by
+    node once on every backend (step 1; the device path reuses it for `RankPlacement`) and
+    agrees the largest ranks per node in step 7's all-reduce (two maxima), so every rank
+    resolves the same strategy; `ThreadingReport::{ranks_per_node, m2l}` report it with
+    the reason (`StrategyChoice`). The device path keeps the `tune` rule. `resolve(p)` and
+    `AUTO_DENSE_MAX_P` are deprecated. The guarantee is per *resolved* strategy: a
+    one-rank reference names `Fmm::strategy()` of the multi-rank run (`check_one_rank` in
+    `tests/mpi_exec.rs`, `tests/multi_rank.rs`). With `table_cache` the lowest rank of
+    each node loads or builds and stores first, the others after a barrier of the node's
+    communicator, then load (decision 7; `TableCache` unchanged). `tests/mpi_exec.rs`,
+    **the strategy rule on the node**, checks the agreement, a named strategy kept, and
+    the cold cache filled once per node; `tests/operator/strategy.rs` the rule over both
+    precisions, p = 0–20, 1–128 ranks per node and the budgets.
   - `examples/basic_evaluation.rs` is the user-facing example of calling `Fmm`
     (registered with `templated-examples`, so the weekly job runs it at 3 ranks): it
     must run on any number of ranks, each passing its own points, and keep to the

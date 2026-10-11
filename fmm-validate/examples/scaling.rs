@@ -45,12 +45,16 @@
 //! - `--precision f64|f32` (f64), `--p p` (8);
 //! - `--threads t` rayon threads per rank (1; MPI at `Threading::Funneled` above 1);
 //! - `--strategy auto|dense|classes|rotation`, the M2L strategy (auto);
+//! - `--budget MB` the node budget of `auto` in MB of 10⁶ bytes
+//!   (`FmmBuilder::dense_node_budget`; the library's 64 if not given; Phase 5N T4:
+//!   `tools/scaling/run.sh` passes 56 on the M3 Max and 96 on locust and Kathleen);
 //! - `--overlap off|on|both` (both: one build, the evaluations alternating, a block each);
 //! - `--input share|rank0|owners` (share);
 //! - `--evals k` timed evaluations per path (10), `--builds b` (1);
 //! - `--errors k` charge vectors of the errors against the direct sum at `--sampled s`
 //!   targets (0, not checked; 1,000 targets);
-//! - `--reference` the one-rank FMM over every point on rank 0, against the output;
+//! - `--reference` the one-rank FMM over every point on rank 0, of the strategy the run
+//!   resolved, against the output;
 //! - `--reference-strategy auto|dense|classes|rotation` that FMM with another M2L
 //!   strategy (the difference between strategies; Phase 5N T3);
 //! - `--kinds` every level call timed by operator kind (`KindTiming::Synchronous`): the
@@ -109,6 +113,7 @@ fn arguments() -> Arguments {
             "--p" => s.p = number(),
             "--threads" => s.threads = number().max(1),
             "--strategy" => s.strategy = strategy(&flag, &value),
+            "--budget" => s.dense_node_budget = Some(number() * 1_000_000),
             "--reference-strategy" => s.reference_strategy = Some(strategy(&flag, &value)),
             "--overlap" => {
                 s.overlap = Overlap::from_name(&value)

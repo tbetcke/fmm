@@ -22,10 +22,12 @@
 //!    threading level when `threads` > 1, the supplied domain ([`Domain::new`]) and that
 //!    every point is finite, builds the thread pool if `threads` > 1, opens the device
 //!    of a device [`Backend`] (compiled in, a device that comes up, the precision
-//!    supported), and agrees the outcome on every rank (one all-reduce). With a device
-//!    backend it splits the communicator by node once (`split_shared`, Phase 5 T8): the
-//!    rank's place there is in the device report, and on the CPU runtime the units per
-//!    cube are capped at the node's cores over its ranks.
+//!    supported), and agrees the outcome on every rank (one all-reduce). Then it splits
+//!    the communicator by node once (`split_shared`; Phase 5N T4 on every backend, Phase 5
+//!    T8 with a device): its size is the ranks per node of the strategy rule (step 7),
+//!    its barrier orders the table loading with a cache (step 7), and with a device
+//!    backend the rank's place there is in the device report, and on the CPU runtime the
+//!    units per cube are capped at the node's cores over its ranks.
 //! 2. Counts the points of all ranks (one all-reduce); none at all is an error.
 //! 3. Takes the supplied domain, or `compute_global_bounding_box` over the sources and
 //!    targets of every rank (after one all-reduce pair that rejects points spanning no
@@ -44,12 +46,17 @@
 //!    rank, position on that rank).
 //! 6. Takes the points of every local leaf from the redistributions, the radius of every
 //!    local leaf, and the output order (local).
-//! 7. All-reduces the largest number of sources in a leaf, which sizes the P2P scratch;
-//!    with a device backend resolves the M2L strategy of [`M2lStrategy::Auto`] for the
-//!    device (Phase 4 T12: from the tuning cache, by timing rotation against dense, or by
-//!    the static rule; on several ranks with a tuning cache rank 0's, broadcast, Phase 5
-//!    T8); builds or loads the tables, the host operator, and the evaluator with the
-//!    per-leaf counts (its own collectives).
+//! 7. All-reduces the largest number of sources in a leaf, which sizes the P2P scratch,
+//!    and the largest number of ranks per node (one all-reduce of two maxima); with a
+//!    device backend resolves the M2L strategy of [`M2lStrategy::Auto`] for the device
+//!    (Phase 4 T12: from the tuning cache, by timing rotation against dense, or by the
+//!    static rule; on several ranks with a tuning cache rank 0's, broadcast, Phase 5 T8),
+//!    and otherwise by the host rule with the node ([`M2lStrategy::resolve_on_node`],
+//!    Phase 5N T4: p, the precision, the agreed ranks per node and
+//!    [`FmmBuilder::dense_node_budget`]), so every rank resolves the same strategy;
+//!    builds or loads the tables (with a cache, the lowest rank of each node first, the
+//!    others after a barrier of the node's communicator: [`FmmBuilder::table_cache`]), the
+//!    host operator, and the evaluator with the per-leaf counts (its own collectives).
 //! 8. Writes the leaf-scaled source coordinates and target positions, from the forwarded
 //!    f64 coordinates, into the evaluator's stores, once ([`leaf_coordinates`]). With a
 //!    device backend (Phase 5 T8) it then builds the device operator around the host
@@ -185,17 +192,24 @@
 //!   (step 5), and each charge with its source on every evaluation; the output comes back
 //!   to the target's rank. Within a leaf the points lie in the order (origin rank,
 //!   position on that rank).
-//! - **Collectives.** Per build, besides those of step 1–3, `Octree::new`, `Plan::new` and
-//!   `Evaluator::new`: two `Redistribution::new` (each an all-to-all of counts, an
-//!   all-reduce of the errors, a communicator duplicate and an all-to-all-v of the keys),
-//!   two all-to-all-v's of the coordinates, and the all-reduce of step 7. Per
+//! - **Collectives.** Per build, besides those of step 1–3 (the split by node of step 1
+//!   included), `Octree::new`, `Plan::new` and `Evaluator::new`: two `Redistribution::new`
+//!   (each an all-to-all of counts, an all-reduce of the errors, a communicator duplicate
+//!   and an all-to-all-v of the keys), two all-to-all-v's of the coordinates, the
+//!   all-reduce of step 7 (two maxima since Phase 5N T4, the ranks per node added), and
+//!   with a table cache one barrier of the node's communicator. Phase 5N T4 added one
+//!   communicator split per build on the host path (the device path had it). Per
 //!   evaluation: the all-reduce of the charge length, the forward of the charges (an
 //!   all-to-all-v), the evaluator's exchanges (the source exchange, the coarse gather and
 //!   the multipole exchange of every level), and the backward of the output (an
 //!   all-to-all-v). Every rank enters each one, a rank with no points included.
 //! - **Equal to one rank.** On P ranks the output is bit for bit the output of the
-//!   one-rank `Fmm` of the same settings over the union of every rank's points in rank
-//!   order (rank 0's points, then rank 1's, …): its leaves are the same (Phase 5 T4), the
+//!   one-rank `Fmm` of the same settings and the same *resolved* strategy
+//!   ([`Fmm::strategy`]) over the union of every rank's points in rank order (rank 0's
+//!   points, then rank 1's, …). Under [`M2lStrategy::Auto`] the strategy depends on the
+//!   ranks per node (Phase 5N T4, decision 5), so the same input on 1 and on 12 ranks may
+//!   resolve differently; a caller who needs the same bits across rank counts names the
+//!   strategy. Its leaves are the same (Phase 5 T4), the
 //!   points of a leaf lie in the same order, the near and X rows are ordered by the source
 //!   leaf's (level, key) (Phase 5 T5), and ghost and global values are exact copies or the
 //!   same sums (design §5.1, §5.3). Two distributions of the same points over the ranks
@@ -262,8 +276,8 @@ use mpi::Threading;
 use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
 #[cfg(feature = "gpu")]
-use mpi::traits::{Communicator, Root};
-use mpi::traits::{CommunicatorCollectives, Equivalence};
+use mpi::traits::Root;
+use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_math::RealScalar;
 pub use nd_fmm_plan::evaluator::OverlapTimes;
 use nd_fmm_plan::evaluator::{Evaluator, EvaluatorError};
@@ -293,7 +307,7 @@ use crate::device::{
 };
 use crate::geometry::{Domain, GeometryError, leaf_coordinates, radius};
 use crate::operator::{Isa, LaplaceOperator, P2pChoice, SimdScalar};
-use crate::tables::{M2lStrategy, Tables};
+use crate::tables::{M2lStrategy, NodeContext, StrategyChoice, Tables};
 use crate::threading::{REQUIRED_MPI_THREADING, ThreadingReport};
 
 /// The largest degree p that [`FmmBuilder::build`] accepts: CONVENTIONS §3.9 covers M2L
@@ -766,12 +780,13 @@ pub enum FmmError {
 /// | Setting | Default |
 /// | --- | --- |
 /// | degree p ([`new`](Self::new)) | none; 0 ≤ p ≤ [`MAX_DEGREE`] |
-/// | [`strategy`](Self::strategy) | [`M2lStrategy::Auto`]: `Dense` for p ≤ 8, `Rotation` above |
+/// | [`strategy`](Self::strategy) | [`M2lStrategy::Auto`]: `Dense` while the dense tables are at most 9 MB per rank and the node budget per node, `Rotation` otherwise ([`M2lStrategy::resolve_on_node`]) |
+/// | [`dense_node_budget`](Self::dense_node_budget) | [`M2lStrategy::AUTO_DENSE_NODE_BYTES`], 64 MB |
 /// | [`gradients`](Self::gradients) | off |
 /// | [`max_level`](Self::max_level) | [`DEFAULT_MAX_LEVEL`], 16 |
 /// | [`max_points_per_leaf`](Self::max_points_per_leaf) | [`DEFAULT_MAX_POINTS_PER_LEAF`], 64 |
 /// | [`domain`](Self::domain) | `compute_global_bounding_box` of all points |
-/// | [`table_cache`](Self::table_cache) | none: tables are built |
+/// | [`table_cache`](Self::table_cache) | none: every rank builds its tables |
 /// | [`threads`](Self::threads) | 1: no pool, the calling thread |
 /// | [`p2p_kernel`](Self::p2p_kernel) | [`P2pChoice::Auto`]: the kernel of `nd-fmm-simd` on the widest ISA of this machine |
 /// | [`backend`](Self::backend) | [`Backend::Host`]: the host path |
@@ -794,6 +809,7 @@ pub enum FmmError {
 pub struct FmmBuilder<T> {
     p: usize,
     strategy: M2lStrategy,
+    dense_node_budget: usize,
     gradients: bool,
     max_level: usize,
     max_points_per_leaf: usize,
@@ -825,6 +841,7 @@ impl<T> FmmBuilder<T> {
         Self {
             p,
             strategy: M2lStrategy::Auto,
+            dense_node_budget: M2lStrategy::AUTO_DENSE_NODE_BYTES,
             gradients: false,
             max_level: DEFAULT_MAX_LEVEL,
             max_points_per_leaf: DEFAULT_MAX_POINTS_PER_LEAF,
@@ -852,9 +869,25 @@ impl<T> FmmBuilder<T> {
     }
 
     /// Sets the M2L strategy, which also chooses the tables of M2M and L2L
-    /// ([`M2lStrategy`]).
+    /// ([`M2lStrategy`]). A named strategy is never overridden; under
+    /// [`M2lStrategy::Auto`] (the default) [`build`](Self::build) resolves it on the host
+    /// by the rule of [`M2lStrategy::resolve_on_node`], with the ranks per node it agrees
+    /// ([`Fmm::strategy`], [`Fmm::threading`]).
     pub fn strategy(mut self, strategy: M2lStrategy) -> Self {
         self.strategy = strategy;
+        self
+    }
+
+    /// Sets the node budget of [`M2lStrategy::Auto`] in bytes: the private dense tables of
+    /// all the ranks of a node above which `Auto` resolves to `Rotation`
+    /// ([`NodeContext::node_budget`]; default [`M2lStrategy::AUTO_DENSE_NODE_BYTES`],
+    /// 64 MB; Phase 5N T4, docs/design/node-m2l.md §4). A machine with a larger shared
+    /// cache may set more: the harness uses 96 MB on locust (114 MB of L3) and Kathleen
+    /// (2 × 27.5 MB), where Dense still wins at f32 p = 8 with 8–10 ranks per node. Every
+    /// rank must pass the same value. Ignored by a named strategy and, with a device
+    /// backend and M2L on the device, by the device path's rule.
+    pub fn dense_node_budget(mut self, bytes: usize) -> Self {
+        self.dense_node_budget = bytes;
         self
     }
 
@@ -888,7 +921,17 @@ impl<T> FmmBuilder<T> {
     }
 
     /// Loads the tables from the cache directory `dir`, building and storing those
-    /// that are missing ([`Tables::load_or_build`]). Without it, no directory is used.
+    /// that are missing ([`Tables::load_or_build`]). Without it, no directory is used and
+    /// every rank builds its own tables.
+    ///
+    /// On several ranks one rank per node goes first (Phase 5N T4, decision 7 of
+    /// docs/phase5n/README.md; docs/design/node-m2l.md §5): the lowest rank of each node
+    /// loads the tables, building and storing those that are missing, while the others
+    /// wait at a barrier of the node's communicator (the one `split_shared` of `build`),
+    /// then load them. So a cold directory is filled once per node instead of every rank
+    /// building at once (at p = 8 on 40 ranks of a Kathleen node 0.84 s against 2.8 s for
+    /// every rank storing), and a warm one costs one load more on the first rank. The cache
+    /// itself, its atomic stores and its checks are those of `nd_fmm_tables::TableCache`.
     pub fn table_cache(mut self, dir: impl Into<PathBuf>) -> Self {
         self.table_cache = Some(dir.into());
         self
@@ -1192,12 +1235,16 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
                 Ok((pool, supplied, device))
             });
         let (pool, supplied, mut device) = agree(comm, local)?;
-        let threading = ThreadingReport::read(self.rayon_threads(), provided);
-        // A device per rank (Phase 5 T8, docs/design/distributed-fmm.md §7.4): every rank of
-        // a device build opens the default device of the backend (above), and the ranks of
-        // a node share it. One split of the communicator by node places the rank there;
-        // every rank has the same backend (agreed above), so every rank splits or none.
-        let ranks = self.place_rank(comm, device.as_mut());
+        let mut threading = ThreadingReport::read(self.rayon_threads(), provided);
+        // The node (Phase 5N T4, docs/design/node-m2l.md §4, §5): one split of the
+        // communicator by node, on every rank and every backend. Its size is the ranks per
+        // node of the strategy rule (agreed in step 7), and its barrier orders the table
+        // loading of step 7 with a cache. A device per rank (Phase 5 T8,
+        // docs/design/distributed-fmm.md §7.4): every rank of a device build opens the
+        // default device of the backend (above), and the ranks of a node share it; the
+        // same split places the rank there.
+        let node = comm.split_shared(comm.rank());
+        let ranks = self.place_rank(comm, &node, device.as_mut());
 
         // Step 2: are there points at all?
         let mut total = 0u64;
@@ -1271,11 +1318,17 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         let outputs = OutputOrder::new(&target_leaves, &radii);
         let redistribute_time = start.elapsed();
 
-        // Step 7: tables, operator, evaluator.
+        // Step 7: tables, operator, evaluator. One all-reduce agrees the largest number of
+        // sources in a leaf and the largest number of ranks per node (Phase 5N T4), so that
+        // every rank resolves the same strategy.
         let start = Instant::now();
-        let local_max = source_leaves.counts.iter().copied().max().unwrap_or(0);
-        let mut max_leaf_points = 0usize;
-        comm.all_reduce_into(&local_max, &mut max_leaf_points, SystemOperation::max());
+        let local_max = [
+            source_leaves.counts.iter().copied().max().unwrap_or(0),
+            node.size() as usize,
+        ];
+        let mut agreed = [0usize; 2];
+        comm.all_reduce_into(&local_max[..], &mut agreed[..], SystemOperation::max());
+        let [max_leaf_points, ranks_per_node] = agreed;
         // With a device backend, the tuner (Phase 4 T12) and the M2L strategy: under
         // `Auto` with M2L on the device, the cached, tuned or static choice of the device
         // path, for which the tables are built; on several ranks with a tuning cache rank
@@ -1284,10 +1337,36 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         let (strategy, tuner) = self.device_strategy(device.as_mut(), &plan, comm);
         let tuning_time = tuning_start.elapsed();
         let start = start + tuning_time;
+        // The strategy: a named one; under `Auto` the device path's (above), or the host
+        // rule in the node context (Phase 5N T4, `M2lStrategy::resolve_on_node`).
+        let node_context = NodeContext::new(
+            self.p,
+            size_of::<T>(),
+            ranks_per_node,
+            self.dense_node_budget,
+        );
+        let choice = match (self.strategy, strategy) {
+            (M2lStrategy::Auto, M2lStrategy::Auto) => M2lStrategy::Auto.choose(&node_context),
+            (M2lStrategy::Auto, device) => StrategyChoice::Device(device),
+            (named, _) => StrategyChoice::Named(named),
+        };
+        let strategy = choice.strategy();
+        threading.ranks_per_node = ranks_per_node;
+        threading.m2l = Some(choice);
+        // With a cache, one rank per node first (decision 7 of docs/phase5n/README.md): the
+        // node's lowest rank loads, building and storing what is missing, the others load
+        // after the node's barrier, which every rank of the node enters.
         let (tables, cache_outcomes) = match &self.table_cache {
-            Some(dir) => Tables::load_or_build(self.p, strategy, &TableCache::new(dir)),
+            Some(dir) => {
+                let cache = TableCache::new(dir);
+                let first =
+                    (node.rank() == 0).then(|| Tables::load_or_build(self.p, strategy, &cache));
+                node.barrier();
+                first.unwrap_or_else(|| Tables::load_or_build(self.p, strategy, &cache))
+            }
             None => (Tables::build(self.p, strategy), Vec::new()),
         };
+        drop(node);
         let tables_time = start.elapsed();
         let start = Instant::now();
         let mut operator = LaplaceOperator::new(tables, self.gradients, max_leaf_points)
@@ -1373,7 +1452,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             octree,
             evaluator,
             domain,
-            strategy: strategy.resolve(self.p),
+            strategy,
             backend: self.backend,
             synchronous_stages: self.synchronous_stages && self.backend.is_device(),
             overlap: self.overlap,
@@ -1406,19 +1485,19 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
     }
 
     /// With a device backend (feature `gpu`): where this rank sits among the ranks and on
-    /// its node (Phase 5 T8, docs/design/distributed-fmm.md §7.4), from one
+    /// its node (Phase 5 T8, docs/design/distributed-fmm.md §7.4), from `node`, the one
     /// `split_shared` of `comm`; on the CPU runtime it caps the units per cube of `device`
     /// at `threads(n)` and at the node's cores over its ranks. Nothing on the host.
     #[cfg(feature = "gpu")]
     fn place_rank<C: CommunicatorCollectives>(
         &self,
         comm: &C,
+        node: &SimpleCommunicator,
         device: Option<&mut OpenedDevice>,
     ) -> device::RankPlacement {
         let Some(device) = device else {
             return device::RankPlacement::default();
         };
-        let node = comm.split_shared(comm.rank());
         let placement = device::RankPlacement {
             rank: comm.rank() as usize,
             ranks: comm.size() as usize,
@@ -1437,9 +1516,10 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
     fn place_rank<C: CommunicatorCollectives>(
         &self,
         comm: &C,
+        node: &SimpleCommunicator,
         device: Option<&mut OpenedDevice>,
     ) -> RankPlacement {
-        let _ = comm;
+        let _ = (comm, node);
         if let Some(never) = device {
             match *never {}
         }
@@ -3198,10 +3278,13 @@ where
         self.operator().p()
     }
 
-    /// Returns the resolved strategy, never [`M2lStrategy::Auto`]: on the host `Auto` by
-    /// [`M2lStrategy::resolve`]; with a device backend and M2L on the device, `Auto` by the
+    /// Returns the resolved strategy, never [`M2lStrategy::Auto`], for which the tables
+    /// were built: a named strategy; on the host `Auto` by the rule of
+    /// [`M2lStrategy::resolve_on_node`] with the agreed ranks per node (Phase 5N T4), the
+    /// same on every rank; with a device backend and M2L on the device, `Auto` by the
     /// device path's choice (Phase 4 T12: from the tuning cache, tuned at build, or the
-    /// static rule of the `tune` module, feature `gpu`), for which the tables were built.
+    /// static rule of the `tune` module, feature `gpu`). [`Fmm::threading`] gives the
+    /// reason ([`ThreadingReport::m2l`]).
     pub fn strategy(&self) -> M2lStrategy {
         self.strategy
     }
@@ -3338,7 +3421,8 @@ where
     }
 
     /// Returns the threading report: the rayon threads, the MPI threading level and the
-    /// BLAS thread variables as `build` read them ([`threading`](crate::threading)).
+    /// BLAS thread variables as `build` read them ([`threading`](crate::threading)), and
+    /// the ranks per node with the M2L strategy's reason (Phase 5N T4).
     pub fn threading(&self) -> &ThreadingReport {
         &self.threading
     }

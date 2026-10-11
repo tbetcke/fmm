@@ -20,9 +20,21 @@
 #                   on locust at the largest count), N = 10^6, f64 p = 8
 #   sixteen         16 ranks, efficiency cores included (M3 Max only), the N = 10^6 cube
 #   strategy        the M2L strategies with small tables, Rotation and Classes, against the
-#                   default (Dense at p = 8), at every rank count of RANKS: the N = 10^6
-#                   cube and Plummer, f64 p = 8, overlap off (does the dense tables' size
-#                   per rank limit the downward pass?)
+#                   default (Dense at p = 8 until Phase 5N T4, Rotation since), at every
+#                   rank count of RANKS: the N = 10^6 cube and Plummer, f64 p = 8, overlap
+#                   off (does the dense tables' size per rank limit the downward pass?)
+#   node-rule       Phase 5N T4, the strategy rule on the node (docs/design/node-m2l.md §4,
+#                   §8): the N = 10^6 cube and Plummer, overlap off, at every ranks x
+#                   threads of NODE_GRID: f64 p = 8, f32 p = 8 and f64 p = 3 with `auto`
+#                   (the new default) and the strategy auto does not resolve to (Dense or
+#                   Rotation; with Dense, the default before T4 at p <= 8), f64 p = 12
+#                   with `auto` alone (Rotation, before and after T4); f64 p = 7 and f32
+#                   p = 9 at one rank with Dense and Rotation (the 9 MB cap); and the
+#                   errors (8 vectors, 1,000 targets, the one-rank reference) of `auto`
+#                   and Dense at f64 and f32 p = 8 at one rank and the largest count
+#   crossover       Dense against Rotation where the rule's budget decides (f32 p = 8,
+#                   8.7 MB per rank, and f64 p = 6, 6.4 MB), at the ranks per node of
+#                   CROSSOVER, one thread each: the N = 10^6 cube and Plummer
 #   check           the errors against the direct sum (8 charge vectors, 1,000 targets)
 #                   and the one-rank reference: N = 10^5 at every rank count, N = 10^6 at
 #                   one rank and the largest count
@@ -50,6 +62,17 @@
 #            launch, with the load before and after on Linux
 #   RANKS    the rank counts of strong and weak (default "1 2 4 8 12" on macOS,
 #            "1 2 4 8 16 32 64 72" on Linux)
+#   BUDGET   the node budget of the strategy rule in MB, passed to every launch as
+#            --budget (Phase 5N T4, per machine class: default 56 on macOS, the M3 Max,
+#            and 96 on Linux, locust, and under Slurm, Kathleen; signed off as 64 for the
+#            M3 Max, set to 56 by the user on 2026-10-11 after T4's f64 p = 6 runs at 8
+#            and 10 ranks per node, fmm-validate/results/phase5n-kathleen.md, "Phase 5N,
+#            T4")
+#   NODE_GRID  ranks x threads per node of node-rule (default T3's grid: "1x1 2x1 4x1 8x1
+#            12x1 1x12 2x6" on macOS, "1x1 8x1 16x1 32x1 64x1 72x1 1x72 4x18 8x9" on
+#            Linux, "1x1 2x1 10x1 20x1 40x1 1x40 2x20 4x10" under Slurm)
+#   CROSSOVER  ranks per node of crossover (default "6 8 10" on macOS, "8 12 16 24" on
+#            Linux, "8 10 12 16 20" under Slurm)
 #   EVALS    timed evaluations per path (default 10)
 #   TIMEOUT  seconds per launch (default 3600)
 #   QUIET    on macOS, the CPU percentage the other processes may use before a launch
@@ -118,6 +141,9 @@ Darwin)
     CORES=12
     THREAD_SPLITS="1x12 2x6 4x3 6x2 12x1"
     LARGEST=12
+    BUDGET=${BUDGET:-56}
+    NODE_GRID=${NODE_GRID:-"1x1 2x1 4x1 8x1 12x1 1x12 2x6"}
+    CROSSOVER=${CROSSOVER:-"6 8 10"}
     ;;
 *)
     if [ -n "${SLURM_JOB_ID:-}" ]; then
@@ -129,12 +155,18 @@ Darwin)
         THREAD_SPLITS="1x40 2x20 4x10 8x5 10x4 20x2 40x1"
         LARGEST=$((CORES_PER_NODE * NODES))
         SPLITS=${SPLITS:-"40x1 2x20"}
+        BUDGET=${BUDGET:-96}
+        NODE_GRID=${NODE_GRID:-"1x1 2x1 10x1 20x1 40x1 1x40 2x20 4x10"}
+        CROSSOVER=${CROSSOVER:-"8 10 12 16 20"}
     else
         os=linux
         RANKS=${RANKS:-"1 2 4 8 16 32 64 72"}
         CORES=72
         THREAD_SPLITS="1x72 4x18 8x9 18x4 72x1"
         LARGEST=72
+        BUDGET=${BUDGET:-96}
+        NODE_GRID=${NODE_GRID:-"1x1 8x1 16x1 32x1 64x1 72x1 1x72 4x18 8x9"}
+        CROSSOVER=${CROSSOVER:-"8 12 16 24"}
     fi
     ;;
 esac
@@ -224,7 +256,8 @@ of $CORES cores evenly" | tee -a "${OUT}/skipped.txt"
             flags="--report-bindings --map-by slot:PE=$threads --bind-to core"
         fi
     fi
-    command="timeout $TIMEOUT mpirun $flags -n $ranks $exe --threads $threads --evals $EVALS $*"
+    command="timeout $TIMEOUT mpirun $flags -n $ranks $exe --threads $threads --evals $EVALS \
+--budget $BUDGET $*"
     if [ -n "${DRY_RUN:-}" ]; then
         echo "$command"
         return
@@ -251,6 +284,21 @@ of $CORES cores evenly" | tee -a "${OUT}/skipped.txt"
 }
 
 degrees="f64:3 f64:8 f32:8"
+
+# auto_resolves <precision> <p> <ranks per node>: the strategy `auto` resolves to under the
+# rule of Phase 5N T4 with BUDGET (M2lStrategy::resolve_on_node): dense iff the dense
+# tables of a rank, 332 (p + 1)^4 values, are at most 9 MB and those of the node at most
+# the budget, else rotation.
+auto_resolves() {
+    bytes=8
+    if [ "$1" = f32 ]; then bytes=4; fi
+    rank=$((332 * ($2 + 1) * ($2 + 1) * ($2 + 1) * ($2 + 1) * bytes))
+    if [ "$rank" -le 9000000 ] && [ $(($3 * rank)) -le $((BUDGET * 1000000)) ]; then
+        echo dense
+    else
+        echo rotation
+    fi
+}
 
 for sweep in "$@"; do
     case "$sweep" in
@@ -318,6 +366,64 @@ for sweep in "$@"; do
         launch "sixteen-cube-r16x1" 16 1 \
             --dist cube --n 1000000 --precision f64 --p 8 --overlap both
         ;;
+    node-rule)
+        # T3's grid, one launch per cell and strategy; one rank evaluates 3 times.
+        for split in $NODE_GRID; do
+            r=${split%x*} t=${split#*x}
+            evals=$EVALS
+            if [ "$r" -eq 1 ] && [ "$t" -eq 1 ]; then evals=3; fi
+            for dist in cube plummer; do
+                for dp in f64:8 f32:8 f64:3 f64:12; do
+                    prec=${dp%%:*} p=${dp##*:}
+                    strategies=auto
+                    if [ "$p" -ne 12 ]; then
+                        case $(auto_resolves "$prec" "$p" "$r") in
+                        dense) strategies="auto rotation" ;;
+                        *) strategies="auto dense" ;;
+                        esac
+                    fi
+                    for strategy in $strategies; do
+                        launch "node-rule-$dist-$prec-p$p-$strategy-r${r}x$t" "$r" "$t" \
+                            --dist $dist --n 1000000 --precision "$prec" --p "$p" \
+                            --strategy $strategy --overlap off --evals $evals
+                    done
+                done
+            done
+        done
+        # The cap: f64 p = 7 (10.9 MB) and f32 p = 9 (13.3 MB) on one rank.
+        for dist in cube plummer; do
+            for dp in f64:7 f32:9; do
+                for strategy in dense rotation; do
+                    launch "node-rule-$dist-${dp%%:*}-p${dp##*:}-$strategy-r1x1" 1 1 \
+                        --dist $dist --n 1000000 --precision "${dp%%:*}" --p "${dp##*:}" \
+                        --strategy $strategy --overlap off --evals 3
+                done
+            done
+        done
+        # The errors of the new default against Dense (the default before T4).
+        for r in 1 $LARGEST; do
+            for dp in f64:8 f32:8; do
+                for strategy in auto dense; do
+                    launch "node-rule-check-cube-${dp%%:*}-p${dp##*:}-$strategy-r${r}x1" "$r" 1 \
+                        --dist cube --n 1000000 --precision "${dp%%:*}" --p "${dp##*:}" \
+                        --strategy $strategy --overlap off --errors 8 --reference --evals 1
+                done
+            done
+        done
+        ;;
+    crossover)
+        for r in $CROSSOVER; do
+            for dist in cube plummer; do
+                for dp in f32:8 f64:6; do
+                    for strategy in dense rotation; do
+                        launch "crossover-$dist-${dp%%:*}-p${dp##*:}-$strategy-r${r}x1" "$r" 1 \
+                            --dist $dist --n 1000000 --precision "${dp%%:*}" \
+                            --p "${dp##*:}" --strategy $strategy --overlap off
+                    done
+                done
+            done
+        done
+        ;;
     strategy)
         for dist in cube plummer; do
             for strategy in rotation classes; do
@@ -364,7 +470,8 @@ for sweep in "$@"; do
         fi
         case "$sweep" in
         host)
-            # Dense is the default at p <= 8: "auto" is Dense here, named as such.
+            # Dense was the default at p <= 8 until Phase 5N T4: named as such; "auto" (f32
+            # p = 8) is Dense on one rank under the rule of T4 too.
             for t in 1 "$CORES"; do
                 for dist in cube plummer; do
                     for run in f64:3:dense f64:3:rotation f64:8:dense f64:8:rotation f32:8:auto; do
@@ -389,7 +496,8 @@ for sweep in "$@"; do
                 for split in $SPLITS; do
                     per=${split%x*} t=${split#*x}
                     for dist in cube plummer; do
-                        for run in 3:auto 8:auto 8:rotation; do
+                        # 8:dense is Phase 5N T2's 8:auto (the default before T4).
+                        for run in 3:auto 8:dense 8:rotation; do
                             p=${run%%:*} strategy=${run#*:}
                             launch "$sweep-$dist-n$n-f64-p$p-$strategy-N$NODES-${per}x$t" \
                                 $((per * NODES)) "$t" --dist $dist --n "$n" --precision f64 \
