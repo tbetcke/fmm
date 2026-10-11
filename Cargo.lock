@@ -3872,9 +3872,9 @@ dependencies = [
 
 [[package]]
 name = "rlst"
-version = "0.9.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a76bb29d414d4f6d658e38645f54bd98b15256202777e1dc54a0d700dc84d1d4"
+checksum = "6d3ea91532c8ca7c27c40b5ded86c625af032829c4684999cd0ccf8e34842657"
 dependencies = [
  "aligned-vec",
  "bindgen 0.73.2",
@@ -3903,9 +3903,9 @@ dependencies = [
 
 [[package]]
 name = "rlst-proc-macro"
-version = "0.9.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90276dd288f725f8b0dd98ae549bef983819d7a04d3751537b1b257bb1428f3b"
+checksum = "ca93784cbb6cb9a71595c70d3508cd97f917ba224680a28157d2a9e9359d0bc2"
 dependencies = [
  "aligned-vec",
  "darling",
