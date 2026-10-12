@@ -191,7 +191,7 @@ first launch of each variant includes its compilation):
 | where | run | pre.4 | 0.11.0 |
 | --- | --- | --- | --- |
 | locust | `cargo test -p nd-fmm-kernels --release --features cpu,cuda -- --include-ignored` | 862 variants, 72.46 s, slowest 5.77 s | 863 variants, 72.85 s (+0.5 %), slowest 6.08 s |
-| CI, `run-tests-kernels` | the job's CPU-runtime test run | 340 variants, 185.82 s, slowest 94.14 s (main, run 38176953355) | not run yet (needs the pull request) |
+| CI, `run-tests-kernels` | the job's CPU-runtime test run | 340 variants, 185.82 s, slowest 94.14 s (main, run 38176953355) | 340 variants, 176.17 s (−5.2 %), slowest 77.10 s (PR #99, run 38208426942) |
 | M3 Max | `cargo test -p nd-fmm-kernels --features cpu --release` | not measured | 406 variants, 21.86 s, slowest 4.21 s |
 
 The device FMM on locust's H100 (`tools/bench/run.sh --backend host,cuda --precision
@@ -246,4 +246,9 @@ Kathleen (2026-10-12, 0.54 node-hours of the 5):
 Kathleen ran the tree before the guard of §2.1, which changes nothing on a backend without
 CMMA (Kathleen builds the CPU runtime only).
 
-CI runs once the branch is pushed; its caches key on `Cargo.lock`, so the first run is cold.
+CI (PR #99, run 38208426942, 2026-10-12): `run-tests`, `run-tests-simd` (x86_64, arm64),
+`run-tests-kernels` and `run-tests-mpi` passed. The caches key on `Cargo.lock`, so the
+cargo caches were restored only from the prefix fallback (main's pre.4 entries) and the
+CubeCL crates were rebuilt: `run-tests-kernels` took 8:12 against 4:21 on main (run
+38176953355; its release test build 2 min 9 s against 13 s), `run-tests` 6:52 against 6:18,
+`run-tests-mpi` 5:07 against 7:46; `run-tests-kernels` saved its cache under the new key.
