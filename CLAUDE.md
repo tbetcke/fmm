@@ -149,7 +149,7 @@ their paths from cargo's `--message-format=json` output, and launches each under
 `RUST_MIN_STACK=8388608` and the BLAS thread variables at 1; the run steps have their own
 `timeout-minutes`. It covers `nd-fmm-plan`'s `mpi_regressions`, `nd-fmm-exec`'s
 `mpi_exec`, `mpi_threading` and `invariance` (rank-count invariance, Phase 5S T2), and the
-six registered nd-octree examples. The runner's 4 vCPUs are 2 cores, so the ranks
+seven registered nd-octree examples (`test_mpi_locally_essential` since Phase 5S T3). The runner's 4 vCPUs are 2 cores, so the ranks
 oversubscribe (`OMPI_MCA_rmaps_base_oversubscribe=1`); it needs no interface flags. By hand, the same script runs a list at any rank count
 (`run-mpi-tests.sh build <list>`, then `run-mpi-tests.sh run <list> 2 4`, on macOS with
 `MPIRUN_FLAGS` set to the loopback flags below).

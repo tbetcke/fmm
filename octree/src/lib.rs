@@ -130,10 +130,15 @@
 //! classifies every stored key as [`octree::KeyType::LocalLeaf`],
 //! [`octree::KeyType::LocalInterior`], [`octree::KeyType::Global`],
 //! [`octree::KeyType::GhostLeaf`], or [`octree::KeyType::GhostInterior`]. Global
-//! keys are shared ancestors of the distributed coarse tree. Ghost variants
+//! keys are shared ancestors: ancestors of this rank's coarse blocks. Ghost variants
 //! carry the originating, zero-based owner rank; use
 //! [`octree::KeyType::ghost_rank`] when that rank is needed. Ghosts provide
-//! interface topology but are not local ownership.
+//! interface topology but are not local ownership. Each rank holds only its
+//! locally essential keys (its own keys, its shared ancestors, their same-level
+//! neighbours and, with the layer below, those neighbours' children), assembled
+//! without gathering keys to every rank; [`Octree::partition_map`] replicates the
+//! partition itself as keys ([`octree::PartitionMap`]: every coarse block with its
+//! owner), from which any rank finds the owner of any key without communication.
 //!
 //! The same [`OctreeOptions`] value selects the optional layers. With
 //! [`OctreeOptions::with_ghost_children`] enabled, the tree also stores the
@@ -158,6 +163,7 @@
 //! | [`octree::compute_global_bounding_box`] | collective | All ranks contribute a padded cubic box. |
 //! | [`Octree::new`] | collective | All ranks in the communicator construct one distributed topology, also ranks without keys or blocks. The coarse tree costs one all-reduce per refinement round. Optional layers selected by [`OctreeOptions`] enlarge the exchanged payload but add no round. |
 //! | [`Octree::owner_rank`] | local | Valid finest-level key to its owner, without communication. |
+//! | [`octree::PartitionMap`] lookups | local | The owner, sharers and kind of any key, from the replicated blocks. |
 //! | [`Octree::local_leaf`] | local | Finds a containing leaf only when this rank owns the key. |
 //! | [`Octree::lookup_leaves`] | collective | Routes batch queries to owners and preserves input order. |
 //! | [`Octree::global_max_level`] | collective | Reduces the local maximum level. |
@@ -212,7 +218,8 @@ pub mod vtk;
 
 pub use crate::geometry::PhysicalBox;
 pub use crate::octree::{
-    LeafLocation, LookupBatchError, LookupError, Octree, OctreeOptions, PartitionWeight,
+    LeafLocation, LookupBatchError, LookupError, Octree, OctreeOptions, PartitionMap,
+    PartitionWeight,
 };
 pub use morton::MortonKey;
 pub use octree::points_to_morton;

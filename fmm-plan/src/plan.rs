@@ -28,7 +28,8 @@
 //! # Cost
 //!
 //! The lists are built locally, in O(E log K) for E list entries and K held keys.
-//! [`Plan::new`] adds two all-reduces.
+//! [`Plan::new`] adds two all-reduces, and until Phase 5S T4 the collectives that
+//! rebuild the Phase 5 key set from the octree.
 
 #[cfg(test)]
 #[path = "plan_tests.rs"]
@@ -44,6 +45,7 @@ use super::lists::{
     CsrBuilder, GroupedBuilder, LevelLists, NOCTANTS, NOFFSETS, Overflow, offset, offset_index,
 };
 use crate::interaction_manager::{is_interior, is_leaf, key_lists, valid_neighbours};
+use crate::phase5_keys::phase5_held_keys;
 
 /// The box index and the interaction lists of an octree on one rank.
 ///
@@ -156,8 +158,14 @@ impl Error for PlanError {}
 impl Plan {
     /// Build the box index and the interaction lists of `octree`.
     ///
+    /// Until Phase 5S T4 the plan holds the Phase 5 key set: since T3 the octree holds
+    /// only its locally essential keys, and a private adapter rebuilds Phase 5's set
+    /// from the octree's leaves, blocks and bounds, so every list and value stays that
+    /// of Phase 5.
+    ///
     /// # Collective operation
-    /// One all-reduce for the global level count and one for the validity check, in that
+    /// One all-reduce for the global level count; the adapter's two all-gathers and
+    /// all-to-all-v (until T4); and one all-reduce for the validity check, in that
     /// order, on every rank. The lists themselves are built without communication.
     ///
     /// # Errors
@@ -167,8 +175,9 @@ impl Plan {
     /// the defect returns it; the other ranks return [`PlanError::OtherRank`].
     pub fn new<C: CommunicatorCollectives>(octree: &Octree<'_, C>) -> Result<Self, PlanError> {
         let nlevels = octree.global_max_level() + 1;
+        let held = phase5_held_keys(octree);
         let local = if octree.options().ghost_children() {
-            Self::from_key_types(octree.all_keys(), nlevels, octree.coarse_tree_leafs())
+            Self::from_key_types(&held, nlevels, octree.coarse_tree_leafs())
         } else {
             Err(PlanError::MissingGhostChildren)
         };

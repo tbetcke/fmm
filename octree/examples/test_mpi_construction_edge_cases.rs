@@ -3,12 +3,9 @@
 //! Covers a rank without keys, every key on one rank, duplicate keys straddling
 //! rank boundaries, every key identical, a tree whose only block is the root, a
 //! heavy cluster that cannot be split by the coarse tree, `max_level` being
-//! honoured on every rank count, and distinct neighbour entries. Every tree is
-//! compared key for key with the Phase 5 construction (the sample sorts), kept in
-//! `phase5_reference` until Phase 5S T3 lands (T3a).
-
-#[path = "phase5_reference/mod.rs"]
-mod phase5_reference;
+//! honoured on every rank count, and distinct neighbour entries. (Phase 5S T3a
+//! compared every tree key for key with a private copy of the Phase 5 construction,
+//! removed with T3.)
 
 use itertools::Itertools;
 use mpi::{topology::SimpleCommunicator, traits::Communicator};
@@ -30,7 +27,6 @@ fn check_tree<'c, C: mpi::traits::CommunicatorCollectives>(
     comm: &'c C,
 ) -> Octree<'c, C> {
     let tree = Octree::new(fine_keys, options, comm);
-    phase5_reference::assert_same_as_phase5("edge case", &tree, fine_keys, options, comm);
     let max_level = options.max_level();
     let rank = comm.rank() as usize;
 

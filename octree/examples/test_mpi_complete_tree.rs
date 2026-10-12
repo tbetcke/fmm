@@ -95,16 +95,28 @@ pub fn main() {
         assert!(nghosts > 0);
     }
 
-    let nglobal = all_keys
+    // The `Global` keys are the shared ancestors: exactly the ancestors of this rank's
+    // own blocks (Phase 5S T3).
+
+    let own_blocks = tree.coarse_tree_leafs();
+    let mut shared = own_blocks
+        .iter()
+        .flat_map(|&block| std::iter::successors(morton::parent(block), |&key| morton::parent(key)))
+        .collect_vec();
+    shared.sort_unstable();
+    shared.dedup();
+    let mut nglobal = all_keys
         .iter()
         .filter(|(_, value)| matches!(**value, KeyType::Global))
-        .count();
-
-    // Assert that all globals across all ranks have the same count.
-
-    let nglobals = gather_to_all(std::slice::from_ref(&nglobal), &comm);
-
-    assert_eq!(nglobals.iter().unique().count(), 1);
+        .map(|(&key, _)| key)
+        .collect_vec();
+    nglobal.sort_unstable();
+    // On one rank the root is the only block and `Global` (Phase 5).
+    if comm.size() == 1 {
+        assert_eq!(nglobal, vec![morton::root()]);
+    } else {
+        assert_eq!(nglobal, shared);
+    }
 
     // Check the neighbour relationships.
 
@@ -162,48 +174,30 @@ pub fn main() {
             .collect_vec()
     };
     assert_eq!(globals(all_keys), globals(ghost_keys));
-    let nglobals = gather_to_all(std::slice::from_ref(&globals(ghost_keys).len()), &comm);
-    assert_eq!(nglobals.iter().unique().count(), 1);
 
-    // The layer also replicates every coarse block of every rank, with the leaf or
-    // interior classification and the owner its own rank assigns. Every rank enters
-    // the gathers, also on one rank.
+    // Every held block or ancestor of a block (a top-tree key) has the kind the
+    // partition map gives it, and every own block is held. The other ranks' blocks
+    // are held only where the locally essential set needs them (Phase 5S T3).
 
-    let own_blocks = ghost_tree.coarse_tree_leafs();
-    let own_block_is_leaf = own_blocks
-        .iter()
-        .map(|block| ghost_keys[block] == KeyType::LocalLeaf)
-        .collect_vec();
-    let block_counts = gather_to_all(std::slice::from_ref(&own_blocks.len()), &comm);
-    let blocks = gather_to_all(own_blocks, &comm);
-    let block_is_leaf = gather_to_all(&own_block_is_leaf, &comm);
-    let owners = block_counts
-        .iter()
-        .enumerate()
-        .flat_map(|(owner, &count)| std::iter::repeat_n(owner, count))
-        .collect_vec();
-    let rank = comm.rank() as usize;
+    let map = ghost_tree.partition_map();
     let mut supplied_blocks = 0;
-    for ((block, &is_leaf), &owner) in blocks.iter().zip(&block_is_leaf).zip(&owners) {
-        let key_type = ghost_keys.get(block).copied();
-        if owner == rank {
-            // On one rank the only block is the root, which is `Global` unless it
-            // is the only leaf.
-            assert!(matches!(
-                key_type,
-                Some(KeyType::LocalLeaf | KeyType::LocalInterior | KeyType::Global)
-            ));
-        } else if is_leaf {
-            assert_eq!(key_type, Some(KeyType::GhostLeaf(owner)));
-        } else {
-            assert_eq!(key_type, Some(KeyType::GhostInterior(owner)));
-        }
-        if !all_keys.contains_key(block) {
-            supplied_blocks += 1;
+    for (&key, &key_type) in ghost_keys {
+        if let Some(top_kind) = map.top_kind(key) {
+            assert_eq!(key_type, top_kind);
+            if map.blocks().binary_search(&key).is_ok() && !all_keys.contains_key(&key) {
+                supplied_blocks += 1;
+            }
         }
     }
+    for block in own_blocks {
+        assert!(matches!(
+            ghost_keys.get(block),
+            Some(KeyType::LocalLeaf | KeyType::LocalInterior | KeyType::Global)
+        ));
+    }
 
-    // Hence every child of every `Global` key is a key of the tree.
+    // Every child of every `Global` key is a key of the tree: a shared ancestor's
+    // children are neighbours of one of its children in S, and the layer holds them.
 
     for (&key, &key_type) in ghost_keys {
         if key_type != KeyType::Global {
@@ -214,9 +208,14 @@ pub fn main() {
         }
     }
     println!(
-        "rank {}: {} coarse blocks, {supplied_blocks} of them supplied by the ghost-children layer",
+        "rank {}: {} coarse blocks, {} held, {supplied_blocks} of them supplied by the \
+         ghost-children layer",
         comm.rank(),
-        blocks.len()
+        map.blocks().len(),
+        map.blocks()
+            .iter()
+            .filter(|block| ghost_keys.contains_key(block))
+            .count()
     );
 
     // Non-vacuity: on more than one rank the baseline tree is missing children that

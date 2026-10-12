@@ -35,6 +35,7 @@ the distributed passes are checked by the Laplace FMM in `nd-fmm-exec`.
 | `src/interaction_manager.rs` | `V_LIST_DIRECTIONS` (the 316 V-list offsets, CONVENTIONS §3.12) and the private per-key list rule `key_lists`, with its helpers. See the section below. |
 | `src/lists.rs` | `Csr`, `GroupedCsr` as `VList`/`Children`/`Parents`, `LevelLists` (the views of one level), `offset_index`, `NOFFSETS`, `NOCTANTS`. |
 | `src/plan.rs` | `Plan::new` (collective), `Plan::from_key_types` (local), `PlanError`. Near and X rows by the entry leaf's (level, key) (P1), and no V, X or L2L rows for a `Global` box that is not an ancestor of the rank's own coarse blocks (P2); distributed-fmm §5.1, §3.6. |
+| `src/phase5_keys.rs` | Private and transitional (Phase 5S T3 to T4): since T3 the octree holds only its locally essential keys, so `Plan::new` rebuilds the Phase 5 key set from the octree's leaves, blocks and bounds with Phase 5's `generate_all_keys` (two all-gathers and an all-to-all-v) and plans over it; every list and value stays Phase 5's. T4 builds the plan over the octree's own set and removes it. `tests/mpi_regressions.rs` reads the held keys from the plan's index (`held_keys`), not from `octree.all_keys()`. |
 | `src/store.rs` | `LevelBuffers`, `LeafStore` and their slice types: one buffer per level kind, CSR leaf data with variable counts. |
 | `src/exchange.rs` | `SourceExchange`, `MultipoleExchange`, `CoarseExchange`, `ExchangeError`: variable-size source exchange into the ghost tail, per-level multipole exchange, coarse-block gather. Each names the slots it reads and writes (`send_leaves`/`ghost_leaves`, `send_boxes`/`receive_boxes`, `sent_blocks`/`received_blocks`; the last two from Phase 5 T7). Next to the blocking `forward`/`forward_all`, the non-blocking `SourceExchange::forward_overlapped` and `MultipoleExchange::forward_all_overlapped` (Phase 5 T9): scoped rsmpi point-to-point on each exchange's graph communicator, the caller's work run in between with an in-flight handle (`SourcesInFlight`, `MultipolesInFlight`: `test`, `wait(level)`, `exchange`), `ExchangeTimes`; `Traffic` (messages and values per exchange). |
 | `src/operator.rs` | `FmmSizes`, the level-batched `FmmOperator` with its batch types `P2m` … `P2p` and `UpwardPass`, the per-pair `PairOperator` and its `PerPair` adapter; `HostData` and `FmmOperator::host_data` (default: nothing), the data-movement hook (Phase 5 T7, below). |
@@ -63,9 +64,10 @@ file beats either LSP or `grep`.
 ## The interaction lists
 
 `Plan::from_key_types` applies the private per-key rule `interaction_manager::key_lists`
-to every non-ghost key of `octree.all_keys()` and translates the lists to indices. The
-rule is **local — no collectives**; `Plan::new` adds two all-reduces (validation agreed
-on every rank). The module docs of `src/interaction_manager.rs` and `src/lists.rs` are
+to every non-ghost held key (until Phase 5S T4 the Phase 5 key set that `phase5_keys`
+rebuilds from the octree) and translates the lists to indices. The rule is **local — no
+collectives**; `Plan::new` adds two all-reduces (validation agreed on every rank) and,
+until T4, the collectives of `phase5_keys`. The module docs of `src/interaction_manager.rs` and `src/lists.rs` are
 the contract; the points that matter most when changing them:
 
 - **Rows for every box.** A box view of level l has one row per held box of the level,

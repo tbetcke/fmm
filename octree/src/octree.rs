@@ -1,5 +1,6 @@
 //! Definition of Octree.
 mod implementation;
+mod partition_map;
 use std::{collections::HashMap, error::Error, fmt};
 
 pub(crate) use implementation::*;
@@ -8,6 +9,8 @@ use mpi::{
     collective::SystemOperation,
     traits::{CommunicatorCollectives, Root},
 };
+pub use partition_map::PartitionMap;
+pub(crate) use partition_map::{Placement, last_finest_descendant};
 use rlst::{Array, ValueArrayImpl, distributed_tools::array_tools::gather_to_rank};
 
 use crate::{constants::DEEPEST_LEVEL, geometry::PhysicalBox, morton, morton::MortonKey};
@@ -19,7 +22,9 @@ pub enum KeyType {
     LocalLeaf,
     /// A local interior key.
     LocalInterior,
-    /// A global key.
+    /// A shared ancestor: an ancestor of one of this rank's coarse blocks, held by
+    /// every rank with a block below it (Phase 5S T3; docs/design/scale-out.md §3.3).
+    /// On one rank the root, unless it is the only leaf.
     Global,
     /// A ghost leaf key from a specific process.
     GhostLeaf(usize),
@@ -277,26 +282,26 @@ impl OctreeOptions {
 
     /// Request, or drop, the ghost-children layer.
     ///
-    /// With the layer enabled, construction also replicates the children of the
+    /// With the layer enabled, construction also stores the children of the
     /// interior boxes bordering this rank: for every non-ghost key of
     /// [`Octree::all_keys`] and every same-level neighbour cell of that key which
     /// the tree holds as an interior box, all eight children of the neighbour are
     /// keys of [`Octree::all_keys`] too, each with the classification its owner
     /// assigns. This is one step of closure relative to the keys stored without
     /// the option, not a fixed point: the children of a ghost child that the
-    /// layer itself added are not added in turn.
+    /// layer itself added are not added in turn. In the terms of
+    /// docs/design/scale-out.md §3.1 the tree holds H = N(S) ∪ C(N(S)) with the
+    /// layer and N(S) without it (see [`Octree::all_keys`]).
     ///
     /// The layer is what a fast multipole method needs to resolve its V- and
     /// W-list entries locally, since those are children of neighbouring boxes.
+    /// The non-ghost keys include the [`KeyType::Global`] keys, the ancestors of
+    /// this rank's blocks, so every child of every `Global` key is a key of the
+    /// map as well.
     ///
-    /// On more than one rank the layer also replicates every coarse block, that
-    /// is every key of [`Octree::coarse_tree_leafs`] on every rank, without its
-    /// children. A block of another rank is a key of [`Octree::all_keys`],
-    /// classified as [`KeyType::GhostLeaf`] or [`KeyType::GhostInterior`] with its
-    /// owner. The children of a [`KeyType::Global`] key are `Global` keys or
-    /// coarse blocks, so every child of every `Global` key is a key of the map as
-    /// well. This lets a distributed fast multipole method form the multipoles of
-    /// the `Global` keys on every rank from the multipoles of all blocks.
+    /// Since Phase 5S T3 the layer no longer replicates every coarse block of every
+    /// rank: a block of another rank is held where the rule above or the halo needs
+    /// it, and [`Octree::partition_map`] holds every block as a key.
     /// # Arguments
     /// - `enabled`: Whether the ghost-children layer is stored.
     ///
@@ -377,8 +382,7 @@ impl OctreeOptions {
     /// [`OctreeOptions::max_level`]. A block that cannot be split stays whole however
     /// heavy it is, so the busiest rank's weight is at most the mean times
     /// `1 + w_max / (W / P)`, `w_max` the heaviest block. Finer blocks mean more
-    /// coarse blocks and `Global` keys, which every rank holds (the replicated
-    /// coarse tree, and with [`OctreeOptions::with_ghost_children`] every block).
+    /// coarse blocks, which every rank holds as keys in its [`PartitionMap`].
     /// The factor never changes the leaves, and on one rank it has no effect.
     /// A factor of 0 acts as 1.
     /// # Arguments
@@ -418,6 +422,7 @@ pub struct Octree<'o, C> {
     coarse_tree_leafs: Vec<MortonKey>,
     leaf_keys: Vec<MortonKey>,
     coarse_tree_bounds: Vec<MortonKey>,
+    partition_map: PartitionMap,
     all_keys: HashMap<MortonKey, KeyType>,
     neighbours: HashMap<MortonKey, Vec<MortonKey>>,
     options: OctreeOptions,
@@ -475,15 +480,17 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
     /// owners); one all-reduce per refinement round of the coarse tree, and one
     /// more if 2:1 balancing the blocks changes them; the key move to the owners (an
     /// all-to-all-v); the distributed 2:1 balance (an all-reduce of the deepest
-    /// level and an all-to-all-v of the local closures by the partition bounds); and
-    /// the ghost exchange (two all-gathers and an all-to-all-v). Each all-to-all-v
-    /// includes an all-to-all of its counts. No key is sorted across the ranks.
-    /// Debug builds add the collectives of their invariant checks. The partition
-    /// bounds come from the replicated coarse tree and need no communication.
+    /// level and an all-to-all-v of the local closures by the partition bounds); the
+    /// leaf flags of the blocks for the [`PartitionMap`] (an all-gather-v of one flag
+    /// per block, whose counts follow from the cut); and the push of the locally
+    /// essential keys (an all-to-all-v; see [`Octree::all_keys`]). Each all-to-all-v
+    /// includes an all-to-all of its counts. No key is sorted across the ranks, and no
+    /// key list is gathered to every rank (Phase 5S T3). Debug builds add the
+    /// collectives of their invariant checks. The partition bounds and the partition
+    /// map come from the replicated coarse tree and need no further communication.
     ///
     /// Enabling [`OctreeOptions::with_ghost_children`] does not add a communication
-    /// round: the additional keys travel inside the two collectives that the ghost
-    /// exchange already performs.
+    /// round: the additional keys travel inside the push.
     ///
     /// On one rank the coarse tree is the root, and the options that shape the
     /// partition have no effect.
@@ -548,14 +555,21 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
             create_local_tree(&local_fine_keys, &coarse_tree, max_level, max_fine_keys);
         let leaf_tree = balance(&refined_tree, &coarse_tree_bounds, comm);
 
-        let all_keys =
-            generate_all_keys(&leaf_tree, &coarse_tree, &coarse_tree_bounds, options, comm);
+        // The partition map: the replicated blocks and cut, with whether each block is
+        // a leaf, which only the balance settles (one all-gather-v of a flag per block).
+        let leaf_blocks = gather_leaf_blocks(&leaf_tree, &coarse_tree, &partition, comm);
+        let partition_map = PartitionMap::new(global_coarse_tree, partition, &leaf_blocks, rank);
+        drop(leaf_blocks);
+
+        // The locally essential keys: S, the map's top-tree keys and the push.
+        let all_keys = generate_all_keys(&leaf_tree, &partition_map, options, comm);
         let neighbours = compute_neighbours(&all_keys);
 
         Self {
             coarse_tree_leafs: coarse_tree,
             leaf_keys: leaf_tree,
             coarse_tree_bounds,
+            partition_map,
             all_keys,
             neighbours,
             options,
@@ -674,6 +688,34 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
         &self.coarse_tree_bounds
     }
 
+    /// Return the partition map: every coarse block with its owner and leaf flag,
+    /// replicated on every rank as keys (Phase 5S S1; see [`PartitionMap`]).
+    ///
+    /// It gives the owner of any key, the ranks sharing a key above the blocks, and the
+    /// kind of any block or ancestor of one relative to this rank, without
+    /// communication. [`Octree::coarse_tree_leafs`] is this rank's range of its blocks,
+    /// and [`Octree::coarse_tree_bounds`] the first block of every rank's range.
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mpi::traits::Communicator;
+    /// let universe = mpi::initialize().expect("MPI must be initialized once");
+    /// // Use a self communicator so this complete input is not replicated across ranks.
+    /// use mpi::topology::SimpleCommunicator;
+    /// use nd_octree::{morton, Octree, octree::OctreeOptions};
+    /// let comm = SimpleCommunicator::self_comm();
+    /// let fine_keys = [
+    ///     morton::deepest_first(),
+    ///     morton::from_index_and_level([1, 0, 0], 16),
+    /// ];
+    /// let tree = Octree::new(&fine_keys, OctreeOptions::default(), &comm);
+    /// assert_eq!(tree.partition_map().blocks(), &[morton::root()]);
+    /// assert_eq!(tree.partition_map().owner(morton::deepest_first()), 0);
+    /// ```
+    pub fn partition_map(&self) -> &PartitionMap {
+        &self.partition_map
+    }
+
     /// Return the communicator.
     /// # Examples
     ///
@@ -700,29 +742,41 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
     /// The map assigns each key a [KeyType] identifier. It is one of:
     /// - [KeyType::LocalLeaf] for leaf keys
     /// - [KeyType::LocalInterior] for interior keys
-    /// - [KeyType::Global] for global keys
-    /// - [KeyType::GhostLeaf] and [KeyType::GhostInterior], keys adjacent to keys
-    ///   on the current rank but living on a different rank.
+    /// - [KeyType::Global] for shared ancestors
+    /// - [KeyType::GhostLeaf] and [KeyType::GhostInterior], keys this rank needs
+    ///   but another rank owns.
+    ///
+    /// Since Phase 5S T3 the map is this rank's *locally essential* key set
+    /// (docs/design/scale-out.md §3.1). With S the own keys (the local leaves and
+    /// interior keys, at or below this rank's coarse blocks) and the shared ancestors
+    /// (the ancestors of those blocks), it holds
+    ///
+    /// > H = N(S) ∪ C(N(S)),
+    ///
+    /// N(S) being S and every key of the tree that is a same-level neighbour of a key
+    /// of S, and C(N(S)) the children of the interior keys of N(S), which only the
+    /// ghost-children layer ([`OctreeOptions::with_ghost_children`]) adds. Every key
+    /// that a V-, W- or X-list of a key of S, the halo of S or a parent-child step
+    /// from S names is in it; nothing else is. Its size does not grow with the number
+    /// of ranks at a fixed number of keys per rank.
     ///
     /// Leaf keys have no children. A local interior key has all of its children on
     /// the local rank; a ghost interior key generally does not. The ghost-children
-    /// layer ([`OctreeOptions::with_ghost_children`]) adds one step of closure, not
-    /// a fixed point: with it enabled, for every non-ghost key of this map and every
-    /// same-level neighbour cell of that key which the tree holds as an interior
-    /// box, all eight children of that neighbour are keys of this map too. A ghost
+    /// layer is one step of closure, not a fixed point: with it enabled, for every
+    /// non-ghost key of this map and every same-level neighbour cell of that key which
+    /// the tree holds as an interior box, all eight children of that neighbour are
+    /// keys of this map too, among them every child of every `Global` key. A ghost
     /// interior that the layer itself added does **not** have its own children here.
-    /// The layer also makes every coarse block of every rank, and hence every child
-    /// of every global key, a key of this map; see
-    /// [`OctreeOptions::with_ghost_children`].
-    /// Global keys are keys that are not uniquely assigned to a rank but exist on all ranks.
-    /// The global keys are those that are close to the root of the tree. By construction these
-    /// are the ancestors of the coarse tree leafs, where as the coarse tree leafs themselves are
-    /// the first level of keys distributed across ranks. When the root is the only coarse
-    /// block on several ranks, there is no global key: the root is local to the rank that
-    /// owns it and a ghost of that rank on every other rank. A rank without coarse blocks
-    /// holds only global keys and ghosts. Ghost keys are keys that are not local to
-    /// the current rank but lie along the interface to the current rank. Their identifiers store the value
-    /// of the rank that they originate from.
+    ///
+    /// [`KeyType::Global`] keys are the shared ancestors: an ancestor of one of this
+    /// rank's blocks, held by every rank that has a block below it. Every other key
+    /// not owned here is a ghost of its owner ([`PartitionMap::owner`]): the rank of
+    /// its block, or, for an ancestor of other ranks' blocks only, the rank of its
+    /// first descendant block. When the root is the only coarse block on several
+    /// ranks, there is no global key: the root is local to the rank that owns it. A
+    /// rank without coarse blocks holds no key. On one rank the map is the whole tree,
+    /// with the root `Global` unless it is the only leaf. Every block and every
+    /// ancestor of one has the kind [`PartitionMap::top_kind`] gives it.
     /// # Examples
     ///
     /// ```no_run

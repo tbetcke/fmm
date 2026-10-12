@@ -38,7 +38,8 @@ set -euo pipefail
 # MpiThreading error rides on the agreement all-reduce of `build`'s step 1, which the
 # several-rank run exercises. invariance is the rank-count-invariance check of Phase 5S
 # T2 (P ranks against P/k for every divisor k, bit for bit; docs/design/scale-out.md
-# §5.1, §9.2).
+# §5.1, §9.2); test_mpi_locally_essential the held keys and the partition map of T3
+# against brute force (§9.1).
 TARGETS="test nd-fmm-plan mpi_regressions
 test nd-fmm-exec mpi_exec
 test nd-fmm-exec mpi_threading
@@ -48,7 +49,8 @@ example nd-octree test_mpi_global_bounding_box
 example nd-octree test_mpi_leaf_lookup
 example nd-octree test_mpi_vtk
 example nd-octree test_mpi_construction_edge_cases
-example nd-octree test_mpi_weighted_partition"
+example nd-octree test_mpi_weighted_partition
+example nd-octree test_mpi_locally_essential"
 
 now() {
     python3 -c 'import time; print(f"{time.time():.3f}")'

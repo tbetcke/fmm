@@ -121,6 +121,22 @@ fn needs_local(all_keys: &HashMap<u64, KeyType>, own_blocks: &[u64], key: u64) -
             .any(|&block| block != key && is_ancestor(key, block))
 }
 
+/// The keys the plan holds, with their kinds. Until Phase 5S T4 this is the Phase 5 key
+/// set, which `Plan::new` rebuilds from the octree, while the octree itself holds only
+/// its locally essential keys (T3).
+fn held_keys(plan: &Plan) -> HashMap<u64, KeyType> {
+    let index = plan.index();
+    (0..index.nlevels())
+        .flat_map(|level| {
+            index
+                .keys(level)
+                .iter()
+                .copied()
+                .zip(index.kinds(level).iter().copied())
+        })
+        .collect()
+}
+
 /// Compute the [`OracleLists`] from the local key map and the sorted global leaves. A
 /// `Global` box whose local this rank does not need ([`needs_local`]) has empty V- and
 /// X-lists (P2).
@@ -1473,8 +1489,9 @@ fn check_batches<C: CommunicatorCollectives>(
     );
     assert_eq!(recorder.calls, expected_calls(plan.nlevels()), "{name}");
 
+    let held = held_keys(plan);
     let mut expected = Vec::new();
-    for (&key, &kind) in octree.all_keys() {
+    for (&key, &kind) in &held {
         if kind.is_ghost() {
             continue;
         }
@@ -1483,7 +1500,7 @@ fn check_batches<C: CommunicatorCollectives>(
         expected.extend(entries("m2l", v));
         expected.extend(entries("p2l", x));
         if let Some(parent) = morton::parent(key)
-            && needs_local(octree.all_keys(), octree.coarse_tree_leafs(), key)
+            && needs_local(&held, octree.coarse_tree_leafs(), key)
         {
             expected.push(("l2l", key, parent));
         }
@@ -1934,22 +1951,12 @@ fn distributed_tree_regressions() {
         let mut global_leaves = gather_to_all(leaves, &comm);
         global_leaves.sort_unstable();
         assert!(morton::is_complete_linear_and_balanced(&global_leaves));
-        let oracle = oracle_of(
-            octree.all_keys(),
-            &global_leaves,
-            octree.coarse_tree_leafs(),
-        );
-
         // The index-form plan, against the oracle. Building it is collective.
         let plan =
             Plan::new(&octree).unwrap_or_else(|error| panic!("rank {rank}: {name}: {error}"));
-        check_plan(
-            name,
-            octree.all_keys(),
-            &oracle,
-            &plan,
-            octree.coarse_tree_leafs(),
-        );
+        let held = held_keys(&plan);
+        let oracle = oracle_of(&held, &global_leaves, octree.coarse_tree_leafs());
+        check_plan(name, &held, &oracle, &plan, octree.coarse_tree_leafs());
         // The graded tree has `Global` boxes on every rank count and spreads its lists
         // over several ranks, so the global pass and the ghost leaves are exercised.
         let global_pairs: usize = plan.levels().iter().map(|l| l.m2m_global().len()).sum();
@@ -1960,10 +1967,9 @@ fn distributed_tree_regressions() {
             SystemOperation::sum(),
         );
         // P2 drops the downward rows of some `Global` box on some rank.
-        let local_pruned = octree
-            .all_keys()
+        let local_pruned = held
             .keys()
-            .filter(|&&key| !needs_local(octree.all_keys(), octree.coarse_tree_leafs(), key))
+            .filter(|&&key| !needs_local(&held, octree.coarse_tree_leafs(), key))
             .count();
         let mut pruned = 0usize;
         comm.all_reduce_into(&local_pruned, &mut pruned, SystemOperation::sum());
@@ -2005,8 +2011,7 @@ fn distributed_tree_regressions() {
             })
             .collect();
         let multipoles =
-            check_multipole_exchange(name, &comm, octree.all_keys(), &oracle, &plan, &sizes)
-                .total(&comm);
+            check_multipole_exchange(name, &comm, &held, &oracle, &plan, &sizes).total(&comm);
         let coarse = check_coarse_gather(name, &comm, &plan, &sizes);
         if comm.size() > 1 && name == "graded corner blob" {
             assert!(

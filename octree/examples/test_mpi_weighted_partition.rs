@@ -16,27 +16,23 @@
 //!   last rank's keys moved to rank 0 (a rank with no keys) give the same blocks;
 //! - every invariant of a tree: completeness, linearity and 2:1 balance, the ghosts
 //!   name the rank that owns them with its classification, the neighbour map has
-//!   entries for exactly the non-ghost keys, each neighbour once, every coarse block
-//!   of every rank is a key of every rank (the ghost-children layer), and so is every
-//!   child of every `Global` key.
+//!   entries for exactly the non-ghost keys, each neighbour once, every held block or
+//!   ancestor of a block has the partition map's kind, every own block is held, and
+//!   so is every child of every `Global` key (the ghost-children layer).
 //!
 //! The duplicate-heavy cube is also built with `PartitionWeight::DistinctKeys` and
 //! with a block refinement of 1: the same leaves. The former panic (fewer blocks
 //! than ranks) is a tree whose only block is the root, built with `max_level` 0 and
 //! with fewer distinct keys than `max_fine_keys`, and the globally empty input: one
-//! rank owns the root, the others own nothing and hold it as a ghost, on every rank
-//! count.
+//! rank owns the root, the others own nothing and hold no key (Phase 5S T3), on every
+//! rank count.
 //!
-//! Every tree is also compared key for key with the Phase 5 construction (the sample
-//! sorts), kept in `phase5_reference` until Phase 5S T3 lands: the leaves, the blocks
-//! and their weights, the partition bounds and every key with its `KeyType` are
-//! those of Phase 5 (T3a).
+//! Phase 5S T3a also compared every tree key for key with a private copy of the Phase 5
+//! construction (the sample sorts), removed with T3, whose `test_mpi_locally_essential`
+//! checks the held keys.
 //!
 //! Every check is agreed over all ranks before it is asserted, so a failure stops
 //! every rank, not one.
-
-#[path = "phase5_reference/mod.rs"]
-mod phase5_reference;
 
 use itertools::Itertools;
 use mpi::{
@@ -261,28 +257,16 @@ fn check_tree<C: CommunicatorCollectives>(
     }
     agree(ok, &format!("{name}: ghosts and neighbours"), comm);
 
-    // Every block of every rank, and every child of every `Global` key, is a key of
-    // every rank, with its owner's classification.
+    // Every held block or ancestor of a block has the partition map's kind (Phase 5S
+    // T3: other ranks' blocks only where the locally essential set needs them), every
+    // own block is held, and so is every child of every `Global` key.
     let blocks = gather_to_all(tree.coarse_tree_leafs(), comm);
-    let block_owners = nblocks
-        .iter()
-        .enumerate()
-        .flat_map(|(owner, &n)| std::iter::repeat_n(owner, n))
-        .collect_vec();
-    let mut ok = true;
-    for (&block, &owner) in blocks.iter().zip(&block_owners) {
-        let is_leaf = owned.contains(&(block, owner));
-        ok &= match all_keys.get(&block) {
-            Some(KeyType::LocalLeaf) => owner == rank && is_leaf,
-            Some(KeyType::LocalInterior) => owner == rank && !is_leaf,
-            Some(KeyType::GhostLeaf(r)) => *r == owner && is_leaf,
-            Some(KeyType::GhostInterior(r)) => *r == owner && !is_leaf,
-            // On one rank the only block is the root, `Global` unless it is a leaf.
-            Some(KeyType::Global) => size == 1 && block == morton::root() && !is_leaf,
-            None => false,
-        };
-    }
+    let map = tree.partition_map();
+    let mut ok = map.blocks() == blocks.as_slice();
     for (&key, &key_type) in all_keys {
+        if let Some(top_kind) = map.top_kind(key) {
+            ok &= key_type == top_kind;
+        }
         if key_type == KeyType::Global {
             ok &= morton::children(key)
                 .unwrap()
@@ -290,7 +274,12 @@ fn check_tree<C: CommunicatorCollectives>(
                 .all(|child| all_keys.contains_key(child));
         }
     }
-    agree(ok, &format!("{name}: replicated blocks"), comm);
+    for block in tree.coarse_tree_leafs() {
+        ok &= all_keys
+            .get(block)
+            .is_some_and(|key_type| !key_type.is_ghost());
+    }
+    agree(ok, &format!("{name}: blocks and the partition map"), comm);
 
     // The weight bound of O3: every rank within a fair share plus the heaviest block.
     let mut sorted = keys.to_vec();
@@ -327,7 +316,7 @@ fn check_tree<C: CommunicatorCollectives>(
 }
 
 /// Check a tree whose only coarse block is the root: one rank owns it, a leaf, and
-/// every other rank owns nothing and holds the root as its ghost.
+/// every other rank owns nothing and holds no key (its locally essential set is empty).
 ///
 /// # Collective operation
 /// Gathers and agreements; every rank must call it.
@@ -348,9 +337,9 @@ fn check_root_only<C: CommunicatorCollectives>(name: &str, tree: &Octree<'_, C>,
         ok &= tree.leaf_keys().is_empty();
         ok &= tree.local_leaf(morton::deepest_first()) == Ok(None);
         if comm.size() > 1 {
-            ok &= tree.all_keys().len() == 1;
-            ok &= tree.all_keys().get(&root) == Some(&KeyType::GhostLeaf(owner));
+            ok &= tree.all_keys().is_empty();
             ok &= tree.neighbour_map().is_empty();
+            ok &= tree.partition_map().top_kind(root) == Some(KeyType::GhostLeaf(owner));
         }
     }
     let found = tree
@@ -389,7 +378,6 @@ fn main() {
             let label = format!("{name}, {kind:?}");
             let local = input(&keys, kind, rank, size);
             let tree = Octree::new(&local, options, &comm);
-            phase5_reference::assert_same_as_phase5(&label, &tree, &local, options, &comm);
             let balance = check_tree(&label, &tree, &keys, &one_rank, &comm);
             partitions.push(gather_to_all(tree.coarse_tree_leafs(), &comm));
             partitions.push(tree.coarse_tree_bounds().clone());
@@ -424,7 +412,6 @@ fn main() {
             ] {
                 let local = input(&keys, Input::Share, rank, size);
                 let tree = Octree::new(&local, other, &comm);
-                phase5_reference::assert_same_as_phase5(label, &tree, &local, other, &comm);
                 let leaves = gather_to_all(tree.leaf_keys(), &comm);
                 agree(
                     leaves == one_rank,
@@ -474,7 +461,6 @@ fn main() {
         ] {
             let tree = Octree::new(&local, options, &comm);
             let label = format!("{label}, ghost children {ghost_children}");
-            phase5_reference::assert_same_as_phase5(&label, &tree, &local, options, &comm);
             check_root_only(&label, &tree, &comm);
             if label.starts_with("no keys") {
                 // As on one rank: the root is a leaf of rank 0.
@@ -489,13 +475,6 @@ fn main() {
     // Few keys on many ranks still split where the one-rank tree splits.
     let local = input(&few, Input::Share, rank, size);
     let tree = Octree::new(&local, OctreeOptions::default(), &comm);
-    phase5_reference::assert_same_as_phase5(
-        "three keys, one per leaf",
-        &tree,
-        &local,
-        OctreeOptions::default(),
-        &comm,
-    );
     let leaves = gather_to_all(tree.leaf_keys(), &comm);
     agree(
         leaves == one_rank_leaves(&few, OctreeOptions::default()),

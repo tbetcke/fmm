@@ -3,19 +3,25 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::morton;
-use crate::{constants::DEEPEST_LEVEL, morton::MortonKey};
+use crate::{
+    constants::{DEEPEST_LEVEL, DIRECTIONS, LEVEL_MASK},
+    morton::MortonKey,
+};
 
 use mpi::traits::Equivalence;
 
 use itertools::{Itertools, izip};
-use mpi::{collective::SystemOperation, traits::CommunicatorCollectives};
+use mpi::{collective::SystemOperation, datatype::PartitionMut, traits::CommunicatorCollectives};
 use rlst::distributed_tools::{
     all_to_allv,
     array_tools::{communicate_back, gather_to_all},
     sort_to_bins,
 };
 
-use super::{KeyType, LeafLocation, LookupBatchError, LookupError, OctreeOptions, PartitionWeight};
+use super::{
+    KeyType, LeafLocation, LookupBatchError, LookupError, OctreeOptions, PartitionMap,
+    PartitionWeight, Placement, last_finest_descendant,
+};
 
 /// A distinct finest-level key and its number of copies, as the key routing sends
 /// it (S4, docs/design/scale-out.md §7.1).
@@ -964,9 +970,9 @@ pub(crate) fn balance_closure(linear_keys: &[MortonKey], deepest_level: usize) -
 /// assert_eq!(first_finest_descendant(morton::root()), morton::deepest_first());
 /// ```
 pub(crate) fn first_finest_descendant(key: MortonKey) -> MortonKey {
-    let (level, index) = morton::decode(key);
-    let shift = DEEPEST_LEVEL as usize - level;
-    morton::from_index_and_level(index.map(|i| i << shift), DEEPEST_LEVEL as usize)
+    // The position bits of a key are those of its anchor on the deepest level, so only
+    // the level changes.
+    (key & !LEVEL_MASK) | DEEPEST_LEVEL
 }
 
 /// Return true if the keys are linear.
@@ -1137,26 +1143,6 @@ pub fn deepest_level<C: CommunicatorCollectives>(keys: &[MortonKey], comm: &C) -
     );
 
     global_deepest_level
-}
-
-/// For a sorted array return either position of the key or positioin directly before search key.
-/// # Parameters
-///
-/// - `arr`: Locally held, Morton-ordered tree keys.
-/// - `key`: Morton key to inspect or transform.
-///
-/// # Examples
-///
-/// ```ignore
-/// // This call is illustrative; `implementation` is private to the crate.
-/// let comm = mpi::topology::SimpleCommunicator::self_comm();
-/// assert_eq!(get_key_index(&[1, 2], 2), Some(1));
-/// assert_eq!(get_key_index(&[5, 7], 3), None);
-/// ```
-pub fn get_key_index(arr: &[MortonKey], key: MortonKey) -> Option<usize> {
-    // Either the position of an exact match or the position of the closest smaller
-    // key. `None` when `key` precedes every element, which has no predecessor.
-    checked_predecessor(arr, key)
 }
 
 // /// Generate a map that associates each leaf with the corresponding point indices.
@@ -1489,26 +1475,111 @@ pub(crate) fn lookup_leaves_collective<C: CommunicatorCollectives>(
         .collect())
 }
 
-/// Generate all leaf and interior keys.
+/// Gather whether every block is a leaf of the tree: the leaf bits of the partition map
+/// (Phase 5S S1; docs/design/scale-out.md §3.2).
 ///
-/// `leaf_tree` and `coarse_tree` are assumed to be sorted.
-///
-/// With [`OctreeOptions::ghost_children`] enabled the ghost exchange additionally
-/// carries, for every key a rank advertises to another rank, that key's eight
-/// children whenever the key is interior, and it advertises every local coarse
-/// block to all ranks. Together these guarantee that for every non-ghost key of
-/// the result and every same-level neighbour cell of it which the result holds as
-/// an interior key, all eight children of that neighbour are in the result as
-/// well. This is one step of closure relative to the keys stored without the
-/// option, not a fixed point. Both additions travel inside the two collectives the
-/// exchange already performs, so no communication round is added.
+/// A block that [`create_local_tree`] leaves whole can still be split by the 2:1 balance,
+/// so the bits are known only after it. Every rank contributes one flag per own block;
+/// the counts follow from the cut, which every rank holds, so no count is exchanged.
 /// # Parameters
 ///
-/// - `leaf_tree`: Sorted local leaf keys to classify.
-/// - `coarse_tree`: Local partition of the complete coarse tree.
-/// - `coarse_tree_bounds`: Per-rank lower Morton bounds used to identify remote ownership.
+/// - `leaf_tree`: This rank's sorted leaves.
+/// - `own_blocks`: This rank's blocks, sorted.
+/// - `partition`: The `P + 1` range boundaries of [`partition_blocks`].
+/// - `comm`: Communicator whose ranks enter this collective phase.
+///
+/// # Returns
+///
+/// For every block of the coarse tree, in order, whether it is a leaf.
+///
+/// # Collective operation
+///
+/// One all-gather-v on more than one rank, of one flag per block; every rank must
+/// enter, a rank without blocks with no flag. On one rank nothing is communicated.
+///
+/// # Examples
+///
+/// ```ignore
+/// // This call is illustrative; `implementation` is private to the crate.
+/// let comm = mpi::topology::SimpleCommunicator::self_comm();
+/// let root = [morton::root()];
+/// assert_eq!(gather_leaf_blocks(&root, &root, &[0, 1], &comm), vec![true]);
+/// ```
+pub(crate) fn gather_leaf_blocks<C: CommunicatorCollectives>(
+    leaf_tree: &[MortonKey],
+    own_blocks: &[MortonKey],
+    partition: &[usize],
+    comm: &C,
+) -> Vec<bool> {
+    let own = own_blocks
+        .iter()
+        .map(|block| leaf_tree.binary_search(block).is_ok())
+        .collect_vec();
+    if comm.size() == 1 {
+        return own;
+    }
+    let counts = partition
+        .windows(2)
+        .map(|range| i32::try_from(range[1] - range[0]).expect("a rank's blocks fit an MPI count"))
+        .collect_vec();
+    let displacements = partition[..partition.len() - 1]
+        .iter()
+        .map(|&offset| i32::try_from(offset).expect("the blocks fit an MPI displacement"))
+        .collect_vec();
+    let mut leaf_blocks = vec![false; *partition.last().unwrap()];
+    comm.all_gather_varcount_into(
+        &own[..],
+        &mut PartitionMut::new(&mut leaf_blocks[..], &counts[..], &displacements[..]),
+    );
+    leaf_blocks
+}
+
+/// Generate the locally essential key set of this rank and classify every key (Phase 5S
+/// S1; docs/design/scale-out.md §3.1, §3.3).
+///
+/// Let S be this rank's own keys (its leaves and their ancestors at or below its blocks)
+/// and its *shared ancestors* (the ancestors of its blocks). The result is
+///
+/// > H = N(S) ∪ C(N(S)),
+///
+/// N(S) being S and every key of the tree that is a same-level neighbour of a key of S,
+/// and C(N(S)) the children of the interior keys of N(S), which only
+/// [`OctreeOptions::ghost_children`] asks for. It holds every key that a V-, W- or X-row
+/// of a key of S, the halo of S or a parent-child step from S names, and nothing more. A
+/// rank without blocks holds no key.
+///
+/// The kinds: an own leaf is [`KeyType::LocalLeaf`], an own interior key
+/// [`KeyType::LocalInterior`], a shared ancestor [`KeyType::Global`], and every other key
+/// a ghost of its owner ([`PartitionMap::owner`]): a key at or below a block of its
+/// block's rank, an ancestor of other ranks' blocks of the rank of its first descendant
+/// block. On one rank the result is the whole tree with the Phase 5 kinds (the root
+/// `Global` unless it is the only leaf).
+///
+/// Assembled without gathering keys:
+/// 1. the top-tree keys of H (blocks and their ancestors) come from the partition map,
+///    with their kinds, without communication;
+/// 2. every other key of H lies below another rank's block, and that rank pushes it:
+///    every rank sends each of its own keys k, with k's children when k is interior and
+///    the ghost-children layer is asked for, to every other rank that holds a
+///    same-level neighbour cell of k in its S: the owner of the cell's block for a cell
+///    at or below a block, the sharers of the cell for a top-tree cell. The receiver
+///    keeps what lies in H.
+///
+/// For every key of S and every same-level neighbour cell of it that the result holds as
+/// an interior key, the result holds all eight children of the neighbour when the
+/// ghost-children layer is asked for (checked in debug builds).
+/// # Parameters
+///
+/// - `leaf_tree`: This rank's sorted leaves.
+/// - `map`: The partition map, with this rank's blocks and the leaf bits.
 /// - `options`: Optional topology layers requested from [`crate::Octree::new`].
 /// - `comm`: Communicator whose ranks enter this collective phase.
+///
+/// # Collective operation
+///
+/// On more than one rank, the push: one all-to-all-v (with its all-to-all of counts),
+/// which every rank enters, a rank without blocks sending and receiving nothing. On one
+/// rank nothing is communicated.
 ///
 /// # Examples
 ///
@@ -1516,250 +1587,226 @@ pub(crate) fn lookup_leaves_collective<C: CommunicatorCollectives>(
 /// // This call is illustrative; `implementation` is private to the crate.
 /// let comm = mpi::topology::SimpleCommunicator::self_comm();
 /// let leaves = morton::children(morton::root()).unwrap();
-/// let options = OctreeOptions::default();
-/// let keys = generate_all_keys(&leaves, &leaves, &[leaves[0]], options, &comm);
+/// let map = PartitionMap::new(vec![morton::root()], vec![0, 1], &[false], 0);
+/// let keys = generate_all_keys(&leaves, &map, OctreeOptions::default(), &comm);
 /// ```
 pub fn generate_all_keys<C: CommunicatorCollectives>(
     leaf_tree: &[MortonKey],
-    coarse_tree: &[MortonKey],
-    coarse_tree_bounds: &[MortonKey],
+    map: &PartitionMap,
     options: OctreeOptions,
     comm: &C,
 ) -> HashMap<MortonKey, KeyType> {
-    /// This struct combines rank and key information for sending ghosts to neighbors.
+    /// A key pushed to another rank, and whether it is a leaf there. The sender is the
+    /// key's owner, which the receiver learns from the position in the exchange.
     ///
     /// `Default` is required by the collective helpers, which need a placeholder
-    /// element for ranks contributing nothing. Such a value is never read back as
-    /// a ghost.
-    #[derive(Copy, Clone, Default, Equivalence, PartialEq, Eq, Hash)]
-    struct KeyWithRank {
+    /// element. Such a value is never read back.
+    #[derive(Copy, Clone, Default, Equivalence, PartialEq, Eq, PartialOrd, Ord)]
+    struct PushedKey {
         key: MortonKey,
-        rank: usize,
         is_leaf: bool,
     }
 
     let rank = comm.rank() as usize;
     let size = comm.size() as usize;
+    debug_assert_eq!(map.rank(), rank);
+    debug_assert_eq!(map.nranks(), size);
+    let own_range = map.rank_blocks(rank);
+    let own_blocks = &map.blocks()[own_range.clone()];
 
+    // S: the shared ancestors, the own blocks with the kinds the map gives them, and the
+    // own keys below the blocks, from the leaves up to their blocks.
     let mut all_keys = HashMap::<MortonKey, KeyType>::new();
-    let leaf_keys: HashSet<MortonKey> = HashSet::from_iter(leaf_tree.iter().copied());
-
-    // If size == 1 we simply create locally the keys, so don't need to treat the global keys.
-
-    if size > 1 {
-        let mut global_keys = HashSet::<MortonKey>::new();
-
-        // First deal with the parents of the coarse tree. These are different
-        // as they may exist on multiple nodes, so receive a different label.
-
-        for &key in coarse_tree {
-            // A root-only tree has no ancestors to add.
-            let Some(mut parent) = morton::parent(key) else {
-                continue;
-            };
-            // Stop as soon as an ancestor chain that was already walked is reached.
-            // `all_keys` is still empty here, so testing it would never short-circuit.
-            while morton::level(parent) > 0 && !global_keys.contains(&parent) {
-                global_keys.insert(parent);
-                parent = morton::parent(parent).unwrap();
+    for &block in own_blocks {
+        let mut key = block;
+        while let Some(parent) = morton::parent(key) {
+            if all_keys.insert(parent, KeyType::Global).is_some() {
+                break;
             }
-        }
-
-        // We now send around the parents of the coarse tree to every node. These will
-        // be global keys.
-
-        let global_keys = gather_to_all(&global_keys.iter().copied().collect_vec(), comm);
-
-        // We can now insert the global keys into `all_keys` with the `Global` label.
-
-        for &key in &global_keys {
-            all_keys.entry(key).or_insert(KeyType::Global);
+            key = parent;
         }
     }
-
-    // We now deal with the fine leafs and their ancestors.
-    // The leafs of the coarse tree will also be either part
-    // of the fine tree leafs or will be interior keys. In either
-    // case the following loop catches them.
-
-    for leaf in leaf_keys {
-        debug_assert!(!all_keys.contains_key(&leaf));
+    for (b, &block) in own_range.clone().zip(own_blocks) {
+        let kind = map
+            .top_kind(block)
+            .expect("a block is a top-tree key of the map");
+        debug_assert_eq!(
+            map.is_leaf_block(b),
+            leaf_tree.binary_search(&block).is_ok()
+        );
+        all_keys.insert(block, kind);
+    }
+    for &leaf in leaf_tree {
         all_keys.insert(leaf, KeyType::LocalLeaf);
-        // Keep a root leaf local; it has no parent, and the root insertion
-        // below must not replace its LocalLeaf classification.
-        let Some(mut parent) = morton::parent(leaf) else {
-            continue;
-        };
-        while morton::level(parent) > 0 && !all_keys.contains_key(&parent) {
+        let mut key = leaf;
+        while let Some(parent) = morton::parent(key)
+            && !all_keys.contains_key(&parent)
+        {
             all_keys.insert(parent, KeyType::LocalInterior);
-            parent = morton::parent(parent).unwrap();
+            key = parent;
         }
     }
 
-    // Need to explicitly add the root at the end. On several ranks the root may be
-    // the only coarse block; the bounds are then the root up to its owner and above
-    // every valid key after it, since the first bound is always the first block.
-    // That block is a local key of its owner and reaches the other ranks as a ghost
-    // through the gather below, never as `Global`.
-    let root_is_block = size > 1 && coarse_tree_bounds.first() == Some(&morton::root());
-    let owns_root_block = root_is_block && coarse_tree.first() == Some(&morton::root());
-    if owns_root_block {
-        all_keys
-            .entry(morton::root())
-            .or_insert(KeyType::LocalInterior);
-    } else if !root_is_block {
-        all_keys.entry(morton::root()).or_insert(KeyType::Global);
+    // On one rank S is the whole tree.
+    if size == 1 {
+        return all_keys;
     }
 
-    // We only need to deal with ghosts if the size is larger than 1.
+    // Membership of N(S): a key of S, or a same-level neighbour of one. The keys of S
+    // are exactly the non-ghost keys of the map, also once ghosts are added.
+    let in_s = |all_keys: &HashMap<MortonKey, KeyType>, key: MortonKey| {
+        all_keys.get(&key).is_some_and(|kind| !kind.is_ghost())
+    };
+    let in_n = |all_keys: &HashMap<MortonKey, KeyType>, key: MortonKey| {
+        in_s(all_keys, key) || any_neighbour(key, |neighbour| in_s(all_keys, neighbour))
+    };
 
-    if size > 1 {
-        // For each rank the set of keys that we want to send to it. Sets, because a
-        // key is a neighbour of the same rank through several directions but only
-        // needs to be sent once.
-
-        let mut rank_send_ghost = vec![HashSet::<KeyWithRank>::new(); size];
-
-        let mut send_to_all = HashSet::<KeyWithRank>::new();
-
-        // Advertise `key` to a receiver, together with its eight children when the
-        // ghost-children layer is requested and `key` is interior. An interior key
-        // holds all of its children on this rank, so every child's classification
-        // is available locally. The target is a set, so duplicates are free.
-        let advertise = |key: MortonKey, is_leaf: bool, target: &mut HashSet<KeyWithRank>| {
-            target.insert(KeyWithRank { key, rank, is_leaf });
-            if !options.ghost_children() || is_leaf {
-                return;
+    // 1. The top part of H, from the map: the top-tree keys among the same-level
+    // neighbours of S, and with the ghost-children layer the children of the ancestors
+    // among N(S), which are top-tree keys too. No key deeper than the deepest block is a
+    // top-tree key. The children of an interior block of another rank lie below it and
+    // come with the push.
+    let deepest_block = map
+        .blocks()
+        .iter()
+        .map(|&block| morton::level(block))
+        .max()
+        .unwrap();
+    let mut top = Vec::new();
+    for (&key, kind) in all_keys.iter() {
+        if morton::level(key) > deepest_block {
+            continue;
+        }
+        if *kind == KeyType::Global {
+            top.push(key);
+        }
+        for neighbour in valid_neighbours(key) {
+            if let Some(kind) = map.top_kind(neighbour) {
+                if !kind.is_ghost() {
+                    // An own block or a shared ancestor, already in S.
+                    debug_assert_eq!(all_keys.get(&neighbour), Some(&kind));
+                    continue;
+                }
+                top.push(neighbour);
             }
-            // An interior key is never at the deepest level, but the API is total.
-            let Some(children) = morton::children(key) else {
-                return;
-            };
-            for child in children {
-                let child_status = all_keys
+        }
+    }
+    top.sort_unstable();
+    top.dedup();
+    let mut top_children = Vec::new();
+    for &key in &top {
+        if let Some(kind @ (KeyType::GhostLeaf(_) | KeyType::GhostInterior(_))) = map.top_kind(key)
+        {
+            top_children.push((key, kind));
+        }
+        if options.ghost_children() && matches!(map.placement(key), Placement::Ancestor(_)) {
+            for child in morton::children(key).expect("an ancestor of a block has children") {
+                let kind = map
+                    .top_kind(child)
+                    .expect("a child of an ancestor of the blocks is a top-tree key");
+                top_children.push((child, kind));
+            }
+        }
+    }
+    for (key, kind) in top_children {
+        let existing = *all_keys.entry(key).or_insert(kind);
+        debug_assert_eq!(existing, kind, "the map classifies a top-tree key once");
+    }
+
+    // 2. The push: every own key to the ranks that hold a same-level neighbour cell of
+    // it in their S, with its children when it is interior and the layer is asked for.
+    // A cell deeper than every block whose first finest descendant lies in this rank's
+    // range is inside an own block: no target, and no search of the map.
+    let own_finest = own_blocks
+        .first()
+        .zip(own_blocks.last())
+        .map(|(&first, &last)| first_finest_descendant(first)..=last_finest_descendant(last));
+    let is_own_cell = |cell: MortonKey| {
+        morton::level(cell) > deepest_block
+            && own_finest
+                .as_ref()
+                .is_some_and(|range| range.contains(&first_finest_descendant(cell)))
+    };
+    let mut send = vec![Vec::<PushedKey>::new(); size];
+    let mut targets = Vec::new();
+    for (&key, &kind) in all_keys.iter() {
+        let is_leaf = match kind {
+            KeyType::LocalLeaf => true,
+            KeyType::LocalInterior => false,
+            _ => continue,
+        };
+        targets.clear();
+        for neighbour in valid_neighbours(key).filter(|&cell| !is_own_cell(cell)) {
+            match map.placement(neighbour) {
+                Placement::Block(b) | Placement::Below(b) => targets.push(map.block_owner(b)),
+                Placement::Ancestor(_) => targets.extend(
+                    map.sharers(neighbour)
+                        .filter(|&sharer| !map.rank_blocks(sharer).is_empty()),
+                ),
+            }
+        }
+        targets.sort_unstable();
+        targets.dedup();
+        for &target in targets.iter().filter(|&&target| target != rank) {
+            send[target].push(PushedKey { key, is_leaf });
+            if !options.ghost_children() || is_leaf {
+                continue;
+            }
+            for child in morton::children(key).expect("an interior key has children") {
+                let child_kind = all_keys
                     .get(&child)
                     .expect("a local interior key holds all of its children locally");
-                target.insert(KeyWithRank {
+                send[target].push(PushedKey {
                     key: child,
-                    rank,
-                    is_leaf: *child_status == KeyType::LocalLeaf,
+                    is_leaf: *child_kind == KeyType::LocalLeaf,
                 });
             }
-        };
+        }
+    }
+    let mut counts = Vec::with_capacity(size);
+    let mut flat = Vec::new();
+    for keys in &mut send {
+        keys.sort_unstable();
+        keys.dedup();
+        counts.push(keys.len());
+        flat.append(keys);
+    }
+    drop(send);
+    let (received_counts, received) = all_to_allv(comm, &counts, &flat);
+    drop(flat);
 
-        for (&key, &status) in all_keys.iter() {
-            // We need not send around global keys to neighbors.
-            if status == KeyType::Global {
-                continue;
-            }
-            let is_leaf = matches!(status, KeyType::LocalLeaf);
-            for &neighbor in morton::neighbours(key)
-                .iter()
-                .filter(|&&key| morton::is_valid(key))
-            {
-                // If the neighbour is a global key then continue.
-                if all_keys
-                    .get(&neighbor)
-                    .is_some_and(|&value| value == KeyType::Global)
-                {
-                    // Global keys exist on all nodes, so need to send their neighbors to all nodes.
-
-                    advertise(key, is_leaf, &mut send_to_all);
+    // Keep what lies in H: a key of N(S), or a child of an interior key of N(S) with the
+    // layer. A cell inside another rank's block that S names may lie below a leaf there,
+    // so a sender cannot tell whether the receiver holds it; the receiver can.
+    let mut start = 0;
+    let mut ghosts = Vec::new();
+    for (sender, &count) in received_counts.iter().enumerate() {
+        for pushed in &received[start..start + count] {
+            debug_assert_ne!(sender, rank, "no rank pushes to itself");
+            debug_assert_eq!(map.owner(pushed.key), sender, "the sender owns the key");
+            // Most pushed keys are children of a pushed key of N(S): the parent first.
+            let keep = (options.ghost_children()
+                && morton::parent(pushed.key).is_some_and(|parent| in_n(&all_keys, parent)))
+                || in_n(&all_keys, pushed.key);
+            if keep {
+                let kind = if pushed.is_leaf {
+                    KeyType::GhostLeaf(sender)
                 } else {
-                    // Get rank of the neighbour. Every non-global key is at or above
-                    // the first partition bound, so a predecessor must exist. Keys
-                    // whose neighbour is local need not be sent anywhere.
-                    let neighbor_rank = get_key_index(coarse_tree_bounds, neighbor)
-                        .expect("a neighbour key must lie within the global partition bounds");
-                    if neighbor_rank != rank {
-                        advertise(key, is_leaf, &mut rank_send_ghost[neighbor_rank]);
-                    }
-                }
+                    KeyType::GhostInterior(sender)
+                };
+                ghosts.push((pushed.key, kind));
             }
         }
-
-        // The children of a `Global` key are either `Global`, and hence already on
-        // every rank, or coarse blocks. Replicating the local blocks therefore
-        // closes the ghost-children guarantee at the `Global` keys. The blocks go
-        // without their children: a block is advertised here as a key of the tree,
-        // not as a neighbour of anything. A root that is the only block is
-        // advertised with or without the layer: it is a key of every rank.
-        let advertised_blocks = if options.ghost_children() {
-            coarse_tree
-        } else if owns_root_block {
-            &coarse_tree[..1]
-        } else {
-            &[]
-        };
-        for &block in advertised_blocks {
-            let status = *all_keys
-                .get(&block)
-                .expect("a coarse block is a key of its own rank");
-            let is_leaf = match status {
-                KeyType::LocalLeaf => true,
-                KeyType::LocalInterior => false,
-                // On several ranks a coarse block is never `Global`: the root,
-                // when it is the only block, is local to its owner (above). The
-                // branch is spelled out because advertising a `Global` key would
-                // be both pointless — it is already on every rank — and harmful,
-                // since the receive loop would overwrite the receivers' `Global`
-                // entry with a `GhostInterior`.
-                KeyType::Global => continue,
-                KeyType::GhostLeaf(_) | KeyType::GhostInterior(_) => {
-                    unreachable!("a coarse block of this rank is never a ghost")
-                }
-            };
-            send_to_all.insert(KeyWithRank {
-                key: block,
-                rank,
-                is_leaf,
-            });
-        }
-
-        let send_ghost_to_all = gather_to_all(&send_to_all.into_iter().collect_vec(), comm);
-        // We now know which key needs to be sent to which rank.
-        // Turn to array, get the counts and send around.
-
-        let (arr, counts) = {
-            let mut arr = Vec::<KeyWithRank>::new();
-            let mut counts = Vec::<usize>::new();
-            for keys in &rank_send_ghost {
-                arr.extend(keys.iter());
-                counts.push(keys.len());
-            }
-            (arr, counts)
-        };
-
-        // These are all the keys that are neighbors to our keys. We now go through
-        // and store those that do not live on our tree as into `all_keys` with a label
-        // of `Ghost`.
-        let (_in_counts, mut ghost_keys) = all_to_allv(comm, &counts, &arr);
-        // Add the neighbors of any global key.
-        ghost_keys.extend(send_ghost_to_all.iter());
-
-        for key in &ghost_keys {
-            if key.rank == rank {
-                // Keys adjacent to a global key were gathered to every rank,
-                // including their own.
-                continue;
-            }
-            let key_type = if key.is_leaf {
-                KeyType::GhostLeaf(key.rank)
-            } else {
-                KeyType::GhostInterior(key.rank)
-            };
-            // Every non-global key belongs to exactly one rank, so no two ranks
-            // advertise the same key and a received key never overwrites a local,
-            // global, or differently classified entry.
-            #[cfg(debug_assertions)]
-            if let Some(&existing) = all_keys.get(&key.key) {
-                debug_assert_eq!(
-                    existing, key_type,
-                    "a received ghost key must not reclassify an existing key"
-                );
-            }
-            all_keys.insert(key.key, key_type);
-        }
+        start += count;
+    }
+    for (key, kind) in ghosts {
+        // Every key below a block belongs to one rank, and a top-tree key is classified
+        // by the map as its owner classifies it, so a pushed key never reclassifies one.
+        let existing = *all_keys.entry(key).or_insert(kind);
+        debug_assert_eq!(
+            existing, kind,
+            "a received ghost key must not reclassify an existing key"
+        );
     }
 
     // The ghost-children guarantee, checked on the map that is returned.
@@ -1769,11 +1816,7 @@ pub fn generate_all_keys<C: CommunicatorCollectives>(
             if key_type.is_ghost() {
                 continue;
             }
-            for neighbour in morton::neighbours(key)
-                .iter()
-                .copied()
-                .filter(|&neighbour| morton::is_valid(neighbour))
-            {
+            for neighbour in valid_neighbours(key) {
                 let Some(&neighbour_type) = all_keys.get(&neighbour) else {
                     continue;
                 };
@@ -1793,6 +1836,28 @@ pub fn generate_all_keys<C: CommunicatorCollectives>(
     }
 
     all_keys
+}
+
+/// Whether `predicate` holds for a valid same-level neighbour cell of `key`, stopping at
+/// the first; the key is decoded once (`morton::neighbours` encodes all 26 cells).
+fn any_neighbour(key: MortonKey, mut predicate: impl FnMut(MortonKey) -> bool) -> bool {
+    let (level, index) = morton::decode(key);
+    let size = 1i64 << level;
+    DIRECTIONS.iter().any(|direction| {
+        let cell = [0, 1, 2].map(|d| index[d] as i64 + direction[d]);
+        cell.iter().all(|&i| (0..size).contains(&i))
+            && predicate(morton::from_index_and_level(
+                cell.map(|i| i as usize),
+                level,
+            ))
+    })
+}
+
+/// The valid same-level neighbour cells of a key.
+fn valid_neighbours(key: MortonKey) -> impl Iterator<Item = MortonKey> {
+    morton::neighbours(key)
+        .into_iter()
+        .filter(|&neighbour| morton::is_valid(neighbour))
 }
 
 /// Compute the neighbours of all non-ghost keys.
@@ -1872,9 +1937,9 @@ mod test {
         constants::{DEEPEST_LEVEL, NSIBLINGS},
         morton,
         octree::{
-            KeyCount, KeyType, LeafLocation, LookupError, OctreeOptions, balance_closure,
-            checked_predecessor, compute_neighbours, count_duplicates, counts_fit_mpi_i32,
-            create_local_tree, first_finest_descendant, generate_all_keys, get_key_index,
+            KeyCount, KeyType, LeafLocation, LookupError, OctreeOptions, PartitionMap,
+            balance_closure, checked_predecessor, compute_neighbours, count_duplicates,
+            counts_fit_mpi_i32, create_local_tree, first_finest_descendant, generate_all_keys,
             local_block_counts, local_coarse_tree_weights, local_leaf_for_key, merge_key_counts,
             owner_rank_for_key, partition_blocks, rank_counts, refine_heavy_blocks, tree_bins,
             validate_fine_keys, validate_lookup_key, weight_rounds,
@@ -1882,9 +1947,10 @@ mod test {
         tools::{generate_random_keys, seeded_rng},
     };
 
-    /// On one rank the ghost exchange is skipped entirely, so the ghost-children
-    /// option must not change the generated key map. The tree below is adaptive,
-    /// so it has interior keys at two levels and leaves at three.
+    /// On one rank there is no push, so the ghost-children option must not change the
+    /// generated key map, which is the whole tree with the Phase 5 kinds: the root
+    /// `Global`, every other interior key local. The tree below is adaptive, so it has
+    /// interior keys at two levels and leaves at three.
     #[test]
     fn test_ghost_children_option_is_a_noop_on_one_rank() {
         let _universe = mpi::initialize().expect("this test owns MPI initialization");
@@ -1896,27 +1962,25 @@ mod test {
         leaves.extend_from_slice(&grandchildren[1..]);
         leaves.extend_from_slice(&morton::children(grandchildren[0]).unwrap());
         leaves.sort_unstable();
-        let coarse_tree = octants.to_vec();
-        let bounds = vec![octants[0]];
+        let map = PartitionMap::new(vec![morton::root()], vec![0, 1], &[false], 0);
 
-        let baseline = generate_all_keys(
-            &leaves,
-            &coarse_tree,
-            &bounds,
-            OctreeOptions::default(),
-            &comm,
-        );
+        let baseline = generate_all_keys(&leaves, &map, OctreeOptions::default(), &comm);
         let with_children = generate_all_keys(
             &leaves,
-            &coarse_tree,
-            &bounds,
+            &map,
             OctreeOptions::new().with_ghost_children(true),
             &comm,
         );
         assert_eq!(baseline, with_children);
 
         // A single rank holds the whole tree, so the guarantee is met either way.
-        assert!(baseline.values().all(|key_type| !key_type.is_ghost()));
+        let mut expected: HashMap<_, _> = morton::get_interior_keys(&leaves)
+            .into_iter()
+            .map(|key| (key, KeyType::LocalInterior))
+            .collect();
+        expected.insert(morton::root(), KeyType::Global);
+        expected.extend(leaves.iter().map(|&leaf| (leaf, KeyType::LocalLeaf)));
+        assert_eq!(baseline, expected);
         for (&key, &key_type) in &baseline {
             if key_type == KeyType::LocalLeaf {
                 continue;
@@ -1925,6 +1989,14 @@ mod test {
                 assert!(baseline.contains_key(&child));
             }
         }
+
+        // A root that is the only leaf is the only key, a local leaf.
+        let map = PartitionMap::new(vec![morton::root()], vec![0, 1], &[true], 0);
+        let root_only = generate_all_keys(&[morton::root()], &map, OctreeOptions::default(), &comm);
+        assert_eq!(
+            root_only,
+            HashMap::from([(morton::root(), KeyType::LocalLeaf)])
+        );
     }
 
     #[test]
@@ -2074,7 +2146,7 @@ mod test {
 
         let mid = keys[25];
 
-        assert_eq!(Some(25), get_key_index(&keys, mid));
+        assert_eq!(Some(25), checked_predecessor(&keys, mid));
 
         // Now remove the mid index and do the same again.
 
@@ -2082,11 +2154,11 @@ mod test {
 
         // The result should be 24.
 
-        assert_eq!(Some(24), get_key_index(&keys, mid));
+        assert_eq!(Some(24), checked_predecessor(&keys, mid));
 
         // A key ordered below every element has no predecessor.
 
-        assert_eq!(None, get_key_index(&keys, morton::root()));
+        assert_eq!(None, checked_predecessor(&keys, morton::root()));
     }
 
     #[test]
