@@ -65,9 +65,9 @@ loading with a cache at scale, the ranks × threads guidance; design docs/design
     feature `cuda`; Phase 4S T4) initialise it at `Threading::Funneled`;
     `tests/device_fmm.rs` (the ignored C4.8 gate, feature `gpu`) and
     `tests/device_tune.rs` (the tuner, feature `cpu`) at the default level, and
-    `tests/multi_rank.rs` (the ignored C5.1 host gate, Phase 5 T6) and
-    `tests/device_ranks.rs` (the ignored C5.1 device gate, Phase 5 T8, feature `gpu`) at
-    `Funneled`.
+    `tests/multi_rank.rs` (the ignored C5.1 host gate, Phase 5 T6),
+    `tests/device_ranks.rs` (the ignored C5.1 device gate, Phase 5 T8, feature `gpu`) and
+    `tests/invariance.rs` (rank-count invariance, Phase 5S T2, below) at `Funneled`.
     The device checks shared by `tests/mpi_exec.rs`, `tests/device_metal.rs` and
     `tests/device_cuda.rs` live in `tests/device_common/`, the tuner's in
     `tests/tune_common/`, the shadow operator of the host-data hook (Phase 5 T7) in
@@ -94,8 +94,23 @@ loading with a cache at scale, the ranks × threads guidance; design docs/design
     within 100 u_T relative L2 (1.1e-14 f64, 6.0e-6 f32), not bit for bit: the order
     within a leaf is (origin rank, origin position). Not run on one rank, where a run is
     its own reference, so the one-rank debug run costs nothing more.
-  - CI runs `tests/mpi_exec.rs` and `tests/mpi_threading.rs` in debug at 2 and 4 ranks
-    on every pull request (the `run-tests-mpi` job, root `CLAUDE.md`, "Checks";
+  - Rank-count invariance (Phase 5S T2, C5S.1; requirement 3 of docs/phase5s/README.md;
+    docs/design/scale-out.md §5.1): `tests/invariance.rs`, its own executable (so that
+    `mpi_exec` keeps its minute), checks that the `Fmm` on P ranks equals the `Fmm` on P/k
+    ranks bit for bit for every divisor k > 1 of P (k = 1 on one rank), when small rank r
+    holds the inputs of world ranks k r … k r + k − 1 concatenated: every input generated
+    by index (a seeded random share), the small runs on a `split` of the world (the other
+    ranks enter nothing of it), the outputs moved back point to point by index, one
+    all-reduce of the count. The cube, the Plummer sphere and a graded tree with one empty
+    rank, N = 10⁴, f64 p = 8 `Rotation` and f32 p = 3 `Dense` (the strategy named: `Auto`
+    resolves by the ranks per node), each comparison blocking against overlapped. 39 s at
+    one rank in debug on the M3 Max; 31, 38 and 43 s at 2, 4 and 8; in CI (PR #101) 64 s at
+    one rank (`run-tests`), 56 and 110 s at 2 and 4 (`run-tests-mpi`). Keep it passing in
+    every structural task (T3–T8): it is the oracle where no one-rank run fits, and its
+    at-scale form is `nd_fmm_validate::scaling::invariance`.
+  - CI runs `tests/mpi_exec.rs`, `tests/mpi_threading.rs` and `tests/invariance.rs` in
+    debug at 2 and 4 ranks on every pull request (the `run-tests-mpi` job, root
+    `CLAUDE.md`, "Checks";
     `mpi_threading` checks there that its `MpiThreading` error, carried by step 1's
     agreement all-reduce, reaches every rank). 8 ranks and the ignored tests
     (`accuracy`, `adaptive`, `multi_rank`, the device executables) stay by hand, on the

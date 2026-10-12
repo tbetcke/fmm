@@ -36,10 +36,13 @@ set -euo pipefail
 # each; fmm-plan/CLAUDE.md, fmm-exec/CLAUDE.md) and the nd-octree MPI examples
 # (octree/CLAUDE.md, "MPI examples"). mpi_threading runs on several ranks too: its
 # MpiThreading error rides on the agreement all-reduce of `build`'s step 1, which the
-# several-rank run exercises.
+# several-rank run exercises. invariance is the rank-count-invariance check of Phase 5S
+# T2 (P ranks against P/k for every divisor k, bit for bit; docs/design/scale-out.md
+# §5.1, §9.2).
 TARGETS="test nd-fmm-plan mpi_regressions
 test nd-fmm-exec mpi_exec
 test nd-fmm-exec mpi_threading
+test nd-fmm-exec invariance
 example nd-octree test_mpi_complete_tree
 example nd-octree test_mpi_global_bounding_box
 example nd-octree test_mpi_leaf_lookup

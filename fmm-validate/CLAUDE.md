@@ -109,6 +109,22 @@ per run at 4 nodes, the replicated part against P to 160 ranks, the errors at 4 
 repeats, the 4-node queue, and the PSM2 defect (wrong data between nodes through PSM2's
 TID path; every Kathleen job runs with `PSM2_TID=0`, `tools/kathleen/env.sh`).
 
+Phase 5S T2 (validation at scale, C5S.1; docs/design/scale-out.md §5) added to `scaling`:
+`invariance` and the example's `--invariance k[,k…]` (rank-count invariance: the run on P
+ranks against P/k ranks for each k in one launch, the small runs on a split of the world
+with the large run's strategy named, the outputs moved back by index point to point and
+never gathered, the values that differ per check reduced; the example exits 1 on every
+rank if any differs; not registered, it times); `Input::Ranges` (`--input ranges`,
+contiguous index ranges in O(N/P) time) and `input_by_index`; `HarnessError` (`run` and
+`invariance` return a `Result`): `--reference` refused above `REFERENCE_MAX_POINTS` =
+2 × 10⁷ points, a factor that does not divide the ranks, the owners' input for invariance,
+each on every rank before any collective; `Errors::{direct_pairs, direct_seconds}` (the
+direct sum's O(N/P) part per rank) and `RankRow::resident_input` (the harness's own
+memory after the input). `tests/scaling.rs` covers them at 1 and 2 ranks.
+`tools/kathleen/jobs/correctness.sbatch` runs the invariance at scale and the harness at
+N = 10⁸. Its report is `results/phase5s-t2.md`. The test of the same check at N = 10⁴,
+in CI at 1, 2 and 4 ranks, is `nd-fmm-exec`'s `tests/invariance.rs`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`
@@ -117,7 +133,8 @@ CPU runtime). Tests that run P2P kernels only
 (`tests/p2p_kernels.rs`) need no MPI initialisation. Device results of a phase are kept
 as one Markdown report under `results/` (Phase 4: `results/phase4-m3max.md`; Phase 5:
 `results/phase5-m3max.md` and `results/phase5-gh200.md`; Phase 5N:
-`results/phase5n-kathleen.md`), never as CSV or raw output
+`results/phase5n-kathleen.md`; Phase 5S: one per task, `results/phase5s-<task>.md`), never
+as CSV or raw output
 beside it.
 
 Anything else (criterion, rand, plotting) needs a note in the PR.

@@ -30,6 +30,7 @@ lifted from Phase 5N's 2 nodes. 4-node jobs run in `small` ("Jobs and QoS").
 | `jobs/launcher.sbatch` | 2 nodes, `test` (2 × 40 ranks fixed: a record of decision 4, not run at 4 nodes) | decision 4: `mpirun` against `srun --mpi=pmix` at 2 × 40 ranks, the bindings, the transport between and within nodes |
 | `jobs/scaling.sbatch` | 2 nodes `test`, or 4 nodes `small` | one `scaling` launch, 2 ranks × 20 threads on each node of the job, the N = 10⁶ cube, f64, p = 3, `--reference --errors 8` |
 | `jobs/run.sbatch` | 1 node, `singlenode` (40 tasks per node, so `mpirun` has slots); any node count the submission names | each argument as one step, for anything else |
+| `jobs/correctness.sbatch` | 2 nodes `test` (default), or 4 nodes `small` | Phase 5S T2's correctness job, by parts: the MPI test list at 2, 4, 8 and one rank per core, rank-count invariance at one rank per core against P/2, P/4 and P/8, the `scaling` smoke run; at 4 nodes also the harness at N = 10⁸ against a quarter of the ranks and invariance at 640 against 80 oversubscribed ("The correctness job") |
 | `jobs/sweep.sbatch` | 1 node `singlenode` 6 h, 2 nodes `test`/`small`, or 4 nodes `small` | sweeps of `tools/scaling/run.sh` in one allocation, and `p2p` (the x86 P2P examples); one file per launch in `logs/scaling-<job id>/` (Phase 5N T2; "Scaling sweeps") |
 | `check-root.sh` | login node | lists what was written outside the root since the setup |
 | `machine.md` | | the machine's facts, measured, and what the environment resolved to |
@@ -264,6 +265,37 @@ a job (job 238833). `mpirun` and `srun` launches work either way.
 **Timeouts.** `jobs/mpi.sbatch` runs every launch under `timeout`, 900 s by default:
 `mpi_exec` at 80 ranks in debug took 242 s in one job and more than CI's 300 s in
 another.
+
+## The correctness job
+
+Phase 5S T2 (docs/phase5s/T2-validation-at-scale.md, docs/design/scale-out.md §5, §9.2):
+`jobs/correctness.sbatch` checks correctness across nodes, for T2 and for every structural
+task after it (T3–T8). Every launch runs under `timeout` and is one step of the job, so
+the job's output ends with a table of the launches, each with its result and wall time;
+a step fails if its launch fails or, for an invariance launch, if any value differs (the
+`scaling` example then exits with status 1 on every rank). The parts, in the order they
+run (default `mpi invariance smoke`):
+
+| Part | Launches |
+| --- | --- |
+| `mpi` | `.github/scripts/run-mpi-tests.sh` built in debug as in CI, run at 2, 4, 8 and 40 × nodes ranks, `--bind-to core`, 900 s per launch (`RUN_TIMEOUT`) |
+| `invariance` | `scaling --invariance 2,4,8` at 40 × nodes ranks, 20 per socket: the cube and the Plummer sphere (f64, p = 8, Rotation) and the cube (f32, p = 3, Dense), N = `INV_N` (10⁶), the random share, overlap both |
+| `smoke` | the launch of `jobs/scaling.sbatch`: 2 ranks × 20 threads per node, the N = 10⁶ cube, f64 p = 3, the one-rank reference and 8 error vectors |
+| `large` | the harness at N = `LARGE_N` (10⁸), no one-rank reference, the errors of one charge vector at 1,000 targets: the cube at f64 p = 8 and f32 p = 3, Rotation, at 40 × nodes ranks and at a quarter of them (spread over every node) |
+| `oversubscribed` | `scaling --invariance 8` at 160 ranks per node (`--oversubscribe --map-by ppr:160:node --bind-to none -x PSM2_SHAREDCONTEXTS=1`), the N = `INV_N` cube, f64 p = 8; correctness only. Last: a failed oversubscribed launch can leave the HFI contexts busy |
+
+```sh
+tools/kathleen/submit.sh correctness.sbatch          # 2 nodes, test: mpi invariance smoke
+tools/kathleen/submit.sh --qos=small --nodes=4 --time=03:00:00 \
+    '--export=ALL,INV_N=10000000,LAUNCH_TIMEOUT=3600' -- correctness.sbatch invariance large oversubscribed
+```
+
+`LAUNCH_TIMEOUT` (1,800 s) bounds each `scaling` launch. T2's runs (jobs 447987 at 2
+nodes, 19 min 38 s; 447366 at 4 nodes, 10 min 39 s) and their times are in
+`fmm-validate/results/phase5s-t2.md`. If every launch across the nodes fails in
+`MPI_Init` with "assign_context command failed: Device or resource busy" on one node
+(T2's first attempt, job 447359, node-c11a-011), that node's HFI contexts are taken:
+resubmit with `--exclude=<node>`.
 
 ## Scaling sweeps
 
