@@ -29,7 +29,12 @@
 //!   and downward time per V pair of the slowest rank;
 //! - where the ranks ran ([`Placement`], Phase 5N T2): the nodes and the ranks per node
 //!   (from `split_shared`), each rank's host and CPUs, the MPI library, and on a cluster
-//!   the Slurm job with its QoS, node list and binding ([`SlurmJob`]).
+//!   the Slurm job with its QoS, node list and binding ([`SlurmJob`]);
+//! - the harness's own memory per rank (Phase 5S T2): the resident size after the input is
+//!   generated, before the builds ([`RankRow::resident_input`]).
+//!
+//! [`invariance`] (Phase 5S T2, C5S.1) is the other oracle at scale: the run on P ranks
+//! against the run on P/k ranks, bit for bit ("Rank-count invariance" below).
 //!
 //! Nothing here asserts a timing; the smoke test checks the fields and the errors.
 //!
@@ -47,8 +52,12 @@
 //! # Input distributions
 //!
 //! [`Input`]: every point on rank 0; a seeded random share (point i on rank
-//! `hash(i) mod P`); or every point already on the rank that owns its leaf, found by a
+//! `hash(i) mod P`); contiguous index ranges (Phase 5S T2: found in O(N/P) time, where the
+//! share hashes every index on every rank, O(N); docs/design/scale-out.md §5.2 keeps the
+//! share up to N = 10⁹); or every point already on the rank that owns its leaf, found by a
 //! first build from the share (the partition does not depend on the input, Phase 5 T4).
+//! Every input but the owners' is found from the indices alone ([`input_by_index`]), so any
+//! rank can produce any rank's input, and no rank holds O(N) (but rank 0 with every point).
 //! In every case the output is that of the one-rank `Fmm` over the union of the inputs in
 //! rank order, bit for bit, and within 100 u_T of the one-rank `Fmm` over the points in
 //! index order (docs/design/distributed-fmm.md §5), which [`Reference`] measures.
@@ -59,8 +68,32 @@
 //! vectors of the relative L2 and max errors of φ and ∇φ at the sampled targets, against
 //! `direct_sum` in f64 over every source with the charges rounded to the FMM's precision,
 //! divided by 4π. The direct sum is computed once over the ranks, each rank over the
-//! sources it passed, and summed (an all-reduce), so it changes with the rank count only
-//! in the last bits.
+//! sources it passed (`direct_sum`: in f64, Neumaier-compensated over the rank's sources),
+//! and the ranks' parts added by one all-reduce, so it changes with the rank count only
+//! in the last bits. Its cost is O(N/P) per rank, the rank's sources times the sampled
+//! targets ([`Errors::direct_pairs`], timed in [`Errors::direct_seconds`]), and nothing in
+//! it holds O(N): it is the oracle at N ≥ 10⁸ (Phase 5S T2), where no one-rank reference
+//! fits ([`REFERENCE_MAX_POINTS`]).
+//!
+//! # The one-rank reference
+//!
+//! [`Settings::reference`] gathers every rank's output and indices to rank 0, which builds
+//! the one-rank `Fmm` over every point in index order. Above [`REFERENCE_MAX_POINTS`]
+//! (2 × 10⁷) [`run`] refuses it with [`HarnessError::ReferenceTooLarge`], on every rank
+//! before any collective.
+//!
+//! # Rank-count invariance
+//!
+//! [`invariance`] (requirement 3 of docs/phase5s/README.md; docs/design/scale-out.md §5.1;
+//! S7 of docs/design/distributed-fmm.md §14.4): a run on P ranks equals a run on P/k ranks
+//! bit for bit when rank r of the small run holds the concatenation of the inputs of ranks
+//! k r, …, k r + k − 1 of the large one, in that order. Both runs are in one launch: the
+//! small one on a split of the communicator, with the strategy of the large one named
+//! (`Auto` resolves by the ranks per node, which differ); the outputs move back by index,
+//! point to point, and are never gathered. The test of `nd-fmm-exec`
+//! (`tests/invariance.rs`) checks the same at N = 10⁴ on 1, 2 and 4 ranks in CI; this is
+//! the check at scale (P against P/8: 512 against 64 on locust, 160 against 20 and 640
+//! against 80 on Kathleen).
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
@@ -68,8 +101,8 @@ use std::time::{Duration, Instant};
 
 use mpi::collective::SystemOperation;
 use mpi::datatype::PartitionMut;
-use mpi::topology::SimpleCommunicator;
-use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence, Root};
+use mpi::topology::{Color, SimpleCommunicator};
+use mpi::traits::{Communicator, CommunicatorCollectives, Destination, Equivalence, Root, Source};
 use nd_fmm_exec::fmm::{
     BuildTimings, Fmm, FmmBuilder, KindTiming, ListSizes, OperatorKind, Output, StageTimings,
     Traffic,
@@ -95,6 +128,64 @@ pub const MAX_POINTS_PER_LEAF: usize = 64;
 
 /// Values per target in the output: φ and ∇φ.
 const OUTPUT_VALUES: usize = 4;
+
+/// The largest N of [`Settings::reference`], 2 × 10⁷: the one-rank reference gathers every
+/// point and output to rank 0 and builds the one-rank `Fmm` there, and this is the largest
+/// N that ran on one rank in Phase 5N (docs/design/scale-out.md §5.2). Above it the
+/// oracles are the errors against the direct sum and rank-count invariance ([`invariance`]).
+pub const REFERENCE_MAX_POINTS: usize = 20_000_000;
+
+/// Why [`run`] or [`invariance`] refuses its arguments (Phase 5S T2). Each is decided from
+/// the arguments alone, which every rank passes the same (the functions are collective), so
+/// every rank returns the same error before any collective: an agreed error without a
+/// collective of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HarnessError {
+    /// [`Settings::reference`] with more than [`REFERENCE_MAX_POINTS`] points.
+    ReferenceTooLarge {
+        /// The number of points.
+        n: usize,
+        /// [`REFERENCE_MAX_POINTS`].
+        max: usize,
+    },
+    /// A factor k of [`invariance`] that is 0 or does not divide the ranks.
+    Factor {
+        /// The factor.
+        k: usize,
+        /// The ranks of the communicator.
+        ranks: usize,
+    },
+    /// [`invariance`] with an input that is not found from the indices alone
+    /// ([`Input::Owners`]).
+    InputNotByIndex(Input),
+}
+
+impl fmt::Display for HarnessError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ReferenceTooLarge { n, max } => write!(
+                f,
+                "the one-rank reference gathers every point to rank 0 and builds the FMM \
+                 there; N = {n} is above {max}, the largest it runs at (docs/design/\
+                 scale-out.md §5.2): check the errors against the direct sum (--errors) and \
+                 rank-count invariance (--invariance) instead"
+            ),
+            Self::Factor { k, ranks } => write!(
+                f,
+                "rank-count invariance at k = {k}: k must divide the {ranks} ranks (the small \
+                 run has P / k ranks)"
+            ),
+            Self::InputNotByIndex(input) => write!(
+                f,
+                "rank-count invariance needs an input found from the indices alone (share, \
+                 ranges or rank0), not {}",
+                input.name()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for HarnessError {}
 
 /// A problem whose points and charges are generated by index (module documentation).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,6 +253,13 @@ impl Workload {
         (hash(self.seed ^ SHARE_SALT, i as u64) % size.max(1) as u64) as usize
     }
 
+    /// The indices of rank `rank` of `size` in [`Input::Ranges`]: from ⌊rank N / size⌋ to
+    /// ⌊(rank + 1) N / size⌋.
+    pub fn range(&self, rank: usize, size: usize) -> std::ops::Range<usize> {
+        let bound = |r: usize| (r as u128 * self.n as u128 / size.max(1) as u128) as usize;
+        bound(rank)..bound(rank + 1)
+    }
+
     /// `count` distinct indices of targets, seeded, in the order drawn.
     ///
     /// # Panics
@@ -191,18 +289,24 @@ pub enum Input {
     Share,
     /// Every point on the rank that owns its leaf.
     Owners,
+    /// Contiguous index ranges, rank r the indices from ⌊r N / P⌋ to ⌊(r + 1) N / P⌋
+    /// ([`Workload::range`]; Phase 5S T2): found in O(N/P) time, where the share filters
+    /// every index on every rank (O(N); docs/design/scale-out.md §5.2: the share up to
+    /// N = 10⁹, ranges beyond).
+    Ranges,
 }
 
 impl Input {
     /// Every input distribution.
-    pub const ALL: [Self; 3] = [Self::Rank0, Self::Share, Self::Owners];
+    pub const ALL: [Self; 4] = [Self::Rank0, Self::Share, Self::Owners, Self::Ranges];
 
-    /// The name: "rank0", "share" or "owners".
+    /// The name: "rank0", "share", "owners" or "ranges".
     pub fn name(self) -> &'static str {
         match self {
             Self::Rank0 => "rank0",
             Self::Share => "share",
             Self::Owners => "owners",
+            Self::Ranges => "ranges",
         }
     }
 
@@ -217,6 +321,9 @@ impl Input {
             Self::Rank0 => "every point on rank 0",
             Self::Share => "a seeded random share (point i on rank hash(i) mod P)",
             Self::Owners => "every point on the rank that owns its leaf",
+            Self::Ranges => {
+                "contiguous index ranges (rank r the indices from r N / P to (r + 1) N / P)"
+            }
         }
     }
 }
@@ -284,7 +391,7 @@ pub struct Settings {
     /// Sampled targets of the errors.
     pub sampled: usize,
     /// Whether to compare with the one-rank `Fmm` over every point in index order, built
-    /// on rank 0 alone ([`Reference`]).
+    /// on rank 0 alone ([`Reference`]); refused above [`REFERENCE_MAX_POINTS`].
     pub reference: bool,
     /// The strategy of that one-rank `Fmm` (Phase 5N T3): the difference between two
     /// strategies at otherwise fixed settings. Without it, the strategy the run resolved
@@ -562,10 +669,16 @@ pub struct RankRow {
     /// The resident size at the end of the run, in bytes, where it can be read
     /// ([`resident_memory`]).
     pub resident: Option<f64>,
+    /// The resident size after the input was generated, before the timed builds (Phase 5S
+    /// T2): the harness's own memory, which must not be O(N) on any rank (but rank 0
+    /// with [`Input::Rank0`]); with [`Input::Owners`] it includes the build that finds the
+    /// owners.
+    pub resident_input: Option<f64>,
 }
 
 /// The position in [`RankRow::encode`] of the ghost held boxes, after the counts, the
-/// build, the traffic, the memory and the resident size; the `Global` ones follow.
+/// build, the traffic, the memory and the resident size; the `Global` ones and the resident
+/// size after the input follow.
 const ROW_VALUES: usize = 11 + 9 + 16 + 8 + 1;
 
 impl RankRow {
@@ -610,6 +723,7 @@ impl RankRow {
         values.push(self.resident.unwrap_or(-1.0));
         values.push(self.held[1] as f64);
         values.push(self.held[2] as f64);
+        values.push(self.resident_input.unwrap_or(-1.0));
         values
     }
 
@@ -653,6 +767,7 @@ impl RankRow {
             },
             memory: MemoryModel::from_array(&v[36..44]),
             resident: (v[44] >= 0.0).then_some(v[44]),
+            resident_input: (v[ROW_VALUES + 2] >= 0.0).then_some(v[ROW_VALUES + 2]),
         }
     }
 }
@@ -740,6 +855,12 @@ pub struct Errors {
     pub potential: ErrorNorms,
     /// The same of ∇φ.
     pub gradient: ErrorNorms,
+    /// The most pairs a rank's part of the direct sum evaluates per vector: its sources
+    /// times the sampled targets, O(N/P) (Phase 5S T2).
+    pub direct_pairs: usize,
+    /// The time of a rank's part of the direct sum, summed over the vectors, on the
+    /// slowest rank, in seconds; not part of the evaluation times.
+    pub direct_seconds: f64,
 }
 
 /// The output of charge vector 0 against the one-rank `Fmm` of the same settings over
@@ -1027,6 +1148,52 @@ fn gather_strings(bytes: &[u8], comm: &SimpleCommunicator) -> Vec<String> {
         .collect()
 }
 
+/// The positions of the points that rank `rank` of `size` passes under `input`, ascending,
+/// found from the indices alone, so that any rank can produce any rank's input (Phase 5S
+/// T2): every input but [`Input::Owners`], which needs a build. O(N) time for the share
+/// (every index hashed), O(N/P) for the ranges; O(N/P) memory but on rank 0 with
+/// [`Input::Rank0`].
+///
+/// # Panics
+///
+/// With [`Input::Owners`].
+pub fn input_by_index(workload: &Workload, input: Input, rank: usize, size: usize) -> Vec<usize> {
+    let n = workload.n;
+    match input {
+        Input::Rank0 => (0..n).filter(|_| rank == 0).collect(),
+        Input::Share => (0..n)
+            .filter(|&i| workload.share(i, size) == rank)
+            .collect(),
+        Input::Ranges => workload.range(rank, size).collect(),
+        Input::Owners => panic!("the owners' input needs a build, not only the indices"),
+    }
+}
+
+/// [`input_by_index`] of ranks `first` … `first + count − 1` of `size`, in rank order; the
+/// share in one pass over the indices.
+fn inputs_by_index(
+    workload: &Workload,
+    input: Input,
+    (first, count): (usize, usize),
+    size: usize,
+) -> Vec<Vec<usize>> {
+    match input {
+        Input::Share => {
+            let mut inputs = vec![Vec::new(); count];
+            for i in 0..workload.n {
+                let r = workload.share(i, size);
+                if (first..first + count).contains(&r) {
+                    inputs[r - first].push(i);
+                }
+            }
+            inputs
+        }
+        _ => (first..first + count)
+            .map(|r| input_by_index(workload, input, r, size))
+            .collect(),
+    }
+}
+
 /// The positions of the points this rank passes under `input`, ascending.
 ///
 /// # Collective operation
@@ -1040,13 +1207,9 @@ fn input_points<T: Stored + SimdScalar + Equivalence + Default>(
 ) -> Vec<usize> {
     let (rank, size) = (comm.rank() as usize, comm.size() as usize);
     let n = workload.n;
-    let share: Vec<usize> = (0..n)
-        .filter(|&i| workload.share(i, size) == rank)
-        .collect();
     match input {
-        Input::Rank0 => (0..n).filter(|_| rank == 0).collect(),
-        Input::Share => share,
         Input::Owners => {
+            let share = input_by_index(workload, Input::Share, rank, size);
             let points: Vec<[f64; 3]> = share.iter().map(|&i| workload.point(i)).collect();
             let fmm: Fmm<'_, T> = builder
                 .clone()
@@ -1061,6 +1224,7 @@ fn input_points<T: Stored + SimdScalar + Equivalence + Default>(
             );
             owned
         }
+        other => input_by_index(workload, other, rank, size),
     }
 }
 
@@ -1188,6 +1352,7 @@ fn rank_row<T: Stored + SimdScalar + Equivalence + Default>(
         traffic: rank_traffic,
         memory,
         resident: None,
+        resident_input: None,
     }
 }
 
@@ -1209,25 +1374,9 @@ fn bits<T: RealScalar>(output: &Output<T>) -> Vec<u64> {
     bits
 }
 
-/// Builds the FMM of `workload` in precision `T` with `settings` on every rank of
-/// `comm`, evaluates it and measures it (module documentation).
-///
-/// # Collective operation
-///
-/// On every rank of `comm`, with the same arguments; every rank returns the same
-/// [`Report`] apart from [`Report::machine`].
-///
-/// # Panics
-///
-/// If the FMM does not build or evaluate (for example with `threads` > 1 when MPI
-/// provides less than `Threading::Funneled`), or with [`Input::Owners`] if the points
-/// found on their owners are not every point once.
-pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
-    workload: &Workload,
-    settings: &Settings,
-    comm: &SimpleCommunicator,
-) -> Report {
-    let (rank, size) = (comm.rank() as usize, comm.size() as usize);
+/// The builder of `settings`: the harness's tree, gradients, the threads, the strategy and
+/// its node budget, overlap and the kind timings.
+fn builder<T: Stored + SimdScalar + Equivalence + Default>(settings: &Settings) -> FmmBuilder<T> {
     let mut builder = FmmBuilder::<T>::new(settings.p)
         .max_level(MAX_LEVEL)
         .max_points_per_leaf(MAX_POINTS_PER_LEAF)
@@ -1243,8 +1392,44 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
     if let Some(bytes) = settings.dense_node_budget {
         builder = builder.dense_node_budget(bytes);
     }
+    builder
+}
+
+/// Builds the FMM of `workload` in precision `T` with `settings` on every rank of
+/// `comm`, evaluates it and measures it (module documentation).
+///
+/// # Collective operation
+///
+/// On every rank of `comm`, with the same arguments; every rank returns the same
+/// [`Report`] apart from [`Report::machine`].
+///
+/// # Errors
+///
+/// [`HarnessError::ReferenceTooLarge`] with [`Settings::reference`] above
+/// [`REFERENCE_MAX_POINTS`] points, on every rank before any collective.
+///
+/// # Panics
+///
+/// If the FMM does not build or evaluate (for example with `threads` > 1 when MPI
+/// provides less than `Threading::Funneled`), or with [`Input::Owners`] if the points
+/// found on their owners are not every point once.
+pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
+    workload: &Workload,
+    settings: &Settings,
+    comm: &SimpleCommunicator,
+) -> Result<Report, HarnessError> {
+    if settings.reference && workload.n > REFERENCE_MAX_POINTS {
+        return Err(HarnessError::ReferenceTooLarge {
+            n: workload.n,
+            max: REFERENCE_MAX_POINTS,
+        });
+    }
+    let (rank, size) = (comm.rank() as usize, comm.size() as usize);
+    let builder = builder::<T>(settings);
     let mine = input_points(workload, settings.input, &builder, comm);
     let points: Vec<[f64; 3]> = mine.iter().map(|&i| workload.point(i)).collect();
+    // The harness's own memory: the input, before any build that is timed.
+    let resident_input = resident_memory().map(|(bytes, _)| bytes);
 
     // The builds: the times of each, the last kept.
     let mut fmm: Option<Fmm<'_, T>> = None;
@@ -1263,6 +1448,7 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
     let mut fmm = fmm.expect("at least one build");
     let mut row = rank_row(&fmm, mine.len(), settings.p, size);
     row.build = core::array::from_fn(|k| median(builds.iter().map(|b| b[k]).collect()));
+    row.resident_input = resident_input;
 
     // The timed evaluations of charge vector 0, the paths alternating.
     let charges: Vec<T> = mine
@@ -1361,7 +1547,7 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         .collect();
     let placement = placement(comm);
 
-    Report {
+    Ok(Report {
         machine: if rank == 0 { machine() } else { String::new() },
         workload: *workload,
         settings: *settings,
@@ -1377,7 +1563,7 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         reference,
         resident_kind: resident.map_or("not available", |(_, kind)| kind),
         placement,
-    }
+    })
 }
 
 /// The errors of `fmm` against the direct sum (module documentation): `settings.vectors`
@@ -1399,6 +1585,7 @@ fn errors<T: Stored + SimdScalar + Equivalence + Default>(
         .collect();
     let scale = 4.0 * std::f64::consts::PI;
     let (mut phi_l2, mut phi_max, mut grad_l2, mut grad_max) = (0.0, 0.0, 0.0, 0.0);
+    let mut direct_seconds = 0.0;
     for vector in 0..settings.vectors {
         let charges: Vec<T> = mine
             .iter()
@@ -1408,7 +1595,9 @@ fn errors<T: Stored + SimdScalar + Equivalence + Default>(
         // The direct sum over this rank's sources, then over every rank.
         let mut phi = vec![0.0; targets.len()];
         let mut grad = vec![[0.0; 3]; targets.len()];
+        let start = Instant::now();
         direct_sum(points, &rounded, &targets, &mut phi, Some(&mut grad));
+        direct_seconds += start.elapsed().as_secs_f64();
         let (mut exact_phi, mut exact_grad) = (vec![0.0; phi.len()], vec![0.0; 3 * phi.len()]);
         comm.all_reduce_into(&phi[..], &mut exact_phi[..], SystemOperation::sum());
         comm.all_reduce_into(
@@ -1435,9 +1624,14 @@ fn errors<T: Stored + SimdScalar + Equivalence + Default>(
         grad_max += g.max * g.max;
     }
     let rms = |sum: f64| (sum / settings.vectors as f64).sqrt();
+    let local = [(points.len() * targets.len()) as f64, direct_seconds];
+    let mut most = [0.0f64; 2];
+    comm.all_reduce_into(&local[..], &mut most[..], SystemOperation::max());
     Errors {
         vectors: settings.vectors,
         sampled: sample.len(),
+        direct_pairs: most[0] as usize,
+        direct_seconds: most[1],
         potential: ErrorNorms {
             l2: rms(phi_l2),
             max: rms(phi_max),
@@ -1563,6 +1757,508 @@ fn reference<T: Stored + SimdScalar + Equivalence + Default>(
     }
 }
 
+/// One output's values at a rank's targets, φ and ∇φ flattened, for [`invariance`].
+struct Values<T> {
+    potential: Vec<T>,
+    gradient: Vec<T>,
+}
+
+impl<T: Copy> Values<T> {
+    fn new(output: Output<T>) -> Self {
+        let gradient = output.gradient.expect("built with gradients");
+        Self {
+            potential: output.potential,
+            gradient: gradient.as_flattened().to_vec(),
+        }
+    }
+
+    /// The values of `count` targets from `first`, φ then ∇φ: one message.
+    fn slice(&self, first: usize, count: usize) -> Vec<T> {
+        let mut values = self.potential[first..first + count].to_vec();
+        values.extend_from_slice(&self.gradient[3 * first..3 * (first + count)]);
+        values
+    }
+
+    /// Every value, φ then ∇φ.
+    fn all(&self) -> Vec<T> {
+        self.slice(0, self.potential.len())
+    }
+}
+
+/// Builds the FMM of `builder` on `comm` over the points `indices` of `workload` and
+/// evaluates charge vector 0 once per path of `overlapped`. Returns the outputs in that
+/// order and the resolved strategy; the FMM is dropped before it returns.
+///
+/// # Collective operation
+///
+/// On every rank of `comm`.
+fn evaluate_paths<T: Stored + SimdScalar + Equivalence + Default>(
+    builder: &FmmBuilder<T>,
+    workload: &Workload,
+    indices: &[usize],
+    overlapped: &[bool],
+    comm: &SimpleCommunicator,
+) -> (Vec<Values<T>>, M2lStrategy) {
+    let rank = comm.rank();
+    let points: Vec<[f64; 3]> = indices.iter().map(|&i| workload.point(i)).collect();
+    let charges: Vec<T> = indices
+        .iter()
+        .map(|&i| T::from_f64(workload.charge(0, i)))
+        .collect();
+    let mut fmm: Fmm<'_, T> = builder
+        .build(&points, &points, comm)
+        .unwrap_or_else(|error| panic!("rank {rank}: the FMM does not build: {error}"));
+    let outputs =
+        overlapped
+            .iter()
+            .map(|&overlap| {
+                fmm.set_overlap(overlap);
+                Values::new(fmm.evaluate(&charges).unwrap_or_else(|error| {
+                    panic!("rank {rank}: the FMM does not evaluate: {error}")
+                }))
+            })
+            .collect();
+    (outputs, fmm.strategy())
+}
+
+/// The values of `a` and `b` that differ in any bit (compared in f64, which holds an f32
+/// exactly).
+fn differing_values<T: RealScalar>(a: &[T], b: &[T]) -> usize {
+    assert_eq!(a.len(), b.len(), "the same targets");
+    a.iter()
+        .zip(b)
+        .filter(|&(&x, &y)| RealScalar::to_f64(x).to_bits() != RealScalar::to_f64(y).to_bits())
+        .count()
+}
+
+/// Receives `values` from rank `from` of `comm`, testing the request every millisecond and
+/// sleeping in between, so that a rank that waits for a small run of [`invariance`] leaves
+/// its core to the small run's ranks when the ranks oversubscribe the cores (a blocking
+/// receive spins).
+fn receive_sleeping<T: Equivalence>(comm: &SimpleCommunicator, from: usize, values: &mut [T]) {
+    mpi::request::scope(|scope| {
+        let mut request = comm
+            .process_at_rank(from as i32)
+            .immediate_receive_into(scope, values);
+        loop {
+            match request.test() {
+                Ok(_) => break,
+                Err(pending) => {
+                    request = pending;
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        }
+    });
+}
+
+/// One check of [`invariance`]: the run on P ranks against the run on P/k ranks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InvarianceCheck {
+    /// The factor k.
+    pub k: usize,
+    /// The ranks of the small run, P / k.
+    pub small_ranks: usize,
+    /// The values compared, over every rank: four per target (φ and ∇φ) and path of the
+    /// large run.
+    pub compared: usize,
+    /// The values that differ in any bit, summed over the ranks.
+    pub differing: usize,
+    /// The most values that differ on one rank.
+    pub differing_max: usize,
+    /// The ranks with a value that differs.
+    pub ranks_differing: usize,
+    /// The lowest rank with a value that differs, if one has.
+    pub first_rank_differing: Option<usize>,
+    /// The most points a rank of the small run passed (k inputs concatenated).
+    pub small_input_max: usize,
+    /// The build and evaluation of the small run on its slowest rank, in seconds.
+    pub small_seconds: f64,
+    /// The check from the split to the comparison on the slowest rank, in seconds.
+    pub seconds: f64,
+}
+
+/// The result of [`invariance`], the same on every rank apart from
+/// [`machine`](Self::machine), which rank 0 fills.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Invariance {
+    /// The machine: CPU, cores, host name, target and toolchain; on rank 0 only.
+    pub machine: String,
+    /// The problem.
+    pub workload: Workload,
+    /// The settings.
+    pub settings: Settings,
+    /// "f32" or "f64".
+    pub precision: &'static str,
+    /// The strategy of every run: the one [`Settings::strategy`] names, or under `Auto` the
+    /// one the large run resolved, named in the small runs.
+    pub strategy: M2lStrategy,
+    /// The ranks of the large run, P.
+    pub ranks: usize,
+    /// The most points a rank of the large run passed.
+    pub input_max: usize,
+    /// The paths of the large run (overlapped or not), compared each with the small run's.
+    pub large_paths: Vec<bool>,
+    /// The path of the small runs: overlapped unless [`Settings::overlap`] is
+    /// [`Overlap::Off`].
+    pub small_overlapped: bool,
+    /// The build and evaluations of the large run on its slowest rank, in seconds.
+    pub large_seconds: f64,
+    /// One check per factor, in the order given.
+    pub checks: Vec<InvarianceCheck>,
+    /// The largest resident size of a rank at the end ([`resident_memory`]), in bytes.
+    pub resident_max: Option<f64>,
+    /// How the resident size was read.
+    pub resident_kind: &'static str,
+    /// Where the ranks ran.
+    pub placement: Placement,
+}
+
+/// Rank-count invariance at scale (Phase 5S T2, C5S.1; requirement 3 of
+/// docs/phase5s/README.md; docs/design/scale-out.md §5.1): the FMM of `workload` with
+/// `settings` on the P ranks of `comm` against the same FMM on P/k ranks, for every k of
+/// `factors`, bit for bit, when rank r of the small run holds the concatenation of the
+/// inputs of ranks k r, …, k r + k − 1 of the large one, in that order.
+///
+/// Every rank finds its input from the indices ([`input_by_index`]). The large run builds
+/// and evaluates charge vector 0 on every path of [`Settings::overlap`], keeps its outputs
+/// and drops the FMM. For each k, `split` of `comm` gives the small communicator: colour 0
+/// on the ranks k r, none elsewhere; the other ranks enter nothing of it. Small rank r
+/// finds the inputs of ranks k r … k r + k − 1 (the share in one pass over the indices),
+/// concatenates them, builds the FMM with the strategy of the large run named (`Auto`
+/// resolves by the ranks per node, which differ), evaluates one path (overlapped unless
+/// overlap is off), and sends each rank k r + i (i ≥ 1) its slice of the output, point to
+/// point; the sizes are known on both sides, and a waiting rank sleeps between tests of its
+/// receive, so that oversubscribed small runs get the cores. Each rank compares its own
+/// targets' values with every path of its large run, and four all-reduces agree the
+/// counts. Nothing is
+/// gathered: a rank holds its large input and outputs, and a small rank k inputs.
+///
+/// # Collective operation
+///
+/// On every rank of `comm`, with the same arguments; every rank returns the same
+/// [`Invariance`] apart from [`Invariance::machine`].
+///
+/// # Errors
+///
+/// On every rank, before any collective: [`HarnessError::Factor`] for a factor that is 0
+/// or does not divide the ranks, [`HarnessError::InputNotByIndex`] with
+/// [`Input::Owners`].
+///
+/// # Panics
+///
+/// If an FMM does not build or evaluate.
+pub fn invariance<T: Stored + SimdScalar + Equivalence + Default>(
+    workload: &Workload,
+    settings: &Settings,
+    factors: &[usize],
+    comm: &SimpleCommunicator,
+) -> Result<Invariance, HarnessError> {
+    let (rank, size) = (comm.rank() as usize, comm.size() as usize);
+    if settings.input == Input::Owners {
+        return Err(HarnessError::InputNotByIndex(settings.input));
+    }
+    if let Some(&k) = factors.iter().find(|&&k| k == 0 || !size.is_multiple_of(k)) {
+        return Err(HarnessError::Factor { k, ranks: size });
+    }
+    let builder = builder::<T>(settings);
+
+    // The large run.
+    comm.barrier();
+    let start = Instant::now();
+    let mine = input_by_index(workload, settings.input, rank, size);
+    let large_paths = settings.overlap.paths().to_vec();
+    let (large, strategy) = evaluate_paths(&builder, workload, &mine, &large_paths, comm);
+    let large_seconds = start.elapsed().as_secs_f64();
+    let builder = builder.strategy(strategy);
+    let small_overlapped = settings.overlap != Overlap::Off;
+    let large_all: Vec<Vec<T>> = large.iter().map(Values::all).collect();
+    drop(large);
+
+    let mut checks = Vec::with_capacity(factors.len());
+    for &k in factors {
+        comm.barrier();
+        let start = Instant::now();
+        let leader = rank / k * k;
+        let color = if rank == leader {
+            Color::with_value(0)
+        } else {
+            Color::undefined()
+        };
+        let small_comm = comm.split_by_color(color);
+        let (mut small_input, mut small_seconds) = (0usize, 0.0f64);
+        // This rank's slice of the small run's output.
+        let small: Vec<T> = match &small_comm {
+            Some(small) => {
+                let started = Instant::now();
+                let inputs = inputs_by_index(workload, settings.input, (leader, k), size);
+                let concatenated = inputs.concat();
+                small_input = concatenated.len();
+                let (outputs, resolved) = evaluate_paths(
+                    &builder,
+                    workload,
+                    &concatenated,
+                    &[small_overlapped],
+                    small,
+                );
+                assert_eq!(resolved, strategy, "rank {rank}: the strategy named");
+                small_seconds = started.elapsed().as_secs_f64();
+                let mut first = inputs[0].len();
+                for (i, input) in inputs.iter().enumerate().skip(1) {
+                    comm.process_at_rank((leader + i) as i32)
+                        .send(&outputs[0].slice(first, input.len())[..]);
+                    first += input.len();
+                }
+                outputs[0].slice(0, inputs[0].len())
+            }
+            None => {
+                let mut values = vec![T::default(); OUTPUT_VALUES * mine.len()];
+                receive_sleeping(comm, leader, &mut values);
+                values
+            }
+        };
+        drop(small_comm);
+        let local: usize = large_all
+            .iter()
+            .map(|values| differing_values(values, &small))
+            .sum();
+        let seconds = start.elapsed().as_secs_f64();
+        let mut sums = [0usize; 2];
+        comm.all_reduce_into(
+            &[usize::from(local > 0), large_all.len() * small.len()][..],
+            &mut sums[..],
+            SystemOperation::sum(),
+        );
+        let mut differing = 0usize;
+        comm.all_reduce_into(&local, &mut differing, SystemOperation::sum());
+        let mut most = [0.0f64; 4];
+        comm.all_reduce_into(
+            &[local as f64, small_input as f64, small_seconds, seconds][..],
+            &mut most[..],
+            SystemOperation::max(),
+        );
+        let mut first = 0usize;
+        comm.all_reduce_into(
+            &(if local > 0 { rank } else { usize::MAX }),
+            &mut first,
+            SystemOperation::min(),
+        );
+        checks.push(InvarianceCheck {
+            k,
+            small_ranks: size / k,
+            compared: sums[1],
+            differing,
+            differing_max: most[0] as usize,
+            ranks_differing: sums[0],
+            first_rank_differing: (first != usize::MAX).then_some(first),
+            small_input_max: most[1] as usize,
+            small_seconds: most[2],
+            seconds: most[3],
+        });
+    }
+
+    let mut most = [0.0f64; 3];
+    let resident = resident_memory();
+    comm.all_reduce_into(
+        &[
+            mine.len() as f64,
+            large_seconds,
+            resident.map_or(-1.0, |(bytes, _)| bytes),
+        ][..],
+        &mut most[..],
+        SystemOperation::max(),
+    );
+    let placement = placement(comm);
+    Ok(Invariance {
+        machine: if rank == 0 { machine() } else { String::new() },
+        workload: *workload,
+        settings: *settings,
+        precision: if size_of::<T>() == 4 { "f32" } else { "f64" },
+        strategy,
+        ranks: size,
+        input_max: most[0] as usize,
+        large_paths,
+        small_overlapped,
+        large_seconds: most[1],
+        checks,
+        resident_max: (most[2] >= 0.0).then_some(most[2]),
+        resident_kind: resident.map_or("not available", |(_, kind)| kind),
+        placement,
+    })
+}
+
+impl Invariance {
+    /// The values that differ over every check.
+    pub fn differing(&self) -> usize {
+        self.checks.iter().map(|c| c.differing).sum()
+    }
+
+    /// One `key=value` line per check, for the job tables.
+    pub fn summaries(&self) -> Vec<String> {
+        self.checks
+            .iter()
+            .map(|c| {
+                let mut fields = vec![
+                    format!("dist={}", self.workload.distribution.name()),
+                    format!("n={}", self.workload.n),
+                    format!("precision={}", self.precision),
+                    format!("p={}", self.settings.p),
+                    format!("strategy={:?}", self.strategy),
+                    format!("requested={:?}", self.settings.strategy),
+                    format!("input={}", self.settings.input.name()),
+                    format!("overlap={}", self.settings.overlap.name()),
+                    format!("threads={}", self.settings.threads),
+                    format!("ranks={}", self.ranks),
+                    format!("small_ranks={}", c.small_ranks),
+                    format!("k={}", c.k),
+                    format!("compared={}", c.compared),
+                    format!("differing={}", c.differing),
+                    format!("differing_max={}", c.differing_max),
+                    format!("ranks_differing={}", c.ranks_differing),
+                    format!("small_input_max={}", c.small_input_max),
+                    format!("nodes={}", self.placement.nodes),
+                ];
+                if let Some(job) = &self.placement.slurm {
+                    fields.push(format!("job={}", job.id));
+                }
+                format!("invariance: {}", fields.join(" "))
+            })
+            .collect()
+    }
+}
+
+impl fmt::Display for Invariance {
+    /// The report in Markdown: the heading, the settings and placement, one row per check,
+    /// the verdict and the [`summaries`](Invariance::summaries).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = &self.settings;
+        let path = |overlapped: bool| if overlapped { "overlapped" } else { "blocking" };
+        let smalls: Vec<String> = self
+            .checks
+            .iter()
+            .map(|c| c.small_ranks.to_string())
+            .collect();
+        writeln!(
+            f,
+            "## invariance: {} N = {}, {} p = {}, {} ranks against {}",
+            self.workload.distribution.name(),
+            self.workload.n,
+            self.precision,
+            s.p,
+            self.ranks,
+            smalls.join(", ")
+        )?;
+        writeln!(f)?;
+        writeln!(f, "- machine: {}", self.machine)?;
+        writeln!(
+            f,
+            "- problem: N = {}, {}; seed {:#x}, every point generated by index; max_level \
+             {MAX_LEVEL}, {MAX_POINTS_PER_LEAF} points per leaf; charge vector 0, gradients",
+            self.workload.n,
+            self.workload.distribution.description(),
+            self.workload.seed
+        )?;
+        writeln!(
+            f,
+            "- precision {}, p = {}, strategy {:?} in every run ({}); input: {}; threads per \
+             rank {}",
+            self.precision,
+            s.p,
+            self.strategy,
+            if s.strategy == M2lStrategy::Auto {
+                "Auto as resolved by the large run, named in the small runs".to_string()
+            } else {
+                format!("{:?} as named", s.strategy)
+            },
+            s.input.description(),
+            s.threads
+        )?;
+        let large: Vec<&str> = self.large_paths.iter().map(|&o| path(o)).collect();
+        writeln!(
+            f,
+            "- the large run on {} ranks evaluates {}, each compared bit for bit with the small \
+             run's {} output at every target; small rank r holds the inputs of ranks k r … \
+             k r + k − 1 concatenated, and sends each its slice point to point (nothing \
+             gathered)",
+            self.ranks,
+            large.join(" and "),
+            path(self.small_overlapped)
+        )?;
+        let placement = &self.placement;
+        let (fewest, most) = placement.ranks_per_node_range();
+        writeln!(
+            f,
+            "- placement: {} node(s), ranks per node {}; MPI library: {}",
+            placement.nodes,
+            if fewest == most {
+                format!("{most}")
+            } else {
+                format!("{fewest}–{most}")
+            },
+            placement.mpi_library
+        )?;
+        if let Some(job) = &placement.slurm {
+            writeln!(f, "- Slurm: {job}")?;
+        }
+        writeln!(
+            f,
+            "- the large run: at most {} points per rank, {:.2} s to build and evaluate on the \
+             slowest rank; largest resident size of a rank at the end {} MB ({}); times are \
+             for the record (oversubscribed runs are never timings)",
+            self.input_max,
+            self.large_seconds,
+            self.resident_max.map_or("–".to_string(), mb),
+            self.resident_kind
+        )?;
+        writeln!(f)?;
+        writeln!(
+            f,
+            "| P | P / k | k | values compared | differing (sum over ranks) | most on a rank | \
+             ranks with any | first rank with any | points per small rank (max) | small run, \
+             s | check, s |"
+        )?;
+        writeln!(f, "| {} |", ["---"; 11].join(" | "))?;
+        for c in &self.checks {
+            writeln!(
+                f,
+                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {:.2} | {:.2} |",
+                self.ranks,
+                c.small_ranks,
+                c.k,
+                c.compared,
+                c.differing,
+                c.differing_max,
+                c.ranks_differing,
+                c.first_rank_differing
+                    .map_or("–".to_string(), |r| r.to_string()),
+                c.small_input_max,
+                c.small_seconds,
+                c.seconds
+            )?;
+        }
+        writeln!(f)?;
+        let differing = self.differing();
+        if differing == 0 {
+            writeln!(
+                f,
+                "Rank-count invariance: 0 values differ ({} ranks against {})",
+                self.ranks,
+                smalls.join(", ")
+            )?;
+        } else {
+            writeln!(
+                f,
+                "Rank-count invariance FAILED: {differing} values differ (table above)"
+            )?;
+        }
+        writeln!(f)?;
+        for line in self.summaries() {
+            writeln!(f, "{line}")?;
+        }
+        Ok(())
+    }
+}
+
 /// Milliseconds with three decimals, or "–" for NaN.
 fn ms(seconds: f64) -> String {
     if seconds.is_nan() {
@@ -1615,6 +2311,10 @@ impl Report {
         let resident = rows
             .iter()
             .filter_map(|r| r.resident)
+            .fold(f64::NAN, f64::max);
+        let resident_input = rows
+            .iter()
+            .filter_map(|r| r.resident_input)
             .fold(f64::NAN, f64::max);
         self.paths
             .iter()
@@ -1687,6 +2387,8 @@ impl Report {
                 if let Some(e) = &self.errors {
                     fields.push(format!("phi_l2={:.3e}", e.potential.l2));
                     fields.push(format!("grad_l2={:.3e}", e.gradient.l2));
+                    fields.push(format!("direct_pairs_max={}", e.direct_pairs));
+                    fields.push(format!("direct_ms={}", ms(e.direct_seconds)));
                 }
                 if let Some(r) = &self.reference {
                     if let Some(strategy) = self.settings.reference_strategy {
@@ -1703,6 +2405,7 @@ impl Report {
                     mb(max(&|r: &RankRow| r.memory.total()))
                 ));
                 fields.push(format!("resident_max_mb={}", mb(resident)));
+                fields.push(format!("resident_input_max_mb={}", mb(resident_input)));
                 let placement = &self.placement;
                 fields.push(format!("nodes={}", placement.nodes));
                 fields.push(format!(
@@ -2025,6 +2728,14 @@ impl fmt::Display for Report {
                 &|v| mb(v),
             )?;
         }
+        if rows.iter().all(|r| r.resident_input.is_some()) {
+            line(
+                f,
+                "resident after the input (the harness, before the builds), MB",
+                &|r| r.resident_input.unwrap_or(f64::NAN),
+                &|v| mb(v),
+            )?;
+        }
         writeln!(f)?;
 
         for path in &self.paths {
@@ -2163,13 +2874,18 @@ impl fmt::Display for Report {
             Some(e) => writeln!(
                 f,
                 "Errors against the direct sum ({} charge vectors, {} sampled targets, root \
-                 mean squares): φ L2 {:.3e}, max {:.3e}; ∇φ L2 {:.3e}, max {:.3e}",
+                 mean squares): φ L2 {:.3e}, max {:.3e}; ∇φ L2 {:.3e}, max {:.3e}. The \
+                 direct sum: each rank over its own sources (Neumaier-compensated in f64), \
+                 one all-reduce; at most {} pairs per rank and vector, {} ms on the slowest \
+                 rank over the vectors",
                 e.vectors,
                 e.sampled,
                 e.potential.l2,
                 e.potential.max,
                 e.gradient.l2,
-                e.gradient.max
+                e.gradient.max,
+                e.direct_pairs,
+                ms(e.direct_seconds)
             )?,
             None => writeln!(f, "Errors against the direct sum: not checked in this run")?,
         }

@@ -148,9 +148,9 @@ their paths from cargo's `--message-format=json` output, and launches each under
 `timeout` (300 s), the tests with `--test-threads=1 --nocapture`, with
 `RUST_MIN_STACK=8388608` and the BLAS thread variables at 1; the run steps have their own
 `timeout-minutes`. It covers `nd-fmm-plan`'s `mpi_regressions`, `nd-fmm-exec`'s
-`mpi_exec` and `mpi_threading`, and the six registered nd-octree examples. The runner's
-4 vCPUs are 2 cores, so the ranks oversubscribe (`OMPI_MCA_rmaps_base_oversubscribe=1`);
-it needs no interface flags. By hand, the same script runs a list at any rank count
+`mpi_exec`, `mpi_threading` and `invariance` (rank-count invariance, Phase 5S T2), and the
+six registered nd-octree examples. The runner's 4 vCPUs are 2 cores, so the ranks
+oversubscribe (`OMPI_MCA_rmaps_base_oversubscribe=1`); it needs no interface flags. By hand, the same script runs a list at any rank count
 (`run-mpi-tests.sh build <list>`, then `run-mpi-tests.sh run <list> 2 4`, on macOS with
 `MPIRUN_FLAGS` set to the loopback flags below).
 
@@ -209,7 +209,15 @@ tools/kathleen/submit.sh build.sbatch                       # build, nd-fmm-math
 tools/kathleen/submit.sh check.sbatch                       # root, strict, simd, kernels
 tools/kathleen/submit.sh mpi.sbatch 1 2 4 8                 # MPI test list on one node
 tools/kathleen/submit.sh --qos=test --nodes=2 -- mpi.sbatch 80   # 2 nodes x 40 ranks
+tools/kathleen/submit.sh correctness.sbatch                 # 2 nodes: Phase 5S T2's job
 ```
+
+`correctness.sbatch` (Phase 5S T2) is the correctness job of every structural task: at 2
+nodes in `test`, the MPI test list at 2, 4, 8 and 80 ranks, rank-count invariance at 80
+against 40, 20 and 10 ranks (`scaling --invariance`), and the `scaling` smoke run; at 4
+nodes in `small` also invariance at 160 against 80, 40 and 20, 640 against 80
+oversubscribed and the harness at N = 10⁸ (tools/kathleen/README.md, "The correctness
+job").
 
 `cargo test --workspace` needs a working MPI runtime, because nd-octree and
 nd-fmm-plan tests initialise MPI; crates without MPI (e.g. `cargo test -p nd-fmm-math`)

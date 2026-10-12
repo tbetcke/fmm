@@ -25,6 +25,14 @@
 //! within the downward stage, a time per V pair) and the reference of another strategy
 //! (Dense against Rotation, to rounding).
 //!
+//! And those of Phase 5S T2: the inputs found from the indices (every point once, in index
+//! order; the ranges contiguous, and those of k ranks concatenated the ranges at P/k), the
+//! direct sum's pairs per rank, the ranges' input, the refusals (the one-rank reference
+//! above `REFERENCE_MAX_POINTS`, a factor that does not divide the ranks, the owners'
+//! input for invariance), and rank-count invariance (`scaling::invariance`) against every
+//! divisor of the ranks, k = 1 included, in f64 and f32, from the share, the ranges and
+//! rank 0: 0 values differ.
+//!
 //! One test initialises MPI (at `Threading::Funneled`). Error measures: as named at each
 //! check; the timings are only checked to be finite and non-negative.
 
@@ -35,7 +43,8 @@ use mpi::traits::{Communicator, CommunicatorCollectives};
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::scaling::{
-    COMPUTE, Input, Overlap, Report, STAGES, Settings, SlurmJob, Workload, run,
+    COMPUTE, HarnessError, Input, Overlap, REFERENCE_MAX_POINTS, Report, STAGES, Settings,
+    SlurmJob, Workload, input_by_index, invariance, run,
 };
 
 /// The tiny problem: 1,500 points of the cube.
@@ -65,13 +74,13 @@ fn smoke_run_of_the_scaling_core() {
     for (precision, bound) in [("f64", 1e-3), ("f32", 1e-2)] {
         let (report, alone) = if precision == "f64" {
             (
-                run::<f64>(&WORKLOAD, &settings(), &comm),
-                run::<f64>(&WORKLOAD, &settings(), &one),
+                run::<f64>(&WORKLOAD, &settings(), &comm).expect("a run"),
+                run::<f64>(&WORKLOAD, &settings(), &one).expect("a run"),
             )
         } else {
             (
-                run::<f32>(&WORKLOAD, &settings(), &comm),
-                run::<f32>(&WORKLOAD, &settings(), &one),
+                run::<f32>(&WORKLOAD, &settings(), &comm).expect("a run"),
+                run::<f32>(&WORKLOAD, &settings(), &one).expect("a run"),
             )
         };
         check_fields(&report, &comm);
@@ -93,6 +102,11 @@ fn smoke_run_of_the_scaling_core() {
         }
         // p = 3 on the cube: errors of the order of the single-translation prediction.
         assert!(e.potential.l2 > 0.0 && e.potential.l2 < 1e-2, "{e:?}");
+        // The direct sum's part per rank: its sources times the sampled targets.
+        let most = report.rows.iter().map(|r| r.input).max().unwrap();
+        assert_eq!(e.direct_pairs, most * e.sampled, "{e:?}");
+        assert_eq!(a.direct_pairs, WORKLOAD.n * a.sampled, "{a:?}");
+        assert!(e.direct_seconds.is_finite() && e.direct_seconds >= 0.0);
         // Error measure: relative L2 and max differences, and the count of differing
         // values. One rank with the points in index order is its own reference; several
         // ranks reorder the points within a leaf, within 100 u_T.
@@ -118,6 +132,8 @@ fn smoke_run_of_the_scaling_core() {
     }
     inputs_rank0_and_owners(&comm);
     kinds_and_reference_strategy(&comm);
+    refusals(&comm);
+    rank_count_invariance(&comm);
 }
 
 /// Every point and charge depends on its index and the seed only; the sample is distinct.
@@ -311,17 +327,24 @@ fn slurm_job_from_variables() {
 /// owners' input no point moves.
 fn inputs_rank0_and_owners(comm: &SimpleCommunicator) {
     let rank = comm.rank() as usize;
-    for input in [Input::Rank0, Input::Owners] {
+    for input in [Input::Rank0, Input::Owners, Input::Ranges] {
         let settings = Settings {
             input,
             evaluations: 1,
             ..Settings::new(3)
         };
-        let report = run::<f64>(&WORKLOAD, &settings, comm);
+        let report = run::<f64>(&WORKLOAD, &settings, comm).expect("a run");
         let row = &report.rows[rank];
         match input {
             Input::Rank0 => {
                 assert_eq!(row.input, if rank == 0 { WORKLOAD.n } else { 0 });
+            }
+            Input::Ranges => {
+                assert_eq!(row.input, WORKLOAD.range(rank, report.ranks).len());
+                assert_eq!(
+                    report.rows.iter().map(|r| r.input).sum::<usize>(),
+                    WORKLOAD.n
+                );
             }
             _ => {
                 assert_eq!(
@@ -350,7 +373,7 @@ fn kinds_and_reference_strategy(comm: &SimpleCommunicator) {
         kinds: true,
         ..Settings::new(3)
     };
-    let report = run::<f64>(&WORKLOAD, &settings, comm);
+    let report = run::<f64>(&WORKLOAD, &settings, comm).expect("a run");
     let path = &report.paths[0];
     assert_eq!(path.kinds.len(), report.ranks);
     for (r, kinds) in path.kinds.iter().enumerate() {
@@ -378,5 +401,137 @@ fn kinds_and_reference_strategy(comm: &SimpleCommunicator) {
         "tables_ms=",
     ] {
         assert!(summary.contains(key), "{key} missing from {summary}");
+    }
+}
+
+/// Every input found from the indices: every point once over the ranks, each rank's in
+/// index order, the ranges contiguous and balanced. Needs no MPI.
+#[test]
+fn inputs_by_index() {
+    for size in 1..=5 {
+        for input in [Input::Rank0, Input::Share, Input::Ranges] {
+            let mut every: Vec<usize> = Vec::new();
+            for rank in 0..size {
+                let mine = input_by_index(&WORKLOAD, input, rank, size);
+                assert!(
+                    mine.windows(2).all(|w| w[0] < w[1]),
+                    "{input:?}: index order"
+                );
+                if input == Input::Ranges {
+                    assert!(mine.len().abs_diff(WORKLOAD.n / size) <= 1);
+                    assert_eq!(mine, WORKLOAD.range(rank, size).collect::<Vec<_>>());
+                }
+                every.extend(mine);
+            }
+            every.sort_unstable();
+            assert_eq!(
+                every,
+                (0..WORKLOAD.n).collect::<Vec<_>>(),
+                "{input:?} at {size}"
+            );
+        }
+    }
+    // The ranges of the concatenated inputs of k ranks are the ranges at P / k.
+    for (rank, size) in [(0, 2), (1, 2), (3, 4)] {
+        let both = [
+            input_by_index(&WORKLOAD, Input::Ranges, 2 * rank, 2 * size),
+            input_by_index(&WORKLOAD, Input::Ranges, 2 * rank + 1, 2 * size),
+        ]
+        .concat();
+        assert_eq!(both, input_by_index(&WORKLOAD, Input::Ranges, rank, size));
+    }
+}
+
+/// The refusals of the harness (Phase 5S T2): the one-rank reference above
+/// `REFERENCE_MAX_POINTS`, a factor that does not divide the ranks and the owners' input
+/// for rank-count invariance, each on every rank before any collective (so these calls
+/// cost nothing: no point is generated).
+fn refusals(comm: &SimpleCommunicator) {
+    let size = comm.size() as usize;
+    let huge = Workload {
+        n: REFERENCE_MAX_POINTS + 1,
+        ..WORKLOAD
+    };
+    let error = run::<f64>(&huge, &settings(), comm).expect_err("the reference is refused");
+    assert_eq!(
+        error,
+        HarnessError::ReferenceTooLarge {
+            n: REFERENCE_MAX_POINTS + 1,
+            max: REFERENCE_MAX_POINTS
+        }
+    );
+    assert!(error.to_string().contains("--errors"), "{error}");
+    let error = invariance::<f64>(&WORKLOAD, &settings(), &[size + 1], comm)
+        .expect_err("a factor that does not divide");
+    assert_eq!(
+        error,
+        HarnessError::Factor {
+            k: size + 1,
+            ranks: size
+        }
+    );
+    let owners = Settings {
+        input: Input::Owners,
+        ..settings()
+    };
+    assert_eq!(
+        invariance::<f64>(&WORKLOAD, &owners, &[1], comm),
+        Err(HarnessError::InputNotByIndex(Input::Owners))
+    );
+}
+
+/// Rank-count invariance (Phase 5S T2): the run on P ranks against P/k for every divisor
+/// k of P (k = 1 included: a second build on a communicator of its own), in f64 and f32,
+/// from the share, the ranges and rank 0, overlap both; 0 values differ, every target
+/// compared once per path, the report's fields and lines.
+fn rank_count_invariance(comm: &SimpleCommunicator) {
+    let size = comm.size() as usize;
+    let factors: Vec<usize> = (1..=size).filter(|&k| size.is_multiple_of(k)).collect();
+    for input in [Input::Share, Input::Ranges, Input::Rank0] {
+        let settings = Settings {
+            input,
+            strategy: M2lStrategy::Rotation,
+            ..settings()
+        };
+        for precision in ["f64", "f32"] {
+            let report = if precision == "f64" {
+                invariance::<f64>(&WORKLOAD, &settings, &factors, comm)
+            } else {
+                invariance::<f32>(&WORKLOAD, &settings, &factors, comm)
+            }
+            .expect("an invariance check");
+            assert_eq!(report.ranks, size);
+            assert_eq!(report.strategy, M2lStrategy::Rotation);
+            assert_eq!(report.large_paths, vec![false, true]);
+            assert!(report.small_overlapped);
+            assert_eq!(report.checks.len(), factors.len());
+            for (check, &k) in report.checks.iter().zip(&factors) {
+                assert_eq!((check.k, check.small_ranks), (k, size / k));
+                assert_eq!(
+                    check.compared,
+                    2 * 4 * WORKLOAD.n,
+                    "{input:?}: every target"
+                );
+                assert_eq!(
+                    (check.differing, check.differing_max, check.ranks_differing),
+                    (0, 0, 0),
+                    "{input:?} {precision} at k = {k}: {check:?}"
+                );
+                assert_eq!(check.first_rank_differing, None);
+                assert!(check.small_input_max * size / k >= WORKLOAD.n);
+            }
+            assert_eq!(report.differing(), 0);
+            let text = report.to_string();
+            assert!(
+                text.contains("Rank-count invariance: 0 values differ"),
+                "{text}"
+            );
+            let summaries = report.summaries();
+            assert_eq!(summaries.len(), factors.len());
+            assert!(summaries.iter().all(|line| line.contains(" differing=0 ")));
+            if comm.rank() == 0 && input == Input::Share {
+                println!("{report}");
+            }
+        }
     }
 }

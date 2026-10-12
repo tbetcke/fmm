@@ -39,6 +39,25 @@
 //! per node from one `split_shared`, each rank's host and CPUs, the MPI library, and under
 //! Slurm the job id, QoS, node list and the binding Slurm reports.
 //!
+//! **Rank-count invariance** (Phase 5S T2, C5S.1; `scaling::invariance`): with
+//! `--invariance k[,k…]` the launch runs no timed evaluations; it runs the workload on the
+//! P ranks of the launch and on P/k ranks for every k (the small runs on a split of the
+//! world, rank r holding the inputs of ranks k r … k r + k − 1 concatenated), compares the
+//! outputs bit for bit by index without gathering them, prints the values that differ per
+//! check (the sum, the most on a rank, the ranks with any), and exits with status 1 on
+//! every rank if any value differs. For example 512 against 64 ranks, oversubscribed on
+//! locust (correctness, never a timing):
+//!
+//! ```sh
+//! ulimit -n "$(ulimit -Hn)"
+//! timeout 3600 mpirun --map-by :OVERSUBSCRIBE --bind-to none -n 512 \
+//!   target/release/examples/scaling --dist cube --n 10000000 --precision f64 --p 8 \
+//!   --strategy rotation --invariance 8
+//! ```
+//!
+//! On Kathleen, `tools/kathleen/jobs/correctness.sbatch` runs it (80 against 40, 20 and 10
+//! ranks at 2 nodes; 160 against 20 and 640 against 80 at 4).
+//!
 //! Options:
 //! - `--dist cube|sphere|plummer|clusters` (cube);
 //! - `--n N` (10⁶), or `--n-per-rank n` for N = n P (weak scaling);
@@ -49,22 +68,30 @@
 //!   (`FmmBuilder::dense_node_budget`; the library's 64 if not given; Phase 5N T4:
 //!   `tools/scaling/run.sh` passes 56 on the M3 Max and 96 on locust and Kathleen);
 //! - `--overlap off|on|both` (both: one build, the evaluations alternating, a block each);
-//! - `--input share|rank0|owners` (share);
+//! - `--input share|rank0|owners|ranges` (share; `ranges`: contiguous index ranges, found
+//!   in O(N/P) time, for N above 10⁹);
 //! - `--evals k` timed evaluations per path (10), `--builds b` (1);
 //! - `--errors k` charge vectors of the errors against the direct sum at `--sampled s`
 //!   targets (0, not checked; 1,000 targets);
 //! - `--reference` the one-rank FMM over every point on rank 0, of the strategy the run
-//!   resolved, against the output;
+//!   resolved, against the output; refused (every rank exits with status 2 and the
+//!   reason) above N = 2 × 10⁷ (`scaling::REFERENCE_MAX_POINTS`, Phase 5S T2), where the
+//!   errors against the direct sum and `--invariance` are the oracles;
 //! - `--reference-strategy auto|dense|classes|rotation` that FMM with another M2L
 //!   strategy (the difference between strategies; Phase 5N T3);
 //! - `--kinds` every level call timed by operator kind (`KindTiming::Synchronous`): the
-//!   M2M, M2L and L2L parts per rank and the time per V pair (Phase 5N T3).
+//!   M2M, M2L and L2L parts per rank and the time per V pair (Phase 5N T3);
+//! - `--invariance k[,k…]` rank-count invariance against P/k ranks for each k (above),
+//!   with the overlap of `--overlap` (the large run evaluates its paths, the small runs
+//!   overlapped unless `--overlap off`) and the strategy of `--strategy` (`auto`: the one
+//!   the large run resolves, named in the small runs).
 
 use mpi::Threading;
+use mpi::topology::SimpleCommunicator;
 use mpi::traits::Communicator;
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_validate::fmm_accuracy::Distribution;
-use nd_fmm_validate::scaling::{Input, Overlap, Settings, Workload, run};
+use nd_fmm_validate::scaling::{HarnessError, Input, Overlap, Settings, Workload, invariance, run};
 
 /// The command line: the workload, the precision and the settings.
 struct Arguments {
@@ -72,6 +99,8 @@ struct Arguments {
     n_per_rank: Option<usize>,
     precision: String,
     settings: Settings,
+    /// The factors of `--invariance`, if given.
+    invariance: Option<Vec<usize>>,
 }
 
 /// Parses the options of the module documentation; exits with a message on anything
@@ -82,6 +111,7 @@ fn arguments() -> Arguments {
         n_per_rank: None,
         precision: "f64".into(),
         settings: Settings::new(8),
+        invariance: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
@@ -121,8 +151,18 @@ fn arguments() -> Arguments {
             }
             "--input" => {
                 s.input = Input::from_name(&value).unwrap_or_else(|| {
-                    fail(&format!("--input: share, rank0 or owners, not {value}"))
+                    fail(&format!(
+                        "--input: share, rank0, owners or ranges, not {value}"
+                    ))
                 });
+            }
+            "--invariance" => {
+                let factors = value
+                    .split(',')
+                    .map(|k| k.trim().parse::<usize>())
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap_or_else(|_| fail(&format!("--invariance: k[,k…], not {value}")));
+                args.invariance = Some(factors);
             }
             "--evals" => s.evaluations = number(),
             "--builds" => s.builds = number().max(1),
@@ -171,11 +211,51 @@ fn main() {
     if let Some(n) = args.n_per_rank {
         args.workload.n = n * comm.size() as usize;
     }
-    let report = match args.precision.as_str() {
-        "f32" => run::<f32>(&args.workload, &args.settings, &comm),
-        _ => run::<f64>(&args.workload, &args.settings, &comm),
+    let status = launch(&args, &comm);
+    // MPI is finalised before the exit status is set.
+    drop(comm);
+    drop(universe);
+    std::process::exit(status);
+}
+
+/// Runs the launch of `args` on `comm` and prints its report on rank 0. The exit status:
+/// 0; 1 if rank-count invariance finds a value that differs; 2 if the harness refuses the
+/// arguments (`scaling::HarnessError`, the reason on rank 0). Each is the same on every
+/// rank: the refusals depend on the arguments only, and the invariance counts are reduced.
+fn launch(args: &Arguments, comm: &SimpleCommunicator) -> i32 {
+    let print = |report: &dyn std::fmt::Display| {
+        if comm.rank() == 0 {
+            println!("{report}");
+        }
     };
-    if comm.rank() == 0 {
-        println!("{report}");
+    let refused = |error: HarnessError| {
+        if comm.rank() == 0 {
+            eprintln!("scaling: {error}");
+        }
+        2
+    };
+    if let Some(factors) = &args.invariance {
+        let result = match args.precision.as_str() {
+            "f32" => invariance::<f32>(&args.workload, &args.settings, factors, comm),
+            _ => invariance::<f64>(&args.workload, &args.settings, factors, comm),
+        };
+        return match result {
+            Ok(report) => {
+                print(&report);
+                i32::from(report.differing() > 0)
+            }
+            Err(error) => refused(error),
+        };
+    }
+    let result = match args.precision.as_str() {
+        "f32" => run::<f32>(&args.workload, &args.settings, comm),
+        _ => run::<f64>(&args.workload, &args.settings, comm),
+    };
+    match result {
+        Ok(report) => {
+            print(&report);
+            0
+        }
+        Err(error) => refused(error),
     }
 }
