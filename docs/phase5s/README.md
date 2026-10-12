@@ -481,7 +481,7 @@ In the repository root, start `claude` and say:
 - [x] T1 merged: `docs/design/scale-out.md` drafted, sign-off questions listed
 - [x] Scale-out design signed off, including L_r, the work weight, the S4/S5 triggers, CI and the node-hour budget (decisions 1–6; 2026-10-11: every recommendation of scale-out.md §12 accepted, questions 1–11)
 - [x] T1s merged: rlst 0.10.0 and CubeCL 0.11.0; host outputs bit for bit, device within Phase 4's bounds; `Octree::new` before and after
-- [ ] T2 merged: rank-count invariance at 1, 2 and 4 ranks in CI, at 512 against 64 on locust, and at 160 against 20 on Kathleen; the harness at N = 10⁸
+- [x] T2 merged: rank-count invariance at 1, 2 and 4 ranks in CI, at 512 against 64 on locust, and at 160 against 20 on Kathleen; the harness at N = 10⁸
 - [x] T3a merged: the sample sorts of `Octree::new` replaced by routing; the octree key for key unchanged at 1–8, 512 (locust) and 160/640 (Kathleen) ranks; `Octree::new` by step before and after
 - [ ] T3 merged: the partition map as keys and the locally essential key set in `nd-octree`; MPI examples pass on 1, 3 and 8 ranks
 - [ ] T4 merged: `Plan::new` over the locally essential set; bit for bit; held boxes bounded in P to 512 (locust) and 640 (Kathleen) oversubscribed ranks
