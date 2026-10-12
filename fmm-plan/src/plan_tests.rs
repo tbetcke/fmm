@@ -739,6 +739,147 @@ fn global_boxes_above_other_ranks_blocks_get_no_downward_rows() {
     assert!(pruned_x > 0, "no X row was pruned");
 }
 
+/// Every row of every box with rows, as keys in row order: V (with offsets), X, L2L, the
+/// two M2M views and, for a leaf, the near and W rows.
+fn rows_by_key(plan: &Plan) -> HashMap<MortonKey, Vec<Vec<(MortonKey, usize)>>> {
+    let index = plan.index();
+    let leaves = index.leaves();
+    let mut rows = HashMap::new();
+    for level in 0..index.nlevels() {
+        let lists = plan.level(level);
+        let local = leaves.local(level);
+        let on = |level: usize| move |&i: &u32| index.key(level, i as usize);
+        for (i, &key) in index.keys(level).iter().enumerate() {
+            if index.kind(level, i).is_ghost() {
+                continue;
+            }
+            let grouped = |(boxes, groups): (&[u32], &[u8]), level: usize| {
+                boxes
+                    .iter()
+                    .map(on(level))
+                    .zip(groups.iter().map(|&g| g as usize))
+                    .collect::<Vec<_>>()
+            };
+            let (v, offsets) = lists.v().row(i);
+            let leaf_keys = |row: &[u32]| {
+                row.iter()
+                    .map(|&j| (leaves.key(j as usize), 0))
+                    .collect::<Vec<_>>()
+            };
+            let mut key_rows = vec![
+                v.iter()
+                    .map(on(level))
+                    .zip(offsets.iter().map(|&d| d as usize))
+                    .collect(),
+                leaf_keys(lists.x().row(i)),
+                grouped(lists.l2l().row(i), level.wrapping_sub(1)),
+                grouped(lists.m2m_local().row(i), level + 1),
+                grouped(lists.m2m_global().row(i), level + 1),
+            ];
+            if let Some(leaf) = index.box_leaf(level, i) {
+                let r = leaf as usize - local.start;
+                key_rows.push(leaf_keys(lists.near().row(r)));
+                key_rows.push(
+                    lists
+                        .w()
+                        .row(r)
+                        .iter()
+                        .map(|&j| (on(level + 1)(&j), 0))
+                        .collect(),
+                );
+            }
+            rows.insert(key, key_rows);
+        }
+    }
+    rows
+}
+
+/// Phase 5S T4 (docs/design/scale-out.md §3.7): blocks on levels 1–4 over a uniform
+/// level-4 tree (octants 0–6; the children of octant 7 but its first, c; the children of
+/// c but its first, d; the children of d), with the root, octant 7, c and d `Global`. A
+/// rank owning one block holds only H ∪ T: its own keys and shared ancestors, their
+/// same-level neighbours, the children of the interior ones, and every block and
+/// `Global` box. Its plan has every row of the plan over the whole map, key for key and
+/// in the same order, and the same ghost leaves. On the rank of octant 0, d is not a
+/// shared ancestor, and its V-list names keys below other ranks' blocks that H does not
+/// hold, so the plan must not resolve it (P2).
+#[test]
+fn the_plan_over_the_locally_essential_set_has_the_rows_of_the_whole_map() {
+    let map = key_types(&uniform_leaves(4));
+    let octants = morton::children(morton::root()).unwrap();
+    let c = morton::children(octants[7]).unwrap()[0];
+    let d = morton::children(c).unwrap()[0];
+    let globals = [morton::root(), octants[7], c, d];
+    let mut blocks: Vec<MortonKey> = octants[..7].to_vec();
+    blocks.extend(&morton::children(octants[7]).unwrap()[1..]);
+    blocks.extend(&morton::children(c).unwrap()[1..]);
+    blocks.extend(morton::children(d).unwrap());
+    let nlevels = nlevels(&map);
+    let mut dropped = 0;
+    for own_block in [
+        blocks[0],
+        blocks[3],
+        blocks[8],
+        blocks[15],
+        *blocks.last().unwrap(),
+    ] {
+        let own = |key: MortonKey| morton::is_ancestor(own_block, key);
+        // Every key at or below another rank's block is that rank's ghost.
+        let mut whole = map.clone();
+        for (&key, kind) in whole.iter_mut() {
+            *kind = match *kind {
+                _ if globals.contains(&key) => KeyType::Global,
+                _ if own(key) => *kind,
+                KeyType::LocalLeaf => KeyType::GhostLeaf(1),
+                _ => KeyType::GhostInterior(1),
+            };
+        }
+        let s: Vec<MortonKey> = whole
+            .keys()
+            .copied()
+            .filter(|&key| own(key) || (key != own_block && morton::is_ancestor(key, own_block)))
+            .collect();
+        let mut held: BTreeSet<MortonKey> = s.iter().copied().collect();
+        for &key in &s {
+            held.extend(
+                morton::neighbours(key)
+                    .into_iter()
+                    .filter(|n| whole.contains_key(n)),
+            );
+        }
+        let interior: Vec<MortonKey> = held
+            .iter()
+            .copied()
+            .filter(|key| !matches!(whole[key], KeyType::LocalLeaf | KeyType::GhostLeaf(_)))
+            .collect();
+        for key in interior {
+            held.extend(morton::children(key).unwrap());
+        }
+        held.extend(globals.iter().chain(&blocks));
+        let essential: HashMap<MortonKey, KeyType> =
+            held.iter().map(|&key| (key, whole[&key])).collect();
+        assert!(
+            essential.len() < whole.len(),
+            "{own_block}: nothing dropped"
+        );
+        dropped += whole.len() - essential.len();
+
+        let full = Plan::from_key_types(&whole, nlevels, &[own_block]).unwrap();
+        let reduced = Plan::from_key_types(&essential, nlevels, &[own_block]).unwrap();
+        assert_eq!(rows_by_key(&reduced), rows_by_key(&full), "{own_block}");
+        let ghost_leaves = |plan: &Plan| {
+            let leaves = plan.index().leaves();
+            leaves.ghosts().map(|j| leaves.key(j)).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ghost_leaves(&reduced),
+            ghost_leaves(&full),
+            "{own_block}: ghost leaves"
+        );
+    }
+    assert!(dropped > 0);
+}
+
 #[test]
 fn malformed_maps_are_errors_not_panics() {
     let at = |index: [usize; 3], level: usize| morton::from_index_and_level(index, level);

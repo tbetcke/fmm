@@ -1,8 +1,10 @@
 //! The box index: every box a rank holds, numbered densely in Morton order per level.
 //!
-//! [`BoxIndex`] numbers, on every level l in `0..nlevels`, every key of
-//! [`Octree::all_keys`](nd_octree::Octree::all_keys) on that level, whatever its
-//! [`KeyType`]: local leaves and interiors, `Global` boxes and ghosts. Box i of level l
+//! [`BoxIndex`] numbers, on every level l in `0..nlevels`, every key the plan holds on
+//! that level (since Phase 5S T4 the octree's
+//! [`Octree::all_keys`](nd_octree::Octree::all_keys) and the top-tree keys,
+//! [Held keys](super::plan#held-keys)), whatever its [`KeyType`]: local leaves and
+//! interiors, `Global` boxes and ghosts. Box i of level l
 //! is the i-th smallest key of the level, so the numbering is Morton order with the
 //! positions this rank does not hold left out. Every level buffer, exchange buffer and
 //! list view of the plan addresses boxes by these indices (design §3,

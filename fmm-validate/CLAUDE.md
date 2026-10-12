@@ -125,6 +125,14 @@ memory after the input). `tests/scaling.rs` covers them at 1 and 2 ranks.
 N = 10⁸. Its report is `results/phase5s-t2.md`. The test of the same check at N = 10⁴,
 in CI at 1, 2 and 4 ranks, is `nd-fmm-exec`'s `tests/invariance.rs`.
 
+Phase 5S T4 (the plan over the locally essential set) split `scaling`'s held boxes
+(`RankRow::held`, `HELD_PARTS`) into own, halo, shared ancestors, the other top-tree keys
+of the octree's locally essential set H, and the keys held outside H (since T4 the
+top-tree keys the coarse gather and the global pass still need); the first four sum to
+|H|. `RankRow::plan_bytes` counts the plan's arrays from their lengths (box index, leaf
+numbering, every view with its row offsets and batches). Its report is
+`results/phase5s-t4.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`
