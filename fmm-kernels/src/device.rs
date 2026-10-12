@@ -11,13 +11,14 @@ use cubecl::features::Plane;
 use cubecl::prelude::*;
 use cubecl::profile::{ProfileDuration, TimingMethod};
 use cubecl::server::ProfileError;
+use cubecl::{MemoryScope, MemoryUsage};
 
 use crate::buffer::{DeviceBuffer, DeviceElement, DeviceSlice, DeviceSliceMut, IndexBuffer};
 use crate::error::KernelError;
 use crate::movement;
 
 /// The CubeCL version this crate is built against (the workspace pin), for reports.
-pub const CUBECL_VERSION: &str = "0.11.0-pre.4";
+pub const CUBECL_VERSION: &str = "0.11.0";
 
 /// The most elements a buffer may hold. Kernels index with 32-bit arithmetic, and
 /// keeping lengths below 2³¹ leaves room for a grid stride past the end.
@@ -148,7 +149,7 @@ impl DeviceInfo {
 }
 
 impl fmt::Display for DeviceInfo {
-    /// One line: `metal (wgpu<msl>), Apple M3 Max, CubeCL 0.11.0-pre.4, f32`.
+    /// One line: `metal (wgpu<msl>), Apple M3 Max, CubeCL 0.11.0, f32`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let precisions: Vec<_> = self.precisions().iter().map(|p| p.name()).collect();
         write!(
@@ -499,7 +500,17 @@ impl Device {
     /// configuration before allocating anything (device-path.md §4.6).
     pub fn available_memory(&self) -> Option<u64> {
         self.info.max_memory.map(|limit| {
-            let usage = self.client.memory_usage();
+            // The device pools of every stream, as `Client::memory_usage` summed them
+            // before CubeCL 0.11.0; the runtime's auxiliary memories (staging, uniforms)
+            // stay out, as they did.
+            let usage = self
+                .client
+                .memory_report(MemoryScope::Device)
+                .streams
+                .iter()
+                .fold(MemoryUsage::default(), |usage, stream| {
+                    usage.combine(stream.pools.usage())
+                });
             limit.saturating_sub(usage.bytes_in_use + usage.bytes_padding)
         })
     }
