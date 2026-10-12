@@ -99,6 +99,7 @@ pub mod index;
 pub mod interaction_manager;
 pub mod lists;
 pub mod operator;
+mod phase5_keys;
 pub mod plan;
 pub mod redistribute;
 pub mod store;
