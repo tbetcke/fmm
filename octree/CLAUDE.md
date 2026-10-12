@@ -25,7 +25,7 @@ on them, live outside this crate.
 | `src/constants.rs` | `DEEPEST_LEVEL = 16`, `NLEVELS`, `LEVEL_SIZE`, bit masks/displacements, the 26 `DIRECTIONS`, and the X/Y/Z encode/decode lookup tables. |
 | `src/geometry.rs` | `PhysicalBox` and physical/reference coordinate transforms. |
 | `src/octree.rs` | Public `Octree`, `OctreeOptions`, `PartitionWeight`, `KeyType`, `LeafLocation`, `LookupError`, `LookupBatchError`, `compute_global_bounding_box`, `points_to_morton`, `is_complete_linear_and_balanced`. |
-| `src/octree/implementation.rs` | Private module with the distributed machinery: input validation, parallel sort/linearization, the replicated coarse tree (capped at `max_level`), built by weight from the root, with the nearest-boundary cut and the partition bounds (ranges may be empty), redistribution, refinement, distributed balancing, ghost discovery, neighbour maps, and the leaf-lookup helpers. |
+| `src/octree/implementation.rs` | Private module with the distributed machinery: input validation, the key routing by weight that linearizes the input keys without a sort, the replicated coarse tree (capped at `max_level`), built by weight from the root, with the nearest-boundary cut and the partition bounds (ranges may be empty), redistribution, refinement, distributed balancing by routing the closure along the partition bounds, ghost discovery, neighbour maps, and the leaf-lookup helpers. |
 | `src/tools.rs` | `seeded_rng` (ChaCha8) and `generate_random_keys`. |
 | `src/types.rs` | Placeholder module (doc comment only). |
 | `src/vtk.rs` | Dependency-free ASCII VTK/PVTU writer: serial `write_vtu` and collective `write_pvtu`. |
@@ -138,7 +138,17 @@ ranks the coarse tree is built by weight from the root (docs/design/distributed-
 `max_fine_keys` distinct keys and lies above `max_level`, one all-reduce per round;
 it is then 2:1 balanced serially. Its blocks are therefore nodes of the one-rank tree,
 and the leaves equal the one-rank leaves on every rank count and input distribution;
-keep it so. The coarse tree is replicated on every rank and cut into contiguous
+keep it so. No key is sorted across the ranks (S4, Phase 5S T3a): each rank sorts its
+input keys once; rounds of provisional blocks, split by weight alone (one all-reduce
+each), cut at the nearest boundaries, route the keys deduplicated as (key,
+multiplicity) pairs in one all-to-all-v, so every copy of a key lands on one rank and
+O1 counts distinct keys and weights from the routed keys. The 2:1 balance routes each
+rank's linearized closure by the partition bounds (a key by its first finest
+descendant, so a key coarser than the blocks reaches the owner of its first
+descendant block) and linearizes locally, which leaves every leaf on its owner. The
+leaves, blocks, cut and keys are the Phase 5 ones key for key; the MPI examples check
+that against a private copy of the Phase 5 construction (`examples/phase5_reference/`,
+removed when T3 lands). The coarse tree is replicated on every rank and cut into contiguous
 ranges at the block boundaries nearest to W p/P (O3; ties to the later boundary).
 A range may be empty (O4): such a rank owns no blocks or leaves, holds only `Global`
 keys and ghosts, and still enters every collective. The partition bounds are
