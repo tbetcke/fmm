@@ -121,9 +121,8 @@ fn needs_local(all_keys: &HashMap<u64, KeyType>, own_blocks: &[u64], key: u64) -
             .any(|&block| block != key && is_ancestor(key, block))
 }
 
-/// The keys the plan holds, with their kinds. Until Phase 5S T4 this is the Phase 5 key
-/// set, which `Plan::new` rebuilds from the octree, while the octree itself holds only
-/// its locally essential keys (T3).
+/// The keys the plan holds, with their kinds: since Phase 5S T4 the octree's locally
+/// essential keys and the top-tree keys, H ∪ T ([`check_held_keys`]).
 fn held_keys(plan: &Plan) -> HashMap<u64, KeyType> {
     let index = plan.index();
     (0..index.nlevels())
@@ -198,6 +197,136 @@ fn grouped_batches<G: Copy + Into<usize>>(view: &GroupedCsr<G>) -> Vec<(u32, u32
     }
     triples.sort_unstable();
     triples
+}
+
+/// The held keys of `plan` against brute force over the gathered tree (Phase 5S T4;
+/// docs/design/scale-out.md §3.1, §3.7): exactly H ∪ T, with H = N(S) ∪ C(N(S)) and T
+/// every coarse block and every ancestor of one, so no key is held that no list, halo
+/// or parent-child step of S names beyond what the design allows; and every kind
+/// Phase 5's: an own key local, every ancestor of a block `Global` (on one rank the root
+/// unless it is the only leaf), every other key a ghost of its block's rank. Returns
+/// this rank's |H ∪ T|, |H| and |T|.
+///
+/// # Collective operation
+/// Two all-gathers (the blocks and their counts); every rank must call it.
+fn check_held_keys<C: CommunicatorCollectives>(
+    name: &str,
+    comm: &C,
+    held: &HashMap<u64, KeyType>,
+    octree: &Octree<'_, C>,
+    global_leaves: &[u64],
+) -> [usize; 3] {
+    let nranks = comm.size() as usize;
+    let rank = comm.rank() as usize;
+    let own_blocks = octree.coarse_tree_leafs();
+    let mut counts = vec![0usize; nranks];
+    comm.all_gather_into(&own_blocks.len(), &mut counts[..]);
+    let blocks = gather_to_all(own_blocks, comm);
+    let mut owners = Vec::with_capacity(blocks.len());
+    for (r, &count) in counts.iter().enumerate() {
+        owners.extend(std::iter::repeat_n(r, count));
+    }
+    assert!(blocks.windows(2).all(|pair| pair[0] < pair[1]), "{name}");
+
+    let mut tree: Vec<u64> = morton::get_interior_keys(global_leaves)
+        .into_iter()
+        .collect();
+    tree.extend_from_slice(global_leaves);
+    tree.sort_unstable();
+    tree.dedup();
+    let in_tree = |key: u64| tree.binary_search(&key).is_ok();
+    let is_leaf = |key: u64| global_leaves.binary_search(&key).is_ok();
+    let block_of = |key: u64| blocks.iter().position(|&block| is_ancestor(block, key));
+
+    // T: every block and every ancestor of one.
+    let mut top: Vec<u64> = Vec::new();
+    for &block in &blocks {
+        let mut key = Some(block);
+        while let Some(k) = key {
+            top.push(k);
+            key = morton::parent(k);
+        }
+    }
+    top.sort_unstable();
+    top.dedup();
+
+    // S: the own keys and the shared ancestors; N(S) and C(N(S)) by geometry.
+    let own = |key: u64| own_blocks.iter().any(|&block| is_ancestor(block, key));
+    let shared = |key: u64| {
+        own_blocks
+            .iter()
+            .any(|&block| block != key && is_ancestor(key, block))
+    };
+    let s: Vec<u64> = tree
+        .iter()
+        .copied()
+        .filter(|&key| own(key) || shared(key))
+        .collect();
+    let mut essential = s.clone();
+    for &key in &s {
+        let (level, index) = morton::decode(key);
+        let cells = 1i64 << level;
+        for offset in 0..27 {
+            let d = [offset % 3, offset / 3 % 3, offset / 9].map(|d| d as i64 - 1);
+            let cell = [0, 1, 2].map(|k| index[k] as i64 + d[k]);
+            if cell.iter().all(|&c| (0..cells).contains(&c)) {
+                let neighbour = morton::from_index_and_level(cell.map(|c| c as usize), level);
+                if in_tree(neighbour) {
+                    essential.push(neighbour);
+                }
+            }
+        }
+    }
+    essential.sort_unstable();
+    essential.dedup();
+    let children: Vec<u64> = essential
+        .iter()
+        .filter(|&&key| !is_leaf(key))
+        .flat_map(|&key| morton::children(key).unwrap())
+        .collect();
+    essential.extend(children);
+    essential.sort_unstable();
+    essential.dedup();
+
+    let mut expected: Vec<u64> = essential.iter().chain(&top).copied().collect();
+    expected.sort_unstable();
+    expected.dedup();
+    let mut actual: Vec<u64> = held.keys().copied().collect();
+    actual.sort_unstable();
+    let extra: Vec<u64> = actual
+        .iter()
+        .copied()
+        .filter(|key| expected.binary_search(key).is_err())
+        .collect();
+    let missing: Vec<u64> = expected
+        .iter()
+        .copied()
+        .filter(|key| actual.binary_search(key).is_err())
+        .collect();
+    assert!(
+        extra.is_empty() && missing.is_empty(),
+        "rank {rank}: {name}: held keys not H ∪ T: {} extra {extra:?}, {} missing {missing:?}",
+        extra.len(),
+        missing.len()
+    );
+
+    for (&key, &kind) in held {
+        let above_blocks = top.binary_search(&key).is_ok() && blocks.binary_search(&key).is_err();
+        let one_rank_root = nranks == 1 && key == morton::root() && !is_leaf(key);
+        let expected = if above_blocks || one_rank_root {
+            KeyType::Global
+        } else {
+            let owner = owners[block_of(key).expect("a key below the blocks lies in one")];
+            match (owner == rank, is_leaf(key)) {
+                (true, true) => KeyType::LocalLeaf,
+                (true, false) => KeyType::LocalInterior,
+                (false, true) => KeyType::GhostLeaf(owner),
+                (false, false) => KeyType::GhostInterior(owner),
+            }
+        };
+        assert_eq!(kind, expected, "rank {rank}: {name}: kind of {key}");
+    }
+    [held.len(), essential.len(), top.len()]
 }
 
 /// Compare the index-form lists of every local non-ghost box against the brute-force
@@ -1957,6 +2086,23 @@ fn distributed_tree_regressions() {
         let held = held_keys(&plan);
         let oracle = oracle_of(&held, &global_leaves, octree.coarse_tree_leafs());
         check_plan(name, &held, &oracle, &plan, octree.coarse_tree_leafs());
+        // The held set is H ∪ T, the locally essential keys and the top-tree keys.
+        let [all, essential, top] = check_held_keys(name, &comm, &held, &octree, &global_leaves);
+        let mut most = [0usize; 3];
+        comm.all_reduce_into(
+            &[all, essential, top][..],
+            &mut most[..],
+            SystemOperation::max(),
+        );
+        if rank == 0 && name == "graded corner blob" {
+            println!(
+                "held keys on {} ranks, {name}, max over the ranks: H ∪ T {}, H {}, T {}",
+                comm.size(),
+                most[0],
+                most[1],
+                most[2]
+            );
+        }
         // The graded tree has `Global` boxes on every rank count and spreads its lists
         // over several ranks, so the global pass and the ghost leaves are exercised.
         let global_pairs: usize = plan.levels().iter().map(|l| l.m2m_global().len()).sum();

@@ -13,7 +13,8 @@
 //!   ([`V_LIST_DIRECTIONS`](interaction_manager::V_LIST_DIRECTIONS)) and the per-key
 //!   list rule.
 //! - [`plan`]: [`Plan`](plan::Plan) builds the index and the lists of every level from
-//!   an octree.
+//!   an octree, over the octree's locally essential keys and the top-tree keys of its
+//!   partition map (Phase 5S T4, [Held keys](plan#held-keys)).
 //! - [`store`]: the data of an evaluation, one buffer per level and kind for
 //!   multipoles and locals, and CSR leaf stores with variable counts per leaf.
 //! - [`exchange`]: the ghost exchanges of sources and multipoles, and the gather of the
@@ -99,7 +100,6 @@ pub mod index;
 pub mod interaction_manager;
 pub mod lists;
 pub mod operator;
-mod phase5_keys;
 pub mod plan;
 pub mod redistribute;
 pub mod store;

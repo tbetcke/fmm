@@ -5,7 +5,8 @@
 //! evaluates it repeatedly and reports, per rank and reduced over the ranks
 //! ([`Report`]):
 //! - the work as built: input points, owned sources and targets, leaves, list pairs, held
-//!   boxes (local, ghost, `Global`);
+//!   boxes (own, halo, shared ancestors, other top-tree keys of the locally essential
+//!   set, top-tree keys held only for the global pass; Phase 5S T4);
 //! - the build by part (`BuildTimings`: domain, octree, plan, redistribution, tables,
 //!   evaluator with its exchange builds, load), the median over [`Settings::builds`];
 //! - the evaluation by stage ([`STAGES`]): the median per rank over
@@ -656,8 +657,11 @@ pub struct RankRow {
     pub empty_leaves: usize,
     /// The interaction lists on this rank.
     pub lists: ListSizes,
-    /// The held boxes: local, ghost and `Global`, as the octree classifies them.
-    pub held: [usize; 3],
+    /// The held boxes of the plan ([`HELD_PARTS`]): own, halo, shared ancestors, the
+    /// other top-tree keys of the locally essential set H, and the top-tree keys held
+    /// only for the coarse gather and the global pass (T ∖ H; Phase 5S T4,
+    /// docs/design/scale-out.md §3.7). The first four sum to |H|, all five to |H ∪ T|.
+    pub held: [usize; 5],
     /// The ghost source points the source exchange receives (G_s).
     pub ghost_sources: usize,
     /// [`BUILD_PARTS`], the median over the builds.
@@ -674,11 +678,15 @@ pub struct RankRow {
     /// with [`Input::Rank0`]); with [`Input::Owners`] it includes the build that finds the
     /// owners.
     pub resident_input: Option<f64>,
+    /// The bytes of the plan's arrays, counted from their lengths (Phase 5S T4): the box
+    /// index (keys, kinds, first children, leaves), the leaf numbering and every view,
+    /// row offsets and batch arrays included; what `Plan::new` keeps.
+    pub plan_bytes: usize,
 }
 
-/// The position in [`RankRow::encode`] of the ghost held boxes, after the counts, the
-/// build, the traffic, the memory and the resident size; the `Global` ones and the resident
-/// size after the input follow.
+/// The position in [`RankRow::encode`] of the second part of the held boxes, after the
+/// counts, the build, the traffic, the memory and the resident size; the third part, the
+/// resident size after the input and the last two parts follow.
 const ROW_VALUES: usize = 11 + 9 + 16 + 8 + 1;
 
 impl RankRow {
@@ -724,6 +732,9 @@ impl RankRow {
         values.push(self.held[1] as f64);
         values.push(self.held[2] as f64);
         values.push(self.resident_input.unwrap_or(-1.0));
+        values.push(self.held[3] as f64);
+        values.push(self.held[4] as f64);
+        values.push(self.plan_bytes as f64);
         values
     }
 
@@ -744,7 +755,13 @@ impl RankRow {
                 x: c(8),
             },
             ghost_sources: c(9),
-            held: [c(10), c(ROW_VALUES), c(ROW_VALUES + 1)],
+            held: [
+                c(10),
+                c(ROW_VALUES),
+                c(ROW_VALUES + 1),
+                c(ROW_VALUES + 3),
+                c(ROW_VALUES + 4),
+            ],
             build: core::array::from_fn(|k| v[11 + k]),
             traffic: RankTraffic {
                 sources: Traffic {
@@ -768,6 +785,7 @@ impl RankRow {
             memory: MemoryModel::from_array(&v[36..44]),
             resident: (v[44] >= 0.0).then_some(v[44]),
             resident_input: (v[ROW_VALUES + 2] >= 0.0).then_some(v[ROW_VALUES + 2]),
+            plan_bytes: c(ROW_VALUES + 5),
         }
     }
 }
@@ -1262,20 +1280,37 @@ fn owned_points<T: Stored + SimdScalar + Equivalence + Default>(
         .collect()
 }
 
-/// The held boxes of `fmm` on this rank: local, ghost and `Global`.
-fn held_boxes<T: Stored + SimdScalar + Equivalence + Default>(fmm: &Fmm<'_, T>) -> [usize; 3] {
+/// The parts of [`RankRow::held`].
+pub const HELD_PARTS: [&str; 5] = [
+    "own",
+    "halo",
+    "shared ancestors",
+    "other top keys in H",
+    "top keys only for the global pass",
+];
+
+/// The held boxes of `fmm`'s plan on this rank, by [`HELD_PARTS`]: a key of the octree's
+/// locally essential set H is own (non-ghost there, not `Global`), a shared ancestor
+/// (`Global` there), a top-tree key of another rank (a ghost that the partition map
+/// knows: another rank's block, or an ancestor of other ranks' blocks only) or halo (a
+/// ghost below another rank's block); every other held key is a top-tree key the plan
+/// holds only for the coarse gather and the global pass (Phase 5S T4).
+fn held_boxes<T: Stored + SimdScalar + Equivalence + Default>(fmm: &Fmm<'_, T>) -> [usize; 5] {
     let index = fmm.plan().index();
-    let mut held = [0usize; 3];
+    let octree = fmm.octree();
+    let essential = octree.all_keys();
+    let map = octree.partition_map();
+    let mut held = [0usize; 5];
     for level in 0..index.nlevels() {
-        for kind in index.kinds(level) {
-            // `KeyType` is nd-octree's, which this crate does not depend on: its
-            // `Global` variant is told apart by name.
-            let k = if kind.is_ghost() {
-                1
-            } else if format!("{kind:?}") == "Global" {
-                2
-            } else {
-                0
+        for &key in index.keys(level) {
+            let k = match essential.get(&key) {
+                None => 4,
+                // `KeyType` is nd-octree's, which this crate does not depend on: its
+                // `Global` variant is told apart by name.
+                Some(kind) if !kind.is_ghost() && format!("{kind:?}") == "Global" => 2,
+                Some(kind) if !kind.is_ghost() => 0,
+                Some(_) if map.top_kind(key).is_some() => 3,
+                Some(_) => 1,
             };
             held[k] += 1;
         }
@@ -1353,7 +1388,52 @@ fn rank_row<T: Stored + SimdScalar + Equivalence + Default>(
         memory,
         resident: None,
         resident_input: None,
+        plan_bytes: plan_bytes(fmm),
     }
+}
+
+/// The bytes of the arrays of `fmm`'s plan, from their lengths ([`RankRow::plan_bytes`]).
+fn plan_bytes<T: Stored + SimdScalar + Equivalence + Default>(fmm: &Fmm<'_, T>) -> usize {
+    use std::mem::size_of_val;
+    let plan = fmm.plan();
+    let index = plan.index();
+    let leaves = index.leaves();
+    let mut bytes =
+        size_of_val(leaves.keys()) + size_of_val(leaves.levels()) + size_of_val(leaves.boxes());
+    for level in 0..index.nlevels() {
+        bytes += size_of_val(index.keys(level))
+            + size_of_val(index.kinds(level))
+            + size_of_val(index.first_children(level))
+            + size_of_val(index.box_leaves(level));
+    }
+    // The views are named by their accessors: this crate does not depend on nd-fmm-plan.
+    macro_rules! csr {
+        ($view:expr) => {
+            size_of_val($view.row_offsets()) + size_of_val($view.entries())
+        };
+    }
+    macro_rules! grouped {
+        ($view:expr) => {
+            size_of_val($view.row_offsets())
+                + size_of_val($view.sources())
+                + size_of_val($view.groups())
+                + size_of_val($view.batch_offsets())
+                + size_of_val($view.batch_targets())
+                + size_of_val($view.batch_sources())
+        };
+    }
+    for lists in plan.levels() {
+        bytes += grouped!(lists.v())
+            + grouped!(lists.m2m_local())
+            + grouped!(lists.m2m_global())
+            + grouped!(lists.l2l())
+            + csr!(lists.x())
+            + csr!(lists.p2m())
+            + csr!(lists.near())
+            + csr!(lists.w())
+            + csr!(lists.l2p());
+    }
+    bytes + size_of_val(plan.coarse_blocks())
 }
 
 /// The bits of every value of `output`, φ then ∇φ.
@@ -2516,14 +2596,16 @@ impl fmt::Display for Report {
             writeln!(
                 f,
                 "| rank | input | sources | targets | leaves (empty) | near pairs | V pairs | \
-                 W pairs | X pairs | held boxes local / ghost / Global | ghost sources | \
+                 W pairs | X pairs | held boxes own / halo / shared / other top / only T | \
+                 ghost sources | \
                  memory model, MB (coefficients) | resident, MB |"
             )?;
             writeln!(f, "| --- | {} |", ["---"; 12].join(" | "))?;
             for (r, row) in self.rows.iter().enumerate() {
                 writeln!(
                     f,
-                    "| {r} | {} | {} | {} | {} ({}) | {} | {} | {} | {} | {} / {} / {} | {} | \
+                    "| {r} | {} | {} | {} | {} ({}) | {} | {} | {} | {} | {} / {} / {} / {} / {} \
+                     | {} | \
                      {} ({}) | {} |",
                     row.input,
                     row.sources,
@@ -2537,6 +2619,8 @@ impl fmt::Display for Report {
                     row.held[0],
                     row.held[1],
                     row.held[2],
+                    row.held[3],
+                    row.held[4],
                     row.ghost_sources,
                     mb(row.memory.total()),
                     mb(row.memory.coefficients),
@@ -2654,11 +2738,34 @@ impl fmt::Display for Report {
         )?;
         line(
             f,
-            "held boxes not local (fraction)",
-            &|r| (r.held[1] + r.held[2]) as f64 / r.held.iter().sum::<usize>().max(1) as f64,
+            "held boxes of H, the locally essential set",
+            &|r| r.held[..4].iter().sum::<usize>() as f64,
+            &count,
+        )?;
+        for (k, part) in HELD_PARTS.iter().enumerate() {
+            line(
+                f,
+                &format!("held boxes: {part}"),
+                &|r| r.held[k] as f64,
+                &count,
+            )?;
+        }
+        line(
+            f,
+            "held boxes not own (fraction)",
+            &|r| {
+                (r.held.iter().sum::<usize>() - r.held[0]) as f64
+                    / r.held.iter().sum::<usize>().max(1) as f64
+            },
             &|v| format!("{v:.3}"),
         )?;
         line(f, "ghost sources", &|r| r.ghost_sources as f64, &count)?;
+        line(
+            f,
+            "plan arrays (box index, leaves, views), MB",
+            &|r| r.plan_bytes as f64,
+            &|v| mb(v),
+        )?;
         for (k, part) in BUILD_PARTS.iter().enumerate() {
             line(f, &format!("build: {part}, ms"), &|r| r.build[k], &|v| {
                 ms(v)

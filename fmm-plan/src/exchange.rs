@@ -36,7 +36,9 @@
 //!   into a flat buffer of every rank's blocks in rank order, which is global key order
 //!   because ranks own ascending key ranges ([`CoarseExchange::keys`]). The blocks of the
 //!   other ranks are then scattered into their slots; every coarse block has a box index
-//!   on every rank (design §3.5).
+//!   on every rank (design §3.5): since Phase 5S T4 not as a guarantee of the octree's
+//!   key set, but because the plan holds every block of the partition map until T5
+//!   replaces the gather ([Held keys](super::plan#held-keys)).
 //!
 //! # Collectives
 //!

@@ -6,6 +6,23 @@
 //! [`interaction_manager`](crate::interaction_manager) and are translated to indices at
 //! build time (design §4.1, `docs/design/fmm-plan-redesign.md`).
 //!
+//! # Held keys
+//!
+//! Since Phase 5S T4 the plan holds **H ∪ T** (`docs/design/scale-out.md` §3.4, §3.7):
+//! - H, the octree's locally essential set
+//!   ([`Octree::all_keys`](nd_octree::Octree::all_keys)): with S the own keys and the
+//!   shared ancestors (the ancestors of this rank's coarse blocks), S, every same-level
+//!   neighbour of a key of S and the children of the interior ones;
+//! - T, the top-tree keys: every coarse block of every rank and every ancestor of one,
+//!   from the replicated [`PartitionMap`](nd_octree::octree::PartitionMap), without
+//!   communication. Other ranks' blocks are ghosts of their owners; **every** ancestor
+//!   of a block is `Global`, as in Phase 5, also where the octree holds it as a ghost
+//!   (an ancestor of other ranks' blocks only).
+//!
+//! T is what the coarse gather and the global upward pass still need until Phase 5S T5
+//! replaces them: a slot for every block, and the M2M row of every `Global` box. It
+//! grows with P (about 1.15 B keys for B blocks); H does not grow at fixed N/P.
+//!
 //! # Guarantees
 //!
 //! - Every non-ghost box has rows in every view that applies to it; ghost boxes have
@@ -13,23 +30,31 @@
 //!   and [`index`](super::index) for those of the numbering.
 //! - **Only the `Global` locals this rank needs** (P2, `docs/design/distributed-fmm.md`
 //!   §3.6). A rank's locals descend only from the `Global` boxes above its own coarse
-//!   blocks, so a `Global` box that is not an ancestor of one of them has empty V, X and
-//!   L2L rows, and its local stays zero. Its M2M row of the global pass stays, because
-//!   the V rows that remain read the multipoles of any `Global` box. Every row that
-//!   stays is the row it would be without P2, so every value of a needed box is the
-//!   same, bit for bit. One rank has no `Global` box with a row to drop, and a rank
-//!   without coarse blocks keeps no `Global` downward row.
-//! - Every list entry, every child of a non-ghost interior box (in particular every child
-//!   of a `Global` box, which is a coarse block or `Global` itself) and every own coarse
-//!   block is a held key. [`Plan::new`] checks this and fails on every rank otherwise.
+//!   blocks (its shared ancestors), so a `Global` box that is not an ancestor of one of
+//!   them has empty V, X and L2L rows, and its local stays zero. Its lists are not even
+//!   resolved: the plan does not hold its neighbourhood (Phase 5S T4). Its M2M row of
+//!   the global pass stays, because the V rows that remain read the multipoles of any
+//!   `Global` box. Every row that stays is the row it would be without P2, so every
+//!   value of a needed box is the same, bit for bit. One rank has no `Global` box with
+//!   a row to drop, and a rank without coarse blocks keeps no `Global` downward row.
+//! - **Every key a list or a parent-child step names is held**: every list entry of a
+//!   box with rows, the parent of such a box, every child of a non-ghost interior box
+//!   (in particular every child of a `Global` box, which is a coarse block or `Global`
+//!   itself) and every own coarse block. [`Plan::new`] checks this and fails on every
+//!   rank otherwise. The keys the exchanges name are the ghosts among them, and every
+//!   coarse block (T).
+//! - **Phase 5's lists.** Every list entry, as a key, and the order of every row are
+//!   those of the Phase 5 plan over the Phase 5 key set: the rows depend only on the
+//!   tree and the rule, P1 orders by (level, key), and the kinds of the keys the rows
+//!   name are Phase 5's (`docs/design/scale-out.md` §3.6). Only the box indices change,
+//!   because fewer keys are held.
 //! - The plan owns its arrays and borrows nothing from the octree. A new tree needs a new
 //!   plan: box indices, unlike keys, change when the tree changes.
 //!
 //! # Cost
 //!
-//! The lists are built locally, in O(E log K) for E list entries and K held keys.
-//! [`Plan::new`] adds two all-reduces, and until Phase 5S T4 the collectives that
-//! rebuild the Phase 5 key set from the octree.
+//! The lists are built locally, in O(E log K) for E list entries and K held keys, and T
+//! in O(B) for B coarse blocks. [`Plan::new`] adds two all-reduces.
 
 #[cfg(test)]
 #[path = "plan_tests.rs"]
@@ -45,7 +70,6 @@ use super::lists::{
     CsrBuilder, GroupedBuilder, LevelLists, NOCTANTS, NOFFSETS, Overflow, offset, offset_index,
 };
 use crate::interaction_manager::{is_interior, is_leaf, key_lists, valid_neighbours};
-use crate::phase5_keys::phase5_held_keys;
 
 /// The box index and the interaction lists of an octree on one rank.
 ///
@@ -158,24 +182,22 @@ impl Error for PlanError {}
 impl Plan {
     /// Build the box index and the interaction lists of `octree`.
     ///
-    /// Until Phase 5S T4 the plan holds the Phase 5 key set: since T3 the octree holds
-    /// only its locally essential keys, and a private adapter rebuilds Phase 5's set
-    /// from the octree's leaves, blocks and bounds, so every list and value stays that
-    /// of Phase 5.
+    /// The plan holds the octree's locally essential keys and the top-tree keys of its
+    /// partition map, H ∪ T (see [Held keys](self#held-keys)).
     ///
     /// # Collective operation
-    /// One all-reduce for the global level count; the adapter's two all-gathers and
-    /// all-to-all-v (until T4); and one all-reduce for the validity check, in that
-    /// order, on every rank. The lists themselves are built without communication.
+    /// One all-reduce for the global level count and one for the validity check, in
+    /// that order, on every rank. The held keys and the lists are built without
+    /// communication.
     ///
     /// # Errors
     /// Returned on every rank if, on any rank, the tree lacks the ghost-children layer,
-    /// a list entry or a child of a non-ghost interior box (in particular of a `Global`
-    /// box) is not held, or a level or view outgrows `u32` indices. The rank that found
-    /// the defect returns it; the other ranks return [`PlanError::OtherRank`].
+    /// a list entry, a parent or a child of a non-ghost interior box (in particular of a
+    /// `Global` box) is not held, or a level or view outgrows `u32` indices. The rank
+    /// that found the defect returns it; the other ranks return [`PlanError::OtherRank`].
     pub fn new<C: CommunicatorCollectives>(octree: &Octree<'_, C>) -> Result<Self, PlanError> {
         let nlevels = octree.global_max_level() + 1;
-        let held = phase5_held_keys(octree);
+        let held = held_keys(octree);
         let local = if octree.options().ghost_children() {
             Self::from_key_types(&held, nlevels, octree.coarse_tree_leafs())
         } else {
@@ -239,19 +261,11 @@ impl Plan {
             .collect();
         let mut index = BoxIndex::new(keys, kinds);
 
-        validate_tree(&index, all_keys)?;
         let mut coarse_blocks = own_coarse_blocks.to_vec();
         coarse_blocks.sort_unstable();
         coarse_blocks.dedup();
-        for &key in &coarse_blocks {
-            match index.find(key) {
-                Some((level, i)) if !index.kind(level, i as usize).is_ghost() => {}
-                _ => return Err(PlanError::CoarseBlock { key }),
-            }
-        }
-
         // P2: the `Global` boxes whose locals this rank needs, the ancestors of its own
-        // coarse blocks, ascending.
+        // coarse blocks (its shared ancestors), ascending.
         let mut needed_globals = Vec::new();
         for &block in &coarse_blocks {
             let mut key = block;
@@ -262,6 +276,14 @@ impl Plan {
         }
         needed_globals.sort_unstable();
         needed_globals.dedup();
+
+        validate_tree(&index, all_keys, &needed_globals)?;
+        for &key in &coarse_blocks {
+            match index.find(key) {
+                Some((level, i)) if !index.kind(level, i as usize).is_ghost() => {}
+                _ => return Err(PlanError::CoarseBlock { key }),
+            }
+        }
 
         // First pass: every view that needs only box indices, and the U- and X-entries
         // as boxes, which become leaf indices once the ghost leaves are numbered.
@@ -318,13 +340,50 @@ impl Plan {
     }
 }
 
-/// Check the preconditions of the per-key rule, so that it cannot panic: every held
-/// interior key has children, every same-level neighbour of the parent of a non-ghost key
-/// is held, and every same-level neighbour cell of a non-ghost leaf is held or covered by
-/// a held leaf parent.
+/// The keys the plan holds, H ∪ T, with their kinds (see [Held keys](self#held-keys)): the
+/// octree's locally essential set, with every coarse block and every ancestor of one
+/// added from the partition map; a block keeps the kind the map gives it, and every
+/// ancestor of a block is `Global`. Local, O(B) for B blocks.
+fn held_keys<C: CommunicatorCollectives>(octree: &Octree<'_, C>) -> HashMap<MortonKey, KeyType> {
+    let map = octree.partition_map();
+    let mut held = octree.all_keys().clone();
+    for &block in map.blocks() {
+        let kind = map
+            .top_kind(block)
+            .expect("a coarse block is a top-tree key");
+        let previous = held.insert(block, kind);
+        debug_assert!(
+            previous.is_none_or(|previous| previous == kind),
+            "the octree and its partition map classify block {block} alike"
+        );
+        let mut key = block;
+        while let Some(parent) = morton::parent(key) {
+            // An ancestor already `Global` was reached from an earlier block, or is a
+            // shared ancestor, whose ancestors are shared ancestors too.
+            if held.insert(parent, KeyType::Global) == Some(KeyType::Global) {
+                break;
+            }
+            key = parent;
+        }
+    }
+    held
+}
+
+/// Whether `key`, of kind `kind`, is a `Global` box whose local this rank does not need
+/// (P2): not an ancestor of one of its coarse blocks, `needed_globals` (ascending).
+fn is_pruned(key: MortonKey, kind: KeyType, needed_globals: &[MortonKey]) -> bool {
+    kind == KeyType::Global && needed_globals.binary_search(&key).is_err()
+}
+
+/// Check the preconditions of the per-key rule, so that it cannot panic: no interior key
+/// lies on the deepest level, and for every key the rule runs on (every non-ghost key but
+/// the pruned `Global` boxes of P2) every same-level neighbour of its parent is held,
+/// and, for a leaf, every same-level neighbour cell is held or covered by a held leaf
+/// parent.
 fn validate_tree(
     index: &BoxIndex,
     all_keys: &HashMap<MortonKey, KeyType>,
+    needed_globals: &[MortonKey],
 ) -> Result<(), PlanError> {
     let malformed = |key, reason| Err(PlanError::MalformedTree { key, reason });
     for level in 0..index.nlevels() {
@@ -332,7 +391,7 @@ fn validate_tree(
             if is_interior(kind) && level >= DEEPEST_LEVEL as usize {
                 return malformed(key, "an interior key lies on the deepest level");
             }
-            if kind.is_ghost() {
+            if kind.is_ghost() || is_pruned(key, kind, needed_globals) {
                 continue;
             }
             if is_leaf(kind) {
@@ -382,8 +441,8 @@ struct PartialLevel {
 /// X-entries, recording every ghost leaf among them in `ghost_leaves`.
 ///
 /// A `Global` box that is not in `needed_globals` (ascending) gets empty V, X and L2L
-/// rows (P2); its lists are still resolved, so that the errors do not depend on the
-/// rank's coarse blocks.
+/// rows (P2) and only its M2M row of the global pass. Its lists are not resolved: since
+/// Phase 5S T4 the plan does not hold its neighbourhood.
 fn first_pass(
     index: &BoxIndex,
     all_keys: &HashMap<MortonKey, KeyType>,
@@ -418,10 +477,23 @@ fn first_pass(
             continue;
         }
 
-        let [u, v, w, x] = key_lists(key, kind, all_keys);
         // P2 (distributed-fmm §3.6): this rank's locals descend only from the `Global`
         // boxes above its own coarse blocks, so the others get no downward rows.
-        let pruned = kind == KeyType::Global && needed_globals.binary_search(&key).is_err();
+        if is_pruned(key, kind, needed_globals) {
+            let first = index
+                .first_child(level, i)
+                .ok_or(PlanError::MissingChild { key })?;
+            partial.v.push_row([]);
+            partial.m2m_local.push_row([]);
+            partial
+                .m2m_global
+                .push_row((0..NOCTANTS as u8).map(|o| (o, first + o as u32)));
+            partial.l2l.push_row([]);
+            partial.p2m.push_row([]);
+            partial.x_offsets.push(partial.x_entries.len());
+            continue;
+        }
+        let [u, v, w, x] = key_lists(key, kind, all_keys);
         let resolve = |entry| {
             index
                 .find(entry)
@@ -441,9 +513,6 @@ fn first_pass(
                 "a V-list offset is not one of V_LIST_DIRECTIONS",
             ))?;
             v_row.push((d as u16, j));
-        }
-        if pruned {
-            v_row.clear();
         }
         v_row.sort_unstable();
         partial.v.push_row(v_row.iter().copied());
@@ -482,9 +551,6 @@ fn first_pass(
                     "an X-list entry is not a leaf one level coarser",
                 ));
             }
-            if pruned {
-                continue;
-            }
             partial.x_entries.push(entry);
             if index.kind(entry.0, entry.1 as usize).is_ghost() {
                 ghost_leaves.push(entry);
@@ -514,11 +580,7 @@ fn first_pass(
                 let Some((_, j)) = index.find(parent) else {
                     return Err(malformed(key, "the parent of a non-ghost key is not held"));
                 };
-                if pruned {
-                    partial.l2l.push_row([]);
-                } else {
-                    partial.l2l.push_row([(morton::child_index(key) as u8, j)]);
-                }
+                partial.l2l.push_row([(morton::child_index(key) as u8, j)]);
             }
             None => partial.l2l.push_row([]),
         }
