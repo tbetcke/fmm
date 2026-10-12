@@ -516,7 +516,7 @@ fn main() {
         performance_cores()
     );
     println!("- Build: {}, {}", target(), toolchain());
-    println!("- CubeCL 0.11.0-pre.4 (pinned)");
+    println!("- CubeCL 0.11.0 (pinned)");
     let blas: Vec<String> = [
         "OPENBLAS_NUM_THREADS",
         "OMP_NUM_THREADS",

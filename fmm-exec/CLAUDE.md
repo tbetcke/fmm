@@ -394,7 +394,8 @@ loading with a cache at scale, the ranks × threads guidance; design docs/design
 
 ## CUDA (Phase 4S)
 Measured on locust's H100 (GH200) on 2026-10-07 (Phase 4S T4, C4S.4; CubeCL
-0.11.0-pre.4 through LLVM NVPTX, CUDA 12.6; docs/design/device-path.md §18.1).
+0.11.0-pre.4 through LLVM NVPTX, CUDA 12.6; docs/design/device-path.md §18.1). The pin is
+CubeCL 0.11.0 since Phase 5S T1s, re-run on locust there (fmm-validate/results/phase5s-t1s.md).
 - Running: on the M3 Max, outside the sandbox, `tools/gh200/sync.sh`, then
   `tools/gh200/remote.sh 'RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features
   cuda --release -- --ignored --nocapture'`. CUDA tests are `#[ignore = "CUDA: run by
@@ -411,7 +412,10 @@ Measured on locust's H100 (GH200) on 2026-10-07 (Phase 4S T4, C4S.4; CubeCL
   level call the static rule gives the library (f32, n ≥ 81: M2M and L2L under `Auto`,
   every kind under `Library`) reports a `library_rejection` and runs the hand-written
   kernel; the tests assert it. The tuner's candidates are the hand-written layouts, the
-  chunk budget and the P2P layouts; a library candidate is unregistered.
+  chunk budget and the P2P layouts; a library candidate is unregistered. (Since CubeCL
+  0.11.0, Phase 5S T1s, the probe succeeds and runs f32 at TF32 precision; the
+  input-precision guard rejects it because CUDA registers no f32 CMMA form,
+  `docs/design/cubecl-upstream.md` entry 4, so the outcome is unchanged.)
 - C4.8 (`tests/device_fmm.rs`): the device output within 6.7e-15 (f64) and 2.9e-6 (f32)
   of the host's (relative L2, φ), the errors against the direct sum within a ratio of
   1.0000 of the host's in f64 and 0.991–1.010 in f32, over the cube, the Plummer sphere

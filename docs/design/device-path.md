@@ -924,6 +924,9 @@ Details:
   registers no TF32 type, since the accelerated routines otherwise switch f32 stages
   to TF32 (F21, `adjust_dtypes`). Metal registers none; CUDA does, so f32 on CUDA uses
   the hand-written kernel. T9 checks the resolved `MatmulElems`, not the backend name.
+  Since CubeCL 0.11.0 (Phase 5S T1s) the resolved types no longer show the TF32 switch
+  on CUDA, so the guard also requires a registered CMMA form with T operands
+  (docs/design/cubecl-upstream.md, entry 4).
 - A shape the library rejects at build (`MatmulSetupError::Unavailable`) goes to the
   hand-written kernel, decided by shape alone, so the choice is the same on every
   evaluation. The choice per level is fixed at build and reported.

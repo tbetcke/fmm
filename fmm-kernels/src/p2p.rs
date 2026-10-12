@@ -320,7 +320,8 @@ fn p2p_tiled_kernel<F: Float>(
         // same values. cubecl-llvm 0.11.0-pre.4 does not lower PLANE_POS for NVPTX (it
         // panics at compilation; Phase 4S T2); fixed upstream after that release
         // (tracel-ai/cubecl#1714), so this can go back to the builtins once the pin
-        // includes the fix.
+        // includes the fix. The pin 0.11.0 (Phase 5S T1s) includes it (cubecl-llvm
+        // src/shared/builtins.rs:136-141); going back is a separate change.
         member = UNIT_POS as usize / group;
         lane = UNIT_POS as usize % group;
     }

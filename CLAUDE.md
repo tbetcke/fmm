@@ -49,9 +49,9 @@ for crate-specific rules; everything here applies to all of them.
   bound to `RealScalar` (its test operators use `u32`).
 - New dependencies of new crates only through [workspace.dependencies]; octree/
   declares its own directly until migrated (a separate decision). CubeCL only
-  in nd-fmm-kernels and spikes/; it is pinned to `=0.11.0-pre.4` (matmul: `cubek-matmul`
-  `=0.3.0-pre.4`, with `cubek-std` `=0.3.0-pre.4`) in [workspace.dependencies], a
-  pre-release chosen on 2026-10-03 for f64 on CUDA; see
+  in nd-fmm-kernels and spikes/; it is pinned to `=0.11.0` (matmul: `cubek-matmul`
+  `=0.3.0`, with `cubek-std` `=0.3.0`) in [workspace.dependencies], the release (Phase 5S
+  T1s) after the pre-release `=0.11.0-pre.4` chosen on 2026-10-03 for f64 on CUDA; see
   spikes/cubecl-gemm/SPIKE_REPORT.md.
 - `unsafe` only in nd-fmm-simd's `arch` modules and its ISA dispatch, in
   nd-fmm-kernels, and in spikes/. Every block carries a `// SAFETY:` comment and
@@ -248,8 +248,8 @@ runs `cargo upgrades` (not `cargo audit`).
 
 ## Navigating the code
 Prefer LSP tools (go-to-definition, find-references, symbols) over `grep`/`find` when
-chasing a symbol; they resolve through the real dependency graph. `rlst` 0.9.0 comes
-from crates.io, so its sources are in `~/.cargo/registry/src/*/rlst-0.9.0/`; a `../rlst`
+chasing a symbol; they resolve through the real dependency graph. `rlst` 0.10.0 comes
+from crates.io, so its sources are in `~/.cargo/registry/src/*/rlst-0.10.0/`; a `../rlst`
 checkout on the machine, if any, is an unrelated development tree and may differ. Use
 `grep` for what LSP does not index: comments, CI YAML, `Cargo.toml`. Read the
 implementation and tests rather than trusting prose when checking how an API behaves.

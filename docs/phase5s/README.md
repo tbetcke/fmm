@@ -309,7 +309,7 @@ These hold for every task, so that no task decides them on its own:
   otherwise. One MPI-initialising test per test executable.
 - **Errors.** No new collective for agreement where an existing one can carry the error;
   a new one is justified in T1 and counted in the collectives table.
-- **Dependencies.** No new external dependency. rlst 0.10.0 (from T1s; 0.9.0 until then)
+- **Dependencies.** No new external dependency. rlst 0.10.0 (since T1s; 0.9.0 before)
   and mpi 0.8.2 stay pinned, and CubeCL `=0.11.0` with `cubek-matmul`/`cubek-std`
   `=0.3.0` (from T1s; the pre-releases until then).
   rsmpi 0.8.2 already has what a sparse exchange needs (`immediate_synchronous_send`,

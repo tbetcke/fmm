@@ -33,7 +33,7 @@
 //! device that came up without the MSL compiler (a silent WGSL fallback), recognised by
 //! the plane-sync and CMMA features only the MSL path registers. [`DeviceInfo`] names
 //! the backend, compiler, device and CubeCL version for reports; its `Display` is one
-//! line, `metal (wgpu<msl>), Apple M3 Max, CubeCL 0.11.0-pre.4, f32`.
+//! line, `metal (wgpu<msl>), Apple M3 Max, CubeCL 0.11.0, f32`.
 //!
 //! The crate never reads an environment variable to choose a backend or device.
 //! CubeCL reads its own (`CUBECL_CPU_STACK_MB`, `CUBECL_DEBUG_LOG`, …) and a

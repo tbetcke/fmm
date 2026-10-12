@@ -120,7 +120,9 @@ docs/phase5/.
   group wider than the budget in pieces), reading the library copy of the tables from
   the chunk's first group (wgpu binds only aligned offsets), only if a probe launch of
   every chunk shape succeeds at build and the resolved `MatmulElems` keep T for every
-  stage and register type (the input-precision guard; tested with lowered types); else
+  stage and register type and the device registers a CMMA form with T operands (the
+  input-precision guard; tested with lowered types; the second part since Phase 5S T1s,
+  CUDA section below); else
   the hand-written kernel for the whole view, decided at build by the shape alone
   (`GroupedPlan::gemm`, `library_rejection`, `gemm_columns` for the padding). Chunks and
   layouts never change the bits of the hand-written path (tested); on Metal the library
@@ -235,7 +237,8 @@ docs/phase5/.
 - CubeCL features: the workspace entries set `default-features = false`, so `cpu` and
   `cuda` build without CubeCL's `persistence`. With `metal` it is on regardless:
   `cubecl-wgpu` 0.11.0-pre.4 takes `cubecl-cpp` with its defaults, which enable
-  `cubecl-runtime/default`. A Metal run then creates an empty store
+  `cubecl-runtime/default` (still so in 0.11.0, Phase 5S T1s: `cubecl-wgpu` Cargo.toml
+  lines 133-136, `cubecl-cpp` line 40, `cubecl-runtime` line 48). A Metal run then creates an empty store
   `target/environment/default.db` (T4; accepted at its sign-off, device-path.md §3.4).
   Never call CubeCL's autotune or throughput
   measurement, and never enable `[compilation] cache`, so that nothing is recorded in
@@ -273,7 +276,8 @@ Measured on locust's H100 (GH200) on 2026-10-06 (Phase 4S T2; docs/design/device
   locust"]` and are registered with `tests_on!(cuda: …)`: Metal's list plus every f64
   test and the property tests, 56 tests (58 from Phase 4S T9, with the output gather in
   f32 and f64; Metal's list gains its f64 refusal instead).
-- `DeviceInfo`: `cuda (cuda), NVIDIA GH200 480GB, CubeCL 0.11.0-pre.4, f32 f64`; plane
+- `DeviceInfo`: `cuda (cuda), NVIDIA GH200 480GB, CubeCL 0.11.0, f32 f64` (0.11.0-pre.4
+  until Phase 5S T1s); plane
   size 32 (fixed), shared memory 232,448 B per cube (the opt-in maximum; Metal 32 KB),
   1024 units per cube, cube counts (2³¹ − 1, 65,535, 65,535), memory 102,005,473,280 B.
   `GPU_MAX_CUBES` stays 65,535 for every backend: measured in Phase 4S T7, lifting it on
@@ -291,13 +295,21 @@ Measured on locust's H100 (GH200) on 2026-10-06 (Phase 4S T2; docs/design/device
   conversion; it does not come into play, because the library probe already fails:
   `cubek-matmul`'s `SimpleCyclicCmma` refuses every f32 shape the tests build ("No tile
   size is available for the problem"), so `GemmPolicy::Auto` takes the hand-written
-  kernel (tested on CUDA: `library_level_call`, `m2l_library`).
+  kernel (tested on CUDA: `library_level_call`, `m2l_library`). Changed with CubeCL
+  0.11.0 (Phase 5S T1s): the probe succeeds and computes f32 at TF32 precision while
+  reporting F32 types (`docs/design/cubecl-upstream.md` entry 4). The input-precision
+  guard's second part (the device must register a CMMA form with T operands;
+  `registers_cmma` in `src/translate.rs`) rejects it, since CUDA registers none for f32,
+  so the hand-written kernel still runs.
 - Compiler path: LLVM to NVPTX (`client.name()` is `"cuda"`; it does not name the
   path). `PLANE_POS` is not lowered for NVPTX: compiling a kernel that reads it panics on
   CubeCL's server thread, and the launch is dropped silently (a later download returns
   the buffer's old contents, no error). Fixed upstream after 0.11.0-pre.4
   (tracel-ai/cubecl#1714, merged 2026-09-25, not yet released). Until the pin includes
-  it, do not use `PLANE_POS`; derive it from `UNIT_POS` in a 1-D cube. `UNIT_POS_PLANE` (the reproducer), `sync_plane` and
+  it, do not use `PLANE_POS`; derive it from `UNIT_POS` in a 1-D cube. (Fixed in the
+  0.11.0 pin, Phase 5S T1s: `cubecl-llvm` src/shared/builtins.rs:136-141 sets `PlanePos`
+  for every GPU target; the kernels still derive it, and moving back to the builtin is a
+  separate change.) `UNIT_POS_PLANE` (the reproducer), `sync_plane` and
   `sync_cube` (the tests) work.
 - Every bit-for-bit test holds on CUDA in f32 and f64 (copies, scatters, frames, the
   hand-written GEMM, (B) against (A), rotation against its `mul_add` replica, P2P and

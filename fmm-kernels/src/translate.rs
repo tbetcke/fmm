@@ -102,8 +102,11 @@
 //!   stage and register types of both inputs and of the accumulator. A strategy that
 //!   rounds f32 inputs to TF32, F16 or BF16 (as the accelerated routines do on a backend
 //!   that registers TF32, CUDA) is never used (docs/phase4/README.md, "M2L strategies").
-//!   The guard reads the resolved element types, never the backend's name; where a probe
-//!   fails, the guard cannot be established and the hand-written kernel runs.
+//!   The device must also register a CMMA form whose operands are T: CubeCL 0.11.0 runs
+//!   an f32 CMMA on CUDA with its TF32 form while reporting F32 types (Phase 5S T1s).
+//!   The guard reads the resolved element types and the device's registered forms, never
+//!   the backend's name; where a probe fails, the guard cannot be established and the
+//!   hand-written kernel runs.
 //!
 //! Otherwise the hand-written kernel runs, for the whole view. The choice is fixed per
 //! view at build and reported ([`GroupedPlan::gemm`], [`GroupedPlan::library_rejection`]).
@@ -138,9 +141,11 @@
 //! [`gemm`] runs one GEMM over a [`TileSchedule`] and [`library`] one library GEMM, for
 //! tests and reports.
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::ops::Range;
 
+use cubecl::features::MmaConfig;
 use cubecl::prelude::*;
 use cubecl::zspace::{Shape, Strides};
 use cubek_matmul::definition::MatmulElems;
@@ -2049,7 +2054,24 @@ fn library_gemm<T: DeviceFloat>(
     );
     device.count_launch();
     result.map_err(|e| format!("{e:?}"))?;
-    keeps_precision(&dtypes, elem)
+    keeps_precision(&dtypes, elem)?;
+    registers_cmma(&device.client().properties().features.matmul.cmma, elem)
+}
+
+/// The input-precision guard (module documentation), second part: the device's registered
+/// CMMA forms `cmma` include one whose A and B operands are `elem`. CubeCL 0.11.0 on CUDA
+/// registers none for f32 (only TF32, F16 and BF16 forms), yet runs an f32
+/// `SimpleCyclicCmma` with the TF32 form and reports F32 for every resolved type (Phase 5S
+/// T1s; docs/design/cubecl-upstream.md, entry 4), so the resolved types alone do not
+/// establish the precision.
+fn registers_cmma(cmma: &BTreeSet<MmaConfig>, elem: ElemType) -> Result<(), String> {
+    if cmma.iter().any(|c| c.a_type == elem && c.b_type == elem) {
+        Ok(())
+    } else {
+        Err(format!(
+            "input-precision guard: the device registers no CMMA form with {elem:?} operands"
+        ))
+    }
 }
 
 /// The input-precision guard (module documentation): every stage and register type of
@@ -2674,5 +2696,37 @@ mod tests {
         ] {
             assert!(keeps_precision(&lowered, f32_elem).is_err(), "{lowered:?}");
         }
+    }
+
+    /// The guard's second part: a device whose CMMA forms take f32 only as TF32 (CUDA
+    /// with CubeCL 0.11.0) is rejected for f32, one with an f32 form is accepted, and f64
+    /// needs an f64 form.
+    #[test]
+    fn the_input_precision_guard_needs_a_cmma_form_of_the_precision() {
+        let float = |kind| ElemType::Float(kind);
+        let form = |a, cd, (m, n, k)| MmaConfig {
+            a_type: a,
+            b_type: a,
+            cd_type: cd,
+            m,
+            n,
+            k,
+        };
+        let (f16, tf32, f32_elem, f64_elem) = (
+            float(cubecl::ir::FloatKind::F16),
+            float(cubecl::ir::FloatKind::TF32),
+            f32::elem_type_native(),
+            f64::elem_type_native(),
+        );
+        let mut cuda = BTreeSet::from([
+            form(f16, f32_elem, (16, 16, 16)),
+            form(tf32, f32_elem, (16, 16, 8)),
+        ]);
+        assert!(registers_cmma(&cuda, f32_elem).is_err());
+        assert!(registers_cmma(&cuda, f64_elem).is_err());
+        assert!(registers_cmma(&BTreeSet::new(), f32_elem).is_err());
+        cuda.insert(form(f32_elem, f32_elem, (8, 8, 8)));
+        assert_eq!(registers_cmma(&cuda, f32_elem), Ok(()));
+        assert!(registers_cmma(&cuda, f64_elem).is_err());
     }
 }
