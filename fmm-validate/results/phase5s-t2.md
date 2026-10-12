@@ -32,9 +32,9 @@ is named.
   2 nodes in `test` (job 447987, 19 min 38 s): the MPI list at 2, 4, 8 and 80 ranks, the
   invariance at 80 against 40, 20, 10 and the smoke run. The first attempt (447359) met a
   node whose Omni-Path HFI refused contexts (§5.2).
-- **CI**: the invariance test takes 31 and 38 s at 2 and 4 ranks in debug on the M3 Max
-  (`mpi_exec` 98 and 83 s there, 166 and 225 s in CI): about 1–2 minutes added to each
-  `run-tests-mpi` run step, *estimated* from that ratio; the pull request's run measures it.
+- **CI** (the pull request's run 38252400249, every job passed): the invariance test took
+  55.6 s at 2 ranks and 110.1 s at 4 in `run-tests-mpi` (run steps of 15 minutes, launches
+  of 300 s) and 64.0 s at one rank in `run-tests`; `run-tests-mpi` took 10 min 58 s in all.
 - Node-hours on Kathleen: 1.86 (three jobs, §6), of the 10 planned (20 budgeted).
 
 ## 1. What was built
@@ -76,12 +76,24 @@ In Kathleen job 447359 (the failed attempt, §5.2) the same test passed at 2, 4 
 
 ### 2.2 CI
 
-`run-tests-mpi` runs it at 2 and 4 ranks, `run-tests` (`cargo test`) at one. Local
-`run-mpi-tests.sh run … 2 4` on the M3 Max: `mpi_exec` 98.4 / 82.9 s, `invariance`
-30.9 / 38.1 s. CI's last run on `main` (run 38240370553) took 166.1 / 224.8 s for
-`mpi_exec`, 1.7–2.7× the M3 Max: the invariance test should add about 50–105 s to each run
-step (15 minutes each) and stay well inside `RUN_TIMEOUT` (300 s). *Estimate*; the pull
-request's CI run measures it.
+`run-tests-mpi` runs it at 2 and 4 ranks, `run-tests` (`cargo test`) at one. Measured in
+the pull request's CI run (run 38252400249, `ubuntu-latest`, 4 vCPUs on 2 cores, the ranks
+oversubscribed; every job passed):
+
+| Job | Ranks | `invariance`, s | `mpi_exec`, s (for scale) |
+| --- | ---: | ---: | ---: |
+| `run-tests` (`cargo test`) | 1 | 64.0 | – |
+| `run-tests-mpi` | 2 | 55.6 | 187.8 |
+| `run-tests-mpi` | 4 | 110.1 | 230.2 |
+
+0 values differ in every check (6 at 1 and 2 ranks, 12 at 4). The added time is within
+`RUN_TIMEOUT` (300 s per launch) and the run steps' 15 minutes; `run-tests-mpi` took
+10 min 58 s in all, `run-tests` 7 min 28 s. Before the run it was estimated at 50–105 s per
+step from `mpi_exec`'s ratio of CI to the M3 Max (166.1 / 224.8 s in CI run 38240370553
+on `main` against 98.4 / 82.9 s locally; `invariance` 30.9 / 38.1 s locally): close, the
+4-rank run 5% over. The one-rank run in `run-tests` is 64 s, a little over the minute that
+fmm-exec/CLAUDE.md asks of the debug run of a test; it is its own executable (the brief's
+alternative to `mpi_exec`'s budget).
 
 ### 2.3 A broken input order fails on every rank
 

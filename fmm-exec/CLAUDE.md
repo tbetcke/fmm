@@ -104,7 +104,8 @@ loading with a cache at scale, the ranks × threads guidance; design docs/design
     all-reduce of the count. The cube, the Plummer sphere and a graded tree with one empty
     rank, N = 10⁴, f64 p = 8 `Rotation` and f32 p = 3 `Dense` (the strategy named: `Auto`
     resolves by the ranks per node), each comparison blocking against overlapped. 39 s at
-    one rank in debug on the M3 Max; 31, 38 and 43 s at 2, 4 and 8. Keep it passing in
+    one rank in debug on the M3 Max; 31, 38 and 43 s at 2, 4 and 8; in CI (PR #101) 64 s at
+    one rank (`run-tests`), 56 and 110 s at 2 and 4 (`run-tests-mpi`). Keep it passing in
     every structural task (T3–T8): it is the oracle where no one-rank run fits, and its
     at-scale form is `nd_fmm_validate::scaling::invariance`.
   - CI runs `tests/mpi_exec.rs`, `tests/mpi_threading.rs` and `tests/invariance.rs` in
