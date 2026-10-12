@@ -27,8 +27,16 @@
 //! rank owns the root, the others own nothing and hold it as a ghost, on every rank
 //! count.
 //!
+//! Every tree is also compared key for key with the Phase 5 construction (the sample
+//! sorts), kept in `phase5_reference` until Phase 5S T3 lands: the leaves, the blocks
+//! and their weights, the partition bounds and every key with its `KeyType` are
+//! those of Phase 5 (T3a).
+//!
 //! Every check is agreed over all ranks before it is asserted, so a failure stops
 //! every rank, not one.
+
+#[path = "phase5_reference/mod.rs"]
+mod phase5_reference;
 
 use itertools::Itertools;
 use mpi::{
@@ -381,6 +389,7 @@ fn main() {
             let label = format!("{name}, {kind:?}");
             let local = input(&keys, kind, rank, size);
             let tree = Octree::new(&local, options, &comm);
+            phase5_reference::assert_same_as_phase5(&label, &tree, &local, options, &comm);
             let balance = check_tree(&label, &tree, &keys, &one_rank, &comm);
             partitions.push(gather_to_all(tree.coarse_tree_leafs(), &comm));
             partitions.push(tree.coarse_tree_bounds().clone());
@@ -415,6 +424,7 @@ fn main() {
             ] {
                 let local = input(&keys, Input::Share, rank, size);
                 let tree = Octree::new(&local, other, &comm);
+                phase5_reference::assert_same_as_phase5(label, &tree, &local, other, &comm);
                 let leaves = gather_to_all(tree.leaf_keys(), &comm);
                 agree(
                     leaves == one_rank,
@@ -464,6 +474,7 @@ fn main() {
         ] {
             let tree = Octree::new(&local, options, &comm);
             let label = format!("{label}, ghost children {ghost_children}");
+            phase5_reference::assert_same_as_phase5(&label, &tree, &local, options, &comm);
             check_root_only(&label, &tree, &comm);
             if label.starts_with("no keys") {
                 // As on one rank: the root is a leaf of rank 0.
@@ -478,6 +489,13 @@ fn main() {
     // Few keys on many ranks still split where the one-rank tree splits.
     let local = input(&few, Input::Share, rank, size);
     let tree = Octree::new(&local, OctreeOptions::default(), &comm);
+    phase5_reference::assert_same_as_phase5(
+        "three keys, one per leaf",
+        &tree,
+        &local,
+        OctreeOptions::default(),
+        &comm,
+    );
     let leaves = gather_to_all(tree.leaf_keys(), &comm);
     agree(
         leaves == one_rank_leaves(&few, OctreeOptions::default()),

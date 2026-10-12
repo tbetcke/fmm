@@ -9,8 +9,6 @@ use mpi::traits::Equivalence;
 
 use itertools::{Itertools, izip};
 use mpi::{collective::SystemOperation, traits::CommunicatorCollectives};
-use rand::Rng;
-use rlst::distributed_tools::parallel_sort::{self};
 use rlst::distributed_tools::{
     all_to_allv,
     array_tools::{communicate_back, gather_to_all},
@@ -19,28 +17,324 @@ use rlst::distributed_tools::{
 
 use super::{KeyType, LeafLocation, LookupBatchError, LookupError, OctreeOptions, PartitionWeight};
 
+/// A distinct finest-level key and its number of copies, as the key routing sends
+/// it (S4, docs/design/scale-out.md §7.1).
+#[derive(Copy, Clone, Debug, Default, Equivalence, PartialEq, Eq)]
+pub(crate) struct KeyCount {
+    /// The key.
+    pub(crate) key: MortonKey,
+    /// The copies of the key, on the sending rank or, after the merge, on all ranks.
+    pub(crate) count: u64,
+}
+
+/// Route the input keys to provisional owners by weight, without a sort (S4,
+/// docs/design/scale-out.md §7.1).
+///
+/// Sorts this rank's keys once, duplicates kept. Starting from the root, every
+/// round counts the keys under each provisional block in one merge pass, sums the
+/// counts over the ranks in one all-reduce, and splits every block heavier than
+/// `W / (k P)` and above `max_level` ([`weight_rounds`]): O1's round with the
+/// weight rule alone. The blocks are cut at the nearest boundaries
+/// ([`partition_blocks`]), and every rank sends its keys, deduplicated, as
+/// (key, multiplicity) pairs to the owners of their blocks in one all-to-all-v.
+/// Each rank merges the sorted runs it receives and sums the multiplicities
+/// ([`merge_key_counts`]). Every copy of a key is then on one rank, and the
+/// distinct keys are the linearized keys: the input keys are all on the deepest
+/// level, so linearizing is deduplication.
+///
+/// The provisional blocks only balance the key move; [`compute_coarse_tree`]
+/// builds the coarse tree from the routed keys as before.
+///
+/// # Parameters
+///
+/// - `fine_keys`: The keys this rank passed to [`crate::Octree::new`], in any order,
+///   duplicates included.
+/// - `options`: The construction options: `max_level` and the block refinement
+///   factor `k`.
+/// - `comm`: Communicator whose ranks enter this collective phase.
+///
+/// # Returns
+///
+/// This rank's share of the linearized keys, sorted, distinct and every distinct
+/// key on exactly one rank, and the copies of each over all ranks.
+///
+/// # Collective operation
+///
+/// On more than one rank, one all-reduce per round and the all-to-all-v of the
+/// pairs (with its all-to-all of counts); every rank must enter. Debug builds add a
+/// check that the routed keys are distinct across the ranks. On one rank nothing
+/// is communicated.
+///
+/// # Examples
+///
+/// ```ignore
+/// // This call is illustrative; `implementation` is private to the crate.
+/// let comm = mpi::topology::SimpleCommunicator::self_comm();
+/// let key = morton::deepest_first();
+/// let (keys, copies) = route_keys(&[key, key], OctreeOptions::default(), &comm);
+/// assert_eq!((keys, copies), (vec![key], vec![2]));
+/// ```
+pub fn route_keys<C: CommunicatorCollectives>(
+    fine_keys: &[MortonKey],
+    options: OctreeOptions,
+    comm: &C,
+) -> (Vec<MortonKey>, Vec<u64>) {
+    // The one local sort: the rounds count these keys, and their runs of equal keys
+    // are the pairs.
+    let mut sorted_keys = fine_keys.to_vec();
+    sorted_keys.sort_unstable();
+
+    let routed = if comm.size() == 1 {
+        count_duplicates(&sorted_keys)
+    } else {
+        let size = comm.size() as usize;
+        let max_level = options.max_level().min(DEEPEST_LEVEL as usize);
+        let shares = options.block_refinement().max(1) as u64 * size as u64;
+        let (blocks, weights) = weight_rounds(shares, max_level, |blocks| {
+            let local = local_coarse_tree_weights(&sorted_keys, blocks)
+                .into_iter()
+                .map(|count| count as u64)
+                .collect_vec();
+            let mut global = vec![0u64; blocks.len()];
+            comm.all_reduce_into(&local, &mut global, SystemOperation::sum());
+            global
+        });
+        let bounds = tree_bins(&blocks, &partition_blocks(&weights, size));
+
+        let pairs = count_duplicates(&sorted_keys);
+        drop(sorted_keys);
+        let counts = rank_counts(&pairs, &bounds, |pair| pair.key);
+        let (run_lengths, received) = all_to_allv(comm, &counts, &pairs);
+        drop(pairs);
+        let routed = merge_key_counts(&received, &run_lengths);
+        debug_assert!(is_distinct_across_ranks(
+            &routed.iter().map(|pair| pair.key).collect_vec(),
+            comm
+        ));
+        routed
+    };
+    routed
+        .into_iter()
+        .map(|pair| (pair.key, pair.count))
+        .unzip()
+}
+
+/// Refine provisional blocks by weight alone, from the root (the rounds of
+/// [`route_keys`]).
+///
+/// Every round asks `global_weights` for the weight of each block and splits every
+/// block that weighs more than `W / shares` and lies above `max_level` into its
+/// eight children, until no block splits. It is O1's round
+/// ([`refine_heavy_blocks`]) without the distinct-key rule, which needs the keys
+/// deduplicated first.
+///
+/// # Parameters
+///
+/// - `shares`: The refinement factor times the number of ranks, `k P`.
+/// - `max_level`: The deepest level a block may have.
+/// - `global_weights`: The weight of each of the given sorted, complete blocks,
+///   summed over the ranks; called once per round.
+///
+/// # Returns
+///
+/// The blocks, sorted and complete, and their weights.
+///
+/// # Examples
+///
+/// ```ignore
+/// // This call is illustrative; `implementation` is private to the crate.
+/// let (blocks, weights) = weight_rounds(1, 16, |blocks| vec![5; blocks.len()]);
+/// assert_eq!((blocks, weights), (vec![morton::root()], vec![5]));
+/// ```
+pub(crate) fn weight_rounds(
+    shares: u64,
+    max_level: usize,
+    mut global_weights: impl FnMut(&[MortonKey]) -> Vec<u64>,
+) -> (Vec<MortonKey>, Vec<u64>) {
+    let mut blocks = vec![morton::root()];
+    loop {
+        let weights = global_weights(&blocks);
+        // With the weights as the distinct counts and `max_fine_keys` 0 the
+        // distinct-key rule always holds for a block heavier than `W / shares`,
+        // which weighs at least one key: only the weight and the level decide.
+        match refine_heavy_blocks(&blocks, &weights, &weights, shares, 0, max_level) {
+            Some(refined) => blocks = refined,
+            None => return (blocks, weights),
+        }
+    }
+}
+
+/// Collapse the runs of equal keys of a sorted slice into (key, multiplicity) pairs.
+///
+/// # Parameters
+///
+/// - `sorted_keys`: Sorted keys, duplicates allowed.
+///
+/// # Returns
+///
+/// One pair per distinct key, in order.
+///
+/// # Examples
+///
+/// ```ignore
+/// // This call is illustrative; `implementation` is private to the crate.
+/// let pairs = count_duplicates(&[1, 1, 2]);
+/// assert_eq!(pairs, vec![KeyCount { key: 1, count: 2 }, KeyCount { key: 2, count: 1 }]);
+/// ```
+pub(crate) fn count_duplicates(sorted_keys: &[MortonKey]) -> Vec<KeyCount> {
+    sorted_keys
+        .chunk_by(|a, b| a == b)
+        .map(|run| KeyCount {
+            key: run[0],
+            count: run.len() as u64,
+        })
+        .collect()
+}
+
+/// Merge sorted runs of (key, multiplicity) pairs, summing the multiplicities of
+/// equal keys.
+///
+/// # Parameters
+///
+/// - `runs`: The runs one after another, as an all-to-all-v receives them; each
+///   run sorted by key and distinct.
+/// - `run_lengths`: The length of each run; runs may be empty.
+///
+/// # Returns
+///
+/// The pairs of all runs, sorted by key and distinct, with the summed copies.
+///
+/// # Examples
+///
+/// ```ignore
+/// // This call is illustrative; `implementation` is private to the crate.
+/// let pair = |key, count| KeyCount { key, count };
+/// let merged = merge_key_counts(&[pair(1, 2), pair(1, 3), pair(4, 1)], &[1, 0, 2]);
+/// assert_eq!(merged, vec![pair(1, 5), pair(4, 1)]);
+/// ```
+pub(crate) fn merge_key_counts(runs: &[KeyCount], run_lengths: &[usize]) -> Vec<KeyCount> {
+    debug_assert_eq!(run_lengths.iter().sum::<usize>(), runs.len());
+    let mut rest = runs;
+    let mut slices = Vec::with_capacity(run_lengths.len());
+    for &length in run_lengths {
+        let (run, tail) = rest.split_at(length);
+        debug_assert!(run.iter().tuple_windows().all(|(a, b)| a.key < b.key));
+        slices.push(run.iter().copied());
+        rest = tail;
+    }
+    slices
+        .into_iter()
+        .kmerge_by(|a, b| a.key < b.key)
+        .coalesce(|a, b| {
+            if a.key == b.key {
+                Ok(KeyCount {
+                    key: a.key,
+                    count: a.count + b.count,
+                })
+            } else {
+                Err((a, b))
+            }
+        })
+        .collect()
+}
+
+/// Count the items of a sorted slice per rank by the partition bounds.
+///
+/// An item goes to the last rank whose bound is at most its position, as with
+/// [`sort_to_bins`]: repeated bounds (ranks without blocks) select the last of them.
+/// One binary search per rank.
+///
+/// # Parameters
+///
+/// - `sorted`: Items whose positions do not decrease, none before the first bound.
+/// - `bounds`: The partition bounds of every rank, from [`tree_bins`].
+/// - `position`: The finest-level key that places an item.
+///
+/// # Returns
+///
+/// The number of items for each rank.
+///
+/// # Examples
+///
+/// ```ignore
+/// // This call is illustrative; `implementation` is private to the crate.
+/// assert_eq!(rank_counts(&[1, 3, 3, 9], &[0, 3, 3, 8], |&key| key), vec![1, 0, 2, 1]);
+/// ```
+pub(crate) fn rank_counts<T>(
+    sorted: &[T],
+    bounds: &[MortonKey],
+    position: impl Fn(&T) -> MortonKey,
+) -> Vec<usize> {
+    let starts = bounds
+        .iter()
+        .map(|&bound| sorted.partition_point(|item| position(item) < bound))
+        .chain(std::iter::once(sorted.len()))
+        .collect_vec();
+    debug_assert!(
+        starts[0] == 0,
+        "every item must lie at or after the first bound"
+    );
+    starts.iter().tuple_windows().map(|(a, b)| b - a).collect()
+}
+
+/// Return true on every rank if no rank's last key reaches the first key of the
+/// next rank with keys: the keys are distinct across the ranks.
+///
+/// # Parameters
+///
+/// - `sorted_keys`: This rank's sorted keys.
+/// - `comm`: Communicator whose ranks enter this collective phase.
+///
+/// # Collective operation
+///
+/// The all-gathers of `communicate_back` and one all-reduce; every rank must enter.
+/// Used in debug checks only.
+///
+/// # Examples
+///
+/// ```ignore
+/// // This call is illustrative; `implementation` is private to the crate.
+/// let comm = mpi::topology::SimpleCommunicator::self_comm();
+/// assert!(is_distinct_across_ranks(&[1, 2], &comm));
+/// ```
+fn is_distinct_across_ranks<C: CommunicatorCollectives>(
+    sorted_keys: &[MortonKey],
+    comm: &C,
+) -> bool {
+    let distinct = match (sorted_keys.last(), communicate_back(sorted_keys, comm)) {
+        (Some(&last), Some(next)) => last < next,
+        _ => true,
+    };
+    let mut all_distinct = false;
+    comm.all_reduce_into(&distinct, &mut all_distinct, SystemOperation::logical_and());
+    all_distinct
+}
+
 /// Build the coarse tree by weight from the root, replicated on every rank (design
 /// O1, docs/design/distributed-fmm.md §3.2).
 ///
 /// Starting from the root, every round counts for each block `b` the distinct keys
-/// under it, `d(b)` (from `linear_keys`), and its weight `w(b)` (every input key
-/// under it, duplicates included, or `d(b)` with [`PartitionWeight::DistinctKeys`]),
-/// sums both over the ranks in one all-reduce, and splits into its eight children
-/// every block with `w(b) > W / (k P)`, `d(b) > max_fine_keys` and a level below
-/// `max_level` ([`refine_heavy_blocks`]). It stops when no block splits. The blocks
-/// are then 2:1 balanced serially; if that changes them, one more all-reduce weighs
-/// the balanced blocks. The one-rank tree splits exactly the boxes with more than
-/// `max_fine_keys` distinct keys above `max_level`, so every block is a node of it.
+/// under it, `d(b)`, and its weight `w(b)` (every input key under it, duplicates
+/// included, from the multiplicities, or `d(b)` with
+/// [`PartitionWeight::DistinctKeys`]), sums both over the ranks in one all-reduce,
+/// and splits into its eight children every block with `w(b) > W / (k P)`,
+/// `d(b) > max_fine_keys` and a level below `max_level` ([`refine_heavy_blocks`]).
+/// It stops when no block splits. The blocks are then 2:1 balanced serially; if
+/// that changes them, one more all-reduce weighs the balanced blocks. The one-rank
+/// tree splits exactly the boxes with more than `max_fine_keys` distinct keys
+/// above `max_level`, so every block is a node of it. The blocks and weights
+/// depend only on the global counts, so they do not depend on how the keys are
+/// distributed over the ranks.
 ///
 /// Every rank holds the same counts after each all-reduce, so the number of rounds
 /// is the same on every rank, and a rank without keys enters each round with zero
 /// counts. On one rank the coarse tree is the root and nothing is communicated.
 /// # Parameters
 ///
-/// - `fine_keys`: The keys this rank passed to [`crate::Octree::new`], in any order,
-///   duplicates included.
-/// - `linear_keys`: This rank's share of the linearized keys: sorted, distinct, and
-///   every distinct key on exactly one rank.
+/// - `linear_keys`: This rank's share of the linearized keys, from [`route_keys`]:
+///   sorted, distinct, and every distinct key on exactly one rank.
+/// - `multiplicities`: The copies of each linearized key passed to
+///   [`crate::Octree::new`] over all ranks.
 /// - `options`: The construction options: `max_level`, `max_fine_keys`, the
 ///   partition weight and the block refinement factor.
 /// - `comm`: Communicator whose ranks enter this collective phase.
@@ -61,40 +355,31 @@ use super::{KeyType, LeafLocation, LookupBatchError, LookupError, OctreeOptions,
 /// // This call is illustrative; `implementation` is private to the crate.
 /// let comm = mpi::topology::SimpleCommunicator::self_comm();
 /// let keys = vec![morton::deepest_first()];
-/// let (blocks, weights) = compute_coarse_tree(&keys, &keys, OctreeOptions::default(), &comm);
-/// assert_eq!((blocks, weights), (vec![morton::root()], vec![1]));
+/// let (blocks, weights) = compute_coarse_tree(&keys, &[2], OctreeOptions::default(), &comm);
+/// assert_eq!((blocks, weights), (vec![morton::root()], vec![2]));
 /// ```
 pub fn compute_coarse_tree<C: CommunicatorCollectives>(
-    fine_keys: &[MortonKey],
     linear_keys: &[MortonKey],
+    multiplicities: &[u64],
     options: OctreeOptions,
     comm: &C,
 ) -> (Vec<MortonKey>, Vec<u64>) {
     debug_assert!(is_linear_tree(linear_keys, comm));
+    debug_assert_eq!(linear_keys.len(), multiplicities.len());
 
     // On a single node a complete coarse tree is simply the root.
     if comm.size() == 1 {
-        return (vec![morton::root()], vec![fine_keys.len() as u64]);
+        return (vec![morton::root()], vec![multiplicities.iter().sum()]);
     }
 
     let max_level = options.max_level().min(DEEPEST_LEVEL as usize);
     let shares = options.block_refinement().max(1) as u64 * comm.size() as u64;
-
-    // The weighted keys, sorted so that each round counts them in one merge pass.
-    let sorted_fine_keys;
-    let weighted_keys = match options.partition_weight() {
-        PartitionWeight::Keys => {
-            let mut keys = fine_keys.to_vec();
-            keys.sort_unstable();
-            sorted_fine_keys = keys;
-            sorted_fine_keys.as_slice()
-        }
-        PartitionWeight::DistinctKeys => linear_keys,
-    };
+    let weight = options.partition_weight();
 
     let mut blocks = vec![morton::root()];
     let weights = loop {
-        let (distinct, weights) = global_block_counts(linear_keys, weighted_keys, &blocks, comm);
+        let (distinct, weights) =
+            global_block_counts(linear_keys, multiplicities, weight, &blocks, comm);
         match refine_heavy_blocks(
             &blocks,
             &distinct,
@@ -115,18 +400,20 @@ pub fn compute_coarse_tree<C: CommunicatorCollectives>(
         weights
     } else {
         blocks = balanced;
-        global_block_counts(&[], weighted_keys, &blocks, comm).1
+        global_block_counts(linear_keys, multiplicities, weight, &blocks, comm).1
     };
     debug_assert!(morton::is_complete_linear_and_balanced(&blocks));
     (blocks, weights)
 }
 
-/// Count the distinct and the weighted keys under each block, summed over the ranks.
+/// Count the distinct keys and the weight under each block, summed over the ranks.
 ///
 /// # Parameters
 ///
 /// - `linear_keys`: This rank's sorted distinct keys, counted as `d(b)`.
-/// - `weighted_keys`: This rank's sorted weighted keys, duplicates counted, as `w(b)`.
+/// - `multiplicities`: The copies of each key, summed as `w(b)` with
+///   [`PartitionWeight::Keys`].
+/// - `weight`: What a block weighs: its keys with their copies, or `d(b)`.
 /// - `blocks`: The replicated, sorted, complete blocks.
 /// - `comm`: Communicator whose ranks enter this collective phase.
 ///
@@ -144,30 +431,69 @@ pub fn compute_coarse_tree<C: CommunicatorCollectives>(
 /// // This call is illustrative; `implementation` is private to the crate.
 /// let comm = mpi::topology::SimpleCommunicator::self_comm();
 /// let keys = vec![morton::deepest_first()];
-/// let (d, w) = global_block_counts(&keys, &keys, &[morton::root()], &comm);
+/// let (d, w) = global_block_counts(&keys, &[3], PartitionWeight::Keys, &[morton::root()], &comm);
 /// ```
 fn global_block_counts<C: CommunicatorCollectives>(
     linear_keys: &[MortonKey],
-    weighted_keys: &[MortonKey],
+    multiplicities: &[u64],
+    weight: PartitionWeight,
     blocks: &[MortonKey],
     comm: &C,
 ) -> (Vec<u64>, Vec<u64>) {
     let nblocks = blocks.len();
-    let mut local = Vec::with_capacity(2 * nblocks);
-    local.extend(
-        local_coarse_tree_weights(linear_keys, blocks)
-            .into_iter()
-            .map(|count| count as u64),
-    );
-    local.extend(
-        local_coarse_tree_weights(weighted_keys, blocks)
-            .into_iter()
-            .map(|count| count as u64),
-    );
+    let (distinct, copies) = local_block_counts(linear_keys, multiplicities, blocks);
+    let mut local = distinct;
+    match weight {
+        PartitionWeight::Keys => local.extend(copies),
+        PartitionWeight::DistinctKeys => local.extend_from_within(..),
+    }
     let mut global = vec![0u64; 2 * nblocks];
     comm.all_reduce_into(&local, &mut global, SystemOperation::sum());
     let weights = global.split_off(nblocks);
     (global, weights)
+}
+
+/// Count for each block the sorted distinct keys under it and their copies.
+///
+/// Both slices are sorted and the descendants of a block are contiguous in Morton
+/// order, so a single merge pass suffices, as in [`local_coarse_tree_weights`].
+/// # Parameters
+///
+/// - `linear_keys`: Sorted distinct finest-level keys, each descending from exactly
+///   one block.
+/// - `multiplicities`: The copies of each key.
+/// - `blocks`: Sorted, non-overlapping blocks covering every key.
+///
+/// # Returns
+///
+/// The keys under each block and the sum of their copies.
+///
+/// # Examples
+///
+/// ```ignore
+/// // This call is illustrative; `implementation` is private to the crate.
+/// let (d, w) = local_block_counts(&[morton::deepest_first()], &[3], &[morton::root()]);
+/// assert_eq!((d, w), (vec![1], vec![3]));
+/// ```
+pub(crate) fn local_block_counts(
+    linear_keys: &[MortonKey],
+    multiplicities: &[u64],
+    blocks: &[MortonKey],
+) -> (Vec<u64>, Vec<u64>) {
+    let mut distinct = vec![0; blocks.len()];
+    let mut copies = vec![0; blocks.len()];
+    let mut keys = izip!(linear_keys, multiplicities).peekable();
+    for (d, w, &block) in izip!(distinct.iter_mut(), copies.iter_mut(), blocks) {
+        while let Some((_, &count)) = keys.next_if(|&(&key, _)| morton::is_ancestor(block, key)) {
+            *d += 1;
+            *w += count;
+        }
+    }
+    debug_assert!(
+        keys.peek().is_none(),
+        "every key must descend from a block of the complete coarse tree"
+    );
+    (distinct, copies)
 }
 
 /// Split every heavy, splittable block into its eight children (one round of O1).
@@ -387,72 +713,6 @@ pub fn create_local_tree(
     refined_keys
 }
 
-/// Linearize a set of weighted Morton keys.
-/// # Parameters
-///
-/// - `keys`: Locally held Morton keys to sort, validate, or classify, depending on the helper.
-/// - `rng`: Random source used for sampling.
-/// - `comm`: Communicator whose ranks enter this collective phase.
-///
-/// # Examples
-///
-/// ```ignore
-/// // This call is illustrative; `implementation` is private to the crate.
-/// let comm = mpi::topology::SimpleCommunicator::self_comm();
-/// let mut rng = crate::tools::seeded_rng(0);
-/// let linear = linearize(&[morton::deepest_first()], &mut rng, &comm);
-/// ```
-pub fn linearize<R: Rng, C: CommunicatorCollectives>(
-    keys: &[MortonKey],
-    rng: &mut R,
-    comm: &C,
-) -> Vec<MortonKey> {
-    // If we only have one process we use the standard serial linearization.
-
-    if comm.size() == 1 {
-        return morton::linearize(keys);
-    }
-
-    // We are first sorting the keys. Then in a linear process across all processors we
-    // go through the arrays and delete ancestors of nodes.
-
-    let sorted_keys = parallel_sort::parsort(keys, comm, rng)
-        .unwrap_or_else(|_| panic!("Could not sort sequence."));
-
-    // Each process needs to send its first element to the previous process. Each process
-    // then goes through its own list and retains elements that are not ancestors of the
-    // next element.
-
-    let mut result = Vec::<MortonKey>::new();
-
-    let next_key = communicate_back(&sorted_keys, comm);
-
-    // Treat the local keys
-    for (&m1, &m2) in sorted_keys.iter().tuple_windows() {
-        // m1 is also ancestor of m2 if they are identical.
-        if morton::is_ancestor(m1, m2) {
-            continue;
-        } else {
-            result.push(m1);
-        }
-    }
-
-    // The parallel sort may leave this rank without keys. Otherwise keep the last
-    // key unless it is an ancestor of `next_key`, the first key on the next
-    // non-empty process; the last non-empty process always keeps its last key.
-
-    if let Some(&last) = sorted_keys.last() {
-        match next_key {
-            Some(next) if morton::is_ancestor(last, next) => {}
-            _ => result.push(last),
-        }
-    }
-
-    debug_assert!(is_linear_tree(&result, comm));
-
-    result
-}
-
 /// Cut weighted blocks into `size` contiguous ranges at the nearest block boundaries
 /// (design O3, docs/design/distributed-fmm.md §3.2).
 ///
@@ -536,37 +796,113 @@ pub(crate) fn tree_bins(coarse_tree: &[MortonKey], partition: &[usize]) -> Vec<M
     bins
 }
 
-/// Balance a distributed tree.
+/// Balance a distributed tree, without a sort (S4, docs/design/scale-out.md §7.1).
+///
+/// Every rank builds the 2:1 closure of its own keys ([`balance_closure`]) and
+/// linearizes it locally. It then routes each remaining key to the rank whose
+/// partition range holds the key's first finest-level descendant
+/// ([`first_finest_descendant`]), in one all-to-all-v, and every rank linearizes
+/// what it receives. The union of the local results is the global linearization
+/// of the closure, already distributed by the bounds:
+/// - a key coarser than the blocks goes to the rank that owns its first
+///   descendant block, whose leaves, or their descendants in the closure, descend
+///   from it and go to the same rank, so the key is removed locally as the global
+///   linearization removes it;
+/// - a key at or below a block lies in that block's range with all its
+///   descendants;
+/// - duplicates from several ranks land on one rank.
+///
+/// The result has no key coarser than a block, so every key is owned by this rank
+/// as [`crate::Octree::owner_rank`] defines it.
 ///
 /// A rank may hold no keys; it still enters every collective.
 /// # Parameters
 ///
-/// - `linear_keys`: Locally held sorted, non-overlapping Morton keys.
-/// - `rng`: Random source used for sampling.
+/// - `linear_keys`: Locally held sorted, non-overlapping Morton keys, each a
+///   coarse block of this rank or a descendant of one.
+/// - `coarse_tree_bounds`: The partition bounds of every rank, from [`tree_bins`].
 /// - `comm`: Communicator whose ranks enter this collective phase.
+///
+/// # Collective operation
+///
+/// An all-reduce of the deepest level and, on more than one rank and below the
+/// root, the all-to-all-v of the closure (with its all-to-all of counts); every
+/// rank must enter. Debug builds add the collectives of their invariant checks.
 ///
 /// # Examples
 ///
 /// ```ignore
 /// // This call is illustrative; `implementation` is private to the crate.
 /// let comm = mpi::topology::SimpleCommunicator::self_comm();
-/// let mut rng = crate::tools::seeded_rng(0);
-/// let balanced = balance(&[morton::root()], &mut rng, &comm);
+/// let balanced = balance(&[morton::root()], &[morton::root()], &comm);
 /// ```
-pub fn balance<R: Rng, C: CommunicatorCollectives>(
+pub fn balance<C: CommunicatorCollectives>(
     linear_keys: &[MortonKey],
-    rng: &mut R,
+    coarse_tree_bounds: &[MortonKey],
     comm: &C,
 ) -> Vec<MortonKey> {
-    // Treat the case that the tree is only the root, on one rank: the loop below
-    // would give an empty output, as it only iterates up to level 1. The deepest
-    // level is global, so every rank takes the same branch, also a rank without keys.
+    // Treat the case that the tree is only the root, on one rank: the closure would
+    // be empty, as it only iterates up to level 1. The deepest level is global, so
+    // every rank takes the same branch, also a rank without keys.
 
     let deepest_level = deepest_level(linear_keys, comm);
     if deepest_level == 0 {
         return linear_keys.to_vec();
     }
 
+    let closure = morton::linearize(&balance_closure(linear_keys, deepest_level));
+    let result = if comm.size() == 1 {
+        closure
+    } else {
+        let counts = rank_counts(&closure, coarse_tree_bounds, |&key| {
+            first_finest_descendant(key)
+        });
+        let (_in_counts, received) = all_to_allv(comm, &counts, &closure);
+        drop(closure);
+        morton::linearize(&received)
+    };
+
+    #[cfg(debug_assertions)]
+    {
+        let rank = comm.rank() as usize;
+        debug_assert!(
+            result
+                .iter()
+                .all(|&key| owner_rank_for_key(coarse_tree_bounds, key) == Some(rank)),
+            "every balanced key must be owned by the rank that holds it"
+        );
+    }
+    debug_assert!(crate::octree::is_complete_linear_and_balanced(
+        &result, comm
+    ));
+    result
+}
+
+/// The local 2:1 closure of a rank's keys: for every key, its siblings, and for
+/// every parent, the neighbours of the parent, level by level from
+/// `deepest_level` up to level 1.
+///
+/// The closure of the union of the ranks' keys is the union of their closures, so
+/// its global linearization is the balanced tree ([`morton::balance`] on one rank).
+///
+/// # Parameters
+///
+/// - `linear_keys`: Locally held sorted, non-overlapping Morton keys.
+/// - `deepest_level`: The deepest level of the keys over all ranks, at least 1.
+///
+/// # Returns
+///
+/// The closure, unsorted, with duplicates.
+///
+/// # Examples
+///
+/// ```ignore
+/// // This call is illustrative; `implementation` is private to the crate.
+/// let octants = morton::children(morton::root()).unwrap();
+/// let closure = balance_closure(&octants, 1);
+/// assert_eq!(morton::linearize(&closure), octants.to_vec());
+/// ```
+pub(crate) fn balance_closure(linear_keys: &[MortonKey], deepest_level: usize) -> Vec<MortonKey> {
     // Start with keys at deepest level
     let mut work_list = linear_keys
         .iter()
@@ -609,12 +945,28 @@ pub fn balance<R: Rng, C: CommunicatorCollectives>(
         work_list = new_work_list;
     }
 
-    let result = linearize(&result, rng, comm);
-
-    debug_assert!(crate::octree::is_complete_linear_and_balanced(
-        &result, comm
-    ));
     result
+}
+
+/// The first finest-level descendant of a key: the finest key at its anchor.
+///
+/// It places a key of any level in the partition: the rank whose range holds it
+/// owns the key's first descendant block, or the block the key lies in.
+///
+/// # Parameters
+///
+/// - `key`: A valid Morton key.
+///
+/// # Examples
+///
+/// ```ignore
+/// // This call is illustrative; `implementation` is private to the crate.
+/// assert_eq!(first_finest_descendant(morton::root()), morton::deepest_first());
+/// ```
+pub(crate) fn first_finest_descendant(key: MortonKey) -> MortonKey {
+    let (level, index) = morton::decode(key);
+    let shift = DEEPEST_LEVEL as usize - level;
+    morton::from_index_and_level(index.map(|i| i << shift), DEEPEST_LEVEL as usize)
 }
 
 /// Return true if the keys are linear.
@@ -1514,17 +1866,18 @@ mod test {
     use rand::RngExt;
     use rlst::distributed_tools::sort_to_bins;
 
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
 
     use crate::{
         constants::{DEEPEST_LEVEL, NSIBLINGS},
         morton,
         octree::{
-            KeyType, LeafLocation, LookupError, OctreeOptions, checked_predecessor,
-            compute_neighbours, counts_fit_mpi_i32, create_local_tree, generate_all_keys,
-            get_key_index, local_coarse_tree_weights, local_leaf_for_key, owner_rank_for_key,
-            partition_blocks, refine_heavy_blocks, tree_bins, validate_fine_keys,
-            validate_lookup_key,
+            KeyCount, KeyType, LeafLocation, LookupError, OctreeOptions, balance_closure,
+            checked_predecessor, compute_neighbours, count_duplicates, counts_fit_mpi_i32,
+            create_local_tree, first_finest_descendant, generate_all_keys, get_key_index,
+            local_block_counts, local_coarse_tree_weights, local_leaf_for_key, merge_key_counts,
+            owner_rank_for_key, partition_blocks, rank_counts, refine_heavy_blocks, tree_bins,
+            validate_fine_keys, validate_lookup_key, weight_rounds,
         },
         tools::{generate_random_keys, seeded_rng},
     };
@@ -2174,5 +2527,408 @@ mod test {
         blocks.extend_from_slice(&octants[1..]);
         let weights = local_coarse_tree_weights(&keys, &blocks);
         assert_eq!(weights.iter().sum::<usize>(), keys.len());
+    }
+
+    #[test]
+    fn test_weight_rounds_on_hand_made_counts() {
+        let root = morton::root();
+        let octants = morton::children(root).unwrap();
+
+        // A single block: with one share the root never weighs more than W / 1, with
+        // no keys nothing weighs anything, and `max_level` 0 keeps the root whole.
+        assert_eq!(
+            weight_rounds(1, 16, |blocks| vec![7; blocks.len()]),
+            (vec![root], vec![7])
+        );
+        assert_eq!(
+            weight_rounds(64, 16, |blocks| vec![0; blocks.len()]),
+            (vec![root], vec![0])
+        );
+        assert_eq!(
+            weight_rounds(64, 0, |blocks| vec![9; blocks.len()]),
+            (vec![root], vec![9])
+        );
+
+        // Heavy blocks, by hand: W = 100 and k P = 8, so a block splits above 12.5.
+        // The root splits, then its first octant (60), then the first two of that
+        // octant's children (20 each); their children are light.
+        let grandchildren = morton::children(octants[0]).unwrap();
+        let first = morton::children(grandchildren[0]).unwrap();
+        let second = morton::children(grandchildren[1]).unwrap();
+        let mut hand_made = HashMap::new();
+        hand_made.insert(root, 100);
+        for (blocks, weights) in [
+            (octants, [60, 10, 10, 5, 5, 5, 5, 0]),
+            (grandchildren, [20, 20, 5, 5, 5, 5, 0, 0]),
+            (first, [10, 5, 5, 0, 0, 0, 0, 0]),
+            (second, [4, 4, 4, 4, 4, 0, 0, 0]),
+        ] {
+            hand_made.extend(blocks.into_iter().zip(weights));
+        }
+        let mut rounds = 0;
+        let mut weigh = |blocks: &[morton::MortonKey]| {
+            rounds += 1;
+            blocks.iter().map(|block| hand_made[block]).collect_vec()
+        };
+        let (blocks, weights) = weight_rounds(8, 16, &mut weigh);
+        let mut expected = first.to_vec();
+        expected.extend(second);
+        expected.extend_from_slice(&grandchildren[2..]);
+        expected.extend_from_slice(&octants[1..]);
+        assert_eq!(blocks, expected);
+        assert_eq!(
+            weights,
+            expected.iter().map(|block| hand_made[block]).collect_vec()
+        );
+        assert_eq!(rounds, 4);
+        // `max_level` 2 keeps the grandchildren whole.
+        let mut rounds = 0;
+        let (blocks, _) = weight_rounds(8, 2, |blocks: &[morton::MortonKey]| {
+            rounds += 1;
+            blocks.iter().map(|block| hand_made[block]).collect_vec()
+        });
+        let mut expected = grandchildren.to_vec();
+        expected.extend_from_slice(&octants[1..]);
+        assert_eq!((blocks, rounds), (expected, 3));
+
+        // One key, repeated: no distinct-key rule, so its block splits down to
+        // `max_level`, one level per round, seven siblings left on each level.
+        let key = morton::from_index_and_level([12345, 678, 9], DEEPEST_LEVEL as usize);
+        let keys = vec![key; 40];
+        for max_level in [5, 16] {
+            let mut rounds = 0;
+            let (blocks, weights) =
+                weight_rounds(16, max_level, |blocks: &[morton::MortonKey]| {
+                    rounds += 1;
+                    local_coarse_tree_weights(&keys, blocks)
+                        .into_iter()
+                        .map(|count| count as u64)
+                        .collect_vec()
+                });
+            assert_eq!(rounds, max_level + 1);
+            assert_eq!(blocks.len(), 7 * max_level + 1);
+            assert!(morton::is_complete_linear_octree(&blocks));
+            let heavy = blocks
+                .iter()
+                .position(|&b| morton::is_ancestor(b, key))
+                .unwrap();
+            assert_eq!(morton::level(blocks[heavy]), max_level);
+            assert_eq!(weights[heavy], 40);
+            assert_eq!(weights.iter().sum::<u64>(), 40);
+        }
+
+        // Clustered keys: every block above `max_level` is at most W / (k P), and
+        // every block below the root has a parent that was heavier.
+        let mut rng = seeded_rng(29);
+        let mut keys = generate_random_keys(300, &mut rng);
+        for _ in 0..900 {
+            keys.push(morton::from_index_and_level(
+                [
+                    30000 + rng.random_range(0..100usize),
+                    500 + rng.random_range(0..100usize),
+                    9000 + rng.random_range(0..100usize),
+                ],
+                DEEPEST_LEVEL as usize,
+            ));
+        }
+        keys.sort_unstable();
+        let count = |block| {
+            keys.iter()
+                .filter(|&&key| morton::is_ancestor(block, key))
+                .count() as u64
+        };
+        for (shares, max_level) in [(2, 16), (16, 16), (64, 16), (512, 4)] {
+            let (blocks, weights) = weight_rounds(shares, max_level, |blocks| {
+                local_coarse_tree_weights(&keys, blocks)
+                    .into_iter()
+                    .map(|count| count as u64)
+                    .collect_vec()
+            });
+            assert!(morton::is_complete_linear_octree(&blocks));
+            for (&block, &weight) in blocks.iter().zip(&weights) {
+                assert_eq!(weight, count(block));
+                assert!(morton::level(block) <= max_level);
+                if morton::level(block) < max_level {
+                    assert!(weight * shares <= keys.len() as u64);
+                }
+                if let Some(parent) = morton::parent(block) {
+                    assert!(count(parent) * shares > keys.len() as u64);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_merge_key_counts_sums_the_runs() {
+        let pair = |key, count| KeyCount { key, count };
+        assert_eq!(count_duplicates(&[]), Vec::new());
+        assert_eq!(
+            count_duplicates(&[3, 3, 5, 9, 9, 9]),
+            vec![pair(3, 2), pair(5, 1), pair(9, 3)]
+        );
+
+        // Duplicates across runs; empty runs first, in the middle and last.
+        let runs = [
+            pair(1, 2),
+            pair(4, 1),
+            pair(1, 3),
+            pair(2, 1),
+            pair(4, 5),
+            pair(9, 1),
+        ];
+        assert_eq!(
+            merge_key_counts(&runs, &[0, 2, 0, 3, 1, 0]),
+            vec![pair(1, 5), pair(2, 1), pair(4, 6), pair(9, 1)]
+        );
+        assert_eq!(merge_key_counts(&runs[..2], &[2]), runs[..2].to_vec());
+        assert_eq!(merge_key_counts(&[], &[0, 0, 0]), Vec::new());
+        assert_eq!(merge_key_counts(&[], &[]), Vec::new());
+
+        // Randomised against a map: each rank's keys, few distinct and many
+        // duplicates, deduplicated by the rank and merged by the receiver.
+        let mut rng = seeded_rng(17);
+        for _ in 0..100 {
+            let mut expected = BTreeMap::<morton::MortonKey, u64>::new();
+            let mut received = Vec::new();
+            let mut lengths = Vec::new();
+            for _ in 0..rng.random_range(0..9usize) {
+                let mut keys = (0..rng.random_range(0..40usize))
+                    .map(|_| {
+                        morton::from_index_and_level(
+                            [rng.random_range(0..8usize), 0, 0],
+                            DEEPEST_LEVEL as usize,
+                        )
+                    })
+                    .collect_vec();
+                keys.sort_unstable();
+                for &key in &keys {
+                    *expected.entry(key).or_default() += 1;
+                }
+                let run = count_duplicates(&keys);
+                lengths.push(run.len());
+                received.extend(run);
+            }
+            assert_eq!(
+                merge_key_counts(&received, &lengths),
+                expected
+                    .into_iter()
+                    .map(|(key, count)| pair(key, count))
+                    .collect_vec()
+            );
+        }
+    }
+
+    #[test]
+    fn test_rank_counts_and_first_finest_descendants() {
+        let deepest = DEEPEST_LEVEL as usize;
+        let root = morton::root();
+        assert_eq!(first_finest_descendant(root), morton::deepest_first());
+        let key = morton::from_index_and_level([3, 5, 7], deepest);
+        assert_eq!(first_finest_descendant(key), key);
+        assert_eq!(
+            first_finest_descendant(morton::from_index_and_level([1, 0, 1], 1)),
+            morton::from_index_and_level([1 << 15, 0, 1 << 15], deepest)
+        );
+
+        // Keys of every level. The first finest descendant is the first finest key
+        // under the key, and it does not decrease along sorted keys.
+        let mut rng = seeded_rng(9);
+        let fine = generate_random_keys(400, &mut rng);
+        let mut coarse = fine
+            .iter()
+            .map(|&key| morton::ancestor_at_level(key, rng.random_range(0..=deepest)).unwrap())
+            .collect_vec();
+        coarse.sort_unstable();
+        for &key in &coarse {
+            let first = first_finest_descendant(key);
+            assert!(morton::is_ancestor(key, first));
+            assert_eq!(morton::level(first), deepest);
+            assert!(
+                first == morton::deepest_first() || !morton::is_ancestor(key, first - (1 << 15))
+            );
+        }
+        assert!(
+            coarse
+                .iter()
+                .map(|&key| first_finest_descendant(key))
+                .tuple_windows()
+                .all(|(a, b)| a <= b)
+        );
+
+        let mut keys = fine;
+        keys.sort_unstable();
+        let octants = morton::children(root).unwrap();
+        let mut blocks = morton::children(octants[3]).unwrap().to_vec();
+        blocks.extend_from_slice(&octants[..3]);
+        blocks.extend_from_slice(&octants[4..]);
+        blocks.sort_unstable();
+        for partition in [
+            vec![0, 0, 5, 5, 9, 15, 15],
+            vec![0, 15, 15, 15],
+            vec![0, 0, 0, 15],
+            vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        ] {
+            let bins = tree_bins(&blocks, &partition);
+            let size = bins.len();
+            // Finest keys as `sort_to_bins` sorts them, repeated and invalid bounds
+            // included; no keys, no counts.
+            assert_eq!(
+                rank_counts(&keys, &bins, |&key| key),
+                sort_to_bins(&keys, &bins)
+            );
+            assert_eq!(
+                rank_counts(&[] as &[morton::MortonKey], &bins, |&key| key),
+                vec![0; size]
+            );
+            // A key of any level goes to the owner of the block it lies in, or of its
+            // first descendant block.
+            let counts = rank_counts(&coarse, &bins, |&key| first_finest_descendant(key));
+            assert_eq!(counts.iter().sum::<usize>(), coarse.len());
+            let mut start = 0;
+            for (rank, &count) in counts.iter().enumerate() {
+                for &key in &coarse[start..start + count] {
+                    let block = blocks
+                        .iter()
+                        .position(|&block| {
+                            morton::is_ancestor(block, key)
+                                || morton::is_ancestor(key, block)
+                                    && first_finest_descendant(key)
+                                        == first_finest_descendant(block)
+                        })
+                        .unwrap();
+                    assert!(partition[rank] <= block && block < partition[rank + 1]);
+                }
+                start += count;
+            }
+        }
+    }
+
+    #[test]
+    fn test_local_block_counts_against_the_expanded_keys() {
+        let mut rng = seeded_rng(23);
+        let mut weighted = generate_random_keys(200, &mut rng);
+        weighted.extend_from_within(..50);
+        weighted.extend(std::iter::repeat_n(weighted[7], 30));
+        weighted.sort_unstable();
+        let (keys, copies): (Vec<_>, Vec<_>) = count_duplicates(&weighted)
+            .into_iter()
+            .map(|pair| (pair.key, pair.count))
+            .unzip();
+        assert_eq!(keys, morton::linearize(&weighted));
+
+        let octants = morton::children(morton::root()).unwrap();
+        let mut blocks = morton::children(octants[2]).unwrap().to_vec();
+        blocks.extend_from_slice(&octants[..2]);
+        blocks.extend_from_slice(&octants[3..]);
+        blocks.sort_unstable();
+        let widen = |counts: Vec<usize>| counts.into_iter().map(|c| c as u64).collect_vec();
+        let (distinct, weights) = local_block_counts(&keys, &copies, &blocks);
+        assert_eq!(distinct, widen(local_coarse_tree_weights(&keys, &blocks)));
+        assert_eq!(
+            weights,
+            widen(local_coarse_tree_weights(&weighted, &blocks))
+        );
+        assert_eq!(
+            local_block_counts(&[], &[], &blocks),
+            (vec![0; blocks.len()], vec![0; blocks.len()])
+        );
+    }
+
+    /// S4's balance replayed serially on `size` ranks: the blocks of O1, the cut,
+    /// every rank's refined tree, its local closure linearized and routed by the first
+    /// finest descendants, and every rank's linearization of what it receives. The
+    /// union is the balanced tree of all the leaves, distributed by the bounds.
+    #[test]
+    fn test_routed_balance_against_morton_balance() {
+        let deepest = DEEPEST_LEVEL as usize;
+        let mut rng = seeded_rng(31);
+        let mut weighted = generate_random_keys(200, &mut rng);
+        for _ in 0..600 {
+            weighted.push(morton::from_index_and_level(
+                [
+                    50000 + rng.random_range(0..200usize),
+                    3000 + rng.random_range(0..200usize),
+                    41000 + rng.random_range(0..200usize),
+                ],
+                deepest,
+            ));
+        }
+        weighted.extend(std::iter::repeat_n(
+            morton::from_index_and_level([7, 61000, 300], deepest),
+            300,
+        ));
+        weighted.sort_unstable();
+        let distinct = morton::linearize(&weighted);
+
+        let mut coarser_than_first_block = 0;
+        for size in [1, 2, 3, 5, 8, 13] {
+            for (max_fine_keys, max_level) in [(1, 16), (8, 16), (8, 5), (64, 16), (4, 2)] {
+                let label = format!("{size} ranks, {max_fine_keys} keys, level {max_level}");
+                let shares = 8 * size as u64;
+                let blocks =
+                    serial_coarse_tree(&distinct, &weighted, shares, max_fine_keys, max_level);
+                let weights = local_coarse_tree_weights(&weighted, &blocks)
+                    .into_iter()
+                    .map(|w| w as u64)
+                    .collect_vec();
+                let partition = partition_blocks(&weights, size);
+                let bounds = tree_bins(&blocks, &partition);
+                let refined = (0..size)
+                    .map(|rank| {
+                        let keys = distinct
+                            .iter()
+                            .copied()
+                            .filter(|&key| owner_rank_for_key(&bounds, key) == Some(rank))
+                            .collect_vec();
+                        let own = &blocks[partition[rank]..partition[rank + 1]];
+                        create_local_tree(&keys, own, max_level, max_fine_keys)
+                    })
+                    .collect_vec();
+                let leaves = refined.concat();
+                let deepest_level = leaves.iter().map(|&key| morton::level(key)).max().unwrap();
+                assert!(deepest_level > 0);
+
+                // The Phase 5 balance: the union of the closures, linearized globally.
+                let expected = morton::balance(&leaves, morton::root());
+                let union = refined
+                    .iter()
+                    .flat_map(|keys| balance_closure(keys, deepest_level))
+                    .collect_vec();
+                assert_eq!(morton::linearize(&union), expected, "{label}");
+
+                let mut received = vec![Vec::new(); size];
+                for keys in &refined {
+                    let closure = morton::linearize(&balance_closure(keys, deepest_level));
+                    let counts =
+                        rank_counts(&closure, &bounds, |&key| first_finest_descendant(key));
+                    let mut start = 0;
+                    for (rank, &count) in counts.iter().enumerate() {
+                        let part = &closure[start..start + count];
+                        coarser_than_first_block += part
+                            .iter()
+                            .filter(|&&key| owner_rank_for_key(&bounds, key) != Some(rank))
+                            .count();
+                        received[rank].extend_from_slice(part);
+                        start += count;
+                    }
+                }
+                let balanced = received
+                    .iter()
+                    .map(|keys| morton::linearize(keys))
+                    .collect_vec();
+                assert_eq!(balanced.concat(), expected, "{label}");
+                for (rank, keys) in balanced.iter().enumerate() {
+                    assert!(
+                        keys.iter()
+                            .all(|&key| owner_rank_for_key(&bounds, key) == Some(rank)),
+                        "{label}"
+                    );
+                }
+            }
+        }
+        // A closure key coarser than the first block of a rank sorts before that
+        // rank's bound; by its own key it would go to an earlier rank, which holds
+        // none of its descendants. The replay routed such keys.
+        assert!(coarser_than_first_block > 0);
     }
 }

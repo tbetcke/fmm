@@ -1,11 +1,17 @@
 //! Construction inputs at the edge of the supported range.
 //!
-//! Covers a rank without keys, duplicate keys straddling rank boundaries, a
+//! Covers a rank without keys, every key on one rank, duplicate keys straddling
+//! rank boundaries, every key identical, a tree whose only block is the root, a
 //! heavy cluster that cannot be split by the coarse tree, `max_level` being
-//! honoured on every rank count, and distinct neighbour entries.
+//! honoured on every rank count, and distinct neighbour entries. Every tree is
+//! compared key for key with the Phase 5 construction (the sample sorts), kept in
+//! `phase5_reference` until Phase 5S T3 lands (T3a).
+
+#[path = "phase5_reference/mod.rs"]
+mod phase5_reference;
 
 use itertools::Itertools;
-use mpi::traits::Communicator;
+use mpi::{topology::SimpleCommunicator, traits::Communicator};
 use nd_octree::{
     Octree, OctreeOptions,
     constants::DEEPEST_LEVEL,
@@ -24,6 +30,7 @@ fn check_tree<'c, C: mpi::traits::CommunicatorCollectives>(
     comm: &'c C,
 ) -> Octree<'c, C> {
     let tree = Octree::new(fine_keys, options, comm);
+    phase5_reference::assert_same_as_phase5("edge case", &tree, fine_keys, options, comm);
     let max_level = options.max_level();
     let rank = comm.rank() as usize;
 
@@ -126,6 +133,22 @@ fn check_ghost_bookkeeping<C: mpi::traits::CommunicatorCollectives>(
     }
 }
 
+/// The leaves of the one-rank tree of `keys`, built on this rank alone.
+fn one_rank_leaves(keys: &[morton::MortonKey], options: OctreeOptions) -> Vec<morton::MortonKey> {
+    let comm = SimpleCommunicator::self_comm();
+    Octree::new(keys, options, &comm).leaf_keys().clone()
+}
+
+/// Assert that the root is the only block and the only leaf, on exactly one rank.
+///
+/// # Collective operation
+/// Gathers the blocks and the leaves of every rank, so every rank must call it.
+fn assert_root_only<C: mpi::traits::CommunicatorCollectives>(tree: &Octree<'_, C>, comm: &C) {
+    let root = morton::root();
+    assert_eq!(gather_to_all(tree.coarse_tree_leafs(), comm), vec![root]);
+    assert_eq!(gather_to_all(tree.leaf_keys(), comm), vec![root]);
+}
+
 fn main() {
     let universe = mpi::initialize().unwrap();
     let comm = universe.world();
@@ -147,6 +170,38 @@ fn main() {
             .with_max_fine_keys(4),
         &comm,
     );
+
+    // Every key on one rank, the last: the others route nothing and receive their
+    // share. The leaves are those of the one-rank tree.
+    let mut rng = seeded_rng(3);
+    let all = generate_random_keys(1000, &mut rng);
+    let keys = if rank + 1 == size {
+        all.clone()
+    } else {
+        Vec::new()
+    };
+    let options = OctreeOptions::new().with_max_fine_keys(8);
+    let tree = check_tree(&keys, options, &comm);
+    assert_eq!(
+        gather_to_all(tree.leaf_keys(), &comm),
+        one_rank_leaves(&all, options)
+    );
+
+    // Every key identical, many copies on every rank: one distinct key, so the root
+    // is the only block and the only leaf, on one rank. The routing rounds split
+    // the key's block down to `max_level` before the cut.
+    let key = morton::from_index_and_level([4321, 123, 60000], deepest);
+    for max_level in [16, 4] {
+        let options = OctreeOptions::new().with_max_level(max_level);
+        let tree = check_tree(&vec![key; 50 + rank], options, &comm);
+        assert_root_only(&tree, &comm);
+    }
+
+    // The root as the only block with many distinct keys: `max_level` 0.
+    let mut rng = seeded_rng(11 + rank);
+    let keys = generate_random_keys(300, &mut rng);
+    let tree = check_tree(&keys, OctreeOptions::new().with_max_level(0), &comm);
+    assert_root_only(&tree, &comm);
 
     // One distinct key per rank, each duplicated: the parallel sort splits runs of
     // equal keys across ranks, and load balancing must still give every rank a block.
@@ -179,7 +234,9 @@ fn main() {
         }
         keys.push(morton::from_index_and_level([0, 32, 32], deepest));
     } else {
-        let far = morton::from_index_and_level([60000 - 100 * rank; 3], deepest);
+        // `rank % 500` keeps the index within the 2^16 cells of level 16 on any
+        // number of ranks (checked at 512 and 640).
+        let far = morton::from_index_and_level([60000 - 100 * (rank % 500); 3], deepest);
         keys.extend(std::iter::repeat_n(far, 600));
     }
     // The heavy block goes whole to one rank, which may leave another without
@@ -191,7 +248,7 @@ fn main() {
     // Clustered points far from the domain corner make the natural coarse tree deep;
     // `max_level` must still bound the leaves and the result must be usable.
     let mut rng = seeded_rng(rank);
-    let base = 20000 + rank * 200;
+    let base = 20000 + (rank % 200) * 200;
     let mut keys = (0..1000)
         .map(|_| {
             morton::from_index_and_level(
@@ -205,7 +262,7 @@ fn main() {
         })
         .collect_vec();
     keys.push(morton::from_index_and_level(
-        [65000 - 100 * rank; 3],
+        [65000 - 100 * (rank % 500); 3],
         deepest,
     ));
     for max_level in [3, 6, 16] {

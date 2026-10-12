@@ -8,8 +8,6 @@ use mpi::{
     collective::SystemOperation,
     traits::{CommunicatorCollectives, Root},
 };
-use rand::SeedableRng;
-use rand_chacha::ChaCha8Rng;
 use rlst::{Array, ValueArrayImpl, distributed_tools::array_tools::gather_to_rank};
 
 use crate::{constants::DEEPEST_LEVEL, geometry::PhysicalBox, morton, morton::MortonKey};
@@ -471,12 +469,15 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
     /// The partition depends on the rank count and the weights, never on which
     /// rank passed which key.
     ///
-    /// The collectives on several ranks, in order: those of the parallel sort and
-    /// the successor exchange of the linearization; one all-reduce per refinement
-    /// round of the coarse tree, and one more if 2:1 balancing the blocks changes
-    /// them; the key move to the owners (an all-to-all-v); those of the distributed
-    /// 2:1 balance (an all-reduce of the deepest level and a linearization); the key
-    /// move again; and the ghost exchange (two all-gathers and an all-to-all-v).
+    /// The collectives on several ranks, in order: the routing of the keys (one
+    /// all-reduce per round of provisional blocks, refined by weight alone, and one
+    /// all-to-all-v of the deduplicated keys with their copies to the provisional
+    /// owners); one all-reduce per refinement round of the coarse tree, and one
+    /// more if 2:1 balancing the blocks changes them; the key move to the owners (an
+    /// all-to-all-v); the distributed 2:1 balance (an all-reduce of the deepest
+    /// level and an all-to-all-v of the local closures by the partition bounds); and
+    /// the ghost exchange (two all-gathers and an all-to-all-v). Each all-to-all-v
+    /// includes an all-to-all of its counts. No key is sorted across the ranks.
     /// Debug builds add the collectives of their invariant checks. The partition
     /// bounds come from the replicated coarse tree and need no communication.
     ///
@@ -520,18 +521,16 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
         let rank = comm.rank() as usize;
         let size = comm.size() as usize;
 
-        // We need a random number generator for sorting. For simplicity we use a ChaCha8 random number generator
-        // seeded with the rank of the process.
-        let mut rng = ChaCha8Rng::seed_from_u64(comm.rank() as u64);
-
-        // Linearize the keys.
-        let linear_keys = linearize(fine_keys, &mut rng, comm);
+        // Linearize the keys: route them by weight to provisional owners, every copy
+        // of a key to one rank, and deduplicate them there with their copies.
+        let (linear_keys, multiplicities) = route_keys(fine_keys, options, comm);
 
         // Build the complete, 2:1 balanced coarse tree by weight, no deeper than
         // `max_level`, with the weight of each block. Both are replicated on every
         // rank, so the partition and its bounds are computed locally and agree.
         let (global_coarse_tree, weights) =
-            compute_coarse_tree(fine_keys, &linear_keys, options, comm);
+            compute_coarse_tree(&linear_keys, &multiplicities, options, comm);
+        drop(multiplicities);
         let partition = partition_blocks(&weights, size);
         let coarse_tree = global_coarse_tree[partition[rank]..partition[rank + 1]].to_vec();
         let coarse_tree_bounds = tree_bins(&global_coarse_tree, &partition);
@@ -540,17 +539,14 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
         // Redistribute the fine keys with respect to the partitioned coarse tree.
         let local_fine_keys =
             redistribute_with_respect_to_coarse_tree(&linear_keys, &coarse_tree_bounds, comm);
+        drop(linear_keys);
 
         // Refine the blocks until we are at max level or the fine keys per box are
-        // few enough, then 2:1 balance the refined tree and redistribute it again
-        // with respect to the coarse tree.
+        // few enough, then 2:1 balance the refined tree, which leaves every key on
+        // the rank that owns it.
         let refined_tree =
             create_local_tree(&local_fine_keys, &coarse_tree, max_level, max_fine_keys);
-        let leaf_tree = redistribute_with_respect_to_coarse_tree(
-            &balance(&refined_tree, &mut rng, comm),
-            &coarse_tree_bounds,
-            comm,
-        );
+        let leaf_tree = balance(&refined_tree, &coarse_tree_bounds, comm);
 
         let all_keys =
             generate_all_keys(&leaf_tree, &coarse_tree, &coarse_tree_bounds, options, comm);
