@@ -56,22 +56,25 @@
 //! # Host data
 //!
 //! Outside the level calls the [`Evaluator`](super::evaluator::Evaluator) moves data in
-//! its host stores itself: `reset` zeroes them, and the three exchanges read the values
+//! its host stores itself: `reset` zeroes them, and the four exchanges read the values
 //! they send and write the values they receive. It tells the operator about every such
 //! movement with [`FmmOperator::host_data`] and one [`HostData`] event, with the index
-//! lists the movement uses (`docs/design/distributed-fmm.md` §6). An operator that keeps
-//! its own copies of the stores, for example on a device, stays consistent with the
+//! lists the movement uses (`docs/design/distributed-fmm.md` §6; since Phase 5S T5 the
+//! reduction and the replicated top of `docs/design/scale-out.md` §4.5). An operator that
+//! keeps its own copies of the stores, for example on a device, stays consistent with the
 //! evaluator through these events alone. The default does nothing, so an operator that
 //! works on the evaluator's slices needs none of it.
 //!
-//! The events of one evaluation, in order (L the deepest level):
+//! The events of one evaluation, in order (L the deepest level, D the deepest block
+//! level, so the reduction levels are 1 to D,
+//! [`Plan::reduction_levels`](super::plan::Plan::reduction_levels)):
 //!
 //! | Stage | Events and movements, in order |
 //! | --- | --- |
 //! | `reset` | the zeroing; [`Reset`](HostData::Reset) |
 //! | `exchange_sources` | [`SendSources`](HostData::SendSources); the source exchange; [`ReceivedSources`](HostData::ReceivedSources) |
 //! | `upward_local` | level calls only |
-//! | `upward_global` | [`SendMultipoles`](HostData::SendMultipoles); the coarse gather; [`ReceivedCoarse`](HostData::ReceivedCoarse); the `m2m` calls of the global pass |
+//! | `upward_global` | for l = L − 1 down to 0: if l + 1 ≤ D, [`SendReduction`](HostData::SendReduction) of l + 1, the reduction of l + 1, [`ReceivedReduction`](HostData::ReceivedReduction) of l + 1; then the `m2m` call of level l of the global pass. Then [`SendMultipoles`](HostData::SendMultipoles); the all-gather of the replicated top; [`ReceivedTop`](HostData::ReceivedTop) |
 //! | `exchange_multipoles` | for l = 0 to L: the multipole exchange of level l; [`ReceivedMultipoles`](HostData::ReceivedMultipoles) of level l |
 //! | `downward`, `evaluate_leaves` | level calls only |
 //!
@@ -80,13 +83,14 @@
 //! order among themselves and at the same logical points; only their place among the
 //! level calls changes: `ReceivedSources` comes after the `upward_local` calls (the source
 //! exchange travels behind them), and each `ReceivedMultipoles` of level l after the
-//! global M2M and the downward calls of the levels above l, just before the first call
-//! that reads level l's ghosts.
+//! downward calls of the levels above l, just before the first call that reads level l's
+//! ghosts.
 //!
-//! That is 5 + nlevels events per evaluation, on every rank and every rank count, also
-//! when a movement moves nothing: on one rank every index list is empty (no ghost leaf,
-//! no ghost box, no block sent or received), so an operator handles one and several ranks
-//! alike.
+//! That is 5 + nlevels + 2D events per evaluation, on every rank, also when a movement
+//! moves nothing: D is the same on every rank (from the replicated partition map), and on
+//! one rank D is 0 and every index list is empty (no ghost leaf, no box received, no box
+//! of the replicated top), so an operator handles one and several ranks alike. Phase 5's
+//! `ReceivedCoarse` went with the coarse gather (Phase 5S T5).
 //!
 //! The guarantees:
 //! - **Coverage.** The evaluator reads or writes a host store outside the level calls
@@ -94,10 +98,12 @@
 //!   (`sources_mut`, `local_sources_mut`, `target_input_mut`,
 //!   `local_target_inputs_mut`).
 //! - **"Send" events** come before the exchange reads the host store, with mutable
-//!   access to it: an operator writes the values to send there. Every value an
-//!   evaluation sends is final when [`SendMultipoles`](HostData::SendMultipoles) fires
-//!   (after the local upward pass): the exchanges send only local leaves and local
-//!   interior boxes, never a `Global` box or a ghost.
+//!   access to it: an operator writes the values to send there. Every value sent is final
+//!   when its event fires: [`SendReduction`](HostData::SendReduction) of level l follows
+//!   the global `m2m` that formed the owned `Global` boxes of level l, and
+//!   [`SendMultipoles`](HostData::SendMultipoles) follows the whole reduction. The
+//!   exchanges send only boxes this rank computes (local leaves, local interior boxes and
+//!   the `Global` boxes it owns), never a ghost or another rank's `Global` box.
 //! - **"Received" events** come after the exchange wrote the received values into the
 //!   host store; the event names the slots, and the exchange's packed receive buffer
 //!   holds the same values.
@@ -108,9 +114,9 @@
 //!
 //! An operator that keeps its own copies must therefore, besides computing every batch
 //! on its copies: zero its multipoles, locals and target output at `Reset`; write the
-//! values of the listed leaves, blocks and boxes into the host store at the "send"
-//! events; and copy the listed slots from the host store (or the packed buffers) at the
-//! "received" events. The caller's data (points, charges) it learns from the caller.
+//! values of the listed leaves and boxes into the host store at the "send" events; and
+//! copy the listed slots from the host store (or the packed buffers) at the "received"
+//! events. The caller's data (points, charges) it learns from the caller.
 
 #[cfg(test)]
 #[path = "operator_tests.rs"]
@@ -121,7 +127,7 @@ use std::ops::Range;
 use mpi::traits::Equivalence;
 use nd_octree::MortonKey;
 
-use super::exchange::{CoarseExchange, MultipoleExchange};
+use super::exchange::{MultipoleExchange, ReductionExchange, TopExchange};
 use super::index::BoxIndex;
 use super::lists::{Children, Csr, Parents, VList};
 use super::store::{LeafSlice, LeafSliceMut, LeafStore, LevelBuffers, LevelSlice, LevelSliceMut};
@@ -156,8 +162,8 @@ pub trait FmmSizes {
 pub enum UpwardPass {
     /// The local pass: `LocalInterior` parents, whose children are all on this rank.
     Local,
-    /// The global pass: `Global` parents, formed on every rank from the gathered
-    /// coarse blocks.
+    /// The global pass: `Global` parents, formed on their owners from the children the
+    /// upward reduction delivers (Phase 5S T5).
     Global,
 }
 
@@ -337,25 +343,50 @@ pub enum HostData<'a, T> {
         /// The source store, every leaf of the numbering.
         sources: &'a LeafStore<T>,
     },
-    /// Every multipole the evaluation sends is final: this rank's coarse blocks
-    /// ([`CoarseExchange::sent_blocks`], empty on one rank; the slot of block b is
-    /// [`CoarseExchange::block`]) and the boxes
-    /// [`MultipoleExchange::send_boxes`] of every level. Once per evaluation, before the
-    /// coarse gather.
+    /// The upward reduction of `level` is about to send this rank's multipoles of the
+    /// level to the owners of their parents: the boxes
+    /// [`ReductionExchange::send_boxes`]`(level)` (own blocks and owned `Global` boxes,
+    /// final: the global `m2m` of the level has formed the owned ones). Once per
+    /// reduction level, deepest first, before the reduction of the level.
+    SendReduction {
+        /// The level sent, one of [`ReductionExchange::levels`].
+        level: usize,
+        /// The reduction, for the boxes it sends.
+        exchange: &'a ReductionExchange<T>,
+        /// The multipoles of every box.
+        multipoles: &'a mut LevelBuffers<T>,
+    },
+    /// The upward reduction of `level` wrote the children it received into the slots
+    /// [`ReductionExchange::receive_boxes`]`(level)`; the values, packed in that order,
+    /// are [`ReductionExchange::receive_buffer`]. Once per reduction level, before the
+    /// global `m2m` call that reads them.
+    ReceivedReduction {
+        /// The level received.
+        level: usize,
+        /// The reduction.
+        exchange: &'a ReductionExchange<T>,
+        /// The multipoles of every box.
+        multipoles: &'a LevelBuffers<T>,
+    },
+    /// Every other multipole the evaluation sends is final, after the reduction: this
+    /// rank's boxes of the replicated top ([`TopExchange::sent_keys`]; the slot of key r
+    /// is [`TopExchange::slot`]) and the boxes [`MultipoleExchange::send_boxes`] of every
+    /// level. Once per evaluation, before the all-gather of the replicated top.
     SendMultipoles {
-        /// The coarse gather, for the blocks it sends.
-        coarse: &'a CoarseExchange<T>,
+        /// The replicated top, for the boxes it sends.
+        top: &'a TopExchange<T>,
         /// The multipole exchange, for the boxes it sends on each level.
         exchange: &'a MultipoleExchange<T>,
         /// The multipoles of every box.
         multipoles: &'a mut LevelBuffers<T>,
     },
-    /// The coarse gather wrote every other rank's blocks
-    /// ([`CoarseExchange::received_blocks`]) into their slots; the values, packed block
-    /// after block, are [`CoarseExchange::gathered`].
-    ReceivedCoarse {
-        /// The coarse gather.
-        coarse: &'a CoarseExchange<T>,
+    /// The all-gather of the replicated top wrote the boxes
+    /// [`TopExchange::received_keys`] into their slots ([`TopExchange::slot`]); the
+    /// values of key r are [`TopExchange::chunk`]`(r)` of the packed
+    /// [`TopExchange::gathered`].
+    ReceivedTop {
+        /// The replicated top.
+        top: &'a TopExchange<T>,
         /// The multipoles of every box.
         multipoles: &'a LevelBuffers<T>,
     },
@@ -381,7 +412,7 @@ pub enum HostData<'a, T> {
 /// | Stage | Calls, in order |
 /// | --- | --- |
 /// | `upward_local` | for l = L down to 0: `p2m(l)`, then `m2m(l − 1)` of the [local pass](UpwardPass::Local) (l ≥ 1) |
-/// | `upward_global` | for l = L − 1 down to 0: `m2m(l)` of the [global pass](UpwardPass::Global) |
+/// | `upward_global` | for l = L − 1 down to 0: `m2m(l)` of the [global pass](UpwardPass::Global), after the reduction of level l + 1 |
 /// | `downward` | for l = 1 to L: `l2l(l)`, `m2l(l)`, `p2l(l)` |
 /// | `evaluate_leaves` | for l = 0 to L: `l2p(l)`, `m2p(l)`, `p2p(l)` |
 ///

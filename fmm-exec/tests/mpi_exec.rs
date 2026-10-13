@@ -160,8 +160,13 @@
 //!   On several ranks (Phase 5 T8) every check runs as on one rank, against the host path
 //!   on the same ranks, with the formula extended by the exchanges' transfers on the rank
 //!   (`Fmm::exchange_sizes`: the ghost tail up, the sent multipoles down in one more sync,
-//!   the coarse blocks and each level's ghost multipoles up, a launch each). The test
-//!   prints the backends and the ranks it ran, and the largest differences, at the end.
+//!   the boxes of the replicated top and each level's ghost multipoles up, a launch each).
+//!   The test prints the backends and the ranks it ran, and the largest differences, at
+//!   the end. **Since Phase 5S T5 the device repeats on several ranks are T6's**: the
+//!   device does not mirror the upward reduction before T6, so on several ranks they, the
+//!   CPU runtime's threads rule of **device backends** and **device errors and tuning on
+//!   several ranks** print that they are T6's on every rank instead of running
+//!   (`device_runs_here`).
 //! - **device backends**: `Host` is the default and reports every kind on the host; a
 //!   backend not compiled in gives `BackendNotCompiled`, also when only rank 0 asks for
 //!   it (the others return `OtherRank`: the check rides on step 1's agreement); with the
@@ -248,7 +253,8 @@
 //!   and charges moved by the test's own `Redistribution`s, the leaf-scaled points and the
 //!   charges handed to the shadow alone), and its output, scaled as `Fmm` scales it and
 //!   moved back, equals the `Fmm`'s bit for bit; the evaluator's own target output and
-//!   locals stay zero, and every evaluation fires 5 + nlevels events. Once per tree,
+//!   locals stay zero, and every evaluation fires 5 + nlevels + 2 r events (r the
+//!   reduction levels, Phase 5S T5). Once per tree,
 //!   precision and output kind of each scenario (`check_shadow_once`: which data move
 //!   depends on those, not on p, the strategy or the P2P kernel), to keep the debug run
 //!   under a minute.
@@ -258,8 +264,8 @@
 //!   shadow equals the `Fmm` through two evaluations of different charges on one
 //!   evaluator (the second relies on `Reset`). With the hook disabled (the shadow ignores
 //!   every event) one evaluation is still exact on one rank, where no event carries data,
-//!   and differs on several ranks, where the ghosts and the other ranks' coarse blocks stay
-//!   zero (the test asserts that the tree has ghost leaves and boxes there); two
+//!   and differs on several ranks, where the received multipoles stay zero (the test
+//!   asserts that the tree has ghost leaves and boxes there); two
 //!   evaluations differ on every rank count. It prints the ghosts and how many values
 //!   differ.
 //!
@@ -367,6 +373,24 @@ fn device_backends() -> Vec<Backend> {
         .into_iter()
         .filter(|b| b.is_compiled())
         .collect()
+}
+
+/// Whether the device scenario `what` runs on `comm`: on one rank. On several ranks the
+/// device does not mirror the upward reduction of Phase 5S T5 before T6 (a device
+/// evaluation with a box to reduce fails with `FmmError::Device`), so the device
+/// scenarios on several ranks are T6's (docs/phase5s/T5-owned-top-tree.md): this prints
+/// so on every rank instead of running them. Every rank takes the same branch.
+#[cfg(feature = "gpu")]
+fn device_runs_here(what: &str, comm: &SimpleCommunicator) -> bool {
+    let size = comm.size();
+    if size > 1 {
+        eprintln!(
+            "rank {}: {what}: not run on {size} ranks, Phase 5S T6's (the device does not \
+             mirror the upward reduction yet)",
+            comm.rank()
+        );
+    }
+    size == 1
 }
 
 /// The device runs of one backend for [`backends_line`]: the backend, f32 and f64 runs,
@@ -1193,7 +1217,10 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
         check_overlapped(&mut fmm, charges, &reference);
     }
     #[cfg(feature = "gpu")]
-    for backend in device_backends() {
+    for backend in device_backends()
+        .into_iter()
+        .filter(|backend| device_runs_here(&format!("the {backend} repeat"), comm))
+    {
         let difference = device_common::check_backend(
             &builder,
             (sources, targets),
@@ -3396,7 +3423,7 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
     // The threads rule with the CPU runtime: no rayon pool, the units capped at n, and on
     // several ranks at the node's cores over its ranks (Phase 5 T8, design §7.4).
     #[cfg(feature = "cpu")]
-    {
+    if device_runs_here("the threads rule of the CPU runtime", comm) {
         let charges = random_charges(&mut rng, points.len());
         let builder = FmmBuilder::<f64>::new(3).backend(Backend::Cpu).threads(4);
         match builder.build(&points, &points, comm) {
@@ -3589,7 +3616,7 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
 /// documentation, "device errors and tuning on several ranks"), on the CPU runtime.
 fn device_ranks(comm: &SimpleCommunicator) {
     #[cfg(feature = "cpu")]
-    {
+    if device_runs_here("device errors and tuning", comm) {
         device_errors(comm);
         device_tuning(comm);
     }
@@ -3638,7 +3665,7 @@ fn device_errors_with(comm: &SimpleCommunicator, overlap: bool) {
     // The failing rank: the lowest that sends multipoles, so that its injection lands on a
     // real mid-evaluation sync (on one rank, rank 0 without one).
     let sizes = fmm.exchange_sizes();
-    let sends = sizes.sent_blocks + sizes.sent_boxes.iter().sum::<usize>() > 0;
+    let sends = sizes.sent_top + sizes.sent_boxes.iter().sum::<usize>() > 0;
     let failing = if size == 1 {
         0
     } else {

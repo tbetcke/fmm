@@ -8,17 +8,19 @@
 //! ([`Shadow::load_points`] once, [`Shadow::begin_evaluation`] per evaluation), and of
 //! the evaluator's own data movements only through `FmmOperator::host_data`:
 //! - `Reset`: it zeroes its multipoles, locals and target output;
-//! - `SendSources`, `SendMultipoles`: it writes its values of the listed leaves, coarse
-//!   blocks and boxes into the host store, which the exchange then sends;
-//! - `ReceivedSources`: it copies the ghost tail from the host store; `ReceivedCoarse`
-//!   and `ReceivedMultipoles`: it copies the received values from the exchanges' packed
-//!   buffers (`CoarseExchange::chunk`, `MultipoleExchange::receive_buffer`).
+//! - `SendSources`, `SendReduction`, `SendMultipoles`: it writes its values of the listed
+//!   leaves and boxes (those of the replicated top included) into the host store, which
+//!   the exchange then sends;
+//! - `ReceivedSources`: it copies the ghost tail from the host store;
+//!   `ReceivedReduction`, `ReceivedTop` and `ReceivedMultipoles`: it copies the received
+//!   values from the exchanges' packed buffers (`ReductionExchange::receive_buffer`,
+//!   `TopExchange::chunk`, `MultipoleExchange::receive_buffer`; Phase 5S T5).
 //!
 //! So its output equals the plain operator's bit for bit exactly when the events cover
 //! every host read and write of the evaluator. With the hook disabled it ignores every
 //! event: on one rank, where no event carries data, one evaluation from fresh copies is
-//! still exact; on several ranks the ghosts and the other ranks' coarse blocks stay zero
-//! and the output differs ([`check_fmm`] reports how many values differ).
+//! still exact; on several ranks the received multipoles stay zero and the output
+//! differs ([`check_fmm`] reports how many values differ).
 //!
 //! [`check_fmm`] drives the plan's `Evaluator` with a [`Shadow`] on the octree and plan of
 //! a built `Fmm`, moves the points and charges to their owners with its own
@@ -266,13 +268,36 @@ impl<T: SimdScalar + Equivalence + Default> FmmOperator for Shadow<T> {
                     .as_mut_slice()
                     .copy_from_slice(sources.range(leaves).as_slice());
             }
-            HostData::SendMultipoles {
-                coarse,
+            HostData::SendReduction {
+                level,
                 exchange,
                 multipoles,
             } => {
-                for b in coarse.sent_blocks() {
-                    let (level, i) = coarse.block(b);
+                for &i in exchange.send_boxes(level) {
+                    let i = i as usize;
+                    multipoles
+                        .chunk_mut(level, i)
+                        .copy_from_slice(self.multipoles.chunk(level, i));
+                }
+            }
+            HostData::ReceivedReduction {
+                level, exchange, ..
+            } => {
+                let size = exchange.size(level);
+                let values = exchange.receive_buffer(level).chunks_exact(size);
+                for (&i, chunk) in exchange.receive_boxes(level).iter().zip(values) {
+                    self.multipoles
+                        .chunk_mut(level, i as usize)
+                        .copy_from_slice(chunk);
+                }
+            }
+            HostData::SendMultipoles {
+                top,
+                exchange,
+                multipoles,
+            } => {
+                for r in top.sent_keys() {
+                    let (level, i) = top.slot(r).expect("an owner holds its keys of the top");
                     let i = i as usize;
                     multipoles
                         .chunk_mut(level, i)
@@ -287,12 +312,12 @@ impl<T: SimdScalar + Equivalence + Default> FmmOperator for Shadow<T> {
                     }
                 }
             }
-            HostData::ReceivedCoarse { coarse, .. } => {
-                for b in coarse.received_blocks() {
-                    let (level, i) = coarse.block(b);
+            HostData::ReceivedTop { top, .. } => {
+                for &r in top.received_keys() {
+                    let (level, i) = top.slot(r).expect("a received key has a slot");
                     self.multipoles
                         .chunk_mut(level, i as usize)
-                        .copy_from_slice(coarse.chunk(b));
+                        .copy_from_slice(top.chunk(r));
                 }
             }
             HostData::ReceivedMultipoles {
@@ -326,7 +351,8 @@ pub struct Verdict {
     /// Values of the evaluator's own target output and locals that are not zero (the
     /// shadow never writes the evaluator's slices, so there must be none).
     pub host_written: usize,
-    /// Ranks on which an evaluation did not receive 5 + nlevels events.
+    /// Ranks on which an evaluation did not receive 5 + nlevels + 2 r events, r the
+    /// reduction levels.
     pub event_counts: usize,
 }
 
@@ -417,7 +443,8 @@ pub fn check_fmm<T: Stored + SimdScalar + Equivalence + Default>(
             evaluator.evaluate();
         }
         let events = evaluator.operator().events() - before;
-        verdict.event_counts += usize::from(events != 5 + plan.nlevels());
+        let expected = 5 + plan.nlevels() + 2 * plan.reduction_levels().len();
+        verdict.event_counts += usize::from(events != expected);
         let host = evaluator.target_output_store().as_slice().iter();
         verdict.host_written += host
             .chain(evaluator.locals().as_slice())

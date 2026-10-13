@@ -30,7 +30,7 @@
 //!
 //! | Data | On the device | Uploaded | Downloaded |
 //! | --- | --- | --- | --- |
-//! | multipoles, locals | one buffer each, the `LevelBuffers` layout, ghost boxes included | never (zeroed by a kernel), but on several ranks the received ghost and coarse multipoles, packed | never, but by host-fallback calls and on several ranks the sent multipoles, packed |
+//! | multipoles, locals | one buffer each, the `LevelBuffers` layout, ghost boxes included | never (zeroed by a kernel), but on several ranks the received ghost multipoles and those of the replicated top, packed | never, but by host-fallback calls and on several ranks the sent multipoles, packed |
 //! | source store | the `LeafStore` layout of CONVENTIONS §3.13, every leaf of the numbering (the ghost leaves last) | coordinates once at build; the charges every evaluation, scattered into their slots; on several ranks the ghost tail every evaluation | never |
 //! | target input | the `LeafStore` layout | once at build | never |
 //! | target output | the `LeafStore` layout | never (zeroed) | once per evaluation (without the output pass on the device), and by host-fallback calls |
@@ -41,7 +41,7 @@
 //! | tables | the dense octant tables of M2M and L2L; the dense M2L tables under `Dense`, expanded from the classes under `Classes` (§6.8); the M2L family of the rotation tables under `Rotation` (T10); for a family whose level calls may take the library GEMM, also its library copy (matrices at 256-byte aligned strides) | once at build | never |
 //! | translation plans (T8, T9, T10) | per M2M, L2L and dense M2L level call on the device: the tile schedule of the hand-written GEMM, or the padded gather indices of the library GEMM; per rotation M2L level call, its rows with a pair | once at build | never |
 //! | translation scratch (T8, T9) | the gathered inputs and products of the widest chunk, shared by every level call | never (allocated at build) | never |
-//! | exchange buffers (Phase 5 T8) | on several ranks: the packed sent multipoles, the packed received coarse blocks, one level's packed received ghost multipoles, and their columns (u32) | the columns once at build; the received values every evaluation | the sent values every evaluation |
+//! | exchange buffers (Phase 5 T8) | on several ranks: the packed sent multipoles, the packed received boxes of the replicated top, one level's packed received ghost multipoles, and their columns (u32) | the columns once at build; the received values every evaluation | the sent values every evaluation |
 //!
 //! Before allocating, [`DeviceOperator::new`] sums the bytes of every buffer and refuses a
 //! configuration that does not fit in the memory the device reports as available
@@ -251,7 +251,7 @@
 //! | Stage | Launches |
 //! | --- | --- |
 //! | `reset`, `begin_evaluation` | 3 zero kernels at `HostData::Reset` (multipoles, locals, target output; none for an empty store) and the charge scatter |
-//! | the exchanges, several ranks (Phase 5 T8) | the gather of the sent multipoles (if the rank sends), the scatter of the received coarse blocks (if any), the scatter of each level's received ghost multipoles (per level with a ghost box) |
+//! | the exchanges, several ranks (Phase 5 T8) | the gather of the sent multipoles (if the rank sends), the scatter of the received boxes of the replicated top (if any), the scatter of each level's received ghost multipoles (per level with a ghost box) |
 //! | upward, local pass | per level: P2M 1; M2M 3 per chunk (gather, GEMM, reduction) |
 //! | upward, global pass | on one rank the root's M2M: 3, none if the root is a leaf |
 //! | downward | per level: L2L 3 per chunk (gather, GEMM, scatter-add); M2L 3 c (dense) or 1 (rotation); P2L 1 |
@@ -386,8 +386,8 @@
 //! placement within the FMM bounds.
 //!
 //! **Residency.** The device stores have the plan's layouts, ghost slots included: the
-//! multipoles and locals of every held box (the ghost boxes and the other ranks' coarse
-//! blocks too), and the source store of every leaf of the numbering, the ghost leaves
+//! multipoles and locals of every held box (the ghost boxes and the other ranks' boxes of
+//! the replicated top too), and the source store of every leaf of the numbering, the ghost leaves
 //! last, with their owners' counts, which `Fmm::build` takes from the evaluator's source
 //! exchange; the device operator is therefore built after the evaluator and swapped in
 //! for its host operator. The ghost data never stage through a host copy of a device
@@ -396,16 +396,18 @@
 //!
 //! **The exchanges on the device.** At each `HostData` event of the evaluator
 //! ([`ExchangeLists`], the index lists the build copies from the exchanges; G_s ghost
-//! source points, B_o and B_r this rank's and the other ranks' coarse blocks, S_l and
-//! R_l the boxes sent and received on level l, n_c = (p + 1)²):
+//! source points, B_o and B_r this rank's boxes of the replicated top and the other
+//! ranks' that this rank holds (Phase 5S T5; before it the coarse blocks of the coarse
+//! gather), S_l and R_l the boxes sent and received on level l, n_c = (p + 1)²):
 //!
 //! | Event | On the device | Transfers |
 //! | --- | --- | --- |
 //! | `Reset` | the three zero kernels | none |
 //! | `SendSources` | nothing: `Fmm` writes the charges of the sent leaves into the host's source chunks, where the exchange reads them (the coordinates are there from the build) | none |
 //! | `ReceivedSources` | one upload of the host's ghost tail (coordinates and charges) into the device's | 4 G_s s up |
-//! | `SendMultipoles` | one `gather_columns` of this rank's coarse blocks and every level's sent boxes into a packed buffer, one download, and the host writes each column into its slot of the host store | (B_o + Σ_l S_l) n_c s down, 1 sync |
-//! | `ReceivedCoarse` | one upload of the other ranks' blocks (packed on the host from the gathered buffer) and one `scatter_columns` into the multipoles | B_r n_c s up |
+//! | `SendMultipoles` | one `gather_columns` of this rank's boxes of the top and every level's sent boxes into a packed buffer, one download, and the host writes each column into its slot of the host store | (B_o + Σ_l S_l) n_c s down, 1 sync |
+//! | `ReceivedTop` | one upload of the other ranks' boxes of the top it holds (packed on the host from the gathered buffer) and one `scatter_columns` into the multipoles | B_r n_c s up |
+//! | `SendReduction(l)`, `ReceivedReduction(l)` | not mirrored before Phase 5S T6: with a box to send or receive, the operator fails with a device error, agreed on every rank as any other | none |
 //! | `ReceivedMultipoles(l)` | one upload of the level's receive buffer and one `scatter_columns` into the multipoles | R_l n_c s up |
 //!
 //! A call with nothing to move does nothing. **Per evaluation**, with every kind on the
@@ -415,7 +417,7 @@
 //! is sent, one scatter if B_r > 0 and one per level with R_l > 0 (design §7.2). On one
 //! rank every list is empty, and an evaluation is Phase 4's minimum: the charges up, the
 //! output down, one sync. [`DeviceCounters`] count the exchanges' transfers by
-//! [`DataKind`] (`GhostSources`, `SentMultipoles`, `CoarseMultipoles`,
+//! [`DataKind`] (`GhostSources`, `SentMultipoles`, `TopMultipoles`,
 //! `ReceivedMultipoles`, the last per level in [`DeviceCounters::received_levels`]);
 //! `tests/device_common` checks them against `Fmm::exchange_sizes` on every scenario and
 //! rank count. The scatters assign (`nd_fmm_kernels::movement::scatter_columns`): a
@@ -423,7 +425,7 @@
 //! bit identity of the host fallback.
 //!
 //! **Memory** added per rank, allocated at build, nothing per evaluation: the packed sent
-//! multipoles (B_o + Σ S_l) n_c s, the coarse receive buffer B_r n_c s, one receive buffer
+//! multipoles (B_o + Σ S_l) n_c s, the replicated top's receive buffer B_r n_c s, one receive buffer
 //! of max_l R_l n_c s reused level after level (one stream orders each upload after the
 //! scatter that read the buffer before it), and the columns (u32), in
 //! [`DeviceReport::exchange_bytes`]; the ghost slots of the stores in
@@ -515,7 +517,7 @@ use nd_fmm_kernels::{
     HostValues, IndexBuffer, KernelError, TimingWindow, WindowTime,
 };
 pub use nd_fmm_kernels::{Counters, DeviceInfo};
-use nd_fmm_plan::exchange::{CoarseExchange, MultipoleExchange};
+use nd_fmm_plan::exchange::{MultipoleExchange, TopExchange};
 use nd_fmm_plan::lists::{Csr, GroupedCsr, VList};
 use nd_fmm_plan::operator::{
     FmmOperator, FmmSizes, HostData, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, UpwardPass,
@@ -624,12 +626,14 @@ pub enum DataKind {
     /// The ghost tail of the source store, which the source exchange received (Phase 5
     /// T8): one upload per evaluation on a rank with ghost leaves.
     GhostSources,
-    /// The multipoles the evaluation sends, this rank's coarse blocks and every level's
-    /// sent boxes, packed (Phase 5 T8): one download per evaluation on a rank that sends.
+    /// The multipoles the evaluation sends, this rank's boxes of the replicated top and
+    /// every level's sent boxes, packed (Phase 5 T8): one download per evaluation on a
+    /// rank that sends.
     SentMultipoles,
-    /// The other ranks' coarse blocks, which the coarse gather received (Phase 5 T8): one
-    /// upload per evaluation on several ranks.
-    CoarseMultipoles,
+    /// The other ranks' boxes of the replicated top that this rank holds, which its
+    /// all-gather received (Phase 5S T5; the coarse blocks of the coarse gather before):
+    /// one upload per evaluation on a rank that holds one.
+    TopMultipoles,
     /// The ghost multipoles the multipole exchange received, packed (Phase 5 T8): one
     /// upload per level with a ghost box ([`DeviceCounters::received_levels`]).
     ReceivedMultipoles,
@@ -652,7 +656,7 @@ impl DataKind {
         Self::Output,
         Self::GhostSources,
         Self::SentMultipoles,
-        Self::CoarseMultipoles,
+        Self::TopMultipoles,
         Self::ReceivedMultipoles,
         Self::FallbackMultipoles,
         Self::FallbackLocals,
@@ -670,7 +674,7 @@ impl DataKind {
             Self::Output => "output",
             Self::GhostSources => "ghost sources",
             Self::SentMultipoles => "sent multipoles",
-            Self::CoarseMultipoles => "coarse blocks",
+            Self::TopMultipoles => "replicated top",
             Self::ReceivedMultipoles => "received multipoles",
             Self::FallbackMultipoles => "fallback multipoles",
             Self::FallbackLocals => "fallback locals",
@@ -922,8 +926,8 @@ pub struct DeviceReport {
     /// (Phase 5 T8).
     pub ranks: RankPlacement,
     /// The bytes of the exchanges' packed buffers and their column lists (Phase 5 T8,
-    /// docs/design/distributed-fmm.md §7.3): the sent multipoles, the received coarse
-    /// blocks, one level's received ghost multipoles; 0 on one rank. Part of
+    /// docs/design/distributed-fmm.md §7.3): the sent multipoles, the received boxes of
+    /// the replicated top, one level's received ghost multipoles; 0 on one rank. Part of
     /// [`memory_needed`](Self::memory_needed).
     pub exchange_bytes: u64,
     /// The bytes of the ghost slots in the device stores: the multipoles and locals of the
@@ -1171,18 +1175,20 @@ impl RankPlacement {
 /// The index lists of the evaluator's exchanges that a device operator needs (Phase 5 T8;
 /// docs/design/distributed-fmm.md §7.1–§7.3), copied at build from
 /// `nd_fmm_plan::exchange`: the packed buffers are sized from them and their columns
-/// uploaded once. Every list is empty on one rank.
+/// uploaded once. Every list is empty on one rank. The upward reduction of Phase 5S T5 is
+/// not among them before T6 (the [module documentation](self), "The exchanges on the
+/// device").
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ExchangeLists {
-    /// The coarse blocks this rank sends in the gather (`CoarseExchange::sent_blocks`), as
-    /// (level, box index).
-    pub sent_blocks: Vec<(usize, u32)>,
-    /// The other ranks' coarse blocks, which the gather writes
-    /// (`CoarseExchange::received_blocks`), as (level, box index), in block order.
-    pub received_blocks: Vec<(usize, u32)>,
-    /// The values of the received blocks in `CoarseExchange::gathered`: those of the
-    /// blocks before this rank's, and those after.
-    pub received_values: [Range<usize>; 2],
+    /// This rank's boxes of the replicated top, which its all-gather sends
+    /// (`TopExchange::sent_keys` and `slot`), as (level, box index).
+    pub sent_top: Vec<(usize, u32)>,
+    /// The other ranks' boxes of the replicated top that the all-gather writes on this
+    /// rank (`TopExchange::received_keys` and `slot`), as (level, box index), in key
+    /// order.
+    pub received_top: Vec<(usize, u32)>,
+    /// The values of each box of `received_top` in `TopExchange::gathered`.
+    pub received_values: Vec<Range<usize>>,
     /// Per level, the boxes the multipole exchange sends, in send order; a box sent to
     /// two ranks appears twice (`MultipoleExchange::send_boxes`).
     pub send_boxes: Vec<Vec<u32>>,
@@ -1192,30 +1198,32 @@ pub struct ExchangeLists {
 }
 
 impl ExchangeLists {
-    /// The lists of an evaluator's multipole exchange and coarse gather
-    /// (`Evaluator::multipole_exchange`, `Evaluator::coarse_exchange`).
+    /// The lists of an evaluator's multipole exchange and replicated top
+    /// (`Evaluator::multipole_exchange`, `Evaluator::top_exchange`).
     pub fn new<T: Equivalence + Copy + Default>(
         multipoles: &MultipoleExchange<T>,
-        coarse: &CoarseExchange<T>,
+        top: &TopExchange<T>,
     ) -> Self {
-        let nkeys = coarse.keys().len();
-        // The value offsets of the blocks in the gathered buffer.
+        // The value offsets of the keys in the gathered buffer.
+        let nkeys = top.keys().len();
         let offsets: Vec<usize> = std::iter::once(0)
-            .chain((0..nkeys).scan(0, |end, b| {
-                *end += coarse.chunk(b).len();
+            .chain((0..nkeys).scan(0, |end, r| {
+                *end += top.chunk(r).len();
                 Some(*end)
             }))
             .collect();
-        let received: Vec<usize> = coarse.received_blocks().collect();
-        // This rank's blocks are the gap in the received ones.
-        let own_start = (0..nkeys)
-            .find(|&b| received.get(b) != Some(&b))
-            .unwrap_or(nkeys);
-        let own_end = own_start + (nkeys - received.len());
+        let slot = |r: usize| {
+            top.slot(r)
+                .expect("the top's sent and received keys are held")
+        };
         Self {
-            sent_blocks: coarse.sent_blocks().map(|b| coarse.block(b)).collect(),
-            received_blocks: received.iter().map(|&b| coarse.block(b)).collect(),
-            received_values: [0..offsets[own_start], offsets[own_end]..offsets[nkeys]],
+            sent_top: top.sent_keys().map(slot).collect(),
+            received_top: top.received_keys().iter().map(|&r| slot(r)).collect(),
+            received_values: top
+                .received_keys()
+                .iter()
+                .map(|&r| offsets[r]..offsets[r + 1])
+                .collect(),
             send_boxes: (0..multipoles.nlevels())
                 .map(|l| multipoles.send_boxes(l).to_vec())
                 .collect(),
@@ -1615,16 +1623,17 @@ struct Packed<T: DeviceFloat> {
 /// empty, as on one rank.
 #[derive(Debug)]
 struct Exchanges<T: DeviceFloat> {
-    /// The sent multipoles: this rank's coarse blocks, then every level's sent boxes.
+    /// The sent multipoles: this rank's boxes of the replicated top, then every level's
+    /// sent boxes.
     send: Option<Packed<T>>,
     /// (level, box index) of every column of `send`, in order.
     sent: Vec<(usize, u32)>,
-    /// The other ranks' coarse blocks.
-    coarse: Option<Packed<T>>,
-    /// Their values in the gathered buffer: before this rank's blocks, and after.
-    coarse_values: [Range<usize>; 2],
-    /// The host copy of the received blocks, packed, for their one upload.
-    coarse_staging: Vec<T>,
+    /// The other ranks' boxes of the replicated top that this rank holds.
+    top: Option<Packed<T>>,
+    /// Their values in the gathered buffer, box by box.
+    top_values: Vec<Range<usize>>,
+    /// The host copy of the received boxes, packed, for their one upload.
+    top_staging: Vec<T>,
     /// Every level's received ghost boxes, the levels one after the other, and the values
     /// of the largest level, reused level after level (one stream orders an upload after
     /// the scatter that read the buffer before).
@@ -2313,7 +2322,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                 .expect("the box index fits in u32, so its column does")
         };
         let sent: Vec<(usize, u32)> = exchanges
-            .sent_blocks
+            .sent_top
             .iter()
             .copied()
             .chain(
@@ -2325,19 +2334,15 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             )
             .collect();
         let send_columns: Vec<u32> = sent.iter().map(|&b| column(b)).collect();
-        let coarse_columns: Vec<u32> = exchanges
-            .received_blocks
-            .iter()
-            .map(|&b| column(b))
-            .collect();
+        let top_columns: Vec<u32> = exchanges.received_top.iter().map(|&b| column(b)).collect();
         assert_eq!(
             exchanges
                 .received_values
                 .iter()
                 .map(Range::len)
                 .sum::<usize>(),
-            coarse_columns.len() * n,
-            "the received blocks' values, n per block"
+            top_columns.len() * n,
+            "the received boxes' values of the top, n per box"
         );
         let mut receive_offsets = vec![0usize];
         let mut receive_columns = Vec::new();
@@ -2360,7 +2365,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             }
         };
         let exchange_bytes = packed_bytes(send_columns.len(), send_columns.len())
-            + packed_bytes(coarse_columns.len(), coarse_columns.len())
+            + packed_bytes(top_columns.len(), top_columns.len())
             + packed_bytes(receive_columns.len(), receive_width);
         let ghost_boxes: usize = (0..nlevels)
             .map(|l| index.kinds(l).iter().filter(|k| k.is_ghost()).count())
@@ -2502,9 +2507,9 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         let exchanges_on_device = Exchanges {
             send: packed(&send_columns, send_columns.len())?,
             sent,
-            coarse: packed(&coarse_columns, coarse_columns.len())?,
-            coarse_values: exchanges.received_values.clone(),
-            coarse_staging: vec![T::default(); coarse_columns.len() * n],
+            top: packed(&top_columns, top_columns.len())?,
+            top_values: exchanges.received_values.clone(),
+            top_staging: vec![T::default(); top_columns.len() * n],
             receive: packed(&receive_columns, receive_width)?,
             receive_offsets,
             ghost_sources: 4 * nsources..4 * nstored,
@@ -3233,8 +3238,8 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         });
     }
 
-    /// [`HostData::SendMultipoles`]: gathers the multipoles this rank sends (its coarse
-    /// blocks, then every level's sent boxes) into the packed buffer, downloads it (one
+    /// [`HostData::SendMultipoles`]: gathers the multipoles this rank sends (its boxes of
+    /// the replicated top, then every level's sent boxes) into the packed buffer, downloads it (one
     /// download, one sync) and writes each column into its slot of the host store, where
     /// the exchanges read it (Phase 5 T8); nothing if the rank sends nothing. With the test
     /// hook ([`inject_error`](Self::inject_error)) the operator fails here instead.
@@ -3270,32 +3275,48 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         }
     }
 
-    /// [`HostData::ReceivedCoarse`]: one upload of the other ranks' coarse blocks from the
-    /// gathered buffer `gathered` (its two ranges around this rank's blocks, packed on the
-    /// host) and one scatter into their slots of the multipoles (Phase 5 T8); nothing on
-    /// one rank.
-    fn receive_coarse(&mut self, gathered: &[T]) {
+    /// [`HostData::ReceivedTop`]: one upload of the other ranks' boxes of the replicated
+    /// top that this rank holds, packed on the host from the gathered buffer `gathered`,
+    /// and one scatter into their slots of the multipoles (Phase 5S T5, as the coarse
+    /// blocks of Phase 5 T8); nothing where the rank holds none.
+    fn receive_top(&mut self, gathered: &[T]) {
         let n = self.n();
         let (stores, exchanges) = (&mut self.stores, &mut self.exchanges);
-        let Some(coarse) = &mut exchanges.coarse else {
+        let Some(top) = &mut exchanges.top else {
             return;
         };
-        let [before, after] = &exchanges.coarse_values;
-        let staging = &mut exchanges.coarse_staging;
-        staging[..before.len()].copy_from_slice(&gathered[before.clone()]);
-        staging[before.len()..].copy_from_slice(&gathered[after.clone()]);
-        self.link.run(DataKind::CoarseMultipoles, |d| {
-            d.write(coarse.values.as_slice_mut(), staging)
+        let staging = &mut exchanges.top_staging;
+        for (column, values) in staging.chunks_exact_mut(n).zip(&exchanges.top_values) {
+            column.copy_from_slice(&gathered[values.clone()]);
+        }
+        self.link.run(DataKind::TopMultipoles, |d| {
+            d.write(top.values.as_slice_mut(), staging)
         });
-        self.link.run(DataKind::CoarseMultipoles, |d| {
+        self.link.run(DataKind::TopMultipoles, |d| {
             scatter_columns(
                 d,
                 n,
-                coarse.values.as_slice(),
-                coarse.columns.as_slice(),
+                top.values.as_slice(),
+                top.columns.as_slice(),
                 stores.multipoles.as_slice_mut(),
             )
         });
+    }
+
+    /// [`HostData::SendReduction`] and [`HostData::ReceivedReduction`] with `boxes` to
+    /// move: the device does not mirror the upward reduction before Phase 5S T6, so the
+    /// operator fails here with a device error (agreed on every rank after the output's
+    /// download, as any device error), rather than form wrong multipoles; nothing when
+    /// the rank moves no box at the level.
+    fn refuse_reduction(&mut self, level: usize, boxes: &[u32]) {
+        if !boxes.is_empty() && self.link.error.is_none() {
+            self.link.error = Some(KernelError::Device {
+                reason: format!(
+                    "the device does not mirror the upward reduction of level {level} yet \
+                     (Phase 5S T6)"
+                ),
+            });
+        }
     }
 
     /// [`HostData::ReceivedMultipoles`] of `level`: one upload of the exchange's receive
@@ -3909,8 +3930,14 @@ impl<T: DeviceScalar> FmmOperator for DeviceOperator<T> {
             HostData::ReceivedSources { leaves, sources } => {
                 self.receive_sources(sources.range(leaves).as_slice());
             }
+            HostData::SendReduction {
+                level, exchange, ..
+            } => self.refuse_reduction(level, exchange.send_boxes(level)),
+            HostData::ReceivedReduction {
+                level, exchange, ..
+            } => self.refuse_reduction(level, exchange.receive_boxes(level)),
             HostData::SendMultipoles { multipoles, .. } => self.send_multipoles(multipoles),
-            HostData::ReceivedCoarse { coarse, .. } => self.receive_coarse(coarse.gathered()),
+            HostData::ReceivedTop { top, .. } => self.receive_top(top.gathered()),
             HostData::ReceivedMultipoles {
                 level, exchange, ..
             } => self.receive_multipoles(level, exchange.receive_buffer(level)),

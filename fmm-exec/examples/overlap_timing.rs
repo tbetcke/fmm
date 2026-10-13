@@ -149,7 +149,7 @@ fn measures(t: &StageTimings, nlevels: usize) -> Vec<f64> {
         s(o.multipoles.exposed),
         s(o.multipoles.progress),
         s(o.sources.exposed + o.multipoles.exposed),
-        s(o.coarse_gather),
+        s(o.top_gather),
         s(o.sources.sends),
         s(o.multipoles.sends),
         s(t.exchange_sources + t.upward_local + t.upward_global),
@@ -175,10 +175,10 @@ const MEASURES: [&str; 19] = [
     "multipoles: exposed",
     "multipoles: progress (test calls)",
     "exposed(sources) + exposed(multipoles)",
-    "coarse gather",
+    "all-gather of the replicated top",
     "sources: exposed in the final wait for the sends",
     "multipoles: exposed in the final wait for the sends",
-    "exchange_sources + upward_local + upward_global (to the end of the gather)",
+    "exchange_sources + upward_local + upward_global (to the end of the top's all-gather)",
 ];
 
 fn median(mut values: Vec<f64>) -> f64 {
@@ -291,8 +291,8 @@ fn run<T: Stored + SimdScalar + Equivalence + Default>(args: &Args, comm: &Simpl
         multipoles[1],
         multipoles[2],
         multipoles[3],
-        traffic.coarse_sent,
-        traffic.coarse_received,
+        traffic.top_sent,
+        traffic.top_received,
     ];
     let mut every = vec![0usize; local.len() * size];
     comm.all_gather_into(&local[..], &mut every[..]);
@@ -388,7 +388,7 @@ fn run<T: Stored + SimdScalar + Equivalence + Default>(args: &Args, comm: &Simpl
     println!();
     println!(
         "| rank | sources: msgs sent / received | sources: bytes sent / received | \
-         multipoles: msgs sent / received | multipoles: bytes sent / received | coarse gather: \
+         multipoles: msgs sent / received | multipoles: bytes sent / received | replicated top: \
          bytes sent / received | received bytes / copy bandwidth, ms |"
     );
     println!("| --- | --- | --- | --- | --- | --- | --- |");

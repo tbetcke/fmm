@@ -8,20 +8,30 @@
 //!
 //! # Held keys
 //!
-//! Since Phase 5S T4 the plan holds **H ∪ T** (`docs/design/scale-out.md` §3.4, §3.7):
-//! - H, the octree's locally essential set
-//!   ([`Octree::all_keys`](nd_octree::Octree::all_keys)): with S the own keys and the
-//!   shared ancestors (the ancestors of this rank's coarse blocks), S, every same-level
-//!   neighbour of a key of S and the children of the interior ones;
-//! - T, the top-tree keys: every coarse block of every rank and every ancestor of one,
-//!   from the replicated [`PartitionMap`](nd_octree::octree::PartitionMap), without
-//!   communication. Other ranks' blocks are ghosts of their owners; **every** ancestor
-//!   of a block is `Global`, as in Phase 5, also where the octree holds it as a ghost
-//!   (an ancestor of other ranks' blocks only).
+//! Since Phase 5S T5 the plan holds **H**, the octree's locally essential set
+//! ([`Octree::all_keys`](nd_octree::Octree::all_keys); `docs/design/scale-out.md` §3.1,
+//! §3.4): with S the own keys and the shared ancestors (the ancestors of this rank's
+//! coarse blocks, `Global`), S, every same-level neighbour of a key of S and the children
+//! of the interior ones, each with the octree's kind (a top-tree key that is not a shared
+//! ancestor is a ghost of its owner). H does not grow at fixed N/P. Phase 5S T4 also held
+//! T, every coarse block and every ancestor of one, for the coarse gather and the global
+//! pass that T5 replaced by the owned top tree; the replicated top
+//! ([`TopExchange`](super::exchange::TopExchange)) needs no slot outside H either, since
+//! no row names a key outside H.
 //!
-//! T is what the coarse gather and the global upward pass still need until Phase 5S T5
-//! replaces them: a slot for every block, and the M2M row of every `Global` box. It
-//! grows with P (about 1.15 B keys for B blocks); H does not grow at fixed N/P.
+//! # Owners
+//!
+//! From the replicated [`PartitionMap`] the plan keeps, without communication, the owner
+//! of every held *top-tree key* (a coarse block or an ancestor of one): the rank of its
+//! first descendant block (`docs/design/scale-out.md` §4.1,
+//! [`PartitionMap::owner`]). The owner of a box is the one rank that computes its
+//! multipole ([`Plan::owner`]): a local box's is this rank, a ghost's is its
+//! [`KeyType::ghost_rank`], and a `Global` box's is the owner of the map, which may be
+//! another rank. Only the owner of a `Global` box has its M2M row of the global pass:
+//! its children are local boxes, `Global` boxes it owns as well, or ghosts of their
+//! owners, which the upward reduction delivers
+//! ([`ReductionExchange`](super::exchange::ReductionExchange)). On one rank every box is
+//! owned, and the root (`Global` unless it is a leaf) keeps its row.
 //!
 //! # Guarantees
 //!
@@ -32,29 +42,35 @@
 //!   §3.6). A rank's locals descend only from the `Global` boxes above its own coarse
 //!   blocks (its shared ancestors), so a `Global` box that is not an ancestor of one of
 //!   them has empty V, X and L2L rows, and its local stays zero. Its lists are not even
-//!   resolved: the plan does not hold its neighbourhood (Phase 5S T4). Its M2M row of
-//!   the global pass stays, because the V rows that remain read the multipoles of any
-//!   `Global` box. Every row that stays is the row it would be without P2, so every
-//!   value of a needed box is the same, bit for bit. One rank has no `Global` box with
-//!   a row to drop, and a rank without coarse blocks keeps no `Global` downward row.
+//!   resolved: the plan does not hold its neighbourhood (Phase 5S T4). Since Phase 5S T5
+//!   every `Global` box of [`Plan::new`] is a shared ancestor, so P2 drops no row there;
+//!   it still applies to a key map that types other keys `Global`
+//!   ([`Plan::from_key_types`]). Every row that stays is the row it would be without P2,
+//!   so every value of a needed box is the same, bit for bit.
+//! - **Global M2M rows on the owner only.** A `Global` box has its eight children in its
+//!   M2M row of the global pass on its [owner](#owners) and an empty row elsewhere. Its
+//!   other sharers read its multipole, where a row names it, from the owner
+//!   ([`MultipoleExchange`](super::exchange::MultipoleExchange)) or from the replicated
+//!   top.
 //! - **Every key a list or a parent-child step names is held**: every list entry of a
 //!   box with rows, the parent of such a box, every child of a non-ghost interior box
-//!   (in particular every child of a `Global` box, which is a coarse block or `Global`
-//!   itself) and every own coarse block. [`Plan::new`] checks this and fails on every
-//!   rank otherwise. The keys the exchanges name are the ghosts among them, and every
-//!   coarse block (T).
+//!   (in particular every child of a `Global` box, a top-tree key) and every own coarse
+//!   block. [`Plan::new`] checks this and fails on every rank otherwise. The keys the
+//!   exchanges name are among them.
 //! - **Phase 5's lists.** Every list entry, as a key, and the order of every row are
 //!   those of the Phase 5 plan over the Phase 5 key set: the rows depend only on the
 //!   tree and the rule, P1 orders by (level, key), and the kinds of the keys the rows
-//!   name are Phase 5's (`docs/design/scale-out.md` §3.6). Only the box indices change,
-//!   because fewer keys are held.
+//!   name are Phase 5's, but for a top-tree key that is not a shared ancestor, which is a
+//!   ghost of its owner since Phase 5S T5 (`docs/design/scale-out.md` §3.6, §4). Only the
+//!   box indices change, because fewer keys are held.
 //! - The plan owns its arrays and borrows nothing from the octree. A new tree needs a new
 //!   plan: box indices, unlike keys, change when the tree changes.
 //!
 //! # Cost
 //!
-//! The lists are built locally, in O(E log K) for E list entries and K held keys, and T
-//! in O(B) for B coarse blocks. [`Plan::new`] adds two all-reduces.
+//! The lists are built locally, in O(E log K) for E list entries and K held keys, and the
+//! owners in O(K_T (log B + log P)) for K_T held top-tree keys, B coarse blocks and P
+//! ranks. [`Plan::new`] adds two all-reduces.
 
 #[cfg(test)]
 #[path = "plan_tests.rs"]
@@ -63,7 +79,12 @@ pub(crate) mod tests;
 use std::{collections::HashMap, error::Error, fmt};
 
 use mpi::{collective::SystemOperation, traits::CommunicatorCollectives};
-use nd_octree::{MortonKey, Octree, constants::DEEPEST_LEVEL, morton, octree::KeyType};
+use nd_octree::{
+    MortonKey, Octree,
+    constants::DEEPEST_LEVEL,
+    morton,
+    octree::{KeyType, PartitionMap},
+};
 
 use super::index::BoxIndex;
 use super::lists::{
@@ -79,6 +100,12 @@ pub struct Plan {
     index: BoxIndex,
     levels: Vec<LevelLists>,
     coarse_blocks: Vec<MortonKey>,
+    /// The rank of the partition map.
+    rank: usize,
+    /// `[level]`: (box index, owner) of every held top-tree key, ascending.
+    top: Vec<Vec<(u32, u32)>>,
+    /// The deepest level of a coarse block of any rank, capped at the deepest level.
+    deepest_block_level: usize,
 }
 
 /// The reasons a [`Plan`] cannot be built.
@@ -182,8 +209,9 @@ impl Error for PlanError {}
 impl Plan {
     /// Build the box index and the interaction lists of `octree`.
     ///
-    /// The plan holds the octree's locally essential keys and the top-tree keys of its
-    /// partition map, H ∪ T (see [Held keys](self#held-keys)).
+    /// The plan holds the octree's locally essential keys H (see
+    /// [Held keys](self#held-keys)), and the owners of its top-tree keys from the
+    /// octree's partition map ([Owners](self#owners)).
     ///
     /// # Collective operation
     /// One all-reduce for the global level count and one for the validity check, in
@@ -197,9 +225,14 @@ impl Plan {
     /// that found the defect returns it; the other ranks return [`PlanError::OtherRank`].
     pub fn new<C: CommunicatorCollectives>(octree: &Octree<'_, C>) -> Result<Self, PlanError> {
         let nlevels = octree.global_max_level() + 1;
-        let held = held_keys(octree);
+        let map = octree.partition_map();
+        debug_assert_eq!(
+            &map.blocks()[map.rank_blocks(map.rank())],
+            &octree.coarse_tree_leafs()[..],
+            "the partition map names this rank's coarse blocks"
+        );
         let local = if octree.options().ghost_children() {
-            Self::from_key_types(&held, nlevels, octree.coarse_tree_leafs())
+            Self::from_key_types(octree.all_keys(), nlevels, map)
         } else {
             Err(PlanError::MissingGhostChildren)
         };
@@ -214,13 +247,15 @@ impl Plan {
         }
     }
 
-    /// Build the plan from a key classification; local, for tests on hand-built maps.
+    /// Build the plan from a key classification and a partition map; local, for tests on
+    /// hand-built maps.
     ///
     /// `all_keys` must describe a complete, 2:1 (26-neighbour) balanced tree together with
     /// its one-cell same-level halo, as
     /// [`Octree::all_keys`](nd_octree::Octree::all_keys) does, on the levels
-    /// `0..nlevels`. `own_coarse_blocks` are this rank's coarse blocks
-    /// ([`Octree::coarse_tree_leafs`](nd_octree::Octree::coarse_tree_leafs)).
+    /// `0..nlevels`. This rank's coarse blocks are those of `map`'s rank
+    /// ([`PartitionMap::rank_blocks`]); `map` also gives the owners of the top-tree keys
+    /// ([Owners](self#owners)).
     ///
     /// # Errors
     /// Returns the first defect found, scanning levels and keys in ascending order, so the
@@ -229,7 +264,7 @@ impl Plan {
     pub fn from_key_types(
         all_keys: &HashMap<MortonKey, KeyType>,
         nlevels: usize,
-        own_coarse_blocks: &[MortonKey],
+        map: &PartitionMap,
     ) -> Result<Self, PlanError> {
         let mut sorted: Vec<MortonKey> = all_keys.keys().copied().collect();
         sorted.sort_unstable();
@@ -261,9 +296,8 @@ impl Plan {
             .collect();
         let mut index = BoxIndex::new(keys, kinds);
 
-        let mut coarse_blocks = own_coarse_blocks.to_vec();
-        coarse_blocks.sort_unstable();
-        coarse_blocks.dedup();
+        let rank = map.rank();
+        let coarse_blocks = map.blocks()[map.rank_blocks(rank)].to_vec();
         // P2: the `Global` boxes whose locals this rank needs, the ancestors of its own
         // coarse blocks (its shared ancestors), ascending.
         let mut needed_globals = Vec::new();
@@ -285,6 +319,13 @@ impl Plan {
             }
         }
 
+        let top = top_owners(&index, map);
+        let owned = |level: usize, i: usize| {
+            top[level]
+                .binary_search_by_key(&(i as u32), |&(j, _)| j)
+                .is_ok_and(|t| top[level][t].1 as usize == rank)
+        };
+
         // First pass: every view that needs only box indices, and the U- and X-entries
         // as boxes, which become leaf indices once the ghost leaves are numbered.
         let mut partial = Vec::with_capacity(nlevels);
@@ -294,6 +335,7 @@ impl Plan {
                 &index,
                 all_keys,
                 &needed_globals,
+                &|i| owned(level, i),
                 level,
                 &mut ghost_leaves,
             )?);
@@ -307,10 +349,20 @@ impl Plan {
             .map(|(level, partial)| partial.finish(&index, level))
             .collect::<Result<_, _>>()?;
 
+        let deepest_block_level = map
+            .blocks()
+            .iter()
+            .map(|&block| morton::level(block))
+            .max()
+            .unwrap_or(0)
+            .min(nlevels.saturating_sub(1));
         Ok(Self {
             index,
             levels,
             coarse_blocks,
+            rank,
+            top,
+            deepest_block_level,
         })
     }
 
@@ -338,35 +390,79 @@ impl Plan {
     pub fn coarse_blocks(&self) -> &[MortonKey] {
         &self.coarse_blocks
     }
-}
 
-/// The keys the plan holds, H ∪ T, with their kinds (see [Held keys](self#held-keys)): the
-/// octree's locally essential set, with every coarse block and every ancestor of one
-/// added from the partition map; a block keeps the kind the map gives it, and every
-/// ancestor of a block is `Global`. Local, O(B) for B blocks.
-fn held_keys<C: CommunicatorCollectives>(octree: &Octree<'_, C>) -> HashMap<MortonKey, KeyType> {
-    let map = octree.partition_map();
-    let mut held = octree.all_keys().clone();
-    for &block in map.blocks() {
-        let kind = map
-            .top_kind(block)
-            .expect("a coarse block is a top-tree key");
-        let previous = held.insert(block, kind);
-        debug_assert!(
-            previous.is_none_or(|previous| previous == kind),
-            "the octree and its partition map classify block {block} alike"
-        );
-        let mut key = block;
-        while let Some(parent) = morton::parent(key) {
-            // An ancestor already `Global` was reached from an earlier block, or is a
-            // shared ancestor, whose ancestors are shared ancestors too.
-            if held.insert(parent, KeyType::Global) == Some(KeyType::Global) {
-                break;
-            }
-            key = parent;
+    /// Return the rank of the partition map the plan was built with: this rank.
+    pub fn rank(&self) -> usize {
+        self.rank
+    }
+
+    /// Return the held top-tree keys of `level` (coarse blocks and ancestors of one) as
+    /// (box index, owner), ascending in the box index ([Owners](self#owners)).
+    pub fn top_boxes(&self, level: usize) -> &[(u32, u32)] {
+        &self.top[level]
+    }
+
+    /// Whether box `i` of `level` is a top-tree key: a coarse block of any rank or an
+    /// ancestor of one.
+    pub fn is_top(&self, level: usize, i: usize) -> bool {
+        self.top_owner(level, i).is_some()
+    }
+
+    /// Return the rank that computes the multipole of box `i` of `level`
+    /// ([Owners](self#owners)): this rank for a local box, the owner rank for a ghost,
+    /// the owner of the partition map for a `Global` box.
+    pub fn owner(&self, level: usize, i: usize) -> usize {
+        match self.index.kind(level, i) {
+            KeyType::LocalLeaf | KeyType::LocalInterior => self.rank,
+            KeyType::GhostLeaf(rank) | KeyType::GhostInterior(rank) => rank,
+            KeyType::Global => self
+                .top_owner(level, i)
+                .expect("every `Global` box is a top-tree key"),
         }
     }
-    held
+
+    /// Whether this rank computes the multipole of box `i` of `level`: a local box, or a
+    /// `Global` box it owns.
+    pub fn computes(&self, level: usize, i: usize) -> bool {
+        self.owner(level, i) == self.rank
+    }
+
+    /// Return the deepest level of a coarse block of any rank, the same on every rank
+    /// (from the replicated partition map); 0 on one rank.
+    pub fn deepest_block_level(&self) -> usize {
+        self.deepest_block_level
+    }
+
+    /// Return the levels of the upward reduction, `1..=deepest_block_level()`: level l
+    /// sends the multipoles of level l to the owners of their parents
+    /// ([`ReductionExchange`](super::exchange::ReductionExchange)). Empty on one rank.
+    pub fn reduction_levels(&self) -> std::ops::Range<usize> {
+        1..self.deepest_block_level + 1
+    }
+
+    /// The owner of the top-tree key `i` of `level`, if it is one.
+    fn top_owner(&self, level: usize, i: usize) -> Option<usize> {
+        let top = &self.top[level];
+        top.binary_search_by_key(&(i as u32), |&(j, _)| j)
+            .ok()
+            .map(|t| top[t].1 as usize)
+    }
+}
+
+/// The held top-tree keys of every level as (box index, owner), ascending, from `map`
+/// ([Owners](self#owners)). Local.
+fn top_owners(index: &BoxIndex, map: &PartitionMap) -> Vec<Vec<(u32, u32)>> {
+    (0..index.nlevels())
+        .map(|level| {
+            index
+                .keys(level)
+                .iter()
+                .enumerate()
+                .filter(|&(_, &key)| map.top_kind(key).is_some())
+                .map(|(i, &key)| (i as u32, map.owner(key) as u32))
+                .collect()
+        })
+        .collect()
 }
 
 /// Whether `key`, of kind `kind`, is a `Global` box whose local this rank does not need
@@ -441,12 +537,14 @@ struct PartialLevel {
 /// X-entries, recording every ghost leaf among them in `ghost_leaves`.
 ///
 /// A `Global` box that is not in `needed_globals` (ascending) gets empty V, X and L2L
-/// rows (P2) and only its M2M row of the global pass. Its lists are not resolved: since
-/// Phase 5S T4 the plan does not hold its neighbourhood.
+/// rows (P2). Its lists are not resolved: since Phase 5S T4 the plan does not hold its
+/// neighbourhood. A `Global` box has its M2M row of the global pass only if `owned`
+/// (by its box index) says this rank owns it ([Owners](self#owners)).
 fn first_pass(
     index: &BoxIndex,
     all_keys: &HashMap<MortonKey, KeyType>,
     needed_globals: &[MortonKey],
+    owned: &dyn Fn(usize) -> bool,
     level: usize,
     ghost_leaves: &mut Vec<(usize, u32)>,
 ) -> Result<PartialLevel, PlanError> {
@@ -485,9 +583,13 @@ fn first_pass(
                 .ok_or(PlanError::MissingChild { key })?;
             partial.v.push_row([]);
             partial.m2m_local.push_row([]);
-            partial
-                .m2m_global
-                .push_row((0..NOCTANTS as u8).map(|o| (o, first + o as u32)));
+            if owned(i) {
+                partial
+                    .m2m_global
+                    .push_row((0..NOCTANTS as u8).map(|o| (o, first + o as u32)));
+            } else {
+                partial.m2m_global.push_row([]);
+            }
             partial.l2l.push_row([]);
             partial.p2m.push_row([]);
             partial.x_offsets.push(partial.x_entries.len());
@@ -565,7 +667,11 @@ fn first_pass(
             let children = (0..NOCTANTS as u8).map(|o| (o, first + o as u32));
             if kind == KeyType::Global {
                 partial.m2m_local.push_row([]);
-                partial.m2m_global.push_row(children);
+                if owned(i) {
+                    partial.m2m_global.push_row(children);
+                } else {
+                    partial.m2m_global.push_row([]);
+                }
             } else {
                 partial.m2m_local.push_row(children);
                 partial.m2m_global.push_row([]);

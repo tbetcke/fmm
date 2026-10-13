@@ -1,8 +1,14 @@
 //! Pure local tests of the box index and the index-form lists, on the synthetic key maps
 //! of `interaction_manager_tests.rs`. No MPI.
-use std::collections::{BTreeSet, HashMap};
+use std::{
+    collections::{BTreeSet, HashMap},
+    ops::Range,
+};
 
-use nd_octree::{MortonKey, morton, octree::KeyType};
+use nd_octree::{
+    MortonKey, morton,
+    octree::{KeyType, PartitionMap},
+};
 
 use super::{Plan, PlanError};
 use crate::interaction_manager::{
@@ -58,8 +64,32 @@ pub(crate) fn nlevels(map: &HashMap<MortonKey, KeyType>) -> usize {
     map.keys().map(|&key| morton::level(key)).max().unwrap() + 1
 }
 
+/// Whether `key` is a leaf of `map`.
+fn is_leaf_of(map: &HashMap<MortonKey, KeyType>, key: MortonKey) -> bool {
+    map.get(&key)
+        .is_some_and(|kind| matches!(kind, KeyType::LocalLeaf | KeyType::GhostLeaf(_)))
+}
+
+/// The partition map of one rank, whose one block is the root.
+pub(crate) fn one_rank_map(map: &HashMap<MortonKey, KeyType>) -> PartitionMap {
+    let root = morton::root();
+    PartitionMap::new(vec![root], vec![0, 1], &[is_leaf_of(map, root)], 0)
+}
+
+/// The partition map of `blocks` (ascending, a complete linear tree) on three ranks, seen
+/// from rank 1, which owns the blocks `mine`: rank 0 those before, rank 2 those after.
+pub(crate) fn map_of(
+    map: &HashMap<MortonKey, KeyType>,
+    blocks: Vec<MortonKey>,
+    mine: Range<usize>,
+) -> PartitionMap {
+    let leaves: Vec<bool> = blocks.iter().map(|&block| is_leaf_of(map, block)).collect();
+    let n = blocks.len();
+    PartitionMap::new(blocks, vec![0, mine.start, mine.end, n], &leaves, 1)
+}
+
 pub(crate) fn plan(map: &HashMap<MortonKey, KeyType>) -> Plan {
-    Plan::from_key_types(map, nlevels(map), &[morton::root()]).unwrap()
+    Plan::from_key_types(map, nlevels(map), &one_rank_map(map)).unwrap()
 }
 
 /// The same map, inserted in the order selected by `order`.
@@ -117,7 +147,7 @@ fn numbering_is_dense_morton_and_independent_of_insertion_order() {
         let plan = plan(&map);
         for order in 0..3 {
             assert_eq!(
-                Plan::from_key_types(&reinserted(&map, order), nlevels(&map), &[morton::root()]),
+                Plan::from_key_types(&reinserted(&map, order), nlevels(&map), &one_rank_map(&map)),
                 Ok(plan.clone()),
                 "{name}: insertion order {order}"
             );
@@ -661,8 +691,10 @@ fn the_root_multipole_is_formed_by_the_matching_pass() {
 /// P2 (distributed-fmm §3.6): with `Global` boxes on levels 0–2, a rank whose blocks lie
 /// below one level-2 `Global` box (the first, then the last) keeps the rows of that box
 /// and its ancestors as they are when every `Global` box is needed, and gets empty V, X
-/// and L2L rows for every other `Global` box. Every other row, the global M2M rows
-/// included, is unchanged.
+/// and L2L rows for every other `Global` box. Every other row is unchanged, but for the
+/// global M2M rows (Phase 5S T5): a `Global` box keeps its row only on its owner, the rank
+/// of its first block, so the rank of the first anchor owns the anchor and its ancestors,
+/// that of the last anchor only the anchor.
 #[test]
 fn global_boxes_above_other_ranks_blocks_get_no_downward_rows() {
     let mut pruned_v = 0;
@@ -694,7 +726,13 @@ fn global_boxes_above_other_ranks_blocks_get_no_downward_rows() {
             .collect();
         every_block.sort_unstable();
         let nlevels = nlevels(&map);
-        let full = Plan::from_key_types(&map, nlevels, &every_block).unwrap();
+        let nblocks = every_block.len();
+        let full = Plan::from_key_types(
+            &map,
+            nlevels,
+            &map_of(&map, every_block.clone(), 0..nblocks),
+        )
+        .unwrap();
 
         let level_two: Vec<MortonKey> = globals
             .iter()
@@ -707,14 +745,32 @@ fn global_boxes_above_other_ranks_blocks_get_no_downward_rows() {
             .chain(level_two.last())
             .copied()
         {
-            let mine =
-                Plan::from_key_types(&map, nlevels, &morton::children(anchor).unwrap()).unwrap();
+            let first = every_block
+                .binary_search(&morton::children(anchor).unwrap()[0])
+                .unwrap();
+            let blocks = map_of(&map, every_block.clone(), first..first + 8);
+            let mine = Plan::from_key_types(&map, nlevels, &blocks).unwrap();
             let needed = [Some(anchor), morton::parent(anchor), Some(morton::root())];
+            // The owner of a `Global` box is the rank of its first block.
+            let mut owned = vec![anchor];
+            while morton::child_index(*owned.last().unwrap()) == 0
+                && let Some(parent) = morton::parent(*owned.last().unwrap())
+            {
+                owned.push(parent);
+            }
             let index = mine.index();
             assert_eq!(index, full.index(), "tree {t}");
             for level in 0..nlevels {
                 let (a, b) = (mine.level(level), full.level(level));
-                assert_eq!(a.m2m_global(), b.m2m_global(), "tree {t}");
+                for (i, &key) in index.keys(level).iter().enumerate() {
+                    let row = a.m2m_global().row(i);
+                    if owned.contains(&key) {
+                        assert_eq!(row, b.m2m_global().row(i), "tree {t}: M2M row of {key}");
+                        assert!(mine.computes(level, i), "tree {t}: {key} owned");
+                    } else {
+                        assert!(row.0.is_empty(), "tree {t}: M2M row of {key}");
+                    }
+                }
                 assert_eq!(a.m2m_local(), b.m2m_local(), "tree {t}");
                 assert_eq!(a.near(), b.near(), "tree {t}");
                 assert_eq!(a.w(), b.w(), "tree {t}");
@@ -864,8 +920,12 @@ fn the_plan_over_the_locally_essential_set_has_the_rows_of_the_whole_map() {
         );
         dropped += whole.len() - essential.len();
 
-        let full = Plan::from_key_types(&whole, nlevels, &[own_block]).unwrap();
-        let reduced = Plan::from_key_types(&essential, nlevels, &[own_block]).unwrap();
+        let mut sorted = blocks.clone();
+        sorted.sort_unstable();
+        let b = sorted.binary_search(&own_block).unwrap();
+        let partition = map_of(&whole, sorted, b..b + 1);
+        let full = Plan::from_key_types(&whole, nlevels, &partition).unwrap();
+        let reduced = Plan::from_key_types(&essential, nlevels, &partition).unwrap();
         assert_eq!(rows_by_key(&reduced), rows_by_key(&full), "{own_block}");
         let ghost_leaves = |plan: &Plan| {
             let leaves = plan.index().leaves();
@@ -887,7 +947,8 @@ fn malformed_maps_are_errors_not_panics() {
     // A hole in a uniform tree: the missing cell is not covered by a leaf parent.
     let mut holed = key_types(&uniform_leaves(2));
     holed.remove(&at([3, 3, 3], 2));
-    let error = Plan::from_key_types(&holed, 3, &[]).unwrap_err();
+    let nothing = |map: &HashMap<MortonKey, KeyType>| map_of(map, vec![morton::root()], 0..0);
+    let error = Plan::from_key_types(&holed, 3, &nothing(&holed)).unwrap_err();
     assert!(matches!(error, PlanError::MalformedTree { .. }), "{error}");
 
     // An interior neighbour without its children, as without the ghost-children layer.
@@ -898,7 +959,8 @@ fn malformed_maps_are_errors_not_panics() {
     }
     childless.insert(refined, KeyType::GhostInterior(1));
     for order in 0..3 {
-        let error = Plan::from_key_types(&reinserted(&childless, order), 3, &[]).unwrap_err();
+        let error = Plan::from_key_types(&reinserted(&childless, order), 3, &nothing(&childless))
+            .unwrap_err();
         // The first non-ghost box in Morton order whose list names a child is the level-1
         // leaf [0, 0, 1]. Its W-list, resolved before its U-list, starts with child 0 of
         // the refined octant.
@@ -916,28 +978,38 @@ fn malformed_maps_are_errors_not_panics() {
     let mut orphaned = childless.clone();
     orphaned.insert(refined, KeyType::LocalInterior);
     assert_eq!(
-        Plan::from_key_types(&orphaned, 3, &[]),
+        Plan::from_key_types(&orphaned, 3, &nothing(&orphaned)),
         Err(PlanError::MissingChild { key: refined })
     );
 
     // Too few levels.
     let uniform = key_types(&uniform_leaves(2));
     assert!(matches!(
-        Plan::from_key_types(&uniform, 2, &[]),
+        Plan::from_key_types(&uniform, 2, &nothing(&uniform)),
         Err(PlanError::LevelOutOfRange { nlevels: 2, .. })
     ));
 
     // A coarse block that is not held, or held as a ghost.
     let block = at([1, 1, 1], 1);
+    let mut cells = morton::children(morton::root())
+        .unwrap()
+        .iter()
+        .flat_map(|&octant| morton::children(octant).unwrap())
+        .flat_map(|cell| morton::children(cell).unwrap())
+        .collect::<Vec<_>>();
+    cells.sort_unstable();
+    let deep = cells.binary_search(&at([5, 5, 5], 3)).unwrap();
     assert_eq!(
-        Plan::from_key_types(&uniform, 3, &[at([5, 5, 5], 3)]),
+        Plan::from_key_types(&uniform, 3, &map_of(&uniform, cells, deep..deep + 1)),
         Err(PlanError::CoarseBlock {
             key: at([5, 5, 5], 3)
         })
     );
     let ghosts = ghost_half(&uniform);
+    let octants = morton::children(morton::root()).unwrap().to_vec();
+    let b = octants.binary_search(&block).unwrap();
     assert_eq!(
-        Plan::from_key_types(&ghosts, 3, &[block]),
+        Plan::from_key_types(&ghosts, 3, &map_of(&ghosts, octants, b..b + 1)),
         Err(PlanError::CoarseBlock { key: block })
     );
 }

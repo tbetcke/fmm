@@ -13,12 +13,14 @@
 //!   ([`V_LIST_DIRECTIONS`](interaction_manager::V_LIST_DIRECTIONS)) and the per-key
 //!   list rule.
 //! - [`plan`]: [`Plan`](plan::Plan) builds the index and the lists of every level from
-//!   an octree, over the octree's locally essential keys and the top-tree keys of its
-//!   partition map (Phase 5S T4, [Held keys](plan#held-keys)).
+//!   an octree, over the octree's locally essential keys (Phase 5S T4, T5,
+//!   [Held keys](plan#held-keys)), with the owner of every top-tree key from its
+//!   partition map ([Owners](plan#owners)).
 //! - [`store`]: the data of an evaluation, one buffer per level and kind for
 //!   multipoles and locals, and CSR leaf stores with variable counts per leaf.
-//! - [`exchange`]: the ghost exchanges of sources and multipoles, and the gather of the
-//!   coarse blocks for the global upward pass.
+//! - [`exchange`]: the ghost exchanges of sources and multipoles, the upward reduction of
+//!   the owned top tree and the replicated top (Phase 5S T5,
+//!   `docs/design/scale-out.md` §4).
 //! - [`operator`]: the level-batched operator interface, with a per-pair adapter.
 //! - [`evaluator`]: [`Evaluator`](evaluator::Evaluator) runs the distributed pass order
 //!   on a plan, its stores and its exchanges.
@@ -40,16 +42,21 @@
 //!    level, then `m2m` from the level into the local interior boxes of its parent
 //!    level. A local interior box has all its children on the local rank, so no
 //!    communication is needed.
-//! 3. **Global upward pass** (collective). The multipoles of the coarse blocks of all
-//!    ranks are gathered on every rank, and every rank computes the multipoles of the
-//!    [`Global`](nd_octree::octree::KeyType::Global) boxes itself, with `m2m` of the
-//!    global pass, deepest level first.
-//! 4. **Multipole exchange** (collective). The multipole of every ghost box in a V- or
-//!    W-list is fetched from its owner, one exchange per level.
+//! 3. **Owned top tree** (collective; Phase 5S T5). Every
+//!    [`Global`](nd_octree::octree::KeyType::Global) box (an ancestor of this rank's
+//!    coarse blocks) has one owner, the rank of its first descendant block. Level by level
+//!    from the deepest coarse block up, the upward reduction sends the multipoles each
+//!    rank computes to the owners of their parents, and each owner forms its `Global`
+//!    boxes with `m2m` of the global pass from their eight exact children, by octant, as
+//!    one rank does. Then one all-gather of fixed size replicates the top-tree boxes that
+//!    many ranks read (the replicated top).
+//! 4. **Multipole exchange** (collective). The multipole of every box in a V- or W-list
+//!    that another rank computes, and that neither the reduction nor the replicated top
+//!    delivered, is fetched from it, one exchange per level.
 //! 5. **Downward pass.** Level by level from level 1: `l2l` from the parents, `m2l` over
-//!    the V-list and `p2l` over the X-list. Every rank computes the locals of the
-//!    `Global` boxes above its own coarse blocks itself, so no communication is needed;
-//!    the other `Global` boxes get no downward rows (P2, [`plan`]).
+//!    the V-list and `p2l` over the X-list. Every rank computes the locals of its
+//!    `Global` boxes itself, from identical inputs in identical order, so no
+//!    communication is needed (P2, [`plan`]).
 //! 6. **Leaf evaluation.** Level by level: `l2p`, `m2p` over the W-list, and `p2p` over
 //!    the near list (the U-list and the leaf itself) of the local leaves.
 //!
@@ -58,12 +65,14 @@
 //!
 //! [`Evaluator::evaluate_overlapped`](evaluator::Evaluator::evaluate_overlapped) makes
 //! the same calls in the same order with the exchanges non-blocking (Phase 5 T9): the
-//! source exchange travels behind stage 2, and the multipole exchange of every level,
-//! posted before the coarse gather, behind stages 3 and 5 until the level that reads it;
-//! the output is bit for bit that of `evaluate` ([Overlap](evaluator#overlap)).
+//! source exchange travels behind stage 2, the reduction posts its receives ahead and
+//! each level's sends as soon as it is formed, and the multipole exchange of every level,
+//! posted after the reduction, travels behind the all-gather of the top and stage 5 until
+//! the level that reads it; the output is bit for bit that of `evaluate`
+//! ([Overlap](evaluator#overlap)).
 //!
 //! Besides the level calls, the evaluator tells the operator of each of its own data
-//! movements, `reset`'s zeroing and the three exchanges, with an event of
+//! movements, `reset`'s zeroing and the four exchanges, with an event of
 //! [`FmmOperator::host_data`](operator::FmmOperator::host_data) that carries the index
 //! lists the movement uses ([Host data](operator#host-data),
 //! `docs/design/distributed-fmm.md` §6). An operator that keeps its own copies of the
@@ -81,7 +90,9 @@
 //! The crate checks topology and data flow, not values. The lists are compared with a
 //! brute-force geometric oracle, the exchanges with values seeded from the keys, and
 //! the evaluator with test operators that record the calls, the batches and the pairs
-//! they are handed (`tests/mpi_regressions.rs`, on any number of ranks). The
+//! they are handed (`tests/mpi_regressions.rs`, on any number of ranks), and with an
+//! order-sensitive mixing operator whose every value on several ranks must be the
+//! one-rank value of the same tree, bit for bit (Phase 5S T5). The
 //! redistribution is checked by round trips of payloads that name their origin, for
 //! several input distributions of every scenario. The values of the passes are checked
 //! by the Laplace FMM in `nd-fmm-exec` against the direct sum.

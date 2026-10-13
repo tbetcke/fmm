@@ -32,10 +32,15 @@
 //! a workload point on Metal and CUDA) builds the device `Fmm` alone and checks its
 //! evaluation against the formula and the one-rank host run. For every point rank 0 prints
 //! each rank's transfers per evaluation by data kind (the charges, the ghost sources, the
-//! sent multipoles, the coarse blocks, the received multipoles, the output: calls and
+//! sent multipoles, the boxes of the replicated top (the coarse blocks before Phase 5S T5),
+//! the received multipoles, the output: calls and
 //! bytes), its syncs and launches, whether they equal the formula, and the device memory
 //! of its exchange buffers and ghost slots (`DeviceReport::exchange_bytes`,
 //! `ghost_bytes`).
+//!
+//! **Since Phase 5S T5 the gate is T6's on several ranks**: the device does not mirror the
+//! upward reduction of the owned top tree before T6, so on more than one rank the test
+//! prints "skipped at P ranks" on every rank and returns; on one rank it runs as before.
 //!
 //! The device on several ranks is a correctness check only (docs/phase5/README.md,
 //! decision 3): ranks share one GPU and are never timed here. The verdict is all-reduced
@@ -84,7 +89,7 @@ const TABLE_KINDS: [DataKind; 6] = [
     DataKind::Charges,
     DataKind::GhostSources,
     DataKind::SentMultipoles,
-    DataKind::CoarseMultipoles,
+    DataKind::TopMultipoles,
     DataKind::ReceivedMultipoles,
     DataKind::Output,
 ];
@@ -337,7 +342,7 @@ fn run<T: Stored + SimdScalar + Equivalence + Default>(
             ));
         }
         eprintln!(
-            "| rank | charges up | ghost sources up | sent multipoles down | coarse blocks up \
+            "| rank | charges up | ghost sources up | sent multipoles down | top up \
              | received multipoles up | output down | syncs | launches | = formula | exchange \
              buffers B | ghost slots B |"
         );
@@ -375,6 +380,16 @@ fn device_on_several_ranks() {
     assert!(provided >= Threading::Funneled, "MPI provides {provided:?}");
     let comm = universe.world();
     let (rank, size) = (comm.rank(), comm.size());
+    // The device does not mirror the upward reduction of Phase 5S T5 before T6, so the
+    // gate on several ranks is T6's (docs/phase5s/T5-owned-top-tree.md); every rank says
+    // so before any collective.
+    if size > 1 {
+        println!(
+            "rank {rank}: skipped at {size} ranks: the device on several ranks is Phase 5S \
+             T6's (the device does not mirror the upward reduction yet)"
+        );
+        return;
+    }
     let mut failures = Vec::new();
     let mut ran = Vec::new();
     if Backend::Cpu.is_compiled() {
