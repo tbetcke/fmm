@@ -5,12 +5,12 @@
 fired at 8 ranks (`docs/design/scale-out.md` §1.4, §7.1). T8 keeps S5 and re-measures the
 construction after T3a; where this brief says "build S4", read "re-measure T3a's routing".
 
-**Draft of 2026-10-13 (T5, at the user's request; not yet signed off):** T8 also evaluates
-a third trigger, **S8, the fan-out below the replicated top** (below, and step 1's last
-item). T5 measured the multipole exchange's neighbours and messages growing with P
-(`fmm-validate/results/phase5s-t5.md` §4): the boxes about a rank's size keep a roughly
-constant number of readers while R's threshold rises with P, so they leave R and go point
-to point from their owners, each to up to the threshold less one ranks.
+**Added on 2026-10-13 (T5, at the user's request; signed off by the user on 2026-10-13):**
+T8 also evaluates a third trigger, **S8, the fan-out below the replicated top** (below,
+and step 1's last item). T5 measured the multipole exchange's neighbours and messages
+growing with P (`fmm-validate/results/phase5s-t5.md` §4): the boxes about a rank's size
+keep a roughly constant number of readers while R's threshold rises with P, so they leave
+R and go point to point from their owners, each to up to the threshold less one ranks.
 
 distributed-fmm.md §14.4 keeps two packages in reserve, to be built only if measured to
 need them at 1,000 or more ranks:
@@ -28,8 +28,8 @@ need them at 1,000 or more ranks:
   (`immediate_synchronous_send`, `immediate_barrier`), so S5 needs no rsmpi addition;
   confirm it, together with the probe calls a receiver needs.
 
-**S8, the fan-out below the replicated top** (`nd-fmm-plan`; draft, T5). A top-tree box
-below R goes from its owner to every reader, up to the threshold less one (63 at 512
+**S8, the fan-out below the replicated top** (`nd-fmm-plan`; T5, signed off on
+2026-10-13). A top-tree box below R goes from its owner to every reader, up to the threshold less one (63 at 512
 locust ranks on the clusters, where the 4,096-box cap doubles the threshold to 64); the
 busiest sender's messages per evaluation grow with P (clusters: 39 → 316 from 40 to 640
 Kathleen ranks; 104 → 510 from 64 to 512 on locust). The remedy forwards each such box
@@ -74,7 +74,7 @@ Do:
    - **modelled** to 10³ and 10⁴ ranks: time per item from the counted messages and bytes
      at the stated latency and bandwidth (the method of `scale-out.md` §10), marked
      *model*;
-   - **for S8** (draft), from `scaling`'s summary line (T5's fields), on the cube, the
+   - **for S8**, from `scaling`'s summary line (T5's fields), on the cube, the
      Plummer sphere and the clusters at 2.5 × 10⁴ points per rank, f64 p = 8 and f32
      p = 3, at the counts of the first item (locust 64–512, Kathleen 40–640, 40 per node to
      160): the busiest sender's multipole-exchange messages per evaluation
@@ -102,8 +102,8 @@ Do:
      (same counts and payloads on every rank) at 1–8 ranks, at 512 oversubscribed and
      (Kathleen) at 160; the rlst graph builds replaced only if rlst's API allows it
      without a fork (otherwise ask: an upstream change).
-   - S8 (draft): fires when the busiest sender's multipole-exchange messages, modelled at
-     10⁴ ranks, exceed 1% of a modelled evaluation at 2.5 × 10⁴ points per rank
+   - S8 (signed off on 2026-10-13): fires when the busiest sender's multipole-exchange
+     messages, modelled at 10⁴ ranks, exceed 1% of a modelled evaluation at 2.5 × 10⁴ points per rank
      (`scale-out.md` §10.4: about 5.5 ms of the cube's 549 ms at f64 p = 8; state the p = 3
      figure too), or when the multipole exposed wait on the overlapped path exceeds 1% of
      the evaluation at 160 Kathleen ranks (measured). The remedy, built only on the

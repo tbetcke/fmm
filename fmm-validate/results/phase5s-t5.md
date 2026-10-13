@@ -52,7 +52,8 @@ Kathleen nodes are exclusive; every job is named.
   clusters and the Plummer sphere), the signed-off reading of requirement 5 (scale-out.md
   §12, question 1), not a constant. The growth is the boxes about a rank's size leaving R
   as the threshold rises (§4, "Where the neighbours come from"); most messages stay on
-  the node (§4, "By node"). A trigger for it (S8) is drafted into T8's brief.
+  the node (§4, "By node"). A trigger for it (S8) is in T8's brief (signed off on
+  2026-10-13).
 
 ## 1. The change
 

@@ -342,7 +342,8 @@ These hold for every task, so that no task decides them on its own:
   within T1's target at 512 (locust) and 640 (Kathleen) oversubscribed ranks (distributed-fmm.md §14.5: ≤ 1.10
   at 1,024 ranks), and the measured compute-stage max/mean at 72 (locust) and 160
   (Kathleen) ranks reported against the first cut; bit for bit.
-- C5S.5 (T8): S4 and S5 evaluated on oversubscribed counts, bytes and models, and built
+- C5S.5 (T8): S4, S5 and S8 (the fan-out below the replicated top; added by T5, signed
+  off on 2026-10-13) evaluated on oversubscribed counts, bytes and models, and built
   or closed as the sign-off decides; their timing at scale stays open.
 - C5S.6 (T9): the scaling report (strong and weak at 1, 2 and 4 Kathleen nodes and 1–72
   locust ranks, Phase 5 against Phase 5S, stage by stage; memory, counts and bytes per
@@ -378,7 +379,7 @@ One pull request each.
 | T5 | [T5-owned-top-tree.md](T5-owned-top-tree.md) | S2 in `nd-fmm-plan`: owners, the order-preserving upward reduction, the replicated top of fixed size, the coarse gather removed, new `HostData` events, overlap of the reduction | C5S.3 | T4 |
 | T6 | [T6-owned-top-tree-exec.md](T6-owned-top-tree-exec.md) | S2 in `nd-fmm-exec`: `Fmm`, the device operator's events, overlap, timings and traffic, the harness's new measures | C5S.3 | T5 |
 | T7 | [T7-work-weighted-cut.md](T7-work-weighted-cut.md) | S3: the cost model from per-kind timings, the second cut after the local refinement, an `Fmm` option; the modelled cost balance at 512–640 oversubscribed ranks, the measured balance at 72 and 160 | C5S.4 | T4; T6 for timing |
-| T8 | [T8-construction-and-collectives.md](T8-construction-and-collectives.md) | S5 (S4 moved to T3a; T8 re-measures it), conditional: evaluated on oversubscribed counts and bytes (to 512–640 ranks) and models; built only where T1's trigger fires and the sign-off accepts, else closed by a report | C5S.5 | T6, T7 |
+| T8 | [T8-construction-and-collectives.md](T8-construction-and-collectives.md) | S5 (S4 moved to T3a; T8 re-measures it) and S8 (the fan-out below the replicated top, from T5), conditional: evaluated on oversubscribed counts and bytes (to 512–640 ranks) and models; built only where T1's trigger fires and the sign-off accepts, else closed by a report | C5S.5 | T6, T7 |
 | T9 | [T9-scaling-at-scale.md](T9-scaling-at-scale.md) | scaling on Kathleen at 1, 2 and 4 nodes and on locust to 72 ranks, Phase 5 against Phase 5S, counts and memory to 512–640 oversubscribed ranks, *model* times beyond, design-document update, Phase 6 briefs revised | C5S.6; gate: scaling report | T6, T7, T8 |
 
 Review T1 yourself before the tasks that build on it: T3–T8 encode its decisions on the
@@ -488,6 +489,6 @@ In the repository root, start `claude` and say:
 - [ ] T5 merged: the owned top tree in `nd-fmm-plan`; the coarse gather removed; bit for bit
 - [ ] T6 merged: `Fmm`, device events and overlap on the owned top tree; bit for bit; device gate passes
 - [ ] T7 merged: the work-weighted cut; modelled cost max/mean within the target at 512–640 oversubscribed ranks; measured imbalance at 72 and 160 ranks
-- [ ] T8 merged: S4 and S5 built or closed by counts, bytes and models
+- [ ] T8 merged: S4, S5 and S8 built or closed by counts, bytes and models
 - [ ] T9 merged: scaling report published; Phase 6 briefs revised (decision 7)
 - [ ] Design documents updated: laplace-fmm-plan §7 (Phase 5S status and numbers), §8, §9; distributed-fmm.md §14/§15 notes; `scale-out.md` outcome section; workspace-structure §3, §3.1, §4 and §6
