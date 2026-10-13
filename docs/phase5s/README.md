@@ -486,7 +486,7 @@ In the repository root, start `claude` and say:
 - [x] T3a merged: the sample sorts of `Octree::new` replaced by routing; the octree key for key unchanged at 1–8, 512 (locust) and 160/640 (Kathleen) ranks; `Octree::new` by step before and after
 - [x] T3 merged: the partition map as keys and the locally essential key set in `nd-octree`; MPI examples pass on 1, 3 and 8 ranks
 - [x] T4 merged: `Plan::new` over the locally essential set; bit for bit; held boxes bounded in P to 512 (locust) and 640 (Kathleen) oversubscribed ranks
-- [ ] T5 merged: the owned top tree in `nd-fmm-plan`; the coarse gather removed; bit for bit
+- [x] T5 merged: the owned top tree in `nd-fmm-plan`; the coarse gather removed; bit for bit
 - [ ] T6 merged: `Fmm`, device events and overlap on the owned top tree; bit for bit; device gate passes
 - [ ] T7 merged: the work-weighted cut; modelled cost max/mean within the target at 512–640 oversubscribed ranks; measured imbalance at 72 and 160 ranks
 - [ ] T8 merged: S4, S5 and S8 built or closed by counts, bytes and models
