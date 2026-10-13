@@ -228,9 +228,9 @@
 //!   not fit MPI's `i32` counts is [`FmmError::Redistribution`], on every rank.
 //! - **The device** (Phase 5 T8) runs on any number of ranks: every rank opens the default
 //!   device of its backend, and the device operator mirrors the evaluator's exchanges
-//!   (the `device` module, "Several ranks"), but for the upward reduction of Phase 5S T5,
-//!   which it mirrors from T6: until then a device evaluation with a box to reduce fails
-//!   with [`FmmError::Device`]. Per evaluation it adds one all-reduce, after
+//!   (the `device` module, "Several ranks"), the upward reduction and the replicated top
+//!   of Phase 5S T5 included since T6 (between the two, a device evaluation with a box to
+//!   reduce failed with [`FmmError::Device`]). Per evaluation it adds one all-reduce, after
 //!   the output's download, that agrees a device error of any rank; the rank that failed
 //!   returns [`FmmError::Device`], the others [`FmmError::OtherRank`], and from then on
 //!   the charge-length agreement carries the kept error. [`Fmm::exchange_sizes`] says
@@ -256,6 +256,8 @@
 //! - **Times.** [`StageTimings`] keeps its stages, split as its documentation says, and
 //!   adds [`StageTimings::overlap`]: per exchange the time from post to completion, the
 //!   exposed wait and the `test` calls, the wait per level and the all-gather of the top.
+//!   [`StageTimings::reduction`] and [`StageTimings::replicated_top`] (Phase 5S T6) are
+//!   timed alike in both paths, from the events that bracket them.
 //! - **The device** runs the overlapped stages with the same events and transfers
 //!   (design §13, question 10), for correctness only: no device time is a scaling
 //!   figure (decision 3). With [`FmmBuilder::device_timestamps`] the first overlapped
@@ -1585,8 +1587,11 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         let Engine::Host(host) = engine else {
             unreachable!("the evaluator is built with the host engine")
         };
-        let lists =
-            device::ExchangeLists::new(evaluator.multipole_exchange(), evaluator.top_exchange());
+        let lists = device::ExchangeLists::new(
+            evaluator.reduction_exchange(),
+            evaluator.multipole_exchange(),
+            evaluator.top_exchange(),
+        );
         let counts = (evaluator.source_exchange().leaf_counts(), target_counts);
         let driver = device::driver(
             host,
@@ -1929,10 +1934,82 @@ impl<T: SimdScalar + Stored + Equivalence + Default> Engine<T> {
 /// The operator of the evaluator: the [`Engine`] that runs the level calls, and the
 /// per-kind timer of [`FmmBuilder::kind_timings`] around them (Phase 4S T5). Every level
 /// call passes through the [`FmmOperator`] implementation below, the one place where it
-/// is timed; with [`KindTiming::Off`] it only checks the mode and delegates.
+/// is timed; with [`KindTiming::Off`] it only checks the mode and delegates. The same
+/// place times the upward reduction and the replicated top from the host-data events
+/// that bracket them ([`EventClock`]; Phase 5S T6).
 struct ExecOperator<T: SimdScalar + Stored + Equivalence + Default> {
     engine: Engine<T>,
     kinds: KindRecorder,
+    clock: EventClock,
+}
+
+/// The times of the evaluator's top-tree movements in one evaluation (Phase 5S T6;
+/// [`StageTimings::reduction`], [`StageTimings::replicated_top`]), read from the host
+/// clock at the host-data events that bracket them: per reduction level from the arrival
+/// of `SendReduction` to the return of `ReceivedReduction`, and from the return of
+/// `SendMultipoles` to the arrival of `ReceivedTop` (the all-gather of the top in the
+/// blocking path), with the `ReceivedTop` event. Reset at `Reset`.
+#[derive(Clone, Copy, Debug, Default)]
+struct EventClock {
+    /// When the current reduction level's `SendReduction` arrived.
+    reduction_start: Option<Instant>,
+    /// When `SendMultipoles` returned.
+    top_start: Option<Instant>,
+    /// The reduction levels so far, events included.
+    reduction: Duration,
+    /// From the return of `SendMultipoles` to the arrival of `ReceivedTop`.
+    top_gather: Duration,
+    /// The `ReceivedTop` event (on a device, the upload and scatter of the top).
+    top_event: Duration,
+}
+
+/// The host-data events an [`EventClock`] records.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClockedEvent {
+    Reset,
+    SendReduction,
+    ReceivedReduction,
+    SendMultipoles,
+    ReceivedTop,
+    Other,
+}
+
+impl ClockedEvent {
+    fn of<T>(event: &HostData<'_, T>) -> Self {
+        match event {
+            HostData::Reset => Self::Reset,
+            HostData::SendReduction { .. } => Self::SendReduction,
+            HostData::ReceivedReduction { .. } => Self::ReceivedReduction,
+            HostData::SendMultipoles { .. } => Self::SendMultipoles,
+            HostData::ReceivedTop { .. } => Self::ReceivedTop,
+            HostData::SendSources { .. }
+            | HostData::ReceivedSources { .. }
+            | HostData::ReceivedMultipoles { .. } => Self::Other,
+        }
+    }
+}
+
+impl EventClock {
+    /// Records `event`, which arrived at `arrived` and has just returned.
+    fn record(&mut self, event: ClockedEvent, arrived: Instant) {
+        match event {
+            ClockedEvent::Reset => *self = Self::default(),
+            ClockedEvent::SendReduction => self.reduction_start = Some(arrived),
+            ClockedEvent::ReceivedReduction => {
+                if let Some(start) = self.reduction_start.take() {
+                    self.reduction += start.elapsed();
+                }
+            }
+            ClockedEvent::SendMultipoles => self.top_start = Some(Instant::now()),
+            ClockedEvent::ReceivedTop => {
+                if let Some(start) = self.top_start.take() {
+                    self.top_gather += arrived.saturating_duration_since(start);
+                }
+                self.top_event += arrived.elapsed();
+            }
+            ClockedEvent::Other => {}
+        }
+    }
 }
 
 impl<T: SimdScalar + Stored + Equivalence + Default> ExecOperator<T> {
@@ -1943,6 +2020,7 @@ impl<T: SimdScalar + Stored + Equivalence + Default> ExecOperator<T> {
         Self {
             engine,
             kinds: KindRecorder::new(mode, placement, on_device),
+            clock: EventClock::default(),
         }
     }
 
@@ -2153,13 +2231,16 @@ macro_rules! delegate {
             )*
 
             /// The evaluator's data movements, to the engine: nothing on the host path; the
-            /// device operator mirrors them (Phase 5 T8).
+            /// device operator mirrors them (Phase 5 T8). The [`EventClock`] reads the
+            /// host clock around them (Phase 5S T6).
             fn host_data(&mut self, event: HostData<'_, T>) {
+                let (clocked, arrived) = (ClockedEvent::of(&event), Instant::now());
                 match &mut self.engine {
                     Engine::Host(operator) => operator.host_data(event),
                     #[cfg(feature = "gpu")]
                     Engine::Device(driver) => driver.host_data(event),
                 }
+                self.clock.record(clocked, arrived);
             }
         }
     };
@@ -2522,7 +2603,9 @@ pub struct BuildTimings {
     pub redistribute: Duration,
     /// Building or loading the tables.
     pub tables: Duration,
-    /// The operator and `Evaluator::new` (stores and exchanges).
+    /// The operator and `Evaluator::new` (stores and exchanges: since Phase 5S T5 the
+    /// upward reduction's per level and the replicated top's, with the all-reduce and
+    /// all-gathers that choose R; no part of its own).
     pub evaluator: Duration,
     /// Step 8: the leaf-scaled coordinates.
     pub load: Duration,
@@ -2598,8 +2681,24 @@ pub struct StageTimings {
     pub upward_local: Duration,
     /// Stage 3: the upward reduction and the global M2M of the owned `Global` boxes, then
     /// the all-gather of the replicated top (collective; Phase 5S T5). With overlap, the
-    /// same, inside the second overlapped stage.
+    /// same, inside the second overlapped stage. [`reduction`](Self::reduction) and
+    /// [`replicated_top`](Self::replicated_top) are parts of it.
     pub upward_global: Duration,
+    /// The part of [`upward_global`](Self::upward_global) spent in the upward reduction
+    /// (Phase 5S T6; docs/design/scale-out.md §4.2): summed over the reduction levels,
+    /// from the level's `SendReduction` event to the end of its `ReceivedReduction`, so
+    /// the events (on a device the gather and download of the multipoles sent and the
+    /// upload and scatter of the children received), the exchange of the level and the
+    /// wait for other ranks; with overlap the posting of the level's sends and the wait
+    /// for it. Zero on one rank, where no level is a reduction level. Not added to
+    /// [`total`](Self::total).
+    pub reduction: Duration,
+    /// The part of [`upward_global`](Self::upward_global) spent on the replicated top
+    /// (Phase 5S T6; docs/design/scale-out.md §4.3): its all-gather (collective, with the
+    /// wait for other ranks; with overlap [`OverlapTimes::top_gather`]) and the
+    /// `ReceivedTop` event (on a device the upload and scatter of the top). Not added to
+    /// [`total`](Self::total).
+    pub replicated_top: Duration,
     /// Stage 4: the multipole exchange (collective). With overlap, the time of the second
     /// overlapped stage outside stages 3 and 5.
     pub exchange_multipoles: Duration,
@@ -2907,6 +3006,13 @@ pub struct ExchangeSizes {
     /// The local leaves it sends, each once: the leaves whose charges a device
     /// evaluation writes into the host store.
     pub sent_leaves: usize,
+    /// Per level, the boxes the upward reduction of the level sends to the owners of their
+    /// parents (S^red_l; Phase 5S T6, docs/design/scale-out.md §4.5): own blocks and owned
+    /// `Global` boxes, each to one rank; zero on the levels that are not reduction levels.
+    pub sent_reduction: Vec<usize>,
+    /// Per level, the children of this rank's owned `Global` boxes that the upward
+    /// reduction of the level receives (R^red_l; Phase 5S T6).
+    pub received_reduction: Vec<usize>,
     /// This rank's boxes of the replicated top, which its all-gather sends (B_o; Phase 5S
     /// T5, before it the coarse blocks of the coarse gather); none on one rank.
     pub sent_top: usize,
@@ -3122,6 +3228,7 @@ where
         if let ExecOperator {
             engine: Engine::Device(driver),
             kinds,
+            ..
         } = evaluator.operator_mut()
         {
             // With synchronous kind timings, the first level call starts on an idle
@@ -3187,10 +3294,20 @@ where
             e.evaluate_leaves();
         });
 
+        // The reduction and the replicated top, from the events (Phase 5S T6); with overlap
+        // the multipole exchange is posted between `SendMultipoles` and the all-gather, so
+        // the all-gather's own time is the evaluator's.
+        let clock = self.evaluator.operator().clock;
+        timings.reduction = clock.reduction;
+        timings.replicated_top = clock.top_event
+            + timings
+                .overlap
+                .map_or(clock.top_gather, |overlap| overlap.top_gather);
+
         // The output pass, on the rank that owns each target, in leaf order.
         let start = Instant::now();
         let gradients = self.gradients();
-        let ExecOperator { engine, kinds } = self.evaluator.operator_mut();
+        let ExecOperator { engine, kinds, .. } = self.evaluator.operator_mut();
         match engine {
             Engine::Host(_) => {
                 timings.kinds = kinds.timings();
@@ -3398,10 +3515,22 @@ where
         let sources = self.evaluator.source_exchange();
         let multipoles = self.evaluator.multipole_exchange();
         let top = self.evaluator.top_exchange();
+        let reduction = self.evaluator.reduction_exchange();
         let mut sent_leaves = sources.send_leaves().to_vec();
         sent_leaves.sort_unstable();
         sent_leaves.dedup();
         let nlevels = multipoles.nlevels();
+        let reduction_level = |boxes: &dyn Fn(usize) -> usize| -> Vec<usize> {
+            (0..nlevels)
+                .map(|l| {
+                    if reduction.levels().contains(&l) {
+                        boxes(l)
+                    } else {
+                        0
+                    }
+                })
+                .collect()
+        };
         ExchangeSizes {
             ghost_sources: sources.ghost_counts().iter().sum(),
             sent_sources: sources
@@ -3410,6 +3539,8 @@ where
                 .map(|&j| sources.leaf_counts()[j as usize])
                 .sum(),
             sent_leaves: sent_leaves.len(),
+            sent_reduction: reduction_level(&|l| reduction.send_boxes(l).len()),
+            received_reduction: reduction_level(&|l| reduction.receive_boxes(l).len()),
             sent_top: top.sent_keys().len(),
             received_top: top.received_keys().len(),
             sent_boxes: (0..nlevels)

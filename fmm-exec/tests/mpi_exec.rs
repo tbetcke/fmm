@@ -159,14 +159,13 @@
 //!
 //!   On several ranks (Phase 5 T8) every check runs as on one rank, against the host path
 //!   on the same ranks, with the formula extended by the exchanges' transfers on the rank
-//!   (`Fmm::exchange_sizes`: the ghost tail up, the sent multipoles down in one more sync,
-//!   the boxes of the replicated top and each level's ghost multipoles up, a launch each).
-//!   The test prints the backends and the ranks it ran, and the largest differences, at
-//!   the end. **Since Phase 5S T5 the device repeats on several ranks are T6's**: the
-//!   device does not mirror the upward reduction before T6, so on several ranks they, the
-//!   CPU runtime's threads rule of **device backends** and **device errors and tuning on
-//!   several ranks** print that they are T6's on every rank instead of running
-//!   (`device_runs_here`).
+//!   (`Fmm::exchange_sizes`: the ghost tail up; per reduction level the multipoles the
+//!   upward reduction sends down in one more sync and the children it receives up (Phase
+//!   5S T6); the sent multipoles down in one more sync, the boxes of the replicated top and
+//!   each level's ghost multipoles up, a launch each). The test prints the backends and the
+//!   ranks it ran, and the largest differences, at the end. (Between Phase 5S T5 and T6 the
+//!   device did not mirror the reduction, and the device repeats on several ranks were not
+//!   run.)
 //! - **device backends**: `Host` is the default and reports every kind on the host; a
 //!   backend not compiled in gives `BackendNotCompiled`, also when only rank 0 asks for
 //!   it (the others return `OtherRank`: the check rides on step 1's agreement); with the
@@ -266,8 +265,13 @@
 //!   every event) one evaluation is still exact on one rank, where no event carries data,
 //!   and differs on several ranks, where the received multipoles stay zero (the test
 //!   asserts that the tree has ghost leaves and boxes there); two
-//!   evaluations differ on every rank count. It prints the ghosts and how many values
-//!   differ.
+//!   evaluations differ on every rank count. With only the events of the owned top tree
+//!   disabled (Phase 5S T6, `shadow::Hook::WithoutTopTree`: `SendReduction`,
+//!   `ReceivedReduction`, `ReceivedTop`) one evaluation is exact on one rank and differs
+//!   on several, where the children the owners of `Global` boxes receive and the boxes of
+//!   the replicated top stay zero (the test asserts that the reduction receives a child
+//!   there). It prints the ghosts, the children and boxes of the top tree received, and
+//!   how many values differ.
 //!
 //! Overlap (Phase 5 T9, C5.2; docs/design/distributed-fmm.md §8; `FmmBuilder::overlap`,
 //! `Fmm::set_overlap`). Error measure: exact equality of the bit patterns.
@@ -344,6 +348,7 @@ use nd_octree::{MortonKey, Octree, OctreeOptions, PhysicalBox, constants::DEEPES
 mod device_common;
 mod kind_common;
 mod shadow;
+use shadow::Hook;
 
 type Scenario = fn(&SimpleCommunicator);
 
@@ -373,24 +378,6 @@ fn device_backends() -> Vec<Backend> {
         .into_iter()
         .filter(|b| b.is_compiled())
         .collect()
-}
-
-/// Whether the device scenario `what` runs on `comm`: on one rank. On several ranks the
-/// device does not mirror the upward reduction of Phase 5S T5 before T6 (a device
-/// evaluation with a box to reduce fails with `FmmError::Device`), so the device
-/// scenarios on several ranks are T6's (docs/phase5s/T5-owned-top-tree.md): this prints
-/// so on every rank instead of running them. Every rank takes the same branch.
-#[cfg(feature = "gpu")]
-fn device_runs_here(what: &str, comm: &SimpleCommunicator) -> bool {
-    let size = comm.size();
-    if size > 1 {
-        eprintln!(
-            "rank {}: {what}: not run on {size} ranks, Phase 5S T6's (the device does not \
-             mirror the upward reduction yet)",
-            comm.rank()
-        );
-    }
-    size == 1
 }
 
 /// The device runs of one backend for [`backends_line`]: the backend, f32 and f64 runs,
@@ -814,7 +801,7 @@ fn evaluate_shadow(
     let index = plan.index();
     let source_counts: Vec<usize> = source_leaves.iter().map(Vec::len).collect();
     let target_counts: Vec<usize> = target_leaves.iter().map(Vec::len).collect();
-    let shadow = shadow::Shadow::new(operator, true);
+    let shadow = shadow::Shadow::new(operator, Hook::On);
     let mut evaluator = Evaluator::new(plan, comm, shadow, &source_counts, &target_counts)
         .expect("the evaluator builds");
     let (mut points, mut leaf_charges, mut target_points) = (Vec::new(), Vec::new(), Vec::new());
@@ -1217,10 +1204,7 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
         check_overlapped(&mut fmm, charges, &reference);
     }
     #[cfg(feature = "gpu")]
-    for backend in device_backends()
-        .into_iter()
-        .filter(|backend| device_runs_here(&format!("the {backend} repeat"), comm))
-    {
+    for backend in device_backends() {
         let difference = device_common::check_backend(
             &builder,
             (sources, targets),
@@ -1336,7 +1320,7 @@ fn check_shadow<T: Stored + SimdScalar + Equivalence + Default>(
     comm: &SimpleCommunicator,
 ) {
     for &overlapped in paths {
-        let verdict = shadow::check_fmm(fmm, sets, evaluations, (true, overlapped), comm);
+        let verdict = shadow::check_fmm(fmm, sets, evaluations, (Hook::On, overlapped), comm);
         assert_eq!(
             verdict,
             shadow::Verdict {
@@ -3423,7 +3407,7 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
     // The threads rule with the CPU runtime: no rayon pool, the units capped at n, and on
     // several ranks at the node's cores over its ranks (Phase 5 T8, design §7.4).
     #[cfg(feature = "cpu")]
-    if device_runs_here("the threads rule of the CPU runtime", comm) {
+    {
         let charges = random_charges(&mut rng, points.len());
         let builder = FmmBuilder::<f64>::new(3).backend(Backend::Cpu).threads(4);
         match builder.build(&points, &points, comm) {
@@ -3616,7 +3600,7 @@ fn device_backends_scenario(comm: &SimpleCommunicator) {
 /// documentation, "device errors and tuning on several ranks"), on the CPU runtime.
 fn device_ranks(comm: &SimpleCommunicator) {
     #[cfg(feature = "cpu")]
-    if device_runs_here("device errors and tuning", comm) {
+    {
         device_errors(comm);
         device_tuning(comm);
     }
@@ -3677,9 +3661,14 @@ fn device_errors_with(comm: &SimpleCommunicator, overlap: bool) {
     );
     // Every check is a defect agreed on every rank, so that a failure stops every rank.
     let mut defects = Vec::new();
+    // One sync for the output, one for the sent multipoles, one per reduction level at
+    // which the rank sends (Phase 5S T6).
+    let reduction_sends = sizes.sent_reduction.iter().filter(|&&n| n > 0).count() as u64;
     let syncs = fmm.device_counters().unwrap().evaluation.syncs;
-    if syncs != 1 + u64::from(sends) {
-        defects.push(format!("{syncs} syncs in an evaluation"));
+    if syncs != 1 + u64::from(sends) + reduction_sends {
+        defects.push(format!(
+            "{syncs} syncs in an evaluation, {reduction_sends} reduction levels sent"
+        ));
     }
     if rank == failing {
         fmm.inject_device_error();
@@ -3854,14 +3843,29 @@ fn host_data_hook(comm: &SimpleCommunicator) {
     let both = [(&first[..], &output), (&second[..], &again)];
     check_shadow(sets, &both, &fmm, &[false, true], comm);
     // Without it, one evaluation: on one rank no event carries data; on several the
-    // ghosts and the other ranks' coarse blocks stay zero.
-    let off = shadow::check_fmm(&fmm, sets, &both[..1], (false, false), comm);
+    // ghosts and the received multipoles stay zero.
+    let off = shadow::check_fmm(&fmm, sets, &both[..1], (Hook::Off, false), comm);
     // Without it, two evaluations: the second adds to the first on every rank count.
-    let off_twice = shadow::check_fmm(&fmm, sets, &both, (false, false), comm);
+    let off_twice = shadow::check_fmm(&fmm, sets, &both, (Hook::Off, false), comm);
+    // Without the events of the owned top tree alone (Phase 5S T6), one evaluation: on
+    // several ranks the children the owners of `Global` boxes receive and the boxes of the
+    // replicated top stay zero.
+    let sizes = fmm.exchange_sizes();
+    let top_tree = [
+        global_sum(sizes.received_reduction.iter().sum(), comm),
+        global_sum(sizes.received_top, comm),
+    ];
+    assert!(
+        comm.size() == 1 || top_tree[0] > 0,
+        "children received by the reduction on several ranks: {top_tree:?}"
+    );
+    let top_off = shadow::check_fmm(&fmm, sets, &both[..1], (Hook::WithoutTopTree, false), comm);
     eprintln!(
         "rank {}: host-data hook: {} ghost leaves and {} ghost boxes on {} ranks; the \
          shadow equals the FMM bit for bit through two evaluations; without the hook {} of \
-         {} values differ after one evaluation, {} of {} after two",
+         {} values differ after one evaluation, {} of {} after two; {} children of the \
+         reduction and {} boxes of the replicated top received, without their events {} of \
+         {} values differ",
         comm.rank(),
         ghosts[0],
         ghosts[1],
@@ -3869,12 +3873,24 @@ fn host_data_hook(comm: &SimpleCommunicator) {
         off.differing,
         off.values,
         off_twice.differing,
-        off_twice.values
+        off_twice.values,
+        top_tree[0],
+        top_tree[1],
+        top_off.differing,
+        top_off.values
     );
     if comm.size() == 1 {
         assert_eq!(off.differing, 0, "one rank: no event carries data");
+        assert_eq!(
+            top_off.differing, 0,
+            "one rank: no top-tree event carries data"
+        );
     } else {
         assert!(off.differing > 0, "without the hook the shadow must differ");
+        assert!(
+            top_off.differing > 0,
+            "without the top tree's events the shadow must differ"
+        );
     }
     assert!(
         off_twice.differing > 0,

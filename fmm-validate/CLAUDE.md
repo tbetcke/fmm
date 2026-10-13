@@ -144,6 +144,18 @@ neighbours (also those on other nodes, the other nodes, the messages sent to the
 tree; the report has their reduced lines and a table of the
 reduction per level, the summary line their maxima. Its report is `results/phase5s-t5.md`.
 
+Phase 5S T6 (the owned top tree in `nd-fmm-exec`) put the upward reduction and the
+replicated top into `scaling`'s stages: `STAGES` (`NSTAGES` = 17; `DOWNWARD`, `TOTAL`)
+has "upward reduction" and "replicated top" as parts of "upward global" from
+`StageTimings::{reduction, replicated_top}`, timed in both paths (the row "top all-gather",
+timed only overlapped, is gone; the summary keys `reduction_max_ms` and
+`replicated_top_max_ms` replace `top_gather_max_ms`), and the C5.2 line reports the
+reduction beside the criterion. `RankTraffic::reduction` holds the reduction's messages
+and values summed over the levels (moved from `TopTreeRow`, which keeps them per level),
+with columns in the per-rank traffic table. `MemoryModel::partition` is the partition map
+of docs/design/scale-out.md §8.2 (8 B + B/8 + 8 (P + 1)) in place of the bounds' 8 P.
+Its report is `results/phase5s-t6.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

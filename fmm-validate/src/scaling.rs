@@ -13,8 +13,9 @@
 //!   [`Settings::evaluations`] after one warm-up, then the maximum, minimum and mean over
 //!   the ranks and the load imbalance (maximum over mean) of the compute stages;
 //! - per exchange the messages and bytes per rank ([`RankTraffic`]);
-//! - memory per rank: the formula of docs/design/distributed-fmm.md §9.2 evaluated
-//!   ([`MemoryModel`], a *model*), and the resident size where the machine reports it
+//! - memory per rank: the formula of docs/design/distributed-fmm.md §9.2, as
+//!   docs/design/scale-out.md §8.2 updates it (Phase 5S T6), evaluated ([`MemoryModel`], a
+//!   *model*), and the resident size where the machine reports it
 //!   without a new dependency ([`resident_memory`]);
 //! - optionally the errors against the direct sum at sampled targets ([`Errors`]) and the
 //!   difference from the one-rank `Fmm` over every point in index order ([`Reference`]),
@@ -435,9 +436,12 @@ impl Settings {
 /// stage itself: a blocking exchange is all exposed. "upward global" is the upward
 /// reduction with the global M2M of the owned `Global` boxes and the all-gather of the
 /// replicated top (Phase 5S T5; the coarse gather and the global M2M of every `Global` box
-/// before); the all-gather alone is timed only in the overlapped path
-/// (`OverlapTimes::top_gather`), and is NaN (printed "–") in the blocking one.
-pub const STAGES: [&str; 16] = [
+/// before); its parts "upward reduction" and "replicated top" (`StageTimings::reduction`
+/// and `replicated_top`, Phase 5S T6) are timed in both paths, and are not added to the
+/// total. Until T6 the harness had a row "top all-gather" in their place, timed only in
+/// the overlapped path (`OverlapTimes::top_gather`, still the all-gather part of
+/// "replicated top" there).
+pub const STAGES: [&str; NSTAGES] = [
     "forward charges",
     "load",
     "source exchange (stage)",
@@ -445,7 +449,8 @@ pub const STAGES: [&str; 16] = [
     "sources: exposed wait",
     "upward local",
     "upward global (reduction + global M2M + top)",
-    "top all-gather",
+    "upward reduction (part of upward global)",
+    "replicated top (part of upward global)",
     "multipole exchange (stage)",
     "multipoles: post to completion",
     "multipoles: exposed wait",
@@ -456,16 +461,25 @@ pub const STAGES: [&str; 16] = [
     "total",
 ];
 
+/// The number of [`STAGES`].
+pub const NSTAGES: usize = 17;
+
 /// The positions in [`STAGES`] of the compute stages, whose imbalance a [`Report`] gives:
 /// upward local, downward and leaves.
-pub const COMPUTE: [usize; 3] = [5, 11, 12];
+pub const COMPUTE: [usize; 3] = [5, DOWNWARD, 13];
+
+/// The position in [`STAGES`] of the downward pass.
+pub const DOWNWARD: usize = 12;
+
+/// The position in [`STAGES`] of the total.
+pub const TOTAL: usize = NSTAGES - 1;
 
 /// The operator kinds of [`PathTimes::kinds`], in `OperatorKind::ALL` order.
 pub const KINDS: [&str; 8] = ["P2M", "M2M", "M2L", "P2L", "L2L", "L2P", "M2P", "P2P"];
 
 /// The positions in [`STAGES`] of the exposed waits and of the blocking exchange stages.
-const EXPOSED: [usize; 2] = [4, 10];
-const EXCHANGES: [usize; 2] = [2, 8];
+const EXPOSED: [usize; 2] = [4, 11];
+const EXCHANGES: [usize; 2] = [2, 9];
 
 /// The parts of the build as a [`run`] reports them, from `BuildTimings`, then the sum
 /// and the wall time of `build` on the rank; seconds.
@@ -482,21 +496,16 @@ pub const BUILD_PARTS: [&str; 9] = [
 ];
 
 /// The values of [`STAGES`] for one evaluation of the path `overlapped`.
-fn stage_values(t: &StageTimings, overlapped: bool) -> [f64; 16] {
+fn stage_values(t: &StageTimings, overlapped: bool) -> [f64; NSTAGES] {
     let s = Duration::as_secs_f64;
     let o = t.overlap.unwrap_or_default();
-    let (sources, multipoles, gather) = if overlapped {
+    let (sources, multipoles) = if overlapped {
         (
             [s(&o.sources.total), s(&o.sources.exposed)],
             [s(&o.multipoles.total), s(&o.multipoles.exposed)],
-            s(&o.top_gather),
         )
     } else {
-        (
-            [s(&t.exchange_sources); 2],
-            [s(&t.exchange_multipoles); 2],
-            f64::NAN,
-        )
+        ([s(&t.exchange_sources); 2], [s(&t.exchange_multipoles); 2])
     };
     [
         s(&t.forward_charges),
@@ -506,7 +515,8 @@ fn stage_values(t: &StageTimings, overlapped: bool) -> [f64; 16] {
         sources[1],
         s(&t.upward_local),
         s(&t.upward_global),
-        gather,
+        s(&t.reduction),
+        s(&t.replicated_top),
         s(&t.exchange_multipoles),
         multipoles[0],
         multipoles[1],
@@ -565,6 +575,9 @@ pub fn median(mut values: Vec<f64>) -> f64 {
 pub struct RankTraffic {
     /// The source exchange.
     pub sources: Traffic,
+    /// The upward reduction, summed over the levels (Phase 5S T6; per level in
+    /// [`TopTreeRow`], T5's place for the sum).
+    pub reduction: Traffic,
     /// The multipole exchange, summed over the levels.
     pub multipoles: Traffic,
     /// The values of this rank's boxes of the replicated top, which its all-gather sends
@@ -584,8 +597,11 @@ pub struct RankTraffic {
     pub output: [usize; 2],
 }
 
-/// The memory of one rank by the formula of docs/design/distributed-fmm.md §9.2, in
-/// bytes: a *model*, not a measurement.
+/// The memory of one rank by the formula of docs/design/distributed-fmm.md §9.2, as
+/// docs/design/scale-out.md §8.2 updates it for the locally essential, owned top tree
+/// (Phase 5S T6), in bytes: a *model*, not a measurement. The held boxes K are the
+/// plan's, H since Phase 5S T5; the buffers hold every exchange's values, the upward
+/// reduction's and the replicated top's all-gathered |R| n_c values included.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MemoryModel {
     /// Multipoles and locals: 2 n_c s K, a slot for every held box.
@@ -604,9 +620,14 @@ pub struct MemoryModel {
     /// The replicated top's keys, slots and offsets: 24 |R| (Phase 5S T5; the coarse
     /// gather's keys and blocks, 16 B, before).
     pub top: f64,
-    /// The partition bounds: 8 P.
+    /// The partition map (Phase 5S T3; scale-out.md §8.2): 8 B for the keys of the B
+    /// blocks, B / 8 for their leaf bits and 8 (P + 1) for the cut; 8 P (the partition
+    /// bounds) before Phase 5S T6.
     pub partition: f64,
 }
+
+/// The number of parts of a [`MemoryModel`].
+const MEMORY_PARTS: usize = 8;
 
 impl MemoryModel {
     /// The sum of the parts.
@@ -621,7 +642,7 @@ impl MemoryModel {
             + self.partition
     }
 
-    fn to_array(self) -> [f64; 8] {
+    fn to_array(self) -> [f64; MEMORY_PARTS] {
         [
             self.coefficients,
             self.points,
@@ -708,8 +729,6 @@ pub struct TopTreeRow {
     /// The values Phase 5's coarse gather received on this rank: every other rank's
     /// coarse blocks.
     pub phase5_coarse_received: usize,
-    /// The upward reduction, summed over the levels.
-    pub reduction: Traffic,
     /// Per level, the messages the reduction of the level receives on this rank.
     pub reduction_messages: [usize; TOP_TREE_LEVELS],
     /// Per level, the values the reduction of the level receives on this rank.
@@ -734,18 +753,13 @@ pub struct TopTreeRow {
 
 impl TopTreeRow {
     /// The number of values of [`encode`](Self::encode).
-    const VALUES: usize = 13 + 2 * TOP_TREE_LEVELS;
+    const VALUES: usize = 9 + 2 * TOP_TREE_LEVELS;
 
     fn encode(&self) -> Vec<f64> {
-        let r = &self.reduction;
         let mut values = vec![
             self.global_m2m,
             self.phase5_global_m2m,
             self.phase5_coarse_received,
-            r.messages_sent,
-            r.messages_received,
-            r.values_sent,
-            r.values_received,
             self.multipole_neighbours,
             self.multipole_off_node_neighbours,
             self.multipole_neighbour_nodes,
@@ -764,20 +778,14 @@ impl TopTreeRow {
             global_m2m: c(0),
             phase5_global_m2m: c(1),
             phase5_coarse_received: c(2),
-            reduction: Traffic {
-                messages_sent: c(3),
-                messages_received: c(4),
-                values_sent: c(5),
-                values_received: c(6),
-            },
-            multipole_neighbours: c(7),
-            multipole_off_node_neighbours: c(8),
-            multipole_neighbour_nodes: c(9),
-            multipole_off_node_messages: c(10),
-            multipole_fan_out: c(11),
-            top_threshold: c(12),
-            reduction_messages: core::array::from_fn(|l| c(13 + l)),
-            reduction_values: core::array::from_fn(|l| c(13 + TOP_TREE_LEVELS + l)),
+            multipole_neighbours: c(3),
+            multipole_off_node_neighbours: c(4),
+            multipole_neighbour_nodes: c(5),
+            multipole_off_node_messages: c(6),
+            multipole_fan_out: c(7),
+            top_threshold: c(8),
+            reduction_messages: core::array::from_fn(|l| c(9 + l)),
+            reduction_values: core::array::from_fn(|l| c(9 + TOP_TREE_LEVELS + l)),
         }
     }
 }
@@ -785,7 +793,7 @@ impl TopTreeRow {
 /// The position in [`RankRow::encode`] of the second part of the held boxes, after the
 /// counts, the build, the traffic, the memory and the resident size; the third part, the
 /// resident size after the input and the last two parts follow.
-const ROW_VALUES: usize = 11 + 9 + 16 + 8 + 1;
+const ROW_VALUES: usize = 11 + 9 + 20 + MEMORY_PARTS + 1;
 
 impl RankRow {
     /// The row as values, for an all-gather (every count is exact in f64).
@@ -813,6 +821,10 @@ impl RankRow {
             t.multipoles.messages_received,
             t.multipoles.values_sent,
             t.multipoles.values_received,
+            t.reduction.messages_sent,
+            t.reduction.messages_received,
+            t.reduction.values_sent,
+            t.reduction.values_received,
             t.top_sent,
             t.top_received,
             t.top_boxes[0],
@@ -875,14 +887,20 @@ impl RankRow {
                     values_sent: t(6),
                     values_received: t(7),
                 },
-                top_sent: t(8),
-                top_received: t(9),
-                top_boxes: [t(10), t(11)],
-                charges: [t(12), t(13)],
-                output: [t(14), t(15)],
+                reduction: Traffic {
+                    messages_sent: t(8),
+                    messages_received: t(9),
+                    values_sent: t(10),
+                    values_received: t(11),
+                },
+                top_sent: t(12),
+                top_received: t(13),
+                top_boxes: [t(14), t(15)],
+                charges: [t(16), t(17)],
+                output: [t(18), t(19)],
             },
-            memory: MemoryModel::from_array(&v[36..44]),
-            resident: (v[44] >= 0.0).then_some(v[44]),
+            memory: MemoryModel::from_array(&v[40..40 + MEMORY_PARTS]),
+            resident: (v[40 + MEMORY_PARTS] >= 0.0).then_some(v[40 + MEMORY_PARTS]),
             resident_input: (v[ROW_VALUES + 2] >= 0.0).then_some(v[ROW_VALUES + 2]),
             plan_bytes: c(ROW_VALUES + 5),
             top_tree: TopTreeRow::decode(&v[ROW_VALUES + 6..ROW_VALUES + 6 + TopTreeRow::VALUES]),
@@ -896,7 +914,7 @@ pub struct PathTimes {
     /// Whether the exchanges overlapped.
     pub overlapped: bool,
     /// Per rank, the median of each of [`STAGES`] over the evaluations.
-    pub medians: Vec<[f64; 16]>,
+    pub medians: Vec<[f64; NSTAGES]>,
     /// The median over the evaluations of the maximum over the ranks of the total: the
     /// evaluation's wall time.
     pub wall: f64,
@@ -1389,6 +1407,13 @@ pub const HELD_PARTS: [&str; 5] = [
     "outside H (Phase 5S T4's top keys; none since T5)",
 ];
 
+/// The bytes of a partition map of `blocks` blocks cut over `ranks` ranks (Phase 5S T3;
+/// docs/design/scale-out.md §8.2): 8 per block for its key, a leaf bit per block (in u64
+/// words) and 8 (P + 1) for the cut.
+fn partition_map_bytes(blocks: usize, ranks: usize) -> f64 {
+    (8 * blocks + 8 * blocks.div_ceil(64) + 8 * (ranks + 1)) as f64
+}
+
 /// The held boxes of `fmm`'s plan on this rank, by [`HELD_PARTS`]: a key of the octree's
 /// locally essential set H is own (non-ghost there, not `Global`), a shared ancestor
 /// (`Global` there), a top-tree key of another rank (a ghost that the partition map
@@ -1437,8 +1462,18 @@ fn rank_row<T: Stored + SimdScalar + Equivalence + Default>(
             values_sent: sum.values_sent + t.values_sent,
             values_received: sum.values_received + t.values_received,
         });
+    let reduction = traffic
+        .reduction
+        .iter()
+        .fold(Traffic::default(), |sum, t| Traffic {
+            messages_sent: sum.messages_sent + t.messages_sent,
+            messages_received: sum.messages_received + t.messages_received,
+            values_sent: sum.values_sent + t.values_sent,
+            values_received: sum.values_received + t.values_received,
+        });
     let rank_traffic = RankTraffic {
         sources: traffic.sources,
+        reduction,
         multipoles,
         top_sent: traffic.top_sent,
         top_received: traffic.top_received,
@@ -1463,8 +1498,8 @@ fn rank_row<T: Stored + SimdScalar + Equivalence + Default>(
         + rank_traffic.sources.values_received
         + multipoles.values_sent
         + multipoles.values_received
-        + top_tree.reduction.values_sent
-        + top_tree.reduction.values_received
+        + reduction.values_sent
+        + reduction.values_received
         + traffic.top_sent
         + traffic.top_received;
     let memory = MemoryModel {
@@ -1475,7 +1510,7 @@ fn rank_row<T: Stored + SimdScalar + Equivalence + Default>(
         redistribution: 2.0 * (4 * input + 12 * sources) as f64,
         buffers: values as f64 * s,
         top: 24.0 * ((traffic.top_sent + traffic.top_received) as f64 / n_c),
-        partition: 8.0 * ranks as f64,
+        partition: partition_map_bytes(fmm.octree().partition_map().blocks().len(), ranks),
     };
     RankRow {
         input,
@@ -1525,10 +1560,6 @@ fn top_tree_row<T: Stored + SimdScalar + Equivalence + Default>(
         ..TopTreeRow::default()
     };
     for (level, t) in traffic.reduction.iter().enumerate().take(TOP_TREE_LEVELS) {
-        row.reduction.messages_sent += t.messages_sent;
-        row.reduction.messages_received += t.messages_received;
-        row.reduction.values_sent += t.values_sent;
-        row.reduction.values_received += t.values_received;
         row.reduction_messages[level] = t.messages_received;
         row.reduction_values[level] = t.values_received;
     }
@@ -1701,7 +1732,7 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         .map(|&i| T::from_f64(workload.charge(0, i)))
         .collect();
     let paths = settings.overlap.paths();
-    let mut times: Vec<Vec<[f64; 16]>> = vec![Vec::new(); paths.len()];
+    let mut times: Vec<Vec<[f64; NSTAGES]>> = vec![Vec::new(); paths.len()];
     let mut kinds: Vec<Vec<[f64; 8]>> = vec![Vec::new(); paths.len()];
     let mut differing = 0usize;
     let mut last = None;
@@ -1733,11 +1764,11 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
     // The stage medians and the totals of every evaluation, gathered.
     let mut path_times = Vec::new();
     for (path, &overlapped) in paths.iter().enumerate() {
-        let local: [f64; 16] =
+        let local: [f64; NSTAGES] =
             core::array::from_fn(|k| median(times[path].iter().map(|t| t[k]).collect()));
-        let mut every = vec![0.0f64; 16 * size];
+        let mut every = vec![0.0f64; NSTAGES * size];
         comm.all_gather_into(&local[..], &mut every[..]);
-        let totals: Vec<f64> = times[path].iter().map(|t| t[15]).collect();
+        let totals: Vec<f64> = times[path].iter().map(|t| t[TOTAL]).collect();
         let mut all_totals = vec![0.0f64; totals.len() * size];
         comm.all_gather_into(&totals[..], &mut all_totals[..]);
         let evaluations = totals.len();
@@ -1761,7 +1792,7 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         };
         path_times.push(PathTimes {
             overlapped,
-            medians: every.as_chunks::<16>().0.to_vec(),
+            medians: every.as_chunks::<NSTAGES>().0.to_vec(),
             wall,
             kinds: kind_medians,
         });
@@ -2605,11 +2636,12 @@ impl Report {
                     (0, "forward"),
                     (5, "upward_local"),
                     (6, "upward_global"),
-                    (7, "top_gather"),
-                    (11, "downward"),
-                    (12, "leaves"),
-                    (14, "backward"),
-                    (15, "total"),
+                    (7, "reduction"),
+                    (8, "replicated_top"),
+                    (DOWNWARD, "downward"),
+                    (13, "leaves"),
+                    (15, "backward"),
+                    (TOTAL, "total"),
                 ] {
                     fields.push(format!("{key}_max_ms={}", ms(path.reduced(k)[0])));
                 }
@@ -2620,7 +2652,7 @@ impl Report {
                 ));
                 fields.push(format!(
                     "downward_us_per_pair={:.4}",
-                    1e6 * path.per_v_pair(rows, |r| path.medians[r][11])
+                    1e6 * path.per_v_pair(rows, |r| path.medians[r][DOWNWARD])
                 ));
                 if !path.kinds.is_empty() {
                     for (k, key) in [(1, "m2m"), (2, "m2l"), (4, "l2l")] {
@@ -2666,13 +2698,13 @@ impl Report {
                         r.top_tree.phase5_coarse_received as f64 * vb
                     }),
                     top("reduction_sent_max", &|r| {
-                        r.top_tree.reduction.messages_sent as f64
+                        r.traffic.reduction.messages_sent as f64
                     }),
                     top("reduction_received_max", &|r| {
-                        r.top_tree.reduction.messages_received as f64
+                        r.traffic.reduction.messages_received as f64
                     }),
                     top("reduction_bytes_max", &|r| {
-                        r.top_tree.reduction.values_received as f64 * vb
+                        r.traffic.reduction.values_received as f64 * vb
                     }),
                     top("reduction_level_messages_max", &|r| {
                         r.top_tree
@@ -2878,23 +2910,28 @@ impl fmt::Display for Report {
             writeln!(f)?;
             writeln!(
                 f,
-                "| rank | sources: msgs sent / recv | sources: bytes sent / recv | \
+                "| rank | sources: msgs sent / recv | sources: bytes sent / recv | upward \
+                 reduction: msgs sent / recv | upward reduction: bytes sent / recv | \
                  multipoles: msgs sent / recv | multipoles: bytes sent / recv | replicated top: \
                  boxes own / others, bytes own / others | charges forward: bytes sent / recv | \
                  output backward: bytes sent / recv |"
             )?;
-            writeln!(f, "| --- | {} |", ["---"; 7].join(" | "))?;
+            writeln!(f, "| --- | {} |", ["---"; 9].join(" | "))?;
             for (r, row) in self.rows.iter().enumerate() {
                 let t = &row.traffic;
                 let b = |v: usize| v * value_bytes;
                 writeln!(
                     f,
-                    "| {r} | {} / {} | {} / {} | {} / {} | {} / {} | {} / {}, {} / {} | {} / {} \
-                     | {} / {} |",
+                    "| {r} | {} / {} | {} / {} | {} / {} | {} / {} | {} / {} | {} / {} | {} / {}, \
+                     {} / {} | {} / {} | {} / {} |",
                     t.sources.messages_sent,
                     t.sources.messages_received,
                     b(t.sources.values_sent),
                     b(t.sources.values_received),
+                    t.reduction.messages_sent,
+                    t.reduction.messages_received,
+                    b(t.reduction.values_sent),
+                    b(t.reduction.values_received),
                     t.multipoles.messages_sent,
                     t.multipoles.messages_received,
                     b(t.multipoles.values_sent),
@@ -3072,19 +3109,19 @@ impl fmt::Display for Report {
         line(
             f,
             "upward reduction: messages sent (all levels)",
-            &|r| r.top_tree.reduction.messages_sent as f64,
+            &|r| r.traffic.reduction.messages_sent as f64,
             &count,
         )?;
         line(
             f,
             "upward reduction: messages received (all levels)",
-            &|r| r.top_tree.reduction.messages_received as f64,
+            &|r| r.traffic.reduction.messages_received as f64,
             &count,
         )?;
         line(
             f,
             "upward reduction: bytes received",
-            &|r| r.top_tree.reduction.values_received as f64 * vb,
+            &|r| r.traffic.reduction.values_received as f64 * vb,
             &bytes,
         )?;
         line(
@@ -3211,7 +3248,7 @@ impl fmt::Display for Report {
             writeln!(f)?;
             if per_rank {
                 writeln!(f, "| rank | {} |", STAGES.join(" | "))?;
-                writeln!(f, "| --- | {} |", ["---"; 16].join(" | "))?;
+                writeln!(f, "| --- | {} |", ["---"; NSTAGES].join(" | "))?;
                 for (r, m) in path.medians.iter().enumerate() {
                     let cells: Vec<String> = m.iter().map(|&t| ms(t)).collect();
                     writeln!(f, "| {r} | {} |", cells.join(" | "))?;
@@ -3275,7 +3312,7 @@ impl fmt::Display for Report {
                     f,
                     "Per V pair, of the slowest rank in each: M2L {:.4} µs, downward {:.4} µs",
                     1e6 * path.per_v_pair(rows, |r| path.kinds[r][2]),
-                    1e6 * path.per_v_pair(rows, |r| path.medians[r][11])
+                    1e6 * path.per_v_pair(rows, |r| path.medians[r][DOWNWARD])
                 )?;
                 writeln!(f)?;
             }
@@ -3307,17 +3344,23 @@ impl fmt::Display for Report {
         if let [blocking, overlapped] = &self.paths[..] {
             let (exposed, _) = overlapped.exchanges();
             let (_, exchanges) = blocking.exchanges();
+            // The upward reduction beside the criterion (Phase 5S T6), as the coarse gather
+            // was in Phase 5: each level's send to the end of its wait.
+            let reduction = |path: &PathTimes| path.reduced(7)[0];
             writeln!(
                 f,
                 "C5.2 measure (max over ranks): exposed waits {} ms against blocking \
                  exchanges {} ms = {:.1}%; evaluation {} ms blocking, {} ms overlapped; {} \
-                 values of the two paths differ in any bit",
+                 values of the two paths differ in any bit; the upward reduction (not in the \
+                 criterion) {} ms overlapped, {} ms blocking",
                 ms(exposed),
                 ms(exchanges),
                 100.0 * exposed / exchanges,
                 ms(blocking.wall),
                 ms(overlapped.wall),
-                self.differing.unwrap_or(0)
+                self.differing.unwrap_or(0),
+                ms(reduction(overlapped)),
+                ms(reduction(blocking))
             )?;
             writeln!(f)?;
         }
