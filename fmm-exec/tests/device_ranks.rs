@@ -32,15 +32,12 @@
 //! a workload point on Metal and CUDA) builds the device `Fmm` alone and checks its
 //! evaluation against the formula and the one-rank host run. For every point rank 0 prints
 //! each rank's transfers per evaluation by data kind (the charges, the ghost sources, the
+//! multipoles the upward reduction sends and the children it receives (Phase 5S T6), the
 //! sent multipoles, the boxes of the replicated top (the coarse blocks before Phase 5S T5),
-//! the received multipoles, the output: calls and
-//! bytes), its syncs and launches, whether they equal the formula, and the device memory
-//! of its exchange buffers and ghost slots (`DeviceReport::exchange_bytes`,
-//! `ghost_bytes`).
-//!
-//! **Since Phase 5S T5 the gate is T6's on several ranks**: the device does not mirror the
-//! upward reduction of the owned top tree before T6, so on more than one rank the test
-//! prints "skipped at P ranks" on every rank and returns; on one rank it runs as before.
+//! the received multipoles, the output: calls and bytes), its syncs and launches, whether
+//! they equal the formula, and the device memory of its exchange buffers and ghost slots
+//! (`DeviceReport::exchange_bytes`, `ghost_bytes`). (Between Phase 5S T5 and T6, when the
+//! device did not yet mirror the reduction, the gate did not run on several ranks.)
 //!
 //! The device on several ranks is a correctness check only (docs/phase5/README.md,
 //! decision 3): ranks share one GPU and are never timed here. The verdict is all-reduced
@@ -85,9 +82,11 @@ const SEED: u64 = 0xc33;
 const SHARE_SEED: u64 = 0x05ee_dc58;
 
 /// The data kinds of the transfer table, in its column order.
-const TABLE_KINDS: [DataKind; 6] = [
+const TABLE_KINDS: [DataKind; 8] = [
     DataKind::Charges,
     DataKind::GhostSources,
+    DataKind::SentReduction,
+    DataKind::ReceivedReduction,
     DataKind::SentMultipoles,
     DataKind::TopMultipoles,
     DataKind::ReceivedMultipoles,
@@ -342,11 +341,13 @@ fn run<T: Stored + SimdScalar + Equivalence + Default>(
             ));
         }
         eprintln!(
-            "| rank | charges up | ghost sources up | sent multipoles down | top up \
-             | received multipoles up | output down | syncs | launches | = formula | exchange \
-             buffers B | ghost slots B |"
+            "| rank | charges up | ghost sources up | reduction down | reduction up | sent \
+             multipoles down | top up | received multipoles up | output down | syncs | \
+             launches | = formula | exchange buffers B | ghost slots B |"
         );
-        eprintln!("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+        eprintln!(
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+        );
         let width = table.len() / size;
         for (r, row) in table.chunks(width).enumerate() {
             let kinds: Vec<String> = row[..2 * TABLE_KINDS.len()]
@@ -380,16 +381,6 @@ fn device_on_several_ranks() {
     assert!(provided >= Threading::Funneled, "MPI provides {provided:?}");
     let comm = universe.world();
     let (rank, size) = (comm.rank(), comm.size());
-    // The device does not mirror the upward reduction of Phase 5S T5 before T6, so the
-    // gate on several ranks is T6's (docs/phase5s/T5-owned-top-tree.md); every rank says
-    // so before any collective.
-    if size > 1 {
-        println!(
-            "rank {rank}: skipped at {size} ranks: the device on several ranks is Phase 5S \
-             T6's (the device does not mirror the upward reduction yet)"
-        );
-        return;
-    }
     let mut failures = Vec::new();
     let mut ran = Vec::new();
     if Backend::Cpu.is_compiled() {

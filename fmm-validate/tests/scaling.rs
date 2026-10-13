@@ -33,6 +33,11 @@
 //! divisor of the ranks, k = 1 included, in f64 and f32, from the share, the ranges and
 //! rank 0: 0 values differ.
 //!
+//! And those of Phase 5S T6: the upward reduction and the replicated top as parts of the
+//! stage "upward global" in both paths (zero reduction on one rank), the reduction's
+//! traffic per rank (none on one rank, sent equal to received over the ranks), and the
+//! memory model's partition map.
+//!
 //! One test initialises MPI (at `Threading::Funneled`). Error measures: as named at each
 //! check; the timings are only checked to be finite and non-negative.
 
@@ -43,8 +48,8 @@ use mpi::traits::{Communicator, CommunicatorCollectives};
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::scaling::{
-    COMPUTE, HarnessError, Input, Overlap, REFERENCE_MAX_POINTS, Report, STAGES, Settings,
-    SlurmJob, Workload, input_by_index, invariance, run,
+    COMPUTE, DOWNWARD, HarnessError, Input, Overlap, REFERENCE_MAX_POINTS, Report, STAGES,
+    Settings, SlurmJob, TOTAL, Workload, input_by_index, invariance, run,
 };
 
 /// The tiny problem: 1,500 points of the cube.
@@ -185,13 +190,18 @@ fn check_fields(report: &Report, comm: &SimpleCommunicator) {
         assert!(row.held[0] > 0, "every rank holds local boxes");
         assert!(row.memory.total() > row.memory.coefficients);
         assert!(row.memory.coefficients > 0.0);
+        // The partition map: at least one block's key and the cut of the ranks.
+        assert!(row.memory.partition >= (8 + 8 * (size + 1)) as f64);
     }
     // The traffic: none on one rank; on several, every message and value sent is received.
     let t = |f: &dyn Fn(&nd_fmm_validate::scaling::RankTraffic) -> usize| -> usize {
         report.rows.iter().map(|r| f(&r.traffic)).sum()
     };
     if size == 1 {
-        assert_eq!(t(&|t| t.sources.values_sent + t.multipoles.values_sent), 0);
+        assert_eq!(
+            t(&|t| t.sources.values_sent + t.multipoles.values_sent + t.reduction.values_sent),
+            0
+        );
         assert_eq!(t(&|t| t.top_received + t.top_boxes[1]), 0);
         assert!(report.rows[0].held[1] == 0, "no ghost on one rank");
     } else {
@@ -207,11 +217,20 @@ fn check_fields(report: &Report, comm: &SimpleCommunicator) {
             t(&|t| t.multipoles.values_sent),
             t(&|t| t.multipoles.values_received)
         );
+        assert_eq!(
+            t(&|t| t.reduction.messages_sent),
+            t(&|t| t.reduction.messages_received)
+        );
+        assert_eq!(
+            t(&|t| t.reduction.values_sent),
+            t(&|t| t.reduction.values_received)
+        );
         assert!(t(&|t| t.sources.values_sent) > 0);
         assert_eq!(t(&|t| t.charges[0]), t(&|t| t.charges[1]));
         assert_eq!(t(&|t| t.output[0]), t(&|t| t.output[1]));
     }
-    // Both paths, a median per rank and stage; the top's all-gather only in the overlapped.
+    // Both paths, a median per rank and stage, the reduction and the replicated top parts of
+    // the upward global stage (Phase 5S T6).
     assert_eq!(report.paths.len(), 2);
     assert_eq!(
         report.differing,
@@ -222,16 +241,21 @@ fn check_fields(report: &Report, comm: &SimpleCommunicator) {
         assert_eq!(path.medians.len(), size);
         for m in &path.medians {
             for (k, t) in m.iter().enumerate() {
-                if k == 7 && !path.overlapped {
-                    assert!(t.is_nan(), "no gather time in the blocking path");
-                } else {
-                    assert!(t.is_finite() && *t >= 0.0, "{}: {t}", STAGES[k]);
-                }
+                assert!(t.is_finite() && *t >= 0.0, "{}: {t}", STAGES[k]);
+            }
+            // In the blocking path both lie inside the stage's clock; the overlapped
+            // path's stage leaves out the `test` calls, which the reduction's span holds.
+            assert!(
+                path.overlapped || m[7] + m[8] <= m[6],
+                "the reduction and the replicated top within upward global: {m:?}"
+            );
+            if size == 1 {
+                assert_eq!(m[7], 0.0, "no reduction on one rank");
             }
             let compute: f64 = COMPUTE.iter().map(|&k| m[k]).sum();
-            assert!(compute <= m[15], "the compute stages within the total");
+            assert!(compute <= m[TOTAL], "the compute stages within the total");
         }
-        assert!(path.wall >= path.reduced(15)[0] * 0.999);
+        assert!(path.wall >= path.reduced(TOTAL)[0] * 0.999);
         let [max, min, mean] = path.compute();
         assert!(min <= mean && mean <= max && max > 0.0);
     }
@@ -377,7 +401,7 @@ fn kinds_and_reference_strategy(comm: &SimpleCommunicator) {
     let path = &report.paths[0];
     assert_eq!(path.kinds.len(), report.ranks);
     for (r, kinds) in path.kinds.iter().enumerate() {
-        let (m2l, downward) = (kinds[2], path.medians[r][11]);
+        let (m2l, downward) = (kinds[2], path.medians[r][DOWNWARD]);
         if report.rows[r].lists.v > 0 {
             assert!(m2l > 0.0, "rank {r}: M2L {m2l}");
         }

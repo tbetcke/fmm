@@ -41,7 +41,7 @@
 //! | tables | the dense octant tables of M2M and L2L; the dense M2L tables under `Dense`, expanded from the classes under `Classes` (§6.8); the M2L family of the rotation tables under `Rotation` (T10); for a family whose level calls may take the library GEMM, also its library copy (matrices at 256-byte aligned strides) | once at build | never |
 //! | translation plans (T8, T9, T10) | per M2M, L2L and dense M2L level call on the device: the tile schedule of the hand-written GEMM, or the padded gather indices of the library GEMM; per rotation M2L level call, its rows with a pair | once at build | never |
 //! | translation scratch (T8, T9) | the gathered inputs and products of the widest chunk, shared by every level call | never (allocated at build) | never |
-//! | exchange buffers (Phase 5 T8) | on several ranks: the packed sent multipoles, the packed received boxes of the replicated top, one level's packed received ghost multipoles, and their columns (u32) | the columns once at build; the received values every evaluation | the sent values every evaluation |
+//! | exchange buffers (Phase 5 T8) | on several ranks: the packed sent multipoles, the packed received boxes of the replicated top, one level's packed received ghost multipoles, one reduction level's packed sent multipoles and received children (Phase 5S T6), and their columns (u32) | the columns once at build; the received values every evaluation | the sent values every evaluation |
 //!
 //! Before allocating, [`DeviceOperator::new`] sums the bytes of every buffer and refuses a
 //! configuration that does not fit in the memory the device reports as available
@@ -71,7 +71,8 @@
 //! **Per evaluation**, with every kind on the device (T11): one upload of N_s s bytes
 //! (the charges), one download of o N_t s bytes (the target output) and one sync (the
 //! download), for N_s sources, N_t targets, s bytes per value and o = 1, or 4 with
-//! gradients; on several ranks the exchanges' transfers and one more sync ([Several
+//! gradients; on several ranks the exchanges' transfers and one more sync, and one per
+//! level of the upward reduction at which the rank sends (Phase 5S T6; [Several
 //! ranks](#several-ranks-phase-5-t8)). Host-fallback calls add their own transfers (next
 //! section).
 //!
@@ -251,9 +252,9 @@
 //! | Stage | Launches |
 //! | --- | --- |
 //! | `reset`, `begin_evaluation` | 3 zero kernels at `HostData::Reset` (multipoles, locals, target output; none for an empty store) and the charge scatter |
-//! | the exchanges, several ranks (Phase 5 T8) | the gather of the sent multipoles (if the rank sends), the scatter of the received boxes of the replicated top (if any), the scatter of each level's received ghost multipoles (per level with a ghost box) |
+//! | the exchanges, several ranks (Phase 5 T8) | per reduction level (Phase 5S T6) the gather of the multipoles the upward reduction sends (if the rank sends at the level) and the scatter of the children it receives (if it receives); the gather of the sent multipoles (if the rank sends), the scatter of the received boxes of the replicated top (if any), the scatter of each level's received ghost multipoles (per level with a ghost box) |
 //! | upward, local pass | per level: P2M 1; M2M 3 per chunk (gather, GEMM, reduction) |
-//! | upward, global pass | on one rank the root's M2M: 3, none if the root is a leaf |
+//! | upward, global pass | per level the M2M of the owned `Global` boxes (Phase 5S T5): 3 per chunk; on one rank the root's: 3, none if the root is a leaf |
 //! | downward | per level: L2L 3 per chunk (gather, GEMM, scatter-add); M2L 3 c (dense) or 1 (rotation); P2L 1 |
 //! | leaves | per level: L2P 1, M2P 1, P2P 1 |
 //! | `read_output` | with the output pass on the device (Phase 4S T9): the gather, if there is a target |
@@ -351,8 +352,9 @@
 //! keeps the first failure, skips its remaining device work (the evaluator's stages
 //! still run to the end), and [`read_output`](DeviceOperator::read_output) returns it;
 //! `Fmm::evaluate` then returns `FmmError::Device`, and so does every later evaluation.
-//! On several ranks a failure can surface at the mid-evaluation download of the sent
-//! multipoles, after which the rank sends the host store's zeros and its neighbours
+//! On several ranks a failure can surface at a mid-evaluation download of sent
+//! multipoles (the reduction's or the exchanges'), after which the rank sends the host
+//! store's zeros and its neighbours
 //! compute wrong values without knowing: `Fmm::evaluate` agrees every rank's outcome by
 //! one all-reduce after the output's download, before the backward move, so the rank that
 //! failed returns `FmmError::Device` and the others `FmmError::OtherRank`; from then on
@@ -396,9 +398,11 @@
 //!
 //! **The exchanges on the device.** At each `HostData` event of the evaluator
 //! ([`ExchangeLists`], the index lists the build copies from the exchanges; G_s ghost
-//! source points, B_o and B_r this rank's boxes of the replicated top and the other
-//! ranks' that this rank holds (Phase 5S T5; before it the coarse blocks of the coarse
-//! gather), S_l and R_l the boxes sent and received on level l, n_c = (p + 1)²):
+//! source points, S^red_l and R^red_l the boxes the upward reduction of level l sends and
+//! receives (Phase 5S T6; docs/design/scale-out.md §4.5), B_o and B_r this rank's boxes
+//! of the replicated top and the other ranks' that this rank holds (Phase 5S T5; before it
+//! the coarse blocks of the coarse gather), S_l and R_l the boxes sent and received on
+//! level l, n_c = (p + 1)²):
 //!
 //! | Event | On the device | Transfers |
 //! | --- | --- | --- |
@@ -407,28 +411,38 @@
 //! | `ReceivedSources` | one upload of the host's ghost tail (coordinates and charges) into the device's | 4 G_s s up |
 //! | `SendMultipoles` | one `gather_columns` of this rank's boxes of the top and every level's sent boxes into a packed buffer, one download, and the host writes each column into its slot of the host store | (B_o + Σ_l S_l) n_c s down, 1 sync |
 //! | `ReceivedTop` | one upload of the other ranks' boxes of the top it holds (packed on the host from the gathered buffer) and one `scatter_columns` into the multipoles | B_r n_c s up |
-//! | `SendReduction(l)`, `ReceivedReduction(l)` | not mirrored before Phase 5S T6: with a box to send or receive, the operator fails with a device error, agreed on every rank as any other | none |
+//! | `SendReduction(l)` | one `gather_columns` of the level's sent boxes (own blocks and the owned `Global` boxes the global M2M of the level formed on the device) into a packed buffer, one download, and the host writes each column into its slot of the host store | S^red_l n_c s down, 1 sync |
+//! | `ReceivedReduction(l)` | one upload of the level's receive buffer and one `scatter_columns` into the multipoles, before the global M2M that reads them | R^red_l n_c s up |
 //! | `ReceivedMultipoles(l)` | one upload of the level's receive buffer and one `scatter_columns` into the multipoles | R_l n_c s up |
 //!
 //! A call with nothing to move does nothing. **Per evaluation**, with every kind on the
-//! device: up N_s s + 4 G_s s + B_r n_c s + Σ_l R_l n_c s in one call for the charges,
-//! one if G_s > 0, one if B_r > 0 and one per level with R_l > 0; down o N_t s + (B_o +
-//! Σ_l S_l) n_c s in one call for the output and one if anything is sent; **two syncs** with anything sent, one otherwise; one gather launch if anything
-//! is sent, one scatter if B_r > 0 and one per level with R_l > 0 (design §7.2). On one
-//! rank every list is empty, and an evaluation is Phase 4's minimum: the charges up, the
-//! output down, one sync. [`DeviceCounters`] count the exchanges' transfers by
-//! [`DataKind`] (`GhostSources`, `SentMultipoles`, `TopMultipoles`,
-//! `ReceivedMultipoles`, the last per level in [`DeviceCounters::received_levels`]);
-//! `tests/device_common` checks them against `Fmm::exchange_sizes` on every scenario and
-//! rank count. The scatters assign (`nd_fmm_kernels::movement::scatter_columns`): a
+//! device: up N_s s + 4 G_s s + Σ_l R^red_l n_c s + B_r n_c s + Σ_l R_l n_c s in one call
+//! for the charges, one if G_s > 0, one per reduction level with R^red_l > 0, one if
+//! B_r > 0 and one per level with R_l > 0; down o N_t s + Σ_l S^red_l n_c s + (B_o + Σ_l
+//! S_l) n_c s in one call for the output, one per reduction level with S^red_l > 0 and
+//! one if anything else is sent; so **1 + [anything sent] + r_s syncs, at most 2 + r_s**,
+//! r_s the reduction levels at which the rank sends (scale-out.md §4.5: Phase 5's two
+//! syncs become 2 + r_s, because the multipoles a level sends are formed on the device by
+//! the global M2M of that level and must reach the host before that level's exchange,
+//! which comes before the next level's M2M; at most 7 levels measured, T5); one gather
+//! launch per download of sent multipoles and one scatter per upload of received ones
+//! (design §7.2). On one rank every list is empty, and an evaluation is Phase 4's minimum:
+//! the charges up, the output down, one sync. [`DeviceCounters`] count the exchanges'
+//! transfers by [`DataKind`] (`GhostSources`, `SentReduction`, `ReceivedReduction`,
+//! `SentMultipoles`, `TopMultipoles`, `ReceivedMultipoles`; the received multipoles per
+//! level in [`DeviceCounters::received_levels`], the reduction's in
+//! [`DeviceCounters::reduction_levels`]); `tests/device_common` checks them against
+//! `Fmm::exchange_sizes` on every scenario and rank count. The scatters assign (`nd_fmm_kernels::movement::scatter_columns`): a
 //! scatter-add into zeroed slots would turn a received −0.0 into +0.0, and so break the
 //! bit identity of the host fallback.
 //!
 //! **Memory** added per rank, allocated at build, nothing per evaluation: the packed sent
 //! multipoles (B_o + Σ S_l) n_c s, the replicated top's receive buffer B_r n_c s, one receive buffer
 //! of max_l R_l n_c s reused level after level (one stream orders each upload after the
-//! scatter that read the buffer before it), and the columns (u32), in
-//! [`DeviceReport::exchange_bytes`]; the ghost slots of the stores in
+//! scatter that read the buffer before it), the upward reduction's (Phase 5S T6) send
+//! buffer of max_l S^red_l n_c s (each level's download waits for its gather) and receive
+//! buffer of max_l R^red_l n_c s, reused level after level likewise, and the columns
+//! (u32), in [`DeviceReport::exchange_bytes`]; the ghost slots of the stores in
 //! [`DeviceReport::ghost_bytes`]. Both are counted in the memory check before anything is
 //! allocated.
 //!
@@ -517,7 +531,7 @@ use nd_fmm_kernels::{
     HostValues, IndexBuffer, KernelError, TimingWindow, WindowTime,
 };
 pub use nd_fmm_kernels::{Counters, DeviceInfo};
-use nd_fmm_plan::exchange::{MultipoleExchange, TopExchange};
+use nd_fmm_plan::exchange::{MultipoleExchange, ReductionExchange, TopExchange};
 use nd_fmm_plan::lists::{Csr, GroupedCsr, VList};
 use nd_fmm_plan::operator::{
     FmmOperator, FmmSizes, HostData, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, UpwardPass,
@@ -626,6 +640,13 @@ pub enum DataKind {
     /// The ghost tail of the source store, which the source exchange received (Phase 5
     /// T8): one upload per evaluation on a rank with ghost leaves.
     GhostSources,
+    /// The multipoles the upward reduction sends to the owners of their parents, packed
+    /// (Phase 5S T6): one download per reduction level at which the rank sends
+    /// ([`DeviceCounters::reduction_levels`]).
+    SentReduction,
+    /// The children the upward reduction received, packed (Phase 5S T6): one upload per
+    /// reduction level at which the rank receives ([`DeviceCounters::reduction_levels`]).
+    ReceivedReduction,
     /// The multipoles the evaluation sends, this rank's boxes of the replicated top and
     /// every level's sent boxes, packed (Phase 5 T8): one download per evaluation on a
     /// rank that sends.
@@ -647,7 +668,7 @@ pub enum DataKind {
 
 impl DataKind {
     /// Every kind, in report order.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 15] = [
         Self::Points,
         Self::Indices,
         Self::Geometry,
@@ -655,6 +676,8 @@ impl DataKind {
         Self::Charges,
         Self::Output,
         Self::GhostSources,
+        Self::SentReduction,
+        Self::ReceivedReduction,
         Self::SentMultipoles,
         Self::TopMultipoles,
         Self::ReceivedMultipoles,
@@ -673,6 +696,8 @@ impl DataKind {
             Self::Charges => "charges",
             Self::Output => "output",
             Self::GhostSources => "ghost sources",
+            Self::SentReduction => "sent reduction",
+            Self::ReceivedReduction => "received reduction",
             Self::SentMultipoles => "sent multipoles",
             Self::TopMultipoles => "replicated top",
             Self::ReceivedMultipoles => "received multipoles",
@@ -762,6 +787,11 @@ pub struct DeviceCounters {
     /// The uploads of [`DataKind::ReceivedMultipoles`] of the last evaluation by level
     /// (Phase 5 T8): one per level with a ghost box, none on one rank.
     pub received_levels: [Traffic; MAX_LEVELS],
+    /// The upward reduction of the last evaluation by level (Phase 5S T6): the downloads
+    /// of [`DataKind::SentReduction`] (one per level at which the rank sends) and the
+    /// uploads of [`DataKind::ReceivedReduction`] (one per level at which it receives);
+    /// none on one rank.
+    pub reduction_levels: [Traffic; MAX_LEVELS],
 }
 
 /// A table family uploaded to the device, for [`DeviceReport`].
@@ -927,7 +957,8 @@ pub struct DeviceReport {
     pub ranks: RankPlacement,
     /// The bytes of the exchanges' packed buffers and their column lists (Phase 5 T8,
     /// docs/design/distributed-fmm.md §7.3): the sent multipoles, the received boxes of
-    /// the replicated top, one level's received ghost multipoles; 0 on one rank. Part of
+    /// the replicated top, one level's received ghost multipoles, one reduction level's
+    /// sent multipoles and received children (Phase 5S T6); 0 on one rank. Part of
     /// [`memory_needed`](Self::memory_needed).
     pub exchange_bytes: u64,
     /// The bytes of the ghost slots in the device stores: the multipoles and locals of the
@@ -1175,11 +1206,17 @@ impl RankPlacement {
 /// The index lists of the evaluator's exchanges that a device operator needs (Phase 5 T8;
 /// docs/design/distributed-fmm.md §7.1–§7.3), copied at build from
 /// `nd_fmm_plan::exchange`: the packed buffers are sized from them and their columns
-/// uploaded once. Every list is empty on one rank. The upward reduction of Phase 5S T5 is
-/// not among them before T6 (the [module documentation](self), "The exchanges on the
-/// device").
+/// uploaded once. Every list is empty on one rank. Since Phase 5S T6 they include the
+/// upward reduction's (docs/design/scale-out.md §4.5).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ExchangeLists {
+    /// Per level, the boxes the upward reduction of the level sends to the owners of their
+    /// parents, in send order (`ReductionExchange::send_boxes`; Phase 5S T6); empty on the
+    /// levels that are not reduction levels.
+    pub reduction_send: Vec<Vec<u32>>,
+    /// Per level, the children the upward reduction of the level writes, ascending, in the
+    /// order of its receive buffer (`ReductionExchange::receive_boxes`; Phase 5S T6).
+    pub reduction_receive: Vec<Vec<u32>>,
     /// This rank's boxes of the replicated top, which its all-gather sends
     /// (`TopExchange::sent_keys` and `slot`), as (level, box index).
     pub sent_top: Vec<(usize, u32)>,
@@ -1198,12 +1235,26 @@ pub struct ExchangeLists {
 }
 
 impl ExchangeLists {
-    /// The lists of an evaluator's multipole exchange and replicated top
-    /// (`Evaluator::multipole_exchange`, `Evaluator::top_exchange`).
+    /// The lists of an evaluator's upward reduction, multipole exchange and replicated top
+    /// (`Evaluator::reduction_exchange`, `Evaluator::multipole_exchange`,
+    /// `Evaluator::top_exchange`).
     pub fn new<T: Equivalence + Copy + Default>(
+        reduction: &ReductionExchange<T>,
         multipoles: &MultipoleExchange<T>,
         top: &TopExchange<T>,
     ) -> Self {
+        let nlevels = multipoles.nlevels();
+        let per_level = |boxes: &dyn Fn(usize) -> Vec<u32>| -> Vec<Vec<u32>> {
+            (0..nlevels)
+                .map(|l| {
+                    if reduction.levels().contains(&l) {
+                        boxes(l)
+                    } else {
+                        Vec::new()
+                    }
+                })
+                .collect()
+        };
         // The value offsets of the keys in the gathered buffer.
         let nkeys = top.keys().len();
         let offsets: Vec<usize> = std::iter::once(0)
@@ -1217,6 +1268,8 @@ impl ExchangeLists {
                 .expect("the top's sent and received keys are held")
         };
         Self {
+            reduction_send: per_level(&|l| reduction.send_boxes(l).to_vec()),
+            reduction_receive: per_level(&|l| reduction.receive_boxes(l).to_vec()),
             sent_top: top.sent_keys().map(slot).collect(),
             received_top: top.received_keys().iter().map(|&r| slot(r)).collect(),
             received_values: top
@@ -1236,6 +1289,8 @@ impl ExchangeLists {
     /// The lists of one rank of `nlevels` levels: all empty.
     pub fn one_rank(nlevels: usize) -> Self {
         Self {
+            reduction_send: vec![Vec::new(); nlevels],
+            reduction_receive: vec![Vec::new(); nlevels],
             send_boxes: vec![Vec::new(); nlevels],
             receive_boxes: vec![Vec::new(); nlevels],
             ..Self::default()
@@ -1647,6 +1702,19 @@ struct Exchanges<T: DeviceFloat> {
     inject: bool,
     /// The received multipoles of the current evaluation by level.
     received_levels: [Traffic; MAX_LEVELS],
+    /// The upward reduction's sent multipoles (Phase 5S T6): every reduction level's, the
+    /// levels one after the other, and the values of the largest level, reused level after
+    /// level (each level's download waits for its gather before the next gather).
+    reduction_send: Option<Packed<T>>,
+    /// `nlevels + 1` offsets of the levels in `reduction_send`'s columns.
+    reduction_send_offsets: Vec<usize>,
+    /// The upward reduction's received children, laid out as `reduction_send`, the values
+    /// reused level after level as those of `receive`.
+    reduction_receive: Option<Packed<T>>,
+    /// `nlevels + 1` offsets of the levels in `reduction_receive`'s columns.
+    reduction_receive_offsets: Vec<usize>,
+    /// The upward reduction of the current evaluation by level.
+    reduction_levels: [Traffic; MAX_LEVELS],
 }
 
 /// The host copies of the multipoles and locals that host-fallback calls work on.
@@ -2344,19 +2412,25 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             top_columns.len() * n,
             "the received boxes' values of the top, n per box"
         );
-        let mut receive_offsets = vec![0usize];
-        let mut receive_columns = Vec::new();
-        for (l, boxes) in exchanges.receive_boxes.iter().enumerate() {
-            receive_columns.extend(boxes.iter().map(|&i| column((l, i))));
-            receive_offsets.push(receive_columns.len());
-        }
-        receive_offsets.resize(nlevels + 1, receive_columns.len());
-        let receive_width = exchanges
-            .receive_boxes
-            .iter()
-            .map(Vec::len)
-            .max()
-            .unwrap_or(0);
+        // The columns of per-level lists, the levels one after the other, their `nlevels +
+        // 1` offsets, and the largest level's width.
+        let by_level = |lists: &[Vec<u32>]| -> (Vec<u32>, Vec<usize>, usize) {
+            let mut offsets = vec![0usize];
+            let mut columns = Vec::new();
+            for (l, boxes) in lists.iter().enumerate() {
+                columns.extend(boxes.iter().map(|&i| column((l, i))));
+                offsets.push(columns.len());
+            }
+            offsets.resize(nlevels + 1, columns.len());
+            let width = lists.iter().map(Vec::len).max().unwrap_or(0);
+            (columns, offsets, width)
+        };
+        let (receive_columns, receive_offsets, receive_width) = by_level(&exchanges.receive_boxes);
+        // The upward reduction's (Phase 5S T6).
+        let (reduction_send_columns, reduction_send_offsets, reduction_send_width) =
+            by_level(&exchanges.reduction_send);
+        let (reduction_receive_columns, reduction_receive_offsets, reduction_receive_width) =
+            by_level(&exchanges.reduction_receive);
         let packed_bytes = |columns: usize, width: usize| {
             if columns == 0 {
                 0
@@ -2366,7 +2440,9 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         };
         let exchange_bytes = packed_bytes(send_columns.len(), send_columns.len())
             + packed_bytes(top_columns.len(), top_columns.len())
-            + packed_bytes(receive_columns.len(), receive_width);
+            + packed_bytes(receive_columns.len(), receive_width)
+            + packed_bytes(reduction_send_columns.len(), reduction_send_width)
+            + packed_bytes(reduction_receive_columns.len(), reduction_receive_width);
         let ghost_boxes: usize = (0..nlevels)
             .map(|l| index.kinds(l).iter().filter(|k| k.is_ghost()).count())
             .sum();
@@ -2515,6 +2591,11 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             ghost_sources: 4 * nsources..4 * nstored,
             inject: false,
             received_levels: [Traffic::default(); MAX_LEVELS],
+            reduction_send: packed(&reduction_send_columns, reduction_send_width)?,
+            reduction_send_offsets,
+            reduction_receive: packed(&reduction_receive_columns, reduction_receive_width)?,
+            reduction_receive_offsets,
+            reduction_levels: [Traffic::default(); MAX_LEVELS],
         };
 
         let upload = |link: &mut Link, set: &MatrixSet<T>, library: bool| {
@@ -3170,6 +3251,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         self.link.device.reset_counters();
         self.link.traffic = TrafficByData::default();
         self.exchanges.received_levels = [Traffic::default(); MAX_LEVELS];
+        self.exchanges.reduction_levels = [Traffic::default(); MAX_LEVELS];
         self.pending.clear();
         self.stage_timings = None;
         self.open_stage();
@@ -3303,20 +3385,92 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         });
     }
 
-    /// [`HostData::SendReduction`] and [`HostData::ReceivedReduction`] with `boxes` to
-    /// move: the device does not mirror the upward reduction before Phase 5S T6, so the
-    /// operator fails here with a device error (agreed on every rank after the output's
-    /// download, as any device error), rather than form wrong multipoles; nothing when
-    /// the rank moves no box at the level.
-    fn refuse_reduction(&mut self, level: usize, boxes: &[u32]) {
-        if !boxes.is_empty() && self.link.error.is_none() {
-            self.link.error = Some(KernelError::Device {
-                reason: format!(
-                    "the device does not mirror the upward reduction of level {level} yet \
-                     (Phase 5S T6)"
-                ),
-            });
+    /// [`HostData::SendReduction`] of `level`: gathers this rank's multipoles of the level
+    /// that the upward reduction sends (`boxes`, in send order: own blocks and the owned
+    /// `Global` boxes the global M2M of the level formed on the device) into the packed
+    /// buffer, downloads them (one download, one sync: the values must reach the host
+    /// before the exchange reads them) and writes each column into its slot of the host
+    /// store (Phase 5S T6, docs/design/scale-out.md §4.5); nothing on a level at which the
+    /// rank sends nothing.
+    fn send_reduction(&mut self, level: usize, boxes: &[u32], multipoles: &mut LevelBuffers<T>) {
+        let n = self.n();
+        let (stores, exchanges) = (&self.stores, &mut self.exchanges);
+        let columns =
+            exchanges.reduction_send_offsets[level]..exchanges.reduction_send_offsets[level + 1];
+        assert_eq!(
+            boxes.len(),
+            columns.len(),
+            "the reduction's sent boxes of level {level}"
+        );
+        let Some(send) = exchanges
+            .reduction_send
+            .as_mut()
+            .filter(|_| !columns.is_empty())
+        else {
+            return;
+        };
+        let before = self.link.device.counters();
+        let packed = 0..columns.len() * n;
+        self.link.run(DataKind::SentReduction, |d| {
+            gather_columns(
+                d,
+                n,
+                stores.multipoles.as_slice(),
+                send.columns.slice(columns),
+                send.values.slice_mut(packed.clone()),
+            )
+        });
+        let values = self.link.run(DataKind::SentReduction, |d| {
+            d.download_view(send.values.slice(packed))
+        });
+        if let Some(values) = values {
+            for (column, &i) in values.chunks_exact(n).zip(boxes) {
+                multipoles
+                    .chunk_mut(level, i as usize)
+                    .copy_from_slice(column);
+            }
         }
+        let moved = Traffic::between(before, self.link.device.counters());
+        exchanges.reduction_levels[level] = exchanges.reduction_levels[level].plus(moved);
+    }
+
+    /// [`HostData::ReceivedReduction`] of `level`: one upload of the reduction's receive
+    /// buffer `received` (the level's children from other ranks, packed) and one scatter
+    /// into their slots of the multipoles, before the global M2M of the level above reads
+    /// them (Phase 5S T6); nothing on a level at which the rank receives nothing.
+    fn receive_reduction(&mut self, level: usize, received: &[T]) {
+        let n = self.n();
+        let (stores, exchanges) = (&mut self.stores, &mut self.exchanges);
+        let columns = exchanges.reduction_receive_offsets[level]
+            ..exchanges.reduction_receive_offsets[level + 1];
+        assert_eq!(
+            received.len(),
+            columns.len() * n,
+            "the reduction's receive buffer of level {level}"
+        );
+        let Some(receive) = exchanges
+            .reduction_receive
+            .as_mut()
+            .filter(|_| !columns.is_empty())
+        else {
+            return;
+        };
+        let before = self.link.device.counters();
+        let packed = 0..received.len();
+        self.link.run(DataKind::ReceivedReduction, |d| {
+            d.write(receive.values.slice_mut(packed.clone()), received)
+        });
+        self.link.run(DataKind::ReceivedReduction, |d| {
+            scatter_columns(
+                d,
+                n,
+                receive.values.slice(packed),
+                receive.columns.slice(columns),
+                stores.multipoles.as_slice_mut(),
+            )
+        });
+        let moved = Traffic::between(before, self.link.device.counters());
+        exchanges.reduction_levels[level] = exchanges.reduction_levels[level].plus(moved);
     }
 
     /// [`HostData::ReceivedMultipoles`] of `level`: one upload of the exchange's receive
@@ -3547,6 +3701,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             build_traffic: self.build_traffic,
             evaluation_traffic: self.link.traffic,
             received_levels: self.exchanges.received_levels,
+            reduction_levels: self.exchanges.reduction_levels,
         }
     }
 
@@ -3931,11 +4086,13 @@ impl<T: DeviceScalar> FmmOperator for DeviceOperator<T> {
                 self.receive_sources(sources.range(leaves).as_slice());
             }
             HostData::SendReduction {
-                level, exchange, ..
-            } => self.refuse_reduction(level, exchange.send_boxes(level)),
+                level,
+                exchange,
+                multipoles,
+            } => self.send_reduction(level, exchange.send_boxes(level), multipoles),
             HostData::ReceivedReduction {
                 level, exchange, ..
-            } => self.refuse_reduction(level, exchange.receive_boxes(level)),
+            } => self.receive_reduction(level, exchange.receive_buffer(level)),
             HostData::SendMultipoles { multipoles, .. } => self.send_multipoles(multipoles),
             HostData::ReceivedTop { top, .. } => self.receive_top(top.gathered()),
             HostData::ReceivedMultipoles {
@@ -4630,7 +4787,7 @@ mod tests {
         by.add(DataKind::Output, t);
         assert_eq!(by.get(DataKind::Output).downloads, 4);
         assert_eq!(by.total().upload_bytes, 24);
-        assert_eq!(DataKind::ALL.len(), 13);
+        assert_eq!(DataKind::ALL.len(), 15);
         assert!(
             DataKind::ALL
                 .iter()

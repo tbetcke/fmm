@@ -374,6 +374,8 @@ fn median_stages(timings: &[StageTimings]) -> StageTimings {
         exchange_sources: stage(|t| t.exchange_sources),
         upward_local: stage(|t| t.upward_local),
         upward_global: stage(|t| t.upward_global),
+        reduction: stage(|t| t.reduction),
+        replicated_top: stage(|t| t.replicated_top),
         exchange_multipoles: stage(|t| t.exchange_multipoles),
         downward: stage(|t| t.downward),
         evaluate_leaves: stage(|t| t.evaluate_leaves),

@@ -17,10 +17,14 @@
 //!   `TopExchange::chunk`, `MultipoleExchange::receive_buffer`; Phase 5S T5).
 //!
 //! So its output equals the plain operator's bit for bit exactly when the events cover
-//! every host read and write of the evaluator. With the hook disabled it ignores every
-//! event: on one rank, where no event carries data, one evaluation from fresh copies is
-//! still exact; on several ranks the received multipoles stay zero and the output
-//! differs ([`check_fmm`] reports how many values differ).
+//! every host read and write of the evaluator. With the hook disabled ([`Hook::Off`]) it
+//! ignores every event: on one rank, where no event carries data, one evaluation from
+//! fresh copies is still exact; on several ranks the received multipoles stay zero and
+//! the output differs ([`check_fmm`] reports how many values differ). With
+//! [`Hook::WithoutTopTree`] (Phase 5S T6) it ignores only the events of the owned top
+//! tree (`SendReduction`, `ReceivedReduction`, `ReceivedTop`), so the children other
+//! ranks send to the owner of a `Global` box and the boxes of the replicated top stay
+//! zero in its stores.
 //!
 //! [`check_fmm`] drives the plan's `Evaluator` with a [`Shadow`] on the octree and plan of
 //! a built `Fmm`, moves the points and charges to their owners with its own
@@ -44,11 +48,23 @@ use nd_fmm_plan::store::{LeafStore, LevelBuffers};
 use nd_fmm_tables::cache::Stored;
 use nd_octree::{MortonKey, constants::DEEPEST_LEVEL, morton};
 
+/// Which host-data events a [`Shadow`] follows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hook {
+    /// Every event.
+    On,
+    /// None.
+    Off,
+    /// Every event but those of the owned top tree of Phase 5S T5: `SendReduction`,
+    /// `ReceivedReduction` and `ReceivedTop` (Phase 5S T6).
+    WithoutTopTree,
+}
+
 /// `LaplaceOperator` on its own copies of the stores (module documentation).
 pub struct Shadow<T: SimdScalar + Equivalence + Default> {
     operator: LaplaceOperator<T>,
-    /// Whether it follows the host-data events; without, it ignores them.
-    hook: bool,
+    /// Which host-data events it follows; it ignores the others.
+    hook: Hook,
     /// The host-data events received.
     events: usize,
     multipoles: LevelBuffers<T>,
@@ -63,8 +79,8 @@ pub struct Shadow<T: SimdScalar + Equivalence + Default> {
 
 impl<T: SimdScalar + Equivalence + Default> Shadow<T> {
     /// A shadow of `operator`, without stores until [`attach`](Self::attach); `hook`
-    /// says whether it follows the host-data events.
-    pub fn new(operator: LaplaceOperator<T>, hook: bool) -> Self {
+    /// says which host-data events it follows.
+    pub fn new(operator: LaplaceOperator<T>, hook: Hook) -> Self {
         Self {
             operator,
             hook,
@@ -247,7 +263,13 @@ impl<T: SimdScalar + Equivalence + Default> FmmOperator for Shadow<T> {
 
     fn host_data(&mut self, event: HostData<'_, T>) {
         self.events += 1;
-        if !self.hook {
+        let top_tree = matches!(
+            event,
+            HostData::SendReduction { .. }
+                | HostData::ReceivedReduction { .. }
+                | HostData::ReceivedTop { .. }
+        );
+        if self.hook == Hook::Off || (self.hook == Hook::WithoutTopTree && top_tree) {
             return;
         }
         match event {
@@ -376,8 +398,8 @@ fn keys(
 }
 
 /// The shadow check of `fmm`, built from this rank's `sources` and `targets` with one
-/// thread on the host: the evaluator with a [`Shadow`] of `fmm`'s operator (`hook` on or
-/// off) on `fmm`'s plan, every `(charges, output)` of `evaluations` evaluated in turn on
+/// thread on the host: the evaluator with a [`Shadow`] of `fmm`'s operator (following the
+/// events `hook` names) on `fmm`'s plan, every `(charges, output)` of `evaluations` evaluated in turn on
 /// the same evaluator (so a second one depends on `Reset`), by its overlapped stages with
 /// `overlapped` (Phase 5 T9), each output compared with the `Fmm`'s bit for bit.
 /// Collective; the verdict is the same on every rank.
@@ -385,7 +407,7 @@ pub fn check_fmm<T: Stored + SimdScalar + Equivalence + Default>(
     fmm: &Fmm<'_, T>,
     (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
     evaluations: &[(&[T], &Output<T>)],
-    (hook, overlapped): (bool, bool),
+    (hook, overlapped): (Hook, bool),
     comm: &SimpleCommunicator,
 ) -> Verdict {
     let (octree, plan, domain) = (fmm.octree(), fmm.plan(), fmm.domain());

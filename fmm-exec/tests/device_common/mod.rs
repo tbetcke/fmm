@@ -69,10 +69,13 @@
 //! On several ranks (Phase 5 T8, docs/design/distributed-fmm.md §7) every check runs as on
 //! one rank, against the host path on the same ranks: the host output and expansions there,
 //! and the formula extended by the exchanges' transfers on this rank
-//! ([`expected_evaluation`], from `Fmm::exchange_sizes`): the ghost tail of the sources up,
-//! the sent multipoles down in one download (one more sync), the other ranks' coarse
-//! blocks up, and each level's received ghost multipoles up, with a gather and a scatter
-//! launch each. On one rank these are all zero, and the Phase 4 formula holds unchanged.
+//! ([`expected_evaluation`], from `Fmm::exchange_sizes`): the ghost tail of the sources up;
+//! per reduction level (Phase 5S T6, docs/design/scale-out.md §4.5) the multipoles the
+//! upward reduction sends down in one download (one more sync each) and the children it
+//! receives up; the sent multipoles down in one download (one more sync), the other
+//! ranks' boxes of the replicated top up, and each level's received ghost multipoles up,
+//! with a gather and a scatter launch each. On one rank these are all zero, and the Phase
+//! 4 formula holds unchanged.
 //!
 //! Error measures: exact equality (bit patterns, counts and bytes), and the relative L2
 //! difference from the host output.
@@ -202,12 +205,18 @@ impl Expected {
 /// - launches: the three zero kernels of non-empty stores and the charge scatter if
 ///   there is a source, and with the output pass on the device (Phase 4S T9) its gather
 ///   if there is a target; syncs: one per download;
-/// - on several ranks (Phase 5 T8, design §7.2), with G_s ghost source points, B_o and B_r
-///   sent and received coarse blocks and S_l and R_l sent and received boxes of level l
-///   (`Fmm::exchange_sizes`): up 4 G_s s (the ghost tail, if G_s > 0); down (B_o +
-///   Σ_l S_l) n_c s in one download after one gather launch (if anything is sent); up
-///   B_r n_c s and one scatter launch (if B_r > 0); per level with R_l > 0 up R_l n_c s
-///   and one scatter launch. Every placement moves them, the host fallback as the device.
+/// - on several ranks (Phase 5 T8, design §7.2), with G_s ghost source points, S^red_l and
+///   R^red_l boxes the upward reduction of level l sends and receives (Phase 5S T6), B_o
+///   and B_r sent and received boxes of the replicated top (Phase 5S T5; the coarse blocks
+///   before) and S_l and R_l sent and received boxes of level l (`Fmm::exchange_sizes`):
+///   up 4 G_s s (the ghost tail, if G_s > 0); per level with S^red_l > 0 down S^red_l
+///   n_c s in one download after one gather launch, and with R^red_l > 0 up R^red_l n_c s
+///   and one scatter launch; down (B_o + Σ_l S_l) n_c s in one download after one gather
+///   launch (if anything is sent); up B_r n_c s and one scatter launch (if B_r > 0); per
+///   level with R_l > 0 up R_l n_c s and one scatter launch. So an evaluation syncs
+///   1 + [anything sent] + r_s times, r_s the reduction levels at which the rank sends,
+///   at most 2 + r_s (docs/design/scale-out.md §4.5). Every placement moves them, the host
+///   fallback as the device.
 ///
 /// A kind in `on_device` (T6: P2P; T7: P2M, P2L, L2P, M2P; T8: M2M, L2L; T9: M2L) moves
 /// nothing: each of its level calls is one launch instead of its downloads and uploads, or
@@ -277,6 +286,17 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
     let x = fmm.exchange_sizes();
     if x.ghost_sources > 0 {
         e.up(DataKind::GhostSources, 4 * x.ghost_sources * s);
+    }
+    // The upward reduction, level by level (Phase 5S T6).
+    for (&sent, &received) in x.sent_reduction.iter().zip(&x.received_reduction) {
+        if sent > 0 {
+            e.launches += 1;
+            e.down(DataKind::SentReduction, sent * nc * s);
+        }
+        if received > 0 {
+            e.up(DataKind::ReceivedReduction, received * nc * s);
+            e.launches += 1;
+        }
     }
     let sent = x.sent_top + x.sent_boxes.iter().sum::<usize>();
     if sent > 0 {
@@ -418,9 +438,12 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
     e
 }
 
-/// The exchanges' kinds of data (Phase 5 T8), which move only on several ranks.
-const EXCHANGES: [DataKind; 4] = [
+/// The exchanges' kinds of data (Phase 5 T8; the reduction's from Phase 5S T6), which move
+/// only on several ranks.
+const EXCHANGES: [DataKind; 6] = [
     DataKind::GhostSources,
+    DataKind::SentReduction,
+    DataKind::ReceivedReduction,
     DataKind::SentMultipoles,
     DataKind::TopMultipoles,
     DataKind::ReceivedMultipoles,
@@ -456,7 +479,8 @@ pub fn check_reference<T: Stored + SimdScalar + Equivalence + Default>(
 /// With every kind on the device, `expected` is the design's minimum (device-path.md
 /// §4.1, §8.1, §8.2): one upload of the charges, one download of the output, one sync,
 /// and nothing moved by a host-fallback call; on several ranks (Phase 5 T8, design §7.2)
-/// besides the exchanges' transfers, and one more sync where the rank sends multipoles.
+/// besides the exchanges' transfers, one more sync where the rank sends multipoles and
+/// one per reduction level at which it sends (Phase 5S T6: at most 2 + r_s).
 fn check_minimum<T: Stored + SimdScalar + Equivalence + Default>(
     backend: Backend,
     fmm: &Fmm<'_, T>,
@@ -492,10 +516,22 @@ fn check_minimum<T: Stored + SimdScalar + Equivalence + Default>(
         sends <= 1,
         "{backend}: at most one download of the sent multipoles"
     );
+    let reduction_sends = fmm
+        .exchange_sizes()
+        .sent_reduction
+        .iter()
+        .filter(|&&n| n > 0)
+        .count() as u64;
+    assert_eq!(
+        expected.traffic[DataKind::SentReduction as usize].downloads,
+        reduction_sends,
+        "{backend}: one download per reduction level at which the rank sends"
+    );
     assert_eq!(
         expected.syncs,
-        1 + sends,
-        "{backend}: one sync per evaluation, one more where the rank sends"
+        1 + sends + reduction_sends,
+        "{backend}: one sync per evaluation, one more where the rank sends and one per \
+         reduction level at which it sends"
     );
 }
 
@@ -521,6 +557,31 @@ fn check_received_levels<T: Stored + SimdScalar + Equivalence + Default>(
             *traffic, want,
             "{what}: received multipoles of level {level}"
         );
+    }
+}
+
+/// Checks the upward reduction of the last evaluation of `fmm` level by level
+/// (`DeviceCounters::reduction_levels`, Phase 5S T6): one download of S^red_l n_c s bytes on
+/// each level at which the rank sends, one upload of R^red_l n_c s bytes on each level at
+/// which it receives, nothing elsewhere.
+fn check_reduction_levels<T: Stored + SimdScalar + Equivalence + Default>(
+    what: &str,
+    fmm: &Fmm<'_, T>,
+) {
+    let counters = fmm.device_counters().expect("a device backend");
+    let nc = ((fmm.p() + 1) * (fmm.p() + 1)) as u64;
+    let s = size_of::<T>() as u64;
+    let sizes = fmm.exchange_sizes();
+    for (level, traffic) in counters.reduction_levels.iter().enumerate() {
+        let sent = sizes.sent_reduction.get(level).copied().unwrap_or(0) as u64;
+        let received = sizes.received_reduction.get(level).copied().unwrap_or(0) as u64;
+        let want = Traffic {
+            uploads: u64::from(received > 0),
+            upload_bytes: received * nc * s,
+            downloads: u64::from(sent > 0),
+            download_bytes: sent * nc * s,
+        };
+        assert_eq!(*traffic, want, "{what}: the reduction of level {level}");
     }
 }
 
@@ -561,6 +622,7 @@ fn check_evaluation_counters<T: Stored + SimdScalar + Equivalence + Default>(
          syncs)"
     );
     check_received_levels(what, fmm);
+    check_reduction_levels(what, fmm);
 }
 
 /// Checks that the device's copy of `view` is the plan's, and that its row-to-batch map
