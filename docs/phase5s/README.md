@@ -495,7 +495,7 @@ In the repository root, start `claude` and say:
 - [x] T4 merged: `Plan::new` over the locally essential set; bit for bit; held boxes bounded in P to 512 (locust) and 640 (Kathleen) oversubscribed ranks
 - [x] T5 merged: the owned top tree in `nd-fmm-plan`; the coarse gather removed; bit for bit
 - [x] T6 merged: `Fmm`, device events and overlap on the owned top tree; bit for bit; device gate passes
-- [ ] T7 merged: the work-weighted cut; modelled cost max/mean within the target at 512–640 oversubscribed ranks; measured imbalance at 72 and 160 ranks
+- [x] T7 merged: the work-weighted cut; modelled cost max/mean within the target at 512–640 oversubscribed ranks; measured imbalance at 72 and 160 ranks
 - [ ] T8 merged: S4, S5 and S8 built or closed by counts, bytes and models
 - [ ] T9 merged: scaling report published; Phase 6 briefs revised (decision 7)
 - [ ] Design documents updated: laplace-fmm-plan §7 (Phase 5S status and numbers), §8, §9; distributed-fmm.md §14/§15 notes; `scale-out.md` outcome section; workspace-structure §3, §3.1, §4 and §6
