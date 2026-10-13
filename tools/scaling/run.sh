@@ -42,6 +42,24 @@
 #                   p = 8, correctness and memory only (never a timing); the soft limit
 #                   of open files is raised to the hard limit for these launches
 #
+# Sweeps of the work-weighted cut (Phase 5S T7, docs/phase5s/T7-work-weighted-cut.md;
+# docs/design/scale-out.md §6), every launch with --kinds unless counted only:
+#   calibrate       the constants of the cost model: one rank per core of the machine (or
+#                   of the job's nodes), the cube, the Plummer sphere and the clusters at
+#                   N = CAL_N (default 10^7), f64 p = 3 Dense, f64 p = 8 Rotation, f32
+#                   p = 8 Rotation and Dense, the first cut (by points), overlap off, three
+#                   timed evaluations; the summary's alpha_ns are the fitted constants
+#   cut             the first cut against the second: the three workloads at every N of
+#                   CUT_NS (default "1000000 10000000"; under Slurm "10000000"), f64 p = 8
+#                   with the strategy of the rule, overlap off, three timed evaluations,
+#                   `--cut points` and `--cut work`; at the rank counts of CUT_RANKS
+#                   (default "8 72" on Linux, "8" on macOS), under Slurm at every split
+#                   of SPLITS on the job's nodes
+#   cut-counts      counted, never timed: the three workloads at N = 10^6 and 10^7, f64
+#                   p = 8 Rotation, both cuts, one warm-up evaluation; oversubscribed at
+#                   COUNT_RANKS (default 512 on Linux; under Slurm 80 and 160 ranks per
+#                   node, PSM2 with shared contexts, `--bind-to none`)
+#
 # Sweeps under Slurm only (Phase 5N T2, docs/phase5n/T2-kathleen-baseline.md), at the
 # job's node count, with SPLITS ranks x threads per node (default "40x1 2x20"):
 #   host            one rank on one node, at 1 thread and at every core: the N = 10^6
@@ -84,6 +102,9 @@
 #            starts (default 200, two cores): each launch waits, up to an hour, until
 #            they use less (a laptop's background jobs, such as a virus scanner, would
 #            otherwise share the cores), and the file records the wait
+#   ALPHA    if set, the eight constants of the cost model (`--alpha`, ns, comma-separated:
+#            P2M, M2M, M2L, P2L, L2L, L2P, M2P, P2P) for every launch: a machine's own,
+#            from its `calibrate` sweep (Phase 5S T7); the library's otherwise
 #   ONLY     if set, an extended regular expression: only the launches whose names match
 #            it run (for example the repeats of Phase 5S T0); the others are left out
 #            without a file
@@ -244,6 +265,12 @@ launch() {
     if [ "$os" = macos ]; then
         flags="--mca btl_tcp_if_include lo0 --mca oob_tcp_if_include lo0"
         if [ "$ranks" -gt 16 ]; then flags="$flags --oversubscribe"; fi
+    elif [ "$os" = slurm ] && [ -n "${OVERSUBSCRIBED:-}" ]; then
+        # Counts only (Phase 5S T7): Kathleen's oversubscribed launch of
+        # docs/design/scale-out.md §10.1, at most 160 ranks per node.
+        per_node=$((ranks / NODES))
+        flags="--report-bindings --oversubscribe --map-by ppr:$per_node:node --bind-to none \
+-x PSM2_SHAREDCONTEXTS=1"
     elif [ "$os" = slurm ]; then
         per_node=$((ranks / NODES))
         if [ $((per_node * NODES)) -ne "$ranks" ] || [ $((per_node * threads)) -gt "$CORES" ]; then
@@ -267,8 +294,10 @@ of $CORES cores evenly" | tee -a "${OUT}/skipped.txt"
             flags="--report-bindings --map-by slot:PE=$threads --bind-to core"
         fi
     fi
+    alpha=""
+    if [ -n "${ALPHA:-}" ]; then alpha="--alpha $ALPHA"; fi
     command="timeout $TIMEOUT mpirun $flags -n $ranks $exe --threads $threads --evals $EVALS \
---budget $BUDGET $*"
+--budget $BUDGET $alpha $*"
     if [ -n "${DRY_RUN:-}" ]; then
         echo "$command"
         return
@@ -473,6 +502,66 @@ for sweep in "$@"; do
                 --dist cube --n 1000000 --precision f64 --p 8 --overlap both \
                 --errors 8 --reference --evals 1
         done
+        ;;
+    calibrate)
+        n=${CAL_N:-10000000}
+        for dist in cube plummer clusters; do
+            for run in f64:3:dense f64:8:rotation f32:8:rotation f32:8:dense; do
+                prec=${run%%:*} rest=${run#*:}
+                p=${rest%%:*} strategy=${rest#*:}
+                launch "calibrate-$dist-n$n-$prec-p$p-$strategy-r${LARGEST}x1" "$LARGEST" 1 \
+                    --dist $dist --n "$n" --precision "$prec" --p "$p" --strategy "$strategy" \
+                    --overlap off --kinds --cut points --evals 3
+            done
+        done
+        ;;
+    cut)
+        if [ "$os" = slurm ]; then
+            ns=${CUT_NS:-10000000}
+            runs=""
+            for split in $SPLITS; do runs="$runs $((${split%x*} * NODES))x${split#*x}"; done
+        else
+            ns=${CUT_NS:-"1000000 10000000"}
+            runs=""
+            if [ "$os" = macos ]; then default=8; else default="8 72"; fi
+            for r in ${CUT_RANKS:-$default}; do runs="$runs ${r}x1"; done
+        fi
+        for n in $ns; do
+            for run in $runs; do
+                r=${run%x*} t=${run#*x}
+                for dist in cube plummer clusters; do
+                    for cut in points work; do
+                        launch "cut-$dist-n$n-f64-p8-$cut-N$NODES-r${r}x$t" "$r" "$t" \
+                            --dist $dist --n "$n" --precision f64 --p 8 --overlap off \
+                            --kinds --cut $cut --evals 3
+                    done
+                done
+            done
+        done
+        ;;
+    cut-counts)
+        if [ "$os" = macos ]; then
+            echo "cut-counts: locust and Kathleen only" >&2
+            continue
+        fi
+        if [ "$os" = slurm ]; then
+            counts=${COUNT_RANKS:-"$((80 * NODES)) $((160 * NODES))"}
+            OVERSUBSCRIBED=1
+        else
+            counts=${COUNT_RANKS:-512}
+        fi
+        for r in $counts; do
+            for n in 1000000 10000000; do
+                for dist in cube plummer clusters; do
+                    for cut in points work; do
+                        launch "cut-counts-$dist-n$n-f64-p8-$cut-N$NODES-r${r}x1" "$r" 1 \
+                            --dist $dist --n "$n" --precision f64 --p 8 --strategy rotation \
+                            --overlap off --cut $cut --evals 0
+                    done
+                done
+            done
+        done
+        OVERSUBSCRIBED=
         ;;
     host | nodes-strong | nodes-weak | nodes-check | nodes-large)
         if [ "$os" != slurm ]; then

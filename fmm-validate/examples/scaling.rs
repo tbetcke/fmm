@@ -81,6 +81,13 @@
 //!   strategy (the difference between strategies; Phase 5N T3);
 //! - `--kinds` every level call timed by operator kind (`KindTiming::Synchronous`): the
 //!   M2M, M2L and L2L parts per rank and the time per V pair (Phase 5N T3);
+//! - `--cut work|points` the blocks cut again by the modelled cost of their work (`work`,
+//!   the library's default, `FmmBuilder::work_cut`; Phase 5S T7) or by points only;
+//! - `--alpha a,a,a,a,a,a,a,a` the eight constants of the modelled cost in ns per counted
+//!   unit, P2M, M2M, M2L, P2L, L2L, L2P, M2P, P2P (`FmmBuilder::cost_model`; the library's
+//!   `CostModel::calibrated`, measured on Kathleen, if not given); with `--kinds` the
+//!   report fits them to the measured kind times (`scaling::ModelFit`, the `alpha_ns`
+//!   field of the summary), which is how a machine's constants are calibrated;
 //! - `--invariance k[,k…]` rank-count invariance against P/k ranks for each k (above),
 //!   with the overlap of `--overlap` (the large run evaluates its paths, the small runs
 //!   overlapped unless `--overlap off`) and the strategy of `--strategy` (`auto`: the one
@@ -89,6 +96,7 @@
 use mpi::Threading;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::Communicator;
+use nd_fmm_exec::cost::CostModel;
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::scaling::{HarnessError, Input, Overlap, Settings, Workload, invariance, run};
@@ -163,6 +171,26 @@ fn arguments() -> Arguments {
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap_or_else(|_| fail(&format!("--invariance: k[,k…], not {value}")));
                 args.invariance = Some(factors);
+            }
+            "--cut" => {
+                s.work_cut = match value.as_str() {
+                    "work" => true,
+                    "points" => false,
+                    _ => fail(&format!("--cut: work or points, not {value}")),
+                };
+            }
+            "--alpha" => {
+                let alpha = value
+                    .split(',')
+                    .map(|a| a.trim().parse::<f64>())
+                    .collect::<Result<Vec<_>, _>>()
+                    .ok()
+                    .and_then(|alpha| <[f64; 8]>::try_from(alpha).ok())
+                    .unwrap_or_else(|| fail(&format!("--alpha: eight numbers, not {value}")));
+                s.cost_model = Some(
+                    CostModel::new(alpha)
+                        .unwrap_or_else(|error| fail(&format!("--alpha: {error}"))),
+                );
             }
             "--evals" => s.evaluations = number(),
             "--builds" => s.builds = number().max(1),

@@ -21,6 +21,9 @@
 //!   ancestors of other ranks' blocks only, `Global` in Phase 5 and ghosts of their
 //!   owner now, and on one rank both are the same map.
 //!
+//! Every check runs again on the tree cut a second time (Phase 5S T7,
+//! `Octree::repartition`) by the square of each block's leaves.
+//!
 //! Rank 0 prints the held keys per rank, Phase 5 against now (max and mean over the
 //! ranks). Every check is agreed over all ranks before it is asserted, so a failure
 //! stops every rank, not one.
@@ -499,6 +502,21 @@ fn main() {
             let label = format!("{name}, ghost children {ghost_children}");
             let tree = Octree::new(&local, options, &comm);
             let sizes = check(&label, &tree, &comm);
+            // The second cut (Phase 5S T7): the same checks on the tree cut again by the
+            // square of each block's leaves, which moves blocks between the ranks.
+            let weights = tree
+                .coarse_tree_leafs()
+                .iter()
+                .map(|&block| {
+                    let below = tree
+                        .leaf_keys()
+                        .iter()
+                        .filter(|&&leaf| leaf == block || morton::is_ancestor(block, leaf));
+                    (below.count() as f64).powi(2)
+                })
+                .collect_vec();
+            let recut = tree.repartition(&weights, None);
+            check(&format!("{label}, second cut"), &recut, &comm);
             let empty = gather_to_all(&[tree.coarse_tree_leafs().is_empty()], &comm);
             if rank == 0 {
                 let (old_max, old_mean) = max_mean(&sizes.old);

@@ -21,7 +21,9 @@ docs/design/distributed-fmm.md) and C5.1 device with C5.2's device-resident ghos
 buffers (task T8: the device operator on any number of ranks through the host-data
 hook) and C5.2 (task T9: the exchanges overlapped with local work, `FmmBuilder::overlap`);
 Phase 5N, C5N.3 (task T4 in docs/phase5n/: the M2L strategy rule on the node, the table
-loading with a cache at scale, the ranks × threads guidance; design docs/design/node-m2l.md).
+loading with a cache at scale, the ranks × threads guidance; design docs/design/node-m2l.md);
+Phase 5S, C5S.3 (T6: the owned top tree in `Fmm`) and C5S.4 (T7: the work-weighted cut,
+module `cost`; design docs/design/scale-out.md §6).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -128,6 +130,30 @@ loading with a cache at scale, the ranks × threads guidance; design docs/design
     overflows MPI's counts. On P ranks the host output is bit for bit the one-rank `Fmm`
     over the union of the points in rank order; keep it so (the `fmm` module docs,
     "Several ranks").
+  - The work-weighted cut (Phase 5S T7, C5S.4, S3; docs/design/scale-out.md §6; the
+    `cost` and `fmm` module docs): on several ranks `build` cuts the coarse blocks a
+    second time by modelled cost, `FmmBuilder::work_cut` (on by default, decision 3 of
+    docs/phase5s/README.md; off: by points only, as before). Step 4 counts the points of
+    every local leaf where they are (one all-to-all-v of distinct keys with their source
+    and target counts, `cost::leaf_point_counts`), learns the ghost leaves' source counts
+    from the build of a `SourceExchange<u8>`, counts every own block's work by kind on the
+    first plan (`cost::work_counts`: P2M and L2P points, M2M and L2L pairs, V pairs, X
+    pairs × source points, W pairs × target points, near interactions n_t Σ n_s; the rows
+    of `Global` boxes belong to no block), weighs it with a `CostModel` (`cost_model`, by
+    default `CostModel::calibrated` for the strategy the host rule resolves with the ranks
+    per node agreed in step 2's all-reduce, the precision and p: Kathleen's constants,
+    scaled by powers of p + 1 away from the calibrated p), calls
+    `nd_octree::Octree::repartition` with `min_gain` `WORK_CUT_MIN_GAIN` (2 %: the new cut
+    only where it lowers the busiest rank's block cost by that much; signed off on
+    2026-10-13, `fmm-validate/results/phase5s-t7.md` §9) and builds the plan again where
+    the cut changed, before any point moves (`BuildTimings::cut`, `Fmm::recut`). `nd-octree` receives weights only. The constants are fixed
+    inputs, never timed in a build: the partition is deterministic, and only it depends
+    on them, never a bit of the output. `Fmm::{work_cut, recut, cost_model, kind_counts}` report
+    it. `tests/mpi_exec.rs` runs every scenario with it on, and **work-weighted cut**
+    checks it off against on bit for bit, that it moves points, and the counts summed over
+    the ranks against one rank; `tests/invariance.rs` and `tests/multi_rank.rs` run with
+    it on (the default). The input distribution "owners" of **input distributions** takes
+    the owners from an `Fmm`'s own octree (both cuts).
   - The host-data hook (Phase 5 T7; `nd_fmm_plan::operator::HostData`, design §6): the
     evaluator tells the operator of `reset` and of every exchange's reads and writes.
     `LaplaceOperator` keeps the default (nothing), and `ExecOperator` forwards the events

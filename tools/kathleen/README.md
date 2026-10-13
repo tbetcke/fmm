@@ -333,6 +333,20 @@ tools/kathleen/submit.sh --qos=small --nodes=4 --time=00:40:00 '--exclude=node-c
     '--export=ALL,ONLY=^nodes-strong-cube-n1000000-f64-p3-auto-N4-40x1$' -- sweep.sbatch nodes-strong
 ```
 
+The work-weighted cut (Phase 5S T7, `fmm-validate/results/phase5s-t7.md`): `calibrate`
+fits the cost model's constants (40 ranks, the three workloads at N = 10⁷, four
+configurations; 8 min of job 603049), `cut` times the first cut against the second at
+the job's nodes (N = 10⁷: 11 min at one node, 6 min at two; `CUT_NS` adds 10⁸ at four),
+and `cut-counts` counts both at 80 and 160 ranks per node, oversubscribed (put it last):
+
+```sh
+tools/kathleen/submit.sh --qos=singlenode --nodes=1 --time=02:00:00 -- sweep.sbatch calibrate
+tools/kathleen/submit.sh --qos=singlenode --nodes=1 --time=01:00:00 -- sweep.sbatch cut
+tools/kathleen/submit.sh --qos=test --nodes=2 --time=00:45:00 -- sweep.sbatch cut
+tools/kathleen/submit.sh --qos=small --nodes=4 --time=01:30:00 '--export=ALL,CUT_NS=10000000 100000000' \
+    -- sweep.sbatch cut cut-counts
+```
+
 `singlenode` and `test` take two jobs per user each, so two one-node and two two-node
 sweeps run at once; Phase 5S T0 kept at most two jobs pending or running in all. The output stays in the root's `logs/`, never in a tree; the report
 quotes what it needs.

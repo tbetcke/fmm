@@ -433,7 +433,14 @@ Each is recorded in the exit checklist when made:
    weighed by per-kind constants per strategy, precision and p, a second cut by
    `Octree::repartition` after `Plan::new`; the target ≤ 1.10 modelled at 512 (locust) and
    640 (Kathleen) oversubscribed ranks with blocks refined by cost, or ≤ 1.12 without that
-   refinement; the second cut on by default on several ranks.
+   refinement; the second cut on by default on several ranks. **Revisited on 2026-10-13 after T7's
+   measurements (`fmm-validate/results/phase5s-t7.md` §9):** the target accepted as
+   measured without refinement by cost (the modelled max over mean 1.02–1.12 at 320–640
+   oversubscribed ranks, the cube at N = 10⁶ on 512 locust ranks 1.124; question 1, option
+   a); the second cut on by default with a gain rule: blocks move only where the new cut
+   lowers the busiest rank's block cost by at least 2 % (`WORK_CUT_MIN_GAIN`; question 2,
+   option c), its build cost (31–41 % of a build at 40–160 ranks) being above the quarter
+   scale-out.md §6.4 set.
 4. The triggers of S4 and S5, stated on what can be measured: counts, bytes and memory at
    512–640 oversubscribed ranks and times to 160 ranks, with a model beyond (for example
    the sample sorts' message volume or a count all-to-all's modelled time at 10⁴ ranks

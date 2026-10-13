@@ -38,6 +38,12 @@
 //! traffic per rank (none on one rank, sent equal to received over the ranks), and the
 //! memory model's partition map.
 //!
+//! And those of Phase 5S T7: the second cut off and on (`Settings::work_cut`) with the
+//! constants named (`Settings::cost_model`): the work by kind per rank, summed over the
+//! ranks the same either way for the kinds no rank repeats (P2M, M2M, L2P, M2P, P2P);
+//! each rank's modelled cost the constants times its counts; the constants fitted to the
+//! kind times (`PathTimes::fit`) finite and a valid model; the new summary fields.
+//!
 //! One test initialises MPI (at `Threading::Funneled`). Error measures: as named at each
 //! check; the timings are only checked to be finite and non-negative.
 
@@ -45,6 +51,7 @@ use mpi::Threading;
 use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, CommunicatorCollectives};
+use nd_fmm_exec::cost::CostModel;
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::scaling::{
@@ -137,6 +144,7 @@ fn smoke_run_of_the_scaling_core() {
     }
     inputs_rank0_and_owners(&comm);
     kinds_and_reference_strategy(&comm);
+    work_cut_and_cost_model(&comm);
     refusals(&comm);
     rank_count_invariance(&comm);
 }
@@ -426,6 +434,66 @@ fn kinds_and_reference_strategy(comm: &SimpleCommunicator) {
     ] {
         assert!(summary.contains(key), "{key} missing from {summary}");
     }
+}
+
+/// The second cut and the cost model (Phase 5S T7; module documentation).
+fn work_cut_and_cost_model(comm: &SimpleCommunicator) {
+    let model = CostModel::new([100.0, 400.0, 500.0, 100.0, 400.0, 200.0, 200.0, 2.0])
+        .expect("valid constants");
+    let mut totals = Vec::new();
+    let mut fitted = None;
+    for work_cut in [false, true] {
+        let settings = Settings {
+            strategy: M2lStrategy::Rotation,
+            evaluations: 2,
+            kinds: true,
+            work_cut,
+            cost_model: Some(model),
+            ..Settings::new(3)
+        };
+        let report = run::<f64>(&WORKLOAD, &settings, comm).expect("a run");
+        assert_eq!(report.cost_model, model);
+        assert!(work_cut || !report.recut, "no recut without the second cut");
+        let mut total = [0u64; 8];
+        for row in &report.rows {
+            let counts = row.kind_counts;
+            for (t, c) in total.iter_mut().zip(counts) {
+                *t += c;
+            }
+            let cost: f64 = (0..8).map(|k| model.to_array()[k] * counts[k] as f64).sum();
+            assert!((row.modelled - 1e-9 * cost).abs() <= 1e-12 * cost.max(1.0));
+        }
+        assert!(
+            total[0] > 0 && total[7] > 0,
+            "P2M and P2P counted: {total:?}"
+        );
+        totals.push(total);
+        let fit = report.paths[0].fit(&report.rows).expect("kind timings");
+        assert!(
+            fit.alpha.iter().all(|a| a.is_finite() && *a >= 0.0),
+            "{fit:?}"
+        );
+        assert!(fit.error_max.is_finite() && fit.measured_imbalance >= 1.0);
+        let summary = &report.summaries()[0];
+        let cut = if work_cut { "cut=work" } else { "cut=points" };
+        for key in [
+            cut,
+            "recut=",
+            "modelled_imbalance=",
+            "cut_build_ms=",
+            "alpha_ns=",
+        ] {
+            assert!(summary.contains(key), "{key} missing from {summary}");
+        }
+        fitted = Some(fit);
+    }
+    // The kinds no rank repeats sum to the same work over the ranks with either cut.
+    for k in [0, 1, 5, 6, 7] {
+        assert_eq!(totals[0][k], totals[1][k], "kind {k}: {totals:?}");
+    }
+    // The fitted constants are a valid model (some kind was timed and counted).
+    let fit = fitted.expect("two runs");
+    assert!(CostModel::new(fit.alpha).is_ok(), "{fit:?}");
 }
 
 /// Every input found from the indices: every point once over the ranks, each rank's in

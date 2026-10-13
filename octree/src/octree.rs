@@ -577,6 +577,174 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
         }
     }
 
+    /// Cut the blocks among the ranks again, by the caller's weights, and return the tree
+    /// with the new ownership (the second cut, Phase 5S S3; docs/design/scale-out.md §6.3).
+    ///
+    /// [`Octree::new`] cuts the blocks by the keys under them. A caller that knows the
+    /// work of each block better, for example from an FMM plan of this tree, passes one
+    /// weight per own block, and the blocks are cut again at the nearest boundaries
+    /// (as [`Octree::new`] describes, ties to the later boundary) by those weights. The
+    /// blocks, the leaves and every key stay those of `self`; only which rank owns them
+    /// changes, and with it the partition map, the bounds and each rank's locally
+    /// essential keys ([`Octree::all_keys`]). The busiest rank's weight is at most the
+    /// mean plus the heaviest block. This crate never interprets a weight: it only
+    /// compares and adds them.
+    ///
+    /// The weights are cut after scaling to integers summing to about 2⁵²
+    /// (`round(w 2⁵² / W)` for the total `W`), so the cut depends only on the gathered
+    /// weights, the same on every rank, and never on the order of arrival. With no
+    /// weight at all, rank 0 takes every block. A rank may be left without blocks, as
+    /// with the first cut.
+    ///
+    /// With `min_gain` the new cut is taken only where it pays: when it lowers the
+    /// heaviest rank's weight, measured by the gathered weights under the current cut and
+    /// under the new one, by at least `min_gain` of it (new ≤ (1 − `min_gain`) current);
+    /// otherwise the current cut stays. Every rank decides alike from the same gathered
+    /// weights, so the rule adds no communication. Without it the new cut is always
+    /// taken.
+    ///
+    /// # Parameters
+    ///
+    /// - `weights`: One weight per own block ([`Octree::coarse_tree_leafs`]), in block
+    ///   order: finite and not negative. A rank without blocks passes `&[]`.
+    /// - `min_gain`: The relative reduction of the heaviest rank's weight below which the
+    ///   current cut stays, finite if given (for example `Some(0.02)`); `None` always
+    ///   takes the new cut.
+    ///
+    /// # Collective operation
+    ///
+    /// Every rank in the communicator must call it. On several ranks, in order: one
+    /// all-gather-v of the block weights (its counts from the partition map); then, unless
+    /// the current cut stays (the weights cut the blocks as they are cut already, or the
+    /// new cut gains less than `min_gain`: every rank finds the same from the same
+    /// weights, and then returns a copy of the tree), the move of the leaves to
+    /// their new owners (one all-to-all-v with its all-to-all of counts) and the push of
+    /// the locally essential keys, as in [`Octree::new`]. Debug builds add the
+    /// collectives of their invariant checks. On one rank nothing is communicated and the
+    /// tree is unchanged.
+    ///
+    /// # Panics
+    ///
+    /// Panics, before communicating, when the number of weights is not the number of own
+    /// blocks, a weight is negative or not finite, or `min_gain` is not finite. The other
+    /// ranks then wait in the first collective; a caller agrees such errors first.
+    ///
+    /// # Returns
+    ///
+    /// The tree with the same blocks, leaves and options, cut by the weights, or as it is
+    /// cut when the new cut does not gain `min_gain`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mpi::traits::Communicator;
+    /// let universe = mpi::initialize().expect("MPI must be initialized once");
+    /// use nd_octree::{morton, Octree, octree::OctreeOptions};
+    /// let comm = universe.world();
+    /// let rank = comm.rank() as usize;
+    /// let fine_keys: Vec<_> = (0..64)
+    ///     .map(|i| morton::from_index_and_level([i, 3 * rank, 7], 16))
+    ///     .collect();
+    /// let tree = Octree::new(&fine_keys, OctreeOptions::new().with_max_fine_keys(4), &comm);
+    /// // Weigh every own block by the number of its leaves.
+    /// let weights: Vec<f64> = tree
+    ///     .coarse_tree_leafs()
+    ///     .iter()
+    ///     .map(|&block| {
+    ///         let leaves = tree.leaf_keys();
+    ///         leaves.iter().filter(|&&leaf| block == leaf || morton::is_ancestor(block, leaf)).count() as f64
+    ///     })
+    ///     .collect();
+    /// let recut = tree.repartition(&weights, None);
+    /// assert_eq!(recut.partition_map().blocks(), tree.partition_map().blocks());
+    /// // Only where the busiest rank gets at least 2 % lighter.
+    /// let worthwhile = tree.repartition(&weights, Some(0.02));
+    /// ```
+    pub fn repartition(&self, weights: &[f64], min_gain: Option<f64>) -> Self {
+        let comm = self.comm;
+        let rank = comm.rank() as usize;
+        let size = comm.size() as usize;
+        let map = &self.partition_map;
+        assert_eq!(
+            weights.len(),
+            self.coarse_tree_leafs.len(),
+            "repartition needs one weight per own block"
+        );
+        if let Some((b, weight)) = weights
+            .iter()
+            .enumerate()
+            .find(|(_, w)| !(w.is_finite() && **w >= 0.0))
+        {
+            panic!("the weight {weight} of own block {b} is negative or not finite");
+        }
+        if let Some(gain) = min_gain {
+            assert!(gain.is_finite(), "the minimum gain {gain} is not finite");
+        }
+
+        // The weights of every block, on every rank, and the cut by them.
+        let offsets = (0..=size)
+            .map(|r| {
+                if r < size {
+                    map.rank_blocks(r).start
+                } else {
+                    map.blocks().len()
+                }
+            })
+            .collect_vec();
+        let all_weights = gather_block_weights(weights, &offsets, comm);
+        let quantized = quantize_weights(&all_weights);
+        drop(all_weights);
+        let partition = partition_blocks(&quantized, size);
+        // The same decision on every rank, from the same weights: the cut stays where it
+        // is the same, or where it does not lower the heaviest rank's weight enough.
+        let gains_too_little = min_gain.is_some_and(|gain| {
+            let current = heaviest_range(&quantized, &offsets) as f64;
+            let new = heaviest_range(&quantized, &partition) as f64;
+            new > (1.0 - gain) * current
+        });
+        drop(quantized);
+        if partition == offsets || gains_too_little {
+            return Self {
+                coarse_tree_leafs: self.coarse_tree_leafs.clone(),
+                leaf_keys: self.leaf_keys.clone(),
+                coarse_tree_bounds: self.coarse_tree_bounds.clone(),
+                partition_map: self.partition_map.clone(),
+                all_keys: self.all_keys.clone(),
+                neighbours: self.neighbours.clone(),
+                options: self.options,
+                comm,
+            };
+        }
+        let blocks = map.blocks().to_vec();
+        let coarse_tree_bounds = tree_bins(&blocks, &partition);
+        let coarse_tree = blocks[partition[rank]..partition[rank + 1]].to_vec();
+
+        // The leaves to their new owners; a block's leaf flag does not depend on the cut.
+        let leaf_tree = move_leaves(&self.leaf_keys, &coarse_tree_bounds, comm);
+        debug_assert!(is_complete_linear_and_balanced(&leaf_tree, comm));
+        let leaf_blocks = (0..blocks.len())
+            .map(|b| map.is_leaf_block(b))
+            .collect_vec();
+        let partition_map = PartitionMap::new(blocks, partition, &leaf_blocks, rank);
+        drop(leaf_blocks);
+
+        // The locally essential keys of the new ownership: S, the map's top-tree keys and
+        // the push.
+        let all_keys = generate_all_keys(&leaf_tree, &partition_map, self.options, comm);
+        let neighbours = compute_neighbours(&all_keys);
+
+        Self {
+            coarse_tree_leafs: coarse_tree,
+            leaf_keys: leaf_tree,
+            coarse_tree_bounds,
+            partition_map,
+            all_keys,
+            neighbours,
+            options: self.options,
+            comm,
+        }
+    }
+
     /// Return the options the tree was constructed with.
     /// # Returns
     /// The [`OctreeOptions`] passed to [`Octree::new`].

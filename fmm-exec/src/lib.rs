@@ -78,6 +78,9 @@
 //!   passed on any of them (C5.1; [`fmm`](fmm#several-ranks-c51)).
 //! - [`threading`]: the rules for rayon threads, MPI and BLAS, how to launch with one
 //!   BLAS thread, and the [`ThreadingReport`](threading::ThreadingReport) of an FMM.
+//! - [`cost`]: the modelled cost of an evaluation by operator kind
+//!   ([`CostModel`](cost::CostModel), [`KindCounts`](cost::KindCounts)), which weighs the
+//!   coarse blocks for the work-weighted cut on several ranks (Phase 5S T7, S3).
 //! - `device` (feature `gpu`): the device path, `DeviceOperator`, its report and its
 //!   accounting of transfers, launches and syncs (C4.1–C4.8).
 //!
@@ -177,6 +180,7 @@
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 //! [`RealScalar`]: nd_fmm_math::RealScalar
 
+pub mod cost;
 #[cfg(feature = "gpu")]
 pub mod device;
 pub mod fmm;

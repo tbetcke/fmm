@@ -156,6 +156,21 @@ with columns in the per-rank traffic table. `MemoryModel::partition` is the part
 of docs/design/scale-out.md §8.2 (8 B + B/8 + 8 (P + 1)) in place of the bounds' 8 P.
 Its report is `results/phase5s-t6.md`.
 
+Phase 5S T7 (the work-weighted cut, docs/design/scale-out.md §6) added to `scaling`:
+`Settings::{work_cut, cost_model}` (`--cut work|points`, the library's second cut on or
+off; `--alpha` eight constants in ns, `FmmBuilder::cost_model`), the build part "second
+cut" (`BUILD_PARTS`, `NBUILD` = 10, from `BuildTimings::cut`), `RankRow::{kind_counts,
+modelled}` (the work by kind from `Fmm::kind_counts` and the modelled cost with the run's
+constants, `Report::cost_model`), and `PathTimes::fit` (`ModelFit`: with `--kinds` the
+constants fitted to the kind times, Σ_r time over Σ_r count per kind, and how the model
+reproduces each rank's sum of kind times), `Report::recut` (`Fmm::recut`); the summary's
+`cut`, `recut`, `modelled_*`,
+`*_imbalance`, `cut_build_ms` and, with `--kinds`, `alpha_ns`, `model_error_max`,
+`kinds_imbalance` and `fit_imbalance`. `tools/scaling/run.sh` has the sweeps
+`calibrate`, `cut` and `cut-counts` (oversubscribed under Slurm with PSM2's shared
+contexts) and `ALPHA`. `tests/scaling.rs` covers them at 1 and 2 ranks. Its report is
+`results/phase5s-t7.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

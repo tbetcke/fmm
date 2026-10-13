@@ -770,6 +770,165 @@ pub(crate) fn partition_blocks(weights: &[u64], size: usize) -> Vec<usize> {
     bounds
 }
 
+/// The total weight that [`quantize_weights`] scales the block weights to: 2⁵², so that
+/// each block keeps its weight to about 2⁻⁵² of the total and the sums of
+/// [`partition_blocks`] stay exact.
+const QUANTIZED_TOTAL: f64 = (1u64 << 52) as f64;
+
+/// Turn real block weights into the integer weights of [`partition_blocks`] (Phase 5S
+/// S3, docs/design/scale-out.md §6.3).
+///
+/// Each weight becomes `round(w 2⁵² / W)`, `W` the sum of the weights in block order, so
+/// the cut by the integers is the nearest-boundary cut of the real weights up to about
+/// 2⁻⁵² of the total per block. The result depends only on the weights and their order,
+/// so every rank that holds the same weights computes the same integers. With no weight
+/// at all every block gets zero.
+///
+/// # Parameters
+///
+/// - `weights`: Block weights in block order, finite and not negative.
+///
+/// # Examples
+///
+/// ```ignore
+/// // This call is illustrative; `implementation` is private to the crate.
+/// assert_eq!(quantize_weights(&[1.0, 0.0, 3.0]), vec![1 << 50, 0, 3 << 50]);
+/// ```
+pub(crate) fn quantize_weights(weights: &[f64]) -> Vec<u64> {
+    debug_assert!(weights.iter().all(|w| w.is_finite() && *w >= 0.0));
+    let total: f64 = weights.iter().sum();
+    if total <= 0.0 {
+        return vec![0; weights.len()];
+    }
+    let scale = QUANTIZED_TOTAL / total;
+    weights
+        .iter()
+        .map(|&weight| (weight * scale).round() as u64)
+        .collect()
+}
+
+/// The weight of the heaviest range of a cut: the largest sum of `weights` over the
+/// ranges `partition[r]..partition[r + 1]` (Phase 5S S3; 0 without ranges).
+///
+/// # Parameters
+///
+/// - `weights`: Block weights in block order.
+/// - `partition`: The range boundaries of a cut, from 0 to the number of blocks.
+///
+/// # Examples
+///
+/// ```ignore
+/// // This call is illustrative; `implementation` is private to the crate.
+/// assert_eq!(heaviest_range(&[1, 2, 3, 4], &[0, 3, 4]), 6);
+/// ```
+pub(crate) fn heaviest_range(weights: &[u64], partition: &[usize]) -> u128 {
+    partition
+        .windows(2)
+        .map(|range| {
+            weights[range[0]..range[1]]
+                .iter()
+                .map(|&weight| weight as u128)
+                .sum::<u128>()
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// Gather every rank's block weights to every rank, in block order (Phase 5S S3).
+///
+/// # Parameters
+///
+/// - `own`: The weight of each of this rank's blocks, in block order.
+/// - `partition`: The `size + 1` range boundaries of the current cut; rank `r` passes
+///   `partition[r + 1] - partition[r]` weights.
+/// - `comm`: Communicator whose ranks enter this collective phase.
+///
+/// # Collective operation
+///
+/// One all-gather-v on more than one rank, its counts from the cut; every rank must
+/// enter, a rank without blocks with no weights. On one rank nothing is communicated.
+///
+/// # Examples
+///
+/// ```ignore
+/// // This call is illustrative; `implementation` is private to the crate.
+/// let comm = mpi::topology::SimpleCommunicator::self_comm();
+/// assert_eq!(gather_block_weights(&[2.0], &[0, 1], &comm), vec![2.0]);
+/// ```
+pub(crate) fn gather_block_weights<C: CommunicatorCollectives>(
+    own: &[f64],
+    partition: &[usize],
+    comm: &C,
+) -> Vec<f64> {
+    if comm.size() == 1 {
+        return own.to_vec();
+    }
+    let counts = partition
+        .windows(2)
+        .map(|range| i32::try_from(range[1] - range[0]).expect("a rank's blocks fit an MPI count"))
+        .collect_vec();
+    let displacements = partition[..partition.len() - 1]
+        .iter()
+        .map(|&offset| i32::try_from(offset).expect("the blocks fit an MPI displacement"))
+        .collect_vec();
+    let mut weights = vec![0.0f64; *partition.last().unwrap()];
+    comm.all_gather_varcount_into(
+        own,
+        &mut PartitionMut::new(&mut weights[..], &counts[..], &displacements[..]),
+    );
+    weights
+}
+
+/// Move this rank's leaves to the ranks that own them under new partition bounds
+/// (Phase 5S S3, docs/design/scale-out.md §6.3).
+///
+/// The leaves of every rank lie in its blocks, and the ranges of the blocks are
+/// contiguous, so the leaves of a rank go to consecutive ranks and arrive sorted: the
+/// received leaves, in sender order, are this rank's leaves under the new bounds.
+///
+/// # Parameters
+///
+/// - `leaves`: This rank's sorted leaves.
+/// - `bounds`: The new partition bounds of every rank, from [`tree_bins`].
+/// - `comm`: Communicator whose ranks enter this collective phase.
+///
+/// # Collective operation
+///
+/// One all-to-all-v (with its all-to-all of counts) on more than one rank; every rank
+/// must enter, a rank without leaves sending nothing. On one rank nothing is
+/// communicated.
+///
+/// # Examples
+///
+/// ```ignore
+/// // This call is illustrative; `implementation` is private to the crate.
+/// let comm = mpi::topology::SimpleCommunicator::self_comm();
+/// let root = [morton::root()];
+/// assert_eq!(move_leaves(&root, &root, &comm), vec![morton::root()]);
+/// ```
+pub(crate) fn move_leaves<C: CommunicatorCollectives>(
+    leaves: &[MortonKey],
+    bounds: &[MortonKey],
+    comm: &C,
+) -> Vec<MortonKey> {
+    if comm.size() == 1 {
+        return leaves.to_vec();
+    }
+    let counts = rank_counts(leaves, bounds, |&key| first_finest_descendant(key));
+    let (_received_counts, received) = all_to_allv(comm, &counts, leaves);
+    debug_assert!(
+        received.iter().tuple_windows().all(|(a, b)| a < b),
+        "the moved leaves arrive sorted"
+    );
+    debug_assert!(
+        received
+            .iter()
+            .all(|&key| owner_rank_for_key(bounds, key) == Some(comm.rank() as usize)),
+        "every moved leaf is owned by the rank that receives it"
+    );
+    received
+}
+
 /// The partition bounds of every rank: the first block of each rank's range.
 ///
 /// A rank with an empty range takes the bound of the next rank with blocks, or,
@@ -1940,9 +2099,9 @@ mod test {
             KeyCount, KeyType, LeafLocation, LookupError, OctreeOptions, PartitionMap,
             balance_closure, checked_predecessor, compute_neighbours, count_duplicates,
             counts_fit_mpi_i32, create_local_tree, first_finest_descendant, generate_all_keys,
-            local_block_counts, local_coarse_tree_weights, local_leaf_for_key, merge_key_counts,
-            owner_rank_for_key, partition_blocks, rank_counts, refine_heavy_blocks, tree_bins,
-            validate_fine_keys, validate_lookup_key, weight_rounds,
+            heaviest_range, local_block_counts, local_coarse_tree_weights, local_leaf_for_key,
+            merge_key_counts, owner_rank_for_key, partition_blocks, quantize_weights, rank_counts,
+            refine_heavy_blocks, tree_bins, validate_fine_keys, validate_lookup_key, weight_rounds,
         },
         tools::{generate_random_keys, seeded_rng},
     };
@@ -2380,6 +2539,94 @@ mod test {
             for (&start, &end) in bounds.iter().tuple_windows() {
                 let weight: u64 = weights[start..end].iter().sum();
                 assert!(weight * size as u64 <= total + heaviest * size as u64);
+            }
+        }
+    }
+
+    /// The second cut (Phase 5S S3): real weights scaled to integers and cut by
+    /// [`partition_blocks`], with heavy blocks, ties and empty ranges.
+    #[test]
+    fn test_cut_by_real_weights() {
+        let cut = |weights: &[f64], size| partition_blocks(&quantize_weights(weights), size);
+
+        // The scaling: integers proportional to the weights, summing to about 2⁵².
+        assert_eq!(
+            quantize_weights(&[1.0, 0.0, 3.0]),
+            vec![1 << 50, 0, 3 << 50]
+        );
+        assert_eq!(quantize_weights(&[0.0, 0.0]), vec![0, 0]);
+        assert!(quantize_weights(&[]).is_empty());
+        // Only the ratios matter.
+        assert_eq!(
+            quantize_weights(&[2.5e-9, 7.5e-9]),
+            quantize_weights(&[2.5e6, 7.5e6])
+        );
+
+        // The heaviest range of a cut, which the minimum gain compares.
+        assert_eq!(heaviest_range(&[1, 2, 3, 4], &[0, 3, 4]), 6);
+        assert_eq!(heaviest_range(&[1, 2, 3, 4], &[0, 2, 2, 4]), 7);
+        assert_eq!(heaviest_range(&[], &[0, 0, 0]), 0);
+
+        // Unit weights split evenly, as by keys.
+        assert_eq!(cut(&[1.0; 4], 2), vec![0, 2, 4]);
+        assert_eq!(cut(&[0.5; 6], 3), vec![0, 2, 4, 6]);
+        // Heavy blocks: the cut follows the weight, not the number of blocks.
+        assert_eq!(
+            cut(&[9.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], 2),
+            vec![0, 1, 10]
+        );
+        assert_eq!(cut(&[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 6.0], 2), vec![0, 6, 7]);
+        // A block heavier than a fair share goes whole to one range, and the
+        // neighbouring ranges may be empty.
+        assert_eq!(cut(&[1.0, 30.0, 1.0], 4), vec![0, 1, 2, 2, 3]);
+        assert_eq!(cut(&[100.0], 3), vec![0, 0, 1, 1]);
+        // Ties: zero weights between two equally close boundaries go to the earlier
+        // range (the later boundary), also in tiny real weights.
+        assert_eq!(cut(&[0.0, 2.0, 0.0, 0.0, 2.0, 0.0], 2), vec![0, 4, 6]);
+        assert_eq!(cut(&[0.0, 1e-300, 0.0, 0.0, 1e-300, 0.0], 2), vec![0, 4, 6]);
+        // No weight at all: the first range takes every block, the others are empty.
+        assert_eq!(cut(&[0.0, 0.0, 0.0], 3), vec![0, 3, 3, 3]);
+        assert_eq!(cut(&[], 2), vec![0, 0, 0]);
+        // One range takes everything.
+        assert_eq!(cut(&[3.0, 0.0, 2.0], 1), vec![0, 3]);
+
+        // Randomised, against the nearest boundaries of the real weights and the bound
+        // of design O3: no range weighs more than a fair share plus the heaviest block
+        // (up to the scaling's rounding, one unit per block).
+        let mut rng = seeded_rng(17);
+        for _ in 0..500 {
+            let nblocks = rng.random_range(0..40usize);
+            let size = rng.random_range(1..12usize);
+            let heavy = rng.random_range(1.0..1e6f64);
+            let weights = (0..nblocks)
+                .map(|_| match rng.random_range(0..4) {
+                    0 => 0.0,
+                    1 => heavy,
+                    _ => rng.random_range(0.0..10.0f64),
+                })
+                .collect_vec();
+            let bounds = cut(&weights, size);
+            assert_eq!(bounds.len(), size + 1);
+            assert_eq!((bounds[0], bounds[size]), (0, nblocks));
+            assert!(bounds.iter().tuple_windows().all(|(a, b)| a <= b));
+            let total: f64 = weights.iter().sum();
+            let heaviest = weights.iter().copied().fold(0.0f64, f64::max);
+            for (&start, &end) in bounds.iter().tuple_windows() {
+                let weight: f64 = weights[start..end].iter().sum();
+                assert!(weight <= total / size as f64 + heaviest + 1e-9 * total);
+            }
+            // Each boundary is a nearest boundary of the real prefix weights, within the
+            // rounding of the scaling.
+            let mut prefix = vec![0.0f64];
+            for &weight in &weights {
+                prefix.push(prefix.last().unwrap() + weight);
+            }
+            for p in 1..size {
+                let target = total * p as f64 / size as f64;
+                let best = (bounds[p - 1]..=nblocks)
+                    .map(|b| (prefix[b] - target).abs())
+                    .fold(f64::INFINITY, f64::min);
+                assert!((prefix[bounds[p]] - target).abs() <= best + 1e-9 * total.max(1.0));
             }
         }
     }
