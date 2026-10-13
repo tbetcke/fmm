@@ -25,7 +25,7 @@ on them, live outside this crate.
 | `src/constants.rs` | `DEEPEST_LEVEL = 16`, `NLEVELS`, `LEVEL_SIZE`, bit masks/displacements, the 26 `DIRECTIONS`, and the X/Y/Z encode/decode lookup tables. |
 | `src/geometry.rs` | `PhysicalBox` and physical/reference coordinate transforms. |
 | `src/octree.rs` | Public `Octree`, `OctreeOptions`, `PartitionWeight`, `KeyType`, `LeafLocation`, `LookupError`, `LookupBatchError`, `compute_global_bounding_box`, `points_to_morton`, `is_complete_linear_and_balanced`; re-exports `PartitionMap`. |
-| `src/octree/implementation.rs` | Private module with the distributed machinery: input validation, the key routing by weight that linearizes the input keys without a sort, the replicated coarse tree (capped at `max_level`), built by weight from the root, with the nearest-boundary cut and the partition bounds (ranges may be empty), redistribution, refinement, distributed balancing by routing the closure along the partition bounds, the blocks' leaf flags, the locally essential key set (the map's top-tree keys and the push), neighbour maps, and the leaf-lookup helpers. |
+| `src/octree/implementation.rs` | Private module with the distributed machinery: input validation, the key routing by weight that linearizes the input keys without a sort, the replicated coarse tree (capped at `max_level`), built by weight from the root, with the nearest-boundary cut and the partition bounds (ranges may be empty), redistribution, refinement, distributed balancing by routing the closure along the partition bounds, the blocks' leaf flags, the locally essential key set (the map's top-tree keys and the push), the second cut's helpers (the weights scaled to integers, gathered, and the leaves moved; Phase 5S T7), neighbour maps, and the leaf-lookup helpers. |
 | `src/octree/partition_map.rs` | Public `PartitionMap` (Phase 5S T3): every coarse block, the cut and a leaf bit per block, replicated on every rank; the owner, sharers and kind of any key without communication; its unit tests against brute force. |
 | `src/tools.rs` | `seeded_rng` (ChaCha8) and `generate_random_keys`. |
 | `src/types.rs` | Placeholder module (doc comment only). |
@@ -80,13 +80,18 @@ mpirun -n 3 target/debug/examples/test_mpi_locally_essential
 
 `test_mpi_weighted_partition` (Phase 5 T4) checks the partition by weight on four
 workloads: the leaves against the one-rank tree, the weight bound, independence of the
-input distribution, and a tree whose only block is the root. Run it also at 2, 4 and 8
-ranks for a change to the partition; `test_mpi_construction_edge_cases` at 1–8, and
-`test_mpi_leaf_lookup` at 8, where rank 1 owns no leaves. `test_mpi_locally_essential`
+input distribution, and a tree whose only block is the root; and (Phase 5S T7) the
+second cut, `Octree::repartition`, by five weights per block (uneven, heavy, zero,
+unit): the leaves the first cut's key for key, the nearest-boundary cut of the gathered
+weights, ownership, the held keys' kinds, one rank unchanged, a repeat a fixed point, and
+the minimum gain's decision against brute force.
+Run it also at 2, 4 and 8 ranks for a change to the partition;
+`test_mpi_construction_edge_cases` at 1–8, and `test_mpi_leaf_lookup` at 8, where rank 1 owns no leaves. `test_mpi_locally_essential`
 (Phase 5S T3) checks the partition map and the held keys against brute force over the
 gathered tree (H = N(S) ∪ C(N(S)) exactly, every key a list, the halo or a parent-child
-step names held, a subset of the Phase 5 set, which `examples/phase5_keys/` rebuilds);
-run it at 1–8 for a change to the held keys.
+step names held, a subset of the Phase 5 set, which `examples/phase5_keys/` rebuilds),
+also on every tree cut a second time (Phase 5S T7); run it at 1–8 for a change to the
+held keys.
 
 ## Invariants and domain rules
 
@@ -164,6 +169,18 @@ leaves, blocks and cut are the Phase 5 ones key for key (T3a checked them agains
 private copy of the Phase 5 construction, removed with T3). The coarse tree is
 replicated on every rank and cut into contiguous
 ranges at the block boundaries nearest to W p/P (O3; ties to the later boundary).
+`Octree::repartition(&self, weights, min_gain)` (Phase 5S T7, S3; docs/design/scale-out.md
+§6.3) cuts the same blocks again by the caller's weights, one per own block (an all-gather-v,
+the weights scaled to integers summing to about 2⁵² so that `partition_blocks` cuts
+them exactly as it cuts keys), moves the leaves to their new owners (one all-to-all-v;
+they arrive sorted) and rebuilds the partition map (the leaf bits do not depend on the
+cut) and H by the push. The coarse tree, the leaves and every key stay; only ownership
+changes, so the leaves stay the one-rank leaves. With `Some(min_gain)` the new cut is
+taken only if it lowers the heaviest rank's (scaled) weight by at least that fraction,
+decided alike on every rank from the gathered weights; otherwise, as when the new cut
+equals the current one, it returns a copy without the move and the push. One rank is
+unchanged. The crate never
+interprets a weight (no kernel knowledge: the FMM's cost model lives in `nd-fmm-exec`).
 A range may be empty (O4): such a rank owns no blocks or leaves, holds no key (its S is
 empty), and still enters every collective. The partition bounds are
 computed locally from the replicated tree; an empty rank takes the next non-empty

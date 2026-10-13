@@ -27,6 +27,28 @@
 //! rank owns the root, the others own nothing and hold no key (Phase 5S T3), on every
 //! rank count.
 //!
+//! The second cut (Phase 5S T7, S3; docs/design/scale-out.md §6.3,
+//! `Octree::repartition`): every workload's tree (the share) is cut again by several
+//! weights per block, the square of its leaves (strongly uneven), the levels of its
+//! leaves cubed, one heavy block (so that ranks are left without blocks), no weight at
+//! all (rank 0 takes every block) and unit weights, and each recut tree is checked:
+//! - **the leaves are the first cut's, key for key** (gathered in rank order), and so
+//!   are the blocks with their leaf flags;
+//! - the cut: contiguous ranges, each boundary the nearest to its target of the
+//!   gathered weights (up to the scaling's rounding), so every rank weighs at most a
+//!   fair share plus the heaviest block; leaves exactly on the ranks with blocks, each
+//!   in a block of its rank and owned by it;
+//! - complete, linear and 2:1 balanced; the held keys with the partition map's kinds,
+//!   the own leaves exactly the local leaves, every own block and every child of a
+//!   `Global` key held, the neighbour map over exactly the non-ghost keys; on one rank
+//!   the tree unchanged;
+//! - a second repartition by the same weights keeps the cut;
+//! - with a minimum gain (−1, 0, 0.02, 0.5, 1) the tree is the recut tree where the new
+//!   cut lowers the heaviest rank's weight by at least that fraction, and the first cut
+//!   otherwise, by brute force over the gathered weights.
+//!
+//! `test_mpi_locally_essential` checks the held keys of a recut tree by brute force.
+//!
 //! Phase 5S T3a also compared every tree key for key with a private copy of the Phase 5
 //! construction (the sample sorts), removed with T3, whose `test_mpi_locally_essential`
 //! checks the held keys.
@@ -356,6 +378,291 @@ fn check_root_only<C: CommunicatorCollectives>(name: &str, tree: &Octree<'_, C>,
     );
 }
 
+/// The weights of the second cut.
+#[derive(Clone, Copy, Debug)]
+enum Weights {
+    /// The square of the number of leaves of a block.
+    LeavesSquared,
+    /// The sum over the leaves of a block of the leaf's level cubed.
+    LevelsCubed,
+    /// Unit weights, but the last block of the tree weighs a million.
+    OneHeavy,
+    /// Every weight zero.
+    Zero,
+    /// Every weight one.
+    Unit,
+}
+
+/// The weight of each of this rank's blocks.
+fn block_weights<C: CommunicatorCollectives>(tree: &Octree<'_, C>, weights: Weights) -> Vec<f64> {
+    let leaves = tree.leaf_keys();
+    let nblocks = tree.partition_map().blocks().len();
+    let last = tree.partition_map().blocks()[nblocks - 1];
+    tree.coarse_tree_leafs()
+        .iter()
+        .map(|&block| {
+            let below = leaves
+                .iter()
+                .filter(|&&leaf| leaf == block || morton::is_ancestor(block, leaf));
+            match weights {
+                Weights::LeavesSquared => (below.count() as f64).powi(2),
+                Weights::LevelsCubed => below
+                    .map(|&leaf| (morton::level(leaf) as f64).powi(3))
+                    .sum(),
+                Weights::OneHeavy if block == last => 1e6,
+                Weights::OneHeavy | Weights::Unit => 1.0,
+                Weights::Zero => 0.0,
+            }
+        })
+        .collect()
+}
+
+/// The max over mean of the ranks' weights, given every block's weight and the number
+/// of blocks of every rank.
+fn max_over_mean(weights: &[f64], nblocks: &[usize]) -> f64 {
+    let total: f64 = weights.iter().sum();
+    if total == 0.0 {
+        return 1.0;
+    }
+    let mut start = 0;
+    let mut max = 0.0f64;
+    for &n in nblocks {
+        max = max.max(weights[start..start + n].iter().sum());
+        start += n;
+    }
+    max * nblocks.len() as f64 / total
+}
+
+/// Check `recut`, the second cut of `tree` by `own_weights`, and return its weight's
+/// max over mean with that of the first cut by the same weights.
+///
+/// # Collective operation
+/// Gathers and agreements; every rank must call it.
+fn check_recut<C: CommunicatorCollectives>(
+    name: &str,
+    tree: &Octree<'_, C>,
+    recut: &Octree<'_, C>,
+    own_weights: &[f64],
+    comm: &C,
+) -> (f64, f64) {
+    let rank = comm.rank() as usize;
+    let size = comm.size() as usize;
+    let map = recut.partition_map();
+
+    // The leaves, key for key, and the blocks with their leaf flags.
+    let first = gather_to_all(tree.leaf_keys(), comm);
+    let second = gather_to_all(recut.leaf_keys(), comm);
+    agree(
+        first == second,
+        &format!("{name}: the leaves of the first cut, key for key"),
+        comm,
+    );
+    let first_map = tree.partition_map();
+    let mut ok = map.blocks() == first_map.blocks();
+    ok &= (0..map.blocks().len()).all(|b| map.is_leaf_block(b) == first_map.is_leaf_block(b));
+    ok &= recut.options() == tree.options();
+    agree(
+        ok,
+        &format!("{name}: the blocks and their leaf flags"),
+        comm,
+    );
+
+    // The cut: contiguous ranges, each boundary nearest to its target.
+    let weights = gather_to_all(own_weights, comm);
+    let old_blocks = gather_to_all(&[tree.coarse_tree_leafs().len()], comm);
+    let new_blocks = gather_to_all(&[recut.coarse_tree_leafs().len()], comm);
+    let blocks = gather_to_all(recut.coarse_tree_leafs(), comm);
+    let total: f64 = weights.iter().sum();
+    let heaviest = weights.iter().copied().fold(0.0f64, f64::max);
+    let mut ok = blocks == map.blocks() && weights.len() == blocks.len();
+    let mut prefix = vec![0.0f64];
+    for &weight in &weights {
+        prefix.push(prefix.last().unwrap() + weight);
+    }
+    let mut start = 0;
+    for (r, &n) in new_blocks.iter().enumerate() {
+        ok &= map.rank_blocks(r) == (start..start + n);
+        let weight: f64 = weights[start..start + n].iter().sum();
+        ok &= weight <= total / size as f64 + heaviest + 1e-9 * total;
+        if r > 0 {
+            let target = total * r as f64 / size as f64;
+            let best = (map.rank_blocks(r - 1).start..=blocks.len())
+                .map(|b| (prefix[b] - target).abs())
+                .fold(f64::INFINITY, f64::min);
+            ok &= (prefix[start] - target).abs() <= best + 1e-9 * total;
+        }
+        start += n;
+    }
+    agree(ok, &format!("{name}: the nearest-boundary cut"), comm);
+
+    // Ownership: leaves exactly with blocks, each in one of its rank's blocks and owned by
+    // it; the bounds do not decrease.
+    let own_blocks = recut.coarse_tree_leafs();
+    let mut ok = recut.leaf_keys().is_empty() == own_blocks.is_empty();
+    ok &= recut
+        .coarse_tree_bounds()
+        .iter()
+        .tuple_windows()
+        .all(|(a, b)| a <= b);
+    for &leaf in recut.leaf_keys() {
+        ok &= own_blocks
+            .iter()
+            .any(|&block| block == leaf || morton::is_ancestor(block, leaf));
+        let (level, index) = morton::decode(leaf);
+        let shift = DEEPEST_LEVEL as usize - level;
+        for corner in [0, (1 << shift) - 1] {
+            let finest = morton::from_index_and_level(index.map(|i| (i << shift) | corner), 16);
+            ok &= recut.owner_rank(finest) == Ok(rank);
+            ok &= recut.local_leaf(finest) == Ok(Some(leaf));
+        }
+    }
+    agree(ok, &format!("{name}: ownership"), comm);
+    agree(
+        is_complete_linear_and_balanced(recut.leaf_keys(), comm),
+        &format!("{name}: complete, linear, balanced"),
+        comm,
+    );
+
+    // The held keys: the map's kinds, the own leaves, the own blocks, the children of the
+    // `Global` keys, the neighbour map.
+    let all_keys = recut.all_keys();
+    let mut ok = true;
+    let mut local_leaves = Vec::new();
+    for (&key, &kind) in all_keys {
+        if let Some(top_kind) = map.top_kind(key) {
+            ok &= kind == top_kind;
+        }
+        match kind {
+            KeyType::LocalLeaf => local_leaves.push(key),
+            KeyType::LocalInterior => ok &= map.owner(key) == rank,
+            KeyType::Global => {
+                ok &= own_blocks
+                    .iter()
+                    .any(|&block| morton::is_ancestor(key, block));
+                ok &= morton::children(key)
+                    .unwrap()
+                    .iter()
+                    .all(|child| all_keys.contains_key(child));
+            }
+            KeyType::GhostLeaf(owner) | KeyType::GhostInterior(owner) => {
+                ok &= owner != rank && map.owner(key) == owner;
+            }
+        }
+        ok &= recut.neighbour_map().contains_key(&key) != kind.is_ghost();
+    }
+    local_leaves.sort_unstable();
+    ok &= local_leaves == *recut.leaf_keys();
+    ok &= own_blocks
+        .iter()
+        .all(|block| all_keys.get(block).is_some_and(|kind| !kind.is_ghost()));
+    ok &= recut.neighbour_map().len() == all_keys.values().filter(|k| !k.is_ghost()).count();
+    agree(ok, &format!("{name}: the held keys"), comm);
+
+    // One rank: unchanged.
+    if size == 1 {
+        let mut ok = recut.all_keys() == tree.all_keys();
+        ok &= recut.coarse_tree_bounds() == tree.coarse_tree_bounds();
+        ok &= recut.neighbour_map() == tree.neighbour_map();
+        agree(ok, &format!("{name}: unchanged on one rank"), comm);
+    }
+
+    (
+        max_over_mean(&weights, &old_blocks),
+        max_over_mean(&weights, &new_blocks),
+    )
+}
+
+/// The minimum gain of `Octree::repartition`: with `min_gain` the tree is `recut` (the cut
+/// without it) where that lowers the heaviest rank's weight by at least `min_gain` of it,
+/// and `tree` unchanged otherwise, decided here by brute force over the gathered weights
+/// (a decision within 10⁻⁹ of the boundary, where the scaled integers may round either
+/// way, is not checked). -1 always takes the new cut (the mean plus the heaviest block is
+/// at most twice the current heaviest rank), 1 only a cut whose heaviest rank weighs
+/// nothing.
+///
+/// # Collective operation
+/// Repartitions, gathers and agreements; every rank must call it.
+fn check_min_gain<C: CommunicatorCollectives>(
+    name: &str,
+    tree: &Octree<'_, C>,
+    recut: &Octree<'_, C>,
+    own_weights: &[f64],
+    comm: &C,
+) {
+    let weights = gather_to_all(own_weights, comm);
+    let heaviest = |nblocks: &[usize]| {
+        let mut start = 0;
+        let mut max = 0.0f64;
+        for &n in nblocks {
+            max = max.max(weights[start..start + n].iter().sum());
+            start += n;
+        }
+        max
+    };
+    let current = heaviest(&gather_to_all(&[tree.coarse_tree_leafs().len()], comm));
+    let new = heaviest(&gather_to_all(&[recut.coarse_tree_leafs().len()], comm));
+    let total: f64 = weights.iter().sum();
+    for gain in [-1.0, 0.0, 0.02, 0.5, 1.0] {
+        let decided = tree.repartition(own_weights, Some(gain));
+        let margin = new - (1.0 - gain) * current;
+        let expected = if margin <= -1e-9 * total.max(1.0) || (new == 0.0 && gain <= 1.0) {
+            Some(recut)
+        } else if margin >= 1e-9 * total.max(1.0) {
+            Some(tree)
+        } else {
+            None
+        };
+        let ok = expected.is_none_or(|expected| {
+            decided.coarse_tree_bounds() == expected.coarse_tree_bounds()
+                && decided.partition_map() == expected.partition_map()
+                && decided.leaf_keys() == expected.leaf_keys()
+                && decided.all_keys() == expected.all_keys()
+        });
+        agree(ok, &format!("{name}: the minimum gain {gain}"), comm);
+    }
+}
+
+/// Cut `tree` again with every [`Weights`] and check each result ([`check_recut`]); a
+/// second repartition by the same weights keeps the cut, and the minimum gain keeps or
+/// takes it as the gathered weights say ([`check_min_gain`]).
+///
+/// # Collective operation
+/// Repartitions, gathers and agreements; every rank must call it.
+fn check_second_cut<C: CommunicatorCollectives>(name: &str, tree: &Octree<'_, C>, comm: &C) {
+    let rank = comm.rank() as usize;
+    let size = comm.size() as usize;
+    for weights in [
+        Weights::LeavesSquared,
+        Weights::LevelsCubed,
+        Weights::OneHeavy,
+        Weights::Zero,
+        Weights::Unit,
+    ] {
+        let label = format!("{name}, second cut by {weights:?}");
+        let own_weights = block_weights(tree, weights);
+        let recut = tree.repartition(&own_weights, None);
+        let (first, second) = check_recut(&label, tree, &recut, &own_weights, comm);
+        let empty = gather_to_all(&[recut.coarse_tree_leafs().is_empty()], comm);
+        // The weights of a block do not depend on its owner, so a second repartition
+        // keeps the cut.
+        let again = recut.repartition(&block_weights(&recut, weights), None);
+        agree(
+            again.coarse_tree_bounds() == recut.coarse_tree_bounds()
+                && again.all_keys() == recut.all_keys(),
+            &format!("{label}: the cut is a fixed point"),
+            comm,
+        );
+        check_min_gain(&label, tree, &recut, &own_weights, comm);
+        if rank == 0 {
+            println!(
+                "{label} on {size} rank(s): {} rank(s) without blocks; weight max/mean \
+                 {first:.3} by keys, {second:.3} by weight",
+                empty.iter().filter(|&&e| e).count(),
+            );
+        }
+    }
+}
+
 fn main() {
     let universe = mpi::initialize().unwrap();
     let comm = universe.world();
@@ -381,6 +688,9 @@ fn main() {
             let balance = check_tree(&label, &tree, &keys, &one_rank, &comm);
             partitions.push(gather_to_all(tree.coarse_tree_leafs(), &comm));
             partitions.push(tree.coarse_tree_bounds().clone());
+            if matches!(kind, Input::Share) {
+                check_second_cut(name, &tree, &comm);
+            }
             if rank == 0 {
                 println!(
                     "{label} on {size} rank(s): {} blocks, {} leaves, weight max/mean {:.3} \

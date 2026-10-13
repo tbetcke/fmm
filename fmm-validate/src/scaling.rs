@@ -105,6 +105,7 @@ use mpi::collective::SystemOperation;
 use mpi::datatype::PartitionMut;
 use mpi::topology::{Color, SimpleCommunicator};
 use mpi::traits::{Communicator, CommunicatorCollectives, Destination, Equivalence, Root, Source};
+use nd_fmm_exec::cost::CostModel;
 use nd_fmm_exec::fmm::{
     BuildTimings, ExchangeTraffic, Fmm, FmmBuilder, KindTiming, ListSizes, OperatorKind, Output,
     StageTimings, Traffic,
@@ -369,7 +370,7 @@ impl Overlap {
 }
 
 /// How a [`run`] builds, evaluates and checks.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Settings {
     /// The degree; gradients are always on.
     pub p: usize,
@@ -403,11 +404,19 @@ pub struct Settings {
     /// Whether every level call is timed by operator kind (`KindTiming::Synchronous`, one
     /// clock pair per call on the host; Phase 5N T3), into [`PathTimes::kinds`].
     pub kinds: bool,
+    /// Whether the blocks are cut a second time, by modelled cost
+    /// (`FmmBuilder::work_cut`, Phase 5S T7; on, as the library's default).
+    pub work_cut: bool,
+    /// The constants of the modelled cost (`FmmBuilder::cost_model`), or the library's
+    /// (`CostModel::calibrated`) if `None`; they weigh the second cut and give
+    /// [`RankRow::modelled`].
+    pub cost_model: Option<CostModel>,
 }
 
 impl Settings {
     /// Degree `p` on one thread, the default strategy, overlap off, the random share, one
-    /// build, ten evaluations, no checks, no kind timings.
+    /// build, ten evaluations, no checks, no kind timings, the second cut on with the
+    /// library's constants.
     pub const fn new(p: usize) -> Self {
         Self {
             p,
@@ -423,6 +432,8 @@ impl Settings {
             reference: false,
             reference_strategy: None,
             kinds: false,
+            work_cut: true,
+            cost_model: None,
         }
     }
 }
@@ -483,10 +494,11 @@ const EXCHANGES: [usize; 2] = [2, 9];
 
 /// The parts of the build as a [`run`] reports them, from `BuildTimings`, then the sum
 /// and the wall time of `build` on the rank; seconds.
-pub const BUILD_PARTS: [&str; 9] = [
+pub const BUILD_PARTS: [&str; NBUILD] = [
     "domain",
     "octree",
     "plan",
+    "second cut",
     "redistribution",
     "tables",
     "evaluator",
@@ -537,13 +549,17 @@ fn kind_values(t: &StageTimings) -> [f64; 8] {
     }
 }
 
+/// The number of [`BUILD_PARTS`].
+pub const NBUILD: usize = 10;
+
 /// The values of [`BUILD_PARTS`] for one build.
-fn build_values(t: &BuildTimings, wall: Duration) -> [f64; 9] {
+fn build_values(t: &BuildTimings, wall: Duration) -> [f64; NBUILD] {
     let s = Duration::as_secs_f64;
     [
         s(&t.domain),
         s(&t.octree),
         s(&t.plan),
+        s(&t.cut),
         s(&t.redistribute),
         s(&t.tables),
         s(&t.evaluator),
@@ -692,7 +708,7 @@ pub struct RankRow {
     /// The ghost source points the source exchange receives (G_s).
     pub ghost_sources: usize,
     /// [`BUILD_PARTS`], the median over the builds.
-    pub build: [f64; 9],
+    pub build: [f64; NBUILD],
     /// The traffic per evaluation.
     pub traffic: RankTraffic,
     /// The §9.2 formula, evaluated.
@@ -711,6 +727,12 @@ pub struct RankRow {
     pub plan_bytes: usize,
     /// The owned top tree (Phase 5S T5; docs/design/scale-out.md §4), per evaluation.
     pub top_tree: TopTreeRow,
+    /// The work by operator kind on this rank's plan (`Fmm::kind_counts`, Phase 5S T7),
+    /// in `OperatorKind::ALL` order, in the units of `nd_fmm_exec::cost`.
+    pub kind_counts: [u64; 8],
+    /// The modelled cost of an evaluation on this rank, Σ_k α_k c_k with the run's
+    /// constants ([`Report::cost_model`]), in seconds.
+    pub modelled: f64,
 }
 
 /// The levels a [`TopTreeRow`] counts per level: 0 to 16, the octree's deepest level.
@@ -793,7 +815,10 @@ impl TopTreeRow {
 /// The position in [`RankRow::encode`] of the second part of the held boxes, after the
 /// counts, the build, the traffic, the memory and the resident size; the third part, the
 /// resident size after the input and the last two parts follow.
-const ROW_VALUES: usize = 11 + 9 + 20 + MEMORY_PARTS + 1;
+const ROW_VALUES: usize = 11 + NBUILD + 20 + MEMORY_PARTS + 1;
+
+/// The position in [`RankRow::encode`] of the traffic, after the counts and the build.
+const ROW_TRAFFIC: usize = 11 + NBUILD;
 
 impl RankRow {
     /// The row as values, for an all-gather (every count is exact in f64).
@@ -846,13 +871,17 @@ impl RankRow {
         values.push(self.held[4] as f64);
         values.push(self.plan_bytes as f64);
         values.extend(self.top_tree.encode());
+        values.extend(self.kind_counts.map(|c| c as f64));
+        values.push(self.modelled);
         values
     }
 
     /// The row of [`encode`](Self::encode).
     fn decode(v: &[f64]) -> Self {
         let c = |k: usize| v[k] as usize;
-        let t = |k: usize| v[20 + k] as usize;
+        let t = |k: usize| v[ROW_TRAFFIC + k] as usize;
+        let memory = ROW_TRAFFIC + 20;
+        let kinds = ROW_VALUES + 6 + TopTreeRow::VALUES;
         Self {
             input: c(0),
             sources: c(1),
@@ -899,11 +928,13 @@ impl RankRow {
                 charges: [t(16), t(17)],
                 output: [t(18), t(19)],
             },
-            memory: MemoryModel::from_array(&v[40..40 + MEMORY_PARTS]),
-            resident: (v[40 + MEMORY_PARTS] >= 0.0).then_some(v[40 + MEMORY_PARTS]),
+            memory: MemoryModel::from_array(&v[memory..memory + MEMORY_PARTS]),
+            resident: (v[memory + MEMORY_PARTS] >= 0.0).then_some(v[memory + MEMORY_PARTS]),
             resident_input: (v[ROW_VALUES + 2] >= 0.0).then_some(v[ROW_VALUES + 2]),
             plan_bytes: c(ROW_VALUES + 5),
-            top_tree: TopTreeRow::decode(&v[ROW_VALUES + 6..ROW_VALUES + 6 + TopTreeRow::VALUES]),
+            top_tree: TopTreeRow::decode(&v[ROW_VALUES + 6..kinds]),
+            kind_counts: core::array::from_fn(|k| v[kinds + k] as u64),
+            modelled: v[kinds + 8],
         }
     }
 }
@@ -964,6 +995,69 @@ impl PathTimes {
                 .fold(0.0, f64::max)
         };
         (max(EXPOSED), max(EXCHANGES))
+    }
+}
+
+/// The cost model of `nd_fmm_exec::cost` against the measured kind times of a path
+/// (Phase 5S T7; docs/design/scale-out.md §6.1): the constants fitted to them, and how
+/// well the model reproduces every rank's compute.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ModelFit {
+    /// The fitted constants α_k, in ns per counted unit, in [`KINDS`] order: the time of
+    /// kind k summed over the ranks over its count summed over the ranks (0 for a kind
+    /// without a count).
+    pub alpha: [f64; 8],
+    /// The largest relative difference over the ranks between the modelled compute with
+    /// the fitted constants and the measured one (the sum of the kind times).
+    pub error_max: f64,
+    /// The measured compute's max over mean (the sum of the kind times per rank).
+    pub measured_imbalance: f64,
+    /// The modelled compute's max over mean, with the fitted constants.
+    pub fitted_imbalance: f64,
+    /// The modelled compute's max over mean, with the run's constants
+    /// ([`RankRow::modelled`]).
+    pub modelled_imbalance: f64,
+}
+
+impl PathTimes {
+    /// The fit of the cost model to this path's kind times and the ranks' counts; `None`
+    /// without kind timings.
+    pub fn fit(&self, rows: &[RankRow]) -> Option<ModelFit> {
+        if self.kinds.is_empty() {
+            return None;
+        }
+        let alpha: [f64; 8] = core::array::from_fn(|k| {
+            let time: f64 = self.kinds.iter().map(|t| t[k]).sum();
+            let count: f64 = rows.iter().map(|r| r.kind_counts[k] as f64).sum();
+            if count > 0.0 { 1e9 * time / count } else { 0.0 }
+        });
+        let measured: Vec<f64> = self.kinds.iter().map(|t| t.iter().sum()).collect();
+        let fitted: Vec<f64> = rows
+            .iter()
+            .map(|r| {
+                (0..8)
+                    .map(|k| 1e-9 * alpha[k] * r.kind_counts[k] as f64)
+                    .sum()
+            })
+            .collect();
+        let imbalance = |values: &[f64]| {
+            let [max, _, mean] = reduce_over(values.iter().copied());
+            max / mean
+        };
+        let error_max = measured
+            .iter()
+            .zip(&fitted)
+            .filter(|(m, _)| **m > 0.0)
+            .map(|(m, f)| (f - m).abs() / m)
+            .fold(0.0, f64::max);
+        let modelled: Vec<f64> = rows.iter().map(|r| r.modelled).collect();
+        Some(ModelFit {
+            alpha,
+            error_max,
+            measured_imbalance: imbalance(&measured),
+            fitted_imbalance: imbalance(&fitted),
+            modelled_imbalance: imbalance(&modelled),
+        })
     }
 }
 
@@ -1052,6 +1146,12 @@ pub struct Report {
     /// Where the ranks ran: nodes, ranks per node, hosts and CPUs, the MPI library and
     /// the Slurm job (Phase 5N T2).
     pub placement: Placement,
+    /// The constants of the modelled cost (`Fmm::cost_model`, Phase 5S T7): those the
+    /// second cut weighed with, and those of [`RankRow::modelled`].
+    pub cost_model: CostModel,
+    /// Whether the second cut moved blocks (`Fmm::recut`): it ran and gained at least
+    /// `WORK_CUT_MIN_GAIN`.
+    pub recut: bool,
 }
 
 /// The resident size of this process in bytes and how it was read: the peak (`VmHWM`) from
@@ -1482,6 +1582,7 @@ fn rank_row<T: Stored + SimdScalar + Equivalence + Default>(
         output: [OUTPUT_VALUES * targets, OUTPUT_VALUES * input],
     };
     let held = held_boxes(fmm);
+    let counts = fmm.kind_counts();
     let k: usize = held.iter().sum();
     let leaves = fmm.plan().index().leaves();
     let (j_loc, j_all) = (leaves.nlocal(), leaves.len());
@@ -1521,13 +1622,15 @@ fn rank_row<T: Stored + SimdScalar + Equivalence + Default>(
         lists: fmm.list_sizes(),
         held,
         ghost_sources,
-        build: [0.0; 9],
+        build: [0.0; NBUILD],
         traffic: rank_traffic,
         memory,
         resident: None,
         resident_input: None,
         plan_bytes: plan_bytes(fmm),
         top_tree,
+        kind_counts: counts.to_array(),
+        modelled: fmm.cost_model().cost(&counts) * 1e-9,
     }
 }
 
@@ -1651,7 +1754,7 @@ fn bits<T: RealScalar>(output: &Output<T>) -> Vec<u64> {
 }
 
 /// The builder of `settings`: the harness's tree, gradients, the threads, the strategy and
-/// its node budget, overlap and the kind timings.
+/// its node budget, overlap, the kind timings, the second cut and its constants.
 fn builder<T: Stored + SimdScalar + Equivalence + Default>(settings: &Settings) -> FmmBuilder<T> {
     let mut builder = FmmBuilder::<T>::new(settings.p)
         .max_level(MAX_LEVEL)
@@ -1667,6 +1770,10 @@ fn builder<T: Stored + SimdScalar + Equivalence + Default>(settings: &Settings) 
         });
     if let Some(bytes) = settings.dense_node_budget {
         builder = builder.dense_node_budget(bytes);
+    }
+    builder = builder.work_cut(settings.work_cut);
+    if let Some(model) = settings.cost_model {
+        builder = builder.cost_model(model);
     }
     builder
 }
@@ -1846,6 +1953,8 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         reference,
         resident_kind: resident.map_or("not available", |(_, kind)| kind),
         placement,
+        cost_model: fmm.cost_model(),
+        recut: fmm.recut(),
     })
 }
 
@@ -2629,8 +2738,9 @@ impl Report {
                         mb(self.dense_bytes(self.threading.ranks_per_node))
                     ),
                     format!("wall_ms={}", ms(path.wall)),
-                    format!("build_ms={}", ms(build_max[8])),
-                    format!("redistribution_build_ms={}", ms(build_max[3])),
+                    format!("build_ms={}", ms(build_max[9])),
+                    format!("redistribution_build_ms={}", ms(build_max[4])),
+                    format!("cut_build_ms={}", ms(build_max[3])),
                 ];
                 for (k, key) in [
                     (0, "forward"),
@@ -2645,7 +2755,41 @@ impl Report {
                 ] {
                     fields.push(format!("{key}_max_ms={}", ms(path.reduced(k)[0])));
                 }
-                fields.push(format!("tables_ms={}", ms(build_max[4])));
+                fields.push(format!("tables_ms={}", ms(build_max[5])));
+                // The second cut (Phase 5S T7): the balance of the work and of the model.
+                let imbalance = |get: &dyn Fn(&RankRow) -> f64| {
+                    let [max, _, mean] = reduce_over(rows.iter().map(get));
+                    max / mean
+                };
+                fields.push(format!(
+                    "cut={}",
+                    if self.settings.work_cut {
+                        "work"
+                    } else {
+                        "points"
+                    }
+                ));
+                fields.push(format!("recut={}", if self.recut { "yes" } else { "no" }));
+                fields.push(format!(
+                    "modelled_max_ms={}",
+                    ms(max(&|r: &RankRow| r.modelled))
+                ));
+                fields.push(format!(
+                    "modelled_imbalance={:.3}",
+                    imbalance(&|r| r.modelled)
+                ));
+                fields.push(format!(
+                    "sources_imbalance={:.3}",
+                    imbalance(&|r| r.sources as f64)
+                ));
+                fields.push(format!(
+                    "leaves_imbalance={:.3}",
+                    imbalance(&|r| r.leaves as f64)
+                ));
+                fields.push(format!(
+                    "v_pairs_imbalance={:.3}",
+                    imbalance(&|r| r.lists.v as f64)
+                ));
                 fields.push(format!(
                     "v_pairs_max={}",
                     rows.iter().map(|r| r.lists.v).max().unwrap_or(0)
@@ -2662,6 +2806,13 @@ impl Report {
                         "m2l_us_per_pair={:.4}",
                         1e6 * path.per_v_pair(rows, |r| path.kinds[r][2])
                     ));
+                }
+                if let Some(fit) = path.fit(rows) {
+                    let alpha: Vec<String> = fit.alpha.iter().map(|a| format!("{a:.4}")).collect();
+                    fields.push(format!("alpha_ns={}", alpha.join(",")));
+                    fields.push(format!("model_error_max={:.4}", fit.error_max));
+                    fields.push(format!("kinds_imbalance={:.3}", fit.measured_imbalance));
+                    fields.push(format!("fit_imbalance={:.3}", fit.fitted_imbalance));
                 }
                 fields.push(format!("compute_max_ms={}", ms(compute[0])));
                 fields.push(format!("compute_mean_ms={}", ms(compute[2])));
@@ -2856,6 +3007,18 @@ impl fmt::Display for Report {
         if let Some(job) = &placement.slurm {
             writeln!(f, "- Slurm: {job}")?;
         }
+        writeln!(
+            f,
+            "- the cut: {}; the modelled cost's constants: {}",
+            if !s.work_cut {
+                "the blocks cut by points only"
+            } else if self.recut {
+                "the blocks cut again by modelled cost (Phase 5S T7)"
+            } else {
+                "the second cut gained less than 2 % and kept the cut by points"
+            },
+            self.cost_model
+        )?;
         writeln!(f)?;
 
         let per_rank = self.ranks <= PER_RANK_ROWS;
@@ -2900,7 +3063,7 @@ impl fmt::Display for Report {
             writeln!(f, "### Build per rank, ms")?;
             writeln!(f)?;
             writeln!(f, "| rank | {} |", BUILD_PARTS.join(" | "))?;
-            writeln!(f, "| --- | {} |", ["---"; 9].join(" | "))?;
+            writeln!(f, "| --- | {} |", ["---"; NBUILD].join(" | "))?;
             for (r, row) in self.rows.iter().enumerate() {
                 let cells: Vec<String> = row.build.iter().map(|&t| ms(t)).collect();
                 writeln!(f, "| {r} | {} |", cells.join(" | "))?;
@@ -2999,6 +3162,20 @@ impl fmt::Display for Report {
         let count = |v: f64| format!("{v:.0}");
         let bytes = |v: f64| format!("{v:.0}");
         line(f, "sources owned", &|r| r.sources as f64, &count)?;
+        line(
+            f,
+            "modelled cost (the run's constants), ms",
+            &|r| r.modelled,
+            &|v| ms(v),
+        )?;
+        for (k, kind) in KINDS.iter().enumerate() {
+            line(
+                f,
+                &format!("work: {kind} count"),
+                &|r| r.kind_counts[k] as f64,
+                &count,
+            )?;
+        }
         line(f, "leaves", &|r| r.leaves as f64, &count)?;
         line(f, "near pairs", &|r| r.lists.u as f64, &count)?;
         line(f, "V pairs", &|r| r.lists.v as f64, &count)?;
@@ -3315,6 +3492,26 @@ impl fmt::Display for Report {
                     1e6 * path.per_v_pair(rows, |r| path.medians[r][DOWNWARD])
                 )?;
                 writeln!(f)?;
+                if let Some(fit) = path.fit(rows) {
+                    let alpha: Vec<String> = KINDS
+                        .iter()
+                        .zip(fit.alpha)
+                        .map(|(kind, a)| format!("{kind} {a:.4}"))
+                        .collect();
+                    writeln!(
+                        f,
+                        "The cost model (Phase 5S T7): constants fitted to these kind times, ns \
+                         per counted unit: {}. With them the model is within {:.2} % of every \
+                         rank's sum of kind times; max / mean of that sum {:.3}, of the model \
+                         with the fitted constants {:.3}, with the run's constants {:.3}.",
+                        alpha.join(", "),
+                        100.0 * fit.error_max,
+                        fit.measured_imbalance,
+                        fit.fitted_imbalance,
+                        fit.modelled_imbalance
+                    )?;
+                    writeln!(f)?;
+                }
             }
             // The slowest rank in compute, and its share of the work.
             let slowest = path

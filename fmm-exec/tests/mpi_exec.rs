@@ -237,6 +237,20 @@
 //!   bit for bit its own one-rank reference, each within 100 u_T (1.1e-14 in f64, 6.0e-6
 //!   in f32; design §5.4) of the one-rank `Fmm` over the points in their order, and the
 //!   random share within 100 u_T of each of the other three; the relative max is printed.
+//! - **work-weighted cut** (Phase 5S T7, S3; docs/design/scale-out.md §6;
+//!   `FmmBuilder::work_cut`, on by default, so every other scenario runs it too): a
+//!   uniform cloud and a dense blob, N = 3,000, p = 5 `Rotation`, 16 points per leaf and
+//!   `max_level` 5 (so the blob's leaves hold hundreds of points and its P2P outweighs its
+//!   points), shared by rank, built with the second cut off and on. Both are bit for bit
+//!   their one-rank reference and each other; `Fmm::work_cut` says whether it ran (on
+//!   several ranks with the setting on) and `Fmm::recut` that it moved blocks (its gain
+//!   is far above `WORK_CUT_MIN_GAIN`). On several ranks the cut moves points on some
+//!   rank (the owned points differ, agreed over the ranks). The work by kind
+//!   (`Fmm::kind_counts`) summed over the ranks equals the one-rank `Fmm`'s for the kinds
+//!   no rank repeats (P2M, M2M, L2P, M2P, P2P) and is at least it for the others (M2L,
+//!   P2L, L2L, which the sharers of a `Global` box each compute), with the cut on and
+//!   off. Rank 0 prints the modelled cost's max over mean, first cut against second. On
+//!   one rank, where the cut does nothing, the scenario says so and stops.
 //! - **tiny problem**: three points, one per rank on the first three, default settings:
 //!   one coarse block, so on more than one rank every rank but the root's owner has no
 //!   leaf (O4; no error, no hang); P2P alone, equal to the direct sum to 1e-14. It also
@@ -457,7 +471,7 @@ fn distributed_scenarios() {
         "the threaded scenarios need MPI at Funneled, it provides {provided:?}"
     );
     let comm = universe.world();
-    let cases: [(&str, Scenario); 25] = [
+    let cases: [(&str, Scenario); 26] = [
         ("table order against the plan", table_order),
         ("batched against per-pair", batched_against_per_pair),
         ("uniform cube, every strategy", uniform_cube_strategies),
@@ -483,6 +497,7 @@ fn distributed_scenarios() {
         ("device backends", device_backends_scenario),
         ("device errors and tuning on several ranks", device_ranks),
         ("input distributions", input_distributions),
+        ("work-weighted cut", work_weighted_cut),
         ("tiny problem", tiny_problem),
         ("host-data hook", host_data_hook),
         ("the strategy rule on the node", strategy_on_the_node),
@@ -2889,13 +2904,14 @@ const DISTRIBUTIONS: [&str; 4] = ["all on rank 0", "random share", "one empty ra
 /// The positions in `points` this rank passes under the distribution `name`
 /// ([`DISTRIBUTIONS`]): every point on rank 0; point i on rank `hash(seed, i) % P`; that
 /// share with the last rank's points given to rank 0; or every point on the rank that owns
-/// its leaf, by an octree of every point's key twice (as a source and as a target) with the
-/// settings of the FMM in `domain` (the partition does not depend on the input, Phase 5
-/// T4, so this is the FMM's own).
-fn distribute(
+/// its leaf, by the octree of an `Fmm` of `builder` with every point on rank 0, as a source
+/// and as a target (the partition does not depend on the input: the first cut weighs the
+/// keys, Phase 5 T4, the second the work of the points per leaf, Phase 5S T7, so this is
+/// the FMM's own).
+fn distribute<T: Stored + SimdScalar + Equivalence + Default>(
     name: &str,
     points: &[[f64; 3]],
-    (domain, max_points_per_leaf): (&Domain, usize),
+    (domain, builder): (&Domain, &FmmBuilder<T>),
     comm: &SimpleCommunicator,
 ) -> Vec<usize> {
     let (rank, size) = (comm.rank() as usize, comm.size());
@@ -2916,21 +2932,100 @@ fn distribute(
                     morton::from_physical_point(x, &domain.physical_box(), DEEPEST_LEVEL as usize)
                 })
                 .collect();
-            let mine: Vec<MortonKey> = if rank == 0 {
-                keys.iter().chain(&keys).copied().collect()
-            } else {
-                Vec::new()
-            };
-            let options = OctreeOptions::new()
-                .with_max_level(16)
-                .with_max_fine_keys(max_points_per_leaf)
-                .with_ghost_children(true);
-            let octree = Octree::new(&mine, options, comm);
+            let mine: &[[f64; 3]] = if rank == 0 { points } else { &[] };
+            let fmm = builder
+                .build(mine, mine, comm)
+                .expect("the FMM of every point on rank 0 builds");
             (0..points.len())
-                .filter(|&i| octree.owner_rank(keys[i]).expect("a valid key") == rank)
+                .filter(|&i| fmm.octree().owner_rank(keys[i]).expect("a valid key") == rank)
                 .collect()
         }
         _ => unreachable!("{name} is not a distribution"),
+    }
+}
+
+/// The work-weighted cut (Phase 5S T7): the second cut off and on, bit for bit, the points
+/// it moves and the work by kind against one rank (module documentation).
+fn work_weighted_cut(comm: &SimpleCommunicator) {
+    let (rank, size) = (comm.rank() as usize, comm.size() as usize);
+    if size == 1 {
+        eprintln!(
+            "rank 0: work-weighted cut: one rank, nothing to cut (every other scenario builds \
+             with it on)"
+        );
+        return;
+    }
+    let mut rng = SplitMix64(0x78b7);
+    // A uniform cloud and a dense blob whose leaves, capped at level 5, hold hundreds of
+    // points: the blob's work per point (P2P) is many times the cloud's.
+    let mut points = unit_cube_points(&mut rng, 1500);
+    points
+        .extend((0..1500).map(|_| -> [f64; 3] { core::array::from_fn(|_| rng.range(0.3, 0.33)) }));
+    let charges = random_charges(&mut rng, points.len());
+    let (local, local_charges) = (share(&points, comm), share(&charges, comm));
+    let builder = FmmBuilder::<f64>::new(5)
+        .strategy(M2lStrategy::Rotation)
+        .max_level(5)
+        .max_points_per_leaf(16);
+
+    // The work by kind of the one-rank FMM over every point.
+    let one = SimpleCommunicator::self_comm();
+    let reference = builder
+        .clone()
+        .build(&points, &points, &one)
+        .expect("the one-rank FMM builds")
+        .kind_counts();
+
+    let mut outputs = Vec::new();
+    let mut owned = Vec::new();
+    let mut balance = Vec::new();
+    for on in [false, true] {
+        let (fmm, output) = evaluate_threaded(
+            &builder.clone().work_cut(on),
+            (&local, &local),
+            &local_charges,
+            &[],
+            comm,
+        )
+        .expect("the FMM builds");
+        assert_eq!(fmm.work_cut(), on, "rank {rank}: work_cut");
+        // The blob gains far more than the 2 % the second cut needs to move blocks.
+        assert_eq!(fmm.recut(), on, "rank {rank}: recut");
+        let counts = fmm.kind_counts();
+        for (kind, count) in counts.iter() {
+            let mut total = 0u64;
+            comm.all_reduce_into(&count, &mut total, SystemOperation::sum());
+            let one_rank = reference.get(kind);
+            match kind {
+                OperatorKind::M2l | OperatorKind::P2l | OperatorKind::L2l => assert!(
+                    total >= one_rank,
+                    "rank {rank}: cut {on}: {kind} over the ranks {total} < {one_rank}"
+                ),
+                _ => assert_eq!(
+                    total, one_rank,
+                    "rank {rank}: cut {on}: {kind} over the ranks against one rank"
+                ),
+            }
+        }
+        let cost = fmm.cost_model().cost(&counts);
+        let costs = union(&[cost], comm).0;
+        let mean = costs.iter().sum::<f64>() / size as f64;
+        balance.push(costs.iter().copied().fold(0.0f64, f64::max) / mean);
+        owned.push(fmm.owned_points());
+        outputs.push(output_bits(&output));
+    }
+    assert_eq!(
+        outputs[0], outputs[1],
+        "rank {rank}: the second cut changes the output"
+    );
+    let moved = global_sum(usize::from(owned[0] != owned[1]), comm);
+    assert!(moved > 0, "rank {rank}: the second cut moves no point");
+    if rank == 0 {
+        eprintln!(
+            "rank 0: work-weighted cut on {size} rank(s): output bit for bit; points moved on \
+             {moved} rank(s); modelled cost max/mean {:.3} by points, {:.3} by cost",
+            balance[0], balance[1]
+        );
     }
 }
 
@@ -3002,7 +3097,7 @@ fn distributions_in<T: Stored + SimdScalar + Equivalence + Default>(
     let tolerance = 100.0 * unit;
     let mut report = Vec::new();
     for name in DISTRIBUTIONS {
-        let mine = distribute(name, points, (domain, leaf), comm);
+        let mine = distribute(name, points, (domain, &builder), comm);
         let local: Vec<[f64; 3]> = mine.iter().map(|&i| points[i]).collect();
         let local_charges: Vec<T> = mine.iter().map(|&i| charges[i]).collect();
         let (fmm, output) =

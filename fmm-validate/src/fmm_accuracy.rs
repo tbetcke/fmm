@@ -720,6 +720,7 @@ fn slowest_build(build: &BuildTimings, comm: &SimpleCommunicator) -> BuildTiming
         domain: slowest(build.domain, comm),
         octree: slowest(build.octree, comm),
         plan: slowest(build.plan, comm),
+        cut: slowest(build.cut, comm),
         redistribute: slowest(build.redistribute, comm),
         tables: slowest(build.tables, comm),
         evaluator: slowest(build.evaluator, comm),

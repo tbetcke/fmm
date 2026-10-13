@@ -28,7 +28,9 @@
 //!    its barrier orders the table loading with a cache (step 7), and with a device
 //!    backend the rank's place there is in the device report, and on the CPU runtime the
 //!    units per cube are capped at the node's cores over its ranks.
-//! 2. Counts the points of all ranks (one all-reduce); none at all is an error.
+//! 2. Checks that some rank has points and agrees the largest number of ranks per node
+//!    (one all-reduce of two maxima; the ranks per node since Phase 5S T7, for the
+//!    strategy of the cost model in step 4); no point at all is an error.
 //! 3. Takes the supplied domain, or `compute_global_bounding_box` over the sources and
 //!    targets of every rank (after one all-reduce pair that rejects points spanning no
 //!    volume, which that function cannot handle). Checks that every point lies strictly
@@ -37,8 +39,23 @@
 //!    this rank's sources and targets together, with `max_level`, `max_points_per_leaf`
 //!    (`OctreeOptions::with_max_fine_keys`) and the ghost-children layer, and the plan
 //!    of its box index and lists. The octree's partition weighs every key it is passed,
-//!    so the points (`nd-octree`'s default since Phase 5 T4); the FMM passes no other
-//!    weight (docs/design/distributed-fmm.md §3.5).
+//!    so the points (`nd-octree`'s default since Phase 5 T4; docs/design/distributed-fmm.md
+//!    §3.5). On several ranks with [`FmmBuilder::work_cut`] (the default; Phase 5S T7,
+//!    docs/design/scale-out.md §6) it then cuts the blocks a second time by the modelled
+//!    cost of their work: it counts the points of every local leaf where they are (one
+//!    all-to-all-v of the distinct keys with their numbers of sources and targets),
+//!    learns the ghost leaves' source counts by the build of a source exchange, counts the
+//!    work of every own block by operator kind on the plan ([`cost::work_counts`]),
+//!    weighs it with the [`CostModel`] ([`FmmBuilder::cost_model`], by default
+//!    [`CostModel::calibrated`] for the strategy the host rule resolves with the ranks per
+//!    node of step 2, the precision and p), repartitions the octree by those weights
+//!    (`Octree::repartition`: an all-gather-v of the weights, an all-to-all-v of the
+//!    leaves and the push of the locally essential keys, unless the cut stays as it is),
+//!    taking the new cut only where it lowers the busiest rank's modelled block cost by
+//!    at least [`WORK_CUT_MIN_GAIN`] (2 %), and builds the plan again where the cut
+//!    changed ([`Fmm::recut`]). The leaves and every row stay the
+//!    same; only the owners of the blocks change, before any point moves
+//!    ([`BuildTimings::cut`]).
 //! 5. Moves every point to the rank that owns its leaf (Phase 5 T6, design §4.4): one
 //!    `nd_fmm_plan::redistribute::Redistribution` for the sources and one for the
 //!    targets, routed by the keys of step 4, then the f64 coordinates of each forwarded
@@ -187,13 +204,17 @@
 //! own targets in the order it passed them; where the points are is the library's
 //! business (Phase 5 T6, docs/design/distributed-fmm.md §4).
 //! - **Where points go.** The octree (step 4) partitions the coarse blocks over the ranks
-//!   by points, independently of where the points were passed; its leaves are those of
-//!   the one-rank tree of the same points. Each point goes to the rank that owns its leaf
+//!   by points, independently of where the points were passed, and by default
+//!   ([`FmmBuilder::work_cut`], Phase 5S T7) once more by the modelled cost of their work
+//!   ([`cost`]), which depends only on the tree, the points per leaf and the constants,
+//!   never on a timing; its leaves are those of the one-rank tree of the same points
+//!   either way. Each point goes to the rank that owns its leaf
 //!   (step 5), and each charge with its source on every evaluation; the output comes back
 //!   to the target's rank. Within a leaf the points lie in the order (origin rank,
 //!   position on that rank).
 //! - **Collectives.** Per build, besides those of step 1–3 (the split by node of step 1
-//!   included), `Octree::new`, `Plan::new` and `Evaluator::new`: two `Redistribution::new`
+//!   included), `Octree::new`, `Plan::new` and `Evaluator::new`, with the second cut
+//!   (Phase 5S T7) those of step 4 and a second `Plan::new`; two `Redistribution::new`
 //!   (each an all-to-all of counts, an all-reduce of the errors, a communicator duplicate
 //!   and an all-to-all-v of the keys), two all-to-all-v's of the coordinates, the
 //!   all-reduce of step 7 (two maxima since Phase 5N T4, the ranks per node added), and
@@ -207,8 +228,9 @@
 //! - **Equal to one rank.** On P ranks the output is bit for bit the output of the
 //!   one-rank `Fmm` of the same settings and the same *resolved* strategy
 //!   ([`Fmm::strategy`]) over the union of every rank's points in rank order (rank 0's
-//!   points, then rank 1's, …). Under [`M2lStrategy::Auto`] the strategy depends on the
-//!   ranks per node (Phase 5N T4, decision 5), so the same input on 1 and on 12 ranks may
+//!   points, then rank 1's, …), with the second cut or without it. Under
+//!   [`M2lStrategy::Auto`] the strategy depends on the ranks per node (Phase 5N T4,
+//!   decision 5), so the same input on 1 and on 12 ranks may
 //!   resolve differently; a caller who needs the same bits across rank counts names the
 //!   strategy. Its leaves are the same (Phase 5 T4), the
 //!   points of a leaf lie in the same order, the near and X rows are ordered by the source
@@ -309,6 +331,7 @@ use thiserror::Error;
 #[cfg(feature = "gpu")]
 use nd_fmm_kernels::{TimingWindow, WindowTime};
 
+use crate::cost::{self, CostModel, KindCounts};
 #[cfg(feature = "gpu")]
 use crate::device::{
     self, DeviceCounters, DeviceDriver, DeviceOptions, DeviceOutput, DeviceReport, ViewsImage,
@@ -324,6 +347,14 @@ pub const MAX_DEGREE: usize = 20;
 
 /// The default `max_level` of [`FmmBuilder`]: 16, the deepest level of a Morton key.
 pub const DEFAULT_MAX_LEVEL: usize = DEEPEST_LEVEL as usize;
+
+/// The least gain for which [`FmmBuilder::work_cut`] moves blocks (Phase 5S T7): the second
+/// cut is taken where it lowers the busiest rank's modelled cost of its blocks by at least
+/// 2 %, and the first cut stays otherwise (`Octree::repartition`'s `min_gain`). Signed off
+/// on 2026-10-13 (fmm-validate/results/phase5s-t7.md §9, question 2): at 40–160 ranks with
+/// one thread per rank every measured second cut gained more, at 2–8 ranks most gained
+/// less than the cost of a second `Plan::new`.
+pub const WORK_CUT_MIN_GAIN: f64 = 0.02;
 
 /// The default `max_points_per_leaf` of [`FmmBuilder`].
 pub const DEFAULT_MAX_POINTS_PER_LEAF: usize = 64;
@@ -810,6 +841,8 @@ pub enum FmmError {
 /// | [`tuning_cache`](Self::tuning_cache) | none: no tuning, the static rule |
 /// | [`tuning_budget`](Self::tuning_budget) | 10 s |
 /// | [`overlap`](Self::overlap) | off: the blocking exchanges |
+/// | [`work_cut`](Self::work_cut) | on: the blocks cut again by modelled cost on several ranks |
+/// | [`cost_model`](Self::cost_model) | [`CostModel::calibrated`] for the strategy, precision and p |
 ///
 /// For `T = f32`, p > 8 is accepted but lies beyond the useful range (design §4): the
 /// error is then at the f32 floor already.
@@ -838,6 +871,8 @@ pub struct FmmBuilder<T> {
     tuning_cache: Option<PathBuf>,
     tuning_budget: Duration,
     overlap: bool,
+    work_cut: bool,
+    cost_model: Option<CostModel>,
     #[cfg(feature = "gpu")]
     tuning_hook: crate::tune::TuningHook,
     value: PhantomData<fn() -> T>,
@@ -870,6 +905,8 @@ impl<T> FmmBuilder<T> {
             tuning_cache: None,
             tuning_budget: DEFAULT_TUNING_BUDGET,
             overlap: false,
+            work_cut: true,
+            cost_model: None,
             #[cfg(feature = "gpu")]
             tuning_hook: crate::tune::TuningHook::default(),
             value: PhantomData,
@@ -1123,6 +1160,31 @@ impl<T> FmmBuilder<T> {
         self
     }
 
+    /// Cuts the coarse blocks among the ranks a second time, by the modelled cost of
+    /// their work (Phase 5S T7, S3; [Several ranks](self#several-ranks-c51),
+    /// docs/design/scale-out.md §6): on by default. Step 4 then counts the work of every
+    /// own block on the plan of the first cut (by points), weighs it with the
+    /// [`cost_model`](Self::cost_model) and cuts again (`Octree::repartition`) before any
+    /// point moves, where that lowers the busiest rank's modelled cost of its blocks by at
+    /// least [`WORK_CUT_MIN_GAIN`] (2 %; otherwise the cut by points stays,
+    /// [`Fmm::recut`]). The leaves, the plan's rows and the output stay the same bit for
+    /// bit; only which rank owns which blocks changes. Off, the blocks stay cut by points,
+    /// as before Phase 5S T7. On one rank it does nothing. Every rank must pass the same
+    /// setting.
+    pub fn work_cut(mut self, on: bool) -> Self {
+        self.work_cut = on;
+        self
+    }
+
+    /// The per-kind constants of the [`work_cut`](Self::work_cut) ([`CostModel`]). By
+    /// default [`CostModel::calibrated`] for the strategy, the precision and p, measured
+    /// on Kathleen; name others for another machine. Only the partition depends on them,
+    /// never the output. Every rank must pass the same model.
+    pub fn cost_model(mut self, model: CostModel) -> Self {
+        self.cost_model = Some(model);
+        self
+    }
+
     /// A test aid for the tuner (Phase 4 T12; feature `gpu`): `hook` adjusts measured
     /// times and offers extra candidates, which go through registration like the others
     /// (`tune::TuningHook`). Not for production runs.
@@ -1254,16 +1316,15 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         let node = comm.split_shared(comm.rank());
         let ranks = self.place_rank(comm, &node, device.as_mut());
 
-        // Step 2: are there points at all?
-        let mut total = 0u64;
-        comm.all_reduce_into(
-            &((sources.len() + targets.len()) as u64),
-            &mut total,
-            SystemOperation::sum(),
-        );
-        if total == 0 {
+        // Step 2: are there points at all? The same all-reduce agrees the largest number
+        // of ranks per node, for the strategy of the cost model (step 4).
+        let local_max = [(sources.len() + targets.len()) as u64, node.size() as u64];
+        let mut agreed = [0u64; 2];
+        comm.all_reduce_into(&local_max[..], &mut agreed[..], SystemOperation::max());
+        if agreed[0] == 0 {
             return Err(FmmError::NoPoints);
         }
+        let model_ranks_per_node = agreed[1] as usize;
 
         // Step 3: the domain, and every point strictly inside it.
         let coordinates: Vec<f64> = sources.iter().chain(targets).flatten().copied().collect();
@@ -1294,6 +1355,44 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         let start = Instant::now();
         let plan = Plan::new(&octree).map_err(FmmError::Plan)?;
         let plan_time = start.elapsed();
+
+        // The second cut (Phase 5S T7, S3; docs/design/scale-out.md §6.3): the work of every
+        // own block counted on this plan, weighed by the cost model, the blocks cut again
+        // by it and the plan rebuilt, before any point moves. The leaves and every row stay;
+        // only the owners change.
+        let start = Instant::now();
+        let cost_model = self.cost_model.unwrap_or_else(|| {
+            let strategy = self
+                .strategy
+                .choose(&NodeContext::new(
+                    self.p,
+                    size_of::<T>(),
+                    model_ranks_per_node,
+                    self.dense_node_budget,
+                ))
+                .strategy();
+            CostModel::calibrated(strategy, size_of::<T>(), self.p)
+        });
+        let work_cut = self.work_cut && comm.size() > 1;
+        let (octree, plan, recut) = if work_cut {
+            let (source_keys, target_keys) = keys.split_at(sources.len());
+            let weights =
+                cost::block_weights(&octree, &plan, source_keys, target_keys, &cost_model, comm)
+                    .map_err(|error| FmmError::Evaluator(EvaluatorError::Exchange(error)))?;
+            let recut = octree.repartition(&weights, Some(WORK_CUT_MIN_GAIN));
+            if recut.partition_map() == octree.partition_map() {
+                // The cut by points stays (the same cut, or too little gain): so does the
+                // plan.
+                (recut, plan, false)
+            } else {
+                drop(plan);
+                let plan = Plan::new(&recut).map_err(FmmError::Plan)?;
+                (recut, plan, true)
+            }
+        } else {
+            (octree, plan, false)
+        };
+        let cut_time = start.elapsed();
 
         // Step 5: every point to the rank that owns its leaf (Phase 5 T6,
         // docs/design/distributed-fmm.md §4.4): one redistribution for the sources and one
@@ -1462,6 +1561,9 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             domain,
             strategy,
             backend: self.backend,
+            work_cut,
+            recut,
+            cost_model,
             synchronous_stages: self.synchronous_stages && self.backend.is_device(),
             overlap: self.overlap,
             host_sources,
@@ -1483,6 +1585,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
                 domain: domain_time.saturating_sub(open_time),
                 octree: octree_time,
                 plan: plan_time,
+                cut: cut_time,
                 redistribute: redistribute_time,
                 tables: tables_time,
                 evaluator: evaluator_time,
@@ -2596,6 +2699,11 @@ pub struct BuildTimings {
     pub octree: Duration,
     /// `Plan::new`.
     pub plan: Duration,
+    /// The second cut (Phase 5S T7, [`FmmBuilder::work_cut`]): the points per leaf and
+    /// the ghost leaves' source counts (collective), the work per block, the
+    /// repartition of the octree (collective) and the second `Plan::new`; zero without
+    /// it.
+    pub cut: Duration,
     /// Steps 5 and 6 (Phase 5 T6): the two redistributions of the points to the ranks
     /// that own their leaves (sources and targets: `Redistribution::new` and the forward
     /// of the coordinates, collective, with the wait for other ranks), the radii of the
@@ -2621,6 +2729,7 @@ impl BuildTimings {
         self.domain
             + self.octree
             + self.plan
+            + self.cut
             + self.redistribute
             + self.tables
             + self.evaluator
@@ -3079,6 +3188,12 @@ where
     domain: Domain,
     strategy: M2lStrategy,
     backend: Backend,
+    /// Whether the blocks were cut a second time, by modelled cost (Phase 5S T7).
+    work_cut: bool,
+    /// Whether that second cut moved blocks.
+    recut: bool,
+    /// The constants of the modelled cost.
+    cost_model: CostModel,
     /// With a device backend: sync after every stage.
     synchronous_stages: bool,
     /// Run the overlapped stages (Phase 5 T9).
@@ -3424,6 +3539,41 @@ where
     /// Returns the expansion degree p.
     pub fn p(&self) -> usize {
         self.operator().p()
+    }
+
+    /// Returns whether the coarse blocks were cut a second time, by modelled cost
+    /// ([`FmmBuilder::work_cut`], Phase 5S T7): on several ranks with the setting on.
+    pub fn work_cut(&self) -> bool {
+        self.work_cut
+    }
+
+    /// Returns whether the second cut moved blocks between the ranks: it ran
+    /// ([`work_cut`](Self::work_cut)) and its cut differed from the cut by points by a
+    /// gain of at least [`WORK_CUT_MIN_GAIN`].
+    pub fn recut(&self) -> bool {
+        self.recut
+    }
+
+    /// Returns the constants of the modelled cost ([`FmmBuilder::cost_model`]), those the
+    /// second cut weighed the blocks with when it ran.
+    pub fn cost_model(&self) -> CostModel {
+        self.cost_model
+    }
+
+    /// Returns this rank's work by operator kind on its plan ([`KindCounts`], the units of
+    /// the [`cost`] module), from the plan's views and the points of the leaves (the
+    /// ghost leaves' from the source exchange), without communication. For reports: with
+    /// [`cost_model`](Self::cost_model) it gives the modelled cost of the rank
+    /// ([`CostModel::cost`]), and with [`KindTiming::Synchronous`] the constants of a
+    /// machine (scale-out.md §6.1).
+    pub fn kind_counts(&self) -> KindCounts {
+        cost::work_counts(
+            self.evaluator.plan(),
+            self.octree.coarse_tree_leafs(),
+            self.evaluator.source_exchange().leaf_counts(),
+            &self.target_leaves.counts,
+        )
+        .total()
     }
 
     /// Returns the resolved strategy, never [`M2lStrategy::Auto`], for which the tables
