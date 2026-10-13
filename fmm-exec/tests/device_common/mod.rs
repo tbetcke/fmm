@@ -278,13 +278,13 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
     if x.ghost_sources > 0 {
         e.up(DataKind::GhostSources, 4 * x.ghost_sources * s);
     }
-    let sent = x.sent_blocks + x.sent_boxes.iter().sum::<usize>();
+    let sent = x.sent_top + x.sent_boxes.iter().sum::<usize>();
     if sent > 0 {
         e.launches += 1;
         e.down(DataKind::SentMultipoles, sent * nc * s);
     }
-    if x.received_blocks > 0 {
-        e.up(DataKind::CoarseMultipoles, x.received_blocks * nc * s);
+    if x.received_top > 0 {
+        e.up(DataKind::TopMultipoles, x.received_top * nc * s);
         e.launches += 1;
     }
     for &r in &x.received_boxes {
@@ -422,7 +422,7 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
 const EXCHANGES: [DataKind; 4] = [
     DataKind::GhostSources,
     DataKind::SentMultipoles,
-    DataKind::CoarseMultipoles,
+    DataKind::TopMultipoles,
     DataKind::ReceivedMultipoles,
 ];
 

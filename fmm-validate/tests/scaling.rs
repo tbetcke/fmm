@@ -192,7 +192,7 @@ fn check_fields(report: &Report, comm: &SimpleCommunicator) {
     };
     if size == 1 {
         assert_eq!(t(&|t| t.sources.values_sent + t.multipoles.values_sent), 0);
-        assert_eq!(t(&|t| t.coarse_received + t.blocks[1]), 0);
+        assert_eq!(t(&|t| t.top_received + t.top_boxes[1]), 0);
         assert!(report.rows[0].held[1] == 0, "no ghost on one rank");
     } else {
         assert_eq!(
@@ -211,7 +211,7 @@ fn check_fields(report: &Report, comm: &SimpleCommunicator) {
         assert_eq!(t(&|t| t.charges[0]), t(&|t| t.charges[1]));
         assert_eq!(t(&|t| t.output[0]), t(&|t| t.output[1]));
     }
-    // Both paths, a median per rank and stage; the coarse gather only in the overlapped.
+    // Both paths, a median per rank and stage; the top's all-gather only in the overlapped.
     assert_eq!(report.paths.len(), 2);
     assert_eq!(
         report.differing,

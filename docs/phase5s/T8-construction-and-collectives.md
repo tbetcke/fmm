@@ -5,6 +5,13 @@
 fired at 8 ranks (`docs/design/scale-out.md` §1.4, §7.1). T8 keeps S5 and re-measures the
 construction after T3a; where this brief says "build S4", read "re-measure T3a's routing".
 
+**Draft of 2026-10-13 (T5, at the user's request; not yet signed off):** T8 also evaluates
+a third trigger, **S8, the fan-out below the replicated top** (below, and step 1's last
+item). T5 measured the multipole exchange's neighbours and messages growing with P
+(`fmm-validate/results/phase5s-t5.md` §4): the boxes about a rank's size keep a roughly
+constant number of readers while R's threshold rises with P, so they leave R and go point
+to point from their owners, each to up to the threshold less one ranks.
+
 distributed-fmm.md §14.4 keeps two packages in reserve, to be built only if measured to
 need them at 1,000 or more ranks:
 - **S4, construction at scale** (`nd-octree`). `Octree::new` sorts keys with the sample
@@ -20,6 +27,14 @@ need them at 1,000 or more ranks:
   consensus: synchronous sends, then a non-blocking barrier). rsmpi 0.8.2 has both
   (`immediate_synchronous_send`, `immediate_barrier`), so S5 needs no rsmpi addition;
   confirm it, together with the probe calls a receiver needs.
+
+**S8, the fan-out below the replicated top** (`nd-fmm-plan`; draft, T5). A top-tree box
+below R goes from its owner to every reader, up to the threshold less one (63 at 512
+locust ranks on the clusters, where the 4,096-box cap doubles the threshold to 64); the
+busiest sender's messages per evaluation grow with P (clusters: 39 → 316 from 40 to 640
+Kathleen ranks; 104 → 510 from 64 to 512 on locust). The remedy forwards each such box
+along a tree of its readers fixed at build, so that no rank sends one box more than a few
+times; R, its cap and K stay as signed off.
 
 No job in this phase is larger than 4 nodes, so nothing can be timed at 1,000 ranks. T1
 states each trigger on what can be measured (decision 4 of docs/phase5s/README.md):
@@ -58,7 +73,20 @@ Do:
      (Kathleen) or the stated assumed values (without Kathleen);
    - **modelled** to 10³ and 10⁴ ranks: time per item from the counted messages and bytes
      at the stated latency and bandwidth (the method of `scale-out.md` §10), marked
-     *model*.
+     *model*;
+   - **for S8** (draft), from `scaling`'s summary line (T5's fields), on the cube, the
+     Plummer sphere and the clusters at 2.5 × 10⁴ points per rank, f64 p = 8 and f32
+     p = 3, at the counts of the first item (locust 64–512, Kathleen 40–640, 40 per node to
+     160): the busiest sender's multipole-exchange messages per evaluation
+     (`multipole_messages_sent_max`) and those to other nodes
+     (`multipole_off_node_messages_max`), the largest fan-out of a box
+     (`multipole_fan_out_max`), R's threshold (`top_threshold`), the neighbours, those on
+     other nodes and the other nodes (`multipole_neighbours_max`,
+     `multipole_off_node_neighbours_max`, `multipole_neighbour_nodes_max`); timed at 160
+     Kathleen ranks, the overlapped path's multipole exposed wait against the evaluation;
+     modelled to 10³ and 10⁴ ranks by a stated fit of the busiest sender's messages
+     against P (per workload, over 64–640), at the effective 4 µs per message of
+     `scale-out.md` §10.4 (T0: 342 messages in 1.43 ms), marked *model*.
 2. **Decide** against T1's triggers. Write the result into `docs/design/scale-out.md`
    (an addendum to §7) and the PR description: which package fires, on which counted or
    modelled number, and what stays open (the timing at scale, network effects a model
@@ -74,7 +102,21 @@ Do:
      (same counts and payloads on every rank) at 1–8 ranks, at 512 oversubscribed and
      (Kathleen) at 160; the rlst graph builds replaced only if rlst's API allows it
      without a fork (otherwise ask: an upstream change).
-   If neither fires: no code; the report closes both, with the counted costs and the rank
+   - S8 (draft): fires when the busiest sender's multipole-exchange messages, modelled at
+     10⁴ ranks, exceed 1% of a modelled evaluation at 2.5 × 10⁴ points per rank
+     (`scale-out.md` §10.4: about 5.5 ms of the cube's 549 ms at f64 p = 8; state the p = 3
+     figure too), or when the multipole exposed wait on the overlapped path exceeds 1% of
+     the evaluation at 160 Kathleen ranks (measured). The remedy, built only on the
+     sign-off of step 2: each top-tree box below R is sent along a tree of its readers
+     fixed at build (each rank sends one box to at most a stated number of ranks; a node's
+     first reader forwards within its node), in the level's exchange after the reduction
+     forms the level; every slot receives the same multipole as the direct exchange
+     (copies, never sums), checked slot by slot against it at 1–8 ranks, at 512
+     oversubscribed and (Kathleen) at 160, bit for bit at every rank count; any new
+     `HostData` event agreed with T6's device mirror first. Not remedies: a larger
+     `TOP_MAX_BOXES` or a fixed number of readers for R (R's all-gather grows with P again,
+     the O(P) volume S2 removed) and a fixed top level (T1: 335 readers below level 4).
+   If none fires: no code; the report closes each, with the counted costs and the rank
    count at which each would fire (*model*).
 
 Tests that define done:
@@ -94,7 +136,7 @@ Must pass:
 - (Kathleen) the correctness job of T2 at 2 nodes (if code changed).
 
 Do not:
-- build S4 or S5 without a trigger firing and the sign-off of step 2;
+- build S4, S5 or S8 without a trigger firing and the sign-off of step 2;
 - time an oversubscribed run, or present a modelled time as measured;
 - submit a job larger than 4 nodes;
 - change the leaves, O1–O4, the second cut of T7 or any output bit;

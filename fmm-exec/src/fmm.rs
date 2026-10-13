@@ -200,8 +200,9 @@
 //!   with a table cache one barrier of the node's communicator. Phase 5N T4 added one
 //!   communicator split per build on the host path (the device path had it). Per
 //!   evaluation: the all-reduce of the charge length, the forward of the charges (an
-//!   all-to-all-v), the evaluator's exchanges (the source exchange, the coarse gather and
-//!   the multipole exchange of every level), and the backward of the output (an
+//!   all-to-all-v), the evaluator's exchanges (the source exchange, the upward reduction of
+//!   every reduction level, the all-gather of the replicated top and the multipole
+//!   exchange of every level; Phase 5S T5), and the backward of the output (an
 //!   all-to-all-v). Every rank enters each one, a rank with no points included.
 //! - **Equal to one rank.** On P ranks the output is bit for bit the output of the
 //!   one-rank `Fmm` of the same settings and the same *resolved* strategy
@@ -211,8 +212,9 @@
 //!   resolve differently; a caller who needs the same bits across rank counts names the
 //!   strategy. Its leaves are the same (Phase 5 T4), the
 //!   points of a leaf lie in the same order, the near and X rows are ordered by the source
-//!   leaf's (level, key) (Phase 5 T5), and ghost and global values are exact copies or the
-//!   same sums (design §5.1, §5.3). Two distributions of the same points over the ranks
+//!   leaf's (level, key) (Phase 5 T5), received values are exact copies, and the owner of a
+//!   `Global` box forms it from exact copies of its children by octant, as one rank does
+//!   (design §5.1, §5.3; Phase 5S T5, docs/design/scale-out.md §4.2). Two distributions of the same points over the ranks
 //!   put the points of a leaf in different orders, so their outputs differ in the last
 //!   bits: within 100 u_T relative L2 over every target, φ and ∇φ (1.1e-14 in f64, 6.0e-6
 //!   in f32; design §5.4). The errors against the direct sum are the one-rank run's.
@@ -226,7 +228,9 @@
 //!   not fit MPI's `i32` counts is [`FmmError::Redistribution`], on every rank.
 //! - **The device** (Phase 5 T8) runs on any number of ranks: every rank opens the default
 //!   device of its backend, and the device operator mirrors the evaluator's exchanges
-//!   (the `device` module, "Several ranks"). Per evaluation it adds one all-reduce, after
+//!   (the `device` module, "Several ranks"), but for the upward reduction of Phase 5S T5,
+//!   which it mirrors from T6: until then a device evaluation with a box to reduce fails
+//!   with [`FmmError::Device`]. Per evaluation it adds one all-reduce, after
 //!   the output's download, that agrees a device error of any rank; the rank that failed
 //!   returns [`FmmError::Device`], the others [`FmmError::OtherRank`], and from then on
 //!   the charge-length agreement carries the kept error. [`Fmm::exchange_sizes`] says
@@ -236,12 +240,14 @@
 //!
 //! With [`FmmBuilder::overlap`] (or [`Fmm::set_overlap`]; Phase 5 T9, off by default)
 //! `evaluate` runs the evaluator's overlapped stages: the source exchange travels behind
-//! P2M and the local M2M, and the multipole exchange of every level, posted before the
-//! coarse gather, behind the gather, the global M2M and the downward pass of the coarser
-//! levels, each level waited for just before the first call that reads it
-//! (`nd_fmm_plan::evaluator`, "Overlap"; docs/design/distributed-fmm.md §8). The
-//! exchanges are scoped point-to-point requests, progressed by a `test` after every level
-//! call on the calling thread; the coarse gather stays blocking.
+//! P2M and the local M2M, the upward reduction posts its receives ahead and each level's
+//! sends as soon as that level is formed (Phase 5S T5), and the multipole exchange of
+//! every level, posted after the reduction and before the all-gather of the replicated
+//! top, travels behind the all-gather and the downward pass of the coarser levels, each
+//! level waited for just before the first call that reads it (`nd_fmm_plan::evaluator`,
+//! "Overlap"; docs/design/distributed-fmm.md §8). The exchanges are scoped point-to-point
+//! requests, progressed by a `test` after every level call on the calling thread; the
+//! all-gather of the top stays blocking.
 //! - **Output.** No level call moves, so the output is bit for bit the blocking path's,
 //!   for every rank count and number of threads (no reordering is offered, decision 9).
 //! - **Collectives.** The same per evaluation, except that the source and multipole
@@ -249,7 +255,7 @@
 //!   same setting.
 //! - **Times.** [`StageTimings`] keeps its stages, split as its documentation says, and
 //!   adds [`StageTimings::overlap`]: per exchange the time from post to completion, the
-//!   exposed wait and the `test` calls, the wait per level and the coarse gather.
+//!   exposed wait and the `test` calls, the wait per level and the all-gather of the top.
 //! - **The device** runs the overlapped stages with the same events and transfers
 //!   (design §13, question 10), for correctness only: no device time is a scaling
 //!   figure (decision 3). With [`FmmBuilder::device_timestamps`] the first overlapped
@@ -1580,7 +1586,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             unreachable!("the evaluator is built with the host engine")
         };
         let lists =
-            device::ExchangeLists::new(evaluator.multipole_exchange(), evaluator.coarse_exchange());
+            device::ExchangeLists::new(evaluator.multipole_exchange(), evaluator.top_exchange());
         let counts = (evaluator.source_exchange().leaf_counts(), target_counts);
         let driver = device::driver(
             host,
@@ -2566,13 +2572,14 @@ impl BuildTimings {
 /// place of stages 1–5, and the five fields are their parts, so that the two paths compare
 /// and [`total`](Self::total) is still the wall time: [`upward_local`](Self::upward_local),
 /// [`upward_global`](Self::upward_global) and [`downward`](Self::downward) the same work as
-/// in the blocking path (level calls, the coarse gather and its events), and
+/// in the blocking path (level calls, the reduction, the all-gather of the replicated top
+/// and their events), and
 /// [`exchange_sources`](Self::exchange_sources) and
 /// [`exchange_multipoles`](Self::exchange_multipoles) the rest of each overlapped stage:
 /// packing, posting, the `test` calls, the waits, unpacking and the exchanges' events.
 /// [`overlap`](Self::overlap) has the times of the exchanges themselves: from post to
-/// completion, the exposed wait and the `test` calls, the wait per level and the coarse
-/// gather ([`OverlapTimes`], docs/design/distributed-fmm.md §8.6).
+/// completion, the exposed wait and the `test` calls, the wait per level and the
+/// all-gather of the top ([`OverlapTimes`], docs/design/distributed-fmm.md §8.6).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct StageTimings {
     /// Moving the charges to the ranks that own their sources, into leaf order: the
@@ -2589,7 +2596,8 @@ pub struct StageTimings {
     pub exchange_sources: Duration,
     /// Stage 2: P2M and the local M2M. With overlap, their level calls.
     pub upward_local: Duration,
-    /// Stage 3: the coarse gather (collective) and the global M2M. With overlap, the
+    /// Stage 3: the upward reduction and the global M2M of the owned `Global` boxes, then
+    /// the all-gather of the replicated top (collective; Phase 5S T5). With overlap, the
     /// same, inside the second overlapped stage.
     pub upward_global: Duration,
     /// Stage 4: the multipole exchange (collective). With overlap, the time of the second
@@ -2624,7 +2632,7 @@ pub struct StageTimings {
     pub kinds: Option<KindTimings>,
     /// With [`FmmBuilder::overlap`], the times of the overlapped exchanges
     /// ([`OverlapTimes`]: per exchange from post to completion, the exposed wait and the
-    /// `test` calls; the wait per level; the coarse gather); `None` in a blocking
+    /// `test` calls; the wait per level; the all-gather of the top); `None` in a blocking
     /// evaluation.
     pub overlap: Option<OverlapTimes>,
 }
@@ -2780,7 +2788,8 @@ impl KindTimings {
 /// A stage of [`Fmm::evaluate`] that runs device work, timed by one timing window
 /// ([`DeviceStageTimings`]). The exchanges have no window: on one rank they move nothing,
 /// on several the device's part of them is a few transfers and launches (Phase 5 T8),
-/// and the coarse gather's download falls in [`UpwardGlobal`](Self::UpwardGlobal). With
+/// and the download of the multipoles sent falls in [`UpwardGlobal`](Self::UpwardGlobal).
+/// With
 /// [`FmmBuilder::overlap`] the first overlapped stage falls in
 /// [`UpwardLocal`](Self::UpwardLocal) and the second in [`Downward`](Self::Downward),
 /// which then spans the global M2M too ([Overlap](self#overlap-c52)).
@@ -2898,10 +2907,13 @@ pub struct ExchangeSizes {
     /// The local leaves it sends, each once: the leaves whose charges a device
     /// evaluation writes into the host store.
     pub sent_leaves: usize,
-    /// This rank's coarse blocks, which the coarse gather sends (B_o); none on one rank.
-    pub sent_blocks: usize,
-    /// The other ranks' coarse blocks, which it receives (B_r).
-    pub received_blocks: usize,
+    /// This rank's boxes of the replicated top, which its all-gather sends (B_o; Phase 5S
+    /// T5, before it the coarse blocks of the coarse gather); none on one rank.
+    pub sent_top: usize,
+    /// The other ranks' boxes of the replicated top that the all-gather writes on this
+    /// rank (B_r): those it holds but neither computes nor receives through the upward
+    /// reduction.
+    pub received_top: usize,
     /// Per level, the boxes the multipole exchange sends (S_l), a box sent to two ranks
     /// twice.
     pub sent_boxes: Vec<usize>,
@@ -2917,13 +2929,32 @@ pub struct ExchangeSizes {
 pub struct ExchangeTraffic {
     /// The source exchange: one message per neighbour with values, four values per point.
     pub sources: Traffic,
+    /// The upward reduction of each level (Phase 5S T5; docs/design/scale-out.md §4.2):
+    /// one message per neighbour with values; zero on the levels that are not reduction
+    /// levels (level 0 and those below the deepest coarse block).
+    pub reduction: Vec<Traffic>,
     /// The multipole exchange of each level: one message per neighbour with values.
     pub multipoles: Vec<Traffic>,
-    /// The values of this rank's coarse blocks, which the coarse gather sends to every
-    /// other rank; none on one rank.
-    pub coarse_sent: usize,
-    /// The values of the other ranks' coarse blocks, which it receives.
-    pub coarse_received: usize,
+    /// The ranks the multipole exchange receives from, over every level, each once,
+    /// ascending.
+    pub multipole_neighbours: Vec<usize>,
+    /// Per level, the ranks the multipole exchange of the level sends a message to (one
+    /// message each), ascending (Phase 5S T5).
+    pub multipole_destinations: Vec<Vec<usize>>,
+    /// The most ranks the multipole exchange sends one box's multipole to, on any level
+    /// (Phase 5S T5): below the replicated top, a top-tree box goes to fewer ranks than
+    /// [`top_threshold`](Self::top_threshold); a box inside a block has no such bound.
+    pub multipole_fan_out: usize,
+    /// The readers a top-tree box needs to be in the replicated top
+    /// (`nd_fmm_plan::exchange::TopExchange::threshold`; Phase 5S T5), the same on every
+    /// rank.
+    pub top_threshold: usize,
+    /// The values of this rank's boxes of the replicated top, which its all-gather sends
+    /// to every other rank (Phase 5S T5; docs/design/scale-out.md §4.3); none on one rank.
+    pub top_sent: usize,
+    /// The values of the other ranks' boxes of the replicated top, which the all-gather
+    /// delivers to this rank, whether or not it holds them.
+    pub top_received: usize,
 }
 
 /// A built FMM; see the [module documentation](self).
@@ -3366,7 +3397,7 @@ where
     pub fn exchange_sizes(&self) -> ExchangeSizes {
         let sources = self.evaluator.source_exchange();
         let multipoles = self.evaluator.multipole_exchange();
-        let coarse = self.evaluator.coarse_exchange();
+        let top = self.evaluator.top_exchange();
         let mut sent_leaves = sources.send_leaves().to_vec();
         sent_leaves.sort_unstable();
         sent_leaves.dedup();
@@ -3379,8 +3410,8 @@ where
                 .map(|&j| sources.leaf_counts()[j as usize])
                 .sum(),
             sent_leaves: sent_leaves.len(),
-            sent_blocks: coarse.sent_blocks().len(),
-            received_blocks: coarse.received_blocks().count(),
+            sent_top: top.sent_keys().len(),
+            received_top: top.received_keys().len(),
             sent_boxes: (0..nlevels)
                 .map(|l| multipoles.send_boxes(l).len())
                 .collect(),
@@ -3395,17 +3426,59 @@ where
     /// index lists and counts.
     pub fn exchange_traffic(&self) -> ExchangeTraffic {
         let multipoles = self.evaluator.multipole_exchange();
-        let coarse = self.evaluator.coarse_exchange();
+        let reduction = self.evaluator.reduction_exchange();
+        let top = self.evaluator.top_exchange();
+        let top_sent: usize = top.sent_keys().map(|r| top.chunk(r).len()).sum();
+        let mut neighbours: Vec<usize> = (0..multipoles.nlevels())
+            .flat_map(|l| {
+                multipoles
+                    .communicator(l)
+                    .in_ranks()
+                    .iter()
+                    .map(|&r| r as usize)
+            })
+            .collect();
+        neighbours.sort_unstable();
+        neighbours.dedup();
+        let mut destinations = Vec::with_capacity(multipoles.nlevels());
+        let mut fan_out = 0;
+        for level in 0..multipoles.nlevels() {
+            let communicator = multipoles.communicator(level);
+            let mut ranks: Vec<usize> = communicator
+                .out_ranks()
+                .iter()
+                .map(|&r| r as usize)
+                .collect();
+            ranks.sort_unstable();
+            destinations.push(ranks);
+            // A box's key appears once per rank it goes to.
+            let mut keys = communicator.send_indices().to_vec();
+            keys.sort_unstable();
+            fan_out = keys
+                .chunk_by(|a, b| a == b)
+                .map(<[_]>::len)
+                .fold(fan_out, usize::max);
+        }
         ExchangeTraffic {
             sources: self.evaluator.source_exchange().traffic(),
+            reduction: (0..multipoles.nlevels())
+                .map(|l| {
+                    if reduction.levels().contains(&l) {
+                        reduction.traffic(l)
+                    } else {
+                        Traffic::default()
+                    }
+                })
+                .collect(),
             multipoles: (0..multipoles.nlevels())
                 .map(|l| multipoles.traffic(l))
                 .collect(),
-            coarse_sent: coarse.sent_blocks().map(|b| coarse.chunk(b).len()).sum(),
-            coarse_received: coarse
-                .received_blocks()
-                .map(|b| coarse.chunk(b).len())
-                .sum(),
+            multipole_neighbours: neighbours,
+            multipole_destinations: destinations,
+            multipole_fan_out: fan_out,
+            top_threshold: top.threshold(),
+            top_sent,
+            top_received: top.gathered().len() - top_sent,
         }
     }
 

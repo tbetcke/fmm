@@ -133,6 +133,17 @@ top-tree keys the coarse gather and the global pass still need); the first four 
 numbering, every view with its row offsets and batches). Its report is
 `results/phase5s-t4.md`.
 
+Phase 5S T5 (the owned top tree in `nd-fmm-plan`) retargeted `scaling`'s coarse-gather
+columns to the replicated top (`RankTraffic::{top_sent, top_received, top_boxes}`,
+`MemoryModel::top`, the stage "top all-gather" from `OverlapTimes::top_gather`) and added
+`RankRow::top_tree` (`TopTreeRow`): the global M2M pairs of the owned `Global` boxes, the
+upward reduction summed and per level (`TOP_TREE_LEVELS`), the multipole exchange's
+neighbours (also those on other nodes, the other nodes, the messages sent to them, by
+`Placement::node`), the largest fan-out of a box and R's readers' threshold, and what Phase
+5's global pass (8 (B − 1)/7 pairs for B blocks) and coarse gather received on the same
+tree; the report has their reduced lines and a table of the
+reduction per level, the summary line their maxima. Its report is `results/phase5s-t5.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

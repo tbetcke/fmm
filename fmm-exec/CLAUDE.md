@@ -146,7 +146,10 @@ loading with a cache at scale, the ranks × threads guidance; design docs/design
     compare (the work parts from `OverlapTimes`, the rest of each overlapped stage in
     `exchange_sources` and `exchange_multipoles`), and adds `overlap: Option<OverlapTimes>`
     (per exchange post to completion, exposed wait, `test` calls; the wait per level; the
-    coarse gather). `Fmm::exchange_traffic` gives the messages and values per exchange.
+    all-gather of the replicated top, the coarse gather before Phase 5S T5).
+    `Fmm::exchange_traffic` gives the messages and values per exchange (since Phase 5S T5
+    also the upward reduction per level, the replicated top's values and threshold, and the
+    multipole exchange's neighbours, destinations per level and largest fan-out of a box).
     The device runs the overlapped stages too, for correctness (design §13, question 10;
     the stage windows `UpwardLocal` and `Downward`). `tests/mpi_exec.rs` checks overlap on
     every scenario that evaluates (its module docs, "Overlap"), the shadow check runs
@@ -196,19 +199,25 @@ loading with a cache at scale, the ranks × threads guidance; design docs/design
     stores have the plan's layouts, ghost slots included, so `build` builds the device
     operator after the evaluator, from its source exchange's counts (every leaf of the
     numbering) and `device::ExchangeLists` (copied from the evaluator's exchanges through
-    `Evaluator::{source_exchange, multipole_exchange, coarse_exchange}`), swaps it in for
+    `Evaluator::{source_exchange, multipole_exchange, top_exchange}`), swaps it in for
     the host operator, loads the points and agrees the outcome (one all-reduce). At each
     event the device moves exactly what the exchange sends and receives, packed on the
     device in buffers allocated at build: `SendMultipoles` one `gather_columns` and one
-    download (the evaluation's second sync), `ReceivedCoarse` and each
+    download (the evaluation's second sync), `ReceivedTop` (Phase 5S T5; `ReceivedCoarse`
+    before) and each
     `ReceivedMultipoles(l)` one upload and one `nd_fmm_kernels::movement::scatter_columns`
     (assignment, so a −0.0 stays −0.0), `ReceivedSources` one upload of the ghost tail;
     `SendSources` nothing (`Fmm` writes the sent leaves' charges into the host chunks).
     The counters split them by `DataKind` (`GhostSources`, `SentMultipoles`,
-    `CoarseMultipoles`, `ReceivedMultipoles`, per level in
+    `TopMultipoles`, `ReceivedMultipoles`, per level in
     `DeviceCounters::received_levels`); `Fmm::exchange_sizes` gives the sizes, and
     `tests/device_common::expected_evaluation` the formula, checked on every scenario and
-    rank count. One rank is unchanged: every list empty, Phase 4's formula. A device per
+    rank count. One rank is unchanged: every list empty, Phase 4's formula. **Since Phase
+    5S T5** the device does not mirror the upward reduction (`SendReduction`,
+    `ReceivedReduction`) until T6: with a box to reduce the device operator fails with a
+    device error, agreed as any other, and `tests/mpi_exec.rs` (`device_runs_here`) and
+    `tests/device_ranks.rs` mark the device scenarios on several ranks as T6's, printed
+    on every rank, not run. A device per
     rank: one `split_shared` per build (`DeviceReport::ranks`, `device::RankPlacement`);
     every rank opens the default device (`Device::open` takes no index); on the CPU
     runtime the units per cube are `threads(n)` capped at the node's cores over its

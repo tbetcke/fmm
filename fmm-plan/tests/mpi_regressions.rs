@@ -1,11 +1,14 @@
 //! Public-API regression tests. Keep MPI initialization in one test: MPI cannot
 //! be initialized again after finalization within the same process.
-use std::{borrow::Borrow, collections::HashMap};
+use std::{borrow::Borrow, collections::HashMap, ops::Range};
 
-use mpi::{collective::SystemOperation, traits::*};
+use mpi::{collective::SystemOperation, topology::SimpleCommunicator, traits::*};
 use nd_fmm_plan::{
     evaluator::Evaluator,
-    exchange::{self, CoarseExchange, MultipoleExchange, SourceExchange},
+    exchange::{
+        self, MultipoleExchange, ReductionExchange, SourceExchange, TOP_MAX_BOXES,
+        TOP_READER_FRACTION, TopExchange,
+    },
     interaction_manager::V_LIST_DIRECTIONS,
     lists::{GroupedCsr, offset_index},
     operator::{
@@ -17,8 +20,12 @@ use nd_fmm_plan::{
     store::{LeafSliceMut, LeafStore, LevelBuffers},
 };
 use nd_octree::{
-    Octree, OctreeOptions, PhysicalBox, constants::DEEPEST_LEVEL, morton, morton::is_ancestor,
-    octree::KeyType, points_to_morton,
+    Octree, OctreeOptions, PhysicalBox,
+    constants::DEEPEST_LEVEL,
+    morton,
+    morton::is_ancestor,
+    octree::{KeyType, PartitionMap},
+    points_to_morton,
 };
 use rlst::{
     distributed_tools::{GhostCommunicator, array_tools::gather_to_all},
@@ -121,8 +128,8 @@ fn needs_local(all_keys: &HashMap<u64, KeyType>, own_blocks: &[u64], key: u64) -
             .any(|&block| block != key && is_ancestor(key, block))
 }
 
-/// The keys the plan holds, with their kinds: since Phase 5S T4 the octree's locally
-/// essential keys and the top-tree keys, H ∪ T ([`check_held_keys`]).
+/// The keys the plan holds, with their kinds: since Phase 5S T5 the octree's locally
+/// essential keys H ([`check_held_keys`]).
 fn held_keys(plan: &Plan) -> HashMap<u64, KeyType> {
     let index = plan.index();
     (0..index.nlevels())
@@ -199,13 +206,13 @@ fn grouped_batches<G: Copy + Into<usize>>(view: &GroupedCsr<G>) -> Vec<(u32, u32
     triples
 }
 
-/// The held keys of `plan` against brute force over the gathered tree (Phase 5S T4;
-/// docs/design/scale-out.md §3.1, §3.7): exactly H ∪ T, with H = N(S) ∪ C(N(S)) and T
-/// every coarse block and every ancestor of one, so no key is held that no list, halo
-/// or parent-child step of S names beyond what the design allows; and every kind
-/// Phase 5's: an own key local, every ancestor of a block `Global` (on one rank the root
-/// unless it is the only leaf), every other key a ghost of its block's rank. Returns
-/// this rank's |H ∪ T|, |H| and |T|.
+/// The held keys of `plan` against brute force over the gathered tree (Phase 5S T4, T5;
+/// docs/design/scale-out.md §3.1, §4): exactly H = N(S) ∪ C(N(S)), so no key is held that
+/// no list, halo or parent-child step of S names; and every kind the octree's: an own key
+/// local, a shared ancestor `Global` (on one rank the root unless it is the only leaf), a
+/// top-tree key above other ranks' blocks only a ghost of the rank of its first block,
+/// every other key a ghost of its block's rank. Returns this rank's |H| and the number of
+/// top-tree keys (blocks and ancestors of one) among them.
 ///
 /// # Collective operation
 /// Two all-gathers (the blocks and their counts); every rank must call it.
@@ -215,7 +222,7 @@ fn check_held_keys<C: CommunicatorCollectives>(
     held: &HashMap<u64, KeyType>,
     octree: &Octree<'_, C>,
     global_leaves: &[u64],
-) -> [usize; 3] {
+) -> [usize; 2] {
     let nranks = comm.size() as usize;
     let rank = comm.rank() as usize;
     let own_blocks = octree.coarse_tree_leafs();
@@ -236,6 +243,8 @@ fn check_held_keys<C: CommunicatorCollectives>(
     tree.dedup();
     let in_tree = |key: u64| tree.binary_search(&key).is_ok();
     let is_leaf = |key: u64| global_leaves.binary_search(&key).is_ok();
+    // The first block at or below `key`, and the block a key below the blocks lies in.
+    let first_block = |key: u64| blocks.iter().position(|&block| is_ancestor(key, block));
     let block_of = |key: u64| blocks.iter().position(|&block| is_ancestor(block, key));
 
     // T: every block and every ancestor of one.
@@ -288,24 +297,21 @@ fn check_held_keys<C: CommunicatorCollectives>(
     essential.sort_unstable();
     essential.dedup();
 
-    let mut expected: Vec<u64> = essential.iter().chain(&top).copied().collect();
-    expected.sort_unstable();
-    expected.dedup();
     let mut actual: Vec<u64> = held.keys().copied().collect();
     actual.sort_unstable();
     let extra: Vec<u64> = actual
         .iter()
         .copied()
-        .filter(|key| expected.binary_search(key).is_err())
+        .filter(|key| essential.binary_search(key).is_err())
         .collect();
-    let missing: Vec<u64> = expected
+    let missing: Vec<u64> = essential
         .iter()
         .copied()
         .filter(|key| actual.binary_search(key).is_err())
         .collect();
     assert!(
         extra.is_empty() && missing.is_empty(),
-        "rank {rank}: {name}: held keys not H ∪ T: {} extra {extra:?}, {} missing {missing:?}",
+        "rank {rank}: {name}: held keys not H: {} extra {extra:?}, {} missing {missing:?}",
         extra.len(),
         missing.len()
     );
@@ -313,8 +319,10 @@ fn check_held_keys<C: CommunicatorCollectives>(
     for (&key, &kind) in held {
         let above_blocks = top.binary_search(&key).is_ok() && blocks.binary_search(&key).is_err();
         let one_rank_root = nranks == 1 && key == morton::root() && !is_leaf(key);
-        let expected = if above_blocks || one_rank_root {
+        let expected = if shared(key) || one_rank_root {
             KeyType::Global
+        } else if above_blocks {
+            KeyType::GhostInterior(owners[first_block(key).expect("an ancestor of a block")])
         } else {
             let owner = owners[block_of(key).expect("a key below the blocks lies in one")];
             match (owner == rank, is_leaf(key)) {
@@ -326,17 +334,42 @@ fn check_held_keys<C: CommunicatorCollectives>(
         };
         assert_eq!(kind, expected, "rank {rank}: {name}: kind of {key}");
     }
-    [held.len(), essential.len(), top.len()]
+    let top_held = held
+        .keys()
+        .filter(|key| top.binary_search(key).is_ok())
+        .count();
+    [held.len(), top_held]
+}
+
+/// Whether this rank computes the multipole of the held `key`: a local key, or a `Global`
+/// box it owns, the owner of a top-tree key being the rank of its first descendant block
+/// (the octree's partition map; docs/design/scale-out.md §4.1).
+fn computes<C: CommunicatorCollectives>(
+    octree: &Octree<'_, C>,
+    held: &HashMap<u64, KeyType>,
+    key: u64,
+) -> bool {
+    match held[&key] {
+        KeyType::LocalLeaf | KeyType::LocalInterior => true,
+        KeyType::Global => {
+            let map = octree.partition_map();
+            map.owner(key) == map.rank()
+        }
+        KeyType::GhostLeaf(_) | KeyType::GhostInterior(_) => false,
+    }
 }
 
 /// Compare the index-form lists of every local non-ghost box against the brute-force
-/// oracle, through the key and index maps, and check the invariants of the views.
+/// oracle, through the key and index maps, and check the invariants of the views: a
+/// `Global` box has its children in its global M2M row where `computed` says this rank
+/// owns it, and an empty row elsewhere (Phase 5S T5).
 fn check_plan(
     name: &str,
     all_keys: &HashMap<u64, KeyType>,
     oracle: &OracleLists,
     plan: &Plan,
     coarse_blocks: &[u64],
+    computed: impl Fn(u64) -> bool,
 ) {
     let index = plan.index();
     let leaves = index.leaves();
@@ -437,7 +470,12 @@ fn check_plan(
                 _ => (&[][..], &[][..]),
             };
             let children: Vec<u64> = children.iter().map(key_on(level + 1)).collect();
-            if kind == KeyType::LocalInterior || kind == KeyType::Global {
+            assert_eq!(
+                plan.computes(level, i),
+                computed(key),
+                "{name}: owner of {key}"
+            );
+            if kind == KeyType::LocalInterior || (kind == KeyType::Global && computed(key)) {
                 assert_eq!(children, morton::children(key).unwrap(), "{name}: children");
                 assert_eq!(octants, [0, 1, 2, 3, 4, 5, 6, 7]);
             } else {
@@ -678,31 +716,315 @@ fn check_source_exchange<C: CommunicatorCollectives>(
     }
 }
 
-/// Forward the multipoles of every non-ghost box with `sizes[l]` values on level l, and
-/// check that exactly the ghosts of the V- and W-lists of the oracle receive their
-/// owner's values. Returns the traffic.
-fn check_multipole_exchange<C: CommunicatorCollectives>(
-    name: &str,
-    comm: &C,
-    all_keys: &HashMap<u64, KeyType>,
-    oracle: &OracleLists,
+/// A multipole store of `plan` with `sizes[l]` values on level l, the boxes this rank
+/// computes ([`computes`]) seeded from their keys with [`ghost_value`], every other zero.
+fn seeded_multipoles<C: CommunicatorCollectives>(
+    octree: &Octree<'_, C>,
+    held: &HashMap<u64, KeyType>,
     plan: &Plan,
     sizes: &[usize],
-) -> Traffic {
+) -> LevelBuffers<u64> {
     let index = plan.index();
-    let mut exchange = MultipoleExchange::<u64>::new(plan, comm, sizes)
-        .unwrap_or_else(|error| panic!("{name}: multipole exchange: {error}"));
     let mut multipoles = LevelBuffers::<u64>::from_index(index, sizes);
     for level in 0..index.nlevels() {
         for i in 0..index.len(level) {
-            if !index.kind(level, i).is_ghost() {
-                let key = index.key(level, i);
+            let key = index.key(level, i);
+            if computes(octree, held, key) {
                 for (k, value) in multipoles.chunk_mut(level, i).iter_mut().enumerate() {
                     *value = ghost_value(key, k);
                 }
             }
         }
     }
+    multipoles
+}
+
+/// The keys of `boxes` on `level`.
+fn keys_of(plan: &Plan, level: usize, boxes: &[u32]) -> Vec<u64> {
+    boxes
+        .iter()
+        .map(|&i| plan.index().key(level, i as usize))
+        .collect()
+}
+
+/// Check that `multipoles` holds its owner's values exactly in the slots this rank
+/// computes and in `received[l]` (keys, per level), and zero elsewhere.
+fn check_slots<C: CommunicatorCollectives>(
+    name: &str,
+    octree: &Octree<'_, C>,
+    held: &HashMap<u64, KeyType>,
+    plan: &Plan,
+    multipoles: &LevelBuffers<u64>,
+    received: &[Vec<u64>],
+) {
+    let index = plan.index();
+    for (level, received) in received.iter().enumerate().take(index.nlevels()) {
+        for i in 0..index.len(level) {
+            let key = index.key(level, i);
+            let chunk = multipoles.chunk(level, i);
+            if computes(octree, held, key) || received.binary_search(&key).is_ok() {
+                for (k, &value) in chunk.iter().enumerate() {
+                    assert_eq!(value, ghost_value(key, k), "{name}: multipole of {key}");
+                }
+            } else {
+                assert!(
+                    chunk.iter().all(|&v| v == 0),
+                    "{name}: {key} written but not received"
+                );
+            }
+        }
+    }
+}
+
+/// Check the upward reduction (Phase 5S T5; docs/design/scale-out.md §4.2): its levels are
+/// 1 to the deepest block level; on level l it receives exactly the children of the
+/// `Global` boxes this rank owns that other ranks compute, and sends only boxes this rank
+/// computes; forwarded deepest first it writes their owners' values into those slots and
+/// nothing else; the non-blocking reduction (sends posted level by level, `test` calls,
+/// waits deepest first, on a second exchange) delivers the same bits; and messages and
+/// values sent equal those received over all ranks. Returns the reduction and the
+/// traffic (keys and values received). Collective.
+fn check_reduction<C: CommunicatorCollectives>(
+    name: &str,
+    octree: &Octree<'_, C>,
+    held: &HashMap<u64, KeyType>,
+    plan: &Plan,
+    sizes: &[usize],
+) -> (ReductionExchange<u64>, Traffic) {
+    let comm = octree.comm();
+    let index = plan.index();
+    let mut exchange = ReductionExchange::<u64>::new(plan, comm, sizes)
+        .unwrap_or_else(|error| panic!("{name}: reduction: {error}"));
+    let deepest = octree
+        .partition_map()
+        .blocks()
+        .iter()
+        .map(|&block| morton::level(block))
+        .max()
+        .unwrap();
+    assert_eq!(
+        exchange.levels(),
+        1..deepest + 1,
+        "{name}: reduction levels"
+    );
+
+    // The children of the owned `Global` boxes that other ranks compute, by level.
+    let mut expected = vec![Vec::new(); index.nlevels()];
+    for (&key, &kind) in held {
+        if kind == KeyType::Global && computes(octree, held, key) {
+            for child in morton::children(key).unwrap() {
+                if !computes(octree, held, child) {
+                    expected[morton::level(child)].push(child);
+                }
+            }
+        }
+    }
+    let mut traffic = Traffic::default();
+    for (level, expected) in expected.iter_mut().enumerate() {
+        expected.sort_unstable();
+        if !exchange.levels().contains(&level) {
+            assert!(expected.is_empty(), "{name}: a child on level {level}");
+            continue;
+        }
+        let received = exchange.receive_boxes(level);
+        assert!(received.windows(2).all(|pair| pair[0] < pair[1]), "{name}");
+        assert_eq!(
+            &keys_of(plan, level, received),
+            expected,
+            "{name}: reduction receives of level {level}"
+        );
+        for key in keys_of(plan, level, exchange.send_boxes(level)) {
+            assert!(
+                computes(octree, held, key),
+                "{name}: the reduction sends {key}, which another rank computes"
+            );
+        }
+        let communicator = exchange.communicator(level);
+        traffic.keys += communicator.total_receive_count();
+        traffic.values += communicator.receive_buffer_len();
+    }
+
+    let seeded = seeded_multipoles(octree, held, plan, sizes);
+    let mut multipoles = seeded.clone();
+    for level in exchange.levels().rev() {
+        exchange.forward(level, &mut multipoles);
+    }
+    check_slots(name, octree, held, plan, &multipoles, &expected);
+
+    let mut second = ReductionExchange::<u64>::new(plan, comm, sizes)
+        .unwrap_or_else(|error| panic!("{name}: reduction: {error}"));
+    let mut overlapped = seeded;
+    let levels = second.levels();
+    let (current, _) = second.forward_all_overlapped(&mut overlapped, |flight, multipoles| {
+        let mut current = true;
+        for level in levels.rev() {
+            flight.send(level, multipoles);
+            flight.test();
+            flight.wait(level, multipoles);
+            current &= flight.exchange().receive_buffer(level) == exchange.receive_buffer(level);
+        }
+        current
+    });
+    assert!(current, "{name}: a reduction receive buffer after its wait");
+    assert!(
+        overlapped == multipoles,
+        "{name}: the non-blocking reduction differs from the blocking one"
+    );
+    for level in exchange.levels() {
+        check_traffic(
+            name,
+            comm,
+            second.traffic(level),
+            second.communicator(level),
+        );
+    }
+    (exchange, traffic)
+}
+
+/// The top-tree keys each rank reads but neither computes nor receives through the
+/// reduction (the readers of the replicated top), by key, from the oracle's V- and
+/// W-lists.
+fn top_needs<C: CommunicatorCollectives>(
+    octree: &Octree<'_, C>,
+    held: &HashMap<u64, KeyType>,
+    oracle: &OracleLists,
+    plan: &Plan,
+    reduction: &ReductionExchange<u64>,
+) -> Vec<u64> {
+    let map = octree.partition_map();
+    let index = plan.index();
+    let mut needs: Vec<u64> = oracle
+        .values()
+        .flat_map(|[_, v, w, _]| v.iter().chain(w))
+        .copied()
+        .filter(|&key| map.top_kind(key).is_some() && !computes(octree, held, key))
+        .filter(|&key| {
+            let (level, i) = index.find(key).unwrap();
+            !reduction.receives(level, i)
+        })
+        .collect();
+    needs.sort_unstable();
+    needs.dedup();
+    needs
+}
+
+/// Check the replicated top (Phase 5S T5; docs/design/scale-out.md §4.3): R is the same on
+/// every rank; with every rank's readers counted by brute force (each rank's
+/// [`top_needs`], gathered), it holds exactly the top-tree keys with at least
+/// max(2, ⌈P/16⌉) readers (the tests stay far below the cap), in rank order, each rank's
+/// keys its own by (level, key); the gather sends this rank's keys, writes exactly the
+/// keys of R this rank holds but neither computes nor receives through the reduction, and
+/// delivers every owner's values to every rank. Returns the exchange and its size (keys, values). Collective.
+fn check_top<C: CommunicatorCollectives>(
+    name: &str,
+    octree: &Octree<'_, C>,
+    held: &HashMap<u64, KeyType>,
+    oracle: &OracleLists,
+    plan: &Plan,
+    sizes: &[usize],
+    reduction: &ReductionExchange<u64>,
+) -> (TopExchange<u64>, Traffic) {
+    let comm = octree.comm();
+    let map = octree.partition_map();
+    let nranks = comm.size() as usize;
+    let rank = comm.rank() as usize;
+    let index = plan.index();
+    let mut top = TopExchange::<u64>::new(plan, comm, sizes, reduction)
+        .unwrap_or_else(|error| panic!("{name}: replicated top: {error}"));
+
+    let (shortest, longest) = extremes(comm, top.keys().len());
+    let hash = top.keys().iter().fold(OFFSET_BASIS, |hash, &key| {
+        (hash ^ key).wrapping_mul(0x0100_0000_01b3)
+    });
+    let mut hashes = [0u64; 2];
+    comm.all_reduce_into(&hash, &mut hashes[0], SystemOperation::min());
+    comm.all_reduce_into(&hash, &mut hashes[1], SystemOperation::max());
+    assert!(
+        shortest == longest && hashes[0] == hashes[1],
+        "{name}: R differs between ranks"
+    );
+
+    let mut readers = gather_to_all(&top_needs(octree, held, oracle, plan, reduction), comm);
+    readers.sort_unstable();
+    let threshold = nranks.div_ceil(TOP_READER_FRACTION).max(2);
+    let mut expected = Vec::new();
+    for group in readers.chunk_by(|a, b| a == b) {
+        if group.len() >= threshold {
+            expected.push(group[0]);
+        }
+    }
+    assert!(expected.len() <= TOP_MAX_BOXES, "{name}: the cap binds");
+    assert_eq!(top.threshold(), threshold, "{name}: threshold");
+    let mut keys = top.keys().to_vec();
+    keys.sort_unstable();
+    assert_eq!(keys, expected, "{name}: the keys of R");
+    for r in 0..nranks {
+        let own = &top.keys()[top.rank_keys(r)];
+        assert!(own.iter().all(|&key| map.owner(key) == r), "{name}");
+        assert!(
+            own.windows(2)
+                .all(|pair| (morton::level(pair[0]), pair[0]) < (morton::level(pair[1]), pair[1])),
+            "{name}: R by (level, key)"
+        );
+    }
+    assert_eq!(top.sent_keys(), top.rank_keys(rank), "{name}: sent keys");
+    let received: Vec<usize> = (0..top.keys().len())
+        .filter(|&r| {
+            let key = top.keys()[r];
+            index.find(key).is_some_and(|(level, i)| {
+                !computes(octree, held, key) && !reduction.receives(level, i)
+            })
+        })
+        .collect();
+    assert_eq!(top.received_keys(), received, "{name}: received keys");
+    for (r, &key) in top.keys().iter().enumerate() {
+        assert_eq!(top.slot(r), index.find(key), "{name}: slot of {key} in R");
+    }
+
+    let mut multipoles = seeded_multipoles(octree, held, plan, sizes);
+    top.gather(&mut multipoles);
+    for (r, &key) in top.keys().iter().enumerate() {
+        let expected: Vec<u64> = (0..sizes[morton::level(key)])
+            .map(|k| ghost_value(key, k))
+            .collect();
+        assert_eq!(top.chunk(r), expected, "{name}: gathered {key}");
+    }
+    let mut written = vec![Vec::new(); index.nlevels()];
+    for &r in top.received_keys() {
+        let key = top.keys()[r];
+        written[morton::level(key)].push(key);
+    }
+    for level in &mut written {
+        level.sort_unstable();
+    }
+    check_slots(name, octree, held, plan, &multipoles, &written);
+    let size = Traffic {
+        keys: top.keys().len(),
+        values: top.gathered().len(),
+    };
+    (top, size)
+}
+
+/// Forward the multipoles of every box this rank computes with `sizes[l]` values on
+/// level l, and check that the boxes of the oracle's V- and W-lists that other ranks
+/// compute, without those the reduction and the replicated top deliver, receive their
+/// owner's values, and nothing else; that every box sent is one this rank computes; and
+/// that every multipole a list of this rank reads, and every child its owned `Global`
+/// boxes need, reaches it exactly once over the three exchanges. Returns the traffic.
+fn check_multipole_exchange<C: CommunicatorCollectives>(
+    name: &str,
+    octree: &Octree<'_, C>,
+    all_keys: &HashMap<u64, KeyType>,
+    oracle: &OracleLists,
+    plan: &Plan,
+    sizes: &[usize],
+    (reduction, top): (&ReductionExchange<u64>, &TopExchange<u64>),
+) -> Traffic {
+    let comm = octree.comm();
+    let index = plan.index();
+    let mut exchange = MultipoleExchange::<u64>::new(plan, comm, sizes, reduction, top)
+        .unwrap_or_else(|error| panic!("{name}: multipole exchange: {error}"));
+    let mut multipoles = seeded_multipoles(octree, all_keys, plan, sizes);
     let mut overlapped = multipoles.clone();
     exchange.forward_all(&mut multipoles);
 
@@ -711,7 +1033,7 @@ fn check_multipole_exchange<C: CommunicatorCollectives>(
     // between, delivers the same bits into the slots and the receive buffers; a level's
     // receive buffer is current once it is waited for.
     let nlevels = index.nlevels();
-    let mut second = MultipoleExchange::<u64>::new(plan, comm, sizes)
+    let mut second = MultipoleExchange::<u64>::new(plan, comm, sizes, reduction, top)
         .unwrap_or_else(|error| panic!("{name}: multipole exchange: {error}"));
     let (current, _) = second.forward_all_overlapped(&mut overlapped, |flight, multipoles| {
         let mut current = true;
@@ -741,118 +1063,78 @@ fn check_multipole_exchange<C: CommunicatorCollectives>(
         );
     }
 
-    // The ghosts of the V- and W-lists, by level.
-    let mut expected = vec![Vec::new(); index.nlevels()];
+    // The boxes of the V- and W-lists that other ranks compute, by level; those the
+    // multipole exchange receives are the rest after the reduction and the top.
+    let mut needed = vec![Vec::new(); nlevels];
     for &entry in oracle.values().flat_map(|[_, v, w, _]| v.iter().chain(w)) {
-        if all_keys[&entry].is_ghost() {
-            expected[morton::level(entry)].push(entry);
+        if !computes(octree, all_keys, entry) {
+            needed[morton::level(entry)].push(entry);
         }
+    }
+    let mut expected = vec![Vec::new(); nlevels];
+    for (level, needed) in needed.iter_mut().enumerate() {
+        needed.sort_unstable();
+        needed.dedup();
+        expected[level] = needed
+            .iter()
+            .copied()
+            .filter(|&key| {
+                let (_, i) = index.find(key).unwrap();
+                !reduction.receives(level, i) && !top.replicates(key)
+            })
+            .collect();
     }
 
     let mut traffic = Traffic::default();
-    for (level, expected) in expected.iter_mut().enumerate() {
-        expected.sort_unstable();
-        expected.dedup();
+    for (level, expected) in expected.iter().enumerate() {
         let received = exchange.receive_boxes(level);
         assert!(received.windows(2).all(|pair| pair[0] < pair[1]), "{name}");
-        let received_keys: Vec<u64> = received
-            .iter()
-            .map(|&i| index.key(level, i as usize))
-            .collect();
         assert_eq!(
-            &received_keys, expected,
-            "{name}: received ghosts of level {level}"
+            &keys_of(plan, level, received),
+            expected,
+            "{name}: received multipoles of level {level}"
         );
-        for i in 0..index.len(level) {
-            let key = index.key(level, i);
-            let chunk = multipoles.chunk(level, i);
-            if index.kind(level, i).is_ghost() && received.binary_search(&(i as u32)).is_err() {
-                assert!(
-                    chunk.iter().all(|&v| v == 0),
-                    "{name}: unrequested ghost {key}"
-                );
-            } else {
-                for (k, &value) in chunk.iter().enumerate() {
-                    assert_eq!(value, ghost_value(key, k), "{name}: multipole of {key}");
-                }
-            }
+        for key in keys_of(plan, level, exchange.send_boxes(level)) {
+            assert!(
+                computes(octree, all_keys, key),
+                "{name}: the multipole exchange sends {key}, which another rank computes"
+            );
         }
         let communicator = exchange.communicator(level);
         traffic.keys += communicator.total_receive_count();
         traffic.values += communicator.receive_buffer_len();
     }
-    traffic
-}
+    check_slots(name, octree, all_keys, plan, &multipoles, &expected);
 
-/// Gather the multipoles of every rank's coarse blocks and check that every rank then
-/// holds every block's values, in global key order, in the gathered buffer and in the
-/// block's slot.
-fn check_coarse_gather<C: CommunicatorCollectives>(
-    name: &str,
-    comm: &C,
-    plan: &Plan,
-    sizes: &[usize],
-) -> Traffic {
-    let index = plan.index();
-    let rank = comm.rank() as usize;
-    let mut gather = CoarseExchange::<u64>::new(plan, comm, sizes)
-        .unwrap_or_else(|error| panic!("{name}: coarse gather: {error}"));
-    let all_blocks = gather_to_all(plan.coarse_blocks(), comm);
-    assert_eq!(
-        gather.keys(),
-        all_blocks,
-        "{name}: coarse blocks in rank order"
-    );
-    assert!(
-        all_blocks.windows(2).all(|pair| pair[0] < pair[1]),
-        "{name}: rank order is key order"
-    );
-    assert_eq!(
-        &gather.keys()[gather.rank_blocks(rank)],
-        plan.coarse_blocks()
-    );
-    // What the gather reads (none on one rank, where it gathers to itself) and writes.
-    let own = gather.rank_blocks(rank);
-    let sent = if comm.size() == 1 { 0..0 } else { own.clone() };
-    assert_eq!(gather.sent_blocks(), sent, "{name}: sent blocks");
-    let received: Vec<usize> = gather.received_blocks().collect();
-    let others: Vec<usize> = (0..all_blocks.len()).filter(|b| !own.contains(b)).collect();
-    assert_eq!(received, others, "{name}: received blocks");
-
-    let mut multipoles = LevelBuffers::<u64>::from_index(index, sizes);
-    for &key in plan.coarse_blocks() {
-        let (level, i) = index.find(key).unwrap();
-        for (k, value) in multipoles
-            .chunk_mut(level, i as usize)
-            .iter_mut()
-            .enumerate()
-        {
-            *value = ghost_value(key, k);
+    // Every multipole a list reads, and every child of an owned `Global` box, once.
+    let mut delivered = vec![Vec::new(); nlevels];
+    for (level, delivered) in delivered.iter_mut().enumerate() {
+        if reduction.levels().contains(&level) {
+            delivered.extend(keys_of(plan, level, reduction.receive_boxes(level)));
+        }
+        delivered.extend(keys_of(plan, level, exchange.receive_boxes(level)));
+    }
+    for &r in top.received_keys() {
+        let key = top.keys()[r];
+        delivered[morton::level(key)].push(key);
+    }
+    for (level, delivered) in delivered.iter_mut().enumerate() {
+        delivered.sort_unstable();
+        let unique = delivered.len();
+        delivered.dedup();
+        assert_eq!(
+            unique,
+            delivered.len(),
+            "{name}: a multipole received twice"
+        );
+        for key in &needed[level] {
+            assert!(
+                delivered.binary_search(key).is_ok(),
+                "{name}: {key} is read but never received"
+            );
         }
     }
-    gather.gather(&mut multipoles);
-    let first = gather.gathered().to_vec();
-    for (b, &key) in gather.keys().iter().enumerate() {
-        let (level, i) = gather.block(b);
-        assert_eq!(
-            index.key(level, i as usize),
-            key,
-            "{name}: slot of block {key}"
-        );
-        let expected: Vec<u64> = (0..sizes[level]).map(|k| ghost_value(key, k)).collect();
-        assert_eq!(gather.chunk(b), expected, "{name}: gathered block {key}");
-        assert_eq!(
-            multipoles.chunk(level, i as usize),
-            expected,
-            "{name}: block {key} in its slot"
-        );
-    }
-    gather.gather(&mut multipoles);
-    assert_eq!(gather.gathered(), first, "{name}: two gathers agree");
-    Traffic {
-        keys: gather.keys().len(),
-        values: gather.gathered().len(),
-    }
+    traffic
 }
 
 /// A target count per leaf that every rank can recompute from the key, independent of
@@ -861,10 +1143,12 @@ fn hashed_target_count(key: u64) -> usize {
     hashed_count(key ^ 0x5bd1_e995)
 }
 
-/// A per-pair test operator whose values do not matter. Every call adds to each output
+/// A per-pair test operator whose values do not matter. Every call mixes into each output
 /// value a hash of all its inputs and of the keys of the pair, so the values depend on
-/// every input, ghost sources and ghost multipoles included, and a stale or doubled
-/// value shows. It checks that an evaluation repeats bit for bit, not that it is right.
+/// every input, received sources and multipoles included, and a stale or doubled value
+/// shows; the mixing does not commute, so a contribution in another order shows too
+/// (Phase 5S T5). It checks that an evaluation repeats bit for bit, and that several
+/// ranks give a value the bits of one rank, not that it is right.
 #[derive(Clone, Copy, Debug)]
 struct Mixer;
 
@@ -872,14 +1156,15 @@ struct Mixer;
 /// give a nonzero hash.
 const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 
-/// Add a hash of `inputs` and `keys` to every value of `output`.
+/// Mix a hash of `inputs` and `keys` into every value of `output`: rotate, then add, so
+/// that two contributions in the other order give other bits.
 fn mix(inputs: [&[u32]; 2], keys: [u64; 2], output: &mut [u32]) {
     let hash = inputs.iter().flat_map(|input| input.iter()).fold(
         OFFSET_BASIS ^ keys[0] ^ keys[1].rotate_left(32),
         |hash, &value| (hash ^ u64::from(value)).wrapping_mul(0x0100_0000_01b3),
     );
     for (k, value) in output.iter_mut().enumerate() {
-        *value = value.wrapping_add((hash >> (k % 32)) as u32);
+        *value = value.rotate_left(7).wrapping_add((hash >> (k % 32)) as u32);
     }
 }
 
@@ -1046,14 +1331,166 @@ fn check_repeated_evaluation<C: CommunicatorCollectives>(name: &str, comm: &C, p
     );
 }
 
+/// The stores of a [`Mixer`] evaluation of `plan` on `comm` (hashed counts, data by key,
+/// as [`check_repeated_evaluation`]), and per level the boxes whose multipoles the
+/// evaluation received: through the reduction, the replicated top and the multipole
+/// exchange. Collective.
+fn mixed<C: CommunicatorCollectives>(plan: &Plan, comm: &C) -> (Stores, Vec<Vec<u32>>) {
+    let leaves = plan.index().leaves();
+    let sources: Vec<usize> = (0..leaves.nlocal())
+        .map(|j| hashed_count(leaves.key(j)))
+        .collect();
+    let targets: Vec<usize> = (0..leaves.nlocal())
+        .map(|j| hashed_target_count(leaves.key(j)))
+        .collect();
+    let mut evaluator = Evaluator::new(plan, comm, PerPair(Mixer), &sources, &targets)
+        .unwrap_or_else(|error| panic!("evaluator: {error}"));
+    fill_by_key(plan, evaluator.local_sources_mut(), 0);
+    fill_by_key(plan, evaluator.local_target_inputs_mut(), 1);
+    evaluator.evaluate();
+    let mut received = vec![Vec::new(); plan.nlevels()];
+    let reduction = evaluator.reduction_exchange();
+    for level in reduction.levels() {
+        received[level].extend_from_slice(reduction.receive_boxes(level));
+    }
+    let top = evaluator.top_exchange();
+    for &r in top.received_keys() {
+        let (level, i) = top.slot(r).unwrap();
+        received[level].push(i);
+    }
+    let multipoles = evaluator.multipole_exchange();
+    for (level, received) in received.iter_mut().enumerate() {
+        received.extend_from_slice(multipoles.receive_boxes(level));
+        received.sort_unstable();
+    }
+    (stores(&evaluator), received)
+}
+
+/// Evaluate the order-sensitive [`Mixer`] on `plan` and on the plan of the one-rank tree
+/// over every rank's `fine_keys` (built on `self_comm`), with the same counts and data
+/// by key, and check by key (Phase 5S T5; docs/design/scale-out.md §9.1): every multipole
+/// this rank computes or receives, the shared ancestors' among them, the local of every
+/// box it holds but a ghost, and the output of every local leaf are bit for bit the
+/// one-rank values; every other multipole is zero. The leaves of the two trees agree.
+/// The verdict is agreed on every rank (one all-reduce), so the check fails on every rank
+/// or on none. Returns the number of `Global` multipoles this rank formed. Collective.
+fn check_against_one_rank<C: CommunicatorCollectives>(
+    name: &str,
+    octree: &Octree<'_, C>,
+    plan: &Plan,
+    fine_keys: &[u64],
+    options: OctreeOptions,
+) -> usize {
+    let comm = octree.comm();
+    let rank = comm.rank();
+    let all_keys = gather_to_all(fine_keys, comm);
+    let mut leaves = gather_to_all(octree.leaf_keys(), comm);
+    leaves.sort_unstable();
+    let single_comm = SimpleCommunicator::self_comm();
+    let single = Octree::new(&all_keys, options, &single_comm);
+    assert_eq!(single.leaf_keys(), &leaves, "{name}: the one-rank tree");
+    let one = Plan::new(&single).unwrap_or_else(|error| panic!("{name}: one rank: {error}"));
+
+    let ((outputs, multipoles, locals, _), received) = mixed(plan, comm);
+    let ((one_outputs, one_multipoles, one_locals, _), _) = mixed(&one, &single_comm);
+    let index = plan.index();
+    let one_index = one.index();
+    // The defects of this rank (the first few named), agreed on every rank below, so that
+    // the check fails on every rank or on none.
+    let mut defects = 0usize;
+    let mut named = Vec::new();
+    let mut defect = |what: String| {
+        defects += 1;
+        if named.len() < 4 {
+            named.push(what);
+        }
+    };
+    let mut formed = 0;
+    for (level, received) in received.iter().enumerate() {
+        for i in 0..index.len(level) {
+            let key = index.key(level, i);
+            let kind = index.kind(level, i);
+            let (one_level, j) = one_index.find(key).expect("the same tree");
+            let had = plan.computes(level, i) || received.binary_search(&(i as u32)).is_ok();
+            if had {
+                if multipoles.chunk(level, i) != one_multipoles.chunk(one_level, j as usize) {
+                    defect(format!("multipole of {key} ({kind:?})"));
+                }
+                formed += usize::from(kind == KeyType::Global && plan.computes(level, i));
+            } else if multipoles.chunk(level, i).iter().any(|&v| v != 0) {
+                defect(format!("multipole of {key} ({kind:?}) written"));
+            }
+            if !kind.is_ghost() && locals.chunk(level, i) != one_locals.chunk(one_level, j as usize)
+            {
+                defect(format!("local of {key} ({kind:?})"));
+            }
+        }
+    }
+    let leaves = index.leaves();
+    let one_leaves = one_index.leaves();
+    for j in 0..leaves.nlocal() {
+        let key = leaves.key(j);
+        let k = one_index.find_leaf(key).expect("the same leaves") as usize;
+        if k >= one_leaves.nlocal() || outputs.chunk(j) != one_outputs.chunk(k) {
+            defect(format!("output of leaf {key}"));
+        }
+    }
+    let mut total = 0usize;
+    comm.all_reduce_into(&defects, &mut total, SystemOperation::sum());
+    assert!(
+        total == 0,
+        "rank {rank}: {name}: {total} values differ from one rank's over all ranks, here \
+         {defects}: {named:?}"
+    );
+    formed
+}
+
+/// A point in [0, 1)³ from `i` and `k`, the same on every rank.
+fn hashed_unit(i: usize, k: u64) -> f64 {
+    let hash = (i as u64 ^ k.wrapping_mul(0x5851_f42d_4c95_7f2d))
+        .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        .rotate_left(29)
+        .wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    (hash >> 11) as f64 / (1u64 << 53) as f64
+}
+
+/// `n` points of the unit cube, uniform, the i-th from its index.
+fn cube(range: Range<usize>) -> Vec<[f64; 3]> {
+    range
+        .map(|i| [hashed_unit(i, 1), hashed_unit(i, 2), hashed_unit(i, 3)])
+        .collect()
+}
+
+/// Points of a Plummer sphere of scale 0.05 at the centre of the unit cube (radii cut at
+/// 0.45), the i-th from its index.
+fn plummer(range: Range<usize>) -> Vec<[f64; 3]> {
+    range
+        .map(|i| {
+            let mass = hashed_unit(i, 4).max(1e-9);
+            let radius = (0.05 / (mass.powf(-2.0 / 3.0) - 1.0).max(1e-12).sqrt()).min(0.45);
+            let cos = 2.0 * hashed_unit(i, 5) - 1.0;
+            let sin = (1.0 - cos * cos).sqrt();
+            let phi = std::f64::consts::TAU * hashed_unit(i, 6);
+            [
+                0.5 + radius * sin * phi.cos(),
+                0.5 + radius * sin * phi.sin(),
+                0.5 + radius * cos,
+            ]
+        })
+        .collect()
+}
+
 /// One level call: (method, level, pass of an M2M), or one host-data event: (event,
-/// level of a `ReceivedMultipoles`, else 0, `None`).
+/// level of a `SendReduction`, `ReceivedReduction` or `ReceivedMultipoles`, else 0,
+/// `None`).
 type Call = (&'static str, usize, Option<UpwardPass>);
 
 /// The index lists of one host-data event as the recorder saw them: (event, level, the
 /// lists). `SendSources`: the leaves; `ReceivedSources`: the ghost leaves;
-/// `SendMultipoles`: the sent coarse blocks, then the sent boxes of every level;
-/// `ReceivedCoarse`: the received blocks; `ReceivedMultipoles`: the received boxes.
+/// `SendReduction`, `ReceivedReduction`: the sent and the received boxes of the level;
+/// `SendMultipoles`: the sent keys of the replicated top, then the sent boxes of every
+/// level; `ReceivedTop`: the received keys of the top; `ReceivedMultipoles`: the received
+/// boxes.
 type EventLists = (&'static str, usize, Vec<Vec<usize>>);
 
 /// A test operator that computes nothing. It checks every batch it receives (the
@@ -1255,39 +1692,72 @@ impl FmmOperator for Recorder<'_> {
                 vec![leaves.collect()],
                 sources.nleaves() == nleaves,
             ),
-            HostData::SendMultipoles {
-                coarse,
+            HostData::SendReduction {
+                level,
                 exchange,
                 multipoles,
             } => {
-                let mut lists = vec![coarse.sent_blocks().collect::<Vec<_>>()];
+                // The sent boxes are final and this rank's: local, or `Global` and owned.
+                let boxes = exchange.send_boxes(level);
+                let shaped = multipoles.nlevels() == index.nlevels()
+                    && boxes.iter().all(|&i| self.plan.computes(level, i as usize));
+                (
+                    "send reduction",
+                    level,
+                    vec![boxes.iter().map(|&i| i as usize).collect()],
+                    shaped,
+                )
+            }
+            HostData::ReceivedReduction {
+                level,
+                exchange,
+                multipoles,
+            } => {
+                let boxes = exchange.receive_boxes(level);
+                let size = exchange.size(level);
+                let buffer = exchange.receive_buffer(level);
+                let shaped = buffer.len() == boxes.len() * size
+                    && boxes
+                        .iter()
+                        .zip(buffer.chunks_exact(size))
+                        .all(|(&i, chunk)| multipoles.chunk(level, i as usize) == chunk);
+                (
+                    "received reduction",
+                    level,
+                    vec![boxes.iter().map(|&i| i as usize).collect()],
+                    shaped,
+                )
+            }
+            HostData::SendMultipoles {
+                top,
+                exchange,
+                multipoles,
+            } => {
+                let mut lists = vec![top.sent_keys().collect::<Vec<_>>()];
                 lists.extend(
                     (0..exchange.nlevels())
                         .map(|l| exchange.send_boxes(l).iter().map(|&i| i as usize).collect()),
                 );
-                // The sent blocks are final after the local upward pass: local leaves or
-                // local interior boxes, never `Global`.
+                // The sent keys of the top are this rank's boxes, final after the
+                // reduction: local, or `Global` and owned.
                 let shaped = multipoles.nlevels() == index.nlevels()
                     && (0..index.nlevels()).all(|l| multipoles.len(l) == index.len(l))
-                    && coarse.sent_blocks().all(|b| {
-                        let (l, i) = coarse.block(b);
-                        matches!(
-                            index.kind(l, i as usize),
-                            KeyType::LocalLeaf | KeyType::LocalInterior
-                        )
+                    && top.sent_keys().all(|r| {
+                        top.slot(r)
+                            .is_some_and(|(l, i)| self.plan.computes(l, i as usize))
                     });
                 ("send multipoles", 0, lists, shaped)
             }
-            HostData::ReceivedCoarse { coarse, multipoles } => {
+            HostData::ReceivedTop { top, multipoles } => {
                 // The packed values are the slots' values.
-                let shaped = coarse.received_blocks().all(|b| {
-                    let (l, i) = coarse.block(b);
-                    coarse.chunk(b) == multipoles.chunk(l, i as usize)
+                let shaped = top.received_keys().iter().all(|&r| {
+                    top.slot(r)
+                        .is_some_and(|(l, i)| top.chunk(r) == multipoles.chunk(l, i as usize))
                 });
                 (
-                    "received coarse",
+                    "received top",
                     0,
-                    vec![coarse.received_blocks().collect()],
+                    vec![top.received_keys().to_vec()],
                     shaped,
                 )
             }
@@ -1320,9 +1790,28 @@ impl FmmOperator for Recorder<'_> {
     }
 }
 
+/// [`expected_calls`] or [`expected_overlapped_calls`].
+type ExpectedCalls = fn(usize, Range<usize>) -> Vec<Call>;
+
+/// The global M2M calls of one evaluation from level L − 1 down, each after the events
+/// of the reduction of the level below it if that is a reduction level (Phase 5S T5).
+fn global_pass(deepest: usize, reduction: &Range<usize>) -> Vec<Call> {
+    let mut calls = Vec::new();
+    for level in (0..deepest).rev() {
+        if reduction.contains(&(level + 1)) {
+            calls.extend([
+                ("send reduction", level + 1, None),
+                ("received reduction", level + 1, None),
+            ]);
+        }
+        calls.push(("m2m", level, Some(UpwardPass::Global)));
+    }
+    calls
+}
+
 /// The level calls and host-data events of one evaluation, in the order of design §7.2
-/// and of `docs/design/distributed-fmm.md` §6.2.
-fn expected_calls(nlevels: usize) -> Vec<Call> {
+/// and of `docs/design/distributed-fmm.md` §6.2, with the reduction levels `reduction`.
+fn expected_calls(nlevels: usize, reduction: Range<usize>) -> Vec<Call> {
     let deepest = nlevels - 1;
     let mut calls = vec![
         ("reset", 0, None),
@@ -1335,10 +1824,8 @@ fn expected_calls(nlevels: usize) -> Vec<Call> {
             calls.push(("m2m", level - 1, Some(UpwardPass::Local)));
         }
     }
-    calls.extend([("send multipoles", 0, None), ("received coarse", 0, None)]);
-    for level in (0..deepest).rev() {
-        calls.push(("m2m", level, Some(UpwardPass::Global)));
-    }
+    calls.extend(global_pass(deepest, &reduction));
+    calls.extend([("send multipoles", 0, None), ("received top", 0, None)]);
     for level in 0..=deepest {
         calls.push(("received multipoles", level, None));
     }
@@ -1363,7 +1850,7 @@ fn expected_calls(nlevels: usize) -> Vec<Call> {
 /// (`Evaluator::evaluate_overlapped`, `docs/design/distributed-fmm.md` §6.5, §8.1): the
 /// calls of [`expected_calls`] in the same order, `ReceivedSources` after the local upward
 /// pass, and each `ReceivedMultipoles` of level l just before the downward calls of l.
-fn expected_overlapped_calls(nlevels: usize) -> Vec<Call> {
+fn expected_overlapped_calls(nlevels: usize, reduction: Range<usize>) -> Vec<Call> {
     let deepest = nlevels - 1;
     let mut calls = vec![("reset", 0, None), ("send sources", 0, None)];
     for level in (0..=deepest).rev() {
@@ -1372,14 +1859,9 @@ fn expected_overlapped_calls(nlevels: usize) -> Vec<Call> {
             calls.push(("m2m", level - 1, Some(UpwardPass::Local)));
         }
     }
-    calls.extend([
-        ("received sources", 0, None),
-        ("send multipoles", 0, None),
-        ("received coarse", 0, None),
-    ]);
-    for level in (0..deepest).rev() {
-        calls.push(("m2m", level, Some(UpwardPass::Global)));
-    }
+    calls.push(("received sources", 0, None));
+    calls.extend(global_pass(deepest, &reduction));
+    calls.extend([("send multipoles", 0, None), ("received top", 0, None)]);
     calls.push(("received multipoles", 0, None));
     for level in 1..=deepest {
         calls.extend([
@@ -1407,6 +1889,53 @@ fn pairs_of(method: &'static str, target: u64, sources: &[u64]) -> Vec<(&'static
         .collect()
 }
 
+/// The index lists of the host-data events of one evaluation with the exchanges
+/// `sources`, `reduction`, `top` and `multipoles`, in order (see [`EventLists`]).
+fn event_lists<T: Equivalence + Copy + Default>(
+    nlevels: usize,
+    sources: &SourceExchange<T>,
+    reduction: &ReductionExchange<T>,
+    top: &TopExchange<T>,
+    multipoles: &MultipoleExchange<T>,
+) -> Vec<EventLists> {
+    let as_usize = |values: &[u32]| values.iter().map(|&v| v as usize).collect::<Vec<_>>();
+    let mut events = vec![
+        ("reset", 0, Vec::new()),
+        ("send sources", 0, vec![as_usize(sources.send_leaves())]),
+        (
+            "received sources",
+            0,
+            vec![sources.ghost_leaves().collect()],
+        ),
+    ];
+    for level in (1..nlevels).rev() {
+        if reduction.levels().contains(&level) {
+            events.push((
+                "send reduction",
+                level,
+                vec![as_usize(reduction.send_boxes(level))],
+            ));
+            events.push((
+                "received reduction",
+                level,
+                vec![as_usize(reduction.receive_boxes(level))],
+            ));
+        }
+    }
+    let mut sends = vec![top.sent_keys().collect::<Vec<usize>>()];
+    sends.extend((0..nlevels).map(|l| as_usize(multipoles.send_boxes(l))));
+    events.push(("send multipoles", 0, sends));
+    events.push(("received top", 0, vec![top.received_keys().to_vec()]));
+    events.extend((0..nlevels).map(|l| {
+        (
+            "received multipoles",
+            l,
+            vec![as_usize(multipoles.receive_boxes(l))],
+        )
+    }));
+    events
+}
+
 /// The index lists the host-data events of one evaluation must carry, in order (see
 /// [`EventLists`]), from exchanges built independently of the evaluator's, with the
 /// recorder's sizes and `counts`. Collective.
@@ -1420,49 +1949,19 @@ fn expected_events<C: CommunicatorCollectives>(
     let sizes = vec![1; nlevels];
     let sources = SourceExchange::<u32>::new(plan, comm, counts, 1)
         .unwrap_or_else(|error| panic!("{name}: source exchange: {error}"));
-    let multipoles = MultipoleExchange::<u32>::new(plan, comm, &sizes)
+    let reduction = ReductionExchange::<u32>::new(plan, comm, &sizes)
+        .unwrap_or_else(|error| panic!("{name}: reduction: {error}"));
+    let top = TopExchange::<u32>::new(plan, comm, &sizes, &reduction)
+        .unwrap_or_else(|error| panic!("{name}: replicated top: {error}"));
+    let multipoles = MultipoleExchange::<u32>::new(plan, comm, &sizes, &reduction, &top)
         .unwrap_or_else(|error| panic!("{name}: multipole exchange: {error}"));
-    let coarse = CoarseExchange::<u32>::new(plan, comm, &sizes)
-        .unwrap_or_else(|error| panic!("{name}: coarse gather: {error}"));
-    let rank = comm.rank() as usize;
-    let own = coarse.rank_blocks(rank);
-    let as_usize = |values: &[u32]| values.iter().map(|&v| v as usize).collect::<Vec<_>>();
-    // One rank gathers to itself: no block is sent or received.
-    let sent: Vec<usize> = if comm.size() == 1 {
-        Vec::new()
-    } else {
-        own.clone().collect()
-    };
-    let received: Vec<usize> = (0..coarse.keys().len())
-        .filter(|b| !own.contains(b))
-        .collect();
-    let mut sends = vec![sent];
-    sends.extend((0..nlevels).map(|l| as_usize(multipoles.send_boxes(l))));
-    let mut events = vec![
-        ("reset", 0, Vec::new()),
-        ("send sources", 0, vec![as_usize(sources.send_leaves())]),
-        (
-            "received sources",
-            0,
-            vec![sources.ghost_leaves().collect()],
-        ),
-        ("send multipoles", 0, sends),
-        ("received coarse", 0, vec![received]),
-    ];
-    events.extend((0..nlevels).map(|l| {
-        (
-            "received multipoles",
-            l,
-            vec![as_usize(multipoles.receive_boxes(l))],
-        )
-    }));
-    events
+    event_lists(nlevels, &sources, &reduction, &top, &multipoles)
 }
 
 /// Check the recorded host-data events of `recorder` against `expected`, and the kinds of
-/// what they name: the sent blocks are this rank's coarse blocks, every box sent is a local
-/// leaf or local interior box (final after the local upward pass), every slot written is
-/// a ghost. Returns the defects found, so that the verdict can be agreed on every rank.
+/// what they name: every box sent is one this rank computes (a local leaf or interior
+/// box, or a `Global` box it owns), every slot written one another rank computes.
+/// Returns the defects found, so that the verdict can be agreed on every rank.
 fn event_defects(recorder: &Recorder<'_>, expected: &[EventLists]) -> Vec<String> {
     let index = recorder.plan.index();
     let mut defects: Vec<String> = recorder
@@ -1482,12 +1981,7 @@ fn event_defects(recorder: &Recorder<'_>, expected: &[EventLists]) -> Vec<String
             defects.push(format!("{} (level {}): index lists differ", want.0, want.1));
         }
     }
-    let local = |l: usize, i: usize| {
-        matches!(
-            index.kind(l, i),
-            KeyType::LocalLeaf | KeyType::LocalInterior
-        )
-    };
+    let plan = recorder.plan;
     for (event, level, lists) in &recorder.events {
         match *event {
             "send sources" if lists[0].iter().any(|&j| j >= index.leaves().nlocal()) => {
@@ -1495,17 +1989,18 @@ fn event_defects(recorder: &Recorder<'_>, expected: &[EventLists]) -> Vec<String
             }
             "send multipoles" => {
                 for (l, boxes) in lists[1..].iter().enumerate() {
-                    if boxes.iter().any(|&i| !local(l, i)) {
-                        defects.push(format!("send multipoles: a box on level {l} not local"));
+                    if boxes.iter().any(|&i| !plan.computes(l, i)) {
+                        defects.push(format!("send multipoles: a box on level {l} not ours"));
                     }
                 }
             }
-            "received multipoles"
-                if lists[0].iter().any(|&i| !index.kind(*level, i).is_ghost()) =>
+            "send reduction" if lists[0].iter().any(|&i| !plan.computes(*level, i)) => {
+                defects.push(format!("send reduction: a box on level {level} not ours"));
+            }
+            "received reduction" | "received multipoles"
+                if lists[0].iter().any(|&i| plan.computes(*level, i)) =>
             {
-                defects.push(format!(
-                    "received multipoles: a box on level {level} not a ghost"
-                ));
+                defects.push(format!("{event}: a box on level {level} of ours"));
             }
             _ => {}
         }
@@ -1515,7 +2010,7 @@ fn event_defects(recorder: &Recorder<'_>, expected: &[EventLists]) -> Vec<String
 
 /// Evaluate with a recording operator: every level gets every call once, in pass order;
 /// every batch honours its grouping; and the pairs issued are exactly the pairs of the
-/// oracle lists, each once. The host-data events (`docs/design/distributed-fmm.md` §6)
+/// oracle lists, each once, the global M2M pairs on the owner of the parent only. The host-data events (`docs/design/distributed-fmm.md` §6)
 /// come in their place among the level calls, on every rank, with the index lists of the
 /// exchanges; their verdict is agreed on every rank. With `overlapped`, through
 /// `Evaluator::evaluate_overlapped` (Phase 5 T9): the same calls, groupings, pairs, events
@@ -1527,7 +2022,7 @@ fn check_batches<C: CommunicatorCollectives>(
     plan: &Plan,
     overlapped: bool,
 ) {
-    let (name, expected_calls): (&str, fn(usize) -> Vec<Call>) = if overlapped {
+    let (name, expected_calls): (&str, ExpectedCalls) = if overlapped {
         (&format!("{name}, overlapped"), expected_overlapped_calls)
     } else {
         (name, expected_calls)
@@ -1553,42 +2048,23 @@ fn check_batches<C: CommunicatorCollectives>(
         evaluator.evaluate();
     }
     let recorder = evaluator.operator();
+    let calls = expected_calls(plan.nlevels(), plan.reduction_levels());
 
     // The events, agreed: every rank receives each of them, in order, with its lists.
     let mut defects = event_defects(recorder, &expected_events);
-    if recorder.calls != expected_calls(plan.nlevels()) {
+    if recorder.calls != calls {
         defects.push("the order of the calls and events".into());
     }
     // The evaluator's exchanges, read through its accessors (Phase 5 T8), name the lists
     // its events carried.
-    let as_usize = |values: &[u32]| values.iter().map(|&v| v as usize).collect::<Vec<_>>();
+    let accessed = event_lists(
+        plan.nlevels(),
+        evaluator.source_exchange(),
+        evaluator.reduction_exchange(),
+        evaluator.top_exchange(),
+        evaluator.multipole_exchange(),
+    );
     let sources = evaluator.source_exchange();
-    let multipoles = evaluator.multipole_exchange();
-    let coarse = evaluator.coarse_exchange();
-    let mut sends = vec![coarse.sent_blocks().collect::<Vec<usize>>()];
-    sends.extend((0..plan.nlevels()).map(|l| as_usize(multipoles.send_boxes(l))));
-    let mut accessed = vec![
-        ("reset", 0, Vec::new()),
-        ("send sources", 0, vec![as_usize(sources.send_leaves())]),
-        (
-            "received sources",
-            0,
-            vec![sources.ghost_leaves().collect()],
-        ),
-        ("send multipoles", 0, sends),
-        (
-            "received coarse",
-            0,
-            vec![coarse.received_blocks().collect()],
-        ),
-    ];
-    accessed.extend((0..plan.nlevels()).map(|l| {
-        (
-            "received multipoles",
-            l,
-            vec![as_usize(multipoles.receive_boxes(l))],
-        )
-    }));
     if accessed != recorder.events || sources.leaf_counts()[..nlocal] != counts[..] {
         defects.push("the exchanges' accessors and the events' lists differ".into());
     }
@@ -1603,9 +2079,10 @@ fn check_batches<C: CommunicatorCollectives>(
         &mut per_rank[1],
         SystemOperation::max(),
     );
-    if per_rank != [5 + plan.nlevels(); 2] {
+    let events = 5 + plan.nlevels() + 2 * plan.reduction_levels().len();
+    if per_rank != [events; 2] {
         defects.push(format!(
-            "events per rank between {} and {}",
+            "events per rank between {} and {}, expected {events}",
             per_rank[0], per_rank[1]
         ));
     }
@@ -1616,7 +2093,7 @@ fn check_batches<C: CommunicatorCollectives>(
         "rank {}: {name}: {failed} host-data defects on all ranks, here: {defects:?}",
         comm.rank()
     );
-    assert_eq!(recorder.calls, expected_calls(plan.nlevels()), "{name}");
+    assert_eq!(recorder.calls, calls, "{name}");
 
     let held = held_keys(plan);
     let mut expected = Vec::new();
@@ -1643,7 +2120,11 @@ fn check_batches<C: CommunicatorCollectives>(
                 expected.extend(entries("p2p", u));
             }
             KeyType::LocalInterior => expected.extend(entries("m2m local", &children)),
-            KeyType::Global => expected.extend(entries("m2m global", &children)),
+            // Only the owner forms a `Global` box (Phase 5S T5).
+            KeyType::Global if computes(octree, &held, key) => {
+                expected.extend(entries("m2m global", &children))
+            }
+            KeyType::Global => {}
             _ => unreachable!(),
         }
     }
@@ -1879,7 +2360,8 @@ fn check_redistribution_errors<C: CommunicatorCollectives>(
         .map(|child| (child, KeyType::LocalLeaf))
         .collect();
     map.insert(root, KeyType::LocalInterior);
-    let other = Plan::from_key_types(&map, 2, &[root]).unwrap();
+    let one_rank = PartitionMap::new(vec![root], vec![0, 1], &[false], 0);
+    let other = Plan::from_key_types(&map, 2, &one_rank).unwrap();
     let local_mismatch = octree.leaf_keys()[..] != morton::children(root).unwrap()[..];
     let mut any_mismatch = false;
     comm.all_reduce_into(
@@ -2085,34 +2567,38 @@ fn distributed_tree_regressions() {
             Plan::new(&octree).unwrap_or_else(|error| panic!("rank {rank}: {name}: {error}"));
         let held = held_keys(&plan);
         let oracle = oracle_of(&held, &global_leaves, octree.coarse_tree_leafs());
-        check_plan(name, &held, &oracle, &plan, octree.coarse_tree_leafs());
-        // The held set is H ∪ T, the locally essential keys and the top-tree keys.
-        let [all, essential, top] = check_held_keys(name, &comm, &held, &octree, &global_leaves);
-        let mut most = [0usize; 3];
-        comm.all_reduce_into(
-            &[all, essential, top][..],
-            &mut most[..],
-            SystemOperation::max(),
+        check_plan(
+            name,
+            &held,
+            &oracle,
+            &plan,
+            octree.coarse_tree_leafs(),
+            |key| computes(&octree, &held, key),
         );
+        // The held set is H, the locally essential keys (Phase 5S T5).
+        let [essential, top] = check_held_keys(name, &comm, &held, &octree, &global_leaves);
+        let mut most = [0usize; 2];
+        comm.all_reduce_into(&[essential, top][..], &mut most[..], SystemOperation::max());
         if rank == 0 && name == "graded corner blob" {
             println!(
-                "held keys on {} ranks, {name}, max over the ranks: H ∪ T {}, H {}, T {}",
+                "held keys on {} ranks, {name}, max over the ranks: H {}, top-tree keys of H {}",
                 comm.size(),
                 most[0],
-                most[1],
-                most[2]
+                most[1]
             );
         }
         // The graded tree has `Global` boxes on every rank count and spreads its lists
         // over several ranks, so the global pass and the ghost leaves are exercised.
-        let global_pairs: usize = plan.levels().iter().map(|l| l.m2m_global().len()).sum();
+        let local_pairs: usize = plan.levels().iter().map(|l| l.m2m_global().len()).sum();
+        let mut global_pairs = 0usize;
+        comm.all_reduce_into(&local_pairs, &mut global_pairs, SystemOperation::sum());
         let mut ghost_leaves = 0usize;
         comm.all_reduce_into(
             &plan.index().leaves().ghosts().len(),
             &mut ghost_leaves,
             SystemOperation::sum(),
         );
-        // P2 drops the downward rows of some `Global` box on some rank.
+        // Every `Global` box is a shared ancestor (Phase 5S T5), so P2 drops no row.
         let local_pruned = held
             .keys()
             .filter(|&&key| !needs_local(&held, octree.coarse_tree_leafs(), key))
@@ -2125,10 +2611,10 @@ fn distributed_tree_regressions() {
                 comm.size() == 1 || ghost_leaves > 0,
                 "{name}: no ghost leaf"
             );
-            assert!(
-                comm.size() == 1 || pruned > 0,
-                "{name}: no `Global` box without downward rows"
-            );
+        }
+        // (On one rank the root is the block, `Global` and without rows.)
+        if comm.size() > 1 {
+            assert_eq!(pruned, 0, "{name}: a `Global` box without downward rows");
         }
 
         // The exchanges. Sources: counts of one, counts from a hash of the key (zeros
@@ -2156,9 +2642,19 @@ fn distributed_tree_regressions() {
                 }
             })
             .collect();
-        let multipoles =
-            check_multipole_exchange(name, &comm, &held, &oracle, &plan, &sizes).total(&comm);
-        let coarse = check_coarse_gather(name, &comm, &plan, &sizes);
+        let (reduction, reduced) = check_reduction(name, &octree, &held, &plan, &sizes);
+        let reduced = reduced.total(&comm);
+        let (top, top_size) = check_top(name, &octree, &held, &oracle, &plan, &sizes, &reduction);
+        let multipoles = check_multipole_exchange(
+            name,
+            &octree,
+            &held,
+            &oracle,
+            &plan,
+            &sizes,
+            (&reduction, &top),
+        )
+        .total(&comm);
         if comm.size() > 1 && name == "graded corner blob" {
             assert!(
                 ones.keys > 0 && multipoles.keys > 0,
@@ -2183,12 +2679,18 @@ fn distributed_tree_regressions() {
             println!("  sources, counts of one:  {ones:?}");
             println!("  sources, hashed counts:  {hashed:?}");
             println!("  sources, source points:  {points:?}");
+            println!("  reduction:               {reduced:?}");
             println!("  multipoles:              {multipoles:?}");
-            println!("  coarse gather, per rank: {coarse:?}");
+            println!(
+                "  replicated top, per rank: {top_size:?} (threshold {})",
+                top.threshold()
+            );
         }
 
-        // The evaluator: determinism with variable counts, and the batches it issues.
+        // The evaluator: determinism with variable counts, the bits of one rank, and the
+        // batches it issues.
         check_repeated_evaluation(name, &comm, &plan);
+        check_against_one_rank(name, &octree, &plan, &fine_keys, options);
         check_batches(name, &octree, &oracle, &plan, false);
         check_batches(name, &octree, &oracle, &plan, true);
 
@@ -2199,5 +2701,38 @@ fn distributed_tree_regressions() {
         check_redistribution(name, &octree, &plan, "sources", &global_sources);
         check_redistribution(name, &octree, &plan, "targets", &global_targets);
         check_redistribution_errors(name, &octree, &plan, &global_sources);
+    }
+
+    // The owned top tree against one rank on the cube and the Plummer sphere (Phase 5S T5):
+    // 200 points per rank, generated by index, each rank its own range.
+    let nranks = comm.size() as usize;
+    for (name, points) in [
+        ("cube", cube(200 * rank..200 * (rank + 1))),
+        ("Plummer sphere", plummer(200 * rank..200 * (rank + 1))),
+    ] {
+        eprintln!("rank {rank}: {name}");
+        let fine_keys = keys(&points);
+        let options = OctreeOptions::new()
+            .with_max_level(8)
+            .with_max_fine_keys(16)
+            .with_ghost_children(true);
+        let octree = Octree::new(&fine_keys, options, &comm);
+        let plan =
+            Plan::new(&octree).unwrap_or_else(|error| panic!("rank {rank}: {name}: {error}"));
+        let formed = check_against_one_rank(name, &octree, &plan, &fine_keys, options);
+        let mut total = 0usize;
+        comm.all_reduce_into(&formed, &mut total, SystemOperation::sum());
+        let mut deepest = 0usize;
+        comm.all_reduce_into(
+            &plan.reduction_levels().len(),
+            &mut deepest,
+            SystemOperation::max(),
+        );
+        if rank == 0 {
+            println!(
+                "{name} on {nranks} ranks: {total} `Global` multipoles formed on their owners, \
+                 {deepest} reduction levels, all bit for bit one rank's"
+            );
+        }
     }
 }
