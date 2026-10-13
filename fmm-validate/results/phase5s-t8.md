@@ -495,6 +495,31 @@ Questions (the recommendations first; the brief: nothing is built without them):
    consensus, rsmpi 0.8.2's `immediate_synchronous_send`, probes and `immediate_barrier`)
    in rlst's `GhostCommunicatorBuilder::build` and a sparse `all_to_allv`, released and
    pinned here.
+   **T8r done on 2026-10-13: rlst 0.10.1 is released.**
+   - Upstream: rlst PR #42 (merged as 3169694) and the release PR #43 (merged as
+     486fea2), tagged `v0.10.1` with a Codeberg release. `rlst-proc-macro`, `rlst` and
+     `rlst-suitesparse` 0.10.1 are on crates.io.
+   - What 0.10.1 adds:
+     - `sparse_all_to_allv`, the arguments and result of `all_to_allv`;
+     - `SparseRoutes`, the fixed-route exchange;
+     - `GhostCommunicatorBuilder::build` by non-blocking consensus, every public result
+       unchanged;
+     - `SPARSE_EXCHANGE_TAG`;
+     - a fix: `all_to_allv` no longer hands MPI an empty buffer.
+   - Checked before the release, with this workspace patched to the branch and no call
+     changed: `cargo test --workspace`, `run-mpi-tests.sh` at 2 and 4 ranks, `invariance`
+     and `mpi_exec` at 8, and invariance at 512 against 64 on locust (cube and Plummer
+     f64 p = 8, cube f32 p = 3: 0 values differ).
+   - Step 3 of this task now:
+     - pins `rlst = "0.10.1"` in `[workspace.dependencies]` and `octree/Cargo.toml`, one
+       commit with `Cargo.lock`;
+     - moves the octree's sparse moves (key move, balance, push, the second cut's leaf
+       move and push) to `sparse_all_to_allv`;
+     - puts `Redistribution::new`'s counts and `forward`/`backward` on `SparseRoutes`
+       (S5 for the evaluation, question 1 (a));
+     - keeps every result bit for bit;
+     - re-runs the probe before and after: on locust, and on Kathleen at 160 ranks timed
+       and 640 counted.
 3. **S8. Signed off on 2026-10-13 by the user: option (a), its own task after T8**
    (docs/phase5s/T8s-fan-out-tree.md). It fires on the modelled clause. (a) Build the forwarding tree as its own task
    after T8 (T8b), with the design of the brief (each top-tree box below R sent along a
