@@ -80,6 +80,9 @@ are exclusive; the job is named in §7.
     returns to 220–238 ms (job 604022, §9.3).
   - `tools/kathleen/env.sh` now sets it for every Kathleen job; the 4-node correctness
     job passed with it (job 604023).
+  - rlst 0.10.2 (T8q) posts its sparse exchanges in a rotated order. It does not change
+    the losses but halves the first exchange of a fixed route (job 604024, §9.3); this
+    workspace pins it.
   - Steps 1 and 3, the stall's tests and that job together used **8.30 node-hours** (§7).
 
 ## 1. Method
@@ -739,6 +742,28 @@ job, beside `PSM2_TID=0`. T2's full correctness job at 4 nodes passed with it, e
 40 and 20, the smoke run, and 640 against 80 oversubscribed). A timing on 4 Kathleen
 nodes still needs repeats: the losses remain, each now costing about 10 ms (T9).
 
+**The rotated send order, rlst 0.10.2** (T8q, 2026-10-14). rlst 0.10.1's sparse exchanges
+posted in ascending rank order, so all senders converged on one receiver at a time, the
+incast suspected above. rlst 0.10.2 (rlst PRs #44 and #45, tag `v0.10.2`) has rank r post
+to r + 1, …, P − 1, 0, …, r − 1, as MPI's all-to-alls do; every result is unchanged. The
+micro-benchmark at 160 ranks on 4 nodes, PSM2's default timeout set explicitly, three runs
+of 20 repeats against 0.10.1 and against the branch, alternating (job 604024), medians:
+
+| phase | stalls (> 50 ms), 0.10.1 → 0.10.2 | median ms, 0.10.1 → 0.10.2 |
+| --- | ---: | ---: |
+| A: `SparseRoutes::new` | 0 of 60 → 0 of 60 | 1.44 → 1.38 |
+| A: the first exchange (keys) | 0 of 60 → 0 of 60 | 4.1 → 2.0 |
+| A: the second and third (coordinates, again) | 0 of 120 → 1 of 120 | 3.7, 3.4 → 3.4, 3.1 |
+| D: `sparse_all_to_allv` | 0 of 60 → 0 of 60 | 1.31 → 1.26 |
+| B: Open MPI's `Alltoallv` (unchanged) | 94 of 120 → 93 of 120 | – |
+| C and D: the raw bursts in ascending order (unchanged) | 63 of 120 → 60 of 120 | – |
+
+The order does not change the losses: rlst's exchanges hardly stall with either, and Open
+MPI's own all-to-all, which already rotates, stalls as often. So the losses come from the
+volume of a dense burst across 4 nodes, not from converging senders. The rotation still
+halves the first exchange of a fixed route and takes 5–10 % off the others. This workspace
+pins 0.10.2; its checks are in §9.4.
+
 **Points on their owners** (`--input owners`; every route a rank has is to itself or a
 neighbour), recording on, per evaluation in ms:
 
@@ -782,6 +807,14 @@ grows with P: §9.5.
   oversubscribed). Every step passes; 0 values differ.
 - Before the release, T8r ran the same suite on this workspace patched to the rlst
   branch (§6, question 2).
+- **rlst 0.10.2 pinned** (T8q, 2026-10-14). Before its release, on this workspace patched
+  to the rlst branch: `cargo test --workspace`, `run-mpi-tests.sh` at 2 and 4 ranks (22 of
+  22) and `invariance` at 8 ranks pass. With 0.10.2 from crates.io, on the M3 Max: `cargo
+  fmt -- --check`, `cargo clippy -- -D warnings`, `cargo clippy --examples -- -D warnings`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, `RUST_MIN_STACK=8388608 cargo
+  test --workspace` (768 tests), `cargo doc --no-deps` and `run-mpi-tests.sh` at 2 and 4
+  ranks pass. On locust: invariance at 512 against 64 oversubscribed (the same three
+  configurations), 0 values differ.
 
 ### 9.5 The triggers after step 3 (*model*)
 

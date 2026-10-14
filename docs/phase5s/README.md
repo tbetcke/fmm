@@ -507,7 +507,7 @@ In the repository root, start `claude` and say:
 - [x] T6 merged: `Fmm`, device events and overlap on the owned top tree; bit for bit; device gate passes
 - [x] T7 merged: the work-weighted cut; modelled cost max/mean within the target at 512–640 oversubscribed ranks; measured imbalance at 72 and 160 ranks
 - [x] T8r done: rlst 0.10.1 published (sparse `all_to_allv`, NBX ghost build, fixed-route exchange; rlst PRs #42, #43, tag `v0.10.1`, 2026-10-13)
-- [ ] T8q done: rlst 0.10.2 published (rotated send order) and pinned here
+- [x] T8q done: rlst 0.10.2 published (rotated send order; rlst PRs #44, #45, tag `v0.10.2`, 2026-10-14) and pinned here
 - [ ] T8 merged: S4, S5 and S8 built or closed by counts, bytes and models (S4 closed; S5 built on rlst 0.10.1 in step 3, 2026-10-14; S8 to T8s)
 - [ ] T8s merged: S8, the forwarding tree below R, built as its own task after T8
 - [ ] T9 merged: scaling report published; Phase 6 briefs revised (decision 7)
