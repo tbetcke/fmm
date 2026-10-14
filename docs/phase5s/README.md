@@ -344,7 +344,9 @@ These hold for every task, so that no task decides them on its own:
   (Kathleen) ranks reported against the first cut; bit for bit.
 - C5S.5 (T8): S4, S5 and S8 (the fan-out below the replicated top; added by T5, signed
   off on 2026-10-13) evaluated on oversubscribed counts, bytes and models, and built
-  or closed as the sign-off decides; their timing at scale stays open.
+  or closed as the sign-off decides; their timing at scale stays open. S5 is built in rlst
+  (T8r, rlst 0.10.1) and adopted by T8; S8 fires on the model and is built as its own
+  task after T8, T8s (the user, 2026-10-13).
 - C5S.6 (T9): the scaling report (strong and weak at 1, 2 and 4 Kathleen nodes and 1–72
   locust ranks, Phase 5 against Phase 5S, stage by stage; memory, counts and bytes per
   rank to 512 (locust) and 640 (Kathleen) oversubscribed ranks; *model* times beyond 160 ranks; rank-count
@@ -365,6 +367,11 @@ One pull request each.
 - T7 needs T4 (the held set and the plan it re-cuts), and T6 for timing the cost model's
   constants on the final structure.
 - T8 needs T6 and T7 (it measures the final construction and collectives; S4 is T3a's).
+- T8r (added 2026-10-13 at the user's request, from T8's step 1) needs T8's step 1: S5's
+  sparse exchanges built in rlst and released as rlst 0.10.1; T8's step 3 adopts them.
+- T8q (added 2026-10-14 at the user's request, from T8's step 3) needs T8r: rlst's sparse
+  exchanges post in a rotated order (rank r starts at r + 1), released as rlst 0.10.2.
+- T8s (added 2026-10-13 at the user's request, S8 as its own task) needs T8 merged.
 - T9 needs T6, T7 and T8.
 
 | Task | Brief | Delivers | Component | Depends on |
@@ -380,6 +387,9 @@ One pull request each.
 | T6 | [T6-owned-top-tree-exec.md](T6-owned-top-tree-exec.md) | S2 in `nd-fmm-exec`: `Fmm`, the device operator's events, overlap, timings and traffic, the harness's new measures | C5S.3 | T5 |
 | T7 | [T7-work-weighted-cut.md](T7-work-weighted-cut.md) | S3: the cost model from per-kind timings, the second cut after the local refinement, an `Fmm` option; the modelled cost balance at 512–640 oversubscribed ranks, the measured balance at 72 and 160 | C5S.4 | T4; T6 for timing |
 | T8 | [T8-construction-and-collectives.md](T8-construction-and-collectives.md) | S5 (S4 moved to T3a; T8 re-measures it) and S8 (the fan-out below the replicated top, from T5), conditional: evaluated on oversubscribed counts and bytes (to 512–640 ranks) and models; built only where T1's trigger fires and the sign-off accepts, else closed by a report | C5S.5 | T6, T7 |
+| T8r | [T8r-rlst-sparse-exchange.md](T8r-rlst-sparse-exchange.md) | S5 upstream: in rlst, a sparse `all_to_allv`, `GhostCommunicatorBuilder::build` by non-blocking consensus and a fixed-route exchange, every result unchanged; this workspace checked against the branch; rlst 0.10.1 merged, tagged and published | C5S.5 | T8 (step 1) |
+| T8q | [T8q-rlst-send-order.md](T8q-rlst-send-order.md) | rlst's sparse exchanges and consensus round post their messages in a rotated order (rank r starts at r + 1, as MPI's all-to-alls do), so senders do not all converge on one receiver; every result unchanged; the stall micro-benchmark before and after on 4 Kathleen nodes; rlst 0.10.2 merged, tagged and published, then pinned here | C5S.5 | T8r |
+| T8s | [T8s-fan-out-tree.md](T8s-fan-out-tree.md) | S8: each top-tree box below R sent along a tree of its readers fixed at build (at most F ranks per box and rank, a node's first reader forwarding on the node), copies only, bit for bit; level aggregation counted as the alternative; counts to 512–640 and the model at 10⁴ against T8's thresholds | C5S.5 | T8 |
 | T9 | [T9-scaling-at-scale.md](T9-scaling-at-scale.md) | scaling on Kathleen at 1, 2 and 4 nodes and on locust to 72 ranks, Phase 5 against Phase 5S, counts and memory to 512–640 oversubscribed ranks, *model* times beyond, design-document update, Phase 6 briefs revised | C5S.6; gate: scaling report | T6, T7, T8 |
 
 Review T1 yourself before the tasks that build on it: T3–T8 encode its decisions on the
@@ -496,6 +506,9 @@ In the repository root, start `claude` and say:
 - [x] T5 merged: the owned top tree in `nd-fmm-plan`; the coarse gather removed; bit for bit
 - [x] T6 merged: `Fmm`, device events and overlap on the owned top tree; bit for bit; device gate passes
 - [x] T7 merged: the work-weighted cut; modelled cost max/mean within the target at 512–640 oversubscribed ranks; measured imbalance at 72 and 160 ranks
-- [ ] T8 merged: S4, S5 and S8 built or closed by counts, bytes and models
+- [x] T8r done: rlst 0.10.1 published (sparse `all_to_allv`, NBX ghost build, fixed-route exchange; rlst PRs #42, #43, tag `v0.10.1`, 2026-10-13)
+- [x] T8q done: rlst 0.10.2 published (rotated send order; rlst PRs #44, #45, tag `v0.10.2`, 2026-10-14) and pinned here
+- [ ] T8 merged: S4, S5 and S8 built or closed by counts, bytes and models (S4 closed; S5 built on rlst 0.10.1 in step 3, 2026-10-14; S8 to T8s)
+- [ ] T8s merged: S8, the forwarding tree below R, built as its own task after T8
 - [ ] T9 merged: scaling report published; Phase 6 briefs revised (decision 7)
 - [ ] Design documents updated: laplace-fmm-plan §7 (Phase 5S status and numbers), §8, §9; distributed-fmm.md §14/§15 notes; `scale-out.md` outcome section; workspace-structure §3, §3.1, §4 and §6

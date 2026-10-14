@@ -15,7 +15,7 @@ use mpi::{collective::SystemOperation, datatype::PartitionMut, traits::Communica
 use rlst::distributed_tools::{
     all_to_allv,
     array_tools::{communicate_back, gather_to_all},
-    sort_to_bins,
+    sort_to_bins, sparse_all_to_allv,
 };
 
 use super::{
@@ -609,7 +609,9 @@ pub(crate) fn local_coarse_tree_weights(
 ///
 /// # Collective operation
 ///
-/// One all-to-all-v on more than one rank; every rank must enter.
+/// One sparse exchange on more than one rank (rlst's `sparse_all_to_allv`: a message to
+/// each rank with keys, a non-blocking barrier and one all-reduce; no all-to-all of
+/// counts, S5); every rank must enter.
 ///
 /// # Examples
 ///
@@ -631,7 +633,7 @@ pub fn redistribute_with_respect_to_coarse_tree<C: CommunicatorCollectives>(
     // The keys and the bounds are both sorted, so one pass counts the keys of each
     // rank. Repeated bounds (ranks without blocks) select the last of them.
     let rank_counts = sort_to_bins(linear_keys, coarse_tree_bounds);
-    let (_in_counts, result) = all_to_allv(comm, &rank_counts, linear_keys);
+    let (_in_counts, result) = sparse_all_to_allv(comm, &rank_counts, linear_keys);
 
     // A rank whose blocks contain no keys, or that has no blocks, receives nothing.
 
@@ -894,8 +896,8 @@ pub(crate) fn gather_block_weights<C: CommunicatorCollectives>(
 ///
 /// # Collective operation
 ///
-/// One all-to-all-v (with its all-to-all of counts) on more than one rank; every rank
-/// must enter, a rank without leaves sending nothing. On one rank nothing is
+/// One sparse exchange (rlst's `sparse_all_to_allv`, S5) on more than one rank; every
+/// rank must enter, a rank without leaves sending nothing. On one rank nothing is
 /// communicated.
 ///
 /// # Examples
@@ -915,7 +917,7 @@ pub(crate) fn move_leaves<C: CommunicatorCollectives>(
         return leaves.to_vec();
     }
     let counts = rank_counts(leaves, bounds, |&key| first_finest_descendant(key));
-    let (_received_counts, received) = all_to_allv(comm, &counts, leaves);
+    let (_received_counts, received) = sparse_all_to_allv(comm, &counts, leaves);
     debug_assert!(
         received.iter().tuple_windows().all(|(a, b)| a < b),
         "the moved leaves arrive sorted"
@@ -966,7 +968,7 @@ pub(crate) fn tree_bins(coarse_tree: &[MortonKey], partition: &[usize]) -> Vec<M
 /// Every rank builds the 2:1 closure of its own keys ([`balance_closure`]) and
 /// linearizes it locally. It then routes each remaining key to the rank whose
 /// partition range holds the key's first finest-level descendant
-/// ([`first_finest_descendant`]), in one all-to-all-v, and every rank linearizes
+/// ([`first_finest_descendant`]), in one sparse exchange, and every rank linearizes
 /// what it receives. The union of the local results is the global linearization
 /// of the closure, already distributed by the bounds:
 /// - a key coarser than the blocks goes to the rank that owns its first
@@ -991,7 +993,7 @@ pub(crate) fn tree_bins(coarse_tree: &[MortonKey], partition: &[usize]) -> Vec<M
 /// # Collective operation
 ///
 /// An all-reduce of the deepest level and, on more than one rank and below the
-/// root, the all-to-all-v of the closure (with its all-to-all of counts); every
+/// root, the sparse exchange of the closure (rlst's `sparse_all_to_allv`, S5); every
 /// rank must enter. Debug builds add the collectives of their invariant checks.
 ///
 /// # Examples
@@ -1022,7 +1024,7 @@ pub fn balance<C: CommunicatorCollectives>(
         let counts = rank_counts(&closure, coarse_tree_bounds, |&key| {
             first_finest_descendant(key)
         });
-        let (_in_counts, received) = all_to_allv(comm, &counts, &closure);
+        let (_in_counts, received) = sparse_all_to_allv(comm, &counts, &closure);
         drop(closure);
         morton::linearize(&received)
     };
@@ -1736,8 +1738,8 @@ pub(crate) fn gather_leaf_blocks<C: CommunicatorCollectives>(
 ///
 /// # Collective operation
 ///
-/// On more than one rank, the push: one all-to-all-v (with its all-to-all of counts),
-/// which every rank enters, a rank without blocks sending and receiving nothing. On one
+/// On more than one rank, the push: one sparse exchange (rlst's `sparse_all_to_allv`,
+/// S5), which every rank enters, a rank without blocks sending and receiving nothing. On one
 /// rank nothing is communicated.
 ///
 /// # Examples
@@ -1931,7 +1933,7 @@ pub fn generate_all_keys<C: CommunicatorCollectives>(
         flat.append(keys);
     }
     drop(send);
-    let (received_counts, received) = all_to_allv(comm, &counts, &flat);
+    let (received_counts, received) = sparse_all_to_allv(comm, &counts, &flat);
     drop(flat);
 
     // Keep what lies in H: a key of N(S), or a child of an interior key of N(S) with the

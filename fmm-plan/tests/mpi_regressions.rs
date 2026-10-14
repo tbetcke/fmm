@@ -28,7 +28,7 @@ use nd_octree::{
     points_to_morton,
 };
 use rlst::{
-    distributed_tools::{GhostCommunicator, array_tools::gather_to_all},
+    distributed_tools::{GhostCommunicator, all_to_allv, array_tools::gather_to_all},
     rlst_dynamic_array,
 };
 
@@ -2210,7 +2210,10 @@ fn bits(values: &[f64]) -> Vec<u64> {
 /// rank that owns its leaf, in that leaf, in (origin rank, position) order; that the
 /// counts are those the plan's leaves imply; that payloads which name their origin
 /// arrive with it and round-trip through `backward`, for `f64` with three values per
-/// item and `u32` with one; and that two forwards agree bit for bit. Collective.
+/// item and `u32` with one; that two forwards agree bit for bit; and that `forward`, point
+/// to point on its fixed routes since Phase 5S T8 (S5), gives the bits of the dense
+/// all-to-all-v of the same items (rlst's `all_to_allv`, ordered by leaf and origin).
+/// Collective.
 fn check_redistribution<C: CommunicatorCollectives>(
     name: &str,
     octree: &Octree<'_, C>,
@@ -2294,6 +2297,34 @@ fn check_redistribution<C: CommunicatorCollectives>(
             }
             start += count;
         }
+
+        // The dense oracle (S5): the same payloads moved to the owners by an all-to-all-v
+        // of P counts and ordered by (leaf, origin rank, position) are forward's bits.
+        let nranks = comm.size() as usize;
+        let mut by_owner = vec![Vec::new(); nranks];
+        for (p, &key) in mine.iter().enumerate() {
+            let owner = octree.owner_rank(key).expect("a valid key");
+            by_owner[owner].extend_from_slice(&f64_payload[3 * p..3 * p + 3]);
+        }
+        let counts: Vec<usize> = by_owner.iter().map(Vec::len).collect();
+        let flat: Vec<f64> = by_owner.concat();
+        let (_, dense) = all_to_allv(comm, &counts, &flat);
+        let mut dense: Vec<(u32, usize, usize, [f64; 3])> = dense
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|&item| {
+                let (o, p) = (item[0] as usize, item[1] as usize);
+                let leaf = plan
+                    .index()
+                    .local_leaf_containing(global[inputs[o][p]])
+                    .expect("a received item lies in a local leaf");
+                (leaf, o, p, item)
+            })
+            .collect();
+        dense.sort_by_key(|&(leaf, o, p, _)| (leaf, o, p));
+        let dense: Vec<f64> = dense.iter().flat_map(|&(.., item)| item).collect();
+        assert_eq!(bits(&dense), bits(&forwarded), "{label}: the dense oracle");
 
         // Forward then backward is the identity.
         let returned = redistribution.backward(&forwarded, 3);

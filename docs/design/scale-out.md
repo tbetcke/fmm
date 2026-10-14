@@ -970,6 +970,61 @@ costs about 2 P α_v when every peer is visited: with α_v = α_a, 0.76 ms at 1,
   (src/topology/mod.rs) as the probe source. **No rsmpi addition is needed.** rlst's ghost-communicator build keeps its
   all-to-all (an rlst change, asked for upstream, not forked) unless that trigger fires.
 
+### 7.3 T8: the triggers on the final structure (addendum, 2026-10-13)
+
+T8 (docs/phase5s/T8-construction-and-collectives.md; fmm-validate/results/phase5s-t8.md)
+measured S4, S5 and S8 (the fan-out below R, added by T5) on main at e788576 (T3a, T3,
+T5–T7). It used locust at 8–72 ranks (timed) and 128–512 (counted), and Kathleen at
+40–160 ranks (timed) and 320–640 (counted; job 604012, 1.99 node-hours). Counts and
+times per call came from an instrumented copy of the tree that was not committed.
+Every figure at 10³–10⁴ ranks is a *model*.
+
+| Package | Trigger | Measured or modelled | Outcome |
+| --- | --- | --- | --- |
+| S4 | most keys received > 2 × mean, or sorts > ¼ of `Octree::new` | no sorts since T3a; keys after routing within 1.002–1.083 of the mean (timed) and 1.02–1.12 (128–640 counted); routing 35–65 % of `Octree::new`, which is 7–12 % of the build | closed (built in T3a) |
+| S5, build | the all-to-alls of counts > ¼ of a modelled build at 10⁴ ranks | 21–32 per build, 19–30 of them in rlst (12–23 in `GhostCommunicatorBuilder::build`, 7 in `array_tools::all_to_allv`), 2 in `Redistribution::new`; timed 0.5–3 % of the build at 40–160 ranks; *model* at 10⁴ (2.5 × 10⁴ points per rank): 19–27 % with §7.2's α_a P (0.376 µs per peer), 6–9 % with the measured trend 43.8 µs + 0.102 µs P | on the edge on §7.2's bound; does not fire on the trend |
+| S5, evaluation | the all-to-all-v pair > 1 % of an evaluation at 10⁴ points per rank | with every count 0, Open MPI 4.1.6 took 0.3, 167 and 1.2 µs at 40, 80 and 160 ranks: its `tuned` component chose pairwise (P − 1 steps, 2.1 µs per peer) at 80 and basic linear (zero counts skipped) at 40 and 160; *model* at 10⁴: 0 / 7.5 / 42 ms against 0.22–5.7 ms | fires on §7.2's model and on pairwise, not on basic linear |
+| S8 | the busiest sender's multipole messages at 10⁴ × 4 µs > 1 % of an evaluation at 2.5 × 10⁴ points per rank; or the multipole exposed wait > 1 % of the evaluation at 160 ranks | messages 41–93 at 40 ranks, 113–486 at 512–640 (fits P^0.71–0.75 on the clusters, P^0.28–0.38 on the cube and the Plummer sphere); *model* at 10⁴: 1.4–28 ms against 5.5–14 ms (f64 p = 8) and 0.56–1.85 ms (f32 p = 3); exposed wait at 160 ranks 0.002–0.013 ms (≤ 0.004 %) | modelled clause fires (f32 p = 3 on every workload from 600–8,000 ranks; f64 p = 8 under the linear fits); measured clause does not |
+
+Still O(P) and covered by no package: the all-reduces of the routing's weight rounds and
+of O1's rounds. They move about 0.9 MB per build at 640 ranks, growing like P; *model*
+about 14 MB and 57 ms per build at 10⁴ ranks (distributed §14.2 called them
+"acceptable"). Open: every timing at scale, which all-to-all-v algorithm Open MPI picks
+at 10³–10⁴ ranks, contention on a node's link, collective algorithms at thousands of
+ranks, and R's cap setting the threshold above 640 ranks.
+
+**S5 is built upstream** (the user, 2026-10-13): T8r
+(docs/phase5s/T8r-rlst-sparse-exchange.md) adds a sparse `all_to_allv`, an NBX
+`GhostCommunicatorBuilder::build` and a fixed-route exchange to rlst, every result
+unchanged, released as rlst 0.10.1. T8's step 3 adopts them for the build and for the
+evaluation's redistribution. **S8 fires on the modelled clause and is built as its own task after T8, T8s**
+(docs/phase5s/T8s-fan-out-tree.md; signed off by
+the user on 2026-10-13; the report's §6, question 3): the forwarding tree of a box's
+readers that T8's brief describes, R, its cap and K unchanged.
+
+**S5, built (T8 step 3, 2026-10-14; the report's §9).** rlst 0.10.1 is pinned (T8r: rlst
+PRs #42 and #43, tag `v0.10.1`), and every output is unchanged bit for bit:
+- the octree's key move, balance, push and the second cut's leaf move go through
+  `sparse_all_to_allv`;
+- `Redistribution` routes by rlst's `SparseRoutes` (point to point in `forward` and
+  `backward`, no collective, no P-long array);
+- rlst's ghost builds find their send lists by consensus underneath.
+
+Counted per build: 21–32 all-to-alls of P counts become 2 (the routing and
+`leaf_point_counts`), the P-long arrays fall by 65–80 % and the all-reduces by a quarter,
+with 19–30 non-blocking barriers new. *Model* at 10⁴ ranks: 2.1–2.7 % of a build on
+§7.2's bound and 0.8–1.1 % on the trend. Timed:
+- the redistribution per evaluation is 6–30 % faster at 160 Kathleen ranks;
+- the build is 2–6 ms slower on one node, where the harness's random share makes every
+  route dense;
+- on 4 Kathleen nodes the build trips a 160 ms transport stall (Open MPI 4.1.6 over PSM2)
+  more often than before. A micro-benchmark finds that stall on every kind of dense
+  burst, the old all-to-all-v included, and never on 2 nodes. It is PSM2's error-check
+  timeout (`PSM2_ERRCHK_TIMEOUT`, 160 ms by default): with `10:40:2` each stall costs
+  about 10 ms and the stalled build returns to 220–238 ms (job 604022, the report's
+  §9.3). `tools/kathleen/env.sh` sets it for every Kathleen job (correctness: job
+  604023).
+
 ## 8. Collectives and memory per rank
 
 ### 8.1 Every collective, in order, after S1, S2 and S3
@@ -979,13 +1034,13 @@ with empty lists and zero counts; no collective sits in a branch only some ranks
 
 | Call | Collectives, in order |
 | --- | --- |
-| `Octree::new` (P > 1) | `linearize` (**S4: the histogram rounds and one all-to-all-v replace the sample sort**); O1: one all-reduce per round and one after balancing; the key move (all-to-all-v); `balance` (all-reduce of the deepest level; **S4: an all-to-all-v by the bounds replaces the second sort**); the key move again; **the leaf-bit all-gather-v (B bytes, §3.2); the push: an all-to-all of P counts and an all-to-all-v (§3.3)**. The two `gather_to_all` of `generate_all_keys` go |
+| `Octree::new` (P > 1) | `linearize` (**S4: the histogram rounds and one all-to-all-v replace the sample sort**); O1: one all-reduce per round and one after balancing; the key move (all-to-all-v; **T8, S5: rlst's `sparse_all_to_allv`, a message per rank with keys, a non-blocking barrier and one all-reduce**); `balance` (all-reduce of the deepest level; **S4: an all-to-all-v by the bounds replaces the second sort; T8: a sparse exchange**); the key move again; **the leaf-bit all-gather-v (B bytes, §3.2); the push (§3.3; T8: a sparse exchange in place of an all-to-all of P counts and an all-to-all-v)**. The two `gather_to_all` of `generate_all_keys` go |
 | `Plan::new` | two all-reduces (unchanged) |
-| **S3: `Octree::repartition`** (several ranks, default on) | **all-gather-v of the block weights (B values); all-to-all of P counts and all-to-all-v of the moved leaves; the leaf-bit all-gather-v; the push (as `Octree::new`)**; then `Plan::new` again |
-| `Redistribution::new` (twice) | all-to-all of counts, all-reduce, communicator duplicate, all-to-all-v (unchanged; S5 for the build would replace the count all-to-all) |
+| **S3: `Octree::repartition`** (several ranks, default on) | **all-gather-v of the block weights (B values); the moved leaves (T8: a sparse exchange in place of an all-to-all of P counts and an all-to-all-v); the leaf-bit all-gather-v; the push (as `Octree::new`)**; then `Plan::new` again |
+| `Redistribution::new` (twice) | **T8, S5: rlst's `SparseRoutes::new` (communicator duplicate, a sparse exchange of the item counts, an all-reduce); the all-reduce of errors; the keys and positions point to point along the routes** (before T8: all-to-all of counts, all-reduce, communicator duplicate, all-to-all-v) |
 | `Evaluator::new` | all-reduce; `SourceExchange::new`; `MultipoleExchange::new` (one rlst build per level); **the reduction's exchanges (one rlst build per level, §4.2); R: one all-reduce of a reader histogram, one all-gather of P counts and one all-gather-v of R's keys (§4.3)**. `CoarseExchange::new` goes |
 | `Fmm::build` | as distributed §9.1 and node-m2l.md §4 (step agreements, `split_shared`, the table-cache barrier, the device agreement), with the rows above |
-| `Fmm::evaluate`, blocking | all-reduce (charge length, kept device error); forward of the charges (**S5: point-to-point on the build's routes**); the source exchange; **the reduction: one neighbour exchange per level; the all-gather-v of R**; the multipole exchange, one per level; with a device on P > 1, one all-reduce (device errors); backward of the output (**S5: point-to-point**) |
+| `Fmm::evaluate`, blocking | all-reduce (charge length, kept device error); forward of the charges (**S5, built in T8: point-to-point on the build's routes, rlst's `SparseRoutes`**); the source exchange; **the reduction: one neighbour exchange per level; the all-gather-v of R**; the multipole exchange, one per level; with a device on P > 1, one all-reduce (device errors); backward of the output (**S5: point-to-point**) |
 | `Fmm::evaluate`, overlapped | the same, the reduction and the source and multipole exchanges as scoped point-to-point (§4.6); the all-gather of R blocking |
 
 New collectives per build, and why each is needed (README, "Errors": no new agreement):

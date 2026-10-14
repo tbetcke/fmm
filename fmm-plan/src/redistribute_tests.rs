@@ -1,7 +1,7 @@
 //! Pure local tests of the redistribution: bucketing, in-place permutations, count
 //! arithmetic, and the grouping, order and round trip of `Sender` and `Receiver` on
 //! hand-made routing data, with the all-to-all-v simulated. No MPI.
-use super::{Cycles, Receiver, Sender, bucket, max_per_item, value_counts};
+use super::{Cycles, Receiver, Sender, bucket, max_per_item};
 
 /// A small deterministic generator (SplitMix64), so that the tests need no dependency.
 struct Rng(u64);
@@ -81,18 +81,6 @@ fn cycles_move_chunks_as_the_permutation_says() {
     }
     let identity: Vec<u32> = (0..10).collect();
     assert_eq!(Cycles::new(&identity), Cycles::new(&[]), "no cycles");
-}
-
-#[test]
-fn value_counts_scale_items_and_prefix_sum_them() {
-    let mut values = [0i32; 3];
-    let mut displacements = [0i32; 3];
-    value_counts(&[2, 0, 3], 3, &mut values, &mut displacements);
-    assert_eq!(values, [6, 0, 9]);
-    assert_eq!(displacements, [0, 6, 6]);
-    value_counts(&[2, 0, 3], 0, &mut values, &mut displacements);
-    assert_eq!(values, [0, 0, 0]);
-    assert_eq!(displacements, [0, 0, 0]);
 }
 
 #[test]

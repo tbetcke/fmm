@@ -26,7 +26,7 @@
 //!   item, given in received order, back to its origin, and returns them in the order of
 //!   the keys passed to `new`.
 //!
-//! Items that stay on their rank are copied by the all-to-all-v, not sent.
+//! Items that stay on their rank are copied, not sent.
 //!
 //! # Collectives
 //!
@@ -34,12 +34,17 @@
 //!
 //! | Call | Collectives, in order |
 //! | --- | --- |
-//! | [`Redistribution::new`] | all-to-all (item counts); all-reduce (errors and [`max_per_item`](Redistribution::max_per_item)); communicator duplicate; all-to-all-v (key and position of every item) |
-//! | [`forward`](Redistribution::forward), [`forward_into`](Redistribution::forward_into) | one all-to-all-v |
-//! | [`backward`](Redistribution::backward), [`backward_into`](Redistribution::backward_into) | one all-to-all-v |
+//! | [`Redistribution::new`] | rlst's `SparseRoutes::new` (communicator duplicate; the item counts to the ranks that receive items, by a sparse exchange; all-reduce); all-reduce (errors and [`max_per_item`](Redistribution::max_per_item)); the key and position of every item along the routes, point to point |
+//! | [`forward`](Redistribution::forward), [`forward_into`](Redistribution::forward_into) | none: point to point along the routes |
+//! | [`backward`](Redistribution::backward), [`backward_into`](Redistribution::backward_into) | none: point to point along the reversed routes |
 //!
-//! `new` agrees every error before the first collective that depends on the input, so
-//! it fails on every rank or on none. `forward` and `backward` check `per_item` against
+//! The routes are fixed in `new` (Phase 5S T8, S5): `forward` and `backward` send only to
+//! the ranks a rank shares items with and receive only from them, with no collective and
+//! no array of one entry per rank. They move the bytes an all-to-all-v of the same counts
+//! would move, in the same order.
+//!
+//! `new` agrees every error before anything that depends on the keys is sent, so it fails
+//! on every rank or on none. `forward` and `backward` check `per_item` against
 //! [`max_per_item`](Redistribution::max_per_item), which every rank holds, and panic
 //! alike on every rank before any communication if it is too large. A rank that passes
 //! a slice of the wrong length takes part in the exchange with default values and then
@@ -105,15 +110,14 @@
 #[path = "redistribute_tests.rs"]
 mod tests;
 
-use std::{cell::RefCell, error::Error, fmt};
+use std::{error::Error, fmt};
 
 use mpi::{
     collective::SystemOperation,
-    datatype::{Partition, PartitionMut},
-    topology::SimpleCommunicator,
     traits::{CommunicatorCollectives, Equivalence},
 };
 use nd_octree::{MortonKey, Octree};
+use rlst::distributed_tools::SparseRoutes;
 
 use super::plan::Plan;
 
@@ -162,16 +166,13 @@ impl Error for RedistributionError {}
 /// Received items are grouped by local leaf, in leaf order, and within a leaf ordered
 /// by (origin rank, position on the origin). See the [module documentation](self).
 ///
-/// The redistribution keeps a duplicate of the octree's communicator, and is not
-/// `Sync`: its calls are collective, from one thread per rank.
+/// The redistribution keeps its routes on a duplicate of the octree's communicator; its
+/// calls are collective, from one thread per rank.
 pub struct Redistribution {
-    comm: SimpleCommunicator,
+    routes: SparseRoutes,
     sender: Sender,
     receiver: Receiver,
     max_per_item: usize,
-    /// Scratch for the value counts and displacements of one all-to-all-v: four blocks
-    /// of P, so that `forward` and `backward` allocate no counts.
-    scratch: RefCell<Vec<i32>>,
 }
 
 impl fmt::Debug for Redistribution {
@@ -198,10 +199,12 @@ impl Redistribution {
     /// grouped by its local leaves.
     ///
     /// # Collective operation
-    /// On the octree's communicator, every rank: one all-to-all of the item counts, one
-    /// all-reduce that agrees the errors and [`max_per_item`](Self::max_per_item), a
-    /// communicator duplicate, and one all-to-all-v of the key and position of every item
-    /// (12 bytes per item). A rank with no items passes an empty slice.
+    /// On the octree's communicator, every rank: the routes (rlst's `SparseRoutes::new`:
+    /// a communicator duplicate, the item counts sent to the ranks that receive items by
+    /// a sparse exchange, and an all-reduce), one all-reduce that agrees the errors and
+    /// [`max_per_item`](Self::max_per_item), and the key and position of every item
+    /// (12 bytes per item) along the routes, point to point. A rank with no items passes
+    /// an empty slice.
     ///
     /// # Errors
     /// Returned on every rank if, on any rank, a key is not a valid finest-level key
@@ -210,7 +213,8 @@ impl Redistribution {
     /// receives 2³¹ items or more ([`RedistributionError::Overflow`]). The rank that found
     /// a defect returns it; the other ranks return [`RedistributionError::OtherRank`].
     /// The agreement comes before the exchange of the keys, so nothing that depends on
-    /// invalid input is communicated.
+    /// invalid input is communicated: a rank with an error sends no items, and the routes
+    /// carry only counts.
     pub fn new<C: CommunicatorCollectives>(
         octree: &Octree<'_, C>,
         plan: &Plan,
@@ -241,18 +245,16 @@ impl Redistribution {
         if local.is_ok() && mismatch {
             local = Err(RedistributionError::PlanMismatch);
         }
-        let sender = if local.is_ok() {
+        // A rank that fails, or sends more items than `i32` counts, routes nothing; the
+        // agreement below turns the latter into `Overflow` on every rank.
+        let sender = if local.is_ok() && max_per_item(keys.len(), 0) > 0 {
             Sender::new(&destinations, nranks)
         } else {
             Sender::new(&[], nranks)
         };
 
-        let mut receive_counts = vec![0usize; nranks];
-        comm.all_to_all_into(&sender.rank_counts[..], &mut receive_counts[..]);
-        let nreceived = receive_counts
-            .iter()
-            .try_fold(0usize, |total, &count| total.checked_add(count));
-        let local_max = nreceived.map_or(0, |nreceived| max_per_item(keys.len(), nreceived));
+        let routes = SparseRoutes::new(comm, &sender.rank_counts);
+        let local_max = max_per_item(keys.len(), routes.total_receive_count());
         // The maximum of [failed, −max_per_item] gives "any rank failed" and the minimum.
         let mine = [i64::from(local.is_err()), -(local_max as i64)];
         let mut all = [0i64; 2];
@@ -267,8 +269,6 @@ impl Redistribution {
         }
 
         // Every count and every position now fits `i32`.
-        let comm = comm.duplicate();
-        let mut scratch = vec![0i32; 4 * nranks];
         let mut routed: Vec<Routed> = keys
             .iter()
             .enumerate()
@@ -278,14 +278,7 @@ impl Redistribution {
             })
             .collect();
         sender.pack(&mut routed, 1);
-        let mut arrived = vec![Routed::default(); nreceived.unwrap_or(0)];
-        all_to_all_v(
-            &comm,
-            &mut scratch,
-            (&routed, &sender.rank_counts),
-            (&mut arrived, &receive_counts),
-            1,
-        );
+        let arrived = routes.exchange(&routed, 1);
         drop(routed);
 
         let positions: Vec<u32> = arrived.iter().map(|item| item.position).collect();
@@ -302,14 +295,17 @@ impl Redistribution {
             })
             .collect();
         drop(arrived);
+        let mut receive_counts = vec![0usize; nranks];
+        for (&source, &count) in routes.sources().iter().zip(routes.receive_counts()) {
+            receive_counts[source] = count;
+        }
         let receiver = Receiver::new(receive_counts, &positions, &arrival_leaves, nlocal);
 
         Ok(Self {
-            comm,
+            routes,
             sender,
             receiver,
             max_per_item,
-            scratch: RefCell::new(scratch),
         })
     }
 
@@ -353,7 +349,8 @@ impl Redistribution {
     /// received item r at `r · per_item`.
     ///
     /// # Collective operation
-    /// One all-to-all-v, on every rank, with the same `per_item` on every rank.
+    /// Every rank, with the same `per_item` on every rank: point to point along the
+    /// routes, no collective.
     ///
     /// # Panics
     /// Panics on every rank, before communicating, if `per_item` exceeds
@@ -395,26 +392,12 @@ impl Redistribution {
             vec![T::default(); nsend]
         };
         self.sender.pack(&mut send, per_item);
-        let mut scratch = self.scratch.borrow_mut();
-        let counts = (&self.sender.rank_counts, &self.receiver.rank_counts);
         if lengths {
-            all_to_all_v(
-                &self.comm,
-                &mut scratch,
-                (&send, counts.0),
-                (received, counts.1),
-                per_item,
-            );
+            self.routes.exchange_into(&send, per_item, received);
             self.receiver.unpack(received, per_item);
         } else {
             let mut ignored = vec![T::default(); nreceive];
-            all_to_all_v(
-                &self.comm,
-                &mut scratch,
-                (&send, counts.0),
-                (&mut ignored, counts.1),
-                per_item,
-            );
+            self.routes.exchange_into(&send, per_item, &mut ignored);
         }
         assert!(
             lengths,
@@ -431,7 +414,8 @@ impl Redistribution {
     /// holds `nsent() · per_item` values, those of item i at `i · per_item`.
     ///
     /// # Collective operation
-    /// One all-to-all-v, on every rank, with the same `per_item` on every rank.
+    /// Every rank, with the same `per_item` on every rank: point to point along the
+    /// reversed routes, no collective.
     ///
     /// # Panics
     /// Panics on every rank, before communicating, if `per_item` exceeds
@@ -473,26 +457,13 @@ impl Redistribution {
             vec![T::default(); nsend]
         };
         self.receiver.pack(&mut send, per_item);
-        let mut scratch = self.scratch.borrow_mut();
-        let counts = (&self.receiver.rank_counts, &self.sender.rank_counts);
         if lengths {
-            all_to_all_v(
-                &self.comm,
-                &mut scratch,
-                (&send, counts.0),
-                (returned, counts.1),
-                per_item,
-            );
+            self.routes.exchange_back_into(&send, per_item, returned);
             self.sender.unpack(returned, per_item);
         } else {
             let mut ignored = vec![T::default(); nreceive];
-            all_to_all_v(
-                &self.comm,
-                &mut scratch,
-                (&send, counts.0),
-                (&mut ignored, counts.1),
-                per_item,
-            );
+            self.routes
+                .exchange_back_into(&send, per_item, &mut ignored);
         }
         assert!(
             lengths,
@@ -516,46 +487,6 @@ impl Redistribution {
 /// items received fit MPI's `i32` counts and displacements; zero if even one does not.
 fn max_per_item(nsent: usize, nreceived: usize) -> usize {
     i32::MAX as usize / nsent.max(nreceived).max(1)
-}
-
-/// Write the value counts and displacements of `per_item` values per item, for the item
-/// `counts`, into `values` and `displacements`.
-///
-/// The caller guarantees that the total fits `i32` (`per_item` at most
-/// [`max_per_item`]).
-fn value_counts(counts: &[usize], per_item: usize, values: &mut [i32], displacements: &mut [i32]) {
-    let mut total = 0usize;
-    for ((&count, value), displacement) in counts.iter().zip(values).zip(displacements) {
-        *displacement = total as i32;
-        *value = (count * per_item) as i32;
-        total += count * per_item;
-    }
-}
-
-/// One all-to-all-v of `per_item` values per item, with the item counts of every rank
-/// on both sides; `scratch` holds 4 P counts.
-fn all_to_all_v<T: Equivalence>(
-    comm: &SimpleCommunicator,
-    scratch: &mut [i32],
-    (send, send_counts): (&[T], &[usize]),
-    (receive, receive_counts): (&mut [T], &[usize]),
-    per_item: usize,
-) {
-    let nranks = send_counts.len();
-    let (send_values, rest) = scratch.split_at_mut(nranks);
-    let (send_displacements, rest) = rest.split_at_mut(nranks);
-    let (receive_values, receive_displacements) = rest.split_at_mut(nranks);
-    value_counts(send_counts, per_item, send_values, send_displacements);
-    value_counts(
-        receive_counts,
-        per_item,
-        receive_values,
-        receive_displacements,
-    );
-    comm.all_to_all_varcount_into(
-        &Partition::new(send, &send_values[..], &send_displacements[..]),
-        &mut PartitionMut::new(receive, &receive_values[..], &receive_displacements[..]),
-    );
 }
 
 /// Stably sort elements into buckets: return the number of elements of each of the

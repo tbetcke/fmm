@@ -245,6 +245,16 @@ rendezvous off (`PSM2_MQ_RNDV_HFI_THRESH` above every message), and failed with
 Versions: libpsm2-12.0.1-1.el9 (PSM2 v2.2, driver interface
 v6.3), kernel 5.14.0-570.140.1.el9_6.
 
+**`PSM2_ERRCHK_TIMEOUT=10:40:2`** (`env.sh`, Phase 5S T8): PSM2 resends a packet that is
+not acknowledged after its error-check timeout, compiled in as `160:640:2` (ms: the first
+wait, the largest, the factor). At 160 ranks on 4 nodes, dense bursts (every rank sending
+a few KB to every other at once: an `MPI_Alltoallv` or immediate sends) lose packets in
+about half the phases, and each loss stalled the receiving rank by about 160 ms, and the
+other ranks at their next collective. It never happened on 2 nodes. With `10:40:2` the
+same losses cost about 10 ms (jobs 604021, 604022; fmm-validate/results/phase5s-t8.md
+§9.3). T8's full correctness job passed with it at 4 nodes, 640 ranks oversubscribed
+included (job 604023). The `ofi` MTL hung in the same test.
+
 **Decision 4 (signed off by the user, 2026-10-10): `mpirun` inside the allocation**,
 with `--bind-to core` and the placement explicit: `--map-by core` for one thread per
 rank, `--map-by ppr:<ranks per socket>:socket:PE=<threads> --bind-to core` for ranks with

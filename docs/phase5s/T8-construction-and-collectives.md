@@ -5,6 +5,17 @@
 fired at 8 ranks (`docs/design/scale-out.md` §1.4, §7.1). T8 keeps S5 and re-measures the
 construction after T3a; where this brief says "build S4", read "re-measure T3a's routing".
 
+**Added on 2026-10-13 (T8, at the user's request):** step 1 found 29–30 of the build's
+31–32 all-to-alls of counts inside rlst (`fmm-validate/results/phase5s-t8.md` §3). S5's
+sparse exchanges are therefore built upstream in **T8r**
+([T8r-rlst-sparse-exchange.md](T8r-rlst-sparse-exchange.md)): rlst 0.10.1 with a sparse
+`all_to_allv`, `GhostCommunicatorBuilder::build` by non-blocking consensus and a fixed-route
+exchange. Step 3 below continues on that release: pin it, move the sparse calls of the
+octree and `Redistribution` (S5 for the build and for the evaluation) onto it, bit for bit,
+and re-run the probe. S8 fires on the modelled clause and is **built as its own task after
+T8, T8s** ([T8s-fan-out-tree.md](T8s-fan-out-tree.md); signed off by the user on 2026-10-13, the report's §6, question 3), so T8 builds no
+S8.
+
 **Added on 2026-10-13 (T5, at the user's request; signed off by the user on 2026-10-13):**
 T8 also evaluates a third trigger, **S8, the fan-out below the replicated top** (below,
 and step 1's last item). T5 measured the multipole exchange's neighbours and messages
