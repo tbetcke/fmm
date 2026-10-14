@@ -81,7 +81,8 @@
 //!
 //! The evaluator works on the points of the local leaves, grouped by leaf. A caller
 //! whose points lie on any rank moves them to their owners with a
-//! [`Redistribution`](redistribute::Redistribution) (`forward`, one all-to-all-v), which
+//! [`Redistribution`](redistribute::Redistribution) (`forward`, point to point on routes
+//! fixed at build), which
 //! also gives the counts per leaf, and moves the results back with `backward`
 //! (`docs/design/distributed-fmm.md` §4).
 //!

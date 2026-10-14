@@ -138,7 +138,8 @@ holds every block or every ancestor of one any more; `Octree::partition_map`
 block, a bit, 8 (P + 1) B for the cut), and gives the owner of any key (for a key above
 the blocks, its first descendant block's rank), its sharers and the kind of any block
 or ancestor of one locally. The top-tree keys of H come from the map; the keys below
-other ranks' blocks come by one push (an all-to-all-v: every own key to the ranks with
+other ranks' blocks come by one push (a sparse exchange, rlst's `sparse_all_to_allv`
+since Phase 5S T8: every own key to the ranks with
 a same-level neighbour cell of it in their S, with its children under the layer), and
 the receiver keeps what lies in H. No key list is gathered to every rank.
 `neighbour_map` has entries only for non-ghost keys, though its *values* may be
@@ -172,7 +173,7 @@ ranges at the block boundaries nearest to W p/P (O3; ties to the later boundary)
 `Octree::repartition(&self, weights, min_gain)` (Phase 5S T7, S3; docs/design/scale-out.md
 §6.3) cuts the same blocks again by the caller's weights, one per own block (an all-gather-v,
 the weights scaled to integers summing to about 2⁵² so that `partition_blocks` cuts
-them exactly as it cuts keys), moves the leaves to their new owners (one all-to-all-v;
+them exactly as it cuts keys), moves the leaves to their new owners (one sparse exchange;
 they arrive sorted) and rebuilds the partition map (the leaf bits do not depend on the
 cut) and H by the push. The coarse tree, the leaves and every key stay; only ownership
 changes, so the leaves stay the one-rank leaves. With `Some(min_gain)` the new cut is

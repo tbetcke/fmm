@@ -2,9 +2,9 @@
 
 S4, S5 and S8 evaluated, as docs/phase5s/T8-construction-and-collectives.md asks, on the
 final structure (main at e788576: T3a's routing, T3's partition map, T5/T6's owned top
-tree, T7's second cut on by default). Steps 1 (measure) and 2 (decide) of the brief; step
-3 (build what fires) waits for the sign-off of §6. No library code changed. Run on
-2026-10-13 on locust (GH200) and Kathleen.
+tree, T7's second cut on by default). Steps 1 (measure) and 2 (decide) of the brief ran on
+2026-10-13; step 3 (build what fires) on 2026-10-14, after the sign-off of §6: S5 on rlst
+0.10.1 (T8r), §9. Run on locust (GH200) and Kathleen.
 
 **Measured** means run here and read from the output; timings are reported, never
 asserted. **Counted** runs are oversubscribed and never timed. ***Model*** marks every
@@ -61,6 +61,21 @@ are exclusive; the job is named in §7.
 - **Questions for sign-off: §6.** Kathleen used **1.99 node-hours** in one 4-node job
   (§7). The measurement tool was a throwaway, instrumented copy of the tree outside the
   repository (§1).
+- **Step 3 (§9): S5 built on rlst 0.10.1, every output unchanged bit for bit.**
+  - The octree's sparse moves use `sparse_all_to_allv`, and `Redistribution` uses
+    `SparseRoutes`.
+  - Counted per build: 21–32 all-to-alls of P counts become 2, the P-long arrays fall by
+    65–80 %, the all-reduces by a quarter. The evaluation has no collective and no P-long
+    array left.
+  - *Model* at 10⁴ ranks: 2.1–2.7 % of a build on T1's bound, 0.8–1.1 % on the trend
+    (19–27 % and 6–9 % before).
+  - Timed: the redistribution per evaluation is 6–30 % faster at 160 Kathleen ranks. The
+    build is 2–6 ms slower on one node, where the harness's random share makes every
+    route dense.
+  - On 4 Kathleen nodes the build trips a 160 ms transport stall more often than before.
+    A micro-benchmark shows the stall on every kind of dense burst, the old all-to-all-v
+    included, and never on 2 nodes; it stays open for T9.
+  - Steps 1 and 3 together used **5.13 node-hours** (§7).
 
 ## 1. Method
 
@@ -537,12 +552,230 @@ Questions (the recommendations first; the brief: nothing is built without them):
 | Job | Nodes, QoS | What | Waited | Ran | Node-hours |
 | --- | --- | --- | ---: | ---: | ---: |
 | 604012 | 4, `small`, node-c11b-[002,008,017,032] | build of the probe copy; micro-benchmarks at 40, 80, 160; timed at 40, 80, 160 (N = 10⁷, 10⁸, 2.5 × 10⁴ per rank); counted at 320, 640 | 1:04:03 | 29:47 | 1.99 |
+| 604016 | 2, `test`, node-c11b-[002,008] | step 3: T2's correctness job (MPI test list at 2, 4, 8, 80; invariance at 80; smoke) | 0:00:01 | 23:14 | 0.77 |
+| 604017 | 4, `small`, node-c11b-[002,008,017,032] | step 3: invariance at 160 against 80, 40, 20; 640 against 80 oversubscribed | 0:23:14 | 1:02 | 0.07 |
+| 604018 | 4, `small`, the same | step 3: the probe before and after, timed at 40, 80, 160, counted at 320, 640; points on their owners | 0:24:13 | 21:56 | 1.46 |
+| 604019 | 4, `small`, the same | step 3: the 160-rank builds, four repeats (recording on) | 0:00:01 | 1:32 | 0.10 |
+| 604020 | 4, `small`, the same | step 3: before and after with the recording off, 160 (×4), 40 (×2), N = 10⁷ at 160 (×2) | 0:00:50 | 10:02 | 0.67 |
+| 604021 | 4, `small`, the same | step 3: the stall micro-benchmark at 160 (×2) and 80 | 0:08:03 | 0:54 | 0.06 |
+| | | | | **total** | **5.13** |
 
 Within the task's budget of 20 node-hours. Raw outputs stay in Kathleen's
 `/scratch/scratch/ucahtbe/fmm/logs/p5s-t8/` and locust's `/data/ucahtbe/logs/p5s-t8/`.
 
 ## 8. Checks
 
-No code changed in this step: the repository holds this report and the addendum to
-docs/design/scale-out.md §7 (§7.3). The checks of the brief that apply to a change of code
-run with step 3, if anything is built.
+Steps 1 and 2 changed no code: the repository held this report and the addendum to
+docs/design/scale-out.md §7 (§7.3). Step 3's checks are in §9.4.
+
+## 9. Step 3: S5 built on rlst 0.10.1
+
+Built on 2026-10-14 after T8r released rlst 0.10.1 (§6, question 2; the T8r brief). Every
+output is unchanged bit for bit (§9.4).
+
+### 9.1 What changed
+
+- **The pin.** `rlst = "0.10.1"` in `[workspace.dependencies]`, in the green-kernels patch
+  and in `octree/Cargo.toml`; `Cargo.lock` moves `rlst` and `rlst-proc-macro` only.
+  Underneath, rlst's `GhostCommunicatorBuilder::build` now finds the owners' send lists by
+  non-blocking consensus: the source, top, multipole, reduction and second-cut exchanges
+  lose their all-to-alls of counts with no call changed here.
+- **The octree's sparse moves** (`nd-octree`): the key move, the balance, the push and the
+  second cut's leaf move (with its push) call rlst's `sparse_all_to_allv`, which takes the
+  arguments of `all_to_allv` and returns its result element for element: a message to each
+  rank with data, a non-blocking barrier and one all-reduce. The routing and the cost
+  model's `leaf_point_counts` keep `all_to_allv`; the brief does not name them.
+- **`Redistribution`** (`nd-fmm-plan`, S5 for the evaluation, question 1 (a)): `new` builds
+  rlst's `SparseRoutes` from the item counts (a communicator duplicate, the counts by
+  consensus, an all-reduce) and moves the keys along the routes. `forward` and `backward`
+  are point to point along the routes, with no collective and no P-long array. The
+  errors and `max_per_item` are agreed as before, so a rank that fails routes nothing.
+  `tests/mpi_regressions.rs` gains the oracle the design's §9 names: forward's bits equal
+  the dense all-to-all-v of the same payloads (rlst's `all_to_allv`, ordered by leaf and
+  origin).
+
+### 9.2 Counted: the collectives per build and per evaluation
+
+T8's probe was rebuilt on the new code. It is the same throwaway copy with the same
+sites, and its interposer now also records `MPI_Improbe` and `MPI_Mrecv`. Before is step
+1's build of e788576, timed again in the same jobs. The counts at 320, 512 and 640 ranks
+are step 1's (oversubscribed, never timed).
+
+**Kathleen**, per build, 2.5 × 10⁴ points per rank, f64 p = 8, before → after:
+
+| workload | ranks | collectives | all-to-alls of counts | all-reduces | non-blocking barriers | graph creations | messages | P-long kB | build ms (recording on) | count all-to-alls in-call ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| cube | 40 | 190 → 144 | 21.0 → 2.00 | 102 → 77.0 | 0 → 19.0 | 24.0 → 24.0 | 1,573 → 912 | 22.2 → 7.49 | 121 → 123 | 3.36 → 0.461 |
+| cube | 80 | 208 → 158 | 23.0 → 2.00 | 110 → 83.0 | 0 → 21.0 | 28.0 → 28.0 | 3,155 → 1,658 | 42.1 → 12.6 | 147 → 148 | 3.31 → 0.535 |
+| cube | 160 | 208 → 158 | 23.0 → 2.00 | 110 → 83.0 | 0 → 21.0 | 28.0 → 28.0 | 6,001 → 2,985 | 78.3 → 21.3 | 213 → 390 | 6.02 → 0.551 |
+| cube | 320 | 194 → 152 | 21.0 → 2.00 | 100 → 79.0 | 0 → 19.0 | 28.0 → 28.0 | 10,969 → 5,551 | 134 → 38.0 | (not timed) | – |
+| cube | 640 | 226 → 172 | 25.0 → 2.00 | 118 → 89.0 | 0 → 23.0 | 32.0 → 32.0 | 24,127 → 10,723 | 302 → 70.9 | (not timed) | – |
+| Plummer | 40 | 263 → 201 | 29.0 → 2.00 | 135 → 102 | 0 → 27.0 | 40.0 → 40.0 | 1,998 → 1,026 | 27.0 → 9.02 | 198 → 238 | 3.67 → 0.466 |
+| Plummer | 80 | 263 → 201 | 29.0 → 2.00 | 135 → 102 | 0 → 27.0 | 40.0 → 40.0 | 3,762 → 1,788 | 48.6 → 14.4 | 235 → 238 | 3.93 → 0.453 |
+| Plummer | 160 | 281 → 215 | 31.0 → 2.00 | 143 → 108 | 0 → 29.0 | 44.0 → 44.0 | 7,402 → 3,130 | 90.6 → 22.6 | 239 → 264 | 6.34 → 0.511 |
+| Plummer | 320 | 281 → 215 | 31.0 → 2.00 | 143 → 108 | 0 → 29.0 | 44.0 → 44.0 | 14,420 → 5,820 | 174 → 40.2 | (not timed) | – |
+| Plummer | 640 | 281 → 215 | 31.0 → 2.00 | 143 → 108 | 0 → 29.0 | 44.0 → 44.0 | 28,303 → 11,061 | 338 → 74.1 | (not timed) | – |
+| clusters | 40 | 263 → 201 | 29.0 → 2.00 | 135 → 102 | 0 → 27.0 | 40.0 → 40.0 | 1,803 → 835 | 23.5 → 6.66 | 210 → 213 | 3.21 → 0.404 |
+| clusters | 80 | 271 → 207 | 30.0 → 2.00 | 138 → 104 | 0 → 28.0 | 42.0 → 42.0 | 3,599 → 1,555 | 45.4 → 11.8 | 221 → 220 | 5.93 → 0.535 |
+| clusters | 160 | 281 → 215 | 31.0 → 2.00 | 143 → 108 | 0 → 29.0 | 44.0 → 44.0 | 7,240 → 2,954 | 89.2 → 21.7 | 241 → 427 | 5.93 → 0.636 |
+| clusters | 320 | 281 → 215 | 31.0 → 2.00 | 143 → 108 | 0 → 29.0 | 44.0 → 44.0 | 14,179 → 5,584 | 172 → 39.2 | (not timed) | – |
+| clusters | 640 | 289 → 221 | 32.0 → 2.00 | 146 → 110 | 0 → 30.0 | 46.0 → 46.0 | 28,586 → 10,782 | 340 → 72.4 | (not timed) | – |
+
+**locust**, the same:
+
+| workload | ranks | collectives | all-to-alls of counts | all-reduces | non-blocking barriers | graph creations | messages | P-long kB | build ms (recording on) | count all-to-alls in-call ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| cube | 8 | 190 → 144 | 21.0 → 2.00 | 102 → 77.0 | 0 → 19.0 | 24.0 → 24.0 | 323 → 209 | 5.12 → 1.95 | 29.4 → 27.9 | 0.377 → 0.039 |
+| cube | 32 | 190 → 144 | 21.0 → 2.00 | 102 → 77.0 | 0 → 19.0 | 24.0 → 24.0 | 1,250 → 725 | 17.7 → 5.97 | 53.3 → 54.5 | 0.795 → 0.125 |
+| cube | 72 | 208 → 158 | 23.0 → 2.00 | 110 → 83.0 | 0 → 21.0 | 28.0 → 28.0 | 2,851 → 1,509 | 38.0 → 11.5 | 48.0 → 57.5 | 1.12 → 0.223 |
+| cube | 512 | 226 → 172 | 25.0 → 2.00 | 118 → 89.0 | 0 → 23.0 | 32.0 → 32.0 | 19,416 → 8,701 | 244 → 57.9 | (not timed) | – |
+| Plummer | 8 | 230 → 180 | 25.0 → 2.00 | 116 → 91.0 | 0 → 23.0 | 36.0 → 36.0 | 396 → 253 | 6.39 → 2.80 | 39.4 → 40.3 | 0.245 → 0.041 |
+| Plummer | 32 | 263 → 201 | 29.0 → 2.00 | 135 → 102 | 0 → 27.0 | 40.0 → 40.0 | 1,634 → 864 | 22.6 → 7.87 | 76.6 → 78.6 | 1.03 → 0.121 |
+| Plummer | 72 | 263 → 201 | 29.0 → 2.00 | 135 → 102 | 0 → 27.0 | 40.0 → 40.0 | 3,371 → 1,598 | 43.5 → 12.8 | 103 → 109 | 1.52 → 0.329 |
+| Plummer | 512 | 281 → 215 | 31.0 → 2.00 | 143 → 108 | 0 → 29.0 | 44.0 → 44.0 | 22,757 → 8,970 | 272 → 60.6 | (not timed) | – |
+| clusters | 8 | 245 → 187 | 27.0 → 2.00 | 127 → 96.0 | 0 → 25.0 | 36.0 → 36.0 | 355 → 199 | 5.34 → 1.84 | 70.7 → 70.2 | 0.688 → 0.042 |
+| clusters | 32 | 263 → 201 | 29.0 → 2.00 | 135 → 102 | 0 → 27.0 | 40.0 → 40.0 | 1,483 → 714 | 19.7 → 5.95 | 89.4 → 89.8 | 0.875 → 0.130 |
+| clusters | 72 | 263 → 201 | 29.0 → 2.00 | 135 → 102 | 0 → 27.0 | 40.0 → 40.0 | 3,264 → 1,495 | 42.2 → 11.9 | 99.6 → 107 | 2.33 → 0.232 |
+| clusters | 512 | 281 → 215 | 31.0 → 2.00 | 143 → 108 | 0 → 29.0 | 44.0 → 44.0 | 22,693 → 8,967 | 276 → 63.1 | (not timed) | – |
+
+
+- **The all-to-alls of P counts fall from 21–32 per build to 2**: the routing's and
+  `leaf_point_counts`'. The P-long arrays fall by 65–80 % (they are now those two calls'
+  and the routing's), the all-reduces by a quarter (rlst's validity checks folded), and
+  the messages by about half (the all-to-alls' P − 1 count messages go). The non-blocking
+  barriers (19–30 per build, one per sparse exchange) are new. The graph creations stay:
+  rlst's ghost communicators still make two each.
+- **The evaluation** at 640 ranks has no all-to-all-v and no P-long array left. It sends
+  the same 1,278 messages per rank as before: the harness's random share sends every
+  rank's points to every other rank, so its routes are dense.
+
+### 9.3 Timed, with the interposer's recording off
+
+The probe's interposer records every MPI call under a string-keyed site, so it charges a
+polling exchange (the push: about 10,000 `MPI_Test` and `MPI_Improbe` calls against two
+collectives before) with an allocation and a map update per call. The timed comparison
+below is therefore run with `PROBE_OFF=1` (the site timers stay), before and after
+interleaved in every repeat (Kathleen jobs 604020 and, recording on, 604018 and 604019;
+locust, idle). Build in ms, median and every repeat; the redistribution's forward and
+backward per evaluation in ms, median, f64 p = 8.
+
+| machine | run | ranks | repeats | build, before | build, after | forward + backward per evaluation, before → after |
+| --- | --- | ---: | ---: | --- | --- | --- |
+| locust | 2.5 × 10⁴ per rank, cube | 72 | 3 | 49 (49, 49, 48) | 55 (54, 55, 56) | 3.14 → 3.10 |
+| locust | 2.5 × 10⁴ per rank, Plummer | 72 | 3 | 104 (102, 104, 104) | 107 (108, 107, 106) | 6.84 → 6.32 |
+| locust | 2.5 × 10⁴ per rank, clusters | 72 | 3 | 101 (101, 102, 100) | 104 (104, 103, 104) | 9.41 → 9.01 |
+| locust | N = 10⁷, cube | 72 | 3 | 296 (293, 297, 296) | 305 (308, 301, 305) | 15.86 → 17.34 |
+| Kathleen | 2.5 × 10⁴ per rank, cube | 40 | 2 | 119 (119, 119) | 121 (120, 122) | 5.98 → 5.60 |
+| Kathleen | 2.5 × 10⁴ per rank, Plummer | 40 | 2 | 198 (198, 198) | 198 (198, 198) | 8.04 → 7.95 |
+| Kathleen | 2.5 × 10⁴ per rank, clusters | 40 | 2 | 210 (210, 210) | 210 (210, 210) | 12.25 → 11.05 |
+| Kathleen | 2.5 × 10⁴ per rank, cube | 160 | 4 | 216 (213, 216, 217, 230) | 378 (376, 381, 378, 377) | 13.26 → 11.51 |
+| Kathleen | 2.5 × 10⁴ per rank, Plummer | 160 | 4 | 251 (246, 302, 247, 254) | 329 (253, 405, 253, 413) | 15.29 → 14.41 |
+| Kathleen | 2.5 × 10⁴ per rank, clusters | 160 | 4 | 246 (246, 245, 245, 250) | 413 (412, 562, 415, 406) | 20.24 → 17.00 |
+| Kathleen | N = 10⁷, cube | 160 | 2 | 277 (276, 278) | 286 (288, 283) | 44.47 → 31.39 |
+
+- **One locust node (72 ranks):** the build is 2–6 ms slower (+3–12 %), in the two
+  `Redistribution::new`, the coordinates' forward and the balance: with the random share
+  every route is dense, and point-to-point messages to 71 ranks cost more than Open MPI
+  5's tuned all-to-alls over shared memory. The evaluation's redistribution is unchanged
+  within noise.
+- **Kathleen, 40 ranks (one node):** builds unchanged (119 → 121, 198 → 198, 210 → 210
+  ms); the redistribution per evaluation 1–10 % faster.
+- **Kathleen, 160 ranks (4 nodes):** the redistribution per evaluation is 6–30 % faster
+  (N = 10⁷: 44.5 → 31.4 ms). The build pays a **transport stall of about 160 ms** in most
+  runs after and in few before: with recording off 10 of 12 builds after (the cube and
+  the clusters 4 of 4, the Plummer sphere 2 of 4) against 1 of 12 before; with it on 10
+  of 18 after against 2 of 18 before (jobs 604018 and 604019). Step 1's cube at 160
+  ranks, 373 ms, was one of the stalled builds before. Outside the stall the
+  build costs 5–10 ms more (N = 10⁷: 277 → 286 ms).
+
+**The stall is not the sparse exchange's.** It comes in quanta of 80 and 160 ms, on
+whichever call waits for the late rank (a `Wait`, an `MPI_Comm_dup`, an `MPI_Alltoallv`).
+A micro-benchmark at 160 ranks on the same 4 nodes (job 604021; 20 repeats, twice; every
+rank sending 156 items of 16 bytes to every other rank, as the harness's redistribution
+does) stalls on every kind of dense burst:
+
+| sequence | phases that stalled (> 50 ms) at 160 ranks | at 80 ranks |
+| --- | ---: | ---: |
+| A: `SparseRoutes::new`, then three exchanges (as `Redistribution` now) | 3 of 160 | 0 of 80 |
+| B: `all_to_allv` of the keys and of the coordinates (as before T8) | 43 of 80 | 0 of 40 |
+| C: a communicator duplicate, then two raw bursts of immediate sends and receives | 7 of 120 | 0 of 60 |
+| D: `sparse_all_to_allv`, then a raw burst on the same communicator | 27 of 80 | 0 of 40 |
+
+So dense bursts of a few thousand messages across 4 nodes trip a fixed delay in Open MPI
+4.1.6 over PSM2 (already run with `PSM2_TID=0` for an earlier defect;
+tools/kathleen/README.md), whatever sends them, and never on 2 nodes. Which sequence
+trips it depends on timing. In the harness's build the new sequence trips it more often
+than the old; in the micro-benchmark the old one trips it more often. It is not fixed
+here; it is an open item for every timing on 4 Kathleen nodes (T9).
+
+**Points on their owners** (`--input owners`; every route a rank has is to itself or a
+neighbour), recording on, per evaluation in ms:
+
+Kathleen, before → after:
+
+| workload | precision | ranks | forward charges | backward output | evaluation |
+| --- | --- | ---: | ---: | ---: | ---: |
+| cube | f64 p = 8 | 40 | 0.025 → 0.025 | 0.066 → 0.064 | 51.1 → 48.4 |
+| cube | f64 p = 8 | 160 | 0.028 → 0.026 | 0.071 → 0.066 | 96.2 → 91.4 |
+| clusters | f64 p = 8 | 40 | 0.026 → 0.026 | 0.066 → 0.067 | 124 → 119 |
+| clusters | f64 p = 8 | 160 | 0.039 → 0.036 | 0.102 → 0.095 | 134 → 112 |
+
+locust, before → after:
+
+| workload | precision | ranks | forward charges | backward output | evaluation |
+| --- | --- | ---: | ---: | ---: | ---: |
+| cube | f64 p = 8 | 8 | 0.0091 → 0.0087 | 0.029 → 0.029 | 26.7 → 26.4 |
+| cube | f64 p = 8 | 72 | 0.028 → 0.026 | 0.042 → 0.044 | 51.1 → 50.7 |
+| clusters | f64 p = 8 | 8 | 0.0099 → 0.0096 | 0.031 → 0.032 | 65.4 → 64.0 |
+| clusters | f64 p = 8 | 72 | 0.040 → 0.039 | 0.059 → 0.055 | 63.6 → 63.0 |
+
+At these rank counts the all-to-all-v pair of zero counts costs Open MPI little either
+way (§4), so the difference is in the noise. (The evaluation column moves by up to 16 %
+in code step 3 does not touch: run-to-run noise, with recording on.) What the routes remove is the cost that
+grows with P: §9.5.
+
+### 9.4 Checks (step 3)
+
+- **Locally (M3 Max):** `cargo fmt -- --check`, `cargo clippy -- -D warnings`, `cargo
+  clippy --examples -- -D warnings`, `cargo test`, `cargo doc --no-deps`, `cargo clippy
+  --workspace --all-targets -- -D warnings`, `RUST_MIN_STACK=8388608 cargo test
+  --workspace`, nd-octree's strict Clippy and `RUSTDOCFLAGS="-D warnings" cargo doc`: all
+  pass. `.github/scripts/run-mpi-tests.sh` at 2 and 4 ranks passes. The nd-octree MPI
+  examples pass at 1, 3, 5 and 8 ranks, and `mpi_regressions`, `invariance`, `mpi_exec` and
+  `mpi_threading` at 8 ranks on every rank.
+- **locust:** rank-count invariance at 512 against 64 oversubscribed (the cube and the
+  Plummer sphere at f64 p = 8, the cube at f32 p = 3): 0 values differ.
+- **Kathleen:** T2's correctness job at 2 nodes (604016: the MPI test list at 2, 4, 8 and
+  80 ranks, invariance at 80 against 40, 20 and 10, the smoke run) and its invariance at 4
+  nodes (604017: 160 against 80, 40 and 20 for the three configurations; 640 against 80
+  oversubscribed). Every step passes; 0 values differ.
+- Before the release, T8r ran the same suite on this workspace patched to the rlst
+  branch (§6, question 2).
+
+### 9.5 The triggers after step 3 (*model*)
+
+§3.3's model with n = 2 all-to-alls of counts per build, plus the new non-blocking
+barriers at log₂ P hops of 4 µs each (§10.4 of the design's time model), 19–30 per build.
+Build at 160 ranks as in §3.3:
+
+| precision | workload | count all-to-alls + barriers / build at 10³, T1 | 10³, trend | 10⁴, T1 | 10⁴, trend |
+| --- | --- | --- | --- | --- | --- |
+| f64 p = 8 | cube | 0.8 + 0.8 / 377 ms (0.4 %) | 0.3 + 0.8 / 377 ms (0.3 %) | 7.5 + 1.1 / 410 ms (2.1 %) | 2.1 + 1.1 / 404 ms (0.8 %) |
+| f64 p = 8 | Plummer | 0.8 + 1.2 / 253 ms (0.8 %) | 0.3 + 1.2 / 253 ms (0.6 %) | 7.5 + 1.5 / 350 ms (2.6 %) | 2.1 + 1.5 / 344 ms (1.1 %) |
+| f64 p = 8 | clusters | 0.8 + 1.2 / 251 ms (0.8 %) | 0.3 + 1.2 / 251 ms (0.6 %) | 7.5 + 1.6 / 343 ms (2.7 %) | 2.1 + 1.6 / 336 ms (1.1 %) |
+| f32 p = 3 | cube | 0.8 + 0.8 / 378 ms (0.4 %) | 0.3 + 0.8 / 377 ms (0.3 %) | 7.5 + 1.1 / 410 ms (2.1 %) | 2.1 + 1.1 / 405 ms (0.8 %) |
+| f32 p = 3 | Plummer | 0.8 + 1.2 / 286 ms (0.7 %) | 0.3 + 1.2 / 286 ms (0.5 %) | 7.5 + 1.5 / 383 ms (2.4 %) | 2.1 + 1.5 / 378 ms (1.0 %) |
+| f32 p = 3 | clusters | 0.8 + 1.2 / 274 ms (0.7 %) | 0.3 + 1.2 / 274 ms (0.5 %) | 7.5 + 1.6 / 365 ms (2.5 %) | 2.1 + 1.6 / 359 ms (1.0 %) |
+
+- **S5 for the build:** at 10⁴ ranks the count all-to-alls and barriers are 2.1–2.7 % of a
+  modelled build on T1's bound (19–27 % before) and 0.8–1.1 % on the trend (6–9 %), far
+  below the quarter.
+- **S5 for the evaluation:** no collective and no P-long array is left; the cost is the
+  messages the routes carry, m × 4 µs for m peers. With points on or near their owners m
+  is a handful (0 ms at 10⁴ ranks against 0 / 7.5 / 42 ms before, depending on Open MPI's
+  algorithm). With a random share m is P − 1 either way, as the all-to-all-v's was.
+- Open: what the model leaves out. A dense pattern sent by consensus costs P − 1
+  synchronous sends where an all-to-all of counts cost one collective (the random share's
+  `Redistribution::new` at 10⁴ ranks: about 40 ms at 4 µs per message, against 3.8 ms on
+  T1's bound). Applications with points near their owners route sparsely; the harness's
+  random share is the dense worst case. And §9.3's stall on 4 Kathleen nodes.

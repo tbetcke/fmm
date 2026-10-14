@@ -166,7 +166,7 @@
 //! | [`points_to_morton`] | local | Maps `[3, n]` points using an explicit box. |
 //! | [`octree::compute_global_bounding_box`] | collective | All ranks contribute a padded cubic box. |
 //! | [`Octree::new`] | collective | All ranks in the communicator construct one distributed topology, also ranks without keys or blocks. The coarse tree costs one all-reduce per refinement round. Optional layers selected by [`OctreeOptions`] enlarge the exchanged payload but add no round. |
-//! | [`Octree::repartition`] | collective | The blocks cut again by the caller's weights: an all-gather-v of one weight per block, then, unless the cut stays (the same, or less gain than asked), the leaves moved to their new owners (an all-to-all-v) and the push of the locally essential keys. The leaves stay the same. |
+//! | [`Octree::repartition`] | collective | The blocks cut again by the caller's weights: an all-gather-v of one weight per block, then, unless the cut stays (the same, or less gain than asked), the leaves moved to their new owners (a sparse exchange) and the push of the locally essential keys. The leaves stay the same. |
 //! | [`Octree::owner_rank`] | local | Valid finest-level key to its owner, without communication. |
 //! | [`octree::PartitionMap`] lookups | local | The owner, sharers and kind of any key, from the replicated blocks. |
 //! | [`Octree::local_leaf`] | local | Finds a containing leaf only when this rank owns the key. |

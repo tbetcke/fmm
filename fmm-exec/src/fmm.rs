@@ -49,7 +49,7 @@
 //!    weighs it with the [`CostModel`] ([`FmmBuilder::cost_model`], by default
 //!    [`CostModel::calibrated`] for the strategy the host rule resolves with the ranks per
 //!    node of step 2, the precision and p), repartitions the octree by those weights
-//!    (`Octree::repartition`: an all-gather-v of the weights, an all-to-all-v of the
+//!    (`Octree::repartition`: an all-gather-v of the weights, a sparse exchange of the
 //!    leaves and the push of the locally essential keys, unless the cut stays as it is),
 //!    taking the new cut only where it lowers the busiest rank's modelled block cost by
 //!    at least [`WORK_CUT_MIN_GAIN`] (2 %), and builds the plan again where the cut
@@ -97,11 +97,11 @@
 //!
 //! [`Fmm::evaluate`] is collective: it agrees the length of the charge vector (one
 //! all-reduce), forwards the charges to the ranks that own their sources, into leaf order
-//! (one all-to-all-v), writes them after the coordinates of each source chunk (§3.13,
+//! (point to point on the routes fixed at build, no collective), writes them after the coordinates of each source chunk (§3.13,
 //! "Source chunks"), resets the evaluator and runs its six stages (or, with
 //! [`FmmBuilder::overlap`], its overlapped stages: [Overlap](#overlap-c52)), scales the target
 //! output of the owned targets in leaf order (the output pass, next section), and moves
-//! it back to the caller's ranks and order (one all-to-all-v), timing each step
+//! it back to the caller's ranks and order (point to point again), timing each step
 //! ([`StageTimings`]). For a fixed input on every rank, a fixed rank count and fixed
 //! settings, two evaluations are bit-identical (the accumulation order of
 //! `nd_fmm_plan::evaluator`), for every number of threads. [`Fmm::evaluate_into`]
@@ -215,16 +215,17 @@
 //! - **Collectives.** Per build, besides those of step 1–3 (the split by node of step 1
 //!   included), `Octree::new`, `Plan::new` and `Evaluator::new`, with the second cut
 //!   (Phase 5S T7) those of step 4 and a second `Plan::new`; two `Redistribution::new`
-//!   (each an all-to-all of counts, an all-reduce of the errors, a communicator duplicate
-//!   and an all-to-all-v of the keys), two all-to-all-v's of the coordinates, the
+//!   (each rlst's `SparseRoutes::new`, a communicator duplicate, the counts by a sparse
+//!   exchange and an all-reduce, then an all-reduce of the errors and the keys point to
+//!   point; Phase 5S T8), the coordinates point to point along both routes, the
 //!   all-reduce of step 7 (two maxima since Phase 5N T4, the ranks per node added), and
 //!   with a table cache one barrier of the node's communicator. Phase 5N T4 added one
 //!   communicator split per build on the host path (the device path had it). Per
-//!   evaluation: the all-reduce of the charge length, the forward of the charges (an
-//!   all-to-all-v), the evaluator's exchanges (the source exchange, the upward reduction of
+//!   evaluation: the all-reduce of the charge length, the forward of the charges (point
+//!   to point along the routes, no collective), the evaluator's exchanges (the source exchange, the upward reduction of
 //!   every reduction level, the all-gather of the replicated top and the multipole
-//!   exchange of every level; Phase 5S T5), and the backward of the output (an
-//!   all-to-all-v). Every rank enters each one, a rank with no points included.
+//!   exchange of every level; Phase 5S T5), and the backward of the output (point to
+//!   point). Every rank enters each one, a rank with no points included.
 //! - **Equal to one rank.** On P ranks the output is bit for bit the output of the
 //!   one-rank `Fmm` of the same settings and the same *resolved* strategy
 //!   ([`Fmm::strategy`]) over the union of every rank's points in rank order (rank 0's
@@ -2775,8 +2776,9 @@ impl BuildTimings {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct StageTimings {
     /// Moving the charges to the ranks that own their sources, into leaf order: the
-    /// forward of the sources' `Redistribution` (collective: one all-to-all-v, with the
-    /// wait for other ranks; Phase 5 T6, docs/design/distributed-fmm.md §4.4).
+    /// forward of the sources' `Redistribution` (every rank: point to point along its
+    /// routes since Phase 5S T8, one all-to-all-v before, with the wait for other ranks;
+    /// Phase 5 T6, docs/design/distributed-fmm.md §4.4).
     pub forward_charges: Duration,
     /// Writing the charges, in leaf order, into the host's source chunks (on a device only
     /// with P2M, P2L or P2P on the host fallback), on the `Fmm`'s pool when it has one
@@ -2820,8 +2822,8 @@ pub struct StageTimings {
     /// backend downloading it ([`download`](Self::download)).
     pub output: Duration,
     /// Moving the output back to the ranks and the order the caller passed the targets in:
-    /// the backward of the targets' `Redistribution` (collective: one all-to-all-v, with
-    /// the wait for other ranks) and the copy into the [`Output`] (Phase 5 T6,
+    /// the backward of the targets' `Redistribution` (every rank: point to point along
+    /// its routes, with the wait for other ranks) and the copy into the [`Output`] (Phase 5 T6,
     /// docs/design/distributed-fmm.md §4.4).
     pub backward_output: Duration,
     /// With a device backend: the part of [`output`](Self::output) spent in
@@ -3868,7 +3870,8 @@ where
     ///
     /// # Collective operation
     ///
-    /// Every rank must call it: one all-to-all-v, two with gradients; with a device
+    /// Every rank must call it: the backward of the targets' `Redistribution`, point to
+    /// point along its routes (twice with gradients); with a device
     /// backend first one all-reduce, which agrees the download.
     ///
     /// # Errors

@@ -478,13 +478,16 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
     /// all-reduce per round of provisional blocks, refined by weight alone, and one
     /// all-to-all-v of the deduplicated keys with their copies to the provisional
     /// owners); one all-reduce per refinement round of the coarse tree, and one
-    /// more if 2:1 balancing the blocks changes them; the key move to the owners (an
-    /// all-to-all-v); the distributed 2:1 balance (an all-reduce of the deepest
-    /// level and an all-to-all-v of the local closures by the partition bounds); the
+    /// more if 2:1 balancing the blocks changes them; the key move to the owners (a
+    /// sparse exchange); the distributed 2:1 balance (an all-reduce of the deepest
+    /// level and a sparse exchange of the local closures by the partition bounds); the
     /// leaf flags of the blocks for the [`PartitionMap`] (an all-gather-v of one flag
     /// per block, whose counts follow from the cut); and the push of the locally
-    /// essential keys (an all-to-all-v; see [`Octree::all_keys`]). Each all-to-all-v
-    /// includes an all-to-all of its counts. No key is sorted across the ranks, and no
+    /// essential keys (a sparse exchange; see [`Octree::all_keys`]). The routing's
+    /// all-to-all-v includes an all-to-all of its counts. A sparse exchange is rlst's
+    /// `sparse_all_to_allv` (Phase 5S T8, S5): a message to each rank with data, a
+    /// non-blocking barrier and one all-reduce, with no all-to-all of counts. No key is
+    /// sorted across the ranks, and no
     /// key list is gathered to every rank (Phase 5S T3). Debug builds add the
     /// collectives of their invariant checks. The partition bounds and the partition
     /// map come from the replicated coarse tree and need no further communication.
@@ -618,7 +621,7 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
     /// the current cut stays (the weights cut the blocks as they are cut already, or the
     /// new cut gains less than `min_gain`: every rank finds the same from the same
     /// weights, and then returns a copy of the tree), the move of the leaves to
-    /// their new owners (one all-to-all-v with its all-to-all of counts) and the push of
+    /// their new owners (one sparse exchange, as in [`Octree::new`]) and the push of
     /// the locally essential keys, as in [`Octree::new`]. Debug builds add the
     /// collectives of their invariant checks. On one rank nothing is communicated and the
     /// tree is unchanged.

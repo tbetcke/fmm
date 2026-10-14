@@ -124,7 +124,9 @@ module `cost`; design docs/design/scale-out.md §6).
   - Doctests that initialise MPI are `no_run`.
   - Since Phase 5 T6 `Fmm` runs on any number of ranks: `build` moves every point to the
     rank that owns its leaf (two `Redistribution`s, the coordinates forwarded), and
-    `evaluate` forwards the charges and moves the output back (one all-to-all-v each;
+    `evaluate` forwards the charges and moves the output back (one all-to-all-v each
+    until Phase 5S T8, since then point to point on the routes fixed at build, rlst's
+    `SparseRoutes`;
     `StageTimings::{forward_charges, backward_output}`, `BuildTimings::redistribute`).
     `PointsNotOwned` is gone; `FmmError::Redistribution` carries a redistribution that
     overflows MPI's counts. On P ranks the host output is bit for bit the one-rank `Fmm`
