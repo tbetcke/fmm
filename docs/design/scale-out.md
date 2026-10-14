@@ -1019,7 +1019,11 @@ with 19–30 non-blocking barriers new. *Model* at 10⁴ ranks: 2.1–2.7 % of a
   route dense;
 - on 4 Kathleen nodes the build trips a 160 ms transport stall (Open MPI 4.1.6 over PSM2)
   more often than before. A micro-benchmark finds that stall on every kind of dense
-  burst, the old all-to-all-v included, and never on 2 nodes; it is open for T9.
+  burst, the old all-to-all-v included, and never on 2 nodes. It is PSM2's error-check
+  timeout (`PSM2_ERRCHK_TIMEOUT`, 160 ms by default): with `10:40:2` each stall costs
+  about 10 ms and the stalled build returns to 220–238 ms (job 604022, the report's
+  §9.3). `tools/kathleen/env.sh` sets it for every Kathleen job (correctness: job
+  604023).
 
 ## 8. Collectives and memory per rank
 

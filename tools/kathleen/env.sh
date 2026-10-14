@@ -89,6 +89,13 @@ export RUST_MIN_STACK=8388608
 # messages go through PSM2's other paths. Every rank inherits it: mpirun's daemons start
 # through srun with this environment.
 export PSM2_TID=0
+# PSM2 resends a packet that is not acknowledged after its error-check timeout, by default
+# 160 ms, doubling to 640 ms (`160:640:2`). At 160 ranks on 4 nodes dense bursts lose
+# packets in about half the phases, every rank sending to every other at once, and each
+# loss stalled the receiving rank by about 160 ms. With 10:40:2 the same losses cost about
+# 10 ms (Phase 5S T8, jobs 604021 and 604022;
+# fmm-validate/results/phase5s-t8.md §9.3).
+export PSM2_ERRCHK_TIMEOUT=10:40:2
 
 # Prepends a directory to a colon-separated variable, once.
 _fmm_kathleen_prepend() {

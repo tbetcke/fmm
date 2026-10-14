@@ -74,8 +74,13 @@ are exclusive; the job is named in §7.
     route dense.
   - On 4 Kathleen nodes the build trips a 160 ms transport stall more often than before.
     A micro-benchmark shows the stall on every kind of dense burst, the old all-to-all-v
-    included, and never on 2 nodes; it stays open for T9.
-  - Steps 1 and 3 together used **5.13 node-hours** (§7).
+    included, and never on 2 nodes.
+  - The stall is PSM2's error-check timeout (160 ms by default). With
+    `PSM2_ERRCHK_TIMEOUT=10:40:2` each one costs about 10 ms and the stalled build
+    returns to 220–238 ms (job 604022, §9.3).
+  - `tools/kathleen/env.sh` now sets it for every Kathleen job; the 4-node correctness
+    job passed with it (job 604023).
+  - Steps 1 and 3, the stall's tests and that job together used **8.30 node-hours** (§7).
 
 ## 1. Method
 
@@ -558,7 +563,10 @@ Questions (the recommendations first; the brief: nothing is built without them):
 | 604019 | 4, `small`, the same | step 3: the 160-rank builds, four repeats (recording on) | 0:00:01 | 1:32 | 0.10 |
 | 604020 | 4, `small`, the same | step 3: before and after with the recording off, 160 (×4), 40 (×2), N = 10⁷ at 160 (×2) | 0:00:50 | 10:02 | 0.67 |
 | 604021 | 4, `small`, the same | step 3: the stall micro-benchmark at 160 (×2) and 80 | 0:08:03 | 0:54 | 0.06 |
-| | | | | **total** | **5.13** |
+| 604022 | 4, `small`, the same | the stall: `PSM2_ERRCHK_TIMEOUT` default against 10:40:2 (micro-benchmark ×3 each, the FMM build ×4 each), and the `ofi` MTL | 0:00:01 | 17:42 | 1.18 |
+| 604023 | 4, `small`, node-c11a-[042,054,071,088] | `PSM2_ERRCHK_TIMEOUT=10:40:2` set in `env.sh`: T2's correctness job (MPI test list at 2, 4, 8, 160; invariance at 160; smoke; 640 oversubscribed) | 1:57:36 | 28:23 | 1.89 |
+| 604024 | 4, `small`, the same | T8q: the stall micro-benchmark at 160, rlst 0.10.1 (ascending order) against the T8q branch (rotated), default timeout set explicitly, three runs each | 2:23:57 | 1:33 | 0.10 |
+| | | | | **total** | **8.30** |
 
 Within the task's budget of 20 node-hours. Raw outputs stay in Kathleen's
 `/scratch/scratch/ucahtbe/fmm/logs/p5s-t8/` and locust's `/data/ucahtbe/logs/p5s-t8/`.
@@ -705,8 +713,31 @@ So dense bursts of a few thousand messages across 4 nodes trip a fixed delay in 
 4.1.6 over PSM2 (already run with `PSM2_TID=0` for an earlier defect;
 tools/kathleen/README.md), whatever sends them, and never on 2 nodes. Which sequence
 trips it depends on timing. In the harness's build the new sequence trips it more often
-than the old; in the micro-benchmark the old one trips it more often. It is not fixed
-here; it is an open item for every timing on 4 Kathleen nodes (T9).
+than the old; in the micro-benchmark the old one trips it more often.
+
+**The cause is PSM2's error-check timeout** (job 604022, 2026-10-14). Kathleen's
+libpsm2 has `PSM2_ERRCHK_TIMEOUT`, given in ms as `min:max:factor`, compiled in as
+`160:640:2`: a packet that is not acknowledged is resent after 160 ms, the wait doubling up
+to 640 ms. With `PSM2_ERRCHK_TIMEOUT=10:40:2` (PSM2's verbose output confirms it is read)
+the same micro-benchmark, three runs alternating with the default:
+
+| setting | burst phases with an outlier (> 8 ms) | the outliers | median burst phase |
+| --- | ---: | --- | ---: |
+| default, 160:640:2 | 122 of 660 | 121 at about 160 ms, one at 20 ms | 3.31 ms |
+| 10:40:2 | 110 of 660 | all 110 at about 10 ms (largest 13.4 ms) | 3.24 ms |
+
+The resends happen as often (dense bursts across 4 nodes lose packets, most likely by
+incast: 159 senders reach every receiver at once); the shorter timer only shortens what
+each one costs. The FMM build that stalled (after, the cube at 2.5 × 10⁴ points per rank,
+160 ranks, recording off, four runs each) takes 382–431 ms with the default and 220–238 ms
+with `10:40:2`, close to the build before step 3 without a stall (213–230 ms, job 604020).
+The evaluations stay within about 1 %. The same micro-benchmark over Open MPI's `ofi` MTL
+hung until its 900 s timeout. At the user's
+decision, `tools/kathleen/env.sh` sets `PSM2_ERRCHK_TIMEOUT=10:40:2` for every Kathleen
+job, beside `PSM2_TID=0`. T2's full correctness job at 4 nodes passed with it, every step
+(job 604023: the MPI test list at 2, 4, 8 and 160 ranks, invariance at 160 against 80,
+40 and 20, the smoke run, and 640 against 80 oversubscribed). A timing on 4 Kathleen
+nodes still needs repeats: the losses remain, each now costing about 10 ms (T9).
 
 **Points on their owners** (`--input owners`; every route a rank has is to itself or a
 neighbour), recording on, per evaluation in ms:
