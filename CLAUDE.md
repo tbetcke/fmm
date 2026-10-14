@@ -256,8 +256,8 @@ runs `cargo upgrades` (not `cargo audit`).
 
 ## Navigating the code
 Prefer LSP tools (go-to-definition, find-references, symbols) over `grep`/`find` when
-chasing a symbol; they resolve through the real dependency graph. `rlst` 0.10.1 comes
-from crates.io, so its sources are in `~/.cargo/registry/src/*/rlst-0.10.1/`; a `../rlst`
+chasing a symbol; they resolve through the real dependency graph. `rlst` 0.10.2 comes
+from crates.io, so its sources are in `~/.cargo/registry/src/*/rlst-0.10.2/`; a `../rlst`
 checkout on the machine, if any, is an unrelated development tree and may differ. Use
 `grep` for what LSP does not index: comments, CI YAML, `Cargo.toml`. Read the
 implementation and tests rather than trusting prose when checking how an API behaves.
