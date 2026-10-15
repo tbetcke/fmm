@@ -17,6 +17,16 @@ values; R's all-gather-v, measured linear in the ranks (0.62 and 2.06 µs per ra
 and 2.65 MB on Kathleen, `phase5s-kathleen.md` §1.2), grows with m in its bandwidth term:
 report it per vector. Kathleen is usable (Phase 5N decision 0).
 
+**Revised after T1's sign-off (2026-10-15; docs/design/optimisation.md §4).** The plan
+carries m vectors through its sizes alone (no `nd-fmm-plan` change); the interface is
+`FmmBuilder::vectors(m)` (fixed at build) with `Fmm::evaluate_many` /
+`evaluate_many_into` and an `OutputMany` (vector after vector), `evaluate` refused when
+m > 1 (agreed in the charge-length all-reduce); the charges point-major in the leaf store,
+which is a CONVENTIONS §3.13 addition proposed in this task's PR before code that depends
+on it; each vector bit for bit its single-vector evaluation (optimisation.md §4.3: the
+operators share only what does not depend on the charge). Through T2's batched kernel (no
+BLAS, decision 2); SVD compression is dropped, so no compressed path takes m columns.
+
 Read first:
 - root CLAUDE.md, fmm-exec/CLAUDE.md, fmm-plan/CLAUDE.md, fmm-kernels/CLAUDE.md,
   fmm-simd/CLAUDE.md;

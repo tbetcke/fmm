@@ -23,6 +23,16 @@ Kathleen unusable, T6 waits, as AVX-512 waited in Phase 3S, and the exit checkli
 records C6.7 as waiting, not failed. No Kathleen job in this task uses more than one node
 (and none ever more than 4).
 
+**Revised after T1's sign-off (2026-10-15; docs/design/optimisation.md §5, decision 4).**
+Rust 1.89 stabilised the AVX-512 target features and intrinsics; the toolchain is 1.99.0.
+`avx512f` only; `Isa::Avx512` always selectable where the CPU has it, while `Isa::detect()`
+and `P2pChoice::Auto` keep AVX2 until this task's in-FMM measurement at 40 ranks per node
+and T11's sign-off. CI: `ubuntu-latest` exposed AVX-512F on 14 of 40 recent x86_64 jobs, so
+the tests run opportunistically there and skip cleanly elsewhere; a dispatch unit test with
+a forced feature set. **This task now runs after T2** and adds the AVX-512 body of T2's
+order-preserving M2L kernel (`nd-fmm-simd`, optimisation.md §2.11) beside the P2P, bit for
+bit its scalar body; both change `isa.rs` and `arch/mod.rs`.
+
 Read first:
 - root CLAUDE.md ("`unsafe` only in nd-fmm-simd's `arch` modules and its ISA dispatch";
   "For a change to nd-fmm-simd, also clippy the other architecture's code"),
