@@ -1578,6 +1578,12 @@ Further choices made here, listed so that they can be overruled:
 
 ## 14. Toward thousands of ranks
 
+> **Done in Phase 5S (2026-10-11 to 2026-10-15).** The packages below were designed in
+> [scale-out.md](scale-out.md) and built as S1–S5, S7 and S8 (S6 left open with the GPU
+> nodes); scale-out.md §13 records the decisions as taken and the measured numbers, and §15.5
+> below summarises them. This section stays as written, a plan from a single-process
+> simulation.
+
 ### 14.1 Why this section
 
 The goal beyond Phase 5 is benchmark runs over **thousands of MPI ranks**, on clusters.
@@ -1911,6 +1917,26 @@ Added at the end of Phase 5N (2026-10-11; docs/phase5n/, laplace-fmm-plan.md §7
   unmeasured; Phase 5S (§14) starts from these numbers. (The user lifted the cap to 4
   nodes for Phase 5S on 2026-10-11; its T0 extends these runs to 4 nodes, 160 ranks,
   before the scale-out design.)
+
+### 15.5 Phase 5S: the scale-out (note)
+
+Added at the end of Phase 5S (T9, 2026-10-15; docs/phase5s/, laplace-fmm-plan.md §7,
+Phase 5S; the full outcome in [scale-out.md](scale-out.md) §13, the scaling report
+`fmm-validate/results/phase5s-kathleen.md`). §14's packages were built and measured on
+Kathleen at 1, 2 and 4 nodes (40–160 ranks timed, 640 oversubscribed counted) and on locust
+(to 72 timed, 512 counted):
+- **The replicated top tree is gone** (§14.2): a rank holds its locally essential set H
+  (1,401–8,425 boxes at 128–640 ranks, against Phase 5's 37,449 at 512), forms only the
+  top-tree multipoles it owns (48–592 global M2M per rank against 4,520–37,448), and
+  receives the boxes many ranks read as one replicated top R of at most 4,096 boxes
+  (1.25–2.56 MB per evaluation, against a coarse gather of 9.4–21.2 MB); every output bit
+  for bit Phase 5's, and rank-count invariant (§14.4, S7) at every pair run to 640 ranks.
+- **Measured**: strong scaling from 1 to 4 nodes at N = 10⁸ with an efficiency of
+  0.96–0.99; at 160 ranks 0.67–0.74 of Phase 5's time on the Plummer sphere with 40 ranks
+  per node (the work-weighted cut, S3), 0.89–1.01 elsewhere.
+- **Left, as *model*** (§14.5's "a cluster may not be available"): R's all-gather-v grows
+  linearly in P (about 6 and 12–24 ms at 10⁴ ranks for 0.26 and 2.65 MB); overlap (§8) is
+  neutral with one thread per rank and is not the default; nothing beyond 160 ranks is timed.
 
 ### 15.3 For the next phase
 

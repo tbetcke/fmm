@@ -9,7 +9,13 @@ GEMM columns"), and P2P reads each source's position once for m charges. This ta
 it to the host path (through T2's batched layout) and the device path, as
 `docs/design/optimisation.md` §4 designs it.
 
-**Revision note.** Written on 2026-10-10; Phase 5S T9 may revise it.
+**Revision note.** Written on 2026-10-10; **revised by Phase 5S T9 on 2026-10-15** (decision
+7 of docs/phase5s/README.md): the exchanges are Phase 5S's: the source exchange, the upward
+reduction (per level), the replicated top R's all-gather-v and the multipole exchange along
+the forwarding tree (`fmm-plan/CLAUDE.md`). With m charge vectors each carries m times the
+values; R's all-gather-v, measured linear in the ranks (0.62 and 2.06 µs per rank at 0.26
+and 2.65 MB on Kathleen, `phase5s-kathleen.md` §1.2), grows with m in its bandwidth term:
+report it per vector. Kathleen is usable (Phase 5N decision 0).
 
 Read first:
 - root CLAUDE.md, fmm-exec/CLAUDE.md, fmm-plan/CLAUDE.md, fmm-kernels/CLAUDE.md,

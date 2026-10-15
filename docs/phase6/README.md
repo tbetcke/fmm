@@ -9,11 +9,18 @@ kept behind its slower trusted path. By the time it starts the workspace has:
   bit-identical for every thread count (C3.5); P2P through `nd-fmm-simd` (NEON, AVX2 +
   FMA, scalar; Phase 3S); no BLAS call in any compute path (Phase 3, "Threads and
   BLAS");
-- **the device path** (`nd-fmm-kernels`, CubeCL 0.11.0-pre.4): every operator on Metal
+- **the device path** (`nd-fmm-kernels`, CubeCL 0.11.0 since Phase 5S T1s): every operator on Metal
   f32, CUDA f32/f64 and the CubeCL CPU runtime, dense M2L as gathered GEMMs per level
   (device-path.md §6.4), rotation M2L, a tuner (Phase 4, Phase 4S);
 - **the distributed FMM** on any number of ranks (Phase 5), with the M2L strategy chosen
-  per node (Phase 5N) and the top tree no longer replicated (Phase 5S).
+  per node (Phase 5N) and the top tree no longer replicated (Phase 5S: each rank holds its
+  locally essential set and owns part of the top tree, the blocks are cut by modelled work,
+  the multipole exchange runs along a forwarding tree; measured to 4 Kathleen nodes with an
+  efficiency of 0.96–0.99 from 1 to 4 nodes at N = 10⁸, `fmm-validate/results/phase5s-kathleen.md`).
+  At 160 ranks the communication is 0.2–1.1 % of an evaluation at f64 p = 8; **the operators
+  are the cost**: the leaves (mostly P2P) take 42–79 % of an evaluation at p = 3 and the
+  downward pass (mostly M2L) 67–92 % at p = 8 (each stage's slowest rank, 40 ranks per
+  node, 2.5 × 10⁴ points per rank and N = 10⁸).
 
 What is missing, collected from the earlier phases:
 - **The host M2L reads its tables once per target.** At p = 8 every rank holds its own
@@ -43,10 +50,27 @@ What is missing, collected from the earlier phases:
 - **Defaults that are still open**: the leaf size per p (laplace-fmm-plan §9.2, "the best
   leaf size depends on p ... still open for every backend"), and the strategy rule once
   C6.6 and C6.2 exist (T11).
+- **M2P and P2L on boxes with few points** (found in Phase 5S T9; C6.9, new). The W and X
+  lists apply a multipole at a target point (M2P) or form a local from a source point (P2L)
+  whatever the box holds. On the cube at 2 × 10⁶ points, where the tree is half refined to a
+  seventh level, the busiest of 80 Kathleen ranks makes 767,220 M2P evaluations per
+  evaluation in the leaves stage, about 1 s at f64 p = 8 (each about 500 P2P pairs' cost),
+  against about 60 ms for its 24.5 × 10⁶ P2P pairs, while a W-list box on that level holds at
+  most 64 sources; its leaves take 12× those of the uniform trees at 10⁶ and 4 × 10⁶ points
+  (`phase5s-kathleen.md` §11). Below a crossover in points per box P2P (for W) and direct
+  evaluation (for X) are cheaper and exact.
+- **The work weight of the cut** (Phase 5S T7, on by default) uses per-kind constants
+  fitted to today's operators (`nd_fmm_exec::cost`); every operator this phase speeds up
+  changes them, and at f32 p = 3 they already underweight P2P (compute max/mean 1.06–1.18 at
+  160 ranks against a modelled 1.04–1.07). The constants are refitted with the new operators
+  (T11).
 
-**These briefs were written on 2026-10-10, before Phase 5N and 5S ran.** Phase 5S T9
-revises them with its measurements, as Phase 4S T8 revised the Phase 5 briefs. Where a
-brief names a number from 5N or 5S, it is a placeholder for that revision.
+**These briefs were written on 2026-10-10, before Phase 5N and 5S ran, and revised by Phase 5S
+T9 on 2026-10-15** with its measurements (decision 7 of docs/phase5s/README.md), as Phase 4S
+T8 revised the Phase 5 briefs: Kathleen is usable (Phase 5N decision 0) at up to 4 nodes
+per job; the baseline numbers come from the Phase 5S reports; C6.9 (M2P and P2L on boxes
+with few points) is added; the multi-node runs of T11 use Phase 5S's sweeps; overlap stays
+opt-in. Each brief's revision note says what changed in it.
 
 Hardware: three machines (docs/phase5n/README.md, "Machines"):
 - the Apple M3 Max (12 performance and 4 efficiency cores, 64 GB, Metal f32);
@@ -57,9 +81,10 @@ Hardware: three machines (docs/phase5n/README.md, "Machines"):
   Phase 5N T1), **if it is usable** (below). **No Kathleen job is ever larger than 4
   nodes (160 cores)**, in this phase as in 5N and 5S.
 
-**Kathleen may turn out unusable.** Phase 5N T1 probes its queue waits, and the user
-decides whether it is used ("decision 0" of docs/phase5n/README.md). Phase 6 has a path
-without it:
+**Kathleen is usable** (Phase 5N decision 0, 2026-10-10; 4-node jobs in `small` since
+Phase 5S, with waits from seconds to a few hours; `tools/kathleen/README.md`). Avoid
+node-c11a-011 (`--exclude`), whose Omni-Path contexts were busy in Phase 5S T2 and T9. The
+path without Kathleen, kept from the original plan in case the queue becomes unusable:
 - **with Kathleen**: everything below, including the x86 measurements (C6.7's AVX-512
   P2P, and the Kathleen parts of T1, T2, T3, T5, T9 and T11), on at most 4 nodes per job;
 - **without Kathleen**: C6.7 (T6) waits until an AVX-512 machine is available (as it
@@ -204,6 +229,7 @@ The IDs of laplace-fmm-plan §7, Phase 6, kept; C6.6–C6.8 are new.
 | C6.6 | Host batched M2L (per-level GEMMs over gathered columns) | within requirement 1 of the target-by-target host path; bit-identical for every thread count; faster than every existing host strategy at p ≥ 6 on one rank, and scaling with ranks per node where Dense does not (Phase 5's tables) | C3.3, C4.5 | T2 |
 | C6.7 | AVX-512 P2P | within simd-p2p.md's per-pair contract (8 u_T for φ, 16 u_T for ∇φ; §3, requirement 2); faster than AVX2 on Kathleen in f32 and f64 at FMM leaf sizes, or recorded as not worth it | C3S.3 | T6 |
 | C6.8 | FMM3D comparison | both codes at matched accuracy on the same problems and machine, one node; the build documented | C3.3 | T9 |
+| C6.9 | M2P and P2L only where they pay (new, Phase 5S T9) | a rule by points per box (or by a cost model) that sends W and X pairs below a crossover to P2P and direct evaluation; within requirement 1 (P2P is exact); the cube at 2 × 10⁶ points on 80 ranks no longer spends 12× its uniform trees' leaf time; opt-in until T11 | C3.2, C3S.6 | T1 designs it and names its task |
 
 ## Exit gate
 - Every acceptance test in the task briefs passes: in CI for the default members; in
@@ -215,7 +241,8 @@ The IDs of laplace-fmm-plan §7, Phase 6, kept; C6.6–C6.8 are new.
   the gate is the rest.
 - C6.6 (T2) and C6.2 (T3, T4) meet their criteria, or the PR reports why not and the
   sign-off records it; C6.3, C6.4, C6.7 and C6.8 meet theirs; C6.1 is adopted or dropped
-  by measurement; C6.5 is adopted or dropped at its spike.
+  by measurement; C6.5 is adopted or dropped at its spike; C6.9 is built in the task T1
+  names, or dropped by measurement.
 - T11's report on the three machines, with the defaults signed off and the design
   documents updated.
 
@@ -299,7 +326,7 @@ In the repository root, start `claude` and say:
 "Read docs/phase6/T<k>-<name>.md and do that task." Review and merge before the next.
 
 ## Exit checklist
-- [ ] Briefs revised by Phase 5S T9
+- [x] Briefs revised by Phase 5S T9 (2026-10-15; decision 7 of docs/phase5s/README.md)
 - [ ] T1 merged: `docs/design/optimisation.md` drafted, sign-off questions listed
 - [ ] Optimisation design signed off (decisions 1–5)
 - [ ] T2 merged: host batched M2L, deterministic, measured on the three machines (C6.6)
@@ -311,5 +338,6 @@ In the repository root, start `claude` and say:
 - [ ] T8 merged: dipole sources (C6.4)
 - [ ] T9 merged: FMM3D comparison (C6.8)
 - [ ] T10 merged: plane-wave spike; C6.5 adopted or dropped (decision 6)
+- [ ] C6.9 (M2P and P2L only where they pay): built in the task T1 names, or dropped by measurement
 - [ ] T11 merged: final benchmarks; defaults signed off (decision 7)
 - [ ] Design documents updated: laplace-fmm-plan §4, §6, §7 (Phase 6 status and numbers), §8.3, §9.1, §9.2; simd-p2p.md §4.7; device-path.md (outcome section); workspace-structure §3, §6

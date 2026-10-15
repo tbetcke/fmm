@@ -16,7 +16,9 @@ high p. They belong to the same kernels and are folded into this task, each adop
 by measurement. `docs/design/optimisation.md` §6 (T1) states which are in scope and their
 expected gains.
 
-**Revision note.** Written on 2026-10-10; Phase 5S T9 may revise it.
+**Revision note.** Written on 2026-10-10; **revised by Phase 5S T9 on 2026-10-15** (decision
+7 of docs/phase5s/README.md): no change of premise; Kathleen is usable (Phase 5N decision 0)
+at up to 4 nodes per job, so its runs here are not conditional.
 
 Read first:
 - root CLAUDE.md, fmm-kernels/CLAUDE.md, fmm-exec/CLAUDE.md;

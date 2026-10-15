@@ -1476,6 +1476,37 @@ of ranks, for correctness only (Phase 5 decision 3); `DeviceNeedsOneRank` is gon
   one rank and two on several (tables in `fmm-validate/results/phase5-m3max.md` §11 and
   `phase5-gh200.md` §12).
 
+**Changed in Phase 5S** (T5, T6, signed off as [scale-out.md](scale-out.md) §4.5, §12
+question 4; outcome in scale-out.md §13). The owned top tree replaces the coarse gather, and
+the hook follows it:
+- **Events**: `ReceivedCoarse` is gone; per reduction level, deepest first,
+  `SendReduction(l)` and `ReceivedReduction(l)` bracket the upward reduction, each pair
+  before the global M2M that reads it; `SendMultipoles` moves after the reduction and before
+  the all-gather of the replicated top R, and lists the top's sent keys with every level's
+  multipole sends; `ReceivedTop` follows the all-gather. 5 + nlevels + 2 D events per
+  evaluation, D the deepest block level (0 on one rank).
+- **The device at each event** (T6): `SendReduction(l)` one `gather_columns` of the level's
+  sent boxes and one download (one sync per reduction level at which the rank sends);
+  `ReceivedReduction(l)` one upload and one `scatter_columns` before the global M2M;
+  `ReceivedTop` one upload and one scatter of the boxes of R the rank holds (from the
+  gathered buffer, `TopExchange::gathered`); `SendMultipoles` as before (one gather, one
+  download, one sync). The counters gain `SentReduction`, `ReceivedReduction` and
+  `TopMultipoles` in place of `CoarseMultipoles`, the reduction per level in
+  `DeviceCounters::reduction_levels`.
+- **Syncs per evaluation**: 1 + [anything else sent] + r_s, at most 2 + r_s, r_s the
+  reduction levels at which the rank sends (Phase 5's two); r_s reached 5 in the gate (the
+  Plummer sphere at N = 10⁵: 7 syncs on that rank). The reduction's device buffers add at most
+  about 20 kB per rank there.
+- **The multipole exchange's forwarding tree** (T8s, S8) adds no event and no transfer: a
+  forward resends a received chunk from the exchange's staging buffer, so the device sees the
+  direct exchange's `ReceivedMultipoles` lists.
+- **Checked** on the CPU runtime (M3 Max, locust) and CUDA (locust) at 1, 2 and 4 ranks and
+  Metal at 2 (`tests/device_ranks.rs`): every transfer the extended formula, the output within
+  Phase 4's bounds of the one-rank host run (2.7e-6 in f32, 1.4e-15 in f64); still
+  correctness only, every rank sharing one GPU (Phase 5 decision 3). T9 changed nothing on the
+  device path; overlap stays off by default, and on a GPU node it would need the exchanges to
+  progress while the device computes (scale-out.md §13.3).
+
 **Overlapping P2P with the far field on a second stream** (README, out of scope). On
 Metal it would gain little as built: all of a device's wgpu streams submit to one ordered
 queue (F10; stated in `cubecl-wgpu-0.11.0-pre.4/src/compute/timings.rs`), so there is no

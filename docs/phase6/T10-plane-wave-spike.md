@@ -8,7 +8,9 @@ C6.5 is optional: "beats C4.5/C4.6 on some configuration, else dropped" (laplace
 §7). After T2 (the host batched M2L) and T3 (compressed M2L) the bar is higher. This task
 is a spike in `spikes/`, with a stop rule, as `docs/design/optimisation.md` §8 frames it.
 
-**Revision note.** Written on 2026-10-10; Phase 5S T9 may revise it.
+**Revision note.** Written on 2026-10-10; **revised by Phase 5S T9 on 2026-10-15** (decision
+7 of docs/phase5s/README.md): no change of premise; Kathleen is usable (Phase 5N decision 0)
+at up to 4 nodes per job, so its runs here are not conditional.
 
 Read first:
 - root CLAUDE.md ("spikes/ is excluded from default members and never built in CI");

@@ -10,7 +10,13 @@ the toolchain of the root CLAUDE.md and CI). This task adds the path simd-p2p.md
 describes, by hand in the crate's `arch` modules, and measures it on Kathleen inside the
 FMM, as `docs/design/optimisation.md` §5 designs it.
 
-**Revision note.** Written on 2026-10-10; Phase 5S T9 may revise it.
+**Revision note.** Written on 2026-10-10; **revised by Phase 5S T9 on 2026-10-15** (decision
+7 of docs/phase5s/README.md): Kathleen is usable (Phase 5N decision 0), so this task runs, and
+the AVX2 kernels' contract and timings on its Cascade Lake cores are in Phase 5N's report
+(`phase5n-kathleen.md`, the x86 P2P profile). The gain matters most at low p: at 160 Kathleen
+ranks the leaves (mostly P2P) are 42–79 % of an evaluation at p = 3 and 5–43 % at p = 8
+(`phase5s-kathleen.md`). Measure inside the FMM at 40 ranks per node, where every core runs
+AVX-512 at once.
 
 **This task needs Kathleen** (or another AVX-512 machine). If Phase 5N decision 0 found
 Kathleen unusable, T6 waits, as AVX-512 waited in Phase 3S, and the exit checklist

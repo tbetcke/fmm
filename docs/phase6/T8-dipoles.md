@@ -11,7 +11,9 @@ L2P and M2P, the lists and the exchanges of multipoles do not change. This task 
 source-type interface and dipoles through the whole path, as `docs/design/optimisation.md`
 §7 designs it.
 
-**Revision note.** Written on 2026-10-10; Phase 5S T9 may revise it.
+**Revision note.** Written on 2026-10-10; **revised by Phase 5S T9 on 2026-10-15** (decision
+7 of docs/phase5s/README.md): no change of premise; Kathleen is usable (Phase 5N decision 0)
+at up to 4 nodes per job, so its runs here are not conditional.
 
 Read first:
 - root CLAUDE.md ("CONVENTIONS.md wins"; convention changes are proposed in the PR, never

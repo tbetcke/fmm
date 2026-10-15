@@ -18,7 +18,18 @@ updated. The defaults in question:
 - **the device strategies and layouts** after C6.1;
 - whether compressed M2L (decision 3) or several right-hand sides change any default.
 
-**Revision note.** Written on 2026-10-10; Phase 5S T9 may revise it.
+**Revision note.** Written on 2026-10-10; **revised by Phase 5S T9 on 2026-10-15** (decision
+7 of docs/phase5s/README.md):
+- Kathleen is usable (Phase 5N decision 0): its runs are not conditional; jobs at most 4
+  nodes, `--exclude=node-c11a-011` (busy Omni-Path contexts in Phase 5S).
+- The multi-node runs are `tools/scaling/run.sh`'s `t9-strong` and `t9-weak` (Phase 5S T9)
+  at 1, 2 and 4 nodes; the baseline is Phase 5S's report (`phase5s-kathleen.md`), run on the
+  same days where a comparison is close (Phase 5S T9 found the same code 3–6 % apart on
+  different 4-node sets).
+- Also revisit: the cut's per-kind constants with the new operators (`cost`, Phase 5S T7;
+  at f32 p = 3 they underweight P2P), C6.9's default, and overlap's default (off; Phase 5S T9
+  found it neutral with one thread per rank and intermittently up to 4.4 % slower with 20,
+  `phase5s-kathleen.md` §7: a longer A/B with `PSM2_RCVTHREAD=0` first).
 
 Read first:
 - root CLAUDE.md; docs/phase6/README.md ("Requirements" 5 and 6, "Decisions to sign off"

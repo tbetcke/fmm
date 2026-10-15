@@ -33,7 +33,13 @@
 //!   (from `split_shared`), each rank's host and CPUs, the MPI library, and on a cluster
 //!   the Slurm job with its QoS, node list and binding ([`SlurmJob`]);
 //! - the harness's own memory per rank (Phase 5S T2): the resident size after the input is
-//!   generated, before the builds ([`RankRow::resident_input`]).
+//!   generated, before the builds ([`RankRow::resident_input`]);
+//! - in the overlapped path, from `OverlapTimes` (Phase 5S T9, "The exposed collectives"):
+//!   per rank the median of the `test` calls of each exchange, the multipole exchange's
+//!   final wait for its sends and its wait for each level ([`PathTimes::overlap`],
+//!   [`OVERLAP_PARTS`]), reduced over the ranks in a table of the report and as
+//!   `multipoles_progress_max_ms`, `multipoles_sends_wait_max_ms`, `level_wait_max_ms` and
+//!   `level_wait_max_level` in the overlapped path's summary.
 //!
 //! [`invariance`] (Phase 5S T2, C5S.1) is the other oracle at scale: the run on P ranks
 //! against the run on P/k ranks, bit for bit ("Rank-count invariance" below).
@@ -555,6 +561,34 @@ fn kind_values(t: &StageTimings) -> [f64; 8] {
     }
 }
 
+/// The details of the overlapped path as a [`run`] reports them, from `OverlapTimes`
+/// (Phase 5S T9, "The exposed collectives"), seconds: the `test` calls of each exchange,
+/// the multipole exchange's final wait for its sends, then its wait for each level
+/// (`OverlapTimes::level_waits`, levels 0 to [`TOP_TREE_LEVELS`] − 1).
+pub const OVERLAP_PARTS: [&str; 4] = [
+    "sources: test calls",
+    "reduction: test calls",
+    "multipoles: test calls",
+    "multipoles: final wait for the sends",
+];
+
+/// The number of values of [`PathTimes::overlap`] per rank: [`OVERLAP_PARTS`], then one
+/// wait per level.
+pub const NOVERLAP: usize = OVERLAP_PARTS.len() + TOP_TREE_LEVELS;
+
+/// The values of [`NOVERLAP`] for one overlapped evaluation.
+fn overlap_values(t: &StageTimings) -> [f64; NOVERLAP] {
+    let o = t.overlap.unwrap_or_default();
+    let s = Duration::as_secs_f64;
+    core::array::from_fn(|k| match k {
+        0 => s(&o.sources.progress),
+        1 => s(&o.reduction.progress),
+        2 => s(&o.multipoles.progress),
+        3 => s(&o.multipoles.sends),
+        _ => o.level_waits.get(k - OVERLAP_PARTS.len()).map_or(0.0, s),
+    })
+}
+
 /// The number of [`BUILD_PARTS`].
 pub const NBUILD: usize = 10;
 
@@ -967,6 +1001,9 @@ pub struct PathTimes {
     /// With [`Settings::kinds`], per rank the median of each of [`KINDS`] over the
     /// evaluations, seconds; empty otherwise.
     pub kinds: Vec<[f64; 8]>,
+    /// In the overlapped path, per rank the median over the evaluations of each value of
+    /// [`NOVERLAP`] (Phase 5S T9), seconds; empty in the blocking path.
+    pub overlap: Vec<[f64; NOVERLAP]>,
 }
 
 impl PathTimes {
@@ -979,6 +1016,12 @@ impl PathTimes {
     /// kind timings.
     pub fn kind(&self, k: usize) -> [f64; 3] {
         reduce_over(self.kinds.iter().map(|t| t[k]))
+    }
+
+    /// The maximum, minimum and mean over the ranks of value `k` of [`NOVERLAP`]; NaN in
+    /// the blocking path.
+    pub fn overlap_part(&self, k: usize) -> [f64; 3] {
+        reduce_over(self.overlap.iter().map(|t| t[k]))
     }
 
     /// The time per V pair, in seconds, of the rank whose `time` is the largest: its
@@ -1869,6 +1912,7 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
     let paths = settings.overlap.paths();
     let mut times: Vec<Vec<[f64; NSTAGES]>> = vec![Vec::new(); paths.len()];
     let mut kinds: Vec<Vec<[f64; 8]>> = vec![Vec::new(); paths.len()];
+    let mut overlap: Vec<Vec<[f64; NOVERLAP]>> = vec![Vec::new(); paths.len()];
     let mut differing = 0usize;
     let mut last = None;
     for e in 0..=settings.evaluations {
@@ -1882,6 +1926,7 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
             if e > 0 {
                 times[path].push(stage_values(&output.timings, overlapped));
                 kinds[path].push(kind_values(&output.timings));
+                overlap[path].push(overlap_values(&output.timings));
             }
             outputs.push(output);
         }
@@ -1925,11 +1970,21 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         } else {
             Vec::new()
         };
+        let overlap_medians = if overlapped {
+            let local: [f64; NOVERLAP] =
+                core::array::from_fn(|k| median(overlap[path].iter().map(|t| t[k]).collect()));
+            let mut every = vec![0.0f64; NOVERLAP * size];
+            comm.all_gather_into(&local[..], &mut every[..]);
+            every.as_chunks::<NOVERLAP>().0.to_vec()
+        } else {
+            Vec::new()
+        };
         path_times.push(PathTimes {
             overlapped,
             medians: every.as_chunks::<NSTAGES>().0.to_vec(),
             wall,
             kinds: kind_medians,
+            overlap: overlap_medians,
         });
     }
     let differing = (paths.len() == 2).then(|| {
@@ -2848,6 +2903,23 @@ impl Report {
                 fields.push(format!("compute_imbalance={:.3}", compute[0] / compute[2]));
                 fields.push(format!("exposed_ms={}", ms(exposed)));
                 fields.push(format!("exchanges_ms={}", ms(exchanges)));
+                if path.overlapped {
+                    // The overlapped path's details (Phase 5S T9).
+                    let n = OVERLAP_PARTS.len();
+                    let (level, wait) = (0..TOP_TREE_LEVELS)
+                        .map(|l| (l, path.overlap_part(n + l)[0]))
+                        .fold((0, 0.0), |a, b| if b.1 > a.1 { b } else { a });
+                    fields.push(format!(
+                        "multipoles_progress_max_ms={}",
+                        ms(path.overlap_part(2)[0])
+                    ));
+                    fields.push(format!(
+                        "multipoles_sends_wait_max_ms={}",
+                        ms(path.overlap_part(3)[0])
+                    ));
+                    fields.push(format!("level_wait_max_ms={}", ms(wait)));
+                    fields.push(format!("level_wait_max_level={level}"));
+                }
                 if let Some(e) = &self.errors {
                     fields.push(format!("phi_l2={:.3e}", e.potential.l2));
                     fields.push(format!("grad_l2={:.3e}", e.gradient.l2));
@@ -3611,6 +3683,25 @@ impl fmt::Display for Report {
                 ms(reduction(overlapped)),
                 ms(reduction(blocking))
             )?;
+            writeln!(f)?;
+            // The overlapped path's details (Phase 5S T9): the test calls, the final wait
+            // for the sends and the wait for each level of the multipole exchange.
+            writeln!(
+                f,
+                "Overlapped path, the exchanges' test calls and the multipole exchange's waits \
+                 (ms; per rank the median over the evaluations):"
+            )?;
+            writeln!(f)?;
+            writeln!(f, "| part | max | min | mean |")?;
+            writeln!(f, "| --- | ---: | ---: | ---: |")?;
+            let parts = OVERLAP_PARTS.iter().map(|name| (*name).to_string()).chain(
+                (0..self.nlevels.min(TOP_TREE_LEVELS))
+                    .map(|l| format!("multipoles: wait for level {l}")),
+            );
+            for (k, name) in parts.enumerate() {
+                let [max, min, mean] = overlapped.overlap_part(k);
+                writeln!(f, "| {name} | {} | {} | {} |", ms(max), ms(min), ms(mean))?;
+            }
             writeln!(f)?;
         }
         match &self.errors {

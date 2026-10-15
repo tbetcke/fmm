@@ -7,7 +7,9 @@ dropped. This task builds FMM3D outside the workspace, runs both codes on the sa
 problems at matched accuracy on one node, and reports, as
 `docs/design/optimisation.md` §8 designs the method.
 
-**Revision note.** Written on 2026-10-10; Phase 5S T9 may revise it.
+**Revision note.** Written on 2026-10-10; **revised by Phase 5S T9 on 2026-10-15** (decision
+7 of docs/phase5s/README.md): no change of premise; Kathleen is usable (Phase 5N decision 0)
+at up to 4 nodes per job, so its runs here are not conditional.
 
 Read first:
 - root CLAUDE.md ("New dependencies ... only through [workspace.dependencies]": FMM3D is

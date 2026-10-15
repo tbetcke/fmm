@@ -7,7 +7,9 @@ the device refuses configurations that do not fit with `SettingsError::DeviceMem
 This task runs the compressed M2L on Metal, CUDA and the CubeCL CPU runtime, as
 `docs/design/optimisation.md` §3 designs its device form.
 
-**Revision note.** Written on 2026-10-10; Phase 5S T9 may revise it.
+**Revision note.** Written on 2026-10-10; **revised by Phase 5S T9 on 2026-10-15** (decision
+7 of docs/phase5s/README.md): no change of premise; Kathleen is usable (Phase 5N decision 0)
+at up to 4 nodes per job, so its runs here are not conditional.
 
 Read first:
 - root CLAUDE.md, fmm-kernels/CLAUDE.md, fmm-exec/CLAUDE.md;

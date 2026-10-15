@@ -60,6 +60,29 @@
 #                   COUNT_RANKS (default 512 on Linux; under Slurm 80 and 160 ranks per
 #                   node, PSM2 with shared contexts, `--bind-to none`)
 #
+# Sweeps of the scaling report (Phase 5S T9, docs/phase5s/T9-scaling-at-scale.md), every
+# launch under `auto` (the rule's strategy), the library's defaults otherwise, and the
+# errors of one charge vector at 1,000 targets (the distributed direct sum) unless counted:
+#   t9-strong       Slurm only: the cube and the Plummer sphere at every N of T9_NS (default
+#                   "10000000 100000000"), f64 p = 3 and 8 and f32 p = 8, every split of
+#                   SPLITS (2x20 first), overlap both; EVALS timed evaluations at N <= 10^7,
+#                   T9_LARGE_EVALS (default 2) above; at N <= 10^7 also f64 p = 8 with the
+#                   first cut only (`--cut points`, the launch name ends in -cutpoints)
+#   t9-weak         Slurm only: 2.5 x 10^4 points per rank at 40x1 and 10^6 per socket at
+#                   2x20 (`--n-per-rank`), the cube, the Plummer sphere and the clusters,
+#                   f64 p = 3 and 8, f32 p = 8 and 3, overlap both
+#   t9-model        the model's inputs (scale-out.md §10.2): one rank per core of the
+#                   machine (or of the job's nodes) at 10^4 and 10^6 points per rank, the
+#                   three workloads, f64 p = 3 and 8, f32 p = 8 and 3, overlap off, five
+#                   timed evaluations, no errors
+#   t9-counts       counted, never timed: the three workloads at N = 10^6, 10^7 and at
+#                   2.5 x 10^4 points per rank, f64 p = 8 Rotation, overlap off, the warm-up
+#                   evaluation only; at COUNT_RANKS (default "128 256 512" on Linux, "80 160"
+#                   ranks per node under Slurm, PSM2 with shared contexts, put it last)
+# The Phase 5 tree (docs/phase5s/T9, "Phase 5 against Phase 5S") runs the same launches
+# with this script copied into it; its harness has no `--cut`, so leave out -cutpoints
+# there (ONLY or by name).
+#
 # Sweeps under Slurm only (Phase 5N T2, docs/phase5n/T2-kathleen-baseline.md), at the
 # job's node count, with SPLITS ranks x threads per node (default "40x1 2x20"):
 #   host            one rank on one node, at 1 thread and at every core: the N = 10^6
@@ -558,6 +581,91 @@ for sweep in "$@"; do
                             --dist $dist --n "$n" --precision f64 --p 8 --strategy rotation \
                             --overlap off --cut $cut --evals 0
                     done
+                done
+            done
+        done
+        OVERSUBSCRIBED=
+        ;;
+    t9-strong)
+        if [ "$os" != slurm ]; then
+            echo "$sweep: under Slurm only" >&2
+            continue
+        fi
+        for n in ${T9_NS:-10000000 100000000}; do
+            evals=$EVALS
+            if [ "$n" -gt 10000000 ]; then evals=${T9_LARGE_EVALS:-2}; fi
+            for split in $(printf '%s\n' $SPLITS | sort -t x -k 1,1n); do
+                per=${split%x*} t=${split#*x}
+                for dist in cube plummer; do
+                    for dp in $degrees; do
+                        prec=${dp%%:*} p=${dp##*:}
+                        launch "t9-strong-$dist-n$n-$prec-p$p-auto-N$NODES-${per}x$t" \
+                            $((per * NODES)) "$t" --dist $dist --n "$n" --precision "$prec" \
+                            --p "$p" --strategy auto --overlap both --evals "$evals" --errors 1
+                        if [ "$n" -le 10000000 ] && [ "$dp" = f64:8 ]; then
+                            launch "t9-strong-$dist-n$n-$prec-p$p-auto-N$NODES-${per}x$t-cutpoints" \
+                                $((per * NODES)) "$t" --dist $dist --n "$n" --precision "$prec" \
+                                --p "$p" --strategy auto --overlap both --evals "$evals" \
+                                --errors 1 --cut points
+                        fi
+                    done
+                done
+            done
+        done
+        ;;
+    t9-weak)
+        if [ "$os" != slurm ]; then
+            echo "$sweep: under Slurm only" >&2
+            continue
+        fi
+        for split in $SPLITS; do
+            per=${split%x*} t=${split#*x}
+            # 2.5 x 10^4 points per rank at one thread, 10^6 per socket at 2 x 20.
+            if [ "$t" -eq 1 ]; then nper=25000; else nper=$((1000000 * SOCKETS / per)); fi
+            for dist in cube plummer clusters; do
+                for dp in $degrees f32:3; do
+                    prec=${dp%%:*} p=${dp##*:}
+                    launch "t9-weak-$dist-$prec-p$p-auto-N$NODES-${per}x$t" \
+                        $((per * NODES)) "$t" --dist $dist --n-per-rank "$nper" \
+                        --precision "$prec" --p "$p" --strategy auto --overlap both --errors 1
+                done
+            done
+        done
+        ;;
+    t9-model)
+        for nper in 10000 1000000; do
+            for dist in cube plummer clusters; do
+                for dp in $degrees f32:3; do
+                    prec=${dp%%:*} p=${dp##*:}
+                    launch "t9-model-$dist-per$nper-$prec-p$p-auto-r${LARGEST}x1" "$LARGEST" 1 \
+                        --dist $dist --n-per-rank "$nper" --precision "$prec" --p "$p" \
+                        --strategy auto --overlap off --evals 5
+                done
+            done
+        done
+        ;;
+    t9-counts)
+        if [ "$os" = macos ]; then
+            echo "$sweep: locust and Kathleen only" >&2
+            continue
+        fi
+        if [ "$os" = slurm ]; then
+            counts=${COUNT_RANKS:-"$((80 * NODES)) $((160 * NODES))"}
+            OVERSUBSCRIBED=1
+        else
+            counts=${COUNT_RANKS:-"128 256 512"}
+        fi
+        for r in $counts; do
+            for size in n1000000 n10000000 per25000; do
+                case $size in
+                n*) arg="--n ${size#n}" ;;
+                *) arg="--n-per-rank ${size#per}" ;;
+                esac
+                for dist in cube plummer clusters; do
+                    # shellcheck disable=SC2086
+                    launch "t9-counts-$dist-$size-f64-p8-rotation-r${r}x1" "$r" 1 \
+                        --dist $dist $arg --precision f64 --p 8 --strategy rotation \
+                        --overlap off --evals 0
                 done
             done
         done

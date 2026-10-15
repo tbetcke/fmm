@@ -7,8 +7,23 @@ the rest by measured gain. It writes `docs/design/optimisation.md` for sign-off 
 before T2. It is the Phase 6 counterpart of Phase 4 T1 and Phase 5 T1, and writes no Rust
 apart from throwaway measurements in the scratch directory, which are not committed.
 
-**Revision note.** Written on 2026-10-10, before Phase 5N and 5S. Phase 5S T9 revises
-this brief; until then, every number it cites from those phases is a placeholder.
+**Revision note.** Written on 2026-10-10, before Phase 5N and 5S; **revised by Phase 5S T9
+on 2026-10-15** (decision 7 of docs/phase5s/README.md):
+- Kathleen is usable (Phase 5N decision 0) at up to 4 nodes per job: its measurements are
+  part of the baseline, not conditional (the path without it stays in the README).
+- The starting numbers are Phase 5S's (`fmm-validate/results/phase5s-kathleen.md`): at 160
+  Kathleen ranks the communication is 0.2–1.1 % of an evaluation at f64 p = 8; the leaves
+  (mostly P2P) take 42–79 % of an evaluation at p = 3 and the downward pass (mostly M2L)
+  67–92 % at p = 8; the mean compute per point at f64 p = 8 (Rotation) is 45–52 µs on the
+  Plummer sphere and the clusters at 10⁴–10⁶ points per rank. At f64 p = 8 40 ranks × 1
+  thread per node is now 2–10 % faster than 2 × 20 (with the cut by work); at f32 p = 8
+  2 × 20 with Dense is 1.14–1.28× faster than 40 × 1 with Rotation.
+- New: **C6.9**, M2P and P2L only where they pay (README, "What is missing"), with its own
+  section in the design (below) and its task named there.
+- The cut by work (Phase 5S T7, on by default) weighs blocks with per-kind constants
+  (`nd_fmm_exec::cost`) that every faster operator changes: the design says how they are
+  refitted (T11) and whether P2P's weight at f32 p = 3 (underweighted in Phase 5S) is fixed
+  first.
 
 Read first:
 - root CLAUDE.md, fmm-exec/CLAUDE.md, fmm-tables/CLAUDE.md, fmm-simd/CLAUDE.md,
@@ -23,10 +38,11 @@ Read first:
 - docs/design/device-path.md §6.4–§6.6 (the dense M2L launch structure the host batched
   M2L may mirror), §10 (the spike's model), §18.2 (CUDA layouts; the kernel work left);
 - docs/design/node-m2l.md (Phase 5N: the strategy rule per node) and
-  docs/design/scale-out.md (Phase 5S), once written;
+  docs/design/scale-out.md (Phase 5S; §13 its outcome);
 - the reports: `fmm-validate/results/phase4-m3max.md`, `fmm-bench/results/phase4s-gh200.md`,
   `fmm-validate/results/phase5-m3max.md` and `phase5-gh200.md` (§1, "Stages against ranks"
-  and "The M2L strategy at p = 8"), and Phase 5N's and 5S's Kathleen reports;
+  and "The M2L strategy at p = 8"), Phase 5N's Kathleen report and Phase 5S's
+  (`phase5s-kathleen.md`, §2–§4 and §10; `phase5s-t7.md` for the cost model);
 - the code:
   - `nd_fmm_exec::operator`: `LaplaceOperator`, its `m2l` level call and `m2l_target`
     (the target-by-target body over a V row), the per-thread `Scratch` sets, the
@@ -47,7 +63,7 @@ Read first:
     `offset_indices`; fmm-plan-redesign §4.3).
 
 Measure before you design where a decision rests on a number. On each machine in use (the
-M3 Max; locust's host; one Kathleen node if Kathleen is usable, Phase 5N decision 0; no
+M3 Max; locust's host; one Kathleen node (usable, Phase 5N decision 0); no
 Kathleen job above 4 nodes), release, the cube and the Plummer sphere at N = 10⁶,
 f64 p = 3, 6, 8, 12 and f32 p = 3, 8, one rank and the machine's useful ranks per node
 (12, 72, and 40 and 2 × 20 on Kathleen):
@@ -60,7 +76,10 @@ f64 p = 3, 6, 8, 12 and f32 p = 3, 8, one rank and the machine's useful ranks pe
   hand-written loop, at the column counts the levels give; and whether its bits change
   with the BLAS build or the thread count;
 - P2P on Kathleen (AVX2 path, `p2p_kernels`, `p2p_fmm`) at FMM leaf sizes, as the AVX-512
-  baseline; without Kathleen, say that C6.7 waits and skip this.
+  baseline;
+- M2P and P2L against P2P per (box, point) on each machine and p, and the W and X pair
+  counts on the workloads (the cube at 2 × 10⁶ points, the Plummer sphere, the clusters),
+  for C6.9's crossover.
 
 The design states, for every component, what it does on the path without Kathleen
 (README, "Kathleen may turn out unusable").
@@ -104,6 +123,12 @@ Write `docs/design/optimisation.md` with these sections:
    convention addition is proposed in the PR, never made in code).
 8. **FMM3D (C6.8) and plane waves (C6.5).** The comparison's method (matched accuracy,
    the problems, the build); the plane-wave spike's question and stop rule.
+8a. **M2P and P2L only where they pay (C6.9).** The rule (points per box, or the cost
+   model's constants) that sends a W pair below the crossover to P2P and an X pair to direct
+   evaluation at the target box's points; the order of additions and the accuracy (exact
+   instead of truncated, so the errors can only fall; requirement 1), the plan's views it
+   needs (an `nd-fmm-plan` change is a sign-off question, README "Design decisions"), the
+   device's form, and which task builds it.
 9. **Order and gain.** The tasks ordered by measured or modelled gain per machine, with
    any brief that should change (propose, do not rewrite).
 10. **Questions for sign-off.** README decisions 1–6, each with a recommendation.
