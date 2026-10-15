@@ -1025,6 +1025,34 @@ with 19–30 non-blocking barriers new. *Model* at 10⁴ ranks: 2.1–2.7 % of a
   §9.3). `tools/kathleen/env.sh` sets it for every Kathleen job (correctness: job
   604023).
 
+**S8, built (T8s, 2026-10-14; fmm-validate/results/phase5s-t8s.md).** Every box of the
+multipole exchange with more than F = 8 readers goes along a tree of its readers fixed at
+build, copies only, the output bit for bit:
+- **The rule** (signed off on 2026-10-14, the report's §3): per owner and level, the readers of
+  its tree boxes are split into at most F parts by node and rank; each node gets a share of
+  the F parts by its readers. The owner sends each box to one head per part, the reader that
+  reads most of the owner's boxes, and the head forwards within the part.
+- **The mechanism:** `MultipoleRouting::Tree` (the default) beside `Direct` (the oracle). The
+  build replaces the per-level rlst builds by a communicator duplicate and two sparse
+  exchanges (§8.1). Each evaluation sends point to point per level and stage, each forward
+  posted once its copy has arrived. No event is added.
+- **Measured** (2.5 × 10⁴ points per rank):
+  - the busiest sender's messages at 512 (locust) and 640 (Kathleen) ranks: 98–244 against
+    T8's 113–486, 9–51 % fewer;
+  - no box sent by one rank to more than 8 ranks (T8: 27–63), depth 2–3;
+  - messages to other nodes at 640: 44–82 against 62–208.
+- ***Model* at 10⁴ ranks** (fits over 64–640 ranks, 4 µs per message):
+  - f64 p = 8 is below 1 % of an evaluation on every workload (clusters 3.7 / 12.0 ms
+    against 14.25; P^0.48 instead of P^0.71);
+  - f32 p = 3 still fires on the cube and the clusters (1.0 / 4.3 and 3.2 / 11.2 ms against
+    0.56 and 1.85). The boxes with at most 8 readers, which no tree changes, already reach
+    the cube's threshold under the linear fit. Recorded as fired, for T9; level aggregation
+    is the lever left.
+- **Timed:** the overlapped path's multipole exposed wait stays at 0.002–0.21 ms at 160
+  Kathleen ranks (at most 0.12 % of an evaluation). The blocking stage is 0.05–1.8 ms
+  slower (at most 0.2 % of an evaluation); a control without forwarding costs the same,
+  so that is the point-to-point exchange (its receive copy), not the extra hop.
+
 ## 8. Collectives and memory per rank
 
 ### 8.1 Every collective, in order, after S1, S2 and S3
@@ -1038,9 +1066,9 @@ with empty lists and zero counts; no collective sits in a branch only some ranks
 | `Plan::new` | two all-reduces (unchanged) |
 | **S3: `Octree::repartition`** (several ranks, default on) | **all-gather-v of the block weights (B values); the moved leaves (T8: a sparse exchange in place of an all-to-all of P counts and an all-to-all-v); the leaf-bit all-gather-v; the push (as `Octree::new`)**; then `Plan::new` again |
 | `Redistribution::new` (twice) | **T8, S5: rlst's `SparseRoutes::new` (communicator duplicate, a sparse exchange of the item counts, an all-reduce); the all-reduce of errors; the keys and positions point to point along the routes** (before T8: all-to-all of counts, all-reduce, communicator duplicate, all-to-all-v) |
-| `Evaluator::new` | all-reduce; `SourceExchange::new`; `MultipoleExchange::new` (one rlst build per level); **the reduction's exchanges (one rlst build per level, §4.2); R: one all-reduce of a reader histogram, one all-gather of P counts and one all-gather-v of R's keys (§4.3)**. `CoarseExchange::new` goes |
+| `Evaluator::new` | all-reduce; `SourceExchange::new`; `MultipoleExchange::new` (one rlst build per level; **T8s, S8: under the forwarding tree, the default, a communicator duplicate and two sparse exchanges, rlst's `sparse_all_to_allv`: the requests with the requester's node, then the instructions, in place of the per-level builds**); **the reduction's exchanges (one rlst build per level, §4.2); R: one all-reduce of a reader histogram, one all-gather of P counts and one all-gather-v of R's keys (§4.3)**. `CoarseExchange::new` goes |
 | `Fmm::build` | as distributed §9.1 and node-m2l.md §4 (step agreements, `split_shared`, the table-cache barrier, the device agreement), with the rows above |
-| `Fmm::evaluate`, blocking | all-reduce (charge length, kept device error); forward of the charges (**S5, built in T8: point-to-point on the build's routes, rlst's `SparseRoutes`**); the source exchange; **the reduction: one neighbour exchange per level; the all-gather-v of R**; the multipole exchange, one per level; with a device on P > 1, one all-reduce (device errors); backward of the output (**S5: point-to-point**) |
+| `Fmm::evaluate`, blocking | all-reduce (charge length, kept device error); forward of the charges (**S5, built in T8: point-to-point on the build's routes, rlst's `SparseRoutes`**); the source exchange; **the reduction: one neighbour exchange per level; the all-gather-v of R**; the multipole exchange, one per level (**T8s: point to point along the forwarding tree, no collective; the neighbour all-to-all only under `MultipoleRouting::Direct`**); with a device on P > 1, one all-reduce (device errors); backward of the output (**S5: point-to-point**) |
 | `Fmm::evaluate`, overlapped | the same, the reduction and the source and multipole exchanges as scoped point-to-point (§4.6); the all-gather of R blocking |
 
 New collectives per build, and why each is needed (README, "Errors": no new agreement):
@@ -1050,6 +1078,13 @@ all-gather (the threshold is global). No new agreement: their errors ride on the
 existing validity all-reduces of `Octree::new`, `Evaluator::new` and `Fmm::build`. Per
 evaluation, against Phase 5: the coarse gather (all-gather-v of B n_c s) is replaced by
 r neighbour exchanges and one all-gather-v of fixed size.
+
+T8s (S8, the forwarding tree; fmm-validate/results/phase5s-t8s.md) changes the multipole
+exchange's build: a communicator duplicate and two sparse exchanges (each a message per
+rank with data, a non-blocking barrier and an all-reduce) replace one rlst ghost build per
+level (each a consensus round, two graph creations and two neighbour all-to-alls); its
+errors ride on the exchange's existing layout all-reduce. Per evaluation the multipole
+exchange has no collective left: point-to-point messages per level and stage.
 
 ### 8.2 Memory per rank, and what remains O(P)
 

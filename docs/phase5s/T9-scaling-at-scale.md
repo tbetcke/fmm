@@ -22,6 +22,20 @@ jobs, the Kathleen runs are skipped and the report says so; the phase is then ac
 locust's runs and the models (README, "Without Kathleen"), and the Kathleen runs below are
 listed as the ones to add when the queue allows.
 
+**Added on 2026-10-14 (T8s, at the user's request): the exposed collectives.** T8s built
+S8 (the forwarding tree) and an analysis of its measurements
+(`fmm-validate/results/phase5s-t8s.md` §7, §9) found that at the measured scale the
+communication is 1–4 % of an evaluation, that the overlapped path hides the source and
+multipole exchanges (0.00–0.02 ms exposed at 160 Kathleen ranks), and that the one
+per-evaluation term left that grows with P is the replicated top's all-gather-v
+(`TopExchange::gather`): 1.7–7 ms (f64 p = 8) and 0.3–0.7 ms (f32 p = 3) at 160 ranks on
+the fastest rank, on the critical path of both paths. If Open MPI 4.1.6 picks a P/2-step
+algorithm for R's size (inferred from its fixed decision rule, not measured), it takes
+10–17 ms per evaluation at 10⁴ ranks (*model*), 5–8 times `scale-out.md` §10.4's
+log₂ P model, and crosses 1 % of an evaluation at f32 p = 3 from a few hundred ranks,
+before S8 did. T9 therefore also does the following (the steps "The exposed collectives"
+below), and the "Do not" on library changes has the exceptions named there.
+
 Read first:
 - root CLAUDE.md, fmm-validate/CLAUDE.md, tools/kathleen/README.md;
 - docs/phase5s/README.md ("Requirements" 4, 5, 9, 10; "Ranks on Kathleen", node-hours;
@@ -70,7 +84,8 @@ Do:
   configuration against the smallest run (f64 to the printed digits, f32 within 1%),
   stating which runs were checked.
 - **Node-hours**: state the node-hours per sweep and in total (budget for this task: at
-  most 60 node-hours unless the sign-off raises it).
+  most 60 node-hours unless the sign-off raises it; the exposed collectives' measurements
+  and checks, about 3–5 of them, come out of it).
 - **The report**: `fmm-validate/results/phase5s-kathleen.md` (or `phase5s.md` without
   Kathleen), in the format of the Phase 5 reports. It states which figures are timed
   across nodes (Kathleen, 1–4 nodes, Omni-Path, the MPI library and settings named),
@@ -95,6 +110,55 @@ Do:
   measured: the per-node and per-rank costs, the strategy and configuration that scaled,
   and any task whose premise changed. Record the revision as decision 7.
 
+- **The exposed collectives** (added on 2026-10-14 from T8s; the analysis is summarised in
+  `fmm-validate/results/phase5s-t8s.md` §9):
+  1. **Measure first** (one 4-node job, about 0.5 node-hours, before the scaling sweeps):
+     - `MPI_Allgatherv` at R's sizes (0.26 MB and 2.65 MB in all, R at the cap in f32
+       p = 3 and f64 p = 8) at 40, 80 and 160 ranks with 10, 20 and 40 ranks per node,
+       with Open MPI's default and each forced algorithm
+       (`OMPI_MCA_coll_tuned_use_dynamic_rules=1`,
+       `OMPI_MCA_coll_tuned_allgatherv_algorithm`), fitted as a·P + bytes/β; refit
+       `scale-out.md` §10.2's all-gather term and §10.4 with it;
+     - the overlapped path's wait per level (`OverlapTimes::level_waits`, reported) and its
+       per-message cost (`progress`, posting) at 160 ranks timed and 640 counted, to see
+       whether the forwarding tree's forwards (posted between level calls) lag a level
+       at depth 3;
+     - the blocking tree's receive copy (`copy_into` in `TreeExchange::forward`), timed.
+  2. **Decide** (sign-off, before building): the all-gather's model and remedy; whether
+     overlap becomes the default; whether the blocking path keeps a default anywhere.
+  3. **Build** what the sign-off accepts, bit for bit, safe rsmpi only, no new event, no
+     collective in a branch:
+     - **a two-level gather of R** in `TopExchange`: the node communicator from
+       `Fmm::build`'s `split_shared` (passed in as the tree's node is) and a leaders'
+       communicator (the node's first rank); per evaluation the leaders all-gather-v R,
+       then each node broadcasts the gathered buffer from its leader; the same `gathered`
+       layout, slots and `ReceivedTop` (*model* at 10⁴: 1.5–2 ms at f64 p = 8, about
+       0.4 ms at f32 p = 3); `TopExchange` keeps the one-communicator gather as the
+       oracle, as `MultipoleRouting::Direct` is the tree's;
+     - **overlap on by default** (`FmmBuilder::overlap`), `overlap(false)` kept as the
+       oracle, if the sweeps at N = 10⁷ and 10⁸ confirm it (measured at 160 ranks: the
+       exchanges' 0.4–1.5 % of an evaluation hidden, bit for bit);
+     - only if the blocking path keeps a default: the tree's blocking path posting every
+       level at once and scattering from its staging buffer (the measured +0.3–0.6 ms
+       against the direct exchange at 160 ranks; T8s §7.3).
+  4. **Test**: `check_top` in `mpi_regressions` against the one-communicator gather, with
+     made-up nodes of two ranks at 4–8 ranks; the Phase 5S suites, the shadow and device
+     checks (CPU runtime, Metal, CUDA), T2's correctness job at 2 nodes and invariance at
+     160 and 640 (as T8s did); the collectives in order in `scale-out.md` §8.1 and the
+     `exchange` module docs.
+  5. **Measure** before and after in the sweeps above (both paths, both precisions, the
+     three workloads at 40–160 ranks timed, 320–640 counted), and the S8 trigger at
+     f32 p = 3 (left fired by T8s, `scale-out.md` §7.3) on the overlapped path.
+  - **Record, not build** (for the Phase 6 revision or their own briefs): pacing dense
+    bursts in rlst's sparse exchanges (the 4-node packet losses, T8 §9.3; upstream); the
+    octree's O1 and weight-round all-reduces (the largest O(P) build term left, *model*
+    about 57 ms per build at 10⁴ ranks); `ReductionExchange::new` on two sparse
+    exchanges as the tree's build; level aggregation, not as specified (it would expose
+    the overlapped path's per-level waits; T8s §2.2); the imbalance at f32 p = 3
+    (26–42 % of wall time at 160 ranks: the cost model underweights P2P there); and an
+    explanation of the cube's leaf time at 80 Kathleen ranks (1,068 ms at f64 p = 8 against
+    88 ms at 40 and 72 ms at 160 ranks for 1.15 times the P2P count; T8s job 604104).
+
 Tests that define done:
 - The scaling report is published with every run's configuration, job id and the
   node-hours used, and every number labelled timed, counted or *model*.
@@ -115,6 +179,6 @@ Do not:
 - time an oversubscribed run, or present a model as a measurement;
 - assert timings, or commit CSV or raw outputs beyond the report;
 - change the library to improve a number (a defect found is reported and fixed in its own
-  commit with its test);
+  commit with its test), except the exposed collectives' changes above, once signed off;
 - run builds or measurements on Kathleen's login nodes, or exceed the node-hour budget
   without asking.
