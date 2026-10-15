@@ -44,6 +44,11 @@
 //! each rank's modelled cost the constants times its counts; the constants fitted to the
 //! kind times (`PathTimes::fit`) finite and a valid model; the new summary fields.
 //!
+//! And those of Phase 5S T9: the overlapped path's `test` calls per exchange, its final
+//! wait for the sends and its wait per level (`PathTimes::overlap`, `OVERLAP_PARTS`), per
+//! rank in the overlapped path and in no other, finite and non-negative, the waits per
+//! level within the multipole exchange's exposed wait; their table and summary fields.
+//!
 //! One test initialises MPI (at `Threading::Funneled`). Error measures: as named at each
 //! check; the timings are only checked to be finite and non-negative.
 
@@ -55,8 +60,8 @@ use nd_fmm_exec::cost::CostModel;
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::scaling::{
-    COMPUTE, DOWNWARD, HarnessError, Input, Overlap, REFERENCE_MAX_POINTS, Report, STAGES,
-    Settings, SlurmJob, TOTAL, Workload, input_by_index, invariance, run,
+    COMPUTE, DOWNWARD, HarnessError, Input, OVERLAP_PARTS, Overlap, REFERENCE_MAX_POINTS, Report,
+    STAGES, Settings, SlurmJob, TOTAL, Workload, input_by_index, invariance, run,
 };
 
 /// The tiny problem: 1,500 points of the cube.
@@ -264,6 +269,19 @@ fn check_fields(report: &Report, comm: &SimpleCommunicator) {
             assert!(compute <= m[TOTAL], "the compute stages within the total");
         }
         assert!(path.wall >= path.reduced(TOTAL)[0] * 0.999);
+        // The overlapped path's details (Phase 5S T9), in that path only.
+        if path.overlapped {
+            assert_eq!(path.overlap.len(), size);
+            for (o, m) in path.overlap.iter().zip(&path.medians) {
+                assert!(o.iter().all(|t| t.is_finite() && *t >= 0.0), "{o:?}");
+                // Each level's wait lies within the exposed wait of every evaluation, so
+                // its median within the median of the exposed wait.
+                let levels: f64 = o[OVERLAP_PARTS.len()..].iter().copied().fold(0.0, f64::max);
+                assert!(levels <= m[11] * 1.001 + 1e-6, "{o:?} against {}", m[11]);
+            }
+        } else {
+            assert!(path.overlap.is_empty());
+        }
         let [max, min, mean] = path.compute();
         assert!(min <= mean && mean <= max && max > 0.0);
     }
@@ -293,11 +311,21 @@ fn check_fields(report: &Report, comm: &SimpleCommunicator) {
         summaries[0].contains(&format!("ranks={size}")) && summaries[0].contains("overlap=off")
     );
     assert!(summaries[1].contains("overlap=on") && summaries[1].contains("phi_l2="));
+    for key in [
+        "multipoles_progress_max_ms=",
+        "multipoles_sends_wait_max_ms=",
+        "level_wait_max_ms=",
+        "level_wait_max_level=",
+    ] {
+        assert!(summaries[1].contains(key), "{key} missing");
+        assert!(!summaries[0].contains(key), "{key} in the blocking summary");
+    }
     let text = report.to_string();
     assert!(
         text.contains("### Evaluation, blocking") && text.contains("### Evaluation, overlapped")
     );
     assert!(text.contains("C5.2 measure"));
+    assert!(text.contains("multipoles: wait for level 0"));
     assert!(text.contains(&format!(
         "- placement: 1 node(s) ({}), ranks per node {size}",
         placement.hosts[0]

@@ -50,6 +50,12 @@ name = "scaling"
 [[example]]
 name = "node_tables"
 
+# The replicated top's all-gather at R's sizes (Phase 5S T9): `MPI_Allgatherv` against a
+# gather in two levels (node leaders, then a broadcast on each node); a timing example on
+# any number of ranks, so not registered with templated-examples.
+[[example]]
+name = "collectives"
+
 # The device path on the host fallback (Phase 4 T5): needs a device backend; not run in
 # CI (no templated-examples entry), run by hand on one rank.
 [[example]]
