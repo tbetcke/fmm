@@ -13,8 +13,11 @@
 //! | [`TopExchange`] | the replicated top R: the top-tree boxes many ranks read, every rank's, in rank order | `sizes[level]` values | the slots of R's boxes this rank holds but does not compute |
 //! | [`MultipoleExchange`] | per level l, the boxes named by a V-row of level l or a W-row of level l − 1 that other ranks compute, without those the reduction or R deliver, in box order | `sizes[l]` values | their slots of level l of the multipole [`LevelBuffers`] |
 //!
-//! The source, reduction and multipole exchanges are neighbourhood exchanges on rlst's
-//! [`GhostCommunicator`] with Morton keys as global indices. A box's multipole comes from
+//! The source and reduction exchanges, and the multipole exchange under
+//! [`MultipoleRouting::Direct`], are neighbourhood exchanges on rlst's
+//! [`GhostCommunicator`] with Morton keys as global indices. By default the multipole
+//! exchange routes along forwarding trees instead ([`MultipoleRouting::Tree`], Phase 5S
+//! T8s; [The forwarding tree](#the-forwarding-tree)). A box's multipole comes from
 //! the rank that computes it ([`Plan::owner`]): its own rank for a ghost, the owner of
 //! the partition map for a `Global` box (`docs/design/scale-out.md` §4.1); local boxes
 //! and owned `Global` boxes are never received. The replicated top is one all-gather on a
@@ -60,15 +63,15 @@
 //! | [`SourceExchange::new`] | all-reduce (validity, point size agreed); rlst build (three validity all-reduces, an all-to-all, two graph creates, two neighbour all-to-alls); all-reduce (layout) |
 //! | [`ReductionExchange::new`] | all-reduce (validity, sizes agreed); one rlst build per reduction level, ascending; all-reduce (layout) |
 //! | [`TopExchange::new`] | all-reduce (validity, sizes agreed); communicator duplicate; one rlst build (the readers); all-reduce (layout and the boxes per threshold); all-gather (counts); all-gather-v (keys) |
-//! | [`MultipoleExchange::new`] | all-reduce (validity, sizes agreed); one rlst build per level, l = 0..nlevels; all-reduce (layout) |
+//! | [`MultipoleExchange::new`] | all-reduce (validity, sizes and routing agreed); `Direct`: one rlst build per level, l = 0..nlevels; `Tree`: a communicator duplicate and two sparse exchanges (rlst's `sparse_all_to_allv`: the requests with the requester's node, then the instructions); all-reduce (layout) |
 //! | [`SourceExchange::forward`] | one neighbour all-to-all |
 //! | [`ReductionExchange::forward`] | one neighbour all-to-all on the level's communicator |
 //! | [`TopExchange::gather`] | one all-gather-v, counts fixed at construction |
-//! | [`MultipoleExchange::forward`] | one neighbour all-to-all on the level's communicator |
+//! | [`MultipoleExchange::forward`] | `Direct`: one neighbour all-to-all on the level's communicator; `Tree`: none, point-to-point messages, each forward posted once its copies have arrived |
 //! | [`MultipoleExchange::forward_all`] | [`forward`](MultipoleExchange::forward) for l = 0..nlevels, in order |
 //! | [`SourceExchange::forward_overlapped`] | none: point-to-point requests on the exchange's graph communicator |
 //! | [`ReductionExchange::forward_all_overlapped`] | none: point-to-point requests on every reduction level's graph communicator |
-//! | [`MultipoleExchange::forward_all_overlapped`] | none: point-to-point requests on every level's graph communicator |
+//! | [`MultipoleExchange::forward_all_overlapped`] | none: point-to-point requests on every level's graph communicator (`Direct`) or on the tree's duplicate (`Tree`) |
 //!
 //! Every rank must call the exchange methods in the same order. A rank that passes a
 //! store of the wrong layout still takes part in the communication, with default values
@@ -119,6 +122,37 @@
 //!   same bits as from the blocking exchanges, whatever the order in which messages
 //!   arrive.
 //!
+//! # The forwarding tree
+//!
+//! Under [`MultipoleRouting::Tree`] (the default; Phase 5S T8s, S8;
+//! `fmm-validate/results/phase5s-t8s.md` §1, signed off on 2026-10-14) a box with more than
+//! `fan_out` readers is sent along a tree of its readers fixed at build, the others direct:
+//!
+//! - **The rule.** Per owner and level, the readers of the owner's tree boxes, ordered by
+//!   (node, rank), are split into at most `fan_out` parts: runs on the owner's own node,
+//!   the nodes' shares of `fan_out` (one part each at least) on 2 to `fan_out` nodes, runs
+//!   of whole nodes beyond. For each part a box has readers in, the owner sends it to the
+//!   reader of the part that reads most of the owner's boxes of the level (the part's
+//!   head), which forwards it to the box's other readers of the part, by the same split
+//!   when they are more than `fan_out` or on other nodes. No rank sends a box to more than
+//!   `fan_out` ranks; an owner's boxes of a level share their first hops.
+//! - **The stages.** A message is one (sender, receiver, level, stage): stage 0 from the
+//!   store (`send_boxes`), stage s ≥ 1 resending chunks received at stage s − 1 from the
+//!   staging buffer, never a store, so the host-data events stay those of the direct
+//!   exchange. Point to point on a duplicate of the plan's communicator, tagged
+//!   `32 stage + level`, each forward posted as soon as what it resends has arrived (in
+//!   the waits, which poll every receive of the level, and in each `test` of the overlapped
+//!   path).
+//! - **Same bits.** Every reader receives each box once, a copy of the owner's chunk, into
+//!   the receive buffer in box order: [`MultipoleExchange::receive_boxes`] and
+//!   [`MultipoleExchange::receive_buffer`] are those of the direct exchange, and so are the
+//!   stores.
+//! - **Reported** per level: [`MultipoleExchange::traffic`] (one message per destination and
+//!   stage), [`destinations`](MultipoleExchange::destinations),
+//!   [`sources`](MultipoleExchange::sources), [`depth`](MultipoleExchange::depth),
+//!   [`fan_out`](MultipoleExchange::fan_out) and
+//!   [`forwarded`](MultipoleExchange::forwarded).
+//!
 //! # Guarantees
 //!
 //! - **Index order.** Every send and receive buffer is flat and contiguous, in leaf or
@@ -138,6 +172,9 @@
 #[cfg(test)]
 #[path = "exchange_tests.rs"]
 mod tests;
+
+#[path = "exchange_tree.rs"]
+mod tree;
 
 use std::{
     cell::Cell,
@@ -195,6 +232,11 @@ pub enum ExchangeError {
     /// The ghosts do not arrive in index order, so an octree invariant (each rank owns
     /// one ascending key range) is broken.
     ReceiveOrder,
+    /// The fan-out of a forwarding tree ([`MultipoleRouting::Tree`]) is below 2.
+    FanOut {
+        /// The fan-out given.
+        fan_out: usize,
+    },
     /// Building the exchange failed on another rank.
     OtherRank,
 }
@@ -215,6 +257,12 @@ impl fmt::Display for ExchangeError {
                 write!(f, "key {key} is not held in the form the exchange needs")
             }
             Self::ReceiveOrder => write!(f, "the ghosts do not arrive in index order"),
+            Self::FanOut { fan_out } => {
+                write!(
+                    f,
+                    "a forwarding tree needs a fan-out of at least 2, not {fan_out}"
+                )
+            }
             Self::OtherRank => write!(f, "building the exchange failed on another rank"),
         }
     }
@@ -748,7 +796,7 @@ impl<T: Equivalence + Copy + Default> MultipolesInFlight<'_, T> {
     pub fn wait(&mut self, level: usize, multipoles: &mut LevelBuffers<T>) -> Duration {
         let exposed = self
             .flight
-            .receive(level, &mut self.exchange.levels[level].receive_buffer);
+            .receive(level, self.exchange.receive_buffer_mut(level));
         if self.exchange.has_layout(level, multipoles) {
             self.exchange.scatter(level, multipoles);
         } else {
@@ -1210,18 +1258,62 @@ impl<T: Equivalence + Copy + Default> LevelExchange<T> {
     }
 }
 
+/// The most ranks one rank sends a multipole to under the default
+/// [`MultipoleRouting::Tree`], F (Phase 5S T8s, signed off on 2026-10-14;
+/// `fmm-validate/results/phase5s-t8s.md` §1.2).
+pub const TREE_FAN_OUT: usize = 8;
+
+/// How the [`MultipoleExchange`] moves each multipole from the rank that computes it to
+/// the ranks that read it (Phase 5S T8s, S8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MultipoleRouting {
+    /// From the owner to every reader, one rlst ghost communicator per level: one message
+    /// per (rank, destination, level); a box goes to up to R's threshold less one ranks.
+    /// Kept as the oracle of the tree.
+    Direct,
+    /// A box with more than `fan_out` readers goes along a tree of its readers fixed at
+    /// build, so that no rank sends it to more than `fan_out` ranks; the others go direct
+    /// (`fmm-validate/results/phase5s-t8s.md` §1.2). Point to point on a duplicate of the
+    /// plan's communicator, in stages; `fan_out` is at least 2.
+    Tree {
+        /// The most ranks one rank sends a box to, F.
+        fan_out: usize,
+    },
+}
+
+impl Default for MultipoleRouting {
+    /// The tree with [`TREE_FAN_OUT`].
+    fn default() -> Self {
+        Self::Tree {
+            fan_out: TREE_FAN_OUT,
+        }
+    }
+}
+
+/// The levels of a [`MultipoleExchange`], by routing.
+enum Routed<T> {
+    Direct(Vec<LevelExchange<T>>),
+    Tree(tree::TreeExchange<T>),
+}
+
 /// The exchange of multipoles for the boxes of the V- and W-lists that other ranks
 /// compute, one per level.
 ///
-/// See the [module documentation](self).
+/// See the [module documentation](self). [`MultipoleRouting`] chooses how each multipole
+/// travels; the index lists, the receive buffers and the stores' bits are the same under
+/// both routings.
 pub struct MultipoleExchange<T> {
-    levels: Vec<LevelExchange<T>>,
+    routing: MultipoleRouting,
+    routed: Routed<T>,
 }
 
 impl<T: Equivalence + Copy + Default> MultipoleExchange<T> {
     /// Build the exchange for the boxes of `plan`'s V- and W-rows whose multipoles other
     /// ranks compute, with `sizes[l]` values per multipole of level l, without those that
     /// `reduction` and `top` deliver: every multipole a row reads reaches this rank once.
+    /// `routing` is how the multipoles travel; `node` identifies this rank's node for the
+    /// tree (ranks with the same `node` share a node; any value under
+    /// [`MultipoleRouting::Direct`]).
     ///
     /// # Collective operation
     /// On `comm`, the communicator of the octree of `plan`; see the
@@ -1229,101 +1321,235 @@ impl<T: Equivalence + Copy + Default> MultipoleExchange<T> {
     ///
     /// # Errors
     /// Returned on every rank if, on any rank, `sizes` does not have one positive entry
-    /// per level, the sizes differ between ranks, a rank is asked for a key whose
-    /// multipole it does not compute, or the ghosts do not arrive in box order.
+    /// per level, the sizes or the routing differ between ranks, a tree's fan-out is below
+    /// 2, a rank is asked for a key whose multipole it does not compute, or the ghosts do
+    /// not arrive in box order.
     pub fn new<C: CommunicatorCollectives>(
         plan: &Plan,
         comm: &C,
         sizes: &[usize],
         reduction: &ReductionExchange<T>,
         top: &TopExchange<T>,
+        routing: MultipoleRouting,
+        node: usize,
     ) -> Result<Self, ExchangeError> {
         let index = plan.index();
         let nlevels = index.nlevels();
-        let (local, sizes) = level_sizes(sizes, nlevels);
-        agree(comm, local, &sizes)?;
+        let (local, mut agreed) = level_sizes(sizes, nlevels);
+        let local = match routing {
+            MultipoleRouting::Tree { fan_out } if fan_out < 2 => {
+                local.and(Err(ExchangeError::FanOut { fan_out }))
+            }
+            _ => local,
+        };
+        agreed.push(match routing {
+            MultipoleRouting::Direct => 0,
+            MultipoleRouting::Tree { fan_out } => fan_out,
+        });
+        agree(comm, local, &agreed)?;
+        let sizes = &agreed[..nlevels];
 
+        let ghosts: Vec<Vec<(u32, usize)>> = (0..nlevels)
+            .map(|level| {
+                let mut ghosts = multipole_ghosts(plan, level);
+                ghosts.retain(|&(i, _)| {
+                    !reduction.receives(level, i) && !top.replicates(index.key(level, i as usize))
+                });
+                ghosts
+            })
+            .collect();
         let mut layout = Ok(());
-        let mut levels = Vec::with_capacity(nlevels);
-        for (level, &size) in sizes.iter().enumerate() {
-            let mut ghosts = multipole_ghosts(plan, level);
-            ghosts.retain(|&(i, _)| {
-                !reduction.receives(level, i) && !top.replicates(index.key(level, i as usize))
-            });
-            levels.push(LevelExchange::new(
+        let routed = match routing {
+            MultipoleRouting::Direct => Routed::Direct(
+                sizes
+                    .iter()
+                    .zip(&ghosts)
+                    .enumerate()
+                    .map(|(level, (&size, ghosts))| {
+                        LevelExchange::new(plan, comm, level, size, ghosts, &mut layout)
+                    })
+                    .collect(),
+            ),
+            MultipoleRouting::Tree { fan_out } => Routed::Tree(tree::TreeExchange::new(
                 plan,
                 comm,
-                level,
-                size,
+                sizes,
                 &ghosts,
+                fan_out,
+                node,
                 &mut layout,
-            ));
-        }
+            )),
+        };
         agree_valid(comm, layout)?;
-        Ok(Self { levels })
+        Ok(Self { routing, routed })
+    }
+
+    /// Return how the multipoles travel.
+    pub fn routing(&self) -> MultipoleRouting {
+        self.routing
     }
 
     /// Return the number of levels.
     pub fn nlevels(&self) -> usize {
-        self.levels.len()
+        match &self.routed {
+            Routed::Direct(levels) => levels.len(),
+            Routed::Tree(tree) => tree.levels.len(),
+        }
     }
 
     /// Return the number of values per multipole of `level`.
     pub fn size(&self, level: usize) -> usize {
-        self.levels[level].size
+        match &self.routed {
+            Routed::Direct(levels) => levels[level].size,
+            Routed::Tree(tree) => tree.levels[level].size(),
+        }
     }
 
-    /// Return the box index on `level` of every chunk of the send buffer, in send order;
-    /// a box sent to two ranks appears twice.
+    /// Return the box index on `level` of every chunk this rank sends from its store, in
+    /// send order; a box sent to two ranks appears twice. Under the tree these are the
+    /// stage-0 messages; the forwards resend received chunks and read no store.
     pub fn send_boxes(&self, level: usize) -> &[u32] {
-        &self.levels[level].send_boxes
+        match &self.routed {
+            Routed::Direct(levels) => &levels[level].send_boxes,
+            Routed::Tree(tree) => &tree.levels[level].send_boxes,
+        }
     }
 
     /// Return the box index on `level` of every chunk of the receive buffer, strictly
-    /// ascending.
+    /// ascending; the same under both routings.
     pub fn receive_boxes(&self, level: usize) -> &[u32] {
-        &self.levels[level].receive_boxes
+        match &self.routed {
+            Routed::Direct(levels) => &levels[level].receive_boxes,
+            Routed::Tree(tree) => &tree.levels[level].receive_boxes,
+        }
     }
 
     /// Return the receive buffer of `level`, as of the last exchange.
     pub fn receive_buffer(&self, level: usize) -> &[T] {
-        &self.levels[level].receive_buffer
+        match &self.routed {
+            Routed::Direct(levels) => &levels[level].receive_buffer,
+            Routed::Tree(tree) => &tree.levels[level].receive_buffer,
+        }
     }
 
-    /// Return the rlst communicator of `level`, for its counts and neighbours.
-    pub fn communicator(&self, level: usize) -> &GhostCommunicator<MortonKey> {
-        &self.levels[level].communicator
+    fn receive_buffer_mut(&mut self, level: usize) -> &mut [T] {
+        match &mut self.routed {
+            Routed::Direct(levels) => &mut levels[level].receive_buffer,
+            Routed::Tree(tree) => &mut tree.levels[level].receive_buffer,
+        }
     }
 
-    /// Return the messages and values of the exchange of `level` on this rank.
+    /// Return the messages and values of the exchange of `level` on this rank, every
+    /// stage counted (one message per destination and stage under the tree).
     pub fn traffic(&self, level: usize) -> Traffic {
-        traffic(&self.levels[level].communicator)
+        match &self.routed {
+            Routed::Direct(levels) => traffic(&levels[level].communicator),
+            Routed::Tree(tree) => tree.levels[level].traffic(),
+        }
+    }
+
+    /// Return the ranks this rank sends a message to on `level`, at any stage, ascending.
+    pub fn destinations(&self, level: usize) -> Vec<usize> {
+        match &self.routed {
+            Routed::Direct(levels) => {
+                let mut ranks: Vec<usize> = sends(&levels[level].communicator)
+                    .filter(|(_, v)| !v.is_empty())
+                    .map(|(r, _)| r as usize)
+                    .collect();
+                ranks.sort_unstable();
+                ranks
+            }
+            Routed::Tree(tree) => tree.levels[level].destinations(),
+        }
+    }
+
+    /// Return the ranks this rank receives a message from on `level`, ascending.
+    pub fn sources(&self, level: usize) -> Vec<usize> {
+        match &self.routed {
+            Routed::Direct(levels) => {
+                let mut ranks: Vec<usize> = receives(&levels[level].communicator)
+                    .filter(|(_, v)| !v.is_empty())
+                    .map(|(r, _)| r as usize)
+                    .collect();
+                ranks.sort_unstable();
+                ranks
+            }
+            Routed::Tree(tree) => tree.levels[level].sources(),
+        }
+    }
+
+    /// Return the stages of `level` this rank takes part in: 1 + the last stage of its
+    /// messages, 0 without any. The direct exchange has one stage.
+    pub fn depth(&self, level: usize) -> usize {
+        match &self.routed {
+            Routed::Direct(levels) => {
+                let c = &levels[level].communicator;
+                usize::from(c.send_buffer_len() + c.receive_buffer_len() > 0)
+            }
+            Routed::Tree(tree) => tree.levels[level].depth(),
+        }
+    }
+
+    /// Return the most ranks this rank sends one box of `level` to, at any stage: at most
+    /// the fan-out under the tree.
+    pub fn fan_out(&self, level: usize) -> usize {
+        match &self.routed {
+            Routed::Direct(levels) => {
+                // A box's key appears once per rank it goes to.
+                let mut keys = levels[level].communicator.send_indices().to_vec();
+                keys.sort_unstable();
+                keys.chunk_by(|a, b| a == b)
+                    .map(<[_]>::len)
+                    .max()
+                    .unwrap_or(0)
+            }
+            Routed::Tree(tree) => tree.levels[level].fan_out(),
+        }
+    }
+
+    /// Return the chunks of `level` this rank forwards (copies of boxes it received and
+    /// resends to other readers); 0 under the direct exchange.
+    pub fn forwarded(&self, level: usize) -> usize {
+        match &self.routed {
+            Routed::Direct(_) => 0,
+            Routed::Tree(tree) => tree.levels[level].forwarded(),
+        }
     }
 
     /// Whether level `level` of `multipoles` has the plan's number of levels and boxes and
     /// this exchange's size.
     fn has_layout(&self, level: usize, multipoles: &LevelBuffers<T>) -> bool {
-        self.levels[level].has_layout(multipoles)
+        match &self.routed {
+            Routed::Direct(levels) => levels[level].has_layout(multipoles),
+            Routed::Tree(tree) => tree.levels[level].has_layout(multipoles),
+        }
     }
 
     /// Write the receive buffer of `level` into the slots of
     /// [`receive_boxes`](Self::receive_boxes)`(level)`.
     fn scatter(&self, level: usize, multipoles: &mut LevelBuffers<T>) {
-        self.levels[level].scatter(multipoles);
+        match &self.routed {
+            Routed::Direct(levels) => levels[level].scatter(multipoles),
+            Routed::Tree(tree) => tree.levels[level].scatter(multipoles),
+        }
     }
 
     /// Send the multipoles of `level` that other ranks read, and write the received
     /// multipoles into their slots of `multipoles`.
     ///
-    /// This is a neighbourhood collective: every rank must call it for the same levels in
-    /// the same order.
+    /// Every rank must call it for the same levels in the same order: a neighbourhood
+    /// collective under [`MultipoleRouting::Direct`]; under the tree point to point, each
+    /// forward posted once its copy has arrived.
     ///
     /// # Panics
     ///
     /// Panics, after taking part in the exchange, if `multipoles` does not have the
     /// plan's number of levels and boxes and this exchange's sizes.
     pub fn forward(&mut self, level: usize, multipoles: &mut LevelBuffers<T>) {
-        self.levels[level].forward(multipoles);
+        match &mut self.routed {
+            Routed::Direct(levels) => levels[level].forward(multipoles),
+            Routed::Tree(tree) => tree.forward(level, multipoles),
+        }
     }
 
     /// Call [`forward`](Self::forward) for every level, in ascending order.
@@ -1341,13 +1567,14 @@ impl<T: Equivalence + Copy + Default> MultipoleExchange<T> {
     /// with [`MultipolesInFlight::wait`], which writes the level's receive buffer and
     /// ghost slots bit for bit as [`forward`](Self::forward) does, in any order, and calls
     /// [`test`](MultipolesInFlight::test) between its own calls so that MPI progresses the
-    /// messages. It must not call MPI on the plan's communicator in a way that waits for
+    /// messages (and, under the tree, so that this rank posts its forwards as their copies
+    /// arrive). It must not call MPI on the plan's communicator in a way that waits for
     /// another rank's part of this exchange; a collective that every rank enters (the
     /// all-gather of the replicated top) is fine. When `work` returns, every send is
     /// waited for. Returns its result and the [`ExchangeTimes`].
     ///
-    /// Every rank must call it, as [`forward_all`](Self::forward_all) (no collective: one
-    /// point-to-point receive and send per level and neighbour with values).
+    /// Every rank must call it, as [`forward_all`](Self::forward_all) (no collective:
+    /// point-to-point receives and sends).
     ///
     /// # Panics
     ///
@@ -1360,27 +1587,88 @@ impl<T: Equivalence + Copy + Default> MultipoleExchange<T> {
         multipoles: &mut LevelBuffers<T>,
         work: impl FnOnce(&mut MultipolesInFlight<'_, T>, &mut LevelBuffers<T>) -> R,
     ) -> (R, ExchangeTimes) {
-        let nlevels = self.levels.len();
+        let nlevels = self.nlevels();
         let layout = (0..nlevels).all(|level| self.has_layout(level, multipoles));
+        let (result, times, written) = match &mut self.routed {
+            Routed::Direct(_) => self.direct_overlapped(multipoles, layout, work),
+            Routed::Tree(tree) => {
+                let mut parts = tree.take_parts(multipoles, layout);
+                let outcome = request::scope(|scope| {
+                    let mut flight = parts.post(scope);
+                    let mut in_flight = MultipolesInFlight {
+                        exchange: &mut *self,
+                        flight: &mut flight,
+                        written: vec![false; nlevels],
+                        layout,
+                    };
+                    let result = work(&mut in_flight, multipoles);
+                    let MultipolesInFlight {
+                        written, layout, ..
+                    } = in_flight;
+                    // What the work did not wait for reaches the receive buffers only.
+                    for (level, _) in written.iter().enumerate().filter(|(_, w)| !**w) {
+                        flight.receive(level, self.receive_buffer_mut(level));
+                    }
+                    let written = layout && written.iter().all(|&w| w);
+                    (result, flight.finish(), written)
+                });
+                let Routed::Tree(tree) = &mut self.routed else {
+                    unreachable!()
+                };
+                tree.restore(parts);
+                outcome
+            }
+        };
+        assert!(
+            layout,
+            "the multipole buffers do not have the exchange layout"
+        );
+        assert!(
+            written,
+            "every level must be waited for, with buffers of the exchange layout"
+        );
+        (result, times)
+    }
+
+    /// [`forward_all_overlapped`](Self::forward_all_overlapped) under
+    /// [`MultipoleRouting::Direct`]: one receive and one send per level and neighbour on
+    /// the level's graph communicator. Returns the result, the times and whether every
+    /// level was written.
+    fn direct_overlapped<R>(
+        &mut self,
+        multipoles: &mut LevelBuffers<T>,
+        layout: bool,
+        work: impl FnOnce(&mut MultipolesInFlight<'_, T>, &mut LevelBuffers<T>) -> R,
+    ) -> (R, ExchangeTimes, bool) {
+        let Routed::Direct(levels) = &mut self.routed else {
+            unreachable!()
+        };
+        let nlevels = levels.len();
         if layout {
-            for level in &mut self.levels {
+            for level in levels.iter_mut() {
                 level.pack(multipoles);
             }
         }
         // The buffers the requests borrow live outside the exchange while they are in
         // flight, so that the work can read the exchange.
-        let sends: Vec<Vec<T>> = self
-            .levels
+        let sends: Vec<Vec<T>> = levels
             .iter_mut()
             .map(|level| std::mem::take(&mut level.send_buffer))
             .collect();
-        let mut staging = take_staging(&mut self.levels);
-        let (result, times, written) = request::scope(|scope| {
+        let mut staging = take_staging(levels);
+        // The communicators stay in the exchange; the requests borrow their own copies of
+        // the neighbour ranges, taken here.
+        let outcome = request::scope(|scope| {
             let mut flight = Flight::new(scope, nlevels);
-            for ((level, send), receive) in self.levels.iter().zip(&sends).zip(&mut staging) {
-                flight
-                    .groups
-                    .push(Posted::new(scope, &level.communicator, send, receive));
+            {
+                let Routed::Direct(levels) = &self.routed else {
+                    unreachable!()
+                };
+                for ((level, send), receive) in levels.iter().zip(&sends).zip(&mut staging) {
+                    flight
+                        .groups
+                        .push(Posted::new(scope, &level.communicator, send, receive));
+                }
             }
             let mut in_flight = MultipolesInFlight {
                 exchange: &mut *self,
@@ -1394,24 +1682,19 @@ impl<T: Equivalence + Copy + Default> MultipoleExchange<T> {
             } = in_flight;
             // What the work did not wait for reaches the receive buffers only.
             for (level, _) in written.iter().enumerate().filter(|(_, w)| !**w) {
-                flight.receive(level, &mut self.levels[level].receive_buffer);
+                flight.receive(level, self.receive_buffer_mut(level));
             }
             let written = layout && written.iter().all(|&w| w);
             (result, flight.finish(), written)
         });
-        for ((level, send), staging) in self.levels.iter_mut().zip(sends).zip(staging) {
+        let Routed::Direct(levels) = &mut self.routed else {
+            unreachable!()
+        };
+        for ((level, send), staging) in levels.iter_mut().zip(sends).zip(staging) {
             level.send_buffer = send;
             level.staging = staging;
         }
-        assert!(
-            layout,
-            "the multipole buffers do not have the exchange layout"
-        );
-        assert!(
-            written,
-            "every level must be waited for, with buffers of the exchange layout"
-        );
-        (result, times)
+        outcome
     }
 }
 

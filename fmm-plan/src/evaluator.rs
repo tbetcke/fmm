@@ -112,7 +112,7 @@
 //! | [`Evaluator::new`] | all-reduce (validity); [`SourceExchange::new`]; [`ReductionExchange::new`]; [`TopExchange::new`]; [`MultipoleExchange::new`] |
 //! | [`exchange_sources`](Evaluator::exchange_sources) | one neighbour all-to-all |
 //! | [`upward_global`](Evaluator::upward_global) | one neighbour all-to-all per reduction level, deepest first; one all-gather-v |
-//! | [`exchange_multipoles`](Evaluator::exchange_multipoles) | one neighbour all-to-all per level, in level order |
+//! | [`exchange_multipoles`](Evaluator::exchange_multipoles) | per level, in level order: one neighbour all-to-all (`MultipoleRouting::Direct`), or point-to-point messages, forwards posted as their copies arrive (the forwarding tree, the default; Phase 5S T8s) |
 //! | [`evaluate`](Evaluator::evaluate) | all of the above stages, in order |
 //! | [`exchange_sources_and_upward_local`](Evaluator::exchange_sources_and_upward_local) | none: point-to-point requests |
 //! | [`far_field`](Evaluator::far_field) | one all-gather-v, with the multipole exchange's point-to-point requests in flight; point-to-point requests otherwise |
@@ -178,7 +178,8 @@ use mpi::{collective::SystemOperation, traits::CommunicatorCollectives};
 use nd_octree::constants::DEEPEST_LEVEL;
 
 use super::exchange::{
-    ExchangeError, ExchangeTimes, MultipoleExchange, ReductionExchange, SourceExchange, TopExchange,
+    ExchangeError, ExchangeTimes, MultipoleExchange, MultipoleRouting, ReductionExchange,
+    SourceExchange, TopExchange,
 };
 use super::operator::{FmmOperator, HostData, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, UpwardPass};
 use super::plan::Plan;
@@ -648,6 +649,39 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator, P: Borrow<Plan>> Evaluator
         source_counts: &[usize],
         target_counts: &[usize],
     ) -> Result<Self, EvaluatorError> {
+        let node = comm.rank() as usize;
+        Self::with_routing(
+            plan,
+            comm,
+            operator,
+            source_counts,
+            target_counts,
+            MultipoleRouting::default(),
+            node,
+        )
+    }
+
+    /// [`new`](Self::new) with the multipole exchange's `routing` (Phase 5S T8s), and
+    /// `node` identifying this rank's node for the forwarding tree: ranks with the same
+    /// `node` share a node (`nd-fmm-exec` passes the world rank of the node's first rank;
+    /// [`new`](Self::new) takes every rank as a node of its own and the default routing,
+    /// the tree with [`TREE_FAN_OUT`](super::exchange::TREE_FAN_OUT)).
+    ///
+    /// # Collective operation
+    /// As [`new`](Self::new).
+    ///
+    /// # Errors
+    /// As [`new`](Self::new), and on every rank if the ranks pass different routings or a
+    /// tree's fan-out is below 2.
+    pub fn with_routing(
+        plan: P,
+        comm: &'p C,
+        operator: Op,
+        source_counts: &[usize],
+        target_counts: &[usize],
+        routing: MultipoleRouting,
+        node: usize,
+    ) -> Result<Self, EvaluatorError> {
         let planned: &Plan = plan.borrow();
         let local = validate(planned, &operator, source_counts, target_counts);
         let mut valid = false;
@@ -671,6 +705,8 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator, P: Borrow<Plan>> Evaluator
             &multipole_sizes,
             &reduction_exchange,
             &top_exchange,
+            routing,
+            node,
         )
         .map_err(EvaluatorError::Exchange)?;
 
@@ -947,7 +983,8 @@ impl<'p, C: CommunicatorCollectives, Op: FmmOperator, P: Borrow<Plan>> Evaluator
     /// level.
     ///
     /// # Collective operation
-    /// One neighbour all-to-all per level, in level order; every rank must call it.
+    /// Per level, in level order, one neighbour all-to-all under
+    /// [`MultipoleRouting::Direct`], point-to-point messages under the forwarding tree; every rank must call it.
     pub fn exchange_multipoles(&mut self) {
         self.enter(Stage::ExchangeMultipoles);
         for level in 0..self.multipole_exchange.nlevels() {

@@ -83,6 +83,10 @@
 //!   M2M, M2L and L2L parts per rank and the time per V pair (Phase 5N T3);
 //! - `--cut work|points` the blocks cut again by the modelled cost of their work (`work`,
 //!   the library's default, `FmmBuilder::work_cut`; Phase 5S T7) or by points only;
+//! - `--routing direct|tree|treeF` how the multipole exchange routes the multipoles
+//!   (`FmmBuilder::multipole_routing`; Phase 5S T8s): along the forwarding tree with the
+//!   library's fan-out (`tree`, the default) or with fan-out F (`tree4`), or from each
+//!   owner to every reader (`direct`);
 //! - `--alpha a,a,a,a,a,a,a,a` the eight constants of the modelled cost in ns per counted
 //!   unit, P2M, M2M, M2L, P2L, L2L, L2P, M2P, P2P (`FmmBuilder::cost_model`; the library's
 //!   `CostModel::calibrated`, measured on Kathleen, if not given); with `--kinds` the
@@ -97,6 +101,7 @@ use mpi::Threading;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::Communicator;
 use nd_fmm_exec::cost::CostModel;
+use nd_fmm_exec::fmm::MultipoleRouting;
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::scaling::{HarnessError, Input, Overlap, Settings, Workload, invariance, run};
@@ -177,6 +182,16 @@ fn arguments() -> Arguments {
                     "work" => true,
                     "points" => false,
                     _ => fail(&format!("--cut: work or points, not {value}")),
+                };
+            }
+            "--routing" => {
+                s.routing = match value.as_str() {
+                    "direct" => MultipoleRouting::Direct,
+                    "tree" => MultipoleRouting::default(),
+                    tree => match tree.strip_prefix("tree").map(str::parse::<usize>) {
+                        Some(Ok(fan_out)) => MultipoleRouting::Tree { fan_out },
+                        _ => fail(&format!("--routing: direct, tree or treeF, not {value}")),
+                    },
                 };
             }
             "--alpha" => {

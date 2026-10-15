@@ -171,6 +171,14 @@ reproduces each rank's sum of kind times), `Report::recut` (`Fmm::recut`); the s
 contexts) and `ALPHA`. `tests/scaling.rs` covers them at 1 and 2 ranks. Its report is
 `results/phase5s-t7.md`.
 
+Phase 5S T8s (the forwarding tree, S8) added `Settings::routing` (`--routing
+direct|tree|treeF`, `FmmBuilder::multipole_routing`; the library's default tree with fan-out
+8, `treeF` another fan-out, `direct` the oracle), `TopTreeRow::{multipole_depth,
+multipole_forwarded}` and the summary's `routing`, `multipole_depth_max` and
+`multipole_forwarded_max` (`multipole_messages_sent_max` and `multipole_fan_out_max` count
+every stage of the tree), with two lines of the report and the routing in its header.
+Its report is `results/phase5s-t8s.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

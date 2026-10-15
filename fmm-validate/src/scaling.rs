@@ -107,8 +107,8 @@ use mpi::topology::{Color, SimpleCommunicator};
 use mpi::traits::{Communicator, CommunicatorCollectives, Destination, Equivalence, Root, Source};
 use nd_fmm_exec::cost::CostModel;
 use nd_fmm_exec::fmm::{
-    BuildTimings, ExchangeTraffic, Fmm, FmmBuilder, KindTiming, ListSizes, OperatorKind, Output,
-    StageTimings, Traffic,
+    BuildTimings, ExchangeTraffic, Fmm, FmmBuilder, KindTiming, ListSizes, MultipoleRouting,
+    OperatorKind, Output, StageTimings, TREE_FAN_OUT, Traffic,
 };
 use nd_fmm_exec::geometry::{contains, integer_centre};
 use nd_fmm_exec::operator::SimdScalar;
@@ -411,12 +411,15 @@ pub struct Settings {
     /// (`CostModel::calibrated`) if `None`; they weigh the second cut and give
     /// [`RankRow::modelled`].
     pub cost_model: Option<CostModel>,
+    /// How the multipole exchange routes the multipoles (`FmmBuilder::multipole_routing`,
+    /// Phase 5S T8s; the forwarding tree with `TREE_FAN_OUT`, as the library's default).
+    pub routing: MultipoleRouting,
 }
 
 impl Settings {
     /// Degree `p` on one thread, the default strategy, overlap off, the random share, one
     /// build, ten evaluations, no checks, no kind timings, the second cut on with the
-    /// library's constants.
+    /// library's constants, the multipoles along the default forwarding tree.
     pub const fn new(p: usize) -> Self {
         Self {
             p,
@@ -434,6 +437,9 @@ impl Settings {
             kinds: false,
             work_cut: true,
             cost_model: None,
+            routing: MultipoleRouting::Tree {
+                fan_out: TREE_FAN_OUT,
+            },
         }
     }
 }
@@ -765,8 +771,14 @@ pub struct TopTreeRow {
     /// level.
     pub multipole_off_node_messages: usize,
     /// The most ranks the multipole exchange sends one box's multipole to, on any level
-    /// (`ExchangeTraffic::multipole_fan_out`).
+    /// (`ExchangeTraffic::multipole_fan_out`), at any stage of the forwarding tree.
     pub multipole_fan_out: usize,
+    /// The stages of the multipole exchange this rank takes part in, the most over the
+    /// levels (`ExchangeTraffic::multipole_depth`; Phase 5S T8s).
+    pub multipole_depth: usize,
+    /// The chunks this rank forwards along the forwarding tree, over every level
+    /// (`ExchangeTraffic::multipole_forwarded`; Phase 5S T8s).
+    pub multipole_forwarded: usize,
     /// The readers a top-tree box needs to be in the replicated top
     /// (`ExchangeTraffic::top_threshold`): ⌈P/16⌉ (at least 2), or a higher power of two
     /// where more than 4,096 boxes reach it.
@@ -775,7 +787,7 @@ pub struct TopTreeRow {
 
 impl TopTreeRow {
     /// The number of values of [`encode`](Self::encode).
-    const VALUES: usize = 9 + 2 * TOP_TREE_LEVELS;
+    const VALUES: usize = 11 + 2 * TOP_TREE_LEVELS;
 
     fn encode(&self) -> Vec<f64> {
         let mut values = vec![
@@ -791,6 +803,7 @@ impl TopTreeRow {
         ];
         values.extend(self.reduction_messages);
         values.extend(self.reduction_values);
+        values.extend([self.multipole_depth, self.multipole_forwarded]);
         values.into_iter().map(|v| v as f64).collect()
     }
 
@@ -808,6 +821,8 @@ impl TopTreeRow {
             top_threshold: c(8),
             reduction_messages: core::array::from_fn(|l| c(9 + l)),
             reduction_values: core::array::from_fn(|l| c(9 + TOP_TREE_LEVELS + l)),
+            multipole_depth: c(9 + 2 * TOP_TREE_LEVELS),
+            multipole_forwarded: c(10 + 2 * TOP_TREE_LEVELS),
         }
     }
 }
@@ -1659,6 +1674,8 @@ fn top_tree_row<T: Stored + SimdScalar + Equivalence + Default>(
         phase5_coarse_received: (blocks - own) * n_c,
         multipole_neighbours: traffic.multipole_neighbours.len(),
         multipole_fan_out: traffic.multipole_fan_out,
+        multipole_depth: traffic.multipole_depth,
+        multipole_forwarded: traffic.multipole_forwarded,
         top_threshold: traffic.top_threshold,
         ..TopTreeRow::default()
     };
@@ -1667,6 +1684,15 @@ fn top_tree_row<T: Stored + SimdScalar + Equivalence + Default>(
         row.reduction_values[level] = t.values_received;
     }
     row
+}
+
+/// The name of `routing` in the summary and the report: `direct`, or `tree` with its
+/// fan-out (`tree8`).
+pub fn routing_name(routing: MultipoleRouting) -> String {
+    match routing {
+        MultipoleRouting::Direct => "direct".to_owned(),
+        MultipoleRouting::Tree { fan_out } => format!("tree{fan_out}"),
+    }
 }
 
 /// Fills `row`'s counts of the multipole exchange by node: the neighbours on other nodes,
@@ -1771,7 +1797,9 @@ fn builder<T: Stored + SimdScalar + Equivalence + Default>(settings: &Settings) 
     if let Some(bytes) = settings.dense_node_budget {
         builder = builder.dense_node_budget(bytes);
     }
-    builder = builder.work_cut(settings.work_cut);
+    builder = builder
+        .work_cut(settings.work_cut)
+        .multipole_routing(settings.routing);
     if let Some(model) = settings.cost_model {
         builder = builder.cost_model(model);
     }
@@ -2770,6 +2798,7 @@ impl Report {
                     }
                 ));
                 fields.push(format!("recut={}", if self.recut { "yes" } else { "no" }));
+                fields.push(format!("routing={}", routing_name(self.settings.routing)));
                 fields.push(format!(
                     "modelled_max_ms={}",
                     ms(max(&|r: &RankRow| r.modelled))
@@ -2898,6 +2927,12 @@ impl Report {
                     top("multipole_fan_out_max", &|r| {
                         r.top_tree.multipole_fan_out as f64
                     }),
+                    top("multipole_depth_max", &|r| {
+                        r.top_tree.multipole_depth as f64
+                    }),
+                    top("multipole_forwarded_max", &|r| {
+                        r.top_tree.multipole_forwarded as f64
+                    }),
                     top("top_threshold", &|r| r.top_tree.top_threshold as f64),
                 ]);
                 fields.push(format!(
@@ -3018,6 +3053,11 @@ impl fmt::Display for Report {
                 "the second cut gained less than 2 % and kept the cut by points"
             },
             self.cost_model
+        )?;
+        writeln!(
+            f,
+            "- the multipole exchange: {} (Phase 5S T8s)",
+            routing_name(s.routing)
         )?;
         writeln!(f)?;
 
@@ -3275,6 +3315,18 @@ impl fmt::Display for Report {
             f,
             "multipole exchange: most ranks one box is sent to",
             &|r| r.top_tree.multipole_fan_out as f64,
+            &count,
+        )?;
+        line(
+            f,
+            "multipole exchange: stages (the forwarding tree's depth)",
+            &|r| r.top_tree.multipole_depth as f64,
+            &count,
+        )?;
+        line(
+            f,
+            "multipole exchange: chunks forwarded (all levels)",
+            &|r| r.top_tree.multipole_forwarded as f64,
             &count,
         )?;
         line(

@@ -251,6 +251,16 @@
 //!   P2L, L2L, which the sharers of a `Global` box each compute), with the cut on and
 //!   off. Rank 0 prints the modelled cost's max over mean, first cut against second. On
 //!   one rank, where the cut does nothing, the scenario says so and stops.
+//! - **multipole routing** (Phase 5S T8s, S8; fmm-validate/results/phase5s-t8s.md §1;
+//!   `FmmBuilder::multipole_routing`, the forwarding tree by default, so every other
+//!   scenario runs it too): a Plummer sphere, N = 3,000, p = 5 `Rotation`, 16 points per
+//!   leaf, built with the tree at its narrowest (fan-out 2, so that a box with three
+//!   readers or more is forwarded at 4–8 ranks), the default tree and the direct exchange.
+//!   Each is bit for bit its one-rank reference and the others, blocking and overlapped;
+//!   the shadow check runs on the narrow tree in both paths. `Fmm::exchange_traffic`
+//!   reports no box sent to more ranks than the fan-out and, on 4 to 8 ranks, chunks
+//!   forwarded by the narrow tree; the direct exchange forwards none. Rank 0 prints the
+//!   busiest sender's messages and the depth of each.
 //! - **tiny problem**: three points, one per rank on the first three, default settings:
 //!   one coarse block, so on more than one rank every rank but the root's owner has no
 //!   leaf (O4; no error, no hang); P2P alone, equal to the direct sum to 1e-14. It also
@@ -339,8 +349,8 @@ use mpi::datatype::PartitionMut;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
 use nd_fmm_exec::fmm::{
-    Backend, Fmm, FmmBuilder, FmmError, KindTiming, OperatorKind, Output, OutputPass, Placement,
-    PointSet, SettingsError,
+    Backend, Fmm, FmmBuilder, FmmError, KindTiming, MultipoleRouting, OperatorKind, Output,
+    OutputPass, Placement, PointSet, SettingsError,
 };
 use nd_fmm_exec::geometry::{Domain, GeometryError, leaf_coordinates, radius};
 use nd_fmm_exec::operator::{Isa, LaplaceOperator, P2pChoice, SimdScalar};
@@ -471,7 +481,7 @@ fn distributed_scenarios() {
         "the threaded scenarios need MPI at Funneled, it provides {provided:?}"
     );
     let comm = universe.world();
-    let cases: [(&str, Scenario); 26] = [
+    let cases: [(&str, Scenario); 27] = [
         ("table order against the plan", table_order),
         ("batched against per-pair", batched_against_per_pair),
         ("uniform cube, every strategy", uniform_cube_strategies),
@@ -498,6 +508,7 @@ fn distributed_scenarios() {
         ("device errors and tuning on several ranks", device_ranks),
         ("input distributions", input_distributions),
         ("work-weighted cut", work_weighted_cut),
+        ("multipole routing", multipole_routing),
         ("tiny problem", tiny_problem),
         ("host-data hook", host_data_hook),
         ("the strategy rule on the node", strategy_on_the_node),
@@ -3182,6 +3193,80 @@ fn relative_max<T: RealScalar>(a: &[T], b: &[T]) -> f64 {
         size = size.max(y.abs());
     }
     difference / size.max(f64::MIN_POSITIVE)
+}
+
+/// **multipole routing** (Phase 5S T8s): the forwarding tree, narrow and default, against
+/// the direct exchange, bit for bit (module docs).
+fn multipole_routing(comm: &SimpleCommunicator) {
+    let (rank, size) = (comm.rank(), comm.size());
+    let mut rng = SplitMix64(0x7a5e);
+    let points = plummer_points(&mut rng, 3000, [0.5, 0.5, 0.5], 0.1);
+    let charges = random_charges(&mut rng, points.len());
+    let (local, local_charges) = (share(&points, comm), share(&charges, comm));
+    let builder = FmmBuilder::<f64>::new(5)
+        .strategy(M2lStrategy::Rotation)
+        .max_points_per_leaf(16);
+    let mut outputs = Vec::new();
+    let mut lines = Vec::new();
+    for routing in [
+        MultipoleRouting::Tree { fan_out: 2 },
+        MultipoleRouting::default(),
+        MultipoleRouting::Direct,
+    ] {
+        let builder = builder.clone().multipole_routing(routing);
+        let (fmm, output) =
+            evaluate_threaded(&builder, (&local, &local), &local_charges, &[], comm)
+                .expect("the FMM builds");
+        assert_eq!(fmm.multipole_routing(), routing, "rank {rank}");
+        let traffic = fmm.exchange_traffic();
+        match routing {
+            MultipoleRouting::Tree { fan_out } => assert!(
+                traffic.multipole_fan_out <= fan_out,
+                "rank {rank}: {routing:?} sends a box to {} ranks",
+                traffic.multipole_fan_out
+            ),
+            MultipoleRouting::Direct => assert_eq!(traffic.multipole_forwarded, 0),
+        }
+        if routing == (MultipoleRouting::Tree { fan_out: 2 }) {
+            check_shadow(
+                (&local, &local),
+                &[(&local_charges, &output)],
+                &fmm,
+                &[false, true],
+                comm,
+            );
+        }
+        let sent: usize = traffic.multipoles.iter().map(|t| t.messages_sent).sum();
+        let mut busiest = [0usize; 2];
+        comm.all_reduce_into(
+            &[sent, traffic.multipole_depth][..],
+            &mut busiest[..],
+            SystemOperation::max(),
+        );
+        let forwarded = global_sum(traffic.multipole_forwarded, comm);
+        // From 4 ranks some box has three readers or more; at many ranks the 3,000 points
+        // leave too few per rank for a box below R to (80 ranks on Kathleen: none).
+        if routing == (MultipoleRouting::Tree { fan_out: 2 }) && (4..=8).contains(&size) {
+            assert!(
+                forwarded > 0,
+                "rank {rank}: the narrow tree forwarded nothing"
+            );
+        }
+        lines.push(format!(
+            "{routing:?}: busiest sender {} messages, depth {}, {forwarded} chunks forwarded",
+            busiest[0], busiest[1]
+        ));
+        outputs.push(output_bits(&output));
+    }
+    assert!(
+        outputs.windows(2).all(|pair| pair[0] == pair[1]),
+        "rank {rank}: the routings give different outputs"
+    );
+    if rank == 0 {
+        for line in lines {
+            eprintln!("rank 0: multipole routing on {size} ranks: {line}");
+        }
+    }
 }
 
 /// Three points on any number of ranks: one coarse block, the root, so every rank but its
