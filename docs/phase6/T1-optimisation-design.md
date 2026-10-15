@@ -15,7 +15,8 @@ on 2026-10-15** (decision 7 of docs/phase5s/README.md):
   Kathleen ranks the communication is 0.2–1.1 % of an evaluation at f64 p = 8; the leaves
   (mostly P2P) take 42–79 % of an evaluation at p = 3 and the downward pass (mostly M2L)
   67–92 % at p = 8; the mean compute per point at f64 p = 8 (Rotation) is 45–52 µs on the
-  Plummer sphere and the clusters at 10⁴–10⁶ points per rank. At f64 p = 8 40 ranks × 1
+  Plummer sphere at 10⁴–10⁶ points per rank (the cube 21–23 µs above 10⁴ points per rank;
+  the clusters not stated; corrected by T1). At f64 p = 8 40 ranks × 1
   thread per node is now 2–10 % faster than 2 × 20 (with the cut by work); at f32 p = 8
   2 × 20 with Dense is 1.14–1.28× faster than 40 × 1 with Rotation.
 - New: **C6.9**, M2P and P2L only where they pay (README, "What is missing"), with its own

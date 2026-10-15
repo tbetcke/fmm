@@ -1,5 +1,12 @@
 # Phase 6 / T3 — SVD-compressed M2L on the host (C6.2, host)
 
+**Dropped at T1's sign-off (2026-10-15; decision 3 of docs/phase6/README.md).** T1 measured
+the tables' singular values (docs/design/optimisation.md §3): per-offset compression saves
+no flops at p ≤ 8 at a tolerance below the FMM's error, 0.53× and 0.31× of the dense
+flops at p = 12 and 18, and bases shared across the offsets do not compress; the user
+judged it barely worth it and dropped C6.2 for now. This brief is kept as the record and is
+not to be run; optimisation.md §3 holds the design for a later phase.
+
 Dense M2L tables grow as (p + 1)⁴: 16.6 MB for the 316 offsets at p = 8 in f64, about
 400 MB at p = 19 (laplace-fmm-plan §9.1, "Dense M2L memory at high p"). Each 316-table
 set has low numerical rank for the far offsets: a truncated SVD per offset, U Σ Vᵀ with k

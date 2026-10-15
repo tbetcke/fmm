@@ -11,6 +11,13 @@ problems at matched accuracy on one node, and reports, as
 7 of docs/phase5s/README.md): no change of premise; Kathleen is usable (Phase 5N decision 0)
 at up to 4 nodes per job, so its runs here are not conditional.
 
+**Revised after T1's sign-off (2026-10-15; docs/design/optimisation.md §8.1, decision 5).**
+A pinned FMM3D release built with gfortran and OpenMP outside the repository; the driver a
+small Fortran program on FMM3D's sources-only charge-and-gradient interface (names checked
+against the pinned release); Kathleen the gate machine, the M3 Max the second (Homebrew
+gfortran, GCC 16); FMM3D's 1/r divided by 4π before the comparison, checked on a two-point
+problem first. Our side is T2's best host configuration (`Batched`, without and with FMA).
+
 Read first:
 - root CLAUDE.md ("New dependencies ... only through [workspace.dependencies]": FMM3D is
   not one), fmm-bench/CLAUDE.md, fmm-validate/CLAUDE.md;

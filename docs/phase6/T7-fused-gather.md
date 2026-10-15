@@ -20,6 +20,12 @@ expected gains.
 7 of docs/phase5s/README.md): no change of premise; Kathleen is usable (Phase 5N decision 0)
 at up to 4 nodes per job, so its runs here are not conditional.
 
+**Revised after T1's sign-off (2026-10-15; docs/design/optimisation.md §6).** In scope,
+each adopted only by measurement: the fused gather (≤ 6 % of a CUDA evaluation at f32
+p = 8 by its share), `Accumulate::Rows` by chunk (bit for bit; modelled −30 % of the M2L at
+N = 10⁷, f64 p = 18), the shared-memory-tiled GEMM as a candidate (0–20 % of the GEMM at
+p ≥ 8 from the spike), and L2P at high p only if simple (≤ 5 % of an evaluation).
+
 Read first:
 - root CLAUDE.md, fmm-kernels/CLAUDE.md, fmm-exec/CLAUDE.md;
 - docs/design/optimisation.md §6;

@@ -15,6 +15,14 @@ source-type interface and dipoles through the whole path, as `docs/design/optimi
 7 of docs/phase5s/README.md): no change of premise; Kathleen is usable (Phase 5N decision 0)
 at up to 4 nodes per job, so its runs here are not conditional.
 
+**Revised after T1's sign-off (2026-10-15; docs/design/optimisation.md §7).** The source
+type fixed at build (`SourceType::{Charges, Dipoles, ChargesAndDipoles}`, `FmmBuilder::
+sources`), `Fmm::evaluate_sources` with a `Sources` value, `evaluate(charges)` and its bits
+unchanged; the dipole moments in the source leaf's scaled units; the CONVENTIONS text
+proposed in this task's PR before code that depends on it; on the device the dipole kinds
+on the host fallback first, device kernels only if the fallback costs more than 20 % of a
+device evaluation.
+
 Read first:
 - root CLAUDE.md ("CONVENTIONS.md wins"; convention changes are proposed in the PR, never
   made in code), docs/CONVENTIONS.md (the solid harmonics, the expansions, scaling: §3.x),

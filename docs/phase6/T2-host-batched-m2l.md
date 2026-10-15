@@ -28,10 +28,21 @@ are not conditional, and 40 × 1 per node is the configuration to beat at f64 p 
 faster than 2 × 20 with Phase 5S's cut by work). T1's design overrides any detail here
 that it settles differently.
 
+**Revised after T1's sign-off (2026-10-15; docs/design/optimisation.md §2, §10).** Decided:
+no host BLAS; the strategy `M2lStrategy::Batched`; the order-preserving kernel (offsets in
+index order, products accumulated into each target's own local, no FMA), which is bit for
+bit the target-by-target `Dense`, in `nd-fmm-simd` behind its run-time ISA dispatch; an
+**opt-in FMA mode** of the same kernel; M2M, L2L and Classes unchanged. T1 measured the
+kernel at 6.7–15× today's Dense per pair with one rank per core and faster than Rotation
+at f64 p = 8 on every machine (optimisation.md §2.6), and modelled the evaluation at f64
+p = 8 at 1.13× (locust) to 2.07× (Kathleen) today's best strategy (§2.10).
+
 Read first:
-- root CLAUDE.md, fmm-exec/CLAUDE.md, fmm-tables/CLAUDE.md;
+- root CLAUDE.md, fmm-exec/CLAUDE.md, fmm-tables/CLAUDE.md, fmm-simd/CLAUDE.md;
 - docs/phase6/README.md ("Requirements", "Design decisions": BLAS inside rayon);
-- docs/design/optimisation.md §1, §2 and the signed-off answers to decision 2;
+- docs/design/optimisation.md §1, §2 (the design: §2.2 layout, §2.3 order, §2.4 threads,
+  §2.5 scratch, §2.11 the kernel's place) and §10 (the sign-off);
+- docs/design/simd-p2p.md §5.2–§5.4 (detection, dispatch, `unsafe`);
 - docs/phase3/README.md, "Threads and BLAS"; docs/design/laplace-fmm-plan.md §3.6, §6.8;
 - docs/design/device-path.md §6.4 (the dense M2L launch structure and its order);
 - docs/design/fmm-plan-redesign.md §4.3 (the V grouping: `batch_targets`,
@@ -39,28 +50,31 @@ Read first:
 - docs/design/node-m2l.md (Phase 5N: the strategy rule per node);
 - the code: `nd_fmm_exec::operator` (`LaplaceOperator::m2l`, `m2l_target`, `Execution`,
   the per-thread `Scratch`), `nd_fmm_exec::tables` (`Tables`, `M2lStrategy`),
-  `nd_fmm_tables::{MatrixSet, M2lTables}`, and for comparison `nd_fmm_kernels::translate`
-  (`grouped`, `Accumulate`, `TileSchedule`).
+  `nd_fmm_tables::{MatrixSet, M2lTables}` (`MatrixSet::apply`: the chain to keep),
+  `nd_fmm_simd::{isa, kernel, arch}` (the dispatch the kernel joins), and for comparison
+  `nd_fmm_kernels::translate` (`grouped`, `Accumulate`, `TileSchedule`).
 
 Do:
-- **The batched M2L level call** on the host, as T1 designed it: a new way to apply the
-  dense tables, chosen by a strategy value (for example `M2lStrategy::Batched`, or a mode
-  of `Dense`; T1 names it). Per level:
-  - offsets in index order, in chunks whose gathered columns and products fit a scratch
-    budget per thread (T1's formula; default stated and measured);
-  - for each offset of a chunk, the source multipoles of its pairs gathered into a
-    column block, one product with the offset's table (BLAS through rlst, single-threaded
-    inside rayon, or the hand-written kernel; decision 2), the products added into each
-    target's local in the order the target-by-target path adds them;
-  - rayon splits the work so that every target's local is written by one thread at a
-    time and meets its offsets in index order, so the output is bit-identical for every
-    thread count (requirement 2). If T1's design changes the order of the additions,
-    implement its documented order and test its bound instead of bit identity against the
-    target-by-target path; bit identity across thread counts still holds.
-  - nothing allocated per pair or per call beyond the scratch sets, as today.
-- **M2M and L2L** in the same form if T1 found it pays (decision 2); otherwise unchanged.
-- **Classes** through the batched form if T1 recommends it (the class matrices with the
-  coefficient transforms around the product), else unchanged.
+- **The kernel** in `nd-fmm-simd` (optimisation.md §2.11): a safe public function that adds
+  A · B[:, b_j] into C[:, c_j] for lists of column offsets, every element as
+  `MatrixSet::apply` (k ascending, the product and the sum rounded apart), the NB source
+  columns packed k-major, an MR × NB block of the targets in registers across k; bodies in
+  `arch::{scalar, neon, avx2}` (the AVX-512 body comes with T6), `unsafe` only in `arch` and
+  the dispatch, every block with `// SAFETY:`; and the **FMA mode** (`fma(a, b, acc)`, k
+  ascending; `mul_add` on the scalar body, so every ISA gives the same bits).
+- **The batched M2L level call** in `nd-fmm-exec`, `M2lStrategy::Batched` (the dense tables
+  of `Dense`; on the device it runs as `Dense` and is reported so), per level:
+  - rayon over blocks of B consecutive targets (fixed, not from the thread count; 64
+    proposed, measured), `par_chunks_mut` on the level's locals;
+  - per block, the offsets in index order, the block's pairs of each offset found in
+    `batch(d)` (binary searches, or ranges per (block, offset) precomputed when the level is
+    first seen), the kernel reading the multipoles and the locals in place (no gathered
+    copy of the level);
+  - nothing allocated per pair or per call: the packing buffer and the index lists are
+    per-thread scratch made at construction (optimisation.md §2.5);
+  - the ISA from the `Fmm`'s P2P choice (`P2pChoice`), the mode (no FMA by default, FMA
+    opt-in) from the strategy or a builder setting that T2 names and documents.
+- **M2M, L2L and Classes** unchanged (≤ 1.2 % of an evaluation; optimisation.md §2.7, §2.8).
 - **The strategy rule**: `Auto` unchanged in this task (Phase 5N T4's rule:
   `M2lStrategy::resolve_on_node`, Dense while the dense tables of a rank and of a node are
   small, Rotation otherwise; docs/design/node-m2l.md). Report how the batched M2L compares
@@ -80,24 +94,29 @@ Do:
   - the downward pass's total over the ranks against one rank, as in Phase 5 T10's
     "Stages against ranks" table: the criterion is that it no longer grows with the
     ranks per node the way Dense does;
-  - achieved GFLOP/s of the products, and the scratch per thread.
-  Report in the PR and as a section of `fmm-validate/results/` (T1 names the file, for
-  example `phase6-m2l.md`).
+  - achieved GFLOP/s of the products, the scratch per thread, the block size B, and the
+    FMA mode beside the default at the same cells;
+  - Kathleen with the kernel's AVX2 body (T1's native-build figures are the model to
+    check).
+  Report in the PR and in `fmm-validate/results/phase6-m2l.md`.
 
 Tests that define done:
 - The batched M2L against the target-by-target `Dense` on every `tests/mpi_exec.rs`
-  scenario at 1, 2 and 4 ranks: bit for bit if the order is kept, otherwise within T1's
-  bound (and requirement 1 against the direct sum).
+  scenario at 1, 2 and 4 ranks, bit for bit; the FMA mode within its bound (relative
+  ≲ n u per element, optimisation.md §2.3; requirement 1's 1e-12 / 1e-5 against `Dense`)
+  and bit-identical across thread counts and rank counts.
+- The kernel of every available ISA against its scalar body bit for bit, in both modes,
+  at p = 0–20 and column counts 1–64 (`nd-fmm-simd` tests; the AVX2 body on CI's x86_64
+  runner, NEON on the M3 Max and the arm64 runner).
 - Bit-identical across 1, 2, 4 and 8 threads, and across two evaluations and two builds.
 - The multi-rank guarantees of Phase 5 (README requirement 3): the C5.1 host gate
   (`tests/multi_rank.rs`) with the new strategy at 2, 4 and 8 ranks.
 - f32 and f64 at p = 3, 8 and 18 against the direct sum within the Phase 3 bounds.
-- If BLAS is used: a test that runs the same level call with BLAS and with the
-  hand-written fallback (or two BLAS thread settings in a subprocess) and compares bits,
-  or states the bound.
 
 Must pass:
 - `cargo fmt --all`, the root checks and the stricter workspace checks;
+- the `nd-fmm-simd` checks of the root CLAUDE.md, including the other architecture's
+  clippy (`--target x86_64-apple-darwin` on the M3 Max);
 - `RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec`, and `.github/scripts/run-mpi-tests.sh`
   at 2 and 4 ranks;
 - the ignored release gates of `nd-fmm-exec` at 1 rank on the M3 Max, and the C5.1 host
@@ -106,7 +125,6 @@ Must pass:
 
 Do not:
 - change the default strategy or any default output (README requirement 6; T11 decides);
-- call a multi-threaded BLAS inside a rayon worker, or set thread variables from the
-  library;
-- add a dependency (BLAS goes through rlst or a hand-written kernel);
+- call BLAS on the host, or set thread variables from the library (decision 2);
+- add a dependency, or `unsafe` outside `nd-fmm-simd`'s `arch` and dispatch;
 - assert a timing.

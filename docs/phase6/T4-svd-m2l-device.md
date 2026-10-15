@@ -1,5 +1,12 @@
 # Phase 6 / T4 — SVD-compressed M2L on the device (C6.2, device)
 
+**Dropped at T1's sign-off (2026-10-15; decision 3 of docs/phase6/README.md).** T1 measured
+the tables' singular values (docs/design/optimisation.md §3): per-offset compression saves
+no flops at p ≤ 8 at a tolerance below the FMM's error, 0.53× and 0.31× of the dense
+flops at p = 12 and 18, and bases shared across the offsets do not compress; the user
+judged it barely worth it and dropped C6.2 for now. This brief is kept as the record and is
+not to be run; optimisation.md §3 holds the design for a later phase.
+
 T3 compresses the M2L tables and applies them on the host. On the device the dense M2L is
 gathered GEMMs per level (device-path.md §6.4), with the tables uploaded once per `Fmm`;
 at high p their size limits what fits beside large particle sets (laplace-fmm-plan §9.1;

@@ -9,14 +9,15 @@ updated. The defaults in question:
   (`FmmBuilder::dense_node_budget`, 64 MB by default; the harness 56 MB on the M3 Max, 96 MB
   on locust and Kathleen), Rotation otherwise: Rotation at f64 p = 8, Dense at f64 p = 3
   and at f32 p = 8 with few ranks per node (docs/design/node-m2l.md §4 and its outcome
-  section). With the batched host M2L (C6.6) and compressed M2L (C6.2) the rule changes
+  section). With the batched host M2L (C6.6) and its FMA mode the rule changes
   again;
 - **the leaf size per p**: open since Phase 3S T7 ("the best leaf size depends on p ...
   64 at p = 3, 256 at p = 8"), confirmed on Metal (Phase 4 T13) and CUDA (Phase 4S T8),
   "still open for every backend" (laplace-fmm-plan §9.2);
 - **the P2P ISA** on AVX-512 machines (C6.7, decision 4);
 - **the device strategies and layouts** after C6.1;
-- whether compressed M2L (decision 3) or several right-hand sides change any default.
+- whether the FMA mode of the batched M2L, C6.9's near rule (T12) or several right-hand
+  sides change any default.
 
 **Revision note.** Written on 2026-10-10; **revised by Phase 5S T9 on 2026-10-15** (decision
 7 of docs/phase5s/README.md):
@@ -30,6 +31,10 @@ updated. The defaults in question:
   at f32 p = 3 they underweight P2P), C6.9's default, and overlap's default (off; Phase 5S T9
   found it neutral with one thread per rank and intermittently up to 4.4 % slower with 20,
   `phase5s-kathleen.md` §7: a longer A/B with `PSM2_RCVTHREAD=0` first).
+
+**Revised after T1's sign-off (2026-10-15; docs/design/optimisation.md §10).** SVD
+compression (C6.2, T3 and T4) was dropped; the batched M2L has an opt-in FMA mode (T2) and
+C6.9 an opt-in near rule (T12), whose defaults this task revisits with the rest.
 
 Read first:
 - root CLAUDE.md; docs/phase6/README.md ("Requirements" 5 and 6, "Decisions to sign off"
@@ -48,7 +53,7 @@ Do:
     AVX2 and AVX-512), with
     `nd-fmm-bench` and the `scaling` harness: the C3.2 cube and the C3.3 Plummer sphere,
     N = 10⁶ and 10⁷, f64 p = 3, 6, 8, 12, 18 and f32 p = 3, 6, 8; every M2L strategy
-    including the batched and compressed ones; ranks per node and threads per rank as
+    including the batched one (with and without FMA); ranks per node and threads per rank as
     Phase 5N's rule recommends and at its extremes;
   - Kathleen across nodes, if usable: the strong and weak scaling runs of Phase 5S T9
     repeated with the new defaults at 1, 2 and 4 nodes — **never more than 4 nodes (160
@@ -64,7 +69,7 @@ Do:
   in the format of phase4-m3max.md), every figure labelled measured (machine, ranks ×
   threads, build) or model.
 - **Design documents**:
-  - laplace-fmm-plan.md: the revision note; §4 (the strategy comparison with C6.2, C6.5,
+  - laplace-fmm-plan.md: the revision note; §4 (the strategy comparison with C6.2 dropped, C6.5,
     C6.6); §6 (CubeCL facts that changed); §7 (Phase 6 status per component, the
     benchmark tables, a "Recommendation" for what follows); §8.3; §9.1 and §9.2;
   - simd-p2p.md §4.7 (AVX-512 as built and measured);
