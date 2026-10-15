@@ -360,7 +360,7 @@ In the repository root, start `claude` and say:
 
 ## Exit checklist
 - [x] Briefs revised by Phase 5S T9 (2026-10-15; decision 7 of docs/phase5s/README.md)
-- [ ] T1 merged: `docs/design/optimisation.md` drafted, sign-off questions listed
+- [x] T1 merged: `docs/design/optimisation.md` drafted, sign-off questions listed
 - [x] Optimisation design signed off (decisions 1–5, 2026-10-15; C6.2 dropped, C6.9 in T12)
 - [ ] T2 merged: host batched M2L, deterministic, measured on the three machines (C6.6)
 - [x] T3, T4 (C6.2, SVD-compressed M2L): dropped at T1's sign-off, 2026-10-15
