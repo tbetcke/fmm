@@ -326,6 +326,13 @@ on every rank. The plan checks this at construction. The public docs of
 `OctreeOptions::with_ghost_children` do not state it; Section 12, question 6 proposes
 that they do.
 
+> **Replaced in Phase 5S** (T3, T4; [scale-out.md](scale-out.md) §3, §13): no rank holds
+> another rank's blocks any more. A rank holds its locally essential set H, and decision 6
+> ("every coarse block held") is replaced by the held-key check: every key a list, the halo
+> or a parent-child step names is held, checked by `Plan::new` and failing on every rank
+> (fmm-plan/CLAUDE.md, "The interaction lists"). `OctreeOptions::with_ghost_children` stays,
+> without block replication.
+
 ### 3.6 Construction and validation
 
 ```rust
@@ -803,6 +810,16 @@ No collective sits in a branch that only some ranks take: the level loops run ov
 global nlevels, and validation is agreed before any communicator is built. Compared with
 today, `upward_global` drops the per-evaluation key gather, and `Evaluator::new`
 computes the global level count once (in `Plan::new`) instead of three times.
+
+> **Changed in Phase 5S** ([scale-out.md](scale-out.md) §8.1, the table of every collective;
+> §13): the coarse-key gather and the all-gather of coarse multipoles are gone.
+> `upward_global` runs the order-preserving reduction to the owners (one neighbour exchange per
+> level) and one all-gather-v of the replicated top R of fixed size; the multipole exchange
+> runs point to point along the forwarding tree (T8s; the per-level neighbour all-to-all only
+> under `MultipoleRouting::Direct`); `Evaluator::new` adds the reduction's builds and R's
+> all-reduce, all-gather and all-gather-v, and the tree's two sparse exchanges. §7.4's "every
+> rank computes every `Global` box" no longer holds: a `Global` box's global M2M row is on its
+> owner only.
 
 ### 7.4 Global coarse levels
 

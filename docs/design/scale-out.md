@@ -2,7 +2,9 @@
 
 Phase 5S, task T1 (docs/phase5s/T1-scale-out-design.md). Drafted on 2026-10-11 for
 sign-off by hand before T3. **Signed off on 2026-10-11: every recommendation of §12
-accepted** (questions 1–11; docs/phase5s/README.md, decisions 0–6). It answers "Requirements on the scale-out" of
+accepted** (questions 1–11; docs/phase5s/README.md, decisions 0–6). **Outcome (T9,
+2026-10-15): §13** records the decisions as taken in T2–T9 and the measured numbers
+that replace the models. It answers "Requirements on the scale-out" of
 docs/phase5s/README.md and settles the decisions that change code in T2–T9: what a rank
 holds of the top of the tree (S1), who forms each top-tree multipole and how it reaches
 the ranks that read it (S2), how results are checked where no one-rank run fits (S7),
@@ -1370,6 +1372,64 @@ model (§10.2) with α_e and β_e at the stated alternatives.
 | 9 | The time model beyond 160 ranks | §10.2, with Kathleen's measured α_e, β_e and β_g (§10.3) and the README's 1–2 µs and 10–100 Gbit/s beside them; every figure *model*, the open effects listed |
 | 10 | (new) Decision 0, 4 nodes in practice | The phase runs at 4 nodes as planned (T0's S0.12): of T1's four 4-node jobs two waited 2 s, one 33 minutes (Sunday evening), and one, submitted 20 s after that one, started when it ended; 10.4 node-hours in all (Appendix A) |
 | 11 | (new) Oversubscription on Kathleen | **640 ranks (160 per node) is Kathleen's ceiling**, over PSM2 with shared contexts; 1,280 did not start (§10.1). The briefs' 1,280 on Kathleen (T2–T9) amended to 640 and the invariance at scale to 640 against 80 (done at the user's request); locust's 512 remains the largest count elsewhere |
+
+## 13. Outcome: decisions as taken and measured numbers (Phase 5S, T2–T9)
+
+Written at the end of Phase 5S (T9, 2026-10-15), as distributed-fmm.md §15 does for
+Phase 5. The sections above stay as signed off; this one records what T2–T8s built where
+it differs from them, the measured numbers that replace this document's models, and what
+is left. Every number is *measured* (the machine, nodes, ranks × threads and job named in
+the reports) or marked *model*; oversubscribed runs are counted, never timed. The reports:
+`fmm-validate/results/phase5s-t2.md` … `phase5s-t8s.md` (one per task) and
+`fmm-validate/results/phase5s-kathleen.md` (T9, the scaling report).
+
+### 13.1 Decisions as taken
+
+| Package (section) | As designed and signed off | As taken |
+| --- | --- | --- |
+| S7, validation at scale (§5, T2) | P against P/k bit for bit, by index, never gathered; the harness at N ≥ 10⁸ without a one-rank reference | as designed (`tests/invariance.rs` in CI at 1, 2, 4; `scaling --invariance`); 0 values differ at every pair run in every task since T2, last in T9: 80 against 40/20/10, 160 against 80/40/20 and 640 against 80 on Kathleen, 512 against 64 on locust, both paths |
+| S4, key routing (§7.1, T3a) | the sample sorts of `Octree::new` replaced by routing | as designed; the octree key for key Phase 5's; `Octree::new` 1.8–2.4× faster than rlst 0.10.0's balanced `parsort` at 160 ranks (and 11–38× rlst 0.9.0's); closed by T8 (no trigger left) |
+| S1, the locally essential set (§3, T3, T4) | H = N(S) ∪ C(N(S)) from the partition map and one push; `Plan::new` over H | as designed; the held boxes are H exactly (brute force in `mpi_regressions`); 14 collectives of `Octree::new` become 7 |
+| S2, the owned top tree (§4, T5, T6) | the order-preserving reduction to the owners; R by readers (at least max(2, ⌈P/16⌉), at most 4,096 boxes); the coarse gather removed; three events; the device's 2 + r_s syncs | as designed; every top-tree multipole bit for bit the one-rank value; the device follows it (CPU runtime, Metal, CUDA) |
+| S3, the work-weighted cut (§6, T7) | the plan's counts per block weighed by per-kind constants, a second cut after `Plan::new`, on by default; target ≤ 1.10 (with blocks refined by cost) or ≤ 1.12 | the cut by `Octree::repartition` with the 2 % gain rule (decision 3, revisited 2026-10-13), without refinement by cost; target accepted as measured, 1.02–1.12 (one row 1.124) |
+| S5, the O(P) collectives (§7.2, T8, T8r, T8q) | point-to-point redistribution on the build's routes; non-blocking consensus only if the build's all-to-alls exceed a quarter of a modelled build at 10⁴ | the evaluation part built on rlst 0.10.1's `SparseRoutes` (T8r, upstream); the build's all-to-alls replaced by rlst's sparse exchanges (T8, rlst 0.10.2 with a rotated send order, T8q) |
+| S8, the fan-out below R (§7.3, T8s) | added by T5 as a trigger; built as its own task | the forwarding tree, F = 8, heads by priority, the first hops split across nodes (`MultipoleRouting::Tree`, the default; `Direct` the oracle) |
+| the exposed collectives (T9, from T8s) | measure the all-gather of R; a two-level gather and overlap on by default if the sign-off accepts | measured (phase5s-kathleen.md §1): Open MPI's flat all-gather-v the fastest variant within 4 nodes; **no remedy built** (signed off 2026-10-15), the refitted model and the hierarchical design recorded; **overlap left off by default** (the sweeps did not confirm it, §7 there); the blocking tree's improvement not built |
+| the transport (T0, T8) | not designed | `PSM2_TID=0` (wrong data through PSM2's TID path, T0) and `PSM2_ERRCHK_TIMEOUT=10:40:2` (160 ms stalls on lost packets at 4 nodes, T8) in `tools/kathleen/env.sh` |
+
+### 13.2 Measured numbers against the models
+
+| Quantity (section) | Model or Phase 5's figure | Measured in Phase 5S |
+| --- | --- | --- |
+| held boxes per rank at fixed N/P (§3.1, §8.2) | H bounded, at most 2× its 40-rank value; Phase 5: 37,449 (every box) at 512 ranks | H 1,401–8,425 at 128–640 ranks (2.5 × 10⁴ points per rank and N = 10⁶–10⁷), at most 1.96× the 40-rank value (T3, T4); 1,457 at 512 ranks on Phase 5 T10's own case |
+| the replicated top per evaluation (§4.3) | R ≤ 4,096 boxes, ≤ 2.65 MB, about 2 ms at any P (log₂ P α_e + |R| n_c s / β_g, §10.2) | R 1.25–2.56 MB at 128–640 ranks against Phase 5's coarse gather of 9.4–12.0 MB at 512 (21.2 MB at 640); the all-gather-v at R's cap 0.22 ms (0.26 MB) and 1.74 ms (2.65 MB) at 160 ranks, but **growing linearly**: 0.62 and 2.06 µs per rank (neighbour exchange, 40 ranks per node); *model* 6.3 and 12–24 ms at 10⁴ ranks |
+| the global M2M per rank (§4.4) | at most 88 owned (§4.4); Phase 5: 8 × every `Global` box | 48–592 owned at 128–640 ranks against 4,520–37,448 |
+| the reduction (§4.2) | r rounds, 0.1 ms (§10.4) | 13–35 messages over 5–8 rounds, 11–31 kB per rank to 640 ranks; its own time 0.006–0.03 ms at 160 ranks (its maximum holds the waits for slower ranks) |
+| the multipole exchange's busiest sender (§7.3) | below max(2, ⌈P/16⌉) − 1 readers per box | at most 8 copies of a box per rank (the tree), 40–244 messages at 128–640 ranks; *model* at 10⁴ 0.9–12 ms (T8s §7.2) |
+| the exchanges' rate (§10.3) | β_e = 0.27 GB/s per rank when every rank of a node exchanges | 0.33–0.73 GB/s per rank at 1, 2 and 4 nodes (the same on one node as on four) |
+| the modelled cost's balance (§6) | ≤ 1.10 or ≤ 1.12 at 512–640 | 1.02–1.15 counted at 128–640 ranks (the cube at N = 10⁶ on 512: 1.150 in T9's counts, 1.124 in T7's); the measured compute max/mean at 160 ranks 1.01–1.11 at f64 p = 8 (Phase 5, same day: 1.52–1.60 on the Plummer sphere at 40 × 1) |
+| strong scaling, 1 to 4 nodes (§10.1) | none set | N = 10⁸: efficiency 0.96–0.99 in all 12 configurations; N = 10⁷: 0.93–1.11 |
+| Phase 5 against 5S, same day, 4 nodes (§10.1) | the top-tree terms ≤ 2 ms against Phase 5's 0.83–1.05 s at 8,192 ranks (*model*, §10.4) | at 160 ranks 0.67–0.74 of Phase 5's time on the Plummer sphere at 40 × 1 (the cut), 0.89–1.01 elsewhere; on locust at 72 ranks 0.82–0.93 at the same strategy |
+| overlap (§4.6) | hides the reduction's and the exchanges' waits | neutral with one thread per rank (median 0.9995 over 78 launches), +0.25 % median and up to +4.4 % with 20 threads per rank (one rank's downward pass, intermittent; not explained) |
+| weak scaling at 10⁴ ranks (§10.4: cube 549, Plummer 1,212 ms at f64 p = 8, *model*) | | *model* 1,180–1,196 (cube) and 1,272–1,287 ms (Plummer) at 2.5 × 10⁴ points per rank, within 2 % of the measured 160-rank times; the cube's 160-rank compute is 2.2× §10.4's input (its tree's fill at 4 × 10⁶ points) |
+
+### 13.3 For the next phase
+
+- **The replicated top's all-gather** is the one per-evaluation term left that grows with
+  P: negligible to 160 ranks, *model* 2–10 % of an evaluation at 10⁴ ranks in strong
+  scaling at N = 10⁸ and 4–11 % in weak scaling at f32 p = 3. The hierarchical gather
+  (phase5s-kathleen.md §1.2) is designed and micro-benchmarked; it needs a cluster larger
+  than 4 nodes to be measured where it would win.
+- **Overlap** is not yet the default: its intermittent slowdown at 20 threads per rank
+  needs a cause (PSM2's receive thread is the candidate), and on GPU nodes the exchanges
+  would have to progress while the device computes.
+- **The imbalance** is now the largest term above the compute at f32 p = 3 (compute
+  max/mean 1.06–1.18 at 160 ranks): the cost model underweights P2P there.
+- **Operators, not structure, at small N/P**: the cube's leaves at 2 × 10⁶ points on 80
+  ranks are 12× its leaves at 10⁶ on 40 (767,220 M2P evaluations per rank on a half-refined
+  level, each about 500 P2P pairs' cost): M2P and P2L only where a box holds more points than
+  the expansion's cost (Phase 6).
+- **Every time beyond 160 ranks stays a model** (phase5s-kathleen.md §10, §11).
 
 ## Appendix A. How the numbers were measured
 

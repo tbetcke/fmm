@@ -18,8 +18,15 @@ the host counterpart, as signed off in `docs/design/optimisation.md` §2 (T1), a
 measures it where Phase 5 found the problem: many ranks per node. It was deferred in
 Phase 4 (docs/phase4/README.md, decision 6).
 
-**Revision note.** Written on 2026-10-10; Phase 5S T9 may revise it. T1's design
-overrides any detail here that it settles differently.
+**Revision note.** Written on 2026-10-10; **revised by Phase 5S T9 on 2026-10-15** (decision
+7 of docs/phase5s/README.md): the premise holds after Phase 5N and 5S. Phase 5N's rule picks
+Rotation at f64 p = 8 (and at f32 p = 8 above a few ranks per node), which avoids the
+dense tables' limit but not their cause; at 160 Kathleen ranks the downward pass (mostly M2L)
+is 67–92 % of an evaluation at p = 8 (`fmm-validate/results/phase5s-kathleen.md`), so this
+task is the largest gain left at high p. Kathleen is usable (Phase 5N decision 0): its runs
+are not conditional, and 40 × 1 per node is the configuration to beat at f64 p = 8 (2–10 %
+faster than 2 × 20 with Phase 5S's cut by work). T1's design overrides any detail here
+that it settles differently.
 
 Read first:
 - root CLAUDE.md, fmm-exec/CLAUDE.md, fmm-tables/CLAUDE.md;

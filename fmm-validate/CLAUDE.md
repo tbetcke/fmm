@@ -179,6 +179,20 @@ multipole_forwarded}` and the summary's `routing`, `multipole_depth_max` and
 every stage of the tree), with two lines of the report and the routing in its header.
 Its report is `results/phase5s-t8s.md`.
 
+Phase 5S T9 (the scaling report, C5S.6) added the `collectives` example (not registered;
+it times): `MPI_Allgatherv` of a buffer of the replicated top's size (`--bytes`, default
+R's cap at f32 p = 3 and f64 p = 8) split evenly over the ranks, flat, in two levels (a
+gather-v to each node's first rank, the leaders' all-gather-v, a broadcast on each node)
+and hierarchically (an all-gather-v on each node, the slices across the nodes, an
+all-gather-v of the slices on each node), each part timed, every value checked;
+`--node-size k` makes up nodes of k ranks. `scaling` reports the overlapped path's
+`test` calls per exchange, its final wait for the sends and its wait per level
+(`PathTimes::overlap`, `OVERLAP_PARTS`, `NOVERLAP`; a table of the report and the
+summary's `multipoles_progress_max_ms`, `multipoles_sends_wait_max_ms`,
+`level_wait_max_ms`, `level_wait_max_level`); `tests/scaling.rs` covers them.
+`tools/scaling/run.sh` has the sweeps `t9-strong`, `t9-weak`, `t9-model` and `t9-counts`.
+Its report is `results/phase5s-kathleen.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

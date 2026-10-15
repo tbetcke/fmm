@@ -8,7 +8,9 @@ flops, at an error that can be held below the p-truncation error. This task buil
 compressed tables in `nd-fmm-tables` and their application on the host, as signed off in
 `docs/design/optimisation.md` §3 (T1), on top of T2's batched layout.
 
-**Revision note.** Written on 2026-10-10; Phase 5S T9 may revise it.
+**Revision note.** Written on 2026-10-10; **revised by Phase 5S T9 on 2026-10-15** (decision
+7 of docs/phase5s/README.md): no change of premise; Kathleen is usable (Phase 5N decision 0)
+at up to 4 nodes per job, so its runs here are not conditional.
 
 Read first:
 - root CLAUDE.md, fmm-tables/CLAUDE.md, fmm-exec/CLAUDE.md;

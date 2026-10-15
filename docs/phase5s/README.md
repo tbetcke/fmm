@@ -469,7 +469,16 @@ Each is recorded in the exit checklist when made:
    per job, and T9's job plan (T1; T9). **Signed off on 2026-10-11 (question 8):** about
    120 node-hours for the phase within the 240 budgeted, per task as scale-out.md §10.5;
    T9 one 4-node job per sweep. T1 used 10.4.
-7. The Phase 6 briefs as revised by T9 (T9).
+7. The Phase 6 briefs as revised by T9 (T9). **Revised on 2026-10-15** (docs/phase6/README.md
+   and every brief's revision note): Kathleen usable at up to 4 nodes per job; the baseline
+   numbers from Phase 5S's reports (the operators are the cost at 160 ranks); a new component
+   C6.9 (M2P and P2L only where they pay, from T9's cube at 80 ranks); the cut's constants
+   refitted with the new operators and overlap's default revisited in T11. In T9 itself,
+   signed off on 2026-10-15 after its step 1 (`fmm-validate/results/phase5s-kathleen.md`
+   §1.4): no remedy for the replicated top's all-gather (the flat all-gather-v measured
+   fastest within 4 nodes; the model and the hierarchical design recorded), overlap on by
+   default only if the sweeps confirmed it (they did not, §7 there: it stays off), the
+   blocking tree's improvement not built.
 
 ## Risks
 
@@ -510,5 +519,5 @@ In the repository root, start `claude` and say:
 - [x] T8q done: rlst 0.10.2 published (rotated send order; rlst PRs #44, #45, tag `v0.10.2`, 2026-10-14) and pinned here
 - [x] T8 merged: S4, S5 and S8 built or closed by counts, bytes and models (S4 closed; S5 built on rlst 0.10.1 in step 3, 2026-10-14; S8 to T8s)
 - [x] T8s merged: S8, the forwarding tree below R, built as its own task after T8 (2026-10-14: every box with more than 8 readers along a tree of its readers, `MultipoleRouting::Tree` the default; the busiest sender 9–51 % fewer messages at 512–640 ranks, no box sent to more than 8 ranks; f64 p = 8 below the modelled threshold at 10⁴ ranks, f32 p = 3 still fires on the cube and the clusters, for T9; fmm-validate/results/phase5s-t8s.md)
-- [ ] T9 merged: scaling report published; Phase 6 briefs revised (decision 7)
-- [ ] Design documents updated: laplace-fmm-plan §7 (Phase 5S status and numbers), §8, §9; distributed-fmm.md §14/§15 notes; `scale-out.md` outcome section; workspace-structure §3, §3.1, §4 and §6
+- [x] T9 merged: scaling report published (`fmm-validate/results/phase5s-kathleen.md`: strong scaling at N = 10⁸ with an efficiency of 0.96–0.99 from 1 to 4 Kathleen nodes; the per-rank structures bounded to 640 oversubscribed ranks; invariance 0 values differing at 80, 160, 512 and 640; no all-gather remedy and overlap left off, signed off 2026-10-15); Phase 6 briefs revised (decision 7)
+- [x] Design documents updated: laplace-fmm-plan §7 (Phase 5S status and numbers), §8, §9; distributed-fmm.md §14/§15 notes; `scale-out.md` outcome section (§13); fmm-plan-redesign §3.5, §7.3; device-path §14; workspace-structure §3, §3.1, §4 and §6

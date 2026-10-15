@@ -80,6 +80,20 @@ rank (at most 9 MB) and of all the ranks of a node (at most a budget per machine
 small, and to Rotation otherwise. At p = 8 the default is within 1.03 of the best strategy
 at every ranks-per-node count measured on the three machines, where the rule of Phases 2–5
 was up to 6.45× slower. With a table cache one rank per node builds the tables first.
+Revised at the end of Phase 5S (2026-10-15; Sections 7, 8.1, 8.3, 9.1 and 9.2): the scale-out
+of distributed-fmm.md §14 is built ([scale-out.md](scale-out.md), its outcome in §13;
+docs/phase5s/): a rank holds only its locally essential set of the tree and forms only the
+top-tree multipoles it owns, the boxes many ranks read travel as one replicated top of at
+most 4,096 boxes, the blocks are cut a second time by modelled work, the sample sorts and
+the O(P) all-to-alls are replaced by routing and sparse exchanges (rlst 0.10.1/0.10.2), and
+the multipole exchange runs along a forwarding tree; every output stays bit for bit the
+one-rank result and rank-count invariant (checked to 640 ranks). Measured on Kathleen at 1,
+2 and 4 nodes (`fmm-validate/results/phase5s-kathleen.md`): strong scaling at N = 10⁸ with an
+efficiency of 0.96–0.99 from 1 to 4 nodes, the per-rank held boxes, traffic and memory
+bounded in P at fixed N/P to 640 oversubscribed ranks, and at 160 ranks 0.67–0.74 of Phase
+5's time on the Plummer sphere (the cut by work). Nothing beyond 160 ranks is timed; the
+model puts the evaluation at 10⁴ ranks within 2 % of 160 ranks in weak scaling at f64 p = 8,
+with the replicated top's all-gather the one term that grows. Overlap stays opt-in.
 
 > Where this document and `docs/CONVENTIONS.md` differ (normalisation, phases, scaling),
 > **the conventions file takes precedence.** Section 2.4 below now follows the scaling of
@@ -1078,7 +1092,7 @@ flowchart TB
   P4S["Phase 4S · CUDA on Grace Hopper<br/>C4S.1–C4S.10 · tools/gh200, fmm-kernels, fmm-exec · done"]
   P5["Phase 5 · Distributed<br/>C5.1–C5.3 · nd-fmm-plan, fmm-exec · done"]
   P5N["Phase 5N · The node: Kathleen, M2L tables per node<br/>C5N.1–C5N.3 · tools/kathleen, fmm-exec"]
-  P5S["Phase 5S · Scale-out<br/>C5S.1–C5S.6 · nd-octree, nd-fmm-plan, fmm-exec"]
+  P5S["Phase 5S · Scale-out<br/>C5S.0–C5S.6 · nd-octree, nd-fmm-plan, fmm-exec · done"]
   P6["Phase 6 · Optimisation and extensions<br/>C6.1–C6.8 · benchmark-driven"]
   S["Spike · CubeCL GEMM<br/>Phase 0 task T6 · done; f64 CUDA run pending"]
   P0 -- "Gate: harmonic identities hold to 1e-14" --> P1
@@ -2176,13 +2190,101 @@ and gathers 11.6 MB per evaluation (phase5-gh200.md §10).
 
 | ID | Component | Acceptance criterion | Depends on | Status |
 | --- | --- | --- | --- | --- |
-| C5S.0 | Four-node baseline (Kathleen) | the code as Phase 5N left it at one, two and four nodes (strong at N = 10⁶–10⁸, weak, exchanges, the replicated part and memory per rank to 160 ranks, errors) and the 4-node queue waits; report published (`phase5n-kathleen.md`, "Phase 5S, T0") | C5N.3 | Not started |
-| C5S.1 | Validation at scale (S7) | rank-count invariance (P against P/k, bit for bit) in CI at ≤ 4 ranks, on Kathleen at up to four nodes and oversubscribed at hundreds of ranks; distributed direct-sum errors at N ≥ 10⁸ | C5S.0 | Not started |
-| C5S.2 | Locally essential top tree (S1) | held boxes per rank independent of P at fixed N/P; bit for bit Phase 5's results | C5S.1 | Not started |
-| C5S.3 | Owned top tree (S2) | no per-rank evaluation cost that grows with P; the coarse gather removed; bit for bit; hook, overlap and device kept | C5S.2 | Not started |
-| C5S.4 | Work-weighted cut (S3) | per-rank work max/mean within the design's target on the workloads, measured at up to 160 ranks and counted on oversubscribed runs beyond | C5S.2 | Not started |
-| C5S.5 | Construction and collectives at scale (S4, S5) | built only where counts, bytes and models from oversubscribed runs show the need, otherwise closed by measurement | C5S.3, C5S.4 | Not started |
-| C5S.6 | Scaling report | strong and weak scaling on Kathleen at one to four nodes (if usable) and locust, oversubscribed per-rank counts beyond, *model* times at larger P; Phase 5 against 5S; report published | C5S.3–C5S.5 | Not started |
+| C5S.0 | Four-node baseline (Kathleen) | the code as Phase 5N left it at one, two and four nodes (strong at N = 10⁶–10⁸, weak, exchanges, the replicated part and memory per rank to 160 ranks, errors) and the 4-node queue waits; report published (`phase5n-kathleen.md`, "Phase 5S, T0") | C5N.3 | **Done** (T0: `phase5n-kathleen.md`, "Phase 5S, T0"; decision 0, 4 nodes as planned; the PSM2 TID defect found and worked around) |
+| C5S.1 | Validation at scale (S7) | rank-count invariance (P against P/k, bit for bit) in CI at ≤ 4 ranks, on Kathleen at up to four nodes and oversubscribed at hundreds of ranks; distributed direct-sum errors at N ≥ 10⁸ | C5S.0 | **Done** (T2: `tests/invariance.rs` in CI, `scaling --invariance`, the harness at N = 10⁸, the correctness job; 0 values differ at every pair run to 640 ranks, last in T9) |
+| C5S.2 | Locally essential top tree (S1) | held boxes per rank independent of P at fixed N/P; bit for bit Phase 5's results | C5S.1 | **Done** (T3a key routing, T3 the partition map and H, T4 the plan over H; H at most 1.96× its 40-rank value to 640 ranks) |
+| C5S.3 | Owned top tree (S2) | no per-rank evaluation cost that grows with P; the coarse gather removed; bit for bit; hook, overlap and device kept | C5S.2 | **Done** (T5 in `nd-fmm-plan`, T6 in `fmm-exec` and the device; the coarse gather and the replicated global pass gone, bit for bit) |
+| C5S.4 | Work-weighted cut (S3) | per-rank work max/mean within the design's target on the workloads, measured at up to 160 ranks and counted on oversubscribed runs beyond | C5S.2 | **Done** (T7: the second cut by modelled cost, on by default with a 2 % gain rule; modelled max/mean 1.02–1.12 at 512–640, target accepted as measured) |
+| C5S.5 | Construction and collectives at scale (S4, S5) | built only where counts, bytes and models from oversubscribed runs show the need, otherwise closed by measurement | C5S.3, C5S.4 | **Done** (S4 built in T3a and closed by T8; S5 built in T8 on rlst 0.10.1/0.10.2 (T8r, T8q, upstream); S8, the forwarding tree, built in T8s) |
+| C5S.6 | Scaling report | strong and weak scaling on Kathleen at one to four nodes (if usable) and locust, oversubscribed per-rank counts beyond, *model* times at larger P; Phase 5 against 5S; report published | C5S.3–C5S.5 | **Done** (T9: `fmm-validate/results/phase5s-kathleen.md`; the exposed collectives measured, no remedy built, overlap left opt-in) |
+
+
+**Status at the end of Phase 5S** (2026-10-15; the reports `fmm-validate/results/phase5s-t2.md`
+… `phase5s-t8s.md`, one per task, and the scaling report `phase5s-kathleen.md` (T9);
+[scale-out.md](scale-out.md) §13; decisions 0–7 of docs/phase5s/README.md):
+- **C5S.0** (T0). The Phase 5N code at 1, 2 and 4 Kathleen nodes: from 2 to 4 nodes an
+  efficiency of 0.84–1.05 (0.90–1.05 at N = 10⁷); a transport defect found (wrong data
+  through PSM2's TID path at 4 nodes; `PSM2_TID=0` in every job) and the 4-node queue usable
+  (median wait 12 s on a Sunday, up to hours on busy afternoons).
+- **C5S.1** (T2). Rank-count invariance: P against P/k bit for bit by index, never gathered,
+  in CI at 1, 2 and 4 ranks and at scale (80/160/640 on Kathleen, 512 on locust), the oracle
+  wherever no one-rank run fits; the harness at N = 10⁸ with the distributed direct sum.
+- **C5S.2** (T3a, T3, T4). The octree routes keys by weight rounds instead of sample sorts
+  (1.8–2.4× faster than rlst 0.10.0's balanced sort at 160 ranks), publishes its partition map
+  and holds only the locally essential set H (14 collectives become 7); `Plan::new` runs over
+  H. Held boxes per rank at 2.5 × 10⁴ points per rank stay at 3,585–9,177 from 40 to 640
+  ranks against Phase 5's 3,881 → 59,097.
+- **C5S.3** (T5, T6). The owned top tree: the order-preserving reduction of the top-tree
+  multipoles to their owners, the replicated top R (at most 4,096 boxes, 1.25–2.56 MB per
+  evaluation measured), three new events and the device's 2 + r_s syncs; the global M2M per
+  rank 48–592 against Phase 5's 4,520–37,448, the coarse gather (9.4–21.2 MB at 512–640) gone;
+  every top-tree multipole bit for bit the one-rank value.
+- **C5S.4** (T7). The second cut by the plan's counts weighed by Kathleen's per-kind constants
+  (`cost`, `Octree::repartition`), on by default with a 2 % gain rule: the compute max/mean at
+  160 ranks from 1.52–1.64 to 1.08–1.11 on the Plummer sphere, 19–26 % off its evaluation
+  against the cut by points (26–33 % against the Phase 5 code).
+- **C5S.5** (T8, T8r, T8q, T8s). S4 closed (no sample sort left); S5's point-to-point
+  redistribution and sparse exchanges built upstream in rlst (0.10.1, 0.10.2); S8, the
+  forwarding tree (F = 8), cut the busiest sender's multipole messages by 9–51 % at 512–640
+  ranks, no box sent by one rank to more than 8.
+- **C5S.6** (T9). Measured on Kathleen at 1, 2 and 4 nodes (40–160 ranks timed, both splits,
+  the cube, the Plummer sphere and the clusters), on locust to 72 ranks and the M3 Max to 12,
+  counted to 512 (locust) and 640 (Kathleen); 24.95 Kathleen node-hours of the 60 budgeted. The
+  exposed collectives first (the brief's addition from T8s): Open MPI's flat all-gather-v of R
+  is the fastest variant within 4 nodes (0.22 and 1.74 ms at 0.26 and 2.65 MB on 160 ranks),
+  so no remedy was built (signed off); overlap was not made the default.
+
+The scaling (Kathleen, the blocking path, the rule's strategy, ms; from
+`phase5s-kathleen.md` §2–§4):
+
+| problem | split | 1 node | 2 nodes | 4 nodes | efficiency 1→4 | Phase 5, 4 nodes, same day |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| cube, N = 10⁷, f64 p = 8 (Rotation) | 40 × 1 | 5,488 | 2,771 | 1,396 | 0.98 | 1,450 |
+| Plummer, N = 10⁷, f64 p = 8 (Rotation) | 40 × 1 | 12,889 | 6,662 | 3,454 | 0.93 | 4,674 |
+| cube, N = 10⁸, f64 p = 8 (Rotation) | 40 × 1 | 56,184 | 28,346 | 14,371 | 0.98 | 14,612 |
+| Plummer, N = 10⁸, f64 p = 8 (Rotation) | 40 × 1 | 127,076 | 63,223 | 32,620 | 0.97 | 47,434 |
+| cube, N = 10⁸, f64 p = 3 (Dense) | 2 × 20 | 18,487 | 9,387 | 4,661 | 0.99 | – |
+| Plummer, N = 10⁸, f32 p = 8 (Dense) | 2 × 20 | 94,969 | 49,324 | 24,458 | 0.97 | 26,428 |
+
+- **Strong scaling** from 1 to 4 nodes at N = 10⁸: 0.96–0.99 in every configuration; at
+  N = 10⁷ 0.93–1.11.
+- **Weak scaling** at 2.5 × 10⁴ points per rank (40 × 1) and 10⁶ per socket (2 × 20): the
+  Plummer sphere and the clusters keep 0.88–1.21 of their one-node time at 4 nodes; the
+  cube changes its tree between sizes (a half-refined level at 2 × 10⁶ points with W and X
+  lists whose M2P costs 12× its leaves), so its weak figures compare different work.
+- **Per rank at fixed N/P** (counted to 640): held boxes 4,000–8,400, R 1.25–2.56 MB, the
+  multipole exchange 1.8–3.7 MB, the memory model 18–32 MB, bounded in P (requirement 4).
+- **Correctness**: rank-count invariance 0 values differing at 80, 160, 512 and 640 ranks;
+  the direct-sum errors identical in every printed digit (f64) and within 0.34 % (f32) across
+  node counts, splits, cuts and against Phase 5; T2's correctness job passes at 2 nodes.
+- **Regressions**: locust and the M3 Max within −4 % to +2 % of Phase 5's reports at up to 8
+  ranks at the same strategy, faster from 16 ranks (locust 0.78–0.97 at 64–72 at the same
+  strategy); the M3 Max's 8-rank f64 p = 8 cells 1.6–2.7 % slower than the Phase 5 binary
+  (not traced).
+- **Overlap**: neutral with one thread per rank (median 0.9995), +0.25 % median and up to
+  +4.4 % with 20 threads per rank (one rank's downward pass, intermittent); opt-in.
+- **Beyond 160 ranks, *model*** (§10 of the report): weak scaling at f64 p = 8 within 2 % of
+  160 ranks at 10⁴ ranks; at f32 p = 3 +2–16 %, the replicated top's all-gather (6.3 ms, flat
+  and linear in P) and the busiest sender's messages the growing terms; strong scaling at
+  N = 10⁸ 0.96–1.00 to 10³ ranks and 0.41–0.94 at 10⁴ (decided by the per-point cost at 10⁴
+  points per rank, not by communication).
+
+**Recommendation for Phase 6** (T9; docs/phase6/README.md, revised as decision 7):
+- **The operators, not the structure, are now the cost.** At 160 ranks the communication is
+  0.2–1.1 % of an evaluation at f64 p = 8 and the top-tree terms below 0.5 %; the compute
+  stages (the upward pass, the downward pass and the leaves) are 93–99 %. C6.6 (the host batched M2L) and C6.7 (AVX-512 P2P, measured
+  on Kathleen's nodes in Phase 5S) stay the first items.
+- **A new operator item**: M2P and P2L only where a box holds more points than the expansion
+  costs (P2P for the W and X pairs below that). On the cube at 2 × 10⁶ points the W list's
+  767,220 M2P evaluations per rank cost 12× its P2P (each about 500 P2P pairs).
+- **Configuration**: at f64 p = 8 40 × 1 is now 2–10 % faster than 2 × 20 at every node
+  count (with the cut by work; T0 found 2 × 20 ahead by 1–29 % before it); at f32 p = 8
+  2 × 20 with Dense is 1.14–1.28× faster than 40 × 1 with Rotation (1.19–1.28× at 4 nodes);
+  at f64 p = 3 40 × 1 is 1.26–1.36× faster at 4 nodes. Assume the rule's strategy, the cut by work and a table cache.
+- **Measure on the final structure**: Phase 6's multi-node runs (T11) use Phase 5S's harness
+  and sweeps (`t9-strong`, `t9-weak`), the same-day Phase 5 baseline no longer needed.
+- **Left for a larger cluster**: the hierarchical gather of R, overlap's slowdown at 20
+  threads per rank, everything beyond 160 ranks.
 
 ### Phase 6: optimisation and extensions
 
@@ -2196,10 +2298,14 @@ and gathers 11.6 MB per evaluation (phase5-gh200.md §10).
 | C6.6 | Host batched M2L (per-level GEMMs over gathered columns; Phase 4 decision 6, deferred) | faster than the per-target host M2L at equal accuracy, bit for bit across thread counts, and scaling with ranks per node | C3.4, C5N.3 | Not started |
 | C6.7 | AVX-512 P2P (`nd-fmm-simd`; deferred until hardware, simd-p2p.md) | within the P2P accuracy contract; faster than AVX2 on Kathleen | C3S.6 | Not started |
 | C6.8 | FMM3D comparison at matched accuracy (Phase 4 decision 9) | time and memory against FMM3D on one node, documented build | C6.6 | Not started |
+| C6.9 | M2P and P2L only where they pay (new, Phase 5S T9) | W and X pairs below a crossover in points per box sent to P2P and direct evaluation; exact; the half-refined cube's leaves no longer 12× the uniform trees' | C3.2, C3S.6 | Not started |
 
 *Planned on 2026-10-10* (docs/phase6/): after Phase 5S, benchmark-driven on the M3 Max,
-locust and Kathleen; C6.6 first, as the deep fix for per-rank table pressure; Phase 5S T9
-revises the briefs.
+locust and Kathleen; C6.6 first, as the deep fix for per-rank table pressure. *Revised by
+Phase 5S T9 on 2026-10-15* (decision 7 of docs/phase5s/README.md): the briefs take Phase 5S's
+numbers (the operators are the cost: the leaves 42–79 % of an evaluation at p = 3, the
+downward pass 67–92 % at p = 8, at 160 Kathleen ranks), Kathleen is usable, and C6.9 is
+added.
 
 ## 8. Validation and benchmarking
 
@@ -2217,8 +2323,8 @@ the GPU FMM, and the direct sum checks everything.
 | End-to-end | full FMM vs direct sum over sampled targets | f64 direct sum | CI small N, nightly large N |
 | Cross-backend | CUDA, HIP, wgpu and CPU runtimes agree to precision | CPU FMM | nightly |
 | ISA equivalence (Phase 3S) | every SIMD path (NEON, AVX2, scalar) of the P2P kernel and its inverse square root; chunk and target-position invariance | `nd_fmm_ref::p2p`, `direct_sum`, exhaustive f32 checks | CI: the `nd-fmm-simd` job on x86_64 (AVX2) and arm64 (NEON) runners, with the release accuracy tests; NEON also on the development machine |
-| Topology (as built in Phase 5) | pass order, lists, the exchanges (blocking and overlapped), the host-data events, the redistribution, and the `nd-fmm-plan` extensions (C3.0, C4.0, C5.2) | the brute-force list oracle; the recording operator of `tests/mpi_regressions.rs` (call order, groupings, every list pair exactly once, the events and their lists; `IndexFmm` until Phase 5 T2 removed it); the exchange checks; the overlapped exchanges against the blocking ones bit for bit; the redistribution's owners, order within leaves and round trips | CI on one rank; the `run-tests-mpi` job at 2 and 4 ranks (Phase 5 T3, debug, on every pull request); 8 ranks and the ignored `overlap_stress` by hand on the M3 Max and locust |
-| Distributed (as built in Phase 5) | the multi-rank result equals the single-rank result; input distributions agree; overlap and the hook change no bit; the device on several ranks | the one-rank `Fmm` of the same settings over the union of every rank's points in rank order, built on `SimpleCommunicator::self_comm()`: **bit for bit** on the host path (decision 7); 100 u_T relative L2 between input distributions; `direct_sum` within 0.1% (f64) and 1% (f32) of the one-rank errors; the blocking path for overlap, bit for bit; a shadow operator that learns of host data only through the events, bit for bit; the host on the same ranks for the device (Phase 4's bounds; the fallback bit for bit) and the transfer formula | every `tests/mpi_exec.rs` scenario on every rank count: CI on one rank and in `run-tests-mpi` at 2 and 4 ranks; 8 ranks, the ignored gates `tests/multi_rank.rs` (C5.1 host, N = 10⁵) and `tests/device_ranks.rs` (C5.1 device) by hand on both machines; the reference and error checks of the `scaling` harness up to 72 ranks on locust and 512 oversubscribed (T10) |
+| Topology (as built in Phase 5) | pass order, lists, the exchanges (blocking and overlapped), the host-data events, the redistribution, and the `nd-fmm-plan` extensions (C3.0, C4.0, C5.2) | the brute-force list oracle; the recording operator of `tests/mpi_regressions.rs` (call order, groupings, every list pair exactly once, the events and their lists; `IndexFmm` until Phase 5 T2 removed it); the exchange checks; the overlapped exchanges against the blocking ones bit for bit; the redistribution's owners, order within leaves and round trips | CI on one rank; the `run-tests-mpi` job at 2 and 4 ranks (Phase 5 T3, debug, on every pull request); 8 ranks and the ignored `overlap_stress` by hand on the M3 Max and locust. *Phase 5S*: the held keys equal H by brute force over the gathered tree (T3, T4); the reduction, R and the multipole exchange against brute force (every multipole a list reads received exactly once over the three); every top-tree multipole bit for bit the one-rank tree's by key with an order-sensitive mixing operator (T5); the forwarding tree slot for slot against the direct exchange, at its narrowest on made-up nodes (T8s); the point-to-point redistribution against the dense all-to-all-v (T8); 80 ranks on 2 Kathleen nodes in T2's correctness job |
+| Distributed (as built in Phase 5) | the multi-rank result equals the single-rank result; input distributions agree; overlap and the hook change no bit; the device on several ranks | the one-rank `Fmm` of the same settings over the union of every rank's points in rank order, built on `SimpleCommunicator::self_comm()`: **bit for bit** on the host path (decision 7); 100 u_T relative L2 between input distributions; `direct_sum` within 0.1% (f64) and 1% (f32) of the one-rank errors; the blocking path for overlap, bit for bit; a shadow operator that learns of host data only through the events, bit for bit; the host on the same ranks for the device (Phase 4's bounds; the fallback bit for bit) and the transfer formula | every `tests/mpi_exec.rs` scenario on every rank count: CI on one rank and in `run-tests-mpi` at 2 and 4 ranks; 8 ranks, the ignored gates `tests/multi_rank.rs` (C5.1 host, N = 10⁵) and `tests/device_ranks.rs` (C5.1 device) by hand on both machines; the reference and error checks of the `scaling` harness up to 72 ranks on locust and 512 oversubscribed (T10). *Phase 5S*: **rank-count invariance** (P against P/k bit for bit by index, never gathered; `tests/invariance.rs` in CI at 1, 2, 4 and by hand at 8; `scaling --invariance` at 80, 160 and 640 on Kathleen and 512 on locust) where no one-rank run fits; the direct-sum errors at N = 10⁸ against the run on a quarter of the ranks (f64 to the printed digits, f32 within 1 %); the shadow check with the owned top tree's events, different with only those disabled (T6); the second cut against the first bit for bit (T7) and the routings against each other (T8s) in `tests/mpi_exec.rs`; T2's correctness job at 2 nodes for every structural task |
 | Device (Phase 4, as built) | buffers, data movement and views bit for bit; each kernel per operator; the device operator per kind against the host operator; the device FMM against the host FMM and the direct sum; transfers, launches and syncs per evaluation; the tuner and its cache | host loops (bit for bit); `nd-fmm-ref`, `nd-fmm-math`, `nd-fmm-tables` at the canonical frames on levels 2, 9 and 16; the host `LaplaceOperator`; the host `Fmm` of the same settings (every kind on the host fallback: bit for bit; on the device: the FMM bounds); `direct_sum`; the formulas of device-path.md §4.1 and §8.1 | `nd-fmm-kernels` on the CPU runtime in CI (`run-tests-kernels`, f32 and f64, small shapes); `nd-fmm-exec` on the CPU runtime by hand (every `tests/mpi_exec.rs` scenario, the ignored C3.2, C3.3 and C4.8 gates); Metal f32 by hand, `#[ignore]`d, outside the macOS sandbox; CUDA type-checked only. Every run prints the backends it ran |
 
 Use property-based tests (e.g. `proptest`) for random points, offsets and levels, so
@@ -2369,6 +2475,17 @@ ignored gates and every timing stay by hand, on the M3 Max and on locust.
   states its node-hours. Reports: `fmm-validate/results/phase5n-kathleen.md` (with the T4
   section for all three machines) and [node-m2l.md](node-m2l.md); numbers in Section 7,
   Phase 5N.
+- *Done in Phase 5S* (T0–T9) on Kathleen at up to 4 nodes (`small`): the harness at
+  N = 10⁸ without a one-rank reference (the distributed direct sum), rank-count invariance
+  at scale, the per-rank measures of the new structures (held boxes by part, the reduction
+  per level, R, the forwarding tree's depth and forwards, the modelled cost and its fit), the
+  overlapped path's `test` calls and waits per level, and oversubscribed counts (to 640 on
+  Kathleen with PSM2's shared contexts, 512 on locust), never timed. The sweeps of the
+  scaling report are `tools/scaling/run.sh`'s `t9-strong`, `t9-weak`, `t9-model` and
+  `t9-counts`, run on the Phase 5 tree too (the same-day baseline), and the `collectives`
+  example micro-benchmarks the replicated top's all-gather. Every time beyond 160 ranks is a
+  *model* with its inputs stated. Reports: one per task (`fmm-validate/results/phase5s-*.md`)
+  and the scaling report `phase5s-kathleen.md`; numbers in Section 7, Phase 5S.
 
 ## 9. Risks, open questions and working with Claude Code
 
@@ -2422,6 +2539,15 @@ and identity tests, the second with a one-day spike before Phase 4.
 | A strategy rule that depends on the node gives different bits at different launch configurations (Phase 5N) | runs at different rank counts disagree in the last bits | **As designed (T4):** the inputs are agreed (step 7's all-reduce) and reported (`Fmm::strategy`, `ThreadingReport::m2l`); bit identity holds per resolved strategy; a caller who needs the same bits across rank counts names the strategy |
 | Kathleen's cache hierarchy gives another crossover (Phase 5N) | one rule wrong on one machine | **Realised (T3, T4):** the crossover in bytes per node differs by machine and by precision (f64 p = 6 about 51–64 MB, f32 p = 8 140–175 MB on Kathleen; 38–51 and 52–70 MB on the M3 Max), so the budget is set per machine class (64 MB in the library, 56 on the M3 Max, 96 on locust and Kathleen) and the band keeps a measured miss of at most 1.16 |
 | Two nodes say little about 1,000+ ranks (Phase 5N) | the scale-out designed on a small sample | **Open (stated):** the 2-node cap stays; beyond 2 nodes the evidence is oversubscribed locust runs and *models* (distributed-fmm.md §14.5); Phase 5S starts from T2's per-rank exchange rate |
+| A defect appears only at hundreds of ranks or across nodes (Phase 5S) | slow attempts in a busy queue | **Realised and caught:** PSM2's TID path delivered wrong data at 4 nodes (T0; `PSM2_TID=0`), lost packets stalled 4-node bursts by 160 ms (T8; `PSM2_ERRCHK_TIMEOUT=10:40:2`), a node's Omni-Path contexts stayed busy (T2, T9; `--exclude`); every library defect was found at 1–8 ranks or by the invariance check first |
+| No timing beyond 160 ranks (Phase 5S) | effects at thousands of ranks unmeasured | **As stated:** counts to 640 (Kathleen) and 512 (locust), *models* beyond (phase5s-kathleen.md §10), the open effects listed (§11); the replicated top's all-gather measured linear in P, the one growing term |
+| S2's reduction changes bits (Phase 5S) | the multi-rank guarantee lost | **Not realised:** children added by octant on the owner; every top-tree multipole bit for bit the one-rank value (T5), invariance at every pair run |
+| The locally essential set misses a key (Phase 5S) | wrong lists or a panic at scale | **Not realised:** the held-key check (every listed key held) and H by brute force (T3, T4) |
+| The replicated top chosen badly (Phase 5S) | many senders per needed multipole, or too much replicated | **Retired:** R by readers with a cap (not a level L_r; scale-out.md §4.3), 1.25–2.56 MB at 128–640 ranks; the fan-out below it by the forwarding tree (S8, T8s) |
+| The work-weighted cut changes nothing measurable or unbalances P2P (Phase 5S) | no gain | **Realised in part:** 19–26 % off the Plummer sphere's evaluation at 40 ranks per node; at f32 p = 3 the model underweights P2P (compute max/mean 1.06–1.18 against a modelled 1.04–1.07, open) |
+| Omni-Path and Open MPI 4.1 behave differently from one node (Phase 5S) | progress, eager limits, PSM2 settings | **Realised:** the two PSM2 settings above; overlap neutral with one thread per rank, intermittently slower with 20 (open, phase5s-kathleen.md §7) |
+| `Plan::new`, rlst's graph communicators or the sample sorts become the bottleneck (Phase 5S) | the build stops scaling | **Retired by S4 and S5:** key routing (T3a), rlst's sparse exchanges (T8, upstream); the O1 and weight-round all-reduces the largest O(P) build term left (*model* about 57 ms at 10⁴ ranks) |
+| The scale-out changes the structures the device and overlap rely on (Phase 5S) | device or overlap broken | **Not realised:** three new events, the device's 2 + r_s syncs, the shadow check and the device gate on the CPU runtime, Metal and CUDA (T6) |
 
 
 ### 9.2 Open questions
@@ -2538,6 +2664,22 @@ and identity tests, the second with a one-day spike before Phase 4.
     that would settle them is one command (`tools/scaling/run.sh`, header; design §11),
     and distributed-fmm.md §14 plans the scale-out phase that replaces the replicated top
     tree.
+    *Answered in Phase 5S up to 4 nodes* ([scale-out.md](scale-out.md) §13;
+    `fmm-validate/results/phase5s-kathleen.md`): the replicated top tree is gone; strong
+    scaling from 1 to 4 nodes at N = 10⁸ with an efficiency of 0.96–0.99; the exchanges at
+    0.33–0.73 GB/s per rank at 1, 2 and 4 nodes (the node's copies and the neighbours' waits
+    set the rate, not the link); overlap neutral with one thread per rank and not the
+    default; per-rank structures bounded in P to 640 oversubscribed ranks.
+  - *Open after Phase 5S:* **timing beyond 160 ranks.** No job is larger than 4 nodes, so
+    every time beyond 160 ranks is a *model* (the report's §10): contention across hundreds
+    of nodes, Open MPI's collective algorithms at 10⁴ ranks, the replicated top's
+    all-gather-v (measured linear in P, *model* 6.3–24 ms at 10⁴ ranks; the hierarchical
+    gather designed, not built), overlap's slowdown at 20 threads per rank, and the cube's
+    per-point cost at 10⁴ points per rank on a large tree. The documented command for a
+    larger cluster is `tools/scaling/run.sh`'s `t9-strong` and `t9-weak` under Slurm.
+  - *Answered in Phase 5S:* **a second cut by modelled work** (decision 13 of Phase 5):
+    built (T7), on by default with a 2 % gain rule; at 160 ranks the Plummer sphere's
+    compute max/mean 1.52–1.64 → 1.08–1.11.
   - *Answered in Phase 5N:* **the host M2L strategy on several ranks per node.** The
     rule sees the ranks per node ([node-m2l.md](node-m2l.md) §4, built in T4): Dense iff
     the dense tables of a rank are at most 9 MB and those of the node at most a budget per

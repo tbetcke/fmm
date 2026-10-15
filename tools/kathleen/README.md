@@ -357,6 +357,31 @@ tools/kathleen/submit.sh --qos=small --nodes=4 --time=01:30:00 '--export=ALL,CUT
     -- sweep.sbatch cut cut-counts
 ```
 
+The scaling report (Phase 5S T9, `fmm-validate/results/phase5s-kathleen.md`): `t9-strong`
+(the cube and the Plummer sphere at N = 10⁷ and 10⁸, f64 p = 3 and 8, f32 p = 8 under `auto`,
+both splits, overlap both, the errors of one charge vector; at N = 10⁷ also the first cut),
+`t9-weak` (2.5 × 10⁴ points per rank at 40 × 1, 10⁶ per socket at 2 × 20, three workloads,
+four degrees), `t9-model` (10⁴ and 10⁶ points per rank on one node, overlap off) and
+`t9-counts` (counted at 80 and 160 ranks per node, last). Measured in T9 (2026-10-15): one
+node 1 h 42 min (N = 10⁷ with weak and model) and 2 h 43 min (N = 10⁸), two nodes 2 h 3 min,
+four nodes 1 h 16 min. The Phase 5 side ran the same launches from its own tree
+(06016d2) with this `run.sh` copied in and this branch's environment, through `run.sbatch`
+and a script in `logs/` (`ONLY` without the `-cutpoints` launches, which need `--cut`):
+
+```sh
+tools/kathleen/submit.sh --qos=singlenode --nodes=1 --time=02:30:00 '--export=ALL,T9_NS=10000000' \
+    -- sweep.sbatch t9-strong t9-weak t9-model
+tools/kathleen/submit.sh --qos=singlenode --nodes=1 --time=06:00:00 '--export=ALL,T9_NS=100000000' \
+    -- sweep.sbatch t9-strong
+tools/kathleen/submit.sh --qos=small --nodes=2 --time=03:30:00 --exclude=node-c11a-011 -- sweep.sbatch t9-strong t9-weak
+tools/kathleen/submit.sh --qos=small --nodes=4 --time=03:30:00 --exclude=node-c11a-011 \
+    -- sweep.sbatch t9-strong t9-weak t9-counts
+```
+
+`node-c11a-011`'s Omni-Path contexts were busy in T2 (job 447359) and again in T9 (job
+604193): 40 ranks per node fail in `MPI_Init` there ("assign_context … busy"), 2 per node
+start. Exclude it.
+
 `singlenode` and `test` take two jobs per user each, so two one-node and two two-node
 sweeps run at once; Phase 5S T0 kept at most two jobs pending or running in all. The output stays in the root's `logs/`, never in a tree; the report
 quotes what it needs.
