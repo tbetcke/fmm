@@ -308,11 +308,11 @@ use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
 #[cfg(feature = "gpu")]
 use mpi::traits::Root;
-use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
+use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence, Group};
 use nd_fmm_math::RealScalar;
 pub use nd_fmm_plan::evaluator::OverlapTimes;
 use nd_fmm_plan::evaluator::{Evaluator, EvaluatorError};
-pub use nd_fmm_plan::exchange::{ExchangeTimes, Traffic};
+pub use nd_fmm_plan::exchange::{ExchangeTimes, MultipoleRouting, TREE_FAN_OUT, Traffic};
 use nd_fmm_plan::operator::{
     FmmOperator, FmmSizes, HostData, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p,
 };
@@ -874,6 +874,7 @@ pub struct FmmBuilder<T> {
     overlap: bool,
     work_cut: bool,
     cost_model: Option<CostModel>,
+    multipole_routing: MultipoleRouting,
     #[cfg(feature = "gpu")]
     tuning_hook: crate::tune::TuningHook,
     value: PhantomData<fn() -> T>,
@@ -908,6 +909,7 @@ impl<T> FmmBuilder<T> {
             overlap: false,
             work_cut: true,
             cost_model: None,
+            multipole_routing: MultipoleRouting::default(),
             #[cfg(feature = "gpu")]
             tuning_hook: crate::tune::TuningHook::default(),
             value: PhantomData,
@@ -1186,6 +1188,19 @@ impl<T> FmmBuilder<T> {
         self
     }
 
+    /// How the multipole exchange moves each multipole to the ranks that read it (Phase 5S
+    /// T8s, S8; fmm-validate/results/phase5s-t8s.md §1): by default
+    /// [`MultipoleRouting::Tree`] with [`TREE_FAN_OUT`], a box with more ranks reading it
+    /// sent along a tree of its readers so that no rank sends it to more than the fan-out
+    /// ranks, the first hops split across the nodes of the one `split_shared` of
+    /// [`build`](Self::build); [`MultipoleRouting::Direct`], from the owner to every
+    /// reader, is the oracle. The output is the same bit for bit; only the messages differ
+    /// ([`Fmm::exchange_traffic`]). Every rank must pass the same routing.
+    pub fn multipole_routing(mut self, routing: MultipoleRouting) -> Self {
+        self.multipole_routing = routing;
+        self
+    }
+
     /// A test aid for the tuner (Phase 4 T12; feature `gpu`): `hook` adjusts measured
     /// times and offers extra candidates, which go through registration like the others
     /// (`tune::TuningHook`). Not for production runs.
@@ -1315,6 +1330,12 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         // default device of the backend (above), and the ranks of a node share it; the
         // same split places the rank there.
         let node = comm.split_shared(comm.rank());
+        // The node of the multipole exchange's forwarding tree (Phase 5S T8s): the rank of the node's first rank
+        // in `comm`, from this split without communication.
+        let node_id =
+            node.group()
+                .translate_rank(0, &comm.group())
+                .expect("the node's ranks are ranks of the communicator") as usize;
         let ranks = self.place_rank(comm, &node, device.as_mut());
 
         // Step 2: are there points at all? The same all-reduce agrees the largest number
@@ -1486,12 +1507,14 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         // The evaluator is built with the host engine; a device engine replaces it below,
         // once the evaluator's exchanges know the ghost leaves and the slots they move.
         let operator = ExecOperator::new(Engine::Host(operator), self.kind_timing, false);
-        let mut evaluator = Evaluator::new(
+        let mut evaluator = Evaluator::with_routing(
             plan,
             comm,
             operator,
             &source_leaves.counts,
             &target_leaves.counts,
+            self.multipole_routing,
+            node_id,
         )
         .map_err(FmmError::Evaluator)?;
         let evaluator_time = start.elapsed();
@@ -3155,13 +3178,22 @@ pub struct ExchangeTraffic {
     /// The ranks the multipole exchange receives from, over every level, each once,
     /// ascending.
     pub multipole_neighbours: Vec<usize>,
-    /// Per level, the ranks the multipole exchange of the level sends a message to (one
-    /// message each), ascending (Phase 5S T5).
+    /// Per level, the ranks the multipole exchange of the level sends a message to, at any
+    /// stage, ascending (Phase 5S T5; under the forwarding tree a rank may get one message
+    /// per stage, which [`multipoles`](Self::multipoles) counts).
     pub multipole_destinations: Vec<Vec<usize>>,
     /// The most ranks the multipole exchange sends one box's multipole to, on any level
-    /// (Phase 5S T5): below the replicated top, a top-tree box goes to fewer ranks than
-    /// [`top_threshold`](Self::top_threshold); a box inside a block has no such bound.
+    /// and at any stage (Phase 5S T5): below the replicated top, a top-tree box goes to
+    /// fewer ranks than [`top_threshold`](Self::top_threshold), a box inside a block has no
+    /// such bound; under the forwarding tree (Phase 5S T8s) at most its fan-out.
     pub multipole_fan_out: usize,
+    /// The stages of the multipole exchange this rank takes part in, the most over the
+    /// levels (Phase 5S T8s): 1 under the direct exchange, 1 + the last stage of its
+    /// messages under the forwarding tree; 0 without any message.
+    pub multipole_depth: usize,
+    /// The chunks this rank forwards over every level: copies of multipoles it received
+    /// and resends along the forwarding tree (Phase 5S T8s); 0 under the direct exchange.
+    pub multipole_forwarded: usize,
     /// The readers a top-tree box needs to be in the replicated top
     /// (`nd_fmm_plan::exchange::TopExchange::threshold`; Phase 5S T5), the same on every
     /// rank.
@@ -3713,35 +3745,23 @@ where
         let top = self.evaluator.top_exchange();
         let top_sent: usize = top.sent_keys().map(|r| top.chunk(r).len()).sum();
         let mut neighbours: Vec<usize> = (0..multipoles.nlevels())
-            .flat_map(|l| {
-                multipoles
-                    .communicator(l)
-                    .in_ranks()
-                    .iter()
-                    .map(|&r| r as usize)
-            })
+            .flat_map(|l| multipoles.sources(l))
             .collect();
         neighbours.sort_unstable();
         neighbours.dedup();
-        let mut destinations = Vec::with_capacity(multipoles.nlevels());
-        let mut fan_out = 0;
-        for level in 0..multipoles.nlevels() {
-            let communicator = multipoles.communicator(level);
-            let mut ranks: Vec<usize> = communicator
-                .out_ranks()
-                .iter()
-                .map(|&r| r as usize)
-                .collect();
-            ranks.sort_unstable();
-            destinations.push(ranks);
-            // A box's key appears once per rank it goes to.
-            let mut keys = communicator.send_indices().to_vec();
-            keys.sort_unstable();
-            fan_out = keys
-                .chunk_by(|a, b| a == b)
-                .map(<[_]>::len)
-                .fold(fan_out, usize::max);
-        }
+        let levels = 0..multipoles.nlevels();
+        let destinations = levels.clone().map(|l| multipoles.destinations(l)).collect();
+        let fan_out = levels
+            .clone()
+            .map(|l| multipoles.fan_out(l))
+            .max()
+            .unwrap_or(0);
+        let depth = levels
+            .clone()
+            .map(|l| multipoles.depth(l))
+            .max()
+            .unwrap_or(0);
+        let forwarded = levels.map(|l| multipoles.forwarded(l)).sum();
         ExchangeTraffic {
             sources: self.evaluator.source_exchange().traffic(),
             reduction: (0..multipoles.nlevels())
@@ -3759,6 +3779,8 @@ where
             multipole_neighbours: neighbours,
             multipole_destinations: destinations,
             multipole_fan_out: fan_out,
+            multipole_depth: depth,
+            multipole_forwarded: forwarded,
             top_threshold: top.threshold(),
             top_sent,
             top_received: top.gathered().len() - top_sent,
@@ -3798,6 +3820,11 @@ where
         check_kind_timing(mode, self.backend, kinds.on_device)?;
         kinds.timings.mode = mode;
         Ok(())
+    }
+
+    /// How the multipole exchange routes the multipoles ([`FmmBuilder::multipole_routing`]).
+    pub fn multipole_routing(&self) -> MultipoleRouting {
+        self.evaluator.multipole_exchange().routing()
     }
 
     /// Whether evaluations overlap the exchanges with local work ([`FmmBuilder::overlap`]).

@@ -441,12 +441,16 @@ pub fn check_fmm<T: Stored + SimdScalar + Equivalence + Default>(
     let operator = fmm.operator().clone();
     assert_eq!(operator.threads(), 1, "the shadow check runs on one thread");
     let gradients = operator.gradients();
-    let mut evaluator = Evaluator::new(
+    // The multipole exchange of the FMM's routing (Phase 5S T8s): the tree forwards copies
+    // it received, which the events must still cover.
+    let mut evaluator = Evaluator::with_routing(
         plan,
         comm,
         Shadow::new(operator, hook),
         fmm.source_counts(),
         fmm.target_counts(),
+        fmm.multipole_routing(),
+        comm.rank() as usize,
     )
     .expect("the shadow's evaluator builds");
     let all_counts = counts(evaluator.source_store());

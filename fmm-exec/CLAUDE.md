@@ -184,7 +184,20 @@ module `cost`; design docs/design/scale-out.md §6).
     or `OverlapTimes::top_gather` overlapped, plus `ReceivedTop`).
     `Fmm::exchange_traffic` gives the messages and values per exchange (since Phase 5S T5
     also the upward reduction per level, the replicated top's values and threshold, and the
-    multipole exchange's neighbours, destinations per level and largest fan-out of a box).
+    multipole exchange's neighbours, destinations per level and largest fan-out of a box;
+    since T8s its depth and forwarded chunks).
+  - The forwarding tree (Phase 5S T8s, S8; fmm-validate/results/phase5s-t8s.md §1;
+    `nd_fmm_plan::exchange::MultipoleRouting`, re-exported by `fmm`):
+    `FmmBuilder::multipole_routing` (default `MultipoleRouting::Tree` with `TREE_FAN_OUT`
+    = 8; `Direct` is the oracle) and `Fmm::multipole_routing`. `build` takes each rank's
+    node from step 1's `split_shared` (`Group::translate_rank`, no communication) and
+    passes it to `Evaluator::with_routing`. The output is the same bit for bit under every
+    routing, and no event changes: the forwards resend received chunks, so the device and
+    the shadow see the direct exchange's `ReceivedMultipoles` lists (fewer duplicates in
+    `send_boxes`). The shadow check builds its evaluator with the `Fmm`'s routing.
+    `tests/mpi_exec.rs`, **multipole routing**, checks the narrow tree (fan-out 2), the
+    default and `Direct` against each other and one rank, blocking and overlapped, with
+    the shadow check on the narrow tree.
     The device runs the overlapped stages too, for correctness (design §13, question 10;
     the stage windows `UpwardLocal` and `Downward`). `tests/mpi_exec.rs` checks overlap on
     every scenario that evaluates (its module docs, "Overlap"), the shadow check runs

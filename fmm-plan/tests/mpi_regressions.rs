@@ -6,8 +6,8 @@ use mpi::{collective::SystemOperation, topology::SimpleCommunicator, traits::*};
 use nd_fmm_plan::{
     evaluator::Evaluator,
     exchange::{
-        self, MultipoleExchange, ReductionExchange, SourceExchange, TOP_MAX_BOXES,
-        TOP_READER_FRACTION, TopExchange,
+        self, MultipoleExchange, MultipoleRouting, ReductionExchange, SourceExchange,
+        TOP_MAX_BOXES, TOP_READER_FRACTION, TopExchange,
     },
     interaction_manager::V_LIST_DIRECTIONS,
     lists::{GroupedCsr, offset_index},
@@ -31,6 +31,67 @@ use rlst::{
     distributed_tools::{GhostCommunicator, all_to_allv, array_tools::gather_to_all},
     rlst_dynamic_array,
 };
+
+/// The forwarding tree at its narrowest (Phase 5S T8s): a fan-out of 2, so that boxes with
+/// three readers or more are forwarded at 4–8 ranks, and made-up nodes of two ranks each,
+/// so that the node split runs. With this rank's node.
+fn narrow_tree<C: Communicator>(comm: &C) -> (MultipoleRouting, usize) {
+    (
+        MultipoleRouting::Tree { fan_out: 2 },
+        comm.rank() as usize / 2,
+    )
+}
+
+/// The default routing with this rank as its own node, as `Evaluator::new` builds it.
+fn default_routing<C: Communicator>(comm: &C) -> (MultipoleRouting, usize) {
+    (MultipoleRouting::default(), comm.rank() as usize)
+}
+
+/// Check what the multipole exchange of `level` reports about its traffic: the values
+/// received are the receive buffer, at least one message per rank sent to or received
+/// from, at most `fan_out` copies of a box from this rank under a tree, and over all
+/// ranks as many messages and values sent as received. Collective.
+fn check_multipole_traffic<C: CommunicatorCollectives, T: Copy + Default + Equivalence>(
+    name: &str,
+    comm: &C,
+    exchange: &MultipoleExchange<T>,
+    level: usize,
+) {
+    let traffic = exchange.traffic(level);
+    assert_eq!(
+        traffic.values_received,
+        exchange.receive_buffer(level).len(),
+        "{name}"
+    );
+    assert!(
+        traffic.messages_sent >= exchange.destinations(level).len(),
+        "{name}"
+    );
+    assert!(
+        traffic.messages_received >= exchange.sources(level).len(),
+        "{name}"
+    );
+    if let MultipoleRouting::Tree { fan_out } = exchange.routing() {
+        assert!(
+            exchange.fan_out(level) <= fan_out,
+            "{name}: a box sent to {} ranks on level {level}",
+            exchange.fan_out(level)
+        );
+    }
+    let local = [
+        traffic.messages_sent,
+        traffic.messages_received,
+        traffic.values_sent,
+        traffic.values_received,
+    ];
+    let mut total = [0usize; 4];
+    comm.all_reduce_into(&local[..], &mut total[..], SystemOperation::sum());
+    assert_eq!(
+        [total[0], total[2]],
+        [total[1], total[3]],
+        "{name}: messages and values sent and received over all ranks"
+    );
+}
 
 fn keys(points: &[[f64; 3]]) -> Vec<u64> {
     let mut array = rlst_dynamic_array!(f64, [3, points.len()]);
@@ -1010,7 +1071,12 @@ fn check_top<C: CommunicatorCollectives>(
 /// compute, without those the reduction and the replicated top deliver, receive their
 /// owner's values, and nothing else; that every box sent is one this rank computes; and
 /// that every multipole a list of this rank reads, and every child its owned `Global`
-/// boxes need, reaches it exactly once over the three exchanges. Returns the traffic.
+/// boxes need, reaches it exactly once over the three exchanges. The forwarding tree
+/// (Phase 5S T8s), at its default and at its narrowest ([`narrow_tree`]), blocking and
+/// non-blocking, receives the same boxes as the direct exchange with the same bits in every
+/// slot and receive buffer, and sends no box to more ranks than its fan-out. Returns the
+/// traffic of the direct exchange and the chunks the narrow tree forwarded, summed over the
+/// ranks.
 fn check_multipole_exchange<C: CommunicatorCollectives>(
     name: &str,
     octree: &Octree<'_, C>,
@@ -1019,11 +1085,15 @@ fn check_multipole_exchange<C: CommunicatorCollectives>(
     plan: &Plan,
     sizes: &[usize],
     (reduction, top): (&ReductionExchange<u64>, &TopExchange<u64>),
-) -> Traffic {
+) -> (Traffic, usize) {
     let comm = octree.comm();
     let index = plan.index();
-    let mut exchange = MultipoleExchange::<u64>::new(plan, comm, sizes, reduction, top)
-        .unwrap_or_else(|error| panic!("{name}: multipole exchange: {error}"));
+    let direct = (MultipoleRouting::Direct, 0);
+    let build = |(routing, node): (MultipoleRouting, usize)| {
+        MultipoleExchange::<u64>::new(plan, comm, sizes, reduction, top, routing, node)
+            .unwrap_or_else(|error| panic!("{name}: multipole exchange {routing:?}: {error}"))
+    };
+    let mut exchange = build(direct);
     let mut multipoles = seeded_multipoles(octree, all_keys, plan, sizes);
     let mut overlapped = multipoles.clone();
     exchange.forward_all(&mut multipoles);
@@ -1033,8 +1103,7 @@ fn check_multipole_exchange<C: CommunicatorCollectives>(
     // between, delivers the same bits into the slots and the receive buffers; a level's
     // receive buffer is current once it is waited for.
     let nlevels = index.nlevels();
-    let mut second = MultipoleExchange::<u64>::new(plan, comm, sizes, reduction, top)
-        .unwrap_or_else(|error| panic!("{name}: multipole exchange: {error}"));
+    let mut second = build(direct);
     let (current, _) = second.forward_all_overlapped(&mut overlapped, |flight, multipoles| {
         let mut current = true;
         for level in (0..nlevels).rev() {
@@ -1055,13 +1124,64 @@ fn check_multipole_exchange<C: CommunicatorCollectives>(
             exchange.receive_buffer(level),
             "{name}: receive buffer of level {level}"
         );
-        check_traffic(
-            name,
-            comm,
-            second.traffic(level),
-            second.communicator(level),
-        );
+        check_multipole_traffic(name, comm, &second, level);
     }
+
+    // The forwarding tree, slot by slot against the direct exchange: the same boxes
+    // received, the same bits in every slot and receive buffer, blocking and overlapped
+    // (the levels waited for in order, as the evaluator does).
+    let mut forwarded = 0usize;
+    for (label, routing) in [
+        ("tree", default_routing(comm)),
+        ("narrow tree", narrow_tree(comm)),
+    ] {
+        let name = &format!("{name}, {label}");
+        let mut tree = build(routing);
+        let mut blocking = seeded_multipoles(octree, all_keys, plan, sizes);
+        tree.forward_all(&mut blocking);
+        assert!(
+            blocking == multipoles,
+            "{name}: the stores differ from the direct exchange's"
+        );
+        for level in 0..nlevels {
+            assert_eq!(
+                tree.receive_boxes(level),
+                exchange.receive_boxes(level),
+                "{name}: received boxes of level {level}"
+            );
+            assert_eq!(
+                tree.receive_buffer(level),
+                exchange.receive_buffer(level),
+                "{name}: receive buffer of level {level}"
+            );
+            for key in keys_of(plan, level, tree.send_boxes(level)) {
+                assert!(computes(octree, all_keys, key), "{name}: sends {key}");
+            }
+            check_multipole_traffic(name, comm, &tree, level);
+            forwarded += tree.forwarded(level);
+        }
+        let mut tree = build(routing);
+        let mut overlapped = seeded_multipoles(octree, all_keys, plan, sizes);
+        tree.forward_all_overlapped(&mut overlapped, |flight, multipoles| {
+            for level in 0..nlevels {
+                flight.test();
+                flight.wait(level, multipoles);
+            }
+        });
+        assert!(
+            overlapped == multipoles,
+            "{name}: the non-blocking tree differs from the direct exchange"
+        );
+        for level in 0..nlevels {
+            assert_eq!(
+                tree.receive_buffer(level),
+                exchange.receive_buffer(level),
+                "{name}: non-blocking receive buffer of level {level}"
+            );
+        }
+    }
+    let mut total_forwarded = 0usize;
+    comm.all_reduce_into(&forwarded, &mut total_forwarded, SystemOperation::sum());
 
     // The boxes of the V- and W-lists that other ranks compute, by level; those the
     // multipole exchange receives are the rest after the reduction and the top.
@@ -1100,9 +1220,8 @@ fn check_multipole_exchange<C: CommunicatorCollectives>(
                 "{name}: the multipole exchange sends {key}, which another rank computes"
             );
         }
-        let communicator = exchange.communicator(level);
-        traffic.keys += communicator.total_receive_count();
-        traffic.values += communicator.receive_buffer_len();
+        traffic.keys += exchange.receive_boxes(level).len();
+        traffic.values += exchange.receive_buffer(level).len();
     }
     check_slots(name, octree, all_keys, plan, &multipoles, &expected);
 
@@ -1134,7 +1253,7 @@ fn check_multipole_exchange<C: CommunicatorCollectives>(
             );
         }
     }
-    traffic
+    (traffic, total_forwarded)
 }
 
 /// A target count per leaf that every rank can recompute from the key, independent of
@@ -1329,6 +1448,36 @@ fn check_repeated_evaluation<C: CommunicatorCollectives>(name: &str, comm: &C, p
         stores(&owning) == first,
         "{name}: a blocking evaluation after an overlapped one differs"
     );
+
+    // Every routing of the multipole exchange gives the stores of the default bit for bit
+    // (Phase 5S T8s), blocking and overlapped.
+    for (label, (routing, node)) in [
+        ("direct", (MultipoleRouting::Direct, 0)),
+        ("narrow tree", narrow_tree(comm)),
+    ] {
+        let mut other = Evaluator::with_routing(
+            plan,
+            comm,
+            PerPair(Mixer),
+            &sources,
+            &targets,
+            routing,
+            node,
+        )
+        .unwrap_or_else(|error| panic!("{name}, {label}: evaluator: {error}"));
+        fill_by_key(plan, other.local_sources_mut(), 0);
+        fill_by_key(plan, other.local_target_inputs_mut(), 1);
+        other.evaluate();
+        assert!(
+            stores(&other) == first,
+            "{name}, {label}: the stores differ"
+        );
+        other.evaluate_overlapped();
+        assert!(
+            stores(&other) == first,
+            "{name}, {label}: the overlapped stores differ"
+        );
+    }
 }
 
 /// The stores of a [`Mixer`] evaluation of `plan` on `comm` (hashed counts, data by key,
@@ -1944,6 +2093,7 @@ fn expected_events<C: CommunicatorCollectives>(
     comm: &C,
     plan: &Plan,
     counts: &[usize],
+    (routing, node): (MultipoleRouting, usize),
 ) -> Vec<EventLists> {
     let nlevels = plan.nlevels();
     let sizes = vec![1; nlevels];
@@ -1953,8 +2103,9 @@ fn expected_events<C: CommunicatorCollectives>(
         .unwrap_or_else(|error| panic!("{name}: reduction: {error}"));
     let top = TopExchange::<u32>::new(plan, comm, &sizes, &reduction)
         .unwrap_or_else(|error| panic!("{name}: replicated top: {error}"));
-    let multipoles = MultipoleExchange::<u32>::new(plan, comm, &sizes, &reduction, &top)
-        .unwrap_or_else(|error| panic!("{name}: multipole exchange: {error}"));
+    let multipoles =
+        MultipoleExchange::<u32>::new(plan, comm, &sizes, &reduction, &top, routing, node)
+            .unwrap_or_else(|error| panic!("{name}: multipole exchange: {error}"));
     event_lists(nlevels, &sources, &reduction, &top, &multipoles)
 }
 
@@ -2014,13 +2165,15 @@ fn event_defects(recorder: &Recorder<'_>, expected: &[EventLists]) -> Vec<String
 /// come in their place among the level calls, on every rank, with the index lists of the
 /// exchanges; their verdict is agreed on every rank. With `overlapped`, through
 /// `Evaluator::evaluate_overlapped` (Phase 5 T9): the same calls, groupings, pairs, events
-/// and lists, the events in the overlapped places.
+/// and lists, the events in the overlapped places. The multipole exchange routes by
+/// `routing` (Phase 5S T8s), with this rank's node.
 fn check_batches<C: CommunicatorCollectives>(
     name: &str,
     octree: &Octree<'_, C>,
     oracle: &OracleLists,
     plan: &Plan,
     overlapped: bool,
+    routing: (MultipoleRouting, usize),
 ) {
     let (name, expected_calls): (&str, ExpectedCalls) = if overlapped {
         (&format!("{name}, overlapped"), expected_overlapped_calls)
@@ -2032,7 +2185,7 @@ fn check_batches<C: CommunicatorCollectives>(
         .map(|j| hashed_count(plan.index().leaf_key(j)))
         .collect();
     let comm = octree.comm();
-    let expected_events = expected_events(name, comm, plan, &counts);
+    let expected_events = expected_events(name, comm, plan, &counts, routing);
     let recorder = Recorder {
         plan,
         calls: Vec::new(),
@@ -2040,8 +2193,9 @@ fn check_batches<C: CommunicatorCollectives>(
         events: Vec::new(),
         shape_errors: Vec::new(),
     };
-    let mut evaluator = Evaluator::new(plan, comm, recorder, &counts, &counts)
-        .unwrap_or_else(|error| panic!("{name}: evaluator: {error}"));
+    let mut evaluator =
+        Evaluator::with_routing(plan, comm, recorder, &counts, &counts, routing.0, routing.1)
+            .unwrap_or_else(|error| panic!("{name}: evaluator: {error}"));
     if overlapped {
         evaluator.evaluate_overlapped();
     } else {
@@ -2574,6 +2728,9 @@ fn distributed_tree_regressions() {
             8,
         ),
     ];
+    // The chunks the narrow forwarding tree forwarded over every scenario, summed over the
+    // ranks (Phase 5S T8s).
+    let mut tree_forwarded = 0usize;
     for (name, sources, targets, max_level, capacity) in cases {
         eprintln!("rank {rank}: {name}");
         // One tree serves both populations, as in an FMM with distinct
@@ -2676,7 +2833,7 @@ fn distributed_tree_regressions() {
         let (reduction, reduced) = check_reduction(name, &octree, &held, &plan, &sizes);
         let reduced = reduced.total(&comm);
         let (top, top_size) = check_top(name, &octree, &held, &oracle, &plan, &sizes, &reduction);
-        let multipoles = check_multipole_exchange(
+        let (multipoles, forwarded) = check_multipole_exchange(
             name,
             &octree,
             &held,
@@ -2684,8 +2841,9 @@ fn distributed_tree_regressions() {
             &plan,
             &sizes,
             (&reduction, &top),
-        )
-        .total(&comm);
+        );
+        let multipoles = multipoles.total(&comm);
+        tree_forwarded += forwarded;
         if comm.size() > 1 && name == "graded corner blob" {
             assert!(
                 ones.keys > 0 && multipoles.keys > 0,
@@ -2722,8 +2880,11 @@ fn distributed_tree_regressions() {
         // batches it issues.
         check_repeated_evaluation(name, &comm, &plan);
         check_against_one_rank(name, &octree, &plan, &fine_keys, options);
-        check_batches(name, &octree, &oracle, &plan, false);
-        check_batches(name, &octree, &oracle, &plan, true);
+        check_batches(name, &octree, &oracle, &plan, false, default_routing(&comm));
+        check_batches(name, &octree, &oracle, &plan, true, default_routing(&comm));
+        let narrow = &format!("{name}, narrow tree");
+        check_batches(narrow, &octree, &oracle, &plan, false, narrow_tree(&comm));
+        check_batches(narrow, &octree, &oracle, &plan, true, narrow_tree(&comm));
 
         // The redistribution of the sources and of the targets, from every input
         // distribution of the scenario's global points (every rank's, in rank order).
@@ -2732,6 +2893,17 @@ fn distributed_tree_regressions() {
         check_redistribution(name, &octree, &plan, "sources", &global_sources);
         check_redistribution(name, &octree, &plan, "targets", &global_targets);
         check_redistribution_errors(name, &octree, &plan, &global_sources);
+    }
+    if rank == 0 {
+        println!(
+            "narrow forwarding tree on {} ranks: {tree_forwarded} chunks forwarded",
+            comm.size()
+        );
+    }
+    // From 4 ranks some box of the scenarios has three readers or more; at many ranks the
+    // scenarios' few points per rank may leave none below R.
+    if (4..=8).contains(&comm.size()) {
+        assert!(tree_forwarded > 0, "the narrow tree forwarded nothing");
     }
 
     // The owned top tree against one rank on the cube and the Plummer sphere (Phase 5S T5):
