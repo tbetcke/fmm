@@ -117,7 +117,7 @@ use nd_fmm_exec::fmm::{
     MultipoleRouting, OperatorKind, Output, OutputMany, StageTimings, TREE_FAN_OUT, Traffic,
 };
 use nd_fmm_exec::geometry::{contains, integer_centre};
-use nd_fmm_exec::operator::{MulAdd, SimdScalar};
+use nd_fmm_exec::operator::{MulAdd, P2pChoice, SimdScalar};
 use nd_fmm_exec::tables::{M2lStrategy, NodeContext};
 use nd_fmm_exec::threading::ThreadingReport;
 use nd_fmm_math::RealScalar;
@@ -440,6 +440,10 @@ pub struct Settings {
     /// backend of the `gpu` features (Phase 6 T5, for the device's throughput per charge
     /// vector), on one rank or on the ranks sharing a device (correctness, never scaling).
     pub backend: Backend,
+    /// The P2P kernel (`FmmBuilder::p2p_kernel`; the library's `Auto`, the ISA of
+    /// `Isa::detect`): an explicit ISA, such as AVX-512 (Phase 6 T6), or the reference.
+    /// On the host it also sets the ISA of the batched M2L's kernel.
+    pub p2p: P2pChoice,
 }
 
 impl Settings {
@@ -469,6 +473,7 @@ impl Settings {
             },
             rhs: 1,
             backend: Backend::Host,
+            p2p: P2pChoice::Auto,
         }
     }
 }
@@ -1206,6 +1211,8 @@ pub struct Report {
     pub precision: &'static str,
     /// The resolved M2L strategy.
     pub strategy: M2lStrategy,
+    /// The resolved P2P kernel (`Fmm::p2p_kernel`): `Auto` replaced by its ISA.
+    pub p2p: P2pChoice,
     /// The number of ranks.
     pub ranks: usize,
     /// Rank 0's threading report: rayon threads, the MPI level and the BLAS variables.
@@ -1868,7 +1875,7 @@ fn bits<T: RealScalar>(output: &Output<T>) -> Vec<u64> {
 }
 
 /// The builder of `settings`: the harness's tree, gradients, the threads, the strategy, its
-/// node budget and the batched M2L's mode, overlap, the kind timings, the second cut and
+/// node budget and the batched M2L's mode, the P2P kernel, overlap, the kind timings, the second cut and
 /// its constants.
 fn builder<T: Stored + SimdScalar + Equivalence + Default>(settings: &Settings) -> FmmBuilder<T> {
     let mut builder = FmmBuilder::<T>::new(settings.p)
@@ -1878,6 +1885,7 @@ fn builder<T: Stored + SimdScalar + Equivalence + Default>(settings: &Settings) 
         .threads(settings.threads)
         .strategy(settings.strategy)
         .m2l_mul_add(settings.m2l_mul_add)
+        .p2p_kernel(settings.p2p)
         .overlap(settings.overlap == Overlap::On)
         .kind_timings(if settings.kinds {
             KindTiming::Synchronous
@@ -2099,6 +2107,7 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         settings: *settings,
         precision: if size_of::<T>() == 4 { "f32" } else { "f64" },
         strategy: fmm.strategy(),
+        p2p: fmm.p2p_kernel(),
         ranks: size,
         threading: fmm.threading().clone(),
         nlevels: fmm.nlevels(),
@@ -2884,6 +2893,7 @@ impl Report {
                     format!("strategy={:?}", self.strategy),
                     format!("requested={:?}", self.settings.strategy),
                     format!("mul_add={}", self.settings.m2l_mul_add),
+                    format!("p2p={}", self.p2p),
                     format!(
                         "budget_mb={}",
                         mb(self
@@ -3133,11 +3143,12 @@ impl fmt::Display for Report {
         )?;
         writeln!(
             f,
-            "- precision {}, p = {}, strategy {:?}, gradients; input: {}; overlap: {}; kind \
-             timings: {}",
+            "- precision {}, p = {}, strategy {:?}, P2P kernel {}, gradients; input: {}; \
+             overlap: {}; kind timings: {}",
             self.precision,
             s.p,
             self.strategy,
+            self.p2p,
             s.input.description(),
             s.overlap.name(),
             if s.kinds { "Synchronous" } else { "off" }

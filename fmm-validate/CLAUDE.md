@@ -208,6 +208,16 @@ traffic and the memory model with m values per source and box, and in
 `tools/scaling/run.sh` the sweeps `t5-host`, `t5-threads`, `t5-device` and `t5-nodes`
 (`T5_RHS`, `DEVICE`, `FEATURES`). Its report is `results/phase6-rhs.md`.
 
+Phase 6 T6 (AVX-512, C6.7) added `Settings::p2p` (`--p2p` with `auto`, `reference` or an
+ISA name such as `avx512`; `FmmBuilder::p2p_kernel`, which on the host also sets the
+batched M2L's kernel; an ISA the machine lacks is refused by the example before MPI starts), `Report::p2p` (the
+resolved kernel, the report's "P2P kernel" and the summary's `p2p`), covered in
+`tests/scaling.rs`; `p2p_kernels --isa name` (the reference and one ISA, for one copy per
+core of a node) and the AVX-512 row of `p2p_kernels::model`; in `tools/scaling/run.sh` the
+sweeps `t6-fmm` and `t6-m2l` (each configuration with every ISA of `T6_ISAS`, default
+"avx2 avx512"), and the step `p2p-node` of `tools/kathleen/jobs/sweep.sbatch`. Its report
+is `results/phase6-avx512.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

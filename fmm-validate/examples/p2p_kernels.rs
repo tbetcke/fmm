@@ -15,7 +15,8 @@
 //! Run in release mode with every BLAS thread variable set to 1; the kernels run on one
 //! thread. `--quick` runs a reduced set of cells; `--ghz f` sets the clock that turns
 //! times into cycles (default: 4.05 on the Apple M3 Max, else none, and the fraction
-//! of the model is not printed):
+//! of the model is not printed); `--isa name` times the reference and that ISA alone
+//! (Phase 6 T6: one copy per core of a node, each with one ISA, loads every core with it):
 //!
 //! ```text
 //! OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 BLIS_NUM_THREADS=1 \
@@ -25,7 +26,8 @@
 //!
 //! Nothing here initialises MPI, although the crate links it (but `--device … --fmm`).
 //! Timings are reported, never asserted. The example builds and runs on x86_64 as well,
-//! where it times the AVX2 path; Phase 3S took no x86_64 timings.
+//! where it times the AVX2 path and, on a CPU with AVX-512F, the AVX-512 path (Phase 6
+//! T6); Phase 3S took no x86_64 timings.
 //!
 //! # The device P2P (Phase 4 T6, C4.2; feature `gpu`)
 //!
@@ -111,6 +113,8 @@ struct Row {
 struct Arguments {
     quick: bool,
     ghz: Option<f64>,
+    /// `--isa name`: the reference and this ISA of `nd-fmm-simd` alone.
+    isa: Option<Isa>,
     /// `--device b`: the device rows instead of the host table.
     device: Option<String>,
     /// `--fmm`: with `--device`, also the leaf stage inside the FMM.
@@ -125,20 +129,22 @@ struct Arguments {
     repeats: usize,
 }
 
-/// Parses `--quick`, `--ghz f`, `--device b`, `--fmm`, `--leaves n`, `--threads n` and
-/// `--repeats r`; exits with a message on anything else.
+/// Parses `--quick`, `--ghz f`, `--isa name`, `--device b`, `--fmm`, `--leaves n`,
+/// `--threads n` and `--repeats r`; exits with a message on anything else.
 fn arguments() -> Arguments {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let usage = || -> ! {
         eprintln!(
-            "usage: p2p_kernels [--quick] [--ghz f] [--device cpu|metal|cuda [--fmm|--only-fmm] \
-             [--leaves n] [--threads n] [--repeats r]], f > 0, n, r >= 1; got {args:?}"
+            "usage: p2p_kernels [--quick] [--ghz f] [--isa name] [--device cpu|metal|cuda \
+             [--fmm|--only-fmm] [--leaves n] [--threads n] [--repeats r]], f > 0, n, r >= 1, \
+             name an available ISA; got {args:?}"
         );
         std::process::exit(2);
     };
     let mut parsed = Arguments {
         quick: false,
         ghz: cpu_model().contains("Apple M3 Max").then_some(M3_MAX_GHZ),
+        isa: None,
         device: None,
         fmm: false,
         only_fmm: false,
@@ -163,6 +169,13 @@ fn arguments() -> Arguments {
                 match value.parse::<f64>() {
                     Ok(f) if f > 0.0 => parsed.ghz = Some(f),
                     _ => usage(),
+                }
+                tail
+            }
+            ("--isa", [value, tail @ ..]) => {
+                match Isa::available().find(|isa| isa.to_string() == *value) {
+                    Some(isa) => parsed.isa = Some(isa),
+                    None => usage(),
                 }
                 tail
             }
@@ -217,10 +230,12 @@ fn main() {
             std::process::exit(2);
         }
     }
-    let Arguments { quick, ghz, .. } = arguments;
+    let Arguments {
+        quick, ghz, isa, ..
+    } = arguments;
     let cells = if quick { Cell::quick() } else { Cell::all() };
-    let mut rows = run::<f32>(&cells);
-    rows.extend(run::<f64>(&cells));
+    let mut rows = run::<f32>(&cells, isa);
+    rows.extend(run::<f64>(&cells, isa));
     print_header(quick, ghz);
     for precision in ["f32", "f64"] {
         for gradients in [false, true] {
@@ -231,8 +246,8 @@ fn main() {
 }
 
 /// Checks and times every kernel of precision `T` on every cell, with and without
-/// gradients.
-fn run<T: SimdScalar>(cells: &[Cell]) -> Vec<Row> {
+/// gradients: the reference and every available ISA, or only `isa` if given.
+fn run<T: SimdScalar>(cells: &[Cell], isa: Option<Isa>) -> Vec<Row> {
     let mut rows = Vec::new();
     for &cell in cells {
         let pool = cell.pool::<T>();
@@ -245,7 +260,10 @@ fn run<T: SimdScalar>(cells: &[Cell]) -> Vec<Row> {
                 if gradients { "φ, ∇φ" } else { "φ" }
             );
             let mut reference = Accuracy::default();
-            for kernel in Kernel::<T>::all() {
+            let kernels = Kernel::<T>::all()
+                .into_iter()
+                .filter(|kernel| isa.is_none() || kernel.isa().is_none() || kernel.isa() == isa);
+            for kernel in kernels {
                 let accuracy = check(&kernel, &pool, &oracles, cell.form(), gradients);
                 if kernel.isa().is_none() {
                     reference = accuracy;
@@ -342,8 +360,9 @@ fn print_header(quick: bool, ghz: Option<f64>) {
     );
     println!(
         "- Model: pairs per cycle of design §4.6 as corrected by the T2 spike (NEON: \
-         4 FP pipes and the divider, W / max(ops/4, 3); AVX2: 2 FMA pipes, 2W / ops), \
-         with the measured pairs per cycle at the assumed clock."
+         4 FP pipes and the divider, W / max(ops/4, 3); AVX2 and AVX-512: 2 FMA pipes, \
+         2W / ops), with the measured pairs per cycle at the assumed clock (on AVX-512 the \
+         clock a core holds under 512-bit code may be lower)."
     );
     println!(
         "- The reference's speed is bimodal on the M3 Max (T2 spike, \"Other findings\"): \

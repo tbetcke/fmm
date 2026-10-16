@@ -6,8 +6,8 @@
 //! rounded once, and the inputs are finite and moderate, so no NaN with an
 //! ISA-dependent payload arises (NaN only passes through the and-not unchanged). The
 //! kernel's inverse square root equals the scalar path bit for bit where both use
-//! `sqrt` and a division (NEON); on AVX2 it is checked against 1/√x within its
-//! contract here, and exhaustively in `tests/rsqrt`. The estimate is checked against
+//! `sqrt` and a division (NEON); on AVX2 and AVX-512 it is checked against 1/√x within
+//! its contract here, and exhaustively in `tests/rsqrt`. The estimate is checked against
 //! its documented bound.
 //!
 //! The P2P kernel body is checked here where it is generic: every K gives the same
@@ -15,12 +15,16 @@
 //! does not run, is within the term and sum tolerances of the reference. The public
 //! kernel is tested in `tests/p2p`.
 //!
-//! Every test prints the ISAs it ran; run with `--show-output` to see it.
+//! Every test prints the ISAs it ran, and those of this architecture it could not run
+//! for want of the CPU features (AVX-512 on most x86_64 machines); run with
+//! `--show-output` to see it.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 #[cfg(target_arch = "x86_64")]
 use super::avx2::Avx2;
+#[cfg(target_arch = "x86_64")]
+use super::avx512::Avx512;
 #[cfg(target_arch = "aarch64")]
 use super::neon::Neon;
 use super::p2p::{p2p_body, p2p_many_body};
@@ -31,10 +35,13 @@ use crate::{Isa, SimdScalar};
 const TRIALS: usize = 2000;
 
 /// Runs the generic check `$check::<$t, _>(token)` on the token of every available ISA
-/// and prints the ISAs it ran under the test's name.
+/// and prints the ISAs it ran under the test's name, and those of this architecture it
+/// skipped because the CPU lacks them.
 macro_rules! on_every_isa {
     ($test:expr, $t:ty, $check:ident) => {{
         let mut ran = vec![Isa::Scalar.to_string()];
+        #[allow(unused_mut, reason = "only x86_64 has an ISA to skip")]
+        let mut skipped: Vec<String> = Vec::new();
         $check::<$t, _>(Scalar);
         #[cfg(target_arch = "aarch64")]
         if let Some(s) = Neon::try_new() {
@@ -42,15 +49,31 @@ macro_rules! on_every_isa {
             ran.push(Isa::Neon.to_string());
         }
         #[cfg(target_arch = "x86_64")]
-        if let Some(s) = Avx2::try_new() {
-            $check::<$t, _>(s);
-            ran.push(Isa::Avx2.to_string());
+        match Avx2::try_new() {
+            Some(s) => {
+                $check::<$t, _>(s);
+                ran.push(Isa::Avx2.to_string());
+            }
+            None => skipped.push(format!("{} (no avx2 and fma)", Isa::Avx2)),
+        }
+        #[cfg(target_arch = "x86_64")]
+        match Avx512::try_new() {
+            Some(s) => {
+                $check::<$t, _>(s);
+                ran.push(Isa::Avx512.to_string());
+            }
+            None => skipped.push(format!("{} (no avx512f)", Isa::Avx512)),
         }
         println!(
-            "{} ({}): ISAs run: {}",
+            "{} ({}): ISAs run: {}{}",
             $test,
             stringify!($t),
-            ran.join(", ")
+            ran.join(", "),
+            if skipped.is_empty() {
+                String::new()
+            } else {
+                format!("; not run: {}", skipped.join(", "))
+            }
         );
     }};
 }
@@ -231,6 +254,8 @@ fn inverse_square_roots<T: SimdScalar, S: Simd<T>>(s: S) {
         Isa::Neon => 2f64.powi(-8),
         // `vrsqrtps` (Intel Intrinsics Guide), plus the conversion of f64 to f32.
         Isa::Avx2 => 1.5 * 2f64.powi(-12) + 2f64.powi(-24),
+        // `vrsqrt14ps`/`pd` (Intel Intrinsics Guide).
+        Isa::Avx512 => 2f64.powi(-14),
         _ => rsqrt_bound,
     };
     for _ in 0..TRIALS {
@@ -254,7 +279,7 @@ fn inverse_square_roots<T: SimdScalar, S: Simd<T>>(s: S) {
                 x[i].to_f64()
             );
         }
-        if S::ISA != Isa::Avx2 {
+        if !matches!(S::ISA, Isa::Avx2 | Isa::Avx512) {
             // `sqrt` and a division, as on the scalar path.
             let want: Vec<T> = x.iter().map(|&xi| Scalar.rsqrt(xi)).collect();
             assert_bits::<T, S>("rsqrt", &rsqrt, &want);

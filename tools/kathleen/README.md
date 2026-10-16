@@ -31,7 +31,7 @@ lifted from Phase 5N's 2 nodes. 4-node jobs run in `small` ("Jobs and QoS").
 | `jobs/scaling.sbatch` | 2 nodes `test`, or 4 nodes `small` | one `scaling` launch, 2 ranks × 20 threads on each node of the job, the N = 10⁶ cube, f64, p = 3, `--reference --errors 8` |
 | `jobs/run.sbatch` | 1 node, `singlenode` (40 tasks per node, so `mpirun` has slots); any node count the submission names | each argument as one step, for anything else |
 | `jobs/correctness.sbatch` | 2 nodes `test` (default), or 4 nodes `small` | Phase 5S T2's correctness job, by parts: the MPI test list at 2, 4, 8 and one rank per core, rank-count invariance at one rank per core against P/2, P/4 and P/8, the `scaling` smoke run; at 4 nodes also the harness at N = 10⁸ against a quarter of the ranks and invariance at 640 against 80 oversubscribed ("The correctness job") |
-| `jobs/sweep.sbatch` | 1 node `singlenode` 6 h, 2 nodes `test`/`small`, or 4 nodes `small` | sweeps of `tools/scaling/run.sh` in one allocation, and `p2p` (the x86 P2P examples); one file per launch in `logs/scaling-<job id>/` (Phase 5N T2; "Scaling sweeps") |
+| `jobs/sweep.sbatch` | 1 node `singlenode` 6 h, 2 nodes `test`/`small`, or 4 nodes `small` | sweeps of `tools/scaling/run.sh` in one allocation, `p2p` (the x86 P2P examples) and `p2p-node` (`p2p_kernels` on every core at once, one ISA at a time; Phase 6 T6); one file per launch in `logs/scaling-<job id>/` (Phase 5N T2; "Scaling sweeps") |
 | `check-root.sh` | login node | lists what was written outside the root since the setup |
 | `machine.md` | | the machine's facts, measured, and what the environment resolved to |
 
@@ -322,6 +322,7 @@ a rank's threads are placed by the kernel, one per core while cores are idle.
 
 ```sh
 tools/kathleen/submit.sh sweep.sbatch strong threads p2p          # one node, ~2.5 h
+tools/kathleen/submit.sh '--export=ALL,EVALS=5' -- sweep.sbatch p2p p2p-node t6-fmm t6-m2l  # Phase 6 T6, one node, 48 min
 tools/kathleen/submit.sh sweep.sbatch strategy check host         # one node, ~2 h
 tools/kathleen/submit.sh sweep.sbatch nodes-strong nodes-check    # one node, N = 10^7
 tools/kathleen/submit.sh --qos=test --nodes=2 '--export=ALL,SPLITS=40x1' -- sweep.sbatch nodes-strong

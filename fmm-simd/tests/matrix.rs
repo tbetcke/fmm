@@ -131,6 +131,21 @@ fn bits<T: SimdScalar>(values: &[T]) -> Vec<u64> {
     values.iter().map(|&v| v.to_f64().to_bits()).collect()
 }
 
+/// The ISAs this machine cannot run (those of the other architecture, and on x86_64 any
+/// whose features the CPU lacks, such as AVX-512 on most machines), for the line every
+/// test prints: their tests skip, they do not fail.
+fn unavailable() -> String {
+    let names: Vec<String> = Isa::all()
+        .filter(|isa| !isa.is_available())
+        .map(|isa| isa.to_string())
+        .collect();
+    if names.is_empty() {
+        "none".to_owned()
+    } else {
+        names.join(", ")
+    }
+}
+
 /// The kernels of every available ISA in `mul_add`, after printing them under the test's
 /// name.
 fn kernels<T: SimdScalar>(test: &str, mul_add: MulAdd) -> Vec<MatrixKernel<T>> {
@@ -139,9 +154,10 @@ fn kernels<T: SimdScalar>(test: &str, mul_add: MulAdd) -> Vec<MatrixKernel<T>> {
         .collect();
     let names: Vec<String> = kernels.iter().map(|k| k.isa().to_string()).collect();
     println!(
-        "{test} ({}, {mul_add}): ISAs run: {}",
+        "{test} ({}, {mul_add}): ISAs run: {}; not available here: {}",
         std::any::type_name::<T>(),
-        names.join(", ")
+        names.join(", "),
+        unavailable()
     );
     kernels
 }

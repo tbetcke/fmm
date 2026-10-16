@@ -13,7 +13,8 @@
 //! vector layer and the inverse square root of the kernel, which
 //! [`rsqrt::rsqrt_slice`] exposes for tests and reports. Phase 6 T2:
 //! [`MatrixKernel::accumulate_columns`] on every ISA, in the [`MulAdd`] modes. Phase 6
-//! T5: [`P2pKernel::evaluate_many`], P2P of several charge vectors at once.
+//! T5: [`P2pKernel::evaluate_many`], P2P of several charge vectors at once. Phase 6 T6:
+//! [`Isa::Avx512`], every kernel on AVX-512F, selectable but not yet the default.
 //!
 //! ## Instruction sets
 //!
@@ -22,9 +23,9 @@
 //! | [`Isa::Scalar`] | any | none | 1 / 1 | always |
 //! | [`Isa::Neon`] | aarch64 | 128-bit NEON | 4 / 2 | on every aarch64 CPU |
 //! | [`Isa::Avx2`] | x86_64 | 256-bit AVX2 + FMA | 8 / 4 | if the CPU has AVX2 and FMA |
+//! | [`Isa::Avx512`] | x86_64 | 512-bit AVX-512F | 16 / 8 | if the CPU has AVX-512F, AVX2 and FMA |
 //!
-//! AVX-512 is deferred (design §4.7); an AVX-512 machine runs [`Isa::Avx2`]. Every
-//! variant exists on every target, but the code of an ISA is compiled only for its
+//! Every variant exists on every target, but the code of an ISA is compiled only for its
 //! architecture and [`Isa::is_available`] is false elsewhere.
 //!
 //! ## Dispatch
@@ -32,8 +33,10 @@
 //! - On aarch64 NEON is part of the base architecture, so [`Isa::Neon`] needs no
 //!   detection. On x86_64, `is_x86_feature_detected!` for `avx2` and `fma` decides
 //!   [`Isa::Avx2`].
-//! - [`Isa::detect`] picks the widest available ISA: NEON on aarch64, AVX2 if detected
-//!   on x86_64, else scalar.
+//! - [`Isa::detect`] picks the default ISA: NEON on aarch64, AVX2 if detected on x86_64,
+//!   else scalar. It never picks [`Isa::Avx512`]: an AVX-512 machine runs AVX2 by default
+//!   until Phase 6 T11 signs AVX-512 off from measurements inside the FMM on a fully
+//!   loaded node (docs/design/optimisation.md §5.3); select it explicitly until then.
 //! - [`P2pKernel::new`] fails with [`IsaUnavailable`] for an ISA the machine cannot
 //!   run, so a kernel always holds an available ISA. [`P2pKernel::detect`] uses
 //!   [`Isa::detect`]. Every ISA is selectable explicitly, for tests and benchmarks.
@@ -46,13 +49,15 @@
 //! Targets in lanes (design §4.1): each lane holds one target, a block holds K vectors
 //! of targets, and each source is broadcast to every lane and visited in input order.
 //! The loop order, the inverse square root and K are those signed off in Phase 3S T2
-//! (spikes/p2p-simd/SPIKE_REPORT.md, "Recommendation"):
+//! (spikes/p2p-simd/SPIKE_REPORT.md, "Recommendation"), and for AVX-512 those of Phase 6
+//! T6 (docs/design/optimisation.md §5.2):
 //!
 //! | [`Isa`] | 1/r, f32 | 1/r, f64 | K, f32 / f64 | targets per block |
 //! | --- | --- | --- | --- | --- |
 //! | [`Isa::Scalar`] | `sqrt`, division | `sqrt`, division | — | 1 (the reference's loop) |
 //! | [`Isa::Neon`] | FSQRT, FDIV | FSQRT, FDIV | 2 / 4 | 8 / 8 |
 //! | [`Isa::Avx2`] | `vrsqrtps` + degree-2 correction | `vrsqrtps` via f32 + degree-5 correction | 1 / 1 | 8 / 4 |
+//! | [`Isa::Avx512`] | `vrsqrt14ps` + one Newton step | `vrsqrt14pd` + two Newton steps | 2 / 2 | 32 / 16 |
 //!
 //! Per pair and lane, with d = x − y: r² = fma(d₂, d₂, fma(d₁, d₁, d₀²)); ρ = 1/√r²,
 //! cleared to +0 where r² = 0; φ += q ρ, and with gradients ∇φ −= (q ρ) ρ² d. A call
@@ -82,7 +87,8 @@
 //!   below. The scalar path uses the reference's formulas in the reference's order and
 //!   equals it bit for bit wherever r² ≠ 0. On AVX2 the estimate `vrsqrtps` is not
 //!   architecturally defined, so results may also differ between Intel and AMD CPUs in
-//!   the last bits (design §5.5).
+//!   the last bits (design §5.5); AVX-512's `vrsqrt14ps`/`pd` has a bit-exact reference
+//!   in Intel's documentation.
 //! - **Accuracy** (design §3, requirement 2), for pairs in the kernel domain: each
 //!   potential term within 8 u_T of the reference's term, relative, and each gradient
 //!   component within 16 u_T relative to |q| / r², with u_T the unit roundoff (2⁻²⁴,
@@ -99,7 +105,7 @@
 //! evaluates m charge vectors at the same sources and targets: the m charges of a source
 //! adjacent, the m vectors' outputs one vector after the other (CONVENTIONS §3.13,
 //! "Several charge vectors"). The targets stay in lanes and the vectors run in groups
-//! held in registers (on NEON and AVX2 8 vectors without gradients and 4 with, then halves
+//! held in registers (on NEON, AVX2 and AVX-512 8 vectors without gradients and 4 with, then halves
 //! for the rest); per source and target vector d, r² and ρ are formed once and every vector
 //! of the group then takes the steps of [`P2pKernel::evaluate`] with its own charge, in
 //! the same order. So vector v of the result is `evaluate` of vector v bit for bit, on
@@ -112,8 +118,8 @@
 //! columns, A an n × n column-major matrix: the product of each M2L offset's table with
 //! the multipoles of its pairs, added into the targets' own locals. Four B columns are
 //! packed k-major into the caller's buffer, and a block of R vectors of rows of their four
-//! C columns stays in registers while k runs from 0 to n − 1 (R = 4 on NEON, 2 on AVX2,
-//! 4 rows on the scalar path); the rows left over run as single vectors, then one at a
+//! C columns stays in registers while k runs from 0 to n − 1 (R = 4 on NEON and
+//! AVX-512, 2 on AVX2, 4 rows on the scalar path); the rows left over run as single vectors, then one at a
 //! time. Every element receives c ← c + B[k, b_j] · A[r, k] for k ascending, with the
 //! product and the sum rounded apart ([`MulAdd::Separate`], the chain of
 //! `nd_fmm_tables::MatrixSet::apply`) or fused ([`MulAdd::Fused`]), from its own row and
@@ -138,8 +144,10 @@
 //!
 //! - aarch64 (Apple silicon, the CI arm64 runner): `cargo test -p nd-fmm-simd --
 //!   --show-output` runs scalar and NEON.
-//! - x86_64 (the CI x86_64 runner): the same command runs scalar and, if the CPU has it,
-//!   AVX2 + FMA.
+//! - x86_64 (the CI x86_64 runner): the same command runs scalar and, if the CPU has
+//!   them, AVX2 + FMA and AVX-512F. Most runners lack AVX-512F (docs/design/optimisation.md
+//!   §5.4): its tests then skip, and every test line names it under "not available
+//!   here"; Kathleen's Cascade Lake nodes run it (Phase 6 T6).
 //! - The release-mode accuracy tests (exhaustive and sampled, from Phase 3S T4 on) are
 //!   `#[ignore]`d: `cargo test -p nd-fmm-simd --release -- --ignored --show-output`.
 //! - The other architecture's code is checked by
@@ -175,7 +183,7 @@
 //!   dispatch calls them in `unsafe` like the AVX2 ones.
 //! - **AVX-512 target features** (Rust 1.89): stable. `#[target_feature(enable =
 //!   "avx512f")]`, the `__m512d` intrinsics and `is_x86_feature_detected!("avx512f")`
-//!   compile, for the deferred path.
+//!   compile; [`Isa::Avx512`] (Phase 6 T6) uses them.
 //!
 //! Two limits on this toolchain shape the vector layer of design §5.3:
 //!

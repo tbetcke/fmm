@@ -6,9 +6,11 @@
 //! | [`Isa::Scalar`] | `sqrt`, division | `sqrt`, division | 1.5 u_T |
 //! | [`Isa::Neon`] | FSQRT, FDIV | FSQRT, FDIV | 1.5 u_T |
 //! | [`Isa::Avx2`] | `vrsqrtps`, degree-2 correction | `vrsqrtps` through f32, degree-5 correction | 1.5 u_T, derived |
+//! | [`Isa::Avx512`] | `vrsqrt14ps`, one Newton step | `vrsqrt14pd`, two Newton steps | 1.6 u₃₂ and 1.9 u₆₄, derived |
 //!
 //! u_T is the unit roundoff, 2⁻²⁴ (f32) or 2⁻⁵³ (f64). The formulations are the ones
-//! signed off in Phase 3S T2 (spikes/p2p-simd/SPIKE_REPORT.md, "Recommendation"); the
+//! signed off in Phase 3S T2 (spikes/p2p-simd/SPIKE_REPORT.md, "Recommendation"), and for
+//! AVX-512 those of docs/design/simd-p2p.md §4.3 and optimisation.md §5.2 (Phase 6 T6); the
 //! architecture modules document each with its error bound. The contract of
 //! design §4.3, checked by the tests of `tests/rsqrt` on every ISA a machine offers, is
 //! a relative error of at most 4 u_T on the kernel domain of CONVENTIONS §3.13,

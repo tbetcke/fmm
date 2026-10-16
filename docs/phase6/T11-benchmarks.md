@@ -14,7 +14,9 @@ updated. The defaults in question:
 - **the leaf size per p**: open since Phase 3S T7 ("the best leaf size depends on p ...
   64 at p = 3, 256 at p = 8"), confirmed on Metal (Phase 4 T13) and CUDA (Phase 4S T8),
   "still open for every backend" (laplace-fmm-plan §9.2);
-- **the P2P ISA** on AVX-512 machines (C6.7, decision 4);
+- **the P2P ISA** on AVX-512 machines (C6.7, decision 4; T6 measured AVX-512 faster than
+  AVX2, or equal within run-to-run variation, inside the FMM on a fully loaded Kathleen
+  node and proposes it as `Auto`'s ISA there, fmm-validate/results/phase6-avx512.md §8);
 - **the device strategies and layouts** after C6.1;
 - whether the FMA mode of the batched M2L, C6.9's near rule (T12) or several right-hand
   sides change any default.

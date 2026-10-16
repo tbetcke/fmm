@@ -45,7 +45,7 @@ fn available_contains_detect_and_scalar() {
 fn all_lists_every_variant_once() {
     print_isas("all_lists_every_variant_once");
     let all: Vec<Isa> = Isa::all().collect();
-    assert_eq!(all, [Isa::Scalar, Isa::Neon, Isa::Avx2]);
+    assert_eq!(all, [Isa::Scalar, Isa::Neon, Isa::Avx2, Isa::Avx512]);
 }
 
 #[test]
@@ -59,9 +59,19 @@ fn detection_matches_the_architecture() {
         assert_eq!(Isa::Avx2.is_available(), detected);
         let expected = if detected { Isa::Avx2 } else { Isa::Scalar };
         assert_eq!(Isa::detect(), expected);
+        // AVX-512 needs AVX2 and FMA too, and detection keeps AVX2 until Phase 6 T11.
+        let avx512 = std::arch::is_x86_feature_detected!("avx512f") && detected;
+        assert_eq!(Isa::Avx512.is_available(), avx512);
+        if !avx512 {
+            println!("detection_matches_the_architecture: avx512 not run (no avx512f)");
+        }
     }
     #[cfg(not(target_arch = "x86_64"))]
-    assert!(!Isa::Avx2.is_available());
+    {
+        assert!(!Isa::Avx2.is_available());
+        assert!(!Isa::Avx512.is_available());
+    }
+    assert_ne!(Isa::detect(), Isa::Avx512);
     #[cfg(target_arch = "aarch64")]
     assert_eq!(Isa::detect(), Isa::Neon);
 }
@@ -104,13 +114,15 @@ fn lanes_per_isa_and_precision() {
     assert_eq!(Isa::Neon.lanes::<f64>(), 2);
     assert_eq!(Isa::Avx2.lanes::<f32>(), 8);
     assert_eq!(Isa::Avx2.lanes::<f64>(), 4);
+    assert_eq!(Isa::Avx512.lanes::<f32>(), 16);
+    assert_eq!(Isa::Avx512.lanes::<f64>(), 8);
 }
 
 #[test]
 fn display_names() {
     print_isas("display_names");
     let names: Vec<String> = Isa::all().map(|isa| isa.to_string()).collect();
-    assert_eq!(names, ["scalar", "neon", "avx2"]);
+    assert_eq!(names, ["scalar", "neon", "avx2", "avx512"]);
 }
 
 #[test]

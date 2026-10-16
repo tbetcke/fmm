@@ -2492,8 +2492,8 @@ fn input_errors(comm: &SimpleCommunicator) {
         assert_eq!(error, Some(FmmError::InvalidSettings(expected)));
     }
 
-    // A P2P kernel on an ISA this machine cannot run (NEON on x86_64, AVX2 on aarch64
-    // and on x86_64 CPUs without it). The check is local; `build` agrees it with every
+    // A P2P kernel on an ISA this machine cannot run (NEON on x86_64, AVX2 and AVX-512
+    // on aarch64 and on x86_64 CPUs without them). The check is local; `build` agrees it with every
     // other input error of step 1, so on mixed CPUs the ranks that can run the ISA
     // return `OtherRank`.
     let unavailable: Vec<Isa> = Isa::all().filter(|isa| !isa.is_available()).collect();

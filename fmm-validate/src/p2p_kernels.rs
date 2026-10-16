@@ -616,12 +616,14 @@ pub struct Model {
 /// - Operations per pair and lane: 9 (φ) or 15 (φ, ∇φ) for the difference, r², the
 ///   mask and the accumulation (design §4.2), plus the inverse square root: FSQRT and
 ///   FDIV on NEON (2), `vrsqrtps` with the degree-2 correction in f32 (6) and the
-///   degree-5 correction via f32 in f64 (11, with two conversions) on AVX2.
+///   degree-5 correction via f32 in f64 (11, with two conversions) on AVX2,
+///   `vrsqrt14ps`/`pd` with one Newton step in f32 (5) and two in f64 (8) on AVX-512
+///   (Phase 6 T6; docs/design/optimisation.md §5.2).
 /// - NEON: four FP pipes, and the divider, which runs FSQRT and FDIV on a unit beside
 ///   them at about 3 cycles per vector (measured on the M3 Max by the spike). The bound
 ///   is W / max(ops / 4, 3) pairs per cycle.
-/// - AVX2: two FMA pipes, 2 W / ops pairs per cycle; a model only, since no x86_64
-///   machine times anything in Phase 3S.
+/// - AVX2 and AVX-512: two FMA pipes, 2 W / ops pairs per cycle (on AVX-512 at the
+///   clock the core holds while it runs 512-bit code, which `--ghz` does not know).
 pub fn model<T: SimdScalar>(isa: Isa, gradients: bool) -> Option<Model> {
     let base = if gradients { 15 } else { 9 };
     let lanes = isa.lanes::<T>() as f64;
@@ -635,8 +637,14 @@ pub fn model<T: SimdScalar>(isa: Isa, gradients: bool) -> Option<Model> {
                 pairs_per_cycle: lanes / cycles,
             })
         }
-        Isa::Avx2 => {
-            let ops = base + if f32 { 6 } else { 11 };
+        Isa::Avx2 | Isa::Avx512 => {
+            let rsqrt = match (isa, f32) {
+                (Isa::Avx2, true) => 6,
+                (Isa::Avx2, false) => 11,
+                (_, true) => 5,
+                (_, false) => 8,
+            };
+            let ops = base + rsqrt;
             Some(Model {
                 ops,
                 pairs_per_cycle: 2.0 * lanes / ops as f64,
@@ -737,6 +745,11 @@ mod tests {
         );
         assert_eq!(model::<f64>(Isa::Avx2, true).unwrap().ops, 26);
         assert_eq!(model::<f32>(Isa::Avx2, false).unwrap().ops, 15);
+        // simd-p2p §4.6's AVX-512 row: 32/20 = 1.60 and 16/23 = 0.70 with gradients.
+        let avx512 = model::<f32>(Isa::Avx512, true).unwrap();
+        assert_eq!(avx512.ops, 20);
+        assert!((avx512.pairs_per_cycle - 1.6).abs() < 1e-15);
+        assert_eq!(model::<f64>(Isa::Avx512, true).unwrap().ops, 23);
         assert!(model::<f64>(Isa::Scalar, false).is_none());
     }
 }

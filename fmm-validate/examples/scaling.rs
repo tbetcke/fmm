@@ -65,6 +65,9 @@
 //! - `--threads t` rayon threads per rank (1; MPI at `Threading::Funneled` above 1);
 //! - `--strategy auto|dense|classes|rotation|batched`, the M2L strategy (auto; `batched`
 //!   is the host's batched M2L of Phase 6 T2);
+//! - `--p2p auto|reference|scalar|neon|avx2|avx512` the P2P kernel (`FmmBuilder::p2p_kernel`,
+//!   auto; an ISA this machine lacks is refused before MPI starts; Phase 6 T6), which on
+//!   the host also runs the batched M2L's kernel (the summary's `p2p`, resolved);
 //! - `--mul-add separate|fused` the batched M2L's multiply–add mode
 //!   (`FmmBuilder::m2l_mul_add`; separate, bit for bit `dense`);
 //! - `--budget MB` the node budget of `auto` in MB of 10⁶ bytes
@@ -112,6 +115,7 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::Communicator;
 use nd_fmm_exec::cost::CostModel;
 use nd_fmm_exec::fmm::MultipoleRouting;
+use nd_fmm_exec::operator::P2pChoice;
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::scaling::{HarnessError, Input, Overlap, Settings, Workload, invariance, run};
@@ -167,6 +171,14 @@ fn arguments() -> Arguments {
             "--threads" => s.threads = number().max(1),
             "--strategy" => s.strategy = strategy(&flag, &value),
             "--budget" => s.dense_node_budget = Some(number() * 1_000_000),
+            "--p2p" => {
+                s.p2p = value
+                    .parse::<P2pChoice>()
+                    .unwrap_or_else(|error| fail(&format!("--p2p: {error}")));
+                if let Err(error) = s.p2p.resolve() {
+                    fail(&format!("--p2p: {error}"));
+                }
+            }
             "--mul-add" => {
                 s.m2l_mul_add = value
                     .parse()
