@@ -353,7 +353,7 @@ use nd_fmm_exec::fmm::{
     OutputPass, Placement, PointSet, SettingsError,
 };
 use nd_fmm_exec::geometry::{Domain, GeometryError, leaf_coordinates, radius};
-use nd_fmm_exec::operator::{Isa, LaplaceOperator, P2pChoice, SimdScalar};
+use nd_fmm_exec::operator::{Isa, LaplaceOperator, MulAdd, P2pChoice, SimdScalar};
 use nd_fmm_exec::tables::{M2lStrategy, NodeContext, StrategyChoice, Tables};
 use nd_fmm_math::RealScalar;
 use nd_fmm_plan::evaluator::Evaluator;
@@ -542,6 +542,15 @@ fn distributed_scenarios() {
          path",
         comm.rank(),
         OVERLAP_CHECKS.load(std::sync::atomic::Ordering::Relaxed)
+    );
+    let (separate, fused, worst) = *BATCHED_CHECKS.lock().unwrap();
+    eprintln!(
+        "rank {}: batched M2L (Phase 6 T2): {separate} evaluations bit for bit Dense; \
+         {fused} fused evaluations within the bound, largest relative L2 from Dense \
+         {:.1e} (f32), {:.1e} (f64)",
+        comm.rank(),
+        worst[0],
+        worst[1]
     );
     let checks = ONE_RANK_CHECKS.load(std::sync::atomic::Ordering::Relaxed);
     eprintln!(
@@ -1214,6 +1223,15 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
         comm,
     );
     let reference = output_bits(&output);
+    check_batched(
+        &builder,
+        (sources, targets),
+        charges,
+        &fmm,
+        (&output, &reference),
+        threads,
+        comm,
+    );
     let calls = kind_common::check_kinds("host, one thread", &fmm, &output, mode);
     if mode != KindTiming::Off {
         kind_common::record("host", calls);
@@ -1300,6 +1318,148 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
         }
     }
     Some((fmm, output))
+}
+
+/// The batched M2L's checks (Phase 6 T2, C6.6), for the closing line: the evaluations
+/// bit for bit `Dense`, the fused evaluations within the bound, and the largest relative
+/// L2 difference of a fused evaluation from `Dense` in f32 and f64.
+static BATCHED_CHECKS: std::sync::Mutex<(usize, usize, [f64; 2])> =
+    std::sync::Mutex::new((0, 0, [0.0; 2]));
+
+/// The (scenario, value size, gradients, p) whose batched M2L [`check_batched`] ran.
+type BatchedKey = (&'static str, usize, bool, usize);
+
+/// The keys [`check_batched`] has seen.
+static BATCHED_SEEN: std::sync::Mutex<Vec<BatchedKey>> = std::sync::Mutex::new(Vec::new());
+
+/// The batched M2L (Phase 6 T2, C6.6; docs/design/optimisation.md §2.3) where `fmm`, at
+/// one thread with output `dense` (its bits `reference`), resolved `Dense`: the same
+/// settings with `M2lStrategy::Batched` give `reference` bit for bit, serially
+/// (`Fmm::set_serial`), once per scenario, precision, p and output kind (its other
+/// evaluations repeat a tree with another P2P kernel, threads or overlap, which reach M2L
+/// with the same inputs, or another tree of the same kind; a build in debug mode costs
+/// more than the evaluation).
+/// Once per scenario and precision (the first such evaluation) the same build also runs
+/// at the most threads of `threads` (bit for bit), and in the fused mode
+/// (`Fmm::set_m2l_mul_add` with `MulAdd::Fused`) serially within the bound of requirement
+/// 1 of docs/phase6/README.md (relative L2 1e-12 in f64, 1e-5 in f32, over every rank's
+/// φ and ∇φ) and at those threads with the same bits; on several ranks the fused output
+/// is bit for bit the one-rank fused `Fmm` over the union (rank-count invariance). Nothing
+/// under another strategy.
+fn check_batched<T: Stored + SimdScalar + Equivalence + Default>(
+    builder: &FmmBuilder<T>,
+    points: (&[[f64; 3]], &[[f64; 3]]),
+    charges: &[T],
+    fmm: &Fmm<'_, T>,
+    (dense, reference): (&Output<T>, &[u64]),
+    threads: &[usize],
+    comm: &SimpleCommunicator,
+) {
+    if fmm.strategy() != M2lStrategy::Dense {
+        return;
+    }
+    let (sources, targets) = points;
+    let scenario = *SCENARIO.lock().unwrap();
+    let (full, any) = {
+        let mut seen = BATCHED_SEEN.lock().unwrap();
+        let full = !seen
+            .iter()
+            .any(|(s, bytes, ..)| *s == scenario && *bytes == size_of::<T>());
+        let key = (
+            scenario,
+            size_of::<T>(),
+            fmm.gradients(),
+            fmm.operator().p(),
+        );
+        let any = !seen.contains(&key);
+        if any {
+            seen.push(key);
+        }
+        (full, any)
+    };
+    if !any {
+        return;
+    }
+    let most = if full {
+        threads.iter().copied().max().unwrap_or(1)
+    } else {
+        1
+    };
+    let batched = builder.clone().strategy(M2lStrategy::Batched);
+    let mut fmm = built(
+        batched.clone().threads(most).build(sources, targets, comm),
+        comm,
+    )
+    .expect("the batched FMM builds");
+    assert_eq!(fmm.strategy(), M2lStrategy::Batched);
+    let p2p = match fmm.p2p_kernel() {
+        P2pChoice::Isa(isa) => isa,
+        _ => Isa::Scalar,
+    };
+    assert_eq!(
+        fmm.threading().m2l_kernel,
+        Some((p2p, MulAdd::Separate)),
+        "the column kernel runs on the P2P ISA, separate by default"
+    );
+    // Every rank evaluates alike, so every comparison is agreed by a sum over the ranks.
+    let evaluate = |fmm: &mut Fmm<'_, T>, serial: bool| {
+        fmm.set_serial(serial);
+        let output = fmm.evaluate(charges).expect("the batched FMM evaluates");
+        (output_bits(&output), output)
+    };
+    let differing =
+        |a: &[u64], b: &[u64]| global_sum(a.iter().zip(b).filter(|(x, y)| x != y).count(), comm);
+    let mut separate = 0;
+    for serial in [true, false].into_iter().take(if most > 1 { 2 } else { 1 }) {
+        let (bits, _) = evaluate(&mut fmm, serial);
+        let n = if serial { 1 } else { most };
+        assert_eq!(
+            differing(&bits, reference),
+            0,
+            "rank {}: Batched at {n} thread(s): values differ from Dense",
+            comm.rank()
+        );
+        separate += 1;
+    }
+    let mut checks = BATCHED_CHECKS.lock().unwrap();
+    checks.0 += separate;
+    if !full {
+        return;
+    }
+    fmm.set_m2l_mul_add(MulAdd::Fused);
+    assert_eq!(fmm.threading().m2l_kernel, Some((p2p, MulAdd::Fused)));
+    let (fused_bits, fused) = evaluate(&mut fmm, true);
+    let mut worst = difference(&fused.potential, &dense.potential, comm);
+    if let (Some(a), Some(b)) = (&fused.gradient, &dense.gradient) {
+        worst = worst.max(difference(a.as_flattened(), b.as_flattened(), comm));
+    }
+    let bound = if size_of::<T>() == 8 { 1e-12 } else { 1e-5 };
+    assert!(
+        worst <= bound,
+        "the fused batched M2L differs from Dense by {worst:e} > {bound:e}"
+    );
+    checks.1 += 1;
+    if most > 1 {
+        let (bits, _) = evaluate(&mut fmm, false);
+        assert_eq!(
+            differing(&bits, &fused_bits),
+            0,
+            "rank {}: the fused batched M2L at {most} threads differs from one thread",
+            comm.rank()
+        );
+        checks.1 += 1;
+    }
+    let precision = usize::from(size_of::<T>() == 8);
+    checks.2[precision] = checks.2[precision].max(worst);
+    drop(checks);
+    check_one_rank(
+        "host, fused batched M2L",
+        &batched.m2l_mul_add(MulAdd::Fused),
+        (sources, targets),
+        charges,
+        &fused,
+        comm,
+    );
 }
 
 /// The overlapped evaluations compared with the blocking path, for the closing line.
@@ -3303,6 +3463,7 @@ fn strategy_code(strategy: M2lStrategy) -> u8 {
         M2lStrategy::Classes => 1,
         M2lStrategy::Rotation => 2,
         M2lStrategy::Auto => 3,
+        M2lStrategy::Batched => 4,
     }
 }
 

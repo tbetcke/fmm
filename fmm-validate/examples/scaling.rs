@@ -63,7 +63,10 @@
 //! - `--n N` (10⁶), or `--n-per-rank n` for N = n P (weak scaling);
 //! - `--precision f64|f32` (f64), `--p p` (8);
 //! - `--threads t` rayon threads per rank (1; MPI at `Threading::Funneled` above 1);
-//! - `--strategy auto|dense|classes|rotation`, the M2L strategy (auto);
+//! - `--strategy auto|dense|classes|rotation|batched`, the M2L strategy (auto; `batched`
+//!   is the host's batched M2L of Phase 6 T2);
+//! - `--mul-add separate|fused` the batched M2L's multiply–add mode
+//!   (`FmmBuilder::m2l_mul_add`; separate, bit for bit `dense`);
 //! - `--budget MB` the node budget of `auto` in MB of 10⁶ bytes
 //!   (`FmmBuilder::dense_node_budget`; the library's 64 if not given; Phase 5N T4:
 //!   `tools/scaling/run.sh` passes 56 on the M3 Max and 96 on locust and Kathleen);
@@ -77,7 +80,7 @@
 //!   resolved, against the output; refused (every rank exits with status 2 and the
 //!   reason) above N = 2 × 10⁷ (`scaling::REFERENCE_MAX_POINTS`, Phase 5S T2), where the
 //!   errors against the direct sum and `--invariance` are the oracles;
-//! - `--reference-strategy auto|dense|classes|rotation` that FMM with another M2L
+//! - `--reference-strategy auto|dense|classes|rotation|batched` that FMM with another M2L
 //!   strategy (the difference between strategies; Phase 5N T3);
 //! - `--kinds` every level call timed by operator kind (`KindTiming::Synchronous`): the
 //!   M2M, M2L and L2L parts per rank and the time per V pair (Phase 5N T3);
@@ -157,6 +160,11 @@ fn arguments() -> Arguments {
             "--threads" => s.threads = number().max(1),
             "--strategy" => s.strategy = strategy(&flag, &value),
             "--budget" => s.dense_node_budget = Some(number() * 1_000_000),
+            "--mul-add" => {
+                s.m2l_mul_add = value
+                    .parse()
+                    .unwrap_or_else(|error| fail(&format!("--mul-add: {error}")));
+            }
             "--reference-strategy" => s.reference_strategy = Some(strategy(&flag, &value)),
             "--overlap" => {
                 s.overlap = Overlap::from_name(&value)
@@ -227,8 +235,9 @@ fn strategy(flag: &str, value: &str) -> M2lStrategy {
         "dense" => M2lStrategy::Dense,
         "classes" => M2lStrategy::Classes,
         "rotation" => M2lStrategy::Rotation,
+        "batched" => M2lStrategy::Batched,
         _ => fail(&format!(
-            "{flag}: auto, dense, classes or rotation, not {value}"
+            "{flag}: auto, dense, classes, rotation or batched, not {value}"
         )),
     }
 }

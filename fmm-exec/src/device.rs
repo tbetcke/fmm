@@ -975,9 +975,10 @@ impl DeviceReport {
 
     /// How the device runs the strategy (device-path.md §6.6, §6.8): `Dense`, "Classes,
     /// run as dense on the device" (the 316 tables of `M2lClasses::expand` on the device,
-    /// the class tables on the host for the fallback), or `Rotation` (the rotation kernel,
-    /// T10); with M2L on the host fallback by request, the strategy and "M2L on the host
-    /// fallback".
+    /// the class tables on the host for the fallback), `Rotation` (the rotation kernel,
+    /// T10), or "Batched, run as dense on the device" (the dense tables, whose device M2L
+    /// is already a product per level; Phase 6 T2); with M2L on the host fallback by
+    /// request, the strategy and "M2L on the host fallback".
     pub fn strategy_name(&self) -> String {
         match (self.strategy, self.placement(OperatorKind::M2l)) {
             (M2lStrategy::Dense, Placement::Device) => "Dense".to_owned(),
@@ -985,6 +986,9 @@ impl DeviceReport {
                 "Classes, run as dense on the device".to_owned()
             }
             (M2lStrategy::Rotation, Placement::Device) => "Rotation".to_owned(),
+            (M2lStrategy::Batched, Placement::Device) => {
+                "Batched, run as dense on the device".to_owned()
+            }
             (strategy, _) => format!("{strategy:?}, M2L on the host fallback"),
         }
     }

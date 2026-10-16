@@ -103,6 +103,7 @@ use std::fmt;
 
 use mpi::Threading;
 
+use crate::operator::{Isa, MulAdd};
 use crate::tables::StrategyChoice;
 
 /// The MPI threading level that more than one thread requires: the pool's threads never
@@ -161,6 +162,11 @@ pub struct ThreadingReport {
     /// ([`M2lStrategy::choose`](crate::tables::M2lStrategy::choose)); `None` from
     /// [`read`](Self::read), set by `build`.
     pub m2l: Option<StrategyChoice>,
+    /// The ISA and multiply–add mode of the batched M2L's column kernel under
+    /// `M2lStrategy::Batched` (Phase 6 T2; on a device backend it runs only where M2L is
+    /// on the host fallback); `None` under every other strategy and from
+    /// [`read`](Self::read).
+    pub m2l_kernel: Option<(Isa, MulAdd)>,
 }
 
 impl ThreadingReport {
@@ -177,6 +183,7 @@ impl ThreadingReport {
             }),
             ranks_per_node: 1,
             m2l: None,
+            m2l_kernel: None,
         }
     }
 
@@ -199,7 +206,8 @@ impl ThreadingReport {
 impl fmt::Display for ThreadingReport {
     /// For example `rayon threads 4; MPI Funneled; OPENBLAS_NUM_THREADS=1,
     /// OMP_NUM_THREADS unset (warning), …; ranks per node 12; M2L Auto → Rotation: 12
-    /// ranks per node × 8.7 MB > 64 MB` (the M2L part only once `build` set it).
+    /// ranks per node × 8.7 MB > 64 MB` (the M2L part only once `build` set it), or
+    /// `…; M2L Batched (named), batched on neon, separate`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "rayon threads {}; MPI {:?}; ", self.threads, self.mpi)?;
         let warnings = self.warnings();
@@ -218,6 +226,9 @@ impl fmt::Display for ThreadingReport {
         write!(f, "; ranks per node {}", self.ranks_per_node)?;
         if let Some(choice) = &self.m2l {
             write!(f, "; M2L {choice}")?;
+        }
+        if let Some((isa, mul_add)) = self.m2l_kernel {
+            write!(f, ", batched on {isa}, {mul_add}")?;
         }
         Ok(())
     }

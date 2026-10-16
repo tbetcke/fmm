@@ -117,7 +117,7 @@ use nd_fmm_exec::fmm::{
     OperatorKind, Output, StageTimings, TREE_FAN_OUT, Traffic,
 };
 use nd_fmm_exec::geometry::{contains, integer_centre};
-use nd_fmm_exec::operator::SimdScalar;
+use nd_fmm_exec::operator::{MulAdd, SimdScalar};
 use nd_fmm_exec::tables::{M2lStrategy, NodeContext};
 use nd_fmm_exec::threading::ThreadingReport;
 use nd_fmm_math::RealScalar;
@@ -387,6 +387,9 @@ pub struct Settings {
     /// The node budget of `Auto` in bytes (`FmmBuilder::dense_node_budget`; Phase 5N T4),
     /// or the library's default (`M2lStrategy::AUTO_DENSE_NODE_BYTES`, 64 MB) if `None`.
     pub dense_node_budget: Option<usize>,
+    /// The multiply–add mode of the batched M2L (`FmmBuilder::m2l_mul_add`, Phase 6 T2;
+    /// the library's `Separate`): only `M2lStrategy::Batched` uses it.
+    pub m2l_mul_add: MulAdd,
     /// The evaluation paths.
     pub overlap: Overlap,
     /// Where the points are passed in.
@@ -432,6 +435,7 @@ impl Settings {
             threads: 1,
             strategy: M2lStrategy::Auto,
             dense_node_budget: None,
+            m2l_mul_add: MulAdd::Separate,
             overlap: Overlap::Off,
             input: Input::Share,
             builds: 1,
@@ -1822,8 +1826,9 @@ fn bits<T: RealScalar>(output: &Output<T>) -> Vec<u64> {
     bits
 }
 
-/// The builder of `settings`: the harness's tree, gradients, the threads, the strategy and
-/// its node budget, overlap, the kind timings, the second cut and its constants.
+/// The builder of `settings`: the harness's tree, gradients, the threads, the strategy, its
+/// node budget and the batched M2L's mode, overlap, the kind timings, the second cut and
+/// its constants.
 fn builder<T: Stored + SimdScalar + Equivalence + Default>(settings: &Settings) -> FmmBuilder<T> {
     let mut builder = FmmBuilder::<T>::new(settings.p)
         .max_level(MAX_LEVEL)
@@ -1831,6 +1836,7 @@ fn builder<T: Stored + SimdScalar + Equivalence + Default>(settings: &Settings) 
         .gradients(true)
         .threads(settings.threads)
         .strategy(settings.strategy)
+        .m2l_mul_add(settings.m2l_mul_add)
         .overlap(settings.overlap == Overlap::On)
         .kind_timings(if settings.kinds {
             KindTiming::Synchronous
@@ -2807,6 +2813,7 @@ impl Report {
                     format!("overlap={}", if path.overlapped { "on" } else { "off" }),
                     format!("strategy={:?}", self.strategy),
                     format!("requested={:?}", self.settings.strategy),
+                    format!("mul_add={}", self.settings.m2l_mul_add),
                     format!(
                         "budget_mb={}",
                         mb(self

@@ -59,6 +59,28 @@
 //! The body of one target is a function of that target's output slice, the call's
 //! shared inputs and one scratch set (`Kernels::*_target`), and nothing else.
 //!
+//! # The batched M2L
+//!
+//! Under `M2lStrategy::Batched` (Phase 6 T2, C6.6; docs/design/optimisation.md §2) M2L
+//! runs block by block instead: the level's locals split into blocks of
+//! [`M2L_BLOCK_TARGETS`] consecutive targets, and for each block the offset indices d =
+//! 0 … 315 in order, the pairs of the grouped view's `batch(d)` whose target lies in the
+//! block (two binary searches over its ascending targets), all in one call of
+//! `nd_fmm_simd::MatrixKernel::accumulate_columns` with the table of d, the sources'
+//! multipoles and the targets' own locals read in place. Each table is so read once per
+//! block, not once per target. A target occurs at most once per offset and meets the
+//! offsets in index order, which is the order of its row, and the kernel gives every
+//! element the chain of `MatrixSet::apply` (k ascending, multiply and add rounded apart)
+//! from its own column only: every local receives exactly the additions of the
+//! target-by-target path, so the output is `Dense`'s bit for bit, on every ISA, thread
+//! count and block size. In the fused mode ([`with_m2l_mul_add`](LaplaceOperator::with_m2l_mul_add)
+//! with [`MulAdd::Fused`]) each step is one fma: deterministic, the same on every thread
+//! count, ISA and rank count, and within n u of `Dense` per element. The column kernel
+//! runs on the ISA of the P2P kernel ([`P2pChoice`]; the scalar path for the reference).
+//! M2M and L2L stay `Dense`'s, target by target. The pool splits a level call by blocks
+//! (below); per thread the scratch holds the packing buffer, 4 (p + 1)² values, and two
+//! lists of at most [`M2L_BLOCK_TARGETS`] column offsets.
+//!
 //! # P2P kernel
 //!
 //! P2P runs the kernel of [`P2pChoice`], set by [`with_p2p`](LaplaceOperator::with_p2p)
@@ -98,7 +120,8 @@
 //! `ThreadPool::install` and hands each target to one pool thread:
 //!
 //! - box calls (P2M, M2M, M2L, P2L, L2L) split the output level with
-//!   `par_chunks_mut(size)`, one chunk per box;
+//!   `par_chunks_mut(size)`, one chunk per box; the batched M2L by blocks of
+//!   [`M2L_BLOCK_TARGETS`] boxes, `par_chunks_mut(M2L_BLOCK_TARGETS · size)`;
 //! - leaf calls (L2P, M2P, P2P) split the target output into one mutable slice per
 //!   leaf by its CSR offsets, with `LeafSliceMut::split_at_mut` halving the rows
 //!   recursively under `rayon::join`. Nothing is allocated per call or per pair.
@@ -112,17 +135,19 @@
 //! The pool's threads only compute: no level call communicates, so worker threads never
 //! call MPI ([`Fmm`](crate::fmm::Fmm) keeps every collective on the calling thread). Nor
 //! do they call BLAS or LAPACK: the tables are applied by hand-written loops of
-//! `nd-fmm-tables`, the leaf operators by the plain Rust of `nd-fmm-ref`, and P2P by the
-//! intrinsics of `nd-fmm-simd` or the plain Rust of `nd-fmm-ref`
-//! ([`threading`](crate::threading)). The P2P kernel is stateless and shared by every
-//! thread, one call at a time per thread, so it adds no per-thread state.
+//! `nd-fmm-tables` (under `Batched`, M2L by the column kernel of `nd-fmm-simd`; no host
+//! BLAS, decision 2 of docs/phase6/README.md), the leaf operators by the plain Rust of
+//! `nd-fmm-ref`, and P2P by the intrinsics of `nd-fmm-simd` or the plain Rust of
+//! `nd-fmm-ref` ([`threading`](crate::threading)). The P2P and column kernels are
+//! stateless and shared by every thread, one call at a time per thread.
 //!
 //! # Scratch
 //!
 //! The interface passes `&mut self`, so the operator owns its scratch outright, with
 //! no `RefCell`. A scratch set is an `nd_fmm_ref::Workspace` for p, the
-//! [`TableScratch`] of its tables, and one buffer of `max_leaf_points` points into
-//! which P2P maps the sources of another leaf. The operator holds one set, or with a
+//! [`TableScratch`] of its tables, one buffer of `max_leaf_points` points into
+//! which P2P maps the sources of another leaf, and under `Batched` the batched M2L's
+//! packing buffer and column lists. The operator holds one set, or with a
 //! pool one per pool thread, each in its own `Mutex`, created when the pool is given and
 //! selected by `rayon::current_thread_index()`. Only thread i ever locks set i, and only
 //! around one target body, which never yields to rayon, so the lock is uncontended by
@@ -178,8 +203,9 @@ use nd_fmm_plan::operator::{
 };
 use nd_fmm_plan::store::{LeafSlice, LeafSliceMut, LevelSlice, LevelSliceMut};
 use nd_fmm_ref::{Frame, Workspace, leaf, p2p};
-use nd_fmm_simd::P2pKernel;
-pub use nd_fmm_simd::{Isa, IsaUnavailable, SimdScalar};
+pub use nd_fmm_simd::{Isa, IsaUnavailable, MulAdd, SimdScalar};
+use nd_fmm_simd::{MatrixKernel, P2pKernel};
+use nd_fmm_tables::MatrixSet;
 use nd_fmm_tables::geometry::m2l_offset_index;
 use nd_octree::{MortonKey, morton};
 use rayon::ThreadPool;
@@ -196,6 +222,11 @@ pub const SOURCE_POINT_SIZE: usize = 4;
 /// Values per target point in the target input: the leaf-scaled position (CONVENTIONS
 /// §3.13, "Target input and output").
 pub const TARGET_INPUT_POINT_SIZE: usize = 3;
+
+/// The consecutive targets of one block of the batched M2L (`M2lStrategy::Batched`;
+/// module documentation, "The batched M2L"): fixed, never derived from the thread count,
+/// so a block decides only which thread runs a target's chain, never the chain.
+pub const M2L_BLOCK_TARGETS: usize = 64;
 
 /// The P2P kernel of a [`LaplaceOperator`] (docs/design/simd-p2p.md §6).
 ///
@@ -319,6 +350,12 @@ pub(crate) struct Kernels<T: SimdScalar> {
     max_leaf_points: usize,
     /// The P2P kernel of `nd-fmm-simd`, or `None` for `nd_fmm_ref::p2p::p2p`.
     p2p: Option<P2pKernel<T>>,
+    /// The column kernel of the batched M2L, on the ISA of the P2P choice (the scalar
+    /// path for the reference) in the operator's multiply–add mode; `None` unless the
+    /// tables are `Batched`.
+    matrix: Option<MatrixKernel<T>>,
+    /// The multiply–add mode of the batched M2L ([`MulAdd::Separate`] by default).
+    mul_add: MulAdd,
 }
 
 /// One scratch set: what a target body writes besides its output.
@@ -328,15 +365,41 @@ pub(crate) struct Scratch<T: RealScalar> {
     tables: TableScratch<T>,
     /// The sources of another leaf in the target's coordinates (P2P); fixed length.
     mapped: Vec<[T; 3]>,
+    /// The batched M2L's packing buffer and column lists; empty unless `Batched`.
+    columns: Columns<T>,
+}
+
+/// The scratch of one block of the batched M2L: the packing buffer of the column kernel
+/// (`MatrixKernel::pack_len`, 4 (p + 1)² values) and the column offsets of one offset's
+/// pairs in the block, at most [`M2L_BLOCK_TARGETS`] each (a target occurs at most once
+/// per offset). Sized at construction; a block only clears and refills them.
+#[derive(Clone, Debug)]
+struct Columns<T> {
+    pack: Vec<T>,
+    sources: Vec<usize>,
+    targets: Vec<usize>,
 }
 
 impl<T: SimdScalar> Scratch<T> {
     /// A scratch set for `kernels`.
     fn new(kernels: &Kernels<T>) -> Self {
+        let columns = match kernels.matrix {
+            Some(_) => Columns {
+                pack: vec![T::zero(); MatrixKernel::<T>::pack_len((kernels.p + 1).pow(2))],
+                sources: Vec::with_capacity(M2L_BLOCK_TARGETS),
+                targets: Vec::with_capacity(M2L_BLOCK_TARGETS),
+            },
+            None => Columns {
+                pack: Vec::new(),
+                sources: Vec::new(),
+                targets: Vec::new(),
+            },
+        };
         Self {
             workspace: Workspace::new(kernels.p),
             tables: kernels.tables.scratch(),
             mapped: vec![[T::zero(); 3]; kernels.max_leaf_points],
+            columns,
         }
     }
 }
@@ -398,6 +461,34 @@ impl<T: RealScalar> Execution<T> {
                 let scratch = self.first();
                 for (t, chunk) in output.chunks_mut().enumerate() {
                     body(t, chunk, scratch);
+                }
+            }
+        }
+    }
+
+    /// Runs `body(first, block, scratch)` for every block of `targets` consecutive chunks
+    /// of `output` (the last may be shorter), `first` the index of its first chunk: in
+    /// order on the calling thread, or in the pool with `par_chunks_mut`.
+    fn blocks<F>(&mut self, mut output: LevelSliceMut<'_, T>, targets: usize, body: F)
+    where
+        F: Fn(usize, &mut [T], &mut Scratch<T>) + Sync,
+    {
+        let size = output.size() * targets;
+        match (&self.pool, self.serial) {
+            (Some(pool), false) => {
+                let sets = &self.scratch;
+                pool.install(|| {
+                    output
+                        .as_mut_slice()
+                        .par_chunks_mut(size)
+                        .enumerate()
+                        .for_each(|(i, block)| with_scratch(sets, |s| body(i * targets, block, s)));
+                });
+            }
+            _ => {
+                let scratch = self.first();
+                for (i, block) in output.as_mut_slice().chunks_mut(size).enumerate() {
+                    body(i * targets, block, scratch);
                 }
             }
         }
@@ -500,12 +591,17 @@ impl<T: SimdScalar> LaplaceOperator<T> {
     /// The operator runs serially; [`with_pool`](Self::with_pool) gives it threads. Its
     /// P2P kernel is [`P2pChoice::Auto`]; [`with_p2p`](Self::with_p2p) chooses another.
     pub fn new(tables: Tables<T>, gradients: bool, max_leaf_points: usize) -> Self {
+        let matrix = tables
+            .batched_m2l()
+            .map(|_| MatrixKernel::detect(MulAdd::Separate));
         let kernels = Kernels {
             p: tables.p(),
             tables,
             gradients,
             max_leaf_points,
             p2p: Some(P2pKernel::detect()),
+            matrix,
+            mul_add: MulAdd::Separate,
         };
         let execution = Execution {
             scratch: vec![Mutex::new(Scratch::new(&kernels))],
@@ -530,15 +626,43 @@ impl<T: SimdScalar> LaplaceOperator<T> {
         self
     }
 
-    /// Runs P2P with the kernel of `choice` ([`P2pChoice`]). Every other operator, the
-    /// order of every sum and the scratch stay as they are.
+    /// Runs P2P with the kernel of `choice` ([`P2pChoice`]), and the batched M2L's
+    /// column kernel on the same ISA (the scalar path for the reference), which changes no
+    /// bit of it. Every other operator, the order of every sum and the scratch stay as
+    /// they are.
     ///
     /// # Errors
     ///
     /// [`IsaUnavailable`] for `P2pChoice::Isa(isa)` if this machine cannot run `isa`.
     pub fn with_p2p(mut self, choice: P2pChoice) -> Result<Self, IsaUnavailable> {
         self.kernels.p2p = choice.kernel()?;
+        self.kernels.matrix = self.kernels.matrix_kernel(self.kernels.mul_add)?;
         Ok(self)
+    }
+
+    /// Runs the batched M2L (`M2lStrategy::Batched`) in the multiply–add mode `mul_add`:
+    /// [`MulAdd::Separate`], the default, gives `Dense`'s output bit for bit;
+    /// [`MulAdd::Fused`] one fma per step, within n u of it (module documentation, "The
+    /// batched M2L"). Every other strategy ignores it.
+    pub fn with_m2l_mul_add(mut self, mul_add: MulAdd) -> Self {
+        self.set_m2l_mul_add(mul_add);
+        self
+    }
+
+    /// [`with_m2l_mul_add`](Self::with_m2l_mul_add) on this operator: the next level calls
+    /// of the batched M2L run in `mul_add`. Allocates nothing.
+    pub fn set_m2l_mul_add(&mut self, mul_add: MulAdd) {
+        self.kernels.mul_add = mul_add;
+        self.kernels.matrix = self
+            .kernels
+            .matrix_kernel(mul_add)
+            .expect("the ISA of the P2P kernel is available");
+    }
+
+    /// Returns the column kernel of the batched M2L, its ISA and multiply–add mode; `None`
+    /// unless the strategy is `M2lStrategy::Batched`.
+    pub fn m2l_kernel(&self) -> Option<MatrixKernel<T>> {
+        self.kernels.matrix
     }
 
     /// Returns the P2P kernel as it runs: [`P2pChoice::Reference`] or
@@ -801,6 +925,16 @@ fn source_points<T>(sources: &[T]) -> (&[[T; 3]], &[T]) {
 type TargetOutput<'a, T> = (&'a mut [T], Option<&'a mut [[T; 3]]>);
 
 impl<T: SimdScalar> Kernels<T> {
+    /// The batched M2L's column kernel in `mul_add` on the ISA of the P2P kernel (the
+    /// scalar path for the reference), or `None` unless the tables are `Batched`.
+    fn matrix_kernel(&self, mul_add: MulAdd) -> Result<Option<MatrixKernel<T>>, IsaUnavailable> {
+        if self.tables.batched_m2l().is_none() {
+            return Ok(None);
+        }
+        let isa = self.p2p.as_ref().map_or(Isa::Scalar, P2pKernel::isa);
+        MatrixKernel::new(isa, mul_add).map(Some)
+    }
+
     /// Values per target point in the target output.
     fn output_point_size(&self) -> usize {
         if self.gradients { 4 } else { 1 }
@@ -1037,6 +1171,57 @@ impl<T: SimdScalar> Kernels<T> {
                 "the offset index of a V-list entry disagrees with its keys"
             );
             self.m2l(d as usize, call.input.chunk(s as usize), local, scratch);
+        }
+    }
+
+    /// The batched M2L of the block of targets `first ..` whose locals are `locals`
+    /// (module documentation, "The batched M2L"): for every offset index d in order, the
+    /// pairs of `batch(d)` whose target lies in the block, found by two binary searches,
+    /// in one call of the column kernel with the table of d, the sources' multipoles and
+    /// the targets' locals read in place.
+    #[inline]
+    pub(crate) fn m2l_block(
+        &self,
+        call: &BoxCall<'_, VList, LevelSlice<'_, T>>,
+        (tables, kernel): (&MatrixSet<T>, &MatrixKernel<T>),
+        first: usize,
+        locals: &mut [T],
+        scratch: &mut Scratch<T>,
+    ) {
+        let n = tables.n();
+        let end = first + locals.len() / n;
+        let multipoles = call.input.as_slice();
+        let columns = &mut scratch.columns;
+        for d in 0..call.view.ngroups() {
+            let (targets, sources) = call.view.batch(d);
+            let lo = targets.partition_point(|&t| (t as usize) < first);
+            let hi = lo + targets[lo..].partition_point(|&t| (t as usize) < end);
+            if lo == hi {
+                continue;
+            }
+            columns.sources.clear();
+            columns.targets.clear();
+            for (&t, &s) in targets[lo..hi].iter().zip(&sources[lo..hi]) {
+                debug_assert_eq!(
+                    offset_index(
+                        call.index.key(call.level, s as usize),
+                        call.index.key(call.level, t as usize)
+                    ),
+                    d,
+                    "the offset index of a V-list batch disagrees with its keys"
+                );
+                columns.sources.push(s as usize * n);
+                columns.targets.push((t as usize - first) * n);
+            }
+            kernel.accumulate_columns(
+                n,
+                tables.matrix(d),
+                multipoles,
+                &columns.sources,
+                locals,
+                &columns.targets,
+                &mut columns.pack,
+            );
         }
     }
 
@@ -1279,9 +1464,20 @@ impl<T: SimdScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
             input: multipoles,
         };
         let kernels = &self.kernels;
-        self.execution.boxes(locals, |t, local, scratch| {
-            kernels.m2l_target(&call, t, local, scratch);
-        });
+        match (kernels.tables.batched_m2l(), &kernels.matrix) {
+            (Some(tables), Some(matrix)) => {
+                if pairs.is_empty() {
+                    return;
+                }
+                self.execution
+                    .blocks(locals, M2L_BLOCK_TARGETS, |first, block, scratch| {
+                        kernels.m2l_block(&call, (tables, matrix), first, block, scratch);
+                    });
+            }
+            _ => self.execution.boxes(locals, |t, local, scratch| {
+                kernels.m2l_target(&call, t, local, scratch);
+            }),
+        }
     }
 
     fn p2l(&mut self, batch: P2l<'_, T>) {

@@ -37,7 +37,7 @@ pub const QUICK_REPEATS: usize = 2;
 /// The one-line usage, printed with every command-line error.
 pub const USAGE: &str = "usage: nd-fmm-bench [--n N,...] [--precision f32|f64,...] \
 [--degree p,...] [--backend host|cpu|metal|cuda,...] [--threads n] \
-[--strategy auto|dense|classes|rotation] [--repeats r] [--warmup w] \
+[--strategy auto|dense|classes|rotation|batched] [--repeats r] [--warmup w] \
 [--kinds sync|device|off] [--accuracy TARGETS|off] [--no-gradients] [--reuse-output] \
 [--output-pass auto|host|device] [--leaf-size n] [--max-level l] [--table-cache DIR] [--tuning-cache DIR] [--output FILE.md] \
 [--quick] [--help]";
@@ -54,7 +54,7 @@ option takes one value or a comma-separated list; the run is their Cartesian pro
   --degree p,...           expansion degree p, 0 to 20 (default 6)
   --backend B,...          host, cpu (CubeCL CPU runtime), metal, cuda (default host)
   --threads n              host and host-fallback threads (default: every core)
-  --strategy S             auto, dense, classes or rotation (default auto)
+  --strategy S             auto, dense, classes, rotation or batched (default auto)
   --repeats r              timed evaluations (default 10)
   --warmup w               untimed evaluations first, which compile the kernels (default 2)
   --kinds sync|device|off  per-kind timing mode (default sync)
@@ -358,15 +358,17 @@ fn precision(s: &str) -> Result<Precision, String> {
     }
 }
 
-/// `auto`, `dense`, `classes` or `rotation`.
+/// `auto`, `dense`, `classes`, `rotation` or `batched`.
 fn strategy(s: &str) -> Result<M2lStrategy, String> {
     match s {
         "auto" => Ok(M2lStrategy::Auto),
         "dense" => Ok(M2lStrategy::Dense),
         "classes" => Ok(M2lStrategy::Classes),
         "rotation" => Ok(M2lStrategy::Rotation),
+        "batched" => Ok(M2lStrategy::Batched),
         _ => Err(format!(
-            "`{s}` is not a strategy; expected `auto`, `dense`, `classes` or `rotation`"
+            "`{s}` is not a strategy; expected `auto`, `dense`, `classes`, `rotation` or \
+             `batched`"
         )),
     }
 }
@@ -422,14 +424,15 @@ pub fn kinds_name(mode: KindTiming) -> &'static str {
     }
 }
 
-/// The name of an [`M2lStrategy`] on the command line: `auto`, `dense`, `classes` or
-/// `rotation`.
+/// The name of an [`M2lStrategy`] on the command line: `auto`, `dense`, `classes`,
+/// `rotation` or `batched`.
 pub fn strategy_name(strategy: M2lStrategy) -> &'static str {
     match strategy {
         M2lStrategy::Auto => "auto",
         M2lStrategy::Dense => "dense",
         M2lStrategy::Classes => "classes",
         M2lStrategy::Rotation => "rotation",
+        M2lStrategy::Batched => "batched",
     }
 }
 
@@ -695,6 +698,7 @@ mod tests {
             M2lStrategy::Dense,
             M2lStrategy::Classes,
             M2lStrategy::Rotation,
+            M2lStrategy::Batched,
         ] {
             assert_eq!(strategy(strategy_name(s)), Ok(s));
         }

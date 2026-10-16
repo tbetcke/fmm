@@ -19,10 +19,11 @@
 #   balance         the cube, the Plummer sphere and the Gaussian clusters at 8 ranks (and
 #                   on locust at the largest count), N = 10^6, f64 p = 8
 #   sixteen         16 ranks, efficiency cores included (M3 Max only), the N = 10^6 cube
-#   strategy        the M2L strategies with small tables, Rotation and Classes, against the
-#                   default (Dense at p = 8 until Phase 5N T4, Rotation since), at every
-#                   rank count of RANKS: the N = 10^6 cube and Plummer, f64 p = 8, overlap
-#                   off (does the dense tables' size per rank limit the downward pass?)
+#   strategy        the M2L strategies with small tables, Rotation and Classes, and since
+#                   Phase 6 T2 the batched M2L (Batched), against the default (Dense at
+#                   p = 8 until Phase 5N T4, Rotation since), at every rank count of RANKS:
+#                   the N = 10^6 cube and Plummer, f64 p = 8, overlap off (does the dense
+#                   tables' size per rank limit the downward pass?)
 #   node-rule       Phase 5N T4, the strategy rule on the node (docs/design/node-m2l.md §4,
 #                   §8): the N = 10^6 cube and Plummer, overlap off, at every ranks x
 #                   threads of NODE_GRID: f64 p = 8, f32 p = 8 and f64 p = 3 with `auto`
@@ -41,6 +42,17 @@
 #   oversubscribed  locust only: 256 and 512 ranks on 72 cores, the N = 10^6 cube, f64
 #                   p = 8, correctness and memory only (never a timing); the soft limit
 #                   of open files is raised to the hard limit for these launches
+#
+# Sweeps of the batched host M2L (Phase 6 T2, docs/phase6/T2-host-batched-m2l.md;
+# docs/design/optimisation.md §2), every launch with --kinds, overlap off, against Dense,
+# Classes and Rotation; `batched-fused` is Batched with `--mul-add fused`:
+#   t2-host         one rank at 1 thread and at every core of the machine (CORES): the
+#                   cube and the Plummer sphere at N = 10^6, f64 p = 3, 6, 8, 12, 18 and
+#                   f32 p = 3, 6, 8, the five variants; three timed evaluations (two at
+#                   p = 12, one at p = 18)
+#   t2-node         many ranks per node: every ranks x threads of T2_SPLITS, the N = 10^6
+#                   cube and Plummer at f64 p = 8 and the cube at f64 p = 12, the five
+#                   variants; three timed evaluations
 #
 # Sweeps of the work-weighted cut (Phase 5S T7, docs/phase5s/T7-work-weighted-cut.md;
 # docs/design/scale-out.md §6), every launch with --kinds unless counted only:
@@ -119,6 +131,9 @@
 #            Linux, "1x1 2x1 10x1 20x1 40x1 1x40 2x20 4x10" under Slurm)
 #   CROSSOVER  ranks per node of crossover (default "6 8 10" on macOS, "8 12 16 24" on
 #            Linux, "8 10 12 16 20" under Slurm)
+#   T2_SPLITS  ranks x threads per node of t2-node (default "1x1 2x1 4x1 8x1 12x1 1x12" on
+#            macOS, "1x1 8x1 16x1 32x1 64x1 72x1 1x72 8x9" on Linux, "1x1 10x1 20x1 40x1
+#            2x20 1x40" under Slurm)
 #   EVALS    timed evaluations per path (default 10)
 #   TIMEOUT  seconds per launch (default 3600)
 #   QUIET    on macOS, the CPU percentage the other processes may use before a launch
@@ -196,6 +211,7 @@ Darwin)
     BUDGET=${BUDGET:-56}
     NODE_GRID=${NODE_GRID:-"1x1 2x1 4x1 8x1 12x1 1x12 2x6"}
     CROSSOVER=${CROSSOVER:-"6 8 10"}
+    T2_SPLITS=${T2_SPLITS:-"1x1 2x1 4x1 8x1 12x1 1x12"}
     ;;
 *)
     if [ -n "${SLURM_JOB_ID:-}" ]; then
@@ -210,6 +226,7 @@ Darwin)
         BUDGET=${BUDGET:-96}
         NODE_GRID=${NODE_GRID:-"1x1 2x1 10x1 20x1 40x1 1x40 2x20 4x10"}
         CROSSOVER=${CROSSOVER:-"8 10 12 16 20"}
+        T2_SPLITS=${T2_SPLITS:-"1x1 10x1 20x1 40x1 2x20 1x40"}
     else
         os=linux
         RANKS=${RANKS:-"1 2 4 8 16 32 64 72"}
@@ -219,6 +236,7 @@ Darwin)
         BUDGET=${BUDGET:-96}
         NODE_GRID=${NODE_GRID:-"1x1 8x1 16x1 32x1 64x1 72x1 1x72 4x18 8x9"}
         CROSSOVER=${CROSSOVER:-"8 12 16 24"}
+        T2_SPLITS=${T2_SPLITS:-"1x1 8x1 16x1 32x1 64x1 72x1 1x72 8x9"}
     fi
     ;;
 esac
@@ -363,8 +381,49 @@ auto_resolves() {
     fi
 }
 
+# t2_launch <name prefix> <ranks> <threads> <variant> <scaling arguments...>: one launch of
+# T2's sweeps with the strategy of <variant> (dense, classes, rotation, batched, or
+# batched-fused: Batched with --mul-add fused), --kinds and overlap off.
+t2_launch() {
+    prefix=$1 r=$2 t=$3 variant=$4
+    shift 4
+    strategy=${variant%-fused} mul_add=separate
+    if [ "$variant" = batched-fused ]; then mul_add=fused; fi
+    launch "$prefix-$variant-r${r}x$t" "$r" "$t" --strategy "$strategy" --mul-add "$mul_add" \
+        --kinds --overlap off "$@"
+}
+
+t2_variants="dense classes rotation batched batched-fused"
+
 for sweep in "$@"; do
     case "$sweep" in
+    t2-host)
+        for dist in cube plummer; do
+            for dp in f64:3 f64:6 f64:8 f64:12 f64:18 f32:3 f32:6 f32:8; do
+                prec=${dp%%:*} p=${dp##*:} evals=3
+                if [ "$p" -ge 12 ]; then evals=2; fi
+                if [ "$p" -ge 18 ]; then evals=1; fi
+                for t in 1 "$CORES"; do
+                    for variant in $t2_variants; do
+                        t2_launch "t2-host-$dist-$prec-p$p" 1 "$t" "$variant" --dist $dist \
+                            --n 1000000 --precision "$prec" --p "$p" --evals "$evals"
+                    done
+                done
+            done
+        done
+        ;;
+    t2-node)
+        for run in cube:8 plummer:8 cube:12; do
+            dist=${run%%:*} p=${run##*:}
+            for split in $T2_SPLITS; do
+                r=${split%x*} t=${split#*x}
+                for variant in $t2_variants; do
+                    t2_launch "t2-node-$dist-f64-p$p" "$r" "$t" "$variant" --dist "$dist" \
+                        --n 1000000 --precision f64 --p "$p" --evals 3
+                done
+            done
+        done
+        ;;
     strong | strong-small)
         n=1000000
         if [ "$sweep" = strong-small ]; then n=100000; fi
@@ -489,7 +548,7 @@ for sweep in "$@"; do
         ;;
     strategy)
         for dist in cube plummer; do
-            for strategy in rotation classes; do
+            for strategy in rotation classes batched; do
                 for r in $RANKS; do
                     launch "strategy-$dist-$strategy-r${r}x1" "$r" 1 \
                         --dist $dist --n 1000000 --precision f64 --p 8 --overlap off \

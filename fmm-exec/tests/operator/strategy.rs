@@ -1,6 +1,8 @@
 //! Strategies: `Auto` resolves by the node rule of Phase 5N T4 (docs/design/node-m2l.md
-//! §4), and `Dense`, `Classes` and `Rotation` give the same translations.
+//! §4), `Dense`, `Classes` and `Rotation` give the same translations, and `Batched` (Phase
+//! 6 T2) holds `Dense`'s tables and names its column kernel.
 
+use nd_fmm_exec::operator::{Isa, LaplaceOperator, MulAdd, P2pChoice};
 use nd_fmm_exec::tables::{M2lStrategy, NodeContext, StrategyChoice, Tables};
 use nd_fmm_tables::cache::TableKind;
 use nd_fmm_tables::geometry::m2l_offsets;
@@ -256,5 +258,88 @@ fn dense_classes_and_rotation_give_the_same_translations() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn batched_holds_the_dense_tables_and_names_its_kernel() {
+    // Phase 6 T2 (C6.6). Error measures: exact equality of strategies, kinds, kernels and
+    // the bits of every pair translation. The level calls of `Batched` (per block, through
+    // the column kernel) are checked against `Dense` bit for bit in `tests/mpi_exec.rs`;
+    // here its tables and settings.
+    let p = 4;
+    let (dense, batched) = (Tables::<f64>::build(p, M2lStrategy::Dense), {
+        Tables::<f64>::build(p, M2lStrategy::Batched)
+    });
+    assert_eq!(batched.strategy(), M2lStrategy::Batched);
+    assert_eq!(batched.kinds(), dense.kinds());
+    assert_eq!(
+        batched.kinds(),
+        [TableKind::M2m, TableKind::L2l, TableKind::M2l]
+    );
+    // Named, never overridden; never `Auto`'s choice.
+    for ranks in [1, 12, 128] {
+        let node = NodeContext::new(p, 8, ranks, 64_000_000);
+        assert_eq!(
+            M2lStrategy::Batched.choose(&node),
+            StrategyChoice::Named(M2lStrategy::Batched)
+        );
+        assert_ne!(
+            M2lStrategy::Auto.resolve_on_node(&node),
+            M2lStrategy::Batched
+        );
+    }
+    // One pair at a time it applies the dense tables: every translation bit for bit.
+    let n = len(p);
+    let mut rng = SplitMix64::new(0xba7c);
+    let (mut s_dense, mut s_batched) = (dense.scratch(), batched.scratch());
+    for index in 0..316 {
+        let x = random_coefficients(Kind::Multipole, p, &mut rng);
+        let (mut a, mut b) = (vec![0.5; n], vec![0.5; n]);
+        dense.m2l(index, &x, &mut a, &mut s_dense);
+        batched.m2l(index, &x, &mut b, &mut s_batched);
+        assert_eq!(a, b, "offset {index}");
+    }
+    for o in 0..8 {
+        let x = random_coefficients(Kind::Multipole, p, &mut rng);
+        let (mut a, mut b) = (vec![0.0; n], vec![0.0; n]);
+        dense.m2m(o, &x, &mut a, &mut s_dense);
+        batched.m2m(o, &x, &mut b, &mut s_batched);
+        dense.l2l(o, &x, &mut a, &mut s_dense);
+        batched.l2l(o, &x, &mut b, &mut s_batched);
+        assert_eq!(a, b, "octant {o}");
+    }
+
+    // The column kernel: on the P2P ISA (the scalar path for the reference), separate
+    // by default; none under another strategy.
+    let op = LaplaceOperator::new(batched.clone(), false, 8);
+    let kernel = op.m2l_kernel().expect("Batched has a column kernel");
+    assert_eq!(
+        (kernel.isa(), kernel.mul_add()),
+        (Isa::detect(), MulAdd::Separate)
+    );
+    let mut op = op.with_m2l_mul_add(MulAdd::Fused);
+    assert_eq!(op.m2l_kernel().unwrap().mul_add(), MulAdd::Fused);
+    op.set_m2l_mul_add(MulAdd::Separate);
+    assert_eq!(op.m2l_kernel().unwrap().mul_add(), MulAdd::Separate);
+    let reference = op
+        .with_m2l_mul_add(MulAdd::Fused)
+        .with_p2p(P2pChoice::Reference)
+        .unwrap();
+    let kernel = reference.m2l_kernel().unwrap();
+    assert_eq!(
+        (kernel.isa(), kernel.mul_add()),
+        (Isa::Scalar, MulAdd::Fused)
+    );
+    for isa in Isa::available() {
+        let op = LaplaceOperator::new(batched.clone(), false, 8)
+            .with_p2p(P2pChoice::Isa(isa))
+            .unwrap();
+        assert_eq!(op.m2l_kernel().unwrap().isa(), isa);
+    }
+    for strategy in STRATEGIES {
+        let op = LaplaceOperator::new(Tables::<f64>::build(p, strategy), false, 8)
+            .with_m2l_mul_add(MulAdd::Fused);
+        assert!(op.m2l_kernel().is_none(), "{strategy:?}");
     }
 }

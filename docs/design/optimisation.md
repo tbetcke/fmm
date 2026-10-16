@@ -442,7 +442,7 @@ runs SSE2) against today's best strategy, and 1.95–3.0× at f32 p = 8; at p = 
 Max at f64 p = 12 with 12 ranks (0.96×; Rotation's O(p³) catches up). C6.6's criterion
 ("faster than every existing host strategy at p ≥ 6 on one rank, and scaling with ranks
 per node where Dense does not") is met by the model everywhere but that cell; T2 measures
-it. At 160 Kathleen ranks, where M2L is most of the 67–92 % downward share at p = 8 (§1.2),
+it (measured in T2: fmm-validate/results/phase6-m2l.md, its §7 against this model). At 160 Kathleen ranks, where M2L is most of the 67–92 % downward share at p = 8 (§1.2),
 the same per-pair gain applies per rank.
 
 ### 2.11 Where the kernel lives

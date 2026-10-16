@@ -28,7 +28,7 @@ use std::arch::aarch64::{
     vsubq_f64,
 };
 
-use super::{Simd, p2p::p2p_body, rsqrt_body};
+use super::{Simd, matrix::accumulate_body, p2p::p2p_body, rsqrt_body};
 use crate::Isa;
 
 /// The token of NEON: a value exists only on a CPU with NEON, so the [`Simd`] methods
@@ -349,3 +349,62 @@ macro_rules! p2p_entries {
 
 p2p_entries!(p2p_f32, p2p_f32_gradient, f32, K_F32);
 p2p_entries!(p2p_f64, p2p_f64_gradient, f64, K_F64);
+
+/// Row vectors per block of the column-accumulation kernel in f32 (`arch::matrix`):
+/// 32 vector registers: 16 accumulators of 4 × 4 (f32: 16 rows; f64: 8 rows), 4 of A
+/// and the broadcast.
+pub(crate) const MATRIX_ROWS_F32: usize = 4;
+/// Row vectors per block of the column-accumulation kernel in f64 (as
+/// [`MATRIX_ROWS_F32`]).
+pub(crate) const MATRIX_ROWS_F64: usize = 4;
+
+/// Generates the column-accumulation entry points of one precision, separate and fused.
+macro_rules! accumulate_entries {
+    ($separate:ident, $fused:ident, $t:ty, $r:expr) => {
+        /// C[:, c_j] += A · B[:, b_j] on NEON, multiply and add rounded apart
+        /// (`arch::matrix::accumulate_body`), in the precision of its name, with shapes
+        /// checked by the caller.
+        ///
+        /// Not inlined, so that the dispatch stays one call and the inlining check
+        /// finds the function by name.
+        #[target_feature(enable = "neon")]
+        #[inline(never)]
+        pub(crate) fn $separate(
+            n: usize,
+            a: &[$t],
+            b: &[$t],
+            b_offsets: &[usize],
+            c: &mut [$t],
+            c_offsets: &[usize],
+            pack: &mut [$t],
+        ) {
+            // SAFETY: this function enables `neon`, so it runs only on a CPU with NEON:
+            // a call from outside a NEON context is `unsafe` and asserts it.
+            let s = unsafe { Neon::new_unchecked() };
+            accumulate_body::<$t, Neon, { $r }, false>(s, n, a, b, b_offsets, c, c_offsets, pack);
+        }
+
+        /// The fused form of the separate entry point: one fma per step.
+        ///
+        /// Not inlined, as the separate entry point.
+        #[target_feature(enable = "neon")]
+        #[inline(never)]
+        pub(crate) fn $fused(
+            n: usize,
+            a: &[$t],
+            b: &[$t],
+            b_offsets: &[usize],
+            c: &mut [$t],
+            c_offsets: &[usize],
+            pack: &mut [$t],
+        ) {
+            // SAFETY: this function enables `neon`, so it runs only on a CPU with NEON:
+            // a call from outside a NEON context is `unsafe` and asserts it.
+            let s = unsafe { Neon::new_unchecked() };
+            accumulate_body::<$t, Neon, { $r }, true>(s, n, a, b, b_offsets, c, c_offsets, pack);
+        }
+    };
+}
+
+accumulate_entries!(accumulate_f32, accumulate_f32_fused, f32, MATRIX_ROWS_F32);
+accumulate_entries!(accumulate_f64, accumulate_f64_fused, f64, MATRIX_ROWS_F64);

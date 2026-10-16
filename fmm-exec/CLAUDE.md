@@ -23,7 +23,9 @@ hook) and C5.2 (task T9: the exchanges overlapped with local work, `FmmBuilder::
 Phase 5N, C5N.3 (task T4 in docs/phase5n/: the M2L strategy rule on the node, the table
 loading with a cache at scale, the ranks × threads guidance; design docs/design/node-m2l.md);
 Phase 5S, C5S.3 (T6: the owned top tree in `Fmm`) and C5S.4 (T7: the work-weighted cut,
-module `cost`; design docs/design/scale-out.md §6).
+module `cost`; design docs/design/scale-out.md §6); Phase 6, C6.6 (T2 in docs/phase6/: the
+host batched M2L, `M2lStrategy::Batched`, with `nd-fmm-simd`'s `MatrixKernel` and the
+opt-in fused mode `FmmBuilder::m2l_mul_add`; design docs/design/optimisation.md §2).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -43,7 +45,12 @@ module `cost`; design docs/design/scale-out.md §6).
   from `operator`; f32 and f64, like `RealScalar`). No allocation in operators: scratch
   is owned by the operator and sized at construction.
 - The host path executes each level target by target, through the plan's
-  target-centric view, each target's contributions in a documented order.
+  target-centric view, each target's contributions in a documented order. The one
+  exception is M2L under `Batched` (Phase 6 T2): blocks of `M2L_BLOCK_TARGETS`
+  consecutive targets, offsets in index order through the grouped view's batches, each
+  local receiving exactly the chain of `Dense` (the `operator` module docs, "The batched
+  M2L"). Keep `Batched` bit for bit `Dense` in its default mode; `Dense` stays the
+  trusted path.
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread
   count. No `unsafe`, no atomics, no global pool; per-thread scratch created at
@@ -79,6 +86,14 @@ module `cost`; design docs/design/scale-out.md §6).
     CUDA executables in `tests/kind_common/windows.rs`, and the whole-output check of the
     C3.2 tree (Phase 4S T9) in `tests/output_common/` (used by `tests/accuracy.rs` and
     `tests/device_fmm.rs`).
+  - The batched M2L (Phase 6 T2): `evaluate_threaded` runs `check_batched` wherever the
+    scenario resolved `Dense`: the same settings under `Batched` bit for bit, serially,
+    once per scenario, precision, p and output kind; once per scenario and precision
+    also at its most threads and in the fused mode (within 1e-12 / 1e-5 of `Dense`, the
+    same bits at those threads, the one-rank fused reference on several ranks), on one
+    build (`Fmm::set_serial`, `Fmm::set_m2l_mul_add`). It added about 15 s to the
+    one-rank debug run (91 → 106 s on the M3 Max). `tests/multi_rank.rs` runs every
+    workload point with the default strategy, `Batched` and `Batched` fused.
   - New `Fmm` scenarios evaluate through `evaluate_threaded` in `tests/mpi_exec.rs`,
     which repeats them at 2, 4 and 8 threads and checks the output bit for bit, or
     through `evaluate_every_kernel`, which also repeats them with `Reference` and every
