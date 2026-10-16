@@ -293,6 +293,7 @@ impl<T: DeviceFloat + RealScalar> DeviceProblem<T> {
             sources: self.sources.as_slice(),
             target_offsets: &self.target_offsets,
             target_input: self.target_input.as_slice(),
+            vectors: 1,
         };
         p2p(
             device,

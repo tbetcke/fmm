@@ -134,7 +134,20 @@ fn scenario(
         difference.root,
         difference.locals
     );
-    eprintln!("rank {}: {name}: {summary}", comm.rank());
+    // Three charge vectors (Phase 6 T5): each bit for bit the one-vector device FMM's,
+    // blocking and overlapped, with the transfers of the formula for m vectors.
+    let vectors = device_common::check_three_vectors(
+        &builder,
+        (sources, targets),
+        charges,
+        Backend::Metal,
+        comm,
+    );
+    eprintln!(
+        "rank {}: {name}: {summary}; {vectors} evaluations of three charge vectors bit for \
+         bit their one-vector evaluations",
+        comm.rank()
+    );
 }
 
 #[test]

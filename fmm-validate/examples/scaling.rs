@@ -95,6 +95,13 @@
 //!   `CostModel::calibrated`, measured on Kathleen, if not given); with `--kinds` the
 //!   report fits them to the measured kind times (`scaling::ModelFit`, the `alpha_ns`
 //!   field of the summary), which is how a machine's constants are calibrated;
+//! - `--backend host|cpu|metal|cuda` where the operators run (`FmmBuilder::backend`; host;
+//!   a device needs the example built with that feature of `nd-fmm-validate`): one rank per
+//!   device for a timing (ranks sharing a device are a correctness check only);
+//! - `--rhs m` charge vectors per evaluation (`FmmBuilder::vectors`, Phase 6 T5; 1): the
+//!   FMM built for m vectors and timed through `Fmm::evaluate_many` (the summary's `rhs`
+//!   field; the time per vector is the wall time over m); not with `--errors`,
+//!   `--reference` or `--invariance`;
 //! - `--invariance k[,k…]` rank-count invariance against P/k ranks for each k (above),
 //!   with the overlap of `--overlap` (the large run evaluates its paths, the small runs
 //!   overlapped unless `--overlap off`) and the strategy of `--strategy` (`auto`: the one
@@ -218,6 +225,12 @@ fn arguments() -> Arguments {
             "--evals" => s.evaluations = number(),
             "--builds" => s.builds = number().max(1),
             "--errors" => s.vectors = number(),
+            "--rhs" => s.rhs = number().max(1),
+            "--backend" => {
+                s.backend = value.parse().unwrap_or_else(|_| {
+                    fail(&format!("--backend: host, cpu, metal or cuda, not {value}"))
+                });
+            }
             "--sampled" => s.sampled = number(),
             other => fail(&format!("unknown option {other}")),
         }

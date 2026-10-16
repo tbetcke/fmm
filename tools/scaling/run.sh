@@ -54,6 +54,23 @@
 #                   cube and Plummer at f64 p = 8 and the cube at f64 p = 12, the five
 #                   variants; three timed evaluations
 #
+# Sweeps of several charge vectors (Phase 6 T5, docs/phase6/T5-multiple-rhs.md;
+# docs/design/optimisation.md §4), every host launch with --kinds, overlap off, three timed
+# evaluations, at `--rhs m` for every m of T5_RHS (default "1 2 4 8 16 32"); the time per
+# vector is the summary's wall_ms over rhs:
+#   t5-host         one rank per core (CORES ranks x 1 thread; under Slurm CORES_PER_NODE
+#                   per node on the job's nodes): the N = 10^6 cube, f64 p = 3 and 8 and
+#                   f32 p = 3 and 8, with `auto` (the rule's strategy) and `batched`
+#   t5-threads      one rank at every core (1 x CORES), the same problems and strategies
+#   t5-device       one rank on the device of DEVICE (metal or cuda; the example built with
+#                   that feature, FEATURES=DEVICE by default), every core for the host's
+#                   parts: the N = 10^6 cube, f32 p = 3 and 8, on CUDA also f64 p = 3 and
+#                   8, the device path's own strategy rule (`auto`), without --kinds
+#   t5-nodes        the exchanges at every rank of the job (under Slurm, CORES_PER_NODE per
+#                   node; else LARGEST ranks): the cube at N = 10^6 and 10^7, f64 p = 8
+#                   with `auto`: the messages and bytes per exchange, and the replicated
+#                   top's all-gather, against m
+#
 # Sweeps of the work-weighted cut (Phase 5S T7, docs/phase5s/T7-work-weighted-cut.md;
 # docs/design/scale-out.md §6), every launch with --kinds unless counted only:
 #   calibrate       the constants of the cost model: one rank per core of the machine (or
@@ -135,6 +152,11 @@
 #            macOS, "1x1 8x1 16x1 32x1 64x1 72x1 1x72 8x9" on Linux, "1x1 10x1 20x1 40x1
 #            2x20 1x40" under Slurm)
 #   EVALS    timed evaluations per path (default 10)
+#   T5_RHS   the charge vectors of the t5 sweeps (default "1 2 4 8 16 32")
+#   DEVICE   the device of t5-device: metal or cuda (default metal on macOS, cuda on
+#            Linux)
+#   FEATURES cargo features of nd-fmm-validate for the example's build (default: none;
+#            t5-device builds with DEVICE unless FEATURES is set)
 #   TIMEOUT  seconds per launch (default 3600)
 #   QUIET    on macOS, the CPU percentage the other processes may use before a launch
 #            starts (default 200, two cores): each launch waits, up to an hour, until
@@ -241,10 +263,19 @@ Darwin)
     ;;
 esac
 
+T5_RHS=${T5_RHS:-"1 2 4 8 16 32"}
+if [ "$os" = macos ]; then DEVICE=${DEVICE:-metal}; else DEVICE=${DEVICE:-cuda}; fi
+for sweep in "$@"; do
+    if [ "$sweep" = t5-device ] && [ -z "${FEATURES:-}" ]; then FEATURES=$DEVICE; fi
+done
 exe=${CARGO_TARGET_DIR:-target}/release/examples/scaling
 if [ -z "${DRY_RUN:-}" ]; then
     mkdir -p "$OUT"
-    cargo build --release -p nd-fmm-validate --example scaling
+    if [ -n "${FEATURES:-}" ]; then
+        cargo build --release -p nd-fmm-validate --example scaling --features "$FEATURES"
+    else
+        cargo build --release -p nd-fmm-validate --example scaling
+    fi
 fi
 
 # Under Slurm: the job and the mapping of a launch, in place of the load.
@@ -395,8 +426,51 @@ t2_launch() {
 
 t2_variants="dense classes rotation batched batched-fused"
 
+# t5_launch <name prefix> <ranks> <threads> <scaling arguments...>: one launch per m of
+# T5_RHS, with --kinds (on the host; t5_kinds empty on a device, where the synchronous kind
+# timings would add a sync per level call), overlap off and three timed evaluations.
+t5_kinds=--kinds
+t5_launch() {
+    prefix=$1 r=$2 t=$3
+    shift 3
+    for m in $T5_RHS; do
+        launch "$prefix-rhs$m-r${r}x$t" "$r" "$t" --rhs "$m" $t5_kinds --overlap off --evals 3 "$@"
+    done
+}
+
 for sweep in "$@"; do
     case "$sweep" in
+    t5-host | t5-threads)
+        if [ "$sweep" = t5-host ]; then
+            r=$((CORES * NODES)) t=1
+        else
+            r=$NODES t=$CORES
+        fi
+        for dp in f64:3 f64:8 f32:3 f32:8; do
+            prec=${dp%%:*} p=${dp##*:}
+            for strategy in auto batched; do
+                t5_launch "$sweep-cube-$prec-p$p-$strategy" "$r" "$t" --dist cube \
+                    --n 1000000 --precision "$prec" --p "$p" --strategy "$strategy"
+            done
+        done
+        ;;
+    t5-device)
+        t5_kinds=""
+        degrees="f32:3 f32:8"
+        if [ "$DEVICE" = cuda ]; then degrees="f32:3 f32:8 f64:3 f64:8"; fi
+        for dp in $degrees; do
+            prec=${dp%%:*} p=${dp##*:}
+            t5_launch "t5-device-$DEVICE-cube-$prec-p$p" 1 "$CORES" --dist cube --n 1000000 \
+                --precision "$prec" --p "$p" --backend "$DEVICE"
+        done
+        ;;
+    t5-nodes)
+        if [ "$os" = slurm ]; then r=$((CORES_PER_NODE * NODES)); else r=$LARGEST; fi
+        for n in 1000000 10000000; do
+            t5_launch "t5-nodes-cube-n$n-f64-p8" "$r" 1 --dist cube --n "$n" --precision f64 \
+                --p 8
+        done
+        ;;
     t2-host)
         for dist in cube plummer; do
             for dp in f64:3 f64:6 f64:8 f64:12 f64:18 f32:3 f32:6 f32:8; do

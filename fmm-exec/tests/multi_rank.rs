@@ -14,10 +14,15 @@
 //! evaluated with the exchanges overlapped, `Fmm::set_overlap`, Phase 5 T9), 1,000 sampled
 //! targets; f64 at p = 3, 8 and 18, f32 at p = 3 and 8 (the f32 charges rounded, with an
 //! oracle on the rounded charges); one thread per rank. Point i is passed on rank
-//! `hash(i) % P` (a seeded random share). Every workload point runs three times (Phase 6
-//! T2): with the default strategy (`Auto`), with `M2lStrategy::Batched`, and with
-//! `Batched` in the fused mode (`MulAdd::Fused`); the batched runs load their tables from a
-//! cache in `CARGO_TARGET_TMPDIR`. On every rank count, for every run:
+//! `hash(i) % P` (a seeded random share). Every workload point runs five times (Phase 6
+//! T2, T5): with the default strategy (`Auto`), with `M2lStrategy::Batched`, with
+//! `Batched` in the fused mode (`MulAdd::Fused`), and with the default strategy and with
+//! `Batched` on an FMM of the eight vectors (`FmmBuilder::vectors(8)`, Phase 6 T5, C6.3),
+//! evaluated at once by `Fmm::evaluate_many`, blocking and again with the exchanges
+//! overlapped (the two bit for bit); the batched runs load their tables from a cache in
+//! `CARGO_TARGET_TMPDIR`. The one-rank runs of every variant evaluate one vector at a
+//! time, so the eight-vector variants check that each vector is bit for bit its
+//! single-vector evaluation. On every rank count, for every run:
 //! - **Equal to one rank** (requirement 2, decision 7; docs/design/distributed-fmm.md
 //!   §5.3, §5.4): every output value of every evaluation, φ and ∇φ, is bit for bit that
 //!   of the one-rank `Fmm` of the same settings and the same resolved strategy (Phase 5N
@@ -26,7 +31,8 @@
 //!   built on rank 0 on `SimpleCommunicator::self_comm()`; and within 100 u_T
 //!   (1.1e-14 in f64, 6.0e-6 in f32) relative L2 over every target, φ and ∇φ, of the
 //!   one-rank `Fmm` over the points in their own order (the "one-rank run"), whose
-//!   relative max difference is printed too. On one rank both are the run itself.
+//!   relative max difference is printed too. On one rank both are the run itself, but for
+//!   the runs of eight vectors, whose one-rank runs evaluate one vector at a time.
 //! - **Errors against the direct sum** (docs/phase5/README.md, "Accuracy measures"): the
 //!   root mean square over the eight charge vectors of the relative L2 error at the
 //!   sampled targets, of φ and of ∇φ, against `direct_sum` in f64 divided by 4π, within
@@ -64,7 +70,7 @@ use mpi::collective::SystemOperation;
 use mpi::datatype::PartitionMut;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
-use nd_fmm_exec::fmm::{Fmm, FmmBuilder, Output};
+use nd_fmm_exec::fmm::{Fmm, FmmBuilder, Output, OutputMany};
 use nd_fmm_exec::operator::{MulAdd, SimdScalar};
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_math::RealScalar;
@@ -94,15 +100,23 @@ const SHARE_SEED: u64 = 0x05ee_dc51;
 const TABLE_CACHE: &str = concat!(env!("CARGO_TARGET_TMPDIR"), "/multi_rank_tables");
 
 /// A run's strategy by name: the default (`None`), or a named strategy and the
-/// multiply–add mode of the batched M2L.
-type Variant = (&'static str, Option<(M2lStrategy, MulAdd)>);
+/// multiply–add mode of the batched M2L; and the charge vectors of each evaluation of the
+/// multi-rank run (1, or all eight at once, Phase 6 T5).
+type Variant = (&'static str, Option<(M2lStrategy, MulAdd)>, usize);
 
-/// The strategies every workload point runs with: the default, and the batched M2L in
-/// both multiply–add modes (Phase 6 T2).
-const VARIANTS: [Variant; 3] = [
-    ("auto", None),
-    ("batched", Some((M2lStrategy::Batched, MulAdd::Separate))),
-    ("fused", Some((M2lStrategy::Batched, MulAdd::Fused))),
+/// The strategies every workload point runs with: the default, the batched M2L in both
+/// multiply–add modes (Phase 6 T2), and the default and the batched M2L on an FMM of the
+/// eight vectors (Phase 6 T5).
+const VARIANTS: [Variant; 5] = [
+    ("auto", None, 1),
+    ("batched", Some((M2lStrategy::Batched, MulAdd::Separate)), 1),
+    ("fused", Some((M2lStrategy::Batched, MulAdd::Fused)), 1),
+    ("auto, 8 vectors", None, CHARGE_VECTORS as usize),
+    (
+        "batched, 8 vectors",
+        Some((M2lStrategy::Batched, MulAdd::Separate)),
+        CHARGE_VECTORS as usize,
+    ),
 ];
 
 /// How far the multi-rank errors against the direct sum may lie from the one-rank run's,
@@ -295,6 +309,23 @@ fn union<V: Equivalence + Copy + Default>(local: &[V], comm: &SimpleCommunicator
 }
 
 /// An output as f64: φ, and ∇φ flattened.
+fn as_f64_vector<T: RealScalar>(output: &OutputMany<T>, v: usize) -> (Vec<f64>, Vec<f64>) {
+    let phi = output
+        .potential_of(v)
+        .iter()
+        .map(|&x| RealScalar::to_f64(x))
+        .collect();
+    let grad = output
+        .gradient_of(v)
+        .expect("built with gradients")
+        .as_flattened()
+        .iter()
+        .map(|&x| RealScalar::to_f64(x))
+        .collect();
+    (phi, grad)
+}
+
+/// φ and ∇φ of `output` as f64, ∇φ flattened.
 fn as_f64<T: RealScalar>(output: &Output<T>) -> (Vec<f64>, Vec<f64>) {
     let f = |v: &[T]| v.iter().map(|&x| RealScalar::to_f64(x)).collect::<Vec<_>>();
     (
@@ -374,7 +405,7 @@ type Errors = Vec<(&'static str, &'static str, usize, &'static str, f64)>;
 /// φ error of the multi-rank run; prints every rank's tree if `first`.
 fn run<T: Stored + SimdScalar + Equivalence + Default>(
     workload: &Workload,
-    (p, prediction, (variant, settings)): (usize, Option<f64>, Variant),
+    (p, prediction, (variant, settings, vectors)): (usize, Option<f64>, Variant),
     (charges, oracle): (&[Vec<f64>], Option<&Oracle>),
     mine: &[usize],
     first: bool,
@@ -398,24 +429,69 @@ fn run<T: Stored + SimdScalar + Equivalence + Default>(
     // The multi-rank run, on every rank.
     comm.barrier();
     let mut fmm: Fmm<'_, T> = builder
+        .clone()
+        .vectors(vectors)
         .build(&local_points, &local_points, comm)
         .expect("the FMM builds");
     let build = fmm.build_timings();
     // The one-rank runs take the strategy the multi-rank run resolved: under `Auto` it
     // depends on the ranks per node (Phase 5N T4), and the guarantee is per resolved
-    // strategy.
+    // strategy. They evaluate one vector at a time.
     let builder_strategy = fmm.strategy();
     let builder = builder.strategy(builder_strategy);
     let mut outputs = Vec::new();
     let (mut totals, mut moves) = (Vec::new(), Vec::new());
-    for (k, q) in local_charges.iter().enumerate() {
-        // Every second charge vector with the exchanges overlapped (Phase 5 T9).
-        fmm.set_overlap(k % 2 == 1);
-        let output = fmm.evaluate(q).expect("the FMM evaluates");
-        let t = output.timings;
-        totals.push(t.total());
-        moves.push(t.forward_charges + t.backward_output);
-        outputs.push(as_f64(&output));
+    if vectors == 1 {
+        for (k, q) in local_charges.iter().enumerate() {
+            // Every second charge vector with the exchanges overlapped (Phase 5 T9).
+            fmm.set_overlap(k % 2 == 1);
+            let output = fmm.evaluate(q).expect("the FMM evaluates");
+            let t = output.timings;
+            totals.push(t.total());
+            moves.push(t.forward_charges + t.backward_output);
+            outputs.push(as_f64(&output));
+        }
+    } else {
+        // Every vector at once (Phase 6 T5), blocking and then overlapped: the same bits;
+        // the times per evaluation of all the vectors.
+        let refs: Vec<&[T]> = local_charges.iter().map(Vec::as_slice).collect();
+        let mut first: Option<Vec<(Vec<f64>, Vec<f64>)>> = None;
+        for overlap in [false, true] {
+            fmm.set_overlap(overlap);
+            let output = fmm
+                .evaluate_many(&refs)
+                .expect("the FMM evaluates the vectors");
+            let t = output.timings;
+            totals.push(t.total());
+            moves.push(t.forward_charges + t.backward_output);
+            let per_vector: Vec<(Vec<f64>, Vec<f64>)> =
+                (0..vectors).map(|v| as_f64_vector(&output, v)).collect();
+            match &first {
+                None => first = Some(per_vector),
+                Some(blocking) => {
+                    let differing: usize = blocking
+                        .iter()
+                        .zip(&per_vector)
+                        .map(|((a, b), (c, d))| {
+                            a.iter()
+                                .chain(b)
+                                .zip(c.iter().chain(d))
+                                .filter(|(x, y)| x.to_bits() != y.to_bits())
+                                .count()
+                        })
+                        .sum();
+                    let mut total = 0usize;
+                    comm.all_reduce_into(&differing, &mut total, SystemOperation::sum());
+                    if total > 0 && rank == 0 {
+                        failures.push(format!(
+                            "{what}: {total} values of the overlapped evaluation of the vectors \
+                             differ from the blocking one"
+                        ));
+                    }
+                }
+            }
+        }
+        outputs = first.expect("the blocking evaluation");
     }
     // Every rank's leaves, owned points, near pairs and V pairs, once per workload.
     if first {
@@ -480,7 +556,9 @@ fn run<T: Stored + SimdScalar + Equivalence + Default>(
                 .collect()
         };
         let union_points: Vec<[f64; 3]> = order.iter().map(|&i| workload.points[i]).collect();
-        let (union_reference, point_order) = if size == 1 {
+        // On one rank a run of one vector is its own reference; a run of several is
+        // checked against the one-vector runs (Phase 6 T5).
+        let (union_reference, point_order) = if size == 1 && vectors == 1 {
             (gathered.clone(), gathered.clone())
         } else {
             (

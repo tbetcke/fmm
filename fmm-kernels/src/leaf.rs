@@ -58,6 +58,16 @@
 //! `leaf::p2l` do. Splitting a row into several calls at any entry gives the same bits,
 //! and repeated launches give the same bits.
 //!
+//! # Several charge vectors
+//!
+//! With m charge vectors (Phase 6 T5, C6.3; [`SourceInputs::vectors`],
+//! [`TargetInputs::vectors`]; CONVENTIONS §3.13, "Several charge vectors") one launch runs
+//! the grid of one vector m times along z, the cube at z = v running vector v: the m
+//! charges of a source adjacent, the box's m expansions and the leaf's m outputs one vector
+//! after the other. Each vector's cube makes exactly the operations of the one-vector
+//! kernel (the harmonics are formed per vector), so vector v of every output equals the
+//! one-vector launch on vector v bit for bit; the launches per level call do not change.
+//!
 //! # Layouts ([`LeafLayout`])
 //!
 //! | Layout | Default on | P2M, P2L | L2P, M2P |
@@ -256,8 +266,13 @@ pub struct SourceInputs<'a, T: DeviceFloat> {
     pub leaves: &'a LeafCoordinates,
     /// The point offsets of the source store, by leaf.
     pub source_offsets: &'a PointOffsets,
-    /// The source store: per leaf of n points, n leaf-scaled triples, then n charges.
+    /// The source store: per leaf of n points, n leaf-scaled triples, then n charges; with
+    /// m charge vectors the m n charges point-major (CONVENTIONS §3.13, "Several charge
+    /// vectors").
     pub sources: DeviceSlice<'a, T>,
+    /// The charge vectors m, at least 1 (Phase 6 T5): m charges per source and m
+    /// expansions per box, one vector after the other.
+    pub vectors: usize,
 }
 
 /// The inputs of one level's L2P or M2P call ([`l2p`], [`m2p`]): target leaves of a level
@@ -280,6 +295,10 @@ pub struct TargetInputs<'a, T: DeviceFloat> {
     pub target_offsets: &'a PointOffsets,
     /// The target input: per leaf of n points, n leaf-scaled triples.
     pub target_input: DeviceSlice<'a, T>,
+    /// The charge vectors m, at least 1 (Phase 6 T5): m expansions per box, and per leaf of
+    /// n targets the m vectors' potentials, then their gradients, one vector after the
+    /// other (CONVENTIONS §3.13, "Several charge vectors").
+    pub vectors: usize,
 }
 
 // --- Harmonics -----------------------------------------------------------------------
@@ -544,6 +563,7 @@ fn expand_cube_kernel<F: Float>(
     source_base: u32,
     coefficient_base: u32,
     nrows: u32,
+    vectors: u32,
     #[comptime] p: usize,
     #[comptime] units: usize,
     #[comptime] tile: usize,
@@ -557,13 +577,16 @@ fn expand_cube_kernel<F: Float>(
     let mut acc = Array::<F>::new(owned);
     let unit = UNIT_POS as usize;
     let row = CUBE_POS_Y as usize * CUBE_COUNT_X as usize + CUBE_POS_X as usize;
+    // The vector of the cube (Phase 6 T5): its charges and its expansion of each box.
+    let m = vectors as usize;
+    let v = CUBE_POS_Z as usize;
     // The row and its entry range are the same for every unit of the cube, so every
     // barrier below is reached by all of them or by none.
     if row < nrows as usize {
         let e_first = row_offsets[row] as usize;
         let e_last = row_offsets[row + 1] as usize;
         if e_first < e_last {
-            let out0 = coefficient_base as usize + row * nc;
+            let out0 = coefficient_base as usize + (row * m + v) * nc;
             #[unroll]
             for k in 0..owned {
                 let c = unit + k * units;
@@ -576,7 +599,7 @@ fn expand_cube_kernel<F: Float>(
                 let j = entries[e] as usize;
                 let s_first = source_offsets[j] as usize;
                 let n_s = source_offsets[j + 1] as usize - s_first;
-                let base = source_base as usize + 4 * s_first;
+                let base = source_base as usize + (3 + m) * s_first;
                 // P2L: the frame (ĉ(t|s), r̂(t|s)) of the box seen from the leaf, applied
                 // as (u − ĉ) · 2^(l_t − l_s).
                 let ls = leaves[4 * j];
@@ -614,7 +637,7 @@ fn expand_cube_kernel<F: Float>(
                                 staged[at + c] = values[c];
                             }
                         }
-                        charges[unit] = sources[base + 3 * n_s + i];
+                        charges[unit] = sources[base + 3 * n_s + i * m + v];
                     }
                     sync_cube();
                     let mut count = n_s - k0;
@@ -667,18 +690,22 @@ fn expand_cpu_kernel<F: Float>(
     source_base: u32,
     coefficient_base: u32,
     nrows: u32,
+    vectors: u32,
     #[comptime] p: usize,
     #[comptime] irregular_basis: bool,
 ) {
     let nc = comptime!((p + 1) * (p + 1));
     let mut values = Array::<F>::new(nc);
     let mut acc = Array::<F>::new(nc);
+    // The vector of the cube (Phase 6 T5): its charges and its expansion of each box.
+    let m = vectors as usize;
+    let v = CUBE_POS_Z as usize;
     let (first, count) = unit_rows(nrows as usize);
     for row in first..first + count {
         let e_first = row_offsets[row] as usize;
         let e_last = row_offsets[row + 1] as usize;
         if e_first < e_last {
-            let out0 = coefficient_base as usize + row * nc;
+            let out0 = coefficient_base as usize + (row * m + v) * nc;
             #[unroll]
             for c in 0..nc {
                 acc[c] = coefficients[out0 + c];
@@ -688,7 +715,7 @@ fn expand_cpu_kernel<F: Float>(
                 let j = entries[e] as usize;
                 let s_first = source_offsets[j] as usize;
                 let n_s = source_offsets[j + 1] as usize - s_first;
-                let base = source_base as usize + 4 * s_first;
+                let base = source_base as usize + (3 + m) * s_first;
                 let ls = leaves[4 * j];
                 let mut c0 = F::new(0.0f32);
                 let mut c1 = F::new(0.0f32);
@@ -710,7 +737,7 @@ fn expand_cpu_kernel<F: Float>(
                         v2 = (v2 - c2) * scale;
                     }
                     solid::<F>(v0, v1, v2, &mut values, p, irregular_basis);
-                    let q = sources[base + 3 * n_s + i];
+                    let q = sources[base + 3 * n_s + i * m + v];
                     // `add_conjugate` of `nd_fmm_ref::leaf`.
                     #[unroll]
                     for c in 0..nc {
@@ -835,6 +862,7 @@ fn evaluate_cube_kernel<F: Float>(
     output_base: u32,
     first_leaf: u32,
     nrows: u32,
+    vectors: u32,
     #[comptime] p: usize,
     #[comptime] units: usize,
     #[comptime] irregular_basis: bool,
@@ -850,6 +878,9 @@ fn evaluate_cube_kernel<F: Float>(
     let mut values = Array::<F>::new(comptime!((degree + 1) * (degree + 1)));
     let unit = UNIT_POS as usize;
     let row = CUBE_POS_Y as usize * CUBE_COUNT_X as usize + CUBE_POS_X as usize;
+    // The vector of the cube (Phase 6 T5): its expansion of each box and its outputs.
+    let m = vectors as usize;
+    let v = CUBE_POS_Z as usize;
     // The row, its entries and its targets are the same for every unit of the cube, so
     // every barrier below is reached by all of them or by none.
     if row < nrows as usize {
@@ -860,8 +891,11 @@ fn evaluate_cube_kernel<F: Float>(
         if gradients {
             per_point = 4usize;
         }
-        let phi0 = output_base as usize + per_point * t_first;
-        let grad0 = phi0 + n_t;
+        // The leaf's chunk holds the m vectors' potentials, then their gradients, one
+        // vector after the other (Phase 6 T5): this cube's vector v.
+        let chunk = output_base as usize + per_point * m * t_first;
+        let phi0 = chunk + v * n_t;
+        let grad0 = chunk + m * n_t + 3 * v * n_t;
         let in0 = input_base as usize + 3 * t_first;
         let e_first = row_offsets[row] as usize;
         let e_last = row_offsets[row + 1] as usize;
@@ -891,7 +925,7 @@ fn evaluate_cube_kernel<F: Float>(
             }
             for e in e_first..e_last {
                 let s = entries[e] as usize;
-                let cbase = coefficient_base as usize + s * nc;
+                let cbase = coefficient_base as usize + (s * m + v) * nc;
                 let mut c = unit;
                 while c < nc {
                     staged[c] = coefficients[cbase + c];
@@ -968,6 +1002,7 @@ fn evaluate_cpu_kernel<F: Float>(
     output_base: u32,
     first_leaf: u32,
     nrows: u32,
+    vectors: u32,
     #[comptime] p: usize,
     #[comptime] irregular_basis: bool,
     #[comptime] gradients: bool,
@@ -980,6 +1015,9 @@ fn evaluate_cpu_kernel<F: Float>(
     });
     let mut staged = Array::<F>::new(nc);
     let mut values = Array::<F>::new(comptime!((degree + 1) * (degree + 1)));
+    // The vector of the cube (Phase 6 T5): its expansion of each box and its outputs.
+    let m = vectors as usize;
+    let v = CUBE_POS_Z as usize;
     let (first, count) = unit_rows(nrows as usize);
     for row in first..first + count {
         let t_leaf = first_leaf as usize + row;
@@ -989,12 +1027,15 @@ fn evaluate_cpu_kernel<F: Float>(
         if gradients {
             per_point = 4usize;
         }
-        let phi0 = output_base as usize + per_point * t_first;
-        let grad0 = phi0 + n_t;
+        // The leaf's chunk holds the m vectors' potentials, then their gradients, one
+        // vector after the other (Phase 6 T5): this cube's vector v.
+        let chunk = output_base as usize + per_point * m * t_first;
+        let phi0 = chunk + v * n_t;
+        let grad0 = chunk + m * n_t + 3 * v * n_t;
         let in0 = input_base as usize + 3 * t_first;
         for e in row_offsets[row] as usize..row_offsets[row + 1] as usize {
             let s = entries[e] as usize;
-            let cbase = coefficient_base as usize + s * nc;
+            let cbase = coefficient_base as usize + (s * m + v) * nc;
             #[unroll]
             for c in 0..nc {
                 staged[c] = coefficients[cbase + c];
@@ -1193,6 +1234,7 @@ fn check_sources<T: DeviceFloat>(
         leaves,
         source_offsets,
         sources,
+        vectors,
     } = *inputs;
     for owner in [
         view.row_offsets().device(),
@@ -1206,6 +1248,7 @@ fn check_sources<T: DeviceFloat>(
         device.check_owner(owner)?;
     }
     assert!(p <= MAX_DEGREE, "{what}: p = {p} exceeds {MAX_DEGREE}");
+    assert!(vectors > 0, "{what}: at least one charge vector");
     assert!(
         level < boxes.nlevels(),
         "{what}: level {level} of {} levels",
@@ -1228,13 +1271,13 @@ fn check_sources<T: DeviceFloat>(
     );
     assert_eq!(
         sources.len(),
-        4 * source_offsets.total(),
-        "{what}: the source store holds 4 values per point"
+        (3 + vectors) * source_offsets.total(),
+        "{what}: the source store holds 3 + {vectors} values per point"
     );
     assert_eq!(
         out.len(),
-        coefficients(p) * nrows,
-        "{what}: the coefficients of the level, (p + 1)^2 per box"
+        vectors * coefficients(p) * nrows,
+        "{what}: the coefficients of the level, {vectors} (p + 1)^2 per box"
     );
     Ok(nrows)
 }
@@ -1256,6 +1299,7 @@ fn check_targets<T: DeviceFloat>(
         leaves,
         target_offsets,
         target_input,
+        vectors,
         ..
     } = *inputs;
     for owner in [
@@ -1271,6 +1315,7 @@ fn check_targets<T: DeviceFloat>(
         device.check_owner(owner)?;
     }
     assert!(p <= MAX_DEGREE, "{what}: p = {p} exceeds {MAX_DEGREE}");
+    assert!(vectors > 0, "{what}: at least one charge vector");
     let nrows = view.nrows();
     assert!(
         first_leaf + nrows <= target_offsets.nleaves() && first_leaf + nrows <= leaves.len(),
@@ -1289,7 +1334,7 @@ fn check_targets<T: DeviceFloat>(
         3 * target_offsets.total(),
         "{what}: the target input holds 3 values per point"
     );
-    let per_point = if gradients { 4 } else { 1 };
+    let per_point = vectors * if gradients { 4 } else { 1 };
     assert_eq!(
         output.len(),
         per_point * target_offsets.total(),
@@ -1309,8 +1354,8 @@ fn check_targets<T: DeviceFloat>(
         );
         assert_eq!(
             coefficients_in.len(),
-            coefficients(p) * nboxes,
-            "{what}: the coefficients of level {entry_level}, (p + 1)^2 per box"
+            vectors * coefficients(p) * nboxes,
+            "{what}: the coefficients of level {entry_level}, {vectors} (p + 1)^2 per box"
         );
     }
     Ok(nrows)
@@ -1354,6 +1399,8 @@ fn expand<T: DeviceFloat>(
         out.offset() as u32,
         nrows as u32,
     );
+    // One cube (or, on the CPU layout, one grid) per charge vector, along z (Phase 6 T5).
+    let vectors = u32::try_from(inputs.vectors).expect("the charge vectors fit in u32");
     let client = device.client().clone();
     match layout {
         LeafLayout::Cube { units, tile } => {
@@ -1364,16 +1411,18 @@ fn expand<T: DeviceFloat>(
             // leaf below the bounds checked above: the leaf coordinates at 4 j + c and the
             // source offsets at j and j + 1; the box coordinates of row r of the level at
             // 3 (offset + r) + k, within the level's boxes (nrows = its box count). Offsets
-            // are validated CSR (`PointOffsets`), so each leaf's chunk lies within the
-            // source store, whose length was asserted against the total; the coefficients
-            // of row r lie at out.offset() + r (p + 1)² + c < out.offset() + out.len().
+            // are validated CSR (`PointOffsets`), so each leaf's chunk of (3 + m) n values
+            // lies within the source store, whose length was asserted against the total;
+            // the coefficients of row r and the cube's vector v < m (the z extent) lie at
+            // out.offset() + (r m + v) (p + 1)² + c < out.offset() + out.len(), the length
+            // asserted as m (p + 1)² per row.
             // Shared memory holds tile (p + 1)² and tile values, written by units below
             // tile at their own region; each unit writes only the slots it owns. Rows at
             // or past nrows (a 2-D grid) do nothing.
             unsafe {
                 expand_cube_kernel::launch_unchecked::<T>(
                     &client,
-                    CubeCount::Static(cubes_x, cubes_y, 1),
+                    CubeCount::Static(cubes_x, cubes_y, vectors),
                     CubeDim::new_1d(units),
                     BufferArg::from_raw_parts(ro, ro_len),
                     BufferArg::from_raw_parts(en, en_len),
@@ -1387,6 +1436,7 @@ fn expand<T: DeviceFloat>(
                     scalars.2,
                     scalars.3,
                     scalars.4,
+                    vectors,
                     p,
                     units as usize,
                     tile as usize,
@@ -1399,11 +1449,12 @@ fn expand<T: DeviceFloat>(
             // SAFETY: as for the cube layout: every handle is a whole buffer with its
             // element count; rows, entries, leaves, boxes and offsets are within the bounds
             // checked above, and every chunk within its store. Each unit covers its own
-            // contiguous range of rows, so no two units write one coefficient.
+            // contiguous range of rows of its cube's vector, so no two units write one
+            // coefficient.
             unsafe {
                 expand_cpu_kernel::launch_unchecked::<T>(
                     &client,
-                    CubeCount::Static(1, 1, 1),
+                    CubeCount::Static(1, 1, vectors),
                     CubeDim::new_1d(units),
                     BufferArg::from_raw_parts(ro, ro_len),
                     BufferArg::from_raw_parts(en, en_len),
@@ -1417,6 +1468,7 @@ fn expand<T: DeviceFloat>(
                     scalars.2,
                     scalars.3,
                     scalars.4,
+                    vectors,
                     p,
                     irregular_basis,
                 );
@@ -1472,25 +1524,30 @@ fn evaluate<T: DeviceFloat>(
         inputs.first_leaf as u32,
         nrows as u32,
     );
+    // One cube (or, on the CPU layout, one grid) per charge vector, along z (Phase 6 T5).
+    let vectors = u32::try_from(inputs.vectors).expect("the charge vectors fit in u32");
     let client = device.client().clone();
     match layout {
         LeafLayout::Cube { units, .. } => {
             let (cubes_x, cubes_y) = cube_grid(&info, nrows);
             // SAFETY: every handle is a whole buffer with its element count. The kernel
             // reads row offsets r and r + 1 of rows r < nrows and their entries, each a box
-            // on the entry level below the bound checked above: its coefficients at
-            // coefficients.offset() + s (p + 1)² + c, within the slice of the level's
-            // boxes, and its coordinates at 3 (offset + s) + k. The target offsets at
+            // on the entry level below the bound checked above: its coefficients of the
+            // cube's vector v < m (the z extent) at coefficients.offset() + (s m + v)
+            // (p + 1)² + c, within the slice of the level's boxes (m (p + 1)² each), and
+            // its coordinates at 3 (offset + s) + k. The target offsets at
             // first_leaf + r + 1 ≤ nleaves and the leaf coordinates at 4 (first_leaf + r)
             // + k lie within the bounds checked above; offsets are validated CSR, so each
             // leaf's chunk lies within the target input and output, whose lengths were
-            // asserted against the totals. Shared memory holds (p + 1)² values, each
-            // written by one unit between barriers; each unit writes only its own targets'
-            // outputs. Rows at or past nrows (a 2-D grid) do nothing.
+            // asserted against the totals (m, or 4 m, output values per target: vector v's
+            // at v n and m n + 3 v n of the leaf's chunk). Shared memory holds (p + 1)²
+            // values, each written by one unit between barriers; each unit writes only its
+            // own targets' outputs of its cube's vector. Rows at or past nrows (a 2-D grid)
+            // do nothing.
             unsafe {
                 evaluate_cube_kernel::launch_unchecked::<T>(
                     &client,
-                    CubeCount::Static(cubes_x, cubes_y, 1),
+                    CubeCount::Static(cubes_x, cubes_y, vectors),
                     CubeDim::new_1d(units),
                     BufferArg::from_raw_parts(ro, ro_len),
                     BufferArg::from_raw_parts(en, en_len),
@@ -1507,6 +1564,7 @@ fn evaluate<T: DeviceFloat>(
                     scalars.4,
                     scalars.5,
                     scalars.6,
+                    vectors,
                     p,
                     units as usize,
                     irregular_basis,
@@ -1519,11 +1577,12 @@ fn evaluate<T: DeviceFloat>(
             // SAFETY: as for the cube layout: every handle is a whole buffer with its
             // element count; rows, entries, boxes, leaves and offsets are within the bounds
             // checked above, and every chunk within its store. Each unit covers its own
-            // contiguous range of target leaves, so no two units write one output value.
+            // contiguous range of target leaves of its cube's vector, so no two units write
+            // one output value.
             unsafe {
                 evaluate_cpu_kernel::launch_unchecked::<T>(
                     &client,
-                    CubeCount::Static(1, 1, 1),
+                    CubeCount::Static(1, 1, vectors),
                     CubeDim::new_1d(units),
                     BufferArg::from_raw_parts(ro, ro_len),
                     BufferArg::from_raw_parts(en, en_len),
@@ -1540,6 +1599,7 @@ fn evaluate<T: DeviceFloat>(
                     scalars.4,
                     scalars.5,
                     scalars.6,
+                    vectors,
                     p,
                     irregular_basis,
                     gradients,
@@ -1568,7 +1628,8 @@ fn evaluate<T: DeviceFloat>(
 ///
 /// If p exceeds [`MAX_DEGREE`], the level does not exist or has another number of boxes
 /// than the view rows, an entry addresses no leaf of the source offsets or the
-/// coordinates, or a store does not hold its values: 4 per source point, (p + 1)² per box.
+/// coordinates, or a store does not hold its values: 3 + m per source point, m (p + 1)²
+/// per box (m = `inputs.vectors`).
 pub fn p2m<T: DeviceFloat>(
     device: &mut Device,
     layout: LeafLayout,
@@ -1617,8 +1678,8 @@ pub fn p2l<T: DeviceFloat>(
 ///
 /// If p exceeds [`MAX_DEGREE`], the rows exceed the target leaves or the leaf
 /// coordinates, an entry addresses no box of the level, or a store does not hold its
-/// values: 3 per target point in the input, 1 (4 with gradients) per target point in the
-/// output, (p + 1)² per box of the level.
+/// values: 3 per target point in the input, m (4 m with gradients) per target point in the
+/// output, m (p + 1)² per box of the level (m = `inputs.vectors`).
 pub fn l2p<T: DeviceFloat>(
     device: &mut Device,
     layout: LeafLayout,

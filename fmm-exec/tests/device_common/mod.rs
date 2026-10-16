@@ -80,11 +80,12 @@
 //! Error measures: exact equality (bit patterns, counts and bytes), and the relative L2
 //! difference from the host output.
 
+use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
-use mpi::traits::{Communicator, Equivalence};
+use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_exec::device::{DataKind, GroupedImage, StageTiming, Traffic};
 use nd_fmm_exec::fmm::{
-    Backend, Fmm, FmmBuilder, KindTiming, OperatorKind, Output, OutputPass, Placement,
+    Backend, Fmm, FmmBuilder, KindTiming, OperatorKind, Output, OutputMany, OutputPass, Placement,
 };
 use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_exec::tables::M2lStrategy;
@@ -193,9 +194,10 @@ impl Expected {
 
 /// The transfers of one evaluation of `fmm` with every kind on the host fallback
 /// (device-path.md §4.1, §7.2; the device module's tables). With s bytes per value,
-/// n_c = (p + 1)², o values per target, K_l boxes and N_l targets on level l:
+/// n_c = m (p + 1)² values per box and o = m or 4 m per target for m charge vectors (Phase 6
+/// T5; m = 1 before), N_s charges m each, K_l boxes and N_l targets on level l:
 ///
-/// - the charges: one upload of N_s s bytes; the output: one download of o N_t s;
+/// - the charges: one upload of m N_s s bytes; the output: one download of o N_t s;
 /// - per level call whose view has an entry (and, for L2P, M2P and P2P, whose leaves
 ///   have a target): P2M down and up K_l n_c s; M2M (each pass) down (K_l + K_{l+1})
 ///   n_c s in one call, up K_l n_c s; M2L down K_l n_c s twice, up once; P2L down and up
@@ -209,7 +211,7 @@ impl Expected {
 ///   R^red_l boxes the upward reduction of level l sends and receives (Phase 5S T6), B_o
 ///   and B_r sent and received boxes of the replicated top (Phase 5S T5; the coarse blocks
 ///   before) and S_l and R_l sent and received boxes of level l (`Fmm::exchange_sizes`):
-///   up 4 G_s s (the ghost tail, if G_s > 0); per level with S^red_l > 0 down S^red_l
+///   up (3 + m) G_s s (the ghost tail, if G_s > 0); per level with S^red_l > 0 down S^red_l
 ///   n_c s in one download after one gather launch, and with R^red_l > 0 up R^red_l n_c s
 ///   and one scatter launch; down (B_o + Σ_l S_l) n_c s in one download after one gather
 ///   launch (if anything is sent); up B_r n_c s and one scatter launch (if B_r > 0); per
@@ -221,7 +223,8 @@ impl Expected {
 /// A kind in `on_device` (T6: P2P; T7: P2M, P2L, L2P, M2P; T8: M2M, L2L; T9: M2L) moves
 /// nothing: each of its level calls is one launch instead of its downloads and uploads, or
 /// for M2M, L2L and M2L three launches per chunk, with the chunks of the device report
-/// (which this checks against the plan's views).
+/// (which this checks against the plan's views, m pairs per pair of the plan). The
+/// launches and syncs do not depend on m.
 /// The bytes of the host mirrors a device `Fmm` holds (Phase 4S T11,
 /// `DeviceReport::host_mirror_bytes`): the multipoles and the locals of every level with any
 /// kind on the host fallback, and the target output (o N_t values) with L2P, M2P or P2P on
@@ -232,8 +235,10 @@ pub fn expected_mirror_bytes<T: Stored + SimdScalar + Equivalence + Default>(
 ) -> u64 {
     let host = |kind: OperatorKind| fmm.placement(kind) == Placement::Host;
     let index = fmm.plan().index();
-    let nc = (fmm.p() + 1) * (fmm.p() + 1);
-    let o = if fmm.gradients() { 4 } else { 1 };
+    // m charge vectors (Phase 6 T5): m n_c values per box, m o per target.
+    let m = fmm.vectors();
+    let nc = m * (fmm.p() + 1) * (fmm.p() + 1);
+    let o = m * if fmm.gradients() { 4 } else { 1 };
     let mut values = 0;
     if OperatorKind::ALL.into_iter().any(host) {
         values += 2
@@ -260,8 +265,12 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
     let index = plan.index();
     let nlevels = plan.nlevels();
     let s = size_of::<T>();
-    let nc = (fmm.p() + 1) * (fmm.p() + 1);
-    let o = if fmm.gradients() { 4 } else { 1 };
+    // m charge vectors (Phase 6 T5; docs/design/device-path.md §14 extended): m n_c values
+    // per box, m charges per source, m o values per target, and the grouped level calls'
+    // m pairs per pair of the plan; the launches and syncs do not change.
+    let m = fmm.vectors();
+    let nc = m * (fmm.p() + 1) * (fmm.p() + 1);
+    let o = m * if fmm.gradients() { 4 } else { 1 };
     let boxes = |l: usize| index.len(l) * nc * s;
     let level_targets = |l: usize| -> usize {
         fmm.target_counts()[index.leaves().local(l)]
@@ -280,12 +289,12 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
     let (nsources, ntargets) = fmm.owned_points();
     let nboxes: usize = (0..nlevels).map(|l| index.len(l)).sum();
 
-    e.up(DataKind::Charges, nsources * s);
+    e.up(DataKind::Charges, m * nsources * s);
     e.launches += 2 * u64::from(nboxes > 0) + u64::from(ntargets > 0) + u64::from(nsources > 0);
     // The exchanges (Phase 5 T8): none on one rank.
     let x = fmm.exchange_sizes();
     if x.ghost_sources > 0 {
-        e.up(DataKind::GhostSources, 4 * x.ghost_sources * s);
+        e.up(DataKind::GhostSources, (3 + m) * x.ghost_sources * s);
     }
     // The upward reduction, level by level (Phase 5S T6).
     for (&sent, &received) in x.sent_reduction.iter().zip(&x.received_reduction) {
@@ -338,8 +347,9 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
             "{kind} {pass:?} level {level}: one report entry"
         );
         assert_eq!(
-            calls[0].pairs, pairs,
-            "{kind} {pass:?} level {level}: pairs"
+            calls[0].pairs,
+            m * pairs,
+            "{kind} {pass:?} level {level}: pairs, m per pair of the plan"
         );
         assert!(calls[0].chunks >= 1);
         calls[0].chunks as u64
@@ -377,8 +387,8 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
                 assert_eq!(calls.len(), 1, "rotation M2L level {l}: one report entry");
                 assert_eq!(
                     calls[0].pairs,
-                    lists.v().len(),
-                    "rotation M2L level {l}: pairs"
+                    m * lists.v().len(),
+                    "rotation M2L level {l}: pairs, m per pair of the plan"
                 );
                 e.launches += 1;
             } else if device(OperatorKind::M2l) {
@@ -487,7 +497,8 @@ fn check_minimum<T: Stored + SimdScalar + Equivalence + Default>(
     expected: &Expected,
 ) {
     let s = size_of::<T>() as u64;
-    let o = if fmm.gradients() { 4 } else { 1 };
+    let m = fmm.vectors() as u64;
+    let o = m * if fmm.gradients() { 4 } else { 1 };
     let (nsources, ntargets) = fmm.owned_points();
     for data in DataKind::ALL {
         if EXCHANGES.contains(&data) {
@@ -496,7 +507,7 @@ fn check_minimum<T: Stored + SimdScalar + Equivalence + Default>(
         let want = match data {
             DataKind::Charges => Traffic {
                 uploads: 1,
-                upload_bytes: nsources as u64 * s,
+                upload_bytes: m * nsources as u64 * s,
                 ..Traffic::default()
             },
             DataKind::Output => Traffic {
@@ -543,7 +554,7 @@ fn check_received_levels<T: Stored + SimdScalar + Equivalence + Default>(
     fmm: &Fmm<'_, T>,
 ) {
     let counters = fmm.device_counters().expect("a device backend");
-    let nc = ((fmm.p() + 1) * (fmm.p() + 1)) as u64;
+    let nc = (fmm.vectors() * (fmm.p() + 1) * (fmm.p() + 1)) as u64;
     let s = size_of::<T>() as u64;
     let received = fmm.exchange_sizes().received_boxes;
     for (level, traffic) in counters.received_levels.iter().enumerate() {
@@ -569,7 +580,7 @@ fn check_reduction_levels<T: Stored + SimdScalar + Equivalence + Default>(
     fmm: &Fmm<'_, T>,
 ) {
     let counters = fmm.device_counters().expect("a device backend");
-    let nc = ((fmm.p() + 1) * (fmm.p() + 1)) as u64;
+    let nc = (fmm.vectors() * (fmm.p() + 1) * (fmm.p() + 1)) as u64;
     let s = size_of::<T>() as u64;
     let sizes = fmm.exchange_sizes();
     for (level, traffic) in counters.reduction_levels.iter().enumerate() {
@@ -806,6 +817,174 @@ pub fn check_backend<'o, T: Stored + SimdScalar + Equivalence + Default>(
         charges,
         host,
         host_output,
+        backend,
+        comm,
+    )
+}
+
+/// Several charge vectors on the device (Phase 6 T5, C6.3): `builder` (at one thread, the
+/// strategy named) on `backend` with m = `vectors.len()` vectors, against `singles`, the
+/// host's single-vector outputs of the same vectors:
+/// - the default placement: each vector of `evaluate_many` equals the one-vector device
+///   `Fmm`'s evaluation of that vector bit for bit, blocking and overlapped; the output pass
+///   is `Fmm::reference_output_many`'s; the transfers, launches and syncs are those of
+///   [`expected_evaluation`] with m vectors (every kind on the device: the charges up and
+///   the output down once each, m times the bytes, one sync, and on several ranks the
+///   exchanges' transfers);
+/// - every kind on the host fallback: each vector bit for bit `singles`, with the transfers
+///   of the formula.
+///
+/// Every comparison is summed over the ranks. Returns the evaluations compared.
+fn check_vectors<T: Stored + SimdScalar + Equivalence + Default>(
+    builder: &FmmBuilder<T>,
+    (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
+    vectors: &[Vec<T>],
+    singles: &[Output<T>],
+    backend: Backend,
+    comm: &SimpleCommunicator,
+) -> usize {
+    let m = vectors.len();
+    let refs: Vec<&[T]> = vectors.iter().map(Vec::as_slice).collect();
+    let rank = comm.rank();
+    let differing = |got: &OutputMany<T>, v: usize, want: &Output<T>| -> usize {
+        let mut a: Vec<u64> = got
+            .potential_of(v)
+            .iter()
+            .map(|&x| RealScalar::to_f64(x).to_bits())
+            .collect();
+        if let Some(g) = got.gradient_of(v) {
+            a.extend(
+                g.as_flattened()
+                    .iter()
+                    .map(|&x| RealScalar::to_f64(x).to_bits()),
+            );
+        }
+        let b = output_bits(want);
+        assert_eq!(a.len(), b.len(), "vector {v}: lengths");
+        let local = a.iter().zip(&b).filter(|(x, y)| x != y).count();
+        let mut total = 0usize;
+        comm.all_reduce_into(&local, &mut total, SystemOperation::sum());
+        total
+    };
+    let build = |builder: FmmBuilder<T>| {
+        builder
+            .threads(1)
+            .backend(backend)
+            .build(sources, targets, comm)
+            .unwrap_or_else(|error| {
+                panic!("rank {rank}: {backend}: the FMM does not build: {error}")
+            })
+    };
+    let mut compared = 0;
+    // The default placement against the one-vector device FMM.
+    let mut one = build(builder.clone());
+    let device_singles: Vec<Output<T>> = refs
+        .iter()
+        .map(|q| one.evaluate(q).expect("the device evaluates"))
+        .collect();
+    let mut many = build(builder.clone().vectors(m));
+    assert_eq!(many.vectors(), m);
+    assert_eq!(
+        many.device_report().expect("a device backend").vectors,
+        m,
+        "{backend}: the report's vectors"
+    );
+    let kinds = device_kinds(many.strategy());
+    let mut out = many
+        .evaluate_many(&refs)
+        .expect("m vectors evaluate on the device");
+    for overlap in [false, true] {
+        if overlap {
+            many.set_overlap(true);
+            many.evaluate_many_into(&refs, &mut out)
+                .expect("m vectors evaluate overlapped on the device");
+            many.set_overlap(false);
+        }
+        let expected = expected_evaluation(&many, &kinds);
+        check_evaluation_counters(&format!("{backend}, {m} vectors"), &many, &expected);
+        if kinds.len() == OperatorKind::ALL.len() {
+            check_minimum(backend, &many, &expected);
+        }
+        for (v, single) in device_singles.iter().enumerate() {
+            let d = differing(&out, v, single);
+            assert_eq!(
+                d, 0,
+                "rank {rank}: {backend}, {m} vectors, overlap {overlap}: {d} values of vector \
+                 {v} differ from the one-vector device evaluation"
+            );
+        }
+        let reference = many
+            .reference_output_many()
+            .expect("the reference output of several vectors");
+        assert!(
+            out.potential
+                .iter()
+                .zip(&reference.potential)
+                .all(|(a, b)| RealScalar::to_f64(*a).to_bits() == RealScalar::to_f64(*b).to_bits()),
+            "rank {rank}: {backend}, {m} vectors: the output pass differs from the pass before T9"
+        );
+        compared += 1;
+    }
+    // Every kind on the host fallback against the host's single-vector outputs.
+    let mut fallback = build(builder.clone().vectors(m).host_fallback(OperatorKind::ALL));
+    let out = fallback
+        .evaluate_many(&refs)
+        .expect("m vectors evaluate on the fallback");
+    let expected = expected_evaluation(&fallback, &[]);
+    check_evaluation_counters(
+        &format!("{backend}, {m} vectors on the fallback"),
+        &fallback,
+        &expected,
+    );
+    for (v, single) in singles.iter().enumerate() {
+        let d = differing(&out, v, single);
+        assert_eq!(
+            d, 0,
+            "rank {rank}: {backend}, {m} vectors on the fallback: {d} values of vector {v} \
+             differ from the host's single-vector evaluation"
+        );
+    }
+    compared + 1
+}
+
+/// [`check_vectors`] for three vectors, `charges` and two of seeded random charges in
+/// [−1, 1), against the host `Fmm` of `builder` at one thread (Phase 6 T5): for the
+/// device executables (Metal, CUDA, several ranks), whose scenarios evaluate one vector.
+/// Returns the evaluations compared.
+pub fn check_three_vectors<T: Stored + SimdScalar + Equivalence + Default>(
+    builder: &FmmBuilder<T>,
+    (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
+    charges: &[T],
+    backend: Backend,
+    comm: &SimpleCommunicator,
+) -> usize {
+    let mut state = 0x7105_0000u64 + comm.rank() as u64;
+    let mut random = || {
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        let z = z ^ (z >> 31);
+        T::from_f64((z >> 11) as f64 / (1u64 << 52) as f64 - 1.0)
+    };
+    let vectors: Vec<Vec<T>> = std::iter::once(charges.to_vec())
+        .chain((1..3).map(|_| charges.iter().map(|_| random()).collect()))
+        .collect();
+    let mut host = builder
+        .clone()
+        .threads(1)
+        .build(sources, targets, comm)
+        .unwrap_or_else(|error| panic!("the host FMM does not build: {error}"));
+    let singles: Vec<Output<T>> = vectors
+        .iter()
+        .map(|q| host.evaluate(q).expect("the host evaluates"))
+        .collect();
+    let builder = builder.clone().strategy(host.strategy());
+    check_vectors(
+        &builder,
+        (sources, targets),
+        &vectors,
+        &singles,
         backend,
         comm,
     )

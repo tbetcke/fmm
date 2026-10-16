@@ -350,7 +350,7 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
 use nd_fmm_exec::fmm::{
     Backend, Fmm, FmmBuilder, FmmError, KindTiming, MultipoleRouting, OperatorKind, Output,
-    OutputPass, Placement, PointSet, SettingsError,
+    OutputMany, OutputPass, Placement, PointSet, SettingsError,
 };
 use nd_fmm_exec::geometry::{Domain, GeometryError, leaf_coordinates, radius};
 use nd_fmm_exec::operator::{Isa, LaplaceOperator, MulAdd, P2pChoice, SimdScalar};
@@ -518,6 +518,7 @@ fn distributed_scenarios() {
         eprintln!("rank {}: {name}", comm.rank());
         let start = std::time::Instant::now();
         scenario(&comm);
+        run_vector_checks(&comm);
         eprintln!(
             "rank {}: {name}: {:.1} s",
             comm.rank(),
@@ -552,6 +553,35 @@ fn distributed_scenarios() {
         worst[0],
         worst[1]
     );
+    let [one, three, eight, batched, device] = *VECTOR_CHECKS.lock().unwrap();
+    eprintln!(
+        "rank {}: several charge vectors (Phase 6 T5): {one} evaluations of one vector, \
+         {three} of three and {eight} of eight (debug: overlapped; release: blocking and \
+         overlapped), {batched} of three under Batched and {device} of three on the device, \
+         each vector bit for bit its single-vector evaluation; {:.1} s",
+        comm.rank(),
+        VECTOR_TIMES
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|t| t.1)
+            .sum::<f64>()
+    );
+    for (scenario, time) in VECTOR_TIMES.lock().unwrap().iter() {
+        eprintln!(
+            "rank {}: several charge vectors: {scenario}: {time:.1} s",
+            comm.rank()
+        );
+    }
+    let skipped = VECTORS_SKIPPED.lock().unwrap();
+    if !skipped.is_empty() {
+        eprintln!(
+            "rank {}: several charge vectors: left to the release runs (an evaluation above \
+             {DEBUG_VECTORS_BUDGET} s in debug): {}",
+            comm.rank(),
+            skipped.join(", ")
+        );
+    }
     let checks = ONE_RANK_CHECKS.load(std::sync::atomic::Ordering::Relaxed);
     eprintln!(
         "rank {}: one-rank reference (Phase 5 T6): {}",
@@ -1288,6 +1318,9 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
             entry.f64_runs += 1;
         }
     }
+    // Several charge vectors (Phase 6 T5, C6.3): checked after the scenario, on its
+    // cheapest evaluation.
+    offer_vectors(&builder, (sources, targets), charges, &fmm, &output, comm);
     assert!(
         threads.is_empty() || threads.iter().any(|&n| n != KIND_THREADS),
         "a repeat without kind timings"
@@ -1460,6 +1493,300 @@ fn check_batched<T: Stored + SimdScalar + Equivalence + Default>(
         &fused,
         comm,
     );
+}
+
+/// The deferred check of several charge vectors (Phase 6 T5) of the running scenario, for
+/// the default P2P kernel (slot 0) and the reference kernel (slot 1): the agreed time of
+/// its evaluation and the check itself ([`check_vectors`]), run by
+/// [`run_vector_checks`] after the scenario. Each slot keeps the scenario's cheapest
+/// evaluation, so that the check costs the debug run as little as it can.
+type PendingVectors = (f64, Box<dyn FnOnce(&SimpleCommunicator)>);
+
+thread_local! {
+    static PENDING_VECTORS: std::cell::RefCell<[Option<PendingVectors>; 2]> =
+        const { std::cell::RefCell::new([None, None]) };
+}
+
+/// In debug builds, the longest evaluation (the slowest rank's) on which [`check_vectors`]
+/// runs, in seconds: a scenario whose cheapest evaluation takes longer (in the debug run on
+/// the M3 Max the strongly graded tree, 11.8 s of check, and multipole routing, 10.9 s) is
+/// checked by the release runs only, so that the debug run (CI) keeps its time.
+const DEBUG_VECTORS_BUDGET: f64 = 0.5;
+
+/// The scenarios the debug run left to the release runs ([`DEBUG_VECTORS_BUDGET`]).
+static VECTORS_SKIPPED: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+
+/// The precisions whose reference-kernel check of several vectors has run (it runs once
+/// per precision).
+static REFERENCE_VECTORS: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+/// The evaluations of several vectors [`check_vectors`] compared vector by vector with
+/// single-vector evaluations, for the closing line: with one vector (`evaluate_many` on an
+/// FMM of one), three and eight, the batched M2L of three among them, and on the device.
+static VECTOR_CHECKS: std::sync::Mutex<[usize; 5]> = std::sync::Mutex::new([0; 5]);
+
+/// The time [`check_vectors`] took per scenario, for the closing line.
+static VECTOR_TIMES: std::sync::Mutex<Vec<(&'static str, f64)>> = std::sync::Mutex::new(Vec::new());
+
+/// Offers the one-thread evaluation `output` of `charges` by `fmm` (built by `builder`) to
+/// the scenario's check of several charge vectors (Phase 6 T5): it becomes the check's
+/// evaluation if it is the cheapest so far of its slot (the default P2P kernel, or the
+/// reference kernel in a precision not yet checked), by the largest evaluation time over
+/// the ranks (one all-reduce, so every rank decides alike).
+fn offer_vectors<T: Stored + SimdScalar + Equivalence + Default + 'static>(
+    builder: &FmmBuilder<T>,
+    (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
+    charges: &[T],
+    fmm: &Fmm<'_, T>,
+    output: &Output<T>,
+    comm: &SimpleCommunicator,
+) {
+    let local = output.timings.total().as_secs_f64();
+    let mut time = 0.0;
+    comm.all_reduce_into(&local, &mut time, SystemOperation::max());
+    let reference = fmm.p2p_kernel() == P2pChoice::Reference;
+    if reference && REFERENCE_VECTORS.lock().unwrap().contains(&size_of::<T>()) {
+        return;
+    }
+    let slot = usize::from(reference);
+    PENDING_VECTORS.with(|pending| {
+        let mut pending = pending.borrow_mut();
+        if pending[slot]
+            .as_ref()
+            .is_some_and(|(cheapest, _)| *cheapest <= time)
+        {
+            return;
+        }
+        let builder = builder.clone().strategy(fmm.strategy());
+        let (sources, targets, charges) = (sources.to_vec(), targets.to_vec(), charges.to_vec());
+        let output = output.clone();
+        pending[slot] = Some((
+            time,
+            Box::new(move |comm: &SimpleCommunicator| {
+                check_vectors(
+                    &builder,
+                    (&sources, &targets),
+                    (&charges, output),
+                    reference,
+                    comm,
+                );
+            }),
+        ));
+    });
+}
+
+/// Runs the scenario's deferred checks of several charge vectors ([`offer_vectors`]), on
+/// every rank alike; in debug builds not those whose evaluation takes longer than
+/// [`DEBUG_VECTORS_BUDGET`] (the time is agreed, so every rank decides alike).
+fn run_vector_checks(comm: &SimpleCommunicator) {
+    let checks = PENDING_VECTORS.with(|pending| std::mem::take(&mut *pending.borrow_mut()));
+    for (time, check) in checks.into_iter().flatten() {
+        if cfg!(debug_assertions) && time > DEBUG_VECTORS_BUDGET {
+            VECTORS_SKIPPED
+                .lock()
+                .unwrap()
+                .push(*SCENARIO.lock().unwrap());
+            continue;
+        }
+        check(comm);
+    }
+}
+
+/// The charge vectors of [`check_vectors`]: `charges`, then `count − 1` vectors of
+/// seeded random charges in [−1, 1) of the same length (the seed by rank and vector).
+fn charge_vectors<T: RealScalar>(charges: &[T], count: usize, rank: i32) -> Vec<Vec<T>> {
+    let mut rng = SplitMix64(0x7105_0000 + rank as u64);
+    std::iter::once(charges.to_vec())
+        .chain((1..count).map(|_| {
+            (0..charges.len())
+                .map(|_| T::from_f64(rng.range(-1.0, 1.0)))
+                .collect()
+        }))
+        .collect()
+}
+
+/// The values of `many`'s vector v (φ, then ∇φ) that differ from `single`'s, summed over
+/// the ranks.
+fn vector_differences<T: RealScalar>(
+    many: &OutputMany<T>,
+    v: usize,
+    single: &Output<T>,
+    comm: &SimpleCommunicator,
+) -> usize {
+    let mut got = bits(many.potential_of(v));
+    if let Some(gradient) = many.gradient_of(v) {
+        got.extend(bits(gradient.as_flattened()));
+    }
+    let want = output_bits(single);
+    assert_eq!(got.len(), want.len(), "vector {v}: the output's length");
+    global_sum(got.iter().zip(&want).filter(|(a, b)| a != b).count(), comm)
+}
+
+/// Several charge vectors (Phase 6 T5, C6.3; docs/design/optimisation.md §4.3), once per
+/// scenario on its cheapest evaluation ([`offer_vectors`]; with the reference P2P kernel,
+/// whose vectors run one at a time, once per precision): `builder` (at one thread, the
+/// resolved strategy named) over the points, whose evaluation of `charges` is `output`,
+/// with the vectors `charges` and seeded random charges ([`charge_vectors`]):
+/// - one vector: `evaluate_many` on the FMM of one is `output` bit for bit, and two or no
+///   vectors are refused with `FmmError::VectorCount` on every rank;
+/// - three vectors, and in release builds also eight (but for the reference kernel): each
+///   vector of `evaluate_many` equals the single-vector evaluation of that vector bit for
+///   bit, with the exchanges overlapped and (in release builds) blocking (into the first
+///   evaluation's reused `OutputMany`); the output pass is
+///   `Fmm::reference_output_many`'s; `evaluate` is refused with `FmmError::VectorCount`;
+/// - in release builds, where the strategy is `Dense`, `M2lStrategy::Batched` with three
+///   vectors likewise (the column lists of m vectors, bit for bit `Dense`);
+/// - with the `gpu` feature, three vectors on every device backend compiled in
+///   (`device_common::check_three_vectors`: each vector bit for bit the one-vector device
+///   `Fmm`'s, blocking and overlapped, with the transfers of the formula for m vectors; on
+///   the host fallback bit for bit the host).
+///
+/// The debug run (CI) checks three vectors, overlapped, only, and not where the cheapest
+/// evaluation takes longer than [`DEBUG_VECTORS_BUDGET`], to keep its time: the blocking
+/// path, eight, `Batched` and those scenarios run in the release runs by hand (and with the
+/// CPU runtime). Every comparison is summed over the ranks, so it fails on every rank or on
+/// none.
+fn check_vectors<T: Stored + SimdScalar + Equivalence + Default>(
+    builder: &FmmBuilder<T>,
+    (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
+    (charges, output): (&[T], Output<T>),
+    reference_kernel: bool,
+    comm: &SimpleCommunicator,
+) {
+    let scenario = *SCENARIO.lock().unwrap();
+    if reference_kernel {
+        REFERENCE_VECTORS.lock().unwrap().push(size_of::<T>());
+    }
+    let start = std::time::Instant::now();
+    let rank = comm.rank();
+    let builder = builder.clone().threads(1);
+    let mut fmm = built(builder.build(sources, targets, comm), comm).expect("the FMM builds");
+    // One vector: `evaluate_many` on the FMM of one is `evaluate` (the scenario's output,
+    // by a build of the same settings, which gives the same bits).
+    let one = fmm.evaluate_many(&[charges]).expect("one vector evaluates");
+    assert_eq!(one.vectors, 1);
+    assert_eq!(
+        vector_differences(&one, 0, &output, comm),
+        0,
+        "rank {rank}: evaluate_many with one vector differs from evaluate"
+    );
+    for wrong in [&[charges, charges][..], &[]] {
+        match fmm.evaluate_many(wrong) {
+            Err(FmmError::VectorCount {
+                expected: 1,
+                actual,
+            }) if actual == wrong.len() => {}
+            other => panic!(
+                "rank {rank}: {} vectors on an FMM of one: {:?}",
+                wrong.len(),
+                other.map(|_| ())
+            ),
+        }
+    }
+    let release = cfg!(not(debug_assertions));
+    let full = release && !reference_kernel;
+    let largest = if full { 8 } else { 3 };
+    let vectors = charge_vectors(charges, largest, rank);
+    // Every vector's single-vector evaluation, on the FMM of one vector.
+    let singles: Vec<Output<T>> = std::iter::once(output)
+        .chain(
+            vectors[1..]
+                .iter()
+                .map(|q| fmm.evaluate(q).expect("the FMM evaluates")),
+        )
+        .collect();
+    let mut checks = [0usize; 5];
+    checks[0] += 1;
+    let mut runs: Vec<(usize, M2lStrategy)> = vec![(3, fmm.strategy())];
+    if full {
+        runs.push((8, fmm.strategy()));
+        if fmm.strategy() == M2lStrategy::Dense {
+            runs.push((3, M2lStrategy::Batched));
+        }
+    }
+    for (m, strategy) in runs {
+        let refs: Vec<&[T]> = vectors[..m].iter().map(Vec::as_slice).collect();
+        let mut many = built(
+            builder
+                .clone()
+                .strategy(strategy)
+                .vectors(m)
+                .build(sources, targets, comm),
+            comm,
+        )
+        .expect("the FMM of several vectors builds");
+        assert_eq!((many.vectors(), many.strategy()), (m, strategy));
+        match many.evaluate(charges) {
+            Err(FmmError::VectorCount {
+                expected,
+                actual: 1,
+            }) if expected == m => {}
+            other => panic!(
+                "rank {rank}: evaluate on an FMM of {m} vectors: {:?}",
+                other.map(|_| ())
+            ),
+        }
+        let mut out = OutputMany {
+            vectors: 0,
+            potential: Vec::new(),
+            gradient: None,
+            timings: Default::default(),
+        };
+        let paths = if release { &[false, true][..] } else { &[true] };
+        for &overlap in paths {
+            many.set_overlap(overlap);
+            many.evaluate_many_into(&refs, &mut out)
+                .expect("m vectors evaluate");
+            many.set_overlap(false);
+            assert_eq!(out.timings.overlap.is_some(), overlap);
+            assert_eq!((out.vectors, out.ntargets()), (m, targets.len()));
+            for (v, single) in singles[..m].iter().enumerate() {
+                let differing = vector_differences(&out, v, single, comm);
+                assert_eq!(
+                    differing, 0,
+                    "rank {rank}: {strategy:?} with {m} vectors, overlap {overlap}: {differing} \
+                     values of vector {v} differ from its single-vector evaluation"
+                );
+            }
+            let reference = many
+                .reference_output_many()
+                .expect("the reference output of several vectors");
+            assert_eq!(
+                (
+                    bits(&out.potential),
+                    out.gradient.as_ref().map(|g| bits(g.as_flattened()))
+                ),
+                (
+                    bits(&reference.potential),
+                    reference.gradient.as_ref().map(|g| bits(g.as_flattened()))
+                ),
+                "rank {rank}: the output pass of {m} vectors differs from the pass before T9"
+            );
+        }
+        checks[match (m, strategy) {
+            (_, M2lStrategy::Batched) => 3,
+            (3, _) => 1,
+            _ => 2,
+        }] += paths.len();
+    }
+    #[cfg(feature = "gpu")]
+    for backend in device_backends() {
+        checks[4] += device_common::check_three_vectors(
+            &builder,
+            (sources, targets),
+            charges,
+            backend,
+            comm,
+        );
+    }
+    let mut total = VECTOR_CHECKS.lock().unwrap();
+    for (t, c) in total.iter_mut().zip(checks) {
+        *t += c;
+    }
+    VECTOR_TIMES
+        .lock()
+        .unwrap()
+        .push((scenario, start.elapsed().as_secs_f64()));
 }
 
 /// The overlapped evaluations compared with the blocking path, for the closing line.

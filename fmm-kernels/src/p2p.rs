@@ -252,12 +252,17 @@ pub struct P2pInputs<'a, T: DeviceFloat> {
     pub leaves: &'a LeafCoordinates,
     /// The point offsets of the source store, by leaf.
     pub source_offsets: &'a PointOffsets,
-    /// The source store: per leaf of n points, n leaf-scaled triples, then n charges.
+    /// The source store: per leaf of n points, n leaf-scaled triples, then n charges (m n
+    /// with m vectors).
     pub sources: DeviceSlice<'a, T>,
     /// The point offsets of the target input and output, by leaf.
     pub target_offsets: &'a PointOffsets,
     /// The target input: per leaf of n points, n leaf-scaled triples.
     pub target_input: DeviceSlice<'a, T>,
+    /// The charge vectors m, at least 1 (Phase 6 T5): m charges per source, point-major,
+    /// and per target leaf of n points the m vectors' potentials, then their gradients, one
+    /// vector after the other (CONVENTIONS §3.13, "Several charge vectors").
+    pub vectors: usize,
 }
 
 /// Component k of the frame centre ĉ(s|t) of leaf s seen from leaf t (CONVENTIONS
@@ -302,6 +307,7 @@ fn p2p_tiled_kernel<F: Float>(
     output_base: u32,
     first_leaf: u32,
     nrows: u32,
+    vectors: u32,
     #[comptime] group: usize,
     #[comptime] groups: usize,
     #[comptime] plane_sync: bool,
@@ -327,6 +333,9 @@ fn p2p_tiled_kernel<F: Float>(
     }
     let cube = CUBE_POS_Y as usize * CUBE_COUNT_X as usize + CUBE_POS_X as usize;
     let row = cube * groups + member;
+    // The vector of the cube (Phase 6 T5): its charges and its outputs.
+    let m = vectors as usize;
+    let v = CUBE_POS_Z as usize;
     let tile0 = member * group;
     // The row condition is the same for every unit of a group, so every barrier below is
     // reached by all of them or by none.
@@ -338,8 +347,11 @@ fn p2p_tiled_kernel<F: Float>(
         if gradients {
             per_point = 4usize;
         }
-        let phi0 = output_base as usize + per_point * t_first;
-        let grad0 = phi0 + n_t;
+        // The leaf's chunk holds the m vectors' potentials, then their gradients, one
+        // vector after the other (Phase 6 T5): this cube's vector v.
+        let chunk = output_base as usize + per_point * m * t_first;
+        let phi0 = chunk + v * n_t;
+        let grad0 = chunk + m * n_t + 3 * v * n_t;
         let in0 = input_base as usize + 3 * t_first;
         let e_first = row_offsets[row] as usize;
         let e_last = row_offsets[row + 1] as usize;
@@ -369,7 +381,7 @@ fn p2p_tiled_kernel<F: Float>(
                 let j = entries[e] as usize;
                 let s_first = source_offsets[j] as usize;
                 let n_s = source_offsets[j + 1] as usize - s_first;
-                let base = source_base as usize + 4 * s_first;
+                let base = source_base as usize + (3 + m) * s_first;
                 let mapped = j != t_leaf;
                 let c0 = frame_centre::<F>(leaves, j, t_leaf, 0usize);
                 let c1 = frame_centre::<F>(leaves, j, t_leaf, 1usize);
@@ -390,7 +402,7 @@ fn p2p_tiled_kernel<F: Float>(
                         tile_x[tile0 + lane] = y0;
                         tile_y[tile0 + lane] = y1;
                         tile_z[tile0 + lane] = y2;
-                        tile_q[tile0 + lane] = sources[base + 3 * n_s + k];
+                        tile_q[tile0 + lane] = sources[base + 3 * n_s + k * m + v];
                     }
                     if plane_sync {
                         sync_plane();
@@ -462,6 +474,7 @@ fn p2p_vector_kernel<F: Float, N: Size>(
     output_base: u32,
     first_leaf: u32,
     nrows: u32,
+    vectors: u32,
     #[comptime] blocks: usize,
     #[comptime] gradients: bool,
 ) {
@@ -477,6 +490,9 @@ fn p2p_vector_kernel<F: Float, N: Size>(
         first = unit * share + unit;
         count = share + 1;
     }
+    // The vector of the cube (Phase 6 T5): its charges and its outputs.
+    let m = vectors as usize;
+    let v = CUBE_POS_Z as usize;
     let zero = Vector::<F, N>::new(F::new(0.0f32));
     let mut tx = Array::<Vector<F, N>>::new(blocks);
     let mut ty = Array::<Vector<F, N>>::new(blocks);
@@ -493,8 +509,11 @@ fn p2p_vector_kernel<F: Float, N: Size>(
         if gradients {
             per_point = 4usize;
         }
-        let phi0 = output_base as usize + per_point * t_first;
-        let grad0 = phi0 + n_t;
+        // The leaf's chunk holds the m vectors' potentials, then their gradients, one
+        // vector after the other (Phase 6 T5): this cube's vector v.
+        let chunk = output_base as usize + per_point * m * t_first;
+        let phi0 = chunk + v * n_t;
+        let grad0 = chunk + m * n_t + 3 * v * n_t;
         let in0 = input_base as usize + 3 * t_first;
         let e_first = row_offsets[row] as usize;
         let e_last = row_offsets[row + 1] as usize;
@@ -536,7 +555,7 @@ fn p2p_vector_kernel<F: Float, N: Size>(
                 let j = entries[e] as usize;
                 let s_first = source_offsets[j] as usize;
                 let n_s = source_offsets[j + 1] as usize - s_first;
-                let base = source_base as usize + 4 * s_first;
+                let base = source_base as usize + (3 + m) * s_first;
                 let mapped = j != t_leaf;
                 let c0 = frame_centre::<F>(leaves, j, t_leaf, 0usize);
                 let c1 = frame_centre::<F>(leaves, j, t_leaf, 1usize);
@@ -554,7 +573,7 @@ fn p2p_vector_kernel<F: Float, N: Size>(
                     let sx = Vector::<F, N>::new(y0);
                     let sy = Vector::<F, N>::new(y1);
                     let sz = Vector::<F, N>::new(y2);
-                    let q = Vector::<F, N>::new(sources[base + 3 * n_s + k]);
+                    let q = Vector::<F, N>::new(sources[base + 3 * n_s + k * m + v]);
                     #[unroll]
                     for b in 0..blocks {
                         let dx = tx[b] - sx;
@@ -697,7 +716,10 @@ pub(crate) fn cube_grid(info: &DeviceInfo, cubes: usize) -> (u32, u32) {
 /// One level's P2P: adds the near field of the rows of `inputs.near` into
 /// `target_output` (module documentation), in `layout`, with gradients if `gradients`.
 /// `target_output` is the target output store: per leaf of n points, n values, or with
-/// gradients the n potentials and then n triples (CONVENTIONS §3.13).
+/// gradients the n potentials and then n triples (CONVENTIONS §3.13); with m charge vectors
+/// ([`P2pInputs::vectors`], Phase 6 T5) m times as many, vector after vector, from one
+/// launch whose cubes along z are the vectors, each the one-vector kernel on its vector (so
+/// vector v equals the one-vector launch on vector v bit for bit).
 ///
 /// A call without rows or entries launches nothing. One launch otherwise, which
 /// allocates nothing; on the CPU layout its units per cube are at most
@@ -713,8 +735,8 @@ pub(crate) fn cube_grid(info: &DeviceInfo, cubes: usize) -> (u32, u32) {
 ///
 /// If the rows exceed the target leaves or the leaf coordinates, an entry addresses no
 /// leaf of the source offsets or the coordinates, or a store does not hold its values:
-/// 4 per source point, 3 per target point, and 1 (4 with gradients) per target point in
-/// the output.
+/// 3 + m per source point, 3 per target point, and m (4 m with gradients) per target point
+/// in the output.
 pub fn p2p<T: DeviceFloat>(
     device: &mut Device,
     layout: P2pLayout,
@@ -730,6 +752,7 @@ pub fn p2p<T: DeviceFloat>(
         sources,
         target_offsets,
         target_input,
+        vectors,
     } = *inputs;
     for owner in [
         source_offsets.buffer().as_slice().device(),
@@ -748,11 +771,12 @@ pub fn p2p<T: DeviceFloat>(
         near.entries().bound().saturating_sub(1),
         source_offsets.nleaves()
     );
-    let per_point = if gradients { 4 } else { 1 };
+    assert!(vectors > 0, "p2p: at least one charge vector");
+    let per_point = vectors * if gradients { 4 } else { 1 };
     assert_eq!(
         sources.len(),
-        4 * source_offsets.total(),
-        "p2p: the source store holds 4 values per point"
+        (3 + vectors) * source_offsets.total(),
+        "p2p: the source store holds 3 + {vectors} values per point"
     );
     assert_eq!(
         target_input.len(),
@@ -781,6 +805,8 @@ pub fn p2p<T: DeviceFloat>(
         target_input.offset() as u32,
         target_output.offset() as u32,
     );
+    // One cube (or, on the CPU layout, one grid) per charge vector, along z (Phase 6 T5).
+    let vectors = u32::try_from(vectors).expect("the charge vectors fit in u32");
     let client = device.client().clone();
     match layout {
         P2pLayout::Cube { .. } | P2pLayout::Plane { .. } => {
@@ -797,14 +823,16 @@ pub fn p2p<T: DeviceFloat>(
             // offsets at j and j + 1, and the target offsets at first_leaf + r + 1 ≤
             // nleaves. Offsets are validated CSR (`PointOffsets`), so each leaf's chunk
             // lies within the store, whose length was asserted against the totals:
-            // sources at base + 4 P_j + i < base + 4 total, target input and output
-            // likewise. Shared memory holds group · groups values per array, and a unit
-            // touches its group's region only. Rows at or past nrows (the last cube of a
-            // plane layout or a 2-D grid) do nothing.
+            // sources at base + (3 + m) P_j + i < base + (3 + m) total, target input and
+            // output likewise, the cube's vector v < m (the z extent) at its own offsets of
+            // the leaf's chunks (charge i m + v, outputs v n and m n + 3 v n). Shared memory
+            // holds group · groups values per array, and a unit touches its group's region
+            // only. Rows at or past nrows (the last cube of a plane layout or a 2-D grid)
+            // do nothing.
             unsafe {
                 p2p_tiled_kernel::launch_unchecked::<T>(
                     &client,
-                    CubeCount::Static(cubes_x, cubes_y, 1),
+                    CubeCount::Static(cubes_x, cubes_y, vectors),
                     CubeDim::new_1d((group * groups) as u32),
                     BufferArg::from_raw_parts(ro, ro_len),
                     BufferArg::from_raw_parts(en, en_len),
@@ -819,6 +847,7 @@ pub fn p2p<T: DeviceFloat>(
                     bases.2,
                     first_leaf as u32,
                     nrows as u32,
+                    vectors,
                     group,
                     groups,
                     plane_sync,
@@ -835,12 +864,12 @@ pub fn p2p<T: DeviceFloat>(
             // SAFETY: as for the tiled kernel: every handle is a whole buffer with its
             // element count; rows, entries, leaves and offsets are within the bounds
             // checked above, and every chunk within its store. Each unit covers its own
-            // contiguous range of rows, so no two units write one output value; lanes
-            // past a leaf's points are neither loaded nor stored.
+            // contiguous range of rows of its cube's vector, so no two units write one
+            // output value; lanes past a leaf's points are neither loaded nor stored.
             unsafe {
                 p2p_vector_kernel::launch_unchecked::<T>(
                     &client,
-                    CubeCount::Static(1, 1, 1),
+                    CubeCount::Static(1, 1, vectors),
                     CubeDim::new_1d(units as u32),
                     lanes,
                     BufferArg::from_raw_parts(ro, ro_len),
@@ -856,6 +885,7 @@ pub fn p2p<T: DeviceFloat>(
                     bases.2,
                     first_leaf as u32,
                     nrows as u32,
+                    vectors,
                     blocks,
                     gradients,
                 );

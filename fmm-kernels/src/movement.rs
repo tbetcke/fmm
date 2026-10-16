@@ -215,11 +215,14 @@ fn scatter_values_kernel<E: Numeric>(
     }
 }
 
-/// The caller-ordered output of [`gather_output`]: for every target i < `work`, with
-/// j = leaves[i], P = offsets[j] and k = points[i] − P, out[i] = F(f64(store[o P + k]) /
-/// scales[2 j]), and with gradients (o = 4, n = offsets[j + 1] − P) out[work + 3 i + c] =
-/// F(f64(store[4 P + n + 3 k + c]) / scales[2 j + 1]) for c < 3. One f64 division and
-/// one rounding to F per value.
+/// The caller-ordered output of [`gather_output`] for each of m = `vectors` charge vectors
+/// (Phase 6 T5; m = 1 before): for every target i < `work`, with j = leaves[i],
+/// P = offsets[j], n = offsets[j + 1] − P and k = points[i] − P, and each vector v, the
+/// leaf's chunk at o m P holding the m vectors' φ̂, then their ĝ (CONVENTIONS §3.13,
+/// "Several charge vectors"): out[v o W + i] = F(f64(store[o m P + v n + k]) / scales[2 j]),
+/// and with gradients (o = 4) out[v o W + W + 3 i + c] = F(f64(store[4 m P + m n +
+/// 3 (v n + k) + c]) / scales[2 j + 1]) for c < 3, W = `work`. One f64 division and one
+/// rounding to F per value.
 #[cube(launch_unchecked)]
 #[allow(clippy::too_many_arguments)]
 fn gather_output_kernel<F: Float>(
@@ -232,13 +235,18 @@ fn gather_output_kernel<F: Float>(
     out: &mut [F],
     out_offset: u32,
     work: u32,
+    vectors: u32,
     chunk: u32,
     threads: u32,
     #[comptime] gradients: bool,
 ) {
     let (store_offset, out_offset) = (store_offset as usize, out_offset as usize);
-    let (work, chunk) = (work as usize, chunk as usize);
+    let (work, chunk, m) = (work as usize, chunk as usize, vectors as usize);
     let stride = threads as usize * chunk;
+    let mut o = 1usize;
+    if gradients {
+        o = 4usize;
+    }
     let mut start = ABSOLUTE_POS * chunk;
     while start < work {
         let mut end = start + chunk;
@@ -248,20 +256,21 @@ fn gather_output_kernel<F: Float>(
         for i in start..end {
             let j = leaves[i] as usize;
             let first = offsets[j] as usize;
+            let count = offsets[j + 1] as usize - first;
             let k = points[i] as usize - first;
-            if gradients {
-                let count = offsets[j + 1] as usize - first;
-                let base = store_offset + 4 * first;
-                out[out_offset + i] = F::cast_from(f64::cast_from(store[base + k]) / scales[2 * j]);
-                let g = base + count + 3 * k;
-                let scale = scales[2 * j + 1];
-                let o = out_offset + work + 3 * i;
-                out[o] = F::cast_from(f64::cast_from(store[g]) / scale);
-                out[o + 1] = F::cast_from(f64::cast_from(store[g + 1]) / scale);
-                out[o + 2] = F::cast_from(f64::cast_from(store[g + 2]) / scale);
-            } else {
-                out[out_offset + i] =
-                    F::cast_from(f64::cast_from(store[store_offset + first + k]) / scales[2 * j]);
+            let base = store_offset + o * m * first;
+            for v in 0..m {
+                let out0 = out_offset + v * o * work;
+                out[out0 + i] =
+                    F::cast_from(f64::cast_from(store[base + v * count + k]) / scales[2 * j]);
+                if gradients {
+                    let g = base + m * count + 3 * (v * count + k);
+                    let scale = scales[2 * j + 1];
+                    let at = out0 + work + 3 * i;
+                    out[at] = F::cast_from(f64::cast_from(store[g]) / scale);
+                    out[at + 1] = F::cast_from(f64::cast_from(store[g + 1]) / scale);
+                    out[at + 2] = F::cast_from(f64::cast_from(store[g + 2]) / scale);
+                }
             }
         }
         start += stride;
@@ -385,6 +394,10 @@ impl OutputOrder {
 /// rounds to nearest (the CPU runtime and CUDA, device-path.md F27, F33), and subnormal
 /// results are not flushed.
 ///
+/// With m = `vectors` charge vectors (Phase 6 T5; CONVENTIONS §3.13, "Several charge
+/// vectors": per leaf the m vectors' φ̂, then their ĝ) the same for each vector, `out`
+/// holding the m vectors' outputs one after the other, each as above (o n values).
+///
 /// # Errors
 ///
 /// [`KernelError::UnsupportedPrecision`] on a device without f64 arithmetic (an
@@ -399,12 +412,13 @@ pub fn gather_output<T: DeviceFloat>(
     device: &mut Device,
     order: &OutputOrder,
     store: DeviceSlice<'_, T>,
-    gradients: bool,
+    (gradients, vectors): (bool, usize),
     out: DeviceSliceMut<'_, T>,
 ) -> Result<(), KernelError> {
     device.require(Precision::F64)?;
     check_owners(device, &[order.device(), store.device(), out.device()])?;
-    let o = if gradients { 4 } else { 1 };
+    assert!(vectors > 0, "gather_output: at least one charge vector");
+    let o = vectors * if gradients { 4 } else { 1 };
     assert_eq!(
         store.len(),
         o * order.total(),
@@ -431,10 +445,11 @@ pub fn gather_output<T: DeviceFloat>(
     // requires. For i < order.len() the kernel reads points[i] and leaves[i] (within
     // their buffers); `OutputOrder::upload` checked j = leaves[i] < nleaves and
     // offsets[j] ≤ points[i] < offsets[j + 1], so offsets[j], offsets[j + 1] and
-    // scales[2 j + 1] lie within their buffers, and the store index o P + k (and with
-    // gradients 4 P + n + 3 k + 2 < 4 offsets[j + 1]) is below o total = store.len(),
-    // offset by store.offset() within the store's buffer. The writes out.offset() + i and
-    // out.offset() + n + 3 i + 2 are below out.offset() + o n = the end of `out`.
+    // scales[2 j + 1] lie within their buffers, and the store index of vector v < m,
+    // o m P + v n_j + k (and with gradients 4 m P + m n_j + 3 (v n_j + k) + 2 < 4 m
+    // offsets[j + 1]), is below o m total = store.len(), offset by store.offset() within
+    // the store's buffer. The writes out.offset() + v o n + i and out.offset() + v o n + n
+    // + 3 i + 2 are below out.offset() + m o n = the end of `out`.
     unsafe {
         gather_output_kernel::launch_unchecked::<T>(
             device.client(),
@@ -449,6 +464,7 @@ pub fn gather_output<T: DeviceFloat>(
             BufferArg::from_raw_parts(yh, yl),
             out.offset() as u32,
             order.len() as u32,
+            vectors as u32,
             grid.chunk,
             grid.threads(),
             gradients,

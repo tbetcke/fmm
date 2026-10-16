@@ -604,6 +604,7 @@ fn launch_sources<T: Real>(
         leaves: &on.leaves,
         source_offsets: &on.source_offsets,
         sources: on.sources.as_slice(),
+        vectors: 1,
     };
     let out = on.out.as_slice_mut();
     if irregular {
@@ -933,6 +934,7 @@ fn launch_targets<T: Real>(
         leaves: &on.leaves,
         target_offsets: &on.target_offsets,
         target_input: on.target_input.as_slice(),
+        vectors: 1,
     };
     let coefficients = on.coefficients.as_slice();
     let output = on.output.as_slice_mut();
@@ -1277,6 +1279,7 @@ fn frames(device: &mut Device) {
                 leaves: &leaf_coordinates,
                 source_offsets: &offsets,
                 sources: sources.as_slice(),
+                vectors: 1,
             };
             let mut out = device.alloc::<T>(4 * en.len()).unwrap();
             x_frames(device, &inputs, out.as_slice_mut()).unwrap();
@@ -1310,6 +1313,7 @@ fn frames(device: &mut Device) {
                 leaves: &leaf_coordinates,
                 target_offsets: &target_offsets,
                 target_input: sources.as_slice(),
+                vectors: 1,
             };
             let mut out = device.alloc::<T>(4 * wen.len()).unwrap();
             w_frames(device, &inputs, out.as_slice_mut()).unwrap();
@@ -1514,6 +1518,190 @@ fn invariance_and_determinism(device: &mut Device) {
     each_precision!(device, body);
 }
 
+/// Several charge vectors (Phase 6 T5, C6.3), bit for bit: one launch of m = 3 vectors
+/// gives every vector the output of a one-vector launch on that vector's data, on every
+/// layout. P2M and P2L: the m charges of each source adjacent, the m expansions of a box
+/// one after the other, from random initial coefficients. L2P and M2P: the m expansions of
+/// a box one after the other, each leaf's output the m vectors' φ̂, then their ĝ, from
+/// random initial values, with and without gradients.
+fn several_vectors(device: &mut Device) {
+    fn body<T: Real>(device: &mut Device) {
+        let mut rng = Rng::new(0x7e57_7105);
+        let (p, m) = (3, 3);
+        let n = coefficients(p);
+        let same = |what: &str, a: &[T], b: &[T]| {
+            assert_eq!(a.len(), b.len(), "{what}: lengths");
+            assert!(
+                a.iter().zip(b).all(|(x, y)| x.bits() == y.bits()),
+                "{what}: values differ"
+            );
+        };
+        for layout in layouts(device) {
+            for irregular in [false, true] {
+                let case = if irregular {
+                    p2l_case::<T>(&mut rng, 9, 12)
+                } else {
+                    p2m_case::<T>(&mut rng, 9)
+                };
+                // Vector v: the case with its own charges.
+                let cases: Vec<SourceCase<T>> = (0..m)
+                    .map(|_| {
+                        let mut case = case.clone();
+                        for q in &mut case.charges {
+                            for q in q.iter_mut() {
+                                *q = t::<T>(charge(&mut rng));
+                            }
+                        }
+                        case
+                    })
+                    .collect();
+                let starts: Vec<Vec<T>> = (0..m)
+                    .map(|_| {
+                        (0..n * case.boxes.len())
+                            .map(|_| t::<T>(charge(&mut rng)))
+                            .collect()
+                    })
+                    .collect();
+                let mut on = case.upload(device, &case.rows, &[]);
+                let mut store = Vec::new();
+                for (j, u) in case.sources.iter().enumerate() {
+                    store.extend(u.iter().flatten());
+                    for i in 0..u.len() {
+                        store.extend(cases.iter().map(|c| c.charges[j][i]));
+                    }
+                }
+                on.sources = device.upload(&store).unwrap();
+                let mut initial = Vec::new();
+                for b in 0..case.boxes.len() {
+                    for start in &starts {
+                        initial.extend_from_slice(&start[b * n..(b + 1) * n]);
+                    }
+                }
+                on.out = device.upload(&initial).unwrap();
+                let inputs = SourceInputs {
+                    view: &on.view,
+                    level: on.level,
+                    boxes: &on.boxes,
+                    leaves: &on.leaves,
+                    source_offsets: &on.source_offsets,
+                    sources: on.sources.as_slice(),
+                    vectors: m,
+                };
+                let out = on.out.as_slice_mut();
+                if irregular {
+                    p2l(device, layout, p, &inputs, out).unwrap();
+                } else {
+                    p2m(device, layout, p, &inputs, out).unwrap();
+                }
+                let got = download(device, &on.out);
+                for (v, (single, start)) in cases.iter().zip(&starts).enumerate() {
+                    let want = single.run(device, layout, p, irregular, Some(start));
+                    for b in 0..case.boxes.len() {
+                        same(
+                            &format!("{layout}, irregular {irregular}, vector {v}, box {b}"),
+                            &got[(b * m + v) * n..(b * m + v + 1) * n],
+                            &want[b * n..(b + 1) * n],
+                        );
+                    }
+                }
+            }
+            for irregular in [false, true] {
+                let case = if irregular {
+                    m2p_case::<T>(&mut rng, 9, p, 12)
+                } else {
+                    l2p_case::<T>(&mut rng, 9, p)
+                };
+                // Vector v: the case with its own expansions.
+                let cases: Vec<TargetCase<T>> = (0..m)
+                    .map(|_| {
+                        let mut case = case.clone();
+                        case.coefficients = (0..case.boxes.len())
+                            .flat_map(|_| random_coefficients::<T>(&mut rng, p, irregular))
+                            .collect();
+                        case
+                    })
+                    .collect();
+                let mut coefficients_many = Vec::new();
+                for b in 0..case.boxes.len() {
+                    for c in &cases {
+                        coefficients_many.extend_from_slice(&c.coefficients[b * n..(b + 1) * n]);
+                    }
+                }
+                for gradients in [false, true] {
+                    let starts: Vec<Vec<T>> = (0..m)
+                        .map(|_| case.output_store(gradients, || t::<T>(charge(&mut rng))))
+                        .collect();
+                    let mut initial = Vec::new();
+                    for r in 0..case.leaves.len() {
+                        let count = case.targets[r].len();
+                        let range = case.output_range(r, gradients);
+                        for start in &starts {
+                            initial.extend_from_slice(&start[range.start..range.start + count]);
+                        }
+                        if gradients {
+                            for start in &starts {
+                                initial.extend_from_slice(&start[range.start + count..range.end]);
+                            }
+                        }
+                    }
+                    let mut on = case.upload(device, irregular, &case.rows, &initial);
+                    on.coefficients = device.upload(&coefficients_many).unwrap();
+                    let inputs = TargetInputs {
+                        view: &on.view,
+                        level: on.level,
+                        first_leaf: 0,
+                        boxes: &on.boxes,
+                        leaves: &on.leaves,
+                        target_offsets: &on.target_offsets,
+                        target_input: on.target_input.as_slice(),
+                        vectors: m,
+                    };
+                    let coefficients = on.coefficients.as_slice();
+                    let output = on.output.as_slice_mut();
+                    if irregular {
+                        m2p(device, layout, p, gradients, &inputs, coefficients, output).unwrap();
+                    } else {
+                        l2p(device, layout, p, gradients, &inputs, coefficients, output).unwrap();
+                    }
+                    let got = download(device, &on.output);
+                    for (v, (single, start)) in cases.iter().zip(&starts).enumerate() {
+                        let want =
+                            single.run(device, layout, p, (irregular, gradients), Some(start));
+                        for r in 0..case.leaves.len() {
+                            let count = case.targets[r].len();
+                            let range = case.output_range(r, gradients);
+                            let chunk = m * range.start;
+                            let what = format!(
+                                "{layout}, irregular {irregular}, gradients {gradients}, vector \
+                                 {v}, leaf {r}"
+                            );
+                            same(
+                                &format!("{what}: φ̂"),
+                                &got[chunk + v * count..chunk + (v + 1) * count],
+                                &want[range.start..range.start + count],
+                            );
+                            if gradients {
+                                let g = chunk + m * count + 3 * v * count;
+                                same(
+                                    &format!("{what}: ĝ"),
+                                    &got[g..g + 3 * count],
+                                    &want[range.start + count..range.end],
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            println!(
+                "  {layout}, {}: {m} vectors bit for bit their one-vector launches (P2M, P2L, \
+                 L2P, M2P, with and without gradients)",
+                T::FLOAT
+            );
+        }
+    }
+    each_precision!(device, body);
+}
+
 /// The layouts against each other: how many values they give bit for bit alike;
 /// reported, not part of the contract (contraction may differ between kernels).
 fn layouts_agree(device: &mut Device) {
@@ -1575,6 +1763,7 @@ tests_on!(
     accumulation_and_empty_calls,
     invariance_and_determinism,
     layouts_agree,
+    several_vectors,
 );
 tests_on!(
     metal: harmonics_match_nd_fmm_math,
@@ -1585,6 +1774,7 @@ tests_on!(
     accumulation_and_empty_calls,
     invariance_and_determinism,
     layouts_agree,
+    several_vectors,
 );
 tests_on!(
     cuda: harmonics_match_nd_fmm_math,
@@ -1595,6 +1785,7 @@ tests_on!(
     accumulation_and_empty_calls,
     invariance_and_determinism,
     layouts_agree,
+    several_vectors,
 );
 
 /// The p = 20 sweep on the CPU runtime: ignored (compile time; fmm-kernels/CLAUDE.md, test

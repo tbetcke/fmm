@@ -11,7 +11,8 @@ an exchange's packed receive buffer (`movement::scatter_columns`).
 Phase and components: Phase 4, C4.1 (T4, T5), C4.2–C4.6 (T6–T10) and the timing windows
 of C4.8 (T11) in docs/phase4/; Phase 4S, C4S.8 (T9) and C4S.10 (T11: transfers without a
 host copy) in docs/phase4s/; Phase 5, C5.2's device-resident ghost buffers (T8) in
-docs/phase5/.
+docs/phase5/; Phase 6, C6.3 (T5: several charge vectors in the leaf operators, P2P and the
+output gather).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -76,6 +77,16 @@ docs/phase5/.
   leaf stores' offsets are `PointOffsets`, validated at upload. Do not change the
   formulation, the tile structure or the order without a sign-off; report a faster
   variant instead.
+- Several charge vectors (Phase 6 T5; `SourceInputs::vectors`, `TargetInputs::vectors`,
+  `P2pInputs::vectors`, `movement::gather_output`'s `(gradients, vectors)`; CONVENTIONS
+  §3.13, "Several charge vectors"): one launch per level call as before, the grid of one
+  vector repeated along z, the cube at z = v running the one-vector kernel on vector v
+  (its charges at `i m + v`, its expansion at column `b m + v`, its outputs at `v n` and
+  `m n + 3 v n` of the leaf's chunk); the output gather loops over the vectors. So vector
+  v of every output equals the one-vector launch on vector v bit for bit, on every layout
+  (`tests/kernels/{p2p,leaf}.rs`, `several_vectors`; `movement.rs`, the gather at 1 and 3
+  vectors). The grouped translations and rotation M2L need no change: `nd-fmm-exec` gives
+  them views with m columns per box.
 - Leaf operators (T7, `leaf`): P2M, P2L, L2P and M2P, one launch per level call, p
   comptime up to `MAX_DEGREE` (20). The harmonics follow `nd_fmm_math::harmonics`
   operation for operation (coefficients formed in the kernel, integers comptime, one

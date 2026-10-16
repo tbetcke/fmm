@@ -8,6 +8,7 @@
 
 mod common;
 mod linearity;
+mod many;
 mod panics;
 mod properties;
 mod series;

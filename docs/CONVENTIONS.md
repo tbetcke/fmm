@@ -846,6 +846,33 @@ For a target x in leaf t with half-width r_t,
 the potential and gradient of the 1/|x − y| kernel of §3.1 in units of the target
 leaf. Every operator below accumulates (+=) into them with no further factor.
 
+### Several charge vectors
+
+An FMM may carry m ≥ 1 charge vectors at the same points (Phase 6 T5, C6.3;
+docs/design/optimisation.md §4). m is fixed for an FMM; m = 1 is the layout above, value
+for value. For m vectors:
+
+```text
+source chunk     u_0 … u_(n−1)  q_0^0 … q_0^(m−1)  q_1^0 … q_1^(m−1)  …  q_(n−1)^(m−1)
+target output    φ̂^0_0 … φ̂^0_(n−1)  …  φ̂^(m−1)_0 … φ̂^(m−1)_(n−1)  ĝ^0_0 … ĝ^0_(n−1)  …  ĝ^(m−1)_(n−1)
+box expansions   M^0 (n_c values)  M^1  …  M^(m−1)
+```
+
+- **Source chunk**, (3 + m) n values: the n coordinate triples as above, then the charges
+  point-major, the m charges of point j adjacent (`q[j m + v]`), so that P2P and P2M read
+  one source's m charges together.
+- **Target output**, m n values (potentials only) or 4 m n (with gradients): the m
+  vectors' φ̂ one vector after the other (φ̂ᵛᵢ at v n + i), then, with gradients, their
+  triples ĝ likewise (ĝᵛᵢ at m n + 3 (v n + i)). Each vector's values are contiguous, so a
+  kernel with targets in vector lanes loads and stores them directly, and vector v's φ̂ and
+  ĝ are the single-vector chunk's φ̂ and ĝ of that vector.
+- **Multipoles and locals** of a box, m n_c values (n_c = (p + 1)², §3.6): the m
+  expansions one vector after the other, each in the storage of §3.6 and §3.7.
+
+Every operator gives each vector exactly what it gives one vector, so vector v of every
+chunk and expansion equals the single-vector FMM's on vector v. The output (next but one
+section) is applied to each vector alike.
+
 ### Operators in scaled coordinates
 
 A `nd_fmm_ref::Frame` (C, R) maps a point p to (p − C) / R (`Frame::scaled`); `leaf::l2p`

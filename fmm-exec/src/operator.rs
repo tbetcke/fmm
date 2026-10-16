@@ -22,6 +22,19 @@
 //!   target leaf; 1/(4π) and r_t are applied once, by the FMM, when output leaves it
 //!   (§3.1, §3.13, "Output").
 //!
+//! With m charge vectors ([`with_vectors`](LaplaceOperator::with_vectors); Phase 6 T5,
+//! C6.3, docs/design/optimisation.md §4; CONVENTIONS §3.13, "Several charge vectors") the
+//! sizes are m times as large, and the layouts:
+//!
+//! - multipoles and locals: m (p + 1)² values per box, the box's m expansions one vector
+//!   after the other;
+//! - source chunk, (3 + m) n values: the n coordinate triples, then the m charges of each
+//!   point in turn (point-major, `q[i m + v]`);
+//! - target output, m n values, or 4 m n with gradients: the m vectors' φ̂ one vector
+//!   after the other (`φ̂[v n + i]`), then their ĝ likewise.
+//!
+//! m = 1 is the single-vector layout above.
+//!
 //! Chunks are read in place: the coordinates with `as_chunks::<3>()`, never copied.
 //!
 //! # Operators
@@ -43,6 +56,22 @@
 //! (§3.11, "L2P and M2P", and §3.13, "Operators in scaled coordinates", derive each
 //! line.) The gradient, when wanted, roughly quadruples the cost of L2P, M2P and P2P.
 //! Every operator adds into its output; a leaf with no points is a no-op.
+//!
+//! # Several charge vectors
+//!
+//! With m vectors every operator gives each vector exactly the chain of operations it
+//! gives one vector, and shares across the vectors only what does not depend on the
+//! charge (docs/design/optimisation.md §4.3), so vector v of every output is the output of
+//! the single-vector operator on vector v, bit for bit, on every strategy, thread count
+//! and P2P choice:
+//!
+//! | Operator | Shared across the m vectors | Per vector |
+//! | --- | --- | --- |
+//! | P2M, P2L | each point's harmonics (`leaf::p2m_many`, `leaf::p2l_many`) | the conjugate harmonics times q_v, into column v |
+//! | M2M, M2L, L2L target by target | the table, from cache | the table applied to column v (`Tables::m2m`, …), the vectors in turn |
+//! | M2L under `Batched` | the table, read once per block for all m n_pairs columns | the column kernel's chain of column v |
+//! | L2P, M2P | each target's harmonics (`leaf::l2p_many`, `leaf::m2p_many`) | the contraction with column v |
+//! | P2P | d, r² and ρ of each pair (`P2pKernel::evaluate_many`) | the steps of `P2pKernel::evaluate` with q_v; for the reference, `p2p::p2p` on vector v's charges in turn |
 //!
 //! # Batched execution and order
 //!
@@ -215,8 +244,8 @@ use thiserror::Error;
 use crate::geometry::relative_frame;
 use crate::tables::{TableScratch, Tables};
 
-/// Values per source point: the leaf-scaled coordinates and the charge (CONVENTIONS
-/// §3.13, "Source chunks").
+/// Values per source point with one charge vector: the leaf-scaled coordinates and the
+/// charge (CONVENTIONS §3.13, "Source chunks"); with m vectors 3 + m.
 pub const SOURCE_POINT_SIZE: usize = 4;
 
 /// Values per target point in the target input: the leaf-scaled position (CONVENTIONS
@@ -356,6 +385,8 @@ pub(crate) struct Kernels<T: SimdScalar> {
     matrix: Option<MatrixKernel<T>>,
     /// The multiply–add mode of the batched M2L ([`MulAdd::Separate`] by default).
     mul_add: MulAdd,
+    /// The charge vectors m (1 by default; Phase 6 T5).
+    vectors: usize,
 }
 
 /// One scratch set: what a target body writes besides its output.
@@ -365,14 +396,18 @@ pub(crate) struct Scratch<T: RealScalar> {
     tables: TableScratch<T>,
     /// The sources of another leaf in the target's coordinates (P2P); fixed length.
     mapped: Vec<[T; 3]>,
+    /// One vector's charges of a leaf, for the reference P2P with several vectors
+    /// (`max_leaf_points` values); empty with one vector.
+    charges: Vec<T>,
     /// The batched M2L's packing buffer and column lists; empty unless `Batched`.
     columns: Columns<T>,
 }
 
 /// The scratch of one block of the batched M2L: the packing buffer of the column kernel
 /// (`MatrixKernel::pack_len`, 4 (p + 1)² values) and the column offsets of one offset's
-/// pairs in the block, at most [`M2L_BLOCK_TARGETS`] each (a target occurs at most once
-/// per offset). Sized at construction; a block only clears and refills them.
+/// pairs in the block, at most m [`M2L_BLOCK_TARGETS`] each (a target occurs at most once
+/// per offset, with m columns). Sized at construction; a block only clears and refills
+/// them.
 #[derive(Clone, Debug)]
 struct Columns<T> {
     pack: Vec<T>,
@@ -386,8 +421,8 @@ impl<T: SimdScalar> Scratch<T> {
         let columns = match kernels.matrix {
             Some(_) => Columns {
                 pack: vec![T::zero(); MatrixKernel::<T>::pack_len((kernels.p + 1).pow(2))],
-                sources: Vec::with_capacity(M2L_BLOCK_TARGETS),
-                targets: Vec::with_capacity(M2L_BLOCK_TARGETS),
+                sources: Vec::with_capacity(kernels.vectors * M2L_BLOCK_TARGETS),
+                targets: Vec::with_capacity(kernels.vectors * M2L_BLOCK_TARGETS),
             },
             None => Columns {
                 pack: Vec::new(),
@@ -395,10 +430,16 @@ impl<T: SimdScalar> Scratch<T> {
                 targets: Vec::new(),
             },
         };
+        let charges = if kernels.vectors > 1 {
+            vec![T::zero(); kernels.max_leaf_points]
+        } else {
+            Vec::new()
+        };
         Self {
             workspace: Workspace::new(kernels.p),
             tables: kernels.tables.scratch(),
             mapped: vec![[T::zero(); 3]; kernels.max_leaf_points],
+            charges,
             columns,
         }
     }
@@ -602,6 +643,7 @@ impl<T: SimdScalar> LaplaceOperator<T> {
             p2p: Some(P2pKernel::detect()),
             matrix,
             mul_add: MulAdd::Separate,
+            vectors: 1,
         };
         let execution = Execution {
             scratch: vec![Mutex::new(Scratch::new(&kernels))],
@@ -657,6 +699,32 @@ impl<T: SimdScalar> LaplaceOperator<T> {
             .kernels
             .matrix_kernel(mul_add)
             .expect("the ISA of the P2P kernel is available");
+    }
+
+    /// Carries `vectors` charge vectors through every operator (Phase 6 T5, C6.3; [module
+    /// documentation](self#several-charge-vectors)): the sizes and layouts of
+    /// [Data](self#data) with m = `vectors`. Vector v of every output is the single-vector
+    /// operator's output on vector v, bit for bit. Allocates the scratch sets again (as
+    /// many as before), for the column lists of the batched M2L and, with more than one
+    /// vector, one vector's charges of a leaf for the reference P2P.
+    ///
+    /// # Panics
+    ///
+    /// If `vectors` is zero.
+    pub fn with_vectors(mut self, vectors: usize) -> Self {
+        assert!(vectors > 0, "at least one charge vector");
+        self.kernels.vectors = vectors;
+        let sets = self.execution.scratch.len();
+        self.execution.scratch = (0..sets)
+            .map(|_| Mutex::new(Scratch::new(&self.kernels)))
+            .collect();
+        self
+    }
+
+    /// Returns the number of charge vectors m ([`with_vectors`](Self::with_vectors); 1 by
+    /// default).
+    pub fn vectors(&self) -> usize {
+        self.kernels.vectors
     }
 
     /// Returns the column kernel of the batched M2L, its ISA and multiply–add mode; `None`
@@ -744,23 +812,25 @@ impl<T: SimdScalar> LaplaceOperator<T> {
     }
 
     /// P2M: adds the multipole of the source chunk `sources` of a leaf, in the leaf's
-    /// frame (CONVENTIONS §3.13: `leaf::p2m` at the unit frame on u). O(n p²).
+    /// frame (CONVENTIONS §3.13: `leaf::p2m` at the unit frame on u). O(n p²). With m
+    /// vectors ([`with_vectors`](Self::with_vectors)) the chunk and the multipole have the
+    /// layouts of the [module documentation](self#data).
     ///
     /// # Panics
     ///
-    /// If `sources.len()` is not a multiple of 4, or `multipole` does not have length
-    /// (p + 1)².
+    /// If `sources.len()` is not a multiple of 3 + m, or `multipole` does not have length
+    /// m (p + 1)².
     pub fn p2m_leaf(&mut self, sources: &[T], multipole: &mut [T]) {
         self.kernels.p2m(sources, multipole, self.execution.first());
     }
 
     /// M2M: adds the multipole of `child` to that of `parent`, with the table of
-    /// `morton::child_index(child)` (CONVENTIONS §3.12). Debug builds check that
-    /// `parent` is the parent of `child`.
+    /// `morton::child_index(child)` (CONVENTIONS §3.12), every vector's in turn. Debug
+    /// builds check that `parent` is the parent of `child`.
     ///
     /// # Panics
     ///
-    /// If a slice does not have length (p + 1)².
+    /// If a slice does not have length m (p + 1)².
     pub fn m2m_pair(
         &mut self,
         child: MortonKey,
@@ -781,7 +851,7 @@ impl<T: SimdScalar> LaplaceOperator<T> {
     /// # Panics
     ///
     /// With both keys if the boxes lie on different levels or their offset is not a
-    /// V-list offset; if a slice does not have length (p + 1)².
+    /// V-list offset; if a slice does not have length m (p + 1)².
     pub fn m2l_pair(
         &mut self,
         source: MortonKey,
@@ -799,8 +869,8 @@ impl<T: SimdScalar> LaplaceOperator<T> {
     ///
     /// # Panics
     ///
-    /// If `sources.len()` is not a multiple of 4, or `target_local` does not have
-    /// length (p + 1)².
+    /// If `sources.len()` is not a multiple of 3 + m, or `target_local` does not have
+    /// length m (p + 1)².
     pub fn p2l_pair(
         &mut self,
         source: MortonKey,
@@ -814,12 +884,12 @@ impl<T: SimdScalar> LaplaceOperator<T> {
     }
 
     /// L2L: adds the local of `parent` to that of `child`, with the table of
-    /// `morton::child_index(child)` (CONVENTIONS §3.12). Debug builds check that
-    /// `parent` is the parent of `child`.
+    /// `morton::child_index(child)` (CONVENTIONS §3.12), every vector's in turn. Debug
+    /// builds check that `parent` is the parent of `child`.
     ///
     /// # Panics
     ///
-    /// If a slice does not have length (p + 1)².
+    /// If a slice does not have length m (p + 1)².
     pub fn l2l_pair(
         &mut self,
         parent: MortonKey,
@@ -839,8 +909,8 @@ impl<T: SimdScalar> LaplaceOperator<T> {
     /// # Panics
     ///
     /// If `target_input.len()` is not a multiple of 3, `target_output` does not hold
-    /// 1 (or with gradients 4) values per target point, or `local` does not have length
-    /// (p + 1)².
+    /// m (or with gradients 4 m) values per target point, or `local` does not have length
+    /// m (p + 1)².
     pub fn l2p_leaf(&mut self, local: &[T], target_input: &[T], target_output: &mut [T]) {
         self.kernels
             .l2p(local, target_input, target_output, self.execution.first());
@@ -878,8 +948,8 @@ impl<T: SimdScalar> LaplaceOperator<T> {
     ///
     /// # Panics
     ///
-    /// As [`l2p_leaf`](Self::l2p_leaf), if `sources.len()` is not a multiple of 4, or if
-    /// a different leaf has more than `max_leaf_points` sources.
+    /// As [`l2p_leaf`](Self::l2p_leaf), if `sources.len()` is not a multiple of 3 + m, or
+    /// if a different leaf has more than `max_leaf_points` sources.
     pub fn p2p_pair(
         &mut self,
         source: MortonKey,
@@ -908,15 +978,17 @@ fn unit_frame<T: RealScalar>() -> Frame<T> {
     }
 }
 
-/// Splits a source chunk into its coordinate triples and its charges, in place.
+/// Splits a source chunk of `vectors` charge vectors into its coordinate triples and its
+/// charges (`vectors` per point, point-major), in place.
 #[inline]
-fn source_points<T>(sources: &[T]) -> (&[[T; 3]], &[T]) {
+fn source_points<T>(sources: &[T], vectors: usize) -> (&[[T; 3]], &[T]) {
+    let size = 3 + vectors;
     assert!(
-        sources.len().is_multiple_of(SOURCE_POINT_SIZE),
-        "a source chunk holds {SOURCE_POINT_SIZE} values per point, got {} values",
+        sources.len().is_multiple_of(size),
+        "a source chunk holds {size} values per point, got {} values",
         sources.len()
     );
-    let n = sources.len() / SOURCE_POINT_SIZE;
+    let n = sources.len() / size;
     let (coordinates, charges) = sources.split_at(3 * n);
     (coordinates.as_chunks::<3>().0, charges)
 }
@@ -935,13 +1007,18 @@ impl<T: SimdScalar> Kernels<T> {
         MatrixKernel::new(isa, mul_add).map(Some)
     }
 
-    /// Values per target point in the target output.
+    /// Values per target point in the target output: m, or 4 m with gradients.
     fn output_point_size(&self) -> usize {
-        if self.gradients { 4 } else { 1 }
+        self.vectors * if self.gradients { 4 } else { 1 }
+    }
+
+    /// Values per box in the multipole and local stores: m (p + 1)².
+    fn box_size(&self) -> usize {
+        self.vectors * (self.p + 1).pow(2)
     }
 
     /// Splits the target input into its positions and the target output into its
-    /// potentials and gradients, in place.
+    /// potentials and gradients (m n each, one vector after the other), in place.
     #[inline]
     fn targets<'a>(
         &self,
@@ -961,19 +1038,19 @@ impl<T: SimdScalar> Kernels<T> {
             size * n,
             "a target output chunk holds {size} values per point, for {n} points"
         );
-        let (potential, gradient) = target_output.split_at_mut(n);
+        let (potential, gradient) = target_output.split_at_mut(self.vectors * n);
         let gradient = self.gradients.then_some(gradient.as_chunks_mut::<3>().0);
         (target_input.as_chunks::<3>().0, (potential, gradient))
     }
 
-    /// P2M at the unit frame.
+    /// P2M at the unit frame, of every vector.
     #[inline]
     fn p2m(&self, sources: &[T], multipole: &mut [T], scratch: &mut Scratch<T>) {
-        let (points, charges) = source_points(sources);
+        let (points, charges) = source_points(sources, self.vectors);
         if points.is_empty() {
             return;
         }
-        leaf::p2m(
+        leaf::p2m_many(
             self.p,
             &unit_frame(),
             points,
@@ -983,32 +1060,48 @@ impl<T: SimdScalar> Kernels<T> {
         );
     }
 
-    /// M2M with the table of child index `o`.
+    /// Applies `apply` to each vector's expansion of the box blocks `input` and `output`
+    /// in turn, vector after vector.
+    #[inline]
+    fn each_vector(&self, input: &[T], output: &mut [T], mut apply: impl FnMut(&[T], &mut [T])) {
+        let n = (self.p + 1).pow(2);
+        for (x, y) in input.chunks_exact(n).zip(output.chunks_exact_mut(n)) {
+            apply(x, y);
+        }
+    }
+
+    /// M2M with the table of child index `o`, of every vector.
     #[inline]
     fn m2m(&self, o: usize, child: &[T], parent: &mut [T], scratch: &mut Scratch<T>) {
-        self.tables.m2m(o, child, parent, &mut scratch.tables);
+        self.each_vector(child, parent, |x, y| {
+            self.tables.m2m(o, x, y, &mut scratch.tables);
+        });
     }
 
-    /// M2L with the table of offset index `d`.
+    /// M2L with the table of offset index `d`, of every vector.
     #[inline]
     fn m2l(&self, d: usize, multipole: &[T], local: &mut [T], scratch: &mut Scratch<T>) {
-        self.tables.m2l(d, multipole, local, &mut scratch.tables);
+        self.each_vector(multipole, local, |x, y| {
+            self.tables.m2l(d, x, y, &mut scratch.tables);
+        });
     }
 
-    /// L2L with the table of child index `o`.
+    /// L2L with the table of child index `o`, of every vector.
     #[inline]
     fn l2l(&self, o: usize, parent: &[T], child: &mut [T], scratch: &mut Scratch<T>) {
-        self.tables.l2l(o, parent, child, &mut scratch.tables);
+        self.each_vector(parent, child, |x, y| {
+            self.tables.l2l(o, x, y, &mut scratch.tables);
+        });
     }
 
-    /// P2L at `frame` = (ĉ(t|s), r̂(t|s)).
+    /// P2L at `frame` = (ĉ(t|s), r̂(t|s)), of every vector.
     #[inline]
     fn p2l(&self, frame: &Frame<T>, sources: &[T], local: &mut [T], scratch: &mut Scratch<T>) {
-        let (points, charges) = source_points(sources);
+        let (points, charges) = source_points(sources, self.vectors);
         if points.is_empty() {
             return;
         }
-        leaf::p2l(
+        leaf::p2l_many(
             self.p,
             frame,
             points,
@@ -1018,14 +1111,14 @@ impl<T: SimdScalar> Kernels<T> {
         );
     }
 
-    /// L2P at the unit frame.
+    /// L2P at the unit frame, of every vector.
     #[inline]
     fn l2p(&self, local: &[T], target_input: &[T], target_output: &mut [T], s: &mut Scratch<T>) {
         let (targets, (potential, gradient)) = self.targets(target_input, target_output);
         if targets.is_empty() {
             return;
         }
-        leaf::l2p(
+        leaf::l2p_many(
             self.p,
             &unit_frame(),
             local,
@@ -1036,7 +1129,7 @@ impl<T: SimdScalar> Kernels<T> {
         );
     }
 
-    /// M2P at `frame` = (ĉ(s|t), r̂(s|t)).
+    /// M2P at `frame` = (ĉ(s|t), r̂(s|t)), of every vector.
     #[inline]
     fn m2p(
         &self,
@@ -1050,7 +1143,7 @@ impl<T: SimdScalar> Kernels<T> {
         if targets.is_empty() {
             return;
         }
-        leaf::m2p(
+        leaf::m2p_many(
             self.p,
             frame,
             multipole,
@@ -1072,21 +1165,26 @@ impl<T: SimdScalar> Kernels<T> {
         target_output: &mut [T],
         scratch: &mut Scratch<T>,
     ) {
-        let (points, charges) = source_points(sources);
+        let (points, charges) = source_points(sources, self.vectors);
         let (targets, (potential, gradient)) = self.targets(target_input, target_output);
         if points.is_empty() || targets.is_empty() {
             return;
         }
+        let Scratch {
+            mapped,
+            charges: one_vector,
+            ..
+        } = scratch;
         let points = match frame {
             None => points,
             Some(frame) => {
                 assert!(
-                    points.len() <= scratch.mapped.len(),
+                    points.len() <= mapped.len(),
                     "a leaf has {} source points, more than max_leaf_points = {}",
                     points.len(),
-                    scratch.mapped.len()
+                    mapped.len()
                 );
-                let mapped = &mut scratch.mapped[..points.len()];
+                let mapped = &mut mapped[..points.len()];
                 for (y, u) in mapped.iter_mut().zip(points) {
                     // r̂ u is exact (r̂ is a power of two); the sum rounds once (§3.13).
                     *y = core::array::from_fn(|k| frame.centre[k] + frame.radius * u[k]);
@@ -1094,10 +1192,12 @@ impl<T: SimdScalar> Kernels<T> {
                 &*mapped
             }
         };
-        self.p2p_points(points, charges, targets, potential, gradient);
+        self.p2p_points(points, charges, targets, potential, gradient, one_vector);
     }
 
-    /// P2P of `sources` with `charges` at `targets`, by the operator's kernel.
+    /// P2P of `sources` with `charges` (m per source) at `targets`, by the operator's
+    /// kernel: `P2pKernel::evaluate_many`, or the reference vector by vector, each
+    /// vector's charges gathered into `one_vector` (m > 1 only).
     #[inline]
     fn p2p_points(
         &self,
@@ -1106,10 +1206,31 @@ impl<T: SimdScalar> Kernels<T> {
         targets: &[[T; 3]],
         potential: &mut [T],
         gradient: Option<&mut [[T; 3]]>,
+        one_vector: &mut [T],
     ) {
+        let m = self.vectors;
         match &self.p2p {
-            None => p2p::p2p(sources, charges, targets, potential, gradient),
-            Some(kernel) => kernel.evaluate(sources, charges, targets, potential, gradient),
+            None if m == 1 => p2p::p2p(sources, charges, targets, potential, gradient),
+            None => {
+                let (n, q) = (targets.len(), &mut one_vector[..sources.len()]);
+                let mut gradient = gradient;
+                for v in 0..m {
+                    for (q, charges) in q.iter_mut().zip(charges.chunks_exact(m)) {
+                        *q = charges[v];
+                    }
+                    let gradient = gradient.as_deref_mut().map(|g| &mut g[v * n..(v + 1) * n]);
+                    p2p::p2p(
+                        sources,
+                        q,
+                        targets,
+                        &mut potential[v * n..(v + 1) * n],
+                        gradient,
+                    );
+                }
+            }
+            Some(kernel) => {
+                kernel.evaluate_many(sources, charges, m, targets, potential, gradient);
+            }
         }
     }
 
@@ -1188,8 +1309,8 @@ impl<T: SimdScalar> Kernels<T> {
         locals: &mut [T],
         scratch: &mut Scratch<T>,
     ) {
-        let n = tables.n();
-        let end = first + locals.len() / n;
+        let (n, m) = (tables.n(), self.vectors);
+        let end = first + locals.len() / (m * n);
         let multipoles = call.input.as_slice();
         let columns = &mut scratch.columns;
         for d in 0..call.view.ngroups() {
@@ -1210,8 +1331,11 @@ impl<T: SimdScalar> Kernels<T> {
                     d,
                     "the offset index of a V-list batch disagrees with its keys"
                 );
-                columns.sources.push(s as usize * n);
-                columns.targets.push((t as usize - first) * n);
+                // The m columns of the pair, vector after vector.
+                for v in 0..m {
+                    columns.sources.push((s as usize * m + v) * n);
+                    columns.targets.push(((t as usize - first) * m + v) * n);
+                }
             }
             kernel.accumulate_columns(
                 n,
@@ -1379,19 +1503,19 @@ fn debug_check_octant(child: MortonKey, parent: MortonKey, o: usize) {
 impl<T: SimdScalar + Equivalence + Default> FmmSizes for LaplaceOperator<T> {
     type Value = T;
 
-    /// (p + 1)² on every level.
+    /// m (p + 1)² on every level: (p + 1)² with one vector.
     fn multipole_size(&self, _level: usize) -> usize {
-        (self.kernels.p + 1).pow(2)
+        self.kernels.box_size()
     }
 
-    /// (p + 1)² on every level.
+    /// m (p + 1)² on every level: (p + 1)² with one vector.
     fn local_size(&self, _level: usize) -> usize {
-        (self.kernels.p + 1).pow(2)
+        self.kernels.box_size()
     }
 
-    /// [`SOURCE_POINT_SIZE`], 4.
+    /// 3 + m: [`SOURCE_POINT_SIZE`], 4, with one vector.
     fn source_point_size(&self) -> usize {
-        SOURCE_POINT_SIZE
+        3 + self.kernels.vectors
     }
 
     /// [`TARGET_INPUT_POINT_SIZE`], 3.
@@ -1399,7 +1523,7 @@ impl<T: SimdScalar + Equivalence + Default> FmmSizes for LaplaceOperator<T> {
         TARGET_INPUT_POINT_SIZE
     }
 
-    /// 1, or 4 with gradients.
+    /// m, or 4 m with gradients: 1 or 4 with one vector.
     fn target_output_point_size(&self) -> usize {
         self.kernels.output_point_size()
     }

@@ -15,11 +15,14 @@
 //! so that the layer methods, all `#[inline(always)]`, and their intrinsics inline into
 //! a function that has the features. [`rsqrt_slice_f32`] and [`rsqrt_slice_f64`]
 //! dispatch to the inverse-square-root entry points, [`p2p_f32`] and [`p2p_f64`] to
-//! the P2P ones, [`accumulate_f32`] and [`accumulate_f64`] to the matrix ones. The
+//! the P2P ones, [`p2p_many_f32`] and [`p2p_many_f64`] to those of several charge vectors
+//! (the body [`p2p::p2p_many_body`]; Phase 6 T5), [`accumulate_f32`] and
+//! [`accumulate_f64`] to the matrix ones. The
 //! scalar ISA runs the matrix body on the scalar layer, whose chain is the vector
 //! paths' exactly.
 //!
-//! The scalar ISA runs P2P by the plain loop [`scalar::p2p`], which equals
+//! The scalar ISA runs P2P by the plain loop [`scalar::p2p`] (several vectors by
+//! [`scalar::p2p_many`], the same terms per vector), which equals
 //! `nd_fmm_ref::p2p::p2p` bit for bit wherever r² ≠ 0, not by the generic body at
 //! W = 1: that body forms r² with fma and the gradient term as (q ρ) ρ² d, so it
 //! rounds differently. The tests run the generic body on the scalar layer as well.
@@ -284,6 +287,58 @@ macro_rules! p2p_dispatch {
 
 p2p_dispatch!(p2p_f32, f32, p2p_f32, p2p_f32_gradient);
 p2p_dispatch!(p2p_f64, f64, p2p_f64, p2p_f64_gradient);
+
+/// Generates the dispatch of the entry points of the P2P of several charge vectors for one
+/// precision (Phase 6 T5).
+macro_rules! p2p_many_dispatch {
+    ($name:ident, $t:ty, $potential:ident, $gradient:ident) => {
+        /// P2P of several charge vectors on `isa`
+        /// ([`P2pKernel::evaluate_many`](crate::P2pKernel::evaluate_many)) in the precision
+        /// of its name, with lengths already checked by the caller.
+        pub(crate) fn $name(
+            isa: AvailableIsa,
+            sources: &[[$t; 3]],
+            charges: &[$t],
+            m: usize,
+            targets: &[[$t; 3]],
+            potential: &mut [$t],
+            gradient: Option<&mut [[$t; 3]]>,
+        ) {
+            match (isa.0, gradient) {
+                (Isa::Scalar, gradient) => {
+                    scalar::p2p_many(sources, charges, m, targets, potential, gradient)
+                }
+                #[cfg(target_arch = "aarch64")]
+                // SAFETY: `isa` is available (`AvailableIsa`), so the CPU has NEON, the
+                // feature the entry point enables.
+                (Isa::Neon, None) => unsafe {
+                    neon::$potential(sources, charges, m, targets, potential)
+                },
+                #[cfg(target_arch = "aarch64")]
+                // SAFETY: as above.
+                (Isa::Neon, Some(gradient)) => unsafe {
+                    neon::$gradient(sources, charges, m, targets, potential, gradient)
+                },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: `isa` is available (`AvailableIsa`), so the CPU has AVX2 and
+                // FMA, the features the entry point enables.
+                (Isa::Avx2, None) => unsafe {
+                    avx2::$potential(sources, charges, m, targets, potential)
+                },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: as above.
+                (Isa::Avx2, Some(gradient)) => unsafe {
+                    avx2::$gradient(sources, charges, m, targets, potential, gradient)
+                },
+                // The ISAs of other architectures, which are never available.
+                (isa, _) => unreachable!("`{isa}` is not available on this machine"),
+            }
+        }
+    };
+}
+
+p2p_many_dispatch!(p2p_many_f32, f32, p2p_many_f32, p2p_many_f32_gradient);
+p2p_many_dispatch!(p2p_many_f64, f64, p2p_many_f64, p2p_many_f64_gradient);
 
 /// Generates the dispatch of the column-accumulation entry points for one precision.
 macro_rules! accumulate_dispatch {

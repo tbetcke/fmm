@@ -665,6 +665,68 @@ the evaluation per vector at m = 8 is *modelled* at 0.3–0.5 of one vector's at
 0.6–0.8 at p = 8 with Batched (the M2L already near its compute bound). T5 measures it at
 m = 1, 2, 4, 8, 16, 32.
 
+### 4.5 As built in T5
+
+The interface of §4.2 (`FmmBuilder::vectors`, `Fmm::evaluate_many`, `evaluate_many_into`,
+`OutputMany`, `FmmError::VectorCount`), the plan unchanged (§4.1), and every vector bit for
+bit its single-vector evaluation (§4.3) on the host, the CPU runtime and CUDA. What
+differs from the proposal above:
+
+- **The target output is vector after vector, not point-major** (CONVENTIONS §3.13,
+  "Several charge vectors", proposed in the PR): a leaf's chunk holds the m vectors' φ̂ one
+  after the other, then their ĝ. P2P keeps the targets in vector lanes (simd-p2p §4.1), so
+  it loads and stores a vector's potentials of W consecutive targets directly; point-major
+  outputs would need a strided gather per block. Each vector's values are then the
+  single-vector chunk's, which the reference P2P (vector by vector) and the device's output
+  pass read unchanged. The charges are point-major as proposed (`q[i m + v]`): the forward
+  moves them in one piece per leaf, and P2P and P2M read a source's m charges together.
+- **P2P** (`P2pKernel::evaluate_many`, `nd-fmm-simd`): the vectors in register groups,
+  ρ formed once per source and target vector per group (NEON: blocks of 2 target vectors
+  with groups of 8 vectors without gradients, 1 and 4 with; AVX2: 1 and 8, 1 and 4, each
+  chosen by timing), each vector then the single-vector kernel's steps. Its gain is
+  capped by the registers: per vector at m ≥ 8, on the M3 Max 4.6× (f32) and 4.1× (f64)
+  without gradients and 1.8–1.9× with, on Kathleen (AVX2) 3.9× and 4.4×, 1.5× and 1.9×,
+  against the model's 15–20× and 3.5–4×, whose bounds assume every vector's accumulators
+  in registers.
+- **The leaf operators** share the harmonics through `nd_fmm_ref::leaf::{p2m, p2l, l2p,
+  m2p}_many` (the oracle crate: the single-vector operators are their m = 1 case).
+- **M2M, L2L and M2L target by target** apply the table to each vector's column in turn
+  (the table from cache); **Batched** gives each pair m columns of the column kernel, so a
+  table is read once per block for m times the columns.
+- **The device**: the grouped GEMMs (M2M, L2L, dense M2L) and rotation M2L run on views
+  with m columns per box (box b's vector v is column b m + v; rows and batches expanded,
+  each column meeting its sources in the plan's row order), with no kernel change; P2M,
+  P2L, L2P, M2P and P2P take the vectors along the grid's z (one launch per level call as
+  before, the cube at z = v the one-vector kernel on vector v); the GEMM decisions are
+  keyed by the plan's pairs, so a tuning cache gives FMMs of any m the same choices, and a
+  choice's chunk budget is per vector unless the builder names one (m times its bytes, at
+  most an eighth of the device's memory: the row reduction walks every entry once per
+  chunk, so m times the chunks cost m², measured 10× per vector at m = 32 on Metal; the
+  root fix, `Accumulate::Rows` by chunk, is T7's, which then revisits this budget). The
+  transfers are device-path §14's with m times the bytes (one upload, one download, one
+  sync on one rank).
+- **Not changed**: the cost model weighs one vector's work (only the partition depends on
+  it; T11 refits the constants), and the strategy rule (`Auto`) is m's.
+
+**Measured** (`fmm-validate/results/phase6-rhs.md`; the N = 10⁶ cube, φ and ∇φ, one rank
+per core): the evaluation per vector at m = 8 against m = 1 is 0.61–0.63 at f64 p = 3 and
+0.69–0.74 at f64 p = 8 under `Batched` on Kathleen and locust (f32 0.61–0.71 and
+0.70–0.76; the M3 Max 0.62 and 0.83, f32 0.64 and 0.83, its batched kernel already near
+the core's compute bound), against §4.4's model of 0.3–0.5 and 0.6–0.8; the gain saturates
+at m = 4–8.
+The model's p = 3 figure assumed P2P's operation count (3.5–4× with ∇φ); the kernel gives
+1.7–1.8× in f64, its accumulators bounded by the registers (§4.5 above), and P2P is most
+of the evaluation at p = 3. Under `Rotation`, which `Auto` resolves at p = 8 with one rank
+per core, M2L shares nothing across the vectors and the evaluation gains only 6–11 %
+(6–10 % on one node, 6–11 % at 80 Kathleen ranks). On
+the device the first sweep found M2L quadratic in m (the chunking above; 10× per vector at
+m = 32 on Metal, 2.0× for M2L on CUDA); with the budget per vector the evaluation per
+vector at m = 32 is 0.40–0.65 on CUDA (mostly the host's forward and backward, which
+fall per vector) and flat on Metal, dense M2L costing the same per vector at every m on
+both. The exchanges keep their
+messages and grow in bytes as §4.1 says; the replicated top's all-gather per vector falls
+from 4.8 to 3.0 ms (N = 10⁶) and 17.2 to 8.2 ms (10⁷) at 80 Kathleen ranks.
+
 ## 5. AVX-512 P2P (C6.7)
 
 ### 5.1 Stable Rust has it

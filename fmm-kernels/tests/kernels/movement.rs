@@ -375,22 +375,28 @@ impl Targets {
         }
     }
 
-    /// The host loop of `nd-fmm-exec`'s output pass: per target, φ then (with
-    /// gradients) ∇φ after every φ, each `T::from_f64(x.to_f64() / scale)`.
-    fn host<T: TestFloat>(&self, store: &[T], gradients: bool) -> Vec<T> {
-        let n = self.points.len();
+    /// The host loop of `nd-fmm-exec`'s output pass for m = `vectors` charge vectors
+    /// (Phase 6 T5; each leaf's chunk the m vectors' φ̂, then their ĝ): per vector, per
+    /// target, φ then (with gradients) ∇φ after every φ, each
+    /// `T::from_f64(x.to_f64() / scale)`.
+    fn host<T: TestFloat>(&self, store: &[T], gradients: bool, vectors: usize) -> Vec<T> {
+        let (n, m) = (self.points.len(), vectors);
         let o = if gradients { 4 } else { 1 };
-        let mut out = vec![T::from_f64(0.0); o * n];
-        for (i, (&s, &j)) in self.points.iter().zip(&self.leaves).enumerate() {
-            let (s, j) = (s as usize, j as usize);
-            let first = self.offsets[j] as usize;
-            let (count, k) = (self.offsets[j + 1] as usize - first, s - first);
-            let divide = |x: T, scale: f64| T::from_f64(x.to_f64() / scale);
-            out[i] = divide(store[o * first + k], self.scales[2 * j]);
-            if gradients {
-                for c in 0..3 {
-                    let x = store[4 * first + count + 3 * k + c];
-                    out[n + 3 * i + c] = divide(x, self.scales[2 * j + 1]);
+        let mut out = vec![T::from_f64(0.0); o * m * n];
+        for v in 0..m {
+            let out = &mut out[v * o * n..(v + 1) * o * n];
+            for (i, (&s, &j)) in self.points.iter().zip(&self.leaves).enumerate() {
+                let (s, j) = (s as usize, j as usize);
+                let first = self.offsets[j] as usize;
+                let (count, k) = (self.offsets[j + 1] as usize - first, s - first);
+                let divide = |x: T, scale: f64| T::from_f64(x.to_f64() / scale);
+                let chunk = o * m * first;
+                out[i] = divide(store[chunk + v * count + k], self.scales[2 * j]);
+                if gradients {
+                    for c in 0..3 {
+                        let x = store[chunk + m * count + 3 * (v * count + k) + c];
+                        out[n + 3 * i + c] = divide(x, self.scales[2 * j + 1]);
+                    }
                 }
             }
         }
@@ -399,8 +405,9 @@ impl Targets {
 }
 
 /// The output gather against the host loop, bit for bit: 0, 1, 7 and 10⁵ targets with an
-/// empty leaf, with and without gradients, store and output at odd offsets inside larger
-/// buffers whose other elements stay untouched; one launch, none for no target.
+/// empty leaf, with and without gradients, one and three charge vectors (Phase 6 T5), store
+/// and output at odd offsets inside larger buffers whose other elements stay untouched;
+/// one launch, none for no target.
 fn output_gather<T: TestFloat + Data>(device: &mut Device) {
     let mut rng = Rng::new(6);
     for targets in [0, 1, 7, 100_000] {
@@ -414,8 +421,8 @@ fn output_gather<T: TestFloat + Data>(device: &mut Device) {
         )
         .unwrap();
         assert_eq!((order.len(), order.total()), (targets, targets));
-        for gradients in [false, true] {
-            let o = if gradients { 4 } else { 1 };
+        for (gradients, vectors) in [(false, 1), (true, 1), (false, 3), (true, 3)] {
+            let o = vectors * if gradients { 4 } else { 1 };
             let inner: Vec<T> = (0..o * targets)
                 .map(|_| T::random_normal(&mut rng))
                 .collect();
@@ -428,15 +435,18 @@ fn output_gather<T: TestFloat + Data>(device: &mut Device) {
                 device,
                 &order,
                 store.slice(PAD..PAD + o * targets),
-                gradients,
+                (gradients, vectors),
                 out.slice_mut(PAD..PAD + o * targets),
             )
             .unwrap();
             assert_eq!(device.counters().launches, u64::from(targets > 0));
             let mut want = before.clone();
-            want[PAD..PAD + o * targets].copy_from_slice(&case.host(&inner, gradients));
+            want[PAD..PAD + o * targets].copy_from_slice(&case.host(&inner, gradients, vectors));
             T::check(
-                &format!("gather_output of {targets} targets, gradients {gradients}"),
+                &format!(
+                    "gather_output of {targets} targets, gradients {gradients}, {vectors} \
+                     vectors"
+                ),
                 &download(device, &out),
                 &want,
             );
@@ -670,7 +680,7 @@ mod refusals {
                     device,
                     &order,
                     store.as_slice(),
-                    true,
+                    (true, 1),
                     out.as_slice_mut(),
                 );
             },

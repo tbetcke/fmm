@@ -151,6 +151,7 @@ fn smoke_run_of_the_scaling_core() {
     kinds_and_reference_strategy(&comm);
     work_cut_and_cost_model(&comm);
     refusals(&comm);
+    several_vectors(&comm);
     rank_count_invariance(&comm);
 }
 
@@ -598,6 +599,52 @@ fn refusals(comm: &SimpleCommunicator) {
         invariance::<f64>(&WORKLOAD, &owners, &[1], comm),
         Err(HarnessError::InputNotByIndex(Input::Owners))
     );
+    // Several charge vectors (Phase 6 T5) with a check of one vector.
+    let several = Settings {
+        rhs: 3,
+        ..settings()
+    };
+    assert_eq!(
+        run::<f64>(&WORKLOAD, &several, comm).expect_err("--errors with --rhs"),
+        HarnessError::SeveralVectors("--errors")
+    );
+    let several = Settings {
+        vectors: 0,
+        ..several
+    };
+    assert_eq!(
+        run::<f64>(&WORKLOAD, &several, comm).expect_err("--reference with --rhs"),
+        HarnessError::SeveralVectors("--reference")
+    );
+    assert_eq!(
+        invariance::<f64>(&WORKLOAD, &several, &[1], comm),
+        Err(HarnessError::SeveralVectors("--invariance"))
+    );
+}
+
+/// Several charge vectors (Phase 6 T5): a run of three vectors through `evaluate_many`,
+/// overlap both (the two paths bit for bit), its summary's `rhs` field, and the charges
+/// forward moving three values per input source.
+fn several_vectors(comm: &SimpleCommunicator) {
+    let settings = Settings {
+        rhs: 3,
+        vectors: 0,
+        reference: false,
+        overlap: Overlap::Both,
+        ..settings()
+    };
+    let report = run::<f64>(&WORKLOAD, &settings, comm).expect("a run of three vectors");
+    assert_eq!(report.differing, Some(0), "the paths of three vectors");
+    for summary in report.summaries() {
+        assert!(summary.contains(" rhs=3 "), "{summary}");
+    }
+    for row in &report.rows {
+        assert_eq!(
+            row.traffic.charges[0],
+            3 * row.input,
+            "three charges per source"
+        );
+    }
 }
 
 /// Rank-count invariance (Phase 5S T2): the run on P ranks against P/k for every divisor

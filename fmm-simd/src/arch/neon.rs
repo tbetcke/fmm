@@ -28,7 +28,8 @@ use std::arch::aarch64::{
     vsubq_f64,
 };
 
-use super::{Simd, matrix::accumulate_body, p2p::p2p_body, rsqrt_body};
+use super::p2p::{p2p_body, p2p_many_body};
+use super::{Simd, matrix::accumulate_body, rsqrt_body};
 use crate::Isa;
 
 /// The token of NEON: a value exists only on a CPU with NEON, so the [`Simd`] methods
@@ -349,6 +350,83 @@ macro_rules! p2p_entries {
 
 p2p_entries!(p2p_f32, p2p_f32_gradient, f32, K_F32);
 p2p_entries!(p2p_f64, p2p_f64_gradient, f64, K_F64);
+
+/// Target vectors per block of the P2P of several charge vectors (`arch::p2p::p2p_many_body`;
+/// Phase 6 T5), potential only: measured on the M3 Max (64 sources and targets, m = 8 and
+/// 32), 2 target vectors with groups of 8 vectors ran 4.6× (f32) and 4.1× (f64) faster per
+/// vector than m calls of the single-vector kernel, against 4.4× and 4.0× with 1 and 8,
+/// and 3.1× and 2.8× with 2 and 4.
+pub(crate) const MANY_K: usize = 2;
+/// Vectors per group of the P2P of several charge vectors, potential only (as [`MANY_K`]).
+pub(crate) const MANY_VG: usize = 8;
+/// Target vectors per block with gradients: 1 target vector with groups of 4 vectors
+/// measured 1.8× (f32) and 1.9× (f64) faster per vector, against 1.2× with 2 and 2 and
+/// 1.4–1.5× with 1 and 2 (16 accumulators per group; 8 vectors would not fit the 32
+/// registers).
+pub(crate) const MANY_K_GRADIENT: usize = 1;
+/// Vectors per group with gradients (as [`MANY_K_GRADIENT`]).
+pub(crate) const MANY_VG_GRADIENT: usize = 4;
+
+/// Generates the entry points of the P2P of several charge vectors of one precision,
+/// potential only and with gradients (Phase 6 T5).
+macro_rules! p2p_many_entries {
+    ($potential:ident, $gradient:ident, $t:ty) => {
+        /// P2P of several charge vectors on NEON, potential only
+        /// (`arch::p2p::p2p_many_body`), in the precision of its name, with lengths
+        /// checked by the caller.
+        ///
+        /// Not inlined, so that the dispatch stays one call and the inlining check
+        /// finds the function by name.
+        #[target_feature(enable = "neon")]
+        #[inline(never)]
+        pub(crate) fn $potential(
+            sources: &[[$t; 3]],
+            charges: &[$t],
+            m: usize,
+            targets: &[[$t; 3]],
+            potential: &mut [$t],
+        ) {
+            // SAFETY: this function enables `neon`, so it runs only on a CPU with NEON:
+            // a call from outside a NEON context is `unsafe` and asserts it.
+            let s = unsafe { Neon::new_unchecked() };
+            p2p_many_body::<$t, Neon, MANY_K, MANY_VG, false>(
+                s,
+                sources,
+                charges,
+                m,
+                targets,
+                potential,
+                &mut [],
+            );
+        }
+
+        /// P2P of several charge vectors on NEON, potential and gradient
+        /// (`arch::p2p::p2p_many_body`), in the precision of its name, with lengths
+        /// checked by the caller.
+        ///
+        /// Not inlined, as the potential-only entry point.
+        #[target_feature(enable = "neon")]
+        #[inline(never)]
+        pub(crate) fn $gradient(
+            sources: &[[$t; 3]],
+            charges: &[$t],
+            m: usize,
+            targets: &[[$t; 3]],
+            potential: &mut [$t],
+            gradient: &mut [[$t; 3]],
+        ) {
+            // SAFETY: this function enables `neon`, so it runs only on a CPU with NEON:
+            // a call from outside a NEON context is `unsafe` and asserts it.
+            let s = unsafe { Neon::new_unchecked() };
+            p2p_many_body::<$t, Neon, MANY_K_GRADIENT, MANY_VG_GRADIENT, true>(
+                s, sources, charges, m, targets, potential, gradient,
+            );
+        }
+    };
+}
+
+p2p_many_entries!(p2p_many_f32, p2p_many_f32_gradient, f32);
+p2p_many_entries!(p2p_many_f64, p2p_many_f64_gradient, f64);
 
 /// Row vectors per block of the column-accumulation kernel in f32 (`arch::matrix`):
 /// 32 vector registers: 16 accumulators of 4 × 4 (f32: 16 rows; f64: 8 rows), 4 of A

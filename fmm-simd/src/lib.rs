@@ -12,7 +12,8 @@
 //! NEON and AVX2 + FMA, and the reference's loop on the scalar path. Each ISA has its
 //! vector layer and the inverse square root of the kernel, which
 //! [`rsqrt::rsqrt_slice`] exposes for tests and reports. Phase 6 T2:
-//! [`MatrixKernel::accumulate_columns`] on every ISA, in the [`MulAdd`] modes.
+//! [`MatrixKernel::accumulate_columns`] on every ISA, in the [`MulAdd`] modes. Phase 6
+//! T5: [`P2pKernel::evaluate_many`], P2P of several charge vectors at once.
 //!
 //! ## Instruction sets
 //!
@@ -92,6 +93,19 @@
 //! - No allocation, no threads, no MPI; the kernel writes only into the caller's
 //!   slices. Mismatched lengths panic, as in the reference.
 //!
+//! ## Several charge vectors
+//!
+//! [`P2pKernel::evaluate_many`] (Phase 6 T5, C6.3; docs/design/optimisation.md §4.3)
+//! evaluates m charge vectors at the same sources and targets: the m charges of a source
+//! adjacent, the m vectors' outputs one vector after the other (CONVENTIONS §3.13,
+//! "Several charge vectors"). The targets stay in lanes and the vectors run in groups
+//! held in registers (on NEON and AVX2 8 vectors without gradients and 4 with, then halves
+//! for the rest); per source and target vector d, r² and ρ are formed once and every vector
+//! of the group then takes the steps of [`P2pKernel::evaluate`] with its own charge, in
+//! the same order. So vector v of the result is `evaluate` of vector v bit for bit, on
+//! every ISA, and every guarantee above holds per vector. The scalar path forms d, r² and
+//! r once per pair and adds each vector's term as its single-vector loop does.
+
 //! ## The matrix kernel
 //!
 //! [`MatrixKernel::accumulate_columns`] adds A · B[:, b_j] into C[:, c_j] for lists of
@@ -225,6 +239,18 @@ mod sealed {
             gradient: Option<&mut [[Self; 3]]>,
         );
 
+        /// [`P2pKernel::evaluate_many`](crate::P2pKernel::evaluate_many) in this
+        /// precision, with lengths already checked.
+        fn p2p_many(
+            isa: AvailableIsa,
+            sources: &[[Self; 3]],
+            charges: &[Self],
+            m: usize,
+            targets: &[[Self; 3]],
+            potential: &mut [Self],
+            gradient: Option<&mut [[Self; 3]]>,
+        );
+
         /// [`MatrixKernel::accumulate_columns`](crate::MatrixKernel::accumulate_columns)
         /// in this precision, with shapes already checked.
         #[expect(
@@ -262,6 +288,19 @@ mod sealed {
         }
 
         #[inline]
+        fn p2p_many(
+            isa: AvailableIsa,
+            sources: &[[f32; 3]],
+            charges: &[f32],
+            m: usize,
+            targets: &[[f32; 3]],
+            potential: &mut [f32],
+            gradient: Option<&mut [[f32; 3]]>,
+        ) {
+            arch::p2p_many_f32(isa, sources, charges, m, targets, potential, gradient);
+        }
+
+        #[inline]
         fn accumulate(
             isa: AvailableIsa,
             mul_add: MulAdd,
@@ -292,6 +331,19 @@ mod sealed {
             gradient: Option<&mut [[f64; 3]]>,
         ) {
             arch::p2p_f64(isa, sources, charges, targets, potential, gradient);
+        }
+
+        #[inline]
+        fn p2p_many(
+            isa: AvailableIsa,
+            sources: &[[f64; 3]],
+            charges: &[f64],
+            m: usize,
+            targets: &[[f64; 3]],
+            potential: &mut [f64],
+            gradient: Option<&mut [[f64; 3]]>,
+        ) {
+            arch::p2p_many_f64(isa, sources, charges, m, targets, potential, gradient);
         }
 
         #[inline]

@@ -387,6 +387,7 @@ fn measure(
                             leaves: &leaf_coordinates,
                             source_offsets: &source_offsets,
                             sources: sources.as_slice(),
+                            vectors: 1,
                         };
                         let out = out.slice_mut(..levels[level].len() * n);
                         if kind == Kind::P2m {
@@ -404,6 +405,7 @@ fn measure(
                             leaves: &leaf_coordinates,
                             target_offsets: &target_offsets,
                             target_input: target_input.as_slice(),
+                            vectors: 1,
                         };
                         let c = coefficients[entry_level].as_slice();
                         if kind == Kind::L2p {
