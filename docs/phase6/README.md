@@ -362,7 +362,7 @@ In the repository root, start `claude` and say:
 - [x] Briefs revised by Phase 5S T9 (2026-10-15; decision 7 of docs/phase5s/README.md)
 - [x] T1 merged: `docs/design/optimisation.md` drafted, sign-off questions listed
 - [x] Optimisation design signed off (decisions 1–5, 2026-10-15; C6.2 dropped, C6.9 in T12)
-- [ ] T2 merged: host batched M2L, deterministic, measured on the three machines (C6.6)
+- [x] T2 merged: host batched M2L, deterministic, measured on the three machines (C6.6)
 - [x] T3, T4 (C6.2, SVD-compressed M2L): dropped at T1's sign-off, 2026-10-15
 - [ ] T5 merged: several right-hand sides (C6.3)
 - [ ] T6 merged: AVX-512 P2P, measured on Kathleen (C6.7), or recorded as waiting for AVX-512 hardware (Kathleen unusable)
