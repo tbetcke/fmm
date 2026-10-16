@@ -193,6 +193,12 @@ summary's `multipoles_progress_max_ms`, `multipoles_sends_wait_max_ms`,
 `tools/scaling/run.sh` has the sweeps `t9-strong`, `t9-weak`, `t9-model` and `t9-counts`.
 Its report is `results/phase5s-kathleen.md`.
 
+Phase 6 T2 (the host batched M2L, C6.6) added `Settings::m2l_mul_add` (`--mul-add
+separate|fused`, `FmmBuilder::m2l_mul_add`; the summary's `mul_add`), `batched` in
+`--strategy` and `--reference-strategy`, and in `tools/scaling/run.sh` the sweeps
+`t2-host` and `t2-node` (`T2_SPLITS`) and `batched` in `strategy`. Its report is
+`results/phase6-m2l.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

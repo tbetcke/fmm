@@ -14,7 +14,10 @@
 //! evaluated with the exchanges overlapped, `Fmm::set_overlap`, Phase 5 T9), 1,000 sampled
 //! targets; f64 at p = 3, 8 and 18, f32 at p = 3 and 8 (the f32 charges rounded, with an
 //! oracle on the rounded charges); one thread per rank. Point i is passed on rank
-//! `hash(i) % P` (a seeded random share). On every rank count, for every point:
+//! `hash(i) % P` (a seeded random share). Every workload point runs three times (Phase 6
+//! T2): with the default strategy (`Auto`), with `M2lStrategy::Batched`, and with
+//! `Batched` in the fused mode (`MulAdd::Fused`); the batched runs load their tables from a
+//! cache in `CARGO_TARGET_TMPDIR`. On every rank count, for every run:
 //! - **Equal to one rank** (requirement 2, decision 7; docs/design/distributed-fmm.md
 //!   §5.3, §5.4): every output value of every evaluation, φ and ∇φ, is bit for bit that
 //!   of the one-rank `Fmm` of the same settings and the same resolved strategy (Phase 5N
@@ -31,7 +34,7 @@
 //! - **The C3.2 and C3.3 gates** on the multi-rank output: in f64, the cube's φ error
 //!   within twice the single-translation prediction (1.77e-3, 1.08e-5 and, re-derived in
 //!   Phase 3 T9, 6.74e-9 at p = 3, 8, 18), and the Plummer sphere's within twice the
-//!   cube's at the same p; f32 is reported.
+//!   cube's at the same p and strategy; f32 is reported.
 //!
 //! Every rank builds and evaluates the multi-rank `Fmm`; rank 0 alone gathers the output
 //! (all-gathers in rank order), computes the oracles and the two one-rank runs, and
@@ -62,7 +65,8 @@ use mpi::datatype::PartitionMut;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
 use nd_fmm_exec::fmm::{Fmm, FmmBuilder, Output};
-use nd_fmm_exec::operator::SimdScalar;
+use nd_fmm_exec::operator::{MulAdd, SimdScalar};
+use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_math::RealScalar;
 use nd_fmm_ref::p2p::direct_sum;
 use nd_fmm_tables::cache::Stored;
@@ -85,6 +89,21 @@ const F32_PS: [usize; 2] = [3, 8];
 
 /// The seed of the random share.
 const SHARE_SEED: u64 = 0x05ee_dc51;
+
+/// The table cache of the batched runs.
+const TABLE_CACHE: &str = concat!(env!("CARGO_TARGET_TMPDIR"), "/multi_rank_tables");
+
+/// A run's strategy by name: the default (`None`), or a named strategy and the
+/// multiply–add mode of the batched M2L.
+type Variant = (&'static str, Option<(M2lStrategy, MulAdd)>);
+
+/// The strategies every workload point runs with: the default, and the batched M2L in
+/// both multiply–add modes (Phase 6 T2).
+const VARIANTS: [Variant; 3] = [
+    ("auto", None),
+    ("batched", Some((M2lStrategy::Batched, MulAdd::Separate))),
+    ("fused", Some((M2lStrategy::Batched, MulAdd::Fused))),
+];
 
 /// How far the multi-rank errors against the direct sum may lie from the one-rank run's,
 /// relative: 0.1% in f64, 1% in f32 (docs/phase5/README.md, "Accuracy measures").
@@ -211,12 +230,20 @@ impl Workload {
         }
     }
 
-    /// The settings at degree `p`, gradients on, one thread.
-    fn builder<T>(&self, p: usize) -> FmmBuilder<T> {
-        FmmBuilder::<T>::new(p)
+    /// The settings at degree `p` with the strategy and mode of `variant` (the default
+    /// without), gradients on, one thread.
+    fn builder<T>(&self, p: usize, variant: Option<(M2lStrategy, MulAdd)>) -> FmmBuilder<T> {
+        let builder = FmmBuilder::<T>::new(p)
             .max_level(self.max_level)
             .max_points_per_leaf(self.max_points_per_leaf)
-            .gradients(true)
+            .gradients(true);
+        match variant {
+            Some((strategy, mul_add)) => builder
+                .strategy(strategy)
+                .m2l_mul_add(mul_add)
+                .table_cache(TABLE_CACHE),
+            None => builder,
+        }
     }
 }
 
@@ -339,15 +366,15 @@ fn slowest(local: Duration, comm: &SimpleCommunicator) -> Duration {
     Duration::from_secs_f64(max)
 }
 
-/// The φ errors of a run, by (workload, precision, p), for the C3.3 gate.
-type Errors = Vec<(&'static str, &'static str, usize, f64)>;
+/// The φ errors of a run, by (workload, precision, p, variant), for the C3.3 gate.
+type Errors = Vec<(&'static str, &'static str, usize, &'static str, f64)>;
 
 /// One run at degree `p` in `T` (module documentation): the multi-rank build and its
 /// evaluations on every rank, the checks on rank 0. Appends rank 0's failures and the
 /// φ error of the multi-rank run; prints every rank's tree if `first`.
 fn run<T: Stored + SimdScalar + Equivalence + Default>(
     workload: &Workload,
-    (p, prediction): (usize, Option<f64>),
+    (p, prediction, (variant, settings)): (usize, Option<f64>, Variant),
     (charges, oracle): (&[Vec<f64>], Option<&Oracle>),
     mine: &[usize],
     first: bool,
@@ -356,7 +383,7 @@ fn run<T: Stored + SimdScalar + Equivalence + Default>(
 ) {
     let (rank, size) = (comm.rank(), comm.size() as usize);
     let precision = if size_of::<T>() == 4 { "f32" } else { "f64" };
-    let what = format!("{}, {precision}, p = {p}", workload.name);
+    let what = format!("{}, {precision}, p = {p}, {variant}", workload.name);
     let all_charges: Vec<Vec<T>> = charges
         .iter()
         .map(|q| q.iter().map(|&v| T::from_f64(v)).collect())
@@ -366,7 +393,7 @@ fn run<T: Stored + SimdScalar + Equivalence + Default>(
         .iter()
         .map(|q| mine.iter().map(|&i| q[i]).collect())
         .collect();
-    let builder = workload.builder::<T>(p);
+    let builder = workload.builder::<T>(p, settings);
 
     // The multi-rank run, on every rank.
     comm.barrier();
@@ -377,7 +404,8 @@ fn run<T: Stored + SimdScalar + Equivalence + Default>(
     // The one-rank runs take the strategy the multi-rank run resolved: under `Auto` it
     // depends on the ranks per node (Phase 5N T4), and the guarantee is per resolved
     // strategy.
-    let builder = builder.strategy(fmm.strategy());
+    let builder_strategy = fmm.strategy();
+    let builder = builder.strategy(builder_strategy);
     let mut outputs = Vec::new();
     let (mut totals, mut moves) = (Vec::new(), Vec::new());
     for (k, q) in local_charges.iter().enumerate() {
@@ -496,9 +524,11 @@ fn run<T: Stored + SimdScalar + Equivalence + Default>(
         let ratios = (errors_multi.0 / errors_one.0, errors_multi.1 / errors_one.1);
         let ms = |d: Duration| d.as_secs_f64() * 1e3;
         eprintln!(
-            "| {} | {precision} | {p} | {size} | {} of {} | {:.1e} / {:.1e} | {:.1e} / {:.1e} \
-             | {:.3e} / {:.3e} | {:.3e} / {:.3e} | {:.4} / {:.4} | {:.1} ({:.1}) | {:.2} ({:.3}) |",
+            "| {} | {precision} | {p} | {variant} ({:?}) | {size} | {} of {} | {:.1e} / {:.1e} \
+             | {:.1e} / {:.1e} | {:.3e} / {:.3e} | {:.3e} / {:.3e} | {:.4} / {:.4} | {:.1} \
+             ({:.1}) | {:.2} ({:.3}) |",
             workload.name,
+            builder_strategy,
             differing,
             gathered.len() * 4 * N,
             worst_l2[0],
@@ -543,7 +573,7 @@ fn run<T: Stored + SimdScalar + Equivalence + Default>(
                 errors_multi.0
             ));
         }
-        errors_by_run.push((workload.name, precision, p, errors_multi.0));
+        errors_by_run.push((workload.name, precision, p, variant, errors_multi.0));
     }
 }
 
@@ -570,12 +600,14 @@ fn equal_to_one_rank_at_the_workload_points() {
             .join(", ")
         );
         eprintln!(
-            "| workload | precision | p | ranks | values differing from the union in rank order \
-             | φ / ∇φ relative L2 from the one-rank run in point order | relative max | φ \
-             error, P ranks / one rank | ∇φ error | ratios | build ms (redistribute) | \
-             evaluation ms (moves) |"
+            "| workload | precision | p | variant (strategy) | ranks | values differing from \
+             the union in rank order | φ / ∇φ relative L2 from the one-rank run in point order \
+             | relative max | φ error, P ranks / one rank | ∇φ error | ratios | build ms \
+             (redistribute) | evaluation ms (moves) |"
         );
-        eprintln!("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+        eprintln!(
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+        );
     }
     let mut failures = Vec::new();
     let mut errors_by_run = Errors::new();
@@ -597,41 +629,44 @@ fn equal_to_one_rank_at_the_workload_points() {
         } else {
             (None, None)
         };
-        for (k, (p, prediction)) in F64_PS.into_iter().enumerate() {
-            run::<f64>(
-                &workload,
-                (p, Some(prediction)),
-                (&workload.charges, oracle64.as_ref()),
-                &mine,
-                k == 0,
-                (&mut failures, &mut errors_by_run),
-                &comm,
-            );
-        }
-        for p in F32_PS {
-            run::<f32>(
-                &workload,
-                (p, None),
-                (&charges32, oracle32.as_ref()),
-                &mine,
-                false,
-                (&mut failures, &mut errors_by_run),
-                &comm,
-            );
+        for (v, variant) in VARIANTS.into_iter().enumerate() {
+            for (k, (p, prediction)) in F64_PS.into_iter().enumerate() {
+                run::<f64>(
+                    &workload,
+                    (p, Some(prediction), variant),
+                    (&workload.charges, oracle64.as_ref()),
+                    &mine,
+                    v == 0 && k == 0,
+                    (&mut failures, &mut errors_by_run),
+                    &comm,
+                );
+            }
+            for p in F32_PS {
+                run::<f32>(
+                    &workload,
+                    (p, None, variant),
+                    (&charges32, oracle32.as_ref()),
+                    &mine,
+                    false,
+                    (&mut failures, &mut errors_by_run),
+                    &comm,
+                );
+            }
         }
     }
     // The C3.3 gate in f64: the Plummer sphere's φ error within twice the cube's.
     if rank == 0 {
-        for &(_, precision, p, error) in errors_by_run.iter().filter(|e| e.0 == "plummer") {
+        for &(_, precision, p, variant, error) in errors_by_run.iter().filter(|e| e.0 == "plummer")
+        {
             let cube = errors_by_run
                 .iter()
-                .find(|e| e.0 == "cube" && e.1 == precision && e.2 == p)
+                .find(|e| e.0 == "cube" && e.1 == precision && e.2 == p && e.3 == variant)
                 .expect("the cube runs every point")
-                .3;
+                .4;
             let ratio = error / cube;
             eprintln!(
-                "C3.3, {precision}, p = {p}: plummer {error:.3e} against the cube's {cube:.3e}, \
-                 ratio {ratio:.2}{}",
+                "C3.3, {precision}, p = {p}, {variant}: plummer {error:.3e} against the cube's \
+                 {cube:.3e}, ratio {ratio:.2}{}",
                 if precision == "f64" {
                     if ratio <= 2.0 {
                         " (gate: passes)"
@@ -643,7 +678,7 @@ fn equal_to_one_rank_at_the_workload_points() {
                 }
             );
             if precision == "f64" && ratio > 2.0 {
-                failures.push(format!("C3.3, p = {p}: ratio {ratio}"));
+                failures.push(format!("C3.3, p = {p}, {variant}: ratio {ratio}"));
             }
         }
     }

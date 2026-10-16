@@ -157,6 +157,20 @@
 //! [`Fmm::p2p_kernel`] reports the kernel that runs, for reports next to
 //! [`Fmm::threading`].
 //!
+//! # The batched M2L (Phase 6 T2, C6.6)
+//!
+//! [`M2lStrategy::Batched`] (opt-in; `Auto` never resolves to it) holds `Dense`'s tables
+//! and applies M2L on the host per level, block by block of targets and offset by offset,
+//! through the column kernel of `nd-fmm-simd` on the ISA of the P2P choice
+//! ([`operator`](crate::operator#the-batched-m2l), "The batched M2L";
+//! docs/design/optimisation.md §2). Its output is `Dense`'s bit for bit, so every
+//! guarantee here holds for it unchanged. [`FmmBuilder::m2l_mul_add`] (or
+//! [`Fmm::set_m2l_mul_add`]) with [`MulAdd::Fused`] forms each step with one fma: within
+//! n u per element of `Dense`, and still deterministic, the same for every thread count
+//! and, on P ranks, bit for bit the one-rank fused `Fmm` over the union. With a device
+//! backend M2L on the device runs as `Dense`. [`Fmm::threading`] names the kernel's ISA
+//! and mode ([`ThreadingReport::m2l_kernel`]).
+//!
 //! # Threads (C3.5)
 //!
 //! With [`FmmBuilder::threads`] n > 1, the `Fmm` owns a rayon pool of n threads and the
@@ -338,7 +352,7 @@ use crate::device::{
     self, DeviceCounters, DeviceDriver, DeviceOptions, DeviceOutput, DeviceReport, ViewsImage,
 };
 use crate::geometry::{Domain, GeometryError, leaf_coordinates, radius};
-use crate::operator::{Isa, LaplaceOperator, P2pChoice, SimdScalar};
+use crate::operator::{Isa, LaplaceOperator, MulAdd, P2pChoice, SimdScalar};
 use crate::tables::{M2lStrategy, NodeContext, StrategyChoice, Tables};
 use crate::threading::{REQUIRED_MPI_THREADING, ThreadingReport};
 
@@ -829,6 +843,7 @@ pub enum FmmError {
 /// | [`table_cache`](Self::table_cache) | none: every rank builds its tables |
 /// | [`threads`](Self::threads) | 1: no pool, the calling thread |
 /// | [`p2p_kernel`](Self::p2p_kernel) | [`P2pChoice::Auto`]: the kernel of `nd-fmm-simd` on the widest ISA of this machine |
+/// | [`m2l_mul_add`](Self::m2l_mul_add) | [`MulAdd::Separate`]: `Batched` bit for bit `Dense` |
 /// | [`backend`](Self::backend) | [`Backend::Host`]: the host path |
 /// | [`host_fallback`](Self::host_fallback) | none |
 /// | [`synchronous_stages`](Self::synchronous_stages) | off |
@@ -859,6 +874,7 @@ pub struct FmmBuilder<T> {
     table_cache: Option<PathBuf>,
     threads: usize,
     p2p: P2pChoice,
+    m2l_mul_add: MulAdd,
     backend: Backend,
     host_fallback: Vec<OperatorKind>,
     synchronous_stages: bool,
@@ -894,6 +910,7 @@ impl<T> FmmBuilder<T> {
             table_cache: None,
             threads: 1,
             p2p: P2pChoice::Auto,
+            m2l_mul_add: MulAdd::Separate,
             backend: Backend::Host,
             host_fallback: Vec::new(),
             synchronous_stages: false,
@@ -1006,6 +1023,18 @@ impl<T> FmmBuilder<T> {
     /// [`P2pChoice`]); [`Fmm::p2p_kernel`] reports the kernel that runs.
     pub fn p2p_kernel(mut self, choice: P2pChoice) -> Self {
         self.p2p = choice;
+        self
+    }
+
+    /// Sets the multiply–add mode of the batched M2L ([`M2lStrategy::Batched`] on the
+    /// host; Phase 6 T2, docs/design/optimisation.md §2.3): [`MulAdd::Separate`] (the
+    /// default) gives every local the chain of `Dense`, so the output is `Dense`'s bit for
+    /// bit; [`MulAdd::Fused`] forms each step with one fma, 1.1–1.6× faster on the kernel
+    /// and within n u per element of `Dense` (n = (p + 1)²), deterministic and the same on
+    /// every thread count, rank count and ISA. Opt-in until Phase 6 T11. Every other
+    /// strategy, and the device, ignores it; [`Fmm::threading`] reports it.
+    pub fn m2l_mul_add(mut self, mul_add: MulAdd) -> Self {
+        self.m2l_mul_add = mul_add;
         self
     }
 
@@ -1500,7 +1529,11 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         let start = Instant::now();
         let mut operator = LaplaceOperator::new(tables, self.gradients, max_leaf_points)
             .with_p2p(self.p2p)
-            .expect("step 1 checked that this machine runs the P2P kernel");
+            .expect("step 1 checked that this machine runs the P2P kernel")
+            .with_m2l_mul_add(self.m2l_mul_add);
+        threading.m2l_kernel = operator
+            .m2l_kernel()
+            .map(|kernel| (kernel.isa(), kernel.mul_add()));
         if let Some(pool) = pool {
             operator = operator.with_pool(pool);
         }
@@ -1839,6 +1872,7 @@ fn strategy_code(strategy: M2lStrategy) -> u8 {
         M2lStrategy::Classes => 1,
         M2lStrategy::Rotation => 2,
         M2lStrategy::Auto => 3,
+        M2lStrategy::Batched => 4,
     }
 }
 
@@ -1849,6 +1883,7 @@ fn strategy_from_code(code: u8) -> M2lStrategy {
         0 => M2lStrategy::Dense,
         1 => M2lStrategy::Classes,
         2 => M2lStrategy::Rotation,
+        4 => M2lStrategy::Batched,
         _ => M2lStrategy::Auto,
     }
 }
@@ -3837,6 +3872,18 @@ where
     /// Every rank must set the same value before its next evaluation.
     pub fn set_overlap(&mut self, on: bool) {
         self.overlap = on;
+    }
+
+    /// Sets the multiply–add mode of the batched M2L for the next evaluations
+    /// ([`FmmBuilder::m2l_mul_add`]), on the same build, and in the threading report.
+    /// Nothing changes under another strategy. Every rank must set the same mode before
+    /// its next evaluation.
+    pub fn set_m2l_mul_add(&mut self, mul_add: MulAdd) {
+        let host = self.evaluator.operator_mut().engine.host_mut();
+        host.set_m2l_mul_add(mul_add);
+        self.threading.m2l_kernel = host
+            .m2l_kernel()
+            .map(|kernel| (kernel.isa(), kernel.mul_add()));
     }
 
     /// With `serial`, runs the next evaluations on the calling thread even if the FMM

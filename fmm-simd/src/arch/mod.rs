@@ -1,5 +1,5 @@
 //! The per-ISA code: the vector layer, the inverse square root and the entry points
-//! (docs/design/simd-p2p.md §5.3).
+//! (docs/design/simd-p2p.md §5.3; the matrix kernel, docs/design/optimisation.md §2.11).
 //!
 //! Each module holds the code of one [`Isa`], compiled only for its architecture, and
 //! implements [`Simd`], the crate's thin layer over its vector types:
@@ -9,12 +9,15 @@
 //! - `avx2` (x86_64): `__m256` and `__m256d`.
 //!
 //! Code that runs on vectors is written once, generic over [`Simd`]
-//! ([`rsqrt_body`] and the P2P kernel body [`p2p::p2p_body`]), and instantiated inside
-//! one `#[target_feature]` entry point per ISA, precision and, for P2P, output, so
-//! that the layer methods, all `#[inline(always)]`, and their intrinsics inline into a
-//! function that has the features. [`rsqrt_slice_f32`] and [`rsqrt_slice_f64`]
+//! ([`rsqrt_body`], the P2P kernel body [`p2p::p2p_body`] and the column-accumulation
+//! body [`matrix::accumulate_body`]), and instantiated inside one `#[target_feature]`
+//! entry point per ISA, precision and, for P2P, output, for the matrix kernel rounding,
+//! so that the layer methods, all `#[inline(always)]`, and their intrinsics inline into
+//! a function that has the features. [`rsqrt_slice_f32`] and [`rsqrt_slice_f64`]
 //! dispatch to the inverse-square-root entry points, [`p2p_f32`] and [`p2p_f64`] to
-//! the P2P ones.
+//! the P2P ones, [`accumulate_f32`] and [`accumulate_f64`] to the matrix ones. The
+//! scalar ISA runs the matrix body on the scalar layer, whose chain is the vector
+//! paths' exactly.
 //!
 //! The scalar ISA runs P2P by the plain loop [`scalar::p2p`], which equals
 //! `nd_fmm_ref::p2p::p2p` bit for bit wherever r² ≠ 0, not by the generic body at
@@ -33,6 +36,7 @@
 
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod avx2;
+pub(crate) mod matrix;
 #[cfg(target_arch = "aarch64")]
 pub(crate) mod neon;
 pub(crate) mod p2p;
@@ -40,7 +44,7 @@ pub(crate) mod scalar;
 #[cfg(test)]
 mod tests;
 
-use crate::{Isa, IsaUnavailable, SimdScalar};
+use crate::{Isa, IsaUnavailable, MulAdd, SimdScalar};
 
 /// The largest lane count of any ISA (AVX2, f32), the size of the padded stack copies
 /// that tails use.
@@ -280,3 +284,78 @@ macro_rules! p2p_dispatch {
 
 p2p_dispatch!(p2p_f32, f32, p2p_f32, p2p_f32_gradient);
 p2p_dispatch!(p2p_f64, f64, p2p_f64, p2p_f64_gradient);
+
+/// Generates the dispatch of the column-accumulation entry points for one precision.
+macro_rules! accumulate_dispatch {
+    ($name:ident, $t:ty, $separate:ident, $fused:ident) => {
+        /// C[:, c_j] += A · B[:, b_j] on `isa`
+        /// ([`MatrixKernel::accumulate_columns`](crate::MatrixKernel::accumulate_columns))
+        /// in the precision of its name, with shapes already checked by the caller.
+        #[expect(
+            clippy::too_many_arguments,
+            reason = "the shape of `MatrixKernel::accumulate_columns`, plus the ISA and mode"
+        )]
+        pub(crate) fn $name(
+            isa: AvailableIsa,
+            mul_add: MulAdd,
+            n: usize,
+            a: &[$t],
+            b: &[$t],
+            b_offsets: &[usize],
+            c: &mut [$t],
+            c_offsets: &[usize],
+            pack: &mut [$t],
+        ) {
+            use matrix::{SCALAR_ROWS, accumulate_body};
+            match (isa.0, mul_add) {
+                (Isa::Scalar, MulAdd::Separate) => accumulate_body::<$t, _, SCALAR_ROWS, false>(
+                    scalar::Scalar,
+                    n,
+                    a,
+                    b,
+                    b_offsets,
+                    c,
+                    c_offsets,
+                    pack,
+                ),
+                (Isa::Scalar, MulAdd::Fused) => accumulate_body::<$t, _, SCALAR_ROWS, true>(
+                    scalar::Scalar,
+                    n,
+                    a,
+                    b,
+                    b_offsets,
+                    c,
+                    c_offsets,
+                    pack,
+                ),
+                #[cfg(target_arch = "aarch64")]
+                // SAFETY: `isa` is available (`AvailableIsa`), so the CPU has NEON, the
+                // feature the entry point enables.
+                (Isa::Neon, MulAdd::Separate) => unsafe {
+                    neon::$separate(n, a, b, b_offsets, c, c_offsets, pack)
+                },
+                #[cfg(target_arch = "aarch64")]
+                // SAFETY: as above.
+                (Isa::Neon, MulAdd::Fused) => unsafe {
+                    neon::$fused(n, a, b, b_offsets, c, c_offsets, pack)
+                },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: `isa` is available (`AvailableIsa`), so the CPU has AVX2 and
+                // FMA, the features the entry point enables.
+                (Isa::Avx2, MulAdd::Separate) => unsafe {
+                    avx2::$separate(n, a, b, b_offsets, c, c_offsets, pack)
+                },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: as above.
+                (Isa::Avx2, MulAdd::Fused) => unsafe {
+                    avx2::$fused(n, a, b, b_offsets, c, c_offsets, pack)
+                },
+                // The ISAs of other architectures, which are never available.
+                (isa, _) => unreachable!("`{isa}` is not available on this machine"),
+            }
+        }
+    };
+}
+
+accumulate_dispatch!(accumulate_f32, f32, accumulate_f32, accumulate_f32_fused);
+accumulate_dispatch!(accumulate_f64, f64, accumulate_f64, accumulate_f64_fused);

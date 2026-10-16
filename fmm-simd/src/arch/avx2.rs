@@ -41,7 +41,7 @@ use std::arch::x86_64::{
     _mm256_storeu_pd, _mm256_storeu_ps, _mm256_sub_pd, _mm256_sub_ps,
 };
 
-use super::{Simd, p2p::p2p_body, rsqrt_body};
+use super::{Simd, matrix::accumulate_body, p2p::p2p_body, rsqrt_body};
 use crate::Isa;
 
 /// The coefficients cₖ = C(2k, k) / 4ᵏ of (1 − r)^(−½) = Σₖ cₖ rᵏ, from c₁; all exact
@@ -411,3 +411,62 @@ macro_rules! p2p_entries {
 
 p2p_entries!(p2p_f32, p2p_f32_gradient, f32, K_F32);
 p2p_entries!(p2p_f64, p2p_f64_gradient, f64, K_F64);
+
+/// Row vectors per block of the column-accumulation kernel in f32 (`arch::matrix`):
+/// 16 vector registers: 8 accumulators of 2 × 4 (f32: 16 rows; f64: 8 rows), 2 of A and
+/// the broadcast.
+pub(crate) const MATRIX_ROWS_F32: usize = 2;
+/// Row vectors per block of the column-accumulation kernel in f64 (as
+/// [`MATRIX_ROWS_F32`]).
+pub(crate) const MATRIX_ROWS_F64: usize = 2;
+
+/// Generates the column-accumulation entry points of one precision, separate and fused.
+macro_rules! accumulate_entries {
+    ($separate:ident, $fused:ident, $t:ty, $r:expr) => {
+        /// C[:, c_j] += A · B[:, b_j] on AVX2 + FMA, multiply and add rounded apart
+        /// (`arch::matrix::accumulate_body`), in the precision of its name, with shapes
+        /// checked by the caller.
+        ///
+        /// Not inlined, so that the dispatch stays one call and the inlining check
+        /// finds the function by name.
+        #[target_feature(enable = "avx2,fma")]
+        #[inline(never)]
+        pub(crate) fn $separate(
+            n: usize,
+            a: &[$t],
+            b: &[$t],
+            b_offsets: &[usize],
+            c: &mut [$t],
+            c_offsets: &[usize],
+            pack: &mut [$t],
+        ) {
+            // SAFETY: this function enables `avx2` and `fma`, so it runs only on a CPU
+            // with both: a call from outside such a context is `unsafe` and asserts it.
+            let s = unsafe { Avx2::new_unchecked() };
+            accumulate_body::<$t, Avx2, { $r }, false>(s, n, a, b, b_offsets, c, c_offsets, pack);
+        }
+
+        /// The fused form of the separate entry point: one fma per step.
+        ///
+        /// Not inlined, as the separate entry point.
+        #[target_feature(enable = "avx2,fma")]
+        #[inline(never)]
+        pub(crate) fn $fused(
+            n: usize,
+            a: &[$t],
+            b: &[$t],
+            b_offsets: &[usize],
+            c: &mut [$t],
+            c_offsets: &[usize],
+            pack: &mut [$t],
+        ) {
+            // SAFETY: this function enables `avx2` and `fma`, so it runs only on a CPU
+            // with both: a call from outside such a context is `unsafe` and asserts it.
+            let s = unsafe { Avx2::new_unchecked() };
+            accumulate_body::<$t, Avx2, { $r }, true>(s, n, a, b, b_offsets, c, c_offsets, pack);
+        }
+    };
+}
+
+accumulate_entries!(accumulate_f32, accumulate_f32_fused, f32, MATRIX_ROWS_F32);
+accumulate_entries!(accumulate_f64, accumulate_f64_fused, f64, MATRIX_ROWS_F64);

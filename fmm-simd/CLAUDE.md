@@ -2,8 +2,12 @@
 
 Purpose: hand-written SIMD kernels for the host path, P2P first: `core::arch` intrinsics
 for aarch64 NEON and x86_64 AVX2 + FMA (AVX-512 deferred), a scalar fallback, and
-run-time ISA dispatch (docs/design/simd-p2p.md).
-Phase and components: Phase 3S, C3S.3 and C3S.4 (tasks T3–T5 in docs/phase3s/).
+run-time ISA dispatch (docs/design/simd-p2p.md). Since Phase 6 T2 also the
+column-accumulation kernel of the host's batched M2L, `MatrixKernel` (C[:, c_j] +=
+A · B[:, b_j], the chain of `nd_fmm_tables::MatrixSet::apply`, and an opt-in fused mode;
+docs/design/optimisation.md §2.3, §2.11).
+Phase and components: Phase 3S, C3S.3 and C3S.4 (tasks T3–T5 in docs/phase3s/); Phase 6,
+C6.6 (task T2 in docs/phase6/).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -12,6 +16,12 @@ Phase and components: Phase 3S, C3S.3 and C3S.4 (tasks T3–T5 in docs/phase3s/)
 - `P2pKernel::evaluate` keeps the signature and semantics of `nd_fmm_ref::p2p::p2p`:
   it adds (+=) into its outputs, applies no 1/(4π), and each target adds its sources in
   input order. Chunk and target-position invariance hold bit for bit on every ISA.
+- `MatrixKernel::accumulate_columns` gives every element of C the chain of
+  `MatrixSet::apply` (k ascending, multiply and add rounded apart; `MulAdd::Separate`)
+  or one fma per step (`MulAdd::Fused`), from its own row of A and column of B only: the
+  bits do not depend on the ISA, the row block, the column group or the other columns of
+  a call, and every ISA equals the scalar layer exactly. Keep it so; never let a step
+  contract or reassociate.
 - Generic over `T: SimdScalar` (f32 and f64, sealed); no allocation, threads or MPI in
   a kernel. Write only into the caller's slices.
 - Hand-written `core::arch` intrinsics only: no portable SIMD crate (`pulp`, `wide`,
@@ -42,9 +52,12 @@ Phase and components: Phase 3S, C3S.3 and C3S.4 (tasks T3–T5 in docs/phase3s/)
   and report its instruction count and that it contains no call. The entry points
   are `#[inline(never)]`, so they keep their names (`nd_fmm_simd::arch::neon::
   rsqrt_slice_f32`, `…::avx2::rsqrt_slice_f64`, `…::neon::p2p_f32`,
-  `…::avx2::p2p_f64_gradient`, …). A P2P entry point has one source loop per block
-  size it runs (K, K/2, …, 1, and the padded tail); the source loops are the
-  innermost loops that contain the inverse square root. From the repository root:
+  `…::avx2::p2p_f64_gradient`, `…::neon::accumulate_f64`, `…::avx2::accumulate_f32_fused`,
+  …). A P2P entry point has one source loop per block size it runs (K, K/2, …, 1, and the
+  padded tail); the source loops are the innermost loops that contain the inverse square
+  root. A matrix entry point's k loops are the innermost loops with R × 4 multiplies and
+  adds, or fmas (Phase 6 T2: NEON 43 instructions at R = 4, AVX2 27 separate and 19
+  fused at R = 2). From the repository root:
 
   ```sh
   # Build the release test binaries; cargo prints their paths ("Executable ...").
@@ -82,4 +95,7 @@ nd-fmm-validate (not even as a dev-dependency). Anything else needs asking first
 `nd_fmm_ref::p2p::p2p` for terms and semantics (the scalar path equals it bit for bit
 wherever r² ≠ 0) and `nd_fmm_ref::p2p::direct_sum` for sums; `1/√x` in f64 (f32 inputs)
 or double-double (f64 inputs) for the inverse square root; the kernel's own results for
-chunk and target-position invariance and determinism.
+chunk and target-position invariance and determinism. For `MatrixKernel` the matrix–vector
+loop of `MatrixSet::apply`, restated in `tests/matrix.rs` (this crate cannot depend on
+nd-fmm-tables), bit for bit in both modes, and the separate mode for the fused mode's
+bound.

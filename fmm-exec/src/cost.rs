@@ -428,13 +428,14 @@ impl CostModel {
     ///
     /// The table holds f64 at p = 3 (`Dense`) and p = 8 (`Rotation`), and f32 at p = 8
     /// (`Dense` and `Rotation`), the configurations of Phase 5S. Another degree takes the
-    /// calibration of the same strategy and precision nearest in p (`Classes` takes
-    /// `Dense`'s, `Auto` `Rotation`'s; another precision f64's) and scales it: the leaf
+    /// calibration of the same strategy and precision nearest in p (`Classes` and
+    /// `Batched` take `Dense`'s, `Auto` `Rotation`'s; another precision f64's) and scales
+    /// it: the leaf
     /// operators by (p + 1)², the translations by (p + 1)³ under `Rotation` and (p + 1)⁴
     /// otherwise, P2P not at all.
     pub fn calibrated(strategy: M2lStrategy, value_bytes: usize, p: usize) -> Self {
         let strategy = match strategy {
-            M2lStrategy::Classes => M2lStrategy::Dense,
+            M2lStrategy::Classes | M2lStrategy::Batched => M2lStrategy::Dense,
             M2lStrategy::Auto => M2lStrategy::Rotation,
             named => named,
         };

@@ -2,14 +2,17 @@
 //!
 //! Hand-written SIMD kernels for the host path of the nd-project FMM, with a scalar
 //! fallback and run-time instruction-set dispatch. P2P, the near field of the Laplace
-//! FMM, is the first kernel ([`P2pKernel`]). The crate needs no MPI and no external
-//! SIMD library: the vector code uses `core::arch` intrinsics only. Its design is
-//! [docs/design/simd-p2p.md][design] (Phase 3S).
+//! FMM, is the first kernel ([`P2pKernel`]); the column-accumulation kernel of the host's
+//! batched M2L ([`MatrixKernel`], Phase 6 T2) the second. The crate needs no MPI and no
+//! external SIMD library: the vector code uses `core::arch` intrinsics only. Its design is
+//! [docs/design/simd-p2p.md][design] (Phase 3S), and for the matrix kernel
+//! docs/design/optimisation.md §2.3 and §2.11 (Phase 6).
 //!
 //! **Status.** Phase 3S T5: [`P2pKernel::evaluate`] runs the vector P2P kernel on
 //! NEON and AVX2 + FMA, and the reference's loop on the scalar path. Each ISA has its
 //! vector layer and the inverse square root of the kernel, which
-//! [`rsqrt::rsqrt_slice`] exposes for tests and reports.
+//! [`rsqrt::rsqrt_slice`] exposes for tests and reports. Phase 6 T2:
+//! [`MatrixKernel::accumulate_columns`] on every ISA, in the [`MulAdd`] modes.
 //!
 //! ## Instruction sets
 //!
@@ -89,6 +92,19 @@
 //! - No allocation, no threads, no MPI; the kernel writes only into the caller's
 //!   slices. Mismatched lengths panic, as in the reference.
 //!
+//! ## The matrix kernel
+//!
+//! [`MatrixKernel::accumulate_columns`] adds A · B[:, b_j] into C[:, c_j] for lists of
+//! columns, A an n × n column-major matrix: the product of each M2L offset's table with
+//! the multipoles of its pairs, added into the targets' own locals. Four B columns are
+//! packed k-major into the caller's buffer, and a block of R vectors of rows of their four
+//! C columns stays in registers while k runs from 0 to n − 1 (R = 4 on NEON, 2 on AVX2,
+//! 4 rows on the scalar path); the rows left over run as single vectors, then one at a
+//! time. Every element receives c ← c + B[k, b_j] · A[r, k] for k ascending, with the
+//! product and the sum rounded apart ([`MulAdd::Separate`], the chain of
+//! `nd_fmm_tables::MatrixSet::apply`) or fused ([`MulAdd::Fused`]), from its own row and
+//! column only: the same bits on every ISA, for every grouping of the columns.
+//!
 //! ## Unsafe
 //!
 //! `unsafe` is allowed only in the architecture modules and in the dispatch that calls
@@ -165,12 +181,14 @@
 mod arch;
 mod isa;
 mod kernel;
+mod matrix;
 pub mod rsqrt;
 #[cfg(test)]
 mod toolchain;
 
 pub use isa::{Isa, IsaUnavailable};
 pub use kernel::P2pKernel;
+pub use matrix::{MatrixKernel, MulAdd, UnknownMulAdd};
 
 use nd_fmm_math::RealScalar;
 
@@ -188,8 +206,8 @@ impl SimdScalar for f64 {}
 /// Seals [`SimdScalar`], and dispatches generic code to the entry points of its
 /// precision.
 mod sealed {
-    use crate::Isa;
     use crate::arch::{self, AvailableIsa};
+    use crate::{Isa, MulAdd};
 
     /// Implemented only for f32 and f64.
     pub trait Sealed: Sized {
@@ -205,6 +223,24 @@ mod sealed {
             targets: &[[Self; 3]],
             potential: &mut [Self],
             gradient: Option<&mut [[Self; 3]]>,
+        );
+
+        /// [`MatrixKernel::accumulate_columns`](crate::MatrixKernel::accumulate_columns)
+        /// in this precision, with shapes already checked.
+        #[expect(
+            clippy::too_many_arguments,
+            reason = "the shape of `MatrixKernel::accumulate_columns`, plus the ISA and mode"
+        )]
+        fn accumulate(
+            isa: AvailableIsa,
+            mul_add: MulAdd,
+            n: usize,
+            a: &[Self],
+            b: &[Self],
+            b_offsets: &[usize],
+            c: &mut [Self],
+            c_offsets: &[usize],
+            pack: &mut [Self],
         );
     }
 
@@ -224,6 +260,21 @@ mod sealed {
         ) {
             arch::p2p_f32(isa, sources, charges, targets, potential, gradient);
         }
+
+        #[inline]
+        fn accumulate(
+            isa: AvailableIsa,
+            mul_add: MulAdd,
+            n: usize,
+            a: &[f32],
+            b: &[f32],
+            b_offsets: &[usize],
+            c: &mut [f32],
+            c_offsets: &[usize],
+            pack: &mut [f32],
+        ) {
+            arch::accumulate_f32(isa, mul_add, n, a, b, b_offsets, c, c_offsets, pack);
+        }
     }
 
     impl Sealed for f64 {
@@ -241,6 +292,21 @@ mod sealed {
             gradient: Option<&mut [[f64; 3]]>,
         ) {
             arch::p2p_f64(isa, sources, charges, targets, potential, gradient);
+        }
+
+        #[inline]
+        fn accumulate(
+            isa: AvailableIsa,
+            mul_add: MulAdd,
+            n: usize,
+            a: &[f64],
+            b: &[f64],
+            b_offsets: &[usize],
+            c: &mut [f64],
+            c_offsets: &[usize],
+            pack: &mut [f64],
+        ) {
+            arch::accumulate_f64(isa, mul_add, n, a, b, b_offsets, c, c_offsets, pack);
         }
     }
 }

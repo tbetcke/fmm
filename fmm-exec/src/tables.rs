@@ -10,6 +10,7 @@
 //! | [`Dense`](M2lStrategy::Dense) | [`M2mTables`], [`L2lTables`] | [`M2lTables`] | (p + 1)⁴ | 17.4 MB / 222 MB |
 //! | [`Classes`](M2lStrategy::Classes) | [`M2mTables`], [`L2lTables`] | [`M2lClasses`] | (p + 1)⁴ + O(p³) | 2.4 MB / 26.4 MB |
 //! | [`Rotation`](M2lStrategy::Rotation) | [`RotationTables`] | [`RotationTables`] | ≈ (10/3) p³ | 0.8 MB / 5.6 MB |
+//! | [`Batched`](M2lStrategy::Batched) | [`M2mTables`], [`L2lTables`] | [`M2lTables`] | (p + 1)⁴, per level as products over columns | 17.4 MB / 222 MB |
 //!
 //! (The dense octant tables are 8 (p + 1)⁴ reals per family; the rest is from the
 //! documentation of the families in `nd-fmm-tables`.)
@@ -49,8 +50,8 @@ use nd_fmm_tables::cache::{Stored, TableKind};
 #[cfg(feature = "gpu")]
 use nd_fmm_tables::rotation::{Operator, ShiftTables};
 use nd_fmm_tables::{
-    CacheOutcome, L2lTables, M2lClasses, M2lScratch, M2lTables, M2mTables, RotationScratch,
-    RotationTables, TableCache,
+    CacheOutcome, L2lTables, M2lClasses, M2lScratch, M2lTables, M2mTables, MatrixSet,
+    RotationScratch, RotationTables, TableCache,
 };
 
 /// How M2L, and with it M2M and L2L, is applied (docs/phase3/README.md, "Strategy").
@@ -66,6 +67,16 @@ pub enum M2lStrategy {
     /// Rotation, coaxial translation and rotation back, from [`RotationTables`], for
     /// all three translations: O(p³) per translation.
     Rotation,
+    /// The tables of [`Dense`](Self::Dense), with M2L applied per level on the host as
+    /// products of each offset's table with the columns of its pairs (Phase 6 T2, C6.6;
+    /// docs/design/optimisation.md §2): each table is read once per block of targets
+    /// instead of once per target, and every local receives the chain of `Dense` (offsets
+    /// in index order, k ascending, multiply and add rounded apart), so the output is
+    /// `Dense`'s bit for bit; with the opt-in fused mode (`FmmBuilder::m2l_mul_add`) it
+    /// is within n u of it. M2M and L2L are `Dense`'s. The device runs it as `Dense`,
+    /// whose dense M2L is already a product per level (docs/design/device-path.md §6.4).
+    /// Opt-in: [`Auto`](Self::Auto) never resolves to it (until Phase 6 T11).
+    Batched,
     /// [`Dense`](Self::Dense) while the dense tables of a rank, and of all the ranks of a
     /// node together, are small enough, [`Rotation`](Self::Rotation) otherwise; see
     /// [`resolve_on_node`](Self::resolve_on_node).
@@ -312,10 +323,12 @@ impl fmt::Display for StrategyChoice {
 /// The table families of one resolved strategy.
 #[derive(Clone, Debug, PartialEq)]
 enum Families<T: RealScalar> {
+    /// `Dense`, or with `batched` `Batched`: the same tables.
     Dense {
         m2m: M2mTables<T>,
         l2l: L2lTables<T>,
         m2l: M2lTables<T>,
+        batched: bool,
     },
     Classes {
         m2m: M2mTables<T>,
@@ -362,10 +375,11 @@ impl<T: RealScalar> Tables<T> {
     /// well under one.
     pub fn build(p: usize, strategy: M2lStrategy) -> Self {
         let families = match strategy.resolve_on_node(&NodeContext::one_rank::<T>(p)) {
-            M2lStrategy::Dense => Families::Dense {
+            strategy @ (M2lStrategy::Dense | M2lStrategy::Batched) => Families::Dense {
                 m2m: M2mTables::build(p),
                 l2l: L2lTables::build(p),
                 m2l: M2lTables::build(p),
+                batched: strategy == M2lStrategy::Batched,
             },
             M2lStrategy::Classes => Families::Classes {
                 m2m: M2mTables::build(p),
@@ -383,11 +397,12 @@ impl<T: RealScalar> Tables<T> {
         self.p
     }
 
-    /// Returns the resolved strategy: [`M2lStrategy::Dense`],
-    /// [`M2lStrategy::Classes`] or [`M2lStrategy::Rotation`], never `Auto`.
+    /// Returns the resolved strategy: [`M2lStrategy::Dense`], [`M2lStrategy::Classes`],
+    /// [`M2lStrategy::Rotation`] or [`M2lStrategy::Batched`], never `Auto`.
     pub fn strategy(&self) -> M2lStrategy {
         match self.families {
-            Families::Dense { .. } => M2lStrategy::Dense,
+            Families::Dense { batched: false, .. } => M2lStrategy::Dense,
+            Families::Dense { batched: true, .. } => M2lStrategy::Batched,
             Families::Classes { .. } => M2lStrategy::Classes,
             Families::Rotation(_) => M2lStrategy::Rotation,
         }
@@ -455,9 +470,9 @@ impl<T: RealScalar> Tables<T> {
 
     /// Adds the M2L of the source multipole `multipole` to the target local `local`, a
     /// V-list pair whose offset has the position `offset_index` in `V_LIST_DIRECTIONS`
-    /// (CONVENTIONS §3.11, §3.12): the dense matrix ((p + 1)⁴ multiply–adds), the class
-    /// matrix between two coefficient transforms ((p + 1)⁴ + O(p³)), or rotation
-    /// (≈ (10/3) p³).
+    /// (CONVENTIONS §3.11, §3.12): the dense matrix ((p + 1)⁴ multiply–adds; under
+    /// `Batched` too, one pair alone), the class matrix between two coefficient transforms
+    /// ((p + 1)⁴ + O(p³)), or rotation (≈ (10/3) p³).
     ///
     /// # Panics
     ///
@@ -483,6 +498,19 @@ impl<T: RealScalar> Tables<T> {
     }
 }
 
+impl<T: RealScalar> Tables<T> {
+    /// The 316 dense M2L matrices under `Batched`, for the per-level products of the
+    /// operator (Phase 6 T2); `None` under every other strategy.
+    pub(crate) fn batched_m2l(&self) -> Option<&MatrixSet<T>> {
+        match &self.families {
+            Families::Dense {
+                m2l, batched: true, ..
+            } => Some(m2l.matrices()),
+            _ => None,
+        }
+    }
+}
+
 /// The families the device path uploads (device-path.md §3.3, §6.8): crate-private, so
 /// the public surface of [`Tables`] does not change.
 #[cfg(feature = "gpu")]
@@ -498,7 +526,7 @@ impl<T: RealScalar> Tables<T> {
         }
     }
 
-    /// The dense M2L tables, under `Dense`.
+    /// The dense M2L tables, under `Dense` and `Batched`.
     pub(crate) fn dense_m2l(&self) -> Option<&M2lTables<T>> {
         match &self.families {
             Families::Dense { m2l, .. } => Some(m2l),
@@ -538,12 +566,17 @@ impl<T: Stored> Tables<T> {
         cache: &TableCache,
     ) -> (Self, Vec<(TableKind, CacheOutcome)>) {
         let (families, outcomes) = match strategy.resolve_on_node(&NodeContext::one_rank::<T>(p)) {
-            M2lStrategy::Dense => {
+            strategy @ (M2lStrategy::Dense | M2lStrategy::Batched) => {
                 let (m2m, m2m_outcome) = cache.load_or_build(p);
                 let (l2l, l2l_outcome) = cache.load_or_build(p);
                 let (m2l, m2l_outcome) = cache.load_or_build(p);
                 (
-                    Families::Dense { m2m, l2l, m2l },
+                    Families::Dense {
+                        m2m,
+                        l2l,
+                        m2l,
+                        batched: strategy == M2lStrategy::Batched,
+                    },
                     vec![
                         (TableKind::M2m, m2m_outcome),
                         (TableKind::L2l, l2l_outcome),
