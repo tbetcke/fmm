@@ -365,7 +365,7 @@ In the repository root, start `claude` and say:
 - [x] T2 merged: host batched M2L, deterministic, measured on the three machines (C6.6)
 - [x] T3, T4 (C6.2, SVD-compressed M2L): dropped at T1's sign-off, 2026-10-15
 - [x] T5 merged: several right-hand sides (C6.3)
-- [ ] T6 merged: AVX-512 P2P, measured on Kathleen (C6.7), or recorded as waiting for AVX-512 hardware (Kathleen unusable)
+- [x] T6 merged: AVX-512 P2P, measured on Kathleen (C6.7), or recorded as waiting for AVX-512 hardware (Kathleen unusable)
 - [ ] T7 merged: fused gather and device GEMM work, adopted or dropped (C6.1)
 - [ ] T8 merged: dipole sources (C6.4)
 - [ ] T9 merged: FMM3D comparison (C6.8)
