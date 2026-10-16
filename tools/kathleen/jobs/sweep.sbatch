@@ -14,7 +14,11 @@
 # --bind-to core`, decision 4, and runs every launch under `timeout`), or `p2p`, which
 # runs `p2p_kernels` (every ISA of the machine, f32 and f64, φ and φ with ∇φ; `--ghz 2.5`,
 # the Xeon Gold 6248's base clock, for the model's cycles) and `p2p_fmm --part kernels`
-# (the kernels inside the FMM at p = 3 and 8), one rank on core 0 with one thread.
+# (the kernels inside the FMM at p = 3 and 8), one rank on core 0 with one thread; or
+# `p2p-node` (Phase 6 T6), `p2p_kernels --quick --isa <isa>` on every core of the node at
+# once, one copy pinned to each, first for avx2, then for avx512, so that every core runs
+# the same code together (the frequency licence of a fully loaded node; one file per core
+# and ISA).
 # One file per launch goes to $OUT (default the root's logs/scaling-<job id>/, never a
 # source tree: raw output stays out of the repository); the job's own output lists the
 # files and every launch that failed. The variables of run.sh (RANKS, SPLITS, EVALS,
@@ -40,6 +44,11 @@ for sweep in "$@"; do
     p2p)
         step p2p-kernels "RAYON_NUM_THREADS=1 taskset -c 0 target/release/examples/p2p_kernels --ghz 2.5 >'$OUT/p2p_kernels.md' 2>'$OUT/p2p_kernels.err'"
         step p2p-fmm "taskset -c 0 target/release/examples/p2p_fmm --part kernels --threads 1 >'$OUT/p2p_fmm.md' 2>'$OUT/p2p_fmm.err'"
+        ;;
+    p2p-node)
+        for isa in avx2 avx512; do
+            step "p2p-node-$isa" "mkdir -p '$OUT/p2p-node' && for c in \$(seq 0 \$((\${CORES_PER_NODE:-40} - 1))); do RAYON_NUM_THREADS=1 taskset -c \$c target/release/examples/p2p_kernels --ghz 2.5 --quick --isa $isa >\"$OUT/p2p-node/$isa-core\$c.md\" 2>\"$OUT/p2p-node/$isa-core\$c.err\" & done; wait"
+        done
         ;;
     *)
         step "$sweep" "tools/scaling/run.sh $sweep"

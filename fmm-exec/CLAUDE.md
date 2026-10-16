@@ -35,7 +35,8 @@ C6.3 (T5: several charge vectors, `FmmBuilder::vectors`, `Fmm::evaluate_many`,
     scaling follow §3.13.
   - Operator formulas are reached only through nd-fmm-tables and nd-fmm-ref, and for
     P2P also through nd-fmm-simd (`P2pKernel::evaluate`). Do not re-derive one here.
-  - P2P runs the kernel of `P2pChoice` (default `Auto`, the widest ISA). Keep
+  - P2P runs the kernel of `P2pChoice` (default `Auto`, `Isa::detect`: AVX2 on an
+    AVX-512 machine until Phase 6 T11; `Isa(Isa::Avx512)` since Phase 6 T6). Keep
     `P2pChoice::Reference` (`nd_fmm_ref::p2p::p2p`) as the trusted slower path: tests
     compare every ISA with it. `nd-fmm-exec` itself stays free of `unsafe`.
 - Geometry comes from integer keys: tables by `morton::child_index` and V-list offset,

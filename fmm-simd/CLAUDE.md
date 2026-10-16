@@ -1,14 +1,16 @@
 # nd-fmm-simd
 
 Purpose: hand-written SIMD kernels for the host path, P2P first: `core::arch` intrinsics
-for aarch64 NEON and x86_64 AVX2 + FMA (AVX-512 deferred), a scalar fallback, and
-run-time ISA dispatch (docs/design/simd-p2p.md). Since Phase 6 T2 also the
+for aarch64 NEON, x86_64 AVX2 + FMA and, since Phase 6 T6, x86_64 AVX-512F (`Isa::Avx512`,
+`arch::avx512`; docs/design/optimisation.md §5), a scalar fallback, and run-time ISA
+dispatch (docs/design/simd-p2p.md). Since Phase 6 T2 also the
 column-accumulation kernel of the host's batched M2L, `MatrixKernel` (C[:, c_j] +=
 A · B[:, b_j], the chain of `nd_fmm_tables::MatrixSet::apply`, and an opt-in fused mode;
 docs/design/optimisation.md §2.3, §2.11).
 Phase and components: Phase 3S, C3S.3 and C3S.4 (tasks T3–T5 in docs/phase3s/); Phase 6,
-C6.6 (task T2 in docs/phase6/) and C6.3 (task T5: `P2pKernel::evaluate_many`, P2P of
-several charge vectors).
+C6.6 (task T2 in docs/phase6/), C6.3 (task T5: `P2pKernel::evaluate_many`, P2P of
+several charge vectors) and C6.7 (task T6: AVX-512, every kernel; report
+fmm-validate/results/phase6-avx512.md).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -39,23 +41,30 @@ several charge vectors).
 - Dispatch: `Isa::detect` once at construction (NEON on aarch64; AVX2 + FMA by
   `is_x86_feature_detected!` on x86_64, else scalar). Every `Isa` variant exists on
   every target; the code of an ISA compiles only for its architecture (`cfg`). Never
-  read an environment variable to choose an ISA.
+  read an environment variable to choose an ISA. `Isa::Avx512` is available where the
+  CPU has AVX-512F, AVX2 and FMA, and selectable there, but `Isa::detect` never returns
+  it: the default stays AVX2 until Phase 6 T11 signs AVX-512 off (decision 4 of
+  docs/phase6/README.md; optimisation.md §5.3). The rule is a function of the feature
+  set (`isa::Features`), unit-tested with forced sets; keep it so.
 - Unsafe (design §5.4): only in `src/arch/` and in the dispatch of `src/kernel.rs` that
   calls `#[target_feature]` entry points. The uses are calling an entry point after
   `P2pKernel::new` (or the dispatch in `src/arch/mod.rs`) checked the ISA, intrinsics
   inside the vector layer, and vector loads and stores from slices whose bounds the
   code checked. The layer trait `arch::Simd` is safe to call: its methods take the
-  ISA's zero-sized token (`Neon`, `Avx2`), which exists only on a CPU with the ISA;
-  the entry points make it with `new_unchecked`, the tests with `try_new`. Every block
+  ISA's zero-sized token (`Neon`, `Avx2`, `Avx512`), which exists only on a CPU with
+  the ISA; the entry points make it with `new_unchecked`, the tests with `try_new`. Every block
   has a `// SAFETY:` comment; the crate denies `unsafe_op_in_unsafe_fn` and
   `clippy::undocumented_unsafe_blocks`. Every public function is safe. Prefer safe
   `#[target_feature]` functions and safe intrinsics (crate docs, "Toolchain") wherever
   they remove an `unsafe` block.
-- ISA coverage: every test that runs a kernel prints the ISAs it ran (`common::kernels`
-  in tests/p2p, `common::isas` in tests/rsqrt and `on_every_isa!` in
-  src/arch/tests.rs do it). A task report lists which ISAs ran on which machine, from
-  the test output, and never reports a path that did not run as passing. Accuracy
-  contracts count only from real hardware, not from Rosetta 2.
+- ISA coverage: every test that runs a kernel prints the ISAs it ran and those this
+  machine cannot run (`common::kernels` in tests/p2p, `common::isas` in tests/rsqrt,
+  `kernels` in tests/matrix.rs and `on_every_isa!` in src/arch/tests.rs do it); on an
+  x86_64 CPU without AVX-512F its tests skip with "not available here: … avx512", never
+  fail (GitHub's x86_64 runners have it about half the time; Kathleen always). A task
+  report lists which ISAs ran on which machine, from the test output, and never reports
+  a path that did not run as passing. Accuracy contracts count only from real hardware,
+  not from Rosetta 2.
 - Inlining check: a missing `#[inline(always)]` on a vector-layer method turns every
   intrinsic into a call; the kernel still passes every test but runs many times
   slower. From T4 on, inspect the release disassembly of each entry point's inner loop
@@ -67,7 +76,10 @@ several charge vectors).
   padded tail); the source loops are the innermost loops that contain the inverse square
   root. A matrix entry point's k loops are the innermost loops with R × 4 multiplies and
   adds, or fmas (Phase 6 T2: NEON 43 instructions at R = 4, AVX2 27 separate and 19
-  fused at R = 2). From the repository root:
+  fused at R = 2; Phase 6 T6: AVX-512 45 separate and 29 fused at R = 4). The AVX-512
+  P2P source loops (Phase 6 T6, K = 2): 36, 50, 42 and 56 instructions for f32 φ, f32 φ
+  and ∇φ, f64 φ, f64 φ and ∇φ (18, 25, 21 and 28 per target vector, against AVX2's 24,
+  35, 29 and 42). From the repository root:
 
   ```sh
   # Build the release test binaries; cargo prints their paths ("Executable ...").

@@ -12,14 +12,30 @@ pub const CONTRACT: f64 = 4.0;
 /// The number of values per call of `rsqrt_slice` in the large checks.
 pub const BATCH: usize = 1 << 16;
 
+/// The ISAs this machine cannot run (those of the other architecture, and on x86_64 any
+/// whose features the CPU lacks, such as AVX-512 on most machines), for the line every
+/// test prints: their tests skip, they do not fail.
+pub fn unavailable() -> String {
+    let names: Vec<String> = Isa::all()
+        .filter(|isa| !isa.is_available())
+        .map(|isa| isa.to_string())
+        .collect();
+    if names.is_empty() {
+        "none".to_owned()
+    } else {
+        names.join(", ")
+    }
+}
+
 /// The ISAs this machine offers, after printing them under the test's name.
 pub fn isas<T: SimdScalar>(test: &str) -> Vec<Isa> {
     let isas: Vec<Isa> = Isa::available().collect();
     let names: Vec<String> = isas.iter().map(|isa| isa.to_string()).collect();
     println!(
-        "{test} ({}): ISAs run: {}",
+        "{test} ({}): ISAs run: {}; not available here: {}",
         std::any::type_name::<T>(),
-        names.join(", ")
+        names.join(", "),
+        unavailable()
     );
     isas
 }

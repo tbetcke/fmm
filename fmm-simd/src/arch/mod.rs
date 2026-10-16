@@ -6,7 +6,8 @@
 //!
 //! - [`scalar`]: one lane, plain Rust, available everywhere;
 //! - `neon` (aarch64): `float32x4_t` and `float64x2_t`;
-//! - `avx2` (x86_64): `__m256` and `__m256d`.
+//! - `avx2` (x86_64): `__m256` and `__m256d`;
+//! - `avx512` (x86_64, Phase 6 T6): `__m512` and `__m512d`, with mask registers.
 //!
 //! Code that runs on vectors is written once, generic over [`Simd`]
 //! ([`rsqrt_body`], the P2P kernel body [`p2p::p2p_body`] and the column-accumulation
@@ -31,7 +32,7 @@
 //!
 //! `unsafe` is allowed only in these modules and in the dispatch (crate documentation,
 //! "Unsafe"). The layer is safe to call: an ISA's methods take its token
-//! (`neon::Neon`, `avx2::Avx2`) by value, and a token can only be made on a CPU
+//! (`neon::Neon`, `avx2::Avx2`, `avx512::Avx512`) by value, and a token can only be made on a CPU
 //! that has the ISA. Inside the methods, every intrinsic call is an `unsafe` block,
 //! because an `#[inline(always)]` method cannot carry `#[target_feature]` (crate
 //! documentation, "Toolchain"); its `// SAFETY:` comment cites the token, and for
@@ -39,6 +40,8 @@
 
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod avx2;
+#[cfg(target_arch = "x86_64")]
+pub(crate) mod avx512;
 pub(crate) mod matrix;
 #[cfg(target_arch = "aarch64")]
 pub(crate) mod neon;
@@ -49,14 +52,14 @@ mod tests;
 
 use crate::{Isa, IsaUnavailable, MulAdd, SimdScalar};
 
-/// The largest lane count of any ISA (AVX2, f32), the size of the padded stack copies
+/// The largest lane count of any ISA (AVX-512, f32), the size of the padded stack copies
 /// that tails use.
-pub(crate) const MAX_LANES: usize = 8;
+pub(crate) const MAX_LANES: usize = 16;
 
 /// The vector operations of one ISA on `T` (docs/design/simd-p2p.md §5.3).
 ///
-/// Implemented by a zero-sized token per ISA, [`scalar::Scalar`], `neon::Neon` and
-/// `avx2::Avx2`, for f32 and f64. A token exists only on a CPU that has its ISA, so
+/// Implemented by a zero-sized token per ISA, [`scalar::Scalar`], `neon::Neon`,
+/// `avx2::Avx2` and `avx512::Avx512`, for f32 and f64. A token exists only on a CPU that has its ISA, so
 /// every method is safe. [`Self::V`] holds [`Self::W`] lanes. Arithmetic is IEEE 754
 /// lane by lane, each operation rounded once (an fma once in all); the vector paths
 /// therefore agree with [`scalar::Scalar`] bit for bit in every method except the two
@@ -68,7 +71,8 @@ pub(crate) const MAX_LANES: usize = 8;
 pub(crate) trait Simd<T: SimdScalar>: Copy {
     /// A vector of [`Self::W`] lanes of `T`.
     type V: Copy;
-    /// The result of a lane-wise comparison: all bits set in a lane where it holds.
+    /// The result of a lane-wise comparison: all bits set in a lane where it holds, or
+    /// on AVX-512 a mask register with one bit per lane.
     type Mask: Copy;
     /// The number of lanes, [`Isa::lanes`] of [`Self::ISA`].
     const W: usize;
@@ -105,12 +109,13 @@ pub(crate) trait Simd<T: SimdScalar>: Copy {
     fn fnma(self, a: Self::V, b: Self::V, c: Self::V) -> Self::V;
     /// The lanes where a == b (IEEE: +0 equals −0, NaN equals nothing).
     fn eq(self, a: Self::V, b: Self::V) -> Self::Mask;
-    /// `v` where `mask` is clear and +0 where it is set: the bitwise and-not, which
-    /// also clears a NaN or an infinity.
+    /// `v` where `mask` is clear and +0 where it is set: the bitwise and-not (on
+    /// AVX-512 the zero-masked move under the complement of the mask), which also clears
+    /// a NaN or an infinity.
     fn and_not(self, mask: Self::Mask, v: Self::V) -> Self::V;
     /// The hardware estimate of 1/√x: FRSQRTE (relative error below 2⁻⁸) on NEON,
-    /// `vrsqrtps` (at most 1.5 · 2⁻¹², documented) on AVX2, through f32 for f64; on
-    /// the scalar path 1/√x itself. Not the kernel's inverse square root; see
+    /// `vrsqrtps` (at most 1.5 · 2⁻¹², documented) on AVX2, through f32 for f64,
+    /// `vrsqrt14ps`/`pd` (below 2⁻¹⁴) on AVX-512; on the scalar path 1/√x itself. Not the kernel's inverse square root; see
     /// [`Self::rsqrt`].
     #[cfg_attr(
         not(test),
@@ -204,6 +209,10 @@ macro_rules! rsqrt_dispatch {
                 // SAFETY: `isa` is available (checked above), so the CPU has AVX2 and
                 // FMA, the features the entry point enables.
                 Isa::Avx2 => unsafe { avx2::$entry(x, out) },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: `isa` is available (checked above), so the CPU has AVX-512F,
+                // AVX2 and FMA, the features the entry point enables or implies.
+                Isa::Avx512 => unsafe { avx512::$entry(x, out) },
                 // The ISAs of other architectures, which are never available.
                 _ => unreachable!("`{isa}` is not available on this machine"),
             }
@@ -278,6 +287,17 @@ macro_rules! p2p_dispatch {
                 (Isa::Avx2, Some(gradient)) => unsafe {
                     avx2::$gradient(sources, charges, targets, potential, gradient)
                 },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: `isa` is available (`AvailableIsa`), so the CPU has AVX-512F,
+                // AVX2 and FMA, the features the entry point enables or implies.
+                (Isa::Avx512, None) => unsafe {
+                    avx512::$potential(sources, charges, targets, potential)
+                },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: as above.
+                (Isa::Avx512, Some(gradient)) => unsafe {
+                    avx512::$gradient(sources, charges, targets, potential, gradient)
+                },
                 // The ISAs of other architectures, which are never available.
                 (isa, _) => unreachable!("`{isa}` is not available on this machine"),
             }
@@ -329,6 +349,17 @@ macro_rules! p2p_many_dispatch {
                 // SAFETY: as above.
                 (Isa::Avx2, Some(gradient)) => unsafe {
                     avx2::$gradient(sources, charges, m, targets, potential, gradient)
+                },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: `isa` is available (`AvailableIsa`), so the CPU has AVX-512F,
+                // AVX2 and FMA, the features the entry point enables or implies.
+                (Isa::Avx512, None) => unsafe {
+                    avx512::$potential(sources, charges, m, targets, potential)
+                },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: as above.
+                (Isa::Avx512, Some(gradient)) => unsafe {
+                    avx512::$gradient(sources, charges, m, targets, potential, gradient)
                 },
                 // The ISAs of other architectures, which are never available.
                 (isa, _) => unreachable!("`{isa}` is not available on this machine"),
@@ -404,6 +435,17 @@ macro_rules! accumulate_dispatch {
                 // SAFETY: as above.
                 (Isa::Avx2, MulAdd::Fused) => unsafe {
                     avx2::$fused(n, a, b, b_offsets, c, c_offsets, pack)
+                },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: `isa` is available (`AvailableIsa`), so the CPU has AVX-512F,
+                // AVX2 and FMA, the features the entry point enables or implies.
+                (Isa::Avx512, MulAdd::Separate) => unsafe {
+                    avx512::$separate(n, a, b, b_offsets, c, c_offsets, pack)
+                },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: as above.
+                (Isa::Avx512, MulAdd::Fused) => unsafe {
+                    avx512::$fused(n, a, b, b_offsets, c, c_offsets, pack)
                 },
                 // The ISAs of other architectures, which are never available.
                 (isa, _) => unreachable!("`{isa}` is not available on this machine"),

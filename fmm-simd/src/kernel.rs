@@ -12,7 +12,7 @@ use crate::{Isa, IsaUnavailable, SimdScalar};
 /// stateless: it is `Copy`, `Send` and `Sync`, and one value can serve any number of
 /// threads.
 ///
-/// On [`Isa::Neon`] and [`Isa::Avx2`] it runs the vector kernel (crate documentation,
+/// On [`Isa::Neon`], [`Isa::Avx2`] and [`Isa::Avx512`] it runs the vector kernel (crate documentation,
 /// "The kernel"), on [`Isa::Scalar`] the reference's loop.
 ///
 /// ```
@@ -49,7 +49,7 @@ impl<T: SimdScalar> P2pKernel<T> {
         })
     }
 
-    /// The kernel on the widest available ISA, [`Isa::detect`].
+    /// The kernel on the default ISA of this machine, [`Isa::detect`].
     pub fn detect() -> Self {
         Self::new(Isa::detect()).expect("`Isa::detect` returns an available ISA")
     }
@@ -120,8 +120,8 @@ impl<T: SimdScalar> P2pKernel<T> {
     /// distance and the inverse square root once and then gives every vector exactly the
     /// steps `evaluate` gives it, in source order (crate documentation, "Several charge
     /// vectors"). Every guarantee of `evaluate` therefore holds per vector. The vector
-    /// kernels hold a group of vectors in registers (8 without gradients and 4 with, on NEON
-    /// and AVX2), so the distance work is shared within a group; one vector runs
+    /// kernels hold a group of vectors in registers (8 without gradients and 4 with, on NEON,
+    /// AVX2 and AVX-512), so the distance work is shared within a group; one vector runs
     /// `evaluate` itself.
     ///
     /// # Panics

@@ -149,7 +149,7 @@
 //! # P2P kernel
 //!
 //! [`FmmBuilder::p2p_kernel`] chooses the kernel of P2P ([`P2pChoice`]): by default
-//! the SIMD kernel of `nd-fmm-simd` on the widest ISA of the machine, or the reference
+//! the SIMD kernel of `nd-fmm-simd` on the default ISA of the machine, or the reference
 //! loop of `nd-fmm-ref`, or an ISA named explicitly. Every other operator is the same.
 //! Kernels differ in the last bits of each near-field term, so outputs of different
 //! choices agree to rounding, not bit for bit; on one machine, ISA and build they are
@@ -885,7 +885,7 @@ pub enum FmmError {
 /// | [`domain`](Self::domain) | `compute_global_bounding_box` of all points |
 /// | [`table_cache`](Self::table_cache) | none: every rank builds its tables |
 /// | [`threads`](Self::threads) | 1: no pool, the calling thread |
-/// | [`p2p_kernel`](Self::p2p_kernel) | [`P2pChoice::Auto`]: the kernel of `nd-fmm-simd` on the widest ISA of this machine |
+/// | [`p2p_kernel`](Self::p2p_kernel) | [`P2pChoice::Auto`]: the kernel of `nd-fmm-simd` on the default ISA of this machine (`Isa::detect`) |
 /// | [`m2l_mul_add`](Self::m2l_mul_add) | [`MulAdd::Separate`]: `Batched` bit for bit `Dense` |
 /// | [`backend`](Self::backend) | [`Backend::Host`]: the host path |
 /// | [`host_fallback`](Self::host_fallback) | none |

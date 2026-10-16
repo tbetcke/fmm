@@ -71,6 +71,18 @@
 #                   with `auto`: the messages and bytes per exchange, and the replicated
 #                   top's all-gather, against m
 #
+# Sweeps of AVX-512 (Phase 6 T6, docs/phase6/T6-avx512-p2p.md; docs/design/optimisation.md
+# §5), x86_64 with AVX-512F only (Kathleen), every launch with --kinds, overlap off, the
+# library's defaults otherwise, the P2P kernel (and so the batched M2L's kernel) named by
+# `--p2p` for each ISA of T6_ISAS (default "avx2 avx512"), the ISAs of one configuration
+# launched one after the other:
+#   t6-fmm          the cube and the Plummer sphere, f64 and f32 at p = 3 and 8 with `auto`
+#                   (the rule's strategy): N = 10^6 at one rank (1x1), and N = 10^6 and 10^7
+#                   at one rank per core (CORES_PER_NODE per node under Slurm, else CORES),
+#                   where every core runs the kernel at once (the frequency licence)
+#   t6-m2l          the batched M2L's kernel: the N = 10^6 cube with `batched`, f64 and f32
+#                   at p = 6 and 8, at one rank and at one rank per core
+#
 # Sweeps of the work-weighted cut (Phase 5S T7, docs/phase5s/T7-work-weighted-cut.md;
 # docs/design/scale-out.md §6), every launch with --kinds unless counted only:
 #   calibrate       the constants of the cost model: one rank per core of the machine (or
@@ -426,6 +438,18 @@ t2_launch() {
 
 t2_variants="dense classes rotation batched batched-fused"
 
+T6_ISAS=${T6_ISAS:-"avx2 avx512"}
+
+# t6_launch <name prefix> <ranks> <scaling arguments...>: one launch per ISA of T6_ISAS,
+# one thread per rank, --kinds and overlap off.
+t6_launch() {
+    prefix=$1 r=$2
+    shift 2
+    for isa in $T6_ISAS; do
+        launch "$prefix-$isa-r${r}x1" "$r" 1 --p2p "$isa" --kinds --overlap off "$@"
+    done
+}
+
 # t5_launch <name prefix> <ranks> <threads> <scaling arguments...>: one launch per m of
 # T5_RHS, with --kinds (on the host; t5_kinds empty on a device, where the synchronous kind
 # timings would add a sync per level call), overlap off and three timed evaluations.
@@ -440,6 +464,29 @@ t5_launch() {
 
 for sweep in "$@"; do
     case "$sweep" in
+    t6-fmm)
+        if [ "$os" = slurm ]; then full=$((CORES_PER_NODE * NODES)); else full=$CORES; fi
+        for dist in cube plummer; do
+            for dp in f64:3 f64:8 f32:3 f32:8; do
+                prec=${dp%%:*} p=${dp##*:}
+                for run in 1:1000000 "$full:1000000" "$full:10000000"; do
+                    r=${run%%:*} n=${run##*:}
+                    t6_launch "t6-fmm-$dist-n$n-$prec-p$p" "$r" --dist "$dist" --n "$n" \
+                        --precision "$prec" --p "$p"
+                done
+            done
+        done
+        ;;
+    t6-m2l)
+        if [ "$os" = slurm ]; then full=$((CORES_PER_NODE * NODES)); else full=$CORES; fi
+        for dp in f64:6 f64:8 f32:6 f32:8; do
+            prec=${dp%%:*} p=${dp##*:}
+            for r in 1 "$full"; do
+                t6_launch "t6-m2l-cube-$prec-p$p-batched" "$r" --dist cube --n 1000000 \
+                    --precision "$prec" --p "$p" --strategy batched
+            done
+        done
+        ;;
     t5-host | t5-threads)
         if [ "$sweep" = t5-host ]; then
             r=$((CORES * NODES)) t=1

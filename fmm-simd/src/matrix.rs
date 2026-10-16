@@ -115,7 +115,7 @@ impl<T: SimdScalar> MatrixKernel<T> {
         })
     }
 
-    /// The kernel on the widest available ISA, [`Isa::detect`], in the mode `mul_add`.
+    /// The kernel on the default ISA of this machine, [`Isa::detect`], in the mode `mul_add`.
     pub fn detect(mul_add: MulAdd) -> Self {
         Self::new(Isa::detect(), mul_add).expect("`Isa::detect` returns an available ISA")
     }

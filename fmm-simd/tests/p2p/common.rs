@@ -8,6 +8,21 @@ use proptest::test_runner::{Config, TestRunner};
 /// Proptest cases per property, kept low for the debug-mode test time.
 pub const CASES: u32 = 64;
 
+/// The ISAs this machine cannot run (those of the other architecture, and on x86_64 any
+/// whose features the CPU lacks, such as AVX-512 on most machines), for the line every
+/// test prints: their tests skip, they do not fail.
+pub fn unavailable() -> String {
+    let names: Vec<String> = Isa::all()
+        .filter(|isa| !isa.is_available())
+        .map(|isa| isa.to_string())
+        .collect();
+    if names.is_empty() {
+        "none".to_owned()
+    } else {
+        names.join(", ")
+    }
+}
+
 /// The kernels of every available ISA, after printing them under the test's name.
 pub fn kernels<T: SimdScalar>(test: &str) -> Vec<P2pKernel<T>> {
     let kernels: Vec<P2pKernel<T>> = Isa::available()
@@ -15,9 +30,10 @@ pub fn kernels<T: SimdScalar>(test: &str) -> Vec<P2pKernel<T>> {
         .collect();
     let names: Vec<String> = kernels.iter().map(|k| k.isa().to_string()).collect();
     println!(
-        "{test} ({}): ISAs run: {}",
+        "{test} ({}): ISAs run: {}; not available here: {}",
         std::any::type_name::<T>(),
-        names.join(", ")
+        names.join(", "),
+        unavailable()
     );
     kernels
 }

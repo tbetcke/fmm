@@ -49,6 +49,10 @@
 //! rank in the overlapped path and in no other, finite and non-negative, the waits per
 //! level within the multipole exchange's exposed wait; their table and summary fields.
 //!
+//! And that of Phase 6 T6: the P2P kernel of the settings (`Settings::p2p`) reaches the
+//! FMM, is reported resolved (`Report::p2p`, the summary's `p2p`), and the scalar ISA, the
+//! reference's loop, gives the reference's errors bit for bit.
+//!
 //! One test initialises MPI (at `Threading::Funneled`). Error measures: as named at each
 //! check; the timings are only checked to be finite and non-negative.
 
@@ -57,6 +61,7 @@ use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, CommunicatorCollectives};
 use nd_fmm_exec::cost::CostModel;
+use nd_fmm_exec::operator::{Isa, P2pChoice};
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::scaling::{
@@ -153,6 +158,7 @@ fn smoke_run_of_the_scaling_core() {
     refusals(&comm);
     several_vectors(&comm);
     rank_count_invariance(&comm);
+    p2p_kernels(&comm);
 }
 
 /// Every point and charge depends on its index and the seed only; the sample is distinct.
@@ -303,6 +309,10 @@ fn check_fields(report: &Report, comm: &SimpleCommunicator) {
     assert!(!placement.mpi_library.is_empty() && !placement.mpi_library.contains('\n'));
     let summaries = report.summaries();
     assert_eq!(summaries.len(), 2);
+    // The default P2P kernel, resolved to the ISA of `Isa::detect`.
+    assert_eq!(report.p2p, P2pChoice::Isa(Isa::detect()));
+    let p2p = format!(" p2p={} ", Isa::detect());
+    assert!(summaries.iter().all(|s| s.contains(&p2p)), "{p2p} missing");
     assert!(
         summaries
             .iter()
@@ -701,4 +711,36 @@ fn rank_count_invariance(comm: &SimpleCommunicator) {
             }
         }
     }
+}
+
+/// The P2P kernel of the settings: the reference and the scalar ISA reach the FMM and the
+/// report, and give the same errors bit for bit (the scalar ISA runs the reference's loop,
+/// and no pair of the cube has r² = 0 between distinct points).
+fn p2p_kernels(comm: &SimpleCommunicator) {
+    let mut errors = Vec::new();
+    for choice in [P2pChoice::Reference, P2pChoice::Isa(Isa::Scalar)] {
+        let settings = Settings {
+            evaluations: 1,
+            vectors: 1,
+            sampled: 50,
+            p2p: choice,
+            ..Settings::new(3)
+        };
+        let report = run::<f64>(&WORKLOAD, &settings, comm).expect("a run");
+        assert_eq!(report.p2p, choice);
+        let summary = &report.summaries()[0];
+        assert!(summary.contains(&format!(" p2p={choice} ")), "{summary}");
+        assert!(report.to_string().contains(&format!("P2P kernel {choice}")));
+        let e = report.errors.expect("errors of one vector");
+        errors.push(
+            [
+                e.potential.l2,
+                e.potential.max,
+                e.gradient.l2,
+                e.gradient.max,
+            ]
+            .map(f64::to_bits),
+        );
+    }
+    assert_eq!(errors[0], errors[1], "reference and scalar errors");
 }

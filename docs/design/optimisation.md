@@ -802,6 +802,38 @@ test of the dispatch with a forced feature set (an `AvailableIsa` built from a g
 crate-private) checks that `detect` never returns `Avx512` without the feature. The
 tests also print which ISAs ran, so a CI log shows whether AVX-512 was covered.
 
+### 5.5 As built in T6
+
+`Isa::Avx512` and `arch::avx512` as §5.2 planned them (`avx512f` only, `vrsqrt14ps`/`pd`
+with one Newton step in f32 and two in f64, mask registers, tails on the padded copies with
+`MAX_LANES` 16), for every kernel of `nd-fmm-simd`: P2P, P2P of several charge vectors and
+the batched M2L's column kernel (bit for bit the scalar layer, so `Dense`, on AVX-512 too).
+Available where the CPU has AVX-512F, AVX2 and FMA; `Isa::detect` and `P2pChoice::Auto`
+keep AVX2 (§5.3), the rule a function of the feature set with a unit test over every
+forced set (§5.4). What the measurements fixed or found
+(`fmm-validate/results/phase6-avx512.md`, Kathleen jobs 604543–604551, one node each):
+
+- **Blocking**: K = 2 target vectors per P2P block (K = 1, 2, 4 within 5 %), R = 4 row
+  vectors in the column kernel (R = 2 was 14 % slower at f64 p = 8). The several-vector
+  groups keep AVX2's.
+- **Accuracy** on Cascade Lake: the inverse square root within 1.498 u₃₂ (exhaustive) and
+  1.488 u₆₄ (10⁷ samples), P2P terms within 4.18 u (φ) and 9.60 u (∇φ); every
+  `tests/mpi_exec.rs` scenario with AVX-512 within C3S.5's tolerance of the reference, at
+  1–8 ranks and threads.
+- **The kernel**, one core: 1.85–2.03× AVX2 in f32 and 2.98–3.08× in f64 on the FMM-shaped
+  cells (the model said 2× and 2.4×; AVX2's f64 kernel reaches only 71–80 % of its model).
+  Every core at once: AVX-512 keeps 0.64–0.66 of its one-core rate against AVX2's
+  0.73–0.76 (the licence), and still leads by 1.37–1.47× and 2.6×. f32 leaves of fewer
+  than 16 points lose lanes (0.55–0.71× AVX2 per pair at 8 targets).
+- **Inside the FMM at 40 ranks per node** (the risk of the README's table): the P2P kind
+  1.40–1.72× (f32) and 2.03–2.33× (f64) faster, the evaluation 1.49–1.63× at f64 p = 3 on
+  the cube, 1.17–1.30× at f32 p = 3, 1.00–1.07× at p = 8, 0.99–1.11× on the Plummer
+  sphere; the stages without AVX-512 code unchanged within run-to-run variation (repeated).
+  The batched M2L's kernel 1.26–1.42× faster at 40 ranks.
+- **For T11**: AVX-512 as `Auto`'s ISA on AVX-512F machines (measured on Cascade Lake
+  only), and the cost model's P2P constant refitted (2.78–3.08 → 1.19–1.50 ns per pair in
+  f64, 1.09–1.37 → 0.65–0.96 ns in f32, at 40 ranks per node).
+
 ## 6. The device items (C6.1)
 
 The device's dense M2L, M2M and L2L run per chunk as gather, grouped GEMM and reduction
