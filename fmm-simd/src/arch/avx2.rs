@@ -41,7 +41,8 @@ use std::arch::x86_64::{
     _mm256_storeu_pd, _mm256_storeu_ps, _mm256_sub_pd, _mm256_sub_ps,
 };
 
-use super::{Simd, matrix::accumulate_body, p2p::p2p_body, rsqrt_body};
+use super::p2p::{p2p_body, p2p_many_body};
+use super::{Simd, matrix::accumulate_body, rsqrt_body};
 use crate::Isa;
 
 /// The coefficients cₖ = C(2k, k) / 4ᵏ of (1 − r)^(−½) = Σₖ cₖ rᵏ, from c₁; all exact
@@ -411,6 +412,84 @@ macro_rules! p2p_entries {
 
 p2p_entries!(p2p_f32, p2p_f32_gradient, f32, K_F32);
 p2p_entries!(p2p_f64, p2p_f64_gradient, f64, K_F64);
+
+/// Target vectors per block of the P2P of several charge vectors (`arch::p2p::p2p_many_body`;
+/// Phase 6 T5), potential only: measured on one core of Kathleen's Xeon Gold 6248 (64
+/// sources and targets, m = 8 and 32, Kathleen job 604422), 1 target vector with groups of
+/// 8 vectors ran 3.9× (f32) and 4.4× (f64) faster per vector than m calls of the
+/// single-vector kernel, against 3.4× and 4.5× with 2 and 8 (but slower in absolute time),
+/// 2.8× and 2.9× with 1 and 4, and 1.8× and 1.6× with 1 and 2.
+pub(crate) const MANY_K: usize = 1;
+/// Vectors per group of the P2P of several charge vectors, potential only (as [`MANY_K`]).
+pub(crate) const MANY_VG: usize = 8;
+/// Target vectors per block with gradients: 1 target vector with groups of 4 vectors
+/// measured 1.5× (f32) and 1.9× (f64) faster per vector, against 1.4× with groups of 2
+/// and 1.0× with 1 (16 accumulators per group in 16 vector registers spill, but less than
+/// the shared work saves).
+pub(crate) const MANY_K_GRADIENT: usize = 1;
+/// Vectors per group with gradients (as [`MANY_K_GRADIENT`]).
+pub(crate) const MANY_VG_GRADIENT: usize = 4;
+
+/// Generates the entry points of the P2P of several charge vectors of one precision,
+/// potential only and with gradients (Phase 6 T5).
+macro_rules! p2p_many_entries {
+    ($potential:ident, $gradient:ident, $t:ty) => {
+        /// P2P of several charge vectors on AVX2 + FMA, potential only
+        /// (`arch::p2p::p2p_many_body`), in the precision of its name, with lengths
+        /// checked by the caller.
+        ///
+        /// Not inlined, so that the dispatch stays one call and the inlining check
+        /// finds the function by name.
+        #[target_feature(enable = "avx2,fma")]
+        #[inline(never)]
+        pub(crate) fn $potential(
+            sources: &[[$t; 3]],
+            charges: &[$t],
+            m: usize,
+            targets: &[[$t; 3]],
+            potential: &mut [$t],
+        ) {
+            // SAFETY: this function enables `avx2` and `fma`, so it runs only on a CPU
+            // with both: a call from outside such a context is `unsafe` and asserts it.
+            let s = unsafe { Avx2::new_unchecked() };
+            p2p_many_body::<$t, Avx2, MANY_K, MANY_VG, false>(
+                s,
+                sources,
+                charges,
+                m,
+                targets,
+                potential,
+                &mut [],
+            );
+        }
+
+        /// P2P of several charge vectors on AVX2 + FMA, potential and gradient
+        /// (`arch::p2p::p2p_many_body`), in the precision of its name, with lengths
+        /// checked by the caller.
+        ///
+        /// Not inlined, as the potential-only entry point.
+        #[target_feature(enable = "avx2,fma")]
+        #[inline(never)]
+        pub(crate) fn $gradient(
+            sources: &[[$t; 3]],
+            charges: &[$t],
+            m: usize,
+            targets: &[[$t; 3]],
+            potential: &mut [$t],
+            gradient: &mut [[$t; 3]],
+        ) {
+            // SAFETY: this function enables `avx2` and `fma`, so it runs only on a CPU
+            // with both: a call from outside such a context is `unsafe` and asserts it.
+            let s = unsafe { Avx2::new_unchecked() };
+            p2p_many_body::<$t, Avx2, MANY_K_GRADIENT, MANY_VG_GRADIENT, true>(
+                s, sources, charges, m, targets, potential, gradient,
+            );
+        }
+    };
+}
+
+p2p_many_entries!(p2p_many_f32, p2p_many_f32_gradient, f32);
+p2p_many_entries!(p2p_many_f64, p2p_many_f64_gradient, f64);
 
 /// Row vectors per block of the column-accumulation kernel in f32 (`arch::matrix`):
 /// 16 vector registers: 8 accumulators of 2 × 4 (f32: 16 rows; f64: 8 rows), 2 of A and

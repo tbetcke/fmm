@@ -7,6 +7,19 @@
 //! [`nd_fmm_math::Layout`]). Every operator adds (+=) into its output and none applies
 //! 1/(4π) (§3.1). They are shared by the translation methods of later tasks.
 //!
+//! # Several charge vectors
+//!
+//! [`p2m_many`], [`p2l_many`], [`l2p_many`] and [`m2p_many`] (Phase 6 T5, C6.3;
+//! docs/design/optimisation.md §4.3) apply the same operators to m charge vectors at the
+//! same points: the harmonics of each point are formed once, and every vector then gets
+//! exactly the operations the single-vector operator gives it, in the same order, so
+//! vector v of the result equals the single-vector operator on vector v bit for bit. The
+//! layouts are those of CONVENTIONS §3.13, "Several charge vectors": the m charges of a
+//! source adjacent (`charges[j m + v]`), the m expansions one after the other
+//! (`coefficients[v (p + 1)² ..]`), and the m potentials and gradients one vector after the
+//! other (`potential[v n + i]`, `gradient[v n + i]` for n targets). The single-vector
+//! operators are the case m = 1.
+//!
 //! # Tested range
 //!
 //! CONVENTIONS §3.9 fixes where the solid harmonics are evaluated, in scaled
@@ -83,10 +96,41 @@ pub fn p2m<T: RealScalar>(
 ) {
     check_coefficients(p, multipole, "multipole");
     check_pair(sources.len(), charges.len(), "sources", "charges");
+    p2m_many(p, frame, sources, charges, ws, multipole);
+}
+
+/// [`p2m`] of m charge vectors at the same sources (module documentation, "Several
+/// charge vectors"): `charges` holds the m charges of each source one after the other
+/// (`charges[j m + v]`), `multipoles` the m multipoles one after the other, m (p + 1)²
+/// values. Each source's harmonics are formed once; multipole v equals [`p2m`] of the
+/// charges of vector v bit for bit.
+///
+/// # Panics
+///
+/// If `ws.p() < p`, `multipoles.len()` is not a positive multiple m of (p + 1)², or
+/// `charges.len() != m · sources.len()`.
+pub fn p2m_many<T: RealScalar>(
+    p: usize,
+    frame: &Frame<T>,
+    sources: &[[T; 3]],
+    charges: &[T],
+    ws: &mut Workspace<T>,
+    multipoles: &mut [T],
+) {
+    let m = check_vectors(p, multipoles, "multipoles");
+    check_pair(
+        sources.len() * m,
+        charges.len(),
+        "sources × vectors",
+        "charges",
+    );
+    let len = Layout::new(p).len();
     let values = ws.harmonics(p);
-    for (&y, &q) in sources.iter().zip(charges) {
+    for (&y, q) in sources.iter().zip(charges.chunks_exact(m)) {
         harmonics::regular(p, frame.scaled(y), values);
-        add_conjugate(p, q, values, multipole);
+        for (&q, multipole) in q.iter().zip(multipoles.chunks_exact_mut(len)) {
+            add_conjugate(p, q, values, multipole);
+        }
     }
 }
 
@@ -117,10 +161,39 @@ pub fn p2l<T: RealScalar>(
 ) {
     check_coefficients(p, local, "local");
     check_pair(sources.len(), charges.len(), "sources", "charges");
+    p2l_many(p, frame, sources, charges, ws, local);
+}
+
+/// [`p2l`] of m charge vectors at the same sources (module documentation, "Several
+/// charge vectors"), in the layouts of [`p2m_many`]: local v equals [`p2l`] of the
+/// charges of vector v bit for bit.
+///
+/// # Panics
+///
+/// If `ws.p() < p`, `locals.len()` is not a positive multiple m of (p + 1)², or
+/// `charges.len() != m · sources.len()`.
+pub fn p2l_many<T: RealScalar>(
+    p: usize,
+    frame: &Frame<T>,
+    sources: &[[T; 3]],
+    charges: &[T],
+    ws: &mut Workspace<T>,
+    locals: &mut [T],
+) {
+    let m = check_vectors(p, locals, "locals");
+    check_pair(
+        sources.len() * m,
+        charges.len(),
+        "sources × vectors",
+        "charges",
+    );
+    let len = Layout::new(p).len();
     let values = ws.harmonics(p);
-    for (&y, &q) in sources.iter().zip(charges) {
+    for (&y, q) in sources.iter().zip(charges.chunks_exact(m)) {
         harmonics::irregular(p, frame.scaled(y), values);
-        add_conjugate(p, q, values, local);
+        for (&q, local) in q.iter().zip(locals.chunks_exact_mut(len)) {
+            add_conjugate(p, q, values, local);
+        }
     }
 }
 
@@ -155,11 +228,36 @@ pub fn l2p<T: RealScalar>(
     gradient: Option<&mut [[T; 3]]>,
 ) {
     check_coefficients(p, local, "local");
+    check_targets(targets.len(), potential, gradient.as_deref());
+    l2p_many(p, frame, local, targets, ws, potential, gradient);
+}
+
+/// [`l2p`] of m local expansions at the same targets (module documentation, "Several
+/// charge vectors"): `locals` holds the m locals one after the other, m (p + 1)² values,
+/// and `potential` (and `gradient`, if given) the m vectors' values one vector after the
+/// other, m n for n targets. Each target's harmonics are formed once; vector v's values
+/// equal [`l2p`] of local v bit for bit.
+///
+/// # Panics
+///
+/// If `ws.p() < p`, `locals.len()` is not a positive multiple m of (p + 1)²,
+/// `potential.len() != m · targets.len()` or a given `gradient` has another length.
+pub fn l2p_many<T: RealScalar>(
+    p: usize,
+    frame: &Frame<T>,
+    locals: &[T],
+    targets: &[[T; 3]],
+    ws: &mut Workspace<T>,
+    potential: &mut [T],
+    gradient: Option<&mut [[T; 3]]>,
+) {
+    let vectors = check_vectors(p, locals, "locals");
     let expansion = Expansion {
         basis: Basis::Regular,
         p,
         frame,
-        coefficients: local,
+        coefficients: locals,
+        vectors,
     };
     expansion.evaluate(targets, ws, potential, gradient);
 }
@@ -195,11 +293,34 @@ pub fn m2p<T: RealScalar>(
     gradient: Option<&mut [[T; 3]]>,
 ) {
     check_coefficients(p, multipole, "multipole");
+    check_targets(targets.len(), potential, gradient.as_deref());
+    m2p_many(p, frame, multipole, targets, ws, potential, gradient);
+}
+
+/// [`m2p`] of m multipole expansions at the same targets (module documentation, "Several
+/// charge vectors"), in the layouts of [`l2p_many`]: vector v's values equal [`m2p`] of
+/// multipole v bit for bit.
+///
+/// # Panics
+///
+/// If `ws.p() < p`, `multipoles.len()` is not a positive multiple m of (p + 1)²,
+/// `potential.len() != m · targets.len()` or a given `gradient` has another length.
+pub fn m2p_many<T: RealScalar>(
+    p: usize,
+    frame: &Frame<T>,
+    multipoles: &[T],
+    targets: &[[T; 3]],
+    ws: &mut Workspace<T>,
+    potential: &mut [T],
+    gradient: Option<&mut [[T; 3]]>,
+) {
+    let vectors = check_vectors(p, multipoles, "multipoles");
     let expansion = Expansion {
         basis: Basis::Irregular,
         p,
         frame,
-        coefficients: multipole,
+        coefficients: multipoles,
+        vectors,
     };
     expansion.evaluate(targets, ws, potential, gradient);
 }
@@ -213,16 +334,20 @@ enum Basis {
     Irregular,
 }
 
-/// An expansion to evaluate: the shared body of [`l2p`] and [`m2p`].
+/// The expansions to evaluate: the shared body of [`l2p_many`] and [`m2p_many`], and so of
+/// [`l2p`] and [`m2p`] (one vector).
 struct Expansion<'a, T: RealScalar> {
     basis: Basis,
     p: usize,
     frame: &'a Frame<T>,
+    /// The `vectors` expansions one after the other.
     coefficients: &'a [T],
+    vectors: usize,
 }
 
 impl<T: RealScalar> Expansion<'_, T> {
-    /// Adds the potential, and optionally the gradient, at each target.
+    /// Adds the potential, and optionally the gradient, of every expansion at each
+    /// target: target i of expansion v at `potential[v n + i]` and `gradient[v n + i]`.
     fn evaluate(
         &self,
         targets: &[[T; 3]],
@@ -235,26 +360,37 @@ impl<T: RealScalar> Expansion<'_, T> {
             p,
             frame,
             coefficients,
+            vectors,
         } = *self;
-        check_pair(targets.len(), potential.len(), "targets", "potential");
+        let n = targets.len();
+        check_pair(
+            n * vectors,
+            potential.len(),
+            "targets × vectors",
+            "potential",
+        );
+        let len = Layout::new(p).len();
         let r = frame.radius;
         let r2 = r * r;
         match gradient {
             None => {
                 let values = ws.harmonics(p);
-                for (&x, phi) in targets.iter().zip(potential.iter_mut()) {
+                for (i, &x) in targets.iter().enumerate() {
                     let v = frame.scaled(x);
                     match basis {
                         Basis::Regular => harmonics::regular(p, v, values),
                         Basis::Irregular => harmonics::irregular(p, v, values),
                     }
-                    *phi = *phi + contract(p, coefficients, values) / r;
+                    for (c, expansion) in coefficients.chunks_exact(len).enumerate() {
+                        let phi = &mut potential[c * n + i];
+                        *phi = *phi + contract(p, expansion, values) / r;
+                    }
                 }
             }
             Some(gradient) => {
-                check_pair(targets.len(), gradient.len(), "targets", "gradient");
+                check_pair(n * vectors, gradient.len(), "targets × vectors", "gradient");
                 let (values, mut grad) = ws.harmonics_and_gradient(p);
-                for ((&x, phi), g) in targets.iter().zip(potential.iter_mut()).zip(gradient) {
+                for (i, &x) in targets.iter().enumerate() {
                     let v = frame.scaled(x);
                     let [gx, gy, gz] = &mut grad;
                     let components = [&mut **gx, &mut **gy, &mut **gz];
@@ -262,9 +398,12 @@ impl<T: RealScalar> Expansion<'_, T> {
                         Basis::Regular => harmonics::regular_grad(p, v, values, components),
                         Basis::Irregular => harmonics::irregular_grad(p, v, values, components),
                     }
-                    *phi = *phi + contract(p, coefficients, values) / r;
-                    for (gk, component) in g.iter_mut().zip(&grad) {
-                        *gk = *gk + contract(p, coefficients, component) / r2;
+                    for (c, expansion) in coefficients.chunks_exact(len).enumerate() {
+                        let phi = &mut potential[c * n + i];
+                        *phi = *phi + contract(p, expansion, values) / r;
+                        for (gk, component) in gradient[c * n + i].iter_mut().zip(&grad) {
+                            *gk = *gk + contract(p, expansion, component) / r2;
+                        }
                     }
                 }
             }
@@ -308,6 +447,31 @@ pub(crate) fn check_coefficients<T>(p: usize, coefficients: &[T], name: &str) {
         len,
         "`{name}` must have length (p + 1)^2 = {len} for p = {p}"
     );
+}
+
+/// The number m of expansions in `coefficients`, m (p + 1)² values.
+///
+/// # Panics
+///
+/// Unless the length is a positive multiple of (p + 1)².
+fn check_vectors<T>(p: usize, coefficients: &[T], name: &str) -> usize {
+    let len = Layout::new(p).len();
+    assert!(
+        !coefficients.is_empty() && coefficients.len().is_multiple_of(len),
+        "`{name}` must hold a positive multiple of (p + 1)^2 = {len} values for p = {p}, \
+         got {}",
+        coefficients.len()
+    );
+    coefficients.len() / len
+}
+
+/// Panics unless `potential` and a given `gradient` hold one value per target, with the
+/// messages of the single-vector operators.
+fn check_targets<T>(targets: usize, potential: &[T], gradient: Option<&[[T; 3]]>) {
+    check_pair(targets, potential.len(), "targets", "potential");
+    if let Some(gradient) = gradient {
+        check_pair(targets, gradient.len(), "targets", "gradient");
+    }
 }
 
 /// Panics unless the paired slices `a` and `b` have the same length.

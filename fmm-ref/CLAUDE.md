@@ -3,7 +3,9 @@
 Purpose: f64 reference operators (leaf operators, direct O(p⁴) and rotation O(p³)
 translations), P2P and the direct-sum oracle that every fast path in later phases is
 tested against.
-Phase and components: Phase 1, C1.1–C1.4 (tasks T1 and T3–T6 in docs/phase1/).
+Phase and components: Phase 1, C1.1–C1.4 (tasks T1 and T3–T6 in docs/phase1/); Phase 6
+T5 (C6.3): `leaf::{p2m, p2l, l2p, m2p}_many`, the leaf operators of several charge
+vectors.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -14,6 +16,10 @@ Phase and components: Phase 1, C1.1–C1.4 (tasks T1 and T3–T6 in docs/phase1/
 - Generic over T: RealScalar; no allocation in operators: temporaries come from a
   caller-owned `Workspace`.
 - `direct` and `rotation` keep identical signatures.
+- The `_many` leaf operators (Phase 6 T5) form each point's harmonics once and give every
+  vector exactly the single-vector operator's operations in its order; the single-vector
+  operators are their m = 1 case with their own panic messages. Vector v of the result is
+  the single-vector operator on vector v bit for bit (`tests/leaf/many.rs`).
 - This crate is the oracle: clarity over speed. Optimisation belongs in nd-fmm-tables,
   nd-fmm-kernels, nd-fmm-simd and nd-fmm-exec.
 - Tests name their error measure (docs/phase1/README.md, "Error measures").

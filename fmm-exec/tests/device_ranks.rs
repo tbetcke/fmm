@@ -23,6 +23,11 @@
 //!   locals of every level; two evaluations and two builds bit-identical; the transfers,
 //!   launches and syncs of every evaluation the formula of the design's §7.2
 //!   (`device_common::expected_evaluation`, from `Fmm::exchange_sizes`);
+//! - three charge vectors (Phase 6 T5, `device_common::check_three_vectors`): each vector
+//!   of the device `Fmm` built with three bit for bit the one-vector device `Fmm`'s,
+//!   blocking and overlapped, with every kind on the host fallback bit for bit the host's,
+//!   and the transfers of the formula for m vectors (m times the bytes of the charges,
+//!   the output and the exchanges, the same launches and syncs);
 //! - **against the one-rank host run**: the device output over every rank's targets, in
 //!   point order, within the same bounds of the one-rank host `Fmm` over all the points in
 //!   their own order (relative L2, φ and ∇φ; requirement 2: the host on P ranks lies within
@@ -277,6 +282,16 @@ fn run<T: Stored + SimdScalar + Equivalence + Default>(
             backend,
             comm,
         );
+        // Three charge vectors (Phase 6 T5) on the same ranks: each bit for bit the
+        // one-vector device FMM's, with the transfers of the formula for m vectors.
+        let vectors =
+            device_common::check_three_vectors(&builder, (&local, &local), &charges, backend, comm);
+        if rank == 0 {
+            eprintln!(
+                "rank 0: {what}: {vectors} evaluations of three charge vectors bit for bit their \
+                 one-vector evaluations on {size} ranks"
+            );
+        }
         // The worst rank's differences.
         let mut worst = [0.0f64; 4];
         comm.all_reduce_into(

@@ -199,6 +199,15 @@ separate|fused`, `FmmBuilder::m2l_mul_add`; the summary's `mul_add`), `batched` 
 `t2-host` and `t2-node` (`T2_SPLITS`) and `batched` in `strategy`. Its report is
 `results/phase6-m2l.md`.
 
+Phase 6 T5 (several charge vectors, C6.3) added `Settings::{rhs, backend}` (`--rhs m`:
+the FMM built for m vectors, `FmmBuilder::vectors`, and timed through
+`Fmm::evaluate_many`, refused with `--errors`, `--reference` and `--invariance`,
+`HarnessError::SeveralVectors`; `--backend host|cpu|metal|cuda`, `FmmBuilder::backend`,
+with the example built with the device's feature), the summary's `rhs` and `backend`, the
+traffic and the memory model with m values per source and box, and in
+`tools/scaling/run.sh` the sweeps `t5-host`, `t5-threads`, `t5-device` and `t5-nodes`
+(`T5_RHS`, `DEVICE`, `FEATURES`). Its report is `results/phase6-rhs.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

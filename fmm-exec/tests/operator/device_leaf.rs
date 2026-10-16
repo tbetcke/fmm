@@ -313,6 +313,7 @@ fn run_sources<T: Real>(
         leaves: &leaves,
         source_offsets: &source_offsets,
         sources: store.as_slice(),
+        vectors: 1,
     };
     if irregular {
         p2l(device, layout, p, &inputs, out.as_slice_mut()).unwrap();
@@ -360,6 +361,7 @@ fn run_targets<T: Real>(
         leaves: &leaves,
         target_offsets: &target_offsets,
         target_input: input.as_slice(),
+        vectors: 1,
     };
     if irregular {
         m2p(

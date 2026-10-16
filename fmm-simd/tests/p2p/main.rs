@@ -32,6 +32,7 @@ mod cross_isa;
 mod domain;
 mod inputs;
 mod invariance;
+mod many;
 mod panics;
 mod reference;
 mod sums;

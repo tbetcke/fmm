@@ -1507,6 +1507,24 @@ the hook follows it:
   device path; overlap stays off by default, and on a GPU node it would need the exchanges to
   progress while the device computes (scale-out.md §13.3).
 
+**Several charge vectors** (Phase 6 T5, C6.3; docs/design/optimisation.md §4; the `device`
+module docs of `nd-fmm-exec`, "Several charge vectors"). With m vectors the formula keeps
+its calls, launches and syncs and multiplies the bytes: per evaluation the charges up,
+m N_s s; the output down, o m N_t s (o = 1, or 4 with gradients); the ghost tail up,
+(3 + m) G_s s; every multipole the exchanges move, m n_c s per box (the reduction's, the
+replicated top's and each level's); a host-fallback call's downloads and uploads likewise
+(m n_c s per box, o m s per target). On one rank: one upload of m N_s s, one download of
+o m N_t s, one sync. The grouped GEMMs take m columns per pair of the plan (views with m
+columns per box; unless the builder names one, a choice's chunk budget is per vector, m
+times its bytes up to an eighth of the device's memory, so that the chunks stay as many as
+for one vector: the row reduction walks every entry once per chunk, and under the
+one-vector budget its cost grew as m², 10× per vector at m = 32 on Metal), the leaf and
+P2P kernels one launch per level call with the vectors along z.
+`tests/device_common::expected_evaluation` states the extended formula and checks
+it at m = 3 on every `tests/mpi_exec.rs` scenario and rank count on the CPU runtime (and on
+Metal and CUDA in their executables), with each vector bit for bit the one-vector device
+`Fmm`'s.
+
 **Overlapping P2P with the far field on a second stream** (README, out of scope). On
 Metal it would gain little as built: all of a device's wgpu streams submit to one ordered
 queue (F10; stated in `cubecl-wgpu-0.11.0-pre.4/src/compute/timings.rs`), so there is no

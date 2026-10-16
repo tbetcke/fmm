@@ -145,6 +145,58 @@ pub(crate) fn p2p<T: RealScalar>(
     }
 }
 
+/// P2P of m charge vectors with the scalar path (`P2pKernel::evaluate_many`), with lengths
+/// already checked by the caller: `charges[j m + v]`, `potential[v n + i]` and
+/// `gradient[v n + i]`. Each (target, source) pair forms d, r² and r once and then adds
+/// every vector's term as [`p2p`] does, so vector v equals [`p2p`] of vector v bit for
+/// bit.
+pub(crate) fn p2p_many<T: RealScalar>(
+    sources: &[[T; 3]],
+    charges: &[T],
+    m: usize,
+    targets: &[[T; 3]],
+    potential: &mut [T],
+    gradient: Option<&mut [[T; 3]]>,
+) {
+    let n = targets.len();
+    match gradient {
+        None => {
+            for (i, &x) in targets.iter().enumerate() {
+                for (&y, q) in sources.iter().zip(charges.chunks_exact(m)) {
+                    let (_, r2) = separation(x, y);
+                    if r2 == T::zero() {
+                        continue;
+                    }
+                    let r = r2.sqrt();
+                    for (v, &q) in q.iter().enumerate() {
+                        let phi = &mut potential[v * n + i];
+                        *phi = *phi + q / r;
+                    }
+                }
+            }
+        }
+        Some(gradient) => {
+            for (i, &x) in targets.iter().enumerate() {
+                for (&y, q) in sources.iter().zip(charges.chunks_exact(m)) {
+                    let (d, r2) = separation(x, y);
+                    if r2 == T::zero() {
+                        continue;
+                    }
+                    let r = r2.sqrt();
+                    let r3 = r2 * r;
+                    for (v, &q) in q.iter().enumerate() {
+                        let phi = &mut potential[v * n + i];
+                        *phi = *phi + q / r;
+                        for (gk, dk) in gradient[v * n + i].iter_mut().zip(d) {
+                            *gk = *gk + -(q * dk / r3);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// d = x − y and r² = (d₀² + d₁²) + d₂².
 #[inline]
 fn separation<T: RealScalar>(x: [T; 3], y: [T; 3]) -> ([T; 3], T) {

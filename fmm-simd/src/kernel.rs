@@ -108,6 +108,65 @@ impl<T: SimdScalar> P2pKernel<T> {
         }
         T::p2p(self.isa, sources, charges, targets, potential, gradient);
     }
+
+    /// P2P of `vectors` charge vectors at the same sources and targets (Phase 6 T5, C6.3;
+    /// docs/design/optimisation.md §4.3): `charges` holds the m = `vectors` charges of each
+    /// source one after the other (`charges[j m + v]`, CONVENTIONS §3.13, "Several charge
+    /// vectors"), and `potential` (and `gradient`, if given) the m vectors' values one
+    /// vector after the other, m n for n targets (`potential[v n + i]`).
+    ///
+    /// Vector v of the result equals [`evaluate`](Self::evaluate) of the charges of vector
+    /// v into its slices bit for bit, on every ISA: each (target, source) pair forms the
+    /// distance and the inverse square root once and then gives every vector exactly the
+    /// steps `evaluate` gives it, in source order (crate documentation, "Several charge
+    /// vectors"). Every guarantee of `evaluate` therefore holds per vector. The vector
+    /// kernels hold a group of vectors in registers (8 without gradients and 4 with, on NEON
+    /// and AVX2), so the distance work is shared within a group; one vector runs
+    /// `evaluate` itself.
+    ///
+    /// # Panics
+    ///
+    /// If `vectors` is zero, `charges.len() != vectors · sources.len()`,
+    /// `potential.len() != vectors · targets.len()` or a given `gradient` has a length
+    /// other than `vectors · targets.len()`.
+    pub fn evaluate_many(
+        &self,
+        sources: &[[T; 3]],
+        charges: &[T],
+        vectors: usize,
+        targets: &[[T; 3]],
+        potential: &mut [T],
+        gradient: Option<&mut [[T; 3]]>,
+    ) {
+        assert!(vectors > 0, "`vectors` must be at least 1");
+        check_pair(
+            vectors * sources.len(),
+            charges.len(),
+            "sources × vectors",
+            "charges",
+        );
+        check_pair(
+            vectors * targets.len(),
+            potential.len(),
+            "targets × vectors",
+            "potential",
+        );
+        if let Some(gradient) = gradient.as_deref() {
+            check_pair(
+                vectors * targets.len(),
+                gradient.len(),
+                "targets × vectors",
+                "gradient",
+            );
+        }
+        if vectors == 1 {
+            T::p2p(self.isa, sources, charges, targets, potential, gradient);
+        } else {
+            T::p2p_many(
+                self.isa, sources, charges, vectors, targets, potential, gradient,
+            );
+        }
+    }
 }
 
 /// Panics unless the paired slices `a` and `b` have the same length, with the message

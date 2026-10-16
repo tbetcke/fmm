@@ -189,6 +189,7 @@ fn launch<T: Real>(
         sources: sources.as_slice(),
         target_offsets: &target_offsets,
         target_input: target_input.as_slice(),
+        vectors: 1,
     };
     p2p(device, layout, gradients, &inputs, output.as_slice_mut()).unwrap();
     let zero = <T as RealScalar>::from_f64(0.0);

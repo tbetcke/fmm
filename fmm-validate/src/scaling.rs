@@ -113,8 +113,8 @@ use mpi::topology::{Color, SimpleCommunicator};
 use mpi::traits::{Communicator, CommunicatorCollectives, Destination, Equivalence, Root, Source};
 use nd_fmm_exec::cost::CostModel;
 use nd_fmm_exec::fmm::{
-    BuildTimings, ExchangeTraffic, Fmm, FmmBuilder, KindTiming, ListSizes, MultipoleRouting,
-    OperatorKind, Output, StageTimings, TREE_FAN_OUT, Traffic,
+    Backend, BuildTimings, ExchangeTraffic, Fmm, FmmBuilder, KindTiming, ListSizes,
+    MultipoleRouting, OperatorKind, Output, OutputMany, StageTimings, TREE_FAN_OUT, Traffic,
 };
 use nd_fmm_exec::geometry::{contains, integer_centre};
 use nd_fmm_exec::operator::{MulAdd, SimdScalar};
@@ -167,6 +167,9 @@ pub enum HarnessError {
     /// [`invariance`] with an input that is not found from the indices alone
     /// ([`Input::Owners`]).
     InputNotByIndex(Input),
+    /// [`Settings::rhs`] above 1 with a check that evaluates one vector: the errors
+    /// against the direct sum, the one-rank reference or [`invariance`] (Phase 6 T5).
+    SeveralVectors(&'static str),
 }
 
 impl fmt::Display for HarnessError {
@@ -189,6 +192,11 @@ impl fmt::Display for HarnessError {
                 "rank-count invariance needs an input found from the indices alone (share, \
                  ranges or rank0), not {}",
                 input.name()
+            ),
+            Self::SeveralVectors(what) => write!(
+                f,
+                "{what} evaluates one charge vector; run it without --rhs (each vector of \
+                 several is bit for bit its single-vector evaluation, Phase 6 T5)"
             ),
         }
     }
@@ -423,6 +431,15 @@ pub struct Settings {
     /// How the multipole exchange routes the multipoles (`FmmBuilder::multipole_routing`,
     /// Phase 5S T8s; the forwarding tree with `TREE_FAN_OUT`, as the library's default).
     pub routing: MultipoleRouting,
+    /// The charge vectors of every timed evaluation (`FmmBuilder::vectors`, Phase 6 T5;
+    /// 1, `Fmm::evaluate`): above 1 the FMM is built for that many and evaluated by
+    /// `Fmm::evaluate_many`, vector k with the charges of seed + 1 + k; the errors, the
+    /// reference and [`invariance`] need 1 ([`HarnessError::SeveralVectors`]).
+    pub rhs: usize,
+    /// Where the operators run (`FmmBuilder::backend`; the host by default): a device
+    /// backend of the `gpu` features (Phase 6 T5, for the device's throughput per charge
+    /// vector), on one rank or on the ranks sharing a device (correctness, never scaling).
+    pub backend: Backend,
 }
 
 impl Settings {
@@ -450,6 +467,8 @@ impl Settings {
             routing: MultipoleRouting::Tree {
                 fan_out: TREE_FAN_OUT,
             },
+            rhs: 1,
+            backend: Backend::Host,
         }
     }
 }
@@ -664,9 +683,10 @@ pub struct RankTraffic {
 /// reduction's and the replicated top's all-gathered |R| n_c values included.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MemoryModel {
-    /// Multipoles and locals: 2 n_c s K, a slot for every held box.
+    /// Multipoles and locals: 2 n_c s K, a slot for every held box (n_c = m (p + 1)² with m
+    /// charge vectors, Phase 6 T5).
     pub coefficients: f64,
-    /// Source store, target input and output: (4 (N_s + G_s) + 3 N_t + 4 N_t) s.
+    /// Source store, target input and output: ((3 + m) (N_s + G_s) + 3 N_t + 4 m N_t) s.
     pub points: f64,
     /// Box index and leaf numbering: 32 K + 13 (J_loc + J_gh).
     pub index: f64,
@@ -1613,6 +1633,7 @@ fn rank_row<T: Stored + SimdScalar + Equivalence + Default>(
     ranks: usize,
 ) -> RankRow {
     let (sources, targets) = fmm.owned_points();
+    let m = fmm.vectors();
     let traffic = fmm.exchange_traffic();
     let sizes = fmm.exchange_sizes();
     let multipoles = traffic
@@ -1640,8 +1661,8 @@ fn rank_row<T: Stored + SimdScalar + Equivalence + Default>(
         top_sent: traffic.top_sent,
         top_received: traffic.top_received,
         top_boxes: [sizes.sent_top, sizes.received_top],
-        charges: [input, sources],
-        output: [OUTPUT_VALUES * targets, OUTPUT_VALUES * input],
+        charges: [m * input, m * sources],
+        output: [m * OUTPUT_VALUES * targets, m * OUTPUT_VALUES * input],
     };
     let held = held_boxes(fmm);
     let counts = fmm.kind_counts();
@@ -1654,7 +1675,8 @@ fn rank_row<T: Stored + SimdScalar + Equivalence + Default>(
         e_rest += lists.near().len() + lists.w().len() + lists.x().len();
     }
     let s = size_of::<T>() as f64;
-    let n_c = ((p + 1) * (p + 1)) as f64;
+    // The values of a box's multipole: m (p + 1)² with m charge vectors (Phase 6 T5).
+    let n_c = (m * (p + 1) * (p + 1)) as f64;
     let ghost_sources = sizes.ghost_sources;
     let top_tree = top_tree_row(fmm, &traffic, n_c as usize);
     let values = rank_traffic.sources.values_sent
@@ -1667,7 +1689,8 @@ fn rank_row<T: Stored + SimdScalar + Equivalence + Default>(
         + traffic.top_received;
     let memory = MemoryModel {
         coefficients: 2.0 * n_c * s * k as f64,
-        points: (4 * (sources + ghost_sources) + (3 + OUTPUT_VALUES) * targets) as f64 * s,
+        points: ((3 + m) * (sources + ghost_sources) + (3 + m * OUTPUT_VALUES) * targets) as f64
+            * s,
         index: (32 * k + 13 * j_all) as f64,
         views: (12 * e_v + 4 * e_rest) as f64,
         redistribution: 2.0 * (4 * input + 12 * sources) as f64,
@@ -1808,7 +1831,25 @@ fn plan_bytes<T: Stored + SimdScalar + Equivalence + Default>(fmm: &Fmm<'_, T>) 
     bytes + size_of_val(plan.coarse_blocks())
 }
 
-/// The bits of every value of `output`, φ then ∇φ.
+/// The bits of every value of `output` of several vectors (Phase 6 T5), φ then ∇φ.
+fn bits_many<T: RealScalar>(output: &OutputMany<T>) -> Vec<u64> {
+    let mut bits: Vec<u64> = output
+        .potential
+        .iter()
+        .map(|&v| RealScalar::to_f64(v).to_bits())
+        .collect();
+    if let Some(gradient) = &output.gradient {
+        bits.extend(
+            gradient
+                .as_flattened()
+                .iter()
+                .map(|&v| RealScalar::to_f64(v).to_bits()),
+        );
+    }
+    bits
+}
+
+/// The bits of every value of `output`, potentials then gradients.
 fn bits<T: RealScalar>(output: &Output<T>) -> Vec<u64> {
     let mut bits: Vec<u64> = output
         .potential
@@ -1848,7 +1889,9 @@ fn builder<T: Stored + SimdScalar + Equivalence + Default>(settings: &Settings) 
     }
     builder = builder
         .work_cut(settings.work_cut)
-        .multipole_routing(settings.routing);
+        .multipole_routing(settings.routing)
+        .vectors(settings.rhs)
+        .backend(settings.backend);
     if let Some(model) = settings.cost_model {
         builder = builder.cost_model(model);
     }
@@ -1884,6 +1927,12 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
             max: REFERENCE_MAX_POINTS,
         });
     }
+    if settings.rhs > 1 && settings.vectors > 0 {
+        return Err(HarnessError::SeveralVectors("--errors"));
+    }
+    if settings.rhs > 1 && settings.reference {
+        return Err(HarnessError::SeveralVectors("--reference"));
+    }
     let (rank, size) = (comm.rank() as usize, comm.size() as usize);
     let builder = builder::<T>(settings);
     let mine = input_points(workload, settings.input, &builder, comm);
@@ -1910,11 +1959,17 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
     row.build = core::array::from_fn(|k| median(builds.iter().map(|b| b[k]).collect()));
     row.resident_input = resident_input;
 
-    // The timed evaluations of charge vector 0, the paths alternating.
-    let charges: Vec<T> = mine
-        .iter()
-        .map(|&i| T::from_f64(workload.charge(0, i)))
+    // The timed evaluations of charge vector 0 (with `rhs` vectors, of vectors 0 to
+    // rhs − 1 at once), the paths alternating.
+    let all_charges: Vec<Vec<T>> = (0..settings.rhs.max(1))
+        .map(|k| {
+            mine.iter()
+                .map(|&i| T::from_f64(workload.charge(k, i)))
+                .collect()
+        })
         .collect();
+    let charges = &all_charges[0];
+    let several: Vec<&[T]> = all_charges.iter().map(Vec::as_slice).collect();
     let paths = settings.overlap.paths();
     let mut times: Vec<Vec<[f64; NSTAGES]>> = vec![Vec::new(); paths.len()];
     let mut kinds: Vec<Vec<[f64; 8]>> = vec![Vec::new(); paths.len()];
@@ -1926,26 +1981,35 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         for (path, &overlapped) in paths.iter().enumerate() {
             fmm.set_overlap(overlapped);
             comm.barrier();
-            let output = fmm
-                .evaluate(&charges)
-                .unwrap_or_else(|error| panic!("rank {rank}: the FMM does not evaluate: {error}"));
+            let (timings, output, output_bits) = if settings.rhs > 1 {
+                let output = fmm.evaluate_many(&several).unwrap_or_else(|error| {
+                    panic!("rank {rank}: the FMM does not evaluate: {error}")
+                });
+                (output.timings, None, bits_many(&output))
+            } else {
+                let output = fmm.evaluate(charges).unwrap_or_else(|error| {
+                    panic!("rank {rank}: the FMM does not evaluate: {error}")
+                });
+                let output_bits = bits(&output);
+                (output.timings, Some(output), output_bits)
+            };
             if e > 0 {
-                times[path].push(stage_values(&output.timings, overlapped));
-                kinds[path].push(kind_values(&output.timings));
-                overlap[path].push(overlap_values(&output.timings));
+                times[path].push(stage_values(&timings, overlapped));
+                kinds[path].push(kind_values(&timings));
+                overlap[path].push(overlap_values(&timings));
             }
-            outputs.push(output);
+            outputs.push((output, output_bits));
         }
         if let [blocking, overlapped] = &outputs[..] {
-            differing += bits(blocking)
+            differing += blocking
+                .1
                 .iter()
-                .zip(bits(overlapped))
-                .filter(|(a, b)| **a != *b)
+                .zip(&overlapped.1)
+                .filter(|(a, b)| a != b)
                 .count();
         }
-        last = outputs.pop();
+        last = outputs.pop().and_then(|(output, _)| output);
     }
-    let last = last.expect("at least the warm-up");
 
     // The stage medians and the totals of every evaluation, gathered.
     let mut path_times = Vec::new();
@@ -2004,7 +2068,10 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
     let reference = settings.reference.then(|| {
         let strategy = settings.reference_strategy.unwrap_or(fmm.strategy());
         let builder = builder.clone().strategy(strategy);
-        reference(workload, &builder, (&mine, &points), &last, comm)
+        let last = last
+            .as_ref()
+            .expect("one vector, the warm-up's output at least");
+        reference(workload, &builder, (&mine, &points), last, comm)
     });
 
     // Every rank's row, with the resident size at the end and the multipole exchange's
@@ -2442,6 +2509,9 @@ pub fn invariance<T: Stored + SimdScalar + Equivalence + Default>(
     if let Some(&k) = factors.iter().find(|&&k| k == 0 || !size.is_multiple_of(k)) {
         return Err(HarnessError::Factor { k, ranks: size });
     }
+    if settings.rhs > 1 {
+        return Err(HarnessError::SeveralVectors("--invariance"));
+    }
     let builder = builder::<T>(settings);
 
     // The large run.
@@ -2828,6 +2898,8 @@ impl Report {
                         mb(self.dense_bytes(self.threading.ranks_per_node))
                     ),
                     format!("wall_ms={}", ms(path.wall)),
+                    format!("rhs={}", self.settings.rhs),
+                    format!("backend={}", self.settings.backend),
                     format!("build_ms={}", ms(build_max[9])),
                     format!("redistribution_build_ms={}", ms(build_max[4])),
                     format!("cut_build_ms={}", ms(build_max[3])),

@@ -25,7 +25,9 @@ loading with a cache at scale, the ranks × threads guidance; design docs/design
 Phase 5S, C5S.3 (T6: the owned top tree in `Fmm`) and C5S.4 (T7: the work-weighted cut,
 module `cost`; design docs/design/scale-out.md §6); Phase 6, C6.6 (T2 in docs/phase6/: the
 host batched M2L, `M2lStrategy::Batched`, with `nd-fmm-simd`'s `MatrixKernel` and the
-opt-in fused mode `FmmBuilder::m2l_mul_add`; design docs/design/optimisation.md §2).
+opt-in fused mode `FmmBuilder::m2l_mul_add`; design docs/design/optimisation.md §2) and
+C6.3 (T5: several charge vectors, `FmmBuilder::vectors`, `Fmm::evaluate_many`,
+`OutputMany`, host and device; design docs/design/optimisation.md §4).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -51,6 +53,24 @@ opt-in fused mode `FmmBuilder::m2l_mul_add`; design docs/design/optimisation.md 
   local receiving exactly the chain of `Dense` (the `operator` module docs, "The batched
   M2L"). Keep `Batched` bit for bit `Dense` in its default mode; `Dense` stays the
   trusted path.
+- Several charge vectors (Phase 6 T5, C6.3; the `operator` and `fmm` module docs,
+  "Several charge vectors"; CONVENTIONS §3.13, "Several charge vectors"):
+  `LaplaceOperator::with_vectors(m)` sizes every store for m vectors (m (p + 1)² values per
+  box, the vectors one after the other; 3 + m per source, the charges point-major; m or
+  4 m per target, the vectors' φ̂ one after the other, then their ĝ), and every operator
+  gives each vector exactly the one-vector chain, sharing only what does not depend on
+  the charge: the harmonics (`nd_fmm_ref::leaf::*_many`), a pair's distance
+  (`P2pKernel::evaluate_many`; the reference P2P vector by vector), a table (the
+  translations column by column; `Batched` with m columns per pair). So vector v of
+  every output is the one-vector `Fmm`'s on vector v, bit for bit; keep it so. The plan,
+  the exchanges and the redistribution carry m through the sizes alone (no `nd-fmm-plan`
+  change). `Fmm::evaluate` is refused with `FmmError::VectorCount` when m > 1, agreed in
+  the charge-length all-reduce; `evaluate_many` packs the charges point-major on the
+  pool. The cost model weighs one vector's work (only the partition depends on it). On
+  the device the grouped GEMMs and rotation M2L run on views with m columns per box
+  (`device::Columns`), the leaf and P2P kernels take the vectors along z, and the GEMM
+  decisions are keyed by the plan's pairs, with a chunk budget per vector unless the builder
+  names one (`vector_settings`; the `device` module docs).
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread
   count. No `unsafe`, no atomics, no global pool; per-thread scratch created at
@@ -94,6 +114,25 @@ opt-in fused mode `FmmBuilder::m2l_mul_add`; design docs/design/optimisation.md 
     build (`Fmm::set_serial`, `Fmm::set_m2l_mul_add`). It added about 15 s to the
     one-rank debug run (91 → 106 s on the M3 Max). `tests/multi_rank.rs` runs every
     workload point with the default strategy, `Batched` and `Batched` fused.
+  - Several charge vectors (Phase 6 T5): `evaluate_threaded` offers every one-thread
+    evaluation to `offer_vectors`, which keeps the scenario's cheapest (the slowest
+    rank's time, agreed) per slot (the default P2P kernel; the reference kernel once per
+    precision), and after the scenario `check_vectors` runs on it: `evaluate_many` with
+    one vector is `evaluate` bit for bit, a wrong vector count is `VectorCount` on every
+    rank, and each vector of an `Fmm` of 3 vectors (in release builds also 8, blocking
+    and overlapped, and `Batched` with 3 where the strategy is `Dense`) equals its
+    single-vector evaluation bit for bit, with the output pass the oracle's
+    (`Fmm::reference_output_many`); with the `gpu` feature
+    `device_common::check_three_vectors` repeats 3 vectors on the device (each the
+    one-vector device `Fmm`'s, blocking and overlapped, the transfers of the formula with
+    m, and on the host fallback the host's). The debug run checks 3 vectors overlapped
+    only, and leaves a scenario whose cheapest evaluation takes over
+    `DEBUG_VECTORS_BUDGET` (0.5 s; the strongly graded tree and multipole routing on the
+    M3 Max) to the release runs: it added about 14 s to the one-rank debug run on the M3
+    Max (106 → 120 s; the full check 210 s). `tests/multi_rank.rs` runs `auto` and `Batched` on an
+    `Fmm` of the eight vectors too, each bit for bit the one-rank single-vector
+    references; `tests/device_metal.rs`, `tests/device_cuda.rs` and
+    `tests/device_ranks.rs` run `check_three_vectors` in every scenario.
   - New `Fmm` scenarios evaluate through `evaluate_threaded` in `tests/mpi_exec.rs`,
     which repeats them at 2, 4 and 8 threads and checks the output bit for bit, or
     through `evaluate_every_kernel`, which also repeats them with `Reference` and every

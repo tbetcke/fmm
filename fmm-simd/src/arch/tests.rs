@@ -23,7 +23,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use super::avx2::Avx2;
 #[cfg(target_arch = "aarch64")]
 use super::neon::Neon;
-use super::{Simd, p2p::p2p_body, scalar::Scalar};
+use super::p2p::{p2p_body, p2p_many_body};
+use super::{Simd, scalar::Scalar};
 use crate::{Isa, SimdScalar};
 
 /// Random vectors per ISA, precision and test.
@@ -484,6 +485,108 @@ fn p2p_k_invariance<T: SimdScalar, S: Simd<T>>(s: S) {
 fn p2p_body_is_independent_of_k() {
     on_every_isa!("p2p_body_is_independent_of_k", f32, p2p_k_invariance);
     on_every_isa!("p2p_body_is_independent_of_k", f64, p2p_k_invariance);
+}
+
+/// The body of several charge vectors with K blocks and groups of VG on `s`, for the m
+/// vectors whose charges are `charges` (m per source), from `potential` and `gradient` (m
+/// per target, vector after vector).
+fn many<T: SimdScalar, S: Simd<T>, const K: usize, const VG: usize, const G: bool>(
+    s: S,
+    p: &P2pProblem<T>,
+    charges: &[T],
+    m: usize,
+    (potential, gradient): &(Vec<T>, Vec<[T; 3]>),
+) -> Vec<u64> {
+    let mut potential = potential.clone();
+    let mut gradient = if G { gradient.clone() } else { Vec::new() };
+    p2p_many_body::<T, S, K, VG, G>(
+        s,
+        &p.sources,
+        charges,
+        m,
+        &p.targets,
+        &mut potential,
+        &mut gradient,
+    );
+    output_bits(&(potential, gradient))
+}
+
+/// The body of several charge vectors (Phase 6 T5) equals the single-vector body vector by
+/// vector bit for bit, for every K (1, 2, 4) and group (1, 2, 4, 8), at target counts
+/// across every block and tail and vector counts across every group and its tails.
+fn p2p_many_matches_single<T: SimdScalar, S: Simd<T>>(s: S) {
+    let mut rng = Rng(0x5eed_7105);
+    for n_t in [0, 1, S::W - 1, S::W, 2 * S::W + 1, 4 * S::W, 4 * S::W + 3] {
+        for m in [1, 2, 3, 5, 8, 11] {
+            let p = rng.p2p_problem::<T>(13, n_t);
+            let charges: Vec<T> = (0..m * p.sources.len()).map(|_| rng.signed()).collect();
+            let start: (Vec<T>, Vec<[T; 3]>) = (
+                (0..m * n_t).map(|_| rng.signed()).collect(),
+                (0..m * n_t)
+                    .map(|_| [0; 3].map(|_| rng.signed::<T>()))
+                    .collect(),
+            );
+            for gradients in [false, true] {
+                // Vector after vector: the single-vector body on each vector's charges.
+                let mut want_potential = Vec::new();
+                let mut want_gradient = Vec::new();
+                for v in 0..m {
+                    let single = P2pProblem {
+                        sources: p.sources.clone(),
+                        charges: charges.iter().skip(v).step_by(m).copied().collect(),
+                        targets: p.targets.clone(),
+                        potential: start.0[v * n_t..(v + 1) * n_t].to_vec(),
+                        gradient: start.1[v * n_t..(v + 1) * n_t].to_vec(),
+                    };
+                    let (phi, g) = if gradients {
+                        body::<T, S, 1, true>(s, &single)
+                    } else {
+                        body::<T, S, 1, false>(s, &single)
+                    };
+                    want_potential.extend(phi);
+                    want_gradient.extend(g);
+                }
+                let want = output_bits(&(want_potential, want_gradient));
+                macro_rules! check {
+                    ($k:literal, $vg:literal) => {
+                        let got = if gradients {
+                            many::<T, S, $k, $vg, true>(s, &p, &charges, m, &start)
+                        } else {
+                            many::<T, S, $k, $vg, false>(s, &p, &charges, m, &start)
+                        };
+                        assert_eq!(
+                            got,
+                            want,
+                            "{} K = {}, VG = {}, n_t = {n_t}, m = {m}, gradients {gradients}",
+                            S::ISA,
+                            $k,
+                            $vg
+                        );
+                    };
+                }
+                check!(1, 1);
+                check!(1, 8);
+                check!(2, 4);
+                check!(4, 2);
+                check!(2, 8);
+                check!(4, 1);
+            }
+        }
+    }
+}
+
+#[test]
+fn p2p_many_body_is_the_single_body_vector_by_vector() {
+    on_every_isa!(
+        "p2p_many_body_is_the_single_body_vector_by_vector",
+        f32,
+        p2p_many_matches_single
+    );
+    on_every_isa!(
+        "p2p_many_body_is_the_single_body_vector_by_vector",
+        f64,
+        p2p_many_matches_single
+    );
 }
 
 /// The generic body on the scalar layer (W = 1), which the scalar ISA does not run

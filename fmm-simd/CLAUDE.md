@@ -7,7 +7,8 @@ column-accumulation kernel of the host's batched M2L, `MatrixKernel` (C[:, c_j] 
 A · B[:, b_j], the chain of `nd_fmm_tables::MatrixSet::apply`, and an opt-in fused mode;
 docs/design/optimisation.md §2.3, §2.11).
 Phase and components: Phase 3S, C3S.3 and C3S.4 (tasks T3–T5 in docs/phase3s/); Phase 6,
-C6.6 (task T2 in docs/phase6/).
+C6.6 (task T2 in docs/phase6/) and C6.3 (task T5: `P2pKernel::evaluate_many`, P2P of
+several charge vectors).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -16,6 +17,15 @@ C6.6 (task T2 in docs/phase6/).
 - `P2pKernel::evaluate` keeps the signature and semantics of `nd_fmm_ref::p2p::p2p`:
   it adds (+=) into its outputs, applies no 1/(4π), and each target adds its sources in
   input order. Chunk and target-position invariance hold bit for bit on every ISA.
+- `P2pKernel::evaluate_many` (Phase 6 T5; `arch::p2p::p2p_many_body`, the scalar path
+  `arch::scalar::p2p_many`) gives every (target, vector) exactly the instruction sequence
+  `evaluate` gives that vector's charges: the distance and ρ are formed once per source
+  and target vector and shared by a group of vectors held in registers (the `MANY_*`
+  constants per ISA), and nothing per vector may contract or reorder. So vector v equals
+  `evaluate` of vector v bit for bit on every ISA, for every group and block size (tested:
+  `tests/p2p/many.rs` against `evaluate`, `src/arch/tests.rs` every K and group against
+  `p2p_body`); m = 1 runs `evaluate`. The charges are point-major (m per source), the
+  outputs vector after vector.
 - `MatrixKernel::accumulate_columns` gives every element of C the chain of
   `MatrixSet::apply` (k ascending, multiply and add rounded apart; `MulAdd::Separate`)
   or one fma per step (`MulAdd::Fused`), from its own row of A and column of B only: the

@@ -248,6 +248,7 @@ fn launch<T: Real>(device: &mut Device, on: &mut OnDevice<T>, layout: P2pLayout,
         sources: on.sources.as_slice(),
         target_offsets: &on.target_offsets,
         target_input: on.target_input.as_slice(),
+        vectors: 1,
     };
     p2p(device, layout, gradients, &inputs, on.output.as_slice_mut()).unwrap();
 }
@@ -1196,6 +1197,120 @@ fn invariance_and_determinism(device: &mut Device) {
     each_precision!(device, body);
 }
 
+/// Several charge vectors (Phase 6 T5, C6.3), bit for bit: one launch of m = 3 vectors
+/// (the m charges of each source adjacent, each leaf's output the m vectors' φ̂, then their
+/// ĝ, from random initial values) gives every vector the output of a one-vector launch on
+/// that vector's charges from that vector's initial values, on every layout, with and
+/// without gradients.
+fn several_vectors(device: &mut Device) {
+    fn body<T: Real>(device: &mut Device) {
+        let mut rng = Rng::new(0x7e57_7105);
+        let m = 3;
+        let base = fmm_rows::<T>(&mut rng, &[3, 11, 0, 20, 8, 1], 1500);
+        // Vector v: the problem with its own charges.
+        let vectors: Vec<Problem<T>> = (0..m)
+            .map(|_| {
+                let mut problem = base.clone();
+                for leaf in &mut problem.leaves {
+                    leaf.charges = (0..leaf.sources.len())
+                        .map(|_| charge::<T>(&mut rng))
+                        .collect();
+                }
+                problem
+            })
+            .collect();
+        let (so, to) = base.offsets();
+        let mut sources = Vec::new();
+        let mut input = Vec::new();
+        for (j, leaf) in base.leaves.iter().enumerate() {
+            sources.extend(leaf.sources.iter().flatten());
+            for i in 0..leaf.sources.len() {
+                sources.extend(vectors.iter().map(|p| p.leaves[j].charges[i]));
+            }
+            input.extend(leaf.targets.iter().flatten());
+        }
+        let row_offsets: Vec<u32> = std::iter::once(0)
+            .chain(base.rows.iter().scan(0u32, |total, row| {
+                *total += row.len() as u32;
+                Some(*total)
+            }))
+            .collect();
+        let entries: Vec<u32> = base.rows.iter().flatten().copied().collect();
+        let keys: Vec<(u32, [u32; 3])> = base.leaves.iter().map(|l| l.key).collect();
+        let near = IndexView::upload(device, &row_offsets, &entries, base.leaves.len()).unwrap();
+        let leaves = LeafCoordinates::upload(device, &keys).unwrap();
+        let source_offsets = PointOffsets::upload(device, &so).unwrap();
+        let target_offsets = PointOffsets::upload(device, &to).unwrap();
+        let sources = device.upload(&sources).unwrap();
+        let target_input = device.upload(&input).unwrap();
+        for layout in layouts(device) {
+            for gradients in [false, true] {
+                // Each vector's initial store, and the m-vector store made of them: per leaf
+                // the vectors' φ̂, then their ĝ.
+                let starts: Vec<Vec<T>> = (0..m)
+                    .map(|_| base.output_store(gradients, |_, _| charge::<T>(&mut rng)))
+                    .collect();
+                let mut store = Vec::new();
+                for (j, leaf) in base.leaves.iter().enumerate() {
+                    let n = leaf.targets.len();
+                    let range = base.output_range(j, gradients);
+                    for start in &starts {
+                        store.extend_from_slice(&start[range.start..range.start + n]);
+                    }
+                    if gradients {
+                        for start in &starts {
+                            store.extend_from_slice(&start[range.start + n..range.end]);
+                        }
+                    }
+                }
+                let mut output = device.upload(&store).unwrap();
+                let inputs = P2pInputs {
+                    near: &near,
+                    first_leaf: base.first,
+                    leaves: &leaves,
+                    source_offsets: &source_offsets,
+                    sources: sources.as_slice(),
+                    target_offsets: &target_offsets,
+                    target_input: target_input.as_slice(),
+                    vectors: m,
+                };
+                p2p(device, layout, gradients, &inputs, output.as_slice_mut()).unwrap();
+                let mut got = vec![t::<T>(0.0); store.len()];
+                device.download(output.as_slice(), &mut got).unwrap();
+                for (v, (problem, start)) in vectors.iter().zip(&starts).enumerate() {
+                    let mut on = upload(device, problem, start);
+                    launch(device, &mut on, layout, gradients);
+                    let want = download(device, &on);
+                    for (j, leaf) in base.leaves.iter().enumerate() {
+                        let n = leaf.targets.len();
+                        let range = base.output_range(j, gradients);
+                        let chunk = m * range.start;
+                        let what = format!("{layout}, gradients {gradients}, vector {v}, leaf {j}");
+                        assert_same_bits(
+                            &format!("{what}: φ̂"),
+                            &got[chunk + v * n..chunk + (v + 1) * n],
+                            &want[range.start..range.start + n],
+                        );
+                        if gradients {
+                            let g = chunk + m * n + 3 * v * n;
+                            assert_same_bits(
+                                &format!("{what}: ĝ"),
+                                &got[g..g + 3 * n],
+                                &want[range.start + n..range.end],
+                            );
+                        }
+                    }
+                }
+            }
+            println!(
+                "  {layout}, {}: {m} vectors bit for bit their one-vector launches",
+                T::FLOAT
+            );
+        }
+    }
+    each_precision!(device, body);
+}
+
 /// On the CPU runtime every operation of the formulation is correctly rounded or an
 /// explicit fma, so the three layouts give the same bits; reported, not part of the
 /// contract (§3.13 allows contraction to differ).
@@ -1235,6 +1350,7 @@ tests_on!(
     accumulation_and_empty_calls,
     invariance_and_determinism,
     layouts_agree,
+    several_vectors,
 );
 tests_on!(
     metal: pair_terms,
@@ -1245,6 +1361,7 @@ tests_on!(
     accumulation_and_empty_calls,
     invariance_and_determinism,
     layouts_agree,
+    several_vectors,
 );
 tests_on!(
     cuda: pair_terms,
@@ -1255,4 +1372,5 @@ tests_on!(
     accumulation_and_empty_calls,
     invariance_and_determinism,
     layouts_agree,
+    several_vectors,
 );

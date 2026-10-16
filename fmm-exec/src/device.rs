@@ -380,6 +380,43 @@
 //! calling thread, so the pool is idle whenever device work runs. Worker threads never
 //! launch and never call MPI.
 //!
+//! # Several charge vectors (Phase 6 T5)
+//!
+//! With `FmmBuilder::vectors` m > 1 (C6.3; docs/design/optimisation.md §4) the device holds
+//! m columns of (p + 1)² values per box, 3 + m values per source and m or 4 m per target,
+//! the layouts of the host (CONVENTIONS §3.13, "Several charge vectors"), and every kernel
+//! gives each vector the one-vector operations, so vector v of the output is the one-vector
+//! device `Fmm`'s on vector v, bit for bit, where the choices of the build are the same
+//! (on the CPU runtime and CUDA always; on Metal the library GEMM, whose acceptance depends
+//! on the shape, may take one m and not another):
+//!
+//! - **the grouped translations and rotation M2L** run on views with m columns per box
+//!   (`Columns`: box b's vector v is column b m + v; row t m + v has the entries of row t
+//!   with sources s m + v; each batch's pairs (t, s) become (t m + v, s m + v)), so the
+//!   GEMM's columns grow by m, each column meeting its sources in the plan's row order, and
+//!   no kernel changes. The GEMM decisions are keyed by the plan's pairs, so a tuning
+//!   cache gives an FMM of any m the same choices; the chunks are sized by the m columns,
+//!   and unless the builder names a budget a choice's budget is per vector (m times its
+//!   bytes, at most an eighth of the device's memory; `vector_settings`), since the
+//!   reduction of `Accumulate::Rows` walks every entry of a row once per chunk and m
+//!   times the chunks would cost m² (measured on Metal); the M2L strategy is tuned on one
+//!   vector's shapes;
+//! - **P2M, P2L, L2P, M2P and P2P** launch once per level call as before, the cubes of the
+//!   vectors along z (`SourceInputs::vectors`, `TargetInputs::vectors`,
+//!   `P2pInputs::vectors`): the cube at z = v runs the one-vector kernel on vector v's
+//!   charges or expansions and outputs (the harmonics and distances formed per vector);
+//! - **the charges** are uploaded once, m per source (`charge_slots` with m), and the
+//!   output downloaded once, o m per target; with the output pass on the device
+//!   `gather_output` makes the m vectors' outputs one after the other;
+//! - **the exchanges** gather and scatter one column of m (p + 1)² values per box, the
+//!   ghost tail (3 + m) values per point.
+//!
+//! **Per evaluation**: the transfers of the formulas below with m times the bytes of the
+//! charges, the output, the ghost tail and the multipoles moved, and the same launches and
+//! syncs (`tests/device_common::expected_evaluation`, extended; docs/design/device-path.md
+//! §14). [`DeviceReport::vectors`] names m, [`TranslationReport::pairs`] counts m pairs per
+//! pair of the plan.
+//!
 //! # Several ranks (Phase 5 T8)
 //!
 //! docs/design/distributed-fmm.md §7, signed off on 2026-10-08. A device backend runs on
@@ -965,6 +1002,10 @@ pub struct DeviceReport {
     /// ghost boxes and the source chunks of the ghost leaves, which the plan's layouts hold
     /// (Phase 5 T8); 0 on one rank. Part of [`memory_needed`](Self::memory_needed).
     pub ghost_bytes: u64,
+    /// The charge vectors of every evaluation (Phase 6 T5; `FmmBuilder::vectors`): the
+    /// stores, the transfers and the grouped views carry m of each ([module
+    /// documentation](self#several-charge-vectors-phase-6-t5)).
+    pub vectors: usize,
 }
 
 impl DeviceReport {
@@ -1003,6 +1044,9 @@ impl fmt::Display for DeviceReport {
     /// A few lines: the device, the placement, the tables and the memory.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "device: {}", self.info)?;
+        if self.vectors > 1 {
+            writeln!(f, "charge vectors: {}", self.vectors)?;
+        }
         let placement: Vec<String> = OperatorKind::ALL
             .iter()
             .map(|&kind| format!("{kind} {}", self.placement(kind)))
@@ -1855,25 +1899,18 @@ fn csr_bytes(nrows: usize, len: usize) -> u64 {
     Device::buffer_bytes::<u32>(nrows + 1) + Device::buffer_bytes::<u32>(len)
 }
 
-/// The bytes of a grouped view on the device: seven index buffers.
-fn grouped_bytes<G: Copy + Into<usize>>(view: &GroupedCsr<G>) -> u64 {
-    let len = view.sources().len();
-    Device::buffer_bytes::<u32>(view.row_offsets().len())
-        + Device::buffer_bytes::<u32>(view.batch_offsets().len())
-        + 5 * Device::buffer_bytes::<u32>(len)
-}
-
-/// The bytes of the views of every level.
-fn view_bytes(plan: &Plan) -> u64 {
+/// The bytes of the views of every level, the grouped ones with m columns per box.
+fn view_bytes(plan: &Plan, columns: &ColumnViews) -> u64 {
     plan.levels()
         .iter()
-        .map(|lists| {
+        .zip(&columns.levels)
+        .map(|(lists, grouped)| {
             let csr = |view: &Csr| csr_bytes(view.nrows(), view.len());
             csr(lists.p2m())
-                + grouped_bytes(lists.m2m_local())
-                + grouped_bytes(lists.m2m_global())
-                + grouped_bytes(lists.l2l())
-                + grouped_bytes(lists.v())
+                + grouped.m2m_local.bytes()
+                + grouped.m2m_global.bytes()
+                + grouped.l2l.bytes()
+                + grouped.v.bytes()
                 + csr(lists.x())
                 + csr(lists.near())
                 + csr(lists.w())
@@ -1898,21 +1935,22 @@ fn point_offsets(counts: &[usize]) -> Result<Vec<u32>, KernelError> {
 }
 
 /// The position of every charge in a source store with `counts` points per leaf and
-/// four values per point, in leaf order: leaf j's charge k at 4 P_j + 3 n_j + k
-/// (CONVENTIONS §3.13, "Source chunks").
-fn charge_slots(counts: &[usize]) -> Result<Vec<u32>, KernelError> {
+/// 3 + m values per point (m = `vectors`), in leaf order, the m charges of a point
+/// together: leaf j's charge v of point k at (3 + m) P_j + 3 n_j + m k + v (CONVENTIONS
+/// §3.13, "Source chunks" and "Several charge vectors").
+fn charge_slots(counts: &[usize], vectors: usize) -> Result<Vec<u32>, KernelError> {
     let total: usize = counts.iter().sum();
-    let mut slots = Vec::with_capacity(total);
+    let mut slots = Vec::with_capacity(vectors * total);
     let mut start = 0usize;
     for &n in counts {
         let first = start + 3 * n;
-        for k in 0..n {
+        for k in 0..vectors * n {
             slots.push(u32::try_from(first + k).map_err(|_| KernelError::TooLarge {
                 what: "source store",
-                len: 4 * total,
+                len: (3 + vectors) * total,
             })?);
         }
-        start += 4 * n;
+        start += (3 + vectors) * n;
     }
     Ok(slots)
 }
@@ -1929,72 +1967,230 @@ fn grouped_arrays<G: Copy + Into<usize>>(view: &GroupedCsr<G>) -> GroupedArrays<
     }
 }
 
+/// A grouped view of the plan with m columns per box (Phase 6 T5, C6.3): box b's vector v
+/// is column b m + v of the level's store (CONVENTIONS §3.13, "Several charge vectors"),
+/// so row t m + v holds the entries of row t with sources s m + v, and every batch holds
+/// the pairs (t m + v, s m + v) of its pairs (t, s), v ascending. Each column so meets its
+/// sources in the order of the plan's row, and the device's grouped GEMM, reduction and
+/// rotation kernel, which index columns, give vector v the one-vector chain. With m = 1 a
+/// copy of the plan's arrays.
+#[derive(Clone, Debug)]
+struct Columns<G> {
+    row_offsets: Vec<u32>,
+    sources: Vec<u32>,
+    groups: Vec<G>,
+    batch_offsets: Vec<u32>,
+    batch_targets: Vec<u32>,
+    batch_sources: Vec<u32>,
+}
+
+impl<G: Copy + Into<usize>> Columns<G> {
+    /// The columns of the grouped view of the plan `view` for `m` vectors.
+    fn new(view: &GroupedCsr<G>, m: usize) -> Self {
+        Self::of(&grouped_arrays(view), m)
+    }
+
+    /// The columns of the grouped arrays `view` for `m` vectors.
+    fn of(view: &GroupedArrays<'_, G>, m: usize) -> Self {
+        let m32 = u32::try_from(m).expect("the charge vectors fit in u32");
+        let column = |box_index: u32, v: u32| -> u32 {
+            box_index
+                .checked_mul(m32)
+                .and_then(|c| c.checked_add(v))
+                .expect("a column index fits in u32")
+        };
+        let nrows = view.row_offsets.len() - 1;
+        let mut row_offsets = Vec::with_capacity(m * nrows + 1);
+        let (mut sources, mut groups) = (Vec::new(), Vec::new());
+        row_offsets.push(0u32);
+        for t in 0..nrows {
+            let row = view.row_offsets[t] as usize..view.row_offsets[t + 1] as usize;
+            for v in 0..m32 {
+                sources.extend(view.sources[row.clone()].iter().map(|&s| column(s, v)));
+                groups.extend_from_slice(&view.groups[row.clone()]);
+                row_offsets
+                    .push(u32::try_from(sources.len()).expect("the pairs of m vectors fit in u32"));
+            }
+        }
+        let batch_offsets = view.batch_offsets.iter().map(|&o| o * m32).collect();
+        let (mut batch_targets, mut batch_sources) = (Vec::new(), Vec::new());
+        for (&t, &s) in view.batch_targets.iter().zip(view.batch_sources) {
+            for v in 0..m32 {
+                batch_targets.push(column(t, v));
+                batch_sources.push(column(s, v));
+            }
+        }
+        Self {
+            row_offsets,
+            sources,
+            groups,
+            batch_offsets,
+            batch_targets,
+            batch_sources,
+        }
+    }
+
+    /// The arrays, borrowed, as `nd-fmm-kernels` takes them.
+    fn arrays(&self) -> GroupedArrays<'_, G> {
+        GroupedArrays {
+            row_offsets: &self.row_offsets,
+            sources: &self.sources,
+            groups: &self.groups,
+            batch_offsets: &self.batch_offsets,
+            batch_targets: &self.batch_targets,
+            batch_sources: &self.batch_sources,
+        }
+    }
+
+    /// The bytes of the view on the device: seven index buffers.
+    fn bytes(&self) -> u64 {
+        let len = self.sources.len();
+        Device::buffer_bytes::<u32>(self.row_offsets.len())
+            + Device::buffer_bytes::<u32>(self.batch_offsets.len())
+            + 5 * Device::buffer_bytes::<u32>(len)
+    }
+}
+
+/// The grouped views of one level with m columns per box ([`Columns`]).
+#[derive(Clone, Debug)]
+struct LevelColumns {
+    m2m_local: Columns<u8>,
+    m2m_global: Columns<u8>,
+    l2l: Columns<u8>,
+    v: Columns<u16>,
+}
+
+/// The grouped views of every level of `plan` with `m` columns per box, and the columns
+/// of every level (m per box): what the device's grouped translations and rotation M2L
+/// run on (Phase 6 T5).
+#[derive(Clone, Debug)]
+struct ColumnViews {
+    levels: Vec<LevelColumns>,
+    columns: Vec<usize>,
+}
+
+impl ColumnViews {
+    fn new(plan: &Plan, m: usize) -> Self {
+        let index = plan.index();
+        Self {
+            levels: plan
+                .levels()
+                .iter()
+                .map(|lists| LevelColumns {
+                    m2m_local: Columns::new(lists.m2m_local(), m),
+                    m2m_global: Columns::new(lists.m2m_global(), m),
+                    l2l: Columns::new(lists.l2l(), m),
+                    v: Columns::new(lists.v(), m),
+                })
+                .collect(),
+            columns: (0..plan.nlevels()).map(|l| m * index.len(l)).collect(),
+        }
+    }
+
+    /// The columns of `level`, zero for a level outside the tree.
+    fn bound(&self, level: Option<usize>) -> usize {
+        level
+            .and_then(|l| self.columns.get(l))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// The columns of the octant view of the grouped call (`kind`, `pass`) on `level`.
+    fn octants(&self, kind: OperatorKind, pass: Option<UpwardPass>, level: usize) -> &Columns<u8> {
+        let lists = &self.levels[level];
+        match (kind, pass) {
+            (OperatorKind::M2m, Some(UpwardPass::Local)) => &lists.m2m_local,
+            (OperatorKind::M2m, _) => &lists.m2m_global,
+            _ => &lists.l2l,
+        }
+    }
+
+    /// The batch offsets of the grouped call (`kind`, `pass`) on `level`, in columns.
+    fn batch_offsets(&self, (kind, pass, level): CallId) -> &[u32] {
+        match kind {
+            OperatorKind::M2l => &self.levels[level].v.batch_offsets,
+            _ => &self.octants(kind, pass, level).batch_offsets,
+        }
+    }
+}
+
 /// The plan of one grouped level call on the device (T8, T9), built through `link` as
-/// index data: `GroupedPlan::new` for the plan's `view` (octant or offset groups) with
-/// `sources_bound` input columns.
+/// index data: `GroupedPlan::new` for the `view` (octant or offset groups, m columns per
+/// box) with `sources_bound` input columns.
 fn build_plan<G: Copy + Into<usize> + Into<u32>, T: DeviceFloat>(
     link: &mut Link,
-    view: &GroupedCsr<G>,
+    view: &Columns<G>,
     sources_bound: usize,
     settings: &PlanSettings,
     tables: &Tables<T>,
     scratch: &mut TranslationScratch<T>,
 ) -> Result<GroupedPlan, FmmError> {
     link.build(DataKind::Indices, |d| {
-        GroupedPlan::new(
-            d,
-            &grouped_arrays(view),
-            sources_bound,
-            settings,
-            tables,
-            scratch,
-        )
+        GroupedPlan::new(d, &view.arrays(), sources_bound, settings, tables, scratch)
     })
 }
 
-/// The plan of the grouped level call (`kind`, `pass`, `level`) of `plan` with
-/// `settings`, over the device tables of its family (T8, T9; T12 builds candidates and
-/// tuned choices the same way).
+/// The plan settings of `choice` for the level calls of `vectors` charge vectors (Phase 6
+/// T5): unless the builder names a budget (`named`), a choice's chunk budget is per
+/// vector, so the calls of m vectors chunk with m times its bytes, at most an eighth of
+/// the device's memory (never below the choice's own budget). The reduction of
+/// `Accumulate::Rows` walks every entry of a target's row once per chunk, and a call of m
+/// vectors has m times the entries; under the one-vector budget it would also have m
+/// times the chunks, and its cost would grow as m² (on Metal, f32 p = 8, the evaluation
+/// per vector was 3.1× the one vector's at m = 8 and 10× at m = 32). The chunks do not
+/// change a bit (`tests/device_common` compares m vectors with one-vector evaluations),
+/// the tuned and cached choices keep their per-vector budgets, and with one vector this is
+/// `choice.settings`.
+fn vector_settings(
+    choice: &GemmChoice,
+    info: &DeviceInfo,
+    n: usize,
+    vectors: usize,
+    named: Option<u64>,
+) -> PlanSettings {
+    let mut settings = choice.settings(info, n);
+    if named.is_none() && vectors > 1 {
+        let cap = info
+            .max_memory
+            .map_or(u64::MAX, |bytes| bytes / 8)
+            .max(choice.budget);
+        settings.budget = choice.budget.saturating_mul(vectors as u64).min(cap);
+    }
+    settings
+}
+
+/// The plan of the grouped level call (`kind`, `pass`, `level`) of the plan's `columns`
+/// (its views with m columns per box, Phase 6 T5) with `settings`, over the device tables
+/// of its family (T8, T9; T12 builds candidates and tuned choices the same way).
 fn plan_level_call<T: DeviceFloat>(
     link: &mut Link,
-    plan: &Plan,
+    columns: &ColumnViews,
     (kind, pass, level): (OperatorKind, Option<UpwardPass>, usize),
     settings: &PlanSettings,
     tables: &DeviceTables<T>,
     scratch: &mut TranslationScratch<T>,
 ) -> Result<GroupedPlan, FmmError> {
-    let lists = plan.level(level);
-    let (index, nlevels) = (plan.index(), plan.nlevels());
-    let bound = |l: usize| if l < nlevels { index.len(l) } else { 0 };
     match (kind, pass) {
-        (OperatorKind::M2m, Some(UpwardPass::Local)) => build_plan(
-            link,
-            lists.m2m_local(),
-            bound(level + 1),
-            settings,
-            &tables.m2m,
-            scratch,
-        ),
         (OperatorKind::M2m, _) => build_plan(
             link,
-            lists.m2m_global(),
-            bound(level + 1),
+            columns.octants(kind, pass, level),
+            columns.bound(Some(level + 1)),
             settings,
             &tables.m2m,
             scratch,
         ),
         (OperatorKind::L2l, _) => build_plan(
             link,
-            lists.l2l(),
-            bound(level.wrapping_sub(1)),
+            columns.octants(kind, pass, level),
+            columns.bound(level.checked_sub(1)),
             settings,
             &tables.l2l,
             scratch,
         ),
         _ => build_plan(
             link,
-            lists.v(),
-            bound(level),
+            &columns.levels[level].v,
+            columns.bound(Some(level)),
             settings,
             tables
                 .m2l
@@ -2165,8 +2361,12 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         );
         let p = host.p();
         let n = (p + 1) * (p + 1);
+        // m charge vectors (Phase 6 T5): m columns of n per box, 3 + m values per source,
+        // o = m or 4 m per target.
+        let m = host.vectors();
         let o = host.target_output_point_size();
         let strategy = host.tables().strategy();
+        let columns = ColumnViews::new(plan, m);
 
         // The dense octant tables: the host's, or under `Rotation` built or loaded here.
         let mut cache_outcomes = Vec::new();
@@ -2253,22 +2453,23 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         let grouped_on_device =
             |kind: OperatorKind| on_device(kind) && (kind != OperatorKind::M2l || dense_m2l);
         // Every grouped level call with a pair: (kind, pass, level, pairs, batch offsets).
+        // The pairs are the plan's, which key the GEMM decisions whatever m (so that a
+        // tuning cache gives FMMs of any m the same choices), the batch offsets those of
+        // the m columns per box, which size the chunks (Phase 6 T5).
+        let columns_ref = &columns;
         let calls: Vec<(CallId, usize, &[u32])> = GROUPED
             .iter()
             .filter(|(kind, _)| grouped_on_device(*kind))
             .flat_map(|&(kind, pass)| {
                 plan.levels().iter().enumerate().map(move |(level, lists)| {
-                    let (len, offsets) = match (kind, pass) {
-                        (OperatorKind::M2m, Some(UpwardPass::Local)) => {
-                            (lists.m2m_local().len(), lists.m2m_local().batch_offsets())
-                        }
-                        (OperatorKind::M2m, _) => {
-                            (lists.m2m_global().len(), lists.m2m_global().batch_offsets())
-                        }
-                        (OperatorKind::L2l, _) => (lists.l2l().len(), lists.l2l().batch_offsets()),
-                        _ => (lists.v().len(), lists.v().batch_offsets()),
+                    let len = match (kind, pass) {
+                        (OperatorKind::M2m, Some(UpwardPass::Local)) => lists.m2m_local().len(),
+                        (OperatorKind::M2m, _) => lists.m2m_global().len(),
+                        (OperatorKind::L2l, _) => lists.l2l().len(),
+                        _ => lists.v().len(),
                     };
-                    ((kind, pass, level), len, offsets)
+                    let call = (kind, pass, level);
+                    (call, len, columns_ref.batch_offsets(call))
                 })
             })
             .collect();
@@ -2335,18 +2536,23 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         // widest chunk, at most, before anything is allocated (T8, T9); with decisions to
         // tune, also the widest chunk of any candidate (T12).
         let (mut plan_bytes, mut scratch_columns) = (0u64, 0usize);
-        let tuning_settings = GemmChoice {
-            budget: options
-                .scratch_budget
-                .unwrap_or_else(|| default_scratch_bytes(&info)),
-            ..GemmChoice::library(T::FLOAT)
-        }
-        .settings(&info, n);
+        let named = options.scratch_budget;
+        let tuning_settings = vector_settings(
+            &GemmChoice {
+                budget: named.unwrap_or_else(|| default_scratch_bytes(&info)),
+                ..GemmChoice::library(T::FLOAT)
+            },
+            &info,
+            n,
+            m,
+            named,
+        );
         for &((kind, _, _), pairs, batch_offsets) in &calls {
-            let size =
-                choice_of(kind, pairs)
-                    .settings(&info, n)
-                    .size(backend, T::FLOAT, batch_offsets);
+            let size = vector_settings(&choice_of(kind, pairs), &info, n, m, named).size(
+                backend,
+                T::FLOAT,
+                batch_offsets,
+            );
             plan_bytes += size.bytes;
             scratch_columns = scratch_columns.max(size.columns);
             if tuning {
@@ -2357,10 +2563,10 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         let scratch_bytes = TranslationScratch::<T>::bytes(scratch_columns * n);
         // The rows of each rotation M2L level call (T10).
         if rotation.is_some() {
-            plan_bytes += plan
-                .levels()
+            plan_bytes += columns
+                .levels
                 .iter()
-                .map(|lists| RotationPlan::bytes(lists.v().row_offsets()))
+                .map(|lists| RotationPlan::bytes(&lists.v.row_offsets))
                 .sum::<u64>();
         }
 
@@ -2376,8 +2582,8 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         );
         let ntargets: usize = target_counts.iter().sum();
         let nleaves = leaves.len();
-        // The first column of each level in the multipole buffer (n values per box on
-        // every level).
+        // The first box of each level in the multipole buffer (m n values per box on every
+        // level): a box is one column of m n values of the exchanges' gathers and scatters.
         let first_columns: Vec<usize> = (0..nlevels)
             .scan(0, |total, l| {
                 let first = *total;
@@ -2413,8 +2619,8 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                 .iter()
                 .map(Range::len)
                 .sum::<usize>(),
-            top_columns.len() * n,
-            "the received boxes' values of the top, n per box"
+            top_columns.len() * m * n,
+            "the received boxes' values of the top, m n per box"
         );
         // The columns of per-level lists, the levels one after the other, their `nlevels +
         // 1` offsets, and the largest level's width.
@@ -2439,7 +2645,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             if columns == 0 {
                 0
             } else {
-                Device::buffer_bytes::<u32>(columns) + Device::buffer_bytes::<T>(width * n)
+                Device::buffer_bytes::<u32>(columns) + Device::buffer_bytes::<T>(width * m * n)
             }
         };
         let exchange_bytes = packed_bytes(send_columns.len(), send_columns.len())
@@ -2450,8 +2656,8 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         let ghost_boxes: usize = (0..nlevels)
             .map(|l| index.kinds(l).iter().filter(|k| k.is_ghost()).count())
             .sum();
-        let ghost_bytes =
-            (2 * ghost_boxes * n + 4 * (nstored - nsources)) as u64 * size_of::<T>() as u64;
+        let ghost_bytes = (2 * ghost_boxes * m * n + (3 + m) * (nstored - nsources)) as u64
+            * size_of::<T>() as u64;
         let device_pass = options.output_pass != OutputPass::Host
             && device.supports(nd_fmm_kernels::Precision::F64);
         let pass_bytes = if device_pass {
@@ -2459,15 +2665,15 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         } else {
             0
         };
-        let needed = 2 * Device::buffer_bytes::<T>(nboxes * n)
-            + Device::buffer_bytes::<T>(4 * nstored)
+        let needed = 2 * Device::buffer_bytes::<T>(nboxes * m * n)
+            + Device::buffer_bytes::<T>((3 + m) * nstored)
             + Device::buffer_bytes::<T>(3 * ntargets)
             + Device::buffer_bytes::<T>(o * ntargets)
-            + Device::buffer_bytes::<T>(nsources)
-            + view_bytes(plan)
+            + Device::buffer_bytes::<T>(m * nsources)
+            + view_bytes(plan, &columns)
             + Device::buffer_bytes::<u32>(nleaves + 1)
             + Device::buffer_bytes::<u32>(leaves.nlocal() + 1)
-            + Device::buffer_bytes::<u32>(nsources)
+            + Device::buffer_bytes::<u32>(m * nsources)
             + Device::buffer_bytes::<u32>(3 * nboxes)
             + Device::buffer_bytes::<u32>(4 * nleaves)
             + tables_report.iter().map(|t| t.bytes).sum::<u64>()
@@ -2489,7 +2695,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         };
         let level_offsets: Vec<usize> = std::iter::once(0)
             .chain((0..nlevels).scan(0, |total, l| {
-                *total += index.len(l) * n;
+                *total += index.len(l) * m * n;
                 Some(*total)
             }))
             .collect();
@@ -2498,34 +2704,48 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         // kind it is counted under stays without traffic.
         let mut alloc = |len: usize| link.build(DataKind::Points, |d| d.alloc::<T>(len));
         let stores = DeviceStores {
-            multipoles: alloc(nboxes * n)?,
-            locals: alloc(nboxes * n)?,
-            sources: alloc(4 * nstored)?,
+            multipoles: alloc(nboxes * m * n)?,
+            locals: alloc(nboxes * m * n)?,
+            sources: alloc((3 + m) * nstored)?,
             target_input: alloc(3 * ntargets)?,
             target_output: alloc(o * ntargets)?,
-            charges: alloc(nsources)?,
+            charges: alloc(m * nsources)?,
         };
 
         let mut levels = Vec::with_capacity(nlevels);
-        for (level, lists) in plan.levels().iter().enumerate() {
+        for (level, (lists, grouped_lists)) in plan.levels().iter().zip(&columns.levels).enumerate()
+        {
             let boxes = |l: Option<usize>| l.filter(|&l| l < nlevels).map_or(0, |l| index.len(l));
             let csr = |link: &mut Link, view: &Csr, columns: usize| {
                 link.build(DataKind::Indices, |d| {
                     IndexView::upload(d, view.row_offsets(), view.entries(), columns)
                 })
             };
-            let grouped = |link: &mut Link, view: &GroupedCsr<u8>, bound: usize| {
+            // The grouped views with m columns per box (Phase 6 T5).
+            let grouped = |link: &mut Link, view: &Columns<u8>, bound: usize| {
                 link.build(DataKind::Indices, |d| {
-                    GroupedView::upload(d, &grouped_arrays(view), bound)
+                    GroupedView::upload(d, &view.arrays(), bound)
                 })
             };
             levels.push(LevelViews {
                 p2m: csr(&mut link, lists.p2m(), nleaves)?,
-                m2m_local: grouped(&mut link, lists.m2m_local(), boxes(Some(level + 1)))?,
-                m2m_global: grouped(&mut link, lists.m2m_global(), boxes(Some(level + 1)))?,
-                l2l: grouped(&mut link, lists.l2l(), boxes(level.checked_sub(1)))?,
+                m2m_local: grouped(
+                    &mut link,
+                    &grouped_lists.m2m_local,
+                    columns.bound(Some(level + 1)),
+                )?,
+                m2m_global: grouped(
+                    &mut link,
+                    &grouped_lists.m2m_global,
+                    columns.bound(Some(level + 1)),
+                )?,
+                l2l: grouped(
+                    &mut link,
+                    &grouped_lists.l2l,
+                    columns.bound(level.checked_sub(1)),
+                )?,
                 v: link.build(DataKind::Indices, |d| {
-                    GroupedView::upload(d, &grouped_arrays(lists.v()), index.len(level))
+                    GroupedView::upload(d, &grouped_lists.v.arrays(), columns.bound(Some(level)))
                 })?,
                 x: csr(&mut link, lists.x(), nleaves)?,
                 near: csr(&mut link, lists.near(), nleaves)?,
@@ -2535,7 +2755,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         }
         let source_offsets = point_offsets(source_counts).map_err(device_error)?;
         let target_offsets = point_offsets(target_counts).map_err(device_error)?;
-        let slots = charge_slots(&source_counts[..nlocal]).map_err(device_error)?;
+        let slots = charge_slots(&source_counts[..nlocal], m).map_err(device_error)?;
         let box_indices: Vec<Vec<[u32; 3]>> = (0..nlevels)
             .map(|l| index.keys(l).iter().map(|&key| key_index(key).1).collect())
             .collect();
@@ -2581,7 +2801,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             }
             Ok(Some(Packed {
                 columns: link.build(DataKind::Indices, |d| d.upload_indices(columns))?,
-                values: link.build(DataKind::Points, |d| d.alloc::<T>(width * n))?,
+                values: link.build(DataKind::Points, |d| d.alloc::<T>(width * m * n))?,
             }))
         };
         let exchanges_on_device = Exchanges {
@@ -2589,10 +2809,10 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             sent,
             top: packed(&top_columns, top_columns.len())?,
             top_values: exchanges.received_values.clone(),
-            top_staging: vec![T::default(); top_columns.len() * n],
+            top_staging: vec![T::default(); top_columns.len() * m * n],
             receive: packed(&receive_columns, receive_width)?,
             receive_offsets,
-            ghost_sources: 4 * nsources..4 * nstored,
+            ghost_sources: (3 + m) * nsources..(3 + m) * nstored,
             inject: false,
             received_levels: [Traffic::default(); MAX_LEVELS],
             reduction_send: packed(&reduction_send_columns, reduction_send_width)?,
@@ -2635,9 +2855,9 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             let choice = choice_of(kind, pairs);
             let grouped_plan = plan_level_call(
                 &mut link,
-                plan,
+                &columns,
                 (kind, pass, level),
-                &choice.settings(&info, n),
+                &vector_settings(&choice, &info, n, m, named),
                 &tables,
                 &mut scratch,
             )?;
@@ -2669,10 +2889,9 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             rotation_layout
                 .check(link.device.info(), p, T::FLOAT)
                 .map_err(device_error)?;
-            for (level, lists) in plan.levels().iter().enumerate() {
-                let view = lists.v();
+            for (level, lists) in columns.levels.iter().enumerate() {
                 let rotation_plan = link.build(DataKind::Indices, |d| {
-                    RotationPlan::new(d, &grouped_arrays(view), index.len(level))
+                    RotationPlan::new(d, &lists.v.arrays(), columns.bound(Some(level)))
                 })?;
                 if !rotation_plan.is_empty() {
                     rotation_report.push(RotationReport {
@@ -2729,7 +2948,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                 .map_err(device_error)?;
         }
         let lens: Vec<usize> = (0..nlevels).map(|l| index.len(l)).collect();
-        let sizes = vec![n; nlevels];
+        let sizes = vec![m * n; nlevels];
         let writes_output = [OperatorKind::L2p, OperatorKind::M2p, OperatorKind::P2p]
             .iter()
             .any(|&kind| placement[kind as usize] == Placement::Host);
@@ -2787,6 +3006,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             ranks: options.ranks,
             exchange_bytes,
             ghost_bytes,
+            vectors: m,
         };
         let mut operator = Self {
             host,
@@ -2817,7 +3037,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             p2p_levels,
             mean_points,
         };
-        operator.tune_translations(plan)?;
+        operator.tune_translations(&columns)?;
         Ok(operator)
     }
 
@@ -2867,7 +3087,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
     /// level call (with a tuning cache that lacks it) or taken from the cache or the
     /// static rule; then the plans of the level calls whose choice changed are rebuilt, and
     /// what no chosen plan needs (library copies, scratch) is released.
-    fn tune_translations(&mut self, plan: &Plan) -> Result<(), FmmError> {
+    fn tune_translations(&mut self, columns: &ColumnViews) -> Result<(), FmmError> {
         let Some(mut tuner) = self.tuner.take() else {
             return Ok(());
         };
@@ -2879,11 +3099,13 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         let info = self.link.device.info().clone();
         let n = self.n();
         let budget = self.options.scratch_budget;
+        let vectors = self.vectors();
         // The largest level call of each decision.
         let mut decisions: Vec<(Decision, CallId, usize)> = Vec::new();
         for &(kind, pass) in &GROUPED {
             for (level, call) in self.translations.calls(kind, pass).iter().enumerate() {
-                let pairs = call.plan.len();
+                // The plan's pairs key the decision whatever m (`new`).
+                let pairs = call.plan.len() / self.vectors();
                 if pairs == 0 {
                     continue;
                 }
@@ -2926,7 +3148,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                 candidates,
                 |candidate, deadline| {
                     let choice = candidate.gemm().expect("a GEMM candidate");
-                    self.time_grouped(plan, call, &choice, deadline)
+                    self.time_grouped(columns, call, &choice, deadline)
                 },
             );
         }
@@ -2935,7 +3157,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         for &(kind, pass) in &GROUPED {
             for level in 0..self.translations.calls(kind, pass).len() {
                 let call = &self.translations.calls(kind, pass)[level];
-                let pairs = call.plan.len();
+                let pairs = call.plan.len() / self.vectors();
                 if pairs == 0 {
                     continue;
                 }
@@ -2962,9 +3184,9 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                 } = self;
                 let rebuilt = plan_level_call(
                     link,
-                    plan,
+                    columns,
                     (kind, pass, level),
-                    &choice.settings(&info, n),
+                    &vector_settings(&choice, &info, n, vectors, budget),
                     tables,
                     &mut translations.scratch,
                 )?;
@@ -2986,12 +3208,23 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         (p + 1) * (p + 1)
     }
 
+    /// The charge vectors m (Phase 6 T5).
+    fn vectors(&self) -> usize {
+        self.host.vectors()
+    }
+
+    /// The values of a box's multipole or local: m n, one column of the exchanges'
+    /// gathers and scatters.
+    fn box_size(&self) -> usize {
+        self.vectors() * self.n()
+    }
+
     /// Times the grouped level call (`kind`, `pass`, `level`) with a plan built for
     /// `choice` (T12), on the operator's own buffers (their values do not matter: every
     /// evaluation zeroes them first).
     fn time_grouped(
         &mut self,
-        plan: &Plan,
+        columns: &ColumnViews,
         (kind, pass, level): (OperatorKind, Option<UpwardPass>, usize),
         choice: &GemmChoice,
         deadline: Instant,
@@ -2999,6 +3232,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         let info = self.link.device.info().clone();
         let n = self.n();
         let budget_named = self.options.scratch_budget;
+        let vectors = self.vectors();
         if let GemmKind::HandWritten(layout) = choice.gemm {
             layout
                 .check(&info)
@@ -3037,15 +3271,8 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         // The operator's scratch is sized at build for every candidate the tuner registers
         // itself; an offered candidate with wider chunks (a `TuningHook`) is not timed, and
         // is checked before its plan is built (which asserts that the scratch holds it).
-        let lists = plan.level(level);
-        let batch_offsets = match (kind, pass) {
-            (OperatorKind::M2m, Some(UpwardPass::Local)) => lists.m2m_local().batch_offsets(),
-            (OperatorKind::M2m, _) => lists.m2m_global().batch_offsets(),
-            (OperatorKind::L2l, _) => lists.l2l().batch_offsets(),
-            _ => lists.v().batch_offsets(),
-        };
-        let wanted = choice
-            .settings(&info, n)
+        let batch_offsets = columns.batch_offsets((kind, pass, level));
+        let wanted = vector_settings(choice, &info, n, vectors, budget_named)
             .size(info.backend, T::FLOAT, batch_offsets)
             .columns
             * n;
@@ -3057,9 +3284,9 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         }
         let candidate = plan_level_call(
             link,
-            plan,
+            columns,
             (kind, pass, level),
-            &choice.settings(&info, n),
+            &vector_settings(choice, &info, n, vectors, budget_named),
             tables,
             &mut translations.scratch,
         )
@@ -3238,6 +3465,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             sources: stores.sources.as_slice(),
             target_offsets: &views.target_offsets,
             target_input: stores.target_input.as_slice(),
+            vectors: self.host.vectors(),
         };
         let output = &mut stores.target_output;
         time_launches(&mut link.device, deadline, |d| {
@@ -3335,7 +3563,8 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                 reason: "injected at the mid-evaluation sync (test hook)".to_owned(),
             });
         }
-        let n = self.n();
+        // One column of m n values per box (Phase 6 T5).
+        let n = self.box_size();
         let (stores, exchanges) = (&self.stores, &mut self.exchanges);
         let Some(send) = &mut exchanges.send else {
             return;
@@ -3366,7 +3595,8 @@ impl<T: DeviceScalar> DeviceOperator<T> {
     /// and one scatter into their slots of the multipoles (Phase 5S T5, as the coarse
     /// blocks of Phase 5 T8); nothing where the rank holds none.
     fn receive_top(&mut self, gathered: &[T]) {
-        let n = self.n();
+        // One column of m n values per box (Phase 6 T5).
+        let n = self.box_size();
         let (stores, exchanges) = (&mut self.stores, &mut self.exchanges);
         let Some(top) = &mut exchanges.top else {
             return;
@@ -3397,7 +3627,8 @@ impl<T: DeviceScalar> DeviceOperator<T> {
     /// store (Phase 5S T6, docs/design/scale-out.md §4.5); nothing on a level at which the
     /// rank sends nothing.
     fn send_reduction(&mut self, level: usize, boxes: &[u32], multipoles: &mut LevelBuffers<T>) {
-        let n = self.n();
+        // One column of m n values per box (Phase 6 T5).
+        let n = self.box_size();
         let (stores, exchanges) = (&self.stores, &mut self.exchanges);
         let columns =
             exchanges.reduction_send_offsets[level]..exchanges.reduction_send_offsets[level + 1];
@@ -3443,7 +3674,8 @@ impl<T: DeviceScalar> DeviceOperator<T> {
     /// into their slots of the multipoles, before the global M2M of the level above reads
     /// them (Phase 5S T6); nothing on a level at which the rank receives nothing.
     fn receive_reduction(&mut self, level: usize, received: &[T]) {
-        let n = self.n();
+        // One column of m n values per box (Phase 6 T5).
+        let n = self.box_size();
         let (stores, exchanges) = (&mut self.stores, &mut self.exchanges);
         let columns = exchanges.reduction_receive_offsets[level]
             ..exchanges.reduction_receive_offsets[level + 1];
@@ -3481,7 +3713,8 @@ impl<T: DeviceScalar> DeviceOperator<T> {
     /// buffer `received` (the level's ghost boxes, packed) and one scatter into their slots
     /// of the multipoles (Phase 5 T8); nothing on a level without ghost boxes.
     fn receive_multipoles(&mut self, level: usize, received: &[T]) {
-        let n = self.n();
+        // One column of m n values per box (Phase 6 T5).
+        let n = self.box_size();
         let (stores, exchanges) = (&mut self.stores, &mut self.exchanges);
         let columns = exchanges.receive_offsets[level]..exchanges.receive_offsets[level + 1];
         assert_eq!(
@@ -3581,7 +3814,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
     /// The first failure of the evaluation, if any device operation failed (a launch
     /// error surfaces at this download, §12).
     pub fn read_output(&mut self) -> Result<DeviceOutput<'_, T>, KernelError> {
-        let gradients = self.host.gradients();
+        let (gradients, m) = (self.host.gradients(), self.host.vectors());
         let stores = &self.stores;
         if let Some(pass) = &mut self.pass {
             self.link.run(DataKind::Output, |d| {
@@ -3589,7 +3822,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                     d,
                     &pass.order,
                     stores.target_output.as_slice(),
-                    gradients,
+                    (gradients, m),
                     pass.values.as_slice_mut(),
                 )
             });
@@ -4012,6 +4245,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             leaves: &views.leaves,
             source_offsets: &views.source_offsets,
             sources: self.stores.sources.as_slice(),
+            vectors: self.host.vectors(),
         };
         let (layout, p) = (self.leaf_layout, self.host.p());
         let out = if irregular {
@@ -4050,6 +4284,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             leaves: &views.leaves,
             target_offsets: &views.target_offsets,
             target_input: self.stores.target_input.as_slice(),
+            vectors: self.host.vectors(),
         };
         let (layout, p, gradients) = (self.leaf_layout, self.host.p(), self.host.gradients());
         let coefficients = if irregular {
@@ -4301,6 +4536,7 @@ impl<T: DeviceScalar> FmmOperator for DeviceOperator<T> {
                 sources: self.stores.sources.as_slice(),
                 target_offsets: &views.target_offsets,
                 target_input: self.stores.target_input.as_slice(),
+                vectors: self.host.vectors(),
             };
             let (layout, gradients) = (self.p2p_layout, self.host.gradients());
             let output = &mut self.stores.target_output;
@@ -4772,9 +5008,88 @@ mod tests {
     #[test]
     fn charge_slots_follow_the_source_chunks() {
         // Leaves of 2, 0 and 3 points: chunks of 8, 0 and 12 values.
-        assert_eq!(charge_slots(&[2, 0, 3]).unwrap(), vec![6, 7, 17, 18, 19]);
+        assert_eq!(charge_slots(&[2, 0, 3], 1).unwrap(), vec![6, 7, 17, 18, 19]);
         assert_eq!(point_offsets(&[2, 0, 3]).unwrap(), vec![0, 2, 2, 5]);
-        assert!(charge_slots(&[]).unwrap().is_empty());
+        assert!(charge_slots(&[], 1).unwrap().is_empty());
+        // Two vectors (Phase 6 T5): chunks of 10, 0 and 15 values, the two charges of a
+        // point together after the coordinates.
+        assert_eq!(
+            charge_slots(&[2, 0, 3], 2).unwrap(),
+            vec![6, 7, 8, 9, 19, 20, 21, 22, 23, 24]
+        );
+    }
+
+    /// The chunk budget of several vectors (Phase 6 T5): per vector unless named, capped at
+    /// an eighth of the device's memory, the choice's own settings for one vector.
+    #[test]
+    fn vector_settings_scale_the_budget_unless_named() {
+        let info = DeviceInfo {
+            backend: nd_fmm_kernels::BackendKind::Metal,
+            name: "Test Device".into(),
+            compiler: "test<msl>".into(),
+            cubecl_version: nd_fmm_kernels::CUBECL_VERSION,
+            f32: true,
+            f64: false,
+            plane_size: (32, 32),
+            max_shared_memory: 32_768,
+            max_units_per_cube: 1024,
+            max_cube_count: (65_535, 65_535, 65_535),
+            max_memory: None,
+        };
+        let n = 81;
+        let choice = GemmChoice {
+            budget: 128 << 20,
+            ..GemmChoice::hand_written(GemmLayout::default_for(&info, n))
+        };
+        assert_eq!(
+            vector_settings(&choice, &info, n, 1, None),
+            choice.settings(&info, n)
+        );
+        let budget =
+            |info: &DeviceInfo, m, named| vector_settings(&choice, info, n, m, named).budget;
+        assert_eq!(budget(&info, 8, None), 8 * (128 << 20));
+        assert_eq!(budget(&info, 8, Some(16 << 20)), 128 << 20);
+        // An eighth of 4 GB is 512 MB: four vectors' worth, never below one vector's.
+        let small = DeviceInfo {
+            max_memory: Some(4 << 30),
+            ..info.clone()
+        };
+        assert_eq!(budget(&small, 32, None), 512 << 20);
+        let tiny = DeviceInfo {
+            max_memory: Some(256 << 20),
+            ..info
+        };
+        assert_eq!(budget(&tiny, 32, None), 128 << 20);
+    }
+
+    /// The column views of several vectors (Phase 6 T5): rows and batches with m columns
+    /// per box, v ascending within a box, and the plan's own arrays for one vector.
+    #[test]
+    fn columns_expand_rows_and_batches() {
+        // Rows: box 0 takes sources 4 (group 1) and 1 (group 5), box 1 nothing, box 2
+        // source 0 (group 2); the batches of groups 0 to 5 hold the same pairs.
+        let view = GroupedArrays::<u8> {
+            row_offsets: &[0, 2, 2, 3],
+            sources: &[4, 1, 0],
+            groups: &[1, 5, 2],
+            batch_offsets: &[0, 0, 1, 2, 2, 2, 3],
+            batch_targets: &[0, 2, 0],
+            batch_sources: &[4, 0, 1],
+        };
+        let one = Columns::of(&view, 1);
+        assert_eq!(one.row_offsets, view.row_offsets);
+        assert_eq!(one.sources, view.sources);
+        assert_eq!(one.groups, view.groups);
+        assert_eq!(one.batch_offsets, view.batch_offsets);
+        assert_eq!(one.batch_targets, view.batch_targets);
+        assert_eq!(one.batch_sources, view.batch_sources);
+        let two = Columns::of(&view, 2);
+        assert_eq!(two.row_offsets, vec![0, 2, 4, 4, 4, 5, 6]);
+        assert_eq!(two.sources, vec![8, 2, 9, 3, 0, 1]);
+        assert_eq!(two.groups, vec![1, 5, 1, 5, 2, 2]);
+        assert_eq!(two.batch_offsets, vec![0, 0, 2, 4, 4, 4, 6]);
+        assert_eq!(two.batch_targets, vec![0, 1, 4, 5, 0, 1]);
+        assert_eq!(two.batch_sources, vec![8, 9, 0, 1, 2, 3]);
     }
 
     #[test]
