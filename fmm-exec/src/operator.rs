@@ -35,6 +35,10 @@
 //!
 //! m = 1 is the single-vector layout above.
 //!
+//! With dipoles ([`with_sources`](LaplaceOperator::with_sources); Phase 6 T8) the source
+//! chunk holds 6 values per point (the coordinates, then the moments d̂), or 7 with charges
+//! too (the coordinates, the charges, the moments): [`SourceType`].
+//!
 //! Chunks are read in place: the coordinates with `as_chunks::<3>()`, never copied.
 //!
 //! # Operators
@@ -72,6 +76,26 @@
 //! | M2L under `Batched` | the table, read once per block for all m n_pairs columns | the column kernel's chain of column v |
 //! | L2P, M2P | each target's harmonics (`leaf::l2p_many`, `leaf::m2p_many`) | the contraction with column v |
 //! | P2P | d, r² and ρ of each pair (`P2pKernel::evaluate_many`) | the steps of `P2pKernel::evaluate` with q_v; for the reference, `p2p::p2p` on vector v's charges in turn |
+//!
+//! # Dipoles
+//!
+//! [`with_sources`](LaplaceOperator::with_sources) (Phase 6 T8, C6.4;
+//! docs/design/optimisation.md §7; [`SourceType`]) builds the operator for point dipoles,
+//! or charges and dipoles at the same points: the potential d · ∇_y 1/|x − y| of a moment d
+//! (CONVENTIONS §3.7, "Dipole sources"). The source chunk then holds the coordinates, the
+//! charges if any, and the moments d̂ = d / r_s in units of the source leaf (§3.13, "Source
+//! chunks"); only the operators that read sources change:
+//!
+//! | Operator | Dipole part, after the charges' |
+//! | --- | --- |
+//! | P2M at leaf s | `leaf::p2m_dipoles` at the unit frame on u_s, d̂ |
+//! | P2L leaf s → box t | `leaf::p2l_dipoles` at (ĉ(t\|s), r̂(t\|s)), which divides d̂ by r̂(t\|s) |
+//! | P2P leaf s → leaf t | `P2pKernel::evaluate_dipoles` (or `p2p::p2p_dipoles` for the reference) on ŷ and r̂(s\|t) d̂, mapped into scratch (d̂ itself for s = t) |
+//!
+//! Each of the three adds the leaf's charge terms first and then its dipole terms, in
+//! source order, so the order of every sum stays fixed. Every scale is a power of two, so
+//! the mapped moments are exact. M2M, M2L, L2L, L2P, M2P and the target data do not
+//! change. Dipoles carry one set of moments: an operator with dipoles has one vector.
 //!
 //! # Batched execution and order
 //!
@@ -252,6 +276,68 @@ pub const SOURCE_POINT_SIZE: usize = 4;
 /// §3.13, "Target input and output").
 pub const TARGET_INPUT_POINT_SIZE: usize = 3;
 
+/// The sources an operator, and an FMM, is built for (Phase 6 T8, C6.4;
+/// docs/design/optimisation.md §7.1): point charges, point dipoles, or both at every
+/// point. It fixes the source chunk (CONVENTIONS §3.13, "Source chunks"):
+///
+/// | Type | Values per source point | Chunk of n points |
+/// | --- | --- | --- |
+/// | [`Charges`](Self::Charges), the default | 3 + m | u₀ … uₙ₋₁, then the m charges of each point |
+/// | [`Dipoles`](Self::Dipoles) | 6 | u₀ … uₙ₋₁, then d̂₀ … d̂ₙ₋₁ |
+/// | [`ChargesAndDipoles`](Self::ChargesAndDipoles) | 7 | u₀ … uₙ₋₁, q₀ … qₙ₋₁, then d̂₀ … d̂ₙ₋₁ |
+///
+/// d̂ = d / r_s is the moment in units of the source leaf (CONVENTIONS §3.7, "Dipole
+/// sources"), a triple per point. A dipole of moment d at y has the potential
+/// d · ∇_y 1/|x − y| = d · (x − y)/|x − y|³; charges and dipoles add. Dipoles carry one
+/// set of moments (m = 1).
+///
+/// ```
+/// use nd_fmm_exec::operator::SourceType;
+///
+/// assert_eq!(SourceType::default(), SourceType::Charges);
+/// assert_eq!(SourceType::ChargesAndDipoles.strengths(), 4);
+/// assert!(SourceType::Dipoles.has_dipoles() && !SourceType::Dipoles.has_charges());
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SourceType {
+    /// Point charges q: the potential q / |x − y|.
+    #[default]
+    Charges,
+    /// Point dipoles d: the potential d · (x − y) / |x − y|³.
+    Dipoles,
+    /// A charge and a dipole at every source point.
+    ChargesAndDipoles,
+}
+
+impl SourceType {
+    /// Whether the sources carry charges.
+    pub fn has_charges(self) -> bool {
+        matches!(self, Self::Charges | Self::ChargesAndDipoles)
+    }
+
+    /// Whether the sources carry dipole moments.
+    pub fn has_dipoles(self) -> bool {
+        matches!(self, Self::Dipoles | Self::ChargesAndDipoles)
+    }
+
+    /// The strengths per source point of one set: 1 (a charge), 3 (a moment) or 4.
+    pub fn strengths(self) -> usize {
+        usize::from(self.has_charges()) + 3 * usize::from(self.has_dipoles())
+    }
+}
+
+/// Prints `charges`, `dipoles` or `charges+dipoles`.
+impl fmt::Display for SourceType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Charges => "charges",
+            Self::Dipoles => "dipoles",
+            Self::ChargesAndDipoles => "charges+dipoles",
+        })
+    }
+}
+
 /// The consecutive targets of one block of the batched M2L (`M2lStrategy::Batched`;
 /// module documentation, "The batched M2L"): fixed, never derived from the thread count,
 /// so a block decides only which thread runs a target's chain, never the chain.
@@ -390,6 +476,8 @@ pub(crate) struct Kernels<T: SimdScalar> {
     mul_add: MulAdd,
     /// The charge vectors m (1 by default; Phase 6 T5).
     vectors: usize,
+    /// The sources (charges by default; Phase 6 T8).
+    sources: SourceType,
 }
 
 /// One scratch set: what a target body writes besides its output.
@@ -402,6 +490,9 @@ pub(crate) struct Scratch<T: RealScalar> {
     /// One vector's charges of a leaf, for the reference P2P with several vectors
     /// (`max_leaf_points` values); empty with one vector.
     charges: Vec<T>,
+    /// The moments of another leaf in the target's units (dipole P2P, Phase 6 T8;
+    /// `max_leaf_points` triples); empty without dipoles.
+    moments: Vec<[T; 3]>,
     /// The batched M2L's packing buffer and column lists; empty unless `Batched`.
     columns: Columns<T>,
 }
@@ -438,11 +529,17 @@ impl<T: SimdScalar> Scratch<T> {
         } else {
             Vec::new()
         };
+        let moments = if kernels.sources.has_dipoles() {
+            vec![[T::zero(); 3]; kernels.max_leaf_points]
+        } else {
+            Vec::new()
+        };
         Self {
             workspace: Workspace::new(kernels.p),
             tables: kernels.tables.scratch(),
             mapped: vec![[T::zero(); 3]; kernels.max_leaf_points],
             charges,
+            moments,
             columns,
         }
     }
@@ -647,6 +744,7 @@ impl<T: SimdScalar> LaplaceOperator<T> {
             matrix,
             mul_add: MulAdd::Separate,
             vectors: 1,
+            sources: SourceType::Charges,
         };
         let execution = Execution {
             scratch: vec![Mutex::new(Scratch::new(&kernels))],
@@ -716,12 +814,48 @@ impl<T: SimdScalar> LaplaceOperator<T> {
     /// If `vectors` is zero.
     pub fn with_vectors(mut self, vectors: usize) -> Self {
         assert!(vectors > 0, "at least one charge vector");
+        assert!(
+            vectors == 1 || self.kernels.sources == SourceType::Charges,
+            "several vectors need charges only, not {}",
+            self.kernels.sources
+        );
         self.kernels.vectors = vectors;
+        self.renew_scratch();
+        self
+    }
+
+    /// Builds the operator for the sources `sources` (Phase 6 T8, C6.4; [`SourceType`]):
+    /// the source chunks hold the values of its table, and P2M, P2L and P2P add the
+    /// dipoles' terms after the charges' (module documentation, "Dipoles"). With
+    /// [`SourceType::Charges`], the default, nothing changes. Allocates the scratch sets
+    /// again (as many as before), with a buffer of `max_leaf_points` moments for P2P where
+    /// there are dipoles.
+    ///
+    /// # Panics
+    ///
+    /// If the operator carries more than one charge vector and `sources` has dipoles.
+    pub fn with_sources(mut self, sources: SourceType) -> Self {
+        assert!(
+            self.kernels.vectors == 1 || sources == SourceType::Charges,
+            "{sources} with {} charge vectors: dipoles carry one set of moments",
+            self.kernels.vectors
+        );
+        self.kernels.sources = sources;
+        self.renew_scratch();
+        self
+    }
+
+    /// Returns the sources ([`with_sources`](Self::with_sources); charges by default).
+    pub fn sources(&self) -> SourceType {
+        self.kernels.sources
+    }
+
+    /// Allocates the scratch sets again, as many as before, for the current settings.
+    fn renew_scratch(&mut self) {
         let sets = self.execution.scratch.len();
         self.execution.scratch = (0..sets)
             .map(|_| Mutex::new(Scratch::new(&self.kernels)))
             .collect();
-        self
     }
 
     /// Returns the number of charge vectors m ([`with_vectors`](Self::with_vectors); 1 by
@@ -996,6 +1130,15 @@ fn source_points<T>(sources: &[T], vectors: usize) -> (&[[T; 3]], &[T]) {
     (coordinates.as_chunks::<3>().0, charges)
 }
 
+/// A source chunk read in place (CONVENTIONS §3.13, "Source chunks"): the coordinate
+/// triples, the charges (m per point; empty without charges) and the moments d̂ (empty
+/// without dipoles).
+struct SourceChunk<'a, T> {
+    points: &'a [[T; 3]],
+    charges: &'a [T],
+    moments: &'a [[T; 3]],
+}
+
 /// The potentials and, if wanted, the gradients of a target output chunk.
 type TargetOutput<'a, T> = (&'a mut [T], Option<&'a mut [[T; 3]]>);
 
@@ -1008,6 +1151,42 @@ impl<T: SimdScalar> Kernels<T> {
         }
         let isa = self.p2p.as_ref().map_or(Isa::Scalar, P2pKernel::isa);
         MatrixKernel::new(isa, mul_add).map(Some)
+    }
+
+    /// Values per source point: 3 + m with charges only, 6 with dipoles, 7 with both
+    /// ([`SourceType`]).
+    fn source_point_size(&self) -> usize {
+        match self.sources {
+            SourceType::Charges => 3 + self.vectors,
+            sources => 3 + sources.strengths(),
+        }
+    }
+
+    /// Splits a source chunk into its coordinates, charges and moments, in place.
+    #[inline]
+    fn source_chunk<'a>(&self, sources: &'a [T]) -> SourceChunk<'a, T> {
+        if self.sources == SourceType::Charges {
+            let (points, charges) = source_points(sources, self.vectors);
+            return SourceChunk {
+                points,
+                charges,
+                moments: &[],
+            };
+        }
+        let size = self.source_point_size();
+        assert!(
+            sources.len().is_multiple_of(size),
+            "a source chunk holds {size} values per point, got {} values",
+            sources.len()
+        );
+        let n = sources.len() / size;
+        let (coordinates, rest) = sources.split_at(3 * n);
+        let (charges, moments) = rest.split_at(if self.sources.has_charges() { n } else { 0 });
+        SourceChunk {
+            points: coordinates.as_chunks::<3>().0,
+            charges,
+            moments: moments.as_chunks::<3>().0,
+        }
     }
 
     /// Values per target point in the target output: m, or 4 m with gradients.
@@ -1046,21 +1225,24 @@ impl<T: SimdScalar> Kernels<T> {
         (target_input.as_chunks::<3>().0, (potential, gradient))
     }
 
-    /// P2M at the unit frame, of every vector.
+    /// P2M at the unit frame, of every vector: the charges, then the dipoles.
     #[inline]
     fn p2m(&self, sources: &[T], multipole: &mut [T], scratch: &mut Scratch<T>) {
-        let (points, charges) = source_points(sources, self.vectors);
+        let SourceChunk {
+            points,
+            charges,
+            moments,
+        } = self.source_chunk(sources);
         if points.is_empty() {
             return;
         }
-        leaf::p2m_many(
-            self.p,
-            &unit_frame(),
-            points,
-            charges,
-            &mut scratch.workspace,
-            multipole,
-        );
+        let ws = &mut scratch.workspace;
+        if self.sources.has_charges() {
+            leaf::p2m_many(self.p, &unit_frame(), points, charges, ws, multipole);
+        }
+        if self.sources.has_dipoles() {
+            leaf::p2m_dipoles(self.p, &unit_frame(), points, moments, ws, multipole);
+        }
     }
 
     /// Applies `apply` to each vector's expansion of the box blocks `input` and `output`
@@ -1097,21 +1279,26 @@ impl<T: SimdScalar> Kernels<T> {
         });
     }
 
-    /// P2L at `frame` = (ĉ(t|s), r̂(t|s)), of every vector.
+    /// P2L at `frame` = (ĉ(t|s), r̂(t|s)), of every vector: the charges, then the dipoles,
+    /// whose moments d̂ the operator divides by r̂(t|s), exactly (CONVENTIONS §3.13,
+    /// "Operators in scaled coordinates").
     #[inline]
     fn p2l(&self, frame: &Frame<T>, sources: &[T], local: &mut [T], scratch: &mut Scratch<T>) {
-        let (points, charges) = source_points(sources, self.vectors);
+        let SourceChunk {
+            points,
+            charges,
+            moments,
+        } = self.source_chunk(sources);
         if points.is_empty() {
             return;
         }
-        leaf::p2l_many(
-            self.p,
-            frame,
-            points,
-            charges,
-            &mut scratch.workspace,
-            local,
-        );
+        let ws = &mut scratch.workspace;
+        if self.sources.has_charges() {
+            leaf::p2l_many(self.p, frame, points, charges, ws, local);
+        }
+        if self.sources.has_dipoles() {
+            leaf::p2l_dipoles(self.p, frame, points, moments, ws, local);
+        }
     }
 
     /// L2P at the unit frame, of every vector.
@@ -1168,14 +1355,19 @@ impl<T: SimdScalar> Kernels<T> {
         target_output: &mut [T],
         scratch: &mut Scratch<T>,
     ) {
-        let (points, charges) = source_points(sources, self.vectors);
-        let (targets, (potential, gradient)) = self.targets(target_input, target_output);
+        let SourceChunk {
+            points,
+            charges,
+            moments,
+        } = self.source_chunk(sources);
+        let (targets, (potential, mut gradient)) = self.targets(target_input, target_output);
         if points.is_empty() || targets.is_empty() {
             return;
         }
         let Scratch {
             mapped,
             charges: one_vector,
+            moments: mapped_moments,
             ..
         } = scratch;
         let points = match frame {
@@ -1195,7 +1387,29 @@ impl<T: SimdScalar> Kernels<T> {
                 &*mapped
             }
         };
-        self.p2p_points(points, charges, targets, potential, gradient, one_vector);
+        if self.sources.has_charges() {
+            let gradient = gradient.as_deref_mut();
+            self.p2p_points(points, charges, targets, potential, gradient, one_vector);
+        }
+        if self.sources.has_dipoles() {
+            let moments = match frame {
+                None => moments,
+                Some(frame) => {
+                    // d̂ in units of t: r̂(s|t) d̂, exact (a power of two; §3.13).
+                    let mapped = &mut mapped_moments[..moments.len()];
+                    for (e, d) in mapped.iter_mut().zip(moments) {
+                        *e = d.map(|dk| frame.radius * dk);
+                    }
+                    &*mapped
+                }
+            };
+            match &self.p2p {
+                None => p2p::p2p_dipoles(points, moments, targets, potential, gradient),
+                Some(kernel) => {
+                    kernel.evaluate_dipoles(points, moments, targets, potential, gradient);
+                }
+            }
+        }
     }
 
     /// P2P of `sources` with `charges` (m per source) at `targets`, by the operator's
@@ -1516,9 +1730,10 @@ impl<T: SimdScalar + Equivalence + Default> FmmSizes for LaplaceOperator<T> {
         self.kernels.box_size()
     }
 
-    /// 3 + m: [`SOURCE_POINT_SIZE`], 4, with one vector.
+    /// 3 + m with charges ([`SOURCE_POINT_SIZE`], 4, with one vector), 6 with dipoles, 7
+    /// with both ([`SourceType`]).
     fn source_point_size(&self) -> usize {
-        3 + self.kernels.vectors
+        self.kernels.source_point_size()
     }
 
     /// [`TARGET_INPUT_POINT_SIZE`], 3.

@@ -47,13 +47,14 @@
 //! - [`Frame`]: the centre and scaling radius of an expansion (§3.7).
 //! - [`Workspace`]: caller-owned scratch memory for the operators, built for a
 //!   maximum p.
-//! - [`leaf`]: the leaf operators P2M, P2L, L2P and M2P (§3.6, §3.7), with gradients.
+//! - [`leaf`]: the leaf operators P2M, P2L, L2P and M2P (§3.6, §3.7), with gradients,
+//!   and the dipole P2M and P2L (§3.7, "Dipole sources"; Phase 6 T8).
 //! - [`direct`]: the translations M2M, L2L and M2L as direct O(p⁴) sums (§3.11).
 //! - [`rotation`]: the same translations in O(p³), by rotation onto the z axis,
 //!   coaxial translation and rotation back (§3.8, §3.11), with the signatures of
 //!   [`direct`].
 //! - [`p2p`]: the near-field operator P2P and the f64 direct-sum oracle (§3.1), with
-//!   gradients and self-interaction excluded.
+//!   gradients and self-interaction excluded, for charges and for dipoles (Phase 6 T8).
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 //! [`RealScalar`]: nd_fmm_math::RealScalar

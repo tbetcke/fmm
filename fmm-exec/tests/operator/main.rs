@@ -25,6 +25,7 @@ mod device_p2p;
 mod device_rotation;
 #[cfg(any(feature = "cpu", feature = "metal", feature = "cuda"))]
 mod device_translate;
+mod dipoles;
 mod generic;
 mod leaf;
 mod p2p_choice;

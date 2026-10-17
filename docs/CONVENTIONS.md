@@ -1,6 +1,6 @@
 # Conventions
 
-`CONVENTION_VERSION = 1` .
+`CONVENTION_VERSION = 2` .
 
 This file is the single source of truth for basis functions, phases, storage and
 scaling in the `nd-fmm-*` crates. Code cites it as `CONVENTIONS §3.x`. Any change to
@@ -134,6 +134,46 @@ choice, M2M, L2L and M2L tables are identical on every level with no extra facto
 (This refines Section 2.4 of docs/design/laplace-fmm-plan.md, which used L̃ = L · rⁿ and a 1/r
 factor on M2L.)
 
+### Dipole sources
+
+A dipole of moment d ∈ ℝ³ at y has the potential (Phase 6 T8, C6.4)
+
+```math
+\phi(\mathbf{x}) = \mathbf{d}\cdot\nabla_{\mathbf{y}} \frac{1}{|\mathbf{x}-\mathbf{y}|}
+= \frac{\mathbf{d}\cdot(\mathbf{x}-\mathbf{y})}{|\mathbf{x}-\mathbf{y}|^3}
+```
+
+the field of a point dipole pointing along d, and for d = n_y the double-layer kernel
+∂/∂n_y of 1/|x − y|; 1/(4π) as §3.1. A set of sources may carry charges, dipoles or both
+at each point; their potentials add.
+
+With u = (y − c)/r as above and the moment in the same units, d̂ = d/r, the stored
+(scaled) coefficients are
+
+```math
+\tilde M_n^m = \sum_j \hat{\mathbf{d}}_j\cdot\nabla\, \overline{R_n^m}(\mathbf{u}_j), \qquad
+\tilde L_n^m = \sum_j \hat{\mathbf{d}}_j\cdot\nabla\, \overline{I_n^m}(\mathbf{u}_j)
+```
+
+with ∇ the gradient with respect to u, and the evaluation formulas above apply unchanged.
+For charges and dipoles at the same points the coefficients add.
+
+- *Derivation.* d · ∇_y = d̂ · ∇_u, since u = (y − c)/r. Apply it to the separation
+  identity of §3.4 in the frame, 1/|x − y| = (1/r) Σ conj(Rₙᵐ(u)) Iₙᵐ(v) for |u| < |v|,
+  and likewise to the local form. The series may be differentiated term by term: it
+  converges uniformly with all derivatives on |u| ≤ c |v| for c < 1.
+- *Real storage (§3.6).* d̂ is real, so slot m ≥ 0 holds Σ d̂ · ∇ Re Xₙᵐ and slot −m holds
+  −Σ d̂ · ∇ Im Xₙᵐ: the charge rule applied to Σₖ d̂ₖ ∂ₖ Xₙᵐ in the gradient storage of
+  §3.6. Mₙ⁻ᵐ = (−1)^m conj(Mₙᵐ) still holds.
+- M̃₀⁰ = 0, since ∇R₀⁰ = 0: a dipole carries no monopole.
+- The dipole local of degree p needs Iₙᵐ to degree p + 1 (through the irregular gradient
+  ladder), the dipole multipole Rₙᵐ only to degree p − 1. The ranges of §3.9 are
+  unchanged: |u| ≤ √3 for regular and |u| ≥ 2 for irregular harmonics.
+- *Verification.* `tools/fixtures/gen_dipoles.py` computes the coefficients from the
+  definitions of §3.3 by directional differences at 120 digits, and the direct sum in
+  closed form, into `fmm-ref/fixtures/dipoles.json`; while drafting, the expansions were
+  checked against the dipole potential in mpmath (relative error 1e-26 at p = 30).
+
 ## 3.8 Rotations
 
 For a proper rotation Q (3 × 3, orthogonal, determinant +1), the degree-n block Dⁿ(Q)
@@ -163,9 +203,13 @@ D^n(Q_1 Q_2) = D^n(Q_1)\, D^n(Q_2)
 
 ## 3.10 Versioning
 
-`CONVENTION_VERSION = 1`. Any change to §3.1–§3.8, §3.11 or §3.12 bumps it, which
+`CONVENTION_VERSION = 2`. Any change to §3.1–§3.8, §3.11 or §3.12 bumps it, which
 invalidates committed fixtures and cached operator tables. §3.12 is included because
 cached tables depend on its geometry, layout and class rule.
+
+- Version 1: the conventions of Phases 0–6 T7.
+- Version 2 (Phase 6 T8): adds "Dipole sources" to §3.7. No existing quantity changed;
+  the fixtures were regenerated with the new version and cached tables are rebuilt.
 
 §3.13 is not included, and a change to it does not bump `CONVENTION_VERSION`: it
 describes in-memory data only (chunk layouts, leaf-scaled values, relative frames), and
@@ -826,6 +870,24 @@ u_0 u_1 … u_(n−1) q_0 q_1 … q_(n−1)        u_j = (x, y, z) of point j
 - These chunks are exchanged for ghost leaves (U and X lists). u is relative to the
   leaf's own key, so a received chunk needs no transformation.
 
+**Dipole sources** (Phase 6 T8; §3.7, "Dipole sources"). The source type is fixed for
+an FMM (`nd_fmm_exec::operator::SourceType`, docs/design/optimisation.md §7.1):
+
+```text
+Charges            4n values   u_0 … u_(n−1)  q_0 … q_(n−1)                (as above)
+Dipoles            6n values   u_0 … u_(n−1)  d̂_0 … d̂_(n−1)
+ChargesAndDipoles  7n values   u_0 … u_(n−1)  q_0 … q_(n−1)  d̂_0 … d̂_(n−1)
+```
+
+- d̂ⱼ = dⱼ / r_s is the moment in units of the source leaf s, as triples point-major after
+  the charges (or after the coordinates), so the moments read as n values of `[T; 3]`.
+- *Evaluation.* Per component, in f64, fl(d / r_s) = fl(d · 2^(l+1) / w), one rounding
+  because r_s is exact (as for u, "Leaf-scaled coordinates"), then rounding to T. The
+  charges stay unscaled.
+- A dipole chunk received for a ghost leaf needs no transformation, as before.
+- Several vectors ("Several charge vectors", below) and dipoles compose in principle (m
+  sets of strengths); Phase 6 T8 builds one set, and an FMM with dipoles has m = 1.
+
 ### Target input and output
 
 A leaf with n ≥ 0 target points has two chunks, in the same point order:
@@ -844,7 +906,9 @@ For a target x in leaf t with half-width r_t,
 ```
 
 the potential and gradient of the 1/|x − y| kernel of §3.1 in units of the target
-leaf. Every operator below accumulates (+=) into them with no further factor.
+leaf. Every operator below accumulates (+=) into them with no further factor. With
+dipoles (§3.7, "Dipole sources") φ̂ and ĝ are r_t and r_t² times the potential and gradient
+of all sources, the dipoles' d · (x − y)/|x − y|³ included, and "Output" applies unchanged.
 
 ### Several charge vectors
 
@@ -886,6 +950,9 @@ Each operator passes:
 | L2P at leaf t | `leaf::l2p` | ((0, 0, 0), 1) | u_t | φ̂, ĝ |
 | M2P from box s at leaf t | `leaf::m2p` | (ĉ(s\|t), r̂(s\|t)) | u_t | φ̂, ĝ |
 | P2P from leaf s to leaf t | `p2p::p2p` | none | ŷ = ĉ(s\|t) + r̂(s\|t) u_s and u_t | φ̂, ĝ |
+| dipole P2M at leaf s | `leaf::p2m_dipoles` | ((0, 0, 0), 1) | u_s, d̂ | M̃ of s in (c_s, r_s) |
+| dipole P2L from leaf s into box t | `leaf::p2l_dipoles` | (ĉ(t\|s), r̂(t\|s)) | u_s, d̂ | L̃ of t in (c_t, r_t) |
+| dipole P2P from leaf s to leaf t | `p2p::p2p_dipoles` | none | ŷ and u_t, r̂(s\|t) d̂ (d̂ for s = t) | φ̂, ĝ |
 | M2M, L2L, M2L | tables (§3.12) | by child index o and offset index (d) | coefficients | coefficients in the output frame |
 
 *Derivations.* With y = c_s + r_s u_s for a source in leaf s and x = c_t + r_t u_t for a
@@ -917,6 +984,14 @@ target in leaf t:
 - **M2M, L2L and M2L.** The coefficients are scaled (§3.7) and the tables of §3.12 are
   the operators at the relative frames (see "Relative frames"). They are looked up by
   child index o and offset index (d); no geometry is evaluated.
+- **Dipoles.** The reference operators take a moment in the units of the points they are
+  given, as they take the points: `p2m_dipoles` and `p2l_dipoles` divide it by the frame
+  radius R (the d̂ = d/r of §3.7). For P2M, R = 1 and d̂ is the moment of §3.7 in (c_s, r_s).
+  For P2L, with u′ = (y − c_t)/r_t = (u_s − ĉ(t|s))/r̂(t|s), d/r_t = d̂ r̂(s|t) = d̂ / r̂(t|s),
+  the division by R = r̂(t|s), a power of two, so exact: L̃ of t with no factor. For P2P,
+  with w = u_t − ŷ and d_t = d/r_t = r̂(s|t) d̂ (exact), x − y = r_t w gives
+  φ̂ = r_t φ = d_t · w / |w|³ and ĝ = r_t² ∇φ = d_t / |w|³ − 3 (d_t · w) w / |w|⁵. The
+  coincident-pair rule (x == y skipped; r² = 0 in fast and device kernels) is unchanged.
 
 Since ĉ and r̂ are exact in T, `Frame::scaled` rounds once in P2L and M2P (the
 subtraction; division by a power of two is exact), relative to |u − ĉ|, on every level
@@ -1016,8 +1091,18 @@ or infinite in both paths, and the gradient contract of fast kernels in f32 hold
 2⁻⁸⁴ ≤ r² ≤ 2⁷ and |q| ≤ 1. Potentials, and everything in f64, stay in the normal
 range on the whole domain.
 
+*Dipoles* (Phase 6 T8). A dipole term has |φ̂| ≤ |d_t| / r² and |ĝ| ≤ 2 |d_t| / r³, and both
+the reference and a fast kernel form r⁻³ (r² r, or ρ³) for both. The reference forms the
+gradient as (d_t,ₖ − ((3 s) / r²) wₖ) / r³ and a fast kernel as ρ³ (d_t,ₖ − (3 s ρ²) wₖ),
+s = d_t · w, never with r⁻⁵, so every intermediate is at most 4 |d_t| / r³ or r⁻³ itself.
+With |d_t,ₖ| ≤ 2^e, e ≥ 0, every intermediate stays below 2¹²³ for 2^(−80 + 2e/3) ≤ r² ≤ 2⁷,
+where the dipole contracts in f32 hold (|d_t,ₖ| ≤ 1: r² ≥ 2⁻⁸⁰, two points farther apart
+than 2⁻⁴⁰ r_t). In f64 everything stays in the normal range on the whole domain. The
+dipole kinds run on the host on every device backend (Phase 6 T8), so no device contract
+for them is stated.
+
 Like the rest of §3.13 this describes in-memory data and the kernels that read it. It
-changes no fixture and no table, and `CONVENTION_VERSION` stays 1 (§3.10).
+changes no fixture and no table, and does not bump `CONVENTION_VERSION` (§3.10).
 
 ### Device kernels
 
@@ -1086,7 +1171,7 @@ domain, ρ ≥ 2⁻³·⁵ and |q| / r² ≥ 2⁻⁷ |q|, so in f32 that happens
 |q| ≥ 2⁻¹⁰⁰, and smaller nonzero charges are outside them on a backend that flushes.
 
 Like the rest of §3.13, this describes in-memory data and the kernels that read it. It
-changes no fixture and no table, and `CONVENTION_VERSION` stays 1 (§3.10).
+changes no fixture and no table, and does not bump `CONVENTION_VERSION` (§3.10).
 
 ### Output
 

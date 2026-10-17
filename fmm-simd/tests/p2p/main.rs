@@ -29,6 +29,7 @@
 mod coincident;
 mod common;
 mod cross_isa;
+mod dipoles;
 mod domain;
 mod inputs;
 mod invariance;

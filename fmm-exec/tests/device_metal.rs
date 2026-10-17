@@ -48,7 +48,10 @@
 //!   slowed candidate, the input-precision guard, the cache round trip, stale and
 //!   corrupted files, every candidate's output within the FMM bounds, the budget) at p = 8
 //!   in f32, where the library GEMM and its coefficient-major layout are candidates, and
-//!   at p = 3 without the stale files and the budget.
+//!   at p = 3 without the stale files and the budget;
+//! - dipole sources (Phase 6 T8, `device_common::dipole_scenario`): the cube, N = 2,000,
+//!   p = 4, f32, `Dipoles` and `ChargesAndDipoles`: every kind on the host fallback bit for
+//!   bit the host, the default placement (P2M, P2L and P2P on the host) within 1e-5.
 //!
 //! The test prints the device (`Backend::probe`) and the backends it ran.
 #![cfg(feature = "metal")]
@@ -166,6 +169,8 @@ fn metal_device_path() {
     eprintln!("rank {}: on {info}", comm.rank());
 
     let mut rng = SplitMix64(0x3e7a1);
+    // Dipole sources (Phase 6 T8, C6.4): P2M, P2L and P2P on the host fallback.
+    device_common::dipole_scenario::<f32>(2000, 4, Backend::Metal, &comm);
     let points = cube(&mut rng, 2000);
     let q = charges(&mut rng, points.len());
     for (strategy, gradients) in [

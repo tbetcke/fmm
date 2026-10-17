@@ -53,4 +53,4 @@ pub use scalar::RealScalar;
 /// Any change to CONVENTIONS §3.1–§3.8, §3.11 or §3.12 bumps this value, which
 /// invalidates committed fixtures and cached operator tables. A test checks that it
 /// matches the file.
-pub const CONVENTION_VERSION: u32 = 1;
+pub const CONVENTION_VERSION: u32 = 2;

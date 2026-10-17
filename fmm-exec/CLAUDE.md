@@ -30,7 +30,9 @@ C6.3 (T5: several charge vectors, `FmmBuilder::vectors`, `Fmm::evaluate_many`,
 `OutputMany`, host and device; design docs/design/optimisation.md §4) and C6.1 (T7: the
 device's fused gather, reduction by chunk and shared-memory GEMM,
 `FmmBuilder::{device_gather, device_reduction}`, `DeviceGemm::Shared`; design
-docs/design/optimisation.md §6).
+docs/design/optimisation.md §6) and C6.4 (T8: dipole sources, `SourceType`,
+`FmmBuilder::sources`, `Sources`, `Fmm::evaluate_sources`; design
+docs/design/optimisation.md §7; report fmm-validate/results/phase6-dipoles.md).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -75,6 +77,32 @@ docs/design/optimisation.md §6).
   (`device::Columns`), the leaf and P2P kernels take the vectors along z, and the GEMM
   decisions are keyed by the plan's pairs, with a chunk budget per vector unless the builder
   names one (`vector_settings`; the `device` module docs).
+- Dipole sources (Phase 6 T8, C6.4; the `operator` and `fmm` module docs, "Dipoles";
+  CONVENTIONS §3.7, "Dipole sources", and §3.13, "Source chunks"): `SourceType` is fixed at
+  build (`FmmBuilder::sources`, `LaplaceOperator::with_sources`) and sets the source chunk
+  (3 + m with charges, 6 with dipoles, 7 with both: u, q, d̂). Only P2M, P2L and P2P change:
+  each adds the leaf's charge terms first, then its dipole terms (`leaf::p2m_dipoles`,
+  `leaf::p2l_dipoles`, `P2pKernel::evaluate_dipoles` or `p2p::p2p_dipoles` with
+  `Reference`), the moments of another leaf mapped by r̂(s|t) into scratch (exact). The
+  charge load scales each moment into its leaf's units, `T::from_f64(d.to_f64() / r)`;
+  the forward moves 1, 3 or 4 strengths per source (the build's `strengths`), the charges and
+  moments packed q, d₀, d₁, d₂ per source. With `SourceType::Charges` (the default) nothing
+  changes: `evaluate_sources(Sources::charges(c))` is `evaluate(c)` bit for bit; keep it so.
+  `evaluate` and `evaluate_many` on a dipole FMM, and a `Sources` that does not match the
+  build, give `FmmError::SourceType`, a short moment slice `FmmError::DipolesLength`, agreed
+  in the length all-reduce; dipoles with m > 1 are `SettingsError::SourcesWithVectors`. On a
+  device P2M, P2L and P2P run on the host fallback with dipoles (the device module docs,
+  "Dipoles"; `device::SOURCE_KINDS`), the device's source store keeps the chunk layout and
+  takes no strengths (no `DataKind::Charges` traffic). The cost model weighs the charge
+  kernels. `tests/operator/dipoles.rs` checks the operators against `nd_fmm_ref` (C3.1
+  criterion, every P2P kernel); `tests/mpi_exec.rs`, **dipole sources**, the FMM against the
+  direct sum, threads, overlap, `Reference`, f32, the one-rank reference, linearity and the
+  errors, with the `gpu` feature `device_common::check_dipoles` and `dipole_scenario` (also
+  in `tests/device_metal.rs`, `tests/device_cuda.rs` and `tests/device_ranks.rs`); the
+  ignored `tests/dipoles.rs` (its own MPI test, any rank count) the gate: twice each source
+  type's single-translation prediction on the C3.2 cube, twice the cube's error on the C3.3
+  Plummer sphere, f64 p = 3, 8, 12 and f32 p = 3, 8. The dipole scenario added about 20 s
+  to the one-rank debug run of `tests/mpi_exec.rs` (137 → 157 s on the M3 Max).
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread
   count. No `unsafe`, no atomics, no global pool; per-thread scratch created at

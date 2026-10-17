@@ -14,7 +14,8 @@
 //! [`rsqrt::rsqrt_slice`] exposes for tests and reports. Phase 6 T2:
 //! [`MatrixKernel::accumulate_columns`] on every ISA, in the [`MulAdd`] modes. Phase 6
 //! T5: [`P2pKernel::evaluate_many`], P2P of several charge vectors at once. Phase 6 T6:
-//! [`Isa::Avx512`], every kernel on AVX-512F, selectable but not yet the default.
+//! [`Isa::Avx512`], every kernel on AVX-512F, selectable but not yet the default. Phase 6 T8:
+//! [`P2pKernel::evaluate_dipoles`], P2P of point dipoles.
 //!
 //! ## Instruction sets
 //!
@@ -112,6 +113,16 @@
 //! every ISA, and every guarantee above holds per vector. The scalar path forms d, r² and
 //! r once per pair and adds each vector's term as its single-vector loop does.
 
+//! ## Dipoles
+//!
+//! [`P2pKernel::evaluate_dipoles`] (Phase 6 T8, C6.4) adds the potential d · w / r³ of
+//! point dipoles and its gradient (CONVENTIONS §3.7, "Dipole sources"), with the
+//! semantics of `nd_fmm_ref::p2p::p2p_dipoles`. The vector kernels run the charge
+//! kernel's loop order, blocks, tails, coincident-pair mask and inverse square root, with
+//! the dipole terms formed as ρ³ s and ρ³ (dₖ − 3 s ρ² wₖ), s = d · w, so that no
+//! intermediate exceeds the term's bound by more than ρ³ (docs/design/simd-p2p.md §4.8,
+//! which derives the contract); the scalar path is the reference's loop.
+//!
 //! ## The matrix kernel
 //!
 //! [`MatrixKernel::accumulate_columns`] adds A · B[:, b_j] into C[:, c_j] for lists of
@@ -259,6 +270,17 @@ mod sealed {
             gradient: Option<&mut [[Self; 3]]>,
         );
 
+        /// [`P2pKernel::evaluate_dipoles`](crate::P2pKernel::evaluate_dipoles) in this
+        /// precision, with lengths already checked.
+        fn p2p_dipoles(
+            isa: AvailableIsa,
+            sources: &[[Self; 3]],
+            dipoles: &[[Self; 3]],
+            targets: &[[Self; 3]],
+            potential: &mut [Self],
+            gradient: Option<&mut [[Self; 3]]>,
+        );
+
         /// [`MatrixKernel::accumulate_columns`](crate::MatrixKernel::accumulate_columns)
         /// in this precision, with shapes already checked.
         #[expect(
@@ -309,6 +331,18 @@ mod sealed {
         }
 
         #[inline]
+        fn p2p_dipoles(
+            isa: AvailableIsa,
+            sources: &[[f32; 3]],
+            dipoles: &[[f32; 3]],
+            targets: &[[f32; 3]],
+            potential: &mut [f32],
+            gradient: Option<&mut [[f32; 3]]>,
+        ) {
+            arch::p2p_dipoles_f32(isa, sources, dipoles, targets, potential, gradient);
+        }
+
+        #[inline]
         fn accumulate(
             isa: AvailableIsa,
             mul_add: MulAdd,
@@ -352,6 +386,18 @@ mod sealed {
             gradient: Option<&mut [[f64; 3]]>,
         ) {
             arch::p2p_many_f64(isa, sources, charges, m, targets, potential, gradient);
+        }
+
+        #[inline]
+        fn p2p_dipoles(
+            isa: AvailableIsa,
+            sources: &[[f64; 3]],
+            dipoles: &[[f64; 3]],
+            targets: &[[f64; 3]],
+            potential: &mut [f64],
+            gradient: Option<&mut [[f64; 3]]>,
+        ) {
+            arch::p2p_dipoles_f64(isa, sources, dipoles, targets, potential, gradient);
         }
 
         #[inline]

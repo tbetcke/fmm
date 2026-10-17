@@ -200,6 +200,35 @@
 //! - **Cost model.** The work-weighted cut weighs the work of one vector
 //!   ([`cost::work_counts`]); only the partition depends on it, never a bit of the output.
 //!
+//! # Dipoles (Phase 6 T8)
+//!
+//! [`FmmBuilder::sources`] (C6.4; docs/design/optimisation.md §7) builds an FMM for point
+//! dipoles, or a charge and a dipole at every source point ([`SourceType`]): a moment d at
+//! y gives the potential d · ∇_y 1/|x − y| = d · (x − y)/|x − y|³ (CONVENTIONS §3.7,
+//! "Dipole sources"), and [`Fmm::evaluate_sources`] takes the strengths as a [`Sources`]
+//! in the caller's source order. [`Fmm::evaluate`] and [`Fmm::evaluate_many`] serve charges
+//! only and are refused with [`FmmError::SourceType`] otherwise, as is a [`Sources`] that
+//! does not match the build, agreed in the length all-reduce. The type is fixed at build
+//! because it sets the source chunks (6 or 7 values per point; CONVENTIONS §3.13, "Source
+//! chunks"):
+//! - **Moves.** The forward moves 1, 3 or 4 values per source (charges and moments packed
+//!   four per source, q first, on the pool); the charge load writes each leaf's charges and
+//!   its moments scaled into the leaf's units, d̂ = d / r_s, one rounding in f64 and one to
+//!   T; the ghost exchange moves the chunks as they are.
+//! - **Operators.** Only P2M, P2L and P2P change (the dipole terms after the charge terms of
+//!   each source leaf; [`operator`](crate::operator#dipoles)); the far field, L2P, M2P, the
+//!   lists, the exchanges of expansions and the output pass are those of charges. The
+//!   guarantees of the charge path hold: bits for every thread count, overlap setting and
+//!   routing; on P ranks the one-rank `Fmm` over the union.
+//! - **Charges unchanged.** With [`SourceType::Charges`], the default, nothing changes:
+//!   `evaluate_sources` of `Sources::charges(c)` is `evaluate(c)` bit for bit.
+//! - **One set.** Dipoles carry one set of strengths; with more than one vector `build`
+//!   returns [`SettingsError::SourcesWithVectors`].
+//! - **The device** runs P2M, P2L and P2P on the host fallback with dipoles (the `device`
+//!   module, "Dipoles").
+//! - **Cost model.** The work-weighted cut weighs the charge kernels' work; only the
+//!   partition depends on it.
+//!
 //! # Threads (C3.5)
 //!
 //! With [`FmmBuilder::threads`] n > 1, the `Fmm` owns a rayon pool of n threads and the
@@ -381,6 +410,7 @@ use crate::device::{
     self, DeviceCounters, DeviceDriver, DeviceOptions, DeviceOutput, DeviceReport, ViewsImage,
 };
 use crate::geometry::{Domain, GeometryError, leaf_coordinates, radius};
+pub use crate::operator::SourceType;
 use crate::operator::{Isa, LaplaceOperator, MulAdd, P2pChoice, SimdScalar};
 use crate::tables::{M2lStrategy, NodeContext, StrategyChoice, Tables};
 use crate::threading::{REQUIRED_MPI_THREADING, ThreadingReport};
@@ -737,6 +767,15 @@ pub enum SettingsError {
     /// `vectors` is zero ([`FmmBuilder::vectors`]).
     #[error("vectors must be at least 1")]
     ZeroVectors,
+    /// Several charge vectors with dipole sources ([`FmmBuilder::vectors`],
+    /// [`FmmBuilder::sources`]; Phase 6 T8): dipoles carry one set of moments.
+    #[error("{sources} carry one set of strengths, not {vectors} vectors")]
+    SourcesWithVectors {
+        /// The sources requested.
+        sources: SourceType,
+        /// The vectors requested.
+        vectors: usize,
+    },
     /// The P2P kernel is [`P2pChoice::Isa`] with an instruction set this machine cannot
     /// run ([`Isa::is_available`]).
     #[error("p2p_kernel: instruction set `{isa}` is not available on this machine")]
@@ -880,6 +919,25 @@ pub enum FmmError {
         /// The vectors given.
         actual: usize,
     },
+    /// The evaluation passes sources of another type than the FMM was built for
+    /// ([`FmmBuilder::sources`], Phase 6 T8): [`Fmm::evaluate`] and
+    /// [`Fmm::evaluate_many`] pass charges, [`Fmm::evaluate_sources`] what its
+    /// [`Sources`] holds (`None` for neither).
+    #[error("{actual:?} given to an FMM built for {expected}")]
+    SourceType {
+        /// The sources the FMM was built for.
+        expected: SourceType,
+        /// The sources given.
+        actual: Option<SourceType>,
+    },
+    /// The dipole moments do not have one entry per source of this rank (Phase 6 T8).
+    #[error("{actual} dipole moments given for {expected} sources")]
+    DipolesLength {
+        /// The number of sources on this rank.
+        expected: usize,
+        /// The number of moments given.
+        actual: usize,
+    },
     /// The plan could not be built.
     #[error("building the plan failed: {0}")]
     Plan(#[source] PlanError),
@@ -920,6 +978,7 @@ pub enum FmmError {
 /// | [`dense_node_budget`](Self::dense_node_budget) | [`M2lStrategy::AUTO_DENSE_NODE_BYTES`], 64 MB |
 /// | [`gradients`](Self::gradients) | off |
 /// | [`vectors`](Self::vectors) | 1: one charge vector per evaluation |
+/// | [`sources`](Self::sources) | [`SourceType::Charges`]: point charges |
 /// | [`max_level`](Self::max_level) | [`DEFAULT_MAX_LEVEL`], 16 |
 /// | [`max_points_per_leaf`](Self::max_points_per_leaf) | [`DEFAULT_MAX_POINTS_PER_LEAF`], 64 |
 /// | [`domain`](Self::domain) | `compute_global_bounding_box` of all points |
@@ -954,6 +1013,7 @@ pub struct FmmBuilder<T> {
     dense_node_budget: usize,
     gradients: bool,
     vectors: usize,
+    sources: SourceType,
     max_level: usize,
     max_points_per_leaf: usize,
     domain: Option<[f64; 6]>,
@@ -993,6 +1053,7 @@ impl<T> FmmBuilder<T> {
             dense_node_budget: M2lStrategy::AUTO_DENSE_NODE_BYTES,
             gradients: false,
             vectors: 1,
+            sources: SourceType::Charges,
             max_level: DEFAULT_MAX_LEVEL,
             max_points_per_leaf: DEFAULT_MAX_POINTS_PER_LEAF,
             domain: None,
@@ -1062,6 +1123,17 @@ impl<T> FmmBuilder<T> {
     /// for bit. Every rank must pass the same value.
     pub fn vectors(mut self, vectors: usize) -> Self {
         self.vectors = vectors;
+        self
+    }
+
+    /// Sets the sources of every evaluation (Phase 6 T8, C6.4; [Dipoles](self#dipoles-phase-6-t8);
+    /// docs/design/optimisation.md §7.1): [`SourceType::Charges`] (the default), point
+    /// dipoles, or both at every source point. It is fixed at build because it sets the
+    /// source chunks and so the exchanges. With dipoles, [`Fmm::evaluate_sources`] takes the
+    /// strengths, one set (with more than one vector [`build`](Self::build) returns
+    /// [`SettingsError::SourcesWithVectors`]).
+    pub fn sources(mut self, sources: SourceType) -> Self {
+        self.sources = sources;
         self
     }
 
@@ -1385,10 +1457,25 @@ impl<T> FmmBuilder<T> {
         if self.vectors == 0 {
             return Err(SettingsError::ZeroVectors);
         }
+        if self.vectors > 1 && self.sources != SourceType::Charges {
+            return Err(SettingsError::SourcesWithVectors {
+                sources: self.sources,
+                vectors: self.vectors,
+            });
+        }
         if let Err(error) = self.p2p.resolve() {
             return Err(SettingsError::P2pIsaUnavailable { isa: error.isa });
         }
         Ok(())
+    }
+
+    /// The strengths per source an evaluation moves: m charges, or the values of one set
+    /// of the source type (1, 3 or 4; Phase 6 T8).
+    fn strengths(&self) -> usize {
+        match self.sources {
+            SourceType::Charges => self.vectors,
+            sources => sources.strengths(),
+        }
     }
 
     /// The rayon threads of the level calls: `threads`, but 1 with [`Backend::Cpu`],
@@ -1590,7 +1677,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         // source and up to 4 m output values per target. `max_per_item` is the same on
         // every rank, so is this outcome.
         let output_values = self.vectors * if self.gradients { 4 } else { 1 };
-        let per_item = output_values.max(3);
+        let per_item = output_values.max(3).max(self.strengths());
         if source_route.max_per_item().min(target_route.max_per_item()) < per_item {
             return Err(FmmError::Redistribution(RedistributionError::Overflow));
         }
@@ -1662,7 +1749,8 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             .with_p2p(self.p2p)
             .expect("step 1 checked that this machine runs the P2P kernel")
             .with_m2l_mul_add(self.m2l_mul_add)
-            .with_vectors(self.vectors);
+            .with_vectors(self.vectors)
+            .with_sources(self.sources);
         threading.m2l_kernel = operator
             .m2l_kernel()
             .map(|kernel| (kernel.isa(), kernel.mul_add()));
@@ -1743,7 +1831,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
 
         // The values per target the output pass forms and the backward move returns: φ,
         // or φ and ∇φ, of every vector (`output_values` above).
-        let vectors = self.vectors;
+        let (vectors, strengths) = (self.vectors, self.strengths());
         Ok(Fmm {
             octree,
             evaluator,
@@ -1759,8 +1847,10 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             sent_leaves,
             device_error: None,
             vectors,
+            source_type: self.sources,
+            strengths,
             packed: Vec::new(),
-            charges: vec![T::zero(); vectors * source_route.nreceived()],
+            charges: vec![T::zero(); strengths * source_route.nreceived()],
             received_output: vec![T::zero(); output_values * target_route.nreceived()],
             returned_output: vec![T::zero(); output_values * target_route.nsent()],
             sources: source_route,
@@ -2705,40 +2795,70 @@ impl OutputOrder {
 /// forwarded. On `pool` when given, the leaves split in halves under `rayon::join` into
 /// disjoint parts of at most [`LOAD_GRAIN`] points (or one leaf); serially otherwise.
 /// Copies only, so the same values either way (Phase 4S T9).
-fn load_source_charges<T: Copy + Send + Sync>(
+fn load_source_charges<T: SimdScalar>(
     chunks: LeafSliceMut<'_, T>,
     sources: &LeafRanges,
     charges: &[T],
-    vectors: usize,
+    (vectors, moments): (usize, Option<StrengthLayout<'_>>),
     pool: Option<&ThreadPool>,
 ) {
-    let input = (sources, charges, vectors);
+    let input = (sources, charges, vectors, moments);
     match pool {
         Some(pool) => pool.install(|| split_source_charges(chunks, 0, input)),
         None => write_source_charges(chunks, 0, input),
     }
 }
 
-/// The input of the charge load: the owned sources' leaves, the charges and the vectors.
-type ChargeInput<'a, T> = (&'a LeafRanges, &'a [T], usize);
+/// The input of the charge load: the owned sources' leaves, the strengths, the strengths
+/// per source and, with dipoles, how to lay them out.
+type ChargeInput<'a, T> = (&'a LeafRanges, &'a [T], usize, Option<StrengthLayout<'a>>);
+
+/// How the charge load lays out the strengths of a source type with dipoles (Phase 6 T8;
+/// CONVENTIONS §3.13, "Source chunks"): the w = 3 or 4 values of a source arrive together
+/// (its charge first, if any), and leaf j's chunk takes the n charges, then the n moments
+/// d̂ = d / r_j, each component `T::from_f64(d.to_f64() / r_j)`: one rounding in f64 (r_j =
+/// w / 2^(l+1) is exact, so this is fl(d · 2^(l+1) / w)), then the rounding to T.
+#[derive(Clone, Copy)]
+struct StrengthLayout<'a> {
+    sources: SourceType,
+    /// r of every local leaf.
+    radii: &'a [f64],
+}
 
 /// [`load_source_charges`] on the calling thread, for the leaves of `chunks`, the first
 /// of which is local leaf `first`.
-fn write_source_charges<T: Copy>(
+fn write_source_charges<T: SimdScalar>(
     mut chunks: LeafSliceMut<'_, T>,
     first: usize,
-    (sources, charges, m): ChargeInput<'_, T>,
+    (sources, charges, m, moments): ChargeInput<'_, T>,
 ) {
     for (r, chunk) in chunks.chunks_mut().enumerate() {
         let points = sources.range(first + r);
         let (_, values) = chunk.split_at_mut(3 * points.len());
-        values.copy_from_slice(&charges[m * points.start..m * points.end]);
+        let input = &charges[m * points.start..m * points.end];
+        match moments {
+            None => values.copy_from_slice(input),
+            Some(StrengthLayout { sources, radii }) => {
+                let radius = radii[first + r];
+                let n = points.len();
+                let q = usize::from(sources.has_charges());
+                let (leaf_charges, leaf_moments) = values.split_at_mut(q * n);
+                for (j, strengths) in input.chunks_exact(m).enumerate() {
+                    if q == 1 {
+                        leaf_charges[j] = strengths[0];
+                    }
+                    for k in 0..3 {
+                        leaf_moments[3 * j + k] = T::from_f64(strengths[q + k].to_f64() / radius);
+                    }
+                }
+            }
+        }
     }
 }
 
 /// [`load_source_charges`] on the current pool, halving the leaves of `chunks` (the
 /// first local leaf `first`) until a half holds at most [`LOAD_GRAIN`] points or one leaf.
-fn split_source_charges<T: Copy + Send + Sync>(
+fn split_source_charges<T: SimdScalar>(
     mut chunks: LeafSliceMut<'_, T>,
     first: usize,
     input: ChargeInput<'_, T>,
@@ -2778,6 +2898,28 @@ fn pack_charges<T: Copy + Send + Sync>(
         None => {
             packed.clear();
             packed.extend((0..m * n).map(value));
+        }
+    }
+}
+
+/// The charges and moments of an evaluation with both (Phase 6 T8) packed point-major,
+/// four values per source in the caller's order: q, d₀, d₁, d₂. On the pool if given.
+fn pack_sources<T: Copy + Send + Sync>(
+    charges: &[T],
+    dipoles: &[[T; 3]],
+    pool: Option<&ThreadPool>,
+    packed: &mut Vec<T>,
+) {
+    let value = |k: usize| match k % 4 {
+        0 => charges[k / 4],
+        c => dipoles[k / 4][c - 1],
+    };
+    let n = 4 * charges.len();
+    match pool {
+        Some(pool) => pool.install(|| (0..n).into_par_iter().map(value).collect_into_vec(packed)),
+        None => {
+            packed.clear();
+            packed.extend((0..n).map(value));
         }
     }
 }
@@ -3515,6 +3657,65 @@ pub struct ExchangeTraffic {
 /// operator with its tables and, with more than one thread, its thread pool, and the
 /// evaluator with its stores, in which the leaf-scaled points stay loaded between
 /// evaluations.
+/// The strengths of one evaluation of [`Fmm::evaluate_sources`] (Phase 6 T8, C6.4;
+/// docs/design/optimisation.md §7.1), in the caller's source order: the charges, the
+/// dipole moments, or both, as the FMM's [`SourceType`] fixed at build. A moment d at y
+/// gives the potential d · (x − y) / |x − y|³ (CONVENTIONS §3.7, "Dipole sources").
+///
+/// ```
+/// use nd_fmm_exec::fmm::{SourceType, Sources};
+///
+/// let (q, d) = ([1.0, -0.5], [[0.0, 0.0, 1.0], [0.5, 0.0, 0.0]]);
+/// assert_eq!(Sources::charges(&q).source_type(), Some(SourceType::Charges));
+/// assert_eq!(Sources::dipoles(&d).source_type(), Some(SourceType::Dipoles));
+/// let both = Sources::charges_and_dipoles(&q, &d);
+/// assert_eq!(both.source_type(), Some(SourceType::ChargesAndDipoles));
+/// assert_eq!(Sources::<f64>::default().source_type(), None);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Sources<'a, T> {
+    /// The charges, one per source, if the sources have charges.
+    pub charges: Option<&'a [T]>,
+    /// The dipole moments, one triple per source, if the sources have dipoles.
+    pub dipoles: Option<&'a [[T; 3]]>,
+}
+
+impl<'a, T> Sources<'a, T> {
+    /// Charges only.
+    pub fn charges(charges: &'a [T]) -> Self {
+        Self {
+            charges: Some(charges),
+            dipoles: None,
+        }
+    }
+
+    /// Dipole moments only.
+    pub fn dipoles(dipoles: &'a [[T; 3]]) -> Self {
+        Self {
+            charges: None,
+            dipoles: Some(dipoles),
+        }
+    }
+
+    /// A charge and a moment per source.
+    pub fn charges_and_dipoles(charges: &'a [T], dipoles: &'a [[T; 3]]) -> Self {
+        Self {
+            charges: Some(charges),
+            dipoles: Some(dipoles),
+        }
+    }
+
+    /// The source type these strengths are for, or `None` if they hold neither.
+    pub fn source_type(&self) -> Option<SourceType> {
+        match (self.charges.is_some(), self.dipoles.is_some()) {
+            (true, false) => Some(SourceType::Charges),
+            (false, true) => Some(SourceType::Dipoles),
+            (true, true) => Some(SourceType::ChargesAndDipoles),
+            (false, false) => None,
+        }
+    }
+}
+
 pub struct Fmm<'o, T, C = SimpleCommunicator>
 where
     T: Stored + SimdScalar + Equivalence + Default,
@@ -3546,8 +3747,14 @@ where
     device_error: Option<String>,
     /// The charge vectors of every evaluation (Phase 6 T5).
     vectors: usize,
+    /// The sources of every evaluation (Phase 6 T8).
+    source_type: SourceType,
+    /// The strengths per source the forward move carries: m charges, or 1, 3 or 4 values
+    /// of the source type (Phase 6 T8).
+    strengths: usize,
     /// With several vectors, the caller's charges packed point-major (m per source in the
-    /// caller's order) for the forward move; allocated by the first `evaluate_many`.
+    /// caller's order) for the forward move; with charges and dipoles their four values
+    /// per source; allocated by the first evaluation that needs it.
     packed: Vec<T>,
     /// The route of the sources from the caller's ranks to their owners (Phase 5 T6).
     sources: Redistribution,
@@ -3557,8 +3764,9 @@ where
     source_leaves: LeafRanges,
     /// The owned targets of every local leaf, in leaf order.
     target_leaves: LeafRanges,
-    /// The charges of the owned sources in leaf order, m per source, as the forward move
-    /// leaves them on the host path (reused by every evaluation).
+    /// The charges of the owned sources in leaf order, m per source (or the source type's
+    /// strengths), as the forward move leaves them on the host path (reused by every
+    /// evaluation).
     charges: Vec<T>,
     /// The output pass's values, o m per owned target in leaf order, for the backward move.
     received_output: Vec<T>,
@@ -3597,8 +3805,10 @@ where
     /// # Errors
     ///
     /// [`FmmError::ChargesLength`] on a rank whose `charges` does not have one entry per
-    /// source, [`FmmError::VectorCount`] on an FMM built with more than one vector, and
-    /// [`FmmError::OtherRank`] on the others; nothing is evaluated. With a device backend,
+    /// source, [`FmmError::VectorCount`] on an FMM built with more than one vector,
+    /// [`FmmError::SourceType`] on one built for dipoles ([`FmmBuilder::sources`]; use
+    /// [`evaluate_sources`](Self::evaluate_sources)), and [`FmmError::OtherRank`] on the
+    /// others; nothing is evaluated. With a device backend,
     /// [`FmmError::Device`] if a device operation of this or an earlier evaluation failed
     /// on this rank, and [`FmmError::OtherRank`] on the other ranks.
     pub fn evaluate(&mut self, charges: &[T]) -> Result<Output<T>, FmmError> {
@@ -3661,7 +3871,8 @@ where
     ///
     /// [`FmmError::VectorCount`] on a rank that does not pass m vectors,
     /// [`FmmError::ChargesLength`] on one with a vector that does not have one entry per
-    /// source, [`FmmError::OtherRank`] on the others; nothing is evaluated. The device
+    /// source, [`FmmError::SourceType`] on an FMM built for dipoles,
+    /// [`FmmError::OtherRank`] on the others; nothing is evaluated. The device
     /// errors of [`evaluate`](Self::evaluate).
     pub fn evaluate_many(&mut self, charges: &[&[T]]) -> Result<OutputMany<T>, FmmError> {
         let mut output = OutputMany {
@@ -3714,8 +3925,115 @@ where
         Ok(())
     }
 
+    /// Evaluates the potentials, and the gradients if built with them, of the sources
+    /// `sources` at every target (Phase 6 T8, C6.4; [Dipoles](self#dipoles-phase-6-t8)):
+    /// charges, dipole moments or both, as [`FmmBuilder::sources`] fixed at build, each in
+    /// the caller's source order on this rank (`charges[i]`, `dipoles[i]` of source i of
+    /// [`FmmBuilder::build`]). For an FMM built for charges, `Sources::charges(c)` gives
+    /// [`evaluate`](Self::evaluate)`(c)` bit for bit. Allocates the output:
+    /// [`evaluate_sources_into`](Self::evaluate_sources_into) a fresh [`Output`], with the
+    /// same bits.
+    ///
+    /// # Collective operation
+    ///
+    /// As [`evaluate`](Self::evaluate).
+    ///
+    /// # Errors
+    ///
+    /// [`FmmError::SourceType`] on a rank whose `sources` does not hold exactly the
+    /// strengths of the build's source type, [`FmmError::ChargesLength`] or
+    /// [`FmmError::DipolesLength`] on one whose slices do not have one entry per source,
+    /// [`FmmError::OtherRank`] on the others; nothing is evaluated. The device errors of
+    /// [`evaluate`](Self::evaluate).
+    pub fn evaluate_sources(&mut self, sources: &Sources<'_, T>) -> Result<Output<T>, FmmError> {
+        let mut output = Output {
+            potential: Vec::new(),
+            gradient: None,
+            timings: StageTimings::default(),
+        };
+        self.evaluate_sources_into(sources, &mut output)?;
+        Ok(output)
+    }
+
+    /// [`evaluate_sources`](Self::evaluate_sources) into `output`, whose buffers are
+    /// reused as [`evaluate_into`](Self::evaluate_into) reuses them: the same bits.
+    ///
+    /// # Collective operation
+    ///
+    /// As [`evaluate`](Self::evaluate).
+    ///
+    /// # Errors
+    ///
+    /// As [`evaluate_sources`](Self::evaluate_sources), agreed on every rank alike.
+    pub fn evaluate_sources_into(
+        &mut self,
+        sources: &Sources<'_, T>,
+        output: &mut Output<T>,
+    ) -> Result<(), FmmError> {
+        let local = self.check_sources(sources);
+        agree(self.evaluator.comm(), local)?;
+        let gradients = self.gradients();
+        let pool = self.evaluator.operator().engine.host().pool().cloned();
+        // The strengths point-major for the forward move: the charges or the moments as
+        // they are, both packed four per source (timed with the forward).
+        let start = Instant::now();
+        let mut packed = std::mem::take(&mut self.packed);
+        let input: &[T] = match (sources.charges, sources.dipoles) {
+            (Some(charges), None) => charges,
+            (None, Some(dipoles)) => dipoles.as_flattened(),
+            (Some(charges), Some(dipoles)) => {
+                pack_sources(charges, dipoles, pool.as_deref(), &mut packed);
+                &packed
+            }
+            (None, None) => unreachable!("`check_sources` refuses no strengths"),
+        };
+        let pack = start.elapsed();
+        let result = self.run(input, pack, |values, pool| {
+            unpack_output(values, gradients, pool, output);
+        });
+        self.packed = packed;
+        output.timings = result?;
+        Ok(())
+    }
+
+    /// The local outcome of [`evaluate_sources`](Self::evaluate_sources)'s input check,
+    /// which the caller agrees on every rank: a kept device error, strengths other than
+    /// the build's source type ([`FmmError::SourceType`]), or a slice whose length is not
+    /// this rank's number of sources.
+    fn check_sources(&self, sources: &Sources<'_, T>) -> Result<(), FmmError> {
+        let expected = self.sources.nsent();
+        if let Some(reason) = &self.device_error {
+            return Err(FmmError::Device(reason.clone()));
+        }
+        let actual = sources.source_type();
+        if actual != Some(self.source_type) {
+            return Err(FmmError::SourceType {
+                expected: self.source_type,
+                actual,
+            });
+        }
+        if let Some(charges) = sources.charges
+            && charges.len() != expected
+        {
+            return Err(FmmError::ChargesLength {
+                expected,
+                actual: charges.len(),
+            });
+        }
+        if let Some(dipoles) = sources.dipoles
+            && dipoles.len() != expected
+        {
+            return Err(FmmError::DipolesLength {
+                expected,
+                actual: dipoles.len(),
+            });
+        }
+        Ok(())
+    }
+
     /// The local outcome of an evaluation's input check, which the caller agrees on every
-    /// rank: a kept device error, `vectors` other than the build's
+    /// rank: a kept device error, an FMM built for other sources than charges
+    /// ([`FmmError::SourceType`]), `vectors` other than the build's
     /// ([`FmmError::VectorCount`]), or a vector whose length (of `lengths`) is not this
     /// rank's number of sources ([`FmmError::ChargesLength`]).
     fn check_charges(
@@ -3726,6 +4044,11 @@ where
         let expected = self.sources.nsent();
         if let Some(reason) = &self.device_error {
             Err(FmmError::Device(reason.clone()))
+        } else if self.source_type != SourceType::Charges {
+            Err(FmmError::SourceType {
+                expected: self.source_type,
+                actual: Some(SourceType::Charges),
+            })
         } else if vectors != self.vectors {
             Err(FmmError::VectorCount {
                 expected: self.vectors,
@@ -3757,21 +4080,29 @@ where
         // The charges to the ranks that own their sources, in leaf order (Phase 5 T6): on
         // the host path into the reused buffer, on a device into a fresh one that the
         // upload takes over without a copy (Phase 4S T11).
-        let (start, m) = (Instant::now(), self.vectors);
+        // w strengths per source: the m charges, or one set of the source type's (Phase 6
+        // T8); the output carries m vectors.
+        let (start, m, w) = (Instant::now(), self.vectors, self.strengths);
         let upload = if self.evaluator.operator().engine.is_device() {
-            Some(self.sources.forward(charges, m))
+            Some(self.sources.forward(charges, w))
         } else {
-            self.sources.forward_into(charges, m, &mut self.charges);
+            self.sources.forward_into(charges, w, &mut self.charges);
             None
         };
         timings.forward_charges = pack + start.elapsed();
         let start = Instant::now();
         if self.host_sources {
+            // Dipole moments are scaled into units of their leaf (CONVENTIONS §3.13,
+            // "Source chunks"); charges are copied as they are.
+            let moments = (self.source_type != SourceType::Charges).then(|| StrengthLayout {
+                sources: self.source_type,
+                radii: &self.radii,
+            });
             load_source_charges(
                 self.evaluator.local_sources_mut(),
                 &self.source_leaves,
                 upload.as_deref().unwrap_or(&self.charges),
-                m,
+                (w, moments),
                 pool.as_deref(),
             );
         } else if let Some(upload) = &upload {
@@ -3781,7 +4112,7 @@ where
                 let points = self.source_leaves.range(j as usize);
                 let chunk = self.evaluator.sources_mut(j as usize);
                 chunk[3 * points.len()..]
-                    .copy_from_slice(&upload[m * points.start..m * points.end]);
+                    .copy_from_slice(&upload[w * points.start..w * points.end]);
             }
         }
         timings.load = start.elapsed();
@@ -3801,6 +4132,13 @@ where
             // device: its own sync, beside that of `synchronous_stages` (each documents it).
             let sync_kinds = kinds.timings.mode == KindTiming::Synchronous;
             let upload = upload.expect("a device evaluation forwards into a fresh buffer");
+            // With dipoles every kind that reads sources runs on the host (the `device`
+            // module, "Dipoles"), so the device takes no strengths.
+            let upload = if self.source_type == SourceType::Charges {
+                upload
+            } else {
+                Vec::new()
+            };
             timings.load += timed(|| {
                 driver.begin_evaluation(upload);
                 if sync {
@@ -4040,6 +4378,11 @@ where
     /// Returns whether the output holds gradients.
     pub fn gradients(&self) -> bool {
         self.operator().gradients()
+    }
+
+    /// Returns the sources of every evaluation ([`FmmBuilder::sources`]; Phase 6 T8).
+    pub fn source_type(&self) -> SourceType {
+        self.source_type
     }
 
     /// Returns the number of charge vectors of every evaluation ([`FmmBuilder::vectors`]).
@@ -4608,7 +4951,7 @@ mod tests {
                     got.range_mut(0..nleaves),
                     &sources,
                     &charges,
-                    m,
+                    (m, None),
                     pool.as_ref(),
                 );
                 assert_eq!(

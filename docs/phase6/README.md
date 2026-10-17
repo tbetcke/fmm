@@ -277,6 +277,8 @@ One pull request each.
   `nd-fmm-exec`).
 - T9 needs T2 (the comparison uses the fastest host path).
 - T10 needs T2 (it competes with Batched and Rotation).
+- T8d (added 2026-10-17 at the user's request: the device kernels of the dipole kinds,
+  split from T8 after its measurement) needs T8 merged.
 - T11 needs every other task merged or closed.
 
 | Task | Brief | Delivers | Component | Depends on |
@@ -289,6 +291,7 @@ One pull request each.
 | T6 | [T6-avx512-p2p.md](T6-avx512-p2p.md) | `arch::avx512` in `nd-fmm-simd` (P2P, and the AVX-512 body of T2's M2L kernel), measured on Kathleen (waits without an AVX-512 machine) | C6.7 | T2; Kathleen usable |
 | T7 | [T7-fused-gather.md](T7-fused-gather.md) | the gather fused into the device GEMM loads, and the device kernel work of device-path §18.2 | C6.1 | T1 |
 | T8 | [T8-dipoles.md](T8-dipoles.md) | dipole sources and a source-type interface, reference to device | C6.4 | T1 |
+| T8d | [T8d-dipoles-device.md](T8d-dipoles-device.md) | the dipole P2P, P2M and P2L on the device (T8 measured the host fallback at 55–97 % of a dipole evaluation on Metal, above §7.4's 20 %) | C6.4 (device) | T8 |
 | T9 | [T9-fmm3d-comparison.md](T9-fmm3d-comparison.md) | FMM3D at matched accuracy, one node, the build in `tools/` | C6.8 | T2 |
 | T10 | [T10-plane-wave-spike.md](T10-plane-wave-spike.md) | a plane-wave M2L spike; adopt or drop | C6.5 | T2 |
 | T11 | [T11-benchmarks.md](T11-benchmarks.md) | final benchmarks on the three machines, defaults revisited (strategy, leaf size per p), design-document update | gate | all |
@@ -380,6 +383,7 @@ In the repository root, start `claude` and say:
 - [x] T6 merged: AVX-512 P2P, measured on Kathleen (C6.7), or recorded as waiting for AVX-512 hardware (Kathleen unusable)
 - [x] T7 merged: fused gather and device GEMM work, adopted or dropped (C6.1)
 - [ ] T8 merged: dipole sources (C6.4)
+- [ ] T8d merged: the dipole kinds on the device (C6.4, device part)
 - [ ] T9 merged: FMM3D comparison (C6.8)
 - [ ] T10 merged: plane-wave spike; C6.5 adopted or dropped (decision 6)
 - [ ] T12 merged: M2P and P2L only where they pay (C6.9), or dropped by measurement

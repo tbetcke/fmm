@@ -9,8 +9,10 @@ A · B[:, b_j], the chain of `nd_fmm_tables::MatrixSet::apply`, and an opt-in fu
 docs/design/optimisation.md §2.3, §2.11).
 Phase and components: Phase 3S, C3S.3 and C3S.4 (tasks T3–T5 in docs/phase3s/); Phase 6,
 C6.6 (task T2 in docs/phase6/), C6.3 (task T5: `P2pKernel::evaluate_many`, P2P of
-several charge vectors) and C6.7 (task T6: AVX-512, every kernel; report
-fmm-validate/results/phase6-avx512.md).
+several charge vectors), C6.7 (task T6: AVX-512, every kernel; report
+fmm-validate/results/phase6-avx512.md) and C6.4 (task T8: `P2pKernel::evaluate_dipoles`, the dipole
+P2P, `arch::p2p::p2p_dipoles_body`, the scalar path `arch::scalar::p2p_dipoles`; contract
+in docs/design/simd-p2p.md §4.8, tests in `tests/p2p/dipoles.rs`).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -28,6 +30,13 @@ fmm-validate/results/phase6-avx512.md).
   `tests/p2p/many.rs` against `evaluate`, `src/arch/tests.rs` every K and group against
   `p2p_body`); m = 1 runs `evaluate`. The charges are point-major (m per source), the
   outputs vector after vector.
+- `P2pKernel::evaluate_dipoles` (Phase 6 T8) keeps the semantics of
+  `nd_fmm_ref::p2p::p2p_dipoles` as `evaluate` keeps `p2p`'s (+=, no 1/(4π), sources in
+  input order, chunk and target-position invariance, r² = 0 skipped; the scalar path bit for
+  bit the reference). Its gradient is formed as ρ³ (dₖ − (3 s ρ²) wₖ), never with ρ⁵, so f32
+  stays in range (CONVENTIONS §3.13, "Range of the terms in f32"). Contract: 32 u_T (φ,
+  relative to |d| / r²) and 176 u_T (∇φ per component, relative to |d| / r³), derived in
+  docs/design/simd-p2p.md §4.8; measured at most 10.5 u and 33.8 u on NEON over 10⁶ pairs.
 - `MatrixKernel::accumulate_columns` gives every element of C the chain of
   `MatrixSet::apply` (k ascending, multiply and add rounded apart; `MulAdd::Separate`)
   or one fma per step (`MulAdd::Fused`), from its own row of A and column of B only: the

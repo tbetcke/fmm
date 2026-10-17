@@ -11,7 +11,7 @@
 //! its documented bound.
 //!
 //! The P2P kernel body is checked here where it is generic: every K gives the same
-//! bits on every ISA, and the body on the scalar layer (W = 1), which the scalar ISA
+//! bits on every ISA (for the dipole body too, Phase 6 T8), and the body on the scalar layer (W = 1), which the scalar ISA
 //! does not run, is within the term and sum tolerances of the reference. The public
 //! kernel is tested in `tests/p2p`.
 //!
@@ -27,7 +27,7 @@ use super::avx2::Avx2;
 use super::avx512::Avx512;
 #[cfg(target_arch = "aarch64")]
 use super::neon::Neon;
-use super::p2p::{p2p_body, p2p_many_body};
+use super::p2p::{p2p_body, p2p_dipoles_body, p2p_many_body};
 use super::{Simd, scalar::Scalar};
 use crate::{Isa, SimdScalar};
 
@@ -510,6 +510,81 @@ fn p2p_k_invariance<T: SimdScalar, S: Simd<T>>(s: S) {
 fn p2p_body_is_independent_of_k() {
     on_every_isa!("p2p_body_is_independent_of_k", f32, p2p_k_invariance);
     on_every_isa!("p2p_body_is_independent_of_k", f64, p2p_k_invariance);
+}
+
+/// The dipole body with K blocks on `s` (Phase 6 T8), with the charges of `p` read as
+/// moments (three per source, from its charge and its coordinates), from the initial
+/// outputs of `p`.
+fn dipole_body<T: SimdScalar, S: Simd<T>, const K: usize, const G: bool>(
+    s: S,
+    p: &P2pProblem<T>,
+) -> (Vec<T>, Vec<[T; 3]>) {
+    let dipoles: Vec<[T; 3]> = p
+        .sources
+        .iter()
+        .zip(&p.charges)
+        .map(|(y, &q)| [q, y[1], y[0]])
+        .collect();
+    let mut potential = p.potential.clone();
+    let mut gradient = if G { p.gradient.clone() } else { Vec::new() };
+    p2p_dipoles_body::<T, S, K, G>(
+        s,
+        &p.sources,
+        &dipoles,
+        &p.targets,
+        &mut potential,
+        &mut gradient,
+    );
+    (potential, gradient)
+}
+
+/// Every K (1, 2, 4) of the dipole body gives the same bits, at every n_t from 0 to
+/// 3 · 4 · W + 1, as [`p2p_k_invariance`] for the charge body.
+fn dipole_k_invariance<T: SimdScalar, S: Simd<T>>(s: S) {
+    let mut rng = Rng(0x5eed_0008);
+    for n_t in 0..=3 * 4 * S::W + 1 {
+        let p = rng.p2p_problem::<T>(19, n_t);
+        let k1 = output_bits(&dipole_body::<T, S, 1, false>(s, &p));
+        assert_eq!(
+            k1,
+            output_bits(&dipole_body::<T, S, 2, false>(s, &p)),
+            "{} K = 2",
+            S::ISA
+        );
+        assert_eq!(
+            k1,
+            output_bits(&dipole_body::<T, S, 4, false>(s, &p)),
+            "{} K = 4",
+            S::ISA
+        );
+        let k1 = output_bits(&dipole_body::<T, S, 1, true>(s, &p));
+        assert_eq!(
+            k1,
+            output_bits(&dipole_body::<T, S, 2, true>(s, &p)),
+            "{} K = 2, gradient",
+            S::ISA
+        );
+        assert_eq!(
+            k1,
+            output_bits(&dipole_body::<T, S, 4, true>(s, &p)),
+            "{} K = 4, gradient",
+            S::ISA
+        );
+    }
+}
+
+#[test]
+fn p2p_dipoles_body_is_independent_of_k() {
+    on_every_isa!(
+        "p2p_dipoles_body_is_independent_of_k",
+        f32,
+        dipole_k_invariance
+    );
+    on_every_isa!(
+        "p2p_dipoles_body_is_independent_of_k",
+        f64,
+        dipole_k_invariance
+    );
 }
 
 /// The body of several charge vectors with K blocks and groups of VG on `s`, for the m

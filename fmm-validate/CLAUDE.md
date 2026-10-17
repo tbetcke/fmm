@@ -230,6 +230,15 @@ MB`, `--device-gemm`, `--device-gather`, `--device-reduction`) and `Report::devi
 reduction by chunk and walking, each with the per-vector and the one-vector chunk budget,
 at every m of `T5_RHS`). Its report is `results/phase6-device.md`.
 
+Phase 6 T8 (dipole sources, C6.4) added `accuracy::sweep_sources` (`sweep` for a
+`SourceType`: moments uniform in [−1, 1)³ from the seed `^ MOMENT_SEED`, the dipole P2M and
+P2L after the charges', against `direct_sum` plus `direct_sum_dipoles`; `sweep` is its charge
+case value for value) and `--sources charges|dipoles|charges+dipoles` of the `accuracy`
+example, the dipole predictions of the gate in `nd-fmm-exec`'s `tests/dipoles.rs`; and the
+`dipole_cost` example (not registered; it times): charges, dipoles and both on one tree,
+stage by stage, and on a device the share of the host fallback of P2M, P2L and P2P. Its
+report is `results/phase6-dipoles.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

@@ -46,7 +46,7 @@ use std::arch::x86_64::{
     _mm512_set1_ps, _mm512_storeu_pd, _mm512_storeu_ps, _mm512_sub_pd, _mm512_sub_ps,
 };
 
-use super::p2p::{p2p_body, p2p_many_body};
+use super::p2p::{p2p_body, p2p_dipoles_body, p2p_many_body};
 use super::{Simd, matrix::accumulate_body, rsqrt_body};
 use crate::Isa;
 
@@ -398,6 +398,70 @@ macro_rules! p2p_entries {
 
 p2p_entries!(p2p_f32, p2p_f32_gradient, f32, K_F32);
 p2p_entries!(p2p_f64, p2p_f64_gradient, f64, K_F64);
+
+/// Target vectors per block of the dipole P2P (`arch::p2p::p2p_dipoles_body`; Phase 6 T8),
+/// both precisions, potential only and with gradients: a block of K target vectors holds
+/// 7 K vectors (targets, potentials, gradients) in registers besides the source's six
+/// broadcasts and the temporaries, so 2 (the charge kernel's K at most).
+pub(crate) const DIPOLE_K: usize = 2;
+
+/// Generates the dipole P2P entry points of one precision, potential only and with
+/// gradients (Phase 6 T8).
+macro_rules! p2p_dipole_entries {
+    ($potential:ident, $gradient:ident, $t:ty) => {
+        /// Dipole P2P on AVX-512F, potential only (`arch::p2p::p2p_dipoles_body`), in the
+        /// precision of its name, with lengths checked by the caller.
+        ///
+        /// Not inlined, so that the dispatch stays one call and the inlining check
+        /// finds the function by name.
+        #[target_feature(enable = "avx512f")]
+        #[inline(never)]
+        pub(crate) fn $potential(
+            sources: &[[$t; 3]],
+            dipoles: &[[$t; 3]],
+            targets: &[[$t; 3]],
+            potential: &mut [$t],
+        ) {
+            // SAFETY: this function enables `avx512f` (and so `avx2` and `fma`), so it
+            // runs only on a CPU with them: a call from outside such a context is
+            // `unsafe` and asserts it.
+            let s = unsafe { Avx512::new_unchecked() };
+            p2p_dipoles_body::<$t, Avx512, DIPOLE_K, false>(
+                s,
+                sources,
+                dipoles,
+                targets,
+                potential,
+                &mut [],
+            );
+        }
+
+        /// Dipole P2P on AVX-512F, potential and gradient (`arch::p2p::p2p_dipoles_body`), in
+        /// the precision of its name, with lengths checked by the caller.
+        ///
+        /// Not inlined, as the potential-only entry point.
+        #[target_feature(enable = "avx512f")]
+        #[inline(never)]
+        pub(crate) fn $gradient(
+            sources: &[[$t; 3]],
+            dipoles: &[[$t; 3]],
+            targets: &[[$t; 3]],
+            potential: &mut [$t],
+            gradient: &mut [[$t; 3]],
+        ) {
+            // SAFETY: this function enables `avx512f` (and so `avx2` and `fma`), so it
+            // runs only on a CPU with them: a call from outside such a context is
+            // `unsafe` and asserts it.
+            let s = unsafe { Avx512::new_unchecked() };
+            p2p_dipoles_body::<$t, Avx512, DIPOLE_K, true>(
+                s, sources, dipoles, targets, potential, gradient,
+            );
+        }
+    };
+}
+
+p2p_dipole_entries!(p2p_dipoles_f32, p2p_dipoles_f32_gradient, f32);
+p2p_dipole_entries!(p2p_dipoles_f64, p2p_dipoles_f64_gradient, f64);
 
 /// Target vectors per block of the P2P of several charge vectors (`arch::p2p::p2p_many_body`;
 /// Phase 6 T5), potential only: AVX2's choice, 1 target vector with groups of 8 vectors.

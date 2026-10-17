@@ -6,6 +6,10 @@ tested against.
 Phase and components: Phase 1, C1.1–C1.4 (tasks T1 and T3–T6 in docs/phase1/); Phase 6
 T5 (C6.3): `leaf::{p2m, p2l, l2p, m2p}_many`, the leaf operators of several charge
 vectors.
+Phase 6 T8 (C6.4): the dipole operators `leaf::{p2m_dipoles, p2l_dipoles}`,
+`p2p::{p2p_dipoles, direct_sum_dipoles}` (CONVENTIONS §3.7, "Dipole sources"), checked in
+`tests/dipoles/` against `fixtures/dipoles.json` (tools/fixtures/gen_dipoles.py) and
+central differences of the charge operators.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -27,7 +31,8 @@ vectors.
   and `cargo test -p nd-fmm-ref` must pass.
 
 ## Allowed dependencies
-nd-fmm-math, num-traits; dev-dependencies: proptest, approx.
+nd-fmm-math, num-traits; dev-dependencies: proptest, approx, serde_json (the dipole
+fixture, Phase 6 T8).
 No MPI, no octree, no CubeCL, and no dependency on nd-fmm-validate (not even as a
 dev-dependency). Anything else needs a note in the PR.
 
