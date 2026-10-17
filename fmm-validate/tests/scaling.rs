@@ -647,7 +647,18 @@ fn several_vectors(comm: &SimpleCommunicator) {
     assert_eq!(report.differing, Some(0), "the paths of three vectors");
     for summary in report.summaries() {
         assert!(summary.contains(" rhs=3 "), "{summary}");
+        // The device settings (Phase 6 T7): the defaults, and no device on the host.
+        for field in [
+            " device_scratch_mb=default ",
+            " device_gemm=Auto ",
+            " device_gather=Auto ",
+            " device_reduction=ByChunk ",
+            " device_scratch_bytes=none ",
+        ] {
+            assert!(summary.contains(field), "{field} in {summary}");
+        }
     }
+    assert_eq!(report.device_scratch_bytes, None, "no device on the host");
     for row in &report.rows {
         assert_eq!(
             row.traffic.charges[0],

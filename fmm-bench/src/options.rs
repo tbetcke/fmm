@@ -9,7 +9,10 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use nd_fmm_exec::fmm::{Backend, DEFAULT_MAX_LEVEL, KindTiming, MAX_DEGREE, OutputPass};
+use nd_fmm_exec::fmm::{
+    Backend, DEFAULT_MAX_LEVEL, DeviceGather, DeviceGemm, DeviceReduction, KindTiming, MAX_DEGREE,
+    OutputPass,
+};
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_validate::calibration::Precision;
 
@@ -39,8 +42,9 @@ pub const USAGE: &str = "usage: nd-fmm-bench [--n N,...] [--precision f32|f64,..
 [--degree p,...] [--backend host|cpu|metal|cuda,...] [--threads n] \
 [--strategy auto|dense|classes|rotation|batched] [--repeats r] [--warmup w] \
 [--kinds sync|device|off] [--accuracy TARGETS|off] [--no-gradients] [--reuse-output] \
-[--output-pass auto|host|device] [--leaf-size n] [--max-level l] [--table-cache DIR] [--tuning-cache DIR] [--output FILE.md] \
-[--quick] [--help]";
+[--output-pass auto|host|device] [--device-gemm auto|library|hand|shared] \
+[--gather auto|separate|fused] [--reduction by-chunk|walk] [--scratch MB] [--leaf-size n] \
+[--max-level l] [--table-cache DIR] [--tuning-cache DIR] [--output FILE.md] [--quick] [--help]";
 
 /// The text of `--help`.
 pub const HELP: &str = "\
@@ -64,6 +68,15 @@ option takes one value or a comma-separated list; the run is their Cartesian pro
                            than a fresh one per evaluation (Fmm::evaluate, the default)
   --output-pass P          auto, host or device: where the output pass runs (default
                            auto: on the device where it does f64 arithmetic)
+  --device-gemm G          auto, library, hand or shared: the GEMM of the device's M2M,
+                           L2L and dense M2L (default auto; shared is the shared-memory
+                           kernel of Phase 6 T7)
+  --gather G               auto, separate or fused: how the device's hand-written GEMM
+                           gets its input columns (default auto; Phase 6 T7)
+  --reduction R            by-chunk or walk: the device's reduction of M2M and M2L
+                           (default by-chunk; walk is Phase 4's, Phase 6 T7)
+  --scratch MB             the device's chunk budget in MB (default: the device's, per
+                           charge vector)
   --leaf-size n            refinement target, points per leaf (default: the library's, 64)
   --max-level l            deepest leaf level, 0 to 16 (default: the library's, 16)
   --table-cache DIR        load and store the operator tables there (default: none)
@@ -107,6 +120,16 @@ pub struct Options {
     pub reuse_output: bool,
     /// Where the output pass runs (`FmmBuilder::output_pass`, Phase 4S T9).
     pub output_pass: OutputPass,
+    /// The GEMM of the device translations (`FmmBuilder::device_gemm`, Phase 6 T7).
+    pub device_gemm: DeviceGemm,
+    /// How the device's hand-written GEMM gets its input columns
+    /// (`FmmBuilder::device_gather`, Phase 6 T7).
+    pub gather: DeviceGather,
+    /// The device's reduction (`FmmBuilder::device_reduction`, Phase 6 T7).
+    pub reduction: DeviceReduction,
+    /// The device's chunk budget in bytes (`FmmBuilder::device_scratch_budget`); `None`
+    /// for the device's.
+    pub scratch: Option<u64>,
     /// The refinement target (`FmmBuilder::max_points_per_leaf`); `None` for the
     /// library's default.
     pub leaf_size: Option<usize>,
@@ -142,6 +165,10 @@ impl Default for Options {
             gradients: true,
             reuse_output: false,
             output_pass: OutputPass::Auto,
+            device_gemm: DeviceGemm::Auto,
+            gather: DeviceGather::Auto,
+            reduction: DeviceReduction::ByChunk,
+            scratch: None,
             leaf_size: None,
             max_level: None,
             table_cache: None,
@@ -272,6 +299,13 @@ pub fn parse<S: AsRef<str>>(args: &[S]) -> Result<Command, String> {
             "--warmup" => options.warmup = count(value).map_err(|e| at(&e))?,
             "--kinds" => options.kinds = kinds(value).map_err(|e| at(&e))?,
             "--output-pass" => options.output_pass = output_pass(value).map_err(|e| at(&e))?,
+            "--device-gemm" => options.device_gemm = device_gemm(value).map_err(|e| at(&e))?,
+            "--gather" => options.gather = gather(value).map_err(|e| at(&e))?,
+            "--reduction" => options.reduction = reduction(value).map_err(|e| at(&e))?,
+            "--scratch" => {
+                let mb = positive(value).map_err(|e| at(&e))?;
+                options.scratch = Some((mb as u64) << 20);
+            }
             "--accuracy" => {
                 options.accuracy = match value {
                     "off" => None,
@@ -397,6 +431,66 @@ fn output_pass(s: &str) -> Result<OutputPass, String> {
     }
 }
 
+/// `auto`, `library`, `hand` or `shared`.
+fn device_gemm(s: &str) -> Result<DeviceGemm, String> {
+    match s {
+        "auto" => Ok(DeviceGemm::Auto),
+        "library" => Ok(DeviceGemm::Library),
+        "hand" => Ok(DeviceGemm::HandWritten),
+        "shared" => Ok(DeviceGemm::Shared),
+        _ => Err(format!(
+            "`{s}` is not a device GEMM; expected `auto`, `library`, `hand` or `shared`"
+        )),
+    }
+}
+
+/// `auto`, `separate` or `fused`.
+fn gather(s: &str) -> Result<DeviceGather, String> {
+    match s {
+        "auto" => Ok(DeviceGather::Auto),
+        "separate" => Ok(DeviceGather::Separate),
+        "fused" => Ok(DeviceGather::Fused),
+        _ => Err(format!(
+            "`{s}` is not a gather; expected `auto`, `separate` or `fused`"
+        )),
+    }
+}
+
+/// `by-chunk` or `walk`.
+fn reduction(s: &str) -> Result<DeviceReduction, String> {
+    match s {
+        "by-chunk" => Ok(DeviceReduction::ByChunk),
+        "walk" => Ok(DeviceReduction::Walk),
+        _ => Err(format!(
+            "`{s}` is not a reduction; expected `by-chunk` or `walk`"
+        )),
+    }
+}
+
+/// The device translations of the report's header: the GEMM, the gather, the reduction
+/// and the chunk budget, as the command line names them.
+pub fn device_translations_name(options: &Options) -> String {
+    let gemm = match options.device_gemm {
+        DeviceGemm::Auto => "auto",
+        DeviceGemm::Library => "library",
+        DeviceGemm::HandWritten => "hand",
+        DeviceGemm::Shared => "shared",
+    };
+    let gather = match options.gather {
+        DeviceGather::Auto => "auto",
+        DeviceGather::Separate => "separate",
+        DeviceGather::Fused => "fused",
+    };
+    let reduction = match options.reduction {
+        DeviceReduction::ByChunk => "by-chunk",
+        DeviceReduction::Walk => "walk",
+    };
+    let scratch = options
+        .scratch
+        .map_or("the device's".to_owned(), |b| format!("{} MB", b >> 20));
+    format!("GEMM `{gemm}`, gather `{gather}`, reduction `{reduction}`, chunk budget {scratch}")
+}
+
 /// The name of an [`OutputPass`] on the command line: `auto`, `host` or `device`.
 pub fn output_pass_name(pass: OutputPass) -> &'static str {
     match pass {
@@ -502,6 +596,14 @@ mod tests {
             "--reuse-output",
             "--output-pass",
             "host",
+            "--device-gemm",
+            "shared",
+            "--gather",
+            "fused",
+            "--reduction",
+            "walk",
+            "--scratch",
+            "64",
             "--leaf-size",
             "32",
             "--max-level",
@@ -529,6 +631,10 @@ mod tests {
                 gradients: false,
                 reuse_output: true,
                 output_pass: OutputPass::Host,
+                device_gemm: DeviceGemm::Shared,
+                gather: DeviceGather::Fused,
+                reduction: DeviceReduction::Walk,
+                scratch: Some(64 << 20),
                 leaf_size: Some(32),
                 max_level: Some(12),
                 table_cache: Some("tables".into()),

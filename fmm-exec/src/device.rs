@@ -190,6 +190,24 @@
 //! kernel (next section); `host_fallback` with [`OperatorKind::M2l`] restores the host
 //! operator under every strategy.
 //!
+//! # The fused gather, the reduction by chunk and the shared-memory GEMM (Phase 6 T7)
+//!
+//! The grouped level calls of M2M, L2L and dense M2L take three settings of
+//! `nd_fmm_kernels::translate` (C6.1; its module docs), none of which changes a bit of the
+//! output: the gather ([`FmmBuilder::device_gather`](crate::fmm::FmmBuilder::device_gather):
+//! separate, or fused into the hand-written GEMM's loads, two launches per chunk instead of
+//! three and no gathered scratch: its chunks fill the budget with products alone, twice as
+//! wide, and the scratch holds gathered columns only for the plans that gather), the
+//! reduction ([`FmmBuilder::device_reduction`](crate::fmm::FmmBuilder::device_reduction):
+//! by chunk, the default, which visits each row's entries once per level call, or Phase 4's
+//! walk of every row once per chunk) and the shared-memory GEMM (`DeviceGemm::Shared`).
+//! Under [`DeviceGemm::Auto`] the static rule takes the layout and the gather by backend,
+//! precision and p (`tune::static_layout`, `tune::static_gather`), and the tuner offers the
+//! shared-memory layout and the other gather as candidates; a gather the builder names holds
+//! for every level call. [`TranslationReport`] gives each call's gather and reduction, and
+//! [`TranslationReport::launches`] its launches. `tests/device_common` checks every variant
+//! against the hand-written device evaluation bit for bit in every device scenario.
+//!
 //! The 316 dense tables take 316 (p + 1)⁴ values on the device, in MB (10⁶ bytes); the
 //! library copy, uploaded only where the library may run (f32, p ≥ 8, a GPU, under
 //! [`DeviceGemm::Library`]), as much
@@ -253,9 +271,9 @@
 //! | --- | --- |
 //! | `reset`, `begin_evaluation` | 3 zero kernels at `HostData::Reset` (multipoles, locals, target output; none for an empty store) and the charge scatter |
 //! | the exchanges, several ranks (Phase 5 T8) | per reduction level (Phase 5S T6) the gather of the multipoles the upward reduction sends (if the rank sends at the level) and the scatter of the children it receives (if it receives); the gather of the sent multipoles (if the rank sends), the scatter of the received boxes of the replicated top (if any), the scatter of each level's received ghost multipoles (per level with a ghost box) |
-//! | upward, local pass | per level: P2M 1; M2M 3 per chunk (gather, GEMM, reduction) |
-//! | upward, global pass | per level the M2M of the owned `Global` boxes (Phase 5S T5): 3 per chunk; on one rank the root's: 3, none if the root is a leaf |
-//! | downward | per level: L2L 3 per chunk (gather, GEMM, scatter-add); M2L 3 c (dense) or 1 (rotation); P2L 1 |
+//! | upward, local pass | per level: P2M 1; M2M 3 per chunk (gather, GEMM, reduction; 2 with the fused gather, Phase 6 T7) |
+//! | upward, global pass | per level the M2M of the owned `Global` boxes (Phase 5S T5): 3 per chunk (2 fused); on one rank the root's: 3 (2 fused), none if the root is a leaf |
+//! | downward | per level: L2L 3 per chunk (gather, GEMM, scatter-add; 2 fused); M2L 3 c (dense; 2 c fused) or 1 (rotation); P2L 1 |
 //! | leaves | per level: L2P 1, M2P 1, P2P 1 |
 //! | `read_output` | with the output pass on the device (Phase 4S T9): the gather, if there is a target |
 //!
@@ -397,10 +415,12 @@
 //!   no kernel changes. The GEMM decisions are keyed by the plan's pairs, so a tuning
 //!   cache gives an FMM of any m the same choices; the chunks are sized by the m columns,
 //!   and unless the builder names a budget a choice's budget is per vector (m times its
-//!   bytes, at most an eighth of the device's memory; `vector_settings`), since the
-//!   reduction of `Accumulate::Rows` walks every entry of a row once per chunk and m
-//!   times the chunks would cost m² (measured on Metal); the M2L strategy is tuned on one
-//!   vector's shapes;
+//!   bytes, at most an eighth of the device's memory; `vector_settings`), since Phase 4's
+//!   reduction of `Accumulate::Rows` walked every entry of a row once per chunk and m
+//!   times the chunks cost m² (measured on Metal); with the reduction by chunk (Phase 6
+//!   T7) a smaller budget costs only the chunks' own work, so on Metal the budget adds up
+//!   at most [`METAL_BUDGET_VECTORS`] vectors' worth and on CUDA one vector's; the M2L
+//!   strategy is tuned on one vector's shapes;
 //! - **P2M, P2L, L2P, M2P and P2P** launch once per level call as before, the cubes of the
 //!   vectors along z (`SourceInputs::vectors`, `TargetInputs::vectors`,
 //!   `P2pInputs::vectors`): the cube at z = v runs the one-vector kernel on vector v's
@@ -555,10 +575,10 @@ use nd_fmm_kernels::rotation::{
     Shift as DeviceShift,
 };
 use nd_fmm_kernels::translate::{
-    Accumulate, GroupedPlan, Operands, Orientation, PlanSettings, Tables, TranslationScratch,
-    default_scratch_bytes, grouped,
+    Accumulate, GroupedPlan, Operands, Orientation, PlanSettings, PlanSize, Tables,
+    TranslationScratch, default_scratch_bytes, grouped,
 };
-pub use nd_fmm_kernels::translate::{Gemm, GemmLayout};
+pub use nd_fmm_kernels::translate::{Gather, Gemm, GemmLayout, Reduction};
 use nd_fmm_kernels::view::{
     BoxCoordinates, GroupedArrays, GroupedView, IndexView, LeafCoordinates, PointOffsets,
 };
@@ -584,8 +604,9 @@ use nd_fmm_tables::{
 use nd_octree::morton;
 
 use crate::fmm::{
-    Backend, DeviceGemm, DeviceLeafLayout, DeviceP2pLayout, DeviceStage, DeviceStageTimings,
-    FmmError, MAX_LEVELS, OperatorKind, OutputPass, Placement, SettingsError,
+    Backend, DeviceGather, DeviceGemm, DeviceLeafLayout, DeviceP2pLayout, DeviceReduction,
+    DeviceStage, DeviceStageTimings, FmmError, MAX_LEVELS, OperatorKind, OutputPass, Placement,
+    SettingsError,
 };
 use crate::operator::{LaplaceOperator, SimdScalar};
 use crate::tables::M2lStrategy;
@@ -864,7 +885,13 @@ pub struct TranslationReport {
     pub orientation: Orientation,
     /// The chunk budget in bytes (T12: the default unless set or tuned).
     pub budget: u64,
-    /// The chunks: three launches each.
+    /// How the GEMM gets its input columns (Phase 6 T7): the choice's for the
+    /// hand-written kernel, [`Gather::Separate`] for the library.
+    pub gather: Gather,
+    /// How the reduction finds a chunk's entries (Phase 6 T7).
+    pub reduction: Reduction,
+    /// The chunks: three launches each, two with the fused gather
+    /// ([`launches`](Self::launches)).
     pub chunks: usize,
     /// The columns the GEMMs compute over the chunks: the pairs with the hand-written
     /// kernel, and with the library also its padding columns
@@ -873,6 +900,18 @@ pub struct TranslationReport {
     /// Why the library does not run where the rule would choose it
     /// ([`GroupedPlan::library_rejection`]).
     pub library_rejection: Option<String>,
+}
+
+impl TranslationReport {
+    /// The launches of the level call: three per chunk (gather, GEMM, reduction or
+    /// scatter-add), two with the fused gather (Phase 6 T7).
+    pub fn launches(&self) -> usize {
+        self.chunks
+            * match self.gather {
+                Gather::Separate => 3,
+                Gather::Fused => 2,
+            }
+    }
 }
 
 /// One device level call of rotation M2L (T10), fixed at build, for [`DeviceReport`].
@@ -1184,6 +1223,12 @@ pub struct DeviceOptions {
     /// The GEMM of the device translations M2M, L2L and M2L (T8, T9); [`DeviceGemm::Auto`]
     /// by default.
     pub gemm: DeviceGemm,
+    /// How the hand-written GEMM gets its input columns (Phase 6 T7);
+    /// [`DeviceGather::Auto`] by default.
+    pub gather: DeviceGather,
+    /// How the reduction finds a chunk's entries (Phase 6 T7); [`DeviceReduction::ByChunk`]
+    /// by default.
+    pub reduction: DeviceReduction,
     /// The scratch budget of the device translations in bytes; `None` for the device's
     /// default, `nd_fmm_kernels::translate::default_scratch_bytes` (128 MB on Metal and the CPU
     /// runtime, 2 GB on CUDA; Phase 4S T7).
@@ -2112,6 +2157,14 @@ impl ColumnViews {
             _ => &self.octants(kind, pass, level).batch_offsets,
         }
     }
+
+    /// The rows of the grouped call (`kind`, `pass`) on `level`, in columns.
+    fn rows(&self, (kind, pass, level): CallId) -> usize {
+        match kind {
+            OperatorKind::M2l => self.levels[level].v.row_offsets.len() - 1,
+            _ => self.octants(kind, pass, level).row_offsets.len() - 1,
+        }
+    }
 }
 
 /// The plan of one grouped level call on the device (T8, T9), built through `link` as
@@ -2130,31 +2183,111 @@ fn build_plan<G: Copy + Into<usize> + Into<u32>, T: DeviceFloat>(
     })
 }
 
+/// `choice` with the gather the builder names (Phase 6 T7): `gather` unless it is
+/// [`DeviceGather::Auto`], which keeps the choice's (the static rule's or the tuner's). A
+/// library choice keeps its own: the library always gathers.
+fn named_gather(choice: GemmChoice, gather: DeviceGather) -> GemmChoice {
+    let gather = match gather {
+        _ if choice.is_library() => return choice,
+        DeviceGather::Auto => return choice,
+        DeviceGather::Separate => Gather::Separate,
+        DeviceGather::Fused => Gather::Fused,
+    };
+    GemmChoice { gather, ..choice }
+}
+
+/// The columns of X (gathered inputs) and Y (products) a translation scratch holds or its
+/// plans need (Phase 6 T7: a plan with the fused gather needs no X).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ScratchColumns {
+    gathered: usize,
+    products: usize,
+}
+
+impl ScratchColumns {
+    /// The columns `scratch` holds of tables of order n.
+    fn of<T: DeviceFloat>(scratch: &TranslationScratch<T>, n: usize) -> Self {
+        Self {
+            gathered: scratch.gathered_len() / n,
+            products: scratch.len() / n,
+        }
+    }
+
+    /// Widens to the columns of a plan of `size`.
+    fn cover(&mut self, size: PlanSize) {
+        self.gathered = self.gathered.max(size.gathered);
+        self.products = self.products.max(size.columns);
+    }
+
+    /// Whether these columns hold a plan of `size`.
+    fn covers(&self, size: PlanSize) -> bool {
+        self.gathered >= size.gathered && self.products >= size.columns
+    }
+
+    /// The bytes of a scratch of these columns of order n.
+    fn bytes<T: DeviceFloat>(&self, n: usize) -> u64 {
+        TranslationScratch::<T>::split_bytes(self.gathered * n, self.products * n)
+    }
+
+    /// Allocates a scratch of these columns of order n.
+    fn alloc<T: DeviceFloat>(
+        &self,
+        device: &mut Device,
+        n: usize,
+    ) -> Result<TranslationScratch<T>, KernelError> {
+        TranslationScratch::split(device, self.gathered * n, self.products * n)
+    }
+}
+
+/// The most charge vectors whose chunk budgets the device adds up on Metal when the builder
+/// names no budget (Phase 6 T7; the module docs, "Several charge vectors"): 8, 1 GB at the
+/// default 128 MB. With the reduction by chunk the evaluation per vector no longer grows as m
+/// with the chunks (the M3 Max, f32 p = 8, the N = 10⁶ cube, `tools/scaling/run.sh
+/// t7-device`): at m = 32 it took 65.3 ms under one vector's 128 MB, 56.0 under 1 GB and
+/// 54.0 under T5's 4 GB (449 ms under 128 MB with Phase 4's walking reduction), and at
+/// m = 8 the cap is T5's budget.
+pub const METAL_BUDGET_VECTORS: usize = 8;
+
 /// The plan settings of `choice` for the level calls of `vectors` charge vectors (Phase 6
 /// T5): unless the builder names a budget (`named`), a choice's chunk budget is per
-/// vector, so the calls of m vectors chunk with m times its bytes, at most an eighth of
-/// the device's memory (never below the choice's own budget). The reduction of
-/// `Accumulate::Rows` walks every entry of a target's row once per chunk, and a call of m
-/// vectors has m times the entries; under the one-vector budget it would also have m
-/// times the chunks, and its cost would grow as m² (on Metal, f32 p = 8, the evaluation
-/// per vector was 3.1× the one vector's at m = 8 and 10× at m = 32). The chunks do not
-/// change a bit (`tests/device_common` compares m vectors with one-vector evaluations),
-/// the tuned and cached choices keep their per-vector budgets, and with one vector this is
-/// `choice.settings`.
+/// vector, so the calls of m vectors chunk with m times its bytes (on Metal at most
+/// [`METAL_BUDGET_VECTORS`] times, and on CUDA once: one vector's 2 GB, Phase 6 T7), at
+/// most an eighth of the device's memory (never below the choice's own budget). On the H100
+/// (f32 p = 8, the N = 10⁶ cube, `tools/scaling/run.sh t7-device`) the evaluation per vector
+/// at m = 32 took 22.0 ms under 2 GB against 21.4 ms under T5's 12 GB. Phase 4's reduction of `Accumulate::Rows` walked
+/// every entry of a target's row once per chunk, and a call of m vectors has m times the
+/// entries; under the one-vector budget it also had m times the chunks, and its cost grew
+/// as m² (on Metal, f32 p = 8, the evaluation per vector was 3.1× the one vector's at m = 8
+/// and 10× at m = 32). The reduction by chunk (Phase 6 T7, the default) visits every
+/// entry once per level call, so a smaller budget costs only the chunks' own launches and
+/// loads. The chunks do not change a bit (`tests/device_common` compares m vectors with
+/// one-vector evaluations), the tuned and cached choices keep their per-vector budgets, and
+/// with one vector this is `choice.settings`. The reduction is the builder's (Phase 6 T7).
 fn vector_settings(
     choice: &GemmChoice,
     info: &DeviceInfo,
-    n: usize,
-    vectors: usize,
+    (n, vectors): (usize, usize),
     named: Option<u64>,
+    reduction: DeviceReduction,
 ) -> PlanSettings {
     let mut settings = choice.settings(info, n);
+    settings.reduction = match reduction {
+        DeviceReduction::ByChunk => Reduction::ByChunk,
+        DeviceReduction::Walk => Reduction::Walk,
+    };
     if named.is_none() && vectors > 1 {
         let cap = info
             .max_memory
             .map_or(u64::MAX, |bytes| bytes / 8)
             .max(choice.budget);
-        settings.budget = choice.budget.saturating_mul(vectors as u64).min(cap);
+        // On CUDA one vector's budget (2 GB) for any m; the CPU runtime, the correctness
+        // backend, keeps T5's rule.
+        let budgets = match info.backend {
+            BackendKind::Metal => vectors.min(METAL_BUDGET_VECTORS),
+            BackendKind::Cuda => 1,
+            BackendKind::Cpu => vectors,
+        };
+        settings.budget = choice.budget.saturating_mul(budgets as u64).min(cap);
     }
     settings
 }
@@ -2220,6 +2353,8 @@ fn translation_reports<T: DeviceFloat>(translations: &Translations<T>) -> Vec<Tr
                     gemm: call.plan.gemm(),
                     orientation: call.plan.orientation(),
                     budget: call.choice.budget,
+                    gather: call.plan.gather(),
+                    reduction: call.plan.reduction(),
                     chunks: call.plan.nchunks(),
                     gemm_columns: call.plan.gemm_columns(),
                     library_rejection: call.plan.library_rejection().map(str::to_owned),
@@ -2425,13 +2560,16 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         let gemm_layout = GemmLayout::default_for(&info, n);
         let tunable_gemm = options.gemm == DeviceGemm::Auto;
         let choice_of = |kind: OperatorKind, pairs: usize| -> GemmChoice {
-            let fixed = static_gemm(
-                &info,
-                T::FLOAT,
-                n,
-                kind,
-                options.gemm,
-                options.scratch_budget,
+            let fixed = named_gather(
+                static_gemm(
+                    &info,
+                    T::FLOAT,
+                    n,
+                    kind,
+                    options.gemm,
+                    options.scratch_budget,
+                ),
+                options.gather,
             );
             if !tunable_gemm {
                 return fixed;
@@ -2444,7 +2582,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                 .decided(decision)
                 .or_else(|| tuner.cached(decision))
                 .and_then(|c| c.gemm())
-                .unwrap_or(fixed);
+                .map_or(fixed, |c| named_gather(c, options.gather));
             if let Some(budget) = options.scratch_budget {
                 choice.budget = budget;
             }
@@ -2535,32 +2673,39 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         // The plans of the device M2M, L2L and M2L level calls: their index buffers and the
         // widest chunk, at most, before anything is allocated (T8, T9); with decisions to
         // tune, also the widest chunk of any candidate (T12).
-        let (mut plan_bytes, mut scratch_columns) = (0u64, 0usize);
+        // The scratch's columns of X and of Y (Phase 6 T7: none of X for a plan with the fused
+        // gather, whose chunks are twice as wide).
+        let (mut plan_bytes, mut scratch_columns) = (0u64, ScratchColumns::default());
         let named = options.scratch_budget;
-        let tuning_settings = vector_settings(
-            &GemmChoice {
-                budget: named.unwrap_or_else(|| default_scratch_bytes(&info)),
-                ..GemmChoice::library(T::FLOAT)
-            },
-            &info,
-            n,
-            m,
-            named,
-        );
-        for &((kind, _, _), pairs, batch_offsets) in &calls {
-            let size = vector_settings(&choice_of(kind, pairs), &info, n, m, named).size(
-                backend,
-                T::FLOAT,
-                batch_offsets,
-            );
+        for &(call, pairs, batch_offsets) in &calls {
+            let rows = columns.rows(call);
+            let size = vector_settings(
+                &choice_of(call.0, pairs),
+                &info,
+                (n, m),
+                named,
+                options.reduction,
+            )
+            .size(backend, T::FLOAT, batch_offsets, rows);
             plan_bytes += size.bytes;
-            scratch_columns = scratch_columns.max(size.columns);
+            scratch_columns.cover(size);
             if tuning {
-                let size = tuning_settings.size(backend, T::FLOAT, batch_offsets);
-                scratch_columns = scratch_columns.max(size.columns);
+                // Every candidate the tuner registers for the call (`tune_translations`).
+                for choice in gemm_candidates(&info, T::FLOAT, n, call.0, named.is_none()) {
+                    let choice = named_gather(
+                        GemmChoice {
+                            budget: named.unwrap_or(choice.budget),
+                            ..choice
+                        },
+                        options.gather,
+                    );
+                    let settings =
+                        vector_settings(&choice, &info, (n, m), named, options.reduction);
+                    scratch_columns.cover(settings.size(backend, T::FLOAT, batch_offsets, rows));
+                }
             }
         }
-        let scratch_bytes = TranslationScratch::<T>::bytes(scratch_columns * n);
+        let scratch_bytes = scratch_columns.bytes::<T>(n);
         // The rows of each rotation M2L level call (T10).
         if rotation.is_some() {
             plan_bytes += columns
@@ -2844,9 +2989,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
 
         // The scratch and the plans of the device translations (T8, T9, T12); a library
         // choice probes its shapes here, so the GEMM is fixed before the first evaluation.
-        let mut scratch = link.build(DataKind::Points, |d| {
-            TranslationScratch::<T>::new(d, scratch_columns * n)
-        })?;
+        let mut scratch = link.build(DataKind::Points, |d| scratch_columns.alloc::<T>(d, n))?;
         gemm_layout
             .check(link.device.info())
             .map_err(device_error)?;
@@ -2857,7 +3000,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                 &mut link,
                 &columns,
                 (kind, pass, level),
-                &vector_settings(&choice, &info, n, m, named),
+                &vector_settings(&choice, &info, (n, m), named, options.reduction),
                 &tables,
                 &mut scratch,
             )?;
@@ -3132,16 +3275,18 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             (rank(kind), std::cmp::Reverse(bucket))
         });
         for &(decision, call, pairs) in &decisions {
-            let candidates: Vec<Candidate> =
-                gemm_candidates(&info, T::FLOAT, n, call.0, budget.is_none())
-                    .into_iter()
-                    .map(|mut choice| {
-                        if let Some(budget) = budget {
-                            choice.budget = budget;
-                        }
-                        Candidate::Gemm(choice)
-                    })
-                    .collect();
+            // A gather the builder names holds for every candidate (the candidates that then
+            // coincide are timed once).
+            let mut candidates: Vec<Candidate> = Vec::new();
+            for mut choice in gemm_candidates(&info, T::FLOAT, n, call.0, budget.is_none()) {
+                if let Some(budget) = budget {
+                    choice.budget = budget;
+                }
+                let candidate = Candidate::Gemm(named_gather(choice, self.options.gather));
+                if !candidates.contains(&candidate) {
+                    candidates.push(candidate);
+                }
+            }
             tuner.decide(
                 decision,
                 (Some(call.2), pairs),
@@ -3169,10 +3314,11 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                     continue;
                 };
                 // A budget the builder names holds for every level call, as in the plans
-                // built before tuning (the scratch is sized for it).
+                // built before tuning (the scratch is sized for it), and so does a gather.
                 if let Some(budget) = self.options.scratch_budget {
                     choice.budget = budget;
                 }
+                choice = named_gather(choice, self.options.gather);
                 if choice == call.choice {
                     continue;
                 }
@@ -3186,7 +3332,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                     link,
                     columns,
                     (kind, pass, level),
-                    &vector_settings(&choice, &info, n, vectors, budget),
+                    &vector_settings(&choice, &info, (n, vectors), budget, self.options.reduction),
                     tables,
                     &mut translations.scratch,
                 )?;
@@ -3235,7 +3381,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         let vectors = self.vectors();
         if let GemmKind::HandWritten(layout) = choice.gemm {
             layout
-                .check(&info)
+                .check_for(&info, n, T::FLOAT)
                 .map_err(|e| Rejection::Unregistered(e.to_string()))?;
         }
         let input = match kind {
@@ -3272,13 +3418,25 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         // itself; an offered candidate with wider chunks (a `TuningHook`) is not timed, and
         // is checked before its plan is built (which asserts that the scratch holds it).
         let batch_offsets = columns.batch_offsets((kind, pass, level));
-        let wanted = vector_settings(choice, &info, n, vectors, budget_named)
-            .size(info.backend, T::FLOAT, batch_offsets)
-            .columns
-            * n;
-        if wanted > translations.scratch.len() {
+        let settings = vector_settings(
+            choice,
+            &info,
+            (n, vectors),
+            budget_named,
+            self.options.reduction,
+        );
+        let wanted = settings.size(
+            info.backend,
+            T::FLOAT,
+            batch_offsets,
+            columns.rows((kind, pass, level)),
+        );
+        if !ScratchColumns::of(&translations.scratch, n).covers(wanted) {
             return Err(Rejection::Skipped(format!(
-                "its chunks need a scratch of {wanted} values, the operator's holds {}",
+                "its chunks need a scratch of {} and {} values, the operator's holds {} and {}",
+                wanted.gathered * n,
+                wanted.columns * n,
+                translations.scratch.gathered_len(),
                 translations.scratch.len()
             )));
         }
@@ -3286,7 +3444,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             link,
             columns,
             (kind, pass, level),
-            &vector_settings(choice, &info, n, vectors, budget_named),
+            &settings,
             tables,
             &mut translations.scratch,
         )
@@ -3373,18 +3531,21 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                 self.report.tables.retain(|t| t.name != name);
             }
         }
-        let columns = GROUPED
+        let mut needed = ScratchColumns::default();
+        for call in GROUPED
             .iter()
             .flat_map(|&(kind, pass)| self.translations.calls(kind, pass))
-            .map(|c| c.plan.columns())
-            .max()
-            .unwrap_or(0);
-        if columns * n < self.translations.scratch.len() {
-            let old = TranslationScratch::<T>::bytes(self.translations.scratch.len());
-            self.translations.scratch = self.link.build(DataKind::Points, |d| {
-                TranslationScratch::<T>::new(d, columns * n)
-            })?;
-            let new = TranslationScratch::<T>::bytes(columns * n);
+        {
+            needed.gathered = needed.gathered.max(call.plan.gathered_columns());
+            needed.products = needed.products.max(call.plan.columns());
+        }
+        let held = ScratchColumns::of(&self.translations.scratch, n);
+        if needed != held {
+            let old = held.bytes::<T>(n);
+            self.translations.scratch = self
+                .link
+                .build(DataKind::Points, |d| needed.alloc::<T>(d, n))?;
+            let new = needed.bytes::<T>(n);
             freed += old - new;
             self.report.scratch_bytes = new;
         }
@@ -4861,7 +5022,7 @@ impl<'a, T: DeviceScalar> StrategyBench<'a, T> {
         let info = device.info().clone();
         if let GemmKind::HandWritten(layout) = choice.gemm {
             layout
-                .check(&info)
+                .check_for(&info, n, T::FLOAT)
                 .map_err(|e| Rejection::Unregistered(e.to_string()))?;
         }
         self.buffers(device, n)?;
@@ -4870,23 +5031,22 @@ impl<'a, T: DeviceScalar> StrategyBench<'a, T> {
             let batch_offsets = self.host_view.batch_offsets();
             // The scratch of the first candidate timed (with the budget of every candidate the
             // tuner registers, the static rule's) and of the library at that budget.
-            let columns = [
+            let mut columns = ScratchColumns::default();
+            for c in [
                 *choice,
                 GemmChoice {
                     budget: choice.budget,
                     ..GemmChoice::library(T::FLOAT)
                 },
-            ]
-            .iter()
-            .map(|c| {
-                c.settings(&info, n)
-                    .size(info.backend, T::FLOAT, batch_offsets)
-                    .columns
-            })
-            .max()
-            .unwrap_or(0);
-            let needed =
-                Tables::<T>::bytes(n, 316, library) + TranslationScratch::<T>::bytes(columns * n);
+            ] {
+                columns.cover(c.settings(&info, n).size(
+                    info.backend,
+                    T::FLOAT,
+                    batch_offsets,
+                    self.boxes,
+                ));
+            }
+            let needed = Tables::<T>::bytes(n, 316, library) + columns.bytes::<T>(n);
             if let Some(limit) = device.available_memory()
                 && needed > limit
             {
@@ -4899,7 +5059,7 @@ impl<'a, T: DeviceScalar> StrategyBench<'a, T> {
                 None => M2lTables::build(p),
             };
             let tables = Tables::upload(device, tables.matrices().as_slice(), n, library)?;
-            let scratch = TranslationScratch::<T>::new(device, columns * n)?;
+            let scratch = columns.alloc::<T>(device, n)?;
             self.dense = Some((tables, scratch));
         }
         let (tables, scratch) = self.dense.as_mut().expect("created above");
@@ -4911,23 +5071,27 @@ impl<'a, T: DeviceScalar> StrategyBench<'a, T> {
         // A candidate with chunks wider than the scratch so far (a larger budget, offered by
         // a `TuningHook`) gets a scratch of its own width: the scratch is this bench's, and
         // temporary.
-        let wanted = choice
-            .settings(&info, n)
-            .size(info.backend, T::FLOAT, self.host_view.batch_offsets())
-            .columns
-            * n;
-        if wanted > scratch.len() {
-            let extra = TranslationScratch::<T>::bytes(wanted)
-                .saturating_sub(TranslationScratch::<T>::bytes(scratch.len()));
+        let held = ScratchColumns::of(scratch, n);
+        let mut wanted = held;
+        wanted.cover(choice.settings(&info, n).size(
+            info.backend,
+            T::FLOAT,
+            self.host_view.batch_offsets(),
+            self.boxes,
+        ));
+        if wanted != held {
+            let extra = wanted.bytes::<T>(n).saturating_sub(held.bytes::<T>(n));
             if let Some(limit) = device.available_memory()
                 && extra > limit
             {
                 return Err(Rejection::Skipped(format!(
-                    "its chunks need a scratch of {wanted} values, {limit} bytes are available"
+                    "its chunks need a scratch of {} and {} values, {limit} bytes are available",
+                    wanted.gathered * n,
+                    wanted.products * n
                 )));
             }
             *scratch = TranslationScratch::<T>::new(device, 0)?;
-            *scratch = TranslationScratch::<T>::new(device, wanted)?;
+            *scratch = wanted.alloc::<T>(device, n)?;
         }
         let plan = GroupedPlan::new(
             device,
@@ -5042,13 +5206,29 @@ mod tests {
             ..GemmChoice::hand_written(GemmLayout::default_for(&info, n))
         };
         assert_eq!(
-            vector_settings(&choice, &info, n, 1, None),
+            vector_settings(&choice, &info, (n, 1), None, DeviceReduction::ByChunk),
             choice.settings(&info, n)
         );
-        let budget =
-            |info: &DeviceInfo, m, named| vector_settings(&choice, info, n, m, named).budget;
+        let budget = |info: &DeviceInfo, m, named| {
+            vector_settings(&choice, info, (n, m), named, DeviceReduction::ByChunk).budget
+        };
         assert_eq!(budget(&info, 8, None), 8 * (128 << 20));
         assert_eq!(budget(&info, 8, Some(16 << 20)), 128 << 20);
+        // On Metal at most eight vectors' worth, on CUDA one vector's (Phase 6 T7); on the
+        // CPU runtime m.
+        assert_eq!(budget(&info, 32, None), 8 * (128 << 20));
+        let on = |backend| DeviceInfo {
+            backend,
+            ..info.clone()
+        };
+        assert_eq!(
+            budget(&on(nd_fmm_kernels::BackendKind::Cuda), 32, None),
+            128 << 20
+        );
+        assert_eq!(
+            budget(&on(nd_fmm_kernels::BackendKind::Cpu), 32, None),
+            32 * (128 << 20)
+        );
         // An eighth of 4 GB is 512 MB: four vectors' worth, never below one vector's.
         let small = DeviceInfo {
             max_memory: Some(4 << 30),

@@ -865,6 +865,45 @@ rejected for the device (device-path §6.4, "a gathered copy of L"), and the dev
 its accumulate-from-zero GEMM with the row-order reduction (device and host agree within
 Phase 4's bounds, not bit for bit, as today).
 
+### 6.1 As built in T7
+
+The three in-scope items as `nd_fmm_kernels::translate::PlanSettings` options of the
+hand-written GEMM, each keeping one accumulator per output, `fma` with k ascending and the
+reduction's row order, so **each gives the bits of Phase 4's path** (tested on every layout
+and chunking against the host rows, and in every device scenario on the CPU runtime, Metal
+and CUDA with each variant forced on): the fused gather (`Gather::Fused`: the GEMM reads its
+columns through the batch's source indices, no gather launch and no gathered scratch, chunks
+twice as wide; the library keeps the separate gather), the reduction by chunk
+(`Reduction::ByChunk`, the default: each chunk's rows listed at build, every entry visited
+once per level call; Phase 4's walk kept as `Reduction::Walk`), and the shared-memory GEMM
+(`GemmLayout::Shared`, `shared_for`; on the CPU runtime one unit, whose `sync_cube` spins).
+L2P at high p was not built (not simple). What the measurements fixed
+(`fmm-validate/results/phase6-device.md`):
+
+- **Metal f32** (the M3 Max): per level call the new paths take 0.51–0.56 of Phase 4S's
+  time at N = 10⁶ (p = 3–12), 0.18–0.26 at 10⁷ (the reduction by chunk: Phase 4S's walk over
+  45–224 chunks under 128 MB), 0.58–0.66 on the Plummer sphere; end to end 1.13–1.65× at
+  N = 10⁶ and 1.29–3.97× at 10⁷ (p = 3–8), far above the model of §6, which was CUDA's:
+  Metal's 128 MB budget gives many chunks. Defaults: the reduction by chunk, the fused
+  gather, the shared-memory GEMM to p = 9.
+- **CUDA f32 and f64** (the H100, beside an idle co-tenant under a sampling gate): per level
+  call 0.60–0.77 of Phase 4S's at N = 10⁶ and 0.49–0.66 at 10⁷; the best variant alternates
+  with p (the fused cube layout at p = 3 and 12, the shared-memory GEMM with the fused gather
+  at 6, 8 and 18, 33–34 % of the f64 peak at p = 18); the reduction by chunk as modelled
+  (−29 % of the M2L at N = 10⁷, f64 p = 18, against −30 %), the fused gather within the
+  model's ≤ 6 % at f32 p = 8 (−1.4 % end to end). The static gather and layout stay
+  Phase 4S's until a sweep of every p (T11); the tuner offers both. End to end 1.0–1.17× in
+  f32 and up to 1.65× in f64 (p = 18, N = 10⁷): the host's part of an evaluation dominates
+  there (15–34 ms at N = 10⁶, 317–500 ms at 10⁷; for T11).
+- **Several charge vectors** (T5's revision): with the reduction by chunk the chunk budget
+  per vector is no longer needed for the m² cost; on Metal it is capped at 8 vectors (3.7 %
+  per vector slower than T5's at m = 32, a quarter of its scratch), on CUDA it is one
+  vector's 2 GB (at most 3 % slower; T5's 10–12 GB failed to allocate beside the
+  co-tenant).
+
+The defaults were signed off by the user on 2026-10-17 (docs/phase6/README.md, decision
+8), with CUDA's gather and layout left to T11: they change no output bit.
+
 ## 7. Dipoles (C6.4)
 
 ### 7.1 The source-type interface

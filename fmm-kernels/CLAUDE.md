@@ -12,7 +12,8 @@ Phase and components: Phase 4, C4.1 (T4, T5), C4.2–C4.6 (T6–T10) and the tim
 of C4.8 (T11) in docs/phase4/; Phase 4S, C4S.8 (T9) and C4S.10 (T11: transfers without a
 host copy) in docs/phase4s/; Phase 5, C5.2's device-resident ghost buffers (T8) in
 docs/phase5/; Phase 6, C6.3 (T5: several charge vectors in the leaf operators, P2P and the
-output gather).
+output gather) and C6.1 (T7: the fused gather, the reduction by chunk and the shared-memory
+GEMM of the grouped translations).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -148,6 +149,38 @@ output gather).
   of Metal f32 (`nd-fmm-exec`'s `tune` docs), so `nd-fmm-exec` does not register it; keep
   it tested. `Tables::release_library_copy` frees a library copy no plan needs (T12), and
   `VERSION` keys the tuning cache.
+- The grouped translations' Phase 6 T7 items (C6.1; the `translate` module docs, "The fused
+  gather", "The reduction by chunk", "The shared-memory GEMM"), each a `PlanSettings`
+  option of the hand-written kernel, each keeping one accumulator per output, `fma` with k
+  ascending and the row order of the reduction, so each gives the bits of Phase 4's path:
+  - `gather: Gather::Fused`: the GEMM reads chunk column c at the batch's source
+    `batch_sources[start + c]` of the input (`gemm_gathered` for one GEMM); no gather
+    launch (two launches per chunk, `GroupedPlan::launches_per_chunk`) and no X: the budget
+    holds Y alone, chunks twice as wide (`PlanSize::gathered`, `gathered_columns`,
+    `TranslationScratch::split`). Box-major; a
+    library plan keeps the separate gather (`GroupedPlan::gather`), coefficient-major is
+    refused (`PlanSettings::check`);
+  - `reduction: Reduction::ByChunk` (the default): per chunk the rows it touches, each with
+    its first entry in the chunk, listed at build (two `u32` per (row, chunk),
+    `chunk_row_pairs`, bounded in `PlanSettings::size`, which takes the rows); the launch
+    walks each listed row from that entry while the batch positions lie in the chunk.
+    `Reduction::Walk` is Phase 4's reduction, kept as the counterpart and for measurement;
+  - `GemmLayout::Shared { rows, columns, per_unit, depth }`: steps of `depth` k staged in
+    shared memory (the table's rows padded to `rows · tm`, the tile's columns), `sync_cube`
+    around each step's products, the last step the n mod `depth` k left; the cube's shared
+    memory checked by `GemmLayout::check_for` (n and the precision), `shared_for` the
+    default per device (on the CPU runtime one unit, correctness only: its `sync_cube` is
+    a yielding spin barrier, and a multi-unit cube on 4 ranks of the M3 Max made
+    `tests/mpi_exec.rs` 140× slower; the kernel tests name multi-unit layouts). Load loops of
+    more than `UNROLLED_LOADS` (32) per unit are not unrolled (a CPU-runtime cube of 8
+    units would compile hundreds of loads per step).
+  Tested on every layout (the shared one included) in f32 and f64: the GEMM at p ∈ {0, 1,
+  3, 8, 12, 20} with the fused gather bit for bit the gathered one (on the CPU runtime at
+  p = 20 only in its own layout; the ignored 1000-column sweep runs the rest), and every
+  level call (M2M- and L2L-shaped, M2L over the 316 offsets; at p = 12 and 20 in the
+  default layout) in both orientations, with the fused gather and both reductions, at
+  chunks of one column to the whole view, bit for bit the host rows; `chunk_rows` and the
+  shared layout's fit in unit tests.
 - Rotation M2L (T10, `rotation`, device-path.md §6.6): the M2L family of the Phase 2
   rotation tables uploaded once as `RotationTables` from plain arrays in the storage of
   `nd_fmm_tables::rotation::ShiftTables` (`RotationArrays`: forward and backward y-blocks
@@ -236,7 +269,12 @@ output gather).
   rotation tests (`tests/kernels/translate/rotation.rs`: random V rows at p ∈ {0, 3, 8}
   and the special offsets at p ∈ {1, 3, 8}, both layouts, f32 and f64) add 3 runtime
   tests of about 1.2 s together. T12 runs the level-call tests in both orientations and
-  the gather coefficient-major too (no new test functions).
+  the gather coefficient-major too (no new test functions). Phase 6 T7 adds the shared
+  layout to every GEMM and level-call test, the fused gather and both reductions to every
+  level call (no new test functions): `gemm_equals_the_host_loop` 21.5 s (its variants'
+  compilation; the fused gather at p = 20 on the CPU runtime only in the CPU layout), the
+  level calls 9.5 s (with p = 12 and 20 in the default layout), M2L 5.0 s; the CPU
+  runtime's 75 default tests in about 40 s (release, the M3 Max).
   `cargo test -p nd-fmm-kernels` without features builds and passes in seconds.
   Kernel compilation, from CubeCL's profiling log (the first launch of each variant
   includes its compilation): `CUBECL_DEBUG_LOG=<file> cargo test -p nd-fmm-kernels

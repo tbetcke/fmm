@@ -35,7 +35,10 @@ use nd_fmm_kernels::view::{GroupedArrays, GroupedView};
 use nd_fmm_kernels::{BackendKind, Device, Precision};
 use nd_fmm_tables::MatrixSet;
 
-use super::{Real, assert_same, download, host_product, layouts, t, terms, uniform, unit, w};
+use super::{
+    Real, assert_same, check_plan, download, host_product, layouts, t, terms, uniform, unit,
+    variants, w,
+};
 use crate::common::{Rng, tests_on};
 
 /// The V-list offsets of `nd_fmm_tables::geometry::m2l_offsets`.
@@ -211,8 +214,16 @@ impl<T: Real> M2lCall<T> {
         let library = settings.library_candidate(device.backend(), T::FLOAT);
         let tables = Tables::upload(device, self.set.as_slice(), n, library).unwrap();
         let view = GroupedView::upload(device, &self.view.arrays(), self.view.nsources).unwrap();
-        let size = settings.size(device.backend(), T::FLOAT, &self.view.batch_offsets);
-        let mut scratch = TranslationScratch::<T>::new(device, size.columns * n).unwrap();
+        let size = settings.size(
+            device.backend(),
+            T::FLOAT,
+            &self.view.batch_offsets,
+            self.view.nrows(),
+        );
+        // X only where the plan gathers (Phase 6 T7: none with the fused gather).
+        let mut scratch =
+            TranslationScratch::<T>::split(device, size.gathered * n, size.columns * n).unwrap();
+        let before = device.counters().uploads;
         let plan = GroupedPlan::new(
             device,
             &self.view.arrays(),
@@ -223,6 +234,7 @@ impl<T: Real> M2lCall<T> {
         )
         .unwrap();
         assert!(plan.columns() <= size.columns);
+        check_plan(&plan, settings, &self.view.row_offsets, before, device);
         if let Some(reason) = plan.library_rejection() {
             println!("    library not used, the hand-written kernel runs: {reason}");
         }
@@ -247,8 +259,8 @@ impl<T: Real> M2lCall<T> {
             .unwrap();
             assert_eq!(
                 device.counters().launches - before,
-                3 * plan.nchunks() as u64,
-                "three launches per chunk"
+                (plan.launches_per_chunk() * plan.nchunks()) as u64,
+                "three launches per chunk, two with the fused gather"
             );
             assert_same(
                 "the multipoles",
@@ -349,29 +361,27 @@ fn check_batches<T: Real>(device: &mut Device, p: usize) {
     for layout in layouts(device, n) {
         let what = format!("{} M2L p = {p}, {pairs} pairs, {layout}", T::FLOAT);
         let mut chunks = Vec::new();
-        // One chunk; chunks of 97 columns, which cut batches; both orientations (T12).
+        // One chunk; chunks of 97 columns, which cut batches; both orientations (T12), the
+        // fused gather and both reductions (Phase 6 T7).
         for columns in [usize::MAX, 97] {
             let budget = if columns == usize::MAX {
                 DEFAULT_SCRATCH_BYTES
             } else {
                 (2 * n * columns * size_of::<T>()) as u64
             };
-            for orientation in [Orientation::BoxMajor, Orientation::CoefficientMajor] {
-                let settings = PlanSettings {
-                    n,
-                    layout,
-                    policy: GemmPolicy::HandWritten,
-                    budget,
-                    orientation,
-                };
+            let all = variants(n, layout, budget);
+            for settings in &all {
                 let repeats = if columns == usize::MAX { 2 } else { 1 };
-                let (got, gemm, nchunks) = call.grouped(device, &settings, repeats);
+                let (got, gemm, nchunks) = call.grouped(device, settings, repeats);
                 assert_eq!(gemm, Gemm::HandWritten(layout));
-                if orientation == Orientation::BoxMajor {
+                if *settings == all[0] {
                     chunks.push(nchunks);
                 }
                 assert_same(
-                    &format!("{what}, {orientation}, {nchunks} chunks: the host rows"),
+                    &format!(
+                        "{what}, {}, {}, {}, {nchunks} chunks: the host rows",
+                        settings.orientation, settings.gather, settings.reduction
+                    ),
                     &got,
                     &want,
                 );
@@ -382,7 +392,8 @@ fn check_batches<T: Real>(device: &mut Device, p: usize) {
         let worst = call.within_apply(&what, &want, &apply, &tau);
         println!(
             "  {what}: bit for bit the host rows in 1 and {} chunks, box-major and \
-             coefficient-major, each entry once, repeated calls bit-identical, empty rows \
+             coefficient-major, the gather separate and fused, the reduction by chunk and \
+             walking every row, each entry once, repeated calls bit-identical, empty rows \
              zero; ≤ {worst:.2} u_T τ from apply",
             chunks[1]
         );
@@ -394,13 +405,7 @@ fn check_per_offset<T: Real>(device: &mut Device, p: usize) {
     let n = (p + 1) * (p + 1);
     let call = M2lCall::<T>::new(0x7_9200 + p as u64, p, 24, 3);
     for layout in layouts(device, n) {
-        let settings = PlanSettings {
-            n,
-            layout,
-            policy: GemmPolicy::HandWritten,
-            budget: DEFAULT_SCRATCH_BYTES,
-            orientation: Orientation::BoxMajor,
-        };
+        let settings = PlanSettings::new(n, layout, GemmPolicy::HandWritten, DEFAULT_SCRATCH_BYTES);
         let (b, _, _) = call.grouped(device, &settings, 1);
         let a = call.per_group(device, Gemm::HandWritten(layout));
         assert_same(
@@ -453,13 +458,7 @@ fn m2l_library(device: &mut Device) {
     let call = M2lCall::<f32>::new(0x7_9300, p, nrows, sparsity);
     let pairs = call.view.sources.len();
     let (apply, tau) = call.apply_rows();
-    let auto = |budget| PlanSettings {
-        n,
-        layout,
-        policy: GemmPolicy::Auto,
-        budget,
-        orientation: Orientation::BoxMajor,
-    };
+    let auto = |budget| PlanSettings::new(n, layout, GemmPolicy::Auto, budget);
     let (library, gemm, chunks) = call.grouped(device, &auto(DEFAULT_SCRATCH_BYTES), 3);
     if device.backend() != BackendKind::Metal {
         assert_eq!(

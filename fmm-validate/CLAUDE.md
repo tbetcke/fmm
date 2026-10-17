@@ -218,6 +218,18 @@ sweeps `t6-fmm` and `t6-m2l` (each configuration with every ISA of `T6_ISAS`, de
 "avx2 avx512"), and the step `p2p-node` of `tools/kathleen/jobs/sweep.sbatch`. Its report
 is `results/phase6-avx512.md`.
 
+Phase 6 T7 (the device GEMM work, C6.1) added the `gemm_variants` example (feature `gpu`,
+not registered; it times): every M2L, M2M and L2L level call of an FMM's plan with the
+hand-written GEMM under Phase 4S's code (`phase4s`: the walking reduction, the separate
+gather) and T7's variants (`by-chunk`, `fused`, `shared`, `shared-fused`), each level
+call's result compared bit for bit, the stages of `phase4s` and `fused`, the efficiency
+against `peaks`; `--vectors m` builds the views with m columns per box. `scaling` gained
+`Settings::{device_scratch, device_gemm, device_gather, device_reduction}` (`--device-scratch
+MB`, `--device-gemm`, `--device-gather`, `--device-reduction`) and `Report::device_scratch_bytes`
+(the summary's `device_*` fields), and `tools/scaling/run.sh` the sweep `t7-device` (the
+reduction by chunk and walking, each with the per-vector and the one-vector chunk budget,
+at every m of `T5_RHS`). Its report is `results/phase6-device.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

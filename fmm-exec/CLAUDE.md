@@ -27,7 +27,10 @@ module `cost`; design docs/design/scale-out.md §6); Phase 6, C6.6 (T2 in docs/p
 host batched M2L, `M2lStrategy::Batched`, with `nd-fmm-simd`'s `MatrixKernel` and the
 opt-in fused mode `FmmBuilder::m2l_mul_add`; design docs/design/optimisation.md §2) and
 C6.3 (T5: several charge vectors, `FmmBuilder::vectors`, `Fmm::evaluate_many`,
-`OutputMany`, host and device; design docs/design/optimisation.md §4).
+`OutputMany`, host and device; design docs/design/optimisation.md §4) and C6.1 (T7: the
+device's fused gather, reduction by chunk and shared-memory GEMM,
+`FmmBuilder::{device_gather, device_reduction}`, `DeviceGemm::Shared`; design
+docs/design/optimisation.md §6).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -349,8 +352,8 @@ C6.3 (T5: several charge vectors, `FmmBuilder::vectors`, `Fmm::evaluate_many`,
     from T7 so do P2M, L2P, P2L and M2P (`nd_fmm_kernels::leaf`, one launch per level
     call, the layout by backend or `FmmBuilder::device_leaf_layout`), and from T8 M2M
     (both passes) and L2L (`nd_fmm_kernels::translate::grouped` with the dense octant
-    tables under every strategy, three launches per chunk, plans and scratch built at
-    build, the GEMM by `FmmBuilder::device_gemm` and the chunks by
+    tables under every strategy, three launches per chunk (two with the fused gather,
+    Phase 6 T7), plans and scratch built at build, the GEMM by `FmmBuilder::device_gemm` and the chunks by
     `device_scratch_budget`, reported in `DeviceReport::translations`), and from T9 M2L
     under `Dense` and `Classes` (the same grouped translation over the level's V view
     and the 316 dense tables, `Classes` from `M2lClasses::expand` and reported as
@@ -409,6 +412,24 @@ C6.3 (T5: several charge vectors, `FmmBuilder::vectors`, `Fmm::evaluate_many`,
     Never time a level call inside `nd-fmm-plan` or `nd-fmm-kernels`, and never assert a
     timing (the overlapped stages of `nd-fmm-plan` read the clock around their `test`
     calls, waits and work parts for `OverlapTimes`, Phase 5 T9: the one exception);
+  - the grouped translations' Phase 6 T7 variants (C6.1; the `device` and `tune` module
+    docs): `FmmBuilder::device_gather` (`DeviceGather::{Auto, Separate, Fused}`),
+    `device_reduction` (`DeviceReduction::{ByChunk, Walk}`, by chunk by default) and
+    `DeviceGemm::Shared` (the shared-memory GEMM, `GemmLayout::shared_for`); none changes a
+    bit. A plan with the fused gather needs no gathered columns and has chunks twice as
+    wide; the scratch holds X and Y for the widest plans and candidates of each
+    (`ScratchColumns`), X only where one gathers. Under `DeviceGemm::Auto` the static rule (`tune::static_layout`,
+    `tune::static_gather`) takes the shared-memory layout to p = 9 and the fused gather on
+    Metal, the default layout and the separate gather elsewhere (on CUDA the best variant
+    alternates with p, so the rule waits for T11), the several-vector chunk budget is
+    capped at 8 vectors on Metal and at one vector's on CUDA, and the tuner offers the
+    shared-memory layout and the other gather (`CANDIDATE_SET_VERSION` 3; the cache's
+    `FORMAT_VERSION` 2 names the gather and the shared-memory layout); a named gather holds
+    for every call and candidate. `TranslationReport::{gather, reduction, launches}` report
+    them, and `tests/device_common::check_variants` builds, in every device scenario (the
+    CPU runtime in `tests/mpi_exec.rs`, Metal, CUDA), the hand-written reference and four
+    variants (fused; walking; shared; shared, fused and walking), each bit for bit the
+    reference with the launches of the formula (the device line counts the evaluations);
   - autotune (T12, C4.7; module `tune`, device-path.md §10): `FmmBuilder::tuning_cache`
     (no default directory, no environment variable) and `tuning_budget` (10 s); the M2L
     strategy under `Auto` with M2L on the device is decided before the tables are built

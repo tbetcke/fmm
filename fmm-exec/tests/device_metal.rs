@@ -126,13 +126,16 @@ fn scenario(
         "metal on the host fallback bit for bit ({} values), transfers as the \
          formula; the default placement within {:.1e} (φ) and {:.1e} \
          (∇φ) of the host, relative L2; per level multipoles {:.1e} (root, the \
-         global M2M: {:.1e}), locals {:.1e}",
+         global M2M: {:.1e}), locals {:.1e}; {} evaluations of the fused gather, the \
+         walking reduction and the shared-memory GEMM bit for bit the hand-written device \
+         evaluation",
         output_bits(&output).len(),
         difference.potential,
         difference.gradient,
         difference.multipoles,
         difference.root,
-        difference.locals
+        difference.locals,
+        difference.variants
     );
     // Three charge vectors (Phase 6 T5): each bit for bit the one-vector device FMM's,
     // blocking and overlapped, with the transfers of the formula for m vectors.

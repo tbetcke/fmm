@@ -10,7 +10,9 @@ use std::fmt::Write;
 use nd_fmm_exec::fmm::{Backend, DEFAULT_MAX_LEVEL, DEFAULT_MAX_POINTS_PER_LEAF, KindTiming};
 use nd_fmm_validate::calibration::Precision;
 
-use crate::options::{Combination, Options, kinds_name, output_pass_name, strategy_name};
+use crate::options::{
+    Combination, Options, device_translations_name, kinds_name, output_pass_name, strategy_name,
+};
 
 /// The machine and the software of a run: the report's header.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -520,6 +522,7 @@ fn header_table(report: &Report) -> String {
                 output_pass_name(o.output_pass)
             ),
         ),
+        ("device translations", device_translations_name(o)),
         (
             "accuracy",
             o.accuracy.map_or_else(
@@ -802,6 +805,10 @@ mod tests {
             gradients: true,
             reuse_output: false,
             output_pass: nd_fmm_exec::fmm::OutputPass::Auto,
+            device_gemm: nd_fmm_exec::fmm::DeviceGemm::Auto,
+            gather: nd_fmm_exec::fmm::DeviceGather::Auto,
+            reduction: nd_fmm_exec::fmm::DeviceReduction::ByChunk,
+            scratch: None,
             leaf_size: None,
             max_level: Some(8),
             table_cache: None,
@@ -1034,6 +1041,7 @@ mod tests {
 | threads | 2; host and host-fallback threads (on the CPU runtime, its units per cube) |
 | timing | 1 warm-up, then 2 timed evaluations; kind timings `sync` in a second build |
 | output | a fresh `Output` per evaluation (`Fmm::evaluate`); output pass `auto` |
+| device translations | GEMM `auto`, gather `auto`, reduction `by-chunk`, chunk budget the device's |
 | accuracy | relative L2 at 100 sampled targets against the f64 direct sum |
 | table cache | none |
 | tuning cache | `tune` |
