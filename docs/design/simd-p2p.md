@@ -489,6 +489,62 @@ change), detection of `avx512f`, and its tests in a CI or local run on hardware 
 it. Until then an AVX-512 machine runs the AVX2 path. green-kernels on stable Rust does
 the same (Section 2.2).
 
+### 4.8 Dipoles (Phase 6 T8)
+
+`P2pKernel::evaluate_dipoles` (C6.4; CONVENTIONS §3.7, "Dipole sources";
+docs/design/optimisation.md §7.2) adds the potential d · w / r³ of a dipole of moment d
+at w = x − y, and its gradient d / r³ − 3 (d · w) w / r⁵. The body (`arch::p2p::
+p2p_dipoles_body`) keeps the charge kernel's loop order, blocks, tails, coincident-pair
+mask and inverse square root, and per pair and lane:
+
+| Step | Operations | Potential only | With gradient |
+| --- | --- | --- | --- |
+| w, r², ρ, mask | as §4.2 | 8 + 3k | 8 + 3k |
+| ρ² = ρ ρ, ρ³ = ρ ρ² | 2 mul | 2 | 2 |
+| s = d · w | mul + 2 fma | 3 | 3 |
+| φ += s ρ³ | fma (with gradient: mul + add) | 1 | 2 |
+| a = (3 s) ρ², gₖ += ρ³ (dₖ − a wₖ) | 2 mul, 3 fnma, 3 fma | — | 8 |
+| **total** | | **14 + 3k** | **23 + 3k** |
+
+so about 1.4× the charge kernel's operations. The gradient is formed as
+ρ³ (dₖ − a wₖ) with |a wₖ| ≤ 3 |d|: no intermediate exceeds ρ³ times 4 |d|, which keeps f32
+in range down to r² = 2^(−80 + 2e/3) for |dₖ| ≤ 2^e (CONVENTIONS §3.13, "Range of the
+terms in f32"); the form (3 s ρ⁵) wₖ would overflow there. The source's moment is
+broadcast by the same `Simd::broadcast` as its coordinates. Blocks: K = 2 on NEON and
+AVX-512 and 1 on AVX2 (`DIPOLE_K`), from the register count (7 K vectors per block plus six
+broadcasts), not measured. The scalar ISA runs `nd_fmm_ref::p2p::p2p_dipoles`'s loop and
+equals it bit for bit wherever r² ≠ 0.
+
+**Contract** (per term, against the reference's term in the same precision; first
+order in u = u_T; both compute w by the same subtraction, so only the later operations
+differ). With ρ = (1/r)(1 + δ), |δ| ≤ 5u (4u for the inverse square root of §4.3 and u for
+the rounded r²), and |s| ≤ |d| r:
+
+- *Kernel potential.* ρ² and ρ³ are within 11u and 17u of r⁻² and r⁻³; s by the fma chain
+  within 3u Σ |dₖ wₖ| ≤ 3u |d| r. So s ρ³ is within (17 + 3) u |d| / r² of d · w / r³ (the
+  final addition rounds the sum, not the term).
+- *Reference potential.* r² within 2u, r within 2u, r³ = r² r within 5u, s within 3u |d| r,
+  and the division one more u: within 9u |d| / r².
+- **Potential: within 29u, so 32 u_T relative to |d| / r²**, in both precisions.
+- *Kernel gradient.* a = fl(fl(3 s) ρ²) is within 9u |d| / r (from s) plus 13u |a|, with
+  |a| ≤ 3 |d| / r: 48u |d| / r. Then hₖ = dₖ − a wₖ (one fnma, |hₖ| ≤ 4 |d|) is within
+  48u |d| + 4u |d|, and ρ³ hₖ within 17u · 4 |d| / r³ more: 120u |d| / r³.
+- *Reference gradient.* (3 s) / r² within 9u |d| / r plus 4u |a|: 21u |d| / r; the product
+  with wₖ and the subtraction add 3u |d| and 4u |d|; the division by r³ adds 5u · 4 |d| / r³
+  and u · 4 |d| / r³: 52u |d| / r³.
+- **Gradient: within 172u, so 176 u_T per component relative to |d| / r³.**
+
+These bounds add worst cases of independent roundings and are loose: over 10⁶ seeded
+pairs across the domain (`tests/p2p/dipoles.rs`, `dipole_terms_*_large`, release) NEON
+measured at most 10.5 u (φ) and 32.6 u (∇φ) in f32 (r² from 2⁻⁸⁰) and 9.6 u and 33.8 u in
+f64, on the M3 Max (Phase 6 T8). The sums against `direct_sum_dipoles` are tested at 1e-5
+(f32) and 1e-13 (f64) relative to Σ |d| / r² and Σ |d| / r³.
+
+Charges and dipoles at the same points (`SourceType::ChargesAndDipoles` of `nd-fmm-exec`)
+run the two kernels one after the other on the same source leaf, charges first; a fused
+kernel would share w, r² and ρ (about 8 + 3k operations per pair) and change the order of
+the additions, and is left for a later task.
+
 ## 5. The crate `nd-fmm-simd`
 
 Directory `fmm-simd/`, package `nd-fmm-simd`, library `nd_fmm_simd`, a default member.

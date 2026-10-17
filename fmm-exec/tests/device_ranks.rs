@@ -28,6 +28,10 @@
 //!   blocking and overlapped, with every kind on the host fallback bit for bit the host's,
 //!   and the transfers of the formula for m vectors (m times the bytes of the charges,
 //!   the output and the exchanges, the same launches and syncs);
+//! - dipole sources (Phase 6 T8, `device_common::dipole_scenario`, the CPU runtime): the
+//!   cube, N = 4,000, f64 p = 6, `Dipoles` and `ChargesAndDipoles`, every kind on the host
+//!   fallback bit for bit the host, the default placement (P2M, P2L and P2P on the host)
+//!   within the bound;
 //! - **against the one-rank host run**: the device output over every rank's targets, in
 //!   point order, within the same bounds of the one-rank host `Fmm` over all the points in
 //!   their own order (relative L2, φ and ∇φ; requirement 2: the host on P ranks lies within
@@ -412,6 +416,8 @@ fn device_on_several_ranks() {
             &mut failures,
             &comm,
         );
+        // Dipole sources (Phase 6 T8, C6.4).
+        device_common::dipole_scenario::<f64>(4000, 6, Backend::Cpu, &comm);
         ran.push("cpu (f64 p = 8, f32 p = 3 at N = 10^4; transfers at N = 10^5, f32 p = 8)");
     }
     if Backend::Metal.is_compiled() {

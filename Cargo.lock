@@ -2942,6 +2942,7 @@ dependencies = [
  "nd-fmm-math",
  "num-traits",
  "proptest",
+ "serde_json",
 ]
 
 [[package]]

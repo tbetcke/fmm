@@ -211,6 +211,26 @@
 //!
 //! The test prints the evaluations with kind timings and their calls at the end.
 //!
+//! Dipole sources (Phase 6 T8, C6.4; docs/design/optimisation.md §7). Error measures: as
+//! for T9, relative L2 against `direct_sum` and `direct_sum_dipoles` divided by 4π over
+//! all targets; exact equality of the bit patterns.
+//! - **dipole sources**: the uniform cube and the Plummer sphere (the `clustered
+//!   distributions` sphere of a = 0.04), N = 2,000, sources equal to targets, moments and
+//!   charges uniform in [−1, 1)³ and [−1, 1), for `SourceType::Dipoles` and
+//!   `ChargesAndDipoles`, f64 with gradients: the error decreases from p = 4 to p = 8 and is
+//!   within [`DIPOLE_SMOKE`] at p = 8 (the C3.2 and C3.3 gates are the ignored
+//!   `tests/accuracy.rs` and `tests/adaptive.rs`). At p = 6: the evaluation at 4 threads
+//!   and overlapped bit for bit; `P2pChoice::Reference` within the tolerance of an ISA;
+//!   f32 within 1e-4 of f64 (relative L2); on several ranks the one-rank `Fmm` over the
+//!   union bit for bit; with the `gpu` feature the device check of `device_common::
+//!   check_dipoles` (every kind on the fallback bit for bit, the default placement with
+//!   P2M, P2L and P2P on the host within the device bounds). On the cube: charges and
+//!   dipoles together equal charges alone plus dipoles alone to 1e-13 (linearity, f64);
+//!   `Sources::charges` on a charge FMM is `evaluate` bit for bit; `evaluate` and a
+//!   mismatched `Sources` on a dipole FMM give `FmmError::SourceType`, a moment slice of
+//!   the wrong length `FmmError::DipolesLength`, on every rank; dipoles with two vectors
+//!   `SettingsError::SourcesWithVectors`.
+//!
 //! Several ranks (Phase 5 T6, C5.1; docs/phase5/README.md, "The oracles", "Accuracy
 //! measures", "Workloads"; docs/design/distributed-fmm.md §5, §10). Every `Fmm` scenario
 //! but **ownership** and **input distributions** passes each rank its share of the
@@ -350,7 +370,7 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
 use nd_fmm_exec::fmm::{
     Backend, Fmm, FmmBuilder, FmmError, KindTiming, MultipoleRouting, OperatorKind, Output,
-    OutputMany, OutputPass, Placement, PointSet, SettingsError,
+    OutputMany, OutputPass, Placement, PointSet, SettingsError, SourceType, Sources,
 };
 use nd_fmm_exec::geometry::{Domain, GeometryError, leaf_coordinates, radius};
 use nd_fmm_exec::operator::{Isa, LaplaceOperator, MulAdd, P2pChoice, SimdScalar};
@@ -362,7 +382,7 @@ use nd_fmm_plan::interaction_manager::V_LIST_DIRECTIONS;
 use nd_fmm_plan::lists::GroupedCsr;
 use nd_fmm_plan::operator::{FmmOperator, PerPair};
 use nd_fmm_plan::plan::Plan;
-use nd_fmm_ref::p2p::direct_sum;
+use nd_fmm_ref::p2p::{direct_sum, direct_sum_dipoles};
 use nd_fmm_tables::cache::Stored;
 use nd_fmm_tables::geometry::m2l_offset_index;
 use nd_fmm_tables::{CacheOutcome, TableCache};
@@ -485,7 +505,7 @@ fn distributed_scenarios() {
         "the threaded scenarios need MPI at Funneled, it provides {provided:?}"
     );
     let comm = universe.world();
-    let cases: [(&str, Scenario); 27] = [
+    let cases: [(&str, Scenario); 28] = [
         ("table order against the plan", table_order),
         ("batched against per-pair", batched_against_per_pair),
         ("uniform cube, every strategy", uniform_cube_strategies),
@@ -516,6 +536,7 @@ fn distributed_scenarios() {
         ("tiny problem", tiny_problem),
         ("host-data hook", host_data_hook),
         ("the strategy rule on the node", strategy_on_the_node),
+        ("dipole sources", dipole_sources),
     ];
     for (name, scenario) in cases {
         *SCENARIO.lock().unwrap() = name;
@@ -4570,4 +4591,336 @@ fn host_data_hook(comm: &SimpleCommunicator) {
         off_twice.differing > 0,
         "without `Reset` the shadow must differ"
     );
+}
+
+/// The largest relative L2 error of φ and ∇φ at p = 8 in **dipole sources**, a smoke
+/// bound (the gates are the ignored tests): the dipole FMM's single-translation error at
+/// p = 8 is about 5e-4 (docs/design/optimisation.md §7.5).
+const DIPOLE_SMOKE: (f64, f64) = (2e-3, 2e-2);
+
+/// The exact potential and gradient of `sources` (charges, moments or both) at
+/// `targets`, divided by 4π.
+fn exact_sources(
+    points: &[[f64; 3]],
+    sources: &Sources<'_, f64>,
+    targets: &[[f64; 3]],
+) -> (Vec<f64>, Vec<[f64; 3]>) {
+    let mut phi = vec![0.0; targets.len()];
+    let mut grad = vec![[0.0; 3]; targets.len()];
+    if let Some(charges) = sources.charges {
+        direct_sum(points, charges, targets, &mut phi, Some(&mut grad));
+    }
+    if let Some(dipoles) = sources.dipoles {
+        direct_sum_dipoles(points, dipoles, targets, &mut phi, Some(&mut grad));
+    }
+    let scale = 4.0 * std::f64::consts::PI;
+    (
+        phi.iter().map(|v| v / scale).collect(),
+        grad.iter().map(|g| g.map(|gk| gk / scale)).collect(),
+    )
+}
+
+/// `sources` in f32.
+fn sources_f32(charges: &[f64], dipoles: &[[f64; 3]]) -> (Vec<f32>, Vec<[f32; 3]>) {
+    (
+        charges.iter().map(|&q| q as f32).collect(),
+        dipoles.iter().map(|d| d.map(|c| c as f32)).collect(),
+    )
+}
+
+/// The strengths of `kind` from the charges and moments.
+fn strengths<'a, T>(kind: SourceType, charges: &'a [T], dipoles: &'a [[T; 3]]) -> Sources<'a, T> {
+    match kind {
+        SourceType::Charges => Sources::charges(charges),
+        SourceType::Dipoles => Sources::dipoles(dipoles),
+        _ => Sources::charges_and_dipoles(charges, dipoles),
+    }
+}
+
+/// The dipole FMM of `builder` on `points` (sources equal to targets), evaluated once.
+fn dipole_fmm<'o, T: Stored + SimdScalar + Equivalence + Default>(
+    builder: &FmmBuilder<T>,
+    points: &[[f64; 3]],
+    sources: &Sources<'_, T>,
+    comm: &'o SimpleCommunicator,
+) -> (Fmm<'o, T>, Output<T>) {
+    let mut fmm = builder
+        .clone()
+        .table_cache(TABLE_CACHE)
+        .build(points, points, comm)
+        .unwrap_or_else(|error| panic!("rank {}: the dipole FMM: {error}", comm.rank()));
+    let output = fmm
+        .evaluate_sources(sources)
+        .expect("the dipole FMM evaluates");
+    (fmm, output)
+}
+
+/// The number of values of all ranks whose bits differ between `a` and `b`.
+fn differing_bits<T: RealScalar>(a: &Output<T>, b: &Output<T>, comm: &SimpleCommunicator) -> usize {
+    let (a, b) = (output_bits(a), output_bits(b));
+    assert_eq!(a.len(), b.len());
+    global_sum(a.iter().zip(&b).filter(|(x, y)| x != y).count(), comm)
+}
+
+/// On several ranks, the one-rank reference of a dipole FMM (as [`check_one_rank`]): the
+/// `Fmm` of `builder` at one thread over the union of every rank's points (sources equal to
+/// targets), charges and moments in rank order, on rank 0, broadcast; the verdict agreed.
+fn check_one_rank_sources<T: Stored + SimdScalar + Equivalence + Default>(
+    what: &str,
+    (builder, kind): (&FmmBuilder<T>, SourceType),
+    points: &[[f64; 3]],
+    (charges, dipoles): (&[T], &[[T; 3]]),
+    output: &Output<T>,
+    comm: &SimpleCommunicator,
+) {
+    if comm.size() == 1 {
+        return;
+    }
+    let (all_points, first) = union_points(points, comm);
+    let (all_charges, _) = union(charges, comm);
+    let (flat, _) = union(dipoles.as_flattened(), comm);
+    let all_dipoles = flat.as_chunks::<3>().0.to_vec();
+    let n = all_points.len();
+    let gradients = output.gradient.is_some();
+    let mut reference = vec![0u64; if gradients { 4 * n } else { n }];
+    if comm.rank() == 0 {
+        let one = SimpleCommunicator::self_comm();
+        let mut fmm = builder
+            .clone()
+            .threads(1)
+            .build(&all_points, &all_points, &one)
+            .unwrap_or_else(|error| panic!("rank 0: {what}: the one-rank FMM: {error}"));
+        let all = fmm
+            .evaluate_sources(&strengths(kind, &all_charges, &all_dipoles))
+            .expect("the one-rank FMM evaluates");
+        reference.copy_from_slice(&output_bits(&all));
+    }
+    comm.process_at_rank(0).broadcast_into(&mut reference[..]);
+    let (phi, grad) = reference.split_at(n);
+    let local = points.len();
+    let mut want = phi[first..first + local].to_vec();
+    if gradients {
+        want.extend_from_slice(&grad[3 * first..3 * (first + local)]);
+    }
+    let got = output_bits(output);
+    let differing = got.iter().zip(&want).filter(|(a, b)| a != b).count();
+    let total = global_sum(differing, comm);
+    assert_eq!(
+        total,
+        0,
+        "rank {}: {what}: {total} values differ from the one-rank FMM over the union",
+        comm.rank()
+    );
+    ONE_RANK_CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Dipole sources (Phase 6 T8, C6.4; module documentation).
+fn dipole_sources(comm: &SimpleCommunicator) {
+    let rank = comm.rank();
+    let mut rng = SplitMix64(0xd1b0_5ce5);
+    let n = 2000;
+    let cube = unit_cube_points(&mut rng, n);
+    let plummer = plummer_points(&mut rng, n, [0.5; 3], 0.04);
+    let charges = random_charges(&mut rng, n);
+    let dipoles: Vec<[f64; 3]> = (0..n)
+        .map(|_| core::array::from_fn(|_| rng.range(-1.0, 1.0)))
+        .collect();
+    let (local_q, local_d) = (share(&charges, comm), share(&dipoles, comm));
+    let (local_q32, local_d32) = sources_f32(&local_q, &local_d);
+    for (name, points) in [("cube", &cube), ("Plummer", &plummer)] {
+        let local = share(points, comm);
+        for kind in [SourceType::Dipoles, SourceType::ChargesAndDipoles] {
+            let all = strengths(kind, &charges, &dipoles);
+            let mine = strengths(kind, &local_q, &local_d);
+            let (phi, grad) = exact_sources(points, &all, &local);
+            let mut errors = Vec::new();
+            for p in [4, 8] {
+                let builder = FmmBuilder::<f64>::new(p).gradients(true).sources(kind);
+                let (fmm, output) = dipole_fmm(&builder, &local, &mine, comm);
+                assert_eq!(fmm.source_type(), kind);
+                let e = (
+                    relative_l2(&output.potential, &phi, comm),
+                    relative_l2_vectors(output.gradient.as_ref().unwrap(), &grad, comm),
+                );
+                if rank == 0 {
+                    eprintln!(
+                        "rank 0: dipole sources, {name}, {kind}, N = {n}, p = {p}: relative L2 \
+                         error {:.3e} (φ), {:.3e} (∇φ)",
+                        e.0, e.1
+                    );
+                }
+                errors.push(e);
+            }
+            assert!(
+                errors[1].0 < errors[0].0 && errors[1].1 < errors[0].1,
+                "{name}, {kind}: the error does not decrease with p: {errors:?}"
+            );
+            assert!(
+                errors[1].0 < DIPOLE_SMOKE.0 && errors[1].1 < DIPOLE_SMOKE.1,
+                "{name}, {kind}, p = 8: {:?}",
+                errors[1]
+            );
+
+            // p = 6: threads, overlap, the reference P2P, f32, the one-rank reference.
+            let builder = FmmBuilder::<f64>::new(6).gradients(true).sources(kind);
+            let (mut fmm, output) = dipole_fmm(&builder, &local, &mine, comm);
+            let (_, threaded) = dipole_fmm(&builder.clone().threads(4), &local, &mine, comm);
+            assert_eq!(
+                differing_bits(&threaded, &output, comm),
+                0,
+                "{name}, {kind}: 4 threads"
+            );
+            fmm.set_overlap(true);
+            let overlapped = fmm.evaluate_sources(&mine).expect("overlapped");
+            fmm.set_overlap(false);
+            assert_eq!(
+                differing_bits(&overlapped, &output, comm),
+                0,
+                "{name}, {kind}: overlap"
+            );
+            OVERLAP_CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let again = fmm.evaluate_sources(&mine).expect("again");
+            assert_eq!(
+                differing_bits(&again, &output, comm),
+                0,
+                "{name}, {kind}: again"
+            );
+            let reference_builder = builder.clone().p2p_kernel(P2pChoice::Reference);
+            let (_, reference) = dipole_fmm(&reference_builder, &local, &mine, comm);
+            let d = difference(&output.potential, &reference.potential, comm).max(difference(
+                output.gradient.as_ref().unwrap().as_flattened(),
+                reference.gradient.as_ref().unwrap().as_flattened(),
+                comm,
+            ));
+            assert!(
+                d < kernel_tolerance::<f64>(),
+                "{name}, {kind}: Reference {d:e}"
+            );
+            let f32_builder = FmmBuilder::<f32>::new(6).gradients(true).sources(kind);
+            let mine32 = strengths(kind, &local_q32, &local_d32);
+            let (single_fmm, single) = dipole_fmm(&f32_builder, &local, &mine32, comm);
+            let single_f64: Vec<f64> = single.potential.iter().map(|&v| f64::from(v)).collect();
+            let precision = difference(&single_f64, &output.potential, comm);
+            assert!(
+                precision < 1e-4,
+                "{name}, {kind}: f32 against f64 {precision:e}"
+            );
+            check_one_rank_sources(
+                &format!("dipole sources, {name}, {kind}"),
+                (&builder.clone().strategy(fmm.strategy()), kind),
+                &local,
+                (&local_q, &local_d),
+                &output,
+                comm,
+            );
+            check_one_rank_sources(
+                &format!("dipole sources, {name}, {kind}, f32"),
+                // The resolved strategy: under `Auto` it depends on the ranks per node.
+                (&f32_builder.clone().strategy(single_fmm.strategy()), kind),
+                &local,
+                (&local_q32, &local_d32),
+                &single,
+                comm,
+            );
+            #[cfg(feature = "gpu")]
+            for backend in device_backends() {
+                device_common::check_dipoles(&builder, &local, &mine, &output, backend, comm);
+            }
+            if rank == 0 {
+                eprintln!(
+                    "rank 0: dipole sources, {name}, {kind}, p = 6: 4 threads, overlapped and \
+                     repeated bit for bit; Reference P2P within {d:.1e}; f32 within \
+                     {precision:.1e} of f64"
+                );
+            }
+        }
+    }
+
+    // Linearity, charges through `Sources`, and the errors, on the cube at p = 6.
+    let local = share(&cube, comm);
+    let builder = FmmBuilder::<f64>::new(6).gradients(true);
+    let (mut charge_fmm, by_charges) =
+        dipole_fmm(&builder, &local, &Sources::charges(&local_q), comm);
+    let evaluated = charge_fmm
+        .evaluate(&local_q)
+        .expect("the charge FMM evaluates");
+    assert_eq!(
+        differing_bits(&evaluated, &by_charges, comm),
+        0,
+        "Sources::charges is evaluate"
+    );
+    let (_, by_dipoles) = dipole_fmm(
+        &builder.clone().sources(SourceType::Dipoles),
+        &local,
+        &Sources::dipoles(&local_d),
+        comm,
+    );
+    let (mut both_fmm, both) = dipole_fmm(
+        &builder.clone().sources(SourceType::ChargesAndDipoles),
+        &local,
+        &Sources::charges_and_dipoles(&local_q, &local_d),
+        comm,
+    );
+    let sum: Vec<f64> = by_charges
+        .potential
+        .iter()
+        .zip(&by_dipoles.potential)
+        .map(|(a, b)| a + b)
+        .collect();
+    let linear = difference(&both.potential, &sum, comm);
+    assert!(linear < 1e-13, "linearity: {linear:e}");
+
+    // Errors, agreed on every rank: only rank 0 passes the wrong input where it can.
+    let wrong = |error: FmmError, what: &str| match error {
+        FmmError::OtherRank => assert_ne!(rank, 0, "{what}: rank 0 holds the error"),
+        error => assert_eq!(rank, 0, "{what}: {error}"),
+    };
+    match both_fmm.evaluate(&local_q) {
+        Err(FmmError::SourceType { expected, actual }) => {
+            assert_eq!(expected, SourceType::ChargesAndDipoles);
+            assert_eq!(actual, Some(SourceType::Charges));
+        }
+        other => panic!("evaluate on a dipole FMM: {other:?}"),
+    }
+    let mismatched = if rank == 0 {
+        Sources::dipoles(&local_d)
+    } else {
+        Sources::charges_and_dipoles(&local_q, &local_d)
+    };
+    match both_fmm.evaluate_sources(&mismatched) {
+        Err(FmmError::SourceType { actual, .. }) => {
+            assert_eq!(rank, 0);
+            assert_eq!(actual, Some(SourceType::Dipoles));
+        }
+        Err(error) => wrong(error, "mismatched sources"),
+        Ok(_) => panic!("mismatched sources evaluated"),
+    }
+    let short = &local_d[..local_d.len().saturating_sub(usize::from(rank == 0))];
+    match both_fmm.evaluate_sources(&Sources::charges_and_dipoles(&local_q, short)) {
+        Err(FmmError::DipolesLength { expected, actual }) => {
+            assert_eq!((rank, expected), (0, actual + 1));
+        }
+        Err(error) => wrong(error, "short moments"),
+        Ok(_) => panic!("short moments evaluated"),
+    }
+    match FmmBuilder::<f64>::new(4)
+        .sources(SourceType::Dipoles)
+        .vectors(2)
+        .build(&local, &local, comm)
+    {
+        Err(FmmError::InvalidSettings(SettingsError::SourcesWithVectors { sources, vectors })) => {
+            assert_eq!((sources, vectors), (SourceType::Dipoles, 2));
+        }
+        other => panic!("dipoles with two vectors: {:?}", other.err()),
+    }
+    #[cfg(feature = "gpu")]
+    for backend in device_backends() {
+        device_common::dipole_scenario::<f32>(1000, 4, backend, comm);
+    }
+    if rank == 0 {
+        eprintln!(
+            "rank 0: dipole sources: charges and dipoles within {linear:.1e} of the sum of \
+             charges and dipoles; Sources::charges bit for bit evaluate; the errors agreed"
+        );
+    }
 }

@@ -7,6 +7,7 @@ scripts below.
 | Script | Purpose | Needs |
 | --- | --- | --- |
 | `gen_harmonics.py` | writes `fmm-math/fixtures/harmonics_{A,B,C}.json` | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
+| `gen_dipoles.py` | writes `fmm-ref/fixtures/dipoles.json`: the dipole P2M and P2L coefficients and the dipole direct sum of CONVENTIONS §3.7, "Dipole sources" (Phase 6 T8) | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
 | `crosscheck_scipy.py` | independent double-precision second opinion on the conventions and the fixtures | Python ≥ 3.9, `numpy`, `scipy` |
 | `check_translations.py` | high-precision check of the translation operators of CONVENTIONS §3.11; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
 | `check_symmetry.py` | high-precision check of the box geometry and cube symmetry rules of CONVENTIONS §3.12; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
@@ -46,6 +47,23 @@ Regenerate when `CONVENTION_VERSION` changes (the generator reads it from
 `docs/CONVENTIONS.md` and writes it into every header) or when the generator itself
 changes; in the latter case bump `GENERATOR_VERSION` in `gen_harmonics.py`. Commit the
 regenerated fixtures together with the change that caused them.
+
+The dipole fixture regenerates the same way, in about a second, byte-identically:
+
+```sh
+uv run tools/fixtures/gen_dipoles.py
+uv run tools/fixtures/gen_dipoles.py --check
+```
+
+It holds, for p = 16 (seed 20261017), three P2M and three P2L cases (five dipoles each, in
+the frames ((0, 0, 0), 1), ((0.3125, −0.21875, 0.6875), 0.37) and ((1, 1, 1), 2⁻¹⁶),
+sources at |u| ≤ √3 and 2 ≤ |u| ≤ 8), with the coefficients Σ (d/r) · ∇ conj Xₙᵐ(u) in
+real storage, and the potential and gradient of 20 dipoles at 10 targets. The
+coefficients are directional derivatives of the definitions of §3.3 by central
+differences at 120 digits, verified by a second step size; the direct sum is the closed
+form, its gradient verified against differences of the potential. Regenerate it when
+`CONVENTION_VERSION` changes (it is written into the header) or the generator changes
+(bump its `GENERATOR_VERSION`). `nd-fmm-ref`'s `tests/dipoles/fixtures.rs` reads it.
 
 ## What the fixtures contain
 

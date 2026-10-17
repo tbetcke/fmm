@@ -145,6 +145,53 @@ pub(crate) fn p2p<T: RealScalar>(
     }
 }
 
+/// Dipole P2P with the scalar path (`P2pKernel::evaluate_dipoles`; Phase 6 T8), with
+/// lengths already checked by the caller: the formulas and operation order of
+/// `nd_fmm_ref::p2p::p2p_dipoles`, w = x − y, r² = (w₀² + w₁²) + w₂², r³ = r² √r²,
+/// s = (d₀ w₀ + d₁ w₁) + d₂ w₂, then φ ← φ + s / r³ and
+/// (∇φ)ₖ ← (∇φ)ₖ + (dₖ − ((3 s) / r²) wₖ) / r³, so on pairs with r² ≠ 0 the result is the
+/// reference's bit for bit. A pair with r² = 0 is skipped.
+pub(crate) fn p2p_dipoles<T: RealScalar>(
+    sources: &[[T; 3]],
+    dipoles: &[[T; 3]],
+    targets: &[[T; 3]],
+    potential: &mut [T],
+    gradient: Option<&mut [[T; 3]]>,
+) {
+    let three = T::from_f64(3.0);
+    match gradient {
+        None => {
+            for (&x, phi) in targets.iter().zip(potential.iter_mut()) {
+                for (&y, d) in sources.iter().zip(dipoles) {
+                    let (w, r2) = separation(x, y);
+                    if r2 == T::zero() {
+                        continue;
+                    }
+                    let s = d[0] * w[0] + d[1] * w[1] + d[2] * w[2];
+                    *phi = *phi + s / (r2 * r2.sqrt());
+                }
+            }
+        }
+        Some(gradient) => {
+            for ((&x, phi), g) in targets.iter().zip(potential.iter_mut()).zip(gradient) {
+                for (&y, d) in sources.iter().zip(dipoles) {
+                    let (w, r2) = separation(x, y);
+                    if r2 == T::zero() {
+                        continue;
+                    }
+                    let r3 = r2 * r2.sqrt();
+                    let s = d[0] * w[0] + d[1] * w[1] + d[2] * w[2];
+                    *phi = *phi + s / r3;
+                    let a = three * s / r2;
+                    for k in 0..3 {
+                        g[k] = g[k] + (d[k] - a * w[k]) / r3;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// P2P of m charge vectors with the scalar path (`P2pKernel::evaluate_many`), with lengths
 /// already checked by the caller: `charges[j m + v]`, `potential[v n + i]` and
 /// `gradient[v n + i]`. Each (target, source) pair forms d, r² and r once and then adds

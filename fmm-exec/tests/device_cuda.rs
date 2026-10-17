@@ -60,6 +60,10 @@
 //!   device spans and each span printed. Whether the windows overlap is read from the
 //!   numbers (on Metal, T11, the spans added up to more than the evaluation's wall time),
 //!   never asserted: timings are reported, not asserted;
+//! - dipole sources (Phase 6 T8, `device_common::dipole_scenario`): the cube, N = 2,000,
+//!   f32 p = 4 and f64 p = 6, `Dipoles` and `ChargesAndDipoles`, every kind on the host
+//!   fallback bit for bit the host, the default placement (P2M, P2L and P2P on the host)
+//!   within the bounds;
 //! - per-kind timings (Phase 4S T5): in every scenario `check_backend` also builds the
 //!   default placement with `kind_timings(Synchronous)` and `kind_timings(Device)` (alone
 //!   and inside the stage windows), each bit for bit the default with the syncs and
@@ -573,6 +577,9 @@ fn cuda_device_path() {
 
     scenarios::<f32>(&mut rng, &comm);
     scenarios::<f64>(&mut rng, &comm);
+    // Dipole sources (Phase 6 T8, C6.4): P2M, P2L and P2P on the host fallback.
+    device_common::dipole_scenario::<f32>(2000, 4, Backend::Cuda, &comm);
+    device_common::dipole_scenario::<f64>(2000, 6, Backend::Cuda, &comm);
 
     if comm.size() == 1 {
         // The tuner (Phase 4 T12).

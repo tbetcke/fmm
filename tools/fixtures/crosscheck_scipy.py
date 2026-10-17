@@ -2,7 +2,7 @@
 # requires-python = ">=3.9"
 # dependencies = ["numpy", "scipy"]
 # ///
-"""Double-precision cross-check of docs/CONVENTIONS.md (CONVENTION_VERSION = 1).
+"""Double-precision cross-check of docs/CONVENTIONS.md (CONVENTION_VERSION = 2).
 
 Independent second opinion next to the mpmath fixtures (T3). Checks, against SciPy's
 Legendre functions with the Condon-Shortley phase removed:

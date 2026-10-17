@@ -437,6 +437,21 @@
 //! §14). [`DeviceReport::vectors`] names m, [`TranslationReport::pairs`] counts m pairs per
 //! pair of the plan.
 //!
+//! # Dipoles (Phase 6 T8)
+//!
+//! With dipole sources (`FmmBuilder::sources`, C6.4; docs/design/optimisation.md §7.4)
+//! P2M, P2L and P2P, the kinds that read the source chunks, run on the host fallback
+//! whatever `host_fallback` names, and [`DeviceReport::placement`] says so; the far field,
+//! L2P and M2P stay on the device. The host holds the strengths (the charge load scales
+//! the moments, as on the host path), so the device's source store keeps the chunk layout
+//! of 6 or 7 values per point for the ghost upload but takes no strengths: an evaluation
+//! uploads nothing at `begin_evaluation`, and the host fallback's transfers carry the
+//! expansions and outputs of those kinds as for charges. With every kind on the fallback
+//! the output is the host path's bit for bit. T8 measured the fallback above the 20 % of a
+//! device evaluation at which §7.4 calls for device kernels
+//! (`fmm-validate/results/phase6-dipoles.md`); they are Phase 6 T8d's
+//! (docs/phase6/T8d-dipoles-device.md).
+//!
 //! # Several ranks (Phase 5 T8)
 //!
 //! docs/design/distributed-fmm.md §7, signed off on 2026-10-08. A device backend runs on
@@ -608,7 +623,7 @@ use crate::fmm::{
     DeviceStage, DeviceStageTimings, FmmError, MAX_LEVELS, OperatorKind, OutputPass, Placement,
     SettingsError,
 };
-use crate::operator::{LaplaceOperator, SimdScalar};
+use crate::operator::{LaplaceOperator, SimdScalar, SourceType};
 use crate::tables::M2lStrategy;
 use crate::tune::{
     Candidate, Decision, GemmChoice, GemmKind, MIN_TUNED_PAIRS, Rejection, Tuner, TuningReport,
@@ -1510,6 +1525,10 @@ const DEVICE_KINDS: [OperatorKind; 8] = [
     OperatorKind::M2p,
     OperatorKind::P2p,
 ];
+
+/// The kinds that read the source chunks, which run on the host fallback with dipoles
+/// (Phase 6 T8; module documentation, "Dipoles").
+const SOURCE_KINDS: [OperatorKind; 3] = [OperatorKind::P2m, OperatorKind::P2l, OperatorKind::P2p];
 
 /// The leaf operators among them (T7).
 const LEAF_KINDS: [OperatorKind; 4] = [
@@ -2500,6 +2519,11 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         // o = m or 4 m per target.
         let m = host.vectors();
         let o = host.target_output_point_size();
+        // Values per source point: 3 + m with charges; with dipoles 6 or 7, and then no
+        // strengths on the device, whose source kinds run on the host (Phase 6 T8; module
+        // documentation, "Dipoles").
+        let sps = host.source_point_size();
+        let dipoles = host.sources() != SourceType::Charges;
         let strategy = host.tables().strategy();
         let columns = ColumnViews::new(plan, m);
 
@@ -2539,6 +2563,13 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         for kind in DEVICE_KINDS {
             if !options.host_fallback.contains(&kind) {
                 placement[kind as usize] = Placement::Device;
+            }
+        }
+        // With dipoles the kinds that read sources run on the host fallback (Phase 6 T8,
+        // docs/design/optimisation.md §7.4; module documentation, "Dipoles").
+        if dipoles {
+            for kind in SOURCE_KINDS {
+                placement[kind as usize] = Placement::Host;
             }
         }
         let on_device = |kind: OperatorKind| placement[kind as usize] == Placement::Device;
@@ -2725,6 +2756,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             source_counts[..nlocal].iter().sum(),
             source_counts.iter().sum(),
         );
+        let nstrengths = if dipoles { 0 } else { m * nsources };
         let ntargets: usize = target_counts.iter().sum();
         let nleaves = leaves.len();
         // The first box of each level in the multipole buffer (m n values per box on every
@@ -2801,8 +2833,8 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         let ghost_boxes: usize = (0..nlevels)
             .map(|l| index.kinds(l).iter().filter(|k| k.is_ghost()).count())
             .sum();
-        let ghost_bytes = (2 * ghost_boxes * m * n + (3 + m) * (nstored - nsources)) as u64
-            * size_of::<T>() as u64;
+        let ghost_bytes =
+            (2 * ghost_boxes * m * n + sps * (nstored - nsources)) as u64 * size_of::<T>() as u64;
         let device_pass = options.output_pass != OutputPass::Host
             && device.supports(nd_fmm_kernels::Precision::F64);
         let pass_bytes = if device_pass {
@@ -2811,10 +2843,10 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             0
         };
         let needed = 2 * Device::buffer_bytes::<T>(nboxes * m * n)
-            + Device::buffer_bytes::<T>((3 + m) * nstored)
+            + Device::buffer_bytes::<T>(sps * nstored)
             + Device::buffer_bytes::<T>(3 * ntargets)
             + Device::buffer_bytes::<T>(o * ntargets)
-            + Device::buffer_bytes::<T>(m * nsources)
+            + Device::buffer_bytes::<T>(nstrengths)
             + view_bytes(plan, &columns)
             + Device::buffer_bytes::<u32>(nleaves + 1)
             + Device::buffer_bytes::<u32>(leaves.nlocal() + 1)
@@ -2851,10 +2883,10 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         let stores = DeviceStores {
             multipoles: alloc(nboxes * m * n)?,
             locals: alloc(nboxes * m * n)?,
-            sources: alloc((3 + m) * nstored)?,
+            sources: alloc(sps * nstored)?,
             target_input: alloc(3 * ntargets)?,
             target_output: alloc(o * ntargets)?,
-            charges: alloc(m * nsources)?,
+            charges: alloc(nstrengths)?,
         };
 
         let mut levels = Vec::with_capacity(nlevels);
@@ -2900,7 +2932,11 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         }
         let source_offsets = point_offsets(source_counts).map_err(device_error)?;
         let target_offsets = point_offsets(target_counts).map_err(device_error)?;
-        let slots = charge_slots(&source_counts[..nlocal], m).map_err(device_error)?;
+        let slots = if dipoles {
+            Vec::new()
+        } else {
+            charge_slots(&source_counts[..nlocal], m).map_err(device_error)?
+        };
         let box_indices: Vec<Vec<[u32; 3]>> = (0..nlevels)
             .map(|l| index.keys(l).iter().map(|&key| key_index(key).1).collect())
             .collect();
@@ -2957,7 +2993,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             top_staging: vec![T::default(); top_columns.len() * m * n],
             receive: packed(&receive_columns, receive_width)?,
             receive_offsets,
-            ghost_sources: (3 + m) * nsources..(3 + m) * nstored,
+            ghost_sources: sps * nsources..sps * nstored,
             inject: false,
             received_levels: [Traffic::default(); MAX_LEVELS],
             reduction_send: packed(&reduction_send_columns, reduction_send_width)?,
@@ -3679,6 +3715,12 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             self.stores.charges.len(),
             "one charge per source"
         );
+        if self.host.sources() != SourceType::Charges {
+            // Dipoles: the kinds that read sources run on the host, which holds the
+            // strengths (Phase 6 T8); nothing to upload.
+            self.close_stage(DeviceStage::Load);
+            return;
+        }
         let (stores, views) = (&mut self.stores, &self.views);
         self.link.run(DataKind::Charges, |d| {
             d.write_owned(stores.charges.as_slice_mut(), charges)

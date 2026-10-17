@@ -13,13 +13,22 @@
 //! up by child index and V-list offset, instead of `nd_fmm_ref::direct`. The example
 //! then also runs the reference path and reports how many printed values differ.
 //!
+//! With `--sources dipoles` or `--sources charges+dipoles` (Phase 6 T8, C6.4) the sources
+//! are point dipoles, or a charge and a dipole each, with moments uniform in [−1, 1)³
+//! (`nd_fmm_validate::accuracy::sweep_sources`): the dipole prediction of the C3.2 gate.
+//!
+//! ```text
+//! cargo run --release -p nd-fmm-validate --example accuracy -- --sources dipoles
+//! ```
+//!
 //! The geometry, chains and error measure are described in
 //! `nd_fmm_validate::accuracy`. The output is deterministic for the seed.
 
+use nd_fmm_exec::operator::SourceType;
 use nd_fmm_math::RealScalar;
 use nd_fmm_tables::geometry::M2L_OFFSET_COUNT;
 use nd_fmm_validate::accuracy::{
-    Chain, Config, Errors, RADIUS, Row, SOURCE_CENTRE, Translations, sweep,
+    Chain, Config, Errors, RADIUS, Row, SOURCE_CENTRE, Translations, sweep, sweep_sources,
 };
 
 /// Largest degree in f64 (CONVENTIONS §3.9: M2L tested up to p = 20).
@@ -29,14 +38,33 @@ const P_MAX_F64: usize = 20;
 const P_MAX_F32: usize = 8;
 
 fn main() {
-    let translations = match std::env::args().nth(1).as_deref() {
-        None => Translations::Reference,
-        Some("--tables") => Translations::Tables,
-        Some(other) => {
-            eprintln!("unknown argument {other:?}; the only option is --tables");
-            std::process::exit(2);
+    let (mut translations, mut kind) = (Translations::Reference, SourceType::Charges);
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match (arg.as_str(), args.next().as_deref()) {
+            ("--tables", next) => {
+                translations = Translations::Tables;
+                if let Some(next) = next {
+                    eprintln!("unexpected argument {next:?} after --tables");
+                    std::process::exit(2);
+                }
+            }
+            ("--sources", Some("charges")) => kind = SourceType::Charges,
+            ("--sources", Some("dipoles")) => kind = SourceType::Dipoles,
+            ("--sources", Some("charges+dipoles")) => kind = SourceType::ChargesAndDipoles,
+            (other, _) => {
+                eprintln!(
+                    "unknown argument {other:?}; the options are --tables and --sources \
+                     charges|dipoles|charges+dipoles"
+                );
+                std::process::exit(2);
+            }
         }
-    };
+    }
+    if translations == Translations::Tables && kind != SourceType::Charges {
+        eprintln!("--tables runs charges only");
+        std::process::exit(2);
+    }
     let config = Config::STANDARD;
     match translations {
         Translations::Reference => {
@@ -52,6 +80,13 @@ fn main() {
          the box, charges uniform in [-1, 1); {} targets uniform in the target box.",
         config.sources, config.targets
     );
+    if kind != SourceType::Charges {
+        println!(
+            "- Sources: {kind} (Phase 6 T8): moments with components uniform in [-1, 1), \
+             the dipole P2M and P2L of `nd_fmm_ref::leaf`, against `direct_sum` and \
+             `direct_sum_dipoles`."
+        );
+    }
     println!(
         "- Target box: same size, centre c + 2r·d for each of the {M2L_OFFSET_COUNT} V-list \
          offsets d."
@@ -80,8 +115,8 @@ fn main() {
          the gradient ∇φ (Euclidean norm per target) against \
          `nd_fmm_ref::p2p::direct_sum` in f64 on the same (rounded) inputs."
     );
-    let rows64 = report::<f64>("f64", &config, P_MAX_F64, translations);
-    let rows32 = report::<f32>("f32", &config, P_MAX_F32, translations);
+    let rows64 = report::<f64>("f64", &config, P_MAX_F64, (translations, kind));
+    let rows32 = report::<f32>("f32", &config, P_MAX_F32, (translations, kind));
     if translations == Translations::Tables {
         println!();
         println!("## Table path against the reference path");
@@ -100,9 +135,9 @@ fn report<T: RealScalar>(
     precision: &str,
     config: &Config,
     p_max: usize,
-    translations: Translations,
+    (translations, kind): (Translations, SourceType),
 ) -> Vec<Row> {
-    let rows = sweep::<T>(config, p_max, translations);
+    let rows = sweep_sources::<T>(config, p_max, translations, kind);
     println!();
     println!("## {precision}, p = 1..={p_max}");
     for chain in Chain::ALL {

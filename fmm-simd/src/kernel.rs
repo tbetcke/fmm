@@ -167,6 +167,49 @@ impl<T: SimdScalar> P2pKernel<T> {
             );
         }
     }
+
+    /// Dipole P2P (Phase 6 T8, C6.4): adds the potential of point dipoles, and optionally
+    /// its gradient, at each target (CONVENTIONS §3.7, "Dipole sources"), as
+    /// `nd_fmm_ref::p2p::p2p_dipoles` does.
+    ///
+    /// For each target xᵢ and each source yⱼ with moment dⱼ and r² = |xᵢ − yⱼ|² ≠ 0, with
+    /// w = xᵢ − yⱼ,
+    ///
+    /// φᵢ ← φᵢ + dⱼ · w / r³,  ∇φᵢ ← ∇φᵢ + dⱼ / r³ − 3 (dⱼ · w) w / r⁵,
+    ///
+    /// without the factor 1/(4π). The guarantees of [`evaluate`](Self::evaluate) hold
+    /// with these terms: coincident pairs (r² = 0) contribute nothing, each target adds
+    /// its sources in input order (chunk and target-position invariance), the results are
+    /// deterministic per machine, ISA and build, and on [`Isa::Scalar`] equal the
+    /// reference's bit for bit wherever r² ≠ 0. The vector kernels share the inverse
+    /// square root of `evaluate` (crate documentation, "Dipoles").
+    ///
+    /// - **Accuracy.** For pairs in the kernel domain (CONVENTIONS §3.13), each potential
+    ///   term is within 32 u_T of the reference's term relative to |dⱼ| / r², and each
+    ///   gradient component within 176 u_T relative to |dⱼ| / r³ (docs/design/simd-p2p.md
+    ///   §4.8 derives both). In f32 both hold for 2^(−80 + 2e/3) ≤ r² ≤ 2⁷ with
+    ///   |dⱼ,ₖ| ≤ 2^e, e ≥ 0 (CONVENTIONS §3.13, "Range of the terms in f32").
+    ///
+    /// # Panics
+    ///
+    /// If `sources.len() != dipoles.len()`, `potential.len() != targets.len()` or a
+    /// given `gradient` has a length other than `targets.len()`, with the messages of
+    /// the reference.
+    pub fn evaluate_dipoles(
+        &self,
+        sources: &[[T; 3]],
+        dipoles: &[[T; 3]],
+        targets: &[[T; 3]],
+        potential: &mut [T],
+        gradient: Option<&mut [[T; 3]]>,
+    ) {
+        check_pair(sources.len(), dipoles.len(), "sources", "dipoles");
+        check_pair(targets.len(), potential.len(), "targets", "potential");
+        if let Some(gradient) = gradient.as_deref() {
+            check_pair(targets.len(), gradient.len(), "targets", "gradient");
+        }
+        T::p2p_dipoles(self.isa, sources, dipoles, targets, potential, gradient);
+    }
 }
 
 /// Panics unless the paired slices `a` and `b` have the same length, with the message

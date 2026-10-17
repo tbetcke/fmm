@@ -54,6 +54,14 @@
 //! `nd_fmm_ref::direct`; P2M → M2P and P2L → L2P have no translation and are the same
 //! in both paths. The tables are built in f64 at each degree and rounded to T.
 //!
+//! # Dipoles
+//!
+//! [`sweep_sources`] (Phase 6 T8, C6.4) runs the same chains for point dipoles, or a
+//! charge and a dipole at every source (CONVENTIONS §3.7, "Dipole sources"), with moments
+//! uniform in [−1, 1)³: the single-translation prediction of the dipole FMM, against which
+//! the C3.2 gate for each source type is set (docs/phase6/T8-dipoles.md, signed off on
+//! 2026-10-17).
+//!
 //! # Error measure
 //!
 //! Relative L2 and max error of the potential and of the gradient (Euclidean norm per
@@ -81,8 +89,9 @@
 
 use core::ops::Range;
 
+use nd_fmm_exec::operator::SourceType;
 use nd_fmm_math::{Layout, RealScalar};
-use nd_fmm_ref::p2p::direct_sum;
+use nd_fmm_ref::p2p::{direct_sum, direct_sum_dipoles};
 use nd_fmm_ref::{Frame, Workspace, direct, leaf};
 use nd_fmm_tables::geometry::{M2L_OFFSET_COUNT, m2l_offsets};
 use nd_fmm_tables::{L2lTables, M2lTables, M2mTables};
@@ -421,6 +430,22 @@ fn frame<T: RealScalar>(centre: [f64; 3], radius: f64) -> Frame<T> {
 ///
 /// If `p_max == 0`, or `config` has no sources or no targets.
 pub fn sweep<T: RealScalar>(config: &Config, p_max: usize, translations: Translations) -> Vec<Row> {
+    sweep_sources::<T>(config, p_max, translations, SourceType::Charges)
+}
+
+/// [`sweep`] for the sources `kind` (Phase 6 T8, C6.4; module documentation, "Dipoles"):
+/// with [`SourceType::Charges`] it is `sweep`, value for value; with dipoles every source
+/// also carries a moment with components uniform in [−1, 1), drawn from a second
+/// generator seeded with `config.seed ^` [`MOMENT_SEED`] (so points, charges and targets
+/// stay those of `sweep`), and the chains add the dipole P2M and P2L
+/// (`nd_fmm_ref::leaf::{p2m_dipoles, p2l_dipoles}`) after the charges', against
+/// `direct_sum` plus `direct_sum_dipoles`.
+pub fn sweep_sources<T: RealScalar>(
+    config: &Config,
+    p_max: usize,
+    translations: Translations,
+    kind: SourceType,
+) -> Vec<Row> {
     assert!(p_max >= 1, "the sweep starts at p = 1");
     assert!(
         config.sources > 0 && config.targets > 0,
@@ -439,6 +464,24 @@ pub fn sweep<T: RealScalar>(config: &Config, p_max: usize, translations: Transla
         .collect();
     let charges64: Vec<f64> = charges.iter().map(|q| RealScalar::to_f64(*q)).collect();
     let mut targets = Sorted::<T>::new(&target_local, SOURCE_CENTRE, RADIUS);
+    // The moments, in the sources' sorted order, rounded to T (empty without dipoles).
+    let mut moment_rng = SplitMix64::new(config.seed ^ MOMENT_SEED);
+    let moments_unsorted: Vec<[f64; 3]> = (0..config.sources)
+        .map(|_| core::array::from_fn(|_| moment_rng.range(-1.0, 1.0)))
+        .collect();
+    let moments: Vec<[T; 3]> = if kind.has_dipoles() {
+        sources
+            .order
+            .iter()
+            .map(|&i| moments_unsorted[i].map(T::from_f64))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let moments64: Vec<[f64; 3]> = moments
+        .iter()
+        .map(|d| d.map(|c| RealScalar::to_f64(c)))
+        .collect();
 
     let source_frame = frame::<T>(SOURCE_CENTRE, RADIUS);
     let source_children: [Frame<T>; 8] = core::array::from_fn(|k| {
@@ -459,13 +502,24 @@ pub fn sweep<T: RealScalar>(config: &Config, p_max: usize, translations: Transla
     for (index, &offset) in offsets.iter().enumerate() {
         targets.move_to(&target_local, target_centre(offset), RADIUS);
         let range = index * n_t..(index + 1) * n_t;
-        direct_sum(
-            &sources.points64,
-            &charges64,
-            &targets.points64,
-            &mut exact[range.clone()],
-            Some(&mut exact_gradient[range]),
-        );
+        if kind.has_charges() {
+            direct_sum(
+                &sources.points64,
+                &charges64,
+                &targets.points64,
+                &mut exact[range.clone()],
+                Some(&mut exact_gradient[range.clone()]),
+            );
+        }
+        if kind.has_dipoles() {
+            direct_sum_dipoles(
+                &sources.points64,
+                &moments64,
+                &targets.points64,
+                &mut exact[range.clone()],
+                Some(&mut exact_gradient[range]),
+            );
+        }
     }
 
     let mut ws = Workspace::<T>::new(p_max);
@@ -489,11 +543,10 @@ pub fn sweep<T: RealScalar>(config: &Config, p_max: usize, translations: Transla
         // Source side, independent of the offset: P2M in the source box, and P2M in
         // the children followed by M2M to the source box.
         let mut multipole = vec![T::zero(); len];
-        leaf::p2m(
-            p,
+        p2m(
+            (p, kind),
             &source_frame,
-            &sources.points,
-            &charges,
+            (&sources.points, &charges, &moments),
             &mut ws,
             &mut multipole,
         );
@@ -505,11 +558,15 @@ pub fn sweep<T: RealScalar>(config: &Config, p_max: usize, translations: Transla
             }
             let cm = &mut child_multipole[..len];
             cm.fill(T::zero());
-            leaf::p2m(
-                p,
+            let moments = if kind.has_dipoles() {
+                &moments[range.clone()]
+            } else {
+                &[][..]
+            };
+            p2m(
+                (p, kind),
                 child,
-                &sources.points[range.clone()],
-                &charges[range],
+                (&sources.points[range.clone()], &charges[range], moments),
                 &mut ws,
                 cm,
             );
@@ -543,7 +600,19 @@ pub fn sweep<T: RealScalar>(config: &Config, p_max: usize, translations: Transla
                         leaf::m2p(p, &source_frame, m, &targets.points, &mut ws, pot, grad);
                     }
                     Chain::P2lL2p => {
-                        leaf::p2l(p, &target_frame, &sources.points, &charges, &mut ws, local);
+                        if kind.has_charges() {
+                            leaf::p2l(p, &target_frame, &sources.points, &charges, &mut ws, local);
+                        }
+                        if kind.has_dipoles() {
+                            leaf::p2l_dipoles(
+                                p,
+                                &target_frame,
+                                &sources.points,
+                                &moments,
+                                &mut ws,
+                                local,
+                            );
+                        }
                         leaf::l2p(p, &target_frame, local, &targets.points, &mut ws, pot, grad);
                     }
                     Chain::P2mM2lL2p => {
@@ -608,6 +677,25 @@ pub fn sweep<T: RealScalar>(config: &Config, p_max: usize, translations: Transla
             })
         })
         .collect()
+}
+
+/// The seed offset of the moments' generator in [`sweep_sources`].
+pub const MOMENT_SEED: u64 = 0xd1b0_1e5e_ed00_0000;
+
+/// P2M of the sources of `kind` in `frame`: the charges, then the moments.
+fn p2m<T: RealScalar>(
+    (p, kind): (usize, SourceType),
+    frame: &Frame<T>,
+    (points, charges, moments): (&[[T; 3]], &[T], &[[T; 3]]),
+    ws: &mut Workspace<T>,
+    multipole: &mut [T],
+) {
+    if kind.has_charges() {
+        leaf::p2m(p, frame, points, charges, ws, multipole);
+    }
+    if kind.has_dipoles() {
+        leaf::p2m_dipoles(p, frame, points, moments, ws, multipole);
+    }
 }
 
 #[cfg(test)]

@@ -967,6 +967,43 @@ of a device evaluation at the workloads. The leaf kernels of `nd_fmm_kernels::le
 evaluate the harmonics per point; a dipole form needs the gradient ladder on the device
 (new code); the far field on the device is unchanged.
 
+### 7.5 As built in T8
+
+As designed in §7.1–§7.4, with the CONVENTIONS text proposed in T8's PR and signed off by
+the user on 2026-10-17 (CONVENTIONS §3.7 "Dipole sources", §3.13; `CONVENTION_VERSION` 2,
+recommended because §3.10 bumps on any change to §3.7 and the new dipole fixture depends on
+it). The sign is φ = d · ∇_y 1/|x − y| = d · (x − y)/|x − y|³, the moment stored as
+d̂ = d / r_s in the chunk. What was built (`fmm-validate/results/phase6-dipoles.md`):
+
+- **Reference** (`nd-fmm-ref`): `leaf::{p2m_dipoles, p2l_dipoles}` (the gradient ladder of
+  `nd-fmm-math` contracted with d̂ per slot) and `p2p::{p2p_dipoles, direct_sum_dipoles}`,
+  against an mpmath fixture (`tools/fixtures/gen_dipoles.py`: directional derivatives of the
+  §3.3 definitions at 120 digits; 4e-15 per degree in f64) and fourth-order differences of
+  the charge operators (8e-12).
+- **Interface** (`nd-fmm-exec`): `SourceType` (in `operator`, re-exported by `fmm`),
+  `FmmBuilder::sources`, `Sources`, `Fmm::evaluate_sources(_into)`,
+  `FmmError::{SourceType, DipolesLength}`, `SettingsError::SourcesWithVectors` (dipoles carry
+  one set). `evaluate(charges)` and its bits are unchanged, and `Sources::charges(c)` gives
+  them. The forward moves 1, 3 or 4 values per source; the charge load scales the moments.
+- **Host operators**: P2M, P2L and P2P add each leaf's charge terms, then its dipole terms;
+  a SIMD dipole P2P on every ISA (`P2pKernel::evaluate_dipoles`; docs/design/simd-p2p.md
+  §4.8 derives its contract, 32 u_T for φ and 176 u_T for ∇φ; measured at most 10.5 u and
+  33.8 u on NEON, AVX2 and AVX-512). Charges and dipoles run the two kernels one after the
+  other; a fused kernel is left for later.
+- **Device**: P2M, P2L and P2P on the host fallback with dipoles, the device source store
+  without strengths; bit for bit the host with every kind on the fallback.
+- **The gate** (signed off with the CONVENTIONS proposal): twice each source type's own
+  single-translation prediction on the C3.2 cube (the charge bounds do not apply: in the
+  sweep the dipole error is 30–150× the charge error at the same p), twice the cube's error
+  on the C3.3 Plummer sphere. Passed at f64 p = 3, 8, 12 and f32 p = 3, 8 on 1, 2 and 4
+  ranks, with 0.05–0.26 of the prediction on the cube: most of a dipole potential is near
+  field, which the single pair does not see.
+- **Cost**: on the host 1.04–1.26× a charge evaluation for dipoles and 1.10–1.86× for both
+  (N = 10⁶, one thread). On Metal the fallback is 92–97 % of a dipole evaluation with one
+  host thread and 55–77 % with twelve, above §7.4's 20 %: **device kernels for P2P (first),
+  P2M and P2L are indicated**; the user made them a follow-up task, T8d (2026-10-17;
+  docs/phase6/T8d-dipoles-device.md).
+
 ## 8. FMM3D (C6.8) and plane waves (C6.5)
 
 ### 8.1 The FMM3D comparison (T9)

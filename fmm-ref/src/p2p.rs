@@ -30,6 +30,13 @@
 //!   summation per target, so its summation error does not grow with the number of
 //!   sources in practice. It is serial and simple, and costs O(N_s · N_t).
 //!
+//! # Dipoles
+//!
+//! [`p2p_dipoles`] and [`direct_sum_dipoles`] (Phase 6 T8, C6.4) are the same pair for
+//! point dipoles, the potential d · ∇_y 1/|x − y| of CONVENTIONS §3.7, "Dipole sources":
+//! the same order, coincidence rule, compensation and panics, with a moment `[T; 3]` per
+//! source in place of its charge.
+//!
 //! # Panics
 //!
 //! Both functions panic if `sources` and `charges` differ in length, if `potential`
@@ -175,6 +182,179 @@ pub fn direct_sum(
                 }
             }
         }
+    }
+}
+
+/// Dipole P2P: adds the potential of point dipoles, and optionally its gradient, at
+/// each target (CONVENTIONS §3.7, "Dipole sources").
+///
+/// For each target xᵢ and each source yⱼ with moment dⱼ and xᵢ ≠ yⱼ, with w = xᵢ − yⱼ,
+/// r² = (w₀² + w₁²) + w₂², r = √r², r³ = r² r and s = (dⱼ,₀ w₀ + dⱼ,₁ w₁) + dⱼ,₂ w₂,
+///
+/// φᵢ ← φᵢ + s / r³,  (∇φᵢ)ₖ ← (∇φᵢ)ₖ + (dⱼ,ₖ − ((3 s) / r²) wₖ) / r³,
+///
+/// which is φ(xᵢ) += Σⱼ dⱼ · (xᵢ − yⱼ) / |xᵢ − yⱼ|³ = Σⱼ dⱼ · ∇_y 1/|xᵢ − yⱼ| and
+/// ∇φ(xᵢ) += Σⱼ (dⱼ / |xᵢ − yⱼ|³ − 3 (dⱼ · (xᵢ − yⱼ)) (xᵢ − yⱼ) / |xᵢ − yⱼ|⁵), without the
+/// factor 1/(4π). The order of operations is that of [`p2p`]: sources in input order, each
+/// term added directly into the outputs as written. The gradient is formed with
+/// (3 s) / r², of magnitude at most 3 |d| / r, so that no intermediate is larger than the
+/// term (CONVENTIONS §3.13, "Range of the terms in f32").
+///
+/// A pair with xᵢ == yⱼ exactly is skipped, as in [`p2p`].
+///
+/// # Panics
+///
+/// If `sources.len() != dipoles.len()`, `potential.len() != targets.len()` or a given
+/// `gradient` has a length other than `targets.len()`.
+pub fn p2p_dipoles<T: RealScalar>(
+    sources: &[[T; 3]],
+    dipoles: &[[T; 3]],
+    targets: &[[T; 3]],
+    potential: &mut [T],
+    gradient: Option<&mut [[T; 3]]>,
+) {
+    check_dipole_lengths(sources, dipoles, targets, potential, gradient.as_deref());
+    match gradient {
+        None => {
+            for (&x, phi) in targets.iter().zip(potential.iter_mut()) {
+                for (&y, &d) in sources.iter().zip(dipoles) {
+                    if let Some(term) = DipoleTerm::new(x, y, d) {
+                        *phi = *phi + term.potential();
+                    }
+                }
+            }
+        }
+        Some(gradient) => {
+            for ((&x, phi), g) in targets.iter().zip(potential.iter_mut()).zip(gradient) {
+                for (&y, &d) in sources.iter().zip(dipoles) {
+                    if let Some(term) = DipoleTerm::new(x, y, d) {
+                        *phi = *phi + term.potential();
+                        for (gk, dgk) in g.iter_mut().zip(term.gradient()) {
+                            *gk = *gk + dgk;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Dipole direct sum: the f64 oracle for the potential of point dipoles, and optionally
+/// its gradient, at each target (CONVENTIONS §3.7, "Dipole sources").
+///
+/// Adds φ(xᵢ) = Σⱼ dⱼ · (xᵢ − yⱼ) / |xᵢ − yⱼ|³ and its gradient to `potential` and
+/// `gradient`, without the factor 1/(4π). Each term is computed exactly as in
+/// [`p2p_dipoles`] and summed per target with the compensated summation of
+/// [`direct_sum`], separately for the potential and each gradient component; the sum is
+/// added to the existing output value in one final addition. For charges and dipoles at
+/// the same points, call [`direct_sum`] and this function on the same outputs.
+///
+/// A pair with xᵢ == yⱼ exactly is skipped, as in [`p2p`].
+///
+/// # Panics
+///
+/// If `sources.len() != dipoles.len()`, `potential.len() != targets.len()` or a given
+/// `gradient` has a length other than `targets.len()`.
+pub fn direct_sum_dipoles(
+    sources: &[[f64; 3]],
+    dipoles: &[[f64; 3]],
+    targets: &[[f64; 3]],
+    potential: &mut [f64],
+    gradient: Option<&mut [[f64; 3]]>,
+) {
+    check_dipole_lengths(sources, dipoles, targets, potential, gradient.as_deref());
+    match gradient {
+        None => {
+            for (&x, phi) in targets.iter().zip(potential.iter_mut()) {
+                let mut sum = Neumaier::default();
+                for (&y, &d) in sources.iter().zip(dipoles) {
+                    if let Some(term) = DipoleTerm::new(x, y, d) {
+                        sum.add(term.potential());
+                    }
+                }
+                *phi += sum.value();
+            }
+        }
+        Some(gradient) => {
+            for ((&x, phi), g) in targets.iter().zip(potential.iter_mut()).zip(gradient) {
+                let mut sum = Neumaier::default();
+                let mut grad = [Neumaier::default(); 3];
+                for (&y, &d) in sources.iter().zip(dipoles) {
+                    if let Some(term) = DipoleTerm::new(x, y, d) {
+                        sum.add(term.potential());
+                        for (gk, dgk) in grad.iter_mut().zip(term.gradient()) {
+                            gk.add(dgk);
+                        }
+                    }
+                }
+                *phi += sum.value();
+                for (gk, sk) in g.iter_mut().zip(&grad) {
+                    *gk += sk.value();
+                }
+            }
+        }
+    }
+}
+
+/// One dipole source–target pair xᵢ ≠ yⱼ: the shared term formula of [`p2p_dipoles`]
+/// and [`direct_sum_dipoles`].
+struct DipoleTerm<T> {
+    /// The moment dⱼ.
+    d: [T; 3],
+    /// w = xᵢ − yⱼ.
+    w: [T; 3],
+    /// r² = (w₀² + w₁²) + w₂².
+    r2: T,
+    /// r³ = r² √r².
+    r3: T,
+    /// s = (d₀ w₀ + d₁ w₁) + d₂ w₂.
+    s: T,
+}
+
+impl<T: RealScalar> DipoleTerm<T> {
+    /// The pair (x, y) with moment d, or `None` if x == y exactly.
+    #[inline]
+    fn new(x: [T; 3], y: [T; 3], d: [T; 3]) -> Option<Self> {
+        if x == y {
+            return None;
+        }
+        let w = [x[0] - y[0], x[1] - y[1], x[2] - y[2]];
+        let r2 = w[0] * w[0] + w[1] * w[1] + w[2] * w[2];
+        Some(Self {
+            d,
+            w,
+            r2,
+            r3: r2 * r2.sqrt(),
+            s: d[0] * w[0] + d[1] * w[1] + d[2] * w[2],
+        })
+    }
+
+    /// s / r³.
+    #[inline]
+    fn potential(&self) -> T {
+        self.s / self.r3
+    }
+
+    /// (dₖ − ((3 s) / r²) wₖ) / r³ per component.
+    #[inline]
+    fn gradient(&self) -> [T; 3] {
+        let a = T::from_f64(3.0) * self.s / self.r2;
+        core::array::from_fn(|k| (self.d[k] - a * self.w[k]) / self.r3)
+    }
+}
+
+/// Panics unless the paired slices of a dipole sum have matching lengths.
+fn check_dipole_lengths<T>(
+    sources: &[[T; 3]],
+    dipoles: &[[T; 3]],
+    targets: &[[T; 3]],
+    potential: &[T],
+    gradient: Option<&[[T; 3]]>,
+) {
+    check_pair(sources.len(), dipoles.len(), "sources", "dipoles");
+    check_pair(targets.len(), potential.len(), "targets", "potential");
+    if let Some(gradient) = gradient {
+        check_pair(targets.len(), gradient.len(), "targets", "gradient");
     }
 }
 

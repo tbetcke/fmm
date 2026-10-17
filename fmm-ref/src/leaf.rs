@@ -1,5 +1,5 @@
-//! Leaf operators: P2M and P2L form expansions from point charges, L2P and M2P
-//! evaluate them at targets (CONVENTIONS §3.6, §3.7).
+//! Leaf operators: P2M and P2L form expansions from point charges (and from point
+//! dipoles), L2P and M2P evaluate them at targets (CONVENTIONS §3.6, §3.7).
 //!
 //! All four take the degree `p` first, then the [`Frame`] of the expansion, their
 //! inputs, the [`Workspace`] and their outputs. Coefficients are the scaled ones of
@@ -19,6 +19,16 @@
 //! (`coefficients[v (p + 1)² ..]`), and the m potentials and gradients one vector after the
 //! other (`potential[v n + i]`, `gradient[v n + i]` for n targets). The single-vector
 //! operators are the case m = 1.
+//!
+//! # Dipole sources
+//!
+//! [`p2m_dipoles`] and [`p2l_dipoles`] (Phase 6 T8, C6.4) form the expansions of point
+//! dipoles, CONVENTIONS §3.7, "Dipole sources": the moment d of a source at y gives the
+//! potential d · ∇_y 1/|x − y|, and its coefficients are the directional derivatives
+//! d̂ · ∇ conj(Rₙᵐ) and d̂ · ∇ conj(Iₙᵐ) at u, with d̂ = d/r the moment in the frame's units.
+//! The moments are passed in the units of the sources, like the points. L2P and M2P
+//! evaluate the result unchanged. For charges and dipoles at the same points, the charge
+//! operator and the dipole operator add into the same expansion.
 //!
 //! # Tested range
 //!
@@ -193,6 +203,97 @@ pub fn p2l_many<T: RealScalar>(
         harmonics::irregular(p, frame.scaled(y), values);
         for (&q, local) in q.iter().zip(locals.chunks_exact_mut(len)) {
             add_conjugate(p, q, values, local);
+        }
+    }
+}
+
+/// Dipole P2M: adds the scaled multipole coefficients of point dipoles to `multipole`
+/// (CONVENTIONS §3.7, "Dipole sources").
+///
+/// With c and r the centre and radius of `frame`, uⱼ = (yⱼ − c)/r and the moment in
+/// the same units, d̂ⱼ = dⱼ/r,
+///
+/// M̃ₙᵐ += Σⱼ d̂ⱼ · ∇ conj(Rₙᵐ)(uⱼ),  n ≤ p,
+///
+/// the multipole of the potential dⱼ · ∇_y 1/|x − y| at yⱼ. `dipoles` holds dⱼ in the
+/// units of `sources`, and each component is divided by r first (exact when r is a power
+/// of two, as in the leaf frames of CONVENTIONS §3.13). Per source and slot the
+/// contraction is (d̂₀ ∂ₓX + d̂₁ ∂ᵧX) + d̂₂ ∂_zX in the real storage of §3.6, from
+/// [`harmonics::regular_grad`], conjugated as in [`p2m`] and added; each source is added
+/// in turn. Degree 0 receives nothing (∇R₀⁰ = 0).
+///
+/// Tested for sources at |uⱼ| ≤ √3 (CONVENTIONS §3.9), as [`p2m`].
+///
+/// # Panics
+///
+/// If `ws.p() < p`, `multipole.len() != (p + 1)²` or
+/// `sources.len() != dipoles.len()`.
+pub fn p2m_dipoles<T: RealScalar>(
+    p: usize,
+    frame: &Frame<T>,
+    sources: &[[T; 3]],
+    dipoles: &[[T; 3]],
+    ws: &mut Workspace<T>,
+    multipole: &mut [T],
+) {
+    check_coefficients(p, multipole, "multipole");
+    check_pair(sources.len(), dipoles.len(), "sources", "dipoles");
+    add_dipoles(Basis::Regular, p, frame, sources, dipoles, ws, multipole);
+}
+
+/// Dipole P2L: adds the scaled local coefficients of point dipoles to `local`
+/// (CONVENTIONS §3.7, "Dipole sources").
+///
+/// With c and r the centre and radius of `frame`, uⱼ = (yⱼ − c)/r and d̂ⱼ = dⱼ/r,
+///
+/// L̃ₙᵐ += Σⱼ d̂ⱼ · ∇ conj(Iₙᵐ)(uⱼ),  n ≤ p,
+///
+/// in the order and storage of [`p2m_dipoles`], from [`harmonics::irregular_grad`],
+/// whose degree-p gradient uses the irregular harmonics of degree p + 1.
+///
+/// Tested for sources at |uⱼ| ≥ 2 (CONVENTIONS §3.9), as [`p2l`].
+///
+/// # Panics
+///
+/// If `ws.p() < p`, `local.len() != (p + 1)²` or `sources.len() != dipoles.len()`.
+pub fn p2l_dipoles<T: RealScalar>(
+    p: usize,
+    frame: &Frame<T>,
+    sources: &[[T; 3]],
+    dipoles: &[[T; 3]],
+    ws: &mut Workspace<T>,
+    local: &mut [T],
+) {
+    check_coefficients(p, local, "local");
+    check_pair(sources.len(), dipoles.len(), "sources", "dipoles");
+    add_dipoles(Basis::Irregular, p, frame, sources, dipoles, ws, local);
+}
+
+/// The shared body of [`p2m_dipoles`] (regular harmonics) and [`p2l_dipoles`]
+/// (irregular harmonics).
+fn add_dipoles<T: RealScalar>(
+    basis: Basis,
+    p: usize,
+    frame: &Frame<T>,
+    sources: &[[T; 3]],
+    dipoles: &[[T; 3]],
+    ws: &mut Workspace<T>,
+    out: &mut [T],
+) {
+    let layout = Layout::new(p);
+    let (values, [gx, gy, gz]) = ws.harmonics_and_gradient(p);
+    for (&y, d) in sources.iter().zip(dipoles) {
+        let u = frame.scaled(y);
+        let components = [&mut *gx, &mut *gy, &mut *gz];
+        match basis {
+            Basis::Regular => harmonics::regular_grad(p, u, values, components),
+            Basis::Irregular => harmonics::irregular_grad(p, u, values, components),
+        }
+        let d = d.map(|dk| dk / frame.radius);
+        for (i, o) in out.iter_mut().enumerate() {
+            let w = d[0] * gx[i] + d[1] * gy[i] + d[2] * gz[i];
+            let (_, m) = layout.nm(i);
+            *o = if m < 0 { *o - w } else { *o + w };
         }
     }
 }

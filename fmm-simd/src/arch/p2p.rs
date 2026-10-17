@@ -410,3 +410,175 @@ fn block_many<T: SimdScalar, S: Simd<T>, const KB: usize, const VG: usize, const
         }
     }
 }
+
+/// Dipole P2P (`P2pKernel::evaluate_dipoles`; Phase 6 T8, C6.4; CONVENTIONS §3.7,
+/// "Dipole sources") on the vector layer `s`: adds into `potential` and, if `G`, into
+/// `gradient` the potential d · (x − y) / |x − y|³ of `sources` with moments `dipoles`, and
+/// its gradient, at `targets`, with blocks of `K` vectors and the tails of [`p2p_body`].
+///
+/// Each lane holds one target and visits the sources in input order:
+///
+/// ```text
+/// broadcast yⱼ and dⱼ
+/// for each of the K vectors:
+///     w = x − yⱼ                                 3 sub
+///     r² = fma(w_z, w_z, fma(w_y, w_y, w_x²))     mul, 2 fma
+///     ρ = rsqrt(r²), +0 where r² = 0
+///     ρ² = ρ ρ;  ρ³ = ρ ρ²
+///     s = fma(d_z, w_z, fma(d_y, w_y, d_x w_x))    mul, 2 fma
+///     potential only:  φ = fma(s, ρ³, φ)
+///     with gradients:  φ = φ + s ρ³;  a = (3 s) ρ²;  gₖ = fma(ρ³, fnma(a, wₖ, dₖ), gₖ)
+/// ```
+///
+/// so the gradient term is ρ³ (dₖ − 3 s ρ² wₖ) = dₖ / r³ − 3 (d · w) wₖ / r⁵, formed with
+/// |3 s ρ² wₖ| ≤ 3 |d| so that no intermediate exceeds the term's bound 4 |d| / r³ by more
+/// than ρ³ (CONVENTIONS §3.13, "Range of the terms in f32"). A pair with r² = 0 has
+/// ρ = ρ³ = 0 and adds zeros (dₖ is finite). The per-lane sequence does not depend on the
+/// other lanes, on `K` or on where the block starts, so chunk and target-position
+/// invariance hold as for [`p2p_body`].
+///
+/// `K` is 1, 2 or 4. Without gradients `gradient` is ignored (pass `&mut []`).
+///
+/// # Panics
+///
+/// If `sources` and `dipoles`, `targets` and `potential`, or, with gradients, `targets`
+/// and `gradient` differ in length. The public entry point checks these first.
+#[inline(always)]
+pub(crate) fn p2p_dipoles_body<T: SimdScalar, S: Simd<T>, const K: usize, const G: bool>(
+    s: S,
+    sources: &[[T; 3]],
+    dipoles: &[[T; 3]],
+    targets: &[[T; 3]],
+    potential: &mut [T],
+    gradient: &mut [[T; 3]],
+) {
+    const { assert!(K == 1 || K == 2 || K == 4) };
+    const { assert!(S::W <= MAX_LANES) };
+    assert_eq!(sources.len(), dipoles.len(), "`sources` and `dipoles`");
+    assert_eq!(targets.len(), potential.len(), "`targets` and `potential`");
+    if G {
+        assert_eq!(targets.len(), gradient.len(), "`targets` and `gradient`");
+    }
+    let w = S::W;
+    let n = targets.len();
+    let mut start = 0;
+    while n - start >= K * w {
+        sub_block_dipoles::<T, S, K, G>(s, sources, dipoles, targets, potential, gradient, start);
+        start += K * w;
+    }
+    if K >= 4 && n - start >= 2 * w {
+        sub_block_dipoles::<T, S, 2, G>(s, sources, dipoles, targets, potential, gradient, start);
+        start += 2 * w;
+    }
+    if K >= 2 && n - start >= w {
+        sub_block_dipoles::<T, S, 1, G>(s, sources, dipoles, targets, potential, gradient, start);
+        start += w;
+    }
+    let m = n - start;
+    if m > 0 {
+        let last = targets[n - 1];
+        let mut padded_targets = [last; MAX_LANES];
+        padded_targets[..m].copy_from_slice(&targets[start..]);
+        let mut padded_potential = [T::zero(); MAX_LANES];
+        padded_potential[..m].copy_from_slice(&potential[start..]);
+        let mut padded_gradient = [[T::zero(); 3]; MAX_LANES];
+        if G {
+            padded_gradient[..m].copy_from_slice(&gradient[start..]);
+        }
+        block_dipoles::<T, S, 1, G>(
+            s,
+            sources,
+            dipoles,
+            &padded_targets[..w],
+            &mut padded_potential[..w],
+            if G {
+                &mut padded_gradient[..w]
+            } else {
+                &mut []
+            },
+        );
+        potential[start..].copy_from_slice(&padded_potential[..m]);
+        if G {
+            gradient[start..].copy_from_slice(&padded_gradient[..m]);
+        }
+    }
+}
+
+/// [`block_dipoles`] on the `KB · W` targets from `start` on, in place.
+#[inline(always)]
+fn sub_block_dipoles<T: SimdScalar, S: Simd<T>, const KB: usize, const G: bool>(
+    s: S,
+    sources: &[[T; 3]],
+    dipoles: &[[T; 3]],
+    targets: &[[T; 3]],
+    potential: &mut [T],
+    gradient: &mut [[T; 3]],
+    start: usize,
+) {
+    let end = start + KB * S::W;
+    block_dipoles::<T, S, KB, G>(
+        s,
+        sources,
+        dipoles,
+        &targets[start..end],
+        &mut potential[start..end],
+        if G {
+            &mut gradient[start..end]
+        } else {
+            &mut []
+        },
+    );
+}
+
+/// One block of `KB` vectors of [`p2p_dipoles_body`]: `targets` and `potential` (and, if
+/// `G`, `gradient`) hold exactly `KB · W` values each.
+#[inline(always)]
+fn block_dipoles<T: SimdScalar, S: Simd<T>, const KB: usize, const G: bool>(
+    s: S,
+    sources: &[[T; 3]],
+    dipoles: &[[T; 3]],
+    targets: &[[T; 3]],
+    potential: &mut [T],
+    gradient: &mut [[T; 3]],
+) {
+    let w = S::W;
+    let x: [[S::V; 3]; KB] = core::array::from_fn(|k| s.load3(&targets[k * w..]));
+    let mut phi: [S::V; KB] = core::array::from_fn(|k| s.load(&potential[k * w..]));
+    let zero = s.splat(T::zero());
+    let three = s.splat(T::from_f64(3.0));
+    let mut g: [[S::V; 3]; KB] = if G {
+        core::array::from_fn(|k| s.load3(&gradient[k * w..]))
+    } else {
+        [[zero; 3]; KB]
+    };
+    for (y, d) in sources.iter().zip(dipoles) {
+        let (y, _) = s.broadcast(y, T::zero());
+        // The moment's three components in every lane, by the same broadcast.
+        let (d, _) = s.broadcast(d, T::zero());
+        for k in 0..KB {
+            let wx = s.sub(x[k][0], y[0]);
+            let wy = s.sub(x[k][1], y[1]);
+            let wz = s.sub(x[k][2], y[2]);
+            let r2 = s.fma(wz, wz, s.fma(wy, wy, s.mul(wx, wx)));
+            let rho = s.rsqrt_masked(r2);
+            let rho2 = s.mul(rho, rho);
+            let rho3 = s.mul(rho, rho2);
+            let dw = s.fma(d[2], wz, s.fma(d[1], wy, s.mul(d[0], wx)));
+            if G {
+                phi[k] = s.add(phi[k], s.mul(dw, rho3));
+                let a = s.mul(s.mul(three, dw), rho2);
+                g[k][0] = s.fma(rho3, s.fnma(a, wx, d[0]), g[k][0]);
+                g[k][1] = s.fma(rho3, s.fnma(a, wy, d[1]), g[k][1]);
+                g[k][2] = s.fma(rho3, s.fnma(a, wz, d[2]), g[k][2]);
+            } else {
+                phi[k] = s.fma(dw, rho3, phi[k]);
+            }
+        }
+    }
+    for k in 0..KB {
+        s.store(phi[k], &mut potential[k * w..]);
+        if G {
+            s.store3(g[k], &mut gradient[k * w..]);
+        }
+    }
+}
