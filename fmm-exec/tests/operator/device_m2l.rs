@@ -36,7 +36,7 @@
 
 use nd_fmm_kernels::translate::{
     Accumulate, DEFAULT_SCRATCH_BYTES, Gemm, GemmLayout, GemmPolicy, GroupedPlan, Operands,
-    Orientation, PlanSettings, Tables, TranslationScratch, grouped,
+    PlanSettings, Tables, TranslationScratch, grouped,
 };
 use nd_fmm_kernels::view::{GroupedArrays, GroupedView};
 use nd_fmm_kernels::{BackendKind, Device, DeviceFloat, Precision};
@@ -145,16 +145,10 @@ fn run_cell<T: Real>(
     let mut locals = vec![T::from_f64(0.0); rows * n];
 
     let view = GroupedView::upload(device, &arrays, rows).unwrap();
-    let settings = PlanSettings {
-        n,
-        layout,
-        policy,
-        budget: DEFAULT_SCRATCH_BYTES,
-        orientation: Orientation::BoxMajor,
-    };
+    let settings = PlanSettings::new(n, layout, policy, DEFAULT_SCRATCH_BYTES);
     let library = settings.library_candidate(device.backend(), T::FLOAT);
     let tables = Tables::upload(device, set.cast::<T>().as_slice(), n, library).unwrap();
-    let size = settings.size(device.backend(), T::FLOAT, &batch_offsets);
+    let size = settings.size(device.backend(), T::FLOAT, &batch_offsets, rows);
     let mut scratch = TranslationScratch::<T>::new(device, size.columns * n).unwrap();
     let plan = GroupedPlan::new(device, &arrays, rows, &settings, &tables, &mut scratch).unwrap();
     if let Some(reason) = plan.library_rejection() {

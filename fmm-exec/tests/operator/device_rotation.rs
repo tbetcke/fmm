@@ -36,8 +36,8 @@
 use nd_fmm_exec::device::RotationHostArrays;
 use nd_fmm_kernels::rotation::{RotationLayout, RotationPlan, RotationTables, m2l};
 use nd_fmm_kernels::translate::{
-    Accumulate, DEFAULT_SCRATCH_BYTES, GemmLayout, GemmPolicy, GroupedPlan, Operands, Orientation,
-    PlanSettings, Tables, TranslationScratch, grouped,
+    Accumulate, DEFAULT_SCRATCH_BYTES, GemmLayout, GemmPolicy, GroupedPlan, Operands, PlanSettings,
+    Tables, TranslationScratch, grouped,
 };
 use nd_fmm_kernels::view::{GroupedArrays, GroupedView};
 use nd_fmm_kernels::{BackendKind, Device, DeviceFloat, Precision};
@@ -199,16 +199,15 @@ impl<T: Real> Batch<T> {
     /// layout, from zero locals.
     fn dense(&self, device: &mut Device, degree: &Degree<T>) -> Vec<T> {
         let n = len(degree.p);
-        let settings = PlanSettings {
+        let settings = PlanSettings::new(
             n,
-            layout: GemmLayout::default_for(device.info(), n),
-            policy: GemmPolicy::HandWritten,
-            budget: DEFAULT_SCRATCH_BYTES,
-            orientation: Orientation::BoxMajor,
-        };
+            GemmLayout::default_for(device.info(), n),
+            GemmPolicy::HandWritten,
+            DEFAULT_SCRATCH_BYTES,
+        );
         let tables = Tables::upload(device, degree.dense.cast::<T>().as_slice(), n, false).unwrap();
         let view = GroupedView::upload(device, &self.arrays(), self.rows()).unwrap();
-        let size = settings.size(device.backend(), T::FLOAT, &self.batch_offsets);
+        let size = settings.size(device.backend(), T::FLOAT, &self.batch_offsets, self.rows());
         let mut scratch = TranslationScratch::<T>::new(device, size.columns * n).unwrap();
         let plan = GroupedPlan::new(
             device,

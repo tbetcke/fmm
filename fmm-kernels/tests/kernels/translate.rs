@@ -15,6 +15,12 @@
 //!   with every scratch budget (one chunk or many); repeated calls bit-identical.
 //! - **Grouped against per-octant**: a level call equals one gather, GEMM and scatter-add
 //!   per octant in octant order (structure (A) of device-path.md §6.4), bit for bit.
+//! - **Phase 6 T7** (C6.1): the shared-memory layout (`GemmLayout::Shared`) in every GEMM and
+//!   level-call check; the fused gather (`gemm_gathered`, columns at permuted sources of a
+//!   wider input) bit for bit the gathered GEMM; every level call also with the fused gather
+//!   (box-major) and with both reductions (`Reduction::{ByChunk, Walk}`), bit for bit the
+//!   host rows, the launches per chunk three (two fused), and the plan's facts
+//!   (`check_plan`); the level calls also at p = 12 and 20 in the backend's default layout.
 //! - **Library** (Metal, f32, p = 8): the plan of a level call under `GemmPolicy::Auto`
 //!   reports its GEMM; with the library, the call is within the GEMM tolerance of the host
 //!   rows and bit-identical when repeated. On the CPU runtime and CUDA the plan must take
@@ -25,8 +31,9 @@
 
 use nd_fmm_kernels::movement::{gather_columns, scatter_add_columns};
 use nd_fmm_kernels::translate::{
-    Accumulate, DEFAULT_SCRATCH_BYTES, Gemm, GemmLayout, GemmPolicy, GroupedPlan, Operands,
-    Orientation, PlanSettings, Tables, TileSchedule, TranslationScratch, gemm, grouped,
+    Accumulate, DEFAULT_SCRATCH_BYTES, Gather, Gemm, GemmLayout, GemmPolicy, GroupedPlan, Operands,
+    Orientation, PlanSettings, Reduction, Tables, TileSchedule, TranslationScratch, gemm,
+    gemm_gathered, grouped,
 };
 use nd_fmm_kernels::view::{GroupedArrays, GroupedView};
 use nd_fmm_kernels::{BackendKind, Device, DeviceBuffer, DeviceInfo, Precision};
@@ -100,6 +107,14 @@ fn layouts(device: &Device, n: usize) -> Vec<GemmLayout> {
                     columns: 1,
                     per_unit: 8,
                 },
+                // The shared-memory layout (Phase 6 T7), a step of 5 k (n mod 5 left for
+                // the last step at most orders).
+                GemmLayout::Shared {
+                    rows: (units / 2).max(1),
+                    columns: 2.min(units),
+                    per_unit: 3,
+                    depth: 5,
+                },
             ]
         }
         _ => {
@@ -145,6 +160,16 @@ fn layouts(device: &Device, n: usize) -> Vec<GemmLayout> {
                 GemmLayout::Cpu {
                     block: 4,
                     per_unit: 3,
+                },
+                // The shared-memory layouts (Phase 6 T7): the default (sized for f64, which
+                // also fits f32) and a small one with a step of 5 k.
+                GemmLayout::shared_for(device.info(), n, Precision::F64)
+                    .expect("a GPU has the shared memory of a step of one k"),
+                GemmLayout::Shared {
+                    rows: 16,
+                    columns: 2,
+                    per_unit: 3,
+                    depth: 5,
                 },
             ]
         }
@@ -205,9 +230,14 @@ fn assert_same<T: Real>(what: &str, got: &[T], want: &[T]) {
 // --- The GEMM ---------------------------------------------------------------------------
 
 /// One GEMM of k columns with the table of order n in `layout`: bit for bit the host
-/// product, within n u_T of `MatrixSet::apply`. Returns the largest error in units of
-/// u_T times the terms.
-fn check_gemm<T: Real>(device: &mut Device, layout: GemmLayout, p: usize, k: usize) -> f64 {
+/// product, within n u_T of `MatrixSet::apply`; with `fused` also the fused gather, bit for
+/// bit the same. Returns the largest error in units of u_T times the terms.
+fn check_gemm<T: Real>(
+    device: &mut Device,
+    layout: GemmLayout,
+    (p, k): (usize, usize),
+    fused: bool,
+) -> f64 {
     let n = (p + 1) * (p + 1);
     let mut rng = Rng::new(0x7_8000 + 31 * p as u64 + k as u64);
     let mut set = MatrixSet::<T>::zeros(n, 1);
@@ -264,32 +294,83 @@ fn check_gemm<T: Real>(device: &mut Device, layout: GemmLayout, p: usize, k: usi
         got[k * n..].iter().all(|&v| w(v) == 7.0),
         "{what}: the slack column was written"
     );
+    if !fused {
+        return worst;
+    }
+    // The fused gather (Phase 6 T7): the same columns read through source indices from an
+    // input of 2 k + 3 columns (column c of x at 2 (k − c) + 1, the others random) give the
+    // same bits.
+    let sources: Vec<u32> = (0..k).map(|c| (2 * (k - c) + 1) as u32).collect();
+    let mut input_host = uniform::<T>(&mut rng, (2 * k + 3) * n);
+    for (c, &s) in sources.iter().enumerate() {
+        input_host[s as usize * n..(s as usize + 1) * n]
+            .copy_from_slice(&x_host[c * n..(c + 1) * n]);
+    }
+    let input = device.upload(&input_host).unwrap();
+    let indices = device.upload_indices(&sources).unwrap();
+    let mut fused = device.upload(&vec![t::<T>(7.0); n * (k + 1)]).unwrap();
+    let before = device.counters().launches;
+    gemm_gathered(
+        device,
+        layout,
+        n,
+        tables.as_slice(),
+        &schedule,
+        input.as_slice(),
+        indices.as_slice(),
+        fused.as_slice_mut(),
+    )
+    .unwrap();
+    assert_eq!(device.counters().launches - before, u64::from(k > 0));
+    assert_same(
+        &format!("{what}: the fused gather"),
+        &download(device, &fused),
+        &got,
+    );
     worst
 }
 
-fn gemm_sweep<T: Real>(device: &mut Device, columns: &[usize]) {
+/// The GEMM at p ∈ {0, 1, 3, 8, 12, 20} on every layout with `columns`, with the fused
+/// gather where `fused(p, layout)`.
+fn gemm_sweep<T: Real>(
+    device: &mut Device,
+    columns: &[usize],
+    fused: impl Fn(usize, GemmLayout) -> bool,
+) {
     for p in [0usize, 1, 3, 8, 12, 20] {
         let n = (p + 1) * (p + 1);
         for layout in layouts(device, n) {
+            let fused = fused(p, layout);
             let worst = columns
                 .iter()
-                .map(|&k| check_gemm::<T>(device, layout, p, k))
+                .map(|&k| check_gemm::<T>(device, layout, (p, k), fused))
                 .fold(0.0, f64::max);
             println!(
                 "  {} p = {p:2}, {layout}: k ∈ {columns:?} bit for bit the host fma loop; \
-                 |device − MatrixSet::apply| ≤ {worst:.2} u_T τ (bound n = {n})",
-                T::FLOAT
+                 |device − MatrixSet::apply| ≤ {worst:.2} u_T τ (bound n = {n}){}",
+                T::FLOAT,
+                if fused {
+                    "; the fused gather the same bits"
+                } else {
+                    ""
+                }
             );
         }
     }
 }
 
+/// The default sweep: the fused gather on every layout, but at p = 20 on the CPU runtime
+/// only in its own layout (the cube and shared-memory kernels of 4 rows of units compile
+/// for seconds there at n = 441; the ignored sweep of 1000 columns runs them).
 fn gemm_small<T: Real>(device: &mut Device) {
-    gemm_sweep::<T>(device, &[0, 1, 7, 64]);
+    let cpu = device.backend() == BackendKind::Cpu;
+    gemm_sweep::<T>(device, &[0, 1, 7, 64], |p, layout| {
+        !cpu || p < 20 || matches!(layout, GemmLayout::Cpu { .. })
+    });
 }
 
 fn gemm_large<T: Real>(device: &mut Device) {
-    gemm_sweep::<T>(device, &[1000]);
+    gemm_sweep::<T>(device, &[1000], |_, _| true);
 }
 
 fn gemm_equals_the_host_loop(device: &mut Device) {
@@ -474,8 +555,16 @@ impl<T: Real> Call<T> {
         let library = settings.library_candidate(device.backend(), T::FLOAT);
         let tables = Tables::upload(device, self.set.as_slice(), n, library).unwrap();
         let view = self.view.upload(device);
-        let size = settings.size(device.backend(), T::FLOAT, &self.view.batch_offsets);
-        let mut scratch = TranslationScratch::<T>::new(device, size.columns * n).unwrap();
+        let size = settings.size(
+            device.backend(),
+            T::FLOAT,
+            &self.view.batch_offsets,
+            self.view.nrows(),
+        );
+        // X only where the plan gathers (Phase 6 T7: none with the fused gather).
+        let mut scratch =
+            TranslationScratch::<T>::split(device, size.gathered * n, size.columns * n).unwrap();
+        let before = device.counters().uploads;
         let plan = GroupedPlan::new(
             device,
             &self.view.arrays(),
@@ -486,6 +575,7 @@ impl<T: Real> Call<T> {
         )
         .unwrap();
         assert!(plan.columns() <= size.columns);
+        check_plan(&plan, settings, &self.view.row_offsets, before, device);
         if let Some(reason) = plan.library_rejection() {
             println!("    library not used, the hand-written kernel runs: {reason}");
         }
@@ -512,8 +602,8 @@ impl<T: Real> Call<T> {
             .unwrap();
             assert_eq!(
                 device.counters().launches - before,
-                3 * plan.nchunks() as u64,
-                "three launches per chunk"
+                (plan.launches_per_chunk() * plan.nchunks()) as u64,
+                "three launches per chunk, two with the fused gather"
             );
             let all = download(device, &store);
             assert_same("the input", &all[input.clone()], &self.input);
@@ -526,8 +616,101 @@ impl<T: Real> Call<T> {
     }
 }
 
+/// The plan's facts (Phase 6 T7): the gather it reports (the settings' for the
+/// hand-written kernel, separate for the library), its columns of X (none fused), its
+/// reduction, and with the reduction
+/// by chunk one row pair per (row, chunk) the row meets: at least one per row with an entry
+/// and at most one per entry, one per entry with chunks of one column; one upload more
+/// than without (the tile schedule, the library's padded sources, the rows).
+fn check_plan(
+    plan: &GroupedPlan,
+    settings: &PlanSettings,
+    row_offsets: &[u32],
+    uploads_before: u64,
+    device: &Device,
+) {
+    let library = plan.gemm() == Gemm::Library;
+    assert_eq!(
+        plan.gather(),
+        if library {
+            Gather::Separate
+        } else {
+            settings.gather
+        }
+    );
+    assert_eq!(plan.reduction(), settings.reduction);
+    // With the fused gather the plan reads no X (and its chunks are as wide as the budget
+    // holds of Y alone).
+    assert_eq!(
+        plan.gathered_columns(),
+        if plan.gather() == Gather::Fused {
+            0
+        } else {
+            plan.columns()
+        }
+    );
+    let pairs = *row_offsets.last().unwrap() as usize;
+    let rows = row_offsets.windows(2).filter(|w| w[1] > w[0]).count();
+    let row_pairs = plan.chunk_row_pairs();
+    let uploads = device.counters().uploads - uploads_before;
+    match settings.reduction {
+        Reduction::ByChunk => {
+            assert!(
+                (rows..=pairs).contains(&row_pairs),
+                "{row_pairs} row pairs for {rows} rows and {pairs} pairs"
+            );
+            if plan.gemm_columns() == plan.nchunks() {
+                assert_eq!(row_pairs, pairs, "one row pair per one-column chunk");
+            }
+            assert_eq!(uploads, 2 + u64::from(library));
+        }
+        Reduction::Walk => {
+            assert_eq!(row_pairs, 0);
+            assert_eq!(uploads, 1 + u64::from(library));
+        }
+    }
+}
+
+/// The hand-written settings of a level call in `layout` with `budget` that the tests
+/// compare (Phase 4 T12, Phase 6 T7): box-major first, coefficient-major (not for the
+/// shared-memory layout), box-major with the fused gather, each with the reduction by
+/// chunk and walking every row.
+fn variants(n: usize, layout: GemmLayout, budget: u64) -> Vec<PlanSettings> {
+    let mut out = Vec::new();
+    for reduction in [Reduction::ByChunk, Reduction::Walk] {
+        for (orientation, gather) in [
+            (Orientation::BoxMajor, Gather::Separate),
+            (Orientation::CoefficientMajor, Gather::Separate),
+            (Orientation::BoxMajor, Gather::Fused),
+        ] {
+            if orientation == Orientation::CoefficientMajor
+                && matches!(layout, GemmLayout::Shared { .. })
+            {
+                continue;
+            }
+            out.push(PlanSettings {
+                orientation,
+                gather,
+                reduction,
+                ..PlanSettings::new(n, layout, GemmPolicy::HandWritten, budget)
+            });
+        }
+    }
+    out
+}
+
 /// The level-call checks of the module documentation for one shape, on every layout.
 fn check_level_call<T: Real>(device: &mut Device, p: usize, nrows: usize, one_per_row: bool) {
+    let n = (p + 1) * (p + 1);
+    check_level_call_in::<T>(device, (p, nrows, one_per_row), layouts(device, n));
+}
+
+/// [`check_level_call`] in `layouts` only.
+fn check_level_call_in<T: Real>(
+    device: &mut Device,
+    (p, nrows, one_per_row): (usize, usize, bool),
+    layouts: Vec<GemmLayout>,
+) {
     let n = (p + 1) * (p + 1);
     let call = Call::<T>::new(
         0x7_8100 + 7 * p as u64 + nrows as u64,
@@ -538,32 +721,29 @@ fn check_level_call<T: Real>(device: &mut Device, p: usize, nrows: usize, one_pe
     let shape = if one_per_row { "L2L" } else { "M2M" };
     let want = host_rows(&call.view, &call.set, &call.input, &call.output);
     let (apply, tau) = apply_rows(&call.view, &call.set, &call.input, &call.output);
-    for layout in layouts(device, n) {
+    for layout in layouts {
         let what = format!("{} {shape} p = {p}, {nrows} rows, {layout}", T::FLOAT);
         let mut chunks = Vec::new();
         // One chunk; chunks of 5 columns (cutting batches); chunks of 1 column; each in both
-        // orientations (T12: the same products, so the same bits).
+        // orientations (T12: the same products, so the same bits), box-major also with the
+        // fused gather, and each with both reductions (Phase 6 T7).
         for columns in [usize::MAX, 5, 1] {
             let budget = if columns == usize::MAX {
                 DEFAULT_SCRATCH_BYTES
             } else {
                 (2 * n * columns * size_of::<T>()) as u64
             };
-            for orientation in [Orientation::BoxMajor, Orientation::CoefficientMajor] {
-                let settings = PlanSettings {
-                    n,
-                    layout,
-                    policy: GemmPolicy::HandWritten,
-                    budget,
-                    orientation,
-                };
+            for settings in variants(n, layout, budget) {
                 let (got, gemm, nchunks) = call.run(device, &settings, columns == usize::MAX);
                 assert_eq!(gemm, Gemm::HandWritten(layout));
-                if orientation == Orientation::BoxMajor {
+                if settings == variants(n, layout, budget)[0] {
                     chunks.push(nchunks);
                 }
                 assert_same(
-                    &format!("{what}, {orientation}, {nchunks} chunks: the host rows"),
+                    &format!(
+                        "{what}, {}, {}, {}, {nchunks} chunks: the host rows",
+                        settings.orientation, settings.gather, settings.reduction
+                    ),
                     &got,
                     &want,
                 );
@@ -585,7 +765,8 @@ fn check_level_call<T: Real>(device: &mut Device, p: usize, nrows: usize, one_pe
         }
         println!(
             "  {what}: bit for bit the host rows with 1, {} and {} chunks, box-major and \
-             coefficient-major, repeated calls bit-identical, empty rows untouched; \
+             coefficient-major, the gather separate and fused, the reduction by chunk and \
+             walking every row, repeated calls bit-identical, empty rows untouched; \
              ≤ {worst:.2} u_T τ from apply",
             chunks[1], chunks[2]
         );
@@ -598,13 +779,7 @@ fn check_per_group<T: Real>(device: &mut Device, p: usize) {
     let n = (p + 1) * (p + 1);
     let call = Call::<T>::new(0x7_8200 + p as u64, n, 40, false);
     for layout in layouts(device, n) {
-        let settings = PlanSettings {
-            n,
-            layout,
-            policy: GemmPolicy::HandWritten,
-            budget: DEFAULT_SCRATCH_BYTES,
-            orientation: Orientation::BoxMajor,
-        };
+        let settings = PlanSettings::new(n, layout, GemmPolicy::HandWritten, DEFAULT_SCRATCH_BYTES);
         let (grouped_result, _, _) = call.run(device, &settings, false);
         let tables = device.upload(call.set.as_slice()).unwrap();
         let view = call.view.upload(device);
@@ -673,6 +848,12 @@ fn level_calls<T: Real>(device: &mut Device) {
         check_level_call::<T>(device, p, 40, false);
         check_level_call::<T>(device, p, 40, true);
     }
+    // The fused gather and both reductions at p = 12 and 20 (Phase 6 T7), in the backend's
+    // default layout (the others compile for long at n = 441 on the CPU runtime).
+    for p in [12usize, 20] {
+        let default = GemmLayout::default_for(device.info(), (p + 1) * (p + 1));
+        check_level_call_in::<T>(device, (p, 12, false), vec![default]);
+    }
     // A level without pairs launches nothing and leaves the output as it is.
     let mut call = Call::<T>::new(0x7_8150, 16, 6, true);
     call.view = View::random(&mut Rng::new(1), 6, call.view.nsources, true);
@@ -682,13 +863,12 @@ fn level_calls<T: Real>(device: &mut Device) {
     call.view.batch_offsets = vec![0; 9];
     call.view.batch_targets.clear();
     call.view.batch_sources.clear();
-    let settings = PlanSettings {
-        n: 16,
-        layout: GemmLayout::default_for(device.info(), 16),
-        policy: GemmPolicy::Auto,
-        budget: DEFAULT_SCRATCH_BYTES,
-        orientation: Orientation::BoxMajor,
-    };
+    let settings = PlanSettings::new(
+        16,
+        GemmLayout::default_for(device.info(), 16),
+        GemmPolicy::Auto,
+        DEFAULT_SCRATCH_BYTES,
+    );
     let (got, _, chunks) = call.run(device, &settings, true);
     assert_eq!(chunks, 0);
     assert_same("a level without pairs", &got, &call.output);
@@ -723,11 +903,13 @@ fn library_level_call(device: &mut Device) {
     }) {
         let call = Call::<f32>::new(0x7_8300 + nrows as u64, n, nrows, one_per_row);
         let settings = PlanSettings {
-            n,
-            layout: GemmLayout::default_for(device.info(), n),
-            policy: GemmPolicy::Auto,
-            budget: DEFAULT_SCRATCH_BYTES,
             orientation,
+            ..PlanSettings::new(
+                n,
+                GemmLayout::default_for(device.info(), n),
+                GemmPolicy::Auto,
+                DEFAULT_SCRATCH_BYTES,
+            )
         };
         let (got, gemm, _) = call.run(device, &settings, true);
         let (apply, tau) = apply_rows(&call.view, &call.set, &call.input, &call.output);

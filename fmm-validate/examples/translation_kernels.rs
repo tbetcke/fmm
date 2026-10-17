@@ -71,8 +71,8 @@ use nd_fmm_exec::fmm::FmmBuilder;
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_kernels::movement::gather_columns;
 use nd_fmm_kernels::translate::{
-    Accumulate, Gemm, GemmLayout, GemmPolicy, GroupedPlan, Operands, Orientation, PlanSettings,
-    Tables, TileSchedule, TranslationScratch, default_scratch_bytes, gemm, grouped, library,
+    Accumulate, Gemm, GemmLayout, GemmPolicy, GroupedPlan, Operands, PlanSettings, Tables,
+    TileSchedule, TranslationScratch, default_scratch_bytes, gemm, grouped, library,
 };
 use nd_fmm_kernels::view::{GroupedArrays, GroupedView};
 use nd_fmm_kernels::{BackendKind, Device, DeviceBuffer, DeviceFloat, Precision};
@@ -433,13 +433,12 @@ fn measure<T: Value>(
     let index = fmm.plan().index();
     let mut rng = SplitMix64::new(0x7e_8001);
     let layout = chosen.unwrap_or_else(|| GemmLayout::default_for(device.info(), n));
-    let library_copy = PlanSettings {
+    let library_copy = PlanSettings::new(
         n,
         layout,
-        policy: GemmPolicy::Auto,
-        budget: default_scratch_bytes(device.info()),
-        orientation: Orientation::BoxMajor,
-    }
+        GemmPolicy::Auto,
+        default_scratch_bytes(device.info()),
+    )
     .library_candidate(device.backend(), T::FLOAT);
     let m2m_tables = Tables::upload(
         device,
@@ -466,14 +465,18 @@ fn measure<T: Value>(
             .collect();
         let mut buffer = device.upload(&store).unwrap();
         let device_view = GroupedView::upload(device, &view.arrays(), inputs).unwrap();
-        let settings = PlanSettings {
+        let settings = PlanSettings::new(
             n,
             layout,
-            policy: GemmPolicy::Auto,
-            budget: default_scratch_bytes(device.info()),
-            orientation: Orientation::BoxMajor,
-        };
-        let size = settings.size(device.backend(), T::FLOAT, &view.batch_offsets);
+            GemmPolicy::Auto,
+            default_scratch_bytes(device.info()),
+        );
+        let size = settings.size(
+            device.backend(),
+            T::FLOAT,
+            &view.batch_offsets,
+            view.row_offsets.len() - 1,
+        );
         let mut scratch = TranslationScratch::<T>::new(device, size.columns * n).unwrap();
         let plan = GroupedPlan::new(
             device,

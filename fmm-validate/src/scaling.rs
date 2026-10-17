@@ -113,8 +113,9 @@ use mpi::topology::{Color, SimpleCommunicator};
 use mpi::traits::{Communicator, CommunicatorCollectives, Destination, Equivalence, Root, Source};
 use nd_fmm_exec::cost::CostModel;
 use nd_fmm_exec::fmm::{
-    Backend, BuildTimings, ExchangeTraffic, Fmm, FmmBuilder, KindTiming, ListSizes,
-    MultipoleRouting, OperatorKind, Output, OutputMany, StageTimings, TREE_FAN_OUT, Traffic,
+    Backend, BuildTimings, DeviceGather, DeviceGemm, DeviceReduction, ExchangeTraffic, Fmm,
+    FmmBuilder, KindTiming, ListSizes, MultipoleRouting, OperatorKind, Output, OutputMany,
+    StageTimings, TREE_FAN_OUT, Traffic,
 };
 use nd_fmm_exec::geometry::{contains, integer_centre};
 use nd_fmm_exec::operator::{MulAdd, P2pChoice, SimdScalar};
@@ -444,6 +445,17 @@ pub struct Settings {
     /// `Isa::detect`): an explicit ISA, such as AVX-512 (Phase 6 T6), or the reference.
     /// On the host it also sets the ISA of the batched M2L's kernel.
     pub p2p: P2pChoice,
+    /// The device's chunk budget in bytes (`FmmBuilder::device_scratch_budget`, Phase 6
+    /// T7); `None` for the library's, per charge vector.
+    pub device_scratch: Option<u64>,
+    /// The device's GEMM of the grouped translations (`FmmBuilder::device_gemm`, Phase 6
+    /// T7).
+    pub device_gemm: DeviceGemm,
+    /// How the device's hand-written GEMM gets its columns (`FmmBuilder::device_gather`,
+    /// Phase 6 T7).
+    pub device_gather: DeviceGather,
+    /// The device's reduction (`FmmBuilder::device_reduction`, Phase 6 T7).
+    pub device_reduction: DeviceReduction,
 }
 
 impl Settings {
@@ -474,6 +486,10 @@ impl Settings {
             rhs: 1,
             backend: Backend::Host,
             p2p: P2pChoice::Auto,
+            device_scratch: None,
+            device_gemm: DeviceGemm::Auto,
+            device_gather: DeviceGather::Auto,
+            device_reduction: DeviceReduction::ByChunk,
         }
     }
 }
@@ -1241,6 +1257,9 @@ pub struct Report {
     /// Whether the second cut moved blocks (`Fmm::recut`): it ran and gained at least
     /// `WORK_CUT_MIN_GAIN`.
     pub recut: bool,
+    /// With a device backend, the bytes of its translations' scratch on this rank
+    /// (`DeviceReport::scratch_bytes`, Phase 6 T7); `None` on the host.
+    pub device_scratch_bytes: Option<u64>,
 }
 
 /// The resident size of this process in bytes and how it was read: the peak (`VmHWM`) from
@@ -1899,7 +1918,13 @@ fn builder<T: Stored + SimdScalar + Equivalence + Default>(settings: &Settings) 
         .work_cut(settings.work_cut)
         .multipole_routing(settings.routing)
         .vectors(settings.rhs)
-        .backend(settings.backend);
+        .backend(settings.backend)
+        .device_gemm(settings.device_gemm)
+        .device_gather(settings.device_gather)
+        .device_reduction(settings.device_reduction);
+    if let Some(bytes) = settings.device_scratch {
+        builder = builder.device_scratch_budget(bytes);
+    }
     if let Some(model) = settings.cost_model {
         builder = builder.cost_model(model);
     }
@@ -2120,7 +2145,24 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         placement,
         cost_model: fmm.cost_model(),
         recut: fmm.recut(),
+        device_scratch_bytes: device_scratch_bytes(&fmm),
     })
+}
+
+/// The bytes of the device translations' scratch of `fmm` (Phase 6 T7), `None` on the host.
+#[cfg(feature = "gpu")]
+fn device_scratch_bytes<T: Stored + SimdScalar + Equivalence + Default>(
+    fmm: &Fmm<'_, T>,
+) -> Option<u64> {
+    fmm.device_report().map(|report| report.scratch_bytes)
+}
+
+/// Without the device path there is no device scratch.
+#[cfg(not(feature = "gpu"))]
+fn device_scratch_bytes<T: Stored + SimdScalar + Equivalence + Default>(
+    _fmm: &Fmm<'_, T>,
+) -> Option<u64> {
+    None
 }
 
 /// The errors of `fmm` against the direct sum (module documentation): `settings.vectors`
@@ -2910,6 +2952,20 @@ impl Report {
                     format!("wall_ms={}", ms(path.wall)),
                     format!("rhs={}", self.settings.rhs),
                     format!("backend={}", self.settings.backend),
+                    format!(
+                        "device_scratch_mb={}",
+                        self.settings
+                            .device_scratch
+                            .map_or("default".to_owned(), |b| (b >> 20).to_string())
+                    ),
+                    format!("device_gemm={:?}", self.settings.device_gemm),
+                    format!("device_gather={:?}", self.settings.device_gather),
+                    format!("device_reduction={:?}", self.settings.device_reduction),
+                    format!(
+                        "device_scratch_bytes={}",
+                        self.device_scratch_bytes
+                            .map_or("none".to_owned(), |b| b.to_string())
+                    ),
                     format!("build_ms={}", ms(build_max[9])),
                     format!("redistribution_build_ms={}", ms(build_max[4])),
                     format!("cut_build_ms={}", ms(build_max[3])),

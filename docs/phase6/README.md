@@ -338,6 +338,18 @@ were **signed off by the user on 2026-10-15** (optimisation.md §10, "Outcome"):
    itself is T10's.
 7. The defaults at the end (T11): the M2L strategy rule with C6.6, the FMA mode and C6.9,
    the leaf size per p, and any one-rank output change that follows.
+8. The device defaults of C6.1 (T7; **signed off by the user on 2026-10-17** with T7's
+   PR, also CUDA's gather and layout left to T11): the
+   reduction by chunk on every backend, and on Metal the fused gather, the shared-memory
+   GEMM to p = 9 and the several-vector chunk budget capped at eight vectors' worth, as
+   defaults now rather than opt-in until T11. They change no output bit (tested in every
+   device scenario with each variant forced on), so requirement 6's concern, a changed
+   one-rank output, does not arise; they are kernel choices like Phase 4S T7's layouts, and
+   the T7 brief asks for them "chosen per (backend, precision, p) by measurement". On CUDA
+   the several-vector budget is one vector's 2 GB (at most 3 % per vector slower than T5's
+   12 GB at m = 32), and the gather and layout stay Phase 4S's: the best variant there
+   alternates with p, and the static rule waits for a sweep of every p (T11; the tuner
+   offers them) (`fmm-validate/results/phase6-device.md` §5). T11 revisits all of them.
 
 ## Risks
 

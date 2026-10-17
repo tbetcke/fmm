@@ -123,7 +123,13 @@ pub fn builder<T>(options: &Options, combination: &Combination) -> FmmBuilder<T>
         .threads(options.threads())
         .strategy(options.strategy)
         .backend(combination.backend)
-        .output_pass(options.output_pass);
+        .output_pass(options.output_pass)
+        .device_gemm(options.device_gemm)
+        .device_gather(options.gather)
+        .device_reduction(options.reduction);
+    if let Some(bytes) = options.scratch {
+        builder = builder.device_scratch_budget(bytes);
+    }
     if let Some(level) = options.max_level {
         builder = builder.max_level(level);
     }

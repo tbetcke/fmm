@@ -71,6 +71,16 @@
 #                   with `auto`: the messages and bytes per exchange, and the replicated
 #                   top's all-gather, against m
 #
+# The sweep of the device reduction against several charge vectors (Phase 6 T7,
+# docs/phase6/T7-fused-gather.md, the revision after T5), as t5-device (one rank on DEVICE,
+# every core for the host's parts, the N = 10^6 cube, f32 p = 3 and 8, on CUDA also f64
+# p = 3 and 8, `auto`, without --kinds, three timed evaluations at every m of T5_RHS),
+# each problem under four device settings: the reduction by chunk (the default) or
+# walking every row (Phase 4's, `--device-reduction walk`), each with the chunk budget per
+# vector (the default since T5) and with one vector's (`--device-scratch`, the device's
+# default: 128 MB on Metal, 2048 MB on CUDA); the summary's device_scratch_bytes is the
+# scratch each needs:
+#   t7-device
 # Sweeps of AVX-512 (Phase 6 T6, docs/phase6/T6-avx512-p2p.md; docs/design/optimisation.md
 # §5), x86_64 with AVX-512F only (Kathleen), every launch with --kinds, overlap off, the
 # library's defaults otherwise, the P2P kernel (and so the batched M2L's kernel) named by
@@ -278,7 +288,9 @@ esac
 T5_RHS=${T5_RHS:-"1 2 4 8 16 32"}
 if [ "$os" = macos ]; then DEVICE=${DEVICE:-metal}; else DEVICE=${DEVICE:-cuda}; fi
 for sweep in "$@"; do
-    if [ "$sweep" = t5-device ] && [ -z "${FEATURES:-}" ]; then FEATURES=$DEVICE; fi
+    if { [ "$sweep" = t5-device ] || [ "$sweep" = t7-device ]; } && [ -z "${FEATURES:-}" ]; then
+        FEATURES=$DEVICE
+    fi
 done
 exe=${CARGO_TARGET_DIR:-target}/release/examples/scaling
 if [ -z "${DRY_RUN:-}" ]; then
@@ -509,6 +521,26 @@ for sweep in "$@"; do
             prec=${dp%%:*} p=${dp##*:}
             t5_launch "t5-device-$DEVICE-cube-$prec-p$p" 1 "$CORES" --dist cube --n 1000000 \
                 --precision "$prec" --p "$p" --backend "$DEVICE"
+        done
+        ;;
+    t7-device)
+        t5_kinds=""
+        one_vector=128
+        degrees="f32:3 f32:8"
+        if [ "$DEVICE" = cuda ]; then
+            one_vector=2048
+            degrees="f32:3 f32:8 f64:3 f64:8"
+        fi
+        for dp in $degrees; do
+            prec=${dp%%:*} p=${dp##*:}
+            for reduction in by-chunk walk; do
+                t5_launch "t7-device-$DEVICE-cube-$prec-p$p-$reduction-per-vector" 1 "$CORES" \
+                    --dist cube --n 1000000 --precision "$prec" --p "$p" --backend "$DEVICE" \
+                    --device-reduction "$reduction"
+                t5_launch "t7-device-$DEVICE-cube-$prec-p$p-$reduction-one-vector" 1 "$CORES" \
+                    --dist cube --n 1000000 --precision "$prec" --p "$p" --backend "$DEVICE" \
+                    --device-reduction "$reduction" --device-scratch "$one_vector"
+            done
         done
         ;;
     t5-nodes)

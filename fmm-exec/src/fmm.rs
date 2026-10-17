@@ -556,6 +556,46 @@ pub enum DeviceGemm {
     Library,
     /// The hand-written kernel everywhere, in the backend's layout.
     HandWritten,
+    /// The shared-memory-tiled hand-written kernel everywhere (Phase 6 T7, C6.1), in the
+    /// backend's shared layout (`nd_fmm_kernels::translate::GemmLayout::shared_for`): the
+    /// same accumulation order, so the bits of [`HandWritten`](Self::HandWritten). Where
+    /// no step of it fits the device's shared memory, the backend's hand-written layout.
+    Shared,
+}
+
+/// How the device's hand-written GEMM of M2M, L2L and dense M2L gets its input columns
+/// ([`FmmBuilder::device_gather`]; Phase 6 T7, C6.1): a gather launch into a scratch the
+/// GEMM reads, or the GEMM reading the multipoles or locals itself through the batch's
+/// source indices. Both read the same values in the same order, so they give the same bits;
+/// the library GEMM always gathers. Ignored by [`Backend::Host`].
+///
+/// The enum exists without the `gpu` feature, as [`Backend`] does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DeviceGather {
+    /// The static rule by backend, precision and p, or the tuner's choice under
+    /// [`DeviceGemm::Auto`] with a tuning cache (`tune::static_gather`).
+    #[default]
+    Auto,
+    /// A gather launch per chunk (Phase 4's structure, device-path.md §6.4).
+    Separate,
+    /// The gather fused into the GEMM's loads: one launch fewer per chunk.
+    Fused,
+}
+
+/// How the device's reduction of M2M and dense M2L finds a chunk's entries
+/// ([`FmmBuilder::device_reduction`]; Phase 6 T7, C6.1). Both add the same products in the
+/// same order, so they give the same bits. Ignored by [`Backend::Host`].
+///
+/// The enum exists without the `gpu` feature, as [`Backend`] does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DeviceReduction {
+    /// Over the rows each chunk touches, from their first entry in it (listed at build):
+    /// every entry once per level call, whatever the chunks.
+    #[default]
+    ByChunk,
+    /// Over every row and its every entry once per chunk (Phase 4's reduction, kept for
+    /// measurement and as the trusted counterpart).
+    Walk,
 }
 
 /// Where the output pass of an evaluation runs ([`FmmBuilder::output_pass`]; Phase 4S T9,
@@ -896,6 +936,8 @@ pub enum FmmError {
 /// | [`device_p2p_layout`](Self::device_p2p_layout) | [`DeviceP2pLayout::Auto`]: by backend |
 /// | [`device_leaf_layout`](Self::device_leaf_layout) | [`DeviceLeafLayout::Auto`]: by backend |
 /// | [`device_gemm`](Self::device_gemm) | [`DeviceGemm::Auto`]: by precision, p and backend |
+/// | [`device_gather`](Self::device_gather) | [`DeviceGather::Auto`]: by backend, precision and p |
+/// | [`device_reduction`](Self::device_reduction) | [`DeviceReduction::ByChunk`] |
 /// | [`device_scratch_budget`](Self::device_scratch_budget) | 128 MB; 2 GB on CUDA |
 /// | [`tuning_cache`](Self::tuning_cache) | none: no tuning, the static rule |
 /// | [`tuning_budget`](Self::tuning_budget) | 10 s |
@@ -928,6 +970,8 @@ pub struct FmmBuilder<T> {
     device_p2p_layout: DeviceP2pLayout,
     device_leaf_layout: DeviceLeafLayout,
     device_gemm: DeviceGemm,
+    device_gather: DeviceGather,
+    device_reduction: DeviceReduction,
     device_scratch_budget: Option<u64>,
     tuning_cache: Option<PathBuf>,
     tuning_budget: Duration,
@@ -965,6 +1009,8 @@ impl<T> FmmBuilder<T> {
             device_p2p_layout: DeviceP2pLayout::Auto,
             device_leaf_layout: DeviceLeafLayout::Auto,
             device_gemm: DeviceGemm::Auto,
+            device_gather: DeviceGather::Auto,
+            device_reduction: DeviceReduction::ByChunk,
             device_scratch_budget: None,
             tuning_cache: None,
             tuning_budget: DEFAULT_TUNING_BUDGET,
@@ -1152,6 +1198,26 @@ impl<T> FmmBuilder<T> {
         self
     }
 
+    /// Sets how the device's hand-written GEMM of M2M, L2L and dense M2L gets its input
+    /// columns ([`DeviceGather`]; default [`DeviceGather::Auto`]; Phase 6 T7). Every choice
+    /// gives the same bits. A gather named here holds for every level call, the tuner's
+    /// choices included. Fixed at build and reported by `Fmm::device_report` (feature
+    /// `gpu`). Ignored by [`Backend::Host`] and where the library GEMM runs.
+    pub fn device_gather(mut self, gather: DeviceGather) -> Self {
+        self.device_gather = gather;
+        self
+    }
+
+    /// Sets how the device's reduction of M2M and dense M2L finds a chunk's entries
+    /// ([`DeviceReduction`]; default [`DeviceReduction::ByChunk`]; Phase 6 T7). Both give
+    /// the same bits; [`DeviceReduction::Walk`] is Phase 4's reduction, for measurement.
+    /// Fixed at build and reported by `Fmm::device_report` (feature `gpu`). Ignored by
+    /// [`Backend::Host`].
+    pub fn device_reduction(mut self, reduction: DeviceReduction) -> Self {
+        self.device_reduction = reduction;
+        self
+    }
+
     /// Sets the scratch budget of the device translations in bytes: the gathered inputs
     /// and the products of one chunk of a level call together (default 128 MB,
     /// docs/design/device-path.md §6.4; on CUDA 2 GB, at most an eighth of the device's
@@ -1160,8 +1226,8 @@ impl<T> FmmBuilder<T> {
     /// Allocated once at build, no larger than the widest chunk, and counted in the device
     /// memory check. A budget named here holds for every level call whatever
     /// [`vectors`](Self::vectors); the default is per vector (m times its bytes with m
-    /// vectors, at most an eighth of the device's memory; Phase 6 T5). Ignored by
-    /// [`Backend::Host`].
+    /// vectors, on Metal at most eight times and on CUDA once since Phase 6 T7, at most an
+    /// eighth of the device's memory; Phase 6 T5). Ignored by [`Backend::Host`].
     pub fn device_scratch_budget(mut self, bytes: u64) -> Self {
         self.device_scratch_budget = Some(bytes);
         self
@@ -1788,6 +1854,8 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             p2p_layout: self.device_p2p_layout,
             leaf_layout: self.device_leaf_layout,
             gemm: self.device_gemm,
+            gather: self.device_gather,
+            reduction: self.device_reduction,
             scratch_budget: self.device_scratch_budget,
             stage_timing: if self.synchronous_stages {
                 device::StageTiming::Synchronous

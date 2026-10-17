@@ -9,12 +9,13 @@
 //! | Decision | When | Candidates ([`Candidate`]), the static rule's first | Timed on |
 //! | --- | --- | --- | --- |
 //! | [`Strategy`](Decision::Strategy) | the builder's strategy is `M2lStrategy::Auto` and M2L runs on the device | `Dense` with each M2L GEMM candidate, `Rotation` | the `Fmm`'s largest V level |
-//! | [`Gemm`](Decision::Gemm) of M2M, L2L or dense M2L, per pair bucket | `DeviceGemm::Auto` and the kind on the device | the hand-written GEMM in the backend's default layout and two others (on CUDA three, [`cuda_gemm_layouts`]), the library (f32, p ≥ 8, a GPU), the device's default chunk budget and (but on CUDA) 16 MB | the largest level call of the kind in the bucket |
+//! | [`Gemm`](Decision::Gemm) of M2M, L2L or dense M2L, per pair bucket | `DeviceGemm::Auto` and the kind on the device | the hand-written GEMM in the backend's default layout and two others (on CUDA three, [`cuda_gemm_layouts`]), the shared-memory GEMM (Phase 6 T7), the default and shared-memory layouts with the other gather (Phase 6 T7), the library (f32, p ≥ 8, a GPU), the device's default chunk budget and (but on CUDA) 16 MB | the largest level call of the kind in the bucket |
 //! | [`P2p`](Decision::P2p), per points-per-leaf bucket | `DeviceP2pLayout::Auto` and P2P on the device | Metal: cube of 64 (the default), 32 and 128 units, plane layouts of 2 and 4 planes; CUDA: cube of 32 (the default) and 64 units, plane layouts of 2 and 4 planes; CPU runtime: vectors of the host's width, 64, 128 and 256 bits | the level with the most near-field pairs |
 //!
 //! A setting the builder names explicitly (a strategy other than `Auto`,
-//! `DeviceGemm::Library` or `HandWritten`, a scratch budget, a P2P layout) is never tuned:
-//! it is used as given. A bucket is the count rounded up to a power of two ([`bucket`]):
+//! `DeviceGemm::Library`, `HandWritten` or `Shared`, a scratch budget, a gather other than
+//! `DeviceGather::Auto`, a P2P layout) is never tuned: it is used as given (a named gather
+//! holds for every GEMM candidate). A bucket is the count rounded up to a power of two ([`bucket`]):
 //! the level's V pairs (M2L), octant pairs (M2M, both passes, and L2L), or the mean points
 //! per leaf, (N_s + N_t) / (2 leaves) rounded up (P2P). Level calls of fewer than
 //! [`MIN_TUNED_PAIRS`] pairs keep the static rule; they take microseconds.
@@ -57,7 +58,12 @@
 //!   Metal and the CPU runtime `Dense` for p ≤ [`STATIC_F64_DENSE_MAX_P`] = 11 and
 //!   `Rotation` from p = 12; the hand-written GEMM;
 //! - the P2P layout of `P2pLayout::default_for`, the device's default chunk budget,
-//!   box-major.
+//!   box-major;
+//! - the hand-written GEMM's layout and gather (Phase 6 T7; [`static_layout`],
+//!   [`static_gather`]): on Metal the shared-memory GEMM to p = 9
+//!   ([`METAL_SHARED_MAX_ORDER`]) and the fused gather; elsewhere the default layout and the
+//!   separate gather. Every layout and gather gives the same bits, so this rule changes no
+//!   output.
 //!
 //! **CUDA** (Phase 4S T7, device-path.md §18.2): on the H100 the dense M2L under the CUDA
 //! defaults was faster than rotation at every p measured, per level (the whole M2L stage,
@@ -149,8 +155,8 @@ use std::time::{Duration, Instant};
 
 use nd_fmm_kernels::p2p::{CPU_VECTOR_BITS, P2pLayout};
 use nd_fmm_kernels::translate::{
-    CPU_GEMM_BLOCK, DEFAULT_SCRATCH_BYTES, GemmLayout, GemmPolicy, Orientation, PlanSettings,
-    default_scratch_bytes,
+    CPU_GEMM_BLOCK, DEFAULT_SCRATCH_BYTES, Gather, GemmLayout, GemmPolicy, Orientation,
+    PlanSettings, default_scratch_bytes,
 };
 use nd_fmm_kernels::{BackendKind, Device, DeviceInfo, KernelError, Precision};
 use nd_fmm_math::CONVENTION_VERSION;
@@ -159,11 +165,11 @@ use crate::fmm::{DeviceGemm, OperatorKind};
 use crate::tables::M2lStrategy;
 
 /// The version of the tuning-cache file format. Any change to the file bumps it.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// The version of the candidate sets of this module. Any change to a candidate set (or
 /// to what a candidate means) bumps it, which makes every cached entry stale.
-pub const CANDIDATE_SET_VERSION: u32 = 2;
+pub const CANDIDATE_SET_VERSION: u32 = 3;
 
 /// The tuning budget of one build by default (device-path.md §10.4).
 pub const DEFAULT_BUDGET: Duration = Duration::from_secs(10);
@@ -254,8 +260,8 @@ pub enum GemmKind {
     },
 }
 
-/// The GEMM, layout of the operands and chunk budget of a grouped level call (M2M, L2L,
-/// dense M2L).
+/// The GEMM, layout of the operands, gather and chunk budget of a grouped level call (M2M,
+/// L2L, dense M2L).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GemmChoice {
     /// The GEMM.
@@ -264,19 +270,23 @@ pub struct GemmChoice {
     pub orientation: Orientation,
     /// The bytes of a chunk's inputs and products together.
     pub budget: u64,
+    /// How the hand-written GEMM gets its input columns (Phase 6 T7); the library always
+    /// gathers ([`Gather::Separate`]).
+    pub gather: Gather,
 }
 
 impl GemmChoice {
-    /// The hand-written kernel in `layout`, box-major, default budget.
+    /// The hand-written kernel in `layout`, box-major, the gather separate, default budget.
     pub fn hand_written(layout: GemmLayout) -> Self {
         Self {
             gemm: GemmKind::HandWritten(layout),
             orientation: Orientation::BoxMajor,
             budget: DEFAULT_SCRATCH_BYTES,
+            gather: Gather::Separate,
         }
     }
 
-    /// The library in `precision`, box-major, default budget.
+    /// The library in `precision`, box-major, the gather separate, default budget.
     pub fn library(precision: Precision) -> Self {
         Self {
             gemm: GemmKind::Library {
@@ -284,22 +294,22 @@ impl GemmChoice {
             },
             orientation: Orientation::BoxMajor,
             budget: DEFAULT_SCRATCH_BYTES,
+            gather: Gather::Separate,
         }
     }
 
     /// The plan settings of this choice for tables of order n on `info`: a library
-    /// choice takes `GemmPolicy::Auto` with the default layout as its fallback.
+    /// choice takes `GemmPolicy::Auto` with the default layout as its fallback; the
+    /// reduction by chunk.
     pub fn settings(&self, info: &DeviceInfo, n: usize) -> PlanSettings {
         let (layout, policy) = match self.gemm {
             GemmKind::HandWritten(layout) => (layout, GemmPolicy::HandWritten),
             GemmKind::Library { .. } => (GemmLayout::default_for(info, n), GemmPolicy::Auto),
         };
         PlanSettings {
-            n,
-            layout,
-            policy,
-            budget: self.budget,
             orientation: self.orientation,
+            gather: self.gather,
+            ..PlanSettings::new(n, layout, policy, self.budget)
         }
     }
 
@@ -310,13 +320,18 @@ impl GemmChoice {
 }
 
 impl fmt::Display for GemmChoice {
-    /// `hand-written cube(32 x 2 units, 4 columns per unit), box-major, 128 MB`.
+    /// `hand-written cube(32 x 2 units, 4 columns per unit), box-major, 128 MB`, with
+    /// `, fused gather` before the budget where the gather is fused.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.gemm {
             GemmKind::HandWritten(layout) => write!(f, "hand-written {layout}")?,
             GemmKind::Library { inputs } => write!(f, "library ({} inputs)", inputs.name())?,
         }
-        write!(f, ", {}, {} MB", self.orientation, self.budget >> 20)
+        write!(f, ", {}", self.orientation)?;
+        if self.gather == Gather::Fused {
+            write!(f, ", {}", self.gather)?;
+        }
+        write!(f, ", {} MB", self.budget >> 20)
     }
 }
 
@@ -725,8 +740,11 @@ pub fn library_applies(backend: BackendKind, precision: Precision, n: usize) -> 
 /// documentation, "The static rule"): under `DeviceGemm::Auto` the library for M2M and
 /// L2L where it applies and the hand-written kernel otherwise and for M2L; under
 /// `Library` the library wherever it applies; under `HandWritten` the hand-written
-/// kernel; always box-major, in the backend's default layout and with the device's
-/// default chunk budget (`default_scratch_bytes`: 128 MB, 2 GB on CUDA) or `budget`.
+/// kernel; under `Shared` the shared-memory kernel in `GemmLayout::shared_for` where a
+/// step of it fits the device (Phase 6 T7); always box-major, in the backend's default
+/// layout, the gather of [`static_gather`] for the hand-written kernel, and with the
+/// device's default chunk budget (`default_scratch_bytes`: 128 MB, 2 GB on CUDA) or
+/// `budget`.
 pub fn static_gemm(
     info: &DeviceInfo,
     precision: Precision,
@@ -739,16 +757,69 @@ pub fn static_gemm(
         && match setting {
             DeviceGemm::Auto => kind != OperatorKind::M2l,
             DeviceGemm::Library => true,
-            DeviceGemm::HandWritten => false,
+            DeviceGemm::HandWritten | DeviceGemm::Shared => false,
         };
+    let layout = match setting {
+        DeviceGemm::Shared => GemmLayout::shared_for(info, n, precision)
+            .unwrap_or_else(|| GemmLayout::default_for(info, n)),
+        DeviceGemm::Auto => static_layout(info, precision, n),
+        DeviceGemm::Library | DeviceGemm::HandWritten => GemmLayout::default_for(info, n),
+    };
     let choice = if library {
         GemmChoice::library(precision)
     } else {
-        GemmChoice::hand_written(GemmLayout::default_for(info, n))
+        GemmChoice {
+            gather: static_gather(info.backend, precision, n),
+            ..GemmChoice::hand_written(layout)
+        }
     };
     GemmChoice {
         budget: budget.unwrap_or_else(|| default_scratch_bytes(info)),
         ..choice
+    }
+}
+
+/// The largest order of the tables at which the static rule takes the shared-memory GEMM
+/// on Metal (Phase 6 T7): 100, p = 9. Measured on the M3 Max in f32 (`nd-fmm-validate`'s
+/// `gemm_variants`, the uniform cube at N = 10⁶, the level calls summed, both with the
+/// fused gather): the shared-memory layout of `GemmLayout::shared_for` took 0.86, 0.79,
+/// 0.87 and 0.87 of the cube layout's time at p = 3, 6, 8 (M2L, M2M and L2L) and 9 (M2L),
+/// 1.12 at p = 10, 0.91 at p = 11 and 1.21 at p = 12.
+pub const METAL_SHARED_MAX_ORDER: usize = 100;
+
+/// The hand-written layout of the static rule under `DeviceGemm::Auto` (Phase 6 T7): on
+/// Metal the shared-memory GEMM of `GemmLayout::shared_for` up to
+/// [`METAL_SHARED_MAX_ORDER`] where it fits, elsewhere the backend's default
+/// (`GemmLayout::default_for`; on CUDA see [`static_gather`]). Every layout gives the same
+/// bits.
+pub fn static_layout(info: &DeviceInfo, precision: Precision, n: usize) -> GemmLayout {
+    let shared = match info.backend {
+        BackendKind::Metal if n <= METAL_SHARED_MAX_ORDER => {
+            GemmLayout::shared_for(info, n, precision)
+        }
+        _ => None,
+    };
+    shared.unwrap_or_else(|| GemmLayout::default_for(info, n))
+}
+
+/// The gather of the hand-written GEMM by the static rule (Phase 6 T7): how it gets its
+/// input columns on `backend` in `precision` for tables of order n. On Metal fused: in
+/// f32 on the M3 Max (`gemm_variants`, the uniform cube at N = 10⁶ and 10⁷ and the
+/// Plummer sphere at 10⁶, every M2L, M2M and L2L level call, the reduction by chunk) it
+/// took 0.62–0.90 of the separate gather's time summed over the level calls at p = 3–12 in
+/// the default layout and 0.63–0.89 in the shared-memory one, and no level call was
+/// slower. Elsewhere separate: the CPU runtime is the correctness backend, and on CUDA
+/// Phase 4S's gather stays: on the H100 the best of the fused cube layout and the
+/// shared-memory GEMM with the fused gather alternated with p (the former at p = 3 and 12,
+/// the latter at p = 6, 8 and 18; the fused cube layout 1.36× slower than the separate
+/// gather at f32 p = 6), so a static rule waits for a sweep of every p (T11); the tuner
+/// offers both. Every gather gives the same bits, so the rule changes no
+/// output (a default proposed for sign-off with T7, docs/phase6/README.md, decision 8).
+pub fn static_gather(backend: BackendKind, precision: Precision, n: usize) -> Gather {
+    let _ = (precision, n);
+    match backend {
+        BackendKind::Metal => Gather::Fused,
+        BackendKind::Cpu | BackendKind::Cuda => Gather::Separate,
     }
 }
 
@@ -761,9 +832,12 @@ pub fn static_p2p(info: &DeviceInfo) -> P2pLayout {
 /// static rule's first (module documentation, "What is chosen"): the hand-written kernel
 /// in the backend's default layout and others (on Metal 2 and 8 columns per unit; on the
 /// CPU runtime blocks of 4 rows of 8 columns and of 16 rows of 2 columns; on CUDA
-/// [`cuda_gemm_layouts`]); the library where it applies; with `budget_tunable`, except on
-/// CUDA, the static choice with a chunk budget of [`SMALL_SCRATCH_BYTES`]. Box-major
-/// throughout (module documentation, "The coefficient-major layout").
+/// [`cuda_gemm_layouts`]), with the static rule's gather; the shared-memory kernel in
+/// `GemmLayout::shared_for` where it fits (Phase 6 T7); the default layout and the
+/// shared-memory one with the other gather (Phase 6 T7); the library where it applies;
+/// with `budget_tunable`, except on CUDA, the static choice with a chunk budget of
+/// [`SMALL_SCRATCH_BYTES`]. Box-major throughout (module documentation, "The
+/// coefficient-major layout").
 pub fn gemm_candidates(
     info: &DeviceInfo,
     precision: Precision,
@@ -773,12 +847,19 @@ pub fn gemm_candidates(
 ) -> Vec<GemmChoice> {
     let first = static_gemm(info, precision, n, kind, DeviceGemm::Auto, None);
     let default = GemmLayout::default_for(info, n);
-    // Every candidate with the device's chunk budget, but the smaller one.
-    let budget = |choice: GemmChoice| GemmChoice {
-        budget: first.budget,
-        ..choice
+    let gather = static_gather(info.backend, precision, n);
+    let other_gather = match gather {
+        Gather::Separate => Gather::Fused,
+        Gather::Fused => Gather::Separate,
     };
-    let mut out = vec![first, budget(GemmChoice::hand_written(default))];
+    // Every candidate with the device's chunk budget, but the smaller one, and the static
+    // rule's gather, but where named.
+    let hand = |layout: GemmLayout, gather: Gather| GemmChoice {
+        budget: first.budget,
+        gather,
+        ..GemmChoice::hand_written(layout)
+    };
+    let mut out = vec![first, hand(default, gather)];
     let others = match default {
         GemmLayout::Cube { .. } if info.backend == BackendKind::Cuda => cuda_gemm_layouts(info, n),
         GemmLayout::Cube {
@@ -810,14 +891,18 @@ pub fn gemm_candidates(
                 },
             ]
         }
+        GemmLayout::Shared { .. } => Vec::new(),
     };
-    out.extend(
-        others
-            .into_iter()
-            .map(|layout| budget(GemmChoice::hand_written(layout))),
-    );
+    out.extend(others.into_iter().map(|layout| hand(layout, gather)));
+    let shared = GemmLayout::shared_for(info, n, precision);
+    out.extend(shared.map(|layout| hand(layout, gather)));
+    out.push(hand(default, other_gather));
+    out.extend(shared.map(|layout| hand(layout, other_gather)));
     if library_applies(info.backend, precision, n) {
-        out.push(budget(GemmChoice::library(precision)));
+        out.push(GemmChoice {
+            budget: first.budget,
+            ..GemmChoice::library(precision)
+        });
     }
     // On CUDA a smaller budget only adds chunks, and each chunk a pass of the reduction
     // over every row: 128 MB was 1.4–1.9× slower than 2 GB on the largest M2L level call
@@ -1584,7 +1669,8 @@ fn decode_decision(text: &str) -> Option<Decision> {
     }
 }
 
-/// `hand/cube/32/2/4/bm/134217728`, `hand/cpu/8/4/bm/…` or `library/f32/cm/…`.
+/// `hand/cube/32/2/4/bm/sep/134217728`, `hand/cpu/8/4/bm/fused/…`,
+/// `hand/shared/32/8/4/16/bm/sep/…` or `library/f32/cm/sep/…`.
 fn encode_gemm(choice: &GemmChoice) -> String {
     let gemm = match choice.gemm {
         GemmKind::HandWritten(GemmLayout::Cube {
@@ -1595,13 +1681,23 @@ fn encode_gemm(choice: &GemmChoice) -> String {
         GemmKind::HandWritten(GemmLayout::Cpu { block, per_unit }) => {
             format!("hand/cpu/{block}/{per_unit}")
         }
+        GemmKind::HandWritten(GemmLayout::Shared {
+            rows,
+            columns,
+            per_unit,
+            depth,
+        }) => format!("hand/shared/{rows}/{columns}/{per_unit}/{depth}"),
         GemmKind::Library { inputs } => format!("library/{}", inputs.name()),
     };
     let orientation = match choice.orientation {
         Orientation::BoxMajor => "bm",
         Orientation::CoefficientMajor => "cm",
     };
-    format!("{gemm}/{orientation}/{}", choice.budget)
+    let gather = match choice.gather {
+        Gather::Separate => "sep",
+        Gather::Fused => "fused",
+    };
+    format!("{gemm}/{orientation}/{gather}/{}", choice.budget)
 }
 
 fn decode_gemm(text: &str) -> Option<GemmChoice> {
@@ -1622,6 +1718,23 @@ fn decode_gemm(text: &str) -> Option<GemmChoice> {
             }),
             rest,
         ),
+        [
+            "hand",
+            "shared",
+            rows,
+            columns,
+            per_unit,
+            depth,
+            ref rest @ ..,
+        ] => (
+            GemmKind::HandWritten(GemmLayout::Shared {
+                rows: rows.parse().ok()?,
+                columns: columns.parse().ok()?,
+                per_unit: per_unit.parse().ok()?,
+                depth: depth.parse().ok()?,
+            }),
+            rest,
+        ),
         ["library", inputs, ref rest @ ..] => (
             GemmKind::Library {
                 inputs: InputPrecision::parse(inputs)?,
@@ -1630,7 +1743,7 @@ fn decode_gemm(text: &str) -> Option<GemmChoice> {
         ),
         _ => return None,
     };
-    let [orientation, budget] = rest[..] else {
+    let [orientation, gather, budget] = rest[..] else {
         return None;
     };
     Some(GemmChoice {
@@ -1641,6 +1754,11 @@ fn decode_gemm(text: &str) -> Option<GemmChoice> {
             _ => return None,
         },
         budget: budget.parse().ok()?,
+        gather: match gather {
+            "sep" => Gather::Separate,
+            "fused" => Gather::Fused,
+            _ => return None,
+        },
     })
 }
 
@@ -1761,11 +1879,32 @@ mod tests {
             for p in 0..=20usize {
                 let n = (p + 1) * (p + 1);
                 let device_budget = default_scratch_bytes(&info);
-                let hand = GemmChoice {
-                    budget: device_budget,
-                    ..GemmChoice::hand_written(GemmLayout::default_for(&info, n))
-                };
                 for precision in [Precision::F32, Precision::F64] {
+                    let hand = GemmChoice {
+                        budget: device_budget,
+                        gather: static_gather(backend, precision, n),
+                        ..GemmChoice::hand_written(GemmLayout::default_for(&info, n))
+                    };
+                    // Phase 6 T7: on Metal the shared-memory layout to p = 9 and the fused
+                    // gather; elsewhere the default layout and the separate gather.
+                    let auto_layout = static_layout(&info, precision, n);
+                    assert_eq!(
+                        auto_layout,
+                        if backend == BackendKind::Metal && p <= 9 {
+                            GemmLayout::shared_for(&info, n, precision).unwrap()
+                        } else {
+                            GemmLayout::default_for(&info, n)
+                        },
+                        "{backend} {precision} p = {p}"
+                    );
+                    assert_eq!(
+                        static_gather(backend, precision, n),
+                        if backend == BackendKind::Metal {
+                            Gather::Fused
+                        } else {
+                            Gather::Separate
+                        }
+                    );
                     let library = precision == Precision::F32 && p >= 8 && backend.is_gpu();
                     for kind in [OperatorKind::M2m, OperatorKind::L2l, OperatorKind::M2l] {
                         let got = static_gemm(&info, precision, n, kind, DeviceGemm::Auto, None);
@@ -1775,7 +1914,10 @@ mod tests {
                                 ..GemmChoice::library(precision)
                             }
                         } else {
-                            hand
+                            GemmChoice {
+                                gemm: GemmKind::HandWritten(auto_layout),
+                                ..hand
+                            }
                         };
                         assert_eq!(got, want, "{backend} {precision} p = {p} {kind}");
                         assert_eq!(got.orientation, Orientation::BoxMajor);
@@ -1789,6 +1931,18 @@ mod tests {
                         assert_eq!(forced, hand);
                         let all = static_gemm(&info, precision, n, kind, DeviceGemm::Library, None);
                         assert_eq!(all.is_library(), library);
+                        // Phase 6 T7: the shared-memory kernel where it fits.
+                        let shared =
+                            static_gemm(&info, precision, n, kind, DeviceGemm::Shared, None);
+                        let layout = GemmLayout::shared_for(&info, n, precision)
+                            .unwrap_or_else(|| GemmLayout::default_for(&info, n));
+                        assert_eq!(
+                            shared,
+                            GemmChoice {
+                                gemm: GemmKind::HandWritten(layout),
+                                ..hand
+                            }
+                        );
                     }
                 }
             }
@@ -1880,6 +2034,19 @@ mod tests {
                                 unreachable!()
                             };
                             assert!(inputs.keeps(precision));
+                            assert_eq!(c.gather, Gather::Separate, "the library gathers");
+                        }
+                        // Phase 6 T7: the shared-memory layout and both gathers.
+                        let shared = GemmLayout::shared_for(&info, n, precision).unwrap();
+                        let default = GemmLayout::default_for(&info, n);
+                        for layout in [default, shared] {
+                            for gather in [Gather::Separate, Gather::Fused] {
+                                assert!(
+                                    all.iter().any(|c| c.gemm == GemmKind::HandWritten(layout)
+                                        && c.gather == gather),
+                                    "{layout}, {gather} at {backend} {precision} p = {p}"
+                                );
+                            }
                         }
                     }
                 }

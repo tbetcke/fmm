@@ -105,6 +105,12 @@
 //!   FMM built for m vectors and timed through `Fmm::evaluate_many` (the summary's `rhs`
 //!   field; the time per vector is the wall time over m); not with `--errors`,
 //!   `--reference` or `--invariance`;
+//! - `--device-scratch MB` the device's chunk budget (`FmmBuilder::device_scratch_budget`;
+//!   the library's, per charge vector, if not given), `--device-gemm
+//!   auto|library|hand|shared`, `--device-gather auto|separate|fused` and
+//!   `--device-reduction by-chunk|walk` (`FmmBuilder::{device_gemm, device_gather,
+//!   device_reduction}`; Phase 6 T7): the summary's `device_*` fields, with the scratch the
+//!   device allocated (`device_scratch_bytes`);
 //! - `--invariance k[,k…]` rank-count invariance against P/k ranks for each k (above),
 //!   with the overlap of `--overlap` (the large run evaluates its paths, the small runs
 //!   overlapped unless `--overlap off`) and the strategy of `--strategy` (`auto`: the one
@@ -114,7 +120,7 @@ use mpi::Threading;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::Communicator;
 use nd_fmm_exec::cost::CostModel;
-use nd_fmm_exec::fmm::MultipoleRouting;
+use nd_fmm_exec::fmm::{DeviceGather, DeviceGemm, DeviceReduction, MultipoleRouting};
 use nd_fmm_exec::operator::P2pChoice;
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_validate::fmm_accuracy::Distribution;
@@ -244,6 +250,37 @@ fn arguments() -> Arguments {
                 });
             }
             "--sampled" => s.sampled = number(),
+            "--device-scratch" => s.device_scratch = Some((number() as u64) << 20),
+            "--device-gemm" => {
+                s.device_gemm = match value.as_str() {
+                    "auto" => DeviceGemm::Auto,
+                    "library" => DeviceGemm::Library,
+                    "hand" => DeviceGemm::HandWritten,
+                    "shared" => DeviceGemm::Shared,
+                    _ => fail(&format!(
+                        "--device-gemm: auto, library, hand or shared, not {value}"
+                    )),
+                };
+            }
+            "--device-gather" => {
+                s.device_gather = match value.as_str() {
+                    "auto" => DeviceGather::Auto,
+                    "separate" => DeviceGather::Separate,
+                    "fused" => DeviceGather::Fused,
+                    _ => fail(&format!(
+                        "--device-gather: auto, separate or fused, not {value}"
+                    )),
+                };
+            }
+            "--device-reduction" => {
+                s.device_reduction = match value.as_str() {
+                    "by-chunk" => DeviceReduction::ByChunk,
+                    "walk" => DeviceReduction::Walk,
+                    _ => fail(&format!(
+                        "--device-reduction: by-chunk or walk, not {value}"
+                    )),
+                };
+            }
             other => fail(&format!("unknown option {other}")),
         }
     }

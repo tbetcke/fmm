@@ -102,6 +102,14 @@ required-features = ["gpu"]
 name = "device_fmm"
 required-features = ["gpu"]
 
+# The variants of the device's grouped translations (Phase 6 T7): the fused gather, the
+# reduction by chunk and the shared-memory GEMM per level call against Phase 4S's code;
+# needs a device backend; not run in CI (no templated-examples entry), run by hand on one
+# rank.
+[[example]]
+name = "gemm_variants"
+required-features = ["gpu"]
+
 # The layout sweep of the device path (Phase 4S T7): every layout candidate of the device
 # kernels on the FMM's own level calls; needs a device backend; not run in CI (no
 # templated-examples entry), run by hand on one rank.

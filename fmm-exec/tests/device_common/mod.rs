@@ -58,6 +58,12 @@
 //!   device times on itself (Metal, CUDA), opens one timing window per stage with device work
 //!   (five) with no sync of its own and returns the device times with the output, while
 //!   on the CPU runtime, whose windows wait for it, it opens none;
+//! - the variants of the grouped translations (Phase 6 T7, C6.1; [`check_variants`]): a
+//!   build with the hand-written GEMM everywhere, the gather separate and the reduction by
+//!   chunk, is the reference; builds with the fused gather, the reduction walking every
+//!   row, the shared-memory GEMM, and the shared-memory GEMM with the fused gather and the
+//!   walking reduction each give its bits, report the forced choices on every level call,
+//!   and have the launches of the formula (two per chunk with the fused gather);
 //! - per-kind timings (Phase 4S T5, `tests/kind_common`): a build with
 //!   `kind_timings(Synchronous)` gives the same bits, two evaluations, each with one sync
 //!   after the charge upload and one after every level call with a pair besides the
@@ -85,7 +91,8 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_exec::device::{DataKind, GroupedImage, StageTiming, Traffic};
 use nd_fmm_exec::fmm::{
-    Backend, Fmm, FmmBuilder, KindTiming, OperatorKind, Output, OutputMany, OutputPass, Placement,
+    Backend, DeviceGather, DeviceGemm, DeviceReduction, Fmm, FmmBuilder, KindTiming, OperatorKind,
+    Output, OutputMany, OutputPass, Placement,
 };
 use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_exec::tables::M2lStrategy;
@@ -93,7 +100,7 @@ use nd_fmm_kernels::Precision;
 use nd_fmm_kernels::leaf::LeafLayout;
 use nd_fmm_kernels::p2p::P2pLayout;
 use nd_fmm_kernels::rotation::RotationLayout;
-use nd_fmm_kernels::translate::GemmLayout;
+use nd_fmm_kernels::translate::{Gather, Gemm, GemmLayout, Reduction};
 use nd_fmm_math::RealScalar;
 use nd_fmm_plan::lists::GroupedCsr;
 use nd_fmm_plan::operator::UpwardPass;
@@ -116,6 +123,9 @@ pub struct Differences {
     pub locals: f64,
     /// The multipole of the root.
     pub root: f64,
+    /// The evaluations of the variants of the grouped translations compared bit for bit
+    /// with the hand-written device evaluation (Phase 6 T7, [`check_variants`]).
+    pub variants: usize,
 }
 
 /// The values as f64 bit patterns: potentials, then gradients.
@@ -333,8 +343,9 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
             }
         }
     }
-    // The chunks of a device M2M or L2L level call, from the report.
-    let chunks = |kind: OperatorKind, pass: Option<UpwardPass>, level: usize, pairs: usize| {
+    // The launches of a device M2M, L2L or dense M2L level call, from the report: three per
+    // chunk, two with the fused gather (Phase 6 T7).
+    let launches = |kind: OperatorKind, pass: Option<UpwardPass>, level: usize, pairs: usize| {
         let report = fmm.device_report().expect("a device backend");
         let calls: Vec<_> = report
             .translations
@@ -352,7 +363,7 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
             "{kind} {pass:?} level {level}: pairs, m per pair of the plan"
         );
         assert!(calls[0].chunks >= 1);
-        calls[0].chunks as u64
+        calls[0].launches() as u64
     };
     for l in 0..nlevels.saturating_sub(1) {
         for (pass, view) in [
@@ -361,7 +372,7 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
         ] {
             if !view.is_empty() {
                 if device(OperatorKind::M2m) {
-                    e.launches += 3 * chunks(OperatorKind::M2m, Some(pass), l, view.len());
+                    e.launches += launches(OperatorKind::M2m, Some(pass), l, view.len());
                 } else {
                     e.down(multipoles, boxes(l) + boxes(l + 1));
                     e.up(multipoles, boxes(l));
@@ -373,7 +384,7 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
         let lists = plan.level(l);
         if !lists.l2l().is_empty() {
             if device(OperatorKind::L2l) {
-                e.launches += 3 * chunks(OperatorKind::L2l, None, l, lists.l2l().len());
+                e.launches += launches(OperatorKind::L2l, None, l, lists.l2l().len());
             } else {
                 e.down(locals, boxes(l - 1) + boxes(l));
                 e.up(locals, boxes(l));
@@ -392,7 +403,7 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
                 );
                 e.launches += 1;
             } else if device(OperatorKind::M2l) {
-                e.launches += 3 * chunks(OperatorKind::M2l, None, l, lists.v().len());
+                e.launches += launches(OperatorKind::M2l, None, l, lists.v().len());
             } else {
                 e.down(multipoles, boxes(l));
                 e.down(locals, boxes(l));
@@ -990,6 +1001,113 @@ pub fn check_three_vectors<T: Stored + SimdScalar + Equivalence + Default>(
     )
 }
 
+/// The variants of the grouped translations (Phase 6 T7, C6.1; module documentation):
+/// `default` is the default build of `builder` on `backend` and `default_bits` its output
+/// for `charges`. The reference is the hand-written GEMM everywhere with the gather
+/// separate and the reduction by chunk (the default's bits where no level call took the
+/// library); every variant gives its bits, reports its gather, reduction and (for the
+/// shared-memory GEMM) layout on every level call, and has the launches of the formula.
+/// Returns the variant evaluations compared (0 without a grouped level call on the
+/// device).
+fn check_variants<T: Stored + SimdScalar + Equivalence + Default>(
+    builder: &FmmBuilder<T>,
+    (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
+    charges: &[T],
+    (default, default_bits): (&Fmm<'_, T>, &[u64]),
+    backend: Backend,
+    comm: &SimpleCommunicator,
+) -> usize {
+    let kinds = device_kinds(default.strategy());
+    let report = default.device_report().expect("a device backend");
+    if report.translations.is_empty() {
+        return 0;
+    }
+    let mut compared = 0;
+    let build = |what: &str, builder: FmmBuilder<T>| {
+        builder
+            .threads(1)
+            .backend(backend)
+            .build(sources, targets, comm)
+            .unwrap_or_else(|error| panic!("{backend}: {what} does not build: {error}"))
+    };
+    let hand = builder
+        .clone()
+        .strategy(default.strategy())
+        .device_gemm(DeviceGemm::HandWritten)
+        .device_gather(DeviceGather::Separate)
+        .device_reduction(DeviceReduction::ByChunk);
+    let library = report.translations.iter().any(|t| t.gemm == Gemm::Library);
+    let reference = if library {
+        let mut fmm = build("the hand-written reference", hand.clone());
+        output_bits(&fmm.evaluate(charges).expect("the device FMM evaluates"))
+    } else {
+        default_bits.to_vec()
+    };
+    let n = (default.p() + 1) * (default.p() + 1);
+    let precision = if size_of::<T>() == 4 {
+        Precision::F32
+    } else {
+        Precision::F64
+    };
+    let shared = GemmLayout::shared_for(&report.info, n, precision);
+    for (gemm, gather, reduction) in [
+        (DeviceGemm::HandWritten, Gather::Fused, Reduction::ByChunk),
+        (DeviceGemm::HandWritten, Gather::Separate, Reduction::Walk),
+        (DeviceGemm::Shared, Gather::Separate, Reduction::ByChunk),
+        (DeviceGemm::Shared, Gather::Fused, Reduction::Walk),
+    ] {
+        let what = format!("{backend}, {gemm:?}, {gather}, {reduction}");
+        let mut fmm = build(
+            &what,
+            hand.clone()
+                .device_gemm(gemm)
+                .device_gather(match gather {
+                    Gather::Separate => DeviceGather::Separate,
+                    Gather::Fused => DeviceGather::Fused,
+                })
+                .device_reduction(match reduction {
+                    Reduction::ByChunk => DeviceReduction::ByChunk,
+                    Reduction::Walk => DeviceReduction::Walk,
+                }),
+        );
+        let report = fmm.device_report().expect("a device backend");
+        for t in &report.translations {
+            let layout = match t.gemm {
+                Gemm::HandWritten(layout) => layout,
+                Gemm::Library => panic!("{what}: {} level {}: the library ran", t.kind, t.level),
+            };
+            if gemm == DeviceGemm::Shared {
+                assert_eq!(
+                    Some(layout),
+                    shared,
+                    "{what}: {} level {}: the shared-memory layout",
+                    t.kind,
+                    t.level
+                );
+            }
+            assert_eq!(
+                (t.gather, t.reduction),
+                (gather, reduction),
+                "{what}: {} level {}: the gather and the reduction",
+                t.kind,
+                t.level
+            );
+        }
+        let expected = expected_evaluation(&fmm, &kinds);
+        for _ in 0..2 {
+            let output = fmm.evaluate(charges).expect("the device FMM evaluates");
+            assert_eq!(
+                output_bits(&output),
+                reference,
+                "{what}: differs from the hand-written device evaluation"
+            );
+            check_evaluation_counters(&what, &fmm, &expected);
+            compared += 1;
+        }
+    }
+    compared
+}
+
 /// The kinds the device runs by default from T10 under `strategy`: every kind, M2L by the
 /// dense tables or (under `Rotation`) by the rotation kernel.
 pub fn device_kinds(strategy: M2lStrategy) -> Vec<OperatorKind> {
@@ -1260,6 +1378,14 @@ fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
             );
         }
     }
+    let variants = check_variants(
+        builder,
+        (sources, targets),
+        charges,
+        (&fmm, &first_bits),
+        backend,
+        comm,
+    );
     // Per-kind timings (Phase 4S T5): the same bits in every mode. `Synchronous` adds one
     // sync after the charge upload and one after every level call with a pair, and no
     // window; `Device`, where the device times on itself, one window per such call and no
@@ -1325,6 +1451,7 @@ fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
         multipoles,
         locals,
         root,
+        variants,
     }
 }
 

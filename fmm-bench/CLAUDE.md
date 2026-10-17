@@ -51,6 +51,10 @@ From Phase 4S T9: `--reuse-output` (every evaluation, warm-ups and kind-timed on
 included, through `Fmm::evaluate_into` into one `Output`; the default stays
 `Fmm::evaluate`, so older reports stay comparable) and `--output-pass auto|host|device`
 (`FmmBuilder::output_pass`, default `auto`); the header's "output" row records both.
+From Phase 6 T7: `--device-gemm auto|library|hand|shared`, `--gather auto|separate|fused`,
+`--reduction by-chunk|walk` and `--scratch MB` (`FmmBuilder::{device_gemm, device_gather,
+device_reduction, device_scratch_budget}`), which the header's "device translations" row
+records; `--reduction walk --gather separate` is Phase 4S's device translations.
 
 The kind table splits "other" (Phase 4S T9): `load` (`StageTimings::load`: the charges
 into leaf order, on a device with their upload and scatter, and in `sync` mode the sync

@@ -387,6 +387,8 @@ struct DeviceRuns {
     /// The largest relative L2 differences of the default placement from the host path,
     /// [φ, ∇φ, multipoles, locals, the root's multipole], in f32 and in f64.
     worst: [[f64; 5]; 2],
+    /// The variant evaluations compared bit for bit (Phase 6 T7).
+    variants: usize,
 }
 
 #[cfg(feature = "gpu")]
@@ -405,9 +407,9 @@ fn device_backends() -> Vec<Backend> {
 }
 
 /// The device runs of one backend for [`backends_line`]: the backend, f32 and f64 runs,
-/// and the largest differences of the default placement in f32 and f64 ([φ, ∇φ,
-/// multipoles, locals, root]).
-type Runs = (Backend, usize, usize, [[f64; 5]; 2]);
+/// the largest differences of the default placement in f32 and f64 ([φ, ∇φ,
+/// multipoles, locals, root]) and the variant evaluations compared (Phase 6 T7).
+type Runs = (Backend, usize, usize, [[f64; 5]; 2], usize);
 
 /// "backends run on P rank(s): …; not run: …" for this test.
 fn backends_line(ranks: i32) -> String {
@@ -416,21 +418,23 @@ fn backends_line(ranks: i32) -> String {
         .lock()
         .unwrap()
         .iter()
-        .map(|r| (r.backend, r.f32_runs, r.f64_runs, r.worst))
+        .map(|r| (r.backend, r.f32_runs, r.f64_runs, r.worst, r.variants))
         .collect();
     #[cfg(not(feature = "gpu"))]
     let runs: Vec<Runs> = Vec::new();
     let mut ran = vec!["host (every scenario)".to_owned()];
     ran.extend(
         runs.iter()
-            .filter(|(_, f32_runs, f64_runs, _)| f32_runs + f64_runs > 0)
-            .map(|(backend, f32_runs, f64_runs, worst)| {
+            .filter(|(_, f32_runs, f64_runs, _, _)| f32_runs + f64_runs > 0)
+            .map(|(backend, f32_runs, f64_runs, worst, variants)| {
                 format!(
                     "{backend} ({f32_runs} f32 and {f64_runs} f64 scenarios: on the host \
                      fallback bit for bit; with every kind on the device (M2L by rotation \
                      under Rotation) within the FMM bounds, largest relative L2 difference φ {:.1e} / ∇φ {:.1e}, per \
                      level multipoles {:.1e} (root, the global M2M: {:.1e}) / locals {:.1e} \
-                     (f32); {:.1e} / {:.1e}, {:.1e} ({:.1e}) / {:.1e} (f64))",
+                     (f32); {:.1e} / {:.1e}, {:.1e} ({:.1e}) / {:.1e} (f64); {variants} \
+                     evaluations of the fused gather, the walking reduction and the \
+                     shared-memory GEMM bit for bit the hand-written device evaluation)",
                     worst[0][0],
                     worst[0][1],
                     worst[0][2],
@@ -1297,6 +1301,7 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
                     f32_runs: 0,
                     f64_runs: 0,
                     worst: [[0.0; 5]; 2],
+                    variants: 0,
                 });
                 runs.last_mut().unwrap()
             }
@@ -1317,6 +1322,7 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
         } else {
             entry.f64_runs += 1;
         }
+        entry.variants += difference.variants;
     }
     // Several charge vectors (Phase 6 T5, C6.3): checked after the scenario, on its
     // cheapest evaluation.

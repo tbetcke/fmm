@@ -744,13 +744,12 @@ fn settings(
     budget: u64,
     gemm: Option<GemmLayout>,
 ) -> PlanSettings {
-    PlanSettings {
+    PlanSettings::new(
         n,
-        layout: gemm.unwrap_or_else(|| GemmLayout::default_for(device.info(), n)),
+        gemm.unwrap_or_else(|| GemmLayout::default_for(device.info(), n)),
         policy,
         budget,
-        orientation: Orientation::BoxMajor,
-    }
+    )
 }
 
 /// A level's plan with `settings`, its scratch.
@@ -761,7 +760,12 @@ fn plan_of<T: Value>(
     tables: &Tables<T>,
 ) -> (GroupedPlan, TranslationScratch<T>) {
     let n = settings.n;
-    let size = settings.size(device.backend(), T::FLOAT, &level.batch_offsets);
+    let size = settings.size(
+        device.backend(),
+        T::FLOAT,
+        &level.batch_offsets,
+        level.row_offsets.len() - 1,
+    );
     let mut scratch = TranslationScratch::<T>::new(device, size.columns * n).unwrap();
     let plan = GroupedPlan::new(
         device,
