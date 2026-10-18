@@ -1077,6 +1077,30 @@ form, names checked against the pinned release's documentation), times with
 **Recommended gate machine: Kathleen** (x86, where FMM3D's compiled kernels are mature and
 our AVX2/AVX-512 P2P is measured), with the M3 Max as the second machine.
 
+**As built in T9 (2026-10-18; `fmm-validate/results/phase6-fmm3d.md`).** As designed, with
+these differences:
+- FMM3D **v2.1.0** computes q / (4π r), not q / r: only the releases up to v2.0.0 have the
+  1/r kernel this section describes. The driver's two-point check finds the factor (1) and
+  applies it.
+- Both of FMM3D's builds are compared: `make lib` (its default) and `make lib FAST_KER=ON`
+  (its "high-performance mode" in its install guide), each against the same matched `eps`.
+- `--write-problem` writes the `scaling` workload (`Workload`), the harness's sampled
+  targets and the direct sum at them; `--check-output` (the second option) measures
+  FMM3D's output with the harness's metrics, so both codes' errors come from one
+  definition. Our side is the sweep `t9-fmm3d` of `tools/scaling/run.sh`.
+- Matched accuracy is coarse: FMM3D's error moves in steps (no `eps` between about
+  4 × 10⁻⁵ and 8 × 10⁻⁸), so the matched step is 1.7–2.1× more accurate than ours at p = 6,
+  1.8–2.2× less accurate at p = 8 and 7.8–10× more accurate at p = 12.
+- The one-thread comparison was dropped at the user's request (2026-10-18), and the CUDA
+  run could not be timed (locust's H100 held by another user's job).
+- Added at the user's request: the two codes' outputs against each other at every point
+  (`--write-output`, `--compare`, `run.sh crosscheck`; Kathleen, N ≤ 10⁶): every difference
+  within the sum of the two errors.
+- Result, every core, one vector: ours 1.1–12× faster than FMM3D's faster build at
+  p ≤ 8 on all three machines; at p = 12 (FMM3D 8–10× more accurate) 0.61–2.5, FMM3D
+  `FAST_KER` ahead on the Plummer sphere. With 8 vectors per call FMM3D's vectorised
+  interface leads from p = 8–12.
+
 ### 8.2 Plane-wave M2L (T10): the question and the stop rule
 
 *The question.* At which p, precision and machine would plane-wave M2L (laplace-fmm-plan

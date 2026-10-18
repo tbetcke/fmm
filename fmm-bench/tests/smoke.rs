@@ -13,13 +13,22 @@
 //! against the kind-timed evaluations' own mean ("evaluation" column), not the summary's,
 //! which comes from other evaluations.
 //!
+//! The same test runs `--write-output`'s core (Phase 6 T9): our FMM on a small problem file
+//! (`problem::evaluate_problem`), its full output checked at the sampled targets against the
+//! problem's direct sum, and compared with itself.
+//!
 //! This executable initialises MPI once, in its one test.
 
 use mpi::Threading;
 use nd_fmm_bench::measure::{SEED, run};
 use nd_fmm_bench::options::{Command, parse};
+use nd_fmm_bench::problem::{
+    ProblemSpec, check_output, compare_outputs, evaluate_problem, write_full_output, write_problem,
+};
 use nd_fmm_bench::report::{Header, KIND_HEADER, Report, SUMMARY_HEADER};
-use nd_fmm_exec::fmm::Backend;
+use nd_fmm_exec::fmm::{Backend, FmmBuilder};
+use nd_fmm_validate::fmm_accuracy::Distribution;
+use nd_fmm_validate::scaling::Workload;
 
 /// The cells of the rows of the Markdown table whose header (and alignment row) is
 /// `header`.
@@ -166,6 +175,39 @@ fn smoke_run_writes_a_row_and_kinds_per_combination() {
             "one download line per device row"
         );
     }
+    // `--write-output`'s core: our FMM at p = 6 on a problem file, every vector, every point.
+    let dir = std::env::temp_dir();
+    let id = std::process::id();
+    let (problem, full) = (
+        dir.join(format!("nd-fmm-bench-smoke-{id}.bin")),
+        dir.join(format!("nd-fmm-bench-smoke-{id}.full.out")),
+    );
+    write_problem(&ProblemSpec {
+        file: problem.clone(),
+        workload: Workload::new(Distribution::Plummer, 3000),
+        vectors: 2,
+        sampled: 50,
+        threads: Some(2),
+    })
+    .expect("the problem is written");
+    let builder = FmmBuilder::<f64>::new(6).gradients(true).threads(2);
+    let (header, values, seconds) =
+        evaluate_problem(&problem, &builder, &comm).expect("our FMM evaluates the problem");
+    assert_eq!((header.vectors, header.workload.n), (2, 3000));
+    assert_eq!(values.len(), 2 * 3000 * 4);
+    assert!(seconds > 0.0);
+    write_full_output(&full, 2, 3000, &values).expect("the output is written");
+    let errors = check_output(&problem, &full).expect("the output is checked");
+    assert_eq!((errors.vectors, errors.sampled), (2, 50));
+    assert!(
+        errors.potential.l2 < 1e-3 && errors.gradient.l2 < 1e-2,
+        "p = 6 errors at the sampled targets: {errors:?}"
+    );
+    let itself = compare_outputs(&full, &full).expect("the output is compared");
+    assert_eq!((itself.potential.l2, itself.gradient.l2), (0.0, 0.0));
+    let _ = std::fs::remove_file(&problem);
+    let _ = std::fs::remove_file(&full);
+
     let ran = format!(
         "Backends run: {}",
         backends

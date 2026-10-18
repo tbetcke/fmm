@@ -15,6 +15,10 @@ use nd_fmm_exec::fmm::{
 };
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_validate::calibration::Precision;
+use nd_fmm_validate::fmm_accuracy::Distribution;
+use nd_fmm_validate::scaling::Workload;
+
+use crate::problem::{DEFAULT_VECTORS, ProblemSpec};
 
 /// The default number of points.
 pub const DEFAULT_N: usize = 1_000_000;
@@ -44,7 +48,12 @@ pub const USAGE: &str = "usage: nd-fmm-bench [--n N,...] [--precision f32|f64,..
 [--kinds sync|device|off] [--accuracy TARGETS|off] [--no-gradients] [--reuse-output] \
 [--output-pass auto|host|device] [--device-gemm auto|library|hand|shared] \
 [--gather auto|separate|fused] [--reduction by-chunk|walk] [--scratch MB] [--leaf-size n] \
-[--max-level l] [--table-cache DIR] [--tuning-cache DIR] [--output FILE.md] [--quick] [--help]";
+[--max-level l] [--table-cache DIR] [--tuning-cache DIR] [--output FILE.md] [--quick] [--help]
+       nd-fmm-bench --write-problem FILE [--dist cube|sphere|plummer|clusters] [--n N] \
+[--vectors m] [--accuracy TARGETS] [--threads n]
+       nd-fmm-bench --check-output OUT,... --problem FILE
+       nd-fmm-bench --write-output OUT --problem FILE [--degree p] [--strategy S] [--threads n]
+       nd-fmm-bench --compare REF,OUT,...";
 
 /// The text of `--help`.
 pub const HELP: &str = "\
@@ -87,7 +96,29 @@ option takes one value or a comma-separated list; the run is their Cartesian pro
 
 A combination the backend refuses (f64 on Metal, a backend not compiled in) becomes a
 row \"refused: <error>\" and the run goes on. Run it through tools/bench/run.sh, which picks
-the cargo features from --backend and sets every BLAS thread variable to 1.";
+the cargo features from --backend and sets every BLAS thread variable to 1.
+
+A problem for another code (Phase 6 T9, tools/fmm3d/README.md), without MPI:
+
+  --write-problem FILE     write the points and charges of the scaling example's
+                           workload, its sampled targets and the f64 direct sum there
+                           (divided by 4 pi) to FILE, a binary file (module problem)
+    --dist D               cube, sphere, plummer or clusters (default cube)
+    --n N                  points (default 1000000)
+    --vectors m            charge vectors (default 8)
+    --accuracy TARGETS     sampled targets (default 1000)
+    --threads n            threads of the direct sum (default: every core)
+  --check-output OUT,...   the errors of each output file (phi and grad phi at the
+                           sampled targets) against the direct sum of
+    --problem FILE         the problem file; one line per output, the scaling
+                           example's error fields (an output of every point, as
+                           --write-output writes, is checked at the sampled targets)
+  --write-output OUT       our FMM on the points and charges of --problem FILE, every
+                           vector, phi and grad phi at every point to OUT (on one rank;
+                           --degree p, default 6, --strategy, default batched,
+                           --threads)
+  --compare REF,OUT,...    each output of every point against the first, over every
+                           point: one line per pair, the error fields as differences";
 
 /// The settings of a run.
 #[derive(Clone, Debug, PartialEq)]
@@ -228,6 +259,38 @@ impl Options {
 pub enum Command {
     /// A benchmark run.
     Run(Box<Options>),
+    /// `--write-problem`: a problem file for another code
+    /// ([`problem::write_problem`](crate::problem::write_problem); Phase 6 T9).
+    WriteProblem(ProblemSpec),
+    /// `--check-output`: the errors of other codes' output files against the direct sum of
+    /// a problem file ([`problem::check_output`](crate::problem::check_output)).
+    CheckOutput {
+        /// The problem file.
+        problem: PathBuf,
+        /// The output files, in the order given.
+        outputs: Vec<PathBuf>,
+    },
+    /// `--write-output`: our FMM on a problem file, φ and ∇φ at every point
+    /// ([`problem::evaluate_problem`](crate::problem::evaluate_problem); Phase 6 T9's
+    /// cross-check against another code's output).
+    WriteOutput {
+        /// The problem file.
+        problem: PathBuf,
+        /// The full output file.
+        output: PathBuf,
+        /// The degree p.
+        degree: usize,
+        /// The M2L strategy (`batched` by default: Phase 6 T2's, bit for bit `dense`).
+        strategy: M2lStrategy,
+        /// The threads; every core if `None`.
+        threads: Option<usize>,
+    },
+    /// `--compare`: every full output file after the first against the first, over every
+    /// point ([`problem::compare_outputs`](crate::problem::compare_outputs)).
+    Compare {
+        /// The output files, the reference first.
+        outputs: Vec<PathBuf>,
+    },
     /// `--help`: print [`HELP`].
     Help,
 }
@@ -240,6 +303,19 @@ pub enum Command {
 /// value, a value out of range, or an option given twice. The binary prints it with
 /// [`USAGE`] and exits with status 2.
 pub fn parse<S: AsRef<str>>(args: &[S]) -> Result<Command, String> {
+    let names = || {
+        args.iter().map(|a| {
+            a.as_ref()
+                .split_once('=')
+                .map_or(a.as_ref(), |(name, _)| name)
+        })
+    };
+    if names().any(|name| name == "--help" || name == "-h") {
+        return Ok(Command::Help);
+    }
+    if names().any(|name| PROBLEM_COMMANDS.iter().any(|(command, _)| *command == name)) {
+        return parse_problem(args);
+    }
     let mut options = Options::default();
     let (mut n, mut repeats) = (None, None);
     let mut seen = HashSet::new();
@@ -335,6 +411,127 @@ pub fn parse<S: AsRef<str>>(args: &[S]) -> Result<Command, String> {
         DEFAULT_REPEATS
     });
     Ok(Command::Run(Box::new(options)))
+}
+
+/// The commands of the problem files (Phase 6 T9) and the options each takes.
+const PROBLEM_COMMANDS: [(&str, &[&str]); 4] = [
+    (
+        "--write-problem",
+        &["--dist", "--n", "--vectors", "--accuracy", "--threads"],
+    ),
+    ("--check-output", &["--problem"]),
+    (
+        "--write-output",
+        &["--problem", "--degree", "--strategy", "--threads"],
+    ),
+    ("--compare", &[]),
+];
+
+/// The options of `--write-problem`, `--check-output`, `--write-output` and `--compare`
+/// ([`Command::WriteProblem`], [`Command::CheckOutput`], [`Command::WriteOutput`],
+/// [`Command::Compare`]): exactly one of the four, and only its own options.
+fn parse_problem<S: AsRef<str>>(args: &[S]) -> Result<Command, String> {
+    let mut problem = None;
+    let (mut distribution, mut n, mut vectors) = (Distribution::Cube, DEFAULT_N, DEFAULT_VECTORS);
+    let (mut sampled, mut threads) = (DEFAULT_ACCURACY_TARGETS, None);
+    let (mut degree, mut strategy_choice) = (DEFAULT_DEGREE, M2lStrategy::Batched);
+    let (mut command, mut file, mut files) = (None, None, None);
+    let mut seen = Vec::new();
+    let mut rest = args.iter().map(AsRef::as_ref);
+    while let Some(arg) = rest.next() {
+        let (name, inline) = match arg.split_once('=') {
+            Some((name, value)) if name.starts_with("--") => (name, Some(value)),
+            _ => (arg, None),
+        };
+        if seen.contains(&name) {
+            return Err(format!("`{name}` is given twice"));
+        }
+        seen.push(name);
+        let value = match inline.or_else(|| rest.next()) {
+            Some(value) => value,
+            None if name.starts_with("--") => return Err(format!("`{name}` needs a value")),
+            None => return Err(format!("unexpected argument `{name}`")),
+        };
+        let at = |message: &str| format!("`{name} {value}`: {message}");
+        match name {
+            "--write-problem" | "--write-output" | "--check-output" | "--compare" => {
+                if let Some(other) = command {
+                    return Err(format!("`{other}` and `{name}` exclude each other"));
+                }
+                command = Some(name);
+                if name == "--write-problem" || name == "--write-output" {
+                    file = Some(path(value).map_err(|e| at(&e))?);
+                } else {
+                    files = Some(list(value, path).map_err(|e| at(&e))?);
+                }
+            }
+            "--problem" => problem = Some(path(value).map_err(|e| at(&e))?),
+            "--dist" => {
+                distribution = Distribution::from_name(value).ok_or_else(|| {
+                    at("not a distribution; expected `cube`, `sphere`, `plummer` or `clusters`")
+                })?;
+            }
+            "--n" => n = positive(value).map_err(|e| at(&e))?,
+            "--vectors" => vectors = positive(value).map_err(|e| at(&e))?,
+            "--accuracy" => sampled = positive(value).map_err(|e| at(&e))?,
+            "--threads" => threads = Some(positive(value).map_err(|e| at(&e))?),
+            "--degree" => {
+                degree = count(value).map_err(|e| at(&e))?;
+                if degree > MAX_DEGREE {
+                    return Err(at(&format!("the degree p must be at most {MAX_DEGREE}")));
+                }
+            }
+            "--strategy" => strategy_choice = strategy(value).map_err(|e| at(&e))?,
+            _ if name.starts_with("--") => {
+                return Err(format!(
+                    "`{name}` does not apply to `--write-problem`, `--check-output`, \
+                     `--write-output` or `--compare`"
+                ));
+            }
+            _ => return Err(format!("unexpected argument `{name}`")),
+        }
+    }
+    let command = command.expect("parse calls this for one of the commands");
+    let allowed = PROBLEM_COMMANDS
+        .iter()
+        .find(|(c, _)| *c == command)
+        .map(|(_, options)| *options)
+        .unwrap_or_default();
+    if let Some(name) = seen.iter().find(|n| **n != command && !allowed.contains(n)) {
+        return Err(format!("`{name}` does not apply to `{command}`"));
+    }
+    let needs_problem = || {
+        problem
+            .clone()
+            .ok_or(format!("`{command}` needs `--problem FILE`"))
+    };
+    match command {
+        "--write-problem" => Ok(Command::WriteProblem(ProblemSpec {
+            file: file.expect("given with its value"),
+            workload: Workload::new(distribution, n),
+            vectors,
+            sampled: sampled.min(n),
+            threads,
+        })),
+        "--check-output" => Ok(Command::CheckOutput {
+            problem: needs_problem()?,
+            outputs: files.expect("given with its value"),
+        }),
+        "--write-output" => Ok(Command::WriteOutput {
+            problem: needs_problem()?,
+            output: file.expect("given with its value"),
+            degree,
+            strategy: strategy_choice,
+            threads,
+        }),
+        _ => {
+            let outputs = files.expect("given with its value");
+            if outputs.len() < 2 {
+                return Err("`--compare` needs two output files or more".into());
+            }
+            Ok(Command::Compare { outputs })
+        }
+    }
 }
 
 /// A comma-separated list of values, none empty.
@@ -791,6 +988,157 @@ mod tests {
         // Every combination once.
         for (i, a) in all.iter().enumerate() {
             assert!(!all[i + 1..].contains(a), "{a:?} twice");
+        }
+    }
+
+    #[test]
+    fn the_problem_commands_parse() {
+        let spec = |args: &[&str]| match parse(args) {
+            Ok(Command::WriteProblem(spec)) => spec,
+            other => panic!("{args:?} gave {other:?}"),
+        };
+        assert_eq!(
+            spec(&["--write-problem", "p.bin"]),
+            ProblemSpec {
+                file: "p.bin".into(),
+                workload: Workload::new(Distribution::Cube, DEFAULT_N),
+                vectors: 8,
+                sampled: 1000,
+                threads: None,
+            }
+        );
+        assert_eq!(
+            spec(&[
+                "--dist=plummer",
+                "--n",
+                "1e7",
+                "--write-problem",
+                "p.bin",
+                "--vectors",
+                "2",
+                "--accuracy",
+                "500",
+                "--threads",
+                "40",
+            ]),
+            ProblemSpec {
+                file: "p.bin".into(),
+                workload: Workload::new(Distribution::Plummer, 10_000_000),
+                vectors: 2,
+                sampled: 500,
+                threads: Some(40),
+            }
+        );
+        // The sampled targets are at most N.
+        assert_eq!(spec(&["--write-problem", "p", "--n", "10"]).sampled, 10);
+        assert_eq!(
+            parse(&["--check-output", "a.out,b.out", "--problem", "p.bin"]),
+            Ok(Command::CheckOutput {
+                problem: "p.bin".into(),
+                outputs: vec!["a.out".into(), "b.out".into()],
+            })
+        );
+        assert_eq!(
+            parse(&["--write-problem", "p", "--help"]),
+            Ok(Command::Help)
+        );
+        assert_eq!(
+            parse(&["--write-output", "o.out", "--problem", "p.bin"]),
+            Ok(Command::WriteOutput {
+                problem: "p.bin".into(),
+                output: "o.out".into(),
+                degree: DEFAULT_DEGREE,
+                strategy: M2lStrategy::Batched,
+                threads: None,
+            })
+        );
+        assert_eq!(
+            parse(&[
+                "--problem=p.bin",
+                "--write-output=o.out",
+                "--degree",
+                "12",
+                "--strategy",
+                "rotation",
+                "--threads",
+                "40",
+            ]),
+            Ok(Command::WriteOutput {
+                problem: "p.bin".into(),
+                output: "o.out".into(),
+                degree: 12,
+                strategy: M2lStrategy::Rotation,
+                threads: Some(40),
+            })
+        );
+        assert_eq!(
+            parse(&["--compare", "a.out,b.out,c.out"]),
+            Ok(Command::Compare {
+                outputs: vec!["a.out".into(), "b.out".into(), "c.out".into()],
+            })
+        );
+        for (args, message) in [
+            (
+                &["--write-problem", "p", "--degree", "3"][..],
+                "`--degree` does not apply to `--write-problem`",
+            ),
+            (
+                &["--write-problem", "p", "--repeats", "3"][..],
+                "`--repeats` does not apply to `--write-problem`, `--check-output`, \
+                 `--write-output` or `--compare`",
+            ),
+            (
+                &["--write-problem", "p", "--check-output", "o"][..],
+                "`--write-problem` and `--check-output` exclude each other",
+            ),
+            (
+                &["--write-problem", "p", "--problem", "q"][..],
+                "`--problem` does not apply to `--write-problem`",
+            ),
+            (
+                &["--check-output", "o", "--problem", "p", "--n", "5"][..],
+                "`--n` does not apply to `--check-output`",
+            ),
+            (
+                &["--check-output", "o"][..],
+                "`--check-output` needs `--problem FILE`",
+            ),
+            (
+                &["--write-output", "o"][..],
+                "`--write-output` needs `--problem FILE`",
+            ),
+            (
+                &["--compare", "a"][..],
+                "`--compare` needs two output files or more",
+            ),
+            (
+                &["--compare", "a,b", "--problem", "p"][..],
+                "`--problem` does not apply to `--compare`",
+            ),
+            (
+                &["--write-output", "o", "--problem", "p", "--degree", "21"][..],
+                "`--degree 21`: the degree p must be at most 20",
+            ),
+            (
+                &["--write-problem", "p", "--dist", "torus"][..],
+                "`--dist torus`: not a distribution; expected `cube`, `sphere`, `plummer` or \
+                 `clusters`",
+            ),
+            (
+                &["--write-problem", "p", "--n", "0"][..],
+                "`--n 0`: must be at least 1",
+            ),
+            (&["--write-problem"][..], "`--write-problem` needs a value"),
+            (
+                &["--write-problem", "p", "--write-problem", "q"][..],
+                "`--write-problem` is given twice",
+            ),
+            (
+                &["--check-output", "a,,b", "--problem", "p"][..],
+                "`--check-output a,,b`: an empty list entry",
+            ),
+        ] {
+            assert_eq!(error(args), message, "{args:?}");
         }
     }
 

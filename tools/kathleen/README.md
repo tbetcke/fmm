@@ -32,6 +32,7 @@ lifted from Phase 5N's 2 nodes. 4-node jobs run in `small` ("Jobs and QoS").
 | `jobs/run.sbatch` | 1 node, `singlenode` (40 tasks per node, so `mpirun` has slots); any node count the submission names | each argument as one step, for anything else |
 | `jobs/correctness.sbatch` | 2 nodes `test` (default), or 4 nodes `small` | Phase 5S T2's correctness job, by parts: the MPI test list at 2, 4, 8 and one rank per core, rank-count invariance at one rank per core against P/2, P/4 and P/8, the `scaling` smoke run; at 4 nodes also the harness at N = 10⁸ against a quarter of the ranks and invariance at 640 against 80 oversubscribed ("The correctness job") |
 | `jobs/sweep.sbatch` | 1 node `singlenode` 6 h, 2 nodes `test`/`small`, or 4 nodes `small` | sweeps of `tools/scaling/run.sh` in one allocation, `p2p` (the x86 P2P examples) and `p2p-node` (`p2p_kernels` on every core at once, one ISA at a time; Phase 6 T6); one file per launch in `logs/scaling-<job id>/` (Phase 5N T2; "Scaling sweeps") |
+| `jobs/fmm3d.sbatch` | 1 node, `singlenode` 6 h | Phase 6 T9's FMM3D side: `build` (FMM3D and the driver, `tools/fmm3d/build.sh build test`, after its `fetch` on the login node), `problems`, `sweep`, `match`, `time` (`tools/fmm3d/run.sh`); FMM3D in the root's `fmm3d/`, the launches' files in `logs/fmm3d/` ("FMM3D") |
 | `check-root.sh` | login node | lists what was written outside the root since the setup |
 | `machine.md` | | the machine's facts, measured, and what the environment resolved to |
 
@@ -386,6 +387,23 @@ start. Exclude it.
 `singlenode` and `test` take two jobs per user each, so two one-node and two two-node
 sweeps run at once; Phase 5S T0 kept at most two jobs pending or running in all. The output stays in the root's `logs/`, never in a tree; the report
 quotes what it needs.
+
+## FMM3D
+
+Phase 6 T9 compares the FMM with FMM3D on one node (tools/fmm3d/README.md). FMM3D is built
+from its pinned release with the gcc module's `gfortran` (12.3.0) in a job, on a compute
+node, so that FMM3D's `-march=native` sees Cascade Lake; it lives in the root's `fmm3d/`
+(`src/` the tarball, `build/<variant>/` the build trees, `<variant>/` the library, the
+driver and `build-info.txt`, `problems/` the problem files, about 2 GB at N = 10⁷), never
+in a source tree. Only the download runs on the login node:
+
+```sh
+tools/kathleen/remote.sh 'tools/fmm3d/build.sh fetch'
+tools/kathleen/submit.sh --time=01:30:00 -- fmm3d.sbatch build problems
+tools/kathleen/submit.sh fmm3d.sbatch sweep
+tools/kathleen/submit.sh '--export=ALL,T9_P2P=avx512,TIMEOUT=7200' -- sweep.sbatch t9-fmm3d
+tools/kathleen/submit.sh '--export=ALL,OURS=/scratch/scratch/ucahtbe/fmm/logs/scaling-<id>' -- fmm3d.sbatch match time
+```
 
 ## Quota
 

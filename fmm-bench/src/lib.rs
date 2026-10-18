@@ -52,6 +52,16 @@
 //! row `refused: <error>` and the run goes on. The file is rewritten after every
 //! combination, so an interrupted run keeps its rows. Nothing here asserts a timing.
 //!
+//! ## A problem for another code
+//!
+//! `--write-problem FILE` writes the points and charges of a `scaling` workload (the cube
+//! or the Plummer sphere of `nd_fmm_validate::scaling::Workload`, `--dist`, `--n`,
+//! `--vectors`), the sampled targets of that harness's errors and the f64 direct sum at
+//! them to one binary file, and `--check-output OUT --problem FILE` measures another
+//! code's φ and ∇φ at those targets against it, with the `scaling` harness's error
+//! metrics ([`problem`]; Phase 6 T9, the FMM3D comparison, `tools/fmm3d/`). Neither
+//! initialises MPI.
+//!
 //! ## Features
 //!
 //! `gpu`, `cpu`, `metal` and `cuda` pass through to `nd-fmm-exec` and
@@ -61,4 +71,5 @@
 pub mod machine;
 pub mod measure;
 pub mod options;
+pub mod problem;
 pub mod report;
