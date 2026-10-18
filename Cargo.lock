@@ -3001,6 +3001,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nd-fmm-spike-plane-wave"
+version = "0.0.0"
+dependencies = [
+ "nd-fmm-math",
+ "nd-fmm-ref",
+ "nd-fmm-simd",
+ "nd-fmm-tables",
+]
+
+[[package]]
 name = "nd-fmm-tables"
 version = "0.1.0-dev"
 dependencies = [
