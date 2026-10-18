@@ -1124,6 +1124,22 @@ stage at some p ≤ 18 and some machine of the workloads; otherwise write the sp
 with the model and recommend dropping C6.5 (decision 6). If built, it must measure that
 margin on one level against T2 and Rotation, else C6.5 is dropped.
 
+**As found in T10 (2026-10-18; `spikes/plane-wave/SPIKE_REPORT.md`).** The model cleared
+the margin (central case 1.4–8.1× at f64 p ≥ 8 on all three machines), so the spike was
+built: the six directional conversions in our basis, FMM3D's merge-and-shift and its
+quadratures (whose stated errors understate the worst pair 6–23×; the spike chooses s by
+the level error, at most 0.1× the M2L truncation: s = 10, 15, 18, 21, 32 at p = 3, 6, 8,
+12, 18), checked against `nd_fmm_ref::direct::m2l` on a level. Measured on T1's level 4
+against the faster of `Batched` and Rotation: 2.8–3.3× at p = 8, 6.5–7.5× at p = 12 and
+6.0–9.8× at p = 18 on the M3 Max and locust, one process or every core; on Kathleen
+1.5–12.5× at p ≥ 8 against the AVX2 kernel, and against the AVX-512 kernel 3.6–8.6× at
+p ≥ 12 but 1.14–1.44× at p = 8; it loses at p = 3 everywhere and at p = 6 on a full locust
+or Kathleen node. Recommended for decision 6: C6.5 proceeds, as its own task (an opt-in
+host strategy, f64, p ≥ 8 first), with the memory of the waves (27–97 KB per box), a SIMD
+body, several ranks, f32 and the device as its open items (the report's §8).
+**Decision 6 signed off by the user on 2026-10-18, as recommended:** C6.5 proceeds, as
+T13 (docs/phase6/T13-plane-wave-m2l.md).
+
 ## 8a. M2P and P2L only where they pay (C6.9)
 
 ### 8a.1 The pairs in question

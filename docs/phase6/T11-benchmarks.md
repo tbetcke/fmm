@@ -18,8 +18,9 @@ updated. The defaults in question:
   AVX2, or equal within run-to-run variation, inside the FMM on a fully loaded Kathleen
   node and proposes it as `Auto`'s ISA there, fmm-validate/results/phase6-avx512.md §8);
 - **the device strategies and layouts** after C6.1;
-- whether the FMA mode of the batched M2L, C6.9's near rule (T12) or several right-hand
-  sides change any default.
+- whether the FMA mode of the batched M2L, C6.9's near rule (T12), the plane-wave M2L
+  (T13, added 2026-10-18 at decision 6; opt-in, with T13's proposal of where it should be
+  the default) or several right-hand sides change any default.
 
 **Revision note.** Written on 2026-10-10; **revised by Phase 5S T9 on 2026-10-15** (decision
 7 of docs/phase5s/README.md):
