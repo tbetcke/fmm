@@ -1,0 +1,16 @@
+[package]
+name = "nd-fmm-spike-plane-wave"
+version = "0.0.0"
+description = "Throwaway study: plane-wave (exponential) M2L with merge-and-shift on one uniform level, against the batched dense M2L and Rotation (Phase 6 T10, C6.5)."
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+nd-fmm-math.workspace = true
+nd-fmm-ref.workspace = true
+# The baselines: `Dense`'s tables for `Batched` and the Rotation tables.
+nd-fmm-tables.workspace = true
+# The batched M2L's column kernel (Phase 6 T2).
+nd-fmm-simd.workspace = true

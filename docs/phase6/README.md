@@ -149,7 +149,10 @@ In scope:
 - `nd-fmm-ref`, `nd-fmm-math`: the dipole reference operators and fixtures (T8), under
   CONVENTIONS (a convention change is proposed in the PR, never made in code).
 - `nd-fmm-validate`, `nd-fmm-bench`: the benchmarks and reports.
-- A spike for plane-wave M2L in `spikes/` (T10).
+- A spike for plane-wave M2L in `spikes/` (T10); after decision 6 (signed off on
+  2026-10-18: C6.5 proceeds) the plane-wave M2L as an opt-in host strategy,
+  `M2lStrategy::PlaneWave`, in `nd-fmm-exec`, its tables in `nd-fmm-tables` and its SIMD
+  bodies in `nd-fmm-simd` (T13).
 
 Out of scope:
 - Kernels other than Laplace (Helmholtz, Yukawa), periodic boundaries, p > 20.
@@ -242,7 +245,7 @@ The IDs of laplace-fmm-plan §7, Phase 6, kept; C6.6–C6.8 are new.
 | C6.2 | SVD-compressed M2L | **dropped at T1's sign-off (2026-10-15)**: no gain at p ≤ 8, 0.53× and 0.31× of the dense flops at p = 12 and 18 (optimisation.md §3) | – | – (T3, T4 dropped) |
 | C6.3 | Multiple right-hand sides (charge vectors as extra GEMM columns) | throughput per right-hand side improves with the batch size; each vector's output bit for bit its single-vector evaluation, or within T1's bound if the order changes | C4.5, C6.6 | T5 |
 | C6.4 | Dipole sources and other source types | matches the direct sum within the Phase 3 bounds | C3.2 | T8 |
-| C6.5 | Plane-wave M2L (optional) | beats C4.5/C4.6 (and C6.6) on some configuration by the 1.25× of optimisation.md §8.2, else dropped | C4.7, C6.6 | T10 |
+| C6.5 | Plane-wave M2L (optional) | beats C4.5/C4.6 (and C6.6) on some configuration by the 1.25× of optimisation.md §8.2, else dropped (met at T10; decision 6: proceeds); as built, an opt-in host strategy within 1.1× `Dense`'s errors against the direct sum, deterministic and bit for bit the one-rank run on P ranks (T13) | C4.7, C6.6 | T10, T13 |
 | C6.6 | Host batched M2L (per-level GEMMs over gathered columns) | within requirement 1 of the target-by-target host path; bit-identical for every thread count; faster than every existing host strategy at p ≥ 6 on one rank, and scaling with ranks per node where Dense does not (Phase 5's tables) | C3.3, C4.5 | T2 |
 | C6.7 | AVX-512 P2P | within simd-p2p.md's per-pair contract (8 u_T for φ, 16 u_T for ∇φ; §3, requirement 2); faster than AVX2 on Kathleen in f32 and f64 at FMM leaf sizes, or recorded as not worth it | C3S.3 | T6 |
 | C6.8 | FMM3D comparison | both codes at matched accuracy on the same problems and machine, one node; the build documented | C3.3 | T9 |
@@ -258,7 +261,8 @@ The IDs of laplace-fmm-plan §7, Phase 6, kept; C6.6–C6.8 are new.
   the gate is the rest.
 - C6.6 (T2) meets its criteria, or the PR reports why not and the sign-off records it;
   C6.3, C6.4, C6.7 and C6.8 meet theirs; C6.1 is adopted or dropped by measurement; C6.5
-  is adopted or dropped at its spike; C6.9 is built in T12, or dropped by measurement.
+  is adopted or dropped at its spike (decision 6, 2026-10-18: it proceeds, built in T13);
+  C6.9 is built in T12, or dropped by measurement.
   (C6.2 was dropped at T1's sign-off.)
 - T11's report on the three machines, with the defaults signed off and the design
   documents updated.
@@ -277,6 +281,10 @@ One pull request each.
   `nd-fmm-exec`).
 - T9 needs T2 (the comparison uses the fastest host path).
 - T10 needs T2 (it competes with Batched and Rotation).
+- T13 (added 2026-10-18 at decision 6: C6.5 proceeds past T10's spike) needs T10 merged.
+  It changes `fmm-exec/src/operator.rs`, `tables.rs` and `cost.rs`, `nd-fmm-tables` and
+  `nd-fmm-simd`: merge T12 first, or rebase. A device plane-wave M2L would be a task after
+  it, gated on its host results (T13's brief, "Afterwards").
 - T8d (added 2026-10-17 at the user's request: the device kernels of the dipole kinds,
   split from T8 after its measurement) needs T8 merged.
 - T11 needs every other task merged or closed.
@@ -295,6 +303,7 @@ One pull request each.
 | T9 | [T9-fmm3d-comparison.md](T9-fmm3d-comparison.md) | FMM3D at matched accuracy, one node, the build in `tools/` | C6.8 | T2 |
 | T10 | [T10-plane-wave-spike.md](T10-plane-wave-spike.md) | a plane-wave M2L spike; adopt or drop | C6.5 | T2 |
 | T11 | [T11-benchmarks.md](T11-benchmarks.md) | final benchmarks on the three machines, defaults revisited (strategy, leaf size per p), design-document update | gate | all |
+| T13 | [T13-plane-wave-m2l.md](T13-plane-wave-m2l.md) | plane-wave M2L as an opt-in host strategy (`M2lStrategy::PlaneWave`, f64, p ≥ 8 first), its tables, SIMD bodies, memory bound and cost constants, measured on the three machines | C6.5 | T10 |
 | T12 | [T12-near-w-x.md](T12-near-w-x.md) | M2P and P2L only where they pay: the near rule in `nd-fmm-plan`, from the cost model and the leaf counts, opt-in | C6.9 | T1 |
 
 T2, T5 and T8 all change `fmm-exec/src/operator.rs` and `tables.rs`, and T5, T8 and T12
@@ -338,7 +347,12 @@ were **signed off by the user on 2026-10-15** (optimisation.md §10, "Outcome"):
    sources-only charge-and-gradient interface, Kathleen as the gate machine.
 6. Whether C6.5 proceeds past its spike (T10). Its stop rule is signed off (a model first;
    the spike only for 1.25× over Batched and Rotation; optimisation.md §8.2); the decision
-   itself is T10's.
+   itself is T10's. **Signed off by the user on 2026-10-18: C6.5 proceeds**, as T10's
+   report recommends (`spikes/plane-wave/SPIKE_REPORT.md` §9): the model and the spike both
+   show the margin (2.2–9.8× the faster of Batched and Rotation at f64 p ≥ 8 on the M3 Max
+   and locust; on Kathleen 1.14–1.44× at p = 8 against the AVX-512 kernel, 3.6–12.5× at
+   p ≥ 12); the plane-wave M2L becomes an opt-in host strategy with its own error budget in
+   a new task, T13; the device after it, if its host results justify one.
 7. The defaults at the end (T11): the M2L strategy rule with C6.6, the FMA mode and C6.9,
    the leaf size per p, and any one-rank output change that follows.
 8. The device defaults of C6.1 (T7; **signed off by the user on 2026-10-17** with T7's
@@ -386,6 +400,8 @@ In the repository root, start `claude` and say:
 - [x] T8d merged: the dipole kinds on the device (C6.4, device part)
 - [x] T9 merged: FMM3D comparison (C6.8)
 - [ ] T10 merged: plane-wave spike; C6.5 adopted or dropped (decision 6)
+- [x] Decision 6 signed off (2026-10-18): C6.5 proceeds, built in T13
+- [ ] T13 merged: plane-wave M2L as an opt-in host strategy (C6.5)
 - [ ] T12 merged: M2P and P2L only where they pay (C6.9), or dropped by measurement
 - [ ] T11 merged: final benchmarks; defaults signed off (decision 7)
 - [ ] Design documents updated: laplace-fmm-plan §4, §6, §7 (Phase 6 status and numbers), §8.3, §9.1, §9.2; simd-p2p.md §4.7; device-path.md (outcome section); workspace-structure §3, §6
