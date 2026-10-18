@@ -383,7 +383,7 @@ In the repository root, start `claude` and say:
 - [x] T6 merged: AVX-512 P2P, measured on Kathleen (C6.7), or recorded as waiting for AVX-512 hardware (Kathleen unusable)
 - [x] T7 merged: fused gather and device GEMM work, adopted or dropped (C6.1)
 - [x] T8 merged: dipole sources (C6.4)
-- [ ] T8d merged: the dipole kinds on the device (C6.4, device part)
+- [x] T8d merged: the dipole kinds on the device (C6.4, device part)
 - [ ] T9 merged: FMM3D comparison (C6.8)
 - [ ] T10 merged: plane-wave spike; C6.5 adopted or dropped (decision 6)
 - [ ] T12 merged: M2P and P2L only where they pay (C6.9), or dropped by measurement
