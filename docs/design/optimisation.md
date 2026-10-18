@@ -1004,6 +1004,39 @@ d̂ = d / r_s in the chunk. What was built (`fmm-validate/results/phase6-dipoles
   P2M and P2L are indicated**; the user made them a follow-up task, T8d (2026-10-17;
   docs/phase6/T8d-dipoles-device.md).
 
+**As built in T8d** (`fmm-validate/results/phase6-dipoles.md`, "Phase 6 T8d"): the dipole
+kinds on the device, in the order of the brief.
+
+- **The source store with strengths.** The device's source store holds the chunks of 6 or 7
+  values per point with the strengths; an evaluation uploads w = 3 or 4 values per source
+  once (`DataKind::Charges`, the strength slots of `charge_slots` generalised), the moments
+  scaled into their leaf's units on the host's pool first, with the charge load's bits; the
+  transfer formula of `tests/device_common` takes w N_s s bytes.
+- **P2P** (`nd_fmm_kernels::p2p`, every layout): separate dipole kernels with the tiles,
+  rows and order of the charge kernels, which do not change; per source leaf its charges
+  (the charge formulation) and then its moments, ŷ by an explicit fma and r̂ d̂ exact, the
+  terms of simd-p2p.md §4.8 with fmas (never r⁻⁵). Contract (CONVENTIONS §3.13, "Device
+  kernels", "Dipoles", a §3.13 addition of this task): the host kernel's 32 u_T and
+  176 u_T, where subnormals flush for d_t = 0 or |d_t| r ≥ 2⁻⁹⁶ (|d̂| ≥ 2⁻⁵⁵ on the f32
+  range). No fused charge-and-dipole kernel: the two stages per leaf keep the host's order.
+  On Metal (p = 3, the cube at N = 10⁶) the P2P of charges and dipoles took 10.2–10.4 ms
+  against 6.2–6.3 ms for dipoles and 5.1–5.2 ms for charges; by the operation counts of
+  simd-p2p.md §4.2 and §4.8 (*model*) a fused kernel would save at most the charge stage's
+  distance and ρ, about half of its 5 ms, some 7 % of a charge-and-dipole evaluation, so it
+  was not built.
+- **P2M and P2L** (`nd_fmm_kernels::leaf`, both layouts): comptime flags in the existing
+  kernels, the gradient `ladder` contracted with d̂ per slot as `nd_fmm_ref::leaf::
+  {p2m_dipoles, p2l_dipoles}` (P2L with the harmonics to p + 1 and d̂ · 2^(l_t − l_s)).
+- **Placement**: the forced fallback (`SOURCE_KINDS`) is gone; `host_fallback` keeps any
+  kind on the host, bit for bit the host path as before. With dipoles the P2P layout under
+  `Auto` is the static rule (the tuning cache's P2P decisions are the charge kernel's).
+- **Cost on Metal** (N = 10⁶ cube, f32, gradients): a dipole evaluation is 1.07–1.23× a
+  charge evaluation (charges and dipoles 1.21–1.64×) with one host thread or twelve, against
+  15–28× and 2.4–4.3× with T8's fallback (reproduced by the same binary); P2M, P2L and P2P
+  are 11–25 % of a dipole evaluation (charges 10–24 %). P2P alone on the device (P2M and P2L
+  on the fallback) left 3.9–8.5× with one thread. CUDA: every correctness check passed on
+  locust; no timing was taken (the H100 was in use by another user throughout).
+
 ## 8. FMM3D (C6.8) and plane waves (C6.5)
 
 ### 8.1 The FMM3D comparison (T9)

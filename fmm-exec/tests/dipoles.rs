@@ -23,18 +23,29 @@
 //! the Plummer sphere, at most twice the cube's error at the same source type, precision
 //! and p (the C3.3 rule). Every case is measured and printed before the gates are checked.
 //!
+//! With every kind on the device (Phase 6 T8d): with a device feature each case is repeated
+//! on the device backends compiled in, the CPU runtime in f64, Metal in f32 and CUDA in
+//! both, every kind on the device (the default placement), and checked against the host run
+//! of the same case with the device-against-host bounds of docs/phase4/README.md ("Accuracy
+//! measures", FMM): the device's error within 0.1% (f64) and 5% (f32) of the host's, and
+//! the device's φ within 1e-12 (f64) and 1e-5 (f32) of the host's (relative L2 over every
+//! target, reduced over the ranks, the root mean square over the vectors). The device runs
+//! with as many threads as the machine has cores (the CPU runtime's units per cube).
+//!
 //! Its own executable, because it initialises MPI; ignored, because it needs release mode:
 //!
 //! ```text
 //! RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --release --test dipoles -- --ignored --nocapture
 //! mpirun -n 2 target/release/deps/dipoles-<hash> --ignored --nocapture   # and -n 4
+//! RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features cpu --release --test dipoles -- \
+//!     --ignored --nocapture                                               # and metal, cuda
 //! ```
 
 use mpi::Threading;
 use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
-use nd_fmm_exec::fmm::{FmmBuilder, SourceType, Sources};
+use nd_fmm_exec::fmm::{Backend, FmmBuilder, SourceType, Sources};
 use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_math::RealScalar;
 use nd_fmm_ref::p2p::{direct_sum, direct_sum_dipoles};
@@ -158,17 +169,38 @@ fn builder<T>(name: &str, p: usize, kind: SourceType) -> FmmBuilder<T> {
     }
 }
 
-/// One measured case.
+/// One measured case: on the host, or on a device backend (Phase 6 T8d) with its φ's
+/// difference from the host's.
 struct Case {
     name: &'static str,
     kind: SourceType,
     precision: &'static str,
     p: usize,
+    backend: Backend,
     error: f64,
+    difference: f64,
+}
+
+/// The device backends compiled in that run the gate in `precision` (Phase 6 T8d): the CPU
+/// runtime in f64, Metal in f32, CUDA in both.
+fn device_backends(precision: &str) -> Vec<Backend> {
+    let mut backends = Vec::new();
+    if precision == "f64" && Backend::Cpu.is_compiled() {
+        backends.push(Backend::Cpu);
+    }
+    if precision == "f32" && Backend::Metal.is_compiled() {
+        backends.push(Backend::Metal);
+    }
+    if Backend::Cuda.is_compiled() {
+        backends.push(Backend::Cuda);
+    }
+    backends
 }
 
 /// The root mean square error of φ at the sampled targets over the vectors, for the FMM
-/// of `name` with `kind` at degree p in T.
+/// of `name` with `kind` at degree p in T on the host; and the same on each of `devices`
+/// with the root mean square over the vectors of the relative L2 difference of its φ from
+/// the host's over every target.
 #[allow(clippy::too_many_arguments)]
 fn measure<T: Stored + SimdScalar + Equivalence + Default>(
     name: &str,
@@ -178,13 +210,37 @@ fn measure<T: Stored + SimdScalar + Equivalence + Default>(
     vectors: &[(Vec<f64>, Vec<[f64; 3]>)],
     exact: &[Vec<f64>],
     sampled: &[(usize, usize)],
-    comm: &SimpleCommunicator,
-) -> f64 {
+    (devices, comm): (&[Backend], &SimpleCommunicator),
+) -> (f64, Vec<(Backend, f64, f64)>) {
     let mine: Vec<[f64; 3]> = local.iter().map(|&i| points[i]).collect();
     let mut fmm = builder::<T>(name, p, kind)
         .build(&mine, &mine, comm)
         .unwrap_or_else(|error| panic!("{name}, {kind}, p = {p}: {error}"));
+    let threads = std::thread::available_parallelism().map_or(1, usize::from);
+    let mut on_devices: Vec<_> = devices
+        .iter()
+        .map(|&backend| {
+            let fmm = builder::<T>(name, p, kind)
+                .backend(backend)
+                .threads(threads)
+                .build(&mine, &mine, comm)
+                .unwrap_or_else(|error| panic!("{backend}, {name}, {kind}, p = {p}: {error}"));
+            (backend, fmm)
+        })
+        .collect();
+    let error = |output: &[T], exact: &[f64]| -> f64 {
+        let mut sums = [0.0f64; 2];
+        for (&(position, _), e) in sampled.iter().zip(exact) {
+            let phi = RealScalar::to_f64(output[position]);
+            sums[0] += (phi - e).powi(2);
+            sums[1] += e * e;
+        }
+        let mut total = [0.0f64; 2];
+        comm.all_reduce_into(&sums[..], &mut total[..], SystemOperation::sum());
+        total[0] / total[1]
+    };
     let mut squares = 0.0;
+    let mut device_squares = vec![(0.0, 0.0); devices.len()];
     for ((charges, dipoles), exact) in vectors.iter().zip(exact) {
         let q: Vec<T> = local.iter().map(|&i| T::from_f64(charges[i])).collect();
         let d: Vec<[T; 3]> = local.iter().map(|&i| dipoles[i].map(T::from_f64)).collect();
@@ -193,17 +249,30 @@ fn measure<T: Stored + SimdScalar + Equivalence + Default>(
             _ => Sources::charges_and_dipoles(&q, &d),
         };
         let output = fmm.evaluate_sources(&sources).expect("the FMM evaluates");
-        let mut sums = [0.0f64; 2];
-        for (&(position, _), e) in sampled.iter().zip(exact) {
-            let phi = RealScalar::to_f64(output.potential[position]);
-            sums[0] += (phi - e).powi(2);
-            sums[1] += e * e;
+        squares += error(&output.potential, exact);
+        for ((backend, device), squares) in on_devices.iter_mut().zip(&mut device_squares) {
+            let got = device
+                .evaluate_sources(&sources)
+                .unwrap_or_else(|error| panic!("{backend}: the device evaluates: {error}"));
+            squares.0 += error(&got.potential, exact);
+            let mut sums = [0.0f64; 2];
+            for (&g, &h) in got.potential.iter().zip(&output.potential) {
+                let (g, h) = (RealScalar::to_f64(g), RealScalar::to_f64(h));
+                sums[0] += (g - h).powi(2);
+                sums[1] += h * h;
+            }
+            let mut total = [0.0f64; 2];
+            comm.all_reduce_into(&sums[..], &mut total[..], SystemOperation::sum());
+            squares.1 += total[0] / total[1];
         }
-        let mut total = [0.0f64; 2];
-        comm.all_reduce_into(&sums[..], &mut total[..], SystemOperation::sum());
-        squares += total[0] / total[1];
     }
-    (squares / vectors.len() as f64).sqrt()
+    let count = vectors.len() as f64;
+    let on_devices = devices
+        .iter()
+        .zip(device_squares)
+        .map(|(&backend, (e, d))| (backend, (e / count).sqrt(), (d / count).sqrt()))
+        .collect();
+    ((squares / count).sqrt(), on_devices)
 }
 
 #[test]
@@ -260,10 +329,12 @@ fn dipole_fmm_within_its_gates() {
                         continue;
                     }
                     let data = (&points[..], &local[..]);
-                    let error = if precision == "f64" {
-                        measure::<f64>(name, kind, p, data, &vectors, &exact, &sampled, &comm)
+                    let devices = device_backends(precision);
+                    let on = (&devices[..], &comm);
+                    let (error, on_devices) = if precision == "f64" {
+                        measure::<f64>(name, kind, p, data, &vectors, &exact, &sampled, on)
                     } else {
-                        measure::<f32>(name, kind, p, data, &vectors, &exact, &sampled, &comm)
+                        measure::<f32>(name, kind, p, data, &vectors, &exact, &sampled, on)
                     };
                     if rank == 0 {
                         eprintln!(
@@ -272,20 +343,76 @@ fn dipole_fmm_within_its_gates() {
                              prediction {prediction:.2e}, ratio {:.2}",
                             error / prediction
                         );
+                        for &(backend, device, difference) in &on_devices {
+                            eprintln!(
+                                "  {backend}, every kind on the device: error {device:.3e} \
+                                 ({:.4} of the host's), φ {difference:.1e} from the host's",
+                                device / error
+                            );
+                        }
                     }
                     cases.push(Case {
                         name,
                         kind,
                         precision,
                         p,
+                        backend: Backend::Host,
                         error,
+                        difference: 0.0,
                     });
+                    for (backend, device, difference) in on_devices {
+                        cases.push(Case {
+                            name,
+                            kind,
+                            precision,
+                            p,
+                            backend,
+                            error: device,
+                            difference,
+                        });
+                    }
                 }
             }
         }
     }
     let mut failures = Vec::new();
     for case in &cases {
+        if case.backend != Backend::Host {
+            // The device-against-host bounds of docs/phase4/README.md (Phase 6 T8d).
+            let host = cases
+                .iter()
+                .find(|c| {
+                    c.backend == Backend::Host
+                        && c.name == case.name
+                        && c.kind == case.kind
+                        && c.precision == case.precision
+                        && c.p == case.p
+                })
+                .expect("the host case");
+            let (error_bound, difference_bound) = if case.precision == "f64" {
+                (1e-3, 1e-12)
+            } else {
+                (5e-2, 1e-5)
+            };
+            if (case.error - host.error).abs() > error_bound * host.error
+                || case.difference > difference_bound
+            {
+                failures.push(format!(
+                    "{}, {}, {}, {}, p = {}: error {:e} against the host's {:e} (within {} of \
+                     it), φ {:e} from the host's (bound {difference_bound:e})",
+                    case.backend,
+                    case.name,
+                    case.kind,
+                    case.precision,
+                    case.p,
+                    case.error,
+                    host.error,
+                    error_bound,
+                    case.difference
+                ));
+            }
+            continue;
+        }
         let (_, rows) = PREDICTION.iter().find(|(k, _)| *k == case.kind).unwrap();
         let &(_, p64, p32) = rows.iter().find(|r| r.0 == case.p).unwrap();
         let prediction = if case.precision == "f64" { p64 } else { p32 };
@@ -296,6 +423,7 @@ fn dipole_fmm_within_its_gates() {
                 .iter()
                 .find(|c| {
                     c.name == "cube"
+                        && c.backend == Backend::Host
                         && c.kind == case.kind
                         && c.precision == case.precision
                         && c.p == case.p

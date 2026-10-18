@@ -31,7 +31,7 @@
 //! | Data | On the device | Uploaded | Downloaded |
 //! | --- | --- | --- | --- |
 //! | multipoles, locals | one buffer each, the `LevelBuffers` layout, ghost boxes included | never (zeroed by a kernel), but on several ranks the received ghost multipoles and those of the replicated top, packed | never, but by host-fallback calls and on several ranks the sent multipoles, packed |
-//! | source store | the `LeafStore` layout of CONVENTIONS §3.13, every leaf of the numbering (the ghost leaves last) | coordinates once at build; the charges every evaluation, scattered into their slots; on several ranks the ghost tail every evaluation | never |
+//! | source store | the `LeafStore` layout of CONVENTIONS §3.13, every leaf of the numbering (the ghost leaves last) | coordinates once at build; the charges (with dipoles the strengths, Phase 6 T8d) every evaluation, scattered into their slots; on several ranks the ghost tail every evaluation | never |
 //! | target input | the `LeafStore` layout | once at build | never |
 //! | target output | the `LeafStore` layout | never (zeroed) | once per evaluation (without the output pass on the device), and by host-fallback calls |
 //! | output order (Phase 4S T9) | with the output pass on the device: every target's point in leaf order and leaf, the leaves' offsets (u32) and scales (f64), [`OutputOrder`] | once at build | never |
@@ -425,7 +425,7 @@
 //!   vectors along z (`SourceInputs::vectors`, `TargetInputs::vectors`,
 //!   `P2pInputs::vectors`): the cube at z = v runs the one-vector kernel on vector v's
 //!   charges or expansions and outputs (the harmonics and distances formed per vector);
-//! - **the charges** are uploaded once, m per source (`charge_slots` with m), and the
+//! - **the charges** are uploaded once, m per source (`strength_slots` with m), and the
 //!   output downloaded once, o m per target; with the output pass on the device
 //!   `gather_output` makes the m vectors' outputs one after the other;
 //! - **the exchanges** gather and scatter one column of m (p + 1)² values per box, the
@@ -437,20 +437,30 @@
 //! §14). [`DeviceReport::vectors`] names m, [`TranslationReport::pairs`] counts m pairs per
 //! pair of the plan.
 //!
-//! # Dipoles (Phase 6 T8)
+//! # Dipoles (Phase 6 T8, T8d)
 //!
-//! With dipole sources (`FmmBuilder::sources`, C6.4; docs/design/optimisation.md §7.4)
-//! P2M, P2L and P2P, the kinds that read the source chunks, run on the host fallback
-//! whatever `host_fallback` names, and [`DeviceReport::placement`] says so; the far field,
-//! L2P and M2P stay on the device. The host holds the strengths (the charge load scales
-//! the moments, as on the host path), so the device's source store keeps the chunk layout
-//! of 6 or 7 values per point for the ghost upload but takes no strengths: an evaluation
-//! uploads nothing at `begin_evaluation`, and the host fallback's transfers carry the
-//! expansions and outputs of those kinds as for charges. With every kind on the fallback
-//! the output is the host path's bit for bit. T8 measured the fallback above the 20 % of a
-//! device evaluation at which §7.4 calls for device kernels
-//! (`fmm-validate/results/phase6-dipoles.md`); they are Phase 6 T8d's
-//! (docs/phase6/T8d-dipoles-device.md).
+//! With dipole sources (`FmmBuilder::sources`, C6.4; docs/design/optimisation.md §7.4,
+//! §7.5) P2M, P2L and P2P, the kinds that read the source chunks, run the dipole kernels of
+//! `nd-fmm-kernels` (Phase 6 T8d; `SourceKind`, the host's `SourceType`): P2P
+//! `nd_fmm_kernels::p2p` with the moments' terms after each source leaf's charges, P2M and
+//! P2L `nd_fmm_kernels::leaf` with the gradient ladders (CONVENTIONS §3.13, "Device
+//! kernels", "Dipoles"). Phase 6 T8 ran them on the host fallback; T8 measured it at
+//! 55–97 % of a device evaluation on Metal (`fmm-validate/results/phase6-dipoles.md`).
+//!
+//! - **The source store** holds the chunk layout of 6 or 7 values per point with the
+//!   strengths: [`begin_evaluation`](DeviceOperator::begin_evaluation) uploads w = 3 or 4
+//!   values per local source (its charge, if any, then its moment in units of its leaf, as
+//!   the host's charge load scales it: `Fmm` scales the forwarded moments on the host before
+//!   the upload) and scatters them by the strength slots ([`DeviceViews::charge_slots`]):
+//!   one upload of w N_s s bytes and one launch, as for charges with w = m.
+//! - **Placement**: every kind on the device by default; `host_fallback` keeps a kind on the
+//!   host, and with every kind there the output is the host path's bit for bit (the device
+//!   still takes the strengths, as it takes the charges).
+//! - **Layouts**: the P2P layout under `DeviceP2pLayout::Auto` is the static rule with
+//!   dipoles, never a tuned or cached one (the tuning cache's P2P decisions are the charge
+//!   kernel's); a named layout is checked for the dipole tile (6 values per source,
+//!   `P2pLayout::check_sources`).
+//! - **Several ranks**: unchanged; the ghost tail carries 6 or 7 values per point.
 //!
 //! # Several ranks (Phase 5 T8)
 //!
@@ -600,7 +610,7 @@ use nd_fmm_kernels::view::{
 pub use nd_fmm_kernels::view::{CsrImage, GroupedImage};
 use nd_fmm_kernels::{
     BackendKind, Device, DeviceBuffer, DeviceElement, DeviceFloat, DeviceSlice, DeviceSliceMut,
-    HostValues, IndexBuffer, KernelError, TimingWindow, WindowTime,
+    HostValues, IndexBuffer, KernelError, SourceKind, TimingWindow, WindowTime,
 };
 pub use nd_fmm_kernels::{Counters, DeviceInfo};
 use nd_fmm_plan::exchange::{MultipoleExchange, ReductionExchange, TopExchange};
@@ -706,7 +716,7 @@ pub enum DataKind {
     Geometry,
     /// The translation tables: once per build.
     Tables,
-    /// The charges: once per evaluation.
+    /// The charges (with dipoles the strengths, Phase 6 T8d): once per evaluation.
     Charges,
     /// The target output: once per evaluation.
     Output,
@@ -1526,9 +1536,15 @@ const DEVICE_KINDS: [OperatorKind; 8] = [
     OperatorKind::P2p,
 ];
 
-/// The kinds that read the source chunks, which run on the host fallback with dipoles
-/// (Phase 6 T8; module documentation, "Dipoles").
-const SOURCE_KINDS: [OperatorKind; 3] = [OperatorKind::P2m, OperatorKind::P2l, OperatorKind::P2p];
+/// The strengths of the device's source store for the host's source type (Phase 6 T8d;
+/// module documentation, "Dipoles").
+fn source_kind(sources: SourceType) -> SourceKind {
+    match sources {
+        SourceType::Charges => SourceKind::Charges,
+        SourceType::Dipoles => SourceKind::Dipoles,
+        SourceType::ChargesAndDipoles => SourceKind::ChargesAndDipoles,
+    }
+}
 
 /// The leaf operators among them (T7).
 const LEAF_KINDS: [OperatorKind; 4] = [
@@ -1606,8 +1622,9 @@ impl DeviceViews {
         &self.target_offsets
     }
 
-    /// The position in the source store of every charge, in leaf order (CONVENTIONS
-    /// §3.13, "Source chunks"): the targets of the charge scatter.
+    /// The position in the source store of every strength, in leaf order, the w strengths
+    /// of a source together (m charges, or with dipoles its charge and moment components;
+    /// CONVENTIONS §3.13, "Source chunks"): the targets of the charge scatter.
     pub fn charge_slots(&self) -> &IndexBuffer {
         &self.charge_slots
     }
@@ -1688,7 +1705,7 @@ pub struct ViewsImage {
     pub source_offsets: Vec<u32>,
     /// The point offsets of the target input and output.
     pub target_offsets: Vec<u32>,
-    /// The position of every charge in the source store.
+    /// The position of every strength (charge or moment component) in the source store.
     pub charge_slots: Vec<u32>,
 }
 
@@ -1998,23 +2015,44 @@ fn point_offsets(counts: &[usize]) -> Result<Vec<u32>, KernelError> {
     Ok(offsets)
 }
 
-/// The position of every charge in a source store with `counts` points per leaf and
-/// 3 + m values per point (m = `vectors`), in leaf order, the m charges of a point
-/// together: leaf j's charge v of point k at (3 + m) P_j + 3 n_j + m k + v (CONVENTIONS
-/// §3.13, "Source chunks" and "Several charge vectors").
-fn charge_slots(counts: &[usize], vectors: usize) -> Result<Vec<u32>, KernelError> {
+/// The position of every strength in a source store with `counts` points per leaf and the
+/// strengths of `kind` (m = `vectors` charges, a moment, or a charge and a moment per
+/// point; CONVENTIONS §3.13, "Source chunks" and "Several charge vectors"), in the order of
+/// the evaluation's upload: leaf order, the w strengths of a point together (its charges,
+/// or its charge and then its moment). With s values per point and P_j the first point of
+/// leaf j: charge v of point k at s P_j + 3 n_j + m k + v; with dipoles (m = 1) moment
+/// component c of point k at s P_j + 3 n_j + q n_j + 3 k + c, q = 1 with charges and 0
+/// without, and its charge at s P_j + 3 n_j + k.
+fn strength_slots(
+    counts: &[usize],
+    kind: SourceKind,
+    vectors: usize,
+) -> Result<Vec<u32>, KernelError> {
     let total: usize = counts.iter().sum();
-    let mut slots = Vec::with_capacity(vectors * total);
+    let size = kind.point_size(vectors);
+    let charges = if kind.has_charges() { vectors } else { 0 };
+    let strengths = size - 3;
+    let mut slots = Vec::with_capacity(strengths * total);
+    let slot = |at: usize| {
+        u32::try_from(at).map_err(|_| KernelError::TooLarge {
+            what: "source store",
+            len: size * total,
+        })
+    };
     let mut start = 0usize;
     for &n in counts {
         let first = start + 3 * n;
-        for k in 0..vectors * n {
-            slots.push(u32::try_from(first + k).map_err(|_| KernelError::TooLarge {
-                what: "source store",
-                len: (3 + vectors) * total,
-            })?);
+        for k in 0..n {
+            for v in 0..charges {
+                slots.push(slot(first + charges * k + v)?);
+            }
+            if kind.has_dipoles() {
+                for c in 0..3 {
+                    slots.push(slot(first + charges * n + 3 * k + c)?);
+                }
+            }
         }
-        start += (3 + vectors) * n;
+        start += size * n;
     }
     Ok(slots)
 }
@@ -2519,11 +2557,12 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         // o = m or 4 m per target.
         let m = host.vectors();
         let o = host.target_output_point_size();
-        // Values per source point: 3 + m with charges; with dipoles 6 or 7, and then no
-        // strengths on the device, whose source kinds run on the host (Phase 6 T8; module
+        // Values per source point: 3 + m with charges, 6 or 7 with dipoles (Phase 6 T8);
+        // the strengths per source an evaluation uploads, m or 3 or 4 (T8d; module
         // documentation, "Dipoles").
         let sps = host.source_point_size();
-        let dipoles = host.sources() != SourceType::Charges;
+        let kind = source_kind(host.sources());
+        let strengths = sps - 3;
         let strategy = host.tables().strategy();
         let columns = ColumnViews::new(plan, m);
 
@@ -2563,13 +2602,6 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         for kind in DEVICE_KINDS {
             if !options.host_fallback.contains(&kind) {
                 placement[kind as usize] = Placement::Device;
-            }
-        }
-        // With dipoles the kinds that read sources run on the host fallback (Phase 6 T8,
-        // docs/design/optimisation.md §7.4; module documentation, "Dipoles").
-        if dipoles {
-            for kind in SOURCE_KINDS {
-                placement[kind as usize] = Placement::Host;
             }
         }
         let on_device = |kind: OperatorKind| placement[kind as usize] == Placement::Device;
@@ -2756,7 +2788,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             source_counts[..nlocal].iter().sum(),
             source_counts.iter().sum(),
         );
-        let nstrengths = if dipoles { 0 } else { m * nsources };
+        let nstrengths = strengths * nsources;
         let ntargets: usize = target_counts.iter().sum();
         let nleaves = leaves.len();
         // The first box of each level in the multipole buffer (m n values per box on every
@@ -2850,7 +2882,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             + view_bytes(plan, &columns)
             + Device::buffer_bytes::<u32>(nleaves + 1)
             + Device::buffer_bytes::<u32>(leaves.nlocal() + 1)
-            + Device::buffer_bytes::<u32>(m * nsources)
+            + Device::buffer_bytes::<u32>(nstrengths)
             + Device::buffer_bytes::<u32>(3 * nboxes)
             + Device::buffer_bytes::<u32>(4 * nleaves)
             + tables_report.iter().map(|t| t.bytes).sum::<u64>()
@@ -2932,11 +2964,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         }
         let source_offsets = point_offsets(source_counts).map_err(device_error)?;
         let target_offsets = point_offsets(target_counts).map_err(device_error)?;
-        let slots = if dipoles {
-            Vec::new()
-        } else {
-            charge_slots(&source_counts[..nlocal], m).map_err(device_error)?
-        };
+        let slots = strength_slots(&source_counts[..nlocal], kind, m).map_err(device_error)?;
         let box_indices: Vec<Vec<[u32; 3]>> = (0..nlevels)
             .map(|l| index.keys(l).iter().map(|&key| key_index(key).1).collect())
             .collect();
@@ -3105,7 +3133,10 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             })
             .collect();
         let mean_points = (nsources + ntargets).div_ceil(2 * leaves.nlocal().max(1));
+        // With dipoles the static rule: the tuning cache's P2P decisions are the charge
+        // kernel's (Phase 6 T8d; module documentation, "Dipoles").
         let p2p_layout = match options.p2p_layout {
+            DeviceP2pLayout::Auto if kind.has_dipoles() => static_p2p(link.device.info()),
             DeviceP2pLayout::Auto => tuner
                 .cached(Decision::P2p {
                     bucket: bucket(mean_points),
@@ -3115,7 +3146,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             layout => layout.resolve(link.device.info()),
         };
         p2p_layout
-            .check(link.device.info(), T::FLOAT)
+            .check_sources(link.device.info(), T::FLOAT, kind)
             .map_err(device_error)?;
         let leaf_layout = options.leaf_layout.resolve::<T>(link.device.info(), p);
         if LEAF_KINDS
@@ -3605,6 +3636,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             .map(|(level, (leaves, pairs))| (level, leaves.clone(), *pairs));
         if self.placement(OperatorKind::P2p) == Placement::Device
             && self.options.p2p_layout == DeviceP2pLayout::Auto
+            && self.host.sources() == SourceType::Charges
             && let Some((level, leaves, pairs)) = best
         {
             tuner.start_phase();
@@ -3644,8 +3676,9 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         layout: P2pLayout,
         deadline: Instant,
     ) -> Result<Duration, Rejection> {
+        let kind = source_kind(self.host.sources());
         layout
-            .check(self.link.device.info(), T::FLOAT)
+            .check_sources(self.link.device.info(), T::FLOAT, kind)
             .map_err(|e| Rejection::Unregistered(e.to_string()))?;
         let gradients = self.host.gradients();
         let Self {
@@ -3663,6 +3696,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             target_offsets: &views.target_offsets,
             target_input: stores.target_input.as_slice(),
             vectors: self.host.vectors(),
+            source_kind: source_kind(self.host.sources()),
         };
         let output = &mut stores.target_output;
         time_launches(&mut link.device, deadline, |d| {
@@ -3696,31 +3730,26 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         }
     }
 
-    /// Loads the charges of an evaluation, after the evaluator's `reset` (which zeroed the
-    /// device stores, [`HostData::Reset`]): uploads `charges` (one per local source, in
-    /// leaf order: the k-th source of the local leaves in leaf order has the k-th charge)
-    /// and scatters them into their slots of the source store. One launch and one upload,
-    /// no sync; the upload takes `charges` without a copy (`Device::write_owned`, Phase 4S
-    /// T11). With [`StageTiming::DeviceTimestamps`] it closes the timing window of
-    /// [`DeviceStage::Load`], which the reset opened.
+    /// Loads the strengths of an evaluation, after the evaluator's `reset` (which zeroed
+    /// the device stores, [`HostData::Reset`]): uploads `charges` (w per local source, in
+    /// leaf order: the k-th source of the local leaves in leaf order has the k-th w
+    /// values; w = m charges, or with dipoles its moment d̂ in units of its leaf, after its
+    /// charge if it has one, Phase 6 T8d) and scatters them into their slots of the source
+    /// store. One launch and one upload, no sync; the upload takes `charges` without a copy
+    /// (`Device::write_owned`, Phase 4S T11). With [`StageTiming::DeviceTimestamps`] it
+    /// closes the timing window of [`DeviceStage::Load`], which the reset opened.
     ///
     /// A failure is kept and returned by [`read_output`](Self::read_output).
     ///
     /// # Panics
     ///
-    /// If `charges` does not hold one value per local source.
+    /// If `charges` does not hold w values per local source.
     pub fn begin_evaluation(&mut self, charges: Vec<T>) {
         assert_eq!(
             charges.len(),
             self.stores.charges.len(),
-            "one charge per source"
+            "the strengths of every local source"
         );
-        if self.host.sources() != SourceType::Charges {
-            // Dipoles: the kinds that read sources run on the host, which holds the
-            // strengths (Phase 6 T8); nothing to upload.
-            self.close_stage(DeviceStage::Load);
-            return;
-        }
         let (stores, views) = (&mut self.stores, &self.views);
         self.link.run(DataKind::Charges, |d| {
             d.write_owned(stores.charges.as_slice_mut(), charges)
@@ -4449,6 +4478,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             source_offsets: &views.source_offsets,
             sources: self.stores.sources.as_slice(),
             vectors: self.host.vectors(),
+            source_kind: source_kind(self.host.sources()),
         };
         let (layout, p) = (self.leaf_layout, self.host.p());
         let out = if irregular {
@@ -4740,6 +4770,7 @@ impl<T: DeviceScalar> FmmOperator for DeviceOperator<T> {
                 target_offsets: &views.target_offsets,
                 target_input: self.stores.target_input.as_slice(),
                 vectors: self.host.vectors(),
+                source_kind: source_kind(self.host.sources()),
             };
             let (layout, gradients) = (self.p2p_layout, self.host.gradients());
             let output = &mut self.stores.target_output;
@@ -5212,16 +5243,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn charge_slots_follow_the_source_chunks() {
+    fn strength_slots_follow_the_source_chunks() {
+        let charges = |counts: &[usize], m| strength_slots(counts, SourceKind::Charges, m);
         // Leaves of 2, 0 and 3 points: chunks of 8, 0 and 12 values.
-        assert_eq!(charge_slots(&[2, 0, 3], 1).unwrap(), vec![6, 7, 17, 18, 19]);
+        assert_eq!(charges(&[2, 0, 3], 1).unwrap(), vec![6, 7, 17, 18, 19]);
         assert_eq!(point_offsets(&[2, 0, 3]).unwrap(), vec![0, 2, 2, 5]);
-        assert!(charge_slots(&[], 1).unwrap().is_empty());
+        assert!(charges(&[], 1).unwrap().is_empty());
         // Two vectors (Phase 6 T5): chunks of 10, 0 and 15 values, the two charges of a
         // point together after the coordinates.
         assert_eq!(
-            charge_slots(&[2, 0, 3], 2).unwrap(),
+            charges(&[2, 0, 3], 2).unwrap(),
             vec![6, 7, 8, 9, 19, 20, 21, 22, 23, 24]
+        );
+        // Dipoles (Phase 6 T8d): chunks of 12 and 18 values, the three components of a
+        // moment together after the coordinates.
+        assert_eq!(
+            strength_slots(&[2, 3], SourceKind::Dipoles, 1).unwrap(),
+            vec![6, 7, 8, 9, 10, 11, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+        );
+        // Charges and dipoles: chunks of 14 and 21 values; per point its charge, then its
+        // moment, the charges of a leaf before its moments.
+        assert_eq!(
+            strength_slots(&[2, 3], SourceKind::ChargesAndDipoles, 1).unwrap(),
+            vec![
+                6, 8, 9, 10, 7, 11, 12, 13, 23, 26, 27, 28, 24, 29, 30, 31, 25, 32, 33, 34
+            ]
         );
     }
 

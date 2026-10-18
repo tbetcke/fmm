@@ -223,8 +223,9 @@
 //!   and overlapped bit for bit; `P2pChoice::Reference` within the tolerance of an ISA;
 //!   f32 within 1e-4 of f64 (relative L2); on several ranks the one-rank `Fmm` over the
 //!   union bit for bit; with the `gpu` feature the device check of `device_common::
-//!   check_dipoles` (every kind on the fallback bit for bit, the default placement with
-//!   P2M, P2L and P2P on the host within the device bounds). On the cube: charges and
+//!   check_dipoles` (every kind on the fallback bit for bit, every kind on the device,
+//!   Phase 6 T8d, within the device bounds, with the transfers of the formula and the
+//!   overlapped stages bit for bit the blocking ones). On the cube: charges and
 //!   dipoles together equal charges alone plus dipoles alone to 1e-13 (linearity, f64);
 //!   `Sources::charges` on a charge FMM is `evaluate` bit for bit; `evaluate` and a
 //!   mismatched `Sources` on a dipole FMM give `FmmError::SourceType`, a moment slice of
@@ -4824,7 +4825,14 @@ fn dipole_sources(comm: &SimpleCommunicator) {
             );
             #[cfg(feature = "gpu")]
             for backend in device_backends() {
-                device_common::check_dipoles(&builder, &local, &mine, &output, backend, comm);
+                let (potential, gradient) =
+                    device_common::check_dipoles(&builder, &local, &mine, &output, backend, comm);
+                if rank == 0 {
+                    eprintln!(
+                        "rank 0: dipole sources, {name}, {kind}, p = 6, {backend}: every kind on \
+                         the device {potential:.1e} (φ), {gradient:.1e} (∇φ) from the host"
+                    );
+                }
             }
             if rank == 0 {
                 eprintln!(

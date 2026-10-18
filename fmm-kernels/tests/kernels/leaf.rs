@@ -34,7 +34,7 @@ use nd_fmm_kernels::leaf::{
     w_frames, x_frames,
 };
 use nd_fmm_kernels::view::{BoxCoordinates, IndexView, LeafCoordinates, PointOffsets};
-use nd_fmm_kernels::{BackendKind, Device, DeviceBuffer, Precision};
+use nd_fmm_kernels::{BackendKind, Device, DeviceBuffer, Precision, SourceKind};
 use nd_fmm_math::{Layout, RealScalar, harmonics as host};
 use nd_fmm_ref::{Frame, Workspace, leaf as reference};
 
@@ -605,6 +605,7 @@ fn launch_sources<T: Real>(
         source_offsets: &on.source_offsets,
         sources: on.sources.as_slice(),
         vectors: 1,
+        source_kind: SourceKind::Charges,
     };
     let out = on.out.as_slice_mut();
     if irregular {
@@ -1280,6 +1281,7 @@ fn frames(device: &mut Device) {
                 source_offsets: &offsets,
                 sources: sources.as_slice(),
                 vectors: 1,
+                source_kind: SourceKind::Charges,
             };
             let mut out = device.alloc::<T>(4 * en.len()).unwrap();
             x_frames(device, &inputs, out.as_slice_mut()).unwrap();
@@ -1586,6 +1588,7 @@ fn several_vectors(device: &mut Device) {
                     source_offsets: &on.source_offsets,
                     sources: on.sources.as_slice(),
                     vectors: m,
+                    source_kind: SourceKind::Charges,
                 };
                 let out = on.out.as_slice_mut();
                 if irregular {
@@ -1752,6 +1755,7 @@ fn degree_20_sweep(device: &mut Device) {
     p2m_and_l2p_at::<f64>(device, &[20]);
     p2l_at::<f64>(device, &[20]);
     m2p_at::<f64>(device, &[20]);
+    dipoles::expansions_at::<f64>(device, &[20]);
 }
 
 tests_on!(
@@ -1802,3 +1806,5 @@ fn degree_20_sweep_on_the_cpu_runtime() {
 }
 
 const _: fn(&mut Device) = degree_20_sweep;
+
+mod dipoles;

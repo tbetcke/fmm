@@ -237,7 +237,10 @@ case value for value) and `--sources charges|dipoles|charges+dipoles` of the `ac
 example, the dipole predictions of the gate in `nd-fmm-exec`'s `tests/dipoles.rs`; and the
 `dipole_cost` example (not registered; it times): charges, dipoles and both on one tree,
 stage by stage, and on a device the share of the host fallback of P2M, P2L and P2P. Its
-report is `results/phase6-dipoles.md`.
+report is `results/phase6-dipoles.md`. Phase 6 T8d (the dipole kinds on the device) added
+`--dipole-fallback none|p2m,p2l,p2p` (the named kinds on the host fallback for the source
+types with dipoles only), so that one binary measures T8's placement, P2P alone on the
+device and every kind on the device; the report's part "Phase 6 T8d".
 
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test

@@ -37,6 +37,7 @@ use nd_fmm_exec::tune::{
 use nd_fmm_kernels::p2p::P2pLayout;
 use nd_fmm_kernels::translate::{GemmLayout, Orientation};
 use nd_fmm_kernels::{BackendKind, Precision};
+use nd_fmm_math::CONVENTION_VERSION;
 
 #[cfg(feature = "cpu")]
 mod tune_common;
@@ -219,7 +220,7 @@ fn stale_and_corrupt_files_are_rejected() {
     for (field, value) in [
         ("cubecl", "0.10.0".to_owned()),
         ("kernels", "0.0.1".to_owned()),
-        ("convention", "2".to_owned()),
+        ("convention", (CONVENTION_VERSION + 1).to_string()),
         ("candidates", (CANDIDATE_SET_VERSION + 1).to_string()),
         ("format", (FORMAT_VERSION + 1).to_string()),
     ] {

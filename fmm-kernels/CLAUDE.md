@@ -13,7 +13,7 @@ of C4.8 (T11) in docs/phase4/; Phase 4S, C4S.8 (T9) and C4S.10 (T11: transfers w
 host copy) in docs/phase4s/; Phase 5, C5.2's device-resident ghost buffers (T8) in
 docs/phase5/; Phase 6, C6.3 (T5: several charge vectors in the leaf operators, P2P and the
 output gather) and C6.1 (T7: the fused gather, the reduction by chunk and the shared-memory
-GEMM of the grouped translations).
+GEMM of the grouped translations) and C6.4 (T8d: dipole sources in P2P, P2M and P2L).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -88,6 +88,29 @@ GEMM of the grouped translations).
   (`tests/kernels/{p2p,leaf}.rs`, `several_vectors`; `movement.rs`, the gather at 1 and 3
   vectors). The grouped translations and rotation M2L need no change: `nd-fmm-exec` gives
   them views with m columns per box.
+- Dipole sources (Phase 6 T8d, C6.4; `SourceKind`, `P2pInputs::source_kind`,
+  `SourceInputs::source_kind`; CONVENTIONS §3.7, "Dipole sources", and §3.13, "Source
+  chunks" and "Device kernels", "Dipoles"): source stores of 3 + m (charges), 6 (dipoles)
+  or 7 (both) values per point, dipoles with one vector (asserted). P2P with dipoles runs
+  its own kernels (`p2p_dipole_tiled_kernel`, `p2p_dipole_vector_kernel`, every layout; the
+  charge kernels unchanged): per source leaf of a row its charges first (the charge
+  formulation operation for operation) and then its moments, staged as ŷ and r̂ d̂ (exact),
+  φ̂ += s ρ³ by an fma and ĝₖ += ρ³ (dₖ − (3 s) ρ² wₖ) by fmas, never r⁻⁵; the GPU tile holds 6
+  values per source (`P2pLayout::check_sources`). Contract 32 u_T (φ̂) and 176 u_T (ĝ), where
+  subnormals flush for d_t = 0 or |d_t| r ≥ 2⁻⁹⁶. P2M and P2L with dipoles take comptime flags
+  in the existing kernels (the charge path's operations unchanged): the harmonics to degree
+  p (P2L: p + 1), the gradient `ladder`, contracted per slot as `nd_fmm_ref::leaf::
+  {p2m_dipoles, p2l_dipoles}` (`directional`, `stage_dipole`, `add_dipole`), each entry's
+  charges before its moments; P2L takes d̂ · 2^(l_t − l_s). Tests (`tests/kernels/p2p/
+  dipoles.rs`, `tests/kernels/leaf/dipoles.rs`): pair terms, sums against
+  `direct_sum_dipoles`, coincident pairs and domain ends with moments, P2M and P2L against
+  `nd_fmm_ref::leaf` on levels 2, 9 and 16 (p = 20 in the ignored sweep), and bit for bit
+  invariance, determinism and the order (charges and dipoles in one launch equal the
+  charges' launch and then the moments', entry by entry), every layout; with
+  `spikes/device-arith`'s section `dipoles` (the coincident-pair rule on its adversarial
+  pairs with moments). They add 8 runtime tests per backend: the CPU runtime's 83 default
+  tests in 54 s (release, the M3 Max), the ignored p = 20 sweep (with the dipole P2M and
+  P2L) 82 s; on CUDA every test passes (locust).
 - Leaf operators (T7, `leaf`): P2M, P2L, L2P and M2P, one launch per level call, p
   comptime up to `MAX_DEGREE` (20). The harmonics follow `nd_fmm_math::harmonics`
   operation for operation (coefficients formed in the kernel, integers comptime, one

@@ -11,14 +11,14 @@ repository.workspace = true
 # No backend by default: `cargo test -p nd-fmm-spike-device-arith` without features
 # builds no runtime. The smoke test needs `--features cpu`.
 default = []
-cpu = ["cubecl/cpu"]
-metal = ["cubecl/metal"]
+cpu = ["cubecl/cpu", "nd-fmm-kernels/cpu"]
+metal = ["cubecl/metal", "nd-fmm-kernels/metal"]
 # No `metal-native` (`cubecl-metal`, MTLMathMode::Safe): cubecl-metal 0.11.0-pre.4 does not
 # compile (`DebugInformation` is not imported in src/compute/context.rs:139; REPORT.md).
 # Fixed in 0.11.0 (Phase 5S T1s: imported at src/compute/context.rs:6; `cargo check` of
 # cubecl 0.11.0 with `metal-native` passes on the M3 Max); the spike is unchanged.
 # CubeCL's default LLVM NVPTX path; run on locust's H100 (Phase 4S T3, REPORT.md).
-cuda = ["cubecl/cuda"]
+cuda = ["cubecl/cuda", "nd-fmm-kernels/cuda"]
 # CUDA through NVRTC instead (CubeCL's `cuda-cpp`), for the Phase 4S T3 comparison only.
 # Production code stays on LLVM NVPTX (docs/phase4s/README.md, decision 4).
 cuda-cpp = ["cuda", "cubecl/cuda-cpp"]
@@ -26,6 +26,8 @@ cuda-cpp = ["cuda", "cubecl/cuda-cpp"]
 [dependencies]
 cubecl.workspace = true
 nd-fmm-math.workspace = true
+# The production dipole P2P on the §3.13 pairs (Phase 6 T8d, the `dipoles` section).
+nd-fmm-kernels.workspace = true
 nd-fmm-ref.workspace = true
 nd-fmm-tables.workspace = true
 nd-fmm-simd.workspace = true

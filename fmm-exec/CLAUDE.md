@@ -31,8 +31,8 @@ C6.3 (T5: several charge vectors, `FmmBuilder::vectors`, `Fmm::evaluate_many`,
 device's fused gather, reduction by chunk and shared-memory GEMM,
 `FmmBuilder::{device_gather, device_reduction}`, `DeviceGemm::Shared`; design
 docs/design/optimisation.md §6) and C6.4 (T8: dipole sources, `SourceType`,
-`FmmBuilder::sources`, `Sources`, `Fmm::evaluate_sources`; design
-docs/design/optimisation.md §7; report fmm-validate/results/phase6-dipoles.md).
+`FmmBuilder::sources`, `Sources`, `Fmm::evaluate_sources`; T8d: the dipole kinds on the
+device; design docs/design/optimisation.md §7; report fmm-validate/results/phase6-dipoles.md).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -91,17 +91,28 @@ docs/design/optimisation.md §7; report fmm-validate/results/phase6-dipoles.md).
   `evaluate` and `evaluate_many` on a dipole FMM, and a `Sources` that does not match the
   build, give `FmmError::SourceType`, a short moment slice `FmmError::DipolesLength`, agreed
   in the length all-reduce; dipoles with m > 1 are `SettingsError::SourcesWithVectors`. On a
-  device P2M, P2L and P2P run on the host fallback with dipoles (the device module docs,
-  "Dipoles"; `device::SOURCE_KINDS`), the device's source store keeps the chunk layout and
-  takes no strengths (no `DataKind::Charges` traffic). The cost model weighs the charge
-  kernels. `tests/operator/dipoles.rs` checks the operators against `nd_fmm_ref` (C3.1
+  device (Phase 6 T8d; the device module docs, "Dipoles") P2M, P2L and P2P run the dipole
+  kernels of `nd-fmm-kernels` (`SourceKind`; `host_fallback` keeps any kind on the host, bit
+  for bit the host path as before): the device's source store holds the chunk layout with
+  the strengths, one upload of w = 3 or 4 values per source per evaluation
+  (`DataKind::Charges`, scattered by the strength slots, `DeviceViews::charge_slots`), the
+  moments scaled into their leaf's units on the host first (`scale_moments` in `fmm`, the
+  bits of the charge load; the sent leaves' chunks from the scaled upload); the P2P layout
+  under `DeviceP2pLayout::Auto` is the static rule with dipoles (the tuning cache's P2P
+  decisions are the charge kernel's). The cost model weighs the charge kernels. `tests/operator/dipoles.rs` checks the operators against `nd_fmm_ref` (C3.1
   criterion, every P2P kernel); `tests/mpi_exec.rs`, **dipole sources**, the FMM against the
   direct sum, threads, overlap, `Reference`, f32, the one-rank reference, linearity and the
   errors, with the `gpu` feature `device_common::check_dipoles` and `dipole_scenario` (also
-  in `tests/device_metal.rs`, `tests/device_cuda.rs` and `tests/device_ranks.rs`); the
-  ignored `tests/dipoles.rs` (its own MPI test, any rank count) the gate: twice each source
+  in `tests/device_metal.rs`, `tests/device_cuda.rs` and `tests/device_ranks.rs`: every kind
+  on the fallback bit for bit the host, every kind on the device within the FMM bounds, two
+  evaluations and blocking against overlapped bit for bit, the transfers of the formula with
+  w strengths per source); `tests/operator/device_p2p.rs` and `device_leaf.rs` the dipole
+  kernels at the absolute frames (P2P also against the host kernel; P2M, P2L p ≤ 20 in f64);
+  the ignored `tests/dipoles.rs` (its own MPI test, any rank count) the gate: twice each source
   type's single-translation prediction on the C3.2 cube, twice the cube's error on the C3.3
-  Plummer sphere, f64 p = 3, 8, 12 and f32 p = 3, 8. The dipole scenario added about 20 s
+  Plummer sphere, f64 p = 3, 8, 12 and f32 p = 3, 8, with a device feature each case also
+  with every kind on the device (the CPU runtime f64, Metal f32, CUDA both) within the
+  device-against-host bounds of docs/phase4/README.md. The dipole scenario added about 20 s
   to the one-rank debug run of `tests/mpi_exec.rs` (137 → 157 s on the M3 Max).
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread

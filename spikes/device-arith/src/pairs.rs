@@ -27,6 +27,9 @@ pub struct Pair<T> {
     /// Whether more than one double point gives these stored values (a coincidence here
     /// can come from distinct points, §3.13 "Coincident pairs").
     pub multi: bool,
+    /// The source leaf s and the target leaf t (Phase 6 T8d: the production kernel forms
+    /// the frame from them).
+    pub keys: (Key, Key),
 }
 
 impl<T: Real> Pair<T> {
@@ -195,6 +198,7 @@ pub fn adversarial<T: Real>(seed: u64, levels: &[u32]) -> Vec<Pair<T>> {
                                     r: T::narrow(r),
                                     self_pair: s == t,
                                     multi: a.multi || b.multi || e.multi,
+                                    keys: (s, t),
                                 });
                             }
                         }
@@ -249,6 +253,7 @@ pub fn random<T: Real>(seed: u64, trials: usize) -> Vec<Pair<T>> {
                         r: T::narrow(r),
                         self_pair: s == t,
                         multi: false,
+                        keys: (s, t),
                     });
                 }
             }

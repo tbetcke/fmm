@@ -33,7 +33,7 @@ use std::time::Instant;
 
 use nd_fmm_kernels::p2p::{P2pInputs, P2pLayout, p2p};
 use nd_fmm_kernels::view::{IndexView, LeafCoordinates, PointOffsets};
-use nd_fmm_kernels::{Device, DeviceBuffer, DeviceFloat, KernelError};
+use nd_fmm_kernels::{Device, DeviceBuffer, DeviceFloat, KernelError, SourceKind};
 use nd_fmm_math::RealScalar;
 use nd_fmm_simd::SimdScalar;
 
@@ -294,6 +294,7 @@ impl<T: DeviceFloat + RealScalar> DeviceProblem<T> {
             target_offsets: &self.target_offsets,
             target_input: self.target_input.as_slice(),
             vectors: 1,
+            source_kind: SourceKind::Charges,
         };
         p2p(
             device,

@@ -46,7 +46,7 @@ use nd_fmm_exec::fmm::FmmBuilder;
 use nd_fmm_exec::operator::LaplaceOperator;
 use nd_fmm_kernels::leaf::{LeafLayout, SourceInputs, TargetInputs, l2p, m2p, p2l, p2m};
 use nd_fmm_kernels::view::{BoxCoordinates, IndexView, LeafCoordinates, PointOffsets};
-use nd_fmm_kernels::{BackendKind, Device, DeviceBuffer, Precision};
+use nd_fmm_kernels::{BackendKind, Device, DeviceBuffer, Precision, SourceKind};
 use nd_fmm_validate::SplitMix64;
 use nd_fmm_validate::bench::{
     cores, cpu_model, median_time_per_call, performance_cores, target, toolchain,
@@ -388,6 +388,7 @@ fn measure(
                             source_offsets: &source_offsets,
                             sources: sources.as_slice(),
                             vectors: 1,
+                            source_kind: SourceKind::Charges,
                         };
                         let out = out.slice_mut(..levels[level].len() * n);
                         if kind == Kind::P2m {

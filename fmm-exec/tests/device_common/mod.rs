@@ -207,7 +207,8 @@ impl Expected {
 /// n_c = m (p + 1)² values per box and o = m or 4 m per target for m charge vectors (Phase 6
 /// T5; m = 1 before), N_s charges m each, K_l boxes and N_l targets on level l:
 ///
-/// - the charges: one upload of m N_s s bytes; the output: one download of o N_t s;
+/// - the charges: one upload of w N_s s bytes, w = m strengths per source (with dipoles
+///   one set: 3, or 4 with charges, Phase 6 T8d); the output: one download of o N_t s;
 /// - per level call whose view has an entry (and, for L2P, M2P and P2P, whose leaves
 ///   have a target): P2M down and up K_l n_c s; M2M (each pass) down (K_l + K_{l+1})
 ///   n_c s in one call, up K_l n_c s; M2L down K_l n_c s twice, up once; P2L down and up
@@ -221,7 +222,7 @@ impl Expected {
 ///   R^red_l boxes the upward reduction of level l sends and receives (Phase 5S T6), B_o
 ///   and B_r sent and received boxes of the replicated top (Phase 5S T5; the coarse blocks
 ///   before) and S_l and R_l sent and received boxes of level l (`Fmm::exchange_sizes`):
-///   up (3 + m) G_s s (the ghost tail, if G_s > 0); per level with S^red_l > 0 down S^red_l
+///   up (3 + w) G_s s (the ghost tail, if G_s > 0); per level with S^red_l > 0 down S^red_l
 ///   n_c s in one download after one gather launch, and with R^red_l > 0 up R^red_l n_c s
 ///   and one scatter launch; down (B_o + Σ_l S_l) n_c s in one download after one gather
 ///   launch (if anything is sent); up B_r n_c s and one scatter launch (if B_r > 0); per
@@ -298,13 +299,20 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
     // The points this rank owns: the device holds those (Phase 5 T6, T8).
     let (nsources, ntargets) = fmm.owned_points();
     let nboxes: usize = (0..nlevels).map(|l| index.len(l)).sum();
+    // The strengths per source (Phase 6 T8d): m charges, or one set with dipoles.
+    let kind = fmm.source_type();
+    let w = if kind.has_dipoles() {
+        kind.strengths()
+    } else {
+        m
+    };
 
-    e.up(DataKind::Charges, m * nsources * s);
+    e.up(DataKind::Charges, w * nsources * s);
     e.launches += 2 * u64::from(nboxes > 0) + u64::from(ntargets > 0) + u64::from(nsources > 0);
     // The exchanges (Phase 5 T8): none on one rank.
     let x = fmm.exchange_sizes();
     if x.ghost_sources > 0 {
-        e.up(DataKind::GhostSources, (3 + m) * x.ghost_sources * s);
+        e.up(DataKind::GhostSources, (3 + w) * x.ghost_sources * s);
     }
     // The upward reduction, level by level (Phase 5S T6).
     for (&sent, &received) in x.sent_reduction.iter().zip(&x.received_reduction) {
@@ -757,13 +765,24 @@ fn check_views<T: Stored + SimdScalar + Equivalence + Default>(fmm: &mut Fmm<'_,
         "the ghost leaves' source offsets"
     );
     assert_eq!(image.target_offsets, offsets(fmm.target_counts()));
+    // The strengths of every source in upload order (Phase 6 T8d): m charges, or its
+    // charge (if any) and its moment, the leaf's charges before its moments.
+    let kind = fmm.source_type();
+    let m = fmm.vectors();
+    let charges = if kind.has_charges() { m } else { 0 };
+    let size = 3 + charges + if kind.has_dipoles() { 3 } else { 0 };
     let mut slots = Vec::new();
     let mut start = 0;
     for &n in fmm.source_counts() {
-        slots.extend((0..n).map(|k| (start + 3 * n + k) as u32));
-        start += 4 * n;
+        for k in 0..n {
+            slots.extend((0..charges).map(|v| (start + 3 * n + charges * k + v) as u32));
+            if kind.has_dipoles() {
+                slots.extend((0..3).map(|c| (start + 3 * n + charges * n + 3 * k + c) as u32));
+            }
+        }
+        start += size * n;
     }
-    assert_eq!(image.charge_slots, slots, "charge slots");
+    assert_eq!(image.charge_slots, slots, "strength slots");
 }
 
 /// The relative L2 difference of `got` from `want` over all targets, for φ and for ∇φ
@@ -1562,17 +1581,19 @@ fn check_fallback<'o, T: Stored + SimdScalar + Equivalence + Default>(
     check_views(&mut fmm);
 }
 
-/// Dipole sources on the device (Phase 6 T8, C6.4; the `device` module docs, "Dipoles"):
-/// `builder` (sources equal to targets at `points`, a dipole source type) on `backend` at
-/// one thread, against `host_output`, the host's evaluation of `sources`:
+/// Dipole sources on the device (Phase 6 T8, C6.4; from T8d with P2M, P2L and P2P on the
+/// device; the `device` module docs, "Dipoles"): `builder` (sources equal to targets at
+/// `points`, a dipole source type) on `backend` at one thread, against `host_output`, the
+/// host's evaluation of `sources`:
 /// - every kind on the host fallback, overlapped: two evaluations, each bit for bit the
-///   host output, with no strengths moved to the device in an evaluation
-///   (`DataKind::Charges`);
-/// - the default placement: P2M, P2L and P2P on the host whatever the builder says, L2P on
-///   the device; two evaluations bit for bit, within [`fmm_bound`] of the host output
-///   (relative L2, φ and ∇φ, per rank), no strengths moved.
+///   host output, with the transfers of the formula ([`expected_evaluation`]: the
+///   strengths, w per source, uploaded once);
+/// - the default placement, every kind on the device: two evaluations bit for bit, within
+///   [`fmm_bound`] of the host output (relative L2, φ and ∇φ, per rank), with the
+///   transfers of the formula, and the overlapped stages bit for bit the blocking ones.
 ///
-/// Every verdict is agreed over the ranks.
+/// Every verdict is agreed over the ranks. Returns this rank's relative L2 difference of the
+/// default placement from the host output (φ, ∇φ).
 pub fn check_dipoles<T: Stored + SimdScalar + Equivalence + Default>(
     builder: &FmmBuilder<T>,
     points: &[[f64; 3]],
@@ -1580,7 +1601,7 @@ pub fn check_dipoles<T: Stored + SimdScalar + Equivalence + Default>(
     host_output: &Output<T>,
     backend: Backend,
     comm: &SimpleCommunicator,
-) {
+) -> (f64, f64) {
     let build = |builder: FmmBuilder<T>| {
         builder
             .threads(1)
@@ -1595,15 +1616,13 @@ pub fn check_dipoles<T: Stored + SimdScalar + Equivalence + Default>(
         comm.all_reduce_into(&local, &mut total, SystemOperation::sum());
         assert_eq!(total, 0, "{backend}, dipoles: {what}");
     };
-    let no_strengths = |fmm: &Fmm<'_, T>, what: &str| {
-        let counters = fmm.device_counters().expect("a device backend");
-        assert_eq!(
-            counters.evaluation_traffic.get(DataKind::Charges),
-            Traffic::default(),
-            "{backend}, dipoles, {what}: strengths moved to the device"
-        );
+    let differing = |a: &Output<T>, b: &Output<T>| {
+        output_bits(a)
+            .iter()
+            .zip(&output_bits(b))
+            .filter(|(x, y)| x != y)
+            .count()
     };
-    let host = output_bits(host_output);
     let mut fallback = build(
         builder
             .clone()
@@ -1613,37 +1632,36 @@ pub fn check_dipoles<T: Stored + SimdScalar + Equivalence + Default>(
     for kind in OperatorKind::ALL {
         assert_eq!(fallback.placement(kind), Placement::Host, "{kind}");
     }
+    let expected = expected_evaluation(&fallback, &[]);
     for what in ["fallback", "fallback again"] {
         let output = fallback
             .evaluate_sources(sources)
             .expect("the device evaluates");
-        let bits = output_bits(&output);
         agree_zero(
-            bits.iter().zip(&host).filter(|(a, b)| a != b).count(),
+            differing(&output, host_output),
             &format!("{what}: values differ from the host"),
         );
-        no_strengths(&fallback, what);
+        check_evaluation_counters(&format!("{backend}, dipoles, {what}"), &fallback, &expected);
     }
+    drop(fallback);
     let mut fmm = build(builder.clone());
-    for kind in [OperatorKind::P2m, OperatorKind::P2l, OperatorKind::P2p] {
+    for kind in OperatorKind::ALL {
         assert_eq!(
             fmm.placement(kind),
-            Placement::Host,
+            Placement::Device,
             "{backend}, dipoles: {kind}"
         );
     }
-    assert_eq!(fmm.placement(OperatorKind::L2p), Placement::Device);
+    let expected = expected_evaluation(&fmm, &OperatorKind::ALL);
     let first = fmm.evaluate_sources(sources).expect("the device evaluates");
+    check_evaluation_counters(&format!("{backend}, dipoles, default"), &fmm, &expected);
     let second = fmm.evaluate_sources(sources).expect("the device evaluates");
-    agree_zero(
-        output_bits(&first)
-            .iter()
-            .zip(&output_bits(&second))
-            .filter(|(a, b)| a != b)
-            .count(),
-        "two evaluations differ",
+    check_evaluation_counters(
+        &format!("{backend}, dipoles, default again"),
+        &fmm,
+        &expected,
     );
-    no_strengths(&fmm, "default");
+    agree_zero(differing(&first, &second), "two evaluations differ");
     let (potential, gradient) = relative_l2(&first, host_output);
     let bound = fmm_bound::<T>();
     agree_zero(
@@ -1652,7 +1670,14 @@ pub fn check_dipoles<T: Stored + SimdScalar + Equivalence + Default>(
             "default placement {potential:.1e}, {gradient:.1e} from the host (bound {bound:e})"
         ),
     );
+    fmm.set_overlap(true);
+    let overlapped = fmm.evaluate_sources(sources).expect("the device evaluates");
+    agree_zero(
+        differing(&overlapped, &first),
+        "overlapped differs from blocking",
+    );
     DIPOLE_DEVICE_CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    (potential, gradient)
 }
 
 /// The dipole device checks [`check_dipoles`] ran, for a closing line.
@@ -1699,11 +1724,12 @@ pub fn dipole_scenario<T: Stored + SimdScalar + Equivalence + Default>(
             .build(&local, &local, comm)
             .unwrap_or_else(|error| panic!("the host dipole FMM: {error}"));
         let output = host.evaluate_sources(&sources).expect("the host evaluates");
-        check_dipoles(&builder, &local, &sources, &output, backend, comm);
+        let (potential, gradient) =
+            check_dipoles(&builder, &local, &sources, &output, backend, comm);
         eprintln!(
             "rank {}: {backend}, {kind}, N = {n}, p = {p}: every kind on the host fallback bit \
-             for bit the host; P2M, P2L and P2P on the host and the rest on the device within \
-             {:e} of the host",
+             for bit the host; every kind on the device {potential:.1e} (φ), {gradient:.1e} (∇φ) \
+             from the host (bound {:e}), the transfers of the formula",
             comm.rank(),
             fmm_bound::<T>()
         );

@@ -5,7 +5,7 @@
 //! OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 BLIS_NUM_THREADS=1 \
 //!     VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 \
 //!     cargo run --release -p nd-fmm-spike-device-arith --features cpu,metal -- \
-//!     [--backends metal,cuda,cpu] [--sections primitives,compiler,domain,p2p,cpu-p2p,leafops] [--quick]
+//!     [--backends metal,cuda,cpu] [--sections primitives,compiler,domain,p2p,cpu-p2p,leafops,dipoles] [--quick]
 //! ```
 //!
 //! Metal needs a process with GPU access (outside the macOS sandbox). CUDA runs on locust
@@ -18,7 +18,9 @@ use std::time::Instant;
 use nd_fmm_simd::P2pKernel;
 use nd_fmm_spike_device_arith::backend::{Backend, describe, keep_ptx, supports_f64};
 use nd_fmm_spike_device_arith::real::Real;
-use nd_fmm_spike_device_arith::{compiler, cpu_p2p, domain, leafops, p2p, pairs, primitives};
+use nd_fmm_spike_device_arith::{
+    compiler, cpu_p2p, dipoles, domain, leafops, p2p, pairs, primitives,
+};
 use nd_fmm_validate::bench::{cores, cpu_model, performance_cores, target, toolchain};
 use nd_fmm_validate::p2p_kernels::{Form, Kernel, W1_SEED, W1_TARGETS, check, oracles, passes, w1};
 
@@ -81,6 +83,7 @@ fn parse() -> Options {
             "p2p",
             "cpu-p2p",
             "leafops",
+            "dipoles",
         ]
         .map(String::from)
         .to_vec(),
@@ -250,6 +253,53 @@ fn domain_for<T: Real>(client: &cubecl::prelude::Client, backend: Backend, sizes
             );
         }
         println!();
+    }
+    ok
+}
+
+/// The coincident-pair rule of the production dipole P2P (Phase 6 T8d) on the pairs of the
+/// §3.13 check, with moments.
+fn dipoles_for<T: Real + nd_fmm_kernels::DeviceFloat>(
+    device: &mut nd_fmm_kernels::Device,
+    backend: Backend,
+    sizes: &Sizes,
+) -> bool {
+    let mut ok = true;
+    let layout = nd_fmm_kernels::p2p::P2pLayout::default_for(device.info());
+    for (label, list, seed) in [
+        (
+            "adversarial",
+            pairs::adversarial::<T>(20261006, &sizes.levels),
+            20261017,
+        ),
+        (
+            "random",
+            pairs::random::<T>(20261007, sizes.random_trials),
+            20261018,
+        ),
+    ] {
+        let t = Instant::now();
+        let o = dipoles::run(device, layout, &list, seed);
+        eprintln!(
+            "  {label} {}: {} pairs in {:.1} s",
+            T::NAME,
+            list.len(),
+            t.elapsed().as_secs_f64()
+        );
+        ok &= o.holds();
+        println!(
+            "| {} | {} | {layout} | {label} | {} | {} | {} | {} | {} | {} | {} | {} |",
+            backend.name(),
+            T::NAME,
+            o.pairs,
+            o.coincident,
+            o.coincident_nonzero,
+            o.nonfinite,
+            o.below_range,
+            u(o.potential),
+            u(o.gradient),
+            if o.holds() { "yes" } else { "**NO**" }
+        );
     }
     ok
 }
@@ -603,6 +653,37 @@ fn main() {
             }
             println!("Per-launch overhead (f32, φ):\n");
             overheads(client);
+        }
+        if has("dipoles") {
+            section(&format!(
+                "The coincident-pair rule of the dipole P2P (Phase 6 T8d): {}",
+                b.name()
+            ));
+            let kind = match b {
+                Backend::Cpu => nd_fmm_kernels::BackendKind::Cpu,
+                Backend::Metal => nd_fmm_kernels::BackendKind::Metal,
+                Backend::Cuda => nd_fmm_kernels::BackendKind::Cuda,
+            };
+            let mut device = nd_fmm_kernels::Device::open(kind)
+                .unwrap_or_else(|e| panic!("cannot open {kind}: {e}"));
+            println!(
+                "`nd_fmm_kernels::p2p::p2p` with `SourceKind::Dipoles` and gradients on {}, one row per \
+                 pair, moments uniform in [−1, 1)³; coincident pairs must add exactly zero, the others \
+                 (in f32 from r² = 2^-79) be finite and within 32 u_T (φ̂, relative to |d_t| / r²) and \
+                 176 u_T (ĝ, relative to |d_t| / r³) of `p2p_dipoles` on the host's ŷ and r̂ d̂:\n",
+                device.info()
+            );
+            println!(
+                "| backend | precision | layout | pairs | count | coincident | coincident ≠ 0 | non-finite | below the f32 range | φ̂ (u_T) | ĝ (u_T) | rule holds |"
+            );
+            println!("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+            if !dipoles_for::<f32>(&mut device, b, &o.sizes) {
+                failures.push(format!("{} f32: dipole coincident-pair rule", b.name()));
+            }
+            if f64_ok && !dipoles_for::<f64>(&mut device, b, &o.sizes) {
+                failures.push(format!("{} f64: dipole coincident-pair rule", b.name()));
+            }
+            println!();
         }
         if has("leafops") {
             section(&format!("Harmonics and GEMM: {}", b.name()));

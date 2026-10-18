@@ -49,9 +49,10 @@
 //!   corrupted files, every candidate's output within the FMM bounds, the budget) at p = 8
 //!   in f32, where the library GEMM and its coefficient-major layout are candidates, and
 //!   at p = 3 without the stale files and the budget;
-//! - dipole sources (Phase 6 T8, `device_common::dipole_scenario`): the cube, N = 2,000,
-//!   p = 4, f32, `Dipoles` and `ChargesAndDipoles`: every kind on the host fallback bit for
-//!   bit the host, the default placement (P2M, P2L and P2P on the host) within 1e-5.
+//! - dipole sources (Phase 6 T8, T8d; `device_common::dipole_scenario`): the cube,
+//!   N = 2,000, p = 4, f32, `Dipoles` and `ChargesAndDipoles`: every kind on the host
+//!   fallback bit for bit the host, every kind on the device (the dipole kernels) within
+//!   1e-5, with the transfers of the formula.
 //!
 //! The test prints the device (`Backend::probe`) and the backends it ran.
 #![cfg(feature = "metal")]

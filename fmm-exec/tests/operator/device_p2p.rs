@@ -18,16 +18,27 @@
 //! f32 and f64, for every pair above and for random key pairs over every combination of
 //! levels 0–16, the opposite corners of level 16 included (device-path.md §6.1).
 //!
+//! Dipoles (Phase 6 T8d, C6.4): the same pairs with a moment d̂ (in units of the source
+//! leaf, on the grid of `common`) at every source, for `SourceKind::Dipoles` and
+//! `ChargesAndDipoles`, against `nd_fmm_ref::p2p::p2p_dipoles` (after `p2p` with charges)
+//! at the absolute points with d = r_s d̂, relative to Σ |d| / r² and Σ 2 |d| / r³ (plus
+//! the charge terms), within the same tolerances; and against the host's dipole kernel
+//! (`nd_fmm_simd::P2pKernel::evaluate_dipoles`, after `evaluate` with charges, the kernel of
+//! `LaplaceOperator`) on the inputs the host operator forms in T (ŷ = fl(ĉ + r̂ u_s),
+//! d_t = r̂ d̂), the difference relative to the same terms within the tolerances.
+//!
 //! The CPU runtime runs with the `cpu` feature; Metal (f32) with `metal`, ignored, by
 //! hand outside the macOS sandbox; CUDA (f32 and f64) with `cuda`, ignored, by hand on
 //! locust (Phase 4S T4). Each test prints the device and the backends it ran.
 
 use nd_fmm_exec::geometry::relative_frame;
+use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_kernels::p2p::{P2pInputs, P2pLayout, near_frames, p2p};
 use nd_fmm_kernels::view::{IndexView, LeafCoordinates, PointOffsets};
-use nd_fmm_kernels::{BackendKind, Device, DeviceFloat, Precision};
+use nd_fmm_kernels::{BackendKind, Device, DeviceFloat, Precision, SourceKind};
 use nd_fmm_math::RealScalar;
 use nd_fmm_ref::p2p as reference;
+use nd_fmm_simd::P2pKernel;
 use nd_octree::{MortonKey, morton};
 
 use crate::common::{
@@ -39,7 +50,7 @@ use crate::common::{
 const POINTS: usize = 6;
 
 /// The precisions of these tests.
-trait Real: DeviceFloat + RealScalar {}
+trait Real: DeviceFloat + RealScalar + SimdScalar {}
 
 /// `x` widened to f64.
 fn w<T: Real>(x: T) -> f64 {
@@ -74,7 +85,8 @@ fn near_sources(target: MortonKey) -> Vec<MortonKey> {
     sources
 }
 
-/// One source–target leaf pair: keys, absolute and leaf-scaled points, charges.
+/// One source–target leaf pair: keys, absolute and leaf-scaled points, charges and (for
+/// the dipole checks) moments d̂ in units of the source leaf.
 struct Pair {
     source: MortonKey,
     target: MortonKey,
@@ -83,6 +95,7 @@ struct Pair {
     y: Vec<[f64; 3]>,
     u_s: Vec<[f64; 3]>,
     q: Vec<f64>,
+    d: Vec<[f64; 3]>,
 }
 
 /// The pairs of one level (module documentation).
@@ -110,6 +123,7 @@ fn pairs(level: usize, rng: &mut SplitMix64) -> Vec<Pair> {
                 y,
                 u_s,
                 q,
+                d: Vec::new(),
             }
         })
         .collect()
@@ -126,8 +140,7 @@ fn key_index(key: MortonKey) -> (u32, [u32; 3]) {
 /// Returns the output chunk of every row and the frames of every entry.
 fn launch<T: Real>(
     device: &mut Device,
-    layout: P2pLayout,
-    gradients: bool,
+    (layout, gradients, kind): (P2pLayout, bool, SourceKind),
     pairs: &[Pair],
 ) -> (Vec<Vec<T>>, Vec<[T; 4]>) {
     let narrow = |v: &[[f64; 3]]| -> Vec<T> {
@@ -143,7 +156,12 @@ fn launch<T: Real>(
     let (mut sources, mut input) = (Vec::<T>::new(), Vec::<T>::new());
     let self_sources = |pair: &Pair, sources: &mut Vec<T>| {
         sources.extend(narrow(&pair.u_s));
-        sources.extend(pair.q.iter().map(|&q| <T as RealScalar>::from_f64(q)));
+        if kind.has_charges() {
+            sources.extend(pair.q.iter().map(|&q| <T as RealScalar>::from_f64(q)));
+        }
+        if kind.has_dipoles() {
+            sources.extend(narrow(&pair.d));
+        }
     };
     for (r, pair) in pairs.iter().enumerate() {
         keys.push(key_index(pair.target));
@@ -190,6 +208,7 @@ fn launch<T: Real>(
         target_offsets: &target_offsets,
         target_input: target_input.as_slice(),
         vectors: 1,
+        source_kind: kind,
     };
     p2p(device, layout, gradients, &inputs, output.as_slice_mut()).unwrap();
     let zero = <T as RealScalar>::from_f64(0.0);
@@ -227,7 +246,8 @@ fn near_pairs<T: Real>(device: &mut Device, layout: P2pLayout) -> (f64, f64) {
     for level in LEVELS {
         let pairs = pairs(level, &mut rng);
         for gradients in [false, true] {
-            let (chunks, frames) = launch::<T>(device, layout, gradients, &pairs);
+            let (chunks, frames) =
+                launch::<T>(device, (layout, gradients, SourceKind::Charges), &pairs);
             for (pair, (chunk, frame)) in pairs.iter().zip(chunks.iter().zip(&frames)) {
                 let context = format!(
                     "{layout}, {}, level {level}, source {:?} target {:?}, gradients {gradients}",
@@ -283,6 +303,134 @@ fn near_pairs<T: Real>(device: &mut Device, layout: P2pLayout) -> (f64, f64) {
         }
     }
     (worst_potential, worst_gradient)
+}
+
+/// Σⱼ |dⱼ| / r² and Σⱼ 2 |dⱼ| / r³ at `x`, coincident points excluded (the dipole terms of
+/// `dipoles.rs`).
+fn dipole_terms(sources: &[[f64; 3]], dipoles: &[[f64; 3]], x: [f64; 3]) -> (f64, f64) {
+    let mut terms = (0.0, 0.0);
+    for (y, d) in sources.iter().zip(dipoles) {
+        if *y == x {
+            continue;
+        }
+        let r = norm(sub(x, *y));
+        terms.0 += norm(*d) / (r * r);
+        terms.1 += 2.0 * norm(*d) / (r * r * r);
+    }
+    terms
+}
+
+/// The dipole P2P of every level (Phase 6 T8d; module documentation) against the reference
+/// and against the host's kernel; returns the worst potential and gradient errors against
+/// each.
+fn dipole_pairs<T: Real>(
+    device: &mut Device,
+    layout: P2pLayout,
+    kind: SourceKind,
+) -> ([f64; 2], [f64; 2]) {
+    let domain = dyadic_domain();
+    let mut rng = SplitMix64::new(0x7e62);
+    let host = P2pKernel::<T>::detect();
+    let t = <T as RealScalar>::from_f64;
+    let (mut reference_worst, mut host_worst) = ([0.0f64; 2], [0.0f64; 2]);
+    for level in LEVELS {
+        let mut pairs = pairs(level, &mut rng);
+        for pair in &mut pairs {
+            pair.d = (0..POINTS).map(|_| [0; 3].map(|_| rng.grid())).collect();
+        }
+        for gradients in [false, true] {
+            let (chunks, _) = launch::<T>(device, (layout, gradients, kind), &pairs);
+            for (pair, chunk) in pairs.iter().zip(&chunks) {
+                let context = format!(
+                    "{layout}, {}, {kind}, level {level}, source {:?} target {:?}, gradients \
+                     {gradients}",
+                    T::FLOAT,
+                    morton::decode(pair.source),
+                    morton::decode(pair.target)
+                );
+                let n = pair.x.len();
+                let r_s = key_radius(pair.source, &domain);
+                let r_t = key_radius(pair.target, &domain);
+                // The reference at the absolute points, the strengths as rounded to T.
+                let q: Vec<f64> = pair.q.iter().map(|&q| w(t(q))).collect();
+                let d: Vec<[f64; 3]> = pair.d.iter().map(|d| d.map(|c| w(t(c)) * r_s)).collect();
+                let (mut phi, mut grad) = (vec![0.0; n], vec![[0.0; 3]; n]);
+                if kind.has_charges() {
+                    reference::p2p(&pair.y, &q, &pair.x, &mut phi, Some(&mut grad));
+                }
+                reference::p2p_dipoles(&pair.y, &d, &pair.x, &mut phi, Some(&mut grad));
+                // The host kernel on the operator's inputs in T.
+                let frame = relative_frame::<T>(pair.source, pair.target);
+                let mapped = pair.source != pair.target;
+                let y_t: Vec<[T; 3]> = pair
+                    .u_s
+                    .iter()
+                    .map(|u| {
+                        let u = u.map(t);
+                        if mapped {
+                            std::array::from_fn(|k| frame.centre[k] + frame.radius * u[k])
+                        } else {
+                            u
+                        }
+                    })
+                    .collect();
+                let d_t: Vec<[T; 3]> = pair
+                    .d
+                    .iter()
+                    .map(|d| d.map(|c| if mapped { frame.radius * t(c) } else { t(c) }))
+                    .collect();
+                let q_t: Vec<T> = pair.q.iter().map(|&q| t(q)).collect();
+                let x_t: Vec<[T; 3]> = pair.u_t.iter().map(|u| u.map(t)).collect();
+                let (mut host_phi, mut host_grad) = (vec![t(0.0); n], vec![[t(0.0); 3]; n]);
+                if kind.has_charges() {
+                    host.evaluate(&y_t, &q_t, &x_t, &mut host_phi, Some(&mut host_grad));
+                }
+                host.evaluate_dipoles(&y_t, &d_t, &x_t, &mut host_phi, Some(&mut host_grad));
+                for j in 0..n {
+                    let (mut tp, mut tg) = dipole_terms(&pair.y, &d, pair.x[j]);
+                    if kind.has_charges() {
+                        let (cp, cg) = p2p_terms(&pair.y, &q, pair.x[j]);
+                        tp += cp;
+                        tg += cg;
+                    }
+                    let got = w(chunk[j]);
+                    let errors = [
+                        (got - r_t * phi[j]).abs() / (r_t * tp),
+                        (got - w(host_phi[j])).abs() / (r_t * tp),
+                    ];
+                    for (e, (worst, what)) in errors.into_iter().zip([
+                        (&mut reference_worst, "the reference"),
+                        (&mut host_worst, "the host kernel"),
+                    ]) {
+                        assert!(
+                            e <= tolerance::<T>(),
+                            "{context}: target {j}: φ error {e:e} against {what}"
+                        );
+                        worst[0] = worst[0].max(e);
+                    }
+                    if gradients {
+                        let g: [f64; 3] = std::array::from_fn(|k| w(chunk[n + 3 * j + k]));
+                        let want = grad[j].map(|v| r_t * r_t * v);
+                        let errors = [
+                            norm(sub(g, want)) / (r_t * r_t * tg),
+                            norm(sub(g, host_grad[j].map(w))) / (r_t * r_t * tg),
+                        ];
+                        for (e, (worst, what)) in errors.into_iter().zip([
+                            (&mut reference_worst, "the reference"),
+                            (&mut host_worst, "the host kernel"),
+                        ]) {
+                            assert!(
+                                e <= tolerance::<T>(),
+                                "{context}: target {j}: ∇φ error {e:e} against {what}"
+                            );
+                            worst[1] = worst[1].max(e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (reference_worst, host_worst)
 }
 
 /// Random key pairs over every combination of levels 0–16, and the opposite corners of
@@ -350,6 +498,22 @@ fn run(kind: BackendKind) {
         if device.supports(Precision::F64) {
             let (p, g) = near_pairs::<f64>(&mut device, layout);
             eprintln!("  {layout}, f64: worst φ {p:.2e}, ∇φ {g:.2e} (terms; bound 1e-13)");
+        }
+        for kind in [SourceKind::Dipoles, SourceKind::ChargesAndDipoles] {
+            let (r, h) = dipole_pairs::<f32>(&mut device, layout, kind);
+            eprintln!(
+                "  {layout}, f32, {kind}: worst φ {:.2e}, ∇φ {:.2e} against the reference, \
+                 {:.2e}, {:.2e} against the host kernel (terms; bound 1e-5)",
+                r[0], r[1], h[0], h[1]
+            );
+            if device.supports(Precision::F64) {
+                let (r, h) = dipole_pairs::<f64>(&mut device, layout, kind);
+                eprintln!(
+                    "  {layout}, f64, {kind}: worst φ {:.2e}, ∇φ {:.2e} against the reference, \
+                     {:.2e}, {:.2e} against the host kernel (terms; bound 1e-13)",
+                    r[0], r[1], h[0], h[1]
+                );
+            }
         }
     }
     let rows = random_frames::<f32>(&mut device);

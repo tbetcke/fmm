@@ -14,8 +14,12 @@
 //! evaluation and of its stages (`StageTimings`) are reported, with the ratio to charges.
 //! With a device backend (`--backend`, the example built with its feature) one more
 //! evaluation runs with `KindTiming::Synchronous` (a sync after every level call) and the
-//! report gives the time of each kind there and the share of P2M, P2L and P2P, which run on
-//! the host fallback with dipoles, in that evaluation.
+//! report gives the time of each kind there and the share of P2M, P2L and P2P in that
+//! evaluation. Since Phase 6 T8d the dipole kinds run on the device; `--dipole-fallback
+//! p2m,p2l,p2p` (any of them, or `none`, the default) keeps the named kinds on the host
+//! fallback for the source types with dipoles (the charge rows keep every kind on the
+//! device), so that one binary measures T8's placement (all three on the fallback), P2P
+//! alone on the device (`p2m,p2l`) and every kind on the device.
 //!
 //! Run in release mode, on one rank, with every BLAS thread variable at 1 (outside the
 //! macOS sandbox for Metal); MPI is initialised at `Threading::Funneled`, for `--threads`:
@@ -23,7 +27,7 @@
 //! ```text
 //! cargo run --release -p nd-fmm-validate --example dipole_cost -- --n 1000000 --threads 1
 //! cargo run --release -p nd-fmm-validate --features metal --example dipole_cost -- \
-//!     --backend metal --precision f32
+//!     --backend metal --precision f32 [--dipole-fallback p2m,p2l,p2p]
 //! ```
 //!
 //! Timings are wall times on this machine, reported and never asserted.
@@ -49,6 +53,8 @@ struct Arguments {
     threads: usize,
     backend: Backend,
     repeats: usize,
+    /// The kinds kept on the host fallback with dipoles (Phase 6 T8d).
+    dipole_fallback: Vec<OperatorKind>,
 }
 
 /// Parses the flags of the module documentation; exits with a message on anything else.
@@ -58,7 +64,7 @@ fn arguments() -> Arguments {
         eprintln!(
             "usage: dipole_cost [--n N] [--dist cube|plummer] [--degrees p,p,…] \
              [--precision f64|f32] [--threads t] [--backend host|cpu|metal|cuda] \
-             [--repeats r]; got {args:?}"
+             [--repeats r] [--dipole-fallback none|p2m,p2l,p2p]; got {args:?}"
         );
         std::process::exit(2);
     };
@@ -70,6 +76,7 @@ fn arguments() -> Arguments {
         threads: 1,
         backend: Backend::Host,
         repeats: 5,
+        dipole_fallback: Vec::new(),
     };
     let mut rest = args.as_slice();
     while let [flag, value, tail @ ..] = rest {
@@ -88,6 +95,18 @@ fn arguments() -> Arguments {
             "--threads" => parsed.threads = value.parse().unwrap_or_else(|_| usage()),
             "--backend" => parsed.backend = value.parse().unwrap_or_else(|_| usage()),
             "--repeats" => parsed.repeats = value.parse().unwrap_or_else(|_| usage()),
+            "--dipole-fallback" if value == "none" => parsed.dipole_fallback.clear(),
+            "--dipole-fallback" => {
+                parsed.dipole_fallback = value
+                    .split(',')
+                    .map(|kind| match kind {
+                        "p2m" => OperatorKind::P2m,
+                        "p2l" => OperatorKind::P2l,
+                        "p2p" => OperatorKind::P2p,
+                        _ => usage(),
+                    })
+                    .collect()
+            }
             _ => usage(),
         }
         rest = tail;
@@ -121,8 +140,9 @@ struct Row {
     kind: SourceType,
     total_ms: f64,
     stages_ms: [f64; 4],
-    /// With a device: the share of P2M, P2L and P2P in the synchronous evaluation, and the
-    /// time of each kind there.
+    /// With a device: the share of P2M, P2L and P2P (on the device, or on the host
+    /// fallback with `--dipole-fallback`) in the synchronous evaluation, and the time of
+    /// each kind there.
     fallback: Option<(f64, Vec<(OperatorKind, f64)>)>,
 }
 
@@ -141,11 +161,17 @@ fn measure<T: Stored + SimdScalar + Equivalence + Default>(
         SourceType::Dipoles => Sources::dipoles(&d),
         _ => Sources::charges_and_dipoles(&q, &d),
     };
+    let fallback = if kind == SourceType::Charges {
+        Vec::new()
+    } else {
+        args.dipole_fallback.clone()
+    };
     let mut fmm = FmmBuilder::<T>::new(p)
         .gradients(true)
         .sources(kind)
         .threads(args.threads)
         .backend(args.backend)
+        .host_fallback(fallback)
         .build(points, points, comm)
         .unwrap_or_else(|error| panic!("p = {p}, {kind}: {error}"));
     fmm.evaluate_sources(&sources)
@@ -231,7 +257,7 @@ fn main() {
         }
     }
 
-    println!("# The cost of dipole sources (Phase 6 T8)\n");
+    println!("# The cost of dipole sources (Phase 6 T8, T8d)\n");
     println!(
         "Machine: {}; {}; {}. Backend {}; {} thread(s); the {} at N = {n}, sources equal to \
          targets, the default tree (64 points per leaf), gradients on, {}; medians over {} \
@@ -269,9 +295,23 @@ fn main() {
     }
     println!("\nEach stage as ms (ratio to the charges' stage).");
     if args.backend.is_device() {
+        let fallback: Vec<String> = args
+            .dipole_fallback
+            .iter()
+            .map(ToString::to_string)
+            .collect();
         println!(
-            "\n## The host fallback on {} (one evaluation with synchronous kind timings)\n",
+            "\n## P2M, P2L and P2P on {} (one evaluation with synchronous kind timings)\n",
             args.backend
+        );
+        println!(
+            "With dipoles on the host fallback: {}; every other kind, and every kind with \
+             charges, on the device.\n",
+            if fallback.is_empty() {
+                "none".to_owned()
+            } else {
+                fallback.join(", ")
+            }
         );
         println!("| p | sources | P2M, P2L and P2P / evaluation | ms per kind |");
         println!("| --- | --- | --- | --- |");
