@@ -1098,8 +1098,8 @@ s = d_t · w, never with r⁻⁵, so every intermediate is at most 4 |d_t| / r³
 With |d_t,ₖ| ≤ 2^e, e ≥ 0, every intermediate stays below 2¹²³ for 2^(−80 + 2e/3) ≤ r² ≤ 2⁷,
 where the dipole contracts in f32 hold (|d_t,ₖ| ≤ 1: r² ≥ 2⁻⁸⁰, two points farther apart
 than 2⁻⁴⁰ r_t). In f64 everything stays in the normal range on the whole domain. The
-dipole kinds run on the host on every device backend (Phase 6 T8), so no device contract
-for them is stated.
+device dipole kernels (Phase 6 T8d) form the same intermediates; their contract is stated
+in "Device kernels", "Dipoles".
 
 Like the rest of §3.13 this describes in-memory data and the kernels that read it. It
 changes no fixture and no table, and does not bump `CONVENTION_VERSION` (§3.10).
@@ -1169,6 +1169,48 @@ flush, a term below the normal range of T becomes zero instead of subnormal. On 
 domain, ρ ≥ 2⁻³·⁵ and |q| / r² ≥ 2⁻⁷ |q|, so in f32 that happens only for
 |q| < 2⁻¹¹⁹. The accuracy contracts of device kernels therefore hold for q = 0 or
 |q| ≥ 2⁻¹⁰⁰, and smaller nonzero charges are outside them on a backend that flushes.
+
+**Dipoles** (Phase 6 T8d). The device dipole P2P takes the inputs of the host kernel
+(docs/design/simd-p2p.md §4.8): w = u_t − ŷ with ŷ by rules 1–2 above, and the moment in
+units of the target leaf, d_t = r̂(s|t) d̂ (d̂ itself for s = t), formed as one product by a
+power of two, exact unless it flushes. It forms r² and ρ by rules 3–4, then ρ² = ρ ρ,
+ρ³ = ρ ρ², s = `fma(d₂, w₂, fma(d₁, w₁, d₀ w₀))`, φ̂ += s ρ³ by an explicit fma and, with
+gradients, a = (3 s) ρ² and ĝₖ = `fma(ρ³, fma(−a, wₖ, dₖ), ĝₖ)`: never r⁻⁵, so f32 stays in
+range as "Range of the terms in f32" requires. With charges and dipoles each source leaf
+adds its charges first and then its moments, as the host does.
+
+- *Contract.* The derivation of simd-p2p.md §4.8 holds operation for operation: it assumes
+  ρ within 5 u_T of 1/r, and here r² rounds at most three times (1.5 u_T in ρ) and
+  `inverse_sqrt` is within 2.5 u_T; every other step is a correctly rounded product or one
+  fma, and a fusion the compiler may add (a product that feeds only an addition) removes a
+  rounding. So the device dipole terms are within the host kernel's contract: 32 u_T for
+  φ̂ relative to |d_t| / r², and 176 u_T for each component of ĝ relative to |d_t| / r³, on
+  the kernel domain, in f32 on the dipole range of "Range of the terms in f32". The
+  coincident-pair rule is the charges': the moments do not enter r² or the select.
+- *Where subnormals flush* (Metal, f32), every r², ρ, ρ² and ρ³ of the dipole range is
+  normal, and so is every nonzero wₖ (at least 2⁻⁵³); what may flush is d_t (from
+  r̂ = ½), a stored subnormal component of d̂, a product dₖ wₖ, and the results of the
+  fmas forming s, 3 s, a and dₖ − a wₖ, which may cancel. Each flush changes its value by
+  less than λ = 2⁻¹²⁶ absolutely. Propagated, with r ≤ 2³·⁵ on the domain, the three in s
+  move φ̂ by less than 3 λ ρ³, and with the mapping (|Δd_t| < √3 λ) by less than
+  (3 + √3 r) λ / (|d_t| r) relative to |d_t| / r²; the gradient moves by less than
+  (10 + r (r + 1) + 2√3 r) λ / (|d_t| r) relative to |d_t| / r³. For |d_t| r ≥ 2⁻⁹⁶, that
+  is λ / (|d_t| r) ≤ 2⁻³⁰ = u₃₂ / 64, these are below 0.4 u_T and 3 u_T, within the 3 u_T
+  and 4 u_T by which the stated constants exceed the first-order sums of §4.8 (29 u_T,
+  172 u_T). So where subnormals flush the dipole contracts hold for d_t = 0 or
+  |d_t| r ≥ 2⁻⁹⁶: on the f32 dipole range (r ≥ 2⁻⁴⁰ for |d_t,ₖ| ≤ 1) for every
+  |d_t| ≥ 2⁻⁵⁶, and so, since r̂ ≥ ½, for every |d̂| ≥ 2⁻⁵⁵. Smaller nonzero moments are
+  outside them on a backend that flushes.
+- *P2M and P2L* with dipoles take d̂ / r̂(t|s) as d̂ · 2^(l_t − l_s), a product by a power of
+  two, exact unless it flushes; like the charges' leaf operators they agree with
+  `nd_fmm_ref::leaf` to rounding, not bit for bit.
+- *Verification.* `nd-fmm-kernels`' `tests/kernels/p2p/dipoles.rs` (pair terms over the
+  domain with moments from 2⁻⁴⁰ to 1 in magnitude and the flushing threshold, sums,
+  coincident pairs, domain ends; measured at most 9.4 u_T and 29.0 u_T on the CPU runtime
+  and 9.4 u_T and 21.7 u_T on Metal), and `spikes/device-arith`, section `dipoles`: the
+  production kernel on its 209,303 (f32) and 439,192 (f64) adversarial and 216,000 random
+  pairs with moments, every coincident pair adding exactly zero and every other within
+  the contract.
 
 Like the rest of §3.13, this describes in-memory data and the kernels that read it. It
 changes no fixture and no table, and does not bump `CONVENTION_VERSION` (§3.10).

@@ -4,6 +4,7 @@
 pub mod backend;
 pub mod compiler;
 pub mod cpu_p2p;
+pub mod dipoles;
 pub mod domain;
 pub mod geometry;
 pub mod leafops;

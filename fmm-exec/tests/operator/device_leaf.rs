@@ -41,6 +41,17 @@
 //!   P2M 7.1 u_T at degree 19; L2P up to 2.4 times the host operator's 1e-16, all within
 //!   2.2e-16; M2P within 1.0.)
 //!
+//! Dipoles (Phase 6 T8d, C6.4): P2M and P2L on the same geometry with a moment d̂ (in units
+//! of the source leaf, on the grid of `common`, rounded to T) at every source, for
+//! `SourceKind::Dipoles` and `ChargesAndDipoles`, against `nd_fmm_ref::leaf::p2m_dipoles`
+//! and `p2l_dipoles` (after `p2m` or `p2l` with charges) at the absolute frames with
+//! d = r_s d̂, relative to the terms Σⱼ Σₖ |dⱼ,ₖ / R ∂ₖ Xᵢ| (plus the charge terms), with the
+//! same tolerances (asserted); the host operator built `with_sources` runs the same cases,
+//! and its error is reported beside the device's, not asserted: the brief's criterion is
+//! the reference's bound, and on Metal one f32 cell came to 2.1 times the host operator's
+//! error (P2L, level 16: 4.3e-7 against 2.0e-7; 1.85 on the CPU runtime), a ratio of two
+//! maxima of rounding errors 23 times below the bound.
+//!
 //! Frames: the frames the kernels form for the X and W lists (`x_frames`, `w_frames`)
 //! equal `geometry::relative_frame` bit for bit, in f32 and f64.
 //!
@@ -54,14 +65,14 @@
 use std::collections::BTreeMap;
 
 use nd_fmm_exec::geometry::relative_frame;
-use nd_fmm_exec::operator::LaplaceOperator;
+use nd_fmm_exec::operator::{LaplaceOperator, SourceType};
 use nd_fmm_exec::tables::{M2lStrategy, Tables};
 use nd_fmm_kernels::leaf::{
     LeafLayout, SourceInputs, TargetInputs, l2p, m2p, p2l, p2m, w_frames, x_frames,
 };
 use nd_fmm_kernels::view::{BoxCoordinates, IndexView, LeafCoordinates, PointOffsets};
-use nd_fmm_kernels::{BackendKind, Device, DeviceFloat, Precision};
-use nd_fmm_math::RealScalar;
+use nd_fmm_kernels::{BackendKind, Device, DeviceFloat, Precision, SourceKind};
+use nd_fmm_math::{RealScalar, harmonics};
 use nd_fmm_ref::{Frame, Workspace, leaf};
 use nd_octree::{MortonKey, morton};
 
@@ -270,21 +281,48 @@ fn view(device: &mut Device, rows: &[Vec<u32>], columns: usize) -> IndexView {
     IndexView::upload(device, &offsets, &entries, columns).unwrap()
 }
 
-/// A set of source leaves: keys, absolute and leaf-scaled points, charges rounded to T.
+/// A set of source leaves: keys, absolute and leaf-scaled points, charges rounded to T,
+/// and with dipoles (Phase 6 T8d) the moments d̂ in units of each leaf, rounded to T.
 struct Sources {
     keys: Vec<MortonKey>,
     x: Vec<Vec<[f64; 3]>>,
     u: Vec<Vec<[f64; 3]>>,
     q: Vec<Vec<f64>>,
+    d: Vec<Vec<[f64; 3]>>,
+    kind: SourceKind,
 }
 
 impl Sources {
+    /// No leaves yet, with strengths of `kind`.
+    fn new(kind: SourceKind) -> Self {
+        Self {
+            keys: Vec::new(),
+            x: Vec::new(),
+            u: Vec::new(),
+            q: Vec::new(),
+            d: Vec::new(),
+            kind,
+        }
+    }
+
+    /// The source chunk of leaf j in f64 (CONVENTIONS §3.13): the triples, the charges and
+    /// the moments of the kind.
+    fn chunk(&self, j: usize) -> Vec<f64> {
+        let mut chunk: Vec<f64> = self.u[j].iter().flatten().copied().collect();
+        if self.kind.has_charges() {
+            chunk.extend(&self.q[j]);
+        }
+        if self.kind.has_dipoles() {
+            chunk.extend(self.d[j].iter().flatten());
+        }
+        chunk
+    }
+
     /// The source store in T and the counts.
     fn store<T: Real>(&self) -> (Vec<T>, Vec<usize>) {
         let mut store = Vec::new();
-        for (u, q) in self.u.iter().zip(&self.q) {
-            store.extend(u.iter().flatten().map(|&c| t::<T>(c)));
-            store.extend(q.iter().map(|&c| t::<T>(c)));
+        for j in 0..self.keys.len() {
+            store.extend(self.chunk(j).iter().map(|&c| t::<T>(c)));
         }
         (store, self.u.iter().map(Vec::len).collect())
     }
@@ -314,6 +352,7 @@ fn run_sources<T: Real>(
         source_offsets: &source_offsets,
         sources: store.as_slice(),
         vectors: 1,
+        source_kind: sources.kind,
     };
     if irregular {
         p2l(device, layout, p, &inputs, out.as_slice_mut()).unwrap();
@@ -486,12 +525,8 @@ fn p2m_and_l2p<T: Real>(device: &mut Device, layout: LeafLayout, cells: &mut Cel
                 }
             }
             let counts = [6, 0, 1, 40];
-            let mut sources = Sources {
-                keys: keys.clone(),
-                x: Vec::new(),
-                u: Vec::new(),
-                q: Vec::new(),
-            };
+            let mut sources = Sources::new(SourceKind::Charges);
+            sources.keys = keys.clone();
             for (j, &key) in keys.iter().enumerate() {
                 let (x, u) = leaf_points(key, counts[j], j == 0, &mut rng);
                 sources.q.push(
@@ -638,12 +673,7 @@ fn p2l_x_list<T: Real>(device: &mut Device, layout: LeafLayout, cells: &mut Cell
                     targets.push(target);
                 }
             }
-            let mut sources = Sources {
-                keys: Vec::new(),
-                x: Vec::new(),
-                u: Vec::new(),
-                q: Vec::new(),
-            };
+            let mut sources = Sources::new(SourceKind::Charges);
             let mut rows = Vec::new();
             for &target in &targets {
                 let mut row = Vec::new();
@@ -712,6 +742,210 @@ fn p2l_x_list<T: Real>(device: &mut Device, layout: LeafLayout, cells: &mut Cell
                     host_error,
                     || format!("p = {p}, target {target}, {} sources", rows[r].len()),
                 );
+            }
+        }
+    }
+}
+
+/// The coefficient terms Σⱼ Σₖ |dⱼ,ₖ / R ∂ₖ Xᵢ(frame.scaled(yⱼ))| of a dipole P2M (regular)
+/// or P2L (irregular), per slot (`dipoles.rs`).
+fn dipole_terms(
+    basis: Basis,
+    p: usize,
+    frame: &Frame<f64>,
+    points: &[[f64; 3]],
+    dipoles: &[[f64; 3]],
+) -> Vec<f64> {
+    let mut out = vec![0.0; len(p)];
+    let mut values = vec![0.0; len(p)];
+    let mut grad = [0; 3].map(|_| vec![0.0; len(p)]);
+    for (&y, d) in points.iter().zip(dipoles) {
+        let [gx, gy, gz] = &mut grad;
+        let components = [&mut gx[..], &mut gy[..], &mut gz[..]];
+        match basis {
+            Basis::Regular => harmonics::regular_grad(p, frame.scaled(y), &mut values, components),
+            Basis::Irregular => {
+                harmonics::irregular_grad(p, frame.scaled(y), &mut values, components)
+            }
+        }
+        for (i, o) in out.iter_mut().enumerate() {
+            *o += (0..3)
+                .map(|k| (d[k] / frame.radius * grad[k][i]).abs())
+                .sum::<f64>();
+        }
+    }
+    out
+}
+
+/// The host's source type of `kind`.
+fn source_type(kind: SourceKind) -> SourceType {
+    match kind {
+        SourceKind::Charges => SourceType::Charges,
+        SourceKind::Dipoles => SourceType::Dipoles,
+        SourceKind::ChargesAndDipoles => SourceType::ChargesAndDipoles,
+    }
+}
+
+/// Dipole P2M and P2L (Phase 6 T8d; module documentation, "Dipoles"): P2M at four leaves
+/// per level (6, 0, 1 and 40 points) and P2L at two target boxes per level with their X
+/// lists, with moments (and charges), one launch per operator, level and degree.
+fn dipole_expansions<T: Real>(device: &mut Device, layout: LeafLayout, cells: &mut Cells) {
+    let domain = dyadic_domain();
+    let mut rng = SplitMix64::new(0x7e72);
+    let widen = |v: &[T]| -> Vec<f64> { v.iter().map(|&c| w(c)).collect() };
+    for (kind, names) in [
+        (SourceKind::Dipoles, ("P2M, dipoles", "P2L, dipoles")),
+        (
+            SourceKind::ChargesAndDipoles,
+            ("P2M, charges+dipoles", "P2L, charges+dipoles"),
+        ),
+    ] {
+        for level in [2usize, 9, 16] {
+            for &p in degrees::<T>() {
+                let n = len(p);
+                let mut ws = Workspace::new(p);
+                let mut host = host_operator::<T>(p, false).with_sources(source_type(kind));
+                let add_leaf = |sources: &mut Sources, key, count, special, rng: &mut _| {
+                    let (x, u) = leaf_points(key, count, special, rng);
+                    sources.keys.push(key);
+                    sources
+                        .q
+                        .push(rng.charges(count).iter().map(|&q| round::<T>(q)).collect());
+                    sources.d.push(
+                        (0..count)
+                            .map(|_| [0; 3].map(|_| round::<T>(rng.grid())))
+                            .collect(),
+                    );
+                    sources.x.push(x);
+                    sources.u.push(u);
+                };
+                // The reference of leaf j of `sources` added into `want`, with its terms.
+                let reference = |sources: &Sources,
+                                 j: usize,
+                                 (frame, basis): (&Frame<f64>, Basis),
+                                 ws: &mut Workspace<f64>,
+                                 want: &mut [f64]|
+                 -> Vec<f64> {
+                    let r_s = key_radius(sources.keys[j], &domain);
+                    let d: Vec<[f64; 3]> =
+                        sources.d[j].iter().map(|d| d.map(|c| c * r_s)).collect();
+                    let (x, q) = (&sources.x[j], &sources.q[j]);
+                    let mut terms = dipole_terms(basis, p, frame, x, &d);
+                    if kind.has_charges() {
+                        match basis {
+                            Basis::Regular => leaf::p2m(p, frame, x, q, ws, want),
+                            Basis::Irregular => leaf::p2l(p, frame, x, q, ws, want),
+                        }
+                        let charge = point_terms(basis, p, frame, x, q);
+                        terms.iter_mut().zip(charge).for_each(|(s, c)| *s += c);
+                    }
+                    match basis {
+                        Basis::Regular => leaf::p2m_dipoles(p, frame, x, &d, ws, want),
+                        Basis::Irregular => leaf::p2l_dipoles(p, frame, x, &d, ws, want),
+                    }
+                    terms
+                };
+                // P2M: row t is leaf t.
+                let mut sources = Sources::new(kind);
+                let counts = [6, 0, 1, 40];
+                while sources.keys.len() < 4 {
+                    let key = rng.key(level);
+                    if !sources.keys.contains(&key) {
+                        let j = sources.keys.len();
+                        add_leaf(&mut sources, key, counts[j], j == 0, &mut rng);
+                    }
+                }
+                let keys = sources.keys.clone();
+                let rows: Vec<Vec<u32>> = (0..4).map(|j| vec![j]).collect();
+                let (got, _) =
+                    run_sources::<T>(device, (layout, p, false), (level, &keys), &sources, &rows);
+                for (j, &key) in keys.iter().enumerate() {
+                    let frame = absolute_frame(key, &domain);
+                    let mut want = vec![0.0; n];
+                    let scale =
+                        reference(&sources, j, (&frame, Basis::Regular), &mut ws, &mut want);
+                    let chunk: Vec<T> = sources.chunk(j).iter().map(|&c| t::<T>(c)).collect();
+                    let mut in_t = vec![t::<T>(0.0); n];
+                    host.p2m_leaf(&chunk, &mut in_t);
+                    let device_error = degree_errors(
+                        Kind::Multipole,
+                        p,
+                        &widen(&got[j * n..(j + 1) * n]),
+                        &want,
+                        &scale,
+                    );
+                    let host_error =
+                        degree_errors(Kind::Multipole, p, &widen(&in_t), &want, &scale)
+                            .into_iter()
+                            .fold(0.0, f64::max);
+                    record::<T>(
+                        cells,
+                        (names.0, "coefficients", level),
+                        Errors::Degrees(&device_error),
+                        host_error,
+                        || format!("p = {p}, leaf {key}, {} points", counts[j]),
+                    );
+                }
+                // P2L: two targets with their X lists.
+                let mut targets = Vec::new();
+                while targets.len() < 2 {
+                    let target = rng.key(level);
+                    if !x_sources(target).is_empty() && !targets.contains(&target) {
+                        targets.push(target);
+                    }
+                }
+                let mut sources = Sources::new(kind);
+                let mut rows = Vec::new();
+                for &target in &targets {
+                    let mut row = Vec::new();
+                    for (k, source) in x_sources(target).into_iter().enumerate() {
+                        row.push(sources.keys.len() as u32);
+                        add_leaf(&mut sources, source, [6, 1, 0, 40][k % 4], k == 0, &mut rng);
+                    }
+                    rows.push(row);
+                }
+                let (got, frames) = run_sources::<T>(
+                    device,
+                    (layout, p, true),
+                    (level, &targets),
+                    &sources,
+                    &rows,
+                );
+                let mut e = 0;
+                for (r, &target) in targets.iter().enumerate() {
+                    let frame = absolute_frame(target, &domain);
+                    let mut want = vec![0.0; n];
+                    let mut in_t = vec![t::<T>(0.0); n];
+                    let mut scale = vec![0.0; n];
+                    for &j in &rows[r] {
+                        let j = j as usize;
+                        let source = sources.keys[j];
+                        check_frame(frames[e], target, source, "P2L");
+                        e += 1;
+                        let terms =
+                            reference(&sources, j, (&frame, Basis::Irregular), &mut ws, &mut want);
+                        scale.iter_mut().zip(terms).for_each(|(s, v)| *s += v);
+                        let chunk: Vec<T> = sources.chunk(j).iter().map(|&c| t::<T>(c)).collect();
+                        host.p2l_pair(source, target, &chunk, &mut in_t);
+                    }
+                    let device_error = degree_errors(
+                        Kind::Local,
+                        p,
+                        &widen(&got[r * n..(r + 1) * n]),
+                        &want,
+                        &scale,
+                    );
+                    let host_error = degree_errors(Kind::Local, p, &widen(&in_t), &want, &scale)
+                        .into_iter()
+                        .fold(0.0, f64::max);
+                    record::<T>(
+                        cells,
+                        (names.1, "coefficients", level),
+                        Errors::Degrees(&device_error),
+                        host_error,
+                        || format!("p = {p}, target {target}, {} sources", rows[r].len()),
+                    );
+                }
             }
         }
     }
@@ -831,7 +1065,25 @@ fn report<T: Real>(cells: &Cells, layout: LeafLayout) {
         let degree = cell
             .degree
             .map_or(String::new(), |n| format!(" at degree {n}"));
-        let comparison = if T::FLOAT == Precision::F64 {
+        let comparison = if name.contains("dipoles") {
+            // The dipole operators (Phase 6 T8d): the operator bound is asserted (`record`),
+            // the comparison with the host operator reported (module documentation).
+            let u = if T::FLOAT == Precision::F64 {
+                f64::EPSILON / 2.0
+            } else {
+                f64::from(f32::EPSILON) / 2.0
+            };
+            format!(
+                "host operator {:.2e}, ratio {:.2}, worst {:.1} u_T; reported",
+                cell.host,
+                if cell.host > 0.0 {
+                    cell.device / cell.host
+                } else {
+                    f64::NAN
+                },
+                cell.device / u
+            )
+        } else if T::FLOAT == Precision::F64 {
             // Within max(2 × host, floor), the floor (n + 2) u_T at degree n for
             // coefficients and 4 u_T for values (module documentation, "Against the host
             // operator").
@@ -905,6 +1157,7 @@ fn check_precision<T: Real>(device: &mut Device) {
         p2m_and_l2p::<T>(device, layout, &mut cells);
         p2l_x_list::<T>(device, layout, &mut cells);
         m2p_w_list::<T>(device, layout, &mut cells);
+        dipole_expansions::<T>(device, layout, &mut cells);
         report::<T>(&cells, layout);
     }
 }

@@ -2969,6 +2969,7 @@ name = "nd-fmm-spike-device-arith"
 version = "0.0.0"
 dependencies = [
  "cubecl",
+ "nd-fmm-kernels",
  "nd-fmm-math",
  "nd-fmm-ref",
  "nd-fmm-simd",

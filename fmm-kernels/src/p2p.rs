@@ -37,6 +37,33 @@
 //! the position of its leaf in the level or on the other targets, and repeated launches
 //! give the same bits. No atomics: every output value has one owning unit per launch.
 //!
+//! # Dipoles (Phase 6 T8d)
+//!
+//! With dipole sources ([`P2pInputs::source_kind`]; CONVENTIONS §3.7, "Dipole sources",
+//! and §3.13) a source of moment d̂ adds the potential and gradient of
+//! `nd_fmm_ref::p2p::p2p_dipoles` at w = u_t − ŷ with the moment in the target's units,
+//! d_t = r̂(s|t) d̂ (exact, a power of two; d̂ itself for s = t):
+//! φ̂ += d_t · w / |w|³ and ĝ += d_t / |w|³ − 3 (d_t · w) w / |w|⁵. The formulation is the
+//! kernel of docs/design/simd-p2p.md §4.8 under the device rules above (ŷ by an explicit
+//! fma, the coincident-pair rule by select):
+//!
+//! - wₖ, r² and ρ as above; ρ² = ρ ρ, ρ³ = ρ ρ²; s = `fma(d₂, w₂, fma(d₁, w₁, d₀ · w₀))`;
+//! - φ̂ = `fma(s, ρ³, φ̂)`; with gradients a = (3 s) ρ² and
+//!   ĝₖ = `fma(ρ³, fma(−a, wₖ, dₖ), ĝₖ)`: never r⁻⁵, so f32 stays in range down to the
+//!   dipole range of CONVENTIONS §3.13.
+//!
+//! Its contract is §3.13's "Device kernels", dipoles: 32 u_T for φ̂ relative to |d_t| / r²
+//! and 176 u_T for each component of ĝ relative to |d_t| / r³, on the kernel domain and the
+//! f32 dipole range, where subnormals flush for d_t = 0 or |d_t| r ≥ 2⁻⁹⁶. With charges and
+//! dipoles at the same points each source leaf of a row adds its charges first (the
+//! charge formulation above, operation for operation) and then its moments, as the host's
+//! P2P runs its two kernels per pair of leaves; one launch, no fused kernel. Dipoles carry
+//! one set of strengths, so a launch with dipoles has one vector. Separate kernels
+//! (`p2p_dipole_tiled_kernel`, `p2p_dipole_vector_kernel`) run the dipole kinds in the
+//! layouts below, with the same rows, blocks, tiles and order; the charge kernels are
+//! unchanged. The tile of the GPU layouts holds 6 values per source instead of 4
+//! ([`P2pLayout::check_sources`]).
+//!
 //! # Layouts ([`P2pLayout`])
 //!
 //! | Layout | Default on | Parallel unit | Sources |
@@ -78,6 +105,7 @@ use crate::buffer::{DeviceFloat, DeviceSlice, DeviceSliceMut};
 use crate::device::{BackendKind, Device, DeviceInfo, Precision};
 use crate::error::KernelError;
 use crate::frame;
+use crate::sources::SourceKind;
 use crate::view::{IndexView, LeafCoordinates, PointOffsets};
 
 /// The units of the [`Cube`](P2pLayout::Cube) layout by default on Metal (and so its
@@ -159,7 +187,8 @@ impl P2pLayout {
         }
     }
 
-    /// Checks that the device can run the layout in `precision`.
+    /// Checks that the device can run the layout in `precision` with charges
+    /// ([`check_sources`](Self::check_sources) with [`SourceKind::Charges`]).
     ///
     /// # Errors
     ///
@@ -168,6 +197,22 @@ impl P2pLayout {
     /// device whose plane size varies, or a vector width other than 64, 128, 256 or 512
     /// bits.
     pub fn check(self, info: &DeviceInfo, precision: Precision) -> Result<(), KernelError> {
+        self.check_sources(info, precision, SourceKind::Charges)
+    }
+
+    /// Checks that the device can run the layout in `precision` on sources of `kind`: as
+    /// [`check`](Self::check), the tile holding 4 values per source with charges and 6
+    /// with dipoles (Phase 6 T8d: the mapped ŷ and moment).
+    ///
+    /// # Errors
+    ///
+    /// As [`check`](Self::check).
+    pub fn check_sources(
+        self,
+        info: &DeviceInfo,
+        precision: Precision,
+        kind: SourceKind,
+    ) -> Result<(), KernelError> {
         let refuse = |reason: String| {
             Err(KernelError::UnsupportedLayout {
                 layout: self.to_string(),
@@ -204,7 +249,8 @@ impl P2pLayout {
                 info.max_units_per_cube
             ));
         }
-        let shared = 4 * tile as usize * value;
+        let arrays = if kind.has_dipoles() { 6 } else { 4 };
+        let shared = arrays * tile as usize * value;
         if shared > info.max_shared_memory {
             return refuse(format!(
                 "{shared} bytes of shared memory, the device has {}",
@@ -253,8 +299,12 @@ pub struct P2pInputs<'a, T: DeviceFloat> {
     /// The point offsets of the source store, by leaf.
     pub source_offsets: &'a PointOffsets,
     /// The source store: per leaf of n points, n leaf-scaled triples, then n charges (m n
-    /// with m vectors).
+    /// with m vectors), with dipoles the n moments d̂ after them (`source_kind`).
     pub sources: DeviceSlice<'a, T>,
+    /// The strengths of the source store (Phase 6 T8d): charges, dipoles or both, 3 + m, 6
+    /// or 7 values per point (CONVENTIONS §3.13, "Source chunks"). With dipoles, one
+    /// vector.
+    pub source_kind: SourceKind,
     /// The point offsets of the target input and output, by leaf.
     pub target_offsets: &'a PointOffsets,
     /// The target input: per leaf of n points, n leaf-scaled triples.
@@ -615,6 +665,458 @@ fn p2p_vector_kernel<F: Float, N: Size>(
     }
 }
 
+/// The GPU layouts with dipole sources (Phase 6 T8d; module documentation, "Dipoles"): the
+/// tiles of [`p2p_tiled_kernel`], per source leaf of the row first its charges (if
+/// `charges`, the charge stage of that kernel operation for operation) and then its
+/// moments, staged as the mapped ŷ and the mapped moment r̂ d̂ (d̂ itself for the leaf
+/// itself). One vector: the source chunk holds 7 (6 without charges) values per point.
+#[cube(launch_unchecked)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::needless_range_loop,
+    reason = "a kernel's arguments are its buffers and scalars, and #[cube] code has no iterators"
+)]
+fn p2p_dipole_tiled_kernel<F: Float>(
+    row_offsets: &[u32],
+    entries: &[u32],
+    leaves: &[u32],
+    source_offsets: &[u32],
+    target_offsets: &[u32],
+    sources: &[F],
+    target_input: &[F],
+    target_output: &mut [F],
+    source_base: u32,
+    input_base: u32,
+    output_base: u32,
+    first_leaf: u32,
+    nrows: u32,
+    #[comptime] group: usize,
+    #[comptime] groups: usize,
+    #[comptime] plane_sync: bool,
+    #[comptime] gradients: bool,
+    #[comptime] charges: bool,
+) {
+    let mut tile_x = Shared::<[F]>::new_slice(group * groups);
+    let mut tile_y = Shared::<[F]>::new_slice(group * groups);
+    let mut tile_z = Shared::<[F]>::new_slice(group * groups);
+    // The charges, and then the moments' components.
+    let mut tile_e0 = Shared::<[F]>::new_slice(group * groups);
+    let mut tile_e1 = Shared::<[F]>::new_slice(group * groups);
+    let mut tile_e2 = Shared::<[F]>::new_slice(group * groups);
+    let mut member = 0usize;
+    let mut lane = UNIT_POS as usize;
+    if plane_sync {
+        // The plane and the lane from UNIT_POS, as in `p2p_tiled_kernel`.
+        member = UNIT_POS as usize / group;
+        lane = UNIT_POS as usize % group;
+    }
+    let cube = CUBE_POS_Y as usize * CUBE_COUNT_X as usize + CUBE_POS_X as usize;
+    let row = cube * groups + member;
+    let tile0 = member * group;
+    // Values per source point: the triple, the charge (if any) and the moment.
+    let mut point_size = 6usize;
+    let mut charge_values = 0usize;
+    if charges {
+        point_size = 7usize;
+        charge_values = 1usize;
+    }
+    let three = F::new(3.0f32);
+    // The row condition is the same for every unit of a group, so every barrier below is
+    // reached by all of them or by none.
+    if row < nrows as usize {
+        let t_leaf = first_leaf as usize + row;
+        let t_first = target_offsets[t_leaf] as usize;
+        let n_t = target_offsets[t_leaf + 1] as usize - t_first;
+        let mut per_point = 1usize;
+        if gradients {
+            per_point = 4usize;
+        }
+        let chunk = output_base as usize + per_point * t_first;
+        let phi0 = chunk;
+        let grad0 = chunk + n_t;
+        let in0 = input_base as usize + 3 * t_first;
+        let e_first = row_offsets[row] as usize;
+        let e_last = row_offsets[row + 1] as usize;
+        let mut block = 0usize;
+        while block < n_t {
+            let t = block + lane;
+            let active = t < n_t;
+            let mut x0 = F::new(0.0f32);
+            let mut x1 = F::new(0.0f32);
+            let mut x2 = F::new(0.0f32);
+            let mut phi = F::new(0.0f32);
+            let mut g0 = F::new(0.0f32);
+            let mut g1 = F::new(0.0f32);
+            let mut g2 = F::new(0.0f32);
+            if active {
+                x0 = target_input[in0 + 3 * t];
+                x1 = target_input[in0 + 3 * t + 1];
+                x2 = target_input[in0 + 3 * t + 2];
+                phi = target_output[phi0 + t];
+                if gradients {
+                    g0 = target_output[grad0 + 3 * t];
+                    g1 = target_output[grad0 + 3 * t + 1];
+                    g2 = target_output[grad0 + 3 * t + 2];
+                }
+            }
+            for e in e_first..e_last {
+                let j = entries[e] as usize;
+                let s_first = source_offsets[j] as usize;
+                let n_s = source_offsets[j + 1] as usize - s_first;
+                let base = source_base as usize + point_size * s_first;
+                let moments = base + 3 * n_s + charge_values * n_s;
+                let mapped = j != t_leaf;
+                let c0 = frame_centre::<F>(leaves, j, t_leaf, 0usize);
+                let c1 = frame_centre::<F>(leaves, j, t_leaf, 1usize);
+                let c2 = frame_centre::<F>(leaves, j, t_leaf, 2usize);
+                let ratio = frame_ratio::<F>(leaves, j, t_leaf);
+                // The charges of the leaf: the charge stage of `p2p_tiled_kernel`.
+                if charges {
+                    let mut k0 = 0usize;
+                    while k0 < n_s {
+                        let k = k0 + lane;
+                        if k < n_s {
+                            let mut y0 = sources[base + 3 * k];
+                            let mut y1 = sources[base + 3 * k + 1];
+                            let mut y2 = sources[base + 3 * k + 2];
+                            if mapped {
+                                y0 = fma(ratio, y0, c0);
+                                y1 = fma(ratio, y1, c1);
+                                y2 = fma(ratio, y2, c2);
+                            }
+                            tile_x[tile0 + lane] = y0;
+                            tile_y[tile0 + lane] = y1;
+                            tile_z[tile0 + lane] = y2;
+                            tile_e0[tile0 + lane] = sources[base + 3 * n_s + k];
+                        }
+                        if plane_sync {
+                            sync_plane();
+                        } else {
+                            sync_cube();
+                        }
+                        let mut count = n_s - k0;
+                        if count > group {
+                            count = group;
+                        }
+                        if active {
+                            for i in 0..count {
+                                let d0 = x0 - tile_x[tile0 + i];
+                                let d1 = x1 - tile_y[tile0 + i];
+                                let d2 = x2 - tile_z[tile0 + i];
+                                let q = tile_e0[tile0 + i];
+                                let r2 = fma(d2, d2, fma(d1, d1, d0 * d0));
+                                let rho =
+                                    select(r2 == F::new(0.0f32), F::new(0.0f32), r2.inverse_sqrt());
+                                phi = fma(q, rho, phi);
+                                if gradients {
+                                    let w = (q * rho) * (rho * rho);
+                                    g0 = fma(-w, d0, g0);
+                                    g1 = fma(-w, d1, g1);
+                                    g2 = fma(-w, d2, g2);
+                                }
+                            }
+                        }
+                        if plane_sync {
+                            sync_plane();
+                        } else {
+                            sync_cube();
+                        }
+                        k0 += group;
+                    }
+                }
+                // The moments of the leaf.
+                let mut k0 = 0usize;
+                while k0 < n_s {
+                    let k = k0 + lane;
+                    if k < n_s {
+                        let mut y0 = sources[base + 3 * k];
+                        let mut y1 = sources[base + 3 * k + 1];
+                        let mut y2 = sources[base + 3 * k + 2];
+                        let mut e0 = sources[moments + 3 * k];
+                        let mut e1 = sources[moments + 3 * k + 1];
+                        let mut e2 = sources[moments + 3 * k + 2];
+                        if mapped {
+                            y0 = fma(ratio, y0, c0);
+                            y1 = fma(ratio, y1, c1);
+                            y2 = fma(ratio, y2, c2);
+                            // r̂ d̂: a power of two times d̂, exact (CONVENTIONS §3.13).
+                            e0 = ratio * e0;
+                            e1 = ratio * e1;
+                            e2 = ratio * e2;
+                        }
+                        tile_x[tile0 + lane] = y0;
+                        tile_y[tile0 + lane] = y1;
+                        tile_z[tile0 + lane] = y2;
+                        tile_e0[tile0 + lane] = e0;
+                        tile_e1[tile0 + lane] = e1;
+                        tile_e2[tile0 + lane] = e2;
+                    }
+                    if plane_sync {
+                        sync_plane();
+                    } else {
+                        sync_cube();
+                    }
+                    let mut count = n_s - k0;
+                    if count > group {
+                        count = group;
+                    }
+                    if active {
+                        for i in 0..count {
+                            let w0 = x0 - tile_x[tile0 + i];
+                            let w1 = x1 - tile_y[tile0 + i];
+                            let w2 = x2 - tile_z[tile0 + i];
+                            let e0 = tile_e0[tile0 + i];
+                            let e1 = tile_e1[tile0 + i];
+                            let e2 = tile_e2[tile0 + i];
+                            let r2 = fma(w2, w2, fma(w1, w1, w0 * w0));
+                            let rho =
+                                select(r2 == F::new(0.0f32), F::new(0.0f32), r2.inverse_sqrt());
+                            let rho2 = rho * rho;
+                            let rho3 = rho * rho2;
+                            let s = fma(e2, w2, fma(e1, w1, e0 * w0));
+                            phi = fma(s, rho3, phi);
+                            if gradients {
+                                let a = (three * s) * rho2;
+                                g0 = fma(rho3, fma(-a, w0, e0), g0);
+                                g1 = fma(rho3, fma(-a, w1, e1), g1);
+                                g2 = fma(rho3, fma(-a, w2, e2), g2);
+                            }
+                        }
+                    }
+                    if plane_sync {
+                        sync_plane();
+                    } else {
+                        sync_cube();
+                    }
+                    k0 += group;
+                }
+            }
+            if active {
+                target_output[phi0 + t] = phi;
+                if gradients {
+                    target_output[grad0 + 3 * t] = g0;
+                    target_output[grad0 + 3 * t + 1] = g1;
+                    target_output[grad0 + 3 * t + 2] = g2;
+                }
+            }
+            block += group;
+        }
+    }
+}
+
+/// The CPU layout with dipole sources (Phase 6 T8d): the rows and target blocks of
+/// [`p2p_vector_kernel`], per source leaf of the row first its charges (if `charges`, that
+/// kernel's charge loop operation for operation) and then its moments, each broadcast with
+/// its mapped ŷ. One vector.
+#[cube(launch_unchecked)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::needless_range_loop,
+    reason = "a kernel's arguments are its buffers and scalars, and #[cube] code has no iterators"
+)]
+fn p2p_dipole_vector_kernel<F: Float, N: Size>(
+    row_offsets: &[u32],
+    entries: &[u32],
+    leaves: &[u32],
+    source_offsets: &[u32],
+    target_offsets: &[u32],
+    sources: &[F],
+    target_input: &[F],
+    target_output: &mut [F],
+    source_base: u32,
+    input_base: u32,
+    output_base: u32,
+    first_leaf: u32,
+    nrows: u32,
+    #[comptime] blocks: usize,
+    #[comptime] gradients: bool,
+    #[comptime] charges: bool,
+) {
+    let width = N::value();
+    let units = CUBE_DIM as usize;
+    let unit = UNIT_POS as usize;
+    let rows = nrows as usize;
+    let share = rows / units;
+    let extra = rows % units;
+    let mut first = unit * share + extra;
+    let mut count = share;
+    if unit < extra {
+        first = unit * share + unit;
+        count = share + 1;
+    }
+    let mut point_size = 6usize;
+    let mut charge_values = 0usize;
+    if charges {
+        point_size = 7usize;
+        charge_values = 1usize;
+    }
+    let zero = Vector::<F, N>::new(F::new(0.0f32));
+    let three = Vector::<F, N>::new(F::new(3.0f32));
+    let mut tx = Array::<Vector<F, N>>::new(blocks);
+    let mut ty = Array::<Vector<F, N>>::new(blocks);
+    let mut tz = Array::<Vector<F, N>>::new(blocks);
+    let mut ap = Array::<Vector<F, N>>::new(blocks);
+    let mut ax = Array::<Vector<F, N>>::new(blocks);
+    let mut ay = Array::<Vector<F, N>>::new(blocks);
+    let mut az = Array::<Vector<F, N>>::new(blocks);
+    for row in first..first + count {
+        let t_leaf = first_leaf as usize + row;
+        let t_first = target_offsets[t_leaf] as usize;
+        let n_t = target_offsets[t_leaf + 1] as usize - t_first;
+        let mut per_point = 1usize;
+        if gradients {
+            per_point = 4usize;
+        }
+        let chunk = output_base as usize + per_point * t_first;
+        let phi0 = chunk;
+        let grad0 = chunk + n_t;
+        let in0 = input_base as usize + 3 * t_first;
+        let e_first = row_offsets[row] as usize;
+        let e_last = row_offsets[row + 1] as usize;
+        let mut b0 = 0usize;
+        while b0 < n_t {
+            #[unroll]
+            for b in 0..blocks {
+                let mut vx = zero;
+                let mut vy = zero;
+                let mut vz = zero;
+                let mut vp = zero;
+                let mut vgx = zero;
+                let mut vgy = zero;
+                let mut vgz = zero;
+                #[unroll]
+                for l in 0..width {
+                    let t = b0 + b * width + l;
+                    if t < n_t {
+                        vx.insert(l, target_input[in0 + 3 * t]);
+                        vy.insert(l, target_input[in0 + 3 * t + 1]);
+                        vz.insert(l, target_input[in0 + 3 * t + 2]);
+                        vp.insert(l, target_output[phi0 + t]);
+                        if gradients {
+                            vgx.insert(l, target_output[grad0 + 3 * t]);
+                            vgy.insert(l, target_output[grad0 + 3 * t + 1]);
+                            vgz.insert(l, target_output[grad0 + 3 * t + 2]);
+                        }
+                    }
+                }
+                tx[b] = vx;
+                ty[b] = vy;
+                tz[b] = vz;
+                ap[b] = vp;
+                ax[b] = vgx;
+                ay[b] = vgy;
+                az[b] = vgz;
+            }
+            for e in e_first..e_last {
+                let j = entries[e] as usize;
+                let s_first = source_offsets[j] as usize;
+                let n_s = source_offsets[j + 1] as usize - s_first;
+                let base = source_base as usize + point_size * s_first;
+                let moments = base + 3 * n_s + charge_values * n_s;
+                let mapped = j != t_leaf;
+                let c0 = frame_centre::<F>(leaves, j, t_leaf, 0usize);
+                let c1 = frame_centre::<F>(leaves, j, t_leaf, 1usize);
+                let c2 = frame_centre::<F>(leaves, j, t_leaf, 2usize);
+                let ratio = frame_ratio::<F>(leaves, j, t_leaf);
+                // The charges of the leaf: the loop of `p2p_vector_kernel`.
+                if charges {
+                    for k in 0..n_s {
+                        let mut y0 = sources[base + 3 * k];
+                        let mut y1 = sources[base + 3 * k + 1];
+                        let mut y2 = sources[base + 3 * k + 2];
+                        if mapped {
+                            y0 = fma(ratio, y0, c0);
+                            y1 = fma(ratio, y1, c1);
+                            y2 = fma(ratio, y2, c2);
+                        }
+                        let sx = Vector::<F, N>::new(y0);
+                        let sy = Vector::<F, N>::new(y1);
+                        let sz = Vector::<F, N>::new(y2);
+                        let q = Vector::<F, N>::new(sources[base + 3 * n_s + k]);
+                        #[unroll]
+                        for b in 0..blocks {
+                            let dx = tx[b] - sx;
+                            let dy = ty[b] - sy;
+                            let dz = tz[b] - sz;
+                            let r2 = fma(dz, dz, fma(dy, dy, dx * dx));
+                            let rho = select_many(r2.equal(&zero), zero, r2.inverse_sqrt());
+                            ap[b] = fma(q, rho, ap[b]);
+                            if gradients {
+                                let w = (q * rho) * (rho * rho);
+                                ax[b] = fma(-w, dx, ax[b]);
+                                ay[b] = fma(-w, dy, ay[b]);
+                                az[b] = fma(-w, dz, az[b]);
+                            }
+                        }
+                    }
+                }
+                // The moments of the leaf.
+                for k in 0..n_s {
+                    let mut y0 = sources[base + 3 * k];
+                    let mut y1 = sources[base + 3 * k + 1];
+                    let mut y2 = sources[base + 3 * k + 2];
+                    let mut e0 = sources[moments + 3 * k];
+                    let mut e1 = sources[moments + 3 * k + 1];
+                    let mut e2 = sources[moments + 3 * k + 2];
+                    if mapped {
+                        y0 = fma(ratio, y0, c0);
+                        y1 = fma(ratio, y1, c1);
+                        y2 = fma(ratio, y2, c2);
+                        // r̂ d̂: a power of two times d̂, exact (CONVENTIONS §3.13).
+                        e0 = ratio * e0;
+                        e1 = ratio * e1;
+                        e2 = ratio * e2;
+                    }
+                    let sx = Vector::<F, N>::new(y0);
+                    let sy = Vector::<F, N>::new(y1);
+                    let sz = Vector::<F, N>::new(y2);
+                    let ex = Vector::<F, N>::new(e0);
+                    let ey = Vector::<F, N>::new(e1);
+                    let ez = Vector::<F, N>::new(e2);
+                    #[unroll]
+                    for b in 0..blocks {
+                        let wx = tx[b] - sx;
+                        let wy = ty[b] - sy;
+                        let wz = tz[b] - sz;
+                        let r2 = fma(wz, wz, fma(wy, wy, wx * wx));
+                        let rho = select_many(r2.equal(&zero), zero, r2.inverse_sqrt());
+                        let rho2 = rho * rho;
+                        let rho3 = rho * rho2;
+                        let s = fma(ez, wz, fma(ey, wy, ex * wx));
+                        ap[b] = fma(s, rho3, ap[b]);
+                        if gradients {
+                            let a = (three * s) * rho2;
+                            ax[b] = fma(rho3, fma(-a, wx, ex), ax[b]);
+                            ay[b] = fma(rho3, fma(-a, wy, ey), ay[b]);
+                            az[b] = fma(rho3, fma(-a, wz, ez), az[b]);
+                        }
+                    }
+                }
+            }
+            #[unroll]
+            for b in 0..blocks {
+                let vp = ap[b];
+                let vgx = ax[b];
+                let vgy = ay[b];
+                let vgz = az[b];
+                #[unroll]
+                for l in 0..width {
+                    let t = b0 + b * width + l;
+                    if t < n_t {
+                        target_output[phi0 + t] = vp.extract(l);
+                        if gradients {
+                            target_output[grad0 + 3 * t] = vgx.extract(l);
+                            target_output[grad0 + 3 * t + 1] = vgy.extract(l);
+                            target_output[grad0 + 3 * t + 2] = vgz.extract(l);
+                        }
+                    }
+                }
+            }
+            b0 += blocks * width;
+        }
+    }
+}
+
 /// The frames of every entry of the rows: (ĉ₀, ĉ₁, ĉ₂, r̂) per entry, (0, 0, 0, 1) for the
 /// leaf itself; rows in blocks of `chunk` per unit and stride.
 #[cube(launch_unchecked)]
@@ -719,7 +1221,9 @@ pub(crate) fn cube_grid(info: &DeviceInfo, cubes: usize) -> (u32, u32) {
 /// gradients the n potentials and then n triples (CONVENTIONS §3.13); with m charge vectors
 /// ([`P2pInputs::vectors`], Phase 6 T5) m times as many, vector after vector, from one
 /// launch whose cubes along z are the vectors, each the one-vector kernel on its vector (so
-/// vector v equals the one-vector launch on vector v bit for bit).
+/// vector v equals the one-vector launch on vector v bit for bit). With dipole sources
+/// ([`P2pInputs::source_kind`], Phase 6 T8d) the moments' terms too, after each leaf's
+/// charges (module documentation, "Dipoles").
 ///
 /// A call without rows or entries launches nothing. One launch otherwise, which
 /// allocates nothing; on the CPU layout its units per cube are at most
@@ -728,15 +1232,15 @@ pub(crate) fn cube_grid(info: &DeviceInfo, cubes: usize) -> (u32, u32) {
 /// # Errors
 ///
 /// [`KernelError::WrongDevice`] if a buffer belongs to another device;
-/// [`KernelError::UnsupportedLayout`] if the device cannot run `layout` in `T`
-/// ([`P2pLayout::check`]).
+/// [`KernelError::UnsupportedLayout`] if the device cannot run `layout` in `T` on the
+/// sources ([`P2pLayout::check_sources`]).
 ///
 /// # Panics
 ///
 /// If the rows exceed the target leaves or the leaf coordinates, an entry addresses no
-/// leaf of the source offsets or the coordinates, or a store does not hold its values:
-/// 3 + m per source point, 3 per target point, and m (4 m with gradients) per target point
-/// in the output.
+/// leaf of the source offsets or the coordinates, dipoles come with more than one vector,
+/// or a store does not hold its values: 3 + m (6 with dipoles, 7 with both) per source
+/// point, 3 per target point, and m (4 m with gradients) per target point in the output.
 pub fn p2p<T: DeviceFloat>(
     device: &mut Device,
     layout: P2pLayout,
@@ -753,6 +1257,7 @@ pub fn p2p<T: DeviceFloat>(
         target_offsets,
         target_input,
         vectors,
+        source_kind,
     } = *inputs;
     for owner in [
         source_offsets.buffer().as_slice().device(),
@@ -764,7 +1269,7 @@ pub fn p2p<T: DeviceFloat>(
         device.check_owner(owner)?;
     }
     let nrows = check_rows(device, near, first_leaf, leaves, target_offsets.nleaves())?;
-    layout.check(device.info(), T::FLOAT)?;
+    layout.check_sources(device.info(), T::FLOAT, source_kind)?;
     assert!(
         near.is_empty() || near.entries().bound() <= source_offsets.nleaves() as u64,
         "p2p: near entries up to {} for {} source leaves",
@@ -772,11 +1277,16 @@ pub fn p2p<T: DeviceFloat>(
         source_offsets.nleaves()
     );
     assert!(vectors > 0, "p2p: at least one charge vector");
+    assert!(
+        vectors == 1 || !source_kind.has_dipoles(),
+        "p2p: {source_kind} with {vectors} vectors: dipoles carry one set of strengths"
+    );
     let per_point = vectors * if gradients { 4 } else { 1 };
+    let point_size = source_kind.point_size(vectors);
     assert_eq!(
         sources.len(),
-        (3 + vectors) * source_offsets.total(),
-        "p2p: the source store holds 3 + {vectors} values per point"
+        point_size * source_offsets.total(),
+        "p2p: the source store holds {point_size} values per point ({source_kind})"
     );
     assert_eq!(
         target_input.len(),
@@ -808,7 +1318,84 @@ pub fn p2p<T: DeviceFloat>(
     // One cube (or, on the CPU layout, one grid) per charge vector, along z (Phase 6 T5).
     let vectors = u32::try_from(vectors).expect("the charge vectors fit in u32");
     let client = device.client().clone();
+    let charges = source_kind.has_charges();
     match layout {
+        P2pLayout::Cube { .. } | P2pLayout::Plane { .. } if source_kind.has_dipoles() => {
+            let (group, groups, plane_sync) = match layout {
+                P2pLayout::Cube { units } => (units as usize, 1usize, false),
+                P2pLayout::Plane { planes } => (info.plane_size.0 as usize, planes as usize, true),
+                P2pLayout::Cpu { .. } => unreachable!("the CPU layout is launched below"),
+            };
+            let (cubes_x, cubes_y) = cube_grid(&info, nrows.div_ceil(groups));
+            // SAFETY: as for the charge kernel below, with one vector (asserted above): every
+            // handle is a whole buffer with its element count; rows, entries, leaves and
+            // offsets are within the bounds checked above; each leaf's chunk of 6 or 7 values
+            // per point (its triples, its charges if any, its moments) lies within the source
+            // store, whose length was asserted against the total, and each target's outputs
+            // within the target output. Shared memory holds group · groups values per array,
+            // and a unit touches its group's region only. Rows at or past nrows do nothing.
+            unsafe {
+                p2p_dipole_tiled_kernel::launch_unchecked::<T>(
+                    &client,
+                    CubeCount::Static(cubes_x, cubes_y, 1),
+                    CubeDim::new_1d((group * groups) as u32),
+                    BufferArg::from_raw_parts(ro, ro_len),
+                    BufferArg::from_raw_parts(en, en_len),
+                    BufferArg::from_raw_parts(lv, lv_len),
+                    BufferArg::from_raw_parts(so, so_len),
+                    BufferArg::from_raw_parts(to, to_len),
+                    BufferArg::from_raw_parts(sh, sh_len),
+                    BufferArg::from_raw_parts(ih, ih_len),
+                    BufferArg::from_raw_parts(oh, oh_len),
+                    bases.0,
+                    bases.1,
+                    bases.2,
+                    first_leaf as u32,
+                    nrows as u32,
+                    group,
+                    groups,
+                    plane_sync,
+                    gradients,
+                    charges,
+                );
+            }
+        }
+        P2pLayout::Cpu { vector_bits } if source_kind.has_dipoles() => {
+            let (lanes, blocks) = cpu_vectors(vector_bits, T::FLOAT);
+            let units = (device.units_cap() as usize)
+                .min(info.max_units_per_cube.max(1) as usize)
+                .min(nrows)
+                .max(1);
+            // SAFETY: as for the charge kernel below, with one vector (asserted above): every
+            // handle is a whole buffer with its element count; rows, entries, leaves and
+            // offsets are within the bounds checked above, and every chunk within its store.
+            // Each unit covers its own contiguous range of rows, so no two units write one
+            // output value; lanes past a leaf's points are neither loaded nor stored.
+            unsafe {
+                p2p_dipole_vector_kernel::launch_unchecked::<T>(
+                    &client,
+                    CubeCount::Static(1, 1, 1),
+                    CubeDim::new_1d(units as u32),
+                    lanes,
+                    BufferArg::from_raw_parts(ro, ro_len),
+                    BufferArg::from_raw_parts(en, en_len),
+                    BufferArg::from_raw_parts(lv, lv_len),
+                    BufferArg::from_raw_parts(so, so_len),
+                    BufferArg::from_raw_parts(to, to_len),
+                    BufferArg::from_raw_parts(sh, sh_len),
+                    BufferArg::from_raw_parts(ih, ih_len),
+                    BufferArg::from_raw_parts(oh, oh_len),
+                    bases.0,
+                    bases.1,
+                    bases.2,
+                    first_leaf as u32,
+                    nrows as u32,
+                    blocks,
+                    gradients,
+                    charges,
+                );
+            }
+        }
         P2pLayout::Cube { .. } | P2pLayout::Plane { .. } => {
             let (group, groups, plane_sync) = match layout {
                 P2pLayout::Cube { units } => (units as usize, 1usize, false),
@@ -1025,6 +1612,18 @@ mod tests {
             P2pLayout::Plane { planes: 33 }
                 .check(&metal, Precision::F64)
                 .is_err()
+        );
+        // With dipoles 6 values per source (Phase 6 T8d): 32 planes of f64 need 48 KB.
+        let planes = P2pLayout::Plane { planes: 32 };
+        assert!(
+            planes
+                .check_sources(&metal, Precision::F64, SourceKind::Dipoles)
+                .is_err()
+        );
+        assert!(
+            P2pLayout::Plane { planes: 21 }
+                .check_sources(&metal, Precision::F64, SourceKind::ChargesAndDipoles)
+                .is_ok()
         );
         let varying = info(BackendKind::Cuda, (16, 32));
         assert!(

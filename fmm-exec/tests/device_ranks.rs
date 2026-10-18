@@ -28,10 +28,11 @@
 //!   blocking and overlapped, with every kind on the host fallback bit for bit the host's,
 //!   and the transfers of the formula for m vectors (m times the bytes of the charges,
 //!   the output and the exchanges, the same launches and syncs);
-//! - dipole sources (Phase 6 T8, `device_common::dipole_scenario`, the CPU runtime): the
-//!   cube, N = 4,000, f64 p = 6, `Dipoles` and `ChargesAndDipoles`, every kind on the host
-//!   fallback bit for bit the host, the default placement (P2M, P2L and P2P on the host)
-//!   within the bound;
+//! - dipole sources (Phase 6 T8, T8d; `device_common::dipole_scenario`): the cube,
+//!   N = 4,000, `Dipoles` and `ChargesAndDipoles` (the CPU runtime f64 p = 6; from T8d
+//!   also Metal f32 p = 4 and CUDA f32 p = 4 and f64 p = 6), every kind on the host
+//!   fallback bit for bit the host, every kind on the device (the dipole kernels) within
+//!   the bound, with the transfers of the formula;
 //! - **against the one-rank host run**: the device output over every rank's targets, in
 //!   point order, within the same bounds of the one-rank host `Fmm` over all the points in
 //!   their own order (relative L2, φ and ∇φ; requirement 2: the host on P ranks lies within
@@ -432,6 +433,8 @@ fn device_on_several_ranks() {
                 run::<f32>(Backend::Metal, name, 100_000, p, true, &mut failures, &comm);
             }
         }
+        // Dipole sources with every kind on the device (Phase 6 T8d).
+        device_common::dipole_scenario::<f32>(4000, 4, Backend::Metal, &comm);
         ran.push("metal (f32 p = 3 and 8 at N = 10^5)");
     }
     if Backend::Cuda.is_compiled() {
@@ -441,6 +444,9 @@ fn device_on_several_ranks() {
             }
             run::<f64>(Backend::Cuda, name, 100_000, 8, true, &mut failures, &comm);
         }
+        // Dipole sources with every kind on the device (Phase 6 T8d).
+        device_common::dipole_scenario::<f32>(4000, 4, Backend::Cuda, &comm);
+        device_common::dipole_scenario::<f64>(4000, 6, Backend::Cuda, &comm);
         ran.push("cuda (f32 p = 3 and 8, f64 p = 8 at N = 10^5)");
     }
     let mut failed = 0u64;

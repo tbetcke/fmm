@@ -287,3 +287,323 @@ cargo run --release -p nd-fmm-validate --features metal --example dipole_cost --
 cargo test -p nd-fmm-simd --release --test p2p dipole_terms -- --ignored --show-output
 tools/kathleen/sync.sh && tools/kathleen/submit.sh check.sbatch simd
 ```
+
+
+# Phase 6 T8d: the dipole kinds on the device
+
+Phase 6, task T8d ([docs/phase6/T8d-dipoles-device.md](../../docs/phase6/T8d-dipoles-device.md));
+design [docs/design/optimisation.md](../../docs/design/optimisation.md) §7.4 and §7.5 ("As
+built in T8d"). Measured on 2026-10-17 and 18 from branch `tbetcke/phase8_t8d` (main at
+dae7e15 plus this task's changes), release builds, rustc 1.99.0, every BLAS thread variable
+at 1, on the Apple M3 Max unless stated; CUDA on locust's H100 (§T8d.4). Kathleen was not
+used.
+
+## T8d summary
+
+1. **Built**, in the order of the brief (§T8d.1): the device's source store with the
+   strengths (one upload of 3 or 4 values per source per evaluation, the moments scaled on
+   the host with the charge load's bits); the dipole P2P in every layout of
+   `nd_fmm_kernels::p2p` (separate kernels; the charge kernels unchanged); the dipole P2M
+   and P2L in both layouts of `nd_fmm_kernels::leaf` (the gradient ladders on the device);
+   the placement (T8's forced host fallback removed; `host_fallback` keeps any kind on the
+   host as before).
+2. **Contract** (CONVENTIONS §3.13, "Device kernels", "Dipoles", added in this task; no
+   version bump): the host kernel's 32 u_T (φ̂) and 176 u_T (ĝ); where subnormals flush, for
+   d_t = 0 or |d_t| r ≥ 2⁻⁹⁶ (every |d̂| ≥ 2⁻⁵⁵ on the f32 range). Measured at most 9.4 u_T
+   and 31.2 u_T on the CPU runtime, Metal and CUDA; the coincident-pair rule holds on every
+   adversarial and random pair of `spikes/device-arith` with moments, on all three (§T8d.2).
+3. **Accuracy** (§T8d.2): every test of the brief passes on the CPU runtime, Metal and CUDA:
+   the kernels against `nd_fmm_ref` and the host kernel, P2M and P2L to p = 20 in f64, the
+   FMM with every kind on the device within the device bounds of the host (1e-12, 1e-5) and
+   every kind on the fallback the host bit for bit with the transfers of the formula, and
+   the dipole gate with every kind on the device (CPU runtime f64, Metal f32, CUDA both)
+   within the device-against-host bounds: the device's error 0.9995–1.0002 of the host's.
+4. **Cost on Metal** (§T8d.3): a dipole evaluation now costs **1.07–1.23× a charge
+   evaluation** (charges and dipoles 1.21–1.64×), at one host thread and at twelve, against
+   15–28× and 2.4–4.3× with T8's fallback, which the same binary reproduces (within 5 % of
+   T8's numbers). P2M, P2L and P2P are 11–25 % of a dipole evaluation (charges: 10–24 %).
+5. **CUDA timings**: **not taken**. The H100 was in use by another user's job (a vLLM
+   engine, 79.6 GB, 100 % utilisation) at every check from 23:07 on 2026-10-17 to 01:16 on
+   2026-10-18, so by tools/gh200/README.md, "GPU etiquette", no timing ran; every CUDA
+   correctness run did (§T8d.4). `dipole_cost --backend cuda` is the open measurement.
+6. **For sign-off**: the §3.13 addition; the dipole leaf cells of `tests/operator/
+   device_leaf.rs` report their ratio to the host operator's error instead of asserting the
+   charge operators' "within twice the host" (Metal: 2.12 in one cell, §T8d.2); no fused
+   charge-and-dipole P2P kernel (§T8d.1); with dipoles the P2P layout under `Auto` is the
+   static rule (§T8d.1). Fixed on the way: `tests/device_tune.rs` hard-coded convention
+   version 2 as "another" version, which T8's bump made the current one (the test runs only
+   with a device feature, which T8 did not run it with).
+
+## T8d.1 What was built
+
+- **The source store with strengths** (`nd-fmm-exec`'s `device` and `fmm`). The device's
+  source store keeps the chunk layout of CONVENTIONS §3.13 (6 or 7 values per point) and
+  now takes the strengths. `Fmm` forwards w = 3 or 4 strengths per source, writes the host's
+  chunks where a kind runs on the host (from the forwarded values, as before), scales the
+  moments of the forwarded buffer into their leaf's units on its pool (`scale_moments`,
+  `T::from_f64(d.to_f64() / r)`: the charge load's bits), writes the chunks of the leaves the
+  source exchange sends from that buffer, and hands it to `begin_evaluation`, which uploads
+  it without a copy and scatters it by the strength slots (`DeviceViews::charge_slots`,
+  generalised: per source its charge, then its moment's components). One upload of
+  w N_s s bytes and one launch per evaluation, as for charges with w = m;
+  `tests/device_common::expected_evaluation` takes w (and 3 + w per ghost point).
+- **P2P** (`nd_fmm_kernels::p2p`). `SourceKind` (charges, dipoles, both) in `P2pInputs`; two
+  new kernels, `p2p_dipole_tiled_kernel` (the cube and plane layouts) and
+  `p2p_dipole_vector_kernel` (the CPU layout), with the rows, blocks, tiles and order of the
+  charge kernels, per source leaf first its charges (the charge formulation, operation for
+  operation) and then its moments: ŷ = fma(r̂, u_s, ĉ), d_t = r̂ d̂ (exact), r² and ρ by the
+  charge rules, ρ² = ρ ρ, ρ³ = ρ ρ², s = fma(d₂, w₂, fma(d₁, w₁, d₀ w₀)), φ̂ = fma(s, ρ³, φ̂),
+  a = (3 s) ρ², ĝₖ = fma(ρ³, fma(−a, wₖ, dₖ), ĝₖ): never r⁻⁵. The GPU tile holds 6 values per
+  source (`P2pLayout::check_sources`). The charge kernels and their launches do not change,
+  so neither does the charge path (every charge test passes as before on every backend).
+- **P2M and P2L** (`nd_fmm_kernels::leaf`). `SourceKind` in `SourceInputs`; comptime flags in
+  the existing kernels (with charges alone the operations of before), the harmonics to
+  degree p (P2L: p + 1, as M2P's gradient), `ladder`'s gradient contracted per slot as
+  `nd_fmm_ref::leaf::{p2m_dipoles, p2l_dipoles}` ((d̂₀ ∂ₓX + d̂₁ ∂ᵧX) + d̂₂ ∂_zX, conjugated:
+  `directional`, `stage_dipole`, `add_dipole`), P2L with d̂ · 2^(l_t − l_s); each entry's
+  charges before its moments. The cube layout stages conj(d̂ · ∇X) in the shared memory of
+  the charges' harmonics, so its shared memory does not grow.
+- **Placement and tuning**: every kind on the device by default with dipoles. The P2P layout
+  under `DeviceP2pLayout::Auto` is the static rule with dipoles, neither tuned nor taken from
+  the cache: the tuning cache keys hold no source type, and their P2P decisions are the
+  charge kernel's.
+- **No fused charge-and-dipole kernel** (the brief: only if measured worth it). On Metal at
+  p = 3 the P2P of charges and dipoles took 10.2–10.4 ms against 6.2–6.3 ms for dipoles and
+  5.1–5.2 ms for charges (§T8d.3); by the operation counts of simd-p2p.md §4.2 and §4.8
+  (*model*) a fused kernel would save at most the charge stage's distance and ρ, about half
+  of its 5 ms, some 7 % of a charge-and-dipole evaluation. The order is that of the host:
+  per source leaf the charges, then the moments.
+- **Tests**: `nd-fmm-kernels`' `tests/kernels/p2p/dipoles.rs` and `tests/kernels/leaf/
+  dipoles.rs` (8 runtime tests per backend), the dipole cases of `nd-fmm-exec`'s
+  `tests/operator/device_p2p.rs` and `device_leaf.rs`, `device_common::check_dipoles` with
+  every kind on the device (also in `tests/device_ranks.rs` on Metal and CUDA), the device
+  repeat of the gate in `tests/dipoles.rs`, and the section `dipoles` of
+  `spikes/device-arith` (the production kernel on the §3.13 pairs).
+- **`dipole_cost --dipole-fallback`** (`nd-fmm-validate`): keeps the named dipole kinds on
+  the host fallback, for the source types with dipoles only, so that one binary measures
+  T8's placement, P2P alone on the device and every kind on the device.
+
+## T8d.2 Accuracy
+
+**The P2P kernel** (`tests/kernels/p2p/dipoles.rs`): pair terms over the kernel domain
+(moments from 2⁻⁴⁰ to 1 in magnitude, every 64th zero, every 16th with a zero component;
+the source in the leaf itself or in a same-level, coarser or finer neighbour, the moment
+mapped by r̂ = 1, 2 or ½; in f32 from r² = 2⁻⁷⁹), against `p2p_dipoles` in the same
+precision, in u_T relative to |d_t| / r² (φ̂) and |d_t| / r³ (ĝ); 32,768 pairs per layout and
+source kind, every layout the same:
+
+| backend | precision | φ̂ (bound 32) | ĝ (bound 176) |
+| --- | --- | --- | --- |
+| CPU runtime (M3 Max) | f32 | 9.40 | 27.57 |
+| CPU runtime (M3 Max) | f64 | 9.01 | 28.96 |
+| Metal | f32 | 9.40 | 21.71 |
+| CUDA | f32 | 9.40 | 27.57 |
+| CUDA | f64 | 9.01 | 28.96 |
+
+Sums against `direct_sum` and `direct_sum_dipoles` (FMM-shaped rows up to 4,096 sources),
+coincident pairs, and the domain ends (r² = 2⁻¹⁰⁸ in f64, the ends of the f32 range,
+|d| r = 2⁻⁹⁰) pass on every layout of every backend; a row split per leaf, permuted target
+leaves and repeated launches are bit for bit, and charges and dipoles in one launch equal,
+leaf by leaf, a launch of the charges followed by one of the moments, bit for bit on every
+layout of the CPU runtime, Metal and CUDA. At the absolute frames (`nd-fmm-exec`'s
+`tests/operator/device_p2p.rs`, levels 2, 9 and 16, every near pair, relative to the term
+sums): against `p2p_dipoles` within 3.5e-16 / 8.2e-16 (f64, φ / ∇φ) and 1.6e-7 / 3.7e-7
+(f32), against the host kernel (`P2pKernel::evaluate_dipoles`) within 2.2e-16 / 0 (f64) and
+9.6e-8 / 0 (f32) on the CPU runtime and 1.7e-7 / 5.0e-7 on Metal.
+
+**The coincident-pair rule** (`spikes/device-arith`, section `dipoles`: the production
+kernel in the backend's default layout, one row per pair, moments uniform in [−1, 1)³;
+coincident pairs must add exactly zero, the others be finite and within the contract):
+
+| backend | precision | pairs | count | coincident | coincident ≠ 0 | non-finite | φ̂ (u_T) | ĝ (u_T) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| CPU runtime | f32 | adversarial | 209,303 | 30,403 | 0 | 0 | 7.43 | 23.47 |
+| CPU runtime | f32 | random | 216,000 | 3,526 | 0 | 0 | 9.18 | 28.58 |
+| CPU runtime | f64 | adversarial | 439,192 | 484 | 0 | 0 | 7.07 | 24.96 |
+| CPU runtime | f64 | random | 216,000 | 3,526 | 0 | 0 | 9.43 | 31.20 |
+| Metal | f32 | adversarial | 209,303 | 30,403 | 0 | 0 | 7.43 | 23.47 |
+| Metal | f32 | random | 216,000 | 3,526 | 0 | 0 | 8.09 | 26.23 |
+| CUDA | f32 | adversarial | 209,303 | 30,403 | 0 | 0 | 7.43 | 23.47 |
+| CUDA | f32 | random | 216,000 | 3,526 | 0 | 0 | 9.18 | 28.58 |
+| CUDA | f64 | adversarial | 439,192 | 484 | 0 | 0 | 7.07 | 24.96 |
+| CUDA | f64 | random | 216,000 | 3,526 | 0 | 0 | 9.43 | 31.20 |
+
+32,038 of the f32 adversarial pairs lie below the f32 dipole range (r² < 2⁻⁷⁹) and are not
+held to the contract; every coincident pair among them adds zero.
+
+**P2M and P2L** (`tests/operator/device_leaf.rs` at the absolute frames, levels 2, 9 and 16,
+f64 p ∈ {0, 1, 4, 8, 12, 20}, f32 p ≤ 8, both source kinds; per degree in the §3.8 weighting
+relative to the term magnitudes, the worst over the levels and kinds; the default layout,
+and on the CPU runtime also the cube layout):
+
+| backend | precision | P2M | P2L | bound |
+| --- | --- | --- | --- | --- |
+| CPU runtime | f64 | 7.4e-16 (6.7 u_T) | 1.1e-15 (9.7 u_T) | 1e-13 |
+| CPU runtime | f32 | 1.2e-7 | 3.7e-7 | 1e-5 |
+| Metal | f32 | 1.2e-7 | 4.7e-7 | 1e-5 |
+| CUDA | f64 | 7.4e-16 (6.7 u_T) | 1.1e-15 (9.7 u_T) | 1e-13 |
+| CUDA | f32 | 1.2e-7 | 3.7e-7 | 1e-5 |
+
+In f64 the device is within max(2 × the host operator's error, (n + 2) u_T) at degree n,
+the charge operators' rule. In f32 the host operator's error is reported beside the
+device's, not asserted (`device_leaf.rs`, module documentation): on Metal one cell, P2L
+dipoles at level 16, came to 2.12 times the host operator's (4.3e-7 against 2.0e-7; 1.85 on
+the CPU runtime), a ratio of two maxima of rounding errors 23 times below the bound; the
+other dipole cells lie at 0.46–1.69. The kernel tests (`tests/kernels/leaf/dipoles.rs`,
+levels 2, 9 and 16 at the canonical frames, p ≤ 8, p = 20 in f64 in the ignored sweep) pass
+on every layout of every backend, with repeated launches, rows split per entry and the order
+of charges and moments bit for bit.
+
+**The FMM** (`device_common::check_dipoles` in `tests/mpi_exec.rs`, `tests/device_metal.rs`,
+`tests/device_cuda.rs` and `tests/device_ranks.rs`): for `Dipoles` and `ChargesAndDipoles`,
+every kind on the host fallback is the host bit for bit, and every kind on the device is
+within the device bound of the host, with two evaluations bit for bit, blocking and
+overlapped bit for bit, and the transfers of the formula with w strengths per source:
+
+| run | backend | precision, p | φ, ∇φ from the host (relative L2) | bound |
+| --- | --- | --- | --- | --- |
+| `mpi_exec`, cube and Plummer, N = 2,000, 1 rank | CPU runtime | f64, 6 | ≤ 1.9e-16, ≤ 3.7e-18 | 1e-12 |
+| `mpi_exec`, the cube, N = 1,000 | CPU runtime | f32, 4 | 5.5e-8, ≤ 2.1e-9 | 1e-5 |
+| `device_metal`, the cube, N = 2,000 | Metal | f32, 4 | within | 1e-5 |
+| `device_cuda`, the cube, N = 2,000 | CUDA | f32, 4; f64, 6 | within | 1e-5; 1e-12 |
+| `device_ranks`, the cube, N = 4,000, 2 and 4 ranks | CPU runtime | f64, 6 | ≤ 2.3e-16, ≤ 4.7e-18 | 1e-12 |
+| `device_ranks`, the cube, N = 4,000, 2 ranks | Metal | f32, 4 | 1.6e-7, 1.5e-7 | 1e-5 |
+| `device_ranks`, the cube, N = 4,000, 2 and 4 ranks | CUDA | f32, 4; f64, 6 | ≤ 1.4e-7, ≤ 3.6e-9; ≤ 2.2e-16, ≤ 5.4e-18 | 1e-5; 1e-12 |
+
+`mpi_exec` passed with the CPU runtime at 1, 2 and 4 ranks (on several ranks the sent leaves
+take their scaled moments from the upload).
+
+**The dipole gate** (`tests/dipoles.rs`, 1 rank; the gate's problems, eight vectors): every
+host case as in T8 (§1, the same errors), and every case repeated with every kind on the
+device:
+
+| backend | precision | cases | device error / host error | device φ from the host's |
+| --- | --- | --- | --- | --- |
+| CPU runtime | f64 | cube and Plummer, both kinds, p = 3, 8, 12 | 1.0000 | 1.9e-17 – 6.8e-17 |
+| Metal | f32 | cube and Plummer, both kinds, p = 3, 8 | 0.9995–1.0000 | 7.8e-8 – 1.3e-7 |
+| CUDA | f32 | cube and Plummer, both kinds, p = 3, 8 | 0.9999–1.0002 | 2.7e-8 – 7.4e-8 |
+| CUDA | f64 | cube and Plummer, both kinds, p = 3, 8, 12 | 1.0000 | 2.4e-17 – 6.8e-17 |
+
+Bounds: the error within 0.1 % (f64) and 5 % (f32) of the host's, φ within 1e-12 and 1e-5
+(docs/phase4/README.md, "Accuracy measures", FMM).
+
+## T8d.3 Cost on Metal
+
+`dipole_cost --backend metal --precision f32 --n 1000000` (the cube, gradients, the default
+tree), the three placements of `--dipole-fallback` with one and twelve host threads; the
+charge rows keep every kind on the device in all of them. Median wall time of `evaluate`
+over five evaluations after a warm-up, ms, and the ratio to the charge evaluation of the
+same run; then the share of P2M, P2L and P2P in one evaluation with synchronous kind
+timings. Load average 3–7 on the M3 Max during the runs (system daemons; no other job of
+ours), the GPU otherwise idle.
+
+| threads | p | sources | T8: P2M, P2L, P2P on the fallback | P2P on the device | every kind on the device |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 3 | charges | 21.0 | 20.8 | 21.0 |
+| 1 | 3 | dipoles | 595.0 (28.35) | 81.1 (3.89) | 25.3 (1.20) |
+| 1 | 3 | charges and dipoles | 965.7 (46.01) | 116.5 (5.59) | 34.4 (1.64) |
+| 1 | 8 | charges | 56.0 | 56.0 | 56.0 |
+| 1 | 8 | dipoles | 845.4 (15.08) | 324.8 (5.80) | 60.1 (1.07) |
+| 1 | 8 | charges and dipoles | 1326.4 (23.67) | 473.4 (8.46) | 70.1 (1.25) |
+| 12 | 3 | charges | 16.8 | 17.0 | 16.2 |
+| 12 | 3 | dipoles | 72.0 (4.29) | 26.9 (1.58) | 20.0 (1.23) |
+| 12 | 3 | charges and dipoles | 107.1 (6.38) | 35.4 (2.08) | 26.2 (1.61) |
+| 12 | 8 | charges | 51.4 | 51.2 | 51.2 |
+| 12 | 8 | dipoles | 122.7 (2.39) | 79.3 (1.55) | 54.8 (1.07) |
+| 12 | 8 | charges and dipoles | 168.2 (3.27) | 97.5 (1.90) | 61.8 (1.21) |
+
+T8's numbers for the fallback (§3: 591.3, 964.8, 839.5, 1340.2 ms at one thread; 69.0, 103.0,
+126.2, 166.3 at twelve) are reproduced within 0.1–4.3 %. Per kind, ms, with every kind on the
+device (synchronous kind timings, one thread; twelve threads the same to ±0.6 ms):
+
+| p | sources | P2M | M2M | M2L | L2L | L2P | P2P | P2M, P2L, P2P / evaluation |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 3 | charges | 0.54 | 1.81 | 4.30 | 1.85 | 0.37 | 5.15 | 21.1 % |
+| 3 | dipoles | 1.00 | 4.36 | 6.11 | 4.43 | 0.55 | 6.33 | 18.8 % |
+| 3 | charges and dipoles | 1.05 | 3.85 | 4.45 | 2.69 | 0.55 | 10.39 | 25.9 % |
+| 8 | charges | 1.43 | 2.13 | 38.05 | 2.24 | 0.73 | 4.97 | 10.1 % |
+| 8 | dipoles | 1.21 | 1.91 | 38.02 | 2.41 | 0.75 | 6.15 | 11.1 % |
+| 8 | charges and dipoles | 1.73 | 2.00 | 38.08 | 2.33 | 0.70 | 10.17 | 15.7 % |
+
+(P2L has no entry on this uniform tree. M2M and L2L at p = 3 vary run to run by ±2 ms with
+synchronous kind timings; see the twelve-thread run, 1.98 and 1.51 ms for dipoles.) The
+dipole P2P costs 1.2× the charge P2P on Metal, close to the 1.4× of the operation counts
+(simd-p2p.md §4.8), and the dipole P2M about the charge P2M. The load stage (forwarding and
+scaling the moments, the upload) took 2.9–3.4 ms for dipoles and 4.6–8.2 ms for charges and
+dipoles, against 1.5 ms for charges.
+
+Step by step (the brief's order, each measured before the next): T8's placement; P2P on the
+device (P2M and P2L still on the fallback): 3.9–8.5× a charge evaluation at one thread,
+1.55–2.08× at twelve, P2M (51–397 ms at one thread) now the larger part; every kind on the
+device: 1.07–1.64×.
+
+## T8d.4 CUDA (locust)
+
+Correctness only, on locust's H100 (CUDA 12.6, CubeCL 0.11.0 through LLVM NVPTX), from
+the synced working tree, 2026-10-17 23:07 to 2026-10-18 00:59. The GPU was shared with
+another user's vLLM engine (79.6 GB of 96, 100 % utilisation, running before the first
+check and after the last); correctness runs that need little memory may share the GPU
+(tools/gh200/README.md, "GPU etiquette"), timings may not, so none was taken: the cost of a
+dipole evaluation on CUDA, against T8 (which had no CUDA numbers either) and against a
+charge evaluation, is open. The command, for when the GPU is free:
+`tools/gh200/remote.sh 'cargo run --release -p nd-fmm-validate --features cuda --example
+dipole_cost -- --backend cuda --precision f32 [--dipole-fallback …]'` (and f64).
+
+What ran and passed:
+
+- `nd-fmm-kernels`, `--features cpu,cuda -- --include-ignored`: 159 tests (the CPU
+  runtime on Grace and CUDA, f32 and f64), the dipole ones included: P2P pair terms
+  9.40 / 27.57 u_T (f32) and 9.01 / 28.96 u_T (f64), sums, coincident pairs, domain ends,
+  invariance and the order bit for bit on every layout; P2M and P2L on levels 2, 9, 16.
+- `spikes/device-arith --sections dipoles` on CUDA: the coincident-pair rule on all pairs
+  (§T8d.2).
+- `nd-fmm-exec`, `--features cuda --release -- --ignored`: every executable, with
+  `tests/device_cuda.rs` (the dipole scenario, f32 p = 4 and f64 p = 6), `tests/dipoles.rs`
+  (the gate, CUDA in f32 and f64, §T8d.2), the operator tests (dipole P2P and P2M, P2L at the
+  absolute frames, p ≤ 20 in f64), `device_fmm`, `accuracy`, `adaptive`; and without
+  `--ignored` every executable (after the `device_tune` fix).
+- `tests/device_ranks.rs` at 2 and 4 ranks (`mpirun`, the ranks sharing the H100) with the
+  CUDA dipole scenario (§T8d.2).
+- `cargo clippy --all-targets --features cpu,cuda -- -D warnings` for `nd-fmm-kernels` and
+  `nd-fmm-exec`.
+
+## T8d.5 Checks
+
+On the M3 Max unless stated; every check passed.
+
+- Root: `cargo fmt -- --check`; `cargo clippy -- -D warnings`; `cargo clippy --examples --
+  -D warnings`; `RUST_MIN_STACK=8388608 cargo test` (`mpi_exec` 140 s in debug, T8 157 s);
+  `cargo doc --no-deps`. Strict: `cargo clippy --workspace --all-targets -- -D warnings`;
+  `RUST_MIN_STACK=8388608 cargo test --workspace`.
+- `.github/scripts/run-mpi-tests.sh` at 2 and 4 ranks (loopback flags): every executable
+  (`mpi_exec` 176 and 152 s).
+- `nd-fmm-kernels`: clippy without features and with `cpu,metal`; `cargo check --features
+  cuda`; `cargo test` (no features) and `--features cpu --release` (83 tests, 54 s) and its
+  ignored p = 20 sweep (82 s); `--features metal -- --ignored` outside the sandbox (63
+  tests); `cargo doc --no-deps`; on locust with `cpu,cuda` (§T8d.4).
+- `nd-fmm-exec`: clippy without features and with `cpu,metal`; `cargo check --features
+  cuda`; `cargo doc --no-deps --features cpu`; `--features cpu --release` and its
+  `-- --ignored` (every gate, `device_fmm`, `device_ranks`, the dipole gate on the CPU
+  runtime, `multi_rank`); `mpi_exec` (`--features cpu --release`) at 1, 2 and 4 ranks;
+  `device_ranks` and `tests/dipoles.rs` (`--features cpu`) at 2 and 4 ranks; `--features
+  metal --release -- --ignored` outside the sandbox (every executable; the operator tests
+  rerun after the dipole leaf cells' change), `device_ranks` on Metal at 2 ranks; on locust
+  with CUDA (§T8d.4).
+- `nd-fmm-validate`: clippy with `metal`, the `dipole_cost` runs of §T8d.3; the spike:
+  clippy with `cpu,metal`, `--sections dipoles` on the CPU runtime, Metal and CUDA.
+- Not run: CUDA timings (§T8d.4); Kathleen (no x86 code changed: the host kernels are
+  untouched).
+
+## T8d.6 Commands
+
+```sh
+cargo test -p nd-fmm-kernels --features cpu --release -- --show-output
+cargo test -p nd-fmm-kernels --release --features metal -- --ignored --show-output   # outside the sandbox
+RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features cpu --release [-- --ignored]
+RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --features metal --release -- --ignored   # outside the sandbox
+cargo run --release -p nd-fmm-spike-device-arith --features cpu,metal -- --sections dipoles
+cargo run --release -p nd-fmm-validate --features metal --example dipole_cost -- \
+    --n 1000000 --precision f32 --backend metal --threads 1 --dipole-fallback p2m,p2l,p2p
+#   … --dipole-fallback p2m,p2l, … --dipole-fallback none, and --threads 12
+tools/gh200/sync.sh && tools/gh200/remote.sh '<the CUDA commands of fmm-kernels/CLAUDE.md and fmm-exec/CLAUDE.md>'
+```

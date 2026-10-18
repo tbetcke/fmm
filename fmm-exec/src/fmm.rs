@@ -224,8 +224,11 @@
 //!   `evaluate_sources` of `Sources::charges(c)` is `evaluate(c)` bit for bit.
 //! - **One set.** Dipoles carry one set of strengths; with more than one vector `build`
 //!   returns [`SettingsError::SourcesWithVectors`].
-//! - **The device** runs P2M, P2L and P2P on the host fallback with dipoles (the `device`
-//!   module, "Dipoles").
+//! - **The device** runs P2M, P2L and P2P with the dipole kernels of `nd-fmm-kernels`
+//!   (Phase 6 T8d; the `device` module, "Dipoles"): an evaluation uploads the 3 or 4
+//!   strengths of every source once, the moments scaled into their leaf's units on the pool
+//!   first (the bits the charge load writes into the host's chunks), and the leaves the
+//!   source exchange sends take their chunks from that upload.
 //! - **Cost model.** The work-weighted cut weighs the charge kernels' work; only the
 //!   partition depends on it.
 //!
@@ -2836,24 +2839,107 @@ fn write_source_charges<T: SimdScalar>(
         let points = sources.range(first + r);
         let (_, values) = chunk.split_at_mut(3 * points.len());
         let input = &charges[m * points.start..m * points.end];
-        match moments {
-            None => values.copy_from_slice(input),
-            Some(StrengthLayout { sources, radii }) => {
-                let radius = radii[first + r];
-                let n = points.len();
-                let q = usize::from(sources.has_charges());
-                let (leaf_charges, leaf_moments) = values.split_at_mut(q * n);
-                for (j, strengths) in input.chunks_exact(m).enumerate() {
-                    if q == 1 {
-                        leaf_charges[j] = strengths[0];
-                    }
-                    for k in 0..3 {
-                        leaf_moments[3 * j + k] = T::from_f64(strengths[q + k].to_f64() / radius);
-                    }
-                }
+        let layout = moments.map(|layout| (layout.sources, Some(layout.radii[first + r])));
+        write_leaf_strengths(values, input, m, layout);
+    }
+}
+
+/// One local leaf's strengths: `values` its chunk after the coordinate triples, `input`
+/// its sources' m strengths each, as forwarded. Copied as they are without `moments`; with
+/// `moments` = (the source type, the leaf's r) the charges first and then the moments,
+/// each component `T::from_f64(d.to_f64() / r)`, or copied as they are with `None` for r
+/// (already scaled, Phase 6 T8d: [`scale_moments`]).
+fn write_leaf_strengths<T: SimdScalar>(
+    values: &mut [T],
+    input: &[T],
+    m: usize,
+    moments: Option<(SourceType, Option<f64>)>,
+) {
+    let Some((sources, radius)) = moments else {
+        values.copy_from_slice(input);
+        return;
+    };
+    let n = input.len() / m;
+    let q = usize::from(sources.has_charges());
+    let (leaf_charges, leaf_moments) = values.split_at_mut(q * n);
+    for (j, strengths) in input.chunks_exact(m).enumerate() {
+        if q == 1 {
+            leaf_charges[j] = strengths[0];
+        }
+        for k in 0..3 {
+            let d = strengths[q + k];
+            leaf_moments[3 * j + k] = match radius {
+                Some(radius) => T::from_f64(d.to_f64() / radius),
+                None => d,
+            };
+        }
+    }
+}
+
+/// Scales the moments of the forwarded strengths `upload` (w = 3 or 4 per source, leaf
+/// order, the charge first if any) into their leaf's units in place, for the device's
+/// upload (Phase 6 T8d): each component `T::from_f64(d.to_f64() / r_j)`, the bits the charge
+/// load writes into the host's chunks; the charges stay as they are. On `pool` when given,
+/// halving the leaves as the charge load does.
+fn scale_moments<T: SimdScalar>(
+    upload: &mut [T],
+    sources: &LeafRanges,
+    layout: StrengthLayout<'_>,
+    pool: Option<&ThreadPool>,
+) {
+    let leaves = 0..layout.radii.len();
+    match pool {
+        Some(pool) => pool.install(|| split_scale_moments(upload, sources, layout, leaves)),
+        None => write_scaled_moments(upload, sources, layout, leaves),
+    }
+}
+
+/// [`scale_moments`] on the calling thread for the local leaves `leaves`, whose strengths
+/// `upload` holds.
+fn write_scaled_moments<T: SimdScalar>(
+    upload: &mut [T],
+    sources: &LeafRanges,
+    StrengthLayout {
+        sources: kind,
+        radii,
+    }: StrengthLayout<'_>,
+    leaves: std::ops::Range<usize>,
+) {
+    let w = kind.strengths();
+    let q = usize::from(kind.has_charges());
+    let first = sources.offsets[leaves.start];
+    for j in leaves {
+        let radius = radii[j];
+        for point in sources.range(j) {
+            let at = w * (point - first) + q;
+            for d in &mut upload[at..at + 3] {
+                *d = T::from_f64(d.to_f64() / radius);
             }
         }
     }
+}
+
+/// [`scale_moments`] on the current pool for the local leaves `leaves`, halving them until
+/// a half holds at most [`LOAD_GRAIN`] points or one leaf.
+fn split_scale_moments<T: SimdScalar>(
+    upload: &mut [T],
+    sources: &LeafRanges,
+    layout: StrengthLayout<'_>,
+    leaves: std::ops::Range<usize>,
+) {
+    let points = sources.offsets[leaves.end] - sources.offsets[leaves.start];
+    if leaves.len() < 2 || points <= LOAD_GRAIN {
+        write_scaled_moments(upload, sources, layout, leaves);
+        return;
+    }
+    let mid = leaves.start + leaves.len() / 2;
+    let w = layout.sources.strengths();
+    let (left, right) =
+        upload.split_at_mut(w * (sources.offsets[mid] - sources.offsets[leaves.start]));
+    rayon::join(
+        || split_scale_moments(left, sources, layout, leaves.start..mid),
+        || split_scale_moments(right, sources, layout, mid..leaves.end),
+    );
 }
 
 /// [`load_source_charges`] on the current pool, halving the leaves of `chunks` (the
@@ -4083,7 +4169,7 @@ where
         // w strengths per source: the m charges, or one set of the source type's (Phase 6
         // T8); the output carries m vectors.
         let (start, m, w) = (Instant::now(), self.vectors, self.strengths);
-        let upload = if self.evaluator.operator().engine.is_device() {
+        let mut upload = if self.evaluator.operator().engine.is_device() {
             Some(self.sources.forward(charges, w))
         } else {
             self.sources.forward_into(charges, w, &mut self.charges);
@@ -4091,13 +4177,13 @@ where
         };
         timings.forward_charges = pack + start.elapsed();
         let start = Instant::now();
+        // Dipole moments are scaled into units of their leaf (CONVENTIONS §3.13, "Source
+        // chunks"); charges are copied as they are.
+        let moments = (self.source_type != SourceType::Charges).then(|| StrengthLayout {
+            sources: self.source_type,
+            radii: &self.radii,
+        });
         if self.host_sources {
-            // Dipole moments are scaled into units of their leaf (CONVENTIONS §3.13,
-            // "Source chunks"); charges are copied as they are.
-            let moments = (self.source_type != SourceType::Charges).then(|| StrengthLayout {
-                sources: self.source_type,
-                radii: &self.radii,
-            });
             load_source_charges(
                 self.evaluator.local_sources_mut(),
                 &self.source_leaves,
@@ -4105,14 +4191,24 @@ where
                 (w, moments),
                 pool.as_deref(),
             );
-        } else if let Some(upload) = &upload {
-            // The charges of the leaves the source exchange sends, which it reads from the
-            // host store (Phase 5 T8, docs/design/distributed-fmm.md §7.1).
+        }
+        if let Some(upload) = &mut upload {
+            // The device takes the strengths with the moments scaled as the host's chunks
+            // hold them (Phase 6 T8d), and the leaves the source exchange sends take them
+            // from the host store, which the exchange reads (Phase 5 T8,
+            // docs/design/distributed-fmm.md §7.1).
+            if let Some(layout) = moments {
+                scale_moments(upload, &self.source_leaves, layout, pool.as_deref());
+            }
             for &j in &self.sent_leaves {
                 let points = self.source_leaves.range(j as usize);
                 let chunk = self.evaluator.sources_mut(j as usize);
-                chunk[3 * points.len()..]
-                    .copy_from_slice(&upload[w * points.start..w * points.end]);
+                write_leaf_strengths(
+                    &mut chunk[3 * points.len()..],
+                    &upload[w * points.start..w * points.end],
+                    w,
+                    moments.map(|layout| (layout.sources, None)),
+                );
             }
         }
         timings.load = start.elapsed();
@@ -4132,13 +4228,6 @@ where
             // device: its own sync, beside that of `synchronous_stages` (each documents it).
             let sync_kinds = kinds.timings.mode == KindTiming::Synchronous;
             let upload = upload.expect("a device evaluation forwards into a fresh buffer");
-            // With dipoles every kind that reads sources runs on the host (the `device`
-            // module, "Dipoles"), so the device takes no strengths.
-            let upload = if self.source_type == SourceType::Charges {
-                upload
-            } else {
-                Vec::new()
-            };
             timings.load += timed(|| {
                 driver.begin_evaluation(upload);
                 if sync {

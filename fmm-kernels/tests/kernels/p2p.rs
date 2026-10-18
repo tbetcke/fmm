@@ -19,7 +19,7 @@
 
 use nd_fmm_kernels::p2p::{P2pInputs, P2pLayout, near_frames, p2p};
 use nd_fmm_kernels::view::{IndexView, LeafCoordinates, PointOffsets};
-use nd_fmm_kernels::{BackendKind, Device, DeviceBuffer, Precision};
+use nd_fmm_kernels::{BackendKind, Device, DeviceBuffer, Precision, SourceKind};
 use nd_fmm_math::RealScalar;
 use nd_fmm_ref::p2p::direct_sum;
 
@@ -87,12 +87,14 @@ fn layouts(device: &Device) -> Vec<P2pLayout> {
 }
 
 /// A leaf of a test problem: its level and index, its sources (leaf-scaled, with
-/// charges) and its targets (leaf-scaled).
+/// charges and, for the dipole tests, moments in units of the leaf) and its targets
+/// (leaf-scaled).
 #[derive(Clone, Debug)]
 struct Leaf<T> {
     key: (u32, [u32; 3]),
     sources: Vec<[T; 3]>,
     charges: Vec<T>,
+    moments: Vec<[T; 3]>,
     targets: Vec<[T; 3]>,
 }
 
@@ -102,6 +104,7 @@ impl<T: Real> Leaf<T> {
             key,
             sources: Vec::new(),
             charges: Vec::new(),
+            moments: Vec::new(),
             targets: Vec::new(),
         }
     }
@@ -249,6 +252,7 @@ fn launch<T: Real>(device: &mut Device, on: &mut OnDevice<T>, layout: P2pLayout,
         target_offsets: &on.target_offsets,
         target_input: on.target_input.as_slice(),
         vectors: 1,
+        source_kind: SourceKind::Charges,
     };
     p2p(device, layout, gradients, &inputs, on.output.as_slice_mut()).unwrap();
 }
@@ -753,6 +757,150 @@ fn sums(device: &mut Device) {
     each_precision!(device, body);
 }
 
+/// The rows of [`coincident`]: targets equal to the sources of their leaf, duplicated
+/// sources, mapped neighbour sources that equal or round onto a target, and adversarial
+/// points at the leaf centres and faces on levels 2, 9 and 16; with the number of
+/// coincident pairs (the reference skips them).
+fn coincident_problem<T: Real>(rng: &mut Rng) -> (Problem<T>, usize) {
+    // Below half a spacing of the sums it is added to (ĉ of magnitude ½ to 1).
+    let tiny = if T::FLOAT == Precision::F32 {
+        2f64.powi(-30)
+    } else {
+        2f64.powi(-60)
+    };
+    // The source u_s of leaf `source` whose mapped ŷ = fl(ĉ + r̂ u_s) seen from
+    // `target` is x: exact where (x − ĉ) / r̂ is not 0, else off by `tiny`, which the
+    // rounding of ĉ + r̂ u_s removes.
+    let onto = |x: [f64; 3], source: (u32, [u32; 3]), target: (u32, [u32; 3])| -> [T; 3] {
+        let (c, ratio) = frame(source, target);
+        std::array::from_fn(|k| {
+            let exact = (x[k] - c[k]) / ratio;
+            t(if exact == 0.0 && c[k].abs() >= 0.5 {
+                tiny
+            } else {
+                exact
+            })
+        })
+    };
+    let special: Vec<T> = [
+        0.0,
+        -2f64.powi(-53),
+        2f64.powi(-53),
+        1.0,
+        -1.0,
+        1.0 - 2f64.powi(-24),
+        -1.0 + 2f64.powi(-24),
+        0.5,
+        -0.5,
+    ]
+    .iter()
+    .map(|&v| t::<T>(v))
+    .collect();
+    let grid: Vec<[T; 3]> = (0..27)
+        .map(|i| {
+            [
+                special[i % 9],
+                special[(i / 3) % 9],
+                special[(5 * i + 1) % 9],
+            ]
+        })
+        .collect();
+    // The target leaves: the constructed one, then one per adversarial level.
+    let target_key = (9u32, [101u32, 100, 100]);
+    let adversarial: Vec<(u32, [u32; 3])> = [2u32, 9, 16]
+        .iter()
+        .map(|&level| (level, interior(rng, level)))
+        .collect();
+    let mut leaves = vec![Leaf::new(target_key)];
+    leaves.extend(adversarial.iter().map(|&key| Leaf::new(key)));
+    // Row 0: targets equal to the sources, every source three times; a same-level
+    // neighbour (ĉ = (2, 0, 0)) whose sources map exactly onto the targets; a coarser
+    // one (ĉ = (3, 1, 1), r̂ = 2) and a finer one (ĉ = (−1.5, −0.5, 0.5), r̂ = ½) with
+    // a source each that rounds onto a target.
+    let corner = [1.0, 1.0, 1.0];
+    let face = [-1.0, -0.5, 0.5];
+    // Targets on the grid 2⁻¹², so that x − ĉ is exact for every frame here.
+    let mut targets: Vec<[T; 3]> = points::<T>(rng, 13)
+        .iter()
+        .map(|p| p.map(|v| t::<T>((w(v) * 4096.0).round() / 4096.0)))
+        .collect();
+    targets.push(corner.map(t::<T>));
+    targets.push(face.map(t::<T>));
+    leaves[0].targets = targets.clone();
+    for &x in &targets {
+        for _ in 0..3 {
+            leaves[0].sources.push(x);
+            leaves[0].charges.push(charge(rng));
+        }
+    }
+    let same_key = (9u32, [102u32, 100, 100]);
+    let coarse_key = (8u32, [51u32, 50, 50]);
+    let fine_key = (10u32, [201u32, 200, 201]);
+    for key in [same_key, coarse_key, fine_key] {
+        assert!(touches(key, target_key), "{key:?}");
+    }
+    let mut same = Leaf::new(same_key);
+    for x in &targets {
+        same.sources.push(onto(x.map(w::<T>), same_key, target_key));
+    }
+    let mut coarse = Leaf::new(coarse_key);
+    coarse.sources.push(onto(corner, coarse_key, target_key));
+    let mut fine = Leaf::new(fine_key);
+    fine.sources.push(onto(face, fine_key, target_key));
+    let mut row0 = vec![0u32];
+    for mut leaf in [same, coarse, fine] {
+        leaf.sources.extend(points::<T>(rng, 6));
+        leaf.charges = leaf.sources.iter().map(|_| charge::<T>(rng)).collect();
+        row0.push(leaves.len() as u32);
+        leaves.push(leaf);
+    }
+    let mut rows = vec![row0];
+    // Adversarial rows: the special points as targets and sources of the leaf, and
+    // in every near leaf the points that map onto them and the special points
+    // themselves.
+    for (a, &key) in adversarial.iter().enumerate() {
+        let r = a + 1;
+        leaves[r].targets = grid.clone();
+        leaves[r].sources = grid.clone();
+        leaves[r].charges = grid.iter().map(|_| charge::<T>(rng)).collect();
+        let mut row = vec![r as u32];
+        for near in near_keys(key) {
+            let mut source = Leaf::new(near);
+            for p in &grid {
+                source.sources.push(onto(p.map(w::<T>), near, key));
+            }
+            source.sources.extend(grid.iter().copied());
+            source.charges = source.sources.iter().map(|_| charge::<T>(rng)).collect();
+            row.push(leaves.len() as u32);
+            leaves.push(source);
+        }
+        rows.push(row);
+    }
+    let problem = Problem {
+        leaves,
+        first: 0,
+        rows,
+    };
+    // The constructed coincidences happen on the host: 3 per target in the leaf, one
+    // per target from the same-level neighbour, and the coarser and finer ones.
+    let (y, _) = problem.row_sources(0);
+    let hits = y
+        .iter()
+        .filter(|p| targets.iter().any(|x| x.map(w::<T>) == p.map(w::<T>)))
+        .count();
+    assert_eq!(hits, 4 * targets.len() + 2, "coincidences constructed");
+    let coincident_pairs: usize = (0..problem.rows.len())
+        .map(|r| {
+            let (y, _) = problem.row_sources(r);
+            let x = &problem.leaves[r].targets;
+            x.iter()
+                .map(|x| y.iter().filter(|p| p.map(w::<T>) == x.map(w::<T>)).count())
+                .sum::<usize>()
+        })
+        .sum();
+    (problem, coincident_pairs)
+}
+
 /// Coincident points: targets equal to the sources of their leaf, duplicated sources,
 /// mapped neighbour sources that equal or round onto a target, and adversarial points
 /// at the leaf centres and faces on levels 2, 9 and 16. Every output is finite and
@@ -760,146 +908,7 @@ fn sums(device: &mut Device) {
 fn coincident(device: &mut Device) {
     fn body<T: Real>(device: &mut Device) {
         let mut rng = Rng::new(0x7e57_0003);
-        // Below half a spacing of the sums it is added to (ĉ of magnitude ½ to 1).
-        let tiny = if T::FLOAT == Precision::F32 {
-            2f64.powi(-30)
-        } else {
-            2f64.powi(-60)
-        };
-        // The source u_s of leaf `source` whose mapped ŷ = fl(ĉ + r̂ u_s) seen from
-        // `target` is x: exact where (x − ĉ) / r̂ is not 0, else off by `tiny`, which the
-        // rounding of ĉ + r̂ u_s removes.
-        let onto = |x: [f64; 3], source: (u32, [u32; 3]), target: (u32, [u32; 3])| -> [T; 3] {
-            let (c, ratio) = frame(source, target);
-            std::array::from_fn(|k| {
-                let exact = (x[k] - c[k]) / ratio;
-                t(if exact == 0.0 && c[k].abs() >= 0.5 {
-                    tiny
-                } else {
-                    exact
-                })
-            })
-        };
-        let special: Vec<T> = [
-            0.0,
-            -2f64.powi(-53),
-            2f64.powi(-53),
-            1.0,
-            -1.0,
-            1.0 - 2f64.powi(-24),
-            -1.0 + 2f64.powi(-24),
-            0.5,
-            -0.5,
-        ]
-        .iter()
-        .map(|&v| t::<T>(v))
-        .collect();
-        let grid: Vec<[T; 3]> = (0..27)
-            .map(|i| {
-                [
-                    special[i % 9],
-                    special[(i / 3) % 9],
-                    special[(5 * i + 1) % 9],
-                ]
-            })
-            .collect();
-        // The target leaves: the constructed one, then one per adversarial level.
-        let target_key = (9u32, [101u32, 100, 100]);
-        let adversarial: Vec<(u32, [u32; 3])> = [2u32, 9, 16]
-            .iter()
-            .map(|&level| (level, interior(&mut rng, level)))
-            .collect();
-        let mut leaves = vec![Leaf::new(target_key)];
-        leaves.extend(adversarial.iter().map(|&key| Leaf::new(key)));
-        // Row 0: targets equal to the sources, every source three times; a same-level
-        // neighbour (ĉ = (2, 0, 0)) whose sources map exactly onto the targets; a coarser
-        // one (ĉ = (3, 1, 1), r̂ = 2) and a finer one (ĉ = (−1.5, −0.5, 0.5), r̂ = ½) with
-        // a source each that rounds onto a target.
-        let corner = [1.0, 1.0, 1.0];
-        let face = [-1.0, -0.5, 0.5];
-        // Targets on the grid 2⁻¹², so that x − ĉ is exact for every frame here.
-        let mut targets: Vec<[T; 3]> = points::<T>(&mut rng, 13)
-            .iter()
-            .map(|p| p.map(|v| t::<T>((w(v) * 4096.0).round() / 4096.0)))
-            .collect();
-        targets.push(corner.map(t::<T>));
-        targets.push(face.map(t::<T>));
-        leaves[0].targets = targets.clone();
-        for &x in &targets {
-            for _ in 0..3 {
-                leaves[0].sources.push(x);
-                leaves[0].charges.push(charge(&mut rng));
-            }
-        }
-        let same_key = (9u32, [102u32, 100, 100]);
-        let coarse_key = (8u32, [51u32, 50, 50]);
-        let fine_key = (10u32, [201u32, 200, 201]);
-        for key in [same_key, coarse_key, fine_key] {
-            assert!(touches(key, target_key), "{key:?}");
-        }
-        let mut same = Leaf::new(same_key);
-        for x in &targets {
-            same.sources.push(onto(x.map(w::<T>), same_key, target_key));
-        }
-        let mut coarse = Leaf::new(coarse_key);
-        coarse.sources.push(onto(corner, coarse_key, target_key));
-        let mut fine = Leaf::new(fine_key);
-        fine.sources.push(onto(face, fine_key, target_key));
-        let mut row0 = vec![0u32];
-        for mut leaf in [same, coarse, fine] {
-            leaf.sources.extend(points::<T>(&mut rng, 6));
-            leaf.charges = leaf.sources.iter().map(|_| charge::<T>(&mut rng)).collect();
-            row0.push(leaves.len() as u32);
-            leaves.push(leaf);
-        }
-        let mut rows = vec![row0];
-        // Adversarial rows: the special points as targets and sources of the leaf, and
-        // in every near leaf the points that map onto them and the special points
-        // themselves.
-        for (a, &key) in adversarial.iter().enumerate() {
-            let r = a + 1;
-            leaves[r].targets = grid.clone();
-            leaves[r].sources = grid.clone();
-            leaves[r].charges = grid.iter().map(|_| charge::<T>(&mut rng)).collect();
-            let mut row = vec![r as u32];
-            for near in near_keys(key) {
-                let mut source = Leaf::new(near);
-                for p in &grid {
-                    source.sources.push(onto(p.map(w::<T>), near, key));
-                }
-                source.sources.extend(grid.iter().copied());
-                source.charges = source
-                    .sources
-                    .iter()
-                    .map(|_| charge::<T>(&mut rng))
-                    .collect();
-                row.push(leaves.len() as u32);
-                leaves.push(source);
-            }
-            rows.push(row);
-        }
-        let problem = Problem {
-            leaves,
-            first: 0,
-            rows,
-        };
-        // The constructed coincidences happen on the host: 3 per target in the leaf, one
-        // per target from the same-level neighbour, and the coarser and finer ones.
-        let (y, _) = problem.row_sources(0);
-        let hits = y
-            .iter()
-            .filter(|p| targets.iter().any(|x| x.map(w::<T>) == p.map(w::<T>)))
-            .count();
-        assert_eq!(hits, 4 * targets.len() + 2, "coincidences constructed");
-        let coincident_pairs: usize = (0..problem.rows.len())
-            .map(|r| {
-                let (y, _) = problem.row_sources(r);
-                let x = &problem.leaves[r].targets;
-                x.iter()
-                    .map(|x| y.iter().filter(|p| p.map(w::<T>) == x.map(w::<T>)).count())
-                    .sum::<usize>()
-            })
-            .sum();
+        let (problem, coincident_pairs) = coincident_problem::<T>(&mut rng);
         for layout in layouts(device) {
             for gradients in [false, true] {
                 // `check_sums` asserts that φ, and ∇φ within its range, are finite.
@@ -1273,6 +1282,7 @@ fn several_vectors(device: &mut Device) {
                     target_offsets: &target_offsets,
                     target_input: target_input.as_slice(),
                     vectors: m,
+                    source_kind: SourceKind::Charges,
                 };
                 p2p(device, layout, gradients, &inputs, output.as_slice_mut()).unwrap();
                 let mut got = vec![t::<T>(0.0); store.len()];
@@ -1374,3 +1384,5 @@ tests_on!(
     layouts_agree,
     several_vectors,
 );
+
+mod dipoles;

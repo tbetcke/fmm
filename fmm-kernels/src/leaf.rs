@@ -68,6 +68,21 @@
 //! kernel (the harmonics are formed per vector), so vector v of every output equals the
 //! one-vector launch on vector v bit for bit; the launches per level call do not change.
 //!
+//! # Dipoles
+//!
+//! With dipole sources ([`SourceInputs::source_kind`], Phase 6 T8d; CONVENTIONS §3.7,
+//! "Dipole sources") P2M and P2L add Σ d̂ · ∇ conj(Xₙᵐ)(u), `nd_fmm_ref::leaf::p2m_dipoles`
+//! and `p2l_dipoles`: per point the harmonics by the recursion above (for P2L to degree
+//! p + 1, as M2P's gradient), the gradient by the ladders of `regular_grad` and
+//! `irregular_grad` (`ladder`), contracted per slot as (d̂₀ ∂ₓX + d̂₁ ∂ᵧX) + d̂₂ ∂_zX and added
+//! (+ for m ≥ 0, − for m < 0, the conjugate) in point order. P2L takes the moment in the
+//! box's units, d̂ / r̂(t|s) = d̂ · 2^(l_t − l_s), exact like the scaled point. With charges
+//! and dipoles each entry leaf adds its charges first and then its moments, as the host's
+//! operators do; one launch. The cube layout stages conj(d̂ · ∇X) of the tile's points in
+//! the shared memory of the charges' harmonics, so its shared memory does not grow. Bit
+//! identity with the host does not apply (as for charges); the charge kernels' operations
+//! do not change.
+//!
 //! # Layouts ([`LeafLayout`])
 //!
 //! | Layout | Default on | P2M, P2L | L2P, M2P |
@@ -98,6 +113,7 @@ use crate::device::{BackendKind, Device, DeviceInfo, Precision};
 use crate::error::KernelError;
 use crate::frame;
 use crate::p2p::cube_grid;
+use crate::sources::SourceKind;
 use crate::view::{BoxCoordinates, IndexView, LeafCoordinates, PointOffsets};
 
 /// The largest degree p the leaf kernels take: that of the FMM (CONVENTIONS §3.9, M2L up
@@ -268,11 +284,15 @@ pub struct SourceInputs<'a, T: DeviceFloat> {
     pub source_offsets: &'a PointOffsets,
     /// The source store: per leaf of n points, n leaf-scaled triples, then n charges; with
     /// m charge vectors the m n charges point-major (CONVENTIONS §3.13, "Several charge
-    /// vectors").
+    /// vectors"); with dipoles the n moments d̂ after them (`source_kind`).
     pub sources: DeviceSlice<'a, T>,
     /// The charge vectors m, at least 1 (Phase 6 T5): m charges per source and m
     /// expansions per box, one vector after the other.
     pub vectors: usize,
+    /// The strengths of the source store (Phase 6 T8d): charges, dipoles or both, 3 + m, 6
+    /// or 7 values per point (CONVENTIONS §3.13, "Source chunks"). With dipoles, one
+    /// vector.
+    pub source_kind: SourceKind,
 }
 
 /// The inputs of one level's L2P or M2P call ([`l2p`], [`m2p`]): target leaves of a level
@@ -472,6 +492,75 @@ fn ladder<F: Float>(
     )
 }
 
+/// d̂ · ∇Xₙᵐ for m ≥ 0, (real part, imaginary part): the gradient of [`ladder`] contracted
+/// with the moment as `nd_fmm_ref::leaf::p2m_dipoles` contracts it per slot,
+/// (d̂₀ ∂ₓX + d̂₁ ∂ᵧX) + d̂₂ ∂_zX (CONVENTIONS §3.7, "Dipole sources").
+#[cube]
+fn directional<F: Float>(
+    values: &Array<F>,
+    d0: F,
+    d1: F,
+    d2: F,
+    #[comptime] n: usize,
+    #[comptime] m: usize,
+    #[comptime] irregular_basis: bool,
+) -> (F, F) {
+    let (xr, xi, yr, yi, zr, zi) = ladder::<F>(values, n, m, irregular_basis);
+    (d0 * xr + d1 * yr + d2 * zr, d0 * xi + d1 * yi + d2 * zi)
+}
+
+/// Writes conj(d̂ · ∇Xₙᵐ) of one point into `out[at..at + (p + 1)²]` in real storage (the
+/// imaginary parts negated, so that an owner adds the staged value), from the harmonics
+/// `values` at the point (degree p + 1 for the irregular ladder).
+#[cube]
+fn stage_dipole<F: Float, L: List<F>>(
+    values: &Array<F>,
+    d0: F,
+    d1: F,
+    d2: F,
+    out: &mut L,
+    at: usize,
+    #[comptime] p: usize,
+    #[comptime] irregular_basis: bool,
+) {
+    #[unroll]
+    for n in 0..p + 1 {
+        #[unroll]
+        for m in 0..n + 1 {
+            let (re, im) = directional::<F>(values, d0, d1, d2, n, m, irregular_basis);
+            out[at + comptime!(slot(n, m as i64))] = re;
+            if comptime!(m > 0) {
+                out[at + comptime!(slot(n, -(m as i64)))] = -im;
+            }
+        }
+    }
+}
+
+/// Adds conj(d̂ · ∇Xₙᵐ) of one point to the coefficients `acc` in real storage, slot by
+/// slot as `add_dipoles` of `nd_fmm_ref::leaf` adds them (+ for m ≥ 0, − for m < 0).
+#[cube]
+fn add_dipole<F: Float>(
+    values: &Array<F>,
+    d0: F,
+    d1: F,
+    d2: F,
+    acc: &mut Array<F>,
+    #[comptime] p: usize,
+    #[comptime] irregular_basis: bool,
+) {
+    #[unroll]
+    for n in 0..p + 1 {
+        #[unroll]
+        for m in 0..n + 1 {
+            let (re, im) = directional::<F>(values, d0, d1, d2, n, m, irregular_basis);
+            acc[comptime!(slot(n, m as i64))] += re;
+            if comptime!(m > 0) {
+                acc[comptime!(slot(n, -(m as i64)))] -= im;
+            }
+        }
+    }
+}
+
 /// Σₙ≤ₚ Σₘ Cₙᵐ Xₙᵐ from real storage by the doubling rule of CONVENTIONS §3.6, with the
 /// coefficients at `coefficients[base..]`: `contract` of `nd_fmm_ref::leaf`.
 #[cube]
@@ -568,18 +657,36 @@ fn expand_cube_kernel<F: Float>(
     #[comptime] units: usize,
     #[comptime] tile: usize,
     #[comptime] irregular_basis: bool,
+    #[comptime] with_charges: bool,
+    #[comptime] with_dipoles: bool,
 ) {
     let nc = comptime!((p + 1) * (p + 1));
     let owned = comptime!(nc.div_ceil(units));
+    // The dipole P2L's gradients take the irregular harmonics of degree p + 1.
+    let degree = comptime!(if with_dipoles && irregular_basis {
+        p + 1
+    } else {
+        p
+    });
     let mut staged = Shared::<[F]>::new_slice(comptime!(tile * nc));
     let mut charges = Shared::<[F]>::new_slice(tile);
-    let mut values = Array::<F>::new(nc);
+    let mut values = Array::<F>::new(comptime!((degree + 1) * (degree + 1)));
     let mut acc = Array::<F>::new(owned);
     let unit = UNIT_POS as usize;
     let row = CUBE_POS_Y as usize * CUBE_COUNT_X as usize + CUBE_POS_X as usize;
     // The vector of the cube (Phase 6 T5): its charges and its expansion of each box.
     let m = vectors as usize;
     let v = CUBE_POS_Z as usize;
+    // Values per source point: the triple, the m charges and, with dipoles, the moment
+    // (Phase 6 T8d; one vector with dipoles).
+    let mut charge_values = 0usize;
+    if with_charges {
+        charge_values = m;
+    }
+    let mut point_size = 3 + charge_values;
+    if with_dipoles {
+        point_size += 3;
+    }
     // The row and its entry range are the same for every unit of the cube, so every
     // barrier below is reached by all of them or by none.
     if row < nrows as usize {
@@ -599,7 +706,7 @@ fn expand_cube_kernel<F: Float>(
                 let j = entries[e] as usize;
                 let s_first = source_offsets[j] as usize;
                 let n_s = source_offsets[j + 1] as usize - s_first;
-                let base = source_base as usize + (3 + m) * s_first;
+                let base = source_base as usize + point_size * s_first;
                 // P2L: the frame (ĉ(t|s), r̂(t|s)) of the box seen from the leaf, applied
                 // as (u − ĉ) · 2^(l_t − l_s).
                 let ls = leaves[4 * j];
@@ -613,49 +720,104 @@ fn expand_cube_kernel<F: Float>(
                     c2 = frame::centre::<F>(level, boxes[tb + 2], ls, leaves[4 * j + 3]);
                     scale = frame::ratio::<F>(ls, level);
                 }
-                let mut k0 = 0usize;
-                while k0 < n_s {
-                    let i = k0 + unit;
-                    if unit < tile && i < n_s {
-                        let mut v0 = sources[base + 3 * i];
-                        let mut v1 = sources[base + 3 * i + 1];
-                        let mut v2 = sources[base + 3 * i + 2];
-                        if irregular_basis {
-                            v0 = (v0 - c0) * scale;
-                            v1 = (v1 - c1) * scale;
-                            v2 = (v2 - c2) * scale;
+                if with_charges {
+                    let mut k0 = 0usize;
+                    while k0 < n_s {
+                        let i = k0 + unit;
+                        if unit < tile && i < n_s {
+                            let mut v0 = sources[base + 3 * i];
+                            let mut v1 = sources[base + 3 * i + 1];
+                            let mut v2 = sources[base + 3 * i + 2];
+                            if irregular_basis {
+                                v0 = (v0 - c0) * scale;
+                                v1 = (v1 - c1) * scale;
+                                v2 = (v2 - c2) * scale;
+                            }
+                            solid::<F>(v0, v1, v2, &mut values, p, irregular_basis);
+                            // conj(X): the imaginary parts negated, so that every owner adds
+                            // q times the staged value.
+                            let at = unit * nc;
+                            #[unroll]
+                            for c in 0..nc {
+                                if comptime!(imaginary(c)) {
+                                    staged[at + c] = -values[c];
+                                } else {
+                                    staged[at + c] = values[c];
+                                }
+                            }
+                            charges[unit] = sources[base + 3 * n_s + i * m + v];
                         }
-                        solid::<F>(v0, v1, v2, &mut values, p, irregular_basis);
-                        // conj(X): the imaginary parts negated, so that every owner adds
-                        // q times the staged value.
-                        let at = unit * nc;
-                        #[unroll]
-                        for c in 0..nc {
-                            if comptime!(imaginary(c)) {
-                                staged[at + c] = -values[c];
-                            } else {
-                                staged[at + c] = values[c];
+                        sync_cube();
+                        let mut count = n_s - k0;
+                        if count > tile {
+                            count = tile;
+                        }
+                        for i in 0..count {
+                            let q = charges[i];
+                            #[unroll]
+                            for k in 0..owned {
+                                let c = unit + k * units;
+                                if c < nc {
+                                    acc[k] += q * staged[i * nc + c];
+                                }
                             }
                         }
-                        charges[unit] = sources[base + 3 * n_s + i * m + v];
+                        sync_cube();
+                        k0 += tile;
                     }
-                    sync_cube();
-                    let mut count = n_s - k0;
-                    if count > tile {
-                        count = tile;
-                    }
-                    for i in 0..count {
-                        let q = charges[i];
-                        #[unroll]
-                        for k in 0..owned {
-                            let c = unit + k * units;
-                            if c < nc {
-                                acc[k] += q * staged[i * nc + c];
+                }
+                // The moments (Phase 6 T8d): each staged slot is conj(d̂ · ∇X) of one
+                // point, which its owner adds.
+                if with_dipoles {
+                    let moments = base + 3 * n_s + charge_values * n_s;
+                    let mut k0 = 0usize;
+                    while k0 < n_s {
+                        let i = k0 + unit;
+                        if unit < tile && i < n_s {
+                            let mut v0 = sources[base + 3 * i];
+                            let mut v1 = sources[base + 3 * i + 1];
+                            let mut v2 = sources[base + 3 * i + 2];
+                            let mut d0 = sources[moments + 3 * i];
+                            let mut d1 = sources[moments + 3 * i + 1];
+                            let mut d2 = sources[moments + 3 * i + 2];
+                            if irregular_basis {
+                                v0 = (v0 - c0) * scale;
+                                v1 = (v1 - c1) * scale;
+                                v2 = (v2 - c2) * scale;
+                                // d̂ / r̂(t|s) = d̂ · 2^(l_t − l_s), exact.
+                                d0 *= scale;
+                                d1 *= scale;
+                                d2 *= scale;
+                            }
+                            solid::<F>(v0, v1, v2, &mut values, degree, irregular_basis);
+                            stage_dipole::<F, Shared<[F]>>(
+                                &values,
+                                d0,
+                                d1,
+                                d2,
+                                &mut staged,
+                                unit * nc,
+                                p,
+                                irregular_basis,
+                            );
+                        }
+                        sync_cube();
+                        let mut count = n_s - k0;
+                        if count > tile {
+                            count = tile;
+                        }
+                        for i in 0..count {
+                            #[unroll]
+                            for k in 0..owned {
+                                let c = unit + k * units;
+                                if c < nc {
+                                    acc[k] += staged[i * nc + c];
+                                }
                             }
                         }
+                        sync_cube();
+                        k0 += tile;
                     }
-                    sync_cube();
-                    k0 += tile;
                 }
             }
             #[unroll]
@@ -693,13 +855,31 @@ fn expand_cpu_kernel<F: Float>(
     vectors: u32,
     #[comptime] p: usize,
     #[comptime] irregular_basis: bool,
+    #[comptime] with_charges: bool,
+    #[comptime] with_dipoles: bool,
 ) {
     let nc = comptime!((p + 1) * (p + 1));
-    let mut values = Array::<F>::new(nc);
+    // The dipole P2L's gradients take the irregular harmonics of degree p + 1.
+    let degree = comptime!(if with_dipoles && irregular_basis {
+        p + 1
+    } else {
+        p
+    });
+    let mut values = Array::<F>::new(comptime!((degree + 1) * (degree + 1)));
     let mut acc = Array::<F>::new(nc);
     // The vector of the cube (Phase 6 T5): its charges and its expansion of each box.
     let m = vectors as usize;
     let v = CUBE_POS_Z as usize;
+    // Values per source point: the triple, the m charges and, with dipoles, the moment
+    // (Phase 6 T8d; one vector with dipoles).
+    let mut charge_values = 0usize;
+    if with_charges {
+        charge_values = m;
+    }
+    let mut point_size = 3 + charge_values;
+    if with_dipoles {
+        point_size += 3;
+    }
     let (first, count) = unit_rows(nrows as usize);
     for row in first..first + count {
         let e_first = row_offsets[row] as usize;
@@ -715,7 +895,7 @@ fn expand_cpu_kernel<F: Float>(
                 let j = entries[e] as usize;
                 let s_first = source_offsets[j] as usize;
                 let n_s = source_offsets[j + 1] as usize - s_first;
-                let base = source_base as usize + (3 + m) * s_first;
+                let base = source_base as usize + point_size * s_first;
                 let ls = leaves[4 * j];
                 let mut c0 = F::new(0.0f32);
                 let mut c1 = F::new(0.0f32);
@@ -727,25 +907,50 @@ fn expand_cpu_kernel<F: Float>(
                     c2 = frame::centre::<F>(level, boxes[tb + 2], ls, leaves[4 * j + 3]);
                     scale = frame::ratio::<F>(ls, level);
                 }
-                for i in 0..n_s {
-                    let mut v0 = sources[base + 3 * i];
-                    let mut v1 = sources[base + 3 * i + 1];
-                    let mut v2 = sources[base + 3 * i + 2];
-                    if irregular_basis {
-                        v0 = (v0 - c0) * scale;
-                        v1 = (v1 - c1) * scale;
-                        v2 = (v2 - c2) * scale;
-                    }
-                    solid::<F>(v0, v1, v2, &mut values, p, irregular_basis);
-                    let q = sources[base + 3 * n_s + i * m + v];
-                    // `add_conjugate` of `nd_fmm_ref::leaf`.
-                    #[unroll]
-                    for c in 0..nc {
-                        if comptime!(imaginary(c)) {
-                            acc[c] -= q * values[c];
-                        } else {
-                            acc[c] += q * values[c];
+                if with_charges {
+                    for i in 0..n_s {
+                        let mut v0 = sources[base + 3 * i];
+                        let mut v1 = sources[base + 3 * i + 1];
+                        let mut v2 = sources[base + 3 * i + 2];
+                        if irregular_basis {
+                            v0 = (v0 - c0) * scale;
+                            v1 = (v1 - c1) * scale;
+                            v2 = (v2 - c2) * scale;
                         }
+                        solid::<F>(v0, v1, v2, &mut values, p, irregular_basis);
+                        let q = sources[base + 3 * n_s + i * m + v];
+                        // `add_conjugate` of `nd_fmm_ref::leaf`.
+                        #[unroll]
+                        for c in 0..nc {
+                            if comptime!(imaginary(c)) {
+                                acc[c] -= q * values[c];
+                            } else {
+                                acc[c] += q * values[c];
+                            }
+                        }
+                    }
+                }
+                // The moments (Phase 6 T8d): `add_dipoles` of `nd_fmm_ref::leaf`.
+                if with_dipoles {
+                    let moments = base + 3 * n_s + charge_values * n_s;
+                    for i in 0..n_s {
+                        let mut v0 = sources[base + 3 * i];
+                        let mut v1 = sources[base + 3 * i + 1];
+                        let mut v2 = sources[base + 3 * i + 2];
+                        let mut d0 = sources[moments + 3 * i];
+                        let mut d1 = sources[moments + 3 * i + 1];
+                        let mut d2 = sources[moments + 3 * i + 2];
+                        if irregular_basis {
+                            v0 = (v0 - c0) * scale;
+                            v1 = (v1 - c1) * scale;
+                            v2 = (v2 - c2) * scale;
+                            // d̂ / r̂(t|s) = d̂ · 2^(l_t − l_s), exact.
+                            d0 *= scale;
+                            d1 *= scale;
+                            d2 *= scale;
+                        }
+                        solid::<F>(v0, v1, v2, &mut values, degree, irregular_basis);
+                        add_dipole::<F>(&values, d0, d1, d2, &mut acc, p, irregular_basis);
                     }
                 }
             }
@@ -1235,6 +1440,7 @@ fn check_sources<T: DeviceFloat>(
         source_offsets,
         sources,
         vectors,
+        source_kind,
     } = *inputs;
     for owner in [
         view.row_offsets().device(),
@@ -1249,6 +1455,10 @@ fn check_sources<T: DeviceFloat>(
     }
     assert!(p <= MAX_DEGREE, "{what}: p = {p} exceeds {MAX_DEGREE}");
     assert!(vectors > 0, "{what}: at least one charge vector");
+    assert!(
+        vectors == 1 || !source_kind.has_dipoles(),
+        "{what}: {source_kind} with {vectors} vectors: dipoles carry one set of strengths"
+    );
     assert!(
         level < boxes.nlevels(),
         "{what}: level {level} of {} levels",
@@ -1269,10 +1479,11 @@ fn check_sources<T: DeviceFloat>(
         source_offsets.nleaves(),
         leaves.len()
     );
+    let point_size = source_kind.point_size(vectors);
     assert_eq!(
         sources.len(),
-        (3 + vectors) * source_offsets.total(),
-        "{what}: the source store holds 3 + {vectors} values per point"
+        point_size * source_offsets.total(),
+        "{what}: the source store holds {point_size} values per point ({source_kind})"
     );
     assert_eq!(
         out.len(),
@@ -1411,8 +1622,9 @@ fn expand<T: DeviceFloat>(
             // leaf below the bounds checked above: the leaf coordinates at 4 j + c and the
             // source offsets at j and j + 1; the box coordinates of row r of the level at
             // 3 (offset + r) + k, within the level's boxes (nrows = its box count). Offsets
-            // are validated CSR (`PointOffsets`), so each leaf's chunk of (3 + m) n values
-            // lies within the source store, whose length was asserted against the total;
+            // are validated CSR (`PointOffsets`), so each leaf's chunk of s n values (s =
+            // 3 + m, or 6 or 7 with dipoles and m = 1) lies within the source store, whose
+            // length was asserted against the total;
             // the coefficients of row r and the cube's vector v < m (the z extent) lie at
             // out.offset() + (r m + v) (p + 1)² + c < out.offset() + out.len(), the length
             // asserted as m (p + 1)² per row.
@@ -1441,6 +1653,8 @@ fn expand<T: DeviceFloat>(
                     units as usize,
                     tile as usize,
                     irregular_basis,
+                    inputs.source_kind.has_charges(),
+                    inputs.source_kind.has_dipoles(),
                 );
             }
         }
@@ -1471,6 +1685,8 @@ fn expand<T: DeviceFloat>(
                     vectors,
                     p,
                     irregular_basis,
+                    inputs.source_kind.has_charges(),
+                    inputs.source_kind.has_dipoles(),
                 );
             }
         }
@@ -1613,7 +1829,8 @@ fn evaluate<T: DeviceFloat>(
 
 /// P2M of one level: adds the multipole of every box's own leaf, from its sources at the
 /// unit frame, into `multipoles`, the multipoles of the level ((p + 1)² per box, box t at
-/// t (p + 1)²), in `layout` (module documentation; `nd_fmm_ref::leaf::p2m`).
+/// t (p + 1)²), in `layout` (module documentation; `nd_fmm_ref::leaf::p2m`, with dipoles
+/// also `p2m_dipoles`).
 ///
 /// A call without entries launches nothing. One launch otherwise, which allocates
 /// nothing.
@@ -1628,8 +1845,9 @@ fn evaluate<T: DeviceFloat>(
 ///
 /// If p exceeds [`MAX_DEGREE`], the level does not exist or has another number of boxes
 /// than the view rows, an entry addresses no leaf of the source offsets or the
-/// coordinates, or a store does not hold its values: 3 + m per source point, m (p + 1)²
-/// per box (m = `inputs.vectors`).
+/// coordinates, dipoles come with more than one vector, or a store does not hold its
+/// values: 3 + m (6 with dipoles, 7 with both) per source point, m (p + 1)² per box
+/// (m = `inputs.vectors`).
 pub fn p2m<T: DeviceFloat>(
     device: &mut Device,
     layout: LeafLayout,
@@ -1642,7 +1860,8 @@ pub fn p2m<T: DeviceFloat>(
 
 /// P2L of one level: adds the local expansion of the sources of every box's X list, at
 /// the frames (ĉ(t|s), r̂(t|s)), into `locals`, the locals of the level ((p + 1)² per box),
-/// in `layout` (module documentation; `nd_fmm_ref::leaf::p2l`).
+/// in `layout` (module documentation; `nd_fmm_ref::leaf::p2l`, with dipoles also
+/// `p2l_dipoles`).
 ///
 /// # Errors
 ///

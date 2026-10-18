@@ -15,6 +15,7 @@
 //! L2P, P2L and M2P ([`leaf`]). T8: the grouped translations with dense tables
 //! ([`translate`]: the hand-written GEMM, the library GEMM, M2M and L2L; T9 adds dense
 //! M2L). T10: rotation M2L ([`rotation`]). T11: timing windows ([`Device::open_window`]).
+//! Phase 6 T8d: dipole sources ([`SourceKind`]) in P2P, P2M and P2L.
 //!
 //! ## Backends and features
 //!
@@ -196,6 +197,7 @@ pub mod leaf;
 pub mod movement;
 pub mod p2p;
 pub mod rotation;
+mod sources;
 pub mod translate;
 pub mod view;
 
@@ -207,6 +209,7 @@ pub use device::{
     MAX_ELEMENTS, Precision, TimingWindow, WindowTime,
 };
 pub use error::KernelError;
+pub use sources::SourceKind;
 
 /// The version of this crate, part of the key of every tuning-cache entry of
 /// `nd-fmm-exec` (Phase 4 T12): a cache written by another version is stale.
