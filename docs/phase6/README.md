@@ -399,7 +399,7 @@ In the repository root, start `claude` and say:
 - [x] T8 merged: dipole sources (C6.4)
 - [x] T8d merged: the dipole kinds on the device (C6.4, device part)
 - [x] T9 merged: FMM3D comparison (C6.8)
-- [ ] T10 merged: plane-wave spike; C6.5 adopted or dropped (decision 6)
+- [x] T10 merged: plane-wave spike; C6.5 adopted or dropped (decision 6)
 - [x] Decision 6 signed off (2026-10-18): C6.5 proceeds, built in T13
 - [ ] T13 merged: plane-wave M2L as an opt-in host strategy (C6.5)
 - [ ] T12 merged: M2P and P2L only where they pay (C6.9), or dropped by measurement
