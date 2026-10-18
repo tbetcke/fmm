@@ -384,7 +384,7 @@ In the repository root, start `claude` and say:
 - [x] T7 merged: fused gather and device GEMM work, adopted or dropped (C6.1)
 - [x] T8 merged: dipole sources (C6.4)
 - [x] T8d merged: the dipole kinds on the device (C6.4, device part)
-- [ ] T9 merged: FMM3D comparison (C6.8)
+- [x] T9 merged: FMM3D comparison (C6.8)
 - [ ] T10 merged: plane-wave spike; C6.5 adopted or dropped (decision 6)
 - [ ] T12 merged: M2P and P2L only where they pay (C6.9), or dropped by measurement
 - [ ] T11 merged: final benchmarks; defaults signed off (decision 7)
