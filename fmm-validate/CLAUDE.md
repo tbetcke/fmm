@@ -242,6 +242,14 @@ report is `results/phase6-dipoles.md`. Phase 6 T8d (the dipole kinds on the devi
 types with dipoles only), so that one binary measures T8's placement, P2P alone on the
 device and every kind on the device; the report's part "Phase 6 T8d".
 
+Phase 6 T9 (the FMM3D comparison, C6.8) made `fmm_accuracy::Oracle::of_targets` public
+(the oracle at any targets, for `nd-fmm-bench --write-problem`, which splits the sampled
+targets over threads) and added to `tools/scaling/run.sh` the sweeps `t9-fmm3d` (our side:
+the cube and the Plummer sphere at N = 10⁵–10⁷, f64 p = 3, 6, 8, 12, Batched separate and
+fused, at 1 × 1 and at Phase 5N's split with the errors of 8 vectors and `--rhs 8`;
+`T9_NS`, `T9_PS`, `T9_SPLIT`, `T9_P2P`, `T9_LARGE_EVALS`) and `t9-device` (the same on
+CUDA). FMM3D's side is `tools/fmm3d/`; the report is `results/phase6-fmm3d.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

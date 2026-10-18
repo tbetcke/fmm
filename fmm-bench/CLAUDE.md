@@ -5,9 +5,10 @@ points uniform in the unit cube, f32 or f64, an expansion degree p and a backend
 evaluation time (min, median, mean, max, standard deviation), the time per operator kind
 and the error against the direct sum, as one Markdown file. A binary (`src/main.rs`,
 `nd-fmm-bench`) over a small library (`src/lib.rs`: `options`, `measure`, `report`,
-`machine`) that holds the configuration, the measurement and the Markdown writer.
+`machine`, `problem`) that holds the configuration, the measurement and the Markdown writer.
 Phase and components: Phase 4S, C4S.6 (task T6 in docs/phase4s/; decision 5); the `load`
-and `output` columns, `--reuse-output` and `--output-pass` (task T9, C4S.8).
+and `output` columns, `--reuse-output` and `--output-pass` (task T9, C4S.8); Phase 6 T9
+(C6.8, the FMM3D comparison): `--write-problem` and `--check-output` (`src/problem.rs`).
 
 ## Running it
 
@@ -56,6 +57,20 @@ From Phase 6 T7: `--device-gemm auto|library|hand|shared`, `--gather auto|separa
 device_reduction, device_scratch_budget}`), which the header's "device translations" row
 records; `--reduction walk --gather separate` is Phase 4S's device translations.
 
+From Phase 6 T9 (`src/problem.rs`; tools/fmm3d/README.md), two commands without MPI for
+another code's comparison: `--write-problem FILE --dist cube|plummer|… --n N [--vectors m]
+[--accuracy s] [--threads t]` writes the points and charges of a `scaling` workload
+(`nd_fmm_validate::scaling::Workload`, the `scaling` example's seed, not `measure::SEED`),
+the harness's sampled targets and the f64 direct sum there (`fmm_accuracy::Oracle`) to
+one little-endian binary file, and `--check-output OUT,… --problem FILE` prints the errors
+of each output file (φ and ∇φ at those targets) with the `scaling` harness's metrics. For
+the cross-check of the two codes' outputs at every point: `--write-output OUT --problem
+FILE [--degree p] [--strategy S] [--threads t]` (our FMM on the problem's points and
+charges, on one rank with MPI, `Batched` by default; φ and ∇φ at every point in a full
+output file) and `--compare REF,OUT,…` (each full output against the first, over every
+point); `--check-output` takes a full output too, at the sampled targets. The file formats
+are documented in `src/problem.rs`; `tools/fmm3d/driver.f90` reads and writes them.
+
 The kind table splits "other" (Phase 4S T9): `load` (`StageTimings::load`: the charges
 into leaf order, on a device with their upload and scatter, and in `sync` mode the sync
 after them), `output` (`StageTimings::output`: the output pass, on a device with the
@@ -102,5 +117,6 @@ nd-fmm-validate. No external dependency; anything else needs asking first.
 
 ## Test oracle
 `nd_fmm_validate::fmm_accuracy::Oracle` (`nd_fmm_ref::p2p::direct_sum` in f64, over the
-f32-rounded charges in f32) for the error columns; hand-made reports for the Markdown
-writer.
+f32-rounded charges in f32) for the error columns and the problem file's reference
+(`Oracle::of_targets` over a split of the targets, Phase 6 T9); hand-made reports for the
+Markdown writer; written-then-read files and exact or scaled outputs for `src/problem.rs`.

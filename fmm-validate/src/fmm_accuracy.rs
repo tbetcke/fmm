@@ -440,8 +440,11 @@ impl Oracle {
         }
     }
 
-    /// The oracle at `targets`.
-    fn of_targets(problem: &Problem, charges: &[Vec<f64>], targets: &[[f64; 3]]) -> Self {
+    /// The oracle at `targets`, any points (the sampled targets of [`new`](Self::new), or a
+    /// part of them, so that callers can split the targets over threads; Phase 6 T9's
+    /// `nd-fmm-bench --write-problem`): `direct_sum` over `problem.points`, divided by 4π.
+    /// A target's values do not depend on the other targets. O(K N n_targets).
+    pub fn of_targets(problem: &Problem, charges: &[Vec<f64>], targets: &[[f64; 3]]) -> Self {
         let scale = 4.0 * std::f64::consts::PI;
         let (potential, gradient) = charges
             .iter()
