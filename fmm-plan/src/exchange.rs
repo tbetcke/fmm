@@ -8,7 +8,7 @@
 //!
 //! | Exchange | Ghosts | Chunk of a ghost | Fills |
 //! | --- | --- | --- | --- |
-//! | [`SourceExchange`] | the ghost leaves of the leaf numbering (named by a U- or X-row), in leaf order | the owner's source points, `count · point_size` values, zero allowed | the ghost tail of the source [`LeafStore`], in place |
+//! | [`SourceExchange`] | the ghost leaves of the leaf numbering (named by a near or X row), in leaf order | the owner's source points, `count · point_size` values, zero allowed | the ghost tail of the source [`LeafStore`], in place |
 //! | [`ReductionExchange`] | per level l of [`Plan::reduction_levels`], the children on l of the `Global` boxes this rank owns that other ranks compute, in box order | `sizes[l]` values | their slots of level l of the multipole [`LevelBuffers`] |
 //! | [`TopExchange`] | the replicated top R: the top-tree boxes many ranks read, every rank's, in rank order | `sizes[level]` values | the slots of R's boxes this rank holds but does not compute |
 //! | [`MultipoleExchange`] | per level l, the boxes named by a V-row of level l or a W-row of level l − 1 that other ranks compute, without those the reduction or R deliver, in box order | `sizes[l]` values | their slots of level l of the multipole [`LevelBuffers`] |
@@ -352,6 +352,60 @@ fn owned_chunk_size(
 ) -> Option<usize> {
     let leaf = index.find_leaf(key)? as usize;
     local_counts.get(leaf)?.checked_mul(point_size)
+}
+
+/// The source counts of the ghost leaves `ghosts` (key, owner), as (key, count) in the
+/// order the owners send them: the chunk sizes of a ghost communicator of one value per
+/// point, so that no value moves (the counts of the near rule, Phase 6 T12,
+/// [`LeafCounts::exchange`](super::near::LeafCounts::exchange)).
+///
+/// # Collective operation
+/// Two all-reduces that agree the outcome, around the build of rlst's ghost communicator.
+///
+/// # Errors
+/// Returned on every rank if, on any rank, `checked` (the caller's checks of its input) is
+/// an error, `local_counts` does not have one entry per local leaf of `plan` or a rank is
+/// asked for a key that is not one of its local leaves.
+pub(crate) fn ghost_source_counts<C: CommunicatorCollectives>(
+    plan: &Plan,
+    comm: &C,
+    checked: Result<(), ExchangeError>,
+    local_counts: &[usize],
+    ghosts: &[(MortonKey, usize)],
+) -> Result<Vec<(MortonKey, usize)>, ExchangeError> {
+    let index = plan.index();
+    let nlocal = index.leaves().nlocal();
+    let local = checked.and(if local_counts.len() == nlocal {
+        Ok(())
+    } else {
+        Err(ExchangeError::CountsLength {
+            expected: nlocal,
+            actual: local_counts.len(),
+        })
+    });
+    agree_valid(comm, local)?;
+
+    let unheld = Cell::new(None);
+    let communicator = GhostCommunicatorBuilder::<MortonKey>::new()
+        .add_ghosts(ghosts.iter().copied())
+        .chunk_sizes(ChunkSizes::PerIndex(Box::new(|key| {
+            owned_chunk_size(index, local_counts, 1, key).unwrap_or_else(|| {
+                unheld.set(Some(key));
+                0
+            })
+        })))
+        .build(comm);
+    let layout = match unheld.get() {
+        Some(key) => Err(ExchangeError::UnheldKey { key }),
+        None => Ok(()),
+    };
+    agree_valid(comm, layout)?;
+    Ok(communicator
+        .receive_indices()
+        .iter()
+        .copied()
+        .zip(communicator.receive_chunk_sizes().iter().copied())
+        .collect())
 }
 
 /// The ghost counts that the chunk sizes `sizes` of the source exchange describe, or

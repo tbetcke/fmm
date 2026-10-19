@@ -27,7 +27,8 @@
 //! test fails on every rank or on none. Nothing is gathered.
 //!
 //! **What must be the same** (scale-out.md §5.1): the precision, p, `max_level`, the leaf
-//! size and the domain (the bounding box of the same union), and **the strategy, named**:
+//! size and the domain (the bounding box of the same union), the near rule, and **the
+//! strategy, named**:
 //! `Auto` resolves by the ranks per node, which differ between the runs. Threads, overlap,
 //! the table cache and the cut change no bit.
 //!
@@ -39,7 +40,10 @@
 //!   cube of side 2⁻⁶ inside it (leaves on levels several apart, W and X lists), and on
 //!   several ranks the last world rank passes nothing: its share goes to rank 0.
 //!
-//! each in f64 at p = 8 with `Rotation` and in f32 at p = 3 with `Dense`.
+//! each in f64 at p = 8 with `Rotation` and in f32 at p = 3 with `Dense`; the Plummer
+//! sphere and the graded tree also with the near rule of the cost model (Phase 6 T12,
+//! `NearRuleChoice::CostModel`), the same on every rank count since the rule decides each
+//! pair from the leaf's count alone.
 //!
 //! Error measure: exact equality of the bit patterns of φ and ∇φ at every target.
 //!
@@ -68,7 +72,7 @@ use mpi::Threading;
 use mpi::collective::SystemOperation;
 use mpi::topology::{Color, SimpleCommunicator};
 use mpi::traits::*;
-use nd_fmm_exec::fmm::{FmmBuilder, Output};
+use nd_fmm_exec::fmm::{FmmBuilder, NearRuleChoice, Output};
 use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_math::RealScalar;
@@ -298,8 +302,7 @@ static CHECKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::
 /// On every rank of `world`.
 fn check<T: Stored + SimdScalar + Equivalence + Default>(
     workload: &Workload,
-    p: usize,
-    strategy: M2lStrategy,
+    (p, strategy, near): (usize, M2lStrategy, NearRuleChoice),
     large_overlapped: bool,
     ks: &[usize],
     world: &SimpleCommunicator,
@@ -308,7 +311,7 @@ fn check<T: Stored + SimdScalar + Equivalence + Default>(
     let precision = if size_of::<T>() == 4 { "f32" } else { "f64" };
     let path = |overlapped: bool| if overlapped { "overlapped" } else { "blocking" };
     let what = format!(
-        "{} {precision} p = {p} {strategy:?}, the large run {}",
+        "{} {precision} p = {p} {strategy:?}, near rule {near}, the large run {}",
         workload.name,
         path(large_overlapped)
     );
@@ -317,6 +320,7 @@ fn check<T: Stored + SimdScalar + Equivalence + Default>(
         .max_points_per_leaf(64)
         .gradients(true)
         .strategy(strategy)
+        .near_rule(near)
         .table_cache(TABLE_CACHE);
     let mine = workload.input(rank, size);
     if workload.empty_rank && size > 1 && rank == size - 1 {
@@ -431,9 +435,29 @@ fn rank_count_invariance() {
         (2..=size).filter(|&k| size.is_multiple_of(k)).collect()
     };
     let start = Instant::now();
+    let off = NearRuleChoice::Off;
     for workload in &WORKLOADS {
-        check::<f64>(workload, 8, M2lStrategy::Rotation, false, &ks, &world);
-        check::<f32>(workload, 3, M2lStrategy::Dense, true, &ks, &world);
+        check::<f64>(
+            workload,
+            (8, M2lStrategy::Rotation, off),
+            false,
+            &ks,
+            &world,
+        );
+        check::<f32>(workload, (3, M2lStrategy::Dense, off), true, &ks, &world);
+    }
+    // The near rule (Phase 6 T12) on the adaptive workloads, whose W and X lists it
+    // converts.
+    let near = NearRuleChoice::CostModel;
+    for workload in &WORKLOADS[1..] {
+        check::<f64>(
+            workload,
+            (8, M2lStrategy::Rotation, near),
+            false,
+            &ks,
+            &world,
+        );
+        check::<f32>(workload, (3, M2lStrategy::Dense, near), true, &ks, &world);
     }
     if world.rank() == 0 {
         eprintln!(

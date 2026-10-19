@@ -360,6 +360,28 @@
 //!   loads tables equal to a fresh build, and the cached build's output equals the
 //!   uncached one's bit for bit.
 //!
+//! The near rule (Phase 6 T12, C6.9; docs/design/optimisation.md §8a;
+//! `FmmBuilder::near_rule`). Error measures: relative L2 against `direct_sum` over every
+//! rank's sources at the targets of all ranks (φ and ∇φ), relative L2 from the rule-off
+//! output, and exact equality of the bit patterns.
+//! - Every scenario whose tree has W or X lists on some rank, once per scenario and
+//!   precision (`check_near_rule`, from `evaluate_threaded`): with the cost model's
+//!   crossovers (`NearRuleChoice::CostModel`, nearly every pair between leaves converts at
+//!   these leaf sizes) two evaluations and a second build at the most threads, overlapped,
+//!   bit for bit, and on several ranks the one-rank `Fmm` of the same rule bit for bit; in
+//!   f64 also with crossovers within the leaf sizes (W 12, X 6: some pairs convert, others
+//!   keep M2P and P2L), two evaluations and the one-rank `Fmm` bit for bit. Each within
+//!   `NEAR_ERROR_BOUND` (1.1) of the rule-off error against the direct sum (where the
+//!   pairs' truncation errors cancel, converting some can raise it by a few per cent), and
+//!   differing from the rule-off output by at most the rule-off error. The rule off is the
+//!   default: every other check runs it, unchanged.
+//! - **work-weighted cut** also runs with the cost model's rule: the second cut moves
+//!   points and keeps the output bit for bit and the pairs converted, and the counts by
+//!   kind summed over the ranks are those of the one-rank `Fmm` with the rule.
+//! - **input errors**: negative and NaN crossovers are `SettingsError::NearCrossover`.
+//!
+//! The near checks added about 30 s to the one-rank debug run on the M3 Max (140 → 171 s).
+//!
 //! The test prints, at the end, how many shadow evaluations matched, how many overlapped
 //! evaluations matched the blocking path, and how many evaluations matched their one-rank
 //! reference.
@@ -370,8 +392,8 @@ use mpi::datatype::PartitionMut;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
 use nd_fmm_exec::fmm::{
-    Backend, Fmm, FmmBuilder, FmmError, KindTiming, MultipoleRouting, OperatorKind, Output,
-    OutputMany, OutputPass, Placement, PointSet, SettingsError, SourceType, Sources,
+    Backend, Fmm, FmmBuilder, FmmError, KindTiming, MultipoleRouting, NearRuleChoice, OperatorKind,
+    Output, OutputMany, OutputPass, Placement, PointSet, SettingsError, SourceType, Sources,
 };
 use nd_fmm_exec::geometry::{Domain, GeometryError, leaf_coordinates, radius};
 use nd_fmm_exec::operator::{Isa, LaplaceOperator, MulAdd, P2pChoice, SimdScalar};
@@ -608,6 +630,33 @@ fn distributed_scenarios() {
             skipped.join(", ")
         );
     }
+    let (rules, seconds) = *NEAR_CHECKS.lock().unwrap();
+    for (choice, (checks, [w, w_converted, x, x_converted], worst)) in
+        NEAR_RULES.into_iter().zip(rules)
+    {
+        eprintln!(
+            "rank {}: near rule (Phase 6 T12), {choice}: {checks} checks; W pairs between \
+             leaves {w}, converted {w_converted}; X pairs between leaves {x}, converted \
+             {x_converted}; largest error with the rule over the error without it {:.6} \
+             (f32), {:.6} (f64)",
+            comm.rank(),
+            worst[0],
+            worst[1]
+        );
+        assert!(
+            checks > 0 && w_converted > 0 && x_converted > 0,
+            "{choice}: the near rule converted nothing"
+        );
+    }
+    let [_, (mid_checks, [w, w_converted, x, x_converted], _)] = rules;
+    assert!(
+        mid_checks > 0 && w_converted < w && x_converted < x,
+        "the crossovers within the leaf sizes converted every pair"
+    );
+    eprintln!(
+        "rank {}: near rule (Phase 6 T12): {seconds:.1} s",
+        comm.rank()
+    );
     let checks = ONE_RANK_CHECKS.load(std::sync::atomic::Ordering::Relaxed);
     eprintln!(
         "rank {}: one-rank reference (Phase 5 T6): {}",
@@ -1288,6 +1337,15 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
         threads,
         comm,
     );
+    check_near_rule(
+        &builder,
+        (sources, targets),
+        charges,
+        &fmm,
+        &output,
+        threads,
+        comm,
+    );
     let calls = kind_common::check_kinds("host, one thread", &fmm, &output, mode);
     if mode != KindTiming::Off {
         kind_common::record("host", calls);
@@ -1379,6 +1437,190 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
         }
     }
     Some((fmm, output))
+}
+
+/// The near rule's checks (Phase 6 T12, C6.9), for the closing line: per rule of
+/// [`NEAR_RULES`] the checks and the W and X pairs between leaves and those converted,
+/// summed over the ranks and the checks, and per precision (f32, f64) the largest ratio of
+/// an error against the direct sum with the rule to the error without it (φ and ∇φ); and
+/// the seconds the checks took.
+static NEAR_CHECKS: std::sync::Mutex<NearTally> =
+    std::sync::Mutex::new(([(0, [0; 4], [0.0; 2]); 2], 0.0));
+
+/// What [`NEAR_CHECKS`] holds: per rule (checks, [W pairs, converted, X pairs,
+/// converted], the largest error ratios (f32, f64)), and the seconds.
+type NearTally = ([(usize, [usize; 4], [f64; 2]); 2], f64);
+
+/// The bound of [`check_near_rule`] on an error against the direct sum with the near rule,
+/// relative to the error without it. A converted pair loses its truncation error, but
+/// where the truncation errors of different pairs cancel the sum can grow: on the
+/// work-weighted cut's tree (3,000 points, `Rotation`, one rank) the φ error grows by 2.1 %
+/// at p = 5 with the cost model's crossovers and by 1.2 % at p = 5 and 0.6 % at p = 16 with
+/// every pair converted, and on the strongly graded tree by 1.5 % at p = 8 with crossovers
+/// 12 and 6, while elsewhere it falls; the change from the rule off is about a tenth of the
+/// error and falls with p as the error does. So not requirement 1's 0.1 %: the form of
+/// C6.5's budget, 1.1 times (fmm-validate/results/phase6-near.md).
+const NEAR_ERROR_BOUND: f64 = 1.1;
+
+/// The rules of [`check_near_rule`]: the cost model's crossovers, and crossovers within
+/// the leaf sizes of the scenarios (at most 64 points), which convert some pairs and keep
+/// others.
+const NEAR_RULES: [NearRuleChoice; 2] = [
+    NearRuleChoice::CostModel,
+    NearRuleChoice::Crossovers { w: 12.0, x: 6.0 },
+];
+
+/// The (scenario, value size) whose near rule [`check_near_rule`] checked.
+static NEAR_SEEN: std::sync::Mutex<Vec<(&'static str, usize)>> = std::sync::Mutex::new(Vec::new());
+
+/// The near rule (Phase 6 T12, C6.9; docs/design/optimisation.md §8a) where the tree of
+/// `fmm`, the rule-off FMM at one thread with output `off`, has W
+/// or X lists on some rank, once per scenario and precision (the first such evaluation; a
+/// build in debug mode costs more than the evaluation), in f32 with the cost model's rule
+/// only. The rules of [`NEAR_RULES`], each
+/// against the direct sum over every rank's sources at this rank's targets, φ and ∇φ
+/// (relative L2 over all ranks): within [`NEAR_ERROR_BOUND`] of the rule-off error (P2P
+/// is exact, so the error falls but where the pairs' truncation errors cancel), and
+/// differing from the rule-off output by at most the rule-off error; two evaluations bit
+/// for bit; for the cost model's rule a second build at the most threads of `threads`,
+/// overlapped, bit for bit; on several ranks the
+/// one-rank `Fmm` of the same rule over the union bit for bit (`check_one_rank`); the
+/// report (the choice, the crossovers of the cost model). The rule off is the default, so
+/// every other check of the scenario runs it.
+fn check_near_rule<T: Stored + SimdScalar + Equivalence + Default>(
+    builder: &FmmBuilder<T>,
+    (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
+    charges: &[T],
+    fmm: &Fmm<'_, T>,
+    off: &Output<T>,
+    threads: &[usize],
+    comm: &SimpleCommunicator,
+) {
+    let scenario = *SCENARIO.lock().unwrap();
+    {
+        let key = (scenario, size_of::<T>());
+        let mut seen = NEAR_SEEN.lock().unwrap();
+        if seen.contains(&key) {
+            return;
+        }
+        let sizes = fmm.list_sizes();
+        if global_sum(sizes.w + sizes.x, comm) == 0 {
+            return;
+        }
+        seen.push(key);
+    }
+    let start = std::time::Instant::now();
+    let rank = comm.rank();
+    let what = |choice: NearRuleChoice| format!("{scenario}, near rule {choice}");
+    // The direct sum at this rank's targets over every rank's sources.
+    let (all_sources, _) = union_points(sources, comm);
+    let (all_charges, _) = union(charges, comm);
+    let all_charges: Vec<f64> = all_charges.iter().map(|&q| RealScalar::to_f64(q)).collect();
+    let (phi, grad) = exact(&all_sources, &all_charges, targets);
+    let errors = |output: &Output<T>| -> [f64; 2] {
+        [
+            relative_l2(&output.potential, &phi, comm),
+            output
+                .gradient
+                .as_ref()
+                .map_or(0.0, |g| relative_l2_vectors(g, &grad, comm)),
+        ]
+    };
+    let without = errors(off);
+    let most = threads.iter().copied().max().unwrap_or(1);
+    let precision = usize::from(size_of::<T>() == 8);
+    // In f32 the cost model's rule only.
+    let rules = if precision == 1 { 2 } else { 1 };
+    for (r, choice) in NEAR_RULES.into_iter().enumerate().take(rules) {
+        let rule = builder.clone().near_rule(choice);
+        let mut on = built(rule.clone().threads(1).build(sources, targets, comm), comm)
+            .expect("the FMM with the near rule builds");
+        let report = on.near_rule();
+        assert_eq!(report.choice, choice, "{}", what(choice));
+        assert_eq!(
+            report.crossovers,
+            choice.crossovers(&on.cost_model()),
+            "{}",
+            what(choice)
+        );
+        let output = on.evaluate(charges).expect("the FMM evaluates");
+        let bits = output_bits(&output);
+        let again = on.evaluate(charges).expect("the FMM evaluates");
+        assert!(
+            output_bits(&again) == bits,
+            "{}: two evaluations",
+            what(choice)
+        );
+        let with = errors(&output);
+        // The change from the rule off is the truncation error the converted pairs had,
+        // within the error without the rule; a wrong pair would change the output by O(1).
+        let change = [
+            difference(&output.potential, &off.potential, comm),
+            match (&output.gradient, &off.gradient) {
+                (Some(a), Some(b)) => difference(a.as_flattened(), b.as_flattened(), comm),
+                _ => 0.0,
+            },
+        ];
+        // (No target on any rank leaves no error to compare.)
+        for k in (0..2).filter(|&k| without[k].is_finite()) {
+            assert!(
+                with[k] <= without[k] * NEAR_ERROR_BOUND && change[k] <= without[k],
+                "rank {rank}: {}: error {:.3e} against {:.3e} without the rule, a change of \
+                 {:.3e} ({})",
+                what(choice),
+                with[k],
+                without[k],
+                change[k],
+                ["φ", "∇φ"][k]
+            );
+        }
+        // The cost model's rule, the one for runs: a second build at the most threads,
+        // overlapped.
+        if choice == NearRuleChoice::CostModel {
+            let mut threaded = built(
+                rule.clone()
+                    .threads(most)
+                    .overlap(true)
+                    .build(sources, targets, comm),
+                comm,
+            )
+            .expect("the FMM with the near rule builds");
+            let output_threaded = threaded.evaluate(charges).expect("the FMM evaluates");
+            assert!(
+                output_bits(&output_threaded) == bits,
+                "rank {rank}: {}: a second build at {most} threads, overlapped",
+                what(choice)
+            );
+        }
+        check_one_rank(
+            &what(choice),
+            &rule.clone().strategy(on.strategy()),
+            (sources, targets),
+            charges,
+            &output,
+            comm,
+        );
+        let pairs = report.pairs;
+        let local = [
+            pairs.w_leaf_pairs,
+            pairs.w_converted,
+            pairs.x_leaf_pairs,
+            pairs.x_converted,
+        ];
+        let mut total = [0usize; 4];
+        comm.all_reduce_into(&local[..], &mut total[..], SystemOperation::sum());
+        let mut checks = NEAR_CHECKS.lock().unwrap();
+        checks.0[r].0 += 1;
+        for (sum, count) in checks.0[r].1.iter_mut().zip(total) {
+            *sum += count;
+        }
+        for k in 0..2 {
+            if without[k] > 0.0 && without[k].is_finite() {
+                checks.0[r].2[precision] = checks.0[r].2[precision].max(with[k] / without[k]);
+            }
+        }
+    }
+    NEAR_CHECKS.lock().unwrap().1 += start.elapsed().as_secs_f64();
 }
 
 /// The batched M2L's checks (Phase 6 T2, C6.6), for the closing line: the evaluations
@@ -2515,6 +2757,17 @@ fn input_errors(comm: &SimpleCommunicator) {
             FmmBuilder::<f64>::new(4).threads(0),
             SettingsError::ZeroThreads,
         ),
+        (
+            FmmBuilder::<f64>::new(4).near_rule(NearRuleChoice::Crossovers { w: -1.0, x: 8.0 }),
+            SettingsError::NearCrossover,
+        ),
+        (
+            FmmBuilder::<f64>::new(4).near_rule(NearRuleChoice::Crossovers {
+                w: 8.0,
+                x: f64::NAN,
+            }),
+            SettingsError::NearCrossover,
+        ),
     ] {
         let error = builder.build(&points, &points, comm).err();
         assert_eq!(error, Some(FmmError::InvalidSettings(expected)));
@@ -3494,64 +3747,86 @@ fn work_weighted_cut(comm: &SimpleCommunicator) {
         .max_level(5)
         .max_points_per_leaf(16);
 
-    // The work by kind of the one-rank FMM over every point.
-    let one = SimpleCommunicator::self_comm();
-    let reference = builder
-        .clone()
-        .build(&points, &points, &one)
-        .expect("the one-rank FMM builds")
-        .kind_counts();
+    // Without and with the near rule (Phase 6 T12): with the rule the cut weighs the
+    // converted plan, and a recut builds the plan with the rule again for the new owners.
+    for rule in [NearRuleChoice::Off, NearRuleChoice::CostModel] {
+        let builder = builder.clone().near_rule(rule);
+        // The work by kind of the one-rank FMM over every point.
+        let one = SimpleCommunicator::self_comm();
+        let reference = builder
+            .clone()
+            .build(&points, &points, &one)
+            .expect("the one-rank FMM builds")
+            .kind_counts();
 
-    let mut outputs = Vec::new();
-    let mut owned = Vec::new();
-    let mut balance = Vec::new();
-    for on in [false, true] {
-        let (fmm, output) = evaluate_threaded(
-            &builder.clone().work_cut(on),
-            (&local, &local),
-            &local_charges,
-            &[],
-            comm,
-        )
-        .expect("the FMM builds");
-        assert_eq!(fmm.work_cut(), on, "rank {rank}: work_cut");
-        // The blob gains far more than the 2 % the second cut needs to move blocks.
-        assert_eq!(fmm.recut(), on, "rank {rank}: recut");
-        let counts = fmm.kind_counts();
-        for (kind, count) in counts.iter() {
-            let mut total = 0u64;
-            comm.all_reduce_into(&count, &mut total, SystemOperation::sum());
-            let one_rank = reference.get(kind);
-            match kind {
-                OperatorKind::M2l | OperatorKind::P2l | OperatorKind::L2l => assert!(
-                    total >= one_rank,
-                    "rank {rank}: cut {on}: {kind} over the ranks {total} < {one_rank}"
-                ),
-                _ => assert_eq!(
-                    total, one_rank,
-                    "rank {rank}: cut {on}: {kind} over the ranks against one rank"
-                ),
+        let mut outputs = Vec::new();
+        let mut owned = Vec::new();
+        let mut balance = Vec::new();
+        let mut converted = Vec::new();
+        for on in [false, true] {
+            let (fmm, output) = evaluate_threaded(
+                &builder.clone().work_cut(on),
+                (&local, &local),
+                &local_charges,
+                &[],
+                comm,
+            )
+            .expect("the FMM builds");
+            assert_eq!(fmm.work_cut(), on, "rank {rank}: work_cut");
+            // The blob gains far more than the 2 % the second cut needs to move blocks.
+            assert_eq!(fmm.recut(), on, "rank {rank}: recut");
+            let counts = fmm.kind_counts();
+            for (kind, count) in counts.iter() {
+                let mut total = 0u64;
+                comm.all_reduce_into(&count, &mut total, SystemOperation::sum());
+                let one_rank = reference.get(kind);
+                match kind {
+                    OperatorKind::M2l | OperatorKind::P2l | OperatorKind::L2l => assert!(
+                        total >= one_rank,
+                        "rank {rank}: {rule}, cut {on}: {kind} over the ranks {total} < \
+                         {one_rank}"
+                    ),
+                    _ => assert_eq!(
+                        total, one_rank,
+                        "rank {rank}: {rule}, cut {on}: {kind} over the ranks against one rank"
+                    ),
+                }
             }
+            let pairs = fmm.near_rule().pairs;
+            converted.push(global_sum(pairs.w_converted + pairs.x_converted, comm));
+            let cost = fmm.cost_model().cost(&counts);
+            let costs = union(&[cost], comm).0;
+            let mean = costs.iter().sum::<f64>() / size as f64;
+            balance.push(costs.iter().copied().fold(0.0f64, f64::max) / mean);
+            owned.push(fmm.owned_points());
+            outputs.push(output_bits(&output));
         }
-        let cost = fmm.cost_model().cost(&counts);
-        let costs = union(&[cost], comm).0;
-        let mean = costs.iter().sum::<f64>() / size as f64;
-        balance.push(costs.iter().copied().fold(0.0f64, f64::max) / mean);
-        owned.push(fmm.owned_points());
-        outputs.push(output_bits(&output));
-    }
-    assert_eq!(
-        outputs[0], outputs[1],
-        "rank {rank}: the second cut changes the output"
-    );
-    let moved = global_sum(usize::from(owned[0] != owned[1]), comm);
-    assert!(moved > 0, "rank {rank}: the second cut moves no point");
-    if rank == 0 {
-        eprintln!(
-            "rank 0: work-weighted cut on {size} rank(s): output bit for bit; points moved on \
-             {moved} rank(s); modelled cost max/mean {:.3} by points, {:.3} by cost",
-            balance[0], balance[1]
+        assert_eq!(
+            outputs[0], outputs[1],
+            "rank {rank}: {rule}: the second cut changes the output"
         );
+        assert_eq!(
+            converted[0], converted[1],
+            "rank {rank}: {rule}: the second cut changes the pairs converted"
+        );
+        assert_eq!(
+            converted[0] > 0,
+            rule != NearRuleChoice::Off,
+            "rank {rank}: {rule}: pairs converted"
+        );
+        let moved = global_sum(usize::from(owned[0] != owned[1]), comm);
+        assert!(
+            moved > 0,
+            "rank {rank}: {rule}: the second cut moves no point"
+        );
+        if rank == 0 {
+            eprintln!(
+                "rank 0: work-weighted cut on {size} rank(s), near rule {rule}: output bit for \
+                 bit; points moved on {moved} rank(s); pairs converted {}; modelled cost \
+                 max/mean {:.3} by points, {:.3} by cost",
+                converted[0], balance[0], balance[1]
+            );
+        }
     }
 }
 

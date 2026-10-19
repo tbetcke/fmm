@@ -1238,6 +1238,47 @@ by kind, unchanged in form). It shares `fmm-exec/src/fmm.rs` with T5 and T8: mer
 then rebase the next (README "Tasks"). Its brief is written after sign-off; its
 criterion is the README's (C6.9).
 
+### 8a.6 As built in T12
+
+Built as §8a.3 designs it, measured in `fmm-validate/results/phase6-near.md`.
+- **`nd-fmm-plan`** (module `near`): `NearRule` holds an operator-supplied predicate over
+  `LeafPair::W { target, source, sources }` and `LeafPair::X { target, source, targets }`
+  (the fine leaf's count in both) and the counts it reads (`LeafCounts`, by key).
+  `Plan::with_near_rule` and `Plan::from_key_types_with_near_rule` apply it in the list
+  construction; `Plan::new` and `from_key_types` keep their signatures and give the plan
+  of before, bit for bit (a sibling constructor rather than a changed `Plan::new`, so that
+  the call sites in twenty-odd files of other crates do not change). `Plan::near_pairs` reports the
+  candidates and the conversions; a missing count is `PlanError::MissingCount`.
+- **The counts, one correction to §8a.3**: the W rows' ghost leaves are not always among
+  the ghost leaves the cut's source exchange delivers (U and X name those), so their source
+  counts are fetched from their owners: `LeafCounts::exchange`, the chunk sizes of one
+  ghost communicator (no value moves) on the plan without the rule. With the points of the
+  local leaves (`cost::leaf_point_counts`, the cut's all-to-all-v, run once for both),
+  `nd-fmm-exec` builds the plan again with the rule; the cut weighs that plan, so the
+  converted pairs count as P2P, and a recut makes the counts and the rule's plan again.
+- **`nd-fmm-exec`**: `FmmBuilder::near_rule(NearRuleChoice)`, `Off` by default; `CostModel`
+  (N_W = α_M2P / α_P2P, N_X = α_P2L / α_P2P, `CostModel::near_crossovers`) or named
+  `Crossovers`; `Fmm::near_rule` reports it. The device path runs the converted pairs with
+  the other near pairs.
+- **Accuracy, a correction to §8a.4**: a converted pair is exact, but the error against
+  the direct sum is a sum over pairs whose truncation errors partly cancel, so removing
+  some of them can raise it: on 3,000 points with leaves of hundreds of points at p = 5 the
+  φ error grows by 2.1 % with the cost model's crossovers and by 1.2 % with every pair
+  converted, on the clusters at N = 10⁶ by up to 0.13 %; on the C3.2 cube (no W or X pair)
+  and the C3.3 Plummer sphere it falls (0.995–0.998), and on the cube at 2 × 10⁶ too
+  (0.995–0.998, ∇φ 0.94). So "at most the existing path's" holds on C6.9's problems but
+  not in general; the tests bound the ratio at 1.1 (the form of C6.5's budget), a sign-off
+  question of T12.
+- **Gain**: the evaluation 1.3–5.9× faster at one rank and at the node's ranks on the M3
+  Max, locust and Kathleen (the cube at 2 × 10⁶ 1.8–5.9×, the Plummer sphere and the
+  clusters 1.3–2.7×),
+  more than §8a.2's model (1.15–2.2×): at p = 3 the X pairs convert too (the leaves under
+  N_X = 35 points are most of them), and W boxes are leaves of 1–32 points in 96–100 % of
+  the W entries. With Kathleen's constants every W pair between leaves converts at p ≥ 3
+  (leaves hold at most 64 points), and every X pair at p ≥ 8 and at f32 p = 3 (97–99 % at
+  f64 p = 3). On 80 Kathleen ranks the cube at 2 × 10⁶ spends 1.9×
+  (f64 p = 8) and 2.1× (f32 p = 3) the uniform tree's leaf time, from 15× and 12×.
+
 ## 9. Order and gain
 
 The components by measured share and modelled gain (§1, §2.10, §3.3, §4.4, §5.3, §6,

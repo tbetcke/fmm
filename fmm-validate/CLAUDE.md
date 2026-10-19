@@ -250,6 +250,15 @@ fused, at 1 × 1 and at Phase 5N's split with the errors of 8 vectors and `--rhs
 `T9_NS`, `T9_PS`, `T9_SPLIT`, `T9_P2P`, `T9_LARGE_EVALS`) and `t9-device` (the same on
 CUDA). FMM3D's side is `tools/fmm3d/`; the report is `results/phase6-fmm3d.md`.
 
+Phase 6 T12 (the near rule, C6.9) added `Settings::near_rule` (`--near off|cost|W,X`,
+`FmmBuilder::near_rule`), `RankRow::near_pairs` (the W and X pairs between leaves and
+those converted, `Fmm::near_rule`), `RankRow::w_entries` (the local leaves' W entries by
+`W_ENTRY_BINS`: interior boxes, leaves by source points, other ranks' leaves),
+`Report::near_crossovers`, two report lines and the summary's `near`, `near_crossovers`,
+`w_leaf_pairs`, `w_converted`, `x_leaf_pairs`, `x_converted` and `w_entries`
+(`tests/scaling.rs` covers them), and in `tools/scaling/run.sh` the sweeps `t12-near` and
+`t12-weak` (`T12_EVALS`). Its report is `results/phase6-near.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

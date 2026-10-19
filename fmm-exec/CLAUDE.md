@@ -32,7 +32,9 @@ device's fused gather, reduction by chunk and shared-memory GEMM,
 `FmmBuilder::{device_gather, device_reduction}`, `DeviceGemm::Shared`; design
 docs/design/optimisation.md §6) and C6.4 (T8: dipole sources, `SourceType`,
 `FmmBuilder::sources`, `Sources`, `Fmm::evaluate_sources`; T8d: the dipole kinds on the
-device; design docs/design/optimisation.md §7; report fmm-validate/results/phase6-dipoles.md).
+device; design docs/design/optimisation.md §7; report fmm-validate/results/phase6-dipoles.md)
+and C6.9 (T12: the near rule, `FmmBuilder::near_rule`, `NearRuleChoice`, `Fmm::near_rule`;
+design docs/design/optimisation.md §8a; report fmm-validate/results/phase6-near.md).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -114,6 +116,27 @@ device; design docs/design/optimisation.md §7; report fmm-validate/results/phas
   with every kind on the device (the CPU runtime f64, Metal f32, CUDA both) within the
   device-against-host bounds of docs/phase4/README.md. The dipole scenario added about 20 s
   to the one-rank debug run of `tests/mpi_exec.rs` (137 → 157 s on the M3 Max).
+- The near rule (Phase 6 T12, C6.9; the `fmm` module docs, "The near rule (C6.9)"):
+  `FmmBuilder::near_rule` (`NearRuleChoice::Off` by default until T11; `CostModel`: N_W =
+  α_M2P / α_P2P and N_X = α_P2L / α_P2P of the FMM's `CostModel`,
+  `CostModel::near_crossovers`; `Crossovers { w, x }` named, negative or NaN refused with
+  `SettingsError::NearCrossover`). Step 4 counts every local leaf's points where they are
+  (`cost::leaf_point_counts`, shared with the cut), fetches the W rows' ghost leaves' source
+  counts (`nd_fmm_plan::near::LeafCounts::exchange`) and builds the plan again with the
+  rule (`near_plan`, `Plan::with_near_rule`); the cut weighs that plan (converted pairs as
+  P2P), and a recut makes the counts and the rule's plan again. Converted pairs lose their
+  truncation error, so the output is not the rule off's; it stays deterministic, the same
+  at every thread count and overlap setting, and on P ranks the one-rank `Fmm` of the same
+  rule bit for bit. `Fmm::near_rule` reports the setting, the crossovers and the plan's
+  `NearPairs`; `BuildTimings::plan` includes the rule's counts and plan. Tested in
+  `tests/mpi_exec.rs` (`check_near_rule` on every scenario with W or X lists, **work-weighted
+  cut**, **input errors**), `tests/invariance.rs` (the Plummer sphere and the graded tree
+  with the rule) and `tests/multi_rank.rs` (the variant "auto, near rule" with the C6.9
+  check). A converted pair is exact, but where the truncation errors of pairs cancel the
+  error against the direct sum can grow by a few per cent (2.1 % on the work-weighted
+  cut's tree at p = 5 with the cost model's rule, 0.6 % at p = 16 with every pair
+  converted); the tests bound it at 1.1 times the rule off's (`NEAR_ERROR_BOUND`), C6.9's
+  "at most" being a sign-off question (fmm-validate/results/phase6-near.md).
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread
   count. No `unsafe`, no atomics, no global pool; per-thread scratch created at
@@ -202,8 +225,10 @@ device; design docs/design/optimisation.md §7; report fmm-validate/results/phas
     ranks enter nothing of it), the outputs moved back point to point by index, one
     all-reduce of the count. The cube, the Plummer sphere and a graded tree with one empty
     rank, N = 10⁴, f64 p = 8 `Rotation` and f32 p = 3 `Dense` (the strategy named: `Auto`
-    resolves by the ranks per node), each comparison blocking against overlapped. 39 s at
-    one rank in debug on the M3 Max; 31, 38 and 43 s at 2, 4 and 8; in CI (PR #101) 64 s at
+    resolves by the ranks per node), each comparison blocking against overlapped; since
+    Phase 6 T12 the Plummer sphere and the graded tree again with the near rule of the
+    cost model. 39 s at one rank in debug on the M3 Max (69 s with T12's runs); 31, 38 and
+    43 s at 2, 4 and 8; in CI (PR #101) 64 s at
     one rank (`run-tests`), 56 and 110 s at 2 and 4 (`run-tests-mpi`). Keep it passing in
     every structural task (T3–T8): it is the oracle where no one-rank run fits, and its
     at-scale form is `nd_fmm_validate::scaling::invariance`.

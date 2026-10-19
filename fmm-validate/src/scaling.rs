@@ -114,8 +114,8 @@ use mpi::traits::{Communicator, CommunicatorCollectives, Destination, Equivalenc
 use nd_fmm_exec::cost::CostModel;
 use nd_fmm_exec::fmm::{
     Backend, BuildTimings, DeviceGather, DeviceGemm, DeviceReduction, ExchangeTraffic, Fmm,
-    FmmBuilder, KindTiming, ListSizes, MultipoleRouting, OperatorKind, Output, OutputMany,
-    StageTimings, TREE_FAN_OUT, Traffic,
+    FmmBuilder, KindTiming, ListSizes, MultipoleRouting, NearRuleChoice, OperatorKind, Output,
+    OutputMany, StageTimings, TREE_FAN_OUT, Traffic,
 };
 use nd_fmm_exec::geometry::{contains, integer_centre};
 use nd_fmm_exec::operator::{MulAdd, P2pChoice, SimdScalar};
@@ -456,6 +456,9 @@ pub struct Settings {
     pub device_gather: DeviceGather,
     /// The device's reduction (`FmmBuilder::device_reduction`, Phase 6 T7).
     pub device_reduction: DeviceReduction,
+    /// The near rule (`FmmBuilder::near_rule`, Phase 6 T12, C6.9; off, as the library's
+    /// default): the W and X pairs between leaves below its crossovers run as P2P.
+    pub near_rule: NearRuleChoice,
 }
 
 impl Settings {
@@ -490,6 +493,7 @@ impl Settings {
             device_gemm: DeviceGemm::Auto,
             device_gather: DeviceGather::Auto,
             device_reduction: DeviceReduction::ByChunk,
+            near_rule: NearRuleChoice::Off,
         }
     }
 }
@@ -818,7 +822,29 @@ pub struct RankRow {
     /// The modelled cost of an evaluation on this rank, Σ_k α_k c_k with the run's
     /// constants ([`Report::cost_model`]), in seconds.
     pub modelled: f64,
+    /// The near rule's pairs on this rank (`Fmm::near_rule`, Phase 6 T12): the W pairs
+    /// between leaves, those converted to near pairs, the X pairs between leaves, those
+    /// converted; all zero with the rule off.
+    pub near_pairs: [usize; 4],
+    /// The W entries of this rank's local leaves after the near rule (Phase 6 T12), by
+    /// [`W_ENTRY_BINS`]: interior boxes, leaves by their source points, and leaves whose
+    /// count this rank does not hold (another rank's; none on one rank).
+    pub w_entries: [usize; W_ENTRY_BINS.len()],
 }
+
+/// The bins of [`RankRow::w_entries`] (Phase 6 T12, docs/design/optimisation.md §8a.2): the
+/// W entries that are interior boxes, the leaves with 0, 1–8, 9–16, 17–32, 33–64 and more
+/// than 64 source points, and the leaves of other ranks.
+pub const W_ENTRY_BINS: [&str; 8] = [
+    "interior",
+    "0",
+    "1-8",
+    "9-16",
+    "17-32",
+    "33-64",
+    ">64",
+    "other rank",
+];
 
 /// The levels a [`TopTreeRow`] counts per level: 0 to 16, the octree's deepest level.
 pub const TOP_TREE_LEVELS: usize = 17;
@@ -967,6 +993,8 @@ impl RankRow {
         values.extend(self.top_tree.encode());
         values.extend(self.kind_counts.map(|c| c as f64));
         values.push(self.modelled);
+        values.extend(self.near_pairs.map(|c| c as f64));
+        values.extend(self.w_entries.map(|c| c as f64));
         values
     }
 
@@ -1029,6 +1057,8 @@ impl RankRow {
             top_tree: TopTreeRow::decode(&v[ROW_VALUES + 6..kinds]),
             kind_counts: core::array::from_fn(|k| v[kinds + k] as u64),
             modelled: v[kinds + 8],
+            near_pairs: core::array::from_fn(|k| v[kinds + 9 + k] as usize),
+            w_entries: core::array::from_fn(|k| v[kinds + 13 + k] as usize),
         }
     }
 }
@@ -1257,6 +1287,9 @@ pub struct Report {
     /// Whether the second cut moved blocks (`Fmm::recut`): it ran and gained at least
     /// `WORK_CUT_MIN_GAIN`.
     pub recut: bool,
+    /// The near rule's crossovers [N_W, N_X] (`Fmm::near_rule`, Phase 6 T12); `None` with
+    /// the rule off.
+    pub near_crossovers: Option<[f64; 2]>,
     /// With a device backend, the bytes of its translations' scratch on this rank
     /// (`DeviceReport::scratch_bytes`, Phase 6 T7); `None` on the host.
     pub device_scratch_bytes: Option<u64>,
@@ -1742,6 +1775,16 @@ fn rank_row<T: Stored + SimdScalar + Equivalence + Default>(
         top_tree,
         kind_counts: counts.to_array(),
         modelled: fmm.cost_model().cost(&counts) * 1e-9,
+        w_entries: w_entries(fmm),
+        near_pairs: {
+            let pairs = fmm.near_rule().pairs;
+            [
+                pairs.w_leaf_pairs,
+                pairs.w_converted,
+                pairs.x_leaf_pairs,
+                pairs.x_converted,
+            ]
+        },
     }
 }
 
@@ -1788,6 +1831,49 @@ pub fn routing_name(routing: MultipoleRouting) -> String {
     match routing {
         MultipoleRouting::Direct => "direct".to_owned(),
         MultipoleRouting::Tree { fan_out } => format!("tree{fan_out}"),
+    }
+}
+
+/// This rank's W entries by [`W_ENTRY_BINS`], from its plan and the source counts of its
+/// local leaves.
+fn w_entries<T: Stored + SimdScalar + Equivalence + Default>(
+    fmm: &Fmm<'_, T>,
+) -> [usize; W_ENTRY_BINS.len()] {
+    let plan = fmm.plan();
+    let index = plan.index();
+    let counts = fmm.source_counts();
+    let mut bins = [0usize; W_ENTRY_BINS.len()];
+    for level in 0..plan.nlevels().saturating_sub(1) {
+        for &s in plan.level(level).w().entries() {
+            // `KeyType` is nd-octree's, which this crate does not depend on: a ghost leaf
+            // by its name.
+            let kind = format!("{:?}", index.kind(level + 1, s as usize));
+            let bin = match index.box_leaf(level + 1, s as usize) {
+                None if kind.starts_with("GhostLeaf") => 7,
+                None => 0,
+                Some(j) => match counts.get(j as usize) {
+                    None => 7,
+                    Some(0) => 1,
+                    Some(1..=8) => 2,
+                    Some(9..=16) => 3,
+                    Some(17..=32) => 4,
+                    Some(33..=64) => 5,
+                    Some(_) => 6,
+                },
+            };
+            bins[bin] += 1;
+        }
+    }
+    bins
+}
+
+/// The near rule by name, as `--near` takes it (Phase 6 T12): `off`, `cost`, or the
+/// crossovers `W,X`.
+pub fn near_name(rule: NearRuleChoice) -> String {
+    match rule {
+        NearRuleChoice::Off => "off".to_owned(),
+        NearRuleChoice::CostModel => "cost".to_owned(),
+        NearRuleChoice::Crossovers { w, x } => format!("{w},{x}"),
     }
 }
 
@@ -1928,7 +2014,7 @@ fn builder<T: Stored + SimdScalar + Equivalence + Default>(settings: &Settings) 
     if let Some(model) = settings.cost_model {
         builder = builder.cost_model(model);
     }
-    builder
+    builder.near_rule(settings.near_rule)
 }
 
 /// Builds the FMM of `workload` in precision `T` with `settings` on every rank of
@@ -2145,6 +2231,7 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         placement,
         cost_model: fmm.cost_model(),
         recut: fmm.recut(),
+        near_crossovers: fmm.near_rule().crossovers,
         device_scratch_bytes: device_scratch_bytes(&fmm),
     })
 }
@@ -2998,6 +3085,29 @@ impl Report {
                     }
                 ));
                 fields.push(format!("recut={}", if self.recut { "yes" } else { "no" }));
+                // The near rule (Phase 6 T12): its crossovers and the pairs converted,
+                // summed over the ranks.
+                let pairs: [usize; 4] =
+                    core::array::from_fn(|k| rows.iter().map(|r| r.near_pairs[k]).sum());
+                fields.push(format!("near={}", near_name(self.settings.near_rule)));
+                fields.push(format!(
+                    "near_crossovers={}",
+                    self.near_crossovers
+                        .map_or("none".to_owned(), |[w, x]| format!("{w:.1},{x:.1}"))
+                ));
+                fields.push(format!("w_leaf_pairs={}", pairs[0]));
+                fields.push(format!("w_converted={}", pairs[1]));
+                fields.push(format!("x_leaf_pairs={}", pairs[2]));
+                fields.push(format!("x_converted={}", pairs[3]));
+                let w: Vec<String> = (0..W_ENTRY_BINS.len())
+                    .map(|k| {
+                        rows.iter()
+                            .map(|r| r.w_entries[k])
+                            .sum::<usize>()
+                            .to_string()
+                    })
+                    .collect();
+                fields.push(format!("w_entries={}", w.join("/")));
                 fields.push(format!("routing={}", routing_name(self.settings.routing)));
                 fields.push(format!(
                     "modelled_max_ms={}",
@@ -3277,6 +3387,38 @@ impl fmt::Display for Report {
             "- the multipole exchange: {} (Phase 5S T8s)",
             routing_name(s.routing)
         )?;
+        let pairs: [usize; 4] =
+            core::array::from_fn(|k| self.rows.iter().map(|r| r.near_pairs[k]).sum());
+        let w: Vec<String> = W_ENTRY_BINS
+            .iter()
+            .enumerate()
+            .map(|(k, bin)| {
+                format!(
+                    "{bin} {}",
+                    self.rows.iter().map(|r| r.w_entries[k]).sum::<usize>()
+                )
+            })
+            .collect();
+        writeln!(
+            f,
+            "- W entries of the local leaves, by box and source points (after the near rule, \
+             all ranks): {}",
+            w.join(", ")
+        )?;
+        match self.near_crossovers {
+            None => writeln!(f, "- the near rule: off (Phase 6 T12)")?,
+            Some([w, x]) => writeln!(
+                f,
+                "- the near rule: {} (Phase 6 T12), N_W {w:.1} and N_X {x:.1} points; W pairs \
+                 between leaves {} of which {} converted, X pairs between leaves {} of which \
+                 {} converted (all ranks)",
+                near_name(s.near_rule),
+                pairs[0],
+                pairs[1],
+                pairs[2],
+                pairs[3]
+            )?,
+        }
         writeln!(f)?;
 
         let per_rank = self.ranks <= PER_RANK_ROWS;

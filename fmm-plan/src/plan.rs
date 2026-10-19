@@ -63,6 +63,12 @@
 //!   name are Phase 5's, but for a top-tree key that is not a shared ancestor, which is a
 //!   ghost of its owner since Phase 5S T5 (`docs/design/scale-out.md` §3.6, §4). Only the
 //!   box indices change, because fewer keys are held.
+//! - **The near rule** (Phase 6 T12, C6.9; [`Plan::with_near_rule`], the
+//!   [`near`](crate::near) module): optional, applied locally while the rows are built.
+//!   The W entries of a leaf that are leaves and the X entries of a leaf that the rule
+//!   converts move to the leaf's near row, in its (level, key) order; a converted ghost W
+//!   entry is numbered as a ghost leaf. Every other row is the row without the rule, and
+//!   [`Plan::new`] is the plan without it, bit for bit.
 //! - The plan owns its arrays and borrows nothing from the octree. A new tree needs a new
 //!   plan: box indices, unlike keys, change when the tree changes.
 //!
@@ -90,6 +96,7 @@ use super::index::BoxIndex;
 use super::lists::{
     CsrBuilder, GroupedBuilder, LevelLists, NOCTANTS, NOFFSETS, Overflow, offset, offset_index,
 };
+use super::near::{LeafPair, NearPairs, NearRule};
 use crate::interaction_manager::{is_interior, is_leaf, key_lists, valid_neighbours};
 
 /// The box index and the interaction lists of an octree on one rank.
@@ -106,6 +113,8 @@ pub struct Plan {
     top: Vec<Vec<(u32, u32)>>,
     /// The deepest level of a coarse block of any rank, capped at the deepest level.
     deepest_block_level: usize,
+    /// The W and X pairs between leaves, and those the near rule converted.
+    near_pairs: NearPairs,
 }
 
 /// The reasons a [`Plan`] cannot be built.
@@ -159,6 +168,13 @@ pub enum PlanError {
         /// The coarse block.
         key: MortonKey,
     },
+    /// The counts of a near rule lack a count it reads: the source count of a leaf a W
+    /// row names, or the target count of a local leaf with an X row
+    /// ([`near`](crate::near)).
+    MissingCount {
+        /// The leaf.
+        key: MortonKey,
+    },
     /// Construction failed on another rank.
     OtherRank,
 }
@@ -199,6 +215,9 @@ impl fmt::Display for PlanError {
             Self::CoarseBlock { key } => {
                 write!(f, "coarse block {key} is not a non-ghost key of the tree")
             }
+            Self::MissingCount { key } => {
+                write!(f, "the near rule has no point count of leaf {key}")
+            }
             Self::OtherRank => write!(f, "building the plan failed on another rank"),
         }
     }
@@ -224,6 +243,31 @@ impl Plan {
     /// `Global` box) is not held, or a level or view outgrows `u32` indices. The rank
     /// that found the defect returns it; the other ranks return [`PlanError::OtherRank`].
     pub fn new<C: CommunicatorCollectives>(octree: &Octree<'_, C>) -> Result<Self, PlanError> {
+        Self::build(octree, None)
+    }
+
+    /// Build the plan of `octree` as [`new`](Self::new) does, with the W and X pairs
+    /// between leaves that `rule` names turned into near pairs (Phase 6 T12, C6.9; the
+    /// [`near`](crate::near) module).
+    ///
+    /// # Collective operation
+    /// Those of [`new`](Self::new): the rule is applied locally.
+    ///
+    /// # Errors
+    /// Those of [`new`](Self::new), and [`PlanError::MissingCount`] where the rule's counts
+    /// lack a count it reads, on every rank alike.
+    pub fn with_near_rule<C: CommunicatorCollectives>(
+        octree: &Octree<'_, C>,
+        rule: &NearRule<'_>,
+    ) -> Result<Self, PlanError> {
+        Self::build(octree, Some(rule))
+    }
+
+    /// [`new`](Self::new) with an optional near rule.
+    fn build<C: CommunicatorCollectives>(
+        octree: &Octree<'_, C>,
+        rule: Option<&NearRule<'_>>,
+    ) -> Result<Self, PlanError> {
         let nlevels = octree.global_max_level() + 1;
         let map = octree.partition_map();
         debug_assert_eq!(
@@ -232,7 +276,7 @@ impl Plan {
             "the partition map names this rank's coarse blocks"
         );
         let local = if octree.options().ghost_children() {
-            Self::from_key_types(octree.all_keys(), nlevels, map)
+            Self::from_key_types_with(octree.all_keys(), nlevels, map, rule)
         } else {
             Err(PlanError::MissingGhostChildren)
         };
@@ -265,6 +309,32 @@ impl Plan {
         all_keys: &HashMap<MortonKey, KeyType>,
         nlevels: usize,
         map: &PartitionMap,
+    ) -> Result<Self, PlanError> {
+        Self::from_key_types_with(all_keys, nlevels, map, None)
+    }
+
+    /// [`from_key_types`](Self::from_key_types) with the W and X pairs between leaves that
+    /// `rule` names turned into near pairs (the [`near`](crate::near) module); local, for
+    /// tests on hand-built maps.
+    ///
+    /// # Errors
+    /// Those of [`from_key_types`](Self::from_key_types), and
+    /// [`PlanError::MissingCount`] where the rule's counts lack a count it reads.
+    pub fn from_key_types_with_near_rule(
+        all_keys: &HashMap<MortonKey, KeyType>,
+        nlevels: usize,
+        map: &PartitionMap,
+        rule: &NearRule<'_>,
+    ) -> Result<Self, PlanError> {
+        Self::from_key_types_with(all_keys, nlevels, map, Some(rule))
+    }
+
+    /// [`from_key_types`](Self::from_key_types) with an optional near rule.
+    fn from_key_types_with(
+        all_keys: &HashMap<MortonKey, KeyType>,
+        nlevels: usize,
+        map: &PartitionMap,
+        rule: Option<&NearRule<'_>>,
     ) -> Result<Self, PlanError> {
         let mut sorted: Vec<MortonKey> = all_keys.keys().copied().collect();
         sorted.sort_unstable();
@@ -330,6 +400,7 @@ impl Plan {
         // as boxes, which become leaf indices once the ghost leaves are numbered.
         let mut partial = Vec::with_capacity(nlevels);
         let mut ghost_leaves = Vec::new();
+        let mut near_pairs = NearPairs::default();
         for level in 0..nlevels {
             partial.push(first_pass(
                 &index,
@@ -338,6 +409,7 @@ impl Plan {
                 &|i| owned(level, i),
                 level,
                 &mut ghost_leaves,
+                (rule, &mut near_pairs),
             )?);
         }
         index.set_ghost_leaves(ghost_leaves);
@@ -363,6 +435,7 @@ impl Plan {
             rank,
             top,
             deepest_block_level,
+            near_pairs,
         })
     }
 
@@ -425,6 +498,12 @@ impl Plan {
     /// `Global` box it owns.
     pub fn computes(&self, level: usize, i: usize) -> bool {
         self.owner(level, i) == self.rank
+    }
+
+    /// Return the W and X pairs between leaves of this rank's rows, and how many of each
+    /// the near rule converted (none without a rule; the [`near`](crate::near) module).
+    pub fn near_pairs(&self) -> NearPairs {
+        self.near_pairs
     }
 
     /// Return the deepest level of a coarse block of any rank, the same on every rank
@@ -536,6 +615,11 @@ struct PartialLevel {
 /// Build the views of `level` that need only box indices, and collect the U- and
 /// X-entries, recording every ghost leaf among them in `ghost_leaves`.
 ///
+/// With a near `rule`, the W entries of a local leaf whose box is a leaf, and the X
+/// entries of a local leaf, that the rule converts join the leaf's U-entries (its near
+/// row) instead, a ghost W entry recorded in `ghost_leaves` as well; `near_pairs` counts
+/// the candidates and the conversions.
+///
 /// A `Global` box that is not in `needed_globals` (ascending) gets empty V, X and L2L
 /// rows (P2). Its lists are not resolved: since Phase 5S T4 the plan does not hold its
 /// neighbourhood. A `Global` box has its M2M row of the global pass only if `owned`
@@ -547,6 +631,7 @@ fn first_pass(
     owned: &dyn Fn(usize) -> bool,
     level: usize,
     ghost_leaves: &mut Vec<(usize, u32)>,
+    (rule, near_pairs): (Option<&NearRule<'_>>, &mut NearPairs),
 ) -> Result<PartialLevel, PlanError> {
     let mut partial = PartialLevel {
         v: GroupedBuilder::new(NOFFSETS),
@@ -603,6 +688,10 @@ fn first_pass(
         };
         let is_leaf_box =
             |(entry_level, j): (usize, u32)| is_leaf(index.kind(entry_level, j as usize));
+        // A non-ghost box with a leaf index is a local leaf: the only boxes with near rows.
+        let leaf = index.box_leaf(level, i);
+        let rule = rule.filter(|_| leaf.is_some());
+        let missing = |key| PlanError::MissingCount { key };
 
         v_row.clear();
         for source in v {
@@ -620,7 +709,9 @@ fn first_pass(
         partial.v.push_row(v_row.iter().copied());
 
         // W-entries are keys of one level, sorted, so they are ascending in box index.
+        // Those the near rule converts join the U-entries.
         let mut w_row = Vec::with_capacity(w.len());
+        let mut w_near = Vec::new();
         for source in w {
             let (source_level, j) = resolve(source)?;
             if source_level != level + 1 {
@@ -628,6 +719,21 @@ fn first_pass(
                     key,
                     "a W-list entry does not lie one level finer",
                 ));
+            }
+            if let Some(rule) = rule
+                && is_leaf_box((source_level, j))
+            {
+                near_pairs.w_leaf_pairs += 1;
+                let sources = rule.counts().sources(source).ok_or(missing(source))?;
+                if rule.converts(LeafPair::W {
+                    target: key,
+                    source,
+                    sources,
+                }) {
+                    near_pairs.w_converted += 1;
+                    w_near.push((source_level, j));
+                    continue;
+                }
             }
             w_row.push(j);
         }
@@ -645,6 +751,12 @@ fn first_pass(
                 ghost_leaves.push(entry);
             }
         }
+        for entry in w_near {
+            partial.u_entries.push(entry);
+            if index.kind(entry.0, entry.1 as usize).is_ghost() {
+                ghost_leaves.push(entry);
+            }
+        }
         for source in x {
             let entry = resolve(source)?;
             if !is_leaf_box(entry) || entry.0 + 1 != level {
@@ -653,10 +765,23 @@ fn first_pass(
                     "an X-list entry is not a leaf one level coarser",
                 ));
             }
-            partial.x_entries.push(entry);
             if index.kind(entry.0, entry.1 as usize).is_ghost() {
                 ghost_leaves.push(entry);
             }
+            if let Some(rule) = rule {
+                near_pairs.x_leaf_pairs += 1;
+                let targets = rule.counts().targets(key).ok_or(missing(key))?;
+                if rule.converts(LeafPair::X {
+                    target: key,
+                    source,
+                    targets,
+                }) {
+                    near_pairs.x_converted += 1;
+                    partial.u_entries.push(entry);
+                    continue;
+                }
+            }
+            partial.x_entries.push(entry);
         }
         partial.x_offsets.push(partial.x_entries.len());
 
@@ -691,8 +816,7 @@ fn first_pass(
             None => partial.l2l.push_row([]),
         }
 
-        match index.box_leaf(level, i) {
-            // A non-ghost box with a leaf index is a local leaf.
+        match leaf {
             Some(leaf) => {
                 partial.p2m.push_row([leaf]);
                 partial.w.push_row(w_row);
@@ -711,7 +835,7 @@ impl PartialLevel {
         let leaf_of = |(entry_level, j): (usize, u32)| {
             index
                 .box_leaf(entry_level, j as usize)
-                .expect("every leaf named by a U- or X-list has a leaf index")
+                .expect("every leaf named by a U- or X-entry has a leaf index")
         };
 
         // P1 (distributed-fmm §5.1): rows by the entry leaf's (level, key), which is the
