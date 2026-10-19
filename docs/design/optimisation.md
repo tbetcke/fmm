@@ -1140,6 +1140,48 @@ body, several ranks, f32 and the device as its open items (the report's §8).
 **Decision 6 signed off by the user on 2026-10-18, as recommended:** C6.5 proceeds, as
 T13 (docs/phase6/T13-plane-wave-m2l.md).
 
+**As built in T13 (2026-10-19; `fmm-validate/results/phase6-planewave.md`).** The spike
+made a strategy, `M2lStrategy::PlaneWave` (opt-in; `Auto` never resolves to it), with
+these differences from the spike and the brief:
+- **The convention** is CONVENTIONS §3.14, outside the versioned set like §3.13 (no
+  fixture depends on it, its tables are not cached): `CONVENTION_VERSION` stays 2.
+- **The quadrature per degree** is the spike's matched rule on a whole uniform level
+  (53,352 V pairs, 0.1× the M2L truncation error) at every p ≤ 20, made non-decreasing:
+  s = 10, 15, 17, 21, 32 at p = 3, 6, 8, 12, 18 (the spike: 18 at p = 8; 30 matched at
+  p = 18, raised to p = 17's 32, where the waves reach their rounding floor of about
+  3 × 10⁻¹⁰ Σ|q|). The FMM's errors stay within 0.94–1.03× the exact M2L's in every test.
+- **Memory**: one frame (two opposite directions) at a time, so the waves of a level take
+  4H values per box, a third of the six directions'; each thread's scratch is (2a + 32) H
+  + 2 (p + 1)² + 8F + 4 (p + 1) s values (a ≤ 10 accumulators, F the frame's modes).
+  `Fmm` sizes the buffer from the plan, so no level call allocates.
+- **Deterministic across ranks**: the accumulators are fixed by geometric masks over a
+  parent's 216 slots and sum their slots in ascending order, so the sums do not depend on
+  which rank holds a source: on P ranks the output is the one-rank `PlaneWave` run's bit
+  for bit, and rank-count invariance holds (80 Kathleen ranks against 40, 20 and 10).
+- **The kernels are bit for bit across ISAs** (the brief allowed a bound): `merge`,
+  `gather`, `waves` and `sums` in `nd-fmm-simd` (NEON, AVX2, AVX-512, scalar) keep one
+  fma per product and sum in a fixed order per value, and the tables' own steps round
+  products and sums apart (an x86-64 build without `fma` turns `mul_add` into a library
+  call). They run on the P2P choice's ISA.
+- **The cost model** counts M2L per box with a V row (`cost::M2lUnit::Boxes`), with
+  Kathleen's constants at f64 p = 8 and 18 and f32 p = 8.
+- **f32** is offered at every degree the builder accepts (p ≤ 20, as f64); its errors meet
+  the budget at p = 3, 6, 8 on the three machines and at p = 12, 18 on the M3 Max, where
+  f32's rounding dominates every strategy's error.
+- **The device** runs it as `Dense`; a device plane-wave kernel stays a later task.
+- **The cut** weighs it right: with `PlaneWave`'s constants the work cut takes the
+  Plummer sphere's and the clusters' imbalance on 40 Kathleen ranks from 1.33–1.41 to
+  1.05–1.13 (evaluations 1.17–1.31× faster).
+- **Gain** (the evaluation against the fastest of `Batched`, separate or fused, and
+  `Rotation`; the cube and the Plummer sphere at N = 10⁶ and 10⁷, one rank and the node's
+  splits): f64 p = 8 1.23–1.80× on the M3 Max, 1.05–1.50× on locust and 1.03–1.25× on
+  Kathleen; p = 12 1.35–3.79×; p = 18 2.04–6.38×; p = 6 1.03–1.20× on the arm machines but
+  0.96–0.99× on Kathleen; p = 3 0.83–1.01×. The M2L stage alone: 1.5–3.2× at p = 8, 6.5–11.4×
+  at p = 18, as T10's spike measured on a level. In f32 1.12–1.40× at p = 8 on the arm
+  machines, none on Kathleen. Proposed for T11: `Auto` resolves to `PlaneWave` for f64 at
+  p ≥ 8 everywhere and from p = 6 on NEON, for f32 from p = 8 on NEON, with the waves in
+  the node budget.
+
 ## 8a. M2P and P2L only where they pay (C6.9)
 
 ### 8a.1 The pairs in question
