@@ -173,6 +173,21 @@
 //! backend M2L on the device runs as `Dense`. [`Fmm::threading`] names the kernel's ISA
 //! and mode ([`ThreadingReport::m2l_kernel`]).
 //!
+//! # The plane-wave M2L (Phase 6 T13, C6.5)
+//!
+//! [`M2lStrategy::PlaneWave`] (opt-in; `Auto` never resolves to it) applies M2L by plane
+//! waves with merge and shift ([`operator`](crate::operator#the-plane-wave-m2l), "The
+//! plane-wave M2L"; CONVENTIONS §3.14), M2M and L2L by `Rotation`'s tables. It approximates
+//! M2L: the output is not `Dense`'s, but within its error budget (the errors against the
+//! direct sum within about 1.1× those of the exact M2L, the quadrature of
+//! `nd_fmm_tables::plane_wave::nodes_for_degree`; f32 and f64, p ≤ 20). Every other
+//! guarantee here holds for it: deterministic, the same for every thread count and overlap
+//! setting, and on P ranks bit for bit the one-rank `PlaneWave` `Fmm` over the union. `build`
+//! sizes its waves buffer from the plan (one frame of the largest level, 4H values per
+//! box), and its cost model counts M2L per box with a V row (`cost::M2lUnit::Boxes`). With a
+//! device backend M2L on the device runs as `Dense`. [`Fmm::threading`] names the plane-wave
+//! kernels' ISA ([`ThreadingReport::wave_kernel`]).
+//!
 //! # Several charge vectors (Phase 6 T5)
 //!
 //! [`FmmBuilder::vectors`] m > 1 (C6.3; docs/design/optimisation.md §4) builds an FMM that
@@ -461,8 +476,12 @@ use crate::tables::{M2lStrategy, NodeContext, StrategyChoice, Tables};
 use crate::threading::{REQUIRED_MPI_THREADING, ThreadingReport};
 
 /// The largest degree p that [`FmmBuilder::build`] accepts: CONVENTIONS §3.9 covers M2L
-/// up to p = 20 in f64.
+/// up to p = 20 in f64, and the plane-wave quadratures (`M2lStrategy::PlaneWave`,
+/// CONVENTIONS §3.14) reach the same degree.
 pub const MAX_DEGREE: usize = 20;
+
+// `PlaneWave` builds its tables at every degree the builder accepts.
+const _: () = assert!(MAX_DEGREE <= nd_fmm_tables::plane_wave::MAX_DEGREE);
 
 /// The default `max_level` of [`FmmBuilder`]: 16, the deepest level of a Morton key.
 pub const DEFAULT_MAX_LEVEL: usize = DEEPEST_LEVEL as usize;
@@ -1907,15 +1926,22 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         drop(node);
         let tables_time = start.elapsed();
         let start = Instant::now();
+        // Under `PlaneWave` the waves of one frame of the largest level (Phase 6 T13).
+        let level_boxes = (0..plan.index().nlevels())
+            .map(|level| plan.index().len(level))
+            .max()
+            .unwrap_or(0);
         let mut operator = LaplaceOperator::new(tables, self.gradients, max_leaf_points)
             .with_p2p(self.p2p)
             .expect("step 1 checked that this machine runs the P2P kernel")
             .with_m2l_mul_add(self.m2l_mul_add)
             .with_vectors(self.vectors)
-            .with_sources(self.sources);
+            .with_sources(self.sources)
+            .with_plane_wave_boxes(level_boxes);
         threading.m2l_kernel = operator
             .m2l_kernel()
             .map(|kernel| (kernel.isa(), kernel.mul_add()));
+        threading.wave_kernel = operator.wave_kernel().map(|kernel| kernel.isa());
         if let Some(pool) = pool {
             operator = operator.with_pool(pool);
         }
@@ -2262,6 +2288,7 @@ fn strategy_code(strategy: M2lStrategy) -> u8 {
         M2lStrategy::Rotation => 2,
         M2lStrategy::Auto => 3,
         M2lStrategy::Batched => 4,
+        M2lStrategy::PlaneWave => 5,
     }
 }
 
@@ -2273,6 +2300,7 @@ fn strategy_from_code(code: u8) -> M2lStrategy {
         1 => M2lStrategy::Classes,
         2 => M2lStrategy::Rotation,
         4 => M2lStrategy::Batched,
+        5 => M2lStrategy::PlaneWave,
         _ => M2lStrategy::Auto,
     }
 }
@@ -4634,17 +4662,19 @@ where
     }
 
     /// Returns this rank's work by operator kind on its plan ([`KindCounts`], the units of
-    /// the [`cost`] module), from the plan's views and the points of the leaves (the
+    /// the [`cost`] module, M2L in the unit of [`cost_model`](Self::cost_model)), from the
+    /// plan's views and the points of the leaves (the
     /// ghost leaves' from the source exchange), without communication. For reports: with
     /// [`cost_model`](Self::cost_model) it gives the modelled cost of the rank
     /// ([`CostModel::cost`]), and with [`KindTiming::Synchronous`] the constants of a
     /// machine (scale-out.md §6.1).
     pub fn kind_counts(&self) -> KindCounts {
-        cost::work_counts(
+        cost::work_counts_in(
             self.evaluator.plan(),
             self.octree.coarse_tree_leafs(),
             self.evaluator.source_exchange().leaf_counts(),
             &self.target_leaves.counts,
+            self.cost_model.m2l_unit(),
         )
         .total()
     }

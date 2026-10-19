@@ -78,6 +78,11 @@
 //!   rotation M2L, M2M and L2L, O(p³) per application (C2.3).
 //! - [`symmetry`]: the cube group O_h, the symmetry classes of the offsets and the
 //!   coefficient transforms T_M(P) and T_L(P) (§3.12).
+//! - [`plane_wave`]: the tables of plane-wave M2L, [`PlaneWaveTables`]: FMM3D's quadratures,
+//!   the conversions between expansions and plane waves in six directions, the shifts of
+//!   merge and shift and a pair translation (CONVENTIONS §3.14; Phase 6 T13, C6.5). Unlike
+//!   the other families they are built from the formulas of §3.14, not from nd-fmm-ref,
+//!   checked against `nd_fmm_ref::direct::m2l`, and not cached.
 //! - [`cache`]: the versioned on-disk cache of every table family, [`TableCache`],
 //!   keyed by family, degree, precision and the convention and format versions (C2.4).
 //!
@@ -89,6 +94,7 @@ pub mod geometry;
 pub mod m2l;
 mod matrix_set;
 pub mod octant;
+pub mod plane_wave;
 pub mod rotation;
 pub mod symmetry;
 
@@ -96,4 +102,5 @@ pub use cache::{CacheError, CacheOutcome, TableCache};
 pub use m2l::{M2lClasses, M2lScratch, M2lTables};
 pub use matrix_set::MatrixSet;
 pub use octant::{L2lTables, M2mTables};
+pub use plane_wave::{PlaneWaveScratch, PlaneWaveTables};
 pub use rotation::{RotationScratch, RotationTables};

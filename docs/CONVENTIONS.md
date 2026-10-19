@@ -5,8 +5,9 @@
 This file is the single source of truth for basis functions, phases, storage and
 scaling in the `nd-fmm-*` crates. Code cites it as `CONVENTIONS §3.x`. Any change to
 §3.1–§3.8, §3.11 or §3.12 bumps `CONVENTION_VERSION`, which invalidates committed
-fixtures and cached operator tables. §3.13 describes in-memory data only; a change to
-it does not bump the version (§3.10).
+fixtures and cached operator tables. §3.13 describes in-memory data only, and §3.14 an
+approximate M2L whose tables are not cached; a change to either does not bump the
+version (§3.10).
 
 Summary of the choices: Legendre functions without the Condon–Shortley phase for
 m ≥ 0, negative orders defined by a (−1)^m conjugate symmetry, Racah-type factorial
@@ -215,6 +216,11 @@ cached tables depend on its geometry, layout and class rule.
 describes in-memory data only (chunk layouts, leaf-scaled values, relative frames), and
 no committed fixture and no cached table depends on it. A change to §3.13 changes the
 code that implements it in the same pull request.
+
+§3.14 (Phase 6 T13) is not included either: it adds an approximate operator beside §3.11
+and changes no quantity of §3.1–§3.12; no committed fixture depends on it, and its tables
+are built at every `Tables` build, never cached (they take milliseconds). A change to
+§3.14 changes `nd_fmm_tables::plane_wave` in the same pull request.
 
 ## 3.11 Translation operators
 
@@ -1273,3 +1279,133 @@ the same adversarial and random pairs, rebuilt in Rust, with ŷ, dₖ and r² fo
 device kernel in five formulations; the primitive operations against correctly rounded
 host values; and the compiler's contraction, simplification and flushing, with inputs
 chosen so that each shows in the bits.
+
+## 3.14 Plane-wave M2L
+
+Phase 6 T13 (C6.5) adds M2L by plane waves with merge and shift (Greengard and Rokhlin
+1997, Acta Numerica 6; Cheng, Greengard and Rokhlin 1999, J. Comput. Phys. 155; the scheme
+of FMM3D's `lfmm3d`), an approximate operator beside the exact M2L of §3.11. It changes no
+quantity of §3.1–§3.13: its input is a scaled multipole (§3.7) and its output is added to
+a scaled local, both in the storage of §3.6. `nd_fmm_tables::plane_wave` implements it;
+the derivation was checked numerically in Phase 6 T10 (`spikes/plane-wave`) and is tested
+against `nd_fmm_ref::direct::m2l` on levels 2, 9 and 16.
+
+### Box widths
+
+On a level the scaled coordinates v of §3.7 have the half-width as unit. Plane waves work
+in box widths, u = v/2. By homogeneity (§3.11) a scaled multipole M̃ gives
+
+```math
+r\,\phi(\mathbf{x}) = \sum_{n,m} \tilde M_n^m\, I_n^m(\mathbf{v})
+= \sum_{n,m} \hat M_n^m\, I_n^m(\mathbf{u}), \qquad \hat M_n^m = 2^{-(n+1)}\, \tilde M_n^m
+```
+
+and a local L̂ in box widths, Σ L̂ₙᵐ Rₙᵐ(u), is the scaled local L̃ₙᵐ = 2⁻ⁿ L̂ₙᵐ of §3.7.
+
+### The quadrature
+
+For z > 0,
+
+```math
+\frac{1}{|\mathbf{u}|} = \frac{1}{2\pi} \int_0^\infty e^{-\lambda z} \int_0^{2\pi}
+e^{i\lambda(x\cos\alpha + y\sin\alpha)}\, d\alpha\, d\lambda
+\approx \sum_{k=1}^{s} \frac{w_k}{N_k} \sum_{j=0}^{N_k - 1}
+e^{-\lambda_k z + i\lambda_k (x\cos\alpha_j + y\sin\alpha_j)}, \quad \alpha_j = \frac{2\pi j}{N_k}
+```
+
+with the s nodes λₖ, weights wₖ, α counts Nₖ and Fourier counts Fₖ of FMM3D's tables for
+separation 1 (`src/Laplace/lwtsexp_sep1.f` of FMM3D v2.1.0, NIST's, with its notice kept
+in `nd_fmm_tables::plane_wave::quadrature_data`), valid for 1 ≤ z ≤ 4 and
+x² + y² ≤ 32 (a V pair whose offset along its direction, below, is 2 or 3 boxes). Here
+Nₖ' = Nₖ + (Nₖ mod 2), even, replaces Nₖ, and at degree p the orders 0 ≤ m < Fₖ' =
+min(Fₖ, p + 1) are kept. The degree's s is `nodes_for_degree(p)`: the fewest nodes whose
+level M2L errs at most 0.1× the M2L truncation of degree p on a uniform level (§3.14 does
+not fix it; it is a table of the code, chosen by measurement).
+
+### Multipole to waves
+
+The irregular ladder of §3.11, Oₙᵐ = (−(∂x + i∂y))ᵐ (−∂z)ⁿ⁻ᵐ with Oₙᵐ I₀⁰ = Iₙᵐ, acts on a
+plane wave e^{−λz + iλ(x cos α + y sin α)} as −∂z → λ, −(∂x + i∂y) → −iλ e^{iα},
+∂x − i∂y → iλ e^{−iα}. So Iₙᵐ(u) for z > 0 is the quadrature with the factor
+λⁿ (−i e^{iα})ᵐ (m ≥ 0; λⁿ (i e^{−iα})^|m| for m < 0), and for real charges
+(M̂⁻ᵐ = (−1)ᵐ conj M̂ᵐ, §3.6) the orders ±m pair. The **up waves** of a multipole,
+for a target above it, are
+
+```math
+X^{\uparrow}(\lambda_k, \alpha_j) = \frac{w_k}{N_k'} \Big[ A_k(0) + \sum_{1 \le m < F_k'}
+2\,(-i)^m\, \mathrm{Re}\big(A_k(m)\, e^{i m \alpha_j}\big) \Big], \qquad
+A_k(m) = \sum_{n=m}^{p} \lambda_k^n\, \hat M_n^m ,
+```
+
+and the **down waves** (target below: e^{+λz}, −∂z → −λ) the same with Aₖ(m) replaced by
+Σₙ (−1)ⁿ⁻ᵐ λₖⁿ M̂ₙᵐ. They represent the multipole's r φ (§3.7): at a point u of the target
+region (box widths from the multipole's centre) it is
+Σₖ Σ_{j<Nₖ'} X e^{∓λₖ u_z + iλₖ(u_x cos αⱼ + u_y sin αⱼ)}, up to the quadrature error.
+
+**Half the α nodes.** For real charges X(λ, α + π) = conj X(λ, α), and every shift below
+keeps it, so the H = Σₖ Nₖ'/2 values j < Nₖ'/2 carry the waves. They are stored as 2H
+reals: the H real parts, then the H imaginary parts, node k's at its offset Σ_{l<k} N_l'/2.
+
+### Shifts
+
+A shift by d (box widths, from the waves' centre to the new centre, in the direction's
+frame) multiplies node (k, j) by
+
+```math
+T_{kj}(\mathbf{d}) = e^{\mp \lambda_k d_z + i \lambda_k (d_x \cos\alpha_j + d_y \sin\alpha_j)}
+```
+
+(− for up waves, + for down waves). Shifts compose exactly: T(d₁) T(d₂) = T(d₁ + d₂).
+
+### Waves to local
+
+With the incoming waves V(λₖ, αⱼ) at the target's centre and
+Gₖ(m) = Σ_{j<Nₖ'} V(λₖ, αⱼ) e^{−imαⱼ} (over all Nₖ' nodes), the ladder of §3.4,
+Dₙᵐ = (∂x − i∂y)ᵐ ∂zⁿ⁻ᵐ, which picks the coefficient of Rₙᵐ, gives
+
+```math
+\tilde L_n^m \mathrel{+}= 2^{-n}\, \lambda_k^n\, (-1)^{n-m}\, i^m\, G_k(m) \ \text{(up)}, \qquad
+\tilde L_n^m \mathrel{+}= 2^{-n}\, \lambda_k^n\, i^m\, G_k(m) \ \text{(down)},
+```
+
+for 0 ≤ m ≤ min(n, Fₖ' − 1), slot +m the real part and slot −m the imaginary part (§3.6).
+From half the nodes, by the conjugate symmetry, Gₖ(m) = 2 Σ_{j<Nₖ'/2} Re V (cos mαⱼ −
+i sin mαⱼ) for even m and 2i Σ_{j<Nₖ'/2} Im V (cos mαⱼ − i sin mαⱼ) for odd m.
+
+### Directions
+
+A V pair (§3.12) is translated along one of six **directions**: up and down (±z), north
+and south (±y), east and west (±x), with the target on the positive side for up, north
+and east. ±y and ±x are ±z in a rotated **frame**: frame 0 is the box's (±z), frame 1
+rotates by R_x(π/2), (x, y, z) ↦ (x, −z, y) (±y), and frame 2 by R_y(−π/2),
+(x, y, z) ↦ (−z, y, x) (±x). Into frame f with rotation Q the multipole of degree n is
+rotated by K Dⁿ(Q) K and the local back out of it by K S Dⁿ(Qᵀ) S⁻¹ K (§3.8, §3.11,
+"Rotation of coefficients"); offsets d rotate to Q d.
+
+### Merge and shift
+
+For a parent P on a level with children on level l, the **slots** are the 216 boxes
+2P − 2 + a, a ∈ {0, …, 5}³ on level l (the children of P's colleagues), numbered
+36 a_x + 6 a_y + a_z, and the children 2P + b, b ∈ {0, 1}³, with child index
+o = 4 b_x + 2 b_y + b_z (§3.12). A V pair from slot a to child b has the offset
+d = b + 2 − a. Its direction: if a lies two boxes from every child of P along z (a_z = 0:
+up; a_z = 5: down), else along y (a_y = 0 or 5: north, south), else along x (east, west);
+otherwise the first axis of z, y, x along which |dᵢ| ≥ 2, with its sign. Along the
+direction the offset is then 2 or 3 boxes.
+
+For each direction a slot reaches a set of children, its **mask**; the slots with the same
+mask form one **accumulator**, the masks taken over the eight children of P whether or not a
+tree holds them (so an accumulator is the same in every tree and on every rank). Per parent
+and direction:
+
+1. each accumulator sums, over its slots in ascending order whose box the tree holds, the
+   slot's waves shifted from the slot's centre to P's centre,
+   d = (5 − 2a)/2 per axis (box widths, in the direction's frame);
+2. each child adds the accumulators whose mask holds it, in ascending order of the mask, and
+   shifts the sum from P's centre to its own, d = (2b − 1)/2 per axis;
+3. each child converts its up and down waves of the frame into a local (above), rotates it
+   back and adds it.
+
+The frames run in order 0, 1, 2. Each shift factors as the pair's T(d_pair) =
+T(d_slot→P) T(d_P→child), so merge and shift equals the pairs' direct translations up to
+rounding.

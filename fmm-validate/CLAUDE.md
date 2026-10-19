@@ -259,6 +259,14 @@ those converted, `Fmm::near_rule`), `RankRow::w_entries` (the local leaves' W en
 (`tests/scaling.rs` covers them), and in `tools/scaling/run.sh` the sweeps `t12-near` and
 `t12-weak` (`T12_EVALS`). Its report is `results/phase6-near.md`.
 
+Phase 6 T13 (the plane-wave M2L, C6.5) added `planewave` to `scaling`'s `--strategy` and
+`--reference-strategy`, `MemoryModel::plane_waves` (`LaplaceOperator::plane_wave_bytes`:
+the waves of one frame of the largest level and every thread's scratch; a line of the
+report), the `plane_wave_parts` example (not registered; it times): every step of the
+plane-wave M2L per box on synthetic data, per ISA (`--isa`), degree (`--ps`) and precision,
+and in `tools/scaling/run.sh` the sweeps `t13-host`, `t13-node`, `t13-calibrate` and
+`t13-cut` (`T13_ISAS`, `T13_NS`). Its report is `results/phase6-planewave.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

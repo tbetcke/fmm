@@ -14,14 +14,15 @@
 //! evaluated with the exchanges overlapped, `Fmm::set_overlap`, Phase 5 T9), 1,000 sampled
 //! targets; f64 at p = 3, 8 and 18, f32 at p = 3 and 8 (the f32 charges rounded, with an
 //! oracle on the rounded charges); one thread per rank. Point i is passed on rank
-//! `hash(i) % P` (a seeded random share). Every workload point runs six times (Phase 6
-//! T2, T5, T12): with the default strategy (`Auto`), with `M2lStrategy::Batched`, with
+//! `hash(i) % P` (a seeded random share). Every workload point runs seven times (Phase 6
+//! T2, T5, T12, T13): with the default strategy (`Auto`), with `M2lStrategy::Batched`, with
 //! `Batched` in the fused mode (`MulAdd::Fused`), and with the default strategy and with
 //! `Batched` on an FMM of the eight vectors (`FmmBuilder::vectors(8)`, Phase 6 T5, C6.3),
 //! evaluated at once by `Fmm::evaluate_many`, blocking and again with the exchanges
 //! overlapped (the two bit for bit), and with the default strategy and the near rule of the
 //! cost model (`NearRuleChoice::CostModel`, Phase 6 T12, C6.9; the uniform cube has no W
-//! or X pairs, the Plummer sphere many); the batched runs load their tables from a cache in
+//! or X pairs, the Plummer sphere many), and with the plane-wave M2L
+//! (`M2lStrategy::PlaneWave`, Phase 6 T13, C6.5); the batched runs load their tables from a cache in
 //! `CARGO_TARGET_TMPDIR`. The one-rank runs of every variant evaluate one vector at a
 //! time, so the eight-vector variants check that each vector is bit for bit its
 //! single-vector evaluation. On every rank count, for every run:
@@ -45,6 +46,9 @@
 //!   cube's at the same p and strategy; f32 is reported.
 //! - **C6.9** (Phase 6 T12): the φ error of the near rule's run within 1.1 times the
 //!   default run's, on both problems, the ratio printed.
+//! - **C6.5** (Phase 6 T13): the φ error of the plane-wave M2L's run
+//!   (`M2lStrategy::PlaneWave`) within 1.1 times the default run's (an exact M2L), on both
+//!   problems in both precisions, the ratio printed.
 //!
 //! Every rank builds and evaluates the multi-rank `Fmm`; rank 0 alone gathers the output
 //! (all-gathers in rank order), computes the oracles and the two one-rank runs, and
@@ -115,9 +119,9 @@ type Variant = (
 
 /// The strategies every workload point runs with: the default, the batched M2L in both
 /// multiply–add modes (Phase 6 T2), the default and the batched M2L on an FMM of the
-/// eight vectors (Phase 6 T5), and the default with the near rule of the cost model
-/// (Phase 6 T12, C6.9).
-const VARIANTS: [Variant; 6] = [
+/// eight vectors (Phase 6 T5), the default with the near rule of the cost model
+/// (Phase 6 T12, C6.9), and the plane-wave M2L (Phase 6 T13, C6.5).
+const VARIANTS: [Variant; 7] = [
     ("auto", None, 1, NearRuleChoice::Off),
     (
         "batched",
@@ -144,6 +148,12 @@ const VARIANTS: [Variant; 6] = [
         NearRuleChoice::Off,
     ),
     ("auto, near rule", None, 1, NearRuleChoice::CostModel),
+    (
+        "planewave",
+        Some((M2lStrategy::PlaneWave, MulAdd::Separate)),
+        1,
+        NearRuleChoice::Off,
+    ),
 ];
 
 /// How far the multi-rank errors against the direct sum may lie from the one-rank run's,
@@ -809,6 +819,28 @@ fn equal_to_one_rank_at_the_workload_points() {
                 failures.push(format!(
                     "C6.9, {name}, {precision}, p = {p}: the near rule's error {error:e} \
                      exceeds the rule off's {off:e}"
+                ));
+            }
+        }
+    }
+    // C6.5 (Phase 6 T13): the plane-wave M2L's errors against the default run's (an exact
+    // M2L), within 1.1 times (its error budget; `tests/mpi_exec.rs`, `PLANE_ERROR_BOUND`).
+    if rank == 0 {
+        for &(name, precision, p, _, error) in errors_by_run.iter().filter(|e| e.3 == "planewave") {
+            let exact = errors_by_run
+                .iter()
+                .find(|e| e.0 == name && e.1 == precision && e.2 == p && e.3 == "auto")
+                .expect("every workload point runs the default")
+                .4;
+            let ratio = error / exact;
+            eprintln!(
+                "C6.5, {name}, {precision}, p = {p}: φ error under PlaneWave {error:.4e} \
+                 against {exact:.4e} with the exact M2L, ratio {ratio:.5}"
+            );
+            if ratio > 1.1 {
+                failures.push(format!(
+                    "C6.5, {name}, {precision}, p = {p}: PlaneWave's error {error:e} exceeds \
+                     1.1 times the exact M2L's {exact:e}"
                 ));
             }
         }

@@ -52,8 +52,9 @@ pub(crate) mod p2p;
 pub(crate) mod scalar;
 #[cfg(test)]
 mod tests;
+pub(crate) mod waves;
 
-use crate::{Isa, IsaUnavailable, MulAdd, SimdScalar};
+use crate::{Isa, IsaUnavailable, MulAdd, SimdScalar, WaveTables};
 
 /// The largest lane count of any ISA (AVX-512, f32), the size of the padded stack copies
 /// that tails use.
@@ -530,3 +531,132 @@ macro_rules! accumulate_dispatch {
 
 accumulate_dispatch!(accumulate_f32, f32, accumulate_f32, accumulate_f32_fused);
 accumulate_dispatch!(accumulate_f64, f64, accumulate_f64, accumulate_f64_fused);
+
+/// Generates the dispatch of the plane-wave entry points for one precision (Phase 6 T13):
+/// the scalar layer runs the generic bodies of [`waves`], the other ISAs their entry points.
+macro_rules! waves_dispatch {
+    ($t:ty, $merge:ident, $gather:ident, $waves:ident, $sums:ident) => {
+        /// [`WaveKernel::merge`](crate::WaveKernel::merge) on `isa` in the precision of its
+        /// name, with shapes already checked by the caller.
+        pub(crate) fn $merge(
+            isa: AvailableIsa,
+            acc: &mut [$t],
+            waves: &[$t],
+            wave_offsets: &[usize],
+            shifts: &[$t],
+            shift_offsets: &[usize],
+        ) {
+            match isa.0 {
+                Isa::Scalar => waves::merge_body(
+                    scalar::Scalar,
+                    acc,
+                    waves,
+                    wave_offsets,
+                    shifts,
+                    shift_offsets,
+                ),
+                #[cfg(target_arch = "aarch64")]
+                // SAFETY: `isa` is available (`AvailableIsa`), so the CPU has NEON, the
+                // feature the entry point enables.
+                Isa::Neon => unsafe {
+                    neon::$merge(acc, waves, wave_offsets, shifts, shift_offsets)
+                },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: `isa` is available (`AvailableIsa`), so the CPU has AVX2 and FMA,
+                // the features the entry point enables.
+                Isa::Avx2 => unsafe {
+                    avx2::$merge(acc, waves, wave_offsets, shifts, shift_offsets)
+                },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: `isa` is available (`AvailableIsa`), so the CPU has AVX-512F, AVX2
+                // and FMA, the features the entry point enables or implies.
+                Isa::Avx512 => unsafe {
+                    avx512::$merge(acc, waves, wave_offsets, shifts, shift_offsets)
+                },
+                // The ISAs of other architectures, which are never available.
+                isa => unreachable!("`{isa}` is not available on this machine"),
+            }
+        }
+
+        /// [`WaveKernel::gather`](crate::WaveKernel::gather) on `isa` in the precision of its
+        /// name, with shapes already checked by the caller.
+        pub(crate) fn $gather(
+            isa: AvailableIsa,
+            v: &mut [$t],
+            accs: &[$t],
+            acc_offsets: &[usize],
+            t: &[$t],
+        ) {
+            match isa.0 {
+                Isa::Scalar => waves::gather_body(scalar::Scalar, v, accs, acc_offsets, t),
+                #[cfg(target_arch = "aarch64")]
+                // SAFETY: as in the merge dispatch.
+                Isa::Neon => unsafe { neon::$gather(v, accs, acc_offsets, t) },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: as in the merge dispatch.
+                Isa::Avx2 => unsafe { avx2::$gather(v, accs, acc_offsets, t) },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: as in the merge dispatch.
+                Isa::Avx512 => unsafe { avx512::$gather(v, accs, acc_offsets, t) },
+                isa => unreachable!("`{isa}` is not available on this machine"),
+            }
+        }
+
+        /// [`WaveKernel::waves`](crate::WaveKernel::waves) on `isa` in the precision of its
+        /// name, with shapes already checked by the caller.
+        pub(crate) fn $waves(
+            isa: AvailableIsa,
+            tables: &WaveTables<$t>,
+            modes: &[$t],
+            up: &mut [$t],
+            down: &mut [$t],
+        ) {
+            match isa.0 {
+                Isa::Scalar => waves::waves_body::<_, _, { waves::BLOCK }>(
+                    scalar::Scalar,
+                    tables,
+                    modes,
+                    up,
+                    down,
+                ),
+                #[cfg(target_arch = "aarch64")]
+                // SAFETY: as in the merge dispatch.
+                Isa::Neon => unsafe { neon::$waves(tables, modes, up, down) },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: as in the merge dispatch.
+                Isa::Avx2 => unsafe { avx2::$waves(tables, modes, up, down) },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: as in the merge dispatch.
+                Isa::Avx512 => unsafe { avx512::$waves(tables, modes, up, down) },
+                isa => unreachable!("`{isa}` is not available on this machine"),
+            }
+        }
+
+        /// [`WaveKernel::sums`](crate::WaveKernel::sums) on `isa` in the precision of its
+        /// name, with shapes already checked by the caller.
+        pub(crate) fn $sums(
+            isa: AvailableIsa,
+            tables: &WaveTables<$t>,
+            up: &[$t],
+            down: &[$t],
+            sums: &mut [$t],
+        ) {
+            match isa.0 {
+                Isa::Scalar => waves::sums_body(scalar::Scalar, tables, up, down, sums),
+                #[cfg(target_arch = "aarch64")]
+                // SAFETY: as in the merge dispatch.
+                Isa::Neon => unsafe { neon::$sums(tables, up, down, sums) },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: as in the merge dispatch.
+                Isa::Avx2 => unsafe { avx2::$sums(tables, up, down, sums) },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: as in the merge dispatch.
+                Isa::Avx512 => unsafe { avx512::$sums(tables, up, down, sums) },
+                isa => unreachable!("`{isa}` is not available on this machine"),
+            }
+        }
+    };
+}
+
+waves_dispatch!(f32, merge_f32, gather_f32, waves_f32, sums_f32);
+waves_dispatch!(f64, merge_f64, gather_f64, waves_f64, sums_f64);

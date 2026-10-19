@@ -34,7 +34,11 @@ docs/design/optimisation.md §6) and C6.4 (T8: dipole sources, `SourceType`,
 `FmmBuilder::sources`, `Sources`, `Fmm::evaluate_sources`; T8d: the dipole kinds on the
 device; design docs/design/optimisation.md §7; report fmm-validate/results/phase6-dipoles.md)
 and C6.9 (T12: the near rule, `FmmBuilder::near_rule`, `NearRuleChoice`, `Fmm::near_rule`;
-design docs/design/optimisation.md §8a; report fmm-validate/results/phase6-near.md).
+design docs/design/optimisation.md §8a; report fmm-validate/results/phase6-near.md) and
+C6.5 (T13: the plane-wave M2L, `M2lStrategy::PlaneWave`, the level call in
+`src/operator_plane_wave.rs`, `cost::M2lUnit`; CONVENTIONS §3.14; design
+docs/design/optimisation.md §8.2, "As built in T13"; report
+fmm-validate/results/phase6-planewave.md).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -60,7 +64,21 @@ design docs/design/optimisation.md §8a; report fmm-validate/results/phase6-near
   consecutive targets, offsets in index order through the grouped view's batches, each
   local receiving exactly the chain of `Dense` (the `operator` module docs, "The batched
   M2L"). Keep `Batched` bit for bit `Dense` in its default mode; `Dense` stays the
-  trusted path.
+  trusted path. The other is M2L under `PlaneWave` (Phase 6 T13, C6.5; the `operator`
+  module docs, "The plane-wave M2L"): per vector and frame the waves of every box of the
+  level, then merge and shift parent by parent, the pool splitting at parent boundaries.
+  It approximates M2L (CONVENTIONS §3.14; the quadrature of each degree keeps the FMM's
+  errors within 1.1× the exact M2L's, `nd_fmm_tables::plane_wave::nodes_for_degree`), so
+  it is not `Dense`'s bits; keep it deterministic, the same at every thread count, overlap
+  setting and ISA, and on P ranks the one-rank `Fmm`'s bit for bit: every accumulator sums
+  its slots in ascending order over geometric masks, so its sources and order do not depend
+  on the rank. Its formulas stay in `nd-fmm-tables` and its loops in `nd-fmm-simd`
+  (`WaveKernel`, on the P2P choice's ISA); the pair path (`m2l_pair`, `PairOperator`)
+  translates each pair directly along the merge's direction (`Tables::m2l_at`), equal to
+  the level call to rounding. M2M and L2L are `Rotation`'s; on a device it runs as `Dense`
+  (the device path builds the dense tables). `Fmm` sizes its waves buffer from the plan
+  (`with_plane_wave_boxes`), so no level call allocates; the cost model counts its M2L per
+  box with a V row (`cost::M2lUnit::Boxes`). `Auto` never resolves to it (until T11).
 - Several charge vectors (Phase 6 T5, C6.3; the `operator` and `fmm` module docs,
   "Several charge vectors"; CONVENTIONS §3.13, "Several charge vectors"):
   `LaplaceOperator::with_vectors(m)` sizes every store for m vectors (m (p + 1)² values per
@@ -180,6 +198,20 @@ design docs/design/optimisation.md §8a; report fmm-validate/results/phase6-near
     build (`Fmm::set_serial`, `Fmm::set_m2l_mul_add`). It added about 15 s to the
     one-rank debug run (91 → 106 s on the M3 Max). `tests/multi_rank.rs` runs every
     workload point with the default strategy, `Batched` and `Batched` fused.
+  - The plane-wave M2L (Phase 6 T13): `evaluate_threaded` runs `check_plane_wave` once
+    per scenario and precision: under `PlaneWave` within `PLANE_ERROR_BOUND` (1.1) of the
+    scenario's error against the direct sum, two evaluations and a build at the most
+    threads, overlapped, bit for bit, the kernels on the P2P ISA, M2L counted per box, and
+    on several ranks the one-rank `Fmm` bit for bit; **batched against per-pair** runs
+    merge and shift against `PerPair` (to rounding, 2.2e-16 on the M3 Max) and threads. In
+    debug it checks only the scenarios whose evaluation takes at most `DEBUG_PLANE_BUDGET`
+    (0.5 s, the slowest rank's time, agreed; CI's 4-rank run had 496 of its 600 s before
+    T13) and names the others, which the release runs check. It added about 15 s to the
+    one-rank debug run (about 180 → 195 s on the M3 Max).
+    `tests/invariance.rs` runs every workload under `PlaneWave` (f64 p = 8, the graded
+    tree also f32 p = 6); `tests/multi_rank.rs` the variant `planewave` with C6.5's check;
+    the ignored `tests/accuracy.rs` and `tests/adaptive.rs` its gates at f64 p = 8, 12,
+    18 (within 1.1× `Rotation`'s error, threads bit for bit).
   - Several charge vectors (Phase 6 T5): `evaluate_threaded` offers every one-thread
     evaluation to `offer_vectors`, which keeps the scenario's cheapest (the slowest
     rank's time, agreed) per slot (the default P2P kernel; the reference kernel once per

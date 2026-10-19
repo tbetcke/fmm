@@ -12,7 +12,9 @@ C6.6 (task T2 in docs/phase6/), C6.3 (task T5: `P2pKernel::evaluate_many`, P2P o
 several charge vectors), C6.7 (task T6: AVX-512, every kernel; report
 fmm-validate/results/phase6-avx512.md) and C6.4 (task T8: `P2pKernel::evaluate_dipoles`, the dipole
 P2P, `arch::p2p::p2p_dipoles_body`, the scalar path `arch::scalar::p2p_dipoles`; contract
-in docs/design/simd-p2p.md §4.8, tests in `tests/p2p/dipoles.rs`).
+in docs/design/simd-p2p.md §4.8, tests in `tests/p2p/dipoles.rs`) and C6.5 (task T13: the
+plane-wave kernels, `WaveKernel` with `WaveTables`, bodies in `arch::waves`, tests in
+`tests/waves.rs`).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -43,8 +45,18 @@ in docs/design/simd-p2p.md §4.8, tests in `tests/p2p/dipoles.rs`).
   bits do not depend on the ISA, the row block, the column group or the other columns of
   a call, and every ISA equals the scalar layer exactly. Keep it so; never let a step
   contract or reassociate.
+- `WaveKernel` (Phase 6 T13; `arch::waves`): `merge`, `gather`, `waves` and `sums` give
+  every value the chain of `nd_fmm_tables::plane_wave`'s `shift_add`, `add` + `shift`,
+  `waves_from_modes` and `sums_from_waves` (one fma per product and sum, the order of each
+  output fixed), from its own inputs only: every ISA equals the scalar layer bit for bit,
+  whatever W, the register block (`waves`: 2 on AVX2's 16 registers, 4 elsewhere) or the
+  padding. `WaveKernel::tables` builds the Fourier passes' tables in the kernel's layout
+  (rows padded to its lanes with zeros); tables of one kernel are refused by another lane
+  count. Slice the rows and offsets once per block and iterate them: bounds checks inside
+  the loops cost NEON's `waves` half its time (Phase 6 T13). `tests/waves.rs` restates the
+  reference loops and checks every ISA bit for bit.
 - Generic over `T: SimdScalar` (f32 and f64, sealed); no allocation, threads or MPI in
-  a kernel. Write only into the caller's slices.
+  a kernel (`WaveKernel::tables` allocates, once). Write only into the caller's slices.
 - Hand-written `core::arch` intrinsics only: no portable SIMD crate (`pulp`, `wide`,
   `std::simd`), no C or assembly, no SVE. Stable Rust.
 - Dispatch: `Isa::detect` once at construction (NEON on aarch64; AVX2 + FMA by

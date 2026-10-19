@@ -34,6 +34,10 @@
 //! 1e-12 (relative L2 over all targets), and four threads give the one-thread output bit
 //! for bit (C3.5).
 //!
+//! **The plane-wave M2L** (Phase 6 T13, C6.5; `M2lStrategy::PlaneWave`): at f64 p = 8, 12
+//! and 18 the relative L2 error of φ at the sampled targets within 1.1× that of the exact
+//! M2L (`Rotation`; its error budget), and eight threads bit for bit one.
+//!
 //! **P2P kernels** (Phase 3S T6, C3S.5). The errors per list are measured with the
 //! default P2P kernel, `P2pChoice::Auto`, and again with `P2pChoice::Reference` on the
 //! same plan; the table has a row per kernel. Both pass the bounds above; with `Auto` the
@@ -863,6 +867,78 @@ fn errors_per_list_on_clustered_trees() {
             );
         }
         strategies_and_threads(name, &points, &charges, &comm);
+        let (parts, _) = parts.as_ref().expect("measured above");
+        let exact: Vec<f64> = (0..sample.len())
+            .map(|r| parts.iter().map(|part| part[r]).sum())
+            .collect();
+        plane_wave_gate(
+            name,
+            (&points, &charges),
+            (&sample, &exact),
+            &comm,
+            &mut failures,
+        );
     }
     assert!(failures.is_empty(), "{}", failures.join("; "));
+}
+
+/// The plane-wave M2L's gate (Phase 6 T13, C6.5; module documentation): at f64 p = 8, 12
+/// and 18 the relative L2 error of φ at the sampled targets under `PlaneWave` within 1.1×
+/// that of the exact M2L, `Rotation` (whose output is `Dense`'s within 1e-12), and
+/// [`THREADS`] threads bit for bit one.
+fn plane_wave_gate(
+    name: &str,
+    (points, charges): (&[[f64; 3]], &[f64]),
+    (sample, exact): (&[usize], &[f64]),
+    comm: &SimpleCommunicator,
+    failures: &mut Vec<String>,
+) {
+    let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+    let sampled = |phi: &[f64]| -> Vec<f64> {
+        sample
+            .iter()
+            .map(|&i| phi[i] * 4.0 * std::f64::consts::PI)
+            .collect()
+    };
+    for p in [8, 12, 18] {
+        let build = |strategy, threads| {
+            FmmBuilder::<f64>::new(p)
+                .strategy(strategy)
+                .threads(threads)
+                .build(points, points, comm)
+                .expect("the FMM builds")
+        };
+        let waves = build(M2lStrategy::PlaneWave, 1)
+            .evaluate(charges)
+            .unwrap()
+            .potential;
+        let threaded = build(M2lStrategy::PlaneWave, THREADS)
+            .evaluate(charges)
+            .unwrap()
+            .potential;
+        assert_eq!(
+            bits(&threaded),
+            bits(&waves),
+            "{name}, PlaneWave, p = {p}: {THREADS} threads"
+        );
+        let rotation = build(M2lStrategy::Rotation, THREADS)
+            .evaluate(charges)
+            .unwrap()
+            .potential;
+        let (error, error_exact) = (
+            relative_l2(&sampled(&waves), exact),
+            relative_l2(&sampled(&rotation), exact),
+        );
+        let ratio = error / error_exact;
+        eprintln!(
+            "{name}, p = {p}: relative L2 error of φ {error:.3e} under PlaneWave, \
+             {error_exact:.3e} under Rotation, ratio {ratio:.4}; {THREADS} threads bit for bit"
+        );
+        if ratio > 1.1 {
+            failures.push(format!(
+                "{name}, p = {p}: PlaneWave's error {error:e} exceeds 1.1 times the exact \
+                 M2L's {error_exact:e}"
+            ));
+        }
+    }
 }

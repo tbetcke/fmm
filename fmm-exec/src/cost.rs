@@ -23,7 +23,7 @@
 //! | --- | --- |
 //! | P2M | source points of the local leaves |
 //! | M2M | parent–child pairs, both passes |
-//! | M2L | V pairs |
+//! | M2L | V pairs; under `PlaneWave` the boxes with a V row ([`M2lUnit`]) |
 //! | P2L | X pairs times the source leaf's points |
 //! | L2L | child–parent pairs |
 //! | L2P | target points of the local leaves |
@@ -34,6 +34,12 @@
 //! [`FmmBuilder::near_rule`](crate::fmm::FmmBuilder::near_rule)) a converted W or X pair
 //! is in the near row of its leaf and counts as P2P, not as M2P or P2L: the cut weighs the
 //! plan with the rule.
+//!
+//! The plane-wave M2L (Phase 6 T13, `M2lStrategy::PlaneWave`) converts each box's
+//! multipole into waves, merges the waves of a parent's sources and converts each target's
+//! incoming waves: its work is per box, nearly the same for an interior box with 189 V
+//! pairs as for one at the domain's boundary with half as many, so its model counts the
+//! boxes with a V row ([`M2lUnit::Boxes`]) instead of the pairs ([`CostModel::m2l_unit`]).
 //!
 //! A block's cost is that of the rows of the boxes and leaves at or below it. The rows of
 //! the `Global` boxes (the shared ancestors: their global M2M on the owner, their M2L,
@@ -123,7 +129,19 @@ impl WorkCounts {
     }
 }
 
-/// Counts the work of every own block of `plan`, and the rest, from its views.
+/// What the cost model counts for M2L (Phase 6 T13; the [module
+/// documentation](self#the-model)).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum M2lUnit {
+    /// V pairs: one translation per pair (`Dense`, `Classes`, `Rotation`, `Batched`).
+    #[default]
+    Pairs,
+    /// The boxes with a V row: the plane-wave M2L, whose work is per box (`PlaneWave`).
+    Boxes,
+}
+
+/// Counts the work of every own block of `plan`, and the rest, from its views, with M2L
+/// in V pairs: [`work_counts_in`] with [`M2lUnit::Pairs`].
 ///
 /// # Parameters
 ///
@@ -142,6 +160,21 @@ pub fn work_counts(
     blocks: &[MortonKey],
     sources: &[usize],
     targets: &[usize],
+) -> WorkCounts {
+    work_counts_in(plan, blocks, sources, targets, M2lUnit::Pairs)
+}
+
+/// [`work_counts`] with M2L counted in `unit`: V pairs, or the boxes with a V row.
+///
+/// # Panics
+///
+/// As [`work_counts`].
+pub fn work_counts_in(
+    plan: &Plan,
+    blocks: &[MortonKey],
+    sources: &[usize],
+    targets: &[usize],
+    unit: M2lUnit,
 ) -> WorkCounts {
     use OperatorKind::{L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p};
 
@@ -173,7 +206,11 @@ pub fn work_counts(
         let keys = index.keys(level);
         // Box views: one row per box of the level, empty for ghosts.
         for (t, &key) in keys.iter().enumerate() {
-            add(key, M2l, lists.v().row(t).0.len() as u64);
+            let pairs = lists.v().row(t).0.len() as u64;
+            match unit {
+                M2lUnit::Pairs => add(key, M2l, pairs),
+                M2lUnit::Boxes => add(key, M2l, u64::from(pairs > 0)),
+            }
             let x: usize = lists.x().row(t).iter().map(|&j| sources[j as usize]).sum();
             add(key, P2l, x as u64);
             let children = lists.m2m_local().row(t).0.len() + lists.m2m_global().row(t).0.len();
@@ -317,11 +354,12 @@ pub(crate) fn block_weights<C: CommunicatorCollectives>(
     comm: &C,
 ) -> Result<Vec<f64>, ExchangeError> {
     let exchange = SourceExchange::<u8>::new(plan, comm, sources, 1)?;
-    let work = work_counts(
+    let work = work_counts_in(
         plan,
         octree.coarse_tree_leafs(),
         exchange.leaf_counts(),
         targets,
+        model.m2l_unit(),
     );
     Ok(work
         .blocks
@@ -351,6 +389,8 @@ pub enum CostModelError {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CostModel {
     alpha: [f64; 8],
+    /// What M2L counts (Phase 6 T13).
+    m2l: M2lUnit,
 }
 
 /// One calibration of [`CostModel::calibrated`]: the constants measured for a strategy,
@@ -370,7 +410,13 @@ struct Calibration {
 /// every rank's sum of kind times (f64 p = 8 `Rotation`), 1.1–4.2 % (f64 p = 3 `Dense`),
 /// 2.1–3.4 % (f32 `Rotation`) and 4.2–8.0 % (f32 `Dense`, whose M2L streams each rank's
 /// own 17 MB of tables).
-const CALIBRATIONS: [Calibration; 4] = [
+///
+/// `PlaneWave` (Phase 6 T13, M2L per box with a V row, [`M2lUnit::Boxes`]) the same way
+/// (Kathleen job 605559, `tools/scaling/run.sh t13-calibrate`: 40 ranks on one node, the
+/// first cut, the three workloads at N = 10⁷, the P2P kernel's AVX2): within 3.1–7.1 % of
+/// every rank's sum of kind times at f64 p = 8, 4.3–8.1 % at p = 18 and 2.0–5.9 % at f32
+/// p = 8.
+const CALIBRATIONS: [Calibration; 7] = [
     Calibration {
         strategy: M2lStrategy::Rotation,
         value_bytes: 8,
@@ -403,6 +449,30 @@ const CALIBRATIONS: [Calibration; 4] = [
             600.07, 1417.28, 4322.29, 629.35, 1557.76, 1098.15, 1288.16, 1.3556,
         ],
     },
+    Calibration {
+        strategy: M2lStrategy::PlaneWave,
+        value_bytes: 8,
+        p: 8,
+        alpha: [
+            586.07, 2586.97, 60190.34, 597.55, 2734.66, 1037.53, 1230.28, 3.0825,
+        ],
+    },
+    Calibration {
+        strategy: M2lStrategy::PlaneWave,
+        value_bytes: 8,
+        p: 18,
+        alpha: [
+            3367.09, 20960.12, 346075.79, 3439.55, 22713.93, 4507.78, 5069.52, 3.0750,
+        ],
+    },
+    Calibration {
+        strategy: M2lStrategy::PlaneWave,
+        value_bytes: 4,
+        p: 8,
+        alpha: [
+            644.45, 2666.24, 41330.64, 639.69, 2755.85, 1067.26, 1271.82, 1.3652,
+        ],
+    },
 ];
 
 impl CostModel {
@@ -423,19 +493,36 @@ impl CostModel {
         if alpha.iter().all(|&value| value == 0.0) {
             return Err(CostModelError::AllZero);
         }
-        Ok(Self { alpha })
+        Ok(Self {
+            alpha,
+            m2l: M2lUnit::Pairs,
+        })
+    }
+
+    /// These constants with M2L counted in `unit` ([`M2lUnit`]; [`new`](Self::new) counts
+    /// V pairs): α_M2L is then in nanoseconds per pair or per box.
+    pub fn with_m2l_unit(mut self, unit: M2lUnit) -> Self {
+        self.m2l = unit;
+        self
+    }
+
+    /// What M2L counts: V pairs, or under `PlaneWave` the boxes with a V row.
+    pub fn m2l_unit(&self) -> M2lUnit {
+        self.m2l
     }
 
     /// The constants measured on Kathleen for `strategy`, values of `value_bytes` bytes
     /// (8 for f64, 4 for f32) and degree `p`.
     ///
     /// The table holds f64 at p = 3 (`Dense`) and p = 8 (`Rotation`), and f32 at p = 8
-    /// (`Dense` and `Rotation`), the configurations of Phase 5S. Another degree takes the
-    /// calibration of the same strategy and precision nearest in p (`Classes` and
-    /// `Batched` take `Dense`'s, `Auto` `Rotation`'s; another precision f64's) and scales
-    /// it: the leaf
-    /// operators by (p + 1)², the translations by (p + 1)³ under `Rotation` and (p + 1)⁴
-    /// otherwise, P2P not at all.
+    /// (`Dense` and `Rotation`), the configurations of Phase 5S, and `PlaneWave` at f64
+    /// p = 8 and 18 and f32 p = 8 (Phase 6 T13), whose M2L counts boxes
+    /// ([`M2lUnit::Boxes`]). Another degree takes the calibration of the same strategy and
+    /// precision nearest in p (`Classes` and `Batched` take `Dense`'s, `Auto`
+    /// `Rotation`'s; another precision f64's) and scales it: the leaf operators by
+    /// (p + 1)², the translations by (p + 1)³ under `Rotation` (M2M and L2L also under
+    /// `PlaneWave`) and (p + 1)⁴ otherwise, the plane waves' M2L per box by (p + 1)², P2P
+    /// not at all.
     pub fn calibrated(strategy: M2lStrategy, value_bytes: usize, p: usize) -> Self {
         let strategy = match strategy {
             M2lStrategy::Classes | M2lStrategy::Batched => M2lStrategy::Dense,
@@ -456,22 +543,32 @@ impl CostModel {
             .min_by_key(|c| c.p.abs_diff(p))
             .expect("every strategy has an f64 calibration");
         let ratio = (p as f64 + 1.0) / (nearest.p as f64 + 1.0);
-        let translation = if strategy == M2lStrategy::Rotation {
-            ratio.powi(3)
-        } else {
-            ratio.powi(4)
+        // M2M and L2L by rotation under `Rotation` and `PlaneWave`, (p + 1)³; the plane
+        // waves' M2L per box by (p + 1)² (Phase 6 T13: measured, it grows as (p + 1)^1.5
+        // from p = 3 to 8, (p + 1)^1.9 from 8 to 12 and (p + 1)^2.3 from 8 to 18, with the
+        // quadrature's nodes; calibrated at p = 8 and 18).
+        let (translation, m2l) = match strategy {
+            M2lStrategy::Rotation => (ratio.powi(3), ratio.powi(3)),
+            M2lStrategy::PlaneWave => (ratio.powi(3), ratio.powi(2)),
+            _ => (ratio.powi(4), ratio.powi(4)),
         };
         let alpha = OperatorKind::ALL.map(|kind| {
             let scale = match kind {
                 OperatorKind::P2m | OperatorKind::L2p | OperatorKind::P2l | OperatorKind::M2p => {
                     ratio.powi(2)
                 }
-                OperatorKind::M2m | OperatorKind::M2l | OperatorKind::L2l => translation,
+                OperatorKind::M2m | OperatorKind::L2l => translation,
+                OperatorKind::M2l => m2l,
                 OperatorKind::P2p => 1.0,
             };
             nearest.alpha[kind as usize] * scale
         });
-        Self { alpha }
+        let m2l = if strategy == M2lStrategy::PlaneWave {
+            M2lUnit::Boxes
+        } else {
+            M2lUnit::Pairs
+        };
+        Self { alpha, m2l }
     }
 
     /// The constant of `kind`, in nanoseconds per counted unit.
@@ -607,6 +704,27 @@ mod tests {
             CostModel::calibrated(M2lStrategy::Dense, 2, 3),
             CostModel::calibrated(M2lStrategy::Dense, 8, 3)
         );
+        // PlaneWave counts M2L per box, the others per pair; between its calibrations its M2L
+        // per box scales by (p + 1)², M2M as Rotation's.
+        assert_eq!(
+            CostModel::calibrated(M2lStrategy::PlaneWave, 8, 8).m2l_unit(),
+            M2lUnit::Boxes
+        );
+        for strategy in [
+            M2lStrategy::Dense,
+            M2lStrategy::Rotation,
+            M2lStrategy::Batched,
+        ] {
+            assert_eq!(
+                CostModel::calibrated(strategy, 8, 8).m2l_unit(),
+                M2lUnit::Pairs
+            );
+        }
+        let waves = CostModel::calibrated(M2lStrategy::PlaneWave, 8, 10);
+        let base = CostModel::calibrated(M2lStrategy::PlaneWave, 8, 8);
+        let expected = base.alpha(OperatorKind::M2l) * (11.0f64 / 9.0).powi(2);
+        assert!((waves.alpha(OperatorKind::M2l) - expected).abs() <= 1e-12 * expected);
+        assert_eq!(CostModel::new([1.0; 8]).unwrap().m2l_unit(), M2lUnit::Pairs);
         // Dense at f64 p = 5 scales from p = 3 by (6 / 4)⁴ for the translations.
         let dense = CostModel::calibrated(M2lStrategy::Dense, 8, 3);
         let dense5 = CostModel::calibrated(M2lStrategy::Dense, 8, 5);

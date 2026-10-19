@@ -3,7 +3,8 @@
 //! Hand-written SIMD kernels for the host path of the nd-project FMM, with a scalar
 //! fallback and run-time instruction-set dispatch. P2P, the near field of the Laplace
 //! FMM, is the first kernel ([`P2pKernel`]); the column-accumulation kernel of the host's
-//! batched M2L ([`MatrixKernel`], Phase 6 T2) the second. The crate needs no MPI and no
+//! batched M2L ([`MatrixKernel`], Phase 6 T2) the second, and the plane-wave M2L's shifts
+//! and Fourier passes ([`WaveKernel`], Phase 6 T13) the third. The crate needs no MPI and no
 //! external SIMD library: the vector code uses `core::arch` intrinsics only. Its design is
 //! [docs/design/simd-p2p.md][design] (Phase 3S), and for the matrix kernel
 //! docs/design/optimisation.md §2.3 and §2.11 (Phase 6).
@@ -15,7 +16,8 @@
 //! [`MatrixKernel::accumulate_columns`] on every ISA, in the [`MulAdd`] modes. Phase 6
 //! T5: [`P2pKernel::evaluate_many`], P2P of several charge vectors at once. Phase 6 T6:
 //! [`Isa::Avx512`], every kernel on AVX-512F, selectable but not yet the default. Phase 6 T8:
-//! [`P2pKernel::evaluate_dipoles`], P2P of point dipoles.
+//! [`P2pKernel::evaluate_dipoles`], P2P of point dipoles. Phase 6 T13: [`WaveKernel`], the
+//! plane-wave M2L's loops on every ISA, bit for bit the scalar path's.
 //!
 //! ## Instruction sets
 //!
@@ -218,10 +220,12 @@ mod matrix;
 pub mod rsqrt;
 #[cfg(test)]
 mod toolchain;
+mod waves;
 
 pub use isa::{Isa, IsaUnavailable};
 pub use kernel::P2pKernel;
 pub use matrix::{MatrixKernel, MulAdd, UnknownMulAdd};
+pub use waves::{WaveBlock, WaveKernel, WaveTables};
 
 use nd_fmm_math::RealScalar;
 
@@ -240,7 +244,7 @@ impl SimdScalar for f64 {}
 /// precision.
 mod sealed {
     use crate::arch::{self, AvailableIsa};
-    use crate::{Isa, MulAdd};
+    use crate::{Isa, MulAdd, WaveTables};
 
     /// Implemented only for f32 and f64.
     pub trait Sealed: Sized {
@@ -297,6 +301,47 @@ mod sealed {
             c: &mut [Self],
             c_offsets: &[usize],
             pack: &mut [Self],
+        );
+
+        /// [`WaveKernel::merge`](crate::WaveKernel::merge) in this precision, with shapes
+        /// already checked.
+        fn merge(
+            isa: AvailableIsa,
+            acc: &mut [Self],
+            waves: &[Self],
+            wave_offsets: &[usize],
+            shifts: &[Self],
+            shift_offsets: &[usize],
+        );
+
+        /// [`WaveKernel::gather`](crate::WaveKernel::gather) in this precision, with shapes
+        /// already checked.
+        fn gather(
+            isa: AvailableIsa,
+            v: &mut [Self],
+            accs: &[Self],
+            acc_offsets: &[usize],
+            t: &[Self],
+        );
+
+        /// [`WaveKernel::waves`](crate::WaveKernel::waves) in this precision, with shapes
+        /// already checked.
+        fn waves(
+            isa: AvailableIsa,
+            tables: &WaveTables<Self>,
+            modes: &[Self],
+            up: &mut [Self],
+            down: &mut [Self],
+        );
+
+        /// [`WaveKernel::sums`](crate::WaveKernel::sums) in this precision, with shapes
+        /// already checked.
+        fn sums(
+            isa: AvailableIsa,
+            tables: &WaveTables<Self>,
+            up: &[Self],
+            down: &[Self],
+            sums: &mut [Self],
         );
     }
 
@@ -356,6 +401,51 @@ mod sealed {
         ) {
             arch::accumulate_f32(isa, mul_add, n, a, b, b_offsets, c, c_offsets, pack);
         }
+
+        #[inline]
+        fn merge(
+            isa: AvailableIsa,
+            acc: &mut [f32],
+            waves: &[f32],
+            wave_offsets: &[usize],
+            shifts: &[f32],
+            shift_offsets: &[usize],
+        ) {
+            arch::merge_f32(isa, acc, waves, wave_offsets, shifts, shift_offsets);
+        }
+
+        #[inline]
+        fn gather(
+            isa: AvailableIsa,
+            v: &mut [f32],
+            accs: &[f32],
+            acc_offsets: &[usize],
+            t: &[f32],
+        ) {
+            arch::gather_f32(isa, v, accs, acc_offsets, t);
+        }
+
+        #[inline]
+        fn waves(
+            isa: AvailableIsa,
+            tables: &WaveTables<f32>,
+            modes: &[f32],
+            up: &mut [f32],
+            down: &mut [f32],
+        ) {
+            arch::waves_f32(isa, tables, modes, up, down);
+        }
+
+        #[inline]
+        fn sums(
+            isa: AvailableIsa,
+            tables: &WaveTables<f32>,
+            up: &[f32],
+            down: &[f32],
+            sums: &mut [f32],
+        ) {
+            arch::sums_f32(isa, tables, up, down, sums);
+        }
     }
 
     impl Sealed for f64 {
@@ -413,6 +503,51 @@ mod sealed {
             pack: &mut [f64],
         ) {
             arch::accumulate_f64(isa, mul_add, n, a, b, b_offsets, c, c_offsets, pack);
+        }
+
+        #[inline]
+        fn merge(
+            isa: AvailableIsa,
+            acc: &mut [f64],
+            waves: &[f64],
+            wave_offsets: &[usize],
+            shifts: &[f64],
+            shift_offsets: &[usize],
+        ) {
+            arch::merge_f64(isa, acc, waves, wave_offsets, shifts, shift_offsets);
+        }
+
+        #[inline]
+        fn gather(
+            isa: AvailableIsa,
+            v: &mut [f64],
+            accs: &[f64],
+            acc_offsets: &[usize],
+            t: &[f64],
+        ) {
+            arch::gather_f64(isa, v, accs, acc_offsets, t);
+        }
+
+        #[inline]
+        fn waves(
+            isa: AvailableIsa,
+            tables: &WaveTables<f64>,
+            modes: &[f64],
+            up: &mut [f64],
+            down: &mut [f64],
+        ) {
+            arch::waves_f64(isa, tables, modes, up, down);
+        }
+
+        #[inline]
+        fn sums(
+            isa: AvailableIsa,
+            tables: &WaveTables<f64>,
+            up: &[f64],
+            down: &[f64],
+            sums: &mut [f64],
+        ) {
+            arch::sums_f64(isa, tables, up, down, sums);
         }
     }
 }

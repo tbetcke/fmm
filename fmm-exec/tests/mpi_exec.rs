@@ -382,6 +382,24 @@
 //!
 //! The near checks added about 30 s to the one-rank debug run on the M3 Max (140 → 171 s).
 //!
+//! The plane-wave M2L (Phase 6 T13, C6.5; `M2lStrategy::PlaneWave`). Error measures:
+//! relative L2 against `direct_sum` over every rank's sources at the targets of all ranks
+//! (φ and ∇φ), relative L2 from the scenario's output, and exact equality of the bit
+//! patterns.
+//! - Every scenario evaluated through `evaluate_threaded`, once per scenario and
+//!   precision (`check_plane_wave`; in debug builds only where the scenario's evaluation
+//!   takes at most `DEBUG_PLANE_BUDGET`, 0.5 s, the others left to the release runs, as
+//!   for several vectors): under `PlaneWave` within `PLANE_ERROR_BOUND` (1.1, the
+//!   budget of C6.5) of the scenario's error against the direct sum with its exact M2L,
+//!   and differing from its output by at most that error; two evaluations, and a second
+//!   build at the most threads, overlapped, bit for bit; the plane-wave kernels on the P2P
+//!   kernel's ISA; on several ranks the one-rank `Fmm` of `PlaneWave` bit for bit; with the
+//!   `gpu` feature, on every device backend compiled in (the CPU runtime), named "PlaneWave,
+//!   run as dense on the device" and the device `Fmm` under `Dense` bit for bit.
+//! - **batched against per-pair** also runs the evaluator with `LaplaceOperator` and with
+//!   `PerPair<LaplaceOperator>` under `PlaneWave`: merge and shift against each pair
+//!   translated directly along the same direction, to rounding.
+//!
 //! The test prints, at the end, how many shadow evaluations matched, how many overlapped
 //! evaluations matched the blocking path, and how many evaluations matched their one-rank
 //! reference.
@@ -391,6 +409,7 @@ use mpi::collective::SystemOperation;
 use mpi::datatype::PartitionMut;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
+use nd_fmm_exec::cost::M2lUnit;
 use nd_fmm_exec::fmm::{
     Backend, Fmm, FmmBuilder, FmmError, KindTiming, MultipoleRouting, NearRuleChoice, OperatorKind,
     Output, OutputMany, OutputPass, Placement, PointSet, SettingsError, SourceType, Sources,
@@ -657,6 +676,30 @@ fn distributed_scenarios() {
         "rank {}: near rule (Phase 6 T12): {seconds:.1} s",
         comm.rank()
     );
+    let (plane_checks, plane_worst, plane_seconds) = *PLANE_CHECKS.lock().unwrap();
+    eprintln!(
+        "rank {}: plane-wave M2L (Phase 6 T13): {} checks in f32, {} in f64; largest error \
+         under PlaneWave over the exact M2L's {:.6} (f32), {:.6} (f64); {plane_seconds:.1} s",
+        comm.rank(),
+        plane_checks[0],
+        plane_checks[1],
+        plane_worst[0],
+        plane_worst[1]
+    );
+    assert!(
+        plane_checks.iter().all(|&c| c > 0),
+        "the plane-wave check ran in both precisions"
+    );
+    let skipped = PLANE_SKIPPED.lock().unwrap();
+    if !skipped.is_empty() {
+        eprintln!(
+            "rank {}: plane-wave M2L: left to the release runs (an evaluation above \
+             {DEBUG_PLANE_BUDGET} s in debug): {}",
+            comm.rank(),
+            skipped.join(", ")
+        );
+    }
+    drop(skipped);
     let checks = ONE_RANK_CHECKS.load(std::sync::atomic::Ordering::Relaxed);
     eprintln!(
         "rank {}: one-rank reference (Phase 5 T6): {}",
@@ -1138,6 +1181,62 @@ fn batched_against_per_pair(comm: &SimpleCommunicator) {
         assert!(potential_error < 1e-3, "potential: {potential_error:e}");
         assert!(gradient_error < 1e-2, "gradient: {gradient_error:e}");
     }
+
+    // The plane-wave M2L (Phase 6 T13): merge and shift (the level calls) against each pair
+    // translated directly along the same direction (`PerPair`, `Tables::m2l_at`), to
+    // rounding (relative L2 over all ranks), and at 2, 4 and 8 threads, overlapped, bit
+    // for bit the serial operator.
+    let plane = LaplaceOperator::new(
+        Tables::build(p, M2lStrategy::PlaneWave),
+        true,
+        max_leaf_points,
+    );
+    let merged = evaluate(
+        &plan,
+        comm,
+        (plane.clone(), false),
+        &domain,
+        input,
+        (&targets, &target_leaves),
+    );
+    for n in THREADS {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .build()
+            .expect("the pool builds");
+        let threaded = plane.clone().with_pool(std::sync::Arc::new(pool));
+        let output = evaluate(
+            &plan,
+            comm,
+            (threaded, true),
+            &domain,
+            input,
+            (&targets, &target_leaves),
+        );
+        assert_eq!(
+            bits(&output),
+            bits(&merged),
+            "PlaneWave: {n} threads against serial"
+        );
+    }
+    let pairwise = evaluate(
+        &plan,
+        comm,
+        (PerPair(plane), false),
+        &domain,
+        input,
+        (&targets, &target_leaves),
+    );
+    let change = difference(&merged, &pairwise, comm);
+    eprintln!(
+        "rank {}: PlaneWave: merge and shift against pair by pair {change:.1e} (relative \
+         L2); 2, 4, 8 threads overlapped bit for bit",
+        comm.rank()
+    );
+    assert!(
+        change <= 1e-13,
+        "PlaneWave: merge and shift against pairs {change:e}"
+    );
 }
 
 /// `n` points uniform in the unit cube [0, 1)³.
@@ -1342,6 +1441,14 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
         (sources, targets),
         charges,
         &fmm,
+        &output,
+        threads,
+        comm,
+    );
+    check_plane_wave(
+        &builder,
+        (sources, targets),
+        charges,
         &output,
         threads,
         comm,
@@ -1621,6 +1728,199 @@ fn check_near_rule<T: Stored + SimdScalar + Equivalence + Default>(
         }
     }
     NEAR_CHECKS.lock().unwrap().1 += start.elapsed().as_secs_f64();
+}
+
+/// The plane-wave M2L's checks (Phase 6 T13, C6.5), for the closing line: the checks per
+/// precision (f32, f64), the largest ratio of an error against the direct sum under
+/// `PlaneWave` to the scenario's own (φ and ∇φ) per precision, and the seconds.
+static PLANE_CHECKS: std::sync::Mutex<([usize; 2], [f64; 2], f64)> =
+    std::sync::Mutex::new(([0; 2], [0.0; 2], 0.0));
+
+/// The (scenario, value size) whose plane waves [`check_plane_wave`] checked.
+static PLANE_SEEN: std::sync::Mutex<Vec<(&'static str, usize)>> = std::sync::Mutex::new(Vec::new());
+
+/// In debug builds, the longest evaluation (the slowest rank's) on which
+/// [`check_plane_wave`] runs, in seconds: a scenario whose first evaluation takes longer is
+/// checked by the release runs only, so that the debug run (CI, `run-tests-mpi` at 4 ranks
+/// under its 600 s timeout) keeps its time.
+const DEBUG_PLANE_BUDGET: f64 = 0.5;
+
+/// The scenarios the debug run left to the release runs ([`DEBUG_PLANE_BUDGET`]).
+static PLANE_SKIPPED: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+
+/// The bound of [`check_plane_wave`] on an error against the direct sum under `PlaneWave`,
+/// relative to the error of the scenario's exact M2L: the error budget of C6.5 (Phase 6
+/// T13, docs/phase6/README.md, requirement 1 for an approximate operator; the quadrature
+/// of each degree keeps the plane waves' error within 0.1× the M2L truncation,
+/// `nd_fmm_tables::plane_wave::nodes_for_degree`).
+const PLANE_ERROR_BOUND: f64 = 1.1;
+
+/// The plane-wave M2L (Phase 6 T13, C6.5; `M2lStrategy::PlaneWave`) on the scenario, once
+/// per scenario and precision (the first evaluation; `output` the scenario's at one
+/// thread, of its own strategy): against the direct sum over every rank's sources at this
+/// rank's targets, φ and ∇φ (relative L2 over all ranks), within [`PLANE_ERROR_BOUND`] of
+/// the scenario's error and differing from its output by at most that error; two
+/// evaluations bit for bit; a second build at the most threads of `threads`, overlapped,
+/// bit for bit; the plane-wave kernels on the P2P kernel's ISA; on several ranks the
+/// one-rank `Fmm` of `PlaneWave` over the union bit for bit (`check_one_rank`).
+fn check_plane_wave<T: Stored + SimdScalar + Equivalence + Default>(
+    builder: &FmmBuilder<T>,
+    (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
+    charges: &[T],
+    output: &Output<T>,
+    threads: &[usize],
+    comm: &SimpleCommunicator,
+) {
+    let scenario = *SCENARIO.lock().unwrap();
+    {
+        let key = (scenario, size_of::<T>());
+        let mut seen = PLANE_SEEN.lock().unwrap();
+        if seen.contains(&key) {
+            return;
+        }
+        seen.push(key);
+    }
+    // In debug builds a scenario whose evaluation takes longer than the budget is left to
+    // the release runs (the time agreed, so every rank decides alike).
+    let local = output.timings.total().as_secs_f64();
+    let mut time = 0.0;
+    comm.all_reduce_into(&local, &mut time, SystemOperation::max());
+    if cfg!(debug_assertions) && time > DEBUG_PLANE_BUDGET {
+        PLANE_SKIPPED.lock().unwrap().push(scenario);
+        return;
+    }
+    let start = std::time::Instant::now();
+    let rank = comm.rank();
+    let (all_sources, _) = union_points(sources, comm);
+    let (all_charges, _) = union(charges, comm);
+    let all_charges: Vec<f64> = all_charges.iter().map(|&q| RealScalar::to_f64(q)).collect();
+    let (phi, grad) = exact(&all_sources, &all_charges, targets);
+    let errors = |output: &Output<T>| -> [f64; 2] {
+        [
+            relative_l2(&output.potential, &phi, comm),
+            output
+                .gradient
+                .as_ref()
+                .map_or(0.0, |g| relative_l2_vectors(g, &grad, comm)),
+        ]
+    };
+    let exact_m2l = errors(output);
+    let plane = builder.clone().strategy(M2lStrategy::PlaneWave);
+    let mut fmm = built(plane.clone().threads(1).build(sources, targets, comm), comm)
+        .expect("the plane-wave FMM builds");
+    assert_eq!(fmm.strategy(), M2lStrategy::PlaneWave);
+    let isa = match fmm.p2p_kernel() {
+        P2pChoice::Isa(isa) => isa,
+        _ => Isa::Scalar,
+    };
+    assert_eq!(
+        fmm.operator().wave_kernel().map(|kernel| kernel.isa()),
+        Some(isa),
+        "the plane-wave kernels run on the P2P ISA"
+    );
+    // The cost model counts M2L per box (Phase 6 T13): the boxes with a V row.
+    assert_eq!(fmm.cost_model().m2l_unit(), M2lUnit::Boxes);
+    let plan = fmm.plan();
+    let v_boxes: usize = (0..plan.nlevels())
+        .map(|l| {
+            let v = plan.level(l).v();
+            (0..v.nrows()).filter(|&t| !v.row(t).0.is_empty()).count()
+        })
+        .sum();
+    assert_eq!(
+        fmm.kind_counts().get(OperatorKind::M2l),
+        v_boxes as u64,
+        "PlaneWave counts M2L per box"
+    );
+    let waves = fmm.evaluate(charges).expect("the plane-wave FMM evaluates");
+    let bits = output_bits(&waves);
+    let again = fmm.evaluate(charges).expect("the plane-wave FMM evaluates");
+    assert!(
+        output_bits(&again) == bits,
+        "rank {rank}: {scenario}: two plane-wave evaluations"
+    );
+    let with = errors(&waves);
+    let change = [
+        difference(&waves.potential, &output.potential, comm),
+        match (&waves.gradient, &output.gradient) {
+            (Some(a), Some(b)) => difference(a.as_flattened(), b.as_flattened(), comm),
+            _ => 0.0,
+        },
+    ];
+    // (No target on any rank leaves no error to compare.)
+    for k in (0..2).filter(|&k| exact_m2l[k].is_finite()) {
+        assert!(
+            with[k] <= exact_m2l[k] * PLANE_ERROR_BOUND && change[k] <= exact_m2l[k],
+            "rank {rank}: {scenario}, PlaneWave: error {:.3e} against {:.3e} with the exact              M2L, a change of {:.3e} ({})",
+            with[k],
+            exact_m2l[k],
+            change[k],
+            ["φ", "∇φ"][k]
+        );
+    }
+    let most = threads.iter().copied().max().unwrap_or(1);
+    let mut threaded = built(
+        plane
+            .clone()
+            .threads(most)
+            .overlap(true)
+            .build(sources, targets, comm),
+        comm,
+    )
+    .expect("the plane-wave FMM builds");
+    let output_threaded = threaded.evaluate(charges).expect("the FMM evaluates");
+    assert!(
+        output_bits(&output_threaded) == bits,
+        "rank {rank}: {scenario}: PlaneWave at {most} threads, overlapped"
+    );
+    check_one_rank(
+        &format!("{scenario}, PlaneWave"),
+        &plane,
+        (sources, targets),
+        charges,
+        &waves,
+        comm,
+    );
+    // On a device it runs as `Dense` (the device path's dense tables): the device `Fmm`
+    // under `PlaneWave` is the device `Fmm` under `Dense` bit for bit.
+    #[cfg(feature = "gpu")]
+    for backend in device_backends() {
+        let device = |strategy: M2lStrategy| {
+            let mut fmm = built(
+                builder
+                    .clone()
+                    .strategy(strategy)
+                    .threads(1)
+                    .backend(backend)
+                    .build(sources, targets, comm),
+                comm,
+            )
+            .expect("the device FMM builds");
+            let name = fmm.device_report().map(|r| r.strategy_name());
+            let output = fmm.evaluate(charges).expect("the device FMM evaluates");
+            (name, output_bits(&output))
+        };
+        let (name, waves) = device(M2lStrategy::PlaneWave);
+        assert_eq!(
+            name.as_deref(),
+            Some("PlaneWave, run as dense on the device"),
+            "{backend}: the strategy"
+        );
+        let (_, dense) = device(M2lStrategy::Dense);
+        assert!(
+            waves == dense,
+            "rank {rank}: {scenario}: PlaneWave on {backend} differs from Dense"
+        );
+    }
+    let precision = usize::from(size_of::<T>() == 8);
+    let mut checks = PLANE_CHECKS.lock().unwrap();
+    checks.0[precision] += 1;
+    for k in 0..2 {
+        if exact_m2l[k] > 0.0 && exact_m2l[k].is_finite() {
+            checks.1[precision] = checks.1[precision].max(with[k] / exact_m2l[k]);
+        }
+    }
+    checks.2 += start.elapsed().as_secs_f64();
 }
 
 /// The batched M2L's checks (Phase 6 T2, C6.6), for the closing line: the evaluations
@@ -2743,6 +3043,11 @@ fn input_errors(comm: &SimpleCommunicator) {
     for (builder, expected) in [
         (
             FmmBuilder::<f64>::new(21),
+            SettingsError::DegreeTooLarge { p: 21 },
+        ),
+        // The plane-wave quadratures end at the same degree (Phase 6 T13).
+        (
+            FmmBuilder::<f64>::new(21).strategy(M2lStrategy::PlaneWave),
             SettingsError::DegreeTooLarge { p: 21 },
         ),
         (
@@ -4094,6 +4399,7 @@ fn strategy_code(strategy: M2lStrategy) -> u8 {
         M2lStrategy::Rotation => 2,
         M2lStrategy::Auto => 3,
         M2lStrategy::Batched => 4,
+        M2lStrategy::PlaneWave => 5,
     }
 }
 

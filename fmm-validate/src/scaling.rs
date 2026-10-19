@@ -729,10 +729,14 @@ pub struct MemoryModel {
     /// blocks, B / 8 for their leaf bits and 8 (P + 1) for the cut; 8 P (the partition
     /// bounds) before Phase 5S T6.
     pub partition: f64,
+    /// Under `M2lStrategy::PlaneWave` (Phase 6 T13): the waves of one frame of the largest
+    /// level, 4H s per held box, and each thread's scratch,
+    /// `LaplaceOperator::plane_wave_bytes`; zero otherwise.
+    pub plane_waves: f64,
 }
 
 /// The number of parts of a [`MemoryModel`].
-const MEMORY_PARTS: usize = 8;
+const MEMORY_PARTS: usize = 9;
 
 impl MemoryModel {
     /// The sum of the parts.
@@ -745,6 +749,7 @@ impl MemoryModel {
             + self.buffers
             + self.top
             + self.partition
+            + self.plane_waves
     }
 
     fn to_array(self) -> [f64; MEMORY_PARTS] {
@@ -757,6 +762,7 @@ impl MemoryModel {
             self.buffers,
             self.top,
             self.partition,
+            self.plane_waves,
         ]
     }
 
@@ -770,6 +776,7 @@ impl MemoryModel {
             buffers: a[5],
             top: a[6],
             partition: a[7],
+            plane_waves: a[8],
         }
     }
 }
@@ -1756,6 +1763,7 @@ fn rank_row<T: Stored + SimdScalar + Equivalence + Default>(
         buffers: values as f64 * s,
         top: 24.0 * ((traffic.top_sent + traffic.top_received) as f64 / n_c),
         partition: partition_map_bytes(fmm.octree().partition_map().blocks().len(), ranks),
+        plane_waves: fmm.operator().plane_wave_bytes() as f64,
     };
     RankRow {
         input,
@@ -3768,6 +3776,15 @@ impl fmt::Display for Report {
             &|r| (r.traffic.top_sent + r.traffic.top_received) as f64 * vb + r.memory.top,
             &|v| mb(v),
         )?;
+        if rows.iter().any(|r| r.memory.plane_waves > 0.0) {
+            line(
+                f,
+                "memory model: plane waves (one frame of the largest level, the threads' \
+                 scratch), MB",
+                &|r| r.memory.plane_waves,
+                &|v| mb(v),
+            )?;
+        }
         if rows.iter().all(|r| r.resident.is_some()) {
             line(
                 f,

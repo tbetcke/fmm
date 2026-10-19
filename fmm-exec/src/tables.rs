@@ -11,6 +11,7 @@
 //! | [`Classes`](M2lStrategy::Classes) | [`M2mTables`], [`L2lTables`] | [`M2lClasses`] | (p + 1)⁴ + O(p³) | 2.4 MB / 26.4 MB |
 //! | [`Rotation`](M2lStrategy::Rotation) | [`RotationTables`] | [`RotationTables`] | ≈ (10/3) p³ | 0.8 MB / 5.6 MB |
 //! | [`Batched`](M2lStrategy::Batched) | [`M2mTables`], [`L2lTables`] | [`M2lTables`] | (p + 1)⁴, per level as products over columns | 17.4 MB / 222 MB |
+//! | [`PlaneWave`](M2lStrategy::PlaneWave) | [`RotationTables`] | [`PlaneWaveTables`] | per box, not per pair: about 31 shifts of H complex values and 12 Fourier passes | 0.8 MB + 0.7 MB / 5.6 MB + 2.1 MB |
 //!
 //! (The dense octant tables are 8 (p + 1)⁴ reals per family; the rest is from the
 //! documentation of the families in `nd-fmm-tables`.)
@@ -51,7 +52,7 @@ use nd_fmm_tables::cache::{Stored, TableKind};
 use nd_fmm_tables::rotation::{Operator, ShiftTables};
 use nd_fmm_tables::{
     CacheOutcome, L2lTables, M2lClasses, M2lScratch, M2lTables, M2mTables, MatrixSet,
-    RotationScratch, RotationTables, TableCache,
+    PlaneWaveScratch, PlaneWaveTables, RotationScratch, RotationTables, TableCache,
 };
 
 /// How M2L, and with it M2M and L2L, is applied (docs/phase3/README.md, "Strategy").
@@ -77,6 +78,18 @@ pub enum M2lStrategy {
     /// whose dense M2L is already a product per level (docs/design/device-path.md §6.4).
     /// Opt-in: [`Auto`](Self::Auto) never resolves to it (until Phase 6 T11).
     Batched,
+    /// M2L by plane waves with merge and shift (Phase 6 T13, C6.5; CONVENTIONS §3.14,
+    /// `nd_fmm_tables::plane_wave`): each level call converts the multipoles it reads into
+    /// waves in six directions, merges them per parent, shifts them to the children and
+    /// converts them into locals, so its work is per box, not per V pair. An approximate
+    /// operator with its own error budget: the quadrature of each degree keeps the FMM's
+    /// errors against the direct sum within about 1.1× those of the exact M2L
+    /// (`nd_fmm_tables::plane_wave::nodes_for_degree`); not `Dense`'s bits, but
+    /// deterministic, the same at every thread count and overlap setting, and on P ranks
+    /// the one-rank output bit for bit. M2M and L2L are `Rotation`'s. The device runs it as
+    /// `Dense`, with dense tables the device path builds. Opt-in: [`Auto`](Self::Auto)
+    /// never resolves to it (until Phase 6 T11).
+    PlaneWave,
     /// [`Dense`](Self::Dense) while the dense tables of a rank, and of all the ranks of a
     /// node together, are small enough, [`Rotation`](Self::Rotation) otherwise; see
     /// [`resolve_on_node`](Self::resolve_on_node).
@@ -337,6 +350,11 @@ enum Families<T: RealScalar> {
     },
     /// Boxed: the struct of three shift-table families is much larger than the others.
     Rotation(Box<RotationTables<T>>),
+    /// `PlaneWave`: Rotation's tables for M2M and L2L, the plane waves for M2L.
+    PlaneWave {
+        rotation: Box<RotationTables<T>>,
+        waves: Box<PlaneWaveTables<T>>,
+    },
 }
 
 /// The translation tables of one strategy at one degree p; see the
@@ -349,7 +367,9 @@ pub struct Tables<T: RealScalar> {
 
 /// The scratch of a [`Tables`] application: none for [`M2lStrategy::Dense`], an
 /// [`M2lScratch`] for [`M2lStrategy::Classes`] and a [`RotationScratch`] for
-/// [`M2lStrategy::Rotation`], each 2 (p + 1)² reals. Made by [`Tables::scratch`].
+/// [`M2lStrategy::Rotation`], each 2 (p + 1)² reals, and for [`M2lStrategy::PlaneWave`]
+/// a [`RotationScratch`] and a [`PlaneWaveScratch`] (the waves of one pair). Made by
+/// [`Tables::scratch`].
 #[derive(Clone, Debug)]
 pub struct TableScratch<T: RealScalar> {
     kind: ScratchKind<T>,
@@ -360,6 +380,7 @@ enum ScratchKind<T: RealScalar> {
     Dense,
     Classes(M2lScratch<T>),
     Rotation(RotationScratch<T>),
+    PlaneWave(RotationScratch<T>, Box<PlaneWaveScratch<T>>),
 }
 
 impl<T: RealScalar> Tables<T> {
@@ -373,6 +394,12 @@ impl<T: RealScalar> Tables<T> {
     /// octant family, 316 (p + 1)² for M2L, 16 (p + 1)² for the classes) and O(p⁴) for
     /// the rotation tables; at p = 16 the dense M2L tables take seconds, the others
     /// well under one.
+    ///
+    /// # Panics
+    ///
+    /// Under [`M2lStrategy::PlaneWave`] if `p` exceeds the plane-wave quadratures'
+    /// [`nd_fmm_tables::plane_wave::MAX_DEGREE`] (20); `FmmBuilder` refuses such a p
+    /// first, for every strategy (`SettingsError::DegreeTooLarge`).
     pub fn build(p: usize, strategy: M2lStrategy) -> Self {
         let families = match strategy.resolve_on_node(&NodeContext::one_rank::<T>(p)) {
             strategy @ (M2lStrategy::Dense | M2lStrategy::Batched) => Families::Dense {
@@ -387,6 +414,10 @@ impl<T: RealScalar> Tables<T> {
                 m2l: M2lClasses::build(p),
             },
             M2lStrategy::Rotation => Families::Rotation(Box::new(RotationTables::build(p))),
+            M2lStrategy::PlaneWave => Families::PlaneWave {
+                rotation: Box::new(RotationTables::build(p)),
+                waves: Box::new(PlaneWaveTables::build(p)),
+            },
             M2lStrategy::Auto => unreachable!("resolve never returns Auto"),
         };
         Self { p, families }
@@ -398,23 +429,26 @@ impl<T: RealScalar> Tables<T> {
     }
 
     /// Returns the resolved strategy: [`M2lStrategy::Dense`], [`M2lStrategy::Classes`],
-    /// [`M2lStrategy::Rotation`] or [`M2lStrategy::Batched`], never `Auto`.
+    /// [`M2lStrategy::Rotation`], [`M2lStrategy::Batched`] or [`M2lStrategy::PlaneWave`],
+    /// never `Auto`.
     pub fn strategy(&self) -> M2lStrategy {
         match self.families {
             Families::Dense { batched: false, .. } => M2lStrategy::Dense,
             Families::Dense { batched: true, .. } => M2lStrategy::Batched,
             Families::Classes { .. } => M2lStrategy::Classes,
             Families::Rotation(_) => M2lStrategy::Rotation,
+            Families::PlaneWave { .. } => M2lStrategy::PlaneWave,
         }
     }
 
-    /// Returns the table families held, in the order [`load_or_build`](Self::load_or_build)
-    /// reports them.
+    /// Returns the cached table families held, in the order
+    /// [`load_or_build`](Self::load_or_build) reports them (the plane-wave tables of
+    /// `PlaneWave` are not cached: they build in milliseconds).
     pub fn kinds(&self) -> &'static [TableKind] {
         match self.families {
             Families::Dense { .. } => &[TableKind::M2m, TableKind::L2l, TableKind::M2l],
             Families::Classes { .. } => &[TableKind::M2m, TableKind::L2l, TableKind::M2lClasses],
-            Families::Rotation(_) => &[TableKind::Rotation],
+            Families::Rotation(_) | Families::PlaneWave { .. } => &[TableKind::Rotation],
         }
     }
 
@@ -425,6 +459,9 @@ impl<T: RealScalar> Tables<T> {
             Families::Dense { .. } => ScratchKind::Dense,
             Families::Classes { .. } => ScratchKind::Classes(M2lScratch::new(self.p)),
             Families::Rotation(_) => ScratchKind::Rotation(RotationScratch::new(self.p)),
+            Families::PlaneWave { ref waves, .. } => {
+                ScratchKind::PlaneWave(RotationScratch::new(self.p), Box::new(waves.scratch()))
+            }
         };
         TableScratch { kind }
     }
@@ -443,7 +480,7 @@ impl<T: RealScalar> Tables<T> {
             Families::Dense { m2m, .. } | Families::Classes { m2m, .. } => {
                 m2m.apply(o, input, output)
             }
-            Families::Rotation(rotation) => {
+            Families::Rotation(rotation) | Families::PlaneWave { rotation, .. } => {
                 rotation.m2m(o, input, output, scratch.rotation());
             }
         }
@@ -462,7 +499,7 @@ impl<T: RealScalar> Tables<T> {
             Families::Dense { l2l, .. } | Families::Classes { l2l, .. } => {
                 l2l.apply(o, input, output)
             }
-            Families::Rotation(rotation) => {
+            Families::Rotation(rotation) | Families::PlaneWave { rotation, .. } => {
                 rotation.l2l(o, input, output, scratch.rotation());
             }
         }
@@ -472,7 +509,10 @@ impl<T: RealScalar> Tables<T> {
     /// V-list pair whose offset has the position `offset_index` in `V_LIST_DIRECTIONS`
     /// (CONVENTIONS §3.11, §3.12): the dense matrix ((p + 1)⁴ multiply–adds; under
     /// `Batched` too, one pair alone), the class matrix between two coefficient transforms
-    /// ((p + 1)⁴ + O(p³)), or rotation (≈ (10/3) p³).
+    /// ((p + 1)⁴ + O(p³)), rotation (≈ (10/3) p³), or under `PlaneWave` the pair's plane
+    /// waves along the first axis of z, y, x on which the offset is 2 or 3 boxes
+    /// (`PlaneWaveTables::m2l_of_offset`; [`m2l_at`](Self::m2l_at) takes the direction of
+    /// merge and shift instead).
     ///
     /// # Panics
     ///
@@ -494,6 +534,41 @@ impl<T: RealScalar> Tables<T> {
             Families::Rotation(rotation) => {
                 rotation.m2l(offset_index, multipole, local, scratch.rotation());
             }
+            Families::PlaneWave { waves, .. } => {
+                waves.m2l_of_offset(offset_index, multipole, local, scratch.plane_wave());
+            }
+        }
+    }
+
+    /// [`m2l`](Self::m2l) of a pair whose target has the child index `child` (CONVENTIONS
+    /// §3.12): the same for every strategy but `PlaneWave`, which translates the pair
+    /// along the direction merge and shift gives it (`PlaneWaveTables::pair_direction`),
+    /// so that the pair by pair path equals the level call to rounding.
+    ///
+    /// # Panics
+    ///
+    /// As [`m2l`](Self::m2l), and if `child >= 8`.
+    #[inline]
+    pub fn m2l_at(
+        &self,
+        offset_index: usize,
+        child: usize,
+        multipole: &[T],
+        local: &mut [T],
+        scratch: &mut TableScratch<T>,
+    ) {
+        match &self.families {
+            Families::PlaneWave { waves, .. } => {
+                let direction = PlaneWaveTables::<T>::pair_direction(offset_index, child);
+                waves.m2l(
+                    offset_index,
+                    direction,
+                    multipole,
+                    local,
+                    scratch.plane_wave(),
+                );
+            }
+            _ => self.m2l(offset_index, multipole, local, scratch),
         }
     }
 }
@@ -509,6 +584,15 @@ impl<T: RealScalar> Tables<T> {
             _ => None,
         }
     }
+
+    /// The plane-wave tables under `PlaneWave`, for the level calls of the operator
+    /// (Phase 6 T13); `None` under every other strategy.
+    pub fn plane_waves(&self) -> Option<&PlaneWaveTables<T>> {
+        match &self.families {
+            Families::PlaneWave { waves, .. } => Some(waves),
+            _ => None,
+        }
+    }
 }
 
 /// The families the device path uploads (device-path.md §3.3, §6.8): crate-private, so
@@ -516,13 +600,13 @@ impl<T: RealScalar> Tables<T> {
 #[cfg(feature = "gpu")]
 impl<T: RealScalar> Tables<T> {
     /// The dense octant tables of M2M and L2L, under `Dense` and `Classes`; `None` under
-    /// `Rotation`, whose device path builds or loads them itself.
+    /// `Rotation` and `PlaneWave`, whose device path builds or loads them itself.
     pub(crate) fn octant_families(&self) -> Option<(&M2mTables<T>, &L2lTables<T>)> {
         match &self.families {
             Families::Dense { m2m, l2l, .. } | Families::Classes { m2m, l2l, .. } => {
                 Some((m2m, l2l))
             }
-            Families::Rotation(_) => None,
+            Families::Rotation(_) | Families::PlaneWave { .. } => None,
         }
     }
 
@@ -604,6 +688,16 @@ impl<T: Stored> Tables<T> {
                     vec![(TableKind::Rotation, outcome)],
                 )
             }
+            M2lStrategy::PlaneWave => {
+                let (rotation, outcome) = cache.load_or_build(p);
+                (
+                    Families::PlaneWave {
+                        rotation: Box::new(rotation),
+                        waves: Box::new(PlaneWaveTables::build(p)),
+                    },
+                    vec![(TableKind::Rotation, outcome)],
+                )
+            }
             M2lStrategy::Auto => unreachable!("resolve never returns Auto"),
         };
         (Self { p, families }, outcomes)
@@ -622,8 +716,16 @@ impl<T: RealScalar> TableScratch<T> {
     /// The scratch of the [`RotationTables`] operators.
     fn rotation(&mut self) -> &mut RotationScratch<T> {
         match &mut self.kind {
-            ScratchKind::Rotation(scratch) => scratch,
+            ScratchKind::Rotation(scratch) | ScratchKind::PlaneWave(scratch, _) => scratch,
             _ => panic!("the table scratch does not belong to Rotation tables"),
+        }
+    }
+
+    /// The scratch of [`PlaneWaveTables::m2l`].
+    fn plane_wave(&mut self) -> &mut PlaneWaveScratch<T> {
+        match &mut self.kind {
+            ScratchKind::PlaneWave(_, scratch) => scratch,
+            _ => panic!("the table scratch does not belong to PlaneWave tables"),
         }
     }
 }
