@@ -1081,8 +1081,10 @@ impl DeviceReport {
     /// How the device runs the strategy (device-path.md §6.6, §6.8): `Dense`, "Classes,
     /// run as dense on the device" (the 316 tables of `M2lClasses::expand` on the device,
     /// the class tables on the host for the fallback), `Rotation` (the rotation kernel,
-    /// T10), or "Batched, run as dense on the device" (the dense tables, whose device M2L
-    /// is already a product per level; Phase 6 T2); with M2L on the host fallback by
+    /// T10), "Batched, run as dense on the device" (the dense tables, whose device M2L
+    /// is already a product per level; Phase 6 T2), or "PlaneWave, run as dense on the
+    /// device" (dense tables the device path builds or loads; Phase 6 T13: no device
+    /// plane-wave kernel yet); with M2L on the host fallback by
     /// request, the strategy and "M2L on the host fallback".
     pub fn strategy_name(&self) -> String {
         match (self.strategy, self.placement(OperatorKind::M2l)) {
@@ -1093,6 +1095,9 @@ impl DeviceReport {
             (M2lStrategy::Rotation, Placement::Device) => "Rotation".to_owned(),
             (M2lStrategy::Batched, Placement::Device) => {
                 "Batched, run as dense on the device".to_owned()
+            }
+            (M2lStrategy::PlaneWave, Placement::Device) => {
+                "PlaneWave, run as dense on the device".to_owned()
             }
             (strategy, _) => format!("{strategy:?}, M2L on the host fallback"),
         }
@@ -2588,10 +2593,23 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             (None, None) => unreachable!("one of the two holds the octant tables"),
         };
         let expanded = host.tables().classes_m2l().map(|classes| classes.expand());
+        // Under `PlaneWave` the device runs M2L as `Dense` (Phase 6 T13): the dense tables,
+        // built or loaded here, where M2L runs on the device.
+        let plane_dense = (strategy == M2lStrategy::PlaneWave
+            && !options.host_fallback.contains(&OperatorKind::M2l))
+        .then(|| match &options.table_cache {
+            Some(dir) => {
+                let (m2l, outcome) = TableCache::new(dir).load_or_build::<M2lTables<T>>(p);
+                cache_outcomes.push((TableKind::M2l, outcome));
+                m2l
+            }
+            None => M2lTables::build(p),
+        });
         let m2l: Option<&MatrixSet<T>> = host
             .tables()
             .dense_m2l()
             .or(expanded.as_ref())
+            .or(plane_dense.as_ref())
             .map(|tables| tables.matrices());
         let rotation = host.tables().rotation_m2l().map(RotationHostArrays::new);
 

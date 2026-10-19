@@ -35,6 +35,11 @@
 //! evaluation equals the one-thread evaluation bit for bit. MPI is initialised with
 //! `Threading::Funneled` for it.
 //!
+//! The plane-wave M2L (Phase 6 T13, C6.5; `M2lStrategy::PlaneWave`): on the same tree and
+//! charge vectors at f64 p = 8, 12 and 18, its error within 1.1× that of the exact M2L
+//! (`Rotation`, whose output is `Dense`'s within 1e-12; its error budget), and four threads
+//! bit for bit one. The test prints both errors and the quadrature's λ nodes.
+//!
 //! P2P kernels (Phase 3S T6, C3S.5): the FMM runs the default kernel, `P2pChoice::Auto`,
 //! and at each p is built again with `P2pChoice::Reference`. Both pass the gate; the
 //! error with `Auto` lies within 1% of the error with `Reference`, and every output of
@@ -71,6 +76,7 @@ use mpi::traits::*;
 use nd_fmm_exec::fmm::Backend;
 use nd_fmm_exec::fmm::{FmmBuilder, KindTiming};
 use nd_fmm_exec::operator::{Isa, P2pChoice};
+use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_ref::p2p::direct_sum;
 
 mod kind_common;
@@ -263,6 +269,7 @@ fn uniform_tree_within_twice_the_prediction() {
             ));
         }
     }
+    plane_wave_gate(&points, (sample, &charges, &exact), &comm, &mut failures);
     kind_timings(&points, &charges[0], &comm);
     // The whole output at p = 6, unchanged by Phase 4S T9.
     for line in output_common::check_whole_output::<f64>(
@@ -278,6 +285,71 @@ fn uniform_tree_within_twice_the_prediction() {
     assert!(failures.is_empty(), "{}", failures.join("; "));
     eprintln!("{}", kind_common::summary());
 }
+
+/// The degrees of the plane-wave gate (Phase 6 T13).
+const PLANE_WAVE_PS: [usize; 3] = [8, 12, 18];
+
+/// The plane-wave M2L's gate on the C3.2 tree (Phase 6 T13, C6.5; module documentation):
+/// at f64 p = 8, 12 and 18 the error of `PlaneWave` (root mean square over the charge
+/// vectors) within 1.1× that of the exact M2L, `Rotation` (whose output is `Dense`'s
+/// within 1e-12), and four threads bit for bit one.
+fn plane_wave_gate(
+    points: &[[f64; 3]],
+    (sample, charges, exact): (&[usize], &[Vec<f64>], &[Vec<f64>]),
+    comm: &mpi::topology::SimpleCommunicator,
+    failures: &mut Vec<String>,
+) {
+    let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+    for p in PLANE_WAVE_PS {
+        let builder = FmmBuilder::<f64>::new(p)
+            .max_level(4)
+            .max_points_per_leaf(1);
+        let build = |strategy: M2lStrategy, threads: usize| {
+            builder
+                .clone()
+                .strategy(strategy)
+                .threads(threads)
+                .build(points, points, comm)
+                .expect("the FMM builds")
+        };
+        let (mut exact_m2l, mut waves, mut threaded) = (
+            build(M2lStrategy::Rotation, 1),
+            build(M2lStrategy::PlaneWave, 1),
+            build(M2lStrategy::PlaneWave, THREADS),
+        );
+        let (mut errors, mut errors_exact) = (Vec::new(), Vec::new());
+        for (k, (q, exact)) in charges.iter().zip(exact).enumerate() {
+            let output = waves.evaluate(q).expect("the plane-wave FMM evaluates");
+            let parallel = threaded.evaluate(q).expect("the plane-wave FMM evaluates");
+            assert_eq!(
+                bits(&parallel.potential),
+                bits(&output.potential),
+                "PlaneWave, p = {p}, charge vector {k}: {THREADS} threads differ from one"
+            );
+            errors.push(sampled_error(&output.potential, sample, exact));
+            let reference = exact_m2l.evaluate(q).expect("the FMM evaluates");
+            errors_exact.push(sampled_error(&reference.potential, sample, exact));
+        }
+        let (error, error_exact) = (rms(&errors), rms(&errors_exact));
+        let ratio = error / error_exact;
+        eprintln!(
+            "uniform level-4 tree, p = {p}: relative L2 error of φ {error:.3e} under \
+             PlaneWave (s = {}), {error_exact:.3e} under Rotation, ratio {ratio:.4}; \
+             {THREADS} threads bit for bit",
+            nd_fmm_tables::plane_wave::nodes_for_degree(p)
+        );
+        if ratio > PLANE_WAVE_RATIO {
+            failures.push(format!(
+                "p = {p}: PlaneWave's error {error:e} exceeds {PLANE_WAVE_RATIO} times the \
+                 exact M2L's {error_exact:e}"
+            ));
+        }
+    }
+}
+
+/// The plane-wave M2L's error budget (Phase 6 T13, C6.5): 1.1 times the exact M2L's
+/// error against the direct sum.
+const PLANE_WAVE_RATIO: f64 = 1.1;
 
 /// The per-kind timings on the C3.2 tree at p = 6, one thread (Phase 4S T5; module
 /// documentation): after an `Off` evaluation, five with `KindTiming::Synchronous` on the

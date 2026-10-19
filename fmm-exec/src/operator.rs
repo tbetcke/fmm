@@ -110,7 +110,8 @@
 //! entry's octant or offset index; debug builds check that it agrees with the keys.
 //!
 //! The body of one target is a function of that target's output slice, the call's
-//! shared inputs and one scratch set (`Kernels::*_target`), and nothing else.
+//! shared inputs and one scratch set (`Kernels::*_target`), and nothing else. M2L under
+//! `Batched` and under `PlaneWave` runs otherwise (below).
 //!
 //! # The batched M2L
 //!
@@ -133,6 +134,54 @@
 //! M2M and L2L stay `Dense`'s, target by target. The pool splits a level call by blocks
 //! (below); per thread the scratch holds the packing buffer, 4 (p + 1)² values, and two
 //! lists of at most [`M2L_BLOCK_TARGETS`] column offsets.
+//!
+//! # The plane-wave M2L
+//!
+//! Under `M2lStrategy::PlaneWave` (Phase 6 T13, C6.5; CONVENTIONS §3.14, with the
+//! formulas, tables and geometry of `nd_fmm_tables::plane_wave`) each M2L level call runs,
+//! for each charge vector and for each frame f = 0, 1, 2 (the directions ±z, ±y, ±x):
+//!
+//! 1. **Outgoing**: the up and down waves of frame f of every box of the level, its own
+//!    and its ghosts (from their multipoles: no exchange beyond the multipoles'; a box
+//!    without one has zero waves), 4H values per box in one buffer: the multipole rotated
+//!    into the frame, its weighted modes (`PlaneWaveTables::outgoing_modes`) and the waves
+//!    (`WaveKernel::waves`). The pool splits the boxes.
+//! 2. **Merge and shift**, parent by parent (the boxes of the level in index order,
+//!    consecutive boxes with one parent key forming a parent). Its *computed* children
+//!    are those with a V row; their rows name the sources, each at its slot among the 216
+//!    children of the parent's colleagues. For the up and then the down direction of the
+//!    frame: every accumulator whose (geometric) mask holds a computed child sums its
+//!    slots present, in ascending slot order, each source's waves shifted to the parent's
+//!    centre (`WaveKernel::merge`, from zero); every computed child adds its accumulators
+//!    in ascending mask order and shifts the sum to its centre (`WaveKernel::gather`).
+//!    Then each computed child with any waves: the incoming sums (`WaveKernel::sums`),
+//!    the local in the frame (`PlaneWaveTables::local_from_sums`) and back into its
+//!    local (`PlaneWaveTables::add_local_from_frame`). The pool splits the level at
+//!    parent boundaries (`split_parents`; pieces of at least `PARENT_GRAIN` = 64 boxes).
+//!
+//! **Order and bits.** Every local receives frame 0, then 1, then 2, each a fixed chain
+//! of its parent's accumulators, which depend on the geometry of the slots alone: the
+//! output is the same at every thread count and overlap setting (each parent runs whole
+//! on one thread), from evaluation to evaluation, and on every ISA (the kernels' chains
+//! are the same on all; `nd_fmm_simd::WaveKernel`). On P ranks a rank computes the
+//! accumulators of its computed children only; each holds the same sources, summed in the
+//! same order, as on one rank (a source of an accumulator lies in the V row of every child
+//! of its mask, so the rank holds its multipole), so the output is the one-rank `Fmm`'s
+//! bit for bit. It is not `Dense`'s: the plane waves approximate the M2L within the
+//! quadrature's error, at most 0.1× the M2L truncation of the degree
+//! (`nd_fmm_tables::plane_wave::nodes_for_degree`). Pair by pair (`m2l_pair`, the
+//! `PairOperator`) a pair is translated directly along the direction merge and shift
+//! gives it (`Tables::m2l_at`), which merge and shift equals to rounding.
+//!
+//! **Memory.** The waves buffer holds one frame of the largest level call, 4H values per
+//! box (H complex values per direction: 252, 399 and 1,009 at p = 8, 12 and 18, so 8.1,
+//! 12.8 and 32.3 kB per box in f64; a third of the six directions' waves of Phase 6 T10's
+//! spike), sized from the plan by `Fmm` ([`with_plane_wave_boxes`](LaplaceOperator::with_plane_wave_boxes))
+//! and grown by a level call only if no one sized it. Each scratch set holds
+//! (2a + 32)H + 2 (p + 1)² + 8F + w values (a = 10 accumulators of a direction at most, F
+//! the modes of every λ node, w = 4 (p + 1) s the λ-power steps' work; 119 kB in f64 at
+//! p = 8, 474 kB at p = 18) and 3 × 216 + a indices; [`plane_wave_bytes`](LaplaceOperator::plane_wave_bytes) reports both.
+//! M2M and L2L are `Rotation`'s, target by target.
 //!
 //! # P2P kernel
 //!
@@ -244,6 +293,7 @@
 //! ```
 
 use core::fmt;
+use core::ops::Range;
 use core::str::FromStr;
 use std::sync::{Arc, Mutex, PoisonError, TryLockError};
 
@@ -257,7 +307,7 @@ use nd_fmm_plan::operator::{
 use nd_fmm_plan::store::{LeafSlice, LeafSliceMut, LevelSlice, LevelSliceMut};
 use nd_fmm_ref::{Frame, Workspace, leaf, p2p};
 pub use nd_fmm_simd::{Isa, IsaUnavailable, MulAdd, SimdScalar};
-use nd_fmm_simd::{MatrixKernel, P2pKernel};
+use nd_fmm_simd::{MatrixKernel, P2pKernel, WaveKernel};
 use nd_fmm_tables::MatrixSet;
 use nd_fmm_tables::geometry::m2l_offset_index;
 use nd_octree::{MortonKey, morton};
@@ -267,6 +317,11 @@ use thiserror::Error;
 
 use crate::geometry::relative_frame;
 use crate::tables::{TableScratch, Tables};
+
+#[path = "operator_plane_wave.rs"]
+mod plane_wave;
+
+use plane_wave::{PARENT_GRAIN, PlaneScratch, PlaneWaveKernel};
 
 /// Values per source point with one charge vector: the leaf-scaled coordinates and the
 /// charge (CONVENTIONS §3.13, "Source chunks"); with m vectors 3 + m.
@@ -457,6 +512,9 @@ impl FromStr for P2pChoice {
 pub struct LaplaceOperator<T: SimdScalar> {
     kernels: Kernels<T>,
     execution: Execution<T>,
+    /// Under `PlaneWave`, the waves of one frame of every box of a level call, 4H values
+    /// per box (module documentation, "The plane-wave M2L"); empty otherwise.
+    waves: Vec<T>,
 }
 
 /// The read-only part of the operator: what every target body shares.
@@ -478,6 +536,9 @@ pub(crate) struct Kernels<T: SimdScalar> {
     vectors: usize,
     /// The sources (charges by default; Phase 6 T8).
     sources: SourceType,
+    /// The plane-wave kernels, on the ISA of the P2P choice (the scalar path for the
+    /// reference); `None` unless the tables are `PlaneWave` (Phase 6 T13).
+    waves: Option<PlaneWaveKernel<T>>,
 }
 
 /// One scratch set: what a target body writes besides its output.
@@ -495,6 +556,8 @@ pub(crate) struct Scratch<T: RealScalar> {
     moments: Vec<[T; 3]>,
     /// The batched M2L's packing buffer and column lists; empty unless `Batched`.
     columns: Columns<T>,
+    /// The plane-wave M2L's scratch; `None` unless `PlaneWave`.
+    plane: Option<PlaneScratch<T>>,
 }
 
 /// The scratch of one block of the batched M2L: the packing buffer of the column kernel
@@ -541,6 +604,7 @@ impl<T: SimdScalar> Scratch<T> {
             charges,
             moments,
             columns,
+            plane: kernels.tables.plane_waves().map(PlaneScratch::new),
         }
     }
 }
@@ -635,6 +699,51 @@ impl<T: RealScalar> Execution<T> {
         }
     }
 
+    /// Runs `body(i, chunk, scratch)` for every chunk i of `size` values of `buffer`: in
+    /// index order on the calling thread, or in the pool with `par_chunks_mut`.
+    fn chunks<F>(&mut self, buffer: &mut [T], size: usize, body: F)
+    where
+        F: Fn(usize, &mut [T], &mut Scratch<T>) + Sync,
+    {
+        match (&self.pool, self.serial) {
+            (Some(pool), false) => {
+                let sets = &self.scratch;
+                pool.install(|| {
+                    buffer
+                        .par_chunks_mut(size)
+                        .enumerate()
+                        .for_each(|(i, chunk)| with_scratch(sets, |s| body(i, chunk, s)));
+                });
+            }
+            _ => {
+                let scratch = self.first();
+                for (i, chunk) in buffer.chunks_mut(size).enumerate() {
+                    body(i, chunk, scratch);
+                }
+            }
+        }
+    }
+
+    /// Runs `body(boxes, chunks, scratch)` over pieces of whole parents of the level
+    /// `slice` (`size` values per box), the boxes `boxes` and their chunks, `starts(t)`
+    /// telling whether box t begins a parent:
+    /// the whole level on the calling thread, or in the pool, halved at parent boundaries
+    /// by [`split_parents`] down to [`PARENT_GRAIN`] boxes.
+    fn parents<F, S>(&mut self, slice: &mut [T], size: usize, starts: S, body: F)
+    where
+        F: Fn(Range<usize>, &mut [T], &mut Scratch<T>) + Sync,
+        S: Fn(usize) -> bool + Sync,
+    {
+        let boxes = slice.len() / size;
+        match (&self.pool, self.serial) {
+            (Some(pool), false) => {
+                let sets = &self.scratch;
+                pool.install(|| split_parents(slice, 0..boxes, size, &starts, sets, &body));
+            }
+            _ => body(0..boxes, slice, self.first()),
+        }
+    }
+
     /// Runs `body(r, chunk, scratch)` for every leaf r of `output`: in index order on the
     /// calling thread, or in the pool, split by [`split_leaves`].
     fn leaves<F>(&mut self, mut output: LeafSliceMut<'_, T>, body: F)
@@ -679,6 +788,35 @@ fn split_leaves<T: RealScalar, F>(
             );
         }
     }
+}
+
+/// Runs `body(boxes, chunks, scratch)` on `boxes` (their chunks `chunks`, `size` values
+/// each), halving it at a box where `starts` holds under `rayon::join` while it holds more
+/// than [`PARENT_GRAIN`] boxes; a piece that no such box divides runs whole.
+fn split_parents<T: RealScalar, F, S>(
+    chunks: &mut [T],
+    boxes: Range<usize>,
+    size: usize,
+    starts: &S,
+    sets: &[Mutex<Scratch<T>>],
+    body: &F,
+) where
+    F: Fn(Range<usize>, &mut [T], &mut Scratch<T>) + Sync,
+    S: Fn(usize) -> bool + Sync,
+{
+    let mut mid = boxes.start + boxes.len() / 2;
+    while mid < boxes.end && !starts(mid) {
+        mid += 1;
+    }
+    if boxes.len() <= PARENT_GRAIN || mid == boxes.end {
+        with_scratch(sets, |s| body(boxes, chunks, s));
+        return;
+    }
+    let (left, right) = chunks.split_at_mut((mid - boxes.start) * size);
+    rayon::join(
+        || split_parents(left, boxes.start..mid, size, starts, sets, body),
+        || split_parents(right, mid..boxes.end, size, starts, sets, body),
+    );
 }
 
 /// Runs `f` with the scratch set of the current pool thread.
@@ -735,6 +873,9 @@ impl<T: SimdScalar> LaplaceOperator<T> {
         let matrix = tables
             .batched_m2l()
             .map(|_| MatrixKernel::detect(MulAdd::Separate));
+        let waves = tables.plane_waves().map(|waves| {
+            PlaneWaveKernel::new(waves, Isa::detect()).expect("`Isa::detect` is available")
+        });
         let kernels = Kernels {
             p: tables.p(),
             tables,
@@ -745,13 +886,18 @@ impl<T: SimdScalar> LaplaceOperator<T> {
             mul_add: MulAdd::Separate,
             vectors: 1,
             sources: SourceType::Charges,
+            waves,
         };
         let execution = Execution {
             scratch: vec![Mutex::new(Scratch::new(&kernels))],
             pool: None,
             serial: false,
         };
-        Self { kernels, execution }
+        Self {
+            kernels,
+            execution,
+            waves: Vec::new(),
+        }
     }
 
     /// Runs every level call in `pool`, each target on one of its threads ([module
@@ -780,7 +926,60 @@ impl<T: SimdScalar> LaplaceOperator<T> {
     pub fn with_p2p(mut self, choice: P2pChoice) -> Result<Self, IsaUnavailable> {
         self.kernels.p2p = choice.kernel()?;
         self.kernels.matrix = self.kernels.matrix_kernel(self.kernels.mul_add)?;
+        let isa = self
+            .kernels
+            .p2p
+            .as_ref()
+            .map_or(Isa::Scalar, P2pKernel::isa);
+        self.kernels.waves = match self.kernels.tables.plane_waves() {
+            Some(tables) => Some(PlaneWaveKernel::new(tables, isa)?),
+            None => None,
+        };
         Ok(self)
+    }
+
+    /// Sizes the waves buffer of the plane-wave M2L (`M2lStrategy::PlaneWave`) for level
+    /// calls of at most `boxes` boxes, 4H values each ([module
+    /// documentation](self#the-plane-wave-m2l)); every other strategy ignores it. A level
+    /// call with more boxes grows the buffer: `Fmm` sizes it from its plan, so that no
+    /// level call allocates.
+    pub fn with_plane_wave_boxes(mut self, boxes: usize) -> Self {
+        if let Some(tables) = self.kernels.tables.plane_waves() {
+            self.waves = vec![T::zero(); boxes * 2 * tables.wave_len()];
+        }
+        self
+    }
+
+    /// The plane-wave kernels and the ISA they run on; `None` unless the strategy is
+    /// `M2lStrategy::PlaneWave`.
+    pub fn wave_kernel(&self) -> Option<WaveKernel<T>> {
+        self.kernels.waves.as_ref().map(|waves| waves.kernel)
+    }
+
+    /// The values of the plane-wave M2L's waves buffer (4H per box of the largest level
+    /// call so far, or as sized by [`with_plane_wave_boxes`](Self::with_plane_wave_boxes));
+    /// zero unless `M2lStrategy::PlaneWave`.
+    pub fn plane_wave_buffer_len(&self) -> usize {
+        self.waves.len()
+    }
+
+    /// The bytes the plane-wave M2L holds besides its tables: the waves buffer and every
+    /// scratch set's plane-wave scratch ([module documentation](self#the-plane-wave-m2l));
+    /// zero unless `M2lStrategy::PlaneWave`.
+    pub fn plane_wave_bytes(&self) -> usize {
+        let scratch: usize = self
+            .execution
+            .scratch
+            .iter()
+            .map(|set| {
+                set.lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .plane
+                    .as_ref()
+                    .map_or(0, PlaneScratch::bytes)
+            })
+            .sum();
+        self.waves.len() * size_of::<T>() + scratch
     }
 
     /// Runs the batched M2L (`M2lStrategy::Batched`) in the multiply–add mode `mul_add`:
@@ -997,8 +1196,13 @@ impl<T: SimdScalar> LaplaceOperator<T> {
         target_local: &mut [T],
     ) {
         let d = offset_index(source, target);
-        self.kernels
-            .m2l(d, source_multipole, target_local, self.execution.first());
+        self.kernels.m2l(
+            d,
+            morton::child_index(target),
+            source_multipole,
+            target_local,
+            self.execution.first(),
+        );
     }
 
     /// P2L: adds the sources of the leaf `source` to the local of the box `target`, at
@@ -1263,11 +1467,19 @@ impl<T: SimdScalar> Kernels<T> {
         });
     }
 
-    /// M2L with the table of offset index `d`, of every vector.
+    /// M2L with the table of offset index `d` into a target of child index `child`
+    /// (`Tables::m2l_at`), of every vector.
     #[inline]
-    fn m2l(&self, d: usize, multipole: &[T], local: &mut [T], scratch: &mut Scratch<T>) {
+    fn m2l(
+        &self,
+        d: usize,
+        child: usize,
+        multipole: &[T],
+        local: &mut [T],
+        scratch: &mut Scratch<T>,
+    ) {
         self.each_vector(multipole, local, |x, y| {
-            self.tables.m2l(d, x, y, &mut scratch.tables);
+            self.tables.m2l_at(d, child, x, y, &mut scratch.tables);
         });
     }
 
@@ -1499,6 +1711,10 @@ impl<T: SimdScalar> Kernels<T> {
         scratch: &mut Scratch<T>,
     ) {
         let (sources, offsets) = call.view.row(t);
+        let child = match sources.is_empty() {
+            true => 0,
+            false => morton::child_index(call.index.key(call.level, t)),
+        };
         for (&s, &d) in sources.iter().zip(offsets) {
             debug_assert_eq!(
                 offset_index(
@@ -1508,7 +1724,13 @@ impl<T: SimdScalar> Kernels<T> {
                 d as usize,
                 "the offset index of a V-list entry disagrees with its keys"
             );
-            self.m2l(d as usize, call.input.chunk(s as usize), local, scratch);
+            self.m2l(
+                d as usize,
+                child,
+                call.input.chunk(s as usize),
+                local,
+                scratch,
+            );
         }
     }
 
@@ -1806,6 +2028,42 @@ impl<T: SimdScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
             input: multipoles,
         };
         let kernels = &self.kernels;
+        if let Some((tables, _)) = kernels.plane_waves() {
+            if pairs.is_empty() {
+                return;
+            }
+            // The plane-wave M2L (module documentation): per vector and frame, the waves
+            // of every box of the level, then merge and shift per parent.
+            let (n, m) = ((kernels.p + 1).pow(2), kernels.vectors);
+            let box_waves = 2 * tables.wave_len();
+            let boxes = multipoles.as_slice().len() / (m * n);
+            if self.waves.len() < boxes * box_waves {
+                self.waves.resize(boxes * box_waves, T::zero());
+            }
+            let mut locals = locals;
+            let size = locals.size();
+            let locals = locals.as_mut_slice();
+            for v in 0..m {
+                for frame in 0..3 {
+                    let waves = &mut self.waves[..boxes * box_waves];
+                    self.execution.chunks(waves, box_waves, |b, out, scratch| {
+                        let multipole = &multipoles.chunk(b)[v * n..(v + 1) * n];
+                        kernels.plane_outgoing(frame, multipole, out, scratch);
+                    });
+                    let waves = &self.waves[..boxes * box_waves];
+                    let starts = |t: usize| {
+                        t == 0
+                            || morton::parent(index.key(level, t))
+                                != morton::parent(index.key(level, t - 1))
+                    };
+                    self.execution
+                        .parents(locals, size, starts, |range, chunks, scratch| {
+                            kernels.plane_parents(&call, (frame, v, waves), range, chunks, scratch);
+                        });
+                }
+            }
+            return;
+        }
         match (kernels.tables.batched_m2l(), &kernels.matrix) {
             (Some(tables), Some(matrix)) => {
                 if pairs.is_empty() {
@@ -1975,6 +2233,7 @@ impl<T: SimdScalar + Equivalence + Default> PairOperator for LaplaceOperator<T> 
         );
         self.kernels.m2l(
             offset_index,
+            morton::child_index(target),
             source_multipole,
             target_local,
             self.execution.first(),

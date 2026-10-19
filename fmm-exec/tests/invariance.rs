@@ -43,7 +43,8 @@
 //! each in f64 at p = 8 with `Rotation` and in f32 at p = 3 with `Dense`; the Plummer
 //! sphere and the graded tree also with the near rule of the cost model (Phase 6 T12,
 //! `NearRuleChoice::CostModel`), the same on every rank count since the rule decides each
-//! pair from the leaf's count alone.
+//! pair from the leaf's count alone; and every workload in f64 at p = 8 with the plane-wave
+//! M2L (Phase 6 T13, `M2lStrategy::PlaneWave`), the graded tree also in f32 at p = 6.
 //!
 //! Error measure: exact equality of the bit patterns of φ and ∇φ at every target.
 //!
@@ -459,6 +460,25 @@ fn rank_count_invariance() {
         );
         check::<f32>(workload, (3, M2lStrategy::Dense, near), true, &ks, &world);
     }
+    // The plane-wave M2L (Phase 6 T13), whose merge and shift sums every accumulator over
+    // the same sources in the same order on any rank: every workload in f64 at p = 8, and
+    // the graded tree in f32 at p = 6.
+    for workload in &WORKLOADS {
+        check::<f64>(
+            workload,
+            (8, M2lStrategy::PlaneWave, off),
+            false,
+            &ks,
+            &world,
+        );
+    }
+    check::<f32>(
+        &WORKLOADS[2],
+        (6, M2lStrategy::PlaneWave, off),
+        true,
+        &ks,
+        &world,
+    );
     if world.rank() == 0 {
         eprintln!(
             "rank-count invariance on {size} rank(s), k in {ks:?}: {} checks, 0 values \

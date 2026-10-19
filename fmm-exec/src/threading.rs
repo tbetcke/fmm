@@ -167,6 +167,10 @@ pub struct ThreadingReport {
     /// on the host fallback); `None` under every other strategy and from
     /// [`read`](Self::read).
     pub m2l_kernel: Option<(Isa, MulAdd)>,
+    /// The ISA of the plane-wave kernels under `M2lStrategy::PlaneWave` (Phase 6 T13; on a
+    /// device backend they run only where M2L is on the host fallback); `None` under every
+    /// other strategy and from [`read`](Self::read).
+    pub wave_kernel: Option<Isa>,
 }
 
 impl ThreadingReport {
@@ -184,6 +188,7 @@ impl ThreadingReport {
             ranks_per_node: 1,
             m2l: None,
             m2l_kernel: None,
+            wave_kernel: None,
         }
     }
 
@@ -207,7 +212,8 @@ impl fmt::Display for ThreadingReport {
     /// For example `rayon threads 4; MPI Funneled; OPENBLAS_NUM_THREADS=1,
     /// OMP_NUM_THREADS unset (warning), …; ranks per node 12; M2L Auto → Rotation: 12
     /// ranks per node × 8.7 MB > 64 MB` (the M2L part only once `build` set it), or
-    /// `…; M2L Batched (named), batched on neon, separate`.
+    /// `…; M2L Batched (named), batched on neon, separate`, or `…; M2L PlaneWave (named),
+    /// plane waves on neon`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "rayon threads {}; MPI {:?}; ", self.threads, self.mpi)?;
         let warnings = self.warnings();
@@ -229,6 +235,9 @@ impl fmt::Display for ThreadingReport {
         }
         if let Some((isa, mul_add)) = self.m2l_kernel {
             write!(f, ", batched on {isa}, {mul_add}")?;
+        }
+        if let Some(isa) = self.wave_kernel {
+            write!(f, ", plane waves on {isa}")?;
         }
         Ok(())
     }

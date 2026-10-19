@@ -54,6 +54,26 @@
 #                   cube and Plummer at f64 p = 8 and the cube at f64 p = 12, the five
 #                   variants; three timed evaluations
 #
+# Sweeps of the plane-wave M2L (Phase 6 T13, docs/phase6/T13-plane-wave-m2l.md;
+# docs/design/optimisation.md §8.2), every launch with --kinds, overlap off and the errors
+# of one charge vector, against Batched (separate and fused) and Rotation, each with the
+# P2P (and so the M2L kernels') ISA of every T13_ISAS (default "auto"; "avx2 avx512" on
+# Kathleen):
+#   t13-host        one rank at 1 thread and at every core of the machine (CORES): the
+#                   cube and the Plummer sphere at N = 10^6, f64 p = 3, 6, 8, 12, 18 and
+#                   f32 p = 3, 6, 8; three timed evaluations (two at p = 12, one at
+#                   p = 18); at the larger N of T13_NS (default none; "10000000" on locust
+#                   and Kathleen) at every core only, f64 only, one timed evaluation
+#   t13-node        many ranks per node: every ranks x threads of T2_SPLITS, the N = 10^6
+#                   cube and Plummer at f64 p = 8 and the cube at f64 p = 12; three timed
+#                   evaluations; the memory per rank in the summary
+#   t13-calibrate   PlaneWave's constants of the cost model, as `calibrate`: one rank per
+#                   core, the cube, the Plummer sphere and the clusters at N = CAL_N
+#                   (default 10^7), f64 p = 8 and 18 and f32 p = 8 under PlaneWave (M2L per
+#                   box), the first cut, overlap off, three timed evaluations
+#   t13-cut         the same launches with the second cut (`--cut work`): how the
+#                   constants balance the ranks' work under PlaneWave
+#
 # Sweeps of several charge vectors (Phase 6 T5, docs/phase6/T5-multiple-rhs.md;
 # docs/design/optimisation.md §4), every host launch with --kinds, overlap off, three timed
 # evaluations, at `--rhs m` for every m of T5_RHS (default "1 2 4 8 16 32"); the time per
@@ -207,6 +227,8 @@
 #            2x20 1x40" under Slurm)
 #   EVALS    timed evaluations per path (default 10)
 #   T5_RHS   the charge vectors of the t5 sweeps (default "1 2 4 8 16 32")
+#   T13_NS, T13_ISAS  t13-host's larger N (default none on macOS, "10000000" elsewhere)
+#            and the t13 sweeps' ISAs (default "auto"; "avx2 avx512" on Kathleen)
 #   T12_EVALS  timed evaluations of the t12 sweeps (default 3)
 #   T9_NS, T9_PS, T9_SPLIT, T9_P2P, T9_LARGE_EVALS  the t9 sweeps' problems and settings
 #            (above)
@@ -295,6 +317,7 @@ Darwin)
     CROSSOVER=${CROSSOVER:-"6 8 10"}
     T2_SPLITS=${T2_SPLITS:-"1x1 2x1 4x1 8x1 12x1 1x12"}
     T9_SPLIT=${T9_SPLIT:-1x12}
+    T13_NS=${T13_NS:-}
     ;;
 *)
     if [ -n "${SLURM_JOB_ID:-}" ]; then
@@ -311,6 +334,8 @@ Darwin)
         CROSSOVER=${CROSSOVER:-"8 10 12 16 20"}
         T2_SPLITS=${T2_SPLITS:-"1x1 10x1 20x1 40x1 2x20 1x40"}
         T9_SPLIT=${T9_SPLIT:-4x10}
+        T13_NS=${T13_NS:-10000000}
+        T13_ISAS=${T13_ISAS:-"avx2 avx512"}
     else
         os=linux
         RANKS=${RANKS:-"1 2 4 8 16 32 64 72"}
@@ -322,6 +347,7 @@ Darwin)
         CROSSOVER=${CROSSOVER:-"8 12 16 24"}
         T2_SPLITS=${T2_SPLITS:-"1x1 8x1 16x1 32x1 64x1 72x1 1x72 8x9"}
         T9_SPLIT=${T9_SPLIT:-8x9}
+        T13_NS=${T13_NS:-10000000}
     fi
     ;;
 esac
@@ -491,6 +517,25 @@ t2_launch() {
 }
 
 t2_variants="dense classes rotation batched batched-fused"
+
+# t13_launch <name prefix> <ranks> <threads> <variant> <scaling arguments...>: one launch
+# per ISA of T13_ISAS (Rotation, whose M2L does not depend on it, the first only), the
+# variant's strategy and mode, --kinds, overlap off and the errors of one charge vector.
+t13_launch() {
+    prefix=$1 r=$2 t=$3 variant=$4
+    shift 4
+    strategy=${variant%-fused} mul_add=separate
+    if [ "$variant" = batched-fused ]; then mul_add=fused; fi
+    isas=$T13_ISAS
+    if [ "$variant" = rotation ]; then isas=${T13_ISAS%% *}; fi
+    for isa in $isas; do
+        launch "$prefix-$variant-$isa-r${r}x$t" "$r" "$t" --strategy "$strategy" \
+            --mul-add "$mul_add" --p2p "$isa" --kinds --overlap off --errors 1 "$@"
+    done
+}
+
+t13_variants="planewave batched batched-fused rotation"
+T13_ISAS=${T13_ISAS:-auto}  # under Slurm (Kathleen) "avx2 avx512", set above
 
 T6_ISAS=${T6_ISAS:-"avx2 avx512"}
 
@@ -709,6 +754,64 @@ for sweep in "$@"; do
                         t2_launch "t2-host-$dist-$prec-p$p" 1 "$t" "$variant" --dist $dist \
                             --n 1000000 --precision "$prec" --p "$p" --evals "$evals"
                     done
+                done
+            done
+        done
+        ;;
+    t13-host)
+        for dist in cube plummer; do
+            for dp in f64:3 f64:6 f64:8 f64:12 f64:18 f32:3 f32:6 f32:8; do
+                prec=${dp%%:*} p=${dp##*:} evals=3
+                if [ "$p" -ge 12 ]; then evals=2; fi
+                if [ "$p" -ge 18 ]; then evals=1; fi
+                for t in 1 "$CORES"; do
+                    for variant in $t13_variants; do
+                        t13_launch "t13-host-$dist-n1000000-$prec-p$p" 1 "$t" "$variant" \
+                            --dist $dist --n 1000000 --precision "$prec" --p "$p" \
+                            --evals "$evals"
+                    done
+                done
+            done
+            for n in $T13_NS; do
+                for p in 3 6 8 12 18; do
+                    for variant in $t13_variants; do
+                        t13_launch "t13-host-$dist-n$n-f64-p$p" 1 "$CORES" "$variant" \
+                            --dist $dist --n "$n" --precision f64 --p "$p" --evals 1
+                    done
+                done
+            done
+        done
+        ;;
+    t13-calibrate)
+        n=${CAL_N:-10000000}
+        for dist in cube plummer clusters; do
+            for run in f64:8 f64:18 f32:8; do
+                prec=${run%%:*} p=${run#*:}
+                launch "t13-calibrate-$dist-n$n-$prec-p$p-planewave-r${LARGEST}x1" "$LARGEST" 1 \
+                    --dist $dist --n "$n" --precision "$prec" --p "$p" --strategy planewave \
+                    --overlap off --kinds --cut points --evals 3
+            done
+        done
+        ;;
+    t13-cut)
+        n=${CAL_N:-10000000}
+        for dist in cube plummer clusters; do
+            for run in f64:8 f64:18 f32:8; do
+                prec=${run%%:*} p=${run#*:}
+                launch "t13-cut-$dist-n$n-$prec-p$p-planewave-r${LARGEST}x1" "$LARGEST" 1 \
+                    --dist $dist --n "$n" --precision "$prec" --p "$p" --strategy planewave \
+                    --overlap off --kinds --cut work --evals 3
+            done
+        done
+        ;;
+    t13-node)
+        for run in cube:8 plummer:8 cube:12; do
+            dist=${run%%:*} p=${run##*:}
+            for split in $T2_SPLITS; do
+                r=${split%x*} t=${split#*x}
+                for variant in $t13_variants; do
+                    t13_launch "t13-node-$dist-f64-p$p" "$r" "$t" "$variant" --dist "$dist" \
+                        --n 1000000 --precision f64 --p "$p" --evals 3
                 done
             done
         done

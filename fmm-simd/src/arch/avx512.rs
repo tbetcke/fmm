@@ -47,8 +47,9 @@ use std::arch::x86_64::{
 };
 
 use super::p2p::{p2p_body, p2p_dipoles_body, p2p_many_body};
+use super::waves::{gather_body, merge_body, sums_body, waves_body};
 use super::{Simd, matrix::accumulate_body, rsqrt_body};
-use crate::Isa;
+use crate::{Isa, WaveTables};
 
 /// The token of AVX-512F (with AVX2 and FMA): a value exists only on a CPU with them, so
 /// the [`Simd`] methods that take it are safe.
@@ -599,3 +600,74 @@ macro_rules! accumulate_entries {
 
 accumulate_entries!(accumulate_f32, accumulate_f32_fused, f32, MATRIX_ROWS_F32);
 accumulate_entries!(accumulate_f64, accumulate_f64_fused, f64, MATRIX_ROWS_F64);
+
+/// Generates the plane-wave entry points of one precision (Phase 6 T13; the bodies of
+/// `arch::waves`).
+macro_rules! waves_entries {
+    ($t:ty, $merge:ident, $gather:ident, $waves:ident, $sums:ident) => {
+        /// [`WaveKernel::merge`](crate::WaveKernel::merge) on AVX-512F, in the precision of
+        /// its name, with shapes checked by the caller (`arch::waves::merge_body`).
+        ///
+        /// Not inlined, so that the dispatch stays one call and the inlining check finds
+        /// the function by name.
+        #[target_feature(enable = "avx512f")]
+        #[inline(never)]
+        pub(crate) fn $merge(
+            acc: &mut [$t],
+            waves: &[$t],
+            wave_offsets: &[usize],
+            shifts: &[$t],
+            shift_offsets: &[usize],
+        ) {
+            // SAFETY: this function enables `avx512f` (and so `avx2` and `fma`), so it
+            // runs only on a CPU with them: a call from outside such a context is
+            // `unsafe` and asserts it.
+            let s = unsafe { Avx512::new_unchecked() };
+            merge_body::<$t, Avx512>(s, acc, waves, wave_offsets, shifts, shift_offsets);
+        }
+
+        /// [`WaveKernel::gather`](crate::WaveKernel::gather) on AVX-512F, as the merge entry
+        /// point (`arch::waves::gather_body`).
+        #[target_feature(enable = "avx512f")]
+        #[inline(never)]
+        pub(crate) fn $gather(v: &mut [$t], accs: &[$t], acc_offsets: &[usize], t: &[$t]) {
+            // SAFETY: this function enables `avx512f` (and so `avx2` and `fma`), so it
+            // runs only on a CPU with them: a call from outside such a context is
+            // `unsafe` and asserts it.
+            let s = unsafe { Avx512::new_unchecked() };
+            gather_body::<$t, Avx512>(s, v, accs, acc_offsets, t);
+        }
+
+        /// [`WaveKernel::waves`](crate::WaveKernel::waves) on AVX-512F, as the merge entry
+        /// point (`arch::waves::waves_body`).
+        #[target_feature(enable = "avx512f")]
+        #[inline(never)]
+        pub(crate) fn $waves(
+            tables: &WaveTables<$t>,
+            modes: &[$t],
+            up: &mut [$t],
+            down: &mut [$t],
+        ) {
+            // SAFETY: this function enables `avx512f` (and so `avx2` and `fma`), so it
+            // runs only on a CPU with them: a call from outside such a context is
+            // `unsafe` and asserts it.
+            let s = unsafe { Avx512::new_unchecked() };
+            waves_body::<$t, Avx512, { super::waves::BLOCK }>(s, tables, modes, up, down);
+        }
+
+        /// [`WaveKernel::sums`](crate::WaveKernel::sums) on AVX-512F, as the merge entry
+        /// point (`arch::waves::sums_body`).
+        #[target_feature(enable = "avx512f")]
+        #[inline(never)]
+        pub(crate) fn $sums(tables: &WaveTables<$t>, up: &[$t], down: &[$t], sums: &mut [$t]) {
+            // SAFETY: this function enables `avx512f` (and so `avx2` and `fma`), so it
+            // runs only on a CPU with them: a call from outside such a context is
+            // `unsafe` and asserts it.
+            let s = unsafe { Avx512::new_unchecked() };
+            sums_body::<$t, Avx512>(s, tables, up, down, sums);
+        }
+    };
+}
+
+waves_entries!(f32, merge_f32, gather_f32, waves_f32, sums_f32);
+waves_entries!(f64, merge_f64, gather_f64, waves_f64, sums_f64);

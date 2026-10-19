@@ -63,8 +63,9 @@
 //! - `--n N` (10⁶), or `--n-per-rank n` for N = n P (weak scaling);
 //! - `--precision f64|f32` (f64), `--p p` (8);
 //! - `--threads t` rayon threads per rank (1; MPI at `Threading::Funneled` above 1);
-//! - `--strategy auto|dense|classes|rotation|batched`, the M2L strategy (auto; `batched`
-//!   is the host's batched M2L of Phase 6 T2);
+//! - `--strategy auto|dense|classes|rotation|batched|planewave`, the M2L strategy (auto;
+//!   `batched` is the host's batched M2L of Phase 6 T2, `planewave` its plane-wave M2L of
+//!   Phase 6 T13);
 //! - `--p2p auto|reference|scalar|neon|avx2|avx512` the P2P kernel (`FmmBuilder::p2p_kernel`,
 //!   auto; an ISA this machine lacks is refused before MPI starts; Phase 6 T6), which on
 //!   the host also runs the batched M2L's kernel (the summary's `p2p`, resolved);
@@ -83,8 +84,8 @@
 //!   resolved, against the output; refused (every rank exits with status 2 and the
 //!   reason) above N = 2 × 10⁷ (`scaling::REFERENCE_MAX_POINTS`, Phase 5S T2), where the
 //!   errors against the direct sum and `--invariance` are the oracles;
-//! - `--reference-strategy auto|dense|classes|rotation|batched` that FMM with another M2L
-//!   strategy (the difference between strategies; Phase 5N T3);
+//! - `--reference-strategy auto|dense|classes|rotation|batched|planewave` that FMM with
+//!   another M2L strategy (the difference between strategies; Phase 5N T3);
 //! - `--kinds` every level call timed by operator kind (`KindTiming::Synchronous`): the
 //!   M2M, M2L and L2L parts per rank and the time per V pair (Phase 5N T3);
 //! - `--cut work|points` the blocks cut again by the modelled cost of their work (`work`,
@@ -317,8 +318,9 @@ fn strategy(flag: &str, value: &str) -> M2lStrategy {
         "classes" => M2lStrategy::Classes,
         "rotation" => M2lStrategy::Rotation,
         "batched" => M2lStrategy::Batched,
+        "planewave" => M2lStrategy::PlaneWave,
         _ => fail(&format!(
-            "{flag}: auto, dense, classes, rotation or batched, not {value}"
+            "{flag}: auto, dense, classes, rotation, batched or planewave, not {value}"
         )),
     }
 }

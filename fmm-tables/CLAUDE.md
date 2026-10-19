@@ -4,7 +4,8 @@ Purpose: precomputed, level-independent operator tables, built in f64 from nd-fm
 and a versioned on-disk cache. The tables are M2M and L2L for the 8 child octants, M2L
 for the 316 V-list offsets and their 16 symmetry classes, and the rotation and coaxial
 tables of point-and-shoot translation.
-Phase and components: Phase 2, C2.1–C2.4 (tasks T1 and T3–T7 in docs/phase2/).
+Phase and components: Phase 2, C2.1–C2.4 (tasks T1 and T3–T7 in docs/phase2/); Phase 6
+C6.5 (task T13: `plane_wave`, the tables of plane-wave M2L, CONVENTIONS §3.14).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -13,6 +14,19 @@ Phase and components: Phase 2, C2.1–C2.4 (tasks T1 and T3–T7 in docs/phase2/
 - Tables are built in f64 by applying nd-fmm-ref operators at the canonical frames of
   §3.12. An f32 table is the f64 table rounded entry by entry. Never build in f32, and
   never re-derive an operator formula here.
+- The exception, `plane_wave` (Phase 6 T13): the plane-wave M2L has no operator in
+  nd-fmm-ref, so its tables follow the formulas of CONVENTIONS §3.14 (built in f64, rounded
+  to T) and are checked against `nd_fmm_ref::direct::m2l` (levels 2, 9 and 16, within the
+  quadrature's bound; the ignored `pair_m2l_every_degree` at every p ≤ 20). FMM3D's
+  quadratures (`quadrature_data.rs`, NIST's notice kept) are regenerated only by
+  `tools/fixtures/plane_wave_quadrature.sh`. The degree's quadrature
+  (`nodes_for_degree`) is the study of the ignored `level_every_degree` (the spike's
+  matched rule on level 3); a change to it changes the FMM's errors, so rerun the gates of
+  nd-fmm-exec. The functions that a `nd-fmm-simd` `WaveKernel` loop restates
+  (`waves_from_modes`, `sums_from_waves`, `shift_add`, `shift`, `add`) define its chains
+  with `mul_add`; keep the two in step. The other steps round products and sums apart: an
+  x86_64 build without `fma` turns `mul_add` into a library call. The plane-wave tables
+  are not cached (milliseconds to build).
 - Matrices are column-major with output = A · input. Every application accumulates
   (+=), and none applies 1/(4π) (§3.1).
 - Builds are serial and deterministic: the same inputs give bit-identical tables and

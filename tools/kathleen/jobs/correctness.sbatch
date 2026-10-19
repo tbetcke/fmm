@@ -15,8 +15,9 @@
 #   invariance      rank-count invariance (nd-fmm-validate's `scaling --invariance`, release)
 #                   at one rank per core of the job against P/k for k of INV_FACTORS (on 2
 #                   nodes 80 against 40, 20 and 10; on 4 nodes 160 against 80, 40 and 20):
-#                   the cube and the Plummer sphere in f64 at p = 8 with Rotation, the cube
-#                   in f32 at p = 3 with Dense, N = INV_N, the random share, overlap both
+#                   the cube and the Plummer sphere in f64 at p = 8 with Rotation and with
+#                   PlaneWave (Phase 6 T13), the cube in f32 at p = 3 with Dense, N = INV_N,
+#                   the random share, overlap both
 #   smoke           the `scaling` smoke run of jobs/scaling.sbatch: 2 ranks x 20 threads per
 #                   node, the N = 10^6 cube, f64 p = 3, the one-rank reference and 8 error
 #                   vectors
@@ -70,7 +71,8 @@ for part in $parts; do
         ;;
     invariance)
         step scaling-build "cargo build --release -p nd-fmm-validate --example scaling"
-        for run in cube:f64:8:rotation plummer:f64:8:rotation cube:f32:3:dense; do
+        for run in cube:f64:8:rotation plummer:f64:8:rotation cube:f32:3:dense \
+            cube:f64:8:planewave plummer:f64:8:planewave; do
             IFS=: read -r dist precision p strategy <<<"$run"
             step "invariance-$dist-$precision-p$p-$cores-k$INV_FACTORS" \
                 "timeout $LAUNCH_TIMEOUT mpirun -n $cores $per_core $scaling --dist $dist --n $INV_N --precision $precision --p $p --strategy $strategy --overlap both --invariance $INV_FACTORS"
