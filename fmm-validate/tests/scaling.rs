@@ -53,6 +53,11 @@
 //! FMM, is reported resolved (`Report::p2p`, the summary's `p2p`), and the scalar ISA, the
 //! reference's loop, gives the reference's errors bit for bit.
 //!
+//! And that of Phase 6 T12: the near rule (`Settings::near_rule`) off and from the cost
+//! model on the Plummer sphere: no pair converted off, pairs converted on, summed over the
+//! ranks; the crossovers of the run's cost model; the summary's fields and the report's
+//! line.
+//!
 //! One test initialises MPI (at `Threading::Funneled`). Error measures: as named at each
 //! check; the timings are only checked to be finite and non-negative.
 
@@ -61,6 +66,7 @@ use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, CommunicatorCollectives};
 use nd_fmm_exec::cost::CostModel;
+use nd_fmm_exec::fmm::NearRuleChoice;
 use nd_fmm_exec::operator::{Isa, P2pChoice};
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_validate::fmm_accuracy::Distribution;
@@ -159,6 +165,7 @@ fn smoke_run_of_the_scaling_core() {
     several_vectors(&comm);
     rank_count_invariance(&comm);
     p2p_kernels(&comm);
+    near_rule(&comm);
 }
 
 /// Every point and charge depends on its index and the seed only; the sample is distinct.
@@ -754,4 +761,46 @@ fn p2p_kernels(comm: &SimpleCommunicator) {
         );
     }
     assert_eq!(errors[0], errors[1], "reference and scalar errors");
+}
+
+/// The near rule of the settings (Phase 6 T12) on the Plummer sphere, whose tree has W and
+/// X pairs between leaves: off, nothing converted and no crossovers; from the cost model,
+/// its crossovers (`CostModel::near_crossovers`) and pairs converted, summed over the
+/// ranks, in the summary and the report.
+fn near_rule(comm: &SimpleCommunicator) {
+    let plummer = Workload::new(Distribution::Plummer, 1500);
+    for rule in [NearRuleChoice::Off, NearRuleChoice::CostModel] {
+        let settings = Settings {
+            evaluations: 1,
+            near_rule: rule,
+            ..Settings::new(3)
+        };
+        let report = run::<f64>(&plummer, &settings, comm).expect("a run");
+        let pairs: [usize; 4] =
+            core::array::from_fn(|k| report.rows.iter().map(|r| r.near_pairs[k]).sum());
+        let summary = &report.summaries()[0];
+        let text = report.to_string();
+        match rule {
+            NearRuleChoice::Off => {
+                assert_eq!(pairs, [0; 4]);
+                assert_eq!(report.near_crossovers, None);
+                assert!(summary.contains(" near=off "), "{summary}");
+                assert!(text.contains("- the near rule: off"), "{text}");
+            }
+            _ => {
+                assert_eq!(
+                    report.near_crossovers,
+                    Some(report.cost_model.near_crossovers())
+                );
+                assert!(
+                    pairs[1] > 0 && pairs[1] <= pairs[0] && pairs[3] > 0 && pairs[3] <= pairs[2],
+                    "{pairs:?}"
+                );
+                for field in [" near=cost ", " w_converted=", " x_converted="] {
+                    assert!(summary.contains(field), "{field} in {summary}");
+                }
+                assert!(text.contains("- the near rule: cost"), "{text}");
+            }
+        }
+    }
 }

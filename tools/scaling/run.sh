@@ -111,6 +111,20 @@
 #                   (`auto`), the errors of 8 vectors, and `--rhs 8`; the example built with
 #                   DEVICE (FEATURES)
 #
+# Sweeps of the near rule (Phase 6 T12, docs/phase6/T12-near-w-x.md; docs/design/
+# optimisation.md §8a), the rule off (`--near off`) against the cost model's crossovers
+# (`--near cost`), every launch with --kinds, overlap off, `auto`, three timed evaluations
+# (T12_EVALS) and the errors of one charge vector at 1,000 targets:
+#   t12-near        the Plummer sphere and the Gaussian clusters at N = 10^6 and the cube
+#                   at 2 x 10^6 (the tree half refined to a seventh level), f64 and f32 at
+#                   p = 3 and 8, at one rank (1x1) and at the node's ranks (12x1 on macOS,
+#                   72x1 on Linux, 40x1 per node under Slurm)
+#   t12-weak        Slurm only (2 nodes): the cube at 2.5 x 10^4 points per rank, N = 10^6
+#                   on 40 ranks and 2 x 10^6 on 80 (Phase 5S T9's weak points, the 80-rank
+#                   tree half refined), f64 p = 8 and f32 p = 3, the rule off and on, and
+#                   rank-count invariance with the rule at 80 ranks against 40, 20 and 10
+#                   (`--invariance 2,4,8`, Rotation named)
+#
 # Sweeps of the work-weighted cut (Phase 5S T7, docs/phase5s/T7-work-weighted-cut.md;
 # docs/design/scale-out.md §6), every launch with --kinds unless counted only:
 #   calibrate       the constants of the cost model: one rank per core of the machine (or
@@ -193,6 +207,7 @@
 #            2x20 1x40" under Slurm)
 #   EVALS    timed evaluations per path (default 10)
 #   T5_RHS   the charge vectors of the t5 sweeps (default "1 2 4 8 16 32")
+#   T12_EVALS  timed evaluations of the t12 sweeps (default 3)
 #   T9_NS, T9_PS, T9_SPLIT, T9_P2P, T9_LARGE_EVALS  the t9 sweeps' problems and settings
 #            (above)
 #   T9_ERRORS_MAX_N  if set, t9-fmm3d checks the errors only up to this N (the direct sum
@@ -553,8 +568,52 @@ t9_device() {
         --overlap off --rhs 8 --evals 3
 }
 
+T12_EVALS=${T12_EVALS:-3}
+
+# t12_launch <name prefix> <ranks> <scaling arguments...>: the rule off and from the cost
+# model, one thread per rank, --kinds, overlap off, the errors of one charge vector.
+t12_launch() {
+    prefix=$1 r=$2
+    shift 2
+    for near in off cost; do
+        launch "$prefix-$near-r${r}x1" "$r" 1 --near "$near" --kinds --overlap off \
+            --errors 1 --evals "$T12_EVALS" "$@"
+    done
+}
+
 for sweep in "$@"; do
     case "$sweep" in
+    t12-near)
+        if [ "$os" = slurm ]; then full=$((CORES_PER_NODE * NODES)); else full=$CORES; fi
+        for problem in plummer:1000000 clusters:1000000 cube:2000000; do
+            dist=${problem%%:*} n=${problem##*:}
+            for dp in f64:3 f64:8 f32:3 f32:8; do
+                prec=${dp%%:*} p=${dp##*:}
+                for r in 1 "$full"; do
+                    t12_launch "t12-near-$dist-n$n-$prec-p$p" "$r" --dist "$dist" --n "$n" \
+                        --precision "$prec" --p "$p"
+                done
+            done
+        done
+        ;;
+    t12-weak)
+        if [ "$os" != slurm ]; then
+            echo "t12-weak: Slurm only (2 Kathleen nodes)" >&2
+            exit 2
+        fi
+        for dp in f64:8 f32:3; do
+            prec=${dp%%:*} p=${dp##*:}
+            for run in 40:1000000 80:2000000; do
+                r=${run%%:*} n=${run##*:}
+                t12_launch "t12-weak-cube-n$n-$prec-p$p" "$r" --dist cube --n "$n" \
+                    --precision "$prec" --p "$p"
+            done
+            # Rank-count invariance with the rule at 80 ranks against 40, 20 and 10.
+            launch "t12-weak-invariance-cube-n2000000-$prec-p$p-cost-r80x1" 80 1 --near cost \
+                --invariance 2,4,8 --overlap both --dist cube --n 2000000 --precision "$prec" \
+                --p "$p" --strategy rotation
+        done
+        ;;
     t6-fmm)
         if [ "$os" = slurm ]; then full=$((CORES_PER_NODE * NODES)); else full=$CORES; fi
         for dist in cube plummer; do

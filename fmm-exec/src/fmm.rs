@@ -55,7 +55,9 @@
 //!    at least [`WORK_CUT_MIN_GAIN`] (2 %), and builds the plan again where the cut
 //!    changed ([`Fmm::recut`]). The leaves and every row stay the
 //!    same; only the owners of the blocks change, before any point moves
-//!    ([`BuildTimings::cut`]).
+//!    ([`BuildTimings::cut`]). With [`FmmBuilder::near_rule`] (Phase 6 T12) the plan is
+//!    built again with the near rule before the cut, which weighs that plan, and again
+//!    after a recut ([The near rule](#the-near-rule-c69)).
 //! 5. Moves every point to the rank that owns its leaf (Phase 5 T6, design §4.4): one
 //!    `nd_fmm_plan::redistribute::Redistribution` for the sources and one for the
 //!    targets, routed by the keys of step 4, then the f64 coordinates of each forwarded
@@ -363,6 +365,45 @@
 //!   global M2M and the downward pass) in that of [`DeviceStage::Downward`];
 //!   [`DeviceStage::UpwardGlobal`] times zero.
 //!
+//! # The near rule (C6.9)
+//!
+//! With [`FmmBuilder::near_rule`] (Phase 6 T12; docs/design/optimisation.md §8a; off by
+//! default until Phase 6 T11) the build turns the W and X pairs between two leaves whose
+//! fine leaf holds few points into near pairs, which P2P evaluates exactly, in place of
+//! M2P (the multipole of the fine leaf at the coarse leaf's targets) and P2L (a local of
+//! the fine leaf from the coarse leaf's sources).
+//! - **The rule.** A W pair converts where its source leaf holds fewer than N_W sources,
+//!   an X pair where its target leaf holds fewer than N_X targets: with
+//!   [`NearRuleChoice::CostModel`] N_W = α_M2P / α_P2P and N_X = α_P2L / α_P2P of the
+//!   FMM's [`CostModel`] ([`CostModel::near_crossovers`]: the points below which P2P costs
+//!   less, by the model; 107 and 35 at f64 p = 3 `Dense`, 421 and 184 at f64 p = 8
+//!   `Rotation` with Kathleen's constants), or named ([`NearRuleChoice::Crossovers`]). An
+//!   interior W box keeps its M2P, and the X entries of an interior box their P2L.
+//! - **The counts.** Step 4 counts the source and target points of every local leaf where
+//!   the points are (the one all-to-all-v that the second cut uses too), fetches the
+//!   source counts of the W rows' ghost leaves from their owners
+//!   (`nd_fmm_plan::near::LeafCounts::exchange`), and builds the plan again with the rule
+//!   (`nd_fmm_plan::plan::Plan::with_near_rule`). The second cut weighs that plan, the
+//!   converted pairs as P2P ([`cost`]); after a recut the counts and the plan with the rule
+//!   are made again for the new owners. The rule decides each pair from the leaf's count
+//!   alone, which is the same on every rank, so every rank makes the rows of one rank.
+//! - **Output.** A converted pair loses its truncation error, so the output is not that of
+//!   the rule off (not within 1e-12), and the error against the direct sum mostly falls;
+//!   where the truncation errors of different pairs cancel it can grow by a few per cent
+//!   (fmm-validate/results/phase6-near.md). For
+//!   fixed settings it is deterministic, the same for every thread count and overlap
+//!   setting, and on P ranks the one-rank output of the same rule bit for bit: the near
+//!   rows keep their (level, key) order.
+//! - **Collectives.** Per plan with the rule, a ghost communicator's build with two
+//!   all-reduces and the two all-reduces of a `Plan::new`; the all-to-all-v of the counts
+//!   once more where the second cut does not run. Nothing per evaluation: the source
+//!   exchange also delivers the converted ghost leaves, and the multipole exchange no
+//!   longer moves the multipoles only a converted pair read.
+//! - **Report.** [`Fmm::near_rule`]: the setting, N_W and N_X, and the W and X pairs
+//!   between leaves of the rank with those converted. [`BuildTimings::plan`] includes
+//!   the counts and the plan with the rule. The device path runs the converted pairs with
+//!   the other near pairs (its P2P forms the frames between any two leaves).
+//!
 //! # Precision
 //!
 //! `T` is f64 or f32 (`Stored + SimdScalar + Equivalence`). Coordinates are always f64
@@ -388,6 +429,7 @@ use nd_fmm_math::RealScalar;
 pub use nd_fmm_plan::evaluator::OverlapTimes;
 use nd_fmm_plan::evaluator::{Evaluator, EvaluatorError};
 pub use nd_fmm_plan::exchange::{ExchangeTimes, MultipoleRouting, TREE_FAN_OUT, Traffic};
+use nd_fmm_plan::near::{LeafCounts, LeafPair, NearRule};
 use nd_fmm_plan::operator::{
     FmmOperator, FmmSizes, HostData, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p,
 };
@@ -829,6 +871,70 @@ pub enum SettingsError {
         /// The requested backend.
         backend: Backend,
     },
+    /// [`NearRuleChoice::Crossovers`] with a crossover that is negative or NaN (Phase 6
+    /// T12).
+    #[error("near_rule: the crossovers must be non-negative numbers")]
+    NearCrossover,
+}
+
+/// Which W and X pairs between two leaves run as near pairs, by P2P (Phase 6 T12, C6.9;
+/// [The near rule](self#the-near-rule-c69), [`FmmBuilder::near_rule`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum NearRuleChoice {
+    /// No near rule (the default until Phase 6 T11): M2P and P2L for every W and X pair,
+    /// the plan of `Plan::new`.
+    #[default]
+    Off,
+    /// The crossovers of the FMM's [`CostModel`] ([`Fmm::cost_model`]): a W pair converts
+    /// where its source leaf holds fewer than N_W = α_M2P / α_P2P sources, an X pair where
+    /// its target leaf holds fewer than N_X = α_P2L / α_P2P targets
+    /// ([`CostModel::near_crossovers`]; docs/design/optimisation.md §8a.2).
+    CostModel,
+    /// Named crossovers, for tests and sweeps: a W pair converts where its source leaf
+    /// holds fewer than `w` sources, an X pair where its target leaf holds fewer than `x`
+    /// targets. `f64::INFINITY` converts every such pair, 0 none.
+    Crossovers {
+        /// N_W, in source points.
+        w: f64,
+        /// N_X, in target points.
+        x: f64,
+    },
+}
+
+impl NearRuleChoice {
+    /// The crossovers [N_W, N_X] of the rule under `model`, or `None` when it is off.
+    pub fn crossovers(self, model: &CostModel) -> Option<[f64; 2]> {
+        match self {
+            Self::Off => None,
+            Self::CostModel => Some(model.near_crossovers()),
+            Self::Crossovers { w, x } => Some([w, x]),
+        }
+    }
+}
+
+impl fmt::Display for NearRuleChoice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Off => f.write_str("off"),
+            Self::CostModel => f.write_str("cost model"),
+            Self::Crossovers { w, x } => write!(f, "crossovers W {w}, X {x}"),
+        }
+    }
+}
+
+pub use nd_fmm_plan::near::NearPairs;
+
+/// The near rule of an [`Fmm`] and what it converted on this rank ([`Fmm::near_rule`];
+/// Phase 6 T12).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NearRuleReport {
+    /// The setting ([`FmmBuilder::near_rule`]).
+    pub choice: NearRuleChoice,
+    /// The crossovers [N_W, N_X] the plan was built with, in points; `None` when off.
+    pub crossovers: Option<[f64; 2]>,
+    /// The W and X pairs between leaves of this rank's plan, and those converted (all
+    /// zero when off).
+    pub pairs: NearPairs,
 }
 
 /// Which of the two point sets a point belongs to, for error messages.
@@ -1006,6 +1112,7 @@ pub enum FmmError {
 /// | [`overlap`](Self::overlap) | off: the blocking exchanges |
 /// | [`work_cut`](Self::work_cut) | on: the blocks cut again by modelled cost on several ranks |
 /// | [`cost_model`](Self::cost_model) | [`CostModel::calibrated`] for the strategy, precision and p |
+/// | [`near_rule`](Self::near_rule) | [`NearRuleChoice::Off`]: M2P and P2L for every W and X pair |
 ///
 /// For `T = f32`, p > 8 is accepted but lies beyond the useful range (design §4): the
 /// error is then at the f32 floor already.
@@ -1041,6 +1148,7 @@ pub struct FmmBuilder<T> {
     overlap: bool,
     work_cut: bool,
     cost_model: Option<CostModel>,
+    near_rule: NearRuleChoice,
     multipole_routing: MultipoleRouting,
     #[cfg(feature = "gpu")]
     tuning_hook: crate::tune::TuningHook,
@@ -1081,6 +1189,7 @@ impl<T> FmmBuilder<T> {
             overlap: false,
             work_cut: true,
             cost_model: None,
+            near_rule: NearRuleChoice::Off,
             multipole_routing: MultipoleRouting::default(),
             #[cfg(feature = "gpu")]
             tuning_hook: crate::tune::TuningHook::default(),
@@ -1418,6 +1527,19 @@ impl<T> FmmBuilder<T> {
         self
     }
 
+    /// The near rule (Phase 6 T12, C6.9; [The near rule](self#the-near-rule-c69)): W and X
+    /// pairs between two leaves whose fine leaf holds fewer points than a crossover run as
+    /// P2P, exactly, instead of M2P and P2L. Off by default until Phase 6 T11;
+    /// [`NearRuleChoice::CostModel`] takes the crossovers from the
+    /// [`cost_model`](Self::cost_model). The output changes (the converted pairs lose
+    /// their truncation error); for fixed settings it is deterministic, the same for every
+    /// thread count and overlap setting, and on P ranks the one-rank output of the same
+    /// rule bit for bit. Every rank must pass the same setting.
+    pub fn near_rule(mut self, rule: NearRuleChoice) -> Self {
+        self.near_rule = rule;
+        self
+    }
+
     /// How the multipole exchange moves each multipole to the ranks that read it (Phase 5S
     /// T8s, S8; fmm-validate/results/phase5s-t8s.md §1): by default
     /// [`MultipoleRouting::Tree`] with [`TREE_FAN_OUT`], a box with more ranks reading it
@@ -1468,6 +1590,11 @@ impl<T> FmmBuilder<T> {
         }
         if let Err(error) = self.p2p.resolve() {
             return Err(SettingsError::P2pIsaUnavailable { isa: error.isa });
+        }
+        if let NearRuleChoice::Crossovers { w, x } = self.near_rule
+            && !(w >= 0.0 && x >= 0.0)
+        {
+            return Err(SettingsError::NearCrossover);
         }
         Ok(())
     }
@@ -1626,10 +1753,10 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         let plan = Plan::new(&octree).map_err(FmmError::Plan)?;
         let plan_time = start.elapsed();
 
-        // The second cut (Phase 5S T7, S3; docs/design/scale-out.md §6.3): the work of every
-        // own block counted on this plan, weighed by the cost model, the blocks cut again
-        // by it and the plan rebuilt, before any point moves. The leaves and every row stay;
-        // only the owners change.
+        // The near rule (Phase 6 T12, C6.9; docs/design/optimisation.md §8a): the points of
+        // every local leaf where they are, the W rows' ghost leaves' source counts, and the
+        // plan again with the rule, which turns the W and X pairs of fine leaves with few
+        // points into near pairs.
         let start = Instant::now();
         let cost_model = self.cost_model.unwrap_or_else(|| {
             let strategy = self
@@ -1643,11 +1770,31 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
                 .strategy();
             CostModel::calibrated(strategy, size_of::<T>(), self.p)
         });
+        let crossovers = self.near_rule.crossovers(&cost_model);
+        let (source_keys, target_keys) = keys.split_at(sources.len());
+        let (plan, counts) = match crossovers {
+            Some(crossovers) => {
+                let counts =
+                    cost::leaf_point_counts(&octree, &plan, source_keys, target_keys, comm);
+                let plan = near_plan(&octree, &plan, &counts, crossovers, comm)?;
+                (plan, Some(counts))
+            }
+            None => (plan, None),
+        };
+        let plan_time = plan_time + start.elapsed();
+
+        // The second cut (Phase 5S T7, S3; docs/design/scale-out.md §6.3): the work of every
+        // own block counted on this plan (with the near rule, the converted pairs as P2P),
+        // weighed by the cost model, the blocks cut again by it and the plan rebuilt, before
+        // any point moves. The leaves and every row stay; only the owners change.
+        let start = Instant::now();
         let work_cut = self.work_cut && comm.size() > 1;
         let (octree, plan, recut) = if work_cut {
-            let (source_keys, target_keys) = keys.split_at(sources.len());
+            let (sources, targets) = counts.unwrap_or_else(|| {
+                cost::leaf_point_counts(&octree, &plan, source_keys, target_keys, comm)
+            });
             let weights =
-                cost::block_weights(&octree, &plan, source_keys, target_keys, &cost_model, comm)
+                cost::block_weights(&octree, &plan, (&sources, &targets), &cost_model, comm)
                     .map_err(|error| FmmError::Evaluator(EvaluatorError::Exchange(error)))?;
             let recut = octree.repartition(&weights, Some(WORK_CUT_MIN_GAIN));
             if recut.partition_map() == octree.partition_map() {
@@ -1657,6 +1804,14 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             } else {
                 drop(plan);
                 let plan = Plan::new(&recut).map_err(FmmError::Plan)?;
+                let plan = match crossovers {
+                    Some(crossovers) => {
+                        let counts =
+                            cost::leaf_point_counts(&recut, &plan, source_keys, target_keys, comm);
+                        near_plan(&recut, &plan, &counts, crossovers, comm)?
+                    }
+                    None => plan,
+                };
                 (recut, plan, true)
             }
         } else {
@@ -1671,7 +1826,11 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         // so every rank returns here alike.
         let start = Instant::now();
         let nlocal = plan.index().leaves().nlocal();
-        let (source_keys, target_keys) = keys.split_at(sources.len());
+        let near_rule = NearRuleReport {
+            choice: self.near_rule,
+            crossovers,
+            pairs: plan.near_pairs(),
+        };
         let source_route =
             Redistribution::new(&octree, &plan, source_keys).map_err(FmmError::Redistribution)?;
         let target_route =
@@ -1844,6 +2003,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             work_cut,
             recut,
             cost_model,
+            near_rule,
             synchronous_stages: self.synchronous_stages && self.backend.is_device(),
             overlap: self.overlap,
             host_sources,
@@ -2641,6 +2801,31 @@ delegate!(p2m: P2m, m2m: M2m, m2l: M2l, p2l: P2l, l2l: L2l, l2p: L2p, m2p: M2p, 
 
 /// Returns `local` on this rank if every rank's `local` is `Ok`, and otherwise an error
 /// on every rank: this rank's own, or [`FmmError::OtherRank`]. One all-reduce.
+/// The plan of `octree` with the near rule of the crossovers [N_W, N_X] (Phase 6 T12,
+/// C6.9): a W pair between leaves converts where its source leaf holds fewer than N_W
+/// sources, an X pair where its target leaf holds fewer than N_X targets. The counts are
+/// `counts`, the source and target points of the local leaves of `plan` (the plan of
+/// `octree` without the rule), and the W rows' ghost leaves' from their owners.
+///
+/// # Collective operation
+///
+/// `LeafCounts::exchange` and `Plan::with_near_rule`; every rank must enter.
+fn near_plan<C: CommunicatorCollectives>(
+    octree: &Octree<'_, C>,
+    plan: &Plan,
+    (sources, targets): &(Vec<usize>, Vec<usize>),
+    [w, x]: [f64; 2],
+    comm: &C,
+) -> Result<Plan, FmmError> {
+    let counts = LeafCounts::exchange(plan, comm, sources, targets)
+        .map_err(|error| FmmError::Evaluator(EvaluatorError::Exchange(error)))?;
+    let predicate = |pair: LeafPair| match pair {
+        LeafPair::W { sources, .. } => (sources as f64) < w,
+        LeafPair::X { targets, .. } => (targets as f64) < x,
+    };
+    Plan::with_near_rule(octree, &NearRule::new(&counts, &predicate)).map_err(FmmError::Plan)
+}
+
 fn agree<C: CommunicatorCollectives, V>(
     comm: &C,
     local: Result<V, FmmError>,
@@ -3206,12 +3391,14 @@ pub struct BuildTimings {
     pub domain: Duration,
     /// `Octree::new`, with the keys of the points.
     pub octree: Duration,
-    /// `Plan::new`.
+    /// `Plan::new`; with the near rule (Phase 6 T12, [`FmmBuilder::near_rule`]) also the
+    /// points per leaf, the W rows' ghost leaves' source counts and the plan with the rule
+    /// (collective).
     pub plan: Duration,
     /// The second cut (Phase 5S T7, [`FmmBuilder::work_cut`]): the points per leaf and
     /// the ghost leaves' source counts (collective), the work per block, the
-    /// repartition of the octree (collective) and the second `Plan::new`; zero without
-    /// it.
+    /// repartition of the octree (collective) and the second `Plan::new` (with the near
+    /// rule, its counts and the plan with the rule again); zero without it.
     pub cut: Duration,
     /// Steps 5 and 6 (Phase 5 T6): the two redistributions of the points to the ranks
     /// that own their leaves (sources and targets: `Redistribution::new` and the forward
@@ -3818,6 +4005,8 @@ where
     recut: bool,
     /// The constants of the modelled cost.
     cost_model: CostModel,
+    /// The near rule and what it converted (Phase 6 T12).
+    near_rule: NearRuleReport,
     /// With a device backend: sync after every stage.
     synchronous_stages: bool,
     /// Run the overlapped stages (Phase 5 T9).
@@ -4435,6 +4624,13 @@ where
     /// second cut weighed the blocks with when it ran.
     pub fn cost_model(&self) -> CostModel {
         self.cost_model
+    }
+
+    /// Returns the near rule ([`FmmBuilder::near_rule`], Phase 6 T12): the setting, its
+    /// crossovers [N_W, N_X] and the W and X pairs between leaves of this rank's plan with
+    /// those it converted to near pairs.
+    pub fn near_rule(&self) -> NearRuleReport {
+        self.near_rule
     }
 
     /// Returns this rank's work by operator kind on its plan ([`KindCounts`], the units of

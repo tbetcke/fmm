@@ -16,6 +16,9 @@
 //!   an octree, over the octree's locally essential keys (Phase 5S T4, T5,
 //!   [Held keys](plan#held-keys)), with the owner of every top-tree key from its
 //!   partition map ([Owners](plan#owners)).
+//! - [`near`]: the optional near rule (Phase 6 T12, C6.9): W and X pairs between two
+//!   leaves that an operator-supplied predicate names become near pairs, from the leaves'
+//!   point counts ([`near::LeafCounts`]); [`Plan::with_near_rule`](plan::Plan::with_near_rule).
 //! - [`store`]: the data of an evaluation, one buffer per level and kind for
 //!   multipoles and locals, and CSR leaf stores with variable counts per leaf.
 //! - [`exchange`]: the ghost exchanges of sources and multipoles, the upward reduction of
@@ -111,6 +114,7 @@ pub mod exchange;
 pub mod index;
 pub mod interaction_manager;
 pub mod lists;
+pub mod near;
 pub mod operator;
 pub mod plan;
 pub mod redistribute;

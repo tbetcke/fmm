@@ -14,12 +14,14 @@
 //! evaluated with the exchanges overlapped, `Fmm::set_overlap`, Phase 5 T9), 1,000 sampled
 //! targets; f64 at p = 3, 8 and 18, f32 at p = 3 and 8 (the f32 charges rounded, with an
 //! oracle on the rounded charges); one thread per rank. Point i is passed on rank
-//! `hash(i) % P` (a seeded random share). Every workload point runs five times (Phase 6
-//! T2, T5): with the default strategy (`Auto`), with `M2lStrategy::Batched`, with
+//! `hash(i) % P` (a seeded random share). Every workload point runs six times (Phase 6
+//! T2, T5, T12): with the default strategy (`Auto`), with `M2lStrategy::Batched`, with
 //! `Batched` in the fused mode (`MulAdd::Fused`), and with the default strategy and with
 //! `Batched` on an FMM of the eight vectors (`FmmBuilder::vectors(8)`, Phase 6 T5, C6.3),
 //! evaluated at once by `Fmm::evaluate_many`, blocking and again with the exchanges
-//! overlapped (the two bit for bit); the batched runs load their tables from a cache in
+//! overlapped (the two bit for bit), and with the default strategy and the near rule of the
+//! cost model (`NearRuleChoice::CostModel`, Phase 6 T12, C6.9; the uniform cube has no W
+//! or X pairs, the Plummer sphere many); the batched runs load their tables from a cache in
 //! `CARGO_TARGET_TMPDIR`. The one-rank runs of every variant evaluate one vector at a
 //! time, so the eight-vector variants check that each vector is bit for bit its
 //! single-vector evaluation. On every rank count, for every run:
@@ -41,6 +43,8 @@
 //!   within twice the single-translation prediction (1.77e-3, 1.08e-5 and, re-derived in
 //!   Phase 3 T9, 6.74e-9 at p = 3, 8, 18), and the Plummer sphere's within twice the
 //!   cube's at the same p and strategy; f32 is reported.
+//! - **C6.9** (Phase 6 T12): the φ error of the near rule's run within 1.1 times the
+//!   default run's, on both problems, the ratio printed.
 //!
 //! Every rank builds and evaluates the multi-rank `Fmm`; rank 0 alone gathers the output
 //! (all-gathers in rank order), computes the oracles and the two one-rank runs, and
@@ -70,7 +74,7 @@ use mpi::collective::SystemOperation;
 use mpi::datatype::PartitionMut;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
-use nd_fmm_exec::fmm::{Fmm, FmmBuilder, Output, OutputMany};
+use nd_fmm_exec::fmm::{Fmm, FmmBuilder, NearRuleChoice, Output, OutputMany};
 use nd_fmm_exec::operator::{MulAdd, SimdScalar};
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_math::RealScalar;
@@ -100,23 +104,46 @@ const SHARE_SEED: u64 = 0x05ee_dc51;
 const TABLE_CACHE: &str = concat!(env!("CARGO_TARGET_TMPDIR"), "/multi_rank_tables");
 
 /// A run's strategy by name: the default (`None`), or a named strategy and the
-/// multiply–add mode of the batched M2L; and the charge vectors of each evaluation of the
-/// multi-rank run (1, or all eight at once, Phase 6 T5).
-type Variant = (&'static str, Option<(M2lStrategy, MulAdd)>, usize);
+/// multiply–add mode of the batched M2L; the charge vectors of each evaluation of the
+/// multi-rank run (1, or all eight at once, Phase 6 T5); and the near rule (Phase 6 T12).
+type Variant = (
+    &'static str,
+    Option<(M2lStrategy, MulAdd)>,
+    usize,
+    NearRuleChoice,
+);
 
 /// The strategies every workload point runs with: the default, the batched M2L in both
-/// multiply–add modes (Phase 6 T2), and the default and the batched M2L on an FMM of the
-/// eight vectors (Phase 6 T5).
-const VARIANTS: [Variant; 5] = [
-    ("auto", None, 1),
-    ("batched", Some((M2lStrategy::Batched, MulAdd::Separate)), 1),
-    ("fused", Some((M2lStrategy::Batched, MulAdd::Fused)), 1),
-    ("auto, 8 vectors", None, CHARGE_VECTORS as usize),
+/// multiply–add modes (Phase 6 T2), the default and the batched M2L on an FMM of the
+/// eight vectors (Phase 6 T5), and the default with the near rule of the cost model
+/// (Phase 6 T12, C6.9).
+const VARIANTS: [Variant; 6] = [
+    ("auto", None, 1, NearRuleChoice::Off),
+    (
+        "batched",
+        Some((M2lStrategy::Batched, MulAdd::Separate)),
+        1,
+        NearRuleChoice::Off,
+    ),
+    (
+        "fused",
+        Some((M2lStrategy::Batched, MulAdd::Fused)),
+        1,
+        NearRuleChoice::Off,
+    ),
+    (
+        "auto, 8 vectors",
+        None,
+        CHARGE_VECTORS as usize,
+        NearRuleChoice::Off,
+    ),
     (
         "batched, 8 vectors",
         Some((M2lStrategy::Batched, MulAdd::Separate)),
         CHARGE_VECTORS as usize,
+        NearRuleChoice::Off,
     ),
+    ("auto, near rule", None, 1, NearRuleChoice::CostModel),
 ];
 
 /// How far the multi-rank errors against the direct sum may lie from the one-rank run's,
@@ -405,7 +432,7 @@ type Errors = Vec<(&'static str, &'static str, usize, &'static str, f64)>;
 /// φ error of the multi-rank run; prints every rank's tree if `first`.
 fn run<T: Stored + SimdScalar + Equivalence + Default>(
     workload: &Workload,
-    (p, prediction, (variant, settings, vectors)): (usize, Option<f64>, Variant),
+    (p, prediction, (variant, settings, vectors, near)): (usize, Option<f64>, Variant),
     (charges, oracle): (&[Vec<f64>], Option<&Oracle>),
     mine: &[usize],
     first: bool,
@@ -424,7 +451,7 @@ fn run<T: Stored + SimdScalar + Equivalence + Default>(
         .iter()
         .map(|q| mine.iter().map(|&i| q[i]).collect())
         .collect();
-    let builder = workload.builder::<T>(p, settings);
+    let builder = workload.builder::<T>(p, settings).near_rule(near);
 
     // The multi-rank run, on every rank.
     comm.barrier();
@@ -757,6 +784,32 @@ fn equal_to_one_rank_at_the_workload_points() {
             );
             if precision == "f64" && ratio > 2.0 {
                 failures.push(format!("C3.3, p = {p}, {variant}: ratio {ratio}"));
+            }
+        }
+    }
+    // C6.9 (Phase 6 T12): the near rule's errors against the rule-off run's ("auto"), within
+    // 1.1 times (a converted pair is exact, but where the truncation errors of pairs cancel
+    // the sum can grow by a few per cent; `tests/mpi_exec.rs`, `NEAR_ERROR_BOUND`).
+    if rank == 0 {
+        for &(name, precision, p, _, error) in
+            errors_by_run.iter().filter(|e| e.3 == "auto, near rule")
+        {
+            let off = errors_by_run
+                .iter()
+                .find(|e| e.0 == name && e.1 == precision && e.2 == p && e.3 == "auto")
+                .expect("every workload point runs the default")
+                .4;
+            let ratio = error / off;
+            let allowed = 0.1;
+            eprintln!(
+                "C6.9, {name}, {precision}, p = {p}: φ error with the near rule {error:.4e} \
+                 against {off:.4e} without, ratio {ratio:.5}"
+            );
+            if ratio > 1.0 + allowed {
+                failures.push(format!(
+                    "C6.9, {name}, {precision}, p = {p}: the near rule's error {error:e} \
+                     exceeds the rule off's {off:e}"
+                ));
             }
         }
     }

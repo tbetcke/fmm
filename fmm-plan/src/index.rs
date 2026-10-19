@@ -13,8 +13,9 @@
 //! Leaves have a second numbering, because leaf data are not level data:
 //! - the local leaves first, as leaf indices `0..nlocal`, ordered by (level, key), so the
 //!   local leaves of level l are one range, [`LeafNumbering::local`];
-//! - then the ghost leaves that some U- or X-list of a non-ghost box names, as
-//!   `nlocal..len`, ordered by key, which is the order of their owners
+//! - then the ghost leaves that some U- or X-list of a non-ghost box names, and, under a
+//!   near rule, the ghost W entries it turned into near entries ([`near`](crate::near)),
+//!   as `nlocal..len`, ordered by key, which is the order of their owners
 //!   ([`LeafNumbering::ghosts`]).
 //!
 //! Other ghost leaves have a box index but no leaf index.
@@ -64,7 +65,7 @@ pub struct BoxIndex {
 }
 
 /// The leaf numbering of a [`BoxIndex`]: local leaves by (level, key), then the ghost
-/// leaves named by a U- or X-list, by key.
+/// leaves named by a U- or X-list (or a near row, under a near rule), by key.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LeafNumbering {
     keys: Vec<MortonKey>,

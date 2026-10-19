@@ -11,6 +11,7 @@ use nd_fmm_plan::{
     },
     interaction_manager::V_LIST_DIRECTIONS,
     lists::{GroupedCsr, offset_index},
+    near::{LeafCounts, LeafPair, NearPairs, NearRule},
     operator::{
         FmmOperator, FmmSizes, HostData, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PairOperator,
         PerPair, UpwardPass,
@@ -1529,6 +1530,7 @@ fn check_against_one_rank<C: CommunicatorCollectives>(
     plan: &Plan,
     fine_keys: &[u64],
     options: OctreeOptions,
+    near: Option<ScenarioPoints<'_>>,
 ) -> usize {
     let comm = octree.comm();
     let rank = comm.rank();
@@ -1539,6 +1541,15 @@ fn check_against_one_rank<C: CommunicatorCollectives>(
     let single = Octree::new(&all_keys, options, &single_comm);
     assert_eq!(single.leaf_keys(), &leaves, "{name}: the one-rank tree");
     let one = Plan::new(&single).unwrap_or_else(|error| panic!("{name}: one rank: {error}"));
+    // With the near rule (Phase 6 T12), the one-rank plan of the same rule and counts.
+    let one = match near {
+        None => one,
+        Some(points) => {
+            let counts = near_counts(name, &single_comm, &one, points);
+            Plan::with_near_rule(&single, &NearRule::new(&counts, &near_predicate))
+                .unwrap_or_else(|error| panic!("{name}: one rank, near rule: {error}"))
+        }
+    };
 
     let ((outputs, multipoles, locals, _), received) = mixed(plan, comm);
     let ((one_outputs, one_multipoles, one_locals, _), _) = mixed(&one, &single_comm);
@@ -2296,6 +2307,216 @@ fn check_batches<C: CommunicatorCollectives>(
     );
 }
 
+/// The sorted fine keys of a scenario's sources and targets, over every rank.
+type ScenarioPoints<'a> = (&'a [u64], &'a [u64]);
+
+/// The predicate of the near-rule checks (Phase 6 T12): kernel-agnostic, and converting
+/// some pairs of each list and keeping others.
+fn near_predicate(pair: LeafPair) -> bool {
+    match pair {
+        LeafPair::W { sources, .. } => sources % 3 != 1,
+        LeafPair::X { targets, .. } => targets % 2 == 0,
+    }
+}
+
+/// The near rule's counts on `plan` (without a rule): every local leaf's points of the
+/// scenario, and the W rows' ghost leaves' from their owners. Collective.
+fn near_counts<C: CommunicatorCollectives>(
+    name: &str,
+    comm: &C,
+    plan: &Plan,
+    (sources, targets): ScenarioPoints<'_>,
+) -> LeafCounts {
+    let leaves = plan.index().leaves();
+    let local = |points: &[u64]| -> Vec<usize> {
+        (0..leaves.nlocal())
+            .map(|j| points_in(points, leaves.key(j)))
+            .collect()
+    };
+    LeafCounts::exchange(plan, comm, &local(sources), &local(targets))
+        .unwrap_or_else(|error| panic!("{name}: near counts: {error}"))
+}
+
+/// The oracle lists with the conversions of [`near_predicate`] applied, from the true
+/// counts of the scenario's points: a W entry of a local leaf that is a leaf, and an X
+/// entry of a local leaf, that the predicate names move to the U-list (the near row
+/// without the leaf itself). Also returns the [`NearPairs`] this rank's plan must report.
+fn near_oracle(
+    held: &HashMap<u64, KeyType>,
+    oracle: &OracleLists,
+    global_leaves: &[u64],
+    (sources, targets): ScenarioPoints<'_>,
+) -> (OracleLists, NearPairs) {
+    let mut pairs = NearPairs::default();
+    let mut converted = OracleLists::new();
+    for (&key, [u, v, w, x]) in oracle {
+        if held[&key] != KeyType::LocalLeaf {
+            converted.insert(key, [u.clone(), v.clone(), w.clone(), x.clone()]);
+            continue;
+        }
+        let (mut u, mut w_kept, mut x_kept) = (u.clone(), Vec::new(), Vec::new());
+        for &s in w {
+            if global_leaves.binary_search(&s).is_ok() {
+                pairs.w_leaf_pairs += 1;
+                if near_predicate(LeafPair::W {
+                    target: key,
+                    source: s,
+                    sources: points_in(sources, s),
+                }) {
+                    pairs.w_converted += 1;
+                    u.push(s);
+                    continue;
+                }
+            }
+            w_kept.push(s);
+        }
+        for &t in x {
+            pairs.x_leaf_pairs += 1;
+            if near_predicate(LeafPair::X {
+                target: key,
+                source: t,
+                targets: points_in(targets, key),
+            }) {
+                pairs.x_converted += 1;
+                u.push(t);
+            } else {
+                x_kept.push(t);
+            }
+        }
+        u.sort_unstable();
+        converted.insert(key, [u, v.clone(), w_kept, x_kept]);
+    }
+    (converted, pairs)
+}
+
+/// Check the near rule (Phase 6 T12, C6.9; `nd_fmm_plan::near`) on a scenario, with the
+/// counts of its points: the counts the rule reads are the leaves' points, the ghost
+/// leaves of the W rows' from their owners; the plan with [`near_predicate`] has the
+/// oracle's lists with the conversions applied ([`near_oracle`]) and passes every check of
+/// [`check_plan`], its ghost leaves among them; the source exchange delivers every ghost
+/// leaf, the converted W entries included, with its owner's count; the reduction, the
+/// replicated top and the multipole exchange follow the converted rows; the evaluator
+/// issues every converted pair as P2P and no M2P or P2L for it, and gives one rank's bits
+/// on a one-rank plan of the same rule; and a rule that converts nothing gives the plan of
+/// `Plan::new`. Returns the W and X pairs of leaves and the converted ones, and the
+/// converted ghost W leaves, summed over the ranks. Collective.
+fn check_near_rule<C: CommunicatorCollectives>(
+    name: &str,
+    octree: &Octree<'_, C>,
+    (held, oracle, global_leaves): (&HashMap<u64, KeyType>, &OracleLists, &[u64]),
+    plan: &Plan,
+    points: ScenarioPoints<'_>,
+    (fine_keys, options): (&[u64], OctreeOptions),
+) -> [usize; 5] {
+    let comm = octree.comm();
+    let rule_name = &format!("{name}, near rule");
+    let index = plan.index();
+    let counts = near_counts(name, comm, plan, points);
+    for level in 0..index.nlevels() {
+        let w = plan.level(level).w();
+        for &s in w.entries() {
+            let (key, kind) = (
+                index.key(level + 1, s as usize),
+                index.kind(level + 1, s as usize),
+            );
+            if matches!(kind, KeyType::LocalLeaf | KeyType::GhostLeaf(_)) {
+                assert_eq!(
+                    counts.sources(key),
+                    Some(points_in(points.0, key)),
+                    "{rule_name}: the source count of W leaf {key}"
+                );
+            }
+        }
+    }
+    let rule_plan = Plan::with_near_rule(octree, &NearRule::new(&counts, &near_predicate))
+        .unwrap_or_else(|error| panic!("{rule_name}: {error}"));
+    let (rule_oracle, pairs) = near_oracle(held, oracle, global_leaves, points);
+    check_plan(
+        rule_name,
+        held,
+        &rule_oracle,
+        &rule_plan,
+        octree.coarse_tree_leafs(),
+        |key| computes(octree, held, key),
+    );
+    assert_eq!(
+        rule_plan.near_pairs(),
+        pairs,
+        "{rule_name}: pairs converted"
+    );
+
+    // The ghost leaves that only a converted W pair names.
+    let named: Vec<u64> = plan
+        .index()
+        .leaves()
+        .ghosts()
+        .map(|j| plan.index().leaf_key(j))
+        .collect();
+    let leaves = rule_plan.index().leaves();
+    let ghost_w = leaves
+        .ghosts()
+        .filter(|&j| named.binary_search(&leaves.key(j)).is_err())
+        .count();
+    let points_of = |key| points_in(points.0, key);
+    check_source_exchange(rule_name, comm, &rule_plan, points_of);
+
+    let sizes: Vec<usize> = (0..rule_plan.nlevels()).map(|level| level + 1).collect();
+    let (reduction, _) = check_reduction(rule_name, octree, held, &rule_plan, &sizes);
+    let (top, _) = check_top(
+        rule_name,
+        octree,
+        held,
+        &rule_oracle,
+        &rule_plan,
+        &sizes,
+        &reduction,
+    );
+    check_multipole_exchange(
+        rule_name,
+        octree,
+        held,
+        &rule_oracle,
+        &rule_plan,
+        &sizes,
+        (&reduction, &top),
+    );
+    check_batches(
+        rule_name,
+        octree,
+        &rule_oracle,
+        &rule_plan,
+        false,
+        default_routing(comm),
+    );
+    check_against_one_rank(
+        rule_name,
+        octree,
+        &rule_plan,
+        fine_keys,
+        options,
+        Some(points),
+    );
+
+    // Without the rule nothing changes: a rule that converts nothing gives `Plan::new`'s
+    // plan.
+    let never = |_: LeafPair| false;
+    let unchanged = Plan::with_near_rule(octree, &NearRule::new(&counts, &never))
+        .unwrap_or_else(|error| panic!("{rule_name}: {error}"));
+    assert_eq!(unchanged.index(), plan.index(), "{name}: never converted");
+    assert_eq!(unchanged.levels(), plan.levels(), "{name}: never converted");
+
+    let local = [
+        pairs.w_leaf_pairs,
+        pairs.w_converted,
+        pairs.x_leaf_pairs,
+        pairs.x_converted,
+        ghost_w,
+    ];
+    let mut total = [0usize; 5];
+    comm.all_reduce_into(&local[..], &mut total[..], SystemOperation::sum());
+    total
+}
+
 /// The input distributions of docs/phase5/README.md ("Workloads"), each derived on every
 /// rank from the scenario's global items (docs/design/distributed-fmm.md §10.2).
 #[derive(Clone, Copy, Debug)]
@@ -2731,6 +2952,9 @@ fn distributed_tree_regressions() {
     // The chunks the narrow forwarding tree forwarded over every scenario, summed over the
     // ranks (Phase 5S T8s).
     let mut tree_forwarded = 0usize;
+    // The near rule's W and X pairs kept and converted, and the converted ghost leaves,
+    // over every scenario, summed over the ranks (Phase 6 T12).
+    let mut near_totals = [0usize; 5];
     for (name, sources, targets, max_level, capacity) in cases {
         eprintln!("rank {rank}: {name}");
         // One tree serves both populations, as in an FMM with distinct
@@ -2879,12 +3103,27 @@ fn distributed_tree_regressions() {
         // The evaluator: determinism with variable counts, the bits of one rank, and the
         // batches it issues.
         check_repeated_evaluation(name, &comm, &plan);
-        check_against_one_rank(name, &octree, &plan, &fine_keys, options);
+        check_against_one_rank(name, &octree, &plan, &fine_keys, options, None);
         check_batches(name, &octree, &oracle, &plan, false, default_routing(&comm));
         check_batches(name, &octree, &oracle, &plan, true, default_routing(&comm));
         let narrow = &format!("{name}, narrow tree");
         check_batches(narrow, &octree, &oracle, &plan, false, narrow_tree(&comm));
         check_batches(narrow, &octree, &oracle, &plan, true, narrow_tree(&comm));
+
+        // The near rule (Phase 6 T12, C6.9), with counts per leaf from the scenario's points.
+        let mut target_points = gather_to_all(&keys(&targets), &comm);
+        target_points.sort_unstable();
+        let pairs = check_near_rule(
+            name,
+            &octree,
+            (&held, &oracle, &global_leaves),
+            &plan,
+            (&source_points, &target_points),
+            (&fine_keys, options),
+        );
+        for (total, count) in near_totals.iter_mut().zip(pairs) {
+            *total += count;
+        }
 
         // The redistribution of the sources and of the targets, from every input
         // distribution of the scenario's global points (every rank's, in rank order).
@@ -2905,6 +3144,30 @@ fn distributed_tree_regressions() {
     if (4..=8).contains(&comm.size()) {
         assert!(tree_forwarded > 0, "the narrow tree forwarded nothing");
     }
+    // The near rule converted and kept pairs of both lists, and on several ranks named a
+    // ghost leaf for a converted W pair.
+    if rank == 0 {
+        println!(
+            "near rule on {} ranks: W pairs of leaves {}, converted {}; X pairs of leaves {}, \
+             converted {}; converted ghost W leaves {}",
+            comm.size(),
+            near_totals[0],
+            near_totals[1],
+            near_totals[2],
+            near_totals[3],
+            near_totals[4]
+        );
+    }
+    assert!(
+        0 < near_totals[1]
+            && near_totals[1] < near_totals[0]
+            && 0 < near_totals[3]
+            && near_totals[3] < near_totals[2],
+        "the near rule converted nothing or everything: {near_totals:?}"
+    );
+    if comm.size() > 1 {
+        assert!(near_totals[4] > 0, "no converted ghost W leaf");
+    }
 
     // The owned top tree against one rank on the cube and the Plummer sphere (Phase 5S T5):
     // 200 points per rank, generated by index, each rank its own range.
@@ -2922,7 +3185,7 @@ fn distributed_tree_regressions() {
         let octree = Octree::new(&fine_keys, options, &comm);
         let plan =
             Plan::new(&octree).unwrap_or_else(|error| panic!("rank {rank}: {name}: {error}"));
-        let formed = check_against_one_rank(name, &octree, &plan, &fine_keys, options);
+        let formed = check_against_one_rank(name, &octree, &plan, &fine_keys, options, None);
         let mut total = 0usize;
         comm.all_reduce_into(&formed, &mut total, SystemOperation::sum());
         let mut deepest = 0usize;

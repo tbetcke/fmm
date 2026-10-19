@@ -30,6 +30,11 @@
 //! | M2P | W pairs times the target leaf's points |
 //! | P2P | near interactions: Σ over the local leaves of n_t times Σ over the near list of n_s |
 //!
+//! The counts follow the plan's views, so under the near rule (Phase 6 T12, C6.9;
+//! [`FmmBuilder::near_rule`](crate::fmm::FmmBuilder::near_rule)) a converted W or X pair
+//! is in the near row of its leaf and counts as P2P, not as M2P or P2L: the cut weighs the
+//! plan with the rule.
+//!
 //! A block's cost is that of the rows of the boxes and leaves at or below it. The rows of
 //! the `Global` boxes (the shared ancestors: their global M2M on the owner, their M2L,
 //! P2L and L2L on every rank that shares them) belong to no block and stay with the rank
@@ -212,7 +217,8 @@ struct CountedKey {
 }
 
 /// The source and target points of every local leaf of `plan`, counted where the
-/// points are, before they move (the second cut of [`block_weights`]).
+/// points are, before they move (the second cut of [`block_weights`] and the near rule's
+/// counts).
 ///
 /// Every rank sorts the keys of its points, merges them into distinct keys with their
 /// numbers of sources and targets, and sends each to the owner of its leaf by the
@@ -292,14 +298,13 @@ pub(crate) fn leaf_point_counts<C: CommunicatorCollectives>(
 }
 
 /// The modelled cost of every own block of `octree` under `model`, from its plan and
-/// the keys of this rank's points: the weights of the second cut
-/// (`Octree::repartition`).
+/// the points of its local leaves (`sources` and `targets`, [`leaf_point_counts`]): the
+/// weights of the second cut (`Octree::repartition`).
 ///
 /// # Collective operation
 ///
-/// [`leaf_point_counts`], then the build of a source exchange of one value per point,
-/// which delivers the source counts of the ghost leaves (`SourceExchange::new`); every
-/// rank must enter.
+/// The build of a source exchange of one value per point, which delivers the source
+/// counts of the ghost leaves (`SourceExchange::new`); every rank must enter.
 ///
 /// # Errors
 ///
@@ -307,18 +312,16 @@ pub(crate) fn leaf_point_counts<C: CommunicatorCollectives>(
 pub(crate) fn block_weights<C: CommunicatorCollectives>(
     octree: &Octree<'_, C>,
     plan: &Plan,
-    source_keys: &[MortonKey],
-    target_keys: &[MortonKey],
+    (sources, targets): (&[usize], &[usize]),
     model: &CostModel,
     comm: &C,
 ) -> Result<Vec<f64>, ExchangeError> {
-    let (sources, targets) = leaf_point_counts(octree, plan, source_keys, target_keys, comm);
-    let exchange = SourceExchange::<u8>::new(plan, comm, &sources, 1)?;
+    let exchange = SourceExchange::<u8>::new(plan, comm, sources, 1)?;
     let work = work_counts(
         plan,
         octree.coarse_tree_leafs(),
         exchange.leaf_counts(),
-        &targets,
+        targets,
     );
     Ok(work
         .blocks
@@ -481,6 +484,19 @@ impl CostModel {
         self.alpha
     }
 
+    /// The crossovers of the near rule (Phase 6 T12, C6.9; docs/design/optimisation.md
+    /// §8a.2) under these constants: N_W = α_M2P / α_P2P, the source points below which a
+    /// W pair between leaves is cheaper as P2P than as M2P, and N_X = α_P2L / α_P2P, the
+    /// target points below which an X pair is cheaper as P2P than as P2L. Infinite where
+    /// α_P2P is zero and the other constant is not; zero where both are.
+    pub fn near_crossovers(&self) -> [f64; 2] {
+        let p2p = self.alpha(OperatorKind::P2p);
+        [OperatorKind::M2p, OperatorKind::P2l].map(|kind| {
+            let alpha = self.alpha(kind);
+            if alpha == 0.0 { 0.0 } else { alpha / p2p }
+        })
+    }
+
     /// The modelled cost of `counts`, Σ_k α_k c_k, in nanoseconds.
     pub fn cost(&self, counts: &KindCounts) -> f64 {
         counts
@@ -537,6 +553,21 @@ mod tests {
         counts.add(OperatorKind::P2p, 4);
         assert_eq!(model.cost(&counts), 32.0);
         assert_eq!(counts.sum(&counts).get(OperatorKind::M2l), 20);
+    }
+
+    #[test]
+    fn near_crossovers_are_the_ratios_to_p2p() {
+        let model = CostModel::new([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 0.5]).unwrap();
+        assert_eq!(model.near_crossovers(), [14.0, 8.0]);
+        let free = CostModel::new([1.0, 2.0, 3.0, 0.0, 5.0, 6.0, 7.0, 0.0]).unwrap();
+        assert_eq!(free.near_crossovers(), [f64::INFINITY, 0.0]);
+        // Kathleen's f64 p = 3 Dense constants: about 107 and 35 points
+        // (docs/design/optimisation.md §8a.2).
+        let [w, x] = CostModel::calibrated(M2lStrategy::Dense, 8, 3).near_crossovers();
+        assert!(
+            (107.0..108.0).contains(&w) && (35.0..36.0).contains(&x),
+            "{w}, {x}"
+        );
     }
 
     #[test]

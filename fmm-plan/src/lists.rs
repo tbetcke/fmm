@@ -40,10 +40,14 @@
 //!   per-key rule of [`interaction_manager`](crate::interaction_manager), translated to
 //!   indices. Ghost boxes have empty rows in every view. The exception is a `Global`
 //!   box that is not an ancestor of one of the rank's own coarse blocks: its `v`, `x`
-//!   and `l2l` rows are empty (P2; see [`plan`](super::plan)).
+//!   and `l2l` rows are empty (P2; see [`plan`](super::plan)). Under a near rule
+//!   ([`near`](crate::near), Phase 6 T12) a W entry of a leaf that is itself a leaf, or an
+//!   X entry of a leaf, that the rule converts is in the leaf's `near` row instead of its
+//!   `w` or `x` row.
 //! - **Entry levels.** V entries lie on l, W entries on l + 1, X entries on l − 1 and U
 //!   entries on l − 1, l or l + 1 (2:1 balance). V and W entries are boxes of any kind,
-//!   U and X entries are leaves.
+//!   U and X entries are leaves. A near row's entries lie on l − 1, l or l + 1 under a
+//!   near rule too: a converted W entry lies on l + 1, a converted X entry on l − 1.
 //! - **Sorted rows.** Rows of a grouped view are strictly ascending in their group (offset
 //!   index or octant), so a target meets each group at most once. Rows of `x` and `near`
 //!   are strictly ascending in the entry leaf's (level, key) (P1,
