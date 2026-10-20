@@ -210,8 +210,8 @@ impl ThreadingReport {
 
 impl fmt::Display for ThreadingReport {
     /// For example `rayon threads 4; MPI Funneled; OPENBLAS_NUM_THREADS=1,
-    /// OMP_NUM_THREADS unset (warning), …; ranks per node 12; M2L Auto → Rotation: 12
-    /// ranks per node × 8.7 MB > 64 MB` (the M2L part only once `build` set it), or
+    /// OMP_NUM_THREADS unset (warning), …; ranks per node 12; M2L Auto → PlaneWave: f64
+    /// p = 8 ≥ 7, plane waves on neon` (the M2L part only once `build` set it), or
     /// `…; M2L Batched (named), batched on neon, separate`, or `…; M2L PlaneWave (named),
     /// plane waves on neon`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

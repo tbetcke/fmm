@@ -80,7 +80,7 @@ use std::time::{Duration, Instant};
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
 use nd_fmm_exec::device::{Counters, DataKind, Traffic};
-use nd_fmm_exec::fmm::{Backend, Fmm, FmmBuilder, OperatorKind, Output, Placement};
+use nd_fmm_exec::fmm::{Backend, Fmm, FmmBuilder, NearRuleChoice, OperatorKind, Output, Placement};
 use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_math::RealScalar;
 use nd_fmm_ref::p2p::direct_sum;
@@ -390,14 +390,21 @@ fn run<T: Stored + SimdScalar + Equivalence + Default + RealScalar>(
         .collect();
     let oracle = problem.oracle(&rounded);
     let builder = FmmBuilder::<T>::new(p).gradients(true);
-    let mut host = builder
-        .build(&problem.points, &problem.points, comm)
-        .expect("the host FMM builds");
     let mut device: Fmm<'_, T> = builder
         .clone()
         .backend(backend)
         .build(&problem.points, &problem.points, comm)
         .unwrap_or_else(|error| panic!("{backend}: the device FMM does not build: {error}"));
+    // The host of the device's strategy and near pairs (since Phase 6 T11 the host's `Auto`
+    // resolves to `Batched` or `PlaneWave`, the device's to `Dense` or `Rotation`, and the
+    // near rule's crossovers come from each named strategy's cost model).
+    let mut host = builder
+        .clone()
+        .strategy(device.strategy())
+        .near_rule(same_near_pairs(&device))
+        .max_points_per_leaf(device.max_points_per_leaf())
+        .build(&problem.points, &problem.points, comm)
+        .expect("the host FMM builds");
     let what = format!("{backend}, {precision}, {}, p = {p}", problem.name);
     for kind in OperatorKind::ALL {
         assert_eq!(device.placement(kind), Placement::Device, "{what}: {kind}");
@@ -549,6 +556,8 @@ fn tuning_budget<T: Stored + SimdScalar + Equivalence + Default + RealScalar>(
     let mut host = builder
         .clone()
         .strategy(device.strategy())
+        .near_rule(same_near_pairs(&device))
+        .max_points_per_leaf(device.max_points_per_leaf())
         .build(&problem.points, &problem.points, comm)
         .expect("the host FMM builds");
     let (d, h) = (
@@ -842,4 +851,15 @@ fn describe(r: &Row) -> String {
         r.difference.0,
         r.difference.1
     )
+}
+
+/// The near rule that gives another build the near pairs of `fmm`: its crossovers named,
+/// or off (Phase 6 T11).
+fn same_near_pairs<T: Stored + SimdScalar + Equivalence + Default>(
+    fmm: &Fmm<'_, T>,
+) -> NearRuleChoice {
+    match fmm.near_rule().crossovers {
+        Some([w, x]) => NearRuleChoice::Crossovers { w, x },
+        None => NearRuleChoice::Off,
+    }
 }

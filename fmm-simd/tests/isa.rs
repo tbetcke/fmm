@@ -57,11 +57,17 @@ fn detection_matches_the_architecture() {
         let detected = std::arch::is_x86_feature_detected!("avx2")
             && std::arch::is_x86_feature_detected!("fma");
         assert_eq!(Isa::Avx2.is_available(), detected);
-        let expected = if detected { Isa::Avx2 } else { Isa::Scalar };
-        assert_eq!(Isa::detect(), expected);
-        // AVX-512 needs AVX2 and FMA too, and detection keeps AVX2 until Phase 6 T11.
+        // AVX-512 needs AVX2 and FMA too; detection picks it since Phase 6 T11.
         let avx512 = std::arch::is_x86_feature_detected!("avx512f") && detected;
         assert_eq!(Isa::Avx512.is_available(), avx512);
+        let expected = if avx512 {
+            Isa::Avx512
+        } else if detected {
+            Isa::Avx2
+        } else {
+            Isa::Scalar
+        };
+        assert_eq!(Isa::detect(), expected);
         if !avx512 {
             println!("detection_matches_the_architecture: avx512 not run (no avx512f)");
         }
@@ -71,7 +77,6 @@ fn detection_matches_the_architecture() {
         assert!(!Isa::Avx2.is_available());
         assert!(!Isa::Avx512.is_available());
     }
-    assert_ne!(Isa::detect(), Isa::Avx512);
     #[cfg(target_arch = "aarch64")]
     assert_eq!(Isa::detect(), Isa::Neon);
 }

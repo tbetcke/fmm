@@ -73,7 +73,7 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
 #[cfg(feature = "gpu")]
 use nd_fmm_exec::fmm::Backend;
-use nd_fmm_exec::fmm::{Fmm, FmmBuilder};
+use nd_fmm_exec::fmm::{Fmm, FmmBuilder, NearRuleChoice};
 use nd_fmm_exec::geometry::{Domain, leaf_coordinates, radius};
 use nd_fmm_exec::operator::{Isa, LaplaceOperator, P2pChoice};
 use nd_fmm_exec::tables::M2lStrategy;
@@ -565,10 +565,13 @@ fn strategies_and_threads(
     charges: &[f64],
     comm: &SimpleCommunicator,
 ) {
+    // The near rule off: the strategies compared on M2L alone (Phase 6 T11 made it a
+    // default, with crossovers from each strategy's cost model).
     let build = |strategy, threads| {
         FmmBuilder::<f64>::new(8)
             .strategy(strategy)
             .threads(threads)
+            .near_rule(NearRuleChoice::Off)
             .build(points, points, comm)
             .expect("the FMM builds")
     };
@@ -698,9 +701,24 @@ fn device_gate<
             .collect()
     };
     let builder = FmmBuilder::<T>::new(p);
+    let mut fmm = builder
+        .clone()
+        .backend(backend)
+        .build(points, points, comm)
+        .unwrap_or_else(|error| panic!("{backend}: the device FMM does not build: {error}"));
+    // The host of the device's strategy and near pairs (since Phase 6 T11 `Auto` resolves to
+    // `Batched` or `PlaneWave` on the host, and a named strategy's cost model gives its own
+    // near crossovers).
+    let near = match fmm.near_rule().crossovers {
+        Some([w, x]) => NearRuleChoice::Crossovers { w, x },
+        None => NearRuleChoice::Off,
+    };
     let host = widen(
         &builder
             .clone()
+            .strategy(fmm.strategy())
+            .near_rule(near)
+            .max_points_per_leaf(fmm.max_points_per_leaf())
             .threads(THREADS)
             .build(points, points, comm)
             .expect("the host FMM builds")
@@ -708,11 +726,6 @@ fn device_gate<
             .expect("the host FMM evaluates")
             .potential,
     );
-    let mut fmm = builder
-        .clone()
-        .backend(backend)
-        .build(points, points, comm)
-        .unwrap_or_else(|error| panic!("{backend}: the device FMM does not build: {error}"));
     let report = fmm.device_report().expect("a device backend");
     let layout = format!(
         "P2P {}, leaf operators {}, M2M/L2L/M2L GEMM {} ({} of {} level calls on the library)",
@@ -778,8 +791,13 @@ fn errors_per_list_on_clustered_trees() {
         let (points, sample, charges) = problem(name);
         let mut parts = None;
         for p in PS {
+            // The near rule off: every W and X pair stays M2P and P2L, whose errors this
+            // measures (Phase 6 T11 made the rule a default); the C3.3 problems' 64 points
+            // per leaf, the same tree at every p (the default is 128 from p = 12 since T11).
             let fmm = FmmBuilder::<f64>::new(p)
                 .threads(THREADS)
+                .near_rule(NearRuleChoice::Off)
+                .max_points_per_leaf(64)
                 .build(&points, &points, &comm)
                 .expect("the FMM builds");
             let leaves = points_by_leaf(&points, fmm.plan(), fmm.domain());
@@ -901,10 +919,12 @@ fn plane_wave_gate(
             .collect()
     };
     for p in [8, 12, 18] {
+        // The near rule off: PlaneWave against the exact M2L at equal near pairs.
         let build = |strategy, threads| {
             FmmBuilder::<f64>::new(p)
                 .strategy(strategy)
                 .threads(threads)
+                .near_rule(NearRuleChoice::Off)
                 .build(points, points, comm)
                 .expect("the FMM builds")
         };

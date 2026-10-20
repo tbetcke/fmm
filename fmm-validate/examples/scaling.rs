@@ -69,15 +69,20 @@
 //! - `--p2p auto|reference|scalar|neon|avx2|avx512` the P2P kernel (`FmmBuilder::p2p_kernel`,
 //!   auto; an ISA this machine lacks is refused before MPI starts; Phase 6 T6), which on
 //!   the host also runs the batched M2L's kernel (the summary's `p2p`, resolved);
-//! - `--mul-add separate|fused` the batched M2L's multiply–add mode
-//!   (`FmmBuilder::m2l_mul_add`; separate, bit for bit `dense`);
-//! - `--budget MB` the node budget of `auto` in MB of 10⁶ bytes
-//!   (`FmmBuilder::dense_node_budget`; the library's 64 if not given; Phase 5N T4:
-//!   `tools/scaling/run.sh` passes 56 on the M3 Max and 96 on locust and Kathleen);
+//! - `--mul-add auto|separate|fused` the batched M2L's multiply–add mode
+//!   (`FmmBuilder::m2l_mul_add`; `auto`, the library's default of p since Phase 6 T11:
+//!   fused from p = 6, else separate, bit for bit `dense`);
+//! - `--budget MB` the node budget in MB of 10⁶ bytes (`FmmBuilder::dense_node_budget`;
+//!   the library's 64 if not given; Phase 5N T4: `tools/scaling/run.sh` passes 56 on the
+//!   M3 Max and 96 on locust and Kathleen; reported only since Phase 6 T11, whose rule of
+//!   `auto` does not read it);
 //! - `--overlap off|on|both` (both: one build, the evaluations alternating, a block each);
 //! - `--input share|rank0|owners|ranges` (share; `ranges`: contiguous index ranges, found
 //!   in O(N/P) time, for N above 10⁹);
 //! - `--evals k` timed evaluations per path (10), `--builds b` (1);
+//! - `--leaf-size n` the refinement target, points per leaf (`FmmBuilder::max_points_per_leaf`;
+//!   Phase 6 T11; the library's default of p and the backend if not given, the summary's
+//!   `leaf`);
 //! - `--errors k` charge vectors of the errors against the direct sum at `--sampled s`
 //!   targets (0, not checked; 1,000 targets);
 //! - `--reference` the one-rank FMM over every point on rank 0, of the strategy the run
@@ -90,8 +95,8 @@
 //!   M2M, M2L and L2L parts per rank and the time per V pair (Phase 5N T3);
 //! - `--cut work|points` the blocks cut again by the modelled cost of their work (`work`,
 //!   the library's default, `FmmBuilder::work_cut`; Phase 5S T7) or by points only;
-//! - `--near off|cost|W,X` the near rule (`FmmBuilder::near_rule`, Phase 6 T12; off, the
-//!   library's default): W and X pairs between leaves whose fine leaf holds fewer points
+//! - `--near off|cost|W,X` the near rule (`FmmBuilder::near_rule`, Phase 6 T12; `cost`,
+//!   the library's default since Phase 6 T11): W and X pairs between leaves whose fine leaf holds fewer points
 //!   than the crossovers run as P2P, with the crossovers of the cost model (`cost`) or
 //!   named (`12,6`); the report gives the crossovers and the pairs converted;
 //! - `--routing direct|tree|treeF` how the multipole exchange routes the multipoles
@@ -193,9 +198,14 @@ fn arguments() -> Arguments {
                 }
             }
             "--mul-add" => {
-                s.m2l_mul_add = value
-                    .parse()
-                    .unwrap_or_else(|error| fail(&format!("--mul-add: {error}")));
+                s.m2l_mul_add = match value.as_str() {
+                    "auto" => None,
+                    _ => Some(
+                        value
+                            .parse()
+                            .unwrap_or_else(|error| fail(&format!("--mul-add: {error}"))),
+                    ),
+                };
             }
             "--reference-strategy" => s.reference_strategy = Some(strategy(&flag, &value)),
             "--overlap" => {
@@ -262,6 +272,7 @@ fn arguments() -> Arguments {
             }
             "--evals" => s.evaluations = number(),
             "--builds" => s.builds = number().max(1),
+            "--leaf-size" => s.max_points_per_leaf = Some(number().max(1)),
             "--errors" => s.vectors = number(),
             "--rhs" => s.rhs = number().max(1),
             "--backend" => {

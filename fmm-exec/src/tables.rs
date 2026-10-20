@@ -30,9 +30,9 @@
 //! ```
 //! use nd_fmm_exec::tables::{M2lStrategy, Tables};
 //!
-//! // `Auto` on one rank: Dense, since the dense tables at p = 2 are small (0.2 MB).
+//! // `Auto` at f64 p = 2: Batched, with Dense's tables (Phase 6 T11).
 //! let tables = Tables::<f64>::build(2, M2lStrategy::Auto);
-//! assert_eq!(tables.strategy(), M2lStrategy::Dense);
+//! assert_eq!(tables.strategy(), M2lStrategy::Batched);
 //!
 //! // The M2L of offset index 0, d = (−3, −3, −3), of a unit monopole.
 //! let mut scratch = tables.scratch();
@@ -76,7 +76,7 @@ pub enum M2lStrategy {
     /// `Dense`'s bit for bit; with the opt-in fused mode (`FmmBuilder::m2l_mul_add`) it
     /// is within n u of it. M2M and L2L are `Dense`'s. The device runs it as `Dense`,
     /// whose dense M2L is already a product per level (docs/design/device-path.md §6.4).
-    /// Opt-in: [`Auto`](Self::Auto) never resolves to it (until Phase 6 T11).
+    /// [`Auto`](Self::Auto)'s choice on the host at f64 p ≤ 6 and f32 p ≤ 7 (Phase 6 T11).
     Batched,
     /// M2L by plane waves with merge and shift (Phase 6 T13, C6.5; CONVENTIONS §3.14,
     /// `nd_fmm_tables::plane_wave`): each level call converts the multipoles it reads into
@@ -87,11 +87,11 @@ pub enum M2lStrategy {
     /// (`nd_fmm_tables::plane_wave::nodes_for_degree`); not `Dense`'s bits, but
     /// deterministic, the same at every thread count and overlap setting, and on P ranks
     /// the one-rank output bit for bit. M2M and L2L are `Rotation`'s. The device runs it as
-    /// `Dense`, with dense tables the device path builds. Opt-in: [`Auto`](Self::Auto)
-    /// never resolves to it (until Phase 6 T11).
+    /// `Dense`, with dense tables the device path builds. [`Auto`](Self::Auto)'s choice on
+    /// the host at f64 p ≥ 7 and f32 p ≥ 8 (Phase 6 T11).
     PlaneWave,
-    /// [`Dense`](Self::Dense) while the dense tables of a rank, and of all the ranks of a
-    /// node together, are small enough, [`Rotation`](Self::Rotation) otherwise; see
+    /// On the host [`Batched`](Self::Batched) below a degree that depends on the
+    /// precision and [`PlaneWave`](Self::PlaneWave) from it (Phase 6 T11); see
     /// [`resolve_on_node`](Self::resolve_on_node).
     #[default]
     Auto,
@@ -107,9 +107,31 @@ impl M2lStrategy {
     )]
     pub const AUTO_DENSE_MAX_P: usize = 8;
 
-    /// The dense tables of one rank, D(p, T) bytes ([`NodeContext::dense_rank_bytes`]),
-    /// above which [`Auto`](Self::Auto) resolves to [`Rotation`](Self::Rotation) whatever
-    /// the node: f64 p ≤ 6 (6.4 MB) and f32 p ≤ 8 (8.7 MB) lie below it, f64 p = 7
+    /// The lowest degree at which [`Auto`](Self::Auto) resolves to
+    /// [`PlaneWave`](Self::PlaneWave) on the host in f64 (Phase 6 T11): below it
+    /// [`Batched`](Self::Batched).
+    pub const AUTO_PLANE_WAVE_MIN_P_F64: usize = 7;
+
+    /// The lowest degree at which [`Auto`](Self::Auto) resolves to
+    /// [`PlaneWave`](Self::PlaneWave) on the host in f32 (Phase 6 T11): below it
+    /// [`Batched`](Self::Batched).
+    pub const AUTO_PLANE_WAVE_MIN_P_F32: usize = 8;
+
+    /// The lowest degree at which [`Auto`](Self::Auto) resolves to
+    /// [`PlaneWave`](Self::PlaneWave) for values of `value_bytes` bytes: 4 is f32, every
+    /// other size takes f64's.
+    pub const fn auto_plane_wave_min_p(value_bytes: usize) -> usize {
+        if value_bytes == 4 {
+            Self::AUTO_PLANE_WAVE_MIN_P_F32
+        } else {
+            Self::AUTO_PLANE_WAVE_MIN_P_F64
+        }
+    }
+
+    /// The cap of the rule of Phase 5N T4 (no longer used by [`Auto`](Self::Auto) since
+    /// Phase 6 T11): the dense tables of one rank, D(p, T) bytes
+    /// ([`NodeContext::dense_rank_bytes`]), above which that rule resolved to
+    /// [`Rotation`](Self::Rotation) whatever the node: f64 p ≤ 6 (6.4 MB) and f32 p ≤ 8 (8.7 MB) lie below it, f64 p = 7
     /// (10.9 MB) and f32 p = 9 (13.3 MB) above. Dense wins on one rank at the first and
     /// loses at f64 p = 8 on every machine measured (docs/design/node-m2l.md §2.1, §3).
     /// Between them the measurements of Phase 5N T4 split (one rank, N = 10⁶): at f64
@@ -118,9 +140,10 @@ impl M2lStrategy {
     /// the cap stays, as signed off (docs/design/node-m2l.md, "Outcome").
     pub const AUTO_DENSE_RANK_BYTES: usize = 9_000_000;
 
-    /// The default node budget of [`Auto`](Self::Auto): the private dense tables of all
-    /// the ranks of a node, ranks per node × D(p, T), above which it resolves to
-    /// [`Rotation`](Self::Rotation). 64 MB is the signed-off machine-independent default
+    /// The default node budget ([`NodeContext::node_budget`]; no longer used by
+    /// [`Auto`](Self::Auto)'s host rule since Phase 6 T11): under the rule of Phase 5N T4
+    /// the private dense tables of all the ranks of a node, ranks per node × D(p, T),
+    /// above which it resolved to [`Rotation`](Self::Rotation). 64 MB is the signed-off machine-independent default
     /// (docs/design/node-m2l.md §4): no single budget suits every machine and precision,
     /// so a machine may set its own (`FmmBuilder::dense_node_budget`). The harness uses
     /// 96 MB on locust and Kathleen, whose larger shared caches keep Dense faster at f32
@@ -140,13 +163,33 @@ impl M2lStrategy {
     }
 
     /// Returns the strategy used in the node context `node`: `self`, or for
-    /// [`Auto`](Self::Auto) [`Dense`](Self::Dense) iff the dense tables of one rank,
-    /// D(p, T) = 332 (p + 1)⁴ · size_of(T) bytes, are at most
-    /// [`AUTO_DENSE_RANK_BYTES`](Self::AUTO_DENSE_RANK_BYTES) and those of the node,
-    /// ranks per node × D(p, T), at most the node budget; [`Rotation`](Self::Rotation)
-    /// otherwise. Never returns `Auto`. [`choose`](Self::choose) also gives the reason.
+    /// [`Auto`](Self::Auto) [`PlaneWave`](Self::PlaneWave) from degree
+    /// [`auto_plane_wave_min_p`](Self::auto_plane_wave_min_p) (f64 p ≥ 7, f32 p ≥ 8) and
+    /// [`Batched`](Self::Batched) below it, whatever the ranks per node and the budget.
+    /// Never returns `Auto`. [`choose`](Self::choose) also gives the reason.
     ///
-    /// *Source of the rule* (Phase 5N T4, signed off as rule B of docs/design/
+    /// *Source of the rule* (Phase 6 T11, decision 7 of docs/phase6/README.md, signed off
+    /// on 2026-10-20; fmm-validate/results/phase6.md). Measured on one node of each
+    /// machine (the M3 Max, locust and Kathleen with AVX-512), the cube and the Plummer
+    /// sphere at N = 10⁶ and 10⁷, f64 p = 3, 6, 7 (Kathleen), 8, 12, 18 and f32 p = 3, 6,
+    /// 7 (Kathleen), 8, at one rank per core, Phase 5N's split and one rank per node:
+    /// Batched (fused from p = 6, `FmmBuilder::m2l_mul_add`) was the fastest strategy or
+    /// within 1.05 of it at f64 p ≤ 6 and f32 p ≤ 7 on Kathleen (within 1.15 on the NEON
+    /// machines but at f64 p = 6 on the M3 Max, below), PlaneWave the fastest at f64 p ≥ 7
+    /// and f32 p = 8 (within 1.05) everywhere; the evaluation 1.1–11.5× faster than under
+    /// the rule of Phase 5N below (0.92 in the worst cell, f64 p = 3 on locust at 72 ranks);
+    /// Rotation, Dense and Classes were never the fastest. Both hold their
+    /// tables once per rank, and at one rank per core Batched's dense tables (6.4 MB at
+    /// f64 p = 6) cost less than Dense's per-target reads did, so the node budget no longer
+    /// enters. The exception left: at f64 p = 6 PlaneWave was 4–28 % faster on the M3 Max
+    /// (mixed on locust, slower on Kathleen), kept on Batched for one machine-independent
+    /// threshold.
+    ///
+    /// *The rule of Phase 5N T4 before it*: [`Dense`](Self::Dense) iff the dense tables of
+    /// one rank, D(p, T) = 332 (p + 1)⁴ · size_of(T) bytes, were at most
+    /// [`AUTO_DENSE_RANK_BYTES`](Self::AUTO_DENSE_RANK_BYTES) and those of the node, ranks
+    /// per node × D(p, T), at most the node budget; [`Rotation`](Self::Rotation)
+    /// otherwise. *Its source* (Phase 5N T4, signed off as rule B of docs/design/
     /// node-m2l.md §4 on 2026-10-11, decision 5 of docs/phase5n/README.md). Every rank
     /// holds its own dense tables (316 M2L and 16 octant matrices), and a dense M2L reads
     /// a different matrix for every V pair, so the tables are streamed from the nearest
@@ -184,13 +227,11 @@ impl M2lStrategy {
         if self != Self::Auto {
             return StrategyChoice::Named(self);
         }
-        let rank = node.dense_rank_bytes();
-        let strategy =
-            if rank <= Self::AUTO_DENSE_RANK_BYTES && node.dense_node_bytes() <= node.node_budget {
-                Self::Dense
-            } else {
-                Self::Rotation
-            };
+        let strategy = if node.p >= Self::auto_plane_wave_min_p(node.value_bytes) {
+            Self::PlaneWave
+        } else {
+            Self::Batched
+        };
         StrategyChoice::Node {
             strategy,
             node: *node,
@@ -200,6 +241,8 @@ impl M2lStrategy {
 
 /// The inputs of [`M2lStrategy::Auto`]'s rule on the host ([`M2lStrategy::resolve_on_node`];
 /// Phase 5N T4, docs/design/node-m2l.md §4): every one the same on every rank of a run.
+/// Since Phase 6 T11 the rule reads p and the value's bytes only; the ranks per node and
+/// the budget stay reported.
 ///
 /// `FmmBuilder::build` takes p and the precision from its settings, the budget from
 /// `FmmBuilder::dense_node_budget`, and the ranks per node from one `split_shared` of
@@ -258,8 +301,7 @@ impl NodeContext {
 /// The strategy of a build and why it was chosen: [`M2lStrategy::choose`], and
 /// `FmmBuilder::build` for the device path; reported in `ThreadingReport::m2l`.
 ///
-/// Its `Display` is the reason, for reports: for example `Auto → Rotation: 12 ranks per
-/// node × 8.7 MB > 64 MB`.
+/// Its `Display` is the reason, for reports: for example `Auto → PlaneWave: f64 p = 8 ≥ 7`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StrategyChoice {
     /// A strategy the builder named, never overridden.
@@ -267,7 +309,7 @@ pub enum StrategyChoice {
     /// [`M2lStrategy::Auto`] resolved by the rule of [`M2lStrategy::resolve_on_node`] in
     /// the context `node`.
     Node {
-        /// The resolved strategy: [`M2lStrategy::Dense`] or [`M2lStrategy::Rotation`].
+        /// The resolved strategy: [`M2lStrategy::Batched`] or [`M2lStrategy::PlaneWave`].
         strategy: M2lStrategy,
         /// The inputs of the rule.
         node: NodeContext,
@@ -287,46 +329,21 @@ impl StrategyChoice {
     }
 }
 
-/// `bytes` in MB (10⁶ bytes), one decimal, without a trailing `.0`.
-fn megabytes(bytes: usize) -> String {
-    let text = format!("{:.1}", bytes as f64 / 1e6);
-    match text.strip_suffix(".0") {
-        Some(whole) => whole.to_owned(),
-        None => text,
-    }
-}
-
 impl fmt::Display for StrategyChoice {
-    /// `Rotation (named)`; `Auto → Dense: 4 ranks per node × 6.4 MB ≤ 64 MB`, `Auto →
-    /// Rotation: 17.4 MB per rank > 9 MB` or `Auto → Rotation: 12 ranks per node × 8.7 MB
-    /// > 64 MB`; `Auto → Dense (the device path)`.
+    /// `Rotation (named)`; `Auto → Batched: f64 p = 6 < 7` or `Auto → PlaneWave: f32 p = 8
+    /// ≥ 8`; `Auto → Dense (the device path)`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Self::Named(strategy) => write!(f, "{strategy:?} (named)"),
             Self::Device(strategy) => write!(f, "Auto → {strategy:?} (the device path)"),
             Self::Node { strategy, node } => {
-                let rank = node.dense_rank_bytes();
-                write!(f, "Auto → {strategy:?}: ")?;
-                if rank > M2lStrategy::AUTO_DENSE_RANK_BYTES {
-                    return write!(
-                        f,
-                        "{} MB per rank > {} MB",
-                        megabytes(rank),
-                        megabytes(M2lStrategy::AUTO_DENSE_RANK_BYTES)
-                    );
-                }
-                let ranks = node.ranks_per_node;
+                let precision = if node.value_bytes == 4 { "f32" } else { "f64" };
+                let threshold = M2lStrategy::auto_plane_wave_min_p(node.value_bytes);
+                let relation = if node.p >= threshold { "≥" } else { "<" };
                 write!(
                     f,
-                    "{ranks} rank{} per node × {} MB {} {} MB",
-                    if ranks == 1 { "" } else { "s" },
-                    megabytes(rank),
-                    if strategy == M2lStrategy::Dense {
-                        "≤"
-                    } else {
-                        ">"
-                    },
-                    megabytes(node.node_budget)
+                    "Auto → {strategy:?}: {precision} p = {} {relation} {threshold}",
+                    node.p
                 )
             }
         }

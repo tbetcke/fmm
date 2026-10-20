@@ -482,7 +482,12 @@ fn header_table(report: &Report) -> String {
                     |l| l.to_string()
                 ),
                 o.leaf_size.map_or_else(
-                    || format!("{DEFAULT_MAX_POINTS_PER_LEAF} (default)"),
+                    || {
+                        format!(
+                            "the default of p and the backend ({DEFAULT_MAX_POINTS_PER_LEAF}; on \
+                             the host 128 from p = 12, on Metal 128 at p = 6–7 and 256 from p = 8)"
+                        )
+                    },
                     |l| l.to_string()
                 )
             ),
@@ -1036,7 +1041,7 @@ mod tests {
 | command | `nd-fmm-bench --n 2000` |
 | environment | OPENBLAS_NUM_THREADS=1, RAYON_NUM_THREADS unset |
 | problem | N points uniform in the unit cube [0, 1]^3 (`points::cube`, seed 0xbe9c), sources equal to targets, charges uniform in [-1, 1) from the same generator; gradients on |
-| tree | adaptive; max_level 8; refinement target 64 (default) points per leaf |
+| tree | adaptive; max_level 8; refinement target the default of p and the backend (64; on the host 128 from p = 12, on Metal 128 at p = 6–7 and 256 from p = 8) points per leaf |
 | M2L strategy | auto |
 | threads | 2; host and host-fallback threads (on the CPU runtime, its units per cube) |
 | timing | 1 warm-up, then 2 timed evaluations; kind timings `sync` in a second build |

@@ -187,8 +187,8 @@
 //!
 //! P2P runs the kernel of [`P2pChoice`], set by [`with_p2p`](LaplaceOperator::with_p2p)
 //! and by default [`P2pChoice::Auto`]: `nd_fmm_simd::P2pKernel` on the default ISA of the
-//! machine (NEON on aarch64, AVX2 + FMA on x86_64 if the CPU has it, AVX-512 machines
-//! included until Phase 6 T11, else its scalar path). [`P2pChoice::Reference`] keeps `nd_fmm_ref::p2p::p2p`, the P2P of Phase 3, as
+//! machine (NEON on aarch64; on x86_64 AVX-512 where the CPU has AVX-512F, AVX2 and FMA,
+//! since Phase 6 T11, else AVX2 + FMA if it has them; else its scalar path). [`P2pChoice::Reference`] keeps `nd_fmm_ref::p2p::p2p`, the P2P of Phase 3, as
 //! the trusted slower path; [`P2pChoice::Isa`] picks an ISA, for tests and benchmarks.
 //! [`p2p_kernel`](LaplaceOperator::p2p_kernel) reports the kernel that runs.
 //!
@@ -429,9 +429,8 @@ pub const M2L_BLOCK_TARGETS: usize = 64;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum P2pChoice {
     /// The kernel of `nd-fmm-simd` on the default ISA of this machine ([`Isa::detect`]):
-    /// NEON on aarch64, AVX2 + FMA on x86_64 if the CPU has it (on an AVX-512 machine
-    /// too, until Phase 6 T11 decides; `Isa(Isa::Avx512)` selects AVX-512), else the
-    /// scalar path.
+    /// NEON on aarch64; on x86_64 AVX-512 where the CPU has AVX-512F, AVX2 and FMA (since
+    /// Phase 6 T11), else AVX2 + FMA if it has them; else the scalar path.
     #[default]
     Auto,
     /// `nd_fmm_ref::p2p::p2p`, the P2P of Phase 3.

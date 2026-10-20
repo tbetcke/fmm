@@ -36,10 +36,10 @@
 //! - On aarch64 NEON is part of the base architecture, so [`Isa::Neon`] needs no
 //!   detection. On x86_64, `is_x86_feature_detected!` for `avx2` and `fma` decides
 //!   [`Isa::Avx2`].
-//! - [`Isa::detect`] picks the default ISA: NEON on aarch64, AVX2 if detected on x86_64,
-//!   else scalar. It never picks [`Isa::Avx512`]: an AVX-512 machine runs AVX2 by default
-//!   until Phase 6 T11 signs AVX-512 off from measurements inside the FMM on a fully
-//!   loaded node (docs/design/optimisation.md §5.3); select it explicitly until then.
+//! - [`Isa::detect`] picks the default ISA: NEON on aarch64; on x86_64 AVX-512 where
+//!   AVX-512F, AVX2 and FMA are detected (since Phase 6 T11, from measurements inside the
+//!   FMM on a fully loaded node; docs/design/optimisation.md §5.3), else AVX2; else
+//!   scalar.
 //! - [`P2pKernel::new`] fails with [`IsaUnavailable`] for an ISA the machine cannot
 //!   run, so a kernel always holds an available ISA. [`P2pKernel::detect`] uses
 //!   [`Isa::detect`]. Every ISA is selectable explicitly, for tests and benchmarks.

@@ -145,8 +145,8 @@ correctness only, never timings, never ignored or release tests and never more t
 ranks. `.github/scripts/run-mpi-tests.sh` builds them in debug without running them
 (`cargo test -p … --test … --no-run`, `cargo build -p nd-octree --example …`), takes
 their paths from cargo's `--message-format=json` output, and launches each under
-`timeout` (600 s since Phase 6 T2; 300 s before, which a slow runner exceeded with
-`mpi_exec` at 4 ranks), the tests with `--test-threads=1 --nocapture`, with
+`timeout` (900 s since Phase 6 T11, 600 s since Phase 6 T2; 300 s before, which a slow
+runner exceeded with `mpi_exec` at 4 ranks), the tests with `--test-threads=1 --nocapture`, with
 `RUST_MIN_STACK=8388608` and the BLAS thread variables at 1; the run steps have their own
 `timeout-minutes`. It covers `nd-fmm-plan`'s `mpi_regressions`, `nd-fmm-exec`'s
 `mpi_exec`, `mpi_threading` and `invariance` (rank-count invariance, Phase 5S T2), and the

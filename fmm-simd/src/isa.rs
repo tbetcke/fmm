@@ -12,9 +12,9 @@ use crate::SimdScalar;
 /// code of an architecture-specific ISA is compiled only for its architecture.
 ///
 /// [`Isa::Avx512`] joined in Phase 6 T6 (docs/design/optimisation.md §5); the enum is
-/// `#[non_exhaustive]`, so a later ISA is not a breaking change either. It is selectable
-/// wherever the CPU has it, but [`Isa::detect`] keeps [`Isa::Avx2`] on an AVX-512 machine
-/// until Phase 6 T11 signs it off as the default (§5.3 there).
+/// `#[non_exhaustive]`, so a later ISA is not a breaking change either. Since Phase 6 T11
+/// (decision 7 of docs/phase6/README.md) [`Isa::detect`] picks it wherever the CPU has
+/// AVX-512F, AVX2 and FMA.
 ///
 /// ```
 /// use nd_fmm_simd::Isa;
@@ -24,7 +24,6 @@ use crate::SimdScalar;
 /// assert_eq!(Isa::Avx2.lanes::<f32>(), 8);
 /// assert_eq!(Isa::Avx512.lanes::<f64>(), 8);
 /// assert_eq!(Isa::Neon.to_string(), "neon");
-/// assert_ne!(Isa::detect(), Isa::Avx512);
 /// ```
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -39,7 +38,7 @@ pub enum Isa {
     Avx2,
     /// x86_64 AVX-512F, 512-bit vectors (Phase 6 T6). Detected at run time, together
     /// with AVX2 and FMA, which every AVX-512F CPU has and the compiler may use beside
-    /// it. Never chosen by [`Isa::detect`] (yet); select it explicitly.
+    /// it. [`Isa::detect`]'s choice where the CPU has them (since Phase 6 T11).
     Avx512,
 }
 
@@ -80,11 +79,14 @@ impl Features {
         }
     }
 
-    /// The ISA [`Isa::detect`] picks with these features: AVX2 + FMA, else NEON, else
-    /// scalar. Never [`Isa::Avx512`]: the default stays AVX2 on an AVX-512 machine until
-    /// Phase 6 T11 signs it off (docs/design/optimisation.md §5.3).
+    /// The ISA [`Isa::detect`] picks with these features: AVX-512F with AVX2 + FMA, else
+    /// AVX2 + FMA, else NEON, else scalar (AVX-512 since Phase 6 T11, which measured it
+    /// faster than AVX2, or equal within run-to-run variation, inside the FMM on every
+    /// configuration of a fully loaded Cascade Lake node; docs/design/optimisation.md §5.3).
     pub(crate) fn detect(self) -> Isa {
-        if self.runs(Isa::Avx2) {
+        if self.runs(Isa::Avx512) {
+            Isa::Avx512
+        } else if self.runs(Isa::Avx2) {
             Isa::Avx2
         } else if self.runs(Isa::Neon) {
             Isa::Neon
@@ -95,14 +97,16 @@ impl Features {
 }
 
 impl Isa {
-    /// The default ISA of this machine: [`Isa::Neon`] on aarch64, [`Isa::Avx2`] on
-    /// x86_64 when the CPU has both AVX2 and FMA, else [`Isa::Scalar`].
+    /// The default ISA of this machine: [`Isa::Neon`] on aarch64; on x86_64
+    /// [`Isa::Avx512`] when the CPU has AVX-512F, AVX2 and FMA, else [`Isa::Avx2`] when it
+    /// has AVX2 and FMA; else [`Isa::Scalar`].
     ///
-    /// An AVX-512 machine gets [`Isa::Avx2`]: [`Isa::Avx512`] changes the bits of every
-    /// output (another inverse-square-root estimate), and Cascade Lake lowers a core's
-    /// clock while it runs 512-bit code, so it becomes the default only where Phase 6
-    /// measures it faster inside the FMM, at T11's sign-off
-    /// (docs/design/optimisation.md §5.3).
+    /// AVX-512 is the default since Phase 6 T11 (decision 7 of docs/phase6/README.md): it
+    /// changes the bits of P2P's terms against AVX2 (another inverse-square-root
+    /// estimate), within the same contract, and Cascade Lake lowers a core's clock while
+    /// it runs 512-bit code, but measured inside the FMM on a fully loaded node it was
+    /// faster than AVX2 or equal within run-to-run variation everywhere
+    /// (docs/design/optimisation.md §5.3; only Cascade Lake was timed).
     ///
     /// Detection reads the CPU, never an environment variable. On x86_64 `std` caches
     /// the result of the CPUID query, so repeated calls are cheap.
@@ -223,21 +227,23 @@ mod tests {
     }
 
     /// The dispatch rule with forced feature sets (docs/design/optimisation.md §5.4):
-    /// detection picks an ISA the set runs, never AVX-512, and AVX2 wherever the set has
-    /// it, AVX-512F included; AVX-512 runs only with AVX-512F, AVX2 and FMA.
+    /// detection picks an ISA the set runs, AVX-512 wherever the set runs it (Phase 6
+    /// T11), else AVX2 wherever the set has it; AVX-512 runs only with AVX-512F, AVX2 and
+    /// FMA.
     #[test]
     fn dispatch_with_forced_features() {
         for features in every_feature_set() {
             let detected = features.detect();
             assert!(features.runs(detected), "{features:?}: {detected}");
-            assert_ne!(detected, Isa::Avx512, "{features:?}");
             assert!(features.runs(Isa::Scalar));
             assert_eq!(
                 features.runs(Isa::Avx512),
                 features.avx512f && features.avx2_fma,
                 "{features:?}"
             );
-            if features.avx2_fma {
+            if features.runs(Isa::Avx512) {
+                assert_eq!(detected, Isa::Avx512, "{features:?}");
+            } else if features.avx2_fma {
                 assert_eq!(detected, Isa::Avx2, "{features:?}");
             }
         }
@@ -246,7 +252,13 @@ mod tests {
             avx2_fma: true,
             avx512f: true,
         };
-        assert_eq!(cascade_lake.detect(), Isa::Avx2);
+        assert_eq!(cascade_lake.detect(), Isa::Avx512);
+        let avx512f_alone = Features {
+            neon: false,
+            avx2_fma: false,
+            avx512f: true,
+        };
+        assert_eq!(avx512f_alone.detect(), Isa::Scalar);
         assert!(cascade_lake.runs(Isa::Avx512));
         let none = Features {
             neon: false,

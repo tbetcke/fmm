@@ -45,7 +45,7 @@ use mpi::Threading;
 use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
-use nd_fmm_exec::fmm::{Backend, FmmBuilder, SourceType, Sources};
+use nd_fmm_exec::fmm::{Backend, FmmBuilder, NearRuleChoice, SourceType, Sources};
 use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_math::RealScalar;
 use nd_fmm_ref::p2p::{direct_sum, direct_sum_dipoles};
@@ -179,6 +179,10 @@ struct Case {
     backend: Backend,
     error: f64,
     difference: f64,
+    /// On a device, the error of the host `Fmm` of the device's strategy and near pairs
+    /// (Phase 6 T11: the host's `Auto` may resolve another strategy); the host's error
+    /// otherwise.
+    reference: f64,
 }
 
 /// The device backends compiled in that run the gate in `precision` (Phase 6 T8d): the CPU
@@ -211,7 +215,7 @@ fn measure<T: Stored + SimdScalar + Equivalence + Default>(
     exact: &[Vec<f64>],
     sampled: &[(usize, usize)],
     (devices, comm): (&[Backend], &SimpleCommunicator),
-) -> (f64, Vec<(Backend, f64, f64)>) {
+) -> (f64, Vec<(Backend, f64, f64, f64)>) {
     let mine: Vec<[f64; 3]> = local.iter().map(|&i| points[i]).collect();
     let mut fmm = builder::<T>(name, p, kind)
         .build(&mine, &mine, comm)
@@ -225,7 +229,20 @@ fn measure<T: Stored + SimdScalar + Equivalence + Default>(
                 .threads(threads)
                 .build(&mine, &mine, comm)
                 .unwrap_or_else(|error| panic!("{backend}, {name}, {kind}, p = {p}: {error}"));
-            (backend, fmm)
+            // The host of the device's strategy and near pairs, for the difference: since
+            // Phase 6 T11 the host's `Auto` resolves to `Batched` or `PlaneWave`, the device's
+            // to `Dense` or `Rotation`, and a named strategy's cost model gives its own
+            // crossovers.
+            let near = match fmm.near_rule().crossovers {
+                Some([w, x]) => NearRuleChoice::Crossovers { w, x },
+                None => NearRuleChoice::Off,
+            };
+            let host = builder::<T>(name, p, kind)
+                .strategy(fmm.strategy())
+                .near_rule(near)
+                .build(&mine, &mine, comm)
+                .unwrap_or_else(|error| panic!("{name}, {kind}, p = {p}: {error}"));
+            (backend, fmm, host)
         })
         .collect();
     let error = |output: &[T], exact: &[f64]| -> f64 {
@@ -240,7 +257,7 @@ fn measure<T: Stored + SimdScalar + Equivalence + Default>(
         total[0] / total[1]
     };
     let mut squares = 0.0;
-    let mut device_squares = vec![(0.0, 0.0); devices.len()];
+    let mut device_squares = vec![(0.0, 0.0, 0.0); devices.len()];
     for ((charges, dipoles), exact) in vectors.iter().zip(exact) {
         let q: Vec<T> = local.iter().map(|&i| T::from_f64(charges[i])).collect();
         let d: Vec<[T; 3]> = local.iter().map(|&i| dipoles[i].map(T::from_f64)).collect();
@@ -250,13 +267,17 @@ fn measure<T: Stored + SimdScalar + Equivalence + Default>(
         };
         let output = fmm.evaluate_sources(&sources).expect("the FMM evaluates");
         squares += error(&output.potential, exact);
-        for ((backend, device), squares) in on_devices.iter_mut().zip(&mut device_squares) {
+        for ((backend, device, host), squares) in on_devices.iter_mut().zip(&mut device_squares) {
             let got = device
                 .evaluate_sources(&sources)
                 .unwrap_or_else(|error| panic!("{backend}: the device evaluates: {error}"));
             squares.0 += error(&got.potential, exact);
+            let want = host
+                .evaluate_sources(&sources)
+                .expect("the host reference evaluates");
+            squares.2 += error(&want.potential, exact);
             let mut sums = [0.0f64; 2];
-            for (&g, &h) in got.potential.iter().zip(&output.potential) {
+            for (&g, &h) in got.potential.iter().zip(&want.potential) {
                 let (g, h) = (RealScalar::to_f64(g), RealScalar::to_f64(h));
                 sums[0] += (g - h).powi(2);
                 sums[1] += h * h;
@@ -270,7 +291,14 @@ fn measure<T: Stored + SimdScalar + Equivalence + Default>(
     let on_devices = devices
         .iter()
         .zip(device_squares)
-        .map(|(&backend, (e, d))| (backend, (e / count).sqrt(), (d / count).sqrt()))
+        .map(|(&backend, (e, d, r))| {
+            (
+                backend,
+                (e / count).sqrt(),
+                (d / count).sqrt(),
+                (r / count).sqrt(),
+            )
+        })
         .collect();
     ((squares / count).sqrt(), on_devices)
 }
@@ -343,7 +371,7 @@ fn dipole_fmm_within_its_gates() {
                              prediction {prediction:.2e}, ratio {:.2}",
                             error / prediction
                         );
-                        for &(backend, device, difference) in &on_devices {
+                        for &(backend, device, difference, _) in &on_devices {
                             eprintln!(
                                 "  {backend}, every kind on the device: error {device:.3e} \
                                  ({:.4} of the host's), φ {difference:.1e} from the host's",
@@ -359,8 +387,9 @@ fn dipole_fmm_within_its_gates() {
                         backend: Backend::Host,
                         error,
                         difference: 0.0,
+                        reference: error,
                     });
-                    for (backend, device, difference) in on_devices {
+                    for (backend, device, difference, reference) in on_devices {
                         cases.push(Case {
                             name,
                             kind,
@@ -369,6 +398,7 @@ fn dipole_fmm_within_its_gates() {
                             backend,
                             error: device,
                             difference,
+                            reference,
                         });
                     }
                 }
@@ -394,20 +424,23 @@ fn dipole_fmm_within_its_gates() {
             } else {
                 (5e-2, 1e-5)
             };
-            if (case.error - host.error).abs() > error_bound * host.error
+            // Against the host of the device's strategy (`reference`).
+            if (case.error - case.reference).abs() > error_bound * case.reference
                 || case.difference > difference_bound
             {
                 failures.push(format!(
                     "{}, {}, {}, {}, p = {}: error {:e} against the host's {:e} (within {} of \
-                     it), φ {:e} from the host's (bound {difference_bound:e})",
+                     it; the host's default {:e}), φ {:e} from the host's (bound \
+                     {difference_bound:e})",
                     case.backend,
                     case.name,
                     case.kind,
                     case.precision,
                     case.p,
                     case.error,
-                    host.error,
+                    case.reference,
                     error_bound,
+                    host.error,
                     case.difference
                 ));
             }

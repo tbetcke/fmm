@@ -38,7 +38,8 @@ design docs/design/optimisation.md §8a; report fmm-validate/results/phase6-near
 C6.5 (T13: the plane-wave M2L, `M2lStrategy::PlaneWave`, the level call in
 `src/operator_plane_wave.rs`, `cost::M2lUnit`; CONVENTIONS §3.14; design
 docs/design/optimisation.md §8.2, "As built in T13"; report
-fmm-validate/results/phase6-planewave.md).
+fmm-validate/results/phase6-planewave.md); and the defaults of T11 (decision 7 of
+docs/phase6/README.md; report fmm-validate/results/phase6.md).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -46,8 +47,8 @@ fmm-validate/results/phase6-planewave.md).
     scaling follow §3.13.
   - Operator formulas are reached only through nd-fmm-tables and nd-fmm-ref, and for
     P2P also through nd-fmm-simd (`P2pKernel::evaluate`). Do not re-derive one here.
-  - P2P runs the kernel of `P2pChoice` (default `Auto`, `Isa::detect`: AVX2 on an
-    AVX-512 machine until Phase 6 T11; `Isa(Isa::Avx512)` since Phase 6 T6). Keep
+  - P2P runs the kernel of `P2pChoice` (default `Auto`, `Isa::detect`: AVX-512 on an
+    AVX-512 machine since Phase 6 T11; selectable as `Isa(Isa::Avx512)` since T6). Keep
     `P2pChoice::Reference` (`nd_fmm_ref::p2p::p2p`) as the trusted slower path: tests
     compare every ISA with it. `nd-fmm-exec` itself stays free of `unsafe`.
 - Geometry comes from integer keys: tables by `morton::child_index` and V-list offset,
@@ -78,7 +79,8 @@ fmm-validate/results/phase6-planewave.md).
   the level call to rounding. M2M and L2L are `Rotation`'s; on a device it runs as `Dense`
   (the device path builds the dense tables). `Fmm` sizes its waves buffer from the plan
   (`with_plane_wave_boxes`), so no level call allocates; the cost model counts its M2L per
-  box with a V row (`cost::M2lUnit::Boxes`). `Auto` never resolves to it (until T11).
+  box with a V row (`cost::M2lUnit::Boxes`). `Auto` resolves to it on the host at f64 p ≥ 7
+  and f32 p ≥ 8 since Phase 6 T11 (below, "The defaults of Phase 6 T11").
 - Several charge vectors (Phase 6 T5, C6.3; the `operator` and `fmm` module docs,
   "Several charge vectors"; CONVENTIONS §3.13, "Several charge vectors"):
   `LaplaceOperator::with_vectors(m)` sizes every store for m vectors (m (p + 1)² values per
@@ -135,7 +137,8 @@ fmm-validate/results/phase6-planewave.md).
   device-against-host bounds of docs/phase4/README.md. The dipole scenario added about 20 s
   to the one-rank debug run of `tests/mpi_exec.rs` (137 → 157 s on the M3 Max).
 - The near rule (Phase 6 T12, C6.9; the `fmm` module docs, "The near rule (C6.9)"):
-  `FmmBuilder::near_rule` (`NearRuleChoice::Off` by default until T11; `CostModel`: N_W =
+  `FmmBuilder::near_rule` (`NearRuleChoice::CostModel` by default since Phase 6 T11, `Off`
+  before; `CostModel`: N_W =
   α_M2P / α_P2P and N_X = α_P2L / α_P2P of the FMM's `CostModel`,
   `CostModel::near_crossovers`; `Crossovers { w, x }` named, negative or NaN refused with
   `SettingsError::NearCrossover`). Step 4 counts every local leaf's points where they are
@@ -359,7 +362,28 @@ fmm-validate/results/phase6-planewave.md).
     `examples/overlap_timing.rs` (not registered; release, by hand) measures the C5.2
     criterion: blocking and overlapped evaluations of one build in turn, the medians over
     evaluations of the maxima over ranks, the traffic per rank and the copy bandwidth.
+  - The defaults of Phase 6 T11 (decision 7 of docs/phase6/README.md, signed off on
+    2026-10-20; fmm-validate/results/phase6.md): `Auto` resolves on the host by p and the
+    precision alone, `Batched` below `M2lStrategy::auto_plane_wave_min_p` (f64 7, f32 8) and
+    `PlaneWave` from it (`StrategyChoice`'s reason `Auto → PlaneWave: f64 p = 8 ≥ 7`; the
+    ranks per node and the node budget agreed and reported, no longer read); `Batched`'s mode
+    `fmm::default_m2l_mul_add(p)` (fused from `FUSED_MUL_ADD_MIN_P` = 6) unless named; the
+    near rule `NearRuleChoice::CostModel`; `Isa::detect` AVX-512 where the CPU has it; the
+    leaf size `fmm::default_max_points_per_leaf(p, backend)` unless named
+    (`Fmm::max_points_per_leaf`); `CostModel::calibrated` with T11's constants (`Batched`
+    its own, `Auto` that of its host rule's strategy). The device path keeps its rule.
+    With the near rule on, each strategy's cost model gives its own crossovers: a test that
+    compares two strategies, or the device with the host, at equal near pairs names them
+    (`near_as` in `tests/mpi_exec.rs`, `device_common::same_near_pairs`) or the rule off,
+    and where `Auto` resolves differently on the device (`Dense`, `Rotation`) and the host
+    (`Batched`, `PlaneWave`), the host reference names the device's strategy
+    (`device_common::check_default`, `tests/device_fmm.rs`). `check_batched`,
+    `check_plane_wave` and `check_near_rule` of `tests/mpi_exec.rs` build their own exact,
+    `Dense` or rule-off references where the scenario now resolves `Batched`, `PlaneWave` or
+    the rule (reusing the scenario's `Fmm` where they can: about 9 % more on the 4-rank debug
+    run, 224 → 244 s on the M3 Max; `run-tests-mpi`'s timeout rose to 900 s).
   - The strategy rule on the node (Phase 5N T4, C5N.3; docs/design/node-m2l.md §4, §5;
+    until Phase 6 T11, which replaced its rule:
     `tables` and `fmm` module docs): under `Auto` the host resolves the strategy by
     `M2lStrategy::resolve_on_node` (rule B: Dense iff the dense tables of a rank, 332
     (p + 1)⁴ values, are at most `AUTO_DENSE_RANK_BYTES` = 9 MB and ranks per node × those

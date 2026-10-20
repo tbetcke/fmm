@@ -66,7 +66,7 @@ use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, CommunicatorCollectives};
 use nd_fmm_exec::cost::CostModel;
-use nd_fmm_exec::fmm::NearRuleChoice;
+use nd_fmm_exec::fmm::{Backend, NearRuleChoice, default_m2l_mul_add, default_max_points_per_leaf};
 use nd_fmm_exec::operator::{Isa, P2pChoice};
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_validate::fmm_accuracy::Distribution;
@@ -320,6 +320,18 @@ fn check_fields(report: &Report, comm: &SimpleCommunicator) {
     assert_eq!(report.p2p, P2pChoice::Isa(Isa::detect()));
     let p2p = format!(" p2p={} ", Isa::detect());
     assert!(summaries.iter().all(|s| s.contains(&p2p)), "{p2p} missing");
+    // The leaf size and the multiply–add mode of the library's defaults (Phase 6 T11).
+    let leaf = format!(
+        " leaf={} ",
+        default_max_points_per_leaf(report.settings.p, Backend::Host)
+    );
+    let mul_add = format!(" mul_add={} ", default_m2l_mul_add(report.settings.p));
+    assert!(
+        summaries
+            .iter()
+            .all(|s| s.contains(&leaf) && s.contains(&mul_add)),
+        "{leaf} or {mul_add} missing"
+    );
     assert!(
         summaries
             .iter()

@@ -238,7 +238,7 @@ jobs:
   run-tests-mpi:
     name: run-tests-mpi (2 and 4 ranks)
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 60
     env:
       APT_PACKAGES: libclang-dev cmake libfftw3-dev libopenblas-dev openmpi-bin libopenmpi-dev
       RUST_MIN_STACK: "8388608"
@@ -246,7 +246,10 @@ jobs:
       OMP_NUM_THREADS: "1"
       # 600 s per launch since Phase 6 T2: mpi_exec took 134–241 s at 2 ranks and
       # 156 s to over 300 s at 4 on the same code (runner speeds differ by up to 2x).
-      RUN_TIMEOUT: "600"
+      # 900 s since Phase 6 T11: on main after T13 it took 336–528 s at 4 ranks, and T11's
+      # defaults (the near rule in every build, the reference builds of its checks) add
+      # about 9 % (224 → 244 s at 4 ranks on the M3 Max).
+      RUN_TIMEOUT: "900"
     steps:
       - name: Install Rust
         id: toolchain
@@ -302,7 +305,7 @@ jobs:
         run: .github/scripts/run-mpi-tests.sh build "$RUNNER_TEMP/mpi-executables.txt"
 
       - name: Run at 2 ranks
-        timeout-minutes: 20
+        timeout-minutes: 25
         env:
           OMPI_MCA_rmaps_base_oversubscribe: "1"
         run: .github/scripts/run-mpi-tests.sh run "$RUNNER_TEMP/mpi-executables.txt" 2
@@ -310,7 +313,7 @@ jobs:
       # Also after a failure at 2 ranks, so that one run shows both counts.
       - name: Run at 4 ranks
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        timeout-minutes: 20
+        timeout-minutes: 25
         env:
           OMPI_MCA_rmaps_base_oversubscribe: "1"
         run: .github/scripts/run-mpi-tests.sh run "$RUNNER_TEMP/mpi-executables.txt" 4

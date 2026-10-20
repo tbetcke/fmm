@@ -515,14 +515,23 @@ fn device_gate<
     for &(p, prediction) in degrees {
         let start = std::time::Instant::now();
         let builder = FmmBuilder::<T>::new(p).max_level(4).max_points_per_leaf(1);
-        let mut host = builder
-            .build(points, points, comm)
-            .expect("the host FMM builds");
         let mut device = builder
             .clone()
             .backend(backend)
             .build(points, points, comm)
             .unwrap_or_else(|error| panic!("{backend}: the device FMM does not build: {error}"));
+        // The host of the device's strategy and near pairs (since Phase 6 T11 the host's
+        // `Auto` resolves to `Batched` or `PlaneWave`, the device's to `Dense` or `Rotation`).
+        let near = match device.near_rule().crossovers {
+            Some([w, x]) => nd_fmm_exec::fmm::NearRuleChoice::Crossovers { w, x },
+            None => nd_fmm_exec::fmm::NearRuleChoice::Off,
+        };
+        let mut host = builder
+            .clone()
+            .strategy(device.strategy())
+            .near_rule(near)
+            .build(points, points, comm)
+            .expect("the host FMM builds");
         let report = device.device_report().expect("a device backend");
         let layout = format!(
             "{}; P2P {}, leaf operators {}, M2M/L2L/M2L GEMM {} ({} of {} level calls on the \
