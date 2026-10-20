@@ -414,5 +414,5 @@ In the repository root, start `claude` and say:
 - [x] Decision 6 signed off (2026-10-18): C6.5 proceeds, built in T13
 - [x] T13 merged: plane-wave M2L as an opt-in host strategy (C6.5)
 - [x] T12 merged: M2P and P2L only where they pay (C6.9), or dropped by measurement
-- [ ] T11 merged: final benchmarks; defaults signed off (decision 7)
+- [x] T11 merged: final benchmarks; defaults signed off (decision 7)
 - [x] Design documents updated: laplace-fmm-plan §4, §6, §7 (Phase 6 status and numbers), §8.3, §9.1, §9.2; simd-p2p.md §4.7; device-path.md (outcome section); workspace-structure §3, §6 (T11, 2026-10-20)
