@@ -94,6 +94,20 @@ bounded in P at fixed N/P to 640 oversubscribed ranks, and at 160 ranks 0.67–0
 5's time on the Plummer sphere (the cut by work). Nothing beyond 160 ranks is timed; the
 model puts the evaluation at 10⁴ ranks within 2 % of 160 ranks in weak scaling at f64 p = 8,
 with the replicated top's all-gather the one term that grows. Overlap stays opt-in.
+Revised at the end of Phase 6 (2026-10-20; Sections 4, 6.1, 7, 8.3, 9.1 and 9.2): the
+operators were the cost after Phase 5S, and Phase 6 made them faster
+([optimisation.md](optimisation.md); docs/phase6/): a batched host M2L (per-level products
+over gathered columns, bit for bit `Dense`, with a fused mode), a plane-wave M2L as a host
+strategy (an approximation within 1.1× the exact M2L's errors), AVX-512 P2P, M2P and P2L
+replaced by exact P2P where a leaf holds few points (the near rule), several charge vectors,
+dipole sources, the device's gather fused into its GEMM, and FMM3D as an external baseline;
+SVD-compressed M2L was dropped. The defaults changed at T11 (decision 7): `Auto` resolves on
+the host to `Batched` at f64 p ≤ 6 and f32 p ≤ 7 and to `PlaneWave` above, the fused mode
+from p = 6, the near rule on, AVX-512 where the CPU has it, the leaf size 128 from p = 12 on
+the host (and per p on Metal), the cost model refitted. Measured on the three machines
+(`fmm-validate/results/phase6.md`): one node 1.1–11.5× faster than the defaults before (0.92
+in the worst cell, f64 p = 3 on locust at 72 ranks), and 1.86–7.99× faster than Phase 5S at 1,
+2 and 4 Kathleen nodes (N = 10⁷), at the same errors (0.92–1.05× of the old).
 
 > Where this document and `docs/CONVENTIONS.md` differ (normalisation, phases, scaling),
 > **the conventions file takes precedence.** Section 2.4 below now follows the scaling of
@@ -467,10 +481,10 @@ The Phase 0 spike (task T6, `spikes/cubecl-gemm/SPIKE_REPORT.md`) put numbers on
 | Method | M2L cost per pair | Per-box conversion | Precomputed data | GPU fit | Accuracy control | Role in this library |
 | --- | --- | --- | --- | --- | --- | --- |
 | Direct matrices | O(p⁴), bandwidth-bound per pair | none | none (or 316 matrices) | poor unless batched | exact truncation at p | f64 oracle; source of dense tables |
-| Dense precomputed + GEMM | O(p⁴) flops, compute-bound | none | 316 × (p+1)⁴ values, or 16 with symmetry | excellent | exact truncation at p | GPU default in f32 (p ≤ 8, measured; hand-written kernel, Phase 4); provisional f64 GPU default for p ≤ 11; CPU per-pair default for p ≤ 8 (Phase 2, measured), since Phase 5N only while the dense tables of a rank (≤ 9 MB: f64 p ≤ 6, f32 p ≤ 8) and of a node are small ([node-m2l.md](node-m2l.md)) |
-| Dense + SVD compression | O(k²) with k < (p+1)², plus basis changes | O(p² k) | shared bases + small cores | excellent | truncation at p and SVD tolerance | optimisation after the default works |
-| Rotation (point-and-shoot) | ≈ (10/3)(p+1)³ multiply-adds | none | rotation and coaxial tables, O(p³) | good; irregular inner loops | exact truncation at p | CPU per-pair default for p ≥ 10 (Phase 2, measured), since Phase 5N for every p whose dense tables exceed 9 MB per rank (f64 p ≥ 7) and wherever the node's exceed the budget; provisional f64 GPU default for p ≥ 12; chosen by the tuner in f32 on large trees (N = 10⁶, p ≥ 6; Phase 4) |
-| Plane-wave | O(p²) diagonal | O(p³) × 6 directions | quadrature tables; ~2.5× expansion memory | good, complex bookkeeping | fixed quadrature levels | optional phase 6 |
+| Dense precomputed + GEMM | O(p⁴) flops, compute-bound | none | 316 × (p+1)⁴ values, or 16 with symmetry | excellent | exact truncation at p | GPU default in f32 (p ≤ 8, measured; hand-written kernel, Phase 4); f64 GPU default at every p on CUDA (Phase 4S), to p = 11 elsewhere; CPU per-pair default for p ≤ 8 (Phase 2, measured), in Phase 5N only while the dense tables of a rank and of a node were small ([node-m2l.md](node-m2l.md)); **since Phase 6 T11 on the host as `Batched`** (per level, each table read once per block of targets; C6.6) at f64 p ≤ 6 and f32 p ≤ 7 |
+| Dense + SVD compression | O(k²) with k < (p+1)², plus basis changes | O(p² k) | shared bases + small cores | excellent | truncation at p and SVD tolerance | **dropped in Phase 6** (T1): no gain at p ≤ 8, 0.53× and 0.31× of the dense flops at p = 12 and 18 only (optimisation.md §3) |
+| Rotation (point-and-shoot) | ≈ (10/3)(p+1)³ multiply-adds | none | rotation and coaxial tables, O(p³) | good; irregular inner loops | exact truncation at p | CPU per-pair default for p ≥ 10 (Phase 2, measured), in Phase 5N for every p whose dense tables exceeded 9 MB per rank and wherever the node's exceeded the budget; no longer a host default since Phase 6 T11 (never the fastest measured; PlaneWave keeps its M2M and L2L); f64 GPU default from p = 12 on Metal and the CPU runtime; chosen by the tuner in f32 on large trees (Phase 4) |
+| Plane-wave | O(p²) diagonal | O(p³) × 6 directions | quadrature tables; ~2.5× expansion memory | good, complex bookkeeping | fixed quadrature levels | **host default since Phase 6 T11 at f64 p ≥ 7 and f32 p ≥ 8** (`M2lStrategy::PlaneWave`, T10 spike, T13; FMM3D's quadratures, merge and shift; errors 0.92–1.05× the exact M2L's); runs as Dense on a device |
 | FFT / Toeplitz | O(p² log p), large constant | FFT setup | FFT plans | fair | stability concerns | not planned |
 | Cartesian Taylor | O(p⁴)–O(p⁶) | none | none | excellent at low p | exact truncation at p | optional low-accuracy f32 path |
 
@@ -485,7 +499,12 @@ Why this ordering:
   counted the rotation cost as multiply-adds; counted as flops, every break-even
   efficiency above halves.)
 - Plane-wave M2L buys at most tens of percent on CPUs in careful comparisons, at
-  substantial complexity. It stays optional.
+  substantial complexity. It stays optional. *Measured in Phase 6* (T10, T13, T11): on this
+  library's host the evaluation under it is 1.08–1.80× faster than under the fastest exact
+  M2L at f64 p = 8 and 1.35–6.38× faster at p ≥ 12 (one rank; T13), and 1.45–11.45× faster than
+  under the defaults before Phase 6 at f64 p ≥ 8 on the three machines (T11); far more than tens of percent, because the exact M2Ls it replaces are the
+  library's own (Batched, Rotation), not FMM3D's tuned ones (FMM3D, itself plane-wave, stays
+  ahead at p = 12 on the Plummer sphere, `fmm-validate/results/phase6-fmm3d.md`).
 
 Starting points for p, calibrated in Phase 3 (C3.4, T12; the full table is in
 Section 7, Phase 3). The smallest p whose relative L2 error of φ is below the target,
@@ -762,6 +781,19 @@ vectorised lines, autotune, a tuned matmul engine) favour a GEMM-centred M2L.
 
 ### 6.1 Version and backend facts (confirmed by the Phase 0 spike, Phase 4 and Phase 4S)
 
+- *Since Phase 5S (T1s):* the final `cubecl =0.11.0` with `cubek-matmul` and `cubek-std`
+  `=0.3.0`; the kernel suites re-run on it (`fmm-validate/results/phase5s-t1s.md`). On CUDA
+  the library's f32 CMMA now launches but runs at TF32 precision while reporting f32 types,
+  so the input-precision guard rejects it and the hand-written GEMM still runs
+  ([cubecl-upstream.md](cubecl-upstream.md), entry 4).
+- *Phase 6 (T7, the device GEMM work; device-path.md §19):* a shared-memory GEMM
+  (`GemmLayout::Shared`: the tile's inputs and the table's rows staged per step of k in
+  `Shared::<[F]>`, a `sync_cube` per step, accumulators in k order) is bit for bit the
+  register GEMM and faster on Metal to p = 9 (its 32 KB per cube bounds the step); on CUDA
+  the best of it and the fused gather alternates with p. On the CPU runtime `sync_cube` is a
+  yielding spin barrier: a multi-unit shared-memory cube with several ranks per node spun on
+  descheduled units (`mpi_exec` at 4 ranks 6,420 s against 46 s), so the CPU runtime gets a
+  one-unit cube there.
 - **Pinned (Phase 4, T2):** `cubecl =0.11.0-pre.4`, with the matmul engine
   `cubek-matmul =0.3.0-pre.4` (feature `multi-level`) and `cubek-std =0.3.0-pre.4`, in
   `[workspace.dependencies]`, used only by `nd-fmm-kernels` and the spikes. A
@@ -2290,15 +2322,15 @@ The scaling (Kathleen, the blocking path, the rule's strategy, ms; from
 
 | ID | Component | Acceptance criterion | Depends on | Status |
 | --- | --- | --- | --- | --- |
-| C6.1 | Fuse gather into GEMM loads | faster than C4.5 at equal accuracy | C4.5 | Not started |
-| C6.2 | SVD-compressed M2L | error within tolerance; memory and time reported vs dense | C2.2, C4.5 | Not started |
-| C6.3 | Multiple right-hand sides (charge vectors as extra GEMM columns) | throughput per RHS improves with batch size | C4.5 | Not started |
-| C6.4 | Dipole sources and other source types | matches direct sum | C3.2 | Not started |
-| C6.5 | Plane-wave M2L (optional) | beats C4.5/C4.6 on some configuration, else dropped | C4.7 | Not started |
-| C6.6 | Host batched M2L (per-level GEMMs over gathered columns; Phase 4 decision 6, deferred) | faster than the per-target host M2L at equal accuracy, bit for bit across thread counts, and scaling with ranks per node | C3.4, C5N.3 | Not started |
-| C6.7 | AVX-512 P2P (`nd-fmm-simd`; deferred until hardware, simd-p2p.md) | within the P2P accuracy contract; faster than AVX2 on Kathleen | C3S.6 | Not started |
-| C6.8 | FMM3D comparison at matched accuracy (Phase 4 decision 9) | time and memory against FMM3D on one node, documented build | C6.6 | Not started |
-| C6.9 | M2P and P2L only where they pay (new, Phase 5S T9) | W and X pairs below a crossover in points per box sent to P2P and direct evaluation; exact; the half-refined cube's leaves no longer 12× the uniform trees' | C3.2, C3S.6 | Not started |
+| C6.1 | Fuse gather into GEMM loads, with the device kernel work of device-path §18.2 | faster than C4.5 at equal accuracy | C4.5 | **Done (T7)**: the fused gather, the reduction by chunk and a shared-memory GEMM, bit for bit Phase 4S's; Metal end to end 1.13–1.65× at N = 10⁶ and 1.29–3.97× at 10⁷; CUDA up to 1.65× (f64 p = 18), its rule per p left to T11 (device-path.md §19) |
+| C6.2 | SVD-compressed M2L | error within tolerance; memory and time reported vs dense | C2.2, C4.5 | **Dropped at T1's sign-off** (2026-10-15): no gain at p ≤ 8, 0.53× and 0.31× of the dense flops at p = 12 and 18 only |
+| C6.3 | Multiple right-hand sides (charge vectors as extra GEMM columns) | throughput per RHS improves with batch size | C4.5 | **Done (T5)**: each vector bit for bit its one-vector evaluation; per vector 0.61–0.64 (p = 3) and 0.69–0.83 (p = 8) of one vector's time at m = 8 with `Batched`, host and device |
+| C6.4 | Dipole sources and other source types | matches direct sum | C3.2 | **Done (T8, T8d)**: `SourceType`, charges and dipoles, within the Phase 3 bounds; on the device a dipole evaluation 1.07–1.23× a charge evaluation (Metal) |
+| C6.5 | Plane-wave M2L (optional) | beats C4.5/C4.6 on some configuration, else dropped | C4.7 | **Done (T10 spike, T13; the host default from f64 p = 7 and f32 p = 8 since T11)**: within 1.1× the exact M2L's errors (0.92–1.05× measured); host only, a device runs it as Dense |
+| C6.6 | Host batched M2L (per-level GEMMs over gathered columns; Phase 4 decision 6, deferred) | faster than the per-target host M2L at equal accuracy, bit for bit across thread counts, and scaling with ranks per node | C3.4, C5N.3 | **Done (T2; the host default at f64 p ≤ 6 and f32 p ≤ 7 since T11)**: a hand-written order-preserving kernel (no BLAS), bit for bit `Dense`, the fused mode within n u; the fastest exact M2L at f64 p = 6–8 on every machine |
+| C6.7 | AVX-512 P2P (`nd-fmm-simd`; deferred until hardware, simd-p2p.md) | within the P2P accuracy contract; faster than AVX2 on Kathleen | C3S.6 | **Done (T6; the default since T11)**: the P2P kind 1.4–2.3× AVX2 inside the FMM on a fully loaded Cascade Lake node, never slower beyond run-to-run variation (simd-p2p.md §4.7) |
+| C6.8 | FMM3D comparison at matched accuracy (Phase 4 decision 9) | time and memory against FMM3D on one node, documented build | C6.6 | **Done (T9)**: FMM3D v2.1.0 beside ours on the three machines; ours faster at p ≤ 8 everywhere (1.1–12.4×), FMM3D's `FAST_KER` ahead at p = 12 on the Plummer sphere (with 8–10× smaller errors) |
+| C6.9 | M2P and P2L only where they pay (new, Phase 5S T9) | W and X pairs below a crossover in points per box sent to P2P and direct evaluation; exact; the half-refined cube's leaves no longer 12× the uniform trees' | C3.2, C3S.6 | **Done (T12; on by default since T11)**: the near rule in `nd-fmm-plan` from the cost model's crossovers; 1.3–5.9× on the problems with W and X lists; the cube at 2 × 10⁶ on 80 ranks 1.9–2.1× the uniform tree's leaf time (from 12–15×) |
 
 *Planned on 2026-10-10* (docs/phase6/): after Phase 5S, benchmark-driven on the M3 Max,
 locust and Kathleen; C6.6 first, as the deep fix for per-rank table pressure. *Revised by
@@ -2306,6 +2338,66 @@ Phase 5S T9 on 2026-10-15* (decision 7 of docs/phase5s/README.md): the briefs ta
 numbers (the operators are the cost: the leaves 42–79 % of an evaluation at p = 3, the
 downward pass 67–92 % at p = 8, at 160 Kathleen ranks), Kathleen is usable, and C6.9 is
 added.
+
+*As built* ([optimisation.md](optimisation.md), signed off on 2026-10-15; one report per
+task, `fmm-validate/results/phase6-*.md`; T11's `phase6.md`). Every new path is
+deterministic, the same at every thread count and overlap setting, and on P ranks the
+one-rank output bit for bit; the exact paths (`Batched` separate, AVX-512 within the P2P
+contract) keep their references' results, the approximate or rearranged ones (`PlaneWave`,
+the fused mode, the near rule) stay within 1.1× of the exact path's errors against the
+direct sum.
+
+**The defaults** (T11, decision 7 of docs/phase6/README.md, signed off on 2026-10-20; the
+one-rank outputs change, requirement 6):
+
+| default | before Phase 6 | since T11 |
+| --- | --- | --- |
+| `Auto` on the host | `Dense` while the dense tables are ≤ 9 MB per rank and the node's ≤ the budget, `Rotation` otherwise (Phase 5N) | `Batched` at f64 p ≤ 6 and f32 p ≤ 7, `PlaneWave` above, whatever the ranks per node |
+| `Batched`'s multiply–add | – | fused from p = 6, separate below |
+| the near rule | – | from the cost model |
+| P2P ISA on AVX-512 machines | AVX2 | AVX-512 |
+| leaf size | 64 | host 128 from p = 12; Metal 128 at p = 6–7, 256 from p = 8; 64 elsewhere |
+| cost-model constants | Phase 5S's (AVX2) | refitted with the new operators (Kathleen, AVX-512) |
+| overlap, the device's strategies, CUDA's gather and layout | off; T7's | unchanged |
+
+**One node** (T11; the cube and the Plummer sphere at N = 10⁶ and 10⁷, every split from
+1 × cores to cores × 1, the old defaults over the new, the same sweep and day; *measured*):
+
+| machine | f64 p = 3 | f64 p = 6 | f64 p = 8 | f64 p = 12 | f64 p = 18 | f32 p = 3–8 |
+| --- | --- | --- | --- | --- | --- | --- |
+| M3 Max (1 × 12, 12 × 1) | 1.08–1.99× | 1.77–3.50× | 2.70–6.30× | 4.11–8.24× | 5.41–9.42× | 1.13–7.74× |
+| locust (1 × 72, 8 × 9, 72 × 1) | 0.92–1.49× | 1.33–2.45× | 1.45–3.35× | 2.54–5.24× | 3.79–6.16× | 0.97–5.45× |
+| Kathleen (1 × 40, 4 × 10, 40 × 1) | 1.36–3.09× | 2.21–5.50× | 3.11–6.74× | 4.50–9.76× | 6.14–11.45× | 1.14–8.19× |
+
+**Across nodes** (Kathleen, 40 × 1 per node, N = 10⁷ strong and 2.5 × 10⁴ points per rank
+weak, against Phase 5S's report; *measured*): strong scaling 1.86–7.99× faster than Phase 5S
+at 1, 2 and 4 nodes (f64 p = 3 1.9–2.8×, p = 8 3.5–6.9×, f32 p = 8 3.8–8.0×), its efficiency
+from 1 to 4 nodes 0.79–0.93 (Phase 5S 0.93–1.00): with 2–8× less compute per rank, PlaneWave's
+downward pass (2.95× for 4×) and the output's move back (16–30 % of a four-node evaluation,
+flat on the Plummer sphere at f64 p = 8) weigh more; weak scaling 1.2–10.6× faster.
+
+**Leaf size** (T11, Phase 3S T7's rule per backend; *measured*): on the host 64 stays best or
+within 1 % at p = 3 everywhere and at p = 6–8 on the NEON machines (Kathleen alone gains
+5–11 % from 128 there), and from p = 12 128 gains 6–21 % on every machine (512 at p = 18 on
+Kathleen 1.37–1.55×). On Metal f32 128 at p = 6 (1.15×) and 256 at p = 8 (1.30×). CUDA was
+not re-measured.
+
+**Recommendation for what follows** (T11):
+- **The output's move back and the host's part of an evaluation.** With the operators 2–11×
+  faster, the backward move of the output (16–30 % of a 4-node evaluation at N = 10⁷; 148 →
+  133 ms from 1 to 4 nodes on the Plummer sphere at f64 p = 8) and, on a device, the charge load
+  and output pass (317–500 ms of a 10⁷ evaluation on the GH200) are the next parts that do not
+  scale; measure them stage by stage before the next scaling phase.
+- **PlaneWave at one rank per core**: its strong-scaling efficiency from 1 to 4 nodes is
+  0.79–0.86 against Batched's 0.88–0.93 (p = 3), its downward pass shrinking 2.95× for 4×
+  (T13 found the ghost boxes' waves a cost at one rank per core); vector bodies for its scalar steps (T13's §10) would
+  also move Kathleen's f64 threshold from 7 to 6, as on NEON.
+- **Overlap** with the smaller compute: the long A/B with `PSM2_RCVTHREAD=0` that T11 did not
+  run (trimmed), before a larger cluster.
+- **The device's rule per p on CUDA** (T7's gather and layout, CUDA's leaf size) and a device
+  plane-wave M2L, which T13's host results justify on paper (T13's brief, "Afterwards").
+- **Leaf sizes at p = 9–11** and a leaf size per machine class (128 from p = 6 on x86) are
+  the measured further gains on the host.
 
 ## 8. Validation and benchmarking
 
@@ -2404,7 +2496,10 @@ ignored gates and every timing stay by hand, on the M3 Max and on locust.
   host paths, and report the rayon threads and the BLAS variables with each run.
 - Compare at matched accuracy against FMM3D (analytic Laplace), the one external
   baseline. *Decided on 2026-10-04 (decision 9):* FMM3D only, not the kernel-independent
-  ExaFMM-t and kifmm-rs, and in a later phase, not in Phase 4.
+  ExaFMM-t and kifmm-rs, and in a later phase, not in Phase 4. *Done in Phase 6 T9*
+  (`tools/fmm3d/`, `fmm-validate/results/phase6-fmm3d.md`): FMM3D v2.1.0 built beside ours
+  on the three machines, the same problems, charge vectors, sampled targets and direct sum;
+  matched by the steps of FMM3D's `eps`.
 - Benchmark the host P2P kernels (Phase 3S) in pairs per second, per ISA and precision,
   on FMM-shaped leaf workloads and all-pairs sets, against `nd_fmm_ref::p2p` and the
   Laplace kernels of green-kernels, with the accuracy of every row against `direct_sum`
@@ -2486,6 +2581,17 @@ ignored gates and every timing stay by hand, on the M3 Max and on locust.
   example micro-benchmarks the replicated top's all-gather. Every time beyond 160 ranks is a
   *model* with its inputs stated. Reports: one per task (`fmm-validate/results/phase5s-*.md`)
   and the scaling report `phase5s-kathleen.md`; numbers in Section 7, Phase 5S.
+- *Done in Phase 6* (T2–T13 one report each, `fmm-validate/results/phase6-*.md`; T11's
+  `phase6.md` on the three machines): every new path measured against the paths it could
+  replace with `scaling`'s options for it (`--strategy batched|planewave`, `--mul-add`,
+  `--rhs`, `--p2p`, `--near`, `--device-*`, `--leaf-size`) and its sweep in
+  `tools/scaling/run.sh` (`t2-*` to `t13-*`); per-kind timings (`--kinds`) in every host
+  launch; the cost model fitted per strategy (`t11-calibrate`). Since T11 the quiet gate of
+  `tools/scaling/run.sh` also runs on locust (`QUIET_LINUX`) and samples the other processes'
+  CPU every 5 s during each launch, voiding and repeating a launch that shared the machine
+  (another session's tests on the M3 Max and locust made the first T11 sweep useless). The
+  one-node "before" figures are the old defaults in the same sweep; the multi-node ones
+  Phase 5S's report.
 
 ## 9. Risks, open questions and working with Claude Code
 
@@ -2509,7 +2615,7 @@ and identity tests, the second with a one-day spike before Phase 4.
 | Per-pair `FmmOperator` calls with `HashMap` lookups too slow even on CPU | Phase 3 timings meaningless | Phase 3 gates on accuracy only; performance is measured on the batched path (C4.0 onwards). **Retired by Phase 3.** No hot path looks a key up in a `HashMap`, and the host path runs one level call per kind, target by target. On one thread, an f64 evaluation at N = 10⁵ takes 0.2 s (uniform cube, p = 3) to 12.6 s (Gaussian clusters, p = 18); with 16 threads the whole calibration sweep took 4.8 minutes (Section 7, Phase 3) |
 | SIMD paths not exercised, or x86_64 not timed (Phase 3S) | a fast path that silently breaks on one ISA | every test run prints the ISAs it ran; a CI job for the MPI-free `nd-fmm-simd` on x86_64 and arm64 runners; x86_64 throughput unmeasured, checked by instruction counts ([simd-p2p.md](simd-p2p.md) §7). **Retired for correctness by Phase 3S**: every CI run tests scalar and AVX2 on x86_64 (an AMD EPYC 7763 in the T4 and T5 runs) and scalar and NEON on arm64 (Neoverse-N2), with the release accuracy tests, and `nd-fmm-exec`'s debug tests run the FMM with AVX2 there. **Open for speed**: no x86_64 path was timed; the AVX2 inner loops hold exactly the FP operations of the model and no call (T5) |
 | Unsafe intrinsic code, and estimates that differ between CPUs (Phase 3S) | undefined behaviour; results outside the accuracy contract on some machine | `unsafe` only in `nd-fmm-simd`'s architecture modules, each block justified; ISA checked at construction; the 4 u_T contract tested exhaustively in f32 on every machine used (simd-p2p.md §5.4, §5.5). **Retired as far as measured**: `unsafe` is confined to `arch` and its dispatch, behind ISA tokens, with no `unsafe` in `nd-fmm-exec`. NEON's FSQRT and FDIV are correctly rounded and give identical bits on the M3 Max and the Neoverse-N2 (1.50 u_T). AVX2's `vrsqrtps` route measures 1.499 / 1.000 u_T on AMD Zen 3; no Intel CPU has run it, so a vendor difference stays possible within the contract |
-| A faster P2P moves the best leaf size (Phase 3S) | the default of 64 no longer fits | **Measured in T7** (Section 7, Phase 3S): at p = 8 the best size moves to 256, at p = 3 it stays at 64; by the rule fixed in advance the default stays 64 (128 is 3.1% faster overall, below the 5% threshold). M3 Max only. **Measured on the device in Phase 4 T13**: the same pattern on Metal f32; 128 is 1.9% faster overall, so the device keeps 64 too |
+| A faster P2P moves the best leaf size (Phase 3S) | the default of 64 no longer fits | **Answered in Phase 6 T11**: the default depends on p and the backend (`fmm::default_max_points_per_leaf`: host 128 from p = 12, Metal 128 at p = 6–7 and 256 from p = 8, 64 elsewhere), by T7's rule on each backend (Section 7, Phase 6). **Measured in T7** (Section 7, Phase 3S): at p = 8 the best size moves to 256, at p = 3 it stays at 64; by the rule fixed in advance the default stays 64 (128 is 3.1% faster overall, below the 5% threshold). M3 Max only. **Measured on the device in Phase 4 T13**: the same pattern on Metal f32; 128 is 1.9% faster overall, so the device keeps 64 too |
 | The SIMD kernel's sums less accurate than green-kernels' (Phase 3S) | the accuracy condition of C3S.6 fails | **Realised (T7)**: green-kernels' largest error is smaller in 57 of 64 cells (up to 12×), from its W partial sums; ours equals the reference's error level, which in-order summation and the C3.1 identity require. Within requirement 2 everywhere. **Accepted** (2026-10-03): the C3S.6 condition is restated as requirement 2 and 8 / 16 u_T per pair (Section 7, Phase 3S) |
 | MPI required by every crate above the tables | tests need an MPI runtime; MPI can be initialised once per test executable | keep `fmm-math`, `fmm-ref` and `fmm-tables` MPI-free; follow the one-MPI-test-per-executable rule of the existing crates |
 | GPU compilers use fast math (reassociation, approximate `rsqrt`, flush to zero) and break the r² = 0 rule or the accuracy contracts (Phase 4) | wrong near-field sums, accuracy outside the contracts on some backend | **Retired as far as measured (T3, T6–T10):** the spike `device-arith` measured each backend; CONVENTIONS §3.13 "Device kernels" states what kernels may assume (signed off). The real finding was 0.11's unconditional fma fusion (Section 6.1), not fast math; Metal flushes subnormals in arithmetic, so the P2P contract holds there for q = 0 or \|q\| ≥ 2⁻¹⁰⁰. Every kernel is tested against `nd-fmm-ref` on the CPU runtime (f32, f64) and Metal (f32) |
@@ -2530,7 +2636,7 @@ and identity tests, the second with a one-day spike before Phase 4.
 | macOS schedules ranks on efficiency cores, and background jobs share the cores (Phase 5) | M3 Max timings vary | **Mitigated (T10):** at most 12 ranks × threads, the one 16-rank run labelled; `tools/scaling/run.sh` waits before each launch until other processes use at most two cores and records it, after a first sweep was discarded while Microsoft Defender's scanner used 3.5–6 cores |
 | locust is a multi-user node, and 72 ranks need every core (Phase 5) | locust timings vary | **Mitigated (T10):** the load recorded before and after every launch and the binding printed; no other user's job ran during any timing run; two root system jobs (`find /`, `dnf makecache`) ran during some runs, and the 64- and 72-rank strong runs were repeated |
 | The O(P) replicated data (coarse tree, coarse gather) dominates at large P (Phase 5) | memory and traffic per rank stop falling with P | **Measured (T10):** at N = 10⁶ the replicated part dominates the held boxes from 16–32 ranks (92% at 72, 97% at 256) and the coarse gather (2.6 MB per rank and evaluation at 72) is the cube's largest exchange; irrelevant at P ≤ 12. distributed-fmm.md §14 plans its replacement for a cluster |
-| Per-rank copies of read-only data compete for one node's caches and memory bandwidth (found in T10) | strong scaling at high p stops at a few ranks per node | **Mitigated in Phase 5N (T3, T4):** the cause measured (Dense neighbours on the same socket triple a rank's M2L time per pair, T3), and `Auto` resolves with the ranks per node: within 1.03 of the best strategy at p = 8 at every count measured on the three machines, within 1.16 in the band where the budget decides. The dense tables still cost one copy per rank; the deep fix, the batched host M2L (C6.6), stays in Phase 6 |
+| Per-rank copies of read-only data compete for one node's caches and memory bandwidth (found in T10) | strong scaling at high p stops at a few ranks per node | **Retired in Phase 6 (T2, T13, T11):** `Batched` reads each table once per block of targets and `PlaneWave` holds no dense tables, and `Auto` uses only them on the host; Dense's per-target reads were up to 3× slower than Batched at one rank with 40 threads. **Mitigated in Phase 5N (T3, T4):** the cause measured (Dense neighbours on the same socket triple a rank's M2L time per pair, T3), and `Auto` resolves with the ranks per node: within 1.03 of the best strategy at p = 8 at every count measured on the three machines, within 1.16 in the band where the budget decides. The dense tables still cost one copy per rank; the deep fix, the batched host M2L (C6.6), stays in Phase 6 |
 | Builds on Kathleen's login node, or a full quota (Phase 5N) | the machine's rules broken, jobs failing | **Retired as built (T1):** every build, test and run is a Slurm job (`tools/kathleen/submit.sh`); the login node only syncs, submits and reads; 22.7 of the 250 GiB quota in use after T2 |
 | Diskless nodes: Open MPI, cargo or rustc write to a `/tmp` that is RAM or missing (Phase 5N) | jobs fail or fill memory | **Retired (T1):** `TMPDIR` and Open MPI's session directory per job in `/dev/shm`, measured empty at every job's end |
 | Kathleen's queue stalls the work (Phase 5N) | tasks wait for days | **Not realised:** 2-node `test` jobs started within 37 s–13 min, one-node `singlenode` jobs within 1 s–1 h 36 min (behind the task's own two running jobs) |
@@ -2548,6 +2654,11 @@ and identity tests, the second with a one-day spike before Phase 4.
 | Omni-Path and Open MPI 4.1 behave differently from one node (Phase 5S) | progress, eager limits, PSM2 settings | **Realised:** the two PSM2 settings above; overlap neutral with one thread per rank, intermittently slower with 20 (open, phase5s-kathleen.md §7) |
 | `Plan::new`, rlst's graph communicators or the sample sorts become the bottleneck (Phase 5S) | the build stops scaling | **Retired by S4 and S5:** key routing (T3a), rlst's sparse exchanges (T8, upstream); the O1 and weight-round all-reduces the largest O(P) build term left (*model* about 57 ms at 10⁴ ranks) |
 | The scale-out changes the structures the device and overlap rely on (Phase 5S) | device or overlap broken | **Not realised:** three new events, the device's 2 + r_s syncs, the shadow check and the device gate on the CPU runtime, Metal and CUDA (T6) |
+| An approximate M2L (plane waves) trades accuracy silently (Phase 6) | larger errors under a default | **As designed (T10, T13, T11):** an error budget signed off before it was built (within 1.1× the exact M2L's errors against the direct sum), the quadrature per p chosen on a whole level, the bound asserted in every `tests/mpi_exec.rs` scenario and the gates; measured 0.92–1.05× on the three machines |
+| Exact P2P in place of M2P and P2L raises the error (Phase 6) | C6.9's "at most today's errors" fails | **Realised in part (T12):** where truncation errors of pairs cancel the error can rise (2.1 % on a small test tree, 0.13 % on the clusters); the criterion restated as within 1.1× (T12's sign-off question), the tests bound it so |
+| AVX-512's frequency licence makes it slower in the FMM than in a kernel benchmark (Phase 6) | a slower default on Intel | **Measured (T6, T11):** the licence costs about 13 % on a fully loaded Cascade Lake node; inside the FMM never more than 2 % slower than AVX2 (within run-to-run variation), up to 1.8× faster; other AVX-512 CPUs untimed |
+| A machine shared with other work skews the timings that set a default (Phase 6) | a default chosen on contended numbers | **Realised and mitigated (T11):** another session's tests ran during the first T11 sweeps on the M3 Max and locust; that data was discarded, and the quiet gate now samples during each launch and repeats a contended one; Kathleen's nodes are exclusive |
+| The new defaults lengthen the debug MPI tests past CI's timeout (Phase 6) | `run-tests-mpi` fails on a slow runner | **Mitigated (T11):** `mpi_exec` at 4 ranks took 336–528 s in CI on main and T11 adds about 9 % (the near rule in every build, the checks' reference builds, which reuse the scenario's FMM where they can); the per-launch timeout rose from 600 to 900 s |
 
 
 ### 9.2 Open questions
@@ -2621,15 +2732,16 @@ and identity tests, the second with a one-day spike before Phase 4.
   - *Answered on 2026-10-02:* CI gains a job for `nd-fmm-simd` on arm64 and x86_64
     runners.
   - *Answered on 2026-10-02:* AVX-512 is deferred until hardware to test and time it is
-    available ([simd-p2p.md](simd-p2p.md) §4.7).
+    available ([simd-p2p.md](simd-p2p.md) §4.7). *Built in Phase 6 T6* on Kathleen's
+    Cascade Lake nodes, the default ISA where the CPU has AVX-512F since T11.
   - *Answered on 2026-10-02 and in T7:* the default leaf size is the one T7's rule picks
     from the M3 Max timings: 64, unchanged (Section 7, Phase 3S, "Leaf size").
   - *Answered in T2:* no relaxed f64 inverse square root ships. On NEON every relaxed
     level was slower than full-precision `sqrt` and division; on AVX2 it would save one
     operation per pair.
-  - *Still open:* x86_64 timings, including the green-kernels comparison there, until an
-    x86_64 machine is available. `p2p_kernels`, `compare` and `p2p_fmm` run there
-    unchanged.
+  - *Answered in Phase 5N and Phase 6:* x86_64 timings, on Kathleen's Cascade Lake nodes
+    (Phase 5N T2: AVX2; Phase 6 T6: AVX-512, the default there since T11). The
+    green-kernels comparison on x86_64 was not run.
   - *Answered on 2026-10-03:* the accuracy condition of C3S.6 against green-kernels'
     sums, which in-order summation cannot meet, is restated as "within requirement 2,
     per pair within 8 / 16 u_T" (Section 7, Phase 3S).
@@ -2638,6 +2750,11 @@ and identity tests, the second with a one-day spike before Phase 4.
     strategy (C4.7)? *Phase 4 (T13):* the same holds on the device (64 at p = 3, 128–256
     at p = 8); the device rule kept 64 (decision 8), and the question stays open for
     both backends. *Phase 4S (T8):* on CUDA too the rule keeps 64 (f32 and f64, N = 10⁵ and 10⁶), with the same dependence on p and the distribution (up to 17% to gain per configuration); still open for every backend.
+    *Answered in Phase 6 T11:* the default depends on p and the backend
+    (`fmm::default_max_points_per_leaf`, signed off on 2026-10-20): the host 64 to p = 11
+    and 128 from p = 12 on every machine (6–21 % faster), Metal 128 at p = 6–7 and 256 from
+    p = 8 (1.15× and 1.30×), CUDA and the CPU runtime 64. Open: p = 9–11, CUDA re-measured,
+    and a rule per machine class (Kathleen gains 5–14 % from 128 at p = 6–8, NEON not).
 - *New with Phase 5* ([distributed-fmm.md](distributed-fmm.md) §13, §14):
   - *Answered in Phase 5:* the multi-rank tolerance. With the tree of O1 and P1's row
     order the host output on P ranks is bit for bit the one-rank `Fmm` over the union in
@@ -2689,6 +2806,13 @@ and identity tests, the second with a one-day spike before Phase 4.
     threads at most 25% of M2L); the batched host M2L (C6.6) stays the deep fix, for
     Phase 6. *Still open:* a rule that weighs the precision (the crossover in bytes differs
     between f32 and f64 on every machine; node-m2l.md §10.2), for Phase 6 with C6.6.
+    *Answered in Phase 6 T11:* with `Batched` (C6.6, tables read once per block of targets)
+    and `PlaneWave` (no dense tables) the ranks per node no longer decide: `Auto` resolves by
+    p and the precision alone (`Batched` at f64 p ≤ 6 and f32 p ≤ 7, `PlaneWave` above),
+    within 1.05 of the fastest strategy measured on Kathleen except at f64 p = 3 (the fused mode
+    up to 1.36× faster in the sweep, level with the separate mode under T11's cost model), and on the NEON machines within 1.05 except at f64 p = 6 (PlaneWave up
+    to 1.28× faster on the M3 Max, 1.14 on locust), f32 p = 3–6 (up to 1.09–1.15) and f64 p = 3
+    on the M3 Max (1.06); the node budget is reported only.
   - *Still open:* **the device on several GPUs.** The device runs on several ranks for
     correctness only: on both machines every rank shares the one GPU, so no device
     scaling figure exists. Every rank opens the default device (`Device::open` takes no

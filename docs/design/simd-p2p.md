@@ -469,25 +469,48 @@ loops hold exactly the FP operations of the model (24, 35, 29 and 42 instruction
 source for f32 φ, f32 φ and ∇φ, f64 φ, f64 φ and ∇φ; T5). On the uniform cube at p = 3
 an f64 evaluation went from 202 to 101 ms (T7), close to the 105 ms estimated above.
 
-### 4.7 AVX-512, deferred
+### 4.7 AVX-512 (Phase 6 T6, built; the default since Phase 6 T11)
 
-AVX-512F is left out of Phase 3S (decided on 2026-10-02), because no hardware is
-available to test or time it, and GitHub's x86_64 runners typically lack it. What a
-later task needs, already recorded above:
+AVX-512F was left out of Phase 3S (decided on 2026-10-02) for want of hardware; Kathleen's
+Cascade Lake nodes (Phase 5N) made it possible, and Phase 6 T6 built it as planned here
+(report `fmm-validate/results/phase6-avx512.md`; docs/design/optimisation.md §5).
 
-- the estimates `_mm512_rsqrt14_ps` and `_mm512_rsqrt14_pd` (< 2⁻¹⁴; Intel documents a
-  bit-exact reference), so f64 needs no f32 detour: one Newton step for f32, two for
-  f64 (Section 4.3);
-- 16 / 8 lanes, 32 registers, native masks for tails and for the r² = 0 mask;
-- the model of Section 4.6: about 2× the AVX2 bound per core in f32 and 2.4× in f64,
-  less on Zen 4, which splits 512-bit operations;
-- the worst lane waste of all ISAs at the leaf sizes of the FMM (Section 4.1).
+**As built** (T6): one module `arch::avx512` (`avx512f` only, stable since Rust 1.89) with
+the vector layer and its inverse square root, `Isa::Avx512` (the enum is
+`#[non_exhaustive]`), detection of `avx512f` together with AVX2 and FMA, which every
+AVX-512F CPU has and the compiler may use beside it. The planned estimate:
+`vrsqrt14ps`/`vrsqrt14pd` (< 2⁻¹⁴) with one Newton step in f32 and two in f64, so f64 needs
+no f32 detour (AVX2's degree-5 correction); masks in mask registers for tails and r² = 0;
+P2P blocks of K = 2 target vectors, the several-vector groups as AVX2's, the batched M2L's
+column kernel with R = 4 row vectors. Every kernel of the crate runs on it, each the scalar
+layer's or the contract's (the batched M2L bit for bit; P2P within §3's contract).
 
-Adding it is one module `arch::avx512` with the vector layer and its inverse square
-root, a new `Isa::Avx512` (the enum is `#[non_exhaustive]`, so this is not a breaking
-change), detection of `avx512f`, and its tests in a CI or local run on hardware that has
-it. Until then an AVX-512 machine runs the AVX2 path. green-kernels on stable Rust does
-the same (Section 2.2).
+**As measured** (Kathleen, Xeon Gold 6248):
+- accuracy: the inverse square root within 1.498 u₃₂ and 1.488 u₆₄ (contract 4 u_T); P2P
+  terms within 4.18 u (φ) and 9.60 u (∇φ) over 10⁶ pairs per precision (contract 8 and 16 u);
+- the kernel on one core, FMM-shaped gathered cells: 1.85–2.03× AVX2 in f32 and 2.98–3.08×
+  in f64 (above §4.6's 2× and 2.4× *model* in f64, where AVX2's estimate falls short of its
+  model); below 16 targets per leaf f32 loses lanes (at 8 targets 0.55–0.71× AVX2 per pair),
+  the worst lane waste foreseen in §4.1;
+- every core at once: the 512-bit frequency licence costs about 13 % more than AVX2's (0.64–0.66
+  of the one-core throughput against 0.73–0.76), leaving 1.37–1.47× (f32) and 2.60–2.63×
+  (f64);
+- inside the FMM on a fully loaded node (T6, 40 ranks): the P2P kind 1.40–1.72× (f32) and
+  2.03–2.33× (f64); the evaluation 1.49–1.63× on the cube at f64 p = 3, 1.00–1.07× at p = 8;
+  no other stage slower beyond run-to-run variation;
+- with Phase 6's strategies (T11, `fmm-validate/results/phase6.md` §3; 240 cells, the cube
+  and the Plummer sphere at N = 10⁶ and 10⁷, 1 × 40, 4 × 10 and 40 × 1): the evaluation
+  1.0–1.79× faster under the batched M2L (fused) and 0.98–1.75× under the plane-wave M2L,
+  never more than 2 % slower.
+
+**The default** (decision 7 of docs/phase6/README.md, signed off on 2026-10-20):
+`Isa::detect` returns `Isa::Avx512` where the CPU has AVX-512F, AVX2 and FMA, so P2P, the
+batched M2L's column kernel and the plane-wave kernels run on it by default. The one-rank
+outputs on such a machine change in the last bits of P2P's terms (another estimate), within
+the contract. Only Cascade Lake was timed: later Intel cores and AMD Zen 4 and 5 (which
+splits 512-bit operations, and which some of GitHub's x86_64 runners have) take it untimed;
+`Isa::Avx2` stays selectable. CI covers it opportunistically: its tests run where the runner
+has AVX-512F and skip cleanly elsewhere.
 
 ### 4.8 Dipoles (Phase 6 T8)
 

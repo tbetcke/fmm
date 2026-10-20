@@ -231,14 +231,14 @@ Each crate has one job and a public surface small enough to describe in a few li
 | Directory | Package | Created in | Purpose | Depends on |
 | --- | --- | --- | --- | --- |
 | `fmm-math` | `nd-fmm-math` | Phase 0 (done) | real solid harmonics and gradients, rotation blocks, index layout, scalar trait | `num-traits` |
-| `fmm-ref` | `nd-fmm-ref` | Phase 1 (done) | f64 reference operators (direct O(p⁴) and rotation O(p³)), P2P, direct-sum oracle | `nd-fmm-math`, `num-traits` |
-| `fmm-tables` | `nd-fmm-tables` | Phase 2 (done) | M2M/L2L (8 octants each), M2L (316 offsets, symmetry classes), rotation tables, versioned cache, later SVD compression | `nd-fmm-math`, `nd-fmm-ref`, `num-traits`, `thiserror` (cache errors); `rlst` (without its `mpi` feature) only with SVD compression (C6.2); no serialiser, as the cache writes its own little-endian format |
-| `fmm-exec` | `nd-fmm-exec` | Phase 3 (host, done), Phase 3S (SIMD P2P, done), Phase 4 (device, done), Phase 4S (CUDA, per-kind timings, done), Phase 5 (any number of ranks, host and device; overlap; done), Phase 5S (the owned top tree, the work-weighted cut, the forwarding tree's option; done) | the level-batched `FmmOperator` for Laplace (`LaplaceOperator`), box geometry from integer Morton keys, user-facing FMM object, M2L strategy selection, host threading, the choice of P2P kernel; behind `gpu` the device path (`DeviceOperator` with a host fallback per kind) and the autotune of its choices | as built in Phase 3: `nd-fmm-math`, `nd-fmm-ref`, `nd-fmm-tables`, `nd-fmm-plan`, `nd-octree`, `mpi` (feature `derive`), `rlst` (no features of its own; `nd-octree` enables `mpi`), `rayon`, `thiserror`; dev-dependency `proptest`. Phase 3S added `nd-fmm-simd`; Phase 4 added `nd-fmm-kernels` (optional, feature `gpu`; features `cpu`, `metal` and `cuda` enable `gpu` and the backend). No direct CubeCL dependency and no `unsafe`. Phase 4S and Phase 5 added no dependency |
-| `fmm-simd` | `nd-fmm-simd` | Phase 3S (done) | hand-written SIMD kernels for the host path, P2P first: `core::arch` intrinsics for aarch64 NEON and x86_64 AVX2 + FMA (AVX-512 deferred), a scalar fallback, runtime ISA dispatch ([simd-p2p.md](simd-p2p.md)) | `nd-fmm-math`, `thiserror`; dev-dependencies `nd-fmm-ref`, `proptest`. No MPI, no external SIMD crate |
-| `fmm-kernels` | `nd-fmm-kernels` | Phase 4 (done); CUDA layouts in Phase 4S (done) | every `#[cube]` kernel behind safe wrappers: backends and the f64 capability check, device buffers, data movement, the plan's views on the device, P2P, the leaf operators, the grouped translations (M2M, L2L, dense M2L), rotation M2L, timing windows; every kernel on every runtime, the runtime a run-time value | `cubecl` =0.11.0, `cubek-matmul` and `cubek-std` =0.3.0 (the pinned workspace entries; the pre-releases =0.11.0-pre.4 and =0.3.0-pre.4 until Phase 5S T1s), `nd-fmm-math`, `thiserror`; dev-dependencies `nd-fmm-ref`, `nd-fmm-tables`, `proptest`. No MPI, no `nd-fmm-plan`, no rayon. Features `cpu`, `metal` (wgpu with the MSL compiler), `cuda` (LLVM NVPTX; type-checked in CI, run by hand on locust's H100 since Phase 4S), none by default. A workspace member, not a default member |
-| `fmm-validate` | `nd-fmm-validate` (`publish = false`) | Phase 1 (done), grows with each phase (Phase 5: multi-rank accuracy runs and the scaling harness; Phase 5S: rank-count invariance and the measures of the new structures) | error norms, point distributions, accuracy sweeps, the FMM accuracy reports and the calibration of p, benchmarks | all of the above, as dev tooling; in Phase 1 `nd-fmm-math` and `nd-fmm-ref`, in Phase 2 also `nd-fmm-tables`, in Phase 3 also `nd-fmm-exec` and `mpi` (so building it needs MPI), in Phase 3S also `nd-fmm-simd`, in Phase 4 also `nd-fmm-kernels` (optional, feature `gpu`, with `cpu`, `metal` and `cuda` passed through). No library crate depends on it; the spike `spikes/p2p-simd` does (Phase 3S T7) |
-| `fmm-bench` | `nd-fmm-bench` (`publish = false`) | Phase 4S (done; T6) | the one-command benchmark: N points uniform in the unit cube, f32 or f64, a degree p and a backend; the evaluation time (min, median, mean, max, standard deviation), the time per operator kind and the error against the direct sum, as one Markdown file (`tools/bench/run.sh`). A binary over a small library | `nd-fmm-exec`, `nd-fmm-validate`, `mpi`, and `nd-fmm-tables` for the `Stored` bound of `Fmm<T>` only, all from `[workspace.dependencies]`; features `gpu`, `cpu`, `metal` and `cuda` passed through. No external dependency (the command line is parsed by hand). A default member, never in CI beyond the default checks and its smoke test |
-| `fmm-plan` | `nd-fmm-plan` (existing; rewritten in Phase 3) | before this plan; rewritten in Phase 3 (T4–T7); Phase 5 (T2, T5, T7, T9; done); Phase 5S (T4, T5, T8, T8s; done) | kernel-agnostic plan of a distributed FMM: box index, lists, stores, ghost exchange, batched operator interface, evaluator; since Phase 5 the redistribution of points, the host-data hook and the overlapped exchanges | as built: `nd-octree`, `rlst` (feature `mpi`), `mpi` (feature `complex`, kept for complex-valued operators downstream), all from `[workspace.dependencies]`; dev-dependency `rand_chacha`. No rayon: threading lives in `nd-fmm-exec` |
+| `fmm-ref` | `nd-fmm-ref` | Phase 1 (done); Phase 6 (T5, T8; done) | f64 reference operators (direct O(p⁴) and rotation O(p³)), P2P, direct-sum oracle; since Phase 6 the leaf operators of several charge vectors (`leaf::*_many`, T5) and the dipole operators (`leaf::{p2m_dipoles, p2l_dipoles}`, `p2p::{p2p_dipoles, direct_sum_dipoles}`, T8) | `nd-fmm-math`, `num-traits` |
+| `fmm-tables` | `nd-fmm-tables` | Phase 2 (done); Phase 6 (T13; done) | M2M/L2L (8 octants each), M2L (316 offsets, symmetry classes), rotation tables, versioned cache; since Phase 6 T13 the plane-wave M2L's tables (`plane_wave`, CONVENTIONS §3.14). SVD compression (C6.2) was dropped at Phase 6 T1's sign-off | `nd-fmm-math`, `nd-fmm-ref`, `num-traits`, `thiserror` (cache errors); no serialiser, as the cache writes its own little-endian format; no `rlst` (C6.2 dropped) |
+| `fmm-exec` | `nd-fmm-exec` | Phase 3 (host, done), Phase 3S (SIMD P2P, done), Phase 4 (device, done), Phase 4S (CUDA, per-kind timings, done), Phase 5 (any number of ranks, host and device; overlap; done), Phase 5S (the owned top tree, the work-weighted cut, the forwarding tree's option; done), Phase 6 (the batched and the plane-wave M2L, several charge vectors, dipoles, the near rule, the device kernels' options; the defaults of T11; done) | the level-batched `FmmOperator` for Laplace (`LaplaceOperator`), box geometry from integer Morton keys, user-facing FMM object, M2L strategy selection, host threading, the choice of P2P kernel; behind `gpu` the device path (`DeviceOperator` with a host fallback per kind) and the autotune of its choices | as built in Phase 3: `nd-fmm-math`, `nd-fmm-ref`, `nd-fmm-tables`, `nd-fmm-plan`, `nd-octree`, `mpi` (feature `derive`), `rlst` (no features of its own; `nd-octree` enables `mpi`), `rayon`, `thiserror`; dev-dependency `proptest`. Phase 3S added `nd-fmm-simd`; Phase 4 added `nd-fmm-kernels` (optional, feature `gpu`; features `cpu`, `metal` and `cuda` enable `gpu` and the backend). No direct CubeCL dependency and no `unsafe`. Phase 4S, 5, 5N, 5S and 6 added no dependency |
+| `fmm-simd` | `nd-fmm-simd` | Phase 3S (done); Phase 6 (T2, T5, T6, T8, T13; done) | hand-written SIMD kernels for the host path: `core::arch` intrinsics for aarch64 NEON, x86_64 AVX2 + FMA and, since Phase 6 T6, AVX-512F (the default ISA where the CPU has it since T11), a scalar fallback, runtime ISA dispatch ([simd-p2p.md](simd-p2p.md)); P2P (several charge vectors, T5; dipoles, T8), the batched M2L's column kernel (`MatrixKernel`, T2) and the plane-wave kernels (`WaveKernel`, T13) | `nd-fmm-math`, `thiserror`; dev-dependencies `nd-fmm-ref`, `proptest`. No MPI, no external SIMD crate |
+| `fmm-kernels` | `nd-fmm-kernels` | Phase 4 (done); CUDA layouts in Phase 4S (done); Phase 6 (T5: several charge vectors; T7: the fused gather, the reduction by chunk, the shared-memory GEMM; T8d: the dipole kernels; done) | every `#[cube]` kernel behind safe wrappers: backends and the f64 capability check, device buffers, data movement, the plan's views on the device, P2P, the leaf operators, the grouped translations (M2M, L2L, dense M2L), rotation M2L, timing windows; every kernel on every runtime, the runtime a run-time value | `cubecl` =0.11.0, `cubek-matmul` and `cubek-std` =0.3.0 (the pinned workspace entries; the pre-releases =0.11.0-pre.4 and =0.3.0-pre.4 until Phase 5S T1s), `nd-fmm-math`, `thiserror`; dev-dependencies `nd-fmm-ref`, `nd-fmm-tables`, `proptest`. No MPI, no `nd-fmm-plan`, no rayon. Features `cpu`, `metal` (wgpu with the MSL compiler), `cuda` (LLVM NVPTX; type-checked in CI, run by hand on locust's H100 since Phase 4S), none by default. A workspace member, not a default member |
+| `fmm-validate` | `nd-fmm-validate` (`publish = false`) | Phase 1 (done), grows with each phase (Phase 5: multi-rank accuracy runs and the scaling harness; Phase 5S: rank-count invariance and the measures of the new structures; Phase 6: the harness's options for every new path, the dipole sweeps, the GEMM variants, the plane-wave parts, the leaf size, and the reports `results/phase6-*.md` and `results/phase6.md`) | error norms, point distributions, accuracy sweeps, the FMM accuracy reports and the calibration of p, benchmarks | all of the above, as dev tooling; in Phase 1 `nd-fmm-math` and `nd-fmm-ref`, in Phase 2 also `nd-fmm-tables`, in Phase 3 also `nd-fmm-exec` and `mpi` (so building it needs MPI), in Phase 3S also `nd-fmm-simd`, in Phase 4 also `nd-fmm-kernels` (optional, feature `gpu`, with `cpu`, `metal` and `cuda` passed through). No library crate depends on it; the spike `spikes/p2p-simd` does (Phase 3S T7) |
+| `fmm-bench` | `nd-fmm-bench` (`publish = false`) | Phase 4S (done; T6); Phase 6 T9 (the problem files for FMM3D; done) | the one-command benchmark: N points uniform in the unit cube, f32 or f64, a degree p and a backend; the evaluation time (min, median, mean, max, standard deviation), the time per operator kind and the error against the direct sum, as one Markdown file (`tools/bench/run.sh`). A binary over a small library | `nd-fmm-exec`, `nd-fmm-validate`, `mpi`, and `nd-fmm-tables` for the `Stored` bound of `Fmm<T>` only, all from `[workspace.dependencies]`; features `gpu`, `cpu`, `metal` and `cuda` passed through. No external dependency (the command line is parsed by hand). A default member, never in CI beyond the default checks and its smoke test |
+| `fmm-plan` | `nd-fmm-plan` (existing; rewritten in Phase 3) | before this plan; rewritten in Phase 3 (T4–T7); Phase 5 (T2, T5, T7, T9; done); Phase 5S (T4, T5, T8, T8s; done); Phase 6 (T12; done) | kernel-agnostic plan of a distributed FMM: box index, lists, stores, ghost exchange, batched operator interface, evaluator; since Phase 5 the redistribution of points, the host-data hook and the overlapped exchanges; since Phase 6 T12 the optional near rule (`near`, `Plan::with_near_rule`) | as built: `nd-octree`, `rlst` (feature `mpi`), `mpi` (feature `complex`, kept for complex-valued operators downstream), all from `[workspace.dependencies]`; dev-dependency `rand_chacha`. No rayon: threading lives in `nd-fmm-exec` |
 
 Dropped after scouting:
 
@@ -283,6 +283,13 @@ Phase 5N adds `tools/kathleen/` (T1) and Phase 5S grows it: the correctness job
 (`PSM2_TID=0`, `PSM2_ERRCHK_TIMEOUT=10:40:2`; T0, T8); `docs/design/scale-out.md` (T1, with
 its outcome in §13 from T9); the reports `fmm-validate/results/phase5s-<task>.md` (one per
 task) and `phase5s-kathleen.md` (T9, the scaling report); no new crate.
+
+Phase 6 adds `docs/design/optimisation.md` (T1, with the outcomes of T2–T13 in its
+sections), `tools/fmm3d/` (T9: FMM3D built and run beside ours, never linked, with
+`tools/kathleen/jobs/fmm3d.sbatch`), `spikes/plane-wave/` (T10: the plane-wave spike, outside
+the default members), the reports `fmm-validate/results/phase6-<topic>.md` (one per task)
+and `phase6.md` (T11: the benchmarks on the three machines and the defaults), and in
+`tools/scaling/run.sh` the sweeps of every task (`t2-*` to `t13-*`, `t11-*`); no new crate.
 
 ### 3.1 Public surface per crate
 
@@ -331,6 +338,10 @@ task) and `phase5s-kathleen.md` (T9, the scaling report); no new crate.
 - As implemented in Phase 1, the leaf operators live in `leaf`, shared by both
   translation methods, not in `direct` and `rotation`. There is no `rayon` dependency.
 
+- Phase 6: `leaf::{p2m, p2l, l2p, m2p}_many` (T5, several charge vectors, the harmonics
+  formed once per point) and the dipole operators `leaf::{p2m_dipoles, p2l_dipoles}`,
+  `p2p::{p2p_dipoles, direct_sum_dipoles}` (T8; CONVENTIONS §3.7, "Dipole sources").
+
 **`nd-fmm-tables`** (Phase 2; MPI-free)
 
 - Every family is generic over `T: RealScalar`, built in f64 with `build(p)` at the
@@ -370,6 +381,10 @@ task) and `phase5s-kathleen.md` (T9, the scaling report); no new crate.
 - As implemented in Phase 2, the cache is generic over the family rather than taking
   `(p, precision)`. The offsets and octants are restated in `geometry`, not keyed by
   `nd-fmm-plan` types. There is no `rlst` and no serialiser.
+- Phase 6 T13: `plane_wave` (`PlaneWaveTables`, `PlaneWaveScratch`, `nodes_for_degree`,
+  `MAX_DEGREE`): the quadratures and the Fourier, shift and conversion tables of the
+  plane-wave M2L (CONVENTIONS §3.14), built in f64 and rounded to T. SVD compression (C6.2)
+  was dropped at Phase 6 T1's sign-off.
 
 **`nd-fmm-exec`** (Phase 3, host path; as built)
 
@@ -495,6 +510,19 @@ task) and `phase5s-kathleen.md` (T9, the scaling report); no new crate.
   - tests: `tests/invariance.rs` (rank-count invariance, T2, its own MPI executable in
     `run-tests-mpi`), the scenarios **work-weighted cut** and **multipole routing** of
     `tests/mpi_exec.rs`; overlap stays off by default (T9, phase5s-kathleen.md §7).
+- Phase 6 ([optimisation.md](optimisation.md); `fmm-validate/results/phase6*.md`):
+  `M2lStrategy::Batched` (T2; `FmmBuilder::m2l_mul_add`, `MulAdd`) and
+  `M2lStrategy::PlaneWave` (T13; `cost::M2lUnit`); several charge vectors (T5:
+  `FmmBuilder::vectors`, `Fmm::evaluate_many`, `OutputMany`); dipole sources (T8, T8d:
+  `SourceType`, `FmmBuilder::sources`, `Sources`, `Fmm::evaluate_sources`); the device's
+  translation options (T7: `FmmBuilder::{device_gather, device_reduction}`,
+  `DeviceGemm::Shared`); the near rule (T12: `FmmBuilder::near_rule`, `NearRuleChoice`,
+  `Fmm::near_rule`). The defaults of T11 (decision 7 of docs/phase6/README.md): `Auto`
+  resolves to `Batched` at f64 p ≤ 6 and f32 p ≤ 7 and to `PlaneWave` above
+  (`M2lStrategy::{AUTO_PLANE_WAVE_MIN_P_F64, AUTO_PLANE_WAVE_MIN_P_F32,
+  auto_plane_wave_min_p}`), `fmm::default_m2l_mul_add` (fused from p = 6),
+  `NearRuleChoice::CostModel`, `fmm::default_max_points_per_leaf` (by p and backend;
+  `Fmm::max_points_per_leaf`), `CostModel::calibrated` refitted.
 
 **`nd-fmm-plan`** (existing; rewritten in Phase 3, see Section 1.1)
 
@@ -546,6 +574,9 @@ task) and `phase5s-kathleen.md` (T9, the scaling report); no new crate.
   - T8s: the forwarding tree of the multipole exchange (`exchange_tree`, private):
     `MultipoleRouting::{Direct, Tree { fan_out }}`, `TREE_FAN_OUT` = 8,
     `Evaluator::with_routing(…, routing, node)`.
+- Phase 6 T12: `near` (`LeafPair`, `LeafCounts::exchange`, `NearRule`, `NearPairs`) and
+  `Plan::with_near_rule` beside an unchanged `Plan::new`: the W and X pairs between leaves
+  that an operator's predicate converts into near pairs, kernel-agnostic.
 
 **`nd-octree`** (existing; changed in Phase 5 T4, as distributed-fmm.md §3.2 signed off)
 
@@ -593,6 +624,11 @@ task) and `phase5s-kathleen.md` (T9, the scaling report); no new crate.
   the generic kernel body `arch::p2p`, and `#[target_feature]` entry points
   `arch::{neon, avx2}::p2p_f{32,64}[_gradient]`; `unsafe` only there and in their
   dispatch. `tools/inner_loops.awk` counts the instructions of their inner loops.
+- Phase 6: `Isa::Avx512` (T6; `Isa::detect`'s choice where the CPU has AVX-512F since T11),
+  `P2pKernel::evaluate_many` (T5) and `evaluate_dipoles` (T8), `MatrixKernel` with `MulAdd`
+  (T2: the batched M2L's column accumulation, bit for bit the matrix–vector chain in the
+  separate mode) and `WaveKernel` with `WaveTables` (T13: the plane-wave M2L's loops); the
+  bodies in `arch::{p2p, matrix, waves}` and `arch::avx512`.
 
 **`nd-fmm-kernels`** (Phase 4, T4–T12; MPI-free; as built, [device-path.md](device-path.md) §3.1)
 
@@ -646,6 +682,10 @@ task) and `phase5s-kathleen.md` (T9, the scaling report); no new crate.
   `CUDA_GEMM_{MIN_ROWS, MAX_ROWS, ROWS_PER_UNIT, UNITS, COLUMNS_PER_UNIT}` and the chunk
   budget `CUDA_SCRATCH_BYTES` (2 GB, at most an eighth of the device memory) through
   `default_scratch_bytes`. Metal and the CPU runtime keep their layouts bit for bit.
+- Phase 6: several charge vectors in the leaf operators, P2P and the output gather (T5;
+  `SourceInputs::vectors`, `TargetInputs::vectors`); the fused gather, the reduction by
+  chunk and the shared-memory GEMM of the grouped translations (T7; `Gather`, `Reduction`,
+  `GemmLayout::shared_for`); the dipole P2P, P2M and P2L (T8d; `SourceKind`).
 
 **`nd-fmm-validate`** (Phase 1; MPI since Phase 3, and no library crate depends on it)
 
@@ -739,6 +779,11 @@ task) and `phase5s-kathleen.md` (T9, the scaling report); no new crate.
   (`PathTimes::overlap`, `OVERLAP_PARTS`) and the `collectives` example (the replicated top's
   all-gather, flat, two-level and hierarchical; T9); the sweeps of `tools/scaling/run.sh`
   through `t9-strong`, `t9-weak`, `t9-model`, `t9-counts`.
+- Phase 6 (fmm-validate/CLAUDE.md has the detail): the harness's options for every new
+  path (`--mul-add`, `--rhs`, `--backend`, `--p2p`, `--device-*`, `--near`, `--leaf-size`,
+  `batched` and `planewave` strategies), the examples `gemm_variants` (T7), `dipole_cost`
+  (T8), `plane_wave_parts` (T13), `accuracy::sweep_sources` (T8), and the sweeps of
+  `tools/scaling/run.sh` from `t2-host` to `t11-device`.
 
 **`nd-fmm-bench`** (Phase 4S, T6; `publish = false`; fmm-bench/CLAUDE.md)
 
@@ -756,6 +801,8 @@ task) and `phase5s-kathleen.md` (T9, the scaling report); no new crate.
 - Tests: the parser, the Markdown writer against a golden string, and `tests/smoke.rs`
   (one MPI-initialising test: a smoke run's structure on the host, and on the CPU
   runtime with `cpu`). Nothing asserts a timing.
+- Phase 6 T9: `--write-problem`, `--check-output`, `--write-output` and `--compare`
+  (`problem`), the files of the FMM3D comparison (tools/fmm3d/).
 
 ## 4. How `nd-fmm-plan` and the octree connect
 
@@ -913,7 +960,7 @@ noise without testing anything.
 | 5 (done) | the multi-rank CI job (T3); `nd-octree`'s partition by weight (T4); in `nd-fmm-plan` the index FMM removed (T2), the redistribution with P1 and P2 (T5), the host-data hook (T7) and the overlapped exchanges (T9); in `fmm-exec` `Fmm` on any number of ranks (T6) and the device on several ranks (T8); in `fmm-validate` the multi-rank accuracy runs (T6) and the scaling harness, `tools/scaling/run.sh` and the reports (T10); no new crate |
 | 5N (done) | `tools/kathleen/` (the queue probe, Kathleen's environment and Slurm job scripts, T1); the scaling harness on Slurm and the Kathleen baseline report `fmm-validate/results/phase5n-kathleen.md` (T2); `docs/design/node-m2l.md` and the `tables` and `node_tables` examples (T3); in `fmm-exec` the M2L strategy rule per node (`M2lStrategy::resolve_on_node`, `NodeContext`, `FmmBuilder::dense_node_budget`), one rank per node first with a table cache and the ranks × threads guidance, and in `fmm-validate` and `tools/scaling/` the budget and the `node-rule` and `crossover` sweeps (T4); `nd-fmm-tables` unchanged; no new crate |
 | 5S (done) | `docs/design/scale-out.md` (T1; outcome §13); rlst 0.10 and CubeCL 0.11.0 (T1s); validation at scale in `fmm-validate` and `tools/kathleen/` (T2); `nd-octree`'s key routing (T3a), partition map as keys and locally essential key sets (T3) and second cut (T7); in `nd-fmm-plan` the plan over the locally essential set (T4), the owned top tree (T5), the point-to-point redistribution (T8, on rlst 0.10.1/0.10.2 from T8r and T8q upstream) and the forwarding tree (T8s); the `fmm-exec` side (T6, T7's cost model and cut, T8s's option); the scaling report `fmm-validate/results/phase5s-kathleen.md` and the `collectives` example (T9); no new crate |
-| 6 (planned) | `docs/design/optimisation.md` (T1); the host batched M2L in `fmm-exec` (T2); SVD-compressed M2L in `fmm-tables`, `fmm-exec` and `fmm-kernels` (T3, T4); multiple charge vectors (T5); AVX-512 P2P in `fmm-simd` (T6); the fused gather in `fmm-kernels` (T7); dipoles (T8); the FMM3D comparison (T9); the plane-wave spike in `spikes/` (T10); benchmarks (T11) |
+| 6 (done) | `docs/design/optimisation.md` (T1); the host batched M2L in `fmm-exec` with its column kernel in `fmm-simd` (T2); SVD-compressed M2L (T3, T4) dropped at T1's sign-off; several charge vectors in `fmm-ref`, `fmm-simd`, `fmm-kernels` and `fmm-exec` (T5); AVX-512 in `fmm-simd` (T6); the fused gather, the reduction by chunk and the shared-memory GEMM in `fmm-kernels` (T7); dipoles in `fmm-ref`, `fmm-simd` and `fmm-exec` (T8) and on the device (T8d); the FMM3D comparison and `tools/fmm3d/` (T9); the plane-wave spike in `spikes/plane-wave/` (T10) and the plane-wave M2L in `fmm-tables`, `fmm-simd` and `fmm-exec` (T13); the near rule in `nd-fmm-plan` and `fmm-exec` (T12); the benchmarks and defaults (T11: the strategy rule, the fused mode, the near rule, AVX-512, the leaf size per p, the cost model); no new crate |
 
 ### Answered by scouting
 

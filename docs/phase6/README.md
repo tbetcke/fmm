@@ -354,7 +354,18 @@ were **signed off by the user on 2026-10-15** (optimisation.md §10, "Outcome"):
    p ≥ 12); the plane-wave M2L becomes an opt-in host strategy with its own error budget in
    a new task, T13; the device after it, if its host results justify one.
 7. The defaults at the end (T11): the M2L strategy rule with C6.6, the FMA mode and C6.9,
-   the leaf size per p, and any one-rank output change that follows.
+   the leaf size per p, and any one-rank output change that follows. **Signed off by the
+   user on 2026-10-20, "approved as written"** (`fmm-validate/results/phase6.md` §1):
+   `Auto` on the host `Batched` at f64 p ≤ 6 and f32 p ≤ 7 and `PlaneWave` above, whatever
+   the ranks per node (the alternative, PlaneWave from f64 p = 6 on NEON, not taken);
+   `Batched` fused from p = 6, separate below; the near rule from the cost model on; AVX-512
+   as `Isa::detect`'s choice where the CPU has AVX-512F; the leaf size 64, 128 from p = 12 on
+   the host (the alternative, 128 from p = 6 on x86, not taken), on Metal 128 at p = 6–7 and
+   256 from p = 8, 64 on CUDA and the CPU runtime; the cost model's constants refitted on
+   Kathleen with AVX-512; overlap's default not revisited (off). CUDA's gather and layout per
+   p: not measured in T11 (the H100 was held by
+   another user's job throughout; the benchmarks dropped at the user's request), so CUDA keeps
+   Phase 4S's, open for a later task.
 8. The device defaults of C6.1 (T7; **signed off by the user on 2026-10-17** with T7's
    PR, also CUDA's gather and layout left to T11): the
    reduction by chunk on every backend, and on Metal the fused gather, the shared-memory
@@ -404,4 +415,4 @@ In the repository root, start `claude` and say:
 - [x] T13 merged: plane-wave M2L as an opt-in host strategy (C6.5)
 - [x] T12 merged: M2P and P2L only where they pay (C6.9), or dropped by measurement
 - [ ] T11 merged: final benchmarks; defaults signed off (decision 7)
-- [ ] Design documents updated: laplace-fmm-plan §4, §6, §7 (Phase 6 status and numbers), §8.3, §9.1, §9.2; simd-p2p.md §4.7; device-path.md (outcome section); workspace-structure §3, §6
+- [x] Design documents updated: laplace-fmm-plan §4, §6, §7 (Phase 6 status and numbers), §8.3, §9.1, §9.2; simd-p2p.md §4.7; device-path.md (outcome section); workspace-structure §3, §6 (T11, 2026-10-20)

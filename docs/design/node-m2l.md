@@ -1,5 +1,13 @@
 # M2L on a node: design for Phase 5N T4 (C5N.3)
 
+> **Superseded on the host by Phase 6 T11** (2026-10-20, decision 7 of
+> docs/phase6/README.md; `fmm-validate/results/phase6.md`): with the batched M2L (C6.6,
+> each table read once per block of targets) and the plane-wave M2L (C6.5, no dense
+> tables), `Auto` resolves by p and the precision alone (`Batched` at f64 p ≤ 6 and f32
+> p ≤ 7, `PlaneWave` above); the ranks per node and the node budget of this document's rule
+> are agreed and reported but no longer decide. The measurements below stand for `Dense`
+> and `Rotation`, which remain selectable.
+
 As of 2026-10-11 (Section 10, the outcome of T4, added). Written in Phase 5N T3 ([docs/phase5n/T3-m2l-node-
 study.md](../phase5n/T3-m2l-node-study.md)); signed off by the user on 2026-10-11, every
 recommendation as proposed, with the budget set per machine class and the far-field build
