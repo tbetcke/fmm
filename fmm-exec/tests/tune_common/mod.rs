@@ -49,7 +49,7 @@ use std::time::Duration;
 
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::Equivalence;
-use nd_fmm_exec::fmm::{Backend, Fmm, FmmBuilder, Output};
+use nd_fmm_exec::fmm::{Backend, Fmm, FmmBuilder, NearRuleChoice, Output};
 use nd_fmm_exec::fmm::{DeviceGemm, OperatorKind};
 use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_exec::tables::M2lStrategy;
@@ -254,7 +254,14 @@ pub fn check_tuning<T: Real>(
     let precision = precision::<T>();
     let label = format!("{backend} {precision} p = {p}");
     let problem = Problem::<T>::new(20_000);
-    let builder = FmmBuilder::<T>::new(p).gradients(true);
+    // The near rule off and 64 points per leaf: the tuner's device builds and the host
+    // references of each strategy have the same tree and convert the same pairs (Phase 6
+    // T11 made the rule a default, with crossovers from each strategy's cost model, and the
+    // leaf size a function of p and the backend).
+    let builder = FmmBuilder::<T>::new(p)
+        .gradients(true)
+        .near_rule(NearRuleChoice::Off)
+        .max_points_per_leaf(64);
     let device = builder.clone().backend(backend);
     let mut hosts = Hosts {
         builder: builder.clone(),

@@ -59,14 +59,15 @@ plane-wave kernels, `WaveKernel` with `WaveTables`, bodies in `arch::waves`, tes
   a kernel (`WaveKernel::tables` allocates, once). Write only into the caller's slices.
 - Hand-written `core::arch` intrinsics only: no portable SIMD crate (`pulp`, `wide`,
   `std::simd`), no C or assembly, no SVE. Stable Rust.
-- Dispatch: `Isa::detect` once at construction (NEON on aarch64; AVX2 + FMA by
-  `is_x86_feature_detected!` on x86_64, else scalar). Every `Isa` variant exists on
-  every target; the code of an ISA compiles only for its architecture (`cfg`). Never
-  read an environment variable to choose an ISA. `Isa::Avx512` is available where the
-  CPU has AVX-512F, AVX2 and FMA, and selectable there, but `Isa::detect` never returns
-  it: the default stays AVX2 until Phase 6 T11 signs AVX-512 off (decision 4 of
-  docs/phase6/README.md; optimisation.md §5.3). The rule is a function of the feature
-  set (`isa::Features`), unit-tested with forced sets; keep it so.
+- Dispatch: `Isa::detect` once at construction (NEON on aarch64; on x86_64 AVX-512F
+  with AVX2 + FMA, else AVX2 + FMA, by `is_x86_feature_detected!`; else scalar). Every
+  `Isa` variant exists on every target; the code of an ISA compiles only for its
+  architecture (`cfg`). Never read an environment variable to choose an ISA.
+  `Isa::Avx512` is available where the CPU has AVX-512F, AVX2 and FMA, and since Phase 6
+  T11 (decision 7 of docs/phase6/README.md, from T11's in-FMM measurements on Kathleen;
+  optimisation.md §5.3) `Isa::detect` returns it there; `Isa::Avx2` stays selectable. The
+  rule is a function of the feature set (`isa::Features`), unit-tested with forced sets;
+  keep it so.
 - Unsafe (design §5.4): only in `src/arch/` and in the dispatch of `src/kernel.rs` that
   calls `#[target_feature]` entry points. The uses are calling an entry point after
   `P2pKernel::new` (or the dispatch in `src/arch/mod.rs`) checked the ISA, intrinsics

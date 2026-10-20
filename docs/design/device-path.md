@@ -7,7 +7,9 @@ taken in T2–T13 and the measured numbers that replace this document's models w
 they differ; short notes in Sections 6.5, 8.1, 10.5 and 13.4 point to it. The design
 sections are otherwise left as signed off. **Updated at the end of Phase 5 (2026-10-10,
 T10):** Section 14 describes the device on several ranks as built (Phase 5 T7, T8), with
-a short note in Section 17. It is
+a short note in Section 17. **Updated at the end of Phase 6 (2026-10-20, T11):** Section 19
+records Phase 6's kernel work (the grouped translations, several charge vectors, dipoles)
+and the device's leaf size per p. It is
 the Phase 4 counterpart of [simd-p2p.md](simd-p2p.md) and of the Phase 3 design
 [fmm-plan-redesign.md](fmm-plan-redesign.md), and it ties together what
 [laplace-fmm-plan.md](laplace-fmm-plan.md) §6 sketches: where data lives during an
@@ -2058,3 +2060,54 @@ Every output is unchanged bit for bit: the C3.2 hashes of the ignored gates equa
 the host, the CPU runtime (both passes), Metal and CUDA (f32 and f64), and every scenario
 of `tests/mpi_exec.rs` and `tests/device_common` still equals `Fmm::reference_output` with
 both output passes.
+
+## 19. Outcome of Phase 6's kernel work (C6.1, C6.3, C6.4; T5, T7, T8d, T11)
+
+Phase 6 changed the device path in three tasks and set one device default in T11; the
+reports are `fmm-validate/results/phase6-device.md` (T7), `phase6-rhs.md` (T5, §3.5),
+`phase6-dipoles.md` (T8d) and `phase6.md` (T11). Every change keeps the device's
+accumulation order and the host-against-device bounds of docs/phase4/README.md.
+
+- **The grouped translations (T7, C6.1; decision 8, signed off on 2026-10-17).** The
+  reduction by chunk (each chunk reduces the rows it touches, never more work than Phase
+  4's walk over every row), the gather fused into the GEMM's loads (`DeviceGather::Fused`,
+  no gathered scratch) and a shared-memory GEMM (`DeviceGemm::Shared`,
+  `GemmLayout::shared_for`) are bit for bit Phase 4S's kernels (every level call and every
+  device scenario compared). Defaults: the reduction by chunk on every backend; on Metal the
+  fused gather and the shared-memory GEMM to p = 9; on CUDA Phase 4S's gather and layout,
+  the tuner offering both. Measured: Metal f32 end to end 1.13–1.65× at N = 10⁶ and
+  1.29–3.97× at 10⁷ (p = 3–8); CUDA per level call 0.49–0.77 of Phase 4S's time, up to
+  33–34 % of the f64 peak at p = 18, end to end 1.0–1.17× in f32 and up to 1.65× in f64
+  (p = 18, N = 10⁷), where the host's part of an evaluation dominates. The best CUDA variant
+  alternates with p (the fused cube layout at p = 3 and 12, the shared-memory GEMM with the
+  fused gather at p = 6, 8 and 18); T11's sweep of every p is §19's last item.
+- **Several charge vectors (T5, C6.3).** The views get m columns per box
+  (`device::Columns`), the leaf and P2P kernels take the vectors along z, each vector bit for
+  bit its one-vector evaluation. The first sweep found the dense M2L quadratic in m (a fixed
+  chunk budget gave m times the chunks, each walking every row); the budget became per
+  vector (T5), then, with T7's reduction by chunk, capped at 8 vectors' worth on Metal and one
+  vector's 2 GB on CUDA. The evaluation per vector at m = 32 is 0.40–0.65 of one vector's on
+  CUDA and flat on Metal (dense M2L dominates there).
+- **Dipoles (T8d, C6.4).** The dipole P2P, P2M and P2L run on the device (CONVENTIONS
+  §3.13, "Device kernels", "Dipoles": 32 u_T for φ̂, 176 u_T for ĝ, measured at most 9.4 and
+  31.2 u_T on the CPU runtime, Metal and CUDA): a dipole evaluation on Metal costs 1.07–1.23×
+  a charge evaluation, against 15–28× with T8's host fallback. CUDA was not timed (the H100
+  was busy).
+- **The leaf size (T11; decision 7, signed off on 2026-10-20).** `FmmBuilder::
+  max_points_per_leaf` unset takes `fmm::default_max_points_per_leaf(p, backend)`: on Metal
+  128 at p = 6–7 and 256 from p = 8 (Phase 3S T7's rule on Metal f32, N = 10⁶: 1.15× at p = 6,
+  1.30× at p = 8, 64 kept at p = 3, where 128 was 2 % faster), 64 on CUDA and the CPU runtime
+  (Phase 4S T8's rule). This is the device answer to §17's open "leaf size per p".
+- **Not changed in Phase 6**: the device's M2L rule (`tune::static_strategy`: f32 Dense, f64
+  Dense on CUDA at every p, Rotation from p = 12 on Metal and the CPU runtime); `Batched` and
+  `PlaneWave`, the host's new strategies, run as `Dense` on a device. The host's part of a
+  device evaluation (the charge load, the output pass; 317–500 ms of a 10⁷ evaluation on the
+  GH200) is the next device item.
+- **CUDA's gather and layout per p (T11).** Not measured: the sweep of every p
+  (f32 2–10, f64 2–20, `gemm_variants`) and the short device sweep were queued behind a
+  GPU-idle gate on locust, where another user's job held the H100 throughout T11, and were
+  dropped at the user's request (2026-10-20); the one run that had completed (f32, the cube at
+  N = 10⁶, p = 2–10) ran beside another GPU job of the same user and its timings are
+  discarded. CUDA keeps Phase 4S's gather and layout and 64 points per leaf (decision 7); the
+  tuner offers the fused gather and the shared-memory GEMM per level call. A static rule per
+  p on CUDA stays open.

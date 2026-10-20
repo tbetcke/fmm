@@ -327,10 +327,17 @@ fn run<T: Stored + SimdScalar + Equivalence + Default>(
     let (phi, grad) = as_f64(&output);
     let (phi, grad) = (union(&phi, comm), union(&grad, comm));
     let order = union(&mine.iter().map(|&i| i as u64).collect::<Vec<u64>>(), comm);
+    // The one-rank host run of the device's strategy and near pairs (since Phase 6 T11 the
+    // host's `Auto` resolves to `Batched` or `PlaneWave`, the device's to `Dense` or
+    // `Rotation`, and a named strategy's cost model gives its own crossovers).
+    let (strategy, near) = (device.strategy(), device_common::same_near_pairs(&device));
     drop(device);
     if rank == 0 {
         let one = SimpleCommunicator::self_comm();
         let mut reference = builder
+            .clone()
+            .strategy(strategy)
+            .near_rule(near)
             .build(&all_points, &all_points, &one)
             .expect("the one-rank host FMM builds");
         let (rphi, rgrad) = as_f64(&reference.evaluate(&all_charges).expect("evaluates"));

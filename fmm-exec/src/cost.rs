@@ -70,7 +70,7 @@ use rlst::distributed_tools::all_to_allv;
 use thiserror::Error;
 
 use crate::fmm::OperatorKind;
-use crate::tables::M2lStrategy;
+use crate::tables::{M2lStrategy, NodeContext};
 
 /// The work of a rank or a block by operator kind, in the units of the [module
 /// documentation](self#the-model).
@@ -411,20 +411,18 @@ struct Calibration {
 /// 2.1–3.4 % (f32 `Rotation`) and 4.2–8.0 % (f32 `Dense`, whose M2L streams each rank's
 /// own 17 MB of tables).
 ///
-/// `PlaneWave` (Phase 6 T13, M2L per box with a V row, [`M2lUnit::Boxes`]) the same way
-/// (Kathleen job 605559, `tools/scaling/run.sh t13-calibrate`: 40 ranks on one node, the
-/// first cut, the three workloads at N = 10⁷, the P2P kernel's AVX2): within 3.1–7.1 % of
-/// every rank's sum of kind times at f64 p = 8, 4.3–8.1 % at p = 18 and 2.0–5.9 % at f32
-/// p = 8.
-const CALIBRATIONS: [Calibration; 7] = [
-    Calibration {
-        strategy: M2lStrategy::Rotation,
-        value_bytes: 8,
-        p: 8,
-        alpha: [
-            664.03, 2754.50, 3129.00, 568.13, 2799.44, 1086.56, 1299.22, 3.0852,
-        ],
-    },
+/// `PlaneWave` (Phase 6 T13, M2L per box with a V row, [`M2lUnit::Boxes`]) the same way.
+///
+/// Refitted in Phase 6 T11 (decision 7 of docs/phase6/README.md; Kathleen job 606208,
+/// `tools/scaling/run.sh t11-calibrate`: 40 ranks on one node, the first cut, the near
+/// rule off, the three workloads at N = 10⁷, per kind the median over them) with the
+/// operators of Phase 6 and the P2P kernel's default ISA there, AVX-512: `Batched` (fused)
+/// at f64 p = 3, 6, 8 and f32 p = 3, 8, within 2.3–4.4 % of every rank's sum of kind
+/// times; `Rotation` at f64 p = 8 and 18 (2.4–5.0 %); `PlaneWave` at f64 p = 8 and 18 and
+/// f32 p = 8 (2.8–10.3 %, its M2L per box varying most between the workloads). `Dense` and
+/// f32 `Rotation` keep Phase 5S's (AVX2) constants: named strategies only, outside the
+/// rule of `Auto`.
+const CALIBRATIONS: [Calibration; 13] = [
     Calibration {
         strategy: M2lStrategy::Dense,
         value_bytes: 8,
@@ -450,11 +448,65 @@ const CALIBRATIONS: [Calibration; 7] = [
         ],
     },
     Calibration {
+        strategy: M2lStrategy::Batched,
+        value_bytes: 8,
+        p: 3,
+        alpha: [
+            111.37, 144.14, 48.37, 110.59, 151.81, 248.10, 327.13, 1.5080,
+        ],
+    },
+    Calibration {
+        strategy: M2lStrategy::Batched,
+        value_bytes: 8,
+        p: 6,
+        alpha: [
+            353.85, 1045.83, 228.45, 349.31, 1181.14, 671.82, 818.92, 1.5085,
+        ],
+    },
+    Calibration {
+        strategy: M2lStrategy::Batched,
+        value_bytes: 8,
+        p: 8,
+        alpha: [
+            617.72, 2733.97, 630.01, 642.61, 3182.59, 1083.07, 1288.92, 1.5083,
+        ],
+    },
+    Calibration {
+        strategy: M2lStrategy::Batched,
+        value_bytes: 4,
+        p: 3,
+        alpha: [122.23, 83.10, 40.71, 114.08, 93.07, 251.10, 324.89, 0.9604],
+    },
+    Calibration {
+        strategy: M2lStrategy::Batched,
+        value_bytes: 4,
+        p: 8,
+        alpha: [
+            671.12, 1423.56, 291.82, 676.87, 1612.63, 1104.98, 1314.02, 0.9617,
+        ],
+    },
+    Calibration {
+        strategy: M2lStrategy::Rotation,
+        value_bytes: 8,
+        p: 8,
+        alpha: [
+            606.49, 2624.05, 2908.61, 600.89, 2684.00, 1078.04, 1289.11, 1.5109,
+        ],
+    },
+    Calibration {
+        strategy: M2lStrategy::Rotation,
+        value_bytes: 8,
+        p: 18,
+        alpha: [
+            3470.95, 21418.10, 30999.40, 3569.59, 23020.98, 4739.32, 5266.74, 1.5181,
+        ],
+    },
+    Calibration {
         strategy: M2lStrategy::PlaneWave,
         value_bytes: 8,
         p: 8,
         alpha: [
-            586.07, 2586.97, 60190.34, 597.55, 2734.66, 1037.53, 1230.28, 3.0825,
+            607.34, 2619.66, 59420.48, 619.66, 2929.18, 1080.42, 1289.28, 1.5114,
         ],
     },
     Calibration {
@@ -462,7 +514,7 @@ const CALIBRATIONS: [Calibration; 7] = [
         value_bytes: 8,
         p: 18,
         alpha: [
-            3367.09, 20960.12, 346075.79, 3439.55, 22713.93, 4507.78, 5069.52, 3.0750,
+            3466.81, 21409.11, 349691.74, 3563.71, 24144.15, 4696.45, 5233.04, 1.5087,
         ],
     },
     Calibration {
@@ -470,7 +522,7 @@ const CALIBRATIONS: [Calibration; 7] = [
         value_bytes: 4,
         p: 8,
         alpha: [
-            644.45, 2666.24, 41330.64, 639.69, 2755.85, 1067.26, 1271.82, 1.3652,
+            666.62, 2686.17, 44310.57, 659.80, 2852.22, 1101.70, 1313.04, 0.9585,
         ],
     },
 ];
@@ -514,19 +566,25 @@ impl CostModel {
     /// The constants measured on Kathleen for `strategy`, values of `value_bytes` bytes
     /// (8 for f64, 4 for f32) and degree `p`.
     ///
-    /// The table holds f64 at p = 3 (`Dense`) and p = 8 (`Rotation`), and f32 at p = 8
-    /// (`Dense` and `Rotation`), the configurations of Phase 5S, and `PlaneWave` at f64
-    /// p = 8 and 18 and f32 p = 8 (Phase 6 T13), whose M2L counts boxes
-    /// ([`M2lUnit::Boxes`]). Another degree takes the calibration of the same strategy and
-    /// precision nearest in p (`Classes` and `Batched` take `Dense`'s, `Auto`
-    /// `Rotation`'s; another precision f64's) and scales it: the leaf operators by
+    /// The table holds, since Phase 6 T11, `Batched` at f64 p = 3, 6, 8 and f32 p = 3, 8,
+    /// `Rotation` at f64 p = 8, 18 and `PlaneWave` at f64 p = 8, 18 and f32 p = 8 (whose M2L
+    /// counts boxes, [`M2lUnit::Boxes`]), with the AVX-512 P2P, and from Phase 5S `Dense`
+    /// at f64 p = 3 and f32 p = 8 and `Rotation` at f32 p = 8. Another degree takes the
+    /// calibration of the same strategy and precision nearest in p (`Classes` takes
+    /// `Dense`'s, `Auto` that of the strategy its host rule resolves to,
+    /// [`M2lStrategy::resolve_on_node`]; another precision f64's) and scales it: the leaf operators by
     /// (p + 1)², the translations by (p + 1)³ under `Rotation` (M2M and L2L also under
     /// `PlaneWave`) and (p + 1)⁴ otherwise, the plane waves' M2L per box by (p + 1)², P2P
     /// not at all.
     pub fn calibrated(strategy: M2lStrategy, value_bytes: usize, p: usize) -> Self {
         let strategy = match strategy {
-            M2lStrategy::Classes | M2lStrategy::Batched => M2lStrategy::Dense,
-            M2lStrategy::Auto => M2lStrategy::Rotation,
+            M2lStrategy::Classes => M2lStrategy::Dense,
+            M2lStrategy::Auto => M2lStrategy::Auto.resolve_on_node(&NodeContext::new(
+                p,
+                value_bytes,
+                1,
+                M2lStrategy::AUTO_DENSE_NODE_BYTES,
+            )),
             named => named,
         };
         let candidates = |bytes: usize| {
@@ -658,7 +716,7 @@ mod tests {
         assert_eq!(model.near_crossovers(), [14.0, 8.0]);
         let free = CostModel::new([1.0, 2.0, 3.0, 0.0, 5.0, 6.0, 7.0, 0.0]).unwrap();
         assert_eq!(free.near_crossovers(), [f64::INFINITY, 0.0]);
-        // Kathleen's f64 p = 3 Dense constants: about 107 and 35 points
+        // Kathleen's f64 p = 3 Dense constants of Phase 5S: about 107 and 35 points
         // (docs/design/optimisation.md §8a.2).
         let [w, x] = CostModel::calibrated(M2lStrategy::Dense, 8, 3).near_crossovers();
         assert!(
@@ -675,30 +733,46 @@ mod tests {
             assert_eq!(model.to_array(), calibration.alpha);
             assert!(CostModel::new(calibration.alpha).is_ok());
         }
-        // Rotation at f64 p = 17: from p = 8, translations by (18 / 9)³, leaf operators
-        // by (18 / 9)², P2P unchanged.
+        // Rotation at f64 p = 12: from p = 8 (nearer than 18), translations by (13 / 9)³,
+        // leaf operators by (13 / 9)², P2P unchanged.
         let base = CostModel::calibrated(M2lStrategy::Rotation, 8, 8);
-        let scaled = CostModel::calibrated(M2lStrategy::Rotation, 8, 17);
-        assert_eq!(
+        let scaled = CostModel::calibrated(M2lStrategy::Rotation, 8, 12);
+        let ratio = 13.0f64 / 9.0;
+        let close = |a: f64, b: f64| (a - b).abs() <= 1e-12 * b;
+        assert!(close(
             scaled.alpha(OperatorKind::M2l),
-            8.0 * base.alpha(OperatorKind::M2l)
-        );
-        assert_eq!(
+            ratio.powi(3) * base.alpha(OperatorKind::M2l)
+        ));
+        assert!(close(
             scaled.alpha(OperatorKind::P2m),
-            4.0 * base.alpha(OperatorKind::P2m)
-        );
+            ratio.powi(2) * base.alpha(OperatorKind::P2m)
+        ));
         assert_eq!(
             scaled.alpha(OperatorKind::P2p),
             base.alpha(OperatorKind::P2p)
         );
-        // Classes takes Dense's; Auto Rotation's; a precision without a calibration f64's.
+        // Classes takes Dense's; Auto that of its host rule's strategy (Phase 6 T11:
+        // Batched below f64 p = 7 and f32 p = 8, PlaneWave from there); a precision without
+        // a calibration f64's.
         assert_eq!(
             CostModel::calibrated(M2lStrategy::Classes, 8, 3),
             CostModel::calibrated(M2lStrategy::Dense, 8, 3)
         );
         assert_eq!(
             CostModel::calibrated(M2lStrategy::Auto, 8, 8),
-            CostModel::calibrated(M2lStrategy::Rotation, 8, 8)
+            CostModel::calibrated(M2lStrategy::PlaneWave, 8, 8)
+        );
+        assert_eq!(
+            CostModel::calibrated(M2lStrategy::Auto, 8, 6),
+            CostModel::calibrated(M2lStrategy::Batched, 8, 6)
+        );
+        assert_eq!(
+            CostModel::calibrated(M2lStrategy::Auto, 4, 7),
+            CostModel::calibrated(M2lStrategy::Batched, 4, 7)
+        );
+        assert_eq!(
+            CostModel::calibrated(M2lStrategy::Auto, 4, 8),
+            CostModel::calibrated(M2lStrategy::PlaneWave, 4, 8)
         );
         assert_eq!(
             CostModel::calibrated(M2lStrategy::Dense, 2, 3),

@@ -70,9 +70,10 @@
 //!    device backend resolves the M2L strategy of [`M2lStrategy::Auto`] for the device
 //!    (Phase 4 T12: from the tuning cache, by timing rotation against dense, or by the
 //!    static rule; on several ranks with a tuning cache rank 0's, broadcast, Phase 5 T8),
-//!    and otherwise by the host rule with the node ([`M2lStrategy::resolve_on_node`],
-//!    Phase 5N T4: p, the precision, the agreed ranks per node and
-//!    [`FmmBuilder::dense_node_budget`]), so every rank resolves the same strategy;
+//!    and otherwise by the host rule ([`M2lStrategy::resolve_on_node`]; since Phase 6
+//!    T11 by p and the precision, the agreed ranks per node and
+//!    [`FmmBuilder::dense_node_budget`] only reported), so every rank resolves the same
+//!    strategy;
 //!    builds or loads the tables (with a cache, the lowest rank of each node first, the
 //!    others after a barrier of the node's communicator: [`FmmBuilder::table_cache`]), the
 //!    host operator, and the evaluator with the per-leaf counts (its own collectives).
@@ -161,13 +162,15 @@
 //!
 //! # The batched M2L (Phase 6 T2, C6.6)
 //!
-//! [`M2lStrategy::Batched`] (opt-in; `Auto` never resolves to it) holds `Dense`'s tables
+//! [`M2lStrategy::Batched`] (`Auto`'s choice at f64 p ≤ 6 and f32 p ≤ 7 since Phase 6
+//! T11) holds `Dense`'s tables
 //! and applies M2L on the host per level, block by block of targets and offset by offset,
 //! through the column kernel of `nd-fmm-simd` on the ISA of the P2P choice
 //! ([`operator`](crate::operator#the-batched-m2l), "The batched M2L";
 //! docs/design/optimisation.md §2). Its output is `Dense`'s bit for bit, so every
-//! guarantee here holds for it unchanged. [`FmmBuilder::m2l_mul_add`] (or
-//! [`Fmm::set_m2l_mul_add`]) with [`MulAdd::Fused`] forms each step with one fma: within
+//! guarantee here holds for it unchanged. [`MulAdd::Fused`] (the default from p =
+//! [`FUSED_MUL_ADD_MIN_P`] since Phase 6 T11, [`default_m2l_mul_add`]; named by
+//! [`FmmBuilder::m2l_mul_add`] or [`Fmm::set_m2l_mul_add`]) forms each step with one fma: within
 //! n u per element of `Dense`, and still deterministic, the same for every thread count
 //! and, on P ranks, bit for bit the one-rank fused `Fmm` over the union. With a device
 //! backend M2L on the device runs as `Dense`. [`Fmm::threading`] names the kernel's ISA
@@ -175,7 +178,8 @@
 //!
 //! # The plane-wave M2L (Phase 6 T13, C6.5)
 //!
-//! [`M2lStrategy::PlaneWave`] (opt-in; `Auto` never resolves to it) applies M2L by plane
+//! [`M2lStrategy::PlaneWave`] (`Auto`'s choice at f64 p ≥ 7 and f32 p ≥ 8 since Phase 6
+//! T11) applies M2L by plane
 //! waves with merge and shift ([`operator`](crate::operator#the-plane-wave-m2l), "The
 //! plane-wave M2L"; CONVENTIONS §3.14), M2M and L2L by `Rotation`'s tables. It approximates
 //! M2L: the output is not `Dense`'s, but within its error budget (the errors against the
@@ -382,8 +386,8 @@
 //!
 //! # The near rule (C6.9)
 //!
-//! With [`FmmBuilder::near_rule`] (Phase 6 T12; docs/design/optimisation.md §8a; off by
-//! default until Phase 6 T11) the build turns the W and X pairs between two leaves whose
+//! With [`FmmBuilder::near_rule`] (Phase 6 T12; docs/design/optimisation.md §8a; on, from
+//! the cost model, by default since Phase 6 T11) the build turns the W and X pairs between two leaves whose
 //! fine leaf holds few points into near pairs, which P2P evaluates exactly, in place of
 //! M2P (the multipole of the fine leaf at the coarse leaf's targets) and P2L (a local of
 //! the fine leaf from the coarse leaf's sources).
@@ -480,6 +484,32 @@ use crate::threading::{REQUIRED_MPI_THREADING, ThreadingReport};
 /// CONVENTIONS §3.14) reach the same degree.
 pub const MAX_DEGREE: usize = 20;
 
+/// The lowest degree at which the batched M2L fuses its multiply–adds by default
+/// ([`default_m2l_mul_add`]; Phase 6 T11).
+pub const FUSED_MUL_ADD_MIN_P: usize = 6;
+
+/// The multiply–add mode of the batched M2L when the builder names none
+/// ([`FmmBuilder::m2l_mul_add`]): [`MulAdd::Fused`] from p = [`FUSED_MUL_ADD_MIN_P`],
+/// [`MulAdd::Separate`] below (Phase 6 T11, decision 7 of docs/phase6/README.md). Measured
+/// on the three machines (fmm-validate/results/phase6.md), the fused mode was 1.05–1.4×
+/// faster than the separate one inside the FMM at p ≥ 6 and tied at p = 3, except at f64
+/// p = 3 with 72 ranks on locust, where it was 1.08–1.5× slower.
+///
+/// ```
+/// use nd_fmm_exec::fmm::default_m2l_mul_add;
+/// use nd_fmm_exec::operator::MulAdd;
+///
+/// assert_eq!(default_m2l_mul_add(5), MulAdd::Separate);
+/// assert_eq!(default_m2l_mul_add(6), MulAdd::Fused);
+/// ```
+pub fn default_m2l_mul_add(p: usize) -> MulAdd {
+    if p >= FUSED_MUL_ADD_MIN_P {
+        MulAdd::Fused
+    } else {
+        MulAdd::Separate
+    }
+}
+
 // `PlaneWave` builds its tables at every degree the builder accepts.
 const _: () = assert!(MAX_DEGREE <= nd_fmm_tables::plane_wave::MAX_DEGREE);
 
@@ -494,8 +524,37 @@ pub const DEFAULT_MAX_LEVEL: usize = DEEPEST_LEVEL as usize;
 /// less than the cost of a second `Plan::new`.
 pub const WORK_CUT_MIN_GAIN: f64 = 0.02;
 
-/// The default `max_points_per_leaf` of [`FmmBuilder`].
+/// The refinement target of Phases 3–6 T10, and since Phase 6 T11 the default of
+/// [`FmmBuilder::max_points_per_leaf`] at low p ([`default_max_points_per_leaf`]).
 pub const DEFAULT_MAX_POINTS_PER_LEAF: usize = 64;
+
+/// The refinement target when the builder names none ([`FmmBuilder::max_points_per_leaf`];
+/// Phase 6 T11, decision 7 of docs/phase6/README.md): by the rule of Phase 3S T7 (a size
+/// other than 64 only where the geometric mean of the evaluation times over the cube and
+/// the Plummer sphere, N and precision is at least 5 % lower, at errors no worse) applied
+/// on each backend (fmm-validate/results/phase6.md):
+/// - on the host, 128 from p = 12 (6–21 % faster on the M3 Max, locust and Kathleen),
+///   64 below (at p = 6–8 128 gained 7–14 % on Kathleen but nothing on the NEON
+///   machines);
+/// - on Metal, 128 at p = 6 and 7 (15 % faster at p = 6) and 256 from p = 8 (30 % at
+///   p = 8), 64 below;
+/// - on CUDA and the CubeCL CPU runtime, 64 (Phase 4S T8's rule kept).
+///
+/// ```
+/// use nd_fmm_exec::fmm::{Backend, default_max_points_per_leaf};
+///
+/// assert_eq!(default_max_points_per_leaf(8, Backend::Host), 64);
+/// assert_eq!(default_max_points_per_leaf(12, Backend::Host), 128);
+/// assert_eq!(default_max_points_per_leaf(8, Backend::Metal), 256);
+/// ```
+pub fn default_max_points_per_leaf(p: usize, backend: Backend) -> usize {
+    match backend {
+        Backend::Host if p >= 12 => 128,
+        Backend::Metal if p >= 8 => 256,
+        Backend::Metal if p >= 6 => 128,
+        _ => DEFAULT_MAX_POINTS_PER_LEAF,
+    }
+}
 
 /// The default [`FmmBuilder::tuning_budget`]: 10 s (docs/design/device-path.md §10.4).
 pub const DEFAULT_TUNING_BUDGET: Duration = Duration::from_secs(10);
@@ -902,12 +961,13 @@ pub enum SettingsError {
 pub enum NearRuleChoice {
     /// No near rule (the default until Phase 6 T11): M2P and P2L for every W and X pair,
     /// the plan of `Plan::new`.
-    #[default]
     Off,
-    /// The crossovers of the FMM's [`CostModel`] ([`Fmm::cost_model`]): a W pair converts
+    /// The default since Phase 6 T11 (decision 7 of docs/phase6/README.md). The crossovers
+    /// of the FMM's [`CostModel`] ([`Fmm::cost_model`]): a W pair converts
     /// where its source leaf holds fewer than N_W = α_M2P / α_P2P sources, an X pair where
     /// its target leaf holds fewer than N_X = α_P2L / α_P2P targets
     /// ([`CostModel::near_crossovers`]; docs/design/optimisation.md §8a.2).
+    #[default]
     CostModel,
     /// Named crossovers, for tests and sweeps: a W pair converts where its source leaf
     /// holds fewer than `w` sources, an X pair where its target leaf holds fewer than `x`
@@ -1102,18 +1162,18 @@ pub enum FmmError {
 /// | Setting | Default |
 /// | --- | --- |
 /// | degree p ([`new`](Self::new)) | none; 0 ≤ p ≤ [`MAX_DEGREE`] |
-/// | [`strategy`](Self::strategy) | [`M2lStrategy::Auto`]: `Dense` while the dense tables are at most 9 MB per rank and the node budget per node, `Rotation` otherwise ([`M2lStrategy::resolve_on_node`]) |
+/// | [`strategy`](Self::strategy) | [`M2lStrategy::Auto`]: on the host `Batched` at f64 p ≤ 6 and f32 p ≤ 7, `PlaneWave` above ([`M2lStrategy::resolve_on_node`]) |
 /// | [`dense_node_budget`](Self::dense_node_budget) | [`M2lStrategy::AUTO_DENSE_NODE_BYTES`], 64 MB |
 /// | [`gradients`](Self::gradients) | off |
 /// | [`vectors`](Self::vectors) | 1: one charge vector per evaluation |
 /// | [`sources`](Self::sources) | [`SourceType::Charges`]: point charges |
 /// | [`max_level`](Self::max_level) | [`DEFAULT_MAX_LEVEL`], 16 |
-/// | [`max_points_per_leaf`](Self::max_points_per_leaf) | [`DEFAULT_MAX_POINTS_PER_LEAF`], 64 |
+/// | [`max_points_per_leaf`](Self::max_points_per_leaf) | [`default_max_points_per_leaf`] of p and the backend: on the host 64, 128 from p = 12 |
 /// | [`domain`](Self::domain) | `compute_global_bounding_box` of all points |
 /// | [`table_cache`](Self::table_cache) | none: every rank builds its tables |
 /// | [`threads`](Self::threads) | 1: no pool, the calling thread |
 /// | [`p2p_kernel`](Self::p2p_kernel) | [`P2pChoice::Auto`]: the kernel of `nd-fmm-simd` on the default ISA of this machine (`Isa::detect`) |
-/// | [`m2l_mul_add`](Self::m2l_mul_add) | [`MulAdd::Separate`]: `Batched` bit for bit `Dense` |
+/// | [`m2l_mul_add`](Self::m2l_mul_add) | [`default_m2l_mul_add`]: [`MulAdd::Fused`] from p = 6, [`MulAdd::Separate`] (`Batched` bit for bit `Dense`) below |
 /// | [`backend`](Self::backend) | [`Backend::Host`]: the host path |
 /// | [`host_fallback`](Self::host_fallback) | none |
 /// | [`synchronous_stages`](Self::synchronous_stages) | off |
@@ -1131,7 +1191,7 @@ pub enum FmmError {
 /// | [`overlap`](Self::overlap) | off: the blocking exchanges |
 /// | [`work_cut`](Self::work_cut) | on: the blocks cut again by modelled cost on several ranks |
 /// | [`cost_model`](Self::cost_model) | [`CostModel::calibrated`] for the strategy, precision and p |
-/// | [`near_rule`](Self::near_rule) | [`NearRuleChoice::Off`]: M2P and P2L for every W and X pair |
+/// | [`near_rule`](Self::near_rule) | [`NearRuleChoice::CostModel`]: W and X pairs below the cost model's crossovers by P2P |
 ///
 /// For `T = f32`, p > 8 is accepted but lies beyond the useful range (design §4): the
 /// error is then at the f32 floor already.
@@ -1144,12 +1204,12 @@ pub struct FmmBuilder<T> {
     vectors: usize,
     sources: SourceType,
     max_level: usize,
-    max_points_per_leaf: usize,
+    max_points_per_leaf: Option<usize>,
     domain: Option<[f64; 6]>,
     table_cache: Option<PathBuf>,
     threads: usize,
     p2p: P2pChoice,
-    m2l_mul_add: MulAdd,
+    m2l_mul_add: Option<MulAdd>,
     backend: Backend,
     host_fallback: Vec<OperatorKind>,
     synchronous_stages: bool,
@@ -1185,12 +1245,12 @@ impl<T> FmmBuilder<T> {
             vectors: 1,
             sources: SourceType::Charges,
             max_level: DEFAULT_MAX_LEVEL,
-            max_points_per_leaf: DEFAULT_MAX_POINTS_PER_LEAF,
+            max_points_per_leaf: None,
             domain: None,
             table_cache: None,
             threads: 1,
             p2p: P2pChoice::Auto,
-            m2l_mul_add: MulAdd::Separate,
+            m2l_mul_add: None,
             backend: Backend::Host,
             host_fallback: Vec::new(),
             synchronous_stages: false,
@@ -1208,7 +1268,7 @@ impl<T> FmmBuilder<T> {
             overlap: false,
             work_cut: true,
             cost_model: None,
-            near_rule: NearRuleChoice::Off,
+            near_rule: NearRuleChoice::CostModel,
             multipole_routing: MultipoleRouting::default(),
             #[cfg(feature = "gpu")]
             tuning_hook: crate::tune::TuningHook::default(),
@@ -1226,14 +1286,13 @@ impl<T> FmmBuilder<T> {
         self
     }
 
-    /// Sets the node budget of [`M2lStrategy::Auto`] in bytes: the private dense tables of
-    /// all the ranks of a node above which `Auto` resolves to `Rotation`
-    /// ([`NodeContext::node_budget`]; default [`M2lStrategy::AUTO_DENSE_NODE_BYTES`],
-    /// 64 MB; Phase 5N T4, docs/design/node-m2l.md §4). A machine with a larger shared
-    /// cache may set more: the harness uses 96 MB on locust (114 MB of L3) and Kathleen
-    /// (2 × 27.5 MB), where Dense still wins at f32 p = 8 with 8–10 ranks per node. Every
-    /// rank must pass the same value. Ignored by a named strategy and, with a device
-    /// backend and M2L on the device, by the device path's rule.
+    /// Sets the node budget in bytes ([`NodeContext::node_budget`]; default
+    /// [`M2lStrategy::AUTO_DENSE_NODE_BYTES`], 64 MB): reported in [`Fmm::threading`],
+    /// and since Phase 6 T11 no longer read by [`M2lStrategy::Auto`]'s host rule, which
+    /// depends on p and the precision alone. Under the rule of Phase 5N T4
+    /// (docs/design/node-m2l.md §4) it was the private dense tables of all the ranks of
+    /// a node above which `Auto` resolved to `Rotation`. Every rank must pass the same
+    /// value.
     pub fn dense_node_budget(mut self, bytes: usize) -> Self {
         self.dense_node_budget = bytes;
         self
@@ -1278,9 +1337,10 @@ impl<T> FmmBuilder<T> {
     /// `max_level`, so leaves there may hold more. Passed to
     /// `OctreeOptions::with_max_fine_keys`, which counts distinct finest-level keys:
     /// a point that is a source and a target counts once, and so do points closer than
-    /// a level-16 box.
+    /// a level-16 box. Unset, [`default_max_points_per_leaf`] of p and the backend
+    /// (Phase 6 T11); [`Fmm::max_points_per_leaf`] reports the target used.
     pub fn max_points_per_leaf(mut self, max_points_per_leaf: usize) -> Self {
-        self.max_points_per_leaf = max_points_per_leaf;
+        self.max_points_per_leaf = Some(max_points_per_leaf);
         self
     }
 
@@ -1333,14 +1393,15 @@ impl<T> FmmBuilder<T> {
     }
 
     /// Sets the multiply–add mode of the batched M2L ([`M2lStrategy::Batched`] on the
-    /// host; Phase 6 T2, docs/design/optimisation.md §2.3): [`MulAdd::Separate`] (the
-    /// default) gives every local the chain of `Dense`, so the output is `Dense`'s bit for
-    /// bit; [`MulAdd::Fused`] forms each step with one fma, 1.1–1.6× faster on the kernel
-    /// and within n u per element of `Dense` (n = (p + 1)²), deterministic and the same on
-    /// every thread count, rank count and ISA. Opt-in until Phase 6 T11. Every other
-    /// strategy, and the device, ignores it; [`Fmm::threading`] reports it.
+    /// host; Phase 6 T2, docs/design/optimisation.md §2.3): [`MulAdd::Separate`] gives
+    /// every local the chain of `Dense`, so the output is `Dense`'s bit for bit;
+    /// [`MulAdd::Fused`] forms each step with one fma, 1.1–1.6× faster on the kernel and
+    /// within n u per element of `Dense` (n = (p + 1)²), deterministic and the same on
+    /// every thread count, rank count and ISA. Unset, [`default_m2l_mul_add`] of p (Phase
+    /// 6 T11): fused from p = [`FUSED_MUL_ADD_MIN_P`]. Every other strategy, and the
+    /// device, ignores it; [`Fmm::threading`] reports it.
     pub fn m2l_mul_add(mut self, mul_add: MulAdd) -> Self {
-        self.m2l_mul_add = mul_add;
+        self.m2l_mul_add = Some(mul_add);
         self
     }
 
@@ -1548,9 +1609,10 @@ impl<T> FmmBuilder<T> {
 
     /// The near rule (Phase 6 T12, C6.9; [The near rule](self#the-near-rule-c69)): W and X
     /// pairs between two leaves whose fine leaf holds fewer points than a crossover run as
-    /// P2P, exactly, instead of M2P and P2L. Off by default until Phase 6 T11;
-    /// [`NearRuleChoice::CostModel`] takes the crossovers from the
-    /// [`cost_model`](Self::cost_model). The output changes (the converted pairs lose
+    /// P2P, exactly, instead of M2P and P2L. By default since Phase 6 T11
+    /// [`NearRuleChoice::CostModel`], which takes the crossovers from the
+    /// [`cost_model`](Self::cost_model); [`NearRuleChoice::Off`] keeps M2P and P2L for
+    /// every pair. The output changes (the converted pairs lose
     /// their truncation error); for fixed settings it is deterministic, the same for every
     /// thread count and overlap setting, and on P ranks the one-rank output of the same
     /// rule bit for bit. Every rank must pass the same setting.
@@ -1583,6 +1645,12 @@ impl<T> FmmBuilder<T> {
 
     /// Checks the settings that do not depend on the input; whether this machine can
     /// run the P2P kernel depends on the rank's CPU.
+    /// The refinement target: the named one, or [`default_max_points_per_leaf`].
+    fn leaf_points(&self) -> usize {
+        self.max_points_per_leaf
+            .unwrap_or_else(|| default_max_points_per_leaf(self.p, self.backend))
+    }
+
     fn check_settings(&self) -> Result<(), SettingsError> {
         if self.p > MAX_DEGREE {
             return Err(SettingsError::DegreeTooLarge { p: self.p });
@@ -1592,7 +1660,7 @@ impl<T> FmmBuilder<T> {
                 max_level: self.max_level,
             });
         }
-        if self.max_points_per_leaf == 0 {
+        if self.max_points_per_leaf == Some(0) {
             return Err(SettingsError::ZeroPointsPerLeaf);
         }
         if self.threads == 0 {
@@ -1764,7 +1832,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         let keys = points_to_morton(&points, DEEPEST, &domain.physical_box());
         let options = OctreeOptions::new()
             .with_max_level(self.max_level)
-            .with_max_fine_keys(self.max_points_per_leaf)
+            .with_max_fine_keys(self.leaf_points())
             .with_ghost_children(true);
         let octree = Octree::new(&keys, options, comm);
         let octree_time = start.elapsed();
@@ -1934,7 +2002,10 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         let mut operator = LaplaceOperator::new(tables, self.gradients, max_leaf_points)
             .with_p2p(self.p2p)
             .expect("step 1 checked that this machine runs the P2P kernel")
-            .with_m2l_mul_add(self.m2l_mul_add)
+            .with_m2l_mul_add(
+                self.m2l_mul_add
+                    .unwrap_or_else(|| default_m2l_mul_add(self.p)),
+            )
             .with_vectors(self.vectors)
             .with_sources(self.sources)
             .with_plane_wave_boxes(level_boxes);
@@ -2026,6 +2097,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             domain,
             strategy,
             backend: self.backend,
+            max_points_per_leaf: self.leaf_points(),
             work_cut,
             recut,
             cost_model,
@@ -4027,6 +4099,8 @@ where
     domain: Domain,
     strategy: M2lStrategy,
     backend: Backend,
+    /// The refinement target of the octree.
+    max_points_per_leaf: usize,
     /// Whether the blocks were cut a second time, by modelled cost (Phase 5S T7).
     work_cut: bool,
     /// Whether that second cut moved blocks.
@@ -4616,6 +4690,12 @@ where
     /// Returns the backend the operators run on ([`FmmBuilder::backend`]).
     pub fn backend(&self) -> Backend {
         self.backend
+    }
+
+    /// Returns the refinement target the octree was built with
+    /// ([`FmmBuilder::max_points_per_leaf`], or [`default_max_points_per_leaf`]).
+    pub fn max_points_per_leaf(&self) -> usize {
+        self.max_points_per_leaf
     }
 
     /// Returns where `kind` runs: on the host for [`Backend::Host`]; with a device

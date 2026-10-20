@@ -115,7 +115,8 @@ use nd_fmm_exec::cost::CostModel;
 use nd_fmm_exec::fmm::{
     Backend, BuildTimings, DeviceGather, DeviceGemm, DeviceReduction, ExchangeTraffic, Fmm,
     FmmBuilder, KindTiming, ListSizes, MultipoleRouting, NearRuleChoice, OperatorKind, Output,
-    OutputMany, StageTimings, TREE_FAN_OUT, Traffic,
+    OutputMany, StageTimings, TREE_FAN_OUT, Traffic, default_m2l_mul_add,
+    default_max_points_per_leaf,
 };
 use nd_fmm_exec::geometry::{contains, integer_centre};
 use nd_fmm_exec::operator::{MulAdd, P2pChoice, SimdScalar};
@@ -133,7 +134,9 @@ use crate::{SplitMix64, points};
 /// The deepest level of a leaf: that of the C3.3 problems.
 pub const MAX_LEVEL: usize = 16;
 
-/// The refinement target: 64 points per leaf, the host path's default.
+/// The refinement target of Phases 3–6 T10, 64 points per leaf; since Phase 6 T11 the
+/// library's default depends on p and the backend (`fmm::default_max_points_per_leaf`),
+/// which the harness takes unless [`Settings::max_points_per_leaf`] names one.
 pub const MAX_POINTS_PER_LEAF: usize = 64;
 
 /// Values per target in the output: φ and ∇φ.
@@ -396,9 +399,10 @@ pub struct Settings {
     /// The node budget of `Auto` in bytes (`FmmBuilder::dense_node_budget`; Phase 5N T4),
     /// or the library's default (`M2lStrategy::AUTO_DENSE_NODE_BYTES`, 64 MB) if `None`.
     pub dense_node_budget: Option<usize>,
-    /// The multiply–add mode of the batched M2L (`FmmBuilder::m2l_mul_add`, Phase 6 T2;
-    /// the library's `Separate`): only `M2lStrategy::Batched` uses it.
-    pub m2l_mul_add: MulAdd,
+    /// The multiply–add mode of the batched M2L (`FmmBuilder::m2l_mul_add`, Phase 6 T2),
+    /// or the library's default of p if `None` (`fmm::default_m2l_mul_add`, Phase 6 T11:
+    /// fused from p = 6): only `M2lStrategy::Batched` uses it.
+    pub m2l_mul_add: Option<MulAdd>,
     /// The evaluation paths.
     pub overlap: Overlap,
     /// Where the points are passed in.
@@ -456,22 +460,42 @@ pub struct Settings {
     pub device_gather: DeviceGather,
     /// The device's reduction (`FmmBuilder::device_reduction`, Phase 6 T7).
     pub device_reduction: DeviceReduction,
-    /// The near rule (`FmmBuilder::near_rule`, Phase 6 T12, C6.9; off, as the library's
-    /// default): the W and X pairs between leaves below its crossovers run as P2P.
+    /// The near rule (`FmmBuilder::near_rule`, Phase 6 T12, C6.9; from the cost model, as
+    /// the library's default since Phase 6 T11): the W and X pairs between leaves below
+    /// its crossovers run as P2P.
     pub near_rule: NearRuleChoice,
+    /// The refinement target (`FmmBuilder::max_points_per_leaf`; Phase 6 T11, the leaf
+    /// size per p), or the library's default of p and the backend if `None`
+    /// (`fmm::default_max_points_per_leaf`).
+    pub max_points_per_leaf: Option<usize>,
 }
 
 impl Settings {
+    /// The multiply–add mode of the batched M2L: [`m2l_mul_add`](Self::m2l_mul_add) or the
+    /// library's default of p.
+    pub fn mul_add(&self) -> MulAdd {
+        self.m2l_mul_add
+            .unwrap_or_else(|| default_m2l_mul_add(self.p))
+    }
+
+    /// The refinement target: [`max_points_per_leaf`](Self::max_points_per_leaf) or the
+    /// library's default of p and the backend.
+    pub fn leaf_points(&self) -> usize {
+        self.max_points_per_leaf
+            .unwrap_or_else(|| default_max_points_per_leaf(self.p, self.backend))
+    }
+
     /// Degree `p` on one thread, the default strategy, overlap off, the random share, one
     /// build, ten evaluations, no checks, no kind timings, the second cut on with the
-    /// library's constants, the multipoles along the default forwarding tree.
+    /// library's constants, the multipoles along the default forwarding tree, the near
+    /// rule, the batched M2L's mode and the leaf size of the library's defaults.
     pub const fn new(p: usize) -> Self {
         Self {
             p,
             threads: 1,
             strategy: M2lStrategy::Auto,
             dense_node_budget: None,
-            m2l_mul_add: MulAdd::Separate,
+            m2l_mul_add: None,
             overlap: Overlap::Off,
             input: Input::Share,
             builds: 1,
@@ -493,7 +517,8 @@ impl Settings {
             device_gemm: DeviceGemm::Auto,
             device_gather: DeviceGather::Auto,
             device_reduction: DeviceReduction::ByChunk,
-            near_rule: NearRuleChoice::Off,
+            near_rule: NearRuleChoice::CostModel,
+            max_points_per_leaf: None,
         }
     }
 }
@@ -1993,11 +2018,11 @@ fn bits<T: RealScalar>(output: &Output<T>) -> Vec<u64> {
 fn builder<T: Stored + SimdScalar + Equivalence + Default>(settings: &Settings) -> FmmBuilder<T> {
     let mut builder = FmmBuilder::<T>::new(settings.p)
         .max_level(MAX_LEVEL)
-        .max_points_per_leaf(MAX_POINTS_PER_LEAF)
+        .max_points_per_leaf(settings.leaf_points())
         .gradients(true)
         .threads(settings.threads)
         .strategy(settings.strategy)
-        .m2l_mul_add(settings.m2l_mul_add)
+        .m2l_mul_add(settings.mul_add())
         .p2p_kernel(settings.p2p)
         .overlap(settings.overlap == Overlap::On)
         .kind_timings(if settings.kinds {
@@ -2850,10 +2875,11 @@ impl fmt::Display for Invariance {
         writeln!(
             f,
             "- problem: N = {}, {}; seed {:#x}, every point generated by index; max_level \
-             {MAX_LEVEL}, {MAX_POINTS_PER_LEAF} points per leaf; charge vector 0, gradients",
+             {MAX_LEVEL}, {} points per leaf; charge vector 0, gradients",
             self.workload.n,
             self.workload.distribution.description(),
-            self.workload.seed
+            self.workload.seed,
+            s.leaf_points()
         )?;
         writeln!(
             f,
@@ -3029,8 +3055,9 @@ impl Report {
                     format!("overlap={}", if path.overlapped { "on" } else { "off" }),
                     format!("strategy={:?}", self.strategy),
                     format!("requested={:?}", self.settings.strategy),
-                    format!("mul_add={}", self.settings.m2l_mul_add),
+                    format!("mul_add={}", self.settings.mul_add()),
                     format!("p2p={}", self.p2p),
+                    format!("leaf={}", self.settings.leaf_points()),
                     format!(
                         "budget_mb={}",
                         mb(self
@@ -3309,10 +3336,11 @@ impl fmt::Display for Report {
         writeln!(
             f,
             "- problem: N = {}, {}; seed {:#x}, every point generated by index; \
-             max_level {MAX_LEVEL}, {MAX_POINTS_PER_LEAF} points per leaf; {} levels",
+             max_level {MAX_LEVEL}, {} points per leaf; {} levels",
             self.workload.n,
             self.workload.distribution.description(),
             self.workload.seed,
+            s.leaf_points(),
             self.nlevels
         )?;
         writeln!(

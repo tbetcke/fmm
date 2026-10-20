@@ -91,8 +91,8 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_exec::device::{DataKind, GroupedImage, StageTiming, Traffic};
 use nd_fmm_exec::fmm::{
-    Backend, DeviceGather, DeviceGemm, DeviceReduction, Fmm, FmmBuilder, KindTiming, OperatorKind,
-    Output, OutputMany, OutputPass, Placement, SourceType, Sources,
+    Backend, DeviceGather, DeviceGemm, DeviceReduction, Fmm, FmmBuilder, KindTiming,
+    NearRuleChoice, OperatorKind, Output, OutputMany, OutputPass, Placement, SourceType, Sources,
 };
 use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_exec::tables::M2lStrategy;
@@ -815,6 +815,21 @@ pub fn fmm_bound<T>() -> f64 {
     if size_of::<T>() == 4 { 1e-5 } else { 1e-12 }
 }
 
+/// The near rule that gives another build the near pairs of `fmm`: its crossovers named,
+/// or off (Phase 6 T11: the rule is on by default, its crossovers from each build's cost
+/// model, so a build of another strategy or backend names these to convert the same
+/// pairs).
+pub fn same_near_pairs<T, C>(fmm: &Fmm<'_, T, C>) -> NearRuleChoice
+where
+    T: Stored + SimdScalar + Equivalence + Default,
+    C: mpi::traits::CommunicatorCollectives,
+{
+    match fmm.near_rule().crossovers {
+        Some([w, x]) => NearRuleChoice::Crossovers { w, x },
+        None => NearRuleChoice::Off,
+    }
+}
+
 /// Builds `builder` on `backend` at one thread and checks it against the host path:
 /// `host` is the one-thread host `Fmm` of the same settings, `host_output` its output
 /// for `charges` (module documentation): first with every kind on the host fallback,
@@ -830,6 +845,11 @@ pub fn check_backend<'o, T: Stored + SimdScalar + Equivalence + Default>(
     backend: Backend,
     comm: &'o SimpleCommunicator,
 ) -> Differences {
+    // The host's tree: since Phase 6 T11 the leaf size's default depends on the backend
+    // (on Metal 128 at p = 6–7 and 256 from p = 8), so the device builds name the host's.
+    let builder = &builder
+        .clone()
+        .max_points_per_leaf(host.max_points_per_leaf());
     // Every kind on the fallback with the exchanges overlapped (Phase 5 T9): bit for bit
     // the blocking host path, with the same transfers.
     check_fallback(
@@ -1009,7 +1029,12 @@ pub fn check_three_vectors<T: Stored + SimdScalar + Equivalence + Default>(
         .iter()
         .map(|q| host.evaluate(q).expect("the host evaluates"))
         .collect();
-    let builder = builder.clone().strategy(host.strategy());
+    // The host's strategy and tree (since Phase 6 T11 the leaf size's default depends on
+    // the backend).
+    let builder = builder
+        .clone()
+        .strategy(host.strategy())
+        .max_points_per_leaf(host.max_points_per_leaf());
     check_vectors(
         &builder,
         (sources, targets),
@@ -1194,12 +1219,37 @@ fn check_default<'o, T: Stored + SimdScalar + Equivalence + Default>(
     backend: Backend,
     comm: &'o SimpleCommunicator,
 ) -> Differences {
+    // The host's near pairs (Phase 6 T11: the near rule is on by default, its crossovers
+    // from the cost model of each build's strategy).
+    let builder = &builder.clone().near_rule(same_near_pairs(host));
     let mut fmm = builder
         .clone()
         .threads(1)
         .backend(backend)
         .build(sources, targets, comm)
         .unwrap_or_else(|error| panic!("{backend}: the FMM does not build: {error}"));
+    // Where the device path's rule resolved another strategy than the host's (since Phase
+    // 6 T11 `Auto` resolves to `Batched` or `PlaneWave` on the host, `Dense` or `Rotation`
+    // on a device), the host `Fmm` of the device's strategy is the reference.
+    let mut own_host;
+    let own_output;
+    let (host, host_output) = if fmm.strategy() == host.strategy() {
+        (host, host_output)
+    } else {
+        // The device's cost model too: on several ranks the cut by work, and with it each
+        // rank's boxes (compared level by level below), follows it.
+        own_host = builder
+            .clone()
+            .strategy(fmm.strategy())
+            .cost_model(fmm.cost_model())
+            .threads(1)
+            .build(sources, targets, comm)
+            .unwrap_or_else(|error| panic!("{backend}: the host reference: {error}"));
+        own_output = own_host
+            .evaluate(charges)
+            .expect("the host reference evaluates");
+        (&mut own_host, &own_output)
+    };
     let report = fmm.device_report().expect("a device backend");
     let kinds = device_kinds(fmm.strategy());
     for kind in OperatorKind::ALL {

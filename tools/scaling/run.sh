@@ -145,6 +145,46 @@
 #                   rank-count invariance with the rule at 80 ranks against 40, 20 and 10
 #                   (`--invariance 2,4,8`, Rotation named)
 #
+# Sweeps of the final benchmarks (Phase 6 T11, docs/phase6/T11-benchmarks.md): every
+# launch with --kinds, overlap off, the library's defaults otherwise (the second cut on),
+# the errors of one charge vector at 1,000 targets where N <= T11_ERRORS_MAX_N (default
+# 10^6) or the launch has 8 ranks or more; `batched-fused` is Batched with
+# `--mul-add fused`; every variant with the near rule T11_NEAR (default `cost`) and the
+# first P2P ISA of T11_ISAS (default "auto"; "avx512 avx2" under Slurm), the variants of
+# T11_ISA_VARIANTS (default "batched-fused planewave") with each of them; beside them
+# `default`, the library's defaults before T11, named (the strategy of Phase 5N T4's rule
+# with BUDGET, `auto_resolves`; separate; the near rule off; AVX2 under Slurm, Kathleen's
+# ISA before T11, else the machine's; 64 points per leaf):
+#   t11-host        one node: the cube and the Plummer sphere at every N of T11_NS
+#                   (default "1000000 10000000") and every precision:p of T11_DEGREES
+#                   (default f64 p = 3, 6, 8, 12, 18 and f32 p = 3, 6, 8), at every ranks x
+#                   threads of T11_SPLITS (Phase 5N's rule and its extremes: default
+#                   "1x12 12x1" on macOS, "1x72 8x9 72x1" on Linux, "1x40 4x10 40x1" under
+#                   Slurm), the variants of T11_VARIANTS (default "batched batched-fused
+#                   rotation planewave") and `default`; at N = 10^6 and p <= 12 also Dense
+#                   and Classes (T11_EXTRA); three timed evaluations at N = 10^6 (two at
+#                   p = 12, one at p = 18), two at 10^7 (one at p >= 12)
+#   t11-leaf        the leaf size per p (the rule of Phase 3S T7, laplace-fmm-plan §7):
+#                   the same problems at T11_LEAF_SPLIT (default Phase 5N's split: 1x12 on
+#                   macOS, 8x9 on Linux, 4x10 under Slurm) and every refinement target of
+#                   T11_LEAVES (default "16 32 64 128 256 512"; 512 only at p >= 8), the
+#                   variants of T11_LEAF_VARIANTS (default "batched-fused planewave";
+#                   planewave not at p = 3) on the ISA T11_LEAF_ISA (default auto; avx512
+#                   under Slurm), the evaluations of t11-host
+#   t11-calibrate   the cost model's constants with the new operators (as `calibrate`):
+#                   one rank per core (LARGEST ranks), the cube, the Plummer sphere and the
+#                   clusters at N = CAL_N (default 10^7), the near rule off, the first cut,
+#                   three timed evaluations, each ISA of T11_ISAS: Batched fused at f64
+#                   p = 3, 6, 8 and f32 p = 3, 8, Rotation at f64 p = 8 and 18, PlaneWave at
+#                   f64 p = 8 and 18 and f32 p = 8
+#   t11-device      one rank on DEVICE (the example built with it), every core for the
+#                   host's parts, the device path's defaults otherwise: the cube and the
+#                   Plummer sphere at every N of T11_NS, f32 p = 3, 6, 8 (on CUDA also f64
+#                   p = 3, 6, 8, 12, 18), `auto` at every refinement target of
+#                   T11_DEVICE_LEAVES (default "16 32 64 128 256") and Rotation at 64; three
+#                   timed evaluations (two at 10^7), the errors as t11-host; T11_DEVICE_DEGREES
+#                   names other precision:p pairs
+#
 # Sweeps of the work-weighted cut (Phase 5S T7, docs/phase5s/T7-work-weighted-cut.md;
 # docs/design/scale-out.md §6), every launch with --kinds unless counted only:
 #   calibrate       the constants of the cost model: one rank per core of the machine (or
@@ -216,7 +256,9 @@
 #            and 96 on Linux, locust, and under Slurm, Kathleen; signed off as 64 for the
 #            M3 Max, set to 56 by the user on 2026-10-11 after T4's f64 p = 6 runs at 8
 #            and 10 ranks per node, fmm-validate/results/phase5n-kathleen.md, "Phase 5N,
-#            T4")
+#            T4"). Since Phase 6 T11 the library's `auto` no longer reads it (it resolves
+#            by p and the precision); the sweeps that name Phase 5N's rule (`auto_resolves`,
+#            t11's `default`) still use it
 #   NODE_GRID  ranks x threads per node of node-rule (default T3's grid: "1x1 2x1 4x1 8x1
 #            12x1 1x12 2x6" on macOS, "1x1 8x1 16x1 32x1 64x1 72x1 1x72 4x18 8x9" on
 #            Linux, "1x1 2x1 10x1 20x1 40x1 1x40 2x20 4x10" under Slurm)
@@ -241,9 +283,17 @@
 #            t5-device builds with DEVICE unless FEATURES is set)
 #   TIMEOUT  seconds per launch (default 3600)
 #   QUIET    on macOS, the CPU percentage the other processes may use before a launch
-#            starts (default 200, two cores): each launch waits, up to an hour, until
-#            they use less (a laptop's background jobs, such as a virus scanner, would
-#            otherwise share the cores), and the file records the wait
+#            starts (default 200, two cores): each launch waits, up to QUIET_WAIT seconds
+#            (default 3600), until they use less (a laptop's background jobs, such as a
+#            virus scanner, would otherwise share the cores), and the file records the
+#            wait. On Linux outside Slurm (locust; Phase 6 T11) the same gate, if
+#            QUIET_LINUX is set: the other processes' CPU over two seconds (`top`, every
+#            user, this user's other jobs included) at most QUIET, and no GPU compute
+#            process (`nvidia-smi`; not checked with QUIET_GPU=0, for host-only sweeps
+#            beside another user's GPU job). Under the gate the other processes' CPU is also
+#            sampled every 5 s during each launch: a launch during which it rose above
+#            QUIET_DURING (default QUIET) is void and repeated, up to QUIET_RETRIES times
+#            (default 3), then kept and marked CONTENDED
 #   ALPHA    if set, the eight constants of the cost model (`--alpha`, ns, comma-separated:
 #            P2M, M2M, M2L, P2L, L2L, L2P, M2P, P2P) for every launch: a machine's own,
 #            from its `calibrate` sweep (Phase 5S T7); the library's otherwise
@@ -251,6 +301,10 @@
 #            it run (for example the repeats of Phase 5S T0); the others are left out
 #            without a file
 #   DRY_RUN  if set, print the commands only
+#   T11_NS, T11_DEGREES, T11_SPLITS, T11_VARIANTS, T11_EXTRA, T11_ISAS, T11_ISA_VARIANTS,
+#   T11_NEAR,
+#   T11_ERRORS_MAX_N, T11_LEAVES, T11_LEAF_SPLIT, T11_LEAF_VARIANTS, T11_LEAF_ISA,
+#   T11_DEVICE_LEAVES, T11_DEVICE_DEGREES  the t11 sweeps' problems and settings (above)
 #   CARGO_TARGET_DIR, RUSTFLAGS  as for cargo: the example is built and run from
 #            $CARGO_TARGET_DIR (default target/), so a labelled build with other flags
 #            (for example RUSTFLAGS="-C target-cpu=cascadelake", Phase 5N T2) keeps its own
@@ -303,6 +357,8 @@ OUT=${OUT:-bench-results/scaling-$host-$(date +%Y%m%d-%H%M)}
 EVALS=${EVALS:-10}
 TIMEOUT=${TIMEOUT:-3600}
 QUIET=${QUIET:-200}
+QUIET_WAIT=${QUIET_WAIT:-3600}
+QUIET_DURING=${QUIET_DURING:-$QUIET}
 SOCKETS=${SOCKETS:-2}
 NODES=1
 case "$(uname -s)" in
@@ -318,6 +374,8 @@ Darwin)
     T2_SPLITS=${T2_SPLITS:-"1x1 2x1 4x1 8x1 12x1 1x12"}
     T9_SPLIT=${T9_SPLIT:-1x12}
     T13_NS=${T13_NS:-}
+    T11_SPLITS=${T11_SPLITS:-"1x12 12x1"}
+    T11_LEAF_SPLIT=${T11_LEAF_SPLIT:-1x12}
     ;;
 *)
     if [ -n "${SLURM_JOB_ID:-}" ]; then
@@ -336,6 +394,10 @@ Darwin)
         T9_SPLIT=${T9_SPLIT:-4x10}
         T13_NS=${T13_NS:-10000000}
         T13_ISAS=${T13_ISAS:-"avx2 avx512"}
+        T11_SPLITS=${T11_SPLITS:-"1x40 4x10 40x1"}
+        T11_LEAF_SPLIT=${T11_LEAF_SPLIT:-4x10}
+        T11_ISAS=${T11_ISAS:-"avx512 avx2"}
+        T11_LEAF_ISA=${T11_LEAF_ISA:-avx512}
     else
         os=linux
         RANKS=${RANKS:-"1 2 4 8 16 32 64 72"}
@@ -348,14 +410,29 @@ Darwin)
         T2_SPLITS=${T2_SPLITS:-"1x1 8x1 16x1 32x1 64x1 72x1 1x72 8x9"}
         T9_SPLIT=${T9_SPLIT:-8x9}
         T13_NS=${T13_NS:-10000000}
+        T11_SPLITS=${T11_SPLITS:-"1x72 8x9 72x1"}
+        T11_LEAF_SPLIT=${T11_LEAF_SPLIT:-8x9}
     fi
     ;;
 esac
 
 T5_RHS=${T5_RHS:-"1 2 4 8 16 32"}
+T11_NS=${T11_NS:-"1000000 10000000"}
+T11_DEGREES=${T11_DEGREES:-"f64:3 f64:6 f64:8 f64:12 f64:18 f32:3 f32:6 f32:8"}
+T11_VARIANTS=${T11_VARIANTS:-"batched batched-fused rotation planewave"}
+T11_EXTRA=${T11_EXTRA:-"dense classes"}
+T11_ISAS=${T11_ISAS:-auto}
+T11_ISA_VARIANTS=${T11_ISA_VARIANTS:-"batched-fused planewave"}
+T11_NEAR=${T11_NEAR:-cost}
+T11_ERRORS_MAX_N=${T11_ERRORS_MAX_N:-1000000}
+T11_LEAVES=${T11_LEAVES:-"16 32 64 128 256 512"}
+T11_LEAF_VARIANTS=${T11_LEAF_VARIANTS:-"batched-fused planewave"}
+T11_LEAF_ISA=${T11_LEAF_ISA:-auto}
+T11_DEVICE_LEAVES=${T11_DEVICE_LEAVES:-"16 32 64 128 256"}
 if [ "$os" = macos ]; then DEVICE=${DEVICE:-metal}; else DEVICE=${DEVICE:-cuda}; fi
 for sweep in "$@"; do
-    if { [ "$sweep" = t5-device ] || [ "$sweep" = t7-device ] || [ "$sweep" = t9-device ]; } &&
+    if { [ "$sweep" = t5-device ] || [ "$sweep" = t7-device ] || [ "$sweep" = t9-device ] ||
+        [ "$sweep" = t11-device ]; } &&
         [ -z "${FEATURES:-}" ]; then
         FEATURES=$DEVICE
     fi
@@ -401,22 +478,44 @@ load() {
     echo '```'
 }
 
-# On macOS: wait until the processes other than this sweep's use at most QUIET% CPU.
+# On macOS (and on Linux outside Slurm with QUIET_LINUX set): wait until the processes
+# other than this sweep's use at most QUIET% CPU, and on Linux no GPU compute process runs.
 quiet() {
-    if [ "$os" != macos ]; then return 0; fi
+    if ! gated; then return 0; fi
     waited=0
     while :; do
-        busy=$(ps -A -o pcpu=,comm= | awk '$2 !~ /scaling|prterun|mpirun|prted/ { s += $1 }
-            END { printf "%d", s }')
-        if [ "$busy" -le "$QUIET" ]; then break; fi
-        if [ "$waited" -ge 3600 ]; then
-            echo "still busy after an hour"
+        busy=$(others_cpu)
+        gpu=""
+        if [ "$os" = linux ] && [ "${QUIET_GPU:-1}" != 0 ]; then
+            gpu=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | head -n 1)
+        fi
+        if [ "$busy" -le "$QUIET" ] && [ -z "$gpu" ]; then break; fi
+        if [ "$waited" -ge "$QUIET_WAIT" ]; then
+            echo "still busy after $QUIET_WAIT s"
             break
         fi
         sleep 15
         waited=$((waited + 15))
     done
-    echo "other processes at ${busy}% CPU when launched, after waiting ${waited} s"
+    echo "other processes at ${busy}% CPU${gpu:+ (a GPU process: $gpu)} when launched, after waiting ${waited} s"
+}
+
+# Whether the quiet gate applies: on macOS, and on Linux outside Slurm with QUIET_LINUX.
+gated() {
+    [ "$os" = macos ] || { [ "$os" = linux ] && [ -n "${QUIET_LINUX:-}" ]; }
+}
+
+# The CPU percentage of the processes other than this sweep's: on macOS `ps` (its recent
+# average), on Linux `top` over two seconds (every user, this user's other jobs included).
+others_cpu() {
+    if [ "$os" = macos ]; then
+        ps -A -o pcpu=,comm= | awk '$2 !~ /scaling|prterun|mpirun|prted/ { s += $1 }
+            END { printf "%d", s }'
+    else
+        top -b -n 2 -d 2 -w 512 | awk '/^ *PID/ { n++; next }
+            n == 2 && $1 ~ /^[0-9]+$/ && $12 !~ /^(scaling|prterun|mpirun|prted|top)$/ { s += $9 }
+            END { printf "%d", s }'
+    fi
 }
 
 # launch <name> <ranks> <threads> <scaling arguments...>
@@ -468,19 +567,51 @@ of $CORES cores evenly" | tee -a "${OUT}/skipped.txt"
     fi
     file="$OUT/$name.txt"
     echo "[$(date '+%H:%M:%S')] $name: $command"
-    gate=$(quiet)
-    {
-        echo "# $name"
-        echo
-        echo "command: \`$command\`"
-        echo
-        if [ -n "$gate" ]; then echo "$gate"; echo; fi
-        if [ "$os" = slurm ]; then job "$per_node" "$threads" "$flags"; else load before; fi
-        echo
-    } >"$file"
-    # mpirun's binding report goes to stderr; keep it in the file.
-    status=0
-    $command >>"$file" 2>&1 || status=$?
+    tries=""
+    attempt=1
+    while :; do
+        gate=$(quiet)
+        {
+            echo "# $name"
+            echo
+            echo "command: \`$command\`"
+            echo
+            if [ -n "$tries" ]; then printf '%s\n' "$tries"; fi
+            if [ -n "$gate" ]; then echo "$gate"; echo; fi
+            if [ "$os" = slurm ]; then job "$per_node" "$threads" "$flags"; else load before; fi
+            echo
+        } >"$file"
+        # Under the gate, the other processes' CPU every 5 s while the launch runs.
+        sampler=""
+        if gated; then
+            (while :; do others_cpu; echo; sleep 5; done) >"$file.during" 2>/dev/null &
+            sampler=$!
+        fi
+        # mpirun's binding report goes to stderr; keep it in the file.
+        status=0
+        $command >>"$file" 2>&1 || status=$?
+        if [ -n "$sampler" ]; then
+            kill "$sampler" 2>/dev/null
+            wait "$sampler" 2>/dev/null || true
+            peak=$(awk 'NF { if ($1 > m) m = $1 } END { printf "%d", m }' "$file.during")
+            rm -f "$file.during"
+            # A launch that shared the machine is void (Phase 6 T11): repeated up to
+            # QUIET_RETRIES times (default 3), then kept and marked.
+            if [ "$peak" -gt "$QUIET_DURING" ]; then
+                if [ "$attempt" -le "${QUIET_RETRIES:-3}" ]; then
+                    tries="${tries}attempt $attempt void: other processes at up to ${peak}% CPU during the run
+"
+                    echo "[$(date '+%H:%M:%S')] $name: void (others at ${peak}% during the run), again"
+                    attempt=$((attempt + 1))
+                    continue
+                fi
+                echo "CONTENDED: other processes at up to ${peak}% CPU during the run" >>"$file"
+            else
+                echo "other processes at most ${peak}% CPU during the run" >>"$file"
+            fi
+        fi
+        break
+    done
     if [ "$status" -ne 0 ]; then
         echo "FAILED (exit $status): $name" | tee -a "$file"
     fi
@@ -626,8 +757,145 @@ t12_launch() {
     done
 }
 
+# t11_evals <n> <p>: the timed evaluations of the t11 sweeps.
+t11_evals() {
+    if [ "$1" -le 1000000 ]; then
+        if [ "$2" -ge 18 ]; then echo 1; elif [ "$2" -ge 12 ]; then echo 2; else echo 3; fi
+    elif [ "$2" -ge 12 ]; then echo 1; else echo 2; fi
+}
+
+# t11_errors <n> <ranks>: the errors argument of a t11 launch (T11_ERRORS_MAX_N).
+t11_errors() {
+    if [ "$1" -le "$T11_ERRORS_MAX_N" ] || [ "$2" -ge 8 ]; then echo "--errors 1"; fi
+}
+
+# t11_launch <name prefix> <ranks> <threads> <variant> <isa> <scaling arguments...>: one
+# launch of the t11 sweeps; `default` is the library's defaults before T11, named, with
+# T11_PRECISION and T11_P (set by the caller) for the old rule.
+t11_launch() {
+    prefix=$1 r=$2 t=$3 variant=$4 isa=$5
+    shift 5
+    if [ "$variant" = default ]; then
+        old_isa=auto
+        if [ "$os" = slurm ]; then old_isa=avx2; fi
+        launch "$prefix-default-r${r}x$t" "$r" "$t" \
+            --strategy "$(auto_resolves "$T11_PRECISION" "$T11_P" $((r / NODES)))" \
+            --mul-add separate --near off --p2p "$old_isa" --leaf-size 64 --kinds \
+            --overlap off "$@"
+        return
+    fi
+    strategy=${variant%-fused} mul_add=separate
+    if [ "$variant" = batched-fused ]; then mul_add=fused; fi
+    launch "$prefix-$variant-$isa-r${r}x$t" "$r" "$t" --strategy "$strategy" \
+        --mul-add "$mul_add" --near "$T11_NEAR" --p2p "$isa" --kinds --overlap off "$@"
+}
+
 for sweep in "$@"; do
     case "$sweep" in
+    t11-host)
+        for dist in cube plummer; do
+            for n in $T11_NS; do
+                for dp in $T11_DEGREES; do
+                    prec=${dp%%:*} p=${dp##*:}
+                    T11_PRECISION=$prec T11_P=$p
+                    evals=$(t11_evals "$n" "$p")
+                    for split in $T11_SPLITS; do
+                        r=${split%x*} t=${split#*x}
+                        r=$((r * NODES))
+                        errors=$(t11_errors "$n" "$r")
+                        prefix="t11-host-$dist-n$n-$prec-p$p"
+                        # shellcheck disable=SC2086
+                        t11_launch "$prefix" "$r" "$t" default - --dist $dist --n "$n" \
+                            --precision "$prec" --p "$p" --evals "$evals" $errors
+                        variants=$T11_VARIANTS
+                        if [ "$n" -le 1000000 ] && [ "$p" -le 12 ]; then
+                            variants="$variants $T11_EXTRA"
+                        fi
+                        for variant in $variants; do
+                            isas=${T11_ISAS%% *}
+                            case " $T11_ISA_VARIANTS " in *" $variant "*) isas=$T11_ISAS ;; esac
+                            for isa in $isas; do
+                                # shellcheck disable=SC2086
+                                t11_launch "$prefix" "$r" "$t" "$variant" "$isa" --dist $dist \
+                                    --n "$n" --precision "$prec" --p "$p" --evals "$evals" \
+                                    $errors
+                            done
+                        done
+                    done
+                done
+            done
+        done
+        ;;
+    t11-leaf)
+        r=${T11_LEAF_SPLIT%x*} t=${T11_LEAF_SPLIT#*x}
+        r=$((r * NODES))
+        for dist in cube plummer; do
+            for n in $T11_NS; do
+                for dp in $T11_DEGREES; do
+                    prec=${dp%%:*} p=${dp##*:}
+                    evals=$(t11_evals "$n" "$p")
+                    errors=$(t11_errors "$n" "$r")
+                    for leaf in $T11_LEAVES; do
+                        if [ "$leaf" -gt 256 ] && [ "$p" -lt 8 ]; then continue; fi
+                        for variant in $T11_LEAF_VARIANTS; do
+                            if [ "$variant" = planewave ] && [ "$p" -le 3 ]; then continue; fi
+                            # shellcheck disable=SC2086
+                            t11_launch "t11-leaf-$dist-n$n-$prec-p$p-leaf$leaf" "$r" "$t" \
+                                "$variant" "$T11_LEAF_ISA" --dist $dist --n "$n" \
+                                --precision "$prec" --p "$p" --evals "$evals" \
+                                --leaf-size "$leaf" $errors
+                        done
+                    done
+                done
+            done
+        done
+        ;;
+    t11-calibrate)
+        n=${CAL_N:-10000000}
+        for dist in cube plummer clusters; do
+            for run in batched-fused:f64:3 batched-fused:f64:6 batched-fused:f64:8 \
+                batched-fused:f32:3 batched-fused:f32:8 rotation:f64:8 rotation:f64:18 \
+                planewave:f64:8 planewave:f64:18 planewave:f32:8; do
+                variant=${run%%:*} rest=${run#*:}
+                prec=${rest%%:*} p=${rest#*:}
+                strategy=${variant%-fused} mul_add=separate
+                if [ "$variant" = batched-fused ]; then mul_add=fused; fi
+                for isa in $T11_ISAS; do
+                    launch "t11-calibrate-$dist-n$n-$prec-p$p-$variant-$isa-r${LARGEST}x1" \
+                        "$LARGEST" 1 --dist $dist --n "$n" --precision "$prec" --p "$p" \
+                        --strategy "$strategy" --mul-add "$mul_add" --p2p "$isa" --near off \
+                        --overlap off --kinds --cut points --evals 3
+                done
+            done
+        done
+        ;;
+    t11-device)
+        degrees="f32:3 f32:6 f32:8"
+        if [ "$DEVICE" = cuda ]; then degrees="$degrees f64:3 f64:6 f64:8 f64:12 f64:18"; fi
+        degrees=${T11_DEVICE_DEGREES:-$degrees}
+        for dist in cube plummer; do
+            for n in $T11_NS; do
+                evals=3
+                if [ "$n" -gt 1000000 ]; then evals=2; fi
+                # shellcheck disable=SC2086
+                errors=$(t11_errors "$n" 1)
+                for dp in $degrees; do
+                    prec=${dp%%:*} p=${dp##*:}
+                    prefix="t11-device-$DEVICE-$dist-n$n-$prec-p$p"
+                    for leaf in $T11_DEVICE_LEAVES; do
+                        # shellcheck disable=SC2086
+                        launch "$prefix-auto-leaf$leaf" 1 "$CORES" --backend "$DEVICE" \
+                            --dist $dist --n "$n" --precision "$prec" --p "$p" --strategy auto \
+                            --overlap off --evals "$evals" --leaf-size "$leaf" $errors
+                    done
+                    # shellcheck disable=SC2086
+                    launch "$prefix-rotation-leaf64" 1 "$CORES" --backend "$DEVICE" --dist $dist \
+                        --n "$n" --precision "$prec" --p "$p" --strategy rotation --overlap off \
+                        --evals "$evals" $errors
+                done
+            done
+        done
+        ;;
     t12-near)
         if [ "$os" = slurm ]; then full=$((CORES_PER_NODE * NODES)); else full=$CORES; fi
         for problem in plummer:1000000 clusters:1000000 cube:2000000; do

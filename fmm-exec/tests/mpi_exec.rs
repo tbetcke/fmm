@@ -1061,8 +1061,10 @@ fn batched_against_per_pair(comm: &SimpleCommunicator) {
     let mut max_leaf_points = 0usize;
     comm.all_reduce_into(&local_max, &mut max_leaf_points, SystemOperation::max());
 
+    // Dense named: `Auto` resolved to it here before Phase 6 T11 (now Batched, whose
+    // kernel debug builds run slower; the strategies have their own scenarios).
     let p = 6;
-    let op = LaplaceOperator::new(Tables::build(p, M2lStrategy::Auto), true, max_leaf_points);
+    let op = LaplaceOperator::new(Tables::build(p, M2lStrategy::Dense), true, max_leaf_points);
     assert_eq!(
         op.p2p_kernel(),
         P2pChoice::Isa(Isa::detect()),
@@ -1431,7 +1433,7 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
         &builder,
         (sources, targets),
         charges,
-        &fmm,
+        &mut fmm,
         (&output, &reference),
         threads,
         comm,
@@ -1449,7 +1451,7 @@ fn evaluate_threaded<'o, T: Stored + SimdScalar + Equivalence + Default>(
         &builder,
         (sources, targets),
         charges,
-        &output,
+        (&output, fmm.strategy(), near_as(&fmm)),
         threads,
         comm,
     );
@@ -1581,7 +1583,8 @@ const NEAR_RULES: [NearRuleChoice; 2] = [
 static NEAR_SEEN: std::sync::Mutex<Vec<(&'static str, usize)>> = std::sync::Mutex::new(Vec::new());
 
 /// The near rule (Phase 6 T12, C6.9; docs/design/optimisation.md §8a) where the tree of
-/// `fmm`, the rule-off FMM at one thread with output `off`, has W
+/// `fmm`, the scenario's FMM at one thread with output `off` (the rule off, or since Phase
+/// 6 T11 the default rule of the cost model, against the rule-off FMM built here), has W
 /// or X lists on some rank, once per scenario and precision (the first such evaluation; a
 /// build in debug mode costs more than the evaluation), in f32 with the cost model's rule
 /// only. The rules of [`NEAR_RULES`], each
@@ -1592,8 +1595,8 @@ static NEAR_SEEN: std::sync::Mutex<Vec<(&'static str, usize)>> = std::sync::Mute
 /// for bit; for the cost model's rule a second build at the most threads of `threads`,
 /// overlapped, bit for bit; on several ranks the
 /// one-rank `Fmm` of the same rule over the union bit for bit (`check_one_rank`); the
-/// report (the choice, the crossovers of the cost model). The rule off is the default, so
-/// every other check of the scenario runs it.
+/// report (the choice, the crossovers of the cost model). The rule of the cost model is
+/// the default since Phase 6 T11, so every other check of the scenario runs it.
 fn check_near_rule<T: Stored + SimdScalar + Equivalence + Default>(
     builder: &FmmBuilder<T>,
     (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
@@ -1633,6 +1636,27 @@ fn check_near_rule<T: Stored + SimdScalar + Equivalence + Default>(
                 .map_or(0.0, |g| relative_l2_vectors(g, &grad, comm)),
         ]
     };
+    // Since Phase 6 T11 the scenario runs the rule of the cost model by default: then the
+    // FMM with the rule off is built here, at one thread, as the reference.
+    let scenario_output = off;
+    let off_build;
+    let off = if fmm.near_rule().choice == NearRuleChoice::Off {
+        off
+    } else {
+        let mut plain = built(
+            builder
+                .clone()
+                .near_rule(NearRuleChoice::Off)
+                .threads(1)
+                .build(sources, targets, comm),
+            comm,
+        )
+        .expect("the FMM without the near rule builds");
+        off_build = plain
+            .evaluate(charges)
+            .expect("the FMM without the near rule evaluates");
+        &off_build
+    };
     let without = errors(off);
     let most = threads.iter().copied().max().unwrap_or(1);
     let precision = usize::from(size_of::<T>() == 8);
@@ -1640,25 +1664,47 @@ fn check_near_rule<T: Stored + SimdScalar + Equivalence + Default>(
     let rules = if precision == 1 { 2 } else { 1 };
     for (r, choice) in NEAR_RULES.into_iter().enumerate().take(rules) {
         let rule = builder.clone().near_rule(choice);
-        let mut on = built(rule.clone().threads(1).build(sources, targets, comm), comm)
-            .expect("the FMM with the near rule builds");
-        let report = on.near_rule();
+        // The scenario's own rule (since Phase 6 T11 the cost model's, the default): its
+        // output and report, whose threads, overlap and one-rank reference the scenario's
+        // own checks covered.
+        let own = fmm.near_rule().choice == choice;
+        let on_build;
+        let output_build;
+        let (report, cost_model, strategy, output) = if own {
+            (
+                fmm.near_rule(),
+                fmm.cost_model(),
+                fmm.strategy(),
+                scenario_output,
+            )
+        } else {
+            let mut on = built(rule.clone().threads(1).build(sources, targets, comm), comm)
+                .expect("the FMM with the near rule builds");
+            output_build = on.evaluate(charges).expect("the FMM evaluates");
+            let bits = output_bits(&output_build);
+            let again = on.evaluate(charges).expect("the FMM evaluates");
+            assert!(
+                output_bits(&again) == bits,
+                "{}: two evaluations",
+                what(choice)
+            );
+            on_build = on;
+            (
+                on_build.near_rule(),
+                on_build.cost_model(),
+                on_build.strategy(),
+                &output_build,
+            )
+        };
+        let bits = output_bits(output);
         assert_eq!(report.choice, choice, "{}", what(choice));
         assert_eq!(
             report.crossovers,
-            choice.crossovers(&on.cost_model()),
+            choice.crossovers(&cost_model),
             "{}",
             what(choice)
         );
-        let output = on.evaluate(charges).expect("the FMM evaluates");
-        let bits = output_bits(&output);
-        let again = on.evaluate(charges).expect("the FMM evaluates");
-        assert!(
-            output_bits(&again) == bits,
-            "{}: two evaluations",
-            what(choice)
-        );
-        let with = errors(&output);
+        let with = errors(output);
         // The change from the rule off is the truncation error the converted pairs had,
         // within the error without the rule; a wrong pair would change the output by O(1).
         let change = [
@@ -1682,8 +1728,8 @@ fn check_near_rule<T: Stored + SimdScalar + Equivalence + Default>(
             );
         }
         // The cost model's rule, the one for runs: a second build at the most threads,
-        // overlapped.
-        if choice == NearRuleChoice::CostModel {
+        // overlapped (the scenario's own checks did it where it runs that rule).
+        if choice == NearRuleChoice::CostModel && !own {
             let mut threaded = built(
                 rule.clone()
                     .threads(most)
@@ -1699,14 +1745,16 @@ fn check_near_rule<T: Stored + SimdScalar + Equivalence + Default>(
                 what(choice)
             );
         }
-        check_one_rank(
-            &what(choice),
-            &rule.clone().strategy(on.strategy()),
-            (sources, targets),
-            charges,
-            &output,
-            comm,
-        );
+        if !own {
+            check_one_rank(
+                &what(choice),
+                &rule.clone().strategy(strategy),
+                (sources, targets),
+                charges,
+                output,
+                comm,
+            );
+        }
         let pairs = report.pairs;
         let local = [
             pairs.w_leaf_pairs,
@@ -1767,10 +1815,14 @@ fn check_plane_wave<T: Stored + SimdScalar + Equivalence + Default>(
     builder: &FmmBuilder<T>,
     (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
     charges: &[T],
-    output: &Output<T>,
+    (output, strategy, near): (&Output<T>, M2lStrategy, NearRuleChoice),
     threads: &[usize],
     comm: &SimpleCommunicator,
 ) {
+    // The scenario's near pairs for every build here, so that only M2L differs (since
+    // Phase 6 T11 the near rule is on by default, its crossovers from each strategy's
+    // cost model).
+    let builder = &builder.clone().near_rule(near);
     let scenario = *SCENARIO.lock().unwrap();
     {
         let key = (scenario, size_of::<T>());
@@ -1803,6 +1855,24 @@ fn check_plane_wave<T: Stored + SimdScalar + Equivalence + Default>(
                 .as_ref()
                 .map_or(0.0, |g| relative_l2_vectors(g, &grad, comm)),
         ]
+    };
+    // Where the scenario resolved `PlaneWave` itself (`Auto`'s choice at f64 p ≥ 7 and f32
+    // p ≥ 8 since Phase 6 T11), `Rotation` named is the exact M2L.
+    let exact_build;
+    let output = if strategy == M2lStrategy::PlaneWave {
+        let mut exact = built(
+            builder
+                .clone()
+                .strategy(M2lStrategy::Rotation)
+                .threads(1)
+                .build(sources, targets, comm),
+            comm,
+        )
+        .expect("the exact FMM builds");
+        exact_build = exact.evaluate(charges).expect("the exact FMM evaluates");
+        &exact_build
+    } else {
+        output
     };
     let exact_m2l = errors(output);
     let plane = builder.clone().strategy(M2lStrategy::PlaneWave);
@@ -1936,7 +2006,9 @@ type BatchedKey = (&'static str, usize, bool, usize);
 static BATCHED_SEEN: std::sync::Mutex<Vec<BatchedKey>> = std::sync::Mutex::new(Vec::new());
 
 /// The batched M2L (Phase 6 T2, C6.6; docs/design/optimisation.md §2.3) where `fmm`, at
-/// one thread with output `dense` (its bits `reference`), resolved `Dense`: the same
+/// one thread with output `dense` (its bits `reference`), resolved `Dense` (or, since
+/// Phase 6 T11, where it resolved `Batched`, `Auto`'s choice at low p, against `Dense`
+/// named and built here at one thread): the same
 /// settings with `M2lStrategy::Batched` give `reference` bit for bit, serially
 /// (`Fmm::set_serial`), once per scenario, precision, p and output kind (its other
 /// evaluations repeat a tree with another P2P kernel, threads or overlap, which reach M2L
@@ -1949,18 +2021,21 @@ static BATCHED_SEEN: std::sync::Mutex<Vec<BatchedKey>> = std::sync::Mutex::new(V
 /// φ and ∇φ) and at those threads with the same bits; on several ranks the fused output
 /// is bit for bit the one-rank fused `Fmm` over the union (rank-count invariance). Nothing
 /// under another strategy.
-fn check_batched<T: Stored + SimdScalar + Equivalence + Default>(
+fn check_batched<'o, T: Stored + SimdScalar + Equivalence + Default>(
     builder: &FmmBuilder<T>,
     points: (&[[f64; 3]], &[[f64; 3]]),
     charges: &[T],
-    fmm: &Fmm<'_, T>,
+    fmm: &mut Fmm<'o, T>,
     (dense, reference): (&Output<T>, &[u64]),
     threads: &[usize],
-    comm: &SimpleCommunicator,
+    comm: &'o SimpleCommunicator,
 ) {
-    if fmm.strategy() != M2lStrategy::Dense {
+    if !matches!(fmm.strategy(), M2lStrategy::Dense | M2lStrategy::Batched) {
         return;
     }
+    // The scenario's near pairs for every build here (Phase 6 T11: the near rule is on by
+    // default, its crossovers from each strategy's cost model).
+    let builder = &builder.clone().near_rule(near_as(fmm));
     let (sources, targets) = points;
     let scenario = *SCENARIO.lock().unwrap();
     let (full, any) = {
@@ -1983,17 +2058,53 @@ fn check_batched<T: Stored + SimdScalar + Equivalence + Default>(
     if !any {
         return;
     }
-    let most = if full {
-        threads.iter().copied().max().unwrap_or(1)
+    // Where the scenario resolved `Batched` (`Auto`'s choice at f64 p ≤ 6 and f32 p ≤ 7
+    // since Phase 6 T11), `Dense` named at one thread is the reference.
+    let dense_build;
+    let dense_bits;
+    let (dense, reference) = if fmm.strategy() == M2lStrategy::Batched {
+        let mut named = built(
+            builder
+                .clone()
+                .strategy(M2lStrategy::Dense)
+                .threads(1)
+                .build(sources, targets, comm),
+            comm,
+        )
+        .expect("the dense FMM builds");
+        dense_build = named.evaluate(charges).expect("the dense FMM evaluates");
+        dense_bits = output_bits(&dense_build);
+        (&dense_build, &dense_bits[..])
     } else {
-        1
+        (dense, reference)
     };
-    let batched = builder.clone().strategy(M2lStrategy::Batched);
-    let mut fmm = built(
-        batched.clone().threads(most).build(sources, targets, comm),
-        comm,
-    )
-    .expect("the batched FMM builds");
+    // Separate named: the default is fused from p = 6 (Phase 6 T11).
+    let batched = builder
+        .clone()
+        .strategy(M2lStrategy::Batched)
+        .m2l_mul_add(MulAdd::Separate);
+    // Where the scenario resolved `Batched` its own FMM (one thread) is switched between
+    // the modes (`Fmm::set_m2l_mul_add`) and restored at the end; its threads are the
+    // scenario's own checks. Otherwise a build at the most threads.
+    let reused = fmm.strategy() == M2lStrategy::Batched;
+    let restore = fmm.threading().m2l_kernel.map(|(_, mode)| mode);
+    let mut own;
+    let (fmm, most) = if reused {
+        fmm.set_m2l_mul_add(MulAdd::Separate);
+        (fmm, 1)
+    } else {
+        let most = if full {
+            threads.iter().copied().max().unwrap_or(1)
+        } else {
+            1
+        };
+        own = built(
+            batched.clone().threads(most).build(sources, targets, comm),
+            comm,
+        )
+        .expect("the batched FMM builds");
+        (&mut own, most)
+    };
     assert_eq!(fmm.strategy(), M2lStrategy::Batched);
     let p2p = match fmm.p2p_kernel() {
         P2pChoice::Isa(isa) => isa,
@@ -2002,7 +2113,7 @@ fn check_batched<T: Stored + SimdScalar + Equivalence + Default>(
     assert_eq!(
         fmm.threading().m2l_kernel,
         Some((p2p, MulAdd::Separate)),
-        "the column kernel runs on the P2P ISA, separate by default"
+        "the column kernel runs on the P2P ISA, separate as named"
     );
     // Every rank evaluates alike, so every comparison is agreed by a sum over the ranks.
     let evaluate = |fmm: &mut Fmm<'_, T>, serial: bool| {
@@ -2014,7 +2125,7 @@ fn check_batched<T: Stored + SimdScalar + Equivalence + Default>(
         |a: &[u64], b: &[u64]| global_sum(a.iter().zip(b).filter(|(x, y)| x != y).count(), comm);
     let mut separate = 0;
     for serial in [true, false].into_iter().take(if most > 1 { 2 } else { 1 }) {
-        let (bits, _) = evaluate(&mut fmm, serial);
+        let (bits, _) = evaluate(fmm, serial);
         let n = if serial { 1 } else { most };
         assert_eq!(
             differing(&bits, reference),
@@ -2027,11 +2138,14 @@ fn check_batched<T: Stored + SimdScalar + Equivalence + Default>(
     let mut checks = BATCHED_CHECKS.lock().unwrap();
     checks.0 += separate;
     if !full {
+        if let (true, Some(mode)) = (reused, restore) {
+            fmm.set_m2l_mul_add(mode);
+        }
         return;
     }
     fmm.set_m2l_mul_add(MulAdd::Fused);
     assert_eq!(fmm.threading().m2l_kernel, Some((p2p, MulAdd::Fused)));
-    let (fused_bits, fused) = evaluate(&mut fmm, true);
+    let (fused_bits, fused) = evaluate(fmm, true);
     let mut worst = difference(&fused.potential, &dense.potential, comm);
     if let (Some(a), Some(b)) = (&fused.gradient, &dense.gradient) {
         worst = worst.max(difference(a.as_flattened(), b.as_flattened(), comm));
@@ -2043,7 +2157,7 @@ fn check_batched<T: Stored + SimdScalar + Equivalence + Default>(
     );
     checks.1 += 1;
     if most > 1 {
-        let (bits, _) = evaluate(&mut fmm, false);
+        let (bits, _) = evaluate(fmm, false);
         assert_eq!(
             differing(&bits, &fused_bits),
             0,
@@ -2055,6 +2169,9 @@ fn check_batched<T: Stored + SimdScalar + Equivalence + Default>(
     let precision = usize::from(size_of::<T>() == 8);
     checks.2[precision] = checks.2[precision].max(worst);
     drop(checks);
+    if let (true, Some(mode)) = (reused, restore) {
+        fmm.set_m2l_mul_add(mode);
+    }
     check_one_rank(
         "host, fused batched M2L",
         &batched.m2l_mul_add(MulAdd::Fused),
@@ -2280,6 +2397,7 @@ fn check_vectors<T: Stored + SimdScalar + Equivalence + Default>(
             builder
                 .clone()
                 .strategy(strategy)
+                .near_rule(near_as(&fmm))
                 .vectors(m)
                 .build(sources, targets, comm),
             comm,
@@ -2669,6 +2787,20 @@ fn bits<T: RealScalar>(values: &[T]) -> Vec<u64> {
         .collect()
 }
 
+/// The near rule that gives another build the near pairs of `fmm`: its crossovers named,
+/// or off (Phase 6 T11: with the rule on by default, each strategy's cost model gives its
+/// own crossovers, so strategies compared at equal near pairs name these).
+fn near_as<T, C>(fmm: &Fmm<'_, T, C>) -> NearRuleChoice
+where
+    T: Stored + SimdScalar + Equivalence + Default,
+    C: mpi::traits::CommunicatorCollectives,
+{
+    match fmm.near_rule().crossovers {
+        Some([w, x]) => NearRuleChoice::Crossovers { w, x },
+        None => NearRuleChoice::Off,
+    }
+}
+
 /// The output's values as bit patterns: potentials, then gradients.
 fn output_bits<T: RealScalar>(output: &Output<T>) -> Vec<u64> {
     let mut values = bits(&output.potential);
@@ -2703,7 +2835,10 @@ fn uniform_cube_strategies(comm: &SimpleCommunicator) {
     for (k, &p) in ps.iter().enumerate() {
         let mut outputs: Vec<Vec<f64>> = Vec::new();
         for (s, &strategy) in strategies.iter().enumerate() {
-            let builder = FmmBuilder::<f64>::new(p).strategy(strategy);
+            // The near rule off: the strategies compared on M2L alone (Phase 6 T11).
+            let builder = FmmBuilder::<f64>::new(p)
+                .strategy(strategy)
+                .near_rule(NearRuleChoice::Off);
             let sets = (&sources[..], &sources[..]);
             let Some((fmm, output)) =
                 evaluate_threaded(&builder, sets, &local_charges, &THREADS, comm)
@@ -2768,16 +2903,11 @@ fn distinct_and_nested(comm: &SimpleCommunicator) {
         else {
             return;
         };
-        // Auto at p = 6 (6.4 MB per rank): Dense up to 10 ranks per node (Phase 5N T4).
+        // Auto at f64 p = 6: Batched on every count of ranks per node (Phase 6 T11).
         let ranks = fmm.threading().ranks_per_node;
-        let want = if ranks <= 10 {
-            M2lStrategy::Dense
-        } else {
-            M2lStrategy::Rotation
-        };
         assert_eq!(
             fmm.strategy(),
-            want,
+            M2lStrategy::Batched,
             "Auto at p = 6 on {ranks} ranks per node"
         );
         assert_eq!(
@@ -3588,10 +3718,12 @@ fn clustered_distributions(comm: &SimpleCommunicator) {
         let (sources, local_charges) = (share(&points, comm), share(&charges, comm));
         let (phi, _) = exact(&points, &charges, &sources);
         let sets = (&sources[..], &sources[..]);
+        // The near rule off: the strategies compared on M2L alone (Phase 6 T11).
         let builder = |p: usize, strategy| {
             FmmBuilder::<f64>::new(p)
                 .strategy(strategy)
                 .max_points_per_leaf(leaf)
+                .near_rule(NearRuleChoice::Off)
         };
         // p = 4: every strategy, Dense also at 2, 4 and 8 threads.
         let mut outputs: Vec<Vec<f64>> = Vec::new();
@@ -4462,12 +4594,12 @@ fn strategy_on_the_node(comm: &SimpleCommunicator) {
         assert_eq!(fmm.strategy(), want.strategy(), "rank {rank}");
         assert_ne!(fmm.strategy(), M2lStrategy::Auto);
         if named == M2lStrategy::Auto && budget == rank_bytes {
-            let expected = if ranks_per_node == 1 {
-                M2lStrategy::Dense
-            } else {
-                M2lStrategy::Rotation
-            };
-            assert_eq!(fmm.strategy(), expected, "one rank's tables as the budget");
+            // Since Phase 6 T11 the budget does not enter: Batched at f64 p = 4.
+            assert_eq!(
+                fmm.strategy(),
+                M2lStrategy::Batched,
+                "one rank's tables as the budget"
+            );
         }
         let agreed = same_on_every_rank(u64::from(strategy_code(fmm.strategy())), comm)
             && same_on_every_rank(report.ranks_per_node as u64, comm)

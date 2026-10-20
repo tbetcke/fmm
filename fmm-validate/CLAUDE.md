@@ -267,6 +267,16 @@ plane-wave M2L per box on synthetic data, per ISA (`--isa`), degree (`--ps`) and
 and in `tools/scaling/run.sh` the sweeps `t13-host`, `t13-node`, `t13-calibrate` and
 `t13-cut` (`T13_ISAS`, `T13_NS`). Its report is `results/phase6-planewave.md`.
 
+Phase 6 T11 (the final benchmarks and the defaults) added `Settings::max_points_per_leaf`
+(`--leaf-size n`, the summary's `leaf`), and the harness now takes the library's defaults
+(decision 7: `Settings::m2l_mul_add` and `max_points_per_leaf` are `Option`s, `None` the
+library's `fmm::default_m2l_mul_add` and `default_max_points_per_leaf`, `--mul-add auto`;
+the near rule `CostModel`); `tools/scaling/run.sh` has the sweeps `t11-host`, `t11-leaf`,
+`t11-calibrate` and `t11-device` (`T11_*`; `default` names the defaults before T11), and its
+quiet gate runs on locust (`QUIET_LINUX`, `QUIET_GPU`) and samples the other processes
+during each launch (`QUIET_DURING`, `QUIET_RETRIES`: a contended launch is repeated). Its
+report is `results/phase6.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`
