@@ -126,6 +126,45 @@ upstream-worthy; keep the source document as the place for the full numbers.
   TF32); document that f32 inputs may be rounded to TF32 on CUDA.
 - **Full numbers:** fmm-validate/results/phase5s-t1s.md.
 
+### 5. Metal: a matmul with few rows is refused as "Plane dimension unsupported: 32"
+
+- **Version:** CubeCL 0.11.0, `cubek-matmul` 0.3.0, wgpu-msl on the M3 Max (seen
+  2026-10-24 in an `nd-fmm-bench` run at f32 p = 8, revision aff3514); the same message
+  in the Phase 4 and Phase 4S reports under 0.11.0-pre.4.
+- **Observation:** `launch_ref` with `multi_level::Strategy::SimpleCyclicCmma` on f32
+  operands fails with `MatmulAvailabilityError::PlaneDimUnsupported { plane_dim: 32 }`,
+  displayed as "Plane dimension unsupported: 32. Only 32 & 64 are supported." The plane
+  size is not the cause. `infer_blueprint_plane`
+  (`src/multi_level/routines/selector/plane.rs:103-127`) sizes the stage as
+  `row_count = max_planes / (tile_factor · precision_factor)`, with the units per cube
+  capped at 256 on macOS (line 106), so 256 / 32 = 8 planes; `precision_factor` is 2 for
+  4-byte stages (line 112); and `tile_factor` is 8 whenever `m ≤ 4 tile_m` or
+  `n ≤ 4 tile_n` (line 118). Metal registers only 8 × 8 × 8 CMMA forms (`cubecl-cpp`
+  `src/metal/dialect.rs:72-104`), so every f32 problem with m ≤ 32 or n ≤ 32 gets
+  `row_count` = 8 / 16 = 0, and the zero is reported as `PlaneDimUnsupported` with the
+  device's plane size (lines 123-127). The error text is a fixed string
+  (`src/definition/error.rs:150-153`), hence the contradiction. The tiny-problem path
+  (`is_tiny`, `src/multi_level/routines/selector/mod.rs:16-25`, enabled by the simple
+  routine) does not catch these shapes: it needs two of m, n, k at most 2 tile edges
+  (16), and here only m is.
+- **Where it showed:** `nd-fmm-kernels`' library probe (`probe_library` in
+  `fmm-kernels/src/translate.rs`), box-major, so the matmul's m is the columns per group
+  and n = k the order (p + 1)². Rejected on Metal at f32 p = 8 (n = 81): M2M and L2L level
+  calls with 1 or 8 columns per group (`[8, 1, 81]`, `[8, 8, 81]`), and Phase 4's dense
+  M2L at level 2 with 32 (`[316, 32, 81]`, also at n = 169 and 289); accepted from 64
+  columns per group. Each rejected view runs the hand-written GEMM, so the outputs are
+  correct and the cost is small (those level calls have 8 to 3096 pairs).
+- **0.11.0: present** (source and run, above). Under pre.4 the same text appears in
+  fmm-validate/results/phase4-m3max.md ("The device dense M2L per level") and
+  fmm-bench/results/phase4s-t11-download-path.md; not re-checked against the pre.4
+  sources.
+- **Possible questions:** report a stage that does not fit as its own error (or as
+  "no stage fits the problem") rather than `PlaneDimUnsupported`, whose message names a
+  supported plane size; or select a smaller stage for small m or n instead of refusing.
+- **Full numbers:** the level calls and their rejections in
+  fmm-validate/results/phase4-m3max.md and fmm-bench/results/phase4s-t11-download-path.md;
+  the 2026-10-24 run's report was not kept in the repository.
+
 ### Earlier observations, recorded elsewhere (pointers; re-check before quoting)
 
 - `PLANE_POS` not lowered for NVPTX; the compile panic is dropped and the launch fails
