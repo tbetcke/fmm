@@ -424,6 +424,17 @@ Decision 2 (signed off by the user, 2026-10-10): at most two trees with their `t
 250 GB; the rest stays free for T2's and T3's outputs (raw output is kept in `logs/`,
 never in a tree).
 
+Once a task has merged, remove its tree's `target/debug`, `target/tmp` and `target/doc`
+(the checks' and tests' builds, nearly all of a `target/`); keep the tree's sources, the
+results in it and `target/release`, the binaries that were timed. On 2026-10-24, 31 trees
+had grown `lquota` to 160.6 GiB; removing these three from every tree (43 directories,
+6 min at low priority on the login node, while a maintenance reservation held every
+compute node) brought it to 27.0 GiB:
+
+```sh
+rm -rf /scratch/scratch/ucahtbe/fmm/src/<branch>/target/{debug,tmp,doc}
+```
+
 ## Checking for writes outside the root
 
 ```sh
