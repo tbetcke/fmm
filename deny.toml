@@ -1,0 +1,28 @@
+# cargo-deny (https://embarkstudios.github.io/cargo-deny/), licence check only: CI's
+# run-tests job runs `cargo deny check licenses` (Helmholtz CHR.2, proposal §6.7, "FFTW
+# stays optional"). It covers the default members with their default features, so a GPL
+# crate entering the default dependency graph (fftw-sys through rlst's `fftw` features)
+# fails the build. The non-default members (nd-fmm-kernels, the spikes) are left out.
+
+[graph]
+exclude = [
+    "nd-fmm-kernels",
+    "nd-fmm-spike-cubecl-gemm",
+    "nd-fmm-spike-device-arith",
+    "nd-fmm-spike-download-path",
+    "nd-fmm-spike-p2p-simd",
+    "nd-fmm-spike-plane-wave",
+]
+
+[licenses]
+# Permissive licences only; nothing copyleft. An `OR` expression passes when one of its
+# terms is listed (r-efi is MIT OR Apache-2.0 OR LGPL-2.1-or-later).
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+]

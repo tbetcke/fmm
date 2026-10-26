@@ -26,8 +26,10 @@ spack:
   # FFTW (CI: libfftw3-dev), for rlst's optional `fftw_system` feature through
   # pkg-config. Not linked by the workspace at Phase 4; kept to match CI.
   - fftw
-  # cmake (CI: cmake), for build scripts that drive cmake (the `cmake` crate is a build
-  # dependency of rlst). The system has 3.26; spack's is newer and pinned here.
+  # cmake, for build scripts that drive cmake: since Helmholtz CHR.2 only rlst 0.10.2's
+  # (the `cmake` crate), which the spikes' green-kernels builds through the root `[patch]`
+  # (`--workspace` builds it here; CI, which builds the default members, dropped its
+  # cmake). The system has 3.26; spack's is newer and pinned here.
   - cmake
   # pkg-config, for mpi-sys (build-probe-mpi) and rlst's `fftw_system` probe.
   - pkgconf

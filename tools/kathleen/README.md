@@ -52,7 +52,8 @@ stable moves, change `FMM_KATHLEEN_RUST` and rerun `setup.sh`. The stack also ha
 
 What the build needs from the modules: Open MPI (rsmpi's `mpi-sys` finds it through
 `mpicc`), libclang for bindgen (the llvm module; RHEL 9 has none in `/usr/lib64`), and
-gcc and cmake for build scripts. The workspace links no BLAS or FFTW library (rlst is
+gcc and cmake for build scripts (cmake, since Helmholtz CHR.2, only for green-kernels'
+rlst 0.10.2 in the spikes, which `--workspace` builds). The workspace links no BLAS or FFTW library (rlst is
 built without those features, and only rlst's own tests link OpenBLAS); the `openblas`
 and `fftw` modules are loaded as the brief pins them, so that a later need finds them.
 The llvm module sets `CC` and `CXX` to its clang; `env.sh` sets them back to the gcc
