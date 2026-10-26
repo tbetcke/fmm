@@ -22,8 +22,8 @@ BLAS thread variable at 1.
    under D9 as clarified on 2026-10-26 (one-sided, §7). locust pending.
 4. **The licence check** (`deny.toml`, CI job `run-licence-check`) passes on the default
    set and fails when FFTW enters it, on fftw-sys stated as `GPL-2.0-or-later` (§3).
-5. **cmake**: the default members no longer need it; CI drops it, locust and Kathleen keep
-   it for the spikes (§4). `cargo upgrades` no longer reports `rlst`; `cargo tree -e
+5. **cmake**: no crate of the workspace runs it (a trap build, §4); CI drops it, locust's
+   and Kathleen's environments keep it unchanged. `cargo upgrades` no longer reports `rlst`; `cargo tree -e
    normal` lists no fftw-sys.
 
 ## 1. The change
@@ -40,7 +40,7 @@ BLAS thread variable at 1.
   the default members with default features, permissive licences only. fftw-sys is stated
   as `GPL-2.0-or-later` (§3).
 - `cmake` dropped from CI's package lists (§4); locust's spack `cmake` and Kathleen's
-  module stay, for the spikes.
+  module stay, unused.
 
 ## 2. Laplace bit for bit
 
@@ -50,7 +50,9 @@ with `main`'s binary and the branch's, f64, p = 3, 6 and 8, the strategies Batch
 Rotation, Dense and PlaneWave, at 1 and 8 threads: 48 full outputs (φ and ∇φ at every
 point, 51 MB each at N = 2 × 10⁵) per binary, on the M3 Max. `cmp`: **all 48 pairs
 identical**. The comparison has teeth: outputs of different strategies or degrees differ
-from the 25th byte on.
+from the 25th byte on. The byte comparison ran on the M3 Max (aarch64) only; on x86
+(Kathleen) the evidence is the equal error columns of §6 and the branch's own identity and
+invariance tests, with no source change and the RLST modules nd-fmm calls identical.
 
 Beside it, the existing fixtures and bit-identity tests pass (§5): across threads and
 overlap (`mpi_exec`, `mpi_threading`), across ranks (`invariance` at 2 and 4 ranks, and
@@ -77,14 +79,18 @@ explicitly allowed". CHR.3's `fftw` job will need its own allowance for that ent
 
 ## 4. cmake
 
-On `main`, `cargo tree -e build,normal -i cmake --workspace` shows the `cmake` crate only
-as rlst 0.10.2's build dependency; on the branch only under green-kernels' rlst 0.10.2
-(the spikes), and not at all for the default members. No build script of the default
-graph mentions cmake (searched in each package with a `build.rs`; libffi-sys builds with
-autotools). A default-members build on locust with a `cmake` on `PATH` that records any call and fails is pending. So CI's three package lists (`run-tests`,
-`run-tests-mpi`, `run-examples`) drop `cmake`, and the CI run of the pull request is
-the final check on x86_64. locust's spack `cmake` and Kathleen's module stay, with their
-reason corrected: `--workspace` builds the spikes there.
+rlst 0.10.2 lists the `cmake` crate as a build dependency, but its `build.rs` only probes
+FFTW through pkg-config (behind `fftw_system`) and never calls it. On the branch the crate
+is in the graph only under green-kernels' rlst 0.10.2 (the spikes), and no build script of
+the default graph mentions cmake (libffi-sys builds with autotools). The trap, Kathleen job
+608744 (node-c11a-139, 3.5 min): with a `cmake` first on `PATH` that records every call
+and exits 127, in a fresh target directory, `cargo build --all-targets` on the default
+members and then `cargo check --workspace --all-targets` (the spikes included) both
+succeed and no call is recorded (no `calls.txt`). **No crate of the workspace runs cmake.**
+So CI's three package lists (`run-tests`, `run-tests-mpi`, `run-examples`) drop it, and the
+CI run of the pull request repeats the check on GitHub's runner. locust's spack `cmake`
+and Kathleen's module stay, with their comments corrected: no crate needs them, and
+dropping the spack entry means re-concretising `spack.lock`, a change of its own.
 
 ## 5. Checks
 
@@ -95,7 +101,9 @@ reason corrected: `--workspace` builds the spikes there.
 | `cargo check --workspace --all-targets` (the spikes, green-kernels on rlst 0.10.2) | M3 Max | passed |
 | `RUST_MIN_STACK=8388608 cargo test --workspace` | M3 Max (878 passed, 0 failed); locust | passed |
 | the same | Kathleen 608726 | failed in `spikes/p2p-simd` only, known before this task: `kernel_rsqrt_within_contract` (avx2 f64 est+S2 at 289 u against 4 u: two Newton steps from Intel's 1.5 · 2⁻¹² estimate give about 270 u) and `compare_core_on_a_small_cell` (green-kernels' f64 gradient 1.17 · 10⁻¹⁴ over its bound; ours 4.3 · 10⁻¹⁶). The spike builds on the unchanged rlst 0.10.2 and calls no RLST in either computation; the same values were recorded on Kathleen before |
-| nd-fmm-simd: clippy, tests, `--release -- --ignored` (C3S.3 and C3S.4) | Kathleen 608726 (AVX2, AVX-512); locust (NEON) | passed |
+| nd-fmm-simd: clippy, tests, `--release -- --ignored` (C3S.3 and C3S.4's accuracy and invariance) | Kathleen 608726 (AVX2, AVX-512); locust (NEON); M3 Max (NEON, the ignored tests) | passed |
+| C3S.4's throughput clause (NEON, at least 90 % of the spike prototype, reported by `p2p_kernels`) | – | not re-measured: unchanged by construction. nd-fmm-simd has no RLST in its graph, neither it nor `spikes/p2p-simd` changed, and the lock file adds only rlst and rlst-proc-macro 0.12.0 (no other package moved), so its kernels compile from the same sources and dependencies |
+| nd-fmm-kernels clippy with `cpu,metal` | M3 Max | not run (the M3 Max was loaded by other jobs); nd-fmm-kernels has no RLST in its graph and did not change; its `cpu` Clippy and `cuda` check passed on Kathleen, `cpu,cuda` on locust |
 | nd-fmm-kernels: clippy `cpu`, `cpu,cuda`; `check --features cuda`; CPU-runtime tests; CUDA tests `--include-ignored` | Kathleen 608726; locust | passed |
 | nd-fmm-exec: `check --features cuda`; clippy `cpu,cuda`; `test --features cuda --release` | Kathleen 608726; locust | passed |
 | nd-fmm-exec: `--features cuda --release -- --ignored` | locust | pending (running) |
@@ -105,6 +113,7 @@ reason corrected: `--workspace` builds the spikes there.
 | weekly examples, `.github/scripts/run-examples.sh 3` | Kathleen 608733 (`run.sbatch`, one node) | 9 passed, 0 failed |
 | `cargo tree -e normal` on the default members: no fftw-sys; one rlst (0.12.0) | M3 Max | passed |
 | `cargo deny --locked check licenses`; the FFTW negative check | M3 Max | passed; fails as intended |
+| the cmake trap: default members `build --all-targets`, `check --workspace --all-targets`, a failing `cmake` first on `PATH` | Kathleen 608744 | passed, no call |
 | `cargo upgrades` | M3 Max | no `rlst` (on `main`: rlst in nd-fmm-plan, nd-octree, nd-fmm-exec); left: the cubecl pins (0.11.0 → 0.11.3) |
 
 ## 6. Laplace's benchmarks (D9)

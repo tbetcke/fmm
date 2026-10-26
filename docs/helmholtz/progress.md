@@ -27,7 +27,7 @@ request, using this template:
 ## 2026-10-26: CHR.2 Move to RLST 0.12
 - Done: `rlst` 0.12.0 for the workspace and `octree/` (no source change; green-kernels'
   `[patch]` stays on 0.10.2); `deny.toml` and the CI job `run-licence-check` (fftw-sys
-  stated as GPL); `cmake` dropped from CI, kept on locust and Kathleen for the spikes; docs.
+  stated as GPL); `cmake` dropped from CI (no crate runs it: trap job 608744), kept unused on locust and Kathleen; docs.
   Report `fmm-validate/results/helmholtz-chr-2.md`.
 - Tests: no new test; 48 Laplace outputs of `main` and the branch compared byte for byte
   (identical); the licence check's negative case with FFTW enabled.

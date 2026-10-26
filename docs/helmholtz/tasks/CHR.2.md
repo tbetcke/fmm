@@ -52,7 +52,7 @@ machine of record before the change, per benchmark; plus the C3S.4 throughput ga
 - `octree/Cargo.toml`: `rlst = { version = "0.12.0", features = ["mpi"] }`.
 - `Cargo.lock`: the resolution that follows (committed with the manifests).
 - Source: only what the compiler demands (nothing expected).
-- `deny.toml` at the root: a licence allow-list for the default members' normal and build
+- `deny.toml` at the root (as built: a separate CI job, `run-licence-check`; open question 3): a licence allow-list for the default members' normal and build
   dependencies with no GPL entry; CI step `cargo deny check licenses` in `run-tests`
   (installed by `taiki-e/install-action` or `cargo install --locked cargo-deny`, decided by
   what the other jobs use).

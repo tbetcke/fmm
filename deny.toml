@@ -1,8 +1,11 @@
 # cargo-deny (https://embarkstudios.github.io/cargo-deny/), licence check only: CI's
-# run-tests job runs `cargo deny check licenses` (Helmholtz CHR.2, proposal §6.7, "FFTW
-# stays optional"). It covers the default members with their default features, so a GPL
-# crate entering the default dependency graph (fftw-sys through rlst's `fftw` features)
-# fails the build. The non-default members (nd-fmm-kernels, the spikes) are left out.
+# run-licence-check job runs `cargo deny --locked check licenses` (Helmholtz CHR.2, proposal
+# §6.7, "FFTW stays optional"), so that a GPL crate entering the default dependency graph
+# (fftw-sys through rlst's `fftw` features) fails the build. The graph is the default
+# members' normal and build dependencies, without dev-dependencies; the non-default members
+# (nd-fmm-kernels, the spikes) are left out below, and a new one must be added there. Cargo
+# unifies features over every member before the exclusion, so a feature that a non-default
+# member enables on a shared crate is checked too: the check errs on the strict side.
 
 [graph]
 exclude = [

@@ -92,10 +92,10 @@ Slash commands in `.claude/skills/`, for the Helmholtz work:
 ## Build environment
 Stable Rust with Rust 2024, plus `rustfmt` and `clippy`. Native prerequisites, as
 installed in Linux CI: `libclang-dev libfftw3-dev libopenblas-dev openmpi-bin
-libopenmpi-dev`; `cmake` too for `--workspace` builds, whose spikes build green-kernels'
-rlst 0.10.2 (Helmholtz CHR.2: the default members no longer need it). `mpi` and `rlst`
-build against a real MPI installation and BLAS/LAPACK, so a dependency build failure is
-far more often a missing native library than a defect in a crate.
+libopenmpi-dev`. No crate needs `cmake` since Helmholtz CHR.2 (rlst 0.10.2 declared it
+but never ran it; a build with a failing `cmake` first on `PATH`, Kathleen job 608744).
+`mpi` and `rlst` build against a real MPI installation and BLAS/LAPACK, so a dependency
+build failure is far more often a missing native library than a defect in a crate.
 
 locust (`ssh locust`, an NVIDIA GH200: 72 Grace cores, one H100) builds and runs in an
 environment made by `tools/gh200/` (README.md there): a pinned spack environment
