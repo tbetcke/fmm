@@ -1,0 +1,302 @@
+# Helmholtz FMM roadmap
+
+The tasks of `docs/design/helmholtz-fmm-proposal.md` (draft 0.8), Section 10, in the order
+`/next-task` takes them. The proposal is the full record: each task's *Done when* condenses
+its acceptance criterion in the §10 table, and where the two differ the proposal wins.
+Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
+`docs/helmholtz/tasks/<ID>.md`; each milestone's gate report is
+`docs/helmholtz/gates/<milestone>.md`.
+
+Status: **not started (2026-10-26).** First: D0 and D9, then CHR.2 and CHR.4.
+
+## How `/next-task` reads this file
+
+- `- [ ]` is open, `- [x]` done. The tick is part of the task's own pull request, so a task
+  counts as done once that PR is merged into `main`.
+- Work in flight is not marked here. A task with a branch `tbetcke/h-<id>` or an open PR is
+  in progress: a **draft** PR waits for machine runs, a sign-off or an open question (its
+  plan file says which); a **ready** PR waits for the user's merge.
+- A task is **runnable** when it is open, has no branch or open PR, and everything in its
+  *Needs* is done: the tasks ticked on `main`, the decisions signed off in the table below.
+  Every task also needs **D0**.
+- `/next-task` takes the first runnable task in the order of this file. If the first task in
+  that order waits only for decisions, it asks the user for them first.
+- A task too big for one reviewable PR is split here into lettered sub-tasks (CH3.1a,
+  CH3.1b), each with its own *Done when* and *Needs*, before it starts.
+- *Machines* names the machines its runs need besides the M3 Max. *Sign-off* marks a task
+  whose PR ends with questions for the user; the tasks that need it wait for the answer.
+
+## Decisions
+
+The proposal's Section 12, plus D0. A decision is recorded here when the user takes it:
+`signed off <YYYY-MM-DD>: <the answer as given>`.
+
+| ID | Decision | Proposal's recommendation | Prepared by | Needed by | Status |
+| --- | --- | --- | --- | --- | --- |
+| D0 | Draft 0.8 of the proposal as the plan of record | as written; later changes by sign-off | review of draft 0.7 | every task | open |
+| D1 | Target kD range and tolerances | for example kD ≤ 500 at 10⁻³ to 10⁻⁸ (proposal §12) | – | CH0.8b, CH3.0 | open |
+| D2 | Placement: modules in the layer crates (A) or separate crates (B) | A (§6.1) | – | CH1.2 | open |
+| D3 | f32 scope | f64 only until H7; then f32 for low-frequency configurations that pass an accuracy contract; high-frequency levels in f32 only if S6 finds stable classes | CH0.6 | CH7.1 | open |
+| D4 | Yukawa: its own operator type, or the wavenumber kind as a type parameter | one `HelmholtzOperator<T, K>` if CH2.1 shows no cost to the complex path | CH2.1 | CH2.2 | open |
+| D5 | Source types of the first release | real and complex charges, potentials and gradients; dipoles once C6.4 exists for Laplace (note: Laplace dipoles were merged in Phase 6 T8 and T8d, so the condition is met) | – | CH1.1 | open |
+| D6 | Order of H4 and H6 | H6 first | – | CH6.1, CH4.1 | open |
+| D7 | Host back ends of the φ step | the product as default and reference; FFTW behind the optional `fftw` feature; rustfft if S9 finds it deterministic per box and faster, decided per machine | CH0.9 | CHR.3, CH4.6 | open |
+| D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2 | CH7.5 | open |
+| D9 | What "within noise" means for Laplace's benchmarks (constraint 1) | the run-to-run spread of the Laplace baseline, repeated on each machine before the change, per benchmark; plus the C3S.4 throughput gate | – | CHR.2, CH2.0 | open |
+| D10 | cubek-fft on the device | after S5: adopt, contribute upstream first, or keep the transform as a GEMM | CH0.5 | CH7.4 | open |
+| D11 | Maximum leaf width c_leaf | from S8: the largest c_leaf with P2P and leaf costs within 10 % of their best on W1 and W3 (expected 0.5 to 1) | CH0.8a | CH3.0 | open |
+| D12 | The reference workloads | the set of §9.1 | CH0.8a | CH2.1 | open |
+| D13 | RLST's `fftw_mkl` back end | – | – | – | withdrawn (RLST ≥ 0.11 has none) |
+| D14 | Ownership and schedule of Phase HR | – | – | – | closed (RLST 0.11.0 and 0.12.0) |
+
+## HR: RLST's FFTW interface and its adoption
+
+**Gate:** nd-fmm on RLST 0.12 with Laplace unchanged; the FFTW of every machine recorded;
+the optional FFTW wrapper of the φ step behind its feature.
+
+- [x] **CHR.1 RLST's FFTW rework.** Done in RLST 0.11.0 (2026-10-25) and 0.12.0
+  (2026-10-26).
+- [ ] **CHR.2 Move to RLST 0.12.** The workspace pin and `octree/Cargo.toml`'s own pin to
+  0.12.0 together; green-kernels' `[patch]` left on 0.10.2 (it uses `rlst::simd`, removed in
+  0.12); `CLAUDE.md`, `fmm-plan/CLAUDE.md` and `docs/design/workspace-structure.md` updated.
+  *Done when:* the default members build, lint, test and document; the MPI tests and the
+  weekly examples pass; `cargo check --workspace --all-targets` builds the spikes;
+  `cargo tree -e normal` lists no fftw-sys; a cargo-deny licence check of the default set is
+  in CI; CI's and locust's `cmake` installs checked; `cargo upgrades` no longer reports
+  `rlst`; Laplace bit for bit and its benchmarks within noise (D9). Fallback: stay on 0.10.2.
+  *Needs:* D9. *Machines:* locust, Kathleen.
+- [ ] **CHR.4 FFTW on the machines.** *Done when:* `pkg-config --modversion fftw3 fftw3f`
+  and `rlst::fftw::version()` recorded for the M3 Max, locust (spack's FFTW, not the RPM's
+  3.3.8), Kathleen and CI, in `tools/*/machine.md`; RLST 0.12's own
+  `cargo test --features fftw_system` passes on each, `fftw_determinism` included.
+  Fallback: a machine without FFTW in both precisions uses the product. *Needs:* –.
+  *Machines:* locust, Kathleen.
+- [ ] **CHR.3 FFTW wrapper of the φ step.** In `nd-fmm-exec` behind
+  `fftw = ["rlst/fftw_system"]`: one plan per (level, N_φ), interleaved per-box scratch,
+  `Rigor::Estimate`, fingerprints all-gathered at build. *Done when:* against the product to
+  round-off; a box's bits the same across batch positions, batch sizes and thread counts;
+  ranks with differing fingerprints both use the product; the feature off by default; a CI
+  job with the feature (`pkg-config`, the FFTW version report, cargo-deny's entry for
+  fftw-sys). *Needs:* CHR.2, CH0.9, D7.
+- [ ] **HR.G Gate.** `/milestone-gate HR`. *Needs:* every task above.
+
+## H0: Spikes
+
+**Gate:** S1–S9 answered, each with a `SPIKE_REPORT.md`; the decisions they prepare (D3,
+D7, D10, D11, D12) put to the user.
+
+- [ ] **CH0.1 S1: rotation blocks at large degree.** The Gumerov–Duraiswami (2014) recursion
+  in the orthonormal real basis. *Done when:* orthogonal and in agreement with an
+  arbitrary-precision reference to p = 1000; in agreement with N-conjugated
+  `nd_fmm_math::rotation::blocks` at p ≤ 30; the degree up to which conjugation stays
+  accurate; the relation of the β and π − β blocks; time per block set. *Needs:* –.
+- [ ] **CH0.2 S2: coaxial coefficients.** (S|R), (S|S), (R|R) by recursion. *Done when:*
+  relative errors against an arbitrary-precision reference for p and k a up to 300, real,
+  complex and imaginary k; the imaginary parts of (S|S) and (R|R) zero to round-off for real
+  k; the index symmetry that halves the tables. *Needs:* –.
+- [ ] **CH0.3 S3: radial functions.** j_n, h_n, i_n, k_n for real and complex arguments, with
+  the scaling of §3.4 (exponential for Yukawa above κ r ≈ 1). *Done when:* accurate against
+  arbitrary precision on every operator's argument and degree ranges; the scaling chosen.
+  *Needs:* –.
+- [ ] **CH0.8a S8: workload census, first pass.** Trees of W1–W4 over the kD sweep from
+  `nd-octree` with a prototype maximum leaf width (c_leaf 0.25 to 2), p from the formula; no
+  FMM is run. *Done when:* per level the occupied boxes, U, V (by distance class), W and X
+  sizes, p_l, regime and per-class choice, the memory model of §7 and the operation counts;
+  c_leaf proposed (D11); no high-frequency leaf; the workloads proposed (D12); batch sizes
+  for S5 and S9. *Needs:* –. *Sign-off:* D11, D12.
+- [ ] **CH0.7 S7: truncation under realistic geometry.** *Done when:* the P2M → M2M → M2L →
+  L2L → L2P chain over two levels and M2M and L2L over three, on all 316 offsets, with points
+  filling the boxes (uniform, corners, W1 patches), real, complex and imaginary k, in
+  extended precision with the S1 and S2 prototypes; p as a function of (k a, ε, operator)
+  meeting ε with a stated margin on every placement. *Needs:* CH0.1, CH0.2, CH0.3.
+- [ ] **CH0.6 S6: stability of the diagonal form.** Seeded by Appendix B.1. *Done when:* the
+  S → F, diagonal, F → R chain in f64 and f32 on all 34 classes against extended-precision
+  RCR and the direct sum, with realistic placements, k a 3 to 400, ε 10⁻³ to 10⁻¹⁰, P from the
+  formula and from S7, Im k > 0, |t| = 3w as a control; C_T and θ; the classes on RCR per
+  (k a, ε); the f32 verdict (D3); whether interpolating T keeps the bound; prototype times.
+  Accepted when the bound never under-predicts by more than 2×. *Needs:* CH0.3, CH0.7.
+  *Sign-off:* D3.
+- [ ] **CH0.8b S8: workload census, final pass.** *Done when:* the first pass repeated with
+  S7's p and S6's constants; its numbers replace §7's. *Needs:* CH0.8a, CH0.6, CH0.7, D1.
+- [ ] **CH0.9 S9: FFT plans, bits and host timing.** A spike crate outside the workspace on
+  RLST 0.12's `rlst::fftw`, and rustfft. *Done when:* per-box plans of 2P − 1 and 2P rings,
+  interleaved scratch against split plans; bits identical across batch positions, batch
+  sizes, threads and fresh processes; fingerprints compared across two ranks; time per box
+  for the product, FFTW and rustfft for P from 34 to 262 on smooth and power-of-two grids;
+  `rlst::fftw::version()` per machine; D7 proposed per machine. *Needs:* CHR.4.
+  *Machines:* locust, Kathleen. *Sign-off:* D7.
+- [ ] **CH0.4 S4: plane-wave quadratures per k w_l.** *Done when:* how FMM3D obtains them;
+  a generator or table for this library with its accuracy over the k w_l of low-frequency
+  levels. *Needs:* –.
+- [ ] **CH0.5 S5: cubek-fft for the φ step.** *Done when:* f64 accuracy against the product
+  and an extended-precision DFT; time against the transform as a GEMM for N_φ = 256 to 2048
+  at S8's batch sizes, on the GH200 and the CPU runtime; the cost of per-butterfly twiddles
+  and power-of-two padding; D10 proposed. *Needs:* CH0.8a. *Machines:* locust.
+  *Sign-off:* D10.
+- [ ] **H0.G Gate.** `/milestone-gate H0`. *Needs:* every task above.
+
+## H1: Conventions, math, reference
+
+**Gate:** CONVENTIONS §3.15 signed off; `nd-fmm-math` and `nd-fmm-ref` carry the Helmholtz
+family, checked against FMM3D's fixtures.
+
+- [ ] **CH1.4 FMM3D convention check and fixtures.** First a draft of §3.15 from proposal §4
+  and S1–S3; then `hfmm3d` in `tools/fmm3d/driver.f90` and a generator in `tools/fixtures/`.
+  *Done when:* on two points, FMM3D's factor, sign of k, gradient and branch identified and
+  matching the draft (or the draft corrected); fixtures for real, complex and imaginary k and
+  real and complex charges, committed with release, routine and `eps`; whether FMM3D is
+  accurate for imaginary zk (R12). *Needs:* CH0.1, CH0.2, CH0.3. *Machines:* Kathleen.
+- [ ] **CH1.1 CONVENTIONS §3.15.** The proposal's Section 4 as a CONVENTIONS section and a
+  `CONVENTION_VERSION` bump. *Done when:* signed off by the user after CH1.4's two-point
+  check. *Needs:* CH1.4, D5. *Sign-off:* §3.15.
+- [ ] **CH1.2 `nd-fmm-math`.** Real orthonormal harmonics, radial functions (with the Yukawa
+  scaling), rotation blocks at any degree. *Done when:* the identities of §3.15; the M2M and
+  L2L coefficients real for real k. *Needs:* CH1.1, D2.
+- [ ] **CH1.3 `nd-fmm-ref`.** Direct-sum oracle, reference operators, direct and RCR
+  translations, the diagonal form in extended precision. *Done when:* addition theorems; the
+  k → 0 limit with the tolerances of §9; Yukawa two ways; the direct sum against CH1.4's
+  fixtures to round-off. *Needs:* CH1.2, CH1.4.
+- [ ] **H1.G Gate.** `/milestone-gate H1`. *Needs:* every task above.
+
+## H2: Yukawa on the host
+
+**Gate:** CH2.5, Yukawa against FMM3D (or skipped with its reason).
+
+- [ ] **CH2.0 Laplace's real host drivers made generic over the kernel.** Dense, Classes,
+  Rotation, Batched (§6.2). *Done when:* constraint 1 of §2: no new dispatch below the level
+  call, layouts and tables unchanged, Laplace bit for bit, its benchmarks within noise on the
+  three machines; the PR states how p reaches Laplace's inner loops. Else dropped, and Yukawa
+  gets copies. *Needs:* CH1.3, CHR.2, D9. *Machines:* locust, Kathleen.
+- [ ] **CH2.4 Yukawa P2P in `nd-fmm-simd`.** On a loop skeleton shared with Laplace if
+  constraint 1 holds. *Done when:* an accuracy contract like simd-p2p.md's; cost per pair
+  against Laplace; Laplace's P2P bit for bit and at least 90 % of the spike (C3S.4).
+  *Needs:* CH1.2. *Machines:* locust, Kathleen.
+- [ ] **CH2.1 The real `HelmholtzOperator` path.** On CH2.0's drivers (or copies), Rotation
+  and Dense M2L. *Done when:* the FMM against the direct sum on W1, W3 and W4 for κD from
+  10⁻² to 10³; deterministic. *Needs:* CH2.0, D12. *Sign-off:* D4.
+- [ ] **CH2.2 Per-level tables with per-level cache keys.** *Done when:* build cost and
+  memory reported; levels reused across an octave sweep. *Needs:* CH2.1, D4.
+- [ ] **CH2.3 Pruning and the calibration of p_l.** *Done when:* the relative error within
+  target for κD from 10⁻² to 10³; on pruned levels the V, W and X lists empty and the buffers
+  zeroed; the same levels pruned on both ranks of a two-rank run; θ_D set. *Needs:* CH2.1,
+  CH0.7.
+- [ ] **CH2.5 Gate: Yukawa against FMM3D.** *Done when:* both codes against the same sampled
+  direct sum over κD on W1 and W3, and the full-target crosscheck; skipped, with the reason,
+  if CH1.4 found FMM3D unreliable for imaginary zk. *Needs:* CH2.3, CH1.4.
+  *Machines:* Kathleen.
+- [ ] **H2.G Gate.** `/milestone-gate H2`. *Needs:* every task above.
+
+## H3: Helmholtz on the host, RCR on every level
+
+**Gate:** CH3.6, RCR on every level against FMM3D. The first Helmholtz deliverable, correct
+at any kD.
+
+- [ ] **CH3.0 Builder: the leaf rule and complex densities.** *Done when:* no leaf wider than
+  c_leaf λ on W1–W4; if `nd-octree` gains a maximum leaf width, Laplace's trees and outputs
+  bit for bit; complex charges in and split potentials and gradients out (§3.15 item 9), one
+  complex expansion per complex vector. *Needs:* CH1.3, D1, D11.
+- [ ] **CH3.5 The shared drivers extended to complex expansions.** Two planes, real shifts
+  for real k, the epilogue. *Done when:* constraint 1 as in CH2.0; else the complex operator
+  gets its own drivers. *Needs:* CH2.0. *Machines:* locust, Kathleen.
+- [ ] **CH3.1 Complex planes and RCR on every level.** RCR M2M and L2L (real coaxial steps
+  for real k) and RCR M2L. *Done when:* the FMM against the direct sum on W1, W3 and W4 for
+  kD ≤ 100 and on W1 at kD = 500; deterministic. *Needs:* CH3.0, CH3.5.
+- [ ] **CH3.2 Dense, Classes and Batched where the node budget allows.** *Done when:*
+  measured against Rotation per p, the cost of the cube-group transforms that move the z-axis
+  included. *Needs:* CH3.1. *Machines:* locust, Kathleen.
+- [ ] **CH3.3 Calibration of p_l over (k a_l, ε).** *Done when:* S7's low-frequency tables
+  confirmed in the full FMM. *Needs:* CH3.1, CH0.7.
+- [ ] **CH3.4 Helmholtz P2P, real and complex k.** On CH2.4's skeleton. *Done when:* the
+  accuracy contract over k r up to 22 c_leaf; cost per pair. *Needs:* CH2.4.
+  *Machines:* locust, Kathleen.
+- [ ] **CH3.6 Gate: RCR on every level against FMM3D.** *Done when:* both codes against the
+  same sampled direct sum on W1, W3 and W4 for kD ≤ 100 and on W1 at kD = 500 with time; the
+  full-target crosscheck. *Needs:* CH3.3, CH1.4. *Machines:* Kathleen.
+- [ ] **H3.G Gate.** `/milestone-gate H3`. *Needs:* every task above.
+
+## H6: Exponential M2L on low-frequency levels (before H4 by default, D6)
+
+**Gate:** the exponential M2L adopted where it wins, or kept opt-in (D8).
+
+- [ ] **CH6.1 The §3.14 machinery generalised.** Six directions, per-level quadratures,
+  merge and shift; opt-in. *Done when:* errors within about 1.1× Rotation's. *Needs:* CH0.4,
+  CH3.1, D6.
+- [ ] **CH6.2 Measured.** Against Rotation and the table-based strategies on the three
+  machines, and against `hfmm3d`'s exponential M2L. *Done when:* per-level accuracy and time
+  beside FMM3D's on the same problems; D8 proposed. *Needs:* CH6.1, CH1.4.
+  *Machines:* locust, Kathleen. *Sign-off:* D8.
+- [ ] **H6.G Gate.** `/milestone-gate H6`. *Needs:* every task above.
+
+## H4: High-frequency levels
+
+**Gate:** CH4.4 and CH4.5, the kD sweep and host performance against FMM3D.
+
+- [ ] **CH4.1 S → F and F → R by the transform as a product.** Per-box aligned signature
+  buffers; source signatures kept per level call, target accumulators chunked under the node
+  budget. *Done when:* round trips to the grid's bandwidth; bits independent of the chunk
+  size; scratch within the budget on W1 at kD = 1000. *Needs:* CH3.1, D6.
+- [ ] **CH4.2 Diagonal M2L per (level, class).** Transfer functions per class, read through
+  the class permutations. *Done when:* against RCR on the same class within E(l, c);
+  deterministic with the RCR pairs added after F → R. *Needs:* CH4.1, CH0.6.
+- [ ] **CH4.3 The per-(level, class) rule, calibrated.** *Done when:* S6's C_T and θ
+  confirmed in the full FMM on W1 and W3; the time crossover per class; a whole level falls
+  back to RCR when the scratch budget binds. *Needs:* CH4.2.
+- [ ] **CH4.4 kD sweep, with the FMM3D gate.** *Done when:* the FMM against the direct sum on
+  W1 to kD = 1000, W2 to 500 and W3 to 200, beside `hfmm3d`; the full-target crosscheck mapped
+  to levels and classes, with no error concentrated at a class boundary; time, memory and
+  build cost per k. *Needs:* CH4.3, CH1.4. *Machines:* Kathleen.
+- [ ] **CH4.5 Host performance against FMM3D at matched accuracy.** As C6.8, setup apart,
+  one node, on CH4.4's sweep. *Needs:* CH4.4. *Machines:* locust, Kathleen.
+- [ ] **CH4.6 The optional FFTW back end of the φ step.** *Done when:* against the product to
+  round-off; per-box plans with bits the same across batch positions, sizes and threads, and
+  fingerprints all-gathered; off by default, a default build linking no FFTW, cargo-deny, a CI
+  job with the feature; the GPL warning in the crate documentation, the README, the builder
+  option and `Cargo.toml`. *Needs:* CH4.1, CHR.3, CH0.9, D7.
+- [ ] **H4.G Gate.** `/milestone-gate H4`. *Needs:* every task above.
+
+## H5: Complex wavenumber
+
+**Gate:** CH5.3, complex k against FMM3D.
+
+- [ ] **CH5.1 Classifier and pruning for Im k > 0.** *Done when:* regimes as §3.6 with S6's
+  damped results; the error within target over a grid of (Re kD, Im kD) on W1. *Needs:*
+  CH2.3, CH4.3.
+- [ ] **CH5.2 Damping-dependent truncation and bound.** *Done when:* the error within target
+  for weakly damped cases. *Needs:* CH5.1, CH0.6.
+- [ ] **CH5.3 Gate: complex k against FMM3D.** *Done when:* both codes against the same
+  sampled direct sum over the (Re kD, Im kD) grid, and the full-target crosscheck. *Needs:*
+  CH5.2, CH1.4. *Machines:* Kathleen.
+- [ ] **H5.G Gate.** `/milestone-gate H5`. *Needs:* every task above.
+
+## H7: Device path
+
+**Gate:** CH7.6, the device path against FMM3D at matched accuracy.
+
+- [ ] **CH7.1 Rotation and translation kernels on complex planes.** Real coaxial steps of
+  M2M and L2L, the complex (S|R) step of the M2L, the stacked GEMM where Dense applies.
+  *Done when:* device output within the host's error. *Needs:* CH3.1, D3.
+  *Machines:* locust.
+- [ ] **CH7.2 Device P2P for Helmholtz and Yukawa.** *Done when:* an accuracy contract as the
+  host's; cost per pair against the host and Laplace's device P2P. *Needs:* CH3.4.
+  *Machines:* locust.
+- [ ] **CH7.3 Device leaf operators.** P2M, L2P, M2P, P2L with radial recursions. *Done
+  when:* against the host operators within error. *Needs:* CH3.1. *Machines:* locust.
+- [ ] **CH7.4 Diagonal M2L and the transforms on the device.** cubek-fft where D10 adopted it,
+  else the transform as a GEMM. *Done when:* as CH4.2 on the device; device locals against
+  the host's within error. *Needs:* CH4.2, CH7.1, CH0.5, D10. *Machines:* locust.
+- [ ] **CH7.5 Exponential M2L on the device**, if D8 adopted it on the host. *Done when:* as
+  CH6.1 on the device. *Needs:* CH6.2, CH7.1, D8. *Machines:* locust.
+- [ ] **CH7.6 Device performance against FMM3D at matched accuracy.** As CH4.5, the device
+  path beside the host's. *Needs:* CH7.2, CH7.3, CH7.4, CH4.5. *Machines:* locust.
+- [ ] **H7.G Gate.** `/milestone-gate H7`. *Needs:* every task above.
+
+## H8: Distributed path
+
+**Gate:** Kathleen scaling at kD of a few hundred, rank-invariant.
+
+- [ ] **CH8.1 Byte cap for the replicated top; exchange of the high-frequency levels.**
+  *Done when:* bit for bit the one-rank output on P ranks; memory per rank and per node
+  bounded. *Needs:* CH4.4. *Machines:* Kathleen.
+- [ ] **CH8.2 Kathleen scaling at kD of a few hundred.** *Done when:* efficiency and memory
+  reported as in Phase 5S, at most 4 nodes per job. *Needs:* CH8.1. *Machines:* Kathleen.
+- [ ] **H8.G Gate.** `/milestone-gate H8`. *Needs:* every task above.
