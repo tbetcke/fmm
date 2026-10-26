@@ -37,7 +37,7 @@ nd-fmm-kernels = { path = "fmm-kernels" }
 # Phase 3, at the versions octree/ uses. rlst is never given the "mpi" feature here;
 # the crates that need it (nd-octree, nd-fmm-plan) enable it themselves.
 mpi = { version = "0.8.2", features = ["derive"] }
-rlst = "0.10.2"
+rlst = "0.12.0"
 rand_chacha = "0.10"
 # Host threading of the Laplace FMM (Phase 3 T10); nd-fmm-exec only.
 rayon = "1"
@@ -61,9 +61,9 @@ pulp = "0.22"
 
 # green-kernels asks for rlst from git main (0.4.0-dev), whose build dependency
 # `cc = "=1.2"` cannot be resolved beside the workspace's rlst and mpi-sys (cc 1.5). Point it
-# at the crates.io rlst the workspace uses, 0.10.2 since Phase 5S T8q (0.10.1 from T8, 0.10.0
-# from T1s, 0.9.0 before), whose `simd` module has the same code (Phase 3S T2, design
+# at the crates.io rlst 0.10.2, whose `simd` module has the same code (Phase 3S T2, design
 # simd-p2p.md §8.4; decided 2026-10-02; the `simd` module of 0.10.0 to 0.10.2 is 0.9.0's
-# unchanged). Only green-kernels uses that source.
+# unchanged). Only green-kernels uses that source, so only the spikes build it. It stays on
+# 0.10.2 while the workspace is on 0.12.0 (Helmholtz CHR.2): rlst 0.12 removed `simd`.
 [patch."https://github.com/linalg-rs/rlst.git"]
 rlst = "0.10.2"

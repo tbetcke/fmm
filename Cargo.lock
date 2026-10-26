@@ -2006,7 +2006,7 @@ dependencies = [
  "pulp",
  "rand 0.9.5",
  "rayon",
- "rlst",
+ "rlst 0.10.2",
 ]
 
 [[package]]
@@ -2898,7 +2898,7 @@ dependencies = [
  "nd-octree",
  "proptest",
  "rayon",
- "rlst",
+ "rlst 0.12.0",
  "thiserror 2.0.21",
 ]
 
@@ -2932,7 +2932,7 @@ dependencies = [
  "mpi",
  "nd-octree",
  "rand_chacha 0.10.0",
- "rlst",
+ "rlst 0.12.0",
 ]
 
 [[package]]
@@ -3042,7 +3042,7 @@ dependencies = [
  "mpi",
  "rand 0.10.3",
  "rand_chacha 0.10.0",
- "rlst",
+ "rlst 0.12.0",
 ]
 
 [[package]]
@@ -3991,8 +3991,6 @@ dependencies = [
  "git2",
  "itertools 0.15.0",
  "lapack",
- "mpi",
- "mpi-sys",
  "num",
  "num_cpus",
  "paste",
@@ -4000,7 +3998,31 @@ dependencies = [
  "rand 0.10.3",
  "rand_chacha 0.10.0",
  "rand_distr",
- "rlst-proc-macro",
+ "rlst-proc-macro 0.10.2",
+ "serde",
+ "thiserror 2.0.21",
+ "typenum",
+]
+
+[[package]]
+name = "rlst"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "533f8a38696f3d864717fcc2ccc97d36e3e09c9a59bc2c9f800dd647c21645e1"
+dependencies = [
+ "aligned-vec",
+ "blas",
+ "itertools 0.15.0",
+ "lapack",
+ "mpi",
+ "mpi-sys",
+ "num",
+ "num_cpus",
+ "paste",
+ "rand 0.10.3",
+ "rand_chacha 0.10.0",
+ "rand_distr",
+ "rlst-proc-macro 0.12.0",
  "serde",
  "thiserror 2.0.21",
  "typenum",
@@ -4011,6 +4033,18 @@ name = "rlst-proc-macro"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d07efe29544f5e6f6ae83ad15e9babee5d9f451c0a29e6ce7cddccdda600dca"
+dependencies = [
+ "aligned-vec",
+ "darling 0.24.1",
+ "quote",
+ "syn 3.0.6",
+]
+
+[[package]]
+name = "rlst-proc-macro"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc577a3caf0dd2025eeea59c9c6185626c7288d34334347ac66e973d5198c16f"
 dependencies = [
  "aligned-vec",
  "darling 0.24.1",
