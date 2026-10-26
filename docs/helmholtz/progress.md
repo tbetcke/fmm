@@ -23,3 +23,22 @@ request, using this template:
 - Decisions: none yet; D0 (the proposal as the plan) and D9 (noise) come first.
 - Laplace: not touched.
 - Follow-ups: `/next-task` (D0, D9, then CHR.2 and CHR.4).
+
+## 2026-10-26: CHR.2 Move to RLST 0.12
+- Done: `rlst` 0.12.0 for the workspace and `octree/` (no source change; green-kernels'
+  `[patch]` stays on 0.10.2); `deny.toml` and the CI job `run-licence-check` (fftw-sys
+  stated as GPL); `cmake` dropped from CI, kept on locust and Kathleen for the spikes; docs.
+  Report `fmm-validate/results/helmholtz-chr-2.md`.
+- Tests: no new test; 48 Laplace outputs of `main` and the branch compared byte for byte
+  (identical); the licence check's negative case with FFTW enabled.
+- Checks: ran `/verify` on the M3 Max (all pass; MPI at 2 and 4), Kathleen 608726 (all pass
+  but the known `spikes/p2p-simd` failures), 608727 (correctness, 2 nodes), 608733 (weekly
+  examples), locust's checks so far; pending on locust: the ignored CUDA tests, the cmake
+  trap, the D9 benchmark. locust's MPI list dropped by the user.
+- Decisions: D0 and D9 signed off 2026-10-26; questions for sign-off: D9 one-sided
+  (Kathleen f32 faster than `main`'s spread), runs per side.
+- Laplace: unchanged bit for bit (48 full outputs, fixtures, bit-identity and invariance
+  tests); benchmarks within noise on the M3 Max and Kathleen f64, Kathleen f32 faster
+  beyond the spread, locust pending.
+- Follow-ups: CHR.4 (next runnable); CHR.3's `fftw` job needs an allowance for the fftw-sys
+  clarification.

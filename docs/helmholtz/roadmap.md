@@ -56,7 +56,7 @@ the optional FFTW wrapper of the φ step behind its feature.
 
 - [x] **CHR.1 RLST's FFTW rework.** Done in RLST 0.11.0 (2026-10-25) and 0.12.0
   (2026-10-26).
-- [ ] **CHR.2 Move to RLST 0.12.** The workspace pin and `octree/Cargo.toml`'s own pin to
+- [x] **CHR.2 Move to RLST 0.12.** Report: `fmm-validate/results/helmholtz-chr-2.md`. The workspace pin and `octree/Cargo.toml`'s own pin to
   0.12.0 together; green-kernels' `[patch]` left on 0.10.2 (it uses `rlst::simd`, removed in
   0.12); `CLAUDE.md`, `fmm-plan/CLAUDE.md` and `docs/design/workspace-structure.md` updated.
   *Done when:* the default members build, lint, test and document; the MPI tests and the

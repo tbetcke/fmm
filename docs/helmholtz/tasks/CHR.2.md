@@ -130,4 +130,21 @@ What they decide: whether CHR.2 passes or falls back to 0.10.2.
 
 ## Pending runs
 
+- **locust** (`/data/ucahtbe/logs/chr2/`, `summary.txt`; `run.sh`, then `run2.sh` after the
+  user dropped locust's MPI list on 2026-10-26): `cargo test -p nd-fmm-exec --features cuda
+  --release -- --ignored` (running), the cmake trap build, the D9 benchmark
+  (`bench-{A,B}{1,2,3}.md`). Decides constraint 1 on locust and the cmake check on aarch64.
+  Done there already: fmt, clippy, test, doc, the strict workspace checks, nd-fmm-simd's
+  ignored tests, nd-fmm-kernels' and nd-fmm-exec's CUDA checks and tests.
+- Done elsewhere: M3 Max (every check, MPI 2 and 4, the bits, D9); Kathleen jobs 608725
+  (D9), 608726 (check; only the known `spikes/p2p-simd` failures), 608727 (correctness, 2
+  nodes), 608733 (weekly examples).
+
 ## Open questions
+
+1. D9 on Kathleen f32: the branch 2.0–3.4 % faster than `main`, outside `main`'s three-run
+   spread, bits identical. Proposed: D9 read one-sided (slower than the spread fails).
+2. Three runs per side underestimate the spread; proposed five runs, or the spread of
+   both sides pooled, from CH2.0 on.
+3. The licence check is a separate CI job (`run-licence-check`, no packages), not a step
+   of `run-tests` as the plan said: it needs only `cargo metadata`.
