@@ -10,7 +10,13 @@ for crate-specific rules; everything here applies to all of them.
   Never change a convention in code; propose changes in the PR description instead.
 - Cite conventions in doc comments as `CONVENTIONS §3.x`.
 - CONVENTION_VERSION in nd-fmm-math must match the file.
-- Current phase and task briefs: docs/phase5s/README.md (Phase 5S, the scale-out on
+- Current work: the Helmholtz-family FMM. Design docs/design/helmholtz-fmm-proposal.md
+  (draft 0.8); its tasks, decisions and their order docs/helmholtz/roadmap.md; the log
+  docs/helmholtz/progress.md; each task's plan docs/helmholtz/tasks/<ID>.md. Run it with
+  `/next-task` ("Skills" below).
+- The Laplace phases, all complete. Phase 6 briefs: docs/phase6/README.md (optimisation
+  and extensions; design docs/design/optimisation.md). Phase 5S briefs:
+  docs/phase5s/README.md (Phase 5S, the scale-out on
   Kathleen; Kathleen jobs at most 4 nodes, the user, 2026-10-11; T0 first, a 4-node
   baseline); its design docs/design/scale-out.md (from T1: the locally essential and
   owned top tree, the replicated top, the cut by modelled cost, the S4/S5 triggers).
@@ -35,8 +41,22 @@ for crate-specific rules; everything here applies to all of them.
   they said, and leave the result uncommitted unless the current message asks for a
   commit. Never report an unrun check as passing; say plainly when something could not
   run (missing MPI, missing native libraries).
+- Exception for `/next-task` and `/milestone-gate` (`.claude/skills/`): invoking one is a
+  request to create its branch (`tbetcke/h-<id>`), commit to it, push it, and open or
+  update its PR (a draft while machine runs, sign-offs or open questions are pending).
+  Merging, pushing to `main`, force-pushing, rewriting history, deleting branches and
+  closing PRs still need a yes in the current message.
 - One task per branch and PR; stay inside the crates the task names.
 - Keep changes targeted: no drive-by reformatting or refactors.
+
+## Skills
+Slash commands in `.claude/skills/`, for the Helmholtz work:
+- `/next-task`: the default loop. Use it whenever the user says "continue" or "next", or
+  names a roadmap ID: it syncs the open task PRs, picks the next runnable task from
+  docs/helmholtz/roadmap.md, plans, implements, verifies, logs and opens the PR.
+- `/verify`: the checks below for what a branch changed, with the Laplace protection of the
+  proposal's constraint 1. Run before calling anything done.
+- `/milestone-gate`: a milestone's gate report and close.
 
 ## Working rules
 - Run `cargo fmt --all` after every Rust edit, before the other checks or committing.
