@@ -26,3 +26,13 @@ allow = [
     "Unicode-3.0",
     "Unlicense",
 ]
+
+# fftw-sys declares its licence only through a `license-file` that holds both the GPL
+# terms (the FFTW back end, the one rlst uses) and MIT ones (MKL, which rlst does not
+# offer); cargo-deny reads it as MIT with low confidence. State it as GPL, so that the
+# check fails on fftw-sys for its licence. The hash ties the entry to fftw-sys 0.8.0's
+# file: a changed file makes cargo-deny ignore it and report the crate as unlicensed.
+[[licenses.clarify]]
+crate = "fftw-sys"
+expression = "GPL-2.0-or-later"
+license-files = [{ path = "LICENSE.md", hash = 0xb3398f27 }]
