@@ -35,10 +35,11 @@ request, using this template:
   but the known `spikes/p2p-simd` failures), 608727 (correctness, 2 nodes), 608733 (weekly
   examples), locust's checks so far; pending on locust: the ignored CUDA tests, the cmake
   trap, the D9 benchmark. locust's MPI list dropped by the user.
-- Decisions: D0 and D9 signed off 2026-10-26; questions for sign-off: D9 one-sided
-  (Kathleen f32 faster than `main`'s spread), runs per side.
+- Decisions: D0 and D9 signed off 2026-10-26; D9 clarified the same day: one-sided
+  (faster passes with identical bits), five runs per side in A B B A order from CH2.0 on,
+  never pooled; the licence check a separate CI job.
 - Laplace: unchanged bit for bit (48 full outputs, fixtures, bit-identity and invariance
-  tests); benchmarks within noise on the M3 Max and Kathleen f64, Kathleen f32 faster
-  beyond the spread, locust pending.
+  tests); benchmarks within noise (D9 as clarified) on the M3 Max and Kathleen, locust
+  pending.
 - Follow-ups: CHR.4 (next runnable); CHR.3's `fftw` job needs an allowance for the fftw-sys
   clarification.

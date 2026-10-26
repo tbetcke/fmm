@@ -142,9 +142,13 @@ What they decide: whether CHR.2 passes or falls back to 0.10.2.
 
 ## Open questions
 
-1. D9 on Kathleen f32: the branch 2.0–3.4 % faster than `main`, outside `main`'s three-run
-   spread, bits identical. Proposed: D9 read one-sided (slower than the spread fails).
-2. Three runs per side underestimate the spread; proposed five runs, or the spread of
-   both sides pooled, from CH2.0 on.
-3. The licence check is a separate CI job (`run-licence-check`, no packages), not a step
-   of `run-tests` as the plan said: it needs only `cargo metadata`.
+All three answered by the user on 2026-10-26 ("agree with all three"):
+
+1. D9 on Kathleen f32 (the branch 2.0–3.4 % faster than `main`, outside its three-run
+   spread, bits identical): D9 is one-sided; slower than the spread fails, faster passes
+   when the outputs are bit for bit identical. CHR.2's Kathleen rows pass; no rerun.
+2. Runs per side: from CH2.0 on, five per side in the order A B B A A B B A A B, the spread
+   from `main`'s runs alone, never pooled. CHR.2 keeps its three runs as planned.
+3. The licence check stays a separate CI job (`run-licence-check`), not a step of
+   `run-tests` as "Changes" said: it needs only `cargo metadata`, fails fast under its own
+   name, and CHR.3's `fftw` job can follow its pattern.

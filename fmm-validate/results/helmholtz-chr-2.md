@@ -18,8 +18,8 @@ BLAS thread variable at 1.
    p = 3, 6, 8, four strategies, 1 and 8 threads) identical byte for byte (§2); the
    fixtures, the bit-identity and the rank-invariance tests pass.
 3. **Laplace's benchmarks (D9)**: within noise on the M3 Max (all nine) and in f64 on
-   Kathleen; Kathleen's three f32 rows are 2.0–3.4 % *faster* than `main`, outside its
-   three-run spread (question 1). locust pending.
+   Kathleen; Kathleen's three f32 rows are 2.0–3.4 % *faster* than `main`, which passes
+   under D9 as clarified on 2026-10-26 (one-sided, §7). locust pending.
 4. **The licence check** (`deny.toml`, CI job `run-licence-check`) passes on the default
    set and fails when FFTW enters it, on fftw-sys stated as `GPL-2.0-or-later` (§3).
 5. **cmake**: the default members no longer need it; CI drops it, locust and Kathleen keep
@@ -150,25 +150,27 @@ both binaries built in the job first. `--backend host --precision f32,f64 --degr
 | host | f64 | 6 | Batched | 162.76, 161.42, 157.29 | 155.77, 156.28, 158.88 | 5.47 | -5.14 (-3.2 %) | yes | yes |
 | host | f64 | 8 | PlaneWave | 201.71, 206.49, 200.87 | 204.57, 203.61, 211.63 | 5.62 | +2.87 (+1.4 %) | yes | yes |
 
-The f64 rows are within noise. The three f32 rows are not: the branch is **faster** than
-`main` by 2.0–3.4 %, beyond a spread of `main` that three runs put at 0.4–2.4 ms, while
-the branch's own three runs spread 1.9–4.7 ms. With the outputs bit for bit identical
-and no RLST call in the timed evaluation, this is a placement effect of the two binaries
-or drift, not a change in Laplace's work; but D9 as signed off is two-sided, so it is put
-to the user (question 1).
+The f64 rows are within noise. The three f32 rows are outside the two-sided rule: the
+branch is **faster** than `main` by 2.0–3.4 %, beyond a spread of `main` that three runs put
+at 0.4–2.4 ms, while the branch's own three runs spread 1.9–4.7 ms. With the outputs bit
+for bit identical and no RLST call in the timed evaluation, this is a placement effect of
+the two binaries or drift, not a change in Laplace's work. Under D9 as clarified on
+2026-10-26 (§7: one-sided, faster passes with identical bits) all six rows pass.
 
 ### locust
 
 Pending: `tools/bench/run.sh --backend host,cuda --precision f32,f64 --degree 3,6,8`, A B A B A B, after the checks (`/data/ucahtbe/logs/chr2/` on locust).
 
-## 7. Questions for sign-off
+## 7. Signed off
 
-1. **D9 on Kathleen f32.** Three f32 benchmarks on Kathleen are outside `main`'s spread in
-   the faster direction (−2.0 to −3.4 %), with identical bits. Proposed: count CHR.2 as
-   within noise, reading D9 as one-sided (a branch slower than `main` by more than the
-   spread fails; faster passes), and record that reading in the decision table. If D9 is
-   to stay two-sided, CHR.2 needs more runs on Kathleen.
-2. **Three runs per side.** Three medians underestimate the spread (Kathleen f32 p = 3:
-   `main` 0.37 ms, the branch 4.67 ms). Proposed for CH2.0 and later: five runs per side,
-   or the spread of both sides pooled. The rule here was applied as planned.
+The user, 2026-10-26, on the three questions of the pull request ("agree with all three"),
+recorded in the decision table (D9) and the plan:
 
+1. **D9 is one-sided.** A branch slower than `main` by more than the spread fails; a faster
+   one passes when its outputs are bit for bit identical. Kathleen's three f32 rows
+   (2.0–3.4 % faster, bits identical) therefore pass.
+2. **Five runs per side from CH2.0 on**, in the order A B B A A B B A A B, which cancels a
+   linear drift (every pair here ran `main` first); the spread is max − min of `main`'s five
+   run medians, never pooled with the branch's. Three runs underestimated it here (Kathleen
+   f32 p = 3: `main` 0.37 ms, the branch 4.67 ms).
+3. **The licence check is its own CI job**, `run-licence-check`, not a step of `run-tests`.
