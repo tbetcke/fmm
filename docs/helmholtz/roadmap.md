@@ -65,7 +65,8 @@ the optional FFTW wrapper of the φ step behind its feature.
   in CI; CI's and locust's `cmake` installs checked; `cargo upgrades` no longer reports
   `rlst`; Laplace bit for bit and its benchmarks within noise (D9). Fallback: stay on 0.10.2.
   *Needs:* D9. *Machines:* locust, Kathleen.
-- [ ] **CHR.4 FFTW on the machines.** *Done when:* `pkg-config --modversion fftw3 fftw3f`
+- [x] **CHR.4 FFTW on the machines.** Report: `fmm-validate/results/helmholtz-chr-4.md`;
+  the probe `tools/fftw/probe.sh`. *Done when:* `pkg-config --modversion fftw3 fftw3f`
   and `rlst::fftw::version()` recorded for the M3 Max, locust (spack's FFTW, not the RPM's
   3.3.8), Kathleen and CI, in `tools/*/machine.md`; RLST 0.12's own
   `cargo test --features fftw_system` passes on each, `fftw_determinism` included.

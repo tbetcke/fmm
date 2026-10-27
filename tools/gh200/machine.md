@@ -75,3 +75,20 @@ Times on 2026-10-05, the node otherwise lightly loaded (load average about 1):
   shared memory 232448 bytes per cube, 1024 units per cube, cube count
   (2147483647, 65535, 65535), max memory 102005473280 bytes.
 - The CubeCL CPU runtime: `cpu (cpu), Neoverse-V2, CubeCL 0.11.0-pre.4, f32 f64`.
+
+## FFTW (Helmholtz CHR.4)
+
+Measured on 2026-10-27 with `tools/gh200/remote.sh 'tools/fftw/probe.sh'`
+(tools/fftw/README.md), inside `env.sh`, at load 0.05.
+
+| Item | Value |
+| --- | --- |
+| FFTW | spack's fftw 3.3.11 (`spack.lock`: `precision=double,float`, `+mpi`, `~openmp`, shared), `/data/ucahtbe/spack-install/linux-neoverse_v2/fftw-3.3.11-gnoihkz…/lib` |
+| `pkg-config --modversion fftw3 fftw3f` | 3.3.11, 3.3.11 (through the view's `PKG_CONFIG_PATH`) |
+| version strings (`fftw_version`, `fftwf_version`) | `fftw-3.3.11-neon`, `fftw-3.3.11-neon`: both precisions with NEON |
+| `rlst::fftw::version()` | `fftw-3.3.11-neon` |
+| loaded at run time | `libfftw3.so.3` and `libfftw3f.so.3` from the spack view (`LD_LIBRARY_PATH` of `env.sh`), not the RPM's 3.3.8 in `/usr/lib64` (`ldd`) |
+| RLST 0.12.0's `cargo test --locked --features fftw_system` | passed: 789 tests, 0 failed; `fftw_check_allocations` 10 checks; `fftw_determinism` 10 scenarios, 0 failed |
+
+A build outside `env.sh` would find the RPM's `fftw-devel` 3.3.8 through the system
+pkg-config: always build with the environment active.

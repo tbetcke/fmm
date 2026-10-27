@@ -191,6 +191,11 @@ may hold permissive licences only, so a GPL crate (fftw-sys through rlst's `fftw
 features) entering it fails. It installs no packages and caches the cargo-deny binary.
 Run it locally after any manifest change.
 
+A separate workflow, `fftw-probe` (Helmholtz CHR.4), runs `tools/fftw/probe.sh` (the
+runner's FFTW and RLST's own tests with `fftw_system`) on pull requests that change
+`tools/fftw/` and by hand; the same probe records each machine's FFTW in its
+`tools/*/machine.md` (tools/fftw/README.md).
+
 nd-fmm-kernels is a workspace member, not a default member: the default and
 `--workspace` checks build it without a backend. For a change to it, also run
 
