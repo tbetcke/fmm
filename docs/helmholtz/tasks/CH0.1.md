@@ -116,4 +116,12 @@ None.
 
 ## Open questions
 
-None yet.
+For sign-off in the PR, neither blocking this task (SPIKE_REPORT.md §8):
+
+1. Generate the Helmholtz rotation blocks by GD at every degree (proposal §3.2 keeps the
+   conjugated `rotation::blocks` as the generator up to the degree where it stays
+   accurate, which S1 finds to be about 28 at 10⁻¹⁴), with the conjugated blocks only as
+   the test reference at p ≤ 30.
+2. Make the generate-or-store threshold of §5.2 and §7 a memory rule (node budget, CH0.8
+   or CH2.2), since S1 finds no accuracy limit to p = 1000; the compact y-rotation layout
+   halves §7's block memory.
