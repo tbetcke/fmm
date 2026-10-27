@@ -160,7 +160,8 @@ None.
 
 ## Open questions
 
-For sign-off in the PR (SPIKE_REPORT.md §8):
+Put for sign-off in the PR (SPIKE_REPORT.md §8); all four signed off 2026-10-27 as
+recommended:
 
 1. Build the coaxial tables by the recursion (triangle, index symmetry) where
    Re(k) a ≤ 40 and by projection above; or projection everywhere.
@@ -169,4 +170,9 @@ For sign-off in the PR (SPIKE_REPORT.md §8):
 3. Replace R2's fallback "through signatures" by the projection; carry the M2L coaxial
    table memory (132 MiB per table at p = 371, 15 per level) and the table-free
    projection into §7 and CH0.8.
-4. What §3.15 item 6 states (symmetries, reality, the Yukawa powers of i).
+4. What §3.15 item 6 states: the coefficients depend on |m| only; the index symmetry
+   and the reflection; (S|S) = (R|R), real for real k; for k = iκ, i^{n−n′} (E|F) real
+   once the basis absorbs the powers of i (proposal §4 item 6's "real for Yukawa" holds
+   only then); the start column; the recursions with their signs. The power scale's
+   radius is left to CH0.3 and CH1.1, which fix the scale; until then proposal §3.4's
+   half-width stands (the spike used the circumradius).

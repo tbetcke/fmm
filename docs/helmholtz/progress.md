@@ -116,12 +116,18 @@ request, using this template:
   `reference.py --check` byte for byte. A self-review by a subagent; its findings are
   fixed (the weights, test 6, the reality check, the report's numbers). No machine runs.
   Nothing pending.
-- Decisions: none taken; for sign-off (report §8): (1) recursion where Re(k) a ≤ 40,
-  projection above; (2) CH0.2's acceptance in the FMM-weighted error; (3) R2's fallback
-  the projection instead of signatures, and the coaxial table memory into §7 and CH0.8;
-  (4) the content of §3.15 item 6, including the scale's radius (the spike used the
-  circumradius, proposal §3.4 the half-width).
+- Decisions: signed off 2026-10-27, as recommended (report §8): (1) the coaxial tables
+  by the recursion (triangle, index symmetry) where Re(k) a ≤ 40, by projection above;
+  (2) CH0.2's acceptance met in the FMM-weighted error, bound 1e-11, not per-entry
+  relative error; (3) R2's fallback the projection instead of signatures, with the
+  coaxial table memory (132 MiB per M2L table at p = 371) and the table-free projection
+  carried into §7 and CH0.8; (4) §3.15 item 6 states the symmetries, (S|S) = (R|R) real
+  for real k, the Yukawa powers of i and the recursion signs; the scale's radius is left
+  to CH0.3 and CH1.1 (proposal §3.4's half-width until then; the spike used the
+  circumradius).
 - Laplace: not touched (only the spike, its member entry and its lock-file entry).
 - Follow-ups: CH0.7 (S7) uses the coaxial prototypes; the table code (CH1.2/CH2.2)
   implements the rule of question 1; §3.15 item 6 takes the symmetries and the Yukawa
-  phases.
+  phases; CH0.3 and CH1.1 fix the scale's radius; CH0.8 takes the coaxial table memory
+  and the table-free projection; the proposal's R2 and §7 take decision 3 at its next
+  draft.

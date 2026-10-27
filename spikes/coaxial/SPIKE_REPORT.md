@@ -55,7 +55,7 @@ Max, release builds, rustc 1.99.0, f64, one thread.
    (constraint 9). It keeps every low-frequency level, and the high-frequency levels to
    boxes of about 7 wavelengths (circumradius 6.4 λ), on the fast path. Replace R2's
    fallback "through signatures" by the projection: the signature route is
-   ill-conditioned at exactly the near classes that RCR serves on high-frequency levels.
+   ill-conditioned at exactly the near classes that RCR serves on high-frequency levels. Questions 1 to 4 of §8 were signed off on 2026-10-27 as recommended.
 
 ## 1. Basis, normalisation and scaling
 
@@ -394,6 +394,9 @@ by projection take about 3 s at k a = 100 and 75 s at k a = 300 on one thread, p
 M2M table. Load average during the runs was about 2.5.
 
 ## 8. Consequences and questions for sign-off
+
+All four were signed off on 2026-10-27 as recommended. For question 4 that leaves the
+scale's radius to CH0.3 and CH1.1 (§1); until then proposal §3.4's half-width stands.
 
 1. **How the coaxial tables are built.** Recommended: the recursion, in its triangle
    with the index symmetry, where Re(k) a ≤ 40 (a the circumradius of the level's boxes).
