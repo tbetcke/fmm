@@ -13,28 +13,32 @@ Max, release builds, rustc 1.99.0, f64, one thread.
    to at most 3.4·10⁻¹⁵ at the octree's polar angles. ‖O Oᵀ − I‖_max stays at or below
    **4.4·10⁻¹⁴** at every degree checked to 1000, for six angles from 10⁻³ to
    arccos(−1/√3). The error grows slowly, from about 10⁻¹⁵ at n ≤ 100 to
-   3–5·10⁻¹⁵ at n = 1000.
+   1.4–5.0·10⁻¹⁵ at n = 1000.
 2. **Two details decide stability** (§2.3). The recursion of GD's step 3 must run only in
    the wedge k ≥ |m|, with the rest filled by symmetry; marched over all columns it
    reached 4·10¹³³ at n = 500. The Legendre functions of row 0 must be computed in a
-   telescoped form in u = 1 − |cos β|. The textbook recursion in cos β cost
-   2.75·10⁻¹² at n = 1000 and β = 10⁻³: Pₙ moves by about n²/2 per unit of cos β, and
+   telescoped form in u = 1 − |cos β|. The textbook recursion in cos β put an error of
+   2.75·10⁻¹² into P̄₁₀₀₀⁰ (3.05·10⁻¹² into the block entries) at β = 10⁻³: Pₙ moves by about n²/2 per unit of cos β, and
    its coefficients nearly cancel near cos β = 1.
 3. **Against N-conjugated `nd_fmm_math::rotation::blocks` at p ≤ 30** (§4.3), the full
    z-y-z blocks agree to **1.8·10⁻¹⁴**. This pins the basis, its phase and the
-   orientation. The definition Yₙ(Qx) = Oⁿ Yₙ(x) holds to 10⁻¹³ relative at n ≤ 20.
+   orientation; the agreement is limited by the conjugated blocks, whose error passes
+   10⁻¹⁴ from n = 28 (item 4), not by GD. The definition Yₙ(Qx) = Oⁿ Yₙ(x) holds to 10⁻¹³ relative at n ≤ 20.
 4. **The conjugated blocks stay accurate only to a low degree** (§5). Measured against
    the GD blocks, 10⁻¹⁴ is lost from n = 28–43, 10⁻¹² from n = 52–78 and 10⁻⁸ from
    n = 94–140, depending on the angle. The blocks become non-finite at n = 515, as §3.2
    predicted. At n = 100 the error is 3·10⁻⁸ for M2M's polar angle.
 5. **β and π − β are related by signs** (§6): Oⁿ(π − β) = (−1)ⁿ E Oⁿ(β) E F, with
    E = diag((−1)^|m|) and F = +1 on the cos slots and −1 on the sin slots. In the real
-   basis no permutation remains. Computed independently, the two agree to 7·10⁻¹⁵, but
-   not bit for bit. A table that derives π − β from β by these signs is exact.
-6. **Time per block set** (§7): 1.8 ns per stored value from p = 20 upwards. That is
+   basis no permutation remains. The reference confirms the rule independently (it
+   evaluates Wigner's sum at π − arccos(1/√3) directly, §4.1); the recursion run with
+   (−cos β, sin β) agrees with the signed blocks of β to 7·10⁻¹⁵, but not bit for bit. A table that derives π − β from β by these signs is exact.
+6. **Time per block set** (§7): 2.2 ns per stored value at p = 20, falling to 1.8 ns
+   from p = 144. That is
    0.75 ms at p = 82, 3.8 ms at p = 144, 22 ms at p = 261 and 1.2 s at p = 1000, for one
    polar angle. This is about 4.5× faster than `rotation::blocks` plus the conjugation at
-   20 ≤ p ≤ 82, which compute twice the values for a general rotation. The compact
+   20 ≤ p ≤ 82, which compute twice the values for a general rotation (about 2.2× per
+   stored value). The compact
    y-rotation set holds half the values of `blocks_len(p)`: 15.5 MiB at p = 144 and
    91 MiB at p = 261.
 7. **Recommendation for CH1.2** (§8): put the GD recursion in `nd-fmm-math` as the
@@ -112,7 +116,9 @@ Two measures make it accurate to degree 1001 at any β:
 | 3 | Legendre in u = 1 − x | 3.8·10⁻¹³ (β = 10⁻³) | 1.3·10⁻¹² |
 | 4 | Legendre telescoped (final) | 5.0·10⁻¹⁵ (β = 10⁻³), 3.4·10⁻¹⁵ (octree) | 8.9·10⁻¹⁵ |
 
-The cancellation-free ½(1 − cos β) of step 2 made no measurable difference. In versions
+Versions 1 to 3 are not kept in the branch; their numbers are the measurements made
+while developing the spike and cannot be reproduced from the committed code. The
+cancellation-free ½(1 − cos β) of step 2 made no measurable difference. In versions
 2 and 3 the error sat on the diagonal entries near 1, carried there from P̄ₙ⁰ of row 0.
 This affects any implementation in CH1.2: the stability of GD's recursion holds only if
 its input, row 0, is itself accurate to round-off at large n.
@@ -203,9 +209,10 @@ from which the maximum entry error stays above each threshold:
 
 The error grows by about a factor of ten every eight to ten degrees, which is the 4ⁿ span
 of the Racah entries (proposal §3.2) showing up through the rounding of the recursion.
-At the 10⁻¹⁴ that §3.9 asks of f64 (p ≤ 30), conjugation is good to n ≈ 28. That is
-just enough for the p ≤ 30 check of the acceptance, and not enough for any
-high-frequency level.
+At the 10⁻¹⁴ that §3.9 asks of f64 (p ≤ 30), conjugation is good only to n ≈ 28 at M2M's
+angle. The p ≤ 30 comparison of §4.3 therefore agrees to 1.8·10⁻¹⁴ (under its bound of
+10⁻¹³), limited by the conjugated blocks, not by GD. No high-frequency level could use
+them.
 
 ## 6. The blocks of β and π − β
 
@@ -218,8 +225,11 @@ remain:
 - on the sin half, O[−m,−k](π − β) = −(−1)ⁿ⁺ᵐ⁺ᵏ O[−m,−k](β);
 
 that is, Oⁿ(π − β) = (−1)ⁿ E Oⁿ(β) E F with E = diag((−1)^|m|) and F = diag(+1 on the
-cos slots, −1 on the sin slots). Test 5 checks this at every degree to 1000 for the six
-angles, with (cos, sin) = (−cos β, sin β) as the second input. The worst difference is
+cos slots, −1 on the sin slots). The independent evidence is test 1 at
+π − arccos(1/√3), where the reference evaluates Wigner's sum at that angle directly
+and the GD blocks agree to 3.4·10⁻¹⁵ at n = 1000. Test 5 checks the rule on the
+recursion itself, at every degree to 1000 for the six angles, running the same code
+with (cos, sin) = (−cos β, sin β) as the second input. The worst difference is
 6.7·10⁻¹⁵, but 22–97 % of the 6.7·10⁸ entries differ in their last bits. The recursion is not
 bit-symmetric under x ↦ −x, because steps 2 and 3 add their terms in a different order.
 A table therefore stores the blocks of β ≤ π/2 and applies the signs. The M2M of a level
@@ -249,10 +259,11 @@ the same rotation (full blocks of a general rotation), alone and with the conjug
 The cost is O(p³) at about 1.8 ns per stored value; at p = 8 the Legendre table and the
 loop overheads dominate. The GD code is a straightforward scalar loop, not optimised.
 
-For scale: applying a compact set to one complex expansion takes about two
-multiply-adds per stored value and per plane, so 8 per value. Generating a set
-therefore costs about as much as applying it to a few boxes. At p = 144 that is
-3.8 ms to generate against roughly 2.0·10⁶ × 8 ≈ 16 Mflop per box. Generating the
+For scale, assuming an M2M or L2L rotates each expansion there and back with the same
+set (two multiply-adds per stored value and per plane, two planes, so 8 flop per stored
+value): at p = 144 a box costs about 2.0·10⁶ × 8 ≈ 16 Mflop of rotation, 1.6 ms at an
+assumed 10 Gflop/s on one core, against 3.8 ms to generate the set. Generating a set
+therefore costs about as much as applying it to two or three boxes. Generating the
 blocks of a level per level call is cheap next to the M2M and L2L of that level once
 it has more than a handful of boxes. That supports §5.2's plan to generate rather than
 store above some degree.

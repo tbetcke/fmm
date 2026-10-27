@@ -206,8 +206,9 @@ fn satisfies_the_definition_to_degree_20() {
 
 /// Test 5: Oⁿ(π − β) = (−1)ⁿ E Oⁿ(β) E F with E = diag((−1)^|m|) and F = diag(+1 on the
 /// cos slots, −1 on the sin slots): entry (i, j) gains (−1)^(n + |i| + |j|) on the cos
-/// half and −(−1)^(n + |i| + |j|) on the sin half. Checked bit for bit with
-/// (cos, sin) = (−cos β, sin β), at every degree to 1000.
+/// half and −(−1)^(n + |i| + |j|) on the sin half. Checked to round-off (1e-12) with
+/// (cos, sin) = (−cos β, sin β) as the second input, at every degree to 1000; the
+/// entries that differ in their bits are counted and printed.
 #[test]
 #[ignore = "release mode: block sets to degree 1000"]
 fn supplementary_angle_is_a_sign_change() {

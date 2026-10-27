@@ -17,7 +17,7 @@
 //!    ladder of CONVENTIONS §3.4; in the frame of x it is the direction
 //!    R_y(β)ᵀ(e₁ + i e₂) = (cos β, i, sin β), so in the Racah basis
 //!    𝒟ⁿ₁ₗ = ½(1 − cos β) 𝒟ⁿ⁺¹₀,ₗ₊₁ + ½(1 + cos β) 𝒟ⁿ⁺¹₀,ₗ₋₁ − sin β 𝒟ⁿ⁺¹₀ₗ,
-//!    with no division by sin β, and νₘ turns it into the orthonormal form of [`row_one`].
+//!    with no division by sin β, and νₘ turns it into the orthonormal form of `row_one`.
 //!    This is the second step of Gumerov and Duraiswami.
 //! 3. **Rows 2 to n and −1 to −n** by the relation that the rotation commutes with J_y
 //!    (their third and fourth steps): with cⱼ = √((n − j)(n + j + 1)),

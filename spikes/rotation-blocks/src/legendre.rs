@@ -10,7 +10,8 @@
 //! x, and in this form the recursion's own rounding near x = 1 grows like n² ε (the
 //! homogeneous coefficients nearly cancel: cₙ + cₙ₋₁ ≈ 2n − 1 with cₙ = √((n − m)(n + m))
 //! and √((n + m − 1)(n − m − 1)) = cₙ₋₁). At n = 1000 and β = 10⁻³ this cost
-//! 2.75·10⁻¹² with x itself and 3.8·10⁻¹³ with x = 1 − u in the spike's first versions.
+//! 2.75·10⁻¹² in P̄₁₀₀₀⁰ itself with x, and 3.8·10⁻¹³ with x = 1 − u, in the spike's
+//! first versions.
 //! The recursion therefore runs on |x|, with u = 1 − |x| = s²/(1 + |x|), in telescoped
 //! form: with Eₙ = cₙ (P̄ₙᵐ − P̄ₙ₋₁ᵐ),
 //!
