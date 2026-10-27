@@ -81,8 +81,10 @@ request, using this template:
 - Checks: ran `/verify` on the M3 Max (default and workspace checks, `cargo doc`, the
   licence check, no fftw-sys; the spike's tests with `--include-ignored` in release);
   `reference.py --check` byte for byte. No machine runs. Nothing pending.
-- Decisions: none taken; questions for sign-off: GD at every degree for the Helmholtz
-  tables, and the generate-or-store threshold of §5.2/§7 as a memory rule (report §8).
+- Decisions: signed off 2026-10-27, as recommended (report §8): GD at every degree for the
+  Helmholtz tables, the conjugated blocks only as the test reference at p ≤ 30; the
+  generate-or-store threshold of §5.2/§7 a memory rule from the node budget, with the
+  per-call generation cost (large near the root) measured in CH0.8 or CH2.2.
 - Laplace: not touched (only the spike, its member entry and its lock-file entry).
 - Follow-ups: CH1.2 implements GD with the wedge-only recursion and the telescoped,
   exponent-carrying Legendre functions (report §2.3); §3.15 item 5 takes the sign rule.

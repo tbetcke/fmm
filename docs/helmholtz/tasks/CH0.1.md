@@ -116,7 +116,7 @@ None.
 
 ## Open questions
 
-For sign-off in the PR, neither blocking this task (SPIKE_REPORT.md §8):
+Put for sign-off in the PR (SPIKE_REPORT.md §8); both signed off 2026-10-27 as recommended:
 
 1. Generate the Helmholtz rotation blocks by GD at every degree (proposal §3.2 keeps the
    conjugated `rotation::blocks` as the generator up to the degree where it stays
@@ -124,4 +124,6 @@ For sign-off in the PR, neither blocking this task (SPIKE_REPORT.md §8):
    the test reference at p ≤ 30.
 2. Make the generate-or-store threshold of §5.2 and §7 a memory rule (node budget, CH0.8
    or CH2.2), since S1 finds no accuracy limit to p = 1000; the compact y-rotation layout
-   halves §7's block memory.
+   halves §7's block memory. Signed off with the time cost stated: generating per level
+   call repeats the setup cost on every evaluation, which near the root (large p, few
+   boxes per angle) can exceed applying the blocks; CH0.8 or CH2.2 measures it.

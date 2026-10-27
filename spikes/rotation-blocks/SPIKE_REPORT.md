@@ -45,7 +45,8 @@ Max, release builds, rustc 1.99.0, f64, one thread.
    generator of the Helmholtz blocks at every degree, not only above a threshold. Keep
    the conjugated `rotation::blocks` as the test reference at p ≤ 30. Then the degree
    above which §5.2 and §7 generate blocks per level call instead of storing them is a
-   memory question, not an accuracy one. Questions 1 and 2 of §8 are for sign-off.
+   memory question, not an accuracy one. Questions 1 and 2 of §8 were signed off on
+   2026-10-27.
 
 ## 1. The basis and the blocks
 
@@ -279,6 +280,7 @@ For CH1.2 (`nd-fmm-math`), §3.15 item 5 (CH1.1) and §7:
    y-rotations the tables store. Recommendation: GD at every degree for the Helmholtz
    tables, with the conjugated Racah blocks only as the test reference at p ≤ 30.
    Laplace keeps its own blocks unchanged (constraint 1).
+   **Signed off 2026-10-27: as recommended.**
 2. **Question: the threshold of §5.2 and §7 is memory, not accuracy.** "Above a degree
    measured in S1 the blocks are generated per level call ... instead of stored." S1
    finds no accuracy limit to p = 1000. Generation costs about 1.8 ns per stored value,
@@ -286,6 +288,11 @@ For CH1.2 (`nd-fmm-math`), §3.15 item 5 (CH1.1) and §7:
    CH2.2, not from S1. The compact y-rotation layout halves the memory of §7's figures:
    15.5 MiB rather than 31 MiB at p = 144, 91 MiB rather than 183 MiB at p = 261, per
    polar angle.
+   **Signed off 2026-10-27: as recommended**, with the time cost stated: storing
+   generates the blocks once at setup, generating per level call repeats that on every
+   evaluation. Near the root, where p is large and few boxes share an angle, generation
+   can cost more than applying the blocks (about 1.2 s per angle at p = 1000), so CH0.8
+   or CH2.2 measures that cost against the budget rather than assuming it small.
 3. **For §3.15 item 5**: the relation of β and π − β is the sign rule of §6, with no
    permutation in the real basis, and tables store β ≤ π/2. The basis of §1 (N Rₙ in
    the real storage of §3.6, no Condon–Shortley phase) is the one the spike verified.
