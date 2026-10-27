@@ -2956,6 +2956,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nd-fmm-spike-coaxial"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "nd-fmm-spike-cubecl-gemm"
 version = "0.0.0"
 dependencies = [

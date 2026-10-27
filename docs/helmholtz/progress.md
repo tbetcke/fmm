@@ -88,3 +88,46 @@ request, using this template:
 - Laplace: not touched (only the spike, its member entry and its lock-file entry).
 - Follow-ups: CH1.2 implements GD with the wedge-only recursion and the telescoped,
   exponent-carrying Legendre functions (report §2.3); §3.15 item 5 takes the sign rule.
+
+## 2026-10-27: CH0.2 S2: coaxial coefficients
+- Done: the spike `spikes/coaxial/` (a member outside the default members): the
+  Gumerov–Duraiswami recursions in m and n for (S|R) and (R|R) = (S|S) in the real
+  orthonormal basis, in the triangle n′ ≥ n with the index symmetry, and the halved
+  table; the coefficients by projection on a sphere (FMM3D's stabilised point and shoot,
+  least squares from value and radial derivative); the FMM-weighted error (weights from
+  the jₙ envelope over the box); an mpmath reference (`tools/reference.py`, the Gaunt sum,
+  checked against the addition theorems to 5.0e-49) and a full-table arbitrary-precision
+  check (`tools/full_table.py`). Report `spikes/coaxial/SPIKE_REPORT.md`.
+- Tests: seven in `tests/accuracy.rs`, all passing in release: 21,809 reference entries in
+  120 configurations (p ≤ 371, k a ≤ 300, real, complex, imaginary k), projection
+  ≤ 1.2e-12 FMM-weighted everywhere, recursion ≤ 8.0e-15 where stable; whole tables at
+  k a = 40 ≤ 8.6e-14; start values 3.3e-14; (R|R) imaginary parts structurally zero by
+  the recursion and below 4.4e-14 (M2M weights) by the outer-sphere projection;
+  i^{n−n′} (E|F) real for imaginary k; the triangle shared bit for bit by both variants;
+  the rectangular table a block of the square bit for bit.
+- Findings: R2 confirmed. For real k the recursion meets 1e-12 weighted to k a = 50 and
+  fails beyond (1.6e-8 at 100, O(1) from 200), independent of ε and p; strongly damped
+  and imaginary k show no instability to 300. Per-entry relative error is unreachable at
+  large p by any f64 method (tables span 10²⁰⁰). Time per table (one thread): recursion
+  85 ms, projection 5.1 s at p = 371; a halved M2L table is 132 MiB there.
+- Checks: ran `/verify` on the M3 Max (format, Clippy default, examples, workspace and the
+  spike's all-targets, `cargo doc`, the default (823) and workspace (884) tests, the
+  licence check, no fftw-sys; the spike's tests with `--include-ignored` in release);
+  `reference.py --check` byte for byte. A self-review by a subagent; its findings are
+  fixed (the weights, test 6, the reality check, the report's numbers). No machine runs.
+  Nothing pending.
+- Decisions: signed off 2026-10-27, as recommended (report §8): (1) the coaxial tables
+  by the recursion (triangle, index symmetry) where Re(k) a ≤ 40, by projection above;
+  (2) CH0.2's acceptance met in the FMM-weighted error, bound 1e-11, not per-entry
+  relative error; (3) R2's fallback the projection instead of signatures, with the
+  coaxial table memory (132 MiB per M2L table at p = 371) and the table-free projection
+  carried into §7 and CH0.8; (4) §3.15 item 6 states the symmetries, (S|S) = (R|R) real
+  for real k, the Yukawa powers of i and the recursion signs; the scale's radius is left
+  to CH0.3 and CH1.1 (proposal §3.4's half-width until then; the spike used the
+  circumradius).
+- Laplace: not touched (only the spike, its member entry and its lock-file entry).
+- Follow-ups: CH0.7 (S7) uses the coaxial prototypes; the table code (CH1.2/CH2.2)
+  implements the rule of question 1; §3.15 item 6 takes the symmetries and the Yukawa
+  phases; CH0.3 and CH1.1 fix the scale's radius; CH0.8 takes the coaxial table memory
+  and the table-free projection; the proposal's R2 and §7 take decision 3 at its next
+  draft.
