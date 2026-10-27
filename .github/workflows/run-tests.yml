@@ -263,7 +263,10 @@ jobs:
   # --test-threads=1 --nocapture. A failure on one rank can leave the others blocked in
   # a collective: the per-launch timeout ends that launch, and the step and job
   # timeouts bound the rest. The runner has 4 vCPUs on 2 cores and Open MPI gives one
-  # slot per core, so the ranks oversubscribe (as in run-examples). No interface flags:
+  # slot per core, so the ranks oversubscribe (as in run-examples): Open MPI 4 through
+  # OMPI_MCA_rmaps_base_oversubscribe, Open MPI 5 (ubuntu-26.04's openmpi-bin, since
+  # ubuntu-latest moved there in October 2026) through
+  # PRTE_MCA_rmaps_default_mapping_policy; each ignores the other's. No interface flags:
   # the ranks talk over shared memory on the one node.
   run-tests-mpi:
     name: run-tests-mpi (2 and 4 ranks)
@@ -338,6 +341,7 @@ jobs:
         timeout-minutes: 25
         env:
           OMPI_MCA_rmaps_base_oversubscribe: "1"
+          PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
         run: .github/scripts/run-mpi-tests.sh run "$RUNNER_TEMP/mpi-executables.txt" 2
 
       # Also after a failure at 2 ranks, so that one run shows both counts.
@@ -346,4 +350,5 @@ jobs:
         timeout-minutes: 25
         env:
           OMPI_MCA_rmaps_base_oversubscribe: "1"
+          PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
         run: .github/scripts/run-mpi-tests.sh run "$RUNNER_TEMP/mpi-executables.txt" 4
