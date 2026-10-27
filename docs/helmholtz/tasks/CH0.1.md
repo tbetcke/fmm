@@ -64,7 +64,7 @@ A spike only; no workspace crate, convention, table or Laplace path changes.
 
 ## Tests that prove it
 
-All in f64, one thread, `cargo test -p nd-fmm-spike-rotation-blocks --release`.
+All in f64, one thread, `cargo test -p nd-fmm-spike-rotation-blocks --release -- --include-ignored`.
 
 1. **Reference to p = 1000**: every sampled entry against `fixtures/reference.json`,
    absolute error ≤ 10⁻¹² (entries are of order one; the measured maximum is reported per

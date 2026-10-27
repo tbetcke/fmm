@@ -1,5 +1,6 @@
 //! The acceptance tests of CH0.1 (docs/helmholtz/tasks/CH0.1.md, "Tests that prove it").
-//! Run in release: `cargo test -p nd-fmm-spike-rotation-blocks --release`.
+//! Tests 1, 2, 5 and 6 are ignored in debug builds' default runs; run them all with
+//! `cargo test -p nd-fmm-spike-rotation-blocks --release -- --include-ignored`.
 
 use nd_fmm_math::rotation::{block_range, blocks_len, euler_zyz};
 use nd_fmm_math::{Layout, harmonics};
@@ -43,6 +44,7 @@ fn angles() -> Vec<f64> {
 
 /// Test 1: every entry of fixtures/reference.json, absolute error ≤ 1e-12.
 #[test]
+#[ignore = "release mode: block sets to degree 1000"]
 fn agrees_with_the_arbitrary_precision_reference() {
     let text = include_str!("../fixtures/reference.json");
     let doc: serde_json::Value = serde_json::from_str(text).unwrap();
@@ -96,6 +98,7 @@ fn orthogonality_error(w: usize, o: &[f64]) -> f64 {
 /// Test 2: O Oᵀ = I to 1e-12 at every n ≤ 100 and at selected degrees to 1000; the probe
 /// ‖Oᵀ(O v) − v‖_∞ at every degree to 1000.
 #[test]
+#[ignore = "release mode: O Oᵀ at degrees to 1000"]
 fn blocks_are_orthogonal_to_degree_1000() {
     let selected = [150, 200, 300, 500, 700, 1000];
     for beta in angles() {
@@ -206,6 +209,7 @@ fn satisfies_the_definition_to_degree_20() {
 /// half and −(−1)^(n + |i| + |j|) on the sin half. Checked bit for bit with
 /// (cos, sin) = (−cos β, sin β), at every degree to 1000.
 #[test]
+#[ignore = "release mode: block sets to degree 1000"]
 fn supplementary_angle_is_a_sign_change() {
     let p = 1000;
     for beta in angles() {
@@ -248,6 +252,7 @@ fn supplementary_angle_is_a_sign_change() {
 
 /// Test 6: Oⁿ(R_y(β₁)) Oⁿ(R_y(β₂)) = Oⁿ(R_y(β₁ + β₂)) at n = 500, 1e-12.
 #[test]
+#[ignore = "release mode: a product of width 1001"]
 fn group_property_at_degree_500() {
     let (n, b1, b2) = (500, 0.7, 1.1);
     let w = 2 * n + 1;

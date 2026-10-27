@@ -145,7 +145,7 @@ byte for byte in about 50 s, which was checked.
 ## 4. Accuracy of the GD blocks
 
 All in `tests/accuracy.rs`, run with
-`cargo test -p nd-fmm-spike-rotation-blocks --release`. All six tests pass.
+`cargo test -p nd-fmm-spike-rotation-blocks --release -- --include-ignored`. All six tests pass.
 
 ### 4.1 Against the reference (test 1, bound 10⁻¹²)
 
