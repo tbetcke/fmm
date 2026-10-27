@@ -1,0 +1,45 @@
+name: 🧪 fftw-probe
+
+# The runner's FFTW as RLST sees it (Helmholtz CHR.4, proposal §10): tools/fftw/probe.sh
+# prints pkg-config's versions, both libraries' version strings with their SIMD suffixes,
+# and runs RLST's own tests with `fftw_system`, `fftw_determinism` included, in a copy
+# outside the workspace. It tests RLST and the runner's FFTW, not nd-fmm, so it runs on the
+# pull requests that change the probe, and by hand; tools/ci/machine.md records its result.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - tools/fftw/**
+      - .github/workflows/fftw-probe.yml
+
+permissions:
+  contents: read
+
+jobs:
+  fftw-probe:
+    name: fftw-probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/checkout@v6
+
+      # RLST's Linux dev-dependencies link the system OpenBLAS.
+      - name: Install FFTW, BLAS and pkg-config
+        timeout-minutes: 5
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfftw3-dev libopenblas-dev pkg-config
+
+      - name: Package versions
+        run: |
+          grep PRETTY_NAME /etc/os-release
+          dpkg -l 'libfftw3*' 'libopenblas*' | grep '^ii'
+
+      - name: Probe
+        run: tools/fftw/probe.sh
