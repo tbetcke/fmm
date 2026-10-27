@@ -43,3 +43,22 @@ request, using this template:
   tests); benchmarks within noise (D9 as clarified) on the M3 Max, Kathleen and locust.
 - Follow-ups: CHR.4 (next runnable); CHR.3's `fftw` job needs an allowance for the fftw-sys
   clarification.
+
+## 2026-10-27: CHR.4 FFTW on the machines
+- Done: `tools/fftw/probe.sh` (with a README) prints a machine's FFTW as RLST sees it and
+  runs RLST 0.12's own tests with `fftw_system` in a copy outside the workspace; the
+  `fftw-probe` workflow runs it on CI. Records in `tools/m3max/machine.md` (new),
+  `tools/gh200/machine.md`, `tools/kathleen/machine.md`, `tools/ci/machine.md` (new).
+  Report `fmm-validate/results/helmholtz-chr-4.md`.
+- Tests: no workspace code changed. RLST's `cargo test --locked --features fftw_system`
+  (789 passed, `fftw_check_allocations` 10 checks, `fftw_determinism` 10 scenarios) on
+  each machine. FFTW: M3 Max Homebrew 3.3.11 without SIMD; locust spack 3.3.11 NEON
+  (loaded from the view, not the RPM's 3.3.8); Kathleen module 3.3.10
+  SSE2/AVX/AVX2/AVX-512; CI Ubuntu 3.3.10 SSE2/AVX. Both precisions everywhere.
+- Checks: ran `/verify`'s default and workspace checks on the M3 Max, `shellcheck` and
+  `dash -n` on the probe, the probe on the four machines (Kathleen job 608854, CI run
+  40481567890), and PR #127's CI. Nothing pending.
+- Decisions: none.
+- Laplace: not touched (no crate, manifest or lock file changed).
+- Follow-ups: S9 (CH0.9) is unblocked; its FFTW timings on the M3 Max are scalar code (R22),
+  an input to D7.

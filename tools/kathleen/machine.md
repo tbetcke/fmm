@@ -54,7 +54,7 @@ and `python3` 3.9.
 
 ## FFTW (Helmholtz CHR.4)
 
-Measured on 2026-10-27 in job 608850 (`run.sbatch 'tools/fftw/probe.sh'`, one node,
+Measured on 2026-10-27 in job 608854 (`run.sbatch 'tools/fftw/probe.sh'`, one node,
 node-c11a-002; tools/fftw/README.md), inside `env.sh`.
 
 | Item | Value |

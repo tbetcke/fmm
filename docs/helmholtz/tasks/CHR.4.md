@@ -110,8 +110,12 @@ and D7.
 
 ## Pending runs
 
-None yet.
+None. All four ran the probe of `d4bb153` on 2026-10-27: the M3 Max (outside the
+sandbox), locust (`tools/gh200/remote.sh`), Kathleen job 608854 (608850 with the probe
+before self-review, same results), CI run 40481567890 (`fftw-probe` on PR #127). All
+passed.
 
 ## Open questions
 
-None yet.
+None blocking. For the user's information (PR text): the M3 Max's Homebrew FFTW has no
+SIMD codelets (R22) and CI's has SSE2 and AVX only; nothing is proposed to change either.
