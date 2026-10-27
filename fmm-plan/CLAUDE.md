@@ -178,7 +178,7 @@ exchanges", are the contract.
   workspace entry has `derive`).
 - `nd-octree` is the workspace path dependency on `../octree`. Keep it that way: do not
   switch to a git or crates.io source, which can diverge from the workspace copy.
-- `rlst` 0.10.1 (since Phase 5S T8; 0.10.0 from T1s) and `mpi` 0.8.2 (rsmpi) come from crates.io. The crate uses rlst's
+- `rlst` 0.12.0 (since Helmholtz CHR.2; 0.10.2 from Phase 5S T8q, 0.10.1 from T8, 0.10.0 from T1s) and `mpi` 0.8.2 (rsmpi) come from crates.io. The crate uses rlst's
   `distributed_tools::{GhostCommunicator, GhostCommunicatorBuilder, ChunkSizes}` in
   `exchange.rs`, `distributed_tools::SparseRoutes` in `redistribute.rs`, `distributed_tools::sparse_all_to_allv` in `exchange_tree.rs`, and
   `distributed_tools::{all_to_allv, array_tools::gather_to_all}` in the tests. Tests and examples also use `rlst_dynamic_array` and `println_mpi`;

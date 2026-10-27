@@ -91,10 +91,11 @@ Slash commands in `.claude/skills/`, for the Helmholtz work:
 
 ## Build environment
 Stable Rust with Rust 2024, plus `rustfmt` and `clippy`. Native prerequisites, as
-installed in Linux CI: `libclang-dev cmake libfftw3-dev libopenblas-dev openmpi-bin
-libopenmpi-dev`. `mpi` and `rlst` build against a real MPI installation and
-BLAS/LAPACK, so a dependency build failure is far more often a missing native library
-than a defect in a crate.
+installed in Linux CI: `libclang-dev libfftw3-dev libopenblas-dev openmpi-bin
+libopenmpi-dev`. No crate needs `cmake` since Helmholtz CHR.2 (rlst 0.10.2 declared it
+but never ran it; a build with a failing `cmake` first on `PATH`, Kathleen job 608744).
+`mpi` and `rlst` build against a real MPI installation and BLAS/LAPACK, so a dependency
+build failure is far more often a missing native library than a defect in a crate.
 
 locust (`ssh locust`, an NVIDIA GH200: 72 Grace cores, one H100) builds and runs in an
 environment made by `tools/gh200/` (README.md there): a pinned spack environment
@@ -183,6 +184,12 @@ also cache the `.deb` files of their packages (keyed on the runner image and the
 list, which the two share; `.github/scripts/apt-install.sh` installs them offline on a
 hit). Every job has a `timeout-minutes`, and so has each package install; a failed
 install is a mirror problem, and its error says to re-run.
+
+A fifth job, `run-licence-check` (Helmholtz CHR.2), runs `cargo deny --locked check
+licenses` against the root `deny.toml`: the default members' graph with default features
+may hold permissive licences only, so a GPL crate (fftw-sys through rlst's `fftw`
+features) entering it fails. It installs no packages and caches the cargo-deny binary.
+Run it locally after any manifest change.
 
 nd-fmm-kernels is a workspace member, not a default member: the default and
 `--workspace` checks build it without a backend. For a change to it, also run
@@ -279,8 +286,9 @@ runs `cargo upgrades` (not `cargo audit`).
 
 ## Navigating the code
 Prefer LSP tools (go-to-definition, find-references, symbols) over `grep`/`find` when
-chasing a symbol; they resolve through the real dependency graph. `rlst` 0.10.2 comes
-from crates.io, so its sources are in `~/.cargo/registry/src/*/rlst-0.10.2/`; a `../rlst`
+chasing a symbol; they resolve through the real dependency graph. `rlst` 0.12.0 comes
+from crates.io, so its sources are in `~/.cargo/registry/src/*/rlst-0.12.0/` (the spikes'
+green-kernels alone builds 0.10.2 through the root `[patch]`); a `../rlst`
 checkout on the machine, if any, is an unrelated development tree and may differ. Use
 `grep` for what LSP does not index: comments, CI YAML, `Cargo.toml`. Read the
 implementation and tests rather than trusting prose when checking how an API behaves.

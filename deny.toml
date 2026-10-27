@@ -1,0 +1,41 @@
+# cargo-deny (https://embarkstudios.github.io/cargo-deny/), licence check only: CI's
+# run-licence-check job runs `cargo deny --locked check licenses` (Helmholtz CHR.2, proposal
+# §6.7, "FFTW stays optional"), so that a GPL crate entering the default dependency graph
+# (fftw-sys through rlst's `fftw` features) fails the build. The graph is the default
+# members' normal and build dependencies, without dev-dependencies; the non-default members
+# (nd-fmm-kernels, the spikes) are left out below, and a new one must be added there. Cargo
+# unifies features over every member before the exclusion, so a feature that a non-default
+# member enables on a shared crate is checked too: the check errs on the strict side.
+
+[graph]
+exclude = [
+    "nd-fmm-kernels",
+    "nd-fmm-spike-cubecl-gemm",
+    "nd-fmm-spike-device-arith",
+    "nd-fmm-spike-download-path",
+    "nd-fmm-spike-p2p-simd",
+    "nd-fmm-spike-plane-wave",
+]
+
+[licenses]
+# Permissive licences only; nothing copyleft. An `OR` expression passes when one of its
+# terms is listed (r-efi is MIT OR Apache-2.0 OR LGPL-2.1-or-later).
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+]
+
+# fftw-sys declares its licence only through a `license-file` that holds both the GPL
+# terms (the FFTW back end, the one rlst uses) and MIT ones (MKL, which rlst does not
+# offer); cargo-deny reads it as MIT with low confidence. State it as GPL, so that the
+# check fails on fftw-sys for its licence. The hash ties the entry to fftw-sys 0.8.0's
+# file: a changed file makes cargo-deny ignore it and report the crate as unlicensed.
+[[licenses.clarify]]
+crate = "fftw-sys"
+expression = "GPL-2.0-or-later"
+license-files = [{ path = "LICENSE.md", hash = 0xb3398f27 }]

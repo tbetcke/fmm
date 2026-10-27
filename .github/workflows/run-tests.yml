@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      APT_PACKAGES: libclang-dev cmake libfftw3-dev libopenblas-dev openmpi-bin libopenmpi-dev
+      APT_PACKAGES: libclang-dev libfftw3-dev libopenblas-dev openmpi-bin libopenmpi-dev
     steps:
       - name: Install Rust
         id: toolchain
@@ -65,7 +65,7 @@ jobs:
           path: ~/apt-archives
           key: ${{ steps.apt-key.outputs.key }}
 
-      - name: Install libclang, CMake, FFTW, BLAS and MPI
+      - name: Install libclang, FFTW, BLAS and MPI
         id: apt
         timeout-minutes: 5
         run: .github/scripts/apt-install.sh ~/apt-archives $APT_PACKAGES
@@ -87,6 +87,36 @@ jobs:
 
       - name: Build docs
         run: cargo doc --no-deps
+
+  # The licences of the default members' dependency graph, with their default features
+  # (deny.toml; Helmholtz CHR.2, proposal §6.7): a GPL crate entering it, such as fftw-sys
+  # through rlst's `fftw` features, fails the job. Reads `cargo metadata` only, so it needs
+  # no native packages. cargo-deny is built once per version and runner and cached.
+  run-licence-check:
+    name: run-licence-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_DENY_VERSION: "0.20.2"
+    steps:
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/checkout@v6
+
+      - name: Cache cargo-deny
+        id: deny-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-${{ env.CARGO_DENY_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install cargo-deny
+        if: steps.deny-cache.outputs.cache-hit != 'true'
+        run: cargo install --locked cargo-deny --version "$CARGO_DENY_VERSION"
+
+      - name: Licences of the default set
+        run: cargo deny --locked check licenses
 
   # nd-fmm-simd alone, without MPI, on real x86_64 (AVX2 + FMA) and arm64 (NEON)
   # hardware (Phase 3S, decided 2026-10-02). The tests print the ISAs they ran;
@@ -243,7 +273,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      APT_PACKAGES: libclang-dev cmake libfftw3-dev libopenblas-dev openmpi-bin libopenmpi-dev
+      APT_PACKAGES: libclang-dev libfftw3-dev libopenblas-dev openmpi-bin libopenmpi-dev
       RUST_MIN_STACK: "8388608"
       OPENBLAS_NUM_THREADS: "1"
       OMP_NUM_THREADS: "1"
@@ -281,7 +311,7 @@ jobs:
           path: ~/apt-archives
           key: ${{ steps.apt-key.outputs.key }}
 
-      - name: Install libclang, CMake, FFTW, BLAS and MPI
+      - name: Install libclang, FFTW, BLAS and MPI
         id: apt
         timeout-minutes: 5
         run: .github/scripts/apt-install.sh ~/apt-archives $APT_PACKAGES
