@@ -51,3 +51,20 @@ and `python3` 3.9.
 | Transport | PML `cm` + MTL `psm2` (Omni-Path PSM2, priority 40; `ofi` 25) between nodes and within a node, under `mpirun` and `srun --mpi=pmix`; `ob1`/`vader` initialised, not selected; no TCP. The module sets `OMPI_MCA_btl=self,vader` (jobs 238826, 238840) |
 | Launch at 2 × 40 ranks | `mpirun` inside the allocation 0.89–0.91 s, `srun --mpi=pmix` 1.28–1.33 s, for a small nd-octree example (job 238840) |
 | Slurm settings that matter | `MpiDefault=pmix`; `TmpFS=/tmp` with `NamespaceType=namespace/tmpfs` (a private `/tmp` per job); `TaskPlugin=task/cgroup,task/affinity`; the batch step has `SLURM_STEP_ID=-5` and `OMPI_MCA_plm_slurm_args=--external-launcher` (`scontrol show config`, job 238830) |
+
+## FFTW (Helmholtz CHR.4)
+
+Measured on 2026-10-27 in job 608850 (`run.sbatch 'tools/fftw/probe.sh'`, one node,
+node-c11a-002; tools/fftw/README.md), inside `env.sh`.
+
+| Item | Value |
+| --- | --- |
+| FFTW | the module `fftw/3.3.10/gcc-12.3.0` (UCL's spack 0.23, `linux-rhel9-cascadelake`), `…/fftw-3.3.10-v57hmo2…/lib` |
+| `pkg-config --modversion fftw3 fftw3f` | 3.3.10, 3.3.10 |
+| version strings (`fftw_version`, `fftwf_version`) | `fftw-3.3.10-sse2-avx-avx2-avx2_128-avx512`, the same for single: both precisions with SSE2, AVX, AVX2 and AVX-512 codelets |
+| `rlst::fftw::version()` | `fftw-3.3.10-sse2-avx-avx2-avx2_128-avx512` |
+| loaded at run time | `libfftw3.so.3` and `libfftw3f.so.3` from the module's `lib` (`ldd`) |
+| RLST 0.12.0's `cargo test --locked --features fftw_system` | passed: 789 tests, 0 failed; `fftw_check_allocations` 10 checks; `fftw_determinism` 10 scenarios, 0 failed |
+
+Every compute node has the same CPU (Xeon Gold 6248), so one FFTW build serves all ranks
+with the same SIMD (proposal R15).
