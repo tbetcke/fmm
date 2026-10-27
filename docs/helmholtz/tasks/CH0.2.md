@@ -67,8 +67,16 @@ A spike only; no workspace crate, convention, table or Laplace path changes.
     pointwise in mpmath, (R|R) at any r, (S|R) for |r| < t, (S|S) = (R|R) for |r| > t,
     for every slot −n..n. Writes `fixtures/reference.json` (committed, under 1 MB): sampled
     entries (rows and columns at both ends, the diagonal, random entries) for orders
-    m ∈ {0, 1, mid, max} of each configuration below.
+    m ∈ {0, 1, mid, max} of each configuration below. (As built: 21,809 entries in 120
+    configurations, 1.2 MB, over the 1 MB first planned.)
   - `tests/accuracy.rs`, `examples/{sweep,time}.rs`, `SPIKE_REPORT.md`.
+  - Added during implementation, once the recursion proved unstable above k a ≈ 50
+    (SPIKE_REPORT.md §4.3): `src/projection.rs`, the coefficients by projection on a
+    sphere (FMM3D's stabilised point and shoot; Gauss–Legendre in the polar angle, least
+    squares from value and radial derivative for (S|R), (S|S) = (R|R) on an outer
+    sphere); `src/metric.rs`, the FMM-weighted error (§4.1 of the report);
+    `tools/full_table.py`, the whole recursion table in f64 against the same recursion
+    in arbitrary precision, because the fixture's samples miss the unstable entries.
 - Root `Cargo.toml` `members` gains `spikes/coaxial`; `Cargo.lock` gains its entry.
 
 Configurations (a the circumradius of a box, a = √3 w/2, as in proposal §3.5's k a_l):
@@ -83,18 +91,19 @@ p_child = p(k a/2) → p_parent = p(k a); M2L at the 15 V-list distances d w, d 
 All in f64 against the reference, one thread,
 `cargo test -p nd-fmm-spike-coaxial --release -- --include-ignored`.
 
-1. **Reference, p and k a to 300**: every sampled entry, recursions from the spike's own
-   radial functions and from the reference's start values. Metrics per configuration:
-   the relative error per entry, and the row-relative error |Δ(E|F)_{n′n}| /
-   max_{n″} |(E|F)_{n′n″}| (the error of output degree n′ relative to its largest
-   contribution, the size that matters when the inputs are scaled to order one). Bound
-   10⁻¹² row-relative for the triangle variant; the per-entry error reported in full, with
-   the entries where it exceeds 10⁻¹² explained. The full-rectangle variant is reported
-   beside it (expected unstable away from the diagonal, the likely source of R2).
+1. **Reference, p and k a to 300**: every sampled entry, by the recursion (from the
+   spike's own start values, checked against the reference's to 10⁻¹³, test 1a) and by
+   the projection. As built, the metric is the FMM-weighted error of SPIKE_REPORT.md
+   §4.1, bound 10⁻¹¹: the row-relative error first planned is meaningless where a row
+   spans tens of orders of magnitude, and the per-entry error is unreachable at large p
+   by any method (report §4.2); it is reported. The projection is asserted on every
+   configuration, the recursion where the full-table sweep finds it stable. The
+   full-table claims rest on `examples/sweep.rs` and `tools/full_table.py`.
 2. **Real k**: the f64 (R|R) has imaginary parts exactly zero (the recursion closes over
    the reals); the reference's (R|R) and (S|S) imaginary parts below 10^{−(digits − 10)};
-   Re (S|R) = (R|R) in f64 to 10⁻¹³ row-relative (h = j + i y, and the Gaunt phases are
-   ±1 for real k), a non-trivial check of the claim.
+   Re (S|R) = (R|R) in f64 (h = j + i y, and the Gaunt phases are ±1 for real k), a
+   non-trivial check of the claim; as built in the M2L weights to 10⁻¹¹, by the
+   recursion to k a = 30 and by the projection at k a = 100 and 300.
 3. **Imaginary k**: i^{n−n′} (E|F)ᵐ_{n′n} real to round-off (the powers of i absorbed per
    degree, proposal §3.1), in the reference and in f64.
 4. **Index symmetry**: in the reference (E|F)ᵐ_{nn′} = (−1)^{n+n′} (E|F)ᵐ_{n′n} to
@@ -137,4 +146,13 @@ None.
 
 ## Open questions
 
-None yet.
+For sign-off in the PR (SPIKE_REPORT.md §8):
+
+1. Build the coaxial tables by the recursion (triangle, index symmetry) where
+   Re(k) a ≤ 40 and by projection above; or projection everywhere.
+2. Record CH0.2's acceptance in the FMM-weighted error (bound 10⁻¹¹) instead of the
+   per-entry relative error, which no f64 method reaches at large p.
+3. Replace R2's fallback "through signatures" by the projection; carry the M2L coaxial
+   table memory (132 MiB per table at p = 371, 15 per level) and the table-free
+   projection into §7 and CH0.8.
+4. What §3.15 item 6 states (symmetries, reality, the Yukawa powers of i).
