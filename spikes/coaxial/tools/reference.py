@@ -130,10 +130,13 @@ def check_radial():
     """The recurrences against mpmath's Bessel functions at sampled orders."""
     worst = mpf(0)
     with mp.workdps(40):
-        for z in [mpf("0.005"), mpf("3.7"), mpf("150"), mpc("20", "2"), mpc("5", "5"), mpc(0, "40")]:
+        cases = [(z, 200, (0, 1, 7, 60, 200)) for z in (mpf("0.005"), mpf("3.7"), mpf("150"), mpc("20", "2"), mpc("5", "5"), mpc(0, "40"))]
+        # The largest arguments and orders of the fixture.
+        cases += [(z, 742, (0, 371, 742)) for z in (mpf("1800"), mpc("1800", "180"), mpc(0, "1800"))]
+        for z, top, orders in cases:
             for op, fn in (("RR", mpmath.besselj), ("SR", mpmath.hankel1)):
-                values = radial(op, z, 200)
-                for l in (0, 1, 7, 60, 200):
+                values = radial(op, z, top)
+                for l in orders:
                     exact = mpmath.sqrt(mpmath.pi / (2 * z)) * fn(l + mpf(1) / 2, z)
                     worst = max(worst, abs(values[l] - exact) / abs(exact))
     if worst > mpf(10) ** -30:

@@ -93,17 +93,25 @@ def main():
         for m, n1, n in [(0, pt, ps), (min(ps, pt) // 2, pt, ps), (min(ps, pt) // 3, pt - 3, ps - 5)]
     )
 
-    def bessel_weight(x, n):
-        return float(abs(mpmath.sqrt(mpmath.pi / (2 * x)) * mpmath.besselj(n + 0.5, x))) * math.sqrt(2 * n + 1)
+    def envelope(x, n_max):
+        """max over 0 < r <= x/k of |j_n(k r)| sqrt(2n + 1), n <= n_max, sampled at 16
+        points per period as src/metric.rs (j_n oscillates for n < x)."""
+        samples = max(16, math.ceil(16 * float(x) / math.pi))
+        best = [mpf(0)] * (n_max + 1)
+        with mp.workdps(30):
+            for i in range(1, samples + 1):
+                values = ref.radial("RR", mpf(x) * i / samples, n_max)
+                best = [max(b, abs(v)) for b, v in zip(best, values)]
+        return [float(b) * math.sqrt(2 * n + 1) for n, b in enumerate(best)]
 
     def hankel_weight(x, n):
         return float(abs(mpmath.sqrt(mpmath.pi / (2 * x)) * mpmath.hankel1(n + 0.5, x))) * math.sqrt(2 * n + 1)
 
     if op == "SR":
-        w = [bessel_weight(mpf(ka), n) for n in range(ps + 1)]
+        w = envelope(ka, ps)
         weight = lambda n1, n: w[n] * w[n1]  # noqa: E731
     else:
-        wc = [bessel_weight(mpf(ka) / 2, n) for n in range(ps + 1)]
+        wc = envelope(ka / 2, ps)
         wp = [hankel_weight(mpf(ka) * 4 / mpmath.sqrt(3), n) for n in range(pt + 1)]
         weight = lambda n1, n: wc[n] * wp[n1]  # noqa: E731
     num = den = 0.0

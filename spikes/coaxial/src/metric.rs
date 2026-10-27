@@ -6,11 +6,12 @@
 //! measures the error of the field it produces:
 //!
 //! - **M2L, (S|R)** between boxes of circumradius a: a source multipole of charges within
-//!   a has |Mₙ| ≤ |jₙ(k a)| √(2n + 1) per unit charge, and a local coefficient of degree
-//!   n′ reaches targets within a through |j_{n′}(k a)| √(2n′ + 1). Weight
-//!   uₙ u_{n′}, uₙ = |jₙ(k a)| √(2n + 1).
+//!   a has |Mₙ| ≤ Jₙ(a) √(2n + 1) per unit charge, Jₙ(a) = max_{r ≤ a} |jₙ(k r)|, and a
+//!   local coefficient of degree n′ reaches targets within a through J_{n′}(a) √(2n′ + 1).
+//!   Weight uₙ u_{n′}, uₙ = Jₙ(a) √(2n + 1). For n ≥ |k| a, |jₙ(k r)| grows with r and
+//!   Jₙ(a) = |jₙ(k a)|; below, jₙ oscillates in r and the envelope is needed.
 //! - **M2M and L2L, (R|R) = (S|S)** from a child (circumradius a/2) to its parent
-//!   (circumradius a): the child's multipole is bounded by |jₙ(k a/2)| √(2n + 1), and the
+//!   (circumradius a): the child's multipole is bounded by Jₙ(a/2) √(2n + 1), and the
 //!   parent's multipole of degree n′ is evaluated no closer than the nearest M2L distance
 //!   t_min = 2 w = 4a/√3, through |h_{n′}(k t_min)| √(2n′ + 1). The same weight serves
 //!   L2L with the roles of the indices exchanged (|E_{n′n}| = |E_{nn′}|).
@@ -22,33 +23,49 @@
 use crate::complex::C64;
 use crate::radial;
 
+/// Jₙ(R) = max_{0 < r ≤ R} |jₙ(k r)| for n ≤ n_max, up to the common factor
+/// e^{|Im k| R}, sampled at 16 points per period π/|k| of the oscillation and at least
+/// 16 in all (the maximum of a grid may fall short of the true one by about 2 %).
+pub fn envelope(k: C64, radius: f64, n_max: usize) -> Vec<f64> {
+    let samples = ((16.0 * k.abs() * radius / std::f64::consts::PI).ceil() as usize).max(16);
+    let mut out = vec![0.0f64; n_max + 1];
+    let mut j = vec![C64::ZERO; n_max + 1];
+    for i in 1..=samples {
+        let r = radius * i as f64 / samples as f64;
+        radial::bessel_j(k * r, &mut j);
+        // ĵ = j e^{−|Im k| r}; relative to e^{|Im k| R}: |j| e^{−|Im k| R}.
+        let f = (k.im.abs() * (r - radius)).exp();
+        for (o, v) in out.iter_mut().zip(&j) {
+            *o = o.max(v.abs() * f);
+        }
+    }
+    out
+}
+
 /// Weights of an M2L table at a level with circumradius a: w(n′, n) = uₙ′ uₙ with
-/// uₙ = |ĵₙ(k a)| √(2n + 1) / gⁿ, n ≤ p.
+/// uₙ = Jₙ(a) √(2n + 1) / gⁿ, n ≤ p.
 pub fn m2l_weights(k: C64, a: f64, g: f64, p: usize) -> Vec<f64> {
-    let mut j = vec![C64::ZERO; p + 1];
-    radial::bessel_j(k * a, &mut j);
     let mut s = 1.0;
-    j.iter()
+    envelope(k, a, p)
+        .iter()
         .enumerate()
         .map(|(n, v)| {
-            let u = v.abs() * ((2 * n + 1) as f64).sqrt() / s;
+            let u = v * ((2 * n + 1) as f64).sqrt() / s;
             s *= g;
             u
         })
         .collect()
 }
 
-/// Input weights |ĵₙ(k a/2)| √(2n + 1), n ≤ p_child, and output weights
+/// Input weights Jₙ(a/2) √(2n + 1), n ≤ p_child, and output weights
 /// |ĥₙ′(k t_min)| √(2n′ + 1), n′ ≤ p_parent, of an M2M table (unscaled).
 pub fn m2m_weights(k: C64, a: f64, p_child: usize, p_parent: usize) -> (Vec<f64>, Vec<f64>) {
-    let mut j = vec![C64::ZERO; p_child + 1];
-    radial::bessel_j(k * (0.5 * a), &mut j);
     let mut h = vec![C64::ZERO; p_parent + 1];
     radial::hankel(k * (4.0 * a / 3.0f64.sqrt()), 1.0, &mut h);
-    let input = j
+    let input = envelope(k, 0.5 * a, p_child)
         .iter()
         .enumerate()
-        .map(|(n, v)| v.abs() * ((2 * n + 1) as f64).sqrt())
+        .map(|(n, v)| v * ((2 * n + 1) as f64).sqrt())
         .collect();
     let output = h
         .iter()

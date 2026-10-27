@@ -1,5 +1,5 @@
 //! The acceptance tests of CH0.2 (docs/helmholtz/tasks/CH0.2.md, "Tests that prove it").
-//! The tests over the whole reference are ignored in debug builds' default runs; run them
+//! The tests that build tables to p = 371 are `#[ignore]`d, for debug builds; run them
 //! all with `cargo test -p nd-fmm-spike-coaxial --release -- --include-ignored`.
 
 use nd_fmm_spike_coaxial::coaxial::{Table, Variant, recurse};
@@ -218,6 +218,30 @@ fn agrees_with_the_arbitrary_precision_reference() {
         let scale = |m, a, b| proj.get(m, a, b);
         let (rw, re) = sampled_errors(&set, &input, &output, scale, |m, a, b| table.get(m, a, b));
         let (pw, pe) = sampled_errors(&set, &input, &output, scale, |m, a, b| proj.get(m, a, b));
+        // The normalisation is the projection's full-table maximum; where the recursion is
+        // stable, an independent table must give the same maximum.
+        if set.recursion_stable() {
+            let largest = |f: &dyn Fn(usize, usize, usize) -> C64| {
+                let mut out = 0.0f64;
+                for m in 0..=set.p_src.min(set.p_tgt) {
+                    for (n1, &w_out) in output.iter().enumerate().take(set.p_tgt + 1).skip(m) {
+                        for (n, &w_in) in input.iter().enumerate().take(set.p_src + 1).skip(m) {
+                            out = out.max(f(m, n1, n).abs() * w_out * w_in);
+                        }
+                    }
+                }
+                out
+            };
+            let (a, b) = (
+                largest(&|m, x, y| proj.get(m, x, y)),
+                largest(&|m, x, y| table.get(m, x, y)),
+            );
+            assert!(
+                (a - b).abs() <= 1e-10 * a,
+                "{}: weighted maxima {a:e} {b:e}",
+                set.name
+            );
+        }
         println!(
             "{:<38} p {:>3} -> {:>3}: recursion weighted {rw:.1e} entrywise {re:.1e}; \
              projection weighted {pw:.1e} entrywise {pe:.1e}",
@@ -258,8 +282,9 @@ fn columns(
 }
 
 /// Test 4: the lower triangle n′ ≥ n is closed under the recursions, so both variants
-/// compute it bit for bit alike; the full variant's upper triangle is reported against
-/// the index symmetry (it is where the full variant loses accuracy).
+/// compute it bit for bit alike. The full variant's upper triangle, against the index
+/// symmetry, is wrong by O(1) per entry for (R|R) and right for (S|R); it is also
+/// measured in the FMM weights. The shift is complex (Im z = 0.3 Re z).
 #[test]
 fn the_variants_share_the_lower_triangle() {
     for (op, ka) in [(Op::Regular, 3.0), (Op::Singular, 10.0), (Op::Regular, 0.1)] {
@@ -272,29 +297,56 @@ fn the_variants_share_the_lower_triangle() {
         let start = start_values(op, z, g, 2 * p);
         let tri = columns(&start, g, p, p, Variant::Triangle);
         let full = columns(&start, g, p, p, Variant::Full);
-        let mut upper = 0.0f64;
+        let k = C64::new(ka, 0.3 * ka);
+        let (input, output) = match op {
+            Op::Regular => m2m_weights(k, 1.0, p, p),
+            Op::Singular => {
+                let w = m2l_weights(k, 1.0, g, p);
+                (w.clone(), w)
+            }
+        };
+        let (mut upper, mut num, mut den) = (0.0f64, 0.0f64, 0.0f64);
         for (&(m, n1, n), v) in &full {
-            if n1 >= n {
+            let sym = if n1 >= n {
                 assert_eq!(tri[&(m, n1, n)], *v, "({m}, {n1}, {n})");
+                *v
             } else {
                 let sym = tri[&(m, n, n1)] * if (n + n1) % 2 == 1 { -1.0 } else { 1.0 };
                 let size = v.abs().max(sym.abs());
                 if size > 0.0 {
                     upper = upper.max((*v - sym).abs() / size);
                 }
+                sym
+            };
+            if n1 <= p && n <= p {
+                let w = output[n1] * input[n];
+                num = num.max((*v - sym).abs() * w);
+                den = den.max(sym.abs() * w);
             }
         }
         println!(
-            "{op:?} ka={ka} p={p}: full variant's upper triangle against the symmetry {upper:.2e}"
+            "{op:?} ka={ka} p={p}: full variant's upper triangle against the symmetry {upper:.2e} \
+             per entry, {:.2e} weighted",
+            num / den
         );
+        match op {
+            Op::Regular => assert!(upper > 0.5, "{upper:e}"),
+            Op::Singular => assert!(upper < 1e-12, "{upper:e}"),
+        }
     }
 }
 
-/// Test 2: for real k the (R|R) recursion closes over the reals (imaginary parts exactly
-/// zero), and Re (S|R) = (R|R) (hₗ = jₗ + i yₗ, Gaunt phases ±1) in the M2L weights to
-/// 1e-11: by the recursion at every V-list distance where it is stable (k a ≤ 30), and by
-/// the projection on the inner sphere at k a = 100 and 300 (there also the imaginary
-/// parts of (R|R)).
+/// Test 2: for real k, (R|R) = (S|S) is real. The acceptance item rests on the
+/// reference, whose definition check confirms the addition theorems with these
+/// coefficients (tools/reference.py); here, in f64:
+/// - the (R|R) recursion closes over the reals (imaginary parts exactly zero; structural);
+/// - Re (S|R) = (R|R) (hₗ = jₗ + i yₗ, Gaunt phases ±1) in the M2L weights to 1e-11, by the
+///   recursion at every V-list distance (k a ≤ 30) and by the inner-sphere projection at
+///   k a = 100 and 300; since both methods are linear with real coefficients, this checks
+///   that Re ĥₗ and ĵₗ agree as the start values feed them, not the identity itself;
+/// - the (S|S) = (R|R) table by projection with hₗ on the outer sphere, whose arithmetic
+///   is complex throughout, has imaginary parts below 1e-11 in the M2M weights at
+///   k a = 100 and 300: a check that can fail.
 #[test]
 #[ignore = "release mode: tables to p = 371"]
 fn real_k_regular_coefficients_are_real() {
@@ -345,11 +397,28 @@ fn real_k_regular_coefficients_are_real() {
         });
         projected = (projected.0.max(err), projected.1.max(imag));
     }
+    let mut outer = 0.0f64;
+    for ka in [100.0, 300.0] {
+        let (p, pc) = (degree(ka, 1e-10), degree(ka / 2.0, 1e-10));
+        let k = C64::new(ka, 0.0);
+        let (input, output) = m2m_weights(k, 1.0, pc, p);
+        let rr = regular_regular(k, 0.5, 4.0 / 3.0f64.sqrt(), pc, p, default_nodes(pc, p));
+        let (err, _) = compare(
+            pc,
+            p,
+            &input,
+            &output,
+            |m, a, b| rr.get(m, a, b),
+            |m, a, b| C64::new(rr.get(m, a, b).re, 0.0),
+        );
+        outer = outer.max(err);
+    }
     println!(
         "Re (S|R) against (R|R), M2L weights: recursion {recursion:.2e}; projection {:.2e}, \
-         Im (R|R) {:.2e}",
+         Im (R|R) {:.2e}; outer-sphere (S|S) imaginary parts, M2M weights {outer:.2e}",
         projected.0, projected.1
     );
+    assert!(outer <= 1e-11, "{outer:.2e}");
     assert!(recursion <= 1e-11, "{recursion:.2e}");
     assert!(
         projected.0 <= 1e-11 && projected.1 <= 1e-11,
@@ -357,7 +426,8 @@ fn real_k_regular_coefficients_are_real() {
     );
 }
 
-/// Test 3: for imaginary k, i^{n−n′} Êᵐ_{n′n} is real, degree-relative 1e-14, in f64 and in
+/// Test 3: for imaginary k, i^{n−n′} Êᵐ_{n′n} is real: exactly in f64 (the arithmetic on
+/// purely real and purely imaginary parts produces exact zeros), and to 1e-30 relative in
 /// the reference.
 #[test]
 fn imaginary_k_is_real_after_the_powers_of_i() {
@@ -395,7 +465,7 @@ fn imaginary_k_is_real_after_the_powers_of_i() {
     }
     println!("imaginary k: f64 {worst:.2e}, reference {reference:.2e}");
     assert!(
-        worst <= 1e-14 && reference <= 1e-30,
+        worst == 0.0 && reference <= 1e-30,
         "{worst:.2e} {reference:.2e}"
     );
 }
@@ -420,4 +490,72 @@ fn rectangular_truncation_is_a_block_of_the_square() {
             }
         }
     }
+}
+
+/// Test 6: the whole recursion table against the projection at the threshold proposed in
+/// SPIKE_REPORT.md §8 (Re(k) a = 40, p = 77), every kind of k, M2M and all 15 V-list
+/// distances, in the FMM weights, bound 1e-11. The fixture's samples cannot show this:
+/// they miss the entries where the recursion fails.
+#[test]
+#[ignore = "release mode: 64 tables to p = 77 by projection"]
+fn recursion_is_stable_at_the_proposed_threshold() {
+    let ka = 40.0;
+    let (p, pc) = (degree(ka, 1e-10), degree(ka / 2.0, 1e-10));
+    let mut worst = (0.0f64, String::new());
+    for (name, re, im) in [
+        ("real", 1.0, 0.0),
+        ("complex0.1", 1.0, 0.1),
+        ("complex1", 1.0, 1.0),
+        ("imaginary", 0.0, 1.0),
+    ] {
+        let k = C64::new(re * ka, im * ka);
+        let kt = m2m_kt(ka);
+        let rec = Table::build(
+            &start_values(Op::Regular, C64::new(re * kt, im * kt), 1.0, pc + p),
+            1.0,
+            pc,
+            p,
+        );
+        let proj = regular_regular(k, 0.5, 4.0 / 3.0f64.sqrt(), pc, p, default_nodes(pc, p));
+        let (input, output) = m2m_weights(k, 1.0, pc, p);
+        let (err, _) = compare(
+            pc,
+            p,
+            &input,
+            &output,
+            |m, a, b| proj.get(m, a, b),
+            |m, a, b| rec.get(m, a, b),
+        );
+        if err > worst.0 {
+            worst = (err, format!("{name} M2M"));
+        }
+        let g = scale(k.abs());
+        let w = m2l_weights(k, 1.0, g, p);
+        for d2 in nd_fmm_spike_coaxial::config::DISTANCES2 {
+            let kt = m2l_kt(ka, d2);
+            let rec = Table::build(
+                &start_values(Op::Singular, C64::new(re * kt, im * kt), g, 2 * p),
+                g,
+                p,
+                p,
+            );
+            let proj = singular_regular(k, m2l_kt(1.0, d2), 1.0, g, p, p, default_nodes(p, p));
+            let (err, _) = compare(
+                p,
+                p,
+                &w,
+                &w,
+                |m, a, b| proj.get(m, a, b),
+                |m, a, b| rec.get(m, a, b),
+            );
+            if err > worst.0 {
+                worst = (err, format!("{name} M2L d2={d2}"));
+            }
+        }
+    }
+    println!(
+        "k a = 40, p {pc} -> {p}: worst weighted {:.2e} ({})",
+        worst.0, worst.1
+    );
+    assert!(worst.0 <= 1e-11, "{worst:?}");
 }

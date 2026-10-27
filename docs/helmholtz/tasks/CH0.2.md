@@ -115,6 +115,20 @@ All in f64 against the reference, one thread,
 6. **Definition** (in the reference tool, before it writes the fixture): the addition
    theorems at n ≤ 6 to 10⁻⁴⁰.
 
+As built (after the self-review): the weights of the FMM-weighted error are the envelope
+max_{r ≤ a} |jₙ(k r)|, not |jₙ(k a)|, which is no bound for n < |k| a. Added: test 6, the
+whole recursion table against the projection at the proposed threshold k a = 40, every
+kind of k, M2M and all 15 distances, bound 10⁻¹¹ (the fixture has nothing between k a = 30
+and 100, and its samples miss the unstable entries); in test 2 the outer-sphere
+projection's imaginary parts, the f64 reality check that can fail (the recursion's zeros
+are structural, and Re (S|R) = (R|R) only checks the start values); in test 1 a check
+that the normalising maximum agrees between projection and recursion; in test 4 the
+weighted error of the full variant (negligible) and assertions. Dropped as separate
+checks, covered otherwise: the reference's explicit symmetry check to 10⁻³⁰ and its
+imaginary parts of (R|R) and (S|S) (real by the formula; the definition check covers
+both at n ≤ 6, and test 1 reads 8,375 upper-triangle samples through the symmetry).
+`examples/nodes.rs` records the quadrature convergence of the projection.
+
 ## Checks
 
 `/verify` (no default member changes: format, Clippy of the workspace with all targets,
