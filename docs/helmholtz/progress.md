@@ -62,3 +62,29 @@ request, using this template:
 - Laplace: not touched (no crate, manifest or lock file changed).
 - Follow-ups: S9 (CH0.9) is unblocked; its FFTW timings on the M3 Max are scalar code (R22),
   an input to D7.
+
+## 2026-10-27: CH0.1 S1: rotation blocks at large degree
+- Done: the spike `spikes/rotation-blocks/` (a member outside the default members): the
+  Gumerov–Duraiswami y-rotation blocks in the orthonormal real basis (N Rₙ in the
+  storage of CONVENTIONS §3.6), in a compact cos/sin layout, with z-y-z blocks built
+  from them; an mpmath reference (`tools/reference.py`, Wigner's sum at 0.61 n + 40
+  digits, the real-basis map checked against the definition). Report
+  `spikes/rotation-blocks/SPIKE_REPORT.md`.
+- Tests: six in `tests/accuracy.rs`, all passing in release: 12,914 sampled reference
+  entries at n ≤ 1000 (worst 5.0e-15 over six angles, 3.4e-15 at the octree's); ‖O Oᵀ − I‖ ≤ 4.4e-14 to
+  n = 1000; N-conjugated `rotation::blocks` at p ≤ 30 (1.8e-14); the definition at
+  n ≤ 20; the β/π − β sign rule to n = 1000 (6.7e-15, not bit for bit); the group
+  property at n = 500 (1.2e-14). Conjugated blocks: 1e-14 lost from n = 28–43, 1e-8
+  from n = 94–140, non-finite at 515. Time: 1.8 ns per stored value (3.8 ms at p = 144,
+  1.2 s at p = 1000), about 4.5× faster than `rotation::blocks` + N at 20 ≤ p ≤ 82
+  (2.2× per stored value; the compact y-rotation set has half the values).
+- Checks: ran `/verify` on the M3 Max (default and workspace checks, `cargo doc`, the
+  licence check, no fftw-sys; the spike's tests with `--include-ignored` in release);
+  `reference.py --check` byte for byte. No machine runs. Nothing pending.
+- Decisions: signed off 2026-10-27, as recommended (report §8): GD at every degree for the
+  Helmholtz tables, the conjugated blocks only as the test reference at p ≤ 30; the
+  generate-or-store threshold of §5.2/§7 a memory rule from the node budget, with the
+  per-call generation cost (large near the root) measured in CH0.8 or CH2.2.
+- Laplace: not touched (only the spike, its member entry and its lock-file entry).
+- Follow-ups: CH1.2 implements GD with the wedge-only recursion and the telescoped,
+  exponent-carrying Legendre functions (report §2.3); §3.15 item 5 takes the sign rule.

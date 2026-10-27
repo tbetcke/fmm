@@ -86,7 +86,8 @@ the optional FFTW wrapper of the φ step behind its feature.
 **Gate:** S1–S9 answered, each with a `SPIKE_REPORT.md`; the decisions they prepare (D3,
 D7, D10, D11, D12) put to the user.
 
-- [ ] **CH0.1 S1: rotation blocks at large degree.** The Gumerov–Duraiswami (2014) recursion
+- [x] **CH0.1 S1: rotation blocks at large degree.** Report:
+  `spikes/rotation-blocks/SPIKE_REPORT.md`. The Gumerov–Duraiswami (2014) recursion
   in the orthonormal real basis. *Done when:* orthogonal and in agreement with an
   arbitrary-precision reference to p = 1000; in agreement with N-conjugated
   `nd_fmm_math::rotation::blocks` at p ≤ 30; the degree up to which conjugation stays

@@ -3011,6 +3011,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nd-fmm-spike-rotation-blocks"
+version = "0.0.0"
+dependencies = [
+ "nd-fmm-math",
+ "serde_json",
+]
+
+[[package]]
 name = "nd-fmm-tables"
 version = "0.1.0-dev"
 dependencies = [
