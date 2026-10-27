@@ -71,10 +71,10 @@ pub fn compare(
 ) -> (f64, f64) {
     let (mut num, mut den, mut entry) = (0.0f64, 0.0f64, 0.0f64);
     for m in 0..=p_src.min(p_tgt) {
-        for n1 in m..=p_tgt {
-            for n in m..=p_src {
+        for (n1, &w_out) in output.iter().enumerate().take(p_tgt + 1).skip(m) {
+            for (n, &w_in) in input.iter().enumerate().take(p_src + 1).skip(m) {
                 let (e, g) = (exact(m, n1, n), got(m, n1, n));
-                let w = output[n1] * input[n];
+                let w = w_out * w_in;
                 let err = (g - e).abs();
                 num = num.max(err * w);
                 den = den.max(e.abs() * w);

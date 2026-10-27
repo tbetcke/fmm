@@ -22,7 +22,7 @@ use crate::complex::C64;
 /// aᵐₙ, zero for n < m.
 #[inline]
 fn a(n: usize, m: usize) -> f64 {
-    if n + 1 <= m {
+    if n < m {
         return 0.0;
     }
     let (n, m) = (n as f64, m as f64);

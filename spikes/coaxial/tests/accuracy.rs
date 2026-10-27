@@ -181,9 +181,9 @@ fn sampled_errors(
 ) -> (f64, f64) {
     let mut den = 0.0f64;
     for m in 0..=set.p_src.min(set.p_tgt) {
-        for n1 in m..=set.p_tgt {
-            for n in m..=set.p_src {
-                den = den.max(scale(m, n1, n).abs() * output[n1] * input[n]);
+        for (n1, &w_out) in output.iter().enumerate().take(set.p_tgt + 1).skip(m) {
+            for (n, &w_in) in input.iter().enumerate().take(set.p_src + 1).skip(m) {
+                den = den.max(scale(m, n1, n).abs() * w_out * w_in);
             }
         }
     }
