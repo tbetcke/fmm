@@ -39,6 +39,8 @@ jobs:
           OPENBLAS_NUM_THREADS: "1"
           OMP_NUM_THREADS: "1"
           # The runner has 2 physical cores, and Open MPI gives one slot per core: allow
-          # the 3 ranks on them (first run of this script, 2026-10-08).
+          # the 3 ranks on them (first run of this script, 2026-10-08). Open MPI 4 reads the
+          # first variable, Open MPI 5 (ubuntu-26.04) the second.
           OMPI_MCA_rmaps_base_oversubscribe: "1"
+          PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
         run: .github/scripts/run-examples.sh 3
