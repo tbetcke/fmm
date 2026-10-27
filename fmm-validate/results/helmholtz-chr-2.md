@@ -2,7 +2,7 @@
 
 Helmholtz task CHR.2 ([docs/helmholtz/tasks/CHR.2.md](../../docs/helmholtz/tasks/CHR.2.md));
 proposal [docs/design/helmholtz-fmm-proposal.md](../../docs/design/helmholtz-fmm-proposal.md)
-§10 CHR.2, §2 constraint 1, §6.7 and R21. Measured on 2026-10-26 from branch
+§10 CHR.2, §2 constraint 1, §6.7 and R21. Measured on 2026-10-26 and 27 from branch
 `tbetcke/h-chr-2` against `main` at `f4a2c71` (a detached worktree with its own target
 directory, `detached-f4a2c71` on the remote machines), release builds, rustc 1.99.0, every
 BLAS thread variable at 1.
@@ -19,7 +19,8 @@ BLAS thread variable at 1.
    fixtures, the bit-identity and the rank-invariance tests pass.
 3. **Laplace's benchmarks (D9)**: within noise on the M3 Max (all nine) and in f64 on
    Kathleen; Kathleen's three f32 rows are 2.0–3.4 % *faster* than `main`, which passes
-   under D9 as clarified on 2026-10-26 (one-sided, §7). locust pending.
+   under D9 as clarified on 2026-10-26 (one-sided, §7); within noise on locust (all
+   twelve, host and CUDA).
 4. **The licence check** (`deny.toml`, CI job `run-licence-check`) passes on the default
    set and fails when FFTW enters it, on fftw-sys stated as `GPL-2.0-or-later` (§3).
 5. **cmake**: no crate of the workspace runs it (a trap build, §4); CI drops it, locust's
@@ -86,7 +87,8 @@ the default graph mentions cmake (libffi-sys builds with autotools). The trap, K
 608744 (node-c11a-139, 3.5 min): with a `cmake` first on `PATH` that records every call
 and exits 127, in a fresh target directory, `cargo build --all-targets` on the default
 members and then `cargo check --workspace --all-targets` (the spikes included) both
-succeed and no call is recorded (no `calls.txt`). **No crate of the workspace runs cmake.**
+succeed and no call is recorded (no `calls.txt`); on locust (aarch64) the same trap on the
+default members' `build --all-targets` (113 crates from scratch) records no call either. **No crate of the workspace runs cmake.**
 So CI's three package lists (`run-tests`, `run-tests-mpi`, `run-examples`) drop it, and the
 CI run of the pull request repeats the check on GitHub's runner. locust's spack `cmake`
 and Kathleen's module stay, with their comments corrected: no crate needs them, and
@@ -106,14 +108,14 @@ dropping the spack entry means re-concretising `spack.lock`, a change of its own
 | nd-fmm-kernels clippy with `cpu,metal` | M3 Max | not run (the M3 Max was loaded by other jobs); nd-fmm-kernels has no RLST in its graph and did not change; its `cpu` Clippy and `cuda` check passed on Kathleen, `cpu,cuda` on locust |
 | nd-fmm-kernels: clippy `cpu`, `cpu,cuda`; `check --features cuda`; CPU-runtime tests; CUDA tests `--include-ignored` | Kathleen 608726; locust | passed |
 | nd-fmm-exec: `check --features cuda`; clippy `cpu,cuda`; `test --features cuda --release` | Kathleen 608726; locust | passed |
-| nd-fmm-exec: `--features cuda --release -- --ignored` | locust | pending (running) |
+| nd-fmm-exec: `--features cuda --release -- --ignored` | locust | passed: every executable ok (`accuracy` 411 s, `adaptive` 196 s, `device_cuda` 237 s, `device_fmm_gate` 1186 s, `device_ranks` 72 s, `dipoles` 363 s, `multi_rank` 2567 s, `operator`'s seven CUDA tests) |
 | MPI list at 2 and 4 ranks (`mpi_regressions`, `mpi_exec`, `mpi_threading`, `invariance`, the seven nd-octree examples) | M3 Max | passed (`mpi_exec` 282 s at 2 ranks, near the script's 300 s default) |
 | the same | locust | not run: dropped by the user on 2026-10-26 to shorten the locust run, covered on the M3 Max and Kathleen |
 | `correctness.sbatch`: the MPI list at 2, 4, 8 and 80 ranks, invariance at 80 against 40, 20, 10, the `scaling` smoke run | Kathleen 608727, 2 nodes `test` (node-c11b-[037-038]), 46 min | passed |
 | weekly examples, `.github/scripts/run-examples.sh 3` | Kathleen 608733 (`run.sbatch`, one node) | 9 passed, 0 failed |
 | `cargo tree -e normal` on the default members: no fftw-sys; one rlst (0.12.0) | M3 Max | passed |
 | `cargo deny --locked check licenses`; the FFTW negative check | M3 Max | passed; fails as intended |
-| the cmake trap: default members `build --all-targets`, `check --workspace --all-targets`, a failing `cmake` first on `PATH` | Kathleen 608744 | passed, no call |
+| the cmake trap: default members `build --all-targets`, `check --workspace --all-targets`, a failing `cmake` first on `PATH` | Kathleen 608744; locust (default members only) | passed, no call |
 | `cargo upgrades` | M3 Max | no `rlst` (on `main`: rlst in nd-fmm-plan, nd-octree, nd-fmm-exec); left: the cubecl pins (0.11.0 → 0.11.3) |
 
 ## 6. Laplace's benchmarks (D9)
@@ -168,7 +170,32 @@ the two binaries or drift, not a change in Laplace's work. Under D9 as clarified
 
 ### locust
 
-Pending: `tools/bench/run.sh --backend host,cuda --precision f32,f64 --degree 3,6,8`, A B A B A B, after the checks (`/data/ucahtbe/logs/chr2/` on locust).
+After the checks, in `/data/ucahtbe/logs/chr2/` (`run.sh`, then `run2.sh`); locust idle
+before timing (load 4.5 from the two builds, GPU unused, no other user's process).
+`--backend host,cuda --precision f32,f64 --degree 3,6,8`, Neoverse-V2 (72 cores) and the
+H100.
+
+| backend | precision | p | strategy | main medians (ms) | branch medians (ms) | spread (ms) | Δ median of medians (ms) | within noise | errors equal |
+| --- | --- | ---: | --- | --- | --- | ---: | ---: | --- | --- |
+| host | f32 | 3 | Batched | 45.57, 44.91, 46.42 | 45.26, 45.76, 50.61 | 1.51 | +0.19 (+0.4 %) | yes | yes |
+| host | f32 | 6 | Batched | 58.87, 59.00, 136.66 | 58.30, 58.80, 70.41 | 77.80 | -0.20 (-0.3 %) | yes | yes |
+| host | f32 | 8 | PlaneWave | 65.49, 65.16, 150.77 | 65.43, 65.31, 80.19 | 85.62 | -0.06 (-0.1 %) | yes | yes |
+| host | f64 | 3 | Batched | 78.79, 79.76, 80.08 | 79.56, 79.72, 100.10 | 1.29 | -0.04 (-0.1 %) | yes | yes |
+| host | f64 | 6 | Batched | 99.16, 100.50, 101.30 | 99.60, 98.86, 112.40 | 2.14 | -0.90 (-0.9 %) | yes | yes |
+| host | f64 | 8 | PlaneWave | 101.97, 104.53, 107.62 | 103.94, 104.86, 140.42 | 5.65 | +0.33 (+0.3 %) | yes | yes |
+| cuda | f32 | 3 | Dense | 21.96, 21.70, 24.40 | 22.14, 21.46, 36.39 | 2.71 | +0.18 (+0.8 %) | yes | yes |
+| cuda | f32 | 6 | Dense | 24.93, 25.44, 26.48 | 25.77, 24.52, 34.03 | 1.55 | +0.34 (+1.3 %) | yes | yes |
+| cuda | f32 | 8 | Dense | 30.87, 30.94, 35.76 | 30.43, 31.32, 41.01 | 4.89 | +0.38 (+1.2 %) | yes | yes |
+| cuda | f64 | 3 | Dense | 43.48, 39.70, 45.63 | 43.73, 39.84, 42.00 | 5.93 | -1.48 (-3.4 %) | yes | yes |
+| cuda | f64 | 6 | Dense | 48.19, 45.16, 82.37 | 48.66, 45.35, 49.96 | 37.20 | +0.47 (+1.0 %) | yes | yes |
+| cuda | f64 | 8 | Dense | 58.06, 54.63, 95.52 | 58.30, 54.91, 59.31 | 40.89 | +0.24 (+0.4 %) | yes | yes |
+
+All twelve within noise. The third pair was disturbed on both sides (`main`'s f32 p = 6
+at 136.7 ms against 59.0, the branch's f64 p = 8 at 140.4 against 104.9; the cause is not
+recorded), which inflates some spreads to 37–86 ms and so weakens the rule for those rows.
+On the two undisturbed pairs alone every benchmark differs from `main` by at most
+1.1 % and is within `main`'s two-run spread or faster: the same verdict without the
+disturbance.
 
 ## 7. Signed off
 

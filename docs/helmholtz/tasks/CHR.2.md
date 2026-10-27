@@ -130,15 +130,10 @@ What they decide: whether CHR.2 passes or falls back to 0.10.2.
 
 ## Pending runs
 
-- **locust** (`/data/ucahtbe/logs/chr2/`, `summary.txt`; `run.sh`, then `run2.sh` after the
-  user dropped locust's MPI list on 2026-10-26): `cargo test -p nd-fmm-exec --features cuda
-  --release -- --ignored` (running), the cmake trap build, the D9 benchmark
-  (`bench-{A,B}{1,2,3}.md`). Decides constraint 1 on locust and the cmake check on aarch64.
-  Done there already: fmt, clippy, test, doc, the strict workspace checks, nd-fmm-simd's
-  ignored tests, nd-fmm-kernels' and nd-fmm-exec's CUDA checks and tests.
-- Done elsewhere: M3 Max (every check, MPI 2 and 4, the bits, D9); Kathleen jobs 608725
-  (D9), 608726 (check; only the known `spikes/p2p-simd` failures), 608727 (correctness, 2
-  nodes), 608733 (weekly examples).
+None. locust finished on 2026-10-27 at 00:06 UTC (`/data/ucahtbe/logs/chr2/summary.txt`): the
+ignored CUDA tests, the cmake trap and the D9 benchmark passed; its MPI list was dropped by
+the user. Kathleen: 608725 (D9), 608726 (check), 608727 (correctness), 608733 (examples),
+608744 (cmake trap).
 
 ## Open questions
 
