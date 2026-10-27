@@ -37,6 +37,8 @@ fi
 
 probe=$root/target/fftw-probe
 mkdir -p "$probe"
+# No step's log from an earlier run may reach this run's summary.
+rm -f "$probe"/*.log
 failed=
 
 section() {
@@ -117,7 +119,9 @@ else
 fi
 
 section "RLST's tests with FFTW"
-rlst_version=$(sed -n 's/^rlst = "\(.*\)"$/\1/p' "$root/Cargo.toml" | head -1)
+# The pin of `[workspace.dependencies]`, not the `[patch]` entry further down.
+rlst_version=$(sed -n '/^\[workspace.dependencies\]/,/^\[/s/^rlst = "\(.*\)"$/\1/p' \
+    "$root/Cargo.toml" | head -1)
 registry=${CARGO_HOME:-$HOME/.cargo}/registry/src
 # The registry's unpacked copy of this RLST, if any.
 registry_copy() {
@@ -131,14 +135,18 @@ if [ -z "$source_dir" ]; then
     (cd "$root" && cargo fetch --locked >/dev/null)
     source_dir=$(registry_copy)
 fi
-echo "- RLST $rlst_version from $source_dir"
-copy=$probe/rlst-$rlst_version
-rm -rf "$copy"
-cp -R "$source_dir" "$copy"
-chmod -R u+w "$copy"
-# A package of its own: without `[workspace]`, cargo would take it for an undeclared
-# member of nd-fmm's workspace.
-cat >>"$copy/Cargo.toml" <<'EOF'
+if [ -z "$rlst_version" ] || [ -z "$source_dir" ]; then
+    echo "(no RLST source: version '$rlst_version' not found in the cargo registry)"
+    failed="$failed rlst-source"
+else
+    echo "- RLST $rlst_version from $source_dir"
+    copy=$probe/rlst-$rlst_version
+    rm -rf "$copy"
+    cp -R "$source_dir" "$copy"
+    chmod -R u+w "$copy"
+    # A package of its own: without `[workspace]`, cargo would take it for an undeclared
+    # member of nd-fmm's workspace.
+    cat >>"$copy/Cargo.toml" <<'EOF'
 
 [[example]]
 name = "fftw_version"
@@ -147,7 +155,7 @@ required-features = ["fftw"]
 
 [workspace]
 EOF
-cat >"$copy/examples/fftw_version.rs" <<'EOF'
+    cat >"$copy/examples/fftw_version.rs" <<'EOF'
 //! Written by nd-fmm's tools/fftw/probe.sh: FFTW's version string, as RLST reads it from the
 //! library it loaded.
 
@@ -160,16 +168,18 @@ fn main() {
     println!("rlst::fftw::version(): {}", rlst::fftw::version());
 }
 EOF
-export CARGO_TARGET_DIR="$probe/target"
-run rlst-tests cargo test --manifest-path "$copy/Cargo.toml" --locked --features fftw_system
+    export CARGO_TARGET_DIR="$probe/target"
+    run rlst-tests cargo test --manifest-path "$copy/Cargo.toml" --locked --no-fail-fast \
+        --features fftw_system
 
-section "rlst::fftw::version()"
-run rlst-version cargo run --manifest-path "$copy/Cargo.toml" --locked --quiet --features fftw_system \
-    --example fftw_version
-fftw_libraries "$CARGO_TARGET_DIR/debug/examples/fftw_version"
+    section "rlst::fftw::version()"
+    run rlst-version cargo run --manifest-path "$copy/Cargo.toml" --locked --quiet \
+        --features fftw_system --example fftw_version
+    fftw_libraries "$CARGO_TARGET_DIR/debug/examples/fftw_version"
+fi
 
 section "Summary"
-echo "- pkg-config fftw3 fftw3f: $(paste -sd' ' "$probe/pkg-config.log")"
+echo "- pkg-config fftw3 fftw3f: $(paste -sd' ' "$probe/pkg-config.log" 2>/dev/null)"
 sed 's/^/- /' "$probe/c-version.log" 2>/dev/null
 echo "- $(cat "$probe/rlst-version.log" 2>/dev/null)"
 awk '/^test result:/ { executables++; passed += $4; failed += $6 }
@@ -178,7 +188,7 @@ awk '/^test result:/ { executables++; passed += $4; failed += $6 }
      END {
          printf "- RLST'"'"'s tests: %d passed, %d failed in %d harness runs; ", passed, failed, executables
          printf "fftw_check_allocations %d checks ok; %s\n", allocations, determinism
-     }' "$probe/rlst-tests.log"
+     }' "$probe/rlst-tests.log" 2>/dev/null
 if [ -n "$failed" ]; then
     echo "FAILED:$failed"
     exit 1

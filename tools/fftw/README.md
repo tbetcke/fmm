@@ -23,9 +23,12 @@ The probe prints, as Markdown:
    bits across fresh processes) and `fftw_check_allocations` included. The registry's copy
    of the workspace's RLST is copied to `target/fftw-probe/` and built there as a package
    of its own, with RLST's packaged `Cargo.lock`, so nothing enters the workspace;
-5. `rlst::fftw::version()`, from an example added to that copy, and the FFTW libraries the
-   binaries load (`ldd`, `otool -L`): a build against one FFTW that loads another at run
-   time shows here;
+5. `rlst::fftw::version()`, from an example added to that copy, and the FFTW libraries
+   that example loads (`ldd`, `otool -L`), as the C program's in step 3: a build against
+   one FFTW that loads another at run time shows here. On Linux the example lists only
+   `libfftw3`, since the linker drops the single-precision library it does not call; the
+   C program lists both;
 6. a summary; the exit status is non-zero if a step failed.
 
-Each step's output is also kept in `target/fftw-probe/<step>.log`.
+The output of steps 2 to 5 is also kept in `target/fftw-probe/<step>.log` (removed at the
+start of each run).

@@ -44,7 +44,7 @@ determinism test included, pass against it.
   double one); copies the registry's `rlst-<the workspace pin>` into
   `target/fftw-probe/`, adds an example that prints `rlst::fftw::version()`, runs RLST's
   own `cargo test --locked --features fftw_system` and that example, and lists the FFTW
-  libraries the test binary loads (`ldd` or `otool -L`), so that a build against spack's
+  libraries the C program and the example load (`ldd` or `otool -L`), so that a build against spack's
   FFTW that loads the RPM's 3.3.8 at run time shows. Nothing enters the workspace or its
   lock file; RLST's packaged `Cargo.lock` is used with `--locked`.
 - `tools/fftw/README.md` (new, short): what the probe does and how to run it on each
