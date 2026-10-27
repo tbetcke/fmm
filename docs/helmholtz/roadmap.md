@@ -92,7 +92,8 @@ D7, D10, D11, D12) put to the user.
   arbitrary-precision reference to p = 1000; in agreement with N-conjugated
   `nd_fmm_math::rotation::blocks` at p ≤ 30; the degree up to which conjugation stays
   accurate; the relation of the β and π − β blocks; time per block set. *Needs:* –.
-- [ ] **CH0.2 S2: coaxial coefficients.** (S|R), (S|S), (R|R) by recursion. *Done when:*
+- [x] **CH0.2 S2: coaxial coefficients.** Report: `spikes/coaxial/SPIKE_REPORT.md`.
+  (S|R), (S|S), (R|R) by recursion. *Done when:*
   relative errors against an arbitrary-precision reference for p and k a up to 300, real,
   complex and imaginary k; the imaginary parts of (S|S) and (R|R) zero to round-off for real
   k; the index symmetry that halves the tables. *Needs:* –.
