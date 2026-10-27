@@ -1,0 +1,12 @@
+[package]
+name = "nd-fmm-spike-coaxial"
+version = "0.0.0"
+description = "Throwaway study: coaxial translation coefficients (S|R), (S|S), (R|R) of the Helmholtz FMM by the Gumerov-Duraiswami recursions in the real orthonormal basis (Helmholtz CH0.2, spike S2)."
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dev-dependencies]
+# The arbitrary-precision reference, fixtures/reference.json.
+serde_json.workspace = true
