@@ -2,7 +2,7 @@
 //! `trees` owns the one MPI initialisation of this executable; the others need no MPI.
 //! Run them with `cargo test -p nd-fmm-spike-census --release`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::f64::consts::PI;
 
 use mpi::traits::Communicator;
@@ -89,34 +89,84 @@ fn check_against_brute_force<C: mpi::traits::CommunicatorCollectives>(
         let occupied = boxes.iter().filter(|&&k| n(k) > 0).count() as u64;
         assert_eq!(c.occupied, occupied, "{name}: occupied on level {l}");
 
-        // V, by distance class, between occupied boxes.
+        // V: every entry of the plan's rows, and between occupied boxes by distance
+        // class, by reflection class (34 tuples (min(|x|, |y|), max(|x|, |y|), |z|), built
+        // here), and the masks of distance classes per source and per target box.
         let mut v = [0u64; NDIST];
+        let mut v_entries = 0;
+        let mut by_class: BTreeMap<[i64; 3], u64> = BTreeMap::new();
+        for d in V_LIST_DIRECTIONS {
+            let (a, b) = (d[0].abs(), d[1].abs());
+            by_class.insert([a.min(b), a.max(b), d[2].abs()], 0);
+        }
+        let mut source_mask: HashMap<MortonKey, u16> = HashMap::new();
+        let mut target_masks: BTreeMap<u16, u64> = BTreeMap::new();
         if l >= 2 {
-            for &b in boxes.iter().filter(|&&b| n(b) > 0) {
+            for &b in boxes {
                 let p = morton::parent(b).unwrap();
-                for &s in boxes.iter().filter(|&&s| n(s) > 0) {
+                let mut target_mask = 0u16;
+                for &s in boxes {
                     let ps = morton::parent(s).unwrap();
-                    if s != b && (adjacent(ps, p) || ps == p) && !adjacent(s, b) {
-                        let (_, ib) = morton::decode(b);
-                        let (_, is) = morton::decode(s);
-                        let d = [0, 1, 2].map(|i| ib[i] as i64 - is[i] as i64);
-                        v[distance_class(d)] += 1;
+                    if s == b || !(adjacent(ps, p) || ps == p) || adjacent(s, b) {
+                        continue;
                     }
+                    v_entries += 1;
+                    if n(b) == 0 || n(s) == 0 {
+                        continue;
+                    }
+                    let (_, ib) = morton::decode(b);
+                    let (_, is) = morton::decode(s);
+                    let d = [0, 1, 2].map(|i| ib[i] as i64 - is[i] as i64);
+                    let dc = distance_class(d);
+                    v[dc] += 1;
+                    let (x, y) = (d[0].abs(), d[1].abs());
+                    *by_class.get_mut(&[x.min(y), x.max(y), d[2].abs()]).unwrap() += 1;
+                    target_mask |= 1 << dc;
+                    *source_mask.entry(s).or_default() |= 1 << dc;
+                }
+                if target_mask != 0 {
+                    *target_masks.entry(target_mask).or_default() += 1;
                 }
             }
         }
+        let mut source_masks: BTreeMap<u16, u64> = BTreeMap::new();
+        for &m in source_mask.values() {
+            *source_masks.entry(m).or_default() += 1;
+        }
+        assert_eq!(by_class.len(), NCLASSES);
+        assert_eq!(c.v_entries, v_entries, "{name}: V entries on level {l}");
         assert_eq!(
             c.v_by_distance, v,
             "{name}: V pairs per distance on level {l}"
         );
+        assert_eq!(
+            c.v_by_class,
+            by_class.values().copied().collect::<Vec<u64>>(),
+            "{name}: V pairs per reflection class on level {l}"
+        );
+        assert_eq!(
+            c.source_masks, source_masks,
+            "{name}: source masks on level {l}"
+        );
+        assert_eq!(
+            c.target_masks, target_masks,
+            "{name}: target masks on level {l}"
+        );
 
-        // U, P2P, W and X.
+        // Leaves, U, P2P, W and X, every entry and between occupied boxes.
         let (mut u, mut pairs, mut w, mut w_points, mut x, mut x_points) = (0, 0, 0, 0, 0, 0);
+        let (mut u_all, mut w_all, mut x_all) = (0, 0, 0);
+        let (mut leaves, mut occupied_leaves, mut leaf_points, mut max_leaf_points) = (0, 0, 0, 0);
         for &b in boxes.iter().filter(|&&b| is_leaf(b)) {
             let nb = n(b);
+            leaves += 1;
+            occupied_leaves += u64::from(nb > 0);
+            leaf_points += nb;
+            max_leaf_points = max_leaf_points.max(nb);
             pairs += nb * nb;
             for &s in &leaf_set {
                 if adjacent(s, b) {
+                    u_all += 1;
                     pairs += nb * n(s);
                     if nb > 0 && n(s) > 0 {
                         u += 1;
@@ -127,25 +177,44 @@ fn check_against_brute_force<C: mpi::traits::CommunicatorCollectives>(
                 if morton::level(s) > l
                     && adjacent(morton::parent(s).unwrap(), b)
                     && !adjacent(s, b)
-                    && nb > 0
-                    && n(s) > 0
                 {
-                    w += 1;
-                    w_points += nb;
-                }
-            }
-        }
-        if l >= 2 {
-            for &b in boxes.iter().filter(|&&b| n(b) > 0) {
-                let p = morton::parent(b).unwrap();
-                for &s in &leaf_set {
-                    if morton::level(s) == l - 1 && adjacent(s, p) && !adjacent(s, b) && n(s) > 0 {
-                        x += 1;
-                        x_points += n(s);
+                    w_all += 1;
+                    if nb > 0 && n(s) > 0 {
+                        w += 1;
+                        w_points += nb;
                     }
                 }
             }
         }
+        if l >= 2 {
+            for &b in boxes {
+                let p = morton::parent(b).unwrap();
+                for &s in &leaf_set {
+                    if morton::level(s) == l - 1 && adjacent(s, p) && !adjacent(s, b) {
+                        x_all += 1;
+                        if n(b) > 0 && n(s) > 0 {
+                            x += 1;
+                            x_points += n(s);
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            (
+                c.leaves,
+                c.occupied_leaves,
+                c.leaf_points,
+                c.max_leaf_points
+            ),
+            (leaves, occupied_leaves, leaf_points, max_leaf_points),
+            "{name}: leaves on level {l}"
+        );
+        assert_eq!(
+            (c.u_entries, c.w_entries, c.x_entries),
+            (u_all, w_all, x_all),
+            "{name}: U, W and X entries on level {l}"
+        );
         assert_eq!(c.u_entries_occupied, u, "{name}: U on level {l}");
         assert_eq!(c.p2p_pairs, pairs, "{name}: P2P pairs on level {l}");
         assert_eq!(

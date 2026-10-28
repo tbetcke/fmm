@@ -23,10 +23,16 @@ pub enum Workload {
     /// W2: W1 with the polar cap of half-angle 30° at ten times the density.
     W2,
     /// W3: uniform random points in the cube, `n` of them.
-    W3 { n: usize },
-    /// W4: a distribution of the Laplace gates (laplace-fmm-plan §8.2) at fixed `n`.
+    W3 {
+        /// The number of points.
+        n: usize,
+    },
+    /// W4: a distribution of the Laplace gates (laplace-fmm-plan §8.2) at fixed `n`, with
+    /// this spike's seed.
     W4 {
+        /// The distribution.
         distribution: Distribution,
+        /// The number of points.
         n: usize,
     },
 }

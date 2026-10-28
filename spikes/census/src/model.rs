@@ -1,6 +1,7 @@
 //! The first-pass model: the formula p of proposal §3.5, the bound and the rule of §3.6,
 //! the grid sizes of §6.7 and the memory and operation counts of §7, applied to a
-//! [`Census`]. Every decision is a function of k, the level and ε only (constraint 9).
+//! [`Census`]. The passing classes are a function of k, the level and ε only; the regime
+//! also of the global tree's counts, never of charges or a rank's share (constraint 9).
 //!
 //! Operation counts are complex multiply-adds with §7's conventions: an RCR translation
 //! 2P³ (P1³ + P2³ when rectangular, from degree p1 to p2), a diagonal pair (2P − 1) N_φ, a

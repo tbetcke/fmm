@@ -49,16 +49,16 @@ A spike only; no workspace crate, convention, table or Laplace path changes.
 
 - `spikes/census/` (new, package `nd-fmm-spike-census`), a workspace member outside
   `default-members` like CH0.1–CH0.3's spikes. Dependencies, all already in
-  `[workspace.dependencies]` and the lock file: `nd-octree`, `nd-fmm-plan`, `mpi`, `rlst`
-  (for `points_to_morton`'s array), `nd-fmm-validate` (W4's generators, bit for bit the
-  Laplace gates' points); dev-dependency `serde_json` (the radial fixture). No new
+  `[workspace.dependencies]` and the lock file: `nd-octree`, `nd-fmm-plan`, `mpi`,
+  `nd-fmm-validate` (W4's generators; `morton::from_physical_point` replaces
+  `points_to_morton`, so no `rlst`); dev-dependency `serde_json` (the radial fixture). No new
   dependency; the root `Cargo.toml` gains only the member entry, `Cargo.lock` the
   package entry.
   - `src/workloads.rs`: W1 (Fibonacci sphere of diameter D, N = ⌈7.96 (kD)²⌉, i.e.
     100 per λ²), W2 (W1 with the polar cap of half-angle 30° replaced by the same
     construction at ten times the density), W3 (uniform random in the cube, 1000 per λ³
     up to kD = 100; 10⁶ at kD = 200 and 500), W4 (the four `Distribution`s at N = 10⁵ and
-    10⁶). Each in a root cube of side D, given explicitly, so kD is the root's side times k.
+    10⁶, the gates' generators with this spike's seed). Each in a root cube of side D, given explicitly, so kD is the root's side times k.
   - `src/tree.rs`: the prototype maximum leaf width. A serial refinement in Morton keys:
     a box is refined if it holds more than n distinct level-16 keys (nd-octree's rule) or
     if it holds a point and is wider than c_leaf λ. The leaves of that complete tree are
@@ -114,9 +114,11 @@ All in release, one rank, one thread (`tests/census.rs`, one MPI initialisation)
    c_leaf λ wide; every occupied leaf with more than n distinct keys is at level 16; the
    tree refines the tree without the rule (every leaf of it is a leaf or an ancestor of
    leaves of the new one).
-3. **The counts against brute force.** On small trees (W1 kD = 20, W2 kD = 20, Clusters
-   N = 2·10⁴): occupied boxes per level from the points' ancestors; V pairs per distance
-   class, U, W and X entries recomputed from the list definitions of
+3. **The counts against brute force.** On small trees (W1 kD = 20 at n = 16, W2 kD = 20
+   at n = 16 and c_leaf = 1, Clusters and Plummer N = 3·10³ at n = 8, the Plummer sphere at
+   c_leaf = 0.5): boxes, occupied boxes and leaves per level from the points' ancestors;
+   V pairs per distance and reflection class, the source and target masks, U, W and X
+   entries, with and without empty boxes, recomputed from the list definitions of
    `interaction_manager` (adjacency of closed cubes, O(n²) over the boxes) and equal to
    the census; point pairs of P2P from the U lists equal to the brute-force count of
    pairs of points in adjacent or equal leaves.
@@ -172,4 +174,6 @@ None.
 
 ## Open questions
 
-None yet.
+The sign-off questions of `spikes/census/SPIKE_REPORT.md` §9: D11 (c_leaf = 1 by a revised
+rule; §12's rule is degenerate), D12, the H leaf levels at 10⁻⁴, and the proposal's
+corrections.

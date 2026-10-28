@@ -30,7 +30,7 @@ the M3 Max (16 cores, 64 GB), release build, one rank, one thread. No FMM is run
 3. **No leaf is high frequency at c_leaf = 1 for ε ≤ 10⁻⁶** (§4), over all 43 trees of the
    sweep. Without a limit, 9 trees have H leaf levels at 10⁻⁶ and one at 10⁻⁸ (W3 at
    kD = 500, 2.5 λ leaves); with c_leaf = 1.5 one tree does at 10⁻⁶. **At ε = 10⁻⁴ the
-   first-pass rule calls levels H down to 0.5–0.8 λ boxes.** The far classes (|t|² up to 27
+   first-pass rule calls levels H down to 0.5–1 λ boxes.** The far classes (|t|² up to 27
    w²) pass the bound there, and the hybrid counts fewer operations than RCR, so 14 trees
    at c_leaf = 1 have an H leaf level. Only c_leaf = 0.25 avoids that, at 3–15× the work.
    Since the leaf operators do not depend on the regime (§3.6), this is a question for S6's
@@ -69,7 +69,7 @@ All in the root cube [0, 1]³, so the wavenumber k is kD with D the root's side
 | W1 | Fibonacci lattice on the sphere of diameter D (less 2·10⁻⁹), N = ⌈100 (kD)²/(4π)⌉ ≈ 7.96 (kD)², ten per wavelength | 10, 20, 50, 100, 200, 500, 1000 |
 | W2 | W1 outside the polar cap of half-angle 30° about +z, and inside it the cap points of the lattice of 10 N: ten times the density, 1.60 N in all | 10, 20, 50, 100, 200, 500 |
 | W3 | uniform random (SplitMix64, fixed seed), 1000 per λ³ (N = ⌈1000 (kD/2π)³⌉: 4,030 at kD = 10 to 4.03 million at 100); 10⁶ at kD = 200 and 500 (under-resolved: 2.0 per λ³ at 500) | 10, 20, 50, 100; 200, 500 |
-| W4 | the four distributions of the Laplace gates (`nd_fmm_validate::fmm_accuracy::Distribution`: cube, sphere, Plummer, clusters), bit for bit their points, mapped from [−1, 1]³ to the root cube; N = 10⁵ and 10⁶ | 1, 10, 100 |
+| W4 | the four distributions of the Laplace gates (`nd_fmm_validate::fmm_accuracy::Distribution`: cube, sphere, Plummer, clusters), the same generators and parameters (this spike's seed, not the gates'), mapped from [−1, 1]³ to the root cube; N = 10⁵ and 10⁶ | 1, 10, 100 |
 
 ### 1.2 The trees: the prototype maximum leaf width (proposal §3.7)
 
@@ -102,9 +102,12 @@ the leaf itself included); the V pairs between occupied boxes per distance class
 x ↔ y, proposal §5.4); for each occupied box the mask of distance classes it is a V source
 (and target) of; the W and X entries between occupied boxes with their point counts. The
 plan holds empty boxes in its rows (about half the boxes of a surface workload are empty);
-the counts here are those of an FMM that skips them. Test 3 recomputes every count by brute
-force from the list definitions of `nd_fmm_plan::interaction_manager` (closed-cube
-adjacency over every pair of boxes) on four small adaptive trees with W and X lists.
+the counts here are those of an FMM that skips them, beside the plan's own entry counts.
+Test 3 recomputes every count (boxes, leaves, the entries of every list with and without
+empty boxes, the V pairs per distance and per reflection class, the masks, the points of
+P2P, W and X) by brute force from the list definitions of
+`nd_fmm_plan::interaction_manager` (closed-cube adjacency over every pair of boxes, no use
+of the plan) on four small adaptive trees with W and X lists.
 
 ### 1.4 The model (`src/model.rs`)
 
@@ -120,8 +123,13 @@ adjacency over every pair of boxes) on four small adaptive trees with W and X li
   42 λ at 10⁻⁸.
 - **The regime** of a level ≥ 2: H if some distance class present passes E ≤ θ ε and the
   hybrid M2L (conversions, diagonal pairs, RCR for the rest) counts fewer operations than
-  RCR on every pair; else L (Rotation on every pair). Constraint 9 holds: the regime and
-  the passing classes depend on k, w_l, p_l and ε only. Levels 0 and 1 carry no V list.
+  RCR on every pair; else L (Rotation on every pair). Every passing class present runs
+  diagonal: §3.6's per-class test ("faster than RCR for that class") is not applied
+  separately, since a diagonal pair, (2P − 1) N_φ ≈ 8P², costs less than an RCR pair, 2P³,
+  for every P here once the conversions are paid. Constraint 9 holds: the passing classes
+  depend on k, w_l, p_l and ε only, the regime also on the global tree's counts (which
+  classes occur, how many pairs and boxes), never on charges or a rank's share. Levels 0
+  and 1 carry no V list.
 - **Grids**: N_φ on the host the smallest multiple of 4 at least 4P − 3 with no prime factor
   above 7 (§6.7: 588 at p = 144, 1080 at 261, 216 at 50), and as a power of two.
 - **Operations**, complex multiply-adds with §7's conventions: an RCR translation 2P³ (from
@@ -187,7 +195,8 @@ that decide, n = 128:
   p: P2P falls with the leaf, and P2M and L2P do not grow, because p at a leaf is the
   formula's floor (22–24 at 10⁻⁶) for every c_leaf ≤ 1. What the rule leaves out is the far
   field: each halving of c_leaf adds a level of boxes with M2L at that floor, and the total
-  is 3–15× the best at 0.25 for kD ≥ 20 (90× on W1 at kD = 10).
+  is 3–15× the best at 0.25 for kD ≥ 20 (90× on W1 at kD = 10, where c_leaf ≥ 1 leaves
+  two levels and no far field at all).
 - **The revised rule.** The leaf rule's purpose (§3.7) is that no leaf is high frequency, and
   the total cost is best for the largest c_leaf. Hence the largest c_leaf with no H leaf
   level on any workload at 10⁻⁶ and 10⁻⁸ (§4): **c_leaf = 1**. Since the width rule acts in
@@ -198,7 +207,8 @@ that decide, n = 128:
   kD = 500 and 1000 (11 % at n = 64), because 1.24 λ leaves are halved; 10.4× on the
   under-resolved W3 at kD = 500, the price §3.7 accepts for "more, sparser leaves instead of
   high-frequency ones", which S8 was to measure.
-- **Sensitivity.** n = 64 changes no conclusion. The ranks of c_leaf are the same at
+- **Sensitivity.** n = 64 (not run for W1 at kD = 1000 and the under-resolved W3 at
+  kD = 500, the two most expensive sets) changes no conclusion. The ranks of c_leaf are the same at
   w = 2, 4 and 8.
 
 ## 4. High-frequency leaves
@@ -218,8 +228,9 @@ workload):
 | none | 17 | 9 | 1 |
 
 At 10⁻⁶ the H leaves are 2 λ wide (W1 and W2 at kD = 50–200 and the Plummer sphere at
-kD = 100, at c_leaf = 2 or without a limit) or 1.24 λ (W3 at kD = 500, c_leaf ≥ 1.5). At 10⁻⁴ the first-pass bound passes the far classes on
-boxes of 0.5–0.8 λ: at p from the 10⁻⁴ formula (16–18 there) max (2j + 1)|h_j(k|t|)| at
+kD = 100, at c_leaf = 2 or without a limit), 1.24 λ (W3 at kD = 500, c_leaf = 1.5 and 2)
+or 2.49 λ (W3 at kD = 500 without a limit, also H at 10⁻⁸). At 10⁻⁴ the first-pass bound
+passes the far classes on boxes of 0.5–1 λ: at p from the 10⁻⁴ formula (16–18 there) max (2j + 1)|h_j(k|t|)| at
 |t| = 3√3 w is small enough, and with full V lists the conversions cost less than RCR on
 those pairs. Whether that survives S6's constants (C_T, θ) and S7's calibrated p is CH0.8b's;
 the leaf operators, M2P and P2L do not depend on the regime, so an H leaf level at 10⁻⁴
@@ -245,7 +256,8 @@ complex multiply-adds; P2P in 10⁹ point pairs):
 | W3 (10⁶) | 500 | 10⁻⁶ | 1.0 M | 2–6 | 0.01 | 100 | 1,526 | 1,652 | 10.2 | 42.1 | 74 | 2.9; 5.2 |
 
 "Top per rank" is the multipoles of levels 2 to the deepest level within Phase 5S's
-4,096-box cap (levels 2–4 for these rows; §6.6 counted levels 2–4); W4 and the small kD in
+4,096-box cap (levels 2–4 for the W1 rows, 2–3 for the W3 rows; §6.6 counted levels
+2–4); W4 and the small kD in
 `summary.md`. The resolved W3 at kD = 100 also does 123·10⁹ of M2P and P2L (its leaves sit
 on two levels). The largest table set of one level is the 47 rotation block sets of an
 RCR level at p ≥ 144: 1.78 GiB at kD = 500, 10 GiB at kD = 1000 and 10⁻⁸ (p = 271),
@@ -259,8 +271,9 @@ What follows:
   one level of W3 at kD = 500. CH4.1's chunked target accumulators and the RCR fallback of
   §3.6 are needed there, not on W1.
 - **The replicated top grows with the H levels, not with N**: 268 MiB per rank on W1 at
-  kD = 1000 (10.5 GiB per Kathleen node at 40 ranks). CH8.1's byte cap is needed from
-  kD ≈ 500 at 40 ranks per node.
+  kD = 1000 (10.5 GiB per Kathleen node at 40 ranks, 3.6 GiB at kD = 500). Whether that
+  calls for CH8.1's byte cap depends on the node budget beside the tables, which this
+  census does not fix.
 
 ## 6. Batch sizes for S5 and S9
 
@@ -278,7 +291,7 @@ Over the sweep host N_φ takes 72 to 1,120 and the power of two 128 to 2,048; S5
 (256 to 2048) covers the top levels, and the lowest H levels (p 25–33) need N_φ = 108–140
 on the host, 128–256 as a power of two. A level converts the same boxes in both directions
 here (every converted box is both source and target). S9's per-box plans are one plan per
-(level, N_φ) with 2P − 1 = 51 to 543 transforms each.
+(level, N_φ) with 2P − 1 = 35 to 543 transforms each over every ε (51 to 523 at 10⁻⁶).
 
 ## 7. The workloads (D12)
 
@@ -301,7 +314,10 @@ definitions:
 - The operation counts are §7's conventions (§1.4), not measured costs; a P2P pair is
   weighted as 4 complex multiply-adds (2 and 8 checked).
 - The regime rule here uses the operation count only. The node budget (§3.6's third
-  condition) is reported, not applied.
+  condition) is reported, not applied, and neither is the per-class speed test (§1.4).
+- P2M and L2P are counted on every leaf, also where a tree of one or two levels has no far
+  field (W1 at kD = 10 and 20 with c_leaf ≥ 1); the effect on those small trees is
+  negligible in absolute terms.
 - The counts skip empty boxes. The Laplace plan holds them in its rows; whether the
   Helmholtz drivers skip them is CH2/CH3's.
 - Build times are of the spike's one-thread census (tree, plan and counting), not of a tuned
@@ -314,7 +330,7 @@ definitions:
    10 % of the best P2P and leaf cost"), which is degenerate (§3). Alternatives: the rule as
    written (c_leaf = 0.25, 3–15× the total work at kD ≥ 20); 1.5 (best total on W1 at kD = 500 and
    1000, but an H leaf level on the under-resolved W3 at 10⁻⁶); 0.5 (no H leaf at 10⁻⁴ except
-   one tree, 2.5–3.3× the total work of 1 on W1 at kD ≥ 50).
+   one tree, 2.4–3.2× the total work of c_leaf = 1 on W1 at kD ≥ 50).
 2. **D12: the workloads of §9.1 unchanged**, with W3 at 10⁶ and kD = 500 named as the
    node-budget and leaf-rule-cost case.
 3. **H leaf levels at 10⁻⁴**: accept that the first-pass rule makes levels of 0.5–1 λ high

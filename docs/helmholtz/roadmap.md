@@ -102,7 +102,8 @@ D7, D10, D11, D12) put to the user.
   the scaling of §3.4 (exponential for Yukawa above κ r ≈ 1). *Done when:* accurate against
   arbitrary precision on every operator's argument and degree ranges; the scaling chosen.
   *Needs:* –.
-- [ ] **CH0.8a S8: workload census, first pass.** Trees of W1–W4 over the kD sweep from
+- [x] **CH0.8a S8: workload census, first pass.** Report:
+  `spikes/census/SPIKE_REPORT.md`. Trees of W1–W4 over the kD sweep from
   `nd-octree` with a prototype maximum leaf width (c_leaf 0.25 to 2), p from the formula; no
   FMM is run. *Done when:* per level the occupied boxes, U, V (by distance class), W and X
   sizes, p_l, regime and per-class choice, the memory model of §7 and the operation counts;
