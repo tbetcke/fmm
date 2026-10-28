@@ -29,11 +29,14 @@ job 614099 (one node, 40 threads).
   reproduces them to 1.7·10⁻¹⁶. CH1.3 tests `nd-fmm-ref`'s direct sum against them.
 - **R12: FMM3D is not a reliable reference for purely imaginary zk at tight eps.** For
   κD ≤ 30, `hfmm3d` meets its eps at every eps from 10⁻³ to 10⁻¹², as it does for real k.
-  For κD from 50 to 300 it misses eps 10⁻⁹ or 10⁻¹² in most cells (cube 9 of 12, sphere
-  10 of 12), by up to 41× at 10⁻⁹ and up to 12,000× at 10⁻¹² (cube, κD = 150:
-  1.2·10⁻⁸ at eps 10⁻¹²). At eps 10⁻⁶ it
-  is within 1.3× everywhere. At κD = 1000 the potential is all near field and every eps
-  passes. The misses are not specific to k = iκ: complex k with Im kD = 100 (Re kD from 1
+  The one exception is a 2× gradient error at 10⁻¹² on the sphere at N = 10⁶, which real
+  k shows as well. For κD from 50 to 300 it misses eps 10⁻⁹ or 10⁻¹² in most cells:
+  - at N = 10⁵ (M3 Max), cube 9 of 12 and sphere 10 of 12;
+  - at N = 10⁶ (Kathleen), cube 12 of 12 and sphere 10 of 12.
+
+  The miss is up to 44× at 10⁻⁹ and 12,000× at 10⁻¹² (cube, κD = 150: 1.2·10⁻⁸ at eps
+  10⁻¹², on both machines). At eps 10⁻⁶ it is within 1.7× everywhere. At κD = 1000 the
+  potential is all near field and every eps passes. The misses are not specific to k = iκ: complex k with Im kD = 100 (Re kD from 1
   to 100) miss in the same way, while k = 100 + 30i passes. They begin where FMM3D's decay
   cut-off leaves an M2L level with Im(k) w ≳ 12 active (§4). Question 2 asks what this
   means for CH2.5 and CH5.3.
@@ -195,17 +198,45 @@ git):
 **Kathleen, N = 10⁶, 40 threads** (job 614099, `logs/fmm3d/r12-n1000000.md` under the
 Kathleen root):
 
-Pending: Kathleen job 614099 is running; this table follows when it ends.
+| kind | kD | eps 10⁻³ | 10⁻⁶ | 10⁻⁹ | 10⁻¹² | s at 10⁻¹² (cube, sphere) |
+| --- | --- | --- | --- | --- | --- | --- |
+| real | 1 | 0.24 / 0.08 | 0.14 / 0.03 | 0.09 / 0.01 | 0.09 / **1.97** | 12.7, 14.6 |
+| real | 10 | 0.13 / 0.08 | 0.10 / 0.03 | 0.05 / 0.01 | 0.08 / **1.98** | 13.5, 14.9 |
+| real | 30 | 0.16 / 0.06 | 0.09 / 0.02 | 0.04 / 0.01 | 0.06 / **2.00** | 15.5, 16.2 |
+| real | 100 | **2.10** / 0.83 | 0.83 / 0.22 | 0.45 / 0.10 | 0.32 / **1.99** | 17.2, 18.6 |
+| imaginary | 0.01 | 0.23 / 0.07 | 0.12 / 0.04 | 0.06 / 0.01 | 0.08 / **1.97** | 10.5, 13.0 |
+| imaginary | 0.1 | 0.23 / 0.07 | 0.15 / 0.05 | 0.06 / 0.01 | 0.08 / **1.97** | 10.6, 13.0 |
+| imaginary | 1 | 0.23 / 0.07 | 0.19 / 0.04 | 0.06 / 0.01 | 0.08 / **2.00** | 10.7, 13.0 |
+| imaginary | 10 | 0.28 / 0.07 | 0.12 / 0.02 | 0.06 / 0.01 | 0.07 / **2.00** | 10.6, 13.0 |
+| imaginary | 30 | 0.33 / 0.06 | 0.18 / 0.03 | 0.61 / 0.07 | 0.61 / **2.00** | 10.3, 12.7 |
+| imaginary | 50 | 0.30 / 0.06 | 0.93 / 0.10 | **22.6** / **1.58** | **24.0** / **6.92** | 10.0, 12.4 |
+| imaginary | 70 | 0.21 / 0.06 | 0.41 / 0.03 | **30.6** / **2.12** | **2,464** / **67.7** | 9.5, 11.8 |
+| imaginary | 100 | 0.19 / 0.06 | **1.18** / 0.11 | **12.9** / 0.68 | **296** / **12.8** | 9.2, 11.4 |
+| imaginary | 150 | 0.09 / 0.05 | 0.34 / 0.03 | **16.3** / **1.10** | **11,567** / **472** | 8.4, 10.5 |
+| imaginary | 200 | 0.08 / 0.04 | **1.68** / 0.14 | **7.88** / 0.24 | **365** / **17.4** | 8.0, 9.6 |
+| imaginary | 300 | 0.03 / 0.02 | 0.31 / 0.02 | **43.9** / **1.48** | **6,506** / **203** | 7.3, 8.1 |
+| imaginary | 1000 | 0.00 / 0.01 | 0.00 / 0.03 | 0.00 / 0.45 | 0.08 / **2.00** | 7.9, 6.1 |
+| complex | 10 + 1i | 0.14 / 0.09 | 0.08 / 0.03 | 0.05 / 0.01 | 0.07 / **2.01** | 14.2, 15.4 |
+| complex | 100 + 10i | **1.89** / 0.34 | 0.55 / 0.09 | 0.33 / 0.04 | 0.20 / **1.98** | 17.6, 18.6 |
+
+Job 614099 ran from 22:19 to 22:40 on node-c11b-009. Its check and fixture steps
+passed again; the R12 table took 1,230 s.
 
 ### Findings
 
 - **Real and complex k (the controls):** FMM3D meets every eps except 10⁻³ at kD = 100,
-  where it misses by 2×. Its own error tables are coarsest there.
+  where it misses by 2× (its own error tables are coarsest there). On the sphere at
+  N = 10⁶ it also misses 10⁻¹², by 2.0× in the gradient for every k, real k included;
+  the potential is within 0.35×. This is a limit of FMM3D's gradient at that eps and
+  tree, not of imaginary k.
 - **Imaginary k, κD ≤ 30:** every eps is met, as for real k. Up to κD = 30 the time is
-  0.54–0.93 times that of real k at the same |k|.
-- **Imaginary k, κD from 50 to 300, eps ≤ 10⁻⁹:** eps is missed on the cube in 9 of the
-  12 cells (it passes at κD = 200 with 10⁻⁹, and at κD = 300 with 10⁻⁹ and 10⁻¹²) and on
-  the sphere in 10 of 12. The miss
+  0.54–0.93 times that of real k at the same |k| on the M3 Max. On Kathleen it is
+  0.36–0.96, over the κD = 1 to 100 that have a real control.
+- **Imaginary k, κD from 50 to 300, eps ≤ 10⁻⁹:** at N = 10⁵ eps is missed on the cube
+  in 9 of the 12 cells (it passes at κD = 200 with 10⁻⁹, and at κD = 300 with 10⁻⁹ and
+  10⁻¹²) and on the sphere in 10 of 12. At N = 10⁶ the cube misses in all 12. Its deeper
+  tree keeps levels with multipole work at κD = 200 and 300 that were cut off or leaves
+  at N = 10⁵. The worst cell at eps 10⁻⁶ is 1.68× (cube, κD = 200). The miss
   is worst at 10⁻¹², 12,000× on the cube at κD = 150. At eps 10⁻⁶ the worst cell is
   1.28×. At κD = 1000 the potential is almost all near field, so every eps passes.
 - **Large Im k in general:** the diagnostic
@@ -240,7 +271,8 @@ answer stands on the sampled ℓ2 norm only.
    our direct sum and the k = iκ cross-check only (CH2.5 skipped, the reason recorded)".
    FMM3D fails only in part. Recommendation: CH2.5 runs, comparing against FMM3D where
    FMM3D met its eps here, which is κD ≤ 30 at every eps, and eps ≥ 10⁻⁶ at larger κD.
-   There the sampled direct sum is the measure and FMM3D's error is stated beside it.
+   At larger κD it allows FMM3D up to 2× its eps, the worst seen being 1.7×. The sampled
+   direct sum is the measure, and FMM3D's error is stated beside it.
    Alternatives: skip CH2.5, as the proposal says; or run CH2.5 everywhere and report
    FMM3D's misses as FMM3D's. CH5.3 (complex k) meets the same limit for Im kD ≳ 50 and
    should restrict its grid in the same way.

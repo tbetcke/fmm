@@ -245,11 +245,14 @@ request, using this template:
     ≤ 1.0e-15 relative ℓ2. `--check` is byte for byte on the M3 Max at 1 and 8 threads,
     and within 1.7e-16 on Kathleen (gcc 12.3).
   - The Laplace mode of `main`'s driver and the branch's write byte-identical outputs.
-- Findings (R12, M3 Max, N = 10⁵):
+- Findings (R12, M3 Max at N = 10⁵, Kathleen at N = 10⁶):
   - `hfmm3d` with imaginary zk meets its eps for κD ≤ 30, and at eps ≥ 1e-6 everywhere
-    (to 1.3×).
+    (to 1.7×).
   - For κD 50–300 at eps 1e-9 and 1e-12 it misses in 9 of 12 cube cells and 10 of 12
-    sphere cells, by up to 12,000×.
+    sphere cells at N = 10⁵, and in 12 and 10 of 12 at N = 10⁶ (Kathleen), by up to
+    12,000×.
+  - On the sphere at N = 10⁶ and eps 1e-12, the gradient is off by 2× for every k, real
+    k included.
   - Complex k with Im kD = 100 misses alike; k = 100 + 30i passes.
   - The misses begin where FMM3D's decay cut-off leaves an M2L level with Im(k) w ≳ 12
     active (a hypothesis that fits every cell).
@@ -261,7 +264,8 @@ request, using this template:
   - Kathleen job 614095: the check and the fixtures. A self-review by a subagent: its two
     blocking points are fixed (the record cases' label, the far-field factor 4π ik in
     the draft), and so are the report's counts.
-  - Pending: Kathleen job 614099, R12 at N = 10⁶ on 40 threads.
+  - Kathleen job 614099 (node-c11b-009, 40 threads): the check, the fixtures and R12 at
+    N = 10⁶, all passed. Nothing pending.
 - Decisions: none taken. Questions for sign-off in report §5:
   1. the draft as CH1.1's starting point;
   2. R12's consequence for CH2.5 and CH5.3 (compare against FMM3D only where it meets its
