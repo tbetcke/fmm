@@ -99,8 +99,11 @@ fn run(
     }
 }
 
-/// The configurations of the sweep: (workload, kD, the c_leaf values, the leaf sizes).
-fn configurations() -> Vec<(Workload, f64, Vec<Option<f64>>, Vec<usize>)> {
+/// One configuration of the sweep: (workload, kD, the c_leaf values, the leaf sizes).
+type Configuration = (Workload, f64, Vec<Option<f64>>, Vec<usize>);
+
+/// The configurations of the sweep.
+fn configurations() -> Vec<Configuration> {
     let all = C_LEAF.to_vec();
     let both = vec![N_LEAF, N_LEAF_SMALL];
     let mut v = Vec::new();
@@ -192,21 +195,27 @@ fn c_leaf_report(runs: &[Run]) -> (String, f64) {
         out,
         "ε = 10⁻⁶, formula p. Leaf cost = w · P2P pairs + P2M + L2P + M2P + P2L (complex \
          multiply-adds), w = {PAIR_WEIGHT} unless stated; far = M2M + L2L + M2L. \"rel.\" is \
-         the leaf cost relative to the best c_leaf of the row group (\"none\" included).\n"
+         the leaf cost relative to the best c_leaf of the row group (\"none\" included), \
+         \"rel. total\" the same for leaf cost + far.\n"
     )
     .unwrap();
     writeln!(
         out,
-        "| Workload | kD | n | c_leaf | leaf levels | leaves (occupied) | P2P pairs | leaf cost | rel. | far | total (w = 4) | build s |"
+        "| Workload | kD | n | c_leaf | leaf levels | leaves (occupied) | P2P pairs | leaf cost | rel. | far | total (w = 4) | rel. total | build s |"
     )
     .unwrap();
-    writeln!(out, "|---|---|---|---|---|---|---|---|---|---|---|---|").unwrap();
+    writeln!(out, "|---|---|---|---|---|---|---|---|---|---|---|---|---|").unwrap();
     let mut verdicts = Vec::new();
     for ((name, kd, n), group) in &groups {
         let best = group
             .iter()
             .map(|r| leaf_cost(r, PAIR_WEIGHT))
             .fold(f64::INFINITY, f64::min);
+        let total = |r: &Run| {
+            let ops = TreeModel::new(&r.census, r.kd, EPS_MAIN).ops();
+            ops.leaf_cost(PAIR_WEIGHT) + ops.far()
+        };
+        let best_total = group.iter().map(|r| total(r)).fold(f64::INFINITY, f64::min);
         for r in group {
             let m = TreeModel::new(&r.census, r.kd, EPS_MAIN);
             let ops = m.ops();
@@ -214,7 +223,7 @@ fn c_leaf_report(runs: &[Run]) -> (String, f64) {
             let leaf = ops.leaf_cost(PAIR_WEIGHT);
             writeln!(
                 out,
-                "| {name} | {kd} | {n} | {} | {}–{} | {} | {} | {} | {:.2} | {} | {} | {:.1} |",
+                "| {name} | {kd} | {n} | {} | {}–{} | {} | {} | {} | {:.2} | {} | {} | {:.2} | {:.1} |",
                 c_name(r.c_leaf),
                 r.census.shallowest_leaf_level(),
                 r.census.deepest_leaf_level(),
@@ -224,6 +233,7 @@ fn c_leaf_report(runs: &[Run]) -> (String, f64) {
                 leaf / best,
                 g(ops.far()),
                 g(leaf + ops.far()),
+                (leaf + ops.far()) / best_total,
                 r.seconds
             )
             .unwrap();
@@ -263,6 +273,70 @@ fn c_leaf_report(runs: &[Run]) -> (String, f64) {
     (out, chosen)
 }
 
+/// The levels with an occupied leaf that are H at `eps`.
+fn high_frequency_leaf_levels(r: &Run, eps: f64) -> Vec<usize> {
+    let m = TreeModel::new(&r.census, r.kd, eps);
+    m.levels
+        .iter()
+        .zip(&r.census.levels)
+        .filter(|(lm, c)| lm.regime == Regime::H && c.occupied_leaves > 0)
+        .map(|(lm, _)| lm.level)
+        .collect()
+}
+
+/// The revised rule proposed for D11: the largest c_leaf at which no tree of the sweep
+/// (n = 128) has a high-frequency leaf at ε = 10⁻⁶ or 10⁻⁸; with the trees per c_leaf that
+/// have one, per ε.
+fn no_high_frequency_leaf(runs: &[Run]) -> (String, f64) {
+    let mut out = String::new();
+    writeln!(
+        out,
+        "\n## Trees with a high-frequency leaf, per c_leaf and ε (n = {N_LEAF}, every workload)\n"
+    )
+    .unwrap();
+    writeln!(out, "| c_leaf | trees | 10⁻⁴ | 10⁻⁶ | 10⁻⁸ |").unwrap();
+    writeln!(out, "|---|---|---|---|---|").unwrap();
+    let mut chosen = 0.0;
+    for c in C_LEAF {
+        let trees: Vec<&Run> = runs
+            .iter()
+            .filter(|r| r.n_leaf == N_LEAF && r.c_leaf == c)
+            .collect();
+        let counts: Vec<usize> = EPS
+            .iter()
+            .map(|&eps| {
+                trees
+                    .iter()
+                    .filter(|r| !high_frequency_leaf_levels(r, eps).is_empty())
+                    .count()
+            })
+            .collect();
+        writeln!(
+            out,
+            "| {} | {} | {} | {} | {} |",
+            c_name(c),
+            trees.len(),
+            counts[0],
+            counts[1],
+            counts[2]
+        )
+        .unwrap();
+        if let Some(c) = c
+            && counts[1] == 0
+            && counts[2] == 0
+        {
+            chosen = c;
+        }
+    }
+    writeln!(
+        out,
+        "\nThe revised rule (the largest c_leaf with no high-frequency leaf at 10⁻⁶ and 10⁻⁸ on \
+         any workload): **c_leaf = {chosen}**."
+    )
+    .unwrap();
+    (out, chosen)
+}
+
 /// Whether any level with an occupied leaf is high frequency, per run and ε.
 fn leaf_report(runs: &[Run]) -> String {
     let mut out = String::new();
@@ -285,13 +359,9 @@ fn leaf_report(runs: &[Run]) -> String {
         let hf: Vec<String> = EPS
             .iter()
             .map(|&eps| {
-                let m = TreeModel::new(&r.census, r.kd, eps);
-                let levels: Vec<String> = m
-                    .levels
+                let levels: Vec<String> = high_frequency_leaf_levels(r, eps)
                     .iter()
-                    .zip(&r.census.levels)
-                    .filter(|(lm, c)| lm.regime == Regime::H && c.occupied_leaves > 0)
-                    .map(|(lm, _)| lm.level.to_string())
+                    .map(|l| l.to_string())
                     .collect();
                 if levels.is_empty() {
                     "–".into()
@@ -539,13 +609,15 @@ fn sweep(comm: &SimpleCommunicator) {
         }
     }
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/results");
-    let (study, chosen) = c_leaf_report(&runs);
+    let (mut study, by_rule) = c_leaf_report(&runs);
+    let (revised, chosen) = no_high_frequency_leaf(&runs);
+    study.push_str(&revised);
     std::fs::write(format!("{dir}/c-leaf.md"), study).unwrap();
     std::fs::write(format!("{dir}/leaves.md"), leaf_report(&runs)).unwrap();
     std::fs::write(format!("{dir}/summary.md"), summary(&runs, chosen)).unwrap();
     std::fs::write(format!("{dir}/batches.md"), batches(&runs, chosen)).unwrap();
     let mut levels = format!(
-        "# Per-level tables\n\nc_leaf = {chosen} (D11 by the rule), n = {N_LEAF}, formula p, \
+        "# Per-level tables\n\nc_leaf = {chosen} (D11 by the revised rule), n = {N_LEAF}, formula p, \
          C_T = 2, θ = 1. Tables: transfer functions of the passing reflection classes, the \
          (S|R) tables of the RCR distances present, and the rotation block sets (one for M2M \
          and L2L, 47 more where RCR M2L runs). U, W and X count entries between occupied \
@@ -575,7 +647,8 @@ fn sweep(comm: &SimpleCommunicator) {
     std::fs::write(format!("{dir}/w1-levels.md"), extra).unwrap();
     let total: f64 = runs.iter().map(|r| r.seconds).sum();
     eprintln!(
-        "{} trees in {total:.0} s; D11 by the rule: c_leaf = {chosen}",
+        "{} trees in {total:.0} s; D11 by the rule: c_leaf = {by_rule}, by the revised rule \
+         {chosen}",
         runs.len()
     );
 }

@@ -311,7 +311,8 @@ impl TreeModel {
             .iter()
             .filter(|l| (2..=4).contains(&l.level))
             .map(|l| l.multipole_bytes)
-            .sum()
+            // Not `sum`: an empty f64 sum is −0.0.
+            .fold(0.0, |a, b| a + b)
     }
 }
 
