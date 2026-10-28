@@ -131,3 +131,43 @@ request, using this template:
   phases; CH0.3 and CH1.1 fix the scale's radius; CH0.8 takes the coaxial table memory
   and the table-free projection; the proposal's R2 and §7 take decision 3 at its next
   draft.
+
+## 2026-10-28: CH0.3 S3: radial functions
+- Done: the spike `spikes/radial/` (a member outside the default members): jₙ, hₙ of
+  complex argument (0 ≤ arg z ≤ π/2), iₙ, kₙ of real argument and their derivatives,
+  scaled by sⁿ and the exponential factor; j and i by Miller's method in ratio form
+  (FMM3D's start test), h and k upward, derivatives from neighbouring orders; an mpmath
+  reference (`tools/reference.py`: J and I from mpmath, h and k from their exact finite
+  sums, DLMF 10.49.6 and 10.49.12); the range, truncation and timing examples. Report
+  `spikes/radial/SPIKE_REPORT.md`.
+- Tests: five in `tests/accuracy.rs`, all passing in release: 13,174 reference entries in
+  571 sets over every operator's range (leaves to c_leaf = 2, levels to k a = 650, orders
+  to 1482, |z| from 10⁻¹² to 4550, real k, k = κ(1 + iη) with η = 0.1, 1, 10, imaginary k,
+  Yukawa), worst 6.5e-14 (≤ 3.6e-15 on the leaf and low-frequency ranges); the Wronskians
+  on a dense grid ≤ 5.4e-14; Yukawa's real path equal to the complex path at z = ix bit
+  for bit; finite everywhere (Yukawa to κρ = 4550) and exact at z = 0; scale consistency.
+- Findings: the exponential factor is needed for range (without it kₙ at the nearest
+  distance underflows f64 from κa ≈ 405, and Yukawa leaves have no wavelength bound); in f64 every power-scale radius works
+  (10^±54 at worst), the double factorials cannot be absorbed (10^±2000 at k a = 650);
+  f32 would need a per-degree scale on low-frequency levels (D3). FMM3D 2.1.0's scale is
+  min(|k| w, 1) with the full width. Yukawa's degree for a relative tolerance grows like
+  √(κ a) (43 at κa = 10, 105 at 100, 324 at 1000 for 1e-10). Time: j 19–31 ns per value,
+  h 5–7 ns. The reference needed exact finite sums for h and k (mpmath's `besselk` does
+  not converge at large argument and moderate order).
+- Checks: ran `/verify` on the M3 Max (format, Clippy default, examples, workspace
+  all-targets, `cargo doc`, the default (823) and workspace (885) tests, the licence
+  check, no fftw-sys; the spike's tests with `--include-ignored` in release);
+  `reference.py --check` byte for byte. A self-review by a subagent; its findings are
+  fixed (the projection's own h to |z| = 4550, η = 10, Yukawa's orders and both M2L
+  distances, the report's numbers). No machine runs.
+  Nothing pending.
+- Decisions: signed off 2026-10-27, as recommended (report §8, questions 1–2): the
+  scaling ĵₙ = e^{−|Im z|} jₙ/sⁿ, ĥₙ = e^{Im z} hₙ sⁿ (likewise i, k and the
+  derivatives) with s_l = min(|k| a_l, 1), a_l the circumradius, the exponential factor
+  on every level and kind of k, no double factorials ("Circumradius, exp always"); kₙ
+  with k₀ = e^{−x}/x ("k₀ = e^{−x}/x").
+- Laplace: not touched (only the spike, its member entry and its lock-file entry).
+- Follow-ups: CH1.1 writes §3.15 item 3 from the sign-offs; CH1.2 implements §2's
+  algorithms (a real-arithmetic j for real k); D3 takes the f32 range finding; the
+  proposal's next draft corrects §3.4 (FMM3D's width; the factor on every kind of k) and
+  §5.5/CH2.3 (Yukawa's degree grows like √(κ a)).
