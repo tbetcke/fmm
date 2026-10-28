@@ -325,6 +325,9 @@ definitions:
 
 ## 9. Questions for sign-off
 
+Signed off by the user on 2026-10-28: "1–4 as recommended". D11 and D12 are recorded in
+`docs/helmholtz/roadmap.md`'s decision table.
+
 1. **D11: c_leaf = 1**, by the revised rule (the largest c_leaf with no high-frequency leaf
    on any workload at 10⁻⁶ and 10⁻⁸), replacing the rule of §12 ("the largest c_leaf within
    10 % of the best P2P and leaf cost"), which is degenerate (§3). Alternatives: the rule as

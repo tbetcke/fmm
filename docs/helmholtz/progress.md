@@ -206,10 +206,15 @@ request, using this template:
   release and debug. A self-review by a subagent: nothing blocking; its 16 points fixed (the
   W4 seed's wording, constraint 9's wording, the per-class test noted, the oracle extended to
   every count, report numbers). No machine runs. Nothing pending.
-- Decisions: questions for sign-off (report §9): D11 c_leaf = 1 by the revised rule; D12
-  the workloads of §9.1 unchanged, W3 at 10⁶ and kD = 500 named the node-budget case; H leaf
-  levels at 10⁻⁴ left to CH0.8b; the proposal's corrections (D11's rule, §7's numbers, the
-  full-cube scratch).
+- Decisions: signed off 2026-10-28, "1–4 as recommended" (report §9): (1) D11 c_leaf = 1
+  by the revised rule (the largest c_leaf with no high-frequency leaf on any workload at
+  10⁻⁶ and 10⁻⁸), replacing §12's degenerate rule, revisable by CH0.8b; (2) D12 the
+  workloads of §9.1 unchanged, W3 at 10⁶ and kD = 500 named the node-budget and
+  leaf-rule-cost case; (3) high-frequency leaf levels at 10⁻⁴ accepted for now, the
+  threshold left to CH0.8b with S6's constants and S7's p; (4) the proposal's next draft
+  takes D11's revised rule, §7's numbers from `results/summary.md` once CH0.8b confirms
+  them, and the full-cube scratch (9.2 GiB on level 5, 42 GiB on level 6 with the leaf
+  rule).
 - Laplace: not touched (only the spike, its member entry and its lock-file entry).
 - Follow-ups: CH0.8b repeats the census with S7's p and S6's constants (`examples/census.rs
   -- sweep`); CH3.0 implements the maximum leaf width in nd-octree with the signed-off

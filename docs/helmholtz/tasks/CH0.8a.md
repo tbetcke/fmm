@@ -176,4 +176,4 @@ None.
 
 The sign-off questions of `spikes/census/SPIKE_REPORT.md` §9: D11 (c_leaf = 1 by a revised
 rule; §12's rule is degenerate), D12, the H leaf levels at 10⁻⁴, and the proposal's
-corrections.
+corrections. Signed off 2026-10-28: "1–4 as recommended".
