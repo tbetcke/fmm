@@ -220,3 +220,56 @@ request, using this template:
   -- sweep`); CH3.0 implements the maximum leaf width in nd-octree with the signed-off
   c_leaf; S5 and S9 take their batch sizes from `results/batches.md`; CH4.1 and CH8.1 the
   scratch and replicated-top numbers.
+
+## 2026-10-28: CH1.4 FMM3D convention check and fixtures
+- Done:
+  - The draft §3.15 (`docs/helmholtz/conventions-3.15-draft.md`), items 1–9 of proposal
+    §4 from the proposal and the S1–S3 sign-offs. Item 1 is fixed by the check; the rest
+    are marked proposed or open.
+  - `tools/fmm3d/driver.f90` gains the modes `helmholtz-check` (the two-point check,
+    which stops unless FMM3D computes the draft's kernel) and `helmholtz` (`h3ddirectcg`
+    or `hfmm3d` on a problem file). Its Laplace usage is unchanged.
+  - `tools/fmm3d/build.sh driver`; `tools/fmm3d/helmholtz.py` (formats, the
+    identification among 16 candidates, the R12 sweep).
+  - `tools/fixtures/gen_helmholtz_fmm3d.py` writes `fmm-ref/fixtures/helmholtz_fmm3d.json`
+    (687 KB): `h3ddirectcg` with 200 sources and 40 targets; k = 1, 25, 1 + 0.5i,
+    25 + 2.5i, i, 25i; real and complex charges.
+  - The Kathleen steps in `fmm3d.sbatch`.
+  - Report `fmm-validate/results/helmholtz-ch1-4.md`.
+- Tests:
+  - The two-point check on the M3 Max and on Kathleen. Both FMM3D routines compute
+    q e^{ikr}/(4πr) with the gradient in the target and the charge unconjugated, for
+    real, complex and imaginary k, to 2.6e-16; exactly one of 16 candidate conventions
+    matches each case.
+  - Every fixture value agrees with the draft's kernel in mpmath at 30 digits to
+    ≤ 1.0e-15 relative ℓ2. `--check` is byte for byte on the M3 Max at 1 and 8 threads,
+    and within 1.7e-16 on Kathleen (gcc 12.3).
+  - The Laplace mode of `main`'s driver and the branch's write byte-identical outputs.
+- Findings (R12, M3 Max, N = 10⁵):
+  - `hfmm3d` with imaginary zk meets its eps for κD ≤ 30, and at eps ≥ 1e-6 everywhere
+    (to 1.3×).
+  - For κD 50–300 at eps 1e-9 and 1e-12 it misses in 9 of 12 cube cells and 10 of 12
+    sphere cells, by up to 12,000×.
+  - Complex k with Im kD = 100 misses alike; k = 100 + 30i passes.
+  - The misses begin where FMM3D's decay cut-off leaves an M2L level with Im(k) w ≳ 12
+    active (a hypothesis that fits every cell).
+- Checks:
+  - Ran `/verify` on the M3 Max: format, Clippy default, examples and workspace
+    all-targets, `cargo doc`, the default (823) and workspace (891) tests. No Rust
+    changed.
+  - Also shellcheck, `bash -n`, the Python 3.9 parse and the generator's `--check`.
+  - Kathleen job 614095: the check and the fixtures. A self-review by a subagent: its two
+    blocking points are fixed (the record cases' label, the far-field factor 4π ik in
+    the draft), and so are the report's counts.
+  - Pending: Kathleen job 614099, R12 at N = 10⁶ on 40 threads.
+- Decisions: none taken. Questions for sign-off in report §5:
+  1. the draft as CH1.1's starting point;
+  2. R12's consequence for CH2.5 and CH5.3 (compare against FMM3D only where it meets its
+     eps, rather than skipping CH2.5);
+  3. the proposal's next draft.
+- Laplace: not touched (tools, docs and one fixture file only; the driver's Laplace
+  outputs are byte for byte the same).
+- Follow-ups:
+  - CH1.1 writes §3.15 from the draft and decides where 4π ik goes.
+  - CH1.3 tests `nd-fmm-ref`'s direct sum against the fixtures, to round-off, not bits.
+  - CH2.5 and CH5.3 take question 2's answer.

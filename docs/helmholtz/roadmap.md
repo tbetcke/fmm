@@ -181,7 +181,9 @@ D7, D10, D11, D12) put to the user.
 **Gate:** CONVENTIONS §3.15 signed off; `nd-fmm-math` and `nd-fmm-ref` carry the Helmholtz
 family, checked against FMM3D's fixtures.
 
-- [ ] **CH1.4 FMM3D convention check and fixtures.** First a draft of §3.15 from proposal §4
+- [x] **CH1.4 FMM3D convention check and fixtures.** Report:
+  `fmm-validate/results/helmholtz-ch1-4.md`; the draft `docs/helmholtz/conventions-3.15-draft.md`;
+  the fixtures `fmm-ref/fixtures/helmholtz_fmm3d.json`. First a draft of §3.15 from proposal §4
   and S1–S3; then `hfmm3d` in `tools/fmm3d/driver.f90` and a generator in `tools/fixtures/`.
   *Done when:* on two points, FMM3D's factor, sign of k, gradient and branch identified and
   matching the draft (or the draft corrected); fixtures for real, complex and imaginary k and

@@ -132,8 +132,22 @@ on the changed scripts, `python3 -m py_compile` on the new scripts.
 
 ## Pending runs
 
-None yet.
+- Kathleen job 614099 (`singlenode`, one node, 40 threads):
+  `tools/kathleen/submit.sh --time=03:00:00 -- fmm3d.sbatch driver helmholtz-check
+  helmholtz-fixtures r12`. It decides R12 at N = 10⁶. The check and the fixtures already
+  passed on Kathleen in job 614095 (node-c11a-089); that job's R12 ran on one thread,
+  because env.sh sets `OMP_NUM_THREADS=1`, and was cancelled. The step now sets
+  `R12_THREADS`.
 
 ## Open questions
 
-None yet.
+For sign-off (report §5). None of them blocks this task's acceptance:
+
+1. The draft §3.15 as CH1.1's starting point. It needs no correction from the check.
+   Where the factor 4π ik is applied is left to CH1.1.
+2. R12 is partial: `hfmm3d` is reliable for imaginary κD ≤ 30 at every eps, and at
+   eps ≥ 10⁻⁶ everywhere (to 1.3×). It misses at eps ≤ 10⁻⁹ for κD 50–300, and for
+   complex k with Im kD ≈ 100. The proposal's fallback skips CH2.5. Recommended
+   instead: CH2.5 compares against FMM3D only where it met its eps, and CH5.3 likewise.
+3. The proposal's next draft: R12's row, §9.2's sentence on imaginary zk, and FMM3D's
+   thresh rule beside §3.13's.
