@@ -19,12 +19,48 @@ Status: **not started (2026-10-26).** First: D0 and D9, then CHR.2 and CHR.4.
 - A task is **runnable** when it is open, has no branch or open PR, and everything in its
   *Needs* is done: the tasks ticked on `main`, the decisions signed off in the table below.
   Every task also needs **D0**.
-- `/next-task` takes the first runnable task in the order of this file. If the first task in
-  that order waits only for decisions, it asks the user for them first.
+- `/next-task` takes the first runnable task of the **priority list** below, in its order.
+  If the first open task of the list waits only for decisions, it asks the user for them
+  first. If no task of the list is runnable (the rest wait for a merge, a machine run or a
+  sign-off), it says what the list waits for and stops; it takes a task off the list only
+  when the user names one. With the list empty or all ticked, it takes the first runnable
+  task in the order of this file, as before.
 - A task too big for one reviewable PR is split here into lettered sub-tasks (CH3.1a,
   CH3.1b), each with its own *Done when* and *Needs*, before it starts.
 - *Machines* names the machines its runs need besides the M3 Max. *Sign-off* marks a task
   whose PR ends with questions for the user; the tasks that need it wait for the answer.
+
+## Priority list: the shortest path to the FMM3D comparison
+
+Set by the user on 2026-10-28: the shortest path to CH3.6, the first comparison of the
+Helmholtz FMM with FMM3D (one Kathleen node; RCR on every level), with the vectorised
+Helmholtz P2P in place for its times. The list holds CH3.6 and exactly the tasks in its
+*Needs*, transitively, that are not yet done. It changes the order, plus one *Needs*: CH3.6
+also needs CH3.4 (the user, 2026-10-28), which brings in CH2.4. No other task or gate
+changes. Ordered so that a long task's pending run or merge leaves the next one runnable
+(CH1.4's Kathleen run beside CH0.7; CH2.0's benchmarks beside CH2.4 and CH3.0; CH3.1 beside
+CH3.4). CH2.0 and CH2.4 both time Laplace on the three machines, so their benchmark runs
+take turns, never overlap.
+
+1. CH1.4 FMM3D convention check and fixtures (*Machines:* Kathleen)
+2. CH0.7 S7: truncation under realistic geometry
+3. CH1.1 CONVENTIONS §3.15 (needs **D5**; *Sign-off:* §3.15)
+4. CH1.2 `nd-fmm-math` (needs **D2**)
+5. CH1.3 `nd-fmm-ref`
+6. CH2.0 Laplace's real host drivers made generic (*Machines:* locust, Kathleen)
+7. CH2.4 Yukawa P2P in `nd-fmm-simd`, the loop skeleton (*Machines:* locust, Kathleen)
+8. CH3.0 Builder: the leaf rule and complex densities (needs **D1**)
+9. CH3.5 The shared drivers extended to complex expansions (*Machines:* locust, Kathleen)
+10. CH3.1 Complex planes and RCR on every level
+11. CH3.4 Helmholtz P2P, real and complex k (*Machines:* locust, Kathleen)
+12. CH3.3 Calibration of p_l
+13. CH3.6 Gate: RCR on every level against FMM3D (*Machines:* Kathleen)
+
+Off the list until CH3.6 is done, in file order afterwards: CH0.6, CH0.8b, CH0.9, CH0.4,
+CH0.5 and H0.G; CHR.3 and HR.G; H1.G; CH2.1, CH2.2, CH2.3, CH2.5 and H2.G; CH3.2 and H3.G;
+H6, H4, H5, H7, H8. CH3.6 times the FMM with CH3.4's vectorised kernel as the Helmholtz
+operator's P2P: CH3.4 puts it there if CH3.1 is merged first (as ordered), else CH3.1 uses
+it.
 
 ## Decisions
 
@@ -212,11 +248,13 @@ at any kD.
 - [ ] **CH3.3 Calibration of p_l over (k a_l, ε).** *Done when:* S7's low-frequency tables
   confirmed in the full FMM. *Needs:* CH3.1, CH0.7.
 - [ ] **CH3.4 Helmholtz P2P, real and complex k.** On CH2.4's skeleton. *Done when:* the
-  accuracy contract over k r up to 22 c_leaf; cost per pair. *Needs:* CH2.4.
+  accuracy contract over k r up to 22 c_leaf; cost per pair; the Helmholtz operator's P2P
+  if CH3.1 is merged (priority list). *Needs:* CH2.4.
   *Machines:* locust, Kathleen.
 - [ ] **CH3.6 Gate: RCR on every level against FMM3D.** *Done when:* both codes against the
   same sampled direct sum on W1, W3 and W4 for kD ≤ 100 and on W1 at kD = 500 with time; the
-  full-target crosscheck. *Needs:* CH3.3, CH1.4. *Machines:* Kathleen.
+  full-target crosscheck, timed with CH3.4's vectorised P2P. *Needs:* CH3.3, CH1.4, CH3.4
+  (added by the user on 2026-10-28; not in proposal §10). *Machines:* Kathleen.
 - [ ] **H3.G Gate.** `/milestone-gate H3`. *Needs:* every task above.
 
 ## H6: Exponential M2L on low-frequency levels (before H4 by default, D6)
