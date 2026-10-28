@@ -30,6 +30,33 @@
 ! (without the 1/(4π)), v2.1.0 computes q/(4π r) (its lfmm3d.f: "We use
 ! 1/(4\pi)*(1/r)"); the driver
 ! scales by what the check finds (1 or 1/(4π)) and stops on anything else.
+!
+! Helmholtz (CH1.4; docs/helmholtz/tasks/CH1.4.md), selected by the first argument; the
+! Laplace usage above is unchanged:
+!
+!     fmm3d_driver helmholtz-check
+!     fmm3d_driver helmholtz PROBLEM PREFIX ZK_RE ZK_IM TOKEN[,TOKEN...] [REPEAT]
+!
+! helmholtz-check is the two-point check of proposal §9.2 against the draft §3.15
+! (docs/helmholtz/conventions-3.15-draft.md, item 1): charges q1 = 0.3 − 0.7i at
+! x1 = (0,0,0) and q2 = 1 at x2 = (1,0,0); with E = e^{ik}/(4π) the draft has
+! φ(x1) = q2 E, ∇φ(x1) = q2 (1 − ik) E (1,0,0), φ(x2) = q1 E, ∇φ(x2) = q1 (ik − 1) E (1,0,0)
+! (φ = Σ q G_k, G_k = e^{ik r}/(4π r), the gradient in the target). It runs
+! `hfmm3d_s_c_g` (eps 1e-12) and `h3ddirectcg` for k = 1, 2.5, 1 + 0.5i, 2.5 + i, 0.5i, 3i,
+! prints one `helmholtz-check:` line of raw values per routine and k, and stops (status 1)
+! unless every value is the draft's to 1e-12 relative; for the record only (outside the
+! draft's branch Im k ≥ 0, Re k ≥ 0) also k = 1 − 0.5i and k = −1, marked `record`.
+!
+! helmholtz runs the check, then reads PROBLEM, a little-endian stream file:
+!   'NDFMMHP1', int64 n, s, t, seed; real(8) sources(3,n); complex(16) charges(n) as
+!   (re, im) pairs; int64 sampled(s), 0-based source indices; real(8) targets(3,t)
+! and for every TOKEN, `direct` (FMM3D's `h3ddirectcg`, thresh 1e-300, so that only
+! coincident points are dropped) or an eps (`hfmm3d_s_c_g`, or `hfmm3d_st_c_g` when
+! t > 0; REPEAT calls, default 1, the fastest timed), writes PREFIX-<TOKEN>.out:
+!   'NDFMMHO1', int64 s, t; complex(16) pot(s), grad(3,s) at the sampled sources (the self
+!   term dropped), pottarg(t), gradtarg(3,t) at the targets
+! and prints one `helmholtz:` line (seconds by `omp_get_wtime`, FMM3D's setup included).
+! FMM3D's values are written as they come: the check shows they need no scale.
 program fmm3d_driver
   use omp_lib
   implicit none
@@ -47,8 +74,20 @@ program fmm3d_driver
   real(8), parameter :: pi = 3.14159265358979323846d0
   integer :: start, comma, unit
 
+  if (command_argument_count() >= 1) then
+    call get_command_argument(1, arg)
+    if (arg == 'helmholtz-check') then
+      if (.not. helmholtz_check()) stop 1
+      stop
+    else if (arg == 'helmholtz') then
+      call helmholtz_run()
+      stop
+    end if
+  end if
   if (command_argument_count() /= 6 .and. command_argument_count() /= 7) then
     print '(a)', 'usage: fmm3d_driver PROBLEM PREFIX EPS[,EPS...] CALLS WARMUP VEC [FULL]'
+    print '(a)', '       fmm3d_driver helmholtz-check'
+    print '(a)', '       fmm3d_driver helmholtz PROBLEM PREFIX ZK_RE ZK_IM TOKEN[,TOKEN...] [REPEAT]'
     stop 2
   end if
   call get_command_argument(1, problem)
@@ -268,5 +307,176 @@ contains
       median = (a(h / 2) + a(h / 2 + 1)) / 2
     end if
   end function median
+
+  ! The two-point check of the header against the draft §3.15; true when every draft case
+  ! matches.
+  logical function helmholtz_check()
+    complex(8) :: zks(8), zk, q(2), pot(2), grad(3,2), e, want(4), got(4)
+    real(8) :: x(3,2), rel, side
+    integer(8) :: ier
+    integer :: c, r
+    logical :: record, ok
+    character(len=12) :: routine
+    real(8), parameter :: pi = 3.14159265358979323846d0
+
+    zks = [(1d0, 0d0), (2.5d0, 0d0), (1d0, 0.5d0), (2.5d0, 1d0), (0d0, 0.5d0), &
+        (0d0, 3d0), (1d0, -0.5d0), (-1d0, 0d0)]
+    x = 0
+    x(1,2) = 1
+    q = [(0.3d0, -0.7d0), (1d0, 0d0)]
+    helmholtz_check = .true.
+    do c = 1, size(zks)
+      zk = zks(c)
+      record = c > 6
+      e = exp((0d0, 1d0) * zk) / (4 * pi)
+      want = [q(2) * e, q(2) * (1 - (0d0, 1d0) * zk) * e, q(1) * e, &
+          q(1) * ((0d0, 1d0) * zk - 1) * e]
+      do r = 1, 2
+        pot = 0
+        grad = 0
+        if (r == 1) then
+          routine = 'hfmm3d_s_c_g'
+          call hfmm3d_s_c_g(1d-12, zk, 2_8, x, q, pot, grad, ier)
+          call failed(ier)
+        else
+          routine = 'h3ddirectcg'
+          call h3ddirectcg(1_8, zk, x, q, 2_8, x, 2_8, pot, grad, 1d-300)
+        end if
+        got = [pot(1), grad(1,1), pot(2), grad(1,2)]
+        rel = maxval(abs(got - want) / abs(want))
+        side = maxval(abs(grad(2:3,:))) / abs(e)
+        ok = rel <= 1d-12 .and. side <= 1d-15
+        write (*, '(a,2es24.16,a,a)', advance='no') 'helmholtz-check: zk=', zk, &
+            ' routine=', trim(routine)
+        write (*, '(a,2es24.16,a,6es24.16)', advance='no') ' pot1=', pot(1), ' grad1=', &
+            grad(:,1)
+        write (*, '(a,2es24.16,a,6es24.16)', advance='no') ' pot2=', pot(2), ' grad2=', &
+            grad(:,2)
+        write (*, '(a,es10.3,a,es10.3)', advance='no') ' rel=', rel, ' side=', side
+        if (record) then
+          write (*, '(a,l1)') ' record draft=', ok
+        else
+          write (*, '(a,l1)') ' check draft=', ok
+          if (.not. ok) helmholtz_check = .false.
+        end if
+      end do
+    end do
+    flush (6)
+    if (.not. helmholtz_check) print '(a)', 'helmholtz-check: FMM3D does not compute the draft''s kernel'
+  end function helmholtz_check
+
+  ! The `helmholtz` mode of the header.
+  subroutine helmholtz_run()
+    character(len=4096) :: hproblem, hprefix, hlist, htoken, harg
+    character(len=8) :: hmagic
+    integer(8) :: hheader(4), hn, hs, ht, hrepeat, r, ier, jj
+    integer(8), allocatable :: sampled(:)
+    real(8), allocatable :: sources(:,:), targets(:,:), at(:,:)
+    complex(8), allocatable :: charges(:), hpot(:), hgrad(:,:), spot(:), sgrad(:,:)
+    complex(8), allocatable :: tpot(:), tgrad(:,:)
+    complex(8) :: zk
+    real(8) :: zre, zim, heps, best, ht0, ht1
+    integer :: hstart, hcomma, hunit
+    logical :: direct
+
+    if (command_argument_count() /= 6 .and. command_argument_count() /= 7) then
+      print '(a)', 'usage: fmm3d_driver helmholtz PROBLEM PREFIX ZK_RE ZK_IM TOKEN[,TOKEN...] [REPEAT]'
+      stop 2
+    end if
+    call get_command_argument(2, hproblem)
+    call get_command_argument(3, hprefix)
+    call get_command_argument(4, harg)
+    read (harg, *) zre
+    call get_command_argument(5, harg)
+    read (harg, *) zim
+    call get_command_argument(6, hlist)
+    hrepeat = 1
+    if (command_argument_count() == 7) then
+      call get_command_argument(7, harg)
+      read (harg, *) hrepeat
+    end if
+    zk = cmplx(zre, zim, kind=8)
+    if (.not. helmholtz_check()) stop 1
+
+    open (newunit=hunit, file=hproblem, access='stream', form='unformatted', status='old', &
+        action='read')
+    read (hunit) hmagic
+    if (hmagic /= 'NDFMMHP1') then
+      print '(a)', 'helmholtz: not a Helmholtz problem file: '//trim(hproblem)
+      stop 1
+    end if
+    read (hunit) hheader
+    hn = hheader(1)
+    hs = hheader(2)
+    ht = hheader(3)
+    allocate (sources(3,hn), charges(hn), sampled(hs), targets(3,max(ht, 1_8)))
+    read (hunit) sources
+    read (hunit) charges
+    read (hunit) sampled
+    if (ht > 0) read (hunit) targets(:,1:ht)
+    close (hunit)
+    if (minval(sampled) < 0 .or. maxval(sampled) >= hn) then
+      print '(a)', 'helmholtz: a sampled index is outside the sources'
+      stop 1
+    end if
+    allocate (at(3,hs), hpot(hn), hgrad(3,hn), spot(hs), sgrad(3,hs))
+    allocate (tpot(max(ht, 1_8)), tgrad(3,max(ht, 1_8)))
+    do jj = 1, hs
+      at(:,jj) = sources(:,sampled(jj) + 1)
+    end do
+    print '(a,i0,a,i0,a,i0,a,i0,a,2es24.16)', 'helmholtz: problem n=', hn, ' sampled=', hs, &
+        ' targets=', ht, ' seed=', hheader(4), ' zk=', zk
+
+    hstart = 1
+    do while (hstart <= len_trim(hlist))
+      hcomma = index(hlist(hstart:), ',')
+      if (hcomma == 0) then
+        htoken = hlist(hstart:len_trim(hlist))
+        hstart = len_trim(hlist) + 1
+      else
+        htoken = hlist(hstart:hstart + hcomma - 2)
+        hstart = hstart + hcomma
+      end if
+      direct = htoken == 'direct'
+      if (.not. direct) read (htoken, *) heps
+      best = huge(1d0)
+      do r = 1, hrepeat
+        spot = 0
+        sgrad = 0
+        tpot = 0
+        tgrad = 0
+        ht0 = omp_get_wtime()
+        if (direct) then
+          call h3ddirectcg(1_8, zk, sources, charges, hn, at, hs, spot, sgrad, 1d-300)
+          if (ht > 0) call h3ddirectcg(1_8, zk, sources, charges, hn, targets, ht, tpot, &
+              tgrad, 1d-300)
+        else if (ht > 0) then
+          call hfmm3d_st_c_g(heps, zk, hn, sources, charges, hpot, hgrad, ht, targets, tpot, &
+              tgrad, ier)
+          call failed(ier)
+        else
+          call hfmm3d_s_c_g(heps, zk, hn, sources, charges, hpot, hgrad, ier)
+          call failed(ier)
+        end if
+        ht1 = omp_get_wtime()
+        best = min(best, ht1 - ht0)
+      end do
+      if (.not. direct) then
+        do jj = 1, hs
+          spot(jj) = hpot(sampled(jj) + 1)
+          sgrad(:,jj) = hgrad(:,sampled(jj) + 1)
+        end do
+      end if
+      open (newunit=hunit, file=trim(hprefix)//'-'//trim(htoken)//'.out', access='stream', &
+          form='unformatted', status='replace', action='write')
+      write (hunit) 'NDFMMHO1', hs, ht, spot, sgrad
+      if (ht > 0) write (hunit) tpot(1:ht), tgrad(:,1:ht)
+      close (hunit)
+      write (*, '(a,a,a,i0,a,i0,a,es24.16,a,a)') 'helmholtz: token=', trim(htoken), &
+          ' threads=', omp_get_max_threads(), ' repeat=', hrepeat, ' seconds=', best, &
+          ' out=', trim(hprefix)//'-'//trim(htoken)//'.out'
+      flush (6)
+    end do
+  end subroutine helmholtz_run
 
 end program fmm3d_driver

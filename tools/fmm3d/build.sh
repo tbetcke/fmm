@@ -3,7 +3,7 @@
 # the driver of the comparison against it, outside the repository (Phase 6 T9, C6.8;
 # docs/design/optimisation.md §8.1, decision 5). README.md beside it has the commands.
 #
-#     tools/fmm3d/build.sh [fetch] [build] [test]
+#     tools/fmm3d/build.sh [fetch] [build] [test] [driver]
 #
 # Steps (default: fetch build):
 #   fetch   downloads the release tarball into $FMM3D_ROOT/src and checks its SHA-256
@@ -16,6 +16,8 @@
 #           the flags and the tarball in $FMM3D_ROOT/<variant>/build-info.txt
 #   test    FMM3D's own Laplace tests (`make test` builds and runs them all; a couple of
 #           minutes) in each variant's build directory
+#   driver  relinks only the driver (driver.f90) against each variant's existing library,
+#           for a change to the driver alone (Helmholtz CH1.4); `build` must have run
 #
 # Variants (VARIANTS, default "default fastker"):
 #   default   FMM3D as `make lib` builds it, with OpenMP: its "easy-to-install version"
@@ -116,6 +118,22 @@ compilers() {
     done
 }
 
+# The driver of one variant, linked against its library.
+link_driver() {
+    prefix=$FMM3D_ROOT/$1
+    if [ ! -f "$prefix/lib/libfmm3d.a" ]; then
+        echo "build.sh: no $prefix/lib/libfmm3d.a; run the build step first" >&2
+        exit 1
+    fi
+    libs="-lm"
+    if [ "$1" = fastker ]; then libs="-lstdc++ $libs"; fi
+    # The driver with FMM3D's Fortran flags but -O2 (it only reads, copies and times).
+    # shellcheck disable=SC2086 # the list is split on purpose
+    "$FC" -O2 -fopenmp -o "$prefix/bin/fmm3d_driver" "$here/driver.f90" \
+        "$prefix/lib/libfmm3d.a" $libs
+    echo "linked $prefix/bin/fmm3d_driver"
+}
+
 build_variant() {
     variant=$1
     case "$variant" in
@@ -152,12 +170,7 @@ build_variant() {
         exit 1
     }
     cp "$src/lib-static/libfmm3d.a" "$prefix/lib/"
-    libs="-lm"
-    if [ "$fast" = ON ]; then libs="-lstdc++ $libs"; fi
-    # The driver with FMM3D's Fortran flags but -O2 (it only reads, copies and times).
-    # shellcheck disable=SC2086 # the list is split on purpose
-    "$FC" -O2 -fopenmp -o "$prefix/bin/fmm3d_driver" "$here/driver.f90" \
-        "$prefix/lib/libfmm3d.a" $libs
+    link_driver "$variant"
     {
         echo "FMM3D $FMM3D_TAG, commit $FMM3D_COMMIT, tarball SHA-256 $FMM3D_SHA256"
         echo "variant $variant: make lib FAST_KER=$fast (OpenMP on: FMM3D's default)"
@@ -204,8 +217,12 @@ for step in $steps; do
         compilers
         for variant in $VARIANTS; do test_variant "$variant"; done
         ;;
+    driver)
+        compilers
+        for variant in $VARIANTS; do link_driver "$variant"; done
+        ;;
     *)
-        echo "build.sh: unknown step $step (fetch, build or test)" >&2
+        echo "build.sh: unknown step $step (fetch, build, test or driver)" >&2
         exit 2
         ;;
     esac

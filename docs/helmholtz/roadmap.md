@@ -181,7 +181,9 @@ D7, D10, D11, D12) put to the user.
 **Gate:** CONVENTIONS §3.15 signed off; `nd-fmm-math` and `nd-fmm-ref` carry the Helmholtz
 family, checked against FMM3D's fixtures.
 
-- [ ] **CH1.4 FMM3D convention check and fixtures.** First a draft of §3.15 from proposal §4
+- [x] **CH1.4 FMM3D convention check and fixtures.** Report:
+  `fmm-validate/results/helmholtz-ch1-4.md`; the draft `docs/helmholtz/conventions-3.15-draft.md`;
+  the fixtures `fmm-ref/fixtures/helmholtz_fmm3d.json`. First a draft of §3.15 from proposal §4
   and S1–S3; then `hfmm3d` in `tools/fmm3d/driver.f90` and a generator in `tools/fixtures/`.
   *Done when:* on two points, FMM3D's factor, sign of k, gradient and branch identified and
   matching the draft (or the draft corrected); fixtures for real, complex and imaginary k and
@@ -222,9 +224,11 @@ family, checked against FMM3D's fixtures.
   zeroed; the same levels pruned on both ranks of a two-rank run; θ_D set. *Needs:* CH2.1,
   CH0.7.
 - [ ] **CH2.5 Gate: Yukawa against FMM3D.** *Done when:* both codes against the same sampled
-  direct sum over κD on W1 and W3, and the full-target crosscheck; skipped, with the reason,
-  if CH1.4 found FMM3D unreliable for imaginary zk. *Needs:* CH2.3, CH1.4.
-  *Machines:* Kathleen.
+  direct sum over κD on W1 and W3, and the full-target crosscheck. CH1.4's R12 found FMM3D
+  reliable for imaginary zk only in part. Signed off 2026-10-28 (CH1.4 report §5,
+  question 2): the comparison with FMM3D is limited to where it met its eps, κD ≤ 30 at
+  every eps and eps ≥ 10⁻⁶ (up to 2×) beyond; the sampled direct sum is the measure, and
+  CH2.5 is not skipped. *Needs:* CH2.3, CH1.4. *Machines:* Kathleen.
 - [ ] **H2.G Gate.** `/milestone-gate H2`. *Needs:* every task above.
 
 ## H3: Helmholtz on the host, RCR on every level
@@ -307,8 +311,9 @@ at any kD.
 - [ ] **CH5.2 Damping-dependent truncation and bound.** *Done when:* the error within target
   for weakly damped cases. *Needs:* CH5.1, CH0.6.
 - [ ] **CH5.3 Gate: complex k against FMM3D.** *Done when:* both codes against the same
-  sampled direct sum over the (Re kD, Im kD) grid, and the full-target crosscheck. *Needs:*
-  CH5.2, CH1.4. *Machines:* Kathleen.
+  sampled direct sum over the (Re kD, Im kD) grid, and the full-target crosscheck. The
+  comparison with FMM3D is limited for Im kD ≳ 50 as in CH2.5 (CH1.4 report §5,
+  question 2, signed off 2026-10-28). *Needs:* CH5.2, CH1.4. *Machines:* Kathleen.
 - [ ] **H5.G Gate.** `/milestone-gate H5`. *Needs:* every task above.
 
 ## H7: Device path
