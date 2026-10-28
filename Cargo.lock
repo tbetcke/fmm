@@ -2956,6 +2956,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "nd-fmm-spike-census"
+version = "0.0.0"
+dependencies = [
+ "mpi",
+ "nd-fmm-plan",
+ "nd-fmm-validate",
+ "nd-octree",
+ "serde_json",
+]
+
+[[package]]
 name = "nd-fmm-spike-coaxial"
 version = "0.0.0"
 dependencies = [

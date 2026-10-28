@@ -44,8 +44,8 @@ The proposal's Section 12, plus D0. A decision is recorded here when the user ta
 | D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2 | CH7.5 | open |
 | D9 | What "within noise" means for Laplace's benchmarks (constraint 1) | the run-to-run spread of the Laplace baseline, repeated on each machine before the change, per benchmark; plus the C3S.4 throughput gate | – | CHR.2, CH2.0 | signed off 2026-10-26: as recommended, the measured spread of the baseline per benchmark and machine, plus the C3S.4 gate. Clarified 2026-10-26 (CHR.2): one-sided, slower than `main` by more than the spread fails, faster passes when the outputs are bit for bit identical; from CH2.0 on five runs per side in the order A B B A A B B A A B, the spread max − min of `main`'s five run medians, never pooled with the branch's |
 | D10 | cubek-fft on the device | after S5: adopt, contribute upstream first, or keep the transform as a GEMM | CH0.5 | CH7.4 | open |
-| D11 | Maximum leaf width c_leaf | from S8: the largest c_leaf with P2P and leaf costs within 10 % of their best on W1 and W3 (expected 0.5 to 1) | CH0.8a | CH3.0 | open |
-| D12 | The reference workloads | the set of §9.1 | CH0.8a | CH2.1 | open |
+| D11 | Maximum leaf width c_leaf | from S8: the largest c_leaf with P2P and leaf costs within 10 % of their best on W1 and W3 (expected 0.5 to 1) | CH0.8a | CH3.0 | signed off 2026-10-28: as recommended (CH0.8a report §9, question 1), c_leaf = 1 by the revised rule, the largest c_leaf with no high-frequency leaf on any workload at 10⁻⁶ and 10⁻⁸, replacing the rule of this row, which is degenerate; a first-pass value that CH0.8b may revise with S6's constants and S7's p |
+| D12 | The reference workloads | the set of §9.1 | CH0.8a | CH2.1 | signed off 2026-10-28: as recommended (CH0.8a report §9, question 2), the workloads of §9.1 unchanged, with W3 at 10⁶ points and kD = 500 named as the node-budget and leaf-rule-cost case |
 | D13 | RLST's `fftw_mkl` back end | – | – | – | withdrawn (RLST ≥ 0.11 has none) |
 | D14 | Ownership and schedule of Phase HR | – | – | – | closed (RLST 0.11.0 and 0.12.0) |
 
@@ -102,7 +102,8 @@ D7, D10, D11, D12) put to the user.
   the scaling of §3.4 (exponential for Yukawa above κ r ≈ 1). *Done when:* accurate against
   arbitrary precision on every operator's argument and degree ranges; the scaling chosen.
   *Needs:* –.
-- [ ] **CH0.8a S8: workload census, first pass.** Trees of W1–W4 over the kD sweep from
+- [x] **CH0.8a S8: workload census, first pass.** Report:
+  `spikes/census/SPIKE_REPORT.md`. Trees of W1–W4 over the kD sweep from
   `nd-octree` with a prototype maximum leaf width (c_leaf 0.25 to 2), p from the formula; no
   FMM is run. *Done when:* per level the occupied boxes, U, V (by distance class), W and X
   sizes, p_l, regime and per-class choice, the memory model of §7 and the operation counts;

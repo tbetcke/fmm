@@ -171,3 +171,52 @@ request, using this template:
   algorithms (a real-arithmetic j for real k); D3 takes the f32 range finding; the
   proposal's next draft corrects §3.4 (FMM3D's width; the factor on every kind of k) and
   §5.5/CH2.3 (Yukawa's degree grows like √(κ a)).
+
+## 2026-10-28: CH0.8a S8: workload census, first pass
+- Done: the spike `spikes/census/` (a member outside the default members): W1–W4 in the
+  root cube; a prototype maximum leaf width (nd-octree's points-per-leaf rule plus "refine a
+  box with a point wider than c_leaf λ", the leaves handed to `Octree::new` as one key each
+  with `max_fine_keys = 1`, so nd-octree balances them); per-level counts from `Plan::new`
+  (boxes, occupied boxes, leaves, U, V per distance and reflection class, W, X, P2P point
+  pairs); the first-pass model (formula p, the bound of §3.6 with C_T = 2 and θ = 1, the
+  regime by operation count, N_φ, §7's memory and operation counts, the replicated top).
+  The sweep: 378 trees (W1 to kD = 1000, W2 to 500, W3 resolved to 100 and 10⁶ at 200 and
+  500, W4 at N = 10⁵ and 10⁶; c_leaf 0.25–2 and none; n = 128 and 64), ε = 10⁻⁴, 10⁻⁶, 10⁻⁸,
+  22 minutes and 40 GB on the M3 Max. Report `spikes/census/SPIKE_REPORT.md`, tables in
+  `spikes/census/results/`.
+- Tests: six in `tests/census.rs` (the plan's eight), all passing in release and debug:
+  the prototype equals nd-octree's tree leaf for leaf without a width (seven workloads);
+  the width rule holds and refines; every count against a brute-force oracle from the list
+  definitions on four adaptive trees; 15 distance and 34 reflection classes; the formula p
+  against §3.5's tables; |h_n| against S3's reference (3.5e-15); the bound against §3.6's
+  classes on RCR and widths; the cost and memory formulas against §7 and §6.7.
+- Findings: the census reproduces §7 and §6.6 from real trees (W1 at kD = 500: the same
+  boxes, regimes and V on RCR, M2L within 4 %; kD = 1000 hybrid 200 against 196, peak
+  signatures 5.35 against 5.0 GiB; replicated top 93, 268 and 237 MiB exactly). §12's D11
+  rule is degenerate: leaf cost never grows as c_leaf shrinks, so it picks 0.25 at 3–15×
+  the total work. A revised rule (the largest c_leaf with no high-frequency leaf at 10⁻⁶ and
+  10⁻⁸ on any workload) gives c_leaf = 1: within 2 % of the best total on resolved
+  workloads to kD = 200, +22–25 % on W1 at 500 and 1000, 10.4× on under-resolved W3 at 500.
+  At 10⁻⁴ the first-pass rule makes 0.5–1 λ levels H. The under-resolved W3 at kD = 500 needs
+  42 GiB of signature scratch on one level (R17). Low-frequency M2L is 71–88 % of the M2L
+  on W1. Batch sizes for S5 and S9 per H level in `results/batches.md`.
+- Checks: ran `/verify` on the M3 Max: format, Clippy default, examples and workspace
+  all-targets, `cargo doc`, the default (823) and workspace (891) tests, `cargo check
+  --workspace --all-targets`, the licence check, no fftw-sys; the spike's Clippy and tests in
+  release and debug. A self-review by a subagent: nothing blocking; its 16 points fixed (the
+  W4 seed's wording, constraint 9's wording, the per-class test noted, the oracle extended to
+  every count, report numbers). No machine runs. Nothing pending.
+- Decisions: signed off 2026-10-28, "1–4 as recommended" (report §9): (1) D11 c_leaf = 1
+  by the revised rule (the largest c_leaf with no high-frequency leaf on any workload at
+  10⁻⁶ and 10⁻⁸), replacing §12's degenerate rule, revisable by CH0.8b; (2) D12 the
+  workloads of §9.1 unchanged, W3 at 10⁶ and kD = 500 named the node-budget and
+  leaf-rule-cost case; (3) high-frequency leaf levels at 10⁻⁴ accepted for now, the
+  threshold left to CH0.8b with S6's constants and S7's p; (4) the proposal's next draft
+  takes D11's revised rule, §7's numbers from `results/summary.md` once CH0.8b confirms
+  them, and the full-cube scratch (9.2 GiB on level 5, 42 GiB on level 6 with the leaf
+  rule).
+- Laplace: not touched (only the spike, its member entry and its lock-file entry).
+- Follow-ups: CH0.8b repeats the census with S7's p and S6's constants (`examples/census.rs
+  -- sweep`); CH3.0 implements the maximum leaf width in nd-octree with the signed-off
+  c_leaf; S5 and S9 take their batch sizes from `results/batches.md`; CH4.1 and CH8.1 the
+  scratch and replicated-top numbers.
