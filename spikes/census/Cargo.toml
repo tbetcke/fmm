@@ -1,0 +1,19 @@
+[package]
+name = "nd-fmm-spike-census"
+version = "0.0.0"
+description = "Throwaway study: the workload census of the Helmholtz FMM, the trees of the reference workloads with a prototype maximum leaf width, their lists, degrees, regimes, memory and operation counts (Helmholtz CH0.8a, spike S8)."
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+nd-octree.workspace = true
+nd-fmm-plan.workspace = true
+mpi.workspace = true
+# W4: the four distributions of the Laplace gates, bit for bit.
+nd-fmm-validate.workspace = true
+
+[dev-dependencies]
+# The reference Hankel functions of spikes/radial/fixtures/reference.json.
+serde_json.workspace = true
