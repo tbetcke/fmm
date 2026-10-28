@@ -97,7 +97,8 @@ D7, D10, D11, D12) put to the user.
   relative errors against an arbitrary-precision reference for p and k a up to 300, real,
   complex and imaginary k; the imaginary parts of (S|S) and (R|R) zero to round-off for real
   k; the index symmetry that halves the tables. *Needs:* –.
-- [ ] **CH0.3 S3: radial functions.** j_n, h_n, i_n, k_n for real and complex arguments, with
+- [x] **CH0.3 S3: radial functions.** Report: `spikes/radial/SPIKE_REPORT.md`.
+  j_n, h_n, i_n, k_n for real and complex arguments, with
   the scaling of §3.4 (exponential for Yukawa above κ r ≈ 1). *Done when:* accurate against
   arbitrary precision on every operator's argument and degree ranges; the scaling chosen.
   *Needs:* –.
