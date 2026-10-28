@@ -7,6 +7,14 @@
 #             FMM3D's own tests; the tarball must be fetched first, on the login node
 #             (tools/kathleen/remote.sh 'tools/fmm3d/build.sh fetch')
 #   problems, sweep, match, time, crosscheck   the steps of tools/fmm3d/run.sh
+#   driver    tools/fmm3d/build.sh driver: relinks only the driver against the existing
+#             build (after a change to driver.f90)
+#   helmholtz-check      the two-point check of FMM3D's Helmholtz conventions against the
+#                        draft §3.15, with the identification (Helmholtz CH1.4)
+#   helmholtz-fixtures   fmm-ref/fixtures/helmholtz_fmm3d.json reproduced from this
+#                        machine's FMM3D, to round-off (`--check --no-reference`)
+#   r12       the R12 sweep of tools/fmm3d/helmholtz.py at N = R12_N (default 10⁶) on 40
+#             threads, its table written to OUT/r12-n<N>.md
 #
 #     tools/kathleen/remote.sh 'tools/fmm3d/build.sh fetch'
 #     tools/kathleen/submit.sh --time=01:00:00 -- fmm3d.sbatch build problems
@@ -37,8 +45,20 @@ for name in "$@"; do
     case "$name" in
     build) step build 'tools/fmm3d/build.sh build test' ;;
     problems | sweep | match | time | crosscheck) step "$name" "tools/fmm3d/run.sh $name" ;;
+    driver) step driver 'tools/fmm3d/build.sh driver' ;;
+    helmholtz-check) step helmholtz-check 'python3 tools/fmm3d/helmholtz.py check' ;;
+    helmholtz-fixtures)
+        step helmholtz-fixtures \
+            'python3 tools/fixtures/gen_helmholtz_fmm3d.py --check --no-reference'
+        ;;
+    r12)
+        n=${R12_N:-1000000}
+        step r12 "set -o pipefail; OMP_NUM_THREADS=\${OMP_NUM_THREADS:-40} python3 tools/fmm3d/helmholtz.py r12 \
+            --n $n | tee '$OUT/r12-n$n.md'"
+        ;;
     *)
-        echo "fmm3d.sbatch: unknown step $name (build, problems, sweep, match, time or crosscheck)"
+        echo "fmm3d.sbatch: unknown step $name (build, problems, sweep, match, time, crosscheck,"
+        echo "  driver, helmholtz-check, helmholtz-fixtures or r12)"
         exit 2
         ;;
     esac
