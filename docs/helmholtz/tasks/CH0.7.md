@@ -55,6 +55,10 @@ A spike only; no workspace crate, convention, table or Laplace path changes.
     L2P with gradient, P2L and M2P by direct evaluation, the direct sum; the expansions
     scaled by s_l per level (multipoles divided by sₙ, locals multiplied, the M2L table
     scaled s^{n+n′} as in S2). Constants: G = e^{ik r}/(4π r) = ik Σ jₙ hₙ Σₘ Y Y.
+    As built: s_l = min(|k| a_l/8, 1), not CH0.3's min(|k| a_l, 1), which overflows the
+    (S|R) table (entries to h_{2p}(k t)) from p ≈ 90 at k a = 1; the truncated chain does
+    not depend on the scale. The shift factors are applied per entry
+    ((s_src/s_tgt)ⁿ s_tgt^{n−n′}), since the unscaled coefficients leave the range.
   - `src/geometry.rs`: the 316 V-list offsets, children and grandchildren, the three
     placements (uniform in the box; clusters in the eight corner cubes of side w_leaf/8 of
     every leaf box; W1 patches, points on a sphere of radius R ∈ {2w, 8w} through the box
@@ -63,7 +67,7 @@ A spike only; no workspace crate, convention, table or Laplace path changes.
     targets of the target box, potential and gradient separately, §9.1), the search for
     the smallest p and the formula p of §3.5 (copied from S8's `degree`).
   - `tests/`, `examples/sweep.rs` (the calibration, writing `results/*.csv` and
-    `results/*.md`), `examples/time.rs`, `SPIKE_REPORT.md`.
+    `results/*.md`), `SPIKE_REPORT.md`. (No timing example: no time is a result here.)
 - Root `Cargo.toml` `members` gains `spikes/truncation`; `Cargo.lock` its entry.
 
 ### The chains
@@ -103,9 +107,10 @@ the same code at the calibrated p for comparison (the f64 floor, an input to S6 
   confirms. The report also gives p for the potential alone and the margin reached.
 - The search runs on the offsets with |t| ≤ √6 w (54 of them, where the error is
   largest), then every chosen p is checked on all 316 offsets and raised until it passes.
-- Coaxial tables by S2's recursion where Re(k) a ≤ 128 in double-double (≤ 40 in f64, the
+- Coaxial tables by S2's recursion where Re(k) a ≤ 100 in double-double (≤ 40 in f64, the
   signed-off rule), by projection above; the end-to-end test below bounds what either
-  leaves.
+  leaves. (Planned at 128; the recursion is 6·10⁻²² off the projection there, 2·10⁻²⁵ at
+  90.5.)
 - Output: tables of p₁ and δ per (kind, k a, ε) beside the formula; a fit of the form
   p = k a + C(ε) (k a)^{1/3} on the high-frequency range and the low-frequency floor, for
   S6, S8 (CH0.8b), §7 and CH2.3, CH3.3, CH4.3.
@@ -132,16 +137,18 @@ test unless stated.
 4. **Rotations**: S1's fixture (f64, ≤ 10⁻¹⁴); orthogonality to ≤ 10⁻²⁸ at n ≤ 300; the
    definition Y(Qx) = O(Q) Y(x) to ≤ 10⁻²⁸ for the 316 offset directions and the eight
    child shifts at n ≤ 20.
-5. **Coaxial tables**: S2's fixture (FMM-weighted error ≤ 10⁻¹¹, S2's metric); the
-   double-double recursion against the double-double projection at k a = 128 (real and
-   η = 0.1) and at k a ≤ 32 (every kind), FMM-weighted ≤ 10⁻²⁴; rectangular truncation a
-   block of the square table.
+5. **Coaxial tables**: S2's fixture (FMM-weighted error ≤ 10⁻¹⁴, S2's metric, over the
+   spike's range Im(k) a ≤ 32); the double-double recursion against the double-double
+   projection at k a = 90.5 (real and η = 0.1) and at k a ≤ 32 (every kind),
+   FMM-weighted ≤ 10⁻²⁴; rectangular truncation a block of the square table, bit for bit.
 6. **Only truncation is measured** (the acceptance's "extended precision"): each chain
    (C1, C2, C3m, C3l) at a p far above the calibrated one against the double-double direct
-   sum, relative error ≤ 10⁻²⁴ for potential and gradient, at k a = 0.1, 4, 32 for every
-   kind and at k a = 128 and 256 for real k and η = 0.1, on the nearest and farthest
-   offsets and every placement. So the rounding of the chain is at least 10⁻¹⁴ below every
-   ε of the sweep.
+   sum, relative error ≤ 10⁻²² for potential and gradient, at k a = 0.1, 4, 32 for every
+   kind and at k a = 128 (real k and η = 0.1) and 256 (real k), on the nearest offsets
+   (on the axis, β = 0 and π, and off it) and the farthest, every placement. So the
+   rounding of the chain is at least 10⁻¹² below every ε of the sweep. (Planned at 10⁻²⁴;
+   at low frequency the decay is about 0.16 decades per degree and the range of the
+   scaled tables ends near p = 135, where the gradient reaches 10⁻²³.)
 7. **Geometry**: 316 offsets, 15 distances; placements inside their boxes; corner
    clusters inside each leaf; patch points on their sphere.
 8. **Search**: on a synthetic error curve the search returns the smallest passing p;
