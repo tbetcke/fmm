@@ -13,6 +13,7 @@ scripts below.
 | `check_symmetry.py` | high-precision check of the box geometry and cube symmetry rules of CONVENTIONS §3.12; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
 | `check_leaf_geometry.py` | exact and high-precision check of the leaf data and relative box geometry of CONVENTIONS §3.13; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
 | `plane_wave_quadrature.sh` | writes `fmm-tables/src/plane_wave/quadrature_data.rs`: FMM3D's plane-wave quadratures for separation 1 (NIST's `lwtsexp_sep1.f` of FMM3D v2.1.0, with its notice; Phase 6 T13, from the spike of T10) | POSIX `sh`, `awk`, `sed`; FMM3D's source (`tools/fmm3d/build.sh fetch`) |
+| `gen_helmholtz_fmm3d.py` | writes `fmm-ref/fixtures/helmholtz_fmm3d.json`: FMM3D 2.1.0's Helmholtz direct sum (`h3ddirectcg`) for real, complex and imaginary k and real and complex charges, every value checked against the draft §3.15's kernel in mpmath, with FMM3D's two-point check (Helmholtz CH1.4) | Python ≥ 3.9, `mpmath==1.4.1` (pinned); FMM3D built by `tools/fmm3d/build.sh` (`FMM3D_ROOT`) |
 | `check_p2p_domain.py` | exact check of the coincident-pair rule and the domain of r² of fast P2P kernels, CONVENTIONS §3.13 "Fast kernels"; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned, through `check_leaf_geometry.py`) |
 
 All scripts declare their dependencies inline (PEP 723), so with
@@ -65,6 +66,26 @@ differences at 120 digits, verified by a second step size; the direct sum is the
 form, its gradient verified against differences of the potential. Regenerate it when
 `CONVENTION_VERSION` changes (it is written into the header) or the generator changes
 (bump its `GENERATOR_VERSION`). `nd-fmm-ref`'s `tests/dipoles/fixtures.rs` reads it.
+
+The Helmholtz FMM3D fixture (CH1.4) comes from FMM3D's own code, so it needs FMM3D
+built outside the repository (tools/fmm3d/README.md). It takes about 25 seconds:
+
+```sh
+FMM3D_ROOT=... uv run tools/fixtures/gen_helmholtz_fmm3d.py
+FMM3D_ROOT=... uv run tools/fixtures/gen_helmholtz_fmm3d.py --check
+FMM3D_ROOT=... python3 tools/fixtures/gen_helmholtz_fmm3d.py --check --no-reference   # no mpmath
+```
+
+It holds 200 sources in [0, 1]³ and 40 targets in [−0.5, 1.5]³ (seed 20261028), real and
+complex charges, and k = 1, 25, 1 + 0.5i, 25 + 2.5i, i and 25i. For each case it stores the
+potential and gradient of e^{ik|x−y|}/(4π|x−y|) at the sources (the self term dropped)
+and at the targets. The header records the release, commit, routine, `thresh`, compiler
+and machine, and how closely each case agrees with the draft's kernel summed in mpmath at
+30 digits; generation fails above 10⁻¹³. It also has the raw two-point values and the
+convention they identify. FMM3D's sums differ in their last bits between compilers, so
+`--check` compares the values to 10⁻¹³ relative, not the bytes. It also says whether the
+file is byte-identical, which it is on the machine and compiler that wrote it.
+`nd-fmm-ref` reads it from CH1.3 on.
 
 ## What the fixtures contain
 
