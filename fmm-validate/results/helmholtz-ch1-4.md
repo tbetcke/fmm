@@ -195,7 +195,7 @@ git):
 **Kathleen, N = 10⁶, 40 threads** (job 614099, `logs/fmm3d/r12-n1000000.md` under the
 Kathleen root):
 
-KATHLEEN_TABLE
+Pending: Kathleen job 614099 is running; this table follows when it ends.
 
 ### Findings
 
