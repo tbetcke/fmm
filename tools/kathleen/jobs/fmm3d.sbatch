@@ -13,8 +13,9 @@
 #                        draft §3.15, with the identification (Helmholtz CH1.4)
 #   helmholtz-fixtures   fmm-ref/fixtures/helmholtz_fmm3d.json reproduced from this
 #                        machine's FMM3D, to round-off (`--check --no-reference`)
-#   r12       the R12 sweep of tools/fmm3d/helmholtz.py at N = R12_N (default 10⁶) on 40
-#             threads, its table written to OUT/r12-n<N>.md
+#   r12       the R12 sweep of tools/fmm3d/helmholtz.py at N = R12_N (default 10⁶) on
+#             R12_THREADS OpenMP threads (default 40; env.sh sets OMP_NUM_THREADS=1 for the
+#             BLAS, so the step sets it), its table written to OUT/r12-n<N>.md
 #
 #     tools/kathleen/remote.sh 'tools/fmm3d/build.sh fetch'
 #     tools/kathleen/submit.sh --time=01:00:00 -- fmm3d.sbatch build problems
@@ -53,7 +54,7 @@ for name in "$@"; do
         ;;
     r12)
         n=${R12_N:-1000000}
-        step r12 "set -o pipefail; OMP_NUM_THREADS=\${OMP_NUM_THREADS:-40} python3 tools/fmm3d/helmholtz.py r12 \
+        step r12 "set -o pipefail; OMP_NUM_THREADS=${R12_THREADS:-40} python3 tools/fmm3d/helmholtz.py r12 \
             --n $n | tee '$OUT/r12-n$n.md'"
         ;;
     *)

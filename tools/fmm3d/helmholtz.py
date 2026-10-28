@@ -125,7 +125,8 @@ def run_check(driver):
             "pot2": cx("pot2", 1)[0],
             "grad2": cx("grad2", 3),
             "rel": float(f["rel"][0]),
-            "record": "record" in f,
+            # `record` is a bare word in the line (between `side=` and `draft=`).
+            "record": " record draft=" in line,
             "draft": (f.get("draft") or ["F"])[0] == "T",
         })
     if proc.returncode not in (0, 1) or not records:
@@ -237,6 +238,7 @@ def r12(args):
     driver = args.driver or default_driver()
     kinds = args.kinds.split(",")
     tokens = args.eps.split(",")
+    own = not args.work
     work = Path(args.work or tempfile.mkdtemp(prefix="r12-"))
     work.mkdir(parents=True, exist_ok=True)
     threads = os.environ.get("OMP_NUM_THREADS", "OpenMP's default")
@@ -275,6 +277,8 @@ def r12(args):
                 for path in work.glob(prefix.name + "-*.out"):
                     path.unlink()
         problem.unlink()
+    if own:
+        work.rmdir()
 
 
 def check(args):

@@ -240,7 +240,7 @@
   {
    "k": ["1.0000000000000000e+00","-5.0000000000000000e-01"],
    "routine": "hfmm3d_s_c_g",
-   "case": "checked",
+   "case": "outside the draft's branch, for the record",
    "potential_at_x1": ["7.0888240656791723e-02","1.1040189358608313e-01"],
    "gradient_at_x1": [
     ["1.4584601391447899e-01","-1.5687293863750160e-02"],
@@ -258,7 +258,7 @@
   {
    "k": ["1.0000000000000000e+00","-5.0000000000000000e-01"],
    "routine": "h3ddirectcg",
-   "case": "checked",
+   "case": "outside the draft's branch, for the record",
    "potential_at_x1": ["7.0888240656791723e-02","1.1040189358608313e-01"],
    "gradient_at_x1": [
     ["1.4584601391447899e-01","-1.5687293863750160e-02"],
@@ -276,7 +276,7 @@
   {
    "k": ["-1.0000000000000000e+00","0.0000000000000000e+00"],
    "routine": "hfmm3d_s_c_g",
-   "case": "checked",
+   "case": "outside the draft's branch, for the record",
    "potential_at_x1": ["4.2995891371431810e-02","-6.6962133350290956e-02"],
    "gradient_at_x1": [
     ["1.0995802472172277e-01","-2.3966241978859146e-02"],
@@ -294,7 +294,7 @@
   {
    "k": ["-1.0000000000000000e+00","0.0000000000000000e+00"],
    "routine": "h3ddirectcg",
-   "case": "checked",
+   "case": "outside the draft's branch, for the record",
    "potential_at_x1": ["4.2995891371431810e-02","-6.6962133350290956e-02"],
    "gradient_at_x1": [
     ["1.0995802472172277e-01","-2.3966241978859146e-02"],

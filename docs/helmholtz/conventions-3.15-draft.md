@@ -50,15 +50,17 @@ G_k(\mathbf{x}, \mathbf{y}) = \frac{e^{ik|\mathbf{x}-\mathbf{y}|}}{4\pi|\mathbf{
 = ik \sum_{n} j_n(k r_<)\, h_n(k r_>) \sum_{m=-n}^{n} Y_n^m(\hat{\mathbf{y}})\, Y_n^m(\hat{\mathbf{x}})
 ```
 
-  As for Laplace (§3.1), 1/(4π) is applied once, by `nd-fmm-exec`, when it produces the
-  output. Every operator accumulates the potential of e^{ikr}/r into a target's output,
-  P2P and the expansions alike. The factor ik is therefore part of the far field. The
-  proposal is that the three operators where a far-field contribution crosses from a
-  singular to a regular representation carry it: M2L (in its (S|R) table), M2P and P2L.
-  Each far-field contribution passes through exactly one of the three. The alternative is
-  that P2P computes e^{ikr}/(ik r) and `nd-fmm-exec` applies ik/(4π) once. That costs no
-  table factor, but it makes the near field singular as k → 0. CH1.1 chooses between the
-  two, and CH1.2 implements the choice.
+  Since Σ_m Y_n^m(x̂) Y_n^m(ŷ) = (2n + 1)/(4π) P_n(x̂ · ŷ), the same series without the
+  1/(4π) on the left reads e^{ikr}/r = 4π ik Σ_n j_n h_n Σ_m Y Y. As for Laplace (§3.1),
+  1/(4π) is applied once, by `nd-fmm-exec`, when it produces the output. Every operator
+  accumulates the potential of e^{ikr}/r into a target's output, P2P and the expansions
+  alike. The factor 4π ik is therefore part of the far field. The proposal is that the
+  three operators where a far-field contribution crosses from a singular to a regular
+  representation carry it: M2L (in its (S|R) table), M2P and P2L. Each far-field
+  contribution passes through exactly one of the three. The alternative is that every
+  operator accumulates the series itself, so P2P computes e^{ikr}/(4π ik r), and
+  `nd-fmm-exec` applies ik once. That costs no table factor, but it makes the near field
+  singular as k → 0. CH1.1 chooses between the two, and CH1.2 implements the choice.
 
 FMM3D 2.1.0 computes exactly this φ and ∇φ: `hfmm3d_s_c_g`, `hfmm3d_st_c_g` and
 `h3ddirectcg`, with k = `zk`. The two-point identification is in the CH1.4 report. FMM3D
@@ -111,7 +113,8 @@ with ν_m = √((n + |m|)!(n − |m|)!). They are evaluated with the Cartesian r
 = \kappa \sum_n i_n(\kappa r_<)\, k_n(\kappa r_>) \sum_m Y_n^m(\hat{\mathbf{y}})\, Y_n^m(\hat{\mathbf{x}})
 ```
 
-  Every factor is real. The Yukawa path stores M^Y = i^{−n} M and L^Y = −iⁿ L. Here M and
+  Every factor is real. Without the 1/(4π), the factor of the series is 4πκ, which
+  item 1's choice places as it places 4π ik. The Yukawa path stores M^Y = i^{−n} M and L^Y = −iⁿ L. Here M and
   L are the coefficients of Σ M h_n Y and Σ L j_n Y at k = iκ, without the factor ik.
   These relations are proposed, and §9 item 4 ("Yukawa two ways", CH1.3) tests them.
 
