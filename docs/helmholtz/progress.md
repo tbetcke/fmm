@@ -266,11 +266,16 @@ request, using this template:
     the draft), and so are the report's counts.
   - Kathleen job 614099 (node-c11b-009, 40 threads): the check, the fixtures and R12 at
     N = 10⁶, all passed. Nothing pending.
-- Decisions: none taken. Questions for sign-off in report §5:
-  1. the draft as CH1.1's starting point;
-  2. R12's consequence for CH2.5 and CH5.3 (compare against FMM3D only where it meets its
-     eps, rather than skipping CH2.5);
-  3. the proposal's next draft.
+- Decisions: signed off 2026-10-28, "1–3 as recommended" (report §5):
+  1. the draft §3.15 is CH1.1's starting point, with no correction from the check. Where
+     the factor 4π ik is applied is left to CH1.1, which takes the draft's proposal (the
+     crossing operators M2L, M2P and P2L) or the alternative;
+  2. CH2.5 runs and is not skipped. It compares against FMM3D only where FMM3D met its eps
+     in R12: κD ≤ 30 at every eps, and eps ≥ 1e-6 with up to 2× allowed beyond. The
+     sampled direct sum is the measure, with FMM3D's error stated beside it. CH5.3
+     restricts its grid the same way for Im kD ≳ 50;
+  3. the proposal's next draft takes R12's result into R12's row and §9.2, and FMM3D's
+     thresh rule beside §3.13's.
 - Laplace: not touched (tools, docs and one fixture file only; the driver's Laplace
   outputs are byte for byte the same).
 - Follow-ups:

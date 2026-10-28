@@ -142,7 +142,7 @@ None. The runs that were pending:
 
 ## Open questions
 
-For sign-off (report §5). None of them blocks this task's acceptance:
+For sign-off (report §5); signed off 2026-10-28, "1–3 as recommended": each as recommended below.
 
 1. The draft §3.15 as CH1.1's starting point. It needs no correction from the check.
    Where the factor 4π ik is applied is left to CH1.1.

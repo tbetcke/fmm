@@ -263,6 +263,9 @@ answer stands on the sampled ℓ2 norm only.
 
 ## 5. Consequences and questions for sign-off
 
+Signed off by the user on 2026-10-28, "1–3 as recommended": each question below is
+decided as its recommendation states.
+
 1. **The draft §3.15 as CH1.1's starting point.** Item 1 matches FMM3D, so no correction
    is needed. CH1.1 asks for sign-off on the items marked proposed, among them where the
    factor ik is applied (draft item 1: the three crossing operators M2L, M2P and P2L, or
