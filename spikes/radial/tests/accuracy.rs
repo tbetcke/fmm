@@ -28,6 +28,12 @@ fn num(v: &serde_json::Value) -> f64 {
     v.as_f64().unwrap()
 }
 
+/// An exact f64 stored as a decimal string (z and s): parsed by `str::parse`, which
+/// rounds correctly, unlike serde_json's default float parsing.
+fn exact(v: &serde_json::Value) -> f64 {
+    v.as_str().unwrap().parse().unwrap()
+}
+
 /// The spike's values and derivatives at orders 0..=top.
 fn evaluate(family: &str, z: C64, s: f64, top: usize) -> (Vec<C64>, Vec<C64>) {
     let mut v = vec![C64::ZERO; top + 1];
@@ -73,8 +79,8 @@ fn reference_on_every_range() {
     for set in doc["sets"].as_array().unwrap() {
         let name = set["name"].as_str().unwrap();
         let family = set["family"].as_str().unwrap();
-        let z = C64::new(num(&set["z"][0]), num(&set["z"][1]));
-        let s = num(&set["s"]);
+        let z = C64::new(exact(&set["z"][0]), exact(&set["z"][1]));
+        let s = exact(&set["s"]);
         let rows = set["rows"].as_array().unwrap();
         let top = rows
             .iter()

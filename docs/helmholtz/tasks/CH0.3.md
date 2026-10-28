@@ -105,6 +105,24 @@ All in f64 against the reference, one thread,
    values at z = 0 (ĵ₀ = 1, ĵₙ = 0, ĵ′₁ = 1/(3s)).
 5. **Scale consistency**: the same z at two scales s, s′ differs by (s′/s)ⁿ to round-off.
 
+As built:
+- The reference takes hₙ and kₙ from their exact finite sums (DLMF 10.49.6, 10.49.12)
+  with digits added until the largest term is covered, not from mpmath's `besselk`:
+  `besselk` does not converge at large argument and moderate order (order 370.5 at
+  1800), and `hankel1` = J + iY cancels by 0.87 Im z digits and took up to 20 s per value.
+  The Wronskians of the definition check tie the sums to `besselj` and `besseli`.
+- The fixture stores z and s as decimal strings (serde_json's default float parsing can
+  be one ulp off, 2·10⁻¹³ in e^{iz} at |z| = 1500), and the reference forms powers of i
+  exactly (Python's `1j ** k` is not exact above |k| = 100).
+- The dense sweeps (tests 2–4) take each family's highest order from the operator that
+  needs it (`src/ranges.rs`: `regular_top`, `singular_top`). A first version took
+  2p(|z|) for every family, orders no operator needs, at which k̂ₙ truly overflows f64.
+- Test 3 (Yukawa two ways) agrees bit for bit: on the imaginary axis the complex
+  recursions perform the real path's arithmetic. It checks the relations and powers of
+  i; the reference checks i and k independently.
+- `examples/ranges.rs` also tabulates the Yukawa series' truncation, which showed the
+  degree for a relative tolerance growing like √(κ a) (report §6).
+
 ## Checks
 
 `/verify` (no default member changes: format, Clippy of the workspace with all targets,
@@ -132,4 +150,18 @@ None.
 
 ## Open questions
 
-Filled when they arise.
+Put to the user on 2026-10-27, before the PR (SPIKE_REPORT.md §8), and signed off as
+recommended:
+
+1. The scaling of §3.15 item 3: ĵₙ = e^{−|Im z|} jₙ(z)/sⁿ, ĥₙ = e^{Im z} hₙ(z) sⁿ,
+   îₙ = e^{−x} iₙ(x)/sⁿ, k̂ₙ = eˣ kₙ(x) sⁿ and the same on the derivatives, with
+   s_l = min(|k| a_l, 1), a_l the circumradius; the exponential factor on every level and
+   every kind of k; the double factorials not absorbed. Signed off 2026-10-27:
+   "Circumradius, exp always".
+2. kₙ normalised as k₀(x) = e⁻ˣ/x (√(2/(πx)) K_{n+½}), so hₙ(iκρ) = −i⁻ⁿ kₙ(κρ) and the
+   Yukawa series is κ Σ iₙ kₙ Σₘ Yₙᵐ Yₙᵐ. Signed off 2026-10-27: "k₀ = e^{−x}/x".
+
+Left in the PR for the record (SPIKE_REPORT.md §8, questions 3–5): the algorithms for
+CH1.2; f32 needs a per-degree scale on low-frequency levels (D3); the proposal's §3.4
+(FMM3D's scale uses the full width; the exponential factor on every kind of k) and §5.5
+and CH2.3 (Yukawa's degree grows like √(κ a)) at its next draft.

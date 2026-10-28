@@ -15,14 +15,18 @@ for complex z with Im z >= 0 and real x > 0, and the same factors on the derivat
 (j^'_n = e^(-|Im z|) j_n'(z) / s^n, ...). k_n is (2/pi) times DLMF's k_n, so
 k_0(x) = e^(-x)/x and h_n(i x) = -i^(-n) k_n(x); j_n(i x) = i^n i_n(x).
 
-Method: mpmath's Bessel functions at half-integer order, so nothing is shared with the
-spike's recursions:
+Method: mpmath's Bessel functions at half-integer order for the regular functions, and
+the finite sums of half-integer order for the singular ones, so nothing is shared with
+the spike's recursions:
 
-    j_n(z) = sqrt(pi/(2z)) J_{n+1/2}(z)
-    h_n(z) = sqrt(pi/(2z)) H^(1)_{n+1/2}(z), from mpmath's hankel1 with digits added
-             for the cancellation of J + iY where Im z <= 2 Re z, else from
-             (2/(pi i)) e^(-i pi nu/2) K_nu(-i z), nu = n + 1/2 (DLMF 10.27.8)
-    i_n(x) = sqrt(pi/(2x)) I_{n+1/2}(x),    k_n(x) = sqrt(2/(pi x)) K_{n+1/2}(x)
+    j_n(z) = sqrt(pi/(2z)) J_{n+1/2}(z),     i_n(x) = sqrt(pi/(2x)) I_{n+1/2}(x)
+    h_n(z) = e^(iz) sum_{k=0}^n i^(k-n-1) a_k / z^(k+1)          (DLMF 10.49.6)
+    k_n(x) = e^(-x) sum_{k=0}^n a_k / x^(k+1)                    (DLMF 10.49.12, times 2/pi)
+    a_k = (n + k)! / (2^k k! (n - k)!)
+
+The sums take digits until their largest term is covered. (mpmath's besselk does not
+converge at large argument and moderate order, e.g. order 370.5 at 1800, and
+hankel1 = J + iY cancels by about 0.87 Im z digits.)
 
 and the derivatives from the neighbouring orders (f_n' = f_{n-1} - (n+1)/z f_n for j, h,
 i; k_n' = -k_{n-1} - (n+1)/x k_n; at n = 0, j_0' = -j_1, h_0' = -h_1, i_0' = i_1,
@@ -179,24 +183,37 @@ def jn(n, z):
     return mpmath.sqrt(mpmath.pi / (2 * z)) * mpmath.besselj(half(n), z)
 
 
-# Where Im z <= HANKEL1_SLOPE Re z (real and damped k up to arg z = pi/4 and a little
-# beyond), h_n comes from mpmath's hankel1 (J + iY) with digits added for the
-# cancellation (|J| / |H| is about e^(2 Im z)); near the imaginary axis from K, which has
-# no cancellation. K is slow, or fails to converge, at large order when its argument -iz
-# is far from the real axis: 15 s at order 1400 for real z = 3900 (hankel1 0.3 s), no
-# convergence at order 1480 for z = 3900 e^(i pi/4) (hankel1 20 s).
-HANKEL1_SLOPE = 2.0
+def i_pow(k):
+    """i^k exactly. (Python's 1j ** k leaves exact repeated multiplication above |k| = 100
+    and errs by 1e-16, which the cancelling terms of h_n amplify to O(1).)"""
+    return (mpc(1), mpc(0, 1), mpc(-1), mpc(0, -1))[k % 4]
+
+
+def hankel_sum(n, z, imaginary):
+    """sum_{k=0}^n c^k a_k(n + 1/2) / z^(k+1) with c = i if `imaginary`, else 1, a_k = (n + k)! / (2^k k! (n - k)!)
+    (DLMF 10.49.1), with digits added until the largest term is covered: the terms of h_n
+    alternate in phase and cancel by up to hundreds of digits near |z| ~ n."""
+    extra = 20
+    while True:
+        with mp.extradps(extra):
+            a = mpf(1)
+            term_scale = 1 / z
+            terms = []
+            for k in range(n + 1):
+                terms.append((i_pow(k) if imaginary else 1) * a * term_scale)
+                a = a * (n + k + 1) * (n - k) / (2 * (k + 1))
+                term_scale = term_scale / z
+            total = mpmath.fsum(terms)
+            largest = max(abs(t) for t in terms)
+            lost = int(mpmath.log10(largest / abs(total))) if total != 0 else 10**6
+            if lost + 15 <= extra:
+                return +total
+            extra = lost + 30
 
 
 def hn(n, z):
-    nu = half(n)
-    if mpmath.im(z) <= HANKEL1_SLOPE * mpmath.re(z):
-        extra = int(0.87 * float(mpmath.im(z))) + 10
-        with mp.extradps(extra):
-            h = mpmath.sqrt(mpmath.pi / (2 * z)) * mpmath.hankel1(nu, z)
-        return +h
-    k = mpmath.besselk(nu, -1j * z)
-    return mpmath.sqrt(mpmath.pi / (2 * z)) * 2 / (mpmath.pi * 1j) * mpmath.expj(-mpmath.pi * nu / 2) * k
+    """h_n(z) = e^(iz) i^(-n-1) sum_k i^k a_k / z^(k+1) (DLMF 10.49.6)."""
+    return mpmath.expj(z) * i_pow(-n - 1) * hankel_sum(n, z, True)
 
 
 def i_n(n, x):
@@ -204,7 +221,8 @@ def i_n(n, x):
 
 
 def kn(n, x):
-    return mpmath.sqrt(2 / (mpmath.pi * x)) * mpmath.besselk(half(n), x)
+    """k_n(x) = e^(-x) sum_k a_k / x^(k+1) (DLMF 10.49.12 times 2/pi), all terms positive."""
+    return mpmath.exp(-x) * hankel_sum(n, x, False)
 
 
 def derivative(fam, f, n, z):
@@ -329,8 +347,8 @@ def check_definitions():
             rel(kn(0, x), mpmath.exp(-x) / x)
             rel(kn(1, x), mpmath.exp(-x) * (1 + x) / x**2)
             for n in (0, 1, 4, 25):
-                rel(jn(n, 1j * x), (1j) ** n * i_n(n, x))
-                rel(hn(n, 1j * x), -((1j) ** -n) * kn(n, x))
+                rel(jn(n, 1j * x), i_pow(n) * i_n(n, x))
+                rel(hn(n, 1j * x), -i_pow(-n) * kn(n, x))
                 w = i_n(n, x) * derivative("k", kn, n, x) - derivative("i", i_n, n, x) * kn(n, x)
                 rel(w, -1 / x**2)
     return worst
@@ -353,7 +371,10 @@ def build():
             if fam == "j":
                 entry += [float(ev), float(ed)]
             rows.append(entry)
-        sets.append({"name": name, "family": fam, "z": list(z), "s": s, "rows": rows})
+        # z and s as decimal strings: the tests parse them with Rust's correctly rounded
+        # str::parse, since serde_json's default float parsing can be one ulp off, which
+        # moves e^(iz) by |z| ulp (2e-13 at |z| = 1500).
+        sets.append({"name": name, "family": fam, "z": [repr(z[0]), repr(z[1])], "s": repr(s), "rows": rows})
         print(f"{name}: {len(rows)} rows", file=sys.stderr)
     doc = {
         "about": "Helmholtz CH0.3 (S3) reference radial functions; spikes/radial/tools/reference.py",
