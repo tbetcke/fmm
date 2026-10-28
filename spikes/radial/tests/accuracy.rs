@@ -139,12 +139,13 @@ fn reference_on_every_range() {
     );
 }
 
-/// The arguments of the dense sweeps: |z| from 10⁻⁶ to 3900, with the highest orders the
+/// The arguments of the dense sweeps: |z| from 10⁻⁶ to 4550 (the projection's hₙ(k R),
+/// R up to 7a, at k a = 650), with the highest orders the
 /// operators need there, of the regular and of the singular functions (src/ranges.rs).
 fn sweep() -> Vec<(f64, usize, usize)> {
     (0..=64)
         .map(|i| {
-            let r = 10f64.powf(-6.0 + i as f64 * (3900f64.log10() + 6.0) / 64.0);
+            let r = 10f64.powf(-6.0 + i as f64 * (4550f64.log10() + 6.0) / 64.0);
             (r, regular_top(r), singular_top(r))
         })
         .collect()
@@ -242,7 +243,7 @@ fn yukawa_two_ways() {
     println!("worst: {worst:.1e}");
 }
 
-/// Test 4: finite on every operator's range, Yukawa at κρ = 3900 included, and the exact
+/// Test 4: finite on every operator's range, Yukawa at κρ = 4550 included, and the exact
 /// values at z = 0.
 #[test]
 #[ignore = "orders to 1460; run in release"]

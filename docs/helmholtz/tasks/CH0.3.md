@@ -47,12 +47,13 @@ A spike only; no workspace crate, convention, table or Laplace path changes.
   - `src/ranges.rs`: the operators' argument and degree ranges (below), and the scale
     candidates.
   - `tools/reference.py` (PEP 723, `mpmath==1.4.1` as CH0.1 and CH0.2): values from
-    mpmath's `besselj`, `bessely`, `besseli` and `besselk` at half-integer order, hₙ
-    through `besselk` (H⁽¹⁾_ν(z) = (2/(πi)) e^{−iπν/2} K_ν(−iz), no cancellation for
-    Im z ≥ 0), derivatives from the neighbouring orders, so it shares no algorithm with
+    mpmath's `besselj` and `besseli` at half-integer order, hₙ and k̃ₙ from their exact
+    finite sums (as built; first planned through `besselk`, see "As built" below),
+    derivatives from the neighbouring orders, so it shares no algorithm with
     the spike; each value at two precisions 40 digits apart, agreeing to 10⁻³⁰. First, the
     closed forms at n ≤ 2 and the relations jₙ(ix) = iⁿ iₙ(x), hₙ(ix) = −i⁻ⁿ k̃ₙ(x) to
-    10⁻⁴⁰. Writes `fixtures/reference.json` (committed, under 1 MB); `--check`
+    10⁻⁴⁰. Writes `fixtures/reference.json` (committed; 1.3 MB as built, over the 1 MB
+    first planned); `--check`
     regenerates it byte for byte.
   - `tests/accuracy.rs`, `examples/{ranges,time}.rs`, `SPIKE_REPORT.md`.
 - Root `Cargo.toml` `members` gains `spikes/radial`; `Cargo.lock` gains its entry.
@@ -67,15 +68,19 @@ circumradius as in §3.5's tables, c_leaf ≤ 2 from S8's range, kD from 10⁻²
 
 | Operator | Family | Arguments | Orders |
 | --- | --- | --- | --- |
-| P2M, L2P | j, j′ (i, i′) | k ρ, 0 ≤ ρ ≤ a_leaf: \|z\| ≤ 5.44 c_leaf ≤ 10.9 | ≤ p_leaf + 1 ≈ 42 |
-| M2P, P2L | h, h′ (k̃, k̃′) | k ρ, √3 a_b ≤ ρ ≲ 3.5 w_leaf: \|z\| ≤ 50 | ≤ p_leaf + 1 |
-| M2M, L2L start | j (i) | k a/2, k a ≤ 650 | ≤ p_l + p_{l+1} ≤ 1460 |
-| M2L start, T(ŝ) | h (k̃) | k t, 2w ≤ t ≤ 6a: \|z\| ≤ 3900 | ≤ 2P − 2 ≤ 1460 |
-| Projection (k a > 40) | j, j′, h, h′ | k ρ, ρ ∈ {a, 4a/√3}: \|z\| ≤ 870 | ≤ p_l ≈ 730 |
+| P2M, L2P | j, j′ (i, i′) | k ρ, 0 ≤ ρ ≤ a_leaf: Re(k) a_leaf ≤ 5.44 c_leaf ≤ 10.9 | ≤ p_leaf + 1 ≈ 42 |
+| M2P, P2L | h, h′ (k̃, k̃′) | k ρ, ρ ≥ √3 a_b (box b the smaller) | ≤ p_b + 1 |
+| M2M, L2L start | j (i) | k a/2, k a ≤ 650 | ≤ p_l + p_{l+1} ≤ 1138 |
+| M2L start, T(ŝ) | h (k̃) | k t, 2w ≤ t ≤ 6a: \|z\| ≤ 3900 | ≤ 2P − 2 ≤ 1482 |
+| Projection (k a > 40) | j, j′, h, h′ | k a, 4 k a/√3, and the translated h at k R, R ≤ t + a = 7a: \|z\| ≤ 4550 | ≤ p_l + 1 ≈ 742 |
 
+The leaf rule bounds Re(k) a only, so damped k reaches larger |k| a_leaf (η = 10: 110).
 Yukawa has no leaf rule (§3.7), so its P2M and L2P arguments are not bounded by c_leaf:
-the sweep takes κρ to 3900 there too, where e^{κρ} overflows f64 without the exponential
+the sweep takes κρ to 4550 there too, where e^{κρ} overflows f64 without the exponential
 factor. Small arguments: down to |z| = 10⁻¹² and z = 0 exactly (a point at a centre).
+(As built; the first version of this table had the orders as 1460 throughout, the
+projection to 870 and omitted the translated h and damped leaves; the self-review found
+them.)
 
 **Scale candidates** (s = min(|k| r, 1)): r = w (FMM3D 2.1.0), r = w/2 (proposal §3.4),
 r = a = √3 w/2 (CH0.2); and the double factorials absorbed (a per-degree scale on
@@ -114,6 +119,9 @@ As built:
 - The fixture stores z and s as decimal strings (serde_json's default float parsing can
   be one ulp off, 2·10⁻¹³ in e^{iz} at |z| = 1500), and the reference forms powers of i
   exactly (Python's `1j ** k` is not exact above |k| = 100).
+- After the self-review: a fifth kind of k (η = 10), the projection's translated h to
+  |z| = 4550 (fixture and sweeps), Yukawa at Helmholtz's orders and at both M2L
+  distances, leaves at ρ/a = 10⁻⁶; 13,174 entries in 571 sets.
 - The dense sweeps (tests 2–4) take each family's highest order from the operator that
   needs it (`src/ranges.rs`: `regular_top`, `singular_top`). A first version took
   2p(|z|) for every family, orders no operator needs, at which k̂ₙ truly overflows f64.

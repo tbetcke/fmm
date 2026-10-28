@@ -158,7 +158,7 @@ fn main() {
     println!("| --- | --- | --- | --- |");
     let t = 4.0 / 3.0f64.sqrt();
     let last = |terms: &[f64], eps: f64| terms.iter().rposition(|x| *x > eps).unwrap_or(0);
-    let top = 120;
+    let top = 500;
     let laplace: Vec<f64> = (0..=top).map(|n| t.powi(-(n as i32))).collect();
     let row = |name: String, terms: &[f64]| {
         println!(

@@ -64,9 +64,15 @@ AGREE = mpf(10) ** -30
 UNDER = 1e-300
 OVER = 1e300
 
-# The kinds of k, by arg k: real, complex k = kappa (1 + i eta) for eta = 0.1 and 1, and
-# imaginary (the complex path at z = i x, which Yukawa's real path is checked against).
-KINDS = [("real", 0.0), ("complex0.1", math.atan(0.1)), ("complex1", math.pi / 4), ("imaginary", math.pi / 2)]
+# The kinds of k, by arg k: real, complex k = kappa (1 + i eta) for eta = 0.1, 1 and 10,
+# and imaginary (the complex path at z = i x, which Yukawa's real path is checked against).
+KINDS = [
+    ("real", 0.0),
+    ("complex0.1", math.atan(0.1)),
+    ("complex1", math.pi / 4),
+    ("complex10", math.atan(10.0)),
+    ("imaginary", math.pi / 2),
+]
 EPS = 1e-10
 # The circumradius of a leaf of width c_leaf wavelengths: k a = 2 pi c sqrt(3)/2.
 C_LEAF = [0.25, 1.0, 2.0]
@@ -77,6 +83,9 @@ LEVEL_KA = [0.01, 1.0, 10.0, 40.0, 100.0, 300.0, 650.0]
 # Yukawa: kappa a of a leaf has no wavelength bound (proposal §3.7).
 YUKAWA_KA = [1e-6, 1e-3, 0.1, 1.0, 5.0, 30.0, 300.0, 650.0]
 RANDOM = 160
+# The largest |z| of the random points: the projection's h_n(k R), R up to t + a = 7a, at
+# k a = 650.
+Z_MAX = 7 * 650.0
 SAMPLES = 18
 
 
@@ -108,6 +117,8 @@ def orders(top, z_abs, rng):
 
 
 def polar(r, theta):
+    if theta == math.pi / 2:
+        return (0.0, r)
     return (r * math.cos(theta), r * math.sin(theta))
 
 
@@ -128,7 +139,7 @@ def configurations(rng):
             # The leaf rule bounds Re k a; |k| a follows from the kind (imaginary: kappa a).
             ka = re_ka if kind == "imaginary" else re_ka / math.cos(theta)
             p = degree(min(ka, 11.0), EPS)
-            for frac in (1e-3, 0.5, 1.0):
+            for frac in (1e-6, 1e-3, 0.5, 1.0):
                 add(f"p2m-{kind}-{tag}-rho{frac}", "j", polar(ka * frac, theta), min(ka, 1.0), p + 1)
     # M2P and P2L: h at k rho, sqrt(3) a_b <= rho <= 8 a_b.
     for kind, theta in KINDS:
@@ -137,7 +148,8 @@ def configurations(rng):
             for frac in (math.sqrt(3), 8.0):
                 add(f"m2p-{kind}-ka{ka}-rho{frac:.3f}", "h", polar(ka * frac, theta), min(ka, 1.0), p + 1)
     # Translations: the start values j_l(k a/2) of M2M and L2L, h_l(k t) of the M2L at
-    # t = 2w and 6a (= sqrt(27) w), and the projection's j and h at rho = a and 4a/sqrt(3).
+    # t = 2w and 6a (= sqrt(27) w), and the projection's j and h at rho = a and 4a/sqrt(3),
+    # and its translated h_n(k R) at the far end R = t + a = 7a of the farthest M2L.
     for kind, theta in KINDS:
         for ka in LEVEL_KA:
             p, pc = degree(ka, EPS), degree(ka / 2, EPS)
@@ -148,21 +160,23 @@ def configurations(rng):
             if ka >= 40:
                 add(f"proj-{kind}-ka{ka}-j", "j", polar(ka, theta), s, p + 1)
                 add(f"proj-{kind}-ka{ka}-h", "h", polar(ka * 4 / math.sqrt(3), theta), s, p + 1)
-    # Yukawa, the real path: i at kappa rho (P2M, L2P, M2M), k at kappa rho and kappa t.
+                add(f"proj-{kind}-ka{ka}-h7", "h", polar(ka * 7, theta), s, p + 1)
+    # Yukawa, the real path: i at kappa rho (P2M, L2P, M2M), k at kappa rho and kappa t, to
+    # Helmholtz's orders at the same kappa a (larger than Yukawa's own, SPIKE_REPORT.md §6).
     for ka in YUKAWA_KA:
-        p = degree(min(ka, 11.0), EPS)
+        p = degree(min(ka, 650.0), EPS)
         s = min(ka, 1.0)
         for frac in (1e-3, 0.5, 1.0):
             add(f"yp2m-ka{ka}-rho{frac}", "i", (ka * frac, 0.0), s, p + 1)
         add(f"ym2p-ka{ka}", "k", (ka * math.sqrt(3), 0.0), s, p + 1)
-        pl = degree(min(ka, 650.0), EPS)
-        add(f"ym2m-ka{ka}", "i", (ka / 2, 0.0), s, pl + degree(ka / 2, EPS))
-        add(f"ym2l-ka{ka}-d27", "k", (ka * 6.0, 0.0), s, 2 * pl)
-    # Random points over the whole range: |z| log-uniform in [1e-6, 3900], arg in [0, pi/2],
+        add(f"ym2m-ka{ka}", "i", (ka / 2, 0.0), s, p + degree(ka / 2, EPS))
+        for tname, t in (("d2", 4 / math.sqrt(3)), ("d27", 6.0)):
+            add(f"ym2l-ka{ka}-{tname}", "k", (ka * t, 0.0), s, 2 * p)
+    # Random points over the whole range: |z| log-uniform in [1e-6, Z_MAX], arg in [0, pi/2],
     # the scale of a box with |k| a between |z|/8 and |z|/sqrt(3) (h) or |z| and 4 |z| (j).
     for i in range(RANDOM):
         fam = "jhik"[i % 4]
-        r = 10 ** rng.uniform(-6, math.log10(3900))
+        r = 10 ** rng.uniform(-6, math.log10(Z_MAX))
         theta = rng.uniform(0, math.pi / 2) if fam in "jh" else 0.0
         ka = r * (rng.uniform(1, 4) if fam in "ji" else rng.uniform(1 / 8, 1 / math.sqrt(3)))
         top = min(1460, 2 * degree(min(ka, 650.0), EPS))
@@ -183,6 +197,10 @@ def jn(n, z):
     return mpmath.sqrt(mpmath.pi / (2 * z)) * mpmath.besselj(half(n), z)
 
 
+# The most digits a sum of hankel_sum lost to cancellation, reported at the end.
+CANCELLED = [0]
+
+
 def i_pow(k):
     """i^k exactly. (Python's 1j ** k leaves exact repeated multiplication above |k| = 100
     and errs by 1e-16, which the cancelling terms of h_n amplify to O(1).)"""
@@ -191,7 +209,7 @@ def i_pow(k):
 
 def hankel_sum(n, z, imaginary):
     """sum_{k=0}^n c^k a_k(n + 1/2) / z^(k+1) with c = i if `imaginary`, else 1, a_k = (n + k)! / (2^k k! (n - k)!)
-    (DLMF 10.49.1), with digits added until the largest term is covered: the terms of h_n
+    (DLMF 10.49.1; the sums of 10.49.6 and 10.49.12), with digits added until the largest term is covered: the terms of h_n
     alternate in phase and cancel by up to hundreds of digits near |z| ~ n."""
     extra = 20
     while True:
@@ -207,6 +225,7 @@ def hankel_sum(n, z, imaginary):
             largest = max(abs(t) for t in terms)
             lost = int(mpmath.log10(largest / abs(total))) if total != 0 else 10**6
             if lost + 15 <= extra:
+                CANCELLED[0] = max(CANCELLED[0], lost)
                 return +total
             extra = lost + 30
 
@@ -376,6 +395,7 @@ def build():
         # moves e^(iz) by |z| ulp (2e-13 at |z| = 1500).
         sets.append({"name": name, "family": fam, "z": [repr(z[0]), repr(z[1])], "s": repr(s), "rows": rows})
         print(f"{name}: {len(rows)} rows", file=sys.stderr)
+    print(f"largest cancellation in the sums: {CANCELLED[0]} digits", file=sys.stderr)
     doc = {
         "about": "Helmholtz CH0.3 (S3) reference radial functions; spikes/radial/tools/reference.py",
         "mpmath": mpmath.__version__,

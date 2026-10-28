@@ -2,7 +2,7 @@
 
 Helmholtz task CH0.3 ([docs/helmholtz/tasks/CH0.3.md](../../docs/helmholtz/tasks/CH0.3.md)).
 The question is proposal §10 CH0.3, with §3.4, §4 item 3, §5.1, §5.5, §5.6 and risk R4.
-Written on 2026-10-27 from branch `tbetcke/h-ch0-3` (main at 0367855 plus this spike), on
+Written on 2026-10-27 and 2026-10-28 from branch `tbetcke/h-ch0-3` (main at 0367855 plus this spike), on
 the M3 Max, release builds, rustc 1.99.0, f64, one thread.
 
 ## Summary
@@ -10,12 +10,12 @@ the M3 Max, release builds, rustc 1.99.0, f64, one thread.
 1. **Every family is accurate to near round-off on every operator's range** (§3).
    jₙ, hₙ = hₙ⁽¹⁾ (complex z, 0 ≤ arg z ≤ π/2), iₙ and kₙ (real x) and their
    derivatives, against an arbitrary-precision reference (mpmath's J and I, and the
-   exact finite sums of hₙ and kₙ): **6.5·10⁻¹⁴ at worst** over 9,454 entries in 452
-   sets, at most 3.8·10⁻¹⁵ on the leaf and low-frequency ranges; the error grows only
+   exact finite sums of hₙ and kₙ): **6.5·10⁻¹⁴ at worst** over 13,174 entries in 571
+   sets, at most 3.6·10⁻¹⁵ on the leaf and low-frequency ranges; the error grows only
    with the largest |z| and orders (hₙ to n = 1481 at |z| = 1501).
-   The Wronskians hold to 6.7·10⁻¹⁴ relative to their terms over |z| from 10⁻⁶ to
-   3900, seven values of arg z, every order an operator needs there (§4). Every value is
-   finite on those ranges, including Yukawa at κρ = 3900, and z = 0 gives the exact
+   The Wronskians hold to 5.4·10⁻¹⁴ relative to their terms over |z| from 10⁻⁶ to
+   4550, seven values of arg z, every order an operator needs there (§4). Every value is
+   finite on those ranges, including Yukawa at κρ = 4550, and z = 0 gives the exact
    values. R4 does not materialise in f64 with the algorithms below.
 2. **The algorithms** (§2): j and i by Miller's method in ratio form (the backward
    recursion of rₙ = fₙ/fₙ₋₁ from a start order found by FMM3D's forward growth test),
@@ -23,8 +23,9 @@ the M3 Max, release builds, rustc 1.99.0, f64, one thread.
    |z| < 0.5); h and k by the upward recursion from their closed forms; derivatives from
    the neighbouring orders. No allocation; one pass each.
 3. **The exponential factor is needed, always** (§6). Yukawa has no leaf rule
-   (proposal §3.7), so a leaf can be many κ⁻¹ wide; iₙ(κa) leaves f64 at κa ≈ 709 and
-   f32 near κa ≈ 90. Damped complex k has the same growth e^{Im z}. Removing e^{∓|Im z|}
+   (proposal §3.7), so a leaf can be many κ⁻¹ wide. Without the factor kₙ at the nearest
+   distance underflows f64 from κa ≈ 405 (f32 from 48) and iₙ(κa) overflows f64 at
+   κa ≈ 717. Damped complex k has the same growth e^{Im z}. Removing e^{∓|Im z|}
    costs nothing for real k (it is 1) and needs no threshold, so the recommendation is
    to remove it on every level and every kind of k, not only above κr ≈ 1 as §3.4
    proposed.
@@ -51,8 +52,8 @@ the M3 Max, release builds, rustc 1.99.0, f64, one thread.
    10⁻¹⁰ relative to the series' own size, 27 orders at κa → 0 (Laplace's), 43 at
    κa = 10, 105 at κa = 100. Pruning removes most such levels (§5.5), but CH2.3's p_l and
    θ_D need the relative and the absolute view both.
-8. **Cost** (§7): 22–31 ns per value for j by Miller's method (complex z), 5–8 ns for h,
-   7–11 ns for i, 2–4 ns for k; 1.1–1.3 µs per particle for P2M's j to order 40.
+8. **Cost** (§7): 19–31 ns per value for j by Miller's method (complex z), 5–7 ns for h,
+   7–10 ns for i, 2–4 ns for k; 0.8–1.3 µs per particle for P2M's j to order 40.
 
 ## 1. Definitions and the scaling
 
@@ -120,7 +121,7 @@ h₀′ = −h₁, i₀′ = i₁, k₀′ = −k₁. Each routine computes one 
 half-integer order, hₙ(z) = e^{iz} Σₖ₌₀ⁿ i^{k−n−1} aₖ/z^{k+1} and
 kₙ(x) = e^{−x} Σₖ₌₀ⁿ aₖ/x^{k+1} with aₖ = (n + k)!/(2ᵏ k! (n − k)!) (DLMF 10.49.6 and
 10.49.12), summed with digits added until the largest term is covered (the terms of hₙ
-cancel by up to 276 digits at n = 1460, z = 1500). The derivatives from the
+cancel by up to 295 digits, at the largest orders and |z| ≈ 1500). The derivatives from the
 neighbouring orders. Nothing is shared with the spike's recursions. Each value is
 computed at 40 and 80 digits and must agree to 10⁻³⁰. Before anything is written, the
 tool checks the closed forms at n ≤ 2, jₙ(ix) = iⁿ iₙ(x) and hₙ(ix) = −i⁻ⁿ kₙ(x), and the
@@ -135,19 +136,26 @@ k a, a the circumradius; c_leaf ≤ 2; kD up to 3000 (k a = 650 at level 2):
 
 | Operator | Family | Arguments | Orders |
 | --- | --- | --- | --- |
-| P2M, L2P | j, j′ (i, i′) | k ρ, 0 ≤ ρ ≤ a_leaf: \|z\| ≤ 5.44 c_leaf ≤ 10.9 | ≤ p_leaf + 1 ≈ 42 |
-| M2P, P2L | h, h′ (k, k′) | k ρ, √3 a_b ≤ ρ ≲ 8 a_b | ≤ p_b + 1 |
-| M2M, L2L start values | j (i) | k a/2, k a ≤ 650 | ≤ p_l + p_{l+1} ≤ 1482 |
+| P2M, L2P | j, j′ (i, i′) | k ρ, 0 ≤ ρ ≤ a_leaf: Re(k) a_leaf ≤ 5.44 c_leaf ≤ 10.9 | ≤ p_leaf + 1 ≈ 42 |
+| M2P, P2L | h, h′ (k, k′) | k ρ, ρ ≥ √3 a_b (box b the smaller) | ≤ p_b + 1 |
+| M2M, L2L start values | j (i) | k a/2, k a ≤ 650 | ≤ p_l + p_{l+1} ≤ 1138 |
 | M2L start values, T(ŝ) | h (k) | k t, 2w ≤ t ≤ 6a | ≤ 2p ≤ 1482 |
-| Projection (k a > 40, CH0.2) | j, j′, h, h′ | k a and 4 k a/√3 | ≤ p + 1 |
+| Projection (k a > 40, CH0.2) | j, j′ at k a; h, h′ at 4 k a/√3; h at k R, R ≤ t + a = 7a | \|z\| ≤ 4550 | ≤ p + 1 |
 
-Yukawa's leaf arguments are not bounded by c_leaf (§6). Each kind of k is sampled: real,
-k = κ(1 + iη) with η = 0.1 and 1, and imaginary (the complex path at z = iκρ); for the
-leaves the leaf rule bounds Re(k) a. The fixture holds 9,454 rows in 452 sets:
+The leaf rule bounds Re(k) a only, so for damped k |k| a_leaf = 10.9 √(1 + η²) grows
+without bound towards the imaginary axis; Yukawa's leaf arguments are not bounded at
+all (§6). Each kind of k is sampled: real, k = κ(1 + iη) with η = 0.1, 1 and 10
+(arg k = 84°, leaves to |k| a = 110), and imaginary (the complex path at z = iκρ). M2P
+and P2L are sampled at ρ = √3 a_b and 8 a_b; larger ratios ρ/a_b (W and X lists across
+several levels) only make ĥₙ smaller, and the dense sweeps of §4 take the scale down to
+|z|/8. Yukawa is sampled to Helmholtz's orders at the same κ a, which exceed its own
+(§6), and at both M2L distances. The fixture (1.3 MB) holds 13,174 rows in 571 sets:
 each operator's range at its ends and inside (all orders up to 40, else the ends, the
-transition near |z|, 18 spread and 4 random orders), and 160 random points with |z| log-uniform
-from 10⁻⁶ to 3900, arg z uniform in [0, π/2] and a random order up to the operator's
-maximum.
+transition near |z|, 18 spread and 4 random orders; leaves at ρ/a from 10⁻⁶, so
+|z| down to 10⁻¹²), and 160 random points with |z| log-uniform from 10⁻⁶ to 4550, arg z
+uniform in [0, π/2] and a random order up to the operator's maximum. The largest value
+stored is k̂ₙ ≈ 1.6·10²⁹⁴ (Yukawa M2L at κ a = 650, x = 1501, n = 1482), 14 decades
+below overflow; Yukawa's own degrees there are far lower.
 
 **The metric.** Relative error for h, h′, i, i′, k, k′, which have no zeros in the
 closed upper half plane or for x > 0. jₙ and jₙ′ have real zeros where n < |z|, so
@@ -159,22 +167,22 @@ range (stored as 0) require the spike's value below 10⁻²⁸⁰.
 
 | operator | family | entries | worst value | worst derivative | at |
 | --- | --- | --- | --- | --- | --- |
-| P2M, L2P | j | 2544 | 1.2e-15 | 1.2e-15 | p2m-complex1-c2.0-rho0.001 n=27 |
-| M2P, P2L | h | 1999 | 3.2e-15 | 3.4e-15 | m2p-complex0.1-ka1.0-rho8.000 n=30 |
-| M2M start | j | 804 | 3.8e-15 | 3.7e-15 | m2m-complex0.1-ka300.0 n=577 |
-| M2L start | h | 1565 | 6.4e-14 | 6.5e-14 | m2l-complex0.1-ka650.0-d2 n=1481 |
-| projection | j | 482 | 5.5e-15 | 5.2e-15 | proj-complex0.1-ka650.0-j n=611 |
-| projection | h | 432 | 1.3e-14 | 1.3e-14 | proj-complex0.1-ka650.0-h n=742 |
-| Yukawa P2M | i | 777 | 1.1e-15 | 1.2e-15 | yp2m-ka1.0-rho0.001 n=13 |
-| Yukawa M2P | k | 262 | 5.5e-16 | 6.5e-16 | ym2p-ka1e-06 n=23 |
-| Yukawa M2M start | i | 219 | 3.5e-15 | 3.7e-15 | ym2m-ka300.0 n=272 |
-| Yukawa M2L start | k | 210 | 1.8e-15 | 1.8e-15 | ym2l-ka1.0-d27 n=69 |
-| random | j, h, i, k | 40 each | 3.8e-15, 9.8e-15, 2.7e-15, 1.2e-15 | 3.6e-15, 9.7e-15, 2.5e-15, 1.3e-15 | |
+| P2M, L2P | j | 4125 | 1.6e-15 | 1.5e-15 | p2m-complex10-ka0.001-rho1.0 n=36 |
+| M2P, P2L | h | 2498 | 3.4e-15 | 3.6e-15 | m2p-complex10-ka1.0-rho8.000 n=36 |
+| M2M start | j | 1002 | 3.8e-15 | 3.8e-15 | m2m-complex0.1-ka300.0 n=577 |
+| M2L start | h | 1948 | 6.4e-14 | 6.5e-14 | m2l-complex0.1-ka650.0-d2 n=1481 |
+| projection | j | 606 | 5.5e-15 | 5.2e-15 | proj-complex0.1-ka650.0-j n=611 |
+| projection | h | 1093 | 1.3e-14 | 1.3e-14 | proj-complex0.1-ka650.0-h n=742 |
+| Yukawa P2M | i | 825 | 3.5e-15 | 3.7e-15 | yp2m-ka300.0-rho0.5 n=263 |
+| Yukawa M2P | k | 271 | 1.3e-15 | 1.3e-15 | ym2p-ka650.0 n=480 |
+| Yukawa M2M start | i | 218 | 3.5e-15 | 3.3e-15 | ym2m-ka300.0 n=272 |
+| Yukawa M2L start | k | 428 | 1.8e-15 | 1.8e-15 | ym2l-ka1.0-d27 n=69 |
+| random | j, h, i, k | 40 each | 4.4e-15, 1.7e-14, 2.2e-15, 1.5e-15 | 4.6e-15, 1.7e-14, 2.3e-15, 1.7e-15 | |
 
-Every one of the 9,454 entries (18,908 values) is within the bound; the worst is
+Every one of the 13,174 entries (26,348 values) is within the bound; the worst is
 **6.5·10⁻¹⁴**, hₙ at n = 1481, |z| = 1501. The error grows with |z| and n as the
-recursions' rounding accumulates, and stays at or below 3.8·10⁻¹⁵ on the leaf and
-low-frequency ranges. Part of it at large |z| is intrinsic: e^{iz} has condition number
+recursions' rounding accumulates, and stays at or below 3.6·10⁻¹⁵ on the leaf and
+low-frequency ranges, strongly damped k included. Part of it at large |z| is intrinsic: e^{iz} has condition number
 |z|, so a rounded argument z = k ρ alone moves hₙ by up to |z| ulp (3·10⁻¹³ at
 |z| = 1500) in any implementation; the fixture holds z exactly, so the test measures
 the functions only.
@@ -189,15 +197,15 @@ e^{iz} by 2·10⁻¹³. The fixture now holds z and s as decimal strings, parsed
 ## 4. Identities, and Yukawa two ways
 
 Without the reference, on a dense grid: |z| at 65 points log-uniform from 10⁻⁶ to
-3900, arg z ∈ {0, 0.05, π/8, π/4, 3π/8, π/2 − 10⁻³, π/2}, s = min(|z|, 1), every order an
+4550, arg z ∈ {0, 0.05, π/8, π/4, 3π/8, π/2 − 10⁻³, π/2}, s = min(|z|, 1), every order an
 operator needs at that |z| (`src/ranges.rs`: for the regular functions the M2M start
 values, p(2|z|) + p(|z|); for the singular ones the M2L start values, 2p(√3|z|/4)).
 
 | Identity (scaled; the factors cancel) | worst, relative to the terms |
 | --- | --- |
-| ĵₙ ĥ′ₙ − ĵ′ₙ ĥₙ = i/z² | 6.7·10⁻¹⁴ |
-| ĵₙ ĥₙ₊₁/s − s ĵₙ₊₁ ĥₙ = −i/z² | 3.1·10⁻¹⁴ |
-| îₙ k̂′ₙ − î′ₙ k̂ₙ = −1/x² | 3.4·10⁻¹⁵ |
+| ĵₙ ĥ′ₙ − ĵ′ₙ ĥₙ = i/z² | 5.4·10⁻¹⁴ |
+| ĵₙ ĥₙ₊₁/s − s ĵₙ₊₁ ĥₙ = −i/z² | 4.5·10⁻¹⁴ |
+| îₙ k̂′ₙ − î′ₙ k̂ₙ = −1/x² | 5.8·10⁻¹⁵ |
 
 The real Yukawa path against the complex path at z = ix (îₙ = i⁻ⁿ ĵₙ(ix),
 î′ₙ = i¹⁻ⁿ ĵ′ₙ(ix), k̂ₙ = −iⁿ ĥₙ(ix), k̂′ₙ = −iⁿ⁺¹ ĥ′ₙ(ix)) agrees **bit for bit** on the
@@ -206,8 +214,8 @@ arithmetic with exact zeros. The test checks the relations and their powers of i
 independent check of i and k is the reference.
 
 A first version of the sweep took the orders of the singular functions from p(|z|)
-instead of p(√3|z|/4); at κρ = 348 that asked for k₇₈₆, which is above 10³⁰⁸ even with
-the exponential factor (k̂ₙ grows like e^{n²/(2x)} for n > x). No operator needs such
+instead of p(√3|z|/4); at κρ = 348 that asked for orders to 846, and k̂ₙ(348) passes
+10³⁰⁸ near n = 790 even with the exponential factor (it grows like e^{n²/(2x)}). No operator needs such
 orders: the M2L distance is at least 2.3 times the box's circumradius.
 
 ## 5. The power scale
@@ -274,10 +282,12 @@ distance:
 | 1000 | 35 | 431 | 431 | -755 | -755 | out of range |
 | 3900 | 35 | 1690 | 1690 | -2937 | -2937 | out of range |
 
-Without the factor, iₙ(κ a) leaves f64 at κ a ≈ 709 (f32 near 90), and Yukawa's leaves are
-not bounded in κ a, because there is no wavelength (proposal §3.7). Pruning does not
+Without the factor, kₙ(√3 κ a) underflows f64 from κ a ≈ 405 (k₀ = e^{−√3κa}/(√3κa); f32
+from κ a ≈ 48; at the farthest M2L distance 6a already from κ a ≈ 117), and iₙ(κ a)
+overflows f64 at κ a ≈ 717 (f32 near 93); the table's "out of range" at 709 is k's.
+Yukawa's leaves are not bounded in κ a, because there is no wavelength (proposal §3.7). Pruning does not
 help: it drops far-field lists on coarse levels, and the leaf level's own P2M and L2P
-are always formed. With the factor, every Yukawa value in test 4 is finite to κρ = 3900.
+are always formed. With the factor, every Yukawa value in test 4 is finite to κρ = 4550.
 The same growth e^{|Im z|} affects jₙ for damped complex k. Hence the recommendation:
 remove the factor always, for every kind of k and every level (a no-op for real k),
 which needs no threshold and no regime switch.
@@ -292,14 +302,15 @@ nearest M2L distance t = 4a/√3, relative to the n = 0 term:
 | 1 | 10 | 19 | 30 |
 | 10 | 22 | 31 | 43 |
 | 100 | 65 | 84 | 105 |
-| 1000 | 120 | 120 | 120 |
+| 1000 | 213 | 266 | 324 |
 
 At κ a → 0 the series is Laplace's ((a/t)ⁿ). For larger κ a the terms decay like a
 Gaussian of width about √(κ a) before the geometric factor takes over, so the degree for
 a relative ε grows like √(κ a ln(1/ε)): it is not bounded by Laplace's. The absolute
 size of the far field falls like e^{−κ t}, which pruning (proposal §5.5) exploits; which
-of the two governs p_l on unpruned levels is CH2.3's calibration. The sweeps here use
-Helmholtz's larger orders for Yukawa, so they cover either.
+of the two governs p_l on unpruned levels is CH2.3's calibration. The fixture and the
+sweeps use Helmholtz's larger orders for Yukawa (p(κa) + 1 at the leaves, 2p(κa) for the
+M2L), so they cover either.
 
 ## 7. Time
 
@@ -307,32 +318,32 @@ Helmholtz's larger orders for Yukawa, so they cover either.
 
 | use | family | z | orders | derivative | ns per call | ns per value |
 | --- | --- | --- | --- | --- | --- | --- |
-| P2M, L2P | j | 5 +0 i | 0..=40 | no | 1097 | 26.8 |
-| P2M, L2P | j | 5 +0 i | 0..=40 | yes | 1189 | 29.0 |
-| P2M, L2P | j | 5 +5 i | 0..=40 | no | 1183 | 28.9 |
-| P2M, L2P | j | 5 +5 i | 0..=40 | yes | 1278 | 31.2 |
-| P2M, L2P | j | 0.01 +0 i | 0..=40 | no | 931 | 22.7 |
-| P2M, L2P | j | 0.01 +0 i | 0..=40 | yes | 1007 | 24.6 |
-| M2P, P2L | h | 15 +0 i | 0..=40 | no | 216 | 5.3 |
-| M2P, P2L | h | 15 +0 i | 0..=40 | yes | 309 | 7.5 |
-| M2P, P2L | h | 15 +15 i | 0..=40 | no | 216 | 5.3 |
-| M2P, P2L | h | 15 +15 i | 0..=40 | yes | 309 | 7.5 |
-| Yukawa P2M | i | 5 +0 i | 0..=40 | no | 305 | 7.4 |
-| Yukawa P2M | i | 5 +0 i | 0..=40 | yes | 451 | 11.0 |
-| Yukawa M2P | k | 15 +0 i | 0..=40 | no | 88 | 2.1 |
-| Yukawa M2P | k | 15 +0 i | 0..=40 | yes | 109 | 2.6 |
-| M2M start | j | 325 +0 i | 0..=1050 | no | 22015 | 20.9 |
-| M2M start | j | 325 +0 i | 0..=1050 | yes | 22989 | 21.9 |
-| M2L start | h | 1500 +0 i | 0..=1460 | no | 9651 | 6.6 |
-| M2L start | h | 1500 +0 i | 0..=1460 | yes | 10854 | 7.4 |
-| Yukawa M2L start | k | 1500 +0 i | 0..=72 | no | 196 | 2.7 |
-| Yukawa M2L start | k | 1500 +0 i | 0..=72 | yes | 312 | 4.3 |
+| P2M, L2P | j | 5 +0 i | 0..=40 | no | 1267 | 30.9 |
+| P2M, L2P | j | 5 +0 i | 0..=40 | yes | 1063 | 25.9 |
+| P2M, L2P | j | 5 +5 i | 0..=40 | no | 1059 | 25.8 |
+| P2M, L2P | j | 5 +5 i | 0..=40 | yes | 1143 | 27.9 |
+| P2M, L2P | j | 0.01 +0 i | 0..=40 | no | 834 | 20.3 |
+| P2M, L2P | j | 0.01 +0 i | 0..=40 | yes | 903 | 22.0 |
+| M2P, P2L | h | 15 +0 i | 0..=40 | no | 189 | 4.6 |
+| M2P, P2L | h | 15 +0 i | 0..=40 | yes | 271 | 6.6 |
+| M2P, P2L | h | 15 +15 i | 0..=40 | no | 189 | 4.6 |
+| M2P, P2L | h | 15 +15 i | 0..=40 | yes | 272 | 6.6 |
+| Yukawa P2M | i | 5 +0 i | 0..=40 | no | 273 | 6.7 |
+| Yukawa P2M | i | 5 +0 i | 0..=40 | yes | 404 | 9.9 |
+| Yukawa M2P | k | 15 +0 i | 0..=40 | no | 75 | 1.8 |
+| Yukawa M2P | k | 15 +0 i | 0..=40 | yes | 98 | 2.4 |
+| M2M start | j | 325 +0 i | 0..=1050 | no | 19690 | 18.7 |
+| M2M start | j | 325 +0 i | 0..=1050 | yes | 20554 | 19.6 |
+| M2L start | h | 1500 +0 i | 0..=1460 | no | 8638 | 5.9 |
+| M2L start | h | 1500 +0 i | 0..=1460 | yes | 9712 | 6.6 |
+| Yukawa M2L start | k | 1500 +0 i | 0..=72 | no | 174 | 2.4 |
+| Yukawa M2L start | k | 1500 +0 i | 0..=72 | yes | 273 | 3.7 |
 
 j costs 3–5 times h: Miller's method makes three passes (the forward start test, the
 backward ratios, the upward products) with a complex division per ratio, where h makes
 one pass of multiplications. For real k a real-arithmetic j would cost a fraction of
 the complex one; that is CH1.2's. At P2M's 41 orders a particle's radial values
-cost about 1.1 µs.
+cost about 0.8–1.3 µs. (A second run varied by about 10 %.)
 
 ## 8. Consequences and questions for sign-off
 
@@ -352,7 +363,10 @@ Questions 1 and 2 were put to the user before the pull request and signed off on
    DLMF's 𝗄ₙ = (π/2) kₙ, which puts 2κ/π in front of the series.
 3. **The algorithms for CH1.2.** Recommended: §2 (Miller's ratios with FMM3D's start
    test for j and i, upward for h and k, derivatives from neighbouring orders), with a
-   real-arithmetic j for real k as an optimisation measured against this spike.
+   real-arithmetic j for real k as an optimisation measured against this spike. Not
+   covered here: the tangential gradient of L2P and M2P divides jₙ and hₙ by z, which
+   needs its own limit as z → 0 (jₙ(z)/z for n ≥ 1); CH1.2 forms it from the
+   neighbouring orders, (jₙ₋₁ + jₙ₊₁)/(2n + 1), as for the derivative.
 4. **f32 (D3, for CH0.6 and CH7.1).** The power scale is out of f32's range on
    low-frequency levels (k a ≤ 1.7); a per-degree envelope scale is the route if D3 puts
    those levels in f32, as a conversion at the f32 boundary. No action now.

@@ -37,8 +37,10 @@ pub fn bessel_j(z: C64, s: f64, out: &mut [C64], der: Option<&mut [C64]>) {
     for n in (1..=start).rev() {
         let mut d = C64::new((2 * n + 1) as f64, 0.0) - z * r;
         if d == C64::ZERO {
-            // jₙ₋₁(z) = 0 to the last bit: any tiny denominator keeps the ratios finite.
-            d = C64::new(f64::MIN_POSITIVE, 0.0);
+            // jₙ₋₁(z) = 0 to the last bit (never met in the sweeps): a denominator of
+            // rounding size keeps rₙ and rₙ₋₁ finite (|z|/ε stays far from overflow), and
+            // their product, which is what the values use, accurate.
+            d = C64::new(f64::EPSILON * (2 * n + 1) as f64, 0.0);
         }
         r = z / d;
         if n == len {
