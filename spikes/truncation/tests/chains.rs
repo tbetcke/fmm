@@ -1,33 +1,56 @@
 //! Test 6 of docs/helmholtz/tasks/CH0.7.md: each chain at a degree far above the
 //! calibrated one against the double-double direct sum. The error left is the rounding
-//! of the chain plus a truncation below it, so a bound of 10⁻²² puts the rounding at
-//! least 10⁻¹² below every ε of the sweep (10⁻¹⁰ with the margin 2): what the sweep
-//! measures is truncation alone.
+//! of the chain plus a truncation below it, so a bound of 10⁻²⁰ puts the rounding at
+//! least 10⁻¹⁰ below every ε/2 of the sweep (5·10⁻¹¹): what the sweep measures is
+//! truncation alone. (At low frequency the decay is slow, about 0.16 decades per degree,
+//! slower with damping, and the scaled tables end near p = 135, where the gradient of C2
+//! reaches 10⁻²² for real k and 5·10⁻²¹ for η = 1.) One exception, η = 0.1 at k a = 256, where the damped
+//! M2L projection levels off at 7·10⁻²⁰ and the shift recursion at 2·10⁻¹⁷
+//! (SPIKE_REPORT.md §2.4): bound 10⁻¹⁶, still 10⁶ below the smallest ε/2.
 
 use nd_fmm_spike_truncation::calibrate::{Chain, Config, run, worst};
 use nd_fmm_spike_truncation::chain::{Kind, Setup};
 use nd_fmm_spike_truncation::geometry::Placement;
 use nd_fmm_spike_truncation::real::Dd;
 
-const BOUND: f64 = 1e-22;
-
-/// A degree at which truncation is below the bound at κ a (from the spike's own curves:
-/// the low-frequency decay is about 0.16 decades per degree, the high-frequency one
-/// steep beyond k a + 9 (k a)^{1/3}, and damping adds about Im(k) a), at most where the
-/// scaled tables stay in range at low frequency.
-fn p_big(kind: Kind, ka: f64) -> usize {
-    let im = match kind {
+/// Im(k) a.
+fn im_ka(kind: Kind, ka: f64) -> f64 {
+    match kind {
         Kind::Real => 0.0,
         Kind::Damped(eta) => eta * ka,
         Kind::Imaginary => ka,
-    };
-    ((ka + 9.0 * ka.cbrt() + im).ceil() as usize + 30).max(135)
+    }
+}
+
+/// A degree at which truncation is below the bound at κ a (from the spike's own curves:
+/// the low-frequency decay is about 0.16 decades per degree, the high-frequency one
+/// steep beyond k a + 9 (k a)^{1/3}, and damping adds about Im(k) a, 3.5 Im(k) a when
+/// strong), at most where the scaled tables stay in range at low frequency.
+fn p_big(kind: Kind, ka: f64) -> usize {
+    let strong = matches!(kind, Kind::Imaginary) || matches!(kind, Kind::Damped(eta) if eta >= 1.0);
+    let im = im_ka(kind, ka) * if strong { 3.5 } else { 1.0 };
+    // At k a ≥ 16 the scale is 1 and the tables stay in range beyond 135.
+    let floor = if ka >= 16.0 { 160 } else { 135 };
+    ((ka + 9.0 * ka.cbrt() + im).ceil() as usize + 30).max(floor)
+}
+
+/// The bound: 10⁻²⁰, or 10⁻¹⁶ where Im(k) a ≥ 16. There the damped field across an
+/// offset is tens of decades below its terms, and the double-double chain levels off at
+/// 4·10⁻¹⁷ (η = 1 and imaginary k at κ a = 32) and 2·10⁻¹⁷ (η = 0.1 at k a = 256, the
+/// shift recursion; the damped M2L projection at 7·10⁻²⁰), still 10⁶ below ε/2.
+fn bound(kind: Kind, ka: f64) -> f64 {
+    if im_ka(kind, ka) >= 16.0 {
+        1e-16
+    } else {
+        1e-20
+    }
 }
 
 /// The nearest offsets on and off the axes (β = 0, π and generic), and the farthest.
 const OFFSETS: [[i32; 3]; 5] = [[2, 0, 0], [0, 0, -2], [0, 0, 2], [2, 1, -1], [3, 3, 3]];
 
 fn check(kind: Kind, ka: f64, chains: &[Chain]) {
+    let bound = bound(kind, ka);
     let setup = Setup::<Dd>::new(kind, ka);
     let deg = [
         p_big(kind, ka),
@@ -45,7 +68,7 @@ fn check(kind: Kind, ka: f64, chains: &[Chain]) {
             kind.name()
         );
         assert!(
-            pot < BOUND && grad < BOUND,
+            pot < bound && grad < bound,
             "{} {} ka {ka}: {pot:e} {grad:e}",
             chain.name(),
             kind.name()
@@ -71,9 +94,10 @@ fn only_truncation_every_kind() {
 }
 
 #[test]
-#[ignore = "degrees to 343 in double-double (about 15 minutes); run in release"]
+#[ignore = "degrees to 369 in double-double (about 20 minutes); run in release"]
 fn only_truncation_high_frequency() {
     check(Kind::Real, 128.0, &ALL);
     check(Kind::Damped(0.1), 128.0, &ALL);
     check(Kind::Real, 256.0, &ALL);
+    check(Kind::Damped(0.1), 256.0, &ALL);
 }

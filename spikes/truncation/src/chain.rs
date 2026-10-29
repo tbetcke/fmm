@@ -140,13 +140,25 @@ impl<T: Real> Setup<T> {
     pub fn shift_table(&self, child: usize, p: usize) -> Table<T> {
         let w_parent = T::from_f64(0.5f64.powi(child as i32 - 1));
         let t = unit_radius::<T>() * w_parent * T::from_f64(0.5);
-        if self.use_recursion() {
+        // In double-double the recursion for complex k and to Re(k) a = 128 for real k (the
+        // shift's argument is k a/2), the projection above: S2's projection on an outer
+        // sphere, accurate in M2M's weights, is not for L2L with damped k
+        // (SPIKE_REPORT.md §2.4).
+        let recursion = if T::EPSILON < 1e-20 {
+            self.k.im != T::ZERO || self.k.re.to_f64() * unit_radius::<f64>() <= 128.0
+        } else {
+            self.use_recursion()
+        };
+        if recursion {
             let start = coaxial::start_values(Op::Regular, self.k * t, T::ONE, 2 * p);
             coaxial::recursion(&start, T::ONE, p)
         } else {
             // S2: the outer sphere at the parent's nearest M2L distance, 2 w_parent.
             let rho = T::from_f64(2.0) * w_parent;
-            coaxial::projection(Op::Regular, self.k, t, rho, T::ONE, p, Self::nodes(p))
+            // The square table an L2L reads needs the integrand's degree, about
+            // n + n′ + 2|k| t, resolved; M2M reads only n ≤ p_child.
+            let kt = (self.k.abs() * t).to_f64().ceil() as usize;
+            coaxial::projection(Op::Regular, self.k, t, rho, T::ONE, p, Self::nodes(p) + kt)
         }
     }
 }
