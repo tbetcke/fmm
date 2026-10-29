@@ -265,11 +265,19 @@ request, using this template:
   moved to all 316 offsets, the search test and the plan. The sweep ran about 20 hours on
   the M3 Max; the η = 0.1 multi-level chains at k a = 181 and 256 ran last, on the user's
   request. Nothing pending.
-- Decisions: none taken; questions for sign-off in the report, §8:
-  1. p* and the closed form as S7's output;
-  2. the norm for decaying kernels (CH2.3 to calibrate Yukawa in the full FMM);
-  3. the L2L tables for CH1.2, amending S2's projection rule;
-  4. the proposal's next draft.
+- Decisions: signed off 2026-10-29, "1–4 as recommended" (report §8):
+  1. p* of `results/summary.md` is S7's output for S6, CH0.8b and §7; for real k the closed
+     form max(⌈6 log₁₀(1/ε)⌉ − 2, ⌈k a + (ln 1/ε)^{2/3} (k a)^{1/3}⌉); CH3.3 confirms it
+     in the full FMM;
+  2. decaying kernels (η = 1, Yukawa): the per-pair tables are upper bounds; CH2.3
+     calibrates Yukawa's p in the full FMM with the global norm, with pruning and θ_D;
+     until then S6 and CH0.8b use the tables only below the pruning cut;
+  3. the L2L tables for CH1.2, amending S2's signed-off question 1: S2's outer-sphere
+     projection serves M2L and M2M only; CH1.2 builds L2L by the recursion where stable,
+     checks every table in both directions' weights, and tests an inner-sphere projection
+     for the rest;
+  4. the proposal's next draft replaces §3.5's formula and tables by p* and the closed
+     form, and records the finding for Yukawa and strong damping.
 - Laplace: not touched (only the spike, its member entry and its lock-file entry).
 - Follow-ups: S6 (CH0.6) and CH0.8b take p* or the closed form; CH1.2 the L2L tables;
   CH2.3, CH3.3 and CH4.3 confirm p in the full FMM.

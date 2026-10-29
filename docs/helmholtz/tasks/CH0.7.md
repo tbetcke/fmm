@@ -200,4 +200,5 @@ request, after a shortened run).
 
 The four questions of SPIKE_REPORT.md §8: the calibrated degree p* and the closed form
 for real k; the norm for decaying kernels; the L2L tables (amending S2's signed-off
-projection rule for CH1.2); the proposal's next draft.
+projection rule for CH1.2); the proposal's next draft. Signed off 2026-10-29: "1–4 as
+recommended".

@@ -395,6 +395,8 @@ The calibration of decaying kernels therefore depends on the norm: question 2 of
 
 ## 8. Questions for sign-off
 
+Signed off on 2026-10-29: "1–4 as recommended".
+
 1. **The calibrated degree.** Take p* of `results/summary.md` (C1's p₁ plus the largest δ
    of the multi-level chains that use the level, the margin ε/2, the per-pair relative ℓ2
    norm of potential and gradient, the worst of the 316 offsets and three placements) as
