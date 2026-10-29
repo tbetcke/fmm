@@ -385,8 +385,11 @@ request, using this template:
     1. 4π ik is applied by M2L (in its (S|R) step), M2P and P2L;
     2. stored coefficients carry e^{∓β_l}, β_l = Im(k) a_l, besides s_lⁿ;
     3. `CONVENTION_VERSION` 3.
-  - Waiting for sign-off: §3.15 as a whole (CH1.1's acceptance), and the corrections for
-    the proposal's next draft (PR questions).
+  - Signed off 2026-10-29, "1 and 2 as recommended" (PR #135):
+    1. §3.15 as written, CH1.1's acceptance;
+    2. the proposal's next draft takes three corrections: §3.1 (the locals carry 4π ik),
+       §3.4 (the circumradius and the per-box damping factor) and §4 item 6 (Yukawa's
+       tables are real as i^{n−n′} (E|F)).
 - Laplace:
   - No code path changed; only the version constant. Cached tables and tune files from
     version 2 are rejected once and rebuilt.

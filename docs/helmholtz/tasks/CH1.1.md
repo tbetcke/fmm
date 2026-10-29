@@ -112,3 +112,6 @@ Asked at planning and answered 2026-10-29, each "as recommended" (the first opti
    of its own that leaves Laplace's caches alone.
 
 Answers: (1) the crossing operators; (2) the per-box factor; (3) `CONVENTION_VERSION` 3.
+
+Signed off 2026-10-29, "1 and 2 as recommended" (PR #135): §3.15 as written; the three
+corrections for the proposal's next draft (§3.1, §3.4, §4 item 6).
