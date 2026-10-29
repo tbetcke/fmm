@@ -191,3 +191,53 @@ fn wrong_length_panics() {
     let mut out = vec![0.0; 3];
     y_blocks(1, 1.0, 0.0, &mut out, &mut Scratch::new(1));
 }
+
+/// Test 10: f32 against f64 at p ≤ 8 for `y_blocks`, `supplement` and `blocks`, 1e-5.
+#[test]
+fn f32_agrees_with_f64_at_low_degree() {
+    let p = 8;
+    for beta in angles() {
+        let (s, x) = (beta as f32).sin_cos();
+        let mut single = vec![0.0f32; compact_blocks_len(p)];
+        y_blocks(p, x, s, &mut single, &mut Scratch::new(p));
+        let double = y(p, beta);
+        let worst = single
+            .iter()
+            .zip(&double)
+            .fold(0.0f64, |m, (&a, b)| m.max((a as f64 - b).abs()));
+        assert!(worst <= 1e-5, "y_blocks, β = {beta}: {worst:e}");
+        supplement(p, &mut single);
+        let mut signed = double.clone();
+        supplement(p, &mut signed);
+        let worst = single
+            .iter()
+            .zip(&signed)
+            .fold(0.0f64, |m, (&a, b)| m.max((a as f64 - b).abs()));
+        assert!(worst <= 1e-5, "supplement, β = {beta}: {worst:e}");
+    }
+    let (alpha, beta, gamma) = (0.4, 1.1, -2.3);
+    let mut single = vec![0.0f32; blocks_len(p)];
+    blocks(
+        p,
+        alpha as f32,
+        beta as f32,
+        gamma as f32,
+        &mut single,
+        &mut Scratch::new(p),
+    );
+    let mut double = vec![0.0f64; blocks_len(p)];
+    blocks(p, alpha, beta, gamma, &mut double, &mut Scratch::new(p));
+    let worst = single
+        .iter()
+        .zip(&double)
+        .fold(0.0f64, |m, (&a, b)| m.max((a as f64 - b).abs()));
+    assert!(worst <= 1e-5, "blocks: {worst:e}");
+}
+
+/// Scratch for a smaller degree panics.
+#[test]
+#[should_panic(expected = "scratch is for degree")]
+fn small_scratch_panics() {
+    let mut out = vec![0.0; blocks_len(4)];
+    blocks(4, 0.1, 0.2, 0.3, &mut out, &mut Scratch::new(3));
+}

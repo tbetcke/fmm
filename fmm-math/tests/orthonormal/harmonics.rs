@@ -262,3 +262,19 @@ fn wrong_length_panics() {
     let mut out = vec![0.0; 3];
     harmonics(1, [1.0, 0.0, 0.0], &mut out);
 }
+
+/// Scratch for a smaller degree panics.
+#[test]
+#[should_panic(expected = "scratch is for degree")]
+fn small_scratch_panics() {
+    let len = Layout::new(4).len();
+    let (mut v, mut t, mut f) = (vec![0.0; len], vec![0.0; len], vec![0.0; len]);
+    harmonics_derivatives(
+        4,
+        [0.0, 0.0, 1.0],
+        &mut v,
+        &mut t,
+        &mut f,
+        &mut DerivativeScratch::new(3),
+    );
+}

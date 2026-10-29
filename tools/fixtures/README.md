@@ -89,8 +89,8 @@ convention they identify. FMM3D's sums differ in their last bits between compile
 file is byte-identical, which it is on the machine and compiler that wrote it.
 `nd-fmm-ref` reads it from CH1.3 on.
 
-The Helmholtz angular fixture (CH1.2a) regenerates byte-identically, in about four
-minutes:
+The Helmholtz angular fixture (CH1.2a) regenerates byte-identically, in about a minute
+and a half:
 
 ```sh
 uv run tools/fixtures/gen_helmholtz_angular.py

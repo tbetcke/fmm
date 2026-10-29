@@ -171,7 +171,7 @@ impl<T: RealScalar> Columns<T> {
             if !(self.over_sin && m == 1) {
                 self.diag = self.diag * self.s;
             }
-            if self.diag != T::zero() && self.diag.abs() < self.small {
+            while self.diag != T::zero() && self.diag.abs() < self.small {
                 self.diag = self.diag * self.big;
                 self.diag_exp -= self.span;
             }
@@ -208,7 +208,7 @@ impl<T: RealScalar> Columns<T> {
             diff = diff + (r - int::<T>(2 * n - 1) * u) * cur;
             cur = cur + diff / c;
             c_prev = c;
-            if cur.abs() > self.big {
+            while cur.abs() > self.big && cur.is_finite() {
                 diff = diff * self.small;
                 cur = cur * self.small;
                 exp += self.span;

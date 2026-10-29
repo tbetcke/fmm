@@ -41,7 +41,8 @@ fn integers(v: &Value) -> Vec<isize> {
 }
 
 /// Test 2: Y, ∂θ Y and (1/sin θ) ∂φ Y at every sampled slot, degrees to 1000, seven
-/// directions; each quantity relative to its largest value of the degree.
+/// directions; each quantity relative to its largest sampled value (or the degree's
+/// largest computed value where every sampled value is zero).
 #[test]
 fn harmonics_and_derivatives_agree_with_the_fixture() {
     let doc = fixture();
@@ -67,12 +68,17 @@ fn harmonics_and_derivatives_agree_with_the_fixture() {
         let slots = integers(&set["m"]);
         for (k, key) in ["value", "dtheta", "dphi"].iter().enumerate() {
             let expected = numbers(&set[key]);
-            // The degree's largest value of the quantity, over every slot: the sampled
-            // slots alone can all be zero (∂θ at the equator for n + m even).
-            let scale = computed[k][layout.degree(n)]
-                .iter()
-                .fold(0.0f64, |m, e| m.max(e.abs()));
-            let scale = if scale > 0.0 { scale } else { 1.0 };
+            // The largest sampled value of the quantity, or, where every sampled value is
+            // zero (∂θ at the equator for n + m even), the degree's largest computed one.
+            let sampled = expected.iter().fold(0.0f64, |m, e| m.max(e.abs()));
+            let scale = if sampled > 0.0 {
+                sampled
+            } else {
+                computed[k][layout.degree(n)]
+                    .iter()
+                    .fold(0.0f64, |m, e| m.max(e.abs()))
+                    .max(f64::MIN_POSITIVE)
+            };
             let error = slots.iter().zip(&expected).fold(0.0f64, |m, (&slot, e)| {
                 m.max((computed[k][layout.idx(n, slot)] - e).abs() / scale)
             });

@@ -63,19 +63,21 @@ All in f64 unless stated, in `fmm-math/tests/orthonormal/`:
 2. Harmonics and both derivatives against the fixture (mpmath, 30 digits) at degrees to
    1000, directions including near-polar (β = 10⁻³) and on-axis: 1e-13 relative to the
    degree's largest |Y| (the S1 error grew to 5e-15 at n = 1000).
-3. Addition formula Σₘ Yₙᵐ(a) Yₙᵐ(b) = (2n + 1)/(4π) Pₙ(a · b), n ≤ 300, against the
-   fixture's Pₙ: 1e-12 relative to (2n + 1)/(4π).
+3. Addition formula Σₘ Yₙᵐ(a) Yₙᵐ(b) = (2n + 1)/(4π) Pₙ(a · b), n ≤ 300, with
+   Pₙ(t) = √(4π/(2n + 1)) Yₙ⁰ at a third direction with cos θ = t (the fixture tests Yₙ⁰
+   itself): 1e-12 relative to (2n + 1)/(4π).
 4. Orthonormality by Gauss–Legendre × uniform-φ quadrature, n ≤ 30: 1e-13.
 5. Derivatives against central differences of `harmonics`, n ≤ 20: 1e-7.
 6. `y_blocks` against the fixture entries (S1's 54 sets, n ≤ 1000, six angles): 1e-13
    absolute (entries are of order one); n ≤ 300 by default, n = 500–1000 in an ignored
    release test.
-7. Orthogonality ‖O Oᵀ − I‖_max ≤ 1e-13, n ≤ 300 (1000 ignored), the six angles.
+7. Orthogonality ‖O Oᵀ − I‖_max ≤ 1e-13, n ≤ 100 by default (each check costs O(n³); the
+   ignored release test checks n = 500, 700 and 1000), the six angles.
 8. `blocks(α, β, γ)` against N-conjugated `rotation::blocks(euler_zyz(α, β, γ))`, p ≤ 30:
    1e-12; Yₙ(Q x̂) = Oⁿ(Q) Yₙ(x̂) at p ≤ 50: 1e-12.
 9. `supplement` against `y_blocks` at π − β: 1e-13.
 10. Lower degrees independent of p (bit for bit), length panics, f32 against f64 at
-    p ≤ 8 (1e-5).
+    p ≤ 8 (1e-5) for the harmonics, their derivatives and the blocks.
 
 ## Checks
 
