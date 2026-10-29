@@ -14,6 +14,7 @@ nothing of it is committed (its sources, builds and outputs stay under `FMM3D_RO
 | `build.sh` | fetches FMM3D at the pinned release (v2.1.0, the commit and the tarball's SHA-256 checked), builds it with OpenMP with the machine's compilers in two variants, and links the driver against each |
 | `driver.f90` | the FMM3D side: reads a problem file, checks FMM3D's normalisation, times FMM3D's setup and its calls, writes φ and ∇φ at the sampled targets |
 | `run.sh` | the steps of a machine's comparison: `problems`, `sweep`, `match`, `time`, and `crosscheck` (the two codes' outputs against each other at every point) |
+| `helmholtz.py` | Helmholtz CH1.4: the driver's Helmholtz modes from Python (problem and output files, the two-point check and the identification of FMM3D's conventions, the error norms) and the R12 sweep; Python 3.9 standard library only |
 
 Our side is the sweep `t9-fmm3d` of `tools/scaling/run.sh` (and `t9-device`, our CUDA
 path), on the same problems.
@@ -117,3 +118,33 @@ root's `logs/fmm3d/`; `sweep.sbatch` writes ours to `logs/scaling-<job id>/`. A
 `singlenode` job runs at most 6 hours: split our side with `ONLY` (for example
 `ONLY='n10000000-.*r1x1'` for the one-thread runs at N = 10⁷, `ONLY='n(100000|1000000)-|N1-'`
 for the rest).
+
+## Helmholtz (CH1.4)
+
+The driver has two Helmholtz modes beside the Laplace usage above (`driver.f90`'s header
+has the file formats); `tools/fixtures/gen_helmholtz_fmm3d.py` makes `nd-fmm-ref`'s FMM3D
+fixtures with them (tools/fixtures/README.md). Report:
+`fmm-validate/results/helmholtz-ch1-4.md`.
+
+- `fmm3d_driver helmholtz-check`: the two-point check of proposal §9.2 against the draft
+  CONVENTIONS §3.15 (`docs/helmholtz/conventions-3.15-draft.md`, item 1). It runs
+  `hfmm3d_s_c_g` and `h3ddirectcg` for real, complex and imaginary k and stops unless
+  both compute e^{ikr}/(4πr) and its gradient in the target. Every `helmholtz` run does
+  this check first, as the Laplace runs check the normalisation.
+- `fmm3d_driver helmholtz PROBLEM PREFIX ZK_RE ZK_IM direct,EPS,... [REPEAT]`: FMM3D's
+  direct sum (`h3ddirectcg`) or its FMM (`hfmm3d_s_c_g`, `hfmm3d_st_c_g`) at the
+  problem's sampled sources and targets.
+
+```sh
+tools/fmm3d/build.sh driver                         # relink the driver after a change
+python3 tools/fmm3d/helmholtz.py check              # the check and the identification
+OMP_NUM_THREADS=12 python3 tools/fmm3d/helmholtz.py r12 --n 100000   # R12, a Markdown table
+```
+
+`r12` measures `hfmm3d` against `h3ddirectcg` at 1,000 sampled sources (the relative ℓ2
+of φ and ∇φ, proposal §9.1) on the unit cube and a sphere surface. It covers imaginary,
+real and complex k over kD and eps 10⁻³ to 10⁻¹². On Kathleen the same runs as job steps:
+
+```sh
+tools/kathleen/submit.sh --time=03:00:00 -- fmm3d.sbatch driver helmholtz-check helmholtz-fixtures r12
+```
