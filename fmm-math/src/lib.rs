@@ -35,11 +35,14 @@
 //!   evaluated by the Cartesian recursions of §3.5.
 //! - [`rotation`]: per-degree rotation blocks Dⁿ(Q) for regular and irregular
 //!   harmonics (§3.8) and z-y-z Euler angles.
+//! - [`orthonormal`]: the real orthonormal harmonics and their rotation blocks at any
+//!   degree, for the Helmholtz family (§3.15).
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 
 pub mod harmonics;
 mod layout;
+pub mod orthonormal;
 pub mod rotation;
 mod scalar;
 
