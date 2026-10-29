@@ -343,3 +343,61 @@ request, using this template:
 - Laplace: not touched (only the spike, its member entry and its lock-file entry).
 - Follow-ups: S6 (CH0.6) and CH0.8b take p* or the closed form; CH1.2 the L2L tables;
   CH2.3, CH3.3 and CH4.3 confirm p in the full FMM.
+
+## 2026-10-29: CH1.1 CONVENTIONS §3.15
+- Done:
+  - D5 and D2 signed off at the start (charges now, dipoles later; A, modules in the layer
+    crates).
+  - `docs/CONVENTIONS.md` §3.15, the Helmholtz family, from CH1.4's draft. Its parts are
+    the kernel and factors, the angular basis, radial functions and scaling, storage,
+    rotations, coaxial translations (with S2's start column and recursions), signatures
+    (reserved), precision and range (f32 reserved), inputs and outputs, and verification.
+  - `CONVENTION_VERSION = 3`, with §3.15 among the versioned sections.
+  - The draft file reduced to a pointer that lists how §3.15 departs from it.
+  - The check `tools/fixtures/check_3_15.py`.
+  - The five fixtures regenerated, their headers only; the FMM3D fixture's header now
+    names §3.15.
+- Tests:
+  - `check_3_15.py`: 101 checks in mpmath at 40 digits, all passing, for real, complex and
+    imaginary k and real and complex charges. They cover the kernel's gradient and its
+    k → 0 limit; the radial relations; the harmonics against Racah's through N; the series
+    with 4π ik and Yukawa's with 4πκ; the leaf operators in stored form, every applied
+    exponent ≤ 0; the rotation blocks; the coaxial symmetries, the start column and both
+    recursions against projected tables; and P2M → M2L → L2P and the M2M and L2L chains
+    in stored form against the direct sum.
+  - The generators' `--check`: dipoles and FMM3D byte for byte; the harmonics fixtures
+    regenerated deterministically, with a header-only diff.
+  - `crosscheck_scipy.py` passed.
+- Checks:
+  - Ran `/verify` on the M3 Max: format; Clippy default, examples and workspace
+    all-targets; `cargo doc`; the default tests (823) and workspace tests (902), all
+    passing.
+  - The MPI test list at 2 and 4 ranks, 22 of 22 passing.
+  - Not run: the licence check and the fftw-sys check (no manifest changed); benchmarks
+    (no code path changed).
+  - A self-review by a subagent. Its one blocking point is fixed: S2's sign-off 4 asks
+    §3.15 for the recursions, which are now stated and checked. Its other points are
+    taken: Yukawa's real tables, f32 reserved, FMM3D's thresh, the stored table
+    normalisation and the M2M/L2L cancellation in the check, and the (R|R) reflection.
+  - No machine runs. Nothing pending.
+- Decisions:
+  - Signed off 2026-10-29 at planning, each as recommended:
+    1. 4π ik is applied by M2L (in its (S|R) step), M2P and P2L;
+    2. stored coefficients carry e^{∓β_l}, β_l = Im(k) a_l, besides s_lⁿ;
+    3. `CONVENTION_VERSION` 3.
+  - Signed off 2026-10-29, "1 and 2 as recommended" (PR #135):
+    1. §3.15 as written, CH1.1's acceptance;
+    2. the proposal's next draft takes three corrections: §3.1 (the locals carry 4π ik),
+       §3.4 (the circumradius and the per-box damping factor) and §4 item 6 (Yukawa's
+       tables are real as i^{n−n′} (E|F)).
+- Laplace:
+  - No code path changed; only the version constant. Cached tables and tune files from
+    version 2 are rejected once and rebuilt.
+  - The tables come out identical; a re-tune may choose differently, so device runs with
+    a tuning cache may change in their last bits, within the FMM's bounds.
+  - The default, workspace and MPI tests pass with the regenerated fixtures.
+- Follow-ups:
+  - CH1.2 implements §3.15 in `nd-fmm-math` (D2: A), with the identities of
+    "Verification".
+  - CH1.3 checks `nd-fmm-ref` against the FMM3D fixtures.
+  - Old `-c2-` cache files can be removed on each machine (Kathleen's quota).

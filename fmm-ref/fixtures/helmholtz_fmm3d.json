@@ -1,8 +1,8 @@
 {
  "header": {
-  "description": "FMM3D's Helmholtz direct sum, the potential and gradient of e^{ik|x-y|}/(4 pi |x-y|) (draft CONVENTIONS §3.15 item 1, docs/helmholtz/conventions-3.15-draft.md), for real, complex and imaginary k and real and complex charges (Helmholtz CH1.4)",
-  "convention_version": 2,
-  "convention": "the draft §3.15 of CH1.4 (not yet in docs/CONVENTIONS.md: CH1.1)",
+  "description": "FMM3D's Helmholtz direct sum, the potential and gradient of e^{ik|x-y|}/(4 pi |x-y|) (CONVENTIONS §3.15, Kernel and factors), for real, complex and imaginary k and real and complex charges (Helmholtz CH1.4)",
+  "convention_version": 3,
+  "convention": "CONVENTIONS §3.15 (drafted in Helmholtz CH1.4, adopted in CH1.1)",
   "generator": "tools/fixtures/gen_helmholtz_fmm3d.py",
   "generator_version": 1,
   "seed": 20261028,
@@ -16,7 +16,7 @@
    "fortran": "GNU Fortran (Homebrew GCC 16.2.0) 16.2.0",
    "machine": "Darwin arm64"
   },
-  "reference": "every value checked against the draft's kernel summed in mpmath 1.4.1 at 30 digits, to 1e-13 (relative l2 per case and quantity, and per point relative to its sum of term magnitudes)",
+  "reference": "every value checked against the kernel of §3.15 summed in mpmath 1.4.1 at 30 digits, to 1e-13 (relative l2 per case and quantity, and per point relative to its sum of term magnitudes)",
   "format": "decimal strings, 17 significant digits of FMM3D's doubles; complex values as [re, im]; a gradient as [re x, im x, re y, im y, re z, im z]; the values at the sources (self term dropped) in source order, then at the targets; the factor 1/(4 pi) included",
   "two_point_geometry": "charges 0.3 - 0.7i at x1 = (0, 0, 0) and 1 at x2 = (1, 0, 0)"
  },

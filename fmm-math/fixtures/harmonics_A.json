@@ -2,7 +2,7 @@
  "header": {
   "description": "Real solid harmonics R_n^m, I_n^m and their Cartesian gradients (docs/CONVENTIONS.md §3.3, §3.6) at seeded random points",
   "set": "A",
-  "convention_version": 2,
+  "convention_version": 3,
   "generator": "tools/fixtures/gen_harmonics.py",
   "generator_version": 2,
   "mpmath_version": "1.4.1",

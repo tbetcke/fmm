@@ -2,7 +2,7 @@
  "header": {
   "description": "Real irregular solid harmonics I_n^m, values only (docs/CONVENTIONS.md §3.3, §3.6), at seeded random points in the range of the M2L shifts (§3.9, §3.11)",
   "set": "C",
-  "convention_version": 2,
+  "convention_version": 3,
   "generator": "tools/fixtures/gen_harmonics.py",
   "generator_version": 2,
   "mpmath_version": "1.4.1",

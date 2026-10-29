@@ -71,10 +71,10 @@ The proposal's Section 12, plus D0. A decision is recorded here when the user ta
 | --- | --- | --- | --- | --- | --- |
 | D0 | Draft 0.8 of the proposal as the plan of record | as written; later changes by sign-off | review of draft 0.7 | every task | signed off 2026-10-26: as written |
 | D1 | Target kD range and tolerances | for example kD ≤ 500 at 10⁻³ to 10⁻⁸ (proposal §12) | – | CH0.8b, CH3.0 | open |
-| D2 | Placement: modules in the layer crates (A) or separate crates (B) | A (§6.1) | – | CH1.2 | open |
+| D2 | Placement: modules in the layer crates (A) or separate crates (B) | A (§6.1) | – | CH1.2 | signed off 2026-10-29: A, modules in the layer crates, as recommended |
 | D3 | f32 scope | f64 only until H7; then f32 for low-frequency configurations that pass an accuracy contract; high-frequency levels in f32 only if S6 finds stable classes | CH0.6 | CH7.1 | open |
 | D4 | Yukawa: its own operator type, or the wavenumber kind as a type parameter | one `HelmholtzOperator<T, K>` if CH2.1 shows no cost to the complex path | CH2.1 | CH2.2 | open |
-| D5 | Source types of the first release | real and complex charges, potentials and gradients; dipoles once C6.4 exists for Laplace (note: Laplace dipoles were merged in Phase 6 T8 and T8d, so the condition is met) | – | CH1.1 | open |
+| D5 | Source types of the first release | real and complex charges, potentials and gradients; dipoles once C6.4 exists for Laplace (note: Laplace dipoles were merged in Phase 6 T8 and T8d, so the condition is met) | – | CH1.1 | signed off 2026-10-29: charges now, dipoles later; §3.15 fixes real and complex charges with potentials and gradients, and dipoles get a later, separate task |
 | D6 | Order of H4 and H6 | H6 first | – | CH6.1, CH4.1 | open |
 | D7 | Host back ends of the φ step | the product as default and reference; FFTW behind the optional `fftw` feature; rustfft if S9 finds it deterministic per box and faster, decided per machine | CH0.9 | CHR.3, CH4.6 | open |
 | D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2 | CH7.5 | open |
@@ -191,9 +191,10 @@ family, checked against FMM3D's fixtures.
   matching the draft (or the draft corrected); fixtures for real, complex and imaginary k and
   real and complex charges, committed with release, routine and `eps`; whether FMM3D is
   accurate for imaginary zk (R12). *Needs:* CH0.1, CH0.2, CH0.3. *Machines:* Kathleen.
-- [ ] **CH1.1 CONVENTIONS §3.15.** The proposal's Section 4 as a CONVENTIONS section and a
-  `CONVENTION_VERSION` bump. *Done when:* signed off by the user after CH1.4's two-point
-  check. *Needs:* CH1.4, D5. *Sign-off:* §3.15.
+- [x] **CH1.1 CONVENTIONS §3.15.** `docs/CONVENTIONS.md` §3.15, `CONVENTION_VERSION = 3`;
+  the check `tools/fixtures/check_3_15.py`. The proposal's Section 4 as a CONVENTIONS
+  section and a `CONVENTION_VERSION` bump. *Done when:* signed off by the user after
+  CH1.4's two-point check. *Needs:* CH1.4, D5. *Sign-off:* §3.15.
 - [ ] **CH1.2 `nd-fmm-math`.** Real orthonormal harmonics, radial functions (with the Yukawa
   scaling), rotation blocks at any degree. *Done when:* the identities of §3.15; the M2M and
   L2L coefficients real for real k. *Needs:* CH1.1, D2.

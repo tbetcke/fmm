@@ -1,10 +1,10 @@
 # Conventions
 
-`CONVENTION_VERSION = 2` .
+`CONVENTION_VERSION = 3` .
 
 This file is the single source of truth for basis functions, phases, storage and
 scaling in the `nd-fmm-*` crates. Code cites it as `CONVENTIONS §3.x`. Any change to
-§3.1–§3.8, §3.11 or §3.12 bumps `CONVENTION_VERSION`, which invalidates committed
+§3.1–§3.8, §3.11, §3.12 or §3.15 bumps `CONVENTION_VERSION`, which invalidates committed
 fixtures and cached operator tables. §3.13 describes in-memory data only, and §3.14 an
 approximate M2L whose tables are not cached; a change to either does not bump the
 version (§3.10).
@@ -12,7 +12,9 @@ version (§3.10).
 Summary of the choices: Legendre functions without the Condon–Shortley phase for
 m ≥ 0, negative orders defined by a (−1)^m conjugate symmetry, Racah-type factorial
 normalisation, real storage of m ≥ 0 coefficients, and scaling by the box half-width
-so every operator table is level-independent.
+so every operator table is level-independent. The Helmholtz family (§3.15) has its own:
+real orthonormal harmonics, spherical Bessel and Hankel functions, complex expansions as
+two real planes, and a scale and damping factor per level.
 
 While drafting, every identity and recursion below was checked numerically in double
 precision against SciPy's Legendre functions (with its Condon–Shortley phase removed):
@@ -204,13 +206,18 @@ D^n(Q_1 Q_2) = D^n(Q_1)\, D^n(Q_2)
 
 ## 3.10 Versioning
 
-`CONVENTION_VERSION = 2`. Any change to §3.1–§3.8, §3.11 or §3.12 bumps it, which
-invalidates committed fixtures and cached operator tables. §3.12 is included because
+`CONVENTION_VERSION = 3`. Any change to §3.1–§3.8, §3.11, §3.12 or §3.15 bumps it,
+which invalidates committed fixtures and cached operator tables. §3.12 is included because
 cached tables depend on its geometry, layout and class rule.
 
 - Version 1: the conventions of Phases 0–6 T7.
 - Version 2 (Phase 6 T8): adds "Dipole sources" to §3.7. No existing quantity changed;
   the fixtures were regenerated with the new version and cached tables are rebuilt.
+- Version 3 (Helmholtz CH1.1): adds §3.15, the Helmholtz family. No quantity of
+  §3.1–§3.14 changed; the fixtures were regenerated with the new version (their headers
+  only) and cached tables are rebuilt. §3.15's "Signatures" and its f32 ranges are
+  reserved, and fixing them bumps the version again; its leaf chunks are excluded, as
+  §3.13 is.
 
 §3.13 is not included, and a change to it does not bump `CONVENTION_VERSION`: it
 describes in-memory data only (chunk layouts, leaf-scaled values, relative frames), and
@@ -1409,3 +1416,288 @@ and direction:
 The frames run in order 0, 1, 2. Each shift factors as the pair's T(d_pair) =
 T(d_slot→P) T(d_P→child), so merge and shift equals the pairs' direct translations up to
 rounding.
+
+## 3.15 The Helmholtz family
+
+The Helmholtz FMM (docs/design/helmholtz-fmm-proposal.md, Helmholtz CH1.1) shares
+§3.2, §3.6's index layout, §3.12 and §3.13 with Laplace and nothing else: its basis,
+radial functions, scaling and translations are below. Notation as in §3.2–§3.8:
+P_n^m without the Condon–Shortley phase (§3.3), idx(n, m) = n² + n + m (§3.6), the
+z-y-z Euler angles (§3.8). The items follow proposal §4. The first release has charges
+only, real and complex, with potentials and gradients; dipole sources are added by a
+later task, with a version bump (decision D5).
+
+### Kernel and factors
+
+```math
+G_k(\mathbf{x}, \mathbf{y}) = \frac{e^{ik|\mathbf{x}-\mathbf{y}|}}{4\pi|\mathbf{x}-\mathbf{y}|},
+\qquad k \ne 0,\quad \operatorname{Re} k \ge 0,\quad \operatorname{Im} k \ge 0
+```
+
+- **Three kinds of k.** Yukawa (modified Helmholtz) has k = iκ with κ > 0, so
+  G_k = e^{−κr}/(4πr). Real k has k > 0. Complex k has Re k > 0 and Im k > 0. k = 0 is
+  the Laplace FMM of §3.1, not a Helmholtz case. k with Im k < 0 (growing kernels) or
+  Re k < 0 (incoming waves) is rejected by the builder.
+- **Branch.** G_k is the outgoing wave for the time factor e^{−iωt}. The expansions use
+  spherical Hankel functions of the first kind, h_n = h_n^{(1)} = j_n + i y_n. For
+  Im k > 0 the kernel decays like e^{−Im(k) r}.
+- **Potential and gradient.** For charges q_j at y_j, coincident pairs excluded as in
+  §3.13 ("Coincident pairs"):
+
+```math
+\phi(\mathbf{x}) = \sum_j q_j\, G_k(\mathbf{x}, \mathbf{y}_j), \qquad
+\nabla\phi(\mathbf{x}) = \sum_j q_j\, \frac{(ik r_j - 1)\, e^{ik r_j}}{4\pi r_j^3}\, (\mathbf{x} - \mathbf{y}_j),
+\quad r_j = |\mathbf{x} - \mathbf{y}_j|
+```
+
+  The gradient is taken with respect to the target x. As k → 0 both reduce to §3.1 and
+  §3.13: φ = q/(4πr) and ∇φ = −q (x − y)/(4πr³). FMM3D 2.1.0 computes exactly this φ and
+  ∇φ (`hfmm3d_s_c_g`, `hfmm3d_st_c_g`, `h3ddirectcg`, with k = `zk`; Helmholtz CH1.4,
+  fmm-validate/results/helmholtz-ch1-4.md). FMM3D drops a pair when |x − y| < thresh, with
+  thresh = 2⁻⁵¹ times the root box width in its FMM, and its direct routines take thresh
+  from the caller; §3.13 drops exact coincidences only.
+- **The series.** For |y| < |x| about a common centre:
+
+```math
+\frac{e^{ik|\mathbf{x}-\mathbf{y}|}}{|\mathbf{x}-\mathbf{y}|}
+= 4\pi ik \sum_{n=0}^{\infty} j_n(k|\mathbf{y}|)\, h_n(k|\mathbf{x}|) \sum_{m=-n}^{n} Y_n^m(\hat{\mathbf{y}})\, Y_n^m(\hat{\mathbf{x}})
+```
+
+- **Where the factors go.** As for Laplace (§3.1), 1/(4π) is applied once, by
+  `nd-fmm-exec`, when it produces the output: every operator accumulates the potential of
+  e^{ikr}/r, written φ̃ = 4πφ below, P2P and the expansions alike. The factor 4π ik is
+  applied by the three operators where a far-field contribution crosses from a singular
+  to a regular representation: **M2L** (in its (S|R) step), **M2P** and **P2L**. Each
+  far-field contribution passes through exactly one of them. P2M, M2M, L2L and L2P carry
+  no factor, and P2P computes e^{ikr}/r, regular as k → 0.
+
+### Angular basis
+
+Real orthonormal spherical harmonics in the slots of §3.6: the cos part in slot +m, the
+sin part in slot −m, no Condon–Shortley phase. For m > 0:
+
+```math
+Y_n^0 = \sqrt{\tfrac{2n+1}{4\pi}}\, P_n(\cos\theta), \qquad
+Y_n^{\pm m} = \sqrt{2\,\tfrac{2n+1}{4\pi}\,\tfrac{(n-m)!}{(n+m)!}}\; P_n^m(\cos\theta)
+\begin{cases}\cos m\phi \\ \sin m\phi\end{cases}
+```
+
+They satisfy ∫ Y_n^m Y_{n′}^{m′} dΩ = δ_{nn′} δ_{mm′} and
+Σ_m Y_n^m(x̂) Y_n^m(ŷ) = (2n + 1)/(4π) P_n(x̂ · ŷ). Against the Racah harmonics of §3.3,
+r^n Y_n^m is √((2n + 1)/(4π)) times the slot-m entry of N **R**_n(x), with N the matrix
+of §3.8: slot 0 holds ν₀ R_n^0, slot +m holds √2 ν_m Re R_n^m and slot −m holds
+√2 ν_m Im R_n^m, with ν_m = √((n + m)!(n − m)!). They are evaluated with the Cartesian
+recursions of §3.5 (no trigonometric calls), in an overflow-free form at large degree
+(spikes/rotation-blocks/SPIKE_REPORT.md §2.2). Being real, Y_n^m is never conjugated: a
+complex charge enters a coefficient as it is.
+
+### Radial functions and scaling
+
+- j_n is the spherical Bessel function and h_n = h_n^{(1)}. For Yukawa,
+  i_n(x) = √(π/(2x)) I_{n+½}(x) and k_n(x) = √(2/(πx)) K_{n+½}(x), so that
+  k₀(x) = e^{−x}/x, j_n(ix) = iⁿ i_n(x) and h_n(ix) = −i^{−n} k_n(x).
+- **The level's constants.** A box of level l has width w_l and circumradius
+  a_l = (√3/2) w_l. Its scale is s_l = min(|k| a_l, 1) and its **damping exponent**
+  β_l = Im(k) a_l (zero for real k; κ a_l for Yukawa).
+- **Scaled radial functions**, for z = kρ (Im z ≥ 0) and x = κρ:
+
+```text
+ĵₙ(z) = e^{−Im z} jₙ(z) / sⁿ        ĥₙ(z) = e^{Im z} hₙ(z) sⁿ
+îₙ(x) = e^{−x} iₙ(x) / sⁿ           k̂ₙ(x) = eˣ kₙ(x) sⁿ
+```
+
+  The exponential factor is used on every level and for every kind of k (it is 1 for
+  real k). Derivatives carry the same factors, which are not differentiated. No double
+  factorial is absorbed.
+- **Expansions.** About a box centre c, with v = x − c, a **multipole** represents
+  φ̃(x) = 4π ik Σ_{n,m} M_n^m h_n(k|v|) Y_n^m(v̂) outside the box's sphere, and a
+  **local** represents φ̃(x) = Σ_{n,m} L_n^m j_n(k|v|) Y_n^m(v̂) inside it, n ≤ p_l.
+  The coefficients of charges q_j at y_j, ρ_j = y_j − c, are
+
+```math
+M_n^m = \sum_j q_j\, j_n(k\rho_j)\, Y_n^m(\hat{\boldsymbol\rho}_j), \qquad
+L_n^m = 4\pi ik \sum_j q_j\, h_n(k\rho_j)\, Y_n^m(\hat{\boldsymbol\rho}_j)
+```
+
+- **Stored coefficients** carry the power scale and the per-box damping factor:
+
+```math
+\hat M_n^m = e^{-\beta_l}\, M_n^m / s_l^n, \qquad \hat L_n^m = e^{\beta_l}\, L_n^m\, s_l^n
+```
+
+  The stored values then stay of moderate size for any Im k, and every leaf operator
+  applies only non-positive exponents: with ρ = |ρ_j| ≤ a_l for P2M and L2P and
+  ρ > a_l for P2L and M2P,
+
+```text
+P2M   M̂ₙᵐ = Σⱼ qⱼ ĵₙ(kρ) e^{Im(k)ρ − β} Yₙᵐ(ρ̂)
+L2P   φ̃   = Σ L̂ₙᵐ ĵₙ(k|v|) e^{Im(k)|v| − β} Yₙᵐ(v̂)
+P2L   L̂ₙᵐ = 4π ik Σⱼ qⱼ ĥₙ(kρ) e^{β − Im(k)ρ} Yₙᵐ(ρ̂)
+M2P   φ̃   = 4π ik Σ M̂ₙᵐ ĥₙ(k|v|) e^{β − Im(k)|v|} Yₙᵐ(v̂)
+```
+
+  The gradients of L2P and M2P are those of these sums with respect to x.
+- **Yukawa's real form.** With k = iκ the series reads
+  e^{−κr}/r = 4πκ Σ_n i_n(κ|y|) k_n(κ|x|) Σ_m Y Y, every factor real. The Yukawa path
+  stores M^Y = i^{−n} M and L^Y = iⁿ L, which for real charges are real:
+  M^Y = Σ_j q_j i_n(κρ_j) Y, L^Y = 4πκ Σ_j q_j k_n(κρ_j) Y, a multipole represents
+  φ̃ = 4πκ Σ M^Y k_n Y and a local φ̃ = Σ L^Y i_n Y. The factor 4π ik becomes 4πκ on the
+  same three operators. Stored: M̂^Y = i^{−n} M̂ and L̂^Y = iⁿ L̂, with î and k̂ in place
+  of ĵ and ĥ. The translations of "Coaxial translations" act on M^Y and L^Y through the
+  real tables i^{n−n′} (S|S) (M2M), i^{n′−n} (R|R) (L2L) and −i^{n+n′} (S|R) (M2L, with
+  4πκ in place of 4π ik).
+
+### Storage
+
+- **A complex expansion** is two real planes per box, the real part then the imaginary
+  part, each in the layout idx(n, m) of §3.6 with every slot −p_l ≤ m ≤ p_l used
+  (the real basis has no conjugate symmetry to exploit): 2(p_l + 1)² reals per charge
+  vector.
+- **Real expansions** have (p_l + 1)² reals. They are used for Yukawa with real charges,
+  multipoles and locals alike, and for real k with real charges, multipoles only (M2M
+  is real for real k).
+- **Sizes per path**, with m charge vectors (`multipole_size(l)`, `local_size(l)`):
+
+| Path | multipole size | local size |
+| --- | --- | --- |
+| Yukawa, real charges | (p_l + 1)² m | (p_l + 1)² m |
+| real k, real charges | (p_l + 1)² m | 2 (p_l + 1)² m |
+| every other case | 2 (p_l + 1)² m | 2 (p_l + 1)² m |
+
+- **Complex charges.** One complex charge vector makes **one** complex expansion, formed
+  by P2M from both input planes. On the Yukawa path it is two real vectors instead.
+- **Several vectors** are stored as in §3.13 ("Several charge vectors"): m expansions,
+  one after the other.
+
+### Rotations
+
+- The degree-n block Oⁿ(Q) satisfies **Y**_n(Q x̂) = Oⁿ(Q) **Y**_n(x̂) and equals
+  N Dⁿ(Q) N⁻¹ (§3.8); the per-degree factor √((2n + 1)/(4π)) commutes with it. Oⁿ is
+  orthogonal, so coefficients rotate by Oⁿ and back by its transpose.
+- The z-y-z factorisation Oⁿ(R_z(α)) Oⁿ(R_y(β)) Oⁿ(R_z(γ)). A z-rotation is a 2 × 2
+  rotation per order. A y-block splits into a cos half ((n + 1)² values) and a sin half
+  (n² values).
+- **β and π − β**: Oⁿ(R_y(π − β)) = (−1)ⁿ E Oⁿ(R_y(β)) E F, with E = diag((−1)^|m|) and
+  F = diag(+1 on the slots m ≥ 0, −1 on the slots m < 0). Tables store the blocks of
+  β ≤ π/2 and apply the signs.
+- **The generator** is the Gumerov–Duraiswami recursion at every degree
+  (spikes/rotation-blocks/SPIKE_REPORT.md). The N-conjugated blocks of §3.8 are the test
+  reference at p ≤ 30 only.
+
+### Coaxial translations
+
+- With F_n^m(r) = f_n(k|r|) Y_n^m(r̂) (f = j regular, R; f = h singular, S) and a shift
+  t = t ẑ along the axis:
+
+```math
+F_n^m(\mathbf{r} + \mathbf{t}) = \sum_{n'} (E|F)^m_{n'n}(t)\; G_{n'}^m(\mathbf{r})
+```
+
+  This defines (R|R) at any r, (S|R) for |r| < t and (S|S) for |r| > t. The slots +m and
+  −m share one coefficient, which depends on |m| only.
+- (S|S) = (R|R) as functions of t. They are real for real k; for Yukawa,
+  i^{n−n′} (E|F) is real. (S|R) is complex for real and complex k.
+- **Symmetries.** The index symmetry (E|F)^m_{nn′} = (−1)^{n+n′} (E|F)^m_{n′n}: a table
+  stores the triangle n′ ≥ n. The reflection (E|F)(−t) = (−1)^{n+n′} (E|F)(t).
+  Rectangular truncation p_src → p_tgt takes the corresponding block of the square table
+  of degree max(p_src, p_tgt).
+- **The translations in coaxial form** (t along +ẑ after rotation, unscaled):
+  M2M from a child c to its parent P, t = P − c: M^P_{n′} = Σ_n (S|S)_{n′n}(t) M^c_n.
+  L2L from P to c, t = c − P: L^c_{n′} = Σ_n (R|R)_{n′n}(t) L^P_n. M2L from a source box
+  s to a target box b of the same level, t = c_b − c_s:
+  L^b_{n′} = 4π ik Σ_n (S|R)_{n′n}(t) M^s_n.
+- **Stored normalisation of the tables**, with z = k|t|: (S|S) and (R|R) times
+  e^{−Im z}, and (S|R) times e^{Im z} s^{n+n′}, s the scale of the level at both ends.
+  With the stored coefficients above, M2M and L2L apply these tables with the power
+  scales s_c and s_P alone (|t| = a_c and β_P = 2β_c, so the damping factors cancel), and
+  M2L applies the factor e^{2β_l − Im(k)|t|} ≤ 1, a scalar per level and offset, besides
+  4π ik.
+- **The recursions** (spikes/coaxial/SPIKE_REPORT.md §2.1), with E = (E|F) and f the
+  radial function of F. The start column, from Gegenbauer's addition theorem:
+  E⁰_{n′0}(t) = (−1)^{n′} √(2n′ + 1) f_{n′}(k t). In n, for every order m:
+
+```math
+a_n^m E^m_{n',n+1} = a_{n-1}^m E^m_{n',n-1} - a_{n'}^m E^m_{n'+1,n} + a_{n'-1}^m E^m_{n'-1,n},
+\qquad a_n^m = \sqrt{\tfrac{(n+1+m)(n+1-m)}{(2n+1)(2n+3)}}
+```
+
+  In m, at n = m, with both signs positive (no Condon–Shortley phase):
+
+```math
+\gamma_m^m E^{m+1}_{n',m+1} = \beta_{n'+1}^m E^m_{n'+1,m} + \gamma_{n'-1}^m E^m_{n'-1,m},
+\quad \beta_n^m = \sqrt{\tfrac{(n-m-1)(n-m)}{(2n-1)(2n+1)}},
+\quad \gamma_n^m = \sqrt{\tfrac{(n+m+1)(n+m+2)}{(2n+1)(2n+3)}}
+```
+
+  An entry with n < m or n′ < m is zero. The start column needs degrees to
+  p_src + p_tgt. The exponential factor of the stored normalisation is common to a table
+  and passes through the recursions unchanged; the power scale s^{n+n′} is applied per
+  entry.
+- **The generator** is the recursion (triangle, index symmetry) where Re(k) a_l ≤ 40,
+  and the projection on an outer sphere above that, for (S|R) and (S|S) only. (R|R) is
+  built by the recursion where it is stable, every table checked in the weights of both
+  directions; an inner-sphere projection is tested for the rest (S7, signed off
+  2026-10-29). The acceptance measure is the FMM-weighted error.
+
+### Signatures
+
+Reserved. The high-frequency levels' signatures are fixed by their tasks (S6 in CH0.6,
+S9 in CH0.9, CH4.1), and the change that fixes them bumps `CONVENTION_VERSION`. Proposed
+so far (proposal §5.4, §6.7) and not yet tested: a (θ, φ) grid per level, Gauss–Legendre
+in cos θ and uniform in φ, N_l = (2P − 1)(4P − 3) samples with P = p_l + 1 and the φ
+count padded to a multiple of 4 for the reflection classes; interleaved complex samples on
+the host and split planes on the device; the index permutations of the 34 classes; the
+transforms S → F and F → R; the diagonal transfer function with bandwidth 2P − 2.
+
+### Precision and range
+
+f64 only. f32 is reserved: decision D3 (prepared by CH0.6) sets its scope, and the task
+that adds it (CH7.1 at the earliest) states its ranges here, with a version bump. Tested
+so far, by the spikes:
+
+- rotation blocks to n = 1000 (S1);
+- coaxial coefficients to p = 371 and k a = 300, real, complex and imaginary k (S2);
+- radial functions to order 1482 and |z| from 10⁻¹² to 4550 (S3);
+- the degrees p_l of S7 (spikes/truncation/results/summary.md) and the two-point check
+  and fixtures of CH1.4.
+
+`nd-fmm-math` (CH1.2) states the ranges of its own tests, as §3.9 does for Laplace.
+
+### Inputs and outputs
+
+- **k** is given as (Re k, Im k) in f64. The builder classifies it as Yukawa (Re k = 0),
+  real (Im k = 0) or complex.
+- **Charges** are given per vector as two planes (Re q, Im q), or Re q alone with the
+  real-charge flag.
+- **Outputs** are φ and ∇φ of "Kernel and factors" (1/(4π) included) as split planes,
+  per vector: Re φ over the targets, then Im φ; with gradients, the Re ∇φ triples
+  (x, y, z) point-major, then the Im ∇φ triples.
+- **Leaf chunks** (in memory, as §3.13) are fixed by CH3.0 and are not versioned.
+- **Fixtures.** `fmm-ref/fixtures/helmholtz_fmm3d.json` holds FMM3D's values of φ and ∇φ
+  (`h3ddirectcg`, FMM3D 2.1.0) for real, complex and imaginary k and for real and complex
+  charges, each checked against the kernel above at 30 digits
+  (`tools/fixtures/gen_helmholtz_fmm3d.py`).
+
+### Verification
+
+`tools/fixtures/check_3_15.py` checks, in mpmath at 40 digits, on seeded random points,
+for real, complex and imaginary k and real and complex charges:
+
+- the gradient against a numerical derivative, and the limit k → 0;
+- h_n against its finite Hankel sum, k₀, j_n(ix) and h_n(ix);
+- the addition formula of the real harmonics and their relation to R_n^m through N;
+- the series with 4π ik, and Yukawa's real series with 4πκ;
+- P2M → M2P and P2L → L2P in stored form at s_l < 1 and s_l = 1, against the direct sum,
+  with every applied exponent non-positive;
+- Yukawa's M^Y and L^Y, real for real charges;
+- the orthogonality of Oⁿ and the β, π − β relation for n ≤ 6;
+- the coaxial coefficients by projection: one coefficient per ±m, (S|S) = (R|R), reality,
+  the index symmetry and the reflection; the start column and both recursions;
+- P2M → M2L → L2P on the axis with the stored (S|R) table, 4π ik and
+  e^{2β_l − Im(k)|t|}, and P2M → M2M → M2P and P2L → L2L → L2P with the stored (S|S) and
+  (R|R) and the power scales alone, against the direct sum;
+- Yukawa's stored forms from î and k̂.
+
+`nd-fmm-math` (CH1.2) confirms these identities in its own tests, and `nd-fmm-ref` (CH1.3)
+the addition theorems, the limit k → 0, Yukawa two ways and the direct sum against the
+fixtures.

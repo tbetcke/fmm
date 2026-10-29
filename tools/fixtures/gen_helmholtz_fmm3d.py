@@ -6,8 +6,8 @@
 """FMM3D's Helmholtz direct sum as fixtures for nd-fmm-ref (Helmholtz CH1.4).
 
 Writes fmm-ref/fixtures/helmholtz_fmm3d.json: the potential and gradient of
-G_k(x, y) = e^{ik|x - y|}/(4 pi |x - y|) (the draft CONVENTIONS §3.15, item 1:
-docs/helmholtz/conventions-3.15-draft.md) as FMM3D 2.1.0's direct routine `h3ddirectcg`
+G_k(x, y) = e^{ik|x - y|}/(4 pi |x - y|) (CONVENTIONS §3.15, "Kernel and factors";
+drafted in CH1.4, adopted in CH1.1) as FMM3D 2.1.0's direct routine `h3ddirectcg`
 computes them, through tools/fmm3d/driver.f90's `helmholtz` mode, for
   - 200 sources in [0, 1]^3 and 40 further targets in [-0.5, 1.5]^3 (seed SEED): the
     values at the 200 sources (the self term dropped) and at the 40 targets;
@@ -226,12 +226,11 @@ def generate(driver, with_reference):
     header = {
         "description": (
             "FMM3D's Helmholtz direct sum, the potential and gradient of "
-            "e^{ik|x-y|}/(4 pi |x-y|) (draft CONVENTIONS §3.15 item 1, "
-            "docs/helmholtz/conventions-3.15-draft.md), for real, complex and imaginary k "
-            "and real and complex charges (Helmholtz CH1.4)"
+            "e^{ik|x-y|}/(4 pi |x-y|) (CONVENTIONS §3.15, Kernel and factors), for real, "
+            "complex and imaginary k and real and complex charges (Helmholtz CH1.4)"
         ),
         "convention_version": convention_version(),
-        "convention": "the draft §3.15 of CH1.4 (not yet in docs/CONVENTIONS.md: CH1.1)",
+        "convention": "CONVENTIONS §3.15 (drafted in Helmholtz CH1.4, adopted in CH1.1)",
         "generator": "tools/fixtures/gen_helmholtz_fmm3d.py",
         "generator_version": GENERATOR_VERSION,
         "seed": SEED,
@@ -241,7 +240,7 @@ def generate(driver, with_reference):
         "thresh": THRESH + " (only exact coincidences dropped, as CONVENTIONS §3.13)",
         "build": None,  # filled by main()
         "reference": (
-            f"every value checked against the draft's kernel summed in mpmath "
+            f"every value checked against the kernel of §3.15 summed in mpmath "
             f"{MPMATH_VERSION} at {DPS} digits, to {TOLERANCE:g} (relative l2 per case and "
             "quantity, and per point relative to its sum of term magnitudes)"
         ),
