@@ -79,6 +79,10 @@ pub struct Setup<T> {
     pub k: Complex<T>,
     /// s_l = min(|k| a_l / 8, 1).
     pub s: [T; 3],
+    /// Forces the shift tables (M2M, L2L) to S2's projection (`Some(true)`) or recursion
+    /// (`Some(false)`); None takes the rule of [`Setup::shift_table`]. For the test that
+    /// records the projection's failure for L2L (SPIKE_REPORT.md §2.4).
+    pub shift_projection: Option<bool>,
 }
 
 impl<T: Real> Setup<T> {
@@ -96,7 +100,13 @@ impl<T: Real> Setup<T> {
             let v = k.abs() * a * T::from_f64(0.5f64.powi(l as i32) / 8.0);
             if v < T::ONE { v } else { T::ONE }
         });
-        Setup { kind, ka, k, s }
+        Setup {
+            kind,
+            ka,
+            k,
+            s,
+            shift_projection: None,
+        }
     }
 
     /// The scale factors of an M2M (`m2m`) or L2L between level `child` and its parent,
@@ -144,10 +154,12 @@ impl<T: Real> Setup<T> {
         // shift's argument is k a/2), the projection above: S2's projection on an outer
         // sphere, accurate in M2M's weights, is not for L2L with damped k
         // (SPIKE_REPORT.md §2.4).
-        let recursion = if T::EPSILON < 1e-20 {
-            self.k.im != T::ZERO || self.k.re.to_f64() * unit_radius::<f64>() <= 128.0
-        } else {
-            self.use_recursion()
+        let recursion = match self.shift_projection {
+            Some(projection) => !projection,
+            None if T::EPSILON < 1e-20 => {
+                self.k.im != T::ZERO || self.k.re.to_f64() * unit_radius::<f64>() <= 128.0
+            }
+            None => self.use_recursion(),
         };
         if recursion {
             let start = coaxial::start_values(Op::Regular, self.k * t, T::ONE, 2 * p);

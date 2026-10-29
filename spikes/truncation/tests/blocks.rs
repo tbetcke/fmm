@@ -1,7 +1,7 @@
 //! Tests 1–4 and 7–8 of docs/helmholtz/tasks/CH0.7.md: the double-double arithmetic, the
 //! radial functions, the harmonics, the rotations, the geometry and the formula.
 
-use nd_fmm_spike_truncation::calibrate::formula_p;
+use nd_fmm_spike_truncation::calibrate::{formula_p, smallest_passing};
 use nd_fmm_spike_truncation::complex::Complex;
 use nd_fmm_spike_truncation::geometry::{
     Placement, Rng, child_index, children, distances, near_offsets, offsets, points,
@@ -468,4 +468,27 @@ fn formula() {
             assert_eq!(formula_p(ka(kd, 2), *eps), p, "kD {kd} eps {eps}");
         }
     }
+}
+
+/// Test 8: the search returns the smallest p from which on every scanned error passes,
+/// also on a curve that dips below the threshold and rises again, and None when the last
+/// point fails.
+#[test]
+fn search() {
+    let curve = [
+        (10, 1e-2),
+        (11, 4e-4),
+        (12, 6e-4),
+        (13, 3e-4),
+        (14, 1e-5),
+        (15, 2e-6),
+    ];
+    assert_eq!(smallest_passing(&curve, 5e-4), Some(13));
+    assert_eq!(smallest_passing(&curve, 1e-1), Some(10));
+    assert_eq!(smallest_passing(&curve, 1e-5), Some(14));
+    assert_eq!(smallest_passing(&curve, 1e-6), None);
+    assert_eq!(smallest_passing(&[], 1.0), None);
+    // Sparse samples: the first passing sample from which on all pass.
+    let sparse = [(20, 1e-3), (24, 1e-7), (28, 1e-9)];
+    assert_eq!(smallest_passing(&sparse, 1e-6), Some(24));
 }

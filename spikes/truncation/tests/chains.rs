@@ -1,12 +1,11 @@
 //! Test 6 of docs/helmholtz/tasks/CH0.7.md: each chain at a degree far above the
 //! calibrated one against the double-double direct sum. The error left is the rounding
 //! of the chain plus a truncation below it, so a bound of 10⁻²⁰ puts the rounding at
-//! least 10⁻¹⁰ below every ε/2 of the sweep (5·10⁻¹¹): what the sweep measures is
+//! least 5·10⁹ below every ε/2 of the sweep (5·10⁻¹¹): what the sweep measures is
 //! truncation alone. (At low frequency the decay is slow, about 0.16 decades per degree,
 //! slower with damping, and the scaled tables end near p = 135, where the gradient of C2
-//! reaches 10⁻²² for real k and 5·10⁻²¹ for η = 1.) One exception, η = 0.1 at k a = 256, where the damped
-//! M2L projection levels off at 7·10⁻²⁰ and the shift recursion at 2·10⁻¹⁷
-//! (SPIKE_REPORT.md §2.4): bound 10⁻¹⁶, still 10⁶ below the smallest ε/2.
+//! reaches 10⁻²² for real k and 5·10⁻²¹ for η = 1.) Every case with Im(k) a ≥ 16 has the
+//! larger bound of [`bound`].
 
 use nd_fmm_spike_truncation::calibrate::{Chain, Config, run, worst};
 use nd_fmm_spike_truncation::chain::{Kind, Setup};
@@ -35,9 +34,9 @@ fn p_big(kind: Kind, ka: f64) -> usize {
 }
 
 /// The bound: 10⁻²⁰, or 10⁻¹⁶ where Im(k) a ≥ 16. There the damped field across an
-/// offset is tens of decades below its terms, and the double-double chain levels off at
-/// 4·10⁻¹⁷ (η = 1 and imaginary k at κ a = 32) and 2·10⁻¹⁷ (η = 0.1 at k a = 256, the
-/// shift recursion; the damped M2L projection at 7·10⁻²⁰), still 10⁶ below ε/2.
+/// offset is decades below its terms, and the double-double chain levels off at up to
+/// 6·10⁻¹⁷ (η = 1 and imaginary k at κ a = 32; η = 0.1 at k a = 256, where the shift
+/// recursion and the damped M2L projection set it), still 10⁶ below ε/2.
 fn bound(kind: Kind, ka: f64) -> f64 {
     if im_ka(kind, ka) >= 16.0 {
         1e-16
@@ -100,4 +99,32 @@ fn only_truncation_high_frequency() {
     check(Kind::Damped(0.1), 128.0, &ALL);
     check(Kind::Real, 256.0, &ALL);
     check(Kind::Damped(0.1), 256.0, &ALL);
+}
+
+/// The record behind SPIKE_REPORT.md §2.4: S2's outer-sphere projection of the shift
+/// tables, accurate in M2M's weights, fails in L2L with complex k. C3l with η = 0.1 at
+/// k a = 128 at the degrees of `check`: the recursion leaves at most 10⁻²⁰, the projection
+/// more than 10⁻³ (3·10²⁰ when it was first seen at p = 220 on every level).
+#[test]
+#[ignore = "projection tables to p = 217 in double-double; run in release"]
+fn l2l_by_projection_fails_with_damping() {
+    let kind = Kind::Damped(0.1);
+    let ka = 128.0;
+    let deg = [
+        p_big(kind, ka),
+        p_big(kind, ka / 2.0),
+        p_big(kind, ka / 4.0),
+    ];
+    let cfg = Config::default();
+    let mut errors = Vec::new();
+    for projection in [false, true] {
+        let mut setup = Setup::<Dd>::new(kind, ka);
+        setup.shift_projection = Some(projection);
+        let rec = run(&setup, Chain::C3l, &OFFSETS, &Placement::ALL, &[deg], &cfg);
+        let (pot, grad) = worst(&rec, 1)[0];
+        println!("C3l η = 0.1, k a = 128, projection {projection}: pot {pot:.2e} grad {grad:.2e}");
+        errors.push(pot.max(grad));
+    }
+    assert!(errors[0] < 1e-20, "recursion {:e}", errors[0]);
+    assert!(errors[1] > 1e-3, "projection {:e}", errors[1]);
 }

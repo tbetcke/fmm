@@ -12,15 +12,14 @@ and compare it with the formula of proposal §3.5.
 
 ## Acceptance (proposal §10, verbatim)
 
-> the chain P2M → M2M → M2L → L2P over two levels, and M2M and L2L chains over three, on
+> the chain P2M → M2M → M2L → L2L → L2P over two levels, and M2M and L2L chains over three, on
 > all 316 offsets, with points filling the boxes (uniform, corners, W1 patches), for real,
 > complex and imaginary k, in extended precision with the S1 and S2 prototypes, so that
 > only truncation is measured. Output: p as a function of (k a, ε, operator) on the low-
 > and high-frequency ranges against the formula of Section 3.5, meeting ε with a stated
 > margin on every placement; fed to S6, S8, Section 7 and CH2.3, CH3.3, CH4.3
 
-(The roadmap's form: "P2M → M2M → M2L → L2L → L2P over two levels"; the chain has L2L as
-well.)
+(Proposal §10, line 1337, verbatim.)
 
 ## Read first
 
@@ -47,8 +46,9 @@ A spike only; no workspace crate, convention, table or Laplace path changes.
   - Generic ports of the prototypes, so that the same code runs in f64 and in
     double-double: `src/radial.rs` (S2/S3's jₙ by Miller's method and hₙ upward, with the
     power scale; derivatives from neighbouring orders), `src/legendre.rs` and
-    `src/rotation.rs` (S1's GD y-blocks with the telescoped Legendre functions; the z
-    rotation; applying O(Q) = O(R_y(−β)) O(R_z(−α)) to a real or complex expansion),
+    `src/rotation.rs` (S1's GD y-blocks, with the plain three-term Legendre recursion in
+    place of S1's telescoped form, which the spike's polar angles do not need; the z
+    rotation; applying O(Q) = O(R_y(−β)) O(R_z(−α)) to a complex expansion),
     `src/coaxial.rs` (S2's recursion in its triangle, and S2's projection), and
     `src/harmonics.rs` (the real orthonormal Yₙᵐ of S2's basis with their gradients).
   - `src/chain.rs`: P2M, M2M, M2L and L2L by rotation, coaxial step, rotation back (RCR),
@@ -105,10 +105,15 @@ the same code at the calibrated p for comparison (the f64 floor, an input to S6 
   offsets, the three placements, potential and gradient, is at most ε/2: a margin of 2,
   for the sum over a target's V lists and levels that the full FMM adds and CH3.3
   confirms. The report also gives p for the potential alone and the margin reached.
-- The search runs on the offsets with |t| ≤ √6 w (54 of them, where the error is
-  largest), then every chosen p is checked on all 316 offsets and raised until it passes.
-- Coaxial tables by S2's recursion where Re(k) a ≤ 100 in double-double (≤ 40 in f64, the
-  signed-off rule), by projection above; the end-to-end test below bounds what either
+- The search runs on the offsets with |t| ≤ √6 w (54 of them), for cost; then every chosen
+  p is checked on all 316 offsets and raised until it passes. As built: every fourth p
+  first, then refined below each threshold's first pass; the 316-offset check at p, p + 1
+  and p + 2 in one run, then further, capped at p + 8 (δ at 8). At high frequency the
+  farthest offsets bind, and the check raised p in 61 of 832 cases.
+- M2L tables by S2's recursion where Re(k) a ≤ 100 in double-double (≤ 40 in f64, the
+  signed-off rule), by projection above. Shift tables (M2M, L2L) in double-double by the
+  recursion for complex k and for real k to Re(k) a = 128, by projection above: S2's
+  outer-sphere projection fails in L2L with complex k (SPIKE_REPORT.md §2.4); the end-to-end test below bounds what either
   leaves. (Planned at 128; the recursion is 6·10⁻²² off the projection there, 2·10⁻²⁵ at
   90.5.)
 - Output: tables of p₁ and δ per (kind, k a, ε) beside the formula; a fit of the form
@@ -143,16 +148,19 @@ test unless stated.
    FMM-weighted ≤ 10⁻²⁴; rectangular truncation a block of the square table, bit for bit.
 6. **Only truncation is measured** (the acceptance's "extended precision"): each chain
    (C1, C2, C3m, C3l) at a p far above the calibrated one against the double-double direct
-   sum, relative error ≤ 10⁻²² for potential and gradient, at k a = 0.1, 4, 32 for every
-   kind and at k a = 128 (real k and η = 0.1) and 256 (real k), on the nearest offsets
-   (on the axis, β = 0 and π, and off it) and the farthest, every placement. So the
-   rounding of the chain is at least 10⁻¹² below every ε of the sweep. (Planned at 10⁻²⁴;
-   at low frequency the decay is about 0.16 decades per degree and the range of the
-   scaled tables ends near p = 135, where the gradient reaches 10⁻²³.)
+   sum, relative error ≤ 10⁻²⁰ for potential and gradient, ≤ 10⁻¹⁶ where Im(k) a ≥ 16, at
+   k a = 0.1, 4, 32 for every kind and at k a = 128 and 256 (real k and η = 0.1), on the
+   nearest offsets (on the axis, β = 0 and π, and off it) and the farthest, every
+   placement. So the rounding of the chain is at least 5·10⁹ below every ε/2 of the sweep
+   (10⁶ where Im(k) a ≥ 16). (Planned at 10⁻²⁴; at low frequency the decay is about 0.16
+   decades per degree and the scaled tables end near p = 135, where the gradient reaches
+   10⁻²² for real k and 5·10⁻²¹ for η = 1; with strong damping the chain levels off at
+   up to 6·10⁻¹⁷.) Added: the record of the L2L finding, C3l with projection shift tables
+   (`l2l_by_projection_fails_with_damping`).
 7. **Geometry**: 316 offsets, 15 distances; placements inside their boxes; corner
    clusters inside each leaf; patch points on their sphere.
-8. **Search**: on a synthetic error curve the search returns the smallest passing p;
-   the formula p reproduces proposal §3.5's tables.
+8. **Search**: on a synthetic error curve the search returns the smallest passing p
+   (`search`); the formula p reproduces proposal §3.5's tables (`formula`).
 
 ## Checks
 
@@ -163,7 +171,10 @@ the spike's Clippy and tests in release with `--include-ignored`.
 ## Machine runs
 
 The sweep on the M3 Max (release, all cores; no timing is a result, only the p tables).
-Kathleen only if the top of the grid needs it (above), as a Slurm job of one node.
+Kathleen only if the top of the grid needs it (above), as a Slurm job of one node. As
+run: the M3 Max only, 2026-10-28 to 2026-10-29, about 20 hours; every chain at every
+ε. Added: `examples/sweep.rs f64all`, C1 in f64 at every calibrated p on all 316
+offsets.
 
 ## Constraints and risks
 
@@ -182,8 +193,11 @@ Kathleen only if the top of the grid needs it (above), as a Slurm job of one nod
 
 ## Pending runs
 
-None yet.
+None (the η = 0.1 multi-level chains at k a = 181 and 256 ran last, on the user's
+request, after a shortened run).
 
 ## Open questions
 
-None yet.
+The four questions of SPIKE_REPORT.md §8: the calibrated degree p* and the closed form
+for real k; the norm for decaying kernels; the L2L tables (amending S2's signed-off
+projection rule for CH1.2); the proposal's next draft.
