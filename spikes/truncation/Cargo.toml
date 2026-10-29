@@ -1,0 +1,13 @@
+[package]
+name = "nd-fmm-spike-truncation"
+version = "0.0.0"
+description = "Throwaway study: the truncation degree of the Helmholtz FMM under realistic geometry, the P2M, M2M, M2L, L2L and L2P chains in double-double precision against the direct sum (Helmholtz CH0.7, spike S7)."
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dev-dependencies]
+# The arbitrary-precision references of spikes/radial, spikes/rotation-blocks and
+# spikes/coaxial.
+serde_json.workspace = true

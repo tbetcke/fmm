@@ -145,7 +145,9 @@ D7, D10, D11, D12) put to the user.
   sizes, p_l, regime and per-class choice, the memory model of §7 and the operation counts;
   c_leaf proposed (D11); no high-frequency leaf; the workloads proposed (D12); batch sizes
   for S5 and S9. *Needs:* –. *Sign-off:* D11, D12.
-- [ ] **CH0.7 S7: truncation under realistic geometry.** *Done when:* the P2M → M2M → M2L →
+- [x] **CH0.7 S7: truncation under realistic geometry.** Report:
+  `spikes/truncation/SPIKE_REPORT.md`, tables in `spikes/truncation/results/summary.md`.
+  *Done when:* the P2M → M2M → M2L →
   L2L → L2P chain over two levels and M2M and L2L over three, on all 316 offsets, with points
   filling the boxes (uniform, corners, W1 patches), real, complex and imaginary k, in
   extended precision with the S1 and S2 prototypes; p as a function of (k a, ε, operator)
