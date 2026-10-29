@@ -13,7 +13,8 @@ scripts below.
 | `check_symmetry.py` | high-precision check of the box geometry and cube symmetry rules of CONVENTIONS §3.12; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
 | `check_leaf_geometry.py` | exact and high-precision check of the leaf data and relative box geometry of CONVENTIONS §3.13; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
 | `plane_wave_quadrature.sh` | writes `fmm-tables/src/plane_wave/quadrature_data.rs`: FMM3D's plane-wave quadratures for separation 1 (NIST's `lwtsexp_sep1.f` of FMM3D v2.1.0, with its notice; Phase 6 T13, from the spike of T10) | POSIX `sh`, `awk`, `sed`; FMM3D's source (`tools/fmm3d/build.sh fetch`) |
-| `gen_helmholtz_fmm3d.py` | writes `fmm-ref/fixtures/helmholtz_fmm3d.json`: FMM3D 2.1.0's Helmholtz direct sum (`h3ddirectcg`) for real, complex and imaginary k and real and complex charges, every value checked against the draft §3.15's kernel in mpmath, with FMM3D's two-point check (Helmholtz CH1.4) | Python ≥ 3.9, `mpmath==1.4.1` (pinned); FMM3D built by `tools/fmm3d/build.sh` (`FMM3D_ROOT`) |
+| `gen_helmholtz_fmm3d.py` | writes `fmm-ref/fixtures/helmholtz_fmm3d.json`: FMM3D 2.1.0's Helmholtz direct sum (`h3ddirectcg`) for real, complex and imaginary k and real and complex charges, every value checked against the kernel of CONVENTIONS §3.15 in mpmath, with FMM3D's two-point check (Helmholtz CH1.4) | Python ≥ 3.9, `mpmath==1.4.1` (pinned); FMM3D built by `tools/fmm3d/build.sh` (`FMM3D_ROOT`) |
+| `check_3_15.py` | high-precision check of the identities of the Helmholtz family, CONVENTIONS §3.15 (Helmholtz CH1.1); writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
 | `check_p2p_domain.py` | exact check of the coincident-pair rule and the domain of r² of fast P2P kernels, CONVENTIONS §3.13 "Fast kernels"; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned, through `check_leaf_geometry.py`) |
 
 All scripts declare their dependencies inline (PEP 723), so with
@@ -80,8 +81,8 @@ It holds 200 sources in [0, 1]³ and 40 targets in [−0.5, 1.5]³ (seed 2026102
 complex charges, and k = 1, 25, 1 + 0.5i, 25 + 2.5i, i and 25i. For each case it stores the
 potential and gradient of e^{ik|x−y|}/(4π|x−y|) at the sources (the self term dropped)
 and at the targets. The header records the release, commit, routine, `thresh`, compiler
-and machine, and how closely each case agrees with the draft's kernel summed in mpmath at
-30 digits; generation fails above 10⁻¹³. It also has the raw two-point values and the
+and machine, and how closely each case agrees with the kernel of CONVENTIONS §3.15 summed
+in mpmath at 30 digits; generation fails above 10⁻¹³. It also has the raw two-point values and the
 convention they identify. FMM3D's sums differ in their last bits between compilers, so
 `--check` compares the values to 10⁻¹³ relative, not the bytes. It also says whether the
 file is byte-identical, which it is on the machine and compiler that wrote it.
@@ -267,3 +268,33 @@ r² is formed as the reference forms it, ((d₀² + d₁²) + d₂²), and with 
 orders. The last lines give, per precision, the smallest nonzero r² found (2⁻¹⁰⁶, the
 sharp bound) with its margin to the domain's lower end 2⁻¹⁰⁸ and to the smallest normal
 number, and the largest r² (108). It takes about half a minute.
+
+## Helmholtz check
+
+```sh
+uv run tools/fixtures/check_3_15.py
+```
+
+checks the identities of CONVENTIONS §3.15 (Helmholtz CH1.1) in mpmath at 40 significant
+digits, from the section's own definitions (its harmonics, radial functions and stored
+coefficients are written out in the script, not imported), on seeded random points, for
+real, complex and imaginary k and real and complex charges. It prints the worst error of:
+
+| Check | Tolerance |
+| --- | --- |
+| the gradient of the kernel against a numerical derivative; k → 0 against §3.13 | 1e-30; 1e-18 |
+| h_n = j_n + i y_n against its finite Hankel sum; k₀(x) = e^{−x}/x; j_n(ix) = iⁿ i_n(x); h_n(ix) = −i^{−n} k_n(x) | 1e-30 |
+| Σ_m Y_n^m(a) Y_n^m(b) = (2n + 1)/(4π) P_n(a · b), and r^n Y_n^m against the Racah R_n^m of §3.3 through ν_m and √2 (n ≤ 15) | 1e-32 |
+| e^{ikr}/r = 4π ik Σ j_n h_n Σ Y Y (p = 60) | 1e-28 |
+| P2M → M2P and P2L → L2P in stored form (scale, per-box damping factor, 4π ik), |k| a below and above 1, against the direct sum (p = 50); every applied exponent ≤ 0 | 1e-24; exact |
+| Yukawa: M^Y = i^{−n} M and L^Y = iⁿ L real for real charges, their real forms, and e^{−κr}/r = 4πκ Σ i_n k_n Σ Y Y | 1e-30; 1e-28 |
+| Oⁿ(R_y(β)) orthogonal and Oⁿ(R_y(π − β)) = (−1)ⁿ E Oⁿ(R_y(β)) E F, Oⁿ fitted from Y(Qx̂) = Oⁿ Y(x̂) (n ≤ 6) | 1e-30 |
+| coaxial (R\|R), (S\|S), (S\|R) by projection (n, n′ ≤ 5, m ≤ 2): one coefficient per ±m, (S\|S) = (R\|R), real for real k, i^{n−n′} (E\|F) real for Yukawa, the index symmetry and the reflection of (S\|R) and (R\|R) (relative) | 1e-20 |
+| P2M → M2L → L2P on the z-axis in stored form: the stored (S\|R) table (by projection), 4π ik and e^{2β − Im(k)\|t\|} (p = 10), against the direct sum; every applied exponent ≤ 0 | 1e-10 (truncation about 3e-13); exact |
+| P2M → M2M → M2P and P2L → L2L → L2P on the z-axis in stored form, child and parent, the stored (S\|S) and (R\|R) with the power scales alone (the damping factors cancel) (p = 14), against the direct sum | 1e-14 (truncation: Yukawa 1e-11 at p = 10, 1e-17 at 14) |
+| the start column and the recursions in n and m of §3.15 against the projected (R\|R) and (S\|R) (n, n′ ≤ 6, m ≤ 3), relative to the table's largest entry | 1e-20 |
+| Yukawa's stored M̂^Y and L̂^Y from î and k̂ against i^{−n} M̂ and iⁿ L̂ (p = 30) | 1e-28 |
+
+The radial functions come from mpmath's Bessel functions; h_n from its finite Hankel sum,
+since j_n + i y_n cancels by e^{2 Im z} (the two are compared at moderate arguments). The
+script exits non-zero on any failure and takes about three minutes.
