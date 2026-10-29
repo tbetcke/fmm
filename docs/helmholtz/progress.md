@@ -220,3 +220,56 @@ request, using this template:
   -- sweep`); CH3.0 implements the maximum leaf width in nd-octree with the signed-off
   c_leaf; S5 and S9 take their batch sizes from `results/batches.md`; CH4.1 and CH8.1 the
   scratch and replicated-top numbers.
+
+## 2026-10-29: CH0.7 S7: truncation under realistic geometry
+- Done:
+  - The spike `spikes/truncation/` (a member outside the default members): a double-double
+    scalar (`src/real.rs`, about 32 digits) and generic ports of S1's rotation blocks,
+    S2's coaxial tables (recursion and projection), S2's and S3's radial functions and
+    S2's basis.
+  - The chains C1 (P2M → M2L → L2P), C2 (P2M → M2M → M2L → L2L → L2P), C3m (M2M twice,
+    M2P) and C3l (P2L, L2L twice) on all 316 offsets, with uniform, corner and W1-patch
+    placements, against the double-double direct sum.
+  - The sweep (`examples/sweep.rs`): k a on a half-octave grid from 0.016 to 256 (κ a to
+    32 for η = 1 and Yukawa); real k, η = 0.1 and 1, imaginary k; ε from 10⁻³ to 10⁻¹⁰;
+    the margin ε/2; f64 at every calibrated p on all 316 offsets.
+  - Report `spikes/truncation/SPIKE_REPORT.md`, tables in `results/summary.md`.
+- Tests:
+  - Double-double identities to 10⁻³⁰.
+  - S1's, S2's and S3's mpmath fixtures, to their f64 rounding.
+  - Orthogonality at degree 300; Y(Qx) = O(Q) Y(x) on all 316 directions.
+  - Recursion against projection to 2·10⁻²⁵ at k a = 90.5.
+  - Test 6: every chain at high p leaves at most 10⁻²⁰ (10⁻¹⁶ where Im(k) a ≥ 16), so the
+    sweep measures truncation alone.
+  - The search, and the formula against §3.5's tables.
+  - The record of the L2L projection failure.
+  - Output of test 6 in `results/chains.log`.
+- Findings:
+  - p for real k is nearly flat below k a ≈ 8 (the Laplace limit) and above the formula of
+    §3.5 there (30 against 22 at 10⁻⁶, 55 against 35 at 10⁻¹⁰), set by corner clusters
+    and the gradient. From k a = 32 it is 5–15 % below the formula.
+  - The closed form max(⌈6 log₁₀(1/ε)⌉ − 2, ⌈k a + (ln 1/ε)^{2/3} (k a)^{1/3}⌉) never
+    under-predicts the per-level degree p* at the real-k grid points (over by ≤ 9).
+  - M2M and L2L over three levels need nothing extra for real k; the two-level chain needs
+    up to 3 degrees at low frequency.
+  - Strong damping and Yukawa need 2–2.5 times the formula at κ a = 16–32 in the per-pair
+    relative norm. η = 0.1's multi-level δ grows with Im(k) a (7 at k a = 181, > 8
+    unresolved at 256, a level always pruned).
+  - f64 meets every real-k p on all 316 offsets, but not strong damping from κ a = 16.
+  - S2's outer-sphere projection of the shift tables fails in L2L with complex k.
+- Checks: ran `/verify` on the M3 Max: format; Clippy default, examples and workspace
+  all-targets; `cargo doc` and the spike's doc with `-D warnings`; the default (823) and
+  workspace (901) tests; `cargo check --workspace --all-targets`; the licence check; no
+  fftw-sys. The spike's tests in release with `--include-ignored`. A self-review by a
+  subagent; its five blocking points were fixed, among them the worst offset, the f64 check
+  moved to all 316 offsets, the search test and the plan. The sweep ran about 20 hours on
+  the M3 Max; the η = 0.1 multi-level chains at k a = 181 and 256 ran last, on the user's
+  request. Nothing pending.
+- Decisions: none taken; questions for sign-off in the report, §8:
+  1. p* and the closed form as S7's output;
+  2. the norm for decaying kernels (CH2.3 to calibrate Yukawa in the full FMM);
+  3. the L2L tables for CH1.2, amending S2's projection rule;
+  4. the proposal's next draft.
+- Laplace: not touched (only the spike, its member entry and its lock-file entry).
+- Follow-ups: S6 (CH0.6) and CH0.8b take p* or the closed form; CH1.2 the L2L tables;
+  CH2.3, CH3.3 and CH4.3 confirm p in the full FMM.
