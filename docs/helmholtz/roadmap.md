@@ -191,9 +191,10 @@ family, checked against FMM3D's fixtures.
   matching the draft (or the draft corrected); fixtures for real, complex and imaginary k and
   real and complex charges, committed with release, routine and `eps`; whether FMM3D is
   accurate for imaginary zk (R12). *Needs:* CH0.1, CH0.2, CH0.3. *Machines:* Kathleen.
-- [ ] **CH1.1 CONVENTIONS §3.15.** The proposal's Section 4 as a CONVENTIONS section and a
-  `CONVENTION_VERSION` bump. *Done when:* signed off by the user after CH1.4's two-point
-  check. *Needs:* CH1.4, D5. *Sign-off:* §3.15.
+- [x] **CH1.1 CONVENTIONS §3.15.** `docs/CONVENTIONS.md` §3.15, `CONVENTION_VERSION = 3`;
+  the check `tools/fixtures/check_3_15.py`. The proposal's Section 4 as a CONVENTIONS
+  section and a `CONVENTION_VERSION` bump. *Done when:* signed off by the user after
+  CH1.4's two-point check. *Needs:* CH1.4, D5. *Sign-off:* §3.15.
 - [ ] **CH1.2 `nd-fmm-math`.** Real orthonormal harmonics, radial functions (with the Yukawa
   scaling), rotation blocks at any degree. *Done when:* the identities of §3.15; the M2M and
   L2L coefficients real for real k. *Needs:* CH1.1, D2.
