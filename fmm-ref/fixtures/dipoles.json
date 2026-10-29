@@ -1,7 +1,7 @@
 {
  "header": {
   "description": "Dipole P2M and P2L coefficients and the dipole direct sum (docs/CONVENTIONS.md §3.7, 'Dipole sources') at seeded random points",
-  "convention_version": 2,
+  "convention_version": 3,
   "generator": "tools/fixtures/gen_dipoles.py",
   "generator_version": 1,
   "mpmath_version": "1.4.1",

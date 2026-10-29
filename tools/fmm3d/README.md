@@ -126,8 +126,8 @@ has the file formats); `tools/fixtures/gen_helmholtz_fmm3d.py` makes `nd-fmm-ref
 fixtures with them (tools/fixtures/README.md). Report:
 `fmm-validate/results/helmholtz-ch1-4.md`.
 
-- `fmm3d_driver helmholtz-check`: the two-point check of proposal §9.2 against the draft
-  CONVENTIONS §3.15 (`docs/helmholtz/conventions-3.15-draft.md`, item 1). It runs
+- `fmm3d_driver helmholtz-check`: the two-point check of proposal §9.2 against
+  CONVENTIONS §3.15, "Kernel and factors" (drafted in CH1.4, adopted in CH1.1). It runs
   `hfmm3d_s_c_g` and `h3ddirectcg` for real, complex and imaginary k and stops unless
   both compute e^{ikr}/(4πr) and its gradient in the target. Every `helmholtz` run does
   this check first, as the Laplace runs check the normalisation.
