@@ -196,15 +196,16 @@ S2 builds (R|R) = (S|S) by projection on an outer sphere and checked it in M2M's
 An L2L reads the same table the other way: from a parent local of high degree to a child
 local of low degree. In this spike that failed:
 
-- C3l with η = 0.1 at k a = 128 grew to 3·10²⁰ with projection tables, where the recursion
-  gives 1.6·10⁻²⁵;
+- C3l with η = 0.1 at k a = 128 leaves 1.4·10⁻¹⁰ with projection tables at the degrees of
+  test 6 ([217, 160, 160]), where the recursion gives 1.9·10⁻²⁵: above ε/2 at ε = 10⁻¹⁰.
+  With p = 220 on every level it grows to 6·10¹⁹ (3·10²⁰ on the probe's offsets);
 - at k a = 256 with η = 0.1 the projection reaches only 2·10⁻¹²;
 - real k at k a = 256 blew up when the child degrees were far above the child's k a
   (p = 345 on every level), but gave 2·10⁻²⁹ at the degrees the chains use;
 - more quadrature nodes (p + 100 + |k| t) did not change it.
 
 The ignored test `l2l_by_projection_fails_with_damping` (`tests/chains.rs`) records the
-first case, C3l with η = 0.1 at k a = 128 with shift tables forced to projection and to
+first case at both degree sets, with the shift tables forced to projection and to
 recursion; its output is in `results/chains.log`.
 
 The spike therefore builds the shift tables by the recursion for complex k and for real k

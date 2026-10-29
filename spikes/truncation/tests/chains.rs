@@ -103,28 +103,32 @@ fn only_truncation_high_frequency() {
 
 /// The record behind SPIKE_REPORT.md §2.4: S2's outer-sphere projection of the shift
 /// tables, accurate in M2M's weights, fails in L2L with complex k. C3l with η = 0.1 at
-/// k a = 128 at the degrees of `check`: the recursion leaves at most 10⁻²⁰, the projection
-/// more than 10⁻³ (3·10²⁰ when it was first seen at p = 220 on every level).
+/// k a = 128, at the degrees of `check` and at p = 220 on every level: the recursion
+/// leaves at most 10⁻²⁰; the projection 1.4·10⁻¹⁰ (above ε/2 at ε = 10⁻¹⁰) and 6·10¹⁹.
 #[test]
-#[ignore = "projection tables to p = 217 in double-double; run in release"]
+#[ignore = "projection tables to p = 220 in double-double; run in release"]
 fn l2l_by_projection_fails_with_damping() {
     let kind = Kind::Damped(0.1);
     let ka = 128.0;
-    let deg = [
+    let cfg = Config::default();
+    let realistic = [
         p_big(kind, ka),
         p_big(kind, ka / 2.0),
         p_big(kind, ka / 4.0),
     ];
-    let cfg = Config::default();
-    let mut errors = Vec::new();
-    for projection in [false, true] {
-        let mut setup = Setup::<Dd>::new(kind, ka);
-        setup.shift_projection = Some(projection);
-        let rec = run(&setup, Chain::C3l, &OFFSETS, &Placement::ALL, &[deg], &cfg);
-        let (pot, grad) = worst(&rec, 1)[0];
-        println!("C3l η = 0.1, k a = 128, projection {projection}: pot {pot:.2e} grad {grad:.2e}");
-        errors.push(pot.max(grad));
+    for (deg, at_least) in [(realistic, 1e-11), ([220; 3], 1.0)] {
+        let mut errors = Vec::new();
+        for projection in [false, true] {
+            let mut setup = Setup::<Dd>::new(kind, ka);
+            setup.shift_projection = Some(projection);
+            let rec = run(&setup, Chain::C3l, &OFFSETS, &Placement::ALL, &[deg], &cfg);
+            let (pot, grad) = worst(&rec, 1)[0];
+            println!(
+                "C3l η = 0.1, k a = 128, p {deg:?}, projection {projection}: pot {pot:.2e} grad {grad:.2e}"
+            );
+            errors.push(pot.max(grad));
+        }
+        assert!(errors[0] < 1e-20, "recursion {:e}", errors[0]);
+        assert!(errors[1] > at_least, "projection {:e}", errors[1]);
     }
-    assert!(errors[0] < 1e-20, "recursion {:e}", errors[0]);
-    assert!(errors[1] > 1e-3, "projection {:e}", errors[1]);
 }

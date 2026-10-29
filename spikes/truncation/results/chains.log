@@ -1,0 +1,73 @@
+test l2l_by_projection_fails_with_damping ... C3l η = 0.1, k a = 128, p [217, 160, 160], projection false: pot 1.58e-25 grad 1.90e-25
+C3l η = 0.1, k a = 128, p [217, 160, 160], projection true: pot 1.39e-10 grad 1.38e-10
+C3l η = 0.1, k a = 128, p [220, 220, 220], projection false: pot 1.59e-25 grad 2.07e-25
+C3l η = 0.1, k a = 128, p [220, 220, 220], projection true: pot 6.33e19 grad 6.35e19
+test only_truncation_every_kind ... C1 real ka 0.1 p [135, 135, 135]: pot 6.29e-26 grad 1.71e-23
+C2 real ka 0.1 p [135, 135, 135]: pot 2.73e-25 grad 1.20e-22
+C3m real ka 0.1 p [135, 135, 135]: pot 1.08e-31 grad 1.20e-31
+C3l real ka 0.1 p [135, 135, 135]: pot 1.72e-31 grad 2.23e-31
+C1 real ka 4 p [135, 135, 135]: pot 5.94e-26 grad 2.29e-24
+C2 real ka 4 p [135, 135, 135]: pot 3.68e-25 grad 2.07e-23
+C3m real ka 4 p [135, 135, 135]: pot 6.78e-31 grad 5.69e-31
+C3l real ka 4 p [135, 135, 135]: pot 2.84e-31 grad 3.00e-31
+C1 real ka 32 p [160, 160, 135]: pot 4.51e-29 grad 2.57e-28
+C2 real ka 32 p [160, 160, 135]: pot 3.63e-28 grad 2.34e-27
+C3m real ka 32 p [160, 160, 135]: pot 2.49e-30 grad 2.49e-30
+C3l real ka 32 p [160, 160, 135]: pot 3.02e-30 grad 3.01e-30
+C1 complex0.1 ka 0.1 p [135, 135, 135]: pot 6.43e-26 grad 1.72e-23
+C2 complex0.1 ka 0.1 p [135, 135, 135]: pot 2.79e-25 grad 1.19e-22
+C3m complex0.1 ka 0.1 p [135, 135, 135]: pot 1.35e-31 grad 1.32e-31
+C3l complex0.1 ka 0.1 p [135, 135, 135]: pot 1.25e-31 grad 2.69e-31
+C1 complex0.1 ka 4 p [135, 135, 135]: pot 1.36e-25 grad 5.15e-24
+C2 complex0.1 ka 4 p [135, 135, 135]: pot 8.12e-25 grad 4.51e-23
+C3m complex0.1 ka 4 p [135, 135, 135]: pot 4.81e-31 grad 4.49e-31
+C3l complex0.1 ka 4 p [135, 135, 135]: pot 3.36e-31 grad 3.69e-31
+C1 complex0.1 ka 32 p [160, 160, 135]: pot 4.73e-27 grad 2.71e-26
+C2 complex0.1 ka 32 p [160, 160, 135]: pot 7.82e-26 grad 4.95e-25
+C3m complex0.1 ka 32 p [160, 160, 135]: pot 3.36e-30 grad 3.33e-30
+C3l complex0.1 ka 32 p [160, 160, 135]: pot 6.33e-30 grad 6.29e-30
+C1 complex1 ka 0.1 p [135, 135, 135]: pot 7.73e-26 grad 1.77e-23
+C2 complex1 ka 0.1 p [135, 135, 135]: pot 3.36e-25 grad 1.21e-22
+C3m complex1 ka 0.1 p [135, 135, 135]: pot 2.80e-31 grad 2.60e-31
+C3l complex1 ka 0.1 p [135, 135, 135]: pot 2.45e-31 grad 4.33e-31
+C1 complex1 ka 4 p [135, 135, 135]: pot 2.64e-23 grad 6.55e-22
+C2 complex1 ka 4 p [135, 135, 135]: pot 1.38e-22 grad 5.17e-21
+C3m complex1 ka 4 p [135, 135, 135]: pot 4.73e-31 grad 4.80e-31
+C3l complex1 ka 4 p [135, 135, 135]: pot 4.76e-31 grad 4.61e-31
+C1 complex1 ka 32 p [203, 160, 135]: pot 3.66e-18 grad 3.77e-18
+C2 complex1 ka 32 p [203, 160, 135]: pot 1.01e-17 grad 6.03e-17
+C3m complex1 ka 32 p [203, 160, 135]: pot 2.17e-24 grad 2.17e-24
+C3l complex1 ka 32 p [203, 160, 135]: pot 1.26e-28 grad 1.32e-28
+C1 imaginary ka 0.1 p [135, 135, 135]: pot 7.35e-26 grad 1.77e-23
+C2 imaginary ka 0.1 p [135, 135, 135]: pot 3.20e-25 grad 1.27e-22
+C3m imaginary ka 0.1 p [135, 135, 135]: pot 9.91e-32 grad 1.17e-31
+C3l imaginary ka 0.1 p [135, 135, 135]: pot 2.10e-31 grad 2.40e-31
+C1 imaginary ka 4 p [135, 135, 135]: pot 2.40e-23 grad 7.85e-22
+C2 imaginary ka 4 p [135, 135, 135]: pot 1.20e-22 grad 5.93e-21
+C3m imaginary ka 4 p [135, 135, 135]: pot 2.70e-31 grad 2.80e-31
+C3l imaginary ka 4 p [135, 135, 135]: pot 2.72e-31 grad 3.12e-31
+C1 imaginary ka 32 p [203, 160, 135]: pot 3.52e-18 grad 3.59e-18
+C2 imaginary ka 32 p [203, 160, 135]: pot 3.58e-18 grad 3.00e-17
+C3m imaginary ka 32 p [203, 160, 135]: pot 1.92e-24 grad 1.74e-24
+C3l imaginary ka 32 p [203, 160, 135]: pot 1.16e-28 grad 1.27e-28
+test only_truncation_high_frequency ... C1 real ka 128 p [204, 160, 160]: pot 7.33e-28 grad 1.34e-27
+C2 real ka 128 p [204, 160, 160]: pot 6.38e-24 grad 6.56e-24
+C3m real ka 128 p [204, 160, 160]: pot 3.37e-24 grad 3.42e-24
+C3l real ka 128 p [204, 160, 160]: pot 3.65e-24 grad 3.89e-24
+C1 complex0.1 ka 128 p [217, 160, 160]: pot 1.37e-24 grad 1.01e-23
+C2 complex0.1 ka 128 p [217, 160, 160]: pot 1.18e-22 grad 2.87e-22
+C3m complex0.1 ka 128 p [217, 160, 160]: pot 1.57e-25 grad 1.57e-25
+C3l complex0.1 ka 128 p [217, 160, 160]: pot 1.58e-25 grad 1.90e-25
+C1 real ka 256 p [344, 204, 160]: pot 3.02e-26 grad 1.24e-25
+C2 real ka 256 p [344, 204, 160]: pot 2.79e-25 grad 2.86e-25
+C3m real ka 256 p [344, 204, 160]: pot 2.53e-26 grad 2.44e-26
+C3l real ka 256 p [344, 204, 160]: pot 1.95e-29 grad 2.05e-29
+C1 complex0.1 ka 256 p [369, 217, 160]: pot 5.67e-21 grad 5.80e-21
+C2 complex0.1 ka 256 p [369, 217, 160]: pot 7.95e-18 grad 8.06e-18
+C3m complex0.1 ka 256 p [369, 217, 160]: pot 6.27e-17 grad 5.74e-17
+C3l complex0.1 ka 256 p [369, 217, 160]: pot 2.14e-17 grad 2.33e-17
+test only_truncation_low_frequency ... C1 real ka 4 p [135, 135, 135]: pot 5.94e-26 grad 2.29e-24
+C2 real ka 4 p [135, 135, 135]: pot 3.68e-25 grad 2.07e-23
+C3m real ka 4 p [135, 135, 135]: pot 6.78e-31 grad 5.69e-31
+C3l real ka 4 p [135, 135, 135]: pot 2.84e-31 grad 3.00e-31
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1019.82s
