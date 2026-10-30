@@ -55,8 +55,9 @@
 //!
 //! `tests/helmholtz/` checks the operators in f64 for P2M sources and L2P targets in the
 //! box (its corners and centre included, ρ ≤ a) and P2L sources and M2P targets at
-//! |ρ| = 2.5 a, for |k| a from 10⁻⁶ to 30, Im(k) a to 100 in the series and to 1000 for
-//! finiteness, and Yukawa to κ a = 300. Outside the sphere's side of each operator the
+//! |ρ| = 2.5 a, for |k| a from 10⁻⁶ to 100 (Im(k) a to 100 in the series), Yukawa against
+//! the complex path to κ a = 300, and finiteness at Im(k) a = 1000 with P2L sources and
+//! M2P targets at 1.5 a. Outside the sphere's side of each operator the
 //! applied exponent is positive and the result is not guaranteed. f32 is checked at
 //! p = 8 and s = 1 only (CONVENTIONS §3.15 reserves it).
 //!

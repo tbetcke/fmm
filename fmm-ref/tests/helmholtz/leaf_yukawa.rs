@@ -4,9 +4,11 @@
 //!
 //! The two paths use different functions of `nd_fmm_math::radial` (ĵ and ĥ of complex
 //! z = iκρ against î and k̂ of real x = κρ). At z = iκρ the complex recursions repeat the
-//! real ones up to exact factors of i, so the two agree to the last bit on the M3 Max
-//! (measured; the comparison is sensitive: the wrong power of i gives errors of order 1).
-//! The test asserts round-off only.
+//! real ones up to exact factors of i: the coefficients and potentials agree to the last
+//! bit on the M3 Max and the gradients within 4e-17 (measured; the comparison is
+//! sensitive: the wrong power of i gives errors of order 1). The test asserts round-off
+//! only. For real charges the complex path's potentials and gradients are real to
+//! round-off.
 //!
 //! Error measures: per degree, ‖Ĉ − iⁿ Ĉᵞ‖₂ over the orders relative to the magnitude
 //! Σⱼ |qⱼ| ‖Ĉᵞₙ(source j)‖₂ of the real path, one source at a time; the potentials and
@@ -190,4 +192,48 @@ fn coefficients_and_evaluations_agree() {
     coefficients.check(TOL, "coefficients, complex against real");
     potentials.check(TOL, "potentials, complex against real");
     gradients.check(TOL, "gradients, complex against real");
+}
+
+/// Real charges on the complex path at k = iκ: the potentials and gradients of
+/// P2M → M2P and P2L → L2P are real (CONVENTIONS §3.15, "Yukawa's real form"). Error
+/// measure: ‖Im‖₂ / ‖·‖₂ over the targets (after scaling, as above); bound 1e-13.
+#[test]
+fn real_charges_give_real_values() {
+    let a = circumradius();
+    let mut worst = Worst::default();
+    for kappa_a in [0.5, 5.0, 50.0, 300.0] {
+        let k = C::new(0.0, kappa_a / a);
+        let mut rng = SplitMix64::new(0x3b_4e01 + kappa_a as u64);
+        let inner = inside(&mut rng, 30, false);
+        let outer = shell(&mut rng, 30, 2.5 * a);
+        let charges: Vec<C> = rng
+            .real_charges(38)
+            .iter()
+            .map(|&q| C::new(q, 0.0))
+            .collect();
+        let targets_out = shell(&mut rng, 20, 2.5 * a);
+        let targets_in = inside(&mut rng, 20, true);
+        for (multipole, sources, targets) in
+            [(true, &inner, &targets_out), (false, &outer, &targets_in)]
+        {
+            let q = &charges[..sources.len()];
+            let field = if multipole {
+                crate::leaf_common::multipole_series(P, k, sources, q, targets)
+            } else {
+                crate::leaf_common::local_series(P, k, sources, q, targets)
+            };
+            let values: Vec<C> = field
+                .potential
+                .iter()
+                .chain(field.gradient.iter().flatten())
+                .copied()
+                .collect();
+            let scale = 1.0 / values.iter().map(|c| c.norm()).fold(0.0, f64::max);
+            let imaginary = norm(values.iter().map(|c| c.im * scale));
+            let total = norm(values.iter().map(|c| c.norm() * scale));
+            let name = if multipole { "P2M→M2P" } else { "P2L→L2P" };
+            worst.record(imaginary / total, || format!("{name} κa = {kappa_a}"));
+        }
+    }
+    worst.check(TOL, "imaginary parts for real charges");
 }

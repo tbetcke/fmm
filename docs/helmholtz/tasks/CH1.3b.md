@@ -65,27 +65,27 @@ non-positive (finite at large Im(k) a).
 `fmm-ref/tests/helmholtz/` (the CH1.3a executable), new modules, f64 unless stated, single
 thread. Kinds of k: real, complex (arg π/4 and Im k = Re k/10) and imaginary.
 
-1. **Series** (`series.rs`): P2M → M2P and P2L → L2P against `direct_sum`, potential and
-   gradient, relative ℓ2 (§9.1) over the targets, for |k| a ∈ {0.5, 5, 30} and every kind,
-   complex charges. P2M: 60 sources uniform in the box plus its 8 corners (ρ ≤ a), 40
-   targets at |v| = 2.5a in random directions. P2L: 60 sources at |ρ| = 2.5a, 40 targets in
-   the box plus its corners and its centre (the z = 0 gradient). Within the truncation: the
-   error at p ≥ p₀(k a) (chosen per configuration, recorded) ≤ 1e-11, and the error at a
-   lower degree well above it (the series converges, not trivially); the error falls with p.
-2. **Stored form** (`leaf.rs`): a single charge on the z-axis, M̂ₙ⁰ and L̂ₙ⁰ for n ≤ 1 against
+1. **Series** (`leaf_series.rs`): P2M → M2P and P2L → L2P against `direct_sum`, potential
+   and gradient, relative ℓ2 (§9.1) over the targets, for |k| a ∈ {0.5, 5, 30} and every
+   kind, complex charges. P2M: 60 sources uniform in the box plus its 8 corners (ρ ≤ a), 40
+   targets at |v| = 2.5a in random directions and two on the ±z-axis. P2L: 60 sources at
+   |ρ| = 2.5a, 40 targets in the box plus its corners, its centre (the z = 0 gradient) and
+   two on the ±z-axis. Within the truncation: the error at p₀ (per configuration: 40, 48,
+   76) ≤ 1e-12, at a lower pₜ (12, 12, 36) above 1e-7, falling from pₜ to (pₜ + p₀)/2 to p₀.
+2. **Stored form** (`leaf_stored.rs`): a single charge on the z-axis, M̂ₙ⁰ and L̂ₙ⁰ for n ≤ 1 against
    the closed forms (j₀ = sin z/z, j₁, h₀ = −i e^{iz}/z, h₁) times e^{∓β} s^{∓n}, at s < 1 and
-   s = 1 and Im(k) a up to 50: pins the scale, the damping and 4π ik. Real k and real
+   s = 1 and Im(k) a up to 50, within 1e-12: pins the scale, the damping and 4π ik. Real k and real
    charges: the imaginary plane of `p2m` exactly zero (§3.15's real multipole).
 3. **Large damping**: Im(k) a = 1000 (Yukawa and complex k), sources at the corners and
-   the centre, targets in and outside: every output finite, the stored coefficients
-   bounded by Σ|q| times the harmonics' bound, where the unscaled coefficients overflow.
-   Series (test 1) also at Im(k) a = 100 (the direct sum stays above underflow).
+   the centre, P2L sources and M2P targets at 1.5a: every output finite (e^β overflows),
+   the P2M coefficients below Σ|q|. Series (test 1) also at |k| a = 100, Im(k) a = 100
+   and about 70, p₀ = 116 (the direct sum stays above underflow).
 4. **k → 0** (`leaf_limit.rs`), on a fixed box and points, at |k| = 1e-2, 1e-4, 1e-6 for
    every kind and Yukawa's real path: the diagonal map of §3.4,
    M̂ₙᵐ ≈ k̂ⁿ 3^{−n/2} √((2n + 1)/(4π)) cₘ νₘ σₘ / (2n + 1)!! · M̃ₙᵐ and
    L̂ₙᵐ ≈ 4π (2n − 1)!! k̂^{−n} 3^{n/2} √((2n + 1)/(4π)) cₘ σₘ / (νₘ r) · L̃ₙᵐ (k̂ = k/|k|,
    cₘ = √2 for m ≠ 0, νₘ = √((n + m)!(n − m)!), σₘ = −1 in the slots m < 0; Laplace's M̃, L̃
-   of §3.7), per coefficient relative to the per-source magnitudes:
+   of §3.7), per degree in ℓ2 over the orders relative to the per-source magnitudes:
    - P2M, undamped (e^{β} M̂): within (|k| a)²/6; damped within |k| a;
    - P2L, undamped (e^{−β} L̂): degree 0 within |k| ρ_max, degrees ≥ 1 within (|k| ρ_max)²;
      real k degree 0's real part within (k ρ_max)²/2 (§9: (k a)² for real parts, k a for
@@ -94,10 +94,9 @@ thread. Kinds of k: real, complex (arg π/4 and Im k = Re k/10) and imaginary.
      potential and gradient, within the same orders;
    - each plus round-off; every error falls with the bound's power of k.
 5. **Yukawa two ways** (`leaf_yukawa.rs`): the complex operators at k = iκ against the real
-   ones for κ a ∈ {0.5, 5, 50, 300}: M̂ = iⁿ M̂^Y and L̂ = i^{−n} L̂^Y per coefficient, and
-   the potentials and gradients (the imaginary parts round-off), for real charges and for
-   complex charges as two real vectors, within 1e-13 relative to the magnitudes (measured,
-   then fixed with a 10× margin for glibc).
+   ones for κ a ∈ {0.5, 5, 50, 300}: M̂ = iⁿ M̂^Y and L̂ = i^{−n} L̂^Y per degree, and the
+   potentials and gradients, complex charges as two real vectors on the Yukawa path, within
+   1e-13; for real charges the complex path's values real within 1e-13.
 6. **f32**: P2M → M2P and P2L → L2P at p = 8, s = 1, against the f64 operators, within 1e-5.
 7. **Panics** (`panics.rs`): lengths, the workspace's degree, a frame whose radius is not
    the level's, a Yukawa operator on a level with Re k ≠ 0, `Level::new` outside the range.

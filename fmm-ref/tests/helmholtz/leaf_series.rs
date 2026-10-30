@@ -2,9 +2,10 @@
 //! §9 item 2, CONVENTIONS §3.15 "Radial functions and scaling").
 //!
 //! The box of `leaf_common` (half-width r = 0.5, circumradius a). P2M → M2P: 60 sources
-//! uniform in the box and its 8 corners (ρ ≤ a), 40 targets at |v| = 2.5 a. P2L → L2P: 60
-//! sources at |ρ| = 2.5 a, 40 targets in the box, its corners and its centre (where the
-//! gradient takes its limit). Complex charges.
+//! uniform in the box and its 8 corners (ρ ≤ a), 40 targets at |v| = 2.5 a and two on the
+//! z-axis. P2L → L2P: 60 sources at |ρ| = 2.5 a, 40 targets in the box, its corners, its
+//! centre (where the gradient takes its limit) and two on the z-axis at |v| = a/2 (the
+//! poles of the gradient's frame). Complex charges.
 //!
 //! Error measure: the relative ℓ2 error of proposal §9.1 over the targets, for the
 //! potential and the gradient field separately, against `p2p::direct_sum`. Within the
@@ -16,7 +17,8 @@ use nd_fmm_ref::helmholtz::p2p;
 
 use crate::common::{C, SplitMix64, Worst, rel_l2, rel_l2_gradient};
 use crate::leaf_common::{
-    Field, KINDS, Kind, circumradius, inside, local_series, multipole_series, shell, wavenumber,
+    CENTRE, Field, KINDS, Kind, circumradius, inside, local_series, multipole_series, shell,
+    wavenumber,
 };
 
 /// At p₀: round-off.
@@ -60,6 +62,12 @@ impl Problem {
     }
 }
 
+/// The two targets on the z-axis through the centre at distance d (θ = 0 and π, where the
+/// gradient's frame takes φ = 0).
+fn on_axis(d: f64) -> [[f64; 3]; 2] {
+    [d, -d].map(|z| [CENTRE[0], CENTRE[1], CENTRE[2] + z])
+}
+
 /// The two problems of one k.
 struct Case {
     k: C,
@@ -73,11 +81,13 @@ impl Case {
         let mut rng = SplitMix64::new(seed);
         let sources = inside(&mut rng, 60, false);
         let charges = rng.complex_charges(sources.len());
-        let targets = shell(&mut rng, 40, 2.5 * a);
+        let mut targets = shell(&mut rng, 40, 2.5 * a);
+        targets.extend(on_axis(2.5 * a));
         let multipole = Problem::new(k, sources, charges, targets);
         let sources = shell(&mut rng, 60, 2.5 * a);
         let charges = rng.complex_charges(sources.len());
-        let targets = inside(&mut rng, 40, true);
+        let mut targets = inside(&mut rng, 40, true);
+        targets.extend(on_axis(0.5 * a));
         let local = Problem::new(k, sources, charges, targets);
         Self {
             k,
