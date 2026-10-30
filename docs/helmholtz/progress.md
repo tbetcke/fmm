@@ -508,3 +508,62 @@ request, using this template:
     projection.
   - A real-arithmetic jₙ for real k (S3 §7: j costs 3–5 times h), measured when the leaf
     operators need it.
+
+## 2026-10-30: CH1.2c Coaxial coefficients
+- Done:
+  - `nd_fmm_math::coaxial`, generic over `T`. `CoaxialTable` stores per order the triangle
+    n′ ≥ n of degrees max(p_src, p_tgt) by min(p_src, p_tgt), in §3.15's stored
+    normalisation. It reads the rest through the index symmetry, so one table serves both
+    orientations (`reversed`: M2M's table is L2L's).
+  - The generators:
+    - S2's recursion (`regular`, `singular_regular`), with the start column from `radial`;
+    - S2's three projections (`projection_singular_regular`, `projection_regular_outer`,
+      and `projection_regular_inner`, extended to complex k), each filling the triangle
+      from the half it computes.
+  - §3.15's rule in `m2l`, `m2m` and `l2l` (`uses_recursion`: Re(k) a ≤ 40, a the M2L
+    level's or the shift parent's circumradius), on S2's spheres; L2L uses the inner
+    projection above the threshold, as signed off.
+  - Every regular radial column is evaluated to the square table's length (Miller's
+    start), so a rectangular table is a block of the square one bit for bit.
+  - The fixture `fmm-math/fixtures/helmholtz_coaxial.json` (1.2 MB) from
+    `tools/fixtures/gen_helmholtz_coaxial.py`: S2's 120 sets and 21,809 entries value for
+    value, with the fmm-math header and each set's geometry.
+  - The example `coaxial_time`, and the report `fmm-validate/results/helmholtz-ch1-2c.md`.
+- Tests: `fmm-math/tests/coaxial/`, 23 tests (5 of them ignored, run in release). In the
+  FMM-weighted error of S2:
+  - the rule's tables against the fixture: 6.8e-13 at worst (bound 1e-11); the recursion
+    8.0e-15 where stable, and per entry 8.1e-14 at k a ≤ 3;
+  - the addition theorems pointwise, with the reflection and the symmetry: 5.9e-15;
+  - real k: the recursion's (R|R) exactly real; Re (S|R) = (R|R) 1.4e-14; the outer
+    projection's imaginary parts 4.1e-14, the inner one's measured 0;
+  - Yukawa: i^{n−n′} (E|F) exactly real to κ a = 300;
+  - rectangular blocks and `reversed` bit for bit for all five generators;
+  - test 7, the threshold at k a = 40, every kind: 6.5e-14;
+  - test 8, L2L at k a 40 to 300: the outer projection (M2M's orientation, read reversed)
+    and the inner projection agree within 6.8e-13 for every kind of k; the recursion
+    fails above the threshold for real and weakly damped k, as S2 found for M2M;
+  - f32 at p = 8: 8.8e-7; the panics.
+- Checks:
+  - Ran `/verify` on the M3 Max: format; Clippy default, examples and workspace
+    all-targets; `cargo doc` (`nd-fmm-math` with `-D warnings`).
+  - The default tests (887) and workspace tests (966), all passing.
+  - The release tests with `--include-ignored` (85 s); the generator's `--check` is byte
+    for byte.
+  - After the self-review fixes (test code and docs only), re-ran `nd-fmm-math`'s Clippy
+    and its tests, debug and release.
+  - Not run: the MPI tests (no code an MPI crate runs changed); the licence and fftw-sys
+    checks (no manifest changed).
+  - A self-review by a subagent: nothing blocking. Its points are taken: the stricter
+    reality check, three panic tests, and the plan's API and two report figures corrected.
+  - No machine runs. Nothing pending. The timings ran at a load average of about 40.
+- Decisions: none signed off. Questions for sign-off (report §5):
+  1. one shift table, the outer projection in M2M's orientation, for M2M and L2L above the
+     threshold;
+  2. §3.15's wording "outer sphere" for the (S|R) projection, which is on an inner sphere.
+- Laplace: not touched. `lib.rs` declares the new module; `radial::div` became
+  `pub(crate)`.
+- Follow-ups:
+  - CH1.3 applies the tables (RCR translations) in `nd-fmm-ref`. CH1.2 is complete with
+    this task.
+  - The recursion computes a, β and γ with a square root per entry; a table of them per
+    order would speed up the build if CH2.2 finds the build cost matters.

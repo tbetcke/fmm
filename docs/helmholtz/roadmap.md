@@ -218,7 +218,9 @@ family, checked against FMM3D's fixtures.
   real x, with derivatives and the scaled forms of §3.15 (S3). *Done when:* against an
   mpmath fixture on every operator's range (S3's), the Wronskians, the relations of
   §3.15 (k₀, j_n(ix), h_n(ix)). *Needs:* CH1.1, D2.
-- [ ] **CH1.2c Coaxial coefficients.** (R|R), (S|S) and (S|R) of §3.15 by the start
+- [x] **CH1.2c Coaxial coefficients.** `nd_fmm_math::coaxial`, tests `fmm-math/tests/coaxial/`,
+  fixture `fmm-math/fixtures/helmholtz_coaxial.json`; report
+  `fmm-validate/results/helmholtz-ch1-2c.md`. (R|R), (S|S) and (S|R) of §3.15 by the start
   column and the recursions (triangle, index symmetry), and by projection where
   Re(k) a > 40 (S2, S7). *Done when:* against an mpmath fixture (S2's); the M2M and L2L
   coefficients real for real k; i^{n−n′} (E|F) real for Yukawa; the symmetries; the
