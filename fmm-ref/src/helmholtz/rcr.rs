@@ -61,8 +61,16 @@
 //! two ways to κ a = 300. Under strong damping an M2L's output is smaller than its input
 //! by about e^{−Im(k)(|t| − 2a)} and the coaxial sum cancels: the output's error relative
 //! to itself grows (about 1e-10 where that factor is 1e-19) while it stays at round-off
-//! relative to the input, and the pruning of proposal §5.5 removes such contributions. f32
-//! is checked at p = 8 only (CONVENTIONS §3.15 reserves it).
+//! relative to the input, and the pruning of proposal §5.5 removes such contributions; an
+//! L2L to a child on the far side of the parent from the sources shows the same at
+//! Im(k) a = 100 (about 1e-11). f32 is checked at p = 8 only (CONVENTIONS §3.15 reserves
+//! it).
+//!
+//! M2M and L2L apply the power scales s_cⁿ / s_P^{n′} as one factor per entry, so they are
+//! limited at low frequency to degrees with p log₁₀(1/s_P) below about 300 (for example
+//! p ≤ 50 at s_P = 10⁻⁶); beyond that the factor overflows and the output is not finite,
+//! and the unscaled (S|S) entries, of order (k a_c)^{|n′ − n|}, underflow. An FMM's low
+//! degrees there are far smaller.
 //!
 //! # Panics
 //!
@@ -591,7 +599,8 @@ fn real_part_times_i_power<T: RealScalar>(j: isize, e: Complex<T>) -> T {
     }
 }
 
-/// aⁿ / b^{n′} = (a/b)ⁿ b^{n − n′}, without forming a large power of b alone.
+/// aⁿ / b^{n′}, formed as (a/b)ⁿ b^{n − n′}; b^{n − n′} overflows where |n − n′| log₁₀(1/b)
+/// exceeds about 300 (module documentation, "Tested range").
 fn power_ratio<T: RealScalar>(a: T, n: usize, b: T, n_prime: usize) -> T {
     (a / b).powi(n as i32) * b.powi(n as i32 - n_prime as i32)
 }

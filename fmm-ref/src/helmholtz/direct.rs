@@ -31,8 +31,9 @@
 //! degrees. It is O(Q² p²) per call, an oracle, not a fast path. At low frequency the
 //! division by ĵₙ(ka′) ~ (ka′)ⁿ/(2n + 1)!! amplifies the quadrature's rounding in the
 //! high-degree local coefficients; their contribution to the field inside the box, where
-//! a local is evaluated, stays at round-off. Compare locals by their fields, not
-//! coefficient by coefficient.
+//! a local is evaluated, stays at round-off. Compare locals by their fields, or by
+//! coefficients weighted per degree by |ĵₙ(ka′)| (the FMM-weighted measure of the tests),
+//! not coefficient by coefficient.
 //!
 //! The operators take the arguments of their [`rcr`](super::rcr) counterparts except the
 //! table, and the same storage. The frames need not form an octree pair: M2M needs the

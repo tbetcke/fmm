@@ -13,13 +13,16 @@
 //! - relative to max(‖C_direct‖_w, ‖input‖_w), the larger of the output's size and the
 //!   size of the field the input carries at its own nearest targets, which an FMM adds to
 //!   the same totals: every case;
-//! - relative to ‖C_direct‖_w alone: real k (no damping, the output of the input's size).
+//! - relative to ‖C_direct‖_w alone: wherever Im(k) a ≤ 5 (every case of the default
+//!   tests, and real and weakly damped k throughout).
 //!
-//! Under strong damping an M2L's output is smaller than its input by about
-//! e^{−Im(k)(|t| − 2a)} and the coaxial sum Σₙ Ê_{n′n} M̂ₙ cancels, so its error relative to
-//! the output alone grows (measured 1e-10 at κ a = 30 and |t| = 3w, where the factor is
-//! 1e-19); relative to the input it stays at round-off, and §5.5's pruning removes such
-//! contributions. The two methods truncate the same input to the same output degrees, so
+//! Under strong damping a translation's output can be far smaller than its input, and the
+//! coaxial sum Σₙ Ê_{n′n} Ĉₙ cancels, so its error relative to the output alone grows while
+//! it stays at round-off relative to the input: an M2L by about e^{−Im(k)(|t| − 2a)}
+//! (measured 1e-10 at κ a = 30 and |t| = 3w, where the factor is 1e-19), an L2L to a child
+//! on the far side of the parent from the sources (about 1e-11 at Im(k) a = 100). §5.5's
+//! pruning removes such contributions. The cases above 1e-12 relative to the output are
+//! printed. The two methods truncate the same input to the same output degrees, so
 //! they agree at any degree, rectangular ones included. The norms are formed from scaled
 //! terms, so tiny outputs do not underflow.
 //!
@@ -37,6 +40,8 @@ use crate::translation_common::{
 };
 
 const ROUND_OFF: f64 = 1e-12;
+/// Up to this Im(k) a the difference is also asserted relative to the output alone.
+const STRICT_DAMPING: f64 = 5.0;
 
 /// The FMM-weighted difference of RCR and direct on one translation (module
 /// documentation): (‖C_rcr − C_direct‖_w, ‖C_direct‖_w, ‖input‖_w).
@@ -72,7 +77,8 @@ fn check(list: &[Translation], kind: Kind, ka: f64, p: [usize; 2], worst: &mut W
     check_k(list, k, &format!("{kind:?} |k|a = {ka}"), p, worst);
 }
 
-/// As [`check`] for a given k; the relative-to-output measure is asserted for real k.
+/// As [`check`] for a given k; the relative-to-output measure is asserted where
+/// Im(k) a ≤ `STRICT_DAMPING`.
 fn check_k(list: &[Translation], k: C, name: &str, p: [usize; 2], worst: &mut Worst) {
     for (n, &t) in list.iter().enumerate() {
         let [diff, output, input] = difference(t, k, p[0], p[1], 0xc13c + n as u64);
@@ -82,8 +88,10 @@ fn check_k(list: &[Translation], k: C, name: &str, p: [usize; 2], worst: &mut Wo
         if relative > ROUND_OFF {
             println!("damped, not asserted: {}", label());
         }
-        if k.im == 0.0 {
-            worst.record(relative, || format!("{}, real k", label()));
+        if k.im * circumradius() <= STRICT_DAMPING {
+            worst.record(relative, || {
+                format!("{}, Im(k) a ≤ {STRICT_DAMPING}", label())
+            });
         }
     }
 }

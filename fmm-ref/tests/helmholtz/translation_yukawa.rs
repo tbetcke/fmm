@@ -28,7 +28,7 @@ fn power(n: usize, multipole: bool) -> C {
     ][n]
 }
 
-/// (max difference / max coefficient, bit-equal slots, slots).
+/// (the FMM-weighted difference relative to the complex output's, bit-equal slots, slots).
 fn compare(t: Translation, method: Method, kappa_a: f64, p: usize) -> (f64, usize, usize) {
     let k = C::new(0.0, kappa_a / circumradius());
     let mut rng = SplitMix64::new(0x3c_7a);

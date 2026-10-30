@@ -19,8 +19,9 @@
 //! damping factors (e^{−Im z} on the shift tables, e^{2β − Im(k)|t|} on the M2L) give:
 //!
 //! - every path: within x (the damping, first order in Im k);
-//! - real k (no damping): the real parts within x², the imaginary parts within x (the
-//!   M2L's (S|R) carries jₙ terms of first order; M2M and L2L are real, imaginary parts 0).
+//! - real k (no damping): the real parts within x², the imaginary parts within x at degree
+//!   0 and x² above (§9: k a for the imaginary part of degree 0 only; M2M and L2L are real,
+//!   imaginary parts 0).
 //!
 //! Each plus round-off (1e-14 for RCR; 1e-11 for the projection, whose division by
 //! ĵₙ(ka) amplifies its quadrature's rounding in the high-degree local coefficients at low
@@ -248,7 +249,8 @@ fn translations_in_the_limit() {
                         all.record(e / (x + floor), label);
                         if matches!(path, Path::Complex(Kind::Real)) {
                             real.record(re / (x * x + floor), label);
-                            imaginary.record(im / (x + floor), label);
+                            let bound = if n == 0 { x } else { x * x };
+                            imaginary.record(im / (bound + floor), label);
                         }
                     }
                 }
@@ -256,6 +258,9 @@ fn translations_in_the_limit() {
         }
         all.check(1.0, &format!("{method:?}, error / |k|d"));
         real.check(1.0, &format!("{method:?}, real k, real parts / (|k|d)²"));
-        imaginary.check(1.0, &format!("{method:?}, real k, imaginary parts / |k|d"));
+        imaginary.check(
+            1.0,
+            &format!("{method:?}, real k, imaginary parts / (|k|d at n = 0, (|k|d)² above)"),
+        );
     }
 }
