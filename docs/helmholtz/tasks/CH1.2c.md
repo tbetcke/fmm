@@ -42,36 +42,34 @@ inner-sphere projection tested for the rest (S7, signed off 2026-10-29).
 
 `nd-fmm-math` only, plus the fixture generator:
 
-- `coaxial` (new, public), generic over `T`, with `k: Complex<T>`:
-  - `Coefficients`: `Regular` ((R|R) = (S|S), M2M and L2L) and `SingularRegular` ((S|R),
-    M2L).
+- `coaxial` (new, public), generic over `T`, with `k: Complex<T>`. As built (the API was
+  planned as a public `Coefficients` enum, a `Translation` enum and `for_translation`;
+  named constructors replaced them during implementation):
   - `CoaxialTable<T>`: the halved table of §3.15, per order m the triangle n′ ≥ n with
     rows to max(p_src, p_tgt) and columns to min(p_src, p_tgt); `get(m, n_tgt, n_src)`
     reads either orientation through the index symmetry, so one stored table serves M2M
-    (p_child → p_parent) and L2L (p_parent → p_child). Stored normalisation of §3.15:
-    (R|R) times e^{−Im z}, (S|R) times e^{Im z} s^{n+n′}, z = k t.
-  - Generators: `recursion(coefficients, z, s, p_src, p_tgt)` (start column from
-    `radial`, both recursions, triangle closed under them); projections
-    `projection_singular_regular` (inner sphere, least squares from value and
-    derivative, S2), `projection_outer` ((S|S) on ρ > t, hₙ onto hₙ, S2) and
-    `projection_inner` ((R|R) on ρ < t, jₙ onto jₙ by least squares; S2's
-    `regular_inner` extended to complex k with the exponential factors split so that no
+    (p_child → p_parent) and L2L (p_parent → p_child); `reversed` exchanges the degrees
+    without recomputing. Stored normalisation of §3.15: (R|R) times e^{−Im z}, (S|R)
+    times e^{Im z} s^{n+n′}, z = k t.
+  - The recursion: `regular(z, p_src, p_tgt)` and `singular_regular(z, s, p_src, p_tgt)`
+    (start column from `radial`, evaluated to the square table's length so that a
+    rectangular table is a block of the square one bit for bit; both recursions over the
+    triangle closed under them).
+  - The projections: `projection_singular_regular` ((S|R) on ρ < t, least squares from
+    value and derivative, S2), `projection_regular_outer` ((S|S) on ρ > t, hₙ onto hₙ,
+    S2) and `projection_regular_inner` ((R|R) on any ρ, jₙ onto jₙ by least squares; S2's
+    `regular_inner` extended to complex k with the exponential factors chosen so that no
     applied exponent is positive). Each projection fills the triangle from the half it
-    computes accurately: the outer one from target degree ≥ source degree (M2M's
-    orientation), the inner ones from target ≤ source; the other half is read through the
-    symmetry. Gauss–Legendre nodes N = max(p_src, p_tgt) + 40 (+ ⌈|k| t⌉ for the inner
-    (R|R), as S7), the Legendre columns from `orthonormal::legendre::Columns`.
-  - The rule of §3.15 as `Translation` (`M2m`, `L2l`, `M2l`) and
-    `CoaxialTable::for_translation(translation, k, t, a, s, p_src, p_tgt)`, with the
+    computes: the outer one from target degree ≥ source degree (M2M's orientation), the
+    inner ones from target ≤ source; the other half is read through the symmetry. The
+    Legendre columns come from `orthonormal::legendre::Columns`.
+  - The rule of §3.15: `uses_recursion(k, a)` with `RECURSION_LIMIT = 40` on Re(k) a, and
+    `m2l(k, t, a, s, p_src, p_tgt)`, `m2m(k, t, p_child, p_parent)` and
+    `l2l(k, t, p_parent, p_child)` (t = a_child, the parent's circumradius 2t), with the
     radii of S2 (M2L: ρ = a, the target box; M2M: ρ = 2 w_parent = 8t/√3; L2L: ρ = t, the
-    child's circumradius), and `RECURSION_LIMIT = 40` on Re(k) a, a the circumradius of
-    the M2L's level or of the shift's parent. L2L: the recursion where Re(k) a ≤ 40 (S2
-    test 6 measures it there); above, the method the L2L measurement below supports,
-    among the inner projection (as signed off) and the shift table built in M2M's
-    orientation (one table for M2M and L2L, if it holds in the L2L weights). If the
-    measurement supports the second, it is a question for sign-off (it changes how
-    §3.15's generator text reads), and the code keeps the signed-off inner projection
-    until answered.
+    child's circumradius) and N = max(p) + 40 nodes (+ ⌈|k| t⌉ for L2L). L2L above the
+    threshold uses the inner projection, as signed off; test 8 found the M2M table read
+    reversed accurate too, which is open question 1.
   - Module documentation: the definitions, the normalisation, the rule, the tested ranges
     (CONVENTIONS §3.15 asks `nd-fmm-math` to state them), and the range of the (S|R)
     start column (s^l hₗ at l = p_src + p_tgt leaves f64 near l ≈ 175 when s = |k| a < 1,

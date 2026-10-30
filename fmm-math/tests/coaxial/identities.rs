@@ -108,7 +108,7 @@ fn tables_satisfy_the_addition_theorems() {
 /// Test 3, the recursion: for real k the (R|R) = (S|S) tables of M2M and L2L are real,
 /// every imaginary part exactly zero (the recursion closes over the reals), at every k a
 /// where the rule uses it; and Re (S|R) = (R|R) s^{n+n′} in the M2L weights at all 15
-/// V-list distances, 1e-11.
+/// V-list distances, 1e-11 relative to (R|R).
 #[test]
 fn real_k_regular_coefficients_are_real() {
     for ka in [0.01, 1.0, 10.0, 30.0, 40.0] {
@@ -135,17 +135,14 @@ fn real_k_regular_coefficients_are_real() {
             let z = k * m2l_t(d2);
             let rr = CoaxialTable::regular(z, p, p);
             let sr = CoaxialTable::singular_regular(z, s, p, p);
+            // Normalised by (R|R) itself, not by the whole (S|R), whose y part dominates.
             let err = weighted(
                 p,
                 p,
                 &w,
                 &w,
-                |m, a, b| sr.get(m, a, b),
-                |m, a, b| {
-                    let v = sr.get(m, a, b);
-                    let power = s.powi((a + b) as i32);
-                    v - Complex::new(v.re - rr.get(m, a, b).re * power, 0.0)
-                },
+                |m, a, b| rr.get(m, a, b) * s.powi((a + b) as i32),
+                |m, a, b| Complex::new(sr.get(m, a, b).re, 0.0),
             );
             worst = worst.max(err);
         }
@@ -350,6 +347,24 @@ fn panics_on_an_m2l_projection_outside_the_shift() {
 #[should_panic(expected = "ρ > t")]
 fn panics_on_an_outer_projection_inside_the_shift() {
     CoaxialTable::projection_regular_outer(Complex::new(1.0, 0.0), 1.0, 0.5, 4, 4, 10);
+}
+
+#[test]
+#[should_panic(expected = "ρ > 0")]
+fn panics_on_an_inner_projection_without_a_radius() {
+    CoaxialTable::projection_regular_inner(Complex::new(1.0, 0.0), 1.0, 0.0, 4, 4, 10);
+}
+
+#[test]
+#[should_panic(expected = "at least one node")]
+fn panics_on_a_projection_without_nodes() {
+    CoaxialTable::projection_regular_outer(Complex::new(1.0, 0.0), 1.0, 2.0, 4, 4, 0);
+}
+
+#[test]
+#[should_panic(expected = "Re k ≥ 0")]
+fn panics_on_an_incoming_wavenumber() {
+    CoaxialTable::projection_singular_regular(Complex::new(-1.0, 0.0), 1.0, 0.5, 1.0, 4, 4, 10);
 }
 
 #[test]

@@ -25,8 +25,8 @@ timings, so the times of §4 are an upper bound.
 - **The identities of §3.15.** The addition theorems hold pointwise to 5.9·10⁻¹⁵ for
   (R|R), (S|R) and (S|S), every slot of n ≤ 6, real, complex and imaginary k, with the
   reflection t → −t and the entries read through the index symmetry. For real k the M2M
-  and L2L coefficients are real: exactly by the recursion and by the inner projection,
-  and to 4.1·10⁻¹⁴ in the shift weights by the outer projection. For Yukawa,
+  and L2L coefficients are real: exactly by the recursion, to 4.1·10⁻¹⁴ in the shift
+  weights by the outer projection, and measured exactly by the inner one. For Yukawa,
   i^{n−n′} (E|F) is exactly real at κ a = 1, 30 and 300. A rectangular table is the block
   of the square one bit for bit, for every generator.
 - **The L2L question of S7 is answered** (§2). S7 found that S2's outer projection fails
@@ -112,10 +112,11 @@ and the inner projection against itself with 60 more nodes:
   projection: 6.5·10⁻¹⁴ at worst (real k, M2L d² = 4).
 - **Test 3, the projections for real k**: the imaginary parts of the outer (S|S) are
   3.9·10⁻¹⁴ (k a = 100) and 4.1·10⁻¹⁴ (300) in the shift weights, read as M2M and as L2L.
-  The inner (R|R) has none: jₙ of a real argument is computed in real arithmetic.
-- **Test 1 at full size**: the rule's tables against the fixture, at most 5.9·10⁻¹³ for
-  Im k = 0.1 Re k at k a = 300, where the rule uses the projection. The recursion reaches
-  2.3·10⁻⁶ there, as S2 found.
+  The inner (R|R)'s are measured exactly zero (the test asserts 10⁻¹¹): jₙ of a real argument
+  stays in real arithmetic.
+- **Test 1 at full size**: the rule's tables against the fixture, at most 6.8·10⁻¹³
+  (Im k = Re k, k a = 300, M2M, by the projection); 5.9·10⁻¹³ for Im k = 0.1 Re k at
+  k a = 300, where the recursion reaches 2.3·10⁻⁶, as S2 found.
 
 ## 4. Time and size per table
 
