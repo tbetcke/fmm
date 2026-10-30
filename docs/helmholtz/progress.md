@@ -443,7 +443,10 @@ request, using this template:
   - A self-review by a subagent: nothing blocking. Its points are taken: test 2's scale,
     the rescale loop, f32 and scratch tests for the blocks, and the plan's tests as run.
   - No machine runs. Nothing pending.
-- Decisions: D2 applied (A). None new.
+- Decisions: D2 applied (A). Signed off 2026-10-30 (PR #136, CI failure): test 2's bound
+  becomes max(1e-13, 2.5e-16 n), "degree-scaled". On Linux x86_64 ∂θ Y at n = 1000 came
+  to 1.10e-13: glibc's `hypot` differs from macOS's in the last bit, and Yₙ's condition
+  number in θ is about n.
 - Laplace: not touched. `lib.rs` declares the new module; no Laplace function changed.
 - Follow-ups:
   - CH1.2b, the radial functions, and then CH1.2c, the coaxial coefficients, which uses

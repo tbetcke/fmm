@@ -62,7 +62,9 @@ All in f64 unless stated, in `fmm-math/tests/orthonormal/`:
    points: 1e-13 relative to the degree's largest value.
 2. Harmonics and both derivatives against the fixture (mpmath, 30 digits) at degrees to
    1000, directions including near-polar (β = 10⁻³) and on-axis: 1e-13 relative to the
-   degree's largest |Y| (the S1 error grew to 5e-15 at n = 1000).
+   degree's largest |Y| (the S1 error grew to 5e-15 at n = 1000). Changed 2026-10-30 after
+   CI on Linux x86_64 measured 1.1e-13 at n = 1000 (∂θ): max(1e-13, 2.5e-16 n), since the
+   rounded cos θ and sin θ of x̂ cost about n ε (signed off by the user, PR #136).
 3. Addition formula Σₘ Yₙᵐ(a) Yₙᵐ(b) = (2n + 1)/(4π) Pₙ(a · b), n ≤ 300, with
    Pₙ(t) = √(4π/(2n + 1)) Yₙ⁰ at a third direction with cos θ = t (the fixture tests Yₙ⁰
    itself): 1e-12 relative to (2n + 1)/(4π).

@@ -42,11 +42,16 @@ fn integers(v: &Value) -> Vec<isize> {
 
 /// Test 2: Y, ∂θ Y and (1/sin θ) ∂φ Y at every sampled slot, degrees to 1000, seven
 /// directions; each quantity relative to its largest sampled value (or the degree's
-/// largest computed value where every sampled value is zero).
+/// largest computed value where every sampled value is zero). The bound grows with the
+/// degree: the code forms cos θ and sin θ from x̂ with a rounding each (`hypot` differs
+/// between libms in the last bit), and Yₙ has condition number about n in θ, so one ulp
+/// of the angle costs about n ε (1.1e-13 at n = 1000 on Linux x86_64). Signed off
+/// 2026-10-30 (PR #136).
 #[test]
 fn harmonics_and_derivatives_agree_with_the_fixture() {
     let doc = fixture();
     let mut worst = [0.0f64; 3];
+    let mut failures = Vec::new();
     for set in doc["harmonics"].as_array().expect("harmonic sets") {
         let n = set["n"].as_u64().expect("n") as usize;
         let x: Vec<f64> = numbers(&set["x"]);
@@ -86,13 +91,20 @@ fn harmonics_and_derivatives_agree_with_the_fixture() {
                 println!("{} n = {n} {key}: {error:.2e}", set["direction"]);
             }
             worst[k] = worst[k].max(error);
+            let bound = 1e-13f64.max(2.5e-16 * n as f64);
+            if error > bound {
+                failures.push(format!(
+                    "{} n = {n} {key}: {error:.2e} > {bound:.1e}",
+                    set["direction"]
+                ));
+            }
         }
     }
     println!(
         "worst: value {:.2e}, ∂θ {:.2e}, ∂φ {:.2e}",
         worst[0], worst[1], worst[2]
     );
-    assert!(worst.iter().all(|&w| w <= 1e-13), "worst {worst:?}");
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// Test 6: every sampled block entry of degree ≤ `p`, absolute error.
