@@ -20,7 +20,14 @@ Helmholtz CH1.3b: `helmholtz::{Level, Workspace}` and `helmholtz::leaf::{p2m, p2
 (k = iκ, real charges, real expansions), in the stored form of §3.15 (the level's power
 scale and damping), checked in `tests/helmholtz/leaf_*.rs` against the direct sum, closed
 forms, Laplace's leaf operators under the diagonal map of proposal §3.4, and the complex
-operators at k = iκ. CH1.3c adds the translations under `helmholtz`.
+operators at k = iκ.
+Helmholtz CH1.3c: `helmholtz::rcr::{m2m, l2l, m2l}` (rotation, coaxial translation with the
+tables of `nd_fmm_math::coaxial`, rotation back; the tables from `rcr::{m2m_table,
+l2l_table, m2l_table}`) and `helmholtz::direct::{m2m, l2l, m2l}` (projection of the leaf
+evaluators' fields on a sphere), with rectangular degrees and `_yukawa` forms, checked in
+`tests/helmholtz/translation_*.rs`: RCR against direct in the FMM-weighted measure, the
+chains against the direct sum, the limit k → 0 against Laplace's `rotation`, and Yukawa
+two ways. `direct` and `rcr` keep identical signatures apart from RCR's table.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.

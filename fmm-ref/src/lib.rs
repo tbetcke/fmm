@@ -58,7 +58,9 @@
 //! - [`helmholtz`]: the reference operators of the Helmholtz family (§3.15), from
 //!   Helmholtz CH1.3: P2P and the direct-sum oracle for real, complex and imaginary k
 //!   and Yukawa's real kernel (CH1.3a); the leaf operators P2M, P2L, L2P and M2P in the
-//!   stored form of §3.15, complex and Yukawa's real ones (CH1.3b).
+//!   stored form of §3.15, complex and Yukawa's real ones (CH1.3b); the translations M2M,
+//!   L2L and M2L by rotation, coaxial translation and rotation back (`helmholtz::rcr`) and
+//!   by projection on a sphere (`helmholtz::direct`), with rectangular degrees (CH1.3c).
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 //! [`RealScalar`]: nd_fmm_math::RealScalar

@@ -1,6 +1,7 @@
 //! Caller-owned scratch memory for the Helmholtz operators.
 
 use nd_fmm_math::orthonormal::DerivativeScratch;
+use nd_fmm_math::orthonormal::rotation::{Scratch, compact_blocks_len};
 use nd_fmm_math::{Complex, Layout, RealScalar};
 
 /// Scratch memory for the Helmholtz operators of [`helmholtz`](crate::helmholtz), built
@@ -12,7 +13,10 @@ use nd_fmm_math::{Complex, Layout, RealScalar};
 /// ((p + 1)² reals each, CONVENTIONS §3.6), the scratch of
 /// [`harmonics_derivatives`](nd_fmm_math::orthonormal::harmonics_derivatives), and the
 /// radial functions of degrees 0 to p with their derivatives, complex (the complex path)
-/// and real (Yukawa's real path).
+/// and real (Yukawa's real path). For the translations ([`direct`](crate::helmholtz::direct)
+/// and [`rcr`](crate::helmholtz::rcr), Helmholtz CH1.3c) it also holds the compact
+/// y-rotation blocks of degrees 0 to p and their scratch, two buffers of 2(p + 1)² reals,
+/// and the projection sums, 2(p + 1)² complex values.
 ///
 /// ```
 /// use nd_fmm_ref::helmholtz::Workspace;
@@ -30,6 +34,34 @@ pub struct Workspace<T: RealScalar> {
     radial_derivative: Vec<Complex<T>>,
     real: Vec<T>,
     real_derivative: Vec<T>,
+    blocks: Vec<T>,
+    rotation: Scratch<T>,
+    first: Vec<T>,
+    second: Vec<T>,
+    sums: Vec<Complex<T>>,
+}
+
+/// The buffers of one translation of degree at most p, borrowed from a [`Workspace`].
+pub(crate) struct Translation<'a, T: RealScalar> {
+    /// Yₙᵐ, (p + 1)².
+    pub harmonics: &'a mut [T],
+    /// A complex radial function of degrees 0 to p.
+    pub radial: &'a mut [Complex<T>],
+    /// Its derivative.
+    pub radial_derivative: &'a mut [Complex<T>],
+    /// A real radial function of degrees 0 to p.
+    pub real: &'a mut [T],
+    /// The compact y-rotation blocks of degrees 0 to p.
+    pub blocks: &'a mut [T],
+    /// The scratch of `y_blocks`.
+    pub rotation: &'a mut Scratch<T>,
+    /// 2(p + 1)² reals.
+    pub first: &'a mut [T],
+    /// 2(p + 1)² reals.
+    pub second: &'a mut [T],
+    /// 2(p + 1)² complex values: the projection's sums of the value, then of the radial
+    /// derivative.
+    pub sums: &'a mut [Complex<T>],
 }
 
 /// The buffers of one operator call of degree p, borrowed from a [`Workspace`].
@@ -67,6 +99,11 @@ impl<T: RealScalar> Workspace<T> {
             radial_derivative: vec![zero; p + 1],
             real: vec![T::zero(); p + 1],
             real_derivative: vec![T::zero(); p + 1],
+            blocks: vec![T::zero(); compact_blocks_len(p)],
+            rotation: Scratch::new(p),
+            first: vec![T::zero(); 2 * len],
+            second: vec![T::zero(); 2 * len],
+            sums: vec![zero; 2 * len],
         }
     }
 
@@ -96,6 +133,31 @@ impl<T: RealScalar> Workspace<T> {
             radial_derivative: &mut self.radial_derivative[..=p],
             real: &mut self.real[..=p],
             real_derivative: &mut self.real_derivative[..=p],
+        }
+    }
+
+    /// The translation buffers for degree `p`, the larger of a translation's two degrees.
+    ///
+    /// # Panics
+    ///
+    /// If `p` exceeds [`p`](Self::p).
+    pub(crate) fn translation(&mut self, p: usize) -> Translation<'_, T> {
+        assert!(
+            p <= self.p,
+            "Workspace built for p = {} is too small for p = {p}",
+            self.p
+        );
+        let len = Layout::new(p).len();
+        Translation {
+            harmonics: &mut self.harmonics[..len],
+            radial: &mut self.radial[..=p],
+            radial_derivative: &mut self.radial_derivative[..=p],
+            real: &mut self.real[..=p],
+            blocks: &mut self.blocks[..compact_blocks_len(p)],
+            rotation: &mut self.rotation,
+            first: &mut self.first[..2 * len],
+            second: &mut self.second[..2 * len],
+            sums: &mut self.sums[..2 * len],
         }
     }
 }

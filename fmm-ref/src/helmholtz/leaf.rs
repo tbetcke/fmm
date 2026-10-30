@@ -677,21 +677,21 @@ impl<T: RealScalar> Polar<T> {
 }
 
 /// x − c.
-fn offset<T: RealScalar>(frame: &Frame<T>, x: [T; 3]) -> [T; 3] {
+pub(super) fn offset<T: RealScalar>(frame: &Frame<T>, x: [T; 3]) -> [T; 3] {
     core::array::from_fn(|i| x[i] - frame.centre[i])
 }
 
-fn four_pi<T: RealScalar>() -> T {
+pub(super) fn four_pi<T: RealScalar>() -> T {
     T::from_f64(4.0) * T::PI()
 }
 
 /// 4π ik = 4π (−Im k + i Re k).
-fn four_pi_ik<T: RealScalar>(k: Complex<T>) -> Complex<T> {
+pub(super) fn four_pi_ik<T: RealScalar>(k: Complex<T>) -> Complex<T> {
     let c = four_pi::<T>();
     Complex::new(-(c * k.im), c * k.re)
 }
 
-fn check_frame<T: RealScalar>(level: &Level<T>, frame: &Frame<T>) {
+pub(super) fn check_frame<T: RealScalar>(level: &Level<T>, frame: &Frame<T>) {
     assert!(
         frame.radius == level.half_width(),
         "the frame's radius {} is not the level's half-width {}",
@@ -701,7 +701,7 @@ fn check_frame<T: RealScalar>(level: &Level<T>, frame: &Frame<T>) {
 }
 
 /// κ = Im k of a Yukawa level.
-fn check_yukawa<T: RealScalar>(level: &Level<T>) -> T {
+pub(super) fn check_yukawa<T: RealScalar>(level: &Level<T>) -> T {
     assert!(
         level.is_yukawa(),
         "Yukawa's real path needs k = iκ (Re k = 0)"
@@ -709,7 +709,7 @@ fn check_yukawa<T: RealScalar>(level: &Level<T>) -> T {
     level.k().im
 }
 
-fn check_coefficients<T>(p: usize, coefficients: &[T], planes: usize, name: &str) {
+pub(super) fn check_coefficients<T>(p: usize, coefficients: &[T], planes: usize, name: &str) {
     let expected = planes * Layout::new(p).len();
     assert_eq!(
         coefficients.len(),

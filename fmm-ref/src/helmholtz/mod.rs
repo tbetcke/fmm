@@ -31,10 +31,17 @@
 //! - [`leaf`]: P2M, P2L, L2P and M2P in the stored form of §3.15, with gradients: the
 //!   complex path for any k and complex charges (two real planes per expansion), and
 //!   Yukawa's real path for real charges (Helmholtz CH1.3b).
+//! - [`rcr`]: M2M, L2L and M2L by rotation, coaxial translation and rotation back, with
+//!   the coaxial tables of [`nd_fmm_math::coaxial`] and rectangular degrees (Helmholtz
+//!   CH1.3c).
+//! - [`direct`]: the same translations by projection of the leaf evaluators' fields on a
+//!   sphere, the trusted path of [`rcr`] (Helmholtz CH1.3c).
 
+pub mod direct;
 pub mod leaf;
 mod level;
 pub mod p2p;
+pub mod rcr;
 mod workspace;
 
 pub use level::Level;
