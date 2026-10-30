@@ -684,3 +684,78 @@ request, using this template:
     real-only P2M for real k with real charges (here it is `p2m`'s real plane).
   - The strong-damping test checks finiteness only. Correct damping is shown by the closed
     forms (Im(k) a ≤ 50) and the series (≤ 100).
+
+## 2026-10-30: CH1.3c Translations
+- Done:
+  - `nd_fmm_ref::helmholtz::rcr`: `m2m`, `l2l`, `m2l` and their `_yukawa` forms, generic
+    over `T`, by proposal §5.2:
+    - rotate the shift onto +z (a z-rotation per order, then the transposed y-block of
+      `orthonormal::rotation::y_blocks`);
+    - apply the coaxial table per order to the slots ±m, rectangular p_in → p_out;
+    - rotate back.
+    - In §3.15's stored form: M2M by s_cⁿ / s_P^{n′}, L2L by s_c^{n′} / s_Pⁿ, M2L by
+      4π ik e^{2β − Im(k)|t|}; Yukawa through the real tables i^{n−n′} Ê, i^{n′−n} Ê and
+      −i^{n+n′} Ê with 4πκ.
+    - The tables come from `rcr::{m2m_table, l2l_table, m2l_table}` (§3.15's rule through
+      `CoaxialTable::{m2m, l2l, m2l}`).
+    - M2M and L2L assert a parent–child pair; M2L one level.
+  - `nd_fmm_ref::helmholtz::direct`, the same six operators by projection:
+    - the leaf evaluators' field at a Gauss–Legendre × uniform product quadrature on the
+      output's sphere, projected on the real harmonics;
+    - divided by 4π ik ĥₙ for a multipole; for a local, least squares from the value and
+      ρ times the radial derivative (jₙ has zeros); Yukawa by k̂ₙ and îₙ;
+    - general frames, with the spheres' nesting or separation asserted.
+  - `Workspace` gains the y-blocks, their scratch and the translation buffers. `leaf`'s
+    private helpers became `pub(super)`.
+- Tests: `fmm-ref/tests/helmholtz/translation_*.rs` (24 tests and 13 panic tests; 2 ignored,
+  run in release):
+  - Addition theorems, RCR against `direct_sum`, every kind of k at |k| a 0.5, 5 and 30:
+    - P2M → M2M → M2P, P2L → L2L → L2P and P2M → M2L → L2P;
+    - ≤ 1e-12 at p₀ (worst 3.0e-14), above 1e-7 at pₜ, falling in between.
+  - RCR against direct, in the FMM-weighted measure (per degree, weighted by the radial
+    function where the output is evaluated):
+    - children, the M2L offsets including the nearest and ±z, rectangular degrees,
+      |k| a 0.5 and 5: worst 2.4e-14;
+    - all 316 offsets: 8.4e-15;
+    - |k| a = 30, Re(k) a = 50 above the projection threshold, and Im(k) a = 100:
+      9.0e-14 relative to the larger of the output and the input;
+    - relative to the output alone wherever Im(k) a ≤ 5.
+  - Rectangular RCR is the square one's block, bit for bit. Real k keeps a real M2M and L2L
+    exactly real. Finite at Im(k) a = 1000. f32 at 1.4e-6.
+  - k → 0 against Laplace's `rotation` under §3.4's map, RCR and direct, |k| a 1e-2 to
+    1e-6, every kind and Yukawa:
+    - within |k| d (worst 0.29 of it);
+    - real k: real parts within (|k| d)², imaginary parts within |k| d at degree 0 and
+      (|k| d)² above (worst 0.22).
+  - Yukawa two ways: 9.5e-15. RCR is bit for bit in all but two of 28 cases.
+- Checks:
+  - Ran `/verify` on the M3 Max: format; Clippy default, examples and workspace
+    all-targets; `cargo doc`.
+  - The default tests (976) and workspace tests (1055), all passing.
+  - `cargo test -p nd-fmm-ref --release -- --ignored`: passed.
+  - After the self-review fixes (tests and docs, one doc comment in `rcr`), re-ran:
+    - the format check, workspace Clippy and the strict docs;
+    - `nd-fmm-ref`'s tests (246);
+    - every translation test in release, ignored included.
+  - Not run: the MPI tests (no code an MPI crate runs changed); the licence check (no
+    manifest changed).
+  - A self-review by a subagent: nothing blocking. Taken:
+    - the strict measure to Im(k) a ≤ 5;
+    - §9's degree-0 rule for real k's imaginary parts;
+    - the low-frequency overflow range documented;
+    - doc corrections.
+  - No machine runs. Nothing pending.
+- Decisions: none. No question for sign-off.
+- Laplace: not touched (new modules under `helmholtz`; `lib.rs` documentation only).
+- Findings:
+  - Under strong damping RCR's output loses relative accuracy while staying at round-off
+    relative to its input:
+    - M2L to 2.1e-10 at κ a = 30 and |t| = 3w, where e^{−Im(k)(|t| − 2a)} ≈ 1e-19;
+    - L2L to a far child about 1e-11 at Im(k) a = 100.
+    - The coaxial sum cancels; the recursion and projection tables agree with each other
+      there. §5.5's pruning removes such contributions; relevant to CH2.3's θ_D.
+  - RCR M2M and L2L overflow at low frequency once p log₁₀(1/s) ≳ 300 (documented).
+- Follow-ups:
+  - CH1.3d (the diagonal form) after CH0.6.
+  - CH2.0 and CH3.0 can take the translations as their reference.
+  - The drivers' tasks need the several-vector forms.

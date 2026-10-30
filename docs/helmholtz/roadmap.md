@@ -248,7 +248,8 @@ family, checked against FMM3D's fixtures.
   the truncation; the k → 0 limit against Laplace's leaf operators under the diagonal map
   of §3.4 with the tolerances of §9; Yukawa two ways; every applied exponent non-positive
   (finite at large Im(k) a). *Needs:* CH1.2, CH1.3a.
-- [ ] **CH1.3c Translations.** M2M, L2L and M2L, direct (projection on a sphere by
+- [x] **CH1.3c Translations.** `nd_fmm_ref::helmholtz::{rcr, direct}`, tests
+  `fmm-ref/tests/helmholtz/translation_*.rs`. M2M, L2L and M2L, direct (projection on a sphere by
   quadrature, from the leaf operators' fields) and RCR (`orthonormal` rotations and the
   `coaxial` tables), with rectangular degrees, for complex expansions and Yukawa's real
   ones. *Done when:* the addition theorems (P2M → M2M → M2P, P2L → L2L → L2P and
