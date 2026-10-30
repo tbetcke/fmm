@@ -22,7 +22,8 @@ timings, so the times of §4 are an upper bound.
 - **Against S2's mpmath fixture** (120 sets, k a to 300, p to 371, every kind of k), the
   rule's tables meet the FMM-weighted bound 10⁻¹¹ with **6.8·10⁻¹³** at worst
   (Im k = Re k, k a = 300, M2M). The recursion meets it with 8.0·10⁻¹⁵ wherever S2 found it
-  stable, and per entry within 8.1·10⁻¹⁴ at k a ≤ 3.
+  stable, and per entry within 8.1·10⁻¹⁴ at k a ≤ 3 (1.4·10⁻¹³ on CI's Linux, whose
+  glibc differs in the last bit; the test's bound is 10⁻¹², signed off 2026-10-30).
 - **The identities of §3.15.** The addition theorems hold pointwise to 5.9·10⁻¹⁵ for
   (R|R), (S|R) and (S|S), every slot of n ≤ 6, real, complex and imaginary k, with the
   reflection t → −t and the entries read through the index symmetry. For real k the M2M

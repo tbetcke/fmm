@@ -93,7 +93,9 @@ fn errors(set: &Set) -> (f64, f64, f64) {
 
 /// Checks every set with max(p_src, p_tgt) ≤ `p_max`: the rule's table within the
 /// weighted bound everywhere, the recursion's where S2 found it stable, and the
-/// recursion's entries within 1e-13 relative at k a ≤ 3.
+/// recursion's entries within 1e-12 relative at k a ≤ 3 (signed off 2026-10-30: on CI's
+/// glibc the e^{iz} of the start column differs from macOS's in the last bit, and an
+/// entry came to 1.4e-13 against 8.1e-14 on the M3 Max).
 fn check(p_max: usize) {
     let mut worst_rule = (0.0f64, String::new());
     let mut worst_rec = (0.0f64, String::new());
@@ -124,7 +126,7 @@ fn check(p_max: usize) {
     );
     assert!(worst_rule.0 <= WEIGHTED, "{worst_rule:?}");
     assert!(worst_rec.0 <= WEIGHTED, "{worst_rec:?}");
-    assert!(worst_entry.0 <= 1e-13, "{worst_entry:?}");
+    assert!(worst_entry.0 <= 1e-12, "{worst_entry:?}");
 }
 
 /// The sets to p = 100 (k a ≤ 30), where the rule uses the recursion.

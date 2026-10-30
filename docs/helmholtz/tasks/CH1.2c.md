@@ -99,7 +99,8 @@ L2L (the table is read transposed; SPIKE_REPORT §4.1).
 1. **Fixture** (S2's 120 sets, 21,809 entries): the start column against the fixture's
    radial samples, 1e-13 relative; every set's table by `for_translation` (the rule) and
    by the recursion where S2 found it stable, sampled weighted error normalised by the
-   full table ≤ 1e-11; per-entry relative error ≤ 1e-13 for the recursion at k a ≤ 3.
+   full table ≤ 1e-11; per-entry relative error ≤ 1e-13 for the recursion at k a ≤ 3 (1e-12 since the
+   sign-off of 2026-10-30, open question 3).
    Sets above p = 100 in an ignored release test.
 2. **The definition, pointwise** (independent of the fixture): Fₙᵐ(r + t ẑ) =
    Σ_{n′} Eᵐ_{n′n} G_{n′}ᵐ(r) for every slot ±m at n ≤ 6, n′ summed to convergence, at
@@ -175,3 +176,7 @@ reversed, and CONVENTIONS §3.15's generator text is amended with both (no versi
 2. §3.15 calls the (S|R) projection "on an outer sphere"; S2's is on the target box's
    sphere ρ = a < t. Recommended: correct the wording when §3.15 next changes; no version
    bump.
+3. CI (PR #149, run-tests): the per-entry bound of test 1 at k a ≤ 3 failed on Linux,
+   1.4e-13 against 1e-13 (8.1e-14 on the M3 Max; real k, k a = 3, ε = 10⁻³, M2L
+   d² = 27, z = 18), glibc's e^{iz} differing from macOS's in the last bit. Signed off
+   2026-10-30: "1e-12 flat". The weighted errors are unchanged.

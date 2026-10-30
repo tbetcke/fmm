@@ -532,7 +532,8 @@ request, using this template:
 - Tests: `fmm-math/tests/coaxial/`, 23 tests (5 of them ignored, run in release). In the
   FMM-weighted error of S2:
   - the rule's tables against the fixture: 6.8e-13 at worst (bound 1e-11); the recursion
-    8.0e-15 where stable, and per entry 8.1e-14 at k a ≤ 3;
+    8.0e-15 where stable, and per entry 8.1e-14 at k a ≤ 3 (1.4e-13 on CI's Linux; bound
+    1e-12);
   - the addition theorems pointwise, with the reflection and the symmetry: 5.9e-15;
   - real k: the recursion's (R|R) exactly real; Re (S|R) = (R|R) 1.4e-14; the outer
     projection's imaginary parts 4.1e-14, the inner one's measured 0;
@@ -563,6 +564,9 @@ request, using this template:
      (inner) sphere.
   Both are in CONVENTIONS §3.15's "The generator"; no stored quantity changes, so
   `CONVENTION_VERSION` stays 3.
+  Signed off 2026-10-30 (PR #149, CI failure): test 1's per-entry bound at k a ≤ 3
+  becomes 1e-12, "1e-12 flat". On CI's glibc an entry came to 1.4e-13 (8.1e-14 on the
+  M3 Max), from the last bit of e^{iz} in the start column.
 - Laplace: not touched. `lib.rs` declares the new module; `radial::div` became
   `pub(crate)`; CONVENTIONS changed in §3.15 only.
 - Follow-ups:
