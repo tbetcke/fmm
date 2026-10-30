@@ -15,6 +15,9 @@ repository = "https://github.com/tbetcke/fmm"
 
 [workspace.dependencies]
 num-traits = "0.2"
+# Helmholtz CH1.2b: the complex type of nd-fmm-math (re-exported as nd_fmm_math::Complex),
+# signed off by the user on 2026-10-30; already in the lock file through rlst.
+num-complex = "0.4"
 thiserror = "2"
 proptest = "1"
 approx = "0.5"

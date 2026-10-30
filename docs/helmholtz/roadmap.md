@@ -209,7 +209,9 @@ family, checked against FMM3D's fixtures.
   p ≤ 30, the addition formula, orthonormality); the blocks against an mpmath fixture to
   p = 1000, orthogonal, against N-conjugated `rotation::blocks` at p ≤ 30, and
   Y(Qx̂) = Oⁿ Y(x̂); the π − β rule. *Needs:* CH1.1, D2.
-- [ ] **CH1.2b Radial functions and scaling.** j_n, h_n for complex z and i_n, k_n for
+- [x] **CH1.2b Radial functions and scaling.** `nd_fmm_math::radial` and `Complex` (num-complex),
+  tests `fmm-math/tests/radial/`, fixture `fmm-math/fixtures/helmholtz_radial.json`:
+  j_n, h_n for complex z and i_n, k_n for
   real x, with derivatives and the scaled forms of §3.15 (S3). *Done when:* against an
   mpmath fixture on every operator's range (S3's), the Wronskians, the relations of
   §3.15 (k₀, j_n(ix), h_n(ix)). *Needs:* CH1.1, D2.
