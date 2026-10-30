@@ -574,3 +574,52 @@ request, using this template:
     this task.
   - The recursion computes a, β and γ with a square root per entry; a table of them per
     order would speed up the build if CH2.2 finds the build cost matters.
+
+## 2026-10-30: CH1.3a Direct-sum oracle
+- Done:
+  - CH1.3 split in the roadmap into CH1.3a (the direct-sum oracle), CH1.3b (leaf
+    operators), CH1.3c (translations, direct and RCR) and CH1.3d (the diagonal form in
+    extended precision). CH1.3d waits for CH0.6's signatures and is off the priority list;
+    CH2.0 and CH3.0 now need CH1.3a–c.
+  - `nd_fmm_ref::helmholtz::p2p`: `p2p` (generic over `T`) and `direct_sum` (f64,
+    Neumaier per component) for e^{ikr}/r with complex k and complex charges, and
+    `p2p_yukawa` and `direct_sum_yukawa` for e^{−κr}/r with real charges, potentials and
+    gradients, exact coincidences skipped, no 1/(4π) (§3.15).
+  - The term is written so that at k = iκ the complex path repeats the Yukawa
+    operations (plus exact zeros), and at k = 0 the potential is Laplace's q/r.
+  - Laplace's `p2p.rs`: `Neumaier` and `check_pair` became `pub(crate)`, nothing else.
+- Tests: `fmm-ref/tests/helmholtz/`, 31 tests. Results in f64:
+  - against CH1.4's FMM3D fixture (12 cases): relative ℓ2 at most 9.9e-16 (bound 1e-14),
+    per point by term sum 4.6e-15 (bound 5e-14; the fixture's own error is up to 2.7e-15);
+  - k → 0 against Laplace's direct sum at |k| = 1e-2, 1e-4, 1e-6, real, complex and
+    imaginary k: within |k| r_max, and within (|k| r_max)²/2 once ik Σq is removed; the
+    gradient within (|k| r_max)². For real k, §9's tolerances: Re φ̃ within (k r)²/2,
+    Im φ̃/k − Σq within (k r)²/6, Im ∇φ̃ within (k r)³/3. Every error falls as the
+    bound's power of k. At k = 0 the potential is bit for bit Laplace's;
+  - Yukawa two ways at κ = 0.5, 25, 300: bit for bit, f64 and f32, real charges and
+    complex charges as two real vectors, `p2p` and `direct_sum`;
+  - `p2p` against `direct_sum` 1.1e-15; f32 2.7e-7; the gradient against central
+    differences 1.0e-8; accumulation, coincidences, reciprocity, exact scaling, empty
+    inputs, and the panics.
+- Checks:
+  - Ran `/verify` on the M3 Max: format; Clippy default, examples and workspace
+    all-targets; `cargo doc` (`nd-fmm-ref` with `-D warnings`).
+  - The default tests (920) and workspace tests (999), all passing.
+  - After the self-review fixes (tests and docs only), re-ran `nd-fmm-ref`'s Clippy, its
+    tests (192), workspace Clippy, its strict docs and the format check.
+  - Not run: the MPI tests (no code an MPI crate runs changed); the licence check (no
+    manifest changed).
+  - A self-review by a subagent: nothing blocking. Its points are taken: the second-order
+    k → 0 check, the plan's bound aligned with the code, the real-charge Yukawa
+    comparison, the "bit for bit" wording, two panic tests, and comments.
+  - No machine runs. Nothing pending.
+- Decisions: the split, the user, 2026-10-30, "Defer to CH1.3d" (the diagonal form after
+  CH0.6). No question for sign-off.
+- Laplace: not touched (`lib.rs` declares the new module; two private items of
+  `p2p.rs` became `pub(crate)`; its tests pass).
+- Follow-ups:
+  - CH1.3b, the leaf operators in §3.15's stored form, uses this oracle for its series.
+  - §9 item 1 asks for the oracle on the workloads of §9.1; CH1.3a tested the fixture and
+    seeded cubes only, so H1.G should not count item 1 as shown yet.
+  - `fmm-ref/Cargo.toml` and README still describe the crate as Laplace's only; worth a
+    one-line change with the next manifest edit.
