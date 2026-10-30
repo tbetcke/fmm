@@ -34,10 +34,12 @@ CH1.2c's.
 
 `nd-fmm-math` only:
 
-- `complex` (new, public, re-exported as `nd_fmm_math::Complex`): a minimal
-  `Complex<T: RealScalar>` (re, im; +, −, ×, Smith's ÷, by-T scaling, |z| by hypot,
-  e^{iθ}, iᵏ, finiteness). No dependency: `num-complex` is in the lock file only through
-  rlst, and adding it to `nd-fmm-math` is a dependency decision (question for sign-off).
+- The complex type: planned as a minimal own `Complex<T: RealScalar>`; on the user's
+  sign-off of 2026-10-30 (open question 1) `num_complex::Complex` instead, a new
+  `[workspace.dependencies]` entry `num-complex = "0.4"` (0.4.6, already in the lock file
+  through rlst), re-exported as `nd_fmm_math::Complex`. `radial` divides by Smith's
+  algorithm in a private helper: num-complex's division forms |b|², and its extra
+  rounding took the Wronskian at |z| = 800 to 1.0e-13.
   Proposal §2 item 3 keeps complex quantities in real planes in the operators' storage;
   this type is for the arithmetic of `nd-fmm-math` and the crates above it.
 - `radial` (new, public): with s the power scale, 0 < s ≤ 1,
@@ -59,7 +61,8 @@ CH1.2c's.
   rows, plus the header of the CH1.2a fixture with `convention_version`) writes
   `fmm-math/fixtures/helmholtz_radial.json`; `tools/fixtures/README.md`.
 
-No Laplace module changes; no table; no convention; no dependency.
+No Laplace module changes; no table; no convention. One dependency: `num-complex`
+(signed off).
 
 Not in scope: a real-arithmetic jₙ for real k (S3 §7: an optimisation, measured when the
 operators need it); a quotient output fₙ(z)/z (documented above instead).
@@ -87,7 +90,7 @@ In `fmm-math/tests/radial/`, f64 unless stated, one thread:
 7. f32 against f64 at s = 1, |z| from 0.1 to 20, n ≤ 8: 1e-5 relative.
 8. Panics: Im z < 0, ĥ at z = 0, k̂ at x = 0, s outside (0, 1], a derivative slice of the
    wrong length.
-9. `Complex` unit tests (division by Smith's method at large moduli, iᵏ).
+9. (Dropped with the own type: `Complex` unit tests.)
 
 ## Checks
 
@@ -115,3 +118,4 @@ None.
 
 1. The complex type: a minimal `Complex<T>` in `nd-fmm-math` (as planned), or
    `num-complex` as a workspace dependency (a new direct dependency of `nd-fmm-math`).
+   Signed off 2026-10-30: "num-complex".

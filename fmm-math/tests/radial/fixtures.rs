@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use nd_fmm_math::{CONVENTION_VERSION, Complex};
+use num_traits::Zero;
 use serde_json::Value;
 
 use crate::support::{Family, evaluate};
@@ -43,9 +44,9 @@ fn exact(v: &Value) -> f64 {
 /// reference underflows and ours does not.
 fn error(ours: Complex<f64>, reference: Complex<f64>, scale: f64) -> Option<f64> {
     if reference == Complex::zero() {
-        return (ours.abs() < UNDERFLOW).then_some(0.0);
+        return (ours.norm() < UNDERFLOW).then_some(0.0);
     }
-    Some((ours - reference).abs() / scale)
+    Some((ours - reference).norm() / scale)
 }
 
 #[test]
@@ -84,7 +85,7 @@ fn every_operator_range_agrees_with_the_fixture() {
             let (sv, sd) = if family == Family::J {
                 (number(&r[5]), number(&r[6]))
             } else {
-                (rv.abs(), rd.abs())
+                (rv.norm(), rd.norm())
             };
             for (k, ours, reference, scale) in [(0, v[n], rv, sv), (1, d[n], rd, sd)] {
                 match error(ours, reference, scale) {

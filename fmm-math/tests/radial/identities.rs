@@ -5,7 +5,9 @@
 use nd_fmm_math::Complex;
 use nd_fmm_math::radial::{bessel_j, hankel_h, modified_i, modified_k};
 
-use crate::support::{ANGLES, Family, evaluate, polar, sweep};
+use num_traits::{One, Zero};
+
+use crate::support::{ANGLES, Family, evaluate, i_pow, polar, sweep};
 
 /// Bound on the identities, relative to the size of their terms.
 const IDENTITY_BOUND: f64 = 1e-13;
@@ -24,23 +26,23 @@ fn wronskians() {
             let z = polar(r, theta);
             let (j, jd) = evaluate(Family::J, z, s, top + 1);
             let (h, hd) = evaluate(Family::H, z, s, top + 1);
-            let target = Complex::i() / (z * z);
+            let target = Complex::<f64>::i() / (z * z);
             for n in 0..=top {
                 let (a, b) = (j[n] * hd[n], jd[n] * h[n]);
-                let e = (a - b - target).abs() / (a.abs() + b.abs());
+                let e = (a - b - target).norm() / (a.norm() + b.norm());
                 worst[0] = worst[0].max(e);
                 assert!(e <= IDENTITY_BOUND, "Wronskian z={z:?} n={n}: {e:e}");
                 let (a, b) = (j[n] * h[n + 1] / s, j[n + 1] * h[n] * s);
-                let e = (a - b + target).abs() / (a.abs() + b.abs());
+                let e = (a - b + target).norm() / (a.norm() + b.norm());
                 worst[1] = worst[1].max(e);
                 assert!(e <= IDENTITY_BOUND, "cross product z={z:?} n={n}: {e:e}");
             }
         }
-        let (i, id) = evaluate(Family::I, Complex::real(r), s, top);
-        let (k, kd) = evaluate(Family::K, Complex::real(r), s, top);
+        let (i, id) = evaluate(Family::I, Complex::from(r), s, top);
+        let (k, kd) = evaluate(Family::K, Complex::from(r), s, top);
         for n in 0..=top {
             let (a, b) = (i[n] * kd[n], id[n] * k[n]);
-            let e = (a - b + Complex::real(1.0 / (r * r))).abs() / (a.abs() + b.abs());
+            let e = (a - b + Complex::from(1.0 / (r * r))).norm() / (a.norm() + b.norm());
             worst[2] = worst[2].max(e);
             assert!(e <= IDENTITY_BOUND, "modified Wronskian x={r} n={n}: {e:e}");
         }
@@ -59,29 +61,29 @@ fn yukawa_two_ways() {
     for (x, top_regular, top_singular) in sweep() {
         let s = x.min(1.0);
         let z = Complex::new(0.0, x);
-        let (i, id) = evaluate(Family::I, Complex::real(x), s, top_regular);
-        let (k, kd) = evaluate(Family::K, Complex::real(x), s, top_singular);
+        let (i, id) = evaluate(Family::I, Complex::from(x), s, top_regular);
+        let (k, kd) = evaluate(Family::K, Complex::from(x), s, top_singular);
         let (j, jd) = evaluate(Family::J, z, s, top_regular);
         let (h, hd) = evaluate(Family::H, z, s, top_singular);
         let regular = (0..=top_regular).flat_map(|n| {
             let p = n as i64;
             [
-                (n, i[n], Complex::i_pow(-p) * j[n]),
-                (n, id[n], Complex::i_pow(1 - p) * jd[n]),
+                (n, i[n], i_pow(-p) * j[n]),
+                (n, id[n], i_pow(1 - p) * jd[n]),
             ]
         });
         let singular = (0..=top_singular).flat_map(|n| {
             let p = n as i64;
             [
-                (n, k[n], -(Complex::i_pow(p) * h[n])),
-                (n, kd[n], -(Complex::i_pow(p + 1) * hd[n])),
+                (n, k[n], -(i_pow(p) * h[n])),
+                (n, kd[n], -(i_pow(p + 1) * hd[n])),
             ]
         });
         for (n, real, complex) in regular.chain(singular) {
-            if real.abs() < UNDERFLOW && complex.abs() < UNDERFLOW {
+            if real.norm() < UNDERFLOW && complex.norm() < UNDERFLOW {
                 continue;
             }
-            let e = (real - complex).abs() / real.abs();
+            let e = (real - complex).norm() / real.norm();
             worst = worst.max(e);
             assert!(
                 e <= IDENTITY_BOUND,
@@ -93,7 +95,7 @@ fn yukawa_two_ways() {
 }
 
 fn close(ours: Complex<f64>, exact: Complex<f64>, bound: f64, what: &str) {
-    let e = (ours - exact).abs() / exact.abs();
+    let e = (ours - exact).norm() / exact.norm();
     assert!(e <= bound, "{what}: {ours:?} vs {exact:?} ({e:e})");
 }
 
@@ -124,14 +126,14 @@ fn closed_forms() {
         let j = [
             sin / z,
             sin / z2 - cos / z,
-            (Complex::real(3.0) / z2 - Complex::one()) * sin / z - cos * 3.0 / z2,
+            (Complex::from(3.0) / z2 - Complex::one()) * sin / z - cos * 3.0 / z2,
         ];
         let e = Complex::cis(z.re) * (-z.im).exp();
         let h = [
-            -(Complex::i() * e) / z,
-            -(e * (z + Complex::i())) / z2,
-            Complex::i() * e / z
-                * (Complex::one() + Complex::new(0.0, 3.0) / z - Complex::real(3.0) / z2),
+            -(Complex::<f64>::i() * e) / z,
+            -(e * (z + Complex::<f64>::i())) / z2,
+            Complex::<f64>::i() * e / z
+                * (Complex::<f64>::one() + Complex::new(0.0, 3.0) / z - Complex::from(3.0) / z2),
         ];
         let (v, _) = evaluate(Family::J, z, s, 2);
         let (w, _) = evaluate(Family::H, z, s, 2);
@@ -140,8 +142,8 @@ fn closed_forms() {
             // jₙ has real zeros: its error is measured against the envelope
             // max(|jₙ|, |hₙ|), as in the fixture test; the closed form itself cancels
             // near them.
-            let envelope = j[n].abs().max(h[n].abs()) * damp / sn;
-            let e = (v[n] - j[n] * (damp / sn)).abs() / envelope;
+            let envelope = j[n].norm().max(h[n].norm()) * damp / sn;
+            let e = (v[n] - j[n] * (damp / sn)).norm() / envelope;
             assert!(e <= 1e-14, "ĵ{n}({z:?}): {e:e}");
             close(
                 w[n],
@@ -152,17 +154,17 @@ fn closed_forms() {
         }
     }
     for x in [1.0, 1.5, 12.0, 200.0] {
-        let (i, _) = evaluate(Family::I, Complex::real(x), s, 1);
-        let (k, _) = evaluate(Family::K, Complex::real(x), s, 1);
+        let (i, _) = evaluate(Family::I, Complex::from(x), s, 1);
+        let (k, _) = evaluate(Family::K, Complex::from(x), s, 1);
         let em = (-x).exp();
-        close(i[0], Complex::real(x.sinh() / x * em), 1e-14, "î₀");
+        close(i[0], Complex::from(x.sinh() / x * em), 1e-14, "î₀");
         close(
             i[1],
-            Complex::real((x.cosh() / x - x.sinh() / (x * x)) * em / s),
+            Complex::from((x.cosh() / x - x.sinh() / (x * x)) * em / s),
             1e-14,
             "î₁",
         );
-        close(k[1], Complex::real((1.0 + x) / (x * x) * s), 1e-15, "k̂₁");
+        close(k[1], Complex::from((1.0 + x) / (x * x) * s), 1e-15, "k̂₁");
     }
 }
 
@@ -185,8 +187,8 @@ fn finite_everywhere() {
                     "h z={z:?} s={s}"
                 );
             }
-            let (i, id) = evaluate(Family::I, Complex::real(r), s, top_regular);
-            let (k, kd) = evaluate(Family::K, Complex::real(r), s, top_singular);
+            let (i, id) = evaluate(Family::I, Complex::from(r), s, top_regular);
+            let (k, kd) = evaluate(Family::K, Complex::from(r), s, top_singular);
             assert!(i.iter().chain(&id).all(|v| v.is_finite()), "i x={r} s={s}");
             assert!(k.iter().chain(&kd).all(|v| v.is_finite()), "k x={r} s={s}");
         }
@@ -214,7 +216,7 @@ fn scale_consistency() {
     ] {
         for family in [Family::J, Family::H, Family::I, Family::K] {
             let z = if matches!(family, Family::I | Family::K) {
-                Complex::real(z.abs())
+                Complex::from(z.norm())
             } else {
                 z
             };
@@ -228,7 +230,7 @@ fn scale_consistency() {
                     (s2 / s1).powi(n as i32)
                 };
                 for (x, y) in [(a[n], b[n]), (ad[n], bd[n])] {
-                    let e = (x * f - y).abs() / y.abs();
+                    let e = (x * f - y).norm() / y.norm();
                     assert!(e <= IDENTITY_BOUND, "{family:?} z={z:?} n={n}: {e:e}");
                 }
             }
@@ -247,10 +249,10 @@ fn prefixes_of_longer_requests() {
         Complex::new(50.0, 5.0),
         Complex::new(0.0, 20.0),
     ] {
-        let s = z.abs().min(1.0);
+        let s = z.norm().min(1.0);
         for family in [Family::J, Family::H, Family::I, Family::K] {
             let z = if matches!(family, Family::I | Family::K) {
-                Complex::real(z.abs())
+                Complex::from(z.norm())
             } else {
                 z
             };
@@ -262,7 +264,7 @@ fn prefixes_of_longer_requests() {
                         if matches!(family, Family::H | Family::K) {
                             assert_eq!(a, b, "{family:?} z={z:?} top={top} n={n}");
                         } else {
-                            let e = (a - b).abs() / b.abs().max(f64::MIN_POSITIVE);
+                            let e = (a - b).norm() / b.norm().max(f64::MIN_POSITIVE);
                             assert!(e <= 1e-15, "{family:?} z={z:?} top={top} n={n}: {e:e}");
                         }
                     }
@@ -280,8 +282,8 @@ fn f32_against_f64() {
     for r in [0.1, 0.7, 2.0, 9.0, 20.0] {
         for theta in [0.0, 0.3, std::f64::consts::FRAC_PI_2] {
             let z = polar(r, theta);
-            let z32 = Complex::<f32>::from_f64(z);
-            let z = z32.to_f64();
+            let z32 = Complex::new(z.re as f32, z.im as f32);
+            let z = Complex::new(f64::from(z32.re), f64::from(z32.im));
             for family in [Family::J, Family::H] {
                 let (v, d) = evaluate(family, z, 1.0, TOP);
                 let mut v32 = [Complex::<f32>::zero(); TOP + 1];
@@ -295,11 +297,12 @@ fn f32_against_f64() {
                     for (a, b) in [(v32[n], v[n]), (d32[n], d[n])] {
                         // ĵ has real zeros; measure against the order's envelope.
                         let scale = if family == Family::J {
-                            v[n].abs().max(d[n].abs()).max(1e-30)
+                            v[n].norm().max(d[n].norm()).max(1e-30)
                         } else {
-                            b.abs()
+                            b.norm()
                         };
-                        let e = (a.to_f64() - b).abs() / scale;
+                        let a = Complex::new(f64::from(a.re), f64::from(a.im));
+                        let e = (a - b).norm() / scale;
                         worst = worst.max(e);
                         assert!(e <= 1e-5, "{family:?} f32 z={z:?} n={n}: {e:e}");
                     }
@@ -307,8 +310,8 @@ fn f32_against_f64() {
             }
             let x32 = r as f32;
             let x = f64::from(x32);
-            let (iv, id) = evaluate(Family::I, Complex::real(x), 1.0, TOP);
-            let (kv, kd) = evaluate(Family::K, Complex::real(x), 1.0, TOP);
+            let (iv, id) = evaluate(Family::I, Complex::from(x), 1.0, TOP);
+            let (kv, kd) = evaluate(Family::K, Complex::from(x), 1.0, TOP);
             let (mut i32v, mut i32d) = ([0.0f32; TOP + 1], [0.0f32; TOP + 1]);
             let (mut k32v, mut k32d) = ([0.0f32; TOP + 1], [0.0f32; TOP + 1]);
             modified_i(x32, 1.0, &mut i32v, Some(&mut i32d));

@@ -35,22 +35,26 @@
 //!   evaluated by the Cartesian recursions of §3.5.
 //! - [`rotation`]: per-degree rotation blocks Dⁿ(Q) for regular and irregular
 //!   harmonics (§3.8) and z-y-z Euler angles.
-//! - [`Complex`]: a minimal complex number over [`RealScalar`], for the Helmholtz family
+//! - [`Complex`]: `num-complex`'s complex number, re-exported for the Helmholtz family
 //!   (§3.15).
 //! - [`radial`]: the scaled spherical Bessel, Hankel and modified spherical Bessel
 //!   functions of the Helmholtz family (§3.15).
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 
-mod complex;
 pub mod harmonics;
 mod layout;
 pub mod radial;
 pub mod rotation;
 mod scalar;
 
-pub use complex::Complex;
 pub use layout::Layout;
+/// The complex number of the Helmholtz family (CONVENTIONS §3.15), `num-complex`'s,
+/// re-exported so that every crate uses the same version. Operator storage keeps complex
+/// quantities as real planes (§3.15, "Storage"); this type is for computing with them.
+/// Its division is the textbook (a c + b d)/(c² + d²), which forms |b|² and rounds more
+/// than Smith's algorithm; [`radial`] divides by Smith's algorithm instead.
+pub use num_complex::Complex;
 pub use scalar::RealScalar;
 
 /// Version of the conventions in

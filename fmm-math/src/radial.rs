@@ -54,6 +54,8 @@
 //! from `values`, or if the argument is not finite; [`bessel_j`] and [`hankel_h`] if
 //! Im z < 0; [`hankel_h`] at z = 0; [`modified_i`] if x < 0; [`modified_k`] unless x > 0.
 
+use num_traits::{One, Zero};
+
 use crate::{Complex, RealScalar};
 
 /// Growth of the forward recursion at which Miller's start order is taken; the error of
@@ -98,7 +100,7 @@ fn check_derivatives<U>(values: usize, derivatives: &Option<&mut [U]>) {
 /// use nd_fmm_math::radial::bessel_j;
 ///
 /// let z = Complex::new(2.0_f64, 0.0);
-/// let mut j = [Complex::zero(); 3];
+/// let mut j = [Complex::new(0.0, 0.0); 3];
 /// bessel_j(z, 1.0, &mut j, None);
 /// assert!((j[0].re - 2.0_f64.sin() / 2.0).abs() < 1e-15);
 /// ```
@@ -110,7 +112,7 @@ pub fn bessel_j<T: RealScalar>(
 ) {
     check_scale(s);
     assert!(
-        z.is_finite() && z.im >= T::zero(),
+        z.re.is_finite() && z.im.is_finite() && z.im >= T::zero(),
         "bessel_j needs a finite z with Im z ≥ 0"
     );
     check_derivatives(values.len(), &derivatives);
@@ -121,17 +123,17 @@ pub fn bessel_j<T: RealScalar>(
     // The ratios rₙ = jₙ/jₙ₋₁ for n = 1..=len (one beyond, for the derivative), by the
     // backward recursion rₙ = z/((2n + 1) − z rₙ₊₁) from 0 at the start order.
     // values[n − 1] holds rₙ for n < len; r_len is kept apart.
-    let start = start_order_j(len, z.to_f64());
+    let start = start_order_j(len, Complex::new(z.re.to_f64(), z.im.to_f64()));
     let mut r = Complex::zero();
     let mut r_top = Complex::zero();
     for n in (1..=start).rev() {
-        let mut d = Complex::real(int::<T>(2 * n + 1)) - z * r;
+        let mut d = Complex::new(int::<T>(2 * n + 1), T::zero()) - z * r;
         if d == Complex::zero() {
             // jₙ₋₁(z) = 0 to the last bit: a denominator of rounding size keeps rₙ and
             // rₙ₋₁ finite, and their product, which is what the values use, accurate.
-            d = Complex::real(T::epsilon() * int(2 * n + 1));
+            d = Complex::new(T::epsilon() * int(2 * n + 1), T::zero());
         }
-        r = z / d;
+        r = div(z, d);
         if n == len {
             r_top = r;
         } else if n < len {
@@ -141,7 +143,7 @@ pub fn bessel_j<T: RealScalar>(
     // ĵ₀ or ĵ₁ from their closed forms, whichever is larger; then ĵₙ = ĵₙ₋₁ rₙ/s upward,
     // overwriting the ratios.
     let (j0, j1) = j0_j1(z);
-    let use_j1 = j1.abs() > j0.abs();
+    let use_j1 = j1.norm() > j0.norm();
     let mut prev = j0;
     for n in 1..len {
         let rn = values[n - 1];
@@ -181,7 +183,7 @@ pub fn bessel_j<T: RealScalar>(
 ///
 /// // ĥ₀(z) = −i e^{i Re z}/z, so ĥ₀(3i) = −1/3.
 /// let z = Complex::new(0.0_f64, 3.0);
-/// let mut h = [Complex::zero(); 2];
+/// let mut h = [Complex::new(0.0, 0.0); 2];
 /// hankel_h(z, 1.0, &mut h, None);
 /// assert!((h[0].re + 1.0 / 3.0).abs() < 1e-15 && h[0].im.abs() < 1e-15);
 /// ```
@@ -193,7 +195,7 @@ pub fn hankel_h<T: RealScalar>(
 ) {
     check_scale(s);
     assert!(
-        z.is_finite() && z.im >= T::zero(),
+        z.re.is_finite() && z.im.is_finite() && z.im >= T::zero(),
         "hankel_h needs a finite z with Im z ≥ 0"
     );
     assert!(z != Complex::zero(), "hankel_h needs z ≠ 0");
@@ -204,14 +206,14 @@ pub fn hankel_h<T: RealScalar>(
     }
     // h₀ = −i e^{iz}/z, h₁ = −e^{iz}(z + i)/z², and e^{iz} e^{Im z} = e^{i Re z}.
     let e = Complex::cis(z.re);
-    let h0 = -(Complex::i() * e) / z;
-    let h1 = -(e * (z + Complex::i())) / z / z * s;
+    let h0 = -div(Complex::<T>::i() * e, z);
+    let h1 = -div(div(e * (z + Complex::<T>::i()), z), z) * s;
     // hₙ₊₁ = (2n + 1)/z hₙ − hₙ₋₁, scaled.
     let (mut a, mut b) = (h0, h1);
     values[0] = h0;
     for (n, v) in values.iter_mut().enumerate().skip(1) {
         *v = b;
-        let c = (b * (int::<T>(2 * n + 1) * s)) / z - a * (s * s);
+        let c = div(b * (int::<T>(2 * n + 1) * s), z) - a * (s * s);
         a = b;
         b = c;
     }
@@ -219,7 +221,7 @@ pub fn hankel_h<T: RealScalar>(
         // ĥ₀′ = −ĥ₁/s; for n ≥ 1, ĥₙ′ = s ĥₙ₋₁ − (n + 1) ĥₙ / z.
         der[0] = -(if len > 1 { values[1] } else { h1 }) / s;
         for n in 1..len {
-            der[n] = values[n - 1] * s - (values[n] * int::<T>(n + 1)) / z;
+            der[n] = values[n - 1] * s - div(values[n] * int::<T>(n + 1), z);
         }
     }
 }
@@ -334,8 +336,8 @@ fn start_order_j(len: usize, z: Complex<f64>) -> usize {
     }
     let (mut g, mut f) = (Complex::<f64>::zero(), Complex::<f64>::one());
     let mut n = len;
-    while f.abs() < GROWTH {
-        let next = (f * (2 * n + 1) as f64) / z - g;
+    while f.norm() < GROWTH {
+        let next = div(f * (2 * n + 1) as f64, z) - g;
         g = f;
         f = next;
         n += 1;
@@ -368,14 +370,14 @@ fn j0_j1<T: RealScalar>(z: Complex<T>) -> (Complex<T>, Complex<T>) {
         return (Complex::one(), Complex::zero());
     }
     let damp = (-z.im).exp();
-    if z.abs().to_f64() < SERIES {
+    if z.norm().to_f64() < SERIES {
         let w = z * z * T::from_f64(-0.5);
         let (mut s0, mut s1) = (Complex::zero(), Complex::zero());
         let mut term = Complex::one(); // wᵏ / k!
         let (mut d0, mut d1) = (T::one(), int::<T>(3)); // (2k + 1)!!, (2k + 3)!!
         for k in 0..SERIES_TERMS {
-            s0 += term / d0;
-            s1 += term / d1;
+            s0 = s0 + term / d0;
+            s1 = s1 + term / d1;
             term = term * w / int::<T>(k + 1);
             d0 = d0 * int(2 * k + 3);
             d1 = d1 * int(2 * k + 5);
@@ -385,7 +387,23 @@ fn j0_j1<T: RealScalar>(z: Complex<T>) -> (Complex<T>, Complex<T>) {
     // e^{±iz} e^{−Im z} without overflow (Im z ≥ 0).
     let plus = Complex::cis(z.re) * (-(z.im + z.im)).exp();
     let minus = Complex::cis(-z.re);
-    let sin = (plus - minus) / Complex::new(T::zero(), int(2));
+    let sin = (plus - minus) * Complex::new(T::zero(), T::from_f64(-0.5)); // ÷ 2i
     let cos = (plus + minus) * T::from_f64(0.5);
-    (sin / z, sin / z / z - cos / z)
+    (div(sin, z), div(div(sin, z), z) - div(cos, z))
+}
+
+/// a / b by Smith's algorithm, which forms neither |b|² nor a product of the two moduli.
+/// `num-complex`'s division forms |b|², and its extra rounding raises the error of the
+/// recursions (the Wronskian at |z| = 800 and n = 784 from 5.6e-14 to 1.0e-13).
+#[inline]
+fn div<T: RealScalar>(a: Complex<T>, b: Complex<T>) -> Complex<T> {
+    if b.re.abs() >= b.im.abs() {
+        let r = b.im / b.re;
+        let d = b.re + b.im * r;
+        Complex::new((a.re + a.im * r) / d, (a.im - a.re * r) / d)
+    } else {
+        let r = b.re / b.im;
+        let d = b.re * r + b.im;
+        Complex::new((a.re * r + a.im) / d, (a.im * r - a.re) / d)
+    }
 }

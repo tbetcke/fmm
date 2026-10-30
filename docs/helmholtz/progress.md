@@ -414,13 +414,14 @@ request, using this template:
     - derivatives from the neighbouring orders.
   - Nothing allocates. Arguments that are not finite panic. The module documents the
     tested ranges and the tangential gradient's limit at z = 0.
-  - `nd_fmm_math::Complex<T>`: a minimal complex type with Smith's division. It adds no
-    dependency (question 1 below).
+  - `nd_fmm_math::Complex`, re-exported from `num-complex` 0.4 (a new workspace
+    dependency, signed off 2026-10-30). `radial` divides by Smith's algorithm in a
+    private helper: num-complex's textbook division took the Wronskian at |z| = 800 from
+    5.6e-14 to 1.0e-13, beyond its bound.
   - The fixture `fmm-math/fixtures/helmholtz_radial.json` (1.3 MB), from
     `tools/fixtures/gen_helmholtz_radial.py`: S3's 571 sets and 13,174 rows, value for
     value, under the fmm-math header.
-- Tests: `fmm-math/tests/radial/`, 18 tests, plus 3 unit tests of `Complex`. Results in
-  f64:
+- Tests: `fmm-math/tests/radial/`, 18 tests. Results in f64:
   - against the fixture on every operator's range: worst 7.1e-14 (ĥ at n = 1482,
     |z| = 1501), at most 3.6e-15 on the leaf and low-frequency ranges;
   - the Wronskians: 5.6e-14; the cross product: 4.6e-14; the modified Wronskian: 5.8e-15;
@@ -433,14 +434,21 @@ request, using this template:
   - The default tests (846) and workspace tests (925), all passing.
   - After the self-review fixes, re-ran `nd-fmm-math`'s tests, Clippy and doctests.
   - The generator's `--check` is byte for byte.
-  - Not run: the MPI tests, because no code an MPI crate uses changed (a new module
-    only); `--ignored` in release, because the branch has no ignored test.
+  - After the switch to `num-complex`, all of the above again (default 844 and workspace
+    923 tests, all passing; +2 panic tests, −3 unit tests and 1 doctest of the own type),
+    plus
+    `cargo check --workspace --all-targets`, `cargo deny --locked check licenses` (ok)
+    and `cargo tree -e normal` (no fftw-sys).
+  - Not run: the MPI tests, because no code an MPI crate runs changed (a new module and
+    a dependency edge only); `--ignored` in release, because the branch has no ignored
+    test.
   - A self-review by a subagent: nothing blocking. Its points are taken: finiteness, z²
     underflow, and the documented start order and ranges.
   - No machine runs. Nothing pending.
-- Decisions: D2 applied (A). Question for sign-off: the own `Complex<T>` or
-  `num-complex`.
-- Laplace: not touched. `lib.rs` declares two new modules and a re-export.
+- Decisions: D2 applied (A). Signed off 2026-10-30 (PR #137): "num-complex" as the
+  complex type, in place of an own `Complex<T>`.
+- Laplace: not touched. `lib.rs` declares a new module and a re-export; `nd-fmm-math` gains
+  the dependency `num-complex`, which no Laplace code calls.
 - Follow-ups:
   - CH1.2c, the coaxial coefficients, uses `radial` for its start column and its
     projection.

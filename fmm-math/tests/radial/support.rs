@@ -4,6 +4,7 @@
 
 use nd_fmm_math::Complex;
 use nd_fmm_math::radial::{bessel_j, hankel_h, modified_i, modified_k};
+use num_traits::Zero;
 
 /// The four families of `radial`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,8 +49,8 @@ pub fn evaluate(
                 modified_k(z.re, s, &mut vr, Some(&mut dr));
             }
             for n in 0..=top {
-                v[n] = Complex::real(vr[n]);
-                d[n] = Complex::real(dr[n]);
+                v[n] = Complex::from(vr[n]);
+                d[n] = Complex::from(dr[n]);
             }
         }
     }
@@ -108,5 +109,15 @@ pub fn polar(r: f64, theta: f64) -> Complex<f64> {
         Complex::new(0.0, r)
     } else {
         Complex::new(r * theta.cos(), r * theta.sin())
+    }
+}
+
+/// iᵏ, exactly.
+pub fn i_pow(k: i64) -> Complex<f64> {
+    match k.rem_euclid(4) {
+        0 => Complex::new(1.0, 0.0),
+        1 => Complex::new(0.0, 1.0),
+        2 => Complex::new(-1.0, 0.0),
+        _ => Complex::new(0.0, -1.0),
     }
 }

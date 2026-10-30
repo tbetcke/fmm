@@ -4,8 +4,8 @@ Purpose: Legendre functions, real solid harmonics and gradients, rotation blocks
 index layout and the scalar trait that every other nd-fmm-* crate builds on.
 Phase and components: Phase 0, C0.1–C0.3 (tasks T2, T4, T5 in docs/phase0/).
 Helmholtz CH1.2b added `radial` (CONVENTIONS §3.15): the scaled jₙ, hₙ (complex z), iₙ,
-kₙ (real x) and their derivatives of spike S3, and `Complex<T>`, a minimal complex type
-for the Helmholtz arithmetic; its tests are `tests/radial/`.
+kₙ (real x) and their derivatives of spike S3, and re-exports `num_complex::Complex` as
+the complex type of the Helmholtz arithmetic; its tests are `tests/radial/`.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -15,7 +15,8 @@ for the Helmholtz arithmetic; its tests are `tests/radial/`.
   and `cargo test -p nd-fmm-math` must pass.
 
 ## Allowed dependencies
-num-traits; dev-dependencies: proptest, approx, serde_json (fixture loading).
+num-traits, num-complex (Helmholtz CH1.2b, signed off 2026-10-30); dev-dependencies:
+proptest, approx, serde_json (fixture loading).
 Anything else needs a note in the PR.
 
 ## Test oracle

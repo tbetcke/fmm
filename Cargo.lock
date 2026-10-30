@@ -2920,6 +2920,7 @@ dependencies = [
 name = "nd-fmm-math"
 version = "0.1.0-dev"
 dependencies = [
+ "num-complex",
  "num-traits",
  "proptest",
  "serde_json",
