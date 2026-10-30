@@ -37,16 +37,27 @@
 //!   harmonics (§3.8) and z-y-z Euler angles.
 //! - [`orthonormal`]: the real orthonormal harmonics and their rotation blocks at any
 //!   degree, for the Helmholtz family (§3.15).
+//! - [`Complex`]: `num-complex`'s complex number, re-exported for the Helmholtz family
+//!   (§3.15).
+//! - [`radial`]: the scaled spherical Bessel, Hankel and modified spherical Bessel
+//!   functions of the Helmholtz family (§3.15).
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 
 pub mod harmonics;
 mod layout;
 pub mod orthonormal;
+pub mod radial;
 pub mod rotation;
 mod scalar;
 
 pub use layout::Layout;
+/// The complex number of the Helmholtz family (CONVENTIONS §3.15), `num-complex`'s,
+/// re-exported so that every crate uses the same version. Operator storage keeps complex
+/// quantities as real planes (§3.15, "Storage"); this type is for computing with them.
+/// Its division is the textbook (a c + b d)/(c² + d²), which forms |b|² and rounds more
+/// than Smith's algorithm; [`radial`] divides by Smith's algorithm instead.
+pub use num_complex::Complex;
 pub use scalar::RealScalar;
 
 /// Version of the conventions in
