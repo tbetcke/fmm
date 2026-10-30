@@ -200,7 +200,8 @@ family, checked against FMM3D's fixtures.
   L2L coefficients real for real k. *Needs:* CH1.1, D2. Split on 2026-10-29 into three
   sub-tasks, one per spike it ports (S1, S3, S2), each one reviewable PR; CH1.2 is done
   when all three are:
-- [ ] **CH1.2a Orthonormal harmonics and rotation blocks.** `nd_fmm_math::orthonormal`:
+- [x] **CH1.2a Orthonormal harmonics and rotation blocks.** `nd_fmm_math::orthonormal`,
+  tests `fmm-math/tests/orthonormal/`, fixture `fmm-math/fixtures/helmholtz_angular.json`:
   the normalised Legendre functions of S1 (overflow-free, telescoped near the poles), the
   real orthonormal harmonics of §3.15 and their angular derivatives, the y-rotation blocks
   by the Gumerov–Duraiswami recursion at any degree, the z-y-z blocks and the π − β signs.
