@@ -35,14 +35,21 @@
 //!   evaluated by the Cartesian recursions of §3.5.
 //! - [`rotation`]: per-degree rotation blocks Dⁿ(Q) for regular and irregular
 //!   harmonics (§3.8) and z-y-z Euler angles.
+//! - [`Complex`]: a minimal complex number over [`RealScalar`], for the Helmholtz family
+//!   (§3.15).
+//! - [`radial`]: the scaled spherical Bessel, Hankel and modified spherical Bessel
+//!   functions of the Helmholtz family (§3.15).
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 
+mod complex;
 pub mod harmonics;
 mod layout;
+pub mod radial;
 pub mod rotation;
 mod scalar;
 
+pub use complex::Complex;
 pub use layout::Layout;
 pub use scalar::RealScalar;
 
