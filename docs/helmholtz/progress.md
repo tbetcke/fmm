@@ -401,3 +401,48 @@ request, using this template:
     "Verification".
   - CH1.3 checks `nd-fmm-ref` against the FMM3D fixtures.
   - Old `-c2-` cache files can be removed on each machine (Kathleen's quota).
+
+## 2026-10-30: CH1.2b Radial functions and scaling
+- Done:
+  - Branched from `main` beside CH1.2a's open PR #136, with the roadmap's split of CH1.2
+    taken unchanged from that branch.
+  - `nd_fmm_math::radial`, generic over `T`: `bessel_j` and `hankel_h` (complex z,
+    Im z ≥ 0), `modified_i` and `modified_k` (real x), with optional derivatives and the
+    scaling of §3.15 (e^{∓Im z} and s^{∓n}; k₀ = e^{−x}/x). They hold S3's algorithms:
+    - Miller's ratios for j and i, with the start test in f64 for every `T`;
+    - the upward recursion for h and k;
+    - derivatives from the neighbouring orders.
+  - Nothing allocates. Arguments that are not finite panic. The module documents the
+    tested ranges and the tangential gradient's limit at z = 0.
+  - `nd_fmm_math::Complex<T>`: a minimal complex type with Smith's division. It adds no
+    dependency (question 1 below).
+  - The fixture `fmm-math/fixtures/helmholtz_radial.json` (1.3 MB), from
+    `tools/fixtures/gen_helmholtz_radial.py`: S3's 571 sets and 13,174 rows, value for
+    value, under the fmm-math header.
+- Tests: `fmm-math/tests/radial/`, 18 tests, plus 3 unit tests of `Complex`. Results in
+  f64:
+  - against the fixture on every operator's range: worst 7.1e-14 (ĥ at n = 1482,
+    |z| = 1501), at most 3.6e-15 on the leaf and low-frequency ranges;
+  - the Wronskians: 5.6e-14; the cross product: 4.6e-14; the modified Wronskian: 5.8e-15;
+  - Yukawa two ways (îₙ = i⁻ⁿ ĵₙ(ix), k̂ₙ = −iⁿ ĥₙ(ix)): bit for bit;
+  - k̂₀ = 1/x exactly, and orders 0–2 against their closed forms;
+  - finite on every range; z = 0 exact; the scale; prefixes; f32 at 4.4e-7; the panics.
+- Checks:
+  - Ran `/verify` on the M3 Max: format; Clippy default, examples and workspace
+    all-targets (14 crates re-checked after a touch); `cargo doc`.
+  - The default tests (846) and workspace tests (925), all passing.
+  - After the self-review fixes, re-ran `nd-fmm-math`'s tests, Clippy and doctests.
+  - The generator's `--check` is byte for byte.
+  - Not run: the MPI tests, because no code an MPI crate uses changed (a new module
+    only); `--ignored` in release, because the branch has no ignored test.
+  - A self-review by a subagent: nothing blocking. Its points are taken: finiteness, z²
+    underflow, and the documented start order and ranges.
+  - No machine runs. Nothing pending.
+- Decisions: D2 applied (A). Question for sign-off: the own `Complex<T>` or
+  `num-complex`.
+- Laplace: not touched. `lib.rs` declares two new modules and a re-export.
+- Follow-ups:
+  - CH1.2c, the coaxial coefficients, uses `radial` for its start column and its
+    projection.
+  - A real-arithmetic jₙ for real k (S3 §7: j costs 3–5 times h), measured when the leaf
+    operators need it.
