@@ -196,6 +196,11 @@ runner's FFTW and RLST's own tests with `fftw_system`) on pull requests that cha
 `tools/fftw/` and by hand; the same probe records each machine's FFTW in its
 `tools/*/machine.md` (tools/fftw/README.md).
 
+A workflow `roadmap-issues` mirrors the milestones of `docs/helmholtz/roadmap.md` as
+GitHub issues, one per milestone, on every push to `main` that changes the roadmap
+(`tools/roadmap/sync_issues.py --apply`, tools/roadmap/README.md). The roadmap is the
+source of truth; edits made in the issues are overwritten.
+
 nd-fmm-kernels is a workspace member, not a default member: the default and
 `--workspace` checks build it without a backend. For a change to it, also run
 

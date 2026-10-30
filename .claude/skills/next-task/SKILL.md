@@ -174,7 +174,9 @@ Commit as `Helmholtz <ID>: roadmap and progress`.
 `git push -u origin <branch>`. Write `target/pr-<id>.md` (ignored by git): the title
 `Helmholtz <ID>: <title>`; a summary; the acceptance items, each with the test or run behind
 it, ticked; the checks with their commands and results; the pending runs; the questions for
-sign-off, numbered; the effect on Laplace; the files and crates touched.
+sign-off, numbered; the effect on Laplace; the files and crates touched; and a last line
+`Part of #<n>`, the milestone's issue (`python3 tools/roadmap/sync_issues.py --issue-of
+<ID>`; tools/roadmap/README.md), which ticks the task when the PR is merged.
 `gh pr create --base main --title "…" --body-file target/pr-<id>.md`, with `--draft` while a
 run is pending or a sign-off or open question blocks. An existing PR is updated with
 `gh pr edit <n> --body-file …`.

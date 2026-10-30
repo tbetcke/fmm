@@ -43,4 +43,6 @@ Ask the user to sign off the gate and the proposed corrections. On their answer,
 branch `tbetcke/h-<milestone>-gate`: tick the gate line; record the sign-offs in the
 decision table in the user's words; apply the signed-off corrections to the proposal with a
 line in its Appendix A; update the roadmap's status line; append a progress entry. Commit as
-`Helmholtz <milestone>: gate`, push, and open the PR.
+`Helmholtz <milestone>: gate`, push, and open the PR, its text ending with `Part of #<n>`,
+the milestone's issue (`python3 tools/roadmap/sync_issues.py --issue-of <milestone>`); the
+issue closes when the PR is merged (tools/roadmap/README.md).

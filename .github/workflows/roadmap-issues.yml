@@ -1,0 +1,38 @@
+name: 🗺️ roadmap-issues
+
+# Mirrors the milestones of docs/helmholtz/roadmap.md as GitHub issues, one per milestone
+# (tools/roadmap/README.md): creates them, ticks their tasks, links the merged task PRs,
+# and closes an issue when its milestone's gate is ticked. Runs on the pushes to `main`
+# that change the roadmap or the script, so a task's box ticks when its PR lands.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - docs/helmholtz/roadmap.md
+      - tools/roadmap/**
+      - .github/workflows/roadmap-issues.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: roadmap-issues
+  cancel-in-progress: false
+
+jobs:
+  roadmap-issues:
+    name: roadmap-issues
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Sync the milestone issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/roadmap/sync_issues.py --apply
