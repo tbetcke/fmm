@@ -234,8 +234,8 @@ family, checked against FMM3D's fixtures.
   after CH0.6 and off the priority list (the user, 2026-10-30, "Defer to CH1.3d"). The
   tasks that need CH1.3's operators (CH2.0, CH3.0) need CH1.3a–c; CH1.3 is done, and
   H1.G runnable, when all four are:
-- [ ] **CH1.3a Direct-sum oracle.** `nd_fmm_ref::helmholtz` (P2P and the direct sum),
-  tests `fmm-ref/tests/helmholtz/`: the potential and gradient of e^{ikr}/r for real,
+- [x] **CH1.3a Direct-sum oracle.** `nd_fmm_ref::helmholtz::p2p` (P2P and the direct
+  sum), tests `fmm-ref/tests/helmholtz/`: the potential and gradient of e^{ikr}/r for real,
   complex and imaginary k and real and complex charges, coincident pairs excluded (§3.15,
   "Kernel and factors"), and Yukawa's real kernel e^{−κr}/r for real charges. *Done
   when:* the direct sum against CH1.4's fixtures to round-off; the k → 0 limit against
