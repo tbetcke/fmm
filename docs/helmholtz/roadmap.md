@@ -49,7 +49,7 @@ take turns, never overlap.
 2. CH0.7 S7: truncation under realistic geometry
 3. CH1.1 CONVENTIONS §3.15 (needs **D5**; *Sign-off:* §3.15)
 4. CH1.2 `nd-fmm-math` (needs **D2**): CH1.2a, CH1.2b, CH1.2c
-5. CH1.3 `nd-fmm-ref`
+5. CH1.3 `nd-fmm-ref`: CH1.3a, CH1.3b, CH1.3c (CH1.3d after CH0.6, off the list)
 6. CH2.0 Laplace's real host drivers made generic (*Machines:* locust, Kathleen)
 7. CH2.4 Yukawa P2P in `nd-fmm-simd`, the loop skeleton (*Machines:* locust, Kathleen)
 8. CH3.0 Builder: the leaf rule and complex densities (needs **D1**)
@@ -60,10 +60,10 @@ take turns, never overlap.
 13. CH3.6 Gate: RCR on every level against FMM3D (*Machines:* Kathleen)
 
 Off the list until CH3.6 is done, in file order afterwards: CH0.6, CH0.8b, CH0.9, CH0.4,
-CH0.5 and H0.G; CHR.3 and HR.G; H1.G; CH2.1, CH2.2, CH2.3, CH2.5 and H2.G; CH3.2 and H3.G;
-H6, H4, H5, H7, H8. CH3.6 times the FMM with CH3.4's vectorised kernel as the Helmholtz
-operator's P2P: CH3.4 puts it there if CH3.1 is merged first (as ordered), else CH3.1 uses
-it.
+CH0.5 and H0.G; CHR.3 and HR.G; CH1.3d and H1.G; CH2.1, CH2.2, CH2.3, CH2.5 and H2.G;
+CH3.2 and H3.G; H6, H4, H5, H7, H8. CH3.6 times the FMM with CH3.4's vectorised kernel as
+the Helmholtz operator's P2P: CH3.4 puts it there if CH3.1 is merged first (as ordered),
+else CH3.1 uses it.
 
 ## Decisions
 
@@ -225,10 +225,38 @@ family, checked against FMM3D's fixtures.
   Re(k) a > 40 (S2, S7). *Done when:* against an mpmath fixture (S2's); the M2M and L2L
   coefficients real for real k; i^{n−n′} (E|F) real for Yukawa; the symmetries; the
   rectangular truncation a block of the square table. *Needs:* CH1.2a, CH1.2b.
-- [ ] **CH1.3 `nd-fmm-ref`.** Direct-sum oracle, reference operators, direct and RCR
+- CH1.3 `nd-fmm-ref`. Direct-sum oracle, reference operators, direct and RCR
   translations, the diagonal form in extended precision. *Done when:* addition theorems; the
   k → 0 limit with the tolerances of §9; Yukawa two ways; the direct sum against CH1.4's
-  fixtures to round-off. *Needs:* CH1.2, CH1.4.
+  fixtures to round-off. *Needs:* CH1.2, CH1.4. Split on 2026-10-30 into four sub-tasks,
+  each one reviewable PR. The diagonal form waits for its signatures, which §3.15 reserves
+  until CH0.6 fixes them, and no acceptance item of CH1.3 tests it: CH1.3d is deferred
+  after CH0.6 and off the priority list (the user, 2026-10-30, "Defer to CH1.3d"). The
+  tasks that need CH1.3's operators (CH2.0, CH3.0) need CH1.3a–c; CH1.3 is done, and
+  H1.G runnable, when all four are:
+- [ ] **CH1.3a Direct-sum oracle.** `nd_fmm_ref::helmholtz` (P2P and the direct sum),
+  tests `fmm-ref/tests/helmholtz/`: the potential and gradient of e^{ikr}/r for real,
+  complex and imaginary k and real and complex charges, coincident pairs excluded (§3.15,
+  "Kernel and factors"), and Yukawa's real kernel e^{−κr}/r for real charges. *Done when:* the direct sum against CH1.4's fixtures to round-off; the k → 0
+  limit against Laplace's direct sum with the tolerances of §9 (relative to |k| r); Yukawa
+  two ways (the real kernel against the complex one at k = iκ). *Needs:* CH1.4.
+- [ ] **CH1.3b Leaf operators.** P2M, L2P, P2L and M2P in the stored form of §3.15 (the
+  level's scale and damping), with gradients, for complex expansions and Yukawa's real
+  ones. *Done when:* the series (P2M → M2P, P2L → L2P) against CH1.3a's direct sum within
+  the truncation; the k → 0 limit against Laplace's leaf operators under the diagonal map
+  of §3.4 with the tolerances of §9; Yukawa two ways; every applied exponent non-positive
+  (finite at large Im(k) a). *Needs:* CH1.2, CH1.3a.
+- [ ] **CH1.3c Translations.** M2M, L2L and M2L, direct (projection on a sphere by
+  quadrature, from the leaf operators' fields) and RCR (`orthonormal` rotations and the
+  `coaxial` tables), with rectangular degrees, for complex expansions and Yukawa's real
+  ones. *Done when:* the addition theorems (P2M → M2M → M2P, P2L → L2L → L2P and
+  P2M → M2L → L2P against the direct sum within the truncation; RCR against direct to
+  round-off); the k → 0 limit against Laplace's translations with the tolerances of §9;
+  Yukawa two ways. *Needs:* CH1.3b.
+- [ ] **CH1.3d The diagonal form in extended precision.** The S → F, diagonal and F → R
+  chain of §5.4 on the signatures CH0.6 fixes, its transfer functions in extended
+  precision, as the reference of CH4.x. *Done when:* against CH1.3c's RCR on the same
+  class within the bound E of §3.6. *Needs:* CH0.6, CH1.3c.
 - [ ] **H1.G Gate.** `/milestone-gate H1`. *Needs:* every task above.
 
 ## H2: Yukawa on the host
@@ -239,7 +267,7 @@ family, checked against FMM3D's fixtures.
   Rotation, Batched (§6.2). *Done when:* constraint 1 of §2: no new dispatch below the level
   call, layouts and tables unchanged, Laplace bit for bit, its benchmarks within noise on the
   three machines; the PR states how p reaches Laplace's inner loops. Else dropped, and Yukawa
-  gets copies. *Needs:* CH1.3, CHR.2, D9. *Machines:* locust, Kathleen.
+  gets copies. *Needs:* CH1.3a–c, CHR.2, D9. *Machines:* locust, Kathleen.
 - [ ] **CH2.4 Yukawa P2P in `nd-fmm-simd`.** On a loop skeleton shared with Laplace if
   constraint 1 holds. *Done when:* an accuracy contract like simd-p2p.md's; cost per pair
   against Laplace; Laplace's P2P bit for bit and at least 90 % of the spike (C3S.4).
@@ -269,7 +297,7 @@ at any kD.
 - [ ] **CH3.0 Builder: the leaf rule and complex densities.** *Done when:* no leaf wider than
   c_leaf λ on W1–W4; if `nd-octree` gains a maximum leaf width, Laplace's trees and outputs
   bit for bit; complex charges in and split potentials and gradients out (§3.15 item 9), one
-  complex expansion per complex vector. *Needs:* CH1.3, D1, D11.
+  complex expansion per complex vector. *Needs:* CH1.3a–c, D1, D11.
 - [ ] **CH3.5 The shared drivers extended to complex expansions.** Two planes, real shifts
   for real k, the epilogue. *Done when:* constraint 1 as in CH2.0; else the complex operator
   gets its own drivers. *Needs:* CH2.0. *Machines:* locust, Kathleen.
