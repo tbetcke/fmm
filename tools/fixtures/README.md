@@ -18,6 +18,7 @@ scripts below.
 | `check_3_15.py` | high-precision check of the identities of the Helmholtz family, CONVENTIONS §3.15 (Helmholtz CH1.1); writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
 | `check_p2p_domain.py` | exact check of the coincident-pair rule and the domain of r² of fast P2P kernels, CONVENTIONS §3.13 "Fast kernels"; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned, through `check_leaf_geometry.py`) |
 | `gen_helmholtz_radial.py` | writes `fmm-math/fixtures/helmholtz_radial.json`: the scaled radial functions ĵₙ, ĥₙ, îₙ, k̂ₙ and their derivatives on every operator's range, spike S3's sets (CONVENTIONS §3.15; Helmholtz CH1.2b) | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
+| `gen_helmholtz_coaxial.py` | writes `fmm-math/fixtures/helmholtz_coaxial.json`: sampled entries of the coaxial coefficients (R|R) = (S|S) and (S|R) in the stored normalisation, spike S2's sets (CONVENTIONS §3.15; Helmholtz CH1.2c) | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
 
 All scripts declare their dependencies inline (PEP 723), so with
 [uv](https://docs.astral.sh/uv/) no environment needs to be set up. Run them from the
@@ -127,6 +128,24 @@ closed forms, the relations at z = ix and the Wronskians. z and s are decimal st
 doubles; the values plain JSON numbers, 0 below 10⁻³⁰⁰. Regenerate it when
 `CONVENTION_VERSION` changes or the generator changes (bump its `GENERATOR_VERSION`).
 `nd-fmm-math`'s `tests/radial/fixtures.rs` reads it.
+
+The Helmholtz coaxial fixture (CH1.2c) regenerates byte-identically, in about four
+minutes:
+
+```sh
+uv run tools/fixtures/gen_helmholtz_coaxial.py
+uv run tools/fixtures/gen_helmholtz_coaxial.py --check
+```
+
+It holds spike S2's 120 sets (21,809 entries; spikes/coaxial/SPIKE_REPORT.md §3), value
+for value those of `spikes/coaxial/fixtures/reference.json`: k a from 0.01 to 300, real,
+complex (Im k = 0.1 Re k and Im k = Re k) and imaginary k, p from proposal §3.5 at
+ε = 10⁻¹⁰ (and 10⁻³ for real k), per configuration M2M at the child shift and M2L at
+d = 2 and √27 box widths. Each coefficient comes from the Gaunt sum at two precisions 50
+digits apart, which must agree to 10⁻²⁵, after a check of the addition theorems at n ≤ 6
+(5·10⁻⁴⁹). The values carry §3.15's stored normalisation; each set records k (for a = 1),
+t, a, z = k t and s. Regenerate it when `CONVENTION_VERSION` changes or the generator
+changes (bump its `GENERATOR_VERSION`). `nd-fmm-math`'s `tests/coaxial/` reads it.
 
 ## What the fixtures contain
 
