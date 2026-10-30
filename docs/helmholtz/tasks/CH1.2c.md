@@ -82,7 +82,7 @@ inner-sphere projection tested for the rest (S7, signed off 2026-10-29).
   each set's k, t, a and kind as fields, so the tests need not parse names) writes
   `fmm-math/fixtures/helmholtz_coaxial.json`; `tools/fixtures/README.md`.
 - Report: `fmm-validate/results/helmholtz-ch1-2c.md` (the L2L measurement, the threshold
-  sweep, times per table).
+  sweep, times per table), with the times from `fmm-math/examples/coaxial_time.rs`.
 
 No Laplace module changes; no table format; no convention; no dependency.
 
@@ -164,4 +164,15 @@ None.
 
 ## Open questions
 
-None yet.
+Both are in the report (`fmm-validate/results/helmholtz-ch1-2c.md` §5) and in the PR;
+neither blocks the acceptance, and the code follows the signed-off rule.
+
+1. One shift table for M2M and L2L above the threshold. Test 8 shows the outer
+   projection computed in M2M's orientation and read reversed within 6.8e-13 of the
+   inner projection in L2L's weights, at every k a from 40 to 300 and every kind of k.
+   S7's failure came from projecting in L2L's orientation. Recommended: allow it (one
+   build, half the shift memory), amending §3.15's generator text; the alternative is the
+   signed-off rule, which the code implements.
+2. §3.15 calls the (S|R) projection "on an outer sphere"; S2's is on the target box's
+   sphere ρ = a < t. Recommended: correct the wording when §3.15 next changes; no version
+   bump.

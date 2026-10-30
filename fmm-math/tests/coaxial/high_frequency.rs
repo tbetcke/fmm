@@ -122,6 +122,9 @@ fn recursion_is_stable_at_the_threshold() {
 /// the recursion, the outer projection (computed in M2M's orientation, read reversed) and
 /// the inner projection (computed in L2L's), against each other over whole tables in the
 /// shift weights read as L2L, and the inner projection against itself with 60 more nodes.
+/// The two projections are independent and must agree within the bound everywhere; the
+/// recursion must agree with the inner projection where S2 found it stable (k a ≤ 40,
+/// and Im k = Re k and Yukawa throughout).
 #[test]
 #[ignore = "release mode: tables to p = 371 by projection"]
 fn l2l_tables_above_the_threshold() {
@@ -151,15 +154,21 @@ fn l2l_tables_above_the_threshold() {
             let d = |a: &CoaxialTable<f64>, b: &CoaxialTable<f64>| {
                 table_difference(a, b, &parent, &child)
             };
+            let (rec_outer, rec_inner) = (d(&rec, &outer), d(&rec, &inner));
+            let (outer_inner, nodes_inner) = (d(&outer, &inner), d(&more, &inner));
             println!(
-                "{name:<11} {ka:>5} {:>4}->{:<4} {:>11.2e} {:>11.2e} {:>11.2e} {:>11.2e}",
-                pp,
-                pc,
-                d(&rec, &outer),
-                d(&rec, &inner),
-                d(&outer, &inner),
-                d(&more, &inner)
+                "{name:<11} {ka:>5} {pp:>4}->{pc:<4} {rec_outer:>11.2e} {rec_inner:>11.2e} \
+                 {outer_inner:>11.2e} {nodes_inner:>11.2e}"
             );
+            let what = format!("{name} ka={ka}");
+            assert!(
+                outer_inner <= WEIGHTED,
+                "{what}: outer-inner {outer_inner:.2e}"
+            );
+            assert!(nodes_inner <= WEIGHTED, "{what}: nodes {nodes_inner:.2e}");
+            if ka <= 40.0 || name == "complex1" || name == "imaginary" {
+                assert!(rec_inner <= WEIGHTED, "{what}: rec-inner {rec_inner:.2e}");
+            }
         }
     }
 }

@@ -26,14 +26,18 @@ fn waves(singular: bool, k: Complex<f64>, n_max: usize, x: [f64; 3]) -> Vec<Comp
     let mut y = vec![0.0; layout.len()];
     harmonics(n_max, x, &mut y);
     let mut out = vec![Complex::zero(); layout.len()];
-    for n in 0..=n_max {
+    for (n, fn_) in f.iter().enumerate() {
         for m in -(n as isize)..=n as isize {
             let i = layout.idx(n, m);
-            out[i] = f[n] * (undo * y[i]);
+            out[i] = *fn_ * (undo * y[i]);
         }
     }
     out
 }
+
+/// One case of the addition theorems: its name, whether F and G are singular, the table,
+/// the factor that undoes its stored normalisation, and |r|/t.
+type Case<'a> = (&'a str, bool, bool, &'a CoaxialTable<f64>, f64, f64);
 
 /// Test 2 (with the symmetries of test 5): Fₙᵐ(r ± t ẑ) = Σ_{n′} (±1)^{n+n′} Eᵐ_{n′n}(t)
 /// G_{n′}ᵐ(r) for every slot of n ≤ 6, n′ summed to 46, at three points each with
@@ -57,7 +61,7 @@ fn tables_satisfy_the_addition_theorems() {
         let regular = CoaxialTable::regular(z, n_out, n_in);
         let singular = CoaxialTable::singular_regular(z, 1.0, n_out, n_in);
         // name, F singular, G singular, the table, its unscaling, |r|/t
-        let cases: [(&str, bool, bool, &CoaxialTable<f64>, f64, f64); 3] = [
+        let cases: [Case; 3] = [
             ("RR", false, false, &regular, z.im.exp(), 0.7),
             ("SR", true, false, &singular, (-z.im).exp(), 0.12),
             ("SS", true, true, &regular, z.im.exp(), 8.0),
@@ -71,7 +75,7 @@ fn tables_satisfy_the_addition_theorems() {
                     let basis = waves(f_in, k, n_in, x);
                     for n in 0..=n_out {
                         for slot in -(n as isize)..=n as isize {
-                            let m = slot.unsigned_abs() as usize;
+                            let m = slot.unsigned_abs();
                             let mut sum = Complex::<f64>::zero();
                             let mut largest = 0.0f64;
                             for n1 in m..=n_in {
