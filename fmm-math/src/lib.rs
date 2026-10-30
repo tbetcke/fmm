@@ -41,9 +41,12 @@
 //!   (§3.15).
 //! - [`radial`]: the scaled spherical Bessel, Hankel and modified spherical Bessel
 //!   functions of the Helmholtz family (§3.15).
+//! - [`coaxial`]: the coaxial translation coefficients (R|R) = (S|S) and (S|R) of the
+//!   Helmholtz family (§3.15), by recursion and by projection.
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 
+pub mod coaxial;
 pub mod harmonics;
 mod layout;
 pub mod orthonormal;

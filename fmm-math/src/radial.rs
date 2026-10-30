@@ -396,7 +396,7 @@ fn j0_j1<T: RealScalar>(z: Complex<T>) -> (Complex<T>, Complex<T>) {
 /// `num-complex`'s division forms |b|², and its extra rounding raises the error of the
 /// recursions (the Wronskian at |z| = 800 and n = 784 from 5.6e-14 to 1.0e-13).
 #[inline]
-fn div<T: RealScalar>(a: Complex<T>, b: Complex<T>) -> Complex<T> {
+pub(crate) fn div<T: RealScalar>(a: Complex<T>, b: Complex<T>) -> Complex<T> {
     if b.re.abs() >= b.im.abs() {
         let r = b.im / b.re;
         let d = b.re + b.im * r;
