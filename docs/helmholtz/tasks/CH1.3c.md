@@ -46,7 +46,7 @@ change, no convention change.
   form: ĥₙ for a multipole (4π ik ĥₙ(kρ) e^{β′ − Im(k)ρ}), and for a local the least
   squares from the value and ρ times the radial derivative (jₙ has zeros); Yukawa divides by
   k̂ₙ and îₙ. The node count is fixed by the degrees and |k| times the geometry
-  (p_in + p_out + ⌈|k|(ρ + |t|)⌉ + 40, adjusted if the tests need more). General frames:
+  (Q = p_in + p_out + ⌈|k| ρ⌉ + 40 rings, 2Q azimuths). General frames:
   M2M and L2L need the input's sphere inside the parent's (|t| + a_child ≤ a_parent), M2L
   needs the spheres apart (|t| ≥ a_src + a_tgt); asserted.
 - `src/helmholtz/rcr.rs` (new, public): `m2m`, `l2l`, `m2l` and `_yukawa` forms, by
@@ -82,9 +82,14 @@ and its children of 0.25.
    - P2M → M2L → L2P between two boxes of one level at |t| = 5a in a general direction;
    - |k| a_P ∈ {0.5, 5, 30}, every kind: at p₀ ≤ 1e-12, at a lower pₜ above 1e-7, falling
      between (as CH1.3b's series).
-2. **RCR against direct** (`translation_direct.rs`), the output fields compared (FMM-weighted,
-   as CH1.2c): multipoles by M2P at |v| = (4 − √3) r (the nearest V-list points),
-   locals by L2P in the box and on its sphere, relative ℓ2 within 1e-12:
+2. **RCR against direct** (`translation_direct.rs`), FMM-weighted as CH1.2c: per degree the
+   coefficient difference weighted by |fₙ(kR)| where the output is evaluated (a multipole
+   at the nearest V-list points R = (4 − √3) r, a local on its sphere R = a), within 1e-12
+   relative to the larger of the output's and the input's weighted size, and for real k
+   relative to the output's alone. (Changed during the task from a comparison of fields:
+   under strong damping an unconverged output's terms cancel, and a damped M2L's output is
+   e^{−Im(k)(|t| − 2a)} times its input, so a field or output-relative measure reports the
+   cancellation, not the operators; see "Open questions".)
    - M2M over the 8 children, L2L over the 8 children, M2L over offsets that include the
      nearest (2, 0, 0)w, the axis ±z (θ = 0, π), (3, 3, 3)w and four general ones; all 316
      offsets in a release-ignored test;
@@ -99,11 +104,13 @@ and its children of 0.25.
    (multipoles k̂ⁿ 3^{−n/2} …, locals …/r per level): mapped Laplace coefficients through the
    Helmholtz translation against Laplace's `rotation::{m2m, l2l, m2l}`, per degree relative
    to the input's mapped magnitudes, at |k| a = 1e-2, 1e-4, 1e-6, every kind and Yukawa's
-   real path: within c (|k| a)² for real k's real parts and c |k| a otherwise (§9), c from
-   the Taylor remainders and stated in the test; every error falls with its power of k.
+   real path: within |k| d for every path and (|k| d)² for real k's real parts (§9), d the
+   translation's size (a_P, or |t| + a for the M2L), plus round-off (1e-14 RCR, 1e-11 for
+   the projection, whose high-degree local coefficients carry amplified rounding at low
+   frequency); every error falls with its power of k.
 6. **Yukawa two ways** (`translation_yukawa.rs`): the complex RCR and direct at k = iκ
    against the real ones on real-charge inputs, κ a ∈ {0.5, 5, 50, 300}: M̂ = iⁿ M̂^Y,
-   L̂ = i^{−n} L̂^Y, within 1e-13 relative per degree (bit for bit where the operations
+   L̂ = i^{−n} L̂^Y, within 1e-13 in the FMM-weighted norm (bit for bit where the operations
    coincide, reported).
 7. **Strong damping**: RCR at Im(k) a = 1000: every output finite.
 8. **f32**: RCR at p = 8, s = 1 against f64 within 1e-5.
@@ -141,4 +148,11 @@ None.
 
 ## Open questions
 
-None.
+None blocking. Findings for the PR:
+
+- Under strong damping RCR's M2L output loses relative accuracy (about 1e-10 relative to
+  itself at κ a = 30 and |t| = 3w, where e^{−Im(k)(|t| − 2a)} ≈ 1e-19): the coaxial sum
+  Σₙ Ê_{n′n} M̂ₙ cancels. Both table generators (recursion and projection) agree with each
+  other there, so the tables are not the cause. Relative to the input it stays at
+  round-off, and §5.5's pruning removes such contributions; worth remembering for CH2.3's
+  θ_D.
