@@ -1,4 +1,4 @@
-//! Argument checks: every length mismatch and a non-finite wavenumber panic.
+//! Argument checks: each kind of length mismatch and a non-finite wavenumber panic.
 
 use nd_fmm_ref::helmholtz::p2p;
 
@@ -38,6 +38,19 @@ fn direct_sum_charges_length() {
 fn direct_sum_gradient_length() {
     let mut g: [[C; 3]; 0] = [];
     p2p::direct_sum(K, &X, &ONE, &X, &mut [C::new(0.0, 0.0)], Some(&mut g));
+}
+
+#[test]
+#[should_panic(expected = "`targets` and `potential`")]
+fn direct_sum_potential_length() {
+    p2p::direct_sum(K, &X, &ONE, &X, &mut [], None);
+}
+
+#[test]
+#[should_panic(expected = "`targets` and `gradient`")]
+fn yukawa_gradient_length() {
+    let mut g = [[0.0; 3]; 2];
+    p2p::p2p_yukawa(1.0, &X, &[1.0], &X, &mut [0.0], Some(&mut g));
 }
 
 #[test]

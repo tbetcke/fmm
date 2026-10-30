@@ -69,7 +69,7 @@ fn p2p_agrees_with_direct_sum() {
 
 #[test]
 fn f32_agrees_with_f64() {
-    // |k| r ≤ 10 on these points; the f32 inputs are rounded first and the f64 sum takes
+    // |k| r ≤ 10.4 on these points; the f32 inputs are rounded first and the f64 sum takes
     // the rounded values.
     let s = set(0x3a_1002, 100);
     let r32 = |x: &[[f64; 3]]| -> Vec<[f32; 3]> { x.iter().map(|p| p.map(|c| c as f32)).collect() };

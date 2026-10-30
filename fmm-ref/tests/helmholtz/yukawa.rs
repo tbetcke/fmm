@@ -2,8 +2,9 @@
 //! `p2p_yukawa` and `direct_sum_yukawa` against the complex kernel at k = iκ.
 //!
 //! Error measure: bit identity. At k = iκ the complex term performs the real term's
-//! operations, with exact zeros in the imaginary parts, so the two agree bit for bit;
-//! complex charges are the two real charge vectors of §3.15 ("Storage").
+//! operations plus additions and subtractions of exact zeros (the imaginary parts of e and
+//! of ikr − 1), so from outputs starting at +0 the two agree bit for bit; real charges
+//! directly, and complex charges as the two real charge vectors of §3.15 ("Storage").
 
 use nd_fmm_math::{Complex, RealScalar};
 use nd_fmm_ref::helmholtz::p2p;
@@ -96,8 +97,28 @@ fn two_ways<T: RealScalar>(seed: u64) {
         );
         let (re, re_g) = real(kappa, &s, |q| q.re, false);
         let (im, im_g) = real(kappa, &s, |q| q.im, false);
+        // Real charges (Im q = 0): the complex path's real part is the Yukawa path.
+        let real_charges: Vec<Complex<T>> = s
+            .charges
+            .iter()
+            .map(|q| Complex::new(q.re, T::zero()))
+            .collect();
+        let mut potential_real = vec![zero; n];
+        let mut gradient_real = vec![[zero; 3]; n];
+        p2p::p2p(
+            Complex::new(T::zero(), kappa),
+            &s.sources,
+            &real_charges,
+            &s.targets,
+            &mut potential_real,
+            Some(&mut gradient_real),
+        );
         for i in 0..n {
             let at = || format!("κ = {}, target {i}", kappa.to_f64());
+            assert_eq!(bits(potential_real[i].re), bits(re[i]), "{}", at());
+            for c in 0..3 {
+                assert_eq!(bits(gradient_real[i][c].re), bits(re_g[i][c]), "{}", at());
+            }
             assert_eq!(bits(potential[i].re), bits(re[i]), "{}", at());
             assert_eq!(bits(potential[i].im), bits(im[i]), "{}", at());
             for c in 0..3 {

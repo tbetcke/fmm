@@ -19,7 +19,8 @@ CH1.3c add the Helmholtz leaf operators and translations under `helmholtz`.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
-  Translations implement §3.11; leaf operators implement §3.6 and §3.7.
+  Translations implement §3.11; leaf operators implement §3.6 and §3.7. The Helmholtz
+  family (`helmholtz`) implements §3.15.
 - Coefficients are always the scaled ones of §3.7. Operators take the input and output
   `Frame` (centre, radius) explicitly, never a bare shift vector.
 - Every operator accumulates (+=) into its output. No 1/(4π) anywhere (§3.1).

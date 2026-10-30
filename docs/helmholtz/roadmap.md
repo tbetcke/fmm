@@ -237,9 +237,10 @@ family, checked against FMM3D's fixtures.
 - [ ] **CH1.3a Direct-sum oracle.** `nd_fmm_ref::helmholtz` (P2P and the direct sum),
   tests `fmm-ref/tests/helmholtz/`: the potential and gradient of e^{ikr}/r for real,
   complex and imaginary k and real and complex charges, coincident pairs excluded (§3.15,
-  "Kernel and factors"), and Yukawa's real kernel e^{−κr}/r for real charges. *Done when:* the direct sum against CH1.4's fixtures to round-off; the k → 0
-  limit against Laplace's direct sum with the tolerances of §9 (relative to |k| r); Yukawa
-  two ways (the real kernel against the complex one at k = iκ). *Needs:* CH1.4.
+  "Kernel and factors"), and Yukawa's real kernel e^{−κr}/r for real charges. *Done
+  when:* the direct sum against CH1.4's fixtures to round-off; the k → 0 limit against
+  Laplace's direct sum with the tolerances of §9 (relative to |k| r); Yukawa two ways
+  (the real kernel against the complex one at k = iκ). *Needs:* CH1.4.
 - [ ] **CH1.3b Leaf operators.** P2M, L2P, P2L and M2P in the stored form of §3.15 (the
   level's scale and damping), with gradients, for complex expansions and Yukawa's real
   ones. *Done when:* the series (P2M → M2P, P2L → L2P) against CH1.3a's direct sum within

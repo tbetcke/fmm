@@ -3,9 +3,10 @@
 //!
 //! Error measure: per target, relative to Laplace's term magnitudes Σⱼ |qⱼ|/rⱼ (potential)
 //! and Σⱼ |qⱼ|/rⱼ² (gradient), and for Im φ̃/k relative to Σⱼ |qⱼ|. The bounds are the
-//! Taylor remainders, with w = ikr and |w| ≤ 1:
+//! Taylor remainders, with w = ikr, Re w = −Im(k) r ≤ 0 and |w| ≤ 1:
 //!
-//! - every kind of k: |e^w − 1| ≤ |w| (1 + |w|), so |φ̃ − φ_L| ≤ |k| r_max (1 + |k| r_max);
+//! - every kind of k: |e^w − 1| ≤ |w|, so |φ̃ − φ_L| ≤ |k| r_max; the first-order term
+//!   pinned, |e^w − 1 − w| ≤ |w|²/2, so |φ̃ − φ_L − ik Σq| ≤ (|k| r_max)²/2;
 //!   |(w − 1) e^w + 1| ≤ |w|², so |∇φ̃ − ∇φ_L| ≤ (|k| r_max)²;
 //! - real k (the tolerances of §9, (k a)² for real parts and k a for the imaginary part
 //!   of degree 0): 1 − cos x ≤ x²/2, so |Re φ̃ − φ_L| ≤ (k r_max)²/2; |sin x/x − 1| ≤ x²/6,
@@ -129,10 +130,15 @@ fn every_kind_tends_to_laplace() {
         for (kind, k) in kinds(m) {
             let (potential, gradient) = helmholtz_sum(k, &p);
             let mut worst = Worst::default();
+            let mut worst_second = Worst::default();
             let mut worst_gradient = Worst::default();
+            let ik = C::new(0.0, 1.0) * k;
             for i in 0..p.targets.len() {
                 let e = (potential[i] - r.potential[i]).norm() / r.magnitude[i];
                 worst.record(e, || format!("target {i}"));
+                let first = ik * r.charge_sum[i];
+                let e = (potential[i] - r.potential[i] - first).norm() / r.magnitude[i];
+                worst_second.record(e, || format!("target {i}"));
                 let e = (0..3)
                     .map(|c| (gradient[i][c] - r.gradient[i][c]).norm_sqr())
                     .sum::<f64>()
@@ -140,9 +146,10 @@ fn every_kind_tends_to_laplace() {
                     / r.magnitude_gradient[i];
                 worst_gradient.record(e, || format!("target {i}"));
             }
-            worst.check(
-                x * (1.0 + x) + ROUND_OFF,
-                &format!("{kind} |k| = {m:e}: potential"),
+            worst.check(x + ROUND_OFF, &format!("{kind} |k| = {m:e}: potential"));
+            worst_second.check(
+                x * x / 2.0 + ROUND_OFF,
+                &format!("{kind} |k| = {m:e}: potential less ik Σq"),
             );
             worst_gradient.check(x * x + ROUND_OFF, &format!("{kind} |k| = {m:e}: gradient"));
         }

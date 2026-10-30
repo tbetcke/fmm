@@ -25,9 +25,11 @@
 //! ```
 //!
 //! and the Yukawa term is the same with Re k = 0 and Im k = κ in real arithmetic. At
-//! k = iκ the complex term performs exactly the operations of the Yukawa term on each
-//! part of the charge (its imaginary parts are exact zeros), so the two agree bit for
-//! bit; at k = 0 the potential is Laplace's q / r bit for bit. The phase Re(k) r is
+//! k = iκ the imaginary parts of e and of ikr − 1 are exact zeros, so the complex term
+//! performs the Yukawa term's operations on each part of the charge plus additions and
+//! subtractions of exact zeros: from outputs that start at +0 the two agree bit for bit
+//! (a zero term may differ in its sign, which an accumulator at −0 could keep). At k = 0
+//! the potential is Laplace's q / r bit for bit. The phase Re(k) r is
 //! rounded once, so a term carries a relative error of order |k| r times the unit
 //! roundoff.
 //!
@@ -311,10 +313,15 @@ pub fn direct_sum_yukawa(
 /// The pair quantities of one target and source: d = x − y, r, r² r, and the complex
 /// e = e^{ikr} and ikr − 1.
 struct Term<T> {
+    /// d = x − y.
     d: [T; 3],
+    /// r = |d|.
     r: T,
+    /// r² r.
     r3: T,
+    /// e^{ikr} = e^{−Im(k) r} (cos(Re(k) r) + i sin(Re(k) r)).
     e: Complex<T>,
+    /// ikr − 1 = (−Im(k) r − 1) + i Re(k) r.
     factor: Complex<T>,
 }
 
@@ -355,10 +362,15 @@ impl<T: RealScalar> Term<T> {
 
 /// The real pair quantities of the Yukawa kernel: [`Term`] at Re k = 0, Im k = κ.
 struct YukawaTerm<T> {
+    /// d = x − y.
     d: [T; 3],
+    /// r = |d|.
     r: T,
+    /// r² r.
     r3: T,
+    /// e^{−κr}.
     e: T,
+    /// −(κr) − 1.
     factor: T,
 }
 
@@ -415,6 +427,7 @@ impl ComplexSum {
     }
 }
 
+/// Panics unless both parts of k are finite.
 fn check_k<T: RealScalar>(k: Complex<T>) {
     assert!(
         k.re.is_finite() && k.im.is_finite(),
@@ -422,10 +435,12 @@ fn check_k<T: RealScalar>(k: Complex<T>) {
     );
 }
 
+/// Panics unless κ is finite.
 fn check_kappa<T: RealScalar>(kappa: T) {
     assert!(kappa.is_finite(), "Yukawa P2P needs a finite wavenumber κ");
 }
 
+/// Panics unless the sources match the charges and the targets match each output.
 fn check_lengths<T>(
     sources: &[[T; 3]],
     charges: usize,

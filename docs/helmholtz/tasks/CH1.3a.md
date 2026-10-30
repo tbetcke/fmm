@@ -74,20 +74,22 @@ CH1.3b's and CH1.3c's.
 2. **k → 0** (`limit.rs`), against Laplace's `p2p::direct_sum` on seeded points in the
    unit cube, at |k| = 1e-2, 1e-4, 1e-6 for real, complex (arg π/4) and imaginary k, per
    target relative to the term magnitudes Σ|q|/r (potential) and Σ|q|/r² (gradient):
-   - every kind: |φ̃ − φ_L| ≤ |k| r_max, |∇φ̃ − ∇φ_L| ≤ (|k| r_max)², plus 1e-14;
+   - every kind (Im k ≥ 0, so Re(ikr) ≤ 0): |φ̃ − φ_L| ≤ |k| r_max; the first-order term
+     pinned, |φ̃ − φ_L − ik Σq| ≤ (|k| r_max)²/2; |∇φ̃ − ∇φ_L| ≤ (|k| r_max)², plus 1e-14;
    - real k (§9 item 3): |Re φ̃ − φ_L| ≤ (k r_max)²/2, |Im φ̃/k − Σq| ≤ (k r_max)²/6
      relative to Σ|q|, |Im ∇φ̃| ≤ (k r_max)³/3, plus round-off;
    - k = 0: the potential equal to Laplace's bit for bit, the gradient within 1e-15.
 3. **Yukawa two ways** (`yukawa.rs`): `p2p_yukawa` against `p2p` at k = iκ, real charges
-   (and complex charges as two real vectors), κ = 0.5, 25, 300: bit for bit, f64 and
-   f32; `direct_sum_yukawa` against `direct_sum` likewise.
+   directly, and complex charges as two real vectors, κ = 0.5, 25, 300: bit for bit,
+   f64 and f32; `direct_sum_yukawa` against `direct_sum` likewise (complex charges).
 4. **Properties** (`properties.rs`): `p2p` against `direct_sum` within 1e-14 of the term
    magnitudes; f32 `p2p` against f64 within 1e-5 at |k| r ≤ 10; accumulation (+=);
    coincident pairs skipped (targets = sources, a duplicated source); reciprocity
    (φ̃ at x from a unit charge at y equals φ̃ at y from x, bit for bit); the gradient
    against central differences of the potential (relative 1e-7); linearity in the charges;
    empty inputs.
-5. **Panics** (`panics.rs`): each length mismatch; a non-finite k or κ.
+5. **Panics** (`panics.rs`): each kind of length mismatch (the four functions share one
+   check); a non-finite k or κ.
 
 ## Checks
 
@@ -111,7 +113,8 @@ None.
   10× margin over the M3 Max (memory "glibc test bounds"); the bit-for-bit tests compare
   two paths on one machine only.
 - Risk: the phase Re(k) r is rounded once, a relative error of order |k| r ε in the term;
-  at the fixture's k r ≤ 43 this is ≤ 1e-14, so the fixture bound holds.
+  at the fixture's |k| r ≤ 58 (r ≤ 2.29, |k| ≤ 25.1) this is about 6e-15, within the
+  fixture bounds.
 
 ## Pending runs
 
