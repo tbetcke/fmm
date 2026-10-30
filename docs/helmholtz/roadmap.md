@@ -27,6 +27,9 @@ Status: **not started (2026-10-26).** First: D0 and D9, then CHR.2 and CHR.4.
   task in the order of this file, as before.
 - A task too big for one reviewable PR is split here into lettered sub-tasks (CH3.1a,
   CH3.1b), each with its own *Done when* and *Needs*, before it starts.
+- Each milestone is mirrored as a GitHub issue (labels `enhancement`, `helmholtz`), ticked
+  and closed from this file on every push to `main` (tools/roadmap/README.md). Change this
+  file, never the issues; a task's PR ends with `Part of #<n>`, its milestone's issue.
 - *Machines* names the machines its runs need besides the M3 Max. *Sign-off* marks a task
   whose PR ends with questions for the user; the tasks that need it wait for the answer.
 
