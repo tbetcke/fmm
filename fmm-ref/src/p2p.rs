@@ -404,7 +404,7 @@ impl<T: RealScalar> Term<T> {
 
 /// Neumaier's compensated sum: a running sum and the rounding errors lost from it.
 #[derive(Clone, Copy, Default)]
-struct Neumaier {
+pub(crate) struct Neumaier {
     /// The running floating-point sum.
     sum: f64,
     /// The accumulated rounding errors of the additions into `sum`.
@@ -415,7 +415,7 @@ impl Neumaier {
     /// Adds `term`, recording the rounding error of the addition exactly (Fast2Sum on
     /// the larger and the smaller summand).
     #[inline]
-    fn add(&mut self, term: f64) {
+    pub(crate) fn add(&mut self, term: f64) {
         let t = self.sum + term;
         if self.sum.abs() >= term.abs() {
             self.compensation += (self.sum - t) + term;
@@ -427,7 +427,7 @@ impl Neumaier {
 
     /// The compensated sum.
     #[inline]
-    fn value(&self) -> f64 {
+    pub(crate) fn value(&self) -> f64 {
         self.sum + self.compensation
     }
 }
@@ -448,7 +448,7 @@ fn check_lengths<T>(
 }
 
 /// Panics unless the paired slices `a` and `b` have the same length.
-fn check_pair(a: usize, b: usize, name_a: &str, name_b: &str) {
+pub(crate) fn check_pair(a: usize, b: usize, name_a: &str, name_b: &str) {
     assert_eq!(
         a, b,
         "`{name_a}` and `{name_b}` must have the same length, got {a} and {b}"

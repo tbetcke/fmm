@@ -55,12 +55,16 @@
 //!   [`direct`].
 //! - [`p2p`]: the near-field operator P2P and the f64 direct-sum oracle (§3.1), with
 //!   gradients and self-interaction excluded, for charges and for dipoles (Phase 6 T8).
+//! - [`helmholtz`]: the reference operators of the Helmholtz family (§3.15), from
+//!   Helmholtz CH1.3: P2P and the direct-sum oracle for real, complex and imaginary k
+//!   and Yukawa's real kernel (CH1.3a).
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 //! [`RealScalar`]: nd_fmm_math::RealScalar
 
 pub mod direct;
 mod frame;
+pub mod helmholtz;
 pub mod leaf;
 pub mod p2p;
 pub mod rotation;

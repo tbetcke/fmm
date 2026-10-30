@@ -10,6 +10,12 @@ Phase 6 T8 (C6.4): the dipole operators `leaf::{p2m_dipoles, p2l_dipoles}`,
 `p2p::{p2p_dipoles, direct_sum_dipoles}` (CONVENTIONS §3.7, "Dipole sources"), checked in
 `tests/dipoles/` against `fixtures/dipoles.json` (tools/fixtures/gen_dipoles.py) and
 central differences of the charge operators.
+Helmholtz CH1.3a: `helmholtz::p2p::{p2p, direct_sum, p2p_yukawa, direct_sum_yukawa}`, the
+Helmholtz-family P2P and direct-sum oracle (CONVENTIONS §3.15, e^{ikr}/r for complex k and
+complex charges, Yukawa's e^{−κr}/r for real charges), checked in `tests/helmholtz/`
+against `fixtures/helmholtz_fmm3d.json` (FMM3D's `h3ddirectcg`, Helmholtz CH1.4), Laplace's
+`p2p::direct_sum` as k → 0, and the complex kernel at k = iκ (bit for bit). CH1.3b and
+CH1.3c add the Helmholtz leaf operators and translations under `helmholtz`.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -31,8 +37,9 @@ central differences of the charge operators.
   and `cargo test -p nd-fmm-ref` must pass.
 
 ## Allowed dependencies
-nd-fmm-math, num-traits; dev-dependencies: proptest, approx, serde_json (the dipole
-fixture, Phase 6 T8).
+nd-fmm-math (with its re-exported `Complex` for the Helmholtz family), num-traits;
+dev-dependencies: proptest, approx, serde_json (the dipole fixture, Phase 6 T8, and the
+Helmholtz fixture, CH1.3a).
 No MPI, no octree, no CubeCL, and no dependency on nd-fmm-validate (not even as a
 dev-dependency). Anything else needs a note in the PR.
 
@@ -40,4 +47,6 @@ dev-dependency). Anything else needs a note in the PR.
 Exact 1/|x − y| and its gradient; the truncated Legendre series for same-degree checks;
 exactness identities (M2M after P2M equals P2M at the parent, L2L exact on local
 polynomials, composition); `direct` checks `rotation`; `direct_sum` checks every chain
-within its truncation bound.
+within its truncation bound. Helmholtz: FMM3D's direct sum (the fixture, itself checked
+at 30 digits), Laplace's operators in the limit k → 0 with the tolerances of proposal §9,
+and the Yukawa real path against the complex one at k = iκ.

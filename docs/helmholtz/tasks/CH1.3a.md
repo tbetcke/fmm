@@ -57,7 +57,7 @@ CH1.3b's and CH1.3c's.
     non-finite k.
   - Charges and outputs as `Complex` slices, not split planes: this is the oracle,
     clarity over speed; §3.15's split planes are the operators' storage (CH1.3b on).
-- Neumaier shared with `p2p.rs` (moved to a private module, unchanged).
+- `p2p.rs`'s `Neumaier` and `check_pair` become `pub(crate)` to be shared, unchanged.
 - `lib.rs` documentation, `fmm-ref/CLAUDE.md` (purpose, fixture, oracle), README if it
   lists the modules.
 
@@ -67,9 +67,10 @@ CH1.3b's and CH1.3c's.
 
 1. **Fixtures** (`fixtures.rs`): `direct_sum` and `p2p` against all 12 cases of
    `helmholtz_fmm3d.json` (times 4π), potential and gradient at the 200 sources and 40
-   targets: relative ℓ2 per case and quantity ≤ 1e-14, and per point relative to the sum
-   of term magnitudes ≤ 1e-14 (the fixture is within 1.0e-15 of the exact kernel; 10×
-   margin for glibc). The header's `convention_version` is checked.
+   targets: relative ℓ2 per case and quantity ≤ 1e-14 (the fixture is within 1.0e-15 of
+   the exact kernel; 10× margin for glibc), and per point relative to the sum of term
+   magnitudes ≤ 5e-14 (the fixture's own error in this measure is up to 2.7e-15 at
+   k = 25i; measured 4.6e-15, so 10×). The header's `convention_version` is checked.
 2. **k → 0** (`limit.rs`), against Laplace's `p2p::direct_sum` on seeded points in the
    unit cube, at |k| = 1e-2, 1e-4, 1e-6 for real, complex (arg π/4) and imaginary k, per
    target relative to the term magnitudes Σ|q|/r (potential) and Σ|q|/r² (gradient):
@@ -101,8 +102,9 @@ None.
 
 ## Constraints and risks
 
-- Constraint 1: no Laplace path changes; Laplace's `p2p.rs` only loses `Neumaier` to a
-  private module, unchanged, so its outputs are bit for bit the same (its tests run).
+- Constraint 1: no Laplace path changes; in Laplace's `p2p.rs` only the visibility of
+  `Neumaier` and `check_pair` changes (`pub(crate)`), so its outputs are bit for bit the
+  same (its tests run).
 - Constraint 6: this is the trusted path later fast P2P kernels (CH2.4, CH3.4) are
   tested against.
 - Risk: glibc's sin, cos and exp differ from macOS's in the last bit, so tolerances keep a
