@@ -623,3 +623,64 @@ request, using this template:
     seeded cubes only, so H1.G should not count item 1 as shown yet.
   - `fmm-ref/Cargo.toml` and README still describe the crate as Laplace's only; worth a
     one-line change with the next manifest edit.
+
+## 2026-10-30: CH1.3b Leaf operators
+- Done:
+  - `nd_fmm_ref::helmholtz::leaf`, generic over `T`: `p2m`, `p2l`, `l2p` and `m2p` for any
+    k and complex charges (one complex expansion as two real planes, §3.15 "Storage"), and
+    `p2m_yukawa`, `p2l_yukawa`, `l2p_yukawa` and `m2p_yukawa` for k = iκ and real charges
+    (M̂ᵞ = i⁻ⁿ M̂, L̂ᵞ = iⁿ L̂). All accumulate, with gradients, in §3.15's stored form: the
+    scaled radial functions of `radial`, the factor 4π ik (4πκ) on P2L and M2P, and only
+    non-positive exponents.
+  - Gradients are the radial derivative plus `harmonics_derivatives`' tangential terms, in
+    the same frame (φ = 0 on the axis). L2P at the box centre takes the limit k/(3s) for
+    n = 1.
+  - `helmholtz::Level`: k with the level's a = √3 r, s = min(|k| a, 1) and β = Im(k) a;
+    it rejects k outside §3.15's range.
+  - `helmholtz::Workspace`: the operators' scratch.
+  - For real k and real charges, `p2m` leaves the imaginary plane exactly zero, which is
+    §3.15's real multipole.
+- Tests: `fmm-ref/tests/helmholtz/leaf_*.rs` and `panics.rs`. All f64 unless stated.
+  - Series, P2M → M2P and P2L → L2P against `direct_sum`, relative ℓ2:
+    - every kind of k at |k| a = 0.5, 5 and 30, and Im(k) a = 100 (and about 70) at
+      |k| a = 100;
+    - sources and targets include the box corners, the centre and the ±z-axis;
+    - at round-off at p₀ (worst 4.2e-14, bound 1e-12);
+    - truncated (above 1e-7) at a lower pₜ, and falling in between.
+  - Closed forms of degrees 0 and 1 (j₀, j₁, h₀, h₁) at s < 1 and s = 1, Im(k) a to 50:
+    1.5e-14 (bound 1e-12). They pin the scale, the damping and 4π ik.
+  - k → 0 against Laplace's `p2m`, `p2l`, `m2p` and `l2p` under the diagonal map of proposal
+    §3.4, written out in `leaf_limit.rs`:
+    - at |k| a = 10⁻², 10⁻⁴ and 10⁻⁶, every kind and Yukawa's real path;
+    - bounds from the Taylor remainders: (|k| a)² for real parts, |k| a for the damping and
+      for degree 0's imaginary part;
+    - worst error over bound 0.54.
+  - Yukawa two ways, κ a = 0.5 to 300: the coefficients and potentials agree bit for bit,
+    the gradients within 3.3e-17 (bound 1e-13). For real charges the complex path's
+    imaginary parts are exactly 0.
+  - Strong damping, Im(k) a = 1000, where e^β overflows: every output finite.
+  - f32 at p = 8: 5.4e-7.
+  - 16 panic tests.
+- Checks:
+  - Ran `/verify` on the M3 Max:
+    - format; Clippy default, examples and workspace all-targets; `cargo doc`
+      (`nd-fmm-ref` with `-D warnings`);
+    - the default tests (951 passed) and workspace tests (1030 passed).
+  - After the self-review fixes (tests and docs only), re-ran the format check, workspace
+    Clippy, `nd-fmm-ref`'s tests (222) and its strict docs.
+  - Not run: the MPI tests (no code an MPI crate runs changed); the licence check (no
+    manifest changed).
+  - A self-review by a subagent: nothing blocking. Taken:
+    - targets on the ±z-axis (the gradient frame's poles);
+    - the real-charge check of the Yukawa path;
+    - two doc corrections, and the plan aligned with the tests.
+  - No machine runs. Nothing pending.
+- Decisions: none. No question for sign-off.
+- Laplace: not touched (new modules under `helmholtz`; `lib.rs` documentation only).
+- Follow-ups:
+  - CH1.3c, the translations (direct and RCR), takes `Level` and `Workspace` from here and
+    tests against these operators' series.
+  - Not in CH1.3b, for the drivers' tasks: the several-vector (`_many`) forms, and a
+    real-only P2M for real k with real charges (here it is `p2m`'s real plane).
+  - The strong-damping test checks finiteness only. Correct damping is shown by the closed
+    forms (Im(k) a ≤ 50) and the series (≤ 100).

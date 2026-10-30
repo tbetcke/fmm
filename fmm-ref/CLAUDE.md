@@ -14,15 +14,21 @@ Helmholtz CH1.3a: `helmholtz::p2p::{p2p, direct_sum, p2p_yukawa, direct_sum_yuka
 Helmholtz-family P2P and direct-sum oracle (CONVENTIONS §3.15, e^{ikr}/r for complex k and
 complex charges, Yukawa's e^{−κr}/r for real charges), checked in `tests/helmholtz/`
 against `fixtures/helmholtz_fmm3d.json` (FMM3D's `h3ddirectcg`, Helmholtz CH1.4), Laplace's
-`p2p::direct_sum` as k → 0, and the complex kernel at k = iκ (bit for bit). CH1.3b and
-CH1.3c add the Helmholtz leaf operators and translations under `helmholtz`.
+`p2p::direct_sum` as k → 0, and the complex kernel at k = iκ (bit for bit).
+Helmholtz CH1.3b: `helmholtz::{Level, Workspace}` and `helmholtz::leaf::{p2m, p2l, l2p, m2p}`
+(complex k, complex charges, two real planes per expansion) and their `_yukawa` forms
+(k = iκ, real charges, real expansions), in the stored form of §3.15 (the level's power
+scale and damping), checked in `tests/helmholtz/leaf_*.rs` against the direct sum, closed
+forms, Laplace's leaf operators under the diagonal map of proposal §3.4, and the complex
+operators at k = iκ. CH1.3c adds the translations under `helmholtz`.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
   Translations implement §3.11; leaf operators implement §3.6 and §3.7. The Helmholtz
   family (`helmholtz`) implements §3.15.
-- Coefficients are always the scaled ones of §3.7. Operators take the input and output
-  `Frame` (centre, radius) explicitly, never a bare shift vector.
+- Coefficients are always the scaled ones of §3.7 (the stored ones of §3.15 for
+  `helmholtz`, whose operators also take the `helmholtz::Level`). Operators take the input
+  and output `Frame` (centre, radius) explicitly, never a bare shift vector.
 - Every operator accumulates (+=) into its output. No 1/(4π) anywhere (§3.1).
 - Generic over T: RealScalar; no allocation in operators: temporaries come from a
   caller-owned `Workspace`.

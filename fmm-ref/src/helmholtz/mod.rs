@@ -18,11 +18,24 @@
 //!
 //! The complex type is [`nd_fmm_math::Complex`]. The oracle takes and returns complex
 //! values per point, for clarity; the operators' storage of §3.15 (two real planes per
-//! complex expansion) belongs to the operators that follow (Helmholtz CH1.3b, CH1.3c).
+//! complex expansion) is that of the expansions' operators ([`leaf`], Helmholtz CH1.3b,
+//! and the translations of CH1.3c).
 //!
 //! ## Contents
 //!
 //! - [`p2p`]: the near-field operator and the f64 direct-sum oracle, for complex k and
 //!   complex charges, and Yukawa's real kernel for real charges (Helmholtz CH1.3a).
+//! - [`Level`]: a level's constants of §3.15 (the circumradius a, the power scale s and the
+//!   damping exponent β) for a wavenumber k, and [`Workspace`], the operators' scratch
+//!   (Helmholtz CH1.3b).
+//! - [`leaf`]: P2M, P2L, L2P and M2P in the stored form of §3.15, with gradients: the
+//!   complex path for any k and complex charges (two real planes per expansion), and
+//!   Yukawa's real path for real charges (Helmholtz CH1.3b).
 
+pub mod leaf;
+mod level;
 pub mod p2p;
+mod workspace;
+
+pub use level::Level;
+pub use workspace::Workspace;
