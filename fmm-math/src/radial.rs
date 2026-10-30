@@ -20,7 +20,7 @@
 //!   rₙ = fₙ/fₙ₋₁ come from the backward recursion, started at the order where the forward
 //!   recursion from the requested length has grown by 10²⁰ (FMM3D's test); then ĵ₀ (or ĵ₁,
 //!   whichever is larger) from its closed form, a power series for |z| < 0.5, and the
-//!   values upward. No pass overflows. The start order is a function of |z| and the
+//!   values upward. No pass overflows. The start order is a function of z and the
 //!   length only, computed in f64 for every `T`.
 //! - [`hankel_h`] and [`modified_k`]: the upward recursion from the closed forms of orders
 //!   0 and 1, the stable direction.
@@ -44,15 +44,15 @@
 //!
 //! `tests/radial/` checks f64 against arbitrary precision (CH1.2b, the sets of S3) on
 //! every operator's range of CONVENTIONS §3.15 at ε down to 10⁻¹⁰ and kD up to 3000:
-//! |z| from 10⁻¹² to 4550, 0 ≤ arg z ≤ π/2, orders to 1481, within 10⁻¹³ (relative, or
+//! |z| from 10⁻¹² (10⁻⁶ for ĥ and k̂) to 4550, 0 ≤ arg z ≤ π/2, orders to 1482, within 10⁻¹³ (relative, or
 //! relative to the oscillation envelope max(|jₙ|, |hₙ|) for jₙ where it has real zeros).
 //! f32 is checked at s = 1, |z| ≤ 20 and n ≤ 8 only (CONVENTIONS §3.15 reserves it).
 //!
 //! # Panics
 //!
 //! Every function panics if s is not in (0, 1] or a derivative slice differs in length
-//! from `values`; [`bessel_j`] and [`hankel_h`] if Im z < 0; [`hankel_h`] at z = 0;
-//! [`modified_i`] if x < 0; [`modified_k`] unless x > 0.
+//! from `values`, or if the argument is not finite; [`bessel_j`] and [`hankel_h`] if
+//! Im z < 0; [`hankel_h`] at z = 0; [`modified_i`] if x < 0; [`modified_k`] unless x > 0.
 
 use crate::{Complex, RealScalar};
 
@@ -109,7 +109,10 @@ pub fn bessel_j<T: RealScalar>(
     derivatives: Option<&mut [Complex<T>]>,
 ) {
     check_scale(s);
-    assert!(z.im >= T::zero(), "bessel_j needs Im z ≥ 0");
+    assert!(
+        z.is_finite() && z.im >= T::zero(),
+        "bessel_j needs a finite z with Im z ≥ 0"
+    );
     check_derivatives(values.len(), &derivatives);
     let len = values.len();
     if len == 0 {
@@ -189,7 +192,10 @@ pub fn hankel_h<T: RealScalar>(
     derivatives: Option<&mut [Complex<T>]>,
 ) {
     check_scale(s);
-    assert!(z.im >= T::zero(), "hankel_h needs Im z ≥ 0");
+    assert!(
+        z.is_finite() && z.im >= T::zero(),
+        "hankel_h needs a finite z with Im z ≥ 0"
+    );
     assert!(z != Complex::zero(), "hankel_h needs z ≠ 0");
     check_derivatives(values.len(), &derivatives);
     let len = values.len();
@@ -199,7 +205,7 @@ pub fn hankel_h<T: RealScalar>(
     // h₀ = −i e^{iz}/z, h₁ = −e^{iz}(z + i)/z², and e^{iz} e^{Im z} = e^{i Re z}.
     let e = Complex::cis(z.re);
     let h0 = -(Complex::i() * e) / z;
-    let h1 = -(e * (z + Complex::i())) / (z * z) * s;
+    let h1 = -(e * (z + Complex::i())) / z / z * s;
     // hₙ₊₁ = (2n + 1)/z hₙ − hₙ₋₁, scaled.
     let (mut a, mut b) = (h0, h1);
     values[0] = h0;
@@ -222,7 +228,10 @@ pub fn hankel_h<T: RealScalar>(
 /// x ≥ 0; x = 0 gives î₀ = 1, î′₁ = 1/(3s) and zeros elsewhere.
 pub fn modified_i<T: RealScalar>(x: T, s: T, values: &mut [T], derivatives: Option<&mut [T]>) {
     check_scale(s);
-    assert!(x >= T::zero(), "modified_i needs x ≥ 0");
+    assert!(
+        x.is_finite() && x >= T::zero(),
+        "modified_i needs a finite x ≥ 0"
+    );
     check_derivatives(values.len(), &derivatives);
     let len = values.len();
     if len == 0 {
@@ -287,7 +296,10 @@ pub fn modified_i<T: RealScalar>(x: T, s: T, values: &mut [T], derivatives: Opti
 /// ```
 pub fn modified_k<T: RealScalar>(x: T, s: T, values: &mut [T], derivatives: Option<&mut [T]>) {
     check_scale(s);
-    assert!(x > T::zero(), "modified_k needs x > 0");
+    assert!(
+        x.is_finite() && x > T::zero(),
+        "modified_k needs a finite x > 0"
+    );
     check_derivatives(values.len(), &derivatives);
     let len = values.len();
     if len == 0 {
@@ -295,7 +307,7 @@ pub fn modified_k<T: RealScalar>(x: T, s: T, values: &mut [T], derivatives: Opti
     }
     // k₀ = e⁻ˣ/x, k₁ = e⁻ˣ(1 + x)/x², kₙ₊₁ = kₙ₋₁ + (2n + 1)/x kₙ.
     let k0 = T::one() / x;
-    let k1 = (T::one() + x) / (x * x) * s;
+    let k1 = (T::one() + x) / x / x * s;
     let (mut a, mut b) = (k0, k1);
     values[0] = k0;
     for (n, v) in values.iter_mut().enumerate().skip(1) {
@@ -375,5 +387,5 @@ fn j0_j1<T: RealScalar>(z: Complex<T>) -> (Complex<T>, Complex<T>) {
     let minus = Complex::cis(-z.re);
     let sin = (plus - minus) / Complex::new(T::zero(), int(2));
     let cos = (plus + minus) * T::from_f64(0.5);
-    (sin / z, sin / (z * z) - cos / z)
+    (sin / z, sin / z / z - cos / z)
 }

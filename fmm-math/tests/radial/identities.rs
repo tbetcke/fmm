@@ -98,7 +98,7 @@ fn close(ours: Complex<f64>, exact: Complex<f64>, bound: f64, what: &str) {
 }
 
 /// Test 3b: k̂₀(x) = 1/x exactly, and orders 0 to 2 against their closed forms with the
-/// factors of §3.15 (at |z| ≥ 1, away from the closed forms' cancellation).
+/// factors of §3.15 (at |z| ≥ 1, away from the closed forms' cancellation at small |z|).
 #[test]
 fn closed_forms() {
     for x in [1e-8, 0.3, 1.0, 7.5, 200.0, 4000.0] {
@@ -137,7 +137,12 @@ fn closed_forms() {
         let (w, _) = evaluate(Family::H, z, s, 2);
         for n in 0..3 {
             let sn = s.powi(n as i32);
-            close(v[n], j[n] * (damp / sn), 1e-14, &format!("ĵ{n}({z:?})"));
+            // jₙ has real zeros: its error is measured against the envelope
+            // max(|jₙ|, |hₙ|), as in the fixture test; the closed form itself cancels
+            // near them.
+            let envelope = j[n].abs().max(h[n].abs()) * damp / sn;
+            let e = (v[n] - j[n] * (damp / sn)).abs() / envelope;
+            assert!(e <= 1e-14, "ĵ{n}({z:?}): {e:e}");
             close(
                 w[n],
                 h[n] * (z.im.exp() * sn),
@@ -325,7 +330,7 @@ fn f32_against_f64() {
     println!("worst f32: {worst:.1e}");
 }
 
-/// Test 8: the panics.
+/// Test 8: the panics (arguments that are not finite would loop in Miller's start test).
 mod panics {
     use super::*;
 
@@ -367,6 +372,23 @@ mod panics {
     #[should_panic(expected = "x ≥ 0")]
     fn i_negative() {
         modified_i(-1.0, 1.0, &mut [0.0; 3], None);
+    }
+
+    #[test]
+    #[should_panic(expected = "finite")]
+    fn infinite_argument() {
+        modified_i(f64::INFINITY, 1.0, &mut [0.0; 3], None);
+    }
+
+    #[test]
+    #[should_panic(expected = "finite")]
+    fn not_a_number() {
+        bessel_j(
+            Complex::new(f64::NAN, 0.0),
+            1.0,
+            &mut [Complex::zero(); 3],
+            None,
+        );
     }
 
     #[test]
