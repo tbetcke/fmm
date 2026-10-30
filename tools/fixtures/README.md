@@ -16,6 +16,7 @@ scripts below.
 | `gen_helmholtz_fmm3d.py` | writes `fmm-ref/fixtures/helmholtz_fmm3d.json`: FMM3D 2.1.0's Helmholtz direct sum (`h3ddirectcg`) for real, complex and imaginary k and real and complex charges, every value checked against the kernel of CONVENTIONS §3.15 in mpmath, with FMM3D's two-point check (Helmholtz CH1.4) | Python ≥ 3.9, `mpmath==1.4.1` (pinned); FMM3D built by `tools/fmm3d/build.sh` (`FMM3D_ROOT`) |
 | `check_3_15.py` | high-precision check of the identities of the Helmholtz family, CONVENTIONS §3.15 (Helmholtz CH1.1); writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
 | `check_p2p_domain.py` | exact check of the coincident-pair rule and the domain of r² of fast P2P kernels, CONVENTIONS §3.13 "Fast kernels"; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned, through `check_leaf_geometry.py`) |
+| `gen_helmholtz_radial.py` | writes `fmm-math/fixtures/helmholtz_radial.json`: the scaled radial functions ĵₙ, ĥₙ, îₙ, k̂ₙ and their derivatives on every operator's range, spike S3's sets (CONVENTIONS §3.15; Helmholtz CH1.2b) | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
 
 All scripts declare their dependencies inline (PEP 723), so with
 [uv](https://docs.astral.sh/uv/) no environment needs to be set up. Run them from the
@@ -87,6 +88,26 @@ convention they identify. FMM3D's sums differ in their last bits between compile
 `--check` compares the values to 10⁻¹³ relative, not the bytes. It also says whether the
 file is byte-identical, which it is on the machine and compiler that wrote it.
 `nd-fmm-ref` reads it from CH1.3 on.
+
+The Helmholtz radial fixture (CH1.2b) regenerates byte-identically, in about two
+minutes:
+
+```sh
+uv run tools/fixtures/gen_helmholtz_radial.py
+uv run tools/fixtures/gen_helmholtz_radial.py --check
+```
+
+It holds spike S3's 571 sets (13,174 rows; spikes/radial/SPIKE_REPORT.md §3), value for
+value those of `spikes/radial/fixtures/reference.json`: ĵₙ, ĥₙ (complex z) and îₙ, k̂ₙ
+(real x) with their derivatives, scaled as in §3.15, on the arguments and orders of every
+operator (P2M and L2P, M2P and P2L, the M2M and M2L start values, the projection) for
+real, complex and imaginary k and for Yukawa, plus 160 random points to |z| = 4550 and
+order 1481. jₙ and iₙ come from mpmath's Bessel functions, hₙ and kₙ from their finite
+sums; every value at 40 and 80 digits, which must agree to 10⁻³⁰, after a check of the
+closed forms, the relations at z = ix and the Wronskians. z and s are decimal strings of
+doubles; the values plain JSON numbers, 0 below 10⁻³⁰⁰. Regenerate it when
+`CONVENTION_VERSION` changes or the generator changes (bump its `GENERATOR_VERSION`).
+`nd-fmm-math`'s `tests/radial/fixtures.rs` reads it.
 
 ## What the fixtures contain
 
