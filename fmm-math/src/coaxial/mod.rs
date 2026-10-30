@@ -59,9 +59,11 @@
 //! [`CoaxialTable::m2l`], [`CoaxialTable::m2m`] and [`CoaxialTable::l2l`] choose by
 //! §3.15's rule: the recursion where Re(k) a ≤ [`RECURSION_LIMIT`] (a the circumradius of
 //! the M2L's level, or of the shift's parent; [`uses_recursion`]), and above it the
-//! projection on S2's spheres: M2L on the target box's sphere ρ = a, M2M on the sphere of
-//! the parent's nearest M2L distance ρ = 2 w_parent = 8t/√3, L2L on the child's sphere
-//! ρ = t (inner, §3.15: "an inner-sphere projection is tested for the rest").
+//! projection on S2's spheres: M2L on the target box's sphere ρ = a, M2M and L2L on the
+//! sphere of the parent's nearest M2L distance ρ = 2 w_parent = 8t/√3, one table computed
+//! in M2M's orientation and read through the index symmetry (signed off 2026-10-30). The
+//! inner projection of (R|R) on the child's sphere ρ = t is the L2L table's independent
+//! check (`tests/coaxial/`, test 8).
 //!
 //! # Tested ranges
 //!
@@ -421,22 +423,16 @@ impl<T: RealScalar> CoaxialTable<T> {
     }
 
     /// The L2L table (R|R) from a parent of degree p_parent to its child of degree
-    /// p_child, at the shift t = a_child, by the rule of §3.15: the recursion at z = k t
-    /// where Re(k) 2t ≤ [`RECURSION_LIMIT`], else the inner projection on the child's
-    /// sphere ρ = t, with max(p_child, p_parent) + 40 + ⌈|k| t⌉ nodes. Unscaled.
+    /// p_child, at the shift t = a_child, by the rule of §3.15: the M2M table of the same
+    /// level pair, [`Self::m2m`], read reversed. Above the threshold that is the outer
+    /// projection computed in M2M's orientation, accurate in L2L's weights too (CH1.2c's
+    /// test 8 against the inner projection). Unscaled.
     ///
     /// # Panics
     ///
-    /// As the generator it uses.
+    /// As [`Self::m2m`].
     pub fn l2l(k: Complex<T>, t: T, p_parent: usize, p_child: usize) -> Self {
-        check_shift(t);
-        if uses_recursion(k, t + t) {
-            check_wavenumber(k, "k");
-            Self::regular(k * t, p_parent, p_child)
-        } else {
-            let nodes = p_child.max(p_parent) + 40 + (k.norm() * t).to_f64().ceil() as usize;
-            Self::projection_regular_inner(k, t, t, p_parent, p_child, nodes)
-        }
+        Self::m2m(k, t, p_child, p_parent).reversed()
     }
 }
 

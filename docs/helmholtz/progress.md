@@ -521,8 +521,8 @@ request, using this template:
       and `projection_regular_inner`, extended to complex k), each filling the triangle
       from the half it computes.
   - §3.15's rule in `m2l`, `m2m` and `l2l` (`uses_recursion`: Re(k) a ≤ 40, a the M2L
-    level's or the shift parent's circumradius), on S2's spheres; L2L uses the inner
-    projection above the threshold, as signed off.
+    level's or the shift parent's circumradius), on S2's spheres; `l2l` reads `m2m`'s
+    table reversed (signed off 2026-10-30, below).
   - Every regular radial column is evaluated to the square table's length (Miller's
     start), so a rectangular table is a block of the square one bit for bit.
   - The fixture `fmm-math/fixtures/helmholtz_coaxial.json` (1.2 MB) from
@@ -556,12 +556,15 @@ request, using this template:
   - A self-review by a subagent: nothing blocking. Its points are taken: the stricter
     reality check, three panic tests, and the plan's API and two report figures corrected.
   - No machine runs. Nothing pending. The timings ran at a load average of about 40.
-- Decisions: none signed off. Questions for sign-off (report §5):
+- Decisions: signed off 2026-10-30, "1 and 2 as recommended" (report §5):
   1. one shift table, the outer projection in M2M's orientation, for M2M and L2L above the
-     threshold;
-  2. §3.15's wording "outer sphere" for the (S|R) projection, which is on an inner sphere.
+     threshold; the inner projection is its check;
+  2. §3.15's generator text corrected: the (S|R) projection is on the target box's
+     (inner) sphere.
+  Both are in CONVENTIONS §3.15's "The generator"; no stored quantity changes, so
+  `CONVENTION_VERSION` stays 3.
 - Laplace: not touched. `lib.rs` declares the new module; `radial::div` became
-  `pub(crate)`.
+  `pub(crate)`; CONVENTIONS changed in §3.15 only.
 - Follow-ups:
   - CH1.3 applies the tables (RCR translations) in `nd-fmm-ref`. CH1.2 is complete with
     this task.

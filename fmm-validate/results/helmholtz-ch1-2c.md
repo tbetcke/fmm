@@ -16,8 +16,9 @@ timings, so the times of §4 are an upper bound.
   generators are S2's recursion (start column from `radial`, triangle closed under both
   recursions) and S2's three projections. `m2l`, `m2m` and `l2l` choose between them by
   §3.15's rule: the recursion where Re(k) a ≤ 40 (a the circumradius of the M2L's level
-  or of the shift's parent), else the projection on S2's spheres. L2L uses the inner
-  projection there, as signed off for S7.
+  or of the shift's parent), else the projection on S2's spheres. Above the threshold `l2l` reads
+  M2M's outer-projection table reversed (question 1 of §5, signed off 2026-10-30); the
+  inner projection is its independent check.
 - **Against S2's mpmath fixture** (120 sets, k a to 300, p to 371, every kind of k), the
   rule's tables meet the FMM-weighted bound 10⁻¹¹ with **6.8·10⁻¹³** at worst
   (Im k = Re k, k a = 300, M2M). The recursion meets it with 8.0·10⁻¹⁵ wherever S2 found it
@@ -136,11 +137,13 @@ One thread, real k, ε = 10⁻¹⁰, best of three
 The times are within S2's §7 (85 ms and 5.1 s for the p = 371 M2L by recursion and
 projection), the projections now computing half a table. Above the threshold the L2L
 inner projection costs about 2.6 times the M2M outer projection, because it has more
-nodes and its least squares double the accumulation. A level above k a = 40 with the
-signed-off rule builds both; with one shared table (question 1) it builds only the outer
-one. The (S|R) table of degree p holds about p³/6 complex values.
+nodes and its least squares double the accumulation. With one shared table (question
+1, signed off) a level above k a = 40 builds only the outer one. The (S|R) table of degree p holds about p³/6 complex values.
 
 ## 5. Questions for sign-off
+
+Both signed off on 2026-10-30, "1 and 2 as recommended": `CoaxialTable::l2l` reads
+`m2m`'s table reversed, and §3.15's generator text is amended (no version bump).
 
 1. **One shift table for M2M and L2L above the threshold.** §3.15 (S7's question 3)
    builds L2L's (R|R) by the recursion where it is stable and tests an inner-sphere
@@ -151,13 +154,13 @@ one. The (S|R) table of degree p holds about p³/6 complex values.
    memory. *Recommended*: allow it, with §3.15's generator text amended to "(R|R) = (S|S)
    by the outer projection, computed in M2M's orientation and read through the index
    symmetry, for both M2M and L2L; the inner projection as the independent check". The
-   code changes only `CoaxialTable::l2l`. *Alternative*: keep the signed-off rule as
-   implemented (the default of this PR).
+   code changes only `CoaxialTable::l2l`. *Alternative*: keep the rule signed off for S7
+   (the inner projection for L2L).
 2. **§3.15's generator text says "the projection on an outer sphere above that, for (S|R)
    and (S|S)"**, but S2's (S|R) projection is on the target box's sphere ρ = a < t, an
    inner sphere. This task implements S2's (S|R) projection. *Recommended*: correct the
-   wording when §3.15 next changes (with question 1, if taken). No stored quantity
-   changes, so `CONVENTION_VERSION` stays.
+   wording together with question 1. No stored quantity changes, so
+   `CONVENTION_VERSION` stays.
 
 ## 6. Files
 

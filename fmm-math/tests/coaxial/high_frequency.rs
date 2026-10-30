@@ -17,7 +17,7 @@ fn outer_nodes(p_child: usize, p_parent: usize) -> usize {
     p_child.max(p_parent) + 40
 }
 
-/// The inner projection's nodes, as [`CoaxialTable::l2l`].
+/// The inner projection's nodes: max(p) + 40 + ⌈|k| t⌉, as S7 for its L2L tables.
 fn inner_nodes(k: Complex<f64>, t: f64, p_child: usize, p_parent: usize) -> usize {
     p_child.max(p_parent) + 40 + (k.norm() * t).ceil() as usize
 }

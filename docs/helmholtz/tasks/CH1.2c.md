@@ -67,9 +67,9 @@ inner-sphere projection tested for the rest (S7, signed off 2026-10-29).
     `m2l(k, t, a, s, p_src, p_tgt)`, `m2m(k, t, p_child, p_parent)` and
     `l2l(k, t, p_parent, p_child)` (t = a_child, the parent's circumradius 2t), with the
     radii of S2 (M2L: ρ = a, the target box; M2M: ρ = 2 w_parent = 8t/√3; L2L: ρ = t, the
-    child's circumradius) and N = max(p) + 40 nodes (+ ⌈|k| t⌉ for L2L). L2L above the
-    threshold uses the inner projection, as signed off; test 8 found the M2M table read
-    reversed accurate too, which is open question 1.
+    child's circumradius) and N = max(p) + 40 nodes (+ ⌈|k| t⌉ for the inner projection).
+    `l2l` is `m2m` reversed (open question 1, signed off 2026-10-30); the inner
+    projection is test 8's independent check.
   - Module documentation: the definitions, the normalisation, the rule, the tested ranges
     (CONVENTIONS §3.15 asks `nd-fmm-math` to state them), and the range of the (S|R)
     start column (s^l hₗ at l = p_src + p_tgt leaves f64 near l ≈ 175 when s = |k| a < 1,
@@ -162,8 +162,9 @@ None.
 
 ## Open questions
 
-Both are in the report (`fmm-validate/results/helmholtz-ch1-2c.md` §5) and in the PR;
-neither blocks the acceptance, and the code follows the signed-off rule.
+Both are in the report (`fmm-validate/results/helmholtz-ch1-2c.md` §5) and in the PR.
+Signed off 2026-10-30: "1 and 2 as recommended". `CoaxialTable::l2l` reads `m2m`'s table
+reversed, and CONVENTIONS §3.15's generator text is amended with both (no version bump).
 
 1. One shift table for M2M and L2L above the threshold. Test 8 shows the outer
    projection computed in M2M's orientation and read reversed within 6.8e-13 of the
