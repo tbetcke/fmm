@@ -1633,11 +1633,15 @@ a_n^m E^m_{n',n+1} = a_{n-1}^m E^m_{n',n-1} - a_{n'}^m E^m_{n'+1,n} + a_{n'-1}^m
   p_src + p_tgt. The exponential factor of the stored normalisation is common to a table
   and passes through the recursions unchanged; the power scale s^{n+n′} is applied per
   entry.
-- **The generator** is the recursion (triangle, index symmetry) where Re(k) a_l ≤ 40,
-  and the projection on an outer sphere above that, for (S|R) and (S|S) only. (R|R) is
-  built by the recursion where it is stable, every table checked in the weights of both
-  directions; an inner-sphere projection is tested for the rest (S7, signed off
-  2026-10-29). The acceptance measure is the FMM-weighted error.
+- **The generator** is the recursion (triangle, index symmetry) where Re(k) a ≤ 40, a
+  the circumradius of the M2L's level or of the shift's parent, and the projection above
+  that: (S|R) on the target box's sphere ρ = a < t (an inner sphere), by least squares
+  from the value and the radial derivative; (S|S) = (R|R) on the outer sphere ρ = 8t/√3
+  (the parent's nearest M2L distance), computed in M2M's orientation (target degree ≥
+  source degree) and read through the index symmetry, one table for M2M and L2L. The
+  inner-sphere projection of (R|R) (ρ = t, computed in L2L's orientation) is its
+  independent check (Helmholtz CH1.2c, signed off 2026-10-30). Every table is checked in
+  the weights of both directions; the acceptance measure is the FMM-weighted error.
 
 ### Signatures
 

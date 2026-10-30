@@ -7,11 +7,15 @@ Helmholtz CH1.2a added `orthonormal` (CONVENTIONS §3.15): the normalised Legend
 functions of spike S1 (telescoped near the poles, an exponent per column), the real
 orthonormal harmonics with ∂θ and (1/sin θ) ∂φ, and the rotation blocks at any degree
 (Gumerov–Duraiswami y-blocks, the π − β signs, z-y-z blocks); its tests are
-`tests/orthonormal/` (degrees above 300 ignored, run in release). CH1.2c adds the coaxial
-coefficients.
+`tests/orthonormal/` (degrees above 300 ignored, run in release).
 Helmholtz CH1.2b added `radial` (CONVENTIONS §3.15): the scaled jₙ, hₙ (complex z), iₙ,
 kₙ (real x) and their derivatives of spike S3, and re-exports `num_complex::Complex` as
 the complex type of the Helmholtz arithmetic; its tests are `tests/radial/`.
+Helmholtz CH1.2c added `coaxial` (CONVENTIONS §3.15): the coaxial coefficients
+(R|R) = (S|S) and (S|R) of spike S2 in a halved table read in both orientations, by the
+recursions and by three projections, chosen by §3.15's rule (the recursion where
+Re(k) a ≤ 40); its tests are `tests/coaxial/` (tables beyond p = 100 ignored, run in
+release).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -31,4 +35,7 @@ CONVENTIONS §3.4 and the rotation properties in §3.8. For `orthonormal`,
 `fixtures/helmholtz_angular.json` (`tools/fixtures/gen_helmholtz_angular.py`), the
 identities of §3.15, and the Laplace harmonics and blocks conjugated by N at p ≤ 30.
 For `radial`, `fixtures/helmholtz_radial.json` (`tools/fixtures/gen_helmholtz_radial.py`,
-spike S3's sets) and the Wronskians and relations of §3.15.
+spike S3's sets) and the Wronskians and relations of §3.15. For `coaxial`,
+`fixtures/helmholtz_coaxial.json` (`tools/fixtures/gen_helmholtz_coaxial.py`, spike S2's
+sets) in S2's FMM-weighted error, the addition theorems pointwise, and independent
+methods against each other over whole tables.
