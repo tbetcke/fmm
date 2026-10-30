@@ -57,7 +57,8 @@
 //!   gradients and self-interaction excluded, for charges and for dipoles (Phase 6 T8).
 //! - [`helmholtz`]: the reference operators of the Helmholtz family (§3.15), from
 //!   Helmholtz CH1.3: P2P and the direct-sum oracle for real, complex and imaginary k
-//!   and Yukawa's real kernel (CH1.3a).
+//!   and Yukawa's real kernel (CH1.3a); the leaf operators P2M, P2L, L2P and M2P in the
+//!   stored form of §3.15, complex and Yukawa's real ones (CH1.3b).
 //!
 //! [conventions]: https://github.com/tbetcke/fmm/blob/main/docs/CONVENTIONS.md
 //! [`RealScalar`]: nd_fmm_math::RealScalar
