@@ -401,3 +401,57 @@ request, using this template:
     "Verification".
   - CH1.3 checks `nd-fmm-ref` against the FMM3D fixtures.
   - Old `-c2-` cache files can be removed on each machine (Kathleen's quota).
+
+## 2026-10-29: CH1.2a Orthonormal harmonics and rotation blocks
+- Done:
+  - CH1.2 split in the roadmap into CH1.2a (S1: harmonics and rotations), CH1.2b (S3:
+    radial functions) and CH1.2c (S2: coaxial coefficients). Each fits one reviewable PR.
+  - `nd_fmm_math::orthonormal`, generic over `T`. It holds:
+    - `legendre`: S1's telescoped recursion, with a binary exponent per column (span
+      2^±256 in f64, 2^±32 in f32), and the column divided by sin θ;
+    - `harmonics` and `harmonics_derivatives`: Y, ∂θ Y and (1/sin θ) ∂φ Y in the layout
+      of §3.6. They need no trigonometric calls; φ = 0 on the axis; ∂θ uses the m-ladder;
+      both derivatives are regular at the poles;
+    - `rotation`: the Gumerov–Duraiswami y-blocks in S1's compact layout, `supplement`
+      (π − β) and `blocks(α, β, γ)` in the layout of `rotation::blocks`.
+  - The fixture `fmm-math/fixtures/helmholtz_angular.json` (514 KB), from
+    `tools/fixtures/gen_helmholtz_angular.py`:
+    - harmonics and derivatives at seven directions to degree 1000, by the plain recursion
+      at 60 and 100 digits;
+    - S1's 54 rotation sets, value for value.
+- Tests: `fmm-math/tests/orthonormal/`, 20 tests (2 of them ignored, run in release).
+  Results in f64:
+  - against the Racah harmonics through N at p = 30: ≤ 1e-13;
+  - the addition formula to n = 300: ≤ 1e-12;
+  - orthonormality by quadrature at n ≤ 30: ≤ 1e-13;
+  - derivatives against differences: ≤ 1e-7;
+  - against the fixture to n = 1000: worst 5.7e-14 for the value, 5.9e-14 for ∂θ, 5.1e-14
+    for ∂φ;
+  - block entries to n = 1000: worst 5.0e-15, as S1;
+  - orthogonality: 4.3e-14 at n = 1000;
+  - against N-conjugated `rotation::blocks` at p ≤ 30, Yₙ(Q x̂) = Oⁿ Yₙ(x̂) at p = 50, the
+    group property, and the π − β rule: all within tolerance;
+  - degree independence, f32 at p ≤ 8, and the panics.
+- Checks:
+  - Ran `/verify` on the M3 Max: format; Clippy default, examples and workspace
+    all-targets; `cargo doc` (`nd-fmm-math` with `-D warnings`).
+  - The default tests (845) and workspace tests (924), all passing.
+  - After the self-review fixes (the exponent loop in `legendre` and tests only), re-ran
+    `nd-fmm-math`'s tests, the ignored ones in release, and workspace Clippy.
+  - The generator's `--check` is byte for byte.
+  - Not run: the MPI tests, because no code an MPI crate uses changed (a new module only).
+  - A self-review by a subagent: nothing blocking. Its points are taken: test 2's scale,
+    the rescale loop, f32 and scratch tests for the blocks, and the plan's tests as run.
+  - No machine runs. Nothing pending.
+- Decisions: D2 applied (A). Signed off 2026-10-30 (PR #136, CI failure): test 2's bound
+  becomes max(1e-13, 2.5e-16 n), "degree-scaled". On Linux x86_64 ∂θ Y at n = 1000 came
+  to 1.10e-13: glibc's `hypot` differs from macOS's in the last bit, and Yₙ's condition
+  number in θ is about n.
+- Laplace: not touched. `lib.rs` declares the new module; no Laplace function changed.
+- Follow-ups:
+  - CH1.2b, the radial functions, and then CH1.2c, the coaxial coefficients, which uses
+    `orthonormal` for the projection.
+  - Performance for the operators (CH3.x): the Legendre step costs a sqrt and three
+    divisions per (n, m), the normalisation a sqrt per entry, the ∂θ ladder 2–3 sqrts,
+    and `row_one` 4 sqrts. Away from the poles the second recursion over sin θ is
+    `current/s`. A table of √ factors per p in the scratch would remove most of this.

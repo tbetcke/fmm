@@ -14,6 +14,7 @@ scripts below.
 | `check_leaf_geometry.py` | exact and high-precision check of the leaf data and relative box geometry of CONVENTIONS §3.13; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
 | `plane_wave_quadrature.sh` | writes `fmm-tables/src/plane_wave/quadrature_data.rs`: FMM3D's plane-wave quadratures for separation 1 (NIST's `lwtsexp_sep1.f` of FMM3D v2.1.0, with its notice; Phase 6 T13, from the spike of T10) | POSIX `sh`, `awk`, `sed`; FMM3D's source (`tools/fmm3d/build.sh fetch`) |
 | `gen_helmholtz_fmm3d.py` | writes `fmm-ref/fixtures/helmholtz_fmm3d.json`: FMM3D 2.1.0's Helmholtz direct sum (`h3ddirectcg`) for real, complex and imaginary k and real and complex charges, every value checked against the kernel of CONVENTIONS §3.15 in mpmath, with FMM3D's two-point check (Helmholtz CH1.4) | Python ≥ 3.9, `mpmath==1.4.1` (pinned); FMM3D built by `tools/fmm3d/build.sh` (`FMM3D_ROOT`) |
+| `gen_helmholtz_angular.py` | writes `fmm-math/fixtures/helmholtz_angular.json`: the real orthonormal harmonics with ∂θ and (1/sin θ) ∂φ, and sampled entries of the y-rotation blocks, to degree 1000 (CONVENTIONS §3.15; Helmholtz CH1.2a) | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
 | `check_3_15.py` | high-precision check of the identities of the Helmholtz family, CONVENTIONS §3.15 (Helmholtz CH1.1); writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned) |
 | `check_p2p_domain.py` | exact check of the coincident-pair rule and the domain of r² of fast P2P kernels, CONVENTIONS §3.13 "Fast kernels"; writes nothing | Python ≥ 3.9, `mpmath==1.4.1` (pinned, through `check_leaf_geometry.py`) |
 
@@ -87,6 +88,24 @@ convention they identify. FMM3D's sums differ in their last bits between compile
 `--check` compares the values to 10⁻¹³ relative, not the bytes. It also says whether the
 file is byte-identical, which it is on the machine and compiler that wrote it.
 `nd-fmm-ref` reads it from CH1.3 on.
+
+The Helmholtz angular fixture (CH1.2a) regenerates byte-identically, in about a minute
+and a half:
+
+```sh
+uv run tools/fixtures/gen_helmholtz_angular.py
+uv run tools/fixtures/gen_helmholtz_angular.py --check
+```
+
+It holds two parts. "harmonics": Yₙᵐ, ∂θ Yₙᵐ and (1/sin θ) ∂φ Yₙᵐ at seven directions
+(generic, both poles, near both poles at θ ≈ 10⁻³, the equator, below it), degrees 0 to
+1000, the orders sampled; P̄ₙᵐ by the plain three-term recursion at 60 and 100 digits,
+which must agree to 10⁻³⁰, the ∂θ ladder checked against mpmath's derivative first.
+"rotation": spike S1's 54 sets of y-rotation block entries (degrees 10 to 1000, six
+polar angles), from Wigner's sum, value for value those of
+`spikes/rotation-blocks/fixtures/reference.json`. Regenerate it when `CONVENTION_VERSION`
+changes or the generator changes (bump its `GENERATOR_VERSION`). `nd-fmm-math`'s
+`tests/orthonormal/fixtures.rs` reads it.
 
 ## What the fixtures contain
 

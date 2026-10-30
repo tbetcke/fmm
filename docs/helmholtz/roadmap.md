@@ -45,7 +45,7 @@ take turns, never overlap.
 1. CH1.4 FMM3D convention check and fixtures (*Machines:* Kathleen)
 2. CH0.7 S7: truncation under realistic geometry
 3. CH1.1 CONVENTIONS §3.15 (needs **D5**; *Sign-off:* §3.15)
-4. CH1.2 `nd-fmm-math` (needs **D2**)
+4. CH1.2 `nd-fmm-math` (needs **D2**): CH1.2a, CH1.2b, CH1.2c
 5. CH1.3 `nd-fmm-ref`
 6. CH2.0 Laplace's real host drivers made generic (*Machines:* locust, Kathleen)
 7. CH2.4 Yukawa P2P in `nd-fmm-simd`, the loop skeleton (*Machines:* locust, Kathleen)
@@ -195,9 +195,29 @@ family, checked against FMM3D's fixtures.
   the check `tools/fixtures/check_3_15.py`. The proposal's Section 4 as a CONVENTIONS
   section and a `CONVENTION_VERSION` bump. *Done when:* signed off by the user after
   CH1.4's two-point check. *Needs:* CH1.4, D5. *Sign-off:* §3.15.
-- [ ] **CH1.2 `nd-fmm-math`.** Real orthonormal harmonics, radial functions (with the Yukawa
+- CH1.2 `nd-fmm-math`. Real orthonormal harmonics, radial functions (with the Yukawa
   scaling), rotation blocks at any degree. *Done when:* the identities of §3.15; the M2M and
-  L2L coefficients real for real k. *Needs:* CH1.1, D2.
+  L2L coefficients real for real k. *Needs:* CH1.1, D2. Split on 2026-10-29 into three
+  sub-tasks, one per spike it ports (S1, S3, S2), each one reviewable PR; CH1.2 is done
+  when all three are:
+- [x] **CH1.2a Orthonormal harmonics and rotation blocks.** `nd_fmm_math::orthonormal`,
+  tests `fmm-math/tests/orthonormal/`, fixture `fmm-math/fixtures/helmholtz_angular.json`:
+  the normalised Legendre functions of S1 (overflow-free, telescoped near the poles), the
+  real orthonormal harmonics of §3.15 and their angular derivatives, the y-rotation blocks
+  by the Gumerov–Duraiswami recursion at any degree, the z-y-z blocks and the π − β signs.
+  *Done when:* §3.15's angular identities (against the Racah harmonics through N at
+  p ≤ 30, the addition formula, orthonormality); the blocks against an mpmath fixture to
+  p = 1000, orthogonal, against N-conjugated `rotation::blocks` at p ≤ 30, and
+  Y(Qx̂) = Oⁿ Y(x̂); the π − β rule. *Needs:* CH1.1, D2.
+- [ ] **CH1.2b Radial functions and scaling.** j_n, h_n for complex z and i_n, k_n for
+  real x, with derivatives and the scaled forms of §3.15 (S3). *Done when:* against an
+  mpmath fixture on every operator's range (S3's), the Wronskians, the relations of
+  §3.15 (k₀, j_n(ix), h_n(ix)). *Needs:* CH1.1, D2.
+- [ ] **CH1.2c Coaxial coefficients.** (R|R), (S|S) and (S|R) of §3.15 by the start
+  column and the recursions (triangle, index symmetry), and by projection where
+  Re(k) a > 40 (S2, S7). *Done when:* against an mpmath fixture (S2's); the M2M and L2L
+  coefficients real for real k; i^{n−n′} (E|F) real for Yukawa; the symmetries; the
+  rectangular truncation a block of the square table. *Needs:* CH1.2a, CH1.2b.
 - [ ] **CH1.3 `nd-fmm-ref`.** Direct-sum oracle, reference operators, direct and RCR
   translations, the diagonal form in extended precision. *Done when:* addition theorems; the
   k → 0 limit with the tolerances of §9; Yukawa two ways; the direct sum against CH1.4's
