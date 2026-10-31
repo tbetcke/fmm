@@ -266,7 +266,8 @@ family, checked against FMM3D's fixtures.
 
 **Gate:** CH2.5, Yukawa against FMM3D (or skipped with its reason).
 
-- [ ] **CH2.0 Laplace's real host drivers made generic over the kernel.** Dense, Classes,
+- [x] **CH2.0 Laplace's real host drivers made generic over the kernel.** Report:
+  `fmm-validate/results/helmholtz-ch2-0.md`; the drivers `nd-fmm-exec/src/driver.rs`. Dense, Classes,
   Rotation, Batched (§6.2). *Done when:* constraint 1 of §2: no new dispatch below the level
   call, layouts and tables unchanged, Laplace bit for bit, its benchmarks within noise on the
   three machines; the PR states how p reaches Laplace's inner loops. Else dropped, and Yukawa

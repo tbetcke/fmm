@@ -759,3 +759,45 @@ request, using this template:
   - CH1.3d (the diagonal form) after CH0.6.
   - CH2.0 and CH3.0 can take the translations as their reference.
   - The drivers' tasks need the several-vector forms.
+
+## 2026-10-31: CH2.0 Laplace's real host drivers made generic over the kernel
+- Done:
+  - The level calls' walking of the views, the threads and scratch sets and the batched
+    M2L's blocks moved from `operator.rs` into `nd-fmm-exec/src/driver.rs`
+    (crate-private), generic over `driver::HostKernel<T>`. Its methods take the level
+    call's level.
+  - Laplace's `Kernels` implements the trait by delegating to its unchanged methods,
+    ignoring the level. `LaplaceOperator` calls the drivers. The plane-wave M2L stays in
+    `operator`.
+  - No public API, table, layout, manifest or convention change.
+  - p reaches Laplace's inner loops at run time, before and after (report §1).
+- Tests: no new test. Laplace is the trait's only implementor, and every existing test
+  runs through it.
+- Checks:
+  - `/verify` on the M3 Max: format; Clippy default, examples, workspace all-targets and
+    `nd-fmm-exec` with `cpu,metal`; the CUDA check; `cargo doc`, also `nd-fmm-exec`'s
+    private items with `-D warnings`.
+  - The default tests (976) and workspace tests (1055).
+  - The MPI list at 2 and 4 ranks; `mpi_exec` at 8 ranks; the ignored release tests of
+    `nd-fmm-exec`. Pending: `multi_rank` at 2, 4 and 8 ranks (report §5).
+  - The full outputs of `main` and the branch identical byte for byte: 18 cases on each
+    of the M3 Max, locust and Kathleen.
+  - D9 on the three machines (report §3):
+    - M3 Max: 12 of 12 within noise.
+    - locust: 11 of 12; f32 p = 3 Batched failed by 0.2 ms and passed on a repeat.
+    - Kathleen (jobs 614707, 614723): 10 of 12. f64 p = 6 Dense and Classes are +5.4 %
+      from code placement: equal to `main` when both are built with
+      `-C llvm-args=-align-loops=64`.
+  - A self-review by a subagent: nothing blocking. Doc corrections taken (the level's
+    meaning, "compile time", the CLAUDE.md rule, the plan as built).
+- Decisions: the user, 2026-10-30, "Proceed as planned" (Laplace the only kernel) and the
+  12 host benchmarks. For sign-off: the two Kathleen rows (recommended: accept), and the
+  repeat of a failing D9 row (report §4).
+- Laplace: unchanged bit for bit (the byte comparison on three machines and the test
+  suite). Benchmarks: within noise except the two Kathleen rows above.
+- Follow-ups:
+  - CH2.1 (Yukawa) or CH3.5/CH3.1 (complex) is the trait's second user, with per-level
+    p_l and tables through the level.
+  - Code placement moves Laplace's times by up to ±5–13 % between builds (Kathleen f64
+    Dense/Classes, M3 Max f32 Classes/Rotation). Later D9 runs may meet it again. An
+    aligned build (`-align-loops=64`) is the tool to tell placement from work.
