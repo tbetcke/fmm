@@ -16,7 +16,10 @@ in docs/design/simd-p2p.md §4.8, tests in `tests/p2p/dipoles.rs`) and C6.5 (tas
 plane-wave kernels, `WaveKernel` with `WaveTables`, bodies in `arch::waves`, tests in
 `tests/waves.rs`). Helmholtz CH2.4a: the exponential e^x for x ≤ 0 (`arch::exp`, the public
 `exp::exp_slice`, tests in `tests/exp`; docs/design/simd-p2p.md §4.9), for the Yukawa P2P of
-CH2.4b.
+CH2.4b. Helmholtz CH2.4b: `P2pKernel::evaluate_yukawa`, the Yukawa P2P e^{−κr}/r, on the P2P
+loop skeleton `arch::p2p::p2p_skeleton` that `evaluate` shares (the pair kernels
+`arch::p2p::{Laplace, Yukawa}`), the scalar path `arch::scalar::p2p_yukawa`; contract in
+docs/design/simd-p2p.md §4.10, tests in `tests/p2p/yukawa.rs`.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -41,6 +44,26 @@ CH2.4b.
   stays in range (CONVENTIONS §3.13, "Range of the terms in f32"). Contract: 32 u_T (φ,
   relative to |d| / r²) and 176 u_T (∇φ per component, relative to |d| / r³), derived in
   docs/design/simd-p2p.md §4.8; measured at most 10.5 u and 33.8 u on NEON over 10⁶ pairs.
+- The P2P skeleton (Helmholtz CH2.4b; proposal §6.2): `arch::p2p::p2p_skeleton` holds the
+  blocks, tails, loads, broadcast, d, r² and stores; a `PairKernel` (a `Copy` type whose
+  `#[inline(always)]` method does everything after r²) is a type parameter. Laplace's is the
+  zero-sized `Laplace`, whose method is `evaluate`'s source loop operation for operation, and
+  `p2p_body` is the skeleton with it. Constraint 1 of the Helmholtz proposal binds every
+  change to the skeleton or to `Laplace`: Laplace's entry points must stay the same
+  instruction for instruction (CH2.4b: every function of the crate identical to `main`'s,
+  aarch64 and x86_64, default and one codegen unit), its bits unchanged and its benchmarks
+  within noise (D9). Nothing per kernel may become a run-time value in the loop.
+- `P2pKernel::evaluate_yukawa` (Helmholtz CH2.4b) keeps the semantics of
+  `nd_fmm_ref::helmholtz::p2p::p2p_yukawa` as `evaluate` keeps `p2p`'s (+=, no 1/(4π),
+  sources in input order, chunk and target-position invariance, r² = 0 skipped; the scalar
+  path bit for bit the reference) and panics unless κ is finite and κ ≥ 0. Its pair kernel
+  forms ρ, r = r² ρ, e = exp((−κ) r) (`arch::exp::exp`), (q e) ρ and, with gradients,
+  ((q e) ρ · fma(κ, r, 1)) (ρ ρ) dₖ; at κ = 0 every step is Laplace's, so the vector kernels
+  then equal `evaluate` bit for bit (tested; keep it so). Contract: (20 + 12 κr) u_T (φ,
+  relative to |q| e^{−κr}/r) and (52 + 12 κr) u_T (∇φ per component, relative to
+  |q| (1 + κr) e^{−κr}/r²) for κr ≤ 64 (f32) or 512 (f64), derived in
+  docs/design/simd-p2p.md §4.10; measured at most 10.2 u at small κr and 3 u per unit of κr
+  beyond, on NEON over 10⁶ pairs. One target vector per block on every ISA (`YUKAWA_K`).
 - `MatrixKernel::accumulate_columns` gives every element of C the chain of
   `MatrixSet::apply` (k ascending, multiply and add rounded apart; `MulAdd::Separate`)
   or one fma per step (`MulAdd::Fused`), from its own row of A and column of B only: the
@@ -117,7 +140,9 @@ CH2.4b.
   and ∇φ, f64 φ, f64 φ and ∇φ (18, 25, 21 and 28 per target vector, against AVX2's 24,
   35, 29 and 42). The exponential's loops (Helmholtz CH2.4a, `…::exp_slice_f32` and `_f64`):
   NEON 27 and 39 (14 and 20 operations, the rest moves), AVX2 23 and 33, AVX-512 23 and
-  29. From the repository root:
+  29. The Yukawa P2P source loops (Helmholtz CH2.4b, K = 1; whole blocks, then the tail),
+  f32 φ, f32 φ and ∇φ, f64 φ, f64 φ and ∇φ: NEON 40/40, 61/50, 52/52, 78/65; AVX2 49/49,
+  78/64, 71/68, 87/84; AVX-512 37/37, 48/46, 46/46, 58/56. From the repository root:
 
   ```sh
   # Build the release test binaries; cargo prints their paths ("Executable ...").
@@ -153,7 +178,9 @@ nd-fmm-validate (not even as a dev-dependency). Anything else needs asking first
 
 ## Test oracle
 `nd_fmm_ref::p2p::p2p` for terms and semantics (the scalar path equals it bit for bit
-wherever r² ≠ 0) and `nd_fmm_ref::p2p::direct_sum` for sums; `1/√x` in f64 (f32 inputs)
+wherever r² ≠ 0) and `nd_fmm_ref::p2p::direct_sum` for sums (for Yukawa
+`nd_fmm_ref::helmholtz::p2p::{p2p_yukawa, direct_sum_yukawa}`, and `evaluate` itself at
+κ = 0); `1/√x` in f64 (f32 inputs)
 or double-double (f64 inputs) for the inverse square root; the kernel's own results for
 chunk and target-position invariance and determinism. For `MatrixKernel` the matrix–vector
 loop of `MatrixSet::apply`, restated in `tests/matrix.rs` (this crate cannot depend on
