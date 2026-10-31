@@ -186,9 +186,18 @@ plan's "Results" (the printed table); no separate report.
   They hold no point; CH3.1 must give them no expansion work (no P2M, L2P, P2P, and M2P,
   P2L only where they hold points) and keep them out of any high-frequency leaf path.
 
+## Checks run
+
+`/verify` on the M6, 2026-10-31: format; Clippy default, examples and workspace
+all-targets; `cargo test` (1,034 passed) and `cargo test --workspace` (1,115 passed);
+`cargo doc`; `cargo deny --locked check licenses` (ok); `cargo tree -e normal` (no
+fftw-sys); `.github/scripts/run-mpi-tests.sh` at 2 and 4 ranks (22 of 22 passed);
+`tests/helmholtz_leaves.rs` at 2 ranks by hand; the ignored sweep in release; the
+spike's `tests/ported_workloads.rs`. Not run: locust and Kathleen (none planned).
+
 ## Pending runs
 
-None planned.
+None.
 
 ## Open questions
 
