@@ -4,7 +4,7 @@
 //!
 //! | [`Isa`] | f32 | f64 | bound, relative |
 //! | --- | --- | --- | --- |
-//! | every ISA | Cody–Waite reduction, Taylor degree 7 | Cody–Waite reduction, Taylor degree 13 | 3.2 u_T, derived |
+//! | every ISA | Cody–Waite reduction, Taylor degree 7 | Cody–Waite reduction, Taylor degree 13 | 3.3 u_T, derived |
 //!
 //! One formulation for every ISA, written once over the vector layer from operations that
 //! each ISA rounds as IEEE 754 does (multiplications and additions fused or not, a

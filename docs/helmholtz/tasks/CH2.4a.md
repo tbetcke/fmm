@@ -85,13 +85,15 @@ All on every ISA the machine offers (`common::isas`, printing those it cannot ru
 - **Contract, f32:** every f32 in [x_min, 0] (about 1.1 · 10⁹ values; `#[ignore]`,
   release) against `f64::exp` of the same value rounded to f32's error measure, within
   4 u₃₂ relative; the debug run a strided subset.
-- **Contract, f64:** 10⁷ seeded samples, uniform in x over [x_min, 0] and log-uniform in
-  |x| over [2⁻⁶⁰, 1] (`#[ignore]`, release; 10⁵ in debug), against a double-double
-  reference in the test (the exact reduction n ln 2 in double-double and a Taylor series in
-  double-double), within 4 u₆₄ relative.
-- **Special values:** ±0 → exactly 1; x_min and its neighbours; x below x_min, −∞ → in
-  [0, 2^e_min], not NaN; the reduction's boundaries (x = (n + ½) ln 2 for n near 0 and
-  near the domain end).
+- **Contract, f64:** 10⁷ seeded samples, half uniform in x over [x_min, 0] and half
+  −2^t with t uniform in [−200, log₂ |x_min|) (`#[ignore]`, release; 10⁵ in debug), against
+  a double-double reference in the test (the exact reduction n ln 2 in double-double and a
+  Taylor series in double-double, compared with y 2⁻ⁿ before scaling), within 4 u₆₄
+  relative. The oracle itself is checked against 90-digit values and `f64::exp`
+  (`f64_oracle`).
+- **Special values:** ±0 → exactly 1; x_min and its neighbours; x below x_min, −∞ → the
+  value at x_min, positive and at most 2^(e_min + 2); the reduction's boundaries
+  (x = (n + ½) ln 2 for every n of the domain) and their neighbours.
 - **Invariance:** the result of each value the same at every position and slice length,
   bit for bit (as `tests/rsqrt/invariance.rs`).
 - **Layer:** `max` and `scale_pow2` on every ISA equal the scalar layer bit for bit.
@@ -142,12 +144,34 @@ All on every ISA the machine offers (`common::isas`, printing those it cannot ru
   sides all 69 existing aarch64 functions are identical to `main`'s. x86_64 (AVX2, AVX-512):
   all 124 existing functions identical at the default settings. Since `Auto` runs the
   plane-wave M2L for Laplace at f64 p ≥ 7 and f32 p ≥ 8, the `sums` step is timed on the
-  M3 Max, `main` against the branch (D9's protocol), below.
+  M3 Max, `main` against the branch (D9's protocol): f32 p = 8 `sums` failed once (+6.1 %)
+  and passed on the one repeat (+3.6 %); every other row passes (report §4).
+- **The f64 oracle** (self-review). `exp_dd` first scaled its low part by 2ⁿ, which is
+  subnormal near x_min and cost the oracle up to half a unit there: the first measurement,
+  1.519 u₆₄ at x = −707.43, was the oracle's. It now returns e^r and n, and the error is
+  taken on y 2⁻ⁿ (exact): 1.228 u₆₄.
+
+## Checks run
+
+- M3 Max, `/verify`: `cargo fmt --all -- --check`, `cargo clippy -- -D warnings`,
+  `cargo clippy --examples -- -D warnings`, `cargo test` (989 passed), `cargo doc --no-deps`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (1,068
+  passed), `nd-fmm-simd`'s Clippy native and `--target x86_64-apple-darwin`, its tests (125)
+  and its ignored release tests (11): all passed. The MPI list at 2 and 4 ranks
+  (`run-mpi-tests.sh`, eleven executables): all passed.
+- After the oracle fix: `tests/exp` in debug (11) and its ignored release tests (2) on the
+  M3 Max; Kathleen job 615691 (`check.sbatch simd`, node-c11a-135): all passed, 1.228 u₆₄
+  and 1.324 u₃₂ on scalar, AVX2 and AVX-512.
+- Kathleen job 615552 (`check.sbatch simd`, node-c11a-033, Xeon Gold 6248): Clippy, the
+  tests and the ignored release tests, scalar, AVX2 and AVX-512: all passed.
+- Not run: the licence check (no manifest changed); Laplace's `tools/bench/run.sh` on the
+  three machines (left to CH2.4b by the plan); locust (no run named by the plan).
 
 ## Pending runs
 
-None yet.
+None.
 
 ## Open questions
 
-None yet.
+The report's §5: (1) the NEON f32 `sums` codegen shift, accept or fix; (2) the plane-wave
+steps on locust, in CH2.4b's D9 runs.

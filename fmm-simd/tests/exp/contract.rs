@@ -168,25 +168,27 @@ fn special_values_f64() {
     special_values::<f64>("special_values_f64");
 }
 
-/// The f64 oracle: `exp_dd` at three f64 values against e^x to 80 digits (Python's
-/// `decimal`), to a relative 2⁻¹⁰⁰; and on samples of the domain within one unit in the
-/// last place of `f64::exp`.
+/// The f64 oracle: `exp_dd` at three f64 values against e^x 2⁻ⁿ to 90 digits (Python's
+/// `decimal`), to a relative 2⁻¹⁰⁰, with the n of the reduction; and on samples of the
+/// domain within one unit in the last place of `f64::exp`.
 #[test]
 fn f64_oracle() {
     let known = [
-        (-1.0, 0.36787944117144233, -1.2428753672788363e-17),
-        (-0.3, 0.7408182206817179, -1.805530505953e-18),
-        (-700.0, 9.85967654375977e-305, 8.5e-322),
+        (-1.0, -1, 0.7357588823428847, -2.4857507345576725e-17),
+        (-0.3, 0, 0.7408182206817179, -1.805530505953e-18),
+        (-700.0, -1010, 1.081828175944821, 9.312926389907246e-18),
     ];
-    for (x, hi, lo) in known {
-        let (h, l) = exp_dd(x);
+    for (x, n, hi, lo) in known {
+        let (h, l, m) = exp_dd(x);
+        assert_eq!(m, n, "exp_dd({x}): the reduction's n");
         let error = ((h - hi) + (l - lo)).abs() / hi;
         assert!(error <= 2f64.powi(-100), "exp_dd({x}): {error:e}");
     }
     let mut rng = Rng(0x0dd0_0dd0);
     for _ in 0..10_000 {
         let x: f64 = rng.domain();
-        let (h, _) = exp_dd(x);
+        let (h, _, n) = exp_dd(x);
+        let h = h * 2f64.powi(n);
         let libm = x.exp();
         assert!(
             (h - libm).abs() <= 2.0 * f64::U * h,

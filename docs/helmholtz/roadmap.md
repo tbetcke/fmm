@@ -279,7 +279,8 @@ family, checked against FMM3D's fixtures.
   *Needs:* CH1.2. *Machines:* locust, Kathleen. Split on 2026-10-31 into two sub-tasks,
   as Phase 3S split the inverse square root (T4) from the kernel (T5) (the user, "Split
   a/b"); CH2.4 is done when both are:
-- [ ] **CH2.4a The vectorised exponential.** `nd_fmm_simd::exp` (`exp_slice`), the vector
+- [x] **CH2.4a The vectorised exponential.** Report: `fmm-validate/results/helmholtz-ch2-4a.md`;
+  design `docs/design/simd-p2p.md` §4.9. `nd_fmm_simd::exp` (`exp_slice`), the vector
   layer's `max` and `scale_pow2`, and `arch::exp` (Cody–Waite reduction and a polynomial), for
   x ≤ 0, f32 and f64, every ISA. *Done when:* within 4 u_T relative on [x_min, 0] (normal
   results), f32 exhaustively and f64 on 10⁷ samples against double-double, on every ISA a

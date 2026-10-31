@@ -86,9 +86,12 @@ impl Precision for f64 {
         if !(y.is_finite() && y > 0.0) {
             return f64::INFINITY;
         }
-        let (hi, lo) = exp_dd(x);
-        // (y − hi) is exact for y within a few units of hi (Sterbenz).
-        (((y - hi) - lo) / hi).abs()
+        // e^x = (hi + lo) 2ⁿ; y 2⁻ⁿ is exact (both normal, |n| ≤ 1021), so the comparison
+        // never meets a subnormal low part, whatever x.
+        let (hi, lo, n) = exp_dd(x);
+        let z = y * 2f64.powi(-n);
+        // (z − hi) is exact for z within a few units of hi (Sterbenz).
+        (((z - hi) - lo) / hi).abs()
     }
 }
 
@@ -125,11 +128,12 @@ const LN2: [f64; 3] = [
     5.707708438416212e-34,
 ];
 
-/// e^x as a double-double hi + lo, for x in the f64 domain: n = round(x / ln 2), the
+/// e^x = (hi + lo) 2ⁿ as (hi, lo, n), for x in the f64 domain: n = round(x / ln 2), the
 /// reduced argument r = x − n ln 2 with n ln 2 formed exactly from the triple-double ln 2
-/// (|n| < 2¹¹), e^r by its Taylor series to degree 30 in double-double, and 2ⁿ applied
-/// exactly (the result is normal).
-pub fn exp_dd(x: f64) -> (f64, f64) {
+/// (|n| < 2¹¹), and e^r = hi + lo by its Taylor series to degree 30 in double-double. The
+/// factor 2ⁿ is left to the caller: applied to lo it would make lo subnormal near x_min
+/// and cost the oracle up to half a unit there (the CH2.4a self-review).
+pub fn exp_dd(x: f64) -> (f64, f64, i32) {
     let n = (x / LN2[0]).round();
     // x − n ln 2: each n · ln2ᵢ as an exact product, subtracted in double-double.
     let mut r = (x, 0.0);
@@ -148,8 +152,7 @@ pub fn exp_dd(x: f64) -> (f64, f64) {
         term = two_sum(q, correction);
         sum = dd_add(sum, term);
     }
-    let scale = 2f64.powi(n as i32);
-    (sum.0 * scale, sum.1 * scale)
+    (sum.0, sum.1, n as i32)
 }
 
 /// The largest error seen, in units of u_T, and where.

@@ -59,7 +59,7 @@ CH2.4b.
   reference loops and checks every ISA bit for bit.
 - `arch::exp::exp` (Helmholtz CH2.4a): e^x within 4 u_T relative on [x_min, 0], x_min =
   (e_min + 1) ln 2 (every result normal), exactly 1 at ±0, the value at x_min below it
-  (design §4.9; measured 1.324 u₃₂ exhaustively and 1.519 u₆₄ on 10⁷ samples on NEON). It
+  (design §4.9; measured 1.324 u₃₂ exhaustively and 1.228 u₆₄ on 10⁷ samples, on every ISA). It
   is written once over `Simd` from IEEE-rounded operations only (`fma`, `fnma`, `sub`, `max`,
   and `scale_pow2`'s integer add on the bits), so every ISA equals the scalar layer bit for
   bit (`tests/exp/invariance.rs`); keep it so: no estimate instruction, no ISA-specific
@@ -94,7 +94,7 @@ CH2.4b.
   `#[target_feature]` functions and safe intrinsics (crate docs, "Toolchain") wherever
   they remove an `unsafe` block.
 - ISA coverage: every test that runs a kernel prints the ISAs it ran and those this
-  machine cannot run (`common::kernels` in tests/p2p, `common::isas` in tests/rsqrt,
+  machine cannot run (`common::kernels` in tests/p2p, `common::isas` in tests/rsqrt and tests/exp,
   `kernels` in tests/matrix.rs and `on_every_isa!` in src/arch/tests.rs do it); on an
   x86_64 CPU without AVX-512F its tests skip with "not available here: … avx512", never
   fail (GitHub's x86_64 runners have it about half the time; Kathleen always). A task

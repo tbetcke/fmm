@@ -22,18 +22,19 @@
 //! **Domain.** x_min = (e_min + 1) ln 2, rounded towards zero: −1021 ln 2 ≈ −707.70 in f64
 //! and −125 ln 2 ≈ −86.64 in f32. Then n ≥ e_min + 1 and p ≥ e^(−ln 2 / 2) > ½, so every
 //! result is a normal number and the exponent addition never leaves the normal range. Below
-//! x_min (−∞ included) the result is e^{x_min}'s, at most 2^(e_min + 1) and positive. For
+//! x_min (−∞ included) the result is e^{x_min}'s, slightly above 2^(e_min + 1), at most 2^(e_min + 2), and positive. For
 //! x = ±0 the result is exactly 1. Above 0 and for NaN it is unspecified.
 //!
 //! **Degree.** Taylor coefficients 1/i!, rounded to the precision: N = 13 in f64 and 7 in
 //! f32, whose truncation errors on |r| ≤ ln 2 / 2 are 0.08 u₆₄ and 0.17 u₃₂ relative.
 //!
 //! **Error** (design §4.9 derives it), relative to e^x, in units of u_T, on the domain:
-//! r carries 0.35 u (its rounding; n · ln2_hi and the first fnma are exact by Sterbenz),
+//! r carries 0.35 u (its rounding; n · ln2_hi is exact by ln2_hi's trailing zeros, and so is
+//! the first fnma, whose result |x − n ln2_hi| ≤ |x| keeps ln2_hi's quantum),
 //! plus the error of ln2_lo times |n| (below 10⁻⁶ u in f64, 0.03 u in f32); Horner's
 //! roundings add u Σⱼ |qⱼ| |r|ʲ ≤ u (1 + |r|) e^{|r|} / e^{−|r|} ≤ 2.69 u, with qⱼ the
 //! partial sums, and the rounded coefficients (1/i! from i = 3) 0.01 u; the scaling is
-//! exact. In all at most 3.2 u, within the contract of 4 u_T.
+//! exact. In all at most 3.2 u (f64) and 3.3 u (f32), within the contract of 4 u_T.
 
 use super::Simd;
 use crate::SimdScalar;

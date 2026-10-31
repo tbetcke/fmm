@@ -603,7 +603,8 @@ NaN it is unspecified.
 for |r| ≤ ln 2 / 2:
 
 - n · ln2_hi is exact: fdlibm's ln2_hi has 32 significant bits in f64 and n has at most 11;
-  f32's 0.693359375 has 9 and n at most 7. x − n ln2_hi is exact by Sterbenz's lemma. The
+  f32's 0.693359375 has 9 and n at most 7. x − n ln2_hi is exact too: x and n ln2_hi are
+  multiples of the quantum of n ln2_hi's last bit, and |x − n ln2_hi| ≤ |x|. The
   second fnma rounds once, by u |r| ≤ 0.35 u, and ln2_lo's own rounding, times |n|, adds
   below 10⁻⁶ u (f64) or 0.03 u (f32). An absolute error δ in r is a relative error δ in e^r.
 - Horner with one fma per degree, qⱼ = fma(qⱼ₊₁, r, cⱼ): step j's rounding, u |qⱼ|, reaches
@@ -614,9 +615,10 @@ for |r| ≤ ln 2 / 2:
   0.17 u₃₂ at N = 7.
 - The scaling is exact.
 
-In all at most 3.2 u, under the contract of 4 u_T. Measured on the M3 Max (NEON and
-scalar, which agree bit for bit): **1.324 u₃₂** over every one of the 1.12 · 10⁹ floats of
-the f32 domain, and **1.519 u₆₄** over 10⁷ seeded f64 samples (half uniform on the domain,
+In all at most 3.2 u (f64: 0.35 + 2.69 + 0.01 + 0.08) and 3.3 u (f32: 0.35 + 0.03 + 2.69 +
+0.01 + 0.17), under the contract of 4 u_T. Measured on the M3 Max (NEON, scalar) and
+on Kathleen (AVX2, AVX-512, scalar), all of which agree bit for bit: **1.324 u₃₂** over every one of the 1.12 · 10⁹ floats of
+the f32 domain, and **1.228 u₆₄** over 10⁷ seeded f64 samples (half uniform on the domain,
 half −2^t with t uniform in [−200, log₂ 707.7)), against a double-double reference
 (`tests/exp`). The tests also check every ISA against the scalar ISA bit for bit.
 
