@@ -49,8 +49,10 @@ chunk budgets, and the launch, sync and elementwise costs). Helmholtz CH3.0b: nd
 (the trees of the leaf rule on the reference workloads, `tests/helmholtz_leaves*.rs`).
 Later phases add the crates they validate.
 
-The only crate that depends on this one is the spike `spikes/p2p-simd` (Phase 3S T7),
-for the inputs of its green-kernels comparison; green-kernels itself never enters here.
+The only crates that depend on this one are the spikes `spikes/p2p-simd` (Phase 3S T7),
+for the inputs of its green-kernels comparison (green-kernels itself never enters here),
+and `spikes/census` (Helmholtz CH0.8a), for W4's distributions and, since CH3.0b, the
+check that `helmholtz_workloads` equals its workloads.
 
 Since Phase 5 T6, `fmm_accuracy::{run, measure}` and the `fmm_accuracy` and `calibrate`
 examples run on any number of ranks: each rank passes its share of the points
@@ -283,12 +285,14 @@ Helmholtz CH3.0b (the builder's leaf rule; docs/helmholtz/tasks/CH3.0b.md) added
 `helmholtz_workloads`: the reference workloads W1–W4 of
 docs/design/helmholtz-fmm-proposal.md §9.1 in the root cube [0, 1]³ (D = 1, so kD is k),
 ported point for point from the census spike (`spikes/census/tests/ported_workloads.rs`
-checks it), points only. `tests/helmholtz_leaves.rs` (one MPI test, about 25 s in debug)
+checks it), points only. `tests/helmholtz_leaves.rs` (one MPI test, about 10 s in debug)
 builds `Fmm`'s tree of each workload with `OctreeOptions::with_min_leaf_level` of
 `nd_fmm_exec::helmholtz::min_leaf_level` and checks that no leaf holding a point is wider
-than c_leaf λ, complex k at the rule of Re k, and Yukawa's tree `Fmm`'s key for key; each
+than c_leaf λ (empty leaves may be wider: §3.7's rule is on boxes that hold points),
+complex k at the rule of Re k, and Yukawa's tree `Fmm`'s key for key; each
 rank checks whole trees on `self_comm`, so it passes on any number of ranks. The ignored
-`tests/helmholtz_leaves_sweep.rs` runs D1's full range in release and prints the table.
+`tests/helmholtz_leaves_sweep.rs` runs D1's full range in release (7 s on the M6) and
+prints the table, with the widest empty leaf.
 
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test

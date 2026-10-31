@@ -1,6 +1,7 @@
 //! The Helmholtz leaf rule on the reference workloads (Helmholtz CH3.0b; proposal §3.7,
 //! §9 item 8): no leaf that holds a point is wider than c_leaf λ, on the trees of W1–W4
-//! at kD within decision D1's range (kD ≤ 500), with the debug-sized subset here. Complex
+//! at kD within decision D1's range (kD ≤ 500), with a debug-sized subset here (kD ≤ 300).
+//! Empty leaves may be wider (§3.7's rule is on boxes that hold points). Complex
 //! k has the rule of real Re k, so its tree; Yukawa adds no rule, its tree `Fmm`'s tree
 //! key for key. The full D1 range is `tests/helmholtz_leaves_sweep.rs` (ignored, release).
 //!
@@ -32,11 +33,13 @@ fn no_occupied_leaf_wider_than_c_leaf_lambda() {
         cases.push((Workload::W1, kd));
         cases.push((Workload::W2, kd));
     }
-    for kd in [10.0, 100.0, 500.0] {
+    // kD = 500 in `helmholtz_leaves_sweep.rs`: its under-resolved trees have hundreds of
+    // thousands of empty leaves, seconds each in debug.
+    for kd in [10.0, 100.0, 300.0] {
         cases.push((Workload::W3 { n: 20_000 }, kd));
     }
     for distribution in DISTRIBUTIONS {
-        for kd in [1.0, 10.0, 100.0, 500.0] {
+        for kd in [1.0, 10.0, 100.0, 300.0] {
             cases.push((
                 Workload::W4 {
                     distribution,
@@ -77,13 +80,14 @@ fn no_occupied_leaf_wider_than_c_leaf_lambda() {
         }
         println!(
             "{name}, kD = {kd}: rule level {}, {} of {} leaves occupied on levels {}–{}, \
-             widest {:.3} λ ({:.1} s)",
+             widest {:.3} λ, widest leaf (empty ones included) {:.3} λ ({:.1} s)",
             leaves.rule,
             leaves.occupied,
             leaves.leaves,
             leaves.levels.0,
             leaves.levels.1,
             leaves.widest.unwrap(),
+            leaves.widest_empty.unwrap(),
             start.elapsed().as_secs_f64()
         );
     }

@@ -7,11 +7,13 @@
 //!
 //! The leaf rule (proposal §3.7, Helmholtz CH3.0b): every box that holds a point and is
 //! wider than c_leaf λ is refined, in addition to the points-per-leaf rule, so that every
-//! leaf lies on a low-frequency level and every P2P pair within about 2√3 c_leaf λ. In
+//! leaf that holds a point lies on a low-frequency level and every P2P pair within about
+//! 2√3 c_leaf λ. Empty leaves are refined only as completeness and the 2:1 balance
+//! require, so they may be wider: they hold no point and no expansion. In
 //! `nd-octree`'s key space that width is a level: [`min_leaf_level`] gives the shallowest
 //! level whose boxes are at most c_leaf λ wide, which the builder passes to
-//! `nd_octree::OctreeOptions::with_min_leaf_level`. The level depends on k, the domain and
-//! c_leaf only, never on the points or a rank's share of them (proposal §2, constraint
+//! `nd_octree::OctreeOptions::with_min_leaf_level`. The level depends on k, the global
+//! domain and c_leaf only, never on a rank's share of the points (proposal §2, constraint
 //! 9), so every rank finds the same one. Yukawa has no wavelength and no rule.
 //!
 //! The module is MPI-free.
@@ -163,10 +165,11 @@ impl Wavenumber {
 /// no rule.
 ///
 /// The builder passes it to `nd_octree::OctreeOptions::with_min_leaf_level`, which
-/// refines every box that holds a key and lies above it, so no occupied leaf is wider
-/// than c_leaf λ, unless the octree's `max_level` lies above the level (it is 16 in the
-/// FMM) or k w > 2¹⁶ · 2π c_leaf, where the cap leaves the leaves of level 16. Level 0,
-/// the octree option's default, adds no condition. [`C_LEAF`] is the value of D11.
+/// refines every box that holds a key and lies above it, so no leaf that holds a point is
+/// wider than c_leaf λ, unless the octree's `max_level` lies above the level (it is 16 in
+/// the FMM) or k w > 2¹⁶ · 2π c_leaf, where the cap leaves the leaves of level 16. Empty
+/// leaves may be wider. Level 0, the octree option's default, adds no condition.
+/// [`C_LEAF`] is the value of D11.
 ///
 /// # Panics
 ///

@@ -1,6 +1,8 @@
 //! The leaf rule (proposal §3.7): `min_leaf_level` against the census spike's search
-//! (`spikes/census/src/tree.rs`, `width_level`), its minimality, complex and Yukawa k,
-//! the cap and the domain's scaling.
+//! (`spikes/census/src/tree.rs`, `width_level`, the same inequality) and against the
+//! closed form ⌈log₂(k w / (2π c_leaf))⌉ (an independent path, away from the level
+//! boundaries), its minimality, known levels, complex and Yukawa k, the cap and the
+//! domain's scaling.
 
 use std::f64::consts::{PI, TAU};
 
@@ -58,6 +60,32 @@ fn level_matches_the_census_search() {
         }
     }
     println!("{checked} (kD, c_leaf) pairs equal to the census search");
+}
+
+#[test]
+fn level_matches_the_closed_form() {
+    // w 2⁻ˡ ≤ c λ ⟺ l ≥ log₂(k w / (2π c)): l = max(0, ⌈log₂(k w / (2π c))⌉), capped at 16,
+    // computed in another way than the search; away from the boundaries, where the
+    // logarithm's rounding decides.
+    let domain = cube(0.0, 1.0);
+    let mut checked = 0;
+    for c_leaf in [0.25, 0.5, 1.0, 1.5, 2.0] {
+        for kd in kd_sweep() {
+            let x = (kd / (TAU * c_leaf)).log2();
+            if (x - x.round()).abs() < 1e-9 {
+                continue;
+            }
+            let expected = (x.ceil().max(0.0) as usize).min(16);
+            let k = Wavenumber::new(kd, 0.0).unwrap();
+            assert_eq!(
+                min_leaf_level(&k, &domain, c_leaf),
+                expected,
+                "kD = {kd}, c_leaf = {c_leaf}"
+            );
+            checked += 1;
+        }
+    }
+    println!("{checked} (kD, c_leaf) pairs equal to the closed form");
 }
 
 #[test]

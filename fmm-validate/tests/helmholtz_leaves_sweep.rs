@@ -2,7 +2,8 @@
 //! §3.7, §9.1): W1 and W2 at kD = 10 to 500 (W2 3.2 million points at 500), W3 resolved
 //! at kD = 10, 30 and 100 (4.0 million points) and under-resolved at N = 10⁶ for kD = 200
 //! and 500, and W4's four distributions at N = 10⁵ for kD = 1 to 500. No leaf that holds
-//! a point is wider than c_leaf λ, and the table of the leaves is printed for the record
+//! a point is wider than c_leaf λ, and the table of the leaves, with the widest leaf of
+//! each tree (empty ones included, which the rule does not bound), is printed for the record
 //! (docs/helmholtz/tasks/CH3.0b.md, "Results").
 //!
 //! Ignored: 7 s in release on the M6, far longer in debug (W3 resolved at kD = 100 has
@@ -57,9 +58,9 @@ fn the_rule_over_the_full_kd_range() {
     }
 
     println!(
-        "| Workload | kD | N | rule level | leaves | occupied | occupied levels | widest (λ) | seconds |"
+        "| Workload | kD | N | rule level | leaves | occupied | occupied levels | widest occupied (λ) | widest leaf (λ) | seconds |"
     );
-    println!("| --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+    println!("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
     for (workload, kd) in cases {
         let start = Instant::now();
         let name = workload.name();
@@ -68,7 +69,7 @@ fn the_rule_over_the_full_kd_range() {
         let k = Wavenumber::new(kd, 0.0).unwrap();
         let leaves = check(&name, &keys, &k);
         println!(
-            "| {name} | {kd} | {} | {} | {} | {} | {}–{} | {:.3} | {:.1} |",
+            "| {name} | {kd} | {} | {} | {} | {} | {}–{} | {:.3} | {:.3} | {:.1} |",
             points.len(),
             leaves.rule,
             leaves.leaves,
@@ -76,6 +77,7 @@ fn the_rule_over_the_full_kd_range() {
             leaves.levels.0,
             leaves.levels.1,
             leaves.widest.unwrap(),
+            leaves.widest_empty.unwrap(),
             start.elapsed().as_secs_f64()
         );
     }

@@ -66,6 +66,9 @@ pub struct Leaves {
     pub levels: (usize, usize),
     /// The widest occupied leaf in wavelengths, w 2⁻ˡ / λ; `None` for Yukawa.
     pub widest: Option<f64>,
+    /// The widest leaf of the tree, empty ones included, in wavelengths; `None` for
+    /// Yukawa. The rule does not bound it (proposal §3.7: boxes that hold points).
+    pub widest_empty: Option<f64>,
 }
 
 /// Builds the tree of `keys` under the rule of `k` and checks proposal §3.7: every leaf
@@ -102,12 +105,20 @@ pub fn check(name: &str, keys: &[MortonKey], k: &Wavenumber) -> Leaves {
             width / lambda
         );
     }
+    let shallowest_any = tree
+        .leaf_keys()
+        .iter()
+        .map(|&leaf| morton::level(leaf))
+        .min()
+        .expect("some leaf");
+    let width_any = domain().side() * 0.5f64.powi(shallowest_any as i32);
     Leaves {
         rule,
         leaves: tree.leaf_keys().len(),
         occupied: occupied.len(),
         levels: (shallowest, deepest),
         widest: k.wavelength().map(|lambda| width / lambda),
+        widest_empty: k.wavelength().map(|lambda| width_any / lambda),
     }
 }
 
