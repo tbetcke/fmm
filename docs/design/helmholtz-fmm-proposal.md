@@ -135,10 +135,11 @@ proposal keeps every one of them.
       §3.12–§3.14 and the on-disk table cache.
    3. **Laplace's outputs bit for bit unchanged**, checked by the existing fixtures and the
       bit-identity tests across threads, overlap and ranks.
-   4. **Laplace's benchmarks within noise** on the machines of record (the M3 Max, locust and
-      Kathleen): the Phase 3S throughput gate of C3S.4 (at least 90 % of the spike), the
-      device gates, and the cost constants of the tuner and of node-m2l.md. "Within noise"
-      is defined by repeating the baseline on each machine (decision D9).
+   4. **Laplace's benchmarks within noise** on the machines of record (the M6, locust and
+      Kathleen; the M6 replaced the M3 Max on 2026-10-31, D9): the Phase 3S throughput
+      gate of C3S.4 (at least 90 % of the spike), the device gates, and the cost constants
+      of the tuner and of node-m2l.md. "Within noise" is defined by repeating the baseline
+      on each machine (decision D9).
 
    The pull request that introduces shared code shows all four. If one fails, the Helmholtz
    side gets its own copy instead, and the Laplace code is left as it was.

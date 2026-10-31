@@ -223,14 +223,23 @@ fn linux_physical_cores() -> Option<usize> {
     (!cores.is_empty()).then_some(cores.len())
 }
 
-/// The number of performance cores: on macOS `hw.perflevel0.physicalcpu` (12 on the
-/// Apple M3 Max), elsewhere `None`, where the cores are not split by kind.
+/// The number of performance cores: on macOS the physical cores of every performance
+/// level but the efficiency cores (`hw.perflevel<i>.physicalcpu` where
+/// `hw.perflevel<i>.name` is not "Efficiency"; 12 on the Apple M3 Max, 2 Super and 4
+/// Performance on the Apple M6), elsewhere `None`, where the cores are not split by kind.
 pub fn performance_cores() -> Option<usize> {
-    if cfg!(target_os = "macos") {
-        sysctl("hw.perflevel0.physicalcpu").and_then(|s| s.parse().ok())
-    } else {
-        None
+    if !cfg!(target_os = "macos") {
+        return None;
     }
+    let levels: usize = sysctl("hw.nperflevels").and_then(|s| s.parse().ok())?;
+    (0..levels)
+        .filter(|i| sysctl(&format!("hw.perflevel{i}.name")).as_deref() != Some("Efficiency"))
+        .map(|i| {
+            sysctl(&format!("hw.perflevel{i}.physicalcpu"))?
+                .parse::<usize>()
+                .ok()
+        })
+        .sum()
 }
 
 /// The version of the `rustc` on the path at run time, e.g. "rustc 1.99.0 (…)", or

@@ -60,8 +60,8 @@
 #   VARIANTS    FMM3D builds (default: those of "default fastker" that are built)
 #   DISTS, NS, PS  the problems (default "cube plummer", "100000 1000000 10000000", "3 6
 #               8 12": those of t9-fmm3d)
-#   CORES       threads of the every-core runs (default 12 on macOS, the M3 Max's
-#               performance cores as in tools/scaling/run.sh; 40 under Slurm; 72 else)
+#   CORES       threads of the every-core runs (default 6 on macOS, the M6's Super and
+#               Performance cores as in tools/scaling/run.sh; 40 under Slurm; 72 else)
 #   EPS_GRID    the precisions of the sweep (default 1-2-5 per decade, 5e-1 ... 1e-10)
 #   OURS, MATCHED, T1_CALLS (3), T1_LARGE_CALLS (1)  as above
 #   SWEEP_VEC   1 (default): the sweep's errors from the vectorised call; 0: from eight
@@ -71,11 +71,11 @@
 #               errors come from the vectorised call); LARGE_CALLS (default CALLS) at
 #               N >= 10^7
 #   VEC_SKIP    "variant:N" pairs whose vectorised call `time` leaves out (default none;
-#               the M3 Max's 64 GB: "default:10000000", the default build's 8 densities
-#               at 10^7 ran out of 188 GB on Kathleen)
+#               the M3 Max's 64 GB and the M6's 24 GB: "default:10000000", the default
+#               build's 8 densities at 10^7 ran out of 188 GB on Kathleen)
 #   T1_MAX_N    the largest N of the one-thread launches of `time` (default: every N); the
-#               M3 Max leaves out N = 10^7 at one thread (T1_MAX_N=1000000), as its
-#               t9-fmm3d sweep does with ONLY
+#               M3 Max left out N = 10^7 at one thread (T1_MAX_N=1000000), as its
+#               t9-fmm3d sweep does with ONLY; the M6 (24 GB) does the same
 #   TIMEOUT     seconds per launch (default 7200)
 #   QUIET       macOS only: the CPU percentage others may use before a launch (200)
 #   DRY_RUN     if set, print the commands only
@@ -115,7 +115,12 @@ VEC_SKIP=${VEC_SKIP:-}
 TIMEOUT=${TIMEOUT:-7200}
 QUIET=${QUIET:-200}
 case "$(uname -s)" in
-Darwin) os=macos CORES=${CORES:-12} ;;
+Darwin)
+    os=macos CORES=${CORES:-6}
+    # hwloc 2.15.0's darwin backend hangs every MPI_Init on the M6 (root CLAUDE.md,
+    # "MPI"); an HWLOC_COMPONENTS already set, even empty, is kept.
+    export HWLOC_COMPONENTS="${HWLOC_COMPONENTS--darwin}"
+    ;;
 *)
     if [ -n "${SLURM_JOB_ID:-}" ]; then os=slurm CORES=${CORES:-40}; else os=linux CORES=${CORES:-72}; fi
     ;;

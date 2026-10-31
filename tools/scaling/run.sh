@@ -11,7 +11,7 @@
 #                   every rank count of RANKS, one thread each; overlap off and on
 #   strong-small    the same at N = 10^5 (where the work runs out)
 #   weak            N = 10^5 per rank, the cube and the Plummer sphere, the same p
-#   threads         ranks x threads at the machine's cores (12 on the M3 Max, 72 on
+#   threads         ranks x threads at the machine's cores (6 on the M6, 72 on
 #                   locust), the N = 10^6 cube and Plummer, f64 p = 8
 #   redistribution  every point on rank 0, a random share, the owners; at 8 ranks (and on
 #                   locust also at the largest count), three builds, the N = 10^6 cube and
@@ -122,7 +122,7 @@
 #                   P2P kernel T9_P2P (default auto; avx512 on Kathleen, Phase 6 T6): at
 #                   one rank with one thread (1x1; three timed evaluations, T9_LARGE_EVALS,
 #                   default 1, at N >= 10^7), and at the node's ranks x threads T9_SPLIT
-#                   (Phase 5N's rule, docs/design/node-m2l.md §7: default 1x12 on macOS,
+#                   (Phase 5N's rule, docs/design/node-m2l.md §7: default 1x6 on macOS,
 #                   8x9 on Linux, 4x10 per node under Slurm) with the errors of 8 charge
 #                   vectors at 1,000 targets, and there again with the 8 vectors in one
 #                   evaluation (`--rhs 8`, three timed evaluations)
@@ -159,13 +159,13 @@
 #                   (default "1000000 10000000") and every precision:p of T11_DEGREES
 #                   (default f64 p = 3, 6, 8, 12, 18 and f32 p = 3, 6, 8), at every ranks x
 #                   threads of T11_SPLITS (Phase 5N's rule and its extremes: default
-#                   "1x12 12x1" on macOS, "1x72 8x9 72x1" on Linux, "1x40 4x10 40x1" under
+#                   "1x6 6x1" on macOS, "1x72 8x9 72x1" on Linux, "1x40 4x10 40x1" under
 #                   Slurm), the variants of T11_VARIANTS (default "batched batched-fused
 #                   rotation planewave") and `default`; at N = 10^6 and p <= 12 also Dense
 #                   and Classes (T11_EXTRA); three timed evaluations at N = 10^6 (two at
 #                   p = 12, one at p = 18), two at 10^7 (one at p >= 12)
 #   t11-leaf        the leaf size per p (the rule of Phase 3S T7, laplace-fmm-plan §7):
-#                   the same problems at T11_LEAF_SPLIT (default Phase 5N's split: 1x12 on
+#                   the same problems at T11_LEAF_SPLIT (default Phase 5N's split: 1x6 on
 #                   macOS, 8x9 on Linux, 4x10 under Slurm) and every refinement target of
 #                   T11_LEAVES (default "16 32 64 128 256 512"; 512 only at p >= 8), the
 #                   variants of T11_LEAF_VARIANTS (default "batched-fused planewave";
@@ -252,19 +252,23 @@
 #   RANKS    the rank counts of strong and weak (default "1 2 4 8 12" on macOS,
 #            "1 2 4 8 16 32 64 72" on Linux)
 #   BUDGET   the node budget of the strategy rule in MB, passed to every launch as
-#            --budget (Phase 5N T4, per machine class: default 56 on macOS, the M3 Max,
-#            and 96 on Linux, locust, and under Slurm, Kathleen; signed off as 64 for the
-#            M3 Max, set to 56 by the user on 2026-10-11 after T4's f64 p = 6 runs at 8
-#            and 10 ranks per node, fmm-validate/results/phase5n-kathleen.md, "Phase 5N,
-#            T4"). Since Phase 6 T11 the library's `auto` no longer reads it (it resolves
-#            by p and the precision); the sweeps that name Phase 5N's rule (`auto_resolves`,
-#            t11's `default`) still use it
-#   NODE_GRID  ranks x threads per node of node-rule (default T3's grid: "1x1 2x1 4x1 8x1
-#            12x1 1x12 2x6" on macOS, "1x1 8x1 16x1 32x1 64x1 72x1 1x72 4x18 8x9" on
-#            Linux, "1x1 2x1 10x1 20x1 40x1 1x40 2x20 4x10" under Slurm)
-#   CROSSOVER  ranks per node of crossover (default "6 8 10" on macOS, "8 12 16 24" on
+#            --budget (Phase 5N T4, per machine class: default 56 on macOS, the M3 Max
+#            and the M6, and 96 on Linux, locust, and under Slurm, Kathleen; signed off as
+#            64 for the M3 Max, set to 56 by the user on 2026-10-11 after T4's f64 p = 6
+#            runs at 8 and 10 ranks per node, fmm-validate/results/phase5n-kathleen.md,
+#            "Phase 5N, T4"). Kept at 56 for the M6 by the user on 2026-10-31 after its crossover
+#            sweep at 2, 4 and 6 ranks (tools/m6/machine.md, "BUDGET": Dense wins f32 p = 8
+#            up to 52 MB per node, loses f64 p = 6 at every count, most at 2 ranks, which no
+#            budget expresses). Since Phase 6 T11 the library's `auto` no longer reads it
+#            (it resolves by p and the precision); the sweeps that name Phase 5N's rule
+#            (`auto_resolves`, t11's `default`) still use it
+#   NODE_GRID  ranks x threads per node of node-rule (default T3's grid, rescaled to the
+#            M6's 6 cores: "1x1 2x1 4x1 6x1 1x6 2x3" on macOS, "1x1 8x1 16x1 32x1 64x1
+#            72x1 1x72 4x18 8x9" on Linux, "1x1 2x1 10x1 20x1 40x1 1x40 2x20 4x10" under
+#            Slurm)
+#   CROSSOVER  ranks per node of crossover (default "2 4 6" on macOS, "8 12 16 24" on
 #            Linux, "8 10 12 16 20" under Slurm)
-#   T2_SPLITS  ranks x threads per node of t2-node (default "1x1 2x1 4x1 8x1 12x1 1x12" on
+#   T2_SPLITS  ranks x threads per node of t2-node (default "1x1 2x1 4x1 6x1 1x6" on
 #            macOS, "1x1 8x1 16x1 32x1 64x1 72x1 1x72 8x9" on Linux, "1x1 10x1 20x1 40x1
 #            2x20 1x40" under Slurm)
 #   EVALS    timed evaluations per path (default 10)
@@ -311,8 +315,10 @@
 #            directory; under Slurm each file records RUSTFLAGS
 #
 # Every BLAS thread variable is set to 1. On macOS `mpirun` gets the loopback flags (root
-# CLAUDE.md, "MPI"); on Linux it reports the binding and binds each rank to its cores
-# (`--map-by slot:PE=<threads> --bind-to core`). On locust it first sources
+# CLAUDE.md, "MPI") and CORES slots mapped by slot, unbound (`--host localhost:<CORES>
+# --map-by slot --bind-to none`; above CORES ranks `--map-by slot:OVERSUBSCRIBE`); on
+# Linux it reports the binding and binds each rank to its cores (`--map-by
+# slot:PE=<threads> --bind-to core`). On locust it first sources
 # tools/gh200/env.sh if that environment is not active. Timings go into the report only
 # with the load stated (docs/phase5/README.md, "Ranks on locust").
 #
@@ -364,18 +370,21 @@ NODES=1
 case "$(uname -s)" in
 Darwin)
     os=macos
-    RANKS=${RANKS:-"1 2 4 8 12"}
-    CORES=12
-    THREAD_SPLITS="1x12 2x6 4x3 6x2 12x1"
-    LARGEST=12
+    # hwloc 2.15.0's darwin backend hangs every MPI_Init on the M6 (root CLAUDE.md,
+    # "MPI"); an HWLOC_COMPONENTS already set, even empty, is kept.
+    export HWLOC_COMPONENTS="${HWLOC_COMPONENTS--darwin}"
+    RANKS=${RANKS:-"1 2 4 6"}
+    CORES=6
+    THREAD_SPLITS="1x6 2x3 3x2 6x1"
+    LARGEST=6
     BUDGET=${BUDGET:-56}
-    NODE_GRID=${NODE_GRID:-"1x1 2x1 4x1 8x1 12x1 1x12 2x6"}
-    CROSSOVER=${CROSSOVER:-"6 8 10"}
-    T2_SPLITS=${T2_SPLITS:-"1x1 2x1 4x1 8x1 12x1 1x12"}
-    T9_SPLIT=${T9_SPLIT:-1x12}
+    NODE_GRID=${NODE_GRID:-"1x1 2x1 4x1 6x1 1x6 2x3"}
+    CROSSOVER=${CROSSOVER:-"2 4 6"}
+    T2_SPLITS=${T2_SPLITS:-"1x1 2x1 4x1 6x1 1x6"}
+    T9_SPLIT=${T9_SPLIT:-1x6}
     T13_NS=${T13_NS:-}
-    T11_SPLITS=${T11_SPLITS:-"1x12 12x1"}
-    T11_LEAF_SPLIT=${T11_LEAF_SPLIT:-1x12}
+    T11_SPLITS=${T11_SPLITS:-"1x6 6x1"}
+    T11_LEAF_SPLIT=${T11_LEAF_SPLIT:-1x6}
     ;;
 *)
     if [ -n "${SLURM_JOB_ID:-}" ]; then
@@ -526,8 +535,15 @@ launch() {
         return
     fi
     if [ "$os" = macos ]; then
-        flags="--mca btl_tcp_if_include lo0 --mca oob_tcp_if_include lo0"
-        if [ "$ranks" -gt 16 ]; then flags="$flags --oversubscribe"; fi
+        # Slots from CORES, not from hwloc: under HWLOC_COMPONENTS=-darwin (the M6, root
+        # CLAUDE.md, "MPI") hwloc finds no cores, so mapping by core finds no slots.
+        # macOS binds nothing either way.
+        flags="--mca btl_tcp_if_include lo0 --mca oob_tcp_if_include lo0 --bind-to none"
+        if [ "$ranks" -gt "$CORES" ]; then
+            flags="$flags --map-by slot:OVERSUBSCRIBE"
+        else
+            flags="$flags --host localhost:$CORES --map-by slot"
+        fi
     elif [ "$os" = slurm ] && [ -n "${OVERSUBSCRIBED:-}" ]; then
         # Counts only (Phase 5S T7): Kathleen's oversubscribed launch of
         # docs/design/scale-out.md §10.1, at most 160 ranks per node.

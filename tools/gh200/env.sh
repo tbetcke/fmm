@@ -16,7 +16,8 @@
 
 # --- Pins -----------------------------------------------------------------------
 # The Rust toolchain (decision 1: rustup, because spack's newest `rust` was older than
-# the current stable). Keep it at the M3 Max's `rustc --version` and CI's stable.
+# the current stable). Keep it at the development machine's (the M6's) `rustc --version`
+# and CI's stable.
 FMM_GH200_RUST=1.99.0
 
 # --- Layout ---------------------------------------------------------------------
