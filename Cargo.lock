@@ -3073,6 +3073,7 @@ dependencies = [
  "nd-fmm-ref",
  "nd-fmm-simd",
  "nd-fmm-tables",
+ "nd-octree",
 ]
 
 [[package]]

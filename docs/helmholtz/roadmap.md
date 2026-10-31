@@ -332,7 +332,9 @@ at any kD.
   refinement's; unset, every tree and Laplace's outputs bit for bit (constraint 1, by the
   byte comparison of the full outputs on the M6, without D9 timing runs: the user,
   2026-10-31, "Bytes only, no D9"). *Needs:* –.
-- [ ] **CH3.0b The Helmholtz builder's leaf rule.** k classified (§3.15), the leaf level
+- [x] **CH3.0b The Helmholtz builder's leaf rule.** Record: `docs/helmholtz/tasks/CH3.0b.md`
+  (the sweep's table); `nd_fmm_exec::helmholtz`, `nd_fmm_validate::helmholtz_workloads`,
+  tests `fmm-validate/tests/helmholtz_leaves*.rs`. k classified (§3.15), the leaf level
   from (k, D, c_leaf), the reference workloads W1–W4 in `nd-fmm-validate` (from
   `spikes/census`). *Done when:* no leaf wider than c_leaf λ on W1–W4 over D1's kD range;
   no rule for Yukawa. *Needs:* CH3.0a, D1, D11.

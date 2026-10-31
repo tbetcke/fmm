@@ -956,3 +956,56 @@ request, using this template:
     c_leaf = 1), from k and the domain; no rule for Yukawa.
   - The census spike's serial prototype (`spikes/census/src/tree.rs`) can move onto the
     option.
+
+## 2026-10-31: CH3.0b The Helmholtz builder's leaf rule
+- Done:
+  - `nd_fmm_exec::helmholtz` (new module), proposal §6.1's home of the Helmholtz builder:
+    - `Wavenumber::new(re, im)` classifies k as §3.15 states (`WavenumberKind`: Yukawa for
+      Re k = 0, real for Im k = 0, complex otherwise). It rejects non-finite parts, k = 0
+      (Laplace), Re k < 0 and Im k < 0 (`WavenumberError`); signed zeros count as zero.
+    - `wavelength()`, 2π/Re k (`None` for Yukawa); `C_LEAF = 1` (D11).
+    - `min_leaf_level(k, domain, c_leaf)`: the shallowest level whose boxes are at most
+      c_leaf λ wide, capped at 16, 0 for Yukawa; the value for CH3.0a's
+      `OctreeOptions::with_min_leaf_level`. It reads k, the global domain and c_leaf only
+      (constraint 9).
+    - `FmmBuilder` is untouched; CH3.1's Helmholtz FMM passes the level to its tree.
+  - `nd_fmm_validate::helmholtz_workloads`: W1–W4 of proposal §9.1 in the root cube, ported
+    point for point from the census spike (points only; charges come with CH3.0c/CH3.1).
+  - `nd-octree` is now a direct dependency of `nd-fmm-validate` (the user: "Add
+    nd-octree"); one new edge in `Cargo.lock`, no new package.
+  - `fmm-exec/CLAUDE.md` and `fmm-validate/CLAUDE.md` updated. Record:
+    `docs/helmholtz/tasks/CH3.0b.md` (the sweep's table; no separate report).
+- Tests:
+  - `fmm-exec/tests/helmholtz/` (17): the classification and rejections. The level
+    against the census spike's search (1,675 pairs of kD and c_leaf, boundaries
+    included) and against the closed form ⌈log₂(k w/(2π c))⌉ (1,459 pairs away from a
+    boundary). Also minimality, known levels, complex k at Re k's level, Yukawa 0, the
+    cap, the domain's scaling and the panics.
+  - `nd-fmm-validate`: 5 unit tests of the workloads. `tests/helmholtz_leaves.rs` (10 s in
+    debug) runs `Fmm`'s tree with the rule on W1–W4 at kD ≤ 300: no leaf that holds a
+    point is wider than c_leaf λ, and Yukawa's tree is `Fmm`'s key for key.
+  - `spikes/census/tests/ported_workloads.rs`: the workloads equal the spike's bit for bit.
+  - The ignored `tests/helmholtz_leaves_sweep.rs` covers D1's range in release (6 s on the
+    M6): W1 and W2 to kD = 500 (3.2 million points), W3 resolved to 100 (4.0 million)
+    and at 10⁶ for 200 and 500, and W4 at 10⁵. No occupied leaf is wider than 0.995 λ;
+    every tree's leaves at kD = 500 lie on level 7 (0.62 λ), as the census found.
+- Checks:
+  - `/verify` on the M6: format; Clippy default, examples and workspace all-targets;
+    `cargo test` (1,034) and `--workspace` (1,115); `cargo doc`; the licence check (ok);
+    `cargo tree -e normal` (no fftw-sys); the MPI list at 2 and 4 ranks (22 of 22 passed);
+    `tests/helmholtz_leaves.rs` at 2 ranks by hand (passed).
+  - A self-review by a subagent found nothing blocking. Its points were taken: occupied
+    leaves stated and the widest empty leaf recorded, a closed form as an independent
+    path, kD = 500 left to the sweep in debug, and the wording.
+  - Not run: locust and Kathleen (no machine run in the plan).
+- Decisions: the dependency (above). Questions for sign-off:
+  1. λ = 2π/Re k for complex k.
+  2. "No leaf wider than c_leaf λ" read as no leaf that holds a point. Empty leaves reach
+     9.9 λ on W1 and 19.9 λ on the clusters at kD = 500.
+  Both signed off 2026-10-31, the user: "1 and 2 as recommended".
+- Laplace: not touched. There is no change to `fmm.rs`, the drivers, the tables,
+  `nd-octree`, `nd-fmm-plan` or `nd-fmm-simd`; the Laplace tests pass unchanged.
+- Follow-ups:
+  - CH3.0c: complex densities.
+  - CH3.1 passes `min_leaf_level` to its tree, and keeps empty leaves (possibly many λ
+    wide) out of every expansion path.

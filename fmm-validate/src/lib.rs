@@ -58,6 +58,10 @@
 //! - `device_fmm` (feature `gpu`, Phase 4 T13): the device FMM against the host path,
 //!   stage by stage, with its build, transfers, launches and syncs and its errors, run
 //!   by the `device_fmm` example (with the device leaf-size study).
+//! - [`helmholtz_workloads`] (Helmholtz CH3.0b): the reference workloads W1–W4 of the
+//!   Helmholtz FMM (docs/design/helmholtz-fmm-proposal.md §9.1) in the root cube,
+//!   ported from the census spike; `tests/helmholtz_leaves.rs` checks the leaf rule on
+//!   their trees.
 //! - [`scaling`] (Phase 5 T10, C5.3): the distributed host FMM on any number of ranks,
 //!   per rank and reduced over the ranks: the work, the build by part, the evaluation
 //!   stage by stage with the load imbalance, the traffic per exchange, the memory per
@@ -100,6 +104,7 @@ pub mod calibration;
 #[cfg(feature = "gpu")]
 pub mod device_fmm;
 pub mod fmm_accuracy;
+pub mod helmholtz_workloads;
 pub mod metrics;
 #[cfg(feature = "gpu")]
 pub mod p2p_device;

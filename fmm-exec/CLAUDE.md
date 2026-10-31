@@ -169,6 +169,16 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   on the M3 Max, locust and Kathleen (D9 of docs/helmholtz/roadmap.md). Add no runtime
   dispatch below the level call, and keep Laplace's strides and sizes as they are
   (runtime p): never turn a compile-time constant into a runtime value.
+- The Helmholtz builder (Helmholtz CH3.0b; docs/design/helmholtz-fmm-proposal.md §3.7,
+  §6.3; CONVENTIONS §3.15): `helmholtz::Wavenumber` classifies k (Yukawa for Re k = 0,
+  real for Im k = 0, complex otherwise; k = 0, Re k < 0, Im k < 0 and non-finite parts
+  are `WavenumberError`s), and `helmholtz::min_leaf_level` is the leaf rule, the
+  shallowest level whose boxes are at most c_leaf λ wide (λ = 2π/Re k, `C_LEAF` = 1 from
+  D11, capped at 16; 0 for Yukawa), for `OctreeOptions::with_min_leaf_level`. It reads k,
+  the domain and c_leaf only (constraint 9). `FmmBuilder` does not use it: it stays
+  Laplace's builder, and the Helmholtz FMM (CH3.1) passes the level to its tree.
+  `tests/helmholtz/` checks it against the census spike's search; the trees of the
+  reference workloads are checked in `nd-fmm-validate` (`tests/helmholtz_leaves.rs`).
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread
   count. No `unsafe`, no atomics, no global pool; per-thread scratch created at

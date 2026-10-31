@@ -81,6 +81,9 @@
 //! - [`cost`]: the modelled cost of an evaluation by operator kind
 //!   ([`CostModel`](cost::CostModel), [`KindCounts`](cost::KindCounts)), which weighs the
 //!   coarse blocks for the work-weighted cut on several ranks (Phase 5S T7, S3).
+//! - [`helmholtz`]: the Helmholtz family's builder, so far the wavenumber and its kind
+//!   ([`Wavenumber`](helmholtz::Wavenumber), §3.15) and the leaf rule
+//!   ([`min_leaf_level`](helmholtz::min_leaf_level); Helmholtz CH3.0b).
 //! - `device` (feature `gpu`): the device path, `DeviceOperator`, its report and its
 //!   accounting of transfers, launches and syncs (C4.1–C4.8).
 //!
@@ -186,6 +189,7 @@ pub mod device;
 mod driver;
 pub mod fmm;
 pub mod geometry;
+pub mod helmholtz;
 pub mod operator;
 pub mod tables;
 pub mod threading;
