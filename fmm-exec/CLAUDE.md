@@ -167,8 +167,8 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   methods. The plane-wave M2L stays in `operator`. A change to `driver.rs` is a change
   to Laplace's paths: Laplace's outputs stay bit for bit, and its benchmarks within noise
   on the M3 Max, locust and Kathleen (D9 of docs/helmholtz/roadmap.md). Add no runtime
-  dispatch below the level call, and keep strides and plane counts compile-time
-  constants for Laplace.
+  dispatch below the level call, and keep Laplace's strides and sizes as they are
+  (runtime p): never turn a compile-time constant into a runtime value.
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread
   count. No `unsafe`, no atomics, no global pool; per-thread scratch created at

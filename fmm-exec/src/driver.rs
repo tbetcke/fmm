@@ -6,9 +6,10 @@
 //! one thread with one scratch set ([`Execution`]), and calls the kernel's body for each
 //! entry of the target's row, in the row's order. Under the batched M2L it runs blocks of
 //! [`M2L_BLOCK_TARGETS`] targets through the kernel's column kernel instead ([`m2l`]).
-//! The kernel ([`HostKernel`]) supplies everything else at compile time: the operators of
-//! one box or leaf, its scratch, its tables and the charge vectors. The order of every
-//! sum is the driver's, so it is the same for every kernel. The operator module
+//! The kernel ([`HostKernel`], a type parameter fixed at compile time) supplies everything
+//! else: the operators of one box or leaf, its scratch, its tables and the charge vectors.
+//! The order in which a target's entries are added is the driver's, so it is the same for
+//! every kernel; the order inside one entry's operator is the kernel's. The operator module
 //! documentation, "Batched execution and order", "The batched M2L", "Threads" and
 //! "Scratch", describes it for Laplace.
 //!
@@ -43,10 +44,12 @@ pub(crate) const PARENT_GRAIN: usize = 64;
 /// the batched M2L's tables and column kernel. Resolved at compile time; the drivers add
 /// no dispatch (proposal §2, constraint 1).
 ///
-/// Every method accumulates into its output. `level` is the level call's own level (the
-/// `level` of its batch, `nd_fmm_plan::operator`): the output's level for P2M, M2M, M2L,
-/// P2L and L2L (the children of M2M one below it, the parents of L2L one above), and the
-/// leaves' level for L2P, M2P and P2P (the W boxes of M2P one below it). Box blocks hold
+/// Every operator method accumulates into its output. `level` is the level call's own
+/// level (the `level` of its batch, `nd_fmm_plan::operator`): the output's level for P2M,
+/// M2M, M2L, P2L and L2L (the children of M2M one below it, the parents of L2L one above),
+/// and the leaves' level for L2P, M2P and P2P (the W boxes of M2P one below it). The
+/// source leaves of P2L and P2P may lie on other levels; the drivers find them by their
+/// keys, and a kernel that needs their level takes it from the frame's radius. Box blocks hold
 /// [`vectors`](Self::vectors) expansions, one after the other.
 pub(crate) trait HostKernel<T: SimdScalar>: Sync {
     /// One thread's scratch set: everything a target body writes besides its output.
@@ -141,7 +144,7 @@ pub(crate) trait HostKernel<T: SimdScalar>: Sync {
 }
 
 /// The scratch of one block of the batched M2L: the packing buffer of the column kernel
-/// (`MatrixKernel::pack_len`, 4 (p + 1)² values) and the column offsets of one offset's
+/// (`MatrixKernel::pack_len` of the table's n; 4 (p + 1)² values for Laplace) and the column offsets of one offset's
 /// pairs in the block, at most m [`M2L_BLOCK_TARGETS`] each (a target occurs at most once
 /// per offset, with m columns). Sized at construction; a block only clears and refills
 /// them.

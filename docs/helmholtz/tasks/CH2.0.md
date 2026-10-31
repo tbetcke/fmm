@@ -74,8 +74,9 @@ convention, table, layout or `nd-fmm-plan` change.
     p2p}(kernel, execution, batch)`. Each is today's `FmmOperator` method body for that
     kind; M2L picks blocks (when `batched_m2l` is `Some`) or target by target, as now.
 - `src/operator.rs`:
-  - `Kernels<T>` implements `HostKernel<T>` with `Scratch = Scratch<T>`. Its existing
-    methods gain an ignored `_level`.
+  - `Kernels<T>` implements `HostKernel<T>` with `Scratch = Scratch<T>`: each trait
+    method ignores the level and calls the inherent method of the same name, which is
+    unchanged (as built; the per-pair path keeps calling the inherent methods).
   - `LaplaceOperator<T>` holds `Execution<Scratch<T>>`. Its `FmmOperator` methods call the
     drivers. The `PlaneWave` M2L branch stays in `LaplaceOperator::m2l`, before the
     driver call: proposal §6.2 shares no plane-wave or diagonal form.
