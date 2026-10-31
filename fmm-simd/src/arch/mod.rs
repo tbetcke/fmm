@@ -19,7 +19,9 @@
 //! the P2P ones, [`p2p_many_f32`] and [`p2p_many_f64`] to those of several charge vectors
 //! (the body [`p2p::p2p_many_body`]; Phase 6 T5), [`p2p_dipoles_f32`] and
 //! [`p2p_dipoles_f64`] to the dipole ones (the body [`p2p::p2p_dipoles_body`]; Phase 6 T8),
-//! [`accumulate_f32`] and
+//! [`p2p_yukawa_f32`] and [`p2p_yukawa_f64`] to the Yukawa ones (the skeleton
+//! [`p2p::p2p_skeleton`] with [`p2p::Yukawa`], which also runs Laplace's [`p2p::p2p_body`];
+//! Helmholtz CH2.4b), [`accumulate_f32`] and
 //! [`accumulate_f64`] to the matrix ones, and [`exp_slice_f32`] and [`exp_slice_f64`] to
 //! those of the exponential (the body [`exp::exp_body`]; Helmholtz CH2.4a), which the
 //! scalar ISA runs on the scalar layer. The
@@ -29,7 +31,8 @@
 //! The scalar ISA runs P2P by the plain loop [`scalar::p2p`] (several vectors by
 //! [`scalar::p2p_many`], the same terms per vector), which equals
 //! `nd_fmm_ref::p2p::p2p` bit for bit wherever r² ≠ 0 (dipoles by [`scalar::p2p_dipoles`],
-//! `nd_fmm_ref::p2p::p2p_dipoles`'s loop), not by the generic body at
+//! `nd_fmm_ref::p2p::p2p_dipoles`'s loop; Yukawa by [`scalar::p2p_yukawa`],
+//! `nd_fmm_ref::helmholtz::p2p::p2p_yukawa`'s loop), not by the generic body at
 //! W = 1: that body forms r² with fma and the gradient term as (q ρ) ρ² d, so it
 //! rounds differently. The tests run the generic body on the scalar layer as well.
 //!
@@ -436,6 +439,69 @@ p2p_dipoles_dispatch!(
     p2p_dipoles_f64,
     p2p_dipoles_f64_gradient
 );
+
+/// Generates the dispatch of the Yukawa P2P entry points for one precision (Helmholtz
+/// CH2.4b).
+macro_rules! p2p_yukawa_dispatch {
+    ($name:ident, $t:ty, $potential:ident, $gradient:ident) => {
+        /// Yukawa P2P on `isa`
+        /// ([`P2pKernel::evaluate_yukawa`](crate::P2pKernel::evaluate_yukawa)) in the
+        /// precision of its name, with lengths and κ ≥ 0 already checked by the caller.
+        pub(crate) fn $name(
+            isa: AvailableIsa,
+            kappa: $t,
+            sources: &[[$t; 3]],
+            charges: &[$t],
+            targets: &[[$t; 3]],
+            potential: &mut [$t],
+            gradient: Option<&mut [[$t; 3]]>,
+        ) {
+            match (isa.0, gradient) {
+                (Isa::Scalar, gradient) => {
+                    scalar::p2p_yukawa(kappa, sources, charges, targets, potential, gradient)
+                }
+                #[cfg(target_arch = "aarch64")]
+                // SAFETY: `isa` is available (`AvailableIsa`), so the CPU has NEON, the
+                // feature the entry point enables.
+                (Isa::Neon, None) => unsafe {
+                    neon::$potential(kappa, sources, charges, targets, potential)
+                },
+                #[cfg(target_arch = "aarch64")]
+                // SAFETY: as above.
+                (Isa::Neon, Some(gradient)) => unsafe {
+                    neon::$gradient(kappa, sources, charges, targets, potential, gradient)
+                },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: `isa` is available (`AvailableIsa`), so the CPU has AVX2 and
+                // FMA, the features the entry point enables.
+                (Isa::Avx2, None) => unsafe {
+                    avx2::$potential(kappa, sources, charges, targets, potential)
+                },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: as above.
+                (Isa::Avx2, Some(gradient)) => unsafe {
+                    avx2::$gradient(kappa, sources, charges, targets, potential, gradient)
+                },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: `isa` is available (`AvailableIsa`), so the CPU has AVX-512F,
+                // AVX2 and FMA, the features the entry point enables or implies.
+                (Isa::Avx512, None) => unsafe {
+                    avx512::$potential(kappa, sources, charges, targets, potential)
+                },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: as above.
+                (Isa::Avx512, Some(gradient)) => unsafe {
+                    avx512::$gradient(kappa, sources, charges, targets, potential, gradient)
+                },
+                // The ISAs of other architectures, which are never available.
+                (isa, _) => unreachable!("`{isa}` is not available on this machine"),
+            }
+        }
+    };
+}
+
+p2p_yukawa_dispatch!(p2p_yukawa_f32, f32, p2p_yukawa_f32, p2p_yukawa_f32_gradient);
+p2p_yukawa_dispatch!(p2p_yukawa_f64, f64, p2p_yukawa_f64, p2p_yukawa_f64_gradient);
 
 /// Generates the dispatch of the entry points of the P2P of several charge vectors for one
 /// precision (Phase 6 T5).

@@ -1,5 +1,7 @@
 //! Acceptance tests for `P2pKernel::evaluate` (Phase 3S T5, C3S.4) on every ISA this
-//! machine offers, in f32 and f64, potential only and with gradients.
+//! machine offers, in f32 and f64, potential only and with gradients; also
+//! `evaluate_dipoles` (`dipoles`, Phase 6 T8), `evaluate_many` (`many`, Phase 6 T5) and
+//! `evaluate_yukawa` (`yukawa`, Helmholtz CH2.4b), each with its measures in its module.
 //!
 //! Error measures:
 //! - *Terms* (`terms`, `domain`): one source and one target; the potential relative to
@@ -38,3 +40,4 @@ mod panics;
 mod reference;
 mod sums;
 mod terms;
+mod yukawa;

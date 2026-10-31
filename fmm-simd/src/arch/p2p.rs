@@ -29,13 +29,160 @@
 //! potential and gradient), of which only the real lanes are written back. A smaller
 //! block is the same per-lane sequence with fewer independent chains; there is no
 //! scalar tail.
+//!
+//! **The shared skeleton** (Helmholtz CH2.4b; docs/design/helmholtz-fmm-proposal.md §6.2).
+//! [`p2p_skeleton`] holds the blocks, the tails, the loads, the broadcast, d and r² and the
+//! stores, and takes the arithmetic after r² from a [`PairKernel`], a type parameter
+//! resolved at compile time: [`Laplace`] (zero-sized; the source loop above, operation for
+//! operation, so [`p2p_body`] is the skeleton with it) and [`Yukawa`] (e^{−κr}/r, design
+//! §4.10). The several-vector and dipole bodies below keep their own loops.
 
+use super::exp::exp;
 use super::{MAX_LANES, Simd};
 use crate::SimdScalar;
 
 /// P2P on the vector layer `s`: adds into `potential` and, if `G`, into `gradient`
 /// the potential and gradient of `sources` with `charges` at `targets` (module
-/// documentation), with blocks of `K` vectors.
+/// documentation), with blocks of `K` vectors: [`p2p_skeleton`] with [`Laplace`].
+///
+/// `K` is 1, 2 or 4. Without gradients `gradient` is ignored (pass `&mut []`).
+///
+/// # Panics
+///
+/// As [`p2p_skeleton`].
+#[inline(always)]
+pub(crate) fn p2p_body<T: SimdScalar, S: Simd<T>, const K: usize, const G: bool>(
+    s: S,
+    sources: &[[T; 3]],
+    charges: &[T],
+    targets: &[[T; 3]],
+    potential: &mut [T],
+    gradient: &mut [[T; 3]],
+) {
+    p2p_skeleton::<T, S, Laplace, K, G>(s, Laplace, sources, charges, targets, potential, gradient);
+}
+
+/// The pair arithmetic of a charge kernel on [`p2p_skeleton`] (Helmholtz CH2.4b): what
+/// follows d = x − y and r² for one source and one vector of targets.
+///
+/// Implementations are `Copy` values whose method is `#[inline(always)]`, so that the
+/// arithmetic inlines into each ISA's `#[target_feature]` entry point (crate `CLAUDE.md`,
+/// "Inlining check"). The method must be one instruction sequence per lane that does not
+/// depend on the other lanes, which keeps chunk and target-position invariance.
+pub(crate) trait PairKernel<T: SimdScalar, S: Simd<T>>: Copy {
+    /// Adds the term of the source with the broadcast charge `q` at the target vector with
+    /// d = x − y (`d`) and r² (`r2`) into `phi` and, if `G`, into `g`. A lane with r² = 0
+    /// adds +0.
+    fn pair<const G: bool>(
+        self,
+        s: S,
+        d: &[S::V; 3],
+        r2: S::V,
+        q: S::V,
+        phi: &mut S::V,
+        g: &mut [S::V; 3],
+    );
+}
+
+/// Laplace's pair arithmetic, q/r and −q d/r³ (CONVENTIONS §3.1; module documentation):
+/// ρ = rsqrt_masked(r²); potential only φ = fma(q, ρ, φ); with gradients t = q ρ, φ = φ + t,
+/// t₃ = t · (ρ ρ), gₖ = fnma(t₃, dₖ, gₖ). Zero-sized.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Laplace;
+
+impl<T: SimdScalar, S: Simd<T>> PairKernel<T, S> for Laplace {
+    #[inline(always)]
+    fn pair<const G: bool>(
+        self,
+        s: S,
+        d: &[S::V; 3],
+        r2: S::V,
+        q: S::V,
+        phi: &mut S::V,
+        g: &mut [S::V; 3],
+    ) {
+        let rho = s.rsqrt_masked(r2);
+        if G {
+            let t = s.mul(q, rho);
+            *phi = s.add(*phi, t);
+            let t3 = s.mul(t, s.mul(rho, rho));
+            g[0] = s.fnma(t3, d[0], g[0]);
+            g[1] = s.fnma(t3, d[1], g[1]);
+            g[2] = s.fnma(t3, d[2], g[2]);
+        } else {
+            *phi = s.fma(q, rho, *phi);
+        }
+    }
+}
+
+/// Yukawa's pair arithmetic, q e^{−κr}/r and −q (κr + 1) e^{−κr} d/r³ (CONVENTIONS §3.15,
+/// k = iκ; design §4.10; Helmholtz CH2.4b):
+///
+/// ```text
+/// ρ = rsqrt_masked(r²);  r = r² ρ;  e = exp((−κ) r)          arch::exp::exp
+/// potential only:  φ = fma(q e, ρ, φ)
+/// with gradients:  t = (q e) ρ;  φ = φ + t;  f = fma(κ, r, 1);  t₃ = (t f) · (ρ ρ);
+///                  gₖ = fnma(t₃, dₖ, gₖ)
+/// ```
+///
+/// A lane with r² = 0 has ρ = r = 0, e = 1 and adds +0. At κ = 0, q e = q and f = 1
+/// exactly, so every step equals [`Laplace`]'s and the result is its bit for bit. κ ≥ 0
+/// (the caller checks it), so the exponential's argument is never positive.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Yukawa<V> {
+    /// κ in every lane.
+    kappa: V,
+    /// −κ in every lane.
+    minus_kappa: V,
+    /// 1 in every lane.
+    one: V,
+}
+
+impl<V: Copy> Yukawa<V> {
+    /// The pair arithmetic for the wavenumber `kappa` ≥ 0 on the layer `s`.
+    #[inline(always)]
+    pub(crate) fn new<T: SimdScalar, S: Simd<T, V = V>>(s: S, kappa: T) -> Self {
+        Self {
+            kappa: s.splat(kappa),
+            minus_kappa: s.splat(-kappa),
+            one: s.splat(T::one()),
+        }
+    }
+}
+
+impl<T: SimdScalar, S: Simd<T>> PairKernel<T, S> for Yukawa<S::V> {
+    #[inline(always)]
+    fn pair<const G: bool>(
+        self,
+        s: S,
+        d: &[S::V; 3],
+        r2: S::V,
+        q: S::V,
+        phi: &mut S::V,
+        g: &mut [S::V; 3],
+    ) {
+        let rho = s.rsqrt_masked(r2);
+        let r = s.mul(r2, rho);
+        let e = exp(s, s.mul(self.minus_kappa, r));
+        let qe = s.mul(q, e);
+        if G {
+            let t = s.mul(qe, rho);
+            *phi = s.add(*phi, t);
+            let f = s.fma(self.kappa, r, self.one);
+            let t3 = s.mul(s.mul(t, f), s.mul(rho, rho));
+            g[0] = s.fnma(t3, d[0], g[0]);
+            g[1] = s.fnma(t3, d[1], g[1]);
+            g[2] = s.fnma(t3, d[2], g[2]);
+        } else {
+            *phi = s.fma(qe, rho, *phi);
+        }
+    }
+}
+
+/// The P2P skeleton on the vector layer `s` (module documentation): adds into `potential`
+/// and, if `G`, into `gradient` the terms of `sources` with `charges` at `targets` that the
+/// pair arithmetic `pair` forms, with blocks of `K` vectors, then `K / 2`, …, 1 and the
+/// padded tail.
 ///
 /// `K` is 1, 2 or 4. Without gradients `gradient` is ignored (pass `&mut []`).
 ///
@@ -45,8 +192,15 @@ use crate::SimdScalar;
 /// `targets` and `gradient` differ in length. The public entry point checks these
 /// first, with the reference's messages.
 #[inline(always)]
-pub(crate) fn p2p_body<T: SimdScalar, S: Simd<T>, const K: usize, const G: bool>(
+pub(crate) fn p2p_skeleton<
+    T: SimdScalar,
+    S: Simd<T>,
+    P: PairKernel<T, S>,
+    const K: usize,
+    const G: bool,
+>(
     s: S,
+    pair: P,
     sources: &[[T; 3]],
     charges: &[T],
     targets: &[[T; 3]],
@@ -64,15 +218,21 @@ pub(crate) fn p2p_body<T: SimdScalar, S: Simd<T>, const K: usize, const G: bool>
     let n = targets.len();
     let mut start = 0;
     while n - start >= K * w {
-        sub_block::<T, S, K, G>(s, sources, charges, targets, potential, gradient, start);
+        sub_block::<T, S, P, K, G>(
+            s, pair, sources, charges, targets, potential, gradient, start,
+        );
         start += K * w;
     }
     if K >= 4 && n - start >= 2 * w {
-        sub_block::<T, S, 2, G>(s, sources, charges, targets, potential, gradient, start);
+        sub_block::<T, S, P, 2, G>(
+            s, pair, sources, charges, targets, potential, gradient, start,
+        );
         start += 2 * w;
     }
     if K >= 2 && n - start >= w {
-        sub_block::<T, S, 1, G>(s, sources, charges, targets, potential, gradient, start);
+        sub_block::<T, S, P, 1, G>(
+            s, pair, sources, charges, targets, potential, gradient, start,
+        );
         start += w;
     }
     let m = n - start;
@@ -86,8 +246,9 @@ pub(crate) fn p2p_body<T: SimdScalar, S: Simd<T>, const K: usize, const G: bool>
         if G {
             padded_gradient[..m].copy_from_slice(&gradient[start..]);
         }
-        block::<T, S, 1, G>(
+        block::<T, S, P, 1, G>(
             s,
+            pair,
             sources,
             charges,
             &padded_targets[..w],
@@ -107,8 +268,13 @@ pub(crate) fn p2p_body<T: SimdScalar, S: Simd<T>, const K: usize, const G: bool>
 
 /// [`block`] on the `KB · W` targets from `start` on, in place.
 #[inline(always)]
-fn sub_block<T: SimdScalar, S: Simd<T>, const KB: usize, const G: bool>(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the shape of `P2pKernel::evaluate` and the vector layer"
+)]
+fn sub_block<T: SimdScalar, S: Simd<T>, P: PairKernel<T, S>, const KB: usize, const G: bool>(
     s: S,
+    pair: P,
     sources: &[[T; 3]],
     charges: &[T],
     targets: &[[T; 3]],
@@ -117,8 +283,9 @@ fn sub_block<T: SimdScalar, S: Simd<T>, const KB: usize, const G: bool>(
     start: usize,
 ) {
     let end = start + KB * S::W;
-    block::<T, S, KB, G>(
+    block::<T, S, P, KB, G>(
         s,
+        pair,
         sources,
         charges,
         &targets[start..end],
@@ -134,8 +301,9 @@ fn sub_block<T: SimdScalar, S: Simd<T>, const KB: usize, const G: bool>(
 /// One block of `KB` vectors: `targets` and `potential` (and, if `G`, `gradient`) hold
 /// exactly `KB · W` values each.
 #[inline(always)]
-fn block<T: SimdScalar, S: Simd<T>, const KB: usize, const G: bool>(
+fn block<T: SimdScalar, S: Simd<T>, P: PairKernel<T, S>, const KB: usize, const G: bool>(
     s: S,
+    pair: P,
     sources: &[[T; 3]],
     charges: &[T],
     targets: &[[T; 3]],
@@ -158,17 +326,7 @@ fn block<T: SimdScalar, S: Simd<T>, const KB: usize, const G: bool>(
             let dy = s.sub(x[k][1], y[1]);
             let dz = s.sub(x[k][2], y[2]);
             let r2 = s.fma(dz, dz, s.fma(dy, dy, s.mul(dx, dx)));
-            let rho = s.rsqrt_masked(r2);
-            if G {
-                let t = s.mul(q, rho);
-                phi[k] = s.add(phi[k], t);
-                let t3 = s.mul(t, s.mul(rho, rho));
-                g[k][0] = s.fnma(t3, dx, g[k][0]);
-                g[k][1] = s.fnma(t3, dy, g[k][1]);
-                g[k][2] = s.fnma(t3, dz, g[k][2]);
-            } else {
-                phi[k] = s.fma(q, rho, phi[k]);
-            }
+            pair.pair::<G>(s, &[dx, dy, dz], r2, q, &mut phi[k], &mut g[k]);
         }
     }
     for k in 0..KB {

@@ -27,7 +27,7 @@ use super::avx2::Avx2;
 use super::avx512::Avx512;
 #[cfg(target_arch = "aarch64")]
 use super::neon::Neon;
-use super::p2p::{p2p_body, p2p_dipoles_body, p2p_many_body};
+use super::p2p::{Yukawa, p2p_body, p2p_dipoles_body, p2p_many_body, p2p_skeleton};
 use super::{Simd, scalar::Scalar};
 use crate::{Isa, SimdScalar};
 
@@ -642,6 +642,78 @@ fn p2p_dipoles_body_is_independent_of_k() {
         "p2p_dipoles_body_is_independent_of_k",
         f64,
         dipole_k_invariance
+    );
+}
+
+/// The Yukawa skeleton (Helmholtz CH2.4b) with K blocks on `s`, wavenumber `kappa`, from
+/// the initial outputs of `p`.
+fn yukawa_body<T: SimdScalar, S: Simd<T>, const K: usize, const G: bool>(
+    s: S,
+    kappa: T,
+    p: &P2pProblem<T>,
+) -> (Vec<T>, Vec<[T; 3]>) {
+    let mut potential = p.potential.clone();
+    let mut gradient = if G { p.gradient.clone() } else { Vec::new() };
+    p2p_skeleton::<T, S, _, K, G>(
+        s,
+        Yukawa::new(s, kappa),
+        &p.sources,
+        &p.charges,
+        &p.targets,
+        &mut potential,
+        &mut gradient,
+    );
+    (potential, gradient)
+}
+
+/// Every K (1, 2, 4) of the Yukawa skeleton gives the same bits at every n_t from 0 to
+/// 3 · 4 · W + 1, as [`p2p_k_invariance`]; and at κ = 0 the Yukawa skeleton gives
+/// [`p2p_body`]'s bits on every layer, the scalar layer's generic body included.
+fn yukawa_k_invariance<T: SimdScalar, S: Simd<T>>(s: S) {
+    let mut rng = Rng(0x5eed_000b);
+    let kappa = T::from_f64(0.875);
+    for n_t in 0..=3 * 4 * S::W + 1 {
+        let p = rng.p2p_problem::<T>(21, n_t);
+        let k1 = output_bits(&yukawa_body::<T, S, 1, false>(s, kappa, &p));
+        for (k, other) in [
+            (2, yukawa_body::<T, S, 2, false>(s, kappa, &p)),
+            (4, yukawa_body::<T, S, 4, false>(s, kappa, &p)),
+        ] {
+            assert_eq!(k1, output_bits(&other), "{} K = {k}", S::ISA);
+        }
+        let k1 = output_bits(&yukawa_body::<T, S, 1, true>(s, kappa, &p));
+        for (k, other) in [
+            (2, yukawa_body::<T, S, 2, true>(s, kappa, &p)),
+            (4, yukawa_body::<T, S, 4, true>(s, kappa, &p)),
+        ] {
+            assert_eq!(k1, output_bits(&other), "{} K = {k}, gradient", S::ISA);
+        }
+        assert_eq!(
+            output_bits(&yukawa_body::<T, S, 2, false>(s, T::zero(), &p)),
+            output_bits(&body::<T, S, 2, false>(s, &p)),
+            "{} κ = 0",
+            S::ISA
+        );
+        assert_eq!(
+            output_bits(&yukawa_body::<T, S, 2, true>(s, T::zero(), &p)),
+            output_bits(&body::<T, S, 2, true>(s, &p)),
+            "{} κ = 0, gradient",
+            S::ISA
+        );
+    }
+}
+
+#[test]
+fn p2p_yukawa_body_is_independent_of_k() {
+    on_every_isa!(
+        "p2p_yukawa_body_is_independent_of_k",
+        f32,
+        yukawa_k_invariance
+    );
+    on_every_isa!(
+        "p2p_yukawa_body_is_independent_of_k",
+        f64,
+        yukawa_k_invariance
     );
 }
 

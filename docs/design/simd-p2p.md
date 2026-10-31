@@ -626,6 +626,111 @@ half −2^t with t uniform in [−200, log₂ 707.7)), against a double-double r
 instructions, of which 14 and 20 operations and the rest register moves (`fmla`
 overwrites its accumulator); AVX2 23 and 33; AVX-512 23 and 29. None contains a call.
 
+### 4.10 The Yukawa P2P (Helmholtz CH2.4b)
+
+`P2pKernel::evaluate_yukawa` adds q e^{−κr}/r and its gradient −q (κr + 1) e^{−κr} d / r³
+(CONVENTIONS §3.15, k = iκ; docs/design/helmholtz-fmm-proposal.md §5.7), with the semantics
+of `nd_fmm_ref::helmholtz::p2p::p2p_yukawa` as `evaluate` has `p2p`'s. κ ≥ 0 is finite, in
+the coordinates' units (in the FMM the leaf-scaled ones of CONVENTIONS §3.13).
+
+**The shared skeleton** (proposal §6.2). The loop of §4.1 and §4.5 (blocks of K, K/2, …, 1
+target vectors and the padded tail, the loads, the broadcast, d and r², the stores) is
+`arch::p2p::p2p_skeleton`, generic over a pair kernel that supplies everything after r²
+as an `#[inline(always)]` method of a `Copy` type, a type parameter resolved at compile
+time. Laplace's pair kernel is zero-sized and holds the source loop of §4.1 operation for
+operation; `p2p_body` is the skeleton with it. Laplace's generated code is unchanged: on
+`main` and on the branch every function of the crate is the same instruction for
+instruction, aarch64 and x86_64, at the default settings and with one codegen unit
+(report `fmm-validate/results/helmholtz-ch2-4b.md` §2). The several-vector and dipole
+bodies keep their own loops (rule of two).
+
+**Arithmetic per pair and lane.** E is the exponential's count of §4.9, 14 (f32) or 20
+(f64):
+
+| Step | Operations | Potential only | With gradient |
+| --- | --- | --- | --- |
+| d, r², ρ, mask | as §4.2 | as §4.2 | as §4.2 |
+| r = r² ρ; x = (−κ) r | 2 mul | 2 | 2 |
+| e = exp(x) | §4.9 | E | E |
+| q e | mul | 1 | 1 |
+| φ += (q e) ρ | fma (with gradient: mul + add) | 1 | 2 |
+| f = fma(κ, r, 1); t₃ = (t f) (ρ ρ) | fma, 3 mul | — | 4 |
+| gₖ = fnma(t₃, dₖ, gₖ) | 3 fnma | — | 3 |
+| **beyond Laplace's** | | **E + 3** | **E + 5** |
+
+so 17 and 23 operations more than Laplace's per pair without gradients (f32, f64), 19 and
+25 with them. A lane with r² = 0 has ρ = 0 after the mask, so r = 0, e = 1 and the term is
++0. At κ = 0, q e = q and f = 1 exactly and every other step is Laplace's, so the Yukawa
+kernel gives `evaluate`'s bits on every vector ISA (a test). The f32 gradient keeps
+Laplace's range (2⁻⁸⁴ ≤ r², |q| ≤ 1): |t f| ≤ |q| ρ (1 + κr) e^{−κr} ≤ |q| ρ.
+
+**Blocks.** K = 1 target vector on every ISA (`YUKAWA_K`). The exponential's constants
+(19 vectors in f64, 11 in f32) and κ, −κ and 1 take most of NEON's and AVX-512's 32
+registers; on the M3 Max K = 1 is faster than K = 2 by 1.2× (f32) and 1.3× (f64) with
+gradients and within ±4 % without, and on Kathleen's AVX-512 K = 2 is within 2 % in f32 and
+5–9 % slower in f64 (Helmholtz CH2.4b, report §5.2). On AVX2's 16 registers the constants
+are memory operands (K = 1 by the register count; not timed against K = 2).
+
+**Contract** (per term, against the reference's term in the same precision, to first order
+in u = u_T; both compute d by the same subtraction):
+
+- *Kernel.* r² by mul and two fma is within 3u, so ρ within 4u + 1.5u = 5.5u (the inverse
+  square root's contract, §4.3, and half of r²'s error). r = fl(r² ρ) = √r² (1 + 4u) rounded:
+  within 6.5u. x = fl((−κ) r) within 7.5u relative, so 7.5u κr absolute, and e = exp(x)
+  within 4u (§4.9) plus 7.5u κr. q e rounds once more: 5u + 7.5u κr. The potential term
+  (q e) ρ is within 10.5u + 7.5u κr without gradients (inside the fma) and 11.5u + 7.5u κr
+  as t with them.
+- *Reference.* r² within 3u, r = fl(√r²) within 2.5u, fl(κ r) within 3.5u and so its
+  exponential within 2u (a libm `exp`, within 1 ulp) plus 3.5u κr; the product with q and
+  the division by r add u and 3.5u: 6.5u + 3.5u κr.
+- **Potential: within 18u + 11u κr, so (20 + 12 κr) u_T relative to |q| e^{−κr}/r.**
+- *Kernel gradient*, relative to |q| (1 + κr) e^{−κr}/r² (which bounds every component):
+  t as above, f = fma(κ, r, 1) within u + 6.5u κr / (1 + κr) ≤ 7.5u, ρ ρ within 12u, and
+  the two products 2u: 33u + 7.5u κr; the fnma takes t₃ dₖ unrounded.
+- *Reference gradient.* (−(κr) − 1) within 3.5u κr / (1 + κr) + u ≤ 4.5u, e within 2u +
+  3.5u κr, the product u, r² r within 6.5u, then the division, the product with q and the
+  one with dₖ 3u: 17u + 3.5u κr.
+- **Gradient: within 50u + 11u κr, so (52 + 12 κr) u_T per component relative to
+  |q| (1 + κr) e^{−κr}/r².**
+
+The κr part is the conditioning of e^{−κr} in r: a relative error δ in r is a relative
+error δ κr in e^{−κr}, and the reference carries 3.5u κr of it itself. The contract
+holds on the kernel domain of §4.4 for 0 ≤ κr ≤ 64 (f32) and 512 (f64), where e^{−κr} and
+the term's products stay normal for 2⁻²⁰ ≤ |q| ≤ 1; beyond, up to κr = −x_min (§4.9), the
+exponential still meets its contract but products may round as subnormals, and past it
+the clamp makes the potential term at most 2^(e_min + 2) |q| / r and each gradient component
+at most (1 + κr) 2^(e_min + 2) |q| / r², which grows with κr.
+
+**Measured** (`tests/p2p/yukawa.rs`, `yukawa_terms_*_large`, 10⁶ seeded pairs per precision,
+r² log-uniform over the domain, κr log-uniform in [10⁻⁶, 64 or 512] and κ = 0 for every
+sixteenth pair, 2⁻²⁰ ≤ |q| ≤ 1), largest errors in u_T, potential / gradient:
+
+| ISA (machine) | precision | κr < 0.01 | 0.01–1 | 1–10 | 10–100 | 100–512 |
+| --- | --- | --- | --- | --- | --- | --- |
+| NEON (M3 Max) | f32 | 5.4 / 9.2 | 7.3 / 9.2 | 35.4 / 31.9 | 194 / 168 | – |
+| AVX2 (Kathleen) | f32 | 4.7 / 8.9 | 7.3 / 9.0 | 35.4 / 30.7 | 194 / 168 | – |
+| AVX-512 (Kathleen) | f32 | 4.2 / 8.8 | 7.3 / 9.3 | 35.4 / 31.9 | 194 / 165 | – |
+| NEON (M3 Max) | f64 | 4.9 / 10.2 | 5.9 / 9.9 | 34.9 / 27.4 | 385 / 258 | 1537 / 1520 |
+| AVX2 (Kathleen) | f64 | 4.0 / 8.5 | 5.9 / 9.1 | 34.9 / 31.0 | 261 / 258 | 1537 / 1520 |
+| AVX-512 (Kathleen) | f64 | 4.1 / 8.5 | 5.9 / 8.3 | 34.9 / 31.0 | 261 / 258 | 1537 / 1045 |
+
+so about 3u per unit of κr at large κr, against the derived 11u, and 5–10u at small κr,
+against 18u and 50u. The sums against `direct_sum_yukawa` (FMM-shaped sets and up to 4,096
+sources, κ = 0.1, 1 and 10) are within 7.9e-7 (f32) and 2.9e-15 (f64) relative to the
+term magnitudes; the scalar ISA equals the reference bit for bit.
+
+**Cost per pair** (report §5.2; one thread, the W1 cells, geometric means): the Yukawa kernel
+takes 2.7–3.0× (f32) and 3.4–4.5× (f64) Laplace's time per pair on the M3 Max, 3.1–3.6× on
+locust's Neoverse-V2, and 2.3–3.6× (AVX-512) and 2.6–3.5× (AVX2) on Kathleen; Laplace's loop
+is bound by NEON's divider, Yukawa's by the FP pipes. It is 1.2–4.1× faster than
+green-kernels' modified Helmholtz on the same machine and vector width.
+
+**Inner loops** (the inlining check, K = 1; the source loop of the whole blocks, then the
+padded tail's): f32 φ, f32 φ and ∇φ, f64 φ, f64 φ and ∇φ: NEON 40/40, 61/50, 52/52 and
+78/65 instructions; AVX2 49/49, 78/64, 71/68 and 87/84; AVX-512 37/37, 48/46, 46/46 and
+58/56. Laplace's (one target vector) are NEON 15, 22, 15 and 22, AVX2 24, 35, 29 and 42 and
+AVX-512 18, 25, 21 and 28. None contains a call.
+
 ## 5. The crate `nd-fmm-simd`
 
 Directory `fmm-simd/`, package `nd-fmm-simd`, library `nd_fmm_simd`, a default member.

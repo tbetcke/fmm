@@ -859,3 +859,56 @@ request, using this template:
   - Adding code to `nd-fmm-simd` can move inlining in untouched kernels (fmm-simd/CLAUDE.md
     now says so). Compare entry points with `main`'s at the default settings and with one
     codegen unit.
+
+## 2026-10-31: CH2.4b Yukawa P2P on a shared skeleton
+- Done:
+  - `arch::p2p::p2p_skeleton`: the P2P loop (blocks, tails, loads, broadcast, d, r², stores)
+    generic over a `PairKernel`, a compile-time type parameter. Laplace's `Laplace` is
+    zero-sized and is the old source loop operation for operation; `p2p_body` is the
+    skeleton with it. The several-vector and dipole bodies are untouched.
+  - `P2pKernel::evaluate_yukawa`: e^{−κr}/r and its gradient for real charges, every ISA,
+    f32 and f64. The pair kernel `Yukawa`: ρ, r = r² ρ, e = exp((−κ) r) (CH2.4a), (q e) ρ
+    and ((q e) ρ · fma(κ, r, 1)) (ρ ρ) dₖ. The scalar ISA is `p2p_yukawa`'s loop. Panics
+    unless κ is finite and κ ≥ 0.
+  - `YUKAWA_K = 1` on every ISA (measured on NEON and AVX-512; K = 2 spills).
+  - Design `docs/design/simd-p2p.md` §4.10; report `fmm-validate/results/helmholtz-ch2-4b.md`;
+    the cost example `spikes/p2p-simd/examples/yukawa.rs`.
+- Tests: `fmm-simd/tests/p2p/yukawa.rs` (17, plus 4 ignored release tests) and
+  `p2p_yukawa_body_is_independent_of_k` in `src/arch/tests.rs`.
+  - Terms within the derived contract (20 + 12 κr) u_T and (52 + 12 κr) u_T over 10⁶ pairs per
+    precision, κr to 64 (f32) and 512 (f64): at most 10.2 u at small κr, about 3 u per unit
+    of κr beyond. The same on NEON (M3 Max), AVX2 and AVX-512 (Kathleen).
+  - Sums against `direct_sum_yukawa` within C3S.4's rule (7.9e-7, 2.9e-15).
+  - κ = 0 equals `evaluate` bit for bit on every vector ISA; the scalar ISA equals
+    `p2p_yukawa` bit for bit; invariance and K independence bit for bit; panics.
+- Checks:
+  - `/verify` on the M3 Max, all passed: format; Clippy default, examples, workspace and
+    `nd-fmm-simd` (native and x86_64); `cargo test` (1,006) and `--workspace` (1,086);
+    `cargo doc`; `nd-fmm-simd`'s tests and ignored release tests; the MPI list at 2 and 4
+    ranks; the spike's test.
+  - Kathleen job 616123 (`check.sbatch simd`, node-c11a-039): passed.
+  - Inlining check: no call in any Yukawa source loop (NEON 40–78, AVX2 49–87, AVX-512 37–58
+    instructions).
+  - Not run: the licence check (no default member's manifest changed).
+- Constraint 1, all four conditions:
+  - no new dispatch (type parameter, const generics); no layout or table change;
+  - every existing function of `nd-fmm-simd` identical to `main`'s on aarch64 and x86_64,
+    macOS and Linux, default and one codegen unit;
+  - the 18 full FMM outputs byte for byte `main`'s on the M3 Max, locust and Kathleen (job
+    616122, node-c11a-034);
+  - D9 on the three machines (`p2p_kernels` gathered W1, `plane_wave_parts` at p = 8 and 12,
+    `run.sh` Auto at p = 3 and 8): 120 of 120 rows within noise, no repeat;
+  - C3S.4: 95–101 % of the Phase 3S prototype on the M3 Max.
+- Cost per pair against Laplace: 2.3–4.5× over every ISA, precision and output (M3 Max f64
+  4.5× at most); 1.2–4.1× faster than green-kernels' modified Helmholtz on the same machine
+  and vector width (its convention checked: 1/(4π), ∂/∂x).
+- Decisions: the user, 2026-10-31, "Proceed as planned" and the D9 set. Questions for
+  sign-off, report §7: 1. the contract as derived; 2. κ ≥ 0 required. Both signed off
+  2026-10-31, the user: "Accept both sign-offs as recommended".
+- Laplace: unchanged in code (instruction for instruction), bits and benchmarks.
+- Follow-ups:
+  - CH2.1 (Yukawa operator) needs a several-vector Yukawa P2P if it evaluates several
+    charge vectors (`evaluate_many` has no Yukawa form yet).
+  - The dipole and several-vector bodies could move onto the skeleton later (rule of two).
+  - CH3.4 (Helmholtz P2P) builds on the same skeleton with a sincos.
+
