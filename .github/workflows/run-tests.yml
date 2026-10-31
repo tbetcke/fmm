@@ -24,13 +24,15 @@ permissions:
 #   downloads once per image before its runs hit.
 # A failed or timed-out package install is a mirror problem; the next step says to re-run.
 # timeout-minutes (T10, from the measured times): about twice a job's warm time and above
-# its worst cold time with a slow mirror (an install step stops at 5 minutes).
+# its worst cold time with a slow mirror (an install step stops at 5 minutes). run-tests
+# rose from 15 to 30 on 2026-10-31: its warm runs had grown to 8–14 minutes, and runs
+# were cancelled at 15 (main on 2026-10-30; Helmholtz CH2.0, no test failed).
 
 jobs:
   run-tests-rust:
     name: run-tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       APT_PACKAGES: libclang-dev libfftw3-dev libopenblas-dev openmpi-bin libopenmpi-dev
     steps:
