@@ -779,7 +779,7 @@ request, using this template:
     private items with `-D warnings`.
   - The default tests (976) and workspace tests (1055).
   - The MPI list at 2 and 4 ranks; `mpi_exec` at 8 ranks; the ignored release tests of
-    `nd-fmm-exec`. Pending: `multi_rank` at 2, 4 and 8 ranks (report §5).
+    `nd-fmm-exec`; `multi_rank` at 2, 4 and 8 ranks in release.
   - The full outputs of `main` and the branch identical byte for byte: 18 cases on each
     of the M3 Max, locust and Kathleen.
   - D9 on the three machines (report §3):

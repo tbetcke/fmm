@@ -174,8 +174,9 @@ as before. Constraints 3–9: not affected.
 
 ## Pending runs
 
-- `multi_rank` at 2, 4 and 8 ranks in release on the M3 Max (the ignored C5.1 host gate;
-  `mpirun` with the loopback flags, timeout 5400 s each): running.
+None. `multi_rank` at 2, 4 and 8 ranks in release on the M3 Max (the ignored C5.1 host
+gate; `mpirun` with the loopback flags, timeout 5400 s each) passed on 2026-10-31: 2221 s,
+2000 s and 1865 s.
 
 Ran on 2026-10-31: the bit check and D9 on the M3 Max, locust (with a repeat of
 one row) and Kathleen (jobs 614707 and 614723, the latter the layout check). Report:

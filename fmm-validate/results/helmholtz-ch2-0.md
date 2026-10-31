@@ -234,7 +234,7 @@ written fails these two rows, so they are put to the user (§4).
 | `run-mpi-tests.sh run … 2 4` (`mpi_regressions`, `mpi_exec`, `mpi_threading`, `invariance`, 7 octree examples) | M3 Max | passed |
 | `run-mpi-tests.sh run … 8` (`mpi_exec`) | M3 Max | passed (216 s) |
 | `RUST_MIN_STACK=8388608 cargo test -p nd-fmm-exec --release -- --ignored` (`accuracy`, `adaptive`, `dipoles`, `multi_rank` at one rank, …) | M3 Max | passed |
-| `multi_rank` at 2, 4 and 8 ranks, release, `mpirun` with the loopback flags | M3 Max | pending (running at commit time) |
+| `multi_rank` at 2, 4 and 8 ranks, release, `mpirun` with the loopback flags | M3 Max | passed (2 ranks 2221 s, 4 ranks 2000 s, 8 ranks 1865 s) |
 | the bit check of §2 | M3 Max, locust, Kathleen | passed (18 of 18 each) |
 | D9 (§3) | M3 Max, locust, Kathleen | M3 Max passed; locust passed on the repeat; Kathleen two rows for sign-off |
 
