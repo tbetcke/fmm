@@ -51,7 +51,8 @@ take turns, never overlap.
 4. CH1.2 `nd-fmm-math` (needs **D2**): CH1.2a, CH1.2b, CH1.2c
 5. CH1.3 `nd-fmm-ref`: CH1.3a, CH1.3b, CH1.3c (CH1.3d after CH0.6, off the list)
 6. CH2.0 Laplace's real host drivers made generic (*Machines:* locust, Kathleen)
-7. CH2.4 Yukawa P2P in `nd-fmm-simd`, the loop skeleton (*Machines:* locust, Kathleen)
+7. CH2.4 Yukawa P2P in `nd-fmm-simd`, the loop skeleton: CH2.4a, CH2.4b (*Machines:*
+   locust, Kathleen)
 8. CH3.0 Builder: the leaf rule and complex densities (needs **D1**)
 9. CH3.5 The shared drivers extended to complex expansions (*Machines:* locust, Kathleen)
 10. CH3.1 Complex planes and RCR on every level
@@ -272,10 +273,25 @@ family, checked against FMM3D's fixtures.
   call, layouts and tables unchanged, Laplace bit for bit, its benchmarks within noise on the
   three machines; the PR states how p reaches Laplace's inner loops. Else dropped, and Yukawa
   gets copies. *Needs:* CH1.3a–c, CHR.2, D9. *Machines:* locust, Kathleen.
-- [ ] **CH2.4 Yukawa P2P in `nd-fmm-simd`.** On a loop skeleton shared with Laplace if
+- CH2.4 Yukawa P2P in `nd-fmm-simd`. On a loop skeleton shared with Laplace if
   constraint 1 holds. *Done when:* an accuracy contract like simd-p2p.md's; cost per pair
   against Laplace; Laplace's P2P bit for bit and at least 90 % of the spike (C3S.4).
-  *Needs:* CH1.2. *Machines:* locust, Kathleen.
+  *Needs:* CH1.2. *Machines:* locust, Kathleen. Split on 2026-10-31 into two sub-tasks,
+  as Phase 3S split the inverse square root (T4) from the kernel (T5) (the user, "Split
+  a/b"); CH2.4 is done when both are:
+- [ ] **CH2.4a The vectorised exponential.** `nd_fmm_simd::exp` (`exp_slice`), the vector
+  layer's `max`, `scale_pow2` and `exp` (Cody–Waite reduction and a polynomial), for
+  x ≤ 0, f32 and f64, every ISA. *Done when:* within 4 u_T relative on [x_min, 0] (normal
+  results), f32 exhaustively and f64 on 10⁷ samples against double-double, on every ISA a
+  machine offers; below x_min a result in [0, 2^e_min]; position and length invariance;
+  no call in the inner loop; the existing entry points' inner loops unchanged instruction
+  for instruction. *Needs:* CH1.2. *Machines:* Kathleen (AVX-512, the contract).
+- [ ] **CH2.4b Yukawa P2P on a shared skeleton.** `P2pKernel::evaluate_yukawa`; the P2P
+  loop skeleton generic over the pair arithmetic, Laplace's the first. *Done when:*
+  CH2.4's: an accuracy contract like simd-p2p.md's (§4.9 onwards) on every ISA; cost per
+  pair against Laplace on the three machines, beside green-kernels' modified Helmholtz;
+  Laplace's P2P bit for bit, its benchmarks within noise (D9) and at least 90 % of the
+  spike (C3S.4). *Needs:* CH2.4a. *Machines:* locust, Kathleen.
 - [ ] **CH2.1 The real `HelmholtzOperator` path.** On CH2.0's drivers (or copies), Rotation
   and Dense M2L. *Done when:* the FMM against the direct sum on W1, W3 and W4 for κD from
   10⁻² to 10³; deterministic. *Needs:* CH2.0, D12. *Sign-off:* D4.
