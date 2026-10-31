@@ -475,8 +475,11 @@ p2p_dipole_entries!(p2p_dipoles_f64, p2p_dipoles_f64_gradient, f64);
 
 /// Target vectors per block of the Yukawa P2P (`arch::p2p::p2p_skeleton` with
 /// `arch::p2p::Yukawa`; Helmholtz CH2.4b), both precisions, potential only and with
-/// gradients: a block of K target vectors holds 5 K vectors (targets, potentials) or 8 K (with gradients) beside the exponential's constants (19 in f64) and the temporaries; NEON's 32 registers take K = 2.
-pub(crate) const YUKAWA_K: usize = 2;
+/// gradients: measured on the M3 Max (Helmholtz CH2.4b, `spikes/p2p-simd`'s `yukawa
+/// --quick`): K = 1 against K = 2, 0.95 against 0.79 Gpairs/s in f32 and 0.34 against 0.26
+/// in f64 with gradients (K = 2 spills: the exponential's constants, 19 in f64, take most
+/// of the 32 registers), within ±4 % for the potential only.
+pub(crate) const YUKAWA_K: usize = 1;
 
 /// Generates the Yukawa P2P entry points of one precision, potential only and with
 /// gradients (Helmholtz CH2.4b).

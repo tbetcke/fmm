@@ -527,8 +527,9 @@ p2p_dipole_entries!(p2p_dipoles_f64, p2p_dipoles_f64_gradient, f64);
 
 /// Target vectors per block of the Yukawa P2P (`arch::p2p::p2p_skeleton` with
 /// `arch::p2p::Yukawa`; Helmholtz CH2.4b), both precisions, potential only and with
-/// gradients: as NEON's, with AVX-512's 32 registers.
-pub(crate) const YUKAWA_K: usize = 2;
+/// gradients: as NEON's, with the same 32 registers (K = 2 timed against it on Kathleen,
+/// report `fmm-validate/results/helmholtz-ch2-4b.md`).
+pub(crate) const YUKAWA_K: usize = 1;
 
 /// Generates the Yukawa P2P entry points of one precision, potential only and with
 /// gradients (Helmholtz CH2.4b).

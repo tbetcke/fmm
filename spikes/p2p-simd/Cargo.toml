@@ -21,3 +21,9 @@ nd-fmm-validate.workspace = true
 [[example]]
 name = "compare"
 test = true
+
+# Helmholtz CH2.4b: the Yukawa P2P's cost per pair against Laplace's, beside
+# green-kernels' modified Helmholtz; `cargo test` runs its smoke test.
+[[example]]
+name = "yukawa"
+test = true

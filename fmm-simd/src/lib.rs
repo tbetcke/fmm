@@ -19,7 +19,9 @@
 //! [`P2pKernel::evaluate_dipoles`], P2P of point dipoles. Phase 6 T13: [`WaveKernel`], the
 //! plane-wave M2L's loops on every ISA, bit for bit the scalar path's. Helmholtz CH2.4a: the
 //! exponential of the Yukawa P2P on every ISA, bit for bit the scalar path's, which
-//! [`exp::exp_slice`] exposes for tests and reports.
+//! [`exp::exp_slice`] exposes for tests and reports. Helmholtz CH2.4b:
+//! [`P2pKernel::evaluate_yukawa`], the Yukawa P2P e^{−κr}/r, on the loop skeleton that
+//! [`P2pKernel::evaluate`] runs.
 //!
 //! ## Instruction sets
 //!
@@ -126,6 +128,21 @@
 //! the dipole terms formed as ρ³ s and ρ³ (dₖ − 3 s ρ² wₖ), s = d · w, so that no
 //! intermediate exceeds the term's bound by more than ρ³ (docs/design/simd-p2p.md §4.8,
 //! which derives the contract); the scalar path is the reference's loop.
+//!
+//! ## Yukawa
+//!
+//! [`P2pKernel::evaluate_yukawa`] (Helmholtz CH2.4b; docs/design/helmholtz-fmm-proposal.md
+//! §5.7) adds the potential e^{−κr}/r of real point charges and its gradient
+//! −(κr + 1) e^{−κr} (x − y)/r³ (CONVENTIONS §3.15, k = iκ), with the semantics of
+//! `nd_fmm_ref::helmholtz::p2p::p2p_yukawa`. The vector kernels and [`P2pKernel::evaluate`]
+//! share one loop skeleton (blocks, tails, loads, the broadcast, d and r², the stores) and
+//! differ only in the arithmetic after r², a compile-time type parameter: Yukawa's forms
+//! ρ by the kernel's inverse square root, r = r² ρ, e^{−κr} by the exponential of
+//! [`exp::exp_slice`], and the terms (q e) ρ and (q e) ρ (κr + 1) ρ² dₖ. At κ = 0 every step
+//! equals Laplace's, so the vector kernels then give [`P2pKernel::evaluate`]'s bits. The
+//! contract grows with κr, the conditioning of e^{−κr} in r (docs/design/simd-p2p.md §4.10);
+//! blocks hold one target vector on every ISA (the exponential's constants take the
+//! registers). The scalar path is the reference's loop.
 //!
 //! ## The matrix kernel
 //!
