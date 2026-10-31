@@ -183,6 +183,7 @@
 pub mod cost;
 #[cfg(feature = "gpu")]
 pub mod device;
+mod driver;
 pub mod fmm;
 pub mod geometry;
 pub mod operator;
