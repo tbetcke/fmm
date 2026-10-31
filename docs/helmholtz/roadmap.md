@@ -287,7 +287,8 @@ family, checked against FMM3D's fixtures.
   machine offers; below x_min the value at x_min; position and length invariance;
   no call in the inner loop; the existing entry points' inner loops unchanged instruction
   for instruction. *Needs:* CH1.2. *Machines:* Kathleen (AVX-512, the contract).
-- [ ] **CH2.4b Yukawa P2P on a shared skeleton.** `P2pKernel::evaluate_yukawa`; the P2P
+- [x] **CH2.4b Yukawa P2P on a shared skeleton.** Report: `fmm-validate/results/helmholtz-ch2-4b.md`;
+  design `docs/design/simd-p2p.md` §4.10. `P2pKernel::evaluate_yukawa`; the P2P
   loop skeleton generic over the pair arithmetic, Laplace's the first. *Done when:*
   CH2.4's: an accuracy contract like simd-p2p.md's (§4.9 onwards) on every ISA; cost per
   pair against Laplace on the three machines, beside green-kernels' modified Helmholtz;
