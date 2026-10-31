@@ -25,6 +25,8 @@ nd-fmm-ref = { workspace = true }
 nd-fmm-tables = { workspace = true }
 nd-fmm-exec = { workspace = true }
 nd-fmm-simd = { workspace = true }
+# The trees of the Helmholtz leaf rule on the reference workloads (Helmholtz CH3.0b).
+nd-octree = { workspace = true }
 mpi = { workspace = true }
 # The device P2P rows of `p2p_kernels` (Phase 4 T6), feature `gpu`.
 nd-fmm-kernels = { workspace = true, optional = true }
