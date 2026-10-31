@@ -203,6 +203,8 @@ None.
 
 1. `nd-octree` as a direct dependency of `nd-fmm-validate` (for the tree test).
    Answered 2026-10-31 by the user: "Add nd-octree" (as recommended).
-2. λ = 2π/Re k for complex k (above). Recorded in the PR as a sign-off point.
+2. λ = 2π/Re k for complex k (above). Signed off 2026-10-31, the user: "1 and 2 as
+   recommended".
 3. "No leaf wider than c_leaf λ" read as no leaf that holds a point (§3.7's rule; empty
-   leaves reach 19.9 λ, "Results"). Recorded in the PR as a sign-off point.
+   leaves reach 19.9 λ, "Results"). Signed off 2026-10-31, the user: "1 and 2 as
+   recommended"; CH3.1 keeps empty leaves out of every expansion path.

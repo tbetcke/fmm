@@ -1002,6 +1002,7 @@ request, using this template:
   1. λ = 2π/Re k for complex k.
   2. "No leaf wider than c_leaf λ" read as no leaf that holds a point. Empty leaves reach
      9.9 λ on W1 and 19.9 λ on the clusters at kD = 500.
+  Both signed off 2026-10-31, the user: "1 and 2 as recommended".
 - Laplace: not touched. There is no change to `fmm.rs`, the drivers, the tables,
   `nd-octree`, `nd-fmm-plan` or `nd-fmm-simd`; the Laplace tests pass unchanged.
 - Follow-ups:
