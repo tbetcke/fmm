@@ -299,6 +299,18 @@ mod sealed {
             gradient: Option<&mut [[Self; 3]]>,
         );
 
+        /// [`P2pKernel::evaluate_yukawa`](crate::P2pKernel::evaluate_yukawa) in this
+        /// precision, with lengths and κ ≥ 0 already checked (Helmholtz CH2.4b).
+        fn p2p_yukawa(
+            isa: AvailableIsa,
+            kappa: Self,
+            sources: &[[Self; 3]],
+            charges: &[Self],
+            targets: &[[Self; 3]],
+            potential: &mut [Self],
+            gradient: Option<&mut [[Self; 3]]>,
+        );
+
         /// [`MatrixKernel::accumulate_columns`](crate::MatrixKernel::accumulate_columns)
         /// in this precision, with shapes already checked.
         #[expect(
@@ -413,6 +425,19 @@ mod sealed {
         }
 
         #[inline]
+        fn p2p_yukawa(
+            isa: AvailableIsa,
+            kappa: f32,
+            sources: &[[f32; 3]],
+            charges: &[f32],
+            targets: &[[f32; 3]],
+            potential: &mut [f32],
+            gradient: Option<&mut [[f32; 3]]>,
+        ) {
+            arch::p2p_yukawa_f32(isa, kappa, sources, charges, targets, potential, gradient);
+        }
+
+        #[inline]
         fn accumulate(
             isa: AvailableIsa,
             mul_add: MulAdd,
@@ -524,6 +549,19 @@ mod sealed {
             gradient: Option<&mut [[f64; 3]]>,
         ) {
             arch::p2p_dipoles_f64(isa, sources, dipoles, targets, potential, gradient);
+        }
+
+        #[inline]
+        fn p2p_yukawa(
+            isa: AvailableIsa,
+            kappa: f64,
+            sources: &[[f64; 3]],
+            charges: &[f64],
+            targets: &[[f64; 3]],
+            potential: &mut [f64],
+            gradient: Option<&mut [[f64; 3]]>,
+        ) {
+            arch::p2p_yukawa_f64(isa, kappa, sources, charges, targets, potential, gradient);
         }
 
         #[inline]

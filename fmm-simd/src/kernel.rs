@@ -210,6 +210,61 @@ impl<T: SimdScalar> P2pKernel<T> {
         }
         T::p2p_dipoles(self.isa, sources, dipoles, targets, potential, gradient);
     }
+
+    /// Yukawa P2P (Helmholtz CH2.4b): adds the potential e^{−κr}/r of real point charges,
+    /// and optionally its gradient, at each target (CONVENTIONS §3.15, k = iκ), as
+    /// `nd_fmm_ref::helmholtz::p2p::p2p_yukawa` does.
+    ///
+    /// For each target xᵢ and each source yⱼ with r² = |xᵢ − yⱼ|² ≠ 0, r = √r²,
+    ///
+    /// φᵢ ← φᵢ + qⱼ e^{−κr} / r,  ∇φᵢ ← ∇φᵢ − qⱼ (κr + 1) e^{−κr} (xᵢ − yⱼ) / r³,
+    ///
+    /// without the factor 1/(4π). The guarantees of [`evaluate`](Self::evaluate) hold
+    /// with these terms: coincident pairs (r² = 0) contribute nothing, each target adds
+    /// its sources in input order (chunk and target-position invariance), the results are
+    /// deterministic per machine, ISA and build, and on [`Isa::Scalar`] equal the
+    /// reference's bit for bit wherever r² ≠ 0. The vector kernels run Laplace's loop
+    /// with another pair arithmetic (crate documentation, "Yukawa"); at κ = 0 they give
+    /// [`evaluate`](Self::evaluate)'s results bit for bit.
+    ///
+    /// - **Accuracy.** For pairs in the kernel domain (CONVENTIONS §3.13) with
+    ///   0 ≤ κr ≤ 64 (f32) or 512 (f64), each potential term is within (20 + 12 κr) u_T of
+    ///   the reference's term relative to |qⱼ| e^{−κr} / r, and each gradient component
+    ///   within (52 + 12 κr) u_T relative to |qⱼ| (1 + κr) e^{−κr} / r²
+    ///   (docs/design/simd-p2p.md §4.10 derives both; the κr part is the conditioning of
+    ///   e^{−κr} in r, which the reference shares). In f32 the gradient contract holds for
+    ///   2⁻⁸⁴ ≤ r² ≤ 2⁷ and |qⱼ| ≤ 1, as [`evaluate`](Self::evaluate)'s. Beyond the κr range
+    ///   the terms are tiny: from κr = (1 − e_min) ln 2 on (707.7 in f64, 86.6 in f32) the
+    ///   factor e^{−κr} is replaced by its value there, at most 2^(e_min + 2).
+    ///
+    /// # Panics
+    ///
+    /// If κ is not finite or is negative, `sources.len() != charges.len()`,
+    /// `potential.len() != targets.len()` or a given `gradient` has a length other than
+    /// `targets.len()`, with the messages of the reference for the lengths.
+    pub fn evaluate_yukawa(
+        &self,
+        kappa: T,
+        sources: &[[T; 3]],
+        charges: &[T],
+        targets: &[[T; 3]],
+        potential: &mut [T],
+        gradient: Option<&mut [[T; 3]]>,
+    ) {
+        assert!(
+            kappa.is_finite() && kappa >= T::zero(),
+            "Yukawa P2P needs a finite wavenumber κ ≥ 0, got {}",
+            kappa.to_f64()
+        );
+        check_pair(sources.len(), charges.len(), "sources", "charges");
+        check_pair(targets.len(), potential.len(), "targets", "potential");
+        if let Some(gradient) = gradient.as_deref() {
+            check_pair(targets.len(), gradient.len(), "targets", "gradient");
+        }
+        T::p2p_yukawa(
+            self.isa, kappa, sources, charges, targets, potential, gradient,
+        );
+    }
 }
 
 /// Panics unless the paired slices `a` and `b` have the same length, with the message

@@ -43,7 +43,7 @@ use std::arch::x86_64::{
     _mm256_storeu_pd, _mm256_storeu_ps, _mm256_sub_pd, _mm256_sub_ps,
 };
 
-use super::p2p::{p2p_body, p2p_dipoles_body, p2p_many_body};
+use super::p2p::{Yukawa, p2p_body, p2p_dipoles_body, p2p_many_body, p2p_skeleton};
 use super::waves::{gather_body, merge_body, sums_body, waves_body};
 use super::{Simd, exp::exp_body, matrix::accumulate_body, rsqrt_body};
 use crate::{Isa, WaveTables};
@@ -535,6 +535,78 @@ macro_rules! p2p_dipole_entries {
 
 p2p_dipole_entries!(p2p_dipoles_f32, p2p_dipoles_f32_gradient, f32);
 p2p_dipole_entries!(p2p_dipoles_f64, p2p_dipoles_f64_gradient, f64);
+
+/// Target vectors per block of the Yukawa P2P (`arch::p2p::p2p_skeleton` with
+/// `arch::p2p::Yukawa`; Helmholtz CH2.4b), both precisions, potential only and with
+/// gradients: the exponential's constants (19 in f64) alone exceed AVX2's 16 registers, so the block holds one target vector and the constants are memory operands.
+pub(crate) const YUKAWA_K: usize = 1;
+
+/// Generates the Yukawa P2P entry points of one precision, potential only and with
+/// gradients (Helmholtz CH2.4b).
+macro_rules! p2p_yukawa_entries {
+    ($potential:ident, $gradient:ident, $t:ty) => {
+        /// Yukawa P2P on AVX2 + FMA, potential only (`arch::p2p::p2p_skeleton` with
+        /// `arch::p2p::Yukawa`), in the precision of its name, with lengths and κ ≥ 0
+        /// checked by the caller.
+        ///
+        /// Not inlined, so that the dispatch stays one call and the inlining check
+        /// finds the function by name.
+        #[target_feature(enable = "avx2,fma")]
+        #[inline(never)]
+        pub(crate) fn $potential(
+            kappa: $t,
+            sources: &[[$t; 3]],
+            charges: &[$t],
+            targets: &[[$t; 3]],
+            potential: &mut [$t],
+        ) {
+            // SAFETY: this function enables `avx2` and `fma`, so it runs only on a CPU
+            // with them: a call from outside such a context is `unsafe` and asserts it.
+            let s = unsafe { Avx2::new_unchecked() };
+            p2p_skeleton::<$t, Avx2, _, YUKAWA_K, false>(
+                s,
+                Yukawa::new(s, kappa),
+                sources,
+                charges,
+                targets,
+                potential,
+                &mut [],
+            );
+        }
+
+        /// Yukawa P2P on AVX2 + FMA, potential and gradient (`arch::p2p::p2p_skeleton`
+        /// with `arch::p2p::Yukawa`), in the precision of its name, with lengths and κ ≥ 0
+        /// checked by the caller.
+        ///
+        /// Not inlined, as the potential-only entry point.
+        #[target_feature(enable = "avx2,fma")]
+        #[inline(never)]
+        pub(crate) fn $gradient(
+            kappa: $t,
+            sources: &[[$t; 3]],
+            charges: &[$t],
+            targets: &[[$t; 3]],
+            potential: &mut [$t],
+            gradient: &mut [[$t; 3]],
+        ) {
+            // SAFETY: this function enables `avx2` and `fma`, so it runs only on a CPU
+            // with them: a call from outside such a context is `unsafe` and asserts it.
+            let s = unsafe { Avx2::new_unchecked() };
+            p2p_skeleton::<$t, Avx2, _, YUKAWA_K, true>(
+                s,
+                Yukawa::new(s, kappa),
+                sources,
+                charges,
+                targets,
+                potential,
+                gradient,
+            );
+        }
+    };
+}
+
+p2p_yukawa_entries!(p2p_yukawa_f32, p2p_yukawa_f32_gradient, f32);
+p2p_yukawa_entries!(p2p_yukawa_f64, p2p_yukawa_f64_gradient, f64);
 
 /// Target vectors per block of the P2P of several charge vectors (`arch::p2p::p2p_many_body`;
 /// Phase 6 T5), potential only: measured on one core of Kathleen's Xeon Gold 6248 (64

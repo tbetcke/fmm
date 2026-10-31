@@ -203,6 +203,55 @@ pub(crate) fn p2p_dipoles<T: RealScalar>(
     }
 }
 
+/// Yukawa P2P with the scalar path (`P2pKernel::evaluate_yukawa`; Helmholtz CH2.4b), with
+/// lengths and κ ≥ 0 already checked by the caller: the formulas and operation order of
+/// `nd_fmm_ref::helmholtz::p2p::p2p_yukawa`, d = x − y, r² = (d₀² + d₁²) + d₂², r = √r²,
+/// e = exp(−(κ r)), then φ ← φ + (q e) / r and
+/// (∇φ)ₖ ← (∇φ)ₖ + (q (((−(κ r)) − 1) e / (r² r))) dₖ, so on pairs with r² ≠ 0 the result is
+/// the reference's bit for bit. A pair with r² = 0 is skipped.
+pub(crate) fn p2p_yukawa<T: RealScalar>(
+    kappa: T,
+    sources: &[[T; 3]],
+    charges: &[T],
+    targets: &[[T; 3]],
+    potential: &mut [T],
+    gradient: Option<&mut [[T; 3]]>,
+) {
+    match gradient {
+        None => {
+            for (&x, phi) in targets.iter().zip(potential.iter_mut()) {
+                for (&y, &q) in sources.iter().zip(charges) {
+                    let (_, r2) = separation(x, y);
+                    if r2 == T::zero() {
+                        continue;
+                    }
+                    let r = r2.sqrt();
+                    let e = (-(kappa * r)).exp();
+                    *phi = *phi + q * e / r;
+                }
+            }
+        }
+        Some(gradient) => {
+            for ((&x, phi), g) in targets.iter().zip(potential.iter_mut()).zip(gradient) {
+                for (&y, &q) in sources.iter().zip(charges) {
+                    let (d, r2) = separation(x, y);
+                    if r2 == T::zero() {
+                        continue;
+                    }
+                    let r = r2.sqrt();
+                    let damping = -(kappa * r);
+                    let e = damping.exp();
+                    *phi = *phi + q * e / r;
+                    let qg = q * ((damping - T::one()) * e / (r2 * r));
+                    for (gk, dk) in g.iter_mut().zip(d) {
+                        *gk = *gk + qg * dk;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// P2P of m charge vectors with the scalar path (`P2pKernel::evaluate_many`), with lengths
 /// already checked by the caller: `charges[j m + v]`, `potential[v n + i]` and
 /// `gradient[v n + i]`. Each (target, source) pair forms d, r² and r once and then adds
