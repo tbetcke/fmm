@@ -912,3 +912,47 @@ request, using this template:
   - The dipole and several-vector bodies could move onto the skeleton later (rule of two).
   - CH3.4 (Helmholtz P2P) builds on the same skeleton with a sincos.
 
+
+## 2026-10-31: CH3.0a nd-octree's maximum leaf width
+- Done:
+  - D1 signed off: kD ≤ 500 at 10⁻³ to 10⁻⁸, as recommended.
+  - CH3.0 split into CH3.0a (this), CH3.0b (the builder's leaf rule on W1–W4) and CH3.0c
+    (complex densities); the user, "Split a/b/c, proceed".
+  - `OctreeOptions::with_min_leaf_level` (the name chosen by the user): every box that
+    holds a key and lies above the level is refined, capped at `max_level`; default 0,
+    no rule. It is the key-space form of proposal §3.7's maximum leaf width.
+  - The rule acts in `create_local_tree` only, below the blocks, never in the coarse
+    tree's weight rounds. So the blocks stay nodes of the one-rank tree, and the leaves
+    are the one-rank leaves on every rank count (O1).
+  - `octree/CLAUDE.md` updated. No other crate, manifest, convention or `nd-fmm-plan`
+    change. Record: the plan `docs/helmholtz/tasks/CH3.0a.md` (no separate report; no
+    measurement).
+- Tests:
+  - `test_create_local_tree_min_leaf_level_against_brute_force`: against a plain
+    recursion, key for key, for max_keys 1, 8 and 64, max_level 3, 5 and 16, levels 0–6,
+    from the root and from the octants. Level 0 equals the call without the option, and a
+    level above `max_level` acts as `max_level`.
+  - `test_coarse_tree_by_weight_keeps_the_one_rank_leaves`: three cases with the level
+    set.
+  - `test_mpi_weighted_partition`: the cube and the Plummer sphere, 2,000 points each, at
+    levels 0, 4 and 5. It checks every invariant, the one-rank leaves, the brute force
+    after balance and the leaf levels. Passes at 1, 2, 3, 4 and 8 ranks.
+- Checks:
+  - `/verify` on the M6:
+    - format; Clippy default, examples and workspace all-targets; `nd-octree`'s Clippy
+      with `strict`, its `cargo doc` with `-D warnings` and its examples;
+    - `cargo test` (1,010) and `--workspace` (1,090); `cargo doc`;
+    - the MPI list at 2 and 4 ranks.
+  - A self-review by a subagent: nothing blocking; its doc and count fixes taken.
+  - Not run: the licence check (no manifest changed); locust and Kathleen (no machine
+    run in the plan).
+- Decisions: D1 signed off; the split; constraint 1's fourth condition by the byte
+  comparison without D9 timing runs (the user, "Bytes only, no D9").
+- Laplace: unchanged bit for bit. The default adds no condition (the tree tests at level
+  0), and the FMM outputs of `main` and the branch are identical byte for byte on the M6:
+  36 of 36 (cube and Plummer, N = 10⁵, f64, p = 3, 6 and 8, all six strategies).
+- Follow-ups:
+  - CH3.0b passes the shallowest level whose boxes are at most c_leaf λ wide (D11:
+    c_leaf = 1), from k and the domain; no rule for Yukawa.
+  - The census spike's serial prototype (`spikes/census/src/tree.rs`) can move onto the
+    option.

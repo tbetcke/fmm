@@ -54,7 +54,7 @@ take turns, never overlap.
 6. CH2.0 Laplace's real host drivers made generic (*Machines:* locust, Kathleen)
 7. CH2.4 Yukawa P2P in `nd-fmm-simd`, the loop skeleton: CH2.4a, CH2.4b (*Machines:*
    locust, Kathleen)
-8. CH3.0 Builder: the leaf rule and complex densities (needs **D1**)
+8. CH3.0 Builder: the leaf rule and complex densities (needs **D1**): CH3.0a, CH3.0b, CH3.0c
 9. CH3.5 The shared drivers extended to complex expansions (*Machines:* locust, Kathleen)
 10. CH3.1 Complex planes and RCR on every level
 11. CH3.4 Helmholtz P2P, real and complex k (*Machines:* locust, Kathleen)
@@ -75,7 +75,7 @@ The proposal's Section 12, plus D0. A decision is recorded here when the user ta
 | ID | Decision | Proposal's recommendation | Prepared by | Needed by | Status |
 | --- | --- | --- | --- | --- | --- |
 | D0 | Draft 0.8 of the proposal as the plan of record | as written; later changes by sign-off | review of draft 0.7 | every task | signed off 2026-10-26: as written |
-| D1 | Target kD range and tolerances | for example kD ≤ 500 at 10⁻³ to 10⁻⁸ (proposal §12) | – | CH0.8b, CH3.0 | open |
+| D1 | Target kD range and tolerances | for example kD ≤ 500 at 10⁻³ to 10⁻⁸ (proposal §12) | – | CH0.8b, CH3.0 | signed off 2026-10-31: kD ≤ 500 at 10⁻³ to 10⁻⁸, as recommended |
 | D2 | Placement: modules in the layer crates (A) or separate crates (B) | A (§6.1) | – | CH1.2 | signed off 2026-10-29: A, modules in the layer crates, as recommended |
 | D3 | f32 scope | f64 only until H7; then f32 for low-frequency configurations that pass an accuracy contract; high-frequency levels in f32 only if S6 finds stable classes | CH0.6 | CH7.1 | open |
 | D4 | Yukawa: its own operator type, or the wavenumber kind as a type parameter | one `HelmholtzOperator<T, K>` if CH2.1 shows no cost to the complex path | CH2.1 | CH2.2 | open |
@@ -318,10 +318,27 @@ family, checked against FMM3D's fixtures.
 **Gate:** CH3.6, RCR on every level against FMM3D. The first Helmholtz deliverable, correct
 at any kD.
 
-- [ ] **CH3.0 Builder: the leaf rule and complex densities.** *Done when:* no leaf wider than
+- CH3.0 Builder: the leaf rule and complex densities. *Done when:* no leaf wider than
   c_leaf λ on W1–W4; if `nd-octree` gains a maximum leaf width, Laplace's trees and outputs
   bit for bit; complex charges in and split potentials and gradients out (§3.15 item 9), one
-  complex expansion per complex vector. *Needs:* CH1.3a–c, D1, D11.
+  complex expansion per complex vector. *Needs:* CH1.3a–c, D1, D11. Split on 2026-10-31
+  into three sub-tasks, each one reviewable PR (the user, "Split a/b/c, proceed"); CH3.0
+  is done, and CH3.1 runnable on its side, when all three are:
+- [x] **CH3.0a nd-octree's maximum leaf width.** Record: `docs/helmholtz/tasks/CH3.0a.md`.
+  `OctreeOptions::with_min_leaf_level`
+  (the user, 2026-10-31): every box that holds a key and lies above the level is refined;
+  default none. *Done when:* every leaf holding a key at or below the level (capped by
+  `max_level`) on any number of ranks, the leaves the one-rank leaves and a brute-force
+  refinement's; unset, every tree and Laplace's outputs bit for bit (constraint 1, by the
+  byte comparison of the full outputs on the M6, without D9 timing runs: the user,
+  2026-10-31, "Bytes only, no D9"). *Needs:* –.
+- [ ] **CH3.0b The Helmholtz builder's leaf rule.** k classified (§3.15), the leaf level
+  from (k, D, c_leaf), the reference workloads W1–W4 in `nd-fmm-validate` (from
+  `spikes/census`). *Done when:* no leaf wider than c_leaf λ on W1–W4 over D1's kD range;
+  no rule for Yukawa. *Needs:* CH3.0a, D1, D11.
+- [ ] **CH3.0c Complex densities.** *Done when:* complex charges in and split potentials
+  and gradients out (§3.15 "Inputs and outputs"), the leaf chunks fixed, one complex
+  expansion per complex charge vector. *Needs:* CH3.0b, CH1.3a–c.
 - [ ] **CH3.5 The shared drivers extended to complex expansions.** Two planes, real shifts
   for real k, the epilogue. *Done when:* constraint 1 as in CH2.0; else the complex operator
   gets its own drivers. *Needs:* CH2.0. *Machines:* locust, Kathleen.

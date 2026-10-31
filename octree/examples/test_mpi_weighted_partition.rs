@@ -49,6 +49,18 @@
 //!
 //! `test_mpi_locally_essential` checks the held keys of a recut tree by brute force.
 //!
+//! The minimum leaf level (Helmholtz CH3.0a; `OctreeOptions::with_min_leaf_level`, the
+//! maximum leaf width of docs/design/helmholtz-fmm-proposal.md §3.7): the uniform cube
+//! and the Plummer sphere, the first 2,000 points of each, at levels 4 and 5, each
+//! checked as above (every invariant and the one-rank leaves, from the share and from
+//! rank 0), and further:
+//! - the one-rank leaves are the brute-force refinement of the rule (split a box above
+//!   `max_level` that holds more than `max_fine_keys` distinct keys, or a key and lies
+//!   above the level), 2:1 balanced;
+//! - every leaf that holds a key lies at the level or below;
+//! - the level zero builds the tree without the option, key for key, and a level only
+//!   refines.
+//!
 //! Phase 5S T3a also compared every tree key for key with a private copy of the Phase 5
 //! construction (the sample sorts), removed with T3, whose `test_mpi_locally_essential`
 //! checks the held keys.
@@ -198,6 +210,84 @@ fn input(keys: &[MortonKey], input: Input, rank: usize, size: usize) -> Vec<Mort
 fn one_rank_leaves(keys: &[MortonKey], options: OctreeOptions) -> Vec<MortonKey> {
     let comm = SimpleCommunicator::self_comm();
     Octree::new(keys, options, &comm).leaf_keys().clone()
+}
+
+/// The leaves of the minimum-leaf-level rule by plain recursion from `key`, before
+/// the 2:1 balance: a box above `max_level` is split while it holds more than
+/// `max_keys` of the sorted distinct `keys`, or one of them and lies above `min_level`.
+fn brute_force_leaves(
+    key: MortonKey,
+    keys: &[MortonKey],
+    (max_level, max_keys, min_level): (usize, usize, usize),
+    leaves: &mut Vec<MortonKey>,
+) {
+    let level = morton::level(key);
+    let split = keys.len() > max_keys || (!keys.is_empty() && level < min_level);
+    if level >= max_level || !split {
+        leaves.push(key);
+        return;
+    }
+    let mut rest = keys;
+    for child in morton::children(key).unwrap() {
+        let n = rest.partition_point(|&k| morton::is_ancestor(child, k));
+        let (mine, others) = rest.split_at(n);
+        brute_force_leaves(child, mine, (max_level, max_keys, min_level), leaves);
+        rest = others;
+    }
+}
+
+/// Check the trees of the minimum leaf level on the first 2,000 points of `name`.
+///
+/// # Collective operation
+/// Tree constructions, gathers and agreements; every rank must call it.
+fn check_min_leaf_level<C: CommunicatorCollectives>(name: &str, options: OctreeOptions, comm: &C) {
+    let rank = comm.rank() as usize;
+    let size = comm.size() as usize;
+    let keys = keys_of(&workload(name)[..2000]);
+    let distinct = morton::linearize(&keys);
+    let unruled = one_rank_leaves(&keys, options);
+    for min_level in [0, 4, 5] {
+        let label = format!("{name}, minimum leaf level {min_level}");
+        let ruled = options.with_min_leaf_level(min_level);
+        let one_rank = one_rank_leaves(&keys, ruled);
+
+        let mut expected = Vec::new();
+        brute_force_leaves(
+            morton::root(),
+            &distinct,
+            (ruled.max_level(), ruled.max_fine_keys(), min_level),
+            &mut expected,
+        );
+        let mut ok = one_rank == morton::balance(&expected, morton::root());
+        ok &= one_rank.iter().all(|&leaf| {
+            morton::level(leaf) >= min_level
+                || !distinct.iter().any(|&key| morton::is_ancestor(leaf, key))
+        });
+        // The level only refines.
+        if min_level == 0 {
+            ok &= one_rank == unruled;
+        } else {
+            ok &= one_rank.len() >= unruled.len();
+        }
+        agree(ok, &format!("{label}: the rule's one-rank leaves"), comm);
+
+        for kind in [Input::Share, Input::RankZero] {
+            let local = input(&keys, kind, rank, size);
+            let tree = Octree::new(&local, ruled, comm);
+            let balance = check_tree(&format!("{label}, {kind:?}"), &tree, &keys, &one_rank, comm);
+            if rank == 0 {
+                println!(
+                    "{label}, {kind:?} on {size} rank(s): {} blocks, {} leaves ({} without \
+                     the level), weight max/mean {:.3} within the bound {:.3}",
+                    balance.blocks,
+                    one_rank.len(),
+                    unruled.len(),
+                    balance.max_over_mean,
+                    balance.bound
+                );
+            }
+        }
+    }
 }
 
 /// What a partition weighs, as the test reports it.
@@ -734,6 +824,12 @@ fn main() {
                 }
             }
         }
+    }
+
+    // The minimum leaf level, from a uniform input and one with a dense core and a
+    // sparse halo.
+    for name in ["cube", "plummer"] {
+        check_min_leaf_level(name, options, &comm);
     }
 
     // The former panic case: a tree with one block, the root, on every rank count.
