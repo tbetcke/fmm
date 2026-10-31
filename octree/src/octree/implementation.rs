@@ -657,7 +657,8 @@ pub fn redistribute_with_respect_to_coarse_tree<C: CommunicatorCollectives>(
 /// Return a complete tree generated from local keys and associated coarse keys.
 ///
 /// The coarse keys are refined until the maximum level is reached or until each coarse key
-/// is the ancestor of at most `max_keys` fine keys.
+/// is the ancestor of at most `max_keys` fine keys and, if it is the ancestor of any, lies
+/// at `min_level` or below.
 /// It is assumed that the level of the fine keys is at least as large as `max_level`.
 /// # Parameters
 ///
@@ -665,6 +666,8 @@ pub fn redistribute_with_respect_to_coarse_tree<C: CommunicatorCollectives>(
 /// - `coarse_keys`: Sorted local coarse-tree leaves that bound refinement.
 /// - `max_level`: Finest permitted leaf level.
 /// - `max_keys`: Refinement target: leaves split while they contain more keys.
+/// - `min_level`: Leaves that contain a key split while they lie above this level
+///   ([`crate::octree::OctreeOptions::with_min_leaf_level`]); zero adds no condition.
 ///
 /// # Examples
 ///
@@ -673,7 +676,7 @@ pub fn redistribute_with_respect_to_coarse_tree<C: CommunicatorCollectives>(
 /// let comm = mpi::topology::SimpleCommunicator::self_comm();
 /// let fine = vec![morton::deepest_first(), morton::from_index_and_level([1, 0, 0], 16)];
 /// let coarse = vec![morton::root()];
-/// let leaves = create_local_tree(&fine, &coarse, 16, 1);
+/// let leaves = create_local_tree(&fine, &coarse, 16, 1, 0);
 /// assert!(leaves.iter().all(|&key| key != morton::root()));
 /// ```
 pub fn create_local_tree(
@@ -681,6 +684,7 @@ pub fn create_local_tree(
     coarse_keys: &[MortonKey],
     mut max_level: usize,
     max_keys: usize,
+    min_level: usize,
 ) -> Vec<MortonKey> {
     if max_level > DEEPEST_LEVEL as usize {
         max_level = DEEPEST_LEVEL as usize;
@@ -702,7 +706,10 @@ pub fn create_local_tree(
     for (&count, &coarse_key) in izip!(counts.iter(), coarse_keys.iter()) {
         let current;
         (current, remainder) = remainder.split_at(count);
-        if morton::level(coarse_key) < max_level && current.len() > max_keys {
+        let level = morton::level(coarse_key);
+        if level < max_level
+            && (current.len() > max_keys || (level < min_level && !current.is_empty()))
+        {
             // We need to refine the current split.
             refined_keys.extend_from_slice(
                 create_local_tree(
@@ -710,6 +717,7 @@ pub fn create_local_tree(
                     morton::children(coarse_key).unwrap().as_slice(),
                     max_level,
                     max_keys,
+                    min_level,
                 )
                 .as_slice(),
             );
@@ -2333,13 +2341,13 @@ mod test {
         let root = morton::root();
 
         // A block whose key count is within budget is kept as a leaf.
-        assert_eq!(create_local_tree(&fine, &[root], deepest, 2), vec![root]);
+        assert_eq!(create_local_tree(&fine, &[root], deepest, 2, 0), vec![root]);
         // So is a block that may not be refined any further, whatever its count.
-        assert_eq!(create_local_tree(&fine, &[root], 0, 1), vec![root]);
+        assert_eq!(create_local_tree(&fine, &[root], 0, 1, 0), vec![root]);
 
         // A budget of one forces refinement all the way to the deepest level,
         // because the two keys only separate there.
-        let leaves = create_local_tree(&fine, &[root], deepest, 1);
+        let leaves = create_local_tree(&fine, &[root], deepest, 1, 0);
         assert!(morton::is_complete_linear_octree(&leaves));
         assert_eq!(
             leaves.iter().map(|&key| morton::level(key)).max(),
@@ -2360,15 +2368,15 @@ mod test {
         assert_eq!(leaves.len(), 7 * (deepest - 1) + NSIBLINGS);
 
         // `max_level` caps the refinement and is clamped to the deepest level.
-        let shallow = create_local_tree(&fine, &[root], 2, 1);
+        let shallow = create_local_tree(&fine, &[root], 2, 1, 0);
         assert!(morton::is_complete_linear_octree(&shallow));
         assert!(shallow.iter().all(|&key| morton::level(key) <= 2));
-        assert_eq!(create_local_tree(&fine, &[root], 100, 1), leaves);
+        assert_eq!(create_local_tree(&fine, &[root], 100, 1, 0), leaves);
 
         // A coarse tree of several blocks keeps the empty ones untouched and
         // refines each crowded block independently.
         let octants = morton::children(root).unwrap();
-        let refined = create_local_tree(&fine, &octants, 3, 1);
+        let refined = create_local_tree(&fine, &octants, 3, 1, 0);
         assert!(morton::is_complete_linear_octree(&refined));
         assert_eq!(
             refined
@@ -2378,6 +2386,106 @@ mod test {
             7
         );
         assert!(!refined.contains(&octants[0]));
+    }
+
+    /// The leaves of the rule by plain recursion from `key`: a box is split while it lies
+    /// above `max_level` and holds more than `max_keys` of the sorted distinct `keys`, or
+    /// holds one and lies above `min_level` (the census spike's prototype).
+    fn brute_force_leaves(
+        key: morton::MortonKey,
+        keys: &[morton::MortonKey],
+        max_level: usize,
+        max_keys: usize,
+        min_level: usize,
+        leaves: &mut Vec<morton::MortonKey>,
+    ) {
+        let level = morton::level(key);
+        let split = keys.len() > max_keys || (!keys.is_empty() && level < min_level);
+        if level >= max_level || !split {
+            leaves.push(key);
+            return;
+        }
+        let mut rest = keys;
+        for child in morton::children(key).unwrap() {
+            let n = rest.partition_point(|&k| morton::is_ancestor(child, k));
+            let (mine, others) = rest.split_at(n);
+            brute_force_leaves(child, mine, max_level, max_keys, min_level, leaves);
+            rest = others;
+        }
+    }
+
+    #[test]
+    fn test_create_local_tree_min_leaf_level_against_brute_force() {
+        let deepest = DEEPEST_LEVEL as usize;
+        let mut rng = seeded_rng(47);
+        // A sparse uniform cloud and a dense cluster, so that the level rule and the
+        // key rule each decide some boxes.
+        let mut keys = generate_random_keys(150, &mut rng);
+        for _ in 0..400 {
+            keys.push(morton::from_index_and_level(
+                [
+                    30000 + rng.random_range(0..400usize),
+                    2000 + rng.random_range(0..400usize),
+                    50000 + rng.random_range(0..400usize),
+                ],
+                deepest,
+            ));
+        }
+        keys.sort_unstable();
+        let distinct = morton::linearize(&keys);
+        let root = morton::root();
+        let octants = morton::children(root).unwrap();
+
+        for max_keys in [1, 8, 64] {
+            for max_level in [3, 5, 16] {
+                let unruled = create_local_tree(&distinct, &[root], max_level, max_keys, 0);
+                for min_level in 0..=6 {
+                    let label = format!("{max_keys} keys, levels {min_level}..{max_level}");
+                    let leaves =
+                        create_local_tree(&distinct, &[root], max_level, max_keys, min_level);
+                    let mut expected = Vec::new();
+                    brute_force_leaves(
+                        root,
+                        &distinct,
+                        max_level,
+                        max_keys,
+                        min_level,
+                        &mut expected,
+                    );
+                    assert_eq!(leaves, expected, "{label}");
+                    assert!(morton::is_complete_linear_octree(&leaves), "{label}");
+
+                    // Every leaf holding a key reaches the level, capped at
+                    // `max_level`; no leaf is deeper than `max_level`.
+                    let floor = min_level.min(max_level);
+                    for &leaf in &leaves {
+                        assert!(morton::level(leaf) <= max_level, "{label}");
+                        if distinct.iter().any(|&k| morton::is_ancestor(leaf, k)) {
+                            assert!(morton::level(leaf) >= floor, "{label}");
+                        }
+                    }
+
+                    // Level zero adds no condition, and the rule only refines.
+                    if min_level == 0 {
+                        assert_eq!(leaves, unruled, "{label}");
+                    }
+                    assert!(leaves.len() >= unruled.len(), "{label}");
+
+                    // From blocks that are nodes of the tree, the same leaves.
+                    if min_level >= 1 {
+                        let from_octants =
+                            create_local_tree(&distinct, &octants, max_level, max_keys, min_level);
+                        assert_eq!(from_octants, leaves, "{label}");
+                    }
+                }
+            }
+        }
+
+        // A level above `max_level` acts as `max_level`.
+        assert_eq!(
+            create_local_tree(&distinct, &[root], 4, 8, 16),
+            create_local_tree(&distinct, &[root], 4, 8, 4)
+        );
     }
 
     #[test]
@@ -2782,9 +2890,25 @@ mod test {
         weighted.sort_unstable();
         let distinct = morton::linearize(&weighted);
 
-        for (max_fine_keys, max_level) in [(1, 16), (8, 16), (8, 6), (64, 16)] {
+        // The minimum leaf level refines only below the blocks, so it keeps them nodes
+        // of the one-rank tree as well.
+        for (max_fine_keys, max_level, min_level) in [
+            (1, 16, 0),
+            (8, 16, 0),
+            (8, 6, 0),
+            (64, 16, 0),
+            (8, 16, 4),
+            (64, 16, 6),
+            (8, 5, 6),
+        ] {
             let one_rank = morton::balance(
-                &create_local_tree(&distinct, &[morton::root()], max_level, max_fine_keys),
+                &create_local_tree(
+                    &distinct,
+                    &[morton::root()],
+                    max_level,
+                    max_fine_keys,
+                    min_level,
+                ),
                 morton::root(),
             );
             for shares in [1, 2, 8, 64, 512] {
@@ -2793,10 +2917,13 @@ mod test {
                 assert!(morton::is_complete_linear_and_balanced(&blocks));
                 assert!(blocks.iter().all(|&b| morton::level(b) <= max_level));
                 let leaves = morton::balance(
-                    &create_local_tree(&distinct, &blocks, max_level, max_fine_keys),
+                    &create_local_tree(&distinct, &blocks, max_level, max_fine_keys, min_level),
                     morton::root(),
                 );
-                assert_eq!(leaves, one_rank, "{max_fine_keys} {max_level} {shares}");
+                assert_eq!(
+                    leaves, one_rank,
+                    "{max_fine_keys} {max_level} {min_level} {shares}"
+                );
 
                 // No block that the rule could still split is heavier than
                 // W / shares.
@@ -3202,7 +3329,7 @@ mod test {
                             .filter(|&key| owner_rank_for_key(&bounds, key) == Some(rank))
                             .collect_vec();
                         let own = &blocks[partition[rank]..partition[rank + 1]];
-                        create_local_tree(&keys, own, max_level, max_fine_keys)
+                        create_local_tree(&keys, own, max_level, max_fine_keys, 0)
                     })
                     .collect_vec();
                 let leaves = refined.concat();

@@ -84,7 +84,10 @@ input distribution, and a tree whose only block is the root; and (Phase 5S T7) t
 second cut, `Octree::repartition`, by five weights per block (uneven, heavy, zero,
 unit): the leaves the first cut's key for key, the nearest-boundary cut of the gathered
 weights, ownership, the held keys' kinds, one rank unchanged, a repeat a fixed point, and
-the minimum gain's decision against brute force.
+the minimum gain's decision against brute force; and (Helmholtz CH3.0a) the minimum
+leaf level on the cube and the Plummer sphere (2,000 points each, levels 0, 4 and 5):
+every invariant, the one-rank leaves, the brute-force rule, and level 0 the tree
+without the option.
 Run it also at 2, 4 and 8 ranks for a change to the partition;
 `test_mpi_construction_edge_cases` at 1–8, and `test_mpi_leaf_lookup` at 8, where rank 1 owns no leaves. `test_mpi_locally_essential`
 (Phase 5S T3) checks the partition map and the held keys against brute force over the
@@ -150,7 +153,11 @@ one level coarser, with each key listed once.
 **Construction contract.** `Octree::new(fine_keys, options, comm)` panics on keys
 that are invalid or not at `DEEPEST_LEVEL`, and on nothing else. Every setting other
 than the keys and the communicator lives on `OctreeOptions`: `with_max_level`
-(default `DEEPEST_LEVEL`), `with_max_fine_keys` (default 1), `with_ghost_children`,
+(default `DEEPEST_LEVEL`), `with_max_fine_keys` (default 1), `with_min_leaf_level`
+(default 0, no rule; Helmholtz CH3.0a: every box that holds a key and lies above the
+level is refined, the key-space form of the Helmholtz FMM's maximum leaf width; it
+acts in `create_local_tree`, below the blocks, never in the coarse tree's rounds, so
+the blocks stay nodes of the one-rank tree), `with_ghost_children`,
 and, for several ranks, `with_partition_weight` (default `PartitionWeight::Keys`,
 every key with its duplicates) and `with_block_refinement` (default 8). On several
 ranks the coarse tree is built by weight from the root (docs/design/distributed-fmm.md

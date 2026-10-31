@@ -172,6 +172,7 @@ pub enum PartitionWeight {
 pub struct OctreeOptions {
     max_level: usize,
     max_fine_keys: usize,
+    min_leaf_level: usize,
     ghost_children: bool,
     partition_weight: PartitionWeight,
     block_refinement: usize,
@@ -180,13 +181,14 @@ pub struct OctreeOptions {
 impl Default for OctreeOptions {
     /// Return the deepest tree with no optional layer.
     /// # Returns
-    /// Options with `max_level` at [`DEEPEST_LEVEL`], `max_fine_keys` at one, the
-    /// ghost-children layer disabled, the partition weighing every key
+    /// Options with `max_level` at [`DEEPEST_LEVEL`], `max_fine_keys` at one,
+    /// `min_leaf_level` at zero (no level rule), the ghost-children layer disabled, the partition weighing every key
     /// ([`PartitionWeight::Keys`]) and a block refinement factor of 8.
     fn default() -> Self {
         Self {
             max_level: DEEPEST_LEVEL as usize,
             max_fine_keys: 1,
+            min_leaf_level: 0,
             ghost_children: false,
             partition_weight: PartitionWeight::Keys,
             block_refinement: 8,
@@ -278,6 +280,51 @@ impl OctreeOptions {
     /// ```
     pub fn max_fine_keys(&self) -> usize {
         self.max_fine_keys
+    }
+
+    /// Set the level that every leaf holding a key reaches.
+    ///
+    /// Every box that holds a finest-level key and lies above
+    /// `min(min_leaf_level, max_level)` is refined, in addition to the
+    /// [`OctreeOptions::with_max_fine_keys`] rule, so no leaf holding a key is
+    /// coarser than that level. A box without keys is refined only as completeness
+    /// and the 2:1 balance require. The level is the key-space form of a maximum
+    /// leaf width: the Helmholtz FMM passes the shallowest level whose boxes are at
+    /// most c_leaf λ wide (docs/design/helmholtz-fmm-proposal.md §3.7). On several
+    /// ranks the leaves are still the one-rank leaves. The default, zero, adds no
+    /// condition and leaves every tree unchanged.
+    /// # Arguments
+    /// - `min_leaf_level`: The level, in `0..=16`; a larger value acts as
+    ///   [`OctreeOptions::max_level`].
+    ///
+    /// # Returns
+    /// The options with the minimum level of a leaf holding a key set to
+    /// `min_leaf_level`.
+    /// # Examples
+    ///
+    /// ```
+    /// use nd_octree::octree::OctreeOptions;
+    /// assert_eq!(OctreeOptions::new().with_min_leaf_level(5).min_leaf_level(), 5);
+    /// ```
+    pub fn with_min_leaf_level(self, min_leaf_level: usize) -> Self {
+        Self {
+            min_leaf_level,
+            ..self
+        }
+    }
+
+    /// Return the minimum level of a leaf holding a key.
+    /// # Returns
+    /// The requested level, see [`OctreeOptions::with_min_leaf_level`], before
+    /// capping at [`OctreeOptions::max_level`].
+    /// # Examples
+    ///
+    /// ```
+    /// use nd_octree::octree::OctreeOptions;
+    /// assert_eq!(OctreeOptions::default().min_leaf_level(), 0);
+    /// ```
+    pub fn min_leaf_level(&self) -> usize {
+        self.min_leaf_level
     }
 
     /// Request, or drop, the ghost-children layer.
@@ -439,6 +486,8 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
     /// - `options`: Every other construction setting, see [`OctreeOptions`]: the
     ///   maximum leaf level ([`OctreeOptions::with_max_level`]), the target number
     ///   of finest-level keys per leaf ([`OctreeOptions::with_max_fine_keys`]),
+    ///   the minimum level of a leaf holding a key
+    ///   ([`OctreeOptions::with_min_leaf_level`]),
     ///   the optional topology layers, and on several ranks the partition weight
     ///   ([`OctreeOptions::with_partition_weight`]) and block refinement
     ///   ([`OctreeOptions::with_block_refinement`]). Pass [`OctreeOptions::default`]
@@ -462,7 +511,9 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
     /// distinct keys and lies above `max_level` is split into its children, round
     /// by round, and the blocks are then 2:1 balanced. A block is therefore a node of
     /// the one-rank tree, and the leaves are the one-rank leaves on every rank count
-    /// and for every distribution of the keys over the ranks. The weight is set by
+    /// and for every distribution of the keys over the ranks. The minimum leaf level
+    /// ([`OctreeOptions::with_min_leaf_level`]) refines below the blocks only, so it
+    /// keeps this. The weight is set by
     /// [`OctreeOptions::with_partition_weight`]: every key, duplicates included, by
     /// default. Boundary `p` of the ranges is the block boundary, at or after
     /// boundary `p - 1`, whose prefix weight is closest to `W p / P` (ties go to the
@@ -528,6 +579,7 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
 
         let max_level = options.max_level();
         let max_fine_keys = options.max_fine_keys();
+        let min_leaf_level = options.min_leaf_level();
         let rank = comm.rank() as usize;
         let size = comm.size() as usize;
 
@@ -552,10 +604,15 @@ impl<'o, C: CommunicatorCollectives> Octree<'o, C> {
         drop(linear_keys);
 
         // Refine the blocks until we are at max level or the fine keys per box are
-        // few enough, then 2:1 balance the refined tree, which leaves every key on
-        // the rank that owns it.
-        let refined_tree =
-            create_local_tree(&local_fine_keys, &coarse_tree, max_level, max_fine_keys);
+        // few enough and every box holding a key reaches the minimum leaf level, then
+        // 2:1 balance the refined tree, which leaves every key on the rank that owns it.
+        let refined_tree = create_local_tree(
+            &local_fine_keys,
+            &coarse_tree,
+            max_level,
+            max_fine_keys,
+            min_leaf_level,
+        );
         let leaf_tree = balance(&refined_tree, &coarse_tree_bounds, comm);
 
         // The partition map: the replicated blocks and cut, with whether each block is
