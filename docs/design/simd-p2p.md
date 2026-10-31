@@ -667,8 +667,9 @@ Laplace's range (2⁻⁸⁴ ≤ r², |q| ≤ 1): |t f| ≤ |q| ρ (1 + κr) e^{�
 **Blocks.** K = 1 target vector on every ISA (`YUKAWA_K`). The exponential's constants
 (19 vectors in f64, 11 in f32) and κ, −κ and 1 take most of NEON's and AVX-512's 32
 registers; on the M3 Max K = 1 is faster than K = 2 by 1.2× (f32) and 1.3× (f64) with
-gradients and within ±4 % without (Helmholtz CH2.4b). On AVX2's 16 registers the constants
-are memory operands. Kathleen times K = 2 against K = 1 on AVX-512 (report §4).
+gradients and within ±4 % without, and on Kathleen's AVX-512 K = 2 is within 2 % in f32 and
+5–9 % slower in f64 (Helmholtz CH2.4b, report §5.2). On AVX2's 16 registers the constants
+are memory operands.
 
 **Contract** (per term, against the reference's term in the same precision, to first order
 in u = u_T; both compute d by the same subtraction):
@@ -706,12 +707,22 @@ sixteenth pair, 2⁻²⁰ ≤ |q| ≤ 1), largest errors in u_T, potential / gra
 | ISA (machine) | precision | κr < 0.01 | 0.01–1 | 1–10 | 10–100 | 100–512 |
 | --- | --- | --- | --- | --- | --- | --- |
 | NEON (M3 Max) | f32 | 5.4 / 9.2 | 7.3 / 9.2 | 35.4 / 31.9 | 194 / 168 | – |
+| AVX2 (Kathleen) | f32 | 4.7 / 8.9 | 7.3 / 9.0 | 35.4 / 30.7 | 194 / 168 | – |
+| AVX-512 (Kathleen) | f32 | 4.2 / 8.8 | 7.3 / 9.3 | 35.4 / 31.9 | 194 / 165 | – |
 | NEON (M3 Max) | f64 | 4.9 / 10.2 | 5.9 / 9.9 | 34.9 / 27.4 | 385 / 258 | 1537 / 1520 |
+| AVX2 (Kathleen) | f64 | 4.0 / 8.5 | 5.9 / 9.1 | 34.9 / 31.0 | 261 / 258 | 1537 / 1520 |
+| AVX-512 (Kathleen) | f64 | 4.1 / 8.5 | 5.9 / 8.3 | 34.9 / 31.0 | 261 / 258 | 1537 / 1045 |
 
 so about 3u per unit of κr at large κr, against the derived 11u, and 5–10u at small κr,
 against 18u and 50u. The sums against `direct_sum_yukawa` (FMM-shaped sets and up to 4,096
 sources, κ = 0.1, 1 and 10) are within 7.9e-7 (f32) and 2.9e-15 (f64) relative to the
 term magnitudes; the scalar ISA equals the reference bit for bit.
+
+**Cost per pair** (report §5.2; one thread, the W1 cells, geometric means): the Yukawa kernel
+takes 2.7–3.0× (f32) and 3.4–4.5× (f64) Laplace's time per pair on the M3 Max, 3.1–3.6× on
+locust's Neoverse-V2, and 2.3–3.6× (AVX-512) and 2.6–3.5× (AVX2) on Kathleen; Laplace's loop
+is bound by NEON's divider, Yukawa's by the FP pipes. It is 1.2–4.1× faster than
+green-kernels' modified Helmholtz on the same machine and vector width.
 
 **Inner loops** (the inlining check, K = 1; the source loop of the whole blocks, then the
 padded tail's): f32 φ, f32 φ and ∇φ, f64 φ, f64 φ and ∇φ: NEON 40/40, 61/50, 52/52 and

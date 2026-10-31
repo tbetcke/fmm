@@ -63,7 +63,7 @@ docs/design/simd-p2p.md §4.10, tests in `tests/p2p/yukawa.rs`.
   relative to |q| e^{−κr}/r) and (52 + 12 κr) u_T (∇φ per component, relative to
   |q| (1 + κr) e^{−κr}/r²) for κr ≤ 64 (f32) or 512 (f64), derived in
   docs/design/simd-p2p.md §4.10; measured at most 10.2 u at small κr and 3 u per unit of κr
-  beyond, on NEON over 10⁶ pairs. One target vector per block on every ISA (`YUKAWA_K`).
+  beyond, over 10⁶ pairs on NEON (M3 Max), AVX2 and AVX-512 (Kathleen). One target vector per block on every ISA (`YUKAWA_K`).
 - `MatrixKernel::accumulate_columns` gives every element of C the chain of
   `MatrixSet::apply` (k ascending, multiply and add rounded apart; `MulAdd::Separate`)
   or one fma per step (`MulAdd::Fused`), from its own row of A and column of B only: the

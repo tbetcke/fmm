@@ -195,10 +195,41 @@ locust: `tools/gh200/sync.sh`, `remote.sh`, the main tree as `detached-<main sha
   Yukawa; the several-vector and dipole bodies untouched), and the D9 set "P2P +
   plane-wave + 4 FMM" (Machine runs 1–3).
 
+## Findings during implementation
+
+- **The skeleton costs Laplace nothing in code.** With `p2p_body` as the skeleton over the
+  zero-sized `Laplace`, every function of the crate is identical to `main`'s instruction for
+  instruction on aarch64 and x86_64, macOS and Linux, at the default settings and with one
+  codegen unit, before and after the Yukawa entry points were added (report §2). Unlike
+  CH2.4a, no codegen-unit shift appeared.
+- **K = 1, not the planned 2.** On NEON, K = 2 spills with the exponential's constants:
+  K = 1 is 1.2–1.3× faster with gradients and equal without; on AVX-512 K = 2 is within 2 %
+  in f32 and 5–9 % slower in f64 (report §5.2). `YUKAWA_K = 1` on every ISA.
+- **κ = 0 gives Laplace's bits** on every vector ISA, a test that the skeleton is shared. The
+  scalar ISA is the Yukawa reference's loop, whose gradient (q (−1 / r³)) dₖ rounds unlike
+  Laplace's −(q dₖ / r³), so there only the potential agrees.
+- **Tooling.** Locust's GNU objdump does not demangle rustc 1.99's v0 symbols; the Linux
+  rlibs were cross-built on the M3 Max with the same toolchain instead (Kathleen's objdump
+  does demangle them, and agreed). The first locust D9 attempt stopped in run 1: an
+  incomplete copy of `main`'s tree lacked `tools/bench/run.sh`; re-synced and rerun whole.
+
+## Checks run
+
+Report §6 lists every command with its machine and result. In short: `/verify` on the M3
+Max (format; Clippy default, examples, workspace all-targets, `nd-fmm-simd` native and
+x86_64; `cargo test` 1,006 and `--workspace` 1,086; `cargo doc`; `nd-fmm-simd`'s tests and
+ignored release tests; the MPI list at 2 and 4 ranks; the spike's test), all passed;
+Kathleen job 616123 (`check.sbatch simd`), passed; the inlining check; the disassembly
+comparison on four targets; `bits.sh` 18/18 on three machines; D9 120/120 rows within
+noise (M3 Max, locust, Kathleen job 616122); C3S.4 95–101 %; the cost per pair on three
+machines. Not run: the licence check (no default member's manifest changed).
+
 ## Pending runs
 
-(filled in step 6)
+None.
 
 ## Open questions
 
-(filled when they arise)
+The report's §7, for sign-off (non-blocking: the code is as derived and recommended):
+1. The Yukawa contract as derived, (20 + 12 κr) u_T and (52 + 12 κr) u_T.
+2. κ ≥ 0 required by `evaluate_yukawa`.
