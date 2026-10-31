@@ -21,10 +21,12 @@ CH2.4's, of which this sub-task prepares the first item:
 CH2.4a's own *Done when* (the split, roadmap):
 
 - e^x within 4 u_T relative on the domain [x_min, 0] on every ISA a machine offers, with
-  x_min = −(e_max − 1) ln 2 rounded inward (about −708.39 in f64 and −87.33 in f32), so that
-  every result is a normal number: f32 exhaustively over the domain, f64 on 10⁷ seeded
-  samples plus the domain ends, −0 and +0 giving exactly 1;
-- below x_min (and at −∞) a result in [0, 2^(e_min)], never NaN, never negative;
+  x_min = (e_min + 1) ln 2 rounded towards zero (−1021 ln 2 ≈ −707.70 in f64 and
+  −125 ln 2 ≈ −86.64 in f32), so that every result is a normal number: f32 exhaustively over
+  the domain, f64 on 10⁷ seeded samples plus the domain ends, −0 and +0 giving exactly 1;
+- below x_min (and at −∞) the value at x_min, positive and at most 2^(e_min + 2), never
+  NaN (the clamp; amended during implementation from "[0, 2^e_min]", which the first draft
+  of the domain got wrong);
 - each value's result independent of its position and of the slice length (whole vectors
   in place, the tail in a padded copy, as `rsqrt_slice`);
 - no call in the inner loop of any entry point (the release disassembly), and its
@@ -54,7 +56,9 @@ CH2.4a's own *Done when* (the split, roadmap):
     n · 2^(mantissa bits) to x's bits; valid where the result is normal. NEON
     `vshlq_n_s64`/`vaddq_s64` (`_s32` for f32), AVX2 `_mm256_slli_epi64`/`_mm256_add_epi64`
     (`_epi32`), AVX-512 the 512-bit forms, the scalar layer `to_bits`/`from_bits`.
-  - `exp_body`, generic over `Simd`, and an `exp` method with a default body on the trait:
+  - `arch::exp` (new): `exp`, a free function generic over `Simd` like the P2P bodies (as
+    built: not a trait method, which nothing outside the module would call), and
+    `exp_body`, the slice loop:
     x ← max(x, x_min); k = fma(x, 1/ln 2, c) (round to nearest); n = k − c;
     r = fnma(n, ln2_hi, x); r = fnma(n, ln2_lo, r) (Cody–Waite, ln2_hi with trailing
     zeros so that n · ln2_hi is exact); p(r) by Horner with one fma per step (Taylor to
@@ -126,6 +130,19 @@ All on every ISA the machine offers (`common::isas`, printing those it cannot ru
 - Risk: AVX2 has no 64-bit integer conversion; the round-to-nearest constant avoids it (k
   already carries n in its bits).
 - f32's e_min: the domain stops at normal results, so FTZ/DAZ settings never matter.
+
+## Findings during implementation
+
+- **Codegen units.** At the default release settings (16 codegen units), adding the
+  exponential changed rustc's partition of the crate, and with it the inlining in five
+  untouched aarch64 functions, all the plane-wave `sums` kernel (NEON `sums_f32` calls
+  `sums_body`'s first closure, `<[&[f32]; 2]>::try_map`, out of line; `sums_f64` moved
+  bounds-check paths). The innermost loops are unchanged instruction for instruction; the
+  bits cannot change (IEEE operations, no contraction). With `-C codegen-units=1` on both
+  sides all 69 existing aarch64 functions are identical to `main`'s. x86_64 (AVX2, AVX-512):
+  all 124 existing functions identical at the default settings. Since `Auto` runs the
+  plane-wave M2L for Laplace at f64 p ≥ 7 and f32 p ≥ 8, the `sums` step is timed on the
+  M3 Max, `main` against the branch (D9's protocol), below.
 
 ## Pending runs
 

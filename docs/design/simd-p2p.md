@@ -568,6 +568,62 @@ run the two kernels one after the other on the same source leaf, charges first; 
 kernel would share w, r² and ρ (about 8 + 3k operations per pair) and change the order of
 the additions, and is left for a later task.
 
+### 4.9 The exponential (Helmholtz CH2.4a)
+
+The Yukawa P2P of Helmholtz CH2.4b needs e^{−κr} per pair (docs/design/helmholtz-fmm-proposal.md
+§5.7). `arch::exp::exp` computes e^x for x ≤ 0 on the vector layer, and
+`exp::exp_slice` exposes it for tests and reports, as `rsqrt_slice` does the inverse
+square root (§4.3). One formulation serves every ISA:
+
+| Step | Operation | f32 | f64 |
+| --- | --- | --- | --- |
+| clamp | x ← max(x, x_min) | 1 | 1 |
+| round | k = fma(x, 1/ln 2, c), c = 1.5 · 2^m; n = k − c | 2 | 2 |
+| reduce | r = fnma(n, ln2_hi, x); r = fnma(n, ln2_lo, r) | 2 | 2 |
+| polynomial | Taylor to degree N by Horner, one fma per degree | N = 7 | N = 13 |
+| scale | bits(p) + (bits(k) ≪ m), an integer shift and add | 2 | 2 |
+| **total** | | **14** | **20** |
+
+m is the number of explicit significand bits. k = c + n holds n in the low bits of its
+significand, and c's low bits are zero, so the scaling needs no conversion to an integer
+(AVX2 has none for 64-bit lanes). The two new layer methods are `Simd::max` and
+`Simd::scale_pow2`; every other step uses the existing ones. Since all of them round as IEEE
+754 prescribes, the exponential gives the same bits on every ISA, and equals the scalar
+layer, which the scalar ISA runs.
+
+**Domain.** x_min = (e_min + 1) ln 2, rounded towards zero: −125 ln 2 ≈ −86.64 (f32) and
+−1021 ln 2 ≈ −707.70 (f64). Then n ≥ e_min + 1 and p ≥ e^{−ln 2 / 2} > ½, so every result
+is normal and the exponent addition stays in range; flush-to-zero and denormals-are-zero
+settings never matter. Below x_min (−∞ included) the clamp returns e^{x_min}'s value, at
+most 2^(e_min + 2). In the Yukawa kernel this is an absolute error below 2^(e_min + 2)
+|q| / r, far beneath any relative contract. At ±0 the result is exactly 1. Above 0 and for
+NaN it is unspecified.
+
+**Contract: within 4 u_T relative on [x_min, 0].** The derivation, to first order in u = u_T,
+for |r| ≤ ln 2 / 2:
+
+- n · ln2_hi is exact: fdlibm's ln2_hi has 32 significant bits in f64 and n has at most 11;
+  f32's 0.693359375 has 9 and n at most 7. x − n ln2_hi is exact by Sterbenz's lemma. The
+  second fnma rounds once, by u |r| ≤ 0.35 u, and ln2_lo's own rounding, times |n|, adds
+  below 10⁻⁶ u (f64) or 0.03 u (f32). An absolute error δ in r is a relative error δ in e^r.
+- Horner with one fma per degree, qⱼ = fma(qⱼ₊₁, r, cⱼ): step j's rounding, u |qⱼ|, reaches
+  the result times |r|ʲ. So the roundings add u Σⱼ |qⱼ| |r|ʲ ≤ u Σᵢ (i + 1) |r|ⁱ / i! =
+  u (1 + |r|) e^{|r|}, relative to e^r ≥ e^{−|r|}: at most (1 + 0.347) e^{0.693} u = 2.69 u.
+  The rounded coefficients 1/i!, i ≥ 3, add 0.01 u.
+- Truncation: |r|^{N+1} / (N + 1)! e^{|r|} relative to e^{−|r|}: 0.08 u₆₄ at N = 13 and
+  0.17 u₃₂ at N = 7.
+- The scaling is exact.
+
+In all at most 3.2 u, under the contract of 4 u_T. Measured on the M3 Max (NEON and
+scalar, which agree bit for bit): **1.324 u₃₂** over every one of the 1.12 · 10⁹ floats of
+the f32 domain, and **1.519 u₆₄** over 10⁷ seeded f64 samples (half uniform on the domain,
+half −2^t with t uniform in [−200, log₂ 707.7)), against a double-double reference
+(`tests/exp`). The tests also check every ISA against the scalar ISA bit for bit.
+
+**Inner loops** (the inlining check; Helmholtz CH2.4a): NEON 27 (f32) and 39 (f64)
+instructions, of which 14 and 20 operations and the rest register moves (`fmla`
+overwrites its accumulator); AVX2 23 and 33; AVX-512 23 and 29. None contains a call.
+
 ## 5. The crate `nd-fmm-simd`
 
 Directory `fmm-simd/`, package `nd-fmm-simd`, library `nd_fmm_simd`, a default member.

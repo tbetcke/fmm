@@ -280,10 +280,10 @@ family, checked against FMM3D's fixtures.
   as Phase 3S split the inverse square root (T4) from the kernel (T5) (the user, "Split
   a/b"); CH2.4 is done when both are:
 - [ ] **CH2.4a The vectorised exponential.** `nd_fmm_simd::exp` (`exp_slice`), the vector
-  layer's `max`, `scale_pow2` and `exp` (Cody–Waite reduction and a polynomial), for
+  layer's `max` and `scale_pow2`, and `arch::exp` (Cody–Waite reduction and a polynomial), for
   x ≤ 0, f32 and f64, every ISA. *Done when:* within 4 u_T relative on [x_min, 0] (normal
   results), f32 exhaustively and f64 on 10⁷ samples against double-double, on every ISA a
-  machine offers; below x_min a result in [0, 2^e_min]; position and length invariance;
+  machine offers; below x_min the value at x_min; position and length invariance;
   no call in the inner loop; the existing entry points' inner loops unchanged instruction
   for instruction. *Needs:* CH1.2. *Machines:* Kathleen (AVX-512, the contract).
 - [ ] **CH2.4b Yukawa P2P on a shared skeleton.** `P2pKernel::evaluate_yukawa`; the P2P

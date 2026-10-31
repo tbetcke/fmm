@@ -17,7 +17,9 @@
 //! T5: [`P2pKernel::evaluate_many`], P2P of several charge vectors at once. Phase 6 T6:
 //! [`Isa::Avx512`], every kernel on AVX-512F, selectable but not yet the default. Phase 6 T8:
 //! [`P2pKernel::evaluate_dipoles`], P2P of point dipoles. Phase 6 T13: [`WaveKernel`], the
-//! plane-wave M2L's loops on every ISA, bit for bit the scalar path's.
+//! plane-wave M2L's loops on every ISA, bit for bit the scalar path's. Helmholtz CH2.4a: the
+//! exponential of the Yukawa P2P on every ISA, bit for bit the scalar path's, which
+//! [`exp::exp_slice`] exposes for tests and reports.
 //!
 //! ## Instruction sets
 //!
