@@ -187,8 +187,8 @@ one row) and Kathleen (jobs 614707 and 614723, the latter the layout check). Rep
 None open. The user, 2026-10-30: "Proceed as planned" (Laplace the only kernel in this
 PR) and "12 host benchmarks" (the set above, host only).
 
-For sign-off (report §4):
+Signed off 2026-10-31 (report §4), the user: "Accept both as recommended":
 1. Kathleen f64 p = 6 Dense and Classes, +5.4 % on the default build. Code placement:
-   equal with every loop aligned to 64 bytes. Recommended: accept.
-2. locust f32 p = 3 Batched: failed by 0.2 ms, passed on a repeat. Recommended: count the
-   repeat, and record in D9 that a failing row may be repeated once, with both reported.
+   equal with every loop aligned to 64 bytes. Accepted.
+2. locust f32 p = 3 Batched: failed by 0.2 ms, passed on a repeat. The repeat counts, and
+   D9 now says that a failing row may be repeated once, with both results reported.

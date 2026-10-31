@@ -205,6 +205,8 @@ written fails these two rows, so they are put to the user (§4).
 
 ## 4. Questions for sign-off
 
+Both signed off 2026-10-31, the user: "Accept both as recommended". D9 in the roadmap now allows one repeat of a failing row.
+
 1. **Kathleen f64 p = 6 Dense and Classes, +5.4 %** (§3.3). The recommendation is to accept
    CH2.0. The rows differ by code placement, shown by the aligned build. Dense and Classes
    are not the defaults (`Auto` resolves to Batched and PlaneWave on the host), and the

@@ -791,10 +791,11 @@ request, using this template:
   - A self-review by a subagent: nothing blocking. Doc corrections taken (the level's
     meaning, "compile time", the CLAUDE.md rule, the plan as built).
 - Decisions: the user, 2026-10-30, "Proceed as planned" (Laplace the only kernel) and the
-  12 host benchmarks. For sign-off: the two Kathleen rows (recommended: accept), and the
-  repeat of a failing D9 row (report §4).
+  12 host benchmarks. Signed off 2026-10-31, the user: "Accept both as recommended":
+  the two Kathleen rows accepted as code placement, and D9 amended so that a failing row
+  may be repeated once, both results reported (report §4).
 - Laplace: unchanged bit for bit (the byte comparison on three machines and the test
-  suite). Benchmarks: within noise except the two Kathleen rows above.
+  suite). Benchmarks: within noise except the two Kathleen rows above (accepted).
 - Follow-ups:
   - CH2.1 (Yukawa) or CH3.5/CH3.1 (complex) is the trait's second user, with per-level
     p_l and tables through the level.
