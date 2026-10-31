@@ -291,8 +291,9 @@ family, checked against FMM3D's fixtures.
   loop skeleton generic over the pair arithmetic, Laplace's the first. *Done when:*
   CH2.4's: an accuracy contract like simd-p2p.md's (§4.9 onwards) on every ISA; cost per
   pair against Laplace on the three machines, beside green-kernels' modified Helmholtz;
-  Laplace's P2P bit for bit, its benchmarks within noise (D9) and at least 90 % of the
-  spike (C3S.4). *Needs:* CH2.4a. *Machines:* locust, Kathleen.
+  Laplace's P2P bit for bit, its benchmarks within noise (D9), the plane-wave M2L steps
+  (`plane_wave_parts`) on locust included (CH2.4a's question 2, signed off 2026-10-31), and
+  at least 90 % of the spike (C3S.4). *Needs:* CH2.4a. *Machines:* locust, Kathleen.
 - [ ] **CH2.1 The real `HelmholtzOperator` path.** On CH2.0's drivers (or copies), Rotation
   and Dense M2L. *Done when:* the FMM against the direct sum on W1, W3 and W4 for κD from
   10⁻² to 10³; deterministic. *Needs:* CH2.0, D12. *Sign-off:* D4.

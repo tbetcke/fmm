@@ -173,5 +173,6 @@ None.
 
 ## Open questions
 
-The report's §5: (1) the NEON f32 `sums` codegen shift, accept or fix; (2) the plane-wave
-steps on locust, in CH2.4b's D9 runs.
+The report's §5, both signed off 2026-10-31:
+1. The NEON f32 `sums` codegen shift: signed off 2026-10-31: accepted.
+2. The plane-wave steps on locust in CH2.4b's D9 runs: signed off 2026-10-31: yes.

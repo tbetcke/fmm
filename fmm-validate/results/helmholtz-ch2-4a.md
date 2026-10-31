@@ -147,6 +147,8 @@ level call. f64 `sums`, whose differences are bounds-check paths only, shows no 
 
 ## 5. Questions for sign-off
 
+Both signed off 2026-10-31: question 1 "Accepted" (option a), question 2 "Yes".
+
 1. **NEON f32 `sums`, 4–6 % slower from a codegen-unit shift.** It failed D9 once and
    passed on the repeat, both reported. The cause is the out-of-line closure call of §3,
    from rustc's partitioning, not a change of code; CH2.4b's additions will move the

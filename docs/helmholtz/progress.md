@@ -845,8 +845,8 @@ request, using this template:
   - Nothing pending.
 - Decisions: the split (above). Questions for sign-off, report §5:
   1. NEON f32 `sums`, 4–6 % slower from a codegen-unit shift: accept, fix in source, or
-     one codegen unit.
-  2. The plane-wave steps on locust in CH2.4b's D9 runs.
+     one codegen unit. Signed off 2026-10-31: accepted.
+  2. The plane-wave steps on locust in CH2.4b's D9 runs. Signed off 2026-10-31: yes.
 - Laplace: bits unchanged (only additions; the test suite and the MPI list).
   - Code: x86_64 all 124 existing functions identical to `main`'s; aarch64 49 of 54.
     - The five that differ are the plane-wave `sums` step, from rustc's codegen-unit
@@ -855,7 +855,7 @@ request, using this template:
     (+6.1 %) and passed on the repeat (+3.6 %); every other row passes, f64 included.
 - Follow-ups:
   - CH2.4b: the Yukawa P2P on `exp`, with Laplace's D9 on the three machines (the
-    plane-wave steps on locust included, if question 2 is signed off).
+    plane-wave steps on locust included, question 2).
   - Adding code to `nd-fmm-simd` can move inlining in untouched kernels (fmm-simd/CLAUDE.md
     now says so). Compare entry points with `main`'s at the default settings and with one
     codegen unit.
