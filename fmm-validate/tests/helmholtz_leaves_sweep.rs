@@ -5,7 +5,8 @@
 //! a point is wider than c_leaf λ, and the table of the leaves is printed for the record
 //! (docs/helmholtz/tasks/CH3.0b.md, "Results").
 //!
-//! Ignored: minutes in release. Run by hand:
+//! Ignored: 7 s in release on the M6, far longer in debug (W3 resolved at kD = 100 has
+//! 4.0 million points). Run by hand:
 //!
 //! ```text
 //! RUST_MIN_STACK=8388608 cargo test -p nd-fmm-validate --release \
@@ -22,7 +23,7 @@ use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::helmholtz_workloads::Workload;
 
 #[test]
-#[ignore = "the full kD range: minutes in release, run by hand"]
+#[ignore = "the full kD range: millions of points, run by hand in release"]
 fn the_rule_over_the_full_kd_range() {
     let _universe = mpi::initialize().expect("MPI initialises once");
 

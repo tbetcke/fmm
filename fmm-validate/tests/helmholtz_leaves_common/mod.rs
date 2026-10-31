@@ -112,6 +112,10 @@ pub fn check(name: &str, keys: &[MortonKey], k: &Wavenumber) -> Leaves {
 }
 
 /// The leaves of the tree of `keys` under the rule of `k`, sorted.
+#[allow(
+    dead_code,
+    reason = "tests/helmholtz_leaves_sweep.rs checks the rule only"
+)]
 pub fn leaf_keys(keys: &[MortonKey], k: &Wavenumber) -> Vec<MortonKey> {
     let comm = SimpleCommunicator::self_comm();
     let mut leaves = tree(keys, k, &comm).leaf_keys().clone();
@@ -120,6 +124,10 @@ pub fn leaf_keys(keys: &[MortonKey], k: &Wavenumber) -> Vec<MortonKey> {
 }
 
 /// The leaves of `Fmm`'s tree of `keys` without the option, sorted.
+#[allow(
+    dead_code,
+    reason = "tests/helmholtz_leaves_sweep.rs checks the rule only"
+)]
 pub fn leaf_keys_without_rule(keys: &[MortonKey]) -> Vec<MortonKey> {
     let comm = SimpleCommunicator::self_comm();
     let mut leaves = Octree::new(keys, fmm_options(), &comm).leaf_keys().clone();
