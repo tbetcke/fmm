@@ -802,3 +802,60 @@ request, using this template:
   - Code placement moves Laplace's times by up to ±5–13 % between builds (Kathleen f64
     Dense/Classes, M3 Max f32 Classes/Rotation). Later D9 runs may meet it again. An
     aligned build (`-align-loops=64`) is the tool to tell placement from work.
+
+## 2026-10-31: CH2.4a The vectorised exponential
+- Done:
+  - CH2.4 split into CH2.4a (this) and CH2.4b (Yukawa P2P on a shared skeleton), the user,
+    "Split a/b".
+  - `nd_fmm_simd::arch::exp::exp`, e^x for x ≤ 0 on the vector layer:
+    - clamp to x_min = (e_min + 1) ln 2;
+    - n by the constant 1.5 · 2^m and a Cody–Waite reduction;
+    - Taylor of degree 13 (f64) or 7 (f32) by Horner;
+    - n added to the exponent bits (`Simd::scale_pow2`, no integer conversion).
+  - The layer gains `max` and `scale_pow2` on every ISA. `exp::exp_slice` is public, for
+    tests and reports, like `rsqrt_slice`.
+  - Every step is an IEEE-rounded operation, so every ISA equals the scalar ISA bit for bit.
+  - Design `docs/design/simd-p2p.md` §4.9; report `fmm-validate/results/helmholtz-ch2-4a.md`.
+- Tests: `fmm-simd/tests/exp/` (11, plus 2 ignored release tests) and the layer test
+  `layer_exponent_operations_match_scalar`.
+  - Contract 4 u_T on [x_min, 0]: f32 exhaustive, 1.324 u; f64 on 10⁷ samples against
+    double-double, 1.228 u.
+    - Identical on the M3 Max (scalar, NEON) and Kathleen (scalar, AVX2, AVX-512).
+    - Derived bounds 3.3 u₃₂ and 3.2 u₆₄.
+  - The reduction's boundaries; e^{±0} = 1 exactly; below x_min the value at x_min.
+  - Bit identity across ISAs, lane and length independence, panics.
+  - The oracle against 90-digit values.
+- Checks:
+  - Ran `/verify` on the M3 Max, all passed:
+    - format; Clippy default, examples and workspace all-targets;
+    - `cargo test` (989) and `cargo test --workspace` (1,068); `cargo doc`;
+    - `nd-fmm-simd`'s Clippy native and x86_64; its tests and ignored release tests;
+    - the MPI list at 2 and 4 ranks.
+  - Kathleen jobs 615552 and 615691 (`check.sbatch simd`): all passed.
+  - Inlining check: no call in any exponential loop; NEON 27/39, AVX2 23/33, AVX-512 23/29
+    instructions (f32/f64).
+  - Not run:
+    - the licence check (no manifest changed);
+    - Laplace's `tools/bench/run.sh` (the plan leaves it to CH2.4b);
+    - locust.
+  - A self-review by a subagent: nothing blocking. Taken:
+    - the f64 oracle compares before its 2ⁿ scaling (the first figure, 1.519 u₆₄, was half
+      the oracle's own error near x_min);
+    - two bounds and one wording corrected; the plan updated.
+  - Nothing pending.
+- Decisions: the split (above). Questions for sign-off, report §5:
+  1. NEON f32 `sums`, 4–6 % slower from a codegen-unit shift: accept, fix in source, or
+     one codegen unit. Signed off 2026-10-31: accepted.
+  2. The plane-wave steps on locust in CH2.4b's D9 runs. Signed off 2026-10-31: yes.
+- Laplace: bits unchanged (only additions; the test suite and the MPI list).
+  - Code: x86_64 all 124 existing functions identical to `main`'s; aarch64 49 of 54.
+    - The five that differ are the plane-wave `sums` step, from rustc's codegen-unit
+      partition; with one codegen unit, 69 of 69 are identical.
+  - D9 on the M3 Max (`plane_wave_parts`, A B B A order): f32 p = 8 `sums` failed once
+    (+6.1 %) and passed on the repeat (+3.6 %); every other row passes, f64 included.
+- Follow-ups:
+  - CH2.4b: the Yukawa P2P on `exp`, with Laplace's D9 on the three machines (the
+    plane-wave steps on locust included, question 2).
+  - Adding code to `nd-fmm-simd` can move inlining in untouched kernels (fmm-simd/CLAUDE.md
+    now says so). Compare entry points with `main`'s at the default settings and with one
+    codegen unit.

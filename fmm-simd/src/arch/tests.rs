@@ -188,6 +188,50 @@ fn arithmetic<T: SimdScalar, S: Simd<T>>(s: S) {
     }
 }
 
+/// The operations of the exponential (Helmholtz CH2.4a), lane by lane against the scalar
+/// path: `max` (without zeros of opposite signs, whose result is unspecified), and
+/// `scale_pow2`, which on the scalar path is also checked against x · 2ⁿ.
+fn exponent_operations<T: SimdScalar, S: Simd<T>>(s: S) {
+    let mut rng = Rng(0x5eed_0005);
+    let w = S::W;
+    let sc = Scalar;
+    // c = 1.5 · 2^m, m the explicit significand bits.
+    let round = 1.5 * 2f64.powi(T::epsilon().to_f64().log2().round().abs() as i32);
+    for _ in 0..TRIALS {
+        let positive_zero = |x: T| if x == T::zero() { T::zero() } else { x };
+        let a: Vec<T> = rng.values(w).into_iter().map(positive_zero).collect();
+        let b: Vec<T> = rng.values(w).into_iter().map(positive_zero).collect();
+        let max: Vec<T> = (0..w).map(|i| sc.max(a[i], b[i])).collect();
+        assert_bits::<T, S>("max", &lanes(s, s.max(s.load(&a), s.load(&b))), &max);
+        // Nonzero x: `scale_pow2` is specified for normal x and x · 2ⁿ only.
+        let nonzero = |x: T| if x == T::zero() { T::one() } else { x };
+        let x: Vec<T> = rng.values(w).into_iter().map(nonzero).collect();
+        let n: Vec<f64> = (0..w)
+            .map(|_| (rng.next_u64() % 201) as f64 - 100.0)
+            .collect();
+        let k: Vec<T> = n.iter().map(|&n| T::from_f64(round + n)).collect();
+        let want: Vec<T> = (0..w)
+            .map(|i| {
+                let y = sc.scale_pow2(x[i], k[i]);
+                let exact = T::from_f64(x[i].to_f64() * 2f64.powi(n[i] as i32));
+                assert_eq!(
+                    bits(y),
+                    bits(exact),
+                    "scalar scale_pow2 of {:e} by 2^{}",
+                    x[i].to_f64(),
+                    n[i]
+                );
+                y
+            })
+            .collect();
+        assert_bits::<T, S>(
+            "scale_pow2",
+            &lanes(s, s.scale_pow2(s.load(&x), s.load(&k))),
+            &want,
+        );
+    }
+}
+
 /// Load and store touch exactly the first W values of a longer slice.
 fn load_store_prefix<T: SimdScalar, S: Simd<T>>(s: S) {
     let mut rng = Rng(0x5eed_0002);
@@ -373,6 +417,20 @@ fn short_slices_panic<T: SimdScalar, S: Simd<T>>(s: S) {
 fn layer_arithmetic_matches_scalar() {
     on_every_isa!("layer_arithmetic_matches_scalar", f32, arithmetic);
     on_every_isa!("layer_arithmetic_matches_scalar", f64, arithmetic);
+}
+
+#[test]
+fn layer_exponent_operations_match_scalar() {
+    on_every_isa!(
+        "layer_exponent_operations_match_scalar",
+        f32,
+        exponent_operations
+    );
+    on_every_isa!(
+        "layer_exponent_operations_match_scalar",
+        f64,
+        exponent_operations
+    );
 }
 
 #[test]
