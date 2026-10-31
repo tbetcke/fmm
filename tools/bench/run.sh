@@ -51,6 +51,9 @@ features=$(printf '%s\n' $cpu $metal $cuda | paste -s -d, -)
 
 export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 BLIS_NUM_THREADS=1
 export GOTO_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1
+# hwloc 2.15.0's darwin backend hangs every MPI_Init on the M6 (root CLAUDE.md, "MPI");
+# an HWLOC_COMPONENTS already set, even empty, is kept.
+if [ "$(uname -s)" = Darwin ]; then export HWLOC_COMPONENTS="${HWLOC_COMPONENTS--darwin}"; fi
 
 if [ -n "$features" ]; then
     exec cargo run --release --manifest-path "$root/Cargo.toml" -p nd-fmm-bench \

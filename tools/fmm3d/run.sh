@@ -115,7 +115,12 @@ VEC_SKIP=${VEC_SKIP:-}
 TIMEOUT=${TIMEOUT:-7200}
 QUIET=${QUIET:-200}
 case "$(uname -s)" in
-Darwin) os=macos CORES=${CORES:-6} ;;
+Darwin)
+    os=macos CORES=${CORES:-6}
+    # hwloc 2.15.0's darwin backend hangs every MPI_Init on the M6 (root CLAUDE.md,
+    # "MPI"); an HWLOC_COMPONENTS already set, even empty, is kept.
+    export HWLOC_COMPONENTS="${HWLOC_COMPONENTS--darwin}"
+    ;;
 *)
     if [ -n "${SLURM_JOB_ID:-}" ]; then os=slurm CORES=${CORES:-40}; else os=linux CORES=${CORES:-72}; fi
     ;;

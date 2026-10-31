@@ -29,8 +29,17 @@
 # flags to every mpirun, for example the macOS loopback flags of the root CLAUDE.md for a
 # run by hand (never on the runner).
 #
-# Plain bash 3.2 (macOS's /bin/bash), so the same script runs on the M3 Max.
+# Plain bash 3.2 (macOS's /bin/bash), so the same script runs on a Mac.
 set -euo pipefail
+
+# On macOS by hand: hwloc 2.15.0's darwin backend hangs every MPI_Init on the M6, and
+# without it hwloc finds no cores, so Open MPI maps by slot (root CLAUDE.md, "MPI").
+# Variables already set, even empty, are kept.
+if [ "$(uname -s)" = Darwin ]; then
+    export HWLOC_COMPONENTS="${HWLOC_COMPONENTS--darwin}"
+    policy="${PRTE_MCA_rmaps_default_mapping_policy-slot:OVERSUBSCRIBE}"
+    export PRTE_MCA_rmaps_default_mapping_policy="$policy"
+fi
 
 # kind, package, target: the MPI-owning test executables (one MPI-initialising test
 # each; fmm-plan/CLAUDE.md, fmm-exec/CLAUDE.md) and the nd-octree MPI examples

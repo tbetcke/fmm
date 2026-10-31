@@ -370,6 +370,9 @@ NODES=1
 case "$(uname -s)" in
 Darwin)
     os=macos
+    # hwloc 2.15.0's darwin backend hangs every MPI_Init on the M6 (root CLAUDE.md,
+    # "MPI"); an HWLOC_COMPONENTS already set, even empty, is kept.
+    export HWLOC_COMPONENTS="${HWLOC_COMPONENTS--darwin}"
     RANKS=${RANKS:-"1 2 4 6"}
     CORES=6
     THREAD_SPLITS="1x6 2x3 3x2 6x1"

@@ -294,10 +294,12 @@ runs `cargo upgrades` (not `cargo audit`).
 - On the M6 (since 2026-10-31), Homebrew's hwloc 2.15.0 hangs in its `darwin` backend
   (three core levels: Super, Performance, Efficiency), and with it every `MPI_Init` and
   `lstopo`. Export `HWLOC_COMPONENTS=-darwin` for every MPI run and every `cargo test`
-  of an MPI crate. hwloc then finds no cores, so Open MPI finds no slots: launch with
-  `--host localhost:6 --map-by slot --bind-to none` (`tools/scaling/run.sh` does), or
-  for the CI list `PRTE_MCA_rmaps_default_mapping_policy=slot:OVERSUBSCRIBE` (the
-  `:oversubscribe` of CI fails here). Oversubscribed and six-slot runs time the same
+  of an MPI crate; `tools/scaling/run.sh`, `tools/bench/run.sh`, `tools/fmm3d/run.sh` and
+  `.github/scripts/run-mpi-tests.sh` set it themselves on macOS when it is unset. hwloc
+  then finds no cores, so Open MPI finds no slots: launch with `--host localhost:6
+  --map-by slot --bind-to none` (`tools/scaling/run.sh` does), or with
+  `PRTE_MCA_rmaps_default_mapping_policy=slot:OVERSUBSCRIBE` (`run-mpi-tests.sh` sets it
+  on macOS when unset; the `:oversubscribe` of CI fails here). Oversubscribed and six-slot runs time the same
   (2026-10-31: wall time within the run-order drift, the exchanges +0.5 ms at 6 ranks).
 - Register every example that CI should run in the crate's `Cargo.toml` with both an
   `[[example]]` section and `[package.metadata.example.<name>.templated-examples]`
