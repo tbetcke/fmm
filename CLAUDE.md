@@ -103,8 +103,9 @@ environment made by `tools/gh200/` (README.md there): a pinned spack environment
 12.6, plus rustup with the toolchain pinned in `env.sh`. Everything on locust lives
 under `/data/ucahtbe`, never in the home directory; `env.sh` moves `HOME` and every
 cache there, and `check-home.sh` verifies it. It also links with rust-lld: GNU ld
-cannot link CubeCL's LLVM on aarch64 Linux (README.md there). A session on the M3 Max drives locust
-with `tools/gh200/sync.sh` (copies the working tree, uncommitted work included) and
+cannot link CubeCL's LLVM on aarch64 Linux (README.md there). A session on the
+development Mac (the M6 since 2026-10-31, `tools/m6/machine.md`; the M3 Max before)
+drives locust with `tools/gh200/sync.sh` (copies the working tree, uncommitted work included) and
 `tools/gh200/remote.sh <command>` (runs it in that copy inside the environment). Both
 use `ssh`, which the sandbox denies, so they run outside it. locust never commits or
 pushes; it is a shared node, so check `nvidia-smi` and `uptime` before timing anything.
@@ -118,7 +119,7 @@ quota that home and Scratch share (`lquota`). The login node takes only short, l
 commands (syncing, `sbatch`, `squeue`, `sacct`, reading output, `cargo fmt`); every
 build, test and run is a Slurm job (`tools/kathleen/jobs/`), and no job is larger than
 4 nodes (Phase 5S; Phase 5N's cap was 2): 1 node in `singlenode`, 2 in `test`, 4 in
-`small`. A session on the M3 Max drives it with `tools/kathleen/sync.sh`, then
+`small`. A session on the development Mac drives it with `tools/kathleen/sync.sh`, then
 `tools/kathleen/submit.sh <job>` (submits and waits) or `tools/kathleen/remote.sh
 <command>` (login node only). All use `ssh`, so they run outside the sandbox. Kathleen
 never commits or pushes; its nodes are exclusive, so a report names the job and nodes.
@@ -208,7 +209,7 @@ nd-fmm-kernels is a workspace member, not a default member: the default and
 cargo clippy -p nd-fmm-kernels --all-targets --features cpu,metal -- -D warnings
 cargo check -p nd-fmm-kernels --features cuda   # CUDA: type-checked here, run on locust
 cargo test -p nd-fmm-kernels --features cpu --release -- --show-output
-# By hand on the M3 Max, outside the sandbox (Metal has no adapter inside it):
+# By hand on the development Mac, outside the sandbox (Metal has no adapter inside it):
 cargo test -p nd-fmm-kernels --release --features metal -- --ignored --show-output
 ```
 
@@ -284,12 +285,20 @@ runs `cargo upgrades` (not `cargo audit`).
   every pull request (`run-tests-mpi`, correctness only), and the registered examples
   weekly at 3; everything else in CI runs on one rank. For changes to distributed code,
   still run multi-rank by hand (8 ranks and the ignored tests run only by hand, on the
-  M3 Max and on locust), and always under an external timeout: an assertion on one rank
-  leaves the others blocked in a collective. Write a multi-rank test to fail on every
+  development Mac and on locust), and always under an external timeout: an assertion on
+  one rank leaves the others blocked in a collective. Write a multi-rank test to fail on every
   rank or on none.
 - On macOS, plain `mpiexec`/`mpirun -n 2 …` hangs or aborts because Open MPI picks a
   non-loopback interface. Add `--mca btl_tcp_if_include lo0 --mca oob_tcp_if_include lo0`.
   This is environmental, not a bug to chase.
+- On the M6 (since 2026-10-31), Homebrew's hwloc 2.15.0 hangs in its `darwin` backend
+  (three core levels: Super, Performance, Efficiency), and with it every `MPI_Init` and
+  `lstopo`. Export `HWLOC_COMPONENTS=-darwin` for every MPI run and every `cargo test`
+  of an MPI crate. hwloc then finds no cores, so Open MPI finds no slots: launch with
+  `--host localhost:6 --map-by slot --bind-to none` (`tools/scaling/run.sh` does), or
+  for the CI list `PRTE_MCA_rmaps_default_mapping_policy=slot:OVERSUBSCRIBE` (the
+  `:oversubscribe` of CI fails here). Oversubscribed and six-slot runs time the same
+  (2026-10-31: wall time within the run-order drift, the exchanges +0.5 ms at 6 ranks).
 - Register every example that CI should run in the crate's `Cargo.toml` with both an
   `[[example]]` section and `[package.metadata.example.<name>.templated-examples]`
   with `command = "mpirun -n {{NPROCESSES}}"`, as in `octree/Cargo.toml`.

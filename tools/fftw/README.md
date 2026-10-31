@@ -7,7 +7,8 @@ Each machine's result is recorded in its `machine.md`.
 
 | Machine | Command | Record |
 | --- | --- | --- |
-| M3 Max | `tools/fftw/probe.sh` (outside the sandbox for the CPU line: it denies `sysctl`) | `tools/m3max/machine.md` |
+| M6 | `tools/fftw/probe.sh` (outside the sandbox for the CPU line: it denies `sysctl`) | `tools/m6/machine.md` |
+| M3 Max (until 2026-10-31) | as the M6 | `tools/m3max/machine.md` |
 | locust | `tools/gh200/sync.sh`, then `tools/gh200/remote.sh 'tools/fftw/probe.sh'` | `tools/gh200/machine.md` |
 | Kathleen | `tools/kathleen/sync.sh`, then `tools/kathleen/submit.sh run.sbatch 'tools/fftw/probe.sh'` | `tools/kathleen/machine.md` |
 | CI | the `fftw-probe` workflow (`.github/workflows/fftw-probe.yml`): on pull requests that change this directory, and by hand | `tools/ci/machine.md` |

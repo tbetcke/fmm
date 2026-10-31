@@ -1,6 +1,7 @@
 # M3 Max: machine facts
 
-The development machine, which drives locust and Kathleen. This file starts with the facts
+The development machine until 2026-10-31, which drove locust and Kathleen; the M6
+replaced it (`tools/m6/machine.md`). This file starts with the facts
 Helmholtz CHR.4 needed; other tasks add theirs.
 
 | Item | Value | Command |

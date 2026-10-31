@@ -24,8 +24,8 @@
 # FMM_KATHLEEN_SETUP=1, which sets the variables only: no modules, no summary.
 
 # --- Pins -----------------------------------------------------------------------
-# The Rust toolchain, through rustup. Keep it at the M3 Max's `rustc --version` and
-# CI's stable, as tools/gh200/env.sh does.
+# The Rust toolchain, through rustup. Keep it at the development machine's (the M6's)
+# `rustc --version` and CI's stable, as tools/gh200/env.sh does.
 FMM_KATHLEEN_RUST=1.99.0
 # The modules, with full versions, from the ucl-stack/2026-03 stack (machine.md).
 # Open MPI's own requirements (numactl) and cmake's and llvm's (curl, xz, pcre2) load

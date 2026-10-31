@@ -95,8 +95,9 @@ Phase 5N T4 (the strategy rule on the node) added `Settings::dense_node_budget`
 default (`Fmm::strategy`; under `Auto` a one-rank `Fmm` may resolve another), the
 summary's `requested`, `budget_mb`, `dense_rank_mb` and `dense_node_mb` (the reason is in
 the threading line), and in `tools/scaling/run.sh` the budget per machine class
-(`BUDGET`: 56 on the M3 Max, set by the user after T4's runs, 96 on locust and Kathleen) and the sweeps `node-rule` (T3's
-grid, `auto` against the other strategy, the cap and the errors) and `crossover`. The
+(`BUDGET`: 56 on the M3 Max, set by the user after T4's runs, and kept for the M6 after
+its crossover sweep, tools/m6/machine.md; 96 on locust and Kathleen) and the sweeps
+`node-rule` (T3's grid, `auto` against the other strategy, the cap and the errors) and `crossover`. The
 before/after report is in `results/phase5n-kathleen.md`, "Phase 5N, T4".
 
 Phase 5S T0 (the code at 1, 2 and 4 Kathleen nodes) added to `tools/scaling/run.sh` the
