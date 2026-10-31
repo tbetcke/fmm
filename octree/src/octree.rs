@@ -159,11 +159,13 @@ pub enum PartitionWeight {
 /// let options = OctreeOptions::new()
 ///     .with_max_level(12)
 ///     .with_max_fine_keys(4)
+///     .with_min_leaf_level(3)
 ///     .with_ghost_children(true)
 ///     .with_partition_weight(PartitionWeight::Keys)
 ///     .with_block_refinement(8);
 /// assert_eq!(options.max_level(), 12);
 /// assert_eq!(options.max_fine_keys(), 4);
+/// assert_eq!(options.min_leaf_level(), 3);
 /// assert!(options.ghost_children());
 /// assert_eq!(options.partition_weight(), PartitionWeight::Keys);
 /// assert_eq!(options.block_refinement(), 8);
@@ -182,8 +184,9 @@ impl Default for OctreeOptions {
     /// Return the deepest tree with no optional layer.
     /// # Returns
     /// Options with `max_level` at [`DEEPEST_LEVEL`], `max_fine_keys` at one,
-    /// `min_leaf_level` at zero (no level rule), the ghost-children layer disabled, the partition weighing every key
-    /// ([`PartitionWeight::Keys`]) and a block refinement factor of 8.
+    /// `min_leaf_level` at zero (no level rule), the ghost-children layer disabled,
+    /// the partition weighing every key ([`PartitionWeight::Keys`]) and a block
+    /// refinement factor of 8.
     fn default() -> Self {
         Self {
             max_level: DEEPEST_LEVEL as usize,
@@ -294,8 +297,8 @@ impl OctreeOptions {
     /// ranks the leaves are still the one-rank leaves. The default, zero, adds no
     /// condition and leaves every tree unchanged.
     /// # Arguments
-    /// - `min_leaf_level`: The level, in `0..=16`; a larger value acts as
-    ///   [`OctreeOptions::max_level`].
+    /// - `min_leaf_level`: The level; a value deeper than [`OctreeOptions::max_level`]
+    ///   (or [`DEEPEST_LEVEL`]) is capped there during construction.
     ///
     /// # Returns
     /// The options with the minimum level of a leaf holding a key set to
