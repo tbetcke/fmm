@@ -231,6 +231,7 @@ None.
 
 ## Open questions
 
-The report's §7, for sign-off (non-blocking: the code is as derived and recommended):
-1. The Yukawa contract as derived, (20 + 12 κr) u_T and (52 + 12 κr) u_T.
-2. κ ≥ 0 required by `evaluate_yukawa`.
+The report's §7, both signed off 2026-10-31 (the user: "Accept both sign-offs as
+recommended"):
+1. The Yukawa contract as derived, (20 + 12 κr) u_T and (52 + 12 κr) u_T: accepted.
+2. κ ≥ 0 required by `evaluate_yukawa`: accepted.

@@ -903,7 +903,8 @@ request, using this template:
   4.5× at most); 1.2–4.1× faster than green-kernels' modified Helmholtz on the same machine
   and vector width (its convention checked: 1/(4π), ∂/∂x).
 - Decisions: the user, 2026-10-31, "Proceed as planned" and the D9 set. Questions for
-  sign-off, report §7: 1. the contract as derived; 2. κ ≥ 0 required.
+  sign-off, report §7: 1. the contract as derived; 2. κ ≥ 0 required. Both signed off
+  2026-10-31, the user: "Accept both sign-offs as recommended".
 - Laplace: unchanged in code (instruction for instruction), bits and benchmarks.
 - Follow-ups:
   - CH2.1 (Yukawa operator) needs a several-vector Yukawa P2P if it evaluates several

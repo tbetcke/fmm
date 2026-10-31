@@ -510,6 +510,8 @@ Max and CI's arm64 runner do not cover; its timings are §3.2 and §5.2).
    10.2 u at most at small κr and about 3 u per unit of κr, on every ISA. Recommendation:
    accept as derived, as §4.8 did for dipoles. Alternative: contracts at the measured level
    with a margin (for example 16 + 6 κr and 24 + 6 κr), which no derivation backs.
+   **Signed off 2026-10-31: accepted as recommended.**
 2. **κ ≥ 0 required.** `evaluate_yukawa` panics unless κ is finite and κ ≥ 0, where the
    reference takes any finite κ: the exponential is specified for x ≤ 0 only, and §3.15's
-   range is Im k ≥ 0. Recommendation: keep it.
+   range is Im k ≥ 0. Recommendation: keep it. **Signed off 2026-10-31: accepted as
+   recommended.**
