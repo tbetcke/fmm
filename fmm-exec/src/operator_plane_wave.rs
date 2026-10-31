@@ -13,7 +13,8 @@ use nd_fmm_tables::plane_wave::geometry::slot_of;
 use nd_fmm_tables::plane_wave::{CHILDREN, Direction, SLOTS};
 use nd_octree::morton;
 
-use super::{BoxCall, Kernels, Scratch};
+use super::{Kernels, Scratch};
+use crate::driver::BoxCall;
 
 /// The slot of the source of V pair (child index o, offset index d) at `8 d + o`, or
 /// [`NO_SLOT`] (`nd_fmm_tables::plane_wave::geometry::slot_of`, tabulated once).
@@ -27,9 +28,6 @@ const NO_SLOT: u8 = u8::MAX;
 
 /// A slot the parent's computed children do not name.
 const NO_BOX: u32 = u32::MAX;
-
-/// The boxes per piece below which the pool runs a piece of the parents serially.
-pub(crate) const PARENT_GRAIN: usize = 64;
 
 /// The plane-wave kernels of an operator: the vector kernels on the ISA of the P2P
 /// choice (the scalar path for the reference) and the tables of their Fourier passes in

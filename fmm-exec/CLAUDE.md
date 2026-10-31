@@ -158,6 +158,17 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   cut's tree at p = 5 with the cost model's rule, 0.6 % at p = 16 with every pair
   converted); the tests bound it at 1.1 times the rule off's (`NEAR_ERROR_BOUND`), C6.9's
   "at most" being a sign-off question (fmm-validate/results/phase6-near.md).
+- The shared host drivers (Helmholtz CH2.0; docs/design/helmholtz-fmm-proposal.md §2,
+  constraint 1, and §6.2; the `operator` module docs, "The shared drivers"): the level
+  calls' walking of the views, threads, scratch sets and batched-M2L blocks live in the
+  crate-private `src/driver.rs`, generic over `driver::HostKernel<T>`. Its methods take
+  the level call's level. `operator::Kernels` is Laplace's kernel: it ignores the level,
+  keeps its runtime p and its per-pair `Tables` dispatch, and delegates to its own
+  methods. The plane-wave M2L stays in `operator`. A change to `driver.rs` is a change
+  to Laplace's paths: Laplace's outputs stay bit for bit, and its benchmarks within noise
+  on the M3 Max, locust and Kathleen (D9 of docs/helmholtz/roadmap.md). Add no runtime
+  dispatch below the level call, and keep strides and plane counts compile-time
+  constants for Laplace.
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread
   count. No `unsafe`, no atomics, no global pool; per-thread scratch created at

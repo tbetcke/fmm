@@ -110,8 +110,20 @@
 //! entry's octant or offset index; debug builds check that it agrees with the keys.
 //!
 //! The body of one target is a function of that target's output slice, the call's
-//! shared inputs and one scratch set (`Kernels::*_target`), and nothing else. M2L under
-//! `Batched` and under `PlaneWave` runs otherwise (below).
+//! shared inputs and one scratch set (the drivers' `*_target` bodies, below), and nothing
+//! else. M2L under `Batched` and under `PlaneWave` runs otherwise (below).
+//!
+//! # The shared drivers
+//!
+//! Since Helmholtz CH2.0 (docs/design/helmholtz-fmm-proposal.md §6.2) the walking of the
+//! views, the threads, the scratch sets and the batched M2L's blocks live in the
+//! crate-private module `driver`, generic over a kernel trait, `HostKernel`. The trait
+//! gives one box's or leaf's operator with the level call's level, the batched M2L's
+//! tables of a level, and the scratch. This operator's kernel ignores the level and
+//! reads its one p at run time, as before. The drivers are monomorphised for it, and
+//! dispatch nothing at run time that the code before them did not. Its outputs are those
+//! of the code before the move, bit for bit. Only the plane-wave M2L stays here. The
+//! Helmholtz-family operators are the drivers' other kernels.
 //!
 //! # The batched M2L
 //!
@@ -293,35 +305,32 @@
 //! ```
 
 use core::fmt;
-use core::ops::Range;
 use core::str::FromStr;
-use std::sync::{Arc, Mutex, PoisonError, TryLockError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use mpi::traits::Equivalence;
 use nd_fmm_math::RealScalar;
-use nd_fmm_plan::index::BoxIndex;
-use nd_fmm_plan::lists::{Children, Csr, Parents, VList};
 use nd_fmm_plan::operator::{
     FmmOperator, FmmSizes, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PairOperator,
 };
-use nd_fmm_plan::store::{LeafSlice, LeafSliceMut, LevelSlice, LevelSliceMut};
 use nd_fmm_ref::{Frame, Workspace, leaf, p2p};
 pub use nd_fmm_simd::{Isa, IsaUnavailable, MulAdd, SimdScalar};
 use nd_fmm_simd::{MatrixKernel, P2pKernel, WaveKernel};
 use nd_fmm_tables::MatrixSet;
-use nd_fmm_tables::geometry::m2l_offset_index;
 use nd_octree::{MortonKey, morton};
 use rayon::ThreadPool;
-use rayon::prelude::*;
 use thiserror::Error;
 
+use crate::driver::{
+    self, BoxCall, Columns, Execution, HostKernel, debug_check_octant, offset_index,
+};
 use crate::geometry::relative_frame;
 use crate::tables::{TableScratch, Tables};
 
 #[path = "operator_plane_wave.rs"]
 mod plane_wave;
 
-use plane_wave::{PARENT_GRAIN, PlaneScratch, PlaneWaveKernel};
+use plane_wave::{PlaneScratch, PlaneWaveKernel};
 
 /// Values per source point with one charge vector: the leaf-scaled coordinates and the
 /// charge (CONVENTIONS §3.13, "Source chunks"); with m vectors 3 + m.
@@ -510,7 +519,7 @@ impl FromStr for P2pChoice {
 #[derive(Clone, Debug)]
 pub struct LaplaceOperator<T: SimdScalar> {
     kernels: Kernels<T>,
-    execution: Execution<T>,
+    execution: Execution<Scratch<T>>,
     /// Under `PlaneWave`, the waves of one frame of every box of a level call, 4H values
     /// per box (module documentation, "The plane-wave M2L"); empty otherwise.
     waves: Vec<T>,
@@ -559,18 +568,6 @@ pub(crate) struct Scratch<T: RealScalar> {
     plane: Option<PlaneScratch<T>>,
 }
 
-/// The scratch of one block of the batched M2L: the packing buffer of the column kernel
-/// (`MatrixKernel::pack_len`, 4 (p + 1)² values) and the column offsets of one offset's
-/// pairs in the block, at most m [`M2L_BLOCK_TARGETS`] each (a target occurs at most once
-/// per offset, with m columns). Sized at construction; a block only clears and refills
-/// them.
-#[derive(Clone, Debug)]
-struct Columns<T> {
-    pack: Vec<T>,
-    sources: Vec<usize>,
-    targets: Vec<usize>,
-}
-
 impl<T: SimdScalar> Scratch<T> {
     /// A scratch set for `kernels`.
     fn new(kernels: &Kernels<T>) -> Self {
@@ -606,255 +603,6 @@ impl<T: SimdScalar> Scratch<T> {
             plane: kernels.tables.plane_waves().map(PlaneScratch::new),
         }
     }
-}
-
-/// Where the level calls run, and the scratch sets they use (module documentation,
-/// "Threads" and "Scratch").
-#[derive(Debug)]
-struct Execution<T: RealScalar> {
-    /// One set, or one per thread of `pool`, indexed by `rayon::current_thread_index()`.
-    /// Set 0 also serves the serial path and the per-pair methods.
-    scratch: Vec<Mutex<Scratch<T>>>,
-    /// The pool of the level calls, if any.
-    pool: Option<Arc<ThreadPool>>,
-    /// Runs the level calls serially even with a pool.
-    serial: bool,
-}
-
-/// A copy shares the pool and gets its own scratch sets.
-impl<T: RealScalar> Clone for Execution<T> {
-    fn clone(&self) -> Self {
-        Self {
-            scratch: self
-                .scratch
-                .iter()
-                .map(|set| Mutex::new(set.lock().unwrap_or_else(PoisonError::into_inner).clone()))
-                .collect(),
-            pool: self.pool.clone(),
-            serial: self.serial,
-        }
-    }
-}
-
-impl<T: RealScalar> Execution<T> {
-    /// Scratch set 0, without locking.
-    fn first(&mut self) -> &mut Scratch<T> {
-        self.scratch[0]
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Runs `body(t, chunk, scratch)` for every chunk t of `output`: in index order on
-    /// the calling thread, or in the pool with `par_chunks_mut`.
-    fn boxes<F>(&mut self, mut output: LevelSliceMut<'_, T>, body: F)
-    where
-        F: Fn(usize, &mut [T], &mut Scratch<T>) + Sync,
-    {
-        match (&self.pool, self.serial) {
-            (Some(pool), false) => {
-                let (sets, size) = (&self.scratch, output.size());
-                pool.install(|| {
-                    output
-                        .as_mut_slice()
-                        .par_chunks_mut(size)
-                        .enumerate()
-                        .for_each(|(t, chunk)| with_scratch(sets, |s| body(t, chunk, s)));
-                });
-            }
-            _ => {
-                let scratch = self.first();
-                for (t, chunk) in output.chunks_mut().enumerate() {
-                    body(t, chunk, scratch);
-                }
-            }
-        }
-    }
-
-    /// Runs `body(first, block, scratch)` for every block of `targets` consecutive chunks
-    /// of `output` (the last may be shorter), `first` the index of its first chunk: in
-    /// order on the calling thread, or in the pool with `par_chunks_mut`.
-    fn blocks<F>(&mut self, mut output: LevelSliceMut<'_, T>, targets: usize, body: F)
-    where
-        F: Fn(usize, &mut [T], &mut Scratch<T>) + Sync,
-    {
-        let size = output.size() * targets;
-        match (&self.pool, self.serial) {
-            (Some(pool), false) => {
-                let sets = &self.scratch;
-                pool.install(|| {
-                    output
-                        .as_mut_slice()
-                        .par_chunks_mut(size)
-                        .enumerate()
-                        .for_each(|(i, block)| with_scratch(sets, |s| body(i * targets, block, s)));
-                });
-            }
-            _ => {
-                let scratch = self.first();
-                for (i, block) in output.as_mut_slice().chunks_mut(size).enumerate() {
-                    body(i * targets, block, scratch);
-                }
-            }
-        }
-    }
-
-    /// Runs `body(i, chunk, scratch)` for every chunk i of `size` values of `buffer`: in
-    /// index order on the calling thread, or in the pool with `par_chunks_mut`.
-    fn chunks<F>(&mut self, buffer: &mut [T], size: usize, body: F)
-    where
-        F: Fn(usize, &mut [T], &mut Scratch<T>) + Sync,
-    {
-        match (&self.pool, self.serial) {
-            (Some(pool), false) => {
-                let sets = &self.scratch;
-                pool.install(|| {
-                    buffer
-                        .par_chunks_mut(size)
-                        .enumerate()
-                        .for_each(|(i, chunk)| with_scratch(sets, |s| body(i, chunk, s)));
-                });
-            }
-            _ => {
-                let scratch = self.first();
-                for (i, chunk) in buffer.chunks_mut(size).enumerate() {
-                    body(i, chunk, scratch);
-                }
-            }
-        }
-    }
-
-    /// Runs `body(boxes, chunks, scratch)` over pieces of whole parents of the level
-    /// `slice` (`size` values per box), the boxes `boxes` and their chunks, `starts(t)`
-    /// telling whether box t begins a parent:
-    /// the whole level on the calling thread, or in the pool, halved at parent boundaries
-    /// by [`split_parents`] down to [`PARENT_GRAIN`] boxes.
-    fn parents<F, S>(&mut self, slice: &mut [T], size: usize, starts: S, body: F)
-    where
-        F: Fn(Range<usize>, &mut [T], &mut Scratch<T>) + Sync,
-        S: Fn(usize) -> bool + Sync,
-    {
-        let boxes = slice.len() / size;
-        match (&self.pool, self.serial) {
-            (Some(pool), false) => {
-                let sets = &self.scratch;
-                pool.install(|| split_parents(slice, 0..boxes, size, &starts, sets, &body));
-            }
-            _ => body(0..boxes, slice, self.first()),
-        }
-    }
-
-    /// Runs `body(r, chunk, scratch)` for every leaf r of `output`: in index order on the
-    /// calling thread, or in the pool, split by [`split_leaves`].
-    fn leaves<F>(&mut self, mut output: LeafSliceMut<'_, T>, body: F)
-    where
-        F: Fn(usize, &mut [T], &mut Scratch<T>) + Sync,
-    {
-        match (&self.pool, self.serial) {
-            (Some(pool), false) => {
-                let sets = &self.scratch;
-                pool.install(|| split_leaves(output, 0, sets, &body));
-            }
-            _ => {
-                let scratch = self.first();
-                for (r, chunk) in output.chunks_mut().enumerate() {
-                    body(r, chunk, scratch);
-                }
-            }
-        }
-    }
-}
-
-/// Runs `body(first + r, chunk r, scratch)` for every leaf r of `output`, halving the
-/// leaves recursively under `rayon::join`: one disjoint mutable slice per leaf, by the
-/// CSR offsets, without allocation.
-fn split_leaves<T: RealScalar, F>(
-    mut output: LeafSliceMut<'_, T>,
-    first: usize,
-    sets: &[Mutex<Scratch<T>>],
-    body: &F,
-) where
-    F: Fn(usize, &mut [T], &mut Scratch<T>) + Sync,
-{
-    match output.nleaves() {
-        0 => {}
-        1 => with_scratch(sets, |s| body(first, output.chunk_mut(0), s)),
-        n => {
-            let mid = n / 2;
-            let (left, right) = output.split_at_mut(mid);
-            rayon::join(
-                || split_leaves(left, first, sets, body),
-                || split_leaves(right, first + mid, sets, body),
-            );
-        }
-    }
-}
-
-/// Runs `body(boxes, chunks, scratch)` on `boxes` (their chunks `chunks`, `size` values
-/// each), halving it at a box where `starts` holds under `rayon::join` while it holds more
-/// than [`PARENT_GRAIN`] boxes; a piece that no such box divides runs whole.
-fn split_parents<T: RealScalar, F, S>(
-    chunks: &mut [T],
-    boxes: Range<usize>,
-    size: usize,
-    starts: &S,
-    sets: &[Mutex<Scratch<T>>],
-    body: &F,
-) where
-    F: Fn(Range<usize>, &mut [T], &mut Scratch<T>) + Sync,
-    S: Fn(usize) -> bool + Sync,
-{
-    let mut mid = boxes.start + boxes.len() / 2;
-    while mid < boxes.end && !starts(mid) {
-        mid += 1;
-    }
-    if boxes.len() <= PARENT_GRAIN || mid == boxes.end {
-        with_scratch(sets, |s| body(boxes, chunks, s));
-        return;
-    }
-    let (left, right) = chunks.split_at_mut((mid - boxes.start) * size);
-    rayon::join(
-        || split_parents(left, boxes.start..mid, size, starts, sets, body),
-        || split_parents(right, mid..boxes.end, size, starts, sets, body),
-    );
-}
-
-/// Runs `f` with the scratch set of the current pool thread.
-///
-/// # Panics
-///
-/// Outside a pool thread, or if the set is locked: only this thread locks it, and only
-/// around a target body that never yields to rayon, so that would be a defect.
-#[inline]
-fn with_scratch<T: RealScalar>(sets: &[Mutex<Scratch<T>>], f: impl FnOnce(&mut Scratch<T>)) {
-    let i = rayon::current_thread_index().expect("a level call runs on the pool's threads");
-    let mut set = match sets[i].try_lock() {
-        Ok(set) => set,
-        Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-        Err(TryLockError::WouldBlock) => panic!("the scratch set of pool thread {i} is in use"),
-    };
-    f(&mut set);
-}
-
-/// The shared inputs of one box call (P2M, M2M, M2L, P2L, L2L): its level, the index,
-/// its view and its input.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct BoxCall<'a, V, I> {
-    level: usize,
-    index: &'a BoxIndex,
-    view: &'a V,
-    input: I,
-}
-
-/// The shared inputs of one leaf call (L2P, M2P, P2P): its level, the index, the leaf
-/// index of row 0, its view, its input and the target input of its rows.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct LeafCall<'a, T, I> {
-    level: usize,
-    index: &'a BoxIndex,
-    first_leaf: usize,
-    view: &'a Csr,
-    input: I,
-    target_input: LeafSlice<'a, T>,
 }
 
 impl<T: SimdScalar> LaplaceOperator<T> {
@@ -1661,281 +1409,106 @@ impl<T: SimdScalar> Kernels<T> {
             }
         }
     }
+}
 
-    /// The P2M body of box t: the source chunk of its leaf, if it has one.
+/// Laplace on the shared drivers (`crate::driver`): each body is the method of the same
+/// name above, with the level ignored, and the batched M2L's tables those of
+/// `M2lStrategy::Batched` on every level.
+impl<T: SimdScalar> HostKernel<T> for Kernels<T> {
+    type Scratch = Scratch<T>;
+
     #[inline]
-    pub(crate) fn p2m_target(
-        &self,
-        call: &BoxCall<'_, Csr, LeafSlice<'_, T>>,
-        t: usize,
-        multipole: &mut [T],
-        scratch: &mut Scratch<T>,
-    ) {
-        for &j in call.view.row(t) {
-            debug_assert_eq!(
-                call.index.leaf_key(j as usize),
-                call.index.key(call.level, t)
-            );
-            self.p2m(call.input.chunk(j as usize), multipole, scratch);
-        }
+    fn vectors(&self) -> usize {
+        self.vectors
     }
 
-    /// The M2M body of parent t: its children, by octant.
     #[inline]
-    pub(crate) fn m2m_target(
-        &self,
-        call: &BoxCall<'_, Children, LevelSlice<'_, T>>,
-        t: usize,
-        multipole: &mut [T],
-        scratch: &mut Scratch<T>,
-    ) {
-        let (children, octants) = call.view.row(t);
-        for (&c, &o) in children.iter().zip(octants) {
-            debug_check_octant(
-                call.index.key(call.level + 1, c as usize),
-                call.index.key(call.level, t),
-                o as usize,
-            );
-            self.m2m(o as usize, call.input.chunk(c as usize), multipole, scratch);
-        }
+    fn p2m(&self, _level: usize, sources: &[T], multipole: &mut [T], scratch: &mut Scratch<T>) {
+        Kernels::p2m(self, sources, multipole, scratch);
     }
 
-    /// The M2L body of target t: its V-list sources, by offset index.
     #[inline]
-    pub(crate) fn m2l_target(
+    fn m2m(&self, _level: usize, o: usize, child: &[T], parent: &mut [T], s: &mut Scratch<T>) {
+        Kernels::m2m(self, o, child, parent, s);
+    }
+
+    #[inline]
+    fn m2l(
         &self,
-        call: &BoxCall<'_, VList, LevelSlice<'_, T>>,
-        t: usize,
+        _level: usize,
+        d: usize,
+        child: usize,
+        multipole: &[T],
         local: &mut [T],
         scratch: &mut Scratch<T>,
     ) {
-        let (sources, offsets) = call.view.row(t);
-        let child = match sources.is_empty() {
-            true => 0,
-            false => morton::child_index(call.index.key(call.level, t)),
-        };
-        for (&s, &d) in sources.iter().zip(offsets) {
-            debug_assert_eq!(
-                offset_index(
-                    call.index.key(call.level, s as usize),
-                    call.index.key(call.level, t)
-                ),
-                d as usize,
-                "the offset index of a V-list entry disagrees with its keys"
-            );
-            self.m2l(
-                d as usize,
-                child,
-                call.input.chunk(s as usize),
-                local,
-                scratch,
-            );
-        }
+        Kernels::m2l(self, d, child, multipole, local, scratch);
     }
 
-    /// The batched M2L of the block of targets `first ..` whose locals are `locals`
-    /// (module documentation, "The batched M2L"): for every offset index d in order, the
-    /// pairs of `batch(d)` whose target lies in the block, found by two binary searches,
-    /// in one call of the column kernel with the table of d, the sources' multipoles and
-    /// the targets' locals read in place.
     #[inline]
-    pub(crate) fn m2l_block(
-        &self,
-        call: &BoxCall<'_, VList, LevelSlice<'_, T>>,
-        (tables, kernel): (&MatrixSet<T>, &MatrixKernel<T>),
-        first: usize,
-        locals: &mut [T],
-        scratch: &mut Scratch<T>,
-    ) {
-        let (n, m) = (tables.n(), self.vectors);
-        let end = first + locals.len() / (m * n);
-        let multipoles = call.input.as_slice();
-        let columns = &mut scratch.columns;
-        for d in 0..call.view.ngroups() {
-            let (targets, sources) = call.view.batch(d);
-            let lo = targets.partition_point(|&t| (t as usize) < first);
-            let hi = lo + targets[lo..].partition_point(|&t| (t as usize) < end);
-            if lo == hi {
-                continue;
-            }
-            columns.sources.clear();
-            columns.targets.clear();
-            for (&t, &s) in targets[lo..hi].iter().zip(&sources[lo..hi]) {
-                debug_assert_eq!(
-                    offset_index(
-                        call.index.key(call.level, s as usize),
-                        call.index.key(call.level, t as usize)
-                    ),
-                    d,
-                    "the offset index of a V-list batch disagrees with its keys"
-                );
-                // The m columns of the pair, vector after vector.
-                for v in 0..m {
-                    columns.sources.push((s as usize * m + v) * n);
-                    columns.targets.push(((t as usize - first) * m + v) * n);
-                }
-            }
-            kernel.accumulate_columns(
-                n,
-                tables.matrix(d),
-                multipoles,
-                &columns.sources,
-                locals,
-                &columns.targets,
-                &mut columns.pack,
-            );
-        }
+    fn l2l(&self, _level: usize, o: usize, parent: &[T], child: &mut [T], s: &mut Scratch<T>) {
+        Kernels::l2l(self, o, parent, child, s);
     }
 
-    /// The P2L body of box t: its X-list leaves, by leaf index.
     #[inline]
-    pub(crate) fn p2l_target(
+    fn p2l(
         &self,
-        call: &BoxCall<'_, Csr, LeafSlice<'_, T>>,
-        t: usize,
+        _level: usize,
+        frame: &Frame<T>,
+        sources: &[T],
         local: &mut [T],
         scratch: &mut Scratch<T>,
     ) {
-        let target = call.index.key(call.level, t);
-        for &j in call.view.row(t) {
-            let frame = relative_frame(target, call.index.leaf_key(j as usize));
-            self.p2l(&frame, call.input.chunk(j as usize), local, scratch);
-        }
+        Kernels::p2l(self, frame, sources, local, scratch);
     }
 
-    /// The L2L body of box t: its parent, if it has a row.
     #[inline]
-    pub(crate) fn l2l_target(
+    fn l2p(
         &self,
-        call: &BoxCall<'_, Parents, LevelSlice<'_, T>>,
-        t: usize,
-        local: &mut [T],
+        _level: usize,
+        local: &[T],
+        target_input: &[T],
+        target_output: &mut [T],
         scratch: &mut Scratch<T>,
     ) {
-        let (parents, octants) = call.view.row(t);
-        for (&parent, &o) in parents.iter().zip(octants) {
-            debug_check_octant(
-                call.index.key(call.level, t),
-                call.index.key(call.level - 1, parent as usize),
-                o as usize,
-            );
-            self.l2l(
-                o as usize,
-                call.input.chunk(parent as usize),
-                local,
-                scratch,
-            );
-        }
+        Kernels::l2p(self, local, target_input, target_output, scratch);
     }
 
-    /// The L2P body of row r: the local of the leaf's box.
     #[inline]
-    pub(crate) fn l2p_target(
+    fn m2p(
         &self,
-        call: &LeafCall<'_, T, LevelSlice<'_, T>>,
-        r: usize,
-        output: &mut [T],
+        _level: usize,
+        frame: &Frame<T>,
+        multipole: &[T],
+        target_input: &[T],
+        target_output: &mut [T],
         scratch: &mut Scratch<T>,
     ) {
-        for &i in call.view.row(r) {
-            let local = call.input.chunk(i as usize);
-            self.l2p(local, call.target_input.chunk(r), output, scratch);
-        }
+        Kernels::m2p(self, frame, multipole, target_input, target_output, scratch);
     }
 
-    /// The M2P body of row r: its W-list boxes, by box index.
     #[inline]
-    pub(crate) fn m2p_target(
+    fn p2p(
         &self,
-        call: &LeafCall<'_, T, LevelSlice<'_, T>>,
-        r: usize,
-        output: &mut [T],
+        _level: usize,
+        frame: Option<&Frame<T>>,
+        sources: &[T],
+        target_input: &[T],
+        target_output: &mut [T],
         scratch: &mut Scratch<T>,
     ) {
-        let target = call.index.leaf_key(call.first_leaf + r);
-        for &s in call.view.row(r) {
-            let frame = relative_frame(call.index.key(call.level + 1, s as usize), target);
-            let multipole = call.input.chunk(s as usize);
-            self.m2p(
-                &frame,
-                multipole,
-                call.target_input.chunk(r),
-                output,
-                scratch,
-            );
-        }
+        Kernels::p2p(self, frame, sources, target_input, target_output, scratch);
     }
 
-    /// The P2P body of row r: its near list, the leaf itself included, by leaf index.
     #[inline]
-    pub(crate) fn p2p_target(
-        &self,
-        call: &LeafCall<'_, T, LeafSlice<'_, T>>,
-        r: usize,
-        output: &mut [T],
-        scratch: &mut Scratch<T>,
-    ) {
-        let leaf = call.first_leaf + r;
-        let target = call.index.leaf_key(leaf);
-        for &j in call.view.row(r) {
-            let j = j as usize;
-            let frame = (j != leaf).then(|| relative_frame(call.index.leaf_key(j), target));
-            self.p2p(
-                frame.as_ref(),
-                call.input.chunk(j),
-                call.target_input.chunk(r),
-                output,
-                scratch,
-            );
-        }
+    fn batched_m2l(&self, _level: usize) -> Option<(&MatrixSet<T>, &MatrixKernel<T>)> {
+        self.tables.batched_m2l().zip(self.matrix.as_ref())
     }
-}
 
-/// A key with its level and index, for panic messages.
-struct Key(MortonKey);
-
-impl fmt::Display for Key {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (level, index) = morton::decode(self.0);
-        write!(f, "{} (level {level}, index {index:?})", self.0)
+    #[inline]
+    fn columns(scratch: &mut Scratch<T>) -> &mut Columns<T> {
+        &mut scratch.columns
     }
-}
-
-/// The position of index(target) − index(source) in `V_LIST_DIRECTIONS`.
-///
-/// # Panics
-///
-/// With both keys if the levels differ or the offset is not a V-list offset.
-fn offset_index(source: MortonKey, target: MortonKey) -> usize {
-    let (source_level, source_index) = morton::decode(source);
-    let (target_level, target_index) = morton::decode(target);
-    assert_eq!(
-        source_level,
-        target_level,
-        "M2L between boxes on different levels: source {}, target {}",
-        Key(source),
-        Key(target)
-    );
-    let d = [0, 1, 2].map(|k| target_index[k] as i64 - source_index[k] as i64);
-    m2l_offset_index(d).unwrap_or_else(|| {
-        panic!(
-            "M2L from source {} to target {}: the offset {d:?} is not a V-list offset",
-            Key(source),
-            Key(target)
-        )
-    })
-}
-
-/// Debug builds: checks that `parent` is the parent of `child` and `o` its child index.
-#[inline]
-fn debug_check_octant(child: MortonKey, parent: MortonKey, o: usize) {
-    debug_assert!(
-        morton::parent(child) == Some(parent),
-        "{} is not the parent of {}",
-        Key(parent),
-        Key(child)
-    );
-    debug_assert_eq!(morton::child_index(child), o, "octant of {}", Key(child));
 }
 
 impl<T: SimdScalar + Equivalence + Default> FmmSizes for LaplaceOperator<T> {
@@ -1972,62 +1545,29 @@ impl<T: SimdScalar + Equivalence + Default> FmmSizes for LaplaceOperator<T> {
 /// operator's pool; see the [module documentation](self#batched-execution-and-order).
 impl<T: SimdScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
     fn p2m(&mut self, batch: P2m<'_, T>) {
-        let P2m {
-            level,
-            index,
-            leaves,
-            sources,
-            multipoles,
-        } = batch;
-        let call = BoxCall {
-            level,
-            index,
-            view: leaves,
-            input: sources,
-        };
-        let kernels = &self.kernels;
-        self.execution.boxes(multipoles, |t, multipole, scratch| {
-            kernels.p2m_target(&call, t, multipole, scratch);
-        });
+        driver::p2m(&self.kernels, &mut self.execution, batch);
     }
 
     fn m2m(&mut self, batch: M2m<'_, T>) {
-        let M2m {
-            level,
-            index,
-            children,
-            child_multipoles,
-            multipoles,
-            ..
-        } = batch;
-        let call = BoxCall {
-            level,
-            index,
-            view: children,
-            input: child_multipoles,
-        };
-        let kernels = &self.kernels;
-        self.execution.boxes(multipoles, |t, multipole, scratch| {
-            kernels.m2m_target(&call, t, multipole, scratch);
-        });
+        driver::m2m(&self.kernels, &mut self.execution, batch);
     }
 
     fn m2l(&mut self, batch: M2l<'_, T>) {
-        let M2l {
-            level,
-            index,
-            pairs,
-            multipoles,
-            locals,
-        } = batch;
-        let call = BoxCall {
-            level,
-            index,
-            view: pairs,
-            input: multipoles,
-        };
         let kernels = &self.kernels;
         if let Some((tables, _)) = kernels.plane_waves() {
+            let M2l {
+                level,
+                index,
+                pairs,
+                multipoles,
+                locals,
+            } = batch;
+            let call = BoxCall {
+                level,
+                index,
+                view: pairs,
+                input: multipoles,
+            };
             if pairs.is_empty() {
                 return;
             }
@@ -2063,132 +1603,27 @@ impl<T: SimdScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
             }
             return;
         }
-        match (kernels.tables.batched_m2l(), &kernels.matrix) {
-            (Some(tables), Some(matrix)) => {
-                if pairs.is_empty() {
-                    return;
-                }
-                self.execution
-                    .blocks(locals, M2L_BLOCK_TARGETS, |first, block, scratch| {
-                        kernels.m2l_block(&call, (tables, matrix), first, block, scratch);
-                    });
-            }
-            _ => self.execution.boxes(locals, |t, local, scratch| {
-                kernels.m2l_target(&call, t, local, scratch);
-            }),
-        }
+        driver::m2l(kernels, &mut self.execution, batch);
     }
 
     fn p2l(&mut self, batch: P2l<'_, T>) {
-        let P2l {
-            level,
-            index,
-            x,
-            sources,
-            locals,
-        } = batch;
-        let call = BoxCall {
-            level,
-            index,
-            view: x,
-            input: sources,
-        };
-        let kernels = &self.kernels;
-        self.execution.boxes(locals, |t, local, scratch| {
-            kernels.p2l_target(&call, t, local, scratch);
-        });
+        driver::p2l(&self.kernels, &mut self.execution, batch);
     }
 
     fn l2l(&mut self, batch: L2l<'_, T>) {
-        let L2l {
-            level,
-            index,
-            parents,
-            parent_locals,
-            locals,
-        } = batch;
-        let call = BoxCall {
-            level,
-            index,
-            view: parents,
-            input: parent_locals,
-        };
-        let kernels = &self.kernels;
-        self.execution.boxes(locals, |t, local, scratch| {
-            kernels.l2l_target(&call, t, local, scratch);
-        });
+        driver::l2l(&self.kernels, &mut self.execution, batch);
     }
 
     fn l2p(&mut self, batch: L2p<'_, T>) {
-        let L2p {
-            level,
-            index,
-            leaves,
-            boxes,
-            locals,
-            target_input,
-            target_output,
-        } = batch;
-        let call = LeafCall {
-            level,
-            index,
-            first_leaf: leaves.start,
-            view: boxes,
-            input: locals,
-            target_input,
-        };
-        let kernels = &self.kernels;
-        self.execution.leaves(target_output, |r, output, scratch| {
-            kernels.l2p_target(&call, r, output, scratch);
-        });
+        driver::l2p(&self.kernels, &mut self.execution, batch);
     }
 
     fn m2p(&mut self, batch: M2p<'_, T>) {
-        let M2p {
-            level,
-            index,
-            leaves,
-            w,
-            multipoles,
-            target_input,
-            target_output,
-        } = batch;
-        let call = LeafCall {
-            level,
-            index,
-            first_leaf: leaves.start,
-            view: w,
-            input: multipoles,
-            target_input,
-        };
-        let kernels = &self.kernels;
-        self.execution.leaves(target_output, |r, output, scratch| {
-            kernels.m2p_target(&call, r, output, scratch);
-        });
+        driver::m2p(&self.kernels, &mut self.execution, batch);
     }
 
     fn p2p(&mut self, batch: P2p<'_, T>) {
-        let P2p {
-            level,
-            index,
-            leaves,
-            near,
-            sources,
-            target_input,
-            target_output,
-        } = batch;
-        let call = LeafCall {
-            level,
-            index,
-            first_leaf: leaves.start,
-            view: near,
-            input: sources,
-            target_input,
-        };
-        let kernels = &self.kernels;
-        self.execution.leaves(target_output, |r, output, scratch| {
-            kernels.p2p_target(&call, r, output, scratch);
-        });
+        driver::p2p(&self.kernels, &mut self.execution, batch);
     }
 }
 
