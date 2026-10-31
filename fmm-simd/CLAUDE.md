@@ -14,7 +14,9 @@ fmm-validate/results/phase6-avx512.md) and C6.4 (task T8: `P2pKernel::evaluate_d
 P2P, `arch::p2p::p2p_dipoles_body`, the scalar path `arch::scalar::p2p_dipoles`; contract
 in docs/design/simd-p2p.md §4.8, tests in `tests/p2p/dipoles.rs`) and C6.5 (task T13: the
 plane-wave kernels, `WaveKernel` with `WaveTables`, bodies in `arch::waves`, tests in
-`tests/waves.rs`).
+`tests/waves.rs`). Helmholtz CH2.4a: the exponential e^x for x ≤ 0 (`arch::exp`, the public
+`exp::exp_slice`, tests in `tests/exp`; docs/design/simd-p2p.md §4.9), for the Yukawa P2P of
+CH2.4b.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -55,6 +57,18 @@ plane-wave kernels, `WaveKernel` with `WaveTables`, bodies in `arch::waves`, tes
   count. Slice the rows and offsets once per block and iterate them: bounds checks inside
   the loops cost NEON's `waves` half its time (Phase 6 T13). `tests/waves.rs` restates the
   reference loops and checks every ISA bit for bit.
+- `arch::exp::exp` (Helmholtz CH2.4a): e^x within 4 u_T relative on [x_min, 0], x_min =
+  (e_min + 1) ln 2 (every result normal), exactly 1 at ±0, the value at x_min below it
+  (design §4.9; measured 1.324 u₃₂ exhaustively and 1.228 u₆₄ on 10⁷ samples, on every ISA). It
+  is written once over `Simd` from IEEE-rounded operations only (`fma`, `fnma`, `sub`, `max`,
+  and `scale_pow2`'s integer add on the bits), so every ISA equals the scalar layer bit for
+  bit (`tests/exp/invariance.rs`); keep it so: no estimate instruction, no ISA-specific
+  step. Its constants are `SimdScalar`'s (`sealed::Sealed::EXP`).
+- Adding items to the crate can change rustc's partition into codegen units and with it the
+  inlining in untouched functions (Helmholtz CH2.4a: NEON's `sums_f32` called `sums_body`'s
+  first closure out of line in the default release build; with `-C codegen-units=1` every
+  existing function was identical to `main`'s). Compare a change's existing entry points with
+  `main`'s at the default settings and with one codegen unit, and report both.
 - Generic over `T: SimdScalar` (f32 and f64, sealed); no allocation, threads or MPI in
   a kernel (`WaveKernel::tables` allocates, once). Write only into the caller's slices.
 - Hand-written `core::arch` intrinsics only: no portable SIMD crate (`pulp`, `wide`,
@@ -80,7 +94,7 @@ plane-wave kernels, `WaveKernel` with `WaveTables`, bodies in `arch::waves`, tes
   `#[target_feature]` functions and safe intrinsics (crate docs, "Toolchain") wherever
   they remove an `unsafe` block.
 - ISA coverage: every test that runs a kernel prints the ISAs it ran and those this
-  machine cannot run (`common::kernels` in tests/p2p, `common::isas` in tests/rsqrt,
+  machine cannot run (`common::kernels` in tests/p2p, `common::isas` in tests/rsqrt and tests/exp,
   `kernels` in tests/matrix.rs and `on_every_isa!` in src/arch/tests.rs do it); on an
   x86_64 CPU without AVX-512F its tests skip with "not available here: … avx512", never
   fail (GitHub's x86_64 runners have it about half the time; Kathleen always). A task
@@ -101,7 +115,9 @@ plane-wave kernels, `WaveKernel` with `WaveTables`, bodies in `arch::waves`, tes
   fused at R = 2; Phase 6 T6: AVX-512 45 separate and 29 fused at R = 4). The AVX-512
   P2P source loops (Phase 6 T6, K = 2): 36, 50, 42 and 56 instructions for f32 φ, f32 φ
   and ∇φ, f64 φ, f64 φ and ∇φ (18, 25, 21 and 28 per target vector, against AVX2's 24,
-  35, 29 and 42). From the repository root:
+  35, 29 and 42). The exponential's loops (Helmholtz CH2.4a, `…::exp_slice_f32` and `_f64`):
+  NEON 27 and 39 (14 and 20 operations, the rest moves), AVX2 23 and 33, AVX-512 23 and
+  29. From the repository root:
 
   ```sh
   # Build the release test binaries; cargo prints their paths ("Executable ...").

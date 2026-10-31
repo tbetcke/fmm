@@ -33,17 +33,19 @@
 //! between Intel and AMD CPUs in the last bits (design §5.5).
 
 use std::arch::x86_64::{
-    __m256, __m256d, _CMP_EQ_OQ, _mm_rsqrt_ps, _mm256_add_pd, _mm256_add_ps, _mm256_andnot_pd,
-    _mm256_andnot_ps, _mm256_broadcast_sd, _mm256_broadcast_ss, _mm256_cmp_pd, _mm256_cmp_ps,
-    _mm256_cvtpd_ps, _mm256_cvtps_pd, _mm256_fmadd_pd, _mm256_fmadd_ps, _mm256_fnmadd_pd,
-    _mm256_fnmadd_ps, _mm256_loadu_pd, _mm256_loadu_ps, _mm256_mul_pd, _mm256_mul_ps,
-    _mm256_rsqrt_ps, _mm256_set1_pd, _mm256_set1_ps, _mm256_setr_pd, _mm256_setr_ps,
+    __m256, __m256d, _CMP_EQ_OQ, _mm_rsqrt_ps, _mm256_add_epi32, _mm256_add_epi64, _mm256_add_pd,
+    _mm256_add_ps, _mm256_andnot_pd, _mm256_andnot_ps, _mm256_broadcast_sd, _mm256_broadcast_ss,
+    _mm256_castpd_si256, _mm256_castps_si256, _mm256_castsi256_pd, _mm256_castsi256_ps,
+    _mm256_cmp_pd, _mm256_cmp_ps, _mm256_cvtpd_ps, _mm256_cvtps_pd, _mm256_fmadd_pd,
+    _mm256_fmadd_ps, _mm256_fnmadd_pd, _mm256_fnmadd_ps, _mm256_loadu_pd, _mm256_loadu_ps,
+    _mm256_max_pd, _mm256_max_ps, _mm256_mul_pd, _mm256_mul_ps, _mm256_rsqrt_ps, _mm256_set1_pd,
+    _mm256_set1_ps, _mm256_setr_pd, _mm256_setr_ps, _mm256_slli_epi32, _mm256_slli_epi64,
     _mm256_storeu_pd, _mm256_storeu_ps, _mm256_sub_pd, _mm256_sub_ps,
 };
 
 use super::p2p::{p2p_body, p2p_dipoles_body, p2p_many_body};
 use super::waves::{gather_body, merge_body, sums_body, waves_body};
-use super::{Simd, matrix::accumulate_body, rsqrt_body};
+use super::{Simd, exp::exp_body, matrix::accumulate_body, rsqrt_body};
 use crate::{Isa, WaveTables};
 
 /// The coefficients cₖ = C(2k, k) / 4ᵏ of (1 − r)^(−½) = Σₖ cₖ rᵏ, from c₁; all exact
@@ -203,6 +205,23 @@ impl Simd<f32> for Avx2 {
         };
         (p, Simd::splat(self, charge))
     }
+
+    #[inline(always)]
+    fn max(self, a: __m256, b: __m256) -> __m256 {
+        // SAFETY: the token proves AVX2 and FMA
+        unsafe { _mm256_max_ps(a, b) }
+    }
+
+    #[inline(always)]
+    fn scale_pow2(self, x: __m256, k: __m256) -> __m256 {
+        // SAFETY: the token proves AVX2 and FMA; the integer lanes are the bits of x and k, reinterpreted.
+        unsafe {
+            _mm256_castsi256_ps(_mm256_add_epi32(
+                _mm256_castps_si256(x),
+                _mm256_slli_epi32::<23>(_mm256_castps_si256(k)),
+            ))
+        }
+    }
 }
 
 impl Simd<f64> for Avx2 {
@@ -336,6 +355,23 @@ impl Simd<f64> for Avx2 {
         };
         (p, Simd::splat(self, charge))
     }
+
+    #[inline(always)]
+    fn max(self, a: __m256d, b: __m256d) -> __m256d {
+        // SAFETY: the token proves AVX2 and FMA
+        unsafe { _mm256_max_pd(a, b) }
+    }
+
+    #[inline(always)]
+    fn scale_pow2(self, x: __m256d, k: __m256d) -> __m256d {
+        // SAFETY: the token proves AVX2 and FMA; the integer lanes are the bits of x and k, reinterpreted.
+        unsafe {
+            _mm256_castsi256_pd(_mm256_add_epi64(
+                _mm256_castpd_si256(x),
+                _mm256_slli_epi64::<52>(_mm256_castpd_si256(k)),
+            ))
+        }
+    }
 }
 
 /// Generates the inverse-square-root entry point of one precision.
@@ -361,6 +397,30 @@ macro_rules! rsqrt_entry {
 
 rsqrt_entry!(rsqrt_slice_f32, f32);
 rsqrt_entry!(rsqrt_slice_f64, f64);
+
+/// Generates the entry point of the exponential of one precision (Helmholtz CH2.4a).
+macro_rules! exp_entry {
+    ($name:ident, $t:ty) => {
+        #[doc = concat!(
+                    "The exponential (Helmholtz CH2.4a) on AVX2 + FMA in ",
+                    stringify!($t), ": `out[i] = exp(x[i])`, with lengths checked by the callee."
+                )]
+        ///
+        /// Not inlined, so that the dispatch stays one call and the inlining check
+        /// finds the function by name.
+        #[target_feature(enable = "avx2,fma")]
+        #[inline(never)]
+        pub(crate) fn $name(x: &[$t], out: &mut [$t]) {
+            // SAFETY: this function enables `avx2` and `fma`, so it runs only on a CPU
+            // with both: a call from outside such a context is `unsafe` and asserts it.
+            let s = unsafe { Avx2::new_unchecked() };
+            exp_body(s, x, out);
+        }
+    };
+}
+
+exp_entry!(exp_slice_f32, f32);
+exp_entry!(exp_slice_f64, f64);
 
 /// Target vectors per P2P block in f32 (signed off in Phase 3S T2,
 /// spikes/p2p-simd/SPIKE_REPORT.md, "Recommendation", item 3).

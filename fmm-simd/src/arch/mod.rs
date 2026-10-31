@@ -20,7 +20,9 @@
 //! (the body [`p2p::p2p_many_body`]; Phase 6 T5), [`p2p_dipoles_f32`] and
 //! [`p2p_dipoles_f64`] to the dipole ones (the body [`p2p::p2p_dipoles_body`]; Phase 6 T8),
 //! [`accumulate_f32`] and
-//! [`accumulate_f64`] to the matrix ones. The
+//! [`accumulate_f64`] to the matrix ones, and [`exp_slice_f32`] and [`exp_slice_f64`] to
+//! those of the exponential (the body [`exp::exp_body`]; Helmholtz CH2.4a), which the
+//! scalar ISA runs on the scalar layer. The
 //! scalar ISA runs the matrix body on the scalar layer, whose chain is the vector
 //! paths' exactly.
 //!
@@ -45,6 +47,7 @@
 pub(crate) mod avx2;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod avx512;
+pub(crate) mod exp;
 pub(crate) mod matrix;
 #[cfg(target_arch = "aarch64")]
 pub(crate) mod neon;
@@ -148,6 +151,16 @@ pub(crate) trait Simd<T: SimdScalar>: Copy {
     fn store3(self, v: [Self::V; 3], points: &mut [[T; 3]]);
     /// One source in every lane: its three coordinates and its charge (NEON `ld3r`).
     fn broadcast(self, point: &[T; 3], charge: T) -> ([Self::V; 3], Self::V);
+    /// The larger of a and b, lane by lane (Helmholtz CH2.4a, [`exp::exp`]'s clamp). Where
+    /// a lane of a or b is NaN, or the lanes are zeros of opposite signs, the result is
+    /// unspecified.
+    fn max(self, a: Self::V, b: Self::V) -> Self::V;
+    /// x · 2ⁿ, lane by lane, where k = c + n carries the integer n in the low bits of its
+    /// significand, c = 1.5 · 2^m with m the explicit significand bits (52, 23; Helmholtz
+    /// CH2.4a, [`exp::exp`]): the integer sum, wrapping, of the bits of x and the bits of k
+    /// shifted left by m. Exact where x and x · 2ⁿ are normal and |n| < 2^(m − 1);
+    /// unspecified otherwise.
+    fn scale_pow2(self, x: Self::V, k: Self::V) -> Self::V;
 
     /// The inverse square root with the coincident-pair mask of design §4.4:
     /// [`Self::rsqrt`] where x ≠ 0 and +0 where x = 0.
@@ -226,6 +239,47 @@ macro_rules! rsqrt_dispatch {
 
 rsqrt_dispatch!(rsqrt_slice_f32, f32, rsqrt_slice_f32);
 rsqrt_dispatch!(rsqrt_slice_f64, f64, rsqrt_slice_f64);
+
+/// Generates the dispatch of the exponential's entry points for one precision (Helmholtz
+/// CH2.4a).
+macro_rules! exp_dispatch {
+    ($name:ident, $t:ty, $entry:ident) => {
+        #[doc = concat!(
+                            "The exponential of every value of `x` into `out`, on `isa`, in ",
+                            stringify!($t), " (`exp::exp_slice`)."
+                        )]
+        ///
+        /// # Panics
+        ///
+        /// If `isa` is not available on this machine, or `x` and `out` have different
+        /// lengths.
+        pub(crate) fn $name(isa: Isa, x: &[$t], out: &mut [$t]) {
+            if !isa.is_available() {
+                panic!("{}", IsaUnavailable { isa });
+            }
+            match isa {
+                Isa::Scalar => exp::exp_body(scalar::Scalar, x, out),
+                #[cfg(target_arch = "aarch64")]
+                // SAFETY: `isa` is available (checked above), so the CPU has NEON,
+                // the feature the entry point enables.
+                Isa::Neon => unsafe { neon::$entry(x, out) },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: `isa` is available (checked above), so the CPU has AVX2 and
+                // FMA, the features the entry point enables.
+                Isa::Avx2 => unsafe { avx2::$entry(x, out) },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: `isa` is available (checked above), so the CPU has AVX-512F,
+                // AVX2 and FMA, the features the entry point enables or implies.
+                Isa::Avx512 => unsafe { avx512::$entry(x, out) },
+                // The ISAs of other architectures, which are never available.
+                _ => unreachable!("`{isa}` is not available on this machine"),
+            }
+        }
+    };
+}
+
+exp_dispatch!(exp_slice_f32, f32, exp_slice_f32);
+exp_dispatch!(exp_slice_f64, f64, exp_slice_f64);
 
 /// An [`Isa`] that this machine can run: the proof that makes the dispatch to the
 /// `#[target_feature]` P2P entry points sound.
