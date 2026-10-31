@@ -324,7 +324,8 @@ at any kD.
   complex expansion per complex vector. *Needs:* CH1.3a–c, D1, D11. Split on 2026-10-31
   into three sub-tasks, each one reviewable PR (the user, "Split a/b/c, proceed"); CH3.0
   is done, and CH3.1 runnable on its side, when all three are:
-- [ ] **CH3.0a nd-octree's maximum leaf width.** `OctreeOptions::with_min_leaf_level`
+- [x] **CH3.0a nd-octree's maximum leaf width.** Record: `docs/helmholtz/tasks/CH3.0a.md`.
+  `OctreeOptions::with_min_leaf_level`
   (the user, 2026-10-31): every box that holds a key and lies above the level is refined;
   default none. *Done when:* every leaf holding a key at or below the level (capped by
   `max_level`) on any number of ranks, the leaves the one-rank leaves and a brute-force

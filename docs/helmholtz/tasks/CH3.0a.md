@@ -82,9 +82,18 @@ Only `nd-octree`, plus docs (`octree/CLAUDE.md`). No manifest, dependency, conve
   holding a key lies at or below the level, and the tree is complete, linear and 2:1
   balanced (`is_complete_linear_and_balanced`). This runs at 1–4 ranks in CI, and by hand
   at 1–8 ranks, the latter under a timeout.
+  - As built: levels 0, 4 and 5 on the first 2,000 points of the cube and the Plummer
+    sphere. The Gaussian clusters were tried first, but their leaves already lie below
+    level 5, so the rule never acted on them. Every check of `check_tree` (all invariants,
+    the one-rank leaves) runs from the share and from rank 0; level 0 reproduces the tree
+    without the option. The rule takes the cube's 64 leaves to 4,012 at level 4 and
+    15,282 at level 5, and the sphere's 232 to 1,184 and 3,872.
+  - In the serial test of the coarse tree by weight
+    (`test_coarse_tree_by_weight_keeps_the_one_rank_leaves`), three cases with the level
+    set: the leaves from the blocks equal the one-rank leaves for every refinement factor.
 - **Laplace unchanged:**
   - the existing `nd-octree`, `nd-fmm-plan` and `nd-fmm-exec` tests and the MPI list;
-  - the 18 full FMM outputs of `main` and the branch compared byte for byte on the M6,
+  - the full FMM outputs (CH2.0's cases, as built 36) of `main` and the branch compared byte for byte on the M6,
     with CH2.0's `bits.sh` recreated in the scratchpad.
 
 ## Checks
@@ -103,22 +112,35 @@ proposes no D9 timing runs on locust and Kathleen (question 2).
 - Constraint 1 binds (`nd-octree` is a Laplace path):
   1. no dispatch below the level call (none is touched);
   2. layouts and tables unchanged;
-  3. outputs bit for bit (the trees key for key with the default, and the 18 outputs);
+  3. outputs bit for bit (the trees key for key with the default, and the 36 outputs);
   4. benchmarks within noise (question 2).
 - Constraint 2: the leaves on P ranks are the one-rank leaves, as the test above checks.
 - Risk: a deep `min_leaf_level` on a sparse input makes many leaves. This is the
   intended cost of §3.7, and S8 measured it.
 
+## Results
+
+- Unit tests: `test_create_local_tree_min_leaf_level_against_brute_force` (max_keys 1, 8
+  and 64; max_level 3, 5 and 16; levels 0–6; from the root and from the octants) and the
+  extended coarse-tree test pass.
+- `test_mpi_weighted_partition` passes at 1, 2, 3, 4 and 8 ranks on the M6 (debug,
+  about 8 s at 2 and 4 ranks).
+- Laplace's outputs: `nd-fmm-bench --write-output` from `main` (e876cbc, a detached
+  worktree with its own target directory) and from the branch, on the M6. The inputs were
+  the cube and the Plummer sphere (N = 10⁵, 2 vectors, f64, 4 threads), at p = 3, 6
+  and 8, with Dense, Classes, Rotation, Batched, PlaneWave and Auto. 36 of 36 outputs are
+  identical byte for byte.
+
 ## Pending runs
 
-None yet.
+None.
 
 ## Open questions
 
 Answered 2026-10-31 by the user, each as recommended:
 
 1. The split into a, b and c and the change to `nd-octree`: "Split a/b/c, proceed".
-2. Constraint 1's fourth condition by the byte comparison of the 18 outputs and the
+2. Constraint 1's fourth condition by the byte comparison of the outputs (CH2.0's 18 cases, as built 36) and the
    tree tests, without D9 timing runs: "Bytes only, no D9".
 3. The name: `with_min_leaf_level`.
 
