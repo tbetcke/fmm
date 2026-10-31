@@ -538,7 +538,8 @@ fn invariance<T: Precision>(test: &str) {
                     kernel.isa()
                 );
             }
-            // Each target alone, and every prefix length, gives its bits in the whole call.
+            // The last `len` targets alone, for lengths from one target to all, give their bits
+            // in the whole call.
             for len in [1, 7, 8, 17, 33, 45] {
                 let part = Problem {
                     sources: p.sources.clone(),
@@ -637,6 +638,14 @@ fn evaluate_yukawa_rejects_mismatched_gradient() {
         &mut phi,
         Some(&mut grad),
     );
+}
+
+#[test]
+#[should_panic(expected = "`targets` and `potential` must have the same length, got 2 and 1")]
+fn evaluate_yukawa_rejects_mismatched_potential() {
+    let kernel = P2pKernel::<f64>::detect();
+    let mut phi = [0.0];
+    kernel.evaluate_yukawa(1.0, &[[0.0; 3]], &[1.0], &[[1.0; 3]; 2], &mut phi, None);
 }
 
 fn rejects_kappa(kappa: f64) {

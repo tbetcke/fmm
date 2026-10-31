@@ -873,7 +873,7 @@ request, using this template:
   - `YUKAWA_K = 1` on every ISA (measured on NEON and AVX-512; K = 2 spills).
   - Design `docs/design/simd-p2p.md` §4.10; report `fmm-validate/results/helmholtz-ch2-4b.md`;
     the cost example `spikes/p2p-simd/examples/yukawa.rs`.
-- Tests: `fmm-simd/tests/p2p/yukawa.rs` (16, plus 4 ignored release tests) and
+- Tests: `fmm-simd/tests/p2p/yukawa.rs` (17, plus 4 ignored release tests) and
   `p2p_yukawa_body_is_independent_of_k` in `src/arch/tests.rs`.
   - Terms within the derived contract (20 + 12 κr) u_T and (52 + 12 κr) u_T over 10⁶ pairs per
     precision, κr to 64 (f32) and 512 (f64): at most 10.2 u at small κr, about 3 u per unit

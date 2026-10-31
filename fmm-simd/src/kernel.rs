@@ -232,10 +232,13 @@ impl<T: SimdScalar> P2pKernel<T> {
     ///   the reference's term relative to |qⱼ| e^{−κr} / r, and each gradient component
     ///   within (52 + 12 κr) u_T relative to |qⱼ| (1 + κr) e^{−κr} / r²
     ///   (docs/design/simd-p2p.md §4.10 derives both; the κr part is the conditioning of
-    ///   e^{−κr} in r, which the reference shares). In f32 the gradient contract holds for
-    ///   2⁻⁸⁴ ≤ r² ≤ 2⁷ and |qⱼ| ≤ 1, as [`evaluate`](Self::evaluate)'s. Beyond the κr range
-    ///   the terms are tiny: from κr = (1 − e_min) ln 2 on (707.7 in f64, 86.6 in f32) the
-    ///   factor e^{−κr} is replaced by its value there, at most 2^(e_min + 2).
+    ///   e^{−κr} in r, which the reference shares), for 2⁻²⁰ ≤ |qⱼ| ≤ 1, where the term's
+    ///   products stay normal. In f32 the gradient contract holds for 2⁻⁸⁴ ≤ r² ≤ 2⁷, as
+    ///   [`evaluate`](Self::evaluate)'s. From κr = −(e_min + 1) ln 2 on (707.7 in f64, 86.6
+    ///   in f32) the factor e^{−κr} is replaced by its value there, at most 2^(e_min + 2):
+    ///   the potential term is then at most 2^(e_min + 2) |qⱼ| / r, each gradient component
+    ///   at most (1 + κr) 2^(e_min + 2) |qⱼ| / r², which grows with κr (and is infinite
+    ///   once κr overflows, as the reference's is NaN).
     ///
     /// # Panics
     ///

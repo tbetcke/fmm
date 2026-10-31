@@ -56,10 +56,11 @@ branch `tbetcke/h-ch2-4b` against `main` at 32a2c94, release builds, rustc 1.99.
   `arch/scalar.rs` `p2p_yukawa`, the reference's loop.
 - `kernel.rs` `P2pKernel::evaluate_yukawa` (panics unless κ is finite and κ ≥ 0, besides the
   reference's length checks); `lib.rs` the sealed method and the crate docs' "Yukawa".
-- Tests: `tests/p2p/yukawa.rs` (16 tests and 4 ignored release tests), and
+- Tests: `tests/p2p/yukawa.rs` (17 tests and 4 ignored release tests), and
   `src/arch/tests.rs` `p2p_yukawa_body_is_independent_of_k`.
 - `spikes/p2p-simd/examples/yukawa.rs`: the cost per pair (§5.2).
-- No manifest, dependency, convention, table, layout or `nd-fmm-plan` change. `nd-fmm-exec`
+- No dependency, convention, table, layout or `nd-fmm-plan` change; the one manifest
+  change is the spike's `[[example]]` for `yukawa`. `nd-fmm-exec`
   does not call the Yukawa kernel yet (CH2.1 will).
 
 ## 2. Laplace's code (constraint 1, conditions 1–3)

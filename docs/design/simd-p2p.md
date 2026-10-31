@@ -669,7 +669,7 @@ Laplace's range (2⁻⁸⁴ ≤ r², |q| ≤ 1): |t f| ≤ |q| ρ (1 + κr) e^{�
 registers; on the M3 Max K = 1 is faster than K = 2 by 1.2× (f32) and 1.3× (f64) with
 gradients and within ±4 % without, and on Kathleen's AVX-512 K = 2 is within 2 % in f32 and
 5–9 % slower in f64 (Helmholtz CH2.4b, report §5.2). On AVX2's 16 registers the constants
-are memory operands.
+are memory operands (K = 1 by the register count; not timed against K = 2).
 
 **Contract** (per term, against the reference's term in the same precision, to first order
 in u = u_T; both compute d by the same subtraction):
@@ -698,7 +698,8 @@ error δ κr in e^{−κr}, and the reference carries 3.5u κr of it itself. The
 holds on the kernel domain of §4.4 for 0 ≤ κr ≤ 64 (f32) and 512 (f64), where e^{−κr} and
 the term's products stay normal for 2⁻²⁰ ≤ |q| ≤ 1; beyond, up to κr = −x_min (§4.9), the
 exponential still meets its contract but products may round as subnormals, and past it
-the clamp makes the term at most 2^(e_min + 2) |q| / r.
+the clamp makes the potential term at most 2^(e_min + 2) |q| / r and each gradient component
+at most (1 + κr) 2^(e_min + 2) |q| / r², which grows with κr.
 
 **Measured** (`tests/p2p/yukawa.rs`, `yukawa_terms_*_large`, 10⁶ seeded pairs per precision,
 r² log-uniform over the domain, κr log-uniform in [10⁻⁶, 64 or 512] and κ = 0 for every

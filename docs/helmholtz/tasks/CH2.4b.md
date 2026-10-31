@@ -37,7 +37,8 @@ green-kernels' modified Helmholtz; Laplace's P2P bit for bit, its benchmarks wit
 
 ## Changes
 
-`nd-fmm-simd` (library) and `spikes/p2p-simd` (one new example), plus docs. No manifest,
+`nd-fmm-simd` (library) and `spikes/p2p-simd` (one new example, registered in its
+`Cargo.toml` as `[[example]]`; as built), plus docs. No other manifest,
 dependency, convention, table, layout or `nd-fmm-plan` change. `nd-fmm-exec` does not call
 the Yukawa kernel yet (CH2.1 does).
 
@@ -105,7 +106,7 @@ All on every ISA the machine offers (`common::kernels`, printing those it cannot
 
 - **Terms** (`tests/p2p/yukawa.rs`): per pair against `p2p_yukawa` in the same precision, r²
   log-uniform over the kernel domain (f32 gradients from 2⁻⁸⁴), κr log-uniform in
-  [10⁻⁶, −x_min] plus κ = 0, |q| ≤ 1: within the contract (a + b κr) u_T; 10⁴ pairs in
+  [10⁻⁶, −x_min] plus κ = 0, |q| ≤ 1: within the contract (a + b κr) u_T; 10⁴ (as built: 4,096) pairs in
   debug, 10⁶ per precision in an ignored release test that prints the maxima by κr decade.
 - **Sums**: against `direct_sum_yukawa` on the W1 sets and random sets to 4,096 sources,
   κ ∈ {0.1, 1, 10} (leaf units): within 1e-14 (f64) and 1e-6 (f32) relative to

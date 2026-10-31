@@ -539,7 +539,8 @@ p2p_dipole_entries!(p2p_dipoles_f64, p2p_dipoles_f64_gradient, f64);
 /// Target vectors per block of the Yukawa P2P (`arch::p2p::p2p_skeleton` with
 /// `arch::p2p::Yukawa`; Helmholtz CH2.4b), both precisions, potential only and with
 /// gradients: the exponential's constants (19 in f64) alone exceed AVX2's 16 registers, so
-/// the block holds one target vector and the constants are memory operands.
+/// the block holds one target vector and the constants are memory operands (by the register
+/// count; not timed against K = 2).
 pub(crate) const YUKAWA_K: usize = 1;
 
 /// Generates the Yukawa P2P entry points of one precision, potential only and with
