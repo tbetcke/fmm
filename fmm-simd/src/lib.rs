@@ -214,6 +214,7 @@
 #![deny(clippy::undocumented_unsafe_blocks)]
 
 mod arch;
+pub mod exp;
 mod isa;
 mod kernel;
 mod matrix;
@@ -243,13 +244,24 @@ impl SimdScalar for f64 {}
 /// Seals [`SimdScalar`], and dispatches generic code to the entry points of its
 /// precision.
 mod sealed {
-    use crate::arch::{self, AvailableIsa};
+    use crate::arch::{self, AvailableIsa, exp::ExpConstants};
     use crate::{Isa, MulAdd, WaveTables};
 
     /// Implemented only for f32 and f64.
     pub trait Sealed: Sized {
         /// [`rsqrt_slice`](crate::rsqrt::rsqrt_slice) in this precision.
         fn rsqrt_slice(isa: Isa, x: &[Self], out: &mut [Self]);
+
+        /// The constants of the exponential in this precision (`arch::exp`; Helmholtz
+        /// CH2.4a).
+        const EXP: ExpConstants;
+
+        /// `Simd::scale_pow2` of the scalar layer: x · 2ⁿ from the bits of x and of
+        /// k = 1.5 · 2^m + n (Helmholtz CH2.4a).
+        fn scale_pow2(x: Self, k: Self) -> Self;
+
+        /// [`exp_slice`](crate::exp::exp_slice) in this precision.
+        fn exp_slice(isa: Isa, x: &[Self], out: &mut [Self]);
 
         /// [`P2pKernel::evaluate`](crate::P2pKernel::evaluate) in this precision, with
         /// lengths already checked.
@@ -348,6 +360,17 @@ mod sealed {
     impl Sealed for f32 {
         fn rsqrt_slice(isa: Isa, x: &[f32], out: &mut [f32]) {
             arch::rsqrt_slice_f32(isa, x, out);
+        }
+
+        const EXP: ExpConstants = arch::exp::F32;
+
+        #[inline(always)]
+        fn scale_pow2(x: f32, k: f32) -> f32 {
+            f32::from_bits(x.to_bits().wrapping_add(k.to_bits() << 23))
+        }
+
+        fn exp_slice(isa: Isa, x: &[f32], out: &mut [f32]) {
+            arch::exp_slice_f32(isa, x, out);
         }
 
         #[inline]
@@ -451,6 +474,17 @@ mod sealed {
     impl Sealed for f64 {
         fn rsqrt_slice(isa: Isa, x: &[f64], out: &mut [f64]) {
             arch::rsqrt_slice_f64(isa, x, out);
+        }
+
+        const EXP: ExpConstants = arch::exp::F64;
+
+        #[inline(always)]
+        fn scale_pow2(x: f64, k: f64) -> f64 {
+            f64::from_bits(x.to_bits().wrapping_add(k.to_bits() << 52))
+        }
+
+        fn exp_slice(isa: Isa, x: &[f64], out: &mut [f64]) {
+            arch::exp_slice_f64(isa, x, out);
         }
 
         #[inline]

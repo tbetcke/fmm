@@ -104,6 +104,17 @@ impl<T: SimdScalar> Simd<T> for Scalar {
     fn broadcast(self, point: &[T; 3], charge: T) -> ([T; 3], T) {
         (*point, charge)
     }
+
+    #[inline(always)]
+    fn max(self, a: T, b: T) -> T {
+        // x86's `maxps`/`maxpd` rule: b unless a > b.
+        if a > b { a } else { b }
+    }
+
+    #[inline(always)]
+    fn scale_pow2(self, x: T, k: T) -> T {
+        T::scale_pow2(x, k)
+    }
 }
 
 /// P2P with the scalar path, with lengths already checked by the caller.

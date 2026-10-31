@@ -20,17 +20,18 @@
 
 use std::arch::aarch64::{
     float32x4_t, float32x4x3_t, float64x2_t, float64x2x3_t, uint32x4_t, uint64x2_t, vaddq_f32,
-    vaddq_f64, vbicq_u32, vbicq_u64, vceqq_f32, vceqq_f64, vdivq_f32, vdivq_f64, vdupq_n_f32,
-    vdupq_n_f64, vfmaq_f32, vfmaq_f64, vfmsq_f32, vfmsq_f64, vld1q_f32, vld1q_f64, vld3q_dup_f32,
-    vld3q_dup_f64, vld3q_f32, vld3q_f64, vmulq_f32, vmulq_f64, vreinterpretq_f32_u32,
-    vreinterpretq_f64_u64, vreinterpretq_u32_f32, vreinterpretq_u64_f64, vrsqrteq_f32,
-    vrsqrteq_f64, vsqrtq_f32, vsqrtq_f64, vst1q_f32, vst1q_f64, vst3q_f32, vst3q_f64, vsubq_f32,
-    vsubq_f64,
+    vaddq_f64, vaddq_s32, vaddq_s64, vbicq_u32, vbicq_u64, vceqq_f32, vceqq_f64, vdivq_f32,
+    vdivq_f64, vdupq_n_f32, vdupq_n_f64, vfmaq_f32, vfmaq_f64, vfmsq_f32, vfmsq_f64, vld1q_f32,
+    vld1q_f64, vld3q_dup_f32, vld3q_dup_f64, vld3q_f32, vld3q_f64, vmaxq_f32, vmaxq_f64, vmulq_f32,
+    vmulq_f64, vreinterpretq_f32_s32, vreinterpretq_f32_u32, vreinterpretq_f64_s64,
+    vreinterpretq_f64_u64, vreinterpretq_s32_f32, vreinterpretq_s64_f64, vreinterpretq_u32_f32,
+    vreinterpretq_u64_f64, vrsqrteq_f32, vrsqrteq_f64, vshlq_n_s32, vshlq_n_s64, vsqrtq_f32,
+    vsqrtq_f64, vst1q_f32, vst1q_f64, vst3q_f32, vst3q_f64, vsubq_f32, vsubq_f64,
 };
 
 use super::p2p::{p2p_body, p2p_dipoles_body, p2p_many_body};
 use super::waves::{gather_body, merge_body, sums_body, waves_body};
-use super::{Simd, matrix::accumulate_body, rsqrt_body};
+use super::{Simd, exp::exp_body, matrix::accumulate_body, rsqrt_body};
 use crate::{Isa, WaveTables};
 
 /// The token of NEON: a value exists only on a CPU with NEON, so the [`Simd`] methods
@@ -164,6 +165,23 @@ impl Simd<f32> for Neon {
         let p = unsafe { vld3q_dup_f32(point.as_ptr()) };
         ([p.0, p.1, p.2], self.splat(charge))
     }
+
+    #[inline(always)]
+    fn max(self, a: float32x4_t, b: float32x4_t) -> float32x4_t {
+        // SAFETY: the token proves NEON
+        unsafe { vmaxq_f32(a, b) }
+    }
+
+    #[inline(always)]
+    fn scale_pow2(self, x: float32x4_t, k: float32x4_t) -> float32x4_t {
+        // SAFETY: the token proves NEON; the integer lanes are the bits of x and k, reinterpreted.
+        unsafe {
+            vreinterpretq_f32_s32(vaddq_s32(
+                vreinterpretq_s32_f32(x),
+                vshlq_n_s32::<23>(vreinterpretq_s32_f32(k)),
+            ))
+        }
+    }
 }
 
 impl Simd<f64> for Neon {
@@ -274,6 +292,23 @@ impl Simd<f64> for Neon {
         let p = unsafe { vld3q_dup_f64(point.as_ptr()) };
         ([p.0, p.1, p.2], self.splat(charge))
     }
+
+    #[inline(always)]
+    fn max(self, a: float64x2_t, b: float64x2_t) -> float64x2_t {
+        // SAFETY: the token proves NEON
+        unsafe { vmaxq_f64(a, b) }
+    }
+
+    #[inline(always)]
+    fn scale_pow2(self, x: float64x2_t, k: float64x2_t) -> float64x2_t {
+        // SAFETY: the token proves NEON; the integer lanes are the bits of x and k, reinterpreted.
+        unsafe {
+            vreinterpretq_f64_s64(vaddq_s64(
+                vreinterpretq_s64_f64(x),
+                vshlq_n_s64::<52>(vreinterpretq_s64_f64(k)),
+            ))
+        }
+    }
 }
 
 /// Generates the inverse-square-root entry point of one precision.
@@ -299,6 +334,30 @@ macro_rules! rsqrt_entry {
 
 rsqrt_entry!(rsqrt_slice_f32, f32);
 rsqrt_entry!(rsqrt_slice_f64, f64);
+
+/// Generates the entry point of the exponential of one precision (Helmholtz CH2.4a).
+macro_rules! exp_entry {
+    ($name:ident, $t:ty) => {
+        #[doc = concat!(
+                            "The exponential (Helmholtz CH2.4a) on NEON in ", stringify!($t),
+                            ": `out[i] = exp(x[i])`, with lengths checked by the callee."
+                        )]
+        ///
+        /// Not inlined, so that the dispatch stays one call and the inlining check
+        /// finds the function by name.
+        #[target_feature(enable = "neon")]
+        #[inline(never)]
+        pub(crate) fn $name(x: &[$t], out: &mut [$t]) {
+            // SAFETY: this function enables `neon`, so it runs only on a CPU with NEON:
+            // a call from outside a NEON context is `unsafe` and asserts it.
+            let s = unsafe { Neon::new_unchecked() };
+            exp_body(s, x, out);
+        }
+    };
+}
+
+exp_entry!(exp_slice_f32, f32);
+exp_entry!(exp_slice_f64, f64);
 
 /// Target vectors per P2P block in f32 (signed off in Phase 3S T2,
 /// spikes/p2p-simd/SPIKE_REPORT.md, "Recommendation", item 3).

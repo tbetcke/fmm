@@ -39,16 +39,18 @@
 //! on hardware with AVX-512F (Kathleen's Cascade Lake; opportunistically CI).
 
 use std::arch::x86_64::{
-    __m512, __m512d, __mmask8, __mmask16, _CMP_EQ_OQ, _mm512_add_pd, _mm512_add_ps,
-    _mm512_cmp_pd_mask, _mm512_cmp_ps_mask, _mm512_fmadd_pd, _mm512_fmadd_ps, _mm512_fnmadd_pd,
-    _mm512_fnmadd_ps, _mm512_loadu_pd, _mm512_loadu_ps, _mm512_maskz_mov_pd, _mm512_maskz_mov_ps,
-    _mm512_mul_pd, _mm512_mul_ps, _mm512_rsqrt14_pd, _mm512_rsqrt14_ps, _mm512_set1_pd,
-    _mm512_set1_ps, _mm512_storeu_pd, _mm512_storeu_ps, _mm512_sub_pd, _mm512_sub_ps,
+    __m512, __m512d, __mmask8, __mmask16, _CMP_EQ_OQ, _mm512_add_epi32, _mm512_add_epi64,
+    _mm512_add_pd, _mm512_add_ps, _mm512_castpd_si512, _mm512_castps_si512, _mm512_castsi512_pd,
+    _mm512_castsi512_ps, _mm512_cmp_pd_mask, _mm512_cmp_ps_mask, _mm512_fmadd_pd, _mm512_fmadd_ps,
+    _mm512_fnmadd_pd, _mm512_fnmadd_ps, _mm512_loadu_pd, _mm512_loadu_ps, _mm512_maskz_mov_pd,
+    _mm512_maskz_mov_ps, _mm512_max_pd, _mm512_max_ps, _mm512_mul_pd, _mm512_mul_ps,
+    _mm512_rsqrt14_pd, _mm512_rsqrt14_ps, _mm512_set1_pd, _mm512_set1_ps, _mm512_slli_epi32,
+    _mm512_slli_epi64, _mm512_storeu_pd, _mm512_storeu_ps, _mm512_sub_pd, _mm512_sub_ps,
 };
 
 use super::p2p::{p2p_body, p2p_dipoles_body, p2p_many_body};
 use super::waves::{gather_body, merge_body, sums_body, waves_body};
-use super::{Simd, matrix::accumulate_body, rsqrt_body};
+use super::{Simd, exp::exp_body, matrix::accumulate_body, rsqrt_body};
 use crate::{Isa, WaveTables};
 
 /// The token of AVX-512F (with AVX2 and FMA): a value exists only on a CPU with them, so
@@ -193,6 +195,23 @@ impl Simd<f32> for Avx512 {
             Simd::splat(self, charge),
         )
     }
+
+    #[inline(always)]
+    fn max(self, a: __m512, b: __m512) -> __m512 {
+        // SAFETY: the token proves AVX-512F
+        unsafe { _mm512_max_ps(a, b) }
+    }
+
+    #[inline(always)]
+    fn scale_pow2(self, x: __m512, k: __m512) -> __m512 {
+        // SAFETY: the token proves AVX-512F; the integer lanes are the bits of x and k, reinterpreted.
+        unsafe {
+            _mm512_castsi512_ps(_mm512_add_epi32(
+                _mm512_castps_si512(x),
+                _mm512_slli_epi32::<23>(_mm512_castps_si512(k)),
+            ))
+        }
+    }
 }
 
 impl Simd<f64> for Avx512 {
@@ -315,6 +334,23 @@ impl Simd<f64> for Avx512 {
             Simd::splat(self, charge),
         )
     }
+
+    #[inline(always)]
+    fn max(self, a: __m512d, b: __m512d) -> __m512d {
+        // SAFETY: the token proves AVX-512F
+        unsafe { _mm512_max_pd(a, b) }
+    }
+
+    #[inline(always)]
+    fn scale_pow2(self, x: __m512d, k: __m512d) -> __m512d {
+        // SAFETY: the token proves AVX-512F; the integer lanes are the bits of x and k, reinterpreted.
+        unsafe {
+            _mm512_castsi512_pd(_mm512_add_epi64(
+                _mm512_castpd_si512(x),
+                _mm512_slli_epi64::<52>(_mm512_castpd_si512(k)),
+            ))
+        }
+    }
 }
 
 /// Generates the inverse-square-root entry point of one precision.
@@ -341,6 +377,31 @@ macro_rules! rsqrt_entry {
 
 rsqrt_entry!(rsqrt_slice_f32, f32);
 rsqrt_entry!(rsqrt_slice_f64, f64);
+
+/// Generates the entry point of the exponential of one precision (Helmholtz CH2.4a).
+macro_rules! exp_entry {
+    ($name:ident, $t:ty) => {
+        #[doc = concat!(
+                    "The exponential (Helmholtz CH2.4a) on AVX-512F in ",
+                    stringify!($t), ": `out[i] = exp(x[i])`, with lengths checked by the callee."
+                )]
+        ///
+        /// Not inlined, so that the dispatch stays one call and the inlining check
+        /// finds the function by name.
+        #[target_feature(enable = "avx512f")]
+        #[inline(never)]
+        pub(crate) fn $name(x: &[$t], out: &mut [$t]) {
+            // SAFETY: this function enables `avx512f` (and so, to the compiler, `avx2`
+            // and `fma`), and the dispatch calls it only where `Isa::Avx512` is
+            // available: a call from outside such a context is `unsafe` and asserts it.
+            let s = unsafe { Avx512::new_unchecked() };
+            exp_body(s, x, out);
+        }
+    };
+}
+
+exp_entry!(exp_slice_f32, f32);
+exp_entry!(exp_slice_f64, f64);
 
 /// Target vectors per P2P block in f32 (optimisation.md §5.2): 32 vector registers hold
 /// two vectors' 2 × 7 accumulators and coordinates with room for the inverse square
