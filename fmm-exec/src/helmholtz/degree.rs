@@ -132,14 +132,16 @@ pub fn s7_degree(k: &Wavenumber, circumradius: f64, epsilon: f64) -> usize {
     floor.max(high) as usize
 }
 
-/// A degree rule of S7's shape (module documentation),
-/// p(x, ε) = max(⌈α log₁₀(1/ε) + β⌉, ⌈x + C (ln 1/ε)^{2/3} x^{1/3}⌉) at x = Re(k) a:
-/// a low-frequency plateau and a high-frequency branch. The ceilings forgive 10⁻⁹, so that
-/// a value an integer up to rounding (α log₁₀(10⁶) with α a multiple of 0.05) stays that
-/// integer.
+/// A degree rule of S7's shape (module documentation), with a quadratic plateau,
+/// p(x, ε) = max(⌈γ L² + α L + β⌉, ⌈x + C (ln 1/ε)^{2/3} x^{1/3}⌉) at x = Re(k) a and
+/// L = log₁₀(1/ε): a low-frequency plateau and a high-frequency branch. S7's closed form is
+/// γ = 0, α = 6, β = −2, C = 1 up to the ceilings, which here forgive 10⁻⁹, so that a value
+/// an integer up to rounding (α log₁₀(10⁶) with α a multiple of 0.05) stays that integer.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DegreeRule {
-    /// α, the plateau's degrees per decade of ε.
+    /// γ, the plateau's quadratic coefficient in L = log₁₀(1/ε).
+    pub gamma: f64,
+    /// α, the plateau's linear coefficient in L.
     pub alpha: f64,
     /// β, the plateau's offset.
     pub beta: f64,
@@ -148,9 +150,10 @@ pub struct DegreeRule {
 }
 
 impl DegreeRule {
-    /// The plateau ⌈α log₁₀(1/ε) + β⌉, at least 0.
+    /// The plateau ⌈γ L² + α L + β⌉ with L = log₁₀(1/ε), at least 0.
     pub fn plateau(&self, epsilon: f64) -> usize {
-        rounded_up(self.alpha * (1.0 / epsilon).log10() + self.beta)
+        let l = (1.0 / epsilon).log10();
+        rounded_up((self.gamma * l + self.alpha) * l + self.beta)
     }
 
     /// The high-frequency branch ⌈x + C (ln 1/ε)^{2/3} x^{1/3}⌉, at least 0.

@@ -15,14 +15,15 @@
 //! - **Points.** A [`Point`] is one measured degree: the level's x = Re(k) a_l (a_l the
 //!   circumradius), the tolerance ε and the degree that meets the target (ε/2, the plan's
 //!   margin).
-//! - **The rule.** [`DegreeRule`] has S7's shape with fitted constants,
+//! - **The rule.** [`DegreeRule`] has S7's shape with fitted constants and a quadratic
+//!   plateau (the full FMM's plateau grows faster than linearly in L = log₁₀(1/ε)),
 //!
 //!   ```text
-//!   p(x, ε) = max(⌈α log₁₀(1/ε) + β⌉, ⌈x + C (ln 1/ε)^{2/3} x^{1/3}⌉),
+//!   p(x, ε) = max(⌈γ L² + α L + β⌉, ⌈x + C (ln 1/ε)^{2/3} x^{1/3}⌉),
 //!   ```
 //!
-//!   the low-frequency plateau and the high-frequency branch. [`fit_plateau`] fits α and
-//!   β to the plateau points, [`fit_high`] fits C to the points the plateau does not cover,
+//!   the low-frequency plateau and the high-frequency branch. [`fit_plateau`] fits γ, α
+//!   and β to the plateau points, [`fit_high`] fits C to the points the plateau does not cover,
 //!   and [`covers`] checks that the rule is at least every point's degree.
 
 use nd_fmm_exec::helmholtz::DegreeRule;
@@ -111,52 +112,57 @@ fn step_above(value: f64) -> f64 {
     (((value + 1e-9) / STEP).floor() + 1.0) * STEP
 }
 
-/// α and β of the plateau: over α on the grid of [`STEP`] in [0, 10], β the smallest
-/// multiple of [`STEP`] with ⌈α log₁₀(1/ε) + β⌉ ≥ p at every point, the pair with the least
-/// total excess Σ (⌈α L + β⌉ − p) over the points, ties to the least Σ (α L + β). The
-/// x of the points is not used. `None` without points.
-pub fn fit_plateau(points: &[Point]) -> Option<(f64, f64)> {
+/// The step of the grid of γ.
+pub const GAMMA_STEP: f64 = 0.01;
+
+/// The plateau of the points: over γ on the grid of [`GAMMA_STEP`] in [0, 0.5] and α on the
+/// grid of [`STEP`] in [0, 10] (so the plateau never falls as ε does), β the smallest
+/// multiple of [`STEP`] with ⌈γ L² + α L + β⌉ ≥ p at every point (L = log₁₀(1/ε)), the
+/// constants with the least total excess Σ (⌈γ L² + α L + β⌉ − p) over the points, ties to
+/// the least Σ (γ L² + α L + β). The x of the points is not used; C is 0. `None` without
+/// points.
+pub fn fit_plateau(points: &[Point]) -> Option<DegreeRule> {
     if points.is_empty() {
         return None;
     }
     let decades: Vec<f64> = points.iter().map(|p| (1.0 / p.epsilon).log10()).collect();
-    let mut best: Option<(usize, f64, f64, f64)> = None;
-    for i in 0..=(10.0 / STEP) as usize {
-        let alpha = i as f64 * STEP;
-        let beta = step_above(
-            points
+    let mut best: Option<(usize, f64, DegreeRule)> = None;
+    for g in 0..=(0.5 / GAMMA_STEP).round() as usize {
+        let gamma = g as f64 * GAMMA_STEP;
+        for i in 0..=(10.0 / STEP).round() as usize {
+            let alpha = i as f64 * STEP;
+            let curve = |l: f64| (gamma * l + alpha) * l;
+            let beta = step_above(
+                points
+                    .iter()
+                    .zip(&decades)
+                    .map(|(p, &l)| p.degree as f64 - 1.0 - curve(l))
+                    .fold(f64::NEG_INFINITY, f64::max),
+            );
+            let rule = DegreeRule {
+                gamma,
+                alpha,
+                beta,
+                c: 0.0,
+            };
+            let excess = points
                 .iter()
-                .zip(&decades)
-                .map(|(p, l)| p.degree as f64 - 1.0 - alpha * l)
-                .fold(f64::NEG_INFINITY, f64::max),
-        );
-        let rule = DegreeRule {
-            alpha,
-            beta,
-            c: 0.0,
-        };
-        let excess = points
-            .iter()
-            .map(|p| rule.plateau(p.epsilon) - p.degree)
-            .sum::<usize>();
-        let total = decades.iter().map(|l| alpha * l + beta).sum::<f64>();
-        if best.is_none_or(|(e, t, _, _)| excess < e || (excess == e && total < t)) {
-            best = Some((excess, total, alpha, beta));
+                .map(|p| rule.plateau(p.epsilon) - p.degree)
+                .sum::<usize>();
+            let total = decades.iter().map(|&l| curve(l) + beta).sum::<f64>();
+            if best.is_none_or(|(e, t, _)| excess < e || (excess == e && total < t)) {
+                best = Some((excess, total, rule));
+            }
         }
     }
-    best.map(|(_, _, alpha, beta)| (alpha, beta))
+    best.map(|(_, _, rule)| rule)
 }
 
-/// C of the high-frequency branch for the plateau α, β: the smallest multiple of [`STEP`]
-/// with ⌈x + C (ln 1/ε)^{2/3} x^{1/3}⌉ ≥ p at every point whose degree the plateau does
-/// not reach; 0 if the plateau reaches every one. Points with x = 0 that the plateau misses
-/// cannot be covered: `None`.
-pub fn fit_high(points: &[Point], alpha: f64, beta: f64) -> Option<f64> {
-    let plateau = DegreeRule {
-        alpha,
-        beta,
-        c: 0.0,
-    };
+/// C of the high-frequency branch beside `plateau`'s plateau: the smallest multiple of
+/// [`STEP`] with ⌈x + C (ln 1/ε)^{2/3} x^{1/3}⌉ ≥ p at every point whose degree the plateau
+/// does not reach; 0 if the plateau reaches every one. Points with x = 0 that the plateau
+/// misses cannot be covered: `None`.
+pub fn fit_high(points: &[Point], plateau: &DegreeRule) -> Option<f64> {
     let mut c: Option<f64> = None;
     for p in points
         .iter()
@@ -173,13 +179,13 @@ pub fn fit_high(points: &[Point], alpha: f64, beta: f64) -> Option<f64> {
 }
 
 /// The rule fitted to the plateau points (all levels low-frequency) and the other points
-/// (the level scans, and plateau scans of trees with a high-frequency level): α and β from
-/// the first, C from both. `None` if either fit fails.
+/// (the level scans, and plateau scans of trees with a high-frequency level): γ, α and β
+/// from the first, C from both. `None` if either fit fails.
 pub fn fit(plateau: &[Point], others: &[Point]) -> Option<DegreeRule> {
-    let (alpha, beta) = fit_plateau(plateau)?;
+    let plateau_rule = fit_plateau(plateau)?;
     let all: Vec<Point> = plateau.iter().chain(others).copied().collect();
-    let c = fit_high(&all, alpha, beta)?;
-    let rule = DegreeRule { alpha, beta, c };
+    let c = fit_high(&all, &plateau_rule)?;
+    let rule = DegreeRule { c, ..plateau_rule };
     covers(&rule, &all).then_some(rule)
 }
 
@@ -260,17 +266,13 @@ mod tests {
     #[test]
     fn the_plateau_fit_recovers_a_rule_and_covers_its_points() {
         let truth = DegreeRule {
-            alpha: 3.3,
-            beta: -4.0,
+            gamma: 0.3,
+            alpha: 0.2,
+            beta: 2.8,
             c: 0.0,
         };
         let points = points_of(&truth, &[0.5]);
-        let (alpha, beta) = fit_plateau(&points).unwrap();
-        let fitted = DegreeRule {
-            alpha,
-            beta,
-            c: 0.0,
-        };
+        let fitted = fit_plateau(&points).unwrap();
         assert!(covers(&fitted, &points));
         // The ceilings of the data are matched exactly: no excess.
         for p in &points {
@@ -289,18 +291,15 @@ mod tests {
                     degree,
                 }
             });
-        let (alpha, beta) = fit_plateau(&points).unwrap();
-        let rule = DegreeRule {
-            alpha,
-            beta,
-            c: 0.0,
-        };
+        let rule = fit_plateau(&points).unwrap();
         assert!(covers(&rule, &points), "{rule:?}");
+        assert!(rule.gamma >= 0.0 && rule.alpha >= 0.0, "{rule:?}");
     }
 
     #[test]
     fn the_full_fit_covers_plateau_and_level_points() {
         let truth = DegreeRule {
+            gamma: 0.0,
             alpha: 3.0,
             beta: -2.0,
             c: 0.8,
@@ -314,7 +313,11 @@ mod tests {
         );
         assert!(rule.c <= truth.c + 1e-12, "{rule:?}");
         // The plateau's constants come from the plateau alone.
-        assert_eq!(fit_plateau(&plateau).unwrap(), (rule.alpha, rule.beta));
+        let alone = fit_plateau(&plateau).unwrap();
+        assert_eq!(
+            (alone.gamma, alone.alpha, alone.beta),
+            (rule.gamma, rule.alpha, rule.beta)
+        );
     }
 
     #[test]
@@ -324,8 +327,15 @@ mod tests {
             epsilon: 1e-3,
             degree: 10,
         }];
-        assert_eq!(fit_high(&points, 0.0, 0.0), None);
-        assert_eq!(fit_high(&points, 0.0, 10.0), Some(0.0));
+        let low = DegreeRule {
+            gamma: 0.0,
+            alpha: 0.0,
+            beta: 0.0,
+            c: 0.0,
+        };
+        assert_eq!(fit_high(&points, &low), None);
+        let high = DegreeRule { beta: 10.0, ..low };
+        assert_eq!(fit_high(&points, &high), Some(0.0));
     }
 
     #[test]

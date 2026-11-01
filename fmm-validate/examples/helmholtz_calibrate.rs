@@ -12,7 +12,7 @@
 //!   - `--scan levels`: each level l ≥ 2 of the tree with x_l = Re(k) a_l ≥ `--min-x`
 //!     (default 0) in turn, its degree from max(1, ⌊x_l⌋ − 2), every other level held at
 //!     `s7_degree` at `--hold-eps` (default the smallest ε), S7's per-pair upper bound,
-//!     whose errors lie far below ε (CH3.1c); or, with `--hold α,β,C`, at the
+//!     whose errors lie far below ε (CH3.1c); or, with `--hold γ,α,β,C`, at the
 //!     `DegreeRule` of those constants at `--hold-eps` (cheaper on large trees, where S7's
 //!     plateau makes every run long).
 //!
@@ -22,14 +22,14 @@
 //!   x of the scanned levels, or `level`). A degree that meets ε/2 already at the scan's
 //!   first degree is printed as `≤ p`, and its point is not written.
 //! - **`fit <files…>`** (no MPI): reads the `point:` lines of saved scan outputs, fits
-//!   `DegreeRule` (the plateau's α and β to the points whose x is at most `PLATEAU_X`, of
+//!   `DegreeRule` (the plateau's γ, α and β to the points whose x is at most `PLATEAU_X`, of
 //!   either scan, C to every point), and prints the rule and each point against it and
 //!   against S7.
 //!
 //! Options of the scans: `--workload w` (as `helmholtz_accuracy`: `w1`, `w2`, `w3`,
 //! `w3:<n>`, `w4-<distribution>:<n>`), `--kd x,…`, `--kim y`, `--eps e,…` (default
 //! 1e-3,…,1e-8 by decades), `--scan plateau|levels`, `--first p`, `--max-degree p`
-//! (default 80), `--min-x x`, `--hold-eps e`, `--hold α,β,C`, `--samples n`, `--threads t` (default 1),
+//! (default 80), `--min-x x`, `--hold-eps e`, `--hold γ,α,β,C`, `--samples n`, `--threads t` (default 1),
 //! `--charges real|complex`. Run in release mode with one BLAS thread:
 //!
 //! ```text
@@ -110,7 +110,7 @@ fn arguments(args: &[String]) -> Arguments {
         eprintln!(
             "usage: helmholtz_calibrate [--workload w] [--kd x,…] [--kim y] [--eps e,…] \
              [--scan plateau|levels] [--first p] [--max-degree p] [--min-x x] \
-             [--hold-eps e] [--hold α,β,C] [--samples n] [--threads t] [--charges real|complex], \
+             [--hold-eps e] [--hold γ,α,β,C] [--samples n] [--threads t] [--charges real|complex], \
              or helmholtz_calibrate fit <files…>; got {args:?}"
         );
         std::process::exit(2);
@@ -152,7 +152,12 @@ fn arguments(args: &[String]) -> Arguments {
             "--min-x" => value.parse().map(|v| parsed.min_x = v).is_ok(),
             "--hold-eps" => value.parse().map(|v| parsed.hold_epsilon = Some(v)).is_ok(),
             "--hold" => match list::<f64>(value).as_deref() {
-                Some(&[alpha, beta, c]) => Some(DegreeRule { alpha, beta, c }),
+                Some(&[gamma, alpha, beta, c]) => Some(DegreeRule {
+                    gamma,
+                    alpha,
+                    beta,
+                    c,
+                }),
                 _ => None,
             }
             .map(|r| parsed.hold = Some(r))
@@ -379,8 +384,8 @@ fn scans(arguments: &Arguments) {
                         format!(
                             "level {level}, others at {} at ε = {hold:e}",
                             arguments.hold.map_or("S7".into(), |r| format!(
-                                "α = {}, β = {}, C = {}",
-                                r.alpha, r.beta, r.c
+                                "γ = {}, α = {}, β = {}, C = {}",
+                                r.gamma, r.alpha, r.beta, r.c
                             ))
                         )
                     },
@@ -455,9 +460,9 @@ fn fit_files(files: &[String]) {
     };
     println!();
     println!(
-        "Rule: α = {:.2}, β = {:.2}, C = {:.2}: p = max(⌈{:.2} log₁₀(1/ε) {:+.2}⌉, \
-         ⌈x + {:.2} (ln 1/ε)^(2/3) x^(1/3)⌉)",
-        rule.alpha, rule.beta, rule.c, rule.alpha, rule.beta, rule.c
+        "Rule: γ = {:.2}, α = {:.2}, β = {:.2}, C = {:.2}: p = max(⌈{:.2} L² + {:.2} L \
+         {:+.2}⌉, ⌈x + {:.2} (ln 1/ε)^(2/3) x^(1/3)⌉), L = log₁₀(1/ε)",
+        rule.gamma, rule.alpha, rule.beta, rule.c, rule.gamma, rule.alpha, rule.beta, rule.c
     );
     let all: Vec<Point> = plateau.iter().chain(&others).copied().collect();
     assert!(covers(&rule, &all));

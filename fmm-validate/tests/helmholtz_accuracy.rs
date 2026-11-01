@@ -2,7 +2,10 @@
 //! `nd_fmm_validate::helmholtz_accuracy`) on small cases: the checksum independent of the
 //! partition and sensitive to one bit, the blocks a partition, the sharded oracle the
 //! unsharded one bit for bit at any thread count, and the FMM within ε of the oracle with
-//! the same checksum at 1 and 2 threads and, on several ranks, on one rank.
+//! the same checksum at 1 and 2 threads and, on several ranks, on one rank. A smoke run of
+//! the calibration's plateau scan (Helmholtz CH3.3, `nd_fmm_validate::helmholtz_calibration`):
+//! the errors fall with the degree, the smallest degree at ε/2 meets it, and the default
+//! rule's degrees are at most S7's at the levels' circumradii.
 //!
 //! One test initialises MPI (at `Funneled`); it passes on any number of ranks, each check
 //! on every rank or on none.
@@ -10,10 +13,13 @@
 use mpi::Threading;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::Communicator;
-use nd_fmm_exec::helmholtz::{ChargeKind, Degrees, Densities, Output, WavenumberKind};
+use nd_fmm_exec::helmholtz::{
+    ChargeKind, Degrees, Densities, Output, Wavenumber, WavenumberKind, s7_degree,
+};
 use nd_fmm_validate::SplitMix64;
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::helmholtz_accuracy::{Case, Oracle, Problem, checksum, complex_k, run};
+use nd_fmm_validate::helmholtz_calibration::Curve;
 use nd_fmm_validate::helmholtz_workloads::Workload;
 
 /// An output of `n` targets, 2 complex vectors with gradients, filled with random values.
@@ -138,6 +144,45 @@ fn check_fmm(world: &SimpleCommunicator, case: &Case) {
     }
 }
 
+/// The plateau scan of the calibration on W1 at kD = 10: one degree p = 1..=8 on every
+/// level ≥ 2, as the `helmholtz_calibrate` example runs it.
+fn check_calibration_scan(world: &SimpleCommunicator) {
+    let mut case = Case::new(Workload::W1, (10.0, 0.0), Degrees::Tolerance(1e-3));
+    let problem = Problem::new(&case);
+    let oracle = Oracle::sharded(complex_k(&case), &problem, true, 2, world);
+    let default = run(&case, &problem, &oracle, 2, world).expect("the FMM runs");
+    // The circumradii are √3 r_l of the run's domain, halving per level.
+    let k = Wavenumber::new(10.0, 0.0).unwrap();
+    assert_eq!(default.circumradii.len(), default.levels);
+    for l in 1..default.levels {
+        assert_eq!(default.circumradii[l], default.circumradii[l - 1] / 2.0);
+    }
+    // The default rule never above S7's.
+    for (l, &p) in default.degrees.iter().enumerate().skip(2) {
+        assert!(
+            p <= s7_degree(&k, default.circumradii[l], 1e-3),
+            "level {l}: {p}"
+        );
+    }
+    let mut curve = Curve::new(1);
+    while curve.next_degree() <= 8 {
+        let mut degrees = vec![curve.next_degree(); 64];
+        degrees[..2].fill(0);
+        case.degrees = Degrees::PerLevel(degrees);
+        let row = run(&case, &problem, &oracle, 2, world).expect("the FMM runs");
+        curve.push(*row.errors.last().unwrap());
+    }
+    let largest = |e: &[f64; 2]| e[0].max(e[1]);
+    assert!(
+        largest(&curve.errors[7]) < 1e-3 * largest(&curve.errors[0]),
+        "{curve:?}"
+    );
+    let p = curve.smallest_degree(0.5e-3).expect("p ≤ 8 meets 5e-4");
+    for e in &curve.errors[p - 1..] {
+        assert!(largest(e) <= 0.5e-3, "{curve:?}");
+    }
+}
+
 #[test]
 fn helmholtz_accuracy_harness() {
     let (universe, _) =
@@ -161,4 +206,5 @@ fn helmholtz_accuracy_harness() {
     w4.charges = ChargeKind::Real;
     w4.gradients = false;
     check_fmm(&world, &w4);
+    check_calibration_scan(&world);
 }
