@@ -356,7 +356,9 @@ at any kD.
   kD ≤ 100 and on W1 at kD = 500; deterministic. *Needs:* CH3.0, CH3.5. Split on
   2026-11-01 into three sub-tasks, each one reviewable PR (the user, "a/b/c"); CH3.1 is
   done, and the tasks that need it runnable, when all three are:
-- [ ] **CH3.1a The Helmholtz operator.** `nd_fmm_exec::helmholtz::{degree, operator}`:
+- [x] **CH3.1a The Helmholtz operator.** Record: `docs/helmholtz/tasks/CH3.1a.md`;
+  `nd_fmm_tables::helmholtz`, `nd_fmm_exec::helmholtz::{degree, operator}`, tests
+  `fmm-tables/tests/helmholtz/`, `fmm-exec/tests/helmholtz/{degree, operator}.rs`:
   `HelmholtzOperator`, the plan's operator on the unchanged shared drivers (CH3.5), for
   real and complex k with real and complex charges. The per-level degree by a rule behind a
   setting, S7's closed form at a tolerance by default and degrees named per level as the

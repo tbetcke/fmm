@@ -175,8 +175,24 @@ None (no Laplace change, no timing).
 
 ## Pending runs
 
-None.
+None. `/verify` ran on the M6 on 2026-11-01, all passed (progress entry).
 
 ## Open questions
 
-None yet.
+None blocking. For sign-off, from the PR:
+1. The y-blocks (and the angles they come from) are built in T, as `rcr` builds them per
+   call, so that stored and per-call blocks agree bit for bit. In f64 nothing changes; in
+   f32 this departs from constraint 5 ("tables in f64, rounded when stored") and the crate
+   rule, which `fmm-tables/CLAUDE.md` now names as an exception. *Recommended*: accept,
+   since f32 is reserved until H7 (D3), and revisit there.
+2. The M2L tables and blocks are keyed by the bits of |t| and (cos θ, sin θ) as `rcr` forms
+   them: 21 distances and 53 polar angles on the M6, not the 15 and 49 exact classes. That
+   costs about 40 % more M2L table memory and buys bit-identity with `rcr`.
+   *Recommended*: accept for CH3.1, and let CH3.2 measure the memory.
+3. The level units: a box of level l holds r_l φ̃ in its own units, as §3.13's chunks do.
+   So the L2L tables carry ½ and P2L scales its charges by r̂(t|s). This is a scaling
+   convention of the stored expansions. *Recommended*: record it in the module docs now,
+   and add it to CONVENTIONS §3.15 at its next revision (no version bump now; nothing on
+   disk depends on it).
+4. Complex k's degree is the closed form at Re(k) a, provisionally until CH5.2.
+   *Recommended*: accept.
