@@ -129,3 +129,12 @@ None.
 ## Open questions
 
 None open. The scope was decided by the user on 2026-11-01 ("Close as a record").
+
+For sign-off, from the PR:
+1. The proposal's §6.2 "The order" item 2 and its §10 rows for CH3.5 and CH3.2 stay as
+   written; the roadmap and this record carry the move of the batched two-plane case and
+   the epilogue to CH3.2.
+2. Dense's epilogue, per pair or a per-target finish hook in `driver::m2l_target`, is
+   decided in CH3.2.
+
+Both signed off 2026-11-01, the user: "1 and 2 as recommended".

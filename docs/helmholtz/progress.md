@@ -1087,7 +1087,10 @@ request, using this template:
     machine runs and D9 (no compiled change to Laplace); the licence check (no manifest
     changed).
 - Decisions: the scope, by the user on 2026-11-01 ("Close as a record"); CH3.2's *Done
-  when* gains the batched two-plane case.
+  when* gains the batched two-plane case. Questions for sign-off: 1. the proposal's §6.2
+  and §10 text left unchanged, the roadmap and the record carrying the move; 2. Dense's
+  epilogue decided in CH3.2. Both signed off 2026-11-01, the user: "1 and 2 as
+  recommended".
 - Laplace: not touched; `driver.rs` changed in doc comments only.
 - Follow-ups:
   - CH3.1: the Helmholtz kernel implements `HostKernel` with `batched_m2l` `None` (and an
