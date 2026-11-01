@@ -259,6 +259,10 @@ None.
 
 ## Open questions
 
-The report's §7, for sign-off: 1. the contract as derived, with the f32 gradient range;
+The report's §7: 1. the contract as derived, with the f32 gradient range;
 2. constraint 1 as met (AVX-512's two Laplace gradient entry points within noise, D9 only
 there; NEON's `merge` differs with one codegen unit only); 3. the panic for Re k < 0.
+Signed off 2026-11-01, the user: "i accept 1 and 2"; question 3, after a discussion of
+keeping or relaxing the check (Im k ≥ 0 is needed for correctness: the exponential's domain
+and the damped/undamped choice; Re k < 0 would compute the conjugate convention's field
+correctly): "A as recommended", the panic kept.

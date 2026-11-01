@@ -1336,7 +1336,8 @@ request, using this template:
   NEON or AVX-512).
 - Decisions: the three above. Questions for sign-off (report §7): 1. the contract with the
   f32 gradient range (1 + |k| r)/r³ ≤ 2¹²⁶; 2. constraint 1 as met; 3. the panic for
-  Re k < 0.
+  Re k < 0. Signed off 2026-11-01, the user: "i accept 1 and 2", and for 3 "A as
+  recommended" (the panic kept).
 - Laplace: `nd-fmm-simd`'s skeleton changed (constraint 1). Every Laplace function on NEON
   and AVX2 `main`'s instruction for instruction at the default settings (aarch64 and x86_64,
   macOS and Linux), every other one too but NEON's `p2p_yukawa_f32_gradient` on macOS (two

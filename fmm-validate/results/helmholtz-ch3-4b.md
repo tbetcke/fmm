@@ -326,6 +326,9 @@ and C3S.4 (NEON's and AVX2's code is `main`'s, §2).
 
 ## 7. Questions for sign-off
 
+Signed off 2026-11-01, the user: "i accept 1 and 2"; question 3 after a discussion: "A as
+recommended" (keep the panic for Re k < 0; Im k ≥ 0 is required for correctness in any case).
+
 1. The contract as derived, (32 + 12 |k| r) u_T and (66 + 12 |k| r) u_T, with the f32
    gradient range (1 + |k| r)/r³ ≤ 2¹²⁶ (Laplace's 2⁻⁸⁴ ≤ r² at k = 0; the reference
    overflows beyond).
