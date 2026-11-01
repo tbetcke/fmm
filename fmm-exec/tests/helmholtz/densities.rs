@@ -98,8 +98,8 @@ fn source_chunk(
 ) -> Vec<f64> {
     let n = points.len();
     let mut chunk = vec![f64::NAN; n * densities.source_point_size()];
-    for (u, &x) in chunk.chunks_exact_mut(3).zip(points) {
-        u.copy_from_slice(&geometry::leaf_coordinates::<f64>(x, key, domain));
+    for (u, &x) in chunk[..3 * n].as_chunks_mut::<3>().0.iter_mut().zip(points) {
+        *u = geometry::leaf_coordinates::<f64>(x, key, domain);
     }
     let indices: Vec<usize> = (0..n).collect();
     let charges = as_charges(densities.charges(), planes);
@@ -145,10 +145,7 @@ fn leaf_level(k: &Wavenumber, r: f64) -> (Level<f64>, Frame<f64>) {
 
 /// The leaf-unit coordinates of `chunk`'s n points.
 fn chunk_points(chunk: &[f64], n: usize) -> Vec<[f64; 3]> {
-    chunk[..3 * n]
-        .chunks_exact(3)
-        .map(|u| [u[0], u[1], u[2]])
-        .collect()
+    chunk[..3 * n].as_chunks::<3>().0.to_vec()
 }
 
 /// The relative L2 error of `a` against `b`.
@@ -177,14 +174,17 @@ fn exact(
     )
 }
 
-/// Vector v of `output` as complex values (imaginary parts zero on Yukawa's real path).
+/// Vector v of `output` as complex values (imaginary parts zero on Yukawa's real path);
+/// no gradients if the output has none.
 fn output_of(output: &Output<f64>, v: usize) -> (Vec<C>, Vec<[C; 3]>) {
     let phi = output.potential_of(v);
     let im = |i: usize| phi.im.map_or(0.0, |im| im[i]);
     let potential = (0..phi.re.len())
         .map(|i| C::new(phi.re[i], im(i)))
         .collect();
-    let g = output.gradient_of(v).unwrap();
+    let Some(g) = output.gradient_of(v) else {
+        return (potential, Vec::new());
+    };
     let gradient = (0..g.re.len())
         .map(|i| core::array::from_fn(|a| C::new(g.re[i][a], g.im.map_or(0.0, |im| im[i][a]))))
         .collect();
@@ -332,6 +332,23 @@ fn charges_in() {
             got: 2
         })
     );
+
+    // Real charges: one column per vector, and a short plane.
+    let d = Densities::new(WavenumberKind::Complex, ChargeKind::Real, 2);
+    let vectors = [Charges::Real(&re0[..]), Charges::Real(&re1[..])];
+    assert_eq!(d.check_charges(&vectors, 3), Ok(()));
+    let mut strengths = [0.0; 4];
+    d.write_leaf_charges(&vectors, &[1, 2], &mut strengths);
+    assert_eq!(strengths, [2.0, 8.0, 3.0, 9.0]);
+    let short = [Charges::Real(&re0[..]), Charges::Real(&re1[..1])];
+    assert_eq!(
+        d.check_charges(&short, 3),
+        Err(DensityError::Length {
+            vector: 1,
+            expected: 3,
+            got: 1
+        })
+    );
 }
 
 #[test]
@@ -390,6 +407,55 @@ fn p2m_is_the_reference_bit_for_bit() {
     }
 }
 
+/// P2M and L2P add to what their outputs hold: into a non-zero buffer, the buffer plus the
+/// operator's result into zeros, to rounding (bit for bit for the real multipole of real
+/// k, which is summed in scratch and then added).
+#[test]
+fn operators_accumulate() {
+    let (domain, key) = leaf_box();
+    let r = geometry::radius(3, &domain);
+    let (n, m, p) = (13, 2, 7);
+    let mut rng = Rng(31);
+    let points = leaf_points(&domain, key, n, &mut rng);
+    let mut scratch = LeafScratch::new(p);
+    let close = |a: &[f64], b: &[f64], what: &str| {
+        let diff: f64 = a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum();
+        let norm: f64 = b.iter().map(|y| y * y).sum();
+        assert!((diff / norm).sqrt() < 1e-14, "{what}");
+    };
+    for kind in KINDS {
+        let k = wavenumber(kind, 21.0);
+        for charges in CHARGES {
+            let d = Densities::new(kind, charges, m);
+            let what = format!("{kind:?} {charges:?}");
+            let planes = charge_planes(charges, m, n, &mut rng);
+            let chunk = source_chunk(&d, &domain, key, &points, &planes);
+            let start: Vec<f64> = (0..d.multipole_size(p)).map(|_| rng.next()).collect();
+            let mut fresh = vec![0.0; start.len()];
+            d.p2m(&k, r, p, &chunk, n, &mut scratch, &mut fresh);
+            let mut added = start.clone();
+            d.p2m(&k, r, p, &chunk, n, &mut scratch, &mut added);
+            let sum: Vec<f64> = start.iter().zip(&fresh).map(|(a, b)| a + b).collect();
+            if (kind, charges) == (WavenumberKind::Real, ChargeKind::Real) {
+                assert_eq!(added, sum, "{what}: P2M");
+            } else {
+                close(&added, &sum, &format!("{what}: P2M"));
+            }
+
+            let locals: Vec<f64> = (0..d.local_size(p)).map(|_| rng.next()).collect();
+            let u = &chunk[..3 * n];
+            let len = n * d.target_output_point_size(true);
+            let start: Vec<f64> = (0..len).map(|_| rng.next()).collect();
+            let mut fresh = vec![0.0; len];
+            d.l2p(&k, r, p, &locals, u, &mut scratch, &mut fresh, true);
+            let mut added = start.clone();
+            d.l2p(&k, r, p, &locals, u, &mut scratch, &mut added, true);
+            let sum: Vec<f64> = start.iter().zip(&fresh).map(|(a, b)| a + b).collect();
+            assert_eq!(added, sum, "{what}: L2P");
+        }
+    }
+}
+
 #[test]
 fn yukawa_complex_vectors_are_two_real_vectors() {
     let (domain, key) = leaf_box();
@@ -431,6 +497,9 @@ fn yukawa_complex_vectors_are_two_real_vectors() {
     }
 }
 
+/// A reference L2P's output column, φ̂, ĝ, and φ̂ of the call without gradients.
+type Expected = (usize, Vec<f64>, Vec<[f64; 3]>, Vec<f64>);
+
 #[test]
 fn l2p_is_the_reference_bit_for_bit() {
     let (domain, key) = leaf_box();
@@ -455,13 +524,17 @@ fn l2p_is_the_reference_bit_for_bit() {
             let locals: Vec<f64> = (0..d.local_size(p)).map(|_| rng.next()).collect();
             let mut output = vec![0.0; n * d.target_output_point_size(true)];
             d.l2p(&k, r, p, &locals, &flat, &mut scratch, &mut output, true);
+            let mut plain = vec![0.0; n * d.target_output_point_size(false)];
+            d.l2p(&k, r, p, &locals, &flat, &mut scratch, &mut plain, false);
             let size = d.local_size(p) / m;
             for v in 0..m {
                 let local = &locals[v * size..(v + 1) * size];
-                // (column, φ̂, ĝ) of the reference.
-                let mut want: Vec<(usize, Vec<f64>, Vec<[f64; 3]>)> = Vec::new();
+                // (column, φ̂, ĝ, φ̂ without gradients) of the reference.
+                let mut want: Vec<Expected> = Vec::new();
                 if kind == WavenumberKind::Yukawa {
                     for (part, plane) in local.chunks_exact(len).enumerate() {
+                        let mut alone = vec![0.0; n];
+                        leaf::l2p_yukawa(p, &level, &frame, plane, &u, &mut ws, &mut alone, None);
                         let (mut phi, mut g) = (vec![0.0; n], vec![[0.0; 3]; n]);
                         leaf::l2p_yukawa(
                             p,
@@ -473,9 +546,11 @@ fn l2p_is_the_reference_bit_for_bit() {
                             &mut phi,
                             Some(&mut g),
                         );
-                        want.push((d.output_column(v, part), phi, g));
+                        want.push((d.output_column(v, part), phi, g, alone));
                     }
                 } else {
+                    let mut alone = vec![zero; n];
+                    leaf::l2p(p, &level, &frame, local, &u, &mut ws, &mut alone, None);
                     let (mut phi, mut g) = (vec![zero; n], vec![[zero; 3]; n]);
                     leaf::l2p(
                         p,
@@ -493,12 +568,14 @@ fn l2p_is_the_reference_bit_for_bit() {
                             d.output_column(v, part),
                             phi.iter().map(|&c| pick(c)).collect(),
                             g.iter().map(|gi| gi.map(pick)).collect(),
+                            alone.iter().map(|&c| pick(c)).collect(),
                         ));
                     }
                 }
-                for (column, phi, g) in want {
+                for (column, phi, g, alone) in want {
                     for i in 0..n {
                         assert_eq!(output[d.potential_index(n, column, i)], phi[i]);
+                        assert_eq!(plain[d.potential_index(n, column, i)], alone[i]);
                         for a in 0..3 {
                             assert_eq!(output[d.gradient_index(n, column, i, a)], g[i][a]);
                         }
@@ -528,8 +605,8 @@ fn p2m_end_to_end_against_the_direct_sum() {
         .collect();
     let mut worst = 0.0f64;
     let zero = C::new(0.0, 0.0);
-    // (|k|, p): k̂ = |k| r of 0.875 and 5.
-    for (size, p) in [(7.0, 20), (40.0, 30)] {
+    // (|k|, p): k̂ = |k| r of 0.875, 5 and 10 (|k| D = 14, 80 and 160).
+    for (size, p) in [(7.0, 20), (40.0, 30), (80.0, 40)] {
         let mut scratch = LeafScratch::new(p);
         let mut ws = Workspace::new(p);
         let len = (p + 1) * (p + 1);
@@ -644,7 +721,7 @@ fn l2p_end_to_end_against_the_direct_sum() {
     let order: Vec<usize> = (0..nt).rev().collect();
     let caller_targets: Vec<[f64; 3]> = (0..nt).map(|t| targets[nt - 1 - t]).collect();
     let mut worst = 0.0f64;
-    for (size, p) in [(7.0, 20), (40.0, 30)] {
+    for (size, p) in [(7.0, 20), (40.0, 30), (80.0, 40)] {
         let mut scratch = LeafScratch::new(p);
         let mut ws = Workspace::new(p);
         let len = (p + 1) * (p + 1);
@@ -680,6 +757,21 @@ fn l2p_end_to_end_against_the_direct_sum() {
                 );
                 let mut output = Output::new(&d, nt, true);
                 d.write_leaf_output(&out_chunk, r, true, &order, &mut output);
+                // Without gradients: L2P and the output pass of potentials only.
+                let mut plain_chunk = vec![0.0; nt * d.target_output_point_size(false)];
+                d.l2p(
+                    &k,
+                    r,
+                    p,
+                    &locals,
+                    &flat_u,
+                    &mut scratch,
+                    &mut plain_chunk,
+                    false,
+                );
+                let mut plain = Output::new(&d, nt, false);
+                d.write_leaf_output(&plain_chunk, r, false, &order, &mut plain);
+                assert!(plain.gradient.is_none() && plain.gradient_of(0).is_none());
 
                 assert_eq!(output.is_complex(), d.output_columns() == 2 * m);
                 assert_eq!(output.ntargets(), nt);
@@ -690,20 +782,31 @@ fn l2p_end_to_end_against_the_direct_sum() {
                     let flat = |g: &[[C; 3]]| g.iter().flatten().copied().collect::<Vec<C>>();
                     let e_phi = relative_l2(&phi, &want_phi);
                     let e_g = relative_l2(&flat(&g), &flat(&want_g));
+                    let (plain_phi, _) = output_of(&plain, v);
+                    let e_plain = relative_l2(&plain_phi, &want_phi);
                     let what = format!("{kind:?} {charges:?} |k| {size} p {p} vector {v}");
                     assert!(e_phi < 1e-10, "{what}: φ {e_phi:.2e}");
-                    worst = worst.max(e_phi).max(e_g);
+                    worst = worst.max(e_phi).max(e_g).max(e_plain);
                     assert!(e_g < 1e-10, "{what}: ∇φ {e_g:.2e}");
-                    // §3.15's order: vector v's Re φ at column 2v, Im φ at 2v + 1.
-                    if output.is_complex() {
-                        let re = &output.potential[2 * v * nt..(2 * v + 1) * nt];
-                        let im = &output.potential[(2 * v + 1) * nt..(2 * v + 2) * nt];
-                        assert_eq!(output.potential_of(v).re, re);
-                        assert_eq!(output.potential_of(v).im, Some(im));
-                    } else {
-                        let re = &output.potential[v * nt..(v + 1) * nt];
-                        assert_eq!(output.potential_of(v).re, re);
+                    assert!(e_plain < 1e-10, "{what}: φ without ∇φ {e_plain:.2e}");
+                    // §3.15's order: vector v's Re φ at column 2v, Im φ at 2v + 1, and its
+                    // Re ∇φ triples at column 2v, Im ∇φ at 2v + 1 (v alone on Yukawa's real
+                    // path).
+                    let gradient = output.gradient.as_deref().unwrap();
+                    let planes = if output.is_complex() { 2 } else { 1 };
+                    let column = |o: usize| o * nt..(o + 1) * nt;
+                    for out in [&output, &plain] {
+                        let phi = out.potential_of(v);
+                        assert_eq!(phi.re, &out.potential[column(planes * v)]);
+                        let im = output
+                            .is_complex()
+                            .then(|| &out.potential[column(2 * v + 1)]);
+                        assert_eq!(phi.im, im);
                     }
+                    let g = output.gradient_of(v).unwrap();
+                    assert_eq!(g.re, &gradient[column(planes * v)]);
+                    let im = output.is_complex().then(|| &gradient[column(2 * v + 1)]);
+                    assert_eq!(g.im, im);
                 }
             }
         }

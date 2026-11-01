@@ -62,7 +62,9 @@
 //! e^{ik|x−y|}/|x − y| = (1/r) e^{ik̂|u−v|}/|u − v|, so a chunk holds φ̂ = r φ̃ and
 //! ĝ = r² ∇φ̃ (φ̃ = 4πφ, §3.15 "Where the factors go"), and the output pass divides by
 //! Laplace's scales 4π r and 4π r². The stored form's power scale and damping depend on
-//! k a only (`nd_fmm_ref::helmholtz::Level`), so they are the level's in either unit.
+//! k a only (`nd_fmm_ref::helmholtz::Level`), so they are the level's in either unit, to
+//! rounding: s and β formed from k̂ are not bit for bit those formed from k and r, so the
+//! translations of a level (CH3.1) form them from the same k̂.
 //!
 //! # Operators
 //!
@@ -277,15 +279,32 @@ impl Densities {
         c * v + part
     }
 
-    /// The index in a target output chunk of n points of output column o's φ̂ at point i:
-    /// o n + i.
+    /// The index in a target output chunk of n points of output column o = `column`'s φ̂
+    /// at point i: o n + i.
+    ///
+    /// # Panics
+    ///
+    /// If `column` is not below [`output_columns`](Self::output_columns) or i ≥ n.
     pub fn potential_index(&self, n: usize, column: usize, i: usize) -> usize {
+        assert!(
+            column < self.output_columns() && i < n,
+            "column {column}, point {i}"
+        );
         column * n + i
     }
 
     /// The index in a target output chunk of n points with gradients of output column
-    /// o's ĝ at point i, component `axis`: o_m n + 3 (o n + i) + axis.
+    /// o = `column`'s ĝ at point i, component `axis`: o_m n + 3 (o n + i) + axis, o_m the
+    /// [`output_columns`](Self::output_columns).
+    ///
+    /// # Panics
+    ///
+    /// If `column` is not below the output columns, i ≥ n or `axis` > 2.
     pub fn gradient_index(&self, n: usize, column: usize, i: usize, axis: usize) -> usize {
+        assert!(
+            column < self.output_columns() && i < n && axis < 3,
+            "column {column}, point {i}, axis {axis}"
+        );
         self.output_columns() * n + 3 * (column * n + i) + axis
     }
 
@@ -372,9 +391,10 @@ impl Densities {
     ///
     /// # Panics
     ///
-    /// If `k`'s kind is not the path's, `radius` is not finite and positive, `scratch` was
-    /// built for a smaller degree than p, `chunk` is too short or `multipoles` has another
-    /// length.
+    /// If `k`'s kind is not the path's, `radius` is not finite and positive, k̂ = k r
+    /// rounded to T is zero or not finite (`nd_fmm_ref::helmholtz::Level::new`), `scratch`
+    /// was built for a smaller degree than p, `chunk` is too short or `multipoles` has
+    /// another length.
     #[allow(clippy::too_many_arguments)]
     pub fn p2m<T: SimdScalar>(
         &self,
@@ -392,7 +412,7 @@ impl Densities {
         assert_eq!(multipoles.len(), self.multipole_size(p), "multipoles");
         let (coordinates, strengths) = chunk.split_at(3 * n);
         let strengths = &strengths[..self.columns() * n];
-        let points = || coordinates.chunks_exact(3).map(|u| [u[0], u[1], u[2]]);
+        let points = || coordinates.as_chunks::<3>().0.iter().copied();
         let ws = &mut scratch.workspace;
         let size = self.multipole_planes() * len;
         for (v, multipole) in multipoles.chunks_exact_mut(size).enumerate() {
@@ -448,8 +468,9 @@ impl Densities {
     ///
     /// # Panics
     ///
-    /// If `k`'s kind is not the path's, `radius` is not finite and positive, `scratch` was
-    /// built for a smaller degree than p, `locals` has another length, `targets` is not a
+    /// If `k`'s kind is not the path's, `radius` is not finite and positive, k̂ = k r
+    /// rounded to T is zero or not finite (`nd_fmm_ref::helmholtz::Level::new`), `scratch`
+    /// was built for a smaller degree than p, `locals` has another length, `targets` is not a
     /// whole number of triples or `output` does not have
     /// [`target_output_point_size`](Self::target_output_point_size) values per target.
     #[allow(clippy::too_many_arguments)]
@@ -475,7 +496,7 @@ impl Densities {
             n * self.target_output_point_size(gradients),
             "target output"
         );
-        let points = || targets.chunks_exact(3).map(|u| [u[0], u[1], u[2]]);
+        let points = || targets.as_chunks::<3>().0.iter().copied();
         let ws = &mut scratch.workspace;
         // Adds a column's potential and gradient at point i.
         let mut add = |column: usize, i: usize, phi: T, g: [T; 3]| {

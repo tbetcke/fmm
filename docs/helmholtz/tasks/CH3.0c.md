@@ -51,7 +51,10 @@ One crate, `nd-fmm-exec`; no Laplace code, no convention, no dependency, no
     `columns()` (m real charges, 2m complex), `output_columns()` (m for Yukawa with real
     charges, else 2m), `source_point_size()` 3 + columns, `target_output_point_size(gradients)`
     output_columns or 4 × output_columns, `multipole_size(p)` and `local_size(p)` of
-    §3.15's table, `complex_multipoles()`, `complex_locals()`, and the chunk indices.
+    §3.15's table, and the chunk indices. As built: `multipole_planes()` and
+    `local_planes()` (1 or 2 planes of (p + 1)² per vector) in place of
+    `complex_multipoles()` and `complex_locals()`, since Yukawa's complex vector has two
+    real planes, not a complex expansion.
   - **The leaf chunks** (module docs; §3.15 says CH3.0 fixes them, not versioned): a
     complex vector is two adjacent real columns, Re then Im, of §3.13's several-vector
     layout with `columns` vectors:
@@ -108,10 +111,12 @@ One crate, `nd-fmm-exec`; no Laplace code, no convention, no dependency, no
   for Yukawa; Yukawa complex = the 2m real vectors' chunk and P2M bit for bit; vector v of
   m = 3 equals the one-vector P2M bit for bit.
 - **L2P bit for bit** likewise (`l2p`, `l2p_yukawa`), into the split planes.
-- **End to end against the direct sum** (`nd_fmm_ref::helmholtz::p2p::direct_sum` and
-  `direct_sum_yukawa` in absolute coordinates, 1/(4π) applied): a leaf on level 3 of a
-  domain [−0.3, 1.7]³, 40 points, complex charges, k = 7, 7 + 2i, 7i, and kD up to
-  about 100 at the leaf (k̂ near 1 and 10):
+- **End to end against the direct sum** (`nd_fmm_ref::helmholtz::p2p::direct_sum` in
+  absolute coordinates, 1/(4π) applied; as built, Yukawa also through the complex
+  `direct_sum` at k = iκ, which CH1.3a showed bit for bit `direct_sum_yukawa`): a leaf on
+  level 3 of a domain [−0.3, 1.7]³ (r = 0.125), 40 points, both charge kinds, m = 2, real,
+  complex (Im k = 0.3 Re k) and Yukawa k with |k| = 7, 40 and 80 (k̂ = 0.875, 5 and 10;
+  |k| D = 14, 80 and 160) at p = 20, 30 and 40:
   - P2M from the chunk, then the reference M2P at targets beyond 2.5 a in leaf units,
     scaled by `write_leaf_output`'s rule, against the direct sum: potential and gradient,
     relative L2 over the targets ≤ 1e-10 at p = 20;
@@ -120,6 +125,11 @@ One crate, `nd-fmm-exec`; no Laplace code, no convention, no dependency, no
     bound; the real and imaginary planes at their §3.15 places;
   - Yukawa with real charges gives one plane; real k with real charges a real multipole
     and a complex output.
+  - As built, after the review: L2P and the output pass also without gradients (bit for
+    bit the reference's call without gradients, and end to end); the gradient planes at
+    their §3.15 places; `operators_accumulate`: P2M and L2P into non-zero buffers (L2P and
+    the real multipole of real k bit for bit start + result, the other P2M paths to
+    1e-14); `check_charges` and `write_leaf_charges` for real charges too.
 
 ## Checks
 
@@ -140,6 +150,19 @@ None: no timing, no Laplace change.
 - Constraint 9: the layouts depend on k's kind, the charge kind and m only.
 - Risk: CH3.1 may want a different P2M/L2P interface for its level calls; these keep to
   the reference operators per point and can be wrapped.
+
+## Results
+
+- `fmm-exec/tests/helmholtz/densities.rs`: 9 tests, all pass (the `helmholtz` executable
+  26 of 26, 0.3 s in debug on the M6).
+- End to end, worst relative L2 over every path, vector, φ and ∇φ: 5.7e-13 for P2M → M2P
+  and 1.1e-11 for P2L → L2P → output pass, against the bound 1e-10.
+- P2M and L2P bit for bit the reference operators on every path; Yukawa's complex vectors
+  bit for bit its real path's 2m vectors (chunks, P2M, L2P with and without gradients).
+- Self-review by a subagent: nothing blocking. Taken: the no-gradient path, k̂ = 10, the
+  accumulation test, real-charge checks, the index assertions, the panics of
+  `Level::new` and the note that s and β from k̂ equal the level's to rounding only.
+  Left: `Output`'s public fields (as Laplace's `Output`).
 
 ## Pending runs
 
