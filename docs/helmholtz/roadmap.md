@@ -56,7 +56,7 @@ take turns, never overlap.
    locust, Kathleen)
 8. CH3.0 Builder: the leaf rule and complex densities (needs **D1**): CH3.0a, CH3.0b, CH3.0c
 9. CH3.5 The shared drivers extended to complex expansions (*Machines:* locust, Kathleen)
-10. CH3.1 Complex planes and RCR on every level
+10. CH3.1 Complex planes and RCR on every level: CH3.1a, CH3.1b, CH3.1c
 11. CH3.4 Helmholtz P2P, real and complex k (*Machines:* locust, Kathleen)
 12. CH3.3 Calibration of p_l
 13. CH3.6 Gate: RCR on every level against FMM3D (*Machines:* Kathleen)
@@ -351,9 +351,40 @@ at any kD.
   box blocks sized by the plan, so two planes and real shifts need no driver change, and
   CH3.1's RCR operator runs on them unchanged. Laplace is untouched, so no machine runs.
   The batched M2L's two-plane case and the epilogue move to CH3.2, their first user.
-- [ ] **CH3.1 Complex planes and RCR on every level.** RCR M2M and L2L (real coaxial steps
+- CH3.1 Complex planes and RCR on every level. RCR M2M and L2L (real coaxial steps
   for real k) and RCR M2L. *Done when:* the FMM against the direct sum on W1, W3 and W4 for
-  kD ≤ 100 and on W1 at kD = 500; deterministic. *Needs:* CH3.0, CH3.5.
+  kD ≤ 100 and on W1 at kD = 500; deterministic. *Needs:* CH3.0, CH3.5. Split on
+  2026-11-01 into three sub-tasks, each one reviewable PR (the user, "a/b/c"); CH3.1 is
+  done, and the tasks that need it runnable, when all three are:
+- [x] **CH3.1a The Helmholtz operator.** Record: `docs/helmholtz/tasks/CH3.1a.md`;
+  `nd_fmm_tables::helmholtz`, `nd_fmm_exec::helmholtz::{degree, operator}`, tests
+  `fmm-tables/tests/helmholtz/`, `fmm-exec/tests/helmholtz/{degree, operator}.rs`:
+  `HelmholtzOperator`, the plan's operator on the unchanged shared drivers (CH3.5), for
+  real and complex k with real and complex charges. The per-level degree by a rule behind a
+  setting, S7's closed form at a tolerance by default and degrees named per level as the
+  override (the user, 2026-11-01, "as recommended"); per-level coaxial tables with the
+  stored form's factors folded in; its own RCR, the real steps on both planes and the real
+  multipoles of real charges for real k; P2L, M2P and P2P (the reference P2P until CH3.4).
+  *Done when:* every body against `nd_fmm_ref::helmholtz` (the translations against `rcr`
+  to rounding on the 8 octants and the 316 offsets, with rectangular degrees, below and
+  above the projection threshold; the leaf operators and P2P against `leaf` and `p2p`);
+  the chains against the direct sum within the truncation; vector v the one-vector
+  operator bit for bit; real charges as complex ones with Im q = 0; Yukawa refused (its
+  path is CH2.1's); Laplace untouched. *Needs:* CH3.0, CH3.5.
+- [ ] **CH3.1b The Helmholtz FMM.** The operator-independent point pipeline of `fmm.rs`
+  (the domain, the octree and plan, the redistributions, the leaf ranges and radii, the
+  leaf-scaled coordinates, the charge forward and the output return) extracted into
+  crate-private code that `Fmm` and the Helmholtz FMM share (the user, 2026-11-01, "as
+  recommended"); the Helmholtz builder (k, the degrees, gradients, the charges, the
+  vectors, threads, the domain) and its evaluation on any number of ranks, the tree with
+  `min_leaf_level`. *Done when:* against the direct sum on small trees; bit for bit at
+  every thread count and on P ranks the one-rank FMM; the level calls the operator's
+  `PerPair` bit for bit; Laplace's outputs bit for bit, and minimal D9 timing runs to
+  check the extraction's impact (the user, 2026-11-01: "make minimal timing runs to check
+  the impact"). *Needs:* CH3.1a.
+- [ ] **CH3.1c The acceptance runs.** *Done when:* CH3.1's: the FMM against the sampled
+  direct sum on W1, W3 and W4 for kD ≤ 100 and on W1 at kD = 500; deterministic; a report.
+  *Needs:* CH3.1b.
 - [ ] **CH3.2 Dense, Classes and Batched where the node budget allows.** *Done when:*
   measured against Rotation per p, the cost of the cube-group transforms that move the z-axis
   included; Batched on the shared drivers needs the two-plane case of `driver::m2l_block`

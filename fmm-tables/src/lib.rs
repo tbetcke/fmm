@@ -83,6 +83,12 @@
 //!   merge and shift and a pair translation (CONVENTIONS §3.14; Phase 6 T13, C6.5). Unlike
 //!   the other families they are built from the formulas of §3.14, not from nd-fmm-ref,
 //!   checked against `nd_fmm_ref::direct::m2l`, and not cached.
+//! - [`helmholtz`]: the RCR tables of the Helmholtz family on an octree's levels,
+//!   [`HelmholtzTables`](helmholtz::HelmholtzTables): per-level coaxial tables with the
+//!   stored form's factors folded in and the y-blocks, and the table-driven M2M, L2L and
+//!   M2L on complex planes (CONVENTIONS §3.15; Helmholtz CH3.1a). Like [`plane_wave`] they
+//!   restate an application (that of `nd_fmm_ref::helmholtz::rcr`), checked against it bit
+//!   for bit, and are not cached.
 //! - [`cache`]: the versioned on-disk cache of every table family, [`TableCache`],
 //!   keyed by family, degree, precision and the convention and format versions (C2.4).
 //!
@@ -91,6 +97,7 @@
 
 pub mod cache;
 pub mod geometry;
+pub mod helmholtz;
 pub mod m2l;
 mod matrix_set;
 pub mod octant;

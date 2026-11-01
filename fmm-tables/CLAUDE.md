@@ -5,7 +5,9 @@ and a versioned on-disk cache. The tables are M2M and L2L for the 8 child octant
 for the 316 V-list offsets and their 16 symmetry classes, and the rotation and coaxial
 tables of point-and-shoot translation.
 Phase and components: Phase 2, C2.1–C2.4 (tasks T1 and T3–T7 in docs/phase2/); Phase 6
-C6.5 (task T13: `plane_wave`, the tables of plane-wave M2L, CONVENTIONS §3.14).
+C6.5 (task T13: `plane_wave`, the tables of plane-wave M2L, CONVENTIONS §3.14);
+Helmholtz CH3.1a (`helmholtz`, the per-level RCR tables of the Helmholtz family,
+CONVENTIONS §3.15).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -27,6 +29,19 @@ C6.5 (task T13: `plane_wave`, the tables of plane-wave M2L, CONVENTIONS §3.14).
   with `mul_add`; keep the two in step. The other steps round products and sums apart: an
   x86_64 build without `fma` turns `mul_add` into a library call. The plane-wave tables
   are not cached (milliseconds to build).
+- The second exception, `helmholtz` (Helmholtz CH3.1a; its module docs): the coaxial
+  tables come from `nd_fmm_ref::helmholtz::rcr::{m2m_table, l2l_table, m2l_table}`, but
+  the stored form's factors folded into them and the three steps of the application
+  restate `rcr`'s private `translate` in its order of operations; keep the two in step.
+  Its tables are keyed by exact integer classes of the shifts, as `rotation`'s are (15
+  values of |d|², 49 polar angles, the azimuth per offset from (d_x, d_y)/gcd), their
+  values formed from the integers by correctly rounded square roots and quotients, so the
+  classes are the same on every machine; never key a table by a floating-point value.
+  `rcr` forms its angles with `hypot`, so the two agree to rounding: `tests/helmholtz/`
+  compares them in the FMM-weighted measure within 2e-13 times max(1, |k̂| a) (1.7e-14
+  measured on the M6). Its y-blocks are built in T, as `rcr`
+  builds them per call, so that stored and per-call blocks agree; the M2L blocks are
+  stored from the finest level up within a byte budget. Not cached (CH2.2).
 - Matrices are column-major with output = A · input. Every application accumulates
   (+=), and none applies 1/(4π) (§3.1).
 - Builds are serial and deterministic: the same inputs give bit-identical tables and

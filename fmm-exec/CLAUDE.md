@@ -201,6 +201,22 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   second frame (P2L, M2P, P2P) and the FMM are CH3.1's. `tests/helmholtz/densities.rs`
   checks the sizes and indices against closed forms, P2M and L2P bit for bit against
   `nd_fmm_ref::helmholtz::leaf`, and the chunks end to end against the direct sum.
+- The Helmholtz operator (Helmholtz CH3.1a; `helmholtz::{degree, operator}`, the module
+  docs; docs/helmholtz/tasks/CH3.1a.md): `Degrees` (a tolerance, S7's closed form
+  `degree` at Re(k) a, degree 0 on levels 0 and 1, which nothing reads; or degrees named
+  per level) and `HelmholtzOperator` for real and complex k, real and complex charges and
+  m vectors (Yukawa is `OperatorError::Yukawa`, CH2.1's path). Level l works in its own
+  units at k̂_l = k r_l; a box holds r_l φ̃ there as a chunk does, so P2L scales its
+  charges by r̂(t|s) and the L2L tables carry ½ (`nd_fmm_tables::helmholtz`). M2M, L2L
+  and M2L are `nd_fmm_tables::helmholtz::HelmholtzTables` (RCR, real shifts for real k,
+  per-level tables, M2L y-blocks stored within a budget); P2M and L2P `Densities`'; P2L
+  and M2P `nd_fmm_ref::helmholtz::leaf` in the points' units with the frame's radius as
+  the other box's half-width (the levels of X and W boxes from the frame's radius); P2P
+  the reference `nd_fmm_ref::helmholtz::p2p::p2p` until CH3.4. It runs on the unchanged
+  shared drivers (`batched_m2l` `None`) and implements `PairOperator`.
+  `tests/helmholtz/operator.rs` checks the bodies pair by pair against the direct sum and,
+  at low degrees, against `nd-fmm-ref`'s chains in absolute units; the level calls are
+  tested with the FMM (CH3.1b).
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread
   count. No `unsafe`, no atomics, no global pool; per-thread scratch created at
