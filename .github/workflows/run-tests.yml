@@ -14,6 +14,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request cancels its older run; pushes to main always run to the
+# end, since main holds the caches every pull request restores.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # Caches (actions/cache, first-party only; Phase 4S decision 13):
 # - cargo: keyed on the job, the rustc version (dtolnay/rust-toolchain's `cachekey`) and
 #   Cargo.lock; a changed Cargo.lock restores the newest cache of the same job and rustc
@@ -27,6 +33,12 @@ permissions:
 # its worst cold time with a slow mirror (an install step stops at 5 minutes). run-tests
 # rose from 15 to 30 on 2026-10-31: its warm runs had grown to 8–14 minutes, and runs
 # were cancelled at 15 (main on 2026-10-30; Helmholtz CH2.0, no test failed).
+# Test builds at opt-level 1 (2026-10-31): the tests ran unoptimised, which made the
+# numeric tests 2–20 times slower (M6: mpi_exec 160 s → 8–11 s, invariance 71 → 14 s at
+# one rank). `CARGO_PROFILE_DEV_OPT_LEVEL=1` keeps the dev profile's debug assertions and
+# overflow checks and changes no float result (rustc neither reorders nor fuses float
+# operations at any level), so every bit-identity test means what it did; the tests' time
+# budgets for the debug run now admit more scenarios. Clippy and the docs keep opt-level 0.
 
 jobs:
   run-tests-rust:
@@ -54,8 +66,8 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: run-tests-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: run-tests-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-
+          key: run-tests-opt1-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: run-tests-opt1-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-
 
       - name: Package cache key (runner image and package list)
         id: apt-key
@@ -85,6 +97,8 @@ jobs:
           cargo clippy --examples -- -D warnings
 
       - name: Run unit tests
+        env:
+          CARGO_PROFILE_DEV_OPT_LEVEL: "1"
         run: RUST_MIN_STACK=8388608 cargo test
 
       - name: Build docs
@@ -258,7 +272,9 @@ jobs:
         run: awk -f fmm-kernels/tools/compile_times.awk "$RUNNER_TEMP/cubecl.log"
 
   # The MPI-owning test executables and the nd-octree MPI examples at 2 and 4 ranks
-  # (Phase 5 T3; README decision 4). Debug builds, correctness only, never timings; no
+  # (Phase 5 T3; README decision 4), one job per rank count, in parallel (2026-10-31:
+  # one after the other they took 340–610 s and 440–870 s). Dev-profile builds at
+  # opt-level 1 (see the top of this file), correctness only, never timings; no
   # ignored or release tests, never more than 4 ranks. .github/scripts/run-mpi-tests.sh
   # builds them without running them, takes their paths from cargo's JSON output, and
   # runs each under `timeout` (RUN_TIMEOUT seconds per launch), the tests with
@@ -271,11 +287,16 @@ jobs:
   # PRTE_MCA_rmaps_default_mapping_policy; each ignores the other's. No interface flags:
   # the ranks talk over shared memory on the one node.
   run-tests-mpi:
-    name: run-tests-mpi (2 and 4 ranks)
+    name: run-tests-mpi (${{ matrix.ranks }} ranks)
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        ranks: [2, 4]
     env:
       APT_PACKAGES: libclang-dev libfftw3-dev libopenblas-dev openmpi-bin libopenmpi-dev
+      CARGO_PROFILE_DEV_OPT_LEVEL: "1"
       RUST_MIN_STACK: "8388608"
       OPENBLAS_NUM_THREADS: "1"
       OMP_NUM_THREADS: "1"
@@ -300,8 +321,10 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: run-tests-mpi-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: run-tests-mpi-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-
+          # One key for both rank counts: they build the same executables. The job that
+          # finishes second finds the key saved and saves nothing (a warning, not a failure).
+          key: run-tests-mpi-opt1-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: run-tests-mpi-opt1-${{ runner.os }}-${{ steps.toolchain.outputs.cachekey }}-
 
       - name: Package cache key (runner image and package list)
         id: apt-key
@@ -334,23 +357,14 @@ jobs:
           echo "4 ranks without oversubscription:"
           timeout 60 mpirun -n 4 true && echo "  accepted" || echo "  refused (exit $?)"
 
-      - name: Build the MPI test executables and examples (debug)
-        id: build
+      - name: Build the MPI test executables and examples (dev profile, opt-level 1)
         timeout-minutes: 20
         run: .github/scripts/run-mpi-tests.sh build "$RUNNER_TEMP/mpi-executables.txt"
 
-      - name: Run at 2 ranks
+      # fail-fast is off, so a failure at one rank count still lets the other finish.
+      - name: Run at ${{ matrix.ranks }} ranks
         timeout-minutes: 25
         env:
           OMPI_MCA_rmaps_base_oversubscribe: "1"
           PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
-        run: .github/scripts/run-mpi-tests.sh run "$RUNNER_TEMP/mpi-executables.txt" 2
-
-      # Also after a failure at 2 ranks, so that one run shows both counts.
-      - name: Run at 4 ranks
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        timeout-minutes: 25
-        env:
-          OMPI_MCA_rmaps_base_oversubscribe: "1"
-          PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
-        run: .github/scripts/run-mpi-tests.sh run "$RUNNER_TEMP/mpi-executables.txt" 4
+        run: .github/scripts/run-mpi-tests.sh run "$RUNNER_TEMP/mpi-executables.txt" ${{ matrix.ranks }}

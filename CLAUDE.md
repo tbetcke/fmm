@@ -137,6 +137,14 @@ RUST_MIN_STACK=8388608 cargo test
 cargo doc --no-deps
 ```
 
+Since 2026-10-31 the test step builds at `CARGO_PROFILE_DEV_OPT_LEVEL=1`, and so does
+`run-tests-mpi` (below): the dev profile's debug assertions and overflow checks stay on and
+no float result changes, but the numeric tests run 2–20 times faster than unoptimised.
+A local `cargo test` keeps opt-level 0 and its `cfg!(debug_assertions)` time budgets; set
+the variable (with its own `CARGO_TARGET_DIR`, to keep both builds) to run what CI runs.
+A newer push to a pull request cancels the older run of the workflow (`concurrency`);
+pushes to `main` always finish.
+
 A second job, `run-tests-simd`, runs nd-fmm-simd alone, without MPI, on an x86_64
 (`ubuntu-latest`) and an arm64 (`ubuntu-24.04-arm`) runner: it prints the CPU, then
 
@@ -162,9 +170,11 @@ cargo test -p nd-fmm-kernels --features cpu --release -- --show-output
 Its one test run (since Phase 4S T10) sets `CUBECL_DEBUG_LOG`, and the next step prints
 the kernel compile times from that log with `fmm-kernels/tools/compile_times.awk`.
 A fourth job, `run-tests-mpi` (Phase 5 T3; README decision 4), runs the MPI test
-executables and the nd-octree MPI examples at 2 and at 4 ranks on `ubuntu-latest`, for
-correctness only, never timings, never ignored or release tests and never more than 4
-ranks. `.github/scripts/run-mpi-tests.sh` builds them in debug without running them
+executables and the nd-octree MPI examples at 2 and at 4 ranks on `ubuntu-latest`, one
+job per rank count in parallel since 2026-10-31 (`run-tests-mpi (2 ranks)`,
+`run-tests-mpi (4 ranks)`), for correctness only, never timings, never ignored or release
+tests and never more than 4 ranks. `.github/scripts/run-mpi-tests.sh` builds them in the
+dev profile (at opt-level 1, above) without running them
 (`cargo test -p … --test … --no-run`, `cargo build -p nd-octree --example …`), takes
 their paths from cargo's `--message-format=json` output, and launches each under
 `timeout` (900 s since Phase 6 T11, 600 s since Phase 6 T2; 300 s before, which a slow
