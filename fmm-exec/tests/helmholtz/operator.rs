@@ -641,3 +641,76 @@ fn low_degree_chains_are_the_reference_chains() {
         }
     }
 }
+
+/// P2P against `nd_fmm_ref::helmholtz::p2p::p2p` bit for bit: the neighbour's sources mapped
+/// into the target leaf's units (ĉ(s|t) + r̂(s|t) u, exact on the unit cube), k̂ = k r_t,
+/// each target's two output columns accumulated by the reference as complex values; then
+/// the self pair.
+#[test]
+fn p2p_is_the_reference_bit_for_bit() {
+    use nd_fmm_ref::helmholtz::p2p;
+
+    for (re, im) in [(20.0, 0.0), (20.0, 2.0)] {
+        let k = Wavenumber::new(re, im).unwrap();
+        let mut pb = Problem::new(k, ChargeKind::Complex, 1, 1e-6);
+        let (s, t) = (key([2, 1, 1], 4), key([1, 1, 1], 4));
+        let mut rng = Rng(9);
+        let (other, own) = (points_in(s, 10, &mut rng), points_in(t, 8, &mut rng));
+        let q = Draw::all(ChargeKind::Complex, 1).charges(other.len() + own.len(), &mut rng);
+        let (q_other, q_own): (Vec<[Vec<f64>; 2]>, Vec<[Vec<f64>; 2]>) = (
+            vec![[q[0][0][..10].to_vec(), q[0][1][..10].to_vec()]],
+            vec![[q[0][0][10..].to_vec(), q[0][1][10..].to_vec()]],
+        );
+        let other_chunk = source_chunk(&pb.densities, s, &other, &as_charges(pb.kind, &q_other));
+        let own_chunk = source_chunk(&pb.densities, t, &own, &as_charges(pb.kind, &q_own));
+        let input = target_input(t, &own);
+        let mut output = pb.output_chunk(own.len());
+        pb.op.p2p(s, t, &other_chunk, &input, &mut output);
+        pb.op.p2p(t, t, &own_chunk, &input, &mut output);
+
+        let r = radius(4, &domain());
+        let k_hat = C::new(re * r, im * r);
+        let frame = geometry::relative_frame::<f64>(s, t);
+        let mapped: Vec<[f64; 3]> = other_chunk[..30]
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|u| core::array::from_fn(|i| frame.centre[i] + frame.radius * u[i]))
+            .collect();
+        let own_units: Vec<[f64; 3]> = own_chunk[..24].as_chunks::<3>().0.to_vec();
+        let charges = |q: &[[Vec<f64>; 2]]| -> Vec<C> {
+            (0..q[0][0].len())
+                .map(|j| C::new(q[0][0][j], q[0][1][j]))
+                .collect()
+        };
+        let zero = C::new(0.0, 0.0);
+        let n = own.len();
+        for i in 0..n {
+            let (mut phi, mut grad) = ([zero], [[zero; 3]]);
+            let x = &own_units[i..=i];
+            p2p::p2p(
+                k_hat,
+                &mapped,
+                &charges(&q_other),
+                x,
+                &mut phi,
+                Some(&mut grad),
+            );
+            p2p::p2p(
+                k_hat,
+                &own_units,
+                &charges(&q_own),
+                x,
+                &mut phi,
+                Some(&mut grad),
+            );
+            let d = &pb.densities;
+            assert_eq!(output[d.potential_index(n, 0, i)], phi[0].re, "target {i}");
+            assert_eq!(output[d.potential_index(n, 1, i)], phi[0].im, "target {i}");
+            for axis in 0..3 {
+                assert_eq!(output[d.gradient_index(n, 0, i, axis)], grad[0][axis].re);
+                assert_eq!(output[d.gradient_index(n, 1, i, axis)], grad[0][axis].im);
+            }
+        }
+    }
+}

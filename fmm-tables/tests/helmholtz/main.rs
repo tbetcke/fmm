@@ -434,3 +434,12 @@ fn a_complex_step_refuses_one_output_plane() {
     let mut y = vec![0.0; 9];
     tables.m2m(0, 0, &x, &mut y, 1, 1, &mut scratch);
 }
+
+/// Below `rcr`'s limit p log₁₀(1/s_P) ≲ 300 the power factors of M2M and L2L overflow:
+/// `build` refuses the degrees rather than build non-finite tables (s_P ≈ 3.5e-6 here, so
+/// p = 60 asks for about 10³²⁷).
+#[test]
+#[should_panic(expected = "too high for the level's power scale")]
+fn power_factors_beyond_the_f64_range_are_refused() {
+    let _ = HelmholtzTables::<f64>::build(Complex::new(2e-6, 0.0), &[60, 60], 0);
+}

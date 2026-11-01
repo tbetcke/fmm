@@ -53,12 +53,22 @@ Two crates; no Laplace file changes.
    - M2M from level l + 1 to l and L2L from l to l + 1: the coaxial tables of
      `rcr::{m2m_table, l2l_table}` with the power ratios of the stored form folded in (the
      `rcr` module docs, "Stored form"); real for real k (the real part, §3.1), complex
-     otherwise. M2L on levels ≥ 2: `rcr::m2l_table` per distance class (|d|², 15 classes)
+     otherwise. M2L on levels ≥ 2: `rcr::m2l_table` per distinct |t| of the 316 shifts
      with the factor 4π ik e^{2β − Im(k)|t|} folded in.
+   - As built: the tables are keyed by the bits of |t| and (cos θ, sin θ) as `rcr` forms
+     them (21 distances and 53 polar angles on the M6, against 15 and 49 exact classes), so
+     every application is `rcr`'s bit for bit in f64.
+   - As built (found by the chain tests): a box of level l holds r_l φ̃ in its own units,
+     as a chunk does. A multipole's factor 4π ik̂_l carries the change of units, so M2M and
+     M2L need none; a local has no such factor, so the L2L tables carry ½ (r_{l+1}/r_l)
+     and P2L scales its charges by r̂(t|s). Both are exact (powers of two).
    - The y-blocks: M2M and L2L of a level pair share two polar angles (cos θ = ±1/√3),
      always stored; M2L's per distinct (cos θ, sin θ) of the 316 shifts (keyed by their
-     bits, so each block is the one `rcr` forms for that shift), stored per level while the
-     total stays within a byte budget (default 512 MiB), else formed per call into scratch.
+     bits, so each block is the one `rcr` forms for that shift), stored level by level from
+     the finest where they fit in the remaining byte budget (default 512 MiB), else formed
+     per call into scratch. As built, the blocks (and angles) are formed in T as `rcr` forms
+     them, so that stored and per-call blocks agree: for f32 that departs from constraint 5
+     (a question for sign-off).
    - Application `m2m`, `l2l`, `m2l` for m vectors per box, the input and output planes
      (1 or 2) of each expansion, accumulated (+=): rotate (z by −φ, the transposed
      y-block), the coaxial step per order, rotate back. Real entries act on each plane
@@ -98,36 +108,39 @@ change. The public API grows by the modules above.
 
 ## Tests that prove it
 
-All f64, one thread, no MPI.
+All f64 but one f32 check, one thread, no MPI. As built (the plan's first list had per-pair
+bit-for-bit checks and a level-independence test; the chain tests below replace them, the
+low-degree one in absolute units, which also pins the change of units).
 
-`nd-fmm-tables`, `tests/helmholtz/` (new executable):
-- M2M and L2L on the 8 octants, M2L on all 316 offsets, against `rcr::{m2m, l2l, m2l}` with
-  the tables of `rcr::*_table` at the same frames: **bit for bit** on the complex paths
-  (complex k; complex-plane M2L of real k), and within 4 ε of each degree's largest term
-  for the real shifts of real k (the real part of the table) and the one-plane multipole
-  (against `rcr` on the multipole widened by Im = 0). k̂ a from 0.01 to 30, real and
-  complex k (Im k a to 5), and Re(k) a above 40 (the projection) at one level pair;
-  rectangular degrees (p_child ≠ p_parent).
-- Stored and per-call M2L blocks give the same bits (budget 0 against the default).
-- Several vectors: vector v equals the one-vector application bit for bit.
-- Level independence: a level's application in its units at k̂_l equals `rcr` at the
-  same k̂ with frames scaled by 2^j (bit for bit).
-- Sizes, the distance classes (15) and the stored-block count reported.
+`nd-fmm-tables`, `tests/helmholtz/` (new executable, 0.6 s in debug):
+- M2L on all 316 offsets on levels 2–4 for five k̂₀ (real and complex, |k̂| a from about
+  0.005 to 17), two planes and for real k one plane widened by Im = 0: **bit for bit**
+  against `rcr::m2l` (`==`, so ±0 equal).
+- M2M and L2L on the 8 octants between every pair of five levels with rectangular degrees:
+  complex k bit for bit against `rcr` (L2L against ½ `rcr`, exact); the real shifts of
+  real k in the FMM-weighted error of `nd-fmm-ref`'s translation tests, within 1e-12
+  (6.7e-14 measured, from the projection's rounding-level imaginary parts).
+- Above the projection threshold (Re(k̂) a ≈ 52): M2L on every seventh offset, M2M and L2L.
+- Stored and per-call blocks bit for bit (budgets 0, finest level only, default); several
+  vectors bit for bit one at a time; the key counts (≥ 15 and ≥ 49); f32 within 1e-5 of
+  f64; Yukawa and a one-plane complex step refused.
 
-`nd-fmm-exec`, `tests/helmholtz/` (`operator.rs`, `degree.rs`):
-- `degree`: S7's closed form at grid points of `spikes/truncation/results/summary.md`
-  (never below p*), levels 0 and 1 at 0, named degrees passed through, the errors.
-- Every `PairOperator` body against `nd_fmm_ref::helmholtz` with the same `Level`s: P2L,
-  M2P, P2P bit for bit; M2M, L2L, M2L bit for bit against `HelmholtzTables` (which the
-  tables test pins to `rcr`); X and W pairs one level apart.
-- The chains against `nd_fmm_ref::helmholtz::p2p::direct_sum` in f64 at absolute
-  coordinates, by pair calls on a hand-built three-level geometry: P2M → M2M → M2L → L2L →
-  L2P, P2L → L2P, P2M → M2P, P2P, within the truncation at the closed form's p (relative ℓ2
-  of potential and gradient below ε for ε = 10⁻⁶ and 10⁻¹⁰; real k at |k| D = 1, 20, 100
-  and complex k with η = 0.1).
-- Real charges equal complex ones with Im q = 0 (to rounding, ≤ 4 ε relative); vector v of
-  m = 3 the one-vector operator bit for bit; Yukawa and kind mismatches refused; sizes
-  against `Densities`.
+`nd-fmm-exec`, `tests/helmholtz/` (`degree.rs`, `operator.rs`; 5.7 s in debug with the
+existing tests):
+- `degree`: S7's closed form equals the table's closed-form column and is ≥ p* at seven
+  rows of k a × eight ε; complex k takes Re k; `resolve` against degrees computed by hand,
+  levels 0 and 1 at 0, named degrees, the errors.
+- Chains by pair calls (far: P2M → M2M → M2M → M2L on level 2 → L2L → L2L → L2P; v4: M2L
+  on level 4; x: P2L from a level-3 leaf; w: M2P from a level-4 box; near: P2P from a
+  neighbour and the self pair) against the direct sum, relative L2 of φ and ∇φ below ε at
+  ε = 10⁻⁶ and 10⁻¹⁰ (P2P below 1e-13), real k at kD = 1, 20, 100 and complex k 20 + 2i,
+  real and complex charges.
+- At named low degrees (p = 5–8), where truncation dominates (10⁻⁵ to 10⁻¹ against the
+  direct sum): the far, v4, x and w chains against the same chains of
+  `nd_fmm_ref::helmholtz` (`leaf`, `rcr`) in absolute units, within 1e-13 (about 1e-16).
+- P2P bit for bit against `nd_fmm_ref::helmholtz::p2p::p2p` on the mapped sources.
+- Vector v of three the one-vector operator bit for bit; real charges bit for bit complex
+  ones with Im q = 0 (asserted within 4 ε); sizes and errors.
 
 The level calls through the drivers (`FmmOperator`) need a plan, so MPI; they are tested in
 CH3.1b (the level calls against `PerPair` bit for bit, and the FMM against the direct sum).
@@ -151,6 +164,10 @@ None (no Laplace change, no timing).
 - Constraint 6: every fast path against `nd_fmm_ref::helmholtz` and the direct sum.
 - Risk: the coaxial (S|R) start column leaves the f64 range near p_src + p_tgt ≈ 170 where
   s < 1 (`coaxial` docs); the closed form keeps low-frequency p ≤ 58 at 10⁻¹⁰.
+- Risk: the M2M and L2L power factors (s_c/s_P)ⁿ s_P^{n−n′} overflow where p log₁₀(1/s_P)
+  exceeds about 300 (`rcr`'s documented limit): at ε = 10⁻¹⁰ from about level 14 at
+  kD = 0.1. `HelmholtzTables::build` panics with a message there rather than build
+  non-finite tables.
 - Risk: memory of the top levels at kD = 500 (p ≈ 135: 15 M2L tables of about 13 MB, y-blocks
   of 13 MB per angle); the block budget bounds the latter. CH3.1c measures.
 - Risk: per-call y-blocks double the M2L's cost where the budget binds; CH3.2 and CH3.6

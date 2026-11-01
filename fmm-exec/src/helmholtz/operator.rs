@@ -295,6 +295,11 @@ impl<T: SimdScalar> Kernel<T> {
 
     /// Vector v's charges of the n sources of `sources` into `out`, as complex values.
     fn charges_of(&self, sources: &[T], n: usize, v: usize, out: &mut [Complex<T>]) {
+        assert!(
+            n <= out.len(),
+            "a leaf has {n} source points, more than max_leaf_points = {}",
+            out.len()
+        );
         let complex = self.densities.columns() == 2 * self.densities.vectors();
         for (j, q) in out[..n].iter_mut().enumerate() {
             let re = sources[self.densities.charge_index(n, j, v, 0)];

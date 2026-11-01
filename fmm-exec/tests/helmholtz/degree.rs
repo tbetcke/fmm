@@ -2,7 +2,7 @@
 //! "Per-level degree p*"): S7's closed form at its grid points, never below p*, and
 //! `Degrees::resolve`. Exact integers.
 
-use nd_fmm_exec::geometry::{Domain, radius};
+use nd_fmm_exec::geometry::Domain;
 use nd_fmm_exec::helmholtz::{DegreeError, Degrees, Wavenumber, degree};
 use nd_octree::PhysicalBox;
 
@@ -131,13 +131,11 @@ fn complex_k_takes_its_real_part() {
 fn resolve() {
     let domain = Domain::new(&PhysicalBox::new([-1.0, -1.0, -1.0, 3.0, 3.0, 3.0])).unwrap();
     let k = Wavenumber::new(50.0, 0.0).unwrap();
+    // Side 4: r₂ = 0.5, k a₂ = 50 · 0.866 = 43.3 and ⌈43.3 + 18.42^{2/3} · 43.3^{1/3}⌉ =
+    // ⌈43.3 + 6.975 · 3.512⌉ = 68; level 3 (21.7 + 19.4 = 41.1) and finer the floor
+    // ⌈6 · 8⌉ − 2 = 46.
     let degrees = Degrees::Tolerance(1e-8).resolve(&k, &domain, 6).unwrap();
-    assert_eq!(degrees[..2], [0, 0]);
-    for (l, &p) in degrees.iter().enumerate().skip(2) {
-        assert_eq!(p, degree(&k, 3f64.sqrt() * radius(l, &domain), 1e-8));
-    }
-    // Coarser levels need at least the degree of finer ones.
-    assert!(degrees[2..].windows(2).all(|w| w[0] >= w[1]));
+    assert_eq!(degrees, [0, 0, 68, 46, 46, 46]);
 
     let named = Degrees::PerLevel(vec![1, 2, 3, 4, 5]);
     assert_eq!(named.resolve(&k, &domain, 3).unwrap(), [1, 2, 3]);

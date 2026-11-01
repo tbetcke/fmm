@@ -69,9 +69,10 @@
 //! The y-blocks of degree p take [`compact_blocks_len`]`(p)` values, about (2/3) p³. The two
 //! polar angles of the octants (cos θ = ±1/√3) serve M2M and L2L of a level pair at degree
 //! max(p_l, p_{l+1}) and are always stored. M2L's blocks, one set per distinct polar angle
-//! at degree p_l, are stored level by level from the finest while their total stays within
-//! the byte budget ([`HelmholtzTables::build`]); on the other levels they are formed per
-//! call into the scratch, by the same function from the same angles, so the bits do not
+//! at degree p_l, are stored level by level from the finest wherever they fit in what is
+//! left of the byte budget ([`HelmholtzTables::build`]; a level that does not fit is
+//! skipped, and a coarser one may still fit); on the other levels they are formed per call
+//! into the scratch, by the same function from the same angles, so the bits do not
 //! depend on the budget. Both are built in T by
 //! [`y_blocks`] as `rcr` builds them, not in f64: the
 //! blocks formed per call cannot be built in f64 without a second scratch, and the stored
@@ -207,8 +208,8 @@ pub struct HelmholtzScratch<T: RealScalar> {
 
 impl<T: RealScalar> HelmholtzTables<T> {
     /// Builds the tables of the levels 0..`degrees.len()` for the root's k̂₀ = k r₀ (r₀ the
-    /// root's half-width, in f64) and the degrees p_l, storing M2L's y-blocks from the
-    /// finest level up while their total stays within `block_budget` bytes. M2L tables are
+    /// root's half-width, in f64) and the degrees p_l, storing M2L's y-blocks level by
+    /// level from the finest wherever they fit in what is left of `block_budget` bytes. M2L tables are
     /// built on levels ≥ 2 only: no V list lies above level 2.
     ///
     /// Building is serial and deterministic. Its cost is that of the coaxial tables, O(p³)
@@ -219,7 +220,10 @@ impl<T: RealScalar> HelmholtzTables<T> {
     /// Unless k̂₀ is finite and nonzero with Re ≥ 0, Im ≥ 0 and Re > 0 (Yukawa's real path,
     /// Re k = 0, is not served here), and `degrees` is not empty; and as the coaxial
     /// builders of `nd_fmm_math::coaxial` (for instance where the (S|R) start column leaves
-    /// the f64 range).
+    /// the f64 range); and if a coefficient is not finite, as the M2M and L2L power factors
+    /// (s_c/s_P)ⁿ s_P^{n−n′} are where p log₁₀(1/s_P) exceeds about 300 (`rcr`'s limit, its
+    /// module documentation, "Tested range": at ε = 10⁻¹⁰ and S7's degrees from about level
+    /// 14 at kD = 0.1).
     pub fn build(k_root: Complex<f64>, degrees: &[usize], block_budget: usize) -> Self {
         assert!(
             k_root.re.is_finite() && k_root.im.is_finite(),
@@ -666,6 +670,11 @@ impl<T: RealScalar> Shift<T> {
             for n_out in m..=p_out {
                 for n_in in m..=p_in {
                     let e = entry(m, n_out, n_in);
+                    assert!(
+                        e.re.is_finite() && e.im.is_finite(),
+                        "the coaxial coefficient of order {m} from degree {n_in} to {n_out} is \
+                         not finite: the degree is too high for the level's power scale"
+                    );
                     re.push(T::from_f64(e.re));
                     if !real {
                         im.push(T::from_f64(e.im));
