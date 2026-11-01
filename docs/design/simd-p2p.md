@@ -794,7 +794,8 @@ Summed with these weights over a grid of 4,000 points of t in [0, π/2 + 10⁻�
 (`fmm-simd/tools/sincos_bound.py`), the worst cases are
 **2.7 u (sine) and 3.4 u (cosine)** in both precisions, under the contract of 4 u_T.
 
-**Measured** on the M6 (NEON, scalar), all of which agree bit for bit, against `f64::sin` and
+**Measured** on the M6 (NEON, scalar) and on Kathleen (AVX2, AVX-512, scalar; job 617308),
+all of which agree bit for bit and give the same maxima, against `f64::sin` and
 `f64::cos` (f32) and a double-double reference (f64; the reduction by a triple-double π and
 the Taylor series to t⁴¹ in double-double, `tests/sincos`):
 

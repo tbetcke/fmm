@@ -179,7 +179,7 @@ On the M6 (macOS, aarch64; NEON and scalar):
   --no-deps`: passed.
 - `nd-fmm-simd`: `cargo clippy -p nd-fmm-simd --all-targets -- -D warnings` and with
   `--target x86_64-apple-darwin`; `cargo test -p nd-fmm-simd -- --show-output` (155 passed,
-  17 ignored); `cargo test -p nd-fmm-simd --release -- --ignored --show-output` (19
+  17 ignored); `cargo test -p nd-fmm-simd --release -- --ignored --show-output` (17
   passed, `tests/sincos` among them: f32 every float of [0, 2¹⁰] and its negation, sin
   1.886 u, cos 2.566 u; f64 10⁷ samples, 1.890 u and 2.396 u; scalar and NEON bit for
   bit); `cargo doc -p nd-fmm-simd --no-deps --document-private-items` with
@@ -206,10 +206,14 @@ On the M6 (macOS, aarch64; NEON and scalar):
 - Not run: the MPI list (no MPI crate's code changes; no existing function of the crate
   changed); the licence check (no manifest changed).
 
+On Kathleen: job 617308 (`tools/kathleen/submit.sh check.sbatch simd`, `singlenode`,
+node-c11a-094, Cascade Lake; the tree at 28fae30): Clippy, the tests and the ignored release
+tests on scalar, AVX2 and AVX-512, all passed; the same maxima as on the M6 on every ISA
+(f32 exhaustive 1.886 / 2.566 u, f64 10⁷ samples 1.890 / 2.396 u).
+
 ## Pending runs
 
-- Kathleen `tools/kathleen/submit.sh check.sbatch simd` (Clippy, tests and ignored release
-  tests on scalar, AVX2 and AVX-512): the contract on real x86 hardware.
+None.
 
 ## Open questions
 
