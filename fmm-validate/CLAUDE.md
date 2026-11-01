@@ -322,6 +322,21 @@ scans with the other levels held, `point:` lines, and `fit <files…>`) and
 times before). `tests/helmholtz_accuracy.rs` runs a plateau scan on W1 at kD = 10 and
 checks the default rule at most S7's. Its report is `results/helmholtz-ch3-3.md`.
 
+Helmholtz CH3.6 (the gate against FMM3D; docs/helmholtz/tasks/CH3.6.md) added
+`helmholtz_fmm3d`: the files of `tools/fmm3d/driver.f90`'s `helmholtz` mode (the problem
+file `NDFMMHP1` written from a `helmholtz_accuracy::Problem`, one charge vector; the outputs
+`NDFMMHO1` at the samples and `NDFMMHF1` at every point read; the driver's seconds),
+FMM3D's errors at the samples against our `Oracle`, and the full-target crosscheck against
+a reference at every point (`crosscheck` of our distributed output, the sums all-reduced
+and the box maxima all-gathered; `crosscheck_values` of FMM3D's): the relative ℓ2 errors
+over all targets and per box of a level of the FMM's domain (`Grid`) the largest error at
+a target over the RMS of the reference. `helmholtz_accuracy::run_output` returns the
+output and the domain with the row. The `helmholtz_fmm3d` example (not registered: it
+times and needs FMM3D's files) has the steps `problem` and `compare`;
+`tools/fmm3d/run.sh helmholtz` runs them around the driver. `tests/helmholtz_accuracy.rs`
+checks the measures with the direct sum standing in for FMM3D. Its report is
+`results/helmholtz-ch3-6.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

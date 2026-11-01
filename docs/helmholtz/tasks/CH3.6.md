@@ -79,9 +79,9 @@ manifest change other than the example's `[[example]]` entry if needed.
 - Unit tests (no MPI): the problem file round trip; `NDFMMHO1` and `NDFMMHF1` read from
   files written in the driver's byte layout; the driver line parsed; the box of a point at
   a level (corners, the upper face); the crosscheck norms on a hand-made example.
-- `tests/helmholtz_accuracy.rs` (debug, one rank in CI and at 2 and 4 ranks in
-  `run-tests-mpi`): the synthetic FMM3D case above, the full-target error equal at 1 and 2
-  ranks.
+- `tests/helmholtz_accuracy.rs` (debug; one rank in CI's `cargo test`, at 2 and 3 ranks by
+  hand: it is not in `run-tests-mpi`'s list): the synthetic FMM3D case above, the
+  full-target error equal on one rank and on several.
 - The FMM3D driver's FULL output: on the M6, its full output at the sampled positions bit
   for bit its sampled output (checked by `compare`, which refuses a mismatch).
 
@@ -120,8 +120,27 @@ No Laplace file changes, so no D9.
 
 ## Pending runs
 
-(filled in step 6)
+Kathleen, submitted 2026-11-01 from a6b3aa7 (`tools/kathleen/sync.sh`):
+- 617649 `fmm3d.sbatch driver` (the driver relinked for FULL);
+- 617650 (after 617649) `fmm3d.sbatch helmholtz`, OUT `logs/ch3-6-w1`: W1 at kD = 10, 30,
+  100, 500, and W1 at kD = 100 on one thread;
+- 617651 (after 617649) `fmm3d.sbatch helmholtz`, OUT `logs/ch3-6-w34`: W3 at kD = 10, 30,
+  100 and W4 (4 distributions × kD = 1, 10, 100).
+They decide the acceptance (both codes' errors and times, the crosscheck).
+
+## Smoke runs on the M6
+
+`tools/fmm3d/run.sh helmholtz`, 1 × 6 ours, FMM3D on 6 threads, both variants: W1 at
+kD = 10, 30, 100 and the W4 cube at N = 10⁴, kD = 10. Our sampled and all-target errors
+within ε everywhere; FMM3D at eps = 10⁻³ on W1 at kD = 100 at 1.2e-3 (above its eps).
+The crosscheck finds our worst box 30–60× our own all-target ℓ2 error at 10⁻⁶ and 10⁻⁸
+(FMM3D 13–18×), up to 22 ε pointwise (∇φ, W1 at kD = 100, 10⁻⁸, relative to the RMS).
+On W1 the worst boxes are the six where the sphere touches its bounding cube; with a
+margin of 0.03 or 0.1 around the domain (a throwaway experiment, not committed) they move
+elsewhere and the ratio stays (20–70×): not a boundary effect.
 
 ## Open questions
 
-(filled when they arise)
+1. The worst-box ratio above: the default rule meets ε in §9.1's ℓ2 norm, but its errors
+   are more concentrated than FMM3D's. A question for the PR (a follow-up, not a change
+   here).
