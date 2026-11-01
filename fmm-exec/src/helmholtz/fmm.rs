@@ -47,8 +47,16 @@
 //! and, on P ranks, the one-rank FMM's over the union of the points in rank order, bit for
 //! bit (proposal §2, constraint 2), as for `Fmm`.
 //!
-//! Not yet: overlap, the device path, the near rule and the work cut, table caches and the
-//! vectorised P2P (CH3.4).
+//! # P2P kernel
+//!
+//! [`HelmholtzFmmBuilder::p2p_kernel`] chooses the kernel of P2P ([`P2pChoice`], Helmholtz
+//! CH3.4c): by default `nd_fmm_simd::P2pKernel::evaluate_helmholtz` on the default ISA of
+//! this machine, [`P2pChoice::Reference`] the trusted slower path
+//! (`nd_fmm_ref::helmholtz::p2p::p2p`). The choice changes the output only in the last bits
+//! (the kernel's accuracy contract, the [`operator`](super::operator) module documentation,
+//! "P2P kernel"); [`HelmholtzFmm::p2p_kernel`] reports the kernel that runs.
+//!
+//! Not yet: overlap, the device path, the near rule and the work cut, and table caches.
 //!
 //! ```no_run
 //! use mpi::traits::Communicator;
@@ -96,7 +104,7 @@ use super::{
 };
 use crate::fmm::{DEFAULT_MAX_POINTS_PER_LEAF, FmmError, PointSet, SettingsError};
 use crate::geometry::Domain;
-use crate::operator::SimdScalar;
+use crate::operator::{P2pChoice, SimdScalar};
 use crate::pipeline::{
     self, Points, check_finite, gather_output, load_source_charges, pack_charges,
     unpack_output_many,
@@ -155,6 +163,7 @@ pub struct HelmholtzFmmBuilder {
     max_level: usize,
     block_budget: usize,
     c_leaf: f64,
+    p2p: P2pChoice,
     pair_calls: bool,
 }
 
@@ -162,7 +171,8 @@ impl HelmholtzFmmBuilder {
     /// The settings for wavenumber `k` with the degrees `degrees`: complex charges, one
     /// vector, potentials only, one thread, the domain from the points,
     /// [`DEFAULT_MAX_POINTS_PER_LEAF`] points per leaf, leaves down to level 16, the
-    /// default block budget of the M2L y-blocks and the leaf width [`C_LEAF`].
+    /// default block budget of the M2L y-blocks, the leaf width [`C_LEAF`] and the P2P
+    /// kernel of [`P2pChoice::Auto`].
     pub fn new(k: Wavenumber, degrees: Degrees) -> Self {
         Self {
             k,
@@ -176,6 +186,7 @@ impl HelmholtzFmmBuilder {
             max_level: DEEPEST,
             block_budget: DEFAULT_BLOCK_BUDGET,
             c_leaf: C_LEAF,
+            p2p: P2pChoice::Auto,
             pair_calls: false,
         }
     }
@@ -241,6 +252,15 @@ impl HelmholtzFmmBuilder {
         self
     }
 
+    /// The P2P kernel (default [`P2pChoice::Auto`]; the module documentation, "P2P
+    /// kernel"). [`build`](Self::build) refuses [`P2pChoice::Isa`] with an ISA this machine
+    /// cannot run, [`SettingsError::P2pIsaUnavailable`]; the check is local, and agreed by
+    /// every rank, the others returning [`HelmholtzFmmError::OtherRank`].
+    pub fn p2p_kernel(mut self, choice: P2pChoice) -> Self {
+        self.p2p = choice;
+        self
+    }
+
     /// For tests: run the operator pair by pair (`nd_fmm_plan::operator::PerPair`) in place
     /// of its level calls. The output is the same bit for bit.
     #[doc(hidden)]
@@ -264,6 +284,8 @@ impl HelmholtzFmmBuilder {
             Some(SettingsError::ZeroThreads)
         } else if self.vectors == 0 {
             Some(SettingsError::ZeroVectors)
+        } else if let Err(error) = self.p2p.resolve() {
+            Some(SettingsError::P2pIsaUnavailable { isa: error.isa })
         } else {
             None
         };
@@ -402,7 +424,9 @@ impl HelmholtzFmmBuilder {
             self.gradients,
             max_leaf_points,
             self.block_budget,
-        )?;
+        )?
+        .with_p2p(self.p2p)
+        .expect("the P2P kernel's ISA is available (checked in step 1)");
         if let Some(pool) = &pool {
             operator = operator.with_pool(Arc::clone(pool));
         }
@@ -706,6 +730,12 @@ where
     /// The operator.
     pub fn operator(&self) -> &HelmholtzOperator<T> {
         self.evaluator.operator().operator()
+    }
+
+    /// The P2P kernel as it runs: [`P2pChoice::Reference`] or [`P2pChoice::Isa`], never
+    /// [`P2pChoice::Auto`].
+    pub fn p2p_kernel(&self) -> P2pChoice {
+        self.operator().p2p_kernel()
     }
 
     /// The domain.

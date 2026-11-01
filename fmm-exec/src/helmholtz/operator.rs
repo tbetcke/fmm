@@ -21,7 +21,7 @@
 //! | M2M, L2L, M2L | `nd_fmm_tables::helmholtz::HelmholtzTables` (RCR with the level's tables; real shifts on each plane for real k) |
 //! | P2L | `nd_fmm_ref::helmholtz::leaf::p2l` in the source leaf's units, at (ĉ(t\|s), r̂(t\|s)) |
 //! | M2P | `nd_fmm_ref::helmholtz::leaf::m2p` in the target leaf's units, at (ĉ(s\|t), r̂(s\|t)) |
-//! | P2P | `nd_fmm_ref::helmholtz::p2p::p2p` in the target leaf's units, the sources mapped as ĉ(s\|t) + r̂(s\|t) u |
+//! | P2P | `nd_fmm_simd::P2pKernel::evaluate_helmholtz` on the ISA of the [`P2pChoice`], or `nd_fmm_ref::helmholtz::p2p::p2p` for [`P2pChoice::Reference`], in the target leaf's units, the sources mapped as ĉ(s\|t) + r̂(s\|t) u |
 //!
 //! A box of level l holds r_l φ̃ in its own units, as a leaf's chunk does (CONVENTIONS
 //! §3.13; `nd_fmm_tables::helmholtz`, "Levels and units"). P2L forms the local in the
@@ -34,13 +34,29 @@
 //! leaf on a coarser one than the box; the operator finds their levels from the frame's
 //! radius. M2P widens a real multipole (real k, real charges) to two planes in scratch.
 //!
-//! P2P, M2P and L2P accumulate into the target output chunk: P2P and M2P load each target's
-//! two output columns of a vector as complex values, let the reference operator add its
-//! terms to them, and store them back; L2P is [`Densities::l2p`]'s. Every operator gives
-//! each charge vector exactly the one-vector operator, and adds (+=); none applies 1/(4π)
-//! or the leaf radius (the output pass does, CONVENTIONS §3.13).
+//! P2P, M2P and L2P accumulate into the target output chunk: M2P, and P2P with the
+//! reference, load each target's two output columns of a vector as complex values, let the
+//! reference operator add its terms to them, and store them back; L2P is
+//! [`Densities::l2p`]'s. Every operator gives each charge vector exactly the one-vector
+//! operator, and adds (+=); none applies 1/(4π) or the leaf radius (the output pass does,
+//! CONVENTIONS §3.13).
 //!
-//! P2P is the reference kernel, the trusted path, until CH3.4 adds the vectorised one.
+//! # P2P kernel
+//!
+//! P2P runs the kernel of a [`P2pChoice`] (Helmholtz CH3.4c), set by
+//! [`with_p2p`](HelmholtzOperator::with_p2p) and by default [`P2pChoice::Auto`], as
+//! Laplace's operator does: `nd_fmm_simd::P2pKernel::evaluate_helmholtz` (Helmholtz CH3.4b)
+//! on the default ISA of the machine (`Isa::detect`) or on a named one, and
+//! [`P2pChoice::Reference`] keeps `nd_fmm_ref::helmholtz::p2p::p2p`, the trusted slower
+//! path. The kernel takes one vector of all the leaf's targets per call: the charges of
+//! vector v, Re q and Im q of a source together (the chunk's own strengths for one vector,
+//! gathered into scratch for several), and the output chunk's planes as they lie, since the
+//! potentials of output columns 2v and 2v + 1 are 2 n_t adjacent values and their gradients
+//! 2 n_t adjacent triples, the kernel's layout. Each ISA is within the kernel's accuracy
+//! contract of the reference (docs/design/simd-p2p.md §4.12), and `Isa::Scalar` is the
+//! reference bit for bit. For one machine, ISA and build the output is deterministic, the
+//! same at every thread count and on P ranks (constraint 2);
+//! [`p2p_kernel`](HelmholtzOperator::p2p_kernel) reports the kernel that runs.
 //!
 //! # Execution
 //!
@@ -61,7 +77,7 @@ use nd_fmm_plan::operator::{
 };
 use nd_fmm_ref::Frame;
 use nd_fmm_ref::helmholtz::{Level, Workspace, leaf, p2p};
-use nd_fmm_simd::{MatrixKernel, SimdScalar};
+use nd_fmm_simd::{HelmholtzCharges, IsaUnavailable, MatrixKernel, P2pKernel, SimdScalar};
 use nd_fmm_tables::MatrixSet;
 use nd_fmm_tables::helmholtz::{DEFAULT_BLOCK_BUDGET, HelmholtzScratch, HelmholtzTables};
 use nd_octree::{MortonKey, morton};
@@ -71,6 +87,7 @@ use thiserror::Error;
 use super::{Densities, LeafScratch, Wavenumber, WavenumberKind};
 use crate::driver::{self, Columns, Execution, HostKernel, debug_check_octant, offset_index};
 use crate::geometry::{Domain, radius, relative_frame};
+use crate::operator::P2pChoice;
 
 /// Why [`HelmholtzOperator::new`] refused its inputs.
 #[derive(Clone, Copy, Debug, Error, PartialEq)]
@@ -106,6 +123,8 @@ struct Kernel<T: SimdScalar> {
     /// r_l of each level, in the units of the points.
     radii: Vec<f64>,
     tables: HelmholtzTables<T>,
+    /// The P2P kernel of `nd-fmm-simd`, or `None` for the reference.
+    p2p: Option<P2pKernel<T>>,
 }
 
 /// One thread's scratch.
@@ -117,6 +136,8 @@ struct Scratch<T: SimdScalar> {
     mapped: Vec<[T; 3]>,
     /// One vector's charges.
     charges: Vec<Complex<T>>,
+    /// One vector's charges for the P2P kernel, Re q and Im q per source.
+    strengths: Vec<T>,
     /// One multipole of two planes (M2P of a real multipole).
     widened: Vec<T>,
     /// Never used: no batched M2L.
@@ -130,7 +151,8 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// points (every leaf P2P reads, local and ghost: on several ranks a global maximum).
     /// Builds the tables of every level with the default block budget
     /// ([`DEFAULT_BLOCK_BUDGET`]) and one scratch set; runs serially until
-    /// [`with_pool`](Self::with_pool).
+    /// [`with_pool`](Self::with_pool), with the P2P kernel of [`P2pChoice::Auto`] until
+    /// [`with_p2p`](Self::with_p2p).
     ///
     /// # Errors
     ///
@@ -191,6 +213,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             max_leaf_points,
             radii,
             tables,
+            p2p: Some(P2pKernel::detect()),
         };
         let execution = Execution {
             scratch: vec![Mutex::new(Scratch::new(&kernel))],
@@ -209,6 +232,29 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             .collect();
         self.execution.pool = Some(pool);
         self
+    }
+
+    /// Runs P2P with the kernel of `choice` (module documentation, "P2P kernel").
+    ///
+    /// # Errors
+    ///
+    /// [`IsaUnavailable`] for `P2pChoice::Isa(isa)` if this machine cannot run `isa`.
+    pub fn with_p2p(mut self, choice: P2pChoice) -> Result<Self, IsaUnavailable> {
+        self.kernel.p2p = match choice {
+            P2pChoice::Auto => Some(P2pKernel::detect()),
+            P2pChoice::Reference => None,
+            P2pChoice::Isa(isa) => Some(P2pKernel::new(isa)?),
+        };
+        Ok(self)
+    }
+
+    /// The P2P kernel as it runs: [`P2pChoice::Reference`] or [`P2pChoice::Isa`] with the
+    /// ISA of the kernel, never [`P2pChoice::Auto`].
+    pub fn p2p_kernel(&self) -> P2pChoice {
+        match &self.kernel.p2p {
+            None => P2pChoice::Reference,
+            Some(kernel) => P2pChoice::Isa(kernel.isa()),
+        }
     }
 
     /// The degree p_l of `level`.
@@ -254,6 +300,7 @@ impl<T: SimdScalar> Scratch<T> {
             tables: kernel.tables.scratch(),
             mapped: vec![[T::zero(); 3]; kernel.max_leaf_points],
             charges: vec![Complex::new(T::zero(), T::zero()); kernel.max_leaf_points],
+            strengths: vec![T::zero(); 2 * kernel.max_leaf_points],
             widened: vec![T::zero(); 2 * Layout::new(p_max).len()],
             columns: Columns {
                 pack: Vec::new(),
@@ -473,7 +520,10 @@ impl<T: SimdScalar> Kernel<T> {
         }
         let k = self.k_hat(level);
         let Scratch {
-            mapped, charges, ..
+            mapped,
+            charges,
+            strengths,
+            ..
         } = s;
         let points = match frame {
             None => points,
@@ -491,12 +541,48 @@ impl<T: SimdScalar> Kernel<T> {
                 &*mapped
             }
         };
-        for v in 0..self.densities.vectors() {
-            self.charges_of(sources, n, v, charges);
-            let charges = &charges[..n];
-            self.each_target(v, targets.len(), output, |i, phi, grad| {
-                p2p::p2p(k, points, charges, &targets[i..=i], phi, grad);
-            });
+        let Some(kernel) = &self.p2p else {
+            for v in 0..self.densities.vectors() {
+                self.charges_of(sources, n, v, charges);
+                let charges = &charges[..n];
+                self.each_target(v, targets.len(), output, |i, phi, grad| {
+                    p2p::p2p(k, points, charges, &targets[i..=i], phi, grad);
+                });
+            }
+            return;
+        };
+        let d = &self.densities;
+        let (m, nt) = (d.vectors(), targets.len());
+        // The real columns of a vector's charges: 1 (real) or 2 (complex).
+        let c = d.columns() / m;
+        // The potentials of every output column, then their gradients (CONVENTIONS §3.13).
+        let (potentials, gradients) = output.split_at_mut(d.output_columns() * nt);
+        for v in 0..m {
+            let charges = if m == 1 {
+                &sources[3 * n..3 * n + c * n]
+            } else {
+                assert!(
+                    c * n <= strengths.len(),
+                    "a leaf has {n} source points, more than max_leaf_points = {}",
+                    strengths.len() / 2
+                );
+                let w = &mut strengths[..c * n];
+                for (j, q) in w.chunks_exact_mut(c).enumerate() {
+                    q.copy_from_slice(&sources[d.charge_index(n, j, v, 0)..][..c]);
+                }
+                &*w
+            };
+            let charges = if c == 1 {
+                HelmholtzCharges::Real(charges)
+            } else {
+                HelmholtzCharges::Complex(charges)
+            };
+            let re = d.output_column(v, 0);
+            let potential = &mut potentials[re * nt..(re + 2) * nt];
+            let gradient = self
+                .gradients
+                .then(|| &mut gradients.as_chunks_mut::<3>().0[re * nt..(re + 2) * nt]);
+            kernel.evaluate_helmholtz(k, points, charges, targets, potential, gradient);
         }
     }
 

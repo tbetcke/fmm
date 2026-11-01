@@ -643,17 +643,24 @@ fn low_degree_chains_are_the_reference_chains() {
     }
 }
 
-/// P2P against `nd_fmm_ref::helmholtz::p2p::p2p` bit for bit: the neighbour's sources mapped
-/// into the target leaf's units (ĉ(s|t) + r̂(s|t) u, exact on the unit cube), k̂ = k r_t,
-/// each target's two output columns accumulated by the reference as complex values; then
-/// the self pair.
+/// P2P with `P2pChoice::Reference` and with `Isa::Scalar` (CH3.4c) against
+/// `nd_fmm_ref::helmholtz::p2p::p2p` bit for bit: the neighbour's sources mapped into the
+/// target leaf's units (ĉ(s|t) + r̂(s|t) u, exact on the unit cube), k̂ = k r_t, each
+/// target's two output columns accumulated by the reference as complex values; then the
+/// self pair.
 #[test]
 fn p2p_is_the_reference_bit_for_bit() {
+    use nd_fmm_exec::operator::{Isa, P2pChoice};
     use nd_fmm_ref::helmholtz::p2p;
 
-    for (re, im) in [(20.0, 0.0), (20.0, 2.0)] {
+    let choices = [P2pChoice::Reference, P2pChoice::Isa(Isa::Scalar)];
+    for ((re, im), choice) in [(20.0, 0.0), (20.0, 2.0)]
+        .into_iter()
+        .flat_map(|k| choices.map(|c| (k, c)))
+    {
         let k = Wavenumber::new(re, im).unwrap();
         let mut pb = Problem::new(k, ChargeKind::Complex, 1, 1e-6);
+        pb.op = pb.op.with_p2p(choice).unwrap();
         let (s, t) = (key([2, 1, 1], 4), key([1, 1, 1], 4));
         let mut rng = Rng(9);
         let (other, own) = (points_in(s, 10, &mut rng), points_in(t, 8, &mut rng));
@@ -704,8 +711,16 @@ fn p2p_is_the_reference_bit_for_bit() {
                 Some(&mut grad),
             );
             let d = &pb.densities;
-            assert_eq!(output[d.potential_index(n, 0, i)], phi[0].re, "target {i}");
-            assert_eq!(output[d.potential_index(n, 1, i)], phi[0].im, "target {i}");
+            assert_eq!(
+                output[d.potential_index(n, 0, i)],
+                phi[0].re,
+                "{choice}, target {i}"
+            );
+            assert_eq!(
+                output[d.potential_index(n, 1, i)],
+                phi[0].im,
+                "{choice}, target {i}"
+            );
             for axis in 0..3 {
                 assert_eq!(output[d.gradient_index(n, 0, i, axis)], grad[0][axis].re);
                 assert_eq!(output[d.gradient_index(n, 1, i, axis)], grad[0][axis].im);

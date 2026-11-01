@@ -14,9 +14,17 @@
 //! - on several ranks, the one-rank FMM over the union of every rank's points and charges
 //!   in rank order (`SimpleCommunicator::self_comm()`, on every rank) bit for bit.
 //!
+//! Every scenario runs the default P2P kernel (`P2pChoice::Auto`, the vectorised kernel of
+//! `nd-fmm-simd` on the default ISA). On two scenarios the P2P kernels (Helmholtz CH3.4c):
+//! `Reference` and every ISA this machine offers, `Isa::Scalar` bit for bit `Reference`,
+//! `Auto` bit for bit `Isa(Isa::detect())`, and every ISA within `KERNEL_TOLERANCE` of
+//! `Reference` (relative L2 over every rank's targets) and within the scenario's bound of
+//! the direct sum.
+//!
 //! Then vectors (vector v of an FMM of two bit for bit the one-vector FMM, of complex and
-//! of real charges), real charges against complex ones with Im q = 0, and the errors, each
-//! on every rank or on none. One scenario leaves rank 0 without points.
+//! of real charges), real charges against complex ones with Im q = 0, and the errors (an
+//! ISA this machine lacks among them), each on every rank or on none. One scenario leaves
+//! rank 0 without points.
 //!
 //! Every comparison is agreed by an all-reduce, so a failure fails every rank. Run by hand
 //! at several ranks under a timeout, e.g. on macOS
@@ -32,10 +40,12 @@ use mpi::collective::SystemOperation;
 use mpi::datatype::PartitionMut;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
+use nd_fmm_exec::fmm::{FmmError, SettingsError};
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, Degrees, DensityError, HelmholtzFmm, HelmholtzFmmBuilder,
     HelmholtzFmmError, OperatorError, Output, Wavenumber,
 };
+use nd_fmm_exec::operator::{Isa, P2pChoice};
 use nd_fmm_math::Complex;
 use nd_fmm_ref::helmholtz::p2p;
 use nd_octree::PhysicalBox;
@@ -49,6 +59,12 @@ const ERROR_FACTOR: f64 = 10.0;
 /// The error bound of the scenarios with degree 8 on every level, where truncation
 /// dominates: about 5 to 13 times the errors measured on the M6 (7.5e-5 and 2.2e-4).
 const P8_BOUND: f64 = 1e-3;
+
+/// Every ISA's output may differ from `Reference`'s by this much (relative L2 of φ and of
+/// ∇φ over every rank's targets): the P2P kernel's contract (docs/design/simd-p2p.md §4.12)
+/// is a few tens of u_T per term at these k r; measured at most 6.9e-16 on the M6
+/// (NEON). As Laplace's tolerance for its kernels in f64 (`tests/mpi_exec.rs`).
+const KERNEL_TOLERANCE: f64 = 1e-13;
 
 /// SplitMix64, uniform in [0, 1).
 struct Rng(u64);
@@ -472,6 +488,90 @@ fn check(scenario: &Scenario, comm: &SimpleCommunicator) {
     }
 }
 
+/// The relative L2 differences of φ and of ∇φ of `a` from `b` over every rank's targets.
+fn difference(a: &Output<f64>, b: &Output<f64>, comm: &SimpleCommunicator) -> (f64, f64) {
+    let sums = |x: &[f64], y: &[f64]| -> [f64; 2] {
+        let d = x.iter().zip(y).map(|(u, w)| (u - w) * (u - w)).sum();
+        [d, y.iter().map(|w| w * w).sum()]
+    };
+    let relative = |[d, n]: [f64; 2]| {
+        let [d, n] = [d, n].map(|s| global_sum(s, comm));
+        if n == 0.0 { d.sqrt() } else { (d / n).sqrt() }
+    };
+    let phi = relative(sums(&a.potential, &b.potential));
+    let grad = match (&a.gradient, &b.gradient) {
+        (Some(x), Some(y)) => relative(sums(x.as_flattened(), y.as_flattened())),
+        _ => 0.0,
+    };
+    (phi, grad)
+}
+
+/// The P2P kernels (module documentation): `Reference` and every available ISA.
+fn check_kernels(scenario: &Scenario, comm: &SimpleCommunicator) {
+    let rank = comm.rank();
+    let inputs = Inputs::new(scenario, 1, comm);
+    let builder = builder(scenario);
+    let kind = scenario.charges;
+    let (fmm, reference) = run(
+        &builder.clone().p2p_kernel(P2pChoice::Reference),
+        &inputs,
+        kind,
+        comm,
+    );
+    assert_eq!(fmm.p2p_kernel(), P2pChoice::Reference);
+    drop(fmm);
+    for isa in Isa::all().filter(|isa| isa.is_available()) {
+        let (fmm, output) = run(
+            &builder.clone().p2p_kernel(P2pChoice::Isa(isa)),
+            &inputs,
+            kind,
+            comm,
+        );
+        assert_eq!(fmm.p2p_kernel(), P2pChoice::Isa(isa));
+        drop(fmm);
+        if isa == Isa::Scalar {
+            assert_same(
+                &format!("{}: Isa::Scalar against Reference", scenario.name),
+                &output,
+                &reference,
+                comm,
+            );
+        }
+        if isa == Isa::detect() {
+            let (fmm, auto) = run(&builder, &inputs, kind, comm);
+            assert_eq!(fmm.p2p_kernel(), P2pChoice::Isa(isa));
+            assert_same(
+                &format!("{}: Auto against Isa({isa})", scenario.name),
+                &auto,
+                &output,
+                comm,
+            );
+        }
+        let (phi, grad) = difference(&output, &reference, comm);
+        let (error_phi, error_grad) = errors(scenario, &inputs, &output, 0, comm);
+        if rank == 0 {
+            println!(
+                "{}: {isa} against Reference: relative L2 φ {phi:.2e}, ∇φ {grad:.2e}; \
+                 against the direct sum φ {error_phi:.2e}, ∇φ {error_grad:.2e}",
+                scenario.name
+            );
+        }
+        assert!(
+            phi <= KERNEL_TOLERANCE && grad <= KERNEL_TOLERANCE,
+            "{}: {isa} against Reference: φ {phi:e}, ∇φ {grad:e}, tolerance {KERNEL_TOLERANCE:e}",
+            scenario.name
+        );
+        assert!(
+            error_phi < scenario.bound && error_grad < scenario.bound,
+            "{}: {isa}: φ {error_phi:.2e}, ∇φ {error_grad:.2e} against the direct sum",
+            scenario.name
+        );
+    }
+    if rank == 0 {
+        println!("{}: P2P kernels passed", scenario.name);
+    }
+}
+
 /// Two vectors: each bit for bit its one-vector FMM, the second against its direct sum;
 /// and a reused output.
 fn check_vectors(scenario: &Scenario, comm: &SimpleCommunicator) {
@@ -609,6 +709,23 @@ fn check_errors(comm: &SimpleCommunicator) {
         matches!(error, Some(HelmholtzFmmError::LeafWidth(_))),
         "rank {rank}: c_leaf = 0: {error:?}"
     );
+
+    // An ISA this machine lacks, on every rank: its own error everywhere.
+    if let Some(isa) = Isa::all().find(|isa| !isa.is_available()) {
+        let error = builder(scenario)
+            .p2p_kernel(P2pChoice::Isa(isa))
+            .build::<f64, _>(&inputs.sources, &inputs.targets, comm)
+            .err();
+        assert!(
+            matches!(
+                error,
+                Some(HelmholtzFmmError::Build(FmmError::InvalidSettings(
+                    SettingsError::P2pIsaUnavailable { isa: refused }
+                ))) if refused == isa
+            ),
+            "rank {rank}: the unavailable ISA {isa}: {error:?}"
+        );
+    }
 
     // A point that is not finite on rank 0 only: its error there, `OtherRank` elsewhere.
     let mut bad = inputs.sources.clone();
@@ -795,6 +912,10 @@ fn helmholtz_fmm() {
         }
         check(&scenario, &comm);
     }
+    // The P2P kernels: complex k with complex charges and gradients, real k with real
+    // charges and separate targets.
+    check_kernels(&scenarios()[0], &comm);
+    check_kernels(&scenarios()[2], &comm);
     // Two vectors of complex and of real charges.
     check_vectors(&scenarios()[1], &comm);
     check_vectors(&scenarios()[2], &comm);
