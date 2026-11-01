@@ -220,7 +220,8 @@ None.
 ## Open questions
 
 1. sin(±0) = +0 (Findings): accept, with the symmetry bit for bit for θ ≠ 0, or require
-   sin(−0) = −0 at the cost of one more rounding (t (1 + s P(s)))?
+   sin(−0) = −0 at the cost of one more rounding (t (1 + s P(s)))? Signed off 2026-11-01,
+   the user: "Accept question 1 as recommended" (sin(±0) = +0 accepted).
 
 ## Decisions
 

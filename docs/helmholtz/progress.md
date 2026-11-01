@@ -1292,7 +1292,8 @@ request, using this template:
   check (no manifest changed).
 - Decisions: the split and the plan, as above. Question for sign-off (the PR): 1. sin(±0)
   = +0 (the sine's last step adds a +0 correction to t = −0), the symmetry bit for bit for
-  θ ≠ 0, against the plan's "sin ±0 with its sign".
+  θ ≠ 0, against the plan's "sin ±0 with its sign". Signed off 2026-11-01, the user:
+  "Accept question 1 as recommended".
 - Laplace: unchanged in code. Every existing function of `nd-fmm-simd` identical to
   `main`'s instruction for instruction in the release rlibs of aarch64 and x86_64, macOS
   and Linux, at the default settings and with one codegen unit (8 builds); so no D9 run.
