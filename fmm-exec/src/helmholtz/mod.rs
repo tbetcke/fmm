@@ -27,7 +27,11 @@
 //! `nd_fmm_tables::helmholtz`, the leaf operators of [`Densities`] and `nd-fmm-ref`, and
 //! the reference P2P.
 //!
-//! The module is MPI-free.
+//! [`HelmholtzFmmBuilder`] and [`HelmholtzFmm`] (Helmholtz CH3.1b, submodule [`fmm`](mod@fmm))
+//! are the FMM on any number of ranks: the point pipeline of `Fmm` with the leaf rule and
+//! the Helmholtz operator.
+//!
+//! The module is MPI-free but for [`fmm`](mod@fmm).
 //!
 //! ```
 //! use nd_fmm_exec::geometry::Domain;
@@ -48,6 +52,7 @@
 
 pub mod degree;
 pub mod densities;
+pub mod fmm;
 pub mod operator;
 
 use std::f64::consts::TAU;
@@ -59,6 +64,7 @@ use crate::geometry::Domain;
 
 pub use degree::{DegreeError, Degrees, degree};
 pub use densities::{ChargeKind, Charges, Densities, DensityError, LeafScratch, Output, Split};
+pub use fmm::{HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError};
 pub use operator::{HelmholtzOperator, OperatorError};
 
 /// The deepest level of a Morton key, 16 (CONVENTIONS §3.12).
