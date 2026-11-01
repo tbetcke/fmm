@@ -1,8 +1,9 @@
 //! The contract of design §4.11: within 4 u_T absolute on |θ| ≤ 2¹⁰ for both the sine and
-//! the cosine; odd and even bit for bit for θ ≠ 0; at ±0 the sine +0, the cosine
-//! exactly 1. f32 over every float of [0, 2¹⁰]
-//! (strided in debug), with its negation; f64 on seeded samples; both at the reduction's
-//! boundaries (n + ½) π, the multiples n π, their neighbours and the domain end.
+//! the cosine; odd and even bit for bit for θ ≠ 0; at ±0 the sine +0, the cosine exactly 1.
+//! f32 over every float of [0, 2¹⁰] (strided in debug), with its negation, on all the
+//! machine's threads, the oracle formed once per value for every ISA (CI's x86_64 job has
+//! five minutes); f64 on seeded samples; both at the reduction's boundaries (n + ½) π, the
+//! multiples n π, their neighbours and the domain end.
 
 use nd_fmm_simd::Isa;
 
@@ -34,26 +35,60 @@ fn check_symmetry<T: Precision>(isa: Isa, theta: &[T], plus: &(Vec<T>, Vec<T>)) 
     }
 }
 
-/// Every `stride`-th f32 of [0, θ_max], and its negation for the symmetries.
+/// Every `stride`-th f32 of [0, θ_max], and its negation for the symmetries: the values
+/// split into one contiguous range per thread, each batch's oracle (`f64::sin`, `f64::cos`)
+/// formed once and every ISA checked against it.
 fn f32_domain(test: &str, stride: usize) {
-    let end = (THETA_MAX as f32).to_bits() + 1;
+    let count = ((THETA_MAX as f32).to_bits() as usize + 1).div_ceil(stride);
     let what = if stride == 1 {
         "f32, every float in [0, 2¹⁰]".to_string()
     } else {
         format!("f32, every {stride}th float in [0, 2¹⁰]")
     };
-    for isa in isas::<f32>(test) {
+    let isas = isas::<f32>(test);
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let per_thread = count.div_ceil(threads);
+    let maxima: Vec<Vec<MaxError>> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads)
+            .map(|t| {
+                let isas = &isas;
+                scope.spawn(move || {
+                    let (first, last) = (t * per_thread, ((t + 1) * per_thread).min(count));
+                    let mut max = vec![MaxError::default(); isas.len()];
+                    let mut theta = Vec::with_capacity(BATCH);
+                    let mut reference = Vec::with_capacity(BATCH);
+                    let mut i = first;
+                    while i < last {
+                        let len = BATCH.min(last - i);
+                        theta.clear();
+                        theta.extend((i..i + len).map(|j| {
+                            f32::from_bits(u32::try_from(j * stride).expect("an f32's bits"))
+                        }));
+                        reference.clear();
+                        reference.extend(theta.iter().map(|&x| {
+                            let x = f64::from(x);
+                            (x.sin(), x.cos())
+                        }));
+                        for (&isa, max) in isas.iter().zip(&mut max) {
+                            let result = sincos(isa, &theta);
+                            max.record_against(&theta, &result.0, &result.1, &reference);
+                            check_symmetry(isa, &theta, &result);
+                        }
+                        i += len;
+                    }
+                    max
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|w| w.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+            .collect()
+    });
+    for (k, &isa) in isas.iter().enumerate() {
         let mut max = MaxError::default();
-        let mut count = 0usize;
-        let mut theta = Vec::with_capacity(BATCH);
-        let mut values = (0..end).step_by(stride).peekable();
-        while values.peek().is_some() {
-            theta.clear();
-            theta.extend(values.by_ref().take(BATCH).map(f32::from_bits));
-            let result = sincos(isa, &theta);
-            max.record(&theta, &result.0, &result.1);
-            check_symmetry(isa, &theta, &result);
-            count += theta.len();
+        for thread in &maxima {
+            max.merge(&thread[k]);
         }
         max.check(
             &format!("{what} ({count} values, and their negations)"),

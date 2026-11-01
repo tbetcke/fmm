@@ -170,6 +170,11 @@ All on every ISA the machine offers (`common::isas`, printing those it cannot ru
 - **The bound.** Derived to first order, 2.7 u (sine) and 3.4 u (cosine) in both precisions
   (`fmm-simd/tools/sincos_bound.py`; design §4.11); measured 1.89 and 2.57 u.
 - **Taylor suffices.** No minimax coefficients were needed (no script beyond the bound's).
+- **CI's five minutes.** The first CI run of the PR cancelled `run-tests-simd (x86_64)` at
+  its `timeout-minutes: 5`, in the exhaustive f32 test (no test failed; the job took 2–2.5
+  min before this task). That test formed the libm oracle once per ISA, serially (300 s on
+  Kathleen with three ISAs). It now forms it once per value for every ISA and splits the
+  range over the machine's threads: the same values, checks and maxima, 1.3 s on the M6.
 
 ## Checks run
 

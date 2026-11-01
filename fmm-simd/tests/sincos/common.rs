@@ -185,15 +185,47 @@ impl MaxError {
     pub fn record<T: Precision>(&mut self, theta: &[T], sin: &[T], cos: &[T]) {
         for ((&x, &s), &c) in theta.iter().zip(sin).zip(cos) {
             let (es, ec) = T::errors(x, s, c);
-            let (es, ec) = (es / T::U, ec / T::U);
-            if es.is_nan() || es > self.sin {
-                self.sin = es;
-                self.sin_at = x.to_f64();
-            }
-            if ec.is_nan() || ec > self.cos {
-                self.cos = ec;
-                self.cos_at = x.to_f64();
-            }
+            self.note(x, es / T::U, ec / T::U);
+        }
+    }
+
+    /// Records the errors of `sin` and `cos` on `theta` against `reference`, the exact
+    /// (sin θ, cos θ) of each value to well below u_T (the f32 check's shared oracle).
+    pub fn record_against<T: Precision>(
+        &mut self,
+        theta: &[T],
+        sin: &[T],
+        cos: &[T],
+        reference: &[(f64, f64)],
+    ) {
+        for (((&x, &s), &c), &(rs, rc)) in theta.iter().zip(sin).zip(cos).zip(reference) {
+            self.note(
+                x,
+                error(s.to_f64(), rs) / T::U,
+                error(c.to_f64(), rc) / T::U,
+            );
+        }
+    }
+
+    /// Keeps the larger of each error of `self` and `other`.
+    pub fn merge(&mut self, other: &MaxError) {
+        self.note_at(other.sin, other.sin_at, other.cos, other.cos_at);
+    }
+
+    /// Notes the errors `es` and `ec`, in units of u_T, of the value `x`.
+    fn note<T: Precision>(&mut self, x: T, es: f64, ec: f64) {
+        self.note_at(es, x.to_f64(), ec, x.to_f64());
+    }
+
+    /// Notes a sine error `es` at `sin_at` and a cosine error `ec` at `cos_at`.
+    fn note_at(&mut self, es: f64, sin_at: f64, ec: f64, cos_at: f64) {
+        if es.is_nan() || es > self.sin {
+            self.sin = es;
+            self.sin_at = sin_at;
+        }
+        if ec.is_nan() || ec > self.cos {
+            self.cos = ec;
+            self.cos_at = cos_at;
         }
     }
 
