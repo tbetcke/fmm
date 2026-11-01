@@ -1169,3 +1169,50 @@ request, using this template:
   - CH3.1b: the FMM, with the level calls against `PerPair`.
   - CH3.2: Dense, Classes and Batched.
   - CH3.4: the vectorised P2P in place of the reference.
+
+## 2026-11-01: CH3.1b The Helmholtz FMM
+- Done:
+  - The point pipeline (`fmm-exec/src/pipeline.rs`, crate-private): steps 3, 4's keys and
+    octree, 5, 6 and 8 of `FmmBuilder::build` (`domain`, `octree`, `Points::route`,
+    `Points::load_coordinates`) and the contiguous block of helpers from `agree` to
+    `unpack_output_many` (the charge load, the output pass, the moves; the dipole and device
+    helpers of the block with them), moved verbatim from `fmm.rs`. `Fmm` holds a `Points`;
+    `unpack_output_many` takes the output's two buffers. No public item of `fmm` changed.
+  - `nd_fmm_exec::helmholtz::fmm`: `HelmholtzFmmBuilder` and `HelmholtzFmm` on any number
+    of ranks, the pipeline with the leaf rule and CH3.1a's operator on `Evaluator`. The c m
+    columns (Re q, Im q per complex vector) are packed point-major, so the charge load,
+    the output pass and the unpacking run unchanged with the columns as the vectors
+    (CH3.0c's chunks). `HelmholtzFmmError`; doc-hidden `pair_calls` and
+    `reference_output` for the tests. No overlap, device, near rule, work cut or cache.
+  - `tests/helmholtz_fmm.rs` in CI's MPI list (`.github/scripts/run-mpi-tests.sh`); root
+    and `fmm-exec/CLAUDE.md` updated. Record: `docs/helmholtz/tasks/CH3.1b.md`.
+- Tests: `tests/helmholtz_fmm.rs` (its own MPI test): six scenarios (cube and clusters,
+  kD = 1, 20, 20 + 2i, 100; ε = 10⁻³ and 10⁻⁶ by S7's closed form, p = 8 named; real and
+  complex charges; one scenario with rank 0 empty), each against the direct sum (2.0e-8 to
+  2.2e-4 within its bound; 5.3e-13 and 2.0e-10 at ε = 10⁻⁶), the reference output pass, 4
+  threads (2 and 4 in release), `PerPair` and the one-rank FMM, all bit for bit; two
+  vectors, real against complex charges, the errors. 36 s at one rank in debug.
+- Checks: `/verify` on the M6: format; Clippy default, examples, workspace all-targets and
+  `nd-fmm-exec` with `cpu,metal`; `cargo check -p nd-fmm-exec --features cuda`; `cargo
+  doc` (and `-D warnings` on `nd-fmm-exec` with private items); `cargo test` (1,067) and
+  `--workspace` (1,148); the MPI list at 2 and 4 ranks (24 of 24); `mpi_exec`,
+  `invariance` and `helmholtz_fmm` at 8 ranks; `helmholtz_fmm` in release at 1 and 4.
+  A self-review by a subagent: no correctness bug, the extraction a pure move; its points
+  taken (the one-rank reference built on every rank, a complex-k tolerance scenario, an
+  empty rank, real-charge vectors, two more errors, the CLAUDE.md wording). Not run: the
+  ignored `multi_rank.rs` (the user, "Skip it"); locust and Kathleen (the user, "M6, 3
+  rows"); the licence check (no manifest changed).
+- Decisions: the user, 2026-11-01, each as recommended: the extraction as planned, the
+  minimal D9 runs on the M6 (three rows), `multi_rank` not run. No question for sign-off.
+- Laplace: `fmm.rs` changed (constraint 1). Outputs bit for bit: every existing test, and
+  36 of 36 `nd-fmm-bench --write-output` files of `main` (540f134) and the branch
+  identical byte for byte on the M6. D9 on the M6: f32 p = 3 +0.7 %, f64 p = 6 +1.3 %,
+  f64 p = 8 +0.4 % against spreads of 5.7 %, 6.7 % and 9.0 % of `main`'s medians, all
+  pass; a thermal drift of about 9 % through the session widened the spreads, and the
+  adjacent A/B pairs, which cancel it, differ by medians of −0.1 %, −0.1 % and +0.4 %.
+- Follow-ups:
+  - CH3.1c: the acceptance runs on W1, W3, W4 (kD ≤ 100) and W1 at kD = 500.
+  - CH3.3: S7's closed form overshoots on low-frequency levels (p = 16 at ε = 10⁻³ gives
+    1e-7 to 1e-8; p = 34 at 10⁻⁶ gives 5e-13).
+  - Later: overlap, the near rule and the work cut for the Helmholtz FMM (their cost model
+    is Laplace's).

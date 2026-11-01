@@ -371,7 +371,9 @@ at any kD.
   the chains against the direct sum within the truncation; vector v the one-vector
   operator bit for bit; real charges as complex ones with Im q = 0; Yukawa refused (its
   path is CH2.1's); Laplace untouched. *Needs:* CH3.0, CH3.5.
-- [ ] **CH3.1b The Helmholtz FMM.** The operator-independent point pipeline of `fmm.rs`
+- [x] **CH3.1b The Helmholtz FMM.** Record: `docs/helmholtz/tasks/CH3.1b.md`;
+  `nd_fmm_exec::helmholtz::fmm`, the crate-private `src/pipeline.rs`, tests
+  `fmm-exec/tests/helmholtz_fmm.rs`. The operator-independent point pipeline of `fmm.rs`
   (the domain, the octree and plan, the redistributions, the leaf ranges and radii, the
   leaf-scaled coordinates, the charge forward and the output return) extracted into
   crate-private code that `Fmm` and the Helmholtz FMM share (the user, 2026-11-01, "as

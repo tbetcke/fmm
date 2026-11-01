@@ -42,7 +42,12 @@ One crate, `nd-fmm-exec`, plus the CI script's MPI list.
    `check_inside`, `global_extent`, `LeafRanges`, `LOAD_GRAIN`, `OutputOrder`,
    `load_source_charges` with `ChargeInput`, `StrengthLayout`, `write_source_charges`,
    `write_leaf_strengths`, `split_source_charges`, `pack_charges`, `gather_output`,
-   `unpack_output_many` (and the unit tests that test them). Extracted from `build` as
+   `unpack_output_many`. As built: the whole contiguous block of `fmm.rs` from `agree` to
+   `unpack_output_many` moved, so the dipole and device helpers in it (`scale_moments`,
+   `pack_sources`, `interleave_output`, `unpack_output`) moved too; their unit tests stayed
+   in `fmm.rs`'s `mod tests`, which reaches them through its imports. `unpack_output_many`
+   takes the output's two buffers instead of an `OutputMany` (same body). Extracted from
+   `build` as
    functions of the same statements:
    - `domain` (step 3): the coordinates, the supplied or global domain, every point
      strictly inside it (agreed);
@@ -84,8 +89,12 @@ One crate, `nd-fmm-exec`, plus the CI script's MPI list.
      the builder (the evaluator runs `PerPair` of the same operator, through a crate-private
      two-variant wrapper like `ExecOperator`'s engine) and `reference_output` (the output
      pass by `Densities::write_leaf_output` on one rank, the trusted path of CH3.0c).
-   - `HelmholtzFmmError`: `Build(FmmError)` for the shared steps' errors, `Wavenumber`,
-     `Degree`, `Operator`, `Charges(DensityError)`, `OtherRank`.
+   - `HelmholtzFmmError`: `Build(FmmError)` for the shared steps' errors, `Degree`,
+     `Operator`, `Charges(DensityError)`, `OtherRank`. As built: `LeafWidth` for a c_leaf
+     that is not positive and finite, and no `Wavenumber` variant (`Wavenumber::new`
+     validates k before the builder sees it).
+   - As built: the operator builds its tables serially and then takes the pool
+     (`with_pool`), as CH3.1a's operator does; only the level calls run on it.
    - No overlap, device, near rule, work cut, dipoles or table cache (later tasks).
 3. **`.github/scripts/run-mpi-tests.sh`**: the new executable `helmholtz_fmm` in the MPI
    list (2 and 4 ranks in CI); root `CLAUDE.md` and `fmm-exec/CLAUDE.md` name it.
@@ -96,25 +105,35 @@ convention change.
 ## Tests that prove it
 
 `tests/helmholtz_fmm.rs` (new executable, its own MPI test at `Funneled`, any rank count;
-each rank passes every P-th point as `mpi_exec` does; small trees, a few thousand points,
-cube and a clustered set, the leaf rule acting):
-- Against the direct sum (`nd_fmm_ref::helmholtz::p2p::direct_sum`, f64, over every
-  target, gathered on every rank): relative L2 of φ and ∇φ below a stated multiple of ε
-  (S7's closed form; CH3.1a's chains met ε) at ε = 10⁻³ and 10⁻⁶; real k at kD = 1, 20,
-  100 (100 only where the debug budget allows; otherwise release-only) and complex
-  20 + 2i; real and complex charges; m = 1 and 2 vectors (each vector against its own
-  direct sum).
-- Threads: 1, 2 and 4 bit for bit.
-- On P ranks: the one-rank `HelmholtzFmm` over the union of every rank's points and
-  charges in rank order (`self_comm`) bit for bit, as `check_one_rank` does for `Fmm`.
-- `PerPair`: `pair_calls(true)` bit for bit the level calls.
-- The output pass: bit for bit `reference_output` (`Densities::write_leaf_output`).
-- Vectors: vector v of an m = 2 FMM bit for bit the one-vector FMM; real charges bit for
-  bit complex ones with Im q = 0 is not expected (real k's real multipoles differ in
-  rounding) and is checked within 4 ε, as CH3.1a did.
-- Errors on every rank alike: Yukawa, wrong vector count, kind or length, a tolerance out
-  of range, no points.
-- Debug run within a minute at one rank (per-level degrees named where speed needs it).
+each rank passes every P-th point, one scenario none on rank 0; domain [0, 1]³, at most 32
+points per leaf). As built, six scenarios:
+
+| Scenario | Points | Degrees | Bound | Builds |
+| --- | --- | --- | --- | --- |
+| cube, kD = 20 + 2i, complex charges, ∇φ, rank 0 empty | 1,000 | ε = 10⁻³ | 10 ε | debug |
+| cube, kD = 1, complex charges, ∇φ | 1,500 | ε = 10⁻³ | 10 ε | debug |
+| clusters, kD = 20, real charges, separate targets | 1,000 / 700 | p = 8 | 1e-3 | debug |
+| cube, kD = 20 + 2i, complex charges, ∇φ | 1,500 | p = 8 | 1e-3 | debug |
+| cube, kD = 20, complex charges, ∇φ | 2,000 | ε = 10⁻⁶ | 10 ε | release |
+| clusters, kD = 100, complex charges | 3,000 | ε = 10⁻⁶ | 10 ε | release |
+
+(p = 8 on every level where truncation dominates: the bound about 5–13× the measured
+7.5e-5 and 2.2e-4. S7's closed form at ε = 10⁻³ gives p = 16 on low-frequency levels,
+too slow in debug for the kD = 20 trees.) Per scenario:
+- against the direct sum (`nd_fmm_ref::helmholtz::p2p::direct_sum`, f64, 1/(4π), over
+  every rank's sources), relative L2 of φ and ∇φ over every rank's targets;
+- the output pass bit for bit `reference_output` (`Densities::write_leaf_output`);
+- 4 threads (2 and 4 in release) bit for bit one;
+- `pair_calls(true)` (`PerPair`) bit for bit the level calls;
+- on P ranks the one-rank FMM over the union in rank order (`self_comm`, built on every
+  rank) bit for bit.
+Then: two vectors of complex and of real charges, each bit for bit its one-vector FMM, the
+second against the direct sum, and `evaluate_into` replacing an output of another path and
+reusing it; real charges against complex ones with Im q = 0 (0 difference measured, bound
+1e-13); the errors on every rank alike: Yukawa, ε = 2, c_leaf = 0, no points, a point that
+is not finite on rank 0 only (`OtherRank` elsewhere), no vector, the wrong kind, a short
+vector on rank 0 only, and an evaluation after them. About 36 s at one rank in debug on the
+M6; 24 s, 17 s and 17 s at 2, 4 and 8 ranks.
 
 Laplace bit for bit (constraint 1, condition 3):
 - every existing `nd-fmm-exec` test, unchanged: `tests/mpi_exec.rs`, `invariance.rs`,
@@ -163,9 +182,52 @@ extraction moves build statements and the charge load and output pass, so the ro
 - Risk: `plan.nlevels()` differs by rank: the degrees depend on the level only, so the
   sizes agree; the evaluator's validation would catch a disagreement.
 
+## Results
+
+Ran on the M6 on 2026-11-01.
+
+- `tests/helmholtz_fmm.rs`: debug at 1, 2, 4 and 8 ranks (36, 24, 17 and 17 s), release at
+  1 and 4 ranks (with the ε = 10⁻⁶ scenarios), all passed. Errors against the direct sum,
+  the same on every rank count:
+
+  | Scenario | Degrees (levels 0–) | φ | ∇φ |
+  | --- | --- | ---: | ---: |
+  | cube, kD = 20 + 2i, ε = 10⁻³, rank 0 empty | 0, 0, 16 | 6.0e-8 | 1.5e-7 |
+  | cube, kD = 1, ε = 10⁻³ | 0, 0, 16, 16 | 2.0e-8 | 1.0e-7 |
+  | clusters, kD = 20, p = 8 | 8 on each of 6 | 7.5e-5 | – |
+  | cube, kD = 20 + 2i, p = 8 | 8 on each of 4 | 1.5e-4 | 2.2e-4 |
+  | cube, kD = 20, ε = 10⁻⁶ (release) | 0, 0, 34, 34 | 5.3e-13 | 4.0e-12 |
+  | clusters, kD = 100, ε = 10⁻⁶ (release) | 0, 0, 38, 34, 34, 34 | 2.0e-10 | – |
+
+  S7's closed form is far from tight on these low-frequency levels (its floor
+  ⌈6 log₁₀(1/ε)⌉ − 2 gives p = 16 at 10⁻³ and 34 at 10⁻⁶): a point for CH3.3's calibration.
+- Laplace's outputs: `nd-fmm-bench --write-output` from `main` (540f134, a detached
+  worktree with its own target directory) and from the branch, the cube and the Plummer
+  sphere at N = 10⁵, 2 vectors, f64, 4 threads, p = 3, 6, 8, Dense, Classes, Rotation,
+  Batched, PlaneWave and Auto: 36 of 36 identical byte for byte.
+- D9, the minimal runs (the M6, host, every core, N = 10⁶, 10 timed evaluations after 2
+  warm-ups, `nd-fmm-bench` with the BLAS thread variables at 1; A = `main` 540f134,
+  B = the branch e28eed1; order A B B A A B B A A B; started once Photos' media analysis,
+  at about 115 % CPU earlier, had stopped):
+
+  | Row | `main` median of medians | branch | difference | `main`'s spread | D9 |
+  | --- | ---: | ---: | ---: | ---: | --- |
+  | f32 p = 3, Auto → Batched | 71.05 ms | 71.55 ms | +0.50 ms (+0.7 %) | 4.02 ms | pass |
+  | f64 p = 6, Auto → Batched | 209.54 ms | 212.36 ms | +2.81 ms (+1.3 %) | 14.14 ms | pass |
+  | f64 p = 8, Auto → PlaneWave | 221.68 ms | 222.63 ms | +0.95 ms (+0.4 %) | 20.03 ms | pass |
+
+  Every run's medians rose through the session, `main`'s and the branch's alike (f64
+  p = 6: 200.7 ms in run 1 to 219.2 ms in run 10), most likely the M6 warming under
+  sustained load. That widens `main`'s spread. The alternating order cancels the drift:
+  B/A − 1 of adjacent pairs (runs 1–2, 4–3, 5–6, 8–7, 9–10) is −1.3 to +2.5 % (f32 p = 3,
+  median −0.1 %), −1.4 to +2.0 % (f64 p = 6, median −0.1 %) and −2.1 to +1.0 % (f64 p = 8,
+  median +0.4 %). Build times: 0.728 / 0.716 s, 0.745 / 0.750 s, 0.703 / 0.704 s (`main` /
+  branch medians). Every run's repeats bit-identical. Reports in the scratch directory
+  `../fmm-d9/runs/` (not committed).
+
 ## Pending runs
 
-<filled in step 6>
+None.
 
 ## Open questions
 
