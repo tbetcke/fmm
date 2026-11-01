@@ -657,10 +657,8 @@ fn p2p_is_the_reference_bit_for_bit() {
         let mut rng = Rng(9);
         let (other, own) = (points_in(s, 10, &mut rng), points_in(t, 8, &mut rng));
         let q = Draw::all(ChargeKind::Complex, 1).charges(other.len() + own.len(), &mut rng);
-        let (q_other, q_own): (Vec<[Vec<f64>; 2]>, Vec<[Vec<f64>; 2]>) = (
-            vec![[q[0][0][..10].to_vec(), q[0][1][..10].to_vec()]],
-            vec![[q[0][0][10..].to_vec(), q[0][1][10..].to_vec()]],
-        );
+        let q_other = vec![[q[0][0][..10].to_vec(), q[0][1][..10].to_vec()]];
+        let q_own = vec![[q[0][0][10..].to_vec(), q[0][1][10..].to_vec()]];
         let other_chunk = source_chunk(&pb.densities, s, &other, &as_charges(pb.kind, &q_other));
         let own_chunk = source_chunk(&pb.densities, t, &own, &as_charges(pb.kind, &q_own));
         let input = target_input(t, &own);
