@@ -38,6 +38,7 @@
 //! §4.10). The several-vector and dipole bodies below keep their own loops.
 
 use super::exp::exp;
+use super::sincos::sincos;
 use super::{MAX_LANES, Simd};
 use crate::SimdScalar;
 
@@ -191,6 +192,116 @@ impl<T: SimdScalar, S: Simd<T>> PairKernel<T, S, 1, 1> for Yukawa<S::V> {
             g[2] = s.fnma(t3, d[2], g[2]);
         } else {
             *phi = s.fma(qe, rho, *phi);
+        }
+    }
+}
+
+/// Helmholtz's pair arithmetic, q e^{ikr}/r and q (ikr − 1) e^{ikr} d/r³ for a wavenumber k
+/// with Re k ≥ 0 and Im k ≥ 0 (CONVENTIONS §3.15; design §4.12; Helmholtz CH3.4b), with
+/// `QP` charge planes (1: real charges q = a; 2: complex charges q = a + i b) and two output
+/// planes, the real and the imaginary part:
+///
+/// ```text
+/// ρ = rsqrt_masked(r²);  r = r² ρ;  θ = Re(k) r;  (s, c) = sincos(θ)      arch::sincos
+/// DAMPED:   E = exp((−Im k) r);  u_a = a E,  u_b = b E                     arch::exp
+/// else:     u_a = a,  u_b = b                                              (Im k = 0)
+/// real q:     p_r = u_a c;  p_i = u_a s
+/// complex q:  p_r = fnma(u_b, s, u_a c);  p_i = fma(u_b, c, u_a s)         q e^{ikr}
+/// potential only:  φ_r = fma(p_r, ρ, φ_r);  φ_i = fma(p_i, ρ, φ_i)
+/// with gradients:  t_r = p_r ρ;  t_i = p_i ρ;  φ_r = φ_r + t_r;  φ_i = φ_i + t_i
+///                  DAMPED: f = fma(Im k, r, 1);  h_r = fma(t_i, θ, t_r f);  h_i = fnma(t_r, θ, t_i f)
+///                  else:   h_r = fma(t_i, θ, t_r);  h_i = fnma(t_r, θ, t_i)
+///                  ρ₂ = ρ ρ;  gₖ_r = fnma(h_r ρ₂, dₖ, gₖ_r);  gₖ_i = fnma(h_i ρ₂, dₖ, gₖ_i)
+/// ```
+///
+/// With f = 1 + Im(k) r, ikr − 1 = −(f − iθ), so the gradient term is −t (f − iθ) ρ² dₖ and
+/// h = t (f − iθ). A lane with r² = 0 has ρ = r = θ = 0, s = +0, c = 1 and E = 1, and adds
+/// zeros. At k = 0 with real charges the real plane takes exactly [`Laplace`]'s steps
+/// (c = 1, s = +0, h_r = t_r), and at k = iκ (Re k = 0, DAMPED) exactly [`Yukawa`]'s (u_a = q E,
+/// h_r = t_r f): the real plane is then theirs bit for bit. `DAMPED` is false only for
+/// Im k = 0; the caller chooses it once per call.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Helmholtz<V, const DAMPED: bool> {
+    /// Re k in every lane.
+    re_k: V,
+    /// Im k in every lane.
+    im_k: V,
+    /// −Im k in every lane.
+    minus_im_k: V,
+    /// 1 in every lane.
+    one: V,
+}
+
+impl<V: Copy, const DAMPED: bool> Helmholtz<V, DAMPED> {
+    /// The pair arithmetic for the wavenumber k = `re_k` + i `im_k`, both ≥ 0 (and `im_k`
+    /// zero unless `DAMPED`), on the layer `s`.
+    #[inline(always)]
+    pub(crate) fn new<T: SimdScalar, S: Simd<T, V = V>>(s: S, re_k: T, im_k: T) -> Self {
+        Self {
+            re_k: s.splat(re_k),
+            im_k: s.splat(im_k),
+            minus_im_k: s.splat(-im_k),
+            one: s.splat(T::one()),
+        }
+    }
+}
+
+impl<T: SimdScalar, S: Simd<T>, const QP: usize, const DAMPED: bool> PairKernel<T, S, QP, 2>
+    for Helmholtz<S::V, DAMPED>
+{
+    #[inline(always)]
+    fn pair<const G: bool>(
+        self,
+        s: S,
+        d: &[S::V; 3],
+        r2: S::V,
+        q: &[S::V; QP],
+        phi: &mut [S::V; 2],
+        g: &mut [[S::V; 3]; 2],
+    ) {
+        let rho = s.rsqrt_masked(r2);
+        let r = s.mul(r2, rho);
+        let theta = s.mul(self.re_k, r);
+        let (sin, cos) = sincos(s, theta);
+        let e = if DAMPED {
+            exp(s, s.mul(self.minus_im_k, r))
+        } else {
+            self.one
+        };
+        let u: [S::V; QP] = core::array::from_fn(|i| if DAMPED { s.mul(q[i], e) } else { q[i] });
+        let (pr, pi) = if QP == 1 {
+            (s.mul(u[0], cos), s.mul(u[0], sin))
+        } else {
+            let ub = u[QP - 1];
+            (
+                s.fnma(ub, sin, s.mul(u[0], cos)),
+                s.fma(ub, cos, s.mul(u[0], sin)),
+            )
+        };
+        if G {
+            let tr = s.mul(pr, rho);
+            let ti = s.mul(pi, rho);
+            phi[0] = s.add(phi[0], tr);
+            phi[1] = s.add(phi[1], ti);
+            let (hr, hi) = if DAMPED {
+                let f = s.fma(self.im_k, r, self.one);
+                (
+                    s.fma(ti, theta, s.mul(tr, f)),
+                    s.fnma(tr, theta, s.mul(ti, f)),
+                )
+            } else {
+                (s.fma(ti, theta, tr), s.fnma(tr, theta, ti))
+            };
+            let rho2 = s.mul(rho, rho);
+            let t3r = s.mul(hr, rho2);
+            let t3i = s.mul(hi, rho2);
+            for k in 0..3 {
+                g[0][k] = s.fnma(t3r, d[k], g[0][k]);
+                g[1][k] = s.fnma(t3i, d[k], g[1][k]);
+            }
+        } else {
+            phi[0] = s.fma(pr, rho, phi[0]);
+            phi[1] = s.fma(pi, rho, phi[1]);
         }
     }
 }

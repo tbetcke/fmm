@@ -3,6 +3,8 @@
 use std::marker::PhantomData;
 
 use crate::arch::AvailableIsa;
+use nd_fmm_math::Complex;
+
 use crate::{Isa, IsaUnavailable, SimdScalar};
 
 /// A P2P kernel bound to one available [`Isa`].
@@ -268,6 +270,100 @@ impl<T: SimdScalar> P2pKernel<T> {
             self.isa, kappa, sources, charges, targets, potential, gradient,
         );
     }
+
+    /// Helmholtz P2P (Helmholtz CH3.4b): adds the potential e^{ikr}/r of real or complex
+    /// point charges, and optionally its gradient, at each target (CONVENTIONS §3.15), as
+    /// `nd_fmm_ref::helmholtz::p2p::p2p` does, with the outputs in split planes.
+    ///
+    /// For each target xᵢ and each source yⱼ with r² = |xᵢ − yⱼ|² ≠ 0, r = √r²,
+    ///
+    /// φᵢ ← φᵢ + qⱼ e^{ikr} / r,  ∇φᵢ ← ∇φᵢ + qⱼ (ikr − 1) e^{ikr} (xᵢ − yⱼ) / r³,
+    ///
+    /// without the factor 1/(4π), for a wavenumber k with Re k ≥ 0 and Im k ≥ 0 in the
+    /// coordinates' units (in the FMM the leaf-scaled ones of CONVENTIONS §3.13). The
+    /// charges are [`HelmholtzCharges`]; `potential` holds 2n values for n targets, the real
+    /// plane and then the imaginary one (`potential[i]` = Re φᵢ, `potential[n + i]` = Im φᵢ),
+    /// and `gradient`, if given, likewise 2n gradients: the layout of
+    /// [`evaluate_many`](Self::evaluate_many)'s two output vectors, and of a complex vector
+    /// in CONVENTIONS §3.15's leaf chunks.
+    ///
+    /// The guarantees of [`evaluate`](Self::evaluate) hold with these terms: coincident
+    /// pairs (r² = 0) contribute nothing, each target adds its sources in input order (chunk
+    /// and target-position invariance), the results are deterministic per machine, ISA and
+    /// build, and on [`Isa::Scalar`] equal the reference's bit for bit wherever r² ≠ 0 (a
+    /// real charge taken as the complex one with Im q = 0). The vector kernels run Laplace's
+    /// loop with another pair arithmetic and two output planes (crate documentation,
+    /// "Helmholtz"); with real charges their real plane at k = 0 is
+    /// [`evaluate`](Self::evaluate)'s and at k = iκ [`evaluate_yukawa`](Self::evaluate_yukawa)'s
+    /// bit for bit. The choice between their entry points (charges, Im k > 0, gradients) is
+    /// made once per call.
+    ///
+    /// - **Accuracy.** For pairs in the kernel domain (CONVENTIONS §3.13) with
+    ///   Re(k) r ≤ 2¹⁰ and Im(k) r ≤ 64 (f32) or 512 (f64), each part of each potential term
+    ///   is within (32 + 12 |k| r) u_T of the reference's term relative to
+    ///   |qⱼ| e^{−Im(k) r} / r, and each part of each gradient component within
+    ///   (66 + 12 |k| r) u_T relative to |qⱼ| (1 + |k| r) e^{−Im(k) r} / r²
+    ///   (docs/design/simd-p2p.md §4.12 derives both; the |k| r part is the conditioning of
+    ///   e^{ikr} in r, which the reference shares), for 2⁻²⁰ ≤ |qⱼ| ≤ 1. In f32 the gradient
+    ///   contract holds for (1 + |k| r) / r³ ≤ 2¹²⁶ and r² ≤ 2⁷, [`evaluate`](Self::evaluate)'s
+    ///   range 2⁻⁸⁴ ≤ r² at k = 0. Beyond Re(k) r = 2¹⁰ the terms are unspecified (the sine
+    ///   and cosine's domain, [`crate::sincos`]); the FMM's leaf rule keeps Re(k) r below
+    ///   22 c_leaf. Beyond the Im(k) r limits the damping behaves as
+    ///   [`evaluate_yukawa`](Self::evaluate_yukawa)'s.
+    ///
+    /// # Panics
+    ///
+    /// If Re k or Im k is not finite or is negative; if the charges do not hold one value
+    /// (real) or two (complex) per source; or if `potential`, or a given `gradient`, does
+    /// not hold two values per target.
+    pub fn evaluate_helmholtz(
+        &self,
+        k: Complex<T>,
+        sources: &[[T; 3]],
+        charges: HelmholtzCharges<'_, T>,
+        targets: &[[T; 3]],
+        potential: &mut [T],
+        gradient: Option<&mut [[T; 3]]>,
+    ) {
+        assert!(
+            k.re.is_finite() && k.im.is_finite() && k.re >= T::zero() && k.im >= T::zero(),
+            "Helmholtz P2P needs a finite wavenumber k with Re k ≥ 0 and Im k ≥ 0, got {} + {}i",
+            k.re.to_f64(),
+            k.im.to_f64()
+        );
+        let (charges, complex) = match charges {
+            HelmholtzCharges::Real(q) => {
+                check_pair(sources.len(), q.len(), "sources", "charges");
+                (q, false)
+            }
+            HelmholtzCharges::Complex(q) => {
+                check_pair(2 * sources.len(), q.len(), "sources × 2", "charges");
+                (q, true)
+            }
+        };
+        check_pair(
+            2 * targets.len(),
+            potential.len(),
+            "targets × 2",
+            "potential",
+        );
+        if let Some(gradient) = gradient.as_deref() {
+            check_pair(2 * targets.len(), gradient.len(), "targets × 2", "gradient");
+        }
+        T::p2p_helmholtz(
+            self.isa, k.re, k.im, complex, sources, charges, targets, potential, gradient,
+        );
+    }
+}
+
+/// The charges of [`P2pKernel::evaluate_helmholtz`] (Helmholtz CH3.4b).
+#[derive(Clone, Copy, Debug)]
+pub enum HelmholtzCharges<'a, T> {
+    /// Real charges, one value per source.
+    Real(&'a [T]),
+    /// Complex charges, Re q and Im q of each source one after the other (point-major:
+    /// `charges[2 j]` and `charges[2 j + 1]`).
+    Complex(&'a [T]),
 }
 
 /// Panics unless the paired slices `a` and `b` have the same length, with the message

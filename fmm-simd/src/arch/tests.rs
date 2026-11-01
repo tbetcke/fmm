@@ -27,7 +27,7 @@ use super::avx2::Avx2;
 use super::avx512::Avx512;
 #[cfg(target_arch = "aarch64")]
 use super::neon::Neon;
-use super::p2p::{Yukawa, p2p_body, p2p_dipoles_body, p2p_many_body, p2p_skeleton};
+use super::p2p::{Helmholtz, Yukawa, p2p_body, p2p_dipoles_body, p2p_many_body, p2p_skeleton};
 use super::{Simd, scalar::Scalar};
 use crate::{Isa, SimdScalar};
 
@@ -714,6 +714,185 @@ fn p2p_yukawa_body_is_independent_of_k() {
         "p2p_yukawa_body_is_independent_of_k",
         f64,
         yukawa_k_invariance
+    );
+}
+
+/// The Helmholtz skeleton (Helmholtz CH3.4b) with K blocks on `s`, k = `re_k` + i `im_k`
+/// and `QP` charge planes (the first `p`'s charges, the second the same reversed), from two
+/// output planes (the real one `p`'s outputs, the imaginary one their negation).
+fn helmholtz_body<
+    T: SimdScalar,
+    S: Simd<T>,
+    const QP: usize,
+    const DAMPED: bool,
+    const K: usize,
+    const G: bool,
+>(
+    s: S,
+    re_k: T,
+    im_k: T,
+    p: &P2pProblem<T>,
+) -> (Vec<T>, Vec<[T; 3]>) {
+    let ns = p.sources.len();
+    let mut potential: Vec<T> = p
+        .potential
+        .iter()
+        .copied()
+        .chain(p.potential.iter().map(|v| -*v))
+        .collect();
+    let mut gradient: Vec<[T; 3]> = if G {
+        p.gradient
+            .iter()
+            .copied()
+            .chain(p.gradient.iter().map(|g| g.map(|c| -c)))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let charges: Vec<T> = (0..ns)
+        .flat_map(|j| [p.charges[j], p.charges[ns - 1 - j]].into_iter().take(QP))
+        .collect();
+    p2p_skeleton::<T, S, _, QP, 2, K, G>(
+        s,
+        Helmholtz::<_, DAMPED>::new(s, re_k, im_k),
+        &p.sources,
+        charges.as_chunks::<QP>().0,
+        &p.targets,
+        &mut potential,
+        &mut gradient,
+    );
+    (potential, gradient)
+}
+
+/// Every K (1, 2, 4) of the Helmholtz skeleton with `QP` charge planes and `DAMPED` gives
+/// the same bits on `p`.
+fn helmholtz_k_case<T: SimdScalar, S: Simd<T>, const QP: usize, const DAMPED: bool>(
+    s: S,
+    p: &P2pProblem<T>,
+) {
+    let (re_k, im_k) = (
+        T::from_f64(2.375),
+        T::from_f64(if DAMPED { 0.625 } else { 0.0 }),
+    );
+    let k1 = output_bits(&helmholtz_body::<T, S, QP, DAMPED, 1, false>(
+        s, re_k, im_k, p,
+    ));
+    for (k, other) in [
+        (
+            2,
+            helmholtz_body::<T, S, QP, DAMPED, 2, false>(s, re_k, im_k, p),
+        ),
+        (
+            4,
+            helmholtz_body::<T, S, QP, DAMPED, 4, false>(s, re_k, im_k, p),
+        ),
+    ] {
+        assert_eq!(
+            k1,
+            output_bits(&other),
+            "{} QP = {QP}, damped {DAMPED}, K = {k}",
+            S::ISA
+        );
+    }
+    let k1 = output_bits(&helmholtz_body::<T, S, QP, DAMPED, 1, true>(
+        s, re_k, im_k, p,
+    ));
+    for (k, other) in [
+        (
+            2,
+            helmholtz_body::<T, S, QP, DAMPED, 2, true>(s, re_k, im_k, p),
+        ),
+        (
+            4,
+            helmholtz_body::<T, S, QP, DAMPED, 4, true>(s, re_k, im_k, p),
+        ),
+    ] {
+        assert_eq!(
+            k1,
+            output_bits(&other),
+            "{} QP = {QP}, damped {DAMPED}, K = {k}, gradient",
+            S::ISA
+        );
+    }
+}
+
+/// The real plane of `out` (n targets), its bits.
+fn real_plane_bits<T: SimdScalar>(
+    (potential, gradient): &(Vec<T>, Vec<[T; 3]>),
+    n: usize,
+) -> Vec<u64> {
+    let gradient = if gradient.is_empty() {
+        &gradient[..]
+    } else {
+        &gradient[..n]
+    };
+    output_bits(&(potential[..n].to_vec(), gradient.to_vec()))
+}
+
+/// Every K (1, 2, 4) of the Helmholtz skeleton gives the same bits at every n_t from 0 to
+/// 3 · 4 · W + 1, for real and complex charges, undamped and damped, as
+/// [`p2p_k_invariance`]; and with real charges its real plane at k = 0 is [`p2p_body`]'s
+/// and at k = iκ the Yukawa skeleton's, bit for bit, on every layer.
+fn helmholtz_k_invariance<T: SimdScalar, S: Simd<T>>(s: S) {
+    let mut rng = Rng(0x5eed_000c);
+    let kappa = T::from_f64(0.875);
+    for n_t in 0..=3 * 4 * S::W + 1 {
+        let p = rng.p2p_problem::<T>(21, n_t);
+        helmholtz_k_case::<T, S, 1, false>(s, &p);
+        helmholtz_k_case::<T, S, 1, true>(s, &p);
+        helmholtz_k_case::<T, S, 2, false>(s, &p);
+        helmholtz_k_case::<T, S, 2, true>(s, &p);
+        let zero = T::zero();
+        assert_eq!(
+            real_plane_bits(
+                &helmholtz_body::<T, S, 1, false, 2, false>(s, zero, zero, &p),
+                n_t
+            ),
+            output_bits(&body::<T, S, 2, false>(s, &p)),
+            "{} k = 0",
+            S::ISA
+        );
+        assert_eq!(
+            real_plane_bits(
+                &helmholtz_body::<T, S, 1, false, 2, true>(s, zero, zero, &p),
+                n_t
+            ),
+            output_bits(&body::<T, S, 2, true>(s, &p)),
+            "{} k = 0, gradient",
+            S::ISA
+        );
+        assert_eq!(
+            real_plane_bits(
+                &helmholtz_body::<T, S, 1, true, 2, false>(s, zero, kappa, &p),
+                n_t
+            ),
+            output_bits(&yukawa_body::<T, S, 2, false>(s, kappa, &p)),
+            "{} k = iκ",
+            S::ISA
+        );
+        assert_eq!(
+            real_plane_bits(
+                &helmholtz_body::<T, S, 1, true, 2, true>(s, zero, kappa, &p),
+                n_t
+            ),
+            output_bits(&yukawa_body::<T, S, 2, true>(s, kappa, &p)),
+            "{} k = iκ, gradient",
+            S::ISA
+        );
+    }
+}
+
+#[test]
+fn p2p_helmholtz_body_is_independent_of_k() {
+    on_every_isa!(
+        "p2p_helmholtz_body_is_independent_of_k",
+        f32,
+        helmholtz_k_invariance
+    );
+    on_every_isa!(
+        "p2p_helmholtz_body_is_independent_of_k",
+        f64,
+        helmholtz_k_invariance
     );
 }
 

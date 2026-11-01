@@ -10,7 +10,7 @@
 //! result is the reference's bit for bit. A pair with r² = 0 is skipped
 //! (CONVENTIONS §3.13, "Fast kernels"), where the reference skips x == y.
 
-use nd_fmm_math::RealScalar;
+use nd_fmm_math::{Complex, RealScalar};
 
 use super::Simd;
 use crate::{Isa, SimdScalar};
@@ -246,6 +246,89 @@ pub(crate) fn p2p_yukawa<T: RealScalar>(
                     for (gk, dk) in g.iter_mut().zip(d) {
                         *gk = *gk + qg * dk;
                     }
+                }
+            }
+        }
+    }
+}
+
+/// Helmholtz P2P with the scalar path (`P2pKernel::evaluate_helmholtz`; Helmholtz CH3.4b),
+/// with lengths and k already checked by the caller: the formulas and operation order of
+/// `nd_fmm_ref::helmholtz::p2p::p2p` in [`Complex`] arithmetic, d = x − y,
+/// r² = (d₀² + d₁²) + d₂², r = √r², e = e^{−(Im(k) r)} (cos(Re(k) r) + i sin(Re(k) r)),
+/// then φ ← φ + (q e) / r and (∇φ)ₖ ← (∇φ)ₖ + (q (((−(Im(k) r) − 1) + i Re(k) r) e / (r² r))) dₖ,
+/// a real charge as the complex one with Im q = 0, so on pairs with r² ≠ 0 the result is the
+/// reference's bit for bit. A pair with r² = 0 is skipped. `charges` holds Re q and Im q
+/// of each source if `complex`, else q; `potential` and `gradient` the real plane, then the
+/// imaginary one.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the shape of `P2pKernel::evaluate_helmholtz`"
+)]
+pub(crate) fn p2p_helmholtz<T: RealScalar>(
+    re_k: T,
+    im_k: T,
+    complex: bool,
+    sources: &[[T; 3]],
+    charges: &[T],
+    targets: &[[T; 3]],
+    potential: &mut [T],
+    gradient: Option<&mut [[T; 3]]>,
+) {
+    let n = targets.len();
+    let charge = |j: usize| {
+        if complex {
+            Complex::new(charges[2 * j], charges[2 * j + 1])
+        } else {
+            Complex::new(charges[j], T::zero())
+        }
+    };
+    // The reference's `Term`: d, r, r² r, e^{ikr} and ikr − 1.
+    let term = |x: [T; 3], y: [T; 3]| {
+        let (d, r2) = separation(x, y);
+        if r2 == T::zero() {
+            return None;
+        }
+        let r = r2.sqrt();
+        let damping = -(im_k * r);
+        let phase = re_k * r;
+        let decay = damping.exp();
+        let e = Complex::new(decay * phase.cos(), decay * phase.sin());
+        let factor = Complex::new(damping - T::one(), phase);
+        Some((d, r, r2 * r, e, factor))
+    };
+    let (re, im) = potential.split_at_mut(n);
+    match gradient {
+        None => {
+            for (i, &x) in targets.iter().enumerate() {
+                let mut phi = Complex::new(re[i], im[i]);
+                for (j, &y) in sources.iter().enumerate() {
+                    if let Some((_, r, _, e, _)) = term(x, y) {
+                        phi = phi + charge(j) * e / r;
+                    }
+                }
+                (re[i], im[i]) = (phi.re, phi.im);
+            }
+        }
+        Some(gradient) => {
+            let (gre, gim) = gradient.split_at_mut(n);
+            for (i, &x) in targets.iter().enumerate() {
+                let mut phi = Complex::new(re[i], im[i]);
+                let mut g: [Complex<T>; 3] =
+                    core::array::from_fn(|axis| Complex::new(gre[i][axis], gim[i][axis]));
+                for (j, &y) in sources.iter().enumerate() {
+                    if let Some((d, r, r3, e, factor)) = term(x, y) {
+                        let q = charge(j);
+                        phi = phi + q * e / r;
+                        let qg = q * (factor * e / r3);
+                        for (gk, dk) in g.iter_mut().zip(d) {
+                            *gk = *gk + qg * dk;
+                        }
+                    }
+                }
+                (re[i], im[i]) = (phi.re, phi.im);
+                for axis in 0..3 {
+                    (gre[i][axis], gim[i][axis]) = (g[axis].re, g[axis].im);
                 }
             }
         }
