@@ -176,7 +176,9 @@ All on every ISA the machine offers (`common::isas`, printing those it cannot ru
 On the M6 (macOS, aarch64; NEON and scalar):
 - `cargo fmt --all -- --check`, `cargo clippy -- -D warnings`, `cargo clippy --examples --
   -D warnings`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo doc
-  --no-deps`: passed.
+  --no-deps`: passed. `RUST_MIN_STACK=8388608 cargo test` (1,080 passed, 81 ignored) and
+  `cargo test --workspace` (1,161 passed, 99 ignored), with `HWLOC_COMPONENTS=-darwin`:
+  passed (run before the self-review's test edits, which `nd-fmm-simd`'s tests rechecked).
 - `nd-fmm-simd`: `cargo clippy -p nd-fmm-simd --all-targets -- -D warnings` and with
   `--target x86_64-apple-darwin`; `cargo test -p nd-fmm-simd -- --show-output` (155 passed,
   17 ignored); `cargo test -p nd-fmm-simd --release -- --ignored --show-output` (17
