@@ -12,10 +12,11 @@
 //! - 4 threads bit for bit one (2 and 4 in release builds);
 //! - the operator pair by pair (`PerPair`) bit for bit its level calls;
 //! - on several ranks, the one-rank FMM over the union of every rank's points and charges
-//!   in rank order (`SimpleCommunicator::self_comm()` on rank 0, broadcast) bit for bit.
+//!   in rank order (`SimpleCommunicator::self_comm()`, on every rank) bit for bit.
 //!
-//! Then vectors (vector v of an FMM of two bit for bit the one-vector FMM), real charges
-//! against complex ones with Im q = 0, and the errors, each on every rank or on none.
+//! Then vectors (vector v of an FMM of two bit for bit the one-vector FMM, of complex and
+//! of real charges), real charges against complex ones with Im q = 0, and the errors, each
+//! on every rank or on none. One scenario leaves rank 0 without points.
 //!
 //! Every comparison is agreed by an all-reduce, so a failure fails every rank. Run by hand
 //! at several ranks under a timeout, e.g. on macOS
@@ -30,7 +31,7 @@ use mpi::Threading;
 use mpi::collective::SystemOperation;
 use mpi::datatype::PartitionMut;
 use mpi::topology::SimpleCommunicator;
-use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence, Root};
+use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, Degrees, DensityError, HelmholtzFmm, HelmholtzFmmBuilder,
     HelmholtzFmmError, OperatorError, Output, Wavenumber,
@@ -107,6 +108,24 @@ fn values(n: usize, seed: u64) -> Vec<f64> {
 fn share<V: Copy>(items: &[V], comm: &SimpleCommunicator) -> Vec<V> {
     let (rank, size) = (comm.rank() as usize, comm.size() as usize);
     items.iter().skip(rank).step_by(size).copied().collect()
+}
+
+/// This rank's share of `items`, with `empty`: on several ranks, rank 0 has none and the
+/// other ranks share every item; otherwise [`share`].
+fn share_of<V: Copy>(items: &[V], empty: bool, comm: &SimpleCommunicator) -> Vec<V> {
+    let (rank, size) = (comm.rank() as usize, comm.size() as usize);
+    if !empty || size == 1 {
+        share(items, comm)
+    } else if rank == 0 {
+        Vec::new()
+    } else {
+        items
+            .iter()
+            .skip(rank - 1)
+            .step_by(size - 1)
+            .copied()
+            .collect()
+    }
 }
 
 /// The values of every rank's `local`, in rank order, and the position of this rank's
@@ -189,6 +208,8 @@ struct Scenario {
     gradients: bool,
     /// Whether the scenario runs in debug builds (each takes a few seconds there).
     debug: bool,
+    /// Whether rank 0 passes no point on several ranks.
+    empty_rank0: bool,
 }
 
 /// The inputs of a scenario on this rank.
@@ -205,14 +226,15 @@ impl Inputs {
         let (ns, nt) = scenario.n;
         let all_sources = points(scenario.layout, ns, 11);
         let all_targets = nt.map(|nt| points(scenario.layout, nt, 12));
-        let sources = share(&all_sources, comm);
-        let targets = share(all_targets.as_ref().unwrap_or(&all_sources), comm);
+        let empty = scenario.empty_rank0;
+        let sources = share_of(&all_sources, empty, comm);
+        let targets = share_of(all_targets.as_ref().unwrap_or(&all_sources), empty, comm);
         let charges = (0..m as u64)
             .map(|v| {
-                let re = share(&values(ns, 100 + 2 * v), comm);
+                let re = share_of(&values(ns, 100 + 2 * v), empty, comm);
                 let im = match scenario.charges {
                     ChargeKind::Real => vec![0.0; re.len()],
-                    ChargeKind::Complex => share(&values(ns, 101 + 2 * v), comm),
+                    ChargeKind::Complex => share_of(&values(ns, 101 + 2 * v), empty, comm),
                 };
                 (re, im)
             })
@@ -317,8 +339,8 @@ fn errors(
 }
 
 /// On several ranks, the one-rank FMM of `builder` over the union of every rank's inputs
-/// in rank order, built by rank 0 on `self_comm`, whose output at each rank's targets must
-/// equal `output` bit for bit.
+/// in rank order, built by every rank on `self_comm` (so that a failure there fails every
+/// rank), whose output at each rank's targets must equal `output` bit for bit.
 fn check_one_rank(
     what: &str,
     builder: &HelmholtzFmmBuilder,
@@ -342,17 +364,13 @@ fn check_one_rank(
         targets,
         charges,
     };
+    // Every rank builds the reference, so that a failure there fails every rank.
+    let one = SimpleCommunicator::self_comm();
+    let (fmm, all) = run(&builder.clone().threads(1), &union_inputs, kind, &one);
+    let reference = bits(&all);
     let n = union_inputs.targets.len();
-    let columns = output.potential.len() / inputs.targets.len().max(1);
+    let columns = fmm.densities().output_columns();
     let gradients = output.gradient.is_some();
-    let per_column = if gradients { 4 } else { 1 };
-    let mut reference = vec![0u64; per_column * columns * n];
-    if comm.rank() == 0 {
-        let one = SimpleCommunicator::self_comm();
-        let (_, all) = run(&builder.clone().threads(1), &union_inputs, kind, &one);
-        reference.copy_from_slice(&bits(&all));
-    }
-    comm.process_at_rank(0).broadcast_into(&mut reference[..]);
     // This rank's targets of every column, φ then ∇φ.
     let local = inputs.targets.len();
     let (phi, grad) = reference.split_at(columns * n);
@@ -454,7 +472,8 @@ fn check(scenario: &Scenario, comm: &SimpleCommunicator) {
     }
 }
 
-/// Two vectors: each bit for bit its one-vector FMM; and a reused output.
+/// Two vectors: each bit for bit its one-vector FMM, the second against its direct sum;
+/// and a reused output.
 fn check_vectors(scenario: &Scenario, comm: &SimpleCommunicator) {
     let inputs = Inputs::new(scenario, 2, comm);
     let builder = builder(scenario);
@@ -488,6 +507,13 @@ fn check_vectors(scenario: &Scenario, comm: &SimpleCommunicator) {
             scenario.name
         );
     }
+    // Vector 1 against its own direct sum.
+    let (phi, grad) = errors(scenario, &inputs, &both, 1, comm);
+    assert!(
+        phi < scenario.bound && grad < scenario.bound,
+        "{}: vector 1 of two: φ {phi:.2e}, ∇φ {grad:.2e} against the direct sum",
+        scenario.name
+    );
     // A reused output of another path is replaced; one of this path is rewritten.
     let mut reused = Output::<f64>::new(
         &nd_fmm_exec::helmholtz::Densities::new(
@@ -548,7 +574,7 @@ fn check_real_charges(scenario: &Scenario, comm: &SimpleCommunicator) {
 /// The errors, each on every rank alike (or, for one rank's input, on that rank and
 /// `OtherRank` elsewhere).
 fn check_errors(comm: &SimpleCommunicator) {
-    let scenario = &scenarios()[0];
+    let scenario = &scenarios()[1];
     let inputs = Inputs::new(scenario, 1, comm);
     let ok = builder(scenario);
     let rank = comm.rank();
@@ -574,6 +600,38 @@ fn check_errors(comm: &SimpleCommunicator) {
         matches!(error, Some(HelmholtzFmmError::Degree(_))),
         "rank {rank}: a tolerance of 2: {error:?}"
     );
+
+    let error = builder(scenario)
+        .c_leaf(0.0)
+        .build::<f64, _>(&inputs.sources, &inputs.targets, comm)
+        .err();
+    assert!(
+        matches!(error, Some(HelmholtzFmmError::LeafWidth(_))),
+        "rank {rank}: c_leaf = 0: {error:?}"
+    );
+
+    // A point that is not finite on rank 0 only: its error there, `OtherRank` elsewhere.
+    let mut bad = inputs.sources.clone();
+    if rank == 0 {
+        bad[0][1] = f64::NAN;
+    }
+    let error = ok.build::<f64, _>(&bad, &inputs.targets, comm).err();
+    if rank == 0 {
+        assert!(
+            matches!(
+                error,
+                Some(HelmholtzFmmError::Build(
+                    nd_fmm_exec::fmm::FmmError::NonFinitePoint { .. }
+                ))
+            ),
+            "rank 0: a point that is not finite: {error:?}"
+        );
+    } else {
+        assert!(
+            matches!(error, Some(HelmholtzFmmError::OtherRank)),
+            "rank {rank}: another rank's point that is not finite: {error:?}"
+        );
+    }
 
     let error = ok.build::<f64, _>(&[], &[], comm).err();
     assert!(
@@ -643,6 +701,18 @@ fn check_errors(comm: &SimpleCommunicator) {
 fn scenarios() -> Vec<Scenario> {
     vec![
         Scenario {
+            name: "cube, kD = 20 + 2i, ε = 1e-3, complex charges, gradients, rank 0 empty",
+            layout: Layout::Cube,
+            n: (1000, None),
+            k: (20.0, 2.0),
+            degrees: Degrees::Tolerance(1e-3),
+            bound: ERROR_FACTOR * 1e-3,
+            charges: ChargeKind::Complex,
+            gradients: true,
+            debug: true,
+            empty_rank0: true,
+        },
+        Scenario {
             name: "cube, kD = 1, ε = 1e-3, complex charges, gradients",
             layout: Layout::Cube,
             n: (1500, None),
@@ -652,6 +722,7 @@ fn scenarios() -> Vec<Scenario> {
             charges: ChargeKind::Complex,
             gradients: true,
             debug: true,
+            empty_rank0: false,
         },
         Scenario {
             name: "clusters, kD = 20, p = 8, real charges, separate targets",
@@ -663,6 +734,7 @@ fn scenarios() -> Vec<Scenario> {
             charges: ChargeKind::Real,
             gradients: false,
             debug: true,
+            empty_rank0: false,
         },
         Scenario {
             name: "cube, kD = 20 + 2i, p = 8, complex charges, gradients",
@@ -674,6 +746,7 @@ fn scenarios() -> Vec<Scenario> {
             charges: ChargeKind::Complex,
             gradients: true,
             debug: true,
+            empty_rank0: false,
         },
         Scenario {
             name: "cube, kD = 20, ε = 1e-6, complex charges, gradients",
@@ -685,6 +758,7 @@ fn scenarios() -> Vec<Scenario> {
             charges: ChargeKind::Complex,
             gradients: true,
             debug: false,
+            empty_rank0: false,
         },
         Scenario {
             name: "clusters, kD = 100, ε = 1e-6, complex charges",
@@ -696,6 +770,7 @@ fn scenarios() -> Vec<Scenario> {
             charges: ChargeKind::Complex,
             gradients: false,
             debug: false,
+            empty_rank0: false,
         },
     ]
 }
@@ -720,10 +795,11 @@ fn helmholtz_fmm() {
         }
         check(&scenario, &comm);
     }
-    let first = &scenarios()[0];
-    check_vectors(first, &comm);
-    check_real_charges(&scenarios()[1], &comm);
+    // Two vectors of complex and of real charges.
+    check_vectors(&scenarios()[1], &comm);
+    check_vectors(&scenarios()[2], &comm);
     check_real_charges(&scenarios()[2], &comm);
+    check_real_charges(&scenarios()[3], &comm);
     check_errors(&comm);
     if comm.rank() == 0 {
         println!(

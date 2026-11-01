@@ -222,10 +222,11 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   `FmmBuilder::build` (`pipeline::{domain, octree}`, `Points::{route, load_coordinates}`)
   and the evaluation's helpers (`agree`, the checks, `LeafRanges`, `OutputOrder`, the
   charge load, `pack_charges`, `gather_output`, `unpack_output_many` and the rest of the
-  moves), moved verbatim from `fmm.rs`; `Fmm` holds a `Points`. It is on Laplace's path:
-  a change there keeps `Fmm`'s outputs bit for bit (constraint 1, as for `driver.rs`).
-  Keep it operator-independent: anything that names Laplace's operator, strategy, cost
-  model or device stays in `fmm.rs`.
+  moves; the dipole and device helpers of that block moved with it), verbatim from
+  `fmm.rs`; `Fmm` holds a `Points`. It is on Laplace's path: a change there keeps `Fmm`'s
+  outputs bit for bit (constraint 1, as for `driver.rs`). Keep its build steps
+  operator-independent: what names Laplace's operator, strategy, cost model or device
+  stays in `fmm.rs`. The moved helpers' unit tests stayed in `fmm.rs`'s `mod tests`.
 - The Helmholtz FMM (Helmholtz CH3.1b; `helmholtz::fmm`, its module docs):
   `HelmholtzFmmBuilder` (k, `Degrees`, `ChargeKind`, vectors, gradients, threads, domain,
   points per leaf, `max_level`, the block budget, c_leaf) and `HelmholtzFmm` on any number
@@ -240,8 +241,8 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   (its own MPI test at `Funneled`, in CI's MPI list) checks it against the direct sum, at 1,
   2 and 4 threads (4 only in debug), pair by pair, against the reference pass and the
   one-rank FMM bit for bit, two vectors, real charges against complex ones with Im q = 0,
-  and the errors; ε = 10⁻⁶ and kD = 100 in release only (about 21 s at one rank in debug on
-  the M6).
+  and the errors, with one scenario that leaves rank 0 empty; ε = 10⁻⁶ and kD = 100 in
+  release only (about 36 s at one rank in debug on the M6).
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread
   count. No `unsafe`, no atomics, no global pool; per-thread scratch created at
@@ -353,10 +354,10 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
     every structural task (T3–T8): it is the oracle where no one-rank run fits, and its
     at-scale form is `nd_fmm_validate::scaling::invariance`.
   - CI runs `tests/mpi_exec.rs`, `tests/mpi_threading.rs`, `tests/invariance.rs` and
-    `tests/helmholtz_fmm.rs` in debug at 2 and 4 ranks on every pull request (the `run-tests-mpi` job, root
-    `CLAUDE.md`, "Checks";
-    `mpi_threading` checks there that its `MpiThreading` error, carried by step 1's
-    agreement all-reduce, reaches every rank). 8 ranks and the ignored tests
+    `tests/helmholtz_fmm.rs` in debug at 2 and 4 ranks on every pull request (the
+    `run-tests-mpi` job, root `CLAUDE.md`, "Checks"; `mpi_threading` checks there that
+    its `MpiThreading` error, carried by step 1's agreement all-reduce, reaches every
+    rank). 8 ranks and the ignored tests
     (`accuracy`, `adaptive`, `multi_rank`, the device executables) stay by hand, on the
     M3 Max and on locust, under an external timeout; `multi_rank` at 1, 2, 4 and 8 ranks
     in release (its module docs give the command).
