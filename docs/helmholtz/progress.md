@@ -1250,9 +1250,10 @@ request, using this template:
   were taken. Not run: the MPI list (no change to `nd-octree`, `nd-fmm-plan` or
   `nd-fmm-exec`); locust and Kathleen (none in the plan); the licence check (no
   dependency changed).
-- Decisions: none taken. Questions for sign-off (the PR): 1. "against the direct sum"
-  read as relative ℓ2 errors of φ and ∇φ at most ε with S7's degrees at ε; 2. W3 at
-  kD = 100, ε = 10⁻⁸ left out on the M6's memory (or run on Kathleen in CH3.3).
+- Decisions: questions for sign-off (the PR): 1. "against the direct sum" read as
+  relative ℓ2 errors of φ and ∇φ at most ε with S7's degrees at ε; 2. W3 at kD = 100,
+  ε = 10⁻⁸ left out on the M6's memory (or run on Kathleen in CH3.3). Both signed off
+  2026-11-01, the user: "1 and 2 as recommended".
 - Laplace: not touched (no compiled change outside `nd-fmm-validate`).
 - Follow-ups:
   - CH3.3: S7's closed form leaves errors 3 × 10³ to 6 × 10⁶ below ε on low-frequency

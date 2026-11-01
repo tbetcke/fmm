@@ -120,5 +120,9 @@ None.
 
 ## Open questions
 
-None blocking. For sign-off in the PR: the reading of "against the direct sum" as errors
-at most ε at S7's degrees, and W3 at kD = 100 at 10⁻⁸ left out.
+None. The PR's two questions were signed off on 2026-11-01, the user: "1 and 2 as
+recommended":
+1. "against the direct sum" read as relative ℓ2 errors of φ and ∇φ at most ε at S7's
+   degrees at ε;
+2. W3 at kD = 100 at 10⁻⁸ left out on the M6's memory, the gap accepted (the
+   recommendation's alternative: a Kathleen run within CH3.3).
