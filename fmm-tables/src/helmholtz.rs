@@ -29,6 +29,14 @@
 //! `rcr::m2m_table(p_{l+1}, p_l, child)` and `rcr::l2l_table(p_l, p_{l+1}, child)` with
 //! child = `Level::new(k̂_{l+1}, 1)` and parent = `Level::new(k̂_{l+1}, 2)`.
 //!
+//! In its own units a box of level l represents r_l φ̃, φ̃ the potential with the factor 4π
+//! of CONVENTIONS §3.15 ("Where the factors go"), as a leaf's chunk does (CONVENTIONS
+//! §3.13): a multipole by 4π ik̂_l Σ M̂ … hₙ, whose factor k̂_l = k r_l carries the change of
+//! units, and a local by Σ L̂ … jₙ, which has no such factor. `rcr` translates in one
+//! system of units, so M2M and M2L carry over unchanged, and L2L takes the factor
+//! r_{l+1} / r_l = ½ of the change from the parent's units to the child's: the L2L tables
+//! are ½ times `rcr`'s, exactly (a power of two).
+//!
 //! # The stored form, folded in
 //!
 //! Each table holds per order m the full coefficient of the coaxial step from degree n to
@@ -37,7 +45,7 @@
 //!
 //! ```text
 //! M2M  Ê_{n′n} · (s_c/s_P)ⁿ s_P^{n−n′}       (Ê of rcr::m2m_table)
-//! L2L  Ê_{n′n} · (s_c/s_P)^{n′} s_P^{n′−n}    (Ê of rcr::l2l_table)
+//! L2L  Ê_{n′n} · (s_c/s_P)^{n′} s_P^{n′−n} · ½   (Ê of rcr::l2l_table; ½ above)
 //! M2L  Ê_{n′n} · 4π ik e^{2β − Im(k)|t|}     (Ê of rcr::m2l_table)
 //! ```
 //!
@@ -54,7 +62,7 @@
 //! distinct |t| of the 316 shifts (at least the 15 values of |d|²), one y-block set per
 //! distinct (cos θ, sin θ), and the azimuth of each shift per offset. So every application
 //! uses exactly the angles, coaxial table and factor of `rcr` at the same shift, and in f64
-//! gives `rcr`'s bits.
+//! gives `rcr`'s bits (L2L: ½ `rcr`'s, exactly).
 //!
 //! # Blocks and the budget
 //!
@@ -276,7 +284,8 @@ impl<T: RealScalar> HelmholtzTables<T> {
                         m2m.get(m, n_out, n_in) * power_ratio(sc, n_in, sp, n_out)
                     });
                     let down = Shift::new(p_parent, p_child, real_shifts, |m, n_out, n_in| {
-                        l2l.get(m, n_out, n_in) * power_ratio(sc, n_out, sp, n_in)
+                        // ½: the change of units from the parent's to the child's.
+                        l2l.get(m, n_out, n_in) * power_ratio(sc, n_out, sp, n_in) * 0.5
                     });
                     let degree = p_parent.max(p_child);
                     let mut scratch = BlockScratch::new(degree);

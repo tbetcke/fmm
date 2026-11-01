@@ -98,7 +98,8 @@ fn check_m2l(tables: &HelmholtzTables<f64>, level: usize, offsets: impl Iterator
 }
 
 /// M2M and L2L of every octant between `level` and `level` + 1 against `rcr`, in the
-/// child's units. Complex k: bit for bit. Real k: the real shifts against `rcr`'s complex
+/// child's units; L2L against ½ `rcr`'s (the change of units, module docs of
+/// `nd_fmm_tables::helmholtz`). Complex k: bit for bit. Real k: the real shifts against `rcr`'s complex
 /// step in the FMM-weighted measure, returning the largest error ([`compare`]).
 fn check_shifts(tables: &HelmholtzTables<f64>, level: usize) -> f64 {
     let (p_parent, p_child) = (tables.degree(level), tables.degree(level + 1));
@@ -135,15 +136,17 @@ fn check_shifts(tables: &HelmholtzTables<f64>, level: usize) -> f64 {
             worst = worst.max(compare(
                 &got,
                 &expected,
+                0.25,
                 &weights(&parent_level, true, p_parent),
                 tables.real_shifts(),
                 "M2M",
             ));
 
             let x = input(p_parent, planes, 8 + o as u64);
-            let mut got = vec![0.25; planes * len_child];
+            // From zero, so that ½ rcr's output is exact.
+            let mut got = vec![0.0; planes * len_child];
             tables.l2l(level + 1, o, &x, &mut got, planes, 1, &mut scratch);
-            let mut expected = vec![0.25; 2 * len_child];
+            let mut expected = vec![0.0; 2 * len_child];
             rcr::l2l(
                 p_parent,
                 p_child,
@@ -156,9 +159,11 @@ fn check_shifts(tables: &HelmholtzTables<f64>, level: usize) -> f64 {
                 &if planes == 2 { x } else { widened(&x) },
                 &mut expected,
             );
+            let half: Vec<f64> = expected.iter().map(|v| 0.5 * v).collect();
             worst = worst.max(compare(
                 &got,
-                &expected,
+                &half,
+                0.0,
                 &weights(&child_level, false, p_child),
                 tables.real_shifts(),
                 "L2L",
@@ -168,18 +173,26 @@ fn check_shifts(tables: &HelmholtzTables<f64>, level: usize) -> f64 {
     worst
 }
 
-/// Complex shifts: bit for bit. Real shifts: the FMM-weighted error of the reference tests
+/// The outputs started at `initial`. Complex shifts: bit for bit. Real shifts: the
+/// FMM-weighted error of the reference tests
 /// (`nd-fmm-ref`'s `tests/helmholtz/translation_common.rs`), ‖got − rcr‖_w / ‖rcr‖_w over
 /// both planes, the one-plane result's imaginary plane taken as zero: per-entry relative
 /// accuracy is not a property of the projection's tables (`nd_fmm_math::coaxial`, "Tested
 /// ranges"), whose imaginary parts for real k are rounding, not zero.
-fn compare(got: &[f64], expected: &[f64], weights: &[f64], real: bool, what: &str) -> f64 {
+fn compare(
+    got: &[f64],
+    expected: &[f64],
+    initial: f64,
+    weights: &[f64],
+    real: bool,
+    what: &str,
+) -> f64 {
     if !real {
         assert_same(got, expected, what);
         return 0.0;
     }
-    let expected: Vec<f64> = expected.iter().map(|v| v - 0.25).collect();
-    let mut got: Vec<f64> = got.iter().map(|v| v - 0.25).collect();
+    let expected: Vec<f64> = expected.iter().map(|v| v - initial).collect();
+    let mut got: Vec<f64> = got.iter().map(|v| v - initial).collect();
     got.resize(expected.len(), 0.0);
     let diff: Vec<f64> = got.iter().zip(&expected).map(|(a, b)| a - b).collect();
     weighted_norm(weights, &diff) / weighted_norm(weights, &expected)

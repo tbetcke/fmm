@@ -20,6 +20,13 @@
 //! leaf chunks and expansion sizes, the complex charges in and the split potentials and
 //! gradients out, with the leaf's own P2M and L2P.
 //!
+//! [`Degrees`] and [`degree()`] (Helmholtz CH3.1a, submodule [`degree`](mod@degree)) give the
+//! degree of each level: S7's closed form at a tolerance, or degrees named per level.
+//! [`HelmholtzOperator`] (CH3.1a, submodule [`operator`]) is the operator of the plan for
+//! real and complex k: RCR on every level with the per-level tables of
+//! `nd_fmm_tables::helmholtz`, the leaf operators of [`Densities`] and `nd-fmm-ref`, and
+//! the reference P2P.
+//!
 //! The module is MPI-free.
 //!
 //! ```
@@ -39,7 +46,9 @@
 //! assert_eq!(min_leaf_level(&yukawa, &domain, C_LEAF), 0);
 //! ```
 
+pub mod degree;
 pub mod densities;
+pub mod operator;
 
 use std::f64::consts::TAU;
 
@@ -48,7 +57,9 @@ use thiserror::Error;
 
 use crate::geometry::Domain;
 
+pub use degree::{DegreeError, Degrees, degree};
 pub use densities::{ChargeKind, Charges, Densities, DensityError, LeafScratch, Output, Split};
+pub use operator::{HelmholtzOperator, OperatorError};
 
 /// The deepest level of a Morton key, 16 (CONVENTIONS §3.12).
 const DEEPEST: usize = DEEPEST_LEVEL as usize;
