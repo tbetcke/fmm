@@ -49,8 +49,17 @@ pub(crate) const PARENT_GRAIN: usize = 64;
 /// M2M, M2L, P2L and L2L (the children of M2M one below it, the parents of L2L one above),
 /// and the leaves' level for L2P, M2P and P2P (the W boxes of M2P one below it). The
 /// source leaves of P2L and P2P may lie on other levels; the drivers find them by their
-/// keys, and a kernel that needs their level takes it from the frame's radius. Box blocks hold
-/// [`vectors`](Self::vectors) expansions, one after the other.
+/// keys, and a kernel that needs their level takes it from the frame's radius.
+///
+/// A box block's layout is the kernel's own: the target-by-target drivers take each block's
+/// size from the plan's stores (the operator's `multipole_size(level)` and
+/// `local_size(level)`, which may differ) and pass whole blocks to the kernel. So complex
+/// expansions in two planes, multipoles and locals of different sizes, and real shifts
+/// applied to both planes all live inside the kernel's bodies (Helmholtz CH3.5,
+/// docs/helmholtz/tasks/CH3.5.md). Only the batched M2L ([`m2l_block`]) reads a layout:
+/// Laplace's, with [`vectors`](Self::vectors) expansions of the table's n values per box,
+/// one after the other, multipole and local alike, and square n × n tables. A kernel with
+/// any other layout returns `None` from [`batched_m2l`](Self::batched_m2l).
 pub(crate) trait HostKernel<T: SimdScalar>: Sync {
     /// One thread's scratch set: everything a target body writes besides its output.
     type Scratch: Send;
@@ -139,7 +148,9 @@ pub(crate) trait HostKernel<T: SimdScalar>: Sync {
     /// M2L target by target.
     fn batched_m2l(&self, level: usize) -> Option<(&MatrixSet<T>, &MatrixKernel<T>)>;
 
-    /// The batched M2L's column lists and packing buffer in `scratch`.
+    /// The batched M2L's column lists and packing buffer in `scratch`; never called for a
+    /// kernel whose [`batched_m2l`](Self::batched_m2l) is `None` on every level, which may
+    /// keep an empty [`Columns`] here.
     fn columns(scratch: &mut Self::Scratch) -> &mut Columns<T>;
 }
 

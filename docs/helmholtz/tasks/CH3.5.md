@@ -52,9 +52,13 @@ What the proposal's three items need from the drivers, item by item:
    the driver. Nothing in the drivers changes.
 3. **The epilogue.** Proposal §6.2 places it in Dense and Batched. There the products with
    [A_r; A_i] give four real products per pair, which are accumulated over a target's
-   offsets and combined once per target. Target by target (Dense, Rotation), a kernel's
-   `m2l` body applies the complex step per pair, into the target's two planes, and needs
-   no hook. Only the batched block (`driver::m2l_block`) shares the arithmetic across
+   offsets and combined once per target. In Rotation the complex step is the (S|R)
+   coaxial step of one pair, inside the kernel's `m2l` body, and needs no hook.
+   Target-by-target Dense can do the same per pair (L_r += A_r M_r − A_i M_i, and
+   likewise L_i), with no epilogue. That is a departure from §6.2's per-target epilogue
+   for Dense. Keeping that epilogue would need a per-target finish hook in
+   `driver::m2l_target`, which has none today. That choice is CH3.2's, beside the
+   batched block. Only the batched block (`driver::m2l_block`) shares the arithmetic across
    pairs, and it is the one driver code that assumes Laplace's layout. It takes square
    n × n tables (`MatrixSet::n`) and m expansions of n values per box, multipole and
    local alike (the column offsets `(s m + v) n`, the block end `locals.len() / (m n)`).
@@ -85,10 +89,14 @@ No public API, manifest, convention, table, layout or `nd-fmm-plan` change.
 ## Tests that prove it
 
 No new test: no code changes. The evidence for the finding:
-- the plan's tests with differing and level-dependent multipole and local sizes (above);
+- the plan's tests with differing and level-dependent multipole and local sizes (above).
+  They prove the stores and the exchanges, not `driver.rs`;
+- reading `driver.rs`: every target body reads its input through `LevelSlice::chunk` of
+  the input's own level and writes the chunk the driver hands it;
 - CH3.1, whose Helmholtz kernel runs on these drivers and is checked against the direct
-  sum (its acceptance). If CH3.1 finds a driver change it needs, the change is made there
-  under constraint 1.
+  sum (its acceptance). `Kernels` is the only `HostKernel` until then, so `driver.rs`
+  stays untested with unequal sizes until CH3.1. If CH3.1 finds a driver change it
+  needs, the change is made there under constraint 1.
 
 ## Checks
 
@@ -103,10 +111,16 @@ None.
 ## Constraints and risks
 
 - Constraint 1: Laplace untouched. Its compiled code is unchanged (comments only).
-- Risk: CH3.1 meets a driver assumption missed here. For example, P2L, M2P and P2P give
-  the kernel the target's level and a frame. A Helmholtz body needs the source leaf's
-  radius for k̂ = k r_s, and it takes that from the frame's radius r̂, as the trait's docs
-  say. Any such change is CH3.1's, under constraint 1.
+- Risk: CH3.1 meets a driver assumption missed here. Any such change is CH3.1's, under
+  constraint 1. What CH3.1's kernel must get right with the trait as it is:
+  - `nd_fmm_ref::helmholtz::leaf::{p2l, m2p}` assert that the frame's radius is the
+    `Level`'s half-width (`check_frame`), so the kernel passes a `Level` in the frame's
+    units.
+  - M2P's W boxes lie one level below the call's `level`. P2L's X leaves lie one level
+    above it. P2P maps the sources into the target leaf's units
+    (`geometry::relative_frame`), so its k̂ comes from `level`.
+  - A kernel whose `batched_m2l` is `None` still implements `vectors` and `columns` (the
+    trait has no defaults), with an empty `Columns` or an unreachable body.
 
 ## Pending runs
 
