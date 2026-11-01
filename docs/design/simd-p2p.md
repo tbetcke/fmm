@@ -731,6 +731,81 @@ padded tail's): f32 φ, f32 φ and ∇φ, f64 φ, f64 φ and ∇φ: NEON 40/40, 
 58/56. Laplace's (one target vector) are NEON 15, 22, 15 and 22, AVX2 24, 35, 29 and 42 and
 AVX-512 18, 25, 21 and 28. None contains a call.
 
+### 4.11 The sine and cosine (Helmholtz CH3.4a)
+
+The Helmholtz P2P of CH3.4b needs e^{iθ} = cos θ + i sin θ per pair at θ = Re(k) r
+(docs/design/helmholtz-fmm-proposal.md §5.7). `arch::sincos::sincos` computes both from one
+reduction on the vector layer, and `sincos::sincos_slice` exposes it for tests and reports,
+as `exp_slice` does the exponential (§4.9). One formulation serves every ISA, from the layer's
+existing methods only (no new one):
+
+| Step | Operation | f32 | f64 |
+| --- | --- | --- | --- |
+| round | k = fma(θ, 1/π, c), c = 1.5 · 2^m; n = k − c | 2 | 2 |
+| reduce | t = fnma(n, π₁, θ) (exact); t = fnma(n, π₂, t) | 2 | 2 |
+| square | s = t t | 1 | 1 |
+| sine | sin t = fma(t s, P(s), t), P Horner to t^(2N_s+1) | N_s + 1 = 7 | N_s + 1 = 11 |
+| cosine | cos t = Q(s), Horner to t^(2N_c) | N_c = 6 | N_c = 10 |
+| sign | h = fma(n, ½, c) − c; b = fnma(2, h, n); σ = fnma(2, b b, 1) = (−1)ⁿ | 5 | 5 |
+| apply | σ sin t, σ cos t (exact) | 2 | 2 |
+| **total** | | **25** | **33** |
+
+since sin(nπ + t) = (−1)ⁿ sin t and cos(nπ + t) = (−1)ⁿ cos t. b = n − 2 round(n/2) is −1,
+0 or 1, so σ = 1 − 2b² is formed exactly; an integer sign flip from k's bits (a layer method
+like `scale_pow2`) would save three operations but add a method per ISA. Every step rounds as
+IEEE 754 prescribes, so the results are the same bits on every ISA and equal the scalar
+layer's.
+
+**Domain.** |θ| ≤ θ_max = 2¹⁰ (proposal §5.7: the phase stays below about 22 c_leaf, so this
+covers c_leaf ≤ 46). Then |n| ≤ 326 has at most 9 bits; π₁ is π truncated to 44 (f64) or 15
+(f32) significant bits, so n π₁ is exact and θ − n π₁ is exact by Sterbenz's lemma
+(θ / (n π₁) lies in [½, 2] for n ≠ 0). π₂ is π − π₁ rounded to the precision. Beyond θ_max
+and for non-finite θ the results are unspecified.
+
+**Symmetry.** Every step is odd or even in θ (rounding to nearest is symmetric, and k's ties
+go to even n), so sin(−θ) = −sin θ and cos(−θ) = cos θ bit for bit for θ ≠ 0. At θ = ±0,
+cos is exactly 1 and sin is +0 for both signs: the last step adds the correction t s P(s)
+to t, and at t = −0 that correction is +0 (its factor P(0) = −1/6 is negative), so the sum
+is +0. Keeping −0 would need sin t = t (1 + s P(s)), one more rounding of the order of
+u_T sin t; the P2P's phase is never negative, so the sign of that zero is not worth it.
+
+**Contract: within 4 u_T absolute, for each of sin θ and cos θ, on |θ| ≤ 2¹⁰.** Absolute
+because the P2P term q e^{iθ}/r is measured relative to |q|/r (CH3.4b); near a zero
+of sin or cos the relative error of that one value is unbounded, which no term inherits. The
+derivation, to first order in u = u_T, for |t| ≤ π/2 (plus |θ| u / π from the rounded 1/π,
+which only moves the boundaries between n and n + 1):
+
+- **Reduction.** t carries one rounding, at most ½ ulp(t) ≤ u for |t| < 2, plus
+  |n| |π − π₁ − π₂| (below 10⁻²⁸ in f64, 7 · 10⁻¹⁰ = 0.012 u₃₂ in f32). An absolute error δ
+  in t changes sin t by δ |cos t| and cos t by δ |sin t|.
+- **Sine.** s and t s round once each, a relative u on the correction t s P(s), which is at
+  most |t − sin t| ≤ π/2 − 1 = 0.571; Horner's roundings in P, u Σⱼ |pⱼ| sʲ relative to the
+  correction's factor t s; the rounded coefficients (1/3! on), u Σ |Δcⱼ| t^(2j+1); and the
+  final fma, ½ ulp(sin t). The truncation at t²¹ (f64) or t¹³ (f32) is below 0.01 u.
+- **Cosine.** s's rounding changes cos t by |t sin t| / 2 · u ≤ 0.785 u; Horner's roundings
+  in Q, u Σⱼ |qⱼ| sʲ, the final one included, where the terms of size 1.2 cancel near
+  |t| = π/2; the rounded coefficients (1/4! on); the truncation at t²⁰ (f64, 0.17 u) or
+  t¹² (f32, 0.11 u).
+- **The sign** is exact.
+
+Summed with these weights over a grid of 4,000 points of t in [0, π/2]
+(`fmm-simd/tools/sincos_bound.py`), the worst cases are
+**2.7 u (sine) and 3.4 u (cosine)** in both precisions, under the contract of 4 u_T.
+
+**Measured** on the M6 (NEON, scalar), all of which agree bit for bit, against `f64::sin` and
+`f64::cos` (f32) and a double-double reference (f64; the reduction by a triple-double π and
+the Taylor series to t⁴¹ in double-double, `tests/sincos`):
+
+| precision | inputs | sin | cos |
+| --- | --- | --- | --- |
+| f32 | every float of [0, 2¹⁰] (1.15 · 10⁹) and its negation | 1.886 u | 2.566 u |
+| f64 | 10⁷ seeded samples (half uniform on [0, 2¹⁰], half 2^e, e uniform in [−30, 10)) and their negations | 1.890 u | 2.396 u |
+| f32 / f64 | the boundaries (n + ½) π, the multiples n π and θ_max, with neighbours | 1.713 / 2.000 u | 2.491 / 2.268 u |
+
+**Inner loops** (the inlining check; Helmholtz CH3.4a): NEON 45 (f32) and 61 (f64)
+instructions, of which 25 and 33 operations and the rest register moves and the loop; AVX2 42
+and 58; AVX-512 37 and 45. None contains a call.
+
 ## 5. The crate `nd-fmm-simd`
 
 Directory `fmm-simd/`, package `nd-fmm-simd`, library `nd_fmm_simd`, a default member.

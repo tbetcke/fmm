@@ -408,11 +408,12 @@ at any kD.
   reviewable PR, as CH2.4 split the exponential from the kernel; CH3.4 is done, and CH3.6
   runnable on its side, when all three are:
 - [ ] **CH3.4a The vectorised sine and cosine.** `nd_fmm_simd::sincos` (`sincos_slice`),
-  `arch::sincos`: sin θ and cos θ together, reduction by π (Cody–Waite, three parts) and
-  Taylor polynomials, the sign of (−1)ⁿ by exact arithmetic, f32 and f64, every ISA.
-  *Done when:* both within 4 u_T absolute for |θ| ≤ 2¹⁰ (above 22 c_leaf for any c_leaf
+  `arch::sincos`: sin θ and cos θ together, reduction by π (Cody–Waite, two parts as
+  built) and Taylor polynomials, the sign of (−1)ⁿ by exact arithmetic, f32 and f64, every
+  ISA. *Done when:* both within 4 u_T absolute for |θ| ≤ 2¹⁰ (above 22 c_leaf for any c_leaf
   ≤ 46), f32 exhaustively on [0, 2¹⁰] and f64 on 10⁷ samples against double-double, on
-  every ISA a machine offers; odd and even bit for bit; every ISA the scalar layer bit for
+  every ISA a machine offers; odd and even bit for bit for θ ≠ 0 (sin(±0) = +0, as built);
+  every ISA the scalar layer bit for
   bit; position and length invariance; no call in the inner loop; the existing entry
   points the same instruction for instruction as `main`'s. *Needs:* CH2.4a. *Machines:*
   Kathleen (AVX-512, the contract).
