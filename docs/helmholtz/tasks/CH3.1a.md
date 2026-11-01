@@ -184,7 +184,7 @@ None. `/verify` ran on the M6 on 2026-11-01, all passed (progress entry).
 
 ## Open questions
 
-None blocking. For sign-off, from the PR:
+None open. For sign-off, from the PR:
 1. The y-blocks (and the angles they come from) are built in T, as `rcr` builds them per
    call, so that stored and per-call blocks agree bit for bit. In f64 nothing changes; in
    f32 this departs from constraint 5 ("tables in f64, rounded when stored") and the crate
@@ -197,6 +197,8 @@ None blocking. For sign-off, from the PR:
    disk depends on it).
 3. Complex k's degree is the closed form at Re(k) a, provisionally until CH5.2.
    *Recommended*: accept.
+
+All three signed off 2026-11-01, the user: "1–3 as recommended".
 
 The question on keys by bits was settled on 2026-11-01: exact integer classes ("switch to
 A in this PR").

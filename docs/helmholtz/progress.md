@@ -1160,7 +1160,8 @@ request, using this template:
   2. The level units (a box holds r_l φ̃) recorded in the module docs now and proposed for
      CONVENTIONS §3.15 at its next revision.
   3. Complex k's degree at Re(k) a until CH5.2.
-  The keys: exact integer classes, the user, 2026-11-01 ("switch to A in this PR").
+  All three signed off 2026-11-01, the user: "1–3 as recommended". The keys: exact integer
+  classes, the user, 2026-11-01 ("switch to A in this PR").
 - Laplace: not touched. There is no change to `LaplaceOperator`, `driver.rs`, Laplace's
   tables, `nd-fmm-plan`, `nd-octree` or `nd-fmm-simd`; the Laplace tests and the MPI list
   pass unchanged.
