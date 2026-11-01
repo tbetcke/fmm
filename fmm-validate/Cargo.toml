@@ -52,6 +52,12 @@ name = "scaling"
 [[example]]
 name = "helmholtz_accuracy"
 
+# The calibration of the Helmholtz FMM's per-level degree (Helmholtz CH3.3): scans of the
+# full FMM per degree, for minutes per workload, so not registered with
+# templated-examples; run by hand.
+[[example]]
+name = "helmholtz_calibrate"
+
 # The tables at scale and the node context (Phase 5N T3): every rank building, loading
 # from `TableCache` at once (or one rank per node first) and the cost of `split_shared`; a
 # timing example on any number of ranks, so not registered with templated-examples.

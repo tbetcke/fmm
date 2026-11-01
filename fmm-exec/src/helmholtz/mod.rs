@@ -62,7 +62,7 @@ use thiserror::Error;
 
 use crate::geometry::Domain;
 
-pub use degree::{DegreeError, Degrees, degree};
+pub use degree::{DegreeError, DegreeRule, Degrees, degree, s7_degree};
 pub use densities::{ChargeKind, Charges, Densities, DensityError, LeafScratch, Output, Split};
 pub use fmm::{HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError};
 pub use operator::{HelmholtzOperator, OperatorError};

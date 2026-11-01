@@ -114,6 +114,63 @@ impl Degrees {
 ///
 /// Unless 0 < ε < 1, and unless `circumradius` is finite and positive.
 pub fn degree(k: &Wavenumber, circumradius: f64, epsilon: f64) -> usize {
+    s7_degree(k, circumradius, epsilon)
+}
+
+/// S7's closed form, max(⌈6 log₁₀(1/ε)⌉ − 2, ⌈x + (ln 1/ε)^{2/3} x^{1/3}⌉) at
+/// x = Re(k) a, a the circumradius of the level's boxes in the units of k: the degree of
+/// S7's per-pair worst case (module documentation), an upper bound of the full FMM's.
+///
+/// # Panics
+///
+/// Unless 0 < ε < 1, and unless `circumradius` is finite and positive.
+pub fn s7_degree(k: &Wavenumber, circumradius: f64, epsilon: f64) -> usize {
+    check_arguments(circumradius, epsilon);
+    let floor = (6.0 * (1.0 / epsilon).log10()).ceil() - 2.0;
+    let x = k.re() * circumradius;
+    let high = (x + (1.0 / epsilon).ln().powf(2.0 / 3.0) * x.cbrt()).ceil();
+    floor.max(high) as usize
+}
+
+/// A degree rule of S7's shape (module documentation),
+/// p(x, ε) = max(⌈α log₁₀(1/ε) + β⌉, ⌈x + C (ln 1/ε)^{2/3} x^{1/3}⌉) at x = Re(k) a:
+/// a low-frequency plateau and a high-frequency branch. The ceilings forgive 10⁻⁹, so that
+/// a value an integer up to rounding (α log₁₀(10⁶) with α a multiple of 0.05) stays that
+/// integer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DegreeRule {
+    /// α, the plateau's degrees per decade of ε.
+    pub alpha: f64,
+    /// β, the plateau's offset.
+    pub beta: f64,
+    /// C, the constant of the high-frequency branch.
+    pub c: f64,
+}
+
+impl DegreeRule {
+    /// The plateau ⌈α log₁₀(1/ε) + β⌉, at least 0.
+    pub fn plateau(&self, epsilon: f64) -> usize {
+        rounded_up(self.alpha * (1.0 / epsilon).log10() + self.beta)
+    }
+
+    /// The high-frequency branch ⌈x + C (ln 1/ε)^{2/3} x^{1/3}⌉, at least 0.
+    pub fn high(&self, x: f64, epsilon: f64) -> usize {
+        rounded_up(x + self.c * (1.0 / epsilon).ln().powf(2.0 / 3.0) * x.cbrt())
+    }
+
+    /// The larger of [`DegreeRule::plateau`] and [`DegreeRule::high`].
+    pub fn degree(&self, x: f64, epsilon: f64) -> usize {
+        self.plateau(epsilon).max(self.high(x, epsilon))
+    }
+}
+
+/// ⌈v − 10⁻⁹⌉, at least 0.
+fn rounded_up(v: f64) -> usize {
+    (v - 1e-9).ceil().max(0.0) as usize
+}
+
+/// Panics unless 0 < ε < 1 and the circumradius is finite and positive.
+fn check_arguments(circumradius: f64, epsilon: f64) {
     assert!(
         check_tolerance(epsilon).is_ok(),
         "the tolerance must lie in (0, 1), got {epsilon}"
@@ -122,10 +179,6 @@ pub fn degree(k: &Wavenumber, circumradius: f64, epsilon: f64) -> usize {
         circumradius.is_finite() && circumradius > 0.0,
         "the circumradius must be finite and positive, got {circumradius}"
     );
-    let floor = (6.0 * (1.0 / epsilon).log10()).ceil() - 2.0;
-    let x = k.re() * circumradius;
-    let high = (x + (1.0 / epsilon).ln().powf(2.0 / 3.0) * x.cbrt()).ceil();
-    floor.max(high) as usize
 }
 
 fn check_tolerance(epsilon: f64) -> Result<(), DegreeError> {
