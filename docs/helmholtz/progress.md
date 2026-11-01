@@ -1391,3 +1391,48 @@ request, using this template:
 - Follow-ups:
   - CH3.2: the translations are where the Helmholtz FMM's time is.
   - CH3.3, then CH3.6 (timed with this kernel).
+
+## 2026-11-01: CH3.3 Calibration of p_l over (k a_l, ε)
+- Done:
+  - The plan's three choices, the user on 2026-11-01: "Calibrate, new default", "Both
+    branches", "ε/2, verify ≤ ε" (each "(Recommended)").
+  - `nd_fmm_exec::helmholtz::DegreeRule` (public: a plateau ⌈γ L² + α L + β⌉ and a branch
+    ⌈x + C (ln 1/ε)^{2/3} x^{1/3}⌉, ceilings forgiving 10⁻⁹), `DegreeRule::CALIBRATED`
+    (γ = 0.30, α = 0.25, β = 2.60, C = 0.80), `degree` on it (the default of
+    `Degrees::Tolerance`), `s7_degree` (S7's closed form, the old default, kept as the
+    per-pair bound).
+  - `nd_fmm_validate::helmholtz_calibration` (MPI-free: `Curve`, `Point`, the fit),
+    `helmholtz_accuracy::Row::circumradii`, the `helmholtz_calibrate` example (plateau and
+    level scans, `fit`), `helmholtz_accuracy --rule s7`. Report
+    `fmm-validate/results/helmholtz-ch3-3.md`; record `docs/helmholtz/tasks/CH3.3.md`.
+- Tests: `fmm-exec/tests/helmholtz/degree.rs` (S7's closed form at its grid, now through
+  `s7_degree`; the calibrated rule at least every measured degree, at most S7's and
+  monotone on a grid of x and ε; `DegreeRule`'s shapes; `resolve`), the doctest;
+  `tests/helmholtz/operator.rs`'s per-pair chains on `s7_degree` (their degrees and bits
+  `main`'s); `helmholtz_calibration`'s unit tests (9); `tests/helmholtz_accuracy.rs` a
+  plateau scan on W1 at kD = 10 and the default rule at most S7's.
+- Runs (M6, release, 1 × 6, NEON P2P): 10 plateau scans (W4 ×4 at kD = 1, 10; W1, W3 at
+  kD = 10; ε = 10⁻³ … 10⁻¹⁰) and level scans (W1 at kD = 30, 100, top levels at 200 and
+  300; W3 at kD = 30; the W4 cube and clusters at kD = 100; ε = 10⁻³ … 10⁻⁸): 176 points,
+  S7's closed form at or above every one (the acceptance). The plateau 7, 9, 12, 15, 20, 24
+  at 10⁻³ … 10⁻⁸ against S7's 16 … 46. Verification of the default against ε: CH3.1c's
+  62 cases (now with W3 at kD = 100, 10⁻⁸) and 26 held out, all within ε, the largest
+  0.63 ε (W1, kD = 500, 10⁻⁸); checksums equal at 1 and 6 threads (15 cases) and at 1, 2,
+  3 ranks (2). Times against S7's degrees: 2.7× at 10⁻³, 6–8× at 10⁻⁶ and 10⁻⁸, 4.9× on
+  W1 at kD = 500, 10⁻⁶ (98 against 478 s).
+- Checks: `/verify` on the M6: format; Clippy default, examples and workspace all-targets;
+  `cargo doc`; `cargo test` (1,118) and `--workspace` (1,200); the MPI list at 2 and 4
+  ranks (24 of 24). A self-review by a subagent: no code defect; the report's case counts
+  (62 and 26, not 63 and 27), the acceptance's wording, a caveat above x = 65, stale plan
+  text, doc wording and a saturating subtraction fixed. Not run: locust and Kathleen (none
+  in the plan); the licence check (no manifest dependency changed; `fmm-validate/Cargo.toml`
+  gained an `[[example]]` only).
+- Decisions: the three above. Questions for sign-off (the PR): 1. the quadratic plateau;
+  2. the high-frequency branch above x = 65 an extrapolation below S7's p* at small ε
+  (checked at kD = 500 only); 3. the per-pair chain tests on `s7_degree`.
+- Laplace: not touched (no Laplace file changed).
+- Follow-ups:
+  - CH3.6: on this rule (W1 at kD = 500, 10⁻⁶ in 98 s).
+  - CH4.3: the high-frequency branch, x + (a L + b) x^{1/3} the candidate (over-predicts at
+    10⁻³ by up to 8 on the top levels; under S7's p* beyond x ≈ 64 at small ε).
+  - A check at kD ≈ 1000, 10⁻⁸ (Kathleen) before relying on the rule there.
