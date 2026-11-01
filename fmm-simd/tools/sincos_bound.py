@@ -7,7 +7,8 @@ For t on a grid of [0, π/2 + 10⁻⁴] it sums, with the weights of the design'
 - the reduction: ½ ulp(t) (plus |n| |π − π₁ − π₂|, 0.012 u in f32), times |cos t| for the
   sine and |sin t| for the cosine;
 - the sine: Horner's roundings in P, u Σⱼ |pⱼ| sʲ, times |t s|; the roundings of s and t s,
-  2 u |t s P(s)|; the coefficients' actual rounding errors; the final ½ ulp(sin t);
+  2 u |t s P(s)|; the coefficients' actual rounding errors; the truncation; the final
+  ½ ulp(sin t);
 - the cosine: Horner's roundings in Q, u Σⱼ |qⱼ| sʲ (the final one included); s's rounding,
   |t sin t| / 2; the coefficients' actual rounding errors; the truncation.
 
@@ -50,23 +51,27 @@ def bound(n_s, n_c, rnd, p, pi_error):
         q, parts = horner_partials(sin_c, s)
         horner = sum(pj * s ** (len(parts) - 1 - k) for k, pj in enumerate(parts))
         coefficients = sum(
-            abs(float(Fraction(rnd(sin_c[j])) - Fraction((-1) ** (j + 1), factorial(2 * j + 3))))
+            abs(float(Fraction(rnd(c)) - Fraction((-1) ** (j + 1), factorial(2 * j + 3))))
             / u
             * t ** (2 * j + 3)
-            for j in range(n_s)
+            for j, c in enumerate(sin_c)
         )
+        sin_truncation = t ** (2 * n_s + 3) / factorial(2 * n_s + 3) / u
         e_sin = (
             reduction * abs(math.cos(t))
             + abs(t * s) * horner
             + 2 * abs(t * s * q)
             + coefficients
+            + sin_truncation
             + half_ulp(math.sin(t), p)
         )
         _, parts = horner_partials(cos_c, s)
         horner = sum(pj * s ** (len(parts) - 1 - k) for k, pj in enumerate(parts))
         coefficients = sum(
-            abs(float(Fraction(rnd(cos_c[j])) - Fraction((-1) ** j, factorial(2 * j)))) / u * t ** (2 * j)
-            for j in range(n_c + 1)
+            abs(float(Fraction(rnd(c)) - Fraction((-1) ** j, factorial(2 * j))))
+            / u
+            * t ** (2 * j)
+            for j, c in enumerate(cos_c)
         )
         truncation = t ** (2 * n_c + 2) / factorial(2 * n_c + 2) / u
         e_cos = (

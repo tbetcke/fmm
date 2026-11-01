@@ -58,6 +58,7 @@ change: the formulation needs only the existing `Simd` methods (`fma`, `fnma`, `
   t = fnma(n, π₁, θ)                exact (π₁ with trailing zeros: n π₁ exact, Sterbenz)
   t = fnma(n, π₂, t)                exact or rounded once (π₂ likewise)
   t = fnma(n, π₃, t)                |t| ≤ π/2 (+ rounding)
+                                    (as built: two parts, π₂ = π − π₁ rounded; "Findings")
   s = t · t
   S = fma(t s, P(s), t)             sin t, Taylor to t^(2N_s+1) by Horner in s
   C = Q(s)                          cos t, Taylor to t^(2N_c) by Horner in s
@@ -154,13 +155,66 @@ All on every ISA the machine offers (`common::isas`, printing those it cannot ru
 - Risk: AVX2 has no 64-bit integer conversion; the shifter constant avoids it, as in the
   exponential.
 
+## Findings during implementation
+
+- **Two parts suffice.** t = fnma(n, π₁, θ) is exact (Sterbenz), and one more fnma with
+  π₂ = π − π₁ rounded to the precision rounds once; the third part of the plan would only
+  add a second rounding. |n| |π − π₁ − π₂| is below 10⁻²⁸ (f64) and 0.012 u₃₂ (f32). One
+  operation fewer than planned: 25 (f32) and 33 (f64) per value.
+- **sin(−0) = +0.** The sine's last step, fma(t s, P(s), t), adds the correction t s P(s)
+  to t; at t = −0 that correction is +0 (P(0) = −1/6), and −0 + +0 = +0. Any form t + w
+  with w ≤ 0 does the same; keeping −0 needs t (1 + s P(s)), one more rounding of the order
+  of u_T sin t. The P2P's phase Re(k) r is never negative, so the sign of that zero does not
+  matter there: the symmetry holds bit for bit for θ ≠ 0, and the plan's "sin ±0 with its
+  sign" is not met (question 1 below; the roadmap's *Done when* says "as built").
+- **The bound.** Derived to first order, 2.7 u (sine) and 3.4 u (cosine) in both precisions
+  (`fmm-simd/tools/sincos_bound.py`; design §4.11); measured 1.89 and 2.57 u.
+- **Taylor suffices.** No minimax coefficients were needed (no script beyond the bound's).
+
+## Checks run
+
+On the M6 (macOS, aarch64; NEON and scalar):
+- `cargo fmt --all -- --check`, `cargo clippy -- -D warnings`, `cargo clippy --examples --
+  -D warnings`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo doc
+  --no-deps`: passed.
+- `nd-fmm-simd`: `cargo clippy -p nd-fmm-simd --all-targets -- -D warnings` and with
+  `--target x86_64-apple-darwin`; `cargo test -p nd-fmm-simd -- --show-output` (155 passed,
+  17 ignored); `cargo test -p nd-fmm-simd --release -- --ignored --show-output` (19
+  passed, `tests/sincos` among them: f32 every float of [0, 2¹⁰] and its negation, sin
+  1.886 u, cos 2.566 u; f64 10⁷ samples, 1.890 u and 2.396 u; scalar and NEON bit for
+  bit); `cargo doc -p nd-fmm-simd --no-deps --document-private-items` with
+  `RUSTDOCFLAGS="-D warnings"` and the doctests: passed.
+- The inlining check (`tools/inner_loops.awk`, release test binaries): no call in any loop;
+  NEON 45 and 61 instructions (f32, f64), AVX2 42 and 58, AVX-512 37 and 45 (from the
+  `x86_64-apple-darwin` build).
+- **Constraint 1, the code**: the release rlibs of `nd-fmm-simd` built from `main` (e6a9d71,
+  `git archive` into the scratchpad) and from the branch for `aarch64-apple-darwin`,
+  `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu`, each at
+  the default settings and with `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1`; every function
+  disassembled (`objdump -d -C`), addresses, symbol annotations and crate hashes normalised,
+  compared by name. All existing functions identical in all eight builds: 141, 145, 211 and
+  211 at the default settings (aarch64 macOS and Linux, x86_64 macOS and Linux), 94, 94, 154
+  and 154 with one codegen unit. New only: the sine and cosine's entry points and dispatch
+  (4 to 9 functions per build, among them the scalar dispatch's slice iterator out of line
+  at the default settings). No codegen-unit shift reached an existing function, so no D9
+  run (as planned).
+- A self-review by a subagent: no defect in the code or the numerics (constants, Sterbenz,
+  the sign, the symmetry, the oracle re-derived). Its points taken: the constraint-1 record
+  here, the sin(−0) question, the cross-ISA test over the special inputs too, the sine's
+  truncation in the bound script, the |t| ≤ π/2 + 10⁻⁴ range in the design, doc wording and
+  long lines.
+- Not run: the MPI list (no MPI crate's code changes; no existing function of the crate
+  changed); the licence check (no manifest changed).
+
 ## Pending runs
 
-None yet.
+- Kathleen `tools/kathleen/submit.sh check.sbatch simd` (Clippy, tests and ignored release
+  tests on scalar, AVX2 and AVX-512): the contract on real x86 hardware.
 
 ## Open questions
 
-None yet.
+1. sin(±0) = +0 (Findings): accept, with the symmetry bit for bit for θ ≠ 0, or require
+   sin(−0) = −0 at the cost of one more rounding (t (1 + s P(s)))?
 
 ## Decisions
 

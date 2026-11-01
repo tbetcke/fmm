@@ -3,6 +3,7 @@
 use nd_fmm_simd::{Isa, sincos::sincos_slice};
 
 use crate::common::{Precision, Rng, bits, isas, sincos};
+use crate::contract::special_inputs;
 
 /// Sampled values per test and precision.
 const SAMPLES: usize = 20_000;
@@ -19,11 +20,13 @@ fn signed_sample<T: Precision>(rng: &mut Rng) -> T {
 
 /// Every ISA gives the scalar ISA's results bit for bit (the formulation uses only
 /// operations every ISA rounds as IEEE 754 does; `nd_fmm_simd::sincos`), on samples of the
-/// domain of both signs.
+/// domain of both signs and on the special inputs of `contract` (the reduction's
+/// boundaries, the multiples of π, the domain end, with neighbours).
 fn same_bits_on_every_isa<T: Precision>(test: &str) {
     let mut rng = Rng(0xb175_51c0);
     let mut theta: Vec<T> = (0..SAMPLES).map(|_| signed_sample(&mut rng)).collect();
     theta.extend([T::zero(), -T::zero(), T::from_f64(1024.0)]);
+    theta.extend(special_inputs::<T>());
     let scalar = sincos(Isa::Scalar, &theta);
     for isa in isas::<T>(test) {
         let got = sincos(isa, &theta);

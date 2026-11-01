@@ -36,7 +36,7 @@
 //!
 //! **Degree.** Taylor coefficients (−1)ⁱ/(2i + 1)! and (−1)ⁱ/(2i)!, rounded to the
 //! precision: sin to t²¹ and cos to t²⁰ in f64, sin to t¹³ and cos to t¹² in f32, whose
-//! truncation errors at |t| = π/2 are 10⁻¹⁸ and 0.17 u₆₄, and 0.01 and 0.11 u₃₂.
+//! truncation errors at |t| = π/2 are 0.01 and 0.17 u₆₄, and 0.011 and 0.11 u₃₂.
 //!
 //! **Error** (design §4.11 derives it; `fmm-simd/tools/sincos_bound.py`), absolute, on the
 //! domain: to first order at most 2.7 u_T for the sine and 3.4 u_T for the cosine, in both
@@ -46,7 +46,8 @@ use super::Simd;
 use crate::SimdScalar;
 
 /// The constants of the sine and cosine in one precision, as f64 values that the precision
-/// represents exactly (but `inv_pi` and the coefficients, rounded once to it).
+/// represents exactly (but `inv_pi` and the coefficients: correctly rounded to f64, then
+/// rounded to f32 when splatted in f32).
 ///
 /// Nominally `pub`, as [`super::AvailableIsa`], because the sealed trait of
 /// [`SimdScalar`] names it; it is not reachable from outside the crate.

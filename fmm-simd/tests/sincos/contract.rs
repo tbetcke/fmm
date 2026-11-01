@@ -1,5 +1,6 @@
 //! The contract of design §4.11: within 4 u_T absolute on |θ| ≤ 2¹⁰ for both the sine and
-//! the cosine, odd and even bit for bit (but the sine of −0, +0), exact at ±0. f32 over every float of [0, 2¹⁰]
+//! the cosine; odd and even bit for bit for θ ≠ 0; at ±0 the sine +0, the cosine
+//! exactly 1. f32 over every float of [0, 2¹⁰]
 //! (strided in debug), with its negation; f64 on seeded samples; both at the reduction's
 //! boundaries (n + ½) π, the multiples n π, their neighbours and the domain end.
 
@@ -110,7 +111,7 @@ fn f64_contract_sampled_large() {
 /// The reduction's boundaries θ = (n + ½) π and the multiples n π in the domain, each with
 /// the neighbours a few units in the last place on each side, and the domain end with its
 /// neighbours below it.
-fn special_inputs<T: Precision>() -> Vec<T> {
+pub fn special_inputs<T: Precision>() -> Vec<T> {
     let mut theta = Vec::new();
     let mut push_with_neighbours = |v: f64| {
         let b = T::from_f64(v);
@@ -185,10 +186,10 @@ fn special_values_f64() {
 /// A double-double, hi + lo.
 type DoubleDouble = (f64, f64);
 
-/// The f64 oracle: `sincos_dd` at six f64 values against sin θ and cos θ to 75 digits
-/// (Python's `decimal`, the series after the reduction by a 100-digit π), to an absolute
-/// 2⁻¹⁰⁰; and on samples of the domain within one unit in the last place of `f64::sin`
-/// and `f64::cos`.
+/// The f64 oracle: `sincos_dd` at six f64 values against sin θ and cos θ computed once in
+/// 80-digit decimal arithmetic (Python's `decimal`: the reduction by a 100-digit π, then
+/// the Taylor series), to an absolute 2⁻¹⁰⁰; and on samples of the domain within 2 u₆₄
+/// absolute of `f64::sin` and `f64::cos`.
 #[test]
 fn f64_oracle() {
     #[expect(clippy::approx_constant, reason = "the f64 nearest π/2 as an input")]

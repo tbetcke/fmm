@@ -772,8 +772,8 @@ u_T sin t; the P2P's phase is never negative, so the sign of that zero is not wo
 **Contract: within 4 u_T absolute, for each of sin θ and cos θ, on |θ| ≤ 2¹⁰.** Absolute
 because the P2P term q e^{iθ}/r is measured relative to |q|/r (CH3.4b); near a zero
 of sin or cos the relative error of that one value is unbounded, which no term inherits. The
-derivation, to first order in u = u_T, for |t| ≤ π/2 (plus |θ| u / π from the rounded 1/π,
-which only moves the boundaries between n and n + 1):
+derivation, to first order in u = u_T, for |t| ≤ π/2 + 10⁻⁴ (the rounded 1/π moves the
+boundaries between n and n + 1 by up to |θ| u / π, so |t| may pass π/2 by 4 · 10⁻⁵ in f32):
 
 - **Reduction.** t carries one rounding, at most ½ ulp(t) ≤ u for |t| < 2, plus
   |n| |π − π₁ − π₂| (below 10⁻²⁸ in f64, 7 · 10⁻¹⁰ = 0.012 u₃₂ in f32). An absolute error δ
@@ -781,14 +781,16 @@ which only moves the boundaries between n and n + 1):
 - **Sine.** s and t s round once each, a relative u on the correction t s P(s), which is at
   most |t − sin t| ≤ π/2 − 1 = 0.571; Horner's roundings in P, u Σⱼ |pⱼ| sʲ relative to the
   correction's factor t s; the rounded coefficients (1/3! on), u Σ |Δcⱼ| t^(2j+1); and the
-  final fma, ½ ulp(sin t). The truncation at t²¹ (f64) or t¹³ (f32) is below 0.01 u.
+  final fma, ½ ulp(sin t); the truncation at t²¹ (f64, 0.01 u) or t¹³ (f32, 0.011 u). s's
+  rounding also reaches P(s), by about 0.07 u, but against the weight of |P|
+  (|P + s P′| < |P|), so the sum stays an upper bound.
 - **Cosine.** s's rounding changes cos t by |t sin t| / 2 · u ≤ 0.785 u; Horner's roundings
   in Q, u Σⱼ |qⱼ| sʲ, the final one included, where the terms of size 1.2 cancel near
   |t| = π/2; the rounded coefficients (1/4! on); the truncation at t²⁰ (f64, 0.17 u) or
   t¹² (f32, 0.11 u).
 - **The sign** is exact.
 
-Summed with these weights over a grid of 4,000 points of t in [0, π/2]
+Summed with these weights over a grid of 4,000 points of t in [0, π/2 + 10⁻⁴]
 (`fmm-simd/tools/sincos_bound.py`), the worst cases are
 **2.7 u (sine) and 3.4 u (cosine)** in both precisions, under the contract of 4 u_T.
 

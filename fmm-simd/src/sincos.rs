@@ -15,11 +15,11 @@
 //!
 //! u_T is the unit roundoff, 2⁻²⁴ (f32) or 2⁻⁵³ (f64). The contract of design §4.11,
 //! checked by the tests of `tests/sincos` on every ISA a machine offers, is an absolute
-//! error of at most 4 u_T in each of sin θ and cos θ for |θ| ≤ 2¹⁰ (the phase Re(k) r of the
-//! Helmholtz P2P stays below about 22 c_leaf radians, proposal §5.7); sin(−θ) = −sin θ and
-//! cos(−θ) = cos θ bit for bit for θ ≠ 0; sin(±0) = +0 and cos(±0) = 1 exactly. The error is absolute
-//! because the P2P term q e^{iθ}/r is measured relative to |q|/r: near a zero of sin or
-//! cos the relative error of that one value is not bounded.
+//! error of at most 4 u_T in each of sin θ and cos θ for |θ| ≤ 2¹⁰ (the phase Re(k) r of
+//! the Helmholtz P2P stays below about 22 c_leaf radians, proposal §5.7); sin(−θ) =
+//! −sin θ and cos(−θ) = cos θ bit for bit for θ ≠ 0; sin(±0) = +0 and cos(±0) = 1
+//! exactly. The error is absolute because the P2P term q e^{iθ}/r is measured relative to
+//! |q|/r: near a zero of sin or cos the relative error of that one value is not bounded.
 
 use crate::{Isa, SimdScalar};
 
