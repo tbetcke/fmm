@@ -191,6 +191,7 @@ pub mod fmm;
 pub mod geometry;
 pub mod helmholtz;
 pub mod operator;
+mod pipeline;
 pub mod tables;
 pub mod threading;
 #[cfg(feature = "gpu")]

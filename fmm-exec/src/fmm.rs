@@ -453,16 +453,13 @@ use nd_fmm_plan::operator::{
     FmmOperator, FmmSizes, HostData, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p,
 };
 use nd_fmm_plan::plan::{Plan, PlanError};
-use nd_fmm_plan::redistribute::{Redistribution, RedistributionError};
-use nd_fmm_plan::store::{LeafSliceMut, LeafStore};
+use nd_fmm_plan::redistribute::RedistributionError;
+use nd_fmm_plan::store::LeafStore;
 use nd_fmm_tables::cache::{Stored, TableKind};
 use nd_fmm_tables::{CacheOutcome, TableCache};
 use nd_octree::constants::DEEPEST_LEVEL;
-use nd_octree::octree::compute_global_bounding_box;
-use nd_octree::{Octree, OctreeOptions, PhysicalBox, points_to_morton};
-use rayon::prelude::*;
+use nd_octree::{Octree, OctreeOptions, PhysicalBox};
 use rayon::{ThreadPool, ThreadPoolBuilder};
-use rlst::SliceArray;
 use thiserror::Error;
 
 #[cfg(feature = "gpu")]
@@ -473,9 +470,17 @@ use crate::cost::{self, CostModel, KindCounts};
 use crate::device::{
     self, DeviceCounters, DeviceDriver, DeviceOptions, DeviceOutput, DeviceReport, ViewsImage,
 };
-use crate::geometry::{Domain, GeometryError, leaf_coordinates, radius};
+use crate::geometry::{Domain, GeometryError};
 pub use crate::operator::SourceType;
 use crate::operator::{Isa, LaplaceOperator, MulAdd, P2pChoice, SimdScalar};
+// Read by the device path and by the unit tests of the output pass.
+#[cfg_attr(not(feature = "gpu"), allow(unused_imports))]
+use crate::pipeline::interleave_output;
+use crate::pipeline::{
+    self, LeafRanges, OutputOrder, Points, StrengthLayout, agree, check_finite, gather_output,
+    load_source_charges, pack_charges, pack_sources, scale_moments, unpack_output,
+    unpack_output_many, write_leaf_strengths,
+};
 use crate::tables::{M2lStrategy, NodeContext, StrategyChoice, Tables};
 use crate::threading::{REQUIRED_MPI_THREADING, ThreadingReport};
 
@@ -1811,30 +1816,16 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         let model_ranks_per_node = agreed[1] as usize;
 
         // Step 3: the domain, and every point strictly inside it.
-        let coordinates: Vec<f64> = sources.iter().chain(targets).flatten().copied().collect();
-        let points = SliceArray::from_shape(&coordinates, [3, sources.len() + targets.len()]);
-        let domain = match supplied {
-            Some(domain) => domain,
-            None => {
-                let extent = global_extent(sources, targets, comm);
-                if !(extent > 0.0 && extent.is_finite()) {
-                    return Err(FmmError::DegenerateExtent { extent });
-                }
-                // The same box on every rank, so the same outcome.
-                Domain::new(&compute_global_bounding_box(&points, comm))?
-            }
-        };
-        agree(comm, check_inside(sources, targets, &domain))?;
+        let (coordinates, domain) = pipeline::domain(sources, targets, supplied, comm)?;
         let domain_time = start.elapsed();
 
         // Step 4: the octree of all points, and its plan.
         let start = Instant::now();
-        let keys = points_to_morton(&points, DEEPEST, &domain.physical_box());
         let options = OctreeOptions::new()
             .with_max_level(self.max_level)
             .with_max_fine_keys(self.leaf_points())
             .with_ghost_children(true);
-        let octree = Octree::new(&keys, options, comm);
+        let (keys, octree) = pipeline::octree(&coordinates, &domain, options, comm);
         let octree_time = start.elapsed();
         let start = Instant::now();
         let plan = Plan::new(&octree).map_err(FmmError::Plan)?;
@@ -1912,35 +1903,25 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         // into the received order, which is leaf order. Each `new` agrees its own errors,
         // so every rank returns here alike.
         let start = Instant::now();
-        let nlocal = plan.index().leaves().nlocal();
         let near_rule = NearRuleReport {
             choice: self.near_rule,
             crossovers,
             pairs: plan.near_pairs(),
         };
-        let source_route =
-            Redistribution::new(&octree, &plan, source_keys).map_err(FmmError::Redistribution)?;
-        let target_route =
-            Redistribution::new(&octree, &plan, target_keys).map_err(FmmError::Redistribution)?;
         // Three coordinates per point move now, and on every evaluation m charges per
         // source and up to 4 m output values per target. `max_per_item` is the same on
         // every rank, so is this outcome.
         let output_values = self.vectors * if self.gradients { 4 } else { 1 };
         let per_item = output_values.max(3).max(self.strengths());
-        if source_route.max_per_item().min(target_route.max_per_item()) < per_item {
-            return Err(FmmError::Redistribution(RedistributionError::Overflow));
-        }
-        let (source_coordinates, target_coordinates) = coordinates.split_at(3 * sources.len());
-        let owned_sources = source_route.forward(source_coordinates, 3);
-        let owned_targets = target_route.forward(target_coordinates, 3);
-
         // Step 6: the points of every local leaf, its radius, and the output order.
-        let source_leaves = LeafRanges::new(source_route.counts());
-        let target_leaves = LeafRanges::new(target_route.counts());
-        let radii: Vec<f64> = (0..nlocal)
-            .map(|j| radius(plan.index().leaves().level(j), &domain))
-            .collect();
-        let outputs = OutputOrder::new(&target_leaves, &radii);
+        let (points, owned) = Points::route(
+            &octree,
+            &plan,
+            (&keys, sources.len()),
+            &coordinates,
+            &domain,
+            per_item,
+        )?;
         let redistribute_time = start.elapsed();
 
         // Step 7: tables, operator, evaluator. One all-reduce agrees the largest number of
@@ -1948,7 +1929,13 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         // every rank resolves the same strategy.
         let start = Instant::now();
         let local_max = [
-            source_leaves.counts.iter().copied().max().unwrap_or(0),
+            points
+                .source_leaves
+                .counts
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(0),
             node.size() as usize,
         ];
         let mut agreed = [0usize; 2];
@@ -2023,8 +2010,8 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             plan,
             comm,
             operator,
-            &source_leaves.counts,
-            &target_leaves.counts,
+            &points.source_leaves.counts,
+            &points.target_leaves.counts,
             self.multipole_routing,
             node_id,
         )
@@ -2034,20 +2021,8 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
         // Step 8: the leaf-scaled coordinates, once, from the forwarded coordinates in
         // leaf order (CONVENTIONS §3.13).
         let start = Instant::now();
-        let leaf_keys = evaluator.plan().index().leaves().keys()[..nlocal].to_vec();
-        let as_point = |values: &[f64]| [values[0], values[1], values[2]];
-        for (j, &key) in leaf_keys.iter().enumerate() {
-            let chunk = evaluator.sources_mut(j);
-            let owned = &owned_sources[3 * source_leaves.offsets[j]..];
-            for (u, x) in chunk.as_chunks_mut::<3>().0.iter_mut().zip(owned.chunks(3)) {
-                *u = leaf_coordinates(as_point(x), key, &domain);
-            }
-            let chunk = evaluator.target_input_mut(j);
-            let owned = &owned_targets[3 * target_leaves.offsets[j]..];
-            for (u, x) in chunk.as_chunks_mut::<3>().0.iter_mut().zip(owned.chunks(3)) {
-                *u = leaf_coordinates(as_point(x), key, &domain);
-            }
-        }
+        points.load_coordinates(&owned, &mut evaluator, &domain);
+        drop(owned);
         let load_time = start.elapsed();
 
         // With a device backend (Phase 5 T8, docs/design/distributed-fmm.md §7.1): the
@@ -2061,8 +2036,8 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             let attached = self.attach_device(
                 &mut evaluator,
                 device,
-                &target_leaves.counts,
-                &outputs,
+                &points.target_leaves.counts,
+                &points.outputs,
                 tuner,
                 ranks,
             );
@@ -2111,15 +2086,10 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             source_type: self.sources,
             strengths,
             packed: Vec::new(),
-            charges: vec![T::zero(); strengths * source_route.nreceived()],
-            received_output: vec![T::zero(); output_values * target_route.nreceived()],
-            returned_output: vec![T::zero(); output_values * target_route.nsent()],
-            sources: source_route,
-            targets: target_route,
-            source_leaves,
-            target_leaves,
-            outputs,
-            radii,
+            charges: vec![T::zero(); strengths * points.sources.nreceived()],
+            received_output: vec![T::zero(); output_values * points.targets.nreceived()],
+            returned_output: vec![T::zero(); output_values * points.targets.nsent()],
+            points,
             max_leaf_points,
             cache_outcomes,
             threading,
@@ -2926,564 +2896,6 @@ fn near_plan<C: CommunicatorCollectives>(
     Plan::with_near_rule(octree, &NearRule::new(&counts, &predicate)).map_err(FmmError::Plan)
 }
 
-fn agree<C: CommunicatorCollectives, V>(
-    comm: &C,
-    local: Result<V, FmmError>,
-) -> Result<V, FmmError> {
-    let mut valid = false;
-    comm.all_reduce_into(&local.is_ok(), &mut valid, SystemOperation::logical_and());
-    match local {
-        Ok(_) if !valid => Err(FmmError::OtherRank),
-        result => result,
-    }
-}
-
-/// The first point of `points` with a coordinate that is not finite, as an error.
-fn check_finite(points: &[[f64; 3]], set: PointSet) -> Result<(), FmmError> {
-    match points.iter().position(|x| !x.iter().all(|c| c.is_finite())) {
-        Some(index) => Err(FmmError::NonFinitePoint {
-            set,
-            index,
-            point: points[index],
-        }),
-        None => Ok(()),
-    }
-}
-
-/// The first point not strictly inside `domain`, as an error.
-fn check_inside(
-    sources: &[[f64; 3]],
-    targets: &[[f64; 3]],
-    domain: &Domain,
-) -> Result<(), FmmError> {
-    let c = domain.physical_box().coordinates();
-    let inside = |x: &[f64; 3]| (0..3).all(|k| c[k] < x[k] && x[k] < c[k + 3]);
-    for (set, points) in [(PointSet::Sources, sources), (PointSet::Targets, targets)] {
-        if let Some(index) = points.iter().position(|x| !inside(x)) {
-            return Err(FmmError::PointOutsideDomain {
-                set,
-                index,
-                point: points[index],
-                domain: c,
-            });
-        }
-    }
-    Ok(())
-}
-
-/// The largest extent max_k (max xₖ − min xₖ) of the points of every rank. Two
-/// all-reduces; +∞ − (−∞) is never formed, since some rank has a point.
-fn global_extent<C: CommunicatorCollectives>(
-    sources: &[[f64; 3]],
-    targets: &[[f64; 3]],
-    comm: &C,
-) -> f64 {
-    let (mut lower, mut upper) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
-    for x in sources.iter().chain(targets) {
-        for k in 0..3 {
-            lower[k] = lower[k].min(x[k]);
-            upper[k] = upper[k].max(x[k]);
-        }
-    }
-    let (mut global_lower, mut global_upper) = ([0.0; 3], [0.0; 3]);
-    comm.all_reduce_into(&lower[..], &mut global_lower[..], SystemOperation::min());
-    comm.all_reduce_into(&upper[..], &mut global_upper[..], SystemOperation::max());
-    (0..3)
-        .map(|k| global_upper[k] - global_lower[k])
-        .fold(0.0, f64::max)
-}
-
-/// The points of a point set that this rank owns, in leaf order (the received order of
-/// its `Redistribution`): the points of local leaf j are `offsets[j]..offsets[j + 1]`.
-#[derive(Clone, Debug)]
-struct LeafRanges {
-    counts: Vec<usize>,
-    offsets: Vec<usize>,
-}
-
-impl LeafRanges {
-    /// The ranges of `counts[j]` points in local leaf j.
-    fn new(counts: &[usize]) -> Self {
-        let mut offsets = Vec::with_capacity(counts.len() + 1);
-        offsets.push(0);
-        for &n in counts {
-            offsets.push(offsets.last().unwrap() + n);
-        }
-        Self {
-            counts: counts.to_vec(),
-            offsets,
-        }
-    }
-
-    /// The positions of the points of local leaf `j`.
-    fn range(&self, j: usize) -> std::ops::Range<usize> {
-        self.offsets[j]..self.offsets[j + 1]
-    }
-
-    /// The number of points.
-    fn len(&self) -> usize {
-        *self.offsets.last().unwrap()
-    }
-}
-
-/// The points per task below which the charge load ([`load_source_charges`]) stops
-/// splitting its work.
-const LOAD_GRAIN: usize = 4096;
-
-/// Where the output pass of an evaluation finds every target (Phase 4S T9): for every
-/// target this rank owns, in the received order of its `Redistribution` (leaf order,
-/// Phase 5 T6), its point in leaf order and its local leaf, and for every local leaf the
-/// two scales of CONVENTIONS §3.13, "Output". Built once by [`FmmBuilder::build`]: 8 N_t
-/// bytes for N_t owned targets, and 16 bytes per local leaf. The pass writes in this
-/// order, and the backward move of the targets' redistribution returns its values to the
-/// caller's ranks and order. With the output pass on the device (`OutputPass`) the device
-/// holds a copy, which the device report's memory counts; for the device it is the order
-/// of the output it writes (`device::CallerOrder`).
-#[derive(Clone, Debug)]
-struct OutputOrder {
-    /// For every owned target in received order: its point in leaf order (the received
-    /// order is leaf order, so target r is point r).
-    points: Vec<u32>,
-    /// For every owned target in received order: its local leaf.
-    leaves: Vec<u32>,
-    /// For every local leaf: 4π r_t and 4π r_t², formed as the pass before T9 formed them.
-    scales: Vec<[f64; 2]>,
-}
-
-impl OutputOrder {
-    /// The order of the owned targets `targets`, whose local leaf j has r_t = `radii[j]`.
-    ///
-    /// # Panics
-    ///
-    /// If this rank owns more than `u32::MAX` targets.
-    fn new(targets: &LeafRanges, radii: &[f64]) -> Self {
-        let n = targets.len();
-        let index = |i: usize| u32::try_from(i).expect("at most u32::MAX targets on a rank");
-        let points = (0..n).map(index).collect();
-        let mut leaves = vec![0; n];
-        for j in 0..radii.len() {
-            leaves[targets.range(j)].fill(index(j));
-        }
-        let scales = radii
-            .iter()
-            .map(|&r| [4.0 * PI * r, 4.0 * PI * r * r])
-            .collect();
-        Self {
-            points,
-            leaves,
-            scales,
-        }
-    }
-}
-
-/// Writes `charges`, the charges of the owned sources in leaf order (forwarded by the
-/// sources' `Redistribution`), m = `vectors` per source, into the charge slots of the
-/// source chunks `chunks` of the local leaves (CONVENTIONS §3.13, "Source chunks" and
-/// "Several charge vectors"): leaf j gets `charges[m sources.range(j)]`, point-major as
-/// forwarded. On `pool` when given, the leaves split in halves under `rayon::join` into
-/// disjoint parts of at most [`LOAD_GRAIN`] points (or one leaf); serially otherwise.
-/// Copies only, so the same values either way (Phase 4S T9).
-fn load_source_charges<T: SimdScalar>(
-    chunks: LeafSliceMut<'_, T>,
-    sources: &LeafRanges,
-    charges: &[T],
-    (vectors, moments): (usize, Option<StrengthLayout<'_>>),
-    pool: Option<&ThreadPool>,
-) {
-    let input = (sources, charges, vectors, moments);
-    match pool {
-        Some(pool) => pool.install(|| split_source_charges(chunks, 0, input)),
-        None => write_source_charges(chunks, 0, input),
-    }
-}
-
-/// The input of the charge load: the owned sources' leaves, the strengths, the strengths
-/// per source and, with dipoles, how to lay them out.
-type ChargeInput<'a, T> = (&'a LeafRanges, &'a [T], usize, Option<StrengthLayout<'a>>);
-
-/// How the charge load lays out the strengths of a source type with dipoles (Phase 6 T8;
-/// CONVENTIONS §3.13, "Source chunks"): the w = 3 or 4 values of a source arrive together
-/// (its charge first, if any), and leaf j's chunk takes the n charges, then the n moments
-/// d̂ = d / r_j, each component `T::from_f64(d.to_f64() / r_j)`: one rounding in f64 (r_j =
-/// w / 2^(l+1) is exact, so this is fl(d · 2^(l+1) / w)), then the rounding to T.
-#[derive(Clone, Copy)]
-struct StrengthLayout<'a> {
-    sources: SourceType,
-    /// r of every local leaf.
-    radii: &'a [f64],
-}
-
-/// [`load_source_charges`] on the calling thread, for the leaves of `chunks`, the first
-/// of which is local leaf `first`.
-fn write_source_charges<T: SimdScalar>(
-    mut chunks: LeafSliceMut<'_, T>,
-    first: usize,
-    (sources, charges, m, moments): ChargeInput<'_, T>,
-) {
-    for (r, chunk) in chunks.chunks_mut().enumerate() {
-        let points = sources.range(first + r);
-        let (_, values) = chunk.split_at_mut(3 * points.len());
-        let input = &charges[m * points.start..m * points.end];
-        let layout = moments.map(|layout| (layout.sources, Some(layout.radii[first + r])));
-        write_leaf_strengths(values, input, m, layout);
-    }
-}
-
-/// One local leaf's strengths: `values` its chunk after the coordinate triples, `input`
-/// its sources' m strengths each, as forwarded. Copied as they are without `moments`; with
-/// `moments` = (the source type, the leaf's r) the charges first and then the moments,
-/// each component `T::from_f64(d.to_f64() / r)`, or copied as they are with `None` for r
-/// (already scaled, Phase 6 T8d: [`scale_moments`]).
-fn write_leaf_strengths<T: SimdScalar>(
-    values: &mut [T],
-    input: &[T],
-    m: usize,
-    moments: Option<(SourceType, Option<f64>)>,
-) {
-    let Some((sources, radius)) = moments else {
-        values.copy_from_slice(input);
-        return;
-    };
-    let n = input.len() / m;
-    let q = usize::from(sources.has_charges());
-    let (leaf_charges, leaf_moments) = values.split_at_mut(q * n);
-    for (j, strengths) in input.chunks_exact(m).enumerate() {
-        if q == 1 {
-            leaf_charges[j] = strengths[0];
-        }
-        for k in 0..3 {
-            let d = strengths[q + k];
-            leaf_moments[3 * j + k] = match radius {
-                Some(radius) => T::from_f64(d.to_f64() / radius),
-                None => d,
-            };
-        }
-    }
-}
-
-/// Scales the moments of the forwarded strengths `upload` (w = 3 or 4 per source, leaf
-/// order, the charge first if any) into their leaf's units in place, for the device's
-/// upload (Phase 6 T8d): each component `T::from_f64(d.to_f64() / r_j)`, the bits the charge
-/// load writes into the host's chunks; the charges stay as they are. On `pool` when given,
-/// halving the leaves as the charge load does.
-fn scale_moments<T: SimdScalar>(
-    upload: &mut [T],
-    sources: &LeafRanges,
-    layout: StrengthLayout<'_>,
-    pool: Option<&ThreadPool>,
-) {
-    let leaves = 0..layout.radii.len();
-    match pool {
-        Some(pool) => pool.install(|| split_scale_moments(upload, sources, layout, leaves)),
-        None => write_scaled_moments(upload, sources, layout, leaves),
-    }
-}
-
-/// [`scale_moments`] on the calling thread for the local leaves `leaves`, whose strengths
-/// `upload` holds.
-fn write_scaled_moments<T: SimdScalar>(
-    upload: &mut [T],
-    sources: &LeafRanges,
-    StrengthLayout {
-        sources: kind,
-        radii,
-    }: StrengthLayout<'_>,
-    leaves: std::ops::Range<usize>,
-) {
-    let w = kind.strengths();
-    let q = usize::from(kind.has_charges());
-    let first = sources.offsets[leaves.start];
-    for j in leaves {
-        let radius = radii[j];
-        for point in sources.range(j) {
-            let at = w * (point - first) + q;
-            for d in &mut upload[at..at + 3] {
-                *d = T::from_f64(d.to_f64() / radius);
-            }
-        }
-    }
-}
-
-/// [`scale_moments`] on the current pool for the local leaves `leaves`, halving them until
-/// a half holds at most [`LOAD_GRAIN`] points or one leaf.
-fn split_scale_moments<T: SimdScalar>(
-    upload: &mut [T],
-    sources: &LeafRanges,
-    layout: StrengthLayout<'_>,
-    leaves: std::ops::Range<usize>,
-) {
-    let points = sources.offsets[leaves.end] - sources.offsets[leaves.start];
-    if leaves.len() < 2 || points <= LOAD_GRAIN {
-        write_scaled_moments(upload, sources, layout, leaves);
-        return;
-    }
-    let mid = leaves.start + leaves.len() / 2;
-    let w = layout.sources.strengths();
-    let (left, right) =
-        upload.split_at_mut(w * (sources.offsets[mid] - sources.offsets[leaves.start]));
-    rayon::join(
-        || split_scale_moments(left, sources, layout, leaves.start..mid),
-        || split_scale_moments(right, sources, layout, mid..leaves.end),
-    );
-}
-
-/// [`load_source_charges`] on the current pool, halving the leaves of `chunks` (the
-/// first local leaf `first`) until a half holds at most [`LOAD_GRAIN`] points or one leaf.
-fn split_source_charges<T: SimdScalar>(
-    mut chunks: LeafSliceMut<'_, T>,
-    first: usize,
-    input: ChargeInput<'_, T>,
-) {
-    let sources = input.0;
-    let n = chunks.nleaves();
-    let points = sources.offsets[first + n] - sources.offsets[first];
-    if n < 2 || points <= LOAD_GRAIN {
-        write_source_charges(chunks, first, input);
-        return;
-    }
-    let mid = n / 2;
-    let (left, right) = chunks.split_at_mut(mid);
-    rayon::join(
-        || split_source_charges(left, first, input),
-        || split_source_charges(right, first + mid, input),
-    );
-}
-
-/// The m = `charges.len()` vectors of the caller's charges packed point-major for the
-/// forward move (Phase 6 T5): `packed[i m + v] = charges[v][i]`, every element written
-/// once (the buffer reused, resized). On `pool` when given, by ranges of sources.
-fn pack_charges<T: Copy + Send + Sync>(
-    charges: &[&[T]],
-    pool: Option<&ThreadPool>,
-    packed: &mut Vec<T>,
-) {
-    let (m, n) = (charges.len(), charges.first().map_or(0, |c| c.len()));
-    let value = |k: usize| charges[k % m][k / m];
-    match pool {
-        Some(pool) => pool.install(|| {
-            (0..m * n)
-                .into_par_iter()
-                .map(value)
-                .collect_into_vec(packed)
-        }),
-        None => {
-            packed.clear();
-            packed.extend((0..m * n).map(value));
-        }
-    }
-}
-
-/// The charges and moments of an evaluation with both (Phase 6 T8) packed point-major,
-/// four values per source in the caller's order: q, d₀, d₁, d₂. On the pool if given.
-fn pack_sources<T: Copy + Send + Sync>(
-    charges: &[T],
-    dipoles: &[[T; 3]],
-    pool: Option<&ThreadPool>,
-    packed: &mut Vec<T>,
-) {
-    let value = |k: usize| match k % 4 {
-        0 => charges[k / 4],
-        c => dipoles[k / 4][c - 1],
-    };
-    let n = 4 * charges.len();
-    match pool {
-        Some(pool) => pool.install(|| (0..n).into_par_iter().map(value).collect_into_vec(packed)),
-        None => {
-            packed.clear();
-            packed.extend((0..n).map(value));
-        }
-    }
-}
-
-/// The output pass on the host (Phase 4S T9): φ and ∇φ of every owned target of `order`
-/// from the leaf-ordered target output `data` (the `LeafStore` layout with the point
-/// offsets `offsets`: the host's store, or since Phase 4S T11 the device's download read
-/// in place), into `values` in the received order, o m values per target: for each of
-/// the m vectors in turn (Phase 6 T5; m = 1 before) φ, or with `gradients` φ and ∇φ
-/// (o = 4), the layout the backward move of the targets' redistribution sends (Phase 5
-/// T6). Leaf j's chunk holds the m vectors' φ̂ one vector after the other, then their ĝ
-/// (CONVENTIONS §3.13, "Several charge vectors"). Each value is
-/// `T::from_f64(x.to_f64() / scale)`, as the pass before T9 ([`scaled_output`]) computes
-/// it, so the output is that pass's bit for bit.
-///
-/// One loop over the targets: on `pool` when given, rayon's split of `values` into ranges
-/// that each thread writes in sequence, reading the store gathered; on the calling thread
-/// otherwise. Every element of `values` (o m values per target) is written once.
-fn gather_output<T: SimdScalar + Default>(
-    data: &[T],
-    offsets: &[usize],
-    order: &OutputOrder,
-    (gradients, m): (bool, usize),
-    pool: Option<&ThreadPool>,
-    values: &mut [T],
-) {
-    let o = if gradients { 4 } else { 1 };
-    debug_assert_eq!(values.len(), o * m * order.points.len());
-    // Target i's leaf j, the leaf's first point and the target's place k in the leaf.
-    let place = |i: usize| {
-        let j = order.leaves[i] as usize;
-        let first = offsets[j];
-        (j, first, order.points[i] as usize - first)
-    };
-    let scaled = |x: T, scale: f64| T::from_f64(RealScalar::to_f64(x) / scale);
-    let write = |(i, target): (usize, &mut [T])| {
-        let (j, first, k) = place(i);
-        let n = offsets[j + 1] - first;
-        let [phi_scale, g_scale] = order.scales[j];
-        // Leaf j's chunk: o m values per point from o m P_j, vector v's φ̂ at v n + k and
-        // its ĝ after the m n potentials, at m n + 3 (v n + k).
-        let base = o * m * first;
-        for (v, target) in target.chunks_exact_mut(o).enumerate() {
-            target[0] = scaled(data[base + v * n + k], phi_scale);
-            if gradients {
-                let g = base + m * n + 3 * (v * n + k);
-                for c in 0..3 {
-                    target[1 + c] = scaled(data[g + c], g_scale);
-                }
-            }
-        }
-    };
-    match pool {
-        Some(pool) => pool.install(|| values.par_chunks_mut(o * m).enumerate().for_each(write)),
-        None => values.chunks_mut(o * m).enumerate().for_each(write),
-    }
-}
-
-/// After the output pass on the device (Phase 4S T9): `device`, for each of the m vectors
-/// in turn (Phase 6 T5) φ of every owned target in received order and then, with
-/// gradients, ∇φ in the `[T; 3]` order of [`Output`], copied into `values` in the layout of
-/// [`gather_output`] (o m values per target), for the backward move. On `pool` when given;
-/// each element once.
-#[cfg_attr(not(feature = "gpu"), allow(dead_code))]
-fn interleave_output<T: SimdScalar>(
-    device: &[T],
-    (gradients, m): (bool, usize),
-    pool: Option<&ThreadPool>,
-    values: &mut [T],
-) {
-    if !gradients && m == 1 {
-        values.copy_from_slice(device);
-        return;
-    }
-    let o = if gradients { 4 } else { 1 };
-    let n = device.len() / (o * m);
-    let write = |(i, target): (usize, &mut [T])| {
-        for (v, target) in target.chunks_exact_mut(o).enumerate() {
-            let vector = &device[v * o * n..(v + 1) * o * n];
-            target[0] = vector[i];
-            if gradients {
-                target[1..].copy_from_slice(&vector[n + 3 * i..n + 3 * i + 3]);
-            }
-        }
-    };
-    match pool {
-        Some(pool) => pool.install(|| values.par_chunks_mut(o * m).enumerate().for_each(write)),
-        None => values.chunks_mut(o * m).enumerate().for_each(write),
-    }
-}
-
-/// After the backward move (Phase 5 T6): `values`, o values per target in the caller's
-/// order (φ, or φ and ∇φ), copied into `output`'s buffers: cleared first and their
-/// allocations reused (`collect_into_vec`, `unzip_into_vecs`), every element written once,
-/// with no zero fill. On `pool` when given, serially otherwise. `gradient` becomes `Some`
-/// with gradients and `None` without.
-fn unpack_output<T: SimdScalar>(
-    values: &[T],
-    gradients: bool,
-    pool: Option<&ThreadPool>,
-    output: &mut Output<T>,
-) {
-    if gradients {
-        let n = values.len() / 4;
-        let both = |i: usize| {
-            let v = &values[4 * i..4 * i + 4];
-            (v[0], [v[1], v[2], v[3]])
-        };
-        let (potential, gradient) = (
-            &mut output.potential,
-            output.gradient.get_or_insert_with(Vec::new),
-        );
-        match pool {
-            Some(pool) => pool.install(|| {
-                (0..n)
-                    .into_par_iter()
-                    .map(both)
-                    .unzip_into_vecs(potential, gradient);
-            }),
-            None => {
-                potential.clear();
-                gradient.clear();
-                potential.reserve(n);
-                gradient.reserve(n);
-                for (phi, g) in (0..n).map(both) {
-                    potential.push(phi);
-                    gradient.push(g);
-                }
-            }
-        }
-    } else {
-        output.gradient = None;
-        let potential = &mut output.potential;
-        match pool {
-            Some(pool) => {
-                pool.install(|| values.par_iter().copied().collect_into_vec(potential));
-            }
-            None => {
-                potential.clear();
-                potential.extend_from_slice(values);
-            }
-        }
-    }
-}
-
-/// After the backward move with m vectors (Phase 6 T5): `values`, o m values per target in
-/// the caller's order (for each vector in turn φ, or φ and ∇φ), copied into `output`'s
-/// buffers vector after vector (`potential[v N + i]`, `gradient[v N + i]` for N targets),
-/// the allocations reused, every element written once. On `pool` when given, serially
-/// otherwise. `gradient` becomes `Some` with gradients and `None` without.
-fn unpack_output_many<T: SimdScalar>(
-    values: &[T],
-    (gradients, m): (bool, usize),
-    pool: Option<&ThreadPool>,
-    output: &mut OutputMany<T>,
-) {
-    let o = if gradients { 4 } else { 1 };
-    let n = values.len() / (o * m);
-    // Element k = v N + i of the output: target i's value of vector v.
-    let at = |k: usize| o * (m * (k % n) + k / n);
-    let potential = |k: usize| values[at(k)];
-    let gradient = |k: usize| {
-        let x = at(k) + 1;
-        [values[x], values[x + 1], values[x + 2]]
-    };
-    match pool {
-        Some(pool) => pool.install(|| {
-            (0..m * n)
-                .into_par_iter()
-                .map(potential)
-                .collect_into_vec(&mut output.potential);
-            if gradients {
-                (0..m * n)
-                    .into_par_iter()
-                    .map(gradient)
-                    .collect_into_vec(output.gradient.get_or_insert_with(Vec::new));
-            }
-        }),
-        None => {
-            output.potential.clear();
-            output.potential.extend((0..m * n).map(potential));
-            if gradients {
-                let g = output.gradient.get_or_insert_with(Vec::new);
-                g.clear();
-                g.extend((0..m * n).map(gradient));
-            }
-        }
-    }
-    if !gradients {
-        output.gradient = None;
-    }
-}
-
 /// The wall time of each step of [`FmmBuilder::build`] on this rank, for reports only.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BuildTimings {
@@ -4133,14 +3545,11 @@ where
     /// caller's order) for the forward move; with charges and dipoles their four values
     /// per source; allocated by the first evaluation that needs it.
     packed: Vec<T>,
-    /// The route of the sources from the caller's ranks to their owners (Phase 5 T6).
-    sources: Redistribution,
-    /// The route of the targets, and of their output back.
-    targets: Redistribution,
-    /// The owned sources of every local leaf, in leaf order.
-    source_leaves: LeafRanges,
-    /// The owned targets of every local leaf, in leaf order.
-    target_leaves: LeafRanges,
+    /// The routes of the sources and targets (Phase 5 T6), the owned points of every
+    /// local leaf, r_t of every local leaf (also for the test oracle,
+    /// [`Fmm::reference_output`]) and the output order (Helmholtz CH3.1b: the point
+    /// pipeline's).
+    points: Points,
     /// The charges of the owned sources in leaf order, m per source (or the source type's
     /// strengths), as the forward move leaves them on the host path (reused by every
     /// evaluation).
@@ -4149,11 +3558,6 @@ where
     received_output: Vec<T>,
     /// The backward move's values, o m per target in the caller's order.
     returned_output: Vec<T>,
-    /// The output pass's position and leaf of every owned target, and the scales of every
-    /// leaf.
-    outputs: OutputOrder,
-    /// r_t of every local leaf, for the test oracle ([`Fmm::reference_output`]).
-    radii: Vec<f64>,
     max_leaf_points: usize,
     cache_outcomes: Vec<(TableKind, CacheOutcome)>,
     threading: ThreadingReport,
@@ -4294,7 +3698,8 @@ where
         let pack = start.elapsed();
         let input = if m > 1 { &packed[..] } else { charges[0] };
         let result = self.run(input, pack, |values, pool| {
-            unpack_output_many(values, (gradients, m), pool, output);
+            let buffers = (&mut output.potential, &mut output.gradient);
+            unpack_output_many(values, (gradients, m), pool, buffers);
         });
         self.packed = packed;
         output.timings = result?;
@@ -4378,7 +3783,7 @@ where
     /// the build's source type ([`FmmError::SourceType`]), or a slice whose length is not
     /// this rank's number of sources.
     fn check_sources(&self, sources: &Sources<'_, T>) -> Result<(), FmmError> {
-        let expected = self.sources.nsent();
+        let expected = self.points.sources.nsent();
         if let Some(reason) = &self.device_error {
             return Err(FmmError::Device(reason.clone()));
         }
@@ -4418,7 +3823,7 @@ where
         vectors: usize,
         lengths: impl IntoIterator<Item = usize>,
     ) -> Result<(), FmmError> {
-        let expected = self.sources.nsent();
+        let expected = self.points.sources.nsent();
         if let Some(reason) = &self.device_error {
             Err(FmmError::Device(reason.clone()))
         } else if self.source_type != SourceType::Charges {
@@ -4461,9 +3866,11 @@ where
         // T8); the output carries m vectors.
         let (start, m, w) = (Instant::now(), self.vectors, self.strengths);
         let mut upload = if self.evaluator.operator().engine.is_device() {
-            Some(self.sources.forward(charges, w))
+            Some(self.points.sources.forward(charges, w))
         } else {
-            self.sources.forward_into(charges, w, &mut self.charges);
+            self.points
+                .sources
+                .forward_into(charges, w, &mut self.charges);
             None
         };
         timings.forward_charges = pack + start.elapsed();
@@ -4472,12 +3879,12 @@ where
         // chunks"); charges are copied as they are.
         let moments = (self.source_type != SourceType::Charges).then(|| StrengthLayout {
             sources: self.source_type,
-            radii: &self.radii,
+            radii: &self.points.radii,
         });
         if self.host_sources {
             load_source_charges(
                 self.evaluator.local_sources_mut(),
-                &self.source_leaves,
+                &self.points.source_leaves,
                 upload.as_deref().unwrap_or(&self.charges),
                 (w, moments),
                 pool.as_deref(),
@@ -4489,10 +3896,10 @@ where
             // from the host store, which the exchange reads (Phase 5 T8,
             // docs/design/distributed-fmm.md §7.1).
             if let Some(layout) = moments {
-                scale_moments(upload, &self.source_leaves, layout, pool.as_deref());
+                scale_moments(upload, &self.points.source_leaves, layout, pool.as_deref());
             }
             for &j in &self.sent_leaves {
-                let points = self.source_leaves.range(j as usize);
+                let points = self.points.source_leaves.range(j as usize);
                 let chunk = self.evaluator.sources_mut(j as usize);
                 write_leaf_strengths(
                     &mut chunk[3 * points.len()..],
@@ -4599,7 +4006,7 @@ where
                 gather_output(
                     store.as_slice(),
                     store.point_offsets(),
-                    &self.outputs,
+                    &self.points.outputs,
                     (gradients, m),
                     pool.as_deref(),
                     &mut self.received_output,
@@ -4612,7 +4019,7 @@ where
                         gather_output(
                             &values,
                             offsets,
-                            &self.outputs,
+                            &self.points.outputs,
                             (gradients, m),
                             pool.as_deref(),
                             &mut self.received_output,
@@ -4664,7 +4071,8 @@ where
         // The output back to the caller's ranks and order (Phase 5 T6).
         let start = Instant::now();
         let o = m * if gradients { 4 } else { 1 };
-        self.targets
+        self.points
+            .targets
             .backward_into(&self.received_output, o, &mut self.returned_output);
         unpack(&self.returned_output, pool.as_deref());
         timings.backward_output = start.elapsed();
@@ -4753,7 +4161,7 @@ where
             self.evaluator.plan(),
             self.octree.coarse_tree_leafs(),
             self.evaluator.source_exchange().leaf_counts(),
-            &self.target_leaves.counts,
+            &self.points.target_leaves.counts,
             self.cost_model.m2l_unit(),
         )
         .total()
@@ -4795,20 +4203,23 @@ where
     /// Returns the number of sources this rank passed to [`FmmBuilder::build`], the length
     /// of its charge vector.
     pub fn nsources(&self) -> usize {
-        self.sources.nsent()
+        self.points.sources.nsent()
     }
 
     /// Returns the number of targets this rank passed to [`FmmBuilder::build`], the length
     /// of its output.
     pub fn ntargets(&self) -> usize {
-        self.targets.nsent()
+        self.points.targets.nsent()
     }
 
     /// Returns the number of sources and of targets this rank owns: those in its local
     /// leaves, wherever the caller passed them (Phase 5 T6). On one rank,
     /// ([`nsources`](Self::nsources), [`ntargets`](Self::ntargets)).
     pub fn owned_points(&self) -> (usize, usize) {
-        (self.sources.nreceived(), self.targets.nreceived())
+        (
+            self.points.sources.nreceived(),
+            self.points.targets.nreceived(),
+        )
     }
 
     /// Returns the number of levels, the global maximum level plus one.
@@ -4818,19 +4229,19 @@ where
 
     /// Returns the number of local leaves, on every level.
     pub fn nleaves(&self) -> usize {
-        self.radii.len()
+        self.points.radii.len()
     }
 
     /// Returns the number of sources in each local leaf, in leaf order
     /// (`nd_fmm_plan::index::LeafNumbering`): the sources this rank owns, from every rank.
     pub fn source_counts(&self) -> &[usize] {
-        &self.source_leaves.counts
+        &self.points.source_leaves.counts
     }
 
     /// Returns the number of targets in each local leaf, in leaf order: the targets this
     /// rank owns, from every rank.
     pub fn target_counts(&self) -> &[usize] {
-        &self.target_leaves.counts
+        &self.points.target_leaves.counts
     }
 
     /// Returns the largest number of sources in a leaf, over all ranks.
@@ -5111,8 +4522,8 @@ where
         let vectors = match &mut self.evaluator.operator_mut().engine {
             Engine::Host(_) => scaled_output(
                 self.evaluator.target_output_store(),
-                &self.target_leaves,
-                &self.radii,
+                &self.points.target_leaves,
+                &self.points.radii,
                 (gradients, m),
             ),
             #[cfg(feature = "gpu")]
@@ -5121,7 +4532,12 @@ where
                     .download_target_output()
                     .map_err(|error| FmmError::Device(error.to_string()));
                 let store = agree(self.evaluator.comm(), store)?;
-                scaled_output(&store, &self.target_leaves, &self.radii, (gradients, m))
+                scaled_output(
+                    &store,
+                    &self.points.target_leaves,
+                    &self.points.radii,
+                    (gradients, m),
+                )
             }
         };
         let mut output = OutputMany {
@@ -5133,9 +4549,9 @@ where
         for (potential, gradient) in vectors {
             output
                 .potential
-                .extend(self.targets.backward(&potential, 1));
+                .extend(self.points.targets.backward(&potential, 1));
             if let (Some(all), Some(gradient)) = (output.gradient.as_mut(), gradient) {
-                let flat = self.targets.backward(gradient.as_flattened(), 3);
+                let flat = self.points.targets.backward(gradient.as_flattened(), 3);
                 all.extend_from_slice(flat.as_chunks::<3>().0);
             }
         }
@@ -5495,7 +4911,8 @@ mod tests {
                     gradient: None,
                     timings: StageTimings::default(),
                 };
-                unpack_output_many(&reference, (gradients, m), pool.as_ref(), &mut fresh);
+                let buffers = (&mut fresh.potential, &mut fresh.gradient);
+                unpack_output_many(&reference, (gradients, m), pool.as_ref(), buffers);
                 assert_eq!(
                     want_bits(&fresh.potential, &fresh.gradient),
                     want,
@@ -5507,7 +4924,8 @@ mod tests {
                     gradient: (!gradients).then(|| vec![[T::zero(); 3]; 5]),
                     timings: StageTimings::default(),
                 };
-                unpack_output_many(&reference, (gradients, m), pool.as_ref(), &mut wrong);
+                let buffers = (&mut wrong.potential, &mut wrong.gradient);
+                unpack_output_many(&reference, (gradients, m), pool.as_ref(), buffers);
                 assert_eq!(
                     want_bits(&wrong.potential, &wrong.gradient),
                     want,
