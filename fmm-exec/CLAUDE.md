@@ -212,11 +212,26 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   per-level tables, M2L y-blocks stored within a budget); P2M and L2P `Densities`'; P2L
   and M2P `nd_fmm_ref::helmholtz::leaf` in the points' units with the frame's radius as
   the other box's half-width (the levels of X and W boxes from the frame's radius); P2P
-  the reference `nd_fmm_ref::helmholtz::p2p::p2p` until CH3.4. It runs on the unchanged
-  shared drivers (`batched_m2l` `None`) and implements `PairOperator`.
-  `tests/helmholtz/operator.rs` checks the bodies pair by pair against the direct sum and,
-  at low degrees, against `nd-fmm-ref`'s chains in absolute units; the level calls are
-  tested with the FMM (CH3.1b).
+  the kernel of a `P2pChoice` (below, CH3.4c). It runs on the unchanged shared drivers
+  (`batched_m2l` `None`) and implements `PairOperator`. `tests/helmholtz/operator.rs`
+  checks the bodies pair by pair against the direct sum and, at low degrees, against
+  `nd-fmm-ref`'s chains in absolute units; the level calls are tested with the FMM
+  (CH3.1b).
+- The Helmholtz P2P kernel (Helmholtz CH3.4c; the `helmholtz::operator` module docs, "P2P
+  kernel"; docs/helmholtz/tasks/CH3.4c.md): `HelmholtzOperator::with_p2p` and
+  `HelmholtzFmmBuilder::p2p_kernel` take Laplace's `P2pChoice` (default `Auto`):
+  `nd_fmm_simd::P2pKernel::evaluate_helmholtz` on the ISA, one call per vector on all the
+  leaf's targets (vector v's charges point-major, the chunk's own slice for m = 1, else
+  gathered into scratch; the output planes of columns 2v and 2v + 1 as they lie, the
+  kernel's layout); `Reference` keeps `nd_fmm_ref::helmholtz::p2p::p2p` target by target,
+  the trusted path, which `Isa::Scalar` equals bit for bit. An unavailable ISA is
+  `IsaUnavailable` from the operator, `SettingsError::P2pIsaUnavailable` from the builder;
+  `p2p_kernel()` reports the resolved choice on both. `tests/helmholtz/p2p.rs` checks every
+  ISA against `Reference` pair by pair within CH3.4b's per-term contract summed over the
+  sources (f64 and f32, real and complex k and charges, two vectors, a coarser neighbour);
+  `tests/helmholtz_fmm.rs` the FMM on every ISA within `KERNEL_TOLERANCE` (1e-13) of
+  `Reference`, `Scalar` bit for bit, `Auto` that of `Isa::detect`, and every other scenario
+  on `Auto`.
 - The point pipeline (Helmholtz CH3.1b; the crate-private `src/pipeline.rs`, its module
   docs; docs/helmholtz/tasks/CH3.1b.md): steps 3, 4's keys and octree, 5, 6 and 8 of
   `FmmBuilder::build` (`pipeline::{domain, octree}`, `Points::{route, load_coordinates}`)
@@ -229,7 +244,7 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   stays in `fmm.rs`. The moved helpers' unit tests stayed in `fmm.rs`'s `mod tests`.
 - The Helmholtz FMM (Helmholtz CH3.1b; `helmholtz::fmm`, its module docs):
   `HelmholtzFmmBuilder` (k, `Degrees`, `ChargeKind`, vectors, gradients, threads, domain,
-  points per leaf, `max_level`, the block budget, c_leaf) and `HelmholtzFmm` on any number
+  points per leaf, `max_level`, the block budget, c_leaf, the P2P kernel since CH3.4c) and `HelmholtzFmm` on any number
   of ranks, the pipeline's steps with the leaf rule (`min_leaf_level` into
   `OctreeOptions::with_min_leaf_level`) and `HelmholtzOperator` on `Evaluator`; no near
   rule, work cut, overlap, device or table cache. `evaluate` packs the c m columns

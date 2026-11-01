@@ -25,7 +25,7 @@
 //! [`HelmholtzOperator`] (CH3.1a, submodule [`operator`]) is the operator of the plan for
 //! real and complex k: RCR on every level with the per-level tables of
 //! `nd_fmm_tables::helmholtz`, the leaf operators of [`Densities`] and `nd-fmm-ref`, and
-//! the reference P2P.
+//! P2P by the vectorised kernel of `nd-fmm-simd` or the reference (CH3.4c).
 //!
 //! [`HelmholtzFmmBuilder`] and [`HelmholtzFmm`] (Helmholtz CH3.1b, submodule
 //! [`fmm`](mod@fmm)) are the FMM on any number of ranks: the point pipeline of `Fmm` with
