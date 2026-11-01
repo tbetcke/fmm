@@ -60,7 +60,7 @@ Public API: the three methods above and `Case::p2p`. Tables, layouts, convention
   `Reference` and with `Isa::Scalar`, each bit for bit `nd_fmm_ref::helmholtz::p2p::p2p`
   (CH3.4b: the scalar path is the reference's loop).
 - `fmm-exec/tests/helmholtz/p2p.rs` (new): every ISA the machine offers against the
-  `Reference` operator, f64 and f32, real k and complex k (Re k̂ r to about 45 and to the
+  `Reference` operator, f64 and f32, real k and complex k (Re k̂ r to about 53, beyond the
   leaf rule's 22 c_leaf), real and complex charges, m = 2 vectors, gradients on, a neighbour
   of the same level and of a coarser one (the frame's r̂ = 2) and the self pair: each part
   of each target's potential within Σ_j (32 + 12 |k̂| r_j + 2 n_s) u_T |q_j| e^{−Im k̂ r_j} /
@@ -99,6 +99,40 @@ kernel's ISAs were checked there in CH3.4b; their time per pair is CH3.4b's repo
 - Constraint 6: `Reference` stays the trusted path, tested against every ISA.
 - Risk: the f32 Helmholtz operator is untested in the FMM so far; the operator test runs
   f32 P2P only.
+
+## Results
+
+Tests (M6, NEON): `tests/helmholtz/p2p.rs` passes; the worst difference from `Reference`
+is at most 0.019 of the contract's bound (φ and ∇φ, f64 and f32, k up to 128 + 16i, so
+Re k̂ r to 53). `Isa::Scalar` is `Reference` bit for bit in the operator (f64, f32) and in
+the FMM. In `tests/helmholtz_fmm.rs` NEON is within 6.9e-16 (φ) and 4.8e-16 (∇φ) of
+`Reference` (relative L2, `KERNEL_TOLERANCE` 1e-13), and its errors against the direct sum
+are `Reference`'s to the printed digits. The scenarios on `Auto` keep their checks: 4
+threads bit for bit one, pair by pair bit for bit the level calls. The debug run at one rank
+took 46 s, 36 s before.
+
+The time before and after (M6, `helmholtz_accuracy`, release, one rank, BLAS threads 1,
+2026-11-01; two launches, `--p2p reference,auto`, then `auto,reference`; the evaluation's
+wall time in s, the mean of the two launches; at 6 threads the range):
+
+| Case | ε | Reference, 1 × 1 | NEON, 1 × 1 | change | Reference, 1 × 6 | NEON, 1 × 6 |
+| --- | --- | ---: | ---: | ---: | --- | --- |
+| W1, kD = 100 (79,578 points) | 10⁻³ | 6.74 | 6.59 | −2.3 % | 1.43–1.49 | 1.47–1.58 |
+| W1, kD = 100 | 10⁻⁶ | 42.52 | 42.31 | −0.5 % | 9.36–9.55 | 9.37–10.69 |
+| W4 cube, N = 10⁵, kD = 10 | 10⁻³ | 5.30 | 4.96 | −6.4 % | 1.19–1.50 | 1.10–1.11 |
+| W4 cube, N = 10⁵, kD = 10 | 10⁻⁶ | 35.80 | 35.54 | −0.7 % | 8.34–10.45 | 7.98–10.48 |
+| W3, kD = 30 (108,849 points) | 10⁻³ | 5.51 | 5.03 | −8.7 % | 1.23 | 1.13–1.15 |
+
+- The vectorised kernel saves 0.15–0.48 s per evaluation at one thread, about the same at
+  10⁻³ and 10⁻⁶ (P2P does not depend on ε): P2P is a small share of these evaluations, which
+  the RCR translations at p = 16–46 dominate (CH3.1c's follow-up). Their cost is CH3.2's.
+- At 6 threads the two launches differ by up to 25 % for the same kernel (the M6's
+  performance and efficiency cores, tools/m6/machine.md), so those rows show no effect.
+- Errors identical to the printed digits for both kernels; the `Reference` checksums equal
+  CH3.1c's (W1 kD = 100: `01003b6877ad138a`, `0062dceef767aca1`; W3 kD = 30:
+  `4d28864830075fe9`), and each kernel's checksum is the same at 1 and 6 threads and in both
+  launches (NEON: `4e1010c90fc21158`, `9dbab52f331a4ccc`, `43dd41e6a6fef349`,
+  `82bc2b1aac617b03`, `9c3d5399b246c996`).
 
 ## Pending runs
 
