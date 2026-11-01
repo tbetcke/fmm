@@ -581,11 +581,11 @@ macro_rules! p2p_yukawa_entries {
             // runs only on a CPU with them: a call from outside such a context is
             // `unsafe` and asserts it.
             let s = unsafe { Avx512::new_unchecked() };
-            p2p_skeleton::<$t, Avx512, _, YUKAWA_K, false>(
+            p2p_skeleton::<$t, Avx512, _, 1, 1, YUKAWA_K, false>(
                 s,
                 Yukawa::new(s, kappa),
                 sources,
-                charges,
+                charges.as_chunks::<1>().0,
                 targets,
                 potential,
                 &mut [],
@@ -611,11 +611,11 @@ macro_rules! p2p_yukawa_entries {
             // runs only on a CPU with them: a call from outside such a context is
             // `unsafe` and asserts it.
             let s = unsafe { Avx512::new_unchecked() };
-            p2p_skeleton::<$t, Avx512, _, YUKAWA_K, true>(
+            p2p_skeleton::<$t, Avx512, _, 1, 1, YUKAWA_K, true>(
                 s,
                 Yukawa::new(s, kappa),
                 sources,
-                charges,
+                charges.as_chunks::<1>().0,
                 targets,
                 potential,
                 gradient,

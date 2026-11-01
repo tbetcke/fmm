@@ -654,11 +654,11 @@ fn yukawa_body<T: SimdScalar, S: Simd<T>, const K: usize, const G: bool>(
 ) -> (Vec<T>, Vec<[T; 3]>) {
     let mut potential = p.potential.clone();
     let mut gradient = if G { p.gradient.clone() } else { Vec::new() };
-    p2p_skeleton::<T, S, _, K, G>(
+    p2p_skeleton::<T, S, _, 1, 1, K, G>(
         s,
         Yukawa::new(s, kappa),
         &p.sources,
-        &p.charges,
+        p.charges.as_chunks::<1>().0,
         &p.targets,
         &mut potential,
         &mut gradient,
