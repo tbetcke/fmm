@@ -342,7 +342,8 @@ fn chains(pb: &mut Problem, seed: u64, draw: Draw) -> Vec<Chain> {
     out
 }
 
-/// The chains' errors within the tolerance ε at S7's degrees (the P2P to rounding, 1e-13), for real k at
+/// The chains' errors within the tolerance ε at S7's degrees (the P2P to rounding, 1e-13),
+/// for real k at
 /// kD = 1, 20 and 100 and complex k at kD = 20 + 2i, real and complex charges, ε = 10⁻⁶
 /// and 10⁻¹⁰.
 #[test]

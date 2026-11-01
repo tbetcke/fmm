@@ -147,7 +147,7 @@ pub fn fit_plateau(points: &[Point]) -> Option<DegreeRule> {
             };
             let excess = points
                 .iter()
-                .map(|p| rule.plateau(p.epsilon) - p.degree)
+                .map(|p| rule.plateau(p.epsilon).saturating_sub(p.degree))
                 .sum::<usize>();
             let total = decades.iter().map(|&l| curve(l) + beta).sum::<f64>();
             if best.is_none_or(|(e, t, _)| excess < e || (excess == e && total < t)) {

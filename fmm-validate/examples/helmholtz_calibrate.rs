@@ -32,7 +32,8 @@
 //! 1e-3,…,1e-8 by decades), `--scan plateau|levels`, `--first p`, `--max-degree p`
 //! (default S7's degree at the scanned x and the smallest ε, plus 8: S7's per-pair worst
 //! case bounds the full FMM's), `--min-x x`, `--level l`, `--hold-eps e`, `--hold γ,α,β,C`,
-//! `--samples n`, `--threads t` (default 1), `--charges real|complex`. Run in release mode with one BLAS thread:
+//! `--samples n`, `--threads t` (default 1), `--charges real|complex`. Run in release mode
+//! with one BLAS thread:
 //!
 //! ```text
 //! OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \

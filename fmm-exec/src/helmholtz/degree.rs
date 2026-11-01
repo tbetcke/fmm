@@ -20,12 +20,22 @@
 //! every measured degree. Outside those ranges it is an extrapolation.
 //!
 //! S7's closed form, [`s7_degree`], max(⌈6 log₁₀(1/ε)⌉ − 2, ⌈x + (ln 1/ε)^{2/3} x^{1/3}⌉),
-//! is the per-pair worst case (the worst of the 316 offsets and three placements, potential
-//! and gradient, per-pair relative ℓ2 norm, margin ε/2), an upper bound of the calibrated
-//! rule, which it was the default before CH3.3: about twice its plateau at low frequency
-//! (34 against 15 at ε = 10⁻⁶), where the full FMM's errors lay 10³ to 10⁶ below ε
-//! (CH3.1c). Complex k takes Re(k) a, provisionally: S7 found η = Im k / Re k = 0.1 within 10
-//! degrees of real k, and the damping-dependent rule is CH5.2's.
+//! was the default before CH3.3. It is the per-pair worst case (the worst of the 316
+//! offsets and three placements, potential and gradient, per-pair relative ℓ2 norm, margin
+//! ε/2) and lies at or above the calibrated rule for 10⁻¹⁸ ≤ ε ≤ 10⁻¹: about twice its plateau
+//! at low frequency (34 against 15 at ε = 10⁻⁶), where the full FMM's errors lay 10³ to 10⁶
+//! below ε (CH3.1c).
+//!
+//! The high-frequency branch is measured to x = 65 (kD = 300 on the unit cube) and checked
+//! in the full FMM at x = 108 (W1 at kD = 500, 0.63 ε at ε = 10⁻⁸, the tightest case of the
+//! verification). Beyond, it is an extrapolation that falls increasingly below S7's
+//! per-pair p* as x grows and ε falls (157 against 161 at x = 128, 292 against 297 at
+//! x = 256, both at 10⁻⁸): the measured excess p − x grows about linearly in log₁₀(1/ε),
+//! faster than (ln 1/ε)^{2/3}. Above kD ≈ 500 at ε ≤ 10⁻⁷, check the errors or name S7's
+//! degrees per level; CH4.3 recalibrates the high-frequency levels.
+//!
+//! Complex k takes Re(k) a, provisionally: S7 found η = Im k / Re k = 0.1 within 10 degrees
+//! of real k, and the damping-dependent rule is CH5.2's.
 //!
 //! Levels 0 and 1 get degree 0 under the rule: no V list lies above level 2, no X list
 //! reaches a box on them and no W list holds one, so nothing reads their expansions; their

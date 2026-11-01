@@ -15,12 +15,17 @@ is timed for a gate.
 
 - **S7's tables are confirmed as upper bounds in the full FMM.** At each of the 176
   measured (level, ε) points (plateau and level scans on W1, W3 and W4, 0.14 ≤ x ≤ 65,
-  10⁻³ ≤ ε ≤ 10⁻⁸, the plateau to 10⁻¹⁰), S7's closed form meets ε/2: it lies 9 to 32
-  degrees above the measured degree on the low-frequency levels (x < 4) and 4 to 30 above
-  it on the others. That is the acceptance, "S7's low-frequency tables confirmed in the
-  full FMM".
-- **The full FMM needs about half S7's low-frequency degree.** The plateau is 7, 9, 12, 15,
-  20 and 24 at ε = 10⁻³ … 10⁻⁸ (30 and 36 at 10⁻⁹ and 10⁻¹⁰), against S7's 16 … 46. It is
+  10⁻⁸ ≤ ε ≤ 10⁻³, the plateau to 10⁻¹⁰), the smallest degree that meets ε/2 is at most
+  S7's: 9 to 32 degrees below S7's closed form on the low-frequency levels (x < 4) and 4
+  to 30 below it on the others, and below S7's tabled p* wherever its grid of k a brackets
+  the point (at k a = 1, p* is 12, 17, 23, 29, 35, 42 at 10⁻³ … 10⁻⁸; the plateau 6 to 24;
+  at k a = 64, 75 … 90; x = 65 needs 69 … 86). The full FMM at S7's degrees themselves is
+  CH3.1c's matrix (errors 10³ to 10⁶ below ε) and §5's `--rule s7` rows. That is the
+  acceptance, "S7's low-frequency tables confirmed in the full FMM".
+- **The full FMM needs about half S7's low-frequency degree.** The measured plateau (every
+  point with x ≤ 4) is 7, 9, 12, 15, 20 and 24 at ε = 10⁻³ … 10⁻⁸ (30 and 36 at 10⁻⁹ and
+  10⁻¹⁰), against S7's 16 … 46; the plateau scans alone give 6 at 10⁻³, W1's level 5 at
+  kD = 100 (x = 2.7) needs 7. It is
   convex in L = log₁₀(1/ε) (3 degrees per decade at 10⁻³, 6 at 10⁻¹⁰), so the fitted
   plateau is quadratic in L. The Gaussian clusters set it at small ε, the cube, the
   Plummer sphere and W1's deeper levels at large ε. On the high-frequency levels the
@@ -33,10 +38,13 @@ is timed for a gate.
   x = Re(k) a_l, L = log₁₀(1/ε).
   ```
 
-  It is at least every measured degree (0 to 8 above it in D1's range) and at most S7's.
-  S7's closed form stays public as `s7_degree`.
-- **Verified against ε in the full FMM**: CH3.1c's whole matrix (63 cases, now with W3 at
-  kD = 100 and ε = 10⁻⁸, which fits in memory) and 27 held-out cases (W2, W1 at kD = 50 and
+  It is at least every measured degree (0 to 8 above it in D1's range) and at most S7's
+  closed form for 10⁻¹⁸ ≤ ε ≤ 10⁻¹. S7's closed form stays public as `s7_degree`.
+  Above the measured x = 65 the high-frequency branch is an extrapolation, checked only on
+  W1 at kD = 500 (x = 108), the tightest case of the verification (0.63 ε at 10⁻⁸); there
+  it falls below S7's per-pair p* at small ε (§6, question 2 of the PR).
+- **Verified against ε in the full FMM**: CH3.1c's whole matrix (62 cases: its 61 and W3 at
+  kD = 100 and ε = 10⁻⁸, which now fits in memory) and 26 held-out cases (W2, W1 at kD = 50 and
   150, the W4 cube and Plummer sphere at kD = 3 and 30, W1 at ε = 10⁻⁴ and 10⁻⁷): every
   error of φ and ∇φ within ε, the largest 0.63 ε (∇φ on W1 at kD = 500, ε = 10⁻⁸).
   Deterministic: equal checksums at 1 and 6 threads on 15 cases, and on 1, 2 and 3 ranks on
@@ -257,7 +265,7 @@ measured against ε itself, 1 rank × 6 threads. The variants are those of CH3.1
 | W1 | 79578 | 100 | 1e-4 | – | 0×2, 32, 19, 12, 9 | 0.88 | 4.58e-6 | 1.70e-5 | 0.17 |
 | W1 | 79578 | 100 | 1e-7 | – | 0×2, 36, 23, 20×2 | 3.10 | 9.12e-9 | 1.78e-8 | 0.18 |
 
-All 90 cases are within ε. The tightest are the clusters at 10⁻⁸ (0.50 ε) and W1 at
+All 88 cases are within ε. The tightest are the clusters at 10⁻⁸ (0.50 ε) and W1 at
 kD = 500 at 10⁻⁸ (0.63 ε), where the top level (x = 108) is extrapolated. W3 at kD = 100
 and 10⁻⁸, left out of CH3.1c for memory, now evaluates in 314 s.
 
@@ -287,6 +295,12 @@ timing runs. S7's rows reproduce CH3.1c's errors to the printed digits (W1 at kD
 
 - **CH3.6.** The comparison with FMM3D runs on this rule: W1 at kD = 500 and 10⁻⁶ in 98 s
   (CH3.1c: 508 s, with the reference P2P and S7's degrees).
+- **Beyond kD ≈ 500.** The rule's high-frequency branch is measured to x = 65 and
+  checked at x = 108. Beyond, at ε ≤ 10⁻⁷, it falls increasingly below S7's per-pair p*
+  (157 against 161 at x = 128, 292 against 297 at x = 256, at 10⁻⁸), and §3's linear growth
+  of p − x in L says a constant C under-predicts more as x and L grow. A kD ≈ 1000 run at
+  10⁻⁸ (W1, about 8 million points, a Kathleen node) would check it; until then the module
+  docs say to check the errors there or name S7's degrees.
 - **CH4.3.** On the top levels the high-frequency branch over-predicts at ε = 10⁻³ by up
   to 8 degrees (§3), because the excess p − x grows about linearly in L. CH4.3
   recalibrates the high-frequency levels for the diagonal form; a branch

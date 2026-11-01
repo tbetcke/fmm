@@ -147,8 +147,16 @@ not fit α log₁₀(1/ε) + β to within one degree, a short per-ε table repla
   10⁻³ … 10⁻¹⁰ (the clusters at small ε, the cube and Plummer at large; still falling
   steadily at p = 38, not a rounding floor). A line α L + β overshoots by up to 4 in the
   middle. So `DegreeRule`'s plateau is ⌈γ L² + α L + β⌉ (γ = 0 is S7's shape), the
-  plan's fallback "a short per-ε table" not needed: the fit γ = 0.29, α = 0.45, β = 1.65
-  reproduces the envelope exactly at every decade. For sign-off in the PR.
+  plan's fallback "a short per-ε table" not needed. The plateau's constants are fitted to
+  every point with x ≤ 4 (`PLATEAU_X`), the plateau scans and the low levels of the level
+  scans: the plateau scans alone gave γ = 0.29, α = 0.45, β = 1.65 (6 at 10⁻³), W1's
+  level 5 at kD = 100 (x = 2.7, 7 at 10⁻³) moved it to the final γ = 0.30, α = 0.25,
+  β = 2.60, with C = 0.80. For sign-off in the PR.
+- The high-frequency branch keeps S7's (ln 1/ε)^{2/3}: it over-predicts at 10⁻³ on the
+  top levels by up to 8 (the excess p − x grows about linearly in L), left to CH4.3. W1 at
+  kD = 300's level 3 (x = 32.5) was stopped after two degrees for time; its level 2 ran in
+  two parts (the example's `--max-degree` default of 80 stopped it at 10⁻⁵; the default is
+  now S7's degree plus 8).
 - `DegreeRule` (public, `nd_fmm_exec::helmholtz`) holds the constants, so the fit and the
   library round alike; `degree` is `DegreeRule::CALIBRATED` at Re(k) a.
 - `helmholtz_accuracy::Row::circumradii`: the levels' √3 r_l in the FMM's domain (the
