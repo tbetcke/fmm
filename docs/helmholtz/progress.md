@@ -1045,7 +1045,8 @@ request, using this template:
   manifest changed); locust and Kathleen (no machine run in the plan).
 - Decisions: none taken. Questions for sign-off: 1. CH3.0c's "in" and "out" read as the
   types, chunks, leaf P2M and L2P and the output pass (the FMM's are CH3.1's); 2. the
-  leaf chunks fixed in the module docs, not in CONVENTIONS.
+  leaf chunks fixed in the module docs, not in CONVENTIONS. Both signed off 2026-11-01,
+  the user: "yes to both".
 - Laplace: not touched. There is no change to `fmm.rs`, `operator.rs`, `driver.rs`, the
   tables, `nd-octree`, `nd-fmm-plan` or `nd-fmm-simd`; the Laplace tests pass unchanged.
 - Follow-ups:

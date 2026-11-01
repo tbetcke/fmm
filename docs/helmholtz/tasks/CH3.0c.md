@@ -175,3 +175,5 @@ None.
 2. (For sign-off.) The leaf chunks are fixed in `nd_fmm_exec::helmholtz`'s module docs, not
    in CONVENTIONS (§3.15: "fixed by CH3.0 and are not versioned"); a later CONVENTIONS
    edit may point there.
+
+Both signed off 2026-11-01, the user: "yes to both".
