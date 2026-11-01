@@ -181,7 +181,8 @@ their paths from cargo's `--message-format=json` output, and launches each under
 runner exceeded with `mpi_exec` at 4 ranks), the tests with `--test-threads=1 --nocapture`, with
 `RUST_MIN_STACK=8388608` and the BLAS thread variables at 1; the run steps have their own
 `timeout-minutes`. It covers `nd-fmm-plan`'s `mpi_regressions`, `nd-fmm-exec`'s
-`mpi_exec`, `mpi_threading` and `invariance` (rank-count invariance, Phase 5S T2), and the
+`mpi_exec`, `mpi_threading`, `invariance` (rank-count invariance, Phase 5S T2) and
+`helmholtz_fmm` (the Helmholtz FMM, Helmholtz CH3.1b), and the
 seven registered nd-octree examples (`test_mpi_locally_essential` since Phase 5S T3). The runner's 4 vCPUs are 2 cores, so the ranks
 oversubscribe (`OMPI_MCA_rmaps_base_oversubscribe=1` for Open MPI 4,
 `PRTE_MCA_rmaps_default_mapping_policy=:oversubscribe` for Open MPI 5, which
