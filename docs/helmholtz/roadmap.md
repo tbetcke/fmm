@@ -343,15 +343,25 @@ at any kD.
   *Done when:* complex charges in and split potentials
   and gradients out (§3.15 "Inputs and outputs"), the leaf chunks fixed, one complex
   expansion per complex charge vector. *Needs:* CH3.0b, CH1.3a–c.
-- [ ] **CH3.5 The shared drivers extended to complex expansions.** Two planes, real shifts
+- [x] **CH3.5 The shared drivers extended to complex expansions.** Record:
+  `docs/helmholtz/tasks/CH3.5.md`. Two planes, real shifts
   for real k, the epilogue. *Done when:* constraint 1 as in CH2.0; else the complex operator
-  gets its own drivers. *Needs:* CH2.0. *Machines:* locust, Kathleen.
+  gets its own drivers. *Needs:* CH2.0. *Machines:* locust, Kathleen. Closed as a record
+  on 2026-11-01 (the user, "Close as a record"). The target-by-target drivers pass whole
+  box blocks sized by the plan, so two planes and real shifts need no driver change, and
+  CH3.1's RCR operator runs on them unchanged. Laplace is untouched, so no machine runs.
+  The batched M2L's two-plane case and the epilogue move to CH3.2, their first user.
 - [ ] **CH3.1 Complex planes and RCR on every level.** RCR M2M and L2L (real coaxial steps
   for real k) and RCR M2L. *Done when:* the FMM against the direct sum on W1, W3 and W4 for
   kD ≤ 100 and on W1 at kD = 500; deterministic. *Needs:* CH3.0, CH3.5.
 - [ ] **CH3.2 Dense, Classes and Batched where the node budget allows.** *Done when:*
   measured against Rotation per p, the cost of the cube-group transforms that move the z-axis
-  included. *Needs:* CH3.1. *Machines:* locust, Kathleen.
+  included; Batched on the shared drivers needs the two-plane case of `driver::m2l_block`
+  (`PLANES`, rectangular real-to-complex tables, the per-target epilogue of proposal §6.2;
+  moved here from CH3.5 on 2026-11-01), and Dense either combines per pair or gets a
+  per-target finish hook in `driver::m2l_target`, with constraint 1 as in CH2.0 (Laplace bit for
+  bit, D9 on the three machines), else Helmholtz's Batched gets its own block.
+  *Needs:* CH3.1. *Machines:* locust, Kathleen.
 - [ ] **CH3.3 Calibration of p_l over (k a_l, ε).** *Done when:* S7's low-frequency tables
   confirmed in the full FMM. *Needs:* CH3.1, CH0.7.
 - [ ] **CH3.4 Helmholtz P2P, real and complex k.** On CH2.4's skeleton. *Done when:* the

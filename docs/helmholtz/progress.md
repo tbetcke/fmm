@@ -1053,3 +1053,49 @@ request, using this template:
   - CH3.1: the operator with P2L, M2P and P2P on the chunks; it can reuse Laplace's charge
     load and output pass with m → `columns` and `output_columns`; its translations form a
     level's s and β from the same k̂ as the leaf operators.
+
+## 2026-11-01: CH3.5 The shared drivers extended to complex expansions
+- Done:
+  - Closed as a record, without a code change (the user: "Close as a record"). The
+    record is `docs/helmholtz/tasks/CH3.5.md`.
+  - The finding: the target-by-target drivers of CH2.0 take each box block's size from
+    the plan's stores (`multipole_size(level)`, `local_size(level)`, which may differ) and
+    pass whole blocks to the kernel's bodies. Two planes per complex expansion, real-k
+    multipoles of (p + 1)² m beside locals of 2 (p + 1)² m, and the real shifts of M2M
+    and L2L on both planes therefore all live in the kernel. CH3.1's RCR operator runs on
+    the unchanged drivers.
+  - Only the batched M2L block (`driver::m2l_block`) assumes Laplace's layout: square
+    tables, and m expansions of n values per box, multipole and local alike. The
+    two-plane case there (`PLANES`, rectangular real-to-complex tables, the per-target
+    epilogue of proposal §6.2) moves to CH3.2, its first user, with constraint 1 as in
+    CH2.0. A kernel with another layout returns `None` from `batched_m2l`.
+  - The docs of `HostKernel` and `Columns` in `fmm-exec/src/driver.rs`, plus
+    `fmm-exec/CLAUDE.md`, now say this. No code line changed.
+- Tests: none new (no code). Evidence: `nd-fmm-plan`'s tests with differing,
+  level-dependent multipole and local sizes (`src/evaluator_tests.rs`,
+  `src/operator_tests.rs`, `tests/mpi_regressions.rs`), which prove the stores and the
+  exchanges; a reading of `driver.rs`. `Kernels` is its only kernel, so `driver.rs`
+  stays untested with unequal sizes until CH3.1, whose kernel is the end-to-end proof.
+- Checks:
+  - `/verify` on the M6: format; Clippy default, examples and workspace all-targets;
+    `cargo doc`, plus `nd-fmm-exec`'s private docs with `-D warnings` (the new links);
+    `cargo test` (1,044) and `--workspace` (1,125).
+  - A self-review by a subagent: nothing blocking. Its wording points were taken: Dense's
+    epilogue, the leaf frames' units, the dummy `Columns`, and the limits of the
+    evidence.
+  - Not run: the MPI list locally (no compiled change; CI runs it at 2 and 4 ranks);
+    machine runs and D9 (no compiled change to Laplace); the licence check (no manifest
+    changed).
+- Decisions: the scope, by the user on 2026-11-01 ("Close as a record"); CH3.2's *Done
+  when* gains the batched two-plane case. Questions for sign-off: 1. the proposal's §6.2
+  and §10 text left unchanged, the roadmap and the record carrying the move; 2. Dense's
+  epilogue decided in CH3.2. Both signed off 2026-11-01, the user: "1 and 2 as
+  recommended".
+- Laplace: not touched; `driver.rs` changed in doc comments only.
+- Follow-ups:
+  - CH3.1: the Helmholtz kernel implements `HostKernel` with `batched_m2l` `None` (and an
+    empty `Columns`). It passes `helmholtz::leaf::{p2l, m2p}` a `Level` in the frame's
+    units: M2P's W boxes lie one level below the call's level and P2L's X leaves one
+    above it.
+  - CH3.2: Dense's epilogue per pair or per target (a finish hook in `m2l_target`).
+  - CH3.2: the batched block's two-plane case.

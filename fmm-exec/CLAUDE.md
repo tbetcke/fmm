@@ -168,7 +168,15 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   to Laplace's paths: Laplace's outputs stay bit for bit, and its benchmarks within noise
   on the M3 Max, locust and Kathleen (D9 of docs/helmholtz/roadmap.md). Add no runtime
   dispatch below the level call, and keep Laplace's strides and sizes as they are
-  (runtime p): never turn a compile-time constant into a runtime value.
+  (runtime p): never turn a compile-time constant into a runtime value. A box block's
+  layout is the kernel's (Helmholtz CH3.5, docs/helmholtz/tasks/CH3.5.md): the
+  target-by-target drivers take the block sizes from the plan's stores and pass whole
+  blocks, so complex expansions in two planes, multipoles and locals of different sizes
+  and real shifts on both planes need no driver change. Only `driver::m2l_block` assumes
+  Laplace's layout (m expansions of n values per box, multipole and local alike, square
+  tables). Any other kernel returns `None` from `batched_m2l` (and keeps an empty
+  `Columns` for `columns`, which is then never called) until CH3.2 adds the
+  two-plane case and the epilogue there, under constraint 1.
 - The Helmholtz builder (Helmholtz CH3.0b; docs/design/helmholtz-fmm-proposal.md §3.7,
   §6.3; CONVENTIONS §3.15): `helmholtz::Wavenumber` classifies k (Yukawa for Re k = 0,
   real for Im k = 0, complex otherwise; k = 0, Re k < 0, Im k < 0 and non-finite parts
