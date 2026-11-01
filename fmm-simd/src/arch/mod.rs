@@ -56,6 +56,7 @@ pub(crate) mod matrix;
 pub(crate) mod neon;
 pub(crate) mod p2p;
 pub(crate) mod scalar;
+pub(crate) mod sincos;
 #[cfg(test)]
 mod tests;
 pub(crate) mod waves;
@@ -283,6 +284,47 @@ macro_rules! exp_dispatch {
 
 exp_dispatch!(exp_slice_f32, f32, exp_slice_f32);
 exp_dispatch!(exp_slice_f64, f64, exp_slice_f64);
+
+/// Generates the dispatch of the sine and cosine's entry points for one precision
+/// (Helmholtz CH3.4a).
+macro_rules! sincos_dispatch {
+    ($name:ident, $t:ty, $entry:ident) => {
+        #[doc = concat!(
+                            "The sine and cosine of every value of `theta` into `sin` and `cos`, on `isa`, in ",
+                            stringify!($t), " (`sincos::sincos_slice`)."
+                        )]
+        ///
+        /// # Panics
+        ///
+        /// If `isa` is not available on this machine, or `theta`, `sin` and `cos` do not
+        /// all have the same length.
+        pub(crate) fn $name(isa: Isa, theta: &[$t], sin: &mut [$t], cos: &mut [$t]) {
+            if !isa.is_available() {
+                panic!("{}", IsaUnavailable { isa });
+            }
+            match isa {
+                Isa::Scalar => sincos::sincos_body(scalar::Scalar, theta, sin, cos),
+                #[cfg(target_arch = "aarch64")]
+                // SAFETY: `isa` is available (checked above), so the CPU has NEON,
+                // the feature the entry point enables.
+                Isa::Neon => unsafe { neon::$entry(theta, sin, cos) },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: `isa` is available (checked above), so the CPU has AVX2 and
+                // FMA, the features the entry point enables.
+                Isa::Avx2 => unsafe { avx2::$entry(theta, sin, cos) },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: `isa` is available (checked above), so the CPU has AVX-512F,
+                // AVX2 and FMA, the features the entry point enables or implies.
+                Isa::Avx512 => unsafe { avx512::$entry(theta, sin, cos) },
+                // The ISAs of other architectures, which are never available.
+                _ => unreachable!("`{isa}` is not available on this machine"),
+            }
+        }
+    };
+}
+
+sincos_dispatch!(sincos_slice_f32, f32, sincos_slice_f32);
+sincos_dispatch!(sincos_slice_f64, f64, sincos_slice_f64);
 
 /// An [`Isa`] that this machine can run: the proof that makes the dispatch to the
 /// `#[target_feature]` P2P entry points sound.
