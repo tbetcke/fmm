@@ -3,13 +3,13 @@
 //! of a build and an evaluation that do not depend on the operator. Crate-private.
 //!
 //! - Build: the domain and the points strictly inside it ([`domain`], step 3 of
-//!   [`FmmBuilder::build`](crate::fmm::FmmBuilder::build)); the Morton keys and the octree
-//!   ([`octree`], step 4's first part); the two redistributions, the coordinates forwarded
-//!   into leaf order, the leaf ranges, the radii and the output order ([`Points::route`],
-//!   steps 5 and 6); the leaf-scaled coordinates in the evaluator's chunks
-//!   ([`Points::load_coordinates`], step 8). The `fmm` module documentation, "Build" and
-//!   "Several ranks", describes them; the caller adds its own steps between them (for
-//!   `Fmm` the near rule, the work cut, the tables and the device).
+//!   [`FmmBuilder::build`](crate::fmm::FmmBuilder::build)); the Morton keys and the
+//!   octree ([`octree`], step 4's first part); the two redistributions, the coordinates
+//!   forwarded into leaf order, the leaf ranges, the radii and the output order
+//!   ([`Points::route`], steps 5 and 6); the leaf-scaled coordinates in the evaluator's
+//!   chunks ([`Points::load_coordinates`], step 8). The `fmm` module documentation,
+//!   "Build" and "Several ranks", describes them; the caller adds its own steps between
+//!   them (for `Fmm` the near rule, the work cut, the tables and the device).
 //! - Evaluation: the charge load into the source chunks ([`load_source_charges`]), the
 //!   packing of several vectors ([`pack_charges`]), the output pass ([`gather_output`]) and
 //!   the unpacking after the backward move ([`unpack_output_many`]), with the agreement of
@@ -126,10 +126,10 @@ impl Points {
     /// Steps 5 and 6: every point to the rank that owns its leaf (Phase 5 T6,
     /// docs/design/distributed-fmm.md §4.4), one redistribution for the sources and one
     /// for the targets, routed by their `keys` (the `nsources` sources, then the targets,
-    /// as [`octree`] gave them) on `plan` of `octree`, and the f64 `coordinates` of [`domain`] forwarded into
-    /// the received order, which is leaf order; then the points of every local leaf, its
-    /// radius and the output order. `per_item` is the largest number of values per point
-    /// that a move of the build's evaluations carries.
+    /// as [`octree`] gave them) on `plan` of `octree`, and the f64 `coordinates` of
+    /// [`domain`] forwarded into the received order, which is leaf order; then the points
+    /// of every local leaf, its radius and the output order. `per_item` is the largest
+    /// number of values per point that a move of the build's evaluations carries.
     ///
     /// # Collective operation
     ///
@@ -316,12 +316,13 @@ pub(crate) const LOAD_GRAIN: usize = 4096;
 /// Where the output pass of an evaluation finds every target (Phase 4S T9): for every
 /// target this rank owns, in the received order of its `Redistribution` (leaf order,
 /// Phase 5 T6), its point in leaf order and its local leaf, and for every local leaf the
-/// two scales of CONVENTIONS §3.13, "Output". Built once by [`FmmBuilder::build`]: 8 N_t
-/// bytes for N_t owned targets, and 16 bytes per local leaf. The pass writes in this
-/// order, and the backward move of the targets' redistribution returns its values to the
-/// caller's ranks and order. With the output pass on the device (`OutputPass`) the device
-/// holds a copy, which the device report's memory counts; for the device it is the order
-/// of the output it writes (`device::CallerOrder`).
+/// two scales of CONVENTIONS §3.13, "Output". Built once by
+/// [`FmmBuilder::build`](crate::fmm::FmmBuilder::build): 8 N_t bytes for N_t owned
+/// targets, and 16 bytes per local leaf. The pass writes in this order, and the backward
+/// move of the targets' redistribution returns its values to the caller's ranks and order.
+/// With the output pass on the device (`OutputPass`) the device holds a copy, which the
+/// device report's memory counts; for the device it is the order of the output it writes
+/// (`device::CallerOrder`).
 #[derive(Clone, Debug)]
 pub(crate) struct OutputOrder {
     /// For every owned target in received order: its point in leaf order (the received
@@ -586,8 +587,8 @@ pub(crate) fn pack_sources<T: Copy + Send + Sync>(
 /// (o = 4), the layout the backward move of the targets' redistribution sends (Phase 5
 /// T6). Leaf j's chunk holds the m vectors' φ̂ one vector after the other, then their ĝ
 /// (CONVENTIONS §3.13, "Several charge vectors"). Each value is
-/// `T::from_f64(x.to_f64() / scale)`, as the pass before T9 ([`scaled_output`]) computes
-/// it, so the output is that pass's bit for bit.
+/// `T::from_f64(x.to_f64() / scale)`, as the pass before T9 (`fmm`'s `scaled_output`)
+/// computes it, so the output is that pass's bit for bit.
 ///
 /// One loop over the targets: on `pool` when given, rayon's split of `values` into ranges
 /// that each thread writes in sequence, reading the store gathered; on the calling thread
@@ -722,10 +723,10 @@ pub(crate) fn unpack_output<T: SimdScalar>(
 /// After the backward move with m vectors (Phase 6 T5): `values`, o m values per target in
 /// the caller's order (for each vector in turn φ, or φ and ∇φ), copied into the output's
 /// buffers `phi` and `grad` vector after vector (`phi[v N + i]`, `grad[v N + i]` for N
-/// targets; [`OutputMany`](crate::fmm::OutputMany)'s layout, and since Helmholtz CH3.1b that of
-/// `helmholtz::Output` with the output columns as the m vectors), the allocations reused,
-/// every element written once. On `pool` when given, serially otherwise. `grad` becomes
-/// `Some` with gradients and `None` without.
+/// targets; the layout of [`OutputMany`](crate::fmm::OutputMany), and since Helmholtz
+/// CH3.1b that of `helmholtz::Output` with the output columns as the m vectors), the
+/// allocations reused, every element written once. On `pool` when given, serially
+/// otherwise. `grad` becomes `Some` with gradients and `None` without.
 pub(crate) fn unpack_output_many<T: SimdScalar>(
     values: &[T],
     (gradients, m): (bool, usize),

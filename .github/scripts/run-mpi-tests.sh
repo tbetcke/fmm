@@ -48,11 +48,13 @@ fi
 # several-rank run exercises. invariance is the rank-count-invariance check of Phase 5S
 # T2 (P ranks against P/k for every divisor k, bit for bit; docs/design/scale-out.md
 # §5.1, §9.2); test_mpi_locally_essential the held keys and the partition map of T3
-# against brute force (§9.1).
+# against brute force (§9.1); helmholtz_fmm the Helmholtz FMM of Helmholtz CH3.1b (the
+# direct sum, threads, PerPair and the one-rank FMM, bit for bit).
 TARGETS="test nd-fmm-plan mpi_regressions
 test nd-fmm-exec mpi_exec
 test nd-fmm-exec mpi_threading
 test nd-fmm-exec invariance
+test nd-fmm-exec helmholtz_fmm
 example nd-octree test_mpi_complete_tree
 example nd-octree test_mpi_global_bounding_box
 example nd-octree test_mpi_leaf_lookup

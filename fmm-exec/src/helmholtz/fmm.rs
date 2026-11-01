@@ -14,7 +14,7 @@
 //! 3. the domain, the supplied one or the bounding box of every rank's points, with every
 //!    point strictly inside it;
 //! 4. the octree of every point, with the leaf rule (proposal §3.7):
-//!    [`min_leaf_level`](super::min_leaf_level) of k, the domain and c_leaf passed to
+//!    [`min_leaf_level`] of k, the domain and c_leaf passed to
 //!    `OctreeOptions::with_min_leaf_level`, so that no leaf holding a point is wider than
 //!    c_leaf λ; and its plan. There is no near rule and no work cut: both weigh the work
 //!    with Laplace's cost model;

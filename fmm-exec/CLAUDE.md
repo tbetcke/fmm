@@ -217,6 +217,31 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   `tests/helmholtz/operator.rs` checks the bodies pair by pair against the direct sum and,
   at low degrees, against `nd-fmm-ref`'s chains in absolute units; the level calls are
   tested with the FMM (CH3.1b).
+- The point pipeline (Helmholtz CH3.1b; the crate-private `src/pipeline.rs`, its module
+  docs; docs/helmholtz/tasks/CH3.1b.md): steps 3, 4's keys and octree, 5, 6 and 8 of
+  `FmmBuilder::build` (`pipeline::{domain, octree}`, `Points::{route, load_coordinates}`)
+  and the evaluation's helpers (`agree`, the checks, `LeafRanges`, `OutputOrder`, the
+  charge load, `pack_charges`, `gather_output`, `unpack_output_many` and the rest of the
+  moves), moved verbatim from `fmm.rs`; `Fmm` holds a `Points`. It is on Laplace's path:
+  a change there keeps `Fmm`'s outputs bit for bit (constraint 1, as for `driver.rs`).
+  Keep it operator-independent: anything that names Laplace's operator, strategy, cost
+  model or device stays in `fmm.rs`.
+- The Helmholtz FMM (Helmholtz CH3.1b; `helmholtz::fmm`, its module docs):
+  `HelmholtzFmmBuilder` (k, `Degrees`, `ChargeKind`, vectors, gradients, threads, domain,
+  points per leaf, `max_level`, the block budget, c_leaf) and `HelmholtzFmm` on any number
+  of ranks, the pipeline's steps with the leaf rule (`min_leaf_level` into
+  `OctreeOptions::with_min_leaf_level`) and `HelmholtzOperator` on `Evaluator`; no near
+  rule, work cut, overlap, device or table cache. `evaluate` packs the c m columns
+  (Re q, Im q per complex vector) point-major, so the charge load, `gather_output` and
+  `unpack_output_many` run unchanged with m replaced by the columns and output columns
+  (CH3.0c's chunks); `HelmholtzFmmError` wraps `FmmError` for the shared steps. Doc-hidden
+  for the tests: `pair_calls` (the evaluator runs `PerPair` of the operator) and
+  `reference_output` (the pass of `Densities::write_leaf_output`). `tests/helmholtz_fmm.rs`
+  (its own MPI test at `Funneled`, in CI's MPI list) checks it against the direct sum, at 1,
+  2 and 4 threads (4 only in debug), pair by pair, against the reference pass and the
+  one-rank FMM bit for bit, two vectors, real charges against complex ones with Im q = 0,
+  and the errors; ε = 10⁻⁶ and kD = 100 in release only (about 21 s at one rank in debug on
+  the M6).
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread
   count. No `unsafe`, no atomics, no global pool; per-thread scratch created at
@@ -242,7 +267,8 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
     `tests/device_tune.rs` (the tuner, feature `cpu`) at the default level, and
     `tests/multi_rank.rs` (the ignored C5.1 host gate, Phase 5 T6),
     `tests/device_ranks.rs` (the ignored C5.1 device gate, Phase 5 T8, feature `gpu`) and
-    `tests/invariance.rs` (rank-count invariance, Phase 5S T2, below) at `Funneled`.
+    `tests/invariance.rs` (rank-count invariance, Phase 5S T2, below) and
+    `tests/helmholtz_fmm.rs` (the Helmholtz FMM, Helmholtz CH3.1b) at `Funneled`.
     The device checks shared by `tests/mpi_exec.rs`, `tests/device_metal.rs` and
     `tests/device_cuda.rs` live in `tests/device_common/`, the tuner's in
     `tests/tune_common/`, the shadow operator of the host-data hook (Phase 5 T7) in
@@ -326,8 +352,8 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
     one rank (`run-tests`), 56 and 110 s at 2 and 4 (`run-tests-mpi`). Keep it passing in
     every structural task (T3–T8): it is the oracle where no one-rank run fits, and its
     at-scale form is `nd_fmm_validate::scaling::invariance`.
-  - CI runs `tests/mpi_exec.rs`, `tests/mpi_threading.rs` and `tests/invariance.rs` in
-    debug at 2 and 4 ranks on every pull request (the `run-tests-mpi` job, root
+  - CI runs `tests/mpi_exec.rs`, `tests/mpi_threading.rs`, `tests/invariance.rs` and
+    `tests/helmholtz_fmm.rs` in debug at 2 and 4 ranks on every pull request (the `run-tests-mpi` job, root
     `CLAUDE.md`, "Checks";
     `mpi_threading` checks there that its `MpiThreading` error, carried by step 1's
     agreement all-reduce, reaches every rank). 8 ranks and the ignored tests

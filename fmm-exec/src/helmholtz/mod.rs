@@ -27,9 +27,9 @@
 //! `nd_fmm_tables::helmholtz`, the leaf operators of [`Densities`] and `nd-fmm-ref`, and
 //! the reference P2P.
 //!
-//! [`HelmholtzFmmBuilder`] and [`HelmholtzFmm`] (Helmholtz CH3.1b, submodule [`fmm`](mod@fmm))
-//! are the FMM on any number of ranks: the point pipeline of `Fmm` with the leaf rule and
-//! the Helmholtz operator.
+//! [`HelmholtzFmmBuilder`] and [`HelmholtzFmm`] (Helmholtz CH3.1b, submodule
+//! [`fmm`](mod@fmm)) are the FMM on any number of ranks: the point pipeline of `Fmm` with
+//! the leaf rule and the Helmholtz operator.
 //!
 //! The module is MPI-free but for [`fmm`](mod@fmm).
 //!

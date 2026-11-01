@@ -78,7 +78,8 @@
 //!    others after a barrier of the node's communicator: [`FmmBuilder::table_cache`]), the
 //!    host operator, and the evaluator with the per-leaf counts (its own collectives).
 //! 8. Writes the leaf-scaled source coordinates and target positions, from the forwarded
-//!    f64 coordinates, into the evaluator's stores, once ([`leaf_coordinates`]). With a
+//!    f64 coordinates, into the evaluator's stores, once
+//!    ([`leaf_coordinates`](crate::geometry::leaf_coordinates)). With a
 //!    device backend (Phase 5 T8) it then builds the device operator around the host
 //!    operator, from the evaluator's source counts (the ghost leaves' included) and the
 //!    index lists of its exchanges: it checks that its buffers fit in device memory,
@@ -88,6 +89,11 @@
 //!    agrees the outcome on every rank (one all-reduce).
 //!
 //! It also reads the BLAS thread variables once, for [`Fmm::threading`].
+//!
+//! Steps 3, 5, 6 and 8, step 4's keys and octree, and the evaluation's charge load, output
+//! pass and moves are the crate-private point pipeline (Helmholtz CH3.1b), which the
+//! Helmholtz FMM ([`HelmholtzFmm`](crate::helmholtz::HelmholtzFmm)) shares; they are the
+//! statements this module ran before, unchanged.
 //!
 //! An error that depends on one rank's input is agreed by every rank before the next
 //! collective: the rank that found it returns it, the others [`FmmError::OtherRank`];
