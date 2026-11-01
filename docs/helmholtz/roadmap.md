@@ -57,7 +57,8 @@ take turns, never overlap.
 8. CH3.0 Builder: the leaf rule and complex densities (needs **D1**): CH3.0a, CH3.0b, CH3.0c
 9. CH3.5 The shared drivers extended to complex expansions (*Machines:* locust, Kathleen)
 10. CH3.1 Complex planes and RCR on every level: CH3.1a, CH3.1b, CH3.1c
-11. CH3.4 Helmholtz P2P, real and complex k (*Machines:* locust, Kathleen)
+11. CH3.4 Helmholtz P2P, real and complex k: CH3.4a, CH3.4b, CH3.4c (*Machines:* locust,
+    Kathleen)
 12. CH3.3 Calibration of p_l
 13. CH3.6 Gate: RCR on every level against FMM3D (*Machines:* Kathleen)
 
@@ -400,10 +401,35 @@ at any kD.
   *Needs:* CH3.1. *Machines:* locust, Kathleen.
 - [ ] **CH3.3 Calibration of p_l over (k a_l, ε).** *Done when:* S7's low-frequency tables
   confirmed in the full FMM. *Needs:* CH3.1, CH0.7.
-- [ ] **CH3.4 Helmholtz P2P, real and complex k.** On CH2.4's skeleton. *Done when:* the
+- CH3.4 Helmholtz P2P, real and complex k. On CH2.4's skeleton. *Done when:* the
   accuracy contract over k r up to 22 c_leaf; cost per pair; the Helmholtz operator's P2P
   if CH3.1 is merged (priority list). *Needs:* CH2.4.
+  *Machines:* locust, Kathleen. Split on 2026-11-01 into three sub-tasks, each one
+  reviewable PR, as CH2.4 split the exponential from the kernel; CH3.4 is done, and CH3.6
+  runnable on its side, when all three are:
+- [ ] **CH3.4a The vectorised sine and cosine.** `nd_fmm_simd::sincos` (`sincos_slice`),
+  `arch::sincos`: sin θ and cos θ together, reduction by π (Cody–Waite, three parts) and
+  Taylor polynomials, the sign of (−1)ⁿ by exact arithmetic, f32 and f64, every ISA.
+  *Done when:* both within 4 u_T absolute for |θ| ≤ 2¹⁰ (above 22 c_leaf for any c_leaf
+  ≤ 46), f32 exhaustively on [0, 2¹⁰] and f64 on 10⁷ samples against double-double, on
+  every ISA a machine offers; odd and even bit for bit; every ISA the scalar layer bit for
+  bit; position and length invariance; no call in the inner loop; the existing entry
+  points the same instruction for instruction as `main`'s. *Needs:* CH2.4a. *Machines:*
+  Kathleen (AVX-512, the contract).
+- [ ] **CH3.4b Helmholtz P2P on the skeleton.** `P2pKernel::evaluate_helmholtz`: e^{ikr}/r
+  and its gradient for real and complex k (e^{−Im(k) r} by CH2.4a's exponential) with real
+  and complex charges, on the P2P skeleton widened to the planes of a complex charge and
+  output, Laplace's and Yukawa's instantiations unchanged. *Done when:* CH3.4's contract
+  over Re(k) r ≤ 22 c_leaf on every ISA, the scalar path bit for bit the reference; cost
+  per pair against Laplace and Yukawa on the three machines, beside green-kernels'
+  Helmholtz; Laplace's P2P instruction for instruction and bit for bit, and its benchmarks
+  within noise (D9) and C3S.4 if the skeleton's Laplace code changes. *Needs:* CH3.4a.
   *Machines:* locust, Kathleen.
+- [ ] **CH3.4c The Helmholtz operator's P2P.** `HelmholtzOperator`'s P2P through
+  `evaluate_helmholtz` on the P2P choice's ISA, the reference kept as the trusted path.
+  *Done when:* every ISA against the reference within CH3.4b's contract in the operator's
+  and the FMM's tests; the FMM deterministic at every thread count and rank-invariant as
+  before; its time on a CH3.1c case before and after. *Needs:* CH3.4b, CH3.1.
 - [ ] **CH3.6 Gate: RCR on every level against FMM3D.** *Done when:* both codes against the
   same sampled direct sum on W1, W3 and W4 for kD ≤ 100 and on W1 at kD = 500 with time; the
   full-target crosscheck, timed with CH3.4's vectorised P2P. *Needs:* CH3.3, CH1.4, CH3.4
