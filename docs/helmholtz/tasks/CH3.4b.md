@@ -206,6 +206,12 @@ All on every ISA the machine offers (`common::kernels`, printing those it cannot
   first non-trivial user belong in one PR (constraint 1 is checked on both together), and
   the operator's use is already CH3.4c.
 
+## Decisions
+
+- The user, 2026-11-01, each "(Recommended)": the skeleton widened as planned ("Proceed as
+  planned"), the split planes for `evaluate_helmholtz` ("Split planes"), and undamped and
+  damped entry points ("Undamped and damped").
+
 ## Pending runs
 
 None yet.
