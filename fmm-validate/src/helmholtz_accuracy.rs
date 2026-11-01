@@ -20,7 +20,8 @@
 //! - **Checksum.** A rank-invariant checksum of the whole output ([`checksum`]): the
 //!   wrapping sum over every output value of a mix of its global point index, its output
 //!   slot and its bits, summed over the ranks. Equal outputs give equal checksums on any
-//!   number of ranks; a single changed bit changes it except with probability about 2⁻⁶⁴.
+//!   number of ranks. One changed value always changes it (the mix is a bijection);
+//!   several changed values leave it equal with probability about 2⁻⁶⁴.
 //!   Determinism (proposal §2, constraint 2) is shown by equal checksums across thread
 //!   counts and rank counts.
 //! - **Times.** The build and the evaluation, wall time of the slowest rank.

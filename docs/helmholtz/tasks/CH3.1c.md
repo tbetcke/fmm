@@ -99,6 +99,26 @@ compared on the rows that fit. Kathleen only if the M6 cannot hold W1 at kD = 50
 - Risk: S7's closed form overshoots on low-frequency levels (CH3.1b), so errors far below
   ε; that is CH3.3's calibration, recorded here, not tuned.
 
+## Results
+
+Ran on the M6 on 2026-11-01 (report `fmm-validate/results/helmholtz-ch3-1c.md`): 61 cases,
+81 runs with the repeats, every error of φ and ∇φ below ε (largest 3.7e-3 ε, ∇φ on W3 at
+kD = 100, ε = 10⁻³); equal checksums at 1 and 6 threads on 13 cases and on several rank
+counts on 4 (W1 at kD = 500 on 1 and 3 ranks). As built:
+
+- the oracle scales `direct_sum` by 1/(4π): the reference leaves it out (its first run gave
+  errors of 1 − 1/(4π) = 0.92 everywhere);
+- ε = 10⁻⁸ on W3, W4 and W1 at kD = 500 ran in a second matrix after the self-review named
+  them missing against D1; W3 at kD = 100 at 10⁻⁸ was not run (about 21 GB, beyond the M6);
+- `tests/helmholtz_accuracy.rs` (26 s at one rank in debug) passed at 1, 2 and 3 ranks;
+  on several ranks the errors equal the one-rank errors within 1e-12 relative (the sums
+  reduce in another order), the checksums exactly.
+
 ## Pending runs
 
+None.
+
 ## Open questions
+
+None blocking. For sign-off in the PR: the reading of "against the direct sum" as errors
+at most ε at S7's degrees, and W3 at kD = 100 at 10⁻⁸ left out.

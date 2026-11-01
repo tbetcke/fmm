@@ -3,7 +3,7 @@
 //! Markdown on stdout.
 //!
 //! One case per kD and ε: the workload's points as sources and targets, the degrees of
-//! S7's closed form at ε (or named, the same on every level ≥ 2), real or complex charges,
+//! S7's closed form at ε (or named, the same on every level), real or complex charges,
 //! m vectors, gradients, against `nd_fmm_ref::helmholtz::p2p::direct_sum` in f64 at the
 //! sampled targets (1,000 by default). Each case runs at every thread count of
 //! `--threads`, and each row prints the tree, the degrees, the build and evaluation times
@@ -16,8 +16,8 @@
 //! - `--workload w`: `w1` (default), `w2`, `w3` (ten points per wavelength), `w3:<n>`,
 //!   `w4-<cube|sphere|plummer|clusters>:<n>`;
 //! - `--kd x,…`: Re kD (default 10); `--kim y`: Im kD (default 0);
-//! - `--eps e,…`: the tolerances (default 1e-3); `--degree p` names p on every level ≥ 2
-//!   in place of a tolerance;
+//! - `--eps e,…`: the tolerances (default 1e-3); `--degree p` names p on every level
+//!   in place of a tolerance (levels 0 and 1 hold expansions nothing reads);
 //! - `--charges real|complex` (default complex), `--vectors m` (default 1),
 //!   `--samples n` (default 1000), `--no-gradients`;
 //! - `--threads t,…` (default 1), `--oracle-threads t` (default the largest of

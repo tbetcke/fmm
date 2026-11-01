@@ -1216,3 +1216,48 @@ request, using this template:
     1e-7 to 1e-8; p = 34 at 10⁻⁶ gives 5e-13).
   - Later: overlap, the near rule and the work cut for the Helmholtz FMM (their cost model
     is Laplace's).
+
+## 2026-11-01: CH3.1c The acceptance runs
+- Done:
+  - `nd_fmm_validate::helmholtz_accuracy` (new): the Helmholtz FMM against
+    `nd_fmm_ref::helmholtz::p2p::direct_sum` (times 1/(4π), which the reference leaves
+    out) at 1,000 sampled targets on the workloads of `helmholtz_workloads`, §9.1's charges
+    and relative ℓ2 norms of φ and ∇φ, each rank a contiguous block, the oracle sharded
+    over ranks and threads, and a rank-invariant checksum of the whole output for
+    determinism. The `helmholtz_accuracy` example (not registered for the weekly job: it
+    runs for minutes) prints a Markdown row per case and thread count.
+  - The report `fmm-validate/results/helmholtz-ch3-1c.md`; record
+    `docs/helmholtz/tasks/CH3.1c.md`.
+  - CH3.1 is done with this task: once it is merged, the tasks that need CH3.1 (CH3.2,
+    CH3.3, CH4.1, CH6.1, the device tasks) no longer wait for it.
+- Tests: `fmm-validate/tests/helmholtz_accuracy.rs` (one MPI test, 26 s at one rank in
+  debug): the checksum independent of the partition and sensitive to one value, the blocks
+  a partition, the sharded oracle the serial one bit for bit, and W1 (kD = 10, two
+  vectors) and the W4 clusters (complex k, real charges) within ε with one checksum at 1
+  and 2 threads and on one rank; passed at 1, 2 and 3 ranks.
+- Runs (the acceptance; M6, release, 1 × 6 unless stated): W1 at kD = 10, 30, 100 and
+  500, W3 at ten points per wavelength at kD = 10, 30 and 100 (4.0 million points), W4's
+  four distributions at N = 10⁵ and kD = 1, 10, 100, each at ε = 10⁻³, 10⁻⁶ and 10⁻⁸
+  (S7's degrees), plus real charges, eight vectors and kD = 100 + 10i on W1: 61 cases,
+  every error of φ and ∇φ below ε, the largest 3.7e-3 ε. Not run: W3 at kD = 100 at 10⁻⁸
+  (about 21 GB). Deterministic: equal checksums at 1 and 6 threads on 13 cases, and on 1,
+  2 and 3 ranks on 3 cases, W1 at kD = 500 on 1 and 3. W1 at kD = 500 evaluates in 89, 508
+  and 1,131 s at the three ε.
+- Checks: `/verify` on the M6: format; Clippy default, examples and workspace all-targets;
+  `cargo doc` (and `-D warnings` on `nd-fmm-validate`); `cargo test` (1,068) and
+  `--workspace` (1,149); the new test at 2 and 3 ranks by hand. A self-review by a
+  subagent: no defect in the harness; its report corrections and the missing 10⁻⁸ rows
+  were taken. Not run: the MPI list (no change to `nd-octree`, `nd-fmm-plan` or
+  `nd-fmm-exec`); locust and Kathleen (none in the plan); the licence check (no
+  dependency changed).
+- Decisions: none taken. Questions for sign-off (the PR): 1. "against the direct sum"
+  read as relative ℓ2 errors of φ and ∇φ at most ε with S7's degrees at ε; 2. W3 at
+  kD = 100, ε = 10⁻⁸ left out on the M6's memory (or run on Kathleen in CH3.3).
+- Laplace: not touched (no compiled change outside `nd-fmm-validate`).
+- Follow-ups:
+  - CH3.3: S7's closed form leaves errors 3 × 10³ to 6 × 10⁶ below ε on low-frequency
+    trees (p = 16, 34, 46 on every low-frequency level); the high-frequency levels set the
+    error. The harness is its measuring tool.
+  - CH3.4 and CH3.2: the cost (reference P2P, RCR at p = 34–46: 5.7–8 times 10⁻³'s time at
+    10⁻⁶).
+  - CH3.6: the harness's oracle and norms for the FMM3D comparison.
