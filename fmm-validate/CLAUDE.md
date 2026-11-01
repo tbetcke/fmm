@@ -294,9 +294,20 @@ rank checks whole trees on `self_comm`, so it passes on any number of ranks. The
 `tests/helmholtz_leaves_sweep.rs` runs D1's full range in release (7 s on the M6) and
 prints the table, with the widest empty leaf.
 
+Helmholtz CH3.1c (the acceptance runs of CH3.1; docs/helmholtz/tasks/CH3.1c.md) added
+`helmholtz_accuracy`: the Helmholtz FMM (`nd_fmm_exec::helmholtz::HelmholtzFmm`) against
+the direct sum in f64 at sampled targets (`nd_fmm_ref::helmholtz::p2p::direct_sum`, which
+leaves out 1/(4π): the oracle applies it) on the workloads of `helmholtz_workloads`, with
+§9.1's charges and norms, each rank passing a contiguous block, the oracle sharded over
+ranks and threads; and a rank-invariant checksum of the whole output (a wrapping sum of
+mixed (position, slot, bits), summed over the ranks) for determinism across thread and
+rank counts. The `helmholtz_accuracy` example (not registered: it runs for minutes) prints
+one Markdown row per case and thread count; `tests/helmholtz_accuracy.rs` (one MPI test)
+checks the harness and small cases. Its report is `results/helmholtz-ch3-1c.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
-executable (`tests/fmm_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`
+executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`
 core; `tests/device_fmm.rs`, feature `cpu`, the smoke run of the `device_fmm` core on the
 CPU runtime). Tests that run P2P kernels only
 (`tests/p2p_kernels.rs`) need no MPI initialisation. Device results of a phase are kept
