@@ -16,6 +16,10 @@
 //! domain and c_leaf only, never on a rank's share of the points (proposal §2, constraint
 //! 9), so every rank finds the same one. Yukawa has no wavelength and no rule.
 //!
+//! [`Densities`] (Helmholtz CH3.0c, submodule [`densities`]) fixes the path of an FMM, its
+//! leaf chunks and expansion sizes, the complex charges in and the split potentials and
+//! gradients out, with the leaf's own P2M and L2P.
+//!
 //! The module is MPI-free.
 //!
 //! ```
@@ -35,12 +39,16 @@
 //! assert_eq!(min_leaf_level(&yukawa, &domain, C_LEAF), 0);
 //! ```
 
+pub mod densities;
+
 use std::f64::consts::TAU;
 
 use nd_octree::constants::DEEPEST_LEVEL;
 use thiserror::Error;
 
 use crate::geometry::Domain;
+
+pub use densities::{ChargeKind, Charges, Densities, DensityError, LeafScratch, Output, Split};
 
 /// The deepest level of a Morton key, 16 (CONVENTIONS §3.12).
 const DEEPEST: usize = DEEPEST_LEVEL as usize;

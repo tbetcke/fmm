@@ -338,7 +338,9 @@ at any kD.
   from (k, D, c_leaf), the reference workloads W1–W4 in `nd-fmm-validate` (from
   `spikes/census`). *Done when:* no leaf wider than c_leaf λ on W1–W4 over D1's kD range;
   no rule for Yukawa. *Needs:* CH3.0a, D1, D11.
-- [ ] **CH3.0c Complex densities.** *Done when:* complex charges in and split potentials
+- [x] **CH3.0c Complex densities.** Record: `docs/helmholtz/tasks/CH3.0c.md`;
+  `nd_fmm_exec::helmholtz::densities`, tests `fmm-exec/tests/helmholtz/densities.rs`.
+  *Done when:* complex charges in and split potentials
   and gradients out (§3.15 "Inputs and outputs"), the leaf chunks fixed, one complex
   expansion per complex charge vector. *Needs:* CH3.0b, CH1.3a–c.
 - [ ] **CH3.5 The shared drivers extended to complex expansions.** Two planes, real shifts
