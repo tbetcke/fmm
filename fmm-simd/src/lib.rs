@@ -21,7 +21,9 @@
 //! exponential of the Yukawa P2P on every ISA, bit for bit the scalar path's, which
 //! [`exp::exp_slice`] exposes for tests and reports. Helmholtz CH2.4b:
 //! [`P2pKernel::evaluate_yukawa`], the Yukawa P2P e^{−κr}/r, on the loop skeleton that
-//! [`P2pKernel::evaluate`] runs.
+//! [`P2pKernel::evaluate`] runs. Helmholtz CH3.4a: the sine and cosine of the Helmholtz
+//! P2P on every ISA, bit for bit the scalar path's, which [`sincos::sincos_slice`] exposes
+//! for tests and reports.
 //!
 //! ## Instruction sets
 //!
@@ -238,6 +240,7 @@ mod isa;
 mod kernel;
 mod matrix;
 pub mod rsqrt;
+pub mod sincos;
 #[cfg(test)]
 mod toolchain;
 mod waves;
@@ -263,7 +266,7 @@ impl SimdScalar for f64 {}
 /// Seals [`SimdScalar`], and dispatches generic code to the entry points of its
 /// precision.
 mod sealed {
-    use crate::arch::{self, AvailableIsa, exp::ExpConstants};
+    use crate::arch::{self, AvailableIsa, exp::ExpConstants, sincos::SincosConstants};
     use crate::{Isa, MulAdd, WaveTables};
 
     /// Implemented only for f32 and f64.
@@ -281,6 +284,13 @@ mod sealed {
 
         /// [`exp_slice`](crate::exp::exp_slice) in this precision.
         fn exp_slice(isa: Isa, x: &[Self], out: &mut [Self]);
+
+        /// The constants of the sine and cosine in this precision (`arch::sincos`;
+        /// Helmholtz CH3.4a).
+        const SINCOS: SincosConstants;
+
+        /// [`sincos_slice`](crate::sincos::sincos_slice) in this precision.
+        fn sincos_slice(isa: Isa, theta: &[Self], sin: &mut [Self], cos: &mut [Self]);
 
         /// [`P2pKernel::evaluate`](crate::P2pKernel::evaluate) in this precision, with
         /// lengths already checked.
@@ -402,6 +412,12 @@ mod sealed {
 
         fn exp_slice(isa: Isa, x: &[f32], out: &mut [f32]) {
             arch::exp_slice_f32(isa, x, out);
+        }
+
+        const SINCOS: SincosConstants = arch::sincos::F32;
+
+        fn sincos_slice(isa: Isa, theta: &[f32], sin: &mut [f32], cos: &mut [f32]) {
+            arch::sincos_slice_f32(isa, theta, sin, cos);
         }
 
         #[inline]
@@ -529,6 +545,12 @@ mod sealed {
 
         fn exp_slice(isa: Isa, x: &[f64], out: &mut [f64]) {
             arch::exp_slice_f64(isa, x, out);
+        }
+
+        const SINCOS: SincosConstants = arch::sincos::F64;
+
+        fn sincos_slice(isa: Isa, theta: &[f64], sin: &mut [f64], cos: &mut [f64]) {
+            arch::sincos_slice_f64(isa, theta, sin, cos);
         }
 
         #[inline]

@@ -50,7 +50,7 @@ use std::arch::x86_64::{
 
 use super::p2p::{Yukawa, p2p_body, p2p_dipoles_body, p2p_many_body, p2p_skeleton};
 use super::waves::{gather_body, merge_body, sums_body, waves_body};
-use super::{Simd, exp::exp_body, matrix::accumulate_body, rsqrt_body};
+use super::{Simd, exp::exp_body, matrix::accumulate_body, rsqrt_body, sincos::sincos_body};
 use crate::{Isa, WaveTables};
 
 /// The token of AVX-512F (with AVX2 and FMA): a value exists only on a CPU with them, so
@@ -402,6 +402,33 @@ macro_rules! exp_entry {
 
 exp_entry!(exp_slice_f32, f32);
 exp_entry!(exp_slice_f64, f64);
+
+/// Generates the entry point of the sine and cosine of one precision (Helmholtz CH3.4a).
+macro_rules! sincos_entry {
+    ($name:ident, $t:ty) => {
+        #[doc = concat!(
+                            "The sine and cosine (Helmholtz CH3.4a) on AVX-512F in ",
+                            stringify!($t),
+                            ": `sin[i] = sin(theta[i])`, `cos[i] = cos(theta[i])`, with lengths \
+                     checked by the callee."
+                        )]
+        ///
+        /// Not inlined, so that the dispatch stays one call and the inlining check
+        /// finds the function by name.
+        #[target_feature(enable = "avx512f")]
+        #[inline(never)]
+        pub(crate) fn $name(theta: &[$t], sin: &mut [$t], cos: &mut [$t]) {
+            // SAFETY: this function enables `avx512f` (and so, to the compiler, `avx2`
+            // and `fma`), and the dispatch calls it only where `Isa::Avx512` is
+            // available: a call from outside such a context is `unsafe` and asserts it.
+            let s = unsafe { Avx512::new_unchecked() };
+            sincos_body(s, theta, sin, cos);
+        }
+    };
+}
+
+sincos_entry!(sincos_slice_f32, f32);
+sincos_entry!(sincos_slice_f64, f64);
 
 /// Target vectors per P2P block in f32 (optimisation.md §5.2): 32 vector registers hold
 /// two vectors' 2 × 7 accumulators and coordinates with room for the inverse square

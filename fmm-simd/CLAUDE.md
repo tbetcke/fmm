@@ -19,7 +19,9 @@ plane-wave kernels, `WaveKernel` with `WaveTables`, bodies in `arch::waves`, tes
 CH2.4b. Helmholtz CH2.4b: `P2pKernel::evaluate_yukawa`, the Yukawa P2P e^{−κr}/r, on the P2P
 loop skeleton `arch::p2p::p2p_skeleton` that `evaluate` shares (the pair kernels
 `arch::p2p::{Laplace, Yukawa}`), the scalar path `arch::scalar::p2p_yukawa`; contract in
-docs/design/simd-p2p.md §4.10, tests in `tests/p2p/yukawa.rs`.
+docs/design/simd-p2p.md §4.10, tests in `tests/p2p/yukawa.rs`. Helmholtz CH3.4a: sin θ and
+cos θ together (`arch::sincos`, the public `sincos::sincos_slice`, tests in `tests/sincos`;
+docs/design/simd-p2p.md §4.11), for the Helmholtz P2P of CH3.4b.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -89,6 +91,17 @@ docs/design/simd-p2p.md §4.10, tests in `tests/p2p/yukawa.rs`.
   and `scale_pow2`'s integer add on the bits), so every ISA equals the scalar layer bit for
   bit (`tests/exp/invariance.rs`); keep it so: no estimate instruction, no ISA-specific
   step. Its constants are `SimdScalar`'s (`sealed::Sealed::EXP`).
+- `arch::sincos::sincos` (Helmholtz CH3.4a): sin θ and cos θ from one reduction by π
+  (n = round(θ/π) by the shifter, t = θ − n π₁ exact, then − n π₂ rounded once), Taylor
+  polynomials in t² (f64 to t²¹ and t²⁰, f32 to t¹³ and t¹²) and the sign (−1)ⁿ = 1 − 2b²,
+  b = n − 2 round(n/2), formed exactly. Each within 4 u_T absolute for |θ| ≤ 2¹⁰ (design
+  §4.11, derived 2.7 u and 3.4 u by `tools/sincos_bound.py`; measured 1.886 u and 2.566 u₃₂
+  over every f32 of [0, 2¹⁰], 1.890 u and 2.396 u₆₄ on 10⁷ samples). Odd and even bit for
+  bit for θ ≠ 0; sin(±0) is +0 and cos(±0) exactly 1. Like the exponential it uses only
+  IEEE-rounded layer operations (`fma`, `fnma`, `sub`, `mul`), so every ISA equals the
+  scalar layer bit for bit (`tests/sincos/invariance.rs`); keep it so, and add no layer
+  method for it without measuring the gain in the kernel. Its constants are `SimdScalar`'s
+  (`sealed::Sealed::SINCOS`).
 - Adding items to the crate can change rustc's partition into codegen units and with it the
   inlining in untouched functions (Helmholtz CH2.4a: NEON's `sums_f32` called `sums_body`'s
   first closure out of line in the default release build; with `-C codegen-units=1` every
@@ -144,7 +157,9 @@ docs/design/simd-p2p.md §4.10, tests in `tests/p2p/yukawa.rs`.
   NEON 27 and 39 (14 and 20 operations, the rest moves), AVX2 23 and 33, AVX-512 23 and
   29. The Yukawa P2P source loops (Helmholtz CH2.4b, K = 1; whole blocks, then the tail),
   f32 φ, f32 φ and ∇φ, f64 φ, f64 φ and ∇φ: NEON 40/40, 61/50, 52/52, 78/65; AVX2 49/49,
-  78/64, 71/68, 87/84; AVX-512 37/37, 48/46, 46/46, 58/56. From the repository root:
+  78/64, 71/68, 87/84; AVX-512 37/37, 48/46, 46/46, 58/56. The sine and cosine's loops
+  (Helmholtz CH3.4a, `…::sincos_slice_f32` and `_f64`): NEON 45 and 61 (25 and 33
+  operations), AVX2 42 and 58, AVX-512 37 and 45. From the repository root:
 
   ```sh
   # Build the release test binaries; cargo prints their paths ("Executable ...").
