@@ -1301,3 +1301,48 @@ request, using this template:
   - CH3.4b: the Helmholtz P2P on the skeleton, e^{iθ} by this sine and cosine and
     e^{−Im(k) r} by CH2.4a's exponential; its contract over Re(k) r ≤ 22 c_leaf.
   - CH3.4c: the operator's P2P.
+
+## 2026-11-01: CH3.4b Helmholtz P2P on the skeleton
+- Done:
+  - The P2P skeleton with planes: `PairKernel<T, S, QP, OP>`, QP charge planes per source
+    (point-major) and OP output planes per target (stride n), compile-time; Laplace and
+    Yukawa the one-plane case, the tail and `sub_block`'s range kept as CH2.4b's for one
+    plane. The user, 2026-11-01, each "(Recommended)": "Proceed as planned", "Split planes",
+    "Undamped and damped".
+  - `P2pKernel::evaluate_helmholtz` with `HelmholtzCharges` (real; complex Re q, Im q per
+    source) and split output planes: the pair kernel `arch::p2p::Helmholtz<V, DAMPED>`
+    (θ = Re(k) r by `arch::sincos`, e^{−Im(k) r} by `arch::exp` only when Im k > 0, the
+    gradient factor t (f − iθ)), 16 entry points and a selector per ISA, `HELMHOLTZ_K` = 1,
+    the scalar path `scalar::p2p_helmholtz` (the reference's loop). Design
+    `docs/design/simd-p2p.md` §4.12; `fmm-simd/CLAUDE.md`; the spike example
+    `spikes/p2p-simd/examples/helmholtz.rs`. Report `fmm-validate/results/helmholtz-ch3-4b.md`;
+    record `docs/helmholtz/tasks/CH3.4b.md`.
+- Tests: `tests/p2p/helmholtz.rs` (23, plus 4 ignored release tests): terms within
+  (32 + 12 |k| r) u_T and (66 + 12 |k| r) u_T over Re(k) r ≤ 2¹⁰ (measured at most 10.3u and
+  9.4u per unit of |k| r over 10⁶ pairs, NEON, AVX2, AVX-512); sums against `direct_sum`; the
+  real plane `evaluate`'s at k = 0 and `evaluate_yukawa`'s at k = iκ bit for bit; complex
+  charges with Im q = 0 as real ones; the scalar path the reference bit for bit; invariance;
+  coincident and empty inputs; panics. `src/arch/tests.rs`: every K and both charge kinds and
+  dampings bit for bit, and the Laplace and Yukawa identities on every layer.
+- Checks: `/verify` on the M6 (format; Clippy default, examples, workspace all-targets,
+  `nd-fmm-simd` for x86_64; `cargo test` 1,104 and `--workspace` 1,186; `cargo doc`; the
+  ignored release tests; the spike's test; the MPI list at 2 and 4 ranks, 24 of 24);
+  Kathleen job 617314 (`check.sbatch simd`) passed; the inlining check (no call; NEON
+  59–167, AVX2 70–181, AVX-512 53–122 instructions). Not run: the licence check.
+- Runs: cost per pair (one thread, W1): complex charges at real k 3.8–5.9× Laplace and
+  1.4–1.7× Yukawa on the default ISAs of the M6, locust and Kathleen (job 617315); damping
+  1.2–1.5× more; 1.7–11.9× faster than green-kernels' Helmholtz. K = 1 (K = 2 no faster on
+  NEON or AVX-512).
+- Decisions: the three above. Questions for sign-off (report §7): 1. the contract with the
+  f32 gradient range (1 + |k| r)/r³ ≤ 2¹²⁶; 2. constraint 1 as met; 3. the panic for
+  Re k < 0.
+- Laplace: `nd-fmm-simd`'s skeleton changed (constraint 1). Every function on NEON and AVX2
+  `main`'s instruction for instruction at the default settings (aarch64 and x86_64, macOS and
+  Linux); AVX-512's `p2p_f32_gradient` and `p2p_f64_gradient` keep `main`'s source loops up to
+  register names but control the block loop differently: D9 on Kathleen (job 617315,
+  node-c11b-015, `p2p_kernels --isa avx512` and the FMM at p = 3, A B B A A B B A A B) 14 of
+  14 rows within noise, outputs equal. With one codegen unit NEON's `merge` differs (not in
+  the default build).
+- Follow-ups:
+  - CH3.4c: `HelmholtzOperator`'s P2P through `evaluate_helmholtz` (the chunks' layout is the
+    kernel's: Re plane, then Im plane), the reference kept as the trusted path.

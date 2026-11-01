@@ -23,7 +23,9 @@
 //! [`P2pKernel::evaluate_yukawa`], the Yukawa P2P e^{−κr}/r, on the loop skeleton that
 //! [`P2pKernel::evaluate`] runs. Helmholtz CH3.4a: the sine and cosine of the Helmholtz
 //! P2P on every ISA, bit for bit the scalar path's, which [`sincos::sincos_slice`] exposes
-//! for tests and reports.
+//! for tests and reports. Helmholtz CH3.4b: [`P2pKernel::evaluate_helmholtz`], the Helmholtz
+//! P2P e^{ikr}/r for real and complex k with real and complex charges
+//! ([`HelmholtzCharges`]), on the same skeleton with two output planes.
 //!
 //! ## Instruction sets
 //!
@@ -145,6 +147,25 @@
 //! contract grows with κr, the conditioning of e^{−κr} in r (docs/design/simd-p2p.md §4.10);
 //! blocks hold one target vector on every ISA (the exponential's constants take the
 //! registers). The scalar path is the reference's loop.
+//!
+//! ## Helmholtz
+//!
+//! [`P2pKernel::evaluate_helmholtz`] (Helmholtz CH3.4b; docs/design/helmholtz-fmm-proposal.md
+//! §5.7) adds the potential e^{ikr}/r of real or complex point charges and its gradient
+//! (ikr − 1) e^{ikr} (x − y)/r³ (CONVENTIONS §3.15) for Re k ≥ 0 and Im k ≥ 0, with the
+//! semantics of `nd_fmm_ref::helmholtz::p2p::p2p` and the outputs in split planes: the real
+//! plane of every target, then the imaginary one (the layout of a complex vector in §3.15's
+//! leaf chunks). The loop skeleton of [`P2pKernel::evaluate`] takes the charges as one or two
+//! planes per source and the outputs as one or two planes per target, compile-time
+//! constants; Laplace and Yukawa are its one-plane case, unchanged. The pair arithmetic
+//! forms ρ and r as Yukawa's, e^{i Re(k) r} by the sine and cosine of
+//! [`sincos::sincos_slice`], e^{−Im(k) r} by the exponential where Im k > 0, the complex
+//! product with the charge, and the gradient factor −(1 + Im(k) r − i Re(k) r) ρ². Each ISA
+//! has an entry point per charge kind, damping (Im k = 0 or not) and output, chosen once
+//! per call. With real charges the real plane is [`P2pKernel::evaluate`]'s at k = 0 and
+//! [`P2pKernel::evaluate_yukawa`]'s at k = iκ, bit for bit. The contract grows with |k| r,
+//! the conditioning of e^{ikr} in r (docs/design/simd-p2p.md §4.12); blocks hold one target
+//! vector on every ISA. The scalar path is the reference's loop.
 //!
 //! ## The matrix kernel
 //!

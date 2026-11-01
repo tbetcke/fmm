@@ -418,7 +418,8 @@ at any kD.
   bit; position and length invariance; no call in the inner loop; the existing entry
   points the same instruction for instruction as `main`'s. *Needs:* CH2.4a. *Machines:*
   Kathleen (AVX-512, the contract).
-- [ ] **CH3.4b Helmholtz P2P on the skeleton.** `P2pKernel::evaluate_helmholtz`: e^{ikr}/r
+- [x] **CH3.4b Helmholtz P2P on the skeleton.** Report: `fmm-validate/results/helmholtz-ch3-4b.md`;
+  design `docs/design/simd-p2p.md` §4.12. `P2pKernel::evaluate_helmholtz`: e^{ikr}/r
   and its gradient for real and complex k (e^{−Im(k) r} by CH2.4a's exponential) with real
   and complex charges, on the P2P skeleton widened to the planes of a complex charge and
   output, Laplace's and Yukawa's instantiations unchanged. *Done when:* CH3.4's contract

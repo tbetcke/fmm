@@ -212,10 +212,49 @@ All on every ISA the machine offers (`common::kernels`, printing those it cannot
   planned"), the split planes for `evaluate_helmholtz` ("Split planes"), and undamped and
   damped entry points ("Undamped and damped").
 
+## Findings during implementation
+
+- **The planes need CH2.4b's one-plane expressions.** Written generally (slices of planes
+  with stride n, `[[T; MAX_LANES]; OP]` tails), the skeleton gave Laplace's source loops
+  unchanged but moved stack slots, a bounds check and the tail's copies in every P2P entry
+  point. Keeping, for one plane, CH2.4b's tail statements and `sub_block`'s range (`if OP ==
+  1`, compile-time) made every function on NEON and AVX2 `main`'s instruction for
+  instruction at the default settings, on macOS and Linux. Left: AVX-512's two Laplace
+  gradient entry points (`p2p_f32_gradient`, `p2p_f64_gradient`, K = 2), whose source loops
+  are `main`'s up to register names but whose block loop is controlled differently (several
+  other formulations tried made it worse, not better). So D9 ran where the code changed:
+  AVX-512 on Kathleen (report §3). With one codegen unit NEON's plane-wave `merge` also
+  differs (a copy loop's unrolling), not in the default build; the shipped profile has no
+  codegen-unit override.
+- **The f32 gradient's range.** At r² near 2⁻⁸⁴ and Re(k) r near 2¹⁰ the reference forms
+  (ikr − 1) e^{ikr}/r³ before the charge and overflows f32 (so does the scalar path, which is
+  the reference). The contract's f32 gradient range is (1 + |k| r)/r³ ≤ 2¹²⁶, Laplace's
+  ρ³ ≤ 2¹²⁶ at k = 0.
+- **K = 1.** On the M6, K = 2 is up to 1.19× slower with gradients and equal without.
+- **The contract** (design §4.12): (32 + 12 |k| r) u_T and (66 + 12 |k| r) u_T; measured at
+  most 10u at small |k| r and 9.4u per unit of |k| r over 10⁶ pairs on NEON (M6), AVX2 and
+  AVX-512 (Kathleen job 617314).
+- **Tooling.** zsh does not word-split `$c` in loops (memory); the Helmholtz entry points are
+  crate-private, so a release rlib's symbols carry ` (.llvm.N)` (the linked test binary has
+  none); macOS's `ar` cannot unpack the Linux rlibs, but `objdump` reads them directly.
+
+## Checks run
+
+Report §6: on the M6 format, Clippy (default, examples, workspace all-targets, `nd-fmm-simd`
+for x86_64), `cargo test` (1,104) and `--workspace` (1,186), `cargo doc`, `nd-fmm-simd`'s
+ignored release tests (21), the spike example's test, the MPI list at 2 and 4 ranks (24 of
+24), the disassembly comparison (4 targets × 2 settings) and the inlining check; Kathleen job
+617314 (`check.sbatch simd`) passed; job 617315: D9 for AVX-512 (14 of 14 rows within noise,
+outputs equal), the cost per pair and AVX-512's K = 2; the cost per pair on the M6 and locust.
+Not run: the licence check (no default member's manifest changed); D9 on the M6 and locust
+and C3S.4 (NEON's and AVX2's code is `main`'s).
+
 ## Pending runs
 
-None yet.
+None.
 
 ## Open questions
 
-None yet.
+The report's §7, for sign-off: 1. the contract as derived, with the f32 gradient range;
+2. constraint 1 as met (AVX-512's two Laplace gradient entry points within noise, D9 only
+there; NEON's `merge` differs with one codegen unit only); 3. the panic for Re k < 0.
