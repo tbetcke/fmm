@@ -21,7 +21,8 @@
 //! gradients out, with the leaf's own P2M and L2P.
 //!
 //! [`Degrees`] and [`degree()`] (Helmholtz CH3.1a, submodule [`degree`](mod@degree)) give the
-//! degree of each level: S7's closed form at a tolerance, or degrees named per level.
+//! degree of each level: a rule at a tolerance (calibrated in the full FMM, Helmholtz
+//! CH3.3), or degrees named per level.
 //! [`HelmholtzOperator`] (CH3.1a, submodule [`operator`]) is the operator of the plan for
 //! real and complex k: RCR on every level with the per-level tables of
 //! `nd_fmm_tables::helmholtz`, the leaf operators of [`Densities`] and `nd-fmm-ref`, and
@@ -62,7 +63,7 @@ use thiserror::Error;
 
 use crate::geometry::Domain;
 
-pub use degree::{DegreeError, Degrees, degree};
+pub use degree::{DegreeError, DegreeRule, Degrees, degree, s7_degree};
 pub use densities::{ChargeKind, Charges, Densities, DensityError, LeafScratch, Output, Split};
 pub use fmm::{HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError};
 pub use operator::{HelmholtzOperator, OperatorError};

@@ -399,8 +399,15 @@ at any kD.
   per-target finish hook in `driver::m2l_target`, with constraint 1 as in CH2.0 (Laplace bit for
   bit, D9 on the three machines), else Helmholtz's Batched gets its own block.
   *Needs:* CH3.1. *Machines:* locust, Kathleen.
-- [ ] **CH3.3 Calibration of p_l over (k a_l, ε).** *Done when:* S7's low-frequency tables
-  confirmed in the full FMM. *Needs:* CH3.1, CH0.7.
+- [x] **CH3.3 Calibration of p_l over (k a_l, ε).** Report:
+  `fmm-validate/results/helmholtz-ch3-3.md`; record `docs/helmholtz/tasks/CH3.3.md`;
+  `nd_fmm_exec::helmholtz::{DegreeRule, degree, s7_degree}`,
+  `nd_fmm_validate::helmholtz_calibration`, the `helmholtz_calibrate` example. S7's tables
+  upper bounds in the full FMM at all 176 measured points; the calibrated rule
+  max(⌈0.30 L² + 0.25 L + 2.60⌉, ⌈x + 0.80 (ln 1/ε)^{2/3} x^{1/3}⌉) the default (the user,
+  2026-11-01: "Calibrate, new default", "Both branches", "ε/2, verify ≤ ε"), S7's closed
+  form kept as `s7_degree`. *Done when:* S7's low-frequency tables confirmed in the full
+  FMM. *Needs:* CH3.1, CH0.7.
 - CH3.4 Helmholtz P2P, real and complex k. On CH2.4's skeleton. *Done when:* the
   accuracy contract over k r up to 22 c_leaf; cost per pair; the Helmholtz operator's P2P
   if CH3.1 is merged (priority list). *Needs:* CH2.4.

@@ -202,9 +202,9 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   checks the sizes and indices against closed forms, P2M and L2P bit for bit against
   `nd_fmm_ref::helmholtz::leaf`, and the chunks end to end against the direct sum.
 - The Helmholtz operator (Helmholtz CH3.1a; `helmholtz::{degree, operator}`, the module
-  docs; docs/helmholtz/tasks/CH3.1a.md): `Degrees` (a tolerance, S7's closed form
-  `degree` at Re(k) a, degree 0 on levels 0 and 1, which nothing reads; or degrees named
-  per level) and `HelmholtzOperator` for real and complex k, real and complex charges and
+  docs; docs/helmholtz/tasks/CH3.1a.md): `Degrees` (a tolerance, the rule `degree` at
+  Re(k) a, degree 0 on levels 0 and 1, which nothing reads; or degrees named per level)
+  and `HelmholtzOperator` for real and complex k, real and complex charges and
   m vectors (Yukawa is `OperatorError::Yukawa`, CH2.1's path). Level l works in its own
   units at k̂_l = k r_l; a box holds r_l φ̃ there as a chunk does, so P2L scales its
   charges by r̂(t|s) and the L2L tables carry ½ (`nd_fmm_tables::helmholtz`). M2M, L2L
@@ -217,6 +217,15 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   checks the bodies pair by pair against the direct sum and, at low degrees, against
   `nd-fmm-ref`'s chains in absolute units; the level calls are tested with the FMM
   (CH3.1b).
+- The degree rule (Helmholtz CH3.3; the `helmholtz::degree` module docs;
+  fmm-validate/results/helmholtz-ch3-3.md): `degree` is `DegreeRule::CALIBRATED`,
+  max(⌈0.30 L² + 0.25 L + 2.60⌉, ⌈x + 0.80 (ln 1/ε)^{2/3} x^{1/3}⌉) with L = log₁₀(1/ε),
+  x = Re(k) a, calibrated in the full FMM (every measured degree at ε/2 covered, 10⁻⁸ ≤ ε
+  ≤ 10⁻³, x ≤ 65, checked at x = 108; an extrapolation beyond, below S7's p* there);
+  S7's closed form, the default before, is `s7_degree`, the per-pair bound. Tests of single pairs or chains (`tests/helmholtz/operator.rs`) take `s7_degree`;
+  tests of the whole FMM the default. `DegreeRule`'s ceilings forgive 10⁻⁹. A change of
+  the constants is a recalibration: rerun `nd-fmm-validate`'s `helmholtz_calibrate` and
+  the verification of the report, and update `tests/helmholtz/degree.rs`'s `MEASURED`.
 - The Helmholtz P2P kernel (Helmholtz CH3.4c; the `helmholtz::operator` module docs, "P2P
   kernel"; docs/helmholtz/tasks/CH3.4c.md): `HelmholtzOperator::with_p2p` and
   `HelmholtzFmmBuilder::p2p_kernel` take Laplace's `P2pChoice` (default `Auto`):

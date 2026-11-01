@@ -34,6 +34,7 @@ use std::time::Instant;
 
 use mpi::collective::SystemOperation;
 use mpi::traits::CommunicatorCollectives;
+use nd_fmm_exec::geometry::radius;
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, Degrees, HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError, Output,
     Wavenumber,
@@ -376,6 +377,9 @@ pub struct Row {
     pub min_leaf_level: usize,
     /// The degree of every level.
     pub degrees: Vec<usize>,
+    /// The circumradius √3 r_l of every level's boxes in the domain of the FMM (the
+    /// points' bounding cube unless named), for x = Re(k) a_l (Helmholtz CH3.3).
+    pub circumradii: Vec<f64>,
     /// The leaves of the tree, summed over the ranks.
     pub leaves: usize,
     /// The most points in a leaf.
@@ -456,6 +460,9 @@ pub fn run<C: CommunicatorCollectives>(
         levels: fmm.nlevels(),
         min_leaf_level: fmm.min_leaf_level(),
         degrees: fmm.degrees().to_vec(),
+        circumradii: (0..fmm.nlevels())
+            .map(|l| 3f64.sqrt() * radius(l, fmm.domain()))
+            .collect(),
         leaves,
         max_leaf_points: fmm.max_leaf_points(),
         build,

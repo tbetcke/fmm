@@ -22,6 +22,9 @@
 //!   `--samples n` (default 1000), `--no-gradients`;
 //! - `--threads t,…` (default 1), `--oracle-threads t` (default the largest of
 //!   `--threads`);
+//! - `--rule calibrated|s7` (default `calibrated`, Helmholtz CH3.3): with `s7`, a tolerance
+//!   gives S7's closed form (`s7_degree`) per level in place of the default rule, through
+//!   one run at degree 1 for the levels' circumradii (the times before CH3.3's rule);
 //! - `--p2p auto|reference|<isa>,…` (default `auto`): the P2P kernels (Helmholtz CH3.4c),
 //!   each case run with each in turn; an ISA this machine lacks is refused before MPI
 //!   starts.
@@ -44,7 +47,7 @@ use std::time::Instant;
 
 use mpi::Threading;
 use mpi::traits::*;
-use nd_fmm_exec::helmholtz::{ChargeKind, Degrees};
+use nd_fmm_exec::helmholtz::{ChargeKind, Degrees, Wavenumber, s7_degree};
 use nd_fmm_exec::operator::P2pChoice;
 use nd_fmm_validate::bench::{cores, cpu_model, target};
 use nd_fmm_validate::fmm_accuracy::Distribution;
@@ -64,6 +67,7 @@ struct Arguments {
     threads: Vec<usize>,
     oracle_threads: Option<usize>,
     p2p: Vec<P2pChoice>,
+    s7: bool,
 }
 
 /// Parses a comma-separated list.
@@ -97,7 +101,7 @@ fn arguments() -> Arguments {
             "usage: helmholtz_accuracy [--workload w1|w2|w3|w3:<n>|w4-<distribution>:<n>] \
              [--kd x,…] [--kim y] [--eps e,…|--degree p] [--charges real|complex] \
              [--vectors m] [--samples n] [--no-gradients] [--threads t,…] \
-             [--oracle-threads t] [--p2p auto|reference|<isa>,…]; got {args:?}"
+             [--oracle-threads t] [--rule calibrated|s7] [--p2p auto|reference|<isa>,…]; got {args:?}"
         );
         std::process::exit(2);
     };
@@ -113,6 +117,7 @@ fn arguments() -> Arguments {
         threads: vec![1],
         oracle_threads: None,
         p2p: vec![P2pChoice::Auto],
+        s7: false,
     };
     let mut rest = args.as_slice();
     loop {
@@ -151,6 +156,13 @@ fn arguments() -> Arguments {
                         .filter(|c| c.iter().all(|c| c.resolve().is_ok()))
                         .map(|c| parsed.p2p = c)
                         .is_some(),
+                    "--rule" => match value.as_str() {
+                        "calibrated" => Some(false),
+                        "s7" => Some(true),
+                        _ => None,
+                    }
+                    .map(|s7| parsed.s7 = s7)
+                    .is_some(),
                     "--oracle-threads" => value
                         .parse()
                         .map(|v| parsed.oracle_threads = Some(v))
@@ -251,9 +263,24 @@ fn main() {
                 format!("{kd} + {}i", arguments.kim)
             };
             let degrees_name = match degrees {
+                Degrees::Tolerance(eps) if arguments.s7 => format!("S7 ε = {eps:e}"),
                 Degrees::Tolerance(eps) => format!("ε = {eps:e}"),
                 Degrees::PerLevel(p) => format!("p = {}", p[0]),
             };
+            if let (true, &Degrees::Tolerance(eps)) = (arguments.s7, degrees) {
+                case.degrees = Degrees::PerLevel(vec![1; 64]);
+                let probe = run(&case, &problem, &oracle, oracle_threads, &world)
+                    .expect("the FMM at degree 1 runs");
+                let k = Wavenumber::new(kd, arguments.kim).expect("a valid wavenumber");
+                case.degrees = Degrees::PerLevel(
+                    (0..64)
+                        .map(|l| match l {
+                            2.. if l < probe.levels => s7_degree(&k, probe.circumradii[l], eps),
+                            _ => 0,
+                        })
+                        .collect(),
+                );
+            }
             let charges = match case.charges {
                 ChargeKind::Real => "real",
                 ChargeKind::Complex => "complex",

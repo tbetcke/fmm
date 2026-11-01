@@ -18,8 +18,8 @@
 
 use nd_fmm_exec::geometry::{self, Domain, radius};
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, Charges, Degrees, Densities, HelmholtzOperator, OperatorError, Output, Wavenumber,
-    WavenumberKind,
+    ChargeKind, Charges, Densities, HelmholtzOperator, OperatorError, Output, Wavenumber,
+    WavenumberKind, s7_degree,
 };
 use nd_fmm_plan::operator::{FmmSizes, PairOperator};
 use nd_fmm_tables::geometry::m2l_offset_index;
@@ -97,7 +97,7 @@ fn target_input(leaf: MortonKey, points: &[[f64; 3]]) -> Vec<f64> {
         .collect()
 }
 
-/// A problem: k, the charge kind, m vectors, and the operator at tolerance ε.
+/// A problem: k, the charge kind, m vectors, and the operator at S7's degrees at ε.
 struct Problem {
     k: Wavenumber,
     kind: ChargeKind,
@@ -108,9 +108,14 @@ struct Problem {
 impl Problem {
     fn new(k: Wavenumber, kind: ChargeKind, m: usize, epsilon: f64) -> Self {
         let densities = Densities::new(k.kind(), kind, m);
-        let degrees = Degrees::Tolerance(epsilon)
-            .resolve(&k, &domain(), LEVELS)
-            .unwrap();
+        // S7's per-pair degrees: the chains are single pairs, which S7's closed form bounds
+        // (the default rule is calibrated on the whole FMM, Helmholtz CH3.3).
+        let degrees: Vec<usize> = (0..LEVELS)
+            .map(|l| match l {
+                0 | 1 => 0,
+                _ => s7_degree(&k, 3f64.sqrt() * radius(l, &domain()), epsilon),
+            })
+            .collect();
         // No stored M2L blocks: the few M2L calls form theirs (the same bits).
         let op =
             HelmholtzOperator::with_block_budget(k, densities, &domain(), &degrees, true, 64, 0)
@@ -337,7 +342,8 @@ fn chains(pb: &mut Problem, seed: u64, draw: Draw) -> Vec<Chain> {
     out
 }
 
-/// The chains' errors within the tolerance ε (the P2P to rounding, 1e-13), for real k at
+/// The chains' errors within the tolerance ε at S7's degrees (the P2P to rounding, 1e-13),
+/// for real k at
 /// kD = 1, 20 and 100 and complex k at kD = 20 + 2i, real and complex charges, ε = 10⁻⁶
 /// and 10⁻¹⁰.
 #[test]

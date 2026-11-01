@@ -311,6 +311,17 @@ example's `--p2p auto|reference|<isa>,…` (each case with each kernel in turn; 
 "P2P"), for the times before and after the vectorised kernel
 (docs/helmholtz/tasks/CH3.4c.md, "Results").
 
+Helmholtz CH3.3 (the calibration of p_l; docs/helmholtz/tasks/CH3.3.md) added
+`helmholtz_calibration` (MPI-free: `Curve`, the errors at consecutive degrees and the
+smallest degree whose larger error meets a target at three degrees in a row; `Point`;
+`fit_plateau`, `fit_high`, `fit` and `covers` for `nd_fmm_exec::helmholtz::DegreeRule`),
+`helmholtz_accuracy::Row::circumradii` (the levels' √3 r_l in the FMM's domain), the
+`helmholtz_calibrate` example (not registered: hours at kD ≥ 200; plateau scans, level
+scans with the other levels held, `point:` lines, and `fit <files…>`) and
+`helmholtz_accuracy --rule s7` (S7's degrees per level through a run at degree 1, for the
+times before). `tests/helmholtz_accuracy.rs` runs a plateau scan on W1 at kD = 10 and
+checks the default rule at most S7's. Its report is `results/helmholtz-ch3-3.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

@@ -6,7 +6,7 @@
 //!
 //! - against the direct sum (`nd_fmm_ref::helmholtz::p2p::direct_sum` in f64, 1/(4π)
 //!   included, over every rank's sources): the relative L2 error of φ and ∇φ over every
-//!   rank's targets within `ERROR_FACTOR` times ε for S7's closed form, or within
+//!   rank's targets within `ERROR_FACTOR` times ε for the default degree rule, or within
 //!   `P8_BOUND` for degree 8 on every level;
 //! - the output pass bit for bit the reference pass of `Densities::write_leaf_output`;
 //! - 4 threads bit for bit one (2 and 4 in release builds);
@@ -52,8 +52,9 @@ use nd_octree::PhysicalBox;
 
 type C = Complex<f64>;
 
-/// The error against the direct sum may be this many times ε: the closed form meets ε per
-/// translation chain (S7, CH3.1a's chain tests), and an output sums many chains.
+/// The error against the direct sum may be this many times ε: the default rule meets ε/2
+/// on the reference workloads' sampled targets (Helmholtz CH3.3), and these small trees
+/// and one rank's targets are not those workloads.
 const ERROR_FACTOR: f64 = 10.0;
 
 /// The error bound of the scenarios with degree 8 on every level, where truncation
