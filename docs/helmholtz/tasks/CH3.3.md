@@ -180,3 +180,8 @@ calibrated rule replaces S7's closed form as `Degrees::Tolerance`'s default, S7'
 public as the upper bound); "Both branches (Recommended)" (the plateau p_lo(ε) and the
 high-frequency constant C); "ε/2, verify ≤ ε (Recommended)" (each measured degree meets
 ε/2; the rule meets ε on the matrix and the held-out cases).
+
+Signed off 2026-11-01 on the PR (#169), the user: "1–3 as recommended": 1. the quadratic
+plateau; 2. the high-frequency branch accepted for CH3.6 (kD ≤ 500), its form left to
+CH4.3, and a kD ≈ 1000, ε = 10⁻⁸ check on Kathleen before the rule is relied on there;
+3. the per-pair chain tests on `s7_degree`.

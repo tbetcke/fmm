@@ -1429,7 +1429,10 @@ request, using this template:
   gained an `[[example]]` only).
 - Decisions: the three above. Questions for sign-off (the PR): 1. the quadratic plateau;
   2. the high-frequency branch above x = 65 an extrapolation below S7's p* at small ε
-  (checked at kD = 500 only); 3. the per-pair chain tests on `s7_degree`.
+  (checked at kD = 500 only); 3. the per-pair chain tests on `s7_degree`. Signed off
+  2026-11-01, the user: "1–3 as recommended" (the quadratic plateau accepted; the branch
+  accepted for CH3.6 at kD ≤ 500, its form left to CH4.3, a kD ≈ 1000, 10⁻⁸ check on
+  Kathleen before relying on it there; the chain tests on `s7_degree`).
 - Laplace: not touched (no Laplace file changed).
 - Follow-ups:
   - CH3.6: on this rule (W1 at kD = 500, 10⁻⁶ in 98 s).
