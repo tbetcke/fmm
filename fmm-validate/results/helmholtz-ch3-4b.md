@@ -7,9 +7,11 @@ Machines:
 - M6 (Apple M6, NEON; `tools/m6/machine.md`): every check, the contract on NEON, the
   disassembly comparison (cross-built for every target), the cost per pair.
 - locust (NVIDIA GH200, Neoverse-V2, NEON): the cost per pair.
-- Kathleen (Intel Xeon Gold 6248: scalar, AVX2, AVX-512): job 617314 (node-c11b-006,
-  `check.sbatch simd`, the contract on x86) and job 617315 (node-c11b-015, D9 for the
-  AVX-512 entry points whose code changed, the cost per pair, AVX-512's K = 2).
+- Kathleen (Intel Xeon Gold 6248: scalar, AVX2, AVX-512): jobs 617314 and 617322 (node-c11b-024, the sampling widened after the self-review; the numbers of §4 are
+  its and the M6's rerun)
+  (`check.sbatch simd`, the contract on x86), job 617315 (node-c11b-015, D9 for the AVX-512
+  entry points whose code changed at p = 3, the cost per pair, AVX-512's K = 2) and job
+  617321 (node-c11a-090, D9 at p = 8 and the byte comparison of the FMM outputs).
 
 ## Summary
 
@@ -24,14 +26,15 @@ Machines:
   Linux), and so is every other existing function but one: NEON's Yukawa
   `p2p_yukawa_f32_gradient` in the default macOS build, whose source loop exchanges the
   registers of two gradient accumulators (v3, v4; the same instructions). AVX-512's two Laplace gradient entry points keep their source loops (registers
-  renamed) but not the block loop's control; D9 on Kathleen: 14 of 14 rows within noise,
-  outputs equal (§2, §3).
+  renamed) but not the block loop's control; D9 on Kathleen: 16 of 16 rows within noise,
+  and the FMM outputs of `main` and the branch byte for byte identical in 18 of 18 cases
+  (§2, §3).
 - **With real charges** the real plane at k = 0 is `evaluate`'s and at k = iκ
   `evaluate_yukawa`'s, bit for bit on every vector ISA: the skeleton is shared, not copied.
 - **Contract** (§4.12): (32 + 12 |k| r) u_T per part of φ and (66 + 12 |k| r) u_T per part of
   each ∇φ component, for Re(k) r ≤ 2¹⁰ (above 22 c_leaf for any c_leaf ≤ 46) and Im(k) r ≤ 64
   (f32) or 512 (f64). Measured over 10⁶ pairs per precision on NEON, AVX2 and AVX-512: at most
-  10.3u at |k| r < 1 and 9.4u per unit of |k| r beyond (§4).
+  10.3u at |k| r < 1 and 9.0u per unit of |k| r beyond (§4).
 - **Cost per pair** (§5): the complex-charge kernel at real k takes 3.8–5.9× Laplace's time
   per pair and 1.4–1.7× Yukawa's on the three machines' default ISAs (AVX2: 3.6–4.9× and
   1.2–1.5×); damping (Im k > 0) costs another 1.2–1.5×. It is 1.7–11.9× faster than green-kernels' Helmholtz on the same
@@ -98,13 +101,16 @@ outputs, and `p2p_body_is_independent_of_k` and the Yukawa tests run through the
 
 ## 3. Laplace's benchmarks (D9, AVX-512 on Kathleen)
 
-D9 as signed off, where the code changed: AVX-512 on Kathleen, job 617315 (node-c11b-015),
+D9 as signed off, where the code changed: AVX-512 on Kathleen, jobs 617315 (node-c11b-015;
+the kernel and p = 3) and 617321 (node-c11a-090; p = 8),
 `main` (dc2fefb, its own tree and target directory) A and the branch B in the order
 A B B A A B B A A B. Per row the spread is max − min of `main`'s five values; a row fails
 only if the branch's median is slower than `main`'s by more than that spread. Each run:
 `p2p_kernels --isa avx512` (one thread; the gathered W1 rows, ns per pair) and
-`tools/bench/run.sh --backend host --precision f32,f64 --degree 3` (N = 10⁶, Auto, 40
-threads, gradients on, 10 evaluations after 2 warm-ups; ms). NEON and AVX2 need no run: their
+`tools/bench/run.sh --backend host --precision f32,f64 --degree 3` and, in the second job,
+`--degree 8` (N = 10⁶, Auto, 40 threads, gradients on, 10 evaluations after 2 warm-ups;
+ms). CH2.4b's plane-wave steps (`plane_wave_parts`) are left out: their code is `main`'s on
+every target (§2). NEON and AVX2 need no run: their
 Laplace code is `main`'s.
 
 | ISA | precision | output | n_t | main ns/pair | branch ns/pair | spread | Δ median | within noise | outputs equal |
@@ -128,11 +134,20 @@ Laplace code is `main`'s.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | f32 | 3 | Batched | 76.04, 75.91, 77.56, 76.56, 74.08 | 77.33, 75.29, 76.18, 76.91, 78.07 | 3.476 | +0.864 (+1.1 %) | yes | yes |
 | f64 | 3 | Batched | 110, 110, 112.9, 109.5, 112.4 | 116, 113, 112.8, 112, 112.7 | 3.458 | +2.746 (+2.5 %) | yes | yes |
+| f32 | 8 | PlaneWave | 156.4, 151.4, 155.6, 153.5, 155.1 | 157.2, 156.5, 157.4, 154.8, 155.1 | 5.062 | +1.398 (+0.9 %) | yes | yes |
+| f64 | 8 | PlaneWave | 210.6, 211.5, 212, 208.3, 208.1 | 216.3, 205.1, 208.2, 204.8, 207.3 | 3.901 | -3.261 (-1.5 %) | yes | yes |
 
 0 rows outside noise
 
-All 14 rows within noise; "outputs equal": the error columns agree in every run of both
-sides. C3S.4 (NEON's prototype ratio) needs no run: NEON's code is `main`'s.
+All 16 rows within noise; "outputs equal": the error columns agree in every run of both
+sides.
+
+**The FMM outputs byte for byte** (job 617321; CH2.0's procedure): `nd-fmm-bench
+--write-problem` once (the cube, N = 10⁵), then `--write-output` from `main`'s and the
+branch's binaries (f64, φ and ∇φ at every point, 40 threads, AVX-512) at p = 3, 6 and 8 under
+dense, classes, rotation, batched, planewave and auto, `cmp`: 18 of 18 identical
+(25,600,024 bytes each). `--write-output` is f64 only; f32's outputs rest on the D9 rows'
+error columns and the test suite. C3S.4 (NEON's prototype ratio) needs no run: NEON's code is `main`'s.
 
 ## 4. Accuracy
 
@@ -146,12 +161,12 @@ undamped), largest errors in u_T, potential / gradient, over both charge kinds:
 
 | ISA (machine) | precision | \|k\| r < 1 | per unit \|k\| r, \|k\| r ≥ 1 | largest (\|k\| r ≤ 1,145) |
 | --- | --- | --- | --- | --- |
-| NEON (M6) | f32 | 9.56 / 10.32 | 6.39 / 8.22 | 3,071 / 2,851 |
-| NEON (M6) | f64 | 7.36 / 10.03 | 6.88 / 9.37 | 3,072 / 2,581 |
-| AVX2 (Kathleen) | f32 | 9.56 / 9.19 | 6.26 / 8.22 | 3,071 / 2,962 |
-| AVX2 (Kathleen) | f64 | 7.36 / 8.89 | 6.88 / 8.03 | 3,072 / 2,581 |
-| AVX-512 (Kathleen) | f32 | 7.97 / 8.59 | 6.26 / 8.22 | 3,071 / 2,962 |
-| AVX-512 (Kathleen) | f64 | 7.36 / 9.45 | 6.88 / 8.03 | 3,072 / 2,581 |
+| NEON (M6) | f32 | 6.38 / 9.72 | 6.37 / 9.04 | 3,063 / 2,753 |
+| NEON (M6) | f64 | 7.13 / 9.57 | 6.88 / 7.24 | 3,072 / 2,382 |
+| AVX2 (Kathleen) | f32 | 5.95 / 9.44 | 6.38 / 6.44 | 3,063 / 2,309 |
+| AVX2 (Kathleen) | f64 | 7.13 / 9.44 | 6.88 / 7.24 | 3,071 / 2,382 |
+| AVX-512 (Kathleen) | f32 | 6.38 / 9.09 | 6.38 / 6.71 | 3,063 / 2,311 |
+| AVX-512 (Kathleen) | f64 | 7.13 / 10.31 | 6.88 / 7.36 | 3,071 / 2,368 |
 | scalar (both) | both | 0 / 0 | 0 / 0 | 0 / 0 |
 
 Against the derived 30u and 64u at small |k| r and 11.8u per unit of |k| r. The sums
@@ -297,13 +312,14 @@ Kathleen (job 617315; green-kernels' pulp backend is AVX2 on this CPU):
 | `cargo clippy --workspace --all-targets -- -D warnings` | M6 | passed (the spike included) |
 | `RUST_MIN_STACK=8388608 cargo test --workspace` | M6 | passed (1,186) |
 | `cargo clippy -p nd-fmm-simd --all-targets --target x86_64-apple-darwin -- -D warnings` | M6 | passed |
-| `cargo test -p nd-fmm-simd --release -- --ignored --show-output` | M6 | passed (21) |
+| `cargo test -p nd-fmm-simd --release -- --ignored --show-output` | M6 | passed (21; the Helmholtz ones again after the review's sampling change) |
 | `cargo test --release -p nd-fmm-spike-p2p-simd --example helmholtz` | M6 | passed |
 | `.github/scripts/run-mpi-tests.sh` build, run at 2 and 4 ranks | M6 | passed (24 of 24) |
-| `check.sbatch simd` (Clippy, tests, ignored release tests) | Kathleen 617314 | passed |
+| `check.sbatch simd` (Clippy, tests, ignored release tests) | Kathleen 617314, 617322 | passed |
 | disassembly comparison, 4 targets × 2 settings | M6 | §2 |
 | inlining check | M6 | §5.3, no call |
-| D9 (AVX-512) | Kathleen 617315 | 14 of 14 within noise |
+| D9 (AVX-512) | Kathleen 617315, 617321 | 16 of 16 within noise |
+| FMM outputs of `main` and the branch, byte for byte (18 cases, f64) | Kathleen 617321 | 18 of 18 identical |
 
 Not run: the licence check (no default member's manifest changed); D9 on the M6 and locust
 and C3S.4 (NEON's and AVX2's code is `main`'s, §2).
@@ -314,7 +330,8 @@ and C3S.4 (NEON's and AVX2's code is `main`'s, §2).
    gradient range (1 + |k| r)/r³ ≤ 2¹²⁶ (Laplace's 2⁻⁸⁴ ≤ r² at k = 0; the reference
    overflows beyond).
 2. Constraint 1 as met: NEON's and AVX2's Laplace code `main`'s (and Yukawa's, but for a
-   register exchange in NEON's f32 gradient loop on macOS); AVX-512's two Laplace gradient entry
+   register exchange in NEON's f32 gradient loop on macOS); the FMM's outputs byte for byte
+   `main`'s on AVX-512 (18 cases); AVX-512's two Laplace gradient entry
    points with `main`'s source loops but other block-loop control, within noise in D9 on
    Kathleen (D9 run only there, where the code changed); NEON's `merge` differs with one
    codegen unit only.

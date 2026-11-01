@@ -96,7 +96,7 @@ docs/design/simd-p2p.md §4.12, tests in `tests/p2p/helmholtz.rs`.
   (66 + 12 |k| r) u_T (each part of each ∇φ component, relative to
   |q| (1 + |k| r) e^{−Im(k) r}/r²) for Re(k) r ≤ 2¹⁰ and Im(k) r ≤ 64 (f32) or 512 (f64), the
   f32 gradient for (1 + |k| r)/r³ ≤ 2¹²⁶, derived in docs/design/simd-p2p.md §4.12; measured
-  at most 10.3u at small |k| r and 9.4u per unit of |k| r over 10⁶ pairs on NEON (M6), AVX2
+  at most 10.3u at small |k| r and 9.0u per unit of |k| r over 10⁶ pairs on NEON (M6), AVX2
   and AVX-512 (Kathleen). One target vector per
   block on every ISA (`HELMHOLTZ_K`).
 - `MatrixKernel::accumulate_columns` gives every element of C the chain of

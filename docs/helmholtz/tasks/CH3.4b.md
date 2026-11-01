@@ -235,7 +235,7 @@ All on every ISA the machine offers (`common::kernels`, printing those it cannot
   ρ³ ≤ 2¹²⁶ at k = 0.
 - **K = 1.** On the M6, K = 2 is up to 1.19× slower with gradients and equal without.
 - **The contract** (design §4.12): (32 + 12 |k| r) u_T and (66 + 12 |k| r) u_T; measured at
-  most 10.3u at small |k| r and 9.4u per unit of |k| r over 10⁶ pairs on NEON (M6), AVX2 and
+  most 10.3u at small |k| r and 9.0u per unit of |k| r over 10⁶ pairs on NEON (M6), AVX2 and
   AVX-512 (Kathleen job 617314).
 - **Tooling.** zsh does not word-split `$c` in loops (memory); the Helmholtz entry points are
   crate-private, so a release rlib's symbols carry ` (.llvm.N)` (the linked test binary has
@@ -247,8 +247,9 @@ Report §6: on the M6 format, Clippy (default, examples, workspace all-targets, 
 for x86_64), `cargo test` (1,104) and `--workspace` (1,186), `cargo doc`, `nd-fmm-simd`'s
 ignored release tests (21), the spike example's test, the MPI list at 2 and 4 ranks (24 of
 24), the disassembly comparison (4 targets × 2 settings) and the inlining check; Kathleen job
-617314 (`check.sbatch simd`) passed; job 617315: D9 for AVX-512 (14 of 14 rows within noise,
-outputs equal), the cost per pair and AVX-512's K = 2; the cost per pair on the M6 and locust.
+617314 and 617322 (`check.sbatch simd`) passed; jobs 617315 and 617321: D9 for AVX-512 (16 of 16 rows
+within noise, outputs equal; p = 8 added after the self-review), the byte comparison of the
+FMM outputs (18 of 18 identical), the cost per pair and AVX-512's K = 2; the cost per pair on the M6 and locust.
 Not run: the licence check (no default member's manifest changed); D9 on the M6 and locust
 and C3S.4 (NEON's and AVX2's code is `main`'s).
 

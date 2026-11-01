@@ -894,21 +894,21 @@ which is the reference, overflows beyond). Beyond Re(k) r = 2¹⁰ the terms are
 
 **Measured** (`tests/p2p/helmholtz.rs`, `helmholtz_terms_*_large`, 10⁶ seeded pairs per
 precision, r² log-uniform over the domain, Re(k) r log-uniform in [10⁻⁶, 2¹⁰] (0 for every
-sixteenth pair), Im(k) r = 0 for a third and log-uniform in [10⁻⁶, 64 or 512] otherwise, real
+sixteenth group of four pairs, so with each output and charge kind), Im(k) r = 0 for a third and log-uniform in [10⁻⁶, 64 or 512] otherwise, real
 and complex charges with 2⁻²⁰ ≤ |q| ≤ 1), largest errors in u_T, potential / gradient:
 
 | ISA (machine) | precision | \|k\| r < 1 | per unit \|k\| r, \|k\| r ≥ 1 |
 | --- | --- | --- | --- |
-| NEON (M6) | f32 | 9.6 / 10.3 | 6.4 / 8.2 |
-| NEON (M6) | f64 | 7.4 / 10.0 | 6.9 / 9.4 |
-| AVX2 (Kathleen) | f32 | 9.6 / 9.2 | 6.3 / 8.2 |
-| AVX2 (Kathleen) | f64 | 7.4 / 8.9 | 6.9 / 8.0 |
-| AVX-512 (Kathleen) | f32 | 8.0 / 8.6 | 6.3 / 8.2 |
-| AVX-512 (Kathleen) | f64 | 7.4 / 9.5 | 6.9 / 8.0 |
+| NEON (M6) | f32 | 6.4 / 9.7 | 6.4 / 9.0 |
+| NEON (M6) | f64 | 7.1 / 9.6 | 6.9 / 7.2 |
+| AVX2 (Kathleen) | f32 | 6.0 / 9.4 | 6.4 / 6.4 |
+| AVX2 (Kathleen) | f64 | 7.1 / 9.4 | 6.9 / 7.2 |
+| AVX-512 (Kathleen) | f32 | 6.4 / 9.1 | 6.4 / 6.7 |
+| AVX-512 (Kathleen) | f64 | 7.1 / 10.3 | 6.9 / 7.4 |
 
-so 7–10u at small |k| r against 32u and 66u, and at most 9.4u per unit of |k| r against 12u.
+so 6–10u at small |k| r against 32u and 66u, and at most 9.0u per unit of |k| r against 12u.
 The sums against `direct_sum` (FMM-shaped sets and up to 4,096 sources, k = 0.1, 1, 10,
-1 + 0.5i and 10 + i in leaf units, real and complex charges) are within 4.1e-7 (φ) and 1.7e-6 (∇φ, within twice the reference's own error) in f32 and
+1 + 0.5i, 10 + i and i in leaf units, real and complex charges) are within 4.1e-7 (φ) and 1.7e-6 (∇φ, within twice the reference's own error) in f32 and
 1.8e-15 in f64; the scalar ISA
 equals the reference bit for bit.
 

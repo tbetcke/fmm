@@ -1319,7 +1319,7 @@ request, using this template:
     record `docs/helmholtz/tasks/CH3.4b.md`.
 - Tests: `tests/p2p/helmholtz.rs` (23, plus 4 ignored release tests): terms within
   (32 + 12 |k| r) u_T and (66 + 12 |k| r) u_T over Re(k) r ≤ 2¹⁰ (measured at most 10.3u and
-  9.4u per unit of |k| r over 10⁶ pairs, NEON, AVX2, AVX-512); sums against `direct_sum`; the
+  9.0u per unit of |k| r over 10⁶ pairs, NEON, AVX2, AVX-512); sums against `direct_sum`; the
   real plane `evaluate`'s at k = 0 and `evaluate_yukawa`'s at k = iκ bit for bit; complex
   charges with Im q = 0 as real ones; the scalar path the reference bit for bit; invariance;
   coincident and empty inputs; panics. `src/arch/tests.rs`: every K and both charge kinds and
@@ -1327,7 +1327,8 @@ request, using this template:
 - Checks: `/verify` on the M6 (format; Clippy default, examples, workspace all-targets,
   `nd-fmm-simd` for x86_64; `cargo test` 1,104 and `--workspace` 1,186; `cargo doc`; the
   ignored release tests; the spike's test; the MPI list at 2 and 4 ranks, 24 of 24);
-  Kathleen job 617314 (`check.sbatch simd`) passed; the inlining check (no call; NEON
+  Kathleen jobs 617314 and 617322 (`check.sbatch simd`, before and after the review's wider
+  sampling) passed; the inlining check (no call; NEON
   59–167, AVX2 70–181, AVX-512 53–122 instructions). Not run: the licence check.
 - Runs: cost per pair (one thread, W1): complex charges at real k 3.8–5.9× Laplace and
   1.4–1.7× Yukawa on the default ISAs of the M6, locust and Kathleen (job 617315); damping
@@ -1340,9 +1341,10 @@ request, using this template:
   and AVX2 `main`'s instruction for instruction at the default settings (aarch64 and x86_64,
   macOS and Linux), every other one too but NEON's `p2p_yukawa_f32_gradient` on macOS (two
   accumulators exchange registers in its source loop); AVX-512's `p2p_f32_gradient` and `p2p_f64_gradient` keep `main`'s source loops up to
-  register names but control the block loop differently: D9 on Kathleen (job 617315,
-  node-c11b-015, `p2p_kernels --isa avx512` and the FMM at p = 3, A B B A A B B A A B) 14 of
-  14 rows within noise, outputs equal. With one codegen unit NEON's `merge` differs (not in
+  register names but control the block loop differently: D9 on Kathleen (jobs 617315 and
+  617321, `p2p_kernels --isa avx512` and the FMM at p = 3 and 8, A B B A A B B A A B) 16 of
+  16 rows within noise, outputs equal; the FMM's outputs of `main` and the branch byte for
+  byte identical in 18 of 18 cases (f64, p = 3, 6, 8, every strategy, AVX-512). With one codegen unit NEON's `merge` differs (not in
   the default build).
 - Follow-ups:
   - CH3.4c: `HelmholtzOperator`'s P2P through `evaluate_helmholtz` (the chunks' layout is the
