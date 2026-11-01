@@ -140,6 +140,29 @@ not fit α log₁₀(1/ε) + β to within one degree, a short per-ε table repla
 
 ## Pending runs
 
+## As built (departures from the plan)
+
+- **A quadratic plateau.** The full FMM's plateau is convex in L = log₁₀(1/ε): the
+  largest degrees over the ten plateau scans at ε/2 are 6, 9, 12, 15, 20, 24, 30, 36 at
+  10⁻³ … 10⁻¹⁰ (the clusters at small ε, the cube and Plummer at large; still falling
+  steadily at p = 38, not a rounding floor). A line α L + β overshoots by up to 4 in the
+  middle. So `DegreeRule`'s plateau is ⌈γ L² + α L + β⌉ (γ = 0 is S7's shape), the
+  plan's fallback "a short per-ε table" not needed: the fit γ = 0.29, α = 0.45, β = 1.65
+  reproduces the envelope exactly at every decade. For sign-off in the PR.
+- `DegreeRule` (public, `nd_fmm_exec::helmholtz`) holds the constants, so the fit and the
+  library round alike; `degree` is `DegreeRule::CALIBRATED` at Re(k) a.
+- `helmholtz_accuracy::Row::circumradii`: the levels' √3 r_l in the FMM's domain (the
+  points' bounding cube), which the level scans need for x_l.
+- The level scans hold the other levels at the stage-1 plateau at 10⁻¹⁰ with S7's high
+  branch (`--hold 0.29,0.45,1.65,1 --hold-eps 1e-10`), not at S7's closed form at 10⁻⁸:
+  S7's plateau (46) on every low level made the kD ≥ 100 runs several times longer. The
+  held levels then contribute at most about 5 × 10⁻¹¹, 100 times below the smallest
+  target. `--level` and `--first` restrict and start a level scan (the top levels of
+  kD = 200 and 300).
+- `nd-fmm-exec`'s per-pair chain tests (`tests/helmholtz/operator.rs`) take `s7_degree`
+  per level: a chain is one pair, which S7's closed form bounds; the calibrated rule is
+  for the whole FMM. Their degrees, and so their bits, are those of `main`.
+
 ## Open questions
 
 ## Decisions

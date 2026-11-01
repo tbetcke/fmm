@@ -10,7 +10,8 @@
 //!   degrees in a row, or the degree reaches `--max-degree`:
 //!   - `--scan plateau`: one degree p on every level ≥ 2, from `--first` (default 1);
 //!   - `--scan levels`: each level l ≥ 2 of the tree with x_l = Re(k) a_l ≥ `--min-x`
-//!     (default 0) in turn, its degree from max(1, ⌊x_l⌋ − 2), every other level held at
+//!     (default 0) in turn, or only `--level l`, its degree from max(1, ⌊x_l⌋ − 2) (from
+//!     `--first` if that is named), every other level held at
 //!     `s7_degree` at `--hold-eps` (default the smallest ε), S7's per-pair upper bound,
 //!     whose errors lie far below ε (CH3.1c); or, with `--hold γ,α,β,C`, at the
 //!     `DegreeRule` of those constants at `--hold-eps` (cheaper on large trees, where S7's
@@ -29,7 +30,7 @@
 //! Options of the scans: `--workload w` (as `helmholtz_accuracy`: `w1`, `w2`, `w3`,
 //! `w3:<n>`, `w4-<distribution>:<n>`), `--kd x,…`, `--kim y`, `--eps e,…` (default
 //! 1e-3,…,1e-8 by decades), `--scan plateau|levels`, `--first p`, `--max-degree p`
-//! (default 80), `--min-x x`, `--hold-eps e`, `--hold γ,α,β,C`, `--samples n`, `--threads t` (default 1),
+//! (default 80), `--min-x x`, `--level l`, `--hold-eps e`, `--hold γ,α,β,C`, `--samples n`, `--threads t` (default 1),
 //! `--charges real|complex`. Run in release mode with one BLAS thread:
 //!
 //! ```text
@@ -71,9 +72,10 @@ struct Arguments {
     kim: f64,
     epsilons: Vec<f64>,
     scan: Scan,
-    first: usize,
+    first: Option<usize>,
     max_degree: usize,
     min_x: f64,
+    level: Option<usize>,
     hold_epsilon: Option<f64>,
     hold: Option<DegreeRule>,
     samples: usize,
@@ -109,7 +111,7 @@ fn arguments(args: &[String]) -> Arguments {
     let usage = || -> ! {
         eprintln!(
             "usage: helmholtz_calibrate [--workload w] [--kd x,…] [--kim y] [--eps e,…] \
-             [--scan plateau|levels] [--first p] [--max-degree p] [--min-x x] \
+             [--scan plateau|levels] [--first p] [--max-degree p] [--min-x x] [--level l] \
              [--hold-eps e] [--hold γ,α,β,C] [--samples n] [--threads t] [--charges real|complex], \
              or helmholtz_calibrate fit <files…>; got {args:?}"
         );
@@ -121,9 +123,10 @@ fn arguments(args: &[String]) -> Arguments {
         kim: 0.0,
         epsilons: (3..=8).map(|d| 10f64.powi(-d)).collect(),
         scan: Scan::Plateau,
-        first: 1,
+        first: None,
         max_degree: 80,
         min_x: 0.0,
+        level: None,
         hold_epsilon: None,
         hold: None,
         samples: 1000,
@@ -147,7 +150,8 @@ fn arguments(args: &[String]) -> Arguments {
             }
             .map(|s| parsed.scan = s)
             .is_some(),
-            "--first" => value.parse().map(|v| parsed.first = v).is_ok(),
+            "--first" => value.parse().map(|v| parsed.first = Some(v)).is_ok(),
+            "--level" => value.parse().map(|v| parsed.level = Some(v)).is_ok(),
             "--max-degree" => value.parse().map(|v| parsed.max_degree = v).is_ok(),
             "--min-x" => value.parse().map(|v| parsed.min_x = v).is_ok(),
             "--hold-eps" => value.parse().map(|v| parsed.hold_epsilon = Some(v)).is_ok(),
@@ -183,7 +187,7 @@ fn arguments(args: &[String]) -> Arguments {
         || !parsed.epsilons.iter().all(valid)
         || !parsed.hold_epsilon.is_none_or(|e| valid(&e))
         || parsed.threads == 0
-        || parsed.first == 0
+        || parsed.first == Some(0)
     {
         usage();
     }
@@ -297,7 +301,7 @@ fn scans(arguments: &Arguments) {
         } else {
             format!("{kd}+{}i", arguments.kim)
         };
-        // One run at the first degree on every level for the tree's levels and radii.
+        // One run at degree 1 on every level for the tree's levels and radii.
         let probe = |degrees: Vec<usize>, case: &mut Case| {
             case.degrees = Degrees::PerLevel(degrees);
             run(case, &problem, &oracle, arguments.threads, &world)
@@ -308,7 +312,7 @@ fn scans(arguments: &Arguments) {
             d[..2].fill(0);
             d
         };
-        let first = probe(plateau_degrees(arguments.first), &mut case);
+        let first = probe(plateau_degrees(1), &mut case);
         let radii = first.circumradii.clone();
         let nlevels = first.levels;
         let x_of = |l: usize| k.re() * radii[l];
@@ -322,7 +326,7 @@ fn scans(arguments: &Arguments) {
                         2,
                         x_of(2),
                         radii[2],
-                        arguments.first,
+                        arguments.first.unwrap_or(1),
                         Box::new(plateau_degrees),
                     ));
                 }
@@ -341,11 +345,13 @@ fn scans(arguments: &Arguments) {
                     .collect();
                 for l in 2..nlevels {
                     let x = x_of(l);
-                    if x < arguments.min_x {
+                    if x < arguments.min_x || arguments.level.is_some_and(|m| m != l) {
                         continue;
                     }
                     let held = held.clone();
-                    let start = (x.floor() as usize).saturating_sub(2).max(1);
+                    let start = arguments
+                        .first
+                        .unwrap_or_else(|| (x.floor() as usize).saturating_sub(2).max(1));
                     jobs.push((
                         l,
                         x,

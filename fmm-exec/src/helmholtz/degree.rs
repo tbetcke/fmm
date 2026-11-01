@@ -1,22 +1,31 @@
-//! The degree p_l of each level of a Helmholtz FMM (Helmholtz CH3.1a;
+//! The degree p_l of each level of a Helmholtz FMM (Helmholtz CH3.1a, calibrated in CH3.3;
 //! docs/design/helmholtz-fmm-proposal.md §3.5; spike S7,
-//! `spikes/truncation/SPIKE_REPORT.md` §3 and §8, question 1, signed off on 2026-10-29).
+//! `spikes/truncation/SPIKE_REPORT.md` §3 and §8, question 1, signed off on 2026-10-29;
+//! `fmm-validate/results/helmholtz-ch3-3.md`).
 //!
 //! The degrees are a setting of the FMM, [`Degrees`]: by default a rule at a tolerance ε,
-//! or degrees named per level, which tests and the calibration of CH3.3 use. The rule is
-//! [`degree`], S7's closed form for real k,
+//! or degrees named per level, which tests and the calibration use. The rule is
+//! [`degree`], [`DegreeRule::CALIBRATED`] at x = Re(k) a with a the circumradius √3 r_l of
+//! the level's boxes and L = log₁₀(1/ε),
 //!
 //! ```text
-//! p(k a, ε) = max(⌈6 log₁₀(1/ε)⌉ − 2, ⌈k a + (ln 1/ε)^{2/3} (k a)^{1/3}⌉)
+//! p(x, ε) = max(⌈0.30 L² + 0.25 L + 2.60⌉, ⌈x + 0.80 (ln 1/ε)^{2/3} x^{1/3}⌉),
 //! ```
 //!
-//! with a the circumradius √3 r_l of the level's boxes. S7 fitted it to the per-level
-//! degree p* of the multi-level chains (the worst of the 316 offsets and three
-//! placements, potential and gradient, per-pair relative ℓ2 norm, margin ε/2) at
-//! 0.016 ≤ k a ≤ 256 and 10⁻¹⁰ ≤ ε ≤ 10⁻³, which it never under-predicts and over-predicts
-//! by at most 9 degrees. Between those grid points it is an interpolation. Complex k takes
-//! Re(k) a, provisionally: S7 found η = Im k / Re k = 0.1 within 10 degrees of real k, and
-//! the damping-dependent rule is CH5.2's. CH3.3 confirms the rule in the full FMM.
+//! a low-frequency plateau and a high-frequency branch, calibrated in the full FMM
+//! (Helmholtz CH3.3): every degree the smallest that keeps the relative ℓ2 errors of φ and
+//! ∇φ over 1,000 sampled targets within ε/2, on W1, W3 and W4 of proposal §9.1, one level
+//! scanned at a time (the plateau on trees with every level at x ≤ 2.2, all levels together),
+//! over 0.14 ≤ x ≤ 65 and 10⁻⁸ ≤ ε ≤ 10⁻³ (the plateau to 10⁻¹⁰); the rule is at least
+//! every measured degree. Outside those ranges it is an extrapolation.
+//!
+//! S7's closed form, [`s7_degree`], max(⌈6 log₁₀(1/ε)⌉ − 2, ⌈x + (ln 1/ε)^{2/3} x^{1/3}⌉),
+//! is the per-pair worst case (the worst of the 316 offsets and three placements, potential
+//! and gradient, per-pair relative ℓ2 norm, margin ε/2), an upper bound of the calibrated
+//! rule, which it was the default before CH3.3: about twice its plateau at low frequency
+//! (34 against 15 at ε = 10⁻⁶), where the full FMM's errors lay 10³ to 10⁶ below ε
+//! (CH3.1c). Complex k takes Re(k) a, provisionally: S7 found η = Im k / Re k = 0.1 within 10
+//! degrees of real k, and the damping-dependent rule is CH5.2's.
 //!
 //! Levels 0 and 1 get degree 0 under the rule: no V list lies above level 2, no X list
 //! reaches a box on them and no W list holds one, so nothing reads their expansions; their
@@ -25,19 +34,20 @@
 //!
 //! ```
 //! use nd_fmm_exec::geometry::Domain;
-//! use nd_fmm_exec::helmholtz::{Degrees, Wavenumber, degree};
+//! use nd_fmm_exec::helmholtz::{Degrees, Wavenumber, degree, s7_degree};
 //! use nd_octree::PhysicalBox;
 //!
-//! // Low frequency: the floor ⌈6 · 6⌉ − 2 = 34 at ε = 10⁻⁶.
+//! // Low frequency: the plateau ⌈0.30 · 36 + 0.25 · 6 + 2.60⌉ = 15 at ε = 10⁻⁶; S7's 34.
 //! let k = Wavenumber::new(1.0, 0.0).unwrap();
-//! assert_eq!(degree(&k, 0.01, 1e-6), 34);
+//! assert_eq!(degree(&k, 0.01, 1e-6), 15);
+//! assert_eq!(s7_degree(&k, 0.01, 1e-6), 34);
 //!
-//! // kD = 100 on the unit cube: level 2 has k a = 100 · √3 / 8 ≈ 21.7, so
-//! // ⌈21.7 + 13.8^{2/3} · 21.7^{1/3}⌉ = 38; level 3 the floor.
+//! // kD = 100 on the unit cube: level 2 has x = 100 · √3 / 8 ≈ 21.65, so
+//! // ⌈21.65 + 0.80 · 13.8^{2/3} · 21.65^{1/3}⌉ = 35; level 3 (x ≈ 10.8) 22.
 //! let k = Wavenumber::new(100.0, 0.0).unwrap();
 //! let domain = Domain::new(&PhysicalBox::new([0.0, 0.0, 0.0, 1.0, 1.0, 1.0])).unwrap();
 //! let degrees = Degrees::Tolerance(1e-6).resolve(&k, &domain, 4).unwrap();
-//! assert_eq!(degrees, [0, 0, 38, 34]);
+//! assert_eq!(degrees, [0, 0, 35, 22]);
 //! ```
 
 use thiserror::Error;
@@ -106,15 +116,15 @@ impl Degrees {
     }
 }
 
-/// S7's closed form (module documentation) at x = Re(k) a, a the circumradius of the
-/// level's boxes in the units of k:
-/// max(⌈6 log₁₀(1/ε)⌉ − 2, ⌈x + (ln 1/ε)^{2/3} x^{1/3}⌉).
+/// The default rule (module documentation), [`DegreeRule::CALIBRATED`] at x = Re(k) a, a
+/// the circumradius of the level's boxes in the units of k.
 ///
 /// # Panics
 ///
 /// Unless 0 < ε < 1, and unless `circumradius` is finite and positive.
 pub fn degree(k: &Wavenumber, circumradius: f64, epsilon: f64) -> usize {
-    s7_degree(k, circumradius, epsilon)
+    check_arguments(circumradius, epsilon);
+    DegreeRule::CALIBRATED.degree(k.re() * circumradius, epsilon)
 }
 
 /// S7's closed form, max(⌈6 log₁₀(1/ε)⌉ − 2, ⌈x + (ln 1/ε)^{2/3} x^{1/3}⌉) at
@@ -150,6 +160,15 @@ pub struct DegreeRule {
 }
 
 impl DegreeRule {
+    /// The default rule, calibrated in the full FMM (Helmholtz CH3.3; module
+    /// documentation): γ = 0.30, α = 0.25, β = 2.60, C = 0.80.
+    pub const CALIBRATED: Self = Self {
+        gamma: 0.30,
+        alpha: 0.25,
+        beta: 2.60,
+        c: 0.80,
+    };
+
     /// The plateau ⌈γ L² + α L + β⌉ with L = log₁₀(1/ε), at least 0.
     pub fn plateau(&self, epsilon: f64) -> usize {
         let l = (1.0 / epsilon).log10();
