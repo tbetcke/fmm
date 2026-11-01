@@ -179,6 +179,20 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   Laplace's builder, and the Helmholtz FMM (CH3.1) passes the level to its tree.
   `tests/helmholtz/` checks it against the census spike's search; the trees of the
   reference workloads are checked in `nd-fmm-validate` (`tests/helmholtz_leaves.rs`).
+- Complex densities (Helmholtz CH3.0c; `helmholtz::densities`, re-exported from
+  `helmholtz`; CONVENTIONS §3.15, "Storage" and "Inputs and outputs"): `Densities` (k's
+  kind, `ChargeKind`, m) fixes the sizes of §3.15's table and the leaf chunks, which the
+  module docs define (§3.15 leaves them to CH3.0, not versioned): a complex vector is two
+  adjacent real columns, Re then Im, of §3.13's several-vector layout, so every chunk is a
+  §3.13 chunk of `columns` source and `output_columns` output vectors, and Yukawa's
+  complex vectors are its real path's 2m vectors value for value; keep both so. One
+  complex expansion per complex vector. `Charges` in (`check_charges`,
+  `write_leaf_charges`), `Output` out in split planes (§3.15's order;
+  `write_leaf_output`, Laplace's scales 4π r and 4π r²); `p2m` and `l2p` in the leaf's own
+  frame at k̂ = k r, one reference call per point (`LeafScratch`). The operators with a
+  second frame (P2L, M2P, P2P) and the FMM are CH3.1's. `tests/helmholtz/densities.rs`
+  checks the sizes and indices against closed forms, P2M and L2P bit for bit against
+  `nd_fmm_ref::helmholtz::leaf`, and the chunks end to end against the direct sum.
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread
   count. No `unsafe`, no atomics, no global pool; per-thread scratch created at
