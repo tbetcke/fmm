@@ -1009,3 +1009,46 @@ request, using this template:
   - CH3.0c: complex densities.
   - CH3.1 passes `min_leaf_level` to its tree, and keeps empty leaves (possibly many λ
     wide) out of every expansion path.
+
+## 2026-11-01: CH3.0c Complex densities
+- Done:
+  - `nd_fmm_exec::helmholtz::densities` (new; `helmholtz.rs` moved to `helmholtz/mod.rs`
+    unchanged but for the module line and re-exports):
+    - `Densities` (k's kind, `ChargeKind`, m): the sizes of §3.15's table
+      (`multipole_size`, `local_size`, `multipole_planes`, `local_planes`), the chunk sizes
+      and indices.
+    - The leaf chunks, which §3.15 leaves to CH3.0 (not versioned), fixed in the module
+      docs: a complex vector is two adjacent real columns, Re then Im, of §3.13's
+      several-vector layout. Every chunk is then a §3.13 chunk of c m source and o_m
+      output vectors, §3.15's output order is the column order, and Yukawa's complex
+      vectors are its real path's 2m vectors value for value.
+    - `Charges` in (`check_charges`, `write_leaf_charges`); `Output` out in split planes
+      (`potential_of`, `gradient_of` give `Split`), `write_leaf_output` with Laplace's
+      scales 4π r and 4π r².
+    - `p2m` and `l2p` in the leaf's own frame at k̂ = k r, one reference call per point
+      (`LeafScratch`, no allocation): one complex expansion per complex vector.
+  - `fmm-exec/CLAUDE.md` updated. Record: `docs/helmholtz/tasks/CH3.0c.md` (no separate
+    report; no measurement).
+- Tests: `fmm-exec/tests/helmholtz/densities.rs` (9 tests, no MPI, 0.3 s in debug):
+  - sizes and indices against §3.15's table and §3.13's closed forms, for every path and
+    m = 1, 3;
+  - charges in, with each error;
+  - P2M and L2P bit for bit against `nd_fmm_ref::helmholtz::leaf` on every path, with and
+    without gradients, vector v equal to the one-vector operator, and accumulation;
+  - Yukawa's complex vectors bit for bit its 2m real vectors;
+  - end to end against the direct sum at k̂ = 0.875, 5 and 10 (|k| D to 160), p = 20 to
+    40: worst relative L2 5.7e-13 (P2M → M2P) and 1.1e-11 (P2L → L2P → output pass).
+- Checks: `/verify` on the M6: format; Clippy default, examples and workspace
+  all-targets; `cargo test` (1,043) and `--workspace` (1,125); `cargo doc`; the MPI list
+  at 2 and 4 ranks (22 of 22 passed). A self-review by a subagent: nothing blocking; its should-fix points
+  taken (no-gradient path, k̂ = 10, accumulation). Not run: the licence check (no
+  manifest changed); locust and Kathleen (no machine run in the plan).
+- Decisions: none taken. Questions for sign-off: 1. CH3.0c's "in" and "out" read as the
+  types, chunks, leaf P2M and L2P and the output pass (the FMM's are CH3.1's); 2. the
+  leaf chunks fixed in the module docs, not in CONVENTIONS.
+- Laplace: not touched. There is no change to `fmm.rs`, `operator.rs`, `driver.rs`, the
+  tables, `nd-octree`, `nd-fmm-plan` or `nd-fmm-simd`; the Laplace tests pass unchanged.
+- Follow-ups:
+  - CH3.1: the operator with P2L, M2P and P2P on the chunks; it can reuse Laplace's charge
+    load and output pass with m → `columns` and `output_columns`; its translations form a
+    level's s and β from the same k̂ as the leaf operators.
