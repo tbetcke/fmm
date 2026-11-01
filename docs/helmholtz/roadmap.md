@@ -384,7 +384,10 @@ at any kD.
   `PerPair` bit for bit; Laplace's outputs bit for bit, and minimal D9 timing runs to
   check the extraction's impact (the user, 2026-11-01: "make minimal timing runs to check
   the impact"). *Needs:* CH3.1a.
-- [ ] **CH3.1c The acceptance runs.** *Done when:* CH3.1's: the FMM against the sampled
+- [x] **CH3.1c The acceptance runs.** Report: `fmm-validate/results/helmholtz-ch3-1c.md`;
+  record `docs/helmholtz/tasks/CH3.1c.md`; `nd_fmm_validate::helmholtz_accuracy`, the
+  `helmholtz_accuracy` example, test `fmm-validate/tests/helmholtz_accuracy.rs`. *Done
+  when:* CH3.1's: the FMM against the sampled
   direct sum on W1, W3 and W4 for kD ≤ 100 and on W1 at kD = 500; deterministic; a report.
   *Needs:* CH3.1b.
 - [ ] **CH3.2 Dense, Classes and Batched where the node budget allows.** *Done when:*

@@ -62,6 +62,9 @@
 //!   Helmholtz FMM (docs/design/helmholtz-fmm-proposal.md §9.1) in the root cube,
 //!   ported from the census spike; `tests/helmholtz_leaves.rs` checks the leaf rule on
 //!   their trees.
+//! - [`helmholtz_accuracy`] (Helmholtz CH3.1c): the Helmholtz FMM against the sampled
+//!   direct sum on those workloads, with a rank-invariant checksum of the output for
+//!   determinism, run by the `helmholtz_accuracy` example on any number of ranks.
 //! - [`scaling`] (Phase 5 T10, C5.3): the distributed host FMM on any number of ranks,
 //!   per rank and reduced over the ranks: the work, the build by part, the evaluation
 //!   stage by stage with the load imbalance, the traffic per exchange, the memory per
@@ -104,6 +107,7 @@ pub mod calibration;
 #[cfg(feature = "gpu")]
 pub mod device_fmm;
 pub mod fmm_accuracy;
+pub mod helmholtz_accuracy;
 pub mod helmholtz_workloads;
 pub mod metrics;
 #[cfg(feature = "gpu")]

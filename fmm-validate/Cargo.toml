@@ -46,6 +46,12 @@ command = "mpirun -n {{NPROCESSES}}"
 [[example]]
 name = "scaling"
 
+# The Helmholtz FMM against the sampled direct sum on the reference workloads (Helmholtz
+# CH3.1c): on any number of ranks, but minutes per run at the gate's sizes, so not
+# registered with templated-examples; run by hand under `mpirun`.
+[[example]]
+name = "helmholtz_accuracy"
+
 # The tables at scale and the node context (Phase 5N T3): every rank building, loading
 # from `TableCache` at once (or one rank per node first) and the cost of `split_shared`; a
 # timing example on any number of ranks, so not registered with templated-examples.
