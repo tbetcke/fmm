@@ -23,7 +23,9 @@
 //! [`P2pKernel::evaluate_yukawa`], the Yukawa P2P e^{−κr}/r, on the loop skeleton that
 //! [`P2pKernel::evaluate`] runs. Helmholtz CH3.4a: the sine and cosine of the Helmholtz
 //! P2P on every ISA, bit for bit the scalar path's, which [`sincos::sincos_slice`] exposes
-//! for tests and reports.
+//! for tests and reports. Helmholtz CH3.4b: [`P2pKernel::evaluate_helmholtz`], the Helmholtz
+//! P2P e^{ikr}/r for real and complex k with real and complex charges
+//! ([`HelmholtzCharges`]), on the same skeleton with two output planes.
 //!
 //! ## Instruction sets
 //!
@@ -146,6 +148,25 @@
 //! blocks hold one target vector on every ISA (the exponential's constants take the
 //! registers). The scalar path is the reference's loop.
 //!
+//! ## Helmholtz
+//!
+//! [`P2pKernel::evaluate_helmholtz`] (Helmholtz CH3.4b; docs/design/helmholtz-fmm-proposal.md
+//! §5.7) adds the potential e^{ikr}/r of real or complex point charges and its gradient
+//! (ikr − 1) e^{ikr} (x − y)/r³ (CONVENTIONS §3.15) for Re k ≥ 0 and Im k ≥ 0, with the
+//! semantics of `nd_fmm_ref::helmholtz::p2p::p2p` and the outputs in split planes: the real
+//! plane of every target, then the imaginary one (the layout of a complex vector in §3.15's
+//! leaf chunks). The loop skeleton of [`P2pKernel::evaluate`] takes the charges as one or two
+//! planes per source and the outputs as one or two planes per target, compile-time
+//! constants; Laplace and Yukawa are its one-plane case, unchanged. The pair arithmetic
+//! forms ρ and r as Yukawa's, e^{i Re(k) r} by the sine and cosine of
+//! [`sincos::sincos_slice`], e^{−Im(k) r} by the exponential where Im k > 0, the complex
+//! product with the charge, and the gradient factor −(1 + Im(k) r − i Re(k) r) ρ². Each ISA
+//! has an entry point per charge kind, damping (Im k = 0 or not) and output, chosen once
+//! per call. With real charges the real plane is [`P2pKernel::evaluate`]'s at k = 0 and
+//! [`P2pKernel::evaluate_yukawa`]'s at k = iκ, bit for bit. The contract grows with |k| r,
+//! the conditioning of e^{ikr} in r (docs/design/simd-p2p.md §4.12); blocks hold one target
+//! vector on every ISA. The scalar path is the reference's loop.
+//!
 //! ## The matrix kernel
 //!
 //! [`MatrixKernel::accumulate_columns`] adds A · B[:, b_j] into C[:, c_j] for lists of
@@ -246,7 +267,7 @@ mod toolchain;
 mod waves;
 
 pub use isa::{Isa, IsaUnavailable};
-pub use kernel::P2pKernel;
+pub use kernel::{HelmholtzCharges, P2pKernel};
 pub use matrix::{MatrixKernel, MulAdd, UnknownMulAdd};
 pub use waves::{WaveBlock, WaveKernel, WaveTables};
 
@@ -331,6 +352,25 @@ mod sealed {
         fn p2p_yukawa(
             isa: AvailableIsa,
             kappa: Self,
+            sources: &[[Self; 3]],
+            charges: &[Self],
+            targets: &[[Self; 3]],
+            potential: &mut [Self],
+            gradient: Option<&mut [[Self; 3]]>,
+        );
+
+        /// [`P2pKernel::evaluate_helmholtz`](crate::P2pKernel::evaluate_helmholtz) in this
+        /// precision, with lengths and k already checked (Helmholtz CH3.4b): `charges`
+        /// holds Re q and Im q per source if `complex`, else q.
+        #[expect(
+            clippy::too_many_arguments,
+            reason = "the shape of `P2pKernel::evaluate_helmholtz`, plus the ISA"
+        )]
+        fn p2p_helmholtz(
+            isa: AvailableIsa,
+            re_k: Self,
+            im_k: Self,
+            complex: bool,
             sources: &[[Self; 3]],
             charges: &[Self],
             targets: &[[Self; 3]],
@@ -471,6 +511,23 @@ mod sealed {
         }
 
         #[inline]
+        fn p2p_helmholtz(
+            isa: AvailableIsa,
+            re_k: f32,
+            im_k: f32,
+            complex: bool,
+            sources: &[[f32; 3]],
+            charges: &[f32],
+            targets: &[[f32; 3]],
+            potential: &mut [f32],
+            gradient: Option<&mut [[f32; 3]]>,
+        ) {
+            arch::p2p_helmholtz_f32(
+                isa, re_k, im_k, complex, sources, charges, targets, potential, gradient,
+            );
+        }
+
+        #[inline]
         fn accumulate(
             isa: AvailableIsa,
             mul_add: MulAdd,
@@ -601,6 +658,23 @@ mod sealed {
             gradient: Option<&mut [[f64; 3]]>,
         ) {
             arch::p2p_yukawa_f64(isa, kappa, sources, charges, targets, potential, gradient);
+        }
+
+        #[inline]
+        fn p2p_helmholtz(
+            isa: AvailableIsa,
+            re_k: f64,
+            im_k: f64,
+            complex: bool,
+            sources: &[[f64; 3]],
+            charges: &[f64],
+            targets: &[[f64; 3]],
+            potential: &mut [f64],
+            gradient: Option<&mut [[f64; 3]]>,
+        ) {
+            arch::p2p_helmholtz_f64(
+                isa, re_k, im_k, complex, sources, charges, targets, potential, gradient,
+            );
         }
 
         #[inline]

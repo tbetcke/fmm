@@ -1,0 +1,268 @@
+# CH3.4b Helmholtz P2P on the skeleton
+
+Started 2026-11-01 on `tbetcke/h-ch3-4b`. Roadmap: "CH3.4b Helmholtz P2P on the skeleton"
+(H3; the second of CH3.4's three sub-tasks, eleventh on the priority list). Proposal: §10
+CH3.4; §2 (constraint 1), §5.7, §6.1, §6.2.
+
+## Goal
+
+`P2pKernel::evaluate_helmholtz`, the potential e^{ikr}/r and its gradient for real and
+complex k with real and complex charges on every ISA in both precisions, on CH2.4b's P2P
+skeleton widened to the planes of a complex charge and output, with Laplace's and Yukawa's
+instantiations unchanged instruction for instruction.
+
+## Acceptance (proposal §10, verbatim)
+
+> accuracy contract over k r up to 22 c_leaf; cost per pair
+
+CH3.4b's *Done when* (roadmap): CH3.4's contract over Re(k) r ≤ 22 c_leaf on every ISA, the
+scalar path bit for bit the reference; cost per pair against Laplace and Yukawa on the
+three machines, beside green-kernels' Helmholtz; Laplace's P2P instruction for instruction
+and bit for bit, and its benchmarks within noise (D9) and C3S.4 if the skeleton's Laplace
+code changes.
+
+## Read first
+
+- `fmm-simd/CLAUDE.md`; `src/arch/p2p.rs` (`p2p_skeleton`, `PairKernel`, `Laplace`,
+  `Yukawa`), `src/arch/{sincos,exp}.rs`, `src/arch/mod.rs` (`p2p_yukawa_dispatch!`), the
+  Yukawa entry points in `src/arch/{neon,avx2,avx512}.rs`, `src/arch/scalar.rs`
+  (`p2p_yukawa`), `src/kernel.rs` (`evaluate_yukawa`), `src/lib.rs` (`Sealed`),
+  `tests/p2p/yukawa.rs`, `src/arch/tests.rs`.
+- docs/design/simd-p2p.md §4.2, §4.5, §4.9–§4.11 (the derivations to mirror).
+- `nd_fmm_ref::helmholtz::p2p::{p2p, direct_sum}` (`Term`).
+- `nd_fmm_exec::helmholtz::{densities, operator}`: the leaf chunks CH3.4c will pass (a
+  complex vector is two adjacent real columns; per target the Re plane's φ̂ then the Im
+  plane's, likewise ĝ).
+- green-kernels' `helmholtz_3d.rs` at the pinned commit (real wavenumber, complex charges);
+  `spikes/p2p-simd/examples/yukawa.rs`.
+
+## Changes
+
+`nd-fmm-simd` (library and tests) and `spikes/p2p-simd` (one new example, registered as
+`[[example]]` in its own manifest), plus docs. No other manifest, dependency, convention,
+table, layout or `nd-fmm-plan` change. `nd-fmm-exec` does not call the kernel yet (CH3.4c).
+
+- **The skeleton widened to planes** (`arch/p2p.rs`). `PairKernel<T, S, const QP: usize,
+  const OP: usize>`: QP charge planes per source (1 real, 2 complex), OP output planes per
+  target (1 real, 2 complex). The method takes `q: &[S::V; QP]`, `phi: &mut [S::V; OP]` and
+  `g: &mut [[S::V; 3]; OP]`. `p2p_skeleton`, `sub_block` and `block` take the charges as
+  `&[[T; QP]]` (point-major: Re q, Im q per source) and the outputs as `[&mut [T]; OP]` and
+  `[&mut [[T; 3]]; OP]` (one slice per plane), and keep everything else: the blocks, the
+  padded tail (one padded copy per plane), the loads, the broadcast (plane 0 through
+  `broadcast`, plane 1 by `splat`, as `p2p_many_body`), d, r² and the stores. `Laplace` and
+  `Yukawa` implement `PairKernel<T, S, 1, 1>` with their present arithmetic; `p2p_body` and
+  the Yukawa entry points pass `as_chunks::<1>()` and one-element arrays. Whether the code
+  stays the same is checked by disassembly (Checks), not assumed. The several-vector and
+  dipole bodies are not touched.
+- **Helmholtz's pair kernel**, `Helmholtz<V, const DAMPED: bool>` with Re k, Im k and 1
+  splatted once per call; QP ∈ {1, 2}, OP = 2. Per pair and lane, a = Re q, b = Im q:
+
+  ```text
+  ρ = rsqrt_masked(r²);  r = r² ρ;  θ = Re(k) r;  (s, c) = sincos(θ)       arch::sincos
+  DAMPED:     E = exp((−Im k) r);  u_a = a E,  u_b = b E                   arch::exp
+  undamped:   u_a = a,  u_b = b                                            (Im k = 0)
+  real q:     p_r = u_a c;  p_i = u_a s
+  complex q:  p_r = fnma(u_b, s, u_a c);  p_i = fma(u_b, c, u_a s)
+  potential only:  φ_r = fma(p_r, ρ, φ_r);  φ_i = fma(p_i, ρ, φ_i)
+  with gradients:  t_r = p_r ρ;  t_i = p_i ρ;  φ_r += t_r;  φ_i += t_i;
+                   f = fma(Im k, r, 1) (DAMPED; else f = 1, no multiply)
+                   h_r = fma(t_i, θ, t_r f);  h_i = fnma(t_r, θ, t_i f)         t (f − iθ)
+                   ρ₂ = ρ ρ;  gₖ_r = fnma(h_r ρ₂, dₖ, gₖ_r);  gₖ_i = fnma(h_i ρ₂, dₖ, gₖ_i)
+  ```
+
+  so the term is q e^{ikr}/r and the gradient q (ikr − 1) e^{ikr} d/r³ = −t (f − iθ) ρ² d.
+  A lane with r² = 0 has ρ = r = θ = 0, s = +0, c = 1, E = 1 and adds zeros. At k = 0 with
+  real charges the real plane performs Laplace's operations exactly (c = 1, s = +0, f = 1,
+  h_r = t_r), and at k = iκ (Re k = 0, DAMPED) Yukawa's (u_a = q e, h_r = t_r f): the real
+  plane is then `evaluate`'s, or `evaluate_yukawa`'s, bit for bit on every vector ISA, a
+  test that the skeleton is shared. With Im q = 0 the complex-charge kernel gives the
+  real-charge kernel's values (one more fnma and fma of exact zeros).
+- **Entry points** per ISA (NEON, AVX2, AVX-512): precision × charges (real, complex) ×
+  damping (undamped for Im k = 0, damped otherwise) × potential/gradient, 16 per ISA,
+  generated by a macro as the Yukawa ones, `#[inline(never)]`, blocks of `HELMHOLTZ_K`
+  target vectors (K = 1 as Yukawa's; K = 2 timed on NEON and AVX-512 before it is fixed). A
+  dispatch macro `p2p_helmholtz_dispatch!`; the choice of entry point (damping, charges)
+  is made once per call from k and the charges, never in the loop.
+- **The scalar ISA**, `scalar::p2p_helmholtz`: the reference's `Term` loop (r = √r²,
+  e^{ikr} by `exp`, `cos`, `sin`, (q e)/r, q ((ikr − 1) e / (r² r)) dₖ in
+  `nd_fmm_math::Complex` arithmetic), real charges as complex ones with Im q = 0, r² = 0
+  skipped: equal to `nd_fmm_ref::helmholtz::p2p::p2p` bit for bit wherever r² ≠ 0.
+- **Public API**, `P2pKernel::evaluate_helmholtz(&self, k: Complex<T>, sources,
+  charges: HelmholtzCharges<'_, T>, targets, potential: &mut [T], gradient: Option<&mut
+  [[T; 3]]>)`. `HelmholtzCharges::{Real(&[T]), Complex(&[T])}` (n, or 2n point-major
+  values); the outputs in split planes, 2n values each, the real plane then the imaginary
+  one (the layout of `evaluate_many`'s two output vectors, and of CH3.0c's leaf chunks for
+  one complex vector). `evaluate`'s semantics: +=, no 1/(4π), sources in input order,
+  r² = 0 skipped, chunk and target-position invariance, deterministic per machine, ISA and
+  build. Panics: the lengths (messages as the reference's), and unless Re k and Im k are
+  finite and non-negative (§3.15's range; k = 0 allowed, as the reference's limit tests
+  use it). `Sealed::p2p_helmholtz`; the crate docs' table and a section "Helmholtz".
+- **The contract** (design §4.12, new: "The Helmholtz P2P (Helmholtz CH3.4b)"), derived to
+  first order as §4.10, against the reference's term in the same precision: each real
+  component of the potential term within (a + b |k| r) u_T relative to |q| e^{−Im(k) r}/r,
+  each real component of each gradient component within (a′ + b′ |k| r) u_T relative to
+  |q| (1 + |k| r) e^{−Im(k) r}/r², on the kernel domain of §4.4 (f32 gradients from 2⁻⁸⁴, as
+  Laplace's) for Re(k) r ≤ 2¹⁰ (the sine and cosine's domain, above 22 c_leaf for every
+  c_leaf ≤ 46) and Im(k) r up to Yukawa's 64 (f32) or 512 (f64). The |k| r part is the
+  conditioning of e^{ikr} in r, |δe^{ikr}| = |k| r δ_r, which the reference shares. A
+  first count gives about a ≈ 30, a′ ≈ 70 and b, b′ ≈ 12; the derivation fixes them and the
+  measured maxima go beside them. Beyond Re(k) r = 2¹⁰ the terms are unspecified (the
+  documentation says so; the FMM's leaf rule keeps Re(k) r below 22 c_leaf).
+- **Cost per pair**, `spikes/p2p-simd/examples/helmholtz.rs` (as `yukawa.rs`): on the
+  gathered W1 cells n_t = 16, 32, 64, f32 and f64, potential and potential with gradient,
+  one thread, k = 1 and k = 1 + 0.1i in leaf units (no branch, so the time does not depend
+  on |k|): Gpairs/s of `evaluate_helmholtz` (real and complex charges, undamped and damped)
+  beside `evaluate_yukawa` and `evaluate` on every ISA, and green-kernels'
+  `Helmholtz3dKernel` (real k, complex charges; its 1/(4π), sign of k and gradient checked
+  on a pair first), the ratios Helmholtz / Laplace and Helmholtz / Yukawa per kernel, and
+  each kernel's accuracy against `direct_sum`.
+- **Docs**: design §4.12; `fmm-simd/CLAUDE.md` (the planes, the Helmholtz rule and
+  contract, the entry points of the inlining check, the oracle); the report
+  `fmm-validate/results/helmholtz-ch3-4b.md`.
+
+## Tests that prove it
+
+All on every ISA the machine offers (`common::kernels`, printing those it cannot run);
+`tests/p2p/helmholtz.rs`.
+
+- **Terms**: per pair against `nd_fmm_ref::helmholtz::p2p::p2p` in the same precision, r²
+  log-uniform over the kernel domain (f32 gradients from 2⁻⁸⁴), Re(k) r log-uniform in
+  [10⁻⁶, 2¹⁰] plus 0, Im(k) r log-uniform in [10⁻⁶, 64 or 512] plus 0 (undamped), real and
+  complex charges with |q| in [2⁻²⁰, 1] and uniform argument: within the contract; 4,096
+  pairs per (precision, charges, damping) in debug, 10⁶ in an ignored release test that
+  prints the maxima by |k| r decade. (As built: 4,096 and 10⁶ pairs per precision, the
+  charge kinds, outputs, dampings and Re k = 0 cycling through them; the sums also at k = i.)
+- **Sums**: against `direct_sum` on random sets to 4,096 sources and FMM-shaped sets,
+  k ∈ {0.1, 1, 10, 1 + 0.5i, 10 + i} (leaf units): within 1e-14 (f64) and 1e-6 (f32)
+  relative to Σ |q| e^{−Im(k) r}/r (Σ |q| (1 + |k| r) e^{−Im(k) r}/r² per gradient
+  component), or twice the reference's error on the same inputs where that is larger.
+- **Laplace and Yukawa through the skeleton**: real charges, k = 0: the real plane equals
+  `evaluate` bit for bit on every vector ISA, and k = iκ (κ ∈ {0.5, 3}) `evaluate_yukawa`'s,
+  with and without gradients; the imaginary plane is then zeros.
+- **Complex charges with Im q = 0** equal real charges (values compared with `==`, so a
+  zero's sign may differ), every ISA.
+- **Scalar ISA**: equals `p2p` bit for bit wherever r² ≠ 0 (real charges as complex ones
+  with Im q = 0).
+- **Coincident, empty and accumulating inputs** as the reference (r² = 0 adds a zero).
+- **Invariance**: chunk (sources split anywhere) and target-position invariance bit for bit
+  on every ISA.
+- **Every block size** (`src/arch/tests.rs`): the Helmholtz body at K = 1, 2, 4 equals K = 1
+  bit for bit on every ISA, both charge kinds and dampings; the existing Laplace and Yukawa
+  block tests unchanged.
+- **Panics**: the length messages; Re k or Im k negative, NaN or infinite.
+- **Laplace and Yukawa**: the whole existing suite, no existing test edited.
+
+## Checks
+
+- `/verify`: format, Clippy default, examples and workspace all-targets, the default and
+  workspace tests, `cargo doc`; `nd-fmm-simd`'s cross-target Clippy (`--target
+  x86_64-apple-darwin`), its tests and its ignored release tests; the MPI list at 2 and 4
+  ranks (`nd-fmm-exec` links the changed skeleton); no licence check (no default member's
+  manifest changes).
+- **The inlining check** on the new entry points (NEON natively, AVX2 and AVX-512 from the
+  `x86_64-apple-darwin` build): no call in any source loop, instruction counts reported.
+- **Constraint 1, the code**: every existing function of the crate on `main` and on the
+  branch, aarch64 and x86_64, macOS and Linux (the Linux rlibs cross-built on the M6),
+  default settings and `-C codegen-units=1`, compared instruction for instruction (pages and
+  RIP displacements normalised; CH2.4b's procedure). The P2P source loops of `evaluate` and
+  `evaluate_yukawa` must be identical.
+- If, and only if, a Laplace entry point's code differs: the D9 runs and C3S.4 of CH2.4b's
+  plan (`p2p_kernels` per ISA and `tools/bench/run.sh` at p = 3 and 8 on the M6, locust and
+  Kathleen), and the byte comparison of the FMM outputs (`bits.sh`, 18 cases).
+
+## Machine runs
+
+- **Cost per pair**: `helmholtz` on the M6 (outside the sandbox, quiet machine), locust
+  (idle checked; NEON on Neoverse-V2) and Kathleen (one `singlenode` job; AVX2 and
+  AVX-512).
+- **Contract on x86**: Kathleen `check.sbatch simd` (the ignored release tests on scalar,
+  AVX2 and AVX-512). CI's `run-tests-simd` covers x86_64 and arm64 again (its x86_64 job
+  has a 5-minute limit; the new ignored tests are sized to stay inside it).
+
+## Constraints and risks
+
+- **Constraint 1** applies: the change edits the shared skeleton and the signatures of
+  `Laplace`'s and `Yukawa`'s pair methods.
+  1. No new runtime dispatch: QP, OP, K, G and DAMPED are const generics, the pair kernel a
+     type parameter; Laplace's is still zero-sized.
+  2. No layout or table change.
+  3. Laplace's bits: same operations in the same order; the suite and the disassembly
+     comparison show it.
+  4. Benchmarks: no D9 run if every Laplace function is identical instruction for
+     instruction (as CH2.4a, CH3.4a); else the D9 runs above.
+  If the widening changes Laplace's code and D9 fails, the fallback: the Helmholtz kernel
+  gets its own copy of the skeleton with planes, Laplace's and Yukawa's code restored as on
+  `main`, reported in the PR.
+- Risk: arrays of one slice (`[&mut [T]; 1]`) or `&[[T; 1]]` might not compile to the same
+  code as a bare slice. The disassembly shows it before anything is timed; if they do not,
+  the same fallback.
+- Risk: registers. Sine and cosine constants (about 16 in f64), the exponential's (19 in
+  f64), Re k, Im k, 1 and two output planes with gradients (8 accumulators) exceed AVX2's 16
+  registers and press on NEON's and AVX-512's 32; K = 1, and AVX2's cost is reported as
+  measured.
+- Risk: the contract's |k| r term in f32 at Re(k) r near 2¹⁰ (phase error about 10³ u₃₂);
+  it is the conditioning the reference shares, and the contract states it.
+- Scope: about 1,300–1,600 changed lines, half tests and docs, in one library crate and one
+  spike example, timings on three machines. Not split further: the widened skeleton and its
+  first non-trivial user belong in one PR (constraint 1 is checked on both together), and
+  the operator's use is already CH3.4c.
+
+## Decisions
+
+- The user, 2026-11-01, each "(Recommended)": the skeleton widened as planned ("Proceed as
+  planned"), the split planes for `evaluate_helmholtz` ("Split planes"), and undamped and
+  damped entry points ("Undamped and damped").
+
+## Findings during implementation
+
+- **The planes need CH2.4b's one-plane expressions.** Written generally (slices of planes
+  with stride n, `[[T; MAX_LANES]; OP]` tails), the skeleton gave Laplace's source loops
+  unchanged but moved stack slots, a bounds check and the tail's copies in every P2P entry
+  point. Keeping, for one plane, CH2.4b's tail statements and `sub_block`'s range (`if OP ==
+  1`, compile-time) made every Laplace function on NEON and AVX2 `main`'s instruction for
+  instruction at the default settings, on macOS and Linux, and every other one but NEON's
+  `p2p_yukawa_f32_gradient` on macOS (two gradient accumulators exchange registers in its
+  source loop). Left: AVX-512's two Laplace
+  gradient entry points (`p2p_f32_gradient`, `p2p_f64_gradient`, K = 2), whose source loops
+  are `main`'s up to register names but whose block loop is controlled differently (several
+  other formulations tried made it worse, not better). So D9 ran where the code changed:
+  AVX-512 on Kathleen (report §3). With one codegen unit NEON's plane-wave `merge` also
+  differs (a copy loop's unrolling), not in the default build; the shipped profile has no
+  codegen-unit override.
+- **The f32 gradient's range.** At r² near 2⁻⁸⁴ and Re(k) r near 2¹⁰ the reference forms
+  (ikr − 1) e^{ikr}/r³ before the charge and overflows f32 (so does the scalar path, which is
+  the reference). The contract's f32 gradient range is (1 + |k| r)/r³ ≤ 2¹²⁶, Laplace's
+  ρ³ ≤ 2¹²⁶ at k = 0.
+- **K = 1.** On the M6, K = 2 is up to 1.19× slower with gradients and equal without.
+- **The contract** (design §4.12): (32 + 12 |k| r) u_T and (66 + 12 |k| r) u_T; measured at
+  most 10.3u at small |k| r and 9.0u per unit of |k| r over 10⁶ pairs on NEON (M6), AVX2 and
+  AVX-512 (Kathleen job 617314).
+- **Tooling.** zsh does not word-split `$c` in loops (memory); the Helmholtz entry points are
+  crate-private, so a release rlib's symbols carry ` (.llvm.N)` (the linked test binary has
+  none); macOS's `ar` cannot unpack the Linux rlibs, but `objdump` reads them directly.
+
+## Checks run
+
+Report §6: on the M6 format, Clippy (default, examples, workspace all-targets, `nd-fmm-simd`
+for x86_64), `cargo test` (1,104) and `--workspace` (1,186), `cargo doc`, `nd-fmm-simd`'s
+ignored release tests (21), the spike example's test, the MPI list at 2 and 4 ranks (24 of
+24), the disassembly comparison (4 targets × 2 settings) and the inlining check; Kathleen job
+617314 and 617322 (`check.sbatch simd`) passed; jobs 617315 and 617321: D9 for AVX-512 (16 of 16 rows
+within noise, outputs equal; p = 8 added after the self-review), the byte comparison of the
+FMM outputs (18 of 18 identical), the cost per pair and AVX-512's K = 2; the cost per pair on the M6 and locust.
+Not run: the licence check (no default member's manifest changed); D9 on the M6 and locust
+and C3S.4 (NEON's and AVX2's code is `main`'s).
+
+## Pending runs
+
+None.
+
+## Open questions
+
+The report's §7: 1. the contract as derived, with the f32 gradient range;
+2. constraint 1 as met (AVX-512's two Laplace gradient entry points within noise, D9 only
+there; NEON's `merge` differs with one codegen unit only); 3. the panic for Re k < 0.
+Signed off 2026-11-01, the user: "i accept 1 and 2"; question 3, after a discussion of
+keeping or relaxing the check (Im k ≥ 0 is needed for correctness: the exponential's domain
+and the damped/undamped choice; Re k < 0 would compute the conjugate convention's field
+correctly): "A as recommended", the panic kept.

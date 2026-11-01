@@ -809,6 +809,122 @@ the Taylor series to t⁴¹ in double-double, `tests/sincos`):
 instructions, of which 25 and 33 operations and the rest register moves and the loop; AVX2 42
 and 58; AVX-512 37 and 45. None contains a call.
 
+### 4.12 The Helmholtz P2P (Helmholtz CH3.4b)
+
+`P2pKernel::evaluate_helmholtz` adds q e^{ikr}/r and its gradient q (ikr − 1) e^{ikr} d / r³
+(CONVENTIONS §3.15; docs/design/helmholtz-fmm-proposal.md §5.7) for a wavenumber k with
+Re k ≥ 0 and Im k ≥ 0, real or complex charges (`HelmholtzCharges`), with the semantics of
+`nd_fmm_ref::helmholtz::p2p::p2p` as `evaluate` has `p2p`'s. The outputs are split planes:
+the real part of every target, then the imaginary part (2n values; the gradient likewise),
+the layout of `evaluate_many`'s two output vectors and of one complex vector in CONVENTIONS
+§3.15's leaf chunks, so the operator (CH3.4c) passes its chunks as they are.
+
+**The skeleton with planes.** §4.10's skeleton gains two compile-time constants: QP charge
+planes per source (1 real, 2 complex: Re q, Im q point-major) and OP output planes per target
+(1 or 2, one after the other with stride n). The pair kernel takes arrays of QP charges and
+OP accumulators per target vector; the blocks, tails, loads, broadcast, d, r² and stores are
+unchanged. Laplace and Yukawa are the case QP = OP = 1. For that case the skeleton keeps the
+expressions of CH2.4b's one-plane skeleton where LLVM did not fold the general ones to the
+same code (the padded tail and the block ranges; report `fmm-validate/results/helmholtz-ch3-4b.md`
+§2): NEON and AVX2 then give `main`'s code for every Laplace function, instruction for
+instruction, at the default settings (and for every other existing function but NEON's
+Yukawa f32 gradient entry point on macOS, whose source loop exchanges two registers); AVX-512's two Laplace gradient entry points keep their
+source loops' instructions (registers renamed) but not the block loop's control (D9, report §3).
+
+**Arithmetic per pair and lane**, a = Re q, b = Im q, θ = Re(k) r, f = 1 + Im(k) r:
+
+```text
+ρ = rsqrt_masked(r²);  r = r² ρ;  θ = Re(k) r;  (s, c) = sincos(θ)           §4.11
+damped (Im k > 0):  E = exp((−Im k) r);  u_a = a E,  u_b = b E               §4.9
+undamped:           u_a = a,  u_b = b
+real q:     p_r = u_a c;  p_i = u_a s
+complex q:  p_r = fnma(u_b, s, u_a c);  p_i = fma(u_b, c, u_a s)             q e^{ikr}
+potential only:  φ_r = fma(p_r, ρ, φ_r);  φ_i = fma(p_i, ρ, φ_i)
+with gradients:  t = p ρ (both parts);  φ += t
+                 h_r = fma(t_i, θ, t_r f);  h_i = fnma(t_r, θ, t_i f)          h = t (f − iθ)
+                 (undamped: f = 1, h_r = fma(t_i, θ, t_r), h_i = fnma(t_r, θ, t_i))
+                 ρ₂ = ρ ρ;  gₖ,r = fnma(h_r ρ₂, dₖ, gₖ,r);  gₖ,i = fnma(h_i ρ₂, dₖ, gₖ,i)
+```
+
+since ikr − 1 = −(f − iθ). With S the sine and cosine's 25 (f32) or 33 (f64) operations and E
+the exponential's 14 or 20, the operations beyond Laplace's are S + 5 (real q, potential
+only), S + 7 (complex q) and S + 12 or S + 14 with gradients; damping adds E + 1 + QP, and
+with gradients E + 3 + QP. A lane with r² = 0 has ρ = r = θ = 0, s = +0, c = 1 and E = 1,
+and adds zeros. With real charges, k = 0 takes exactly Laplace's steps in the real plane
+(c = 1, s = +0, h_r = t_r) and k = iκ exactly Yukawa's (u_a = q E, h_r = t_r f): the real
+plane is then `evaluate`'s or `evaluate_yukawa`'s bit for bit on every vector ISA (tested,
+in the skeleton on every layer and through the public API). The entry point is chosen once
+per call by the charge kind and Im k > 0; nothing per kernel is a run-time value in the loop.
+
+**Blocks.** K = 1 target vector on every ISA (`HELMHOLTZ_K`). The sine and cosine's and the
+exponential's constants, k, and with gradients eight accumulators take most of the
+registers: on the M6 K = 2 is up to 1.19× slower with gradients and equal without, on
+Kathleen's AVX-512 it gives 0.97–1.00 of K = 1's pairs per second (geometric means; report
+§5.3); on AVX2 K = 1 by its 16 registers, as for Yukawa.
+
+**Contract** (per term and part, against the reference's term in the same precision, to
+first order in u = u_T; |k| r = |k| r and E = e^{−Im(k) r}):
+
+- *Kernel.* r within 6.5u (§4.10). A relative error δ in r moves e^{ikr} by |k| r δ |e^{ikr}|;
+  with the roundings of θ = Re(k) r and of (−Im k) r, about 7.9u |k| r relative to E. The
+  sine and cosine are within 4u absolute each (§4.11), which with a complex charge gives
+  (|a| + |b|) 4u ≤ 4√2 u |q|; E within 4u (§4.9); the charge products, the two products of
+  the rotation and its fma about 3u, by |a c| + |b s| ≤ |q| (Cauchy–Schwarz). So p within
+  12.7u + 7.9u |k| r of |q| E, and the term p ρ within 18.2u (inside the fma) or 19.2u (as t).
+- *Reference.* r within 2.5u, the two products 1u each: 3.9u |k| r. libm's exp, cos and sin
+  (1 ulp), the products decay · cos, the complex product with q (2u) and the division: about
+  11.3u.
+- **Potential: within about 30u + 11.8u |k| r, so (32 + 12 |k| r) u_T per part, relative to
+  |q| e^{−Im(k) r}/r.**
+- *Kernel gradient*, relative to |q| (1 + |k| r) E / r², which bounds every component
+  (|ikr − 1| ≤ 1 + |k| r): t within 19.2u + 7.9u |k| r; f within 7.5u (as Yukawa's) and θ
+  within 7.5u, which h weighs by |t_r| f + |t_i| θ ≤ |t| |f − iθ| (Cauchy–Schwarz): 7.5u;
+  the product t_r f and the fma 2u; ρ₂ 12u; h ρ₂ u: 41.7u + 7.9u |k| r.
+- *Reference gradient.* The factor (ikr − 1) about 4.5u, e^{ikr} 5u + 3.9u |k| r, their
+  product 2u, r² r 6.5u, the division u, the product with q 2u and with dₖ u: about 22u.
+- **Gradient: within about 64u + 11.8u |k| r, so (66 + 12 |k| r) u_T per part of each
+  component, relative to |q| (1 + |k| r) e^{−Im(k) r}/r².**
+
+The |k| r part is the conditioning of e^{ikr} in r, which the reference shares (3.9u |k| r
+of it). The contract holds on the kernel domain of §4.4 for Re(k) r ≤ 2¹⁰ (the sine and
+cosine's domain, above 22 c_leaf for any c_leaf ≤ 46) and Im(k) r ≤ 64 (f32) or 512 (f64),
+for 2⁻²⁰ ≤ |q| ≤ 1; in f32 the gradient needs (1 + |k| r)/r³ ≤ 2¹²⁶, Laplace's ρ³ ≤ 2¹²⁶ at
+k = 0, because the reference forms (ikr − 1) e^{ikr}/r³ before the charge (the scalar path,
+which is the reference, overflows beyond). Beyond Re(k) r = 2¹⁰ the terms are unspecified.
+
+**Measured** (`tests/p2p/helmholtz.rs`, `helmholtz_terms_*_large`, 10⁶ seeded pairs per
+precision, r² log-uniform over the domain, Re(k) r log-uniform in [10⁻⁶, 2¹⁰] (0 for every
+sixteenth group of four pairs, so with each output and charge kind), Im(k) r = 0 for a third and log-uniform in [10⁻⁶, 64 or 512] otherwise, real
+and complex charges with 2⁻²⁰ ≤ |q| ≤ 1), largest errors in u_T, potential / gradient:
+
+| ISA (machine) | precision | \|k\| r < 1 | per unit \|k\| r, \|k\| r ≥ 1 |
+| --- | --- | --- | --- |
+| NEON (M6) | f32 | 6.4 / 9.7 | 6.4 / 9.0 |
+| NEON (M6) | f64 | 7.1 / 9.6 | 6.9 / 7.2 |
+| AVX2 (Kathleen) | f32 | 6.0 / 9.4 | 6.4 / 6.4 |
+| AVX2 (Kathleen) | f64 | 7.1 / 9.4 | 6.9 / 7.2 |
+| AVX-512 (Kathleen) | f32 | 6.4 / 9.1 | 6.4 / 6.7 |
+| AVX-512 (Kathleen) | f64 | 7.1 / 10.3 | 6.9 / 7.4 |
+
+so 6–10u at small |k| r against 32u and 66u, and at most 9.0u per unit of |k| r against 12u.
+The sums against `direct_sum` (FMM-shaped sets and up to 4,096 sources, k = 0.1, 1, 10,
+1 + 0.5i, 10 + i and i in leaf units, real and complex charges) are within 4.1e-7 (φ) and 1.7e-6 (∇φ, within twice the reference's own error) in f32 and
+1.8e-15 in f64; the scalar ISA
+equals the reference bit for bit.
+
+**Cost per pair** (report §5; one thread, the W1 cells, geometric means): with complex
+charges at real k the kernel takes 3.9–5.9× Laplace's time per pair and 1.5–1.6× Yukawa's on
+the M6, 4.5–5.7× and 1.4–1.7× on locust's Neoverse-V2, 3.8–5.3× and 1.4–1.6× on Kathleen's
+AVX-512 (AVX2 3.6–4.9× and 1.2–1.5×); real charges save 0–13 %, damping costs 1.2–1.5×. It is
+2.3–5.3× (M6), 1.7–2.1× (locust) and 8.5–11.9× (AVX-512; green-kernels runs AVX2 there)
+faster than green-kernels' Helmholtz.
+
+**Inner loops** (the inlining check, K = 1; the source loop of the whole blocks, then the
+padded tail's), f32 φ, f32 φ and ∇φ, f64 φ, f64 φ and ∇φ, real charges at real k:
+NEON 59/59, 88/81, 108/81, 109/100; AVX2 76/70, 106/106, 102/94, 129/133; AVX-512 55/53,
+73/70, 72/65, 84/81. Complex charges change them by −5 to +5 instructions, damping adds 18–60 (report §5.3 lists
+every entry point). None contains a call.
+
 ## 5. The crate `nd-fmm-simd`
 
 Directory `fmm-simd/`, package `nd-fmm-simd`, library `nd_fmm_simd`, a default member.

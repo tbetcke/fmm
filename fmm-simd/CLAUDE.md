@@ -21,7 +21,11 @@ loop skeleton `arch::p2p::p2p_skeleton` that `evaluate` shares (the pair kernels
 `arch::p2p::{Laplace, Yukawa}`), the scalar path `arch::scalar::p2p_yukawa`; contract in
 docs/design/simd-p2p.md §4.10, tests in `tests/p2p/yukawa.rs`. Helmholtz CH3.4a: sin θ and
 cos θ together (`arch::sincos`, the public `sincos::sincos_slice`, tests in `tests/sincos`;
-docs/design/simd-p2p.md §4.11), for the Helmholtz P2P of CH3.4b.
+docs/design/simd-p2p.md §4.11), for the Helmholtz P2P of CH3.4b. Helmholtz CH3.4b:
+`P2pKernel::evaluate_helmholtz` with `HelmholtzCharges`, the Helmholtz P2P e^{ikr}/r for real
+and complex k and charges, on the skeleton with charge and output planes (the pair kernel
+`arch::p2p::Helmholtz`), the scalar path `arch::scalar::p2p_helmholtz`; contract in
+docs/design/simd-p2p.md §4.12, tests in `tests/p2p/helmholtz.rs`.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -55,6 +59,15 @@ docs/design/simd-p2p.md §4.11), for the Helmholtz P2P of CH3.4b.
   instruction for instruction (CH2.4b: every function of the crate identical to `main`'s,
   aarch64 and x86_64, default and one codegen unit), its bits unchanged and its benchmarks
   within noise (D9). Nothing per kernel may become a run-time value in the loop.
+  Since Helmholtz CH3.4b the skeleton has QP charge planes per source (point-major) and OP
+  output planes per target (stride n), const generics of `PairKernel<T, S, QP, OP>`;
+  Laplace and Yukawa are QP = OP = 1. For one plane the padded tail and `sub_block`'s
+  range keep CH2.4b's expressions (`if OP == 1`), because LLVM did not fold the general
+  ones to the same code; keep them so. With them NEON's and AVX2's Laplace entry points equal
+  `main`'s instruction for instruction (default settings; NEON's Yukawa f32 gradient on
+  macOS exchanges two registers in its source loop); AVX-512's Laplace gradient entry points kept their source
+  loops (registers renamed) but not the block loop's control, and passed D9 on Kathleen
+  (fmm-validate/results/helmholtz-ch3-4b.md §2–§3).
 - `P2pKernel::evaluate_yukawa` (Helmholtz CH2.4b) keeps the semantics of
   `nd_fmm_ref::helmholtz::p2p::p2p_yukawa` as `evaluate` keeps `p2p`'s (+=, no 1/(4π),
   sources in input order, chunk and target-position invariance, r² = 0 skipped; the scalar
@@ -68,6 +81,24 @@ docs/design/simd-p2p.md §4.11), for the Helmholtz P2P of CH3.4b.
   beyond, over 10⁶ pairs on NEON (M3 Max), AVX2 and AVX-512 (Kathleen). One target vector
   per block on every ISA (`YUKAWA_K`; measured against two on NEON and AVX-512, AVX2 by its
   16 registers).
+- `P2pKernel::evaluate_helmholtz` (Helmholtz CH3.4b) keeps the semantics of
+  `nd_fmm_ref::helmholtz::p2p::p2p` as `evaluate` keeps `p2p`'s (+=, no 1/(4π), sources in
+  input order, chunk and target-position invariance, r² = 0 skipped; the scalar path bit for
+  bit the reference, real charges as complex ones with Im q = 0), with the outputs in split
+  planes (the real part of every target, then the imaginary part), and panics unless Re k
+  and Im k are finite and non-negative. Its pair kernel forms ρ, r and θ = Re(k) r, e^{iθ} by
+  `arch::sincos`, e^{−Im(k) r} by `arch::exp` only in the damped entry points (Im k > 0),
+  the complex product with the charge and the gradient factor h = t (f − iθ), f = 1 + Im(k) r;
+  with real charges the real plane at k = 0 is `evaluate`'s and at k = iκ `evaluate_yukawa`'s
+  bit for bit on every vector ISA (tested; keep it so). Entry points per ISA, precision,
+  charge kind, damping and output (16 per ISA), one selector per precision chosen once per
+  call. Contract: (32 + 12 |k| r) u_T (each part of φ, relative to |q| e^{−Im(k) r}/r) and
+  (66 + 12 |k| r) u_T (each part of each ∇φ component, relative to
+  |q| (1 + |k| r) e^{−Im(k) r}/r²) for Re(k) r ≤ 2¹⁰ and Im(k) r ≤ 64 (f32) or 512 (f64), the
+  f32 gradient for (1 + |k| r)/r³ ≤ 2¹²⁶, derived in docs/design/simd-p2p.md §4.12; measured
+  at most 10.3u at small |k| r and 9.0u per unit of |k| r over 10⁶ pairs on NEON (M6), AVX2
+  and AVX-512 (Kathleen). One target vector per
+  block on every ISA (`HELMHOLTZ_K`).
 - `MatrixKernel::accumulate_columns` gives every element of C the chain of
   `MatrixSet::apply` (k ascending, multiply and add rounded apart; `MulAdd::Separate`)
   or one fma per step (`MulAdd::Fused`), from its own row of A and column of B only: the
@@ -159,7 +190,13 @@ docs/design/simd-p2p.md §4.11), for the Helmholtz P2P of CH3.4b.
   f32 φ, f32 φ and ∇φ, f64 φ, f64 φ and ∇φ: NEON 40/40, 61/50, 52/52, 78/65; AVX2 49/49,
   78/64, 71/68, 87/84; AVX-512 37/37, 48/46, 46/46, 58/56. The sine and cosine's loops
   (Helmholtz CH3.4a, `…::sincos_slice_f32` and `_f64`): NEON 45 and 61 (25 and 33
-  operations), AVX2 42 and 58, AVX-512 37 and 45. From the repository root:
+  operations), AVX2 42 and 58, AVX-512 37 and 45. The Helmholtz P2P source loops (Helmholtz
+  CH3.4b, K = 1; whole blocks, then the tail; real charges, real k), f32 φ, f32 φ and ∇φ,
+  f64 φ, f64 φ and ∇φ: NEON 59/59, 88/81, 108/81, 109/100; AVX2 76/70, 106/106, 102/94,
+  129/133; AVX-512 55/53, 73/70, 72/65, 84/81 (complex charges and damping:
+  fmm-validate/results/helmholtz-ch3-4b.md §5.3). The entry points are crate-private, so in
+  a release rlib their symbols carry ` (.llvm.N)`; inspect the linked test binary. From the
+  repository root:
 
   ```sh
   # Build the release test binaries; cargo prints their paths ("Executable ...").
@@ -197,7 +234,8 @@ nd-fmm-validate (not even as a dev-dependency). Anything else needs asking first
 `nd_fmm_ref::p2p::p2p` for terms and semantics (the scalar path equals it bit for bit
 wherever r² ≠ 0) and `nd_fmm_ref::p2p::direct_sum` for sums (for Yukawa
 `nd_fmm_ref::helmholtz::p2p::{p2p_yukawa, direct_sum_yukawa}`, and `evaluate` itself at
-κ = 0); `1/√x` in f64 (f32 inputs)
+κ = 0; for Helmholtz `nd_fmm_ref::helmholtz::p2p::{p2p, direct_sum}`, and `evaluate` and
+`evaluate_yukawa` at k = 0 and k = iκ); `1/√x` in f64 (f32 inputs)
 or double-double (f64 inputs) for the inverse square root; the kernel's own results for
 chunk and target-position invariance and determinism. For `MatrixKernel` the matrix–vector
 loop of `MatrixSet::apply`, restated in `tests/matrix.rs` (this crate cannot depend on

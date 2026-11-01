@@ -48,7 +48,7 @@ use std::arch::x86_64::{
     _mm512_slli_epi64, _mm512_storeu_pd, _mm512_storeu_ps, _mm512_sub_pd, _mm512_sub_ps,
 };
 
-use super::p2p::{Yukawa, p2p_body, p2p_dipoles_body, p2p_many_body, p2p_skeleton};
+use super::p2p::{Helmholtz, Yukawa, p2p_body, p2p_dipoles_body, p2p_many_body, p2p_skeleton};
 use super::waves::{gather_body, merge_body, sums_body, waves_body};
 use super::{Simd, exp::exp_body, matrix::accumulate_body, rsqrt_body, sincos::sincos_body};
 use crate::{Isa, WaveTables};
@@ -581,11 +581,11 @@ macro_rules! p2p_yukawa_entries {
             // runs only on a CPU with them: a call from outside such a context is
             // `unsafe` and asserts it.
             let s = unsafe { Avx512::new_unchecked() };
-            p2p_skeleton::<$t, Avx512, _, YUKAWA_K, false>(
+            p2p_skeleton::<$t, Avx512, _, 1, 1, YUKAWA_K, false>(
                 s,
                 Yukawa::new(s, kappa),
                 sources,
-                charges,
+                charges.as_chunks::<1>().0,
                 targets,
                 potential,
                 &mut [],
@@ -611,11 +611,11 @@ macro_rules! p2p_yukawa_entries {
             // runs only on a CPU with them: a call from outside such a context is
             // `unsafe` and asserts it.
             let s = unsafe { Avx512::new_unchecked() };
-            p2p_skeleton::<$t, Avx512, _, YUKAWA_K, true>(
+            p2p_skeleton::<$t, Avx512, _, 1, 1, YUKAWA_K, true>(
                 s,
                 Yukawa::new(s, kappa),
                 sources,
-                charges,
+                charges.as_chunks::<1>().0,
                 targets,
                 potential,
                 gradient,
@@ -626,6 +626,216 @@ macro_rules! p2p_yukawa_entries {
 
 p2p_yukawa_entries!(p2p_yukawa_f32, p2p_yukawa_f32_gradient, f32);
 p2p_yukawa_entries!(p2p_yukawa_f64, p2p_yukawa_f64_gradient, f64);
+
+/// Target vectors per block of the Helmholtz P2P (`arch::p2p::p2p_skeleton` with
+/// `arch::p2p::Helmholtz`; Helmholtz CH3.4b), both precisions, every charge kind and damping,
+/// potential only and with gradients: one, as `YUKAWA_K` (the sine and cosine's and the
+/// exponential's constants take most of the registers), measured on Kathleen against two
+/// (Helmholtz CH3.4b, `spikes/p2p-simd`'s `helmholtz`; the report
+/// `fmm-validate/results/helmholtz-ch3-4b.md` §5.3): two give 0.97–1.00 of one's pairs per
+/// second (geometric means).
+pub(crate) const HELMHOLTZ_K: usize = 1;
+
+/// Generates the Helmholtz P2P entry points of one precision, charge planes (`$qp`: 1 real,
+/// 2 complex) and damping (`$damped`: Im k > 0), potential only and with gradients
+/// (Helmholtz CH3.4b).
+macro_rules! p2p_helmholtz_entries {
+    ($potential:ident, $gradient:ident, $t:ty, $qp:literal, $damped:literal) => {
+        /// Helmholtz P2P on AVX-512F, potential only (`arch::p2p::p2p_skeleton` with
+        /// `arch::p2p::Helmholtz`), for the precision, charges and damping of its name, with
+        /// lengths and k checked by the caller; `potential` holds the real plane, then the
+        /// imaginary one.
+        ///
+        /// Not inlined, so that the dispatch stays one call and the inlining check
+        /// finds the function by name.
+        #[target_feature(enable = "avx512f")]
+        #[inline(never)]
+        pub(crate) fn $potential(
+            re_k: $t,
+            im_k: $t,
+            sources: &[[$t; 3]],
+            charges: &[$t],
+            targets: &[[$t; 3]],
+            potential: &mut [$t],
+        ) {
+            // SAFETY: this function enables `avx512f` (and so `avx2` and `fma`), so it
+            // runs only on a CPU with them: a call from outside such a context is
+            // `unsafe` and asserts it.
+            let s = unsafe { Avx512::new_unchecked() };
+            p2p_skeleton::<$t, Avx512, _, $qp, 2, HELMHOLTZ_K, false>(
+                s,
+                Helmholtz::<_, $damped>::new(s, re_k, im_k),
+                sources,
+                charges.as_chunks::<$qp>().0,
+                targets,
+                potential,
+                &mut [],
+            );
+        }
+
+        /// Helmholtz P2P on AVX-512F, potential and gradient (`arch::p2p::p2p_skeleton`
+        /// with `arch::p2p::Helmholtz`), for the precision, charges and damping of its name,
+        /// with lengths and k checked by the caller; `potential` and `gradient` hold the real
+        /// plane, then the imaginary one.
+        ///
+        /// Not inlined, as the potential-only entry point.
+        #[target_feature(enable = "avx512f")]
+        #[inline(never)]
+        pub(crate) fn $gradient(
+            re_k: $t,
+            im_k: $t,
+            sources: &[[$t; 3]],
+            charges: &[$t],
+            targets: &[[$t; 3]],
+            potential: &mut [$t],
+            gradient: &mut [[$t; 3]],
+        ) {
+            // SAFETY: this function enables `avx512f` (and so `avx2` and `fma`), so it
+            // runs only on a CPU with them: a call from outside such a context is
+            // `unsafe` and asserts it.
+            let s = unsafe { Avx512::new_unchecked() };
+            p2p_skeleton::<$t, Avx512, _, $qp, 2, HELMHOLTZ_K, true>(
+                s,
+                Helmholtz::<_, $damped>::new(s, re_k, im_k),
+                sources,
+                charges.as_chunks::<$qp>().0,
+                targets,
+                potential,
+                gradient,
+            );
+        }
+    };
+}
+
+p2p_helmholtz_entries!(
+    p2p_helmholtz_f32_real,
+    p2p_helmholtz_f32_real_gradient,
+    f32,
+    1,
+    false
+);
+p2p_helmholtz_entries!(
+    p2p_helmholtz_f32_real_damped,
+    p2p_helmholtz_f32_real_damped_gradient,
+    f32,
+    1,
+    true
+);
+p2p_helmholtz_entries!(
+    p2p_helmholtz_f32_complex,
+    p2p_helmholtz_f32_complex_gradient,
+    f32,
+    2,
+    false
+);
+p2p_helmholtz_entries!(
+    p2p_helmholtz_f32_complex_damped,
+    p2p_helmholtz_f32_complex_damped_gradient,
+    f32,
+    2,
+    true
+);
+p2p_helmholtz_entries!(
+    p2p_helmholtz_f64_real,
+    p2p_helmholtz_f64_real_gradient,
+    f64,
+    1,
+    false
+);
+p2p_helmholtz_entries!(
+    p2p_helmholtz_f64_real_damped,
+    p2p_helmholtz_f64_real_damped_gradient,
+    f64,
+    1,
+    true
+);
+p2p_helmholtz_entries!(
+    p2p_helmholtz_f64_complex,
+    p2p_helmholtz_f64_complex_gradient,
+    f64,
+    2,
+    false
+);
+p2p_helmholtz_entries!(
+    p2p_helmholtz_f64_complex_damped,
+    p2p_helmholtz_f64_complex_damped_gradient,
+    f64,
+    2,
+    true
+);
+
+/// Generates the choice among the Helmholtz P2P entry points of one precision (Helmholtz
+/// CH3.4b): by the charges, the damping (Im k > 0) and the gradients, once per call.
+macro_rules! p2p_helmholtz_select {
+    (
+        $name:ident,
+        $t:ty,
+        $rp:ident,
+        $rg:ident,
+        $rdp:ident,
+        $rdg:ident,
+        $cp:ident,
+        $cg:ident,
+        $cdp:ident,
+        $cdg:ident
+    ) => {
+        /// Helmholtz P2P on AVX-512F in the precision of its name: the entry point of the
+        /// charges (`complex`: Re q and Im q per source), the damping (Im k > 0) and the
+        /// gradients, with lengths and k checked by the caller.
+        #[target_feature(enable = "avx512f")]
+        #[expect(
+            clippy::too_many_arguments,
+            reason = "the shape of `P2pKernel::evaluate_helmholtz`"
+        )]
+        pub(crate) fn $name(
+            re_k: $t,
+            im_k: $t,
+            complex: bool,
+            sources: &[[$t; 3]],
+            charges: &[$t],
+            targets: &[[$t; 3]],
+            potential: &mut [$t],
+            gradient: Option<&mut [[$t; 3]]>,
+        ) {
+            let (k, x, q, y, p) = (re_k, sources, charges, targets, potential);
+            match (complex, im_k > 0.0, gradient) {
+                (false, false, None) => $rp(k, im_k, x, q, y, p),
+                (false, false, Some(g)) => $rg(k, im_k, x, q, y, p, g),
+                (false, true, None) => $rdp(k, im_k, x, q, y, p),
+                (false, true, Some(g)) => $rdg(k, im_k, x, q, y, p, g),
+                (true, false, None) => $cp(k, im_k, x, q, y, p),
+                (true, false, Some(g)) => $cg(k, im_k, x, q, y, p, g),
+                (true, true, None) => $cdp(k, im_k, x, q, y, p),
+                (true, true, Some(g)) => $cdg(k, im_k, x, q, y, p, g),
+            }
+        }
+    };
+}
+
+p2p_helmholtz_select!(
+    p2p_helmholtz_f32,
+    f32,
+    p2p_helmholtz_f32_real,
+    p2p_helmholtz_f32_real_gradient,
+    p2p_helmholtz_f32_real_damped,
+    p2p_helmholtz_f32_real_damped_gradient,
+    p2p_helmholtz_f32_complex,
+    p2p_helmholtz_f32_complex_gradient,
+    p2p_helmholtz_f32_complex_damped,
+    p2p_helmholtz_f32_complex_damped_gradient
+);
+p2p_helmholtz_select!(
+    p2p_helmholtz_f64,
+    f64,
+    p2p_helmholtz_f64_real,
+    p2p_helmholtz_f64_real_gradient,
+    p2p_helmholtz_f64_real_damped,
+    p2p_helmholtz_f64_real_damped_gradient,
+    p2p_helmholtz_f64_complex,
+    p2p_helmholtz_f64_complex_gradient,
+    p2p_helmholtz_f64_complex_damped,
+    p2p_helmholtz_f64_complex_damped_gradient
+);
 
 /// Target vectors per block of the P2P of several charge vectors (`arch::p2p::p2p_many_body`;
 /// Phase 6 T5), potential only: AVX2's choice, 1 target vector with groups of 8 vectors.

@@ -21,7 +21,9 @@
 //! [`p2p_dipoles_f64`] to the dipole ones (the body [`p2p::p2p_dipoles_body`]; Phase 6 T8),
 //! [`p2p_yukawa_f32`] and [`p2p_yukawa_f64`] to the Yukawa ones (the skeleton
 //! [`p2p::p2p_skeleton`] with [`p2p::Yukawa`], which also runs Laplace's [`p2p::p2p_body`];
-//! Helmholtz CH2.4b), [`accumulate_f32`] and
+//! Helmholtz CH2.4b), [`p2p_helmholtz_f32`] and [`p2p_helmholtz_f64`] to each ISA's choice
+//! among the Helmholtz ones (the skeleton with [`p2p::Helmholtz`], two output planes;
+//! Helmholtz CH3.4b), [`accumulate_f32`] and
 //! [`accumulate_f64`] to the matrix ones, and [`exp_slice_f32`] and [`exp_slice_f64`] to
 //! those of the exponential (the body [`exp::exp_body`]; Helmholtz CH2.4a), which the
 //! scalar ISA runs on the scalar layer. The
@@ -32,7 +34,8 @@
 //! [`scalar::p2p_many`], the same terms per vector), which equals
 //! `nd_fmm_ref::p2p::p2p` bit for bit wherever r² ≠ 0 (dipoles by [`scalar::p2p_dipoles`],
 //! `nd_fmm_ref::p2p::p2p_dipoles`'s loop; Yukawa by [`scalar::p2p_yukawa`],
-//! `nd_fmm_ref::helmholtz::p2p::p2p_yukawa`'s loop), not by the generic body at
+//! `nd_fmm_ref::helmholtz::p2p::p2p_yukawa`'s loop; Helmholtz by [`scalar::p2p_helmholtz`],
+//! `nd_fmm_ref::helmholtz::p2p::p2p`'s loop), not by the generic body at
 //! W = 1: that body forms r² with fma and the gradient term as (q ρ) ρ² d, so it
 //! rounds differently. The tests run the generic body on the scalar layer as well.
 //!
@@ -544,6 +547,55 @@ macro_rules! p2p_yukawa_dispatch {
 
 p2p_yukawa_dispatch!(p2p_yukawa_f32, f32, p2p_yukawa_f32, p2p_yukawa_f32_gradient);
 p2p_yukawa_dispatch!(p2p_yukawa_f64, f64, p2p_yukawa_f64, p2p_yukawa_f64_gradient);
+
+/// Generates the dispatch of the Helmholtz P2P for one precision (Helmholtz CH3.4b): each
+/// ISA's choice of entry point by the charges, the damping and the gradients.
+macro_rules! p2p_helmholtz_dispatch {
+    ($name:ident, $t:ty) => {
+        /// Helmholtz P2P on `isa`
+        /// ([`P2pKernel::evaluate_helmholtz`](crate::P2pKernel::evaluate_helmholtz)) in the
+        /// precision of its name, with lengths and k already checked by the caller:
+        /// `charges` holds Re q and Im q per source if `complex`, else q; `potential` and
+        /// `gradient` the real plane, then the imaginary one.
+        #[expect(
+            clippy::too_many_arguments,
+            reason = "the shape of `P2pKernel::evaluate_helmholtz`, plus the ISA"
+        )]
+        pub(crate) fn $name(
+            isa: AvailableIsa,
+            re_k: $t,
+            im_k: $t,
+            complex: bool,
+            sources: &[[$t; 3]],
+            charges: &[$t],
+            targets: &[[$t; 3]],
+            potential: &mut [$t],
+            gradient: Option<&mut [[$t; 3]]>,
+        ) {
+            let (x, q, y, p, g) = (sources, charges, targets, potential, gradient);
+            match isa.0 {
+                Isa::Scalar => scalar::p2p_helmholtz(re_k, im_k, complex, x, q, y, p, g),
+                #[cfg(target_arch = "aarch64")]
+                // SAFETY: `isa` is available (`AvailableIsa`), so the CPU has NEON, the
+                // feature the function enables.
+                Isa::Neon => unsafe { neon::$name(re_k, im_k, complex, x, q, y, p, g) },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: `isa` is available (`AvailableIsa`), so the CPU has AVX2 and
+                // FMA, the features the function enables.
+                Isa::Avx2 => unsafe { avx2::$name(re_k, im_k, complex, x, q, y, p, g) },
+                #[cfg(target_arch = "x86_64")]
+                // SAFETY: `isa` is available (`AvailableIsa`), so the CPU has AVX-512F,
+                // AVX2 and FMA, the features the function enables or implies.
+                Isa::Avx512 => unsafe { avx512::$name(re_k, im_k, complex, x, q, y, p, g) },
+                // The ISAs of other architectures, which are never available.
+                isa => unreachable!("`{isa}` is not available on this machine"),
+            }
+        }
+    };
+}
+
+p2p_helmholtz_dispatch!(p2p_helmholtz_f32, f32);
+p2p_helmholtz_dispatch!(p2p_helmholtz_f64, f64);
 
 /// Generates the dispatch of the entry points of the P2P of several charge vectors for one
 /// precision (Phase 6 T5).
