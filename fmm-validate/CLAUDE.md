@@ -305,6 +305,12 @@ rank counts. The `helmholtz_accuracy` example (not registered: it runs for minut
 one Markdown row per case and thread count; `tests/helmholtz_accuracy.rs` (one MPI test)
 checks the harness and small cases. Its report is `results/helmholtz-ch3-1c.md`.
 
+Helmholtz CH3.4c (the operator's P2P) added `Case::p2p` and `Row::p2p` (the FMM's P2P
+kernel, `HelmholtzFmmBuilder::p2p_kernel`, default `Auto`, and the kernel that ran) and the
+example's `--p2p auto|reference|<isa>,…` (each case with each kernel in turn; a column
+"P2P"), for the times before and after the vectorised kernel
+(docs/helmholtz/tasks/CH3.4c.md, "Results").
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

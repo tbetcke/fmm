@@ -25,6 +25,8 @@
 //!   Determinism (proposal §2, constraint 2) is shown by equal checksums across thread
 //!   counts and rank counts.
 //! - **Times.** The build and the evaluation, wall time of the slowest rank.
+//! - **P2P kernel.** [`Case::p2p`] (Helmholtz CH3.4c): `Auto` by default, `Reference` for
+//!   the times before the vectorised kernel; [`Row::p2p`] the kernel that ran.
 
 use std::ops::Range;
 use std::thread;
@@ -36,6 +38,7 @@ use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, Degrees, HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError, Output,
     Wavenumber,
 };
+use nd_fmm_exec::operator::P2pChoice;
 use nd_fmm_math::Complex;
 use nd_fmm_ref::helmholtz::p2p::direct_sum;
 
@@ -62,11 +65,13 @@ pub struct Case {
     pub samples: usize,
     /// The seed of the samples and charges.
     pub seed: u64,
+    /// The FMM's P2P kernel.
+    pub p2p: P2pChoice,
 }
 
 impl Case {
     /// A case with complex charges, one vector, gradients and 1,000 samples (§9.1), seeded
-    /// with the workloads' [`SEED`].
+    /// with the workloads' [`SEED`], and the P2P kernel of [`P2pChoice::Auto`].
     pub fn new(workload: Workload, k: (f64, f64), degrees: Degrees) -> Self {
         Self {
             workload,
@@ -77,6 +82,7 @@ impl Case {
             gradients: true,
             samples: 1000,
             seed: SEED,
+            p2p: P2pChoice::Auto,
         }
     }
 }
@@ -360,6 +366,8 @@ pub fn errors<C: CommunicatorCollectives>(
 pub struct Row {
     /// The rayon threads per rank.
     pub threads: usize,
+    /// The P2P kernel that ran (never `Auto`).
+    pub p2p: P2pChoice,
     /// The ranks.
     pub ranks: usize,
     /// The levels of the tree.
@@ -421,6 +429,7 @@ pub fn run<C: CommunicatorCollectives>(
         .vectors(case.vectors)
         .gradients(case.gradients)
         .threads(threads)
+        .p2p_kernel(case.p2p)
         .build(points, points, comm)?;
     let build = slowest(start.elapsed().as_secs_f64(), comm);
     let charges: Vec<Charges<'_, f64>> = (0..case.vectors)
@@ -442,6 +451,7 @@ pub fn run<C: CommunicatorCollectives>(
     comm.all_reduce_into(&fmm.nleaves(), &mut leaves, SystemOperation::sum());
     Ok(Row {
         threads,
+        p2p: fmm.p2p_kernel(),
         ranks: size,
         levels: fmm.nlevels(),
         min_leaf_level: fmm.min_leaf_level(),

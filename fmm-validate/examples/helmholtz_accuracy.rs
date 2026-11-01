@@ -21,7 +21,10 @@
 //! - `--charges real|complex` (default complex), `--vectors m` (default 1),
 //!   `--samples n` (default 1000), `--no-gradients`;
 //! - `--threads t,…` (default 1), `--oracle-threads t` (default the largest of
-//!   `--threads`).
+//!   `--threads`);
+//! - `--p2p auto|reference|<isa>,…` (default `auto`): the P2P kernels (Helmholtz CH3.4c),
+//!   each case run with each in turn; an ISA this machine lacks is refused before MPI
+//!   starts.
 //!
 //! Run in release mode, on any number of ranks (each rank passes a contiguous block of
 //! the points, the oracle is sharded over the ranks, rank 0 prints), with one BLAS
@@ -42,6 +45,7 @@ use std::time::Instant;
 use mpi::Threading;
 use mpi::traits::*;
 use nd_fmm_exec::helmholtz::{ChargeKind, Degrees};
+use nd_fmm_exec::operator::P2pChoice;
 use nd_fmm_validate::bench::{cores, cpu_model, target};
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::helmholtz_accuracy::{Case, Oracle, Problem, complex_k, run};
@@ -59,6 +63,7 @@ struct Arguments {
     gradients: bool,
     threads: Vec<usize>,
     oracle_threads: Option<usize>,
+    p2p: Vec<P2pChoice>,
 }
 
 /// Parses a comma-separated list.
@@ -92,7 +97,7 @@ fn arguments() -> Arguments {
             "usage: helmholtz_accuracy [--workload w1|w2|w3|w3:<n>|w4-<distribution>:<n>] \
              [--kd x,…] [--kim y] [--eps e,…|--degree p] [--charges real|complex] \
              [--vectors m] [--samples n] [--no-gradients] [--threads t,…] \
-             [--oracle-threads t]; got {args:?}"
+             [--oracle-threads t] [--p2p auto|reference|<isa>,…]; got {args:?}"
         );
         std::process::exit(2);
     };
@@ -107,6 +112,7 @@ fn arguments() -> Arguments {
         gradients: true,
         threads: vec![1],
         oracle_threads: None,
+        p2p: vec![P2pChoice::Auto],
     };
     let mut rest = args.as_slice();
     loop {
@@ -141,6 +147,10 @@ fn arguments() -> Arguments {
                     "--vectors" => value.parse().map(|v| parsed.vectors = v).is_ok(),
                     "--samples" => value.parse().map(|v| parsed.samples = v).is_ok(),
                     "--threads" => list(value).map(|v| parsed.threads = v).is_some(),
+                    "--p2p" => list::<P2pChoice>(value)
+                        .filter(|c| c.iter().all(|c| c.resolve().is_ok()))
+                        .map(|c| parsed.p2p = c)
+                        .is_some(),
                     "--oracle-threads" => value
                         .parse()
                         .map(|v| parsed.oracle_threads = Some(v))
@@ -155,7 +165,11 @@ fn arguments() -> Arguments {
             _ => usage(),
         };
     }
-    if parsed.vectors == 0 || parsed.threads.contains(&0) || parsed.kds.is_empty() {
+    if parsed.vectors == 0
+        || parsed.threads.contains(&0)
+        || parsed.kds.is_empty()
+        || parsed.p2p.is_empty()
+    {
         usage();
     }
     parsed
@@ -204,12 +218,13 @@ fn main() {
         );
         println!();
         println!(
-            "| Workload | N | kD | degrees | charges | m | ranks × threads | levels | leaf level \
-             | p by level | leaves | max leaf | build s | evaluate s | φ | ∇φ | checksum |"
+            "| Workload | N | kD | degrees | charges | m | P2P | ranks × threads | levels \
+             | leaf level | p by level | leaves | max leaf | build s | evaluate s | φ | ∇φ \
+             | checksum |"
         );
         println!(
-            "| --- | ---: | --- | --- | --- | ---: | --- | ---: | ---: | --- | ---: | ---: | ---: \
-             | ---: | ---: | ---: | --- |"
+            "| --- | ---: | --- | --- | --- | ---: | --- | --- | ---: | ---: | --- | ---: | ---: \
+             | ---: | ---: | ---: | ---: | --- |"
         );
     }
     for &kd in &arguments.kds {
@@ -243,7 +258,12 @@ fn main() {
                 ChargeKind::Real => "real",
                 ChargeKind::Complex => "complex",
             };
-            for &threads in &arguments.threads {
+            for (&p2p, &threads) in arguments
+                .p2p
+                .iter()
+                .flat_map(|p| arguments.threads.iter().map(move |t| (p, t)))
+            {
+                case.p2p = p2p;
                 match run(&case, &problem, &oracle, threads, &world) {
                     Ok(row) if root => {
                         let all = row.errors.last().expect("an entry over all vectors");
@@ -253,12 +273,13 @@ fn main() {
                             "–".into()
                         };
                         println!(
-                            "| {} | {} | {kd_string} | {degrees_name} | {charges} | {} | {} × {} \
+                            "| {} | {} | {kd_string} | {degrees_name} | {charges} | {} | {} | {} × {} \
                              | {} | {} | {} | {} | {} | {:.2} | {:.2} | {:.2e} | {gradient} \
                              | {:016x} |",
                             workload.name(),
                             problem.len(),
                             case.vectors,
+                            row.p2p,
                             row.ranks,
                             row.threads,
                             row.levels,

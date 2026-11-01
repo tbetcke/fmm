@@ -1350,3 +1350,44 @@ request, using this template:
 - Follow-ups:
   - CH3.4c: `HelmholtzOperator`'s P2P through `evaluate_helmholtz` (the chunks' layout is the
     kernel's: Re plane, then Im plane), the reference kept as the trusted path.
+
+## 2026-11-01: CH3.4c The Helmholtz operator's P2P
+- Done:
+  - `HelmholtzOperator::{with_p2p, p2p_kernel}`, `HelmholtzFmmBuilder::p2p_kernel` and
+    `HelmholtzFmm::p2p_kernel` with Laplace's `P2pChoice` (default `Auto`): P2P through
+    `P2pKernel::evaluate_helmholtz` on the ISA, one call per vector on all the leaf's
+    targets (the chunk's own strengths for one vector, gathered into scratch for several;
+    the output planes of columns 2v and 2v + 1 as they lie, the kernel's layout);
+    `Reference` keeps `nd_fmm_ref::helmholtz::p2p::p2p`, the trusted path. An unavailable
+    ISA is `IsaUnavailable` from the operator and `SettingsError::P2pIsaUnavailable` from
+    the builder, before any collective.
+  - `nd_fmm_validate::helmholtz_accuracy::{Case, Row}::p2p` and the example's `--p2p`.
+    Record `docs/helmholtz/tasks/CH3.4c.md` (with the times); `fmm-exec/CLAUDE.md`,
+    `fmm-validate/CLAUDE.md`.
+  - CH3.4 is done with this task: once it is merged, CH3.6 waits for CH3.3 alone.
+- Tests: `fmm-exec/tests/helmholtz/p2p.rs` (new): every available ISA against `Reference`
+  pair by pair within CH3.4b's per-term contract summed over the sources (worst 0.019 of the
+  bound on NEON), f64 and f32, k up to 128 + 16i (Re k̂ r to 53), real and complex charges,
+  one and two vectors, with and without gradients, a coarser neighbour; `Isa::Scalar` the
+  reference bit for bit, `Auto` that of `Isa::detect`. `tests/helmholtz/operator.rs`:
+  `Reference` and `Isa::Scalar` bit for bit `nd_fmm_ref`. `tests/helmholtz_fmm.rs`: every
+  scenario on `Auto` (threads, pair calls and the one-rank FMM bit for bit, as before); on
+  two scenarios every ISA within 1e-13 of `Reference` (6.9e-16 measured), `Scalar` bit for
+  bit; an unavailable ISA refused on every rank. Debug run at one rank 36 → 46 s.
+- Runs (M6, release, one rank, NEON against `Reference`, two launches in both orders): the
+  evaluation 0.15–0.48 s faster at one thread on W1 kD = 100, the W4 cube at kD = 10 and W3
+  at kD = 30 (2–9 % at ε = 10⁻³, under 1 % at 10⁻⁶: the RCR translations dominate); the
+  6-thread runs vary by up to 25 % between launches; errors unchanged, `Reference`
+  checksums CH3.1c's, each kernel's equal at 1 and 6 threads.
+- Checks: `/verify` on the M6: format; Clippy default, examples and workspace all-targets;
+  `cargo doc` (and `-D warnings` on `nd-fmm-exec` and `nd-fmm-validate`); `cargo test`
+  (1,106) and `--workspace` (1,188); the MPI list at 2 and 4 ranks (24 of 24);
+  `helmholtz_fmm` in release at 1 and 3 ranks. A self-review by a subagent: no blocking
+  defect; its points taken (one vector and no gradients on every ISA, the notes). Not run:
+  AVX2 and AVX-512 (CI's x86_64 runner runs the operator and FMM tests on its ISAs);
+  locust and Kathleen (none in the plan); the licence check (no manifest changed).
+- Decisions: none; no question for sign-off.
+- Laplace: not touched (no Laplace file changed; `P2pChoice` reused as it is).
+- Follow-ups:
+  - CH3.2: the translations are where the Helmholtz FMM's time is.
+  - CH3.3, then CH3.6 (timed with this kernel).

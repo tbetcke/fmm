@@ -428,7 +428,9 @@ at any kD.
   Helmholtz; Laplace's P2P instruction for instruction and bit for bit, and its benchmarks
   within noise (D9) and C3S.4 if the skeleton's Laplace code changes. *Needs:* CH3.4a.
   *Machines:* locust, Kathleen.
-- [ ] **CH3.4c The Helmholtz operator's P2P.** `HelmholtzOperator`'s P2P through
+- [x] **CH3.4c The Helmholtz operator's P2P.** Record: `docs/helmholtz/tasks/CH3.4c.md`;
+  `HelmholtzOperator::with_p2p`, `HelmholtzFmmBuilder::p2p_kernel`, tests
+  `fmm-exec/tests/helmholtz/p2p.rs`. `HelmholtzOperator`'s P2P through
   `evaluate_helmholtz` on the P2P choice's ISA, the reference kept as the trusted path.
   *Done when:* every ISA against the reference within CH3.4b's contract in the operator's
   and the FMM's tests; the FMM deterministic at every thread count and rank-invariant as
