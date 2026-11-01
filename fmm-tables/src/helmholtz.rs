@@ -255,7 +255,7 @@ impl<T: RealScalar> HelmholtzTables<T> {
             (azimuth(d), usize::from(d[2] < 0))
         });
         let octant_angles = [[1, 1, 1], [1, 1, -1]].map(|d| polar(d).1);
-        let mut m2l_angles: Vec<((i64, i64, i64), (T, T))> = Vec::new();
+        let mut m2l_angles: Vec<(PolarKey, (T, T))> = Vec::new();
         let mut distances: Vec<i64> = Vec::new();
         let offsets: Vec<OffsetKeys<T>> = m2l_offsets()
             .iter()
@@ -706,11 +706,14 @@ enum Blocks<'a, T> {
     PerCall((T, T)),
 }
 
+/// The key of a polar-angle class: sgn d_z and the reduced fraction d_z² / |d|².
+type PolarKey = (i64, i64, i64);
+
 /// The polar-angle class of the integer direction d and its (cos θ, sin θ), sin θ ≥ 0: the
 /// key (sgn d_z, d_z² / |d|² as a reduced fraction), the values √(d_z²) / √|d|² with d_z's
 /// sign and √(|d|² − d_z²) / √|d|² of the reduced fraction, formed in f64 (correctly rounded
 /// square roots and quotients, the same on every IEEE 754 machine) and rounded to T.
-fn polar<T: RealScalar>(d: [i64; 3]) -> ((i64, i64, i64), (T, T)) {
+fn polar<T: RealScalar>(d: [i64; 3]) -> (PolarKey, (T, T)) {
     let (z2, r2) = (d[2] * d[2], d.iter().map(|x| x * x).sum::<i64>());
     let g = gcd(z2, r2);
     let (num, den) = (z2 / g, r2 / g);
