@@ -165,7 +165,7 @@ That makes 13 cases with equal checksums at 1 and 6 threads, and 4 cases with eq
 checksums on 1, 2 and 3 ranks (W1 at kD = 500 on 1 and 3). On several ranks the errors are
 the one-rank errors to the printed digits. The error sums are reduced in another order, so
 their last bits may differ; the test bounds the difference at 1e-12 relative. The
-evaluation times on 2 × 3 and 3 × 2 are 1–18 % above 1 × 6 (oversubscribed MPI progress, not measured further) (W1 kD = 500 at 3 × 2: 91 s
+evaluation times on 2 × 3 and 3 × 2 are 1–18 % above 1 × 6 (not investigated: timing is not this task's) (W1 kD = 500 at 3 × 2: 91 s
 against 89 s; the build 2.0 s against 3.0 s).
 
 ## 5. Observations for later tasks
