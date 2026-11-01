@@ -32,12 +32,14 @@ CONVENTIONS §3.15).
 - The second exception, `helmholtz` (Helmholtz CH3.1a; its module docs): the coaxial
   tables come from `nd_fmm_ref::helmholtz::rcr::{m2m_table, l2l_table, m2l_table}`, but
   the stored form's factors folded into them and the three steps of the application
-  restate `rcr`'s private `translate` in its order of operations, so that every
-  application in f64 is `rcr`'s bit for bit at the same frames (`tests/helmholtz/`), but
-  for the real shifts of real k, which keep the tables' real parts (the FMM-weighted
-  error, within 1e-12). Keep the two in step. Its tables are keyed by the bits of the
-  shifts' |t| and polar angles as `rcr` forms them (21 distances and 53 polar angles over
-  the 316 offsets on the M6), not by exact classes. Its y-blocks are built in T, as `rcr`
+  restate `rcr`'s private `translate` in its order of operations; keep the two in step.
+  Its tables are keyed by exact integer classes of the shifts, as `rotation`'s are (15
+  values of |d|², 49 polar angles, the azimuth per offset from (d_x, d_y)/gcd), their
+  values formed from the integers by correctly rounded square roots and quotients, so the
+  classes are the same on every machine; never key a table by a floating-point value.
+  `rcr` forms its angles with `hypot`, so the two agree to rounding: `tests/helmholtz/`
+  compares them in the FMM-weighted measure within 2e-13 times max(1, |k̂| a) (1.7e-14
+  measured on the M6). Its y-blocks are built in T, as `rcr`
   builds them per call, so that stored and per-call blocks agree; the M2L blocks are
   stored from the finest level up within a byte budget. Not cached (CH2.2).
 - Matrices are column-major with output = A · input. Every application accumulates

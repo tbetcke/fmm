@@ -1106,11 +1106,15 @@ request, using this template:
     recommended"): the degree is a rule behind a setting, and CH3.1b extracts the shared
     point pipeline of `fmm.rs`, with "minimal timing runs to check the impact" for D9.
   - `nd_fmm_tables::helmholtz` (new): `HelmholtzTables`, the per-level RCR tables. The
-    coaxial tables are `rcr::*_table`'s with the stored form's factors folded in (f64,
-    rounded to T). The M2L tables and y-blocks are keyed by the bits of the shifts' |t|
-    and polar angles as `rcr` forms them (21 and 53 on the M6). The octant blocks are
-    always stored, the M2L blocks within a byte budget (default 512 MiB). The table-driven
-    M2M, L2L and M2L take m vectors of one or two planes, with real shifts for real k.
+    coaxial tables are `rcr`'s and `CoaxialTable::m2l`'s with the stored form's factors
+    folded in (f64, rounded to T). The tables and y-blocks are keyed by exact integer
+    classes (15 distances, 49 polar angles), their values formed from the integers with
+    correctly rounded square roots: the same classes on every machine. (A first version
+    keyed them by the bits of `rcr`'s floating-point angles and distances, for
+    bit-identity with `rcr`; the user found it brittle and chose exact classes in this PR.)
+    The octant blocks are always stored, the M2L blocks within a byte budget (default
+    512 MiB). The table-driven M2M, L2L and M2L take m vectors of one or two planes, with
+    real shifts for real k.
   - `nd_fmm_exec::helmholtz::degree` (new): `Degrees` (a tolerance, or named per level) and
     `degree`, S7's closed form at Re(k) a. Levels 0 and 1 get degree 0, since nothing reads
     their expansions.
@@ -1124,19 +1128,19 @@ request, using this template:
     docs and `fmm-exec/CLAUDE.md` and `fmm-tables/CLAUDE.md` record this.
 - Tests:
   - `fmm-tables/tests/helmholtz/` (10 tests, 0.6 s in debug):
-    - M2L on all 316 offsets, bit for bit `rcr::m2l`, on three levels and five k.
-    - M2M and L2L on the 8 octants with rectangular degrees: bit for bit for complex k
-      (L2L against ½ `rcr`). The real shifts of real k are within 6.7e-14 FMM-weighted
-      (bound 1e-12).
-    - The above above the projection threshold too; stored against per-call blocks;
-      vectors; f32; the refusals, among them non-finite power factors.
+    - Against `rcr` in the FMM-weighted measure, within 2e-13 times max(1, |k̂| a)
+      (1.7e-14 measured): M2L on all 316 offsets on three levels and five k; M2M and L2L
+      on the 8 octants with rectangular degrees (L2L against ½ `rcr`); both above the
+      projection threshold too.
+    - Bit for bit: stored against per-call blocks, vectors one at a time. Also f32, the
+      class counts (15, 49) and the refusals, among them non-finite power factors.
   - `fmm-exec/tests/helmholtz/{degree, operator}.rs` (9 new tests; the binary runs in
     5.8 s in debug):
     - The closed form on S7's grid (≥ p*), and `resolve` against degrees computed by hand.
     - The chains far, v4, x, w and near against the direct sum: below ε at 10⁻⁶ and
       10⁻¹⁰, for kD = 1, 20, 100 and 20 + 2i, with real and complex charges.
     - At p = 5–8, where truncation dominates (10⁻⁵ to 10⁻¹), the same chains of
-      `nd-fmm-ref` in absolute units, within 1e-13 (about 1e-16 measured).
+      `nd-fmm-ref` in absolute units, within 2e-13 (1.2e-14 measured).
     - P2P bit for bit `p2p::p2p`; vectors bit for bit; real charges bit for bit complex
       ones with Im q = 0; sizes and errors.
   - The level calls through the drivers need MPI, so they are tested in CH3.1b.
@@ -1153,15 +1157,14 @@ request, using this template:
 - Decisions: the split and the two design choices above. Questions for sign-off (the PR):
   1. The y-blocks built in T, as `rcr` builds them, so that stored and per-call blocks
      agree. In f32 that departs from constraint 5.
-  2. The keys by bits (21 distances and 53 polar angles, not 15 and 49), for bit-identity
-     with `rcr`.
-  3. The level units (a box holds r_l φ̃) recorded in the module docs now and proposed for
+  2. The level units (a box holds r_l φ̃) recorded in the module docs now and proposed for
      CONVENTIONS §3.15 at its next revision.
-  4. Complex k's degree at Re(k) a until CH5.2.
+  3. Complex k's degree at Re(k) a until CH5.2.
+  The keys: exact integer classes, the user, 2026-11-01 ("switch to A in this PR").
 - Laplace: not touched. There is no change to `LaplaceOperator`, `driver.rs`, Laplace's
   tables, `nd-fmm-plan`, `nd-octree` or `nd-fmm-simd`; the Laplace tests and the MPI list
   pass unchanged.
 - Follow-ups:
   - CH3.1b: the FMM, with the level calls against `PerPair`.
-  - CH3.2: exact distance and angle classes if their memory matters; Dense/Batched.
+  - CH3.2: Dense, Classes and Batched.
   - CH3.4: the vectorised P2P in place of the reference.

@@ -461,8 +461,9 @@ fn sizes_and_errors() {
 /// The operator at named low degrees, where truncation dominates the error, against the
 /// same chains of `nd_fmm_ref::helmholtz` in absolute units (the trusted path: leaf
 /// operators and `rcr` with the levels of half-widths r_l, the frames at the boxes'
-/// centres): far, v4, x and w, potential and gradient, relative L2 within 1e-13 of each
-/// other (about 1e-16 on the M6) while both are 10⁻⁵ to 10⁻¹ from the direct sum.
+/// centres): far, v4, x and w, potential and gradient, relative L2 within 2e-13 of each
+/// other (1.2e-14 at most on the M6: the tables' exact-class angles and distances round
+/// apart from `rcr`'s) while both are 10⁻⁵ to 10⁻¹ from the direct sum.
 #[test]
 fn low_degree_chains_are_the_reference_chains() {
     use nd_fmm_ref::Frame;
@@ -631,7 +632,7 @@ fn low_degree_chains_are_the_reference_chains() {
                     "k = {re} + {im}i, {kind:?}, {}: against the reference φ {dp:.1e}, ∇φ {dg:.1e}; against the direct sum φ {tp:.1e}, ∇φ {tg:.1e}",
                     chain.name
                 );
-                assert!(dp <= 1e-13 && dg <= 1e-13, "{}: {dp:e}, {dg:e}", chain.name);
+                assert!(dp <= 2e-13 && dg <= 2e-13, "{}: {dp:e}, {dg:e}", chain.name);
                 assert!(
                     tp > 1e-9,
                     "{}: truncation not exercised ({tp:e})",

@@ -40,29 +40,36 @@
 //! # The stored form, folded in
 //!
 //! Each table holds per order m the full coefficient of the coaxial step from degree n to
-//! n′, as `rcr`'s module documentation ("Stored form") writes it, formed in f64 exactly as
-//! `rcr` forms it and rounded to T:
+//! n′, as `rcr`'s module documentation ("Stored form") writes it, formed in f64 as `rcr`
+//! forms it and rounded to T:
 //!
 //! ```text
 //! M2M  Ê_{n′n} · (s_c/s_P)ⁿ s_P^{n−n′}       (Ê of rcr::m2m_table)
 //! L2L  Ê_{n′n} · (s_c/s_P)^{n′} s_P^{n′−n} · ½   (Ê of rcr::l2l_table; ½ above)
-//! M2L  Ê_{n′n} · 4π ik e^{2β − Im(k)|t|}     (Ê of rcr::m2l_table)
+//! M2L  Ê_{n′n} · 4π ik e^{2β − Im(k)|t|}     (Ê of CoaxialTable::m2l at |t| = 2√|d|²)
 //! ```
 //!
 //! For real k (Im k = 0) the M2M and L2L coefficients are real (§3.1): the tables keep
 //! their real parts ([`HelmholtzTables::real_shifts`]) and apply them to each plane of an
 //! expansion, the real shifts of proposal §5.2. Everything else is complex.
 //!
-//! # Shifts and their keys
+//! # Shifts and their classes
 //!
-//! `rcr` forms the polar angles and the distance from the shift in floating point. Shifts
-//! of one geometric class (the same |d|², or the same polar angle) can round to different
-//! bits: |t| of (2, 2, 1) and (1, 2, 2) is formed by two `hypot`s in different orders. The
-//! tables are therefore keyed by the bits `rcr` would form: one M2L coaxial table per
-//! distinct |t| of the 316 shifts (at least the 15 values of |d|²), one y-block set per
-//! distinct (cos θ, sin θ), and the azimuth of each shift per offset. So every application
-//! uses exactly the angles, coaxial table and factor of `rcr` at the same shift, and in f64
-//! gives `rcr`'s bits (L2L: ½ `rcr`'s, exactly).
+//! The tables are keyed by exact integer classes of the shifts, never by floating-point
+//! values, as [`rotation`]'s are: the 316 V-list offsets d have 15 distinct |d|² (one M2L
+//! coaxial table each), 49 distinct polar angles, keyed by (sgn d_z, d_z²/|d|² as a reduced
+//! fraction), with θ = 0 and π on the axis (one y-block set each), and per offset an
+//! azimuth from (d_x, d_y) divided by their gcd. Each class's values come from its integer
+//! key alone, by correctly rounded square roots and quotients in f64 (IEEE 754), so the
+//! classes and their angles and distances are the same on every machine: |t| = 2√|d|²,
+//! cos θ = sgn(d_z) √(d_z²)/√|d|² and sin θ = √(|d|² − d_z²)/√|d|² of the reduced fraction,
+//! cos φ = a/√(a² + b²) and sin φ = b/√(a² + b²). The octant shifts ±s_o form two polar
+//! classes (cos θ = ±1/√3) and four azimuths.
+//!
+//! `rcr` forms the same angles and distances from the floating-point shift with `hypot`, so
+//! the two can differ in the last bit; shifts of one class can too (θ of (2, 2, 2) and of
+//! (3, 3, 3)). The tables therefore agree with `rcr` to rounding, not bit for bit, and the
+//! tests compare them in the FMM-weighted measure of `nd-fmm-ref`'s translation tests.
 //!
 //! # Blocks and the budget
 //!
@@ -89,7 +96,7 @@
 //! product per term (an input of one plane as Im = 0) or, for the real shifts, a real
 //! product per plane; per plane the y-block and the rotations by φ, then the addition.
 //! This crate otherwise never restates an operator formula; like [`rotation`] and
-//! [`plane_wave`], this module does, and its tests pin it to `rcr` bit for bit.
+//! [`plane_wave`], this module does, and its tests pin it to `rcr` to rounding.
 //!
 //! [`rotation`]: crate::rotation
 //! [`plane_wave`]: crate::plane_wave
@@ -119,14 +126,17 @@
 //! let table = rcr::m2l_table(p, p, &level, &from, &to);
 //! let mut expected = vec![0.0; len];
 //! rcr::m2l(p, p, &level, &from, &to, &table, &mut Workspace::new(p), &multipole, &mut expected);
-//! assert_eq!(local, expected);
+//! let largest = expected.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+//! for (a, b) in local.iter().zip(&expected) {
+//!     assert!((a - b).abs() <= 1e-14 * largest);
+//! }
 //! ```
 
+use nd_fmm_math::coaxial::CoaxialTable;
 use nd_fmm_math::orthonormal::rotation::{
     Scratch as BlockScratch, compact_blocks_len, compact_offset, y_blocks,
 };
 use nd_fmm_math::{Complex, Layout, RealScalar};
-use nd_fmm_ref::Frame;
 use nd_fmm_ref::helmholtz::{Level, rcr};
 
 use crate::geometry::{M2L_OFFSET_COUNT, OCTANT_COUNT, m2l_offsets, octant_direction};
@@ -238,41 +248,30 @@ impl<T: RealScalar> HelmholtzTables<T> {
         let nlevels = degrees.len();
         let k_hat = |l: usize| k_root * (0.5f64).powi(l as i32);
 
-        // The shifts' keys, from the floating-point shifts `rcr` forms.
+        // The shifts' classes, from their integer directions (module documentation,
+        // "Shifts and their classes"). M2M's shift of octant o is −s_o; key 0 for z > 0.
         let octants = core::array::from_fn(|o| {
-            let t = octant_direction(o).map(|s| -T::from_f64(s as f64));
-            let angles = Angles::of(t);
-            let key = usize::from(t[2] < T::zero());
-            (angles.azimuth, key)
+            let d = octant_direction(o).map(|s| -s);
+            (azimuth(d), usize::from(d[2] < 0))
         });
-        // The two polar angles of the octant shifts, key 0 for z > 0 and 1 for z < 0.
-        let octant_angles = [1.0, -1.0].map(|z| {
-            let angles = Angles::of([T::one(), T::one(), T::from_f64(z)]);
-            (angles.cos_theta, angles.sin_theta)
-        });
-        let mut m2l_angles: Vec<(T, T)> = Vec::new();
-        let mut distances: Vec<(f64, [f64; 3])> = Vec::new();
+        let octant_angles = [[1, 1, 1], [1, 1, -1]].map(|d| polar(d).1);
+        let mut m2l_angles: Vec<((i64, i64, i64), (T, T))> = Vec::new();
+        let mut distances: Vec<i64> = Vec::new();
         let offsets: Vec<OffsetKeys<T>> = m2l_offsets()
             .iter()
-            .map(|d| {
-                let t = d.map(|x| T::from_f64(2.0 * x as f64));
-                let angles = Angles::of(t);
-                let polar = (angles.cos_theta, angles.sin_theta);
-                let angle = find_or_push(&mut m2l_angles, polar, |a, b| {
-                    a.0.to_f64().to_bits() == b.0.to_f64().to_bits()
-                        && a.1.to_f64().to_bits() == b.1.to_f64().to_bits()
-                });
-                let t64 = d.map(|x| 2.0 * x as f64);
-                let distance = find_or_push(&mut distances, (norm(t64), t64), |a, b| {
-                    a.0.to_bits() == b.0.to_bits()
-                });
+            .map(|&d| {
+                let (key, value) = polar(d);
+                let angle = find_or_push(&mut m2l_angles, (key, value), |a, b| a.0 == b.0);
+                let squared = d.iter().map(|x| x * x).sum();
+                let distance = find_or_push(&mut distances, squared, |a, b| a == b);
                 OffsetKeys {
-                    azimuth: angles.azimuth,
+                    azimuth: azimuth(d),
                     angle,
                     distance,
                 }
             })
             .collect();
+        let m2l_angles: Vec<(T, T)> = m2l_angles.into_iter().map(|(_, v)| v).collect();
 
         let mut levels: Vec<LevelTables<T>> = (0..nlevels)
             .map(|l| {
@@ -304,14 +303,14 @@ impl<T: RealScalar> HelmholtzTables<T> {
                 };
                 let m2l = if l >= 2 {
                     let level = Level::new(k_hat(l), 1.0);
-                    let from = Frame::new([0.0; 3], 1.0);
+                    let (k, a, s) = (level.k(), level.circumradius(), level.scale());
+                    let beta = level.damping();
                     distances
                         .iter()
-                        .map(|&(t, centre)| {
-                            let to = Frame::new(centre, 1.0);
-                            let table = rcr::m2l_table(p, p, &level, &from, &to);
-                            let k = level.k();
-                            let beta = level.damping();
+                        .map(|&squared| {
+                            // |t| = 2 |d| in the level's units.
+                            let t = 2.0 * (squared as f64).sqrt();
+                            let table = CoaxialTable::m2l(k, t, a, s, p, p);
                             let factor = four_pi_ik(k) * (beta + beta - k.im * t).exp();
                             Shift::new(p, p, false, |m, n_out, n_in| {
                                 table.get(m, n_out, n_in) * factor
@@ -384,13 +383,13 @@ impl<T: RealScalar> HelmholtzTables<T> {
         self.real_shifts
     }
 
-    /// The number of distinct M2L distances |t| of the 316 shifts, one coaxial table each
-    /// per level (module documentation, "Shifts and their keys").
+    /// The number of M2L distance classes |d|² of the 316 offsets, 15, one coaxial table
+    /// each per level (module documentation, "Shifts and their classes").
     pub fn m2l_distances(&self) -> usize {
         self.levels.iter().map(|l| l.m2l.len()).max().unwrap_or(0)
     }
 
-    /// The number of distinct polar angles of the 316 shifts, one y-block set each.
+    /// The number of polar-angle classes of the 316 offsets, 49, one y-block set each.
     pub fn m2l_polar_angles(&self) -> usize {
         self.m2l_angles.len()
     }
@@ -707,28 +706,42 @@ enum Blocks<'a, T> {
     PerCall((T, T)),
 }
 
-/// The polar angles of a shift as `rcr` forms them: cos θ, sin θ ≥ 0, and the azimuth.
-struct Angles<T> {
-    cos_theta: T,
-    sin_theta: T,
-    azimuth: Azimuth<T>,
+/// The polar-angle class of the integer direction d and its (cos θ, sin θ), sin θ ≥ 0: the
+/// key (sgn d_z, d_z² / |d|² as a reduced fraction), the values √(d_z²) / √|d|² with d_z's
+/// sign and √(|d|² − d_z²) / √|d|² of the reduced fraction, formed in f64 (correctly rounded
+/// square roots and quotients, the same on every IEEE 754 machine) and rounded to T.
+fn polar<T: RealScalar>(d: [i64; 3]) -> ((i64, i64, i64), (T, T)) {
+    let (z2, r2) = (d[2] * d[2], d.iter().map(|x| x * x).sum::<i64>());
+    let g = gcd(z2, r2);
+    let (num, den) = (z2 / g, r2 / g);
+    let sign = d[2].signum();
+    let root = |x: i64| (x as f64).sqrt();
+    let cos = sign as f64 * (root(num) / root(den));
+    let sin = root(den - num) / root(den);
+    ((sign, num, den), (T::from_f64(cos), T::from_f64(sin)))
 }
 
-impl<T: RealScalar> Angles<T> {
-    fn of([x, y, z]: [T; 3]) -> Self {
-        let rho = x.hypot(y);
-        let r = rho.hypot(z);
-        let (cos, sin) = if rho > T::zero() {
-            (x / rho, y / rho)
-        } else {
-            (T::one(), T::zero())
+/// The azimuth of the integer direction d: with (a, b) = (d_x, d_y) divided by their gcd,
+/// cos φ = a / √(a² + b²) and sin φ = b / √(a² + b²), formed in f64 and rounded to T; φ = 0
+/// on the axis.
+fn azimuth<T: RealScalar>(d: [i64; 3]) -> Azimuth<T> {
+    let g = gcd(d[0].abs(), d[1].abs());
+    if g == 0 {
+        return Azimuth {
+            cos: T::one(),
+            sin: T::zero(),
         };
-        Self {
-            cos_theta: z / r,
-            sin_theta: rho / r,
-            azimuth: Azimuth { cos, sin },
-        }
     }
+    let (a, b) = (d[0] / g, d[1] / g);
+    let rho = ((a * a + b * b) as f64).sqrt();
+    Azimuth {
+        cos: T::from_f64(a as f64 / rho),
+        sin: T::from_f64(b as f64 / rho),
+    }
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd(b, a % b) }
 }
 
 /// The index of `value` in `values` by `same`, appended if new.
@@ -816,8 +829,4 @@ fn power_ratio(a: f64, n: usize, b: f64, n_prime: usize) -> f64 {
 fn four_pi_ik(k: Complex<f64>) -> Complex<f64> {
     let c = 4.0 * core::f64::consts::PI;
     Complex::new(-(c * k.im), c * k.re)
-}
-
-fn norm([x, y, z]: [f64; 3]) -> f64 {
-    x.hypot(y).hypot(z)
 }

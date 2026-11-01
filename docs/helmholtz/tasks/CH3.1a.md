@@ -55,9 +55,13 @@ Two crates; no Laplace file changes.
      `rcr` module docs, "Stored form"); real for real k (the real part, §3.1), complex
      otherwise. M2L on levels ≥ 2: `rcr::m2l_table` per distinct |t| of the 316 shifts
      with the factor 4π ik e^{2β − Im(k)|t|} folded in.
-   - As built: the tables are keyed by the bits of |t| and (cos θ, sin θ) as `rcr` forms
-     them (21 distances and 53 polar angles on the M6, against 15 and 49 exact classes), so
-     every application is `rcr`'s bit for bit in f64.
+   - As built: the tables are keyed by exact integer classes (|d|², 15; the polar angle by
+     (sgn d_z, d_z²/|d|²) reduced, 49; the azimuth per offset by (d_x, d_y)/gcd), their
+     values formed from the integers by correctly rounded square roots, the same on every
+     machine. (The first version keyed them by the bits of `rcr`'s floating-point angles
+     and distances, 21 and 53 on the M6, for bit-identity with `rcr`; the user found that
+     brittle and chose exact classes on 2026-11-01, "switch to A in this PR".) The M2L
+     coaxial tables come from `CoaxialTable::m2l` at |t| = 2√|d|².
    - As built (found by the chain tests): a box of level l holds r_l φ̃ in its own units,
      as a chunk does. A multipole's factor 4π ik̂_l carries the change of units, so M2M and
      M2L need none; a local has no such factor, so the L2L tables carry ½ (r_{l+1}/r_l)
@@ -113,16 +117,17 @@ bit-for-bit checks and a level-independence test; the chain tests below replace 
 low-degree one in absolute units, which also pins the change of units).
 
 `nd-fmm-tables`, `tests/helmholtz/` (new executable, 0.6 s in debug):
+- Every comparison with `rcr` is in the FMM-weighted error of `nd-fmm-ref`'s translation
+  tests, within 2e-13 times max(1, |k̂| a) of the level (the tables' and `rcr`'s angles
+  and distances round apart, and a relative change u moves the coaxial phases by about
+  |k̂| |t| u); 1.7e-14 measured on the M6.
 - M2L on all 316 offsets on levels 2–4 for five k̂₀ (real and complex, |k̂| a from about
-  0.005 to 17), two planes and for real k one plane widened by Im = 0: **bit for bit**
-  against `rcr::m2l` (`==`, so ±0 equal).
-- M2M and L2L on the 8 octants between every pair of five levels with rectangular degrees:
-  complex k bit for bit against `rcr` (L2L against ½ `rcr`, exact); the real shifts of
-  real k in the FMM-weighted error of `nd-fmm-ref`'s translation tests, within 1e-12
-  (6.7e-14 measured, from the projection's rounding-level imaginary parts).
-- Above the projection threshold (Re(k̂) a ≈ 52): M2L on every seventh offset, M2M and L2L.
+  0.005 to 17), two planes and for real k one plane widened by Im = 0.
+- M2M and L2L on the 8 octants between every pair of five levels with rectangular degrees
+  (L2L against ½ `rcr`).
+- Above the projection threshold (Re(k̂) a ≈ 52): M2L on all 316 offsets, M2M and L2L.
 - Stored and per-call blocks bit for bit (budgets 0, finest level only, default); several
-  vectors bit for bit one at a time; the key counts (≥ 15 and ≥ 49); f32 within 1e-5 of
+  vectors bit for bit one at a time; the class counts (15 and 49); f32 within 1e-5 of
   f64; Yukawa and a one-plane complex step refused.
 
 `nd-fmm-exec`, `tests/helmholtz/` (`degree.rs`, `operator.rs`; 5.7 s in debug with the
@@ -137,7 +142,7 @@ existing tests):
   real and complex charges.
 - At named low degrees (p = 5–8), where truncation dominates (10⁻⁵ to 10⁻¹ against the
   direct sum): the far, v4, x and w chains against the same chains of
-  `nd_fmm_ref::helmholtz` (`leaf`, `rcr`) in absolute units, within 1e-13 (about 1e-16).
+  `nd_fmm_ref::helmholtz` (`leaf`, `rcr`) in absolute units, within 2e-13 (1.2e-14).
 - P2P bit for bit against `nd_fmm_ref::helmholtz::p2p::p2p` on the mapped sources.
 - Vector v of three the one-vector operator bit for bit; real charges bit for bit complex
   ones with Im q = 0 (asserted within 4 ε); sizes and errors.
@@ -185,14 +190,13 @@ None blocking. For sign-off, from the PR:
    f32 this departs from constraint 5 ("tables in f64, rounded when stored") and the crate
    rule, which `fmm-tables/CLAUDE.md` now names as an exception. *Recommended*: accept,
    since f32 is reserved until H7 (D3), and revisit there.
-2. The M2L tables and blocks are keyed by the bits of |t| and (cos θ, sin θ) as `rcr` forms
-   them: 21 distances and 53 polar angles on the M6, not the 15 and 49 exact classes. That
-   costs about 40 % more M2L table memory and buys bit-identity with `rcr`.
-   *Recommended*: accept for CH3.1, and let CH3.2 measure the memory.
-3. The level units: a box of level l holds r_l φ̃ in its own units, as §3.13's chunks do.
+2. The level units: a box of level l holds r_l φ̃ in its own units, as §3.13's chunks do.
    So the L2L tables carry ½ and P2L scales its charges by r̂(t|s). This is a scaling
    convention of the stored expansions. *Recommended*: record it in the module docs now,
    and add it to CONVENTIONS §3.15 at its next revision (no version bump now; nothing on
    disk depends on it).
-4. Complex k's degree is the closed form at Re(k) a, provisionally until CH5.2.
+3. Complex k's degree is the closed form at Re(k) a, provisionally until CH5.2.
    *Recommended*: accept.
+
+The question on keys by bits was settled on 2026-11-01: exact integer classes ("switch to
+A in this PR").

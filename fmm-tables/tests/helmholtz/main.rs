@@ -4,11 +4,13 @@
 //! two planes, rectangular degrees, and above the projection threshold of CONVENTIONS
 //! §3.15; the stored and per-call blocks, several vectors and the key counts.
 //!
-//! Error measure: bit for bit (`==` per value, so a −0 equals a +0) against `rcr`, which
-//! the tables restate in its order of operations. The exception is the real shifts of
-//! real k, which keep the real parts of `rcr`'s tables: there the FMM-weighted error of the
-//! reference tests, within 1e-12 (6.7e-14 measured on the M6, the margin for other
-//! libms). The f32 test names its own.
+//! Error measure: the FMM-weighted error of `nd-fmm-ref`'s translation tests,
+//! ‖tables − rcr‖_w / ‖rcr‖_w, within [`BOUND`] times max(1, |k̂| a) of the level
+//! ([`conditioning`]). The tables take their angles and distances
+//! from exact integer classes and `rcr` from the floating-point shift, so the two agree to
+//! rounding, not bit for bit; the real shifts of real k also drop the tables' imaginary
+//! parts, which are rounding. Stored against per-call blocks and several vectors against
+//! one: bit for bit (`==` per value, so a −0 equals a +0). The f32 test names its own.
 
 use nd_fmm_math::radial::{bessel_j, hankel_h};
 use nd_fmm_math::{Complex, Layout};
@@ -59,14 +61,20 @@ const K_ROOTS: [(f64, f64); 5] = [
 ];
 
 /// M2L on every offset of `level` against `rcr` (two planes; and one widened plane where
-/// k is real, the real multipoles of real charges).
-fn check_m2l(tables: &HelmholtzTables<f64>, level: usize, offsets: impl Iterator<Item = usize>) {
+/// k is real, the real multipoles of real charges): the largest FMM-weighted error.
+fn check_m2l(
+    tables: &HelmholtzTables<f64>,
+    level: usize,
+    offsets: impl Iterator<Item = usize>,
+) -> f64 {
     let p = tables.degree(level);
     let len = Layout::new(p).len();
     let k_level = Level::new(tables.k_hat(level), 1.0);
+    let w = weights(&k_level, false, p);
     let from = Frame::new([0.0; 3], 1.0);
     let mut ws = Workspace::new(p);
     let mut scratch = tables.scratch();
+    let mut worst = 0.0f64;
     for d in offsets {
         let to = Frame::new(m2l_offsets()[d].map(|x| 2.0 * x as f64), 1.0);
         let table = rcr::m2l_table(p, p, &k_level, &from, &to);
@@ -88,13 +96,10 @@ fn check_m2l(tables: &HelmholtzTables<f64>, level: usize, offsets: impl Iterator
                 &x,
                 &mut expected,
             );
-            assert_same(
-                &got,
-                &expected,
-                &format!("M2L level {level}, d = {d}, {planes} planes"),
-            );
+            worst = worst.max(compare(&got, &expected, 0.5, &w));
         }
     }
+    worst
 }
 
 /// M2M and L2L of every octant between `level` and `level` + 1 against `rcr`, in the
@@ -138,8 +143,6 @@ fn check_shifts(tables: &HelmholtzTables<f64>, level: usize) -> f64 {
                 &expected,
                 0.25,
                 &weights(&parent_level, true, p_parent),
-                tables.real_shifts(),
-                "M2M",
             ));
 
             let x = input(p_parent, planes, 8 + o as u64);
@@ -165,32 +168,16 @@ fn check_shifts(tables: &HelmholtzTables<f64>, level: usize) -> f64 {
                 &half,
                 0.0,
                 &weights(&child_level, false, p_child),
-                tables.real_shifts(),
-                "L2L",
             ));
         }
     }
     worst
 }
 
-/// The outputs started at `initial`. Complex shifts: bit for bit. Real shifts: the
-/// FMM-weighted error of the reference tests
-/// (`nd-fmm-ref`'s `tests/helmholtz/translation_common.rs`), ‖got − rcr‖_w / ‖rcr‖_w over
-/// both planes, the one-plane result's imaginary plane taken as zero: per-entry relative
-/// accuracy is not a property of the projection's tables (`nd_fmm_math::coaxial`, "Tested
-/// ranges"), whose imaginary parts for real k are rounding, not zero.
-fn compare(
-    got: &[f64],
-    expected: &[f64],
-    initial: f64,
-    weights: &[f64],
-    real: bool,
-    what: &str,
-) -> f64 {
-    if !real {
-        assert_same(got, expected, what);
-        return 0.0;
-    }
+/// The outputs started at `initial`: the FMM-weighted error of the reference tests,
+/// ‖got − expected‖_w / ‖expected‖_w over both planes, a one-plane result's imaginary plane
+/// taken as zero (for real k `rcr`'s imaginary parts there are the tables' rounding).
+fn compare(got: &[f64], expected: &[f64], initial: f64, weights: &[f64]) -> f64 {
     let expected: Vec<f64> = expected.iter().map(|v| v - initial).collect();
     let mut got: Vec<f64> = got.iter().map(|v| v - initial).collect();
     got.resize(expected.len(), 0.0);
@@ -239,8 +226,19 @@ fn weighted_norm(weights: &[f64], c: &[f64]) -> f64 {
             .sqrt()
 }
 
+/// The bound of every comparison with `rcr`, in the FMM-weighted measure (module
+/// documentation), times [`conditioning`]: rounding, with room for other libms.
+const BOUND: f64 = 2e-13;
+
+/// max(1, |k̂| a) of `level` (a = √3 in its units): a relative change u of a shift's length
+/// or angles, which the tables and `rcr` round differently, moves the phases of the coaxial
+/// step by about |k̂| |t| u.
+fn conditioning(tables: &HelmholtzTables<f64>, level: usize) -> f64 {
+    (tables.k_hat(level).norm() * 3f64.sqrt()).max(1.0)
+}
+
 #[test]
-fn m2l_on_every_offset_is_rcr_bit_for_bit() {
+fn m2l_on_every_offset_matches_rcr() {
     for (re, im) in K_ROOTS {
         // Levels 2–4; |k̂| a from 0.05 · √3 / 16 to 40 · √3 / 4.
         let tables = HelmholtzTables::<f64>::build(
@@ -248,9 +246,13 @@ fn m2l_on_every_offset_is_rcr_bit_for_bit() {
             &[0, 0, 7, 6, 5],
             DEFAULT_BLOCK_BUDGET,
         );
-        for level in 2..5 {
-            check_m2l(&tables, level, 0..M2L_OFFSET_COUNT);
-        }
+        let worst = (2..5)
+            .map(|level| {
+                check_m2l(&tables, level, 0..M2L_OFFSET_COUNT) / conditioning(&tables, level)
+            })
+            .fold(0.0, f64::max);
+        println!("k̂₀ = {re} + {im}i: M2L against rcr, worst {worst:.2e} per unit of conditioning");
+        assert!(worst <= BOUND, "k̂₀ = {re} + {im}i: {worst:e}");
     }
 }
 
@@ -263,12 +265,13 @@ fn m2m_and_l2l_on_every_octant_match_rcr() {
             &[2, 6, 9, 4, 7],
             DEFAULT_BLOCK_BUDGET,
         );
-        let mut worst = 0.0f64;
-        for level in 0..4 {
-            worst = worst.max(check_shifts(&tables, level));
-        }
-        println!("k̂₀ = {re} + {im}i: real shifts against rcr, worst {worst:.2e} (FMM-weighted)");
-        assert!(worst <= 1e-12, "k̂₀ = {re} + {im}i: {worst:e}");
+        let worst = (0..4)
+            .map(|level| check_shifts(&tables, level) / conditioning(&tables, level))
+            .fold(0.0, f64::max);
+        println!(
+            "k̂₀ = {re} + {im}i: M2M and L2L against rcr, worst {worst:.2e} per unit of conditioning"
+        );
+        assert!(worst <= BOUND, "k̂₀ = {re} + {im}i: {worst:e}");
     }
 }
 
@@ -278,16 +281,16 @@ fn m2m_and_l2l_on_every_octant_match_rcr() {
 #[test]
 fn above_the_projection_threshold() {
     for (re, im) in [(120.0, 0.0), (120.0, 6.0)] {
-        println!("k̂₀ = {re} + {im}i above the threshold");
         let tables = HelmholtzTables::<f64>::build(
             Complex::new(re, im),
             &[0, 0, 12, 10],
             DEFAULT_BLOCK_BUDGET,
         );
-        check_m2l(&tables, 2, (0..M2L_OFFSET_COUNT).step_by(7));
-        let worst = check_shifts(&tables, 2);
-        println!("  real shifts against rcr, worst {worst:.2e} (FMM-weighted)");
-        assert!(worst <= 1e-12, "k̂₀ = {re} + {im}i: {worst:e}");
+        let c = conditioning(&tables, 2);
+        let m2l = check_m2l(&tables, 2, 0..M2L_OFFSET_COUNT) / c;
+        let shifts = check_shifts(&tables, 2) / c;
+        println!("k̂₀ = {re} + {im}i: M2L {m2l:.2e}, M2M and L2L {shifts:.2e}");
+        assert!(m2l <= BOUND && shifts <= BOUND, "k̂₀ = {re} + {im}i");
     }
 }
 
@@ -369,7 +372,7 @@ fn each_vector_is_the_one_vector_application() {
 }
 
 #[test]
-fn keys_sizes_and_shape() {
+fn classes_sizes_and_shape() {
     let tables = HelmholtzTables::<f64>::build(
         Complex::new(1.0, 0.0),
         &[0, 0, 4, 4, 4],
@@ -381,9 +384,9 @@ fn keys_sizes_and_shape() {
         tables.m2l_polar_angles(),
         tables.bytes()
     );
-    // At least the 15 values of |d|² and the 49 polar angles of the geometry.
-    assert!(tables.m2l_distances() >= 15);
-    assert!(tables.m2l_polar_angles() >= 49);
+    // The 15 values of |d|² and the 49 polar angles of the geometry, θ = 0 and π included.
+    assert_eq!(tables.m2l_distances(), 15);
+    assert_eq!(tables.m2l_polar_angles(), 49);
     assert_eq!(tables.nlevels(), 5);
     assert!(tables.real_shifts());
     assert_eq!(tables.k_hat(3), Complex::new(0.125, 0.0));
