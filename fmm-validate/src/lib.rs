@@ -65,6 +65,9 @@
 //! - [`helmholtz_accuracy`] (Helmholtz CH3.1c): the Helmholtz FMM against the sampled
 //!   direct sum on those workloads, with a rank-invariant checksum of the output for
 //!   determinism, run by the `helmholtz_accuracy` example on any number of ranks.
+//! - [`helmholtz_fmm3d`] (Helmholtz CH3.6): FMM3D's `hfmm3d` beside it, through the files
+//!   of `tools/fmm3d/driver.f90`: both codes against the same sampled direct sum, and the
+//!   full-target crosscheck with its errors per box; run by the `helmholtz_fmm3d` example.
 //! - [`scaling`] (Phase 5 T10, C5.3): the distributed host FMM on any number of ranks,
 //!   per rank and reduced over the ranks: the work, the build by part, the evaluation
 //!   stage by stage with the load imbalance, the traffic per exchange, the memory per
@@ -109,6 +112,7 @@ pub mod device_fmm;
 pub mod fmm_accuracy;
 pub mod helmholtz_accuracy;
 pub mod helmholtz_calibration;
+pub mod helmholtz_fmm3d;
 pub mod helmholtz_workloads;
 pub mod metrics;
 #[cfg(feature = "gpu")]

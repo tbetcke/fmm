@@ -44,6 +44,18 @@
 #             against ours at that p (`--compare`); one file per problem,
 #             crosscheck-<dist>-n<N>.txt; the full outputs (256 MB each at N = 10^6) are
 #             removed at the end unless CROSS_KEEP is set
+#   helmholtz  Helmholtz CH3.6 (docs/helmholtz/tasks/CH3.6.md): our Helmholtz FMM and
+#             FMM3D's hfmm3d on every case of H_CASES (<workload>@<kD>, the workloads of
+#             nd-fmm-validate's helmholtz_fmm3d example): its problem file
+#             (`helmholtz_fmm3d problem`, into PROBLEMS), then for every variant the
+#             driver's `helmholtz` mode on CORES threads at every eps of H_EPS with FULL = 1
+#             (the first variant also at H_REFERENCE, the crosscheck's reference), then
+#             `helmholtz_fmm3d compare` under mpirun at H_SPLIT (ranks x threads): both
+#             codes against the same sampled direct sum, the full-target crosscheck; per
+#             case helmholtz-<case>.md (the table), helmholtz-<case>.log (our levels) and
+#             h/<case>-<variant>.log (the driver); the cases of H_T1_CASES again on one
+#             thread for both codes, without the crosscheck (helmholtz-<case>-t1.md); the
+#             full outputs are removed unless H_KEEP is set
 #
 # Every launch's file starts with the command, the machine (CPU, the variant's
 # build-info.txt) and, under Slurm, the job, or elsewhere the load before; macOS waits for
@@ -78,6 +90,13 @@
 #               t9-fmm3d sweep does with ONLY; the M6 (24 GB) does the same
 #   TIMEOUT     seconds per launch (default 7200)
 #   QUIET       macOS only: the CPU percentage others may use before a launch (200)
+#   H_CASES     the cases of `helmholtz` (default the gate of CH3.6: W1 at kD = 10, 30,
+#               100, 500; W3 resolved at 10, 30, 100; the four W4 distributions at
+#               N = 10^5 and kD = 1, 10, 100); H_T1_CASES (default "w1@100")
+#   H_EPS       the tolerances of both codes (default "1e-3,1e-6,1e-8"); H_REFERENCE
+#               FMM3D's eps of the crosscheck's reference (default 1e-12)
+#   H_SPLIT     ours: ranks x threads (default 4x10 under Slurm, T9's split, else 1xCORES)
+#   H_P2P       ours: the P2P kernel (default auto)
 #   DRY_RUN     if set, print the commands only
 
 set -eu
@@ -112,6 +131,15 @@ SWEEP_VEC=${SWEEP_VEC:-1}
 CALLS=${CALLS:-8}
 LARGE_CALLS=${LARGE_CALLS:-$CALLS}
 VEC_SKIP=${VEC_SKIP:-}
+w4cases=
+for dist in cube sphere plummer clusters; do
+    for kd in 1 10 100; do w4cases="$w4cases w4-$dist:100000@$kd"; done
+done
+H_CASES=${H_CASES:-"w1@10 w1@30 w1@100 w1@500 w3@10 w3@30 w3@100$w4cases"}
+H_T1_CASES=${H_T1_CASES-"w1@100"}
+H_EPS=${H_EPS:-"1e-3,1e-6,1e-8"}
+H_REFERENCE=${H_REFERENCE:-1e-12}
+H_P2P=${H_P2P:-auto}
 TIMEOUT=${TIMEOUT:-7200}
 QUIET=${QUIET:-200}
 case "$(uname -s)" in
@@ -125,6 +153,7 @@ Darwin)
     if [ -n "${SLURM_JOB_ID:-}" ]; then os=slurm CORES=${CORES:-40}; else os=linux CORES=${CORES:-72}; fi
     ;;
 esac
+if [ "$os" = slurm ]; then H_SPLIT=${H_SPLIT:-4x10}; else H_SPLIT=${H_SPLIT:-1x$CORES}; fi
 if [ -z "${VARIANTS:-}" ]; then
     VARIANTS=
     for v in default fastker; do
@@ -132,12 +161,16 @@ if [ -z "${VARIANTS:-}" ]; then
     done
 fi
 bench=${CARGO_TARGET_DIR:-target}/release/nd-fmm-bench
+hexe=${CARGO_TARGET_DIR:-target}/release/examples/helmholtz_fmm3d
 export OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 BLIS_NUM_THREADS=1 GOTO_NUM_THREADS=1
 export VECLIB_MAXIMUM_THREADS=1
 
 if [ -z "${DRY_RUN:-}" ]; then
     mkdir -p "$OUT" "$PROBLEMS"
     cargo build --release -p nd-fmm-bench
+    case " $* " in
+    *" helmholtz "*) cargo build --release -p nd-fmm-validate --example helmholtz_fmm3d ;;
+    esac
 fi
 
 # timeout(1) is GNU's; macOS has it from Homebrew's coreutils, or not at all.
@@ -290,6 +323,63 @@ match() {
     cat "$MATCHED"
 }
 
+# helmholtz_case <case> <ranks x threads> <FMM3D threads> <suffix> <reference: 1 or 0>:
+# one case of the `helmholtz` step.
+helmholtz_case() {
+    workload=${1%@*} kd=${1#*@} split=$2 fthreads=$3 suffix=$4 withref=$5
+    name=$(echo "$workload" | sed 's/:/-n/')-kd$kd$suffix
+    ranks=${split%x*} threads=${split#*x}
+    prob=$PROBLEMS/h-$(echo "$workload" | sed 's/:/-n/')-kd$kd.bin
+    mkdir -p "$OUT/h"
+    if [ -n "${DRY_RUN:-}" ]; then
+        echo "helmholtz $name: $prob, ours $ranks x $threads, FMM3D on $fthreads threads"
+        return
+    fi
+    if [ ! -f "$prob" ]; then
+        "$hexe" problem --workload "$workload" --kd "$kd" --out "$prob" |
+            tee -a "$OUT/problems.txt"
+    fi
+    labels= first=1
+    for variant in $VARIANTS; do
+        tokens=$H_EPS
+        if [ "$first" = 1 ] && [ "$withref" = 1 ]; then tokens="$H_EPS,$H_REFERENCE"; fi
+        pre=$OUT/h/$name-$variant
+        driver=$FMM3D_ROOT/$variant/bin/fmm3d_driver
+        command="OMP_NUM_THREADS=$fthreads $limit $driver helmholtz $prob $pre $kd 0 $tokens 1 1"
+        echo "[$(date '+%H:%M:%S')] $name: $command"
+        header "$pre.log" "$variant" "$command"
+        # shellcheck disable=SC2086 # $limit is a command and its argument, or empty
+        OMP_NUM_THREADS=$fthreads $limit "$driver" helmholtz "$prob" "$pre" "$kd" 0 "$tokens" 1 1 \
+            >>"$pre.log" 2>&1 || echo "FAILED: FMM3D $variant" | tee -a "$pre.log"
+        labels="$labels,$variant=$pre"
+        first=0
+    done
+    if [ "$os" = macos ]; then
+        flags="--mca btl_tcp_if_include lo0 --mca oob_tcp_if_include lo0 --bind-to none \
+--host localhost:$CORES --map-by slot"
+    elif [ "$os" = slurm ] && [ $((ranks % 2)) -eq 0 ]; then
+        flags="--report-bindings --map-by ppr:$((ranks / 2)):socket:PE=$threads --bind-to core"
+    else
+        flags="--report-bindings --map-by slot:PE=$threads --bind-to core"
+    fi
+    ref=
+    if [ "$withref" = 1 ]; then ref="--reference $H_REFERENCE"; fi
+    file=$OUT/helmholtz-$name.md
+    command="$limit mpirun $flags -n $ranks $hexe compare --workload $workload --kd $kd \
+--eps $H_EPS --fmm3d ${labels#,} $ref --problem $prob --threads $threads --p2p $H_P2P"
+    echo "[$(date '+%H:%M:%S')] $name: $command"
+    header "$OUT/helmholtz-$name.log" "${VARIANTS%% *}" "$command"
+    # shellcheck disable=SC2086 # the flags and $ref are words, $limit a command or empty
+    $limit mpirun $flags -n "$ranks" "$hexe" compare --workload "$workload" --kd "$kd" \
+        --eps "$H_EPS" --fmm3d "${labels#,}" $ref --problem "$prob" --threads "$threads" \
+        --p2p "$H_P2P" >"$file" 2>>"$OUT/helmholtz-$name.log" ||
+        echo "FAILED: ours (exit $?)" | tee -a "$file"
+    if [ "$os" != slurm ]; then
+        echo "load after ($(date '+%Y-%m-%d %H:%M:%S')): $(uptime)" >>"$OUT/helmholtz-$name.log"
+    fi
+    if [ -z "${H_KEEP:-}" ]; then rm -f "$OUT/h/$name"-*.full.out; fi
+}
+
 for step in "$@"; do
     case "$step" in
     problems)
@@ -401,8 +491,12 @@ for step in "$@"; do
             done
         done
         ;;
+    helmholtz)
+        for c in $H_CASES; do helmholtz_case "$c" "$H_SPLIT" "$CORES" "" 1; done
+        for c in $H_T1_CASES; do helmholtz_case "$c" 1x1 1 -t1 0; done
+        ;;
     *)
-        echo "run.sh: unknown step $step (problems, sweep, match, time or crosscheck)" >&2
+        echo "run.sh: unknown step $step (problems, sweep, match, time, crosscheck or helmholtz)" >&2
         exit 2
         ;;
     esac
