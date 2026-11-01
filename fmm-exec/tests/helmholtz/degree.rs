@@ -120,9 +120,22 @@ fn the_closed_form_at_s7_grid_points() {
 }
 
 /// The largest measured degree at ε/2 per ε (10⁻³ … 10⁻⁸) at the levels' x of CH3.3's
-/// scans (`fmm-validate/results/helmholtz-ch3-3.md`): (x, [p per ε]), the plateau first at
-/// x = 0 (the envelope of the plateau and low-x level scans, x ≤ 4).
-const MEASURED: [(f64, [usize; 6]); 1] = [(0.0, [7, 9, 12, 15, 20, 24])];
+/// scans (`fmm-validate/results/helmholtz-ch3-3.md` §2 and §3): (x, [p per ε]); the plateau
+/// scans' envelope at their largest x, then the level scans.
+const MEASURED: [(f64, [usize; 6]); 12] = [
+    (2.1651, [6, 9, 12, 15, 20, 24]),
+    (1.6238, [6, 8, 11, 14, 18, 22]),
+    (2.7063, [7, 8, 11, 14, 17, 20]),
+    (3.2474, [7, 9, 11, 14, 17, 22]),
+    (5.4127, [10, 11, 13, 15, 18, 21]),
+    (6.4948, [10, 12, 14, 16, 19, 22]),
+    (6.7862, [8, 10, 11, 13, 14, 16]),
+    (10.8253, [15, 17, 19, 21, 23, 24]),
+    (13.5725, [13, 16, 18, 20, 22, 24]),
+    (21.6507, [26, 28, 31, 33, 35, 37]),
+    (43.3018, [47, 51, 54, 57, 60, 62]),
+    (64.9528, [69, 73, 77, 80, 83, 86]),
+];
 
 #[test]
 fn the_calibrated_rule_covers_the_measured_degrees() {

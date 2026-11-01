@@ -30,8 +30,9 @@
 //! Options of the scans: `--workload w` (as `helmholtz_accuracy`: `w1`, `w2`, `w3`,
 //! `w3:<n>`, `w4-<distribution>:<n>`), `--kd x,…`, `--kim y`, `--eps e,…` (default
 //! 1e-3,…,1e-8 by decades), `--scan plateau|levels`, `--first p`, `--max-degree p`
-//! (default 80), `--min-x x`, `--level l`, `--hold-eps e`, `--hold γ,α,β,C`, `--samples n`, `--threads t` (default 1),
-//! `--charges real|complex`. Run in release mode with one BLAS thread:
+//! (default S7's degree at the scanned x and the smallest ε, plus 8: S7's per-pair worst
+//! case bounds the full FMM's), `--min-x x`, `--level l`, `--hold-eps e`, `--hold γ,α,β,C`,
+//! `--samples n`, `--threads t` (default 1), `--charges real|complex`. Run in release mode with one BLAS thread:
 //!
 //! ```text
 //! OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
@@ -73,7 +74,7 @@ struct Arguments {
     epsilons: Vec<f64>,
     scan: Scan,
     first: Option<usize>,
-    max_degree: usize,
+    max_degree: Option<usize>,
     min_x: f64,
     level: Option<usize>,
     hold_epsilon: Option<f64>,
@@ -124,7 +125,7 @@ fn arguments(args: &[String]) -> Arguments {
         epsilons: (3..=8).map(|d| 10f64.powi(-d)).collect(),
         scan: Scan::Plateau,
         first: None,
-        max_degree: 80,
+        max_degree: None,
         min_x: 0.0,
         level: None,
         hold_epsilon: None,
@@ -152,7 +153,7 @@ fn arguments(args: &[String]) -> Arguments {
             .is_some(),
             "--first" => value.parse().map(|v| parsed.first = Some(v)).is_ok(),
             "--level" => value.parse().map(|v| parsed.level = Some(v)).is_ok(),
-            "--max-degree" => value.parse().map(|v| parsed.max_degree = v).is_ok(),
+            "--max-degree" => value.parse().map(|v| parsed.max_degree = Some(v)).is_ok(),
             "--min-x" => value.parse().map(|v| parsed.min_x = v).is_ok(),
             "--hold-eps" => value.parse().map(|v| parsed.hold_epsilon = Some(v)).is_ok(),
             "--hold" => match list::<f64>(value).as_deref() {
@@ -401,8 +402,11 @@ fn scans(arguments: &Arguments) {
                 println!("| p | φ | ∇φ | evaluate s |");
                 println!("| ---: | ---: | ---: | ---: |");
             }
+            let max_degree = arguments
+                .max_degree
+                .unwrap_or_else(|| s7_degree(&k, a, smallest) + 8);
             let mut curve = Curve::new(start);
-            while !curve.reached(goal) && curve.next_degree() <= arguments.max_degree {
+            while !curve.reached(goal) && curve.next_degree() <= max_degree {
                 let p = curve.next_degree();
                 let row = probe(degrees(p), &mut case);
                 let all = *row.errors.last().expect("an entry over all vectors");
