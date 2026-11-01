@@ -5,7 +5,9 @@ and a versioned on-disk cache. The tables are M2M and L2L for the 8 child octant
 for the 316 V-list offsets and their 16 symmetry classes, and the rotation and coaxial
 tables of point-and-shoot translation.
 Phase and components: Phase 2, C2.1–C2.4 (tasks T1 and T3–T7 in docs/phase2/); Phase 6
-C6.5 (task T13: `plane_wave`, the tables of plane-wave M2L, CONVENTIONS §3.14).
+C6.5 (task T13: `plane_wave`, the tables of plane-wave M2L, CONVENTIONS §3.14);
+Helmholtz CH3.1a (`helmholtz`, the per-level RCR tables of the Helmholtz family,
+CONVENTIONS §3.15).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -27,6 +29,17 @@ C6.5 (task T13: `plane_wave`, the tables of plane-wave M2L, CONVENTIONS §3.14).
   with `mul_add`; keep the two in step. The other steps round products and sums apart: an
   x86_64 build without `fma` turns `mul_add` into a library call. The plane-wave tables
   are not cached (milliseconds to build).
+- The second exception, `helmholtz` (Helmholtz CH3.1a; its module docs): the coaxial
+  tables come from `nd_fmm_ref::helmholtz::rcr::{m2m_table, l2l_table, m2l_table}`, but
+  the stored form's factors folded into them and the three steps of the application
+  restate `rcr`'s private `translate` in its order of operations, so that every
+  application in f64 is `rcr`'s bit for bit at the same frames (`tests/helmholtz/`), but
+  for the real shifts of real k, which keep the tables' real parts (the FMM-weighted
+  error, within 1e-12). Keep the two in step. Its tables are keyed by the bits of the
+  shifts' |t| and polar angles as `rcr` forms them (21 distances and 53 polar angles over
+  the 316 offsets on the M6), not by exact classes. Its y-blocks are built in T, as `rcr`
+  builds them per call, so that stored and per-call blocks agree; the M2L blocks are
+  stored from the finest level up within a byte budget. Not cached (CH2.2).
 - Matrices are column-major with output = A · input. Every application accumulates
   (+=), and none applies 1/(4π) (§3.1).
 - Builds are serial and deterministic: the same inputs give bit-identical tables and
