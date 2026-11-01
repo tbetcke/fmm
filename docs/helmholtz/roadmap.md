@@ -407,7 +407,8 @@ at any kD.
   *Machines:* locust, Kathleen. Split on 2026-11-01 into three sub-tasks, each one
   reviewable PR, as CH2.4 split the exponential from the kernel; CH3.4 is done, and CH3.6
   runnable on its side, when all three are:
-- [ ] **CH3.4a The vectorised sine and cosine.** `nd_fmm_simd::sincos` (`sincos_slice`),
+- [x] **CH3.4a The vectorised sine and cosine.** Record: `docs/helmholtz/tasks/CH3.4a.md`;
+  design `docs/design/simd-p2p.md` §4.11. `nd_fmm_simd::sincos` (`sincos_slice`),
   `arch::sincos`: sin θ and cos θ together, reduction by π (Cody–Waite, two parts as
   built) and Taylor polynomials, the sign of (−1)ⁿ by exact arithmetic, f32 and f64, every
   ISA. *Done when:* both within 4 u_T absolute for |θ| ≤ 2¹⁰ (above 22 c_leaf for any c_leaf

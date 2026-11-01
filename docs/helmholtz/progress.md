@@ -1262,3 +1262,41 @@ request, using this template:
   - CH3.4 and CH3.2: the cost (reference P2P, RCR at p = 34–46: 5.7–8 times 10⁻³'s time at
     10⁻⁶).
   - CH3.6: the harness's oracle and norms for the FMM3D comparison.
+
+## 2026-11-01: CH3.4a The vectorised sine and cosine
+- Done:
+  - CH3.4 split into CH3.4a (this), CH3.4b (the Helmholtz P2P on the skeleton) and CH3.4c
+    (the operator's P2P); the user, "Split a/b/c", and the plan, "Proceed as planned".
+  - `arch::sincos` (new): sin θ and cos θ from one reduction by π (n by the shifter,
+    t = θ − n π₁ exact by Sterbenz, − n π₂ rounded once; two parts, not the planned
+    three), Taylor polynomials in t² (f64 to t²¹ and t²⁰, f32 to t¹³ and t¹²) and the sign
+    (−1)ⁿ = 1 − 2b² formed exactly. Only the existing layer operations, so every ISA gives
+    the scalar layer's bits; no layer method added. 25 (f32) and 33 (f64) operations.
+  - `sincos::sincos_slice` (public), entry points per ISA, `Sealed::{SINCOS,
+    sincos_slice}`; design `docs/design/simd-p2p.md` §4.11 with the derivation (2.7 u
+    sine, 3.4 u cosine, first order; `fmm-simd/tools/sincos_bound.py`);
+    `fmm-simd/CLAUDE.md`. Record: `docs/helmholtz/tasks/CH3.4a.md`.
+- Tests: `fmm-simd/tests/sincos/` (11, plus 2 ignored release tests): the 4 u_T absolute
+  contract on |θ| ≤ 2¹⁰, f32 over every float of [0, 2¹⁰] and its negation (1.886 u sine,
+  2.566 u cosine), f64 on 10⁷ samples against double-double (1.890 u, 2.396 u), the
+  reduction's boundaries and the multiples of π; odd and even bit for bit for θ ≠ 0;
+  every ISA the scalar ISA bit for bit; lane and length independence; the oracle against
+  80-digit values and libm; panics.
+- Checks: `/verify` on the M6: format; Clippy default, examples, workspace all-targets and
+  `nd-fmm-simd` native and x86_64; `cargo test` (1,080) and `--workspace` (1,161);
+  `cargo doc` (and `-D warnings` on `nd-fmm-simd`, private items); `nd-fmm-simd`'s tests
+  and ignored release tests. Kathleen job 617308 (`check.sbatch simd`, node-c11a-094):
+  passed, the same maxima on scalar, AVX2 and AVX-512. The inlining check: no call; NEON
+  45/61, AVX2 42/58, AVX-512 37/45 instructions. A self-review by a subagent: no defect;
+  its points taken. Not run: the MPI list (no existing function changed); the licence
+  check (no manifest changed).
+- Decisions: the split and the plan, as above. Question for sign-off (the PR): 1. sin(±0)
+  = +0 (the sine's last step adds a +0 correction to t = −0), the symmetry bit for bit for
+  θ ≠ 0, against the plan's "sin ±0 with its sign".
+- Laplace: unchanged in code. Every existing function of `nd-fmm-simd` identical to
+  `main`'s instruction for instruction in the release rlibs of aarch64 and x86_64, macOS
+  and Linux, at the default settings and with one codegen unit (8 builds); so no D9 run.
+- Follow-ups:
+  - CH3.4b: the Helmholtz P2P on the skeleton, e^{iθ} by this sine and cosine and
+    e^{−Im(k) r} by CH2.4a's exponential; its contract over Re(k) r ≤ 22 c_leaf.
+  - CH3.4c: the operator's P2P.
