@@ -826,8 +826,9 @@ OP accumulators per target vector; the blocks, tails, loads, broadcast, d, r² a
 unchanged. Laplace and Yukawa are the case QP = OP = 1. For that case the skeleton keeps the
 expressions of CH2.4b's one-plane skeleton where LLVM did not fold the general ones to the
 same code (the padded tail and the block ranges; report `fmm-validate/results/helmholtz-ch3-4b.md`
-§2): NEON and AVX2 then give `main`'s code for every existing function, instruction for
-instruction, at the default settings; AVX-512's two Laplace gradient entry points keep their
+§2): NEON and AVX2 then give `main`'s code for every Laplace function, instruction for
+instruction, at the default settings (and for every other existing function but NEON's
+Yukawa f32 gradient entry point on macOS, whose source loop exchanges two registers); AVX-512's two Laplace gradient entry points keep their
 source loops' instructions (registers renamed) but not the block loop's control (D9, report §3).
 
 **Arithmetic per pair and lane**, a = Re q, b = Im q, θ = Re(k) r, f = 1 + Im(k) r:
@@ -914,14 +915,14 @@ equals the reference bit for bit.
 **Cost per pair** (report §5; one thread, the W1 cells, geometric means): with complex
 charges at real k the kernel takes 3.9–5.9× Laplace's time per pair and 1.5–1.6× Yukawa's on
 the M6, 4.5–5.7× and 1.4–1.7× on locust's Neoverse-V2, 3.8–5.3× and 1.4–1.6× on Kathleen's
-AVX-512 (AVX2 3.6–4.9× and 1.2–1.5×); real charges save 2–13 %, damping costs 1.2–1.5×. It is
+AVX-512 (AVX2 3.6–4.9× and 1.2–1.5×); real charges save 0–13 %, damping costs 1.2–1.5×. It is
 2.3–5.3× (M6), 1.7–2.1× (locust) and 8.5–11.9× (AVX-512; green-kernels runs AVX2 there)
 faster than green-kernels' Helmholtz.
 
 **Inner loops** (the inlining check, K = 1; the source loop of the whole blocks, then the
 padded tail's), f32 φ, f32 φ and ∇φ, f64 φ, f64 φ and ∇φ, real charges at real k:
 NEON 59/59, 88/81, 108/81, 109/100; AVX2 76/70, 106/106, 102/94, 129/133; AVX-512 55/53,
-73/70, 72/65, 84/81. Complex charges add 3–5 instructions, damping 20–60 (report §5.3 lists
+73/70, 72/65, 84/81. Complex charges change them by −5 to +5 instructions, damping adds 18–60 (report §5.3 lists
 every entry point). None contains a call.
 
 ## 5. The crate `nd-fmm-simd`

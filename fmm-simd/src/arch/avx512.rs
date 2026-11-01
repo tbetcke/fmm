@@ -630,8 +630,10 @@ p2p_yukawa_entries!(p2p_yukawa_f64, p2p_yukawa_f64_gradient, f64);
 /// Target vectors per block of the Helmholtz P2P (`arch::p2p::p2p_skeleton` with
 /// `arch::p2p::Helmholtz`; Helmholtz CH3.4b), both precisions, every charge kind and damping,
 /// potential only and with gradients: one, as `YUKAWA_K` (the sine and cosine's and the
-/// exponential's constants take most of the registers), measured on Kathleen against two (Helmholtz CH3.4b, `spikes/p2p-simd`'s `helmholtz`;
-/// the report `fmm-validate/results/helmholtz-ch3-4b.md`).
+/// exponential's constants take most of the registers), measured on Kathleen against two
+/// (Helmholtz CH3.4b, `spikes/p2p-simd`'s `helmholtz`; the report
+/// `fmm-validate/results/helmholtz-ch3-4b.md` §5.3): two give 0.97–1.00 of one's pairs per
+/// second (geometric means).
 pub(crate) const HELMHOLTZ_K: usize = 1;
 
 /// Generates the Helmholtz P2P entry points of one precision, charge planes (`$qp`: 1 real,

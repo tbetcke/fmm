@@ -130,7 +130,8 @@ All on every ISA the machine offers (`common::kernels`, printing those it cannot
   [10⁻⁶, 2¹⁰] plus 0, Im(k) r log-uniform in [10⁻⁶, 64 or 512] plus 0 (undamped), real and
   complex charges with |q| in [2⁻²⁰, 1] and uniform argument: within the contract; 4,096
   pairs per (precision, charges, damping) in debug, 10⁶ in an ignored release test that
-  prints the maxima by |k| r decade.
+  prints the maxima by |k| r decade. (As built: 4,096 and 10⁶ pairs per precision, the
+  charge kinds, outputs, dampings and Re k = 0 cycling through them; the sums also at k = i.)
 - **Sums**: against `direct_sum` on random sets to 4,096 sources and FMM-shaped sets,
   k ∈ {0.1, 1, 10, 1 + 0.5i, 10 + i} (leaf units): within 1e-14 (f64) and 1e-6 (f32)
   relative to Σ |q| e^{−Im(k) r}/r (Σ |q| (1 + |k| r) e^{−Im(k) r}/r² per gradient
@@ -218,8 +219,10 @@ All on every ISA the machine offers (`common::kernels`, printing those it cannot
   with stride n, `[[T; MAX_LANES]; OP]` tails), the skeleton gave Laplace's source loops
   unchanged but moved stack slots, a bounds check and the tail's copies in every P2P entry
   point. Keeping, for one plane, CH2.4b's tail statements and `sub_block`'s range (`if OP ==
-  1`, compile-time) made every function on NEON and AVX2 `main`'s instruction for
-  instruction at the default settings, on macOS and Linux. Left: AVX-512's two Laplace
+  1`, compile-time) made every Laplace function on NEON and AVX2 `main`'s instruction for
+  instruction at the default settings, on macOS and Linux, and every other one but NEON's
+  `p2p_yukawa_f32_gradient` on macOS (two gradient accumulators exchange registers in its
+  source loop). Left: AVX-512's two Laplace
   gradient entry points (`p2p_f32_gradient`, `p2p_f64_gradient`, K = 2), whose source loops
   are `main`'s up to register names but whose block loop is controlled differently (several
   other formulations tried made it worse, not better). So D9 ran where the code changed:
@@ -232,7 +235,7 @@ All on every ISA the machine offers (`common::kernels`, printing those it cannot
   ρ³ ≤ 2¹²⁶ at k = 0.
 - **K = 1.** On the M6, K = 2 is up to 1.19× slower with gradients and equal without.
 - **The contract** (design §4.12): (32 + 12 |k| r) u_T and (66 + 12 |k| r) u_T; measured at
-  most 10u at small |k| r and 9.4u per unit of |k| r over 10⁶ pairs on NEON (M6), AVX2 and
+  most 10.3u at small |k| r and 9.4u per unit of |k| r over 10⁶ pairs on NEON (M6), AVX2 and
   AVX-512 (Kathleen job 617314).
 - **Tooling.** zsh does not word-split `$c` in loops (memory); the Helmholtz entry points are
   crate-private, so a release rlib's symbols carry ` (.llvm.N)` (the linked test binary has

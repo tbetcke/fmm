@@ -4,8 +4,10 @@
 //!
 //! Error measures:
 //! - *Terms*: one source and one target with r² log-uniform over the kernel domain (f32
-//!   gradients from 2⁻⁸⁴ with (1 + |k| r)/r³ ≤ 2¹²⁶, Laplace's range at k = 0), Re(k) r log-uniform in [10⁻⁶, [`RE_KR_MAX`]] (and
-//!   Re k = 0 for every sixteenth pair), Im k = 0 for a third of the pairs and Im(k) r
+//!   gradients from 2⁻⁸⁴ with (1 + |k| r)/r³ ≤ 2¹²⁶, Laplace's range at k = 0), the
+//!   potential alone and with gradients, real and complex charges, alternating; Re(k) r
+//!   log-uniform in [10⁻⁶, [`RE_KR_MAX`]] (and Re k = 0 for every sixteenth group of four
+//!   pairs, so with each output and charge kind), Im k = 0 for a third of the pairs and Im(k) r
 //!   log-uniform in [10⁻⁶, [`Contract::IM_KR_MAX`]] otherwise, |q| log-uniform in [2⁻²⁰, 1]
 //!   with a random sign (real charges) or argument (complex): each part of the potential
 //!   against the reference's term in the same precision relative to |q| e^{−Im(k) r}/r, each
@@ -238,7 +240,7 @@ fn pair<T: Contract>(
             continue;
         }
         let r = r2.sqrt();
-        let re_k = if i.is_multiple_of(16) {
+        let re_k = if (i / 4).is_multiple_of(16) {
             T::zero()
         } else {
             T::from_f64(rng.uniform(1e-6f64.ln(), RE_KR_MAX.ln()).exp() / r)
@@ -581,10 +583,18 @@ fn sum_problems<T: Precision>(max_sources: usize) -> Vec<(String, HProblem<T>)> 
 }
 
 /// The wavenumbers of the sum tests, in the units of the points ([−1, 1)³, a leaf of
-/// width 2): real, and complex with Im k > 0.
-fn sum_wavenumbers<T: Precision>() -> [Complex<T>; 5] {
-    [(0.1, 0.0), (1.0, 0.0), (10.0, 0.0), (1.0, 0.5), (10.0, 1.0)]
-        .map(|(re, im)| Complex::new(T::from_f64(re), T::from_f64(im)))
+/// width 2): real, complex with Im k > 0, and imaginary (Yukawa's k = iκ, here with complex
+/// charges too).
+fn sum_wavenumbers<T: Precision>() -> [Complex<T>; 6] {
+    [
+        (0.1, 0.0),
+        (1.0, 0.0),
+        (10.0, 0.0),
+        (1.0, 0.5),
+        (10.0, 1.0),
+        (0.0, 1.0),
+    ]
+    .map(|(re, im)| Complex::new(T::from_f64(re), T::from_f64(im)))
 }
 
 fn sums<T: Precision>(test: &str, max_sources: usize) {

@@ -1336,9 +1336,10 @@ request, using this template:
 - Decisions: the three above. Questions for sign-off (report §7): 1. the contract with the
   f32 gradient range (1 + |k| r)/r³ ≤ 2¹²⁶; 2. constraint 1 as met; 3. the panic for
   Re k < 0.
-- Laplace: `nd-fmm-simd`'s skeleton changed (constraint 1). Every function on NEON and AVX2
-  `main`'s instruction for instruction at the default settings (aarch64 and x86_64, macOS and
-  Linux); AVX-512's `p2p_f32_gradient` and `p2p_f64_gradient` keep `main`'s source loops up to
+- Laplace: `nd-fmm-simd`'s skeleton changed (constraint 1). Every Laplace function on NEON
+  and AVX2 `main`'s instruction for instruction at the default settings (aarch64 and x86_64,
+  macOS and Linux), every other one too but NEON's `p2p_yukawa_f32_gradient` on macOS (two
+  accumulators exchange registers in its source loop); AVX-512's `p2p_f32_gradient` and `p2p_f64_gradient` keep `main`'s source loops up to
   register names but control the block loop differently: D9 on Kathleen (job 617315,
   node-c11b-015, `p2p_kernels --isa avx512` and the FMM at p = 3, A B B A A B B A A B) 14 of
   14 rows within noise, outputs equal. With one codegen unit NEON's `merge` differs (not in

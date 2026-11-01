@@ -2,9 +2,9 @@
 
 use std::marker::PhantomData;
 
-use crate::arch::AvailableIsa;
 use nd_fmm_math::Complex;
 
+use crate::arch::AvailableIsa;
 use crate::{Isa, IsaUnavailable, SimdScalar};
 
 /// A P2P kernel bound to one available [`Isa`].

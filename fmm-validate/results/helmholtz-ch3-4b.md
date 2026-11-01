@@ -19,9 +19,11 @@ Machines:
   then the imaginary part), on every ISA in both precisions. The scalar ISA is the
   reference's loop, bit for bit.
 - **The skeleton has planes.** `PairKernel<T, S, QP, OP>`: QP charge planes and OP output
-  planes, compile-time; Laplace and Yukawa are QP = OP = 1. Every function of the crate on
-  NEON and AVX2 is `main`'s instruction for instruction at the default settings (macOS and
-  Linux). AVX-512's two Laplace gradient entry points keep their source loops (registers
+  planes, compile-time; Laplace and Yukawa are QP = OP = 1. Every Laplace function on NEON
+  and AVX2 is `main`'s instruction for instruction at the default settings (macOS and
+  Linux), and so is every other existing function but one: NEON's Yukawa
+  `p2p_yukawa_f32_gradient` in the default macOS build, whose source loop exchanges the
+  registers of two gradient accumulators (v3, v4; the same instructions). AVX-512's two Laplace gradient entry points keep their source loops (registers
   renamed) but not the block loop's control; D9 on Kathleen: 14 of 14 rows within noise,
   outputs equal (§2, §3).
 - **With real charges** the real plane at k = 0 is `evaluate`'s and at k = iκ
@@ -74,7 +76,11 @@ targets and Mach-O literal comments normalised), compared function by function:
   padded tails), the skeleton left the source loops as they were but moved stack slots, a
   bounds check and the tail's copies in every Laplace and Yukawa P2P entry point. For one plane
   the padded tail now runs CH2.4b's statements and `sub_block` slices `start..end`, a
-  compile-time choice; with them NEON and AVX2 equal `main`. Other formulations tried for
+  compile-time choice; with them NEON's and AVX2's Laplace code equals `main`'s, and every
+  other function too but NEON's `p2p_yukawa_f32_gradient` in the default macOS build: in
+  its source loop the gradient accumulators of y and z exchange registers (v3 and v4, in
+  the two `fmla`s and the moves around the loop), the instructions otherwise the same; on
+  Linux, with the same toolchain, it is `main`'s. Other formulations tried for
   the rest (one-plane addressing in `block`, plane-major accumulators, one-plane asserts)
   moved the differences elsewhere.
 - **AVX-512's Laplace gradient entry points** (K = 2): their source loops (50, 25, 25 in f32;
@@ -99,7 +105,7 @@ only if the branch's median is slower than `main`'s by more than that spread. Ea
 `p2p_kernels --isa avx512` (one thread; the gathered W1 rows, ns per pair) and
 `tools/bench/run.sh --backend host --precision f32,f64 --degree 3` (N = 10⁶, Auto, 40
 threads, gradients on, 10 evaluations after 2 warm-ups; ms). NEON and AVX2 need no run: their
-code is `main`'s.
+Laplace code is `main`'s.
 
 | ISA | precision | output | n_t | main ns/pair | branch ns/pair | spread | Δ median | within noise | outputs equal |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -138,7 +144,7 @@ reference's term relative to |q| e^{−Im(k) r}/r, each part of each gradient co
 `helmholtz_terms_*_large`, 10⁶ seeded pairs per precision (real and complex charges, a third
 undamped), largest errors in u_T, potential / gradient, over both charge kinds:
 
-| ISA (machine) | precision | \|k\| r < 1 | per unit \|k\| r, \|k\| r ≥ 1 | largest (\|k\| r ≤ 1,450) |
+| ISA (machine) | precision | \|k\| r < 1 | per unit \|k\| r, \|k\| r ≥ 1 | largest (\|k\| r ≤ 1,145) |
 | --- | --- | --- | --- | --- |
 | NEON (M6) | f32 | 9.56 / 10.32 | 6.39 / 8.22 | 3,071 / 2,851 |
 | NEON (M6) | f64 | 7.36 / 10.03 | 6.88 / 9.37 | 3,072 / 2,581 |
@@ -160,7 +166,8 @@ Kathleen scalar, AVX2 and AVX-512.
 `spikes/p2p-simd/examples/helmholtz.rs` (full mode: the W1 cells n_t = 16, 32, 64, per-pair
 and gathered; one thread; k = 1 and the damped k = 1 + 0.1i in leaf units; BLAS threads 1).
 "real q" and "complex q" are the Helmholtz kernel at real k, "damped" complex charges at the
-damped k; ratios are times per pair. green-kernels' `Helmholtz3dKernel` (real k, complex
+damped k; ratios are times per pair, except "ours cq / green cq", our Gpairs/s over
+green-kernels' (above 1: ours faster). green-kernels' `Helmholtz3dKernel` (real k, complex
 charges) agrees with `direct_sum` on a pair within 2.4e-16 (4π × its φ and ∂/∂x).
 
 ### 5.1 Geometric means over the cells
@@ -306,7 +313,8 @@ and C3S.4 (NEON's and AVX2's code is `main`'s, §2).
 1. The contract as derived, (32 + 12 |k| r) u_T and (66 + 12 |k| r) u_T, with the f32
    gradient range (1 + |k| r)/r³ ≤ 2¹²⁶ (Laplace's 2⁻⁸⁴ ≤ r² at k = 0; the reference
    overflows beyond).
-2. Constraint 1 as met: NEON and AVX2 `main`'s code; AVX-512's two Laplace gradient entry
+2. Constraint 1 as met: NEON's and AVX2's Laplace code `main`'s (and Yukawa's, but for a
+   register exchange in NEON's f32 gradient loop on macOS); AVX-512's two Laplace gradient entry
    points with `main`'s source loops but other block-loop control, within noise in D9 on
    Kathleen (D9 run only there, where the code changed); NEON's `merge` differs with one
    codegen unit only.

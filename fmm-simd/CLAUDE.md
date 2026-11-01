@@ -63,8 +63,9 @@ docs/design/simd-p2p.md §4.12, tests in `tests/p2p/helmholtz.rs`.
   output planes per target (stride n), const generics of `PairKernel<T, S, QP, OP>`;
   Laplace and Yukawa are QP = OP = 1. For one plane the padded tail and `sub_block`'s
   range keep CH2.4b's expressions (`if OP == 1`), because LLVM did not fold the general
-  ones to the same code; keep them so. With them NEON and AVX2 equal `main` instruction for
-  instruction (default settings); AVX-512's Laplace gradient entry points kept their source
+  ones to the same code; keep them so. With them NEON's and AVX2's Laplace entry points equal
+  `main`'s instruction for instruction (default settings; NEON's Yukawa f32 gradient on
+  macOS exchanges two registers in its source loop); AVX-512's Laplace gradient entry points kept their source
   loops (registers renamed) but not the block loop's control, and passed D9 on Kathleen
   (fmm-validate/results/helmholtz-ch3-4b.md §2–§3).
 - `P2pKernel::evaluate_yukawa` (Helmholtz CH2.4b) keeps the semantics of
