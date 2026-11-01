@@ -228,7 +228,8 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   `IsaUnavailable` from the operator, `SettingsError::P2pIsaUnavailable` from the builder;
   `p2p_kernel()` reports the resolved choice on both. `tests/helmholtz/p2p.rs` checks every
   ISA against `Reference` pair by pair within CH3.4b's per-term contract summed over the
-  sources (f64 and f32, real and complex k and charges, two vectors, a coarser neighbour);
+  sources (f64 and f32, real and complex k and charges, one and two vectors, with and
+  without gradients, a coarser neighbour);
   `tests/helmholtz_fmm.rs` the FMM on every ISA within `KERNEL_TOLERANCE` (1e-13) of
   `Reference`, `Scalar` bit for bit, `Auto` that of `Isa::detect`, and every other scenario
   on `Auto`.
@@ -244,9 +245,9 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   stays in `fmm.rs`. The moved helpers' unit tests stayed in `fmm.rs`'s `mod tests`.
 - The Helmholtz FMM (Helmholtz CH3.1b; `helmholtz::fmm`, its module docs):
   `HelmholtzFmmBuilder` (k, `Degrees`, `ChargeKind`, vectors, gradients, threads, domain,
-  points per leaf, `max_level`, the block budget, c_leaf, the P2P kernel since CH3.4c) and `HelmholtzFmm` on any number
-  of ranks, the pipeline's steps with the leaf rule (`min_leaf_level` into
-  `OctreeOptions::with_min_leaf_level`) and `HelmholtzOperator` on `Evaluator`; no near
+  points per leaf, `max_level`, the block budget, c_leaf, the P2P kernel since CH3.4c) and
+  `HelmholtzFmm` on any number of ranks, the pipeline's steps with the leaf rule
+  (`min_leaf_level` into `OctreeOptions::with_min_leaf_level`) and `HelmholtzOperator` on `Evaluator`; no near
   rule, work cut, overlap, device or table cache. `evaluate` packs the c m columns
   (Re q, Im q per complex vector) point-major, so the charge load, `gather_output` and
   `unpack_output_many` run unchanged with m replaced by the columns and output columns
@@ -257,7 +258,8 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   2 and 4 threads (4 only in debug), pair by pair, against the reference pass and the
   one-rank FMM bit for bit, two vectors, real charges against complex ones with Im q = 0,
   and the errors, with one scenario that leaves rank 0 empty; ε = 10⁻⁶ and kD = 100 in
-  release only (about 36 s at one rank in debug on the M6).
+  release only (about 36 s at one rank in debug on the M6; 46 s since CH3.4c's P2P
+  kernel checks).
 - Threading (from T10): rayon over the targets of a level call, in a pool owned by
   `Fmm`, opt-in (`threads`, default 1). The output is bit-identical for every thread
   count. No `unsafe`, no atomics, no global pool; per-thread scratch created at

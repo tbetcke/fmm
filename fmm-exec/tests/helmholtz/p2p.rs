@@ -1,7 +1,8 @@
 //! The operator's P2P on every ISA (Helmholtz CH3.4c): `nd_fmm_simd::P2pKernel::
 //! evaluate_helmholtz` against `P2pChoice::Reference` (`nd_fmm_ref::helmholtz::p2p::p2p`,
 //! the trusted path), pair by pair (`PairOperator`), in f64 and f32, for real and complex k
-//! with real and complex charges, two vectors and gradients.
+//! with real and complex charges, with one vector (the source chunk's own strengths) and two
+//! (gathered), with and without gradients.
 //!
 //! A target leaf of level 3 in the unit cube takes P2P from a neighbour of its level, from
 //! a coarser neighbour of level 2 (r̂(s|t) = 2) and from itself, into one output chunk. Each
@@ -23,8 +24,6 @@ use nd_fmm_plan::operator::{FmmSizes, PairOperator};
 use nd_octree::{MortonKey, PhysicalBox, morton};
 
 use super::common::Rng;
-
-const VECTORS: usize = 2;
 
 fn domain() -> Domain {
     Domain::new(&PhysicalBox::new([0.0, 0.0, 0.0, 1.0, 1.0, 1.0])).unwrap()
@@ -61,9 +60,9 @@ struct Leaf {
 }
 
 impl Leaf {
-    fn new(key: MortonKey, n: usize, kind: ChargeKind, rng: &mut Rng) -> Self {
+    fn new(key: MortonKey, n: usize, kind: ChargeKind, m: usize, rng: &mut Rng) -> Self {
         let points = points_in(key, n, rng);
-        let q = (0..VECTORS)
+        let q = (0..m)
             .map(|_| {
                 let re = (0..n).map(|_| part(rng)).collect();
                 let im = match kind {
@@ -102,10 +101,13 @@ impl Leaf {
 }
 
 /// The problem: a target leaf of level 3, its three source leaves (a neighbour of level
-/// 3, a coarser neighbour of level 2, itself), k and the charge kind.
+/// 3, a coarser neighbour of level 2, itself), k, the charge kind, m vectors and whether
+/// the output holds gradients.
 struct Problem {
     k: Wavenumber,
     kind: ChargeKind,
+    m: usize,
+    gradients: bool,
     densities: Densities,
     target: MortonKey,
     targets: Vec<[f64; 3]>,
@@ -113,22 +115,24 @@ struct Problem {
 }
 
 impl Problem {
-    fn new(k: Wavenumber, kind: ChargeKind, seed: u64) -> Self {
+    fn new(k: Wavenumber, kind: ChargeKind, m: usize, gradients: bool, seed: u64) -> Self {
         let mut rng = Rng(seed);
         // The level-3 leaf [0.375, 0.5] × [0.125, 0.25]²; the level-2 box [0.5, 0.75] ×
         // [0, 0.25]² shares its face x = 0.5.
         let target = key([3, 1, 1], 3);
-        let own = Leaf::new(target, 13, kind, &mut rng);
+        let own = Leaf::new(target, 13, kind, m, &mut rng);
         let targets = own.points.clone();
         let sources = vec![
-            Leaf::new(key([3, 2, 1], 3), 20, kind, &mut rng),
-            Leaf::new(key([2, 0, 0], 2), 23, kind, &mut rng),
+            Leaf::new(key([3, 2, 1], 3), 20, kind, m, &mut rng),
+            Leaf::new(key([2, 0, 0], 2), 23, kind, m, &mut rng),
             own,
         ];
         Self {
             k,
             kind,
-            densities: Densities::new(k.kind(), kind, VECTORS),
+            m,
+            gradients,
+            densities: Densities::new(k.kind(), kind, m),
             target,
             targets,
             sources,
@@ -146,7 +150,7 @@ impl Problem {
             self.densities,
             &domain(),
             &[2; 4],
-            true,
+            self.gradients,
             32,
             0,
         )
@@ -219,11 +223,13 @@ fn every_isa<T: SimdScalar + Equivalence + Default>(pb: &Problem) {
     let d = &pb.densities;
     let n = pb.targets.len();
     let name = format!(
-        "{} k = {} + {}i, {:?} charges",
+        "{} k = {} + {}i, {:?} charges, m = {}, gradients {}",
         core::any::type_name::<T>(),
         pb.k.re(),
         pb.k.im(),
-        pb.kind
+        pb.kind,
+        pb.m,
+        pb.gradients
     );
     for isa in Isa::all() {
         let Ok(mut op) = pb.operator::<T>(P2pChoice::Isa(isa)) else {
@@ -243,7 +249,7 @@ fn every_isa<T: SimdScalar + Equivalence + Default>(pb: &Problem) {
             );
         }
         let mut worst = (0.0f64, 0.0f64);
-        for v in 0..VECTORS {
+        for v in 0..pb.m {
             for i in 0..n {
                 let (phi, grad) = pb.bounds(i, v);
                 for part in 0..2 {
@@ -259,7 +265,7 @@ fn every_isa<T: SimdScalar + Equivalence + Default>(pb: &Problem) {
                         reference[index].to_f64(),
                         phi * u
                     );
-                    for axis in 0..3 {
+                    for axis in (0..3).filter(|_| pb.gradients) {
                         let index = d.gradient_index(n, o, i, axis);
                         let diff = (output[index].to_f64() - reference[index].to_f64()).abs();
                         worst.1 = worst.1.max(diff / (grad * u));
@@ -290,16 +296,19 @@ fn every_isa<T: SimdScalar + Equivalence + Default>(pb: &Problem) {
 }
 
 /// Real k (Re k̂ r to about 53, beyond the leaf rule's 22 c_leaf at c_leaf = 1) and complex
-/// k, real and complex charges, f64 and f32.
+/// k, real and complex charges, f64 and f32; two vectors with gradients, one vector with
+/// and without.
 #[test]
 fn every_isa_within_the_contract() {
     for (re, im) in [(1.0, 0.0), (30.0, 3.0), (128.0, 0.0), (128.0, 16.0)] {
         for kind in [ChargeKind::Real, ChargeKind::Complex] {
-            let k = Wavenumber::new(re, im).unwrap();
-            let pb = Problem::new(k, kind, 17);
-            println!("k = {re} + {im}i: largest Re k̂ r {:.1}", largest_phase(&pb));
-            every_isa::<f64>(&pb);
-            every_isa::<f32>(&pb);
+            for (m, gradients) in [(2, true), (1, true), (1, false)] {
+                let k = Wavenumber::new(re, im).unwrap();
+                let pb = Problem::new(k, kind, m, gradients, 17);
+                println!("k = {re} + {im}i: largest Re k̂ r {:.1}", largest_phase(&pb));
+                every_isa::<f64>(&pb);
+                every_isa::<f32>(&pb);
+            }
         }
     }
 }

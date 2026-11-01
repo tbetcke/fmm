@@ -49,7 +49,7 @@ rank-invariant as before; its time on a CH3.1c case before and after.
   `SettingsError::P2pIsaUnavailable`, in `check_settings`, before any collective) and
   `HelmholtzFmm::p2p_kernel()`.
 - `nd_fmm_validate::helmholtz_accuracy::Case::p2p` and the example's `--p2p
-  auto|reference|<isa>`, the kernel printed in the header.
+  auto|reference|<isa>,…`, the kernel in a column "P2P".
 - Docs: the two modules' docs, `fmm-exec/CLAUDE.md`, `fmm-validate/CLAUDE.md`.
 
 Public API: the three methods above and `Case::p2p`. Tables, layouts, conventions: none.
