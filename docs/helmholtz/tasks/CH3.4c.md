@@ -134,6 +134,11 @@ wall time in s, the mean of the two launches; at 6 threads the range):
   launches (NEON: `4e1010c90fc21158`, `9dbab52f331a4ccc`, `43dd41e6a6fef349`,
   `82bc2b1aac617b03`, `9c3d5399b246c996`).
 
+Checks (M6): format; Clippy default, examples, workspace all-targets; `cargo doc`;
+`cargo test` (1,106) and `--workspace` (1,188); the MPI list at 2 and 4 ranks, 24 of 24;
+`helmholtz_fmm` in release at 1 and 3 ranks. Not run: AVX2 and AVX-512 (CI's x86_64
+runner), the licence check (no manifest changed).
+
 ## Pending runs
 
 None.
