@@ -27,3 +27,9 @@ test = true
 [[example]]
 name = "yukawa"
 test = true
+
+# Helmholtz CH3.4b: the Helmholtz P2P's cost per pair against Laplace's and Yukawa's,
+# beside green-kernels' Helmholtz; `cargo test` runs its smoke test.
+[[example]]
+name = "helmholtz"
+test = true
