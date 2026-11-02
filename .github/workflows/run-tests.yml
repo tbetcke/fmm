@@ -33,6 +33,10 @@ concurrency:
 # its worst cold time with a slow mirror (an install step stops at 5 minutes). run-tests
 # rose from 15 to 30 on 2026-10-31: its warm runs had grown to 8–14 minutes, and runs
 # were cancelled at 15 (main on 2026-10-30; Helmholtz CH2.0, no test failed).
+# run-tests-simd rose from 5 to 10 on 2026-11-02 (the H3 gate): its x86_64 warm runs had
+# grown from about 2 m 50 s to 3 m 31 s – 4 m 49 s over Helmholtz H3 (CH3.4a and CH3.4b's
+# tests), and main's runs of #166, #169 and #172 were cancelled at 5 in the ignored release
+# tests, no test failed.
 # Test builds at opt-level 1 (2026-10-31): the tests ran unoptimised, which made the
 # numeric tests 2–20 times slower (M6: mpi_exec 160 s → 8–11 s, invariance 71 → 14 s at
 # one rank). `CARGO_PROFILE_DEV_OPT_LEVEL=1` keeps the dev profile's debug assertions and
@@ -139,7 +143,7 @@ jobs:
   # --show-output puts that into the log. Correctness and accuracy only, never timings.
   run-tests-simd:
     name: run-tests-simd (${{ matrix.arch }})
-    timeout-minutes: 5
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
