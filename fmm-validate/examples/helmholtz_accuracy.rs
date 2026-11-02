@@ -28,8 +28,9 @@
 //! - `--p2p auto|reference|<isa>,…` (default `auto`): the P2P kernels (Helmholtz CH3.4c),
 //!   each case run with each in turn; an ISA this machine lacks is refused before MPI
 //!   starts.
-//! - `--m2l rotation|dense|classes|batched,…` (default `rotation`, Helmholtz CH3.2a, CH3.2b,
-//!   CH3.2c): the M2L, each case run with each in turn (and each P2P kernel);
+//! - `--m2l rotation|dense|classes|batched|batched-fused,…` (default `rotation`, Helmholtz
+//!   CH3.2a, CH3.2b, CH3.2c; `batched-fused` the batched M2L in the fused mode): the M2L,
+//!   each case run with each in turn (and each P2P kernel);
 //!   `--dense-budget MB` the dense, class or batched tables' bytes per rank (default
 //!   1024 MiB). The column "M2L" names the levels with tables and their MB.
 //!
@@ -54,7 +55,7 @@ use mpi::traits::*;
 use nd_fmm_exec::helmholtz::{
     ChargeKind, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzM2l, Wavenumber, s7_degree,
 };
-use nd_fmm_exec::operator::P2pChoice;
+use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_validate::bench::{cores, cpu_model, target};
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::helmholtz_accuracy::{Case, Oracle, Problem, complex_k, run};
@@ -73,7 +74,7 @@ struct Arguments {
     threads: Vec<usize>,
     oracle_threads: Option<usize>,
     p2p: Vec<P2pChoice>,
-    m2l: Vec<HelmholtzM2l>,
+    m2l: Vec<(HelmholtzM2l, MulAdd)>,
     dense_budget: usize,
     s7: bool,
 }
@@ -110,7 +111,7 @@ fn arguments() -> Arguments {
              [--kd x,…] [--kim y] [--eps e,…|--degree p] [--charges real|complex] \
              [--vectors m] [--samples n] [--no-gradients] [--threads t,…] \
              [--oracle-threads t] [--rule calibrated|s7] [--p2p auto|reference|<isa>,…] \
-             [--m2l rotation|dense|classes|batched,…] [--dense-budget MB]; got {args:?}"
+             [--m2l rotation|dense|classes|batched|batched-fused,…] [--dense-budget MB]; got {args:?}"
         );
         std::process::exit(2);
     };
@@ -126,7 +127,7 @@ fn arguments() -> Arguments {
         threads: vec![1],
         oracle_threads: None,
         p2p: vec![P2pChoice::Auto],
-        m2l: vec![HelmholtzM2l::Rotation],
+        m2l: vec![(HelmholtzM2l::Rotation, MulAdd::Separate)],
         dense_budget: DEFAULT_DENSE_BUDGET,
         s7: false,
     };
@@ -170,10 +171,11 @@ fn arguments() -> Arguments {
                     "--m2l" => value
                         .split(',')
                         .map(|v| match v {
-                            "rotation" => Some(HelmholtzM2l::Rotation),
-                            "dense" => Some(HelmholtzM2l::Dense),
-                            "classes" => Some(HelmholtzM2l::Classes),
-                            "batched" => Some(HelmholtzM2l::Batched),
+                            "rotation" => Some((HelmholtzM2l::Rotation, MulAdd::Separate)),
+                            "dense" => Some((HelmholtzM2l::Dense, MulAdd::Separate)),
+                            "classes" => Some((HelmholtzM2l::Classes, MulAdd::Separate)),
+                            "batched" => Some((HelmholtzM2l::Batched, MulAdd::Separate)),
+                            "batched-fused" => Some((HelmholtzM2l::Batched, MulAdd::Fused)),
                             _ => None,
                         })
                         .collect::<Option<Vec<_>>>()
@@ -217,15 +219,16 @@ fn arguments() -> Arguments {
     parsed
 }
 
-/// The M2L of a row: `rotation`, or `dense l…`, `classes l…` or `batched l…` with the levels
-/// that ran the setting's tables and their MB.
-fn m2l_string(m2l: HelmholtzM2l, dense: &[bool], bytes: usize) -> String {
+/// The M2L of a row: `rotation`, or `dense l…`, `classes l…`, `batched l…` or
+/// `batched-fused l…` with the levels that ran the setting's tables and their MB.
+fn m2l_string(m2l: HelmholtzM2l, mul_add: MulAdd, dense: &[bool], bytes: usize) -> String {
     let levels: Vec<String> = (0..dense.len())
         .filter(|&l| dense[l])
         .map(|l| l.to_string())
         .collect();
     let name = match m2l {
         HelmholtzM2l::Classes => "classes",
+        HelmholtzM2l::Batched if mul_add == MulAdd::Fused => "batched-fused",
         HelmholtzM2l::Batched => "batched",
         _ => "dense",
     };
@@ -335,7 +338,7 @@ fn main() {
                 ChargeKind::Complex => "complex",
             };
             let (p2ps, threads_list) = (&arguments.p2p, &arguments.threads);
-            let runs: Vec<(HelmholtzM2l, P2pChoice, usize)> = arguments
+            let runs: Vec<((HelmholtzM2l, MulAdd), P2pChoice, usize)> = arguments
                 .m2l
                 .iter()
                 .flat_map(|&m| {
@@ -343,8 +346,9 @@ fn main() {
                         .flat_map(move |&p| threads_list.iter().map(move |&t| (m, p, t)))
                 })
                 .collect();
-            for (m2l, p2p, threads) in runs {
+            for ((m2l, mul_add), p2p, threads) in runs {
                 case.m2l = m2l;
+                case.m2l_mul_add = mul_add;
                 case.p2p = p2p;
                 match run(&case, &problem, &oracle, threads, &world) {
                     Ok(row) if root => {
@@ -362,7 +366,12 @@ fn main() {
                             problem.len(),
                             case.vectors,
                             row.p2p,
-                            m2l_string(row.m2l, &row.dense_levels, row.dense_bytes),
+                            m2l_string(
+                                row.m2l,
+                                row.m2l_mul_add,
+                                &row.dense_levels,
+                                row.dense_bytes
+                            ),
                             row.ranks,
                             row.threads,
                             row.levels,
