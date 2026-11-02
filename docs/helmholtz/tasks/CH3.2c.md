@@ -80,16 +80,24 @@ no `nd-fmm-plan`, no convention, no dependency.
     otherwise. The pair body (`Kernel::m2l`, used by the target-by-target driver on no
     level, by `PairOperator` and so `PerPair`) runs the same chain with one column per
     vector, so the level call is the pair-by-pair operator bit for bit.
-  - The column kernel on the P2P choice's ISA (`Isa::Scalar` for `Reference`), as Laplace's;
-    `MulAdd::Separate` only (the fused mode a follow-up). The scratch's `Columns` sized at
-    construction (`MatrixKernel::pack_len` of the largest n, m `M2L_BLOCK_TARGETS` offsets).
+  - The column kernel on the P2P choice's ISA (`Isa::Scalar` for `Reference`), as Laplace's,
+    in `MulAdd::Separate` by default. The scratch's `Columns` sized at construction
+    (`MatrixKernel::pack_len` of the largest n, m `M2L_BLOCK_TARGETS` offsets).
+  - As built, beyond the first plan: the fused mode as an opt-in,
+    `HelmholtzOperator::{with_m2l_mul_add, m2l_mul_add}` and
+    `HelmholtzFmmBuilder::m2l_mul_add` (as Laplace's `FmmBuilder::m2l_mul_add`), after the
+    first smoke run of `helmholtz_m2l` showed the separate form only level with Dense with
+    complex multipoles (Dense's one-pass loop vectorises as well; both are bound by the
+    separate multiply and add) and the fused form about 1.8× faster. Dense to rounding in
+    both cases; deterministic, ISA- and thread-independent as the separate mode.
   - `HelmholtzFmmBuilder::m2l(Batched)` with `dense_budget`; docs (operator module "M2L",
     "Execution"; `fmm-exec/CLAUDE.md`'s Helmholtz rules).
 - `nd-fmm-validate`:
   - `helmholtz_m2l`: Batched per p, the same chain on a block (32 targets per offset, each
     with its own source, the operator's call sequence, checked against Dense first), ns per
-    pair; its tables' bytes and build seconds.
-  - `helmholtz_accuracy --m2l batched` (`Row::m2l`, the bytes).
+    pair, separate and fused; its build seconds (its bytes are Dense's).
+  - `helmholtz_accuracy --m2l batched,batched-fused` (`Case::m2l_mul_add`,
+    `Row::m2l_mul_add`, the bytes).
   - Report `fmm-validate/results/helmholtz-ch3-2c.md`: per p on the three machines, end to
     end on CH3.2a's cases on the three machines.
 
@@ -108,7 +116,10 @@ no `nd-fmm-plan`, no convention, no dependency.
   two scenarios (the direct sum, Rotation's output within `DENSE_TOLERANCE`, 2 threads, pair
   by pair and the one-rank FMM bit for bit, the finest level alone), and against Dense's
   output: bit for bit on the real-charge real-k scenario (one plane), within
-  `DENSE_TOLERANCE` on the complex one.
+  `DENSE_TOLERANCE` on the complex one; the fused mode within `DENSE_TOLERANCE` of Rotation
+  and Dense, 2 threads and the one-rank FMM bit for bit.
+- `fmm-exec/tests/helmholtz/dense.rs` also: the fused mode against Dense and Rotation within
+  `DENSE_BOUND` (not Dense's bits), and the same bits on every ISA in both modes.
 - f64 for the FMM (D3); f32 only for the tables' rounding.
 
 ## Checks
@@ -123,7 +134,7 @@ change). No D9 (Laplace untouched).
 Release, one rank, one thread, BLAS threads 1:
 - the M6 (behind the quiet gate, after the user's go-ahead): `helmholtz_m2l --ps
   3,4,5,6,7,8,9,10,12,15,18,20`, two launches; `helmholtz_accuracy --m2l
-  rotation,dense,classes,batched` and the reverse order on CH3.2a's cases (W1 at kD = 30
+  rotation,dense,classes,batched,batched-fused` and the reverse order on CH3.2a's cases (W1 at kD = 30
   and 100, the W4 cube at kD = 10 at ε = 10⁻³ and 10⁻⁶, W3 at kD = 30 at 10⁻³);
 - locust (Grace, NEON; `tools/gh200/sync.sh`, `remote.sh`; check `uptime` first): the same;
 - Kathleen (Cascade Lake, AVX-512; one `singlenode` job through `run.sbatch`): the same.
