@@ -7,7 +7,8 @@ tables of point-and-shoot translation.
 Phase and components: Phase 2, C2.1–C2.4 (tasks T1 and T3–T7 in docs/phase2/); Phase 6
 C6.5 (task T13: `plane_wave`, the tables of plane-wave M2L, CONVENTIONS §3.14);
 Helmholtz CH3.1a (`helmholtz`, the per-level RCR tables of the Helmholtz family,
-CONVENTIONS §3.15); Helmholtz CH3.2a (`helmholtz::dense`, the dense M2L tables).
+CONVENTIONS §3.15); Helmholtz CH3.2a (`helmholtz::dense`, the dense M2L tables); Helmholtz
+CH3.2b (`helmholtz::classes`, the class M2L tables and the cube-group transforms).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -50,6 +51,18 @@ CONVENTIONS §3.15); Helmholtz CH3.2a (`helmholtz::dense`, the dense M2L tables)
   application's chain (one plane: k ascending over 2n rows; two planes: one pass,
   L_r + A_r M_r − A_i M_i and L_i + A_i M_r + A_r M_i per k) is what a batched form must
   equal bit for bit, or say it does not (CH3.2c). Not cached.
+  `helmholtz::classes` (Helmholtz CH3.2b; its module docs): `ClassM2l`, per level the 16
+  class matrices of §3.12 built by `DenseM2l`'s rule (bit for bit its matrices of the
+  representatives), and `CubeTransforms`, Oⁿ(P) of the orthonormal coefficients of §3.15
+  for the 48 elements (Oⁿ(P) = (−1)ⁿ Oⁿ(−P) for improper P; T_M = T_L = Oⁿ): rotations
+  factored into quarter turns about z and y, the y-block of π/2 from
+  `orthonormal::rotation::y_blocks` at cos 0 and sin 1 exactly, so the 16 elements that fix
+  the z-axis are exact signed permutations and the 32 others dense per-degree blocks. Per
+  pair O(Pᵀ), the class matrix by Dense's chain into zeroed scratch, then O(P) added: Dense to
+  rounding (3.7e-14 in the FMM-weighted measure on the M6), a representative into a zero
+  local Dense bit for bit. `select` charges the transforms of the largest chosen degree. The
+  transforms follow from §3.12 and §3.15 as they stand (no convention of their own). Not
+  cached.
 - Matrices are column-major with output = A · input. Every application accumulates
   (+=), and none applies 1/(4π) (§3.1).
 - Builds are serial and deterministic: the same inputs give bit-identical tables and

@@ -345,6 +345,13 @@ under Rotation and Dense on one level, the 316 offsets per pass, one and two mul
 planes, Dense's bytes and build time, Dense's locals checked against Rotation's first. Its
 report is `results/helmholtz-ch3-2a.md`.
 
+Helmholtz CH3.2b (the Classes M2L; docs/helmholtz/tasks/CH3.2b.md) added `classes` to the
+example's `--m2l` and `Row::m2l` (the setting; `dense_levels` and `dense_bytes` cover Dense
+and Classes), and Classes to `helmholtz_m2l`: per pair over all 316 offsets, over the
+offsets whose element fixes the z-axis and over the others, its two transforms alone, its
+bytes (the transforms included) and build time, its locals checked against Rotation's
+first. Its report is `results/helmholtz-ch3-2b.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

@@ -232,6 +232,17 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   FMM bit for bit, and the finest level alone (in debug builds the deeper tree's only Dense
   run). Its debug cost: about 15 s of the one-rank run on the M6 (46 → 61 s; the dense
   builds), about 2 s at CI's opt-level 1.
+- The Classes M2L (Helmholtz CH3.2b; the `helmholtz::operator` module docs, "M2L";
+  docs/helmholtz/tasks/CH3.2b.md): `HelmholtzM2l::Classes`, `nd_fmm_tables::helmholtz::classes`
+  on the levels whose 16 class matrices and transforms fit the same budget
+  (`ClassM2l::select`, from the finest up), RCR on the others; `class_bytes()` reports it,
+  the thread scratch holds the class scratch (rebuilt by `with_m2l`). Per pair in the
+  kernel's `m2l` body (no driver change); Rotation's and Dense's output to rounding,
+  deterministic and rank-invariant. `tests/helmholtz/dense.rs` checks every offset of levels
+  2–4 against Rotation and Dense (`CLASSES_BOUND` 5e-14, 5.6e-15 measured), the budget and a
+  zero budget bit for bit Rotation; `tests/helmholtz_fmm.rs` runs `check_tables` for both
+  strategies (Classes on every level and the finest alone, in every build). Its debug cost:
+  about 8 s of the one-rank run on the M6 (61 → 69 s).
 - The degree rule (Helmholtz CH3.3; the `helmholtz::degree` module docs;
   fmm-validate/results/helmholtz-ch3-3.md): `degree` is `DegreeRule::CALIBRATED`,
   max(⌈0.30 L² + 0.25 L + 2.60⌉, ⌈x + 0.80 (ln 1/ε)^{2/3} x^{1/3}⌉) with L = log₁₀(1/ε),
