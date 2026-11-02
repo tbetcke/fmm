@@ -1,0 +1,17 @@
+[package]
+name = "nd-fmm-spike-pw-quadrature"
+version = "0.0.0"
+description = "Throwaway study: the quadratures of the Helmholtz exponential (plane-wave) M2L per k w_l, FMM3D's tables and an independent generator, with their accuracy (Helmholtz CH0.4, spike S4)."
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+num-complex.workspace = true
+# The sweeps over FMM3D's 437 domains × 5 precisions.
+rayon.workspace = true
+
+[dev-dependencies]
+# FMM3D's Laplace quadratures of CONVENTIONS §3.14, the k w → 0 comparison.
+nd-fmm-spike-plane-wave = { path = "../plane-wave" }
