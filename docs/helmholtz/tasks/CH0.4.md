@@ -59,7 +59,8 @@ A spike only; no workspace crate, convention, table or Laplace path changes.
     rectangle) extracted with NIST's notice by `tools/extract_fixture.sh`, so the parser
     and the evaluator are tested without FMM3D's sources.
   - `tools/fetch.sh`: unpacks the pinned tarball from `$FMM3D_ROOT/src` (SHA-256 checked)
-    into `target/`, for the full sweeps and the ignored tests.
+    for the full sweeps and the ignored tests. As built: into `$FMM3D_ROOT/build/s4`, not
+    `target/`, since `tools/fmm3d/build.sh` keeps FMM3D's sources outside the repository.
   - `SPIKE_REPORT.md`.
 - Root `Cargo.toml`: the spike in `members`; `Cargo.lock` gains the spike's package entry.
 
@@ -116,11 +117,30 @@ None besides the M6, and no timing: the sweeps measure accuracy only.
 - Risk: the generator's uncompressed counts may be several times FMM3D's; that is the
   measured cost of a table-free path, not a failure of the spike.
 
+## As built
+
+- The ray sweep runs the generator at FMM3D's measured error (at least 1 % of the
+  precision's `errmax` and 10⁻¹³) and only at iprec 1–3: at iprec 4, near 10⁻¹³, it took
+  minutes per κ, and D1's ε needs iprec ≤ 3.
+- `examples/alpha.rs` added: FMM3D's α counts scaled at the worst domains (report §3.2).
+- The generator's Fourier and α counts take the maximum over all larger orders: the
+  first version stopped at a zero of J_{F+1} and its chain missed ε by up to 120× on the
+  rays; the four worst κ are regression cases.
+
 ## Pending runs
 
 None.
 
 ## Open questions
+
+For sign-off in the PR (report §6):
+
+1. CH6.1's quadratures: FMM3D's tables (iprec 1–3) extracted with NIST's notice, as
+   §3.14's Laplace tables; or the generator (1.5–1.9× the wave values on real κ, more on
+   Yukawa).
+2. The α counts by measurement, not from `hnumphys` (FMM3D's miss the stated error at the
+   region's corner by up to 119×, and ε on 11 of 138 reference rows by up to 1.8×).
+3. The proposal's correction below.
 
 - The proposal says FMM3D uses plane waves "up to boxes of 32 wavelengths" (§5.3, §9.2,
   §11, §13), after FMM3D's documentation (`docs/index.rst`). Its code (`hfmm3d.f`,

@@ -1761,3 +1761,51 @@ request, using this template:
     signed-off follow-up; CI job times against their limits) and the debug test time of
     `helmholtz_fmm` (36 → 150 s). `.claude/skills/` is not writable from the session; for
     the user.
+
+## 2026-11-02: CH0.4 S4: plane-wave quadratures per k w_l
+- Done:
+  - The first task of the H6 priority list. Spike `spikes/pw-quadrature/` (a workspace
+    member outside `default-members`; num-complex and rayon from the workspace, a path
+    dev-dependency on `spikes/plane-wave`): a parser of FMM3D's Helmholtz tables
+    (`hwts_3d_iprec*.txt`, `hnumfour.f`, `hnumphys.f`) with `hwts3e`'s domain lookup,
+    precisions and node maps; the kernel and point-to-point chain evaluators; an
+    independent generator for any κ = k w (the real-t contour, Gauss–Legendre panels,
+    pivoted Gram–Schmidt compression, Bessel-bound α and Fourier counts); the sweeps
+    `domains`, `rays`, `levels` and the probe `alpha`; a fixture of five domains cut with
+    NIST's notice; `tools/fetch.sh` (FMM3D's sources under `$FMM3D_ROOT`, outside the
+    repository). Report `spikes/pw-quadrature/SPIKE_REPORT.md`, results in its `results/`.
+  - Findings: FMM3D tabulates its quadratures (437 domains of complex κ up to 16π × 12π,
+    5 precisions), it does not generate them; every λ sum meets its stated error to 1.5×
+    (5.5× at iprec 4 near 16π, round-off); FMM3D's α counts miss the stated error by up to
+    119× at the region's corner, and ε on 11 of 138 reference level rows by up to 1.8×;
+    the tables cover every unpruned level of the reference trees with Re κ_l < 16π (only
+    levels 2–3 at kD = 500 fall outside); the generator meets ε everywhere measured at
+    1.5–1.9× FMM3D's wave values for real κ and 2.4–4.4× for Yukawa and strongly damped κ;
+    FMM3D's plane waves stop at boxes of 8 wavelengths, not the 32 of its documentation.
+- Tests: `tests/fixture.rs` (the parser, the lookup on all 437 rectangles, the λ sums
+  within 1.5× the stated error at three points of each fixture domain, the grid sums
+  against term-by-term evaluation, the untruncated chain against the kernel at t − s to
+  10⁻¹³, the Laplace limit against `spikes/plane-wave`'s §3.14 tables);
+  `tests/generator.rs` (ε on the grid, off it within 2ε, the chain within 2ε, real t,
+  converged panels; the regression κ of the first count rule); `tests/fmm3d_full.rs`
+  (ignored: all 437 × 5 tables). Debug run on the M6: fixture 18 s, generator 13 s.
+- Checks: `/verify` on the M6: format; Clippy default, examples and workspace
+  all-targets; `cargo test` (742 s) and `--workspace` (1,320 s); `cargo doc`; `cargo
+  check --workspace --all-targets`; `cargo deny --locked check licenses`; no fftw-sys.
+  After the self-review's changes the spike's format, Clippy and tests, default and
+  ignored, again. Not run: the MPI list and D9 (no MPI crate, no Laplace path, no
+  dependency of a default member changed). A self-review by a subagent: one blocking
+  finding, the fixtures' NIST notice cut to 5 of its lines (fixed: the whole notice and
+  a dated change note); the rest taken (the report's wording on α, pruned counts and
+  ratio ranges; `results/alpha.md`; the generator's errors at the levels; its bounds
+  documented; the tests' tolerances recorded).
+- Decisions: none taken. Questions for sign-off (the PR): 1. CH6.1's quadratures from
+  FMM3D's tables (iprec 1–3) extracted with NIST's notice, or from the generator; 2. the
+  α counts by measurement, not from `hnumphys`; 3. the proposal's "32 wavelengths"
+  corrected to 8 (§5.3, §9.2, §11, §13).
+- Laplace: not touched (a new spike crate; the root manifest's `members` and one lock
+  entry).
+- Follow-ups:
+  - CH6.1's line in the roadmap carries S4's recommendation, subject to the sign-offs.
+  - The generator returns its best quadrature at its bounds without saying so; CH6.1
+    checks the result if it uses it (report §4).
