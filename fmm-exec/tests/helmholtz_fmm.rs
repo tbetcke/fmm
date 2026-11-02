@@ -81,7 +81,7 @@ const KERNEL_TOLERANCE: f64 = 1e-13;
 /// The Dense or Classes M2L's output may differ from Rotation's by this much (relative L2
 /// of φ and of ∇φ over every rank's targets): the same operator in another order of
 /// operations (Classes also through the cube-group transforms), so rounding (at most
-/// 7.9e-16 for Dense and 2.3e-16 for Classes on the M6), with a margin of about ten.
+/// 7.9e-16 for Dense and 2.4e-16 for Classes on the M6), with a margin of about ten.
 const DENSE_TOLERANCE: f64 = 1e-14;
 
 /// SplitMix64, uniform in [0, 1).

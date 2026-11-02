@@ -417,7 +417,12 @@ at any kD.
   Rotation's output, the same at every thread count and on P ranks the one-rank FMM bit for
   bit; the tables' bytes and build time, and the M2L cost per pair against Rotation per p
   on the M6. *Needs:* CH3.1.
-- [ ] **CH3.2b Classes.** Dense over the 16 symmetry classes of CONVENTIONS §3.12 per level,
+- [x] **CH3.2b Classes.** Report: `fmm-validate/results/helmholtz-ch3-2b.md`; record
+  `docs/helmholtz/tasks/CH3.2b.md`; `nd_fmm_tables::helmholtz::classes::{ClassM2l,
+  CubeTransforms}`, `HelmholtzM2l::Classes`. Classes is Dense to rounding, its tables about
+  18× smaller; per pair Dense's chain plus the transforms, so faster than Rotation only to
+  p = 4, and end to end 1.23–3.0× Rotation's evaluation on the M6: it stays opt-in.
+  Dense over the 16 symmetry classes of CONVENTIONS §3.12 per level,
   with the cube-group coefficient transforms in the orthonormal basis of §3.15 (signed
   permutations for the elements that fix the z-axis, dense per-degree blocks for the others).
   *Done when:* against Dense to rounding at every offset; the FMM as CH3.2a's; the cost per

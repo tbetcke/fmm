@@ -142,6 +142,11 @@ transforms alone); `helmholtz_accuracy --m2l classes` on CH3.2a's cases (W1 at k
 orders. They decide nothing for the defaults (Rotation stays the default); locust and
 Kathleen are CH3.2c's.
 
+As run (2026-11-02, at b8b8301; the report's §3): both examples rebuilt first, the launches
+started after the user confirmed the machine quiet (another job of theirs had run in
+parallel), every launch gated (other processes at most 87 % before and 81 % during; none
+void). Report `fmm-validate/results/helmholtz-ch3-2b.md`.
+
 ## Constraints and risks
 
 - Constraint 1: Laplace untouched (no Laplace file, no driver change; `batched_m2l` stays
@@ -158,4 +163,21 @@ Kathleen are CH3.2c's.
 
 ## Pending runs
 
+None: the M6 runs are in the report; locust and Kathleen are CH3.2c's.
+
 ## Open questions
+
+For sign-off, in the PR:
+1. Classes stays opt-in (`HelmholtzM2l::Rotation` the default) with no Auto rule, as Dense:
+   end to end 1.23–3.0× Rotation's evaluation and 1.07–1.42× Dense's; per pair faster than
+   Rotation only to p = 4. The rule waits for CH3.2c.
+2. Classes shares Dense's budget (`dense_budget`, `DEFAULT_DENSE_BUDGET` 1 GiB per rank),
+   the transforms counted. Its small tables then cover coarse levels of high p (level 2 at
+   p = 30–35 on W1 at kD = 100), where a table form is slowest per pair.
+3. The transforms Oⁿ(P) (Oⁿ(P) = (−1)ⁿ Oⁿ(−P) for improper P, T_M = T_L = Oⁿ) follow from
+   CONVENTIONS §3.12 and §3.15 as they stand, so no convention changed. Should §3.15 state
+   them in a paragraph of its own at its next version bump?
+4. CH3.2a's report says Dense per pair is bound by memory; this task's measurement (the
+   class tables, in cache, take Dense's time within 5 % from p = 6) shows the arithmetic
+   binds. The correction is in this report and the progress log; CH3.2a's report is left
+   as it was merged.
