@@ -32,7 +32,8 @@
 //! Batched M2L (Helmholtz CH3.2c) on the same two scenarios with Dense's checks and its
 //! debug-build reduction (it builds Dense's tables), and against Dense's output of the same
 //! levels: bit for bit with real multipoles (real k, real charges), within
-//! `DENSE_TOLERANCE` with complex ones.
+//! `DENSE_TOLERANCE` with complex ones; and in the fused mode within `DENSE_TOLERANCE` of
+//! Rotation and Dense, 2 threads and the one-rank FMM bit for bit.
 //!
 //! Then vectors (vector v of an FMM of two bit for bit the one-vector FMM, of complex and
 //! of real charges), real charges against complex ones with Im q = 0, and the errors (an
@@ -58,7 +59,7 @@ use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, Degrees, DensityError, HelmholtzFmm, HelmholtzFmmBuilder,
     HelmholtzFmmError, HelmholtzM2l, OperatorError, Output, Wavenumber,
 };
-use nd_fmm_exec::operator::{Isa, P2pChoice};
+use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
 use nd_fmm_ref::helmholtz::p2p;
 use nd_fmm_tables::helmholtz::classes::{ClassM2l, CubeTransforms};
@@ -684,6 +685,28 @@ fn check_tables(
                 "{name} against Dense: φ {phi:e}, ∇φ {grad:e}"
             );
         }
+        // The fused mode: Rotation's and Dense's output to rounding; 2 threads and the
+        // one-rank FMM bit for bit (pair by pair the separate mode's run above shows: the
+        // level call and the pair body share their calls, and the mode only changes a step).
+        let fused = tables.clone().m2l_mul_add(MulAdd::Fused);
+        let name = format!("{name}, fused");
+        let (_, output) = run(&fused, &inputs, kind, comm);
+        let (phi, grad) = difference(&output, &rotation, comm);
+        let (dense_phi, dense_grad) = difference(&output, dense, comm);
+        if rank == 0 {
+            println!(
+                "{name} against Rotation: relative L2 φ {phi:.2e}, ∇φ {grad:.2e}; against \
+                 Dense φ {dense_phi:.2e}, ∇φ {dense_grad:.2e}"
+            );
+        }
+        assert!(
+            phi.max(grad).max(dense_phi).max(dense_grad) <= tolerance,
+            "{name}: φ {phi:e}, ∇φ {grad:e} against Rotation, φ {dense_phi:e}, ∇φ \
+             {dense_grad:e} against Dense"
+        );
+        let (_, threaded) = run(&fused.clone().threads(2), &inputs, kind, comm);
+        assert_same(&format!("{name}, 2 threads"), &threaded, &output, comm);
+        check_one_rank(&name, &fused, &inputs, kind, &output, comm);
     }
 
     // Also the finest level's tables alone, RCR on the coarser levels (with more than one

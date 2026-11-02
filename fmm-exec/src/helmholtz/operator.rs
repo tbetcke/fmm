@@ -21,6 +21,7 @@
 //! | M2M, L2L, M2L | `nd_fmm_tables::helmholtz::HelmholtzTables` (RCR with the level's tables; real shifts on each plane for real k) |
 //! | M2L under [`HelmholtzM2l::Dense`] | `nd_fmm_tables::helmholtz::dense::DenseM2l` on the levels whose tables fit the budget, RCR on the others |
 //! | M2L under [`HelmholtzM2l::Classes`] | `nd_fmm_tables::helmholtz::classes::ClassM2l` on the levels whose tables fit the budget, RCR on the others |
+//! | M2L under [`HelmholtzM2l::Batched`] | `nd_fmm_tables::helmholtz::batched::BatchedM2l` by `nd_fmm_simd::MatrixKernel`, block by block, on the levels whose tables fit the budget, RCR on the others |
 //! | P2L | `nd_fmm_ref::helmholtz::leaf::p2l` in the source leaf's units, at (ĉ(t\|s), r̂(t\|s)) |
 //! | M2P | `nd_fmm_ref::helmholtz::leaf::m2p` in the target leaf's units, at (ĉ(s\|t), r̂(s\|t)) |
 //! | P2P | `nd_fmm_simd::P2pKernel::evaluate_helmholtz` on the ISA of the [`P2pChoice`], or `nd_fmm_ref::helmholtz::p2p::p2p` for [`P2pChoice::Reference`], in the target leaf's units, the sources mapped as ĉ(s\|t) + r̂(s\|t) u |
@@ -82,13 +83,43 @@
 //! blocks for the others. So Classes agrees with Dense, and with Rotation, to rounding, and
 //! is deterministic and rank-invariant as Dense is.
 //!
+//! Under [`HelmholtzM2l::Batched`] (Helmholtz CH3.2c; proposal §5.3) a level whose tables
+//! fit the same budget (Dense's `select`) holds Dense's matrices in split planes, A_r and
+//! A_i each n × n (`BatchedM2l`), and its M2L level call runs as Laplace's batched M2L
+//! does, with its own block (not `driver::m2l_block`, whose layout is Laplace's; the user,
+//! 2026-11-02): blocks of `M2L_BLOCK_TARGETS` consecutive targets, and in each the offset
+//! indices d in order, the pairs of the grouped view's `batch(d)` whose target lies in the
+//! block, m columns a pair, through `nd_fmm_simd::MatrixKernel::accumulate_columns` (on the
+//! ISA of the P2P kernel, the scalar path for [`P2pChoice::Reference`]), each table read
+//! once per block. Per offset, on each column, in the default [`MulAdd::Separate`] mode
+//! (`MatrixSet::apply`'s steps, product and sum rounded apart):
+//!
+//! - real multipoles (real k, real charges): L_r += A_r M, then L_i += A_i M, Dense's chain
+//!   bit for bit;
+//! - complex multipoles: L_r += A_r M_r; L_r −= A_i M_i (L_r negated, A_i M_i added and L_r
+//!   negated back, exact); L_i += A_i M_r; L_i += A_r M_i. Each column sums the real plane's
+//!   products before the imaginary plane's where Dense alternates them per k, so Batched is
+//!   Dense to rounding here (CH3.2a's sign-off 2), with no per-target epilogue.
+//!
+//! In the opt-in [`MulAdd::Fused`] mode ([`with_m2l_mul_add`](HelmholtzOperator::with_m2l_mul_add))
+//! each step is one fma: Dense to rounding also with real multipoles (within n u per
+//! element of the separate form), and about twice the separate form's rate where the
+//! kernel is bound by its arithmetic (fmm-validate/results/helmholtz-ch3-2c.md).
+//!
+//! An element depends on its own column only, and a target meets the offsets in the order
+//! of its row, so the level call is the pair body (the same calls with one column per
+//! vector) bit for bit: the same at every thread count, block split and ISA, and on P ranks
+//! the one-rank output. Levels without tables run target by target by RCR.
+//!
 //! # Execution
 //!
 //! The level calls run on the shared drivers of `nd-fmm-exec` (Helmholtz CH2.0, CH3.5),
 //! target by target in the plan's order, serially or on the operator's pool
 //! ([`HelmholtzOperator::with_pool`]), each thread with its own scratch; the output is the
-//! same at every thread count. The batched M2L does not apply (`driver::m2l_block` assumes
-//! Laplace's layout; Helmholtz CH3.2). [`PairOperator`] runs the same bodies pair by pair.
+//! same at every thread count. The shared batched M2L does not apply (`driver::m2l_block`
+//! assumes Laplace's layout); under [`HelmholtzM2l::Batched`] the M2L level call of a level
+//! with tables runs the operator's own block instead ("M2L"). [`PairOperator`] runs the same
+//! bodies pair by pair.
 //!
 //! Yukawa (Re k = 0) is not served: its real path is CH2.1's.
 
@@ -384,8 +415,24 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             P2pChoice::Isa(isa) => Some(P2pKernel::new(isa)?),
         };
         let isa = self.kernel.p2p.as_ref().map_or(Isa::Scalar, P2pKernel::isa);
-        self.kernel.matrix = MatrixKernel::new(isa, MulAdd::Separate)?;
+        self.kernel.matrix = MatrixKernel::new(isa, self.kernel.matrix.mul_add())?;
         Ok(self)
+    }
+
+    /// Runs the batched M2L's column kernel in the mode `mul_add` (module documentation,
+    /// "M2L"; [`MulAdd::Separate`] by default): [`MulAdd::Fused`] forms each step as one
+    /// fma, within n u of the separate form per element, so the output is Dense's to
+    /// rounding also with real multipoles; deterministic, the same at every thread count,
+    /// ISA and rank count. Only [`HelmholtzM2l::Batched`] reads it.
+    pub fn with_m2l_mul_add(mut self, mul_add: MulAdd) -> Self {
+        self.kernel.matrix = MatrixKernel::new(self.kernel.matrix.isa(), mul_add)
+            .expect("the kernel's own ISA is available");
+        self
+    }
+
+    /// The batched M2L's multiply–add mode ([`with_m2l_mul_add`](Self::with_m2l_mul_add)).
+    pub fn m2l_mul_add(&self) -> MulAdd {
+        self.kernel.matrix.mul_add()
     }
 
     /// The P2P kernel as it runs: [`P2pChoice::Reference`] or [`P2pChoice::Isa`] with the

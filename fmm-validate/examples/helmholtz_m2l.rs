@@ -1,6 +1,6 @@
-//! The Helmholtz M2L per pair, Dense and Classes against Rotation per degree (Helmholtz
-//! CH3.2a, CH3.2b; docs/design/helmholtz-fmm-proposal.md §5.3, §10 CH3.2). Prints Markdown
-//! on stdout.
+//! The Helmholtz M2L per pair, Dense, Classes and Batched against Rotation per degree
+//! (Helmholtz CH3.2a, CH3.2b, CH3.2c; docs/design/helmholtz-fmm-proposal.md §5.3, §10 CH3.2).
+//! Prints Markdown on stdout.
 //!
 //! For each degree p of `--ps` (default 5, 7, 9, 12, 15, 18, 20), one level (level 2 of
 //! three, k̂ = k r₂ of `--k`, default 1 and 1 + 0.1i) with:
@@ -16,18 +16,28 @@
 //!   (signed permutations) and over the others (dense per-degree blocks), and the
 //!   transforms alone (O(Pᵀ) on each multipole plane and O(P) on both local planes, over
 //!   all 316 offsets, without `m2l`'s two scratch fills);
+//! - Batched: `nd_fmm_tables::helmholtz::batched::BatchedM2l` (Dense's matrices in split
+//!   planes) by `nd_fmm_simd::MatrixKernel` (`MulAdd::Separate`, the default ISA), the call
+//!   sequence of the Helmholtz operator's batched M2L (its module docs, "M2L": two calls
+//!   per offset for one plane, four with L_r negated around the third for two), restated
+//!   here: per pass the offsets in turn, each with `--columns` pairs (default 32; a block
+//!   of 64 targets on a uniform level has about 38 per offset), their own multipoles into
+//!   one block of as many locals, so each table is read once per offset and block; its
+//!   build seconds (its bytes are Dense's);
 //!
-//! each pass the offsets in turn, each with its own multipole of `--vectors` vectors
-//! (default 1) into its own local, as a level call reads the tables; the time per pair is
-//! the median over 15 batches of passes (`bench::median_time_per_call`), on one thread. Per
+//! the other strategies each pass the offsets in turn, each with its own multipole of
+//! `--vectors` vectors (default 1) into its own local, as a level call reads the tables;
+//! the time per pair is the median over 15 batches of passes
+//! (`bench::median_time_per_call`), on one thread. Per
 //! real k the real multipoles of real charges (one plane) and complex ones (two planes); per
 //! complex k two planes. Before timing, Dense's and Classes' locals of one pass are compared
-//! with Rotation's (the largest relative L2 of a local), so that a timed row is a correct
-//! one. The cost per pair does not depend on k (the tables' size and the operations are
+//! with Rotation's (the largest relative L2 of a local), and Batched's block with Dense's
+//! applied pair by pair to the same pairs, so that a timed row is a correct one. The cost per pair does not depend on k (the tables' size and the operations are
 //! p's); k only changes the values.
 //!
 //! Options: `--ps p,…`, `--k re[+im],…` (k̂ on the level, e.g. `1,1+0.1`), `--vectors m`,
-//! `--max-mb MB` (skip Dense above this many MB of tables per level; default 2048).
+//! `--columns c` (Batched's pairs per offset), `--max-mb MB` (skip Dense and Batched above
+//! this many MB of tables per level; default 2048).
 //!
 //! Run in release mode with one BLAS thread:
 //!
@@ -42,7 +52,9 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use nd_fmm_math::{Complex, Layout};
+use nd_fmm_simd::{MatrixKernel, MulAdd};
 use nd_fmm_tables::geometry::M2L_OFFSET_COUNT;
+use nd_fmm_tables::helmholtz::batched::BatchedM2l;
 use nd_fmm_tables::helmholtz::classes::ClassM2l;
 use nd_fmm_tables::helmholtz::dense::DenseM2l;
 use nd_fmm_tables::helmholtz::{DEFAULT_BLOCK_BUDGET, HelmholtzTables};
@@ -57,6 +69,7 @@ struct Arguments {
     ps: Vec<usize>,
     ks: Vec<Complex<f64>>,
     vectors: usize,
+    columns: usize,
     max_bytes: usize,
 }
 
@@ -64,8 +77,8 @@ fn arguments() -> Arguments {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let usage = || -> ! {
         eprintln!(
-            "usage: helmholtz_m2l [--ps p,…] [--k re[+im],…] [--vectors m] [--max-mb MB]; \
-             got {args:?}"
+            "usage: helmholtz_m2l [--ps p,…] [--k re[+im],…] [--vectors m] [--columns c] \
+             [--max-mb MB]; got {args:?}"
         );
         std::process::exit(2);
     };
@@ -73,6 +86,7 @@ fn arguments() -> Arguments {
         ps: vec![5, 7, 9, 12, 15, 18, 20],
         ks: vec![Complex::new(1.0, 0.0), Complex::new(1.0, 0.1)],
         vectors: 1,
+        columns: 32,
         max_bytes: 2048 << 20,
     };
     let k = |v: &str| -> Option<Complex<f64>> {
@@ -102,6 +116,12 @@ fn arguments() -> Arguments {
                 .ok()
                 .filter(|&m| m > 0)
                 .map(|m| parsed.vectors = m)
+                .is_some(),
+            "--columns" => value
+                .parse::<usize>()
+                .ok()
+                .filter(|&c| c > 0)
+                .map(|c| parsed.columns = c)
                 .is_some(),
             "--max-mb" => value
                 .parse::<usize>()
@@ -142,6 +162,45 @@ fn worst_difference(got: &[Vec<f64>], reference: &[Vec<f64>]) -> f64 {
         .fold(0.0f64, f64::max)
 }
 
+/// The Helmholtz operator's batched M2L of one offset (its module docs, "M2L"), restated:
+/// the planes (A_r, A_i) on the columns whose real planes start at `sources` in
+/// `multipoles` and at `targets` in `locals`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the kernel, the planes, two column lists over two slices, and the packing buffer"
+)]
+fn batched_apply(
+    matrix: &MatrixKernel<f64>,
+    n: usize,
+    planes: usize,
+    (a_r, a_i): (&[f64], &[f64]),
+    multipoles: &[f64],
+    sources: &[usize],
+    locals: &mut [f64],
+    targets: &[usize],
+    pack: &mut [f64],
+) {
+    let negate = |locals: &mut [f64]| {
+        for &o in targets {
+            for x in &mut locals[o..o + n] {
+                *x = -*x;
+            }
+        }
+    };
+    matrix.accumulate_columns(n, a_r, multipoles, sources, locals, targets, pack);
+    if planes == 1 {
+        matrix.accumulate_columns(n, a_i, multipoles, sources, &mut locals[n..], targets, pack);
+        return;
+    }
+    let imaginary = &multipoles[n..];
+    negate(locals);
+    matrix.accumulate_columns(n, a_i, imaginary, sources, locals, targets, pack);
+    negate(locals);
+    let locals_i = &mut locals[n..];
+    matrix.accumulate_columns(n, a_i, multipoles, sources, locals_i, targets, pack);
+    matrix.accumulate_columns(n, a_r, imaginary, sources, locals_i, targets, pack);
+}
+
 /// The median time per pair of `pass` over `pairs` pairs a pass, in ns.
 fn ns_per_pair(pairs: usize, mut pass: impl FnMut()) -> f64 {
     median_time_per_call(|calls| {
@@ -169,7 +228,10 @@ fn main() {
     let (z_axis, others): (Vec<usize>, Vec<usize>) = all
         .iter()
         .partition(|&&d| elements[d].0.permutation()[2] == 2);
-    println!("# Helmholtz M2L per pair: Dense and Classes against Rotation (CH3.2a, CH3.2b)");
+    println!(
+        "# Helmholtz M2L per pair: Dense, Classes and Batched against Rotation (CH3.2a, \
+         CH3.2b, CH3.2c)"
+    );
     println!();
     println!(
         "{}, {}, {}; one thread, f64, level {LEVEL}, {m} vector(s), the 316 offsets per pass \
@@ -185,18 +247,27 @@ fn main() {
     println!(
         "ns per pair; Classes over all offsets, over the z-axis offsets (z) and the others \
          (moving), and its two transforms alone (O(Pᵀ) per multipole plane, O(P) per local \
-         plane, over all offsets)."
+         plane, over all offsets); Batched {} pairs per offset on the {:?} column kernel, \
+         its error against Dense applied pair by pair to the same pairs.",
+        arguments.columns,
+        MatrixKernel::<f64>::detect(MulAdd::Separate).isa(),
     );
     println!();
     println!(
         "| p | k̂ | planes | Rotation | Dense | Classes | Classes z | Classes moving \
          | transforms | Rotation / Classes | Dense / Classes | Dense MB | Classes MB \
-         | Dense build s | Classes build s | Dense against Rotation | Classes against Rotation |"
+         | Dense build s | Classes build s | Dense against Rotation | Classes against Rotation \
+         | Batched | Batched fused | Rotation / Batched | Rotation / fused | Dense / Batched \
+         | Dense / fused | Batched build s | Batched against Dense | fused against Dense |"
     );
     println!(
         "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: \
-         | ---: | ---: | ---: | ---: | ---: |"
+         | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: \
+         | ---: | ---: |"
     );
+    let matrix = MatrixKernel::<f64>::detect(MulAdd::Separate);
+    let fused = MatrixKernel::<f64>::detect(MulAdd::Fused);
+    let c = arguments.columns;
     for &p in &arguments.ps {
         for &k_level in &arguments.ks {
             // k̂₀ = 4 k̂₂ (exact): level 2 of three.
@@ -209,6 +280,11 @@ fn main() {
                 let start = Instant::now();
                 let dense = DenseM2l::<f64>::build(k_root, &degrees, &levels);
                 (dense, start.elapsed().as_secs_f64())
+            });
+            let batched = (bytes <= arguments.max_bytes).then(|| {
+                let start = Instant::now();
+                let batched = BatchedM2l::<f64>::build(k_root, &degrees, &levels);
+                (batched, start.elapsed().as_secs_f64())
             });
             let start = Instant::now();
             let classes = ClassM2l::<f64>::build(k_root, &degrees, &levels);
@@ -287,7 +363,7 @@ fn main() {
                     let time = ns_per_pair(M2L_OFFSET_COUNT, || dense_pass(black_box(&mut locals)));
                     (worst, time, *build)
                 });
-                let (dense_time, dense_ratio, dense_build, dense_worst) = match dense_row {
+                let (dense_time, dense_ratio, dense_build, dense_worst) = match &dense_row {
                     Some((worst, time, build)) => (
                         format!("{time:.0}"),
                         format!("{:.2}", time / classes_all),
@@ -295,6 +371,77 @@ fn main() {
                         format!("{worst:.1e}"),
                     ),
                     None => ("–".into(), "–".into(), "–".into(), "–".into()),
+                };
+                // Batched on a block of c pairs per offset: its time per pair and build
+                // seconds, and its error against Dense on the same pairs.
+                let batched_row = dense
+                    .as_ref()
+                    .zip(batched.as_ref())
+                    .map(|(dense, batched)| {
+                        let (dense, (batched, build)) = (&dense.0, batched);
+                        let (input_len, local_len) = (m * planes * n, m * 2 * n);
+                        let block_inputs: Vec<f64> = (0..c)
+                            .flat_map(|j| inputs[j % M2L_OFFSET_COUNT].iter().copied())
+                            .collect();
+                        let sources: Vec<usize> = (0..c * m).map(|i| i * planes * n).collect();
+                        let targets: Vec<usize> = (0..c * m).map(|i| i * 2 * n).collect();
+                        let mut block = vec![0.0; c * local_len];
+                        let mut pack = vec![0.0; MatrixKernel::<f64>::pack_len(n)];
+                        let mut batched_pass = |matrix: &MatrixKernel<f64>, block: &mut [f64]| {
+                            for d in 0..M2L_OFFSET_COUNT {
+                                let planes_d = batched.planes(LEVEL, d);
+                                batched_apply(
+                                    matrix,
+                                    n,
+                                    planes,
+                                    planes_d,
+                                    &block_inputs,
+                                    &sources,
+                                    block,
+                                    &targets,
+                                    &mut pack,
+                                );
+                            }
+                        };
+                        let mut expected = vec![0.0; c * local_len];
+                        for d in 0..M2L_OFFSET_COUNT {
+                            for (x, y) in block_inputs
+                                .chunks_exact(input_len)
+                                .zip(expected.chunks_exact_mut(local_len))
+                            {
+                                dense.m2l(LEVEL, d, x, planes, y, m);
+                            }
+                        }
+                        let chunks = |v: &[f64]| -> Vec<Vec<f64>> {
+                            v.chunks_exact(local_len).map(<[f64]>::to_vec).collect()
+                        };
+                        // Each mode: one pass checked against Dense, then timed.
+                        let mut mode = |matrix: &MatrixKernel<f64>| {
+                            block.fill(0.0);
+                            batched_pass(matrix, &mut block);
+                            let worst = worst_difference(&chunks(&block), &chunks(&expected));
+                            let time = ns_per_pair(M2L_OFFSET_COUNT * c, || {
+                                batched_pass(matrix, black_box(&mut block))
+                            });
+                            (time, worst)
+                        };
+                        (mode(&matrix), mode(&fused), *build)
+                    });
+                let batched_cells = match (batched_row, &dense_row) {
+                    (
+                        Some(((time, worst), (fused, fused_worst), build)),
+                        Some((_, dense_time, _)),
+                    ) => {
+                        format!(
+                            "{time:.0} | {fused:.0} | {:.2} | {:.2} | {:.2} | {:.2} | {build:.2} \
+                             | {worst:.1e} | {fused_worst:.1e}",
+                            rotation / time,
+                            rotation / fused,
+                            dense_time / time,
+                            dense_time / fused,
+                        )
+                    }
+                    _ => "– | – | – | – | – | – | – | – | –".into(),
                 };
                 let dense_mb = match dense {
                     Some(_) => format!("{:.0}", bytes as f64 / 1e6),
@@ -304,7 +451,8 @@ fn main() {
                     "| {p} | {k_string} | {planes} | {rotation:.0} | {dense_time} \
                      | {classes_all:.0} | {classes_z:.0} | {classes_moving:.0} \
                      | {transforms_only:.0} | {:.2} | {dense_ratio} | {dense_mb} | {:.1} \
-                     | {dense_build} | {classes_build:.2} | {dense_worst} | {classes_worst:.1e} |",
+                     | {dense_build} | {classes_build:.2} | {dense_worst} | {classes_worst:.1e} \
+                     | {batched_cells} |",
                     rotation / classes_all,
                     classes.bytes() as f64 / 1e6,
                 );

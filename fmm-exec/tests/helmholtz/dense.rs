@@ -2,7 +2,8 @@
 //! M2L (Helmholtz CH3.2c): pair by pair against Rotation (and Classes and Batched against
 //! Dense) on every offset of levels 2–4, real and complex k, real and complex charges, two
 //! vectors, relative L2 over the local within [`DENSE_BOUND`] and [`CLASSES_BOUND`];
-//! Batched bit for bit Dense with real multipoles, and the same bits on every ISA; the
+//! Batched bit for bit Dense with real multipoles (separate mode), fused within the bound,
+//! and in both modes the same bits on every ISA; the
 //! levels chosen by the budget; a budget of zero is Rotation bit for bit. The FMM under each
 //! is tested in `tests/helmholtz_fmm.rs`.
 
@@ -10,7 +11,7 @@ use nd_fmm_exec::geometry::Domain;
 use nd_fmm_exec::helmholtz::{
     ChargeKind, DEFAULT_DENSE_BUDGET, Densities, HelmholtzM2l, HelmholtzOperator, Wavenumber,
 };
-use nd_fmm_exec::operator::{Isa, P2pChoice};
+use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_plan::operator::{FmmSizes, PairOperator};
 use nd_fmm_tables::geometry::{M2L_OFFSET_COUNT, m2l_offsets};
 use nd_fmm_tables::helmholtz::classes::{ClassM2l, CubeTransforms};
@@ -261,24 +262,56 @@ fn batched_is_dense_bit_for_bit_with_real_multipoles() {
     }
 }
 
-/// The column kernel gives the same bits on every ISA this machine runs, and for the
-/// reference P2P (the scalar path).
+/// Batched in the fused mode pair by pair: Dense and Rotation to rounding with one and two
+/// planes; the mode survives `with_p2p`.
+#[test]
+fn fused_batched_is_dense_to_rounding() {
+    let cases = [
+        (20.0, 0.0, ChargeKind::Real),
+        (20.0, 2.0, ChargeKind::Complex),
+    ];
+    for (re, im, kind) in cases {
+        let k = Wavenumber::new(re, im).unwrap();
+        let mut fused = operator(k, kind, 2, HelmholtzM2l::Batched, usize::MAX)
+            .with_m2l_mul_add(MulAdd::Fused)
+            .with_p2p(P2pChoice::Reference)
+            .unwrap();
+        assert_eq!(fused.m2l_mul_add(), MulAdd::Fused);
+        let mut dense = operator(k, kind, 2, HelmholtzM2l::Dense, usize::MAX);
+        let mut rotation = operator(k, kind, 2, HelmholtzM2l::Rotation, usize::MAX);
+        let (against_dense, same) = compare(&mut fused, &mut dense);
+        let (against_rotation, _) = compare(&mut fused, &mut rotation);
+        println!(
+            "k = {re} + {im}i, {kind:?}: fused Batched against Dense {against_dense:.2e}, \
+             against Rotation {against_rotation:.2e}"
+        );
+        assert!(!same, "the fused chain rounds differently");
+        assert!(against_dense <= BATCHED_BOUND, "{against_dense:e}");
+        assert!(against_rotation <= BATCHED_BOUND, "{against_rotation:e}");
+    }
+}
+
+/// In both modes the column kernel gives the same bits on every ISA this machine runs, and
+/// for the reference P2P (the scalar path).
 #[test]
 fn batched_is_the_same_on_every_isa() {
     let k = Wavenumber::new(20.0, 2.0).unwrap();
-    let mut scalar = operator(k, ChargeKind::Complex, 2, HelmholtzM2l::Batched, usize::MAX)
-        .with_p2p(P2pChoice::Isa(Isa::Scalar))
-        .unwrap();
-    let choices = Isa::all()
-        .filter(|isa| isa.is_available())
-        .map(P2pChoice::Isa)
-        .chain([P2pChoice::Reference, P2pChoice::Auto]);
-    for choice in choices {
-        let mut other = operator(k, ChargeKind::Complex, 2, HelmholtzM2l::Batched, usize::MAX)
-            .with_p2p(choice)
-            .unwrap();
-        let (_, same) = compare(&mut other, &mut scalar);
-        assert!(same, "{choice}: not the scalar path's bits");
+    for mode in [MulAdd::Separate, MulAdd::Fused] {
+        let batched = || {
+            operator(k, ChargeKind::Complex, 2, HelmholtzM2l::Batched, usize::MAX)
+                .with_m2l_mul_add(mode)
+        };
+        let mut scalar = batched().with_p2p(P2pChoice::Isa(Isa::Scalar)).unwrap();
+        let choices = Isa::all()
+            .filter(|isa| isa.is_available())
+            .map(P2pChoice::Isa)
+            .chain([P2pChoice::Reference, P2pChoice::Auto]);
+        for choice in choices {
+            let mut other = batched().with_p2p(choice).unwrap();
+            assert_eq!(other.m2l_mul_add(), mode);
+            let (_, same) = compare(&mut other, &mut scalar);
+            assert!(same, "{mode}, {choice}: not the scalar path's bits");
+        }
     }
 }
 
