@@ -1668,5 +1668,6 @@ request, using this template:
   change; the driver's `Columns`, `Execution::blocks` and `M2L_BLOCK_TARGETS` used as they are).
 - Follow-ups:
   - The M2L rule per level (question 1): fused Batched below a machine's crossover degree,
-    Rotation above, within the budget; with sparse levels (W1) counted.
-  - CH3.2 is done with this task: H3.G becomes runnable on its side.
+    Rotation above, within the budget; with sparse levels (W1) counted. Added to the
+    roadmap as CH3.2d at the sign-off, before H3.G.
+  - CH3.2a–c are done with this task; H3.G waits for CH3.2d.
