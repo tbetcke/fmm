@@ -401,7 +401,7 @@ at any kD.
   *Needs:* CH3.1. *Machines:* locust, Kathleen. Split on 2026-11-02 into three sub-tasks,
   each one reviewable PR (a new table family, its symmetry form and the batched block with
   constraint 1 and the three machines do not fit one); CH3.2 is done, and H3.G runnable on
-  its side, when all three are:
+  its side, when all three are, and CH3.2d (added at CH3.2c's sign-off) too:
 - [x] **CH3.2a Dense.** Report: `fmm-validate/results/helmholtz-ch3-2a.md`; record
   `docs/helmholtz/tasks/CH3.2a.md`; `nd_fmm_tables::helmholtz::dense`,
   `nd_fmm_exec::helmholtz::HelmholtzM2l`, the `helmholtz_m2l` example. Dense is Rotation to
