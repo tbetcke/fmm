@@ -352,6 +352,10 @@ fn tail_count(x: f64, scale: f64, share: f64) -> usize {
 /// Fourier counts. Nₖ also covers the chain: at least the count for the targets' reach
 /// from the source box's centre, ρ_max − r_s, plus Fₖ, so the truncated source orders
 /// do not alias.
+///
+/// At its bounds ([`MAX_PANELS`], the compression's tolerance floor, a fixed number of
+/// tightenings, ε below [`FLOOR`]) it returns its best quadrature even if that misses ε;
+/// a caller that relies on ε checks [`Quadrature::kernel_errors`].
 pub fn generate(kappa: C, eps: f64) -> Quadrature {
     let eps = eps.max(FLOOR);
     let grid = Grid::region();

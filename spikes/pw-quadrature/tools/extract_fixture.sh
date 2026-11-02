@@ -3,11 +3,12 @@
 # src/Helmholtz/hwts_3d_iprec{2,3}.txt, hnumfour.f, hnumphys.f), in FMM3D's own formats,
 # so that the parser and the evaluator are tested without FMM3D's sources.
 #
-# The files are NIST's: each extract keeps their notice (the first comment block) and
-# says that it was cut from them. FMM3D as a whole is Apache-2.0. Run from the spike
-# directory, with the directory tools/fetch.sh unpacked:
+# The files are NIST's: each extract keeps their entire notice (everything above the
+# first `ccccc` banner, blank lines included) and says when and how it was changed.
+# FMM3D as a whole is Apache-2.0. Run from the spike directory, on the directory that
+# tools/fetch.sh unpacks:
 #
-#   tools/extract_fixture.sh ../../target/fmm3d-src/FMM3D-2.1.0/src/Helmholtz
+#   tools/extract_fixture.sh "$(tools/fetch.sh)"
 set -eu
 src=${1:?usage: extract_fixture.sh path/to/FMM3D/src/Helmholtz}
 # Domains: 1 (κ ≈ 0, type 2), 11 (Re κ in [3π, 4π], type 2), 139 (Im κ in [1, π/2],
@@ -16,10 +17,11 @@ domains="1 11 139 172 236"
 out=fixtures
 mkdir -p "$out"
 notice() {
-    awk '/^c/ { print; next } { exit }' "$1"
-    echo "c"
-    echo "c Cut by spikes/pw-quadrature/tools/extract_fixture.sh from FMM3D v2.1.0,"
-    echo "c src/Helmholtz/$(basename "$1"): domains $domains only, otherwise unchanged."
+    awk '/^ccccc/ { exit } { print }' "$1"
+    echo "c Changed on 2026-11-02 for the fmm repository (Helmholtz CH0.4): cut by"
+    echo "c spikes/pw-quadrature/tools/extract_fixture.sh from FMM3D v2.1.0,"
+    echo "c src/Helmholtz/$(basename "$1"), to domains $domains only (in hnumfour.f"
+    echo "c and hnumphys.f also to the routines of iprec 2 and 3); otherwise unchanged."
     echo "c"
 }
 for p in 2 3; do

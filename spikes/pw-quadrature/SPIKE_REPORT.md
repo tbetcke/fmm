@@ -27,18 +27,20 @@ figure is a maximum, independent of the thread count). Accuracy only; nothing is
    CONVENTIONS §3.14's Laplace tables).
 3. **FMM3D's α counts do not keep the stated error at the region's corner** (§3.2). With
    FMM3D's own Nₖ the kernel's error reaches 69–119× the stated error (3.8·10⁻⁶ at
-   iprec 2, the precision of 5·10⁻⁷ ≤ ε < 5·10⁻⁴; 3.0·10⁻⁹ at iprec 3), always at
-   ρ = 4√2, z = 1; within ρ ≤ 4 it is the stated error, and Nₖ × 1.25 to × 2 restores
-   it. The Laplace tables behave alike (6–23×, CONVENTIONS §3.14's spike), and there the
-   counts were chosen by measurement.
+   iprec 2, the precision of 5·10⁻⁷ ≤ ε < 5·10⁻⁴; 3.0·10⁻⁹ at iprec 3). On the four
+   worst domains examined it peaks at the corner ρ = 4√2, z = 1; Nₖ × 2 brings three of
+   them to within 1.2× the stated error, the fourth to 5.6×. The Laplace tables behave
+   alike (6–23×, CONVENTIONS §3.14's spike), and there the counts were chosen by
+   measurement.
 4. **An independent generator works for any κ** (§4): the Sommerfeld integral on the
    contour of real t (no wave grows), composite Gauss–Legendre, compressed by a
    column-pivoted Gram–Schmidt with refitted weights, α and Fourier counts from Bessel
-   bounds. It meets ε on the region, off its samples and in the point-to-point chain,
-   for real, imaginary and complex κ, inside and outside FMM3D's domains. At FMM3D's own
-   measured error it needs 1.5–1.9× FMM3D's wave values Σ Nₖ for real and weakly damped
-   κ, and 2.3–9.6× for Yukawa and strongly damped κ, where FMM3D's tables get by with a few
-   nodes (§4.1). So the tables are the cheaper source; the generator is the fallback.
+   bounds. It met ε on every point measured, on the region, off its samples and in the
+   point-to-point chain, for real, imaginary and complex κ, inside and outside FMM3D's
+   domains (on the reference levels at most 0.6 ε, the 11 levels outside the tables
+   included). At FMM3D's own measured error it needs 1.5–1.9× FMM3D's wave values Σ Nₖ on
+   average for real and weakly damped κ, and 2.4–4.4× (1.6–9.6× per point) for Yukawa
+   and strongly damped κ, where FMM3D's tables get by with a few nodes (§4.1). So the tables are the cheaper source; the generator is the fallback.
 5. **The tables cover every level that would use them** (§5). On the reference trees
    (root side 1, κ_l = kD/2^l) every unpruned level with Re κ_l < 16π falls in a domain;
    at kD = 500 levels 2 and 3 (κ = 125, 62.5, boxes 20 and 10 λ) fall outside (high
@@ -138,6 +140,14 @@ midpoints, centre).
 | 3 | 1.00e-10 | 1.50 | 119 | 3.0e-9 | 6.3e-9 |
 | 4 | 1.00e-13 | 5.51 | 93 | 3.6e-12 | 8.2e-12 |
 
+The column relative to the region's largest |G| (in the file) exceeds 1 in some domains
+with large Im κ (3.4 at iprec 0, 2.4 at iprec 1): there |G| ≤ e^{−Im κ} is itself below
+the precision, and the tables, fitted in the absolute norm, do not resolve it. FMM3D
+accepts this because a far field that small is below ε against the near field; a
+pointwise relative criterion would need more nodes there. The pointwise relative error
+is computed (`region::Errors::pointwise`) but not reported: for real κ it is the absolute
+error times at most |u| ≤ √48, and for decaying κ it is unbounded where |G| underflows.
+
 ### 3.1 The λ sums
 
 They meet the stated error within 1.5× at iprec 0–3; the worst points are rectangle
@@ -146,8 +156,8 @@ waves grow by e^{|Im t| ρ} and round-off sets the floor.
 
 ### 3.2 The α counts
 
-With FMM3D's Nₖ the error peaks at u = (±4, ±4, 1), the corner of the region
-(`examples/alpha.rs`):
+With FMM3D's Nₖ the error peaks at u = (±4, ±4, 1), the corner of the region, on the
+four domains examined (`examples/alpha.rs`, output in `results/alpha.md`):
 
 | iprec, domain, κ | stated | Nₖ × 1 | × 1.25 | × 1.5 | × 2 | ρ ≤ 4 only |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -156,9 +166,11 @@ With FMM3D's Nₖ the error peaks at u = (±4, ±4, 1), the corner of the region
 | 2, 34, 12.57 + 0.02i | 6.9e-8 | 1.39e-6 | 5.03e-7 | 4.13e-7 | 3.84e-7 | 3.76e-7 |
 | 2, 11, 12.57 | 7.2e-8 | 1.12e-6 | 2.75e-7 | 1.14e-7 | 8.46e-8 | 1.99e-7 |
 
-So FMM3D's counts resolve J₀(tρ) to about ρ = 4, not to the corner's 4√2; a V pair
-reaches the corner only from its extreme lateral offsets (3 boxes across in both
-directions and the nearest along). Whether FMM3D's chain, with its multipole and local
+On domains 88 and 85 FMM3D's counts resolve J₀(tρ) to about ρ = 4 and miss only the
+corner's 4√2; on domains 34 and 11 the error stays 2.8–5.5× the stated one within
+ρ ≤ 4 as well, and Nₖ × 2 is not enough on domain 34 (5.6×). A V pair reaches the corner
+only from its extreme lateral offsets (3 boxes across in both directions and the nearest
+along). Whether FMM3D's chain, with its multipole and local
 truncated to degree p on both sides, sees this error is CH6.2's comparison; the
 point-to-point chain here does (the last column of the table above).
 
@@ -182,8 +194,12 @@ point-to-point chain here does (the last column of the table above).
 
 Tests (`tests/generator.rs`): ε met on the grid, at 200 seeded points off it (within 2ε)
 and in the chain (2ε), at κ = 0, 5, 20, 16π, 5i, 30i, 10 + 3i, 40 + 20i, 10 + 10⁻³i and
-ε = 10⁻³, 10⁻⁶, 10⁻⁹ (the release-only test `meets_eps_everywhere`); every tₖ real; the
-panels converged.
+ε = 10⁻³, 10⁻⁶, 10⁻⁹ (the release-only test `meets_eps_everywhere`, run on the M6); every
+tₖ real; the panels converged. The generator meets ε on every point measured here, but
+not by construction: at its bounds (64 panels per segment, the compression's tolerance
+floor, a fixed number of tightenings, ε ≥ 10⁻¹³) it returns its best quadrature without
+saying so. CH6.1's use should check the kernel's error on the region and fail if it
+misses ε.
 
 ### 4.1 Against FMM3D on rays of κ
 
@@ -214,7 +230,7 @@ minutes per κ, and D1's ε needs iprec ≤ 3.
 
 ## 5. The levels
 
-`results/levels.md` (`examples/sweep.rs levels`, 17 s): root side D = 1, so
+`results/levels.md` (`examples/sweep.rs levels`, 31 s): root side D = 1, so
 κ_l = kD/2^l, for real kD = 10, 100, 500, Yukawa κD = 10, 100, 500 and damped
 kD = 100 + 5i, 500 + 25i, levels 2 to 8, ε = 10⁻³, 10⁻⁶, 10⁻⁸ (iprec 1, 2, 3).
 
@@ -222,8 +238,9 @@ kD = 100 + 5i, 500 + 25i, levels 2 to 8, ε = 10⁻³, 10⁻⁶, 10⁻⁸ (iprec
   domain: 138 of the 168 (case, level, ε) rows. The 11 outside are levels 2 and 3 at
   kD = 500 (κ = 125 and 62.5, boxes of 20 and 10 λ), real and damped; they are high
   frequency (proposal §3.6, H4), and the generator serves them if ever needed, at
-  21,000 to 158,000 wave values per direction. 20 rows are pruned by §5.5's test
-  (θ_D = 1): the coarse Yukawa levels at κD = 100 and 500. The unpruned Yukawa levels
+  21,000 to 158,000 wave values per direction. 19 rows are pruned by §5.5's test
+  (θ_D = 1): the coarse Yukawa levels at κD = 100 and 500, and level 2 of the damped
+  kD = 500 + 25i at ε = 10⁻³ (138 + 11 + 19 = 168). The unpruned Yukawa levels
   reach Im κ_l = 15.6 (κD = 500, level 5, ε = 10⁻⁸), well inside Im κ < 12π, so Yukawa
   is pruned before it reaches the tables' upper edge; FMM3D's own cut drops only levels
   that §5.5 prunes too.
@@ -231,9 +248,10 @@ kD = 100 + 5i, 500 + 25i, levels 2 to 8, ε = 10⁻³, 10⁻⁶, 10⁻⁸ (iprec
   rows, by at most 1.8× (1.8·10⁻³ at ε = 10⁻³ on real kD = 100, level 5): all at ε =
   10⁻³ or 10⁻⁶, all §3.2's corner. At ε = 10⁻⁸ iprec 3 gives 10⁻¹⁰ to 10⁻⁹, 10 to 100
   times below ε: FMM3D's precisions are three digits apart.
-- **The generator at ε** needs 1.92× FMM3D's Σ Nₖ on the in-table rows (1.28–3.61),
-  less than §4.1's ratios at ε = 10⁻⁸, where it may use the slack FMM3D's precision step
-  leaves.
+- **The generator at ε** meets ε on all 149 unpruned rows, the 11 outside the tables
+  included: its kernel's and its chain's errors are at most 0.6 ε. It needs 1.92× FMM3D's
+  Σ Nₖ on the in-table rows (1.28–3.61), less than §4.1's ratios at ε = 10⁻⁸, where it may
+  use the slack FMM3D's precision step leaves.
 
 ## 6. Recommendation for CH6.1
 
@@ -245,13 +263,15 @@ kD = 100 + 5i, 500 + 25i, levels 2 to 8, ε = 10⁻³, 10⁻⁶, 10⁻⁸ (iprec
    function of k, w_l and ε only (constraint 9).
 2. **The α counts by measurement**, not from `hnumphys` as they are: FMM3D's misses its
    stated error at the region's corner by up to 119×, and up to 1.8× above ε on the
-   reference levels. Either Nₖ scaled by 1.25 to 2 until the region meets the precision
-   (as §3.14 chose its Laplace counts), or this spike's Bessel bound applied to the
-   table's nodes. CH6.1's criterion (errors within about 1.1× Rotation's, end to end) is
+   reference levels. Either Nₖ scaled per domain until the region meets the precision
+   (as §3.14 chose its Laplace counts; × 2 is not always enough, §3.2), or a bound like
+   this spike's (`generator::tail_count`), adapted to the complex tₖ of the type-2
+   nodes. CH6.1's criterion (errors within about 1.1× Rotation's, end to end) is
    what decides; the precision may then sit one step tighter than `hwts3e`'s at
    ε = 10⁻³ and 10⁻⁶.
 3. **The generator** (`src/generator.rs`) as the trusted path of CH6.1's tests (it is
-   independent of FMM3D's tables and meets ε by construction), and as the source for any
+   independent of FMM3D's tables and met ε on every point measured, with a check of its
+   result added, §4), and as the source for any
    level outside the tables, should one ever want the exponential M2L there.
 4. **Correct the proposal**: FMM3D's plane waves stop at boxes of 8 wavelengths
    (§2.4).
@@ -269,3 +289,11 @@ cargo run --release -p nd-fmm-spike-pw-quadrature --example alpha -- "$FMM3D_HEL
 
 The fixture (`fixtures/`, domains 1, 11, 139, 172 and 236 at iprec 2 and 3) is cut from
 FMM3D's files by `tools/extract_fixture.sh`, with NIST's notice kept.
+Both commands ran on the M6 on 2026-11-02 and passed: the default tests, and the ignored
+ones (`fmm3d_full`, which parses all 437 × 5 tables and checks their rectangles, types,
+counts and stated errors, and `meets_eps_everywhere`). The fixture tests allow the λ sums
+1.5× the stated error (the worst of the full sweep, §3.1), the kernel 30× (FMM3D's α
+counts, §3.2) and the truncated chain 30× the kernel's error; they pin the parser, the node
+maps and the evaluator, while the sweeps above carry the measurements. The fixture is
+regenerated by the spike's own script, as `spikes/radial` and `spikes/coaxial` do, not by
+`tools/fixtures/`, which serves the workspace crates.
