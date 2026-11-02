@@ -112,6 +112,17 @@
 //! vector) bit for bit: the same at every thread count, block split and ISA, and on P ranks
 //! the one-rank output. Levels without tables run target by target by RCR.
 //!
+//! [`HelmholtzM2l::Auto`] (Helmholtz CH3.2d) is the rule per level: Batched in the fused
+//! mode (unless [`with_m2l_mul_add`](HelmholtzOperator::with_m2l_mul_add) names the
+//! separate one) on the levels of degree p_l at most a crossover that fit the budget, from
+//! the finest level up (`BatchedM2l::select_within`), RCR on the others. The crossover is
+//! [`auto_batched_max_degree`] of the column kernel's ISA and the multipole planes, or the
+//! degree named by [`with_m2l_max_degree`](HelmholtzOperator::with_m2l_max_degree); so the
+//! choice is a function of the degrees, the budget and the machine class only (proposal
+//! §2, constraint 9), and each level runs Batched's or Rotation's level call as those
+//! settings do, deterministic and rank-invariant alike. `HelmholtzFmmBuilder` agrees the
+//! crossover over the ranks.
+//!
 //! # Execution
 //!
 //! The level calls run on the shared drivers of `nd-fmm-exec` (Helmholtz CH2.0, CH3.5),
@@ -185,6 +196,30 @@ pub enum HelmholtzM2l {
     /// Dense's matrices in split planes, applied block by block by the column kernel, on the
     /// levels whose tables fit the dense budget, from the finest level up; RCR on the others.
     Batched,
+    /// The rule per level (Helmholtz CH3.2d): Batched, in the fused mode unless one is named,
+    /// on the levels of degree at most the crossover of the machine class
+    /// ([`auto_batched_max_degree`]) whose tables fit the dense budget, from the finest level
+    /// up; RCR on the others.
+    Auto,
+}
+
+/// The crossover degree of [`HelmholtzM2l::Auto`] (Helmholtz CH3.2d; the operator module
+/// documentation, "M2L"): the largest p_l at which the fused Batched M2L is expected to beat
+/// Rotation, for the column kernel's ISA (the machine class) and the multipole's planes (1
+/// for real k with real charges, 2 otherwise). A function of these two alone, so every rank
+/// of one machine class chooses alike (proposal §2, constraint 9); measured in
+/// fmm-validate/results/helmholtz-ch3-2d.md.
+pub fn auto_batched_max_degree(isa: Isa, planes: usize) -> usize {
+    let one_plane = planes == 1;
+    match (isa, one_plane) {
+        (Isa::Avx512, false) => 15,
+        (Isa::Avx512, true) => 18,
+        (Isa::Scalar, false) => 6,
+        (Isa::Scalar, true) => 8,
+        // NEON and AVX2 (and any later ISA until measured).
+        (_, false) => 10,
+        (_, true) => 12,
+    }
 }
 
 /// The default byte budget of the dense or class M2L tables of one rank, 1 GiB.
@@ -207,6 +242,10 @@ struct Kernel<T: SimdScalar> {
     tables: HelmholtzTables<T>,
     /// The M2L setting.
     m2l: HelmholtzM2l,
+    /// The byte budget of the M2L tables ([`HelmholtzOperator::with_m2l`]).
+    dense_budget: usize,
+    /// The crossover degree named for [`HelmholtzM2l::Auto`], or `None` for the rule's.
+    max_degree: Option<usize>,
     /// The dense M2L tables of the levels that have them, under [`HelmholtzM2l::Dense`].
     dense: Option<DenseM2l<T>>,
     /// The class M2L tables of the levels that have them, under [`HelmholtzM2l::Classes`].
@@ -308,6 +347,8 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             radii,
             tables,
             m2l: HelmholtzM2l::Rotation,
+            dense_budget: DEFAULT_DENSE_BUDGET,
+            max_degree: None,
             dense: None,
             classes: None,
             batched: None,
@@ -338,12 +379,49 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// finest level up (`DenseM2l::select`; [`DEFAULT_DENSE_BUDGET`] is a default), under
     /// [`HelmholtzM2l::Classes`] the class tables within the same budget
     /// (`ClassM2l::select`, the transforms included), under [`HelmholtzM2l::Batched`]
-    /// Dense's tables in split planes (`BatchedM2l::select`, Dense's), RCR on the others; under
-    /// [`HelmholtzM2l::Rotation`] ignores the budget. The tables are built in f64, serially,
-    /// O(p⁵) per offset and level (16 offsets a level for Classes, 316 for Dense).
+    /// Dense's tables in split planes (`BatchedM2l::select`, Dense's), RCR on the others;
+    /// under [`HelmholtzM2l::Auto`] Dense's tables in split planes on the levels of degree at
+    /// most the crossover ([`max_degree`](Self::max_degree)) that fit the budget
+    /// (`BatchedM2l::select_within`), with the column kernel in [`MulAdd::Fused`] (a later
+    /// [`with_m2l_mul_add`](Self::with_m2l_mul_add) names another mode), RCR on the others;
+    /// under [`HelmholtzM2l::Rotation`] ignores the budget. The tables are built in f64,
+    /// serially, O(p⁵) per offset and level (16 offsets a level for Classes, 316 for Dense).
     pub fn with_m2l(mut self, choice: HelmholtzM2l, dense_budget: usize) -> Self {
+        self.kernel.m2l = choice;
+        self.kernel.dense_budget = dense_budget;
+        if choice == HelmholtzM2l::Auto {
+            self.kernel.matrix = MatrixKernel::new(self.kernel.matrix.isa(), MulAdd::Fused)
+                .expect("the kernel's own ISA is available");
+        }
+        self.select_tables();
+        self
+    }
+
+    /// Names the crossover degree of [`HelmholtzM2l::Auto`] (`None`: the rule's,
+    /// [`auto_batched_max_degree`] of the column kernel's ISA and the multipole planes), for
+    /// the measurements, the tests and an agreement over ranks; the other settings ignore
+    /// it. Under Auto the levels are chosen again if the degree changes.
+    pub fn with_m2l_max_degree(mut self, max_degree: Option<usize>) -> Self {
+        let before = self.kernel.auto_max_degree();
+        self.kernel.max_degree = max_degree;
+        if self.kernel.m2l == HelmholtzM2l::Auto && self.kernel.auto_max_degree() != before {
+            self.select_tables();
+        }
+        self
+    }
+
+    /// The crossover degree under [`HelmholtzM2l::Auto`]: the named one, else the rule's for
+    /// the column kernel's ISA and the multipole planes; `None` under the other settings.
+    pub fn max_degree(&self) -> Option<usize> {
+        (self.kernel.m2l == HelmholtzM2l::Auto).then(|| self.kernel.auto_max_degree())
+    }
+
+    /// Builds the M2L tables of the setting, the budget and (under Auto) the crossover, and
+    /// the scratch sized for them.
+    fn select_tables(&mut self) {
         let kernel = &mut self.kernel;
-        kernel.m2l = choice;
+        let choice = kernel.m2l;
+        let dense_budget = kernel.dense_budget;
         let degrees: Vec<usize> = (0..kernel.tables.nlevels())
             .map(|l| kernel.tables.degree(l))
             .collect();
@@ -356,8 +434,13 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             let levels = ClassM2l::<T>::select(&degrees, dense_budget);
             ClassM2l::build(k_root, &degrees, &levels)
         });
-        kernel.batched = (choice == HelmholtzM2l::Batched).then(|| {
-            let levels = BatchedM2l::<T>::select(&degrees, dense_budget);
+        let max_degree = match choice {
+            HelmholtzM2l::Batched => Some(usize::MAX),
+            HelmholtzM2l::Auto => Some(kernel.auto_max_degree()),
+            _ => None,
+        };
+        kernel.batched = max_degree.map(|max_degree| {
+            let levels = BatchedM2l::<T>::select_within(&degrees, dense_budget, max_degree);
             BatchedM2l::build(k_root, &degrees, &levels)
         });
         // The class scratch and the batched columns are sized by their tables' largest
@@ -365,7 +448,6 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         for scratch in &mut self.execution.scratch {
             *scratch.get_mut().expect("a scratch set is never poisoned") = Scratch::new(kernel);
         }
-        self
     }
 
     /// The M2L setting ([`with_m2l`](Self::with_m2l)).
@@ -374,8 +456,9 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     }
 
     /// The M2L that runs on `level`: [`HelmholtzM2l::Dense`], [`HelmholtzM2l::Classes`] or
-    /// [`HelmholtzM2l::Batched`] where the level has dense, class or batched tables,
-    /// [`HelmholtzM2l::Rotation`] everywhere else (levels 0 and 1 have no M2L).
+    /// [`HelmholtzM2l::Batched`] where the level has dense, class or batched tables (under
+    /// [`HelmholtzM2l::Auto`] the levels the rule gives Batched), [`HelmholtzM2l::Rotation`]
+    /// everywhere else (levels 0 and 1 have no M2L).
     pub fn m2l_on(&self, level: usize) -> HelmholtzM2l {
         let kernel = &self.kernel;
         match (&kernel.dense, &kernel.classes, &kernel.batched) {
@@ -397,19 +480,22 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         self.kernel.classes.as_ref().map_or(0, ClassM2l::bytes)
     }
 
-    /// The bytes of the batched M2L tables (0 unless [`HelmholtzM2l::Batched`]).
+    /// The bytes of the batched M2L tables (0 unless [`HelmholtzM2l::Batched`] or
+    /// [`HelmholtzM2l::Auto`]).
     pub fn batched_bytes(&self) -> usize {
         self.kernel.batched.as_ref().map_or(0, BatchedM2l::bytes)
     }
 
     /// Runs P2P with the kernel of `choice` (module documentation, "P2P kernel"), and the
     /// batched M2L's column kernel on its ISA (the scalar path for
-    /// [`P2pChoice::Reference`]).
+    /// [`P2pChoice::Reference`]). Under [`HelmholtzM2l::Auto`] without a named crossover
+    /// the levels are chosen again if the ISA's crossover differs.
     ///
     /// # Errors
     ///
     /// [`IsaUnavailable`] for `P2pChoice::Isa(isa)` if this machine cannot run `isa`.
     pub fn with_p2p(mut self, choice: P2pChoice) -> Result<Self, IsaUnavailable> {
+        let before = self.kernel.auto_max_degree();
         self.kernel.p2p = match choice {
             P2pChoice::Auto => Some(P2pKernel::detect()),
             P2pChoice::Reference => None,
@@ -417,6 +503,9 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         };
         let isa = self.kernel.p2p.as_ref().map_or(Isa::Scalar, P2pKernel::isa);
         self.kernel.matrix = MatrixKernel::new(isa, self.kernel.matrix.mul_add())?;
+        if self.kernel.m2l == HelmholtzM2l::Auto && self.kernel.auto_max_degree() != before {
+            self.select_tables();
+        }
         Ok(self)
     }
 
@@ -424,7 +513,8 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// "M2L"; [`MulAdd::Separate`] by default): [`MulAdd::Fused`] forms each step as one
     /// fma, within n u of the separate form per element, so the output is Dense's to
     /// rounding also with real multipoles; deterministic, the same at every thread count,
-    /// ISA and rank count. Only [`HelmholtzM2l::Batched`] reads it.
+    /// ISA and rank count. Only [`HelmholtzM2l::Batched`] and [`HelmholtzM2l::Auto`] read
+    /// it; [`with_m2l`](Self::with_m2l) with Auto sets [`MulAdd::Fused`].
     pub fn with_m2l_mul_add(mut self, mul_add: MulAdd) -> Self {
         self.kernel.matrix = MatrixKernel::new(self.kernel.matrix.isa(), mul_add)
             .expect("the kernel's own ISA is available");
@@ -516,6 +606,13 @@ impl<T: SimdScalar> Scratch<T> {
 }
 
 impl<T: SimdScalar> Kernel<T> {
+    /// The crossover of [`HelmholtzM2l::Auto`]: the named one, else the rule's.
+    fn auto_max_degree(&self) -> usize {
+        self.max_degree.unwrap_or_else(|| {
+            auto_batched_max_degree(self.matrix.isa(), self.densities.multipole_planes())
+        })
+    }
+
     fn p(&self, level: usize) -> usize {
         self.tables.degree(level)
     }

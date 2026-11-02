@@ -70,10 +70,53 @@ fn levels_and_bytes_are_dense_ones() {
             "budget {budget}"
         );
     }
+    // Every degree admitted: `select`.
+    for budget in [0, 1 << 20, 60 << 20, usize::MAX] {
+        assert_eq!(
+            BatchedM2l::<f64>::select_within(&degrees, budget, usize::MAX),
+            BatchedM2l::<f64>::select(&degrees, budget),
+            "budget {budget}"
+        );
+    }
     // No level chosen: nothing built.
     let none = BatchedM2l::<f64>::build(Complex::new(2.0, 0.0), &degrees, &[false; 6]);
     assert_eq!(none.bytes(), 0);
     assert!((0..6).all(|l| !none.is_batched(l)));
+}
+
+/// `select_within` against a brute-force choice: from the finest level up, a level of
+/// degree at most `max_degree` whose tables fit what is left of the budget, never levels 0
+/// and 1 and never a level above the degree.
+#[test]
+fn levels_within_a_degree() {
+    let cases: [&[usize]; 4] = [
+        &[0, 0, 9, 7, 5, 4],
+        &[0, 0, 30, 18, 11, 7],
+        &[0, 0, 15, 15, 15],
+        &[0, 0, 12, 16, 8],
+    ];
+    for degrees in cases {
+        for max_degree in [0, 4, 5, 7, 8, 11, 15, 16, 18, 40, usize::MAX] {
+            for budget in [0, 1 << 20, 30 << 20, 300 << 20, 1 << 30, usize::MAX] {
+                let mut expected = vec![false; degrees.len()];
+                let mut left = budget;
+                for l in (2..degrees.len()).rev() {
+                    let bytes = BatchedM2l::<f64>::level_bytes(degrees[l]);
+                    if degrees[l] <= max_degree && bytes <= left {
+                        left -= bytes;
+                        expected[l] = true;
+                    }
+                }
+                assert_eq!(
+                    BatchedM2l::<f64>::select_within(degrees, budget, max_degree),
+                    expected,
+                    "degrees {degrees:?}, max degree {max_degree}, budget {budget}"
+                );
+            }
+        }
+        // A degree below every level's chooses nothing.
+        assert!(!BatchedM2l::<f64>::select_within(degrees, usize::MAX, 3).contains(&true));
+    }
 }
 
 #[test]

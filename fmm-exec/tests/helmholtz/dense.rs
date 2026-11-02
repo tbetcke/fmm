@@ -4,16 +4,20 @@
 //! vectors, relative L2 over the local within [`DENSE_BOUND`] and [`CLASSES_BOUND`];
 //! Batched bit for bit Dense with real multipoles (separate mode), fused within the bound,
 //! and in both modes the same bits on every ISA; the
-//! levels chosen by the budget; a budget of zero is Rotation bit for bit. The FMM under each
-//! is tested in `tests/helmholtz_fmm.rs`.
+//! levels chosen by the budget; a budget of zero is Rotation bit for bit. The rule per level
+//! (Helmholtz CH3.2d), level by level: fused Batched bit for bit on the levels of degree at
+//! most the crossover, Rotation bit for bit above. The FMM under each is tested in
+//! `tests/helmholtz_fmm.rs`.
 
 use nd_fmm_exec::geometry::Domain;
 use nd_fmm_exec::helmholtz::{
     ChargeKind, DEFAULT_DENSE_BUDGET, Densities, HelmholtzM2l, HelmholtzOperator, Wavenumber,
+    auto_batched_max_degree,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_plan::operator::{FmmSizes, PairOperator};
 use nd_fmm_tables::geometry::{M2L_OFFSET_COUNT, m2l_offsets};
+use nd_fmm_tables::helmholtz::batched::BatchedM2l;
 use nd_fmm_tables::helmholtz::classes::{ClassM2l, CubeTransforms};
 use nd_fmm_tables::helmholtz::dense::DenseM2l;
 use nd_octree::{MortonKey, PhysicalBox, morton};
@@ -93,6 +97,21 @@ fn compare(a: &mut HelmholtzOperator<f64>, b: &mut HelmholtzOperator<f64>) -> (f
         }
     }
     (worst, same)
+}
+
+/// Every offset of `level` through `a` and `b` from the same multipoles: whether every
+/// local was the same bit for bit.
+fn same_on(a: &mut HelmholtzOperator<f64>, b: &mut HelmholtzOperator<f64>, level: usize) -> bool {
+    let mut rng = Rng(5 + level as u64);
+    let multipole: Vec<f64> = (0..a.multipole_size(level)).map(|_| rng.next()).collect();
+    (0..M2L_OFFSET_COUNT).all(|d| {
+        let (source, target) = pair(level, d);
+        let start: Vec<f64> = (0..a.local_size(level)).map(|_| rng.next()).collect();
+        let (mut x, mut y) = (start.clone(), start);
+        a.m2l(source, target, d, &multipole, &mut x);
+        b.m2l(source, target, d, &multipole, &mut y);
+        x == y
+    })
 }
 
 #[test]
@@ -351,4 +370,176 @@ fn no_batched_budget_is_rotation_bit_for_bit() {
     assert_eq!(batched.batched_bytes(), 0);
     let (_, same) = compare(&mut batched, &mut rotation);
     assert!(same);
+}
+
+/// The rule per level with a named crossover that splits the levels (degrees 6, 8, 5 on
+/// levels 2–4, crossover 6): fused Batched bit for bit on levels 2 and 4, Rotation bit for
+/// bit on level 3, with one and two planes and two vectors.
+#[test]
+fn auto_splits_the_levels_at_the_crossover() {
+    let cases = [
+        (20.0, 0.0, ChargeKind::Real),
+        (20.0, 0.0, ChargeKind::Complex),
+        (20.0, 2.0, ChargeKind::Real),
+    ];
+    for (re, im, kind) in cases {
+        let k = Wavenumber::new(re, im).unwrap();
+        let degrees = degrees(&k);
+        let mut auto = operator(k, kind, 2, HelmholtzM2l::Auto, usize::MAX)
+            .with_m2l_max_degree(Some(6))
+            .with_p2p(P2pChoice::Reference)
+            .unwrap();
+        let mut fused = operator(k, kind, 2, HelmholtzM2l::Batched, usize::MAX)
+            .with_m2l_mul_add(MulAdd::Fused)
+            .with_p2p(P2pChoice::Reference)
+            .unwrap();
+        let mut rotation = operator(k, kind, 2, HelmholtzM2l::Rotation, usize::MAX);
+        assert_eq!(auto.m2l_choice(), HelmholtzM2l::Auto);
+        assert_eq!(auto.max_degree(), Some(6));
+        assert_eq!(auto.m2l_mul_add(), MulAdd::Fused);
+        assert_eq!(
+            auto.batched_bytes(),
+            BatchedM2l::<f64>::level_bytes(degrees[2]) + BatchedM2l::<f64>::level_bytes(degrees[4])
+        );
+        for level in 2..LEVELS {
+            let batched = degrees[level] <= 6;
+            let want = if batched {
+                HelmholtzM2l::Batched
+            } else {
+                HelmholtzM2l::Rotation
+            };
+            assert_eq!(auto.m2l_on(level), want, "k = {re} + {im}i, level {level}");
+            let same = if batched {
+                same_on(&mut auto, &mut fused, level)
+            } else {
+                same_on(&mut auto, &mut rotation, level)
+            };
+            assert!(
+                same,
+                "k = {re} + {im}i, {kind:?}, level {level}: not {want:?}'s bits"
+            );
+        }
+    }
+}
+
+/// A crossover above every degree is fused Batched bit for bit; below every degree,
+/// Rotation bit for bit with no tables; a named mode is kept; the other settings have no
+/// crossover.
+#[test]
+fn auto_at_the_extremes_and_its_mode() {
+    let k = Wavenumber::new(20.0, 2.0).unwrap();
+    let auto = |max_degree| {
+        operator(k, ChargeKind::Complex, 1, HelmholtzM2l::Auto, usize::MAX)
+            .with_m2l_max_degree(Some(max_degree))
+    };
+    let mut every = auto(usize::MAX);
+    let mut fused = operator(k, ChargeKind::Complex, 1, HelmholtzM2l::Batched, usize::MAX)
+        .with_m2l_mul_add(MulAdd::Fused);
+    assert!((2..LEVELS).all(|l| every.m2l_on(l) == HelmholtzM2l::Batched));
+    assert!(compare(&mut every, &mut fused).1);
+
+    let mut none = auto(4);
+    let mut rotation = operator(k, ChargeKind::Complex, 1, HelmholtzM2l::Rotation, 0);
+    assert_eq!(none.batched_bytes(), 0);
+    assert!((2..LEVELS).all(|l| none.m2l_on(l) == HelmholtzM2l::Rotation));
+    assert!(compare(&mut none, &mut rotation).1);
+
+    let mut separate = auto(6).with_m2l_mul_add(MulAdd::Separate);
+    let mut batched = operator(k, ChargeKind::Complex, 1, HelmholtzM2l::Batched, usize::MAX);
+    assert_eq!(separate.m2l_mul_add(), MulAdd::Separate);
+    assert!(same_on(&mut separate, &mut batched, 2));
+
+    // A budget binds under Auto as under Batched: the finest admitted level first.
+    let budget = BatchedM2l::<f64>::level_bytes(5);
+    let tight = operator(k, ChargeKind::Complex, 1, HelmholtzM2l::Auto, budget)
+        .with_m2l_max_degree(Some(6));
+    assert_eq!(tight.m2l_on(4), HelmholtzM2l::Batched);
+    assert_eq!(tight.m2l_on(2), HelmholtzM2l::Rotation);
+
+    for m2l in [
+        HelmholtzM2l::Rotation,
+        HelmholtzM2l::Dense,
+        HelmholtzM2l::Classes,
+        HelmholtzM2l::Batched,
+    ] {
+        assert_eq!(
+            operator(k, ChargeKind::Complex, 1, m2l, 0).max_degree(),
+            None
+        );
+    }
+}
+
+/// Without a named crossover the rule's, of the column kernel's ISA and the planes; set
+/// again by `with_p2p`, so either order of the calls gives the same levels and bits.
+#[test]
+fn auto_takes_the_rule_of_the_kernel() {
+    let cases = [
+        (20.0, 0.0, ChargeKind::Real, 1),
+        (20.0, 2.0, ChargeKind::Complex, 2),
+    ];
+    for (re, im, kind, planes) in cases {
+        let k = Wavenumber::new(re, im).unwrap();
+        let degrees = degrees(&k);
+        let detected = operator(k, kind, 1, HelmholtzM2l::Auto, usize::MAX);
+        assert_eq!(
+            detected.max_degree(),
+            Some(auto_batched_max_degree(Isa::detect(), planes))
+        );
+        let choices = Isa::all()
+            .filter(|isa| isa.is_available())
+            .map(P2pChoice::Isa)
+            .chain([P2pChoice::Reference]);
+        for choice in choices {
+            let isa = match choice {
+                P2pChoice::Isa(isa) => isa,
+                _ => Isa::Scalar,
+            };
+            let rule = auto_batched_max_degree(isa, planes);
+            let mut after = operator(k, kind, 1, HelmholtzM2l::Auto, usize::MAX)
+                .with_p2p(choice)
+                .unwrap();
+            let densities = Densities::new(k.kind(), kind, 1);
+            let mut before = HelmholtzOperator::new(k, densities, &domain(), &degrees, false, 8)
+                .unwrap()
+                .with_p2p(choice)
+                .unwrap()
+                .with_m2l(HelmholtzM2l::Auto, usize::MAX);
+            assert_eq!(after.max_degree(), Some(rule), "{choice}");
+            assert_eq!(before.max_degree(), Some(rule), "{choice}");
+            let chosen = BatchedM2l::<f64>::select_within(&degrees, usize::MAX, rule);
+            for (level, &on) in chosen.iter().enumerate().skip(2) {
+                let want = if on {
+                    HelmholtzM2l::Batched
+                } else {
+                    HelmholtzM2l::Rotation
+                };
+                assert_eq!(after.m2l_on(level), want, "{choice}, level {level}");
+                assert_eq!(before.m2l_on(level), want, "{choice}, level {level}");
+            }
+            assert!(compare(&mut after, &mut before).1, "{choice}");
+        }
+    }
+}
+
+/// The crossovers: one plane at least two planes' on every ISA (a real multipole costs
+/// half the products), AVX-512's at least NEON's and AVX2's, the scalar kernel's the
+/// smallest.
+#[test]
+fn the_crossovers_are_ordered() {
+    for isa in Isa::all() {
+        assert!(
+            auto_batched_max_degree(isa, 1) >= auto_batched_max_degree(isa, 2),
+            "{isa}"
+        );
+        for planes in [1, 2] {
+            assert!(
+                auto_batched_max_degree(Isa::Scalar, planes)
+                    <= auto_batched_max_degree(isa, planes)
+            );
+            assert!(
+                auto_batched_max_degree(Isa::Avx512, planes)
+                    >= auto_batched_max_degree(isa, planes)
+            );
+        }
+    }
 }

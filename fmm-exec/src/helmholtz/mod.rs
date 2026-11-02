@@ -67,7 +67,9 @@ use crate::geometry::Domain;
 pub use degree::{DegreeError, DegreeRule, Degrees, degree, s7_degree};
 pub use densities::{ChargeKind, Charges, Densities, DensityError, LeafScratch, Output, Split};
 pub use fmm::{HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError};
-pub use operator::{DEFAULT_DENSE_BUDGET, HelmholtzM2l, HelmholtzOperator, OperatorError};
+pub use operator::{
+    DEFAULT_DENSE_BUDGET, HelmholtzM2l, HelmholtzOperator, OperatorError, auto_batched_max_degree,
+};
 
 /// The deepest level of a Morton key, 16 (CONVENTIONS §3.12).
 const DEEPEST: usize = DEEPEST_LEVEL as usize;
