@@ -17,7 +17,8 @@
 //!   transforms alone (O(Pᵀ) on each multipole plane and O(P) on both local planes, over
 //!   all 316 offsets, without `m2l`'s two scratch fills);
 //! - Batched: `nd_fmm_tables::helmholtz::batched::BatchedM2l` (Dense's matrices in split
-//!   planes) by `nd_fmm_simd::MatrixKernel` (`MulAdd::Separate`, the default ISA), the call
+//!   planes) by `nd_fmm_simd::MatrixKernel` (`MulAdd::Separate`, the default ISA or
+//!   `--isa`'s), the call
 //!   sequence of the Helmholtz operator's batched M2L (its module docs, "M2L": two calls
 //!   per offset for one plane, four with L_r negated around the third for two), restated
 //!   here: per pass the offsets in turn, each with `--columns` pairs (default 32; a block
@@ -38,7 +39,9 @@
 //!
 //! Options: `--ps p,…`, `--k re[+im],…` (k̂ on the level, e.g. `1,1+0.1`), `--vectors m`,
 //! `--columns c` (Batched's pairs per offset), `--max-mb MB` (skip Dense and Batched above
-//! this many MB of tables per level; default 2048).
+//! this many MB of tables per level; default 2048), `--isa name` (Batched's column kernel
+//! on a named ISA this machine runs, `scalar`, `neon`, `avx2` or `avx512`, in place of the
+//! default; Helmholtz CH3.2d, for the crossovers of the Auto rule per ISA).
 //!
 //! Run in release mode with one BLAS thread:
 //!
@@ -53,7 +56,7 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use nd_fmm_math::{Complex, Layout};
-use nd_fmm_simd::{MatrixKernel, MulAdd};
+use nd_fmm_simd::{Isa, MatrixKernel, MulAdd};
 use nd_fmm_tables::geometry::M2L_OFFSET_COUNT;
 use nd_fmm_tables::helmholtz::batched::BatchedM2l;
 use nd_fmm_tables::helmholtz::classes::ClassM2l;
@@ -72,6 +75,7 @@ struct Arguments {
     vectors: usize,
     columns: usize,
     max_bytes: usize,
+    isa: Isa,
 }
 
 fn arguments() -> Arguments {
@@ -79,7 +83,7 @@ fn arguments() -> Arguments {
     let usage = || -> ! {
         eprintln!(
             "usage: helmholtz_m2l [--ps p,…] [--k re[+im],…] [--vectors m] [--columns c] \
-             [--max-mb MB]; got {args:?}"
+             [--max-mb MB] [--isa scalar|neon|avx2|avx512]; got {args:?}"
         );
         std::process::exit(2);
     };
@@ -89,6 +93,7 @@ fn arguments() -> Arguments {
         vectors: 1,
         columns: 32,
         max_bytes: 2048 << 20,
+        isa: Isa::detect(),
     };
     let k = |v: &str| -> Option<Complex<f64>> {
         match v.split_once('+') {
@@ -129,6 +134,10 @@ fn arguments() -> Arguments {
                 .ok()
                 .and_then(|mb| mb.checked_mul(1 << 20))
                 .map(|bytes| parsed.max_bytes = bytes)
+                .is_some(),
+            "--isa" => Isa::all()
+                .find(|isa| isa.to_string() == *value && isa.is_available())
+                .map(|isa| parsed.isa = isa)
                 .is_some(),
             _ => false,
         };
@@ -250,8 +259,7 @@ fn main() {
          (moving), and its two transforms alone (O(Pᵀ) per multipole plane, O(P) per local \
          plane, over all offsets); Batched {} pairs per offset on the {:?} column kernel, \
          its error against Dense applied pair by pair to the same pairs.",
-        arguments.columns,
-        MatrixKernel::<f64>::detect(MulAdd::Separate).isa(),
+        arguments.columns, arguments.isa,
     );
     println!();
     println!(
@@ -266,8 +274,8 @@ fn main() {
          | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: \
          | ---: | ---: |"
     );
-    let matrix = MatrixKernel::<f64>::detect(MulAdd::Separate);
-    let fused = MatrixKernel::<f64>::detect(MulAdd::Fused);
+    let matrix = MatrixKernel::<f64>::new(arguments.isa, MulAdd::Separate).expect("checked");
+    let fused = MatrixKernel::<f64>::new(arguments.isa, MulAdd::Fused).expect("checked");
     let c = arguments.columns;
     for &p in &arguments.ps {
         for &k_level in &arguments.ks {

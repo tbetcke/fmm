@@ -9,7 +9,9 @@
 //! measures (Helmholtz CH3.6, `nd_fmm_validate::helmholtz_fmm3d`) on a stand-in for FMM3D,
 //! the direct sum at every point in the driver's files: its sampled errors zero, our
 //! FMM's full-target error its error at the samples (which are every point), the same on
-//! one rank and on several.
+//! one rank and on several. The M2L rule per level (Helmholtz CH3.2d): `Auto` at a named
+//! crossover reported in the row, within ε at 1 and 2 threads and on one rank; below every
+//! degree Rotation's checksum, above every degree Batched on every level with tables.
 //!
 //! One test initialises MPI (at `Funneled`); it passes on any number of ranks, each check
 //! on every rank or on none.
@@ -18,7 +20,7 @@ use mpi::Threading;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::Communicator;
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, Degrees, Densities, Output, Wavenumber, WavenumberKind, s7_degree,
+    ChargeKind, Degrees, Densities, HelmholtzM2l, Output, Wavenumber, WavenumberKind, s7_degree,
 };
 use nd_fmm_validate::SplitMix64;
 use nd_fmm_validate::fmm_accuracy::Distribution;
@@ -154,6 +156,35 @@ fn check_fmm(world: &SimpleCommunicator, case: &Case) {
     }
 }
 
+/// Auto on W1 at kD = 10: at a crossover below every degree the row reports it and the
+/// output is Rotation's bit for bit (the checksum); above every degree every level with M2L
+/// runs Batched; at either, `check_fmm`'s checks.
+fn check_auto(world: &SimpleCommunicator) {
+    let mut case = Case::new(Workload::W1, (10.0, 0.0), Degrees::Tolerance(1e-3));
+    let problem = Problem::new(&case);
+    let oracle = Oracle::sharded(complex_k(&case), &problem, case.gradients, 2, world);
+    let rotation = run(&case, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert_eq!(rotation.m2l_max_degree, None);
+    let smallest = rotation.degrees[2..]
+        .iter()
+        .min()
+        .copied()
+        .expect("levels with M2L");
+    case.m2l = HelmholtzM2l::Auto;
+    case.m2l_max_degree = Some(smallest - 1);
+    let below = run(&case, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert_eq!(below.m2l, HelmholtzM2l::Auto);
+    assert_eq!(below.m2l_max_degree, Some(smallest - 1));
+    assert!(!below.dense_levels.contains(&true));
+    assert_eq!(below.checksum, rotation.checksum, "Auto below every degree");
+    check_fmm(world, &case);
+    case.m2l_max_degree = Some(usize::MAX);
+    let every = run(&case, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert!(every.dense_levels[2..].iter().all(|&on| on));
+    assert_eq!(every.m2l_mul_add, nd_fmm_exec::operator::MulAdd::Fused);
+    check_fmm(world, &case);
+}
+
 /// The plateau scan of the calibration on W1 at kD = 10: one degree p = 1..=8 on every
 /// level ≥ 2, as the `helmholtz_calibrate` example runs it.
 fn check_calibration_scan(world: &SimpleCommunicator) {
@@ -280,6 +311,7 @@ fn helmholtz_accuracy_harness() {
     w4.charges = ChargeKind::Real;
     w4.gradients = false;
     check_fmm(&world, &w4);
+    check_auto(&world);
     check_calibration_scan(&world);
     check_fmm3d_measures(&world);
 }

@@ -32,7 +32,12 @@
 //!   CH3.2a, CH3.2b, CH3.2c; `batched-fused` the batched M2L in the fused mode): the M2L,
 //!   each case run with each in turn (and each P2P kernel);
 //!   `--dense-budget MB` the dense, class or batched tables' bytes per rank (default
-//!   1024 MiB). The column "M2L" names the levels with tables and their MB.
+//!   1024 MiB). The column "M2L" names the levels with tables and their MB. Also (Helmholtz
+//!   CH3.2d) `auto`, the rule per level at the rule's crossover, `auto:<d>` at the crossover
+//!   d, and `sweep`: Auto at every crossover that chooses differently, from Batched on every
+//!   level that fits (crossover ∞) down to Rotation on every level (one below the smallest
+//!   p_l), the crossovers after the first from its degrees; the column names the crossover
+//!   (`auto ≤ d`).
 //!
 //! Run in release mode, on any number of ranks (each rank passes a contiguous block of
 //! the points, the oracle is sharded over the ranks, rank 0 prints), with one BLAS
@@ -58,7 +63,7 @@ use nd_fmm_exec::helmholtz::{
 use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_validate::bench::{cores, cpu_model, target};
 use nd_fmm_validate::fmm_accuracy::Distribution;
-use nd_fmm_validate::helmholtz_accuracy::{Case, Oracle, Problem, complex_k, run};
+use nd_fmm_validate::helmholtz_accuracy::{Case, Oracle, Problem, Row, complex_k, run};
 use nd_fmm_validate::helmholtz_workloads::Workload;
 
 /// The command line.
@@ -74,9 +79,18 @@ struct Arguments {
     threads: Vec<usize>,
     oracle_threads: Option<usize>,
     p2p: Vec<P2pChoice>,
-    m2l: Vec<(HelmholtzM2l, MulAdd)>,
+    m2l: Vec<M2lRun>,
     dense_budget: usize,
     s7: bool,
+}
+
+/// One entry of `--m2l`.
+#[derive(Clone, Copy, Debug)]
+enum M2lRun {
+    /// A setting, its multiply–add mode and crossover (`None`: the library's).
+    Fixed(HelmholtzM2l, Option<MulAdd>, Option<usize>),
+    /// Auto at every crossover that chooses differently (module documentation).
+    Sweep,
 }
 
 /// Parses a comma-separated list.
@@ -111,7 +125,8 @@ fn arguments() -> Arguments {
              [--kd x,…] [--kim y] [--eps e,…|--degree p] [--charges real|complex] \
              [--vectors m] [--samples n] [--no-gradients] [--threads t,…] \
              [--oracle-threads t] [--rule calibrated|s7] [--p2p auto|reference|<isa>,…] \
-             [--m2l rotation|dense|classes|batched|batched-fused,…] [--dense-budget MB]; got {args:?}"
+             [--m2l rotation|dense|classes|batched|batched-fused|auto|auto:<d>|sweep,…] \
+             [--dense-budget MB]; got {args:?}"
         );
         std::process::exit(2);
     };
@@ -127,7 +142,7 @@ fn arguments() -> Arguments {
         threads: vec![1],
         oracle_threads: None,
         p2p: vec![P2pChoice::Auto],
-        m2l: vec![(HelmholtzM2l::Rotation, MulAdd::Separate)],
+        m2l: vec![M2lRun::Fixed(HelmholtzM2l::Rotation, None, None)],
         dense_budget: DEFAULT_DENSE_BUDGET,
         s7: false,
     };
@@ -170,13 +185,24 @@ fn arguments() -> Arguments {
                         .is_some(),
                     "--m2l" => value
                         .split(',')
-                        .map(|v| match v {
-                            "rotation" => Some((HelmholtzM2l::Rotation, MulAdd::Separate)),
-                            "dense" => Some((HelmholtzM2l::Dense, MulAdd::Separate)),
-                            "classes" => Some((HelmholtzM2l::Classes, MulAdd::Separate)),
-                            "batched" => Some((HelmholtzM2l::Batched, MulAdd::Separate)),
-                            "batched-fused" => Some((HelmholtzM2l::Batched, MulAdd::Fused)),
-                            _ => None,
+                        .map(|v| {
+                            let fixed = |m2l, mul_add| Some(M2lRun::Fixed(m2l, mul_add, None));
+                            match v {
+                                "rotation" => fixed(HelmholtzM2l::Rotation, None),
+                                "dense" => fixed(HelmholtzM2l::Dense, None),
+                                "classes" => fixed(HelmholtzM2l::Classes, None),
+                                "batched" => fixed(HelmholtzM2l::Batched, Some(MulAdd::Separate)),
+                                "batched-fused" => {
+                                    fixed(HelmholtzM2l::Batched, Some(MulAdd::Fused))
+                                }
+                                "auto" => fixed(HelmholtzM2l::Auto, None),
+                                "sweep" => Some(M2lRun::Sweep),
+                                _ => v
+                                    .strip_prefix("auto:")?
+                                    .parse()
+                                    .ok()
+                                    .map(|d| M2lRun::Fixed(HelmholtzM2l::Auto, None, Some(d))),
+                            }
                         })
                         .collect::<Option<Vec<_>>>()
                         .map(|m| parsed.m2l = m)
@@ -220,22 +246,48 @@ fn arguments() -> Arguments {
 }
 
 /// The M2L of a row: `rotation`, or `dense l…`, `classes l…`, `batched l…` or
-/// `batched-fused l…` with the levels that ran the setting's tables and their MB.
-fn m2l_string(m2l: HelmholtzM2l, mul_add: MulAdd, dense: &[bool], bytes: usize) -> String {
+/// `batched-fused l…` with the levels that ran the setting's tables and their MB; under
+/// Auto prefixed with `auto ≤ d: ` (`∞` for no bound).
+fn m2l_string(row: &Row) -> String {
+    let (m2l, mul_add, dense, bytes) = (
+        row.m2l,
+        row.m2l_mul_add,
+        row.dense_levels.as_slice(),
+        row.dense_bytes,
+    );
     let levels: Vec<String> = (0..dense.len())
         .filter(|&l| dense[l])
         .map(|l| l.to_string())
         .collect();
     let name = match m2l {
         HelmholtzM2l::Classes => "classes",
-        HelmholtzM2l::Batched if mul_add == MulAdd::Fused => "batched-fused",
-        HelmholtzM2l::Batched => "batched",
+        HelmholtzM2l::Batched | HelmholtzM2l::Auto if mul_add == MulAdd::Fused => "batched-fused",
+        HelmholtzM2l::Batched | HelmholtzM2l::Auto => "batched",
         _ => "dense",
     };
-    match levels.is_empty() {
+    let ran = match levels.is_empty() {
         true => "rotation".into(),
         false => format!("{name} {} ({:.0} MB)", levels.join(","), bytes as f64 / 1e6),
+    };
+    match row.m2l_max_degree {
+        Some(usize::MAX) => format!("auto ≤ ∞: {ran}"),
+        Some(d) => format!("auto ≤ {d}: {ran}"),
+        None => ran,
     }
+}
+
+/// The sweep's crossovers after ∞: each distinct p_l of the levels with M2L (≥ 2) but the
+/// largest, descending, and one below the smallest (Rotation on every level).
+fn sweep(degrees: &[usize]) -> impl Iterator<Item = usize> {
+    let mut distinct: Vec<usize> = degrees.iter().skip(2).copied().collect();
+    distinct.sort_unstable();
+    distinct.dedup();
+    let below = distinct.first().and_then(|p| p.checked_sub(1));
+    let largest = distinct.pop();
+    distinct
+        .into_iter()
+        .rev()
+        .chain(below.filter(|_| largest.is_some()))
 }
 
 /// The degrees as a short string: runs of equal degrees as `p×count`.
@@ -337,65 +389,76 @@ fn main() {
                 ChargeKind::Real => "real",
                 ChargeKind::Complex => "complex",
             };
-            let (p2ps, threads_list) = (&arguments.p2p, &arguments.threads);
-            let runs: Vec<((HelmholtzM2l, MulAdd), P2pChoice, usize)> = arguments
-                .m2l
-                .iter()
-                .flat_map(|&m| {
-                    p2ps.iter()
-                        .flat_map(move |&p| threads_list.iter().map(move |&t| (m, p, t)))
-                })
-                .collect();
-            for ((m2l, mul_add), p2p, threads) in runs {
-                case.m2l = m2l;
-                case.m2l_mul_add = mul_add;
-                case.p2p = p2p;
-                match run(&case, &problem, &oracle, threads, &world) {
-                    Ok(row) if root => {
-                        let all = row.errors.last().expect("an entry over all vectors");
-                        let gradient = if case.gradients {
-                            format!("{:.2e}", all[1])
-                        } else {
-                            "–".into()
+            let print = |row: &Row| {
+                let all = row.errors.last().expect("an entry over all vectors");
+                let gradient = if case.gradients {
+                    format!("{:.2e}", all[1])
+                } else {
+                    "–".into()
+                };
+                println!(
+                    "| {} | {} | {kd_string} | {degrees_name} | {charges} | {} | {} | {} | {} × {} \
+                     | {} | {} | {} | {} | {} | {:.2} | {:.2} | {:.2e} | {gradient} \
+                     | {:016x} |",
+                    workload.name(),
+                    problem.len(),
+                    case.vectors,
+                    row.p2p,
+                    m2l_string(row),
+                    row.ranks,
+                    row.threads,
+                    row.levels,
+                    row.min_leaf_level,
+                    degrees_string(&row.degrees),
+                    row.leaves,
+                    row.max_leaf_points,
+                    row.build,
+                    row.evaluate,
+                    all[0],
+                    row.checksum,
+                );
+                if case.vectors > 1 {
+                    let per: Vec<String> = row.errors[..case.vectors]
+                        .iter()
+                        .map(|e| format!("{:.2e}/{:.2e}", e[0], e[1]))
+                        .collect();
+                    println!("|  | per vector φ/∇φ: {} |", per.join(", "));
+                }
+            };
+            for &m2l_run in &arguments.m2l {
+                for &p2p in &arguments.p2p {
+                    for &threads in &arguments.threads {
+                        case.p2p = p2p;
+                        // The crossovers of the run: one, or the sweep's, the first ∞ and
+                        // the others from its degrees.
+                        let (m2l, mul_add, first) = match m2l_run {
+                            M2lRun::Fixed(m2l, mul_add, max_degree) => (m2l, mul_add, max_degree),
+                            M2lRun::Sweep => (HelmholtzM2l::Auto, None, Some(usize::MAX)),
                         };
-                        println!(
-                            "| {} | {} | {kd_string} | {degrees_name} | {charges} | {} | {} | {} | {} × {} \
-                             | {} | {} | {} | {} | {} | {:.2} | {:.2} | {:.2e} | {gradient} \
-                             | {:016x} |",
-                            workload.name(),
-                            problem.len(),
-                            case.vectors,
-                            row.p2p,
-                            m2l_string(
-                                row.m2l,
-                                row.m2l_mul_add,
-                                &row.dense_levels,
-                                row.dense_bytes
-                            ),
-                            row.ranks,
-                            row.threads,
-                            row.levels,
-                            row.min_leaf_level,
-                            degrees_string(&row.degrees),
-                            row.leaves,
-                            row.max_leaf_points,
-                            row.build,
-                            row.evaluate,
-                            all[0],
-                            row.checksum,
-                        );
-                        if case.vectors > 1 {
-                            let per: Vec<String> = row.errors[..case.vectors]
-                                .iter()
-                                .map(|e| format!("{:.2e}/{:.2e}", e[0], e[1]))
-                                .collect();
-                            println!("|  | per vector φ/∇φ: {} |", per.join(", "));
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        if root {
-                            eprintln!("{} at kD = {kd_string}: {error}", workload.name());
+                        (case.m2l, case.m2l_mul_add) = (m2l, mul_add);
+                        let mut crossovers = vec![first];
+                        let mut next = 0;
+                        while next < crossovers.len() {
+                            case.m2l_max_degree = crossovers[next];
+                            next += 1;
+                            match run(&case, &problem, &oracle, threads, &world) {
+                                Ok(row) => {
+                                    if root {
+                                        print(&row);
+                                    }
+                                    if matches!(m2l_run, M2lRun::Sweep) && next == 1 {
+                                        crossovers.extend(sweep(&row.degrees).map(Some));
+                                    }
+                                }
+                                Err(error) => {
+                                    if root {
+                                        eprintln!(
+                                            "{} at kD = {kd_string}: {error}",
+                                            workload.name()
+                                        );
+                                    }
+                                }
+                            }
                         }
                     }
                 }
