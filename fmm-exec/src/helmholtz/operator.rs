@@ -102,9 +102,10 @@
 //!   Dense to rounding here (CH3.2a's sign-off 2), with no per-target epilogue.
 //!
 //! In the opt-in [`MulAdd::Fused`] mode ([`with_m2l_mul_add`](HelmholtzOperator::with_m2l_mul_add))
-//! each step is one fma: Dense to rounding also with real multipoles (within n u per
-//! element of the separate form), and about twice the separate form's rate where the
-//! kernel is bound by its arithmetic (fmm-validate/results/helmholtz-ch3-2c.md).
+//! each step is one fma: Dense to rounding also with real multipoles (per element within
+//! about n u of the separate form, relative to the sum of its terms' magnitudes), and about
+//! 1.8 times the separate form's rate on the M6, where the kernel is bound by its arithmetic
+//! (fmm-validate/results/helmholtz-ch3-2c.md).
 //!
 //! An element depends on its own column only, and a target meets the offsets in the order
 //! of its row, so the level call is the pair body (the same calls with one column per
@@ -373,8 +374,8 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     }
 
     /// The M2L that runs on `level`: [`HelmholtzM2l::Dense`], [`HelmholtzM2l::Classes`] or
-    /// [`HelmholtzM2l::Batched`] where the level has dense, class or batched tables, [`HelmholtzM2l::Rotation`] everywhere
-    /// else (levels 0 and 1 have no M2L).
+    /// [`HelmholtzM2l::Batched`] where the level has dense, class or batched tables,
+    /// [`HelmholtzM2l::Rotation`] everywhere else (levels 0 and 1 have no M2L).
     pub fn m2l_on(&self, level: usize) -> HelmholtzM2l {
         let kernel = &self.kernel;
         match (&kernel.dense, &kernel.classes, &kernel.batched) {
@@ -968,7 +969,8 @@ impl<T: SimdScalar + Equivalence + Default> FmmSizes for HelmholtzOperator<T> {
     }
 }
 
-/// Target by target through the shared drivers (module documentation, "Execution").
+/// Target by target through the shared drivers, but for the M2L of a level with batched
+/// tables (module documentation, "Execution" and "M2L").
 impl<T: SimdScalar + Equivalence + Default> FmmOperator for HelmholtzOperator<T> {
     fn p2m(&mut self, batch: P2m<'_, T>) {
         driver::p2m(&self.kernel, &mut self.execution, batch);

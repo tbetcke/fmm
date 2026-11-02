@@ -32,8 +32,9 @@
 //! real k the real multipoles of real charges (one plane) and complex ones (two planes); per
 //! complex k two planes. Before timing, Dense's and Classes' locals of one pass are compared
 //! with Rotation's (the largest relative L2 of a local), and Batched's block with Dense's
-//! applied pair by pair to the same pairs, so that a timed row is a correct one. The cost per pair does not depend on k (the tables' size and the operations are
-//! p's); k only changes the values.
+//! applied pair by pair to the same pairs, so that a timed row is a correct one. The cost
+//! per pair does not depend on k (the tables' size and the operations are p's); k only
+//! changes the values.
 //!
 //! Options: `--ps p,…`, `--k re[+im],…` (k̂ on the level, e.g. `1,1+0.1`), `--vectors m`,
 //! `--columns c` (Batched's pairs per offset), `--max-mb MB` (skip Dense and Batched above

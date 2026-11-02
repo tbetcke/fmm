@@ -174,10 +174,10 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   blocks, so complex expansions in two planes, multipoles and locals of different sizes
   and real shifts on both planes need no driver change. Only `driver::m2l_block` assumes
   Laplace's layout (m expansions of n values per box, multipole and local alike, square
-  tables). Any other kernel returns `None` from `batched_m2l` (and keeps an empty
-  `Columns` for `columns`, which is then never called). Helmholtz CH3.2c chose its own
-  block over a two-plane case here (the user, 2026-11-02; below, "The Batched M2L"), so
-  `m2l_block` stays Laplace's.
+  tables). Any other kernel returns `None` from `batched_m2l` (and keeps a `Columns` for
+  `columns`, which the driver then never calls; Helmholtz's own block uses it). Helmholtz
+  CH3.2c chose its own block over a two-plane case here (the user, 2026-11-02; below, "The
+  Batched M2L"), so `m2l_block` stays Laplace's.
 - The Helmholtz builder (Helmholtz CH3.0b; docs/design/helmholtz-fmm-proposal.md §3.7,
   §6.3; CONVENTIONS §3.15): `helmholtz::Wavenumber` classifies k (Yukawa for Re k = 0,
   real for Im k = 0, complex otherwise; k = 0, Re k < 0, Im k < 0 and non-finite parts
@@ -264,9 +264,11 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   2–4 against Dense (bit for bit with one plane) and Rotation, the fused mode, the same
   bits on every ISA in both modes, the budget and a zero budget bit for bit Rotation;
   `tests/helmholtz_fmm.rs` runs `check_tables` with Batched (Dense's output of the same
-  check bit for bit with real multipoles, within `DENSE_TOLERANCE` with complex ones; the
-  fused mode against Rotation and Dense, 2 threads and the one-rank FMM). Its debug cost:
-  about 37 s of the one-rank run on the M6 (69 → 106 s; the dense builds of each run).
+  check bit for bit with real multipoles, within `DENSE_TOLERANCE` with complex ones; two
+  vectors, the level call against the pair body bit for bit; the fused mode against
+  Rotation and Dense and the one-rank FMM). Its debug cost: about 53 s of the one-rank run
+  on the M6 (69 → 122 s; the dense builds of each run, about 7× cheaper at CI's opt-level
+  1).
 - The degree rule (Helmholtz CH3.3; the `helmholtz::degree` module docs;
   fmm-validate/results/helmholtz-ch3-3.md): `degree` is `DegreeRule::CALIBRATED`,
   max(⌈0.30 L² + 0.25 L + 2.60⌉, ⌈x + 0.80 (ln 1/ε)^{2/3} x^{1/3}⌉) with L = log₁₀(1/ε),

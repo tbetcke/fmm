@@ -32,8 +32,9 @@
 //! Batched M2L (Helmholtz CH3.2c) on the same two scenarios with Dense's checks and its
 //! debug-build reduction (it builds Dense's tables), and against Dense's output of the same
 //! levels: bit for bit with real multipoles (real k, real charges), within
-//! `DENSE_TOLERANCE` with complex ones; and in the fused mode within `DENSE_TOLERANCE` of
-//! Rotation and Dense, 2 threads and the one-rank FMM bit for bit.
+//! `DENSE_TOLERANCE` with complex ones; with two vectors the level call against the pair
+//! body bit for bit; and in the fused mode within `DENSE_TOLERANCE` of Rotation and Dense
+//! and the one-rank FMM bit for bit.
 //!
 //! Then vectors (vector v of an FMM of two bit for bit the one-vector FMM, of complex and
 //! of real charges), real charges against complex ones with Im q = 0, and the errors (an
@@ -685,9 +686,21 @@ fn check_tables(
                 "{name} against Dense: φ {phi:e}, ∇φ {grad:e}"
             );
         }
-        // The fused mode: Rotation's and Dense's output to rounding; 2 threads and the
-        // one-rank FMM bit for bit (pair by pair the separate mode's run above shows: the
-        // level call and the pair body share their calls, and the mode only changes a step).
+        // Two vectors: the block's m > 1 columns, the level call against the pair body bit
+        // for bit.
+        let two = Inputs::new(scenario, 2, comm);
+        let vectors = tables.clone().vectors(2);
+        let (_, level_calls) = run(&vectors, &two, kind, comm);
+        let (_, pairs) = run(&vectors.clone().pair_calls(true), &two, kind, comm);
+        assert_same(
+            &format!("{name}, two vectors, pair by pair"),
+            &pairs,
+            &level_calls,
+            comm,
+        );
+        // The fused mode: Rotation's and Dense's output to rounding; the one-rank FMM bit for
+        // bit (threads and pair by pair as the separate mode's runs above show: the level call
+        // and the pair body share their calls, and the mode only changes a step).
         let fused = tables.clone().m2l_mul_add(MulAdd::Fused);
         let name = format!("{name}, fused");
         let (_, output) = run(&fused, &inputs, kind, comm);
@@ -704,8 +717,6 @@ fn check_tables(
             "{name}: φ {phi:e}, ∇φ {grad:e} against Rotation, φ {dense_phi:e}, ∇φ \
              {dense_grad:e} against Dense"
         );
-        let (_, threaded) = run(&fused.clone().threads(2), &inputs, kind, comm);
-        assert_same(&format!("{name}, 2 threads"), &threaded, &output, comm);
         check_one_rank(&name, &fused, &inputs, kind, &output, comm);
     }
 

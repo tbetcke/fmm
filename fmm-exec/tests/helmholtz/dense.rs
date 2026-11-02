@@ -30,8 +30,10 @@ const DENSE_BOUND: f64 = 1e-14;
 /// pair, so more rounding (at most 5.6e-15 on the M6), with a margin of about ten.
 const CLASSES_BOUND: f64 = 5e-14;
 
-/// Batched against Dense and Rotation with complex multipoles, relative L2 over a local: the
-/// real plane's products before the imaginary plane's, so rounding (Dense's own size).
+/// Batched against Dense and Rotation with complex multipoles, and in the fused mode,
+/// relative L2 over a local: the real plane's products before the imaginary plane's, or one
+/// rounding per step, so rounding of Dense's own size (at most 7.4e-16 separate and 6.9e-16
+/// fused against Dense on the M6), with a margin of about ten.
 const BATCHED_BOUND: f64 = DENSE_BOUND;
 
 fn domain() -> Domain {
@@ -285,14 +287,19 @@ fn fused_batched_is_dense_to_rounding() {
             "k = {re} + {im}i, {kind:?}: fused Batched against Dense {against_dense:.2e}, \
              against Rotation {against_rotation:.2e}"
         );
-        assert!(!same, "the fused chain rounds differently");
+        assert!(
+            !same,
+            "the fused mode gave Dense's bits: is it engaged? (its steps round once)"
+        );
         assert!(against_dense <= BATCHED_BOUND, "{against_dense:e}");
         assert!(against_rotation <= BATCHED_BOUND, "{against_rotation:e}");
     }
 }
 
 /// In both modes the column kernel gives the same bits on every ISA this machine runs, and
-/// for the reference P2P (the scalar path).
+/// for the reference P2P (the scalar path). Pair by pair, so the kernel's groups of fewer
+/// than four columns; its four-column groups are compared across ISAs in `nd-fmm-simd`'s
+/// tests, and the level call against the pair body in `tests/helmholtz_fmm.rs`.
 #[test]
 fn batched_is_the_same_on_every_isa() {
     let k = Wavenumber::new(20.0, 2.0).unwrap();
