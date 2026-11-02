@@ -175,8 +175,9 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   and real shifts on both planes need no driver change. Only `driver::m2l_block` assumes
   Laplace's layout (m expansions of n values per box, multipole and local alike, square
   tables). Any other kernel returns `None` from `batched_m2l` (and keeps an empty
-  `Columns` for `columns`, which is then never called) until CH3.2 adds the
-  two-plane case and the epilogue there, under constraint 1.
+  `Columns` for `columns`, which is then never called). Helmholtz CH3.2c chose its own
+  block over a two-plane case here (the user, 2026-11-02; below, "The Batched M2L"), so
+  `m2l_block` stays Laplace's.
 - The Helmholtz builder (Helmholtz CH3.0b; docs/design/helmholtz-fmm-proposal.md §3.7,
   §6.3; CONVENTIONS §3.15): `helmholtz::Wavenumber` classifies k (Yukawa for Re k = 0,
   real for Im k = 0, complex otherwise; k = 0, Re k < 0, Im k < 0 and non-finite parts
@@ -243,6 +244,29 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   zero budget bit for bit Rotation; `tests/helmholtz_fmm.rs` runs `check_tables` for both
   strategies (Classes on every level and the finest alone, in every build). Its debug cost:
   about 8 s of the one-rank run on the M6 (61 → 69 s).
+- The Batched M2L (Helmholtz CH3.2c; the `helmholtz::operator` module docs, "M2L";
+  docs/helmholtz/tasks/CH3.2c.md; fmm-validate/results/helmholtz-ch3-2c.md):
+  `HelmholtzM2l::Batched`, `nd_fmm_tables::helmholtz::batched::BatchedM2l` (Dense's
+  matrices in split planes, A_r and A_i each n × n; Dense's bytes, budget and `select`),
+  `batched_bytes()`. The operator's own block, not `driver::m2l_block` (Laplace's layout;
+  the user chose it on 2026-11-02 so that no Laplace path changes and no D9 runs are
+  needed): the crate-private `src/helmholtz/batched.rs`, on `Execution::blocks`,
+  `M2L_BLOCK_TARGETS`, the driver's `Columns` type (unchanged) and
+  `nd_fmm_simd::MatrixKernel` on the P2P choice's ISA (scalar for `Reference`). Per offset:
+  one plane L_r += A_r M, L_i += A_i M (Dense bit for bit in the separate mode); two planes
+  L_r += A_r M_r, L_r −= A_i M_i (L_r negated around the call, exact), L_i += A_i M_r,
+  L_i += A_r M_i (Dense to rounding: CH3.2a's sign-off 2). The imaginary planes are the
+  same offsets on the slices shifted by n. The pair body (`Kernel::m2l`, so `PerPair`) runs
+  the same calls with one column per vector, so the level call is it bit for bit; keep the
+  two one chain. `with_m2l_mul_add` and `HelmholtzFmmBuilder::m2l_mul_add` (default
+  `MulAdd::Separate`; `Fused` one fma per step, Dense to rounding in both cases, about 1.8×
+  the separate rate on the M6). `tests/helmholtz/dense.rs` checks every offset of levels
+  2–4 against Dense (bit for bit with one plane) and Rotation, the fused mode, the same
+  bits on every ISA in both modes, the budget and a zero budget bit for bit Rotation;
+  `tests/helmholtz_fmm.rs` runs `check_tables` with Batched (Dense's output of the same
+  check bit for bit with real multipoles, within `DENSE_TOLERANCE` with complex ones; the
+  fused mode against Rotation and Dense, 2 threads and the one-rank FMM). Its debug cost:
+  about 37 s of the one-rank run on the M6 (69 → 106 s; the dense builds of each run).
 - The degree rule (Helmholtz CH3.3; the `helmholtz::degree` module docs;
   fmm-validate/results/helmholtz-ch3-3.md): `degree` is `DegreeRule::CALIBRATED`,
   max(⌈0.30 L² + 0.25 L + 2.60⌉, ⌈x + 0.80 (ln 1/ε)^{2/3} x^{1/3}⌉) with L = log₁₀(1/ε),
