@@ -1439,3 +1439,54 @@ request, using this template:
   - CH4.3: the high-frequency branch, x + (a L + b) x^{1/3} the candidate (over-predicts at
     10⁻³ by up to 8 on the top levels; under S7's p* beyond x ≈ 64 at small ε).
   - A check at kD ≈ 1000, 10⁻⁸ (Kathleen) before relying on the rule there.
+
+## 2026-11-02: CH3.6 Gate: RCR on every level against FMM3D
+- Done:
+  - `tools/fmm3d/driver.f90`: the `helmholtz` mode's optional FULL argument (φ and ∇φ at
+    every point, `NDFMMHF1`).
+  - `nd_fmm_validate::helmholtz_fmm3d` (the driver's files, its `seconds=` line, FMM3D's
+    errors at the samples, the full-target crosscheck of a distributed output: relative ℓ2
+    over all points and the worst error per box of the deepest level over the reference's
+    RMS), `helmholtz_accuracy::{Run, run_output}`, the `helmholtz_fmm3d` example (`problem`,
+    `compare`), `tools/fmm3d/run.sh helmholtz` and `fmm3d.sbatch`'s step (the gate's cases
+    by default). Report `fmm-validate/results/helmholtz-ch3-6.md`; record
+    `docs/helmholtz/tasks/CH3.6.md`.
+  - `run.sh`: the detected FMM3D variants list without a leading space (the log headers
+    named no variant).
+- Tests: `helmholtz_fmm3d`'s unit tests (7: the file round trips in the driver's byte
+  layout, the `seconds=` line, `box_of` at corners and faces, the crosscheck norms);
+  `tests/helmholtz_accuracy.rs` (W1 at kD = 10, every point sampled, the direct sum as a
+  stand-in FMM3D: the crosscheck equals the sampled errors to 10⁻¹², the box errors equal
+  on one rank and several; one rank in CI, 2 and 3 by hand on the M6).
+- Runs (Kathleen, one node each, release, BLAS threads 1; ours 4 ranks × 10 threads with
+  the AVX-512 P2P, FMM3D v2.1.0 default and fastker on 40 threads): job 617649 (driver),
+  617650 (W1 at kD = 10, 30, 100, 500; W1 at kD = 100 on one thread), 617651 (W3 at
+  kD = 10, 30, 100; W4 ×4 at kD = 1, 10, 100); ε = 10⁻³, 10⁻⁶, 10⁻⁸. Ours within ε at the
+  samples on all 57 points, the largest 0.63 ε (∇φ, W1 at kD = 500, 10⁻⁸); over all targets
+  at most 0.43 ε. FMM3D misses its eps at 10⁻³ at kD = 100 (W1 1.23, W3 2.03, the cube
+  2.12 ε) and is at most 0.04 ε at 10⁻⁸. Times at equal ε: ours 0.29–0.65 of FMM3D default
+  and 0.55–1.31 of fastker at 10⁻³, 0.93–3.4 and 1.65–5.5 at 10⁻⁸; W1 at kD = 500 32, 52,
+  100 s against 49, 63, 72 (default) and 33, 44, 49 (fastker). Worst box over the
+  all-target ℓ2: ours up to 146×, FMM3D 37×. M6 smoke runs (W1 at kD = 10, 30, 100, the
+  W4 cube at N = 10⁴) agree.
+- Checks: `/verify` on the M6: format; Clippy default, examples and workspace all-targets;
+  `cargo doc` (and `-D warnings` for nd-fmm-validate); `cargo test` (1,125) and
+  `--workspace` (1,207); `tools/fmm3d/build.sh driver` and `helmholtz-check` on the M6, the
+  driver relinked on Kathleen. Not run: the MPI list at 2 and 4 ranks (no nd-octree,
+  nd-fmm-plan or nd-fmm-exec change; the new test is in `helmholtz_accuracy`, not in the
+  list), the licence check (no dependency change), D9 (Laplace untouched). A self-review by
+  a subagent: no blocking finding; report wording fixed (the problem file holds sample
+  indices, the lowest error ratio, the time-ratio filter, the one-thread checksums).
+- Decisions: none taken. Questions for sign-off (the PR): 1. the worst-box concentration
+  (ours 30–146× the ℓ2 error at 10⁻⁶ and 10⁻⁸, FMM3D up to 37×); 2. the acceptance's
+  reading (same requested ε, FMM3D not gated, the box measure on the deepest level without
+  offset classes, one charge vector rather than §9.1's eight).
+- Laplace: not touched (no library file changed; `run.sh`'s Laplace steps get only the
+  variants fix).
+- Follow-ups:
+  - The worst-box concentration (question 1): where it comes from (the boxes at the cube
+    face tangency on W1 at 10⁻⁶ and 10⁻⁸, not a boundary effect), and whether a pointwise
+    criterion should join §9.1's.
+  - Performance at matched accuracy (§9.2: after CH4.5 and CH7.6); FMM3D over-delivers by
+    up to 100× at 10⁻⁸.
+  - H3.G needs CH3.2.

@@ -24,11 +24,11 @@ full output in job 617649.
   kD ≤ 100, and on W1 at kD = 500 with time reported; the full-target crosscheck".
 - **FMM3D misses its eps at 10⁻³ at kD = 100, and over-delivers at tight eps.** It misses
   on W1 (1.23 ε), W3 (2.03 ε) and the W4 cube (1.99 ε φ, 2.12 ε ∇φ), in both variants. At
-  10⁻⁸ its errors are at most 0.04 ε (W1 at kD = 500: 0.006 ε), where ours are 0.01 to
+  10⁻⁸ its errors are at most 0.04 ε (W1 at kD = 500: 0.006 ε), where ours are 0.001 to
   0.63 ε. FMM3D is reported, not gated (§9.2 uses it as a crosscheck).
 - **Times on one node.** Ours ran on 4 ranks × 10 threads and FMM3D on 40 OpenMP threads.
   For ours the time is build plus evaluation on the slowest rank; for FMM3D it is the whole
-  call. At the same requested ε (cases above 0.25 s), ours takes:
+  call. At the same requested ε (the cases where ours takes more than 0.25 s), ours takes:
   - at 10⁻³, 0.29 to 0.65 of FMM3D default's time and 0.55 to 1.31 of fastker's;
   - at 10⁻⁶, 0.42 to 1.45 of default's and 0.83 to 2.4 of fastker's;
   - at 10⁻⁸, 0.93 to 3.4 of default's and 1.65 to 5.5 of fastker's.
@@ -62,10 +62,11 @@ full output in job 617649.
 
 - **Problems.** `helmholtz_fmm3d problem` writes each case of CH3.1c's harness
   (`nd_fmm_validate::helmholtz_accuracy`, D = 1, real k) to FMM3D's problem file
-  (`NDFMMHP1`): the points, one complex charge vector (§9.1's, seeded), and the 1,000
-  sampled targets with the f64 direct sum's φ and ∇φ there. The direct sum is
+  (`NDFMMHP1`): the points, one complex charge vector (§9.1's, seeded), and the indices of
+  the 1,000 sampled targets. `compare` evaluates the f64 direct sum at those targets,
   `nd_fmm_ref::helmholtz::p2p::direct_sum` × 1/(4π), which CH1.4 showed equal to FMM3D's
-  `h3ddirectcg` to round-off. W1 at kD = 10 has 796 points, all sampled.
+  `h3ddirectcg` to round-off. §9.1 asks for eight charge vectors, as in T9. This gate uses
+  one, as CH3.1c and CH3.3 did (`Case::vectors`), and the PR asks about it. W1 at kD = 10 has 796 points, all sampled.
 - **FMM3D.** `fmm3d_driver helmholtz` calls `hfmm3d_s_c_g` once per eps, with no warm-up,
   on 40 threads. It writes φ and ∇φ at the samples (`NDFMMHO1`) and, with FULL = 1, at every
   point (`NDFMMHF1`). Both variants ran at ε, and `default` also at the reference eps
@@ -85,7 +86,7 @@ full output in job 617649.
     to a few boxes shows.
 
   The reference's own error at the samples is at most 2.3·10⁻¹³ (φ) and 1.05·10⁻¹² (∇φ,
-  the W4 sphere). That is ≤ 10⁻⁴ of the smallest ε. The reference took 0.01 to 111 s
+  the W4 sphere). That is about 10⁻⁴ of the smallest ε. The reference took 0.01 to 111 s
   (W1 at kD = 500).
 - **Not in scope** (the plan): performance at matched accuracy, and the mapping of box
   errors to offset classes (H4).
@@ -102,7 +103,11 @@ above) over ε. FMM3D's errors are the default variant's. Fastker's are within a
 mostly smaller. On the smallest problems FMM3D evaluates directly, with errors of 10⁻¹⁵:
 fastker on W1 at kD = 10 at every ε and, from 10⁻⁶, on W1 at kD = 30 and W3 at
 kD = 10; default on W1 at kD = 10 from 10⁻⁶. p by level is our degree from level 0 down (0 on levels 0 and 1,
-which have no far field). Times are single launches in seconds.
+which have no far field). Times are single launches in seconds. Each case's table on Kathleen
+(`helmholtz-<case>.md`, §3) also gives FMM3D's all-target errors and worst-box ratios for
+both variants, our checksums, and our build and evaluation times apart. The FMM3D column of
+the worst-box ratio table in the Summary, the variant comparison and the one-thread
+checksums come from those tables.
 
 ### W1 (a sphere surface of diameter D, quasi-uniform, ten points per wavelength)
 
@@ -187,6 +192,9 @@ Both codes on one core (ours 1 rank × 1 thread, FMM3D `OMP_NUM_THREADS=1`), no 
 | W1, kD = 100 | 10⁻³ | 0×2, 30, 18, 11, 7 | 7.70 | 11.09 | 4.94 | 4.15e-5, 1.36e-4 | 1.23e-3, 1.20e-3 |
 |  | 10⁻⁶ | 0×2, 35, 22, 15×2 | 19.78 | 14.87 | 6.63 | 9.61e-8, 2.94e-7 | 3.25e-7, 4.40e-7 |
 |  | 10⁻⁸ | 0×2, 38, 24×3 | 57.91 | 23.12 | 8.94 | 1.39e-9, 3.40e-9 | 1.33e-10, 2.09e-10 |
+
+Our checksums at 10⁻³, 10⁻⁶ and 10⁻⁸ are `f103f07e20546c85`, `9263f17ea109543d` and
+`01c022d6d6a5c984`, the same on 1 × 1 and 4 × 10.
 
 ## 3. Reproduce
 

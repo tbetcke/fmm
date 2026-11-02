@@ -442,7 +442,11 @@ at any kD.
   *Done when:* every ISA against the reference within CH3.4b's contract in the operator's
   and the FMM's tests; the FMM deterministic at every thread count and rank-invariant as
   before; its time on a CH3.1c case before and after. *Needs:* CH3.4b, CH3.1.
-- [ ] **CH3.6 Gate: RCR on every level against FMM3D.** *Done when:* both codes against the
+- [x] **CH3.6 Gate: RCR on every level against FMM3D.** Report:
+  `fmm-validate/results/helmholtz-ch3-6.md`; record `docs/helmholtz/tasks/CH3.6.md`;
+  `nd_fmm_validate::helmholtz_fmm3d`, the `helmholtz_fmm3d` example, `tools/fmm3d/run.sh
+  helmholtz`. Ours within ε on all 57 case × ε points (largest 0.63 ε), Kathleen jobs
+  617649–617651. *Done when:* both codes against the
   same sampled direct sum on W1, W3 and W4 for kD ≤ 100 and on W1 at kD = 500 with time; the
   full-target crosscheck, timed with CH3.4's vectorised P2P. *Needs:* CH3.3, CH1.4, CH3.4
   (added by the user on 2026-10-28; not in proposal §10). *Machines:* Kathleen.
