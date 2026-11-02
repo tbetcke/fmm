@@ -27,6 +27,13 @@ for a gate.
   | AVX2 | 11 | 12 | the end-to-end sweeps on Kathleen with `--p2p avx2` (§2) |
   | scalar | 6 | 8 | the cost per pair on the M6 and Kathleen (§3); no end-to-end run |
 
+  Auto's column kernel runs fused (one fma per step) unless a mode is named, except the
+  scalar kernel in a build without a hardware fma (x86_64 without the `fma` target
+  feature, Kathleen's build), which runs separate: there `mul_add` is a library call, and
+  the fused scalar kernel takes 2.4–50× Rotation's time per pair at every degree (§3),
+  `auto_m2l_mul_add`. Found by §3's Kathleen run after the end-to-end runs; it changes
+  nothing on the vector ISAs.
+
   `HelmholtzFmmBuilder::build` agrees the crossover over the ranks (the smallest), so
   every rank chooses the same levels; each level then runs Batched's or Rotation's level
   call unchanged, so the output is deterministic and rank-invariant as theirs (the tests,
@@ -36,7 +43,8 @@ for a gate.
   level: the best of these is the best per-level choice of the family "Batched on the
   finest levels", both uniform settings included. The rule's evaluation time is the best
   one on 34 of the 36 case × machine rows and within 1.001 on one more (Kathleen AVX2, the
-  cube at 10⁻⁶ with real charges, where Batched and Rotation tie). The one miss: **Kathleen AVX-512, W1 at kD = 30 and
+  cube at 10⁻⁶ with real charges, where Batched and Rotation tie). The one miss: **Kathleen
+  AVX-512, W1 at kD = 30 and
   ε = 10⁻⁶, 1.106**, past the stated margin of 1.10 (run spread 2 %): the rule batches a
   sparse W1 level at p = 15, where Rotation is 10 % faster, while the W4 cube at p = 15
   needs Batched (1.17 slower with Rotation), so no crossover by degree alone meets both.
@@ -158,16 +166,21 @@ largest difference between the runs of one choice of the case.
 ## 3. The cost per pair of the AVX2 and scalar column kernels
 
 `helmholtz_m2l --ps 3,4,5,6,7,8,9,10,12,15,18,20 --isa <isa>`, twice (CH3.2c's NEON and
-AVX-512 rows are in its report): fused Batched's speed relative to Rotation's per pair
-(Rotation's ns per pair over fused Batched's, block of 32 pairs per offset, k̂ = 1), the
-mean of the two launches.
+AVX-512 rows are in its report): Batched's speed relative to Rotation's per pair
+(Rotation's ns per pair over Batched's, a block of 32 pairs per offset, k̂ = 1) in the
+separate and the fused mode, the mean of the two launches.
 
 TABLE_PAIRS
 
-The scalar crossovers are the largest p at which fused Batched is at least 1.2× Rotation's
-speed per pair with two planes and one, the headroom the end-to-end sweeps showed the vector
-kernels need on sparse levels; the scalar kernel runs only for `P2pChoice::Reference` (the
-trusted path), so no end-to-end sweep was run with it.
+- AVX2 on Kathleen: fused Batched beats Rotation per pair to p = 12 with two planes and to
+  p = 15 with one; the end-to-end sweeps (§2) set 11 and 12.
+- The scalar kernel: on the M6 (aarch64, a hardware fma) the fused mode is the faster, on
+  Kathleen (x86_64 built without `fma`, so `mul_add` is a call into the C library) the fused
+  mode is 2.4–50× slower than Rotation at every degree and the separate one is the faster.
+  In each machine's faster mode the largest p at which Batched is at least 1.2× Rotation's
+  speed per pair, the headroom the end-to-end sweeps showed the vector kernels need on
+  sparse levels, is 6 with two planes and 8 with one, on both. The scalar kernel runs only
+  for `P2pChoice::Reference` (the trusted path), so no end-to-end sweep was run with it.
 
 ## 4. How it was run
 

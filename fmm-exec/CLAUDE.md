@@ -259,7 +259,7 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   same offsets on the slices shifted by n. The pair body (`Kernel::m2l`, so `PerPair`) runs
   the same calls with one column per vector, so the level call is it bit for bit; keep the
   two one chain. `with_m2l_mul_add` and `HelmholtzFmmBuilder::m2l_mul_add` (default
-  `MulAdd::Separate`, under `Auto` `Fused`; `Fused` one fma per step, Dense to rounding in
+  `MulAdd::Separate`, under `Auto` `auto_m2l_mul_add`; `Fused` one fma per step, Dense to rounding in
   both cases, about 1.8× the separate rate on the M6). `tests/helmholtz/dense.rs` checks every offset of levels
   2–4 against Dense (bit for bit with one plane) and Rotation, the fused mode, the same
   bits on every ISA in both modes, the budget and a zero budget bit for bit Rotation;
@@ -271,8 +271,11 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   1).
 - The M2L rule per level (Helmholtz CH3.2d; the `helmholtz::operator` module docs, "M2L";
   docs/helmholtz/tasks/CH3.2d.md; fmm-validate/results/helmholtz-ch3-2d.md):
-  `HelmholtzM2l::Auto`, Batched (fused unless a mode is named; the builder keeps
-  `m2l_mul_add(MulAdd)` and stores an `Option`) on the levels of degree p_l at most a
+  `HelmholtzM2l::Auto`, Batched (in `auto_m2l_mul_add(isa)`'s mode unless one is named:
+  fused, but separate for the scalar kernel in a build without hardware fma, where
+  `mul_add` is a library call; a named mode holds through later `with_m2l` and `with_p2p`;
+  the builder keeps `m2l_mul_add(MulAdd)` and stores an `Option`) on the levels of degree
+  p_l at most a
   crossover whose tables fit the dense budget from the finest up
   (`BatchedM2l::select_within`), Rotation on the others. The crossover is `auto_batched_max_degree(isa, planes)` of the column
   kernel's ISA and the multipole planes (the machine class, constraint 9), or named
