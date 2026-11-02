@@ -1729,3 +1729,35 @@ request, using this template:
   - CH4.0: the rule's sparse-level term (the roadmap).
   - The crossovers are f64's; f32 takes them unmeasured (D3: f64 until H7).
 
+
+## 2026-11-02: H3.G Gate
+- Done:
+  - `/milestone-gate H3`, the first Helmholtz gate. Report `docs/helmholtz/gates/H3.md`: the
+    gate condition, all 16 tasks (#158–#174) and their sign-offs, CI on `main`, D1 and D11,
+    proposal §9's items, constraint 1 per task, the measurements against §3.5, §5.3, §7,
+    §5.7 and §11, corrections C1–C6, recommendations and a retrospective on the loop.
+  - The gate met: CH3.6's FMM within ε at all 57 case × ε points (largest 0.63 ε sampled,
+    0.43 ε over all targets; Kathleen jobs 617649–617651).
+  - Roadmap: H3.G ticked; the status line; D6 signed off; CH0.8b on the calibrated p;
+    CH4.0 gains the per-node dense budget, CH4.1 the resident memory at the calibrated
+    degrees; CH4.0b (the worst-box concentration) and CH4.0c (the degree rule at
+    kD ≈ 1000 and the under-resolved W3) added; a new priority list for H6 (CH0.4, CH6.1,
+    CH6.2).
+  - Proposal (draft 0.8 kept): C1–C6 applied, with a line in its Appendix A ("Amended at
+    H3.G, 2026-11-02").
+- Tests: none (documents only).
+- Checks: none of cargo's (no code). `tools/roadmap/sync_issues.py --out` parses the
+  edited roadmap (a dry run against the issues: H4's issue would change, nothing applied).
+  CI on `main`: run-tests passed on #158–#174, except `run-tests-simd (x86_64)`, cancelled
+  by its 5-minute limit on #166, #169 and #172; #174's run passed every job.
+- Decisions: signed off 2026-11-02, the user: "i agree with the recommendations" (report
+  §6): 1. H3 closed; 2. D6, H6 first; 3. C1–C6 applied; 4. CH4.0b and CH4.0c added after
+  CH4.0; 5. `run-tests-simd`'s `timeout-minutes` from 5 to 10, in a separate PR; 6. the
+  priority list for H6.
+- Laplace: not touched (documents only).
+- Follow-ups:
+  - `run-tests-simd`'s limit, the separate PR of question 5.
+  - The retrospective's changes to `/next-task` and `/verify` (a roadmap line for every
+    signed-off follow-up; CI job times against their limits) and the debug test time of
+    `helmholtz_fmm` (36 → 150 s). `.claude/skills/` is not writable from the session; for
+    the user.

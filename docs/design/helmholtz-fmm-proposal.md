@@ -284,7 +284,9 @@ P = \left(p_{lo}^4 + p_{hi}^4\right)^{1/4}
 where P is a truncation number (degrees 0..P − 1); the degree in this repository's
 convention is p = ⌈P⌉ − 1. Their bound is conservative (a prescribed 10⁻⁴ gave about 10⁻⁶
 in their runs), and its floor p_lo is far above what this library's Phase 3 calibration
-needs for Laplace (degree 12 for 10⁻⁶ in φ).
+needs for Laplace (degree 12 for 10⁻⁶ in φ). The calibrated Helmholtz plateau (below) is 15
+at 10⁻⁶ with φ and ∇φ both within ε/2, consistent with Laplace: the gradient sets the
+degree.
 
 So p_l is calibrated empirically, as in C3.4, as a function of (k a_l, ε) and the operator,
 not per kD band: levels at kD and at 2kD then share one calibration. Spike S7 produces the
@@ -318,6 +320,36 @@ Top level (level 2) against kD, at ε = 10⁻⁴ / 10⁻⁶ / 10⁻⁸:
 | 3000 | 477 | 699 / 714 / 728 |
 
 Doubling kD moves the whole table up one level.
+
+**Calibrated (H3, CH3.3; amended at H3.G).** The full FMM's rule, `DegreeRule::CALIBRATED`
+of `nd_fmm_exec::helmholtz`, with L = log₁₀(1/ε) and x = Re(k) a:
+
+```math
+p(x, \varepsilon) = \max\!\left(\lceil 0.30 L^2 + 0.25 L + 2.60 \rceil,\;
+\lceil x + 0.80 (\ln\tfrac{1}{\varepsilon})^{2/3} x^{1/3} \rceil\right)
+```
+
+Every degree is the smallest that keeps the relative ℓ2 errors of φ and ∇φ over 1,000
+sampled targets within ε/2 on W1, W3 and W4, measured over 0.14 ≤ x ≤ 65 and
+10⁻⁸ ≤ ε ≤ 10⁻³ and checked in the full FMM at x = 108 (W1 at kD = 500). Beyond that it is
+an extrapolation, below S7's per-pair p* as x grows and ε falls; CH4.3 recalibrates the
+high-frequency levels. The low-frequency plateau is 7, 9, 12, 15, 20 and 24 at
+10⁻³ … 10⁻⁸, about half of S7's 16 … 46. On the example above (CH3.6's W1 tree at kD = 500,
+10⁻⁶, leaves on level 7):
+
+| Level | Box width | p_l, formula | p_l, calibrated |
+| --- | --- | ---: | ---: |
+| 2 | 19.9 λ | 144 | 131 |
+| 3 | 9.9 λ | 82 | 72 |
+| 4 | 5.0 λ | 50 | 41 |
+| 5 | 2.5 λ | 33 | 25 |
+| 6 | 1.2 λ | 25 | 16 |
+| 7 | 0.6 λ | 23 | 15 |
+
+The top level, formula and calibrated rule, at 10⁻⁶ and 10⁻⁸: 43 and 48 against 35 and
+38 at kD = 100; 144 and 151 against 131 and 135 at kD = 500. The formula stays above as the
+uncalibrated reference. The excess p − x on the high-frequency levels grows about linearly
+in L, faster than the formula's (ln 1/ε)^{2/3}, which is CH4.3's to refit.
 
 ### 3.6 The diagonal form, its rounding, and the regimes
 
@@ -529,18 +561,29 @@ is for Laplace:
   tables about 20-fold. On real orthonormal coefficients the cube-group elements that fix
   the z-axis (the reflections and the rotations by multiples of 90° about z) act by signed
   permutations; the elements that move the z-axis act by dense per-degree rotation blocks,
-  O(p³) per application. Laplace's Classes already pays the latter; at the Helmholtz p of
-  20 to 60 its cost is measured (CH3.2), not assumed.
-- **Batched**: Laplace's Batched strategy carried over on the shared drivers, with
-  per-level tables; like Dense, it never resolves where its tables exceed the node budget.
+  O(p³) per application. Laplace's Classes already pays the latter; at the Helmholtz p
+  its cost is measured (CH3.2), not assumed. (Amended at H3.G: the low-frequency levels run
+  at p of 7 to 24 in D1's range, up to about 38 on intermediate levels at kD = 100, not the
+  20 to 60 first expected; CH3.2b measured the transforms at about half a pair's time at
+  p = 3 and 6–11 % from p = 12, Classes faster than Rotation per pair only to p = 4.)
+- **Batched**: Laplace's Batched strategy, with per-level tables; like Dense, it never
+  resolves where its tables exceed the node budget. As built (CH3.2c, the user's decision):
+  its own level call, not the shared drivers' batched block, in split planes, with an
+  opt-in fused mode; fused, it beats Rotation per pair at p = 7 by 1.8× on the M6 and
+  locust and 4.5× on Kathleen.
+- **Auto** (CH3.2d, the builder's default): Batched on the levels whose degree is at most a
+  crossover by machine class (the column kernel's ISA and the multipole planes) and whose
+  tables fit the dense budget, Rotation on the others. It is the first form of Section
+  6.4's selection on low-frequency levels; CH4.0 adds a per-level term for sparse levels.
 - **Exponential (plane-wave) M2L**, opt-in at first: the Helmholtz generalisation of
   CONVENTIONS §3.14 (Greengard, Huang, Rokhlin and Wandzura 1998; Cheng et al. 2006): the
   same six directions, rotations and merge and shift, with quadratures in which the
   integral splits into a propagating and an evanescent part. Three reasons to expect it to
   matter. Phase 6 T10 measured the Laplace plane-wave M2L at 2.2–9.8× the faster of Batched
   and Rotation at f64 p ≥ 8 on the M3 Max and locust, and 3.6–12.5× at p ≥ 12 on Kathleen
-  (docs/phase6/README.md, decision 6). The Helmholtz low-frequency levels run at p of 20 to
-  60, where an O(p²) per-pair M2L gains most. And the low-frequency levels carry most of the
+  (docs/phase6/README.md, decision 6). The Helmholtz low-frequency levels run at p of 7 to
+  24 in D1's range (CH3.3; 20 to 60 before calibration), up to about 38 on intermediate
+  levels, where an O(p²) per-pair M2L still gains. And the low-frequency levels carry most of the
   far-field work below kD ≈ 10³ (Section 7), which is why H6 comes before H4 by default.
   FMM3D uses this M2L for Helmholtz up to boxes of 32 wavelengths. The cost of entry: the
   quadratures depend on k w_l, so a level needs its own quadrature (generated or tabulated;
@@ -1095,6 +1138,19 @@ What follows from these numbers:
   for the level call and target accumulators processed in chunks (Section 5.4); both count
   against the node budget, and a level whose scratch does not fit runs RCR.
 
+**H3 measurements (amended at H3.G).** The calibrated degrees of Section 3.5 on W1 at
+kD = 500, 10⁻⁶, are 131, 72, 41, 25, 16 and 15 on levels 2–7, against the formula's 144,
+82, 50, 33, 25 and 23 above. Counted the same way (2P³ complex multiply-adds per RCR pair,
+this section's box counts and V lists, every level on RCR as in H3), the low-frequency
+levels 6–7 fall from 125.8 to about 36.7 × 10⁹ and levels 2–5 from 61.5 to about
+37.0 × 10⁹: the low-frequency share of the far field from 67 % to about 50 %. This is an
+estimate from the degrees, not a measured time. The premise of D6 holds in a sharper form:
+most of D1's range lies at kD ≤ 100, where the levels are low frequency or intermediate,
+and there, at tight ε, the FMM is slowest against FMM3D (H3 gate report,
+`docs/helmholtz/gates/H3.md` §3.3). CH0.8b's final census, which replaces this section's
+numbers, uses the calibrated rule (`DegreeRule::CALIBRATED`), not S7's p, for the
+low-frequency levels. The tables above stay until it does.
+
 **Transfer functions on the high-frequency levels**, only for the classes that use the
 diagonal form (counted here for every class; a hybrid level stores fewer):
 
@@ -1218,6 +1274,12 @@ gradient field, reported separately. The full-target crosscheck against FMM3D al
 the maximum relative error per box, mapped to levels and offset classes. A tolerance ε
 refers to the relative ℓ2 norm.
 
+The box measure, as CH3.6 built it (amended at H3.G): per box of the deepest level, the
+largest error at one of its targets over the reference's RMS over all targets, reported
+beside the all-target ℓ2 error. It is reported, not gated, until CH4.0b decides whether a
+pointwise criterion joins the ℓ2 norm; CH4.4's "no error concentrated at a class boundary"
+is read with it.
+
 ### 9.2 FMM3D as an independent reference
 
 **Why early.** Every other oracle of this section is this library's own code. A misread
@@ -1295,7 +1357,8 @@ CHR.4, and only CH4.6 depends on it.
 H3 builds RCR on every level, which is correct at any kD and is the first Helmholtz
 deliverable. The default order after it is H6 then H4 (decision D6), because below kD of
 several hundred the low-frequency levels carry most of the far-field work (Section 7).
-Both depend only on H3, so they can also run side by side.
+Both depend only on H3, so they can also run side by side. H3 needs only CH2.0 and CH2.4
+of H2 (the diagram's edge; H3 closed with CH2.1–CH2.3 and CH2.5 open, amended at H3.G).
 
 ```mermaid
 flowchart LR
@@ -1304,7 +1367,7 @@ flowchart LR
   S7 --> S6["S6 diagonal-form stability"]
   H1 --> H2["H2 Yukawa host"]
   H1 --> H3["H3 Helmholtz host, RCR on every level"]
-  H2 --> H3
+  H2 -->|CH2.0 and CH2.4| H3
   S7 --> H3
   S8["S8 workload census"] --> H3
   H3 --> H6["H6 exponential M2L"]
@@ -1353,15 +1416,18 @@ flowchart LR
 | **H3** | **Helmholtz on the host, RCR on every level** (correct at any kD; the first Helmholtz deliverable) | | |
 | CH3.0 | Builder: the leaf rule and complex densities | no leaf wider than c_leaf λ on W1–W4; if `nd-octree` gains the maximum leaf width, Laplace's trees and outputs bit for bit unchanged (constraint 1); complex charges in and potentials and gradients out as split planes (§3.15 item 9), one complex expansion per complex charge vector | CH1.3, D11 |
 | CH3.1 | Complex planes; RCR M2M and L2L (real coaxial steps for real k) and RCR M2L on every level, on the shared drivers if CH3.5 holds | FMM against the direct sum on W1, W3 and W4 for kD ≤ 100 and on W1 at kD = 500; deterministic | CH3.0, CH3.5 |
-| CH3.2 | Dense, Classes and Batched where the node budget allows | measured against Rotation per p, including the cost of the cube-group transforms that move the z-axis | CH3.1 |
+| CH3.2 | Dense, Classes and Batched where the node budget allows; CH3.2d the M2L rule per level (Auto), added at CH3.2c | measured against Rotation per p, including the cost of the cube-group transforms that move the z-axis; CH3.2d: the rule's choice within 1.10 of the best per level on the three machines | CH3.1 |
 | CH3.3 | Calibration of p_l over (k a_l, ε) | S7's low-frequency tables confirmed in the full FMM | CH3.1, CH0.7 |
 | CH3.4 | Helmholtz P2P (real and complex k), on the P2P skeleton of CH2.4 | accuracy contract over k r up to 22 c_leaf; cost per pair | CH2.4 |
-| CH3.5 | The shared drivers extended to complex expansions (two planes, real shifts for real k, the epilogue) | constraint 1 of Section 2, as CH2.0; else the complex operator gets its own drivers | CH2.0 |
-| CH3.6 | Gate: RCR on every level against FMM3D | both codes against the same sampled direct sum on W1, W3 and W4 for kD ≤ 100, and on W1 at kD = 500 with time reported; the full-target crosscheck | CH3.3, CH1.4 |
+| CH3.5 | The shared drivers extended to complex expansions (two planes, real shifts for real k, the epilogue) | constraint 1 of Section 2, as CH2.0; else the complex operator gets its own drivers. Closed as a record, no driver change: the target-by-target drivers already pass whole blocks (amended at H3.G) | CH2.0 |
+| CH3.6 | Gate: RCR on every level against FMM3D | both codes against the same sampled direct sum on W1, W3 and W4 for kD ≤ 100, and on W1 at kD = 500 with time reported; the full-target crosscheck | CH3.3, CH1.4, CH3.4 (the user, 2026-10-28: timed with the vectorised P2P) |
 | **H6** | **Exponential M2L on low-frequency levels** (opt-in; before H4 by default) | | |
 | CH6.1 | The §3.14 machinery generalised: six directions, per-level quadratures, merge and shift | errors within about 1.1× Rotation's, as T13's budget for Laplace | CH0.4, CH3.1 |
 | CH6.2 | Measured against Rotation and the table-based strategies on the three machines, and against `hfmm3d`'s exponential M2L | per-level accuracy and time beside FMM3D's on the same problems; adopted as a strategy where it wins, else kept opt-in or dropped (D8) | CH6.1, CH1.4 |
 | **H4** | **High-frequency levels** | | |
+| CH4.0 | The M2L rule's sparse-level term (added at CH3.2d): a per-level term from the global tree, rank-invariant | CH3.2d's sweeps within 1.10 on every case of the three machines, sparse levels included | CH3.2d |
+| CH4.0b | The worst-box concentration (added at H3.G): where CH3.6's worst box at 30–146× the all-target ℓ2 error comes from, on all-RCR trees | the cause stated; whether a pointwise criterion joins Section 9.1's ℓ2 proposed | CH3.6 |
+| CH4.0c | The degree rule beyond its measured range (added at H3.G): W1 at kD ≈ 1000 and 10⁻⁸, all-RCR, against the direct sum; the under-resolved W3 (N = 10⁶, kD = 200 and 500) | within ε, or the rule corrected or S7's degrees named per level | CH3.6 |
 | CH4.1 | S → F and F → R by the transform as a product; per-box aligned signature buffers; source signatures kept per level call and target accumulators chunked under the node budget | round trips to the bandwidth of the grid; bits independent of the chunk size; scratch within the budget on W1 at kD = 1000 | CH3.1 |
 | CH4.2 | Diagonal M2L per (level, class), with transfer functions per class read through the class permutations | against RCR on the same class within E(l, c); determinism with the RCR pairs added after F → R | CH4.1, CH0.6 |
 | CH4.3 | The per-(level, class) rule, calibrated | C_T and θ from S6 confirmed in the full FMM on W1 and W3; the time crossover per class; the fallback of a whole level to RCR when the scratch budget binds | CH4.2 |
@@ -1597,6 +1663,18 @@ these.
     dependencies; the weekly `cargo upgrades` job named.
   - Section 12: D7 (an internal trait, decided per machine), D10 (cubecl 0.11.3), D13
     withdrawn, D14 closed.
+- **Amended at H3.G, 2026-11-02** (draft 0.8 stays the plan of record; signed off by the
+  user, "i agree with the recommendations"; `docs/helmholtz/gates/H3.md` §4, C1–C6):
+  - Section 3.5: the calibrated rule of CH3.3, its plateau and the measured degrees beside
+    the formula's; the Laplace comparison with the measured Helmholtz plateau (C1).
+  - Section 5.3: the measured degree range (7 to 24 in D1's range, not 20 to 60); Batched as
+    its own level call (CH3.2c); the Auto rule (CH3.2d) (C2).
+  - Section 7: an "H3 measurements" paragraph, the work split re-estimated with the
+    calibrated degrees; CH0.8b's census on the calibrated rule (C3).
+  - Section 10 table: CH3.6 also depends on CH3.4; CH3.2d in CH3.2's row; CH3.5 closed as
+    a record; CH4.0, CH4.0b and CH4.0c added to H4 (C4).
+  - Section 10 diagram and text: the edge H2 → H3 is CH2.0 and CH2.4 (C5).
+  - Section 9.1: the box measure of the full-target crosscheck, reported, not gated (C6).
 
 ## Appendix B. The stability check behind Section 3.6
 
