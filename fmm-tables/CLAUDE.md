@@ -7,7 +7,7 @@ tables of point-and-shoot translation.
 Phase and components: Phase 2, C2.1–C2.4 (tasks T1 and T3–T7 in docs/phase2/); Phase 6
 C6.5 (task T13: `plane_wave`, the tables of plane-wave M2L, CONVENTIONS §3.14);
 Helmholtz CH3.1a (`helmholtz`, the per-level RCR tables of the Helmholtz family,
-CONVENTIONS §3.15).
+CONVENTIONS §3.15); Helmholtz CH3.2a (`helmholtz::dense`, the dense M2L tables).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -42,6 +42,14 @@ CONVENTIONS §3.15).
   measured on the M6). Its y-blocks are built in T, as `rcr`
   builds them per call, so that stored and per-call blocks agree; the M2L blocks are
   stored from the finest level up within a byte budget. Not cached (CH2.2).
+  `helmholtz::dense` (Helmholtz CH3.2a; its module docs): `DenseM2l`, per level and offset
+  the complex M2L as one 2n × n column-major matrix [A_r; A_i], column j Rotation's M2L of
+  e_j built by `HelmholtzTables<f64>` and rounded to T (so Dense equals Rotation to
+  rounding: 4e-14 in the FMM-weighted measure on the M6); levels chosen within a byte
+  budget from the finest up (`select`, a function of the degrees and the budget). Its
+  application's chain (one plane: k ascending over 2n rows; two planes: one pass,
+  L_r + A_r M_r − A_i M_i and L_i + A_i M_r + A_r M_i per k) is what a batched form must
+  equal bit for bit, or say it does not (CH3.2c). Not cached.
 - Matrices are column-major with output = A · input. Every application accumulates
   (+=), and none applies 1/(4π) (§3.1).
 - Builds are serial and deterministic: the same inputs give bit-identical tables and

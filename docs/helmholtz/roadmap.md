@@ -391,14 +391,45 @@ at any kD.
   when:* CH3.1's: the FMM against the sampled
   direct sum on W1, W3 and W4 for kD ≤ 100 and on W1 at kD = 500; deterministic; a report.
   *Needs:* CH3.1b.
-- [ ] **CH3.2 Dense, Classes and Batched where the node budget allows.** *Done when:*
+- CH3.2 Dense, Classes and Batched where the node budget allows. *Done when:*
   measured against Rotation per p, the cost of the cube-group transforms that move the z-axis
   included; Batched on the shared drivers needs the two-plane case of `driver::m2l_block`
   (`PLANES`, rectangular real-to-complex tables, the per-target epilogue of proposal §6.2;
   moved here from CH3.5 on 2026-11-01), and Dense either combines per pair or gets a
   per-target finish hook in `driver::m2l_target`, with constraint 1 as in CH2.0 (Laplace bit for
   bit, D9 on the three machines), else Helmholtz's Batched gets its own block.
-  *Needs:* CH3.1. *Machines:* locust, Kathleen.
+  *Needs:* CH3.1. *Machines:* locust, Kathleen. Split on 2026-11-02 into three sub-tasks,
+  each one reviewable PR (a new table family, its symmetry form and the batched block with
+  constraint 1 and the three machines do not fit one); CH3.2 is done, and H3.G runnable on
+  its side, when all three are:
+- [x] **CH3.2a Dense.** Report: `fmm-validate/results/helmholtz-ch3-2a.md`; record
+  `docs/helmholtz/tasks/CH3.2a.md`; `nd_fmm_tables::helmholtz::dense`,
+  `nd_fmm_exec::helmholtz::HelmholtzM2l`, the `helmholtz_m2l` example. Dense is Rotation to
+  rounding, level with it end to end on the M6 at p = 7 and slower above (1.5–2.6×; per
+  pair faster only to p ≈ 6), so it stays opt-in. Per level and V-list offset the complex M2L table as the 2n × n real
+  matrix [A_r; A_i] (n = (p_l + 1)², real input to two output planes), built in f64 by the
+  level's RCR (`HelmholtzTables<f64>`) and rounded to T, in `nd_fmm_tables::helmholtz`; the
+  operator's M2L per level, `Rotation` (the default) or `Dense` on the levels whose tables fit
+  a byte budget, from the finest level up, `Rotation` elsewhere; Dense combined per pair (L_r
+  += A_r M_r − A_i M_i, L_i += A_i M_r + A_r M_i), so no driver changes (CH3.5, question 2).
+  *Done when:* every offset against Rotation to rounding on several levels, real and complex
+  k, one and two multipole planes; the FMM with Dense against the direct sum and against
+  Rotation's output, the same at every thread count and on P ranks the one-rank FMM bit for
+  bit; the tables' bytes and build time, and the M2L cost per pair against Rotation per p
+  on the M6. *Needs:* CH3.1.
+- [ ] **CH3.2b Classes.** Dense over the 16 symmetry classes of CONVENTIONS §3.12 per level,
+  with the cube-group coefficient transforms in the orthonormal basis of §3.15 (signed
+  permutations for the elements that fix the z-axis, dense per-degree blocks for the others).
+  *Done when:* against Dense to rounding at every offset; the FMM as CH3.2a's; the cost per
+  pair against Rotation and Dense per p on the M6, the transforms that move the z-axis
+  included. *Needs:* CH3.2a.
+- [ ] **CH3.2c Batched, and the measurements per p.** The batched M2L on CH3.2a's tables:
+  the two-plane case of `driver::m2l_block` (`PLANES`, rectangular tables, the per-target
+  epilogue of proposal §6.2) with constraint 1 as in CH2.0 (Laplace bit for bit, D9 on the
+  three machines), else Helmholtz's own block. *Done when:* against Dense (bit for bit, or
+  within rounding where an epilogue reorders the sums, stated); the FMM as CH3.2a's;
+  Rotation, Dense, Classes and Batched per p on the M6, locust and Kathleen. *Needs:*
+  CH3.2a, CH3.2b. *Machines:* locust, Kathleen.
 - [x] **CH3.3 Calibration of p_l over (k a_l, ε).** Report:
   `fmm-validate/results/helmholtz-ch3-3.md`; record `docs/helmholtz/tasks/CH3.3.md`;
   `nd_fmm_exec::helmholtz::{DegreeRule, degree, s7_degree}`,

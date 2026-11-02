@@ -28,6 +28,9 @@
 //! - `--p2p auto|reference|<isa>,…` (default `auto`): the P2P kernels (Helmholtz CH3.4c),
 //!   each case run with each in turn; an ISA this machine lacks is refused before MPI
 //!   starts.
+//! - `--m2l rotation|dense,…` (default `rotation`, Helmholtz CH3.2a): the M2L, each case run
+//!   with each in turn (and each P2P kernel); `--dense-budget MB` the dense tables' bytes
+//!   per rank (default 1024 MiB). The column "M2L" names the dense levels and their MB.
 //!
 //! Run in release mode, on any number of ranks (each rank passes a contiguous block of
 //! the points, the oracle is sharded over the ranks, rank 0 prints), with one BLAS
@@ -47,7 +50,9 @@ use std::time::Instant;
 
 use mpi::Threading;
 use mpi::traits::*;
-use nd_fmm_exec::helmholtz::{ChargeKind, Degrees, Wavenumber, s7_degree};
+use nd_fmm_exec::helmholtz::{
+    ChargeKind, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzM2l, Wavenumber, s7_degree,
+};
 use nd_fmm_exec::operator::P2pChoice;
 use nd_fmm_validate::bench::{cores, cpu_model, target};
 use nd_fmm_validate::fmm_accuracy::Distribution;
@@ -67,6 +72,8 @@ struct Arguments {
     threads: Vec<usize>,
     oracle_threads: Option<usize>,
     p2p: Vec<P2pChoice>,
+    m2l: Vec<HelmholtzM2l>,
+    dense_budget: usize,
     s7: bool,
 }
 
@@ -101,7 +108,8 @@ fn arguments() -> Arguments {
             "usage: helmholtz_accuracy [--workload w1|w2|w3|w3:<n>|w4-<distribution>:<n>] \
              [--kd x,…] [--kim y] [--eps e,…|--degree p] [--charges real|complex] \
              [--vectors m] [--samples n] [--no-gradients] [--threads t,…] \
-             [--oracle-threads t] [--rule calibrated|s7] [--p2p auto|reference|<isa>,…]; got {args:?}"
+             [--oracle-threads t] [--rule calibrated|s7] [--p2p auto|reference|<isa>,…] \
+             [--m2l rotation|dense,…] [--dense-budget MB]; got {args:?}"
         );
         std::process::exit(2);
     };
@@ -117,6 +125,8 @@ fn arguments() -> Arguments {
         threads: vec![1],
         oracle_threads: None,
         p2p: vec![P2pChoice::Auto],
+        m2l: vec![HelmholtzM2l::Rotation],
+        dense_budget: DEFAULT_DENSE_BUDGET,
         s7: false,
     };
     let mut rest = args.as_slice();
@@ -156,6 +166,22 @@ fn arguments() -> Arguments {
                         .filter(|c| c.iter().all(|c| c.resolve().is_ok()))
                         .map(|c| parsed.p2p = c)
                         .is_some(),
+                    "--m2l" => value
+                        .split(',')
+                        .map(|v| match v {
+                            "rotation" => Some(HelmholtzM2l::Rotation),
+                            "dense" => Some(HelmholtzM2l::Dense),
+                            _ => None,
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .map(|m| parsed.m2l = m)
+                        .is_some(),
+                    "--dense-budget" => value
+                        .parse::<usize>()
+                        .ok()
+                        .and_then(|mb| mb.checked_mul(1 << 20))
+                        .map(|bytes| parsed.dense_budget = bytes)
+                        .is_some(),
                     "--rule" => match value.as_str() {
                         "calibrated" => Some(false),
                         "s7" => Some(true),
@@ -181,10 +207,23 @@ fn arguments() -> Arguments {
         || parsed.threads.contains(&0)
         || parsed.kds.is_empty()
         || parsed.p2p.is_empty()
+        || parsed.m2l.is_empty()
     {
         usage();
     }
     parsed
+}
+
+/// The M2L of a row: `rotation`, or `dense l…` with the dense levels and their MB.
+fn m2l_string(dense: &[bool], bytes: usize) -> String {
+    let levels: Vec<String> = (0..dense.len())
+        .filter(|&l| dense[l])
+        .map(|l| l.to_string())
+        .collect();
+    match levels.is_empty() {
+        true => "rotation".into(),
+        false => format!("dense {} ({:.0} MB)", levels.join(","), bytes as f64 / 1e6),
+    }
 }
 
 /// The degrees as a short string: runs of equal degrees as `p×count`.
@@ -230,12 +269,12 @@ fn main() {
         );
         println!();
         println!(
-            "| Workload | N | kD | degrees | charges | m | P2P | ranks × threads | levels \
+            "| Workload | N | kD | degrees | charges | m | P2P | M2L | ranks × threads | levels \
              | leaf level | p by level | leaves | max leaf | build s | evaluate s | φ | ∇φ \
              | checksum |"
         );
         println!(
-            "| --- | ---: | --- | --- | --- | ---: | --- | --- | ---: | ---: | --- | ---: | ---: \
+            "| --- | ---: | --- | --- | --- | ---: | --- | --- | --- | ---: | ---: | --- | ---: | ---: \
              | ---: | ---: | ---: | ---: | --- |"
         );
     }
@@ -247,6 +286,7 @@ fn main() {
             case.vectors = arguments.vectors;
             case.samples = arguments.samples;
             case.gradients = arguments.gradients;
+            case.dense_budget = arguments.dense_budget;
             let problem = Problem::new(&case);
             let start = Instant::now();
             let oracle = Oracle::sharded(
@@ -285,11 +325,17 @@ fn main() {
                 ChargeKind::Real => "real",
                 ChargeKind::Complex => "complex",
             };
-            for (&p2p, &threads) in arguments
-                .p2p
+            let (p2ps, threads_list) = (&arguments.p2p, &arguments.threads);
+            let runs: Vec<(HelmholtzM2l, P2pChoice, usize)> = arguments
+                .m2l
                 .iter()
-                .flat_map(|p| arguments.threads.iter().map(move |t| (p, t)))
-            {
+                .flat_map(|&m| {
+                    p2ps.iter()
+                        .flat_map(move |&p| threads_list.iter().map(move |&t| (m, p, t)))
+                })
+                .collect();
+            for (m2l, p2p, threads) in runs {
+                case.m2l = m2l;
                 case.p2p = p2p;
                 match run(&case, &problem, &oracle, threads, &world) {
                     Ok(row) if root => {
@@ -300,13 +346,14 @@ fn main() {
                             "–".into()
                         };
                         println!(
-                            "| {} | {} | {kd_string} | {degrees_name} | {charges} | {} | {} | {} × {} \
+                            "| {} | {} | {kd_string} | {degrees_name} | {charges} | {} | {} | {} | {} × {} \
                              | {} | {} | {} | {} | {} | {:.2} | {:.2} | {:.2e} | {gradient} \
                              | {:016x} |",
                             workload.name(),
                             problem.len(),
                             case.vectors,
                             row.p2p,
+                            m2l_string(&row.dense_levels, row.dense_bytes),
                             row.ranks,
                             row.threads,
                             row.levels,

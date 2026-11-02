@@ -337,6 +337,14 @@ times and needs FMM3D's files) has the steps `problem` and `compare`;
 checks the measures with the direct sum standing in for FMM3D. Its report is
 `results/helmholtz-ch3-6.md`.
 
+Helmholtz CH3.2a (the Dense M2L; docs/helmholtz/tasks/CH3.2a.md) added
+`helmholtz_accuracy::Case::{m2l, dense_budget}` and `Row::{dense_levels, dense_bytes}`, the
+example's `--m2l rotation|dense,…` and `--dense-budget MB` (a column "M2L"), and the
+`helmholtz_m2l` example (MPI-free, not registered; it times): per degree the M2L per pair
+under Rotation and Dense on one level, the 316 offsets per pass, one and two multipole
+planes, Dense's bytes and build time, Dense's locals checked against Rotation's first. Its
+report is `results/helmholtz-ch3-2a.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

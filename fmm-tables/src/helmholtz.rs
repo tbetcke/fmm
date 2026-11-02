@@ -98,6 +98,11 @@
 //! This crate otherwise never restates an operator formula; like [`rotation`] and
 //! [`plane_wave`], this module does, and its tests pin it to `rcr` to rounding.
 //!
+//! # Dense
+//!
+//! [`dense`] holds the same M2L as one complex matrix per level and offset, built from these
+//! tables in f64 (Helmholtz CH3.2a).
+//!
 //! [`rotation`]: crate::rotation
 //! [`plane_wave`]: crate::plane_wave
 //!
@@ -131,6 +136,8 @@
 //!     assert!((a - b).abs() <= 1e-14 * largest);
 //! }
 //! ```
+
+pub mod dense;
 
 use nd_fmm_math::coaxial::CoaxialTable;
 use nd_fmm_math::orthonormal::rotation::{

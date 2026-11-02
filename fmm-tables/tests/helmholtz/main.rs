@@ -19,6 +19,8 @@ use nd_fmm_ref::helmholtz::{Level, Workspace, rcr};
 use nd_fmm_tables::geometry::{M2L_OFFSET_COUNT, OCTANT_COUNT, m2l_offsets, octant_direction};
 use nd_fmm_tables::helmholtz::{DEFAULT_BLOCK_BUDGET, HelmholtzTables};
 
+mod dense;
+
 /// A deterministic input of `planes` planes at degree p whose degree-n coefficients are of
 /// size about 2⁻ⁿ, with a seed.
 fn input(p: usize, planes: usize, seed: u64) -> Vec<f64> {
