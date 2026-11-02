@@ -101,7 +101,8 @@
 //! # Dense
 //!
 //! [`dense`] holds the same M2L as one complex matrix per level and offset, built from these
-//! tables in f64 (Helmholtz CH3.2a).
+//! tables in f64 (Helmholtz CH3.2a); [`batched`] the same matrices in split planes, for the
+//! batched M2L (Helmholtz CH3.2c).
 //!
 //! [`rotation`]: crate::rotation
 //! [`plane_wave`]: crate::plane_wave
@@ -137,6 +138,7 @@
 //! }
 //! ```
 
+pub mod batched;
 pub mod classes;
 pub mod dense;
 
