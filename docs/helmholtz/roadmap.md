@@ -522,6 +522,14 @@ at any kD.
 
 **Gate:** CH4.4 and CH4.5, the kD sweep and host performance against FMM3D.
 
+- [ ] **CH4.0 The M2L rule's sparse-level term.** Added on 2026-11-02 at CH3.2d (the user,
+  "Accept, follow-up"): CH3.2d's rule by degree and machine class batched a sparse W1 level
+  at p = 15 on Kathleen at 1.106× the best choice (W1, kD = 30, ε = 10⁻⁶), past its 1.10
+  margin, while the W4 cube at the same degree needs Batched. A per-level term from the
+  global tree (the mean V-list length per box, counted once per box over the ranks, the
+  replicated top included), so the rule stays rank-invariant (constraint 9). *Done when:*
+  CH3.2d's sweeps within 1.10 on every case of the three machines, sparse levels included;
+  deterministic and rank-invariant. *Needs:* CH3.2d. *Machines:* locust, Kathleen.
 - [ ] **CH4.1 S → F and F → R by the transform as a product.** Per-box aligned signature
   buffers; source signatures kept per level call, target accumulators chunked under the node
   budget. *Done when:* round trips to the grid's bandwidth; bits independent of the chunk

@@ -159,3 +159,10 @@ None yet.
 ## Open questions
 
 - Whether Auto becomes the default of `HelmholtzFmmBuilder` (for sign-off, in the PR).
+- The margin, asked during the work (2026-11-02): the degree-only rule is within 1.05 of
+  the best choice on every case of the three machines but one, Kathleen with AVX-512 on W1
+  at kD = 30 and ε = 10⁻⁶ (1.106, a sparse level at p = 15 batched; the W4 cube at p = 15
+  needs Batched, so no degree-only crossover meets both). Answered 2026-11-02, the user:
+  "Accept, follow-up": the rule stays by degree and machine class, the miss is stated in
+  the report and the PR, and the sparse-level term is CH4.0 in the roadmap, before H4's
+  other tasks.

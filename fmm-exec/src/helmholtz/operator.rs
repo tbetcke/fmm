@@ -204,19 +204,20 @@ pub enum HelmholtzM2l {
 }
 
 /// The crossover degree of [`HelmholtzM2l::Auto`] (Helmholtz CH3.2d; the operator module
-/// documentation, "M2L"): the largest p_l at which the fused Batched M2L is expected to beat
-/// Rotation, for the column kernel's ISA (the machine class) and the multipole's planes (1
-/// for real k with real charges, 2 otherwise). A function of these two alone, so every rank
-/// of one machine class chooses alike (proposal §2, constraint 9); measured in
-/// fmm-validate/results/helmholtz-ch3-2d.md.
+/// documentation, "M2L"): the largest p_l at which the rule runs the fused Batched M2L, for
+/// the column kernel's ISA (the machine class) and the multipole's planes (1 for real k with
+/// real charges, 2 otherwise). A function of these two alone, so every rank of one machine
+/// class chooses alike (proposal §2, constraint 9). Set from the end-to-end crossover sweeps
+/// of fmm-validate/results/helmholtz-ch3-2d.md: NEON on the M6 and locust, AVX-512 and AVX2
+/// on Kathleen; the scalar kernel from its cost per pair on the M6 and Kathleen.
 pub fn auto_batched_max_degree(isa: Isa, planes: usize) -> usize {
     let one_plane = planes == 1;
     match (isa, one_plane) {
-        (Isa::Avx512, false) => 15,
-        (Isa::Avx512, true) => 18,
+        (Isa::Avx512, _) => 15,
+        (Isa::Avx2, false) => 11,
         (Isa::Scalar, false) => 6,
         (Isa::Scalar, true) => 8,
-        // NEON and AVX2 (and any later ISA until measured).
+        // NEON (and any later ISA until measured); AVX2 with one plane.
         (_, false) => 10,
         (_, true) => 12,
     }
