@@ -2,13 +2,15 @@
 //! classification of k (CONVENTIONS §3.15, "Kernel and factors" and "Inputs and
 //! outputs"), the leaf rule of docs/design/helmholtz-fmm-proposal.md §3.7, the complex
 //! densities (§3.15, "Storage" and "Inputs and outputs"), the degree rule (spike S7),
-//! the operator's bodies pair by pair and its P2P on every ISA (CH3.4c).
+//! the operator's bodies pair by pair, its P2P on every ISA (CH3.4c) and its Dense M2L
+//! against Rotation (CH3.2a).
 //!
 //! None of these tests initialises MPI. The trees of the reference workloads under the
 //! rule are tested in `nd-fmm-validate` (`tests/helmholtz_leaves.rs`).
 
 mod common;
 mod degree;
+mod dense;
 mod densities;
 mod leaf_rule;
 mod operator;

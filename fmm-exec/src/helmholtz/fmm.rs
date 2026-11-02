@@ -99,8 +99,9 @@ use rayon::{ThreadPool, ThreadPoolBuilder};
 use thiserror::Error;
 
 use super::{
-    C_LEAF, ChargeKind, Charges, DegreeError, Degrees, Densities, DensityError, HelmholtzOperator,
-    OperatorError, Output, Wavenumber, WavenumberKind, min_leaf_level,
+    C_LEAF, ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DegreeError, Degrees, Densities,
+    DensityError, HelmholtzM2l, HelmholtzOperator, OperatorError, Output, Wavenumber,
+    WavenumberKind, min_leaf_level,
 };
 use crate::fmm::{DEFAULT_MAX_POINTS_PER_LEAF, FmmError, PointSet, SettingsError};
 use crate::geometry::Domain;
@@ -162,6 +163,8 @@ pub struct HelmholtzFmmBuilder {
     max_points_per_leaf: usize,
     max_level: usize,
     block_budget: usize,
+    m2l: HelmholtzM2l,
+    dense_budget: usize,
     c_leaf: f64,
     p2p: P2pChoice,
     pair_calls: bool,
@@ -171,8 +174,8 @@ impl HelmholtzFmmBuilder {
     /// The settings for wavenumber `k` with the degrees `degrees`: complex charges, one
     /// vector, potentials only, one thread, the domain from the points,
     /// [`DEFAULT_MAX_POINTS_PER_LEAF`] points per leaf, leaves down to level 16, the
-    /// default block budget of the M2L y-blocks, the leaf width [`C_LEAF`] and the P2P
-    /// kernel of [`P2pChoice::Auto`].
+    /// default block budget of the M2L y-blocks, M2L by [`HelmholtzM2l::Rotation`], the leaf
+    /// width [`C_LEAF`] and the P2P kernel of [`P2pChoice::Auto`].
     pub fn new(k: Wavenumber, degrees: Degrees) -> Self {
         Self {
             k,
@@ -185,6 +188,8 @@ impl HelmholtzFmmBuilder {
             max_points_per_leaf: DEFAULT_MAX_POINTS_PER_LEAF,
             max_level: DEEPEST,
             block_budget: DEFAULT_BLOCK_BUDGET,
+            m2l: HelmholtzM2l::Rotation,
+            dense_budget: DEFAULT_DENSE_BUDGET,
             c_leaf: C_LEAF,
             p2p: P2pChoice::Auto,
             pair_calls: false,
@@ -243,6 +248,22 @@ impl HelmholtzFmmBuilder {
     /// default [`DEFAULT_BLOCK_BUDGET`]); the output does not depend on it.
     pub fn block_budget(mut self, bytes: usize) -> Self {
         self.block_budget = bytes;
+        self
+    }
+
+    /// The M2L of the levels (default [`HelmholtzM2l::Rotation`]; the operator module
+    /// documentation, "M2L"). Under [`HelmholtzM2l::Dense`] the output agrees with
+    /// Rotation's to rounding, not bit for bit.
+    pub fn m2l(mut self, choice: HelmholtzM2l) -> Self {
+        self.m2l = choice;
+        self
+    }
+
+    /// The bytes of the dense M2L tables of each rank under [`HelmholtzM2l::Dense`]
+    /// (default [`DEFAULT_DENSE_BUDGET`]): the levels that fit, from the finest level up,
+    /// run Dense, the others RCR.
+    pub fn dense_budget(mut self, bytes: usize) -> Self {
+        self.dense_budget = bytes;
         self
     }
 
@@ -425,6 +446,7 @@ impl HelmholtzFmmBuilder {
             max_leaf_points,
             self.block_budget,
         )?
+        .with_m2l(self.m2l, self.dense_budget)
         .with_p2p(self.p2p)
         .expect("the P2P kernel's ISA is available (checked in step 1)");
         if let Some(pool) = &pool {
