@@ -16,7 +16,7 @@ their errors and times, and compare their outputs at every target.
 at kD = 500 with time reported; the full-target crosscheck". Roadmap: the same, "timed with
 CH3.4's vectorised P2P"; *Machines:* Kathleen.
 
-Read as (to be confirmed in the PR):
+Read as (confirmed in the PR, 2026-11-02):
 - for every case, our FMM and FMM3D at the same requested tolerance ε ∈ {10⁻³, 10⁻⁶,
   10⁻⁸} (decision D1), both measured with §9.1's relative ℓ2 norms of φ and ∇φ over the
   same 1,000 sampled targets, against the same f64 direct sum
@@ -156,3 +156,9 @@ elsewhere and the ratio stays (20–70×): not a boundary effect.
 1. The worst-box ratio above: the default rule meets ε in §9.1's ℓ2 norm, but its errors
    are more concentrated than FMM3D's. A question for the PR (a follow-up, not a change
    here).
+
+Signed off 2026-11-02, the user: "both decisions accepted with your recommendations". So
+question 1 (the worst-box concentration) is accepted on §9.1's ℓ2 criterion, and its cause
+and any pointwise criterion are a follow-up before H4's high-frequency levels. Question 2
+(the acceptance's reading: same requested ε, FMM3D not gated, deepest-level boxes without
+offset classes, one charge vector) is accepted as read.

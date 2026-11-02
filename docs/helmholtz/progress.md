@@ -1480,7 +1480,9 @@ request, using this template:
 - Decisions: none taken. Questions for sign-off (the PR): 1. the worst-box concentration
   (ours 30–146× the ℓ2 error at 10⁻⁶ and 10⁻⁸, FMM3D up to 37×); 2. the acceptance's
   reading (same requested ε, FMM3D not gated, the box measure on the deepest level without
-  offset classes, one charge vector rather than §9.1's eight).
+  offset classes, one charge vector rather than §9.1's eight). Signed off 2026-11-02, the user:
+  "both decisions accepted with your recommendations" (1: the gate on §9.1's ℓ2, the
+  concentration a follow-up before H4; 2: the reading accepted).
 - Laplace: not touched (no library file changed; `run.sh`'s Laplace steps get only the
   variants fix).
 - Follow-ups:
