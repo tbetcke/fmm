@@ -35,11 +35,11 @@
 //! [`DenseM2l::m2l`] adds the M2L of `vectors` multipoles to their locals, per vector the
 //! one-vector operation, each product and sum rounded apart (as `MatrixSet::apply`):
 //!
-//! - one plane (the real multipole of real k and real charges): L[r] ← L[r] + A[r, k] M[k]
-//!   for k = 0, 1, …, n − 1 in turn, over the 2n rows;
+//! - one plane (the real multipole of real k and real charges):
+//!   L\[r\] ← L\[r\] + A\[r, k\] M\[k\] for k = 0, 1, …, n − 1 in turn, over the 2n rows;
 //! - two planes: in one pass over the table, for k = 0, 1, …, n − 1 in turn,
-//!   L_r[r] ← (L_r[r] + A_r[r, k] M_r[k]) − A_i[r, k] M_i[k] and
-//!   L_i[r] ← (L_i[r] + A_i[r, k] M_r[k]) + A_r[r, k] M_i[k], over the n rows.
+//!   L_r\[r\] ← (L_r\[r\] + A_r\[r, k\] M_r\[k\]) − A_i\[r, k\] M_i\[k\] and
+//!   L_i\[r\] ← (L_i\[r\] + A_i\[r, k\] M_r\[k\]) + A_r\[r, k\] M_i\[k\], over the n rows.
 //!
 //! So the four real products of a complex M2L are combined pair by pair, with no per-target
 //! epilogue (Helmholtz CH3.5, question 2), and each table is read once per pair: per pair
