@@ -65,6 +65,7 @@ use nd_fmm_exec::fmm::{FmmError, SettingsError};
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, Degrees, DensityError, HelmholtzFmm, HelmholtzFmmBuilder,
     HelmholtzFmmError, HelmholtzM2l, OperatorError, Output, Wavenumber, auto_batched_max_degree,
+    auto_m2l_mul_add,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -779,7 +780,7 @@ fn check_auto(scenario: &Scenario, comm: &SimpleCommunicator) {
     let op = fmm.operator();
     assert_eq!(op.m2l_choice(), HelmholtzM2l::Auto);
     assert_eq!(fmm.m2l_max_degree(), Some(crossover));
-    assert_eq!(op.m2l_mul_add(), MulAdd::Fused);
+    assert_eq!(op.m2l_mul_add(), auto_m2l_mul_add(Isa::detect()));
     assert_eq!(fmm.degrees(), degrees);
     assert_eq!(
         op.m2l_on(finest),

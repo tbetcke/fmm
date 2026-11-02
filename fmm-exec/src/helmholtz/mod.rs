@@ -69,6 +69,7 @@ pub use densities::{ChargeKind, Charges, Densities, DensityError, LeafScratch, O
 pub use fmm::{HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError};
 pub use operator::{
     DEFAULT_DENSE_BUDGET, HelmholtzM2l, HelmholtzOperator, OperatorError, auto_batched_max_degree,
+    auto_m2l_mul_add,
 };
 
 /// The deepest level of a Morton key, 16 (CONVENTIONS §3.12).

@@ -20,9 +20,10 @@ use mpi::Threading;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::Communicator;
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, Degrees, Densities, HelmholtzM2l, Output, Wavenumber, WavenumberKind, s7_degree,
+    ChargeKind, Degrees, Densities, HelmholtzM2l, Output, Wavenumber, WavenumberKind,
+    auto_m2l_mul_add, s7_degree,
 };
-use nd_fmm_exec::operator::MulAdd;
+use nd_fmm_exec::operator::Isa;
 use nd_fmm_validate::SplitMix64;
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::helmholtz_accuracy::{
@@ -182,12 +183,12 @@ fn check_auto(world: &SimpleCommunicator) {
     case.m2l_max_degree = Some(usize::MAX);
     let every = run(&case, &problem, &oracle, 1, world).expect("the FMM runs");
     assert!(every.dense_levels[2..].iter().all(|&on| on));
-    assert_eq!(every.m2l_mul_add, MulAdd::Fused);
+    assert_eq!(every.m2l_mul_add, auto_m2l_mul_add(Isa::detect()));
     check_fmm(world, &case);
-    // Above every degree: Batched in the fused mode, bit for bit.
+    // Above every degree: Batched in Auto's mode, bit for bit.
     let mut batched = case.clone();
     (batched.m2l, batched.m2l_mul_add, batched.m2l_max_degree) =
-        (HelmholtzM2l::Batched, Some(MulAdd::Fused), None);
+        (HelmholtzM2l::Batched, Some(every.m2l_mul_add), None);
     let fused = run(&batched, &problem, &oracle, 1, world).expect("the FMM runs");
     assert_eq!(every.checksum, fused.checksum, "Auto above every degree");
     // The sweep's crossovers: every choice once, from every level to none.

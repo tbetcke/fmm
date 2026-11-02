@@ -12,7 +12,7 @@
 use nd_fmm_exec::geometry::Domain;
 use nd_fmm_exec::helmholtz::{
     ChargeKind, DEFAULT_DENSE_BUDGET, Densities, HelmholtzM2l, HelmholtzOperator, Wavenumber,
-    auto_batched_max_degree,
+    auto_batched_max_degree, auto_m2l_mul_add,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_plan::operator::{FmmSizes, PairOperator};
@@ -390,13 +390,13 @@ fn auto_splits_the_levels_at_the_crossover() {
             .with_p2p(P2pChoice::Reference)
             .unwrap();
         let mut fused = operator(k, kind, 2, HelmholtzM2l::Batched, usize::MAX)
-            .with_m2l_mul_add(MulAdd::Fused)
+            .with_m2l_mul_add(auto_m2l_mul_add(Isa::Scalar))
             .with_p2p(P2pChoice::Reference)
             .unwrap();
         let mut rotation = operator(k, kind, 2, HelmholtzM2l::Rotation, usize::MAX);
         assert_eq!(auto.m2l_choice(), HelmholtzM2l::Auto);
         assert_eq!(auto.max_degree(), Some(6));
-        assert_eq!(auto.m2l_mul_add(), MulAdd::Fused);
+        assert_eq!(auto.m2l_mul_add(), auto_m2l_mul_add(Isa::Scalar));
         assert_eq!(
             auto.batched_bytes(),
             BatchedM2l::<f64>::level_bytes(degrees[2]) + BatchedM2l::<f64>::level_bytes(degrees[4])
@@ -434,7 +434,7 @@ fn auto_at_the_extremes_and_its_mode() {
     };
     let mut every = auto(usize::MAX);
     let mut fused = operator(k, ChargeKind::Complex, 1, HelmholtzM2l::Batched, usize::MAX)
-        .with_m2l_mul_add(MulAdd::Fused);
+        .with_m2l_mul_add(auto_m2l_mul_add(Isa::detect()));
     assert!((2..LEVELS).all(|l| every.m2l_on(l) == HelmholtzM2l::Batched));
     assert!(compare(&mut every, &mut fused).1);
 
@@ -553,4 +553,31 @@ fn the_crossovers_are_ordered() {
             );
         }
     }
+}
+
+/// Auto's mode: fused on every vector ISA, and for the scalar kernel exactly where the build
+/// has a hardware fma; the operator takes it on the kernel's ISA in either order of the calls,
+/// and a named mode holds through `with_p2p`.
+#[test]
+fn auto_takes_the_mode_of_the_kernel() {
+    let hardware_fma = cfg!(any(target_arch = "aarch64", target_feature = "fma"));
+    for isa in Isa::all() {
+        let want = match (isa, hardware_fma) {
+            (Isa::Scalar, false) => MulAdd::Separate,
+            _ => MulAdd::Fused,
+        };
+        assert_eq!(auto_m2l_mul_add(isa), want, "{isa}");
+    }
+    let k = Wavenumber::new(20.0, 2.0).unwrap();
+    let reference = operator(k, ChargeKind::Complex, 1, HelmholtzM2l::Auto, 0)
+        .with_p2p(P2pChoice::Reference)
+        .unwrap();
+    assert_eq!(reference.m2l_mul_add(), auto_m2l_mul_add(Isa::Scalar));
+    let detected = operator(k, ChargeKind::Complex, 1, HelmholtzM2l::Auto, 0);
+    assert_eq!(detected.m2l_mul_add(), auto_m2l_mul_add(Isa::detect()));
+    let named = operator(k, ChargeKind::Complex, 1, HelmholtzM2l::Auto, 0)
+        .with_m2l_mul_add(MulAdd::Fused)
+        .with_p2p(P2pChoice::Reference)
+        .unwrap();
+    assert_eq!(named.m2l_mul_add(), MulAdd::Fused);
 }

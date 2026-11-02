@@ -443,7 +443,11 @@ at any kD.
   within rounding where an epilogue reorders the sums, stated); the FMM as CH3.2a's;
   Rotation, Dense, Classes and Batched per p on the M6, locust and Kathleen. *Needs:*
   CH3.2a, CH3.2b. *Machines:* locust, Kathleen.
-- [ ] **CH3.2d The M2L rule per level.** Added on 2026-11-02 at CH3.2c's sign-off (the
+- [x] **CH3.2d The M2L rule per level.** Report: `fmm-validate/results/helmholtz-ch3-2d.md`;
+  record `docs/helmholtz/tasks/CH3.2d.md`; `HelmholtzM2l::Auto`, `auto_batched_max_degree`,
+  `BatchedM2l::select_within`. The rule's choice the best on 34 of 36 case × machine rows,
+  1.001 on one, 1.106 on one (Kathleen AVX-512, a sparse W1 level; accepted, CH4.0).
+  Added on 2026-11-02 at CH3.2c's sign-off (the
   user, "i agree with the recommendations": a follow-up before H3.G). An Auto setting of
   `HelmholtzM2l` choosing per level from the degrees, the budget and the machine class only
   (constraint 9): the fused Batched M2L on the levels with tables below a crossover degree

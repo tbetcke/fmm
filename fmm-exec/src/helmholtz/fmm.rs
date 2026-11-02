@@ -274,8 +274,9 @@ impl HelmholtzFmmBuilder {
         self
     }
 
-    /// The batched M2L's multiply–add mode (default [`MulAdd::Fused`] under
-    /// [`HelmholtzM2l::Auto`], [`MulAdd::Separate`] under [`HelmholtzM2l::Batched`]; read
+    /// The batched M2L's multiply–add mode (default `auto_m2l_mul_add` of the P2P kernel's
+    /// ISA under [`HelmholtzM2l::Auto`], fused on every vector ISA, and [`MulAdd::Separate`]
+    /// under [`HelmholtzM2l::Batched`]; read
     /// under these two only): [`MulAdd::Fused`] gives Dense's output to rounding also with
     /// real multipoles (`HelmholtzOperator::with_m2l_mul_add`).
     pub fn m2l_mul_add(mut self, mul_add: MulAdd) -> Self {
@@ -475,10 +476,6 @@ impl HelmholtzFmmBuilder {
             as u64;
         let mut max_degree = 0u64;
         comm.all_reduce_into(&local, &mut max_degree, SystemOperation::min());
-        let mul_add = self.m2l_mul_add.unwrap_or(match self.m2l {
-            HelmholtzM2l::Auto => MulAdd::Fused,
-            _ => MulAdd::Separate,
-        });
         let mut operator = HelmholtzOperator::with_block_budget(
             self.k,
             densities,
@@ -491,8 +488,10 @@ impl HelmholtzFmmBuilder {
         .with_p2p(self.p2p)
         .expect("the P2P kernel's ISA is available (checked in step 1)")
         .with_m2l_max_degree(Some(usize::try_from(max_degree).unwrap_or(usize::MAX)))
-        .with_m2l(self.m2l, self.dense_budget)
-        .with_m2l_mul_add(mul_add);
+        .with_m2l(self.m2l, self.dense_budget);
+        if let Some(mul_add) = self.m2l_mul_add {
+            operator = operator.with_m2l_mul_add(mul_add);
+        }
         if let Some(pool) = &pool {
             operator = operator.with_pool(Arc::clone(pool));
         }
