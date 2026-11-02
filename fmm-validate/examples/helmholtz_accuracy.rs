@@ -28,9 +28,10 @@
 //! - `--p2p auto|reference|<isa>,…` (default `auto`): the P2P kernels (Helmholtz CH3.4c),
 //!   each case run with each in turn; an ISA this machine lacks is refused before MPI
 //!   starts.
-//! - `--m2l rotation|dense,…` (default `rotation`, Helmholtz CH3.2a): the M2L, each case run
-//!   with each in turn (and each P2P kernel); `--dense-budget MB` the dense tables' bytes
-//!   per rank (default 1024 MiB). The column "M2L" names the dense levels and their MB.
+//! - `--m2l rotation|dense|classes,…` (default `rotation`, Helmholtz CH3.2a, CH3.2b): the
+//!   M2L, each case run with each in turn (and each P2P kernel); `--dense-budget MB` the
+//!   dense or class tables' bytes per rank (default 1024 MiB). The column "M2L" names the
+//!   levels with tables and their MB.
 //!
 //! Run in release mode, on any number of ranks (each rank passes a contiguous block of
 //! the points, the oracle is sharded over the ranks, rank 0 prints), with one BLAS
@@ -109,7 +110,7 @@ fn arguments() -> Arguments {
              [--kd x,…] [--kim y] [--eps e,…|--degree p] [--charges real|complex] \
              [--vectors m] [--samples n] [--no-gradients] [--threads t,…] \
              [--oracle-threads t] [--rule calibrated|s7] [--p2p auto|reference|<isa>,…] \
-             [--m2l rotation|dense,…] [--dense-budget MB]; got {args:?}"
+             [--m2l rotation|dense|classes,…] [--dense-budget MB]; got {args:?}"
         );
         std::process::exit(2);
     };
@@ -171,6 +172,7 @@ fn arguments() -> Arguments {
                         .map(|v| match v {
                             "rotation" => Some(HelmholtzM2l::Rotation),
                             "dense" => Some(HelmholtzM2l::Dense),
+                            "classes" => Some(HelmholtzM2l::Classes),
                             _ => None,
                         })
                         .collect::<Option<Vec<_>>>()
@@ -214,15 +216,20 @@ fn arguments() -> Arguments {
     parsed
 }
 
-/// The M2L of a row: `rotation`, or `dense l…` with the dense levels and their MB.
-fn m2l_string(dense: &[bool], bytes: usize) -> String {
+/// The M2L of a row: `rotation`, or `dense l…` or `classes l…` with the levels that ran
+/// the setting's tables and their MB.
+fn m2l_string(m2l: HelmholtzM2l, dense: &[bool], bytes: usize) -> String {
     let levels: Vec<String> = (0..dense.len())
         .filter(|&l| dense[l])
         .map(|l| l.to_string())
         .collect();
+    let name = match m2l {
+        HelmholtzM2l::Classes => "classes",
+        _ => "dense",
+    };
     match levels.is_empty() {
         true => "rotation".into(),
-        false => format!("dense {} ({:.0} MB)", levels.join(","), bytes as f64 / 1e6),
+        false => format!("{name} {} ({:.0} MB)", levels.join(","), bytes as f64 / 1e6),
     }
 }
 
@@ -353,7 +360,7 @@ fn main() {
                             problem.len(),
                             case.vectors,
                             row.p2p,
-                            m2l_string(&row.dense_levels, row.dense_bytes),
+                            m2l_string(row.m2l, &row.dense_levels, row.dense_bytes),
                             row.ranks,
                             row.threads,
                             row.levels,
