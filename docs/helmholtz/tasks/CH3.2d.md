@@ -152,9 +152,19 @@ go into the PR.
 - Risk: the timings move with the M6's background load (CH3.2a's gate, the user's
   go-ahead first) and with locust's other users (`uptime`).
 
+As run (2026-11-02; the report's §4): the M6 at 718306c after the user's go-ahead, every
+launch gated (none void); locust at 718306c (a root `find` on one core, GPU idle);
+Kathleen job 618430 on node-c11a-089 at 718306c (`auto` and `avx2` end to end, then
+`helmholtz_m2l --isa avx2` and `--isa scalar` twice each). The constants were set from
+these runs afterwards (AVX-512 one plane 18 → 15, AVX2 two planes 10 → 11; the report's
+§1), evaluated on the sweeps' measured choices. Beyond the plan: Kathleen's scalar run
+showed the fused scalar kernel 2.4–50× slower than Rotation on x86_64 built without `fma`
+(`mul_add` a library call), so Auto's mode is `auto_m2l_mul_add(isa)`: fused, but separate
+for the scalar kernel without a hardware fma.
+
 ## Pending runs
 
-None yet.
+None: the M6, locust and Kathleen runs are in the report.
 
 ## Open questions
 
