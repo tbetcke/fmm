@@ -34,7 +34,7 @@ use std::time::Instant;
 
 use mpi::collective::SystemOperation;
 use mpi::traits::CommunicatorCollectives;
-use nd_fmm_exec::geometry::radius;
+use nd_fmm_exec::geometry::{Domain, radius};
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, Degrees, HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError, Output,
     Wavenumber,
@@ -422,6 +422,40 @@ pub fn run<C: CommunicatorCollectives>(
     threads: usize,
     comm: &C,
 ) -> Result<Row, HelmholtzFmmError> {
+    run_output(case, problem, oracle, threads, comm).map(|run| run.row)
+}
+
+/// A [`Row`] with what it was measured on (Helmholtz CH3.6, the full-target crosscheck).
+#[derive(Clone, Debug)]
+pub struct Run {
+    /// The row.
+    pub row: Row,
+    /// This rank's output, at the points of [`Problem::block`] in their order.
+    pub output: Output<f64>,
+    /// The FMM's domain.
+    pub domain: Domain,
+}
+
+/// [`run`], also returning this rank's output and the FMM's domain.
+///
+/// # Collective operation
+///
+/// On `comm`, every rank with the same arguments.
+///
+/// # Errors
+///
+/// The FMM's build and evaluation errors.
+///
+/// # Panics
+///
+/// If `case.k` is not a valid wavenumber.
+pub fn run_output<C: CommunicatorCollectives>(
+    case: &Case,
+    problem: &Problem,
+    oracle: &Oracle,
+    threads: usize,
+    comm: &C,
+) -> Result<Run, HelmholtzFmmError> {
     let k = Wavenumber::new(case.k.0, case.k.1).expect("a valid wavenumber");
     let (rank, size) = (comm.rank() as usize, comm.size() as usize);
     let block = problem.block(rank, size);
@@ -453,7 +487,7 @@ pub fn run<C: CommunicatorCollectives>(
     let checksum = reduce_checksum(checksum(&output, block.start), comm);
     let mut leaves = 0usize;
     comm.all_reduce_into(&fmm.nleaves(), &mut leaves, SystemOperation::sum());
-    Ok(Row {
+    let row = Row {
         threads,
         p2p: fmm.p2p_kernel(),
         ranks: size,
@@ -469,6 +503,11 @@ pub fn run<C: CommunicatorCollectives>(
         evaluate,
         errors,
         checksum,
+    };
+    Ok(Run {
+        row,
+        output,
+        domain: *fmm.domain(),
     })
 }
 

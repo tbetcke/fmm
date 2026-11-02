@@ -5,7 +5,11 @@
 //! the same checksum at 1 and 2 threads and, on several ranks, on one rank. A smoke run of
 //! the calibration's plateau scan (Helmholtz CH3.3, `nd_fmm_validate::helmholtz_calibration`):
 //! the errors fall with the degree, the smallest degree at ε/2 meets it, and the default
-//! rule's degrees are at most S7's at the levels' circumradii.
+//! rule's degrees are at most S7's at the levels' circumradii. The FMM3D comparison's
+//! measures (Helmholtz CH3.6, `nd_fmm_validate::helmholtz_fmm3d`) on a stand-in for FMM3D,
+//! the direct sum at every point in the driver's files: its sampled errors zero, our
+//! FMM's full-target error its error at the samples (which are every point), the same on
+//! one rank and on several.
 //!
 //! One test initialises MPI (at `Funneled`); it passes on any number of ranks, each check
 //! on every rank or on none.
@@ -18,8 +22,14 @@ use nd_fmm_exec::helmholtz::{
 };
 use nd_fmm_validate::SplitMix64;
 use nd_fmm_validate::fmm_accuracy::Distribution;
-use nd_fmm_validate::helmholtz_accuracy::{Case, Oracle, Problem, checksum, complex_k, run};
+use nd_fmm_validate::helmholtz_accuracy::{
+    Case, Oracle, Problem, checksum, complex_k, run, run_output,
+};
 use nd_fmm_validate::helmholtz_calibration::Curve;
+use nd_fmm_validate::helmholtz_fmm3d::{
+    Grid, Values, crosscheck, crosscheck_values, full_bytes, parse_full, parse_sampled,
+    sample_errors, sampled_bytes,
+};
 use nd_fmm_validate::helmholtz_workloads::Workload;
 
 /// An output of `n` targets, 2 complex vectors with gradients, filled with random values.
@@ -183,6 +193,70 @@ fn check_calibration_scan(world: &SimpleCommunicator) {
     }
 }
 
+/// The FMM3D comparison's measures on W1 at kD = 10 with every point sampled, the
+/// direct sum standing in for FMM3D's output (module documentation).
+fn check_fmm3d_measures(world: &SimpleCommunicator) {
+    let mut case = Case::new(Workload::W1, (10.0, 0.0), Degrees::Tolerance(1e-3));
+    case.samples = usize::MAX;
+    let problem = Problem::new(&case);
+    assert_eq!(problem.sample.len(), problem.len());
+    let oracle = Oracle::sharded(complex_k(&case), &problem, true, 2, world);
+    // The direct sum at every point, in point order (the samples are a permutation).
+    let zero = nd_fmm_math::Complex::new(0.0, 0.0);
+    let mut direct = Values {
+        potential: vec![zero; problem.len()],
+        gradient: vec![[zero; 3]; problem.len()],
+    };
+    for (s, &i) in problem.sample.iter().enumerate() {
+        direct.potential[i] = oracle.potential[0][s];
+        direct.gradient[i] = oracle.gradient[0][s];
+    }
+    let path = std::path::Path::new("stand-in");
+    let full = parse_full(path, &full_bytes(&direct)).unwrap();
+    let sampled = parse_sampled(path, &sampled_bytes(&full.at(&problem.sample))).unwrap();
+    assert_eq!(full, direct);
+    assert_eq!(sample_errors(&sampled, &oracle, 0), [0.0, 0.0]);
+
+    let ours = run_output(&case, &problem, &oracle, 2, world).expect("the FMM runs");
+    let grid = Grid {
+        domain: ours.domain,
+        level: ours.row.levels - 1,
+    };
+    let block = problem.block(world.rank() as usize, world.size() as usize);
+    let check = crosscheck(&ours.output, 0, &problem, &block, &full, &grid, world);
+    let at_samples = ours.row.errors[0];
+    for j in 0..2 {
+        assert!(
+            (check.errors[j] - at_samples[j]).abs() <= 1e-12 * at_samples[j],
+            "{:?} against {at_samples:?}",
+            check.errors
+        );
+        assert!(check.errors[j] > 0.0 && check.errors[j] <= 1e-3);
+    }
+    // One entry per box that holds a point; the worst at least the ℓ2 error.
+    let mut occupied: Vec<u64> = problem.points.iter().map(|&x| grid.box_of(x)).collect();
+    occupied.sort_unstable();
+    occupied.dedup();
+    let keys: Vec<u64> = check.boxes.iter().map(|&(k, _)| k).collect();
+    assert_eq!(keys, occupied);
+    let worst = check.worst();
+    assert!(worst[0] >= check.errors[0] && worst[1] >= check.errors[1]);
+    assert_eq!(
+        crosscheck_values(&full, &full, &problem.points, &grid).worst(),
+        [0.0, 0.0]
+    );
+    if world.size() > 1 {
+        let one = SimpleCommunicator::self_comm();
+        let single = run_output(&case, &problem, &oracle, 2, &one).expect("the one-rank FMM runs");
+        let all = 0..problem.len();
+        let alone = crosscheck(&single.output, 0, &problem, &all, &full, &grid, &one);
+        assert_eq!(alone.boxes, check.boxes, "ranks change the box errors");
+        for j in 0..2 {
+            assert!((alone.errors[j] - check.errors[j]).abs() <= 1e-12 * alone.errors[j]);
+        }
+    }
+}
+
 #[test]
 fn helmholtz_accuracy_harness() {
     let (universe, _) =
@@ -207,4 +281,5 @@ fn helmholtz_accuracy_harness() {
     w4.gradients = false;
     check_fmm(&world, &w4);
     check_calibration_scan(&world);
+    check_fmm3d_measures(&world);
 }

@@ -13,6 +13,10 @@
 #                        draft §3.15, with the identification (Helmholtz CH1.4)
 #   helmholtz-fixtures   fmm-ref/fixtures/helmholtz_fmm3d.json reproduced from this
 #                        machine's FMM3D, to round-off (`--check --no-reference`)
+#   helmholtz the Helmholtz comparison of CH3.6 (tools/fmm3d/run.sh helmholtz): our
+#             Helmholtz FMM and FMM3D on the cases of H_CASES (default the gate's), both
+#             against the same sampled direct sum, and the full-target crosscheck; the
+#             driver must be relinked first (the `driver` step) for its FULL output
 #   r12       the R12 sweep of tools/fmm3d/helmholtz.py at N = R12_N (default 10⁶) on
 #             R12_THREADS OpenMP threads (default 40; env.sh sets OMP_NUM_THREADS=1 for the
 #             BLAS, so the step sets it), its table written to OUT/r12-n<N>.md
@@ -22,6 +26,7 @@
 #     tools/kathleen/submit.sh fmm3d.sbatch sweep
 #     tools/kathleen/submit.sh '--export=ALL,OURS=/scratch/scratch/ucahtbe/fmm/logs/scaling-<id>' -- fmm3d.sbatch match time
 #     tools/kathleen/submit.sh fmm3d.sbatch crosscheck     # after match: the outputs compared
+#     tools/kathleen/submit.sh '--export=ALL,H_CASES=w1@100' -- fmm3d.sbatch driver helmholtz
 #
 # FMM3D lives in $FMM_KATHLEEN_ROOT/fmm3d (FMM3D_ROOT), its problem files in
 # $FMM3D_ROOT/problems; the launches' files go to OUT, by default the root's logs/fmm3d/,
@@ -45,7 +50,9 @@ echo "=== FMM3D in $FMM3D_ROOT; output of the launches: $OUT"
 for name in "$@"; do
     case "$name" in
     build) step build 'tools/fmm3d/build.sh build test' ;;
-    problems | sweep | match | time | crosscheck) step "$name" "tools/fmm3d/run.sh $name" ;;
+    problems | sweep | match | time | crosscheck | helmholtz)
+        step "$name" "tools/fmm3d/run.sh $name"
+        ;;
     driver) step driver 'tools/fmm3d/build.sh driver' ;;
     helmholtz-check) step helmholtz-check 'python3 tools/fmm3d/helmholtz.py check' ;;
     helmholtz-fixtures)
@@ -59,7 +66,7 @@ for name in "$@"; do
         ;;
     *)
         echo "fmm3d.sbatch: unknown step $name (build, problems, sweep, match, time, crosscheck,"
-        echo "  driver, helmholtz-check, helmholtz-fixtures or r12)"
+        echo "  helmholtz, driver, helmholtz-check, helmholtz-fixtures or r12)"
         exit 2
         ;;
     esac

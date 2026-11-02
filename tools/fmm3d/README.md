@@ -13,7 +13,7 @@ nothing of it is committed (its sources, builds and outputs stay under `FMM3D_RO
 | --- | --- |
 | `build.sh` | fetches FMM3D at the pinned release (v2.1.0, the commit and the tarball's SHA-256 checked), builds it with OpenMP with the machine's compilers in two variants, and links the driver against each |
 | `driver.f90` | the FMM3D side: reads a problem file, checks FMM3D's normalisation, times FMM3D's setup and its calls, writes φ and ∇φ at the sampled targets |
-| `run.sh` | the steps of a machine's comparison: `problems`, `sweep`, `match`, `time`, and `crosscheck` (the two codes' outputs against each other at every point) |
+| `run.sh` | the steps of a machine's comparison: `problems`, `sweep`, `match`, `time`, and `crosscheck` (the two codes' outputs against each other at every point); `helmholtz` (CH3.6, below) |
 | `helmholtz.py` | Helmholtz CH1.4: the driver's Helmholtz modes from Python (problem and output files, the two-point check and the identification of FMM3D's conventions, the error norms) and the R12 sweep; Python 3.9 standard library only |
 
 Our side is the sweep `t9-fmm3d` of `tools/scaling/run.sh` (and `t9-device`, our CUDA
@@ -147,4 +147,36 @@ real and complex k over kD and eps 10⁻³ to 10⁻¹². On Kathleen the same ru
 
 ```sh
 tools/kathleen/submit.sh --time=03:00:00 -- fmm3d.sbatch driver helmholtz-check helmholtz-fixtures r12
+```
+
+## Helmholtz beside our FMM (CH3.6)
+
+`run.sh helmholtz` runs the comparison of Helmholtz CH3.6 (docs/helmholtz/tasks/CH3.6.md;
+report `fmm-validate/results/helmholtz-ch3-6.md`): our Helmholtz FMM (RCR on every level)
+and `hfmm3d` on the reference workloads of proposal §9.1, both against the same sampled
+direct sum, with the full-target crosscheck. Per case of `H_CASES` (`<workload>@<kD>`,
+default the gate's: W1 at kD = 10, 30, 100, 500, W3 resolved at 10, 30, 100, the four W4
+distributions at N = 10⁵ and kD = 1, 10, 100):
+
+1. `helmholtz_fmm3d problem` (nd-fmm-validate's example) writes the case's points, one
+   complex charge vector and its 1,000 sampled targets as the driver's problem file;
+2. the driver's `helmholtz` mode, for each variant on `CORES` OpenMP threads, at every eps
+   of `H_EPS` (default 10⁻³, 10⁻⁶, 10⁻⁸) and, for the first variant, at `H_REFERENCE`
+   (default 10⁻¹²), each with FULL = 1 (φ and ∇φ at every point, `PREFIX-<eps>.full.out`);
+3. `helmholtz_fmm3d compare` under `mpirun` at `H_SPLIT` (ranks × threads; 4 × 10 under
+   Slurm): our FMM at each ε (the default degree rule), both codes against
+   `nd_fmm_ref::helmholtz::p2p::direct_sum` × 1/(4π) at the same sampled targets, and both
+   against FMM3D at `H_REFERENCE` at every point: the relative ℓ2 errors over all targets
+   and the worst box of our tree's deepest level (the largest error at a target over the
+   RMS of the reference), over ε and over the ℓ2 error, with the five worst boxes in the
+   log.
+
+`H_T1_CASES` (default `w1@100`) runs again on one thread for both codes, without the
+crosscheck. The full outputs are removed after each case unless `H_KEEP` is set.
+
+```sh
+FMM3D_ROOT=... tools/fmm3d/build.sh driver          # relink for the driver's FULL output
+FMM3D_ROOT=... H_CASES='w1@10 w1@30' tools/fmm3d/run.sh helmholtz
+tools/kathleen/submit.sh --time=00:20:00 -- fmm3d.sbatch driver
+tools/kathleen/submit.sh '--export=ALL,OUT=/scratch/scratch/ucahtbe/fmm/logs/ch3-6-w1,H_CASES=w1@10 w1@30 w1@100 w1@500' -- fmm3d.sbatch helmholtz
 ```

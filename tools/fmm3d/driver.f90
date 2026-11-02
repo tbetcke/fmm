@@ -35,7 +35,7 @@
 ! Laplace usage above is unchanged:
 !
 !     fmm3d_driver helmholtz-check
-!     fmm3d_driver helmholtz PROBLEM PREFIX ZK_RE ZK_IM TOKEN[,TOKEN...] [REPEAT]
+!     fmm3d_driver helmholtz PROBLEM PREFIX ZK_RE ZK_IM TOKEN[,TOKEN...] [REPEAT [FULL]]
 !
 ! helmholtz-check is the two-point check of proposal §9.2 against the draft §3.15
 ! (docs/helmholtz/conventions-3.15-draft.md, item 1): charges q1 = 0.3 − 0.7i at
@@ -56,6 +56,9 @@
 !   'NDFMMHO1', int64 s, t; complex(16) pot(s), grad(3,s) at the sampled sources (the self
 !   term dropped), pottarg(t), gradtarg(3,t) at the targets
 ! and prints one `helmholtz:` line (seconds by `omp_get_wtime`, FMM3D's setup included).
+! With FULL = 1 (Helmholtz CH3.6, the full-target crosscheck) every eps token also writes
+! PREFIX-<TOKEN>.full.out:
+!   'NDFMMHF1', int64 n; complex(16) pot(n), grad(3,n) at every source (self term dropped)
 ! FMM3D's values are written as they come: the check shows they need no scale.
 program fmm3d_driver
   use omp_lib
@@ -87,7 +90,7 @@ program fmm3d_driver
   if (command_argument_count() /= 6 .and. command_argument_count() /= 7) then
     print '(a)', 'usage: fmm3d_driver PROBLEM PREFIX EPS[,EPS...] CALLS WARMUP VEC [FULL]'
     print '(a)', '       fmm3d_driver helmholtz-check'
-    print '(a)', '       fmm3d_driver helmholtz PROBLEM PREFIX ZK_RE ZK_IM TOKEN[,TOKEN...] [REPEAT]'
+    print '(a)', '       fmm3d_driver helmholtz PROBLEM PREFIX ZK_RE ZK_IM TOKEN[,TOKEN...] [REPEAT [FULL]]'
     stop 2
   end if
   call get_command_argument(1, problem)
@@ -369,7 +372,7 @@ contains
   subroutine helmholtz_run()
     character(len=4096) :: hproblem, hprefix, hlist, htoken, harg
     character(len=8) :: hmagic
-    integer(8) :: hheader(4), hn, hs, ht, hrepeat, r, ier, jj
+    integer(8) :: hheader(4), hn, hs, ht, hrepeat, hfull, r, ier, jj
     integer(8), allocatable :: sampled(:)
     real(8), allocatable :: sources(:,:), targets(:,:), at(:,:)
     complex(8), allocatable :: charges(:), hpot(:), hgrad(:,:), spot(:), sgrad(:,:)
@@ -379,8 +382,8 @@ contains
     integer :: hstart, hcomma, hunit
     logical :: direct
 
-    if (command_argument_count() /= 6 .and. command_argument_count() /= 7) then
-      print '(a)', 'usage: fmm3d_driver helmholtz PROBLEM PREFIX ZK_RE ZK_IM TOKEN[,TOKEN...] [REPEAT]'
+    if (command_argument_count() < 6 .or. command_argument_count() > 8) then
+      print '(a)', 'usage: fmm3d_driver helmholtz PROBLEM PREFIX ZK_RE ZK_IM TOKEN[,TOKEN...] [REPEAT [FULL]]'
       stop 2
     end if
     call get_command_argument(2, hproblem)
@@ -391,9 +394,14 @@ contains
     read (harg, *) zim
     call get_command_argument(6, hlist)
     hrepeat = 1
-    if (command_argument_count() == 7) then
+    if (command_argument_count() >= 7) then
       call get_command_argument(7, harg)
       read (harg, *) hrepeat
+    end if
+    hfull = 0
+    if (command_argument_count() == 8) then
+      call get_command_argument(8, harg)
+      read (harg, *) hfull
     end if
     zk = cmplx(zre, zim, kind=8)
     if (.not. helmholtz_check()) stop 1
@@ -472,6 +480,12 @@ contains
       write (hunit) 'NDFMMHO1', hs, ht, spot, sgrad
       if (ht > 0) write (hunit) tpot(1:ht), tgrad(:,1:ht)
       close (hunit)
+      if (hfull == 1 .and. .not. direct) then
+        open (newunit=hunit, file=trim(hprefix)//'-'//trim(htoken)//'.full.out', &
+            access='stream', form='unformatted', status='replace', action='write')
+        write (hunit) 'NDFMMHF1', hn, hpot, hgrad
+        close (hunit)
+      end if
       write (*, '(a,a,a,i0,a,i0,a,es24.16,a,a)') 'helmholtz: token=', trim(htoken), &
           ' threads=', omp_get_max_threads(), ' repeat=', hrepeat, ' seconds=', best, &
           ' out=', trim(hprefix)//'-'//trim(htoken)//'.out'
