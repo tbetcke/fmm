@@ -27,6 +27,9 @@
 //! - **Times.** The build and the evaluation, wall time of the slowest rank.
 //! - **P2P kernel.** [`Case::p2p`] (Helmholtz CH3.4c): `Auto` by default, `Reference` for
 //!   the times before the vectorised kernel; [`Row::p2p`] the kernel that ran.
+//! - **M2L.** [`Case::m2l`] and [`Case::dense_budget`] (Helmholtz CH3.2a): Rotation by
+//!   default, or Dense on the levels whose tables fit the budget; [`Row::dense_levels`]
+//!   and [`Row::dense_bytes`] what ran.
 
 use std::ops::Range;
 use std::thread;
@@ -36,8 +39,8 @@ use mpi::collective::SystemOperation;
 use mpi::traits::CommunicatorCollectives;
 use nd_fmm_exec::geometry::{Domain, radius};
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, Charges, Degrees, HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError, Output,
-    Wavenumber,
+    ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzFmm, HelmholtzFmmBuilder,
+    HelmholtzFmmError, HelmholtzM2l, Output, Wavenumber,
 };
 use nd_fmm_exec::operator::P2pChoice;
 use nd_fmm_math::Complex;
@@ -68,11 +71,16 @@ pub struct Case {
     pub seed: u64,
     /// The FMM's P2P kernel.
     pub p2p: P2pChoice,
+    /// The FMM's M2L.
+    pub m2l: HelmholtzM2l,
+    /// The bytes of the dense M2L tables per rank under [`HelmholtzM2l::Dense`].
+    pub dense_budget: usize,
 }
 
 impl Case {
     /// A case with complex charges, one vector, gradients and 1,000 samples (§9.1), seeded
-    /// with the workloads' [`SEED`], and the P2P kernel of [`P2pChoice::Auto`].
+    /// with the workloads' [`SEED`], the P2P kernel of [`P2pChoice::Auto`] and M2L by
+    /// [`HelmholtzM2l::Rotation`] (the dense budget [`DEFAULT_DENSE_BUDGET`]).
     pub fn new(workload: Workload, k: (f64, f64), degrees: Degrees) -> Self {
         Self {
             workload,
@@ -84,6 +92,8 @@ impl Case {
             samples: 1000,
             seed: SEED,
             p2p: P2pChoice::Auto,
+            m2l: HelmholtzM2l::Rotation,
+            dense_budget: DEFAULT_DENSE_BUDGET,
         }
     }
 }
@@ -369,6 +379,10 @@ pub struct Row {
     pub threads: usize,
     /// The P2P kernel that ran (never `Auto`).
     pub p2p: P2pChoice,
+    /// Per level, whether its M2L ran Dense (else RCR).
+    pub dense_levels: Vec<bool>,
+    /// The bytes of the dense M2L tables per rank.
+    pub dense_bytes: usize,
     /// The ranks.
     pub ranks: usize,
     /// The levels of the tree.
@@ -468,6 +482,8 @@ pub fn run_output<C: CommunicatorCollectives>(
         .gradients(case.gradients)
         .threads(threads)
         .p2p_kernel(case.p2p)
+        .m2l(case.m2l)
+        .dense_budget(case.dense_budget)
         .build(points, points, comm)?;
     let build = slowest(start.elapsed().as_secs_f64(), comm);
     let charges: Vec<Charges<'_, f64>> = (0..case.vectors)
@@ -490,6 +506,10 @@ pub fn run_output<C: CommunicatorCollectives>(
     let row = Row {
         threads,
         p2p: fmm.p2p_kernel(),
+        dense_levels: (0..fmm.nlevels())
+            .map(|l| fmm.operator().m2l_on(l) == HelmholtzM2l::Dense)
+            .collect(),
+        dense_bytes: fmm.operator().dense_bytes(),
         ranks: size,
         levels: fmm.nlevels(),
         min_leaf_level: fmm.min_leaf_level(),
