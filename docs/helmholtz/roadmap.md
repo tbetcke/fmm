@@ -443,7 +443,13 @@ at any kD.
   within rounding where an epilogue reorders the sums, stated); the FMM as CH3.2a's;
   Rotation, Dense, Classes and Batched per p on the M6, locust and Kathleen. *Needs:*
   CH3.2a, CH3.2b. *Machines:* locust, Kathleen.
-- [ ] **CH3.2d The M2L rule per level.** Added on 2026-11-02 at CH3.2c's sign-off (the
+- [x] **CH3.2d The M2L rule per level.** Report: `fmm-validate/results/helmholtz-ch3-2d.md`;
+  record `docs/helmholtz/tasks/CH3.2d.md`; `HelmholtzM2l::Auto`, `auto_batched_max_degree`,
+  `BatchedM2l::select_within`. The rule's choice the best on 34 of 36 case × machine rows,
+  1.001 on one, 1.106 on one (Kathleen AVX-512, a sparse W1 level; accepted, CH4.0). Auto
+  is `HelmholtzFmmBuilder`'s default (signed off 2026-11-02, "i agree with the
+  recommendations").
+  Added on 2026-11-02 at CH3.2c's sign-off (the
   user, "i agree with the recommendations": a follow-up before H3.G). An Auto setting of
   `HelmholtzM2l` choosing per level from the degrees, the budget and the machine class only
   (constraint 9): the fused Batched M2L on the levels with tables below a crossover degree
@@ -522,6 +528,14 @@ at any kD.
 
 **Gate:** CH4.4 and CH4.5, the kD sweep and host performance against FMM3D.
 
+- [ ] **CH4.0 The M2L rule's sparse-level term.** Added on 2026-11-02 at CH3.2d (the user,
+  "Accept, follow-up"): CH3.2d's rule by degree and machine class batched a sparse W1 level
+  at p = 15 on Kathleen at 1.106× the best choice (W1, kD = 30, ε = 10⁻⁶), past its 1.10
+  margin, while the W4 cube at the same degree needs Batched. A per-level term from the
+  global tree (the mean V-list length per box, counted once per box over the ranks, the
+  replicated top included), so the rule stays rank-invariant (constraint 9). *Done when:*
+  CH3.2d's sweeps within 1.10 on every case of the three machines, sparse levels included;
+  deterministic and rank-invariant. *Needs:* CH3.2d. *Machines:* locust, Kathleen.
 - [ ] **CH4.1 S → F and F → R by the transform as a product.** Per-box aligned signature
   buffers; source signatures kept per level call, target accumulators chunked under the node
   budget. *Done when:* round trips to the grid's bandwidth; bits independent of the chunk

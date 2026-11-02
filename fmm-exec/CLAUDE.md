@@ -259,8 +259,8 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   same offsets on the slices shifted by n. The pair body (`Kernel::m2l`, so `PerPair`) runs
   the same calls with one column per vector, so the level call is it bit for bit; keep the
   two one chain. `with_m2l_mul_add` and `HelmholtzFmmBuilder::m2l_mul_add` (default
-  `MulAdd::Separate`; `Fused` one fma per step, Dense to rounding in both cases, about 1.8×
-  the separate rate on the M6). `tests/helmholtz/dense.rs` checks every offset of levels
+  `MulAdd::Separate`, under `Auto` `auto_m2l_mul_add`; `Fused` one fma per step, Dense to rounding in
+  both cases, about 1.8× the separate rate on the M6). `tests/helmholtz/dense.rs` checks every offset of levels
   2–4 against Dense (bit for bit with one plane) and Rotation, the fused mode, the same
   bits on every ISA in both modes, the budget and a zero budget bit for bit Rotation;
   `tests/helmholtz_fmm.rs` runs `check_tables` with Batched (Dense's output of the same
@@ -269,6 +269,33 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   Rotation and Dense and the one-rank FMM). Its debug cost: about 53 s of the one-rank run
   on the M6 (69 → 122 s; the dense builds of each run, about 7× cheaper at CI's opt-level
   1).
+- The M2L rule per level (Helmholtz CH3.2d; the `helmholtz::operator` module docs, "M2L";
+  docs/helmholtz/tasks/CH3.2d.md; fmm-validate/results/helmholtz-ch3-2d.md):
+  `HelmholtzM2l::Auto`, Batched (in `auto_m2l_mul_add(isa)`'s mode unless one is named:
+  fused, but separate for the scalar kernel in a build without hardware fma, where
+  `mul_add` is a library call; a named mode holds through later `with_m2l` and `with_p2p`;
+  the builder keeps `m2l_mul_add(MulAdd)` and stores an `Option`) on the levels of degree
+  p_l at most a
+  crossover whose tables fit the dense budget from the finest up
+  (`BatchedM2l::select_within`), Rotation on the others. The crossover is `auto_batched_max_degree(isa, planes)` of the column
+  kernel's ISA and the multipole planes (the machine class, constraint 9), or named
+  (`with_m2l_max_degree`, the builder's `m2l_max_degree`); `with_p2p` and
+  `with_m2l_max_degree` choose the levels again when it changes, so the order of the calls
+  does not matter. `HelmholtzFmmBuilder::build` agrees it over the ranks (all-reduce min)
+  and names it to the operator; `HelmholtzFmm::m2l_max_degree` and the operator's
+  `max_degree` report it. Each level runs Batched's or Rotation's level call unchanged, so
+  the output is deterministic and rank-invariant as theirs. `tests/helmholtz/dense.rs`
+  checks every offset of levels 2–4 level by level (fused Batched bit for bit at or below
+  the crossover, Rotation bit for bit above), the extremes, the mode, the budget, the
+  rule of each ISA in either order of the calls and the crossovers' order;
+  `tests/helmholtz_fmm.rs` (`check_auto`, two scenarios) the FMM at the finest level's
+  degree (in debug builds with the finest level's tables alone) against Rotation and the
+  direct sum, 2 threads, pair by pair and the one-rank FMM bit for bit, and the rule's
+  crossover agreed. Its debug cost: about 28 s of the one-rank run on the M6 (122 → 150 s).
+  `Auto` is `HelmholtzFmmBuilder`'s default since CH3.2d's sign-off (2026-11-02; the enum's
+  `Default` too); the operator's own default before `with_m2l` stays `Rotation`. The tests
+  of `tests/helmholtz_fmm.rs` name Rotation (`builder`) as the reference of every check;
+  `check_auto` checks the default (`default_builder`).
 - The degree rule (Helmholtz CH3.3; the `helmholtz::degree` module docs;
   fmm-validate/results/helmholtz-ch3-3.md): `degree` is `DegreeRule::CALIBRATED`,
   max(⌈0.30 L² + 0.25 L + 2.60⌉, ⌈x + 0.80 (ln 1/ε)^{2/3} x^{1/3}⌉) with L = log₁₀(1/ε),

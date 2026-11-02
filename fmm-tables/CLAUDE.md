@@ -54,7 +54,9 @@ CH3.2c (`helmholtz::batched`, Dense's matrices in split planes for the batched M
   equal bit for bit, or say it does not (CH3.2c). Not cached.
   `helmholtz::batched` (Helmholtz CH3.2c; its module docs): `BatchedM2l`, Dense's matrices
   re-laid as A_r then A_i, each n × n column-major, bit for bit Dense's entries; Dense's
-  `select` and `level_bytes`. Its application is `nd-fmm-exec`'s (the column kernel takes
+  `select` and `level_bytes`; `select_within` (Helmholtz CH3.2d) the same choice among the
+  levels of degree at most a crossover only (`nd-fmm-exec`'s `HelmholtzM2l::Auto`). Its
+  application is `nd-fmm-exec`'s (the column kernel takes
   square matrices): one plane Dense's chain bit for bit, two planes the real plane's
   products of a column before the imaginary plane's, Dense to rounding. Not cached.
   `helmholtz::classes` (Helmholtz CH3.2b; its module docs): `ClassM2l`, per level the 16

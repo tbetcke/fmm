@@ -16,7 +16,9 @@
 //! Rotation's M2L of the unit multipoles in f64, rounded to T) and re-lays them offset by
 //! offset. [`BatchedM2l::select`] and [`BatchedM2l::level_bytes`] are Dense's: the levels
 //! within a byte budget from the finest up, a function of the degrees and the budget only
-//! (proposal §2, constraint 9).
+//! (proposal §2, constraint 9). [`BatchedM2l::select_within`] (Helmholtz CH3.2d) chooses
+//! the same way among the levels of degree at most a crossover only, for the per-level rule
+//! of `nd-fmm-exec`'s Helmholtz operator.
 //!
 //! # Application
 //!
@@ -51,6 +53,23 @@ impl<T: RealScalar> BatchedM2l<T> {
     /// 0 and 1 ([`DenseM2l::select`]).
     pub fn select(degrees: &[usize], budget: usize) -> Vec<bool> {
         DenseM2l::<T>::select(degrees, budget)
+    }
+
+    /// As [`select`](Self::select) among the levels of degree p_l ≤ `max_degree` only: from
+    /// the finest level up, each such level whose tables fit what is left of `budget`
+    /// bytes; never levels 0 and 1, never a level of a larger degree. With `max_degree` at
+    /// least every p_l it is [`select`](Self::select).
+    pub fn select_within(degrees: &[usize], budget: usize, max_degree: usize) -> Vec<bool> {
+        let mut chosen = vec![false; degrees.len()];
+        let mut left = budget;
+        for (l, &p) in degrees.iter().enumerate().skip(2).rev() {
+            let bytes = Self::level_bytes(p);
+            if p <= max_degree && bytes <= left {
+                left -= bytes;
+                chosen[l] = true;
+            }
+        }
+        chosen
     }
 
     /// Builds the tables of the levels with `levels[l]` set, for the root's k̂₀ = k r₀ and

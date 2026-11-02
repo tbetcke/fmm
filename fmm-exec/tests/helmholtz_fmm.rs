@@ -34,7 +34,14 @@
 //! levels: bit for bit with real multipoles (real k, real charges), within
 //! `DENSE_TOLERANCE` with complex ones; with two vectors the level call against the pair
 //! body bit for bit; and in the fused mode within `DENSE_TOLERANCE` of Rotation and Dense
-//! and the one-rank FMM bit for bit.
+//! and the one-rank FMM bit for bit. The rule per level (Helmholtz CH3.2d), `Auto`, on the
+//! same two scenarios with one degree more on every level but the finest and the finest
+//! level's degree as the crossover (fused Batched there, Rotation above, a split by degree on
+//! the deeper tree): each level's M2L as the rule says, the fused mode, within
+//! `DENSE_TOLERANCE` of Rotation of the same degrees and the scenario's bound of the direct
+//! sum, 2 threads, pair by pair and the one-rank FMM bit for bit; the rule's
+//! own crossover agreed alike on every rank, a named mode kept, and Auto the builder's
+//! default (every other check names Rotation, its reference).
 //!
 //! Then vectors (vector v of an FMM of two bit for bit the one-vector FMM, of complex and
 //! of real charges), real charges against complex ones with Im q = 0, and the errors (an
@@ -58,7 +65,8 @@ use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_exec::fmm::{FmmError, SettingsError};
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, Degrees, DensityError, HelmholtzFmm, HelmholtzFmmBuilder,
-    HelmholtzFmmError, HelmholtzM2l, OperatorError, Output, Wavenumber,
+    HelmholtzFmmError, HelmholtzM2l, OperatorError, Output, Wavenumber, auto_batched_max_degree,
+    auto_m2l_mul_add,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -298,8 +306,14 @@ impl Inputs {
     }
 }
 
-/// The builder of a scenario.
+/// The builder of a scenario, M2L by Rotation (named: the library's default is Auto).
 fn builder(scenario: &Scenario) -> HelmholtzFmmBuilder {
+    default_builder(scenario).m2l(HelmholtzM2l::Rotation)
+}
+
+/// The scenario's settings with the library's default M2L ([`HelmholtzM2l::Auto`] since
+/// Helmholtz CH3.2d); `builder` names Rotation, the reference of every check.
+fn default_builder(scenario: &Scenario) -> HelmholtzFmmBuilder {
     let k = Wavenumber::new(scenario.k.0, scenario.k.1).unwrap();
     HelmholtzFmmBuilder::new(k, scenario.degrees.clone())
         .charges(scenario.charges)
@@ -740,6 +754,109 @@ fn check_tables(
     output
 }
 
+/// The rule per level, `Auto`, on the scenario's tree with one degree more on every level
+/// but the finest and the finest level's degree named as the crossover: the finest level
+/// runs fused Batched, the coarser levels Rotation (a split by degree wherever the tree has
+/// more than one level with M2L), against Rotation of the same degrees and the direct sum,
+/// threads, pair by pair and the one-rank FMM; the rule's own crossover (agreed over the
+/// ranks) and a named mode.
+fn check_auto(scenario: &Scenario, comm: &SimpleCommunicator) {
+    let start = Instant::now();
+    let rank = comm.rank();
+    let name = format!("{}: Auto", scenario.name);
+    let tolerance = DENSE_TOLERANCE;
+    let inputs = Inputs::new(scenario, 1, comm);
+    let kind = scenario.charges;
+    let (fmm, _) = run(&builder(scenario), &inputs, kind, comm);
+    let mut degrees = fmm.degrees().to_vec();
+    drop(fmm);
+    let finest = degrees.len() - 1;
+    let crossover = degrees[finest];
+    for p in &mut degrees[2..finest] {
+        *p += 1;
+    }
+    let split = Scenario {
+        degrees: Degrees::PerLevel(degrees.clone()),
+        ..scenario.clone()
+    };
+    let (_, rotation) = run(&builder(&split), &inputs, kind, comm);
+    let auto = builder(&split)
+        .m2l(HelmholtzM2l::Auto)
+        .m2l_max_degree(crossover);
+    let (fmm, output) = run(&auto, &inputs, kind, comm);
+    let op = fmm.operator();
+    assert_eq!(op.m2l_choice(), HelmholtzM2l::Auto);
+    assert_eq!(fmm.m2l_max_degree(), Some(crossover));
+    assert_eq!(op.m2l_mul_add(), auto_m2l_mul_add(Isa::detect()));
+    assert_eq!(fmm.degrees(), degrees);
+    assert_eq!(
+        op.m2l_on(finest),
+        HelmholtzM2l::Batched,
+        "{name}, the finest level"
+    );
+    for level in 2..finest {
+        assert_eq!(
+            op.m2l_on(level),
+            HelmholtzM2l::Rotation,
+            "{name}, level {level}"
+        );
+    }
+    drop(fmm);
+    let (phi, grad) = difference(&output, &rotation, comm);
+    let (error_phi, error_grad) = errors(scenario, &inputs, &output, 0, comm);
+    if rank == 0 {
+        println!(
+            "{name} (crossover {crossover}, degrees {degrees:?}) against Rotation: relative L2 \
+             φ {phi:.2e}, ∇φ {grad:.2e}; against the direct sum φ {error_phi:.2e}, ∇φ \
+             {error_grad:.2e}"
+        );
+    }
+    assert!(
+        phi <= tolerance && grad <= tolerance,
+        "{name} against Rotation: φ {phi:e}, ∇φ {grad:e}"
+    );
+    assert!(
+        error_phi < scenario.bound && error_grad < scenario.bound,
+        "{name}: φ {error_phi:.2e}, ∇φ {error_grad:.2e} against the direct sum"
+    );
+    let (_, threaded) = run(&auto.clone().threads(2), &inputs, kind, comm);
+    assert_same(&format!("{name}, 2 threads"), &threaded, &output, comm);
+    let (_, pairs) = run(&auto.clone().pair_calls(true), &inputs, kind, comm);
+    assert_same(&format!("{name}, pair by pair"), &pairs, &output, comm);
+    check_one_rank(&name, &auto, &inputs, kind, &output, comm);
+
+    // The library's default M2L is Auto, at the rule's own crossover (no tables: a budget of
+    // zero), the same on every rank; a named mode kept.
+    let planes = match (scenario.k.1 == 0.0, kind) {
+        (true, ChargeKind::Real) => 1,
+        _ => 2,
+    };
+    let rule = default_builder(scenario)
+        .dense_budget(0)
+        .m2l_mul_add(MulAdd::Separate);
+    let fmm = rule
+        .build::<f64, _>(&inputs.sources, &inputs.targets, comm)
+        .unwrap_or_else(|error| panic!("rank {rank}: the build: {error}"));
+    let own = auto_batched_max_degree(Isa::detect(), planes);
+    let agreed = fmm.m2l_max_degree().expect("Auto has a crossover");
+    let mut smallest = 0u64;
+    comm.all_reduce_into(&(own as u64), &mut smallest, SystemOperation::min());
+    assert_eq!(agreed as u64, smallest, "{name}: the agreed crossover");
+    assert_eq!(
+        fmm.operator().m2l_choice(),
+        HelmholtzM2l::Auto,
+        "the default"
+    );
+    assert_eq!(fmm.operator().m2l_mul_add(), MulAdd::Separate);
+    assert_eq!(fmm.operator().batched_bytes(), 0);
+    if rank == 0 {
+        println!(
+            "{name}: the rule's crossover {agreed} ({planes} planes); checks passed in {:.1?}",
+            start.elapsed()
+        );
+    }
+}
+
 /// Two vectors: each bit for bit its one-vector FMM, the second against its direct sum;
 /// and a reused output.
 fn check_vectors(scenario: &Scenario, comm: &SimpleCommunicator) {
@@ -1091,6 +1208,7 @@ fn helmholtz_fmm() {
         let dense = check_tables(scenario, HelmholtzM2l::Dense, None, &comm);
         check_tables(scenario, HelmholtzM2l::Classes, None, &comm);
         check_tables(scenario, HelmholtzM2l::Batched, Some(&dense), &comm);
+        check_auto(scenario, &comm);
     }
     // Two vectors of complex and of real charges.
     check_vectors(&scenarios()[1], &comm);

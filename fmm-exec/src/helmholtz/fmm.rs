@@ -101,11 +101,11 @@ use thiserror::Error;
 use super::{
     C_LEAF, ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DegreeError, Degrees, Densities,
     DensityError, HelmholtzM2l, HelmholtzOperator, OperatorError, Output, Wavenumber,
-    WavenumberKind, min_leaf_level,
+    WavenumberKind, auto_batched_max_degree, min_leaf_level,
 };
 use crate::fmm::{DEFAULT_MAX_POINTS_PER_LEAF, FmmError, PointSet, SettingsError};
 use crate::geometry::Domain;
-use crate::operator::{MulAdd, P2pChoice, SimdScalar};
+use crate::operator::{Isa, MulAdd, P2pChoice, SimdScalar};
 use crate::pipeline::{
     self, Points, check_finite, gather_output, load_source_charges, pack_charges,
     unpack_output_many,
@@ -165,7 +165,8 @@ pub struct HelmholtzFmmBuilder {
     block_budget: usize,
     m2l: HelmholtzM2l,
     dense_budget: usize,
-    m2l_mul_add: MulAdd,
+    m2l_mul_add: Option<MulAdd>,
+    m2l_max_degree: Option<usize>,
     c_leaf: f64,
     p2p: P2pChoice,
     pair_calls: bool,
@@ -175,8 +176,9 @@ impl HelmholtzFmmBuilder {
     /// The settings for wavenumber `k` with the degrees `degrees`: complex charges, one
     /// vector, potentials only, one thread, the domain from the points,
     /// [`DEFAULT_MAX_POINTS_PER_LEAF`] points per leaf, leaves down to level 16, the
-    /// default block budget of the M2L y-blocks, M2L by [`HelmholtzM2l::Rotation`], the leaf
-    /// width [`C_LEAF`] and the P2P kernel of [`P2pChoice::Auto`].
+    /// default block budget of the M2L y-blocks, M2L by the rule per level
+    /// [`HelmholtzM2l::Auto`] within [`DEFAULT_DENSE_BUDGET`], the leaf width [`C_LEAF`] and
+    /// the P2P kernel of [`P2pChoice::Auto`].
     pub fn new(k: Wavenumber, degrees: Degrees) -> Self {
         Self {
             k,
@@ -189,9 +191,10 @@ impl HelmholtzFmmBuilder {
             max_points_per_leaf: DEFAULT_MAX_POINTS_PER_LEAF,
             max_level: DEEPEST,
             block_budget: DEFAULT_BLOCK_BUDGET,
-            m2l: HelmholtzM2l::Rotation,
+            m2l: HelmholtzM2l::Auto,
             dense_budget: DEFAULT_DENSE_BUDGET,
-            m2l_mul_add: MulAdd::Separate,
+            m2l_mul_add: None,
+            m2l_max_degree: None,
             c_leaf: C_LEAF,
             p2p: P2pChoice::Auto,
             pair_calls: false,
@@ -253,10 +256,12 @@ impl HelmholtzFmmBuilder {
         self
     }
 
-    /// The M2L of the levels (default [`HelmholtzM2l::Rotation`]; the operator module
-    /// documentation, "M2L"). Under [`HelmholtzM2l::Dense`], [`HelmholtzM2l::Classes`] and
-    /// [`HelmholtzM2l::Batched`] the output agrees with Rotation's to rounding, not bit for
-    /// bit; Batched's is Dense's bit for bit with real multipoles (real k, real charges).
+    /// The M2L of the levels (default [`HelmholtzM2l::Auto`] since Helmholtz CH3.2d, signed
+    /// off on 2026-11-02; the operator module documentation, "M2L"). Under
+    /// [`HelmholtzM2l::Dense`], [`HelmholtzM2l::Classes`], [`HelmholtzM2l::Batched`] and
+    /// [`HelmholtzM2l::Auto`] the output agrees with Rotation's to rounding, not bit for bit
+    /// (Auto's is Rotation's bit for bit on the levels it leaves to Rotation); Batched's is
+    /// Dense's bit for bit with real multipoles (real k, real charges).
     pub fn m2l(mut self, choice: HelmholtzM2l) -> Self {
         self.m2l = choice;
         self
@@ -272,11 +277,23 @@ impl HelmholtzFmmBuilder {
         self
     }
 
-    /// The batched M2L's multiply–add mode (default [`MulAdd::Separate`]; read under
-    /// [`HelmholtzM2l::Batched`] only): [`MulAdd::Fused`] gives Dense's output to rounding
-    /// also with real multipoles (`HelmholtzOperator::with_m2l_mul_add`).
+    /// The batched M2L's multiply–add mode (default `auto_m2l_mul_add` of the P2P kernel's
+    /// ISA under [`HelmholtzM2l::Auto`], fused on every vector ISA, and [`MulAdd::Separate`]
+    /// under [`HelmholtzM2l::Batched`]; read
+    /// under these two only): [`MulAdd::Fused`] gives Dense's output to rounding also with
+    /// real multipoles (`HelmholtzOperator::with_m2l_mul_add`).
     pub fn m2l_mul_add(mut self, mul_add: MulAdd) -> Self {
-        self.m2l_mul_add = mul_add;
+        self.m2l_mul_add = Some(mul_add);
+        self
+    }
+
+    /// The crossover degree of [`HelmholtzM2l::Auto`]: Batched on the levels of degree at
+    /// most `max_degree` that fit the dense budget, Rotation above (default the rule's,
+    /// `auto_batched_max_degree` of the P2P kernel's ISA and the multipole planes). Either
+    /// way [`build`](Self::build) agrees it over the ranks (the smallest), so every rank
+    /// chooses the same levels; [`HelmholtzFmm::m2l_max_degree`] reports it.
+    pub fn m2l_max_degree(mut self, max_degree: usize) -> Self {
+        self.m2l_max_degree = Some(max_degree);
         self
     }
 
@@ -450,6 +467,18 @@ impl HelmholtzFmmBuilder {
                 .resolve(&self.k, &domain, plan.nlevels())
                 .map_err(HelmholtzFmmError::from),
         )?;
+        // Auto's crossover, agreed over the ranks (constraints 2 and 9): the smallest of
+        // every rank's, which differ only where the ranks' ISAs do.
+        let isa = match self.p2p.resolve() {
+            Ok(P2pChoice::Isa(isa)) => isa,
+            _ => Isa::Scalar,
+        };
+        let local = self
+            .m2l_max_degree
+            .unwrap_or_else(|| auto_batched_max_degree(isa, densities.multipole_planes()))
+            as u64;
+        let mut max_degree = 0u64;
+        comm.all_reduce_into(&local, &mut max_degree, SystemOperation::min());
         let mut operator = HelmholtzOperator::with_block_budget(
             self.k,
             densities,
@@ -459,10 +488,13 @@ impl HelmholtzFmmBuilder {
             max_leaf_points,
             self.block_budget,
         )?
-        .with_m2l(self.m2l, self.dense_budget)
-        .with_m2l_mul_add(self.m2l_mul_add)
         .with_p2p(self.p2p)
-        .expect("the P2P kernel's ISA is available (checked in step 1)");
+        .expect("the P2P kernel's ISA is available (checked in step 1)")
+        .with_m2l_max_degree(Some(usize::try_from(max_degree).unwrap_or(usize::MAX)))
+        .with_m2l(self.m2l, self.dense_budget);
+        if let Some(mul_add) = self.m2l_mul_add {
+            operator = operator.with_m2l_mul_add(mul_add);
+        }
         if let Some(pool) = &pool {
             operator = operator.with_pool(Arc::clone(pool));
         }
@@ -772,6 +804,13 @@ where
     /// [`P2pChoice::Auto`].
     pub fn p2p_kernel(&self) -> P2pChoice {
         self.operator().p2p_kernel()
+    }
+
+    /// The agreed crossover degree under [`HelmholtzM2l::Auto`]
+    /// ([`HelmholtzFmmBuilder::m2l_max_degree`]), `None` under the other settings; the
+    /// operator's `m2l_on` gives each level's M2L.
+    pub fn m2l_max_degree(&self) -> Option<usize> {
+        self.operator().max_degree()
     }
 
     /// The domain.

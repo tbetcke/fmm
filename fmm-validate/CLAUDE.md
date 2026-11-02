@@ -359,6 +359,18 @@ pairs per offset (default 32), in the separate and the fused mode, each checked 
 Dense applied pair by pair to the same pairs first, with its build time. Its report is
 `results/helmholtz-ch3-2c.md`.
 
+Helmholtz CH3.2d (the M2L rule per level; docs/helmholtz/tasks/CH3.2d.md) added
+`Case::m2l_max_degree` (Auto's crossover named, `None` the rule's), `Case::m2l_mul_add` as
+an `Option` (`None` the library's default for the setting), `Row::m2l_max_degree` (the
+agreed crossover), and to the example's `--m2l` the entries `auto`, `auto:<d>` and `sweep`
+(Auto at every crossover that chooses differently, from ∞ down to one below the smallest
+degree, the crossovers after the first from its degrees; the column "M2L" prefixed
+`auto ≤ d`); `helmholtz_m2l --isa` (Batched's column kernel on a named ISA).
+`tests/helmholtz_accuracy.rs` checks Auto below every degree Rotation's checksum and above
+every degree Batched on every level. `Case::new` keeps Rotation named although Auto is the
+library's default since CH3.2d's sign-off, so that the earlier reports' runs repeat. `tools/helmholtz/ch3-2d-runs.sh` runs the task's
+measurements (gated on macOS). Its report is `results/helmholtz-ch3-2d.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

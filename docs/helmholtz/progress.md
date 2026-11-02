@@ -1671,3 +1671,61 @@ request, using this template:
     Rotation above, within the budget; with sparse levels (W1) counted. Added to the
     roadmap as CH3.2d at the sign-off, before H3.G.
   - CH3.2a–c are done with this task; H3.G waits for CH3.2d.
+
+## 2026-11-02: CH3.2d The M2L rule per level
+- Done:
+  - Taken ahead of CH0.6 (the first runnable task in file order once the priority list was
+    done) at the user's choice ("CH3.2d").
+  - `nd_fmm_tables::helmholtz::batched::BatchedM2l::select_within`: Dense's choice from the
+    finest level up among the levels of degree at most a crossover.
+  - `nd_fmm_exec::helmholtz`: `HelmholtzM2l::Auto` (fused Batched on the levels of degree
+    at most the crossover that fit the budget, Rotation above), `auto_batched_max_degree(isa,
+    planes)` (NEON 10 and 12, AVX-512 15 and 15, AVX2 11 and 12, scalar 6 and 8, two planes
+    and one), `auto_m2l_mul_add(isa)` (fused, separate for the scalar kernel without a
+    hardware fma), `with_m2l_max_degree`, `max_degree`; the named mode kept across
+    `with_m2l` and `with_p2p`; the builder's `m2l_max_degree`, the crossover agreed over the
+    ranks (all-reduce min), `HelmholtzFmm::m2l_max_degree`.
+  - `nd-fmm-validate`: `helmholtz_accuracy` with `auto`, `auto:<d>` and `sweep`
+    (`sweep_crossovers`), `Case::m2l_max_degree`, `Case::m2l_mul_add` as an `Option`,
+    `Row::m2l_max_degree`; `helmholtz_m2l --isa`; `tools/helmholtz/ch3-2d-runs.sh`. Report
+    `fmm-validate/results/helmholtz-ch3-2d.md`; record `docs/helmholtz/tasks/CH3.2d.md`.
+- Tests: `fmm-tables/tests/helmholtz/batched.rs` (`select_within` over degrees, crossovers
+  and budgets; `usize::MAX` is `select`); `fmm-exec/tests/helmholtz/dense.rs` (every offset
+  of levels 2–4 level by level: fused Batched bit for bit at or below the crossover,
+  Rotation bit for bit above; the extremes; the budget; the rule and the mode of each ISA in
+  either order of the calls; a named mode kept; the crossovers' order);
+  `tests/helmholtz_fmm.rs` `check_auto` (one degree more above the finest level, so the
+  clusters' tree splits by degree: Rotation of the same degrees within `DENSE_TOLERANCE`,
+  the direct sum, 2 threads, pair by pair, the one-rank FMM bit for bit; the rule's
+  crossover agreed); `fmm-validate/tests/helmholtz_accuracy.rs` (Auto below every degree
+  Rotation's checksum, above every degree Batched's in Auto's mode; `sweep_crossovers`).
+  One-rank debug run of `helmholtz_fmm` 122 → 150 s on the M6.
+- Runs (release, one rank, one thread, BLAS threads 1; the M6 gated after the user's
+  go-ahead, none void; locust; Kathleen job 618430): `helmholtz_accuracy --m2l
+  rotation,auto,sweep` and the reverse on CH3.2a's seven cases and two with real charges,
+  on the M6, locust, Kathleen AVX-512 and Kathleen AVX2. With the final constants the
+  rule's choice is the best per-level choice on 34 of 36 case × machine rows, 1.001 on one
+  (a tie), and 1.106 on one: Kathleen AVX-512, W1 at kD = 30 and 10⁻⁶, a sparse level at
+  p = 15 batched (the cube at p = 15 needs Batched, so no degree-only crossover meets both).
+  Errors the same for every choice. `helmholtz_m2l --isa` avx2 and scalar on Kathleen,
+  scalar on the M6: the fused scalar kernel 2.4–50× slower than Rotation on Kathleen.
+- Checks: `/verify` on the M6: format; Clippy default, examples and workspace all-targets;
+  `cargo doc`; `cargo test` and `--workspace`; the MPI list at 2 and 4 ranks, 24 of 24;
+  after the review's and the mode's changes `helmholtz_fmm` again at 1, 2 and 4 ranks and
+  the full set once more. A self-review by a subagent: no blocking finding; its points
+  taken (a split by degree in `check_auto`, the named mode across calls, `sweep_crossovers`
+  tested, the report's figures, the f32 caveat, the bookkeeping). Not run: D9 and the
+  Laplace bit-identity runs beyond CI's list (no Laplace file, no driver change); the
+  licence check (no dependency change).
+- Decisions: the margin's miss accepted during the work (the user, 2026-11-02, "Accept,
+  follow-up"): CH4.0, the sparse-level term, added to the roadmap. Questions for sign-off
+  (the PR): 1. Auto as the default of `HelmholtzFmmBuilder`; 2. the scalar kernel's mode;
+  3. the debug cost. Signed off 2026-11-02, the user: "i agree with the recommendations"
+  (1: Auto the builder's default, switched on this branch, the operator's own default and
+  the harness's `Case` Rotation; 2: separate without a hardware fma; 3: kept).
+- Laplace: not touched (no Laplace file, no `driver.rs`, `nd-fmm-simd` or `nd-fmm-plan`
+  change).
+- Follow-ups:
+  - CH4.0: the rule's sparse-level term (the roadmap).
+  - The crossovers are f64's; f32 takes them unmeasured (D3: f64 until H7).
+
