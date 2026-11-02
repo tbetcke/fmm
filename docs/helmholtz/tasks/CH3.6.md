@@ -120,13 +120,25 @@ No Laplace file changes, so no D9.
 
 ## Pending runs
 
-Kathleen, submitted 2026-11-01 from a6b3aa7 (`tools/kathleen/sync.sh`):
-- 617649 `fmm3d.sbatch driver` (the driver relinked for FULL);
-- 617650 (after 617649) `fmm3d.sbatch helmholtz`, OUT `logs/ch3-6-w1`: W1 at kD = 10, 30,
-  100, 500, and W1 at kD = 100 on one thread;
-- 617651 (after 617649) `fmm3d.sbatch helmholtz`, OUT `logs/ch3-6-w34`: W3 at kD = 10, 30,
-  100 and W4 (4 distributions × kD = 1, 10, 100).
-They decide the acceptance (both codes' errors and times, the crosscheck).
+None. Kathleen, from a6b3aa7 (`tools/kathleen/sync.sh`), 2026-11-02, all finished, both
+steps passed and no launch failed:
+- 617649 `fmm3d.sbatch driver` (the driver relinked for FULL), node-c11a-108;
+- 617650 `fmm3d.sbatch helmholtz`, OUT `logs/ch3-6-w1`, node-c11a-108: W1 at kD = 10, 30,
+  100, 500, and W1 at kD = 100 on one thread (862 s);
+- 617651 `fmm3d.sbatch helmholtz`, OUT `logs/ch3-6-w34`, node-c11a-123: W3 at kD = 10, 30,
+  100 and W4 (4 distributions × kD = 1, 10, 100) (663 s).
+
+## Results
+
+`fmm-validate/results/helmholtz-ch3-6.md`. Ours within ε at the samples on every one of the
+57 case × ε points (and the one-thread run's 3), the largest 0.63 ε (∇φ, W1 at kD = 500,
+10⁻⁸); all-target errors at most 0.43 ε. FMM3D misses its eps at 10⁻³ on W1, W3 and the
+W4 cube at kD = 100 (up to 2.1×), and is at most 0.04 ε at 10⁻⁸. Times: at 10⁻³ ours
+0.29–0.65 of FMM3D default and 0.55–1.31 of fastker; at 10⁻⁸ 0.93–3.4 and 1.65–5.5. W1 at
+kD = 500: 32, 52, 100 s against 49, 63, 72 s (default) and 33, 44, 49 s (fastker). Worst box
+over all-target ℓ2: ours up to 146× (FMM3D 37×), up to 57 ε pointwise. The header of each
+case's log lacked FMM3D's build info (the detected variants list began with a space):
+fixed in `run.sh`; the build info is in the report.
 
 ## Smoke runs on the M6
 
