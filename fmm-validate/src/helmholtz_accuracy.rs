@@ -383,6 +383,24 @@ pub fn errors<C: CommunicatorCollectives>(
     rows
 }
 
+/// The crossovers of [`HelmholtzM2l::Auto`] that choose differently on a tree of `degrees`
+/// (Helmholtz CH3.2d's sweep): `usize::MAX` (every level with tables), then each distinct
+/// p_l of the levels with M2L (≥ 2) but the largest, descending, then one below the
+/// smallest (Rotation on every level). Empty without a level of M2L.
+pub fn sweep_crossovers(degrees: &[usize]) -> Vec<usize> {
+    let mut distinct: Vec<usize> = degrees.iter().skip(2).copied().collect();
+    distinct.sort_unstable();
+    distinct.dedup();
+    let Some(&smallest) = distinct.first() else {
+        return Vec::new();
+    };
+    distinct.pop();
+    std::iter::once(usize::MAX)
+        .chain(distinct.into_iter().rev())
+        .chain(smallest.checked_sub(1))
+        .collect()
+}
+
 /// The outcome of one [`Case`] at one thread count.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {

@@ -47,8 +47,12 @@ for a gate.
   locust, 0.40–0.99× on Kathleen with AVX-512 (1.10 on the miss) and 0.54–0.89× with AVX2.
   Against Batched on every level that fits: down to 0.38× (locust, W1 at kD = 30 and
   10⁻⁶), since the rule leaves the high-degree levels to Rotation.
-- **Accuracy.** Every choice of a case gives the same errors against the sampled direct sum
-  to the printed digits (three significant digits); the rule changes time only.
+- **Accuracy.** Every choice of a case printed the same errors of φ and ∇φ against the
+  sampled direct sum (three significant digits; the script of §4 compares them on every row
+  of a case, on every machine): the rule changes time only. The FMM's output under each
+  choice is Batched's and Rotation's of CH3.2c level by level (the tests).
+- **f64 only.** The crossovers were measured in f64 (D3: f64 until H7); `Auto` in f32 takes
+  the same constants, unmeasured.
 - The constants were fitted to the same nine cases they are checked on (no held-out
   workload); within the sweeps several crossovers give the same choice, and the table's
   values are the ones the data decide where they do, the per-pair crossovers of CH3.2c and
@@ -142,8 +146,13 @@ largest difference between the runs of one choice of the case.
 - W1's levels are sparse: a block of 64 targets meets fewer pairs per offset, so each table
   is read for fewer columns. That is why W1 at kD = 30 and 10⁻⁶ prefers Rotation at p = 15
   on Kathleen where the cube prefers Batched, and why W1 at kD = 100 and 10⁻³ prefers
-  Rotation at p = 11 on the NEON machines (locust 5.26 s with the level batched against
-  4.78 s without).
+  Rotation at p = 11 on the NEON machines (on locust 5.25 s with that level batched against
+  4.77 s without, the means of two runs).
+- The script's reverse launch reverses the order of `rotation`, `auto` and `sweep`, not
+  the order inside the sweep (∞ first, then descending, in both): drift between the
+  sweep's own runs does not cancel. The spreads stayed at 0–8 % but for the AVX2 runs of
+  the short cases (12–21 %, the cube at 10⁻³, W1 at kD = 30 and 10⁻³, W3), whose choices are
+  still the best by more than their spread or alike.
 
 ## 3. The cost per pair of the AVX2 and scalar column kernels
 
@@ -174,6 +183,7 @@ trusted path), so no end-to-end sweep was run with it.
 - **Kathleen**: job 618430 in `singlenode` on node-c11a-089 (`tools/kathleen/submit.sh
   --time=06:00:00 -- run.sbatch '<build>' 'tools/helmholtz/ch3-2d-runs.sh <out> auto,avx2
   avx2 scalar'`), the build and the runs in the batch steps.
-- The tables above come from the runs' Markdown with a script that groups the rows of a
-  case by the choice (the levels that ran Batched) and evaluates the final constants on the
-  degrees and the budget (§1).
+- The tables above come from the runs' Markdown with a script (not committed) that groups
+  the rows of a case by the choice (the levels that ran Batched), checks that every row of
+  a case printed the same errors, and evaluates the final constants on the degrees and the
+  budget (§1).

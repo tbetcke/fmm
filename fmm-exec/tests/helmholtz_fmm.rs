@@ -35,9 +35,11 @@
 //! `DENSE_TOLERANCE` with complex ones; with two vectors the level call against the pair
 //! body bit for bit; and in the fused mode within `DENSE_TOLERANCE` of Rotation and Dense
 //! and the one-rank FMM bit for bit. The rule per level (Helmholtz CH3.2d), `Auto`, on the
-//! same two scenarios at the finest level's degree as the crossover (in debug builds with
-//! the finest level's tables alone): each level's M2L as the rule says, the fused mode, within `DENSE_TOLERANCE` of Rotation and the scenario's bound
-//! of the direct sum, 2 threads, pair by pair and the one-rank FMM bit for bit; the rule's
+//! same two scenarios with one degree more on every level but the finest and the finest
+//! level's degree as the crossover (fused Batched there, Rotation above, a split by degree on
+//! the deeper tree): each level's M2L as the rule says, the fused mode, within
+//! `DENSE_TOLERANCE` of Rotation of the same degrees and the scenario's bound of the direct
+//! sum, 2 threads, pair by pair and the one-rank FMM bit for bit; the rule's
 //! own crossover agreed alike on every rank, a named mode kept.
 //!
 //! Then vectors (vector v of an FMM of two bit for bit the one-vector FMM, of complex and
@@ -61,14 +63,12 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_exec::fmm::{FmmError, SettingsError};
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, DensityError, HelmholtzFmm,
-    HelmholtzFmmBuilder, HelmholtzFmmError, HelmholtzM2l, OperatorError, Output, Wavenumber,
-    auto_batched_max_degree,
+    ChargeKind, Charges, Degrees, DensityError, HelmholtzFmm, HelmholtzFmmBuilder,
+    HelmholtzFmmError, HelmholtzM2l, OperatorError, Output, Wavenumber, auto_batched_max_degree,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
 use nd_fmm_ref::helmholtz::p2p;
-use nd_fmm_tables::helmholtz::batched::BatchedM2l;
 use nd_fmm_tables::helmholtz::classes::{ClassM2l, CubeTransforms};
 use nd_fmm_tables::helmholtz::dense::DenseM2l;
 use nd_octree::PhysicalBox;
@@ -746,10 +746,12 @@ fn check_tables(
     output
 }
 
-/// The rule per level, `Auto`, with the finest level's degree named as the crossover (so
-/// the finest level, and any of no larger degree, runs fused Batched within the budget, the
-/// others Rotation), against Rotation and the direct sum, threads, pair by pair and the
-/// one-rank FMM; the rule's own crossover (agreed over the ranks) and a named mode.
+/// The rule per level, `Auto`, on the scenario's tree with one degree more on every level
+/// but the finest and the finest level's degree named as the crossover: the finest level
+/// runs fused Batched, the coarser levels Rotation (a split by degree wherever the tree has
+/// more than one level with M2L), against Rotation of the same degrees and the direct sum,
+/// threads, pair by pair and the one-rank FMM; the rule's own crossover (agreed over the
+/// ranks) and a named mode.
 fn check_auto(scenario: &Scenario, comm: &SimpleCommunicator) {
     let start = Instant::now();
     let rank = comm.rank();
@@ -757,34 +759,39 @@ fn check_auto(scenario: &Scenario, comm: &SimpleCommunicator) {
     let tolerance = DENSE_TOLERANCE;
     let inputs = Inputs::new(scenario, 1, comm);
     let kind = scenario.charges;
-    let (fmm, rotation) = run(&builder(scenario), &inputs, kind, comm);
-    let degrees = fmm.degrees().to_vec();
+    let (fmm, _) = run(&builder(scenario), &inputs, kind, comm);
+    let mut degrees = fmm.degrees().to_vec();
     drop(fmm);
     let finest = degrees.len() - 1;
     let crossover = degrees[finest];
-    // Debug builds give Auto the finest level's tables alone, as `check_tables` does (the
-    // deeper tree's levels share one degree, and their dense builds dominate there).
-    let budget = match cfg!(debug_assertions) {
-        true => BatchedM2l::<f64>::level_bytes(crossover),
-        false => DEFAULT_DENSE_BUDGET,
+    for p in &mut degrees[2..finest] {
+        *p += 1;
+    }
+    let split = Scenario {
+        degrees: Degrees::PerLevel(degrees.clone()),
+        ..scenario.clone()
     };
-    let auto = builder(scenario)
+    let (_, rotation) = run(&builder(&split), &inputs, kind, comm);
+    let auto = builder(&split)
         .m2l(HelmholtzM2l::Auto)
-        .m2l_max_degree(crossover)
-        .dense_budget(budget);
+        .m2l_max_degree(crossover);
     let (fmm, output) = run(&auto, &inputs, kind, comm);
     let op = fmm.operator();
     assert_eq!(op.m2l_choice(), HelmholtzM2l::Auto);
     assert_eq!(fmm.m2l_max_degree(), Some(crossover));
     assert_eq!(op.m2l_mul_add(), MulAdd::Fused);
-    let chosen = BatchedM2l::<f64>::select_within(&degrees, budget, crossover);
-    assert!(chosen[finest], "{name}: the finest level runs Batched");
-    for (level, &on) in chosen.iter().enumerate().skip(2) {
-        let want = match on {
-            true => HelmholtzM2l::Batched,
-            false => HelmholtzM2l::Rotation,
-        };
-        assert_eq!(op.m2l_on(level), want, "{name}, level {level}");
+    assert_eq!(fmm.degrees(), degrees);
+    assert_eq!(
+        op.m2l_on(finest),
+        HelmholtzM2l::Batched,
+        "{name}, the finest level"
+    );
+    for level in 2..finest {
+        assert_eq!(
+            op.m2l_on(level),
+            HelmholtzM2l::Rotation,
+            "{name}, level {level}"
+        );
     }
     drop(fmm);
     let (phi, grad) = difference(&output, &rotation, comm);

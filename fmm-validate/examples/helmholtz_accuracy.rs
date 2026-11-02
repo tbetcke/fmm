@@ -63,7 +63,9 @@ use nd_fmm_exec::helmholtz::{
 use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_validate::bench::{cores, cpu_model, target};
 use nd_fmm_validate::fmm_accuracy::Distribution;
-use nd_fmm_validate::helmholtz_accuracy::{Case, Oracle, Problem, Row, complex_k, run};
+use nd_fmm_validate::helmholtz_accuracy::{
+    Case, Oracle, Problem, Row, complex_k, run, sweep_crossovers,
+};
 use nd_fmm_validate::helmholtz_workloads::Workload;
 
 /// The command line.
@@ -276,20 +278,6 @@ fn m2l_string(row: &Row) -> String {
     }
 }
 
-/// The sweep's crossovers after ∞: each distinct p_l of the levels with M2L (≥ 2) but the
-/// largest, descending, and one below the smallest (Rotation on every level).
-fn sweep(degrees: &[usize]) -> impl Iterator<Item = usize> {
-    let mut distinct: Vec<usize> = degrees.iter().skip(2).copied().collect();
-    distinct.sort_unstable();
-    distinct.dedup();
-    let below = distinct.first().and_then(|p| p.checked_sub(1));
-    let largest = distinct.pop();
-    distinct
-        .into_iter()
-        .rev()
-        .chain(below.filter(|_| largest.is_some()))
-}
-
 /// The degrees as a short string: runs of equal degrees as `p×count`.
 fn degrees_string(degrees: &[usize]) -> String {
     let mut runs: Vec<(usize, usize)> = Vec::new();
@@ -447,7 +435,11 @@ fn main() {
                                         print(&row);
                                     }
                                     if matches!(m2l_run, M2lRun::Sweep) && next == 1 {
-                                        crossovers.extend(sweep(&row.degrees).map(Some));
+                                        crossovers.extend(
+                                            sweep_crossovers(&row.degrees)[1..]
+                                                .iter()
+                                                .map(|&d| Some(d)),
+                                        );
                                     }
                                 }
                                 Err(error) => {

@@ -449,6 +449,17 @@ fn auto_at_the_extremes_and_its_mode() {
     assert_eq!(separate.m2l_mul_add(), MulAdd::Separate);
     assert!(same_on(&mut separate, &mut batched, 2));
 
+    // A mode named before `with_m2l` holds; unnamed, each setting takes its own default.
+    let densities = Densities::new(k.kind(), ChargeKind::Complex, 1);
+    let named = HelmholtzOperator::<f64>::new(k, densities, &domain(), &degrees(&k), false, 8)
+        .unwrap()
+        .with_m2l_mul_add(MulAdd::Separate)
+        .with_m2l(HelmholtzM2l::Auto, 0);
+    assert_eq!(named.m2l_mul_add(), MulAdd::Separate);
+    let back = operator(k, ChargeKind::Complex, 1, HelmholtzM2l::Auto, 0)
+        .with_m2l(HelmholtzM2l::Batched, 0);
+    assert_eq!(back.m2l_mul_add(), MulAdd::Separate);
+
     // A budget binds under Auto as under Batched: the finest admitted level first.
     let budget = BatchedM2l::<f64>::level_bytes(5);
     let tight = operator(k, ChargeKind::Complex, 1, HelmholtzM2l::Auto, budget)

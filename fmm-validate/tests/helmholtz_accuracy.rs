@@ -22,10 +22,11 @@ use mpi::traits::Communicator;
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Degrees, Densities, HelmholtzM2l, Output, Wavenumber, WavenumberKind, s7_degree,
 };
+use nd_fmm_exec::operator::MulAdd;
 use nd_fmm_validate::SplitMix64;
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::helmholtz_accuracy::{
-    Case, Oracle, Problem, checksum, complex_k, run, run_output,
+    Case, Oracle, Problem, checksum, complex_k, run, run_output, sweep_crossovers,
 };
 use nd_fmm_validate::helmholtz_calibration::Curve;
 use nd_fmm_validate::helmholtz_fmm3d::{
@@ -181,8 +182,26 @@ fn check_auto(world: &SimpleCommunicator) {
     case.m2l_max_degree = Some(usize::MAX);
     let every = run(&case, &problem, &oracle, 1, world).expect("the FMM runs");
     assert!(every.dense_levels[2..].iter().all(|&on| on));
-    assert_eq!(every.m2l_mul_add, nd_fmm_exec::operator::MulAdd::Fused);
+    assert_eq!(every.m2l_mul_add, MulAdd::Fused);
     check_fmm(world, &case);
+    // Above every degree: Batched in the fused mode, bit for bit.
+    let mut batched = case.clone();
+    (batched.m2l, batched.m2l_mul_add, batched.m2l_max_degree) =
+        (HelmholtzM2l::Batched, Some(MulAdd::Fused), None);
+    let fused = run(&batched, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert_eq!(every.checksum, fused.checksum, "Auto above every degree");
+    // The sweep's crossovers: every choice once, from every level to none.
+    let sweep = sweep_crossovers(&rotation.degrees);
+    assert_eq!(sweep.first(), Some(&usize::MAX));
+    assert_eq!(sweep.last(), Some(&(smallest - 1)));
+    assert_eq!(
+        sweep_crossovers(&[0, 0, 30, 18, 11, 7]),
+        [usize::MAX, 18, 11, 7, 6]
+    );
+    assert_eq!(sweep_crossovers(&[0, 0, 15, 15, 15]), [usize::MAX, 14]);
+    assert_eq!(sweep_crossovers(&[0, 0, 12, 16, 8]), [usize::MAX, 12, 8, 7]);
+    assert_eq!(sweep_crossovers(&[0, 0, 0]), [usize::MAX]);
+    assert!(sweep_crossovers(&[0, 0]).is_empty());
 }
 
 /// The plateau scan of the calibration on W1 at kD = 10: one degree p = 1..=8 on every

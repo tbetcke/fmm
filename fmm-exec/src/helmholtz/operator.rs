@@ -247,6 +247,8 @@ struct Kernel<T: SimdScalar> {
     dense_budget: usize,
     /// The crossover degree named for [`HelmholtzM2l::Auto`], or `None` for the rule's.
     max_degree: Option<usize>,
+    /// The batched M2L's multiply–add mode if named, else `None` (the setting's default).
+    mul_add: Option<MulAdd>,
     /// The dense M2L tables of the levels that have them, under [`HelmholtzM2l::Dense`].
     dense: Option<DenseM2l<T>>,
     /// The class M2L tables of the levels that have them, under [`HelmholtzM2l::Classes`].
@@ -350,6 +352,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             m2l: HelmholtzM2l::Rotation,
             dense_budget: DEFAULT_DENSE_BUDGET,
             max_degree: None,
+            mul_add: None,
             dense: None,
             classes: None,
             batched: None,
@@ -383,17 +386,20 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// Dense's tables in split planes (`BatchedM2l::select`, Dense's), RCR on the others;
     /// under [`HelmholtzM2l::Auto`] Dense's tables in split planes on the levels of degree at
     /// most the crossover ([`max_degree`](Self::max_degree)) that fit the budget
-    /// (`BatchedM2l::select_within`), with the column kernel in [`MulAdd::Fused`] (a later
-    /// [`with_m2l_mul_add`](Self::with_m2l_mul_add) names another mode), RCR on the others;
+    /// (`BatchedM2l::select_within`), RCR on the others, with the column kernel in
+    /// [`MulAdd::Fused`] unless [`with_m2l_mul_add`](Self::with_m2l_mul_add) named a mode
+    /// (before or after; the other settings' default is [`MulAdd::Separate`]);
     /// under [`HelmholtzM2l::Rotation`] ignores the budget. The tables are built in f64,
     /// serially, O(p⁵) per offset and level (16 offsets a level for Classes, 316 for Dense).
     pub fn with_m2l(mut self, choice: HelmholtzM2l, dense_budget: usize) -> Self {
         self.kernel.m2l = choice;
         self.kernel.dense_budget = dense_budget;
-        if choice == HelmholtzM2l::Auto {
-            self.kernel.matrix = MatrixKernel::new(self.kernel.matrix.isa(), MulAdd::Fused)
-                .expect("the kernel's own ISA is available");
-        }
+        let mul_add = self.kernel.mul_add.unwrap_or(match choice {
+            HelmholtzM2l::Auto => MulAdd::Fused,
+            _ => MulAdd::Separate,
+        });
+        self.kernel.matrix = MatrixKernel::new(self.kernel.matrix.isa(), mul_add)
+            .expect("the kernel's own ISA is available");
         self.select_tables();
         self
     }
@@ -515,8 +521,10 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// fma, within n u of the separate form per element, so the output is Dense's to
     /// rounding also with real multipoles; deterministic, the same at every thread count,
     /// ISA and rank count. Only [`HelmholtzM2l::Batched`] and [`HelmholtzM2l::Auto`] read
-    /// it; [`with_m2l`](Self::with_m2l) with Auto sets [`MulAdd::Fused`].
+    /// it. A named mode holds for every later [`with_m2l`](Self::with_m2l); unnamed, Auto's
+    /// is [`MulAdd::Fused`] and the others' [`MulAdd::Separate`].
     pub fn with_m2l_mul_add(mut self, mul_add: MulAdd) -> Self {
+        self.kernel.mul_add = Some(mul_add);
         self.kernel.matrix = MatrixKernel::new(self.kernel.matrix.isa(), mul_add)
             .expect("the kernel's own ISA is available");
         self
