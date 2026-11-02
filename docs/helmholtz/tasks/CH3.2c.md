@@ -154,10 +154,29 @@ M2L per level by p and the machine) is a question for sign-off with the data.
   packed 2n column would do); measured, and a 2n-column form is the alternative if it
   matters (the 2n × 2n table, twice the bytes, declined above).
 
+As run (2026-11-02; the report's §3): the M6 at a27a78e after the user's go-ahead, behind
+CH3.2a's gate (one void launch, repeated); locust at 64b737e (another user's one-core job
+throughout, GPU idle); Kathleen job 618018 on node-c11a-011 at 64b737e. The commits between
+64b737e and a27a78e change tests and documentation only.
+
 ## Pending runs
 
-(filled in step 6)
+None: the M6, locust and Kathleen runs are in the report.
 
 ## Open questions
 
-(filled when they arise)
+For sign-off, in the PR:
+1. Batched stays opt-in, Rotation the default and the separate mode Batched's default, with
+   no Auto rule in this task. The data argue for a per-level rule by p (the fused Batched
+   M2L on the levels with tables below a machine's crossover degree, about 10 on the M6 and
+   locust and 15 on Kathleen, Rotation above), built and measured as a follow-up task
+   before H3.G, not here.
+2. The fused mode (`with_m2l_mul_add`, `HelmholtzFmmBuilder::m2l_mul_add`), added beyond the
+   first plan as an opt-in after the first measurement (Dense to rounding in both cases).
+3. The one-rank debug run of `tests/helmholtz_fmm.rs` grows from 69 to 122 s on the M6
+   (Batched's checks 53 s, each run rebuilding the dense tables; about 7× cheaper at CI's
+   opt-level 1; the MPI list at 2 and 4 ranks 197 and 148 s locally at opt-level 0, within
+   CI's 900 s): kept, or trimmed (for example the two-vector check on one scenario).
+4. The proposal's §6.2 ("The order", item 2) and §10 row for CH3.2 stay as written; the
+   roadmap and this record carry Helmholtz's own block in place of the two-plane case of
+   the shared driver (decided before the work, decision 1 above), as CH3.5's record did.

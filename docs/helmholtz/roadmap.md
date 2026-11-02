@@ -428,7 +428,15 @@ at any kD.
   *Done when:* against Dense to rounding at every offset; the FMM as CH3.2a's; the cost per
   pair against Rotation and Dense per p on the M6, the transforms that move the z-axis
   included. *Needs:* CH3.2a.
-- [ ] **CH3.2c Batched, and the measurements per p.** The batched M2L on CH3.2a's tables:
+- [x] **CH3.2c Batched, and the measurements per p.** Report:
+  `fmm-validate/results/helmholtz-ch3-2c.md`; record `docs/helmholtz/tasks/CH3.2c.md`;
+  `nd_fmm_tables::helmholtz::batched::BatchedM2l`, `HelmholtzM2l::Batched`,
+  `with_m2l_mul_add`. Helmholtz's own block on the column kernel (the user, 2026-11-02:
+  "Own Helmholtz block"; no Laplace path changes), Dense's tables in split planes ("Split
+  planes, 2n²"): Dense bit for bit with real multipoles, to rounding with complex ones;
+  the fused mode opt-in. Fused Batched beats Rotation per pair to p ≈ 10 on the M6 and
+  locust and p ≈ 15 on Kathleen, and end to end where the levels with tables have low p
+  (0.39–0.82× on the W4 cube and W3 at 10⁻³); it stays opt-in. The batched M2L on CH3.2a's tables:
   the two-plane case of `driver::m2l_block` (`PLANES`, rectangular tables, the per-target
   epilogue of proposal §6.2) with constraint 1 as in CH2.0 (Laplace bit for bit, D9 on the
   three machines), else Helmholtz's own block. *Done when:* against Dense (bit for bit, or
