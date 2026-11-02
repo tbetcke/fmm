@@ -1661,7 +1661,9 @@ request, using this template:
 - Decisions: none taken beyond the two before the work. Questions for sign-off (the PR):
   1. Batched opt-in, no Auto rule here; a per-level rule by p as a follow-up before H3.G;
   2. the fused mode added as an opt-in; 3. the debug test cost; 4. the proposal's §6.2 and
-  §10 left as written, the roadmap and record carrying the own block.
+  §10 left as written, the roadmap and record carrying the own block. Signed off
+  2026-11-02, the user: "i agree with the recommendations" (1: opt-in, the rule by p a
+  follow-up before H3.G; 2: the fused mode kept; 3: the debug cost kept; 4: as stated).
 - Laplace: not touched (no Laplace file, no `driver.rs`, `nd-fmm-simd` or `nd-fmm-plan`
   change; the driver's `Columns`, `Execution::blocks` and `M2L_BLOCK_TARGETS` used as they are).
 - Follow-ups:

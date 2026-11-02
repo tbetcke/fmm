@@ -180,3 +180,9 @@ For sign-off, in the PR:
 4. The proposal's §6.2 ("The order", item 2) and §10 row for CH3.2 stay as written; the
    roadmap and this record carry Helmholtz's own block in place of the two-plane case of
    the shared driver (decided before the work, decision 1 above), as CH3.5's record did.
+
+Signed off 2026-11-02, the user: "i agree with the recommendations". So Batched stays
+opt-in, with Rotation the default and the separate mode Batched's default, and the per-level
+rule by p is a follow-up task before H3.G (1); the fused mode stays (2); the debug cost is
+kept (3); the proposal's §6.2 and §10 stay as written, the roadmap and this record carrying
+the own block (4).
