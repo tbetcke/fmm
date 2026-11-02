@@ -20,6 +20,7 @@
 //! | P2M, L2P | [`Densities::p2m`], [`Densities::l2p`] in the leaf's own frame |
 //! | M2M, L2L, M2L | `nd_fmm_tables::helmholtz::HelmholtzTables` (RCR with the level's tables; real shifts on each plane for real k) |
 //! | M2L under [`HelmholtzM2l::Dense`] | `nd_fmm_tables::helmholtz::dense::DenseM2l` on the levels whose tables fit the budget, RCR on the others |
+//! | M2L under [`HelmholtzM2l::Classes`] | `nd_fmm_tables::helmholtz::classes::ClassM2l` on the levels whose tables fit the budget, RCR on the others |
 //! | P2L | `nd_fmm_ref::helmholtz::leaf::p2l` in the source leaf's units, at (ĉ(t\|s), r̂(t\|s)) |
 //! | M2P | `nd_fmm_ref::helmholtz::leaf::m2p` in the target leaf's units, at (ĉ(s\|t), r̂(s\|t)) |
 //! | P2P | `nd_fmm_simd::P2pKernel::evaluate_helmholtz` on the ISA of the [`P2pChoice`], or `nd_fmm_ref::helmholtz::p2p::p2p` for [`P2pChoice::Reference`], in the target leaf's units, the sources mapped as ĉ(s\|t) + r̂(s\|t) u |
@@ -72,6 +73,15 @@
 //! body, so its output is the same at every thread count and on P ranks the one-rank
 //! output; it adds no per-target epilogue and no driver change.
 //!
+//! Under [`HelmholtzM2l::Classes`] (Helmholtz CH3.2b; proposal §5.3) a level whose tables
+//! fit the same budget (`ClassM2l::select`, from the finest level up) holds the 16 class
+//! matrices of CONVENTIONS §3.12 in Dense's layout, bit for bit Dense's matrices of the
+//! representatives, and the cube-group transforms of the orthonormal coefficients: each pair
+//! takes its multipole through O(Pᵀ), the class matrix by Dense's chain and O(P) into the
+//! local, signed permutations for the elements that fix the z-axis and dense per-degree
+//! blocks for the others. So Classes agrees with Dense, and with Rotation, to rounding, and
+//! is deterministic and rank-invariant as Dense is.
+//!
 //! # Execution
 //!
 //! The level calls run on the shared drivers of `nd-fmm-exec` (Helmholtz CH2.0, CH3.5),
@@ -93,6 +103,7 @@ use nd_fmm_ref::Frame;
 use nd_fmm_ref::helmholtz::{Level, Workspace, leaf, p2p};
 use nd_fmm_simd::{HelmholtzCharges, IsaUnavailable, MatrixKernel, P2pKernel, SimdScalar};
 use nd_fmm_tables::MatrixSet;
+use nd_fmm_tables::helmholtz::classes::{ClassM2l, ClassScratch};
 use nd_fmm_tables::helmholtz::dense::DenseM2l;
 use nd_fmm_tables::helmholtz::{DEFAULT_BLOCK_BUDGET, HelmholtzScratch, HelmholtzTables};
 use nd_octree::{MortonKey, morton};
@@ -132,9 +143,12 @@ pub enum HelmholtzM2l {
     /// One complex matrix per offset on the levels whose tables fit the dense budget, from
     /// the finest level up; RCR on the others.
     Dense,
+    /// The 16 class matrices per level and the cube-group transforms, on the levels whose
+    /// tables fit the dense budget, from the finest level up; RCR on the others.
+    Classes,
 }
 
-/// The default byte budget of the dense M2L tables of one rank, 1 GiB.
+/// The default byte budget of the dense or class M2L tables of one rank, 1 GiB.
 pub const DEFAULT_DENSE_BUDGET: usize = 1 << 30;
 
 /// The Helmholtz-family operator (module documentation).
@@ -156,6 +170,8 @@ struct Kernel<T: SimdScalar> {
     m2l: HelmholtzM2l,
     /// The dense M2L tables of the levels that have them, under [`HelmholtzM2l::Dense`].
     dense: Option<DenseM2l<T>>,
+    /// The class M2L tables of the levels that have them, under [`HelmholtzM2l::Classes`].
+    classes: Option<ClassM2l<T>>,
     /// The P2P kernel of `nd-fmm-simd`, or `None` for the reference.
     p2p: Option<P2pKernel<T>>,
 }
@@ -165,6 +181,8 @@ struct Scratch<T: SimdScalar> {
     leaf: LeafScratch<T>,
     workspace: Workspace<T>,
     tables: HelmholtzScratch<T>,
+    /// The class M2L's rotated multipole and translated local.
+    classes: ClassScratch<T>,
     /// Another leaf's sources in the target's units (P2P).
     mapped: Vec<[T; 3]>,
     /// One vector's charges.
@@ -248,6 +266,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             tables,
             m2l: HelmholtzM2l::Rotation,
             dense: None,
+            classes: None,
             p2p: Some(P2pKernel::detect()),
         };
         let execution = Execution {
@@ -271,23 +290,30 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
 
     /// Runs M2L by `choice` (module documentation, "M2L"): under [`HelmholtzM2l::Dense`]
     /// builds the dense tables of the levels that fit in `dense_budget` bytes from the
-    /// finest level up (`DenseM2l::select`; [`DEFAULT_DENSE_BUDGET`] is a default), RCR on
-    /// the others; under [`HelmholtzM2l::Rotation`] ignores the budget. The tables are built
-    /// in f64, serially, O(p⁵) per offset and level.
+    /// finest level up (`DenseM2l::select`; [`DEFAULT_DENSE_BUDGET`] is a default), under
+    /// [`HelmholtzM2l::Classes`] the class tables within the same budget
+    /// (`ClassM2l::select`, the transforms included), RCR on the others; under
+    /// [`HelmholtzM2l::Rotation`] ignores the budget. The tables are built in f64, serially,
+    /// O(p⁵) per offset and level (16 offsets a level for Classes, 316 for Dense).
     pub fn with_m2l(mut self, choice: HelmholtzM2l, dense_budget: usize) -> Self {
         let kernel = &mut self.kernel;
         kernel.m2l = choice;
-        kernel.dense = match choice {
-            HelmholtzM2l::Rotation => None,
-            HelmholtzM2l::Dense => {
-                let degrees: Vec<usize> = (0..kernel.tables.nlevels())
-                    .map(|l| kernel.tables.degree(l))
-                    .collect();
-                let levels = DenseM2l::<T>::select(&degrees, dense_budget);
-                let k_root = kernel.tables.k_hat(0);
-                Some(DenseM2l::build(k_root, &degrees, &levels))
-            }
-        };
+        let degrees: Vec<usize> = (0..kernel.tables.nlevels())
+            .map(|l| kernel.tables.degree(l))
+            .collect();
+        let k_root = kernel.tables.k_hat(0);
+        kernel.dense = (choice == HelmholtzM2l::Dense).then(|| {
+            let levels = DenseM2l::<T>::select(&degrees, dense_budget);
+            DenseM2l::build(k_root, &degrees, &levels)
+        });
+        kernel.classes = (choice == HelmholtzM2l::Classes).then(|| {
+            let levels = ClassM2l::<T>::select(&degrees, dense_budget);
+            ClassM2l::build(k_root, &degrees, &levels)
+        });
+        // The class scratch is sized by the class tables' largest degree.
+        for scratch in &mut self.execution.scratch {
+            *scratch.get_mut().expect("a scratch set is never poisoned") = Scratch::new(kernel);
+        }
         self
     }
 
@@ -296,18 +322,26 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         self.kernel.m2l
     }
 
-    /// The M2L that runs on `level`: [`HelmholtzM2l::Dense`] where the level has dense
-    /// tables, [`HelmholtzM2l::Rotation`] everywhere else (levels 0 and 1 have no M2L).
+    /// The M2L that runs on `level`: [`HelmholtzM2l::Dense`] or [`HelmholtzM2l::Classes`]
+    /// where the level has dense or class tables, [`HelmholtzM2l::Rotation`] everywhere
+    /// else (levels 0 and 1 have no M2L).
     pub fn m2l_on(&self, level: usize) -> HelmholtzM2l {
-        match &self.kernel.dense {
-            Some(dense) if dense.is_dense(level) => HelmholtzM2l::Dense,
+        match (&self.kernel.dense, &self.kernel.classes) {
+            (Some(dense), _) if dense.is_dense(level) => HelmholtzM2l::Dense,
+            (_, Some(classes)) if classes.is_class(level) => HelmholtzM2l::Classes,
             _ => HelmholtzM2l::Rotation,
         }
     }
 
-    /// The bytes of the dense M2L tables (0 under [`HelmholtzM2l::Rotation`]).
+    /// The bytes of the dense M2L tables (0 unless [`HelmholtzM2l::Dense`]).
     pub fn dense_bytes(&self) -> usize {
         self.kernel.dense.as_ref().map_or(0, DenseM2l::bytes)
+    }
+
+    /// The bytes of the class M2L tables, the transforms included (0 unless
+    /// [`HelmholtzM2l::Classes`]).
+    pub fn class_bytes(&self) -> usize {
+        self.kernel.classes.as_ref().map_or(0, ClassM2l::bytes)
     }
 
     /// Runs P2P with the kernel of `choice` (module documentation, "P2P kernel").
@@ -374,6 +408,10 @@ impl<T: SimdScalar> Scratch<T> {
             leaf: LeafScratch::new(p_max),
             workspace: Workspace::new(p_max),
             tables: kernel.tables.scratch(),
+            classes: kernel
+                .classes
+                .as_ref()
+                .map_or_else(|| ClassScratch::new(0), ClassM2l::scratch),
             mapped: vec![[T::zero(); 3]; kernel.max_leaf_points],
             charges: vec![Complex::new(T::zero(), T::zero()); kernel.max_leaf_points],
             strengths: vec![T::zero(); 2 * kernel.max_leaf_points],
@@ -486,9 +524,12 @@ impl<T: SimdScalar> Kernel<T> {
     fn m2l(&self, level: usize, d: usize, multipole: &[T], local: &mut [T], s: &mut Scratch<T>) {
         let planes = self.densities.multipole_planes();
         let m = self.densities.vectors();
-        match &self.dense {
-            Some(dense) if dense.is_dense(level) => {
+        match (&self.dense, &self.classes) {
+            (Some(dense), _) if dense.is_dense(level) => {
                 dense.m2l(level, d, multipole, planes, local, m);
+            }
+            (_, Some(classes)) if classes.is_class(level) => {
+                classes.m2l(level, d, multipole, planes, local, m, &mut s.classes);
             }
             _ => self
                 .tables

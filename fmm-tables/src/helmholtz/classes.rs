@@ -365,7 +365,7 @@ fn fill_block(
             (1, 0) => f64::from(u8::from(a == b)),
             (-1, 0) => {
                 // (−1)ⁿ F: +1 on m ≥ 0, −1 on m < 0.
-                let parity = if n % 2 == 0 { 1.0 } else { -1.0 };
+                let parity = if n.is_multiple_of(2) { 1.0 } else { -1.0 };
                 let f = if ma >= 0 { 1.0 } else { -1.0 };
                 if a == b { parity * f } else { 0.0 }
             }
