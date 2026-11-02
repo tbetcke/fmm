@@ -401,8 +401,8 @@ fn auto_splits_the_levels_at_the_crossover() {
             auto.batched_bytes(),
             BatchedM2l::<f64>::level_bytes(degrees[2]) + BatchedM2l::<f64>::level_bytes(degrees[4])
         );
-        for level in 2..LEVELS {
-            let batched = degrees[level] <= 6;
+        for (level, &p) in degrees.iter().enumerate().take(LEVELS).skip(2) {
+            let batched = p <= 6;
             let want = if batched {
                 HelmholtzM2l::Batched
             } else {
