@@ -37,11 +37,13 @@
 //!
 //! - one plane (the real multipole of real k and real charges): L[r] ← L[r] + A[r, k] M[k]
 //!   for k = 0, 1, …, n − 1 in turn, over the 2n rows;
-//! - two planes: first the real plane M_r as above, then the imaginary plane M_i, k
-//!   ascending, L_r[r] ← L_r[r] − A_i[r, k] M_i[k] and L_i[r] ← L_i[r] + A_r[r, k] M_i[k].
+//! - two planes: in one pass over the table, for k = 0, 1, …, n − 1 in turn,
+//!   L_r[r] ← (L_r[r] + A_r[r, k] M_r[k]) − A_i[r, k] M_i[k] and
+//!   L_i[r] ← (L_i[r] + A_i[r, k] M_r[k]) + A_r[r, k] M_i[k], over the n rows.
 //!
 //! So the four real products of a complex M2L are combined pair by pair, with no per-target
-//! epilogue (Helmholtz CH3.5, question 2).
+//! epilogue (Helmholtz CH3.5, question 2), and each table is read once per pair: per pair
+//! the application is bound by reading the table, 2n² values.
 
 use nd_fmm_math::{Complex, Layout, RealScalar};
 
@@ -193,21 +195,23 @@ impl<T: RealScalar> DenseM2l<T> {
             .chunks_exact(planes * n)
             .zip(local.chunks_exact_mut(2 * n))
         {
-            for (column, &x) in a.chunks_exact(2 * n).zip(&m[..n]) {
-                for (y, &e) in l.iter_mut().zip(column) {
-                    *y = *y + e * x;
-                }
-            }
-            if planes == 2 {
-                let (l_r, l_i) = l.split_at_mut(n);
-                for (column, &x) in a.chunks_exact(2 * n).zip(&m[n..]) {
-                    let (a_r, a_i) = column.split_at(n);
-                    for ((y_r, y_i), (&e_r, &e_i)) in
-                        l_r.iter_mut().zip(l_i.iter_mut()).zip(a_r.iter().zip(a_i))
-                    {
-                        *y_r = *y_r - e_i * x;
-                        *y_i = *y_i + e_r * x;
+            if planes == 1 {
+                for (column, &x) in a.chunks_exact(2 * n).zip(m) {
+                    for (y, &e) in l.iter_mut().zip(column) {
+                        *y = *y + e * x;
                     }
+                }
+                continue;
+            }
+            let (m_r, m_i) = m.split_at(n);
+            let (l_r, l_i) = l.split_at_mut(n);
+            for ((column, &x_r), &x_i) in a.chunks_exact(2 * n).zip(m_r).zip(m_i) {
+                let (a_r, a_i) = column.split_at(n);
+                for ((y_r, y_i), (&e_r, &e_i)) in
+                    l_r.iter_mut().zip(l_i.iter_mut()).zip(a_r.iter().zip(a_i))
+                {
+                    *y_r = *y_r + e_r * x_r - e_i * x_i;
+                    *y_i = *y_i + e_i * x_r + e_r * x_i;
                 }
             }
         }
