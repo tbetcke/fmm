@@ -137,6 +137,7 @@
 //! }
 //! ```
 
+pub mod classes;
 pub mod dense;
 
 use nd_fmm_math::coaxial::CoaxialTable;
