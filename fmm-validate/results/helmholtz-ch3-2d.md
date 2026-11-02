@@ -151,8 +151,9 @@ largest difference between the runs of one choice of the case.
 - The script's reverse launch reverses the order of `rotation`, `auto` and `sweep`, not
   the order inside the sweep (∞ first, then descending, in both): drift between the
   sweep's own runs does not cancel. The spreads stayed at 0–8 % but for the AVX2 runs of
-  the short cases (12–21 %, the cube at 10⁻³, W1 at kD = 30 and 10⁻³, W3), whose choices are
-  still the best by more than their spread or alike.
+  the short cases (12–21 %: the cube at 10⁻³, W1 at kD = 30 and 10⁻³, W3), where the next
+  choice can lie within the spread of the rule's (W3: 1.64 s against 1.72 s with Batched on
+  every level; W1 at kD = 30: 0.15 s against 0.17 s); Rotation is far slower on all three.
 
 ## 3. The cost per pair of the AVX2 and scalar column kernels
 
