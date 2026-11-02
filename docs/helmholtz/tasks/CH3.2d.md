@@ -168,7 +168,14 @@ None: the M6, locust and Kathleen runs are in the report.
 
 ## Open questions
 
-- Whether Auto becomes the default of `HelmholtzFmmBuilder` (for sign-off, in the PR).
+For sign-off, in the PR: 1. whether Auto becomes the default of `HelmholtzFmmBuilder`;
+2. the scalar kernel's mode under Auto (separate without a hardware fma, beyond the plan);
+3. the debug cost of `tests/helmholtz_fmm.rs` (122 → 150 s on the M6).
+Signed off 2026-11-02, the user: "i agree with the recommendations" (on PR #174's
+questions): 1. Auto is the default of `HelmholtzFmmBuilder` (the operator's own default
+before `with_m2l` stays Rotation, and the harness's `Case` keeps Rotation named, as the
+earlier reports ran); 2. the scalar kernel separate under Auto where the build has no
+hardware fma; 3. the debug cost of `tests/helmholtz_fmm.rs` kept.
 - The margin, asked during the work (2026-11-02): the degree-only rule is within 1.05 of
   the best choice on every case of the three machines but one, Kathleen with AVX-512 on W1
   at kD = 30 and ε = 10⁻⁶ (1.106, a sparse level at p = 15 batched; the W4 cube at p = 15

@@ -50,7 +50,11 @@ for a gate.
   needs Batched (1.17 slower with Rotation), so no crossover by degree alone meets both.
   Accepted by the user during the work (2026-11-02, "Accept, follow-up"); the sparse-level
   term is CH4.0 in the roadmap.
-- **What it gains.** Against Rotation, the default: 0.71–0.95× of Rotation's evaluation
+- **The default.** Auto is `HelmholtzFmmBuilder`'s default since the sign-off of
+  2026-11-02 ("i agree with the recommendations"); the operator's own default before
+  `with_m2l` stays Rotation, and `helmholtz_accuracy`'s `Case` keeps Rotation named, as the
+  earlier reports ran.
+- **What it gains.** Against Rotation, the default before: 0.71–0.95× of Rotation's evaluation
   time on the M6 where the rule batches (Rotation's own choice elsewhere), 0.78–0.97× on
   locust, 0.40–0.99× on Kathleen with AVX-512 (1.10 on the miss) and 0.54–0.89× with AVX2.
   Against Batched on every level that fits: down to 0.38× (locust, W1 at kD = 30 and

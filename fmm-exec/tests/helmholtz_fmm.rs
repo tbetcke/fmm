@@ -40,7 +40,8 @@
 //! the deeper tree): each level's M2L as the rule says, the fused mode, within
 //! `DENSE_TOLERANCE` of Rotation of the same degrees and the scenario's bound of the direct
 //! sum, 2 threads, pair by pair and the one-rank FMM bit for bit; the rule's
-//! own crossover agreed alike on every rank, a named mode kept.
+//! own crossover agreed alike on every rank, a named mode kept, and Auto the builder's
+//! default (every other check names Rotation, its reference).
 //!
 //! Then vectors (vector v of an FMM of two bit for bit the one-vector FMM, of complex and
 //! of real charges), real charges against complex ones with Im q = 0, and the errors (an
@@ -305,8 +306,14 @@ impl Inputs {
     }
 }
 
-/// The builder of a scenario.
+/// The builder of a scenario, M2L by Rotation (named: the library's default is Auto).
 fn builder(scenario: &Scenario) -> HelmholtzFmmBuilder {
+    default_builder(scenario).m2l(HelmholtzM2l::Rotation)
+}
+
+/// The scenario's settings with the library's default M2L ([`HelmholtzM2l::Auto`] since
+/// Helmholtz CH3.2d); `builder` names Rotation, the reference of every check.
+fn default_builder(scenario: &Scenario) -> HelmholtzFmmBuilder {
     let k = Wavenumber::new(scenario.k.0, scenario.k.1).unwrap();
     HelmholtzFmmBuilder::new(k, scenario.degrees.clone())
         .charges(scenario.charges)
@@ -818,14 +825,13 @@ fn check_auto(scenario: &Scenario, comm: &SimpleCommunicator) {
     assert_same(&format!("{name}, pair by pair"), &pairs, &output, comm);
     check_one_rank(&name, &auto, &inputs, kind, &output, comm);
 
-    // The rule's own crossover (no tables: a budget of zero), the same on every rank; a
-    // named mode kept.
+    // The library's default M2L is Auto, at the rule's own crossover (no tables: a budget of
+    // zero), the same on every rank; a named mode kept.
     let planes = match (scenario.k.1 == 0.0, kind) {
         (true, ChargeKind::Real) => 1,
         _ => 2,
     };
-    let rule = builder(scenario)
-        .m2l(HelmholtzM2l::Auto)
+    let rule = default_builder(scenario)
         .dense_budget(0)
         .m2l_mul_add(MulAdd::Separate);
     let fmm = rule
@@ -836,6 +842,11 @@ fn check_auto(scenario: &Scenario, comm: &SimpleCommunicator) {
     let mut smallest = 0u64;
     comm.all_reduce_into(&(own as u64), &mut smallest, SystemOperation::min());
     assert_eq!(agreed as u64, smallest, "{name}: the agreed crossover");
+    assert_eq!(
+        fmm.operator().m2l_choice(),
+        HelmholtzM2l::Auto,
+        "the default"
+    );
     assert_eq!(fmm.operator().m2l_mul_add(), MulAdd::Separate);
     assert_eq!(fmm.operator().batched_bytes(), 0);
     if rank == 0 {

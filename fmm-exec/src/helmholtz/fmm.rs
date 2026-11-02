@@ -176,8 +176,9 @@ impl HelmholtzFmmBuilder {
     /// The settings for wavenumber `k` with the degrees `degrees`: complex charges, one
     /// vector, potentials only, one thread, the domain from the points,
     /// [`DEFAULT_MAX_POINTS_PER_LEAF`] points per leaf, leaves down to level 16, the
-    /// default block budget of the M2L y-blocks, M2L by [`HelmholtzM2l::Rotation`], the leaf
-    /// width [`C_LEAF`] and the P2P kernel of [`P2pChoice::Auto`].
+    /// default block budget of the M2L y-blocks, M2L by the rule per level
+    /// [`HelmholtzM2l::Auto`] within [`DEFAULT_DENSE_BUDGET`], the leaf width [`C_LEAF`] and
+    /// the P2P kernel of [`P2pChoice::Auto`].
     pub fn new(k: Wavenumber, degrees: Degrees) -> Self {
         Self {
             k,
@@ -190,7 +191,7 @@ impl HelmholtzFmmBuilder {
             max_points_per_leaf: DEFAULT_MAX_POINTS_PER_LEAF,
             max_level: DEEPEST,
             block_budget: DEFAULT_BLOCK_BUDGET,
-            m2l: HelmholtzM2l::Rotation,
+            m2l: HelmholtzM2l::Auto,
             dense_budget: DEFAULT_DENSE_BUDGET,
             m2l_mul_add: None,
             m2l_max_degree: None,
@@ -255,10 +256,12 @@ impl HelmholtzFmmBuilder {
         self
     }
 
-    /// The M2L of the levels (default [`HelmholtzM2l::Rotation`]; the operator module
-    /// documentation, "M2L"). Under [`HelmholtzM2l::Dense`], [`HelmholtzM2l::Classes`] and
-    /// [`HelmholtzM2l::Batched`] the output agrees with Rotation's to rounding, not bit for
-    /// bit; Batched's is Dense's bit for bit with real multipoles (real k, real charges).
+    /// The M2L of the levels (default [`HelmholtzM2l::Auto`] since Helmholtz CH3.2d, signed
+    /// off on 2026-11-02; the operator module documentation, "M2L"). Under
+    /// [`HelmholtzM2l::Dense`], [`HelmholtzM2l::Classes`], [`HelmholtzM2l::Batched`] and
+    /// [`HelmholtzM2l::Auto`] the output agrees with Rotation's to rounding, not bit for bit
+    /// (Auto's is Rotation's bit for bit on the levels it leaves to Rotation); Batched's is
+    /// Dense's bit for bit with real multipoles (real k, real charges).
     pub fn m2l(mut self, choice: HelmholtzM2l) -> Self {
         self.m2l = choice;
         self

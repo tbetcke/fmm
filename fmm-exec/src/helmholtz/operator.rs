@@ -63,7 +63,9 @@
 //!
 //! # M2L
 //!
-//! M2L runs by the level's RCR tables ([`HelmholtzM2l::Rotation`], the default), or under
+//! M2L runs by the level's RCR tables ([`HelmholtzM2l::Rotation`], the operator's default
+//! until [`with_m2l`](HelmholtzOperator::with_m2l); `HelmholtzFmmBuilder`'s is
+//! [`HelmholtzM2l::Auto`]), or under
 //! [`HelmholtzM2l::Dense`] (Helmholtz CH3.2a; proposal §5.3) by one complex matrix per
 //! offset on each level whose tables fit a byte budget, chosen from the finest level up
 //! (`DenseM2l::select`, a function of the degrees and the budget only, so every rank
@@ -184,8 +186,9 @@ pub enum OperatorError {
 /// The M2L of the Helmholtz operator's levels (module documentation, "M2L"; proposal §5.3).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum HelmholtzM2l {
-    /// RCR on every level (the default): rotation, coaxial translation, rotation back.
-    #[default]
+    /// RCR on every level (the operator's default before
+    /// [`with_m2l`](HelmholtzOperator::with_m2l)): rotation, coaxial translation, rotation
+    /// back.
     Rotation,
     /// One complex matrix per offset on the levels whose tables fit the dense budget, from
     /// the finest level up; RCR on the others.
@@ -200,7 +203,9 @@ pub enum HelmholtzM2l {
     /// on every vector ISA) unless one is named,
     /// on the levels of degree at most the crossover of the machine class
     /// ([`auto_batched_max_degree`]) whose tables fit the dense budget, from the finest level
-    /// up; RCR on the others.
+    /// up; RCR on the others. The default of `HelmholtzFmmBuilder` (and of this type) since
+    /// Helmholtz CH3.2d.
+    #[default]
     Auto,
 }
 

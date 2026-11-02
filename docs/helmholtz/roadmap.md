@@ -446,7 +446,9 @@ at any kD.
 - [x] **CH3.2d The M2L rule per level.** Report: `fmm-validate/results/helmholtz-ch3-2d.md`;
   record `docs/helmholtz/tasks/CH3.2d.md`; `HelmholtzM2l::Auto`, `auto_batched_max_degree`,
   `BatchedM2l::select_within`. The rule's choice the best on 34 of 36 case × machine rows,
-  1.001 on one, 1.106 on one (Kathleen AVX-512, a sparse W1 level; accepted, CH4.0).
+  1.001 on one, 1.106 on one (Kathleen AVX-512, a sparse W1 level; accepted, CH4.0). Auto
+  is `HelmholtzFmmBuilder`'s default (signed off 2026-11-02, "i agree with the
+  recommendations").
   Added on 2026-11-02 at CH3.2c's sign-off (the
   user, "i agree with the recommendations": a follow-up before H3.G). An Auto setting of
   `HelmholtzM2l` choosing per level from the degrees, the budget and the machine class only

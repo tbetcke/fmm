@@ -367,7 +367,8 @@ agreed crossover), and to the example's `--m2l` the entries `auto`, `auto:<d>` a
 degree, the crossovers after the first from its degrees; the column "M2L" prefixed
 `auto ≤ d`); `helmholtz_m2l --isa` (Batched's column kernel on a named ISA).
 `tests/helmholtz_accuracy.rs` checks Auto below every degree Rotation's checksum and above
-every degree Batched on every level. `tools/helmholtz/ch3-2d-runs.sh` runs the task's
+every degree Batched on every level. `Case::new` keeps Rotation named although Auto is the
+library's default since CH3.2d's sign-off, so that the earlier reports' runs repeat. `tools/helmholtz/ch3-2d-runs.sh` runs the task's
 measurements (gated on macOS). Its report is `results/helmholtz-ch3-2d.md`.
 
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI

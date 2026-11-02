@@ -1718,8 +1718,11 @@ request, using this template:
   Laplace bit-identity runs beyond CI's list (no Laplace file, no driver change); the
   licence check (no dependency change).
 - Decisions: the margin's miss accepted during the work (the user, 2026-11-02, "Accept,
-  follow-up"): CH4.0, the sparse-level term, added to the roadmap. Question for sign-off
-  (the PR): whether Auto becomes the default of `HelmholtzFmmBuilder`.
+  follow-up"): CH4.0, the sparse-level term, added to the roadmap. Questions for sign-off
+  (the PR): 1. Auto as the default of `HelmholtzFmmBuilder`; 2. the scalar kernel's mode;
+  3. the debug cost. Signed off 2026-11-02, the user: "i agree with the recommendations"
+  (1: Auto the builder's default, switched on this branch, the operator's own default and
+  the harness's `Case` Rotation; 2: separate without a hardware fma; 3: kept).
 - Laplace: not touched (no Laplace file, no `driver.rs`, `nd-fmm-simd` or `nd-fmm-plan`
   change).
 - Follow-ups:

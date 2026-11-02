@@ -292,6 +292,10 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   degree (in debug builds with the finest level's tables alone) against Rotation and the
   direct sum, 2 threads, pair by pair and the one-rank FMM bit for bit, and the rule's
   crossover agreed. Its debug cost: about 28 s of the one-rank run on the M6 (122 → 150 s).
+  `Auto` is `HelmholtzFmmBuilder`'s default since CH3.2d's sign-off (2026-11-02; the enum's
+  `Default` too); the operator's own default before `with_m2l` stays `Rotation`. The tests
+  of `tests/helmholtz_fmm.rs` name Rotation (`builder`) as the reference of every check;
+  `check_auto` checks the default (`default_builder`).
 - The degree rule (Helmholtz CH3.3; the `helmholtz::degree` module docs;
   fmm-validate/results/helmholtz-ch3-3.md): `degree` is `DegreeRule::CALIBRATED`,
   max(⌈0.30 L² + 0.25 L + 2.60⌉, ⌈x + 0.80 (ln 1/ε)^{2/3} x^{1/3}⌉) with L = log₁₀(1/ε),
