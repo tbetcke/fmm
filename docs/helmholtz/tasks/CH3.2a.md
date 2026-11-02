@@ -173,3 +173,9 @@ For sign-off, in the PR:
    or states that it equals only to rounding (an epilogue of four products reorders it).
 3. `DEFAULT_DENSE_BUDGET` is 1 GiB per rank, with no node budget (node-m2l.md) until an
    Auto rule exists.
+
+Signed off 2026-11-02, the user, after #171 merged: "i agree with the recommendations". So
+Dense stays opt-in with no Auto rule until CH3.2c (1); CH3.2c's Batched reproduces Dense's
+two-plane chain bit for bit or states that it equals Dense only to rounding (2); and
+`DEFAULT_DENSE_BUDGET` stays 1 GiB per rank with no node budget (3). Recorded on CH3.2b's
+branch.

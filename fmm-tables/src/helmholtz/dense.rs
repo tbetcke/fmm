@@ -105,30 +105,11 @@ impl<T: RealScalar> DenseM2l<T> {
             };
         }
         let tables = HelmholtzTables::<f64>::build(k_root, degrees, DEFAULT_BLOCK_BUDGET);
-        let mut scratch = tables.scratch();
         let levels = degrees
             .iter()
             .zip(levels)
             .enumerate()
-            .map(|(l, (&p, &on))| {
-                let matrices = on.then(|| {
-                    let n = Layout::new(p).len();
-                    let mut identity = vec![0.0; n * n];
-                    for j in 0..n {
-                        identity[j * n + j] = 1.0;
-                    }
-                    let mut columns = vec![0.0; 2 * n * n];
-                    let mut values = Vec::with_capacity(M2L_OFFSET_COUNT * 2 * n * n);
-                    for d in 0..M2L_OFFSET_COUNT {
-                        // Vector j of n is e_j; its local is column j, two planes.
-                        columns.fill(0.0);
-                        tables.m2l(l, d, &identity, 1, &mut columns, n, &mut scratch);
-                        values.extend(columns.iter().map(|&v| T::from_f64(v)));
-                    }
-                    values
-                });
-                (p, matrices)
-            })
+            .map(|(l, (&p, &on))| (p, on.then(|| matrices(&tables, l, 0..M2L_OFFSET_COUNT))))
             .collect();
         Self { levels }
     }
@@ -200,25 +181,57 @@ impl<T: RealScalar> DenseM2l<T> {
             .chunks_exact(planes * n)
             .zip(local.chunks_exact_mut(2 * n))
         {
-            if planes == 1 {
-                for (column, &x) in a.chunks_exact(2 * n).zip(m) {
-                    for (y, &e) in l.iter_mut().zip(column) {
-                        *y = *y + e * x;
-                    }
-                }
-                continue;
+            apply(a, n, planes, m, l);
+        }
+    }
+}
+
+/// The matrices of `offsets` on `level`, one after the other: column j of each Rotation's
+/// M2L of e_j (one real plane) into zeros, in f64, rounded to T (module documentation,
+/// "Build").
+pub(super) fn matrices<T: RealScalar>(
+    tables: &HelmholtzTables<f64>,
+    level: usize,
+    offsets: impl ExactSizeIterator<Item = usize>,
+) -> Vec<T> {
+    let n = Layout::new(tables.degree(level)).len();
+    let mut scratch = tables.scratch();
+    let mut identity = vec![0.0; n * n];
+    for j in 0..n {
+        identity[j * n + j] = 1.0;
+    }
+    let mut columns = vec![0.0; 2 * n * n];
+    let mut values = Vec::with_capacity(offsets.len() * 2 * n * n);
+    for d in offsets {
+        // Vector j of n is e_j; its local is column j, two planes.
+        columns.fill(0.0);
+        tables.m2l(level, d, &identity, 1, &mut columns, n, &mut scratch);
+        values.extend(columns.iter().map(|&v| T::from_f64(v)));
+    }
+    values
+}
+
+/// Adds the M2L of one multipole `m` of `planes` planes by the 2n × n matrix `a` to one
+/// complex local `l` (module documentation, "Application").
+#[inline]
+pub(super) fn apply<T: RealScalar>(a: &[T], n: usize, planes: usize, m: &[T], l: &mut [T]) {
+    if planes == 1 {
+        for (column, &x) in a.chunks_exact(2 * n).zip(m) {
+            for (y, &e) in l.iter_mut().zip(column) {
+                *y = *y + e * x;
             }
-            let (m_r, m_i) = m.split_at(n);
-            let (l_r, l_i) = l.split_at_mut(n);
-            for ((column, &x_r), &x_i) in a.chunks_exact(2 * n).zip(m_r).zip(m_i) {
-                let (a_r, a_i) = column.split_at(n);
-                for ((y_r, y_i), (&e_r, &e_i)) in
-                    l_r.iter_mut().zip(l_i.iter_mut()).zip(a_r.iter().zip(a_i))
-                {
-                    *y_r = *y_r + e_r * x_r - e_i * x_i;
-                    *y_i = *y_i + e_i * x_r + e_r * x_i;
-                }
-            }
+        }
+        return;
+    }
+    let (m_r, m_i) = m.split_at(n);
+    let (l_r, l_i) = l.split_at_mut(n);
+    for ((column, &x_r), &x_i) in a.chunks_exact(2 * n).zip(m_r).zip(m_i) {
+        let (a_r, a_i) = column.split_at(n);
+        for ((y_r, y_i), (&e_r, &e_i)) in
+            l_r.iter_mut().zip(l_i.iter_mut()).zip(a_r.iter().zip(a_i))
+        {
+            *y_r = *y_r + e_r * x_r - e_i * x_i;
+            *y_i = *y_i + e_i * x_r + e_r * x_i;
         }
     }
 }

@@ -252,16 +252,17 @@ impl HelmholtzFmmBuilder {
     }
 
     /// The M2L of the levels (default [`HelmholtzM2l::Rotation`]; the operator module
-    /// documentation, "M2L"). Under [`HelmholtzM2l::Dense`] the output agrees with
-    /// Rotation's to rounding, not bit for bit.
+    /// documentation, "M2L"). Under [`HelmholtzM2l::Dense`] and [`HelmholtzM2l::Classes`]
+    /// the output agrees with Rotation's to rounding, not bit for bit.
     pub fn m2l(mut self, choice: HelmholtzM2l) -> Self {
         self.m2l = choice;
         self
     }
 
-    /// The bytes of the dense M2L tables of each rank under [`HelmholtzM2l::Dense`]
-    /// (default [`DEFAULT_DENSE_BUDGET`]): the levels that fit, from the finest level up,
-    /// run Dense, the others RCR.
+    /// The bytes of the dense M2L tables of each rank under [`HelmholtzM2l::Dense`], and of
+    /// the class tables with their transforms under [`HelmholtzM2l::Classes`] (default
+    /// [`DEFAULT_DENSE_BUDGET`]): the levels that fit, from the finest level up, run Dense or
+    /// Classes, the others RCR.
     pub fn dense_budget(mut self, bytes: usize) -> Self {
         self.dense_budget = bytes;
         self

@@ -27,9 +27,9 @@
 //! - **Times.** The build and the evaluation, wall time of the slowest rank.
 //! - **P2P kernel.** [`Case::p2p`] (Helmholtz CH3.4c): `Auto` by default, `Reference` for
 //!   the times before the vectorised kernel; [`Row::p2p`] the kernel that ran.
-//! - **M2L.** [`Case::m2l`] and [`Case::dense_budget`] (Helmholtz CH3.2a): Rotation by
-//!   default, or Dense on the levels whose tables fit the budget; [`Row::dense_levels`]
-//!   and [`Row::dense_bytes`] what ran.
+//! - **M2L.** [`Case::m2l`] and [`Case::dense_budget`] (Helmholtz CH3.2a, CH3.2b):
+//!   Rotation by default, or Dense or Classes on the levels whose tables fit the budget;
+//!   [`Row::m2l`], [`Row::dense_levels`] and [`Row::dense_bytes`] what ran.
 
 use std::ops::Range;
 use std::thread;
@@ -73,7 +73,8 @@ pub struct Case {
     pub p2p: P2pChoice,
     /// The FMM's M2L.
     pub m2l: HelmholtzM2l,
-    /// The bytes of the dense M2L tables per rank under [`HelmholtzM2l::Dense`].
+    /// The bytes of the dense or class M2L tables per rank under [`HelmholtzM2l::Dense`]
+    /// or [`HelmholtzM2l::Classes`].
     pub dense_budget: usize,
 }
 
@@ -379,9 +380,11 @@ pub struct Row {
     pub threads: usize,
     /// The P2P kernel that ran (never `Auto`).
     pub p2p: P2pChoice,
-    /// Per level, whether its M2L ran Dense (else RCR).
+    /// The M2L setting.
+    pub m2l: HelmholtzM2l,
+    /// Per level, whether its M2L ran the setting's tables, Dense or Classes (else RCR).
     pub dense_levels: Vec<bool>,
-    /// The bytes of the dense M2L tables per rank.
+    /// The bytes of the dense or class M2L tables per rank.
     pub dense_bytes: usize,
     /// The ranks.
     pub ranks: usize,
@@ -506,10 +509,11 @@ pub fn run_output<C: CommunicatorCollectives>(
     let row = Row {
         threads,
         p2p: fmm.p2p_kernel(),
+        m2l: fmm.operator().m2l_choice(),
         dense_levels: (0..fmm.nlevels())
-            .map(|l| fmm.operator().m2l_on(l) == HelmholtzM2l::Dense)
+            .map(|l| fmm.operator().m2l_on(l) != HelmholtzM2l::Rotation)
             .collect(),
-        dense_bytes: fmm.operator().dense_bytes(),
+        dense_bytes: fmm.operator().dense_bytes() + fmm.operator().class_bytes(),
         ranks: size,
         levels: fmm.nlevels(),
         min_leaf_level: fmm.min_leaf_level(),

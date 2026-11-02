@@ -1541,10 +1541,75 @@ request, using this template:
   change; `fmm-validate/Cargo.toml` gains an `[[example]]`).
 - Decisions: none taken. Questions for sign-off (the PR): 1. Dense stays opt-in, no Auto
   rule until CH3.2c; 2. Dense's two-plane chain is what CH3.2c's Batched reproduces bit for
-  bit or declares within rounding; 3. `DEFAULT_DENSE_BUDGET` 1 GiB per rank, no node budget.
+  bit or declares within rounding; 3. `DEFAULT_DENSE_BUDGET` 1 GiB per rank, no node budget. Signed
+  off 2026-11-02, the user, after the merge: "i agree with the recommendations" (1–3 as
+  recommended).
 - Laplace: not touched (no Laplace file, no driver; `nd-fmm-tables` gains a submodule of
   `helmholtz` only).
 - Follow-ups:
   - CH3.2b (Classes): 16 class tables per level, about 20× less to read per level.
   - CH3.2c (Batched): where dense tables can pay, read once per block of targets.
   - The M2L y-blocks of `HelmholtzTables` are still stored for a level that runs Dense.
+
+## 2026-11-02: CH3.2b Classes
+- Done:
+  - CH3.2a's sign-offs recorded first (8693987; the user, after #171 merged: "i agree with
+    the recommendations").
+  - `nd_fmm_tables::helmholtz::classes`: `CubeTransforms` (Oⁿ(P) of the orthonormal
+    coefficients for the 48 elements of O_h: rotations factored into quarter turns about z
+    and y, the y-block of π/2 from `orthonormal::rotation::y_blocks` at cos 0, sin 1
+    exactly; Oⁿ(P) = (−1)ⁿ Oⁿ(−P) for improper P; the 16 elements that fix the z-axis exact
+    signed permutations, the 32 others dense per-degree blocks), and `ClassM2l` (per level
+    the 16 class matrices by `DenseM2l`'s build, bit for bit its matrices of the
+    representatives; per pair O(Pᵀ), Dense's chain into zeroed scratch, O(P) added;
+    `select` from the finest level up with the transforms charged; `ClassScratch`).
+    `helmholtz::dense`'s build and chain moved into shared helpers, the same operations.
+  - `nd_fmm_exec::helmholtz`: `HelmholtzM2l::Classes` (`with_m2l` within the dense budget,
+    `m2l_on`, `class_bytes`, the class scratch per thread), the builder's `dense_budget`
+    covering both.
+  - `nd-fmm-validate`: `helmholtz_m2l` with Classes (all offsets, the z-axis and moving
+    offsets apart, the transforms alone, bytes and build), `helmholtz_accuracy --m2l
+    classes` (`Row::m2l`). Report `fmm-validate/results/helmholtz-ch3-2b.md`; record
+    `docs/helmholtz/tasks/CH3.2b.md`.
+- Tests: `fmm-tables/tests/helmholtz/classes.rs` (**Y**_n(P x̂) = Oⁿ(P) **Y**_n(x̂) for all 48
+  P at p = 12, 2.2e-15; orthogonality, the homomorphism, the z-axis elements' structure
+  including the x–y exchanges, −I; every offset of levels 2–4 for five k̂ against Dense,
+  3.7e-14 per unit of conditioning within 2e-13; the class matrices and the representatives
+  bit for bit Dense; vectors, one plane against two, f32, `select`, refusals);
+  `fmm-exec/tests/helmholtz/dense.rs` (pair by pair against Rotation and Dense, 5.6e-15
+  within 5e-14; the budget; a zero budget bit for bit Rotation); `tests/helmholtz_fmm.rs`
+  `check_tables` for Dense and Classes on two scenarios (Classes 2.4e-16 of Rotation's output
+  within 1e-14; 2 threads, pair by pair, the one-rank FMM bit for bit; the finest level
+  alone). One-rank debug run 61 → 69 s on the M6.
+- Runs (M6, release, one rank, one thread, BLAS threads 1, both examples rebuilt first, the
+  launches started after the user confirmed the machine quiet, every launch gated, none
+  void): `helmholtz_m2l` at p = 3–20 twice: Classes 1.27–1.31× Rotation's speed at p = 3,
+  level at 5, 0.71–0.75× at 7, 0.22× at 20; 0.48–0.51× Dense's at p = 3 (transforms about
+  half the pair), 0.86–1.00× from p = 12 (6–11 %); tables 1.2, 18 and 53 MB at p = 7, 15,
+  20 (Dense 21, 331, 983), built in at most 0.07 s. `helmholtz_accuracy --m2l` in both orders
+  on CH3.2a's cases: Classes 1.23–1.25× Rotation's evaluation on the W4 cube at 10⁻³ and W3,
+  1.7–3.0× on W1 and at 10⁻⁶, 1.07–1.42× Dense's; errors Rotation's to the printed digits,
+  checksums the same in both launches.
+- Checks: `/verify` on the M6: format; Clippy default, examples and workspace all-targets;
+  `cargo doc`; `cargo test` (1,156) and `--workspace` (1,238); the MPI list at 2 and 4 ranks,
+  24 of 24 (`helmholtz_fmm` 62 and 49 s); after the review's fixes again format, workspace
+  Clippy, `nd-fmm-exec`'s `helmholtz` tests, `nd-fmm-tables`' tests and the docs. A
+  self-review by a subagent: no blocking finding; its points taken (the plan brought in line
+  with the code, the x–y exchange test, recorded measurements, doc wording, a test constant
+  from the degrees, the example's transposes hoisted out of the timed loop). Not run: locust
+  and Kathleen (CH3.2c's); D9 (Laplace untouched); the licence check (no dependency change).
+- Decisions: none taken. Questions for sign-off (the PR): 1. Classes stays opt-in, no Auto
+  rule until CH3.2c; 2. Classes shares Dense's budget, the transforms counted; 3. whether
+  §3.15 should state the orthonormal transforms at its next version bump (they follow from
+  §3.12 and §3.15 as they stand); 4. the correction of CH3.2a's "bound by memory" (the
+  arithmetic binds per pair), left in this report rather than in CH3.2a's. Signed off
+  2026-11-02, the user: "i agree with the recommendations" (1: opt-in; 2: the shared budget,
+  CH3.2c's rule decides the levels; 3: §3.15 at its next bump, not now; 4: the correction
+  here, CH3.2a's report unchanged).
+- Laplace: not touched (no Laplace file, no driver; `nd-fmm-tables` gains a submodule of
+  `helmholtz`, Laplace's `symmetry` used, not changed).
+- Follow-ups:
+  - The dense transforms on the compact y-block with two signed permutations: about half
+    their multiply–adds ((n + 1)² + n² of (2n + 1)² entries are non-zero).
+  - CH3.2c: the batched M2L, where tables can pay; Classes' tables could carry it to
+    degrees where Dense's do not fit if the transforms batch too.
