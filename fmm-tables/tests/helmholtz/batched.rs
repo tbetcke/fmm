@@ -23,10 +23,10 @@ fn planes_are_dense_matrices_split() {
         let batched = BatchedM2l::<f64>::build(k, &DEGREES, &LEVELS);
         assert_eq!(batched.nlevels(), DEGREES.len());
         assert_eq!(batched.bytes(), dense.bytes());
-        for level in 2..DEGREES.len() {
+        for (level, &p) in DEGREES.iter().enumerate().skip(2) {
             assert!(batched.is_batched(level));
-            assert_eq!(batched.degree(level), DEGREES[level]);
-            let n = Layout::new(DEGREES[level]).len();
+            assert_eq!(batched.degree(level), p);
+            let n = Layout::new(p).len();
             for d in 0..M2L_OFFSET_COUNT {
                 let a = dense.matrix(level, d);
                 let (a_r, a_i) = batched.planes(level, d);
