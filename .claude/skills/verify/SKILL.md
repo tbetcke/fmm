@@ -41,6 +41,10 @@ The tests of MPI crates need a working MPI.
   `.github/scripts/run-mpi-tests.sh build <list>`, then `run <list> 2 4`, on macOS with
   `MPIRUN_FLAGS="--mca btl_tcp_if_include lo0 --mca oob_tcp_if_include lo0"`, under an
   external timeout. For distributed changes also 8 ranks by hand.
+- **Debug test time**: for each test executable the change adds to, time its one-rank
+  debug run and report it beside the figure the crate's `CLAUDE.md` records. Flag a run
+  above the crate's budget (nd-fmm-exec: the debug run under a minute) or one that grew
+  by more than about 20 %.
 - **Spikes**: their own tests (they are not default members), reported apart.
 - **Manifests or pins**: `cargo tree -e normal` on the default members lists no `fftw-sys`;
   `cargo deny check licenses` once CI has it; `cargo check --workspace --all-targets`.
@@ -55,7 +59,7 @@ drivers, `nd-fmm-tables`, `nd-fmm-simd`, `nd-fmm-math` as Laplace uses it, `nd-o
   they do not cover the changed path, Laplace's outputs on `main` and on the branch with the
   same settings, compared bit for bit;
 - Laplace's benchmarks within noise as D9 defines it (`docs/helmholtz/roadmap.md`), against
-  `main` on the M3 Max, locust and Kathleen: `tools/bench/run.sh` (on locust through
+  `main` on the M6, locust and Kathleen (D9, amended 2026-10-31): `tools/bench/run.sh` (on locust through
   `tools/gh200/remote.sh`) and Kathleen's jobs. These are machine runs: pending, with their
   commands, until they have run.
 
@@ -65,7 +69,7 @@ What the plan names: on locust `tools/gh200/sync.sh`, then the checks above that
 Metal through `tools/gh200/remote.sh '<command>'`; on Kathleen `tools/kathleen/sync.sh`,
 then `tools/kathleen/submit.sh check.sbatch`, `mpi.sbatch 1 2 4 8`, and
 `correctness.sbatch` for structural changes (never on the login node, never more nodes than
-`tools/kathleen/README.md` allows); Metal on the M3 Max outside the sandbox.
+`tools/kathleen/README.md` allows); Metal on the M6 outside the sandbox.
 
 ## 6. Report
 

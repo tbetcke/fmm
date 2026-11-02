@@ -29,8 +29,13 @@ in the current message.
 
 ## 1. Sync the open task PRs
 
-`gh pr list --state open --author "@me" --json number,title,headRefName,isDraft,url`, the
-branches `tbetcke/h-*`. For each, in roadmap order:
+First `main`'s CI: `gh run list --branch main --limit 5`. Report every job that failed or
+was cancelled since the last pass (`gh run view <id> --json jobs`). A job cancelled by its
+`timeout-minutes` is a defect of its own: say so and propose a separate small fix before
+the next task is taken. A cancellation on `main` after a merge is seen by no other step.
+
+Then `gh pr list --state open --author "@me" --json number,title,headRefName,isDraft,url`,
+the branches `tbetcke/h-*`. For each, in roadmap order:
 
 1. **CI failing** (`gh pr checks <n>`): fixing it is this run's task. Switch to its branch,
    fix, `/verify`, push, update the PR, and go to step 10.
@@ -44,7 +49,10 @@ branches `tbetcke/h-*`. For each, in roadmap order:
    pending `gh pr ready <n>`. Still queued or running: note it and go on.
 4. **Draft waiting for a sign-off**: if the roadmap's decision table or the user's message
    now has the answer, record it (step 2's wording) on that branch, push and mark it ready.
-5. **Ready and green**: nothing to do; it waits for the user's merge.
+5. **Ready and green**: it waits for the user's merge. Compare each job's time on its
+   latest run with the job's `timeout-minutes` (`gh run view <id> --json jobs`: `startedAt`
+   and `completedAt`); above about two thirds of the limit, note it in the PR and propose
+   raising the limit.
 
 Merged PRs need no bookkeeping: their roadmap tick and progress entry were part of them. If
 item 1 or 2 applied, that was this run's task: stop at step 10 after it.
@@ -148,7 +156,8 @@ Otherwise go on without asking.
 Run `/verify` with this task's plan. Machine runs go through `tools/`: locust
 `tools/gh200/sync.sh`, then `tools/gh200/remote.sh '<command>'`; Kathleen
 `tools/kathleen/sync.sh`, then `tools/kathleen/submit.sh <job>` (never on the login node);
-Metal on the M3 Max outside the sandbox. Run long jobs in the background and keep working.
+Metal on the M6 outside the sandbox. Ask the user before any timing run on the M6: they
+run other jobs on it. Run long jobs in the background and keep working.
 A run that has not finished when the rest is done goes under "Pending runs" with machine,
 command, job id and what it decides. Never report an unrun check as passing.
 
@@ -163,6 +172,10 @@ rules of root `CLAUDE.md`. Fix what blocks; list the rest in the PR text.
 
 On the branch:
 - tick the task in `docs/helmholtz/roadmap.md`, adding the report's path;
+- update the roadmap's status line: the date, the task just done, what comes next;
+- give every follow-up that a sign-off or the work creates ("a follow-up before H4", "left
+  to CH4.3") a roadmap line in the same PR: a new task with *Done when* and *Needs*, or a
+  sentence in the task it belongs to. The progress entry's follow-ups name that line;
 - append to `docs/helmholtz/progress.md`, using its template;
 - where the work shows the proposal wrong, do not edit it silently: put the correction in
   the PR as a question for sign-off.
