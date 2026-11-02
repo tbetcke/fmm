@@ -181,3 +181,9 @@ For sign-off, in the PR:
    class tables, in cache, take Dense's time within 5 % from p = 6) shows the arithmetic
    binds. The correction is in this report and the progress log; CH3.2a's report is left
    as it was merged.
+
+Signed off 2026-11-02, the user: "i agree with the recommendations". So Classes stays opt-in
+with no Auto rule until CH3.2c (1); Classes keeps sharing Dense's budget, the transforms
+counted, and CH3.2c's Auto rule decides the levels (2); §3.15 states the orthonormal
+transforms at its next version bump, not now (3); and the correction of CH3.2a's "bound by
+memory" stays in this report and the progress log, CH3.2a's report unchanged (4).

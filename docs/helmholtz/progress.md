@@ -1602,7 +1602,10 @@ request, using this template:
   rule until CH3.2c; 2. Classes shares Dense's budget, the transforms counted; 3. whether
   §3.15 should state the orthonormal transforms at its next version bump (they follow from
   §3.12 and §3.15 as they stand); 4. the correction of CH3.2a's "bound by memory" (the
-  arithmetic binds per pair), left in this report rather than in CH3.2a's.
+  arithmetic binds per pair), left in this report rather than in CH3.2a's. Signed off
+  2026-11-02, the user: "i agree with the recommendations" (1: opt-in; 2: the shared budget,
+  CH3.2c's rule decides the levels; 3: §3.15 at its next bump, not now; 4: the correction
+  here, CH3.2a's report unchanged).
 - Laplace: not touched (no Laplace file, no driver; `nd-fmm-tables` gains a submodule of
   `helmholtz`, Laplace's `symmetry` used, not changed).
 - Follow-ups:
