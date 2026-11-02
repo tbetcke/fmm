@@ -1520,13 +1520,16 @@ request, using this template:
   Rotation, 7.9e-16 measured, and the direct-sum bound; 2 threads, pair by pair and the
   one-rank FMM bit for bit; the finest level alone). One-rank debug run 46 → 61 s on the
   M6, 7 s in release.
-- Runs (M6, release, one rank, one thread, BLAS threads 1): `helmholtz_m2l` at p = 3–20:
-  Dense faster per pair to p = 5 (2.5–2.8× at p = 3), level at 6–7, 0.42× at p = 12 and
+- Runs (M6, release, one rank, one thread, BLAS threads 1, every launch behind a quiet
+  gate): `helmholtz_m2l` at p = 3–20, two launches:
+  Dense faster per pair to p = 5 (2.5–2.7× at p = 3), level at 6–7, 0.42× at p = 12 and
   0.22× at p = 20 (memory-bound: 2 (p + 1)⁴ values per pair); tables 21 MB at p = 7, 331 MB
   at 15, 983 MB at 20 per level, built in 0.02–1.4 s. `helmholtz_accuracy --m2l` both orders
   on W1 at kD = 30 and 100, the W4 cube at kD = 10 and W3 at kD = 30, ε = 10⁻³ and 10⁻⁶:
-  Dense 1.4–4.6× slower to evaluate, the errors Rotation's to the printed digits, each
-  strategy's checksum the same in both launches.
+  Dense 0.97–1.03× Rotation's evaluation time at p = 7 (the cube and W3 at 10⁻³), 1.5–2.6×
+  above, the errors Rotation's to the printed digits, each strategy's checksum the same in
+  both launches. The first, ungated runs had timed §2 on a `helmholtz_accuracy` built before
+  the one-pass chain (1.4–4.6×); rerun at the user's question about a quiet machine.
 - Checks: `/verify` on the M6: format; Clippy default, examples and workspace all-targets;
   `cargo doc`; `cargo test` (1,137) and `--workspace` (1,219); `helmholtz_fmm` in release at
   one rank; the MPI list at 2 and 4 ranks, 26 of 26 (`helmholtz_fmm` 75 and 72 s;

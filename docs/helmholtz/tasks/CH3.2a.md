@@ -131,8 +131,14 @@ As run (2026-11-02; the report's §2): W1 at kD = 30 and 100, the W4 cube at kD 
 W3 at kD = 30 (added: a deeper tree at low frequency), at ε = 10⁻³ and 10⁻⁶ (W3 at 10⁻³
 only). Not run: W1 at kD = 10 (a three-level tree, one V level) and ε = 10⁻⁸ (p ≥ 24 on
 the low-frequency levels, 2.0 GB of tables per level, above the default budget, so the
-runs would be Rotation's but for the finest levels; and Dense was already 3.4–4.6× slower
+runs would be Rotation's but for the finest levels; and Dense was already 2.0–2.6× slower
 at 10⁻⁶).
+
+Rerun on 2026-11-02 at 5fedcd8 behind a quiet gate (the user asked whether the first runs
+had a quiet machine; they had not been gated), both examples rebuilt first, every launch
+gated (other processes at most 1.5 cores before, 2 during; none void): §1 unchanged within
+2 %, but §2's first runs had used a `helmholtz_accuracy` built before df11179, so they
+timed the former two-pass Dense (1.4–4.6×). The report now has the rerun (report §3).
 
 ## Constraints and risks
 
@@ -159,8 +165,8 @@ None: the M6 runs are in the report; locust and Kathleen are CH3.2c's.
 
 For sign-off, in the PR:
 1. Dense stays opt-in (`HelmholtzM2l::Rotation` the default) with no Auto rule: it is
-   slower than Rotation end to end in every case measured (1.4–4.6×) and per pair from
-   p ≈ 7. The per-level rule waits for CH3.2c, which measures all four strategies on the
+   level with Rotation end to end at p = 7 (0.97–1.03×) and slower above (1.5–2.6×), and
+   per pair slower from p ≈ 7. The per-level rule waits for CH3.2c, which measures all four strategies on the
    three machines.
 2. Dense's two-plane chain (one pass, L_r ← (L_r + A_r M_r) − A_i M_i and
    L_i ← (L_i + A_i M_r) + A_r M_i per k) is what CH3.2c's Batched reproduces bit for bit,
