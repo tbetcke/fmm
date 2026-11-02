@@ -214,7 +214,23 @@ fn a_level_without_tables_is_refused() {
 }
 
 #[test]
+#[should_panic(expected = "multipole length")]
+fn a_short_multipole_is_refused() {
+    let dense = DenseM2l::<f64>::build(Complex::new(1.0, 0.0), &[0, 0, 3], &[false, false, true]);
+    let len = Layout::new(3).len();
+    dense.m2l(2, 0, &vec![0.0; len - 1], 1, &mut vec![0.0; 2 * len], 1);
+}
+
+#[test]
+#[should_panic(expected = "local length")]
+fn a_one_plane_local_is_refused() {
+    let dense = DenseM2l::<f64>::build(Complex::new(1.0, 0.0), &[0, 0, 3], &[false, false, true]);
+    let len = Layout::new(3).len();
+    dense.m2l(2, 0, &vec![0.0; len], 1, &mut vec![0.0; len], 1);
+}
+
+#[test]
 #[should_panic(expected = "levels 0 and 1")]
-fn dense_tables_above_level_2_are_refused() {
+fn dense_tables_on_levels_0_and_1_are_refused() {
     DenseM2l::<f64>::build(Complex::new(1.0, 0.0), &[0, 3, 3], &[false, true, true]);
 }

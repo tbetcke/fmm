@@ -95,8 +95,10 @@ fn arguments() -> Arguments {
                 .is_some(),
             "--max-mb" => value
                 .parse::<usize>()
-                .map(|mb| parsed.max_bytes = mb << 20)
-                .is_ok(),
+                .ok()
+                .and_then(|mb| mb.checked_mul(1 << 20))
+                .map(|bytes| parsed.max_bytes = bytes)
+                .is_some(),
             _ => false,
         };
         if !ok {

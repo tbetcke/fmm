@@ -57,9 +57,11 @@ convention, no manifest dependency.
     `HelmholtzTables::build`). Constraint 9: a function of the degrees and the budget only.
   - Application `m2l(level, d, multipole, planes, local, vectors)`, adding (+=) per vector:
     one plane (real multipole): L[r] ← L[r] + A[r, k] M[k], k ascending, for the 2n rows;
-    two planes: first the real plane as above, then the imaginary plane, k ascending,
-    L_r[r] ← L_r[r] − A_i[r, k] M_i[k] and L_i[r] ← L_i[r] + A_r[r, k] M_i[k]; each product
-    and sum rounded apart, as `MatrixSet::apply`. Each vector gets the one-vector chain.
+    two planes (as built, df11179: one pass over the table, after the first measurement
+    showed the two-pass form reading each table twice), k ascending,
+    L_r[r] ← (L_r[r] + A_r[r, k] M_r[k]) − A_i[r, k] M_i[k] and
+    L_i[r] ← (L_i[r] + A_i[r, k] M_r[k]) + A_r[r, k] M_i[k]; each product and sum rounded
+    apart, as `MatrixSet::apply`. Each vector gets the one-vector chain.
   - Accessors: `is_dense(level)`, `matrix(level, d)`, `bytes()`, `degree(level)`.
 - `nd_fmm_exec::helmholtz`:
   - `HelmholtzM2l` (public enum): `Rotation` (the default) and `Dense`; and
@@ -68,10 +70,12 @@ convention, no manifest dependency.
   - `HelmholtzOperator::with_m2l(choice, dense_budget)` (or a builder-style setter after
     `new`; the tables built once): under `Dense`, `DenseM2l` on the levels of `select`,
     `Kernel::m2l` dispatching per level by `is_dense` (one branch per pair, Helmholtz only;
-    Rotation keeps `HelmholtzTables::m2l`). `m2l_levels()` reports the choice per level
-    (`Rotation` or `Dense`), `dense_bytes()` the tables' bytes.
-  - `HelmholtzFmmBuilder::{m2l, dense_budget}`, `HelmholtzFmm::m2l_levels`; the build time
-    of the tables in what the FMM reports (or measured by the example).
+    Rotation keeps `HelmholtzTables::m2l`). As built: `m2l_choice()` the setting,
+    `m2l_on(level)` the M2L of a level (`Rotation` or `Dense`), `dense_bytes()` the
+    tables' bytes.
+  - `HelmholtzFmmBuilder::{m2l, dense_budget}`; the FMM reports through
+    `HelmholtzFmm::operator()` (no accessor of its own); the build time is in the
+    builds' times of `helmholtz_accuracy`.
   - Docs: the operator module's table and "Execution"; `fmm-exec/CLAUDE.md`'s Helmholtz
     operator rule.
 - `nd-fmm-validate`:
@@ -98,13 +102,14 @@ convention, no manifest dependency.
     without Dense, wrong lengths).
 - `fmm-exec/tests/helmholtz/operator.rs`: the operator under `Dense` pair by pair against
   `Rotation` on every offset of a level within the same bound, real and complex k and
-  charges; `m2l_levels` against `select`.
+  charges; `m2l_on` against `select`.
 - `fmm-exec/tests/helmholtz_fmm.rs` (in CI's MPI list): on two scenarios (one real k with
   real charges, one complex k with complex charges) the FMM under `Dense` against the
   direct sum within the scenario's tolerance and against `Rotation`'s output within 1e-12
   relative ℓ2; at 1, 2 (and 4 in debug only if cheap) threads and pair by pair bit for bit;
-  on P ranks the one-rank FMM bit for bit; a budget that leaves the finest level to
-  Rotation still correct. Keep the one-rank debug run's growth small (report it).
+  on P ranks the one-rank FMM bit for bit; a budget of the finest level alone (Dense
+  there, RCR on the coarser levels, the mixed case of the finest-first selection) still
+  correct. Keep the one-rank debug run's growth small (report it).
 - f64 throughout for the FMM (D3); f32 only for the tables' rounding.
 
 ## Checks
@@ -121,6 +126,13 @@ The M6 only (release, BLAS threads 1, one thread unless named): `helmholtz_m2l` 
 kD = 10) at ε = 10⁻³, 10⁻⁶, 10⁻⁸, against Rotation, both orders. They decide nothing for
 the defaults (Rotation stays the default), and feed CH3.2c's rule. locust and Kathleen are
 CH3.2c's.
+
+As run (2026-11-02; the report's §2): W1 at kD = 30 and 100, the W4 cube at kD = 10 and
+W3 at kD = 30 (added: a deeper tree at low frequency), at ε = 10⁻³ and 10⁻⁶ (W3 at 10⁻³
+only). Not run: W1 at kD = 10 (a three-level tree, one V level) and ε = 10⁻⁸ (p ≥ 24 on
+the low-frequency levels, 2.0 GB of tables per level, above the default budget, so the
+runs would be Rotation's but for the finest levels; and Dense was already 3.4–4.6× slower
+at 10⁻⁶).
 
 ## Constraints and risks
 
@@ -141,8 +153,17 @@ CH3.2c's.
 
 ## Pending runs
 
-None yet.
+None: the M6 runs are in the report; locust and Kathleen are CH3.2c's.
 
 ## Open questions
 
-None yet.
+For sign-off, in the PR:
+1. Dense stays opt-in (`HelmholtzM2l::Rotation` the default) with no Auto rule: it is
+   slower than Rotation end to end in every case measured (1.4–4.6×) and per pair from
+   p ≈ 7. The per-level rule waits for CH3.2c, which measures all four strategies on the
+   three machines.
+2. Dense's two-plane chain (one pass, L_r ← (L_r + A_r M_r) − A_i M_i and
+   L_i ← (L_i + A_i M_r) + A_r M_i per k) is what CH3.2c's Batched reproduces bit for bit,
+   or states that it equals only to rounding (an epilogue of four products reorders it).
+3. `DEFAULT_DENSE_BUDGET` is 1 GiB per rank, with no node budget (node-m2l.md) until an
+   Auto rule exists.

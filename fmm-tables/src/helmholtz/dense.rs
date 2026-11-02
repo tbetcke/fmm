@@ -81,7 +81,7 @@ impl<T: RealScalar> DenseM2l<T> {
     }
 
     /// Builds the tables of the levels with `levels[l]` set, for the root's k̂₀ = k r₀ and
-    /// the degrees p_l (module documentation, "Build").
+    /// the degrees p_l (module documentation, "Build"); with no level set, builds nothing.
     ///
     /// # Panics
     ///
@@ -99,6 +99,11 @@ impl<T: RealScalar> DenseM2l<T> {
             levels.iter().take(2).all(|&on| !on),
             "no dense M2L on levels 0 and 1: they have no V list"
         );
+        if !levels.contains(&true) {
+            return Self {
+                levels: degrees.iter().map(|&p| (p, None)).collect(),
+            };
+        }
         let tables = HelmholtzTables::<f64>::build(k_root, degrees, DEFAULT_BLOCK_BUDGET);
         let mut scratch = tables.scratch();
         let levels = degrees

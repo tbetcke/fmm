@@ -16,9 +16,9 @@ use super::common::Rng;
 
 const LEVELS: usize = 5;
 
-/// Dense against Rotation, relative L2 over a local: the tables' agreement (4e-14 in the
-/// FMM-weighted measure in `nd-fmm-tables`) with room for the plain L2 of random inputs.
-const DENSE_BOUND: f64 = 1e-12;
+/// Dense against Rotation, relative L2 over a local: the same coefficients summed in
+/// another order, so rounding (at most 7.2e-16 on the M6), with a margin of about ten.
+const DENSE_BOUND: f64 = 1e-14;
 
 fn domain() -> Domain {
     Domain::new(&PhysicalBox::new([0.0, 0.0, 0.0, 1.0, 1.0, 1.0])).unwrap()
@@ -114,7 +114,7 @@ fn the_budget_chooses_the_levels() {
     let budget =
         DenseM2l::<f64>::level_bytes(degrees[4]) + DenseM2l::<f64>::level_bytes(degrees[2]);
     assert!(
-        degrees[3] >= degrees[2],
+        degrees[3] > degrees[2],
         "the middle level's tables are the larger"
     );
     let op = operator(k, ChargeKind::Complex, 1, HelmholtzM2l::Dense, budget);

@@ -14,9 +14,9 @@ nothing here is timed for a gate, and nothing decides a default.
   for five k̂ (real and complex, |k̂| a from 0.005 to 17), one and two multipole planes:
   at most 3.7e-14 per unit of conditioning in the FMM-weighted measure (`nd-fmm-tables`'s
   `tests/helmholtz/dense.rs`; the bound 2e-13 is Rotation's against `rcr`), 3.4e-15
-  against `rcr` directly. Pair by pair in the operator at most 7.9e-16 relative L2
-  (`nd-fmm-exec`'s `tests/helmholtz/dense.rs`); in the FMM at most 7.6e-16 (φ) and
-  4.5e-16 (∇φ) of Rotation's output, with the same errors against the direct sum to the
+  against `rcr` directly. Pair by pair in the operator at most 7.2e-16 relative L2
+  (`nd-fmm-exec`'s `tests/helmholtz/dense.rs`, within 1e-14); in the FMM at most 7.9e-16
+  (φ) and 4.6e-16 (∇φ) of Rotation's output (within 1e-14), with the same errors against the direct sum to the
   printed digits, the same bits at 1 and 2 threads, pair by pair, and on P ranks the
   one-rank FMM's (`tests/helmholtz_fmm.rs`, at 1, 2 and 4 ranks).
 - **Per pair, Dense is faster than Rotation only at small p.** On one level with the 316
@@ -86,8 +86,9 @@ always two. ns per pair:
 | 20 | 1 + 0.1i | 2 | 12291 | 53573 | 0.23 | 983 | 1.40 | 7.0e-16 |
 
 The cost per pair does not depend on k (the tables' sizes and the operations are p's),
-which the two k̂ rows show. Rotation grows as p³ (161 ns at p = 3 to 12.3 µs at p = 20 with
-two planes), Dense as (p + 1)⁴: its two-plane rows read the table once (one pass, the four
+which the two k̂ rows show. Over the measured range Rotation's time grows about 60-fold
+(197 ns at p = 3 to 12.3 µs at p = 20 with two planes), Dense's about 700-fold (72 ns to
+53 µs), close to the 2 (p + 1)⁴ values of its table: its two-plane rows read the table once (one pass, the four
 real products combined per k) and cost 1.1–1.3 times the one-plane rows.
 
 ## 2. End to end
@@ -112,8 +113,8 @@ budget; the levels above them ran Rotation.
   every case (for instance 4.15e-5 and 1.36e-4 on W1 at kD = 100, ε = 10⁻³; 6.08e-8 and
   2.69e-7 on the cube at 10⁻⁶). The checksums differ between the two strategies (Dense is
   Rotation to rounding, not bit for bit) and are each the same in both launches.
-- Dense is slower in every case, 1.4–1.5× where every Dense level has p ≤ 12 and up to
-  4.6× at 10⁻⁶. Even at p = 7 on every level (the cube at 10⁻³), where §1 has the two at
+- Dense is slower in every case: 1.4–1.5× on the cube and W3 at 10⁻³ (Dense levels of
+  p = 7 to 12), 2.3–3.3× on W1 at 10⁻³ and 3.4–4.6× at 10⁻⁶. Even at p = 7 on every level (the cube at 10⁻³), where §1 has the two at
   parity per pair, the evaluation takes 1.4× as long: in the FMM a target reads up to 189
   of the level's 316 tables (21 MB at p = 7), each once, so the tables stream from memory
   as in §1, and the per-target order of the offsets is less regular than §1's pass.

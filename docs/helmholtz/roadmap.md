@@ -402,7 +402,11 @@ at any kD.
   each one reviewable PR (a new table family, its symmetry form and the batched block with
   constraint 1 and the three machines do not fit one); CH3.2 is done, and H3.G runnable on
   its side, when all three are:
-- [ ] **CH3.2a Dense.** Per level and V-list offset the complex M2L table as the 2n × n real
+- [x] **CH3.2a Dense.** Report: `fmm-validate/results/helmholtz-ch3-2a.md`; record
+  `docs/helmholtz/tasks/CH3.2a.md`; `nd_fmm_tables::helmholtz::dense`,
+  `nd_fmm_exec::helmholtz::HelmholtzM2l`, the `helmholtz_m2l` example. Dense is Rotation to
+  rounding and slower than it end to end on the M6 (1.4–4.6×; per pair faster only to
+  p ≈ 6), so it stays opt-in. Per level and V-list offset the complex M2L table as the 2n × n real
   matrix [A_r; A_i] (n = (p_l + 1)², real input to two output planes), built in f64 by the
   level's RCR (`HelmholtzTables<f64>`) and rounded to T, in `nd_fmm_tables::helmholtz`; the
   operator's M2L per level, `Rotation` (the default) or `Dense` on the levels whose tables fit

@@ -25,7 +25,8 @@
 //! Rotation's output (relative L2 over every rank's targets) and the scenario's bound of the
 //! direct sum, 2 threads, pair by pair and the one-rank FMM bit for bit, and on the deeper
 //! tree with the finest level's tables alone (RCR above) within `DENSE_TOLERANCE` of
-//! Rotation's.
+//! Rotation's (in debug builds every Dense check of the deeper tree runs that way: the dense
+//! builds of p = 8 on four levels took about 20 s there).
 //!
 //! Then vectors (vector v of an FMM of two bit for bit the one-vector FMM, of complex and
 //! of real charges), real charges against complex ones with Im q = 0, and the errors (an
@@ -75,9 +76,9 @@ const P8_BOUND: f64 = 1e-3;
 const KERNEL_TOLERANCE: f64 = 1e-13;
 
 /// The Dense M2L's output may differ from Rotation's by this much (relative L2 of φ and of
-/// ∇φ over every rank's targets): the tables agree with Rotation's to rounding (4e-14 in
-/// the FMM-weighted measure of `nd-fmm-tables`).
-const DENSE_TOLERANCE: f64 = 1e-12;
+/// ∇φ over every rank's targets): the same coefficients summed in another order, so
+/// rounding (at most 7.9e-16 on the M6), with a margin of about ten.
+const DENSE_TOLERANCE: f64 = 1e-14;
 
 /// SplitMix64, uniform in [0, 1).
 struct Rng(u64);
@@ -588,7 +589,8 @@ fn check_kernels(scenario: &Scenario, comm: &SimpleCommunicator) {
 /// The Dense M2L (Helmholtz CH3.2a; module documentation): within the scenario's bound of
 /// the direct sum and within `DENSE_TOLERANCE` of Rotation's output; 2 threads, pair by
 /// pair and the one-rank FMM bit for bit; where more than one level has V lists, a budget
-/// that leaves the coarser levels to RCR within `DENSE_TOLERANCE` too.
+/// that leaves the coarser levels to RCR within `DENSE_TOLERANCE` too (in debug builds the
+/// only Dense run of such a tree, for time).
 fn check_dense(scenario: &Scenario, comm: &SimpleCommunicator) {
     let start = Instant::now();
     let rank = comm.rank();
@@ -597,12 +599,23 @@ fn check_dense(scenario: &Scenario, comm: &SimpleCommunicator) {
     let (fmm, rotation) = run(&builder(scenario), &inputs, kind, comm);
     let degrees = fmm.degrees().to_vec();
     drop(fmm);
-    let dense = builder(scenario).m2l(HelmholtzM2l::Dense);
+    // Debug builds give a tree with more than one level of V lists the finest level's
+    // tables alone (RCR on the coarser levels): the dense builds dominate there.
+    let finest = degrees.len() - 1;
+    let finest_only = cfg!(debug_assertions) && finest > 2;
+    let mut dense = builder(scenario).m2l(HelmholtzM2l::Dense);
+    if finest_only {
+        dense = dense.dense_budget(DenseM2l::<f64>::level_bytes(degrees[finest]));
+    }
     let (fmm, output) = run(&dense, &inputs, kind, comm);
     let op = fmm.operator();
     assert_eq!(op.m2l_choice(), HelmholtzM2l::Dense);
     for level in 2..fmm.nlevels() {
-        assert_eq!(op.m2l_on(level), HelmholtzM2l::Dense, "level {level}");
+        let want = match finest_only && level < finest {
+            true => HelmholtzM2l::Rotation,
+            false => HelmholtzM2l::Dense,
+        };
+        assert_eq!(op.m2l_on(level), want, "level {level}");
     }
     let bytes = op.dense_bytes();
     drop(fmm);
@@ -649,10 +662,9 @@ fn check_dense(scenario: &Scenario, comm: &SimpleCommunicator) {
         comm,
     );
 
-    // The finest level's tables alone, RCR on the coarser levels (with more than one level
-    // of V lists).
-    let finest = degrees.len() - 1;
-    if finest > 2 {
+    // In release builds also the finest level's tables alone, RCR on the coarser levels
+    // (with more than one level of V lists).
+    if finest > 2 && !finest_only {
         let budget = DenseM2l::<f64>::level_bytes(degrees[finest]);
         let (fmm, mixed) = run(&dense.clone().dense_budget(budget), &inputs, kind, comm);
         assert_eq!(fmm.operator().m2l_on(finest), HelmholtzM2l::Dense);

@@ -178,8 +178,10 @@ fn arguments() -> Arguments {
                         .is_some(),
                     "--dense-budget" => value
                         .parse::<usize>()
-                        .map(|mb| parsed.dense_budget = mb << 20)
-                        .is_ok(),
+                        .ok()
+                        .and_then(|mb| mb.checked_mul(1 << 20))
+                        .map(|bytes| parsed.dense_budget = bytes)
+                        .is_some(),
                     "--rule" => match value.as_str() {
                         "calibrated" => Some(false),
                         "s7" => Some(true),

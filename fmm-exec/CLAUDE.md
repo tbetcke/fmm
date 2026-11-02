@@ -228,9 +228,10 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   rank-invariant. `tests/helmholtz/dense.rs` checks every offset of levels 2–4 against
   Rotation pair by pair, the budget and a zero budget bit for bit Rotation;
   `tests/helmholtz_fmm.rs` (`check_dense`, two scenarios) the FMM against the direct sum
-  and Rotation within `DENSE_TOLERANCE` (1e-12), 2 threads, pair by pair and the one-rank
-  FMM bit for bit, and the finest level alone. Its debug cost: about 31 s of the one-rank
-  run on the M6 (36 → 68 s; the dense builds), 2.2 s at CI's opt-level 1.
+  and Rotation within `DENSE_TOLERANCE` (1e-14), 2 threads, pair by pair and the one-rank
+  FMM bit for bit, and the finest level alone (in debug builds the deeper tree's only Dense
+  run). Its debug cost: about 15 s of the one-rank run on the M6 (46 → 61 s; the dense
+  builds), about 2 s at CI's opt-level 1.
 - The degree rule (Helmholtz CH3.3; the `helmholtz::degree` module docs;
   fmm-validate/results/helmholtz-ch3-3.md): `degree` is `DegreeRule::CALIBRATED`,
   max(⌈0.30 L² + 0.25 L + 2.60⌉, ⌈x + 0.80 (ln 1/ε)^{2/3} x^{1/3}⌉) with L = log₁₀(1/ε),

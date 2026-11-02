@@ -1492,3 +1492,56 @@ request, using this template:
   - Performance at matched accuracy (§9.2: after CH4.5 and CH7.6); FMM3D over-delivers by
     up to 100× at 10⁻⁸.
   - H3.G needs CH3.2.
+
+## 2026-11-02: CH3.2a Dense
+- Done:
+  - CH3.2 split into a (Dense), b (Classes) and c (Batched, the measurements per p on the
+    three machines), each one reviewable PR; CH3.2a taken as named by the user (off the
+    priority list, which ended with CH3.6).
+  - `nd_fmm_tables::helmholtz::dense::DenseM2l`: per level and offset the complex M2L as one
+    2n × n column-major matrix [A_r; A_i], column j Rotation's M2L of e_j in f64
+    (`HelmholtzTables<f64>`), rounded to T; `select` (the levels within a byte budget from
+    the finest up), `level_bytes`, `m2l` (one plane: k ascending over 2n rows; two planes:
+    one pass, the four real products combined per k).
+  - `nd_fmm_exec::helmholtz::{HelmholtzM2l, DEFAULT_DENSE_BUDGET}`,
+    `HelmholtzOperator::{with_m2l, m2l_choice, m2l_on, dense_bytes}`,
+    `HelmholtzFmmBuilder::{m2l, dense_budget}`: Dense on the levels that fit, RCR on the
+    others, per pair in the kernel's `m2l` (no driver change, `batched_m2l` stays `None`).
+  - `nd-fmm-validate`: the `helmholtz_m2l` example (per p, Dense against Rotation per pair),
+    `helmholtz_accuracy`'s `--m2l` and `--dense-budget`. Report
+    `fmm-validate/results/helmholtz-ch3-2a.md`; record `docs/helmholtz/tasks/CH3.2a.md`.
+- Tests: `fmm-tables/tests/helmholtz/dense.rs` (every offset of levels 2–4 for five k̂
+  against Rotation, at most 3.7e-14 per unit of conditioning in the FMM-weighted measure,
+  bound 2e-13; a sample against `rcr`; columns bit for bit Rotation of e_j; vectors; one
+  plane against two with Im = 0; f32 the f64 tables rounded; `select`; refusals);
+  `fmm-exec/tests/helmholtz/dense.rs` (the operator pair by pair against Rotation within
+  1e-14, 7.2e-16 measured; the budget; a zero budget bit for bit Rotation);
+  `tests/helmholtz_fmm.rs` `check_dense` on two scenarios (the FMM within 1e-14 of
+  Rotation, 7.9e-16 measured, and the direct-sum bound; 2 threads, pair by pair and the
+  one-rank FMM bit for bit; the finest level alone). One-rank debug run 46 → 61 s on the
+  M6, 7 s in release.
+- Runs (M6, release, one rank, one thread, BLAS threads 1): `helmholtz_m2l` at p = 3–20:
+  Dense faster per pair to p = 5 (2.5–2.8× at p = 3), level at 6–7, 0.42× at p = 12 and
+  0.22× at p = 20 (memory-bound: 2 (p + 1)⁴ values per pair); tables 21 MB at p = 7, 331 MB
+  at 15, 983 MB at 20 per level, built in 0.02–1.4 s. `helmholtz_accuracy --m2l` both orders
+  on W1 at kD = 30 and 100, the W4 cube at kD = 10 and W3 at kD = 30, ε = 10⁻³ and 10⁻⁶:
+  Dense 1.4–4.6× slower to evaluate, the errors Rotation's to the printed digits, each
+  strategy's checksum the same in both launches.
+- Checks: `/verify` on the M6: format; Clippy default, examples and workspace all-targets;
+  `cargo doc`; `cargo test` (1,137) and `--workspace` (1,219); `helmholtz_fmm` in release at
+  one rank; the MPI list at 2 and 4 ranks, 26 of 26 (`helmholtz_fmm` 75 and 72 s;
+  `mpi_exec`, unchanged, at 2 ranks hit the script's local 300 s default at opt-level 0 and
+  passed in 298 s with `RUN_TIMEOUT=900`, CI's limit). A self-review by a subagent: no code defect; its
+  points taken (the debug runtime, the plan and report wording, tighter tolerances, a
+  length refusal test, no f64 build without a dense level, example overflow). Not run:
+  locust and Kathleen (CH3.2c's); D9 (Laplace untouched); the licence check (no dependency
+  change; `fmm-validate/Cargo.toml` gains an `[[example]]`).
+- Decisions: none taken. Questions for sign-off (the PR): 1. Dense stays opt-in, no Auto
+  rule until CH3.2c; 2. Dense's two-plane chain is what CH3.2c's Batched reproduces bit for
+  bit or declares within rounding; 3. `DEFAULT_DENSE_BUDGET` 1 GiB per rank, no node budget.
+- Laplace: not touched (no Laplace file, no driver; `nd-fmm-tables` gains a submodule of
+  `helmholtz` only).
+- Follow-ups:
+  - CH3.2b (Classes): 16 class tables per level, about 20× less to read per level.
+  - CH3.2c (Batched): where dense tables can pay, read once per block of targets.
+  - The M2L y-blocks of `HelmholtzTables` are still stored for a level that runs Dense.
