@@ -217,6 +217,20 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   checks the bodies pair by pair against the direct sum and, at low degrees, against
   `nd-fmm-ref`'s chains in absolute units; the level calls are tested with the FMM
   (CH3.1b).
+- The Dense M2L (Helmholtz CH3.2a; the `helmholtz::operator` module docs, "M2L";
+  docs/helmholtz/tasks/CH3.2a.md): `HelmholtzM2l` (`Rotation`, the default, or `Dense`),
+  `HelmholtzOperator::with_m2l(choice, budget)` and `HelmholtzFmmBuilder::{m2l,
+  dense_budget}` (`DEFAULT_DENSE_BUDGET` 1 GiB per rank): `nd_fmm_tables::helmholtz::dense`
+  on the levels that fit the budget from the finest up, RCR on the others, chosen from the
+  degrees and the budget only; `m2l_on(level)` and `dense_bytes()` report it. Dense
+  combines the complex products per pair in the kernel's `m2l` body (no driver change,
+  `batched_m2l` stays `None`); its output is Rotation's to rounding, deterministic and
+  rank-invariant. `tests/helmholtz/dense.rs` checks every offset of levels 2–4 against
+  Rotation pair by pair, the budget and a zero budget bit for bit Rotation;
+  `tests/helmholtz_fmm.rs` (`check_dense`, two scenarios) the FMM against the direct sum
+  and Rotation within `DENSE_TOLERANCE` (1e-12), 2 threads, pair by pair and the one-rank
+  FMM bit for bit, and the finest level alone. Its debug cost: about 31 s of the one-rank
+  run on the M6 (36 → 68 s; the dense builds), 2.2 s at CI's opt-level 1.
 - The degree rule (Helmholtz CH3.3; the `helmholtz::degree` module docs;
   fmm-validate/results/helmholtz-ch3-3.md): `degree` is `DegreeRule::CALIBRATED`,
   max(⌈0.30 L² + 0.25 L + 2.60⌉, ⌈x + 0.80 (ln 1/ε)^{2/3} x^{1/3}⌉) with L = log₁₀(1/ε),
@@ -256,7 +270,8 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   `HelmholtzFmmBuilder` (k, `Degrees`, `ChargeKind`, vectors, gradients, threads, domain,
   points per leaf, `max_level`, the block budget, c_leaf, the P2P kernel since CH3.4c) and
   `HelmholtzFmm` on any number of ranks, the pipeline's steps with the leaf rule
-  (`min_leaf_level` into `OctreeOptions::with_min_leaf_level`) and `HelmholtzOperator` on `Evaluator`; no near
+  (`min_leaf_level` into `OctreeOptions::with_min_leaf_level`) and `HelmholtzOperator` on `Evaluator` (M2L
+  by `HelmholtzM2l`, CH3.2a); no near
   rule, work cut, overlap, device or table cache. `evaluate` packs the c m columns
   (Re q, Im q per complex vector) point-major, so the charge load, `gather_output` and
   `unpack_output_many` run unchanged with m replaced by the columns and output columns
