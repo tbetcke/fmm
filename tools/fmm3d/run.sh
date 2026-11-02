@@ -157,7 +157,7 @@ if [ "$os" = slurm ]; then H_SPLIT=${H_SPLIT:-4x10}; else H_SPLIT=${H_SPLIT:-1x$
 if [ -z "${VARIANTS:-}" ]; then
     VARIANTS=
     for v in default fastker; do
-        if [ -x "$FMM3D_ROOT/$v/bin/fmm3d_driver" ]; then VARIANTS="$VARIANTS $v"; fi
+        if [ -x "$FMM3D_ROOT/$v/bin/fmm3d_driver" ]; then VARIANTS="${VARIANTS:+$VARIANTS }$v"; fi
     done
 fi
 bench=${CARGO_TARGET_DIR:-target}/release/nd-fmm-bench
