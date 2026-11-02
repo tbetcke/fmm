@@ -1,8 +1,8 @@
 //! The operator's Dense M2L (Helmholtz CH3.2a) and Classes M2L (Helmholtz CH3.2b): pair by
 //! pair against Rotation (and Classes against Dense) on every offset of levels 2–4, real
 //! and complex k, real and complex charges, two vectors, relative L2 over the local within
-//! [`DENSE_BOUND`] and [`CLASSES_BOUND`]; the levels chosen by the budget; a budget of zero is Rotation bit for
-//! bit. The FMM under both is tested in `tests/helmholtz_fmm.rs`.
+//! [`DENSE_BOUND`] and [`CLASSES_BOUND`]; the levels chosen by the budget; a budget of zero
+//! is Rotation bit for bit. The FMM under both is tested in `tests/helmholtz_fmm.rs`.
 
 use nd_fmm_exec::geometry::Domain;
 use nd_fmm_exec::helmholtz::{
@@ -190,7 +190,7 @@ fn the_budget_chooses_the_class_levels() {
     let all = (2..LEVELS)
         .map(|l| ClassM2l::<f64>::level_bytes(degrees[l]))
         .sum::<usize>()
-        + CubeTransforms::<f64>::bytes_for(8);
+        + CubeTransforms::<f64>::bytes_for(*degrees[2..].iter().max().unwrap());
     // One byte short of everything drops a level.
     let budget = all - 1;
     let chosen = ClassM2l::<f64>::select(&degrees, budget);

@@ -13,9 +13,9 @@
 //!   cube-group transforms O(Pᵀ) and O(P) per pair), its tables' bytes (the transforms
 //!   included) and build seconds; the time per pair over all 316 offsets (the transforms
 //!   that move the z-axis included), over the offsets whose element fixes the z-axis
-//!   (signed permutations) and over the others (dense per-degree blocks), and the two
+//!   (signed permutations) and over the others (dense per-degree blocks), and the
 //!   transforms alone (O(Pᵀ) on each multipole plane and O(P) on both local planes, over
-//!   all 316 offsets);
+//!   all 316 offsets, without `m2l`'s two scratch fills);
 //!
 //! each pass the offsets in turn, each with its own multipole of `--vectors` vectors
 //! (default 1) into its own local, as a level call reads the tables; the time per pair is
@@ -158,10 +158,17 @@ fn main() {
     let arguments = arguments();
     let m = arguments.vectors;
     let all: Vec<usize> = (0..M2L_OFFSET_COUNT).collect();
-    let elements: Vec<_> = all.iter().map(|&d| class_of(d).1).collect();
+    // Each offset's element P and Pᵀ, formed once.
+    let elements: Vec<_> = all
+        .iter()
+        .map(|&d| {
+            let element = class_of(d).1;
+            (element, element.transpose())
+        })
+        .collect();
     let (z_axis, others): (Vec<usize>, Vec<usize>) = all
         .iter()
-        .partition(|&&d| elements[d].permutation()[2] == 2);
+        .partition(|&&d| elements[d].0.permutation()[2] == 2);
     println!("# Helmholtz M2L per pair: Dense and Classes against Rotation (CH3.2a, CH3.2b)");
     println!();
     println!(
@@ -247,10 +254,10 @@ fn main() {
                 // planes (here the multipole's first plane twice), per vector.
                 let mut rotated = vec![0.0; n];
                 let transforms_only = ns_per_pair(M2L_OFFSET_COUNT, || {
-                    for (&element, x) in elements.iter().zip(&inputs) {
+                    for (&(element, transpose), x) in elements.iter().zip(&inputs) {
                         for v in x.chunks_exact(planes * n) {
                             for plane in v.chunks_exact(n) {
-                                transforms.apply(element.transpose(), plane, &mut rotated);
+                                transforms.apply(transpose, plane, &mut rotated);
                             }
                             for _ in 0..2 {
                                 transforms.apply(element, &v[..n], &mut rotated);

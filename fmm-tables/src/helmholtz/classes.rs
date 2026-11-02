@@ -41,8 +41,11 @@
 //! O(P) of each of its two planes is added to the target's local. A transform's slot i of
 //! degree n is Σⱼ Oⁿᵢⱼ xⱼ over the slots j of degree n in increasing order, each product and
 //! sum rounded apart, then added to the output; a permutation's is ± x_σ(i), added. The
-//! cost per pair is Dense's 2n² table values plus two transforms per plane, dense
-//! (Σₙ (2n + 1)² multiply–adds, O(p³)) for the offsets whose element moves the z-axis.
+//! cost per pair is Dense's 2n² table values plus one transform per multipole plane and two
+//! for the local's planes, dense (Σₙ (2n + 1)² multiply–adds each, O(p³)) for the offsets
+//! whose element moves the z-axis. Such a block has only (n + 1)² + n² non-zero entries (the
+//! y-block keeps the cos and sin slots apart, and the z-rotations are signed permutations),
+//! which the dense application does not exploit.
 //!
 //! The class matrices are [`DenseM2l`]'s of the representatives bit for bit (the same build
 //! from `HelmholtzTables<f64>`), so Classes equals Dense to rounding; at a representative
@@ -531,8 +534,9 @@ impl<T: RealScalar> ClassM2l<T> {
                 .map_or(0, |t| CubeTransforms::<T>::bytes_for(t.p()))
     }
 
-    /// The 2n × n matrix of `class` on `level`, column-major, in [`DenseM2l`](super::dense::DenseM2l)'s layout:
-    /// bit for bit `DenseM2l::matrix` of the class's representative.
+    /// The 2n × n matrix of `class` on `level`, column-major, in
+    /// [`DenseM2l`](super::dense::DenseM2l)'s layout: bit for bit `DenseM2l::matrix` of the
+    /// class's representative.
     ///
     /// # Panics
     ///

@@ -3,7 +3,9 @@
 //! harmonics of CONVENTIONS §3.15 (absolute error, values of order one; 2.2e-15 measured on
 //! the M6) and their structure
 //! (exact); every offset against Dense in the FMM-weighted measure of this test executable
-//! within [`BOUND`] times the conditioning; the class matrices and the representatives bit
+//! within [`BOUND`] times the conditioning (3.7e-14 measured on the M6: a margin of about
+//! five, as Dense's against Rotation, which CI has run since CH3.2a; the matrices are
+//! Dense's bit for bit, so only the transforms' rounding differs); the class matrices and the representatives bit
 //! for bit Dense; the vectors, the f32 tables and the level selection by the budget.
 
 use nd_fmm_math::orthonormal::harmonics;
@@ -67,7 +69,9 @@ fn transforms_map_the_harmonics() {
     assert!(worst <= 3e-14, "{worst:e}");
 }
 
-/// O Oᵀ = I and O(P₁ P₂) = O(P₁) O(P₂) on all pairs, applied to unit vectors.
+/// O Oᵀ = I and O(P₁ P₂) = O(P₁) O(P₂) on all pairs, applied to a seeded expansion whose
+/// degree-n coefficients are of size 2⁻ⁿ (1.1e-16 measured on the M6); and every block's
+/// Gram matrix the identity entry by entry, which weighs every degree alike.
 #[test]
 fn transforms_are_orthogonal_and_a_homomorphism() {
     let p = 8;
@@ -112,7 +116,9 @@ fn transforms_are_orthogonal_and_a_homomorphism() {
 }
 
 /// The 16 elements that map the z-axis to ±itself are signed permutations with entries 0
-/// and ±1 that map each slot pair (±m) to itself, diagonal for g < 8; −I is (−1)ⁿ.
+/// and ±1 that map each slot pair (±m) to itself, diagonal for g < 8; those that exchange x
+/// and y (16 ≤ g ≤ 23) exchange the two slots of every pair of odd m and are diagonal on
+/// the even m (CONVENTIONS §3.12, "The z-axis elements"); −I is (−1)ⁿ.
 #[test]
 fn z_axis_elements_are_signed_permutations() {
     let p = 9;
@@ -135,8 +141,10 @@ fn z_axis_elements_are_signed_permutations() {
                 assert_eq!(row[j].abs(), 1.0);
                 let (mi, mj) = (i as i64 - n as i64, j as i64 - n as i64);
                 assert_eq!(mi.abs(), mj.abs(), "element {g}: slot pairs");
-                if g < 8 {
-                    assert_eq!(i, j, "element {g} is diagonal");
+                if g < 8 || mi % 2 == 0 {
+                    assert_eq!(i, j, "element {g}, order {mi}: diagonal");
+                } else {
+                    assert_eq!(mi, -mj, "element {g}, order {mi}: the pair exchanged");
                 }
             }
         }

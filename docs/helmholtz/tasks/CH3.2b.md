@@ -58,9 +58,9 @@ Construction, exact wherever the entries are 0 and ±1:
   entries and signs, so it adds no rounding.
 - The 16 elements with π(2) = 2 (β ∈ {0, π}) come out as signed permutations of the slots,
   with the structure of §3.12's "The z-axis elements"; they are stored as one (source slot,
-  sign) per slot. The 32 others are dense per-degree blocks of the proper factor, stored
-  for the 16 proper ones only; an improper element applies its −P's blocks with the sign
-  (−1)ⁿ per degree, exact.
+  sign) per slot. The 32 others are dense per-degree blocks (as built: all 32 stored, an
+  improper element's blocks those of −P with the degree's sign (−1)ⁿ folded in, exact; the
+  plan had stored the 16 proper ones only and applied the sign per degree).
 - One set of transforms at the largest degree of the class levels serves every level:
   block n does not depend on p (`block_range`).
 
@@ -72,10 +72,11 @@ not changed), no driver, no `nd-fmm-plan`, no convention, no manifest dependency
 
 - `nd_fmm_tables::helmholtz::classes` (new `fmm-tables/src/helmholtz/classes.rs`):
   - `CubeTransforms<T>`: the 48 Oⁿ(P), n ≤ p (above); `apply(element, x, out)` (out += O x)
-    and `apply_transpose` (out += Oᵀ x) on one plane of (p_l + 1)² ≤ (p + 1)² values; per
-    slot or per degree block row in increasing column order, each product and sum rounded
-    apart; `is_permutation(element)`, `block(element, n)` (the dense block, for the tests),
-    `bytes()`.
+    on one plane of (p_l + 1)² ≤ (p + 1)² values; per slot or per degree block row in
+    increasing column order, each product and sum rounded apart; `is_permutation(element)`,
+    `block(element, n)` (the dense block, for the tests), `bytes_for(p)`. As built, Oᵀ is
+    applied as O(Pᵀ) (Oⁿ(Pᵀ) = Oⁿ(P)ᵀ to rounding; as Laplace's `M2lClasses` takes T(Pᵀ)), so
+    there is no `apply_transpose`.
   - `ClassM2l<T>`: per level with Classes the 16 matrices of the representatives, each
     CH3.2a's 2n × n [A_r; A_i] of that offset (built by `DenseM2l`'s rule from
     `HelmholtzTables<f64>`, so bit for bit `DenseM2l`'s matrix of the representative), plus
@@ -107,7 +108,7 @@ not changed), no driver, no `nd-fmm-plan`, no convention, no manifest dependency
     orthogonality O Oᵀ = I and the homomorphism O(P₁P₂) = O(P₁) O(P₂) on all pairs at
     p = 8 (1e-14); the 16 z-axis elements signed permutations with entries exactly 0, ±1
     mapping each slot pair (±m) to itself, the elements g < 8 diagonal; O(−I) = (−1)ⁿ
-    exactly; `apply_transpose` the inverse of `apply`;
+    exactly; O(Pᵀ) after O(P) the identity (as built: a round trip through `transpose()`);
   - ClassM2l against DenseM2l on every offset of levels 2–4 for the K_ROOTS (real and
     complex k̂), one and two planes, in the FMM-weighted measure within `BOUND` times the
     conditioning (as CH3.2a's test against Rotation);
