@@ -1541,7 +1541,9 @@ request, using this template:
   change; `fmm-validate/Cargo.toml` gains an `[[example]]`).
 - Decisions: none taken. Questions for sign-off (the PR): 1. Dense stays opt-in, no Auto
   rule until CH3.2c; 2. Dense's two-plane chain is what CH3.2c's Batched reproduces bit for
-  bit or declares within rounding; 3. `DEFAULT_DENSE_BUDGET` 1 GiB per rank, no node budget.
+  bit or declares within rounding; 3. `DEFAULT_DENSE_BUDGET` 1 GiB per rank, no node budget. Signed
+  off 2026-11-02, the user, after the merge: "i agree with the recommendations" (1–3 as
+  recommended).
 - Laplace: not touched (no Laplace file, no driver; `nd-fmm-tables` gains a submodule of
   `helmholtz` only).
 - Follow-ups:
