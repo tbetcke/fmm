@@ -1613,3 +1613,61 @@ request, using this template:
     their multiply–adds ((n + 1)² + n² of (2n + 1)² entries are non-zero).
   - CH3.2c: the batched M2L, where tables can pay; Classes' tables could carry it to
     degrees where Dense's do not fit if the transforms batch too.
+
+## 2026-11-02: CH3.2c Batched, and the measurements per p
+- Done:
+  - Decisions before the work (the user, 2026-11-02): Helmholtz's own block, not the
+    two-plane case of `driver::m2l_block` ("Own Helmholtz block"); Dense's tables in split
+    planes, the two-plane chain Dense to rounding ("Split planes, 2n²").
+  - `nd_fmm_tables::helmholtz::batched::BatchedM2l`: Dense's matrices re-laid as A_r and
+    A_i, each n × n column-major, bit for bit Dense's entries; Dense's `select` and bytes.
+  - `nd_fmm_exec::helmholtz`: `HelmholtzM2l::Batched`, `batched_bytes`,
+    `with_m2l_mul_add`/`m2l_mul_add` and the builder's `m2l_mul_add`; the crate-private
+    `src/helmholtz/batched.rs`: the M2L level call by blocks of `M2L_BLOCK_TARGETS` on
+    `Execution::blocks` with `nd_fmm_simd::MatrixKernel` (P2P's ISA), two calls per offset
+    for real multipoles, four for complex ones (L_r negated around the A_i M_i call), and the
+    pair body with the same calls. `driver.rs`, `nd-fmm-simd` and Laplace unchanged.
+  - `nd-fmm-validate`: `helmholtz_m2l` with Batched, separate and fused (the operator's calls
+    on a block of 32 pairs per offset); `helmholtz_accuracy --m2l batched,batched-fused`.
+    Report `fmm-validate/results/helmholtz-ch3-2c.md`; record `docs/helmholtz/tasks/CH3.2c.md`.
+- Tests: `fmm-tables/tests/helmholtz/batched.rs` (the planes Dense's halves bit for bit on
+  every offset of levels 2–4 for five k̂; bytes and `select`; f32; refusals);
+  `fmm-exec/tests/helmholtz/dense.rs` (pair by pair on every offset of levels 2–4: Dense
+  bit for bit with real multipoles, 7.4e-16 with complex ones, fused 6.9e-16, within
+  `BATCHED_BOUND` 1e-14; the same bits on every ISA in both modes; the budget; a zero budget
+  Rotation bit for bit); `tests/helmholtz_fmm.rs` `check_tables` with Batched on two scenarios
+  (Rotation's output within 7.6e-16, Dense's bit for bit with real multipoles and within
+  3.3e-16 with complex ones; 2 threads, pair by pair, two vectors through the block against
+  the pair body, the one-rank FMM bit for bit; the fused mode within 7.6e-16 of Rotation and
+  its one-rank FMM). One-rank debug run 69 → 122 s on the M6.
+- Runs (release, one rank, one thread, BLAS threads 1; the M6 behind the quiet gate after
+  the user's go-ahead, one void launch repeated; locust; Kathleen job 618018):
+  `helmholtz_m2l` at p = 3–20 twice: fused Batched 1.84×, 1.77× and 4.52× Rotation's speed
+  per pair at p = 7 with two planes on the M6, locust and Kathleen, level at p = 10 on the
+  M6 and locust, between 15 and 18 on Kathleen; separate Batched 0.99–1.25× Dense's speed on
+  the M6, 2.8–8.5× on Kathleen. `helmholtz_accuracy` on CH3.2a's cases in both orders:
+  fused Batched 0.72–0.74×, 0.78–0.82× and 0.39–0.42× Rotation's evaluation on the W4 cube
+  at 10⁻³ and W3; 1.27–2.76× on the M6 and locust where the levels with tables carry
+  p = 15–35, 0.80–1.13× on Kathleen; errors Rotation's to the printed digits, checksums the
+  same in both orders.
+- Checks: `/verify` on the M6: format; Clippy default, examples and workspace all-targets;
+  `cargo doc`; `cargo test` (1,167) and `--workspace` (1,249); the MPI list at 2 and 4
+  ranks, 24 of 24 (`helmholtz_fmm` 197 and 148 s at opt-level 0); after the review's fixes
+  format, workspace Clippy, `nd-fmm-exec`'s `helmholtz` tests and `helmholtz_fmm` again.
+  A self-review by a subagent: no blocking finding; its points taken (two vectors through the
+  block, the bounds' measured values, doc wording). Not run: D9 and the Laplace
+  bit-identity runs beyond CI's list (no Laplace file, no driver change); the licence check
+  (no dependency change).
+- Decisions: none taken beyond the two before the work. Questions for sign-off (the PR):
+  1. Batched opt-in, no Auto rule here; a per-level rule by p as a follow-up before H3.G;
+  2. the fused mode added as an opt-in; 3. the debug test cost; 4. the proposal's §6.2 and
+  §10 left as written, the roadmap and record carrying the own block. Signed off
+  2026-11-02, the user: "i agree with the recommendations" (1: opt-in, the rule by p a
+  follow-up before H3.G; 2: the fused mode kept; 3: the debug cost kept; 4: as stated).
+- Laplace: not touched (no Laplace file, no `driver.rs`, `nd-fmm-simd` or `nd-fmm-plan`
+  change; the driver's `Columns`, `Execution::blocks` and `M2L_BLOCK_TARGETS` used as they are).
+- Follow-ups:
+  - The M2L rule per level (question 1): fused Batched below a machine's crossover degree,
+    Rotation above, within the budget; with sparse levels (W1) counted. Added to the
+    roadmap as CH3.2d at the sign-off, before H3.G.
+  - CH3.2a–c are done with this task; H3.G waits for CH3.2d.

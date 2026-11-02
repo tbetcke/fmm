@@ -8,7 +8,8 @@ Phase and components: Phase 2, C2.1–C2.4 (tasks T1 and T3–T7 in docs/phase2/
 C6.5 (task T13: `plane_wave`, the tables of plane-wave M2L, CONVENTIONS §3.14);
 Helmholtz CH3.1a (`helmholtz`, the per-level RCR tables of the Helmholtz family,
 CONVENTIONS §3.15); Helmholtz CH3.2a (`helmholtz::dense`, the dense M2L tables); Helmholtz
-CH3.2b (`helmholtz::classes`, the class M2L tables and the cube-group transforms).
+CH3.2b (`helmholtz::classes`, the class M2L tables and the cube-group transforms); Helmholtz
+CH3.2c (`helmholtz::batched`, Dense's matrices in split planes for the batched M2L).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -51,6 +52,11 @@ CH3.2b (`helmholtz::classes`, the class M2L tables and the cube-group transforms
   application's chain (one plane: k ascending over 2n rows; two planes: one pass,
   L_r + A_r M_r − A_i M_i and L_i + A_i M_r + A_r M_i per k) is what a batched form must
   equal bit for bit, or say it does not (CH3.2c). Not cached.
+  `helmholtz::batched` (Helmholtz CH3.2c; its module docs): `BatchedM2l`, Dense's matrices
+  re-laid as A_r then A_i, each n × n column-major, bit for bit Dense's entries; Dense's
+  `select` and `level_bytes`. Its application is `nd-fmm-exec`'s (the column kernel takes
+  square matrices): one plane Dense's chain bit for bit, two planes the real plane's
+  products of a column before the imaginary plane's, Dense to rounding. Not cached.
   `helmholtz::classes` (Helmholtz CH3.2b; its module docs): `ClassM2l`, per level the 16
   class matrices of §3.12 built by `DenseM2l`'s rule (bit for bit its matrices of the
   representatives), and `CubeTransforms`, Oⁿ(P) of the orthonormal coefficients of §3.15

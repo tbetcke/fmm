@@ -28,7 +28,13 @@
 //! Rotation's (in debug builds every Dense check of the deeper tree runs that way: the dense
 //! builds of p = 8 on four levels took about 20 s there). The Classes M2L (Helmholtz
 //! CH3.2b) on the same two scenarios with the same checks within `DENSE_TOLERANCE`, every
-//! level and the finest level alone in every build (16 offsets a level to build).
+//! level and the finest level alone in every build (16 offsets a level to build). The
+//! Batched M2L (Helmholtz CH3.2c) on the same two scenarios with Dense's checks and its
+//! debug-build reduction (it builds Dense's tables), and against Dense's output of the same
+//! levels: bit for bit with real multipoles (real k, real charges), within
+//! `DENSE_TOLERANCE` with complex ones; with two vectors the level call against the pair
+//! body bit for bit; and in the fused mode within `DENSE_TOLERANCE` of Rotation and Dense
+//! and the one-rank FMM bit for bit.
 //!
 //! Then vectors (vector v of an FMM of two bit for bit the one-vector FMM, of complex and
 //! of real charges), real charges against complex ones with Im q = 0, and the errors (an
@@ -54,7 +60,7 @@ use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, Degrees, DensityError, HelmholtzFmm, HelmholtzFmmBuilder,
     HelmholtzFmmError, HelmholtzM2l, OperatorError, Output, Wavenumber,
 };
-use nd_fmm_exec::operator::{Isa, P2pChoice};
+use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
 use nd_fmm_ref::helmholtz::p2p;
 use nd_fmm_tables::helmholtz::classes::{ClassM2l, CubeTransforms};
@@ -590,13 +596,20 @@ fn check_kernels(scenario: &Scenario, comm: &SimpleCommunicator) {
     }
 }
 
-/// The Dense M2L (Helmholtz CH3.2a) or the Classes M2L (Helmholtz CH3.2b; module
-/// documentation): within the scenario's bound of the direct sum and within
-/// `DENSE_TOLERANCE` of Rotation's output; 2 threads, pair by pair and the
+/// The Dense M2L (Helmholtz CH3.2a), the Classes M2L (Helmholtz CH3.2b) or the Batched M2L
+/// (Helmholtz CH3.2c; module documentation): within the scenario's bound of the direct sum
+/// and within `DENSE_TOLERANCE` of Rotation's output; 2 threads, pair by pair and the
 /// one-rank FMM bit for bit; where more than one level has V lists, a budget that leaves
-/// the coarser levels to RCR within the tolerance too (in debug builds Dense's only run of
-/// such a tree, for time; Classes builds 16 offsets a level and runs both).
-fn check_tables(scenario: &Scenario, m2l: HelmholtzM2l, comm: &SimpleCommunicator) {
+/// the coarser levels to RCR within the tolerance too (in debug builds Dense's and
+/// Batched's only run of such a tree, for time; Classes builds 16 offsets a level and runs
+/// both). Batched also against `dense`, Dense's output of this check on the same levels: bit
+/// for bit with real multipoles, within the tolerance with complex ones. Returns the output.
+fn check_tables(
+    scenario: &Scenario,
+    m2l: HelmholtzM2l,
+    dense: Option<&Output<f64>>,
+    comm: &SimpleCommunicator,
+) -> Output<f64> {
     let start = Instant::now();
     let rank = comm.rank();
     let name = format!("{}: {m2l:?}", scenario.name);
@@ -616,7 +629,9 @@ fn check_tables(scenario: &Scenario, m2l: HelmholtzM2l, comm: &SimpleCommunicato
     // Debug builds give a tree with more than one level of V lists the finest level's
     // dense tables alone (RCR on the coarser levels): the dense builds dominate there.
     let finest = degrees.len() - 1;
-    let finest_only = cfg!(debug_assertions) && finest > 2 && m2l == HelmholtzM2l::Dense;
+    let finest_only = cfg!(debug_assertions)
+        && finest > 2
+        && matches!(m2l, HelmholtzM2l::Dense | HelmholtzM2l::Batched);
     let mut tables = builder(scenario).m2l(m2l);
     if finest_only {
         tables = tables.dense_budget(finest_budget(degrees[finest]));
@@ -631,7 +646,7 @@ fn check_tables(scenario: &Scenario, m2l: HelmholtzM2l, comm: &SimpleCommunicato
         };
         assert_eq!(op.m2l_on(level), want, "level {level}");
     }
-    let bytes = op.dense_bytes() + op.class_bytes();
+    let bytes = op.dense_bytes() + op.class_bytes() + op.batched_bytes();
     drop(fmm);
     let (phi, grad) = difference(&output, &rotation, comm);
     let (error_phi, error_grad) = errors(scenario, &inputs, &output, 0, comm);
@@ -655,6 +670,55 @@ fn check_tables(scenario: &Scenario, m2l: HelmholtzM2l, comm: &SimpleCommunicato
     let (_, pairs) = run(&tables.clone().pair_calls(true), &inputs, kind, comm);
     assert_same(&format!("{name}, pair by pair"), &pairs, &output, comm);
     check_one_rank(&name, &tables, &inputs, kind, &output, comm);
+    if let Some(dense) = dense {
+        // Dense on the same levels: one multipole plane (real k, real charges) gives Dense's
+        // chain exactly, two give its sums to rounding.
+        let one_plane = scenario.k.1 == 0.0 && kind == ChargeKind::Real;
+        let (phi, grad) = difference(&output, dense, comm);
+        if rank == 0 {
+            println!("{name} against Dense: relative L2 φ {phi:.2e}, ∇φ {grad:.2e}");
+        }
+        if one_plane {
+            assert_same(&format!("{name} against Dense"), &output, dense, comm);
+        } else {
+            assert!(
+                phi <= tolerance && grad <= tolerance,
+                "{name} against Dense: φ {phi:e}, ∇φ {grad:e}"
+            );
+        }
+        // Two vectors: the block's m > 1 columns, the level call against the pair body bit
+        // for bit.
+        let two = Inputs::new(scenario, 2, comm);
+        let vectors = tables.clone().vectors(2);
+        let (_, level_calls) = run(&vectors, &two, kind, comm);
+        let (_, pairs) = run(&vectors.clone().pair_calls(true), &two, kind, comm);
+        assert_same(
+            &format!("{name}, two vectors, pair by pair"),
+            &pairs,
+            &level_calls,
+            comm,
+        );
+        // The fused mode: Rotation's and Dense's output to rounding; the one-rank FMM bit for
+        // bit (threads and pair by pair as the separate mode's runs above show: the level call
+        // and the pair body share their calls, and the mode only changes a step).
+        let fused = tables.clone().m2l_mul_add(MulAdd::Fused);
+        let name = format!("{name}, fused");
+        let (_, output) = run(&fused, &inputs, kind, comm);
+        let (phi, grad) = difference(&output, &rotation, comm);
+        let (dense_phi, dense_grad) = difference(&output, dense, comm);
+        if rank == 0 {
+            println!(
+                "{name} against Rotation: relative L2 φ {phi:.2e}, ∇φ {grad:.2e}; against \
+                 Dense φ {dense_phi:.2e}, ∇φ {dense_grad:.2e}"
+            );
+        }
+        assert!(
+            phi.max(grad).max(dense_phi).max(dense_grad) <= tolerance,
+            "{name}: φ {phi:e}, ∇φ {grad:e} against Rotation, φ {dense_phi:e}, ∇φ \
+             {dense_grad:e} against Dense"
+        );
+        check_one_rank(&name, &fused, &inputs, kind, &output, comm);
+    }
 
     // Also the finest level's tables alone, RCR on the coarser levels (with more than one
     // level of V lists), unless that was the run above.
@@ -673,6 +737,7 @@ fn check_tables(scenario: &Scenario, m2l: HelmholtzM2l, comm: &SimpleCommunicato
     if rank == 0 {
         println!("{name} checks passed in {:.1?}", start.elapsed());
     }
+    output
 }
 
 /// Two vectors: each bit for bit its one-vector FMM, the second against its direct sum;
@@ -1019,11 +1084,13 @@ fn helmholtz_fmm() {
     // charges and separate targets.
     check_kernels(&scenarios()[0], &comm);
     check_kernels(&scenarios()[2], &comm);
-    // The Dense and Classes M2L: complex k with complex charges, real k with real charges
-    // (real multipoles, one plane).
-    for m2l in [HelmholtzM2l::Dense, HelmholtzM2l::Classes] {
-        check_tables(&scenarios()[0], m2l, &comm);
-        check_tables(&scenarios()[2], m2l, &comm);
+    // The Dense, Classes and Batched M2L: complex k with complex charges, real k with real
+    // charges (real multipoles, one plane).
+    for i in [0, 2] {
+        let scenario = &scenarios()[i];
+        let dense = check_tables(scenario, HelmholtzM2l::Dense, None, &comm);
+        check_tables(scenario, HelmholtzM2l::Classes, None, &comm);
+        check_tables(scenario, HelmholtzM2l::Batched, Some(&dense), &comm);
     }
     // Two vectors of complex and of real charges.
     check_vectors(&scenarios()[1], &comm);

@@ -27,8 +27,9 @@
 //! - **Times.** The build and the evaluation, wall time of the slowest rank.
 //! - **P2P kernel.** [`Case::p2p`] (Helmholtz CH3.4c): `Auto` by default, `Reference` for
 //!   the times before the vectorised kernel; [`Row::p2p`] the kernel that ran.
-//! - **M2L.** [`Case::m2l`] and [`Case::dense_budget`] (Helmholtz CH3.2a, CH3.2b):
-//!   Rotation by default, or Dense or Classes on the levels whose tables fit the budget;
+//! - **M2L.** [`Case::m2l`] and [`Case::dense_budget`] (Helmholtz CH3.2a, CH3.2b, CH3.2c):
+//!   Rotation by default, or Dense, Classes or Batched on the levels whose tables fit the
+//!   budget, Batched in [`Case::m2l_mul_add`]'s mode (separate by default);
 //!   [`Row::m2l`], [`Row::dense_levels`] and [`Row::dense_bytes`] what ran.
 
 use std::ops::Range;
@@ -42,7 +43,7 @@ use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzFmm, HelmholtzFmmBuilder,
     HelmholtzFmmError, HelmholtzM2l, Output, Wavenumber,
 };
-use nd_fmm_exec::operator::P2pChoice;
+use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
 use nd_fmm_ref::helmholtz::p2p::direct_sum;
 
@@ -73,9 +74,11 @@ pub struct Case {
     pub p2p: P2pChoice,
     /// The FMM's M2L.
     pub m2l: HelmholtzM2l,
-    /// The bytes of the dense or class M2L tables per rank under [`HelmholtzM2l::Dense`]
-    /// or [`HelmholtzM2l::Classes`].
+    /// The bytes of the dense, class or batched M2L tables per rank under
+    /// [`HelmholtzM2l::Dense`], [`HelmholtzM2l::Classes`] or [`HelmholtzM2l::Batched`].
     pub dense_budget: usize,
+    /// The batched M2L's multiply–add mode (read under [`HelmholtzM2l::Batched`] only).
+    pub m2l_mul_add: MulAdd,
 }
 
 impl Case {
@@ -95,6 +98,7 @@ impl Case {
             p2p: P2pChoice::Auto,
             m2l: HelmholtzM2l::Rotation,
             dense_budget: DEFAULT_DENSE_BUDGET,
+            m2l_mul_add: MulAdd::Separate,
         }
     }
 }
@@ -382,9 +386,12 @@ pub struct Row {
     pub p2p: P2pChoice,
     /// The M2L setting.
     pub m2l: HelmholtzM2l,
-    /// Per level, whether its M2L ran the setting's tables, Dense or Classes (else RCR).
+    /// The batched M2L's multiply–add mode.
+    pub m2l_mul_add: MulAdd,
+    /// Per level, whether its M2L ran the setting's tables, Dense, Classes or Batched (else
+    /// RCR).
     pub dense_levels: Vec<bool>,
-    /// The bytes of the dense or class M2L tables per rank.
+    /// The bytes of the dense, class or batched M2L tables per rank.
     pub dense_bytes: usize,
     /// The ranks.
     pub ranks: usize,
@@ -487,6 +494,7 @@ pub fn run_output<C: CommunicatorCollectives>(
         .p2p_kernel(case.p2p)
         .m2l(case.m2l)
         .dense_budget(case.dense_budget)
+        .m2l_mul_add(case.m2l_mul_add)
         .build(points, points, comm)?;
     let build = slowest(start.elapsed().as_secs_f64(), comm);
     let charges: Vec<Charges<'_, f64>> = (0..case.vectors)
@@ -510,10 +518,13 @@ pub fn run_output<C: CommunicatorCollectives>(
         threads,
         p2p: fmm.p2p_kernel(),
         m2l: fmm.operator().m2l_choice(),
+        m2l_mul_add: fmm.operator().m2l_mul_add(),
         dense_levels: (0..fmm.nlevels())
             .map(|l| fmm.operator().m2l_on(l) != HelmholtzM2l::Rotation)
             .collect(),
-        dense_bytes: fmm.operator().dense_bytes() + fmm.operator().class_bytes(),
+        dense_bytes: fmm.operator().dense_bytes()
+            + fmm.operator().class_bytes()
+            + fmm.operator().batched_bytes(),
         ranks: size,
         levels: fmm.nlevels(),
         min_leaf_level: fmm.min_leaf_level(),

@@ -21,6 +21,7 @@
 //! | M2M, L2L, M2L | `nd_fmm_tables::helmholtz::HelmholtzTables` (RCR with the level's tables; real shifts on each plane for real k) |
 //! | M2L under [`HelmholtzM2l::Dense`] | `nd_fmm_tables::helmholtz::dense::DenseM2l` on the levels whose tables fit the budget, RCR on the others |
 //! | M2L under [`HelmholtzM2l::Classes`] | `nd_fmm_tables::helmholtz::classes::ClassM2l` on the levels whose tables fit the budget, RCR on the others |
+//! | M2L under [`HelmholtzM2l::Batched`] | `nd_fmm_tables::helmholtz::batched::BatchedM2l` by `nd_fmm_simd::MatrixKernel`, block by block, on the levels whose tables fit the budget, RCR on the others |
 //! | P2L | `nd_fmm_ref::helmholtz::leaf::p2l` in the source leaf's units, at (ĉ(t\|s), r̂(t\|s)) |
 //! | M2P | `nd_fmm_ref::helmholtz::leaf::m2p` in the target leaf's units, at (ĉ(s\|t), r̂(s\|t)) |
 //! | P2P | `nd_fmm_simd::P2pKernel::evaluate_helmholtz` on the ISA of the [`P2pChoice`], or `nd_fmm_ref::helmholtz::p2p::p2p` for [`P2pChoice::Reference`], in the target leaf's units, the sources mapped as ĉ(s\|t) + r̂(s\|t) u |
@@ -82,13 +83,44 @@
 //! blocks for the others. So Classes agrees with Dense, and with Rotation, to rounding, and
 //! is deterministic and rank-invariant as Dense is.
 //!
+//! Under [`HelmholtzM2l::Batched`] (Helmholtz CH3.2c; proposal §5.3) a level whose tables
+//! fit the same budget (Dense's `select`) holds Dense's matrices in split planes, A_r and
+//! A_i each n × n (`BatchedM2l`), and its M2L level call runs as Laplace's batched M2L
+//! does, with its own block (not `driver::m2l_block`, whose layout is Laplace's; the user,
+//! 2026-11-02): blocks of `M2L_BLOCK_TARGETS` consecutive targets, and in each the offset
+//! indices d in order, the pairs of the grouped view's `batch(d)` whose target lies in the
+//! block, m columns a pair, through `nd_fmm_simd::MatrixKernel::accumulate_columns` (on the
+//! ISA of the P2P kernel, the scalar path for [`P2pChoice::Reference`]), each table read
+//! once per block. Per offset, on each column, in the default [`MulAdd::Separate`] mode
+//! (`MatrixSet::apply`'s steps, product and sum rounded apart):
+//!
+//! - real multipoles (real k, real charges): L_r += A_r M, then L_i += A_i M, Dense's chain
+//!   bit for bit;
+//! - complex multipoles: L_r += A_r M_r; L_r −= A_i M_i (L_r negated, A_i M_i added and L_r
+//!   negated back, exact); L_i += A_i M_r; L_i += A_r M_i. Each column sums the real plane's
+//!   products before the imaginary plane's where Dense alternates them per k, so Batched is
+//!   Dense to rounding here (CH3.2a's sign-off 2), with no per-target epilogue.
+//!
+//! In the opt-in [`MulAdd::Fused`] mode ([`with_m2l_mul_add`](HelmholtzOperator::with_m2l_mul_add))
+//! each step is one fma: Dense to rounding also with real multipoles (per element within
+//! about n u of the separate form, relative to the sum of its terms' magnitudes), and about
+//! 1.8 times the separate form's rate on the M6, where the kernel is bound by its arithmetic
+//! (fmm-validate/results/helmholtz-ch3-2c.md).
+//!
+//! An element depends on its own column only, and a target meets the offsets in the order
+//! of its row, so the level call is the pair body (the same calls with one column per
+//! vector) bit for bit: the same at every thread count, block split and ISA, and on P ranks
+//! the one-rank output. Levels without tables run target by target by RCR.
+//!
 //! # Execution
 //!
 //! The level calls run on the shared drivers of `nd-fmm-exec` (Helmholtz CH2.0, CH3.5),
 //! target by target in the plan's order, serially or on the operator's pool
 //! ([`HelmholtzOperator::with_pool`]), each thread with its own scratch; the output is the
-//! same at every thread count. The batched M2L does not apply (`driver::m2l_block` assumes
-//! Laplace's layout; Helmholtz CH3.2). [`PairOperator`] runs the same bodies pair by pair.
+//! same at every thread count. The shared batched M2L does not apply (`driver::m2l_block`
+//! assumes Laplace's layout); under [`HelmholtzM2l::Batched`] the M2L level call of a level
+//! with tables runs the operator's own block instead ("M2L"). [`PairOperator`] runs the same
+//! bodies pair by pair.
 //!
 //! Yukawa (Re k = 0) is not served: its real path is CH2.1's.
 
@@ -101,8 +133,11 @@ use nd_fmm_plan::operator::{
 };
 use nd_fmm_ref::Frame;
 use nd_fmm_ref::helmholtz::{Level, Workspace, leaf, p2p};
-use nd_fmm_simd::{HelmholtzCharges, IsaUnavailable, MatrixKernel, P2pKernel, SimdScalar};
+use nd_fmm_simd::{
+    HelmholtzCharges, Isa, IsaUnavailable, MatrixKernel, MulAdd, P2pKernel, SimdScalar,
+};
 use nd_fmm_tables::MatrixSet;
+use nd_fmm_tables::helmholtz::batched::BatchedM2l;
 use nd_fmm_tables::helmholtz::classes::{ClassM2l, ClassScratch};
 use nd_fmm_tables::helmholtz::dense::DenseM2l;
 use nd_fmm_tables::helmholtz::{DEFAULT_BLOCK_BUDGET, HelmholtzScratch, HelmholtzTables};
@@ -110,10 +145,11 @@ use nd_octree::{MortonKey, morton};
 use rayon::ThreadPool;
 use thiserror::Error;
 
+use super::batched::Batched;
 use super::{Densities, LeafScratch, Wavenumber, WavenumberKind};
 use crate::driver::{self, Columns, Execution, HostKernel, debug_check_octant, offset_index};
 use crate::geometry::{Domain, radius, relative_frame};
-use crate::operator::P2pChoice;
+use crate::operator::{M2L_BLOCK_TARGETS, P2pChoice};
 
 /// Why [`HelmholtzOperator::new`] refused its inputs.
 #[derive(Clone, Copy, Debug, Error, PartialEq)]
@@ -146,6 +182,9 @@ pub enum HelmholtzM2l {
     /// The 16 class matrices per level and the cube-group transforms, on the levels whose
     /// tables fit the dense budget, from the finest level up; RCR on the others.
     Classes,
+    /// Dense's matrices in split planes, applied block by block by the column kernel, on the
+    /// levels whose tables fit the dense budget, from the finest level up; RCR on the others.
+    Batched,
 }
 
 /// The default byte budget of the dense or class M2L tables of one rank, 1 GiB.
@@ -172,6 +211,10 @@ struct Kernel<T: SimdScalar> {
     dense: Option<DenseM2l<T>>,
     /// The class M2L tables of the levels that have them, under [`HelmholtzM2l::Classes`].
     classes: Option<ClassM2l<T>>,
+    /// The batched M2L tables of the levels that have them, under [`HelmholtzM2l::Batched`].
+    batched: Option<BatchedM2l<T>>,
+    /// The batched M2L's column kernel, on the P2P kernel's ISA (scalar for the reference).
+    matrix: MatrixKernel<T>,
     /// The P2P kernel of `nd-fmm-simd`, or `None` for the reference.
     p2p: Option<P2pKernel<T>>,
 }
@@ -191,7 +234,7 @@ struct Scratch<T: SimdScalar> {
     strengths: Vec<T>,
     /// One multipole of two planes (M2P of a real multipole).
     widened: Vec<T>,
-    /// Never used: no batched M2L.
+    /// The batched M2L's packing buffer and column lists (sized for the batched levels).
     columns: Columns<T>,
 }
 
@@ -267,6 +310,8 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             m2l: HelmholtzM2l::Rotation,
             dense: None,
             classes: None,
+            batched: None,
+            matrix: MatrixKernel::detect(MulAdd::Separate),
             p2p: Some(P2pKernel::detect()),
         };
         let execution = Execution {
@@ -292,7 +337,8 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// builds the dense tables of the levels that fit in `dense_budget` bytes from the
     /// finest level up (`DenseM2l::select`; [`DEFAULT_DENSE_BUDGET`] is a default), under
     /// [`HelmholtzM2l::Classes`] the class tables within the same budget
-    /// (`ClassM2l::select`, the transforms included), RCR on the others; under
+    /// (`ClassM2l::select`, the transforms included), under [`HelmholtzM2l::Batched`]
+    /// Dense's tables in split planes (`BatchedM2l::select`, Dense's), RCR on the others; under
     /// [`HelmholtzM2l::Rotation`] ignores the budget. The tables are built in f64, serially,
     /// O(p⁵) per offset and level (16 offsets a level for Classes, 316 for Dense).
     pub fn with_m2l(mut self, choice: HelmholtzM2l, dense_budget: usize) -> Self {
@@ -310,7 +356,12 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             let levels = ClassM2l::<T>::select(&degrees, dense_budget);
             ClassM2l::build(k_root, &degrees, &levels)
         });
-        // The class scratch is sized by the class tables' largest degree.
+        kernel.batched = (choice == HelmholtzM2l::Batched).then(|| {
+            let levels = BatchedM2l::<T>::select(&degrees, dense_budget);
+            BatchedM2l::build(k_root, &degrees, &levels)
+        });
+        // The class scratch and the batched columns are sized by their tables' largest
+        // degree.
         for scratch in &mut self.execution.scratch {
             *scratch.get_mut().expect("a scratch set is never poisoned") = Scratch::new(kernel);
         }
@@ -322,13 +373,15 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         self.kernel.m2l
     }
 
-    /// The M2L that runs on `level`: [`HelmholtzM2l::Dense`] or [`HelmholtzM2l::Classes`]
-    /// where the level has dense or class tables, [`HelmholtzM2l::Rotation`] everywhere
-    /// else (levels 0 and 1 have no M2L).
+    /// The M2L that runs on `level`: [`HelmholtzM2l::Dense`], [`HelmholtzM2l::Classes`] or
+    /// [`HelmholtzM2l::Batched`] where the level has dense, class or batched tables,
+    /// [`HelmholtzM2l::Rotation`] everywhere else (levels 0 and 1 have no M2L).
     pub fn m2l_on(&self, level: usize) -> HelmholtzM2l {
-        match (&self.kernel.dense, &self.kernel.classes) {
-            (Some(dense), _) if dense.is_dense(level) => HelmholtzM2l::Dense,
-            (_, Some(classes)) if classes.is_class(level) => HelmholtzM2l::Classes,
+        let kernel = &self.kernel;
+        match (&kernel.dense, &kernel.classes, &kernel.batched) {
+            (Some(dense), _, _) if dense.is_dense(level) => HelmholtzM2l::Dense,
+            (_, Some(classes), _) if classes.is_class(level) => HelmholtzM2l::Classes,
+            (_, _, Some(batched)) if batched.is_batched(level) => HelmholtzM2l::Batched,
             _ => HelmholtzM2l::Rotation,
         }
     }
@@ -344,7 +397,14 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         self.kernel.classes.as_ref().map_or(0, ClassM2l::bytes)
     }
 
-    /// Runs P2P with the kernel of `choice` (module documentation, "P2P kernel").
+    /// The bytes of the batched M2L tables (0 unless [`HelmholtzM2l::Batched`]).
+    pub fn batched_bytes(&self) -> usize {
+        self.kernel.batched.as_ref().map_or(0, BatchedM2l::bytes)
+    }
+
+    /// Runs P2P with the kernel of `choice` (module documentation, "P2P kernel"), and the
+    /// batched M2L's column kernel on its ISA (the scalar path for
+    /// [`P2pChoice::Reference`]).
     ///
     /// # Errors
     ///
@@ -355,7 +415,25 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             P2pChoice::Reference => None,
             P2pChoice::Isa(isa) => Some(P2pKernel::new(isa)?),
         };
+        let isa = self.kernel.p2p.as_ref().map_or(Isa::Scalar, P2pKernel::isa);
+        self.kernel.matrix = MatrixKernel::new(isa, self.kernel.matrix.mul_add())?;
         Ok(self)
+    }
+
+    /// Runs the batched M2L's column kernel in the mode `mul_add` (module documentation,
+    /// "M2L"; [`MulAdd::Separate`] by default): [`MulAdd::Fused`] forms each step as one
+    /// fma, within n u of the separate form per element, so the output is Dense's to
+    /// rounding also with real multipoles; deterministic, the same at every thread count,
+    /// ISA and rank count. Only [`HelmholtzM2l::Batched`] reads it.
+    pub fn with_m2l_mul_add(mut self, mul_add: MulAdd) -> Self {
+        self.kernel.matrix = MatrixKernel::new(self.kernel.matrix.isa(), mul_add)
+            .expect("the kernel's own ISA is available");
+        self
+    }
+
+    /// The batched M2L's multiply–add mode ([`with_m2l_mul_add`](Self::with_m2l_mul_add)).
+    pub fn m2l_mul_add(&self) -> MulAdd {
+        self.kernel.matrix.mul_add()
     }
 
     /// The P2P kernel as it runs: [`P2pChoice::Reference`] or [`P2pChoice::Isa`] with the
@@ -404,6 +482,18 @@ impl<T: SimdScalar> Scratch<T> {
             .map(|l| kernel.tables.degree(l))
             .max()
             .unwrap_or(0);
+        // The batched M2L's largest n, and m columns per pair of a block.
+        let n_batched = kernel.batched.as_ref().map_or(0, |b| {
+            (0..b.nlevels())
+                .filter(|&l| b.is_batched(l))
+                .map(|l| Layout::new(b.degree(l)).len())
+                .max()
+                .unwrap_or(0)
+        });
+        let pairs = match n_batched {
+            0 => 0,
+            _ => kernel.densities.vectors() * M2L_BLOCK_TARGETS,
+        };
         Self {
             leaf: LeafScratch::new(p_max),
             workspace: Workspace::new(p_max),
@@ -417,9 +507,9 @@ impl<T: SimdScalar> Scratch<T> {
             strengths: vec![T::zero(); 2 * kernel.max_leaf_points],
             widened: vec![T::zero(); 2 * Layout::new(p_max).len()],
             columns: Columns {
-                pack: Vec::new(),
-                sources: Vec::new(),
-                targets: Vec::new(),
+                pack: vec![T::zero(); MatrixKernel::<T>::pack_len(n_batched)],
+                sources: Vec::with_capacity(pairs),
+                targets: Vec::with_capacity(pairs),
             },
         }
     }
@@ -428,6 +518,17 @@ impl<T: SimdScalar> Scratch<T> {
 impl<T: SimdScalar> Kernel<T> {
     fn p(&self, level: usize) -> usize {
         self.tables.degree(level)
+    }
+
+    /// The batched M2L of `level`, if it has tables.
+    fn batched(&self, level: usize) -> Option<Batched<'_, T>> {
+        let tables = self.batched.as_ref().filter(|b| b.is_batched(level))?;
+        Some(Batched {
+            tables,
+            matrix: &self.matrix,
+            planes: self.densities.multipole_planes(),
+            vectors: self.densities.vectors(),
+        })
     }
 
     /// k̂ of `level` rounded to T.
@@ -524,13 +625,14 @@ impl<T: SimdScalar> Kernel<T> {
     fn m2l(&self, level: usize, d: usize, multipole: &[T], local: &mut [T], s: &mut Scratch<T>) {
         let planes = self.densities.multipole_planes();
         let m = self.densities.vectors();
-        match (&self.dense, &self.classes) {
-            (Some(dense), _) if dense.is_dense(level) => {
+        match (&self.dense, &self.classes, self.batched(level)) {
+            (Some(dense), _, _) if dense.is_dense(level) => {
                 dense.m2l(level, d, multipole, planes, local, m);
             }
-            (_, Some(classes)) if classes.is_class(level) => {
+            (_, Some(classes), _) if classes.is_class(level) => {
                 classes.m2l(level, d, multipole, planes, local, m, &mut s.classes);
             }
+            (_, _, Some(batched)) => batched.pair(level, d, multipole, local, &mut s.columns),
             _ => self
                 .tables
                 .m2l(level, d, multipole, planes, local, m, &mut s.tables),
@@ -867,7 +969,8 @@ impl<T: SimdScalar + Equivalence + Default> FmmSizes for HelmholtzOperator<T> {
     }
 }
 
-/// Target by target through the shared drivers (module documentation, "Execution").
+/// Target by target through the shared drivers, but for the M2L of a level with batched
+/// tables (module documentation, "Execution" and "M2L").
 impl<T: SimdScalar + Equivalence + Default> FmmOperator for HelmholtzOperator<T> {
     fn p2m(&mut self, batch: P2m<'_, T>) {
         driver::p2m(&self.kernel, &mut self.execution, batch);
@@ -877,8 +980,13 @@ impl<T: SimdScalar + Equivalence + Default> FmmOperator for HelmholtzOperator<T>
         driver::m2m(&self.kernel, &mut self.execution, batch);
     }
 
+    /// Under [`HelmholtzM2l::Batched`] block by block on the levels with tables (module
+    /// documentation, "M2L"), target by target elsewhere.
     fn m2l(&mut self, batch: M2l<'_, T>) {
-        driver::m2l(&self.kernel, &mut self.execution, batch);
+        match self.kernel.batched(batch.level) {
+            Some(batched) => batched.m2l(&mut self.execution, batch, |s| &mut s.columns),
+            None => driver::m2l(&self.kernel, &mut self.execution, batch),
+        }
     }
 
     fn p2l(&mut self, batch: P2l<'_, T>) {

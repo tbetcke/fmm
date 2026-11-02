@@ -352,6 +352,13 @@ offsets whose element fixes the z-axis and over the others, its two transforms a
 bytes (the transforms included) and build time, its locals checked against Rotation's
 first. Its report is `results/helmholtz-ch3-2b.md`.
 
+Helmholtz CH3.2c (the Batched M2L; docs/helmholtz/tasks/CH3.2c.md) added `batched` and
+`batched-fused` to the example's `--m2l` (`Case::m2l_mul_add`, `Row::m2l_mul_add`), and
+Batched to `helmholtz_m2l`: the operator's call sequence restated on a block of `--columns`
+pairs per offset (default 32), in the separate and the fused mode, each checked against
+Dense applied pair by pair to the same pairs first, with its build time. Its report is
+`results/helmholtz-ch3-2c.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

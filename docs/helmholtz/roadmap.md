@@ -401,7 +401,7 @@ at any kD.
   *Needs:* CH3.1. *Machines:* locust, Kathleen. Split on 2026-11-02 into three sub-tasks,
   each one reviewable PR (a new table family, its symmetry form and the batched block with
   constraint 1 and the three machines do not fit one); CH3.2 is done, and H3.G runnable on
-  its side, when all three are:
+  its side, when all three are, and CH3.2d (added at CH3.2c's sign-off) too:
 - [x] **CH3.2a Dense.** Report: `fmm-validate/results/helmholtz-ch3-2a.md`; record
   `docs/helmholtz/tasks/CH3.2a.md`; `nd_fmm_tables::helmholtz::dense`,
   `nd_fmm_exec::helmholtz::HelmholtzM2l`, the `helmholtz_m2l` example. Dense is Rotation to
@@ -428,13 +428,30 @@ at any kD.
   *Done when:* against Dense to rounding at every offset; the FMM as CH3.2a's; the cost per
   pair against Rotation and Dense per p on the M6, the transforms that move the z-axis
   included. *Needs:* CH3.2a.
-- [ ] **CH3.2c Batched, and the measurements per p.** The batched M2L on CH3.2a's tables:
-  the two-plane case of `driver::m2l_block` (`PLANES`, rectangular tables, the per-target
+- [x] **CH3.2c Batched, and the measurements per p.** Report:
+  `fmm-validate/results/helmholtz-ch3-2c.md`; record `docs/helmholtz/tasks/CH3.2c.md`;
+  `nd_fmm_tables::helmholtz::batched::BatchedM2l`, `HelmholtzM2l::Batched`,
+  `with_m2l_mul_add`. Helmholtz's own block on the column kernel (the user, 2026-11-02:
+  "Own Helmholtz block"; no Laplace path changes), Dense's tables in split planes ("Split
+  planes, 2n²"): Dense bit for bit with real multipoles, to rounding with complex ones;
+  the fused mode opt-in. Fused Batched beats Rotation per pair to p ≈ 10 on the M6 and
+  locust and p ≈ 15 on Kathleen, and end to end where the levels with tables have low p
+  (0.39–0.82× on the W4 cube and W3 at 10⁻³); it stays opt-in. The batched M2L on
+  CH3.2a's tables: the two-plane case of `driver::m2l_block` (`PLANES`, rectangular tables, the per-target
   epilogue of proposal §6.2) with constraint 1 as in CH2.0 (Laplace bit for bit, D9 on the
   three machines), else Helmholtz's own block. *Done when:* against Dense (bit for bit, or
   within rounding where an epilogue reorders the sums, stated); the FMM as CH3.2a's;
   Rotation, Dense, Classes and Batched per p on the M6, locust and Kathleen. *Needs:*
   CH3.2a, CH3.2b. *Machines:* locust, Kathleen.
+- [ ] **CH3.2d The M2L rule per level.** Added on 2026-11-02 at CH3.2c's sign-off (the
+  user, "i agree with the recommendations": a follow-up before H3.G). An Auto setting of
+  `HelmholtzM2l` choosing per level from the degrees, the budget and the machine class only
+  (constraint 9): the fused Batched M2L on the levels with tables below a crossover degree
+  (CH3.2c measured about 10 on the M6 and locust, about 15 on Kathleen), Rotation above;
+  sparse levels (W1) counted. *Done when:* the rule's choice against the best of Rotation and
+  fused Batched end to end on CH3.2a's cases on the three machines, within a stated margin;
+  deterministic and rank-invariant as CH3.2c's FMM; whether it becomes the default is a
+  question for sign-off. *Needs:* CH3.2c. *Machines:* locust, Kathleen.
 - [x] **CH3.3 Calibration of p_l over (k a_l, ε).** Report:
   `fmm-validate/results/helmholtz-ch3-3.md`; record `docs/helmholtz/tasks/CH3.3.md`;
   `nd_fmm_exec::helmholtz::{DegreeRule, degree, s7_degree}`,

@@ -51,6 +51,7 @@
 //! assert_eq!(min_leaf_level(&yukawa, &domain, C_LEAF), 0);
 //! ```
 
+mod batched;
 pub mod degree;
 pub mod densities;
 pub mod fmm;

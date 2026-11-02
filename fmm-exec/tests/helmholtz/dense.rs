@@ -1,13 +1,17 @@
-//! The operator's Dense M2L (Helmholtz CH3.2a) and Classes M2L (Helmholtz CH3.2b): pair by
-//! pair against Rotation (and Classes against Dense) on every offset of levels 2–4, real
-//! and complex k, real and complex charges, two vectors, relative L2 over the local within
-//! [`DENSE_BOUND`] and [`CLASSES_BOUND`]; the levels chosen by the budget; a budget of zero
-//! is Rotation bit for bit. The FMM under both is tested in `tests/helmholtz_fmm.rs`.
+//! The operator's Dense M2L (Helmholtz CH3.2a), Classes M2L (Helmholtz CH3.2b) and Batched
+//! M2L (Helmholtz CH3.2c): pair by pair against Rotation (and Classes and Batched against
+//! Dense) on every offset of levels 2–4, real and complex k, real and complex charges, two
+//! vectors, relative L2 over the local within [`DENSE_BOUND`] and [`CLASSES_BOUND`];
+//! Batched bit for bit Dense with real multipoles (separate mode), fused within the bound,
+//! and in both modes the same bits on every ISA; the
+//! levels chosen by the budget; a budget of zero is Rotation bit for bit. The FMM under each
+//! is tested in `tests/helmholtz_fmm.rs`.
 
 use nd_fmm_exec::geometry::Domain;
 use nd_fmm_exec::helmholtz::{
     ChargeKind, DEFAULT_DENSE_BUDGET, Densities, HelmholtzM2l, HelmholtzOperator, Wavenumber,
 };
+use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_plan::operator::{FmmSizes, PairOperator};
 use nd_fmm_tables::geometry::{M2L_OFFSET_COUNT, m2l_offsets};
 use nd_fmm_tables::helmholtz::classes::{ClassM2l, CubeTransforms};
@@ -25,6 +29,12 @@ const DENSE_BOUND: f64 = 1e-14;
 /// Classes against Rotation and Dense, relative L2 over a local: two more transforms per
 /// pair, so more rounding (at most 5.6e-15 on the M6), with a margin of about ten.
 const CLASSES_BOUND: f64 = 5e-14;
+
+/// Batched against Dense and Rotation with complex multipoles, and in the fused mode,
+/// relative L2 over a local: the real plane's products before the imaginary plane's, or one
+/// rounding per step, so rounding of Dense's own size (at most 7.4e-16 separate and 6.9e-16
+/// fused against Dense on the M6), with a margin of about ten.
+const BATCHED_BOUND: f64 = DENSE_BOUND;
 
 fn domain() -> Domain {
     Domain::new(&PhysicalBox::new([0.0, 0.0, 0.0, 1.0, 1.0, 1.0])).unwrap()
@@ -215,5 +225,130 @@ fn no_class_budget_is_rotation_bit_for_bit() {
     let mut rotation = operator(k, ChargeKind::Complex, 1, HelmholtzM2l::Rotation, 0);
     assert_eq!(classes.class_bytes(), 0);
     let (_, same) = compare(&mut classes, &mut rotation);
+    assert!(same);
+}
+
+/// Batched pair by pair: with real multipoles (real k, real charges) Dense bit for bit, with
+/// complex ones Dense and Rotation to rounding.
+#[test]
+fn batched_is_dense_bit_for_bit_with_real_multipoles() {
+    let cases = [
+        (20.0, 0.0, ChargeKind::Real, true),
+        (0.5, 0.0, ChargeKind::Real, true),
+        (20.0, 0.0, ChargeKind::Complex, false),
+        (20.0, 2.0, ChargeKind::Real, false),
+    ];
+    for (re, im, kind, one_plane) in cases {
+        let k = Wavenumber::new(re, im).unwrap();
+        let mut batched = operator(k, kind, 2, HelmholtzM2l::Batched, usize::MAX);
+        let mut dense = operator(k, kind, 2, HelmholtzM2l::Dense, usize::MAX);
+        let mut rotation = operator(k, kind, 2, HelmholtzM2l::Rotation, usize::MAX);
+        assert_eq!(batched.m2l_choice(), HelmholtzM2l::Batched);
+        for level in 2..LEVELS {
+            assert_eq!(batched.m2l_on(level), HelmholtzM2l::Batched);
+        }
+        assert_eq!(batched.batched_bytes(), dense.dense_bytes());
+        assert_eq!(batched.dense_bytes(), 0);
+        let (against_dense, same) = compare(&mut batched, &mut dense);
+        let (against_rotation, _) = compare(&mut batched, &mut rotation);
+        println!(
+            "k = {re} + {im}i, {kind:?}: Batched against Dense {against_dense:.2e} (bit for \
+             bit: {same}), against Rotation {against_rotation:.2e}"
+        );
+        assert_eq!(
+            same, one_plane,
+            "k = {re} + {im}i, {kind:?}: bit for bit Dense"
+        );
+        assert!(against_dense <= BATCHED_BOUND, "{against_dense:e}");
+        assert!(against_rotation <= BATCHED_BOUND, "{against_rotation:e}");
+    }
+}
+
+/// Batched in the fused mode pair by pair: Dense and Rotation to rounding with one and two
+/// planes; the mode survives `with_p2p`.
+#[test]
+fn fused_batched_is_dense_to_rounding() {
+    let cases = [
+        (20.0, 0.0, ChargeKind::Real),
+        (20.0, 2.0, ChargeKind::Complex),
+    ];
+    for (re, im, kind) in cases {
+        let k = Wavenumber::new(re, im).unwrap();
+        let mut fused = operator(k, kind, 2, HelmholtzM2l::Batched, usize::MAX)
+            .with_m2l_mul_add(MulAdd::Fused)
+            .with_p2p(P2pChoice::Reference)
+            .unwrap();
+        assert_eq!(fused.m2l_mul_add(), MulAdd::Fused);
+        let mut dense = operator(k, kind, 2, HelmholtzM2l::Dense, usize::MAX);
+        let mut rotation = operator(k, kind, 2, HelmholtzM2l::Rotation, usize::MAX);
+        let (against_dense, same) = compare(&mut fused, &mut dense);
+        let (against_rotation, _) = compare(&mut fused, &mut rotation);
+        println!(
+            "k = {re} + {im}i, {kind:?}: fused Batched against Dense {against_dense:.2e}, \
+             against Rotation {against_rotation:.2e}"
+        );
+        assert!(
+            !same,
+            "the fused mode gave Dense's bits: is it engaged? (its steps round once)"
+        );
+        assert!(against_dense <= BATCHED_BOUND, "{against_dense:e}");
+        assert!(against_rotation <= BATCHED_BOUND, "{against_rotation:e}");
+    }
+}
+
+/// In both modes the column kernel gives the same bits on every ISA this machine runs, and
+/// for the reference P2P (the scalar path). Pair by pair, so the kernel's groups of fewer
+/// than four columns; its four-column groups are compared across ISAs in `nd-fmm-simd`'s
+/// tests, and the level call against the pair body in `tests/helmholtz_fmm.rs`.
+#[test]
+fn batched_is_the_same_on_every_isa() {
+    let k = Wavenumber::new(20.0, 2.0).unwrap();
+    for mode in [MulAdd::Separate, MulAdd::Fused] {
+        let batched = || {
+            operator(k, ChargeKind::Complex, 2, HelmholtzM2l::Batched, usize::MAX)
+                .with_m2l_mul_add(mode)
+        };
+        let mut scalar = batched().with_p2p(P2pChoice::Isa(Isa::Scalar)).unwrap();
+        let choices = Isa::all()
+            .filter(|isa| isa.is_available())
+            .map(P2pChoice::Isa)
+            .chain([P2pChoice::Reference, P2pChoice::Auto]);
+        for choice in choices {
+            let mut other = batched().with_p2p(choice).unwrap();
+            assert_eq!(other.m2l_mul_add(), mode);
+            let (_, same) = compare(&mut other, &mut scalar);
+            assert!(same, "{mode}, {choice}: not the scalar path's bits");
+        }
+    }
+}
+
+#[test]
+fn the_budget_chooses_the_batched_levels() {
+    let k = Wavenumber::new(20.0, 2.0).unwrap();
+    let degrees = degrees(&k);
+    let budget =
+        DenseM2l::<f64>::level_bytes(degrees[4]) + DenseM2l::<f64>::level_bytes(degrees[2]);
+    let op = operator(k, ChargeKind::Complex, 1, HelmholtzM2l::Batched, budget);
+    let chosen = DenseM2l::<f64>::select(&degrees, budget);
+    assert_eq!(chosen, [false, false, true, false, true]);
+    for (level, &on) in chosen.iter().enumerate() {
+        let want = if on {
+            HelmholtzM2l::Batched
+        } else {
+            HelmholtzM2l::Rotation
+        };
+        assert_eq!(op.m2l_on(level), want, "level {level}");
+    }
+    assert_eq!(op.batched_bytes(), budget);
+}
+
+/// Under Batched with a budget of zero no level has tables: Rotation bit for bit.
+#[test]
+fn no_batched_budget_is_rotation_bit_for_bit() {
+    let k = Wavenumber::new(20.0, 2.0).unwrap();
+    let mut batched = operator(k, ChargeKind::Complex, 1, HelmholtzM2l::Batched, 0);
+    let mut rotation = operator(k, ChargeKind::Complex, 1, HelmholtzM2l::Rotation, 0);
+    assert_eq!(batched.batched_bytes(), 0);
+    let (_, same) = compare(&mut batched, &mut rotation);
     assert!(same);
 }

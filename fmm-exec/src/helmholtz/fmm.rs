@@ -105,7 +105,7 @@ use super::{
 };
 use crate::fmm::{DEFAULT_MAX_POINTS_PER_LEAF, FmmError, PointSet, SettingsError};
 use crate::geometry::Domain;
-use crate::operator::{P2pChoice, SimdScalar};
+use crate::operator::{MulAdd, P2pChoice, SimdScalar};
 use crate::pipeline::{
     self, Points, check_finite, gather_output, load_source_charges, pack_charges,
     unpack_output_many,
@@ -165,6 +165,7 @@ pub struct HelmholtzFmmBuilder {
     block_budget: usize,
     m2l: HelmholtzM2l,
     dense_budget: usize,
+    m2l_mul_add: MulAdd,
     c_leaf: f64,
     p2p: P2pChoice,
     pair_calls: bool,
@@ -190,6 +191,7 @@ impl HelmholtzFmmBuilder {
             block_budget: DEFAULT_BLOCK_BUDGET,
             m2l: HelmholtzM2l::Rotation,
             dense_budget: DEFAULT_DENSE_BUDGET,
+            m2l_mul_add: MulAdd::Separate,
             c_leaf: C_LEAF,
             p2p: P2pChoice::Auto,
             pair_calls: false,
@@ -252,19 +254,29 @@ impl HelmholtzFmmBuilder {
     }
 
     /// The M2L of the levels (default [`HelmholtzM2l::Rotation`]; the operator module
-    /// documentation, "M2L"). Under [`HelmholtzM2l::Dense`] and [`HelmholtzM2l::Classes`]
-    /// the output agrees with Rotation's to rounding, not bit for bit.
+    /// documentation, "M2L"). Under [`HelmholtzM2l::Dense`], [`HelmholtzM2l::Classes`] and
+    /// [`HelmholtzM2l::Batched`] the output agrees with Rotation's to rounding, not bit for
+    /// bit; Batched's is Dense's bit for bit with real multipoles (real k, real charges).
     pub fn m2l(mut self, choice: HelmholtzM2l) -> Self {
         self.m2l = choice;
         self
     }
 
-    /// The bytes of the dense M2L tables of each rank under [`HelmholtzM2l::Dense`], and of
-    /// the class tables with their transforms under [`HelmholtzM2l::Classes`] (default
-    /// [`DEFAULT_DENSE_BUDGET`]): the levels that fit, from the finest level up, run Dense or
-    /// Classes, the others RCR.
+    /// The bytes of the dense M2L tables of each rank under [`HelmholtzM2l::Dense`] and
+    /// [`HelmholtzM2l::Batched`] (the same tables in split planes), and of the class tables
+    /// with their transforms under [`HelmholtzM2l::Classes`] (default
+    /// [`DEFAULT_DENSE_BUDGET`]): the levels that fit, from the finest level up, run the
+    /// setting, the others RCR.
     pub fn dense_budget(mut self, bytes: usize) -> Self {
         self.dense_budget = bytes;
+        self
+    }
+
+    /// The batched M2L's multiply–add mode (default [`MulAdd::Separate`]; read under
+    /// [`HelmholtzM2l::Batched`] only): [`MulAdd::Fused`] gives Dense's output to rounding
+    /// also with real multipoles (`HelmholtzOperator::with_m2l_mul_add`).
+    pub fn m2l_mul_add(mut self, mul_add: MulAdd) -> Self {
+        self.m2l_mul_add = mul_add;
         self
     }
 
@@ -448,6 +460,7 @@ impl HelmholtzFmmBuilder {
             self.block_budget,
         )?
         .with_m2l(self.m2l, self.dense_budget)
+        .with_m2l_mul_add(self.m2l_mul_add)
         .with_p2p(self.p2p)
         .expect("the P2P kernel's ISA is available (checked in step 1)");
         if let Some(pool) = &pool {

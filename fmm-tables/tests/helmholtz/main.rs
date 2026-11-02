@@ -19,6 +19,7 @@ use nd_fmm_ref::helmholtz::{Level, Workspace, rcr};
 use nd_fmm_tables::geometry::{M2L_OFFSET_COUNT, OCTANT_COUNT, m2l_offsets, octant_direction};
 use nd_fmm_tables::helmholtz::{DEFAULT_BLOCK_BUDGET, HelmholtzTables};
 
+mod batched;
 mod classes;
 mod dense;
 
