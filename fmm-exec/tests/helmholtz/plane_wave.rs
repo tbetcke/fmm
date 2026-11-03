@@ -6,15 +6,15 @@
 
 use nd_fmm_exec::geometry::Domain;
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, DegreeRule, Densities, HelmholtzM2l, HelmholtzOperator, PlaneWavePrecision,
-    Wavenumber,
+    ChargeKind, DegreeRule, Densities, HelmholtzM2l, HelmholtzOperator, MIN_BUFFER_BOXES,
+    PlaneWaveCounts, PlaneWavePrecision, Wavenumber,
 };
 use nd_fmm_math::{Complex, Layout};
 use nd_fmm_plan::operator::{FmmSizes, PairOperator};
 use nd_fmm_tables::PlaneWaveTables;
 use nd_fmm_tables::geometry::{M2L_OFFSET_COUNT, m2l_offsets};
 use nd_fmm_tables::helmholtz::plane_wave::Precision;
-use nd_fmm_tables::helmholtz::plane_wave::merge::{MergeLevel, select};
+use nd_fmm_tables::helmholtz::plane_wave::merge::{MergeLevel, PlaneWaveM2l, select};
 use nd_fmm_tables::plane_wave::MergeGeometry;
 use nd_octree::{MortonKey, PhysicalBox, morton};
 
@@ -85,6 +85,80 @@ fn the_rule_chooses_each_levels_precision() {
     let rotation = operator(k, ChargeKind::Complex, 1, PlaneWavePrecision::Rule)
         .with_m2l(HelmholtzM2l::Rotation, 0);
     assert_eq!(precisions(&rotation), [None; 6]);
+    assert_eq!(rotation.plane_wave_bytes(), 0);
+}
+
+/// The waves buffer (CH6.2a): sized from the plan's boxes per level and the bound, at least
+/// `MIN_BUFFER_BOXES` boxes of a level (or the level's boxes), at most every box of it, in
+/// either order of the calls; counted in `plane_wave_bytes`; nothing under Rotation.
+#[test]
+fn the_waves_buffer_is_bounded() {
+    let k = Wavenumber::new(20.0, 0.0).unwrap();
+    let boxes = [1, 8, 64, 512, 4096, 32768];
+    let op = || {
+        operator(k, ChargeKind::Complex, 1, PlaneWavePrecision::Rule).with_plane_wave_boxes(&boxes)
+    };
+    // The reals of one box's up and down waves on each level with waves (levels 2–4).
+    let precisions = select(Complex::new(10.0, 0.0), &DEGREES, None);
+    let m2l = PlaneWaveM2l::<f64>::build(Complex::new(10.0, 0.0), &DEGREES, &precisions);
+    let box_waves: Vec<Option<usize>> = (0..DEGREES.len())
+        .map(|l| m2l.level(l).map(|level| 2 * level.tables().wave_len()))
+        .collect();
+    let bytes = |boxes_of: &dyn Fn(usize) -> usize| {
+        (0..DEGREES.len())
+            .filter_map(|l| Some(boxes_of(l) * box_waves[l]? * size_of::<f64>()))
+            .max()
+            .unwrap()
+    };
+    let whole = bytes(&|l| boxes[l]);
+    let floor = bytes(&|l| boxes[l].min(MIN_BUFFER_BOXES));
+
+    let unbounded = op();
+    assert_eq!(unbounded.plane_wave_buffer(), None);
+    assert_eq!(unbounded.plane_wave_buffer_bytes(), whole);
+    assert!(unbounded.plane_wave_bytes() >= m2l.bytes() + whole);
+    assert_eq!(unbounded.plane_wave_counts(), PlaneWaveCounts::default());
+    for bound in [0, 1, floor / 2] {
+        let op = op().with_plane_wave_buffer(Some(bound));
+        assert_eq!(op.plane_wave_buffer(), Some(bound));
+        assert_eq!(op.plane_wave_buffer_bytes(), floor, "bound {bound}");
+        assert_eq!(
+            unbounded.plane_wave_bytes() - op.plane_wave_bytes(),
+            whole - floor + 4 * (boxes[4] - MIN_BUFFER_BOXES),
+            "the waves and the source list (the positions are a level's boxes either way)"
+        );
+    }
+    for bound in [whole, usize::MAX] {
+        let op = op().with_plane_wave_buffer(Some(bound));
+        assert_eq!(op.plane_wave_buffer_bytes(), whole, "bound {bound}");
+    }
+    // A middle bound: each level as many boxes as fit, within its own.
+    let middle = whole / 5;
+    let op = op().with_plane_wave_buffer(Some(middle));
+    let fits = |l: usize| {
+        box_waves[l].map_or(0, |w| {
+            (middle / (w * size_of::<f64>()))
+                .max(MIN_BUFFER_BOXES)
+                .min(boxes[l])
+        })
+    };
+    assert_eq!(op.plane_wave_buffer_bytes(), bytes(&fits));
+    assert!(op.plane_wave_buffer_bytes() <= middle);
+    // The order of the calls does not matter.
+    let densities = Densities::new(k.kind(), ChargeKind::Complex, 1);
+    let before = HelmholtzOperator::<f64>::new(k, densities, &domain(), &DEGREES, false, 8)
+        .unwrap()
+        .with_plane_wave_buffer(Some(middle))
+        .with_plane_wave_boxes(&boxes)
+        .with_m2l(HelmholtzM2l::PlaneWave, 0);
+    assert_eq!(
+        before.plane_wave_buffer_bytes(),
+        op.plane_wave_buffer_bytes()
+    );
+    assert_eq!(before.plane_wave_bytes(), op.plane_wave_bytes());
+    // Rotation holds none of it.
+    let rotation = op.with_m2l(HelmholtzM2l::Rotation, 0);
+    assert_eq!(rotation.plane_wave_buffer_bytes(), 0);
     assert_eq!(rotation.plane_wave_bytes(), 0);
 }
 

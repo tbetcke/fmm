@@ -73,9 +73,9 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_exec::fmm::{FmmError, SettingsError};
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, Charges, Degrees, DensityError, HelmholtzFmm, HelmholtzFmmBuilder,
-    HelmholtzFmmError, HelmholtzM2l, OperatorError, Output, PlaneWavePrecision, Wavenumber,
-    auto_batched_max_degree, auto_m2l_mul_add,
+    ChargeKind, Charges, DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, HelmholtzFmm,
+    HelmholtzFmmBuilder, HelmholtzFmmError, HelmholtzM2l, MIN_BUFFER_BOXES, OperatorError, Output,
+    PlaneWavePrecision, Wavenumber, auto_batched_max_degree, auto_m2l_mul_add,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -915,6 +915,15 @@ fn check_plane_wave(scenario: &Scenario, comm: &SimpleCommunicator) {
         "{name}: a level with waves"
     );
     let bytes = op.plane_wave_bytes();
+    let (whole_buffer, whole_counts) = (op.plane_wave_buffer_bytes(), op.plane_wave_counts());
+    let ranks_per_node = fmm.ranks_per_node();
+    assert!((1..=comm.size() as usize).contains(&ranks_per_node));
+    assert_eq!(
+        op.plane_wave_buffer(),
+        Some(DEFAULT_PLANE_WAVE_NODE_BUDGET / ranks_per_node),
+        "{name}: the node budget over the ranks per node"
+    );
+    assert!(whole_counts.level_calls > 0 && whole_counts.chunks <= whole_counts.level_calls);
     drop(fmm);
     let (phi, grad) = difference(&output, &rotation, comm);
     let (error_phi, error_grad) = errors(scenario, &inputs, &output, 0, comm);
@@ -943,6 +952,73 @@ fn check_plane_wave(scenario: &Scenario, comm: &SimpleCommunicator) {
     let (_, threaded) = run(&tables.clone().threads(2), &inputs, kind, comm);
     assert_same(&format!("{name}, 2 threads"), &threaded, &output, comm);
     check_one_rank(&name, &tables, &inputs, kind, &output, comm);
+
+    // The waves buffer bounded (CH6.2a): at the floor (a budget of 0: `MIN_BUFFER_BOXES`
+    // boxes of a level), at about a third of the whole level's buffer and unbounded, the
+    // output of the default budget (a whole level here) bit for bit; the floor at 2 threads
+    // and against the one-rank FMM.
+    let floor = tables.clone().plane_wave_budget(0);
+    let (fmm, bounded) = run(&floor, &inputs, kind, comm);
+    let op = fmm.operator();
+    let floor_counts = op.plane_wave_counts();
+    assert_eq!(op.plane_wave_buffer(), Some(0));
+    assert!(op.plane_wave_buffer_bytes() <= whole_buffer);
+    assert!(op.plane_wave_bytes() <= bytes);
+    assert_eq!(floor_counts.level_calls, whole_counts.level_calls);
+    assert!(floor_counts.chunks >= whole_counts.chunks);
+    assert!(floor_counts.waves >= whole_counts.waves);
+    // A level call with more sources than the floor holds runs in several chunks there.
+    assert!(
+        whole_counts.waves <= 3 * MIN_BUFFER_BOXES * whole_counts.level_calls
+            || floor_counts.chunks > whole_counts.chunks,
+        "{name}: the floor bound chunks the level calls"
+    );
+    drop(fmm);
+    if rank == 0 {
+        println!(
+            "{name}: the whole level's buffer {:.2} MB, {} chunks, {} waves; at the floor \
+             {} chunks, {} waves",
+            whole_buffer as f64 / 1e6,
+            whole_counts.chunks,
+            whole_counts.waves,
+            floor_counts.chunks,
+            floor_counts.waves,
+        );
+    }
+    assert_same(&format!("{name}, the floor bound"), &bounded, &output, comm);
+    let third = (whole_buffer / 3).saturating_mul(ranks_per_node);
+    let (_, bounded) = run(
+        &tables.clone().plane_wave_budget(third),
+        &inputs,
+        kind,
+        comm,
+    );
+    assert_same(&format!("{name}, a third bound"), &bounded, &output, comm);
+    let (fmm, bounded) = run(
+        &tables.clone().plane_wave_budget(usize::MAX),
+        &inputs,
+        kind,
+        comm,
+    );
+    assert_eq!(fmm.operator().plane_wave_buffer(), None);
+    assert_eq!(fmm.operator().plane_wave_counts(), whole_counts);
+    drop(fmm);
+    assert_same(&format!("{name}, unbounded"), &bounded, &output, comm);
+    let (_, bounded) = run(&floor.clone().threads(2), &inputs, kind, comm);
+    assert_same(
+        &format!("{name}, the floor, 2 threads"),
+        &bounded,
+        &output,
+        comm,
+    );
+    check_one_rank(
+        &format!("{name}, the floor"),
+        &floor,
+        &inputs,
+        kind,
+        &output,
+        comm,
+    );
 
     // Two vectors: each the one-vector FMM bit for bit.
     let two = Inputs::new(scenario, 2, comm);

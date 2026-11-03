@@ -135,10 +135,168 @@ impl<T: SimdScalar> Kernel<T> {
     }
 }
 
+/// The fewest boxes the exponential M2L's waves buffer holds on a level (or the level's
+/// boxes, if fewer): one parent's 216 slots, the most distinct sources its children read.
+pub const MIN_BUFFER_BOXES: usize = SLOTS;
+
+/// No position: the box is not a source of the chunk.
+const NO_POSITION: u32 = u32::MAX;
+
+/// The level call's buffers (module documentation, "M2L"): the up and down waves of one
+/// frame of a chunk's sources, each source's position in it, the chunk's sources in that
+/// order, and the counts of the level calls so far. Sized for the plan's levels and the
+/// bound ([`HelmholtzOperator::with_plane_wave_buffer`]), so no level call allocates.
+pub(super) struct PlaneBuffer<T> {
+    waves: Vec<T>,
+    position: Vec<u32>,
+    sources: Vec<u32>,
+    /// The byte bound of `waves`, or `None` for every box of a level.
+    pub(super) bound: Option<usize>,
+    /// The boxes of each level, own and ghost, if the plan named them.
+    pub(super) level_boxes: Vec<usize>,
+    pub(super) counts: PlaneWaveCounts,
+}
+
+/// The counts of the exponential M2L's level calls since the operator was built or its M2L
+/// last chosen ([`HelmholtzOperator::plane_wave_counts`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlaneWaveCounts {
+    /// Level calls by merge and shift.
+    pub level_calls: usize,
+    /// Chunks of parents, each with its sources' waves in the buffer.
+    pub chunks: usize,
+    /// Boxes whose waves were computed, once per chunk, vector and frame: the sources of a
+    /// chunk's computed children, a source read by several chunks once in each.
+    pub waves: usize,
+}
+
+impl<T> Default for PlaneBuffer<T> {
+    fn default() -> Self {
+        Self {
+            waves: Vec::new(),
+            position: Vec::new(),
+            sources: Vec::new(),
+            bound: None,
+            level_boxes: Vec::new(),
+            counts: PlaneWaveCounts::default(),
+        }
+    }
+}
+
+impl<T: SimdScalar> PlaneBuffer<T> {
+    /// The boxes a level call on a level of `boxes` boxes with `box_waves` reals of waves per
+    /// box holds in the buffer: every box without a bound, else as many as the bound allows,
+    /// at least [`MIN_BUFFER_BOXES`], at most `boxes`.
+    pub(super) fn capacity(&self, boxes: usize, box_waves: usize) -> usize {
+        let bounded = self.bound.map_or(boxes, |bytes| {
+            (bytes / (box_waves * size_of::<T>()).max(1)).max(MIN_BUFFER_BOXES)
+        });
+        bounded.min(boxes)
+    }
+
+    /// Sizes the buffers for the levels with waves of `m2l` and the plan's boxes per level,
+    /// or empties them where there are none.
+    pub(super) fn size(&mut self, m2l: Option<&PlaneWaveM2l<T>>) {
+        let (mut values, mut boxes, mut sources) = (0, 0, 0);
+        if let Some(m2l) = m2l {
+            for (l, &n) in self.level_boxes.iter().enumerate() {
+                let Some(level) = m2l.level(l) else { continue };
+                let box_waves = 2 * level.tables().wave_len();
+                let capacity = self.capacity(n, box_waves);
+                values = values.max(capacity * box_waves);
+                boxes = boxes.max(n);
+                sources = sources.max(capacity);
+            }
+        }
+        self.waves = vec![T::zero(); values];
+        self.position = vec![NO_POSITION; boxes];
+        self.sources = vec![0; sources];
+    }
+
+    /// Its bytes: the waves, the positions and the sources.
+    pub(super) fn bytes(&self) -> usize {
+        self.waves.len() * size_of::<T>() + 4 * (self.position.len() + self.sources.len())
+    }
+
+    /// The bytes of its waves.
+    pub(super) fn wave_bytes(&self) -> usize {
+        self.waves.len() * size_of::<T>()
+    }
+
+    /// Grows the buffers for a level call of `boxes` boxes holding `capacity` of them, where
+    /// the plan did not size them.
+    fn reserve(&mut self, boxes: usize, capacity: usize, box_waves: usize) {
+        if self.waves.len() < capacity * box_waves {
+            self.waves.resize(capacity * box_waves, T::zero());
+        }
+        if self.position.len() < boxes {
+            self.position.resize(boxes, NO_POSITION);
+        }
+        if self.sources.len() < capacity {
+            self.sources.resize(capacity, 0);
+        }
+    }
+
+    /// The chunk of whole parents from box `start` of the call's level: the parents in index
+    /// order while their computed children's distinct sources fit `capacity` (one parent
+    /// always does), each source's position its order of first reading. Returns the chunk's
+    /// end and its number of sources, listed in `sources`.
+    fn chunk(
+        &mut self,
+        call: &BoxCall<'_, VList, LevelSlice<'_, T>>,
+        start: usize,
+        end: usize,
+        capacity: usize,
+    ) -> (usize, usize) {
+        let mut count = 0;
+        let mut t = start;
+        while t < end {
+            let parent = morton::parent(call.index.key(call.level, t));
+            let mut next = t + 1;
+            while next < end && morton::parent(call.index.key(call.level, next)) == parent {
+                next += 1;
+            }
+            let before = count;
+            let mut overflow = false;
+            'parent: for u in t..next {
+                for &source in call.view.row(u).0 {
+                    let position = &mut self.position[source as usize];
+                    if *position != NO_POSITION {
+                        continue;
+                    }
+                    if count == capacity {
+                        overflow = true;
+                        break 'parent;
+                    }
+                    *position = count as u32;
+                    self.sources[count] = source;
+                    count += 1;
+                }
+            }
+            // The parent's sources do not all fit: it starts the next chunk.
+            if overflow {
+                assert!(t > start, "one parent's sources fit the buffer");
+                self.forget(before, count);
+                return (t, before);
+            }
+            t = next;
+        }
+        (end, count)
+    }
+
+    /// Forgets the positions of the sources listed in `from..to`.
+    fn forget(&mut self, from: usize, to: usize) {
+        for &source in &self.sources[from..to] {
+            self.position[source as usize] = NO_POSITION;
+        }
+    }
+}
+
 impl<T: SimdScalar> HelmholtzOperator<T> {
-    /// The level call by merge and shift (module documentation, "M2L"): per vector and
-    /// frame the up and down waves of every box of the level on the pool, then merge and
-    /// shift parent by parent, the pool splitting the level at parent boundaries.
+    /// The level call by merge and shift (module documentation, "M2L"): chunk by chunk of
+    /// whole parents, per vector and frame the up and down waves of the chunk's sources on
+    /// the pool, then merge and shift parent by parent, the pool splitting the chunk at
+    /// parent boundaries.
     pub(super) fn plane_wave_m2l(&mut self, batch: M2l<'_, T>) {
         let M2l {
             level,
@@ -171,45 +329,62 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         let n = Layout::new(tables.p()).len();
         let box_waves = 2 * tables.wave_len();
         let boxes = multipoles.as_slice().len() / (m * planes * n);
-        if self.waves.len() < boxes * box_waves {
-            self.waves.resize(boxes * box_waves, T::zero());
-        }
+        let buffer = &mut self.plane_buffer;
+        let capacity = buffer.capacity(boxes, box_waves);
+        buffer.reserve(boxes, capacity, box_waves);
+        buffer.counts.level_calls += 1;
         let mut locals = locals;
         let size = locals.size();
         let locals = locals.as_mut_slice();
-        for v in 0..m {
-            for frame in 0..3 {
-                let waves = &mut self.waves[..boxes * box_waves];
-                self.execution.chunks(waves, box_waves, |b, out, scratch| {
-                    let x = &multipoles.chunk(b)[v * planes * n..(v + 1) * planes * n];
-                    let plane = scratch
-                        .plane
-                        .as_mut()
-                        .expect("the exponential M2L's scratch");
-                    outgoing(tables, frame, x, planes, out, plane);
-                });
-                let waves = &self.waves[..boxes * box_waves];
-                let starts = |t: usize| {
-                    t == 0
-                        || morton::parent(index.key(level, t))
-                            != morton::parent(index.key(level, t - 1))
-                };
-                self.execution
-                    .parents(locals, size, starts, |range, chunks, scratch| {
+        let targets = locals.len() / size;
+        let mut start = 0;
+        while start < targets {
+            let (end, count) = buffer.chunk(&call, start, targets, capacity);
+            if count == 0 {
+                start = end;
+                continue;
+            }
+            buffer.counts.chunks += 1;
+            buffer.counts.waves += 3 * m * count;
+            let chunk = &mut locals[start * size..end * size];
+            for v in 0..m {
+                for frame in 0..3 {
+                    let sources = &buffer.sources[..count];
+                    let waves = &mut buffer.waves[..count * box_waves];
+                    self.execution.chunks(waves, box_waves, |b, out, scratch| {
+                        let source = sources[b] as usize;
+                        let x = &multipoles.chunk(source)[v * planes * n..(v + 1) * planes * n];
                         let plane = scratch
                             .plane
                             .as_mut()
                             .expect("the exponential M2L's scratch");
-                        parents(
-                            &call,
-                            (merge, geometry),
-                            (frame, v, waves),
-                            range,
-                            chunks,
-                            plane,
-                        );
+                        outgoing(tables, frame, x, planes, out, plane);
                     });
+                    let waves = (&buffer.waves[..count * box_waves], &buffer.position[..]);
+                    let starts = |t: usize| {
+                        t == 0
+                            || morton::parent(index.key(level, start + t))
+                                != morton::parent(index.key(level, start + t - 1))
+                    };
+                    self.execution
+                        .parents(chunk, size, starts, |range, chunks, scratch| {
+                            let plane = scratch
+                                .plane
+                                .as_mut()
+                                .expect("the exponential M2L's scratch");
+                            parents(
+                                &call,
+                                (merge, geometry),
+                                (frame, v, waves),
+                                start + range.start..start + range.end,
+                                chunks,
+                                plane,
+                            );
+                        });
+                }
             }
+            buffer.forget(0, count);
+            start = end;
         }
     }
 }
@@ -239,7 +414,7 @@ fn outgoing<T: SimdScalar>(
 fn parents<T: SimdScalar>(
     call: &BoxCall<'_, VList, LevelSlice<'_, T>>,
     tables: (&MergeLevel<T>, &MergeGeometry),
-    wave: (usize, usize, &[T]),
+    wave: (usize, usize, (&[T], &[u32])),
     boxes: Range<usize>,
     locals: &mut [T],
     s: &mut PlaneScratch<T>,
@@ -268,7 +443,7 @@ fn parents<T: SimdScalar>(
 fn parent_call<T: SimdScalar>(
     call: &BoxCall<'_, VList, LevelSlice<'_, T>>,
     (merge, geometry): (&MergeLevel<T>, &MergeGeometry),
-    (frame, v, waves): (usize, usize, &[T]),
+    (frame, v, (waves, position)): (usize, usize, (&[T], &[u32])),
     children: Range<usize>,
     locals: &mut [T],
     s: &mut PlaneScratch<T>,
@@ -325,7 +500,7 @@ fn parent_call<T: SimdScalar>(
                     acc.fill(T::zero());
                     s.present[a] = true;
                 }
-                let at = (2 * source as usize + half) * w;
+                let at = (2 * position[source as usize] as usize + half) * w;
                 let factors = merge
                     .source_shift(direction, slot as usize)
                     .expect("a slot of an accumulator has a shift");

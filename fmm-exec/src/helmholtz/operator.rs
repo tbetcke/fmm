@@ -211,7 +211,8 @@ use crate::operator::{M2L_BLOCK_TARGETS, P2pChoice};
 #[path = "operator_plane_wave.rs"]
 mod plane_wave;
 
-use plane_wave::PlaneScratch;
+pub use plane_wave::{MIN_BUFFER_BOXES, PlaneWaveCounts};
+use plane_wave::{PlaneBuffer, PlaneScratch};
 
 /// Why [`HelmholtzOperator::new`] refused its inputs.
 #[derive(Clone, Copy, Debug, Error, PartialEq)]
@@ -326,9 +327,9 @@ pub const DEFAULT_DENSE_BUDGET: usize = 1 << 30;
 pub struct HelmholtzOperator<T: SimdScalar> {
     kernel: Kernel<T>,
     execution: Execution<Scratch<T>>,
-    /// Under [`HelmholtzM2l::PlaneWave`], the waves of one frame of every box of a level
-    /// call, up and down.
-    waves: Vec<T>,
+    /// Under [`HelmholtzM2l::PlaneWave`], the level call's waves of one frame of a chunk's
+    /// sources, up and down, and their positions.
+    plane_buffer: PlaneBuffer<T>,
 }
 
 /// What the bodies read: the path, the levels and the tables.
@@ -478,7 +479,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         Ok(Self {
             kernel,
             execution,
-            waves: Vec::new(),
+            plane_buffer: PlaneBuffer::default(),
         })
     }
 
@@ -565,22 +566,47 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         self.kernel.plane_wave_level(level).map(|l| l.precision())
     }
 
-    /// Sizes the waves buffer of the exponential M2L for levels of `boxes[l]` boxes (each
-    /// level's own and ghost boxes), so that no level call grows it; nothing unless
-    /// [`HelmholtzM2l::PlaneWave`]. `HelmholtzFmmBuilder` sizes it from the plan.
+    /// Sizes the buffers of the exponential M2L's level call for levels of `boxes[l]` boxes
+    /// (each level's own and ghost boxes), so that no level call grows them; nothing unless
+    /// [`HelmholtzM2l::PlaneWave`]. `HelmholtzFmmBuilder` sizes them from the plan.
     pub fn with_plane_wave_boxes(mut self, boxes: &[usize]) -> Self {
-        let len = (0..self.kernel.tables.nlevels())
-            .filter_map(|l| {
-                Some(boxes.get(l)? * 2 * self.kernel.plane_wave_level(l)?.tables().wave_len())
-            })
-            .max()
-            .unwrap_or(0);
-        self.waves = vec![T::zero(); len];
+        self.plane_buffer.level_boxes = boxes.to_vec();
+        self.plane_buffer.size(self.kernel.plane_waves.as_ref());
         self
     }
 
-    /// The bytes the exponential M2L holds: its tables, the waves buffer and every scratch
-    /// set's buffers (0 unless [`HelmholtzM2l::PlaneWave`] gives a level waves).
+    /// Bounds the waves buffer of the exponential M2L's level call at `bytes` (`None`: every
+    /// box of a level, the default). A level call then runs by chunks of whole parents whose
+    /// sources' waves fit the bound, at least [`MIN_BUFFER_BOXES`] boxes of each level
+    /// ("M2L" in the module documentation); the output is the same at every bound.
+    /// `HelmholtzFmmBuilder` sets it from its node budget
+    /// ([`plane_wave_budget`](super::HelmholtzFmmBuilder::plane_wave_budget)).
+    pub fn with_plane_wave_buffer(mut self, bytes: Option<usize>) -> Self {
+        self.plane_buffer.bound = bytes;
+        self.plane_buffer.size(self.kernel.plane_waves.as_ref());
+        self
+    }
+
+    /// The waves buffer's byte bound ([`with_plane_wave_buffer`](Self::with_plane_wave_buffer)).
+    pub fn plane_wave_buffer(&self) -> Option<usize> {
+        self.plane_buffer.bound
+    }
+
+    /// The bytes of the waves buffer as sized (part of
+    /// [`plane_wave_bytes`](Self::plane_wave_bytes)).
+    pub fn plane_wave_buffer_bytes(&self) -> usize {
+        self.plane_buffer.wave_bytes()
+    }
+
+    /// The counts of the exponential M2L's level calls since its tables were last chosen:
+    /// level calls, chunks and the waves computed ([`PlaneWaveCounts`]).
+    pub fn plane_wave_counts(&self) -> PlaneWaveCounts {
+        self.plane_buffer.counts
+    }
+
+    /// The bytes the exponential M2L holds: its tables, the level call's buffers (the waves,
+    /// a position per box and the chunk's sources) and every scratch set's buffers (0 unless
+    /// [`HelmholtzM2l::PlaneWave`] gives a level waves).
     pub fn plane_wave_bytes(&self) -> usize {
         let tables = self
             .kernel
@@ -593,7 +619,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             .iter()
             .filter_map(|s| s.lock().ok()?.plane.as_ref().map(PlaneScratch::bytes))
             .sum();
-        tables + self.waves.len() * size_of::<T>() + scratch
+        tables + self.plane_buffer.bytes() + scratch
     }
 
     /// Builds the M2L tables of the setting, the budget and (under Auto) the crossover, and
@@ -637,9 +663,8 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             .plane_waves
             .take()
             .filter(|m2l| (0..m2l.nlevels()).any(|l| m2l.level(l).is_some()));
-        if kernel.plane_waves.is_none() {
-            self.waves = Vec::new();
-        }
+        self.plane_buffer.size(kernel.plane_waves.as_ref());
+        self.plane_buffer.counts = PlaneWaveCounts::default();
         // The class scratch, the batched columns and the exponential M2L's buffers are sized
         // by their tables' largest level.
         for scratch in &mut self.execution.scratch {
