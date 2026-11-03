@@ -664,7 +664,8 @@ at any kD.
   1.31–1.51× FMM3D's waves where Im κ < π/2; whether a pair ever needs the corner at the
   FMM's ε, so fewer waves would do, is measured here. Also (CH6.2a, report §3–§4): the
   times at the default waves budget, whose halo recomputation cost 1.19–1.27× at 40 ranks
-  per node on Kathleen, and the ranks × threads split (W1 at kD = 500 evaluated in 39.7 s
+  per node on Kathleen (a cut by spatial blocks in place of Morton runs would recompute
+  less, if it matters), and the ranks × threads split (W1 at kD = 500 evaluated in 39.7 s
   at 40 × 1 against 21.3 s at 1 × 40). May split again (the times on the three machines;
   FMM3D and D8). *Needs:* CH6.2a, CH1.4. *Machines:* locust, Kathleen.
   *Sign-off:* D8.
