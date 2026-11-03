@@ -17,8 +17,11 @@ again into the generator (CH6.1b, done: S4's generator in `nd-fmm-ref`) and the 
 level's quadrature with its degree. CH6.1c merged
 (#181); CH6.1d split into merge and shift in the FMM (CH6.1d) and the quadrature per level
 by measurement (CH6.1e). 2026-11-03: CH6.1d done (`HelmholtzM2l::PlaneWave`, merge and shift
-with a provisional precision rule). Next: CH6.1e (the rule by the FMM's errors on CH3.1c's
-cases, CH6.1's 1.1× Rotation), once CH6.1d is merged.
+with a provisional precision rule), merged (#182). 2026-11-03: CH6.1e done, so CH6.1 is: the
+rule by the FMM's errors on CH3.1c's cases, iprec 2 at ε ≥ 10⁻⁶ and Rotation below, within
+1.070× Rotation's on every case; no precision of FMM3D's tables holds 1.1× below 10⁻⁶
+(the follow-up CH6.1f). Next: CH6.2 (*Machines:* locust, Kathleen; D8), once CH6.1e is
+merged.
 
 ## How `/next-task` reads this file
 
@@ -57,6 +60,8 @@ CH3.6 (#170) and H3.G.
 1. CH0.4 S4: quadratures of the Helmholtz exponential M2L per k w_l
 2. CH6.1 The §3.14 machinery generalised (needs CH0.4): CH6.1a, CH6.1b, CH6.1c, CH6.1d, CH6.1e
 3. CH6.2 Measured (*Machines:* locust, Kathleen; *Sign-off:* D8)
+4. CH6.1f Quadratures for ε below 10⁻⁶ (needs CH6.1e; after CH6.2, before H6.G: CH6.1e's
+   question 3, signed off 2026-11-03, "1–4 as recommended")
 
 Off the list, in file order: CH0.6, CH0.8b, CH0.9, CH0.5 and H0.G; CHR.3 and HR.G; CH1.3d
 and H1.G; CH2.1, CH2.2, CH2.3, CH2.5 and H2.G; H6.G; H4 (CH4.0, CH4.0b and CH4.0c first),
@@ -588,7 +593,18 @@ at any kD.
   direct sum and against its pair path to rounding; deterministic at every thread count
   and on P ranks the one-rank FMM bit for bit; vector v the one-vector FMM bit for bit;
   the errors against Rotation's reported, not yet asserted (CH6.1e). *Needs:* CH6.1c.
-- [ ] **CH6.1e The quadrature per level, measured.** Split from CH6.1d on 2026-11-03 (the
+- [x] **CH6.1e The quadrature per level, measured.** Report:
+  `fmm-validate/results/helmholtz-ch6-1e.md`; `merge::precision_for_tolerance`,
+  `HelmholtzOperator::with_plane_wave_tolerance`. iprec 2 at the FMM's tolerance ε ≥ 10⁻⁶
+  and Rotation below (named degrees: iprec 2 to p = 15); within 1.070× Rotation's error on
+  87 cases (CH3.1c's matrix and 27 at 10⁻⁴, 10⁻⁵, 10⁻⁷), asserted in the tests on small
+  ones; every level at ε < 10⁻⁶ left to Rotation (iprec 3 1.12× at 10⁻⁷ and 1.76× at
+  10⁻⁸ on the clustered trees' deep levels, iprec 1 1.15× at 10⁻³). The PR's four questions
+  signed off 2026-11-03 (the user: "1–4 as recommended"): (1) the acceptance read as CH3.1c's matrix less
+  the two large cases at 10⁻⁸ (Rotation there), asserted on the tests' small scenarios and
+  the matrix in the report; (2) Rotation below 10⁻⁶, not iprec 3 with a κ guard; (3)
+  CH6.1f before H6.G, CH6.2 first; (4) the waves buffer bounded and counted in the node
+  budget before CH6.2 takes times (CH6.2's line). Split from CH6.1d on 2026-11-03 (the
   level call and the measurement with its report do not fit one PR, about 2,000 lines in
   three crates together). CH6.1's acceptance: the FMM's errors within about 1.1×
   Rotation's on CH3.1c's cases with each level's quadrature chosen with its degree p_l
@@ -603,11 +619,27 @@ at any kD.
   each precision forced per level on CH3.1c's cases; the FMM within about 1.1× Rotation's
   error on every case, asserted in the tests; the report names the levels left to Rotation.
   *Needs:* CH6.1d.
+- [ ] **CH6.1f Quadratures for ε below 10⁻⁶.** From CH6.1e (report §3, §7): no precision
+  of FMM3D's tables keeps the FMM within 1.1× Rotation's error below ε = 10⁻⁶ (iprec 2's
+  stated error is the FMM's own; iprec 3's waves of a degree-p multipole err on its
+  truncated tail at p = 20–24, CH6.1c's degree study), so `HelmholtzM2l::PlaneWave` runs
+  Rotation at D1's tight end. A quadrature matched to the degree, as CONVENTIONS §3.14's
+  `nodes_for_degree` is for Laplace: CH6.1b's `generate` at the level's κ_l, ε and p_l
+  (or a tail-aware compression of it), tabulated or built per level. *Done when:* the FMM
+  within about 1.1× Rotation's error at ε = 10⁻⁷ and 10⁻⁸ on CH6.1e's cases, the clustered
+  trees' deep levels included, with the rule still a function of k, w_l, p_l and ε
+  (constraint 9); or the report shows no such quadrature fits the tables' budget.
+  *Needs:* CH6.1e.
 - [ ] **CH6.2 Measured.** Against Rotation and the table-based strategies on the three
   machines, and against `hfmm3d`'s exponential M2L. *Done when:* per-level accuracy and time
   beside FMM3D's on the same problems; D8 proposed. Also (CH6.1a): CH6.1a's counts resolve
   the region's corner ρ = 4√2 at 1.31–1.51× FMM3D's waves where Im κ < π/2; whether a pair
-  ever needs the corner at the FMM's ε, so fewer waves would do, is measured here.
+  ever needs the corner at the FMM's ε, so fewer waves would do, is measured here. Also
+  (CH6.1e, report §7): the level call's waves buffer, one frame of every box of the
+  largest level with waves, takes 9.0–11.8 GB under the rule on W1 at kD = 500 and W3 at
+  kD = 100 (22.9 GB for one level at iprec 3), against Rotation's few hundred MB; bound it
+  (a buffer per chunk of parents) and count it in the node budget (constraint 7) before
+  the times are taken.
   *Needs:* CH6.1 (a–e), CH1.4.
   *Machines:* locust, Kathleen. *Sign-off:* D8.
 - [ ] **H6.G Gate.** `/milestone-gate H6`. *Needs:* every task above.

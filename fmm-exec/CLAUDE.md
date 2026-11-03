@@ -299,8 +299,10 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
 - The exponential M2L (Helmholtz CH6.1d; the `helmholtz::operator` module docs, "M2L";
   docs/helmholtz/tasks/CH6.1d.md): `HelmholtzM2l::PlaneWave` (opt-in), merge and shift on
   the levels whose `PlaneWavePrecision` gives a quadrature (`Rule`, the default:
-  `nd_fmm_tables::helmholtz::plane_wave::merge::select`, provisional until CH6.1e; or
-  `PerLevel`, for the measurements), RCR elsewhere; `with_plane_wave_precision`,
+  `nd_fmm_tables::helmholtz::plane_wave::merge::select`, measured by Helmholtz CH6.1e:
+  iprec 2 at the FMM's tolerance ε ≥ 10⁻⁶, none below, which the builder passes from
+  `Degrees::Tolerance` through `with_plane_wave_tolerance`; with named degrees iprec 2 to
+  p = 15; or `PerLevel`, for the measurements), RCR elsewhere; `with_plane_wave_precision`,
   `plane_wave_precision(level)`, `plane_wave_bytes`, `with_plane_wave_boxes` (the builder
   sizes the waves buffer from the plan) and `HelmholtzFmmBuilder::plane_wave_precision`.
   The level call is the crate-private `src/helmholtz/operator_plane_wave.rs`, Laplace's
@@ -315,12 +317,15 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   (not Rotation's bits); f64 only. `tests/helmholtz/plane_wave.rs` checks the precisions
   (rule and named) and the pair body bit for bit `PlaneWaveLevel::m2l`;
   `tests/helmholtz_fmm.rs` (`check_plane_wave`, two scenarios, one and two multipole
-  planes) the FMM against the direct sum with its ratio to Rotation's error printed
-  (CH6.1e asserts it), against the pair path within `PLANE_PAIR_TOLERANCE` (1e-14; in
+  planes) the FMM against the direct sum and within `PLANE_WAVE_RATIO` (1.1) of
+  Rotation's error (CH6.1's acceptance, asserted since CH6.1e; 1.000× on both scenarios
+  on the M6; the rule on CH3.1c's cases within 1.070×, fmm-validate/results/helmholtz-ch6-1e.md),
+  against the pair path within `PLANE_PAIR_TOLERANCE` (1e-14; in
   debug builds of a tree with waves on several levels the finest level's alone), 2
   threads and the one-rank FMM bit for bit, two vectors each the one-vector FMM, and named
   precisions (none on every level is Rotation bit for bit). Its debug cost: about 27 s of
-  the one-rank run on the M6.
+  the one-rank run on the M6 (47 s with CH6.1e's iprec 2 on the second scenario, on a
+  loaded M6).
 - The degree rule (Helmholtz CH3.3; the `helmholtz::degree` module docs;
   fmm-validate/results/helmholtz-ch3-3.md): `degree` is `DegreeRule::CALIBRATED`,
   max(⌈0.30 L² + 0.25 L + 2.60⌉, ⌈x + 0.80 (ln 1/ε)^{2/3} x^{1/3}⌉) with L = log₁₀(1/ε),

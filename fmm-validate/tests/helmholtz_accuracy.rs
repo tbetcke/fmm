@@ -11,7 +11,11 @@
 //! FMM's full-target error its error at the samples (which are every point), the same on
 //! one rank and on several. The M2L rule per level (Helmholtz CH3.2d): `Auto` at a named
 //! crossover reported in the row, within ε at 1 and 2 threads and on one rank; below every
-//! degree Rotation's checksum, above every degree Batched on every level with tables.
+//! degree Rotation's checksum, above every degree Batched on every level with tables. The
+//! exponential M2L (Helmholtz CH6.1e): under the precision rule within
+//! [`PLANE_WAVE_RATIO`] of Rotation's errors on small cases of CH3.1c's matrix, each level's
+//! precision in the row, within ε at 1 and 2 threads and on one rank, and Rotation's output
+//! below the rule's tolerance.
 //!
 //! One test initialises MPI (at `Funneled`); it passes on any number of ranks, each check
 //! on every rank or on none.
@@ -20,10 +24,11 @@ use mpi::Threading;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::Communicator;
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, Degrees, Densities, HelmholtzM2l, Output, Wavenumber, WavenumberKind,
-    auto_m2l_mul_add, s7_degree,
+    ChargeKind, Degrees, Densities, HelmholtzM2l, Output, PlaneWavePrecision, Wavenumber,
+    WavenumberKind, auto_m2l_mul_add, s7_degree,
 };
 use nd_fmm_exec::operator::Isa;
+use nd_fmm_tables::helmholtz::plane_wave::merge::precision_for_tolerance;
 use nd_fmm_validate::SplitMix64;
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::helmholtz_accuracy::{
@@ -205,6 +210,82 @@ fn check_auto(world: &SimpleCommunicator) {
     assert!(sweep_crossovers(&[0, 0]).is_empty());
 }
 
+/// The largest ratio of the exponential M2L's errors to Rotation's under the precision rule
+/// (CH6.1's acceptance, "within about 1.1× Rotation's").
+const PLANE_WAVE_RATIO: f64 = 1.1;
+
+/// The exponential M2L under the precision rule on small cases of CH3.1c's matrix (W1 at
+/// kD = 10 at ε = 10⁻³, 10⁻⁶ and 10⁻⁸; W4's clusters at N = 2,000, complex k, real
+/// charges, ε = 10⁻³): φ and ∇φ within [`PLANE_WAVE_RATIO`] of Rotation's errors, the row's
+/// precisions the rule's (`precision_for_tolerance` of ε on every level with waves), and
+/// named precisions as named; at ε = 10⁻⁶ also `check_fmm`'s checks. Below the rule's
+/// tolerance (ε = 10⁻⁸) no level has waves and the output is Rotation's (the checksum).
+fn check_plane_wave(world: &SimpleCommunicator) {
+    let clusters = Workload::W4 {
+        distribution: Distribution::Clusters,
+        n: 2000,
+    };
+    for (workload, k, eps) in [
+        (Workload::W1, (10.0, 0.0), 1e-3),
+        (Workload::W1, (10.0, 0.0), 1e-6),
+        (Workload::W1, (10.0, 0.0), 1e-8),
+        (clusters, (10.0, 1.0), 1e-3),
+    ] {
+        let mut case = Case::new(workload, k, Degrees::Tolerance(eps));
+        if let Workload::W4 { .. } = workload {
+            case.charges = ChargeKind::Real;
+        }
+        let problem = Problem::new(&case);
+        let oracle = Oracle::sharded(complex_k(&case), &problem, case.gradients, 2, world);
+        let rotation = run(&case, &problem, &oracle, 1, world).expect("the FMM runs");
+        assert!(rotation.plane_wave.iter().all(Option::is_none));
+        case.m2l = HelmholtzM2l::PlaneWave;
+        let row = run(&case, &problem, &oracle, 1, world).expect("the FMM runs");
+        assert_eq!(row.m2l, HelmholtzM2l::PlaneWave);
+        for (l, precision) in row.plane_wave.iter().enumerate() {
+            assert_eq!(row.dense_levels[l], precision.is_some(), "level {l}");
+        }
+        let Some(want) = precision_for_tolerance(eps) else {
+            // Below the rule's tolerance: Rotation on every level, bit for bit.
+            assert!(row.plane_wave.iter().all(Option::is_none), "ε = {eps}");
+            assert_eq!(
+                row.checksum, rotation.checksum,
+                "ε = {eps}: Rotation's output"
+            );
+            continue;
+        };
+        assert!(
+            row.plane_wave.iter().any(Option::is_some),
+            "{workload:?} at ε = {eps}: a level with waves, {:?}",
+            row.plane_wave
+        );
+        assert!(
+            row.plane_wave.iter().flatten().all(|&q| q == want),
+            "{workload:?} at ε = {eps}: the rule's precision, {:?}",
+            row.plane_wave
+        );
+        let (all, reference) = (row.errors.last().unwrap(), rotation.errors.last().unwrap());
+        for j in 0..2 {
+            assert!(
+                all[j] <= PLANE_WAVE_RATIO * reference[j],
+                "{workload:?} at ε = {eps}, precisions {:?}: errors {all:?} against \
+                 Rotation's {reference:?}",
+                row.plane_wave
+            );
+        }
+        if eps == 1e-6 {
+            check_fmm(world, &case);
+        }
+        // Named: one precision on the finest level alone.
+        let finest = row.levels - 1;
+        let mut named = vec![None; row.levels];
+        named[finest] = row.plane_wave[finest];
+        case.plane_wave = PlaneWavePrecision::PerLevel(named.clone());
+        let one = run(&case, &problem, &oracle, 1, world).expect("the FMM runs");
+        assert_eq!(one.plane_wave, named);
+    }
+}
+
 /// The plateau scan of the calibration on W1 at kD = 10: one degree p = 1..=8 on every
 /// level ≥ 2, as the `helmholtz_calibrate` example runs it.
 fn check_calibration_scan(world: &SimpleCommunicator) {
@@ -332,6 +413,7 @@ fn helmholtz_accuracy_harness() {
     w4.gradients = false;
     check_fmm(&world, &w4);
     check_auto(&world);
+    check_plane_wave(&world);
     check_calibration_scan(&world);
     check_fmm3d_measures(&world);
 }

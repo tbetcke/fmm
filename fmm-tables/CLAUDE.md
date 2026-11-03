@@ -13,7 +13,8 @@ CH3.2c (`helmholtz::batched`, Dense's matrices in split planes for the batched M
 CH6.1a (`helmholtz::plane_wave::quadrature`, the quadratures of the exponential M2L); Helmholtz
 CH6.1c (`helmholtz::plane_wave::pair`, the exponential M2L's conversions, shifts and pair
 translation on one level, CONVENTIONS §3.15 "Exponential M2L"); Helmholtz CH6.1d
-(`helmholtz::plane_wave::merge`, the merge's shifts and each level's quadrature).
+(`helmholtz::plane_wave::merge`, the merge's shifts and each level's quadrature), the
+rule of which Helmholtz CH6.1e measured.
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -113,11 +114,15 @@ translation on one level, CONVENTIONS §3.15 "Exponential M2L"); Helmholtz CH6.1
   `shift_factors`' 2W reals; `PlaneWaveM2l`, a tree's levels; `shift` and `add`, the
   merge's complex steps (rounded apart, `shift` is `shift_add` from zero bit for bit but
   for the sign of a zero);
-  `precision_for_degree` and `select`, each level's precision from its degree where κ_l
-  lies in the tables (a function of k, w_l and p_l: constraint 9). The rule's constants
-  are provisional (CH6.1c's degree study: iprec 1 to p = 8, 2 to 12, 3 to 16, none
-  above); CH6.1e sets them by the FMM's errors, and a change to them changes the FMM's
-  errors under `HelmholtzM2l::PlaneWave`, so rerun nd-fmm-exec's `tests/helmholtz_fmm.rs`.
+  `precision_for_tolerance`, `precision_for_degree` and `select`, each level's precision
+  where κ_l lies in the tables (a function of k, w_l, p_l and ε: constraint 9), measured
+  in the FMM by Helmholtz CH6.1e (fmm-validate/results/helmholtz-ch6-1e.md): iprec 2 at
+  the FMM's tolerance ε ≥ `PLANE_WAVE_MIN_TOLERANCE` (10⁻⁶) and none below; without a
+  tolerance (named degrees) iprec 2 to `MAX_PLANE_WAVE_DEGREE` (15, the calibrated plateau
+  at 10⁻⁶) and none above. iprec 1 misses 1.1× Rotation's error from ε = 10⁻³, iprec 3 on
+  the clustered trees' deep levels at 10⁻⁷ and 10⁻⁸. A change to the rule changes the FMM's
+  errors under `HelmholtzM2l::PlaneWave`: rerun the report's verification
+  (`tools/helmholtz/ch6-1e-runs.sh verify`) and nd-fmm-exec's `tests/helmholtz_fmm.rs`.
   `tests/helmholtz/plane_wave_merge.rs` checks slot shift × child shift against the pair's
   shift on every direction, slot and child within 1e-12 relative (7.5e-14 measured on the
   M6), the shared tables bit for bit each slot's own, and the rule. Not cached

@@ -129,10 +129,14 @@
 //! Under [`HelmholtzM2l::PlaneWave`] (Helmholtz CH6.1d; opt-in; CONVENTIONS §3.14, "Merge
 //! and shift", with the conversions and shifts of §3.15, "Exponential M2L") a level runs the
 //! exponential M2L where its [`PlaneWavePrecision`] gives it a quadrature: by the rule
-//! (`nd_fmm_tables::helmholtz::plane_wave::merge::select`, a function of k, the level's
-//! width and its degree; provisional until Helmholtz CH6.1e) or named per level, and only
-//! where κ_l = k w_l lies in the quadrature's tables; RCR on the others. Its level call
-//! restates Laplace's (`crate::operator`, "The plane-wave M2L") without its vector kernels:
+//! (`nd_fmm_tables::helmholtz::plane_wave::merge::select`, measured in the FMM in Helmholtz
+//! CH6.1e: iprec 2 at the FMM's tolerance ε ≥ 10⁻⁶ and none below,
+//! [`with_plane_wave_tolerance`](HelmholtzOperator::with_plane_wave_tolerance), or without
+//! one by the level's degree; a function of k, the level's width, its degree and ε) or
+//! named per level, and only where κ_l = k w_l lies in the quadrature's tables; RCR on the
+//! others. Under the rule the FMM's errors stay within about 1.1× Rotation's on CH3.1c's
+//! cases (`fmm-validate/results/helmholtz-ch6-1e.md`). Its level call restates Laplace's
+//! (`crate::operator`, "The plane-wave M2L") without its vector kernels:
 //! for each charge vector and each frame f = 0, 1, 2,
 //!
 //! 1. **outgoing**: the up and down waves of frame f of every box of the level, own and
@@ -266,9 +270,11 @@ pub enum HelmholtzM2l {
 pub enum PlaneWavePrecision {
     /// `nd_fmm_tables::helmholtz::plane_wave::merge::select`: on each level with a V list
     /// whose κ_l = k w_l lies in the quadrature's tables, the precision
-    /// `precision_for_degree` gives its degree (provisional, Helmholtz CH6.1c's degree
-    /// study; CH6.1e measures the rule), none elsewhere. A function of k, the level's width
-    /// and its degree only (proposal §2, constraint 9).
+    /// `precision_for_tolerance` gives the FMM's tolerance
+    /// ([`HelmholtzOperator::with_plane_wave_tolerance`]), or without one the precision
+    /// `precision_for_degree` gives the level's degree (measured in the FMM, Helmholtz
+    /// CH6.1e), none elsewhere. A function of k, the level's width, its degree and the
+    /// tolerance only (proposal §2, constraint 9).
     #[default]
     Rule,
     /// The precision of each level by index, `None` for RCR, for the measurements and the
@@ -350,6 +356,8 @@ struct Kernel<T: SimdScalar> {
     batched: Option<BatchedM2l<T>>,
     /// The quadratures' precisions under [`HelmholtzM2l::PlaneWave`].
     plane_wave_precision: PlaneWavePrecision,
+    /// The FMM's tolerance, which [`PlaneWavePrecision::Rule`] reads, if it has one.
+    plane_wave_tolerance: Option<f64>,
     /// The exponential M2L's tables of the levels that have them, under
     /// [`HelmholtzM2l::PlaneWave`].
     plane_waves: Option<PlaneWaveM2l<T>>,
@@ -457,6 +465,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             classes: None,
             batched: None,
             plane_wave_precision: PlaneWavePrecision::Rule,
+            plane_wave_tolerance: None,
             plane_waves: None,
             matrix: MatrixKernel::detect(MulAdd::Separate),
             p2p: Some(P2pKernel::detect()),
@@ -538,6 +547,18 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         self
     }
 
+    /// Gives [`PlaneWavePrecision::Rule`] the FMM's tolerance ε (`Degrees::Tolerance`'s;
+    /// `None`, the default, for named degrees, when the rule reads each level's degree),
+    /// before or after [`with_m2l`](Self::with_m2l). Under PlaneWave the levels' tables are
+    /// built again.
+    pub fn with_plane_wave_tolerance(mut self, tolerance: Option<f64>) -> Self {
+        self.kernel.plane_wave_tolerance = tolerance;
+        if self.kernel.m2l == HelmholtzM2l::PlaneWave {
+            self.select_tables();
+        }
+        self
+    }
+
     /// The precision of `level`'s quadrature under [`HelmholtzM2l::PlaneWave`], `None` where
     /// the level runs RCR (and under the other settings).
     pub fn plane_wave_precision(&self, level: usize) -> Option<Precision> {
@@ -604,7 +625,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         });
         kernel.plane_waves = (choice == HelmholtzM2l::PlaneWave).then(|| {
             let precisions: Vec<Option<Precision>> = match &kernel.plane_wave_precision {
-                PlaneWavePrecision::Rule => select(k_root, &degrees),
+                PlaneWavePrecision::Rule => select(k_root, &degrees, kernel.plane_wave_tolerance),
                 PlaneWavePrecision::PerLevel(named) => (0..degrees.len())
                     .map(|l| named.get(l).copied().flatten().filter(|_| l >= 2))
                     .collect(),

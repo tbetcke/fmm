@@ -6,7 +6,8 @@
 
 use nd_fmm_exec::geometry::Domain;
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, Densities, HelmholtzM2l, HelmholtzOperator, PlaneWavePrecision, Wavenumber,
+    ChargeKind, DegreeRule, Densities, HelmholtzM2l, HelmholtzOperator, PlaneWavePrecision,
+    Wavenumber,
 };
 use nd_fmm_math::{Complex, Layout};
 use nd_fmm_plan::operator::{FmmSizes, PairOperator};
@@ -25,8 +26,8 @@ fn domain() -> Domain {
     Domain::new(&PhysicalBox::new([0.0, 0.0, 0.0, 1.0, 1.0, 1.0])).unwrap()
 }
 
-/// The degrees of the rule's three precisions and one above it.
-const DEGREES: [usize; 6] = [0, 0, 6, 10, 14, 20];
+/// Degrees the rule gives waves without a tolerance, and one above them.
+const DEGREES: [usize; 6] = [0, 0, 6, 10, 15, 22];
 
 fn operator(
     k: Wavenumber,
@@ -61,9 +62,12 @@ fn the_rule_chooses_each_levels_precision() {
     // k̂₀ = k r₀ = 10, so κ_l = 20 · 2⁻ˡ lies in the tables on every level.
     let k = Wavenumber::new(20.0, 0.0).unwrap();
     let op = operator(k, ChargeKind::Complex, 1, PlaneWavePrecision::Rule);
-    let want = [None, None, Some(Iprec1), Some(Iprec2), Some(Iprec3), None];
+    let want = [None, None, Some(Iprec2), Some(Iprec2), Some(Iprec2), None];
     assert_eq!(precisions(&op), want);
-    assert_eq!(precisions(&op), select(Complex::new(10.0, 0.0), &DEGREES));
+    assert_eq!(
+        precisions(&op),
+        select(Complex::new(10.0, 0.0), &DEGREES, None)
+    );
     assert_eq!(op.m2l_choice(), HelmholtzM2l::PlaneWave);
     for (level, precision) in want.iter().enumerate().skip(2) {
         let on = match precision {
@@ -82,6 +86,60 @@ fn the_rule_chooses_each_levels_precision() {
         .with_m2l(HelmholtzM2l::Rotation, 0);
     assert_eq!(precisions(&rotation), [None; 6]);
     assert_eq!(rotation.plane_wave_bytes(), 0);
+}
+
+#[test]
+fn the_rule_reads_the_tolerance() {
+    let k = Wavenumber::new(20.0, 0.0).unwrap();
+    for (tolerance, want) in [(1e-3, Some(Iprec2)), (1e-6, Some(Iprec2)), (1e-8, None)] {
+        let mut expected = vec![want; 6];
+        expected[..2].fill(None);
+        // Before and after `with_m2l`, the same.
+        let op = operator(k, ChargeKind::Complex, 1, PlaneWavePrecision::Rule)
+            .with_plane_wave_tolerance(Some(tolerance));
+        assert_eq!(precisions(&op), expected, "ε = {tolerance:e}");
+        let densities = Densities::new(k.kind(), ChargeKind::Complex, 1);
+        let before = HelmholtzOperator::<f64>::new(k, densities, &domain(), &DEGREES, false, 8)
+            .unwrap()
+            .with_plane_wave_tolerance(Some(tolerance))
+            .with_m2l(HelmholtzM2l::PlaneWave, 0);
+        assert_eq!(precisions(&before), expected);
+        assert_eq!(
+            expected,
+            select(Complex::new(10.0, 0.0), &DEGREES, Some(tolerance))
+        );
+        // Named precisions ignore it.
+        let named = op.with_plane_wave_precision(PlaneWavePrecision::PerLevel(vec![
+            None,
+            None,
+            Some(Iprec1),
+        ]));
+        assert_eq!(
+            precisions(&named),
+            [None, None, Some(Iprec1), None, None, None]
+        );
+    }
+    // Back to no tolerance: the degrees.
+    let op = operator(k, ChargeKind::Complex, 1, PlaneWavePrecision::Rule)
+        .with_plane_wave_tolerance(Some(1e-8))
+        .with_plane_wave_tolerance(None);
+    assert_eq!(precisions(&op)[4], Some(Iprec2));
+    assert_eq!(
+        precisions(&op),
+        select(Complex::new(10.0, 0.0), &DEGREES, None)
+    );
+}
+
+/// The rule's largest degree without a tolerance is the calibrated plateau at its tolerance.
+#[test]
+fn the_rules_degree_is_the_calibrated_plateau() {
+    use nd_fmm_tables::helmholtz::plane_wave::merge::{
+        MAX_PLANE_WAVE_DEGREE, PLANE_WAVE_MIN_TOLERANCE,
+    };
+    assert_eq!(
+        DegreeRule::CALIBRATED.plateau(PLANE_WAVE_MIN_TOLERANCE),
+        MAX_PLANE_WAVE_DEGREE
+    );
 }
 
 #[test]

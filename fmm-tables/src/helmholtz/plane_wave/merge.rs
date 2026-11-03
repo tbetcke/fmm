@@ -22,12 +22,30 @@
 //!
 //! # The quadrature of a level
 //!
-//! [`precision_for_degree`] pairs a level's degree with the coarsest precision whose
-//! chain keeps its error against the direct sum near RCR's; [`select`] applies it on every
-//! level with a V list whose κ_l = k w_l lies in the tables. Both are functions of k, the
-//! level's width and its degree only (proposal §2, constraint 9), so every rank chooses
-//! alike. The constants are provisional (CH6.1c's degree study); Helmholtz CH6.1e sets them
-//! by the FMM's errors.
+//! Measured in the FMM (Helmholtz CH6.1e, `fmm-validate/results/helmholtz-ch6-1e.md`): on
+//! CH3.1c's cases at the calibrated degrees, each level with a quadrature forced to each
+//! precision alone, the FMM's relative ℓ2 errors of φ and ∇φ against the direct sum over
+//! Rotation's. The precision a level needs follows the FMM's tolerance ε, not its degree or
+//! κ_l: iprec 2 stays within 1.05× Rotation's on every level and case for
+//! 10⁻⁶ ≤ ε ≤ 10⁻³ ([`PLANE_WAVE_MIN_TOLERANCE`]) and misses it from ε = 10⁻⁷ (up to 5.4×
+//! there, 77× at 10⁻⁸); iprec 1 misses it from ε = 10⁻³ (up to 1.15× on one level alone,
+//! 3.6× at 10⁻⁴); iprec 3
+//! holds on most levels at 10⁻⁷ and 10⁻⁸ but not on the deep levels of the clustered trees
+//! (κ_l ≤ 0.08: 1.12× at 10⁻⁷, 1.76× at 10⁻⁸ on one level alone), where its degree-p
+//! waves err on the truncated multipole's tail (CH6.1c's degree study). So
+//! [`precision_for_tolerance`] takes iprec 2 for ε ≥ [`PLANE_WAVE_MIN_TOLERANCE`] and no
+//! precision below (Rotation there).
+//!
+//! An FMM with named degrees has no tolerance. [`precision_for_degree`] then takes the
+//! tolerance a degree p meets on the low-frequency plateau of the calibrated degree rule
+//! (`nd_fmm_exec::helmholtz::DegreeRule::CALIBRATED`, ⌈0.30 L² + 0.25 L + 2.60⌉ with
+//! L = log₁₀(1/ε)): iprec 2 to [`MAX_PLANE_WAVE_DEGREE`], the plateau at
+//! [`PLANE_WAVE_MIN_TOLERANCE`], none above. A high-frequency level has a larger degree at
+//! the same ε, so it may get none where the tolerance would give it iprec 2.
+//!
+//! [`select`] applies either on every level with a V list whose κ_l = k w_l lies in the
+//! tables. Both are functions of k, the level's width, its degree and ε only (proposal §2,
+//! constraint 9), so every rank chooses alike.
 
 use nd_fmm_math::{Complex, RealScalar};
 
@@ -35,32 +53,42 @@ use super::pair::PlaneWaveLevel;
 use super::quadrature::{Precision, Quadrature, domain_of};
 use crate::plane_wave::geometry::{self, CHILDREN, Direction, MergeGeometry, SLOTS};
 
-/// The largest degree [`precision_for_degree`] gives a precision.
-pub const MAX_PLANE_WAVE_DEGREE: usize = 16;
+/// The smallest tolerance at which [`precision_for_tolerance`] gives a precision (Helmholtz
+/// CH6.1e).
+pub const PLANE_WAVE_MIN_TOLERANCE: f64 = 1e-6;
 
-/// The precision of a level of degree `p`, or `None` above [`MAX_PLANE_WAVE_DEGREE`]
-/// (Rotation there): iprec 1 to p = 8, iprec 2 to 12, iprec 3 to 16.
-///
-/// Provisional, from CH6.1c's degree study (docs/helmholtz/tasks/CH6.1c.md, "Results"):
-/// the coarsest precision whose pair chain stayed within 1.1× RCR's error against the
-/// direct sum at every κ of the study (0.31 to 10, real, complex and damped), measured at
-/// p = 8, 12, 16, 20, …; the degrees between take the finer precision, and from p = 20 no
-/// precision held (1.3–2.3× at p = 20–24). Helmholtz CH6.1e replaces it by a rule measured
-/// in the FMM.
-pub fn precision_for_degree(p: usize) -> Option<Precision> {
-    match p {
-        0..=8 => Some(Precision::Iprec1),
-        9..=12 => Some(Precision::Iprec2),
-        13..=MAX_PLANE_WAVE_DEGREE => Some(Precision::Iprec3),
-        _ => None,
-    }
+/// The largest degree [`precision_for_degree`] gives a precision: the calibrated plateau
+/// at [`PLANE_WAVE_MIN_TOLERANCE`].
+pub const MAX_PLANE_WAVE_DEGREE: usize = 15;
+
+/// The precision the rule takes where it takes one, iprec 2 (the [module
+/// documentation](self)).
+pub const RULE_PRECISION: Precision = Precision::Iprec2;
+
+/// The precision of the levels of an FMM at tolerance ε (the [module
+/// documentation](self)): [`RULE_PRECISION`] for ε ≥ [`PLANE_WAVE_MIN_TOLERANCE`], `None`
+/// below (Rotation there) and for a ε that is not positive and finite.
+pub fn precision_for_tolerance(epsilon: f64) -> Option<Precision> {
+    (epsilon >= PLANE_WAVE_MIN_TOLERANCE && epsilon.is_finite()).then_some(RULE_PRECISION)
 }
 
-/// The precision of each level of a tree with k̂₀ = k r₀ at the root and degrees p_l:
-/// [`precision_for_degree`] on the levels l ≥ 2 whose κ_l = 2 k̂₀ 2⁻ˡ lies in the tables
-/// ([`domain_of`]), `None` on levels 0 and 1 (no V list) and on the others. `None`
-/// everywhere unless Re k̂₀ > 0 and Im k̂₀ ≥ 0 are finite.
-pub fn select(k_root: Complex<f64>, degrees: &[usize]) -> Vec<Option<Precision>> {
+/// The precision of a level of named degree `p`, without a tolerance (the [module
+/// documentation](self)): [`RULE_PRECISION`] to [`MAX_PLANE_WAVE_DEGREE`], `None` above
+/// (Rotation there).
+pub fn precision_for_degree(p: usize) -> Option<Precision> {
+    (p <= MAX_PLANE_WAVE_DEGREE).then_some(RULE_PRECISION)
+}
+
+/// The precision of each level of a tree with k̂₀ = k r₀ at the root and degrees p_l, at
+/// the FMM's tolerance if it has one: [`precision_for_tolerance`] of `tolerance`, or
+/// without one [`precision_for_degree`] of p_l, on the levels l ≥ 2 whose
+/// κ_l = 2 k̂₀ 2⁻ˡ lies in the tables ([`domain_of`]), `None` on levels 0 and 1 (no V list)
+/// and on the others. `None` everywhere unless Re k̂₀ > 0 and Im k̂₀ ≥ 0 are finite.
+pub fn select(
+    k_root: Complex<f64>,
+    degrees: &[usize],
+    tolerance: Option<f64>,
+) -> Vec<Option<Precision>> {
     let valid =
         k_root.re > 0.0 && k_root.im >= 0.0 && k_root.re.is_finite() && k_root.im.is_finite();
     degrees
@@ -69,7 +97,10 @@ pub fn select(k_root: Complex<f64>, degrees: &[usize]) -> Vec<Option<Precision>>
         .map(|(l, &p)| {
             let kappa = level_k_hat(k_root, l) * 2.0;
             (valid && l >= 2 && domain_of(kappa).is_some())
-                .then(|| precision_for_degree(p))
+                .then(|| match tolerance {
+                    Some(epsilon) => precision_for_tolerance(epsilon),
+                    None => precision_for_degree(p),
+                })
                 .flatten()
         })
         .collect()

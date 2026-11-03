@@ -33,6 +33,9 @@
 //!   [`Row::m2l`], [`Row::dense_levels`] and [`Row::dense_bytes`] what ran. Auto
 //!   (Helmholtz CH3.2d), the rule per level, at the rule's crossover or at
 //!   [`Case::m2l_max_degree`] (fused by default); [`Row::m2l_max_degree`] the agreed one.
+//!   The exponential M2L (Helmholtz CH6.1e), each level's quadrature by
+//!   [`Case::plane_wave`] (the rule by default, or named per level); [`Row::plane_wave`] the
+//!   precision each level ran.
 
 use std::ops::Range;
 use std::thread;
@@ -43,11 +46,12 @@ use mpi::traits::CommunicatorCollectives;
 use nd_fmm_exec::geometry::{Domain, radius};
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzFmm, HelmholtzFmmBuilder,
-    HelmholtzFmmError, HelmholtzM2l, Output, Wavenumber,
+    HelmholtzFmmError, HelmholtzM2l, Output, PlaneWavePrecision, Wavenumber,
 };
 use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
 use nd_fmm_ref::helmholtz::p2p::direct_sum;
+use nd_fmm_tables::helmholtz::plane_wave::Precision;
 
 use crate::SplitMix64;
 use crate::helmholtz_workloads::{SEED, Workload};
@@ -84,12 +88,16 @@ pub struct Case {
     pub m2l_mul_add: Option<MulAdd>,
     /// The crossover degree of [`HelmholtzM2l::Auto`] (`None` the rule's).
     pub m2l_max_degree: Option<usize>,
+    /// The precision of each level's quadrature under [`HelmholtzM2l::PlaneWave`]
+    /// (Helmholtz CH6.1e).
+    pub plane_wave: PlaneWavePrecision,
 }
 
 impl Case {
     /// A case with complex charges, one vector, gradients and 1,000 samples (§9.1), seeded
     /// with the workloads' [`SEED`], the P2P kernel of [`P2pChoice::Auto`] and M2L by
-    /// [`HelmholtzM2l::Rotation`] (the dense budget [`DEFAULT_DENSE_BUDGET`]).
+    /// [`HelmholtzM2l::Rotation`] (the dense budget [`DEFAULT_DENSE_BUDGET`]; under
+    /// [`HelmholtzM2l::PlaneWave`] the precisions of [`PlaneWavePrecision::Rule`]).
     pub fn new(workload: Workload, k: (f64, f64), degrees: Degrees) -> Self {
         Self {
             workload,
@@ -105,6 +113,7 @@ impl Case {
             dense_budget: DEFAULT_DENSE_BUDGET,
             m2l_mul_add: None,
             m2l_max_degree: None,
+            plane_wave: PlaneWavePrecision::Rule,
         }
     }
 }
@@ -414,11 +423,15 @@ pub struct Row {
     pub m2l_mul_add: MulAdd,
     /// The agreed crossover degree under [`HelmholtzM2l::Auto`], else `None`.
     pub m2l_max_degree: Option<usize>,
-    /// Per level, whether its M2L ran the setting's tables, Dense, Classes or Batched (else
-    /// RCR).
+    /// Per level, whether its M2L ran the setting's tables, Dense, Classes, Batched or the
+    /// exponential M2L (else RCR).
     pub dense_levels: Vec<bool>,
-    /// The bytes of the dense, class or batched M2L tables per rank.
+    /// The bytes of the dense, class or batched M2L tables per rank, or under
+    /// [`HelmholtzM2l::PlaneWave`] its tables and buffers (`plane_wave_bytes`).
     pub dense_bytes: usize,
+    /// Per level, the precision of its quadrature under [`HelmholtzM2l::PlaneWave`], `None`
+    /// where it ran RCR (and under every other setting).
+    pub plane_wave: Vec<Option<Precision>>,
     /// The ranks.
     pub ranks: usize,
     /// The levels of the tree.
@@ -519,7 +532,8 @@ pub fn run_output<C: CommunicatorCollectives>(
         .threads(threads)
         .p2p_kernel(case.p2p)
         .m2l(case.m2l)
-        .dense_budget(case.dense_budget);
+        .dense_budget(case.dense_budget)
+        .plane_wave_precision(case.plane_wave.clone());
     if let Some(mul_add) = case.m2l_mul_add {
         builder = builder.m2l_mul_add(mul_add);
     }
@@ -556,7 +570,11 @@ pub fn run_output<C: CommunicatorCollectives>(
             .collect(),
         dense_bytes: fmm.operator().dense_bytes()
             + fmm.operator().class_bytes()
-            + fmm.operator().batched_bytes(),
+            + fmm.operator().batched_bytes()
+            + fmm.operator().plane_wave_bytes(),
+        plane_wave: (0..fmm.nlevels())
+            .map(|l| fmm.operator().plane_wave_precision(l))
+            .collect(),
         ranks: size,
         levels: fmm.nlevels(),
         min_leaf_level: fmm.min_leaf_level(),

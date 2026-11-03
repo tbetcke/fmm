@@ -9,7 +9,8 @@
 
 use nd_fmm_math::Complex;
 use nd_fmm_tables::helmholtz::plane_wave::merge::{
-    MAX_PLANE_WAVE_DEGREE, MergeLevel, PlaneWaveM2l, add, precision_for_degree, select, shift,
+    MAX_PLANE_WAVE_DEGREE, MergeLevel, PLANE_WAVE_MIN_TOLERANCE, PlaneWaveM2l, RULE_PRECISION, add,
+    precision_for_degree, precision_for_tolerance, select, shift,
 };
 use nd_fmm_tables::helmholtz::plane_wave::pair::shift_add;
 use nd_fmm_tables::helmholtz::plane_wave::{Precision, quadrature::domain_of};
@@ -108,52 +109,77 @@ fn slot_and_child_shifts_factor_the_pair_shift() {
 }
 
 #[test]
-fn the_rule_pairs_degrees_with_precisions() {
-    let expected = |p: usize| match p {
-        0..=8 => Some(Precision::Iprec1),
-        9..=12 => Some(Precision::Iprec2),
-        13..=16 => Some(Precision::Iprec3),
-        _ => None,
-    };
-    for p in 0..=40 {
-        assert_eq!(precision_for_degree(p), expected(p), "p = {p}");
+fn the_rule_pairs_tolerances_with_precisions() {
+    let iprec2 = Some(Precision::Iprec2);
+    assert_eq!(RULE_PRECISION, Precision::Iprec2);
+    for (eps, want) in [
+        (1e-1, iprec2),
+        (1e-3, iprec2),
+        (1e-6, iprec2),
+        (PLANE_WAVE_MIN_TOLERANCE, iprec2),
+        (PLANE_WAVE_MIN_TOLERANCE * 0.999, None),
+        (1e-7, None),
+        (1e-8, None),
+        (0.0, None),
+        (-1e-3, None),
+        (f64::NAN, None),
+        (f64::INFINITY, None),
+    ] {
+        assert_eq!(precision_for_tolerance(eps), want, "ε = {eps:e}");
     }
-    assert_eq!(MAX_PLANE_WAVE_DEGREE, 16);
+}
+
+#[test]
+fn the_rule_pairs_degrees_with_precisions() {
+    for p in 0..=40 {
+        let want = (p <= MAX_PLANE_WAVE_DEGREE).then_some(Precision::Iprec2);
+        assert_eq!(precision_for_degree(p), want, "p = {p}");
+    }
+    // The calibrated plateau ⌈0.30 L² + 0.25 L + 2.60⌉ at the rule's tolerance
+    // (`nd_fmm_exec::helmholtz::DegreeRule::CALIBRATED`; its own test checks the same).
+    let l = (1.0 / PLANE_WAVE_MIN_TOLERANCE).log10();
+    let plateau = ((0.30 * l + 0.25) * l + 2.60 - 1e-9).ceil() as usize;
+    assert_eq!(MAX_PLANE_WAVE_DEGREE, plateau);
+    assert_eq!(MAX_PLANE_WAVE_DEGREE, 15);
 }
 
 #[test]
 fn select_applies_the_rule_where_the_tables_reach() {
-    // κ₀ = 2k̂₀ = 400: levels 0–2 (κ_l = 400, 200, 100 ≥ 16π) lie outside the tables, and
-    // levels 3 and 4 (κ_l = 50, 25) have degrees above the rule's.
+    let iprec2 = Some(Precision::Iprec2);
+    // κ₀ = 2k̂₀ = 400: levels 0–2 (κ_l = 400, 200, 100 ≥ 16π) lie outside the tables.
     let k_root = C::new(200.0, 0.0);
-    let degrees = [30, 30, 30, 30, 20, 16, 12, 8, 6];
-    let chosen = select(k_root, &degrees);
-    for (l, (&p, &got)) in degrees.iter().zip(&chosen).enumerate() {
-        let kappa = k_root * 2.0 * 0.5f64.powi(l as i32);
-        let want = if l >= 2 && domain_of(kappa).is_some() {
-            precision_for_degree(p)
-        } else {
-            None
-        };
-        assert_eq!(got, want, "level {l}");
+    let degrees = [30, 30, 30, 30, 30, 24, 15, 8, 6];
+    for tolerance in [None, Some(1e-3), Some(1e-6), Some(1e-8)] {
+        let chosen = select(k_root, &degrees, tolerance);
+        for (l, (&p, &got)) in degrees.iter().zip(&chosen).enumerate() {
+            let kappa = k_root * 2.0 * 0.5f64.powi(l as i32);
+            let want = if l >= 2 && domain_of(kappa).is_some() {
+                tolerance.map_or(precision_for_degree(p), precision_for_tolerance)
+            } else {
+                None
+            };
+            assert_eq!(got, want, "level {l}, tolerance {tolerance:?}");
+        }
+        assert_eq!(&chosen[..3], &[None; 3]);
     }
-    assert_eq!(&chosen[..5], &[None; 5]);
+    // By the degrees: levels 3–5 above the rule's largest degree.
     assert_eq!(
-        &chosen[5..],
-        &[
-            Some(Precision::Iprec3),
-            Some(Precision::Iprec2),
-            Some(Precision::Iprec1),
-            Some(Precision::Iprec1)
-        ]
+        &select(k_root, &degrees, None)[3..],
+        &[None, None, None, iprec2, iprec2, iprec2]
     );
+    // By the tolerance, whatever the degrees.
+    assert_eq!(&select(k_root, &degrees, Some(1e-3))[3..], &[iprec2; 6]);
+    assert_eq!(&select(k_root, &degrees, Some(1e-6))[3..], &[iprec2; 6]);
+    assert_eq!(&select(k_root, &degrees, Some(1e-8))[3..], &[None; 6]);
     // Complex k; and k̂₀ with Re k̂₀ = 0 (Yukawa) or Im k̂₀ < 0, none.
     assert_eq!(
-        select(C::new(3.0, 1.0), &[8, 8, 8, 8]),
-        [None, None, Some(Precision::Iprec1), Some(Precision::Iprec1)]
+        select(C::new(3.0, 1.0), &[8, 8, 8, 8], None),
+        [None, None, iprec2, iprec2]
     );
-    assert_eq!(select(C::new(0.0, 3.0), &[8; 4]), [None; 4]);
-    assert_eq!(select(C::new(3.0, -1.0), &[8; 4]), [None; 4]);
+    for tolerance in [None, Some(1e-6)] {
+        assert_eq!(select(C::new(0.0, 3.0), &[8; 4], tolerance), [None; 4]);
+        assert_eq!(select(C::new(3.0, -1.0), &[8; 4], tolerance), [None; 4]);
+    }
 }
 
 #[test]
