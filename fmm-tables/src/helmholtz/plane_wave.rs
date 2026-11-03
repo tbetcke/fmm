@@ -18,7 +18,7 @@
 //! each level has its own ([`quadrature`]).
 //!
 //! Helmholtz CH6.1a gives the quadratures; the conversions between expansions and waves,
-//! the shifts and merge and shift follow in CH6.1b and CH6.1c (docs/helmholtz/roadmap.md).
+//! the shifts and merge and shift follow in CH6.1c and CH6.1d (docs/helmholtz/roadmap.md).
 
 pub mod quadrature;
 
