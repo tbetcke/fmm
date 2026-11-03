@@ -1799,10 +1799,12 @@ request, using this template:
   a dated change note); the rest taken (the report's wording on α, pruned counts and
   ratio ranges; `results/alpha.md`; the generator's errors at the levels; its bounds
   documented; the tests' tolerances recorded).
-- Decisions: none taken. Questions for sign-off (the PR): 1. CH6.1's quadratures from
-  FMM3D's tables (iprec 1–3) extracted with NIST's notice, or from the generator; 2. the
+- Decisions: questions for sign-off (the PR): 1. CH6.1's quadratures from FMM3D's tables
+  (iprec 1–3) extracted with NIST's notice, or from the generator: signed off 2026-11-03: "i would like to revert my request not to use the nist tables and go vack to your earlier plan", FMM3D's tables
+  (an earlier answer that day, the generator, withdrawn); 2. the
   α counts by measurement, not from `hnumphys`; 3. the proposal's "32 wavelengths"
-  corrected to 8 (§5.3, §9.2, §11, §13).
+  corrected to 8 (§5.3, §9.2, §11, §13): 2 and 3 signed off 2026-11-03, "yes to 2 and 3";
+  the proposal corrected in this PR, marked "amended at CH0.4".
 - Laplace: not touched (a new spike crate; the root manifest's `members` and one lock
   entry).
 - Follow-ups:

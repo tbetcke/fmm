@@ -137,10 +137,14 @@ For sign-off in the PR (report §6):
 
 1. CH6.1's quadratures: FMM3D's tables (iprec 1–3) extracted with NIST's notice, as
    §3.14's Laplace tables; or the generator (1.5–1.9× the wave values on real κ, more on
-   Yukawa).
+   Yukawa). signed off 2026-11-03: "i would like to revert my request not to use the nist tables and go vack to your earlier plan": FMM3D's tables, as recommended (an earlier answer the same day, "i would
+   like you to avoid taking the tables from fmm3d", withdrawn by this one).
 2. The α counts by measurement, not from `hnumphys` (FMM3D's miss the stated error at the
    region's corner by up to 119×, and ε on 11 of 138 reference rows by up to 1.8×).
-3. The proposal's correction below.
+   Signed off 2026-11-03: "yes to 2 and 3", as recommended.
+3. The proposal's correction below. Signed off 2026-11-03: "yes to 2 and 3"; the proposal
+   corrected on this branch (§5.3, §9.2's limits and table, §11, §13), each place marked
+   "amended at CH0.4".
 
 - The proposal says FMM3D uses plane waves "up to boxes of 32 wavelengths" (§5.3, §9.2,
   §11, §13), after FMM3D's documentation (`docs/index.rst`). Its code (`hfmm3d.f`,

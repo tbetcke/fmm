@@ -255,6 +255,10 @@ kD = 100 + 5i, 500 + 25i, levels 2 to 8, ε = 10⁻³, 10⁻⁶, 10⁻⁸ (iprec
 
 ## 6. Recommendation for CH6.1
 
+**Sign-off (question 1 of the PR):** signed off 2026-11-03: "i would like to revert my request not to use the nist tables and go vack to your earlier plan": item 1, FMM3D's tables.
+Questions 2 and 3 (items 2 and 4): signed off 2026-11-03, "yes to 2 and 3"; the proposal is
+corrected in the same PR.
+
 1. **FMM3D's tables**, iprec 1 to 3 (D1's ε from 10⁻³ to 10⁻⁸; about 32,600 nodes and
    their counts), extracted into `nd-fmm-tables` with NIST's notice kept and a script
    from FMM3D's pinned release, as CONVENTIONS §3.14's Laplace tables were. They are the

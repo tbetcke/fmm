@@ -585,8 +585,9 @@ is for Laplace:
   24 in D1's range (CH3.3; 20 to 60 before calibration), up to about 38 on intermediate
   levels, where an O(p²) per-pair M2L still gains. And the low-frequency levels carry most of the
   far-field work below kD ≈ 10³ (Section 7), which is why H6 comes before H4 by default.
-  FMM3D uses this M2L for Helmholtz up to boxes of 32 wavelengths. The cost of entry: the
-  quadratures depend on k w_l, so a level needs its own quadrature (generated or tabulated;
+  FMM3D uses this M2L for Helmholtz up to boxes of 8 wavelengths, Re(k w) ≤ 16π (amended at
+  CH0.4: its code, not the 32 of its documentation; spikes/pw-quadrature §2.4). The cost
+  of entry: the quadratures depend on k w_l, so a level needs its own quadrature (generated or tabulated;
   spike S4), unlike the single Laplace table of §3.14. Gumerov and Duraiswami found RCR
   about as efficient as exponential forms at moderate p in their 2009 code; the
   repository's own Laplace measurement points the other way, so the decision is a
@@ -1323,8 +1324,8 @@ and for complex and purely imaginary k the branch, before any comparison.
 
 **Limits.** FMM3D is a reference, not ground truth: agreement is meaningful only to the
 looser of the two accuracies, and the sampled direct sum stays the primary measure. Above
-boxes of 32 wavelengths FMM3D uses point and shoot, slower but still accurate. Whether it
-is accurate and efficient for purely imaginary zk (the Yukawa case) is not verified; CH1.4
+boxes of 8 wavelengths (amended at CH0.4; 32 by its documentation) FMM3D uses point and
+shoot, slower but still accurate. Whether it is accurate and efficient for purely imaginary zk (the Yukawa case) is not verified; CH1.4
 checks it (risk R12).
 
 **Per phase:**
@@ -1334,7 +1335,7 @@ checks it (risk R12).
 | H1 (CH1.4) | two-point normalisation; fixtures; `nd-fmm-ref`'s direct sum to round-off | real, complex, imaginary |
 | H2 (CH2.5) | Yukawa FMM on W1 and W3, sampled and full-target, over κ D | imaginary, if R12 clears |
 | H3 (CH3.6) | RCR on every level: W1, W3 and W4 for kD ≤ 100, and W1 at kD = 500 | real |
-| H6 (CH6.2) | the exponential M2L against `hfmm3d`'s, which uses the same M2L up to boxes of 32 wavelengths: per-level accuracy and time | real |
+| H6 (CH6.2) | the exponential M2L against `hfmm3d`'s, which uses the same M2L up to boxes of 8 wavelengths (amended at CH0.4): per-level accuracy and time | real |
 | H4 (CH4.4, CH4.5) | W1 to kD = 1000, W2 to 500, W3 to 200, with the levels and classes mapped; then matched accuracy | real |
 | H5 (CH5.3) | the (Re kD, Im kD) grid on W1 | complex |
 | H7 (CH7.6) | the device path at matched accuracy | real, complex |
@@ -1464,7 +1465,7 @@ flowchart LR
 | Cheng et al. 2006 | spherical harmonics with six-direction exponential M2L | signatures with interpolation and filtering between levels | its low-frequency M2L adopted as an optional strategy (H6); its high-frequency part not, because the per-box conversion of the skeleton needs no interpolation |
 | Cecka–Darve 2013 | none (low-frequency breakdown) | uniform (θ, φ) signatures, FFT interpolation, diagonal M2M, M2L and L2L | upgrade path for the high-frequency levels beyond kD ≈ 10³; its reflection classes adopted |
 | Chaillat–Collino 2015 | plane waves, propagating and evanescent | plane waves | not adopted: plane waves on the low-frequency levels, where most boxes are, replace the operators this library is fast at, and the evanescent part is directional; its error estimates are useful for p_l and the regime boundary |
-| FMM3D `hfmm3d` as built | spherical harmonics with plane waves up to boxes of 32 wavelengths | point and shoot (sub-optimal, by its documentation) | benchmark |
+| FMM3D `hfmm3d` as built | spherical harmonics with plane waves up to boxes of 8 wavelengths (amended at CH0.4; 32 by its documentation) | point and shoot (sub-optimal, by its documentation) | benchmark |
 | Directional (Engquist–Ying; Messner–Schanz–Darve; Börm–Melenk; Chollet et al.) | | | excluded (Section 1.3) |
 | DMK (Jiang–Greengard), kernel-independent (kiFMM, Kailasa's extension to kD of 50–100) | | | excluded; kifmm-rs is a useful external baseline at low kD |
 
@@ -1540,7 +1541,9 @@ these.
   and MIT's Technology Licensing Office,
   https://tlo.mit.edu/technologies/fftw-fastest-fourier-transform-west (non-free licences).
 - FMM3D documentation, https://github.com/flatironinstitute/FMM3D/blob/master/docs/index.rst
-  (plane waves for Helmholtz up to boxes of 32 wavelengths, point and shoot above).
+  (plane waves for Helmholtz up to boxes of 32 wavelengths, point and shoot above; its code,
+  `src/Helmholtz/hfmm3d.f` of v2.1.0, stops at Re(k w) ≤ 16π, boxes of 8 wavelengths:
+  amended at CH0.4, spikes/pw-quadrature/SPIKE_REPORT.md §2.4).
 - FMM-Yukawa (exponential expansions for screened Coulomb interactions),
   https://data.mendeley.com/datasets/wrt6627sr8.
 - S. Jiang, L. Greengard, *A dual-space multilevel kernel-splitting framework for discrete and
