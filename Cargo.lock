@@ -3033,6 +3033,7 @@ dependencies = [
 name = "nd-fmm-spike-pw-quadrature"
 version = "0.0.0"
 dependencies = [
+ "nd-fmm-ref",
  "nd-fmm-spike-plane-wave",
  "nd-fmm-tables",
  "num-complex",

@@ -1854,3 +1854,47 @@ request, using this template:
 - Follow-ups:
   - CH6.1b: the pair chain and the convention, for sign-off (the roadmap).
   - CH6.2: whether fewer waves than the corner's would do (a sentence in CH6.2's line).
+
+## 2026-11-03: CH6.1b The generator
+- Done:
+  - The second task of CH6.1 (priority list item 2), split on this branch: CH6.1b became
+    the generator (this task), the pair chain with its CONVENTIONS §3.15 subsection moved
+    to CH6.1c (sign-off), merge and shift renamed CH6.1d. The pair chain, the generator
+    and the convention together came to about 1,800 lines in two crates.
+  - `nd_fmm_ref::helmholtz::plane_wave` (f64, a builder of quadratures): `generate(κ, ε)`,
+    S4's generator for any κ = k w with Re κ, Im κ ≥ 0 (the contour of real t, composite
+    Gauss–Legendre, column-pivoted Gram–Schmidt with refitted weights, α and Fourier
+    counts by the Bessel bound), in the spike's order of operations with its own
+    Gauss–Legendre rule and Jₙ; `Quadrature` with `evaluate(u)` and `kernel_error()` (the
+    largest |Q − G| on the region's grid); `kernel`; `Shortfall { error, bounds }` with
+    `Bound::{Floor, Panels, Compression, Tightening}`, where the spike returned silently
+    at its bounds.
+  - `spikes/pw-quadrature/examples/generated.rs` (the spike gains `nd-fmm-ref`): the port
+    against the spike's `generate`, every λₖ, tₖ, wₖ, Nₖ and Fₖ bit for bit at all 35 κ × ε
+    of the spike's tests (14 s in release). Record: `docs/helmholtz/tasks/CH6.1b.md`.
+- Tests: `fmm-ref/tests/helmholtz/plane_wave.rs`: S4's checks (ε on the grid, 2ε at 200
+  seeded points off it, 2ε in the point-to-point chain, every tₖ real, no shortfall) at
+  its five debug cases, and ignored at its full set (9 κ × 3 ε and 3 regression cases);
+  determinism bit for bit; the κ panic. Unit tests: the panels converge; a forced panel
+  cap and ε below the floor reported (`Floor`, `Panels`, `Tightening`); no shortfall when
+  ε is met; Jₙ against the trapezoid; Gauss–Legendre on polynomials. `Bound::Compression`
+  has no test of its own (no cheap case reaches the compression's floor). Debug on the
+  M6: the helmholtz test binary 21.2 → 22.2 s, the lib's 0.01 → 24.7 s (the forced-bound
+  test, ten grid sums of the generator's give-up path).
+- Checks: ran `/verify` on the M6: format; Clippy default, examples and workspace
+  all-targets; `cargo doc`; `cargo check --workspace --all-targets`; `cargo deny --locked
+  check licenses`; no fftw-sys in the default members' tree; `cargo test` (744 s) and
+  `--workspace` (1,019 s), all passed. After the self-review's fixes (tests and docs
+  only) Clippy, `cargo doc` and `cargo test -p nd-fmm-ref` again; the ignored release tests
+  (`cargo test -p nd-fmm-ref --release --test helmholtz plane_wave -- --ignored`, 23.5 s);
+  the spike's Clippy and `examples/generated.rs`, both again on the final branch. Not run: the MPI list and D9 (no MPI crate,
+  no Laplace path). A self-review by a subagent: nothing blocking in the code (the
+  arithmetic token for token the spike's, the shortfall's bookkeeping read-only); its
+  points taken (the by-hand runs recorded, two doc bounds corrected, determinism by bits
+  with tₖ, the tests' measures named, the counts' sums tested, the plan's API names).
+- Decisions: none. The split of CH6.1b (this branch).
+- Laplace: not touched (a new module of `nd-fmm-ref`; a doc line of
+  `nd_fmm_tables::helmholtz::plane_wave` for the renamed tasks).
+- Follow-ups:
+  - CH6.1c: the pair chain and its convention, for sign-off, tested with FMM3D's and this
+    generator's quadratures (the roadmap).

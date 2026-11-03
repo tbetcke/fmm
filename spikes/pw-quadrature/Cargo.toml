@@ -12,6 +12,9 @@ num-complex.workspace = true
 # The quadratures of Helmholtz CH6.1a, compared with FMM3D's own counts
 # (examples/counts.rs).
 nd-fmm-tables.workspace = true
+# The generator ported to nd-fmm-ref (Helmholtz CH6.1b), compared with this one bit for
+# bit (examples/generated.rs).
+nd-fmm-ref.workspace = true
 # The sweeps over FMM3D's 437 domains × 5 precisions.
 rayon.workspace = true
 

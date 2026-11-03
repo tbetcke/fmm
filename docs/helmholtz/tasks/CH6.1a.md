@@ -122,7 +122,7 @@ None: accuracy only, on the M6 (no timing).
 
 - Constraint 1: no Laplace file changes (`nd_fmm_tables::plane_wave` untouched).
 - Constraint 9: the quadrature is a function of κ = k w_l and the precision from ε.
-- Constraint 5: built in f64; the module holds f64 only (CH6.1b rounds to T).
+- Constraint 5: built in f64; the module holds f64 only (CH6.1b rounds to T; since the split of 2026-11-03, CH6.1c).
 - Risk: the bound's counts cost more waves than FMM3D's (the generator's were 1.5–1.9×
   FMM3D's Σ Nₖ for its own nodes); recorded, CH6.2 times it. The bound for complex tₖ
   may be loose where |Im tₖ| ρ is large (type 2 near Re κ = 16π).

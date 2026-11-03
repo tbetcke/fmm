@@ -36,11 +36,15 @@
 //!   CH1.3c).
 //! - [`direct`]: the same translations by projection of the leaf evaluators' fields on a
 //!   sphere, the trusted path of [`rcr`] (Helmholtz CH1.3c).
+//! - [`plane_wave`]: a generator of the quadratures of the exponential (plane-wave) M2L
+//!   for any κ = k w, the trusted path of the tabulated ones (Helmholtz CH6.1b, S4's
+//!   generator).
 
 pub mod direct;
 pub mod leaf;
 mod level;
 pub mod p2p;
+pub mod plane_wave;
 pub mod rcr;
 mod workspace;
 
