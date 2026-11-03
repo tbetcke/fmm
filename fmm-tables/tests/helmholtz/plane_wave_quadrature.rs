@@ -298,6 +298,31 @@ fn the_data_are_fmm3ds() {
         assert_eq!(d.nodes[0], x);
         assert_eq!(d.weights[0], w);
     }
+    // The last node and weight of the same domains at every precision, from FMM3D's files
+    // (`xs(n)`, `ws(n)`): (iprec, domain, n, xₙ, wₙ).
+    let last = [
+        (1, 1, 12, 0.8811933181071725e-01, 0.1207341200009158e-01),
+        (1, 11, 26, 0.1054128253993683e+00, 0.9657468295394336e-02),
+        (1, 139, 10, 0.7048956932878120e-01, 0.1189057898878958e-01),
+        (1, 172, 22, 0.1496047036956045e+02, 0.1018366096767002e+01),
+        (1, 236, 1, 0.3647057884873068e+01, 0.5389135443514403e+01),
+        (2, 1, 21, 0.1586626589243695e+00, 0.1259332951418082e-01),
+        (2, 11, 35, 0.1714661223874895e+00, 0.1051494208149056e-01),
+        (2, 139, 20, 0.1514318804220985e+00, 0.1273146853251371e-01),
+        (2, 172, 37, 0.2260996983132893e+02, 0.1265002467422740e+01),
+        (2, 236, 14, 0.1332347618506859e+02, 0.1214099359631963e+01),
+        (3, 1, 33, 0.2488977877058401e+00, 0.3727621470193036e-01),
+        (3, 11, 44, 0.2362804496735852e+00, 0.1065007186065562e-01),
+        (3, 139, 32, 0.2432755759628999e+00, 0.3639171774754243e-01),
+        (3, 172, 52, 0.3088777266736086e+02, 0.1197570724553097e+01),
+        (3, 236, 26, 0.2463562542321771e+02, 0.3852526260915091e+01),
+    ];
+    for (iprec, domain, n, x, w) in last {
+        let d = &domains(Precision::ALL[iprec - 1])[domain - 1];
+        assert_eq!(d.nodes.len(), n, "iprec {iprec}, domain {domain}");
+        assert_eq!(d.nodes[n - 1], x);
+        assert_eq!(d.weights[n - 1], w);
+    }
 }
 
 #[test]
@@ -365,8 +390,10 @@ fn the_node_maps() {
                 assert!(
                     (t * t - (l * l + kappa * kappa)).norm() <= 1e-12 * (l * l).norm().max(1.0)
                 );
-                // The node maps restated: type 1 has t = x real; type 2 runs from
-                // λ(u = 0) = −iκ along u − iκ + i Re(κ) u/(1 + u).
+                // The node maps restated (the code's formula, so a check of its
+                // transcription only; the λ sum below checks the maps against the
+                // kernel): type 1 has t = x real; type 2 runs from λ(u = 0) = −iκ along
+                // u − iκ + i Re(κ) u/(1 + u).
                 match d.map {
                     NodeMap::RealT => {
                         let x = d.nodes[k];
@@ -431,6 +458,53 @@ fn bessel_of_complex_argument() {
         bessel_j_norms(C::new(0.0, 0.0), 3),
         vec![1.0, 0.0, 0.0, 0.0]
     );
+    assert_eq!(bessel_j_norms(C::new(1e-200, 0.0), 2), vec![1.0, 0.0, 0.0]);
+}
+
+/// The tails the counts threshold on, relative: for m ≥ 2|z| against the power series
+/// J_m(z) = Σⱼ (−1)ʲ (z/2)^{m+2j} / (j! (m+j)!) (its first term in logarithms, against
+/// overflow of m!), within its own rounding: 10⁻¹⁴ of Σ |terms| (the series cancels while
+/// its terms grow, by up to e^{|z|²/(4m)} ≤ e^{|z|/8} at m = 2|z|) plus 10⁻¹³ of the value.
+/// The arguments stay at |z| ≤ 60, where that bound is informative; the trapezoid of
+/// [`bessel_of_complex_argument`] covers |z| to 380.
+#[test]
+fn bessel_tails_relative() {
+    let zs = [
+        C::new(7.5, 0.0),
+        C::new(3.0, 2.0),
+        C::new(30.0, -5.0),
+        C::new(50.0, 20.0),
+        C::new(0.0, 15.0),
+        C::new(60.0, 0.5),
+    ];
+    let ln_factorial = |n: usize| (1..=n).map(|i| (i as f64).ln()).sum::<f64>();
+    for z in zs {
+        let first = (2.0 * z.norm()).ceil() as usize;
+        let top = first + 60;
+        let j = bessel_j_norms(z, top);
+        let half = z * 0.5;
+        for (m, &value) in j.iter().enumerate().skip(first) {
+            // The terms relative to the first: (−(z/2)²)ʲ m! / (j! (m+j)!).
+            let (mut term, mut sum, mut size) = (C::new(1.0, 0.0), C::new(1.0, 0.0), 1.0f64);
+            for i in 1..400 {
+                term *= -(half * half) / (i as f64 * (m + i) as f64);
+                sum += term;
+                size += term.norm();
+                if term.norm() < 1e-18 * size {
+                    break;
+                }
+            }
+            let first_term = (m as f64 * half.norm().ln() - ln_factorial(m)).exp();
+            let exact = first_term * sum.norm();
+            if exact < 1e-300 {
+                continue;
+            }
+            assert!(
+                (value - exact).abs() <= 1e-14 * first_term * size + 1e-13 * exact,
+                "|J_{m}({z})| = {value:e} vs {exact:e}"
+            );
+        }
+    }
 }
 
 /// The acceptance in debug builds: the kernel at the centres of the fixture's domains at
@@ -477,9 +551,10 @@ fn the_counts_on_the_reference_levels() {
 /// The acceptance in full: the kernel at the nine points of every domain and precision,
 /// and the chain at every domain's centre (the chain costs about 10⁸ operations per
 /// quadrature, so nine points of every domain would take hours on one thread; S4 §3
-/// measured its chain at the centres too). About ten minutes on the M6.
+/// measured its chain at the centres too). About 6 minutes on the M6 (380 s with the
+/// reference levels, beside other work).
 #[test]
-#[ignore = "release: 437 domains × 3 precisions, about ten minutes"]
+#[ignore = "release: 437 domains × 3 precisions, about 6 minutes"]
 fn the_counts_on_every_domain() {
     let mut worst = [(0.0f64, 0.0f64); 3];
     for precision in Precision::ALL {

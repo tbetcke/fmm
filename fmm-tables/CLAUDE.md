@@ -83,7 +83,7 @@ CH6.1a (`helmholtz::plane_wave::quadrature`, the quadratures of the exponential 
   recurrence normalised by e^{iz} at Im z ≤ 0. A function of κ and the precision only. The
   trusted path is the kernel e^{iκ|u|}/|u| on the region: `tests/helmholtz/` checks the
   kernel within 2× and the point-to-point chain within 3× the stated error (on every domain
-  in the ignored `the_counts_on_every_domain`, about ten minutes in release). A change to
+  in the ignored `the_counts_on_every_domain`, about 6 minutes in release). A change to
   the counts changes the waves of every level, so rerun that test and the spike's
   `examples/counts.rs` (the wave counts against FMM3D's, docs/helmholtz/tasks/CH6.1a.md).
   Not cached.

@@ -442,10 +442,16 @@ fn tail_count(t: C, reach: f64, scale: f64, share: f64) -> usize {
 /// J_{n−1} = (2n/z) Jₙ − J_{n+1} from an order well above max(top, |z|), normalised by
 /// e^{iz} = J₀(z) + 2 Σ_{n≥1} iⁿ Jₙ(z) at z or its conjugate, whichever has Im ≤ 0 (the
 /// module documentation, "The counts"), rescaled against overflow.
+///
+/// Public for the tests. Its range is the counts': |z| up to a few hundred and |Im z| up to
+/// about 100 (the nodes give |tₖ| ρ_max ≤ 320 and |Im tₖ| ρ_max ≤ 6). Beyond, the
+/// unnormalised sum or e^{iz} itself can overflow (|Im z| above about 700 for the latter),
+/// and the result is then infinite or NaN. Below |z| = 10⁻¹⁵⁰ it returns J₀ = 1 and zeros,
+/// within (|z|/2)^m/m! of the values.
 pub fn bessel_j_norms(z: Complex<f64>, top: usize) -> Vec<f64> {
     let mut out = vec![0.0; top + 1];
     let r = z.norm();
-    if r == 0.0 {
+    if r < 1e-150 {
         out[0] = 1.0;
         return out;
     }

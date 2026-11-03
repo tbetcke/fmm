@@ -106,7 +106,7 @@
 //!
 //! # The exponential M2L
 //!
-//! [`plane_wave`](self::plane_wave) holds the exponential (plane-wave) M2L of the
+//! [`helmholtz::plane_wave`](self::plane_wave) holds the exponential (plane-wave) M2L of the
 //! low-frequency levels (proposal §5.3; Helmholtz H6): so far its quadratures per level,
 //! FMM3D's tables with counts of their own (Helmholtz CH6.1a).
 //!

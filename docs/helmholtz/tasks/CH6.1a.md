@@ -63,10 +63,11 @@ Laplace path, no convention, no dependency, no `nd-fmm-plan` change.
     measurement if the acceptance misses, and the rule says so.
 - `fmm-tables/src/helmholtz/plane_wave/hwts_iprec{1,2,3}.txt` (new, generated): per
   domain its index, type, rectangle and stated error, then its nodes and weights, each
-  value the shortest round-trip form of FMM3D's literal; NIST's notice as the header.
-  Read once through `include_str!` and parsed on first use (`LazyLock`). About 1.5 MB.
-- `tools/fixtures/helmholtz_pw_quadrature.py` (new; Python ≥ 3.9, standard library only):
-  writes the three files from FMM3D's `src/Helmholtz/` (the tarball `tools/fmm3d/build.sh`
+  value FMM3D's literal with the exponent letter D written as e; NIST's notice and a dated
+  change note as the header. Read once through `include_str!` and parsed on first use
+  (`LazyLock`). 1.68 MB.
+- `tools/fixtures/helmholtz_pw_quadrature.sh` (new; POSIX `sh` and `awk`, as
+  `plane_wave_quadrature.sh`): writes the three files from FMM3D's `src/Helmholtz/` (the tarball `tools/fmm3d/build.sh`
   pins, unpacked by `spikes/pw-quadrature/tools/fetch.sh`); `tools/fixtures/README.md`'s
   table row.
 - `spikes/pw-quadrature/examples/counts.rs` (new; the spike gains a path dependency on
@@ -82,8 +83,10 @@ binary), f64, no threads:
 
 1. **The data.** Every precision has all 437 domains; each domain's stated rectangle
    equals `rectangle(domain)` to 10⁻¹⁵ relative, its type is 1 for Im κ₀ ≥ π/2 and 2
-   below; the node totals per precision and a few nodes by value (the first and last of
-   domains 1, 11, 139, 172, 236) as FMM3D's files have them (from the spike's fixture).
+   below; the node totals per precision and, as FMM3D's files have them, the node counts
+   and the first and last node and weight of domains 1, 11, 139, 172, 236 (the first at
+   iprec 2 and 3, the last at iprec 1–3). Every value against FMM3D's own files, bit for
+   bit: the spike's `examples/counts.rs` (by hand; it needs FMM3D's sources).
 2. **The lookup.** `domain_of` at the centre, corners (pulled in by 10⁻⁹ relative) and
    edge midpoints of every rectangle gives that rectangle; Re κ ≥ 16π or Im κ ≥ 12π gives
    none; `Precision::for_tolerance` at the thresholds.
@@ -107,8 +110,8 @@ binary), f64, no threads:
 
 `/verify` (format, Clippy default, examples and workspace all-targets, `cargo doc`, `cargo
 test` and `--workspace`); `cargo test -p nd-fmm-tables --release -- --ignored`; the spike's
-`cargo clippy -p nd-fmm-spike-pw-quadrature --all-targets` and its example run with
-`FMM3D_HELMHOLTZ` set. Not needed: the MPI list and D9 (no MPI crate, no Laplace path);
+`cargo clippy -p nd-fmm-spike-pw-quadrature --all-targets` and its example run on the
+directory `spikes/pw-quadrature/tools/fetch.sh` prints. Not needed: the MPI list and D9 (no MPI crate, no Laplace path);
 the licence check (no dependency of a default member changes; run anyway, it is cheap).
 
 ## Machine runs
@@ -125,6 +128,49 @@ None: accuracy only, on the M6 (no timing).
   may be loose where |Im tₖ| ρ is large (type 2 near Re κ = 16π).
 - Data size: about 1.5 MB of text in the crate (NIST's, public domain in the US with the
   notice kept, as `plane_wave::quadrature_data`).
+
+## Results
+
+Release builds on the M6, f64, 2026-11-03; accuracy only, nothing timed.
+
+**The counts against FMM3D's** (`spikes/pw-quadrature/examples/counts.rs`, at the centre,
+the lower corner, the upper corner pulled in by 10⁻⁹ relative and the two mixed corners of
+every domain, 2,185 points per precision; the nodes and weights are bit for bit the spike's
+parse of FMM3D's files, the node maps the same to 10⁻¹⁵). The kernel's error on the grid of
+the region relative to the stated error:
+
+| iprec | kernel / stated, ours, worst | kernel / stated, FMM3D's `hnumphys`, worst | Σ Nₖ ours / FMM3D's, Im κ < π/2 (means per row) | Σ Nₖ ours / FMM3D's, all points, mean (range) |
+| --- | --- | --- | --- | --- |
+| 1 | 1.08 | 82.8 | 1.40–1.51 | 12.35 (0.99–119) |
+| 2 | 1.19 | 94.3 | 1.35–1.39 | 10.17 (1.00–87) |
+| 3 | 1.50 | 119.0 | 1.31–1.32 | 7.99 (1.00–87) |
+
+The worst of ours is the λ sum's own error (S4 §3.1: 1.08, 1.19 and 1.50 at iprec 1–3), so
+the counts add nothing visible on the grid. On the rows of D1's levels (Im κ small: real
+and weakly damped k) the bound costs 1.31–1.51× FMM3D's waves: it resolves J₀ to the
+region's corner ρ = 4√2, where FMM3D's counts resolve to about ρ = 4 (S4 §3.2), and adds Fₖ
+for the chain's aliasing. The ratio grows with Im κ (1.42–1.86 for Im κ in [π/2, 2π)) and is
+21–28 on the strongly damped rows (Im κ ≳ 3π at iprec 1, ≳ 5π at iprec 2, ≳ 7π at
+iprec 3), where FMM3D's tables hold one node with one α node because |G| ≤ e^{−Im κ} is
+near the precision there, and ours give that node 21–30; these rows set the means and the
+largest ratios (119 against 1 wave at iprec 1, domain 299), small in absolute terms.
+A looser share does not pay: e/(2s) and e/s per node cut the real-axis ratio only from
+1.44 to 1.41 and 1.38 at iprec 1 (1.31 to 1.30 and 1.28 at iprec 3), since the Bessel
+tails fall faster than exponentially; the rule keeps e/(4s).
+
+**The acceptance on every domain** (`cargo test -p nd-fmm-tables --release --test
+helmholtz plane_wave -- --ignored`, 380 s on the M6 beside other work): both ignored tests
+passed. The worst over every domain, relative to its stated error:
+
+| iprec | kernel, nine points of every domain | chain, every domain's centre |
+| --- | --- | --- |
+| 1 | 1.079 | 0.984 |
+| 2 | 1.188 | 0.716 |
+| 3 | 1.495 | 1.175 |
+
+within the bounds 2 and 3; and `the_counts_on_the_reference_levels` (S4 §5's levels of real
+kD 10, 100, 500, Yukawa κD 10 and 100, damped 100 + 5i and 500 + 25i, levels 2–8 where they
+fall in the tables, at ε = 10⁻³, 10⁻⁶, 10⁻⁸: kernel and chain) passed.
 
 ## Pending runs
 
