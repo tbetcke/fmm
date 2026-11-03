@@ -9,8 +9,9 @@
 # Stages: `budgets` (W1 at kD = 500 and W3 at kD = 100 at ε = 1e-6 under `--m2l planewave`
 # at one rank × THREADS threads: Rotation once, then the waves budget whole, the default,
 # 1024 MB, 256 MB and the floor (0), then whole and the default again, for the run-to-run
-# spread) and `ranks` (the same cases at RANKS ranks × 1 thread, whole and the default
-# budget, whose share per rank is the budget over the ranks per node). Each launch prints
+# spread) and `ranks` (the same cases at RANKS ranks × 1 thread at each budget of
+# RANK_BUDGETS, default "whole default", in MB per node or `whole`/`default`, whose share per
+# rank is the budget over the ranks per node). Each launch prints
 # the bytes, the chunks and the waves computed, the evaluation's seconds, the checksum and
 # rank 0's peak resident size (VmHWM on Linux). Meant for a Kathleen node (an exclusive
 # node, the job named in the report); BLAS threads 1; each launch's output in
@@ -68,12 +69,14 @@ for stage in "$@"; do
         ranks)
             for entry in "${cases[@]}"; do
                 name=${entry%%|*}
-                for budget in whole default; do
+                for budget in ${RANK_BUDGETS:-whole default}; do
                     flag=()
                     [ "$budget" != default ] && flag=(--plane-wave-budget "$budget")
+                    run=1
+                    while [ -e "$out/ranks-$name-$budget-$run.md" ]; do run=$((run + 1)); done
                     # shellcheck disable=SC2086
-                    launch "ranks-$name-$budget" $M -n "$R" "$X" ${entry#*|} --threads 1 \
-                        --m2l planewave ${flag[@]+"${flag[@]}"}
+                    launch "ranks-$name-$budget-$run" $M -n "$R" "$X" ${entry#*|} \
+                        --threads 1 --m2l planewave ${flag[@]+"${flag[@]}"}
                 done
             done
             ;;
