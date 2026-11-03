@@ -104,8 +104,11 @@ rank. D9 not needed (no Laplace path changed).
 Kathleen, one node (`singlenode`), one rank × 40 threads, release, BLAS threads 1: W1 at
 kD = 500 and W3 at kD = 100 at ε = 10⁻⁶ under `--m2l planewave` with the whole-level
 buffer, the default budget's bound and two smaller bounds: `plane_wave_bytes`, the waves
-computed per V source, peak RSS (`sacct` MaxRSS), the evaluation's time (median of the
-harness's repeats), the error (bit for bit across bounds, by checksum). Decides whether
+computed (against the whole level's: the recomputation), rank 0's peak resident size
+(VmHWM, the oracle's included), the evaluation's time (one evaluation per launch; the
+second whole and default launches give the run-to-run spread), the error and the checksum
+(the same at every bound). And at 40 ranks × 1 thread, the whole level and the default
+(4 GiB over 40 ranks per node), the checksum the one-rank runs'. Decides whether
 the default budget costs time (the recomputation) and is recorded for CH6.2b. Not a gate:
 no quiet-machine rule beyond Kathleen's exclusive node.
 
@@ -125,6 +128,12 @@ no quiet-machine rule beyond Kathleen's exclusive node.
   Two collectives added to the Helmholtz build (the split and the all-reduce), every rank.
 
 ## Pending runs
+
+- Kathleen job 628518 (one node, `singlenode`, 4 h; submitted 2026-11-03 21:24):
+  `cargo build --release -p nd-fmm-validate --example helmholtz_accuracy`, then
+  `tools/helmholtz/ch6-2a-runs.sh /scratch/scratch/ucahtbe/fmm/logs/ch6-2a budgets ranks`.
+  Decides the report's bytes, recomputation and time at each bound and whether the
+  default budget is kept.
 
 ## Open questions
 

@@ -313,14 +313,20 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   whole level) over the ranks per node, which `build` now agrees from one `split_shared`
   (`HelmholtzFmm::ranks_per_node`). Every box's waves are its multipole's alone and every
   accumulator keeps its order, so the output is the same at every bound;
-  `check_plane_wave` runs the floor, a third and no bound against the default bit for bit,
-  the floor at 2 threads and against the one-rank FMM, and `tests/helmholtz/plane_wave.rs`
-  the buffer's sizes.
+  `check_plane_wave` runs the floor, twice the floor's buffer and no bound against the
+  default bit for bit (the chunks agreed between the floor's and the default's), the floor
+  at 2 threads and, on several ranks, against the one-rank FMM, and asserts on one rank that
+  the floor chunked a level call (the clusters' finest level with waves);
+  `tests/helmholtz/plane_wave.rs` checks the buffer's sizes and `plane_wave_bytes` at every
+  bound. The bound is not a hard cap: the floor may exceed it, and the positions (4 bytes
+  per box of the largest level with waves) lie outside it, both counted in
+  `plane_wave_bytes`.
   The level call is the crate-private `src/helmholtz/operator_plane_wave.rs`, Laplace's
   order (`src/operator_plane_wave.rs`) restated in scalar loops on
   `nd_fmm_tables::helmholtz::plane_wave` (no `nd-fmm-simd` kernel: Laplace's `WaveKernel`
   has the real half-node layout of §3.14) on the driver's `Execution::{chunks, parents}`
-  (used, not changed): per vector and frame the waves of every box, then parent by parent
+  (used, not changed): per chunk of parents (since CH6.2a), vector and frame the waves of
+  the chunk's sources, then parent by parent
   every accumulator over its slots in ascending order (geometric masks), so the output is
   the same at every thread count and on P ranks the one-rank output bit for bit. The pair
   body (`PerPair`) is `PlaneWaveLevel::m2l` along `PlaneWaveTables::pair_direction`, which

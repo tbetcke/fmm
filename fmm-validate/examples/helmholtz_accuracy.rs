@@ -44,8 +44,9 @@
 //!   with waves and their precisions (`planewave 3:i2`).
 //! - `--plane-wave-budget MB|whole` (Helmholtz CH6.2a): the exponential M2L's waves buffer
 //!   per node (default the library's, `DEFAULT_PLANE_WAVE_NODE_BUDGET`; `whole` a whole
-//!   level); the column "M2L" then adds rank 0's buffer, its chunks per level call and the
-//!   waves computed (box × frame × vector), and the run ends with the peak resident size.
+//!   level). The column "M2L" of an exponential-M2L row gives rank 0's waves buffer, its
+//!   chunks and level calls and the waves computed (box × frame × vector), and the run ends
+//!   with rank 0's peak resident size (Linux).
 //!
 //! The last column, "÷ Rotation", is the row's error of φ and of ∇φ over the case's
 //! Rotation row at the same P2P kernel and threads, where one ran before it.
@@ -298,7 +299,7 @@ fn arguments() -> Arguments {
 /// The M2L of a row: `rotation`, or `dense l…`, `classes l…`, `batched l…` or
 /// `batched-fused l…` with the levels that ran the setting's tables and their MB; under
 /// Auto prefixed with `auto ≤ d: ` (`∞` for no bound); `planewave l:iq…` with each level's
-/// precision.
+/// precision, its MB, and the waves buffer's MB, chunks, level calls and waves computed.
 fn m2l_string(row: &Row) -> String {
     if row.m2l == HelmholtzM2l::PlaneWave {
         let levels: Vec<String> = (0..row.plane_wave.len())

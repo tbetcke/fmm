@@ -104,46 +104,62 @@ fn the_waves_buffer_is_bounded() {
     let box_waves: Vec<Option<usize>> = (0..DEGREES.len())
         .map(|l| m2l.level(l).map(|level| 2 * level.tables().wave_len()))
         .collect();
-    let bytes = |boxes_of: &dyn Fn(usize) -> usize| {
+    // Each level's boxes in the buffer at a bound: as many as fit, at least the floor, at
+    // most the level's; the buffer and the source list the largest of them, the positions
+    // the largest level's boxes, the rest (tables and scratch) the same at every bound.
+    let capacity = |bound: Option<usize>, l: usize| {
+        let w = box_waves[l].map_or(0, |w| w * size_of::<f64>());
+        bound
+            .map_or(boxes[l], |b| (b / w).max(MIN_BUFFER_BOXES))
+            .min(boxes[l])
+    };
+    let largest = |f: &dyn Fn(usize) -> usize| {
         (0..DEGREES.len())
-            .filter_map(|l| Some(boxes_of(l) * box_waves[l]? * size_of::<f64>()))
+            .filter(|&l| box_waves[l].is_some())
+            .map(f)
             .max()
             .unwrap()
     };
-    let whole = bytes(&|l| boxes[l]);
-    let floor = bytes(&|l| boxes[l].min(MIN_BUFFER_BOXES));
+    let buffer =
+        |bound| largest(&|l| capacity(bound, l) * box_waves[l].unwrap() * size_of::<f64>());
+    let held =
+        |bound| buffer(bound) + 4 * (largest(&|l| capacity(bound, l)) + largest(&|l| boxes[l]));
+    let whole = buffer(None);
+    let floor = largest(&|l| boxes[l].min(MIN_BUFFER_BOXES) * box_waves[l].unwrap() * 8);
 
     let unbounded = op();
+    let rest = unbounded.plane_wave_bytes() - held(None);
     assert_eq!(unbounded.plane_wave_buffer(), None);
     assert_eq!(unbounded.plane_wave_buffer_bytes(), whole);
-    assert!(unbounded.plane_wave_bytes() >= m2l.bytes() + whole);
+    assert!(rest >= m2l.bytes());
     assert_eq!(unbounded.plane_wave_counts(), PlaneWaveCounts::default());
-    for bound in [0, 1, floor / 2] {
+    for bound in [
+        0,
+        1,
+        floor / 2,
+        floor,
+        whole / 5,
+        whole / 2,
+        whole,
+        usize::MAX,
+    ] {
         let op = op().with_plane_wave_buffer(Some(bound));
         assert_eq!(op.plane_wave_buffer(), Some(bound));
-        assert_eq!(op.plane_wave_buffer_bytes(), floor, "bound {bound}");
         assert_eq!(
-            unbounded.plane_wave_bytes() - op.plane_wave_bytes(),
-            whole - floor + 4 * (boxes[4] - MIN_BUFFER_BOXES),
-            "the waves and the source list (the positions are a level's boxes either way)"
+            op.plane_wave_buffer_bytes(),
+            buffer(Some(bound)),
+            "bound {bound}"
         );
+        assert_eq!(
+            op.plane_wave_bytes(),
+            rest + held(Some(bound)),
+            "bound {bound}"
+        );
+        assert!(op.plane_wave_buffer_bytes() >= floor);
+        assert!(op.plane_wave_buffer_bytes() <= bound.max(floor).min(whole));
     }
-    for bound in [whole, usize::MAX] {
-        let op = op().with_plane_wave_buffer(Some(bound));
-        assert_eq!(op.plane_wave_buffer_bytes(), whole, "bound {bound}");
-    }
-    // A middle bound: each level as many boxes as fit, within its own.
     let middle = whole / 5;
     let op = op().with_plane_wave_buffer(Some(middle));
-    let fits = |l: usize| {
-        box_waves[l].map_or(0, |w| {
-            (middle / (w * size_of::<f64>()))
-                .max(MIN_BUFFER_BOXES)
-                .min(boxes[l])
-        })
-    };
-    assert_eq!(op.plane_wave_buffer_bytes(), bytes(&fits));
-    assert!(op.plane_wave_buffer_bytes() <= middle);
     // The order of the calls does not matter.
     let densities = Densities::new(k.kind(), ChargeKind::Complex, 1);
     let before = HelmholtzOperator::<f64>::new(k, densities, &domain(), &DEGREES, false, 8)
