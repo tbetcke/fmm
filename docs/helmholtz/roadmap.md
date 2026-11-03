@@ -15,8 +15,10 @@ again into the generator (CH6.1b, done: S4's generator in `nd-fmm-ref`) and the 
 (CH6.1c), merge and shift renamed CH6.1d. CH6.1c (the pair chain, CONVENTIONS §3.15
 "Exponential M2L" for sign-off) done; its degree study hands CH6.1d the pairing of a
 level's quadrature with its degree. CH6.1c merged
-(#181); CH6.1d split into merge and shift in the FMM (CH6.1d, in progress) and the
-quadrature per level by measurement (CH6.1e).
+(#181); CH6.1d split into merge and shift in the FMM (CH6.1d) and the quadrature per level
+by measurement (CH6.1e). 2026-11-03: CH6.1d done (`HelmholtzM2l::PlaneWave`, merge and shift
+with a provisional precision rule). Next: CH6.1e (the rule by the FMM's errors on CH3.1c's
+cases, CH6.1's 1.1× Rotation), once CH6.1d is merged.
 
 ## How `/next-task` reads this file
 
@@ -567,7 +569,13 @@ at any kD.
   for sign-off. *Done when:* every V offset on several levels against RCR within the
   quadrature's error, with FMM3D's and with CH6.1b's generated quadratures, real and
   complex k, one and two multipole planes. *Needs:* CH6.1b. *Sign-off:* the convention.
-- [ ] **CH6.1d Merge and shift in the FMM.** `HelmholtzM2l::PlaneWave` (opt-in): the level
+- [x] **CH6.1d Merge and shift in the FMM.** Record: `docs/helmholtz/tasks/CH6.1d.md`;
+  `nd_fmm_tables::helmholtz::plane_wave::merge`, `HelmholtzM2l::PlaneWave`,
+  `PlaneWavePrecision`, the level call `fmm-exec/src/helmholtz/operator_plane_wave.rs`, tests
+  `fmm-tables/tests/helmholtz/plane_wave_merge.rs`, `fmm-exec/tests/helmholtz/plane_wave.rs`
+  and `check_plane_wave` in `fmm-exec/tests/helmholtz_fmm.rs`. Merge and shift is its pair
+  path to 2.0e-16 (relative L2), the FMM's errors 1.000× and 1.013× Rotation's on the two
+  test scenarios (CH6.1e measures CH3.1c's cases). `HelmholtzM2l::PlaneWave` (opt-in): the level
   call by merge and shift (CONVENTIONS §3.14's geometry, §3.15's conversions and shifts) on
   the levels that have a quadrature, Rotation on the others; the pair body CH6.1c's
   translation along the merge's direction. The precision per level a setting: a rule of

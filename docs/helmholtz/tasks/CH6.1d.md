@@ -137,10 +137,35 @@ None (no timing: CH6.2; the measurement of the rule is CH6.1e's, on the M6).
 - f64 only (§3.15 "Precision and range"); f32's range (|Pₖ| to about 10³⁴ at iprec 3,
   CH6.1c's review) is not tested here.
 
+## Results
+
+The M6, f64, 2026-11-03.
+
+- **Shift factorisation** (`slot_and_child_shifts_factor_the_pair_shift`): slot shift ×
+  child shift against the pair's shift on every direction, accumulator slot and child of
+  its mask, worst 7.5e-14 relative (bound 1e-12), over k̂₀ = 80, 80 + 12i and 20 + 40i,
+  iprec 1–3 (debug: one level per case and precision); 104 distinct source shifts per
+  level. Tables about 50 ms a level in debug builds.
+- **The FMM** (`check_plane_wave`, release, one rank, every level with waves):
+
+  | Scenario | Precisions (levels 2–5) | vs direct sum φ, ∇φ | × Rotation's | vs pair path φ, ∇φ |
+  | --- | --- | --- | --- | --- |
+  | cube, kD = 20 + 2i, ε = 10⁻³, complex charges, gradients | iprec 2 (level 2, p = 10) | 1.23e-5, 2.24e-5 | 1.000, 1.000 | 1.99e-16, 1.09e-16 |
+  | clusters, kD = 20, p = 8, real charges | iprec 1 on 2–5 | 7.57e-5, – | 1.013 | 2.16e-16, – |
+
+  The same errors in debug and at 2 and 4 ranks (the one-rank FMM bit for bit there); in
+  debug builds the clusters' pair path runs on the finest level's waves alone (3.0e-17).
+  10.8 and 14.3 MB of tables, waves and scratch. Rotation's error ratio is reported, not
+  asserted: CH6.1e asserts CH6.1's 1.1× on CH3.1c's cases.
+- **Debug cost**: `check_plane_wave` about 27 s of the one-rank debug run of
+  `tests/helmholtz_fmm.rs` on the M6 (14.8 s and 21.6 s at 2 ranks); before the debug
+  restriction of the pair path it was about 82 s (the pair path converts each pair's waves,
+  about 25 s on the clusters' four levels). `tests/helmholtz/plane_wave.rs` 12–20 s.
+
 ## Pending runs
 
-None yet.
+None.
 
 ## Open questions
 
-None yet.
+None for sign-off. The split of CH6.1d into d/e is on this branch (the roadmap).

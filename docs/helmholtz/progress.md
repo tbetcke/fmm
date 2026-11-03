@@ -1955,3 +1955,51 @@ request, using this template:
 - Follow-ups:
   - CH6.1d: merge and shift, and the quadrature chosen per level with p_l and ε by
     measurement (a sentence in CH6.1d's line).
+
+## 2026-11-03: CH6.1d Merge and shift in the FMM
+- Done:
+  - The fourth task of CH6.1 (priority list item 2), split on this branch into merge and
+    shift in the FMM (CH6.1d) and the quadrature per level by measurement (CH6.1e), about
+    2,000 lines in three crates together.
+  - `nd_fmm_tables::helmholtz::plane_wave::merge`: `MergeLevel` (a level's `PlaneWaveLevel`
+    with the merge's source shifts slot → parent, 104 tables shared by (rotated offset, up
+    or down), and child shifts parent → child, in §3.14's geometry), `PlaneWaveM2l`, `shift`
+    and `add`; `precision_for_degree` and `select`, each level's precision from its degree
+    where κ_l lies in the tables, provisional from CH6.1c's degree study (iprec 1 to p = 8,
+    2 to 12, 3 to 16, Rotation above). `PlaneWaveLevel::bytes`.
+  - `nd-fmm-exec`: `HelmholtzM2l::PlaneWave` (opt-in), `PlaneWavePrecision` (`Rule` or
+    `PerLevel`), `with_plane_wave_precision`, `plane_wave_precision(level)`,
+    `plane_wave_bytes`, `with_plane_wave_boxes`, `HelmholtzFmmBuilder::plane_wave_precision`;
+    the level call `src/helmholtz/operator_plane_wave.rs`, Laplace's order in scalar loops on
+    the driver's `Execution` (no Laplace file changed); the pair body CH6.1c's translation
+    along `PlaneWaveTables::pair_direction`.
+- Tests: `fmm-tables/tests/helmholtz/plane_wave_merge.rs` (the shifts' factorisation on
+  every direction, slot and child, 7.5e-14 relative against 1e-12; the shared tables bit
+  for bit; the rule; `build`); `fmm-exec/tests/helmholtz/plane_wave.rs` (the precisions by
+  the rule and named; the pair body bit for bit `PlaneWaveLevel::m2l`, one and two planes,
+  two vectors); `check_plane_wave` in `tests/helmholtz_fmm.rs` on two scenarios (one and
+  two multipole planes): the direct sum (1.000× and 1.013× Rotation's error, printed), the
+  pair path within 1e-14 (2.2e-16 in release on every level; in debug builds of a tree
+  with waves on several levels the finest level's alone), 2 threads and the one-rank FMM
+  bit for bit, two vectors, named precisions (none on every level Rotation bit for bit).
+  Debug cost about 27 s of the one-rank `helmholtz_fmm` run on the M6.
+- Checks: ran `/verify` on the M6: format; Clippy default, examples and workspace
+  all-targets; `cargo doc`; `cargo test` (19 min 16 s) and `--workspace` (23 min 57 s), all
+  passed; the MPI list at 2 and 4 ranks (`run-mpi-tests.sh`, every executable passed;
+  `helmholtz_fmm` 276 s and 249 s, `mpi_exec` 350 s and 430 s); `helmholtz_fmm` in release
+  at one rank (21.7 s). After the self-review's fixes (docs, `plane_wave_bytes`'s pair
+  scratch): Clippy and `cargo doc` of both crates, the MPI list (built after them) and
+  `tests/helmholtz` `plane_wave` again. Not run: D9 (no Laplace path changed). A self-review
+  by a subagent: nothing blocking (offsets, up and down halves, the accumulator order, the
+  layouts and the level k̂ checked against §3.14 and Laplace's level call); its points taken
+  (the pair scratch in `plane_wave_bytes`, docs of `m2l_on`, the panics and f64, the
+  plan's file name, the release run recorded).
+- Decisions: none. The split of CH6.1d into d/e (this branch).
+- Laplace: not touched (new Helmholtz modules of `nd-fmm-tables` and `nd-fmm-exec`;
+  Laplace's plane-wave geometry and the driver's `Execution` used, not changed).
+- Follow-ups:
+  - CH6.1e: the precision rule by the FMM's errors on CH3.1c's cases, CH6.1's 1.1×
+    Rotation asserted (the roadmap).
+  - f32 under `PlaneWave` is untested and not refused (factors to about 10³⁴): D3 and
+    CH7.1 (§3.15 "Precision and range", f64 only until then).
+
