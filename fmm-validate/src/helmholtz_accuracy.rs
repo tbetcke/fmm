@@ -46,7 +46,7 @@ use mpi::traits::CommunicatorCollectives;
 use nd_fmm_exec::geometry::{Domain, radius};
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzFmm, HelmholtzFmmBuilder,
-    HelmholtzFmmError, HelmholtzM2l, Output, PlaneWavePrecision, Wavenumber,
+    HelmholtzFmmError, HelmholtzM2l, Output, PlaneWaveCounts, PlaneWavePrecision, Wavenumber,
 };
 use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -91,6 +91,9 @@ pub struct Case {
     /// The precision of each level's quadrature under [`HelmholtzM2l::PlaneWave`]
     /// (Helmholtz CH6.1e).
     pub plane_wave: PlaneWavePrecision,
+    /// The bytes per node of its waves buffer (`HelmholtzFmmBuilder::plane_wave_budget`,
+    /// Helmholtz CH6.2a; `None` the library's default, `usize::MAX` a whole level).
+    pub plane_wave_budget: Option<usize>,
 }
 
 impl Case {
@@ -114,6 +117,7 @@ impl Case {
             m2l_mul_add: None,
             m2l_max_degree: None,
             plane_wave: PlaneWavePrecision::Rule,
+            plane_wave_budget: None,
         }
     }
 }
@@ -432,6 +436,12 @@ pub struct Row {
     /// Per level, the precision of its quadrature under [`HelmholtzM2l::PlaneWave`], `None`
     /// where it ran RCR (and under every other setting).
     pub plane_wave: Vec<Option<Precision>>,
+    /// The bytes of the exponential M2L's waves buffer per rank (part of `dense_bytes`;
+    /// Helmholtz CH6.2a).
+    pub plane_wave_buffer: usize,
+    /// The exponential M2L's level calls, chunks and waves computed in the evaluation, this
+    /// rank's (Helmholtz CH6.2a).
+    pub plane_wave_counts: PlaneWaveCounts,
     /// The ranks.
     pub ranks: usize,
     /// The levels of the tree.
@@ -540,6 +550,9 @@ pub fn run_output<C: CommunicatorCollectives>(
     if let Some(max_degree) = case.m2l_max_degree {
         builder = builder.m2l_max_degree(max_degree);
     }
+    if let Some(budget) = case.plane_wave_budget {
+        builder = builder.plane_wave_budget(budget);
+    }
     let mut fmm: HelmholtzFmm<'_, f64, C> = builder.build(points, points, comm)?;
     let build = slowest(start.elapsed().as_secs_f64(), comm);
     let charges: Vec<Charges<'_, f64>> = (0..case.vectors)
@@ -575,6 +588,8 @@ pub fn run_output<C: CommunicatorCollectives>(
         plane_wave: (0..fmm.nlevels())
             .map(|l| fmm.operator().plane_wave_precision(l))
             .collect(),
+        plane_wave_buffer: fmm.operator().plane_wave_buffer_bytes(),
+        plane_wave_counts: fmm.operator().plane_wave_counts(),
         ranks: size,
         levels: fmm.nlevels(),
         min_leaf_level: fmm.min_leaf_level(),
