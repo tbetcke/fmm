@@ -1811,3 +1811,46 @@ request, using this template:
   - CH6.1's line in the roadmap carries S4's recommendation, subject to the sign-offs.
   - The generator returns its best quadrature at its bounds without saying so; CH6.1
     checks the result if it uses it (report §4).
+
+## 2026-11-03: CH6.1a The quadratures
+- Done:
+  - The first task of CH6.1 (priority list item 2), split on this branch into CH6.1a (the
+    quadratures), CH6.1b (the pair chain, with a CONVENTIONS §3.15 subsection for
+    sign-off) and CH6.1c (merge and shift in the FMM).
+  - `nd_fmm_tables::helmholtz::plane_wave::quadrature`: FMM3D's quadratures for iprec 1–3
+    (`hwts_iprec{1,2,3}.txt`, 437 domains each, 32,574 nodes, 1.68 MB; NIST's notice and
+    a dated change note kept), written by the new `tools/fixtures/helmholtz_pw_quadrature.sh`
+    from FMM3D v2.1.0 and parsed on first use; `hwts3e`'s lookup (`domain_of`,
+    `rectangle`, `Precision::for_tolerance`; negative and non-finite parts refused) and
+    node maps; `Quadrature::new(κ, precision)` with α and Fourier counts not FMM3D's but
+    S4's Bessel bound for complex tₖ (share e/(4s) of the stated error, the corner
+    ρ = 4√2 resolved, the chain's aliasing covered); `bessel_j_norms`, |J_m| of complex
+    argument by Miller's recurrence normalised by e^{iz} at Im z ≤ 0.
+  - `spikes/pw-quadrature/examples/counts.rs` (a path dependency on `nd-fmm-tables`):
+    every value bit for bit FMM3D's files, the node maps the spike's to 10⁻¹⁵, the counts
+    against FMM3D's. Record with the results: `docs/helmholtz/tasks/CH6.1a.md`.
+- Tests: `fmm-tables/tests/helmholtz/plane_wave_quadrature.rs`: the data (rectangles,
+  types, totals, the fixture domains' first and last nodes), the lookup on every rectangle
+  and outside, the node maps and the λ sum within 1.5× the stated error, |J_m| against the
+  trapezoid (|z| to 380) and its tails against the power series, the counts at the
+  fixture domains' centres (debug), determinism; ignored: the kernel at nine points of every
+  domain and precision and the chain at every centre (worst 1.08, 1.19, 1.50 and 0.98,
+  0.72, 1.18 × the stated error at iprec 1–3, bounds 2 and 3), and S4 §5's reference
+  levels. Debug: the new tests 10.8 s, the crate's run 41 s with its build on the M6.
+- Checks: ran `/verify` on the M6: format; Clippy default, examples and workspace
+  all-targets; `cargo doc` (one warning, a link, fixed); `cargo test` and `--workspace`;
+  `cargo check --workspace --all-targets`; `cargo deny --locked check licenses`; after the
+  review's fixes format, workspace Clippy, `cargo doc` (clean) and `cargo test -p
+  nd-fmm-tables` again; `cargo test -p nd-fmm-tables --release --test helmholtz plane_wave
+  -- --ignored` (380 s; before the review's fixes, which changed only tests, the docs and
+  the guard of `bessel_j_norms` below |z| = 10⁻¹⁵⁰, outside the counts' arguments);
+  the spike's Clippy and `examples/counts.rs`. Not run: the MPI list and D9 (no MPI crate,
+  no Laplace path). A self-review by a subagent: nothing blocking; its points taken (the
+  link, the plan's text, the sweep's results recorded, the range of `bessel_j_norms`, the
+  last nodes and the Bessel tails tested).
+- Decisions: none. The split of CH6.1 into a/b/c (this branch).
+- Laplace: not touched (a new module of `nd-fmm-tables`; `plane_wave` and every Laplace
+  path unchanged).
+- Follow-ups:
+  - CH6.1b: the pair chain and the convention, for sign-off (the roadmap).
+  - CH6.2: whether fewer waves than the corner's would do (a sentence in CH6.2's line).

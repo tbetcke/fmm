@@ -9,8 +9,9 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status: **H3 closed (2026-11-02, `docs/helmholtz/gates/H3.md`).** The RCR FMM on every
 level meets ε against FMM3D on all 57 case × ε points of CH3.6. HR, H0, H1 and H2 are still
-open. 2026-11-03: CH0.4 (S4, the plane-wave quadratures) done, its three sign-offs taken.
-Next: CH6.1 by the priority list (D6), once CH0.4 is merged.
+open. 2026-11-03: CH0.4 (S4, the plane-wave quadratures) done, its three sign-offs taken;
+CH6.1 split into a/b/c, CH6.1a (the quadratures in `nd-fmm-tables`) done. Next: CH6.1b
+(the pair chain, with a §3.15 subsection for sign-off), once CH6.1a is merged.
 
 ## How `/next-task` reads this file
 
@@ -516,7 +517,11 @@ at any kD.
   sub-tasks, each one reviewable PR (about 1.5 MB of NIST's tables, the factors of the
   orthonormal basis with a convention for sign-off, and merge and shift in the FMM do not
   fit one); CH6.1 is done, and CH6.2 runnable on its side, when all three are:
-- [ ] **CH6.1a The quadratures.** `nd_fmm_tables::helmholtz::plane_wave::quadrature`:
+- [x] **CH6.1a The quadratures.** Record: `docs/helmholtz/tasks/CH6.1a.md`;
+  `nd_fmm_tables::helmholtz::plane_wave::quadrature`, tests
+  `fmm-tables/tests/helmholtz/plane_wave_quadrature.rs`. The kernel within 1.50× and the
+  chain within 1.18× the stated error on every domain; 1.31–1.51× FMM3D's waves where
+  Im κ < π/2. `nd_fmm_tables::helmholtz::plane_wave::quadrature`:
   FMM3D's tables for iprec 1 to 3 (437 domains each), extracted with NIST's notice by a
   script in `tools/fixtures/` from the pinned v2.1.0; `hwts3e`'s domain lookup and
   precision from ε; the node maps to complex (λₖ, wₖ) at κ = k w_l; the α and Fourier
@@ -542,7 +547,10 @@ at any kD.
   one-rank FMM bit for bit. *Needs:* CH6.1b.
 - [ ] **CH6.2 Measured.** Against Rotation and the table-based strategies on the three
   machines, and against `hfmm3d`'s exponential M2L. *Done when:* per-level accuracy and time
-  beside FMM3D's on the same problems; D8 proposed. *Needs:* CH6.1 (a–c), CH1.4.
+  beside FMM3D's on the same problems; D8 proposed. Also (CH6.1a): CH6.1a's counts resolve
+  the region's corner ρ = 4√2 at 1.31–1.51× FMM3D's waves where Im κ < π/2; whether a pair
+  ever needs the corner at the FMM's ε, so fewer waves would do, is measured here.
+  *Needs:* CH6.1 (a–c), CH1.4.
   *Machines:* locust, Kathleen. *Sign-off:* D8.
 - [ ] **H6.G Gate.** `/milestone-gate H6`. *Needs:* every task above.
 
