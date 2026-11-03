@@ -60,6 +60,8 @@ CH3.6 (#170) and H3.G.
 1. CH0.4 S4: quadratures of the Helmholtz exponential M2L per k w_l
 2. CH6.1 The §3.14 machinery generalised (needs CH0.4): CH6.1a, CH6.1b, CH6.1c, CH6.1d, CH6.1e
 3. CH6.2 Measured (*Machines:* locust, Kathleen; *Sign-off:* D8)
+4. CH6.1f Quadratures for ε below 10⁻⁶ (needs CH6.1e; after CH6.2, before H6.G: CH6.1e's
+   question 3, signed off 2026-11-03, "1–4 as recommended")
 
 Off the list, in file order: CH0.6, CH0.8b, CH0.9, CH0.5 and H0.G; CHR.3 and HR.G; CH1.3d
 and H1.G; CH2.1, CH2.2, CH2.3, CH2.5 and H2.G; H6.G; H4 (CH4.0, CH4.0b and CH4.0c first),
@@ -597,7 +599,12 @@ at any kD.
   and Rotation below (named degrees: iprec 2 to p = 15); within 1.070× Rotation's error on
   87 cases (CH3.1c's matrix and 27 at 10⁻⁴, 10⁻⁵, 10⁻⁷), asserted in the tests on small
   ones; every level at ε < 10⁻⁶ left to Rotation (iprec 3 1.12× at 10⁻⁷ and 1.76× at
-  10⁻⁸ on the clustered trees' deep levels, iprec 1 1.15× at 10⁻³). Split from CH6.1d on 2026-11-03 (the
+  10⁻⁸ on the clustered trees' deep levels, iprec 1 1.15× at 10⁻³). The PR's four questions
+  signed off 2026-11-03 (the user: "1–4 as recommended"): (1) the acceptance read as CH3.1c's matrix less
+  the two large cases at 10⁻⁸ (Rotation there), asserted on the tests' small scenarios and
+  the matrix in the report; (2) Rotation below 10⁻⁶, not iprec 3 with a κ guard; (3)
+  CH6.1f before H6.G, CH6.2 first; (4) the waves buffer bounded and counted in the node
+  budget before CH6.2 takes times (CH6.2's line). Split from CH6.1d on 2026-11-03 (the
   level call and the measurement with its report do not fit one PR, about 2,000 lines in
   three crates together). CH6.1's acceptance: the FMM's errors within about 1.1×
   Rotation's on CH3.1c's cases with each level's quadrature chosen with its degree p_l

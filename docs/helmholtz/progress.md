@@ -2041,8 +2041,11 @@ request, using this template:
   a subagent: one blocking defect fixed (the harness test asserted waves at 10⁻⁸, where the
   rule takes none), numbers in docs and the report corrected, a timeout around the
   script's `mpirun`.
-- Decisions: none taken yet; the PR asks three (the reading of the acceptance, the rule
-  against iprec 3 with a κ guard, the follow-up's place).
+- Decisions: the PR's four questions, signed off 2026-11-03 (the user: "1–4 as recommended"): (1)
+  the acceptance as read (the two large cases at 10⁻⁸ left out, Rotation there; asserted on
+  the tests' small scenarios, the matrix in the report); (2) Rotation below 10⁻⁶, no κ
+  guard for iprec 3; (3) CH6.1f before H6.G, after CH6.2 (priority list item 4); (4) the
+  waves buffer bounded and counted in the node budget before CH6.2's times.
 - Laplace: not touched (Helmholtz modules of `nd-fmm-tables` and `nd-fmm-exec`, and
   `nd-fmm-validate`; no Laplace file changed).
 - Follow-ups:

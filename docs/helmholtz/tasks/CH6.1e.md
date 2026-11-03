@@ -144,6 +144,10 @@ None.
 
 ## Open questions
 
-For sign-off in the PR: the reading of "every case" and "asserted in the tests"; the rule
-(Rotation below 10⁻⁶) against iprec 3 with a κ guard; the follow-up CH6.1f (quadratures for
-ε < 10⁻⁶) and its place before H6.G.
+None. The PR's four questions were signed off 2026-11-03 (the user: "1–4 as recommended"):
+1. "every case" as CH3.1c's matrix less the two large cases at 10⁻⁸ (Rotation there);
+   "asserted in the tests" as the tests' small scenarios, the matrix in the report;
+2. Rotation below 10⁻⁶, not iprec 3 with a guard on κ_l;
+3. CH6.1f before H6.G, CH6.2 taken first (priority list item 4);
+4. the waves buffer bounded (a buffer per chunk of parents) and counted in the node budget
+   before CH6.2 takes times (CH6.2's roadmap line).
