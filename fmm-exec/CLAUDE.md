@@ -305,6 +305,17 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   p = 15; or `PerLevel`, for the measurements), RCR elsewhere; `with_plane_wave_precision`,
   `plane_wave_precision(level)`, `plane_wave_bytes`, `with_plane_wave_boxes` (the builder
   sizes the waves buffer from the plan) and `HelmholtzFmmBuilder::plane_wave_precision`.
+  Since Helmholtz CH6.2a (docs/helmholtz/tasks/CH6.2a.md; fmm-validate/results/helmholtz-ch6-2a.md)
+  the level call runs by chunks of whole parents whose distinct V sources' waves fit the
+  buffer's bound (`with_plane_wave_buffer`, at least `MIN_BUFFER_BOXES` = 216 boxes of a
+  level; `plane_wave_buffer`, `plane_wave_buffer_bytes`, `plane_wave_counts`): the builder's
+  `plane_wave_budget` per node (`DEFAULT_PLANE_WAVE_NODE_BUDGET` 4 GiB, `usize::MAX` a
+  whole level) over the ranks per node, which `build` now agrees from one `split_shared`
+  (`HelmholtzFmm::ranks_per_node`). Every box's waves are its multipole's alone and every
+  accumulator keeps its order, so the output is the same at every bound;
+  `check_plane_wave` runs the floor, a third and no bound against the default bit for bit,
+  the floor at 2 threads and against the one-rank FMM, and `tests/helmholtz/plane_wave.rs`
+  the buffer's sizes.
   The level call is the crate-private `src/helmholtz/operator_plane_wave.rs`, Laplace's
   order (`src/operator_plane_wave.rs`) restated in scalar loops on
   `nd_fmm_tables::helmholtz::plane_wave` (no `nd-fmm-simd` kernel: Laplace's `WaveKernel`

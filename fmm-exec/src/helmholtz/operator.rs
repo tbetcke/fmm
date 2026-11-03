@@ -136,14 +136,17 @@
 //! named per level, and only where κ_l = k w_l lies in the quadrature's tables; RCR on the
 //! others. Under the rule the FMM's errors stay within about 1.1× Rotation's on CH3.1c's
 //! cases (`fmm-validate/results/helmholtz-ch6-1e.md`). Its level call restates Laplace's
-//! (`crate::operator`, "The plane-wave M2L") without its vector kernels:
-//! for each charge vector and each frame f = 0, 1, 2,
+//! (`crate::operator`, "The plane-wave M2L") without its vector kernels, by chunks of
+//! parents (Helmholtz CH6.2a): the level is cut, in index order, into chunks of consecutive
+//! whole parents whose computed children's distinct V sources fit the waves buffer (each
+//! parent joins the chunk while they fit; one parent's sources, at most its 216 slots, always
+//! do). For each chunk, each charge vector and each frame f = 0, 1, 2,
 //!
-//! 1. **outgoing**: the up and down waves of frame f of every box of the level, own and
-//!    ghost (the multipole rotated into the frame by Oⁿ(Q), its modes and the waves, 2W
-//!    reals each, every value complex), the pool splitting the boxes;
+//! 1. **outgoing**: the up and down waves of frame f of the chunk's sources, own and ghost
+//!    boxes (the multipole rotated into the frame by Oⁿ(Q), its modes and the waves, 2W
+//!    reals each, every value complex), the pool splitting the sources;
 //! 2. **merge and shift**, parent by parent (consecutive boxes with one parent key), the
-//!    pool splitting the level at parent boundaries: the parent's computed children (with
+//!    pool splitting the chunk at parent boundaries: the parent's computed children (with
 //!    a V row) and their sources by slot; for the up and then the down direction of f,
 //!    every accumulator whose (geometric) mask holds a computed child sums its slots
 //!    present in ascending order, each source's waves times its source shift, from zero;
@@ -152,17 +155,24 @@
 //!    its down waves into a local in the frame and adds it, rotated back by Oⁿ(Q)ᵀ.
 //!
 //! Every local receives frame 0, then 1, then 2, each a fixed chain of its parent's
-//! accumulators, which depend on the geometry of the slots alone, so the output is the same
-//! at every thread count and, as Laplace's argument goes, on P ranks the one-rank output
-//! bit for bit. The pair body ([`PairOperator`]) translates each pair by
+//! accumulators, which depend on the geometry of the slots alone, and a box's waves are a
+//! function of its multipole alone, so the output is the same at every thread count and
+//! every bound of the buffer and, as Laplace's argument goes, on P ranks the one-rank output
+//! bit for bit. A source read by two chunks has its waves computed in each. The pair body ([`PairOperator`]) translates each pair by
 //! `PlaneWaveLevel::m2l` along the direction merge and shift gives it
 //! (`PlaneWaveTables::pair_direction` of the offset and the target's child index), which
 //! the level call equals to rounding (its two shift factors are the pair's to rounding).
 //! It approximates M2L within its quadrature's error, so it is not Rotation's output. The
-//! waves buffer holds one frame of the largest level call, 4W reals per box, sized from the
-//! plan by `HelmholtzFmmBuilder` ([`with_plane_wave_boxes`](HelmholtzOperator::with_plane_wave_boxes));
-//! each scratch set holds a level's buffers and the pair scratch of every level with waves;
-//! [`plane_wave_bytes`](HelmholtzOperator::plane_wave_bytes) reports them with the tables.
+//! waves buffer holds one frame of a chunk's sources, 2W reals per box, at most a byte bound
+//! ([`with_plane_wave_buffer`](HelmholtzOperator::with_plane_wave_buffer); none: a whole
+//! level; at least [`MIN_BUFFER_BOXES`] boxes of each level), with a position per box of the
+//! largest level and the chunk's source list, sized from the plan by `HelmholtzFmmBuilder`
+//! ([`with_plane_wave_boxes`](HelmholtzOperator::with_plane_wave_boxes)), which bounds it
+//! by its node budget over the ranks per node (proposal §2, constraint 7); each scratch set
+//! holds a level's buffers and the pair scratch of every level with waves;
+//! [`plane_wave_bytes`](HelmholtzOperator::plane_wave_bytes) reports them with the tables,
+//! and [`plane_wave_counts`](HelmholtzOperator::plane_wave_counts) the chunks and the waves
+//! computed.
 //! f64 only (§3.15, "Precision and range"): f32's range is untested (the factors reach
 //! about 10³⁴ at iprec 3).
 //!
