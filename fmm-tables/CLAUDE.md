@@ -10,7 +10,9 @@ Helmholtz CH3.1a (`helmholtz`, the per-level RCR tables of the Helmholtz family,
 CONVENTIONS §3.15); Helmholtz CH3.2a (`helmholtz::dense`, the dense M2L tables); Helmholtz
 CH3.2b (`helmholtz::classes`, the class M2L tables and the cube-group transforms); Helmholtz
 CH3.2c (`helmholtz::batched`, Dense's matrices in split planes for the batched M2L); Helmholtz
-CH6.1a (`helmholtz::plane_wave::quadrature`, the quadratures of the exponential M2L).
+CH6.1a (`helmholtz::plane_wave::quadrature`, the quadratures of the exponential M2L); Helmholtz
+CH6.1c (`helmholtz::plane_wave::pair`, the exponential M2L's conversions, shifts and pair
+translation on one level, CONVENTIONS §3.15 "Exponential M2L").
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -87,6 +89,22 @@ CH6.1a (`helmholtz::plane_wave::quadrature`, the quadratures of the exponential 
   the counts changes the waves of every level, so rerun that test and the spike's
   `examples/counts.rs` (the wave counts against FMM3D's, docs/helmholtz/tasks/CH6.1a.md).
   Not cached.
+  `helmholtz::plane_wave::pair` (Helmholtz CH6.1c; its module docs): `PlaneWaveLevel`, one
+  level's factors Pₖ(n, m) (solid normalised Legendre polynomials at (s/κ)(iλₖ, tₖ),
+  `harmonic_factors`), the cos and sin of mαⱼ, and the frames' Oⁿ(Q) (`classes`'
+  `rotation_blocks`, bit for bit `CubeTransforms`' blocks), built in f64 from either
+  quadrature (CH6.1a's `Quadrature`, or any `Nodes`, `nd_fmm_ref`'s generated ones
+  included) and rounded to T; the steps of CONVENTIONS §3.15 "Exponential M2L" and the
+  pair `m2l` in `HelmholtzTables`' units and slices (one or two multipole planes, two
+  local planes). Real and complex k only (Yukawa's real path is refused, as
+  `HelmholtzTables`). The trusted path is RCR: `tests/helmholtz/plane_wave_pair.rs`
+  checks every V offset along every direction merge and shift gives it within 3× the
+  stated error (FMM3D's) or 3ε (generated), at degrees that resolve the multipoles of
+  in-box charges (`resolved`: base 20, 36, 60 for iprec 1–3, plus ⌈0.9 |κ|⌉); below
+  them the chain also errs on the truncated multipole's tail, which the ignored
+  `degree_study` records (docs/helmholtz/tasks/CH6.1c.md) and CH6.1d's choice of the
+  quadrature per degree must answer. Every product and sum rounded apart (no `mul_add`
+  yet: no SIMD kernel restates these steps). Not cached.
 - Matrices are column-major with output = A · input. Every application accumulates
   (+=), and none applies 1/(4π) (§3.1).
 - Builds are serial and deterministic: the same inputs give bit-identical tables and

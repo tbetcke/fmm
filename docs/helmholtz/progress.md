@@ -1898,3 +1898,60 @@ request, using this template:
 - Follow-ups:
   - CH6.1c: the pair chain and its convention, for sign-off, tested with FMM3D's and this
     generator's quadratures (the roadmap).
+
+## 2026-11-03: CH6.1c The pair chain
+- Done:
+  - The third task of CH6.1 (priority list item 2): `nd_fmm_tables::helmholtz::plane_wave::pair`,
+    `PlaneWaveLevel<T>`, one level's exponential M2L in the orthonormal basis and stored form
+    of CONVENTIONS §3.15, built in f64 (rounded to T) from CH6.1a's `Quadrature` or any
+    `Nodes` (CH6.1b's generated ones): the factors Pₖ(n, m) = i⁻ⁿ cₙₘ 𝒫̄ₙᵐ((s/κ) iλₖ,
+    (s/κ) tₖ; s²) (`harmonic_factors`, the solid normalised Legendre polynomials, finite as
+    κ → 0), the steps (into a frame by Oⁿ(Q), modes, waves, shifts, sums, local, back by
+    Oⁿ(Q)ᵀ) and the pair `m2l` along any of §3.14's six directions, in `HelmholtzTables`'
+    units and slices (one or two multipole planes). The waves represent r_l φ̃ itself (e^β on
+    each conversion). `classes::rotation_blocks` (pub(crate)): Oⁿ of one cube rotation,
+    `CubeTransforms`' blocks bit for bit, so the frames need not build all 48.
+  - CONVENTIONS §3.15 "Exponential M2L" (unversioned, for sign-off), and
+    `tools/fixtures/check_3_15_plane_wave.py` (mpmath, 30 digits): the representation
+    hₙ Yₙᵐ = 1/(iⁿ⁺¹κ) ∫∫ Yₙᵐ(ŝ) e^{iκŝ·u} up and down, the solid recursion, the plane-wave
+    expansion at complex ŝ, and the stored forms, for real, complex and imaginary κ.
+  - The degree study (`degree_study`, ignored; docs/helmholtz/tasks/CH6.1c.md, "Results"):
+    the quadrature represents a degree-p multipole of in-box charges to its error only
+    where p resolves it; below, the waves are a truncated series in λ and the quadrature
+    errs on the tail, more for the finer precisions. At the FMM's degrees some precision
+    keeps the chain within about 1–2.3× RCR against the direct sum (iprec 3 at p ≤ 16,
+    iprec 2 at p = 20–24), but `hwts3e`'s precision from ε alone does not (ε = 10⁻⁸,
+    iprec 3, p ≈ 24: 14–25×).
+- Tests: `fmm-tables/tests/helmholtz/plane_wave_pair.rs`: against RCR (`HelmholtzTables::m2l`)
+  by P2M of charges at the source box's corners, centre and seeded points and L2P at 27
+  target points, box widths, at degrees that resolve the multipole (base 20, 36, 60 for
+  iprec 1–3, plus ⌈0.9 |κ|⌉), every offset along `Direction::of` and every merge-and-shift
+  direction, real k (one and two planes), complex and strongly damped k, levels 2–9 (κ from
+  40 to 0.08 + 0.16i): worst 0.76× the stated error (bound 3×), generated quadratures 0.07 ε
+  (bound 3ε); debug sample 11 s, release ignored 36 s. The factors against the real
+  harmonics, homogeneity, shifts composing, frames round trip, the up and down waves
+  against M2P, the panics.
+- Checks: ran `/verify` on the M6: format; Clippy default, examples and workspace
+  all-targets; `cargo doc`; `cargo test` (12 min 55 s) and `--workspace` (16 min 49 s),
+  all passed (before the review's fixes, which changed only nd-fmm-tables' tests, a unit
+  test and docs); on the final tree format, Clippy default and workspace, `cargo doc` and
+  `cargo test -p nd-fmm-tables` (41 s wall, the helmholtz binary 13.1 s, of which the new
+  tests 11 s); the ignored release tests (`cargo test --release -p nd-fmm-tables --test
+  helmholtz plane_wave_pair -- --ignored`, 36 s, and `degree_study`); `uv run
+  tools/fixtures/check_3_15_plane_wave.py`, all passed. Not run: the MPI list and D9 (no
+  MPI crate, no Laplace path). A self-review by a subagent: nothing blocking in the code
+  (signs, frames, layouts and units checked by hand); its points taken (panic tests for
+  the slice lengths and a specific κ message, `rotation_blocks` tested against
+  `CubeTransforms` bit for bit, the convention's bound sentence, the record's wording and
+  the check's run recorded); left for CH6.1d: f32's range (the factors and e^β are folded
+  into the tables, |Pₖ| up to about 10³⁴ at iprec 3), and the exact κ = 2k̂ comparison of
+  `PlaneWaveLevel::new`.
+- Decisions: three sign-offs, all 2026-11-03, "as recommended": (1) the convention, as
+  written; (2) the acceptance as tested at resolving degrees; (3) CH6.1d pairs each level's
+  quadrature with its degree, the coarsest precision within about 1.1× RCR's error against
+  the direct sum, Rotation where none is (CH6.1d's roadmap line).
+- Laplace: not touched (new Helmholtz modules of `nd-fmm-tables` and one pub(crate)
+  function in `helmholtz::classes`; no Laplace file changed).
+- Follow-ups:
+  - CH6.1d: merge and shift, and the quadrature chosen per level with p_l and ε by
+    measurement (a sentence in CH6.1d's line).
