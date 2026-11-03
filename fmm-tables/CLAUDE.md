@@ -9,7 +9,8 @@ C6.5 (task T13: `plane_wave`, the tables of plane-wave M2L, CONVENTIONS §3.14);
 Helmholtz CH3.1a (`helmholtz`, the per-level RCR tables of the Helmholtz family,
 CONVENTIONS §3.15); Helmholtz CH3.2a (`helmholtz::dense`, the dense M2L tables); Helmholtz
 CH3.2b (`helmholtz::classes`, the class M2L tables and the cube-group transforms); Helmholtz
-CH3.2c (`helmholtz::batched`, Dense's matrices in split planes for the batched M2L).
+CH3.2c (`helmholtz::batched`, Dense's matrices in split planes for the batched M2L); Helmholtz
+CH6.1a (`helmholtz::plane_wave::quadrature`, the quadratures of the exponential M2L).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -71,6 +72,21 @@ CH3.2c (`helmholtz::batched`, Dense's matrices in split planes for the batched M
   local Dense bit for bit. `select` charges the transforms of the largest chosen degree. The
   transforms follow from §3.12 and §3.15 as they stand (no convention of their own). Not
   cached.
+  `helmholtz::plane_wave` (Helmholtz CH6.1a; its `quadrature` module docs): the quadratures
+  of the Helmholtz exponential M2L per level, FMM3D's tables for iprec 1–3
+  (`hwts_iprec{1,2,3}.txt` beside the module, NIST's notice and a dated change note kept,
+  FMM3D's literals with D written as e), regenerated only by
+  `tools/fixtures/helmholtz_pw_quadrature.sh` and parsed on first use; `hwts3e`'s lookup
+  (`domain_of`, `Precision::for_tolerance`) and node maps; the α and Fourier counts not
+  FMM3D's (`hnumphys` misses the stated error at the region's corner) but a Bessel bound per
+  node with the share e/(4s) of the stated error, |J_m| of complex argument by Miller's
+  recurrence normalised by e^{iz} at Im z ≤ 0. A function of κ and the precision only. The
+  trusted path is the kernel e^{iκ|u|}/|u| on the region: `tests/helmholtz/` checks the
+  kernel within 2× and the point-to-point chain within 3× the stated error (on every domain
+  in the ignored `the_counts_on_every_domain`, about ten minutes in release). A change to
+  the counts changes the waves of every level, so rerun that test and the spike's
+  `examples/counts.rs` (the wave counts against FMM3D's, docs/helmholtz/tasks/CH6.1a.md).
+  Not cached.
 - Matrices are column-major with output = A · input. Every application accumulates
   (+=), and none applies 1/(4π) (§3.1).
 - Builds are serial and deterministic: the same inputs give bit-identical tables and

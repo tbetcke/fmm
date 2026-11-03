@@ -524,8 +524,8 @@ at any kD.
   `hnumphys`. *Done when:* every domain's rectangle and node count as FMM3D's; the
   lookup on every rectangle and outside the tables; with the counts, the kernel
   e^{iκ|u|}/|u| on the region within 2× the stated error and the point-to-point chain
-  within 3× it, at nine points of every domain and precision (release; sampled in
-  debug); the wave count Σ Nₖ against FMM3D's recorded. *Needs:* CH0.4.
+  within 3× it, the kernel at nine points of every domain and precision and the chain at
+  every domain's centre (release; sampled in debug); the wave count Σ Nₖ against FMM3D's recorded. *Needs:* CH0.4.
 - [ ] **CH6.1b The pair chain.** `nd_fmm_tables::helmholtz::plane_wave`: the multipole to
   waves and waves to local in the orthonormal basis and stored form of §3.15, the six
   directions and their frames, the shifts, one pair translated directly along its

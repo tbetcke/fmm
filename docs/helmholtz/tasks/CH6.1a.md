@@ -19,8 +19,13 @@ carries no part of it alone; its own condition (the roadmap's split):
 
 > every domain's rectangle and node count as FMM3D's; the lookup on every rectangle and
 > outside the tables; with the counts, the kernel e^{iκ|u|}/|u| on the region within 2× the
-> stated error and the point-to-point chain within 3× it, at nine points of every domain
-> and precision (release; sampled in debug); the wave count Σ Nₖ against FMM3D's recorded.
+> stated error and the point-to-point chain within 3× it, the kernel at nine points of
+> every domain and precision and the chain at every domain's centre (release; sampled in
+> debug); the wave count Σ Nₖ against FMM3D's recorded.
+
+(Amended on this branch from "at nine points of every domain" for both: the chain costs
+about 10⁸ operations per quadrature, so nine points of every domain would take hours on
+one thread, and this crate has no rayon. S4 measured its chain at the centres too.)
 
 ## Read first
 
@@ -90,8 +95,11 @@ binary), f64, no threads:
 5. **The counts** (the acceptance): on the grid of the region (z ∈ {1, 1.25, …, 4},
    x, y ∈ {−4, −3.5, …, 4}) the kernel with the counts within 2× the stated error, and the
    point-to-point chain (S4's sources and targets, the source waves truncated to |m| ≤ Fₖ)
-   within 3× it. Debug: the five fixture domains and the domains of the reference levels of
-   S4 §5 at iprec 1–3. Ignored (release): nine points of every domain and precision.
+   within 3× it. Debug: the kernel at the centres of the five fixture domains at iprec 1–3
+   and the chain at iprec 2 (about a second each in debug). Ignored (release): the kernel
+   at nine points of every domain and precision and the chain at every centre
+   (`the_counts_on_every_domain`); the reference levels of S4 §5, kernel and chain
+   (`the_counts_on_the_reference_levels`).
 6. **Determinism**: two builds of the same (κ, precision) bit for bit; the result a
    function of κ and the precision alone.
 

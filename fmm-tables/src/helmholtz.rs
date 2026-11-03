@@ -104,6 +104,12 @@
 //! tables in f64 (Helmholtz CH3.2a); [`batched`] the same matrices in split planes, for the
 //! batched M2L (Helmholtz CH3.2c).
 //!
+//! # The exponential M2L
+//!
+//! [`plane_wave`](self::plane_wave) holds the exponential (plane-wave) M2L of the
+//! low-frequency levels (proposal §5.3; Helmholtz H6): so far its quadratures per level,
+//! FMM3D's tables with counts of their own (Helmholtz CH6.1a).
+//!
 //! [`rotation`]: crate::rotation
 //! [`plane_wave`]: crate::plane_wave
 //!
@@ -141,6 +147,7 @@
 pub mod batched;
 pub mod classes;
 pub mod dense;
+pub mod plane_wave;
 
 use nd_fmm_math::coaxial::CoaxialTable;
 use nd_fmm_math::orthonormal::rotation::{
