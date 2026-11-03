@@ -54,14 +54,18 @@ dependency (nd-fmm-math's `Complex`), no `nd-fmm-plan` change.
     rule (the spike's `gauss::legendre`, kept apart from `direct`'s `gauss_legendre`,
     whose stopping rule differs in the last bits, so that the port stays bit for bit).
   - **The shortfall.** Where the spike returns its best quadrature at a bound without
-    saying so (S4 §4), `generate` records which bound it hit (`Shortfall::Panels`,
-    `Compression`, `Tightening`, `Floor` for ε below 10⁻¹³) and the kernel's error it
-    reached; `Quadrature::shortfall()` is `None` when ε was met on the grid.
+    saying so (S4 §4), `generate` records the kernel's error it reached and the bounds
+    its final attempt hit, `Shortfall { error, bounds: Vec<Bound> }` with
+    `Bound::{Floor, Panels, Compression, Tightening}` (ε below 10⁻¹³ raised to it; the
+    panel cap; the compression's tolerance floor; the last tightening of the λ rule's
+    target or the counts' share); `Quadrature::shortfall()` is `None` when the requested
+    ε was met on the grid. The bookkeeping reads values the spike computes anyway and
+    never feeds back.
 - `fmm-ref/tests/helmholtz/plane_wave.rs` (new, in the `helmholtz` test binary): the tests
   below, with the chain as a test helper (the spike's `chain_sums`).
 - `spikes/pw-quadrature/examples/generated.rs` (new; the spike gains a dependency on
   `nd-fmm-ref`): at the spike's κ and ε, `nd_fmm_ref`'s quadrature against the spike's
-  `generate`, every λₖ, tₖ, wₖ, Nₖ, Fₖ bit for bit; output in the record below.
+  `generate`, every λₖ, tₖ, wₖ, Nₖ, Fₖ bit for bit; output in the results below.
 - `fmm-ref/CLAUDE.md`: the module in the purpose list; its rule (f64 only, the spike's
   order of operations).
 
@@ -82,15 +86,17 @@ norm, S4 §1):
    `meets_eps_everywhere`, by the same checks.
 3. **The panels converge** (the spike's `panels_converge`): at κ = 10, ε = 10⁻⁶ the λ rule
    with twice the panels differs by at most ε/4 at nine (z, ρ).
-4. **The shortfall is reported**: ε = 10⁻¹⁴ (below the floor) gives `Shortfall::Floor`; a
-   forced bound (a test-only cap on the panels, or ε where the compression's floor binds,
-   whichever the code admits without a test hook in the public API) gives its variant,
-   with the error it reached above ε.
+4. **The shortfall is reported** (unit tests in the module, with a private panel cap):
+   one panel per segment at κ = 2 and ε = 10⁻¹⁵ gives a shortfall with `Floor`, `Panels`
+   and `Tightening`, its error the grid's above ε; a λ rule capped at one panel says so
+   (κ = 20, 10⁻⁹); a quadrature that meets ε (κ = 5, 10⁻³) has none. `Compression` has no
+   test of its own: no cheap case hits the compression's floor with its error above
+   target.
 5. **Bessel and Gauss** (unit tests in the module, the spike's): Jₙ against the trapezoid
    to 10⁻¹⁴; Gauss–Legendre exact on polynomials to degree 2n − 1.
 6. **Bit for bit the spike** (by hand, `cargo run --release -p nd-fmm-spike-pw-quadrature
    --example generated`): every node at the κ and ε of tests 1 and 2.
-7. **Determinism**: two calls give the same bits.
+7. **Determinism**: two calls give the same bits (λₖ, tₖ, wₖ, the counts).
 
 ## Checks
 
@@ -115,6 +121,71 @@ None: accuracy only, on the M6 (no timing).
 - Bit identity with the spike needs the same order of operations, including the
   Gauss–Legendre rule; any deliberate change (the shortfall's bookkeeping) must not touch
   the arithmetic.
+
+## Results
+
+Release builds on the M6, f64, one thread, 2026-11-03; accuracy only, nothing timed but
+the runs' wall times.
+
+**Bit for bit the spike** (`cargo run --release -p nd-fmm-spike-pw-quadrature --example
+generated`, 14 s, run again on the final branch with the same output): at every κ and ε of
+the spike's tests (`meets_eps` and `meets_eps_everywhere`; the first five rows are the
+debug test's), every λₖ, tₖ, wₖ, Nₖ and Fₖ of `nd_fmm_ref` equals the spike's `generate` bit
+for bit, and none has a shortfall. The kernel error is the largest |Q − G| on the region's
+grid in box widths:
+
+| κ | ε | nodes | Σ Nₖ | Σ (2Fₖ + 1) | kernel error | bit for bit |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0+0i | 1.0e-6 | 35 | 1825 | 775 | 8.76e-8 | yes |
+| 5+0i | 1.0e-3 | 26 | 1027 | 458 | 2.30e-4 | yes |
+| 0+5i | 1.0e-6 | 34 | 1938 | 734 | 8.43e-9 | yes |
+| 10+3i | 1.0e-3 | 25 | 1146 | 433 | 2.97e-5 | yes |
+| 17.529+0.876i | 1.4e-4 | 48 | 3962 | 1548 | 1.15e-5 | yes |
+| 0+0i | 1.0e-3 | 19 | 530 | 235 | 1.48e-4 | yes |
+| 0+0i | 1.0e-6 | 35 | 1825 | 775 | 8.76e-8 | yes |
+| 0+0i | 1.0e-9 | 47 | 3775 | 1569 | 1.11e-10 | yes |
+| 5+0i | 1.0e-3 | 26 | 1027 | 458 | 2.30e-4 | yes |
+| 5+0i | 1.0e-6 | 41 | 2456 | 1081 | 1.37e-7 | yes |
+| 5+0i | 1.0e-9 | 58 | 4620 | 2046 | 1.13e-10 | yes |
+| 20+0i | 1.0e-3 | 56 | 5352 | 2022 | 1.27e-4 | yes |
+| 20+0i | 1.0e-6 | 68 | 7717 | 3136 | 1.15e-7 | yes |
+| 20+0i | 1.0e-9 | 80 | 10489 | 4398 | 1.91e-10 | yes |
+| 50.26548245743669+0i | 1.0e-3 | 126 | 25273 | 8458 | 7.90e-5 | yes |
+| 50.26548245743669+0i | 1.0e-6 | 136 | 30306 | 10836 | 2.33e-8 | yes |
+| 50.26548245743669+0i | 1.0e-9 | 147 | 35514 | 13297 | 2.94e-11 | yes |
+| 0+5i | 1.0e-3 | 20 | 520 | 202 | 1.85e-5 | yes |
+| 0+5i | 1.0e-6 | 34 | 1938 | 734 | 8.43e-9 | yes |
+| 0+5i | 1.0e-9 | 51 | 4323 | 1655 | 4.36e-12 | yes |
+| 0+30i | 1.0e-3 | 24 | 24 | 24 | 9.35e-14 | yes |
+| 0+30i | 1.0e-6 | 33 | 33 | 33 | 9.36e-14 | yes |
+| 0+30i | 1.0e-9 | 38 | 38 | 38 | 9.36e-14 | yes |
+| 10+3i | 1.0e-3 | 25 | 1146 | 433 | 2.97e-5 | yes |
+| 10+3i | 1.0e-6 | 40 | 2805 | 1126 | 2.41e-8 | yes |
+| 10+3i | 1.0e-9 | 54 | 5056 | 2076 | 4.94e-11 | yes |
+| 40+20i | 1.0e-3 | 22 | 22 | 22 | 2.49e-9 | yes |
+| 40+20i | 1.0e-6 | 35 | 35 | 35 | 2.49e-9 | yes |
+| 40+20i | 1.0e-9 | 86 | 4520 | 1488 | 1.35e-11 | yes |
+| 10+0.001i | 1.0e-3 | 34 | 2013 | 834 | 1.83e-4 | yes |
+| 10+0.001i | 1.0e-6 | 48 | 3674 | 1600 | 1.99e-7 | yes |
+| 10+0.001i | 1.0e-9 | 64 | 6150 | 2676 | 1.18e-10 | yes |
+| 28.524+14.262i | 1.5e-10 | 76 | 7691 | 2688 | 1.79e-12 | yes |
+| 37.949+1.897i | 1.1e-3 | 79 | 10485 | 3517 | 4.50e-5 | yes |
+| 6.533+0i | 1.9e-7 | 47 | 3234 | 1429 | 2.31e-8 | yes |
+
+The rows of strongly damped κ (30i; 40 + 20i at 10⁻³ and 10⁻⁶) have Nₖ = 1 per node and
+an error near round-off: there |G| ≤ e^{−Im κ} is below ε on the whole region, and the
+counts' bound gives each node a single α point.
+
+**The acceptance** (`cargo test -p nd-fmm-ref --release --test helmholtz plane_wave --
+--ignored`): `the_generator_meets_eps_everywhere` passed in 23.5 s; with the debug run's
+`the_generator_meets_eps` (17 s in debug), S4's checks hold at every κ and ε above. (A first
+version had an ignored test of ε below the floor at full panels: 6 minutes, the generator
+near 10⁻¹³. It became the unit test with one panel per segment.)
+
+**Debug test time** (`cargo test -p nd-fmm-ref`, the M6): the helmholtz test binary 22.2 s
+(21.2 s with the new tests skipped), the lib's unit tests 24.7 s (0.01 s without them; the
+forced-bound test runs the generator's give-up path, ten grid sums with converged α
+counts).
 
 ## Pending runs
 

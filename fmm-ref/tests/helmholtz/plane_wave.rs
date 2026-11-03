@@ -139,6 +139,7 @@ fn check(kw: C, eps: f64) {
     }
 }
 
+/// S4's five debug cases by [`check`]: absolute |Q − G| in box widths.
 #[test]
 fn the_generator_meets_eps() {
     for (kw, eps) in [
@@ -154,7 +155,7 @@ fn the_generator_meets_eps() {
     }
 }
 
-/// S4's full set (slow unoptimised): `cargo test --release -p nd-fmm-ref --test helmholtz
+/// S4's full set by [`check`] (absolute |Q − G| in box widths; slow unoptimised): `cargo test --release -p nd-fmm-ref --test helmholtz
 /// plane_wave -- --ignored`.
 #[test]
 #[ignore = "slow in the dev profile; run with --release"]
@@ -185,13 +186,17 @@ fn the_generator_meets_eps_everywhere() {
     }
 }
 
-/// Two calls give the same bits.
+/// Two calls give the same bits: λₖ, tₖ, wₖ and the counts.
 #[test]
 fn the_generator_is_deterministic() {
     let kw = C::new(5.0, 0.0);
     let (a, b) = (generate(kw, 1e-3), generate(kw, 1e-3));
-    assert_eq!(a.lambda(), b.lambda());
-    assert_eq!(a.weights(), b.weights());
+    let bits = |v: &[C]| -> Vec<(u64, u64)> {
+        v.iter().map(|z| (z.re.to_bits(), z.im.to_bits())).collect()
+    };
+    assert_eq!(bits(a.lambda()), bits(b.lambda()));
+    assert_eq!(bits(a.t()), bits(b.t()));
+    assert_eq!(bits(a.weights()), bits(b.weights()));
     assert_eq!(a.alpha_counts(), b.alpha_counts());
     assert_eq!(a.fourier_counts(), b.fourier_counts());
 }

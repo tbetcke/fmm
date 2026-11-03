@@ -27,7 +27,8 @@
 //!
 //! 1. **The contour of real t.** λ = −i q with q = √(κ² − t²), Im q ≥ 0 (the outgoing
 //!    branch), and dλ = t dt / λ, for t from 0 to t_max, where Re λ reaches
-//!    ln(1/ε) + 4 (the tail beyond is below ε/50 at z ≥ 1). On it J₀(t ρ) has a real
+//!    ln(1/τ) + 4 for the λ rule's target τ ≤ ε/4 (the tail beyond is below τ/50 at
+//!    z ≥ 1). On it J₀(t ρ) has a real
 //!    argument, so the waves never grow and |e^{−λ z}| ≤ 1. For Re κ > 0 the variable is
 //!    θ on [0, π/2] (t = Re κ sin θ) and φ on [0, φ_max] (t = Re κ cosh φ), which removes
 //!    the 1/√ singularity of t/λ at t = κ for real κ; for 0 < Im κ ≪ Re κ the panels are
@@ -53,7 +54,7 @@
 //!
 //! The result is checked against the kernel on the region's grid, z ∈ {1, 1.25, …, 4},
 //! x, y ∈ {−4, −3.5, …, 4} ([`Quadrature::kernel_error`]). If it misses ε, the λ rule's
-//! target is divided by 4 when the λ sum alone misses ε/2 (down to ε/256), and otherwise
+//! target is divided by 4 when the λ sum alone misses ε/2 (from ε/4 down to ε/1024), and otherwise
 //! the counts' share is halved (down to 1/1024 of its start). ε below [`FLOOR`] is raised
 //! to it.
 //!
@@ -425,11 +426,17 @@ mod tests {
         }
     }
 
-    /// A quadrature that meets ε has no shortfall.
+    /// A quadrature that meets ε, the largest absolute |Q − G| on the grid in box widths,
+    /// has no shortfall; its wave and mode counts are the sums of its counts.
     #[test]
     fn no_shortfall_when_eps_is_met() {
         let q = generate(C::new(5.0, 0.0), 1e-3);
         assert!(q.shortfall().is_none());
         assert!(q.kernel_error() <= 1e-3);
+        assert_eq!(q.wave_count(), q.alpha_counts().iter().sum::<usize>());
+        assert_eq!(
+            q.mode_count(),
+            q.fourier_counts().iter().map(|f| 2 * f + 1).sum::<usize>()
+        );
     }
 }
