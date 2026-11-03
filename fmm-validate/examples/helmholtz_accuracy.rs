@@ -37,7 +37,14 @@
 //!   d, and `sweep`: Auto at every crossover that chooses differently, from Batched on every
 //!   level that fits (crossover ∞) down to Rotation on every level (one below the smallest
 //!   p_l), the crossovers after the first from its degrees; the column names the crossover
-//!   (`auto ≤ d`).
+//!   (`auto ≤ d`). Also (Helmholtz CH6.1e) `planewave`, the exponential M2L with each level's
+//!   quadrature by the rule, `planewave:<1|2|3>`, that iprec on every level whose κ_l = k w_l
+//!   lies in the quadrature's tables, and `planewave-scan`: Rotation, then each such level
+//!   ≥ 2 at iprec 1, 2 and 3 alone, the other levels Rotation; the column names the levels
+//!   with waves and their precisions (`planewave 3:i2`).
+//!
+//! The last column, "÷ Rotation", is the row's error of φ and of ∇φ over the case's
+//! Rotation row at the same P2P kernel and threads, where one ran before it.
 //!
 //! Run in release mode, on any number of ranks (each rank passes a contiguous block of
 //! the points, the oracle is sharded over the ranks, rank 0 prints), with one BLAS
@@ -58,9 +65,13 @@ use std::time::Instant;
 use mpi::Threading;
 use mpi::traits::*;
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzM2l, Wavenumber, s7_degree,
+    ChargeKind, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzM2l, PlaneWavePrecision, Wavenumber,
+    s7_degree,
 };
 use nd_fmm_exec::operator::{MulAdd, P2pChoice};
+use nd_fmm_math::Complex;
+use nd_fmm_tables::helmholtz::plane_wave::Precision;
+use nd_fmm_tables::helmholtz::plane_wave::quadrature::domain_of;
 use nd_fmm_validate::bench::{cores, cpu_model, target};
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::helmholtz_accuracy::{
@@ -93,6 +104,21 @@ enum M2lRun {
     Fixed(HelmholtzM2l, Option<MulAdd>, Option<usize>),
     /// Auto at every crossover that chooses differently (module documentation).
     Sweep,
+    /// The exponential M2L, by the rule (`None`) or one precision on every level.
+    PlaneWave(Option<Precision>),
+    /// Rotation, then each level with a quadrature at each precision alone.
+    PlaneWaveScan,
+}
+
+/// The levels ≥ 2 of a row whose κ_l = k w_l lies in the quadrature's tables.
+fn plane_wave_levels(row: &Row, k: Complex<f64>) -> Vec<usize> {
+    (2..row.levels)
+        .filter(|&l| {
+            // The width w_l = 2 r_l, from the circumradius √3 r_l.
+            let width = 2.0 * row.circumradii[l] / 3f64.sqrt();
+            domain_of(k * width).is_some()
+        })
+        .collect()
 }
 
 /// Parses a comma-separated list.
@@ -127,7 +153,8 @@ fn arguments() -> Arguments {
              [--kd x,…] [--kim y] [--eps e,…|--degree p] [--charges real|complex] \
              [--vectors m] [--samples n] [--no-gradients] [--threads t,…] \
              [--oracle-threads t] [--rule calibrated|s7] [--p2p auto|reference|<isa>,…] \
-             [--m2l rotation|dense|classes|batched|batched-fused|auto|auto:<d>|sweep,…] \
+             [--m2l rotation|dense|classes|batched|batched-fused|auto|auto:<d>|sweep|\
+             planewave|planewave:<1|2|3>|planewave-scan,…] \
              [--dense-budget MB]; got {args:?}"
         );
         std::process::exit(2);
@@ -199,6 +226,11 @@ fn arguments() -> Arguments {
                                 }
                                 "auto" => fixed(HelmholtzM2l::Auto, None),
                                 "sweep" => Some(M2lRun::Sweep),
+                                "planewave" => Some(M2lRun::PlaneWave(None)),
+                                "planewave-scan" => Some(M2lRun::PlaneWaveScan),
+                                "planewave:1" => Some(M2lRun::PlaneWave(Some(Precision::Iprec1))),
+                                "planewave:2" => Some(M2lRun::PlaneWave(Some(Precision::Iprec2))),
+                                "planewave:3" => Some(M2lRun::PlaneWave(Some(Precision::Iprec3))),
                                 _ => v
                                     .strip_prefix("auto:")?
                                     .parse()
@@ -249,8 +281,22 @@ fn arguments() -> Arguments {
 
 /// The M2L of a row: `rotation`, or `dense l…`, `classes l…`, `batched l…` or
 /// `batched-fused l…` with the levels that ran the setting's tables and their MB; under
-/// Auto prefixed with `auto ≤ d: ` (`∞` for no bound).
+/// Auto prefixed with `auto ≤ d: ` (`∞` for no bound); `planewave l:iq…` with each level's
+/// precision.
 fn m2l_string(row: &Row) -> String {
+    if row.m2l == HelmholtzM2l::PlaneWave {
+        let levels: Vec<String> = (0..row.plane_wave.len())
+            .filter_map(|l| Some(format!("{l}:i{}", row.plane_wave[l]?.iprec())))
+            .collect();
+        return match levels.is_empty() {
+            true => "rotation".into(),
+            false => format!(
+                "planewave {} ({:.0} MB)",
+                levels.join(","),
+                row.dense_bytes as f64 / 1e6
+            ),
+        };
+    }
     let (m2l, mul_add, dense, bytes) = (
         row.m2l,
         row.m2l_mul_add,
@@ -323,11 +369,11 @@ fn main() {
         println!(
             "| Workload | N | kD | degrees | charges | m | P2P | M2L | ranks × threads | levels \
              | leaf level | p by level | leaves | max leaf | build s | evaluate s | φ | ∇φ \
-             | checksum |"
+             | checksum | ÷ Rotation |"
         );
         println!(
             "| --- | ---: | --- | --- | --- | ---: | --- | --- | --- | ---: | ---: | --- | ---: | ---: \
-             | ---: | ---: | ---: | ---: | --- |"
+             | ---: | ---: | ---: | ---: | --- | --- |"
         );
     }
     for &kd in &arguments.kds {
@@ -377,8 +423,15 @@ fn main() {
                 ChargeKind::Real => "real",
                 ChargeKind::Complex => "complex",
             };
-            let print = |row: &Row| {
+            let print = |row: &Row, rotation: Option<[f64; 2]>| {
                 let all = row.errors.last().expect("an entry over all vectors");
+                let ratio = match rotation {
+                    Some(r) if case.gradients => {
+                        format!("{:.3}/{:.3}", all[0] / r[0], all[1] / r[1])
+                    }
+                    Some(r) => format!("{:.3}", all[0] / r[0]),
+                    None => "–".into(),
+                };
                 let gradient = if case.gradients {
                     format!("{:.2e}", all[1])
                 } else {
@@ -387,7 +440,7 @@ fn main() {
                 println!(
                     "| {} | {} | {kd_string} | {degrees_name} | {charges} | {} | {} | {} | {} × {} \
                      | {} | {} | {} | {} | {} | {:.2} | {:.2} | {:.2e} | {gradient} \
-                     | {:016x} |",
+                     | {:016x} | {ratio} |",
                     workload.name(),
                     problem.len(),
                     case.vectors,
@@ -413,33 +466,82 @@ fn main() {
                     println!("|  | per vector φ/∇φ: {} |", per.join(", "));
                 }
             };
+            // The errors of the case's Rotation rows by P2P kernel and threads.
+            let mut rotation: Vec<((P2pChoice, usize), [f64; 2])> = Vec::new();
+            let k = complex_k(&case);
             for &m2l_run in &arguments.m2l {
                 for &p2p in &arguments.p2p {
                     for &threads in &arguments.threads {
                         case.p2p = p2p;
-                        // The crossovers of the run: one, or the sweep's, the first ∞ and
-                        // the others from its degrees.
-                        let (m2l, mul_add, first) = match m2l_run {
-                            M2lRun::Fixed(m2l, mul_add, max_degree) => (m2l, mul_add, max_degree),
-                            M2lRun::Sweep => (HelmholtzM2l::Auto, None, Some(usize::MAX)),
+                        // The runs of the entry: (setting, mode, crossover, precisions),
+                        // one, or the sweep's (the first ∞, the others from its degrees),
+                        // or the scan's (Rotation first, the levels from its row).
+                        let fixed = |m2l, mul_add, max_degree| {
+                            (m2l, mul_add, max_degree, PlaneWavePrecision::Rule)
                         };
-                        (case.m2l, case.m2l_mul_add) = (m2l, mul_add);
-                        let mut crossovers = vec![first];
+                        let mut runs = vec![match m2l_run {
+                            M2lRun::Fixed(m2l, mul_add, max_degree) => {
+                                fixed(m2l, mul_add, max_degree)
+                            }
+                            M2lRun::Sweep => fixed(HelmholtzM2l::Auto, None, Some(usize::MAX)),
+                            M2lRun::PlaneWave(precision) => (
+                                HelmholtzM2l::PlaneWave,
+                                None,
+                                None,
+                                match precision {
+                                    None => PlaneWavePrecision::Rule,
+                                    Some(q) => PlaneWavePrecision::PerLevel(vec![Some(q); 64]),
+                                },
+                            ),
+                            M2lRun::PlaneWaveScan => fixed(HelmholtzM2l::Rotation, None, None),
+                        }];
                         let mut next = 0;
-                        while next < crossovers.len() {
-                            case.m2l_max_degree = crossovers[next];
+                        while next < runs.len() {
+                            (
+                                case.m2l,
+                                case.m2l_mul_add,
+                                case.m2l_max_degree,
+                                case.plane_wave,
+                            ) = runs[next].clone();
                             next += 1;
                             match run(&case, &problem, &oracle, threads, &world) {
                                 Ok(row) => {
+                                    let all =
+                                        *row.errors.last().expect("an entry over all vectors");
+                                    let reference = rotation
+                                        .iter()
+                                        .find(|(key, _)| *key == (p2p, threads))
+                                        .map(|&(_, errors)| errors);
+                                    let is_rotation = case.m2l == HelmholtzM2l::Rotation;
                                     if root {
-                                        print(&row);
+                                        print(&row, reference.filter(|_| !is_rotation));
                                     }
-                                    if matches!(m2l_run, M2lRun::Sweep) && next == 1 {
-                                        crossovers.extend(
-                                            sweep_crossovers(&row.degrees)[1..]
-                                                .iter()
-                                                .map(|&d| Some(d)),
-                                        );
+                                    if is_rotation && reference.is_none() {
+                                        rotation.push(((p2p, threads), all));
+                                    }
+                                    if next == 1 {
+                                        match m2l_run {
+                                            M2lRun::Sweep => runs.extend(
+                                                sweep_crossovers(&row.degrees)[1..].iter().map(
+                                                    |&d| fixed(HelmholtzM2l::Auto, None, Some(d)),
+                                                ),
+                                            ),
+                                            M2lRun::PlaneWaveScan => {
+                                                for l in plane_wave_levels(&row, k) {
+                                                    for q in Precision::ALL {
+                                                        let mut named = vec![None; row.levels];
+                                                        named[l] = Some(q);
+                                                        runs.push((
+                                                            HelmholtzM2l::PlaneWave,
+                                                            None,
+                                                            None,
+                                                            PlaneWavePrecision::PerLevel(named),
+                                                        ));
+                                                    }
+                                                }
+                                            }
+                                            _ => {}
+                                        }
                                     }
                                 }
                                 Err(error) => {
