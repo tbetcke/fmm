@@ -22,6 +22,7 @@ use nd_fmm_tables::helmholtz::{DEFAULT_BLOCK_BUDGET, HelmholtzTables};
 mod batched;
 mod classes;
 mod dense;
+mod plane_wave_pair;
 mod plane_wave_quadrature;
 
 /// A deterministic input of `planes` planes at degree p whose degree-n coefficients are of

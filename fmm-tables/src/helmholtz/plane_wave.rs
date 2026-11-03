@@ -17,9 +17,13 @@
 //! orders |m| ≤ Fₖ kept at λₖ). Unlike Laplace's single table, the nodes depend on κ, so
 //! each level has its own ([`quadrature`]).
 //!
-//! Helmholtz CH6.1a gives the quadratures; the conversions between expansions and waves,
-//! the shifts and merge and shift follow in CH6.1c and CH6.1d (docs/helmholtz/roadmap.md).
+//! Helmholtz CH6.1a gives the quadratures ([`quadrature`]); CH6.1c the conversions between
+//! expansions and waves, the shifts and the pair translation of one level ([`pair`],
+//! CONVENTIONS §3.15, "Exponential M2L"); merge and shift follows in CH6.1d
+//! (docs/helmholtz/roadmap.md).
 
+pub mod pair;
 pub mod quadrature;
 
+pub use pair::{PlaneWaveLevel, PlaneWaveLevelScratch};
 pub use quadrature::{Precision, Quadrature};

@@ -239,6 +239,26 @@ impl<T: RealScalar> CubeTransforms<T> {
     }
 }
 
+/// Oⁿ(P), n ≤ p, of one rotation P in f64: the blocks of degrees 0 to p row-major at
+/// `block_range(n)`, as [`CubeTransforms::new`] builds a dense element's, from the same
+/// y-block and the same factoring, so bit for bit its values. For callers that need one or
+/// two elements (the frames of `super::plane_wave::pair`) without all 48.
+///
+/// # Panics
+///
+/// If P is improper.
+pub(crate) fn rotation_blocks(p: usize, element: SignedPermutation) -> Vec<f64> {
+    assert!(element.is_proper(), "an improper element");
+    let mut compact = vec![0.0f64; compact_blocks_len(p)];
+    y_blocks(p, 0.0, 1.0, &mut compact, &mut Scratch::new(p));
+    let (alpha, beta, gamma) = factor(element);
+    let mut full = vec![0.0f64; blocks_len(p)];
+    for n in 0..=p {
+        fill_block(n, alpha, beta, gamma, &compact, &mut full[block_range(n)]);
+    }
+    full
+}
+
 /// −P, proper when P is improper.
 fn negated(element: SignedPermutation) -> SignedPermutation {
     // −I is element 7, and −P = (−I) P.
