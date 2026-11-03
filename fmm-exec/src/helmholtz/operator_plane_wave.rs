@@ -37,9 +37,9 @@ const NO_BOX: u32 = u32::MAX;
 /// modes (outgoing); a parent's slots, accumulators and children's incoming waves, a
 /// child's sums and local in the frame (merge and shift); and per level with waves the
 /// pair translation's scratch (the pair body). Sized at construction for the largest
-/// level: 4n + M + S + (a + 32) W values and 216 slots, with n = (p + 1)², M and S the
+/// level: 4n + M + S + (a + 16) W values and 216 slots, with n = (p + 1)², M and S the
 /// modes and sums, W the reals of one direction's waves and a the most accumulators of a
-/// direction.
+/// direction; and per level with waves its own 4n + M + S + 4W.
 pub(super) struct PlaneScratch<T> {
     rotated: Vec<T>,
     modes: Vec<T>,
@@ -50,6 +50,8 @@ pub(super) struct PlaneScratch<T> {
     sums: Vec<T>,
     frame: Vec<T>,
     pairs: Vec<Option<PlaneWaveLevelScratch<T>>>,
+    /// The values of `pairs`.
+    pair_values: usize,
 }
 
 impl<T: SimdScalar> PlaneScratch<T> {
@@ -76,6 +78,13 @@ impl<T: SimdScalar> PlaneScratch<T> {
             pairs: (0..m2l.nlevels())
                 .map(|l| m2l.level(l).map(|level| level.tables().scratch()))
                 .collect(),
+            // `PlaneWaveLevel::scratch`: the frame multipole and local, the modes, the up,
+            // down and incoming waves and the factors, the sums.
+            pair_values: levels()
+                .map(|t| {
+                    4 * Layout::new(t.p()).len() + t.mode_len() + 4 * t.wave_len() + t.sum_len()
+                })
+                .sum(),
         }
     }
 
@@ -86,7 +95,8 @@ impl<T: SimdScalar> PlaneScratch<T> {
             + self.accs.len()
             + self.incoming.len()
             + self.sums.len()
-            + self.frame.len();
+            + self.frame.len()
+            + self.pair_values;
         values * size_of::<T>() + self.present.len() + 4 * SLOTS
     }
 }

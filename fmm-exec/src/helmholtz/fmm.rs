@@ -265,7 +265,8 @@ impl HelmholtzFmmBuilder {
     /// (Auto's is Rotation's bit for bit on the levels it leaves to Rotation); Batched's is
     /// Dense's bit for bit with real multipoles (real k, real charges). Under
     /// [`HelmholtzM2l::PlaneWave`] (opt-in) the levels with waves approximate M2L within their
-    /// quadrature's error ([`plane_wave_precision`](Self::plane_wave_precision)).
+    /// quadrature's error ([`plane_wave_precision`](Self::plane_wave_precision)); f64 only
+    /// (untested in f32, not refused).
     pub fn m2l(mut self, choice: HelmholtzM2l) -> Self {
         self.m2l = choice;
         self

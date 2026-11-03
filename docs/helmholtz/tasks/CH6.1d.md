@@ -68,7 +68,8 @@ No Laplace file changes: `crate::plane_wave` (Laplace's tables and geometry) and
 
 **nd-fmm-exec** (`helmholtz`):
 
-- `src/helmholtz/plane_wave.rs` (new, crate-private): the level call, Laplace's order:
+- `src/helmholtz/operator_plane_wave.rs` (new, crate-private, a submodule of `operator`
+  as Laplace's `src/operator_plane_wave.rs` is): the level call, Laplace's order:
   per vector and frame f, the up and down waves of every box of the level (the multipole
   rotated into f, its modes, the waves: `PlaneWaveLevel::waves_of`, 4W reals per box) on
   the pool by boxes; then per parent (boxes of the level in index order, split at parent

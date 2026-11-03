@@ -247,7 +247,8 @@ pub enum HelmholtzM2l {
     /// The exponential M2L by merge and shift (Helmholtz CH6.1d; opt-in) on the levels with
     /// a quadrature of the [`PlaneWavePrecision`] setting
     /// ([`with_plane_wave_precision`](HelmholtzOperator::with_plane_wave_precision)), RCR on
-    /// the others.
+    /// the others. f64 only (CONVENTIONS §3.15, "Precision and range"): in f32 the factors,
+    /// up to about 10³⁴ at iprec 3, are untested and the setting is not refused.
     PlaneWave,
     /// The rule per level (Helmholtz CH3.2d): Batched, in [`auto_m2l_mul_add`]'s mode (fused
     /// on every vector ISA) unless one is named,
@@ -632,8 +633,9 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
 
     /// The M2L that runs on `level`: [`HelmholtzM2l::Dense`], [`HelmholtzM2l::Classes`] or
     /// [`HelmholtzM2l::Batched`] where the level has dense, class or batched tables (under
-    /// [`HelmholtzM2l::Auto`] the levels the rule gives Batched), [`HelmholtzM2l::Rotation`]
-    /// everywhere else (levels 0 and 1 have no M2L).
+    /// [`HelmholtzM2l::Auto`] the levels the rule gives Batched), [`HelmholtzM2l::PlaneWave`]
+    /// where it has a quadrature, [`HelmholtzM2l::Rotation`] everywhere else (levels 0 and 1
+    /// have no M2L).
     pub fn m2l_on(&self, level: usize) -> HelmholtzM2l {
         let kernel = &self.kernel;
         if kernel.plane_wave_level(level).is_some() {

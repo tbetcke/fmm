@@ -111,7 +111,8 @@ translation on one level, CONVENTIONS §3.15 "Exponential M2L"); Helmholtz CH6.1
   (`crate::plane_wave::geometry`, read only): the source shifts slot → parent, one table
   per distinct (rotated offset, up or down), and the child shifts parent → child, each
   `shift_factors`' 2W reals; `PlaneWaveM2l`, a tree's levels; `shift` and `add`, the
-  merge's complex steps (rounded apart, `shift` is `shift_add` from zero bit for bit);
+  merge's complex steps (rounded apart, `shift` is `shift_add` from zero bit for bit but
+  for the sign of a zero);
   `precision_for_degree` and `select`, each level's precision from its degree where κ_l
   lies in the tables (a function of k, w_l and p_l: constraint 9). The rule's constants
   are provisional (CH6.1c's degree study: iprec 1 to p = 8, 2 to 12, 3 to 16, none

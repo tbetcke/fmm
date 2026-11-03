@@ -100,7 +100,8 @@ impl<T: RealScalar> MergeLevel<T> {
     ///
     /// # Panics
     ///
-    /// As [`PlaneWaveLevel::new`] (Re k̂ > 0 and Im k̂ ≥ 0, finite).
+    /// As [`PlaneWaveLevel::new`] where κ lies in the tables but Re k̂ = 0 (a κ with a
+    /// negative or non-finite part has no domain, so `None`).
     pub fn new(
         k_hat: Complex<f64>,
         p: usize,
@@ -206,7 +207,7 @@ impl<T: RealScalar> PlaneWaveM2l<T> {
     /// # Panics
     ///
     /// If the slices differ in length, a precision is named on level 0 or 1, or a level
-    /// with a precision has not Re k̂ > 0 and Im k̂ ≥ 0.
+    /// with a precision and a domain has Re k̂ = 0.
     pub fn build(
         k_root: Complex<f64>,
         degrees: &[usize],
