@@ -243,10 +243,20 @@ None.
 
 ## Open questions
 
-1. Sign-off: the §3.15 "Exponential M2L" subsection (the convention), as written.
-2. The acceptance as tested: within the quadrature's error of RCR (0.76× the stated error,
-   0.07 ε generated) on every offset, at degrees that resolve the multipole; below them the
-   difference holds the tail's error (the degree study). Accept as CH6.1c's criterion met?
-3. CH6.1d: choose each level's quadrature with its degree (p_l, ε) by measurement, as
-   §3.14's `nodes_for_degree` does for Laplace, rather than `hwts3e`'s precision from ε
-   alone (recorded in CH6.1d's roadmap line).
+Signed off 2026-11-03 (the user: "as recommended"), after the recommendations in the
+session: yes to all three, question 3 with the rule's shape named.
+
+1. The §3.15 "Exponential M2L" subsection (the convention): signed off 2026-11-03: as
+   recommended, accepted as written (unversioned).
+2. The acceptance as tested, within the quadrature's error of RCR on every offset at
+   degrees that resolve the multipole, the lower degrees recorded in the degree study:
+   signed off 2026-11-03: as recommended, accepted as CH6.1c's criterion met; the FMM's
+   errors at its own degrees are CH6.1d's (CH6.1's 1.1× Rotation).
+3. CH6.1d pairs each level's quadrature with its degree by measurement: signed off
+   2026-11-03: as recommended, with the rule's shape: per level, from p_l and ε, the
+   coarsest precision whose chain error against the direct sum stays within a small factor
+   of RCR's (about 1.1×, CH6.1's criterion), a function of k, w_l, p_l and ε (constraint
+   9); a level where no precision reaches it keeps Rotation, and CH6.1d reports which
+   levels those are. To watch: the degree study puts the factor nearer 1.3–2.3× at
+   p = 20–24 on its worst-case charges; if CH3.1c's cases agree, H6's gain shrinks to the
+   levels at p ≤ 16.

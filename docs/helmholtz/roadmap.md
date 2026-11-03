@@ -15,7 +15,7 @@ again into the generator (CH6.1b, done: S4's generator in `nd-fmm-ref`) and the 
 (CH6.1c), merge and shift renamed CH6.1d. CH6.1c (the pair chain, CONVENTIONS §3.15
 "Exponential M2L" for sign-off) done; its degree study hands CH6.1d the pairing of a
 level's quadrature with its degree. Next: CH6.1d (merge and shift in the FMM), once
-CH6.1c is merged and its convention signed off.
+CH6.1c is merged (its three sign-offs taken 2026-11-03).
 
 ## How `/next-task` reads this file
 
@@ -553,9 +553,11 @@ at any kD.
 - [x] **CH6.1c The pair chain.** Record: `docs/helmholtz/tasks/CH6.1c.md`;
   `nd_fmm_tables::helmholtz::plane_wave::pair`, tests
   `fmm-tables/tests/helmholtz/plane_wave_pair.rs`, CONVENTIONS §3.15 "Exponential M2L"
-  (for sign-off). Within 0.76× the stated error of RCR (0.07 ε generated) on every offset
-  and direction at degrees that resolve the multipole; below them the chain also errs on
-  the truncated multipole's tail (the record's degree study).
+  (signed off 2026-11-03: as recommended, accepted as written). Within 0.76× the stated
+  error of RCR (0.07 ε generated) on every offset and direction at degrees that resolve
+  the multipole; below them the chain also errs on the truncated multipole's tail (the
+  record's degree study). Acceptance read at those degrees signed off 2026-11-03: as
+  recommended.
   `nd_fmm_tables::helmholtz::plane_wave`: the
   multipole to waves and waves to local in the orthonormal basis and stored form of §3.15,
   the six directions and their frames, the shifts, one pair translated directly along its
@@ -572,7 +574,11 @@ at any kD.
   with its degree p_l and ε by measurement, as §3.14's `nodes_for_degree` for Laplace, not
   by `hwts3e`'s precision from ε alone (which pairs ε = 10⁻⁸ with iprec 3, at the FMM's
   p ≈ 24 14–25× RCR's error on the study's charges); the rule a function of k, w_l, p_l
-  and ε (constraint 9). *Needs:* CH6.1c.
+  and ε (constraint 9). Signed off 2026-11-03 (CH6.1c, question 3: as recommended): per
+  level the coarsest precision whose chain error against the direct sum stays within about
+  1.1× RCR's; a level where none does keeps Rotation, and the report names those levels
+  (the study suggests 1.3–2.3× at p = 20–24 on worst-case charges, so H6's gain may shrink
+  to the levels at p ≤ 16). *Needs:* CH6.1c.
 - [ ] **CH6.2 Measured.** Against Rotation and the table-based strategies on the three
   machines, and against `hfmm3d`'s exponential M2L. *Done when:* per-level accuracy and time
   beside FMM3D's on the same problems; D8 proposed. Also (CH6.1a): CH6.1a's counts resolve

@@ -1946,8 +1946,10 @@ request, using this template:
   the check's run recorded); left for CH6.1d: f32's range (the factors and e^β are folded
   into the tables, |Pₖ| up to about 10³⁴ at iprec 3), and the exact κ = 2k̂ comparison of
   `PlaneWaveLevel::new`.
-- Decisions: none taken; questions for sign-off: (1) the convention; (2) the acceptance as
-  tested at resolving degrees; (3) CH6.1d to pair each level's quadrature with its degree.
+- Decisions: three sign-offs, all 2026-11-03, "as recommended": (1) the convention, as
+  written; (2) the acceptance as tested at resolving degrees; (3) CH6.1d pairs each level's
+  quadrature with its degree, the coarsest precision within about 1.1× RCR's error against
+  the direct sum, Rotation where none is (CH6.1d's roadmap line).
 - Laplace: not touched (new Helmholtz modules of `nd-fmm-tables` and one pub(crate)
   function in `helmholtz::classes`; no Laplace file changed).
 - Follow-ups:
