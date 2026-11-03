@@ -135,7 +135,8 @@
 //! one by the level's degree; a function of k, the level's width, its degree and ε) or
 //! named per level, and only where κ_l = k w_l lies in the quadrature's tables; RCR on the
 //! others. Under the rule the FMM's errors stay within about 1.1× Rotation's on CH3.1c's
-//! cases (`fmm-validate/results/helmholtz-ch6-1e.md`). Its level call restates Laplace's (`crate::operator`, "The plane-wave M2L") without its vector kernels:
+//! cases (`fmm-validate/results/helmholtz-ch6-1e.md`). Its level call restates Laplace's
+//! (`crate::operator`, "The plane-wave M2L") without its vector kernels:
 //! for each charge vector and each frame f = 0, 1, 2,
 //!
 //! 1. **outgoing**: the up and down waves of frame f of every box of the level, own and

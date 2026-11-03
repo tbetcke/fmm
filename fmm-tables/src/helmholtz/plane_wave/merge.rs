@@ -27,8 +27,9 @@
 //! precision alone, the FMM's relative ℓ2 errors of φ and ∇φ against the direct sum over
 //! Rotation's. The precision a level needs follows the FMM's tolerance ε, not its degree or
 //! κ_l: iprec 2 stays within 1.05× Rotation's on every level and case for
-//! 10⁻⁶ ≤ ε ≤ 10⁻³ ([`PLANE_WAVE_MIN_TOLERANCE`]) and misses it from ε = 10⁻⁷ (up to 5.4×);
-//! iprec 1 misses it from ε = 10⁻³ (up to 1.15× on one level alone, 1.95× at 10⁻⁴); iprec 3
+//! 10⁻⁶ ≤ ε ≤ 10⁻³ ([`PLANE_WAVE_MIN_TOLERANCE`]) and misses it from ε = 10⁻⁷ (up to 5.4×
+//! there, 77× at 10⁻⁸); iprec 1 misses it from ε = 10⁻³ (up to 1.15× on one level alone,
+//! 3.6× at 10⁻⁴); iprec 3
 //! holds on most levels at 10⁻⁷ and 10⁻⁸ but not on the deep levels of the clustered trees
 //! (κ_l ≤ 0.08: 1.12× at 10⁻⁷, 1.76× at 10⁻⁸ on one level alone), where its degree-p
 //! waves err on the truncated multipole's tail (CH6.1c's degree study). So

@@ -11,7 +11,8 @@
 # kD = 500), `between` (the scan at ε = 1e-4, 1e-5, 1e-7 on the smaller trees), `verify`
 # (CH3.1c's matrix and `between`'s cases with `--m2l rotation,planewave`, the rule),
 # `verify-large` (the same on the large cases) and `ranks` (the rule's checksum at 1 × 6,
-# 2 × 3 and 3 × 2 ranks × threads). Accuracy only, nothing timed for a gate: no quiet gate.
+# 2 × 3 and 3 × 2 ranks × threads, under a 30-minute timeout). Accuracy only, nothing
+# timed for a gate: no quiet gate. `scan-large` needs more than 24 GB (the report's §7).
 # One rank × THREADS threads (default 6), BLAS threads 1; each launch's output in
 # <out-dir>/<stage>-<name>.md, a line per launch in <out-dir>/runs.log.
 set -u
@@ -86,7 +87,7 @@ for stage in "$@"; do
             for split in "1 6" "2 3" "3 2"; do
                 read -r n t <<< "$split"
                 # shellcheck disable=SC2086
-                launch "ranks-$n" $M -n "$n" "$X" --workload w1 --kd 30,100 \
+                launch "ranks-$n" timeout 1800 $M -n "$n" "$X" --workload w1 --kd 30,100 \
                     --eps 1e-3,1e-6 --threads "$t" --m2l planewave
             done
             ;;

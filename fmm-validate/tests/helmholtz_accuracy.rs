@@ -14,7 +14,8 @@
 //! degree Rotation's checksum, above every degree Batched on every level with tables. The
 //! exponential M2L (Helmholtz CH6.1e): under the precision rule within
 //! [`PLANE_WAVE_RATIO`] of Rotation's errors on small cases of CH3.1c's matrix, each level's
-//! precision in the row, within ε at 1 and 2 threads and on one rank.
+//! precision in the row, within ε at 1 and 2 threads and on one rank, and Rotation's output
+//! below the rule's tolerance.
 //!
 //! One test initialises MPI (at `Funneled`); it passes on any number of ranks, each check
 //! on every rank or on none.
@@ -27,6 +28,7 @@ use nd_fmm_exec::helmholtz::{
     WavenumberKind, auto_m2l_mul_add, s7_degree,
 };
 use nd_fmm_exec::operator::Isa;
+use nd_fmm_tables::helmholtz::plane_wave::merge::precision_for_tolerance;
 use nd_fmm_validate::SplitMix64;
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::helmholtz_accuracy::{
@@ -213,11 +215,11 @@ fn check_auto(world: &SimpleCommunicator) {
 const PLANE_WAVE_RATIO: f64 = 1.1;
 
 /// The exponential M2L under the precision rule on small cases of CH3.1c's matrix (W1 at
-/// kD = 10 at ε = 10⁻³, 10⁻⁶ and, in release builds, 10⁻⁸; W4's clusters at N = 2,000,
-/// complex k, real charges, ε = 10⁻³):
-/// φ and ∇φ within [`PLANE_WAVE_RATIO`] of Rotation's errors, the row's precisions the
-/// rule's on the levels with waves, and named precisions as named; at ε = 10⁻⁶ also
-/// `check_fmm`'s checks.
+/// kD = 10 at ε = 10⁻³, 10⁻⁶ and 10⁻⁸; W4's clusters at N = 2,000, complex k, real
+/// charges, ε = 10⁻³): φ and ∇φ within [`PLANE_WAVE_RATIO`] of Rotation's errors, the row's
+/// precisions the rule's (`precision_for_tolerance` of ε on every level with waves), and
+/// named precisions as named; at ε = 10⁻⁶ also `check_fmm`'s checks. Below the rule's
+/// tolerance (ε = 10⁻⁸) no level has waves and the output is Rotation's (the checksum).
 fn check_plane_wave(world: &SimpleCommunicator) {
     let clusters = Workload::W4 {
         distribution: Distribution::Clusters,
@@ -229,10 +231,6 @@ fn check_plane_wave(world: &SimpleCommunicator) {
         (Workload::W1, (10.0, 0.0), 1e-8),
         (clusters, (10.0, 1.0), 1e-3),
     ] {
-        // Debug builds leave out iprec 3's tables at p = 24.
-        if cfg!(debug_assertions) && eps < 1e-6 {
-            continue;
-        }
         let mut case = Case::new(workload, k, Degrees::Tolerance(eps));
         if let Workload::W4 { .. } = workload {
             case.charges = ChargeKind::Real;
@@ -244,19 +242,34 @@ fn check_plane_wave(world: &SimpleCommunicator) {
         case.m2l = HelmholtzM2l::PlaneWave;
         let row = run(&case, &problem, &oracle, 1, world).expect("the FMM runs");
         assert_eq!(row.m2l, HelmholtzM2l::PlaneWave);
+        for (l, precision) in row.plane_wave.iter().enumerate() {
+            assert_eq!(row.dense_levels[l], precision.is_some(), "level {l}");
+        }
+        let Some(want) = precision_for_tolerance(eps) else {
+            // Below the rule's tolerance: Rotation on every level, bit for bit.
+            assert!(row.plane_wave.iter().all(Option::is_none), "ε = {eps}");
+            assert_eq!(
+                row.checksum, rotation.checksum,
+                "ε = {eps}: Rotation's output"
+            );
+            continue;
+        };
         assert!(
             row.plane_wave.iter().any(Option::is_some),
             "{workload:?} at ε = {eps}: a level with waves, {:?}",
             row.plane_wave
         );
-        for (l, precision) in row.plane_wave.iter().enumerate() {
-            assert_eq!(row.dense_levels[l], precision.is_some(), "level {l}");
-        }
+        assert!(
+            row.plane_wave.iter().flatten().all(|&q| q == want),
+            "{workload:?} at ε = {eps}: the rule's precision, {:?}",
+            row.plane_wave
+        );
         let (all, reference) = (row.errors.last().unwrap(), rotation.errors.last().unwrap());
         for j in 0..2 {
             assert!(
                 all[j] <= PLANE_WAVE_RATIO * reference[j],
-                "{workload:?} at ε = {eps}, precisions {:?}: errors {all:?} against Rotation's                  {reference:?}",
+                "{workload:?} at ε = {eps}, precisions {:?}: errors {all:?} against \
+                 Rotation's {reference:?}",
                 row.plane_wave
             );
         }
