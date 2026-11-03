@@ -432,6 +432,21 @@ impl<T: RealScalar> PlaneWaveLevel<T> {
         4 * self.orders
     }
 
+    /// The bytes of the tables: the nodes and the α angles in f64, the cos, sin, factor
+    /// and frame tables in T.
+    pub fn bytes(&self) -> usize {
+        let f64s =
+            2 * (self.lambda.len() + self.t.len()) + self.alpha_cos.len() + self.alpha_sin.len();
+        let ts = self.cos.len()
+            + self.sin.len()
+            + self.out_re.len()
+            + self.out_im.len()
+            + self.in_re.len()
+            + self.in_im.len()
+            + self.frames.iter().map(Vec::len).sum::<usize>();
+        f64s * size_of::<f64>() + ts * size_of::<T>()
+    }
+
     /// The scratch of [`m2l`](Self::m2l) and [`waves_of`](Self::waves_of).
     pub fn scratch(&self) -> PlaneWaveLevelScratch<T> {
         let (n, w) = (2 * Layout::new(self.p).len(), self.wave_len());
