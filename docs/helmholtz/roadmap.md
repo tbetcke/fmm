@@ -9,7 +9,8 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status: **H3 closed (2026-11-02, `docs/helmholtz/gates/H3.md`).** The RCR FMM on every
 level meets ε against FMM3D on all 57 case × ε points of CH3.6. HR, H0, H1 and H2 are still
-open. Next: H6 by the priority list (D6), starting with CH0.4.
+open. 2026-11-03: CH0.4 (S4, the plane-wave quadratures) done, its three sign-offs taken.
+Next: CH6.1 by the priority list (D6), once CH0.4 is merged.
 
 ## How `/next-task` reads this file
 
@@ -160,7 +161,8 @@ D7, D10, D11, D12) put to the user.
   for the product, FFTW and rustfft for P from 34 to 262 on smooth and power-of-two grids;
   `rlst::fftw::version()` per machine; D7 proposed per machine. *Needs:* CHR.4.
   *Machines:* locust, Kathleen. *Sign-off:* D7.
-- [ ] **CH0.4 S4: plane-wave quadratures per k w_l.** *Done when:* how FMM3D obtains them;
+- [x] **CH0.4 S4: plane-wave quadratures per k w_l.** Report:
+  `spikes/pw-quadrature/SPIKE_REPORT.md`. *Done when:* how FMM3D obtains them;
   a generator or table for this library with its accuracy over the k w_l of low-frequency
   levels. *Needs:* –.
 - [ ] **CH0.5 S5: cubek-fft for the φ step.** *Done when:* f64 accuracy against the product
@@ -505,8 +507,12 @@ at any kD.
 **Gate:** the exponential M2L adopted where it wins, or kept opt-in (D8).
 
 - [ ] **CH6.1 The §3.14 machinery generalised.** Six directions, per-level quadratures,
-  merge and shift; opt-in. *Done when:* errors within about 1.1× Rotation's. *Needs:* CH0.4,
-  CH3.1, D6.
+  merge and shift; opt-in. The quadratures as S4 recommends, CH0.4's sign-offs 1 and 2
+  taken on 2026-11-03 (`spikes/pw-quadrature/SPIKE_REPORT.md` §6): FMM3D's tables for
+  iprec 1 to 3 extracted with NIST's notice, the α counts chosen by measurement (FMM3D's
+  miss the stated error at the region's corner), the S4 generator as the tests' trusted
+  path. *Done when:* errors
+  within about 1.1× Rotation's. *Needs:* CH0.4, CH3.1, D6.
 - [ ] **CH6.2 Measured.** Against Rotation and the table-based strategies on the three
   machines, and against `hfmm3d`'s exponential M2L. *Done when:* per-level accuracy and time
   beside FMM3D's on the same problems; D8 proposed. *Needs:* CH6.1, CH1.4.

@@ -3030,6 +3030,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nd-fmm-spike-pw-quadrature"
+version = "0.0.0"
+dependencies = [
+ "nd-fmm-spike-plane-wave",
+ "num-complex",
+ "rayon",
+]
+
+[[package]]
 name = "nd-fmm-spike-radial"
 version = "0.0.0"
 dependencies = [
