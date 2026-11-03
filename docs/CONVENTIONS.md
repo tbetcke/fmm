@@ -1643,6 +1643,96 @@ a_n^m E^m_{n',n+1} = a_{n-1}^m E^m_{n',n-1} - a_{n'}^m E^m_{n'+1,n} + a_{n'-1}^m
   independent check (Helmholtz CH1.2c, signed off 2026-10-30). Every table is checked in
   the weights of both directions; the acceptance measure is the FMM-weighted error.
 
+### Exponential M2L
+
+The plane-wave M2L of §3.14 for the Helmholtz family on low-frequency levels (Helmholtz
+CH6.1c; proposal §5.3), unversioned, as §3.14: an approximate operator beside the RCR M2L
+above, whose input is a stored multipole and whose output is added to a stored local.
+`nd_fmm_tables::helmholtz::plane_wave` implements it and its tests check it against RCR
+on every V offset; `tools/fixtures/check_3_15_plane_wave.py` checks the identities below
+in mpmath.
+
+- **Units.** On a level the stored coefficients work in half-widths (k̂ = k r_l, a box
+  represents r_l φ̃, as the tables of §3.12). The waves work in box widths u = v/2, with
+  κ = k w_l = 2k̂ and, for complex λ and t = √(λ² + κ²), the unit vector
+  ŝ = (t cos α, t sin α, iλ)/κ (ŝ·ŝ = 1, complex):
+
+```math
+e^{i\kappa\hat{\mathbf s}\cdot\mathbf u} = e^{-\lambda u_z + i t (u_x\cos\alpha + u_y\sin\alpha)}
+```
+
+- **The quadrature** is a level's (λₖ, wₖ, Nₖ, Fₖ), FMM3D's tables at the domain of κ
+  (`nd_fmm_tables::helmholtz::plane_wave::quadrature`, Helmholtz CH6.1a, the counts its own)
+  or `nd_fmm_ref`'s generator (CH6.1b), with
+  e^{iκ|u|}/|u| ≈ Σₖ (wₖ/Nₖ) Σ_{j<Nₖ} e^{iκŝₖⱼ·u}, αⱼ = 2πj/Nₖ, on 1 ≤ u_z ≤ 4,
+  |u_x|, |u_y| ≤ 4: a V pair whose offset along its direction is 2 or 3 boxes, as in §3.14.
+  Its error is absolute, in box widths.
+- **The representation.** e^{iκ|u|}/|u| = iκ h₀(κ|u|), and the solid harmonics of
+  ∇/(iκ) (Hobson's theorem) give, for u_z > 0,
+
+```math
+h_n(\kappa|\mathbf u|)\, Y_n^m(\hat{\mathbf u}) = \frac{1}{i^{n+1}\kappa}
+\int_\Gamma d\lambda\, \frac{1}{2\pi}\int_0^{2\pi} d\alpha\; Y_n^m(\hat{\mathbf s})\,
+e^{i\kappa\hat{\mathbf s}\cdot\mathbf u}
+```
+
+  with Y_n^m(ŝ) the real harmonics continued to complex ŝ as polynomials:
+  Y_n^{±m}(ŝ) = κ⁻ⁿ c_{nm} 𝒫̄_n^m(iλ, t; κ²) {cos mα, sin mα}, where
+  c_{nm} = √((2 − δ_{m0})(2n + 1)/(4π)) and 𝒫̄_n^m(z, ρ; r²) = rⁿ P̄_n^m(z/r) is the solid
+  form of the normalised Legendre function of "Angular basis", a polynomial in z, ρ and r²
+  (its recursion in `nd_fmm_tables::helmholtz::plane_wave::pair::harmonic_factors`). On the
+  target side, e^{iκŝ·u} = 4π Σₙ iⁿ jₙ(κ|u|) Σₘ Y_n^m(ŝ) Y_n^m(û).
+- **The factors.** With the stored form M = e^β sⁿ M̂ and L̂ = e^β sⁿ L of "Radial
+  functions and scaling", and sⁿ folded into the arguments (homogeneity), node k has
+
+```math
+P_k(n, m) = i^{-n}\, c_{nm}\, \bar{\mathcal P}_n^m\!\left(\tfrac{s}{\kappa}\, i\lambda_k,\ \tfrac{s}{\kappa}\, t_k;\ s^2\right),
+```
+
+  finite as κ → 0 (|s/κ| = √3/2 on levels with s < 1).
+- **Up waves** (target above the source) of a stored multipole of degree p represent its
+  r_l φ̃: r_l φ̃(c + w_l u) = Σₖ Σⱼ X(λₖ, αⱼ) e^{iκŝₖⱼ·u}, with Fₖ' = min(Fₖ, p) and
+
+```math
+X(\lambda_k, \alpha_j) = 2\pi e^{\beta}\, \frac{w_k}{N_k} \sum_{m=0}^{F_k'}
+\big[A_k(m) \cos m\alpha_j + B_k(m) \sin m\alpha_j\big], \quad
+A_k(m) = \sum_{n=m}^{p} P_k(n, m)\, \hat M_n^{+m}, \quad
+B_k(m) = \sum_{n=m}^{p} P_k(n, m)\, \hat M_n^{-m}
+```
+
+  (the constant is 4π ik̂/(iκ) = 2π). **Down waves** (target below, e^{+λ u_z}: ŝ_z = −iλ/κ)
+  take (−1)^{n−m} P_k(n, m). All Nₖ values of a node are complex: the real basis has no
+  conjugate symmetry to halve them, unlike §3.14. They are stored as the W = Σₖ Nₖ real
+  parts, then the W imaginary parts, node k's at Σ_{l<k} N_l.
+- **Shifts** by d (box widths, from the waves' centre to the new centre, in the
+  direction's frame) multiply node (k, j) by
+  T_{kj}(d) = e^{∓λₖ d_z + i tₖ (d_x cos αⱼ + d_y sin αⱼ)} (− up, + down), and compose
+  exactly, T(d₁) T(d₂) = T(d₁ + d₂).
+- **Waves to local.** From the incoming waves V at the target's centre, for
+  0 ≤ m ≤ min(Fₖ', n),
+
+```math
+\hat L_n^{+m} \mathrel{+}= 4\pi e^{\beta} (-1)^n P_k(n, m) \sum_{j<N_k} V(\lambda_k, \alpha_j)\cos m\alpha_j,
+\qquad \hat L_n^{-m} \text{ the same with } \sin m\alpha_j,
+```
+
+  with (−1)^{n−m} more for down waves (iⁿ = (−1)ⁿ i⁻ⁿ, so one table serves both
+  conversions). Since Re λₖ ≥ Im κ on both node maps and d_z ≥ 2, the shift's
+  |e^{−λₖ d_z}| ≤ e^{−2 Im κ} offsets the two e^β = e^{(√3/2) Im κ}, as e^{2β − Im(k)|t|} ≤ 1
+  does for RCR.
+- **Directions and frames** are §3.14's: the six directions, the frames 0, 1, 2 with their
+  rotations Q, and a pair's direction. The multipole goes into frame f by Oⁿ(Q) per degree
+  and the local back by Oⁿ(Q)ᵀ ("Rotations": the basis is orthonormal, so the K and S of
+  §3.14 do not appear). Merge and shift (Helmholtz CH6.1d) follows §3.14's geometry with
+  these conversions and shifts.
+- **The degree.** The chain is exact per degree, but the quadrature represents the waves of
+  a degree-p multipole of in-box charges to its error only where p resolves the multipole:
+  at lower p the waves of the truncated multipole are a truncated series in λ, and the
+  quadrature errs on its tail (more for the finer precisions, whose nodes reach larger λ).
+  The pairing of a level's degree and quadrature is therefore not fixed here; CH6.1d
+  chooses it by measurement (Helmholtz CH6.1c's degree study,
+  docs/helmholtz/tasks/CH6.1c.md).
+
 ### Signatures
 
 Reserved. The high-frequency levels' signatures are fixed by their tasks (S6 in CH0.6,

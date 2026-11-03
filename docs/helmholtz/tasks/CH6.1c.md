@@ -53,15 +53,17 @@ r_l φ̃ = 4π ik̂ Σ M hₙ Y, so the constant is 4π ik̂/(iκ) = 2π):
   with 𝒫ₙᵐ(z, ρ) the solid associated Legendre polynomial (r² = z² + ρ² = κ²), a
   polynomial in iλ, t and κ², finite as κ → 0; the per-node factor
   Pₖ(n, m) = i⁻ⁿ (s/κ)ⁿ cₙₘ 𝒫ₙᵐ(iλₖ, tₖ) (s/κ has modulus √3/2 on low-frequency levels).
-- **Up waves** (target above) of a stored multipole, the stored waves X̂ = e^{−β} X:
-  X̂(λₖ, αⱼ) = 2π (wₖ/Nₖ) Σ_{0≤m≤min(Fₖ, p)} [Aₖ(m) cos mαⱼ + Bₖ(m) sin mαⱼ],
+- **Up waves** (target above) of a stored multipole (changed in the implementation from
+  the X̂ = e^{−β} X first planned: the waves represent r_l φ̃ itself, with e^β on each
+  conversion, so that no factor e^{2β}, up to e^{65}, leaves a later f32's range):
+  X(λₖ, αⱼ) = 2π e^β (wₖ/Nₖ) Σ_{0≤m≤min(Fₖ, p)} [Aₖ(m) cos mαⱼ + Bₖ(m) sin mαⱼ],
   Aₖ(m) = Σₙ Pₖ(n, m) M̂ₙ^{+m}, Bₖ(m) = Σₙ Pₖ(n, m) M̂ₙ^{−m}; **down waves** with
   (−1)ⁿ⁻ᵐ Pₖ(n, m). All Nₖ nodes complex (no conjugate symmetry, unlike §3.14).
 - **Shift** by d (box widths, the direction's frame): e^{∓λₖ d_z + itₖ(d_x cos αⱼ + d_y sin αⱼ)}.
-- **Waves to local**: L̂ₙ^{+m} += 4π e^{2β} (−1)ⁿ Pₖ(n, m) Σⱼ V cos mαⱼ, slot −m with sin,
+- **Waves to local**: L̂ₙ^{+m} += 4π e^β (−1)ⁿ Pₖ(n, m) Σⱼ V cos mαⱼ, slot −m with sin,
   m ≤ min(Fₖ, n); down with (−1)ⁿ⁻ᵐ more. (iⁿ = (−1)ⁿ i⁻ⁿ, so one table serves both.)
-  e^{2β} with |e^{−λₖ d_z}| ≤ e^{−Im κ d_z}, d_z ≥ 2 (Re λₖ ≥ Im κ on both node maps) and
-  2β = √3 Im κ keeps the product ≤ 1, as RCR's e^{2β − Im(k)|t|}.
+  The two e^β with |e^{−λₖ d_z}| ≤ e^{−Im κ d_z}, d_z ≥ 2 (Re λₖ ≥ Im κ on both node maps)
+  and 2β = √3 Im κ keep the product ≤ 1, as RCR's e^{2β − Im(k)|t|}.
 - **Frames**: §3.14's three, the multipole into frame f by Oⁿ(Q) per degree and the local
   back by Oⁿ(Q)ᵀ (orthonormal, so no K or S as in §3.14); Oⁿ from `CubeTransforms`
   (R_x(π/2) and R_y(−π/2) are cube elements).
@@ -110,10 +112,14 @@ In `fmm-tables/tests/helmholtz/plane_wave_pair.rs`, f64, one thread:
    generator), at every one of the 316 offsets along `Direction::of` and along the
    merge-and-shift direction of each child (`PlaneWaveTables::pair_direction`'s rule).
    Cases: real k and complex k (Re, Im > 0, a strongly damped one), levels with κ_l from
-   about 0.3 to 40 (four or more levels, several domains), iprec 1–3 at degrees that
-   meet them (S7/CH3.3 scale: about 6, 12, 18), one plane (real k, real charges) and two
-   planes. Debug: a sample (each case on one or two levels); release, ignored: all.
-   Generated quadratures: two κ in debug, the rest ignored.
+   about 0.3 to 40 (four or more levels, several domains), iprec 1–3, one plane (real k,
+   real charges) and two planes. Debug: a sample (each case on one or two levels);
+   release, ignored: all. Generated quadratures: two κ in debug, the rest ignored.
+   **Degrees** (settled in the implementation, "Results"): degrees that resolve the
+   multipoles of the charges, base 20, 36, 60 for iprec 1–3 (ε 10⁻³, 10⁻⁶, 10⁻⁹ for the
+   generator) plus ⌈0.9 |κ|⌉; below them the chain's difference from RCR also holds the
+   quadrature's error on the truncated multipole's tail, which the ignored
+   `degree_study` records against the direct sum.
 3. **Composition**: shift(d₁) then shift(d₂) equals shift(d₁ + d₂) to rounding; a pair
    along a direction and its frame rotation round trip (Oⁿ orthogonal).
 4. **Panics**: an offset not 2 or 3 boxes along the direction; wrong slice lengths.
@@ -142,10 +148,90 @@ None (no timing, no MPI, no Laplace path).
   the quadrature's error (Fₖ is set for a source's reach √2/2); the tests use P2M of
   in-box charges, as the FMM does.
 
+## Results
+
+Release, the M6, f64, one thread, 2026-11-03. Every V offset (316) along `Direction::of`
+and every direction merge and shift gives it; the error measure of the test module (the
+largest |Δ| at the 27 target points, box widths, per unit Σ|q|).
+
+**Against RCR at the resolved degrees** (`against_rcr_with_fmm3ds_quadratures_every_level`,
+`…_generated_quadratures_every_level`; 36 s together): k̂₀ = 80 (real), 80 + 12i and
+20 + 40i, levels 2–9 (κ_l from 40, level 2 of k̂₀ = 80, down to 0.08 + 0.16i, level 9 of
+20 + 40i), iprec 1–3, one and two planes, 96 cases: the worst 0.76× the stated error
+(iprec 1, κ = 10 + 20i, p = 41), the median 0.14×, against the bound 3×. Generated at
+ε = 10⁻³, 10⁻⁶, 10⁻⁹ on levels 2, 5 and 9: the worst 0.07 ε. Debug sample 11 s.
+
+**The degree** (`degree_study`; sources at the box's corners, centre and four seeded
+points, every third offset along `Direction::of`, two planes). The chain is exact per
+degree, but its waves of a degree-p multipole are a truncated series in λ; the
+quadrature, accurate for the full series, errs on the truncation's tail, the more the
+larger the λ its nodes reach (iprec 3 more than 2). Below the resolving degree the chain
+therefore departs from RCR by more than the stated error (55× at κ = 1.25, iprec 2, p = 14
+in the first debug run; 8,935× at iprec 3, p = 20), and against the direct sum it errs
+above RCR at the degrees an FMM uses. Chain − direct and RCR − direct, box widths:
+
+| κ | p | RCR − direct | chain − direct, iprec 1 | iprec 2 | iprec 3 |
+| --- | --- | --- | --- | --- | --- |
+| 10.0000+0.0000i | 8 | 1.9e-1 | 1.9e-1 | 1.9e-1 | 1.9e-1 |
+| 10.0000+0.0000i | 12 | 6.7e-3 | 6.7e-3 | 6.7e-3 | 6.7e-3 |
+| 10.0000+0.0000i | 16 | 6.2e-5 | 6.1e-5 | 6.2e-5 | 6.2e-5 |
+| 10.0000+0.0000i | 20 | 1.2e-6 | 2.8e-6 | 1.2e-6 | 1.2e-6 |
+| 10.0000+0.0000i | 24 | 7.5e-8 | 2.8e-6 | 1.6e-7 | 3.0e-7 |
+| 10.0000+0.0000i | 28 | 4.1e-9 | 2.8e-6 | 4.9e-9 | 5.5e-8 |
+| 10.0000+0.0000i | 32 | 2.1e-10 | 2.8e-6 | 4.5e-9 | 2.2e-9 |
+| 10.0000+0.0000i | 40 | 1.8e-12 | 2.8e-6 | 4.5e-9 | 5.9e-12 |
+| 1.2500+0.0000i | 8 | 2.5e-4 | 2.6e-4 | 2.5e-4 | 2.5e-4 |
+| 1.2500+0.0000i | 12 | 1.8e-5 | 2.4e-5 | 1.8e-5 | 1.8e-5 |
+| 1.2500+0.0000i | 16 | 7.8e-7 | 1.6e-5 | 2.1e-6 | 7.9e-7 |
+| 1.2500+0.0000i | 20 | 8.7e-8 | 1.6e-5 | 1.7e-7 | 5.1e-7 |
+| 1.2500+0.0000i | 24 | 1.2e-8 | 1.6e-5 | 1.8e-8 | 1.7e-7 |
+| 1.2500+0.0000i | 28 | 8.5e-10 | 1.6e-5 | 1.8e-8 | 1.2e-8 |
+| 1.2500+0.0000i | 32 | 5.1e-11 | 1.6e-5 | 1.8e-8 | 3.2e-10 |
+| 1.2500+0.0000i | 40 | 6.3e-13 | 1.6e-5 | 1.8e-8 | 1.5e-11 |
+| 0.3125+0.0000i | 8 | 2.4e-4 | 2.4e-4 | 2.4e-4 | 2.4e-4 |
+| 0.3125+0.0000i | 12 | 1.6e-5 | 3.0e-5 | 1.6e-5 | 1.6e-5 |
+| 0.3125+0.0000i | 16 | 8.1e-7 | 3.0e-5 | 1.1e-6 | 8.1e-7 |
+| 0.3125+0.0000i | 20 | 7.3e-8 | 3.0e-5 | 1.0e-7 | 6.6e-7 |
+| 0.3125+0.0000i | 24 | 9.9e-9 | 3.0e-5 | 1.5e-8 | 2.5e-7 |
+| 0.3125+0.0000i | 28 | 7.1e-10 | 3.0e-5 | 1.5e-8 | 1.8e-8 |
+| 0.3125+0.0000i | 32 | 5.2e-11 | 3.0e-5 | 1.5e-8 | 5.3e-10 |
+| 0.3125+0.0000i | 40 | 5.5e-13 | 3.0e-5 | 1.5e-8 | 9.2e-12 |
+| 1.2500+0.1875i | 8 | 2.5e-4 | 2.6e-4 | 2.5e-4 | 2.5e-4 |
+| 1.2500+0.1875i | 12 | 1.8e-5 | 2.7e-5 | 1.8e-5 | 1.8e-5 |
+| 1.2500+0.1875i | 16 | 7.8e-7 | 2.2e-5 | 2.0e-6 | 7.8e-7 |
+| 1.2500+0.1875i | 20 | 8.7e-8 | 2.2e-5 | 2.0e-7 | 5.3e-7 |
+| 1.2500+0.1875i | 24 | 1.2e-8 | 2.2e-5 | 1.1e-8 | 1.8e-7 |
+| 1.2500+0.1875i | 28 | 8.5e-10 | 2.2e-5 | 1.1e-8 | 1.3e-8 |
+| 1.2500+0.1875i | 32 | 5.1e-11 | 2.2e-5 | 1.1e-8 | 4.0e-10 |
+| 1.2500+0.1875i | 40 | 6.3e-13 | 2.2e-5 | 1.1e-8 | 7.1e-12 |
+| 0.6250+1.2500i | 8 | 2.1e-4 | 2.1e-4 | 2.1e-4 | 2.1e-4 |
+| 0.6250+1.2500i | 12 | 1.5e-5 | 1.4e-5 | 1.4e-5 | 1.5e-5 |
+| 0.6250+1.2500i | 16 | 6.3e-7 | 4.8e-6 | 9.5e-7 | 6.3e-7 |
+| 0.6250+1.2500i | 20 | 6.8e-8 | 4.9e-6 | 8.8e-8 | 6.2e-7 |
+| 0.6250+1.2500i | 24 | 1.0e-8 | 4.9e-6 | 5.7e-9 | 2.2e-7 |
+| 0.6250+1.2500i | 28 | 7.4e-10 | 4.9e-6 | 5.7e-9 | 1.4e-8 |
+| 0.6250+1.2500i | 32 | 5.0e-11 | 4.9e-6 | 5.7e-9 | 5.3e-10 |
+| 0.6250+1.2500i | 40 | 5.9e-13 | 4.9e-6 | 5.7e-9 | 5.6e-12 |
+
+Stated errors (iprec 1, 2, 3): κ = 10.0000+0.0000i: 4.9e-5, 7.2e-8, 7.9e-11; κ = 1.2500+0.0000i: 5.0e-5, 9.4e-8, 6.1e-11; κ = 0.3125+0.0000i: 7.0e-5, 5.3e-8, 4.5e-11; κ = 1.2500+0.1875i: 7.7e-5, 7.4e-8, 5.9e-11; κ = 0.6250+1.2500i: 5.4e-5, 8.5e-8, 4.4e-11.
+
+Reading: for each degree some precision keeps the chain within about 1–2.3× RCR against
+the direct sum in D1's range of errors (iprec 3 at p ≤ 16, iprec 2 at p = 20–24), but
+`hwts3e`'s rule, the precision from ε alone, pairs ε = 10⁻⁸ (iprec 3) with p ≈ 24 at
+14–25× RCR's error. Above p ≈ 28 (RCR below 10⁻⁹, finer than D1's 10⁻⁸) neither precision
+reaches RCR's error. The pairing of a level's quadrature with its degree is CH6.1d's to
+choose by measurement against CH6.1's criterion (open question 3).
+
 ## Pending runs
 
-None yet.
+None.
 
 ## Open questions
 
-- Sign-off: the §3.15 "Exponential M2L" subsection (the convention).
+1. Sign-off: the §3.15 "Exponential M2L" subsection (the convention), as written.
+2. The acceptance as tested: within the quadrature's error of RCR (0.76× the stated error,
+   0.07 ε generated) on every offset, at degrees that resolve the multipole; below them the
+   difference holds the tail's error (the degree study). Accept as CH6.1c's criterion met?
+3. CH6.1d: choose each level's quadrature with its degree (p_l, ε) by measurement, as
+   §3.14's `nodes_for_degree` does for Laplace, rather than `hwts3e`'s precision from ε
+   alone (recorded in CH6.1d's roadmap line).
