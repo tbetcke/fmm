@@ -87,13 +87,14 @@ No Laplace code, no dependency, no `nd-fmm-plan` change.
 - `fmm-tables/tests/helmholtz/plane_wave_pair.rs` (new, in the `helmholtz` test binary).
 - `docs/CONVENTIONS.md`: a §3.15 subsection "Exponential M2L" (unversioned, as §3.14):
   box widths and κ in the level units, the representation of hₙ Yₙᵐ, the factors, the
-  stored waves X̂, the shift, waves to local, the directions, frames and Oⁿ, the region
+  waves X (r_l φ̃ itself), the shift, waves to local, the directions, frames and Oⁿ, the region
   and which quadratures (CH6.1a's tables and counts, CH6.1b's generator as the tests'
   path); merge and shift left to CH6.1d (by §3.14's geometry). **For sign-off.**
 - `tools/fixtures/check_3_15_plane_wave.py` (new, mpmath): the representation of hₙ Yₙᵐ
   up and down, the plane-wave expansion at complex ŝ, and P2M → waves → shift → local →
   L2P in stored form against the direct kernel, for real, complex and imaginary κ, by a
-  numerical λ integral (no quadrature table), for n ≤ 6.
+  numerical λ integral (no quadrature table), for n ≤ 5 (the representation) and n ≤ 40
+  (the expansion and the one-wave local).
 - `fmm-tables/CLAUDE.md`: the module in the purpose list and its rule.
 
 ## Tests that prove it
@@ -101,7 +102,8 @@ No Laplace code, no dependency, no `nd-fmm-plan` change.
 In `fmm-tables/tests/helmholtz/plane_wave_pair.rs`, f64, one thread:
 
 1. **The factors**: Pₖ(n, m) against `nd_fmm_math::orthonormal::harmonics` at real
-   directions (λ = −iκ cos θ, t = κ sin θ gives a real ŝ), to 1e-13 relative.
+   directions (λ = −iκ cos θ, t = κ sin θ gives a real ŝ), to 1e-13 (absolute, at
+   |x| ≤ √3/2).
 2. **The pair against RCR** (the acceptance): per level the sources are point charges at
    the source box's corners, centre and seeded points with seeded complex charges (real
    for one plane), P2M in stored form (`nd_fmm_ref::helmholtz::leaf::p2m`), one multipole
@@ -122,7 +124,10 @@ In `fmm-tables/tests/helmholtz/plane_wave_pair.rs`, f64, one thread:
    `degree_study` records against the direct sum.
 3. **Composition**: shift(d₁) then shift(d₂) equals shift(d₁ + d₂) to rounding; a pair
    along a direction and its frame rotation round trip (Oⁿ orthogonal).
-4. **Panics**: an offset not 2 or 3 boxes along the direction; wrong slice lengths.
+4. **Panics**: an offset not 2 or 3 boxes along the direction; a multipole or local of
+   another degree; a quadrature of another level.
+5. `rotation_blocks` against `CubeTransforms`' blocks, bit for bit (a unit test in
+   `helmholtz::classes`).
 
 The 3× bounds are set after the first measurements, which the PR reports; any bound
 beyond what CH6.1a/CH6.1b measured is a question, not a quiet change.
@@ -161,6 +166,14 @@ largest |Δ| at the 27 target points, box widths, per unit Σ|q|).
 (iprec 1, κ = 10 + 20i, p = 41), the median 0.14×, against the bound 3×. Generated at
 ε = 10⁻³, 10⁻⁶, 10⁻⁹ on levels 2, 5 and 9: the worst 0.07 ε. Debug sample 11 s.
 
+**The convention's check** (`uv run tools/fixtures/check_3_15_plane_wave.py`, mpmath at 30
+digits, about eight minutes on the M6): all passed. The representation of hₙ Yₙᵐ up and down
+(n ≤ 5, every m) for κ = 1.3, 0.9 + 0.4i and 1.1i within 2.8·10⁻²⁹ relative; the solid
+recursion against the real harmonics 7.9·10⁻³¹; the plane-wave expansion at complex ŝ
+3.5·10⁻³⁰; the waves of a stored multipole against its r_l φ̃, and one up and one down wave
+to a stored local by L2P, within 2.4·10⁻³⁰ (a first run, with the λ integral cut at t = 40,
+missed the representation at κ = 1.1i by 3.6·10⁻¹¹, the truncated tail; cut at 160 since).
+
 **The degree** (`degree_study`; sources at the box's corners, centre and four seeded
 points, every third offset along `Direction::of`, two planes). The chain is exact per
 degree, but its waves of a degree-p multipole are a truncated series in λ; the
@@ -168,7 +181,9 @@ quadrature, accurate for the full series, errs on the truncation's tail, the mor
 larger the λ its nodes reach (iprec 3 more than 2). Below the resolving degree the chain
 therefore departs from RCR by more than the stated error (55× at κ = 1.25, iprec 2, p = 14
 in the first debug run; 8,935× at iprec 3, p = 20), and against the direct sum it errs
-above RCR at the degrees an FMM uses. Chain − direct and RCR − direct, box widths:
+above RCR at the degrees an FMM uses (the 55× is from the first debug run, at a degree the
+study does not include). Chain − direct and RCR − direct, box widths, the study's rows
+arranged by precision into columns:
 
 | κ | p | RCR − direct | chain − direct, iprec 1 | iprec 2 | iprec 3 |
 | --- | --- | --- | --- | --- | --- |

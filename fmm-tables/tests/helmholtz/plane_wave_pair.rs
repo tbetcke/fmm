@@ -535,7 +535,7 @@ fn a_pair_off_the_region_is_refused() {
 }
 
 #[test]
-#[should_panic(expected = "κ")]
+#[should_panic(expected = "is not 2k̂")]
 fn a_quadrature_of_another_level_is_refused() {
     let q = Quadrature::new(C::new(2.0, 0.0), Precision::Iprec1).expect("κ in the tables");
     let _ = PlaneWaveLevel::<f64>::new(C::new(2.0, 0.0), 4, &q);
@@ -626,5 +626,42 @@ fn study(k_root: C, level: usize, p: usize, precision: Precision) {
         worst[0],
         worst[1],
         worst[2]
+    );
+}
+
+#[test]
+#[should_panic(expected = "multipole length")]
+fn a_multipole_of_another_degree_is_refused() {
+    let k_hat = C::new(1.0, 0.0);
+    let q = Quadrature::new(2.0 * k_hat, Precision::Iprec1).expect("κ in the tables");
+    let waves = PlaneWaveLevel::<f64>::new(k_hat, 4, &q);
+    let mut scratch = waves.scratch();
+    let mut local = vec![0.0; 2 * Layout::new(4).len()];
+    // Offset index 158 is (0, 0, 2); a multipole of degree 5.
+    waves.m2l(
+        158,
+        Direction::Up,
+        &vec![0.0; 2 * Layout::new(5).len()],
+        2,
+        &mut local,
+        &mut scratch,
+    );
+}
+
+#[test]
+#[should_panic(expected = "local lengths")]
+fn a_local_of_another_degree_is_refused() {
+    let k_hat = C::new(1.0, 0.0);
+    let q = Quadrature::new(2.0 * k_hat, Precision::Iprec1).expect("κ in the tables");
+    let waves = PlaneWaveLevel::<f64>::new(k_hat, 4, &q);
+    let mut scratch = waves.scratch();
+    let mut local = vec![0.0; 2 * Layout::new(4).len() - 1];
+    waves.m2l(
+        158,
+        Direction::Up,
+        &vec![0.0; 2 * Layout::new(4).len()],
+        2,
+        &mut local,
+        &mut scratch,
     );
 }

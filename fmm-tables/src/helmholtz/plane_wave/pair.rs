@@ -749,8 +749,8 @@ impl<T: RealScalar> PlaneWaveLevel<T> {
     /// # Panics
     ///
     /// If `offset_index` ≥ 316, the offset is not 2 or 3 boxes along `direction`, a slice
-    /// does not hold its planes of (p + 1)² values, or `scratch` was not made by these
-    /// tables.
+    /// does not hold its planes of (p + 1)² values, or `scratch` has other lengths than
+    /// [`scratch`](Self::scratch) makes.
     pub fn m2l(
         &self,
         offset_index: usize,

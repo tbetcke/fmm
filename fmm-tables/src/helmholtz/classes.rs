@@ -644,3 +644,33 @@ impl<T: RealScalar> ClassScratch<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `rotation_blocks` gives `CubeTransforms`' blocks of every rotation that moves the
+    /// z-axis, bit for bit.
+    #[test]
+    fn rotation_blocks_are_cube_transforms_blocks() {
+        let p = 7;
+        let transforms = CubeTransforms::<f64>::new(p);
+        for element in SignedPermutation::all() {
+            if !element.is_proper() || fixes_z_axis(element) {
+                continue;
+            }
+            let blocks = rotation_blocks(p, element);
+            for n in 0..=p {
+                let expected = transforms.block(element, n);
+                assert!(
+                    blocks[block_range(n)]
+                        .iter()
+                        .zip(&expected)
+                        .all(|(a, b)| a.to_bits() == b.to_bits()),
+                    "element {}, degree {n}",
+                    element.index()
+                );
+            }
+        }
+    }
+}

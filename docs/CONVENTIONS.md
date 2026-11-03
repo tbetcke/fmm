@@ -1718,8 +1718,8 @@ B_k(m) = \sum_{n=m}^{p} P_k(n, m)\, \hat M_n^{-m}
 
   with (−1)^{n−m} more for down waves (iⁿ = (−1)ⁿ i⁻ⁿ, so one table serves both
   conversions). Since Re λₖ ≥ Im κ on both node maps and d_z ≥ 2, the shift's
-  |e^{−λₖ d_z}| ≤ e^{−2 Im κ} offsets the two e^β = e^{(√3/2) Im κ}, as e^{2β − Im(k)|t|} ≤ 1
-  does for RCR.
+  |e^{−λₖ d_z}| ≤ e^{−2 Im κ} outweighs the two conversions' factors together,
+  e^{2β} = e^{√3 Im κ}, as e^{2β − Im(k)|t|} ≤ 1 does for RCR.
 - **Directions and frames** are §3.14's: the six directions, the frames 0, 1, 2 with their
   rotations Q, and a pair's direction. The multipole goes into frame f by Oⁿ(Q) per degree
   and the local back by Oⁿ(Q)ᵀ ("Rotations": the basis is orthonormal, so the K and S of
