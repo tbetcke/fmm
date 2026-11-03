@@ -41,7 +41,15 @@
 //! `DENSE_TOLERANCE` of Rotation of the same degrees and the scenario's bound of the direct
 //! sum, 2 threads, pair by pair and the one-rank FMM bit for bit; the rule's
 //! own crossover agreed alike on every rank, a named mode kept, and Auto the builder's
-//! default (every other check names Rotation, its reference).
+//! default (every other check names Rotation, its reference). The exponential M2L
+//! (Helmholtz CH6.1d), `PlaneWave`, on the same two scenarios: each level's precision as
+//! the rule gives it (`nd_fmm_tables::helmholtz::plane_wave::merge::select`), the scenario's
+//! bound of the direct sum with the error's ratio to Rotation's printed (CH6.1e asserts
+//! it), the level call by merge and shift within `PLANE_PAIR_TOLERANCE` of its pair path
+//! (CH6.1c's translation along the merge's direction), 2 threads and the one-rank FMM bit
+//! for bit, vector v of two the one-vector FMM bit for bit, precisions named per level
+//! (Rotation's level call bit for bit where every level names none). In debug builds the
+//! pair path of a tree with waves on several levels runs on the finest level's alone.
 //!
 //! Then vectors (vector v of an FMM of two bit for bit the one-vector FMM, of complex and
 //! of real charges), real charges against complex ones with Im q = 0, and the errors (an
@@ -65,14 +73,16 @@ use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_exec::fmm::{FmmError, SettingsError};
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, Degrees, DensityError, HelmholtzFmm, HelmholtzFmmBuilder,
-    HelmholtzFmmError, HelmholtzM2l, OperatorError, Output, Wavenumber, auto_batched_max_degree,
-    auto_m2l_mul_add,
+    HelmholtzFmmError, HelmholtzM2l, OperatorError, Output, PlaneWavePrecision, Wavenumber,
+    auto_batched_max_degree, auto_m2l_mul_add,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
 use nd_fmm_ref::helmholtz::p2p;
 use nd_fmm_tables::helmholtz::classes::{ClassM2l, CubeTransforms};
 use nd_fmm_tables::helmholtz::dense::DenseM2l;
+use nd_fmm_tables::helmholtz::plane_wave::Precision;
+use nd_fmm_tables::helmholtz::plane_wave::merge::select;
 use nd_octree::PhysicalBox;
 
 type C = Complex<f64>;
@@ -97,6 +107,12 @@ const KERNEL_TOLERANCE: f64 = 1e-13;
 /// operations (Classes also through the cube-group transforms), so rounding (at most
 /// 7.9e-16 for Dense and 2.4e-16 for Classes on the M6), with a margin of about ten.
 const DENSE_TOLERANCE: f64 = 1e-14;
+
+/// The exponential M2L's level call (merge and shift) may differ from its pair path (one
+/// shift per pair, CH6.1c's translation) by this much (relative L2 of φ and of ∇φ over
+/// every rank's targets): the same waves, shifted in two factors and summed in another
+/// order, so rounding (at most 2.0e-16 on the M6), with a margin for other libms.
+const PLANE_PAIR_TOLERANCE: f64 = 1e-14;
 
 /// SplitMix64, uniform in [0, 1).
 struct Rng(u64);
@@ -857,6 +873,146 @@ fn check_auto(scenario: &Scenario, comm: &SimpleCommunicator) {
     }
 }
 
+/// The exponential M2L (module documentation): the rule's precisions, the direct sum and
+/// Rotation's error, the pair path, threads, the one-rank FMM, two vectors and named
+/// precisions.
+fn check_plane_wave(scenario: &Scenario, comm: &SimpleCommunicator) {
+    let start = Instant::now();
+    let rank = comm.rank();
+    let name = format!("{}: PlaneWave", scenario.name);
+    let inputs = Inputs::new(scenario, 1, comm);
+    let kind = scenario.charges;
+    let (fmm, rotation) = run(&builder(scenario), &inputs, kind, comm);
+    let degrees = fmm.degrees().to_vec();
+    drop(fmm);
+    // The domain is the unit cube, r₀ = ½.
+    let k_root = C::new(scenario.k.0, scenario.k.1) * 0.5;
+    let rule = select(k_root, &degrees);
+    let tables = builder(scenario).m2l(HelmholtzM2l::PlaneWave);
+    let (fmm, output) = run(&tables, &inputs, kind, comm);
+    let op = fmm.operator();
+    assert_eq!(op.m2l_choice(), HelmholtzM2l::PlaneWave);
+    for (level, &precision) in rule.iter().enumerate().skip(2) {
+        assert_eq!(op.plane_wave_precision(level), precision, "level {level}");
+        let want = match precision {
+            Some(_) => HelmholtzM2l::PlaneWave,
+            None => HelmholtzM2l::Rotation,
+        };
+        assert_eq!(op.m2l_on(level), want, "{name}, level {level}");
+    }
+    assert!(
+        rule.iter().any(Option::is_some),
+        "{name}: a level with waves"
+    );
+    let bytes = op.plane_wave_bytes();
+    drop(fmm);
+    let (phi, grad) = difference(&output, &rotation, comm);
+    let (error_phi, error_grad) = errors(scenario, &inputs, &output, 0, comm);
+    let (rotation_phi, rotation_grad) = errors(scenario, &inputs, &rotation, 0, comm);
+    if rank == 0 {
+        let ratio = |a: f64, b: f64| if b > 0.0 { a / b } else { 0.0 };
+        println!(
+            "{name} (precisions {rule:?}, {:.1} MB) against the direct sum: φ {error_phi:.2e}, \
+             ∇φ {error_grad:.2e}, {:.3}× and {:.3}× Rotation's; against Rotation φ {phi:.2e}, \
+             ∇φ {grad:.2e}",
+            bytes as f64 / 1e6,
+            ratio(error_phi, rotation_phi),
+            ratio(error_grad, rotation_grad),
+        );
+    }
+    assert!(
+        error_phi < scenario.bound && error_grad < scenario.bound,
+        "{name}: φ {error_phi:.2e}, ∇φ {error_grad:.2e} against the direct sum"
+    );
+    let (_, threaded) = run(&tables.clone().threads(2), &inputs, kind, comm);
+    assert_same(&format!("{name}, 2 threads"), &threaded, &output, comm);
+    check_one_rank(&name, &tables, &inputs, kind, &output, comm);
+
+    // Two vectors: each the one-vector FMM bit for bit.
+    let two = Inputs::new(scenario, 2, comm);
+    let (_, both) = run(&tables.clone().vectors(2), &two, kind, comm);
+    for v in 0..2 {
+        let one = Inputs {
+            sources: two.sources.clone(),
+            targets: two.targets.clone(),
+            charges: vec![two.charges[v].clone()],
+        };
+        let (_, single) = run(&tables, &one, kind, comm);
+        let column = |output: &Output<f64>, v: usize| {
+            let phi = output.potential_of(v);
+            let mut bits: Vec<u64> = phi
+                .re
+                .iter()
+                .chain(phi.im.unwrap_or(&[]))
+                .map(|x| x.to_bits())
+                .collect();
+            if let Some(g) = output.gradient_of(v) {
+                let im = g.im.unwrap_or(&[]);
+                bits.extend(g.re.iter().chain(im).flatten().map(|x| x.to_bits()));
+            }
+            bits
+        };
+        assert!(
+            everywhere(column(&both, v) == column(&single, 0), comm),
+            "{name}: vector {v} of two is not the one-vector FMM bit for bit"
+        );
+    }
+
+    // Named precisions: none on every level is Rotation's level call bit for bit; iprec 1
+    // on the finest level and none above, the finest level alone.
+    let none = tables
+        .clone()
+        .plane_wave_precision(PlaneWavePrecision::PerLevel(vec![None; degrees.len()]));
+    let (fmm, all_rotation) = run(&none, &inputs, kind, comm);
+    assert!((2..degrees.len()).all(|l| fmm.operator().m2l_on(l) == HelmholtzM2l::Rotation));
+    assert_eq!(fmm.operator().plane_wave_bytes(), 0);
+    drop(fmm);
+    assert_same(
+        &format!("{name}, no level named"),
+        &all_rotation,
+        &rotation,
+        comm,
+    );
+    let finest = degrees.len() - 1;
+    let mut named = vec![None; degrees.len()];
+    named[finest] = Some(Precision::Iprec1);
+    let one_level = tables
+        .clone()
+        .plane_wave_precision(PlaneWavePrecision::PerLevel(named));
+    let (fmm, finest_only) = run(&one_level, &inputs, kind, comm);
+    let op = fmm.operator();
+    assert_eq!(op.plane_wave_precision(finest), Some(Precision::Iprec1));
+    assert_eq!(op.m2l_on(finest), HelmholtzM2l::PlaneWave);
+    assert!((2..finest).all(|l| op.m2l_on(l) == HelmholtzM2l::Rotation));
+    drop(fmm);
+    let (error_phi, error_grad) = errors(scenario, &inputs, &finest_only, 0, comm);
+    assert!(
+        error_phi < scenario.bound && error_grad < scenario.bound,
+        "{name}, iprec 1 on the finest level: φ {error_phi:.2e}, ∇φ {error_grad:.2e}"
+    );
+
+    // The pair path: CH6.1c's translation of each pair along the merge's direction, one
+    // conversion per pair. In debug builds of a tree with waves on several levels, on the
+    // finest level's waves alone (its sparse parents; every level took 25 s on the M6).
+    let several = rule.iter().filter(|p| p.is_some()).count() > 1;
+    let (merged, merged_output) = match cfg!(debug_assertions) && several {
+        true => (&one_level, &finest_only),
+        false => (&tables, &output),
+    };
+    let (_, pairs) = run(&merged.clone().pair_calls(true), &inputs, kind, comm);
+    let (phi, grad) = difference(merged_output, &pairs, comm);
+    if rank == 0 {
+        println!("{name}: merge and shift against the pair path φ {phi:.2e}, ∇φ {grad:.2e}");
+    }
+    assert!(
+        phi <= PLANE_PAIR_TOLERANCE && grad <= PLANE_PAIR_TOLERANCE,
+        "{name} against the pair path: φ {phi:e}, ∇φ {grad:e}"
+    );
+    if rank == 0 {
+        println!("{name} checks passed in {:.1?}", start.elapsed());
+    }
+}
+
 /// Two vectors: each bit for bit its one-vector FMM, the second against its direct sum;
 /// and a reused output.
 fn check_vectors(scenario: &Scenario, comm: &SimpleCommunicator) {
@@ -1209,6 +1365,7 @@ fn helmholtz_fmm() {
         check_tables(scenario, HelmholtzM2l::Classes, None, &comm);
         check_tables(scenario, HelmholtzM2l::Batched, Some(&dense), &comm);
         check_auto(scenario, &comm);
+        check_plane_wave(scenario, &comm);
     }
     // Two vectors of complex and of real charges.
     check_vectors(&scenarios()[1], &comm);

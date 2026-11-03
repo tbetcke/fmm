@@ -100,8 +100,8 @@ use thiserror::Error;
 
 use super::{
     C_LEAF, ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DegreeError, Degrees, Densities,
-    DensityError, HelmholtzM2l, HelmholtzOperator, OperatorError, Output, Wavenumber,
-    WavenumberKind, auto_batched_max_degree, min_leaf_level,
+    DensityError, HelmholtzM2l, HelmholtzOperator, OperatorError, Output, PlaneWavePrecision,
+    Wavenumber, WavenumberKind, auto_batched_max_degree, min_leaf_level,
 };
 use crate::fmm::{DEFAULT_MAX_POINTS_PER_LEAF, FmmError, PointSet, SettingsError};
 use crate::geometry::Domain;
@@ -167,6 +167,7 @@ pub struct HelmholtzFmmBuilder {
     dense_budget: usize,
     m2l_mul_add: Option<MulAdd>,
     m2l_max_degree: Option<usize>,
+    plane_wave_precision: PlaneWavePrecision,
     c_leaf: f64,
     p2p: P2pChoice,
     pair_calls: bool,
@@ -195,6 +196,7 @@ impl HelmholtzFmmBuilder {
             dense_budget: DEFAULT_DENSE_BUDGET,
             m2l_mul_add: None,
             m2l_max_degree: None,
+            plane_wave_precision: PlaneWavePrecision::Rule,
             c_leaf: C_LEAF,
             p2p: P2pChoice::Auto,
             pair_calls: false,
@@ -261,7 +263,9 @@ impl HelmholtzFmmBuilder {
     /// [`HelmholtzM2l::Dense`], [`HelmholtzM2l::Classes`], [`HelmholtzM2l::Batched`] and
     /// [`HelmholtzM2l::Auto`] the output agrees with Rotation's to rounding, not bit for bit
     /// (Auto's is Rotation's bit for bit on the levels it leaves to Rotation); Batched's is
-    /// Dense's bit for bit with real multipoles (real k, real charges).
+    /// Dense's bit for bit with real multipoles (real k, real charges). Under
+    /// [`HelmholtzM2l::PlaneWave`] (opt-in) the levels with waves approximate M2L within their
+    /// quadrature's error ([`plane_wave_precision`](Self::plane_wave_precision)).
     pub fn m2l(mut self, choice: HelmholtzM2l) -> Self {
         self.m2l = choice;
         self
@@ -294,6 +298,15 @@ impl HelmholtzFmmBuilder {
     /// chooses the same levels; [`HelmholtzFmm::m2l_max_degree`] reports it.
     pub fn m2l_max_degree(mut self, max_degree: usize) -> Self {
         self.m2l_max_degree = Some(max_degree);
+        self
+    }
+
+    /// The precision of each level's quadrature under [`HelmholtzM2l::PlaneWave`] (default
+    /// [`PlaneWavePrecision::Rule`]; `HelmholtzOperator::with_plane_wave_precision`). The
+    /// rule is a function of k, the domain and the degrees, so every rank chooses alike; a
+    /// list named here must be the same on every rank.
+    pub fn plane_wave_precision(mut self, precision: PlaneWavePrecision) -> Self {
+        self.plane_wave_precision = precision;
         self
     }
 
@@ -479,6 +492,10 @@ impl HelmholtzFmmBuilder {
             as u64;
         let mut max_degree = 0u64;
         comm.all_reduce_into(&local, &mut max_degree, SystemOperation::min());
+        // Under `PlaneWave` the waves of one frame of each level's boxes, own and ghost.
+        let level_boxes: Vec<usize> = (0..plan.index().nlevels())
+            .map(|level| plan.index().len(level))
+            .collect();
         let mut operator = HelmholtzOperator::with_block_budget(
             self.k,
             densities,
@@ -491,7 +508,9 @@ impl HelmholtzFmmBuilder {
         .with_p2p(self.p2p)
         .expect("the P2P kernel's ISA is available (checked in step 1)")
         .with_m2l_max_degree(Some(usize::try_from(max_degree).unwrap_or(usize::MAX)))
-        .with_m2l(self.m2l, self.dense_budget);
+        .with_plane_wave_precision(self.plane_wave_precision.clone())
+        .with_m2l(self.m2l, self.dense_budget)
+        .with_plane_wave_boxes(&level_boxes);
         if let Some(mul_add) = self.m2l_mul_add {
             operator = operator.with_m2l_mul_add(mul_add);
         }

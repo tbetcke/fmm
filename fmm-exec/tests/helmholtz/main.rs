@@ -15,4 +15,5 @@ mod densities;
 mod leaf_rule;
 mod operator;
 mod p2p;
+mod plane_wave;
 mod wavenumber;
