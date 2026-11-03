@@ -22,6 +22,7 @@
 //! | M2L under [`HelmholtzM2l::Dense`] | `nd_fmm_tables::helmholtz::dense::DenseM2l` on the levels whose tables fit the budget, RCR on the others |
 //! | M2L under [`HelmholtzM2l::Classes`] | `nd_fmm_tables::helmholtz::classes::ClassM2l` on the levels whose tables fit the budget, RCR on the others |
 //! | M2L under [`HelmholtzM2l::Batched`] | `nd_fmm_tables::helmholtz::batched::BatchedM2l` by `nd_fmm_simd::MatrixKernel`, block by block, on the levels whose tables fit the budget, RCR on the others |
+//! | M2L under [`HelmholtzM2l::PlaneWave`] | `nd_fmm_tables::helmholtz::plane_wave::merge::PlaneWaveM2l`, merge and shift on the levels with a quadrature, RCR on the others |
 //! | P2L | `nd_fmm_ref::helmholtz::leaf::p2l` in the source leaf's units, at (ĉ(t\|s), r̂(t\|s)) |
 //! | M2P | `nd_fmm_ref::helmholtz::leaf::m2p` in the target leaf's units, at (ĉ(s\|t), r̂(s\|t)) |
 //! | P2P | `nd_fmm_simd::P2pKernel::evaluate_helmholtz` on the ISA of the [`P2pChoice`], or `nd_fmm_ref::helmholtz::p2p::p2p` for [`P2pChoice::Reference`], in the target leaf's units, the sources mapped as ĉ(s\|t) + r̂(s\|t) u |
@@ -125,6 +126,42 @@
 //! settings do, deterministic and rank-invariant alike. `HelmholtzFmmBuilder` agrees the
 //! crossover over the ranks.
 //!
+//! Under [`HelmholtzM2l::PlaneWave`] (Helmholtz CH6.1d; opt-in; CONVENTIONS §3.14, "Merge
+//! and shift", with the conversions and shifts of §3.15, "Exponential M2L") a level runs the
+//! exponential M2L where its [`PlaneWavePrecision`] gives it a quadrature: by the rule
+//! (`nd_fmm_tables::helmholtz::plane_wave::merge::select`, a function of k, the level's
+//! width and its degree; provisional until Helmholtz CH6.1e) or named per level, and only
+//! where κ_l = k w_l lies in the quadrature's tables; RCR on the others. Its level call
+//! restates Laplace's (`crate::operator`, "The plane-wave M2L") without its vector kernels:
+//! for each charge vector and each frame f = 0, 1, 2,
+//!
+//! 1. **outgoing**: the up and down waves of frame f of every box of the level, own and
+//!    ghost (the multipole rotated into the frame by Oⁿ(Q), its modes and the waves, 2W
+//!    reals each, every value complex), the pool splitting the boxes;
+//! 2. **merge and shift**, parent by parent (consecutive boxes with one parent key), the
+//!    pool splitting the level at parent boundaries: the parent's computed children (with
+//!    a V row) and their sources by slot; for the up and then the down direction of f,
+//!    every accumulator whose (geometric) mask holds a computed child sums its slots
+//!    present in ascending order, each source's waves times its source shift, from zero;
+//!    every computed child adds its accumulators in ascending mask order and multiplies the
+//!    sum by its child shift; then each computed child with waves converts its up and then
+//!    its down waves into a local in the frame and adds it, rotated back by Oⁿ(Q)ᵀ.
+//!
+//! Every local receives frame 0, then 1, then 2, each a fixed chain of its parent's
+//! accumulators, which depend on the geometry of the slots alone, so the output is the same
+//! at every thread count and, as Laplace's argument goes, on P ranks the one-rank output
+//! bit for bit. The pair body ([`PairOperator`]) translates each pair by
+//! `PlaneWaveLevel::m2l` along the direction merge and shift gives it
+//! (`PlaneWaveTables::pair_direction` of the offset and the target's child index), which
+//! the level call equals to rounding (its two shift factors are the pair's to rounding).
+//! It approximates M2L within its quadrature's error, so it is not Rotation's output. The
+//! waves buffer holds one frame of the largest level call, 4W reals per box, sized from the
+//! plan by `HelmholtzFmmBuilder` ([`with_plane_wave_boxes`](HelmholtzOperator::with_plane_wave_boxes));
+//! each scratch set holds a level's buffers and the pair scratch of every level with waves;
+//! [`plane_wave_bytes`](HelmholtzOperator::plane_wave_bytes) reports them with the tables.
+//! f64 only (§3.15, "Precision and range"): f32's range is untested (the factors reach
+//! about 10³⁴ at iprec 3).
+//!
 //! # Execution
 //!
 //! The level calls run on the shared drivers of `nd-fmm-exec` (Helmholtz CH2.0, CH3.5),
@@ -132,7 +169,8 @@
 //! ([`HelmholtzOperator::with_pool`]), each thread with its own scratch; the output is the
 //! same at every thread count. The shared batched M2L does not apply (`driver::m2l_block`
 //! assumes Laplace's layout); under [`HelmholtzM2l::Batched`] the M2L level call of a level
-//! with tables runs the operator's own block instead ("M2L"). [`PairOperator`] runs the same
+//! with tables runs the operator's own block instead, and under [`HelmholtzM2l::PlaneWave`]
+//! a level with waves merge and shift ("M2L"). [`PairOperator`] runs the same
 //! bodies pair by pair.
 //!
 //! Yukawa (Re k = 0) is not served: its real path is CH2.1's.
@@ -153,6 +191,8 @@ use nd_fmm_tables::MatrixSet;
 use nd_fmm_tables::helmholtz::batched::BatchedM2l;
 use nd_fmm_tables::helmholtz::classes::{ClassM2l, ClassScratch};
 use nd_fmm_tables::helmholtz::dense::DenseM2l;
+use nd_fmm_tables::helmholtz::plane_wave::Precision;
+use nd_fmm_tables::helmholtz::plane_wave::merge::{PlaneWaveM2l, select};
 use nd_fmm_tables::helmholtz::{DEFAULT_BLOCK_BUDGET, HelmholtzScratch, HelmholtzTables};
 use nd_octree::{MortonKey, morton};
 use rayon::ThreadPool;
@@ -163,6 +203,11 @@ use super::{Densities, LeafScratch, Wavenumber, WavenumberKind};
 use crate::driver::{self, Columns, Execution, HostKernel, debug_check_octant, offset_index};
 use crate::geometry::{Domain, radius, relative_frame};
 use crate::operator::{M2L_BLOCK_TARGETS, P2pChoice};
+
+#[path = "operator_plane_wave.rs"]
+mod plane_wave;
+
+use plane_wave::PlaneScratch;
 
 /// Why [`HelmholtzOperator::new`] refused its inputs.
 #[derive(Clone, Copy, Debug, Error, PartialEq)]
@@ -199,6 +244,12 @@ pub enum HelmholtzM2l {
     /// Dense's matrices in split planes, applied block by block by the column kernel, on the
     /// levels whose tables fit the dense budget, from the finest level up; RCR on the others.
     Batched,
+    /// The exponential M2L by merge and shift (Helmholtz CH6.1d; opt-in) on the levels with
+    /// a quadrature of the [`PlaneWavePrecision`] setting
+    /// ([`with_plane_wave_precision`](HelmholtzOperator::with_plane_wave_precision)), RCR on
+    /// the others. f64 only (CONVENTIONS §3.15, "Precision and range"): in f32 the factors,
+    /// up to about 10³⁴ at iprec 3, are untested and the setting is not refused.
+    PlaneWave,
     /// The rule per level (Helmholtz CH3.2d): Batched, in [`auto_m2l_mul_add`]'s mode (fused
     /// on every vector ISA) unless one is named,
     /// on the levels of degree at most the crossover of the machine class
@@ -207,6 +258,24 @@ pub enum HelmholtzM2l {
     /// Helmholtz CH3.2d.
     #[default]
     Auto,
+}
+
+/// The precision of each level's quadrature under [`HelmholtzM2l::PlaneWave`] (Helmholtz
+/// CH6.1d; module documentation, "M2L").
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum PlaneWavePrecision {
+    /// `nd_fmm_tables::helmholtz::plane_wave::merge::select`: on each level with a V list
+    /// whose κ_l = k w_l lies in the quadrature's tables, the precision
+    /// `precision_for_degree` gives its degree (provisional, Helmholtz CH6.1c's degree
+    /// study; CH6.1e measures the rule), none elsewhere. A function of k, the level's width
+    /// and its degree only (proposal §2, constraint 9).
+    #[default]
+    Rule,
+    /// The precision of each level by index, `None` for RCR, for the measurements and the
+    /// tests. Entries for levels 0 and 1 (no V list) and beyond the tree are ignored, and
+    /// levels beyond the list take none; a level whose κ_l lies outside the tables runs RCR
+    /// whatever it names.
+    PerLevel(Vec<Option<Precision>>),
 }
 
 /// The crossover degree of [`HelmholtzM2l::Auto`] (Helmholtz CH3.2d; the operator module
@@ -251,6 +320,9 @@ pub const DEFAULT_DENSE_BUDGET: usize = 1 << 30;
 pub struct HelmholtzOperator<T: SimdScalar> {
     kernel: Kernel<T>,
     execution: Execution<Scratch<T>>,
+    /// Under [`HelmholtzM2l::PlaneWave`], the waves of one frame of every box of a level
+    /// call, up and down.
+    waves: Vec<T>,
 }
 
 /// What the bodies read: the path, the levels and the tables.
@@ -276,6 +348,11 @@ struct Kernel<T: SimdScalar> {
     classes: Option<ClassM2l<T>>,
     /// The batched M2L tables of the levels that have them, under [`HelmholtzM2l::Batched`].
     batched: Option<BatchedM2l<T>>,
+    /// The quadratures' precisions under [`HelmholtzM2l::PlaneWave`].
+    plane_wave_precision: PlaneWavePrecision,
+    /// The exponential M2L's tables of the levels that have them, under
+    /// [`HelmholtzM2l::PlaneWave`].
+    plane_waves: Option<PlaneWaveM2l<T>>,
     /// The batched M2L's column kernel, on the P2P kernel's ISA (scalar for the reference).
     matrix: MatrixKernel<T>,
     /// The P2P kernel of `nd-fmm-simd`, or `None` for the reference.
@@ -299,6 +376,8 @@ struct Scratch<T: SimdScalar> {
     widened: Vec<T>,
     /// The batched M2L's packing buffer and column lists (sized for the batched levels).
     columns: Columns<T>,
+    /// The exponential M2L's buffers, under [`HelmholtzM2l::PlaneWave`].
+    plane: Option<PlaneScratch<T>>,
 }
 
 impl<T: SimdScalar> HelmholtzOperator<T> {
@@ -377,6 +456,8 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             dense: None,
             classes: None,
             batched: None,
+            plane_wave_precision: PlaneWavePrecision::Rule,
+            plane_waves: None,
             matrix: MatrixKernel::detect(MulAdd::Separate),
             p2p: Some(P2pKernel::detect()),
         };
@@ -385,7 +466,11 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             pool: None,
             serial: false,
         };
-        Ok(Self { kernel, execution })
+        Ok(Self {
+            kernel,
+            execution,
+            waves: Vec::new(),
+        })
     }
 
     /// Runs every level call in `pool`, each target on one of its threads, with one
@@ -441,6 +526,55 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         (self.kernel.m2l == HelmholtzM2l::Auto).then(|| self.kernel.auto_max_degree())
     }
 
+    /// Takes each level's quadrature under [`HelmholtzM2l::PlaneWave`] by `precision`
+    /// ([`PlaneWavePrecision::Rule`] by default), before or after
+    /// [`with_m2l`](Self::with_m2l); the other settings ignore it. Under PlaneWave the levels'
+    /// tables are built again.
+    pub fn with_plane_wave_precision(mut self, precision: PlaneWavePrecision) -> Self {
+        self.kernel.plane_wave_precision = precision;
+        if self.kernel.m2l == HelmholtzM2l::PlaneWave {
+            self.select_tables();
+        }
+        self
+    }
+
+    /// The precision of `level`'s quadrature under [`HelmholtzM2l::PlaneWave`], `None` where
+    /// the level runs RCR (and under the other settings).
+    pub fn plane_wave_precision(&self, level: usize) -> Option<Precision> {
+        self.kernel.plane_wave_level(level).map(|l| l.precision())
+    }
+
+    /// Sizes the waves buffer of the exponential M2L for levels of `boxes[l]` boxes (each
+    /// level's own and ghost boxes), so that no level call grows it; nothing unless
+    /// [`HelmholtzM2l::PlaneWave`]. `HelmholtzFmmBuilder` sizes it from the plan.
+    pub fn with_plane_wave_boxes(mut self, boxes: &[usize]) -> Self {
+        let len = (0..self.kernel.tables.nlevels())
+            .filter_map(|l| {
+                Some(boxes.get(l)? * 2 * self.kernel.plane_wave_level(l)?.tables().wave_len())
+            })
+            .max()
+            .unwrap_or(0);
+        self.waves = vec![T::zero(); len];
+        self
+    }
+
+    /// The bytes the exponential M2L holds: its tables, the waves buffer and every scratch
+    /// set's buffers (0 unless [`HelmholtzM2l::PlaneWave`] gives a level waves).
+    pub fn plane_wave_bytes(&self) -> usize {
+        let tables = self
+            .kernel
+            .plane_waves
+            .as_ref()
+            .map_or(0, PlaneWaveM2l::bytes);
+        let scratch: usize = self
+            .execution
+            .scratch
+            .iter()
+            .filter_map(|s| s.lock().ok()?.plane.as_ref().map(PlaneScratch::bytes))
+            .sum();
+        tables + self.waves.len() * size_of::<T>() + scratch
+    }
+
     /// Builds the M2L tables of the setting, the budget and (under Auto) the crossover, and
     /// the scratch sized for them.
     fn select_tables(&mut self) {
@@ -468,8 +602,25 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             let levels = BatchedM2l::<T>::select_within(&degrees, dense_budget, max_degree);
             BatchedM2l::build(k_root, &degrees, &levels)
         });
-        // The class scratch and the batched columns are sized by their tables' largest
-        // degree.
+        kernel.plane_waves = (choice == HelmholtzM2l::PlaneWave).then(|| {
+            let precisions: Vec<Option<Precision>> = match &kernel.plane_wave_precision {
+                PlaneWavePrecision::Rule => select(k_root, &degrees),
+                PlaneWavePrecision::PerLevel(named) => (0..degrees.len())
+                    .map(|l| named.get(l).copied().flatten().filter(|_| l >= 2))
+                    .collect(),
+            };
+            PlaneWaveM2l::build(k_root, &degrees, &precisions)
+        });
+        // No level with waves: nothing to hold.
+        kernel.plane_waves = kernel
+            .plane_waves
+            .take()
+            .filter(|m2l| (0..m2l.nlevels()).any(|l| m2l.level(l).is_some()));
+        if kernel.plane_waves.is_none() {
+            self.waves = Vec::new();
+        }
+        // The class scratch, the batched columns and the exponential M2L's buffers are sized
+        // by their tables' largest level.
         for scratch in &mut self.execution.scratch {
             *scratch.get_mut().expect("a scratch set is never poisoned") = Scratch::new(kernel);
         }
@@ -482,10 +633,14 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
 
     /// The M2L that runs on `level`: [`HelmholtzM2l::Dense`], [`HelmholtzM2l::Classes`] or
     /// [`HelmholtzM2l::Batched`] where the level has dense, class or batched tables (under
-    /// [`HelmholtzM2l::Auto`] the levels the rule gives Batched), [`HelmholtzM2l::Rotation`]
-    /// everywhere else (levels 0 and 1 have no M2L).
+    /// [`HelmholtzM2l::Auto`] the levels the rule gives Batched), [`HelmholtzM2l::PlaneWave`]
+    /// where it has a quadrature, [`HelmholtzM2l::Rotation`] everywhere else (levels 0 and 1
+    /// have no M2L).
     pub fn m2l_on(&self, level: usize) -> HelmholtzM2l {
         let kernel = &self.kernel;
+        if kernel.plane_wave_level(level).is_some() {
+            return HelmholtzM2l::PlaneWave;
+        }
         match (&kernel.dense, &kernel.classes, &kernel.batched) {
             (Some(dense), _, _) if dense.is_dense(level) => HelmholtzM2l::Dense,
             (_, Some(classes), _) if classes.is_class(level) => HelmholtzM2l::Classes,
@@ -629,6 +784,7 @@ impl<T: SimdScalar> Scratch<T> {
                 sources: Vec::with_capacity(pairs),
                 targets: Vec::with_capacity(pairs),
             },
+            plane: kernel.plane_waves.as_ref().map(PlaneScratch::new),
         }
     }
 }
@@ -756,9 +912,18 @@ impl<T: SimdScalar> Kernel<T> {
             .l2l(level, o, parent, child, planes, m, &mut s.tables);
     }
 
-    fn m2l(&self, level: usize, d: usize, multipole: &[T], local: &mut [T], s: &mut Scratch<T>) {
+    fn m2l(
+        &self,
+        (level, d, child): (usize, usize, usize),
+        multipole: &[T],
+        local: &mut [T],
+        s: &mut Scratch<T>,
+    ) {
         let planes = self.densities.multipole_planes();
         let m = self.densities.vectors();
+        if let Some(merge) = self.plane_wave_level(level) {
+            return self.plane_wave_pair(merge, (level, d, child), multipole, local, s);
+        }
         match (&self.dense, &self.classes, self.batched(level)) {
             (Some(dense), _, _) if dense.is_dense(level) => {
                 dense.m2l(level, d, multipole, planes, local, m);
@@ -1005,12 +1170,12 @@ impl<T: SimdScalar> HostKernel<T> for Kernel<T> {
         &self,
         level: usize,
         d: usize,
-        _child: usize,
+        child: usize,
         multipole: &[T],
         local: &mut [T],
         s: &mut Scratch<T>,
     ) {
-        Kernel::m2l(self, level, d, multipole, local, s);
+        Kernel::m2l(self, (level, d, child), multipole, local, s);
     }
 
     #[inline]
@@ -1114,9 +1279,13 @@ impl<T: SimdScalar + Equivalence + Default> FmmOperator for HelmholtzOperator<T>
         driver::m2m(&self.kernel, &mut self.execution, batch);
     }
 
-    /// Under [`HelmholtzM2l::Batched`] block by block on the levels with tables (module
+    /// Under [`HelmholtzM2l::Batched`] block by block on the levels with tables, under
+    /// [`HelmholtzM2l::PlaneWave`] by merge and shift on the levels with waves (module
     /// documentation, "M2L"), target by target elsewhere.
     fn m2l(&mut self, batch: M2l<'_, T>) {
+        if self.kernel.plane_wave_level(batch.level).is_some() {
+            return self.plane_wave_m2l(batch);
+        }
         match self.kernel.batched(batch.level) {
             Some(batched) => batched.m2l(&mut self.execution, batch, |s| &mut s.columns),
             None => driver::m2l(&self.kernel, &mut self.execution, batch),
@@ -1188,9 +1357,9 @@ impl<T: SimdScalar + Equivalence + Default> PairOperator for HelmholtzOperator<T
             "the offset index of a V-list pair disagrees with its keys"
         );
         let level = morton::level(target) as usize;
+        let child = morton::child_index(target);
         self.kernel.m2l(
-            level,
-            offset,
+            (level, offset, child),
             source_multipole,
             target_local,
             self.execution.first(),

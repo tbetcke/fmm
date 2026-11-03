@@ -14,8 +14,11 @@ CH6.1 split into a/b/c, CH6.1a (the quadratures in `nd-fmm-tables`) done; CH6.1b
 again into the generator (CH6.1b, done: S4's generator in `nd-fmm-ref`) and the pair chain
 (CH6.1c), merge and shift renamed CH6.1d. CH6.1c (the pair chain, CONVENTIONS §3.15
 "Exponential M2L" for sign-off) done; its degree study hands CH6.1d the pairing of a
-level's quadrature with its degree. Next: CH6.1d (merge and shift in the FMM), once
-CH6.1c is merged (its three sign-offs taken 2026-11-03).
+level's quadrature with its degree. CH6.1c merged
+(#181); CH6.1d split into merge and shift in the FMM (CH6.1d) and the quadrature per level
+by measurement (CH6.1e). 2026-11-03: CH6.1d done (`HelmholtzM2l::PlaneWave`, merge and shift
+with a provisional precision rule). Next: CH6.1e (the rule by the FMM's errors on CH3.1c's
+cases, CH6.1's 1.1× Rotation), once CH6.1d is merged.
 
 ## How `/next-task` reads this file
 
@@ -52,7 +55,7 @@ low-frequency and intermediate trees at tight ε across most of D1's range (gate
 CH3.6 (#170) and H3.G.
 
 1. CH0.4 S4: quadratures of the Helmholtz exponential M2L per k w_l
-2. CH6.1 The §3.14 machinery generalised (needs CH0.4): CH6.1a, CH6.1b, CH6.1c, CH6.1d
+2. CH6.1 The §3.14 machinery generalised (needs CH0.4): CH6.1a, CH6.1b, CH6.1c, CH6.1d, CH6.1e
 3. CH6.2 Measured (*Machines:* locust, Kathleen; *Sign-off:* D8)
 
 Off the list, in file order: CH0.6, CH0.8b, CH0.9, CH0.5 and H0.G; CHR.3 and HR.G; CH1.3d
@@ -521,8 +524,9 @@ at any kD.
   sub-tasks, each one reviewable PR (about 1.5 MB of NIST's tables, the factors of the
   orthonormal basis with a convention for sign-off, and merge and shift in the FMM do not
   fit one), and the second again the same day into the generator (CH6.1b) and the pair
-  chain (CH6.1c), about 1,800 lines in two crates together; CH6.1 is done, and CH6.2
-  runnable on its side, when all four are:
+  chain (CH6.1c), about 1,800 lines in two crates together, and the fourth again into
+  merge and shift (CH6.1d) and the quadrature per level by measurement (CH6.1e); CH6.1 is
+  done, and CH6.2 runnable on its side, when all five are:
 - [x] **CH6.1a The quadratures.** Record: `docs/helmholtz/tasks/CH6.1a.md`;
   `nd_fmm_tables::helmholtz::plane_wave::quadrature`, tests
   `fmm-tables/tests/helmholtz/plane_wave_quadrature.rs`. The kernel within 1.50× and the
@@ -565,26 +569,46 @@ at any kD.
   for sign-off. *Done when:* every V offset on several levels against RCR within the
   quadrature's error, with FMM3D's and with CH6.1b's generated quadratures, real and
   complex k, one and two multipole planes. *Needs:* CH6.1b. *Sign-off:* the convention.
-- [ ] **CH6.1d Merge and shift in the FMM.** `HelmholtzM2l::PlaneWave` (opt-in): the level
-  call by merge and shift (CONVENTIONS §3.14's geometry) on the levels the tables cover,
-  Rotation on the others; the pair body CH6.1c's translation. *Done when:* CH6.1's: the
-  FMM's errors within about 1.1× Rotation's on CH3.1c's cases; merge and shift against
-  the pair path to rounding; deterministic at every thread count and on P ranks the
-  one-rank FMM bit for bit. Also (CH6.1c's degree study): each level's quadrature chosen
-  with its degree p_l and ε by measurement, as §3.14's `nodes_for_degree` for Laplace, not
-  by `hwts3e`'s precision from ε alone (which pairs ε = 10⁻⁸ with iprec 3, at the FMM's
-  p ≈ 24 14–25× RCR's error on the study's charges); the rule a function of k, w_l, p_l
-  and ε (constraint 9). Signed off 2026-11-03 (CH6.1c, question 3: as recommended): per
+- [x] **CH6.1d Merge and shift in the FMM.** Record: `docs/helmholtz/tasks/CH6.1d.md`;
+  `nd_fmm_tables::helmholtz::plane_wave::merge`, `HelmholtzM2l::PlaneWave`,
+  `PlaneWavePrecision`, the level call `fmm-exec/src/helmholtz/operator_plane_wave.rs`, tests
+  `fmm-tables/tests/helmholtz/plane_wave_merge.rs`, `fmm-exec/tests/helmholtz/plane_wave.rs`
+  and `check_plane_wave` in `fmm-exec/tests/helmholtz_fmm.rs`. Merge and shift is its pair
+  path to 2.0e-16 (relative L2), the FMM's errors 1.000× and 1.013× Rotation's on the two
+  test scenarios (CH6.1e measures CH3.1c's cases). `HelmholtzM2l::PlaneWave` (opt-in): the level
+  call by merge and shift (CONVENTIONS §3.14's geometry, §3.15's conversions and shifts) on
+  the levels that have a quadrature, Rotation on the others; the pair body CH6.1c's
+  translation along the merge's direction. The precision per level a setting: a rule of
+  p_l (provisional, from CH6.1c's degree study: the coarsest precision whose chain stayed
+  within 1.1× RCR's error against the direct sum at every κ of the study, iprec 1 to
+  p = 8, 2 to 12, 3 to 16, none above), or named per level for the measurements; a
+  level whose κ lies outside the tables, or whose degree the rule leaves without a
+  precision, keeps Rotation. *Done when:* merge and shift's shift factors the pair's
+  to rounding on every direction, slot and child; the FMM with PlaneWave against the
+  direct sum and against its pair path to rounding; deterministic at every thread count
+  and on P ranks the one-rank FMM bit for bit; vector v the one-vector FMM bit for bit;
+  the errors against Rotation's reported, not yet asserted (CH6.1e). *Needs:* CH6.1c.
+- [ ] **CH6.1e The quadrature per level, measured.** Split from CH6.1d on 2026-11-03 (the
+  level call and the measurement with its report do not fit one PR, about 2,000 lines in
+  three crates together). CH6.1's acceptance: the FMM's errors within about 1.1×
+  Rotation's on CH3.1c's cases with each level's quadrature chosen with its degree p_l
+  and ε by measurement, as §3.14's `nodes_for_degree` for Laplace, not by `hwts3e`'s
+  precision from ε alone (which pairs ε = 10⁻⁸ with iprec 3, at the FMM's p ≈ 24 14–25×
+  RCR's error on CH6.1c's study's charges); the rule a function of k, w_l, p_l and ε
+  (constraint 9). Signed off 2026-11-03 (CH6.1c, question 3: as recommended): per
   level the coarsest precision whose chain error against the direct sum stays within about
   1.1× RCR's; a level where none does keeps Rotation, and the report names those levels
   (the study suggests 1.3–2.3× at p = 20–24 on worst-case charges, so H6's gain may shrink
-  to the levels at p ≤ 16). *Needs:* CH6.1c.
+  to the levels at p ≤ 16). *Done when:* the rule's constants set by the FMM's errors with
+  each precision forced per level on CH3.1c's cases; the FMM within about 1.1× Rotation's
+  error on every case, asserted in the tests; the report names the levels left to Rotation.
+  *Needs:* CH6.1d.
 - [ ] **CH6.2 Measured.** Against Rotation and the table-based strategies on the three
   machines, and against `hfmm3d`'s exponential M2L. *Done when:* per-level accuracy and time
   beside FMM3D's on the same problems; D8 proposed. Also (CH6.1a): CH6.1a's counts resolve
   the region's corner ρ = 4√2 at 1.31–1.51× FMM3D's waves where Im κ < π/2; whether a pair
   ever needs the corner at the FMM's ε, so fewer waves would do, is measured here.
-  *Needs:* CH6.1 (a–d), CH1.4.
+  *Needs:* CH6.1 (a–e), CH1.4.
   *Machines:* locust, Kathleen. *Sign-off:* D8.
 - [ ] **H6.G Gate.** `/milestone-gate H6`. *Needs:* every task above.
 

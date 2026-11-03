@@ -12,7 +12,8 @@ CH3.2b (`helmholtz::classes`, the class M2L tables and the cube-group transforms
 CH3.2c (`helmholtz::batched`, Dense's matrices in split planes for the batched M2L); Helmholtz
 CH6.1a (`helmholtz::plane_wave::quadrature`, the quadratures of the exponential M2L); Helmholtz
 CH6.1c (`helmholtz::plane_wave::pair`, the exponential M2L's conversions, shifts and pair
-translation on one level, CONVENTIONS §3.15 "Exponential M2L").
+translation on one level, CONVENTIONS §3.15 "Exponential M2L"); Helmholtz CH6.1d
+(`helmholtz::plane_wave::merge`, the merge's shifts and each level's quadrature).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -105,6 +106,22 @@ translation on one level, CONVENTIONS §3.15 "Exponential M2L").
   `degree_study` records (docs/helmholtz/tasks/CH6.1c.md) and CH6.1d's choice of the
   quadrature per degree must answer. Every product and sum rounded apart (no `mul_add`
   yet: no SIMD kernel restates these steps). Not cached.
+  `helmholtz::plane_wave::merge` (Helmholtz CH6.1d; its module docs): `MergeLevel`, a
+  level's `PlaneWaveLevel` with the merge's shift factors of CONVENTIONS §3.14's geometry
+  (`crate::plane_wave::geometry`, read only): the source shifts slot → parent, one table
+  per distinct (rotated offset, up or down), and the child shifts parent → child, each
+  `shift_factors`' 2W reals; `PlaneWaveM2l`, a tree's levels; `shift` and `add`, the
+  merge's complex steps (rounded apart, `shift` is `shift_add` from zero bit for bit but
+  for the sign of a zero);
+  `precision_for_degree` and `select`, each level's precision from its degree where κ_l
+  lies in the tables (a function of k, w_l and p_l: constraint 9). The rule's constants
+  are provisional (CH6.1c's degree study: iprec 1 to p = 8, 2 to 12, 3 to 16, none
+  above); CH6.1e sets them by the FMM's errors, and a change to them changes the FMM's
+  errors under `HelmholtzM2l::PlaneWave`, so rerun nd-fmm-exec's `tests/helmholtz_fmm.rs`.
+  `tests/helmholtz/plane_wave_merge.rs` checks slot shift × child shift against the pair's
+  shift on every direction, slot and child within 1e-12 relative (7.5e-14 measured on the
+  M6), the shared tables bit for bit each slot's own, and the rule. Not cached
+  (about 50 ms a level in debug builds).
 - Matrices are column-major with output = A · input. Every application accumulates
   (+=), and none applies 1/(4π) (§3.1).
 - Builds are serial and deterministic: the same inputs give bit-identical tables and

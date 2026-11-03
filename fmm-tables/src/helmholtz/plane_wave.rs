@@ -19,11 +19,13 @@
 //!
 //! Helmholtz CH6.1a gives the quadratures ([`quadrature`]); CH6.1c the conversions between
 //! expansions and waves, the shifts and the pair translation of one level ([`pair`],
-//! CONVENTIONS §3.15, "Exponential M2L"); merge and shift follows in CH6.1d
-//! (docs/helmholtz/roadmap.md).
+//! CONVENTIONS §3.15, "Exponential M2L"); CH6.1d the merge's shifts and each level's
+//! quadrature from its degree ([`merge`]), which `nd-fmm-exec`'s level call applies.
 
+pub mod merge;
 pub mod pair;
 pub mod quadrature;
 
+pub use merge::{MergeLevel, PlaneWaveM2l};
 pub use pair::{PlaneWaveLevel, PlaneWaveLevelScratch};
 pub use quadrature::{Precision, Quadrature};
