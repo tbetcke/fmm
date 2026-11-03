@@ -104,6 +104,46 @@ quadrature and are named in the report if cut for time or memory (W3 at kD = 100
   report names those levels.
 - Risk: levels' extra errors add; the per-level share must leave the sum within 1.1×.
 
+## Results
+
+The M6, release, 1 rank × 6 threads, 2026-11-03 (report
+`fmm-validate/results/helmholtz-ch6-1e.md`; a loaded machine, so the times are indicative).
+
+- **The scan**: each level with a quadrature at iprec 1, 2 and 3 alone on CH3.1c's matrix
+  and at ε = 10⁻⁴, 10⁻⁵, 10⁻⁷ on the smaller trees. The precision a level needs follows ε,
+  not p or κ_l: iprec 1 misses 1.1× from 10⁻³ (1.145× on the W4 cube), iprec 2 holds
+  (0.967–1.044×) from 10⁻³ to 10⁻⁶ and misses from 10⁻⁷, iprec 3 misses on the clustered
+  trees' deep levels at 10⁻⁷ (1.116×) and 10⁻⁸ (1.30× Plummer, 1.76× clusters; κ_l ≤
+  0.08), with deviations to 0.68× elsewhere on those trees.
+- **The rule** (as built): iprec 2 for ε ≥ 10⁻⁶, none below (`precision_for_tolerance`); the
+  builder passes `Degrees::Tolerance`'s ε (`with_plane_wave_tolerance`); named degrees
+  without a tolerance take iprec 2 to p = 15, the calibrated plateau at 10⁻⁶
+  (`precision_for_degree`). The plan's "function of κ_l, p_l and, if needed, ε": ε is
+  needed, p_l only without it, κ_l only for the tables' reach.
+- **Verification**: 87 cases (60 of CH3.1c's 62, the two left out W3 at kD = 100 and W1 at
+  kD = 500 at 10⁻⁸, where the rule runs Rotation; and 27 in-between) within 1.070×
+  Rotation's error (φ, Plummer at kD = 1, 10⁻⁶); every level at ε < 10⁻⁶ left to Rotation.
+  Checksums equal at 1 × 6, 2 × 3 and 3 × 2 ranks × threads on four W1 cases.
+- **Tests**: `check_plane_wave` of `tests/helmholtz_fmm.rs` asserts 1.1× (1.000× on both
+  scenarios); `tests/helmholtz_accuracy.rs` asserts 1.1× on W1 at kD = 10 (10⁻³, 10⁻⁶) and W4's
+  clusters, and Rotation's checksum at 10⁻⁸ (no waves); the rule's tests in both crates.
+- **Self-review** (a subagent): one blocking defect fixed (the harness test asserted waves at
+  10⁻⁸, where the rule takes none; its release run would have failed); numbers in
+  `merge.rs`'s docs and the report corrected; a timeout around the script's `mpirun`.
+- **Memory**: the waves buffer takes 9.0–11.8 GB under the rule on the large cases and
+  22.9 GB for W3's level 6 at iprec 3, which ran the M6 out of memory during the large scan
+  (report §7); the large scan stopped there, W1 at kD = 500 not scanned. Bounding it is in
+  CH6.2's roadmap line.
+- **Debug cost** (a loaded M6): `tests/helmholtz_accuracy.rs` 36 s (26 s before);
+  `check_plane_wave` 47 s of `tests/helmholtz_fmm.rs` (27 s in CH6.1d; iprec 2 in place of
+  iprec 1 on the clusters at p = 8); `tests/helmholtz/plane_wave.rs` 15 s.
+
 ## Pending runs
 
+None.
+
 ## Open questions
+
+For sign-off in the PR: the reading of "every case" and "asserted in the tests"; the rule
+(Rotation below 10⁻⁶) against iprec 3 with a κ guard; the follow-up CH6.1f (quadratures for
+ε < 10⁻⁶) and its place before H6.G.

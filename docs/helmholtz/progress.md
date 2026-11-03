@@ -2003,3 +2003,55 @@ request, using this template:
   - f32 under `PlaneWave` is untested and not refused (factors to about 10³⁴): D3 and
     CH7.1 (§3.15 "Precision and range", f64 only until then).
 
+
+## 2026-11-03: CH6.1e The quadrature per level, measured
+- Done:
+  - The fifth and last task of CH6.1 (priority list item 2): the precision rule of
+    `HelmholtzM2l::PlaneWave` by the FMM's own errors. `nd_fmm_tables::helmholtz::plane_wave::merge`:
+    `precision_for_tolerance` (iprec 2 for ε ≥ `PLANE_WAVE_MIN_TOLERANCE` = 10⁻⁶, none
+    below), `precision_for_degree` (named degrees: iprec 2 to `MAX_PLANE_WAVE_DEGREE` = 15,
+    the calibrated plateau at 10⁻⁶), `select(k̂₀, degrees, tolerance)`, `RULE_PRECISION`; the
+    provisional degree rule of CH6.1d replaced. `nd-fmm-exec`:
+    `HelmholtzOperator::with_plane_wave_tolerance`, which `HelmholtzFmmBuilder` sets from
+    `Degrees::Tolerance`.
+  - `nd-fmm-validate`: `helmholtz_accuracy::{Case::plane_wave, Row::plane_wave}`, the
+    example's `--m2l planewave|planewave:<q>|planewave-scan` and its "÷ Rotation" column;
+    `tools/helmholtz/ch6-1e-runs.sh`; the report `fmm-validate/results/helmholtz-ch6-1e.md`.
+  - The scan (the M6): each level with a quadrature at iprec 1, 2 and 3 alone on CH3.1c's
+    matrix and at 10⁻⁴, 10⁻⁵, 10⁻⁷. The precision follows ε, not p or κ_l: iprec 1 misses
+    1.1× Rotation's from 10⁻³ (1.145×), iprec 2 holds from 10⁻³ to 10⁻⁶ (worst 1.044×) and
+    misses from 10⁻⁷, iprec 3 misses on the clustered trees' deep levels (1.116× at 10⁻⁷,
+    1.76× at 10⁻⁸, κ_l ≤ 0.08). The rule within 1.070× on 87 cases; every level at
+    ε < 10⁻⁶ left to Rotation.
+- Tests: the rule in `fmm-tables/tests/helmholtz/plane_wave_merge.rs` and
+  `fmm-exec/tests/helmholtz/plane_wave.rs` (by tolerance, by degree, the plateau);
+  `check_plane_wave` in `fmm-exec/tests/helmholtz_fmm.rs` now asserts 1.1× Rotation's
+  (`PLANE_WAVE_RATIO`; 1.000× on both scenarios); `check_plane_wave` in
+  `fmm-validate/tests/helmholtz_accuracy.rs` on W1 at kD = 10 and W4's clusters. Debug cost
+  (a loaded M6): the harness test 36 s (26 s before), `check_plane_wave` 47 s of
+  `helmholtz_fmm` (27 s).
+- Checks: ran `/verify` on the M6: format; Clippy default, examples and workspace
+  all-targets; `cargo doc`; `cargo test` (705 s) and `--workspace` (1,094 s), all passed;
+  the MPI list at 2 and 4 ranks (`run-mpi-tests.sh`, every executable passed;
+  `helmholtz_fmm` 176 s and 153 s); `tests/helmholtz_accuracy.rs` in release. One-rank
+  debug times: `helmholtz_fmm` 188 s (about 177 s after CH6.1d), `helmholtz_accuracy` 31 s
+  (26 s), `fmm-exec`'s `tests/helmholtz` 30 s. Not run: D9 (no Laplace path changed). A
+  first attempt was stopped by Claude Code when the M6 ran out of memory (the large scan's
+  22.9 GB point beside a workspace test run); the checks ran again alone. A self-review by
+  a subagent: one blocking defect fixed (the harness test asserted waves at 10⁻⁸, where the
+  rule takes none), numbers in docs and the report corrected, a timeout around the
+  script's `mpirun`.
+- Decisions: none taken yet; the PR asks three (the reading of the acceptance, the rule
+  against iprec 3 with a κ guard, the follow-up's place).
+- Laplace: not touched (Helmholtz modules of `nd-fmm-tables` and `nd-fmm-exec`, and
+  `nd-fmm-validate`; no Laplace file changed).
+- Follow-ups:
+  - CH6.1f: quadratures for ε < 10⁻⁶ matched to the degree (a new roadmap task before
+    H6.G).
+  - CH6.2: the times of the rule's iprec 2 against Rotation and the table strategies (the
+    report's §7: 0.25–0.65 of Rotation's evaluation at 10⁻⁶ on a loaded M6), and the waves
+    buffer bounded and counted in the node budget first (9.0–11.8 GB under the rule on the
+    large cases; a sentence in CH6.2's line).
+  - The scan's level 6 of W3 at kD = 100 at iprec 3 (22.9 GB of waves) swapped and the run
+    after it ran the M6 out of memory: the large scan stopped there, W1 at kD = 500 not
+    scanned (the report's §7, §8).
