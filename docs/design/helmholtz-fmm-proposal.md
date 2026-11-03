@@ -587,8 +587,8 @@ is for Laplace:
   far-field work below kD ≈ 10³ (Section 7), which is why H6 comes before H4 by default.
   FMM3D uses this M2L for Helmholtz up to boxes of 8 wavelengths, Re(k w) ≤ 16π (amended at
   CH0.4: its code, not the 32 of its documentation; spikes/pw-quadrature §2.4). The cost
-  of entry: the quadratures depend on k w_l, so a level needs its own quadrature (generated or tabulated;
-  spike S4), unlike the single Laplace table of §3.14. Gumerov and Duraiswami found RCR
+  of entry: the quadratures depend on k w_l, so a level needs its own quadrature
+  (generated or tabulated; spike S4), unlike the single Laplace table of §3.14. Gumerov and Duraiswami found RCR
   about as efficient as exponential forms at moderate p in their 2009 code; the
   repository's own Laplace measurement points the other way, so the decision is a
   measurement (CH6.2).
@@ -1325,8 +1325,8 @@ and for complex and purely imaginary k the branch, before any comparison.
 **Limits.** FMM3D is a reference, not ground truth: agreement is meaningful only to the
 looser of the two accuracies, and the sampled direct sum stays the primary measure. Above
 boxes of 8 wavelengths (amended at CH0.4; 32 by its documentation) FMM3D uses point and
-shoot, slower but still accurate. Whether it is accurate and efficient for purely imaginary zk (the Yukawa case) is not verified; CH1.4
-checks it (risk R12).
+shoot, slower but still accurate. Whether it is accurate and efficient for purely
+imaginary zk (the Yukawa case) is not verified; CH1.4 checks it (risk R12).
 
 **Per phase:**
 
