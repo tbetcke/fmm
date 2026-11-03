@@ -43,10 +43,11 @@
 //! own crossover agreed alike on every rank, a named mode kept, and Auto the builder's
 //! default (every other check names Rotation, its reference). The exponential M2L
 //! (Helmholtz CH6.1d), `PlaneWave`, on the same two scenarios: each level's precision as
-//! the rule gives it (`nd_fmm_tables::helmholtz::plane_wave::merge::select`), the scenario's
-//! bound of the direct sum with the error's ratio to Rotation's printed (CH6.1e asserts
-//! it), the level call by merge and shift within `PLANE_PAIR_TOLERANCE` of its pair path
-//! (CH6.1c's translation along the merge's direction), 2 threads and the one-rank FMM bit
+//! the rule gives it (`nd_fmm_tables::helmholtz::plane_wave::merge::select`, at the
+//! scenario's tolerance or its named degrees), the scenario's bound of the direct sum and
+//! the errors within `PLANE_WAVE_RATIO` of Rotation's (Helmholtz CH6.1e), the level call
+//! by merge and shift within `PLANE_PAIR_TOLERANCE` of its pair path (CH6.1c's
+//! translation along the merge's direction), 2 threads and the one-rank FMM bit
 //! for bit, vector v of two the one-vector FMM bit for bit, precisions named per level
 //! (Rotation's level call bit for bit where every level names none). In debug builds the
 //! pair path of a tree with waves on several levels runs on the finest level's alone.
@@ -113,6 +114,11 @@ const DENSE_TOLERANCE: f64 = 1e-14;
 /// every rank's targets): the same waves, shifted in two factors and summed in another
 /// order, so rounding (at most 2.0e-16 on the M6), with a margin for other libms.
 const PLANE_PAIR_TOLERANCE: f64 = 1e-14;
+
+/// The largest ratio of `PlaneWave`'s errors against the direct sum to Rotation's under
+/// the precision rule (CH6.1's acceptance, "within about 1.1× Rotation's", Helmholtz
+/// CH6.1e).
+const PLANE_WAVE_RATIO: f64 = 1.1;
 
 /// SplitMix64, uniform in [0, 1).
 struct Rng(u64);
@@ -887,7 +893,11 @@ fn check_plane_wave(scenario: &Scenario, comm: &SimpleCommunicator) {
     drop(fmm);
     // The domain is the unit cube, r₀ = ½.
     let k_root = C::new(scenario.k.0, scenario.k.1) * 0.5;
-    let rule = select(k_root, &degrees);
+    let tolerance = match scenario.degrees {
+        Degrees::Tolerance(epsilon) => Some(epsilon),
+        Degrees::PerLevel(_) => None,
+    };
+    let rule = select(k_root, &degrees, tolerance);
     let tables = builder(scenario).m2l(HelmholtzM2l::PlaneWave);
     let (fmm, output) = run(&tables, &inputs, kind, comm);
     let op = fmm.operator();
@@ -923,6 +933,12 @@ fn check_plane_wave(scenario: &Scenario, comm: &SimpleCommunicator) {
     assert!(
         error_phi < scenario.bound && error_grad < scenario.bound,
         "{name}: φ {error_phi:.2e}, ∇φ {error_grad:.2e} against the direct sum"
+    );
+    assert!(
+        error_phi <= PLANE_WAVE_RATIO * rotation_phi
+            && error_grad <= PLANE_WAVE_RATIO * rotation_grad,
+        "{name}: φ {error_phi:.2e}, ∇φ {error_grad:.2e} against Rotation's {rotation_phi:.2e}, \
+         {rotation_grad:.2e}"
     );
     let (_, threaded) = run(&tables.clone().threads(2), &inputs, kind, comm);
     assert_same(&format!("{name}, 2 threads"), &threaded, &output, comm);

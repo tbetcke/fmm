@@ -304,8 +304,10 @@ impl HelmholtzFmmBuilder {
 
     /// The precision of each level's quadrature under [`HelmholtzM2l::PlaneWave`] (default
     /// [`PlaneWavePrecision::Rule`]; `HelmholtzOperator::with_plane_wave_precision`). The
-    /// rule is a function of k, the domain and the degrees, so every rank chooses alike; a
-    /// list named here must be the same on every rank.
+    /// rule reads the tolerance of [`Degrees::Tolerance`], or with named degrees each
+    /// level's degree (`HelmholtzOperator::with_plane_wave_tolerance`); it is a function of
+    /// k, the domain, the degrees and the tolerance, so every rank chooses alike. A list
+    /// named here must be the same on every rank.
     pub fn plane_wave_precision(mut self, precision: PlaneWavePrecision) -> Self {
         self.plane_wave_precision = precision;
         self
@@ -510,6 +512,10 @@ impl HelmholtzFmmBuilder {
         .expect("the P2P kernel's ISA is available (checked in step 1)")
         .with_m2l_max_degree(Some(usize::try_from(max_degree).unwrap_or(usize::MAX)))
         .with_plane_wave_precision(self.plane_wave_precision.clone())
+        .with_plane_wave_tolerance(match self.degrees {
+            Degrees::Tolerance(epsilon) => Some(epsilon),
+            Degrees::PerLevel(_) => None,
+        })
         .with_m2l(self.m2l, self.dense_budget)
         .with_plane_wave_boxes(&level_boxes);
         if let Some(mul_add) = self.m2l_mul_add {
