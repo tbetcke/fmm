@@ -28,6 +28,12 @@ evaluators' fields on a sphere), with rectangular degrees and `_yukawa` forms, c
 `tests/helmholtz/translation_*.rs`: RCR against direct in the FMM-weighted measure, the
 chains against the direct sum, the limit k → 0 against Laplace's `rotation`, and Yukawa
 two ways. `direct` and `rcr` keep identical signatures apart from RCR's table.
+Helmholtz CH6.1b: `helmholtz::plane_wave::generate`, S4's generator of the quadratures of
+the exponential M2L for any κ = k w (`spikes/pw-quadrature`), the trusted path of the
+tabulated ones of `nd_fmm_tables::helmholtz::plane_wave`, checked in
+`tests/helmholtz/plane_wave.rs` against the kernel e^{iκ|u|}/|u| on the region, off its
+grid and in the point-to-point chain, and bit for bit against the spike
+(`spikes/pw-quadrature/examples/generated.rs`, by hand).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -44,6 +50,13 @@ two ways. `direct` and `rcr` keep identical signatures apart from RCR's table.
   vector exactly the single-vector operator's operations in its order; the single-vector
   operators are their m = 1 case with their own panic messages. Vector v of the result is
   the single-vector operator on vector v bit for bit (`tests/leaf/many.rs`).
+- `helmholtz::plane_wave` (Helmholtz CH6.1b) is a builder of quadratures, not an
+  operator: f64 only, allocating, slow (its tests' 35 κ and ε take 14 s in release on the
+  M6). It keeps the
+  spike's order of operations, its own Gauss–Legendre rule and Jₙ included, so that its
+  values are the spike's bit for bit; a change to its arithmetic reruns
+  `examples/generated.rs` and says so. It reports where it stops short of ε
+  (`Quadrature::shortfall`) instead of returning silently.
 - This crate is the oracle: clarity over speed. Optimisation belongs in nd-fmm-tables,
   nd-fmm-kernels, nd-fmm-simd and nd-fmm-exec.
 - Tests name their error measure (docs/phase1/README.md, "Error measures").
