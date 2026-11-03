@@ -10,8 +10,10 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 Status: **H3 closed (2026-11-02, `docs/helmholtz/gates/H3.md`).** The RCR FMM on every
 level meets ε against FMM3D on all 57 case × ε points of CH3.6. HR, H0, H1 and H2 are still
 open. 2026-11-03: CH0.4 (S4, the plane-wave quadratures) done, its three sign-offs taken;
-CH6.1 split into a/b/c, CH6.1a (the quadratures in `nd-fmm-tables`) done. Next: CH6.1b
-(the pair chain, with a §3.15 subsection for sign-off), once CH6.1a is merged.
+CH6.1 split into a/b/c, CH6.1a (the quadratures in `nd-fmm-tables`) done; CH6.1b split
+again into the generator (CH6.1b, done: S4's generator in `nd-fmm-ref`) and the pair chain
+(CH6.1c), merge and shift renamed CH6.1d. Next: CH6.1c (the pair chain, with a §3.15
+subsection for sign-off), once CH6.1b is merged.
 
 ## How `/next-task` reads this file
 
@@ -533,7 +535,10 @@ at any kD.
   e^{iκ|u|}/|u| on the region within 2× the stated error and the point-to-point chain
   within 3× it, the kernel at nine points of every domain and precision and the chain at
   every domain's centre (release; sampled in debug); the wave count Σ Nₖ against FMM3D's recorded. *Needs:* CH0.4.
-- [ ] **CH6.1b The generator.** S4's generator (`spikes/pw-quadrature/src/generator.rs`)
+- [x] **CH6.1b The generator.** Record: `docs/helmholtz/tasks/CH6.1b.md`;
+  `nd_fmm_ref::helmholtz::plane_wave::generate`, tests `fmm-ref/tests/helmholtz/plane_wave.rs`.
+  Bit for bit the spike at all 35 κ × ε of its tests; ε met on the grid, 2ε off it and in
+  the chain at each. S4's generator (`spikes/pw-quadrature/src/generator.rs`)
   ported to `nd_fmm_ref::helmholtz::plane_wave`, the trusted path of the quadratures for
   any κ = k w with Re κ, Im κ ≥ 0: the Sommerfeld integral on the contour of real t,
   composite Gauss–Legendre, compressed by a column-pivoted Gram–Schmidt with refitted
