@@ -371,6 +371,16 @@ every degree Batched on every level. `Case::new` keeps Rotation named although A
 library's default since CH3.2d's sign-off, so that the earlier reports' runs repeat. `tools/helmholtz/ch3-2d-runs.sh` runs the task's
 measurements (gated on macOS). Its report is `results/helmholtz-ch3-2d.md`.
 
+Helmholtz CH6.1e (the quadrature per level; docs/helmholtz/tasks/CH6.1e.md) added
+`helmholtz_accuracy::Case::plane_wave` (a `PlaneWavePrecision`) and `Row::plane_wave` (each
+level's precision as built), and to the example's `--m2l` the entries `planewave` (the
+rule), `planewave:<1|2|3>` (one precision on every level with a quadrature) and
+`planewave-scan` (Rotation, then each level with a quadrature at each precision alone),
+with a last column "÷ Rotation" (the row's errors over the case's Rotation row).
+`tests/helmholtz_accuracy.rs` checks the rule within 1.1× Rotation's on small cases.
+`tools/helmholtz/ch6-1e-runs.sh` runs the task's scan and verification. Its report is
+`results/helmholtz-ch6-1e.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`
