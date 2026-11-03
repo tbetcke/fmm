@@ -129,12 +129,17 @@ no quiet-machine rule beyond Kathleen's exclusive node.
 
 ## Pending runs
 
-- Kathleen job 628518 (one node, `singlenode`, 4 h; submitted 2026-11-03 21:24):
-  `cargo build --release -p nd-fmm-validate --example helmholtz_accuracy`, then
+- Done: Kathleen job 628518 (one node, node-c11a-083, 23 min): the build, then
   `tools/helmholtz/ch6-2a-runs.sh /scratch/scratch/ucahtbe/fmm/logs/ch6-2a budgets ranks`.
-  Decides the report's bytes, recomputation and time at each bound and whether the
-  default budget is kept.
+  The report's §2–§4.
+- Pending: Kathleen job 628529 (one node, `singlenode`, 1 h 30 min; queued for resources):
+  `RANK_BUDGETS="whole default 8192 16384 whole default 8192 16384"
+  tools/helmholtz/ch6-2a-runs.sh /scratch/scratch/ucahtbe/fmm/logs/ch6-2a-ranks ranks`.
+  Decides the default budget's proposal (question 1): the time at 40 ranks per node at 4,
+  8 and 16 GiB per node against the whole level, with repeats.
 
 ## Open questions
 
-1. The default node budget (4 GiB proposed) for sign-off in the PR.
+1. The default node budget (4 GiB in the branch) for sign-off in the PR, after job 628529.
+2. The bound's floor and the positions outside it: accept as documented, or refuse a
+   budget below the floor.
