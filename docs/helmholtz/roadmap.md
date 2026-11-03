@@ -9,8 +9,9 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status: **H3 closed (2026-11-02, `docs/helmholtz/gates/H3.md`).** The RCR FMM on every
 level meets ε against FMM3D on all 57 case × ε points of CH3.6. HR, H0, H1 and H2 are still
-open. 2026-11-03: CH0.4 (S4, the plane-wave quadratures) done, its three sign-offs taken.
-Next: CH6.1 by the priority list (D6), once CH0.4 is merged.
+open. 2026-11-03: CH0.4 (S4, the plane-wave quadratures) done, its three sign-offs taken;
+CH6.1 split into a/b/c, CH6.1a (the quadratures in `nd-fmm-tables`) done. Next: CH6.1b
+(the pair chain, with a §3.15 subsection for sign-off), once CH6.1a is merged.
 
 ## How `/next-task` reads this file
 
@@ -47,7 +48,7 @@ low-frequency and intermediate trees at tight ε across most of D1's range (gate
 CH3.6 (#170) and H3.G.
 
 1. CH0.4 S4: quadratures of the Helmholtz exponential M2L per k w_l
-2. CH6.1 The §3.14 machinery generalised (needs CH0.4)
+2. CH6.1 The §3.14 machinery generalised (needs CH0.4): CH6.1a, CH6.1b, CH6.1c
 3. CH6.2 Measured (*Machines:* locust, Kathleen; *Sign-off:* D8)
 
 Off the list, in file order: CH0.6, CH0.8b, CH0.9, CH0.5 and H0.G; CHR.3 and HR.G; CH1.3d
@@ -506,16 +507,50 @@ at any kD.
 
 **Gate:** the exponential M2L adopted where it wins, or kept opt-in (D8).
 
-- [ ] **CH6.1 The §3.14 machinery generalised.** Six directions, per-level quadratures,
+- CH6.1 The §3.14 machinery generalised. Six directions, per-level quadratures,
   merge and shift; opt-in. The quadratures as S4 recommends, CH0.4's sign-offs 1 and 2
   taken on 2026-11-03 (`spikes/pw-quadrature/SPIKE_REPORT.md` §6): FMM3D's tables for
   iprec 1 to 3 extracted with NIST's notice, the α counts chosen by measurement (FMM3D's
   miss the stated error at the region's corner), the S4 generator as the tests' trusted
   path. *Done when:* errors
-  within about 1.1× Rotation's. *Needs:* CH0.4, CH3.1, D6.
+  within about 1.1× Rotation's. *Needs:* CH0.4, CH3.1, D6. Split on 2026-11-03 into three
+  sub-tasks, each one reviewable PR (about 1.5 MB of NIST's tables, the factors of the
+  orthonormal basis with a convention for sign-off, and merge and shift in the FMM do not
+  fit one); CH6.1 is done, and CH6.2 runnable on its side, when all three are:
+- [x] **CH6.1a The quadratures.** Record: `docs/helmholtz/tasks/CH6.1a.md`;
+  `nd_fmm_tables::helmholtz::plane_wave::quadrature`, tests
+  `fmm-tables/tests/helmholtz/plane_wave_quadrature.rs`. The kernel within 1.50× and the
+  chain within 1.18× the stated error on every domain; 1.31–1.51× FMM3D's waves where
+  Im κ < π/2. `nd_fmm_tables::helmholtz::plane_wave::quadrature`:
+  FMM3D's tables for iprec 1 to 3 (437 domains each), extracted with NIST's notice by a
+  script in `tools/fixtures/` from the pinned v2.1.0; `hwts3e`'s domain lookup and
+  precision from ε; the node maps to complex (λₖ, wₖ) at κ = k w_l; the α and Fourier
+  counts per node by a Bessel bound (S4's `tail_count`, for complex tₖ), not FMM3D's
+  `hnumphys`. *Done when:* every domain's rectangle and node count as FMM3D's; the
+  lookup on every rectangle and outside the tables; with the counts, the kernel
+  e^{iκ|u|}/|u| on the region within 2× the stated error and the point-to-point chain
+  within 3× it, the kernel at nine points of every domain and precision and the chain at
+  every domain's centre (release; sampled in debug); the wave count Σ Nₖ against FMM3D's recorded. *Needs:* CH0.4.
+- [ ] **CH6.1b The pair chain.** `nd_fmm_tables::helmholtz::plane_wave`: the multipole to
+  waves and waves to local in the orthonormal basis and stored form of §3.15, the six
+  directions and their frames, the shifts, one pair translated directly along its
+  direction; a CONVENTIONS §3.15 subsection for it, as §3.14 is for Laplace (unversioned),
+  for sign-off; S4's generator ported to `nd-fmm-ref` as the trusted path. *Done when:*
+  every V offset on several levels against RCR within the quadrature's error, with FMM3D's
+  and with generated quadratures, real and complex k, one and two multipole planes.
+  *Needs:* CH6.1a. *Sign-off:* the convention.
+- [ ] **CH6.1c Merge and shift in the FMM.** `HelmholtzM2l::PlaneWave` (opt-in): the level
+  call by merge and shift (CONVENTIONS §3.14's geometry) on the levels the tables cover,
+  Rotation on the others; the pair body CH6.1b's translation. *Done when:* CH6.1's: the
+  FMM's errors within about 1.1× Rotation's on CH3.1c's cases; merge and shift against
+  the pair path to rounding; deterministic at every thread count and on P ranks the
+  one-rank FMM bit for bit. *Needs:* CH6.1b.
 - [ ] **CH6.2 Measured.** Against Rotation and the table-based strategies on the three
   machines, and against `hfmm3d`'s exponential M2L. *Done when:* per-level accuracy and time
-  beside FMM3D's on the same problems; D8 proposed. *Needs:* CH6.1, CH1.4.
+  beside FMM3D's on the same problems; D8 proposed. Also (CH6.1a): CH6.1a's counts resolve
+  the region's corner ρ = 4√2 at 1.31–1.51× FMM3D's waves where Im κ < π/2; whether a pair
+  ever needs the corner at the FMM's ε, so fewer waves would do, is measured here.
+  *Needs:* CH6.1 (a–c), CH1.4.
   *Machines:* locust, Kathleen. *Sign-off:* D8.
 - [ ] **H6.G Gate.** `/milestone-gate H6`. *Needs:* every task above.
 
