@@ -173,12 +173,12 @@
 //! [`plane_wave_bytes`](HelmholtzOperator::plane_wave_bytes) reports them with the tables,
 //! and [`plane_wave_counts`](HelmholtzOperator::plane_wave_counts) the chunks and the waves
 //! computed.
+//! f64 only (§3.15, "Precision and range"): f32's range is untested (the factors reach
+//! about 10³⁴ at iprec 3).
 //!
 //! Every M2L level call, under every setting, is timed on the calling thread's clock and
 //! summed per level ([`m2l_times`](HelmholtzOperator::m2l_times); Helmholtz CH6.2b): two
 //! clock reads per call, no value changed.
-//! f64 only (§3.15, "Precision and range"): f32's range is untested (the factors reach
-//! about 10³⁴ at iprec 3).
 //!
 //! # Execution
 //!

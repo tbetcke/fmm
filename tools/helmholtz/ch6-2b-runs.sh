@@ -42,9 +42,13 @@ forward="rotation,batched-fused,auto,planewave"
 reverse="planewave,auto,batched-fused,rotation"
 common=(--eps 1e-3,1e-6 --evaluations 2 --levels)
 
-# The CPU percentage of every process but this script's launch and ps itself.
+# The CPU percentage of every process but ps itself outside this script's process group
+# and the launch's (`others <pid>`: `timeout` runs the command in a group of its own,
+# whose id is its pid, so the example and anything it starts are left out).
+group=$(ps -o pgid= -p $$ | tr -d ' ')
 others() {
-    ps -A -o %cpu=,pid=,comm= | awk -v me="$1" '$2 != me && $3 !~ /(^| |\/)ps$/ { s += $1 } END { printf "%d", s }'
+    ps -A -o %cpu=,pgid=,comm= | awk -v me="$group" -v launch="${1:-0}" \
+        '$2 != me && $2 != launch && $3 !~ /(^| |\/)ps$/ { s += $1 } END { printf "%d", s }'
 }
 
 # The launcher of a split `RxT` (an array; empty for one rank).
@@ -67,10 +71,10 @@ launch() {
     local attempt=0
     while :; do
         if $macos; then
-            while [ "$(others 0)" -gt "$QUIET" ]; do sleep 10; done
+            while [ "$(others)" -gt "$QUIET" ]; do sleep 10; done
         fi
         local before start=$SECONDS
-        before=$($macos && others 0 || echo -)
+        before=$($macos && others || echo -)
         timeout "$TIMEOUT" "$@" < /dev/null > "$out/$name.md" 2> "$out/$name.err" &
         local pid=$! peak=0
         if $macos; then

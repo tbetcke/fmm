@@ -564,7 +564,7 @@ fn main() {
                     .filter(|&l| row.v_pairs[l] > 0)
                     .map(|l| {
                         format!(
-                            "{head} | {l} | {} | {} | {} | {:.4} | {:.0} |",
+                            "{head} | {l} | {} | {} | {} | {:.6} | {:.0} |",
                             row.degrees[l],
                             level_m2l(row, l),
                             row.v_pairs[l],
@@ -581,7 +581,7 @@ fn main() {
                     ),
                 };
                 lines.push(format!(
-                    "{head} | Σ | – | {evaluate} | {} | {:.4} | – |",
+                    "{head} | Σ | – | {evaluate} | {} | {:.6} | – |",
                     row.v_pairs.iter().sum::<usize>(),
                     row.m2l_seconds.iter().sum::<f64>(),
                 ));

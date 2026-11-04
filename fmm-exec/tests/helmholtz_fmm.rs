@@ -242,11 +242,13 @@ fn everywhere(ok: bool, comm: &SimpleCommunicator) -> bool {
     all
 }
 
-/// Checks the M2L times per level (Helmholtz CH6.2b): one entry per level, positive on every
-/// level with V pairs on this rank, on every rank or none.
+/// Checks the M2L times per level (Helmholtz CH6.2b): one entry per level, zero on level 0
+/// (the evaluator's downward pass calls M2L from level 1), positive on every level with V
+/// pairs on this rank, on every rank or none.
 fn check_m2l_times(name: &str, fmm: &HelmholtzFmm<'_, f64>, comm: &SimpleCommunicator) {
     let times = fmm.operator().m2l_times();
     let ok = times.len() == fmm.nlevels()
+        && times[0] == Duration::ZERO
         && (0..fmm.nlevels())
             .all(|level| fmm.plan().level(level).v().is_empty() || times[level] > Duration::ZERO);
     assert!(

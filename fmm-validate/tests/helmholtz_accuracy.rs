@@ -120,12 +120,14 @@ fn check_harness(world: &SimpleCommunicator) {
     assert_eq!(Oracle::sharded(k, &problem, true, 2, world), serial);
 }
 
-/// The per-level columns of a row (Helmholtz CH6.2b): an entry per level, an M2L time on
-/// every level with V pairs, none on levels 0 and 1.
+/// The per-level columns of a row (Helmholtz CH6.2b): an entry per level, no V pairs on
+/// levels 0 and 1, no M2L time on level 0 (the downward pass calls M2L from level 1), a
+/// time on every level with V pairs.
 fn check_levels(row: &Row) {
     assert_eq!(row.m2l_seconds.len(), row.levels);
     assert_eq!(row.v_pairs.len(), row.levels);
     assert_eq!(&row.v_pairs[..2], &[0, 0], "no V pairs on levels 0 and 1");
+    assert_eq!(row.m2l_seconds[0], 0.0, "no M2L on level 0");
     assert!(
         row.v_pairs.iter().any(|&n| n > 0),
         "V pairs: {:?}",
