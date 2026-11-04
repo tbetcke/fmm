@@ -39,7 +39,7 @@
 
 use std::ops::Range;
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use mpi::collective::SystemOperation;
 use mpi::traits::CommunicatorCollectives;
@@ -94,6 +94,9 @@ pub struct Case {
     /// The bytes per node of its waves buffer (`HelmholtzFmmBuilder::plane_wave_budget`,
     /// Helmholtz CH6.2a; `None` the library's default, `usize::MAX` a whole level).
     pub plane_wave_budget: Option<usize>,
+    /// The evaluations of one build (at least 1; Helmholtz CH6.2b): the row's times and
+    /// errors are the last one's.
+    pub evaluations: usize,
 }
 
 impl Case {
@@ -118,6 +121,7 @@ impl Case {
             m2l_max_degree: None,
             plane_wave: PlaneWavePrecision::Rule,
             plane_wave_budget: None,
+            evaluations: 1,
         }
     }
 }
@@ -459,8 +463,16 @@ pub struct Row {
     pub max_leaf_points: usize,
     /// The build, seconds (slowest rank).
     pub build: f64,
-    /// The evaluation, seconds (slowest rank).
+    /// The evaluation, seconds (slowest rank); the last of [`Case::evaluations`].
     pub evaluate: f64,
+    /// The first evaluation, seconds (slowest rank); `evaluate` with one evaluation.
+    pub first_evaluate: f64,
+    /// Per level, the M2L level calls' seconds in the last evaluation, the slowest rank's
+    /// (`HelmholtzOperator::m2l_times`; Helmholtz CH6.2b).
+    pub m2l_seconds: Vec<f64>,
+    /// Per level, the V-list pairs of the plan, each target counted on the rank that owns it
+    /// and summed over the ranks: the same on every rank count (Helmholtz CH6.2b).
+    pub v_pairs: Vec<usize>,
     /// The relative ℓ2 errors [φ, ∇φ] per vector, then over all vectors.
     pub errors: Vec<[f64; 2]>,
     /// The checksum of the whole output.
@@ -564,14 +576,48 @@ pub fn run_output<C: CommunicatorCollectives>(
             },
         })
         .collect();
-    comm.barrier();
-    let start = Instant::now();
-    let output = fmm.evaluate(&charges)?;
-    let evaluate = slowest(start.elapsed().as_secs_f64(), comm);
+    // The M2L times before the last evaluation, so that the row has the last one's.
+    let (mut output, mut evaluate, mut first_evaluate) = (None, 0.0, 0.0);
+    let mut before: Vec<Duration> = Vec::new();
+    for evaluation in 0..case.evaluations.max(1) {
+        before = fmm.operator().m2l_times().to_vec();
+        comm.barrier();
+        let start = Instant::now();
+        output = Some(fmm.evaluate(&charges)?);
+        evaluate = slowest(start.elapsed().as_secs_f64(), comm);
+        if evaluation == 0 {
+            first_evaluate = evaluate;
+        }
+    }
+    let output = output.expect("at least one evaluation");
     let errors = errors(&output, problem, &block, oracle, comm);
     let checksum = reduce_checksum(checksum(&output, block.start), comm);
     let mut leaves = 0usize;
     comm.all_reduce_into(&fmm.nleaves(), &mut leaves, SystemOperation::sum());
+    let nlevels = fmm.nlevels();
+    let seconds: Vec<f64> = fmm
+        .operator()
+        .m2l_times()
+        .iter()
+        .zip(&before)
+        .map(|(after, before)| (*after - *before).as_secs_f64())
+        .collect();
+    let mut m2l_seconds = vec![0.0f64; nlevels];
+    comm.all_reduce_into(&seconds[..], &mut m2l_seconds[..], SystemOperation::max());
+    // Each target once, on the rank that owns it (a replicated top box has rows on every
+    // rank).
+    let plan = fmm.plan();
+    let pairs: Vec<u64> = (0..nlevels)
+        .map(|l| {
+            let v = plan.level(l).v();
+            (0..v.nrows())
+                .filter(|&t| plan.computes(l, t))
+                .map(|t| v.row(t).0.len() as u64)
+                .sum()
+        })
+        .collect();
+    let mut v_pairs = vec![0u64; nlevels];
+    comm.all_reduce_into(&pairs[..], &mut v_pairs[..], SystemOperation::sum());
     let row = Row {
         threads,
         p2p: fmm.p2p_kernel(),
@@ -601,6 +647,9 @@ pub fn run_output<C: CommunicatorCollectives>(
         max_leaf_points: fmm.max_leaf_points(),
         build,
         evaluate,
+        first_evaluate,
+        m2l_seconds,
+        v_pairs: v_pairs.into_iter().map(|n| n as usize).collect(),
         errors,
         checksum,
     };

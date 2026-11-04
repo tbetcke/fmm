@@ -2112,3 +2112,53 @@ request, using this template:
     it), and a chunk's halo is recomputed; a cut by spatial blocks rather than Morton runs
     could lower it if CH6.2b finds the cost matters (the report's §3).
 
+
+## 2026-11-04: CH6.2b The M2L timed per level
+- Done:
+  - CH6.2b (priority list item 3) split on this branch into our strategies timed per level
+    (CH6.2b) and FMM3D with D8 (CH6.2c), as its line allowed.
+  - `nd-fmm-exec`: `HelmholtzOperator::m2l_times`, every M2L level call timed and summed per
+    level (two clock reads per call, no value changed; reset with the counts when the
+    tables are chosen).
+  - `nd-fmm-validate`: `Row::{m2l_seconds, v_pairs, first_evaluate}`, `Case::evaluations`,
+    the example's `--levels` (a table per run and level: degree, the method that ran, V
+    pairs, seconds, ns per pair) and `--evaluations n`; `tools/helmholtz/ch6-2b-runs.sh`
+    (ABBA, the macOS gate), `tools/helmholtz/ch6-2b-tables.py`; the report
+    `fmm-validate/results/helmholtz-ch6-2b.md`.
+  - The M6 (1 × 6) and locust (1 × 72; the large cases also 8 × 9, 72 × 1): at 10⁻⁶ the
+    exponential M2L the fastest method on almost every level below the coarsest, 0.19–0.40×
+    Rotation's M2L on the M6's cases of 8 × 10⁴ points and more (evaluation 0.27–0.52×
+    Auto's), 0.45× and 0.21× on W1 at kD = 500 and W3 at kD = 100 on locust; at 10⁻³ no
+    single strategy best (a per-level choice up to 1.32× faster); level 2 9–24× Rotation's
+    time at 72 threads (parents split the level call); Batched above Auto's crossover 2–10×
+    Rotation's.
+- Tests: `check_m2l_times` in `fmm-exec/tests/helmholtz_fmm.rs` (in `check_auto` and
+  `check_plane_wave`: an entry per level, none on level 0, a time on every level with V
+  pairs, on every rank or none); `check_levels` and two evaluations of one build in
+  `fmm-validate/tests/helmholtz_accuracy.rs` (the V pairs against one rank). One-rank debug
+  on the M6: `helmholtz_fmm` 196–201 s (195 s before), `helmholtz_accuracy` 41 s (36 s;
+  the extra evaluation run); 279–301 s and 64 s on a loaded M6 (load average 7).
+- Checks: ran `/verify` on the M6: format; Clippy default, examples and workspace
+  all-targets; `cargo doc`; `cargo test` (21 min, passed); `cargo test --workspace` was
+  terminated (exit 143) inside the spikes after every default member had passed, so the
+  non-default members (nd-fmm-kernels and the spikes) ran on their own and passed; the
+  MPI list at 2 and 4 ranks (`run-mpi-tests.sh`, every executable passed; `helmholtz_fmm`
+  185 s and 162 s); `helmholtz_accuracy` in release at 1 and 2 ranks. Kathleen's runs
+  (job 628611, `matrix` and `large` at 1 × 40, completed, outputs not fetched; `large` at
+  4 × 10 and 40 × 1 not submitted) moved to CH6.2c: the login node refused every
+  connection from 2026-11-04 10:10. Not run: D9 (no Laplace path). A self-review by a subagent: one
+  blocking defect fixed (the macOS gate counted the launch: the M6's run made again), its
+  points taken (the per-level seconds' digits, level 0 asserted, the doc paragraph, the
+  tables' parsing, the plan as built).
+- Decisions: none. The acceptance amended on 2026-11-04 (the user, "yes, go ahead with
+  that change"): done on the M6 and locust, Kathleen's runs moved to CH6.2c. dps31 (a
+  shared Threadripper 3970X, AVX2 only, loaded at the time) was checked as a substitute
+  and not used: it is not Kathleen's AVX-512 class.
+- Laplace: not touched (the Helmholtz operator, `nd-fmm-validate`'s Helmholtz harness,
+  tools).
+- Follow-ups:
+  - CH6.2c: the coarse levels' level call at many threads (split below the parent, or a
+    rule by the level's boxes) and the per-level choice at 10⁻³, both for D8 (sentences in
+    CH6.2c's line).
+  - Kathleen's runs (fetch job 628611, `large` at 4 × 10 and 40 × 1, the report's §5):
+    a sentence in CH6.2c's line.

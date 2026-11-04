@@ -176,6 +176,10 @@
 //! f64 only (§3.15, "Precision and range"): f32's range is untested (the factors reach
 //! about 10³⁴ at iprec 3).
 //!
+//! Every M2L level call, under every setting, is timed on the calling thread's clock and
+//! summed per level ([`m2l_times`](HelmholtzOperator::m2l_times); Helmholtz CH6.2b): two
+//! clock reads per call, no value changed.
+//!
 //! # Execution
 //!
 //! The level calls run on the shared drivers of `nd-fmm-exec` (Helmholtz CH2.0, CH3.5),
@@ -190,6 +194,7 @@
 //! Yukawa (Re k = 0) is not served: its real path is CH2.1's.
 
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use mpi::traits::Equivalence;
 use nd_fmm_math::{Complex, Layout};
@@ -340,6 +345,9 @@ pub struct HelmholtzOperator<T: SimdScalar> {
     /// Under [`HelmholtzM2l::PlaneWave`], the level call's waves of one frame of a chunk's
     /// sources, up and down, and their positions.
     plane_buffer: PlaneBuffer<T>,
+    /// The M2L level calls' wall time per level since the tables were last chosen
+    /// ([`m2l_times`](HelmholtzOperator::m2l_times)).
+    m2l_times: Vec<Duration>,
 }
 
 /// What the bodies read: the path, the levels and the tables.
@@ -486,10 +494,12 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             pool: None,
             serial: false,
         };
+        let m2l_times = vec![Duration::ZERO; kernel.tables.nlevels()];
         Ok(Self {
             kernel,
             execution,
             plane_buffer: PlaneBuffer::default(),
+            m2l_times,
         })
     }
 
@@ -614,6 +624,14 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         self.plane_buffer.counts
     }
 
+    /// The wall time of the M2L level calls of each level since the tables were last chosen
+    /// (Helmholtz CH6.2b): one entry per level, the time of every [`FmmOperator::m2l`] call
+    /// on it summed, whichever M2L ran there ([`m2l_on`](Self::m2l_on)); zero on the levels
+    /// without a call. This rank's, on the calling thread's clock; the pair body is not timed.
+    pub fn m2l_times(&self) -> &[Duration] {
+        &self.m2l_times
+    }
+
     /// The bytes the exponential M2L holds: its tables, the level call's buffers (the waves,
     /// a position per box and the chunk's sources) and every scratch set's buffers (0 unless
     /// [`HelmholtzM2l::PlaneWave`] gives a level waves).
@@ -675,6 +693,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             .filter(|m2l| (0..m2l.nlevels()).any(|l| m2l.level(l).is_some()));
         self.plane_buffer.size(kernel.plane_waves.as_ref());
         self.plane_buffer.counts = PlaneWaveCounts::default();
+        self.m2l_times.fill(Duration::ZERO);
         // The class scratch, the batched columns and the exponential M2L's buffers are sized
         // by their tables' largest level.
         for scratch in &mut self.execution.scratch {
@@ -1338,14 +1357,20 @@ impl<T: SimdScalar + Equivalence + Default> FmmOperator for HelmholtzOperator<T>
     /// Under [`HelmholtzM2l::Batched`] block by block on the levels with tables, under
     /// [`HelmholtzM2l::PlaneWave`] by merge and shift on the levels with waves (module
     /// documentation, "M2L"), target by target elsewhere.
+    ///
+    /// Each call's wall time is added to its level's [`m2l_times`](Self::m2l_times).
     fn m2l(&mut self, batch: M2l<'_, T>) {
-        if self.kernel.plane_wave_level(batch.level).is_some() {
-            return self.plane_wave_m2l(batch);
+        let level = batch.level;
+        let start = Instant::now();
+        if self.kernel.plane_wave_level(level).is_some() {
+            self.plane_wave_m2l(batch);
+        } else {
+            match self.kernel.batched(level) {
+                Some(batched) => batched.m2l(&mut self.execution, batch, |s| &mut s.columns),
+                None => driver::m2l(&self.kernel, &mut self.execution, batch),
+            }
         }
-        match self.kernel.batched(batch.level) {
-            Some(batched) => batched.m2l(&mut self.execution, batch, |s| &mut s.columns),
-            None => driver::m2l(&self.kernel, &mut self.execution, batch),
-        }
+        self.m2l_times[level] += start.elapsed();
     }
 
     fn p2l(&mut self, batch: P2l<'_, T>) {

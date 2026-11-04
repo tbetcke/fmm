@@ -64,7 +64,7 @@
 //! <binary> --test-threads=1 --nocapture` (CI: `.github/scripts/run-mpi-tests.sh`).
 
 use std::f64::consts::PI;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use mpi::Threading;
 use mpi::collective::SystemOperation;
@@ -240,6 +240,22 @@ fn everywhere(ok: bool, comm: &SimpleCommunicator) -> bool {
     let mut all = false;
     comm.all_reduce_into(&ok, &mut all, SystemOperation::logical_and());
     all
+}
+
+/// Checks the M2L times per level (Helmholtz CH6.2b): one entry per level, zero on level 0
+/// (the evaluator's downward pass calls M2L from level 1), positive on every level with V
+/// pairs on this rank, on every rank or none.
+fn check_m2l_times(name: &str, fmm: &HelmholtzFmm<'_, f64>, comm: &SimpleCommunicator) {
+    let times = fmm.operator().m2l_times();
+    let ok = times.len() == fmm.nlevels()
+        && times[0] == Duration::ZERO
+        && (0..fmm.nlevels())
+            .all(|level| fmm.plan().level(level).v().is_empty() || times[level] > Duration::ZERO);
+    assert!(
+        everywhere(ok, comm),
+        "{name}: an M2L time on every level with V pairs (rank {}: {times:?})",
+        comm.rank()
+    );
 }
 
 /// Every value of an output as bits: per column φ, then the gradient triples.
@@ -823,6 +839,7 @@ fn check_auto(scenario: &Scenario, comm: &SimpleCommunicator) {
             "{name}, level {level}"
         );
     }
+    check_m2l_times(&name, &fmm, comm);
     drop(fmm);
     let (phi, grad) = difference(&output, &rotation, comm);
     let (error_phi, error_grad) = errors(scenario, &inputs, &output, 0, comm);
@@ -936,6 +953,7 @@ fn check_plane_wave(scenario: &Scenario, bounds: bool, comm: &SimpleCommunicator
         everywhere(whole_counts.chunks <= whole_counts.level_calls, comm),
         "{name}: one chunk per level call within the default budget"
     );
+    check_m2l_times(&name, &fmm, comm);
     drop(fmm);
     let (phi, grad) = difference(&output, &rotation, comm);
     let (error_phi, error_grad) = errors(scenario, &inputs, &output, 0, comm);

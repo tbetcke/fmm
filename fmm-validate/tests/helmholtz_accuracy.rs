@@ -32,7 +32,7 @@ use nd_fmm_tables::helmholtz::plane_wave::merge::precision_for_tolerance;
 use nd_fmm_validate::SplitMix64;
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::helmholtz_accuracy::{
-    Case, Oracle, Problem, checksum, complex_k, run, run_output, sweep_crossovers,
+    Case, Oracle, Problem, Row, checksum, complex_k, run, run_output, sweep_crossovers,
 };
 use nd_fmm_validate::helmholtz_calibration::Curve;
 use nd_fmm_validate::helmholtz_fmm3d::{
@@ -120,8 +120,30 @@ fn check_harness(world: &SimpleCommunicator) {
     assert_eq!(Oracle::sharded(k, &problem, true, 2, world), serial);
 }
 
+/// The per-level columns of a row (Helmholtz CH6.2b): an entry per level, no V pairs on
+/// levels 0 and 1, no M2L time on level 0 (the downward pass calls M2L from level 1), a
+/// time on every level with V pairs.
+fn check_levels(row: &Row) {
+    assert_eq!(row.m2l_seconds.len(), row.levels);
+    assert_eq!(row.v_pairs.len(), row.levels);
+    assert_eq!(&row.v_pairs[..2], &[0, 0], "no V pairs on levels 0 and 1");
+    assert_eq!(row.m2l_seconds[0], 0.0, "no M2L on level 0");
+    assert!(
+        row.v_pairs.iter().any(|&n| n > 0),
+        "V pairs: {:?}",
+        row.v_pairs
+    );
+    for (l, (&seconds, &pairs)) in row.m2l_seconds.iter().zip(&row.v_pairs).enumerate() {
+        assert!(
+            pairs == 0 || seconds > 0.0,
+            "level {l}: {pairs} V pairs in {seconds} s"
+        );
+    }
+}
+
 /// The FMM within ε, at 1 and 2 threads with one checksum, and on several ranks the
-/// checksum of one rank.
+/// checksum of one rank; the per-level columns, the same V pairs on one rank, and two
+/// evaluations of one build the same checksum.
 fn check_fmm(world: &SimpleCommunicator, case: &Case) {
     let problem = Problem::new(case);
     let oracle = Oracle::sharded(complex_k(case), &problem, case.gradients, 2, world);
@@ -142,15 +164,27 @@ fn check_fmm(world: &SimpleCommunicator, case: &Case) {
             );
         }
         assert_eq!(row.errors.len(), case.vectors + 1);
+        check_levels(row);
+        assert_eq!(row.first_evaluate, row.evaluate, "one evaluation");
     }
     assert_eq!(
         rows[0].checksum, rows[1].checksum,
         "threads change the output"
     );
+    let twice = Case {
+        evaluations: 2,
+        ..case.clone()
+    };
+    let row = run(&twice, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert_eq!(row.checksum, rows[0].checksum, "the second evaluation");
+    assert_eq!(row.errors, rows[0].errors);
+    assert!(row.first_evaluate > 0.0);
+    check_levels(&row);
     if world.size() > 1 {
         let one = SimpleCommunicator::self_comm();
         let row = run(case, &problem, &oracle, 1, &one).expect("the one-rank FMM runs");
         assert_eq!(row.checksum, rows[0].checksum, "ranks change the output");
+        assert_eq!(row.v_pairs, rows[0].v_pairs, "the V pairs of one rank");
         // The same output; the error sums are reduced in another order (relative 1e-12).
         for (one, many) in row.errors.iter().zip(&rows[0].errors) {
             for (a, b) in one.iter().zip(many) {
