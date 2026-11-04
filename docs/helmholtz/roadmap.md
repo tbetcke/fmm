@@ -26,8 +26,8 @@ node budget, bit for bit at every bound; 2026-11-04 its default 8 GiB per node s
 off). 2026-11-04: CH6.2b split into our strategies timed per level (CH6.2b) and FMM3D
 with D8 (CH6.2c); CH6.2b done on the M6 and locust (the exponential M2L the fastest
 method on almost every level below the coarsest at 10⁻⁶, 0.19–0.45× Rotation's M2L on the
-larger cases; at 10⁻³ a per-level choice; the coarse levels slow at many threads),
-Kathleen's runs pending. Next: CH6.2c (*Machines:* Kathleen; D8), once CH6.2b is merged.
+larger cases; at 10⁻³ a per-level choice; the coarse levels slow at many threads);
+Kathleen down, its runs moved to CH6.2c (the user). Next: CH6.2c (*Machines:* Kathleen; D8), once CH6.2b is merged.
 
 ## How `/next-task` reads this file
 
@@ -681,7 +681,9 @@ at any kD.
   4 GiB; a cut by spatial blocks in place of Morton runs would recompute less, if it
   matters), and the ranks × threads split on the large cases (one rank per node, CH3.6's
   split, one rank per core; W1 at kD = 500 evaluated in 39.7 s at 40 × 1 against 21.3 s
-  at 1 × 40). *Needs:* CH6.2a. *Machines:* locust, Kathleen.
+  at 1 × 40). Amended on 2026-11-04 (the user, "go ahead", Kathleen down: its login node
+  refused every connection from 10:10): done on the M6 and locust, Kathleen's runs moved to
+  CH6.2c, which runs on Kathleen anyway. *Needs:* CH6.2a. *Machines:* locust.
 - [ ] **CH6.2c Beside FMM3D's exponential M2L; D8.** Per-level accuracy and time beside
   FMM3D's on the same problems: FMM3D's M2L per level from a timed build of `hfmm3d`
   (per-level timers in its main routine, a patch applied by `tools/fmm3d/build.sh`, outside
@@ -698,8 +700,13 @@ at any kD.
   below the parent (by frame, direction or child) or the rule takes Rotation on levels of
   few boxes on every machine; and at ε = 10⁻³ a per-level choice among Batched, the
   exponential M2L and Rotation was up to 1.32× faster than any one strategy (CH6.2b's
-  per-level tables are the input). *Needs:* CH6.2b, CH1.4. *Machines:* Kathleen.
-  *Sign-off:* D8.
+  per-level tables are the input). Also (CH6.2b, moved on 2026-11-04 while Kathleen was
+  down): CH6.2b's Kathleen runs, the x86 AVX-512 class and a two-socket node: fetch job
+  628611's outputs (`matrix` and `large` at 1 × 40, completed;
+  `/scratch/scratch/ucahtbe/fmm/logs/ch6-2b/`), run `large` at 4 × 10 and 40 × 1
+  (`tools/helmholtz/ch6-2b-runs.sh`; the command in docs/helmholtz/tasks/CH6.2b.md,
+  "Pending runs"), and add Kathleen's per-level tables to CH6.2b's report (§5) before D8 is
+  proposed. *Needs:* CH6.2b, CH1.4. *Machines:* Kathleen. *Sign-off:* D8.
 - [ ] **H6.G Gate.** `/milestone-gate H6`. *Needs:* every task above.
 
 ## H4: High-frequency levels

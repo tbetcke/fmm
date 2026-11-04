@@ -24,6 +24,10 @@ sub-task's, from the roadmap's CH6.2b:
 > each strategy alone. Also: at the default waves budget (8 GiB per node), and the ranks ×
 > threads split on the large cases (one rank per node, CH3.6's split, one rank per core).
 
+Amended on 2026-11-04 (the user: "yes, go ahead with that change"): Kathleen was down (its
+login node refused every connection from 10:10), so the acceptance is the M6 and locust,
+and Kathleen's runs move to CH6.2c's line, which runs on Kathleen anyway.
+
 The per-level accuracy of the exponential M2L against Rotation is CH6.1e's scan (its report
 §2, each level's waves alone); this task records the end-to-end errors of every strategy
 beside the times, and CH6.2c the per-level accuracy against FMM3D's.
@@ -129,6 +133,8 @@ beyond the gate on the M6 and Kathleen's exclusive node.
 - Done: locust, 2026-11-04, `THREADS=72 SPLITS="1x72 8x9 72x1" tools/helmholtz/ch6-2b-runs.sh
   /data/ucahtbe/logs/ch6-2b matrix large` (source 1e22995), and the W3 large cases at
   8 × 9 and 72 × 1 again after the stdin fix (8fb9f84). The report's §2–§4.
+Moved to CH6.2c (the amendment above):
+
 - Kathleen job 628611 (node-c11a-142, 43 min, completed, every launch exit 0): the build,
   `THREADS=40 tools/helmholtz/ch6-2b-runs.sh /scratch/scratch/ucahtbe/fmm/logs/ch6-2b
   matrix large` (1 × 40). Pending: fetch `/scratch/scratch/ucahtbe/fmm/logs/ch6-2b/` and

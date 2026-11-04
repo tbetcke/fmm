@@ -12,7 +12,7 @@ proposal [docs/design/helmholtz-fmm-proposal.md](../../docs/design/helmholtz-fmm
   before): 1 × 72 for every case, and 8 × 9 and 72 × 1 for the large ones, on 2026-11-04,
   source 1e22995 (the W3 large cases at 8 × 9 and 72 × 1 from 8fb9f84, whose code is the
   same; §6);
-- **Kathleen**: pending (§5).
+- **Kathleen**: not in this report; its runs moved to CH6.2c (§5).
 
 Release builds, rustc 1.99.0, Open MPI 5.0.11 (M6) and 5.0.10 (locust), BLAS threads 1,
 the P2P kernel `Auto` (NEON on both), the default waves budget (8 GiB per node). Commands:
@@ -262,15 +262,16 @@ slowest (the exponential M2L at 10⁻³ 1.5× its 1 × 72 time). The exponential
 72 × 1). Rank 0's peak is the 1 × 72 run's whole tree; at 8 × 9 and 72 × 1 a rank holds
 its share (and its share of the default 8 GiB waves budget per node).
 
-## 5. Kathleen (pending)
+## 5. Kathleen (moved to CH6.2c)
 
 Job 628611 (one node, node-c11a-142, 43 min, 2026-11-04: the build, `matrix` and `large`
 at 1 × 40) completed with every launch's exit 0; its outputs are on Kathleen
-(`/scratch/scratch/ucahtbe/fmm/logs/ch6-2b/`) and not yet fetched: from 2026-11-04 10:10
-the Kathleen login node closed every connection through UCL's gateway
-(`kex_exchange_identification: Connection closed by remote host`), so neither the fetch nor
-the second job (`large` at 4 × 10 and 40 × 1) could run. Both are the PR's pending runs;
-this section and the summary take their numbers when they have run.
+(`/scratch/scratch/ucahtbe/fmm/logs/ch6-2b/`) and were not fetched: from 2026-11-04 10:10
+Kathleen's login node refused every connection, so neither the fetch nor the second job
+(`large` at 4 × 10 and 40 × 1) could run. On 2026-11-04 the user moved both to CH6.2c,
+which runs on Kathleen anyway: Kathleen's per-level tables (the x86 AVX-512 class, where
+Auto's crossover differs, and a two-socket node) are added to this section there, before D8
+is proposed.
 
 ## 6. Runs and defects found on the way
 
@@ -306,7 +307,7 @@ this section and the summary take their numbers when they have run.
 - **Batched above the crossover** stays slow (2–10× Rotation's M2L at p ≥ 15 on both
   machines): Auto is right not to take it.
 - **The splits**: on locust one rank with all 72 cores was fastest or within 10 % of
-  8 × 9, and 72 × 1 the slowest; on Kathleen (two sockets) CH3.6's 4 × 10 is pending (§5).
+  8 × 9, and 72 × 1 the slowest; on Kathleen (two sockets) CH3.6's 4 × 10 is CH6.2c's (§5).
 
 ## 8. Reproducing
 
