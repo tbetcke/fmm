@@ -2080,8 +2080,8 @@ request, using this template:
     per case at every bound from the floor to the whole level, at 1 × 40 and 40 × 1. At one
     rank the whole level's waves 8.9 and 11.7 GB (peak 14.6 and 17.1 GB); 4 GiB 1.03× and
     1.04× its time (peak 10.0 and 9.7 GB), 1 GiB 1.05× and 1.11×, 256 MiB 1.34× and 1.43×,
-    the floor 13× and 28×. At 40 ranks per node the default (107 MB per rank) 1.19× and
-    1.27×.
+    the floor 13× and 28×. At 40 ranks per node (job 628529, with repeats) the default
+    (107 MB per rank) 1.16× and 1.28×, 8 GiB 1.04× and 1.11×, 16 GiB 1.01× and 1.06×.
 - Tests: `check_plane_wave_buffer` in `fmm-exec/tests/helmholtz_fmm.rs` (the floor, twice
   the floor and in release no bound bit for bit the default; the floor at 2 threads and
   against the one-rank FMM; the counts agreed over the ranks; on one rank the floor chunked,
@@ -2092,15 +2092,15 @@ request, using this template:
   all-targets; `cargo doc`; `cargo test --workspace` (22 min 52 s, before the review's test
   changes) and `cargo test` (20 min 28 s, after them), all passed; the MPI list at 2 and 4
   ranks (`run-mpi-tests.sh`, every executable passed; `helmholtz_fmm` 187 s and 165 s);
-  `helmholtz_fmm` and `helmholtz_accuracy` in release. Kathleen job 628518 (above). Pending:
-  job 628529 (8 and 16 GiB per node at 40 ranks, with repeats; the report's §4). Not run:
+  `helmholtz_fmm` and `helmholtz_accuracy` in release. Kathleen jobs 628518 and 628529
+  (above; the report's §2–§4). Not run:
   D9 (no Laplace path changed). A self-review by a subagent: no code defect (the chunking,
   the rollback, the offsets and the collectives checked); its points taken (a test that the
   floor chunks, a real middle bound, the counts agreed over the ranks, the byte formula for
   any bound, stale docs, the plan's run text), and the debug run trimmed after the new
   checks took it to 339 s.
 - Decisions: none taken. For sign-off: the default waves budget per node (the PR's
-  question 1).
+  question 1; 4 GiB in the branch, 8 GiB proposed after job 628529).
 - Laplace: not touched (Helmholtz files of `nd-fmm-exec`, `nd-fmm-validate`; the driver's
   `Execution` used, not changed).
 - Follow-ups:

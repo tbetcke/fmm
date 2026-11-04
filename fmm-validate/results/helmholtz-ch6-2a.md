@@ -6,7 +6,8 @@ proposal [docs/design/helmholtz-fmm-proposal.md](../../docs/design/helmholtz-fmm
 2026-11-03: the waves buffer bounded and counted in the node budget before CH6.2 takes
 times). Measured on Kathleen (one exclusive node of 2 × 20 Cascade Lake cores, Intel Xeon
 Gold 6248, 192 GB; `tools/kathleen/`), job 628518 on node-c11a-083 (source 7a51393, whose
-code is the branch's; only docs differed), and job 628529 (the budgets at 40 ranks, §4).
+code is the branch's; only docs differed), and job 628529 on node-c11b-023 (the budgets at
+40 ranks, §4).
 Release build, rustc 1.99.0, Open MPI 4.1.6, BLAS threads 1, the P2P kernel `Auto`
 (AVX-512). Commands: `tools/helmholtz/ch6-2a-runs.sh <out> budgets ranks` (§6).
 
@@ -32,8 +33,8 @@ Release build, rustc 1.99.0, Open MPI 4.1.6, BLAS threads 1, the P2P kernel `Aut
   waves), 1 GiB 1.05× and 1.11×, 256 MB 1.34× and 1.43×; the floor 13× and 28× (10× and
   22× the waves in 13,572 and 32,121 chunks): a correctness floor, not a setting.
 - **At 40 ranks per node the default is tight** (§4): 4 GiB is 107 MB per rank, which took
-  1.19× (W1) and 1.27× (W3) the whole level's evaluation (1.84× and 1.76× the waves on rank
-  0). §4 measures 8 and 16 GiB per node; the default is question 1 of the PR.
+  1.16× (W1) and 1.28× (W3) the whole level's evaluation (1.84× and 1.76× the waves on rank
+  0); 8 GiB 1.04× and 1.11×, 16 GiB 1.01× and 1.06×. The default is question 1 of the PR.
 
 ## 1. Method
 
@@ -102,22 +103,38 @@ cost of the outgoing step alone; merge and shift does the same work at every bou
 
 ## 4. Several ranks per node (40 ranks × 1 thread)
 
-Each rank's bound is the budget over the 40 ranks per node. The whole level is each rank's
-own and ghost boxes; rank 0's numbers:
+Each rank's bound is the budget over the 40 ranks per node: 4 GiB is 107 MB per rank,
+8 GiB 215 MB, 16 GiB 429 MB. The whole level is each rank's own and ghost boxes; the
+counts and the peak are rank 0's, the time the evaluation's (the slowest rank's). Job
+628518 ran the whole level and the default once (node-c11a-083); job 628529
+(node-c11b-023) ran the whole level, 4, 8 and 16 GiB in that order twice:
 
-| Case | budget per node | per rank | waves MB (rank 0) | chunks / calls | waves (rank 0) | evaluate s | peak MB (rank 0) | checksum |
-| --- | --- | --- | ---: | --- | ---: | --- | ---: | --- |
-| W1, kD = 500 | whole | – | 345 | 4 / 4 | 34,968 | 39.70 | 1,439 | 30d1687b75dca4d0 |
-| | 4 GiB (default) | 107 MB | 107 | 19 / 4 | 64,488 | 47.05 | 1,210 | 30d1687b75dca4d0 |
-| W3, kD = 100 | whole | – | 418 | 5 / 5 | 34,224 | 12.56 | 938 | 4041e7524c66aaac |
-| | 4 GiB (default) | 107 MB | 107 | 12 / 5 | 60,336 | 16.00 | 627 | 4041e7524c66aaac |
+| Case | budget per node | waves MB (rank 0) | chunks / calls | waves (rank 0) | evaluate s (628529) | ÷ whole (waves) | ÷ whole (time) | peak MB (rank 0) |
+| --- | --- | ---: | --- | ---: | --- | ---: | ---: | ---: |
+| W1, kD = 500 | whole | 345 | 4 / 4 | 34,968 | 40.47, 40.71 | 1 | 1 | 1,510, 1,445 |
+| | 16 GiB | 345 | 4 / 4 | 34,968 | 41.40, 40.29 | 1 | 1.006 | 1,509, 1,419 |
+| | 8 GiB | 215 | 7 / 4 | 45,936 | 41.99, 42.26 | 1.314 | 1.038 | 1,315, 1,316 |
+| | 4 GiB (default) | 107 | 19 / 4 | 64,488 | 46.82, 47.45 | 1.844 | 1.161 | 1,244, 1,221 |
+| W3, kD = 100 | whole | 418 | 5 / 5 | 34,224 | 12.65, 12.57 | 1 | 1 | 934, 936 |
+| | 16 GiB | 418 | 5 / 5 | 34,224 | 13.33, 13.29 | 1 | 1.056 | 936, 938 |
+| | 8 GiB | 215 | 7 / 5 | 45,600 | 13.97, 13.94 | 1.332 | 1.107 | 732, 733 |
+| | 4 GiB (default) | 107 | 12 / 5 | 60,336 | 16.39, 15.93 | 1.763 | 1.282 | 624, 625 |
 
-The checksums are the one-rank runs': rank invariance at 40 ranks, at both bounds. At 107 MB
-per rank the default recomputes 1.84× and 1.76× rank 0's waves and takes 1.19× and 1.27×
-the whole level's time; the whole level holds at most 345–418 MB per rank on rank 0 here,
-about 14–17 GB per node.
+Job 628518 gave the whole level 39.70 and 12.56 s and the default 47.05 and 16.00 s (1.19×
+and 1.27×), the same within 3 %. The checksums are the one-rank runs' at every budget, in
+both jobs (W1 `30d1687b75dca4d0`, W3 `4041e7524c66aaac`): rank invariance at 40 ranks. The
+repeats agree within 0.2–2.9 %.
 
-(Job 628529: 8 and 16 GiB per node, with repeats; pending.)
+- **4 GiB costs 16–28 %**, the halo of 12–19 small chunks per rank (1.76–1.84× rank 0's
+  waves); it saves rank 0 about 250 and 310 MB of peak (W1, W3), about 10–12 GB per node.
+- **8 GiB costs 4 % and 11 %** (1.31–1.33× the waves) and saves about 160 and 200 MB per
+  rank, about 6–8 GB per node.
+- **16 GiB holds rank 0's whole level** in both cases. W1 costs nothing; W3's 5.6 % in both
+  repeats, with rank 0's work and memory identical to the whole level's, is most likely a
+  rank whose levels exceed 429 MB and chunk (the counts are rank 0's alone).
+
+The whole level holds at most 345–418 MB of waves per rank on rank 0 here, about 14–17 GB
+per node; Kathleen's nodes have 192 GB.
 
 ## 5. Tests
 
