@@ -71,7 +71,7 @@ launch() {
         fi
         local before start=$SECONDS
         before=$($macos && others 0 || echo -)
-        timeout "$TIMEOUT" "$@" > "$out/$name.md" 2> "$out/$name.err" &
+        timeout "$TIMEOUT" "$@" < /dev/null > "$out/$name.md" 2> "$out/$name.err" &
         local pid=$! peak=0
         if $macos; then
             while kill -0 "$pid" 2> /dev/null; do
