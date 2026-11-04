@@ -72,14 +72,16 @@ def main():
             split = m.group(3)
             levels, rows = read(os.path.join(directory, name))
             for c in levels:
-                workload, n, kd, eps, setting, rt, level, p, ran, pairs, seconds, _ = c
+                workload, n, kd, eps, setting, rt, level, p, ran, pairs, seconds, per_pair = c
                 key = (workload, n, kd, eps, split)
                 s = strategy_of(setting)
                 if level == "Σ":
                     evaluate = float(re.match(r"evaluate ([0-9.]+) s", ran).group(1))
                     data[machine][key][s]["evaluate"].append(evaluate)
                     continue
-                data[machine][key][s][int(level)].append(float(seconds))
+                # Pairs × ns per pair keeps the precision of small levels (the seconds were
+                # printed to 0.1 ms before CH6.2b's review).
+                data[machine][key][s][int(level)].append(int(pairs) * float(per_pair) * 1e-9)
                 entry = info[(machine, key)].setdefault(int(level), [p, pairs, {}])
                 entry[2][s] = ran
             # The main rows: the strategies in the launch's order, per (kD, ε).
@@ -89,11 +91,17 @@ def main():
                 groups[(c[0], c[1], c[2], c[3])].append(c)
             for (workload, n, kd, eps), group in groups.items():
                 for s, c in zip(order, group):
+                    # The "M2L" column names the setting, or `rotation` where it ran none.
+                    if not (c[7].startswith(s) or c[7].startswith("rotation")):
+                        sys.exit(f"{name}: row {c[7]!r} is not {s}'s")
                     key = (workload, n, kd, eps, split)
                     errors[(machine, key)][s] = (float(c[16]), float(c[17]), c[18])
 
     def mean(values):
         return sum(values) / len(values) if values else float("nan")
+
+    def ratio_of(a, b):
+        return a / b if b > 0 else float("nan")
 
     def spread(values):
         return max(values) / min(values) if values and min(values) > 0 else float("nan")
@@ -105,7 +113,13 @@ def main():
             workload, n, kd, eps, split = key
             per = data[machine][key]
             lv = sorted(info[(machine, key)])
-            print(f"### {workload} (N = {n}), kD = {kd}, {eps}, {split.replace('x', ' × ')}\n")
+            title = workload if "N =" in workload else f"{workload} (N = {n})"
+            for s in STRATEGIES:
+                launches = len(per[s]["evaluate"])
+                if launches != 2:
+                    print(f"warning: {machine} {title} kD = {kd} {eps} {split}: {s} in {launches} "
+                          "launches, not 2", file=sys.stderr)
+            print(f"### {title}, kD = {kd}, {eps}, {split.replace('x', ' × ')}\n")
             print("| level | p | V pairs | " + " | ".join(STRATEGIES) + " | fastest | planewave ÷ fastest other |")
             print("| ---: | ---: | ---: | " + " | ".join(["---:"] * len(STRATEGIES)) + " | --- | ---: |")
             best_total, worst_spread = 0.0, 1.0
@@ -126,7 +140,7 @@ def main():
                 best_total += methods[fastest]
                 pw = [t for m_, t in methods.items() if m_.startswith("planewave")]
                 others = [t for m_, t in methods.items() if not m_.startswith("planewave")]
-                ratio = pw[0] / min(others) if pw and others else float("nan")
+                ratio = ratio_of(pw[0], min(others)) if pw and others else float("nan")
                 shown = []
                 for s in STRATEGIES:
                     if s not in times:
@@ -143,7 +157,7 @@ def main():
             print("| evaluate | | | " + " | ".join(f"{evals[s]:.3f}" for s in STRATEGIES) + " | | |\n")
             e = errors.get((machine, key), {})
             pw = e.get("planewave"), e.get("rotation")
-            ratio = (f"{pw[0][0] / pw[1][0]:.3f}/{pw[0][1] / pw[1][1]:.3f}"
+            ratio = (f"{ratio_of(pw[0][0], pw[1][0]):.3f}/{ratio_of(pw[0][1], pw[1][1]):.3f}"
                      if pw[0] and pw[1] else "–")
             summary.append((machine, key, sums, evals, best_total, worst_spread, ratio))
     print("## Summary\n")
@@ -156,7 +170,7 @@ def main():
         print(f"| {machine} | {workload} | {kd} | {eps.split('= ')[1]} | {split.replace('x', '×')} | "
               + " | ".join(f"{sums[s]:.3f}" for s in STRATEGIES)
               + f" | {best:.3f} | "
-              + " | ".join(f"{sums[s] / best:.2f}" for s in STRATEGIES)
+              + " | ".join(f"{ratio_of(sums[s], best):.2f}" for s in STRATEGIES)
               + " | " + " | ".join(f"{evals[s]:.3f}" for s in STRATEGIES)
               + f" | {worst:.2f} | {ratio} |")
 
