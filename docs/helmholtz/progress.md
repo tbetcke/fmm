@@ -2127,7 +2127,7 @@ request, using this template:
     `fmm-validate/results/helmholtz-ch6-2b.md`.
   - The M6 (1 × 6) and locust (1 × 72; the large cases also 8 × 9, 72 × 1): at 10⁻⁶ the
     exponential M2L the fastest method on almost every level below the coarsest, 0.19–0.40×
-    Rotation's M2L on the M6's cases of 7 × 10⁴ points and more (evaluation 0.27–0.52×
+    Rotation's M2L on the M6's cases of 8 × 10⁴ points and more (evaluation 0.27–0.52×
     Auto's), 0.45× and 0.21× on W1 at kD = 500 and W3 at kD = 100 on locust; at 10⁻³ no
     single strategy best (a per-level choice up to 1.32× faster); level 2 9–24× Rotation's
     time at 72 threads (parents split the level call); Batched above Auto's crossover 2–10×
