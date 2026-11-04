@@ -15,7 +15,9 @@
 # the bytes, the chunks and the waves computed, the evaluation's seconds, the checksum and
 # rank 0's peak resident size (VmHWM on Linux). Meant for a Kathleen node (an exclusive
 # node, the job named in the report); BLAS threads 1; each launch's output in
-# <out-dir>/<stage>-<name>.md, a line per launch in <out-dir>/runs.log.
+# <out-dir>/<stage>-<name>.md, a line per launch in <out-dir>/runs.log. `default` is the
+# builder's default: 4 GiB in jobs 628518 and 628529, 8 GiB since the sign-off of
+# 2026-11-04 (pass 4096 to repeat those runs).
 set -u
 out=$1
 shift

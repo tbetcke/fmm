@@ -115,9 +115,9 @@ use crate::threading::REQUIRED_MPI_THREADING;
 /// The deepest level of a Morton key, 16 (CONVENTIONS §3.12).
 const DEEPEST: usize = DEEPEST_LEVEL as usize;
 
-/// The default bytes per node of the exponential M2L's waves buffer, 4 GiB
-/// ([`HelmholtzFmmBuilder::plane_wave_budget`]; Helmholtz CH6.2a).
-pub const DEFAULT_PLANE_WAVE_NODE_BUDGET: usize = 4 << 30;
+/// The default bytes per node of the exponential M2L's waves buffer, 8 GiB
+/// ([`HelmholtzFmmBuilder::plane_wave_budget`]; Helmholtz CH6.2a, signed off 2026-11-04).
+pub const DEFAULT_PLANE_WAVE_NODE_BUDGET: usize = 8 << 30;
 
 /// Why a Helmholtz FMM was not built or not evaluated.
 #[derive(Debug, Error)]

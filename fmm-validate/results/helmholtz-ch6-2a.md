@@ -21,20 +21,25 @@ Release build, rustc 1.99.0, Open MPI 4.1.6, BLAS threads 1, the P2P kernel `Aut
   one checksum per case at the whole level, 4 GiB, 1 GiB, 256 MB and the floor, at
   1 rank × 40 threads and at 40 ranks × 1 thread (§2, §4).
 - **The bound.** `HelmholtzFmmBuilder::plane_wave_budget` is bytes per node (default
-  `DEFAULT_PLANE_WAVE_NODE_BUDGET`, 4 GiB in this branch, for sign-off), divided by the
-  ranks per node that `build` agrees from one `split_shared` (proposal §2, constraint 7);
-  the operator's floor is one parent's 216 slots per level. `plane_wave_bytes` counts the
-  buffer, a position per box and the chunk's source list with the tables and the scratch.
+  `DEFAULT_PLANE_WAVE_NODE_BUDGET`, 8 GiB, signed off 2026-11-04 after §4; the runs'
+  `default` was 4 GiB, the branch's default when they ran), divided by the ranks per node
+  that `build` agrees from one `split_shared` (proposal §2, constraint 7); the operator's
+  floor is one parent's 216 slots per level. `plane_wave_bytes` counts the buffer, a
+  position per box and the chunk's source list with the tables and the scratch. The bound
+  is not a hard cap (the floor may exceed it, the positions lie outside it), accepted as
+  documented on 2026-11-04.
 - **The memory falls with the bound** (§2). At one rank the whole level's waves took 8.9 GB
   (W1, kD = 500) and 11.7 GB (W3, kD = 100), peak resident 14.6 and 17.1 GB; at 4 GiB the
   peak is 10.0 and 9.7 GB, at 1 GiB 6.8 and 6.5 GB, against Rotation's 5.4 and 5.3 GB.
 - **The cost is the recomputation of a chunk's halo** (§3). At one rank × 40 threads the
-  4 GiB default took 1.03× and 1.04× the whole level's evaluation (1.05× and 1.16× the
+  4 GiB took 1.03× and 1.04× the whole level's evaluation (1.05× and 1.16× the
   waves), 1 GiB 1.05× and 1.11×, 256 MB 1.34× and 1.43×; the floor 13× and 28× (10× and
   22× the waves in 13,572 and 32,121 chunks): a correctness floor, not a setting.
-- **At 40 ranks per node the default is tight** (§4): 4 GiB is 107 MB per rank, which took
-  1.16× (W1) and 1.28× (W3) the whole level's evaluation (1.84× and 1.76× the waves on rank
-  0); 8 GiB 1.04× and 1.11×, 16 GiB 1.01× and 1.06×. The default is question 1 of the PR.
+- **At 40 ranks per node 4 GiB is tight** (§4): 107 MB per rank, which took 1.16× (W1) and
+  1.28× (W3) the whole level's evaluation (1.84× and 1.76× the waves on rank 0); 8 GiB
+  1.04× and 1.11×, 16 GiB 1.01× and 1.06×. The default is 8 GiB since the sign-off of
+  2026-11-04: 4–11 % at 40 ranks per node, and on one rank about 14 GB of peak (estimated)
+  on these cases, inside the M6's 24 GB.
 
 ## 1. Method
 
@@ -46,7 +51,8 @@ cases are CH6.1e's large ones at ε = 10⁻⁶ under the rule (iprec 2 on every 
 quadrature): W1 at kD = 500 (N = 1,989,437; waves on levels 4–7) and W3 at kD = 100
 (N = 4,031,442; levels 2–6), complex charges, gradients, 1,000 sampled targets. One
 evaluation per launch; the whole level and the default ran twice, first and last, which
-gives the run-to-run spread. Rank 0's peak resident size is VmHWM at the end of the launch,
+gives the run-to-run spread. The runs' default was 4 GiB per node, the branch's default when
+they ran; the tables label it "4 GiB". Rank 0's peak resident size is VmHWM at the end of the launch,
 the oracle's memory included. Bounds in MB are MiB (`--plane-wave-budget 1024` is 1 GiB).
 
 ## 2. Bit for bit, bytes and memory (one rank × 40 threads)
@@ -55,13 +61,13 @@ the oracle's memory included. Bounds in MB are MiB (`--plane-wave-budget 1024` i
 | --- | --- | ---: | ---: | --- | ---: | --- |
 | W1, kD = 500 | Rotation | – | – | – | 5,406 | afecb3102e373417 |
 | | whole | 9,220 | 8,937 | 4 / 4 | 14,643 | 30d1687b75dca4d0 |
-| | 4 GiB (default) | 4,578 | 4,295 | 7 / 4 | 10,046 | 30d1687b75dca4d0 |
+| | 4 GiB | 4,578 | 4,295 | 7 / 4 | 10,046 | 30d1687b75dca4d0 |
 | | 1 GiB | 1,357 | 1,074 | 22 / 4 | 6,793 | 30d1687b75dca4d0 |
 | | 256 MiB | 551 | 268 | 112 / 4 | 5,948 | 30d1687b75dca4d0 |
 | | floor (0) | 348 | 65 | 13,572 / 4 | 5,790 | 30d1687b75dca4d0 |
 | W3, kD = 100 | Rotation | – | – | – | 5,282 | 1418dae5eeeeb43f |
 | | whole | 11,945 | 11,719 | 5 / 5 | 17,147 | 4041e7524c66aaac |
-| | 4 GiB (default) | 4,520 | 4,295 | 8 / 5 | 9,720 | 4041e7524c66aaac |
+| | 4 GiB | 4,520 | 4,295 | 8 / 5 | 9,720 | 4041e7524c66aaac |
 | | 1 GiB | 1,299 | 1,074 | 21 / 5 | 6,495 | 4041e7524c66aaac |
 | | 256 MiB | 494 | 268 | 110 / 5 | 5,685 | 4041e7524c66aaac |
 | | floor (0) | 248 | 23 | 32,121 / 5 | 5,448 | 4041e7524c66aaac |
@@ -83,18 +89,18 @@ mean of the whole level's two runs:
 | --- | --- | --- | ---: | ---: | ---: |
 | W1, kD = 500 | Rotation | 41.69 | – | – | 1.96 |
 | | whole | 21.12, 21.41 | 745,320 | 1 | 1 |
-| | 4 GiB (default) | 22.12, 21.46 | 784,296 | 1.052 | 1.025 |
+| | 4 GiB | 22.12, 21.46 | 784,296 | 1.052 | 1.025 |
 | | 1 GiB | 22.43 | 895,536 | 1.202 | 1.055 |
 | | 256 MiB | 28.49 | 1,181,496 | 1.585 | 1.340 |
 | | floor | 286.67 | 7,717,128 | 10.35 | 13.5 |
 | W3, kD = 100 | Rotation | 37.17 | – | – | 3.64 |
 | | whole | 10.28, 10.16 | 898,752 | 1 | 1 |
-| | 4 GiB (default) | 10.61, 10.61 | 1,038,768 | 1.156 | 1.038 |
+| | 4 GiB | 10.61, 10.61 | 1,038,768 | 1.156 | 1.038 |
 | | 1 GiB | 11.38 | 1,265,088 | 1.408 | 1.114 |
 | | 256 MiB | 14.62 | 1,873,200 | 2.084 | 1.431 |
 | | floor | 285.97 | 19,994,304 | 22.25 | 28.0 |
 
-The run-to-run spread of the whole level and the default is 1.4 % and 3.1 % (W1), 1.2 %
+The run-to-run spread of the whole level and 4 GiB is 1.4 % and 3.1 % (W1), 1.2 %
 and 0 % (W3). A chunk of Morton-consecutive parents reads the children of their
 neighbours, so a small chunk recomputes a halo of sources that its neighbours' chunks
 compute again; the chunk's pool regions add a fixed cost per chunk, which dominates at the
@@ -106,21 +112,21 @@ cost of the outgoing step alone; merge and shift does the same work at every bou
 Each rank's bound is the budget over the 40 ranks per node: 4 GiB is 107 MB per rank,
 8 GiB 215 MB, 16 GiB 429 MB. The whole level is each rank's own and ghost boxes; the
 counts and the peak are rank 0's, the time the evaluation's (the slowest rank's). Job
-628518 ran the whole level and the default once (node-c11a-083); job 628529
+628518 ran the whole level and 4 GiB once (node-c11a-083); job 628529
 (node-c11b-023) ran the whole level, 4, 8 and 16 GiB in that order twice:
 
 | Case | budget per node | waves MB (rank 0) | chunks / calls | waves (rank 0) | evaluate s (628529) | ÷ whole (waves) | ÷ whole (time) | peak MB (rank 0) |
 | --- | --- | ---: | --- | ---: | --- | ---: | ---: | ---: |
 | W1, kD = 500 | whole | 345 | 4 / 4 | 34,968 | 40.47, 40.71 | 1 | 1 | 1,510, 1,445 |
 | | 16 GiB | 345 | 4 / 4 | 34,968 | 41.40, 40.29 | 1 | 1.006 | 1,509, 1,419 |
-| | 8 GiB | 215 | 7 / 4 | 45,936 | 41.99, 42.26 | 1.314 | 1.038 | 1,315, 1,316 |
-| | 4 GiB (default) | 107 | 19 / 4 | 64,488 | 46.82, 47.45 | 1.844 | 1.161 | 1,244, 1,221 |
+| | 8 GiB (default) | 215 | 7 / 4 | 45,936 | 41.99, 42.26 | 1.314 | 1.038 | 1,315, 1,316 |
+| | 4 GiB | 107 | 19 / 4 | 64,488 | 46.82, 47.45 | 1.844 | 1.161 | 1,244, 1,221 |
 | W3, kD = 100 | whole | 418 | 5 / 5 | 34,224 | 12.65, 12.57 | 1 | 1 | 934, 936 |
 | | 16 GiB | 418 | 5 / 5 | 34,224 | 13.33, 13.29 | 1 | 1.056 | 936, 938 |
-| | 8 GiB | 215 | 7 / 5 | 45,600 | 13.97, 13.94 | 1.332 | 1.107 | 732, 733 |
-| | 4 GiB (default) | 107 | 12 / 5 | 60,336 | 16.39, 15.93 | 1.763 | 1.282 | 624, 625 |
+| | 8 GiB (default) | 215 | 7 / 5 | 45,600 | 13.97, 13.94 | 1.332 | 1.107 | 732, 733 |
+| | 4 GiB | 107 | 12 / 5 | 60,336 | 16.39, 15.93 | 1.763 | 1.282 | 624, 625 |
 
-Job 628518 gave the whole level 39.70 and 12.56 s and the default 47.05 and 16.00 s (1.19×
+Job 628518 gave the whole level 39.70 and 12.56 s and 4 GiB 47.05 and 16.00 s (1.19×
 and 1.27×), the same within 3 %. The checksums are the one-rank runs' at every budget, in
 both jobs (W1 `30d1687b75dca4d0`, W3 `4041e7524c66aaac`): rank invariance at 40 ranks. The
 repeats agree within 0.2–2.9 %.
@@ -160,6 +166,9 @@ tools/helmholtz/ch6-2a-runs.sh <out> budgets ranks
 RANK_BUDGETS="whole default 8192 16384 whole default 8192 16384" \
     tools/helmholtz/ch6-2a-runs.sh <out> ranks
 ```
+
+`default` is the builder's default, 8 GiB since the sign-off; the runs above took 4 GiB (pass
+`4096` in its place to repeat them).
 
 On Kathleen inside a one-node job (`tools/kathleen/submit.sh --time=04:00:00 --
 run.sbatch '<build>' '<script>'`; jobs 628518 and 628529), `THREADS=40`, `RANKS=40`.

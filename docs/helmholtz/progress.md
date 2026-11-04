@@ -2070,7 +2070,7 @@ request, using this template:
     `HelmholtzOperator::{with_plane_wave_buffer, plane_wave_buffer,
     plane_wave_buffer_bytes, plane_wave_counts}`, `PlaneWaveCounts`, `MIN_BUFFER_BOXES`
     (216); `HelmholtzFmmBuilder::plane_wave_budget` per node,
-    `DEFAULT_PLANE_WAVE_NODE_BUDGET` (4 GiB), divided by the ranks per node that `build`
+    `DEFAULT_PLANE_WAVE_NODE_BUDGET` (8 GiB), divided by the ranks per node that `build`
     now agrees (one `split_shared`, one all-reduce, every rank), `HelmholtzFmm::ranks_per_node`.
   - `nd-fmm-validate`: `Case::plane_wave_budget`, `Row::{plane_wave_buffer,
     plane_wave_counts}`, the example's `--plane-wave-budget MB|whole` and rank 0's peak
@@ -2099,8 +2099,10 @@ request, using this template:
   floor chunks, a real middle bound, the counts agreed over the ranks, the byte formula for
   any bound, stale docs, the plan's run text), and the debug run trimmed after the new
   checks took it to 339 s.
-- Decisions: none taken. For sign-off: the default waves budget per node (the PR's
-  question 1; 4 GiB in the branch, 8 GiB proposed after job 628529).
+- Decisions: signed off 2026-11-04, both as recommended: the default waves budget 8 GiB
+  per node (the runs took 4 GiB, the default before; at 40 ranks per node 8 GiB costs
+  4–11 % against 16–28 %); the bound not a hard cap (the floor and the positions outside
+  it), accepted as documented.
 - Laplace: not touched (Helmholtz files of `nd-fmm-exec`, `nd-fmm-validate`; the driver's
   `Execution` used, not changed).
 - Follow-ups:

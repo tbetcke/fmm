@@ -309,7 +309,7 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   the level call runs by chunks of whole parents whose distinct V sources' waves fit the
   buffer's bound (`with_plane_wave_buffer`, at least `MIN_BUFFER_BOXES` = 216 boxes of a
   level; `plane_wave_buffer`, `plane_wave_buffer_bytes`, `plane_wave_counts`): the builder's
-  `plane_wave_budget` per node (`DEFAULT_PLANE_WAVE_NODE_BUDGET` 4 GiB, `usize::MAX` a
+  `plane_wave_budget` per node (`DEFAULT_PLANE_WAVE_NODE_BUDGET` 8 GiB, `usize::MAX` a
   whole level) over the ranks per node, which `build` now agrees from one `split_shared`
   (`HelmholtzFmm::ranks_per_node`). Every box's waves are its multipole's alone and every
   accumulator keeps its order, so the output is the same at every bound;

@@ -140,7 +140,7 @@ no quiet-machine rule beyond Kathleen's exclusive node.
 
 ## Open questions
 
-1. The default node budget (4 GiB in the branch) for sign-off in the PR; proposed 8 GiB
-   after job 628529 (report §4).
-2. The bound's floor and the positions outside it: accept as documented, or refuse a
-   budget below the floor.
+1. The default node budget: signed off 2026-11-04, 8 GiB as recommended after job 628529
+   (report §4); the runs took 4 GiB, the branch's default before.
+2. The bound's floor and the positions outside it: signed off 2026-11-04, accepted as
+   documented, as recommended (no refusal of a budget below the floor).
