@@ -2143,18 +2143,22 @@ request, using this template:
   terminated (exit 143) inside the spikes after every default member had passed, so the
   non-default members (nd-fmm-kernels and the spikes) ran on their own and passed; the
   MPI list at 2 and 4 ranks (`run-mpi-tests.sh`, every executable passed; `helmholtz_fmm`
-  185 s and 162 s); `helmholtz_accuracy` in release at 1 and 2 ranks. Pending: Kathleen
+  185 s and 162 s); `helmholtz_accuracy` in release at 1 and 2 ranks. Kathleen's runs
   (job 628611, `matrix` and `large` at 1 × 40, completed, outputs not fetched; `large` at
-  4 × 10 and 40 × 1 not submitted): the login node closed every connection from
-  2026-11-04 10:10. Not run: D9 (no Laplace path). A self-review by a subagent: one
+  4 × 10 and 40 × 1 not submitted) moved to CH6.2c: the login node refused every
+  connection from 2026-11-04 10:10. Not run: D9 (no Laplace path). A self-review by a subagent: one
   blocking defect fixed (the macOS gate counted the launch: the M6's run made again), its
   points taken (the per-level seconds' digits, level 0 asserted, the doc paragraph, the
   tables' parsing, the plan as built).
-- Decisions: none.
+- Decisions: none. The acceptance amended on 2026-11-04 (the user, "yes, go ahead with
+  that change"): done on the M6 and locust, Kathleen's runs moved to CH6.2c. dps31 (a
+  shared Threadripper 3970X, AVX2 only, loaded at the time) was checked as a substitute
+  and not used: it is not Kathleen's AVX-512 class.
 - Laplace: not touched (the Helmholtz operator, `nd-fmm-validate`'s Helmholtz harness,
   tools).
 - Follow-ups:
   - CH6.2c: the coarse levels' level call at many threads (split below the parent, or a
     rule by the level's boxes) and the per-level choice at 10⁻³, both for D8 (sentences in
     CH6.2c's line).
-  - Kathleen's runs, this PR's pending runs.
+  - Kathleen's runs (fetch job 628611, `large` at 4 × 10 and 40 × 1, the report's §5):
+    a sentence in CH6.2c's line.
