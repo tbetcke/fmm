@@ -48,6 +48,16 @@
 //!   chunks and level calls and the waves computed (box × frame × vector), and the run ends
 //!   with rank 0's peak resident size (Linux).
 //!
+//! - `--levels` (Helmholtz CH6.2b): after the table, a second one with a row per run and
+//!   level with V pairs: the level's degree, the M2L that ran there (`rotation`, `dense`,
+//!   `classes`, `batched`, `batched-fused` or `planewave iq`), its V pairs summed over the
+//!   ranks, the M2L level calls' seconds (the slowest rank's, `Row::m2l_seconds`) and
+//!   nanoseconds per pair; then a row `Σ` with the levels' seconds summed and the
+//!   evaluation's (with several evaluations also the first's).
+//! - `--evaluations n` (default 1; Helmholtz CH6.2b): n evaluations of each build; the
+//!   row's evaluation time, errors, checksum and M2L times are the last one's (the first
+//!   touches the buffers, which on a large exponential M2L's waves costs seconds).
+//!
 //! The last column, "÷ Rotation", is the row's error of φ and of ∇φ over the case's
 //! Rotation row at the same P2P kernel and threads, where one ran before it.
 //!
@@ -102,6 +112,8 @@ struct Arguments {
     dense_budget: usize,
     plane_wave_budget: Option<usize>,
     s7: bool,
+    levels: bool,
+    evaluations: usize,
 }
 
 /// One entry of `--m2l`.
@@ -162,7 +174,7 @@ fn arguments() -> Arguments {
              [--oracle-threads t] [--rule calibrated|s7] [--p2p auto|reference|<isa>,…] \
              [--m2l rotation|dense|classes|batched|batched-fused|auto|auto:<d>|sweep|\
              planewave|planewave:<1|2|3>|planewave-scan,…] \
-             [--dense-budget MB] [--plane-wave-budget MB|whole]; got {args:?}"
+             [--dense-budget MB] [--plane-wave-budget MB|whole] [--levels] [--evaluations n]; got {args:?}"
         );
         std::process::exit(2);
     };
@@ -182,6 +194,8 @@ fn arguments() -> Arguments {
         dense_budget: DEFAULT_DENSE_BUDGET,
         plane_wave_budget: None,
         s7: false,
+        levels: false,
+        evaluations: 1,
     };
     let mut rest = args.as_slice();
     loop {
@@ -189,6 +203,10 @@ fn arguments() -> Arguments {
             [] => break,
             [flag, tail @ ..] if flag == "--no-gradients" => {
                 parsed.gradients = false;
+                tail
+            }
+            [flag, tail @ ..] if flag == "--levels" => {
+                parsed.levels = true;
                 tail
             }
             [flag, value, tail @ ..] => {
@@ -271,6 +289,12 @@ fn arguments() -> Arguments {
                     }
                     .map(|s7| parsed.s7 = s7)
                     .is_some(),
+                    "--evaluations" => value
+                        .parse()
+                        .ok()
+                        .filter(|&n| n > 0)
+                        .map(|n| parsed.evaluations = n)
+                        .is_some(),
                     "--oracle-threads" => value
                         .parse()
                         .map(|v| parsed.oracle_threads = Some(v))
@@ -345,6 +369,42 @@ fn m2l_string(row: &Row) -> String {
     }
 }
 
+/// The setting of a row in one word: `rotation`, `dense`, `classes`, `batched`,
+/// `batched-fused`, `auto ≤ d` or `planewave`.
+fn setting_name(row: &Row) -> String {
+    match row.m2l {
+        HelmholtzM2l::Rotation => "rotation".into(),
+        HelmholtzM2l::Dense => "dense".into(),
+        HelmholtzM2l::Classes => "classes".into(),
+        HelmholtzM2l::Batched if row.m2l_mul_add == MulAdd::Fused => "batched-fused".into(),
+        HelmholtzM2l::Batched => "batched".into(),
+        HelmholtzM2l::Auto => match row.m2l_max_degree {
+            Some(usize::MAX) | None => "auto ≤ ∞".into(),
+            Some(d) => format!("auto ≤ {d}"),
+        },
+        HelmholtzM2l::PlaneWave => "planewave".into(),
+    }
+}
+
+/// The M2L that ran on `level` of a row: `planewave iq`, the setting's tables (`dense`,
+/// `classes`, `batched`, `batched-fused`; Auto's are batched) or `rotation`.
+fn level_m2l(row: &Row, level: usize) -> String {
+    if let Some(q) = row.plane_wave[level] {
+        return format!("planewave i{}", q.iprec());
+    }
+    if !row.dense_levels[level] {
+        return "rotation".into();
+    }
+    match row.m2l {
+        HelmholtzM2l::Classes => "classes".into(),
+        HelmholtzM2l::Batched | HelmholtzM2l::Auto if row.m2l_mul_add == MulAdd::Fused => {
+            "batched-fused".into()
+        }
+        HelmholtzM2l::Batched | HelmholtzM2l::Auto => "batched".into(),
+        _ => "dense".into(),
+    }
+}
+
 /// The degrees as a short string: runs of equal degrees as `p×count`.
 fn degrees_string(degrees: &[usize]) -> String {
     let mut runs: Vec<(usize, usize)> = Vec::new();
@@ -397,6 +457,7 @@ fn main() {
              | ---: | ---: | ---: | ---: | --- | --- |"
         );
     }
+    let mut levels: Vec<String> = Vec::new();
     for &kd in &arguments.kds {
         let workload = workload(&arguments.workload, kd).expect("checked");
         for degrees in &arguments.degrees {
@@ -407,6 +468,7 @@ fn main() {
             case.gradients = arguments.gradients;
             case.dense_budget = arguments.dense_budget;
             case.plane_wave_budget = arguments.plane_wave_budget;
+            case.evaluations = arguments.evaluations;
             let problem = Problem::new(&case);
             let start = Instant::now();
             let oracle = Oracle::sharded(
@@ -488,6 +550,43 @@ fn main() {
                     println!("|  | per vector φ/∇φ: {} |", per.join(", "));
                 }
             };
+            // `--levels`: the rows of the second table, a row per level with V pairs and Σ.
+            let per_level = |row: &Row| -> Vec<String> {
+                let head = format!(
+                    "| {} | {} | {kd_string} | {degrees_name} | {} | {} × {}",
+                    workload.name(),
+                    problem.len(),
+                    setting_name(row),
+                    row.ranks,
+                    row.threads,
+                );
+                let mut lines: Vec<String> = (0..row.levels)
+                    .filter(|&l| row.v_pairs[l] > 0)
+                    .map(|l| {
+                        format!(
+                            "{head} | {l} | {} | {} | {} | {:.4} | {:.0} |",
+                            row.degrees[l],
+                            level_m2l(row, l),
+                            row.v_pairs[l],
+                            row.m2l_seconds[l],
+                            1e9 * row.m2l_seconds[l] / row.v_pairs[l] as f64,
+                        )
+                    })
+                    .collect();
+                let evaluate = match arguments.evaluations {
+                    1 => format!("evaluate {:.4} s", row.evaluate),
+                    n => format!(
+                        "evaluate {:.4} s (of {n}; first {:.4} s)",
+                        row.evaluate, row.first_evaluate
+                    ),
+                };
+                lines.push(format!(
+                    "{head} | Σ | – | {evaluate} | {} | {:.4} | – |",
+                    row.v_pairs.iter().sum::<usize>(),
+                    row.m2l_seconds.iter().sum::<f64>(),
+                ));
+                lines
+            };
             // The errors of the case's Rotation rows by P2P kernel and threads.
             let mut rotation: Vec<((P2pChoice, usize), [f64; 2])> = Vec::new();
             let k = complex_k(&case);
@@ -537,6 +636,9 @@ fn main() {
                                     let is_rotation = case.m2l == HelmholtzM2l::Rotation;
                                     if root {
                                         print(&row, reference.filter(|_| !is_rotation));
+                                        if arguments.levels {
+                                            levels.extend(per_level(&row));
+                                        }
                                     }
                                     if is_rotation && reference.is_none() {
                                         rotation.push(((p2p, threads), all));
@@ -585,6 +687,19 @@ fn main() {
                     workload.name()
                 );
             }
+        }
+    }
+    if root && arguments.levels {
+        println!();
+        println!("## M2L per level");
+        println!();
+        println!(
+            "| Workload | N | kD | degrees | M2L | ranks × threads | level | p | ran | V pairs \
+             | M2L s | ns per pair |"
+        );
+        println!("| --- | ---: | --- | --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: |");
+        for line in &levels {
+            println!("{line}");
         }
     }
     if root && let Some((bytes, how)) = resident_memory() {
