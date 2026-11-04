@@ -381,6 +381,17 @@ with a last column "÷ Rotation" (the row's errors over the case's Rotation row)
 `tools/helmholtz/ch6-1e-runs.sh` runs the task's scan and verification. Its report is
 `results/helmholtz-ch6-1e.md`.
 
+Helmholtz CH6.2b (the M2L timed per level; docs/helmholtz/tasks/CH6.2b.md) added
+`helmholtz_accuracy::Row::{m2l_seconds, v_pairs, first_evaluate}` (per level the M2L's
+seconds of the last evaluation, the slowest rank's, from `HelmholtzOperator::m2l_times`;
+the V pairs, each target counted by its owner, so the same at every rank count) and
+`Case::evaluations` (several evaluations of one build, the row the last one's), and to the
+example `--levels` (a second table, a row per run and level with V pairs: degree, the M2L
+that ran, pairs, seconds, ns per pair, and Σ) and `--evaluations n`.
+`tests/helmholtz_accuracy.rs` checks the columns, the pairs against one rank and two
+evaluations against one. `tools/helmholtz/ch6-2b-runs.sh` runs the task's measurements
+(ABBA, the macOS gate). Its report is `results/helmholtz-ch6-2b.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

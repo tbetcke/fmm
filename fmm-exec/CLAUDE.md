@@ -321,6 +321,12 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   bound. The bound is not a hard cap: the floor may exceed it, and the positions (4 bytes
   per box of the largest level with waves) lie outside it, both counted in
   `plane_wave_bytes`.
+  Since Helmholtz CH6.2b (docs/helmholtz/tasks/CH6.2b.md) every M2L level call of the
+  Helmholtz operator, under every setting, is timed on the calling thread's clock and
+  summed per level (`HelmholtzOperator::m2l_times`, reset with `plane_wave_counts` when the
+  tables are chosen): two clock reads per call, no value changed (`check_auto` and
+  `check_plane_wave` check an entry on every level with V pairs). Laplace's opt-in
+  `KindTiming` is untouched.
   The level call is the crate-private `src/helmholtz/operator_plane_wave.rs`, Laplace's
   order (`src/operator_plane_wave.rs`) restated in scalar loops on
   `nd_fmm_tables::helmholtz::plane_wave` (no `nd-fmm-simd` kernel: Laplace's `WaveKernel`
