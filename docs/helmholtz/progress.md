@@ -2058,3 +2058,57 @@ request, using this template:
   - The scan's level 6 of W3 at kD = 100 at iprec 3 (22.9 GB of waves) swapped and the run
     after it ran the M6 out of memory: the large scan stopped there, W1 at kD = 500 not
     scanned (the report's §7, §8).
+
+## 2026-11-03: CH6.2a The waves buffer bounded
+- Done:
+  - CH6.2 (priority list item 3) split on this branch into the bounded waves buffer (CH6.2a)
+    and the measurements (CH6.2b), CH6.1e's sign-off 4 putting the bound before any time.
+  - `nd-fmm-exec`: the exponential M2L's level call by chunks of whole parents
+    (`operator_plane_wave.rs`, `PlaneBuffer`): per chunk the distinct V sources of its
+    computed children, listed with a position per box, their waves on the pool, then merge
+    and shift over the chunk's parents; the output the same at every bound.
+    `HelmholtzOperator::{with_plane_wave_buffer, plane_wave_buffer,
+    plane_wave_buffer_bytes, plane_wave_counts}`, `PlaneWaveCounts`, `MIN_BUFFER_BOXES`
+    (216); `HelmholtzFmmBuilder::plane_wave_budget` per node,
+    `DEFAULT_PLANE_WAVE_NODE_BUDGET` (8 GiB), divided by the ranks per node that `build`
+    now agrees (one `split_shared`, one all-reduce, every rank), `HelmholtzFmm::ranks_per_node`.
+  - `nd-fmm-validate`: `Case::plane_wave_budget`, `Row::{plane_wave_buffer,
+    plane_wave_counts}`, the example's `--plane-wave-budget MB|whole` and rank 0's peak
+    resident size; `tools/helmholtz/ch6-2a-runs.sh`; the report
+    `fmm-validate/results/helmholtz-ch6-2a.md`.
+  - Kathleen (job 628518, one node): W1 at kD = 500 and W3 at kD = 100 at 10⁻⁶, one checksum
+    per case at every bound from the floor to the whole level, at 1 × 40 and 40 × 1. At one
+    rank the whole level's waves 8.9 and 11.7 GB (peak 14.6 and 17.1 GB); 4 GiB 1.03× and
+    1.04× its time (peak 10.0 and 9.7 GB), 1 GiB 1.05× and 1.11×, 256 MiB 1.34× and 1.43×,
+    the floor 13× and 28×. At 40 ranks per node (job 628529, with repeats) the default
+    (107 MB per rank) 1.16× and 1.28×, 8 GiB 1.04× and 1.11×, 16 GiB 1.01× and 1.06×.
+- Tests: `check_plane_wave_buffer` in `fmm-exec/tests/helmholtz_fmm.rs` (the floor, twice
+  the floor and in release no bound bit for bit the default; the floor at 2 threads and
+  against the one-rank FMM; the counts agreed over the ranks; on one rank the floor chunked,
+  8 chunks against 4 on the clusters); `the_waves_buffer_is_bounded` in
+  `fmm-exec/tests/helmholtz/plane_wave.rs` (the sizes and `plane_wave_bytes` at eight
+  bounds). One-rank debug `helmholtz_fmm` 195 s on the M6 (188 s before).
+- Checks: ran `/verify` on the M6: format; Clippy default, examples and workspace
+  all-targets; `cargo doc`; `cargo test --workspace` (22 min 52 s, before the review's test
+  changes) and `cargo test` (20 min 28 s, after them), all passed; the MPI list at 2 and 4
+  ranks (`run-mpi-tests.sh`, every executable passed; `helmholtz_fmm` 187 s and 165 s);
+  `helmholtz_fmm` and `helmholtz_accuracy` in release. Kathleen jobs 628518 and 628529
+  (above; the report's §2–§4). Not run:
+  D9 (no Laplace path changed). A self-review by a subagent: no code defect (the chunking,
+  the rollback, the offsets and the collectives checked); its points taken (a test that the
+  floor chunks, a real middle bound, the counts agreed over the ranks, the byte formula for
+  any bound, stale docs, the plan's run text), and the debug run trimmed after the new
+  checks took it to 339 s.
+- Decisions: signed off 2026-11-04, both as recommended: the default waves budget 8 GiB
+  per node (the runs took 4 GiB, the default before; at 40 ranks per node 8 GiB costs
+  4–11 % against 16–28 %); the bound not a hard cap (the floor and the positions outside
+  it), accepted as documented.
+- Laplace: not touched (Helmholtz files of `nd-fmm-exec`, `nd-fmm-validate`; the driver's
+  `Execution` used, not changed).
+- Follow-ups:
+  - CH6.2b: the times at the default budget and the ranks × threads split (a sentence in
+    CH6.2b's line).
+  - The bound is not a hard cap (the floor of 216 boxes per level, the positions outside
+    it), and a chunk's halo is recomputed; a cut by spatial blocks rather than Morton runs
+    could lower it if CH6.2b finds the cost matters (the report's §3).
+

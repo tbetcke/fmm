@@ -42,6 +42,11 @@
 //!   lies in the quadrature's tables, and `planewave-scan`: Rotation, then each such level
 //!   ≥ 2 at iprec 1, 2 and 3 alone, the other levels Rotation; the column names the levels
 //!   with waves and their precisions (`planewave 3:i2`).
+//! - `--plane-wave-budget MB|whole` (Helmholtz CH6.2a): the exponential M2L's waves buffer
+//!   per node (default the library's, `DEFAULT_PLANE_WAVE_NODE_BUDGET`; `whole` a whole
+//!   level). The column "M2L" of an exponential-M2L row gives rank 0's waves buffer, its
+//!   chunks and level calls and the waves computed (box × frame × vector), and the run ends
+//!   with rank 0's peak resident size (Linux).
 //!
 //! The last column, "÷ Rotation", is the row's error of φ and of ∇φ over the case's
 //! Rotation row at the same P2P kernel and threads, where one ran before it.
@@ -78,6 +83,7 @@ use nd_fmm_validate::helmholtz_accuracy::{
     Case, Oracle, Problem, Row, complex_k, run, sweep_crossovers,
 };
 use nd_fmm_validate::helmholtz_workloads::Workload;
+use nd_fmm_validate::scaling::resident_memory;
 
 /// The command line.
 struct Arguments {
@@ -94,6 +100,7 @@ struct Arguments {
     p2p: Vec<P2pChoice>,
     m2l: Vec<M2lRun>,
     dense_budget: usize,
+    plane_wave_budget: Option<usize>,
     s7: bool,
 }
 
@@ -155,7 +162,7 @@ fn arguments() -> Arguments {
              [--oracle-threads t] [--rule calibrated|s7] [--p2p auto|reference|<isa>,…] \
              [--m2l rotation|dense|classes|batched|batched-fused|auto|auto:<d>|sweep|\
              planewave|planewave:<1|2|3>|planewave-scan,…] \
-             [--dense-budget MB]; got {args:?}"
+             [--dense-budget MB] [--plane-wave-budget MB|whole]; got {args:?}"
         );
         std::process::exit(2);
     };
@@ -173,6 +180,7 @@ fn arguments() -> Arguments {
         p2p: vec![P2pChoice::Auto],
         m2l: vec![M2lRun::Fixed(HelmholtzM2l::Rotation, None, None)],
         dense_budget: DEFAULT_DENSE_BUDGET,
+        plane_wave_budget: None,
         s7: false,
     };
     let mut rest = args.as_slice();
@@ -247,6 +255,15 @@ fn arguments() -> Arguments {
                         .and_then(|mb| mb.checked_mul(1 << 20))
                         .map(|bytes| parsed.dense_budget = bytes)
                         .is_some(),
+                    "--plane-wave-budget" => match value.as_str() {
+                        "whole" => Some(usize::MAX),
+                        mb => mb
+                            .parse::<usize>()
+                            .ok()
+                            .and_then(|mb| mb.checked_mul(1 << 20)),
+                    }
+                    .map(|bytes| parsed.plane_wave_budget = Some(bytes))
+                    .is_some(),
                     "--rule" => match value.as_str() {
                         "calibrated" => Some(false),
                         "s7" => Some(true),
@@ -282,7 +299,7 @@ fn arguments() -> Arguments {
 /// The M2L of a row: `rotation`, or `dense l…`, `classes l…`, `batched l…` or
 /// `batched-fused l…` with the levels that ran the setting's tables and their MB; under
 /// Auto prefixed with `auto ≤ d: ` (`∞` for no bound); `planewave l:iq…` with each level's
-/// precision.
+/// precision, its MB, and the waves buffer's MB, chunks, level calls and waves computed.
 fn m2l_string(row: &Row) -> String {
     if row.m2l == HelmholtzM2l::PlaneWave {
         let levels: Vec<String> = (0..row.plane_wave.len())
@@ -291,9 +308,13 @@ fn m2l_string(row: &Row) -> String {
         return match levels.is_empty() {
             true => "rotation".into(),
             false => format!(
-                "planewave {} ({:.0} MB)",
+                "planewave {} ({:.0} MB; waves {:.0} MB, {} chunks in {} calls, {} waves)",
                 levels.join(","),
-                row.dense_bytes as f64 / 1e6
+                row.dense_bytes as f64 / 1e6,
+                row.plane_wave_buffer as f64 / 1e6,
+                row.plane_wave_counts.chunks,
+                row.plane_wave_counts.level_calls,
+                row.plane_wave_counts.waves,
             ),
         };
     }
@@ -385,6 +406,7 @@ fn main() {
             case.samples = arguments.samples;
             case.gradients = arguments.gradients;
             case.dense_budget = arguments.dense_budget;
+            case.plane_wave_budget = arguments.plane_wave_budget;
             let problem = Problem::new(&case);
             let start = Instant::now();
             let oracle = Oracle::sharded(
@@ -564,5 +586,9 @@ fn main() {
                 );
             }
         }
+    }
+    if root && let Some((bytes, how)) = resident_memory() {
+        println!();
+        println!("Rank 0: {:.0} MB {how}.", bytes / 1e6);
     }
 }

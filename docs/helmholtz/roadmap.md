@@ -20,8 +20,11 @@ by measurement (CH6.1e). 2026-11-03: CH6.1d done (`HelmholtzM2l::PlaneWave`, mer
 with a provisional precision rule), merged (#182). 2026-11-03: CH6.1e done, so CH6.1 is: the
 rule by the FMM's errors on CH3.1c's cases, iprec 2 at ε ≥ 10⁻⁶ and Rotation below, within
 1.070× Rotation's on every case; no precision of FMM3D's tables holds 1.1× below 10⁻⁶
-(the follow-up CH6.1f). Next: CH6.2 (*Machines:* locust, Kathleen; D8), once CH6.1e is
-merged.
+(the follow-up CH6.1f). 2026-11-03: CH6.2 split into the bounded waves buffer (CH6.2a)
+and the measurements (CH6.2b); CH6.2a done (the level call by chunks of parents within a
+node budget, bit for bit at every bound; 2026-11-04 its default 8 GiB per node signed
+off). Next: CH6.2b (*Machines:* locust, Kathleen; D8),
+once CH6.2a is merged.
 
 ## How `/next-task` reads this file
 
@@ -59,7 +62,7 @@ CH3.6 (#170) and H3.G.
 
 1. CH0.4 S4: quadratures of the Helmholtz exponential M2L per k w_l
 2. CH6.1 The §3.14 machinery generalised (needs CH0.4): CH6.1a, CH6.1b, CH6.1c, CH6.1d, CH6.1e
-3. CH6.2 Measured (*Machines:* locust, Kathleen; *Sign-off:* D8)
+3. CH6.2 Measured (*Machines:* locust, Kathleen; *Sign-off:* D8): CH6.2a, CH6.2b
 4. CH6.1f Quadratures for ε below 10⁻⁶ (needs CH6.1e; after CH6.2, before H6.G: CH6.1e's
    question 3, signed off 2026-11-03, "1–4 as recommended")
 
@@ -630,18 +633,43 @@ at any kD.
   trees' deep levels included, with the rule still a function of k, w_l, p_l and ε
   (constraint 9); or the report shows no such quadrature fits the tables' budget.
   *Needs:* CH6.1e.
-- [ ] **CH6.2 Measured.** Against Rotation and the table-based strategies on the three
-  machines, and against `hfmm3d`'s exponential M2L. *Done when:* per-level accuracy and time
-  beside FMM3D's on the same problems; D8 proposed. Also (CH6.1a): CH6.1a's counts resolve
-  the region's corner ρ = 4√2 at 1.31–1.51× FMM3D's waves where Im κ < π/2; whether a pair
-  ever needs the corner at the FMM's ε, so fewer waves would do, is measured here. Also
-  (CH6.1e, report §7): the level call's waves buffer, one frame of every box of the
-  largest level with waves, takes 9.0–11.8 GB under the rule on W1 at kD = 500 and W3 at
-  kD = 100 (22.9 GB for one level at iprec 3), against Rotation's few hundred MB; bound it
-  (a buffer per chunk of parents) and count it in the node budget (constraint 7) before
-  the times are taken.
-  *Needs:* CH6.1 (a–e), CH1.4.
-  *Machines:* locust, Kathleen. *Sign-off:* D8.
+- CH6.2 Measured. Against Rotation and the table-based strategies on the three machines,
+  and against `hfmm3d`'s exponential M2L. *Done when:* per-level accuracy and time beside
+  FMM3D's on the same problems; D8 proposed. *Needs:* CH6.1 (a–e), CH1.4. Split on
+  2026-11-03 into the bounded waves buffer (CH6.2a), which CH6.1e's sign-off 4 puts before
+  any time is taken, and the measurements (CH6.2b); CH6.2 is done when both are:
+- [x] **CH6.2a The waves buffer bounded.** Report:
+  `fmm-validate/results/helmholtz-ch6-2a.md`; `HelmholtzOperator::with_plane_wave_buffer`,
+  `plane_wave_counts`, `MIN_BUFFER_BOXES`, `HelmholtzFmmBuilder::plane_wave_budget`,
+  `DEFAULT_PLANE_WAVE_NODE_BUDGET`, `HelmholtzFmm::ranks_per_node`. The level call by chunks
+  of whole parents, bit for bit at every bound (one checksum per case from the floor to the
+  whole level, at 1 × 40 and 40 × 1 on Kathleen); 4 GiB per node 1.03–1.04× the whole
+  level's time at one rank, 1.16–1.28× at 40 ranks per node, against 1.04–1.11× at 8 GiB,
+  the default (signed off 2026-11-04). From CH6.1e (report §7; its question 4, signed
+  off 2026-11-03): the level call's waves buffer, one frame of every box of the largest
+  level with waves, takes 9.0–11.8 GB under the rule on W1 at kD = 500 and W3 at
+  kD = 100 (22.9 GB for one level at iprec 3), against Rotation's few hundred MB. The
+  level call by chunks of whole parents, each chunk's distinct sources' waves in a buffer
+  of at most a byte bound per rank (at least one parent's 216 slots); the bound a node
+  budget of `HelmholtzFmmBuilder` divided by the ranks per node (constraint 7), counted in
+  `plane_wave_bytes`. *Done when:* the output bit for bit the same at every bound (the
+  floor, a middle bound, the whole level), every thread count and on P ranks the one-rank
+  output; `plane_wave_bytes` within the tables, the bound and the scratch; on W1 at
+  kD = 500 and W3 at kD = 100 at 10⁻⁶ the bytes and the waves computed per box at the
+  default and smaller bounds recorded, with the evaluation's time against the whole-level
+  buffer (Kathleen). *Needs:* CH6.1e. *Machines:* Kathleen.
+- [ ] **CH6.2b The exponential M2L measured.** Against Rotation and the table-based
+  strategies (Batched, Auto) on the three machines, and against `hfmm3d`'s exponential M2L.
+  *Done when:* per-level accuracy and time beside FMM3D's on the same problems; D8
+  proposed. Also (CH6.1a): CH6.1a's counts resolve the region's corner ρ = 4√2 at
+  1.31–1.51× FMM3D's waves where Im κ < π/2; whether a pair ever needs the corner at the
+  FMM's ε, so fewer waves would do, is measured here. Also (CH6.2a, report §3–§4): the
+  times at the default waves budget (8 GiB per node), whose halo recomputation cost
+  1.04–1.11× at 40 ranks per node on Kathleen (1.16–1.28× at 4 GiB; a cut by spatial
+  blocks in place of Morton runs would recompute less, if it matters), and the ranks ×
+  threads split (W1 at kD = 500 evaluated in 39.7 s at 40 × 1 against 21.3 s at 1 × 40).
+  May split again (the times on the three machines; FMM3D and D8). *Needs:* CH6.2a, CH1.4. *Machines:* locust, Kathleen.
+  *Sign-off:* D8.
 - [ ] **H6.G Gate.** `/milestone-gate H6`. *Needs:* every task above.
 
 ## H4: High-frequency levels

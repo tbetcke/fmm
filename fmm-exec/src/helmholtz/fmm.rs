@@ -86,7 +86,7 @@ use std::sync::Arc;
 use mpi::Threading;
 use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
-use mpi::traits::{CommunicatorCollectives, Equivalence};
+use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_plan::evaluator::Evaluator;
 use nd_fmm_plan::operator::{
     FmmOperator, FmmSizes, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PerPair,
@@ -114,6 +114,10 @@ use crate::threading::REQUIRED_MPI_THREADING;
 
 /// The deepest level of a Morton key, 16 (CONVENTIONS §3.12).
 const DEEPEST: usize = DEEPEST_LEVEL as usize;
+
+/// The default bytes per node of the exponential M2L's waves buffer, 8 GiB
+/// ([`HelmholtzFmmBuilder::plane_wave_budget`]; Helmholtz CH6.2a, signed off 2026-11-04).
+pub const DEFAULT_PLANE_WAVE_NODE_BUDGET: usize = 8 << 30;
 
 /// Why a Helmholtz FMM was not built or not evaluated.
 #[derive(Debug, Error)]
@@ -168,6 +172,7 @@ pub struct HelmholtzFmmBuilder {
     m2l_mul_add: Option<MulAdd>,
     m2l_max_degree: Option<usize>,
     plane_wave_precision: PlaneWavePrecision,
+    plane_wave_budget: usize,
     c_leaf: f64,
     p2p: P2pChoice,
     pair_calls: bool,
@@ -178,8 +183,9 @@ impl HelmholtzFmmBuilder {
     /// vector, potentials only, one thread, the domain from the points,
     /// [`DEFAULT_MAX_POINTS_PER_LEAF`] points per leaf, leaves down to level 16, the
     /// default block budget of the M2L y-blocks, M2L by the rule per level
-    /// [`HelmholtzM2l::Auto`] within [`DEFAULT_DENSE_BUDGET`], the leaf width [`C_LEAF`] and
-    /// the P2P kernel of [`P2pChoice::Auto`].
+    /// [`HelmholtzM2l::Auto`] within [`DEFAULT_DENSE_BUDGET`], the exponential M2L's waves
+    /// within [`DEFAULT_PLANE_WAVE_NODE_BUDGET`] per node, the leaf width [`C_LEAF`] and the
+    /// P2P kernel of [`P2pChoice::Auto`].
     pub fn new(k: Wavenumber, degrees: Degrees) -> Self {
         Self {
             k,
@@ -197,6 +203,7 @@ impl HelmholtzFmmBuilder {
             m2l_mul_add: None,
             m2l_max_degree: None,
             plane_wave_precision: PlaneWavePrecision::Rule,
+            plane_wave_budget: DEFAULT_PLANE_WAVE_NODE_BUDGET,
             c_leaf: C_LEAF,
             p2p: P2pChoice::Auto,
             pair_calls: false,
@@ -310,6 +317,19 @@ impl HelmholtzFmmBuilder {
     /// named here must be the same on every rank.
     pub fn plane_wave_precision(mut self, precision: PlaneWavePrecision) -> Self {
         self.plane_wave_precision = precision;
+        self
+    }
+
+    /// The bytes per node of the exponential M2L's waves buffer under
+    /// [`HelmholtzM2l::PlaneWave`] (default [`DEFAULT_PLANE_WAVE_NODE_BUDGET`]; proposal §2,
+    /// constraint 7): each rank's bound is the budget over the ranks per node, agreed in
+    /// [`build`](Self::build) (the largest node's), at least [`MIN_BUFFER_BOXES`](super::MIN_BUFFER_BOXES) boxes of
+    /// a level (`HelmholtzOperator::with_plane_wave_buffer`); `usize::MAX` holds every box
+    /// of a level. The level call then runs by chunks of parents, and the output is the same
+    /// at every budget; [`HelmholtzFmm::ranks_per_node`] and the operator's
+    /// `plane_wave_buffer` report it.
+    pub fn plane_wave_budget(mut self, bytes: usize) -> Self {
+        self.plane_wave_budget = bytes;
         self
     }
 
@@ -427,14 +447,20 @@ impl HelmholtzFmmBuilder {
             Ok((pool, supplied))
         });
         let (pool, supplied) = agree(comm, local)?;
+        // The node (proposal §2, constraint 7): one split of the communicator by node, on
+        // every rank, whose size divides the waves budget of the exponential M2L (step 7).
+        let node = comm.split_shared(comm.rank());
 
-        // Step 2: are there points at all?
-        let local = (sources.len() + targets.len()) as u64;
-        let mut total = 0u64;
-        comm.all_reduce_into(&local, &mut total, SystemOperation::max());
-        if total == 0 {
+        // Step 2: are there points at all? The same all-reduce agrees the largest number of
+        // ranks per node.
+        let local = [(sources.len() + targets.len()) as u64, node.size() as u64];
+        let mut agreed = [0u64; 2];
+        comm.all_reduce_into(&local[..], &mut agreed[..], SystemOperation::max());
+        if agreed[0] == 0 {
             return Err(FmmError::NoPoints.into());
         }
+        let ranks_per_node = agreed[1].max(1) as usize;
+        drop(node);
 
         // Step 3: the domain, and every point strictly inside it.
         let (coordinates, domain) = pipeline::domain(sources, targets, supplied, comm)?;
@@ -495,7 +521,8 @@ impl HelmholtzFmmBuilder {
             as u64;
         let mut max_degree = 0u64;
         comm.all_reduce_into(&local, &mut max_degree, SystemOperation::min());
-        // Under `PlaneWave` the waves of one frame of each level's boxes, own and ghost.
+        // Under `PlaneWave` the level call's buffers, for each level's boxes, own and ghost,
+        // and the waves within the node budget's share of this rank.
         let level_boxes: Vec<usize> = (0..plan.index().nlevels())
             .map(|level| plan.index().len(level))
             .collect();
@@ -517,7 +544,10 @@ impl HelmholtzFmmBuilder {
             Degrees::PerLevel(_) => None,
         })
         .with_m2l(self.m2l, self.dense_budget)
-        .with_plane_wave_boxes(&level_boxes);
+        .with_plane_wave_boxes(&level_boxes)
+        .with_plane_wave_buffer(
+            (self.plane_wave_budget != usize::MAX).then(|| self.plane_wave_budget / ranks_per_node),
+        );
         if let Some(mul_add) = self.m2l_mul_add {
             operator = operator.with_m2l_mul_add(mul_add);
         }
@@ -558,6 +588,7 @@ impl HelmholtzFmmBuilder {
             received_output: vec![T::zero(); output_values * points.targets.nreceived()],
             returned_output: vec![T::zero(); output_values * points.targets.nsent()],
             points,
+            ranks_per_node,
         })
     }
 }
@@ -664,6 +695,8 @@ where
     returned_output: Vec<T>,
     /// The routes, the leaf ranges, the radii and the output order.
     points: Points,
+    /// The largest number of ranks on one node, agreed at build.
+    ranks_per_node: usize,
 }
 
 impl<'o, T, C> HelmholtzFmm<'o, T, C>
@@ -837,6 +870,12 @@ where
     /// operator's `m2l_on` gives each level's M2L.
     pub fn m2l_max_degree(&self) -> Option<usize> {
         self.operator().max_degree()
+    }
+
+    /// The largest number of ranks on one node, agreed at build: the divisor of the
+    /// exponential M2L's waves budget ([`HelmholtzFmmBuilder::plane_wave_budget`]).
+    pub fn ranks_per_node(&self) -> usize {
+        self.ranks_per_node
     }
 
     /// The domain.
