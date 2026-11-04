@@ -49,32 +49,42 @@ script).
    driver's target-by-target call) and adds the elapsed time to the level's entry;
    `HelmholtzOperator::m2l_times() -> &[Duration]` (one entry per level, summed over the
    level calls since the tables were last chosen, as `plane_wave_counts`). Two clock reads
-   per level call, no allocation (the entries sized in `select_tables` from the degrees),
+   per level call, no allocation (the entries sized with the tables, reset in
+   `select_tables`),
    no change to any value: the output stays bit for bit. Always on, as the counts are (a
    level call takes milliseconds; Laplace's opt-in `KindTiming` lives in `ExecOperator`,
    which the Helmholtz FMM does not use).
-2. **The harness** (`nd-fmm-validate`): `Row::m2l_seconds` (per level, the slowest rank's)
-   and `Row::v_pairs` (per level, the V pairs summed over the ranks, from the plan's
-   `level(l).v().len()`), the example's `--levels` (after the table, one row per case,
-   strategy and level: degree, the M2L that ran, V pairs, seconds and µs per pair; the
-   existing table unchanged, so the earlier reports' commands repeat).
+2. **The harness** (`nd-fmm-validate`): `Row::m2l_seconds` (per level, the slowest rank's,
+   of the last evaluation) and `Row::v_pairs` (per level, the V pairs of the targets each
+   rank owns, `Plan::computes`, summed over the ranks: a replicated top box has rows on
+   every rank), `Case::evaluations` and `Row::first_evaluate` (several evaluations of one
+   build; the first touches the buffers, seconds on a large waves buffer), the example's
+   `--levels` (after the table, one row per case, strategy and level: degree, the M2L that
+   ran, V pairs, seconds and ns per pair, and Σ; the existing table unchanged, so the
+   earlier reports' commands repeat) and `--evaluations n`.
 3. **The run script** `tools/helmholtz/ch6-2b-runs.sh`: stages `matrix` (the cases at one
-   rank × the machine's cores, `--m2l rotation,batched-fused,auto,planewave` then reversed)
-   and `large` (W1 at kD = 500 and W3 at kD = 100 at 10⁻³ and 10⁻⁶, the same strategies,
-   at each split of `SPLITS`), each launch under a timeout, the macOS quiet gate of
-   CH3.2d's script.
+   rank × the machine's cores, `--m2l rotation,batched-fused,auto,planewave` then reversed,
+   `--evaluations 2 --levels`) and `large` (W1 at kD = 500 and W3 at kD = 100 at 10⁻³ and
+   10⁻⁶, the same strategies, at each split of `SPLITS`; several ranks as `mpirun -n R
+   --map-by slot:PE=T --bind-to core`), each launch under a timeout, the macOS quiet gate
+   of CH3.2d's script; and `tools/helmholtz/ch6-2b-tables.py`, the report's tables (the
+   ABBA means per level, the fastest method per level, the per-level best).
 4. Docs: the operator's module docs ("M2L"), `fmm-exec/CLAUDE.md` and
    `fmm-validate/CLAUDE.md` entries, the report `fmm-validate/results/helmholtz-ch6-2b.md`.
 
 ## Tests that prove it
 
 - `fmm-exec/tests/helmholtz_fmm.rs`: in `check_plane_wave` and `check_auto` (one build
-  each, already there), `m2l_times()` has one entry per level, zero on levels 0 and 1 and on
-  levels without V pairs, positive on every level with V pairs on this rank; the output
-  unchanged (the existing bit-for-bit checks stay).
+  each, already there), `m2l_times()` has one entry per level, zero on level 0, positive
+  on every level with V pairs on this rank (the evaluator's downward pass calls M2L on
+  every level from 1, empty ones included, so those get a small time: "zero on levels
+  without V pairs" cannot hold); the output unchanged (the existing bit-for-bit checks
+  stay).
 - `fmm-validate/tests/helmholtz_accuracy.rs`: `Row::v_pairs` summed over the ranks the same
-  at every rank count (against the one-rank tree built on `self_comm`), `m2l_seconds`
-  positive exactly where `v_pairs` is; the `--levels` table from one small case.
+  at every rank count (against the one-rank tree built on `self_comm`), none on levels 0
+  and 1, `m2l_seconds` zero on level 0 and positive where `v_pairs` is; two evaluations of
+  one build the one-evaluation checksum and errors. The example's `--levels` table is
+  exercised by the machine runs, not by a test (examples are not tested in this crate).
 
 ## Checks
 
@@ -85,11 +95,12 @@ nd-fmm-validate --release --test helmholtz_accuracy`. D9 not needed (no Laplace 
 ## Machine runs
 
 Release, BLAS threads 1, the default P2P kernel, the default waves budget (8 GiB per
-node), one evaluation per launch, every launch of a case twice with the strategies in
-reversed order (ABBA):
+node), two evaluations per build (the second's times), every launch of a case twice with
+the strategies in reversed order (ABBA):
 
 - **Kathleen**, one node (`singlenode`): `matrix` at 1 × 40; `large` at 1 × 40, 4 × 10
-  (CH3.6's split, `--map-by ppr:2:socket:PE=10`) and 40 × 1. The job and node in the report.
+  (CH3.6's split; `--map-by slot:PE=10`, two ranks per socket as CH3.6's
+  `ppr:2:socket:PE=10`) and 40 × 1. The job and node in the report.
 - **locust**: `matrix` at 1 × 72; `large` at 1 × 72, 8 × 9 and 72 × 1. Load checked first
   (`uptime`), stated in the report.
 - **The M6** (24 GB; the user's go-ahead first, they run other jobs on it): `matrix` at
