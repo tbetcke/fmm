@@ -23,8 +23,11 @@ rule by the FMM's errors on CH3.1c's cases, iprec 2 at ε ≥ 10⁻⁶ and Rotat
 (the follow-up CH6.1f). 2026-11-03: CH6.2 split into the bounded waves buffer (CH6.2a)
 and the measurements (CH6.2b); CH6.2a done (the level call by chunks of parents within a
 node budget, bit for bit at every bound; 2026-11-04 its default 8 GiB per node signed
-off). Next: CH6.2b (*Machines:* locust, Kathleen; D8),
-once CH6.2a is merged.
+off). 2026-11-04: CH6.2b split into our strategies timed per level (CH6.2b) and FMM3D
+with D8 (CH6.2c); CH6.2b done on the M6 and locust (the exponential M2L the fastest
+method on almost every level below the coarsest at 10⁻⁶, 0.19–0.45× Rotation's M2L on the
+larger cases; at 10⁻³ a per-level choice; the coarse levels slow at many threads),
+Kathleen's runs pending. Next: CH6.2c (*Machines:* Kathleen; D8), once CH6.2b is merged.
 
 ## How `/next-task` reads this file
 
@@ -660,7 +663,9 @@ at any kD.
   kD = 500 and W3 at kD = 100 at 10⁻⁶ the bytes and the waves computed per box at the
   default and smaller bounds recorded, with the evaluation's time against the whole-level
   buffer (Kathleen). *Needs:* CH6.1e. *Machines:* Kathleen.
-- [ ] **CH6.2b The M2L timed per level.** Split on 2026-11-04 (the roadmap's "may split
+- [x] **CH6.2b The M2L timed per level.** Report:
+  `fmm-validate/results/helmholtz-ch6-2b.md`; `HelmholtzOperator::m2l_times`,
+  `helmholtz_accuracy --levels --evaluations`. Split on 2026-11-04 (the roadmap's "may split
   again") into our strategies timed per level (CH6.2b) and FMM3D with D8 (CH6.2c). The
   exponential M2L against Rotation and the table-based strategies (Batched, Auto) on the
   three machines: each level's M2L time from the Helmholtz operator's level calls (the
@@ -686,7 +691,14 @@ at any kD.
   this task's times (adopted as a strategy where it wins, else kept opt-in or dropped).
   Also (CH6.1a): CH6.1a's counts resolve the region's corner ρ = 4√2 at 1.31–1.51×
   FMM3D's waves where Im κ < π/2; whether a pair ever needs the corner at the FMM's ε, so
-  fewer waves would do, is measured here. *Needs:* CH6.2b, CH1.4. *Machines:* Kathleen.
+  fewer waves would do, is measured here. Also (CH6.2b, report §7): the exponential M2L's
+  level call splits merge and shift over parents, so a coarse level (level 2: 8 parents)
+  took 9–24× Rotation's time at 72 threads on locust (0.9–3.3× at 6 on the M6); D8's rule
+  cannot read the threads (constraint 2), so before a default either the level call splits
+  below the parent (by frame, direction or child) or the rule takes Rotation on levels of
+  few boxes on every machine; and at ε = 10⁻³ a per-level choice among Batched, the
+  exponential M2L and Rotation was up to 1.32× faster than any one strategy (CH6.2b's
+  per-level tables are the input). *Needs:* CH6.2b, CH1.4. *Machines:* Kathleen.
   *Sign-off:* D8.
 - [ ] **H6.G Gate.** `/milestone-gate H6`. *Needs:* every task above.
 

@@ -124,4 +124,22 @@ beyond the gate on the M6 and Kathleen's exclusive node.
 
 ## Pending runs
 
+- Done: the M6, 2026-11-04, `THREADS=6 tools/helmholtz/ch6-2b-runs.sh <out> matrix`
+  (binary of cd67415; 9 min, one launch repeated for contention). The report's §2–§3.
+- Done: locust, 2026-11-04, `THREADS=72 SPLITS="1x72 8x9 72x1" tools/helmholtz/ch6-2b-runs.sh
+  /data/ucahtbe/logs/ch6-2b matrix large` (source 1e22995), and the W3 large cases at
+  8 × 9 and 72 × 1 again after the stdin fix (8fb9f84). The report's §2–§4.
+- Kathleen job 628611 (node-c11a-142, 43 min, completed, every launch exit 0): the build,
+  `THREADS=40 tools/helmholtz/ch6-2b-runs.sh /scratch/scratch/ucahtbe/fmm/logs/ch6-2b
+  matrix large` (1 × 40). Pending: fetch `/scratch/scratch/ucahtbe/fmm/logs/ch6-2b/` and
+  add `kathleen=<dir>` to the tables.
+- Kathleen, not submitted: after `tools/kathleen/sync.sh`, `tools/kathleen/submit.sh
+  --time=06:00:00 -- run.sbatch 'cargo build --release -p nd-fmm-validate --example
+  helmholtz_accuracy' 'THREADS=40 SPLITS="4x10 40x1" tools/helmholtz/ch6-2b-runs.sh
+  /scratch/scratch/ucahtbe/fmm/logs/ch6-2b large'` (the script's stdin fix needs the sync).
+  Decides Kathleen's ranks × threads split. The login node has closed every connection
+  through UCL's gateway since 2026-11-04 10:10.
+
 ## Open questions
+
+None.
