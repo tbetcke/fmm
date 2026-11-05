@@ -2889,7 +2889,8 @@ impl PlaneWaveChunk {
 /// The chunks of a plane-wave level call (Helmholtz CH7.5b): `parents` in order, cut into
 /// runs of whole parents whose scratch for m vectors (the waves of their distinct sources,
 /// their accumulators and incoming blocks, blocks of `block_len` values) fits `budget`
-/// bytes, at least one parent each.
+/// bytes and whose buffers each stay within the kernels' 32-bit index range, at least one
+/// parent each (a parent has at most 216 sources, so one always fits the range).
 fn plane_wave_chunks<T: DeviceScalar>(
     parents: &[PlaneWaveParent],
     m: usize,
@@ -2898,6 +2899,11 @@ fn plane_wave_chunks<T: DeviceScalar>(
 ) -> Vec<PlaneWaveChunk> {
     let bytes =
         |[s, a, g]: [usize; 3]| PlaneWaveScratch::<T>::bytes_of([m * s, m * a, m * g], block_len);
+    let fits = |[s, a, g]: [usize; 3]| {
+        [DIRECTIONS * s, a, g]
+            .iter()
+            .all(|&blocks| u32::try_from(m * blocks * block_len).is_ok())
+    };
     let mut chunks = Vec::new();
     let (mut first, mut seen) = (0, HashSet::new());
     let mut counts = [0usize; 3];
@@ -2908,7 +2914,7 @@ fn plane_wave_chunks<T: DeviceScalar>(
             counts[1] + parent.accumulators.len(),
             counts[2] + parent.incoming.len(),
         ];
-        if k > first && bytes(grown) > budget {
+        if k > first && (bytes(grown) > budget || !fits(grown)) {
             chunks.push(PlaneWaveChunk::new(&parents[first..k], m));
             first = k;
             seen.clear();

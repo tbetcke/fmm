@@ -1202,7 +1202,7 @@ pub struct PlaneWaveDifferences {
 /// against the host `Fmm` under `PlaneWave` of the same settings at one thread, on this
 /// rank (module documentation, "The device's `PlaneWave`"):
 /// - without the setting the device runs `PlaneWave` as `Dense`, bit for bit the device
-///   `Fmm` under `Dense` (constraint 1);
+///   `Fmm` under `Dense`, and the setting under `Dense` changes nothing (constraint 1);
 /// - with it: every kind on the device; the report names "PlaneWave, merge and shift on
 ///   the device", the plane-wave tables and no dense M2L tables, the default layout and one
 ///   level call per V view with a pair; the output within the FMM bounds of the host's for
@@ -1259,7 +1259,20 @@ pub fn check_plane_waves<T: Stored + SimdScalar + Equivalence + Default>(
         output_bits(&dense.evaluate(charges).expect("the device evaluates")) == dense_bits,
         "{backend}: PlaneWave without the setting differs from Dense"
     );
-    drop((as_dense, dense));
+    // The setting under another strategy changes nothing.
+    let mut named = build(
+        builder
+            .clone()
+            .strategy(M2lStrategy::Dense)
+            .device_plane_wave(DevicePlaneWave::Kernels),
+        "Dense with the setting",
+    );
+    assert!(
+        named.device_report().map(|r| r.plane_wave) == Some(DevicePlaneWave::Dense)
+            && output_bits(&named.evaluate(charges).expect("the device evaluates")) == dense_bits,
+        "{backend}: Dense with DevicePlaneWave::Kernels differs from Dense"
+    );
+    drop((as_dense, dense, named));
 
     let kernels = builder.clone().device_plane_wave(DevicePlaneWave::Kernels);
     let mut fmm = build(kernels.clone(), "PlaneWave on the kernels");

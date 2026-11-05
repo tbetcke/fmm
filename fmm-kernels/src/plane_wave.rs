@@ -775,7 +775,7 @@ fn cpu_units(device: &Device, items: usize) -> u32 {
 /// # Panics
 ///
 /// If `multipoles` does not hold the plan's source bound of (p + 1)² values, the plan was
-/// validated against other tables, or the scratch was made for another plan or tables.
+/// validated against other tables, or the scratch is too small for the plan.
 pub fn outgoing<T: DeviceFloat>(
     device: &mut Device,
     layout: PlaneWaveLayout,
@@ -889,8 +889,8 @@ pub fn outgoing<T: DeviceFloat>(
 ///
 /// # Panics
 ///
-/// If the plan was validated against other tables, or the scratch was made for another
-/// plan or tables.
+/// If the plan was validated against other tables, or the scratch is too small for the
+/// plan.
 pub fn merge<T: DeviceFloat>(
     device: &mut Device,
     layout: PlaneWaveLayout,
@@ -963,8 +963,8 @@ pub fn merge<T: DeviceFloat>(
 ///
 /// # Panics
 ///
-/// If the plan was validated against other tables, or the scratch was made for another
-/// plan or tables.
+/// If the plan was validated against other tables, or the scratch is too small for the
+/// plan.
 pub fn gather<T: DeviceFloat>(
     device: &mut Device,
     layout: PlaneWaveLayout,
@@ -1040,7 +1040,7 @@ pub fn gather<T: DeviceFloat>(
 /// # Panics
 ///
 /// If `locals` does not hold the plan's local bound of (p + 1)² values, the plan was
-/// validated against other tables, or the scratch was made for another plan or tables.
+/// validated against other tables, or the scratch is too small for the plan.
 pub fn local<T: DeviceFloat>(
     device: &mut Device,
     layout: PlaneWaveLayout,

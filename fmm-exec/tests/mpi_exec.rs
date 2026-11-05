@@ -2022,6 +2022,9 @@ fn check_plane_wave<T: Stored + SimdScalar + Equivalence + Default>(
         // On several ranks, M2L alone on the device: the one-rank `Fmm` of the same
         // settings bit for bit (the other kinds' device kernels differ from rank count to
         // rank count by rounding, the host's do not).
+        if comm.size() == 1 {
+            continue;
+        }
         let alone = builder
             .clone()
             .strategy(M2lStrategy::PlaneWave)
