@@ -41,7 +41,9 @@ docs/design/optimisation.md §8.2, "As built in T13"; report
 fmm-validate/results/phase6-planewave.md); and the defaults of T11 (decision 7 of
 docs/phase6/README.md; report fmm-validate/results/phase6.md); Helmholtz CH7.5b (the
 device's `PlaneWave` on `nd_fmm_kernels::plane_wave`, opt-in: `DevicePlaneWave`,
-`FmmBuilder::{device_plane_wave, device_plane_wave_budget}`; docs/helmholtz/tasks/CH7.5b.md).
+`FmmBuilder::{device_plane_wave, device_plane_wave_budget}`; docs/helmholtz/tasks/CH7.5b.md;
+CH7.5c, its measurement: `FmmBuilder::device_plane_wave_layout`, `DevicePlaneWaveLayout`;
+fmm-validate/results/helmholtz-ch7-5c.md).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -742,14 +744,18 @@ device's `PlaneWave` on `nd_fmm_kernels::plane_wave`, opt-in: `DevicePlaneWave`,
     from the computed children's V rows, every accumulator over its slots ascending, each
     computed child's accumulators in order) built at build and cut into chunks of whole
     parents within `device_plane_wave_budget` (default `default_scratch_bytes`), the m
-    vectors as columns, four launches per chunk, one scratch for the widest chunk
+    vectors as columns, four launches per chunk in the layout of
+    `device_plane_wave_layout` (`DevicePlaneWaveLayout::Auto`, by backend, or a named cube;
+    Helmholtz CH7.5c, refused at build where the device cannot run it), one scratch for the widest chunk
     (`PlaneWaveScratch::covering`), reported in `DeviceReport::{plane_wave,
     plane_wave_layout, plane_waves, plane_wave_scratch_bytes}` and "PlaneWave, merge and
     shift on the device". Within the FMM bounds of the host's `PlaneWave`, the same bits at
-    every budget and from run to run, and with M2L alone on the device on P ranks the
+    every budget and layout and from run to run, and with M2L alone on the device on P ranks the
     one-rank output's bit for bit. `device_common::check_plane_waves` (in `tests/mpi_exec.rs`'s
     `check_plane_wave` on the CPU runtime, `tests/device_metal.rs`, `tests/device_cuda.rs`,
-    `tests/device_ranks.rs`) checks it with the transfer formula (four launches per chunk);
+    `tests/device_ranks.rs`) checks it with the transfer formula (four launches per chunk),
+    named cubes (one unit on the CPU runtime, 32 and 256 on the GPUs) bit for bit the
+    default and the refusal of a cube of no unit and of one above the device's units;
     the ignored `tests/device_fmm.rs` its accuracy gate (within 1.1× the device `Dense`'s
     L2 errors on the cube and the Plummer sphere, f64 p = 8, 12, 18 and f32 p = 8).
     `tests/operator/device_leaf.rs` checks the four leaf operators against

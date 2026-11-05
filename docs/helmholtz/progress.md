@@ -2293,8 +2293,11 @@ request, using this template:
   doc`, also `nd-fmm-exec` with `cpu`; `cargo test` 21 min and `cargo test --workspace`
   50 min; the MPI list at 2 and 4 ranks; `mpi_exec` on the CPU runtime at 1, 2 and 4 ranks
   (21 and 24 device plane-wave checks) and the ignored `device_ranks` at 2 and 4 ranks), all
-  passed. Pending: after the adoption, the device executables on Metal and CUDA and D9's
-  device benchmarks (the PR).
+  passed; `mpi_exec` again at 1 and 2 ranks after the review's over-cap refusal. Pending:
+  after the adoption, the device executables on Metal and CUDA (the GPU cubes of
+  `check_plane_waves` included) and D9's device benchmarks (the PR). A self-review by a
+  subagent: nothing blocking; its points taken (the report's budget range and claims, the
+  near rule's share of the evaluation column, the over-cap refusal, docs).
 - Decisions: none. Questions for sign-off (the PR): 1. adopt merge and shift as the default
   of `PlaneWave` on every device, with cubes of 256 units from p = 13 on CUDA and a 1 GB
   plane-wave budget on Metal; 2. a task for the device `Auto` to resolve to `PlaneWave`;

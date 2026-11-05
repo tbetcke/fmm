@@ -53,7 +53,11 @@
 //!   (`device_plane_wave_budget`); then the M2L time per level of `Dense` and of the
 //!   default merge and shift, with each level call's pairs, chunks, sources,
 //!   accumulators, incoming blocks, local items and launches (`DeviceReport::plane_waves`)
-//!   and the plane-wave scratch.
+//!   and the plane-wave scratch. The ratio column of every table of **kinds** and
+//!   **planewave** is the kinds' time over the first row's (here Dense's). Both builds
+//!   take the library's near rule, whose crossovers come from each strategy's cost model,
+//!   so their W and X pairs may differ: the evaluation is that of naming each strategy,
+//!   M2L its own (the V lists are the same).
 //! - **overheads**: on the device alone (`nd_fmm_kernels::Device`):
 //!   - the cost of a launch: 10,000 launches of `movement::zero` over 256 values queued,
 //!     then one sync; the host's enqueue time per launch and the whole per launch;
@@ -860,7 +864,7 @@ impl Sweep<'_> {
         println!();
         let names: Vec<String> = kinds.iter().map(|k| format!("{k} ms")).collect();
         println!(
-            "| variant | {} | kinds ms | evaluation ms | / default |",
+            "| variant | {} | kinds ms | evaluation ms | / first row |",
             names.join(" | ")
         );
         println!(

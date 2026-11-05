@@ -1114,7 +1114,10 @@ pub struct DeviceReport {
     pub plane_wave: DevicePlaneWave,
     /// The layout of the device plane-wave M2L (Helmholtz CH7.5b): by default the CPU
     /// layout on the CPU runtime and a cube of `nd_fmm_kernels::plane_wave::GPU_UNITS`
-    /// units on the GPUs ([`PlaneWaveLayout::default_for`]).
+    /// units on the GPUs ([`PlaneWaveLayout::default_for`]), or the cube that
+    /// [`FmmBuilder::device_plane_wave_layout`](crate::fmm::FmmBuilder::device_plane_wave_layout)
+    /// names (Helmholtz CH7.5c). It runs only where [`plane_wave`](Self::plane_wave) is
+    /// [`DevicePlaneWave::Kernels`].
     pub plane_wave_layout: PlaneWaveLayout,
     /// The device level calls of the plane-wave M2L with a pair, under `PlaneWave` with
     /// [`DevicePlaneWave::Kernels`], by level (Helmholtz CH7.5b).

@@ -100,8 +100,8 @@ use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_exec::device::{DataKind, GroupedImage, PlaneWaveLayout, StageTiming, Traffic};
 use nd_fmm_exec::fmm::{
     Backend, DeviceGather, DeviceGemm, DevicePlaneWave, DevicePlaneWaveLayout, DeviceReduction,
-    Fmm, FmmBuilder, KindTiming, NearRuleChoice, OperatorKind, Output, OutputMany, OutputPass,
-    Placement, SourceType, Sources,
+    Fmm, FmmBuilder, FmmError, KindTiming, NearRuleChoice, OperatorKind, Output, OutputMany,
+    OutputPass, Placement, SourceType, Sources,
 };
 use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_exec::tables::M2lStrategy;
@@ -1407,17 +1407,24 @@ pub fn check_plane_waves<T: Stored + SimdScalar + Equivalence + Default>(
             tight_chunks = tight.iter().map(|r| r.chunks).sum();
         }
     }
-    // A cube of no unit is refused at build, on every rank.
-    let refused = kernels
-        .clone()
-        .device_plane_wave_layout(DevicePlaneWaveLayout::Cube { units: 0 })
-        .backend(backend)
-        .build(sources, targets, comm);
-    assert!(
-        refused.is_err(),
-        "{what}: a plane-wave cube of no unit was not refused"
-    );
-    drop(refused);
+    // A cube of no unit and one of more units than the device allows are refused at
+    // build, on every rank: the rank's own device error names the layout, the others'
+    // agree on `OtherRank`.
+    for units in [0, units_cap + 1] {
+        let refused = kernels
+            .clone()
+            .device_plane_wave_layout(DevicePlaneWaveLayout::Cube { units })
+            .backend(backend)
+            .build(sources, targets, comm);
+        match refused {
+            Err(FmmError::OtherRank) => {}
+            Err(error) => assert!(
+                error.to_string().contains(&format!("cube ({units} units)")),
+                "{what}: a plane-wave cube of {units} units: {error}"
+            ),
+            Ok(_) => panic!("{what}: a plane-wave cube of {units} units was not refused"),
+        }
+    }
     // The expansions after the first charges on both paths (the host last evaluated the
     // second charges).
     host.evaluate(charges).expect("the host FMM evaluates");

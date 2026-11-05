@@ -392,6 +392,15 @@ that ran, pairs, seconds, ns per pair, and Σ) and `--evaluations n`.
 evaluations against one. `tools/helmholtz/ch6-2b-runs.sh` runs the task's measurements
 (ABBA, the macOS gate). Its report is `results/helmholtz-ch6-2b.md`.
 
+Helmholtz CH7.5c (the device's plane-wave M2L measured; docs/helmholtz/tasks/CH7.5c.md)
+added to `layout_sweep` the part `planewave` (only when named: the device's dense M2L
+against merge and shift, `DevicePlaneWave::Kernels`, at the default and each cube layout of
+32–1,024 units, `device_plane_wave_layout`, and each chunk budget of 128 MB–4 GB, M2L by
+the part **kinds**'s timing and the evaluation, then M2L per level with each plane-wave
+level call's chunks and items) and `--dist cube|plummer` (the C3.3 Plummer sphere); the
+ratio column of **kinds** is headed "/ first row". Its report is
+`results/helmholtz-ch7-5c.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

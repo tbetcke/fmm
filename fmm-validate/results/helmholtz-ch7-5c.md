@@ -39,7 +39,7 @@ task's `device_common::check_plane_waves`).
 3. **Layouts.** `GPU_UNITS` = 128 is the best or tied on Metal (f32 p = 8) and on CUDA to
    p = 12; on CUDA from p = 14 cubes of 256 units are faster (1.4–1.8× at p = 18 and 20),
    and 512 units at most 3.6 % faster than 256 (§5).
-4. **Chunk budget.** On CUDA 4 GB is 3–14 % faster in M2L than the default 2 GB (the
+4. **Chunk budget.** On CUDA 4 GB is 1–9 % faster in M2L than the default 2 GB (the
    translation budget) at p ≥ 12; 128 MB is 2.0–2.8× slower. On Metal the default 128 MB
    makes up to 88 chunks per level call, and 1 GB is 14–17 % faster in M2L (§3).
 5. **Proposed** (question 1 of the PR): adopt. `DevicePlaneWave::Kernels` becomes the
@@ -70,6 +70,12 @@ one warm-up. Then a third pair of builds times M2L per level for Dense and the d
 PlaneWave, with each plane-wave level call's chunks and items (`DeviceReport::plane_waves`).
 The problems: the C3.3 cube and Plummer sphere (`fmm_accuracy::Config::c33`) at N = 10⁶ and
 10⁷. Ratios are PlaneWave over Dense.
+
+Both builds take the library's near rule, whose W and X crossovers come from each
+strategy's calibrated cost model (`CostModel::calibrated`), so the two may convert
+different W and X pairs to P2P: the evaluation ratio is the end-to-end effect of naming
+the strategy, not of M2L alone (M2L's V lists are the same). No error column: the accuracy
+is CH7.5b's gate.
 
 The evaluation's wall time includes the host's part of a device evaluation (the charge
 load and the output pass on the host; 317–500 ms at N = 10⁷ on locust, T7 §4), the
@@ -108,7 +114,8 @@ at the 2 GB budget (the widest chunk's scratch 2.0–2.4 GB).
 
 The run-to-run spread at f64 p = 18 is visible: the default row and the identical "cube
 (128 units)" row of the cube at 10⁷ differ by 15 % (620.7 and 541.8 ms), against at most
-0.2 % elsewhere. Every conclusion here is a factor of 3 or more, so it does not depend on it.
+0.2 % elsewhere. The adoption rests on factors of 3 to 5 in M2L, which it does not touch; the layout and
+budget choices rest on 3–17 % differences and are less certain (§4, §5).
 
 ## 3. Metal (the M6, f32 p = 8)
 
@@ -145,8 +152,8 @@ problems of each row):
 
 The cost of a small budget is the waves of a chunk's sources that the next chunk computes
 again (on level 5 of the cube at 10⁷, f64 p = 18, five chunks of the 2 GB budget hold
-47,216 sources for 32,768 local items), and the launches per chunk. 4 GB gains 3–14 % over
-2 GB at p ≥ 12; the device's 2 GB default stays (`default_scratch_bytes`, the scratch budget of
+47,216 sources for 32,768 local items), and the launches per chunk. 4 GB gains 1–9 % over
+2 GB at p ≥ 12 (against the 128-unit row where the 2 GB row is the noisy one, §2); the device's 2 GB default stays (`default_scratch_bytes`, the scratch budget of
 every device translation on CUDA, at most an eighth of the device's memory).
 
 ## 5. Units by p (CUDA)

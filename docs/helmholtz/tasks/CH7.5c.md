@@ -121,8 +121,20 @@ with `cpu,metal` and `cuda` checked.
   (M2L 10 of 50 ms in T10's model); the gate is p ≥ 12, where M2L is most of the
   evaluation.
 
+## As built
+As planned, except: `layout_sweep --part planewave` has no error column (the accuracy is
+CH7.5b's gate, which the layout and the budget cannot change: the same bits); the cube
+layouts measured go to 1,024 units and, after the first CUDA results, by p at f64 p = 10–20
+(report §5); `check_plane_waves` refuses both a cube of no unit and one above the device's
+units. The review (a subagent) found nothing blocking; its points were taken (the report's
+budget range and claims, the near rule's effect on the evaluation column, the ratio
+column's header, the over-cap refusal, docs).
+
 ## Pending runs
-(filled in step 6)
+- After question 1's sign-off and the adoption: `tests/device_metal.rs` and the gate of
+  `tests/device_fmm.rs` on the M6 (Metal; also the new 32- and 256-unit cubes of
+  `check_plane_waves`, which have run on the CPU runtime only); on locust
+  `tests/device_cuda.rs`, the gate and Clippy with `cpu,cuda`; D9 as question 3 decides.
 
 ## Open questions
 Answered before any code (2026-11-05, the user): the plan "Go ahead (Recommended)": build
