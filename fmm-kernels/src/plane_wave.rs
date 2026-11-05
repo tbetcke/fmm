@@ -37,7 +37,8 @@
 //! bit for bit (tested), and the host functions to rounding.
 //!
 //! No atomics: an accumulator, an incoming block and a local are written by one cube (or
-//! unit) only; the locals of one launch are distinct columns (checked in debug builds). The
+//! unit) only; the locals of one launch are distinct columns (checked when the plan is
+//! built). The
 //! result does not depend on the layout, the launch shape or a repetition.
 //!
 //! # Layouts ([`PlaneWaveLayout`])
@@ -415,6 +416,9 @@ pub struct PlaneWavePlan {
     nlocals: usize,
     sources_bound: usize,
     locals_bound: usize,
+    /// The source shifts and block length of the tables the plan was validated against.
+    source_shifts: usize,
+    block_len: usize,
 }
 
 /// Panics unless `offsets` are CSR offsets from 0 over `entries` entries.
@@ -447,8 +451,8 @@ impl PlaneWavePlan {
     ///
     /// If an offset list is not CSR from 0 over its entries, an index lies outside what it
     /// indexes (a source column, a wave block, a shift, an accumulator, an incoming block
-    /// or a local column), the local columns repeat, or the incoming blocks are not six per
-    /// local item.
+    /// or a local column), the local columns repeat, the incoming blocks are not six per
+    /// local item, or a buffer of the call would exceed the 32-bit index range.
     pub fn new<T: DeviceFloat>(
         device: &mut Device,
         lists: &PlaneWaveLists<'_>,
@@ -519,6 +523,20 @@ impl PlaneWavePlan {
             lists.locals.iter().all(|&t| (t as usize) < locals_bound),
             "PlaneWavePlan: a local column lies outside the {locals_bound} locals"
         );
+        let w = tables.block_len();
+        for (what, values) in [
+            ("multipoles", sources_bound * coefficients(tables.p)),
+            ("locals", locals_bound * coefficients(tables.p)),
+            ("waves", DIRECTIONS * nsources * w),
+            ("accumulators", naccumulators * w),
+            ("incoming blocks", nincoming * w),
+            ("source shifts", tables.source_shift_count * w),
+        ] {
+            assert!(
+                u32::try_from(values).is_ok(),
+                "PlaneWavePlan: {values} values of {what} exceed the 32-bit index range"
+            );
+        }
         let mut columns = lists.locals.to_vec();
         columns.sort_unstable();
         assert!(
@@ -540,6 +558,8 @@ impl PlaneWavePlan {
             nlocals,
             sources_bound,
             locals_bound,
+            source_shifts: tables.source_shift_count,
+            block_len: tables.block_len(),
         })
     }
 
@@ -631,9 +651,14 @@ impl<T: DeviceFloat> PlaneWaveScratch<T> {
         self.incoming.as_slice()
     }
 
-    /// Panics unless the buffers fit `plan` with `tables`.
+    /// Panics unless `plan` was validated against tables like `tables` (their source
+    /// shifts and block length) and the buffers fit `plan` with them.
     fn check(&self, plan: &PlaneWavePlan, tables: &PlaneWaveTables<T>) {
         let w = tables.block_len();
+        assert!(
+            plan.source_shifts == tables.source_shift_count && plan.block_len == w,
+            "plane_wave: the plan was validated against other tables"
+        );
         assert!(
             self.waves.len() == DIRECTIONS * plan.nsources * w
                 && self.accumulators.len() == plan.naccumulators * w
@@ -661,8 +686,8 @@ fn cpu_units(device: &Device, items: usize) -> u32 {
 ///
 /// # Panics
 ///
-/// If `multipoles` does not hold the plan's source bound of (p + 1)² values, or the
-/// scratch was made for another plan or tables.
+/// If `multipoles` does not hold the plan's source bound of (p + 1)² values, the plan was
+/// validated against other tables, or the scratch was made for another plan or tables.
 pub fn outgoing<T: DeviceFloat>(
     device: &mut Device,
     layout: PlaneWaveLayout,
@@ -693,6 +718,10 @@ pub fn outgoing<T: DeviceFloat>(
         "plane_wave::outgoing: the multipoles hold {} values, not {} columns of {n}",
         multipoles.len(),
         plan.sources_bound
+    );
+    assert!(
+        u32::try_from(multipoles.offset() + multipoles.len()).is_ok(),
+        "plane_wave::outgoing: the multipoles exceed the 32-bit index range"
     );
     layout.check(device.info(), p, tables.modes, T::FLOAT)?;
     let items = 3 * plan.nsources;
@@ -772,7 +801,8 @@ pub fn outgoing<T: DeviceFloat>(
 ///
 /// # Panics
 ///
-/// If the scratch was made for another plan or tables.
+/// If the plan was validated against other tables, or the scratch was made for another
+/// plan or tables.
 pub fn merge<T: DeviceFloat>(
     device: &mut Device,
     layout: PlaneWaveLayout,
@@ -811,7 +841,8 @@ pub fn merge<T: DeviceFloat>(
     // SAFETY: every handle is a whole buffer with its element count. Accumulator a < A
     // reads the offsets a and a + 1 (A + 1 offsets, validated CSR over the entries) and its
     // entries' pairs, each a wave block < 6 nsources and a source shift < the shift count
-    // (checked at the plan's build), read at block · 2H + j < their buffers' lengths (the
+    // (checked at the plan's build against tables with the shift count and block length of
+    // these, asserted by the scratch check), read at block · 2H + j < their buffers' lengths (the
     // waves checked against the plan, the shifts whole blocks of 2H at upload). It writes
     // its own block a of the accumulators (A blocks, checked). The CPU layout's units cover
     // disjoint ranges of the accumulators.
@@ -844,7 +875,8 @@ pub fn merge<T: DeviceFloat>(
 ///
 /// # Panics
 ///
-/// If the scratch was made for another plan or tables.
+/// If the plan was validated against other tables, or the scratch was made for another
+/// plan or tables.
 pub fn gather<T: DeviceFloat>(
     device: &mut Device,
     layout: PlaneWaveLayout,
@@ -918,8 +950,8 @@ pub fn gather<T: DeviceFloat>(
 ///
 /// # Panics
 ///
-/// If `locals` does not hold the plan's local bound of (p + 1)² values, or the scratch was
-/// made for another plan or tables.
+/// If `locals` does not hold the plan's local bound of (p + 1)² values, the plan was
+/// validated against other tables, or the scratch was made for another plan or tables.
 pub fn local<T: DeviceFloat>(
     device: &mut Device,
     layout: PlaneWaveLayout,
@@ -950,6 +982,10 @@ pub fn local<T: DeviceFloat>(
         "plane_wave::local: the locals hold {} values, not {} columns of {n}",
         locals.len(),
         plan.locals_bound
+    );
+    assert!(
+        u32::try_from(locals.offset() + locals.len()).is_ok(),
+        "plane_wave::local: the locals exceed the 32-bit index range"
     );
     layout.check(device.info(), p, tables.modes, T::FLOAT)?;
     let items = plan.nlocals;

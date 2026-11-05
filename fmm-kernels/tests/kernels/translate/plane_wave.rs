@@ -629,6 +629,16 @@ fn device_call<T: Real>(
     let last = results.pop().unwrap();
     for earlier in &results {
         assert_same("a repeated call's waves", &earlier.waves, &last.waves);
+        assert_same(
+            "a repeated call's accumulators",
+            &earlier.accumulators,
+            &last.accumulators,
+        );
+        assert_same(
+            "a repeated call's incoming blocks",
+            &earlier.incoming,
+            &last.incoming,
+        );
         assert_same("a repeated call's locals", &earlier.locals, &last.locals);
     }
     last
@@ -996,8 +1006,23 @@ fn plane_wave_refused(device: &mut Device) {
         &mut scratch,
     );
     assert!(refused.is_err(), "a cube of no unit");
+    // Tables with the same block length but fewer source shifts than the plan was
+    // validated against: refused before any launch.
+    let arrays = tables.arrays();
+    let wlen = tables.wlen();
+    let fewer = PlaneWaveArrays {
+        source_shifts: &arrays.source_shifts[..10 * wlen],
+        ..arrays
+    };
+    let other = PlaneWaveTables::upload(device, &fewer).unwrap();
+    let launches = device.counters().launches;
+    let mismatch = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        nd_fmm_kernels::plane_wave::merge(device, layout, &plan, &other, &mut scratch)
+    }));
+    assert!(mismatch.is_err(), "a plan of other tables");
+    assert_eq!(device.counters().launches, launches, "nothing launched");
     println!(
-        "  f32 plane-wave M2L: no target, the waves alone; {}",
+        "  f32 plane-wave M2L: no target, the waves alone; {}; a plan of other tables refused",
         refused.unwrap_err()
     );
 }
@@ -1015,6 +1040,7 @@ fn plane_wave_every_degree_on_the_cpu_runtime() {
         for p in [12, 18, 20] {
             check_region::<f64>(device, p, 6, true);
         }
+        check_region::<f32>(device, 12, 6, true);
     });
 }
 
