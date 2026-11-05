@@ -284,7 +284,8 @@ One pull request each.
 - T13 (added 2026-10-18 at decision 6: C6.5 proceeds past T10's spike) needs T10 merged.
   It changes `fmm-exec/src/operator.rs`, `tables.rs` and `cost.rs`, `nd-fmm-tables` and
   `nd-fmm-simd`: merge T12 first, or rebase. A device plane-wave M2L would be a task after
-  it, gated on its host results (T13's brief, "Afterwards").
+  it, gated on its host results (T13's brief, "Afterwards"); since 2026-11-05 it is
+  CH7.5a of docs/helmholtz/roadmap.md.
 - T8d (added 2026-10-17 at the user's request: the device kernels of the dipole kinds,
   split from T8 after its measurement) needs T8 merged.
 - T11 needs every other task merged or closed.

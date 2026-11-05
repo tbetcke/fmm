@@ -27,7 +27,11 @@ off). 2026-11-04: CH6.2b split into our strategies timed per level (CH6.2b) and 
 with D8 (CH6.2c); CH6.2b done on the M6 and locust (the exponential M2L the fastest
 method on almost every level below the coarsest at 10⁻⁶, 0.19–0.45× Rotation's M2L on the
 larger cases; at 10⁻³ a per-level choice; the coarse levels slow at many threads);
-Kathleen down, its runs moved to CH6.2c (the user). Next: CH6.2c (*Machines:* Kathleen; D8), once CH6.2b is merged.
+Kathleen down, its runs moved to CH6.2c (the user). 2026-11-05: CH7.5 split
+(the user) into Laplace's plane-wave M2L on the device (CH7.5a, which builds the merge and
+shift kernels) and Helmholtz's on them (CH7.5b); CH7.5a first on the priority list while
+Kathleen is down (the user). Next: CH7.5a (*Machines:* locust, the M6), then CH6.2c
+(*Machines:* Kathleen; D8) once Kathleen is back.
 
 ## How `/next-task` reads this file
 
@@ -63,15 +67,18 @@ low-frequency and intermediate trees at tight ε across most of D1's range (gate
 §3.3). It replaces the list of 2026-10-28, the shortest path to CH3.6, which finished with
 CH3.6 (#170) and H3.G.
 
-1. CH0.4 S4: quadratures of the Helmholtz exponential M2L per k w_l
-2. CH6.1 The §3.14 machinery generalised (needs CH0.4): CH6.1a, CH6.1b, CH6.1c, CH6.1d, CH6.1e
-3. CH6.2 Measured (*Machines:* locust, Kathleen; *Sign-off:* D8): CH6.2a, CH6.2b, CH6.2c
-4. CH6.1f Quadratures for ε below 10⁻⁶ (needs CH6.1e; after CH6.2, before H6.G: CH6.1e's
+1. CH7.5a Laplace's plane-wave M2L on the device (added on 2026-11-05, the user: "Please add
+   to the priority list to get it sooner", then "Please put 7.5a to the top of the list.
+   Kathleen is still down"; needs only Phase 6 T13, merged; *Machines:* locust, the M6)
+2. CH0.4 S4: quadratures of the Helmholtz exponential M2L per k w_l
+3. CH6.1 The §3.14 machinery generalised (needs CH0.4): CH6.1a, CH6.1b, CH6.1c, CH6.1d, CH6.1e
+4. CH6.2 Measured (*Machines:* locust, Kathleen; *Sign-off:* D8): CH6.2a, CH6.2b, CH6.2c
+5. CH6.1f Quadratures for ε below 10⁻⁶ (needs CH6.1e; after CH6.2, before H6.G: CH6.1e's
    question 3, signed off 2026-11-03, "1–4 as recommended")
 
 Off the list, in file order: CH0.6, CH0.8b, CH0.9, CH0.5 and H0.G; CHR.3 and HR.G; CH1.3d
 and H1.G; CH2.1, CH2.2, CH2.3, CH2.5 and H2.G; H6.G; H4 (CH4.0, CH4.0b and CH4.0c first),
-H5, H7, H8.
+H5, H7 (CH7.5a apart), H8.
 
 ## Decisions
 
@@ -88,7 +95,7 @@ The proposal's Section 12, plus D0. A decision is recorded here when the user ta
 | D5 | Source types of the first release | real and complex charges, potentials and gradients; dipoles once C6.4 exists for Laplace (note: Laplace dipoles were merged in Phase 6 T8 and T8d, so the condition is met) | – | CH1.1 | signed off 2026-10-29: charges now, dipoles later; §3.15 fixes real and complex charges with potentials and gradients, and dipoles get a later, separate task |
 | D6 | Order of H4 and H6 | H6 first | H3.G | CH6.1, CH4.1 | signed off 2026-11-02 (H3 gate, question 2): "i agree with the recommendations", H6 first, as recommended; on the gate report's reason (§3.3): the calibrated degrees cut the low-frequency share of the far field at kD = 500 to about half (an estimate), and the FMM is slowest against FMM3D on low-frequency trees at tight ε, which H6 targets |
 | D7 | Host back ends of the φ step | the product as default and reference; FFTW behind the optional `fftw` feature; rustfft if S9 finds it deterministic per box and faster, decided per machine | CH0.9 | CHR.3, CH4.6 | open |
-| D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2c | CH7.5 | open |
+| D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2c | CH7.5b | open |
 | D9 | What "within noise" means for Laplace's benchmarks (constraint 1) | the run-to-run spread of the Laplace baseline, repeated on each machine before the change, per benchmark; plus the C3S.4 throughput gate | – | CHR.2, CH2.0 | signed off 2026-10-26: as recommended, the measured spread of the baseline per benchmark and machine, plus the C3S.4 gate. Clarified 2026-10-26 (CHR.2): one-sided, slower than `main` by more than the spread fails, faster passes when the outputs are bit for bit identical; from CH2.0 on five runs per side in the order A B B A A B B A A B, the spread max − min of `main`'s five run medians, never pooled with the branch's. Amended 2026-10-31 (CH2.0, the user: "as recommended"): a failing row may be repeated once and the repeat counts, with both results reported. Amended 2026-10-31 (the machine move, the user: "Amend: M6 replaces M3 Max"): the M6 (`tools/m6/machine.md`) replaces the M3 Max as a machine of record, its C3S.4 reference `spikes/p2p-simd/results-m6.md` |
 | D10 | cubek-fft on the device | after S5: adopt, contribute upstream first, or keep the transform as a GEMM | CH0.5 | CH7.4 | open |
 | D11 | Maximum leaf width c_leaf | from S8: the largest c_leaf with P2P and leaf costs within 10 % of their best on W1 and W3 (expected 0.5 to 1) | CH0.8a | CH3.0 | signed off 2026-10-28: as recommended (CH0.8a report §9, question 1), c_leaf = 1 by the revised rule, the largest c_leaf with no high-frequency leaf on any workload at 10⁻⁶ and 10⁻⁸, replacing the rule of this row, which is degenerate; a first-pass value that CH0.8b may revise with S6's constants and S7's p |
@@ -794,8 +801,31 @@ at any kD.
 - [ ] **CH7.4 Diagonal M2L and the transforms on the device.** cubek-fft where D10 adopted it,
   else the transform as a GEMM. *Done when:* as CH4.2 on the device; device locals against
   the host's within error. *Needs:* CH4.2, CH7.1, CH0.5, D10. *Machines:* locust.
-- [ ] **CH7.5 Exponential M2L on the device**, if D8 adopted it on the host. *Done when:* as
-  CH6.1 on the device. *Needs:* CH6.2, CH7.1, D8. *Machines:* locust.
+- [ ] **CH7.5a Laplace's plane-wave M2L on the device.** Added on 2026-11-05 at the user's
+  request, splitting CH7.5: the device kernels of merge and shift (the complex products over
+  a box's waves, the merge lists per parent, the shifts to the children), built first on
+  Laplace, whose host strategy exists (Phase 6 T13, `M2lStrategy::PlaneWave`) and which on
+  a device runs as `Dense` today ("PlaneWave, run as dense on the device",
+  `fmm-exec/src/device.rs`); CH7.5b reuses them. The task T13's brief left for afterwards
+  (docs/phase6/T13-plane-wave-m2l.md, "Afterwards"): T10 modelled it at 2.4–20× T7's dense
+  M2L stage on the H100, larger at high p (`spikes/plane-wave/SPIKE_REPORT.md` §3), with the
+  irregular merge lists the open device question. *Done when:* `PlaneWave` on the device
+  (CUDA f32 and f64, Metal f32, the CubeCL CPU runtime in CI) within 1.1× `Dense`'s errors
+  against the direct sum at the C3.2 cube and the C3.3 Plummer sphere (T13's requirement 1,
+  f64 p = 8, 12, 18 and f32 p = 8), device locals against the host `PlaneWave`'s within
+  the stated bound, bit for bit from run to run and on P ranks against the one-rank device
+  run; the device M2L stage and the evaluation against T7's dense M2L at f64 p = 8, 12, 18
+  on locust's H100 (f32 on the M6's Metal); adopted as the device's `PlaneWave` where it
+  wins at p ≥ 12 (T13's gate), else `PlaneWave` stays `Dense` on the device and the
+  kernels are dropped. Constraint 1: only the opt-in device `PlaneWave` changes its output;
+  every other strategy and Laplace's defaults bit for bit, the device gates and Laplace's
+  benchmarks within noise (D9); the device `Auto` unchanged (a change to it is a
+  sign-off). *Needs:* Phase 6 T13 (merged). *Machines:* locust, the M6 (Metal).
+  *Sign-off:* adoption on the device.
+- [ ] **CH7.5b Exponential M2L on the device**, if D8 adopted it on the host. On CH7.5a's
+  merge and shift kernels, with the Helmholtz conversions (CH6.1c's pair chain) and the
+  quadrature per level (CH6.1e). *Done when:* as CH6.1 on the device. *Needs:* CH7.5a,
+  CH6.2, CH7.1, D8. *Machines:* locust.
 - [ ] **CH7.6 Device performance against FMM3D at matched accuracy.** As CH4.5, the device
   path beside the host's. *Needs:* CH7.2, CH7.3, CH7.4, CH4.5. *Machines:* locust.
 - [ ] **H7.G Gate.** `/milestone-gate H7`. *Needs:* every task above.
