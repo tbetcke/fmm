@@ -2211,8 +2211,10 @@ request, using this template:
   point fixed (a plan validated against tables with more source shifts than a launch's
   would read out of bounds: now refused, tested), its other points taken (32-bit index
   checks, every buffer compared on repeats, f32 at p = 12, docs).
-- Decisions: none. The proposal's §10 row CH7.5 (the exponential M2L on the device) is now
-  CH7.5d; the PR asks whether to amend the row.
+- Decisions: none. The proposal amended at CH7.5a (signed off 2026-11-05 on PR #187,
+  "Please do as recommended"): §10's row CH7.5 split into CH7.5a–c (Laplace's plane-wave
+  M2L on the device) and CH7.5d (the exponential M2L, the former CH7.5),
+  §6.5's device list and the amendment log updated.
 - Laplace: not touched (a new module of `nd-fmm-kernels` that no path calls yet;
   additive accessors in `nd-fmm-tables`, no table or step changed).
 - Follow-ups:

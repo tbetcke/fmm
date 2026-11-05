@@ -858,7 +858,9 @@ CH6.2 has measured it.
   Section 3.7 (CH7.2).
 - **Leaf operators.** P2M, L2P, M2P and P2L with the harmonic and radial recursions in real
   arithmetic, one thread per particle or target, as Laplace's (CH7.3).
-- **Exponential M2L** on the device if D8 adopts it on the host (CH7.5).
+- **Exponential M2L** on the device if D8 adopts it on the host (CH7.5d), on the merge and
+  shift kernels that CH7.5a–c build and measure for Laplace's plane-wave M2L first (amended
+  at CH7.5a).
 - **Precision.** f64 on CUDA and the CPU runtime. f32 (Metal) only for low-frequency
   configurations whose p_l and arguments pass the f32 accuracy contract; no high-frequency
   level in f32 unless S6 finds classes stable in f32 (D3).
@@ -1444,7 +1446,8 @@ flowchart LR
 | CH7.2 | Device P2P for Helmholtz and Yukawa | an accuracy contract as the host's; cost per pair against the host and Laplace's device P2P | CH3.4 |
 | CH7.3 | Device leaf operators: P2M, L2P, M2P, P2L with radial recursions | against the host operators within error | CH3.1 |
 | CH7.4 | Diagonal M2L and the transforms (cubek-fft where S5 adopted it, else the transform as a GEMM) | as CH4.2 on the device; device locals against the host's within error (the grids may differ, Section 6.5) | CH4.2, CH7.1, CH0.5 |
-| CH7.5 | Exponential M2L on the device, if D8 adopted it on the host | as CH6.1 on the device | CH6.2, CH7.1 |
+| CH7.5a–c | Laplace's plane-wave M2L on the device (added at CH7.5a): the merge and shift kernels (CH7.5a), the device's `PlaneWave` behind an opt-in setting (CH7.5b), measured and adopted or dropped (CH7.5c) | T13's requirement 1 on the device (within 1.1× Dense's errors against the direct sum), bit for bit run to run and on P ranks against one rank; adopted where it wins at p ≥ 12 (T13's gate), else dropped | Phase 6 T13 |
+| CH7.5d | Exponential M2L on the device, if D8 adopted it on the host, on CH7.5a's kernels (CH7.5 before CH7.5a) | as CH6.1 on the device | CH7.5c, CH6.2, CH7.1 |
 | CH7.6 | Device performance against FMM3D at matched accuracy | as CH4.5, the device path labelled beside the host's, as T9 reported Laplace's | CH7.2, CH7.3, CH7.4, CH4.5 |
 | **H8** | **Distributed path** | | |
 | CH8.1 | Byte cap for the replicated top, counted per node; exchange of the high-frequency levels | bit for bit the one-rank output on P ranks; memory per rank and per node bounded | CH4.4 |
@@ -1678,6 +1681,10 @@ these.
     a record; CH4.0, CH4.0b and CH4.0c added to H4 (C4).
   - Section 10 diagram and text: the edge H2 → H3 is CH2.0 and CH2.4 (C5).
   - Section 9.1: the box measure of the full-target crosscheck, reported, not gated (C6).
+- **Amended at CH7.5a, 2026-11-05** (signed off by the user on PR #187, "Please do as
+  recommended"): Section 10 table, CH7.5 split into Laplace's plane-wave M2L on the device
+  (CH7.5a–c, a new row) and Helmholtz's exponential M2L on the device (CH7.5d, the former
+  CH7.5, now needing CH7.5c); Section 6.5's device list names CH7.5d.
 
 ## Appendix B. The stability check behind Section 3.6
 
