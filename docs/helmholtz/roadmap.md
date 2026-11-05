@@ -30,8 +30,13 @@ larger cases; at 10⁻³ a per-level choice; the coarse levels slow at many thre
 Kathleen down, its runs moved to CH6.2c (the user). 2026-11-05: CH7.5 split
 (the user) into Laplace's plane-wave M2L on the device (CH7.5a, which builds the merge and
 shift kernels) and Helmholtz's on them (CH7.5b); CH7.5a first on the priority list while
-Kathleen is down (the user). Next: CH7.5a (*Machines:* locust, the M6), then CH6.2c
-(*Machines:* Kathleen; D8) once Kathleen is back.
+Kathleen is down (the user). 2026-11-05: CH7.5a split (the user, "a/b/c, Helmholtz → d")
+into the kernels (CH7.5a), the device's `PlaneWave` behind an opt-in setting (CH7.5b) and
+the measurements with the adoption (CH7.5c); Helmholtz's renamed CH7.5d. 2026-11-05:
+CH7.5a done (the four steps of merge and shift as device kernels, every step bit for bit a
+host `mul_add` replica on the CPU runtime, Metal and CUDA, every p ≤ 20 within the
+quadrature's bound of `direct::m2l`). Next: CH7.5b (*Machines:* locust, the M6), then
+CH7.5c, then CH6.2c (*Machines:* Kathleen; D8) once Kathleen is back.
 
 ## How `/next-task` reads this file
 
@@ -69,7 +74,8 @@ CH3.6 (#170) and H3.G.
 
 1. CH7.5a Laplace's plane-wave M2L on the device (added on 2026-11-05, the user: "Please add
    to the priority list to get it sooner", then "Please put 7.5a to the top of the list.
-   Kathleen is still down"; needs only Phase 6 T13, merged; *Machines:* locust, the M6)
+   Kathleen is still down"; needs only Phase 6 T13, merged; *Machines:* locust, the M6; split on
+   2026-11-05 into CH7.5a, CH7.5b and CH7.5c, the user: "a/b/c, Helmholtz → d")
 2. CH0.4 S4: quadratures of the Helmholtz exponential M2L per k w_l
 3. CH6.1 The §3.14 machinery generalised (needs CH0.4): CH6.1a, CH6.1b, CH6.1c, CH6.1d, CH6.1e
 4. CH6.2 Measured (*Machines:* locust, Kathleen; *Sign-off:* D8): CH6.2a, CH6.2b, CH6.2c
@@ -78,7 +84,7 @@ CH3.6 (#170) and H3.G.
 
 Off the list, in file order: CH0.6, CH0.8b, CH0.9, CH0.5 and H0.G; CHR.3 and HR.G; CH1.3d
 and H1.G; CH2.1, CH2.2, CH2.3, CH2.5 and H2.G; H6.G; H4 (CH4.0, CH4.0b and CH4.0c first),
-H5, H7 (CH7.5a apart), H8.
+H5, H7 (CH7.5a, CH7.5b and CH7.5c apart), H8.
 
 ## Decisions
 
@@ -95,7 +101,7 @@ The proposal's Section 12, plus D0. A decision is recorded here when the user ta
 | D5 | Source types of the first release | real and complex charges, potentials and gradients; dipoles once C6.4 exists for Laplace (note: Laplace dipoles were merged in Phase 6 T8 and T8d, so the condition is met) | – | CH1.1 | signed off 2026-10-29: charges now, dipoles later; §3.15 fixes real and complex charges with potentials and gradients, and dipoles get a later, separate task |
 | D6 | Order of H4 and H6 | H6 first | H3.G | CH6.1, CH4.1 | signed off 2026-11-02 (H3 gate, question 2): "i agree with the recommendations", H6 first, as recommended; on the gate report's reason (§3.3): the calibrated degrees cut the low-frequency share of the far field at kD = 500 to about half (an estimate), and the FMM is slowest against FMM3D on low-frequency trees at tight ε, which H6 targets |
 | D7 | Host back ends of the φ step | the product as default and reference; FFTW behind the optional `fftw` feature; rustfft if S9 finds it deterministic per box and faster, decided per machine | CH0.9 | CHR.3, CH4.6 | open |
-| D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2c | CH7.5b | open |
+| D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2c | CH7.5d | open |
 | D9 | What "within noise" means for Laplace's benchmarks (constraint 1) | the run-to-run spread of the Laplace baseline, repeated on each machine before the change, per benchmark; plus the C3S.4 throughput gate | – | CHR.2, CH2.0 | signed off 2026-10-26: as recommended, the measured spread of the baseline per benchmark and machine, plus the C3S.4 gate. Clarified 2026-10-26 (CHR.2): one-sided, slower than `main` by more than the spread fails, faster passes when the outputs are bit for bit identical; from CH2.0 on five runs per side in the order A B B A A B B A A B, the spread max − min of `main`'s five run medians, never pooled with the branch's. Amended 2026-10-31 (CH2.0, the user: "as recommended"): a failing row may be repeated once and the repeat counts, with both results reported. Amended 2026-10-31 (the machine move, the user: "Amend: M6 replaces M3 Max"): the M6 (`tools/m6/machine.md`) replaces the M3 Max as a machine of record, its C3S.4 reference `spikes/p2p-simd/results-m6.md` |
 | D10 | cubek-fft on the device | after S5: adopt, contribute upstream first, or keep the transform as a GEMM | CH0.5 | CH7.4 | open |
 | D11 | Maximum leaf width c_leaf | from S8: the largest c_leaf with P2P and leaf costs within 10 % of their best on W1 and W3 (expected 0.5 to 1) | CH0.8a | CH3.0 | signed off 2026-10-28: as recommended (CH0.8a report §9, question 1), c_leaf = 1 by the revised rule, the largest c_leaf with no high-frequency leaf on any workload at 10⁻⁶ and 10⁻⁸, replacing the rule of this row, which is degenerate; a first-pass value that CH0.8b may revise with S6's constants and S7's p |
@@ -801,30 +807,59 @@ at any kD.
 - [ ] **CH7.4 Diagonal M2L and the transforms on the device.** cubek-fft where D10 adopted it,
   else the transform as a GEMM. *Done when:* as CH4.2 on the device; device locals against
   the host's within error. *Needs:* CH4.2, CH7.1, CH0.5, D10. *Machines:* locust.
-- [ ] **CH7.5a Laplace's plane-wave M2L on the device.** Added on 2026-11-05 at the user's
+- CH7.5 Plane-wave M2L on the device: Laplace's first. Added on 2026-11-05 at the user's
   request, splitting CH7.5: the device kernels of merge and shift (the complex products over
   a box's waves, the merge lists per parent, the shifts to the children), built first on
   Laplace, whose host strategy exists (Phase 6 T13, `M2lStrategy::PlaneWave`) and which on
   a device runs as `Dense` today ("PlaneWave, run as dense on the device",
-  `fmm-exec/src/device.rs`); CH7.5b reuses them. The task T13's brief left for afterwards
+  `fmm-exec/src/device.rs`); CH7.5d reuses them. The task T13's brief left for afterwards
   (docs/phase6/T13-plane-wave-m2l.md, "Afterwards"): T10 modelled it at 2.4–20× T7's dense
   M2L stage on the H100, larger at high p (`spikes/plane-wave/SPIKE_REPORT.md` §3), with the
-  irregular merge lists the open device question. *Done when:* `PlaneWave` on the device
+  irregular merge lists the open device question. Split on 2026-11-05 (the user, "a/b/c,
+  Helmholtz → d"; constraint 1 agreed: new kernels, the device's `PlaneWave` opt-in until
+  CH7.5c's sign-off) into:
+- [x] **CH7.5a The plane-wave kernels.** Record: `docs/helmholtz/tasks/CH7.5a.md`; tests
+  `fmm-kernels/tests/kernels/translate/plane_wave.rs`. `nd-fmm-kernels` only (with read-only
+  accessors of `nd_fmm_tables::PlaneWaveTables`), module `plane_wave`: the
+  steps of `nd_fmm_tables::plane_wave` (CONVENTIONS §3.14) as kernels, one launch per step
+  and level call (the outgoing waves per box and frame, the merge per parent and
+  accumulator over a merge list built on the host, the gather with the child shifts, the
+  local with the rotation back), the tables uploaded once from plain arrays, explicit `fma`
+  chains, no atomics. *Done when:* each kernel bit for bit a host `mul_add` replica of its
+  order and within a stated bound of the table function it restates, f32 and f64 on the
+  CubeCL CPU runtime (CI), f32 on Metal (the M6, by hand), both on CUDA (locust, by hand),
+  every layout; a level call over a full and an adaptive level against
+  `PlaneWaveTables::m2l` per pair to rounding and against `nd_fmm_ref::direct::m2l` on
+  levels 2, 9 and 16 within T13's quadrature bound (p ≤ 20 f64 in an ignored sweep); two
+  launches bit for bit. No `nd-fmm-exec` change. *Needs:* Phase 6 T13 (merged).
+  *Machines:* locust, the M6 (Metal).
+- [ ] **CH7.5b The device's `PlaneWave`.** `nd-fmm-exec`'s device path runs M2L under
+  `PlaneWave` on CH7.5a's kernels when a builder setting names it (otherwise "PlaneWave,
+  run as dense on the device", as before): the merge lists from the V views at build, the
+  waves buffer bounded by chunks of parents within the device's scratch budget, the
+  launches in the formula of `tests/device_common`; the lists built in the order of CH7.5a's
+  test (`Lists::new` in `fmm-kernels/tests/kernels/translate/plane_wave.rs`, the order of
+  `src/operator_plane_wave.rs`), several vectors as columns, each chunk's buffers within
+  the kernels' 32-bit index range (CH7.5a). *Done when:* `PlaneWave` on the device
   (CUDA f32 and f64, Metal f32, the CubeCL CPU runtime in CI) within 1.1× `Dense`'s errors
   against the direct sum at the C3.2 cube and the C3.3 Plummer sphere (T13's requirement 1,
-  f64 p = 8, 12, 18 and f32 p = 8), device locals against the host `PlaneWave`'s within
-  the stated bound, bit for bit from run to run and on P ranks against the one-rank device
-  run; the device M2L stage and the evaluation against T7's dense M2L at f64 p = 8, 12, 18
-  on locust's H100 (f32 on the M6's Metal); adopted as the device's `PlaneWave` where it
-  wins at p ≥ 12 (T13's gate), else `PlaneWave` stays `Dense` on the device and the
-  kernels are dropped. Constraint 1: only the opt-in device `PlaneWave` changes its output;
-  every other strategy and Laplace's defaults bit for bit, the device gates and Laplace's
-  benchmarks within noise (D9); the device `Auto` unchanged (a change to it is a
-  sign-off). *Needs:* Phase 6 T13 (merged). *Machines:* locust, the M6 (Metal).
+  f64 p = 8, 12, 18 and f32 p = 8), device locals against the host `PlaneWave`'s within the
+  stated bound, bit for bit from run to run and on P ranks against the one-rank device run;
+  constraint 1: without the setting every strategy, the device's `PlaneWave` and Laplace's
+  defaults bit for bit, the device `Auto` unchanged. *Needs:* CH7.5a. *Machines:* locust,
+  the M6 (Metal).
+- [ ] **CH7.5c Measured, and adopted or dropped.** The device M2L stage and the evaluation
+  under CH7.5b's setting against T7's dense M2L at f64 p = 8, 12, 18 on locust's H100 (f32
+  p = 8 on the M6's Metal), with the kernels' layouts measured (CH7.5a's `GPU_UNITS` = 128
+  is a first choice; the merge's irregular lists are the spike's open question); Laplace's
+  device gates and benchmarks within noise (D9). *Done when:* the report gives both; adopted as the device's `PlaneWave` where it wins at
+  p ≥ 12 (T13's gate; the setting becomes the default of `PlaneWave` on the device), else
+  `PlaneWave` stays `Dense` on the device and the kernels are dropped; the device `Auto`
+  unchanged (a change to it is a sign-off). *Needs:* CH7.5b. *Machines:* locust, the M6.
   *Sign-off:* adoption on the device.
-- [ ] **CH7.5b Exponential M2L on the device**, if D8 adopted it on the host. On CH7.5a's
+- [ ] **CH7.5d Exponential M2L on the device**, if D8 adopted it on the host. On CH7.5a's
   merge and shift kernels, with the Helmholtz conversions (CH6.1c's pair chain) and the
-  quadrature per level (CH6.1e). *Done when:* as CH6.1 on the device. *Needs:* CH7.5a,
+  quadrature per level (CH6.1e). *Done when:* as CH6.1 on the device. *Needs:* CH7.5c,
   CH6.2, CH7.1, D8. *Machines:* locust.
 - [ ] **CH7.6 Device performance against FMM3D at matched accuracy.** As CH4.5, the device
   path beside the host's. *Needs:* CH7.2, CH7.3, CH7.4, CH4.5. *Machines:* locust.

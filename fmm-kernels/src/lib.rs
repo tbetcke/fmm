@@ -15,7 +15,8 @@
 //! L2P, P2L and M2P ([`leaf`]). T8: the grouped translations with dense tables
 //! ([`translate`]: the hand-written GEMM, the library GEMM, M2M and L2L; T9 adds dense
 //! M2L). T10: rotation M2L ([`rotation`]). T11: timing windows ([`Device::open_window`]).
-//! Phase 6 T8d: dipole sources ([`SourceKind`]) in P2P, P2M and P2L.
+//! Phase 6 T8d: dipole sources ([`SourceKind`]) in P2P, P2M and P2L. Helmholtz CH7.5a:
+//! plane-wave M2L ([`plane_wave`]).
 //!
 //! ## Backends and features
 //!
@@ -166,6 +167,16 @@
 //! in row order. Every multiply–add is an explicit fma, so the kernel equals a host
 //! `mul_add` loop in its order bit for bit, and `RotationTables::m2l` to rounding.
 //!
+//! ## Plane-wave M2L (Helmholtz CH7.5a)
+//!
+//! [`plane_wave::m2l`] runs one level call of merge and shift (CONVENTIONS §3.14) in four
+//! launches: the waves of every source in every frame, the accumulators of each parent,
+//! the incoming waves of each child and each child's local, from lists the caller builds
+//! on the host ([`plane_wave::PlaneWaveLists`]) and the tables of
+//! `nd_fmm_tables::PlaneWaveTables` uploaded once ([`plane_wave::PlaneWaveTables`]). Every
+//! multiply–add is an explicit fma, so each step equals a host `mul_add` replica of its
+//! order bit for bit and the tables' steps to rounding.
+//!
 //! ## Tests on each backend
 //!
 //! From the repository root (`cargo test` prints the backends it ran with
@@ -196,6 +207,7 @@ mod frame;
 pub mod leaf;
 pub mod movement;
 pub mod p2p;
+pub mod plane_wave;
 pub mod rotation;
 mod sources;
 pub mod translate;

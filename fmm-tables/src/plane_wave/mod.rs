@@ -419,6 +419,49 @@ impl<T: RealScalar> PlaneWaveTables<T> {
         self.source_shifts.len() / self.wave_len().max(1)
     }
 
+    /// Every child shift, 2H values each, direction by direction and child by child: that
+    /// of `direction` and `child` at (8 `direction.index()` + `child`) 2H
+    /// ([`child_shift`](Self::child_shift)).
+    pub fn child_shifts(&self) -> &[T] {
+        &self.child_shifts
+    }
+
+    /// The weighted powers of [`outgoing_modes`](Self::outgoing_modes), (wₖ/Nₖ') λₖⁿ
+    /// 2^{−(n+1)} at n s + k, s the λ nodes ((p + 1) s values).
+    pub fn outgoing_powers(&self) -> &[T] {
+        &self.outgoing_powers
+    }
+
+    /// The powers of [`local_from_sums`](Self::local_from_sums), 2 λₖⁿ 2^{−n} at
+    /// k (p + 1) + n (s (p + 1) values).
+    pub fn incoming_powers(&self) -> &[T] {
+        &self.incoming_powers
+    }
+
+    /// The rotation of a multipole into `frame` (1 or 2) of
+    /// [`rotate_multipole`](Self::rotate_multipole): per degree n its block K Dⁿ(Q) K
+    /// transposed, entry (i, j) at Σ_{n'<n} (2n' + 1)² + j (2n + 1) + i.
+    ///
+    /// # Panics
+    ///
+    /// If `frame` is not 1 or 2 (frame 0 is the identity).
+    pub fn multipole_rotation(&self, frame: usize) -> &[T] {
+        assert!((1..3).contains(&frame), "frames 1 and 2 rotate");
+        &self.rotate_multipole[frame - 1]
+    }
+
+    /// The rotation of a local back from `frame` (1 or 2) of
+    /// [`add_local_from_frame`](Self::add_local_from_frame), in the layout of
+    /// [`multipole_rotation`](Self::multipole_rotation).
+    ///
+    /// # Panics
+    ///
+    /// If `frame` is not 1 or 2.
+    pub fn local_rotation(&self, frame: usize) -> &[T] {
+        assert!((1..3).contains(&frame), "frames 1 and 2 rotate");
+        &self.rotate_local[frame - 1]
+    }
+
     /// The shift of waves in `direction` from the parent's centre to the child `child`
     /// (2H values).
     pub fn child_shift(&self, direction: Direction, child: usize) -> &[T] {

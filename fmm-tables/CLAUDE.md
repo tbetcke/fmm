@@ -35,7 +35,10 @@ rule of which Helmholtz CH6.1e measured.
   (`waves_from_modes`, `sums_from_waves`, `shift_add`, `shift`, `add`) define its chains
   with `mul_add`; keep the two in step. The other steps round products and sums apart: an
   x86_64 build without `fma` turns `mul_add` into a library call. The plane-wave tables
-  are not cached (milliseconds to build).
+  are not cached (milliseconds to build). The accessors `outgoing_powers`,
+  `incoming_powers`, `multipole_rotation`, `local_rotation` and `child_shifts` (Helmholtz
+  CH7.5a) give `nd-fmm-kernels`' device kernels the arrays behind the steps, in their
+  storage; `arrays_match_the_steps` checks them against the steps.
 - The second exception, `helmholtz` (Helmholtz CH3.1a; its module docs): the coaxial
   tables come from `nd_fmm_ref::helmholtz::rcr::{m2m_table, l2l_table, m2l_table}`, but
   the stored form's factors folded into them and the three steps of the application
