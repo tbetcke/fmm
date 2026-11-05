@@ -106,6 +106,60 @@ fn tables_have_their_sizes() {
     }
 }
 
+/// The arrays behind the steps (Helmholtz CH7.5a, for the device kernels): the child
+/// shifts concatenated in direction and child order, the powers' layouts, and the frame
+/// rotations as `rotate_multipole` and `add_local_from_frame` apply them.
+#[test]
+fn arrays_match_the_steps() {
+    let p = 5;
+    let tables = PlaneWaveTables::<f64>::build(p);
+    let (w, s, n) = (tables.wave_len(), tables.blocks().len(), (p + 1) * (p + 1));
+    for direction in Direction::ALL {
+        for child in 0..CHILDREN {
+            let i = 8 * direction.index() + child;
+            assert_eq!(
+                &tables.child_shifts()[i * w..(i + 1) * w],
+                tables.child_shift(direction, child)
+            );
+        }
+    }
+    assert_eq!(tables.child_shifts().len(), 48 * w);
+    assert_eq!(tables.outgoing_powers().len(), (p + 1) * s);
+    assert_eq!(tables.incoming_powers().len(), s * (p + 1));
+    // The powers of the first λ node at degree 1: (w₀/N₀') λ₀ / 4 and 2 λ₀ / 2.
+    let q = tables.quadrature();
+    let lambda = q.lambdas[0];
+    let weight = q.weights[0] / q.even_alpha_nodes()[0] as f64;
+    assert_eq!(tables.outgoing_powers()[s], weight * lambda / 4.0);
+    assert_eq!(tables.incoming_powers()[1], 2.0 * lambda / 2.0);
+    // The rotations: a unit vector e_k in, column k of each degree's block out.
+    let mut rng = Rng(0xa77a);
+    for frame in 1..3 {
+        let (forward, back) = (
+            tables.multipole_rotation(frame),
+            tables.local_rotation(frame),
+        );
+        assert_eq!(forward.len(), back.len());
+        let x: Vec<f64> = (0..n).map(|_| rng.next() - 0.5).collect();
+        let mut rotated = vec![0.0; n];
+        tables.rotate_multipole(frame, &x, &mut rotated);
+        let mut added = vec![0.0; n];
+        tables.add_local_from_frame(frame, &x, &mut added);
+        let mut start = 0;
+        for d in 0..=p {
+            let width = 2 * d + 1;
+            for i in 0..width {
+                let row = |b: &[f64]| -> f64 {
+                    (0..width).fold(0.0, |acc, j| acc + b[start + j * width + i] * x[d * d + j])
+                };
+                assert_eq!(rotated[d * d + i], row(forward));
+                assert_eq!(added[d * d + i], row(back));
+            }
+            start += width * width;
+        }
+    }
+}
+
 /// A source shift to the parent's centre followed by the child shift is the shift of the
 /// pair, to rounding: the factorisation merge and shift rests on.
 #[test]

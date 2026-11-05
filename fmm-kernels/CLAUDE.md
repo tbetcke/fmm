@@ -7,13 +7,16 @@ P2P (`p2p`, T6), the leaf operators P2M, L2P, P2L and M2P (`leaf`, T7), the grou
 translations M2M and L2L (`translate`, T8), dense M2L (`translate`, T9) and rotation M2L
 (`rotation`, T10) (docs/design/device-path.md §3.1), (Phase 4S T9) the output pass of
 `nd-fmm-exec` on the device (`movement::gather_output`), and (Phase 5 T8) the scatter of
-an exchange's packed receive buffer (`movement::scatter_columns`).
+an exchange's packed receive buffer (`movement::scatter_columns`), and (Helmholtz CH7.5a)
+Laplace's plane-wave M2L, merge and shift (`plane_wave`).
 Phase and components: Phase 4, C4.1 (T4, T5), C4.2–C4.6 (T6–T10) and the timing windows
 of C4.8 (T11) in docs/phase4/; Phase 4S, C4S.8 (T9) and C4S.10 (T11: transfers without a
 host copy) in docs/phase4s/; Phase 5, C5.2's device-resident ghost buffers (T8) in
 docs/phase5/; Phase 6, C6.3 (T5: several charge vectors in the leaf operators, P2P and the
 output gather) and C6.1 (T7: the fused gather, the reduction by chunk and the shared-memory
-GEMM of the grouped translations) and C6.4 (T8d: dipole sources in P2P, P2M and P2L).
+GEMM of the grouped translations) and C6.4 (T8d: dipole sources in P2P, P2M and P2L);
+Helmholtz CH7.5a (docs/helmholtz/tasks/CH7.5a.md: the plane-wave kernels, which CH7.5b
+runs in `nd-fmm-exec` and CH7.5c measures).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -223,6 +226,29 @@ GEMM of the grouped translations) and C6.4 (T8d: dipole sources in P2P, P2M and 
   runtime, Metal and CUDA), not `RotationTables::m2l`, which rounds each product
   (tolerance, T3 rule 6; 35–100% of the values agree bit for bit). Do not change the step order or
   the device table layout without a sign-off.
+- Plane-wave M2L (Helmholtz CH7.5a, `plane_wave`; CONVENTIONS §3.14; the module docs): the
+  tables of `nd_fmm_tables::PlaneWaveTables` uploaded once as `PlaneWaveTables` from plain
+  arrays (`PlaneWaveArrays`: the λ nodes, the powers, cos and sin, the frame rotations, the
+  source and child shifts, each the tables crate's accessor; no `nd-fmm-tables`
+  dependency), a level call's lists (`PlaneWaveLists`: the sources' multipole columns, the
+  accumulators' (wave block, source shift) entries, the incoming blocks' child shifts and
+  accumulators, the local items' columns and six incoming blocks or `NO_BLOCK`) validated
+  and uploaded as `PlaneWavePlan`, and `PlaneWaveScratch` (the waves, 6 blocks of 2H per
+  source, the accumulators and the incoming blocks) allocated at build. `m2l` is four
+  launches, one per step (`outgoing`, `merge`, `gather`, `local`), none for a step without
+  items. Two layouts (`PlaneWaveLayout`): `Cube { units }` (one cube per item, units
+  striding over its outputs; `outgoing` and `local` stage (p + 1)² + 4F values in shared
+  memory with `sync_cube` between their steps; default on Metal and CUDA with `GPU_UNITS`
+  = 128, a first choice that CH7.5c measures) and `Cpu` (one unit per core, contiguous
+  items, local arrays; default on the CPU runtime). Each output has one owner and every
+  chain the order of the host function it restates; the loops the tables write with
+  `mul_add` (`waves_from_modes`, `shift_add`, `add` + `shift`, `sums_from_waves`) are the
+  same fmas, the steps the tables round apart (`rotate_multipole`, `outgoing_modes`,
+  `local_from_sums`, `add_local_from_frame`) one fma per term: bit for bit a host `mul_add`
+  replica of every step (tested), the tables' functions to rounding. The local items'
+  columns are distinct (checked at the plan's build), and a frame with neither incoming
+  block is skipped, as the host skips it. Do not change the step order or the device
+  table layout without a sign-off.
 - Timing windows (T11, device-path.md §8.3): `Device::open_window` and `close_window`
   wrap CubeCL's `profile_start`/`profile_end`; `WindowTime::resolve` reads the time after
   the work has run. `Device::times_on_device` is true only on a GPU backend whose runtime
@@ -298,6 +324,11 @@ GEMM of the grouped translations) and C6.4 (T8d: dipole sources in P2P, P2M and 
   compilation; the fused gather at p = 20 on the CPU runtime only in the CPU layout), the
   level calls 9.5 s (with p = 12 and 20 in the default layout), M2L 5.0 s; the CPU
   runtime's 75 default tests in about 40 s (release, the M3 Max).
+  Helmholtz CH7.5a's plane-wave tests (`tests/kernels/translate/plane_wave.rs`: the
+  full and adaptive regions at p ∈ {3, 8} in f32 and f64, both layouts, the direct check
+  at p ∈ {3, 8}, the refusals) add 3 runtime tests of about 1.3 s together (release, the
+  M6); the ignored `plane_wave_every_degree_on_the_cpu_runtime` (every p ≤ 20 against
+  `direct::m2l`, the level calls at p = 12, 18, 20) 8.6 s.
   `cargo test -p nd-fmm-kernels` without features builds and passes in seconds.
   Kernel compilation, from CubeCL's profiling log (the first launch of each variant
   includes its compilation): `CUBECL_DEBUG_LOG=<file> cargo test -p nd-fmm-kernels
@@ -405,5 +436,7 @@ rayon. Anything else needs asking first.
 Plain host loops (buffers, zeroing, gather, scatter), bit for bit; `nd-fmm-ref`
 (`direct`, `leaf`, `p2p`), `nd-fmm-math` and `nd-fmm-tables` (`MatrixSet::apply`,
 `RotationTables`; for rotation M2L also a host `mul_add` replica of the kernel, bit for
-bit) for the operator kernels, at the canonical frames, levels 2, 9 and 16 of a dyadic
+bit; for plane-wave M2L a host `mul_add` replica of every step bit for bit, and
+`nd_fmm_tables::plane_wave`'s functions and `PlaneWaveTables::m2l` per pair to rounding)
+for the operator kernels, at the canonical frames, levels 2, 9 and 16 of a dyadic
 domain.

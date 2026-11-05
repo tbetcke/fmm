@@ -967,3 +967,6 @@ mod m2l;
 
 /// Rotation M2L (T10, C4.6): level calls over V-list-shaped views with the rotation tables.
 mod rotation;
+
+/// Plane-wave M2L (Helmholtz CH7.5a): level calls of merge and shift.
+mod plane_wave;
