@@ -29,7 +29,9 @@ method on almost every level below the coarsest at 10⁻⁶, 0.19–0.45× Rotat
 larger cases; at 10⁻³ a per-level choice; the coarse levels slow at many threads);
 Kathleen down, its runs moved to CH6.2c (the user). 2026-11-05: CH7.5 split
 (the user) into Laplace's plane-wave M2L on the device (CH7.5a, which builds the merge and
-shift kernels) and Helmholtz's on them (CH7.5b). Next: CH6.2c (*Machines:* Kathleen; D8), once CH6.2b is merged.
+shift kernels) and Helmholtz's on them (CH7.5b); CH7.5a first on the priority list while
+Kathleen is down (the user). Next: CH7.5a (*Machines:* locust, the M6), then CH6.2c
+(*Machines:* Kathleen; D8) once Kathleen is back.
 
 ## How `/next-task` reads this file
 
@@ -65,13 +67,14 @@ low-frequency and intermediate trees at tight ε across most of D1's range (gate
 §3.3). It replaces the list of 2026-10-28, the shortest path to CH3.6, which finished with
 CH3.6 (#170) and H3.G.
 
-1. CH0.4 S4: quadratures of the Helmholtz exponential M2L per k w_l
-2. CH6.1 The §3.14 machinery generalised (needs CH0.4): CH6.1a, CH6.1b, CH6.1c, CH6.1d, CH6.1e
-3. CH6.2 Measured (*Machines:* locust, Kathleen; *Sign-off:* D8): CH6.2a, CH6.2b, CH6.2c
-4. CH6.1f Quadratures for ε below 10⁻⁶ (needs CH6.1e; after CH6.2, before H6.G: CH6.1e's
+1. CH7.5a Laplace's plane-wave M2L on the device (added on 2026-11-05, the user: "Please add
+   to the priority list to get it sooner", then "Please put 7.5a to the top of the list.
+   Kathleen is still down"; needs only Phase 6 T13, merged; *Machines:* locust, the M6)
+2. CH0.4 S4: quadratures of the Helmholtz exponential M2L per k w_l
+3. CH6.1 The §3.14 machinery generalised (needs CH0.4): CH6.1a, CH6.1b, CH6.1c, CH6.1d, CH6.1e
+4. CH6.2 Measured (*Machines:* locust, Kathleen; *Sign-off:* D8): CH6.2a, CH6.2b, CH6.2c
+5. CH6.1f Quadratures for ε below 10⁻⁶ (needs CH6.1e; after CH6.2, before H6.G: CH6.1e's
    question 3, signed off 2026-11-03, "1–4 as recommended")
-5. CH7.5a Laplace's plane-wave M2L on the device (added on 2026-11-05, the user: "Please add
-   to the priority list to get it sooner"; needs only Phase 6 T13, merged)
 
 Off the list, in file order: CH0.6, CH0.8b, CH0.9, CH0.5 and H0.G; CHR.3 and HR.G; CH1.3d
 and H1.G; CH2.1, CH2.2, CH2.3, CH2.5 and H2.G; H6.G; H4 (CH4.0, CH4.0b and CH4.0c first),
