@@ -47,7 +47,7 @@
 //!   under `PlaneWave` with merge and shift on the device
 //!   (`DevicePlaneWave::Kernels`) against the device's dense M2L (`M2lStrategy::Dense`
 //!   under the static rule, Phase 6 T7's), timed as in **kinds** (M2L and the evaluation):
-//!   the default layout and budget, the cube layout with 32, 64, 128 and 256 units
+//!   the default layout and budget, the cube layout with 32, 64, 128, 256, 512 and 1,024 units
 //!   (`device_plane_wave_layout`; a layout the device refuses is a "refused" row), and the
 //!   chunk budgets of 128 MB, 512 MB, 1 GB, 2 GB and 4 GB besides the default
 //!   (`device_plane_wave_budget`); then the M2L time per level of `Dense` and of the
@@ -737,7 +737,7 @@ impl Sweep<'_> {
                 kernels(),
             ),
         ];
-        for units in [32u32, 64, 128, 256] {
+        for units in [32u32, 64, 128, 256, 512, 1024] {
             variants.push((
                 format!("PlaneWave, cube ({units} units)"),
                 kernels().device_plane_wave_layout(DevicePlaneWaveLayout::Cube { units }),
