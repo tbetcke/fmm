@@ -39,7 +39,9 @@ C6.5 (T13: the plane-wave M2L, `M2lStrategy::PlaneWave`, the level call in
 `src/operator_plane_wave.rs`, `cost::M2lUnit`; CONVENTIONS §3.14; design
 docs/design/optimisation.md §8.2, "As built in T13"; report
 fmm-validate/results/phase6-planewave.md); and the defaults of T11 (decision 7 of
-docs/phase6/README.md; report fmm-validate/results/phase6.md).
+docs/phase6/README.md; report fmm-validate/results/phase6.md); Helmholtz CH7.5b (the
+device's `PlaneWave` on `nd_fmm_kernels::plane_wave`, opt-in: `DevicePlaneWave`,
+`FmmBuilder::{device_plane_wave, device_plane_wave_budget}`; docs/helmholtz/tasks/CH7.5b.md).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -77,7 +79,8 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
   (`WaveKernel`, on the P2P choice's ISA); the pair path (`m2l_pair`, `PairOperator`)
   translates each pair directly along the merge's direction (`Tables::m2l_at`), equal to
   the level call to rounding. M2M and L2L are `Rotation`'s; on a device it runs as `Dense`
-  (the device path builds the dense tables). `Fmm` sizes its waves buffer from the plan
+  (the device path builds the dense tables) unless the builder names merge and shift on
+  the device (Helmholtz CH7.5b, below in the device path's rules). `Fmm` sizes its waves buffer from the plan
   (`with_plane_wave_boxes`), so no level call allocates; the cost model counts its M2L per
   box with a V row (`cost::M2lUnit::Boxes`). `Auto` resolves to it on the host at f64 p ≥ 7
   and f32 p ≥ 8 since Phase 6 T11 (below, "The defaults of Phase 6 T11").
@@ -729,7 +732,26 @@ docs/phase6/README.md; report fmm-validate/results/phase6.md).
     its own storage through `device::RotationHostArrays`, the rows of each V view at
     build, the layout by backend in `DeviceReport::rotation_layout`, the calls in
     `DeviceReport::rotations`; M2M and L2L stay the dense octant GEMMs);
-    `host_fallback` names a kind to keep it on the host.
+    `host_fallback` names a kind to keep it on the host;
+    and from Helmholtz CH7.5b M2L under `PlaneWave` on `nd_fmm_kernels::plane_wave` when
+    `FmmBuilder::device_plane_wave(DevicePlaneWave::Kernels)` names it (the default
+    `DevicePlaneWave::Dense` keeps "PlaneWave, run as dense on the device", `Dense`'s bits,
+    until Helmholtz CH7.5c decides the adoption; the `device` module docs, "Plane-wave M2L
+    on the device"): the host's `PlaneWaveTables` uploaded once, per level the lists of
+    the host's order (`src/operator_plane_wave.rs`: parents in index order, the slots
+    from the computed children's V rows, every accumulator over its slots ascending, each
+    computed child's accumulators in order) built at build and cut into chunks of whole
+    parents within `device_plane_wave_budget` (default `default_scratch_bytes`), the m
+    vectors as columns, four launches per chunk, one scratch for the widest chunk
+    (`PlaneWaveScratch::covering`), reported in `DeviceReport::{plane_wave,
+    plane_wave_layout, plane_waves, plane_wave_scratch_bytes}` and "PlaneWave, merge and
+    shift on the device". Within the FMM bounds of the host's `PlaneWave`, the same bits at
+    every budget and from run to run, and with M2L alone on the device on P ranks the
+    one-rank output's bit for bit. `device_common::check_plane_waves` (in `tests/mpi_exec.rs`'s
+    `check_plane_wave` on the CPU runtime, `tests/device_metal.rs`, `tests/device_cuda.rs`,
+    `tests/device_ranks.rs`) checks it with the transfer formula (four launches per chunk);
+    the ignored `tests/device_fmm.rs` its accuracy gate (within 1.1× the device `Dense`'s
+    L2 errors on the cube and the Plummer sphere, f64 p = 8, 12, 18 and f32 p = 8).
     `tests/operator/device_leaf.rs` checks the four leaf operators against
     `nd_fmm_ref::leaf` (p ≤ 20 in f64) and the host operator;
     `tests/operator/device_translate.rs` checks M2M and L2L, and

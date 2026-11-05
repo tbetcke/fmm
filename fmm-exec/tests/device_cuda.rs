@@ -184,10 +184,26 @@ fn scenario<T: Real>(
         Backend::Cuda,
         comm,
     );
+    // The device's PlaneWave on its merge and shift kernels (Helmholtz CH7.5b).
+    let plane = device_common::check_plane_waves(
+        &builder,
+        (sources, targets),
+        charges,
+        Backend::Cuda,
+        comm,
+    );
     eprintln!(
         "rank {}: {name}: {summary}; {vectors} evaluations of three charge vectors bit for \
-         bit their one-vector evaluations",
-        comm.rank()
+         bit their one-vector evaluations; PlaneWave, merge and shift on the device (Helmholtz \
+         CH7.5b): within {:.1e} (φ) and {:.1e} (∇φ) of the host's PlaneWave, locals {:.1e}; \
+         {} chunks ({} at one parent each) bit for bit; {} evaluations of three vectors",
+        comm.rank(),
+        plane.potential,
+        plane.gradient,
+        plane.locals,
+        plane.chunks,
+        plane.tight_chunks,
+        plane.vectors
     );
 }
 
