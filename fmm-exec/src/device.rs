@@ -245,6 +245,50 @@
 //! | f32 | 0.04 | 0.39 | 1.16 | 2.58 | 3.59 | 4.85 |
 //! | f64 | 0.07 | 0.77 | 2.31 | 5.15 | 7.18 | 9.69 |
 //!
+//! # Plane-wave M2L on the device (Helmholtz CH7.5b)
+//!
+//! Under `PlaneWave` M2L runs as `Dense` on the device by default ("PlaneWave, run as dense
+//! on the device", Phase 6 T13: the dense tables, built or loaded here, and the output of
+//! `Dense` bit for bit). With
+//! [`FmmBuilder::device_plane_wave`](crate::fmm::FmmBuilder::device_plane_wave)`(`[`DevicePlaneWave::Kernels`]`)`
+//! it runs merge and shift on the device instead ("PlaneWave, merge and shift on the
+//! device"; docs/helmholtz/tasks/CH7.5b.md), the kernels of `nd_fmm_kernels::plane_wave`
+//! (CONVENTIONS §3.14; Helmholtz CH7.5a), opt-in until Helmholtz CH7.5c measures it:
+//!
+//! - **tables**: the host operator's `PlaneWaveTables` (its λ nodes, powers, cos and sin,
+//!   frame rotations, source and child shifts) uploaded once, as they are; no dense M2L
+//!   tables;
+//! - **lists**, built at build from each level's V view in the host's order
+//!   (`src/operator_plane_wave.rs`): the parents in index order (consecutive boxes of one
+//!   parent key), each with its computed children (those with a V row), its sources by
+//!   slot from their rows, per direction (`Direction::ALL`) every accumulator whose mask
+//!   meets the computed children over its slots present in ascending order, and per
+//!   computed child with any accumulator an incoming block (its accumulators in order,
+//!   then its child shift) and a local item (its six incoming blocks), the frames added
+//!   0, 1, 2 into the local as L2L left it;
+//! - **chunks**: a level call runs in chunks of whole parents whose scratch (six wave
+//!   blocks per distinct source, the accumulators and the incoming blocks, 2H values each,
+//!   for all m vectors) fits
+//!   [`device_plane_wave_budget`](crate::fmm::FmmBuilder::device_plane_wave_budget)
+//!   (default the translation scratch budget, `default_scratch_bytes`), at least one
+//!   parent each; the m vectors are columns, the chunk's lists repeated per vector on the
+//!   columns b m + v; four launches per chunk (`outgoing`, `merge`, `gather`, `local`), no
+//!   transfer; one scratch for the widest chunk, allocated at build and counted in the
+//!   memory check with the tables and lists;
+//! - **layout**: [`PlaneWaveLayout::default_for`], the CPU layout on the CPU runtime
+//!   (units capped by `threads(n)`) and a cube of 128 units on Metal and CUDA
+//!   ([`DeviceReport::plane_wave_layout`]); the calls in [`DeviceReport::plane_waves`].
+//!
+//! Every accumulator, incoming block and local has one owner and sums in a fixed order
+//! that depends on the geometry and the V rows of its computed children alone, so the
+//! output is the same at every budget, from evaluation to evaluation and build to build,
+//! and on P ranks the one-rank device output's bit for bit wherever the other kinds are
+//! (with them on the host fallback: `tests/mpi_exec.rs`). The kernels fuse each product
+//! into its sum where the host rounds products apart, so the output agrees with the host's
+//! `PlaneWave` within the FMM bounds, not bit for bit (CH7.5a: each step bit for bit a host
+//! `mul_add` replica). `host_fallback` with [`OperatorKind::M2l`] runs the host's
+//! `PlaneWave`.
+//!
 //! # Transfer accounting
 //!
 //! The operator counts every upload and download (calls and bytes), every launch, every
@@ -583,6 +627,7 @@
 //! ```
 
 use std::any::Any;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::ops::{Deref, Range};
 use std::path::{Path, PathBuf};
@@ -594,6 +639,11 @@ use nd_fmm_kernels::movement::{
     OutputOrder, gather_columns, gather_output, scatter_columns, scatter_values, zero,
 };
 use nd_fmm_kernels::p2p::{P2pInputs, P2pLayout};
+pub use nd_fmm_kernels::plane_wave::PlaneWaveLayout;
+use nd_fmm_kernels::plane_wave::{
+    CHILDREN as PLANE_CHILDREN, DIRECTIONS, LambdaNode, NO_BLOCK, PlaneWaveArrays, PlaneWaveLists,
+    PlaneWavePlan, PlaneWaveScratch, PlaneWaveTables as DevicePlaneWaves,
+};
 pub use nd_fmm_kernels::rotation::RotationLayout;
 use nd_fmm_kernels::rotation::{
     Alignment as DeviceAlignment, RotationArrays, RotationPlan, RotationTables as DeviceRotation,
@@ -614,6 +664,7 @@ use nd_fmm_kernels::{
 };
 pub use nd_fmm_kernels::{Counters, DeviceInfo};
 use nd_fmm_plan::exchange::{MultipoleExchange, ReductionExchange, TopExchange};
+use nd_fmm_plan::index::BoxIndex;
 use nd_fmm_plan::lists::{Csr, GroupedCsr, VList};
 use nd_fmm_plan::operator::{
     FmmOperator, FmmSizes, HostData, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, UpwardPass,
@@ -621,17 +672,20 @@ use nd_fmm_plan::operator::{
 use nd_fmm_plan::plan::Plan;
 use nd_fmm_plan::store::{LeafStore, LevelBuffers};
 use nd_fmm_tables::cache::{Stored, TableKind};
+use nd_fmm_tables::geometry::m2l_offsets;
+use nd_fmm_tables::plane_wave::Direction;
+use nd_fmm_tables::plane_wave::geometry::{SLOTS, slot_of};
 use nd_fmm_tables::rotation::{Alignment, Operator as RotationOperator, ShiftTables};
 use nd_fmm_tables::{
-    CacheOutcome, L2lTables, M2lTables, M2mTables, MatrixSet, RotationTables as HostRotationTables,
-    TableCache,
+    CacheOutcome, L2lTables, M2lTables, M2mTables, MatrixSet,
+    PlaneWaveTables as HostPlaneWaveTables, RotationTables as HostRotationTables, TableCache,
 };
 use nd_octree::morton;
 
 use crate::fmm::{
-    Backend, DeviceGather, DeviceGemm, DeviceLeafLayout, DeviceP2pLayout, DeviceReduction,
-    DeviceStage, DeviceStageTimings, FmmError, MAX_LEVELS, OperatorKind, OutputPass, Placement,
-    SettingsError,
+    Backend, DeviceGather, DeviceGemm, DeviceLeafLayout, DeviceP2pLayout, DevicePlaneWave,
+    DeviceReduction, DeviceStage, DeviceStageTimings, FmmError, MAX_LEVELS, OperatorKind,
+    OutputPass, Placement, SettingsError,
 };
 use crate::operator::{LaplaceOperator, SimdScalar, SourceType};
 use crate::tables::M2lStrategy;
@@ -950,6 +1004,31 @@ pub struct RotationReport {
     pub rows: usize,
 }
 
+/// One device level call of the plane-wave M2L (Helmholtz CH7.5b), fixed at build, for
+/// [`DeviceReport`]: its chunks of whole parents, each four launches of
+/// `nd_fmm_kernels::plane_wave::m2l` (fewer for a step without items), and the items over
+/// its chunks, m per box with m vectors.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaneWaveReport {
+    /// The level of the targets and sources.
+    pub level: usize,
+    /// The pairs of the view, m per pair of the plan.
+    pub pairs: usize,
+    /// The chunks of whole parents within the budget.
+    pub chunks: usize,
+    /// The launches of the level call.
+    pub launches: usize,
+    /// The sources over the chunks, each with six wave blocks (a source shared by two
+    /// chunks counts twice).
+    pub sources: usize,
+    /// The accumulators over the chunks.
+    pub accumulators: usize,
+    /// The incoming blocks over the chunks.
+    pub incoming: usize,
+    /// The local items over the chunks.
+    pub locals: usize,
+}
+
 /// How [`StageTimings`](crate::fmm::StageTimings) time the stages of a device
 /// evaluation (docs/design/device-path.md §8.3), fixed at build.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -1027,6 +1106,20 @@ pub struct DeviceReport {
     /// The device level calls of rotation M2L with a pair, under `Rotation`, by level:
     /// one launch each (T10).
     pub rotations: Vec<RotationReport>,
+    /// How the device runs M2L under `PlaneWave` (Helmholtz CH7.5b): the builder's
+    /// [`DevicePlaneWave`] where it applies (`PlaneWave` with M2L on the device),
+    /// [`DevicePlaneWave::Dense`] otherwise.
+    pub plane_wave: DevicePlaneWave,
+    /// The layout of the device plane-wave M2L (Helmholtz CH7.5b): by default the CPU
+    /// layout on the CPU runtime and a cube of `nd_fmm_kernels::plane_wave::GPU_UNITS`
+    /// units on the GPUs ([`PlaneWaveLayout::default_for`]).
+    pub plane_wave_layout: PlaneWaveLayout,
+    /// The device level calls of the plane-wave M2L with a pair, under `PlaneWave` with
+    /// [`DevicePlaneWave::Kernels`], by level (Helmholtz CH7.5b).
+    pub plane_waves: Vec<PlaneWaveReport>,
+    /// The bytes of the plane-wave scratch, the widest chunk's (Helmholtz CH7.5b); 0
+    /// without plane-wave level calls.
+    pub plane_wave_scratch_bytes: u64,
     /// The bytes of the translation scratch: the gathered inputs and the products of
     /// the widest chunk (T8, T9).
     pub scratch_bytes: u64,
@@ -1083,9 +1176,10 @@ impl DeviceReport {
     /// the class tables on the host for the fallback), `Rotation` (the rotation kernel,
     /// T10), "Batched, run as dense on the device" (the dense tables, whose device M2L
     /// is already a product per level; Phase 6 T2), or "PlaneWave, run as dense on the
-    /// device" (dense tables the device path builds or loads; Phase 6 T13: no device
-    /// plane-wave kernel yet); with M2L on the host fallback by
-    /// request, the strategy and "M2L on the host fallback".
+    /// device" (dense tables the device path builds or loads; Phase 6 T13), or with
+    /// [`DevicePlaneWave::Kernels`] "PlaneWave, merge and shift on the device" (Helmholtz
+    /// CH7.5b); with M2L on the host fallback by request, the strategy and "M2L on the
+    /// host fallback".
     pub fn strategy_name(&self) -> String {
         match (self.strategy, self.placement(OperatorKind::M2l)) {
             (M2lStrategy::Dense, Placement::Device) => "Dense".to_owned(),
@@ -1096,9 +1190,10 @@ impl DeviceReport {
             (M2lStrategy::Batched, Placement::Device) => {
                 "Batched, run as dense on the device".to_owned()
             }
-            (M2lStrategy::PlaneWave, Placement::Device) => {
-                "PlaneWave, run as dense on the device".to_owned()
-            }
+            (M2lStrategy::PlaneWave, Placement::Device) => match self.plane_wave {
+                DevicePlaneWave::Dense => "PlaneWave, run as dense on the device".to_owned(),
+                DevicePlaneWave::Kernels => "PlaneWave, merge and shift on the device".to_owned(),
+            },
             (strategy, _) => format!("{strategy:?}, M2L on the host fallback"),
         }
     }
@@ -1184,6 +1279,18 @@ impl fmt::Display for DeviceReport {
                 self.rotation_layout
             )?;
         }
+        if !self.plane_waves.is_empty() {
+            let chunks: usize = self.plane_waves.iter().map(|r| r.chunks).sum();
+            let pairs: usize = self.plane_waves.iter().map(|r| r.pairs).sum();
+            writeln!(
+                f,
+                "M2L: plane waves in {} level calls of {pairs} pairs, {chunks} chunks, layout \
+                 {}, scratch {} B",
+                self.plane_waves.len(),
+                self.plane_wave_layout,
+                self.plane_wave_scratch_bytes
+            )?;
+        }
         if !self.translations.is_empty() {
             writeln!(f, "translation scratch: {} B", self.scratch_bytes)?;
         }
@@ -1263,6 +1370,12 @@ pub struct DeviceOptions {
     /// default, `nd_fmm_kernels::translate::default_scratch_bytes` (128 MB on Metal and the CPU
     /// runtime, 2 GB on CUDA; Phase 4S T7).
     pub scratch_budget: Option<u64>,
+    /// How M2L runs on the device under `PlaneWave` (Helmholtz CH7.5b);
+    /// [`DevicePlaneWave::Dense`] by default.
+    pub plane_wave: DevicePlaneWave,
+    /// The budget of one chunk of a plane-wave level call in bytes (Helmholtz CH7.5b);
+    /// `None` for the device's translation scratch budget, `default_scratch_bytes`.
+    pub plane_wave_budget: Option<u64>,
     /// How to time the stages; [`StageTiming::Enqueue`] by default.
     /// [`StageTiming::DeviceTimestamps`] falls back to it on a device that does not time on
     /// itself.
@@ -1736,6 +1849,9 @@ struct DeviceTables<T: DeviceFloat> {
     m2l: Option<Tables<T>>,
     /// The M2L family of the rotation tables, under `Rotation` (T10).
     rotation: Option<DeviceRotation<T>>,
+    /// The plane-wave tables, under `PlaneWave` with [`DevicePlaneWave::Kernels`]
+    /// (Helmholtz CH7.5b).
+    plane_wave: Option<DevicePlaneWaves<T>>,
 }
 
 /// One grouped level call on the device: its plan and the GEMM choice it was built with
@@ -1747,8 +1863,10 @@ struct LevelCall {
 }
 
 /// The plans of the device M2M, L2L (T8) and dense M2L (T9) level calls, one per level and
-/// view (empty where the kind runs on the host), their shared scratch, and the plans of the
-/// rotation M2L level calls (T10; empty unless M2L runs on the device under `Rotation`).
+/// view (empty where the kind runs on the host), their shared scratch, the plans of the
+/// rotation M2L level calls (T10; empty unless M2L runs on the device under `Rotation`), and
+/// the chunks of the plane-wave level calls with their shared scratch (Helmholtz CH7.5b;
+/// empty unless M2L runs on the device under `PlaneWave` with [`DevicePlaneWave::Kernels`]).
 #[derive(Debug)]
 struct Translations<T: DeviceFloat> {
     m2m_local: Vec<LevelCall>,
@@ -1758,6 +1876,9 @@ struct Translations<T: DeviceFloat> {
     scratch: TranslationScratch<T>,
     rotation: Vec<RotationPlan>,
     rotation_layout: RotationLayout,
+    plane_waves: Vec<Vec<PlaneWavePlan>>,
+    plane_wave_scratch: Option<PlaneWaveScratch<T>>,
+    plane_wave_layout: PlaneWaveLayout,
 }
 
 impl<T: DeviceFloat> Translations<T> {
@@ -2500,6 +2621,313 @@ impl<T: DeviceScalar> RotationHostArrays<T> {
     }
 }
 
+/// The λ nodes of the host's plane-wave tables as the device takes them (Helmholtz CH7.5b):
+/// [`arrays`](Self::arrays) borrows the tables' other arrays as they are, so the device
+/// tables hold the host's values (`nd_fmm_kernels::plane_wave::PlaneWaveArrays`).
+struct PlaneWaveHostArrays<'a, T: DeviceScalar> {
+    tables: &'a HostPlaneWaveTables<T>,
+    nodes: Vec<LambdaNode>,
+}
+
+impl<'a, T: DeviceScalar> PlaneWaveHostArrays<'a, T> {
+    /// The nodes of `tables`.
+    fn new(tables: &'a HostPlaneWaveTables<T>) -> Self {
+        let nodes = tables
+            .blocks()
+            .iter()
+            .map(|b| LambdaNode {
+                start: b.start,
+                len: b.len,
+                modes: b.modes,
+                mode_start: b.mode_start,
+                trig: b.trig,
+            })
+            .collect();
+        Self { tables, nodes }
+    }
+
+    /// The arrays, borrowed.
+    fn arrays(&self) -> PlaneWaveArrays<'_, T> {
+        let t = self.tables;
+        PlaneWaveArrays {
+            p: t.p(),
+            nodes: &self.nodes,
+            outgoing_powers: t.outgoing_powers(),
+            incoming_powers: t.incoming_powers(),
+            cos: t.cos(),
+            sin: t.sin(),
+            multipole_rotations: [t.multipole_rotation(1), t.multipole_rotation(2)],
+            local_rotations: [t.local_rotation(1), t.local_rotation(2)],
+            source_shifts: t.source_shifts(),
+            child_shifts: t.child_shifts(),
+        }
+    }
+}
+
+/// One parent of a plane-wave level call for one vector (Helmholtz CH7.5b): what the host's
+/// merge and shift computes for it (`src/operator_plane_wave.rs`), as lists over the boxes
+/// of the level.
+#[derive(Debug, Default)]
+struct PlaneWaveParent {
+    /// Its distinct sources, boxes of the level, in the order of first use.
+    sources: Vec<u32>,
+    /// Each accumulator with an entry, its entries in slot order: (its source's position in
+    /// `sources`, the direction, the source shift).
+    accumulators: Vec<Vec<(u32, u32, u32)>>,
+    /// Each incoming block: its child shift 8 d + o and its accumulators in order.
+    incoming: Vec<(u32, Vec<u32>)>,
+    /// Each local item: its box and its incoming block per direction, or [`NO_BLOCK`].
+    locals: Vec<(u32, [u32; DIRECTIONS])>,
+}
+
+/// The parents of the plane-wave level call of `level` with the V view `v`, in index order,
+/// those with a local item only: per parent, as the host's `plane_parent`, its computed
+/// children (those with a V row), its sources by slot from their rows, per direction in
+/// [`Direction::ALL`] order every accumulator whose mask meets the computed children over
+/// its slots present in ascending order, and per computed child its accumulators in order
+/// (the order of CH7.5a's test, `Lists::new`).
+fn plane_wave_parents<T: DeviceScalar>(
+    index: &BoxIndex,
+    level: usize,
+    v: &VList,
+    tables: &HostPlaneWaveTables<T>,
+) -> Vec<PlaneWaveParent> {
+    let offsets = m2l_offsets();
+    let geometry = tables.geometry();
+    let wave_len = tables.wave_len();
+    let boxes = index.len(level);
+    let mut parents = Vec::new();
+    let mut t = 0;
+    while t < boxes {
+        let key = morton::parent(index.key(level, t));
+        let mut end = t + 1;
+        while end < boxes && morton::parent(index.key(level, end)) == key {
+            end += 1;
+        }
+        let mut children = [u32::MAX; PLANE_CHILDREN];
+        let mut computed = 0u8;
+        let mut slots = [u32::MAX; SLOTS];
+        for b in t..end {
+            let o = morton::child_index(index.key(level, b));
+            children[o] = b as u32;
+            let (sources, row) = v.row(b);
+            if sources.is_empty() {
+                continue;
+            }
+            computed |= 1 << o;
+            for (&s, &d) in sources.iter().zip(row) {
+                let slot =
+                    slot_of(o, offsets[d as usize]).expect("a V pair lies in the parent's slots");
+                slots[slot] = s;
+            }
+        }
+        t = end;
+        if computed == 0 {
+            continue;
+        }
+        let mut parent = PlaneWaveParent::default();
+        let position = |s: u32, sources: &mut Vec<u32>| -> u32 {
+            match sources.iter().position(|&x| x == s) {
+                Some(i) => i as u32,
+                None => {
+                    sources.push(s);
+                    (sources.len() - 1) as u32
+                }
+            }
+        };
+        let mut incoming = [[NO_BLOCK; DIRECTIONS]; PLANE_CHILDREN];
+        for (d, direction) in Direction::ALL.into_iter().enumerate() {
+            let accumulators = geometry.accumulators(direction);
+            let mut found = vec![None; accumulators.len()];
+            for (a, accumulator) in accumulators.iter().enumerate() {
+                if accumulator.mask & computed == 0 {
+                    continue;
+                }
+                let mut entries = Vec::new();
+                for &slot in &accumulator.slots {
+                    let s = slots[slot as usize];
+                    if s == u32::MAX {
+                        continue;
+                    }
+                    let shift = tables
+                        .source_shift_offset(direction, slot as usize)
+                        .expect("a slot of an accumulator has a shift")
+                        / wave_len;
+                    entries.push((position(s, &mut parent.sources), d as u32, shift as u32));
+                }
+                if !entries.is_empty() {
+                    found[a] = Some(parent.accumulators.len() as u32);
+                    parent.accumulators.push(entries);
+                }
+            }
+            for (o, block) in incoming.iter_mut().enumerate() {
+                if computed & (1 << o) == 0 {
+                    continue;
+                }
+                let mine: Vec<u32> = accumulators
+                    .iter()
+                    .zip(&found)
+                    .filter_map(|(accumulator, &a)| a.filter(|_| accumulator.mask & (1 << o) != 0))
+                    .collect();
+                if !mine.is_empty() {
+                    block[d] = parent.incoming.len() as u32;
+                    parent
+                        .incoming
+                        .push(((PLANE_CHILDREN * d + o) as u32, mine));
+                }
+            }
+        }
+        for (o, block) in incoming.iter().enumerate() {
+            if computed & (1 << o) != 0 && block.iter().any(|&g| g != NO_BLOCK) {
+                parent.locals.push((children[o], *block));
+            }
+        }
+        if !parent.locals.is_empty() {
+            parents.push(parent);
+        }
+    }
+    parents
+}
+
+/// The lists of one chunk of a plane-wave level call (Helmholtz CH7.5b), owned, with the m
+/// vectors as columns: the chunk's parents for vector 0, then again for vector 1 and so on,
+/// on the columns b m + v of the level's multipoles and locals.
+#[derive(Debug, Default)]
+struct PlaneWaveChunk {
+    sources: Vec<u32>,
+    merge_offsets: Vec<u32>,
+    merge_entries: Vec<u32>,
+    gather_shifts: Vec<u32>,
+    gather_offsets: Vec<u32>,
+    gather_entries: Vec<u32>,
+    locals: Vec<u32>,
+    incoming: Vec<u32>,
+}
+
+impl PlaneWaveChunk {
+    /// The lists of `parents` with `m` vectors: each parent's sources at their first
+    /// position in the chunk, its accumulators, incoming blocks and local items after the
+    /// earlier parents'.
+    fn new(parents: &[PlaneWaveParent], m: usize) -> Self {
+        let mut position = HashMap::new();
+        let mut boxes = Vec::new();
+        for parent in parents {
+            for &s in &parent.sources {
+                position.entry(s).or_insert_with(|| {
+                    boxes.push(s);
+                    (boxes.len() - 1) as u32
+                });
+            }
+        }
+        let (nsources, m32) = (boxes.len() as u32, m as u32);
+        let naccumulators: u32 = parents.iter().map(|p| p.accumulators.len() as u32).sum();
+        let nincoming: u32 = parents.iter().map(|p| p.incoming.len() as u32).sum();
+        let mut chunk = Self {
+            merge_offsets: vec![0],
+            gather_offsets: vec![0],
+            ..Self::default()
+        };
+        for v in 0..m32 {
+            chunk.sources.extend(boxes.iter().map(|&s| s * m32 + v));
+            let (mut accumulator, mut block) = (v * naccumulators, v * nincoming);
+            for parent in parents {
+                for entries in &parent.accumulators {
+                    for &(i, d, shift) in entries {
+                        let source = position[&parent.sources[i as usize]] + v * nsources;
+                        chunk
+                            .merge_entries
+                            .extend([DIRECTIONS as u32 * source + d, shift]);
+                    }
+                    chunk
+                        .merge_offsets
+                        .push((chunk.merge_entries.len() / 2) as u32);
+                }
+                for (shift, accumulators) in &parent.incoming {
+                    chunk.gather_shifts.push(*shift);
+                    chunk
+                        .gather_entries
+                        .extend(accumulators.iter().map(|&a| a + accumulator));
+                    chunk.gather_offsets.push(chunk.gather_entries.len() as u32);
+                }
+                for (t, blocks) in &parent.locals {
+                    chunk.locals.push(t * m32 + v);
+                    chunk
+                        .incoming
+                        .extend(blocks.map(|g| if g == NO_BLOCK { NO_BLOCK } else { g + block }));
+                }
+                accumulator += parent.accumulators.len() as u32;
+                block += parent.incoming.len() as u32;
+            }
+        }
+        chunk
+    }
+
+    /// The lists, borrowed.
+    fn lists(&self) -> PlaneWaveLists<'_> {
+        PlaneWaveLists {
+            sources: &self.sources,
+            merge_offsets: &self.merge_offsets,
+            merge_entries: &self.merge_entries,
+            gather_shifts: &self.gather_shifts,
+            gather_offsets: &self.gather_offsets,
+            gather_entries: &self.gather_entries,
+            locals: &self.locals,
+            incoming: &self.incoming,
+        }
+    }
+
+    /// Its sources, accumulators and incoming blocks: the sizes of its scratch.
+    fn counts(&self) -> [usize; 3] {
+        [
+            self.sources.len(),
+            self.merge_offsets.len() - 1,
+            self.gather_shifts.len(),
+        ]
+    }
+}
+
+/// The chunks of a plane-wave level call (Helmholtz CH7.5b): `parents` in order, cut into
+/// runs of whole parents whose scratch for m vectors (the waves of their distinct sources,
+/// their accumulators and incoming blocks, blocks of `block_len` values) fits `budget`
+/// bytes, at least one parent each.
+fn plane_wave_chunks<T: DeviceScalar>(
+    parents: &[PlaneWaveParent],
+    m: usize,
+    block_len: usize,
+    budget: u64,
+) -> Vec<PlaneWaveChunk> {
+    let bytes =
+        |[s, a, g]: [usize; 3]| PlaneWaveScratch::<T>::bytes_of([m * s, m * a, m * g], block_len);
+    let mut chunks = Vec::new();
+    let (mut first, mut seen) = (0, HashSet::new());
+    let mut counts = [0usize; 3];
+    for (k, parent) in parents.iter().enumerate() {
+        let fresh = parent.sources.iter().filter(|s| !seen.contains(*s)).count();
+        let grown = [
+            counts[0] + fresh,
+            counts[1] + parent.accumulators.len(),
+            counts[2] + parent.incoming.len(),
+        ];
+        if k > first && bytes(grown) > budget {
+            chunks.push(PlaneWaveChunk::new(&parents[first..k], m));
+            first = k;
+            seen.clear();
+            counts = [
+                parent.sources.len(),
+                parent.accumulators.len(),
+                parent.incoming.len(),
+            ];
+        } else {
+            counts = grown;
+        }
+        seen.extend(parent.sources.iter().copied());
+    }
+    if first < parents.len() {
+        chunks.push(PlaneWaveChunk::new(&parents[first..], m));
+    }
+    chunks
+}
+
 impl<T: DeviceScalar> DeviceOperator<T> {
     /// Creates the operator on `device` for `plan` with `source_counts` points per leaf of
     /// the numbering (the local leaves, then the ghost leaves with their owners' counts:
@@ -2594,8 +3022,10 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         };
         let expanded = host.tables().classes_m2l().map(|classes| classes.expand());
         // Under `PlaneWave` the device runs M2L as `Dense` (Phase 6 T13): the dense tables,
-        // built or loaded here, where M2L runs on the device.
+        // built or loaded here, where M2L runs on the device, unless the builder names merge
+        // and shift on the device (Helmholtz CH7.5b).
         let plane_dense = (strategy == M2lStrategy::PlaneWave
+            && options.plane_wave == DevicePlaneWave::Dense
             && !options.host_fallback.contains(&OperatorKind::M2l))
         .then(|| match &options.table_cache {
             Some(dir) => {
@@ -2626,7 +3056,25 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         // M2L on the device runs the dense tables or the rotation kernel, by strategy.
         let dense_m2l = on_device(OperatorKind::M2l) && m2l.is_some();
         let rotation = rotation.filter(|_| on_device(OperatorKind::M2l));
-        debug_assert!(!on_device(OperatorKind::M2l) || dense_m2l != rotation.is_some());
+        // Under `PlaneWave` with `DevicePlaneWave::Kernels`, merge and shift on the device
+        // from the host's plane-wave tables (Helmholtz CH7.5b).
+        let plane_wave = (strategy == M2lStrategy::PlaneWave
+            && options.plane_wave == DevicePlaneWave::Kernels
+            && on_device(OperatorKind::M2l))
+        .then(|| {
+            PlaneWaveHostArrays::new(
+                host.tables()
+                    .plane_waves()
+                    .expect("PlaneWave has its plane-wave tables"),
+            )
+        });
+        debug_assert!(
+            !on_device(OperatorKind::M2l)
+                || usize::from(dense_m2l)
+                    + usize::from(rotation.is_some())
+                    + usize::from(plane_wave.is_some())
+                    == 1
+        );
 
         // The GEMM of each grouped level call (T8, T9, T12): the builder's `device_gemm`
         // and scratch budget where it names them; under `DeviceGemm::Auto` the choice of the
@@ -2750,6 +3198,13 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                 bytes: DeviceRotation::<T>::bytes(&rotation.arrays()),
             });
         }
+        if let Some(arrays) = &plane_wave {
+            tables_report.push(DeviceTable {
+                name: "M2L (plane waves)",
+                matrices: arrays.tables.source_shift_count(),
+                bytes: DevicePlaneWaves::<T>::bytes_of(&arrays.arrays()),
+            });
+        }
 
         // The plans of the device M2M, L2L and M2L level calls: their index buffers and the
         // widest chunk, at most, before anything is allocated (T8, T9); with decisions to
@@ -2795,6 +3250,38 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                 .map(|lists| RotationPlan::bytes(&lists.v.row_offsets))
                 .sum::<u64>();
         }
+        // The chunks of each plane-wave level call and their one scratch, the widest
+        // chunk's (Helmholtz CH7.5b).
+        let plane_budget = options
+            .plane_wave_budget
+            .unwrap_or_else(|| default_scratch_bytes(&info));
+        let plane_chunks: Vec<Vec<PlaneWaveChunk>> = match &plane_wave {
+            Some(arrays) => plan
+                .levels()
+                .iter()
+                .enumerate()
+                .map(|(level, lists)| {
+                    let parents = plane_wave_parents(index, level, lists.v(), arrays.tables);
+                    plane_wave_chunks::<T>(&parents, m, arrays.tables.wave_len(), plane_budget)
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        plan_bytes += plane_chunks
+            .iter()
+            .flatten()
+            .map(|chunk| chunk.lists().bytes())
+            .sum::<u64>();
+        let plane_scratch_bytes = match &plane_wave {
+            Some(arrays) if plane_chunks.iter().any(|chunks| !chunks.is_empty()) => {
+                let widest = plane_chunks.iter().flatten().fold([0; 3], |w, chunk| {
+                    let c = chunk.counts();
+                    [w[0].max(c[0]), w[1].max(c[1]), w[2].max(c[2])]
+                });
+                PlaneWaveScratch::<T>::bytes_of(widest, arrays.tables.wave_len())
+            }
+            _ => 0,
+        };
 
         // Every buffer, summed before anything is allocated (§4.6); with the output pass on
         // the device (Phase 4S T9) also its order and its output; on several ranks (Phase 5
@@ -2906,6 +3393,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             + tables_report.iter().map(|t| t.bytes).sum::<u64>()
             + plan_bytes
             + scratch_bytes
+            + plane_scratch_bytes
             + pass_bytes
             + exchange_bytes;
         let available = device.available_memory();
@@ -3067,7 +3555,15 @@ impl<T: DeviceScalar> DeviceOperator<T> {
                 })?),
                 None => None,
             },
+            plane_wave: match &plane_wave {
+                Some(arrays) => Some(link.build(DataKind::Tables, |d| {
+                    DevicePlaneWaves::upload(d, &arrays.arrays())
+                })?),
+                None => None,
+            },
         };
+        let plane_kernels = plane_wave.is_some();
+        drop(plane_wave);
 
         // The scratch and the plans of the device translations (T8, T9, T12); a library
         // choice probes its shapes here, so the GEMM is fixed before the first evaluation.
@@ -3104,6 +3600,9 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             scratch,
             rotation: Vec::new(),
             rotation_layout: RotationLayout::default_for(link.device.info(), p),
+            plane_waves: Vec::new(),
+            plane_wave_scratch: None,
+            plane_wave_layout: PlaneWaveLayout::default_for(link.device.info()),
         };
 
         // The rows of the rotation M2L level calls and the layout (T10).
@@ -3129,6 +3628,52 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             }
         }
         translations.rotation = rotation_plans;
+
+        // The plans of the plane-wave level calls, one per chunk, their scratch and the
+        // layout (Helmholtz CH7.5b).
+        let plane_wave_layout = translations.plane_wave_layout;
+        let mut plane_report = Vec::new();
+        if let Some(waves) = &tables.plane_wave {
+            plane_wave_layout
+                .check(link.device.info(), p, waves.modes(), T::FLOAT)
+                .map_err(device_error)?;
+            for (level, chunks) in plane_chunks.iter().enumerate() {
+                let bound = columns.bound(Some(level));
+                let mut plans = Vec::with_capacity(chunks.len());
+                for chunk in chunks {
+                    plans.push(link.build(DataKind::Indices, |d| {
+                        PlaneWavePlan::new(d, &chunk.lists(), waves, bound, bound)
+                    })?);
+                }
+                if !plans.is_empty() {
+                    let sum = |count: fn(&PlaneWavePlan) -> usize| plans.iter().map(count).sum();
+                    plane_report.push(PlaneWaveReport {
+                        level,
+                        pairs: m * plan.level(level).v().len(),
+                        chunks: plans.len(),
+                        launches: plans
+                            .iter()
+                            .map(|c| {
+                                [c.sources(), c.accumulators(), c.incoming(), c.locals()]
+                                    .iter()
+                                    .filter(|&&k| k > 0)
+                                    .count()
+                            })
+                            .sum(),
+                        sources: sum(PlaneWavePlan::sources),
+                        accumulators: sum(PlaneWavePlan::accumulators),
+                        incoming: sum(PlaneWavePlan::incoming),
+                        locals: sum(PlaneWavePlan::locals),
+                    });
+                }
+                translations.plane_waves.push(plans);
+            }
+            if !plane_report.is_empty() {
+                translations.plane_wave_scratch = Some(link.build(DataKind::Points, |d| {
+                    PlaneWaveScratch::covering(d, translations.plane_waves.iter().flatten(), waves)
+                })?);
+            }
+        }
 
         // P2P: the near-field pairs of each level's leaves and the mean points per leaf,
         // for the P2P decision (T12); the layout of the builder, or under
@@ -3220,6 +3765,14 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             translations: translation_reports(&translations),
             rotation_layout,
             rotations: rotation_report,
+            plane_wave: if plane_kernels {
+                DevicePlaneWave::Kernels
+            } else {
+                DevicePlaneWave::Dense
+            },
+            plane_wave_layout,
+            plane_waves: plane_report,
+            plane_wave_scratch_bytes: plane_scratch_bytes,
             scratch_bytes,
             memory_needed: needed,
             memory_available: available,
@@ -4441,6 +4994,32 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             link,
             ..
         } = self;
+        if let Some(waves) = &tables.plane_wave {
+            // Merge and shift (Helmholtz CH7.5b): four launches per chunk of parents.
+            let layout = translations.plane_wave_layout;
+            let Translations {
+                plane_waves,
+                plane_wave_scratch,
+                ..
+            } = translations;
+            for chunk in &plane_waves[level] {
+                let scratch = plane_wave_scratch
+                    .as_mut()
+                    .expect("a plane-wave level call has its scratch");
+                link.run(DataKind::Output, |d| {
+                    nd_fmm_kernels::plane_wave::m2l(
+                        d,
+                        layout,
+                        chunk,
+                        waves,
+                        stores.multipoles.slice(values.clone()),
+                        stores.locals.slice_mut(values.clone()),
+                        scratch,
+                    )
+                });
+            }
+            return;
+        }
         if let Some(rotation) = &tables.rotation {
             let (plan, view) = (&translations.rotation[level], &views.levels[level].v);
             let layout = translations.rotation_layout;
@@ -4647,12 +5226,13 @@ impl<T: DeviceScalar> FmmOperator for DeviceOperator<T> {
             return;
         }
         if self.placement(OperatorKind::M2l) == Placement::Device {
-            debug_assert_eq!(
-                batch.pairs.len(),
-                match self.tables.rotation {
-                    Some(_) => self.translations.rotation[level].len(),
-                    None => self.translations.m2l[level].plan.len(),
-                }
+            debug_assert!(
+                self.tables.plane_wave.is_some()
+                    || batch.pairs.len()
+                        == match self.tables.rotation {
+                            Some(_) => self.translations.rotation[level].len(),
+                            None => self.translations.m2l[level].plan.len(),
+                        }
             );
             self.m2l_on_device(level);
             return;

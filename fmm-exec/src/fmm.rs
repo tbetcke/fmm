@@ -762,6 +762,27 @@ pub enum DeviceReduction {
     Walk,
 }
 
+/// How a device runs M2L under [`M2lStrategy::PlaneWave`]
+/// ([`FmmBuilder::device_plane_wave`]; Helmholtz CH7.5b, docs/helmholtz/tasks/CH7.5b.md):
+/// as `Dense`, with the dense tables the device path builds or loads (Phase 6 T13), or by
+/// merge and shift on the device (`nd_fmm_kernels::plane_wave`, CONVENTIONS §3.14), which
+/// approximates M2L as the host's `PlaneWave` does. Ignored by [`Backend::Host`], by every
+/// other strategy and with M2L on the host fallback.
+///
+/// The enum exists without the `gpu` feature, as [`Backend`] does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DevicePlaneWave {
+    /// "PlaneWave, run as dense on the device": the device's output under `PlaneWave` is
+    /// its output under `Dense`, bit for bit (the default until Helmholtz CH7.5c decides
+    /// the adoption).
+    #[default]
+    Dense,
+    /// Merge and shift on the device: per level call and chunk of whole parents the four
+    /// launches of `nd_fmm_kernels::plane_wave::m2l` (the `device` module docs, "Plane-wave
+    /// M2L on the device").
+    Kernels,
+}
+
 /// Where the output pass of an evaluation runs ([`FmmBuilder::output_pass`]; Phase 4S T9,
 /// decision 12): the pass that turns the leaf-ordered, leaf-scaled target output into φ
 /// and ∇φ in the caller's order, dividing by 4π r_t and 4π r_t² in f64 and rounding once
@@ -1197,6 +1218,8 @@ pub enum FmmError {
 /// | [`device_gather`](Self::device_gather) | [`DeviceGather::Auto`]: by backend, precision and p |
 /// | [`device_reduction`](Self::device_reduction) | [`DeviceReduction::ByChunk`] |
 /// | [`device_scratch_budget`](Self::device_scratch_budget) | 128 MB; 2 GB on CUDA |
+/// | [`device_plane_wave`](Self::device_plane_wave) | [`DevicePlaneWave::Dense`]: `PlaneWave` run as dense on a device |
+/// | [`device_plane_wave_budget`](Self::device_plane_wave_budget) | the device's translation scratch budget: 128 MB; 2 GB on CUDA |
 /// | [`tuning_cache`](Self::tuning_cache) | none: no tuning, the static rule |
 /// | [`tuning_budget`](Self::tuning_budget) | 10 s |
 /// | [`overlap`](Self::overlap) | off: the blocking exchanges |
@@ -1233,6 +1256,8 @@ pub struct FmmBuilder<T> {
     device_gather: DeviceGather,
     device_reduction: DeviceReduction,
     device_scratch_budget: Option<u64>,
+    device_plane_wave: DevicePlaneWave,
+    device_plane_wave_budget: Option<u64>,
     tuning_cache: Option<PathBuf>,
     tuning_budget: Duration,
     overlap: bool,
@@ -1274,6 +1299,8 @@ impl<T> FmmBuilder<T> {
             device_gather: DeviceGather::Auto,
             device_reduction: DeviceReduction::ByChunk,
             device_scratch_budget: None,
+            device_plane_wave: DevicePlaneWave::Dense,
+            device_plane_wave_budget: None,
             tuning_cache: None,
             tuning_budget: DEFAULT_TUNING_BUDGET,
             overlap: false,
@@ -1505,6 +1532,31 @@ impl<T> FmmBuilder<T> {
     /// eighth of the device's memory; Phase 6 T5). Ignored by [`Backend::Host`].
     pub fn device_scratch_budget(mut self, bytes: u64) -> Self {
         self.device_scratch_budget = Some(bytes);
+        self
+    }
+
+    /// Sets how a device runs M2L under [`M2lStrategy::PlaneWave`] ([`DevicePlaneWave`];
+    /// default [`DevicePlaneWave::Dense`], "PlaneWave, run as dense on the device"; Helmholtz
+    /// CH7.5b). [`DevicePlaneWave::Kernels`] runs merge and shift on the device: its output
+    /// approximates M2L as the host's `PlaneWave` does, and agrees with the host's within
+    /// the FMM bounds. Fixed at build and reported by `Fmm::device_report` (feature `gpu`).
+    /// Ignored by [`Backend::Host`], by every other strategy and with M2L on the host
+    /// fallback.
+    pub fn device_plane_wave(mut self, plane_wave: DevicePlaneWave) -> Self {
+        self.device_plane_wave = plane_wave;
+        self
+    }
+
+    /// Sets the budget in bytes of one chunk of a device plane-wave level call under
+    /// [`DevicePlaneWave::Kernels`]: the waves of its sources, its accumulators and its
+    /// incoming blocks, for all [`vectors`](Self::vectors) (default the device's translation
+    /// scratch budget, `nd_fmm_kernels::translate::default_scratch_bytes`: 128 MB, 2 GB on
+    /// CUDA). A level call runs in chunks of whole parents within it, at least one parent
+    /// each, with the same bits at every budget; the scratch is allocated once at build, no
+    /// larger than the widest chunk, and counted in the device memory check. Ignored where
+    /// [`device_plane_wave`](Self::device_plane_wave) does not apply.
+    pub fn device_plane_wave_budget(mut self, bytes: u64) -> Self {
+        self.device_plane_wave_budget = Some(bytes);
         self
     }
 
@@ -2184,6 +2236,8 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             gather: self.device_gather,
             reduction: self.device_reduction,
             scratch_budget: self.device_scratch_budget,
+            plane_wave: self.device_plane_wave,
+            plane_wave_budget: self.device_plane_wave_budget,
             stage_timing: if self.synchronous_stages {
                 device::StageTiming::Synchronous
             } else if self.device_timestamps {
