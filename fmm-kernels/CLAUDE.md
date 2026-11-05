@@ -378,7 +378,8 @@ Measured on locust's H100 (GH200) on 2026-10-06 (Phase 4S T2; docs/design/device
   Clippy: `--features cpu,cuda`. CUDA tests are `#[ignore = "CUDA: run by hand on
   locust"]` and are registered with `tests_on!(cuda: …)`: Metal's list plus every f64
   test and the property tests, 56 tests (58 from Phase 4S T9, with the output gather in
-  f32 and f64; Metal's list gains its f64 refusal instead).
+  f32 and f64; Metal's list gains its f64 refusal instead; 77 on 2026-11-05, Helmholtz
+  CH7.5a, the three plane-wave tests included, all passing on locust's H100).
 - `DeviceInfo`: `cuda (cuda), NVIDIA GH200 480GB, CubeCL 0.11.0, f32 f64` (0.11.0-pre.4
   until Phase 5S T1s); plane
   size 32 (fixed), shared memory 232,448 B per cube (the opt-in maximum; Metal 32 KB),

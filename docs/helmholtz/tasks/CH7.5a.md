@@ -80,15 +80,25 @@ two machines: well over one reviewable PR. Split in the roadmap on 2026-11-05 (t
      the host);
   3. **gather**: per (child, direction) the sum of its accumulators in order times its
      child shift (`add`, `shift`), into the incoming waves;
-  4. **local**: per (child, frame) the sums Σⱼ cos/sin, the local from the sums and the
-     rotation back, added into the local (`sums_from_waves`, `local_from_sums`,
-     `add_local_from_frame`).
+  4. **local**: per child, frames 0–2 in order, the sums Σⱼ cos/sin, the local from the
+     sums and the rotation back, added into the local (`sums_from_waves`,
+     `local_from_sums`, `add_local_from_frame`); one owner per local across the frames.
   Each output value has one owner; every chain is an explicit `fma` sequence in the order of
   the table function it restates; no atomics.
-- The merge list's type (`MergeView`, validated at upload like the other views), the
-  layouts (`PlaneWaveLayout`, cube per parent on GPUs, the CPU layout honouring the unit
-  cap), `bytes()` formulas.
-- Tests in `fmm-kernels/tests/kernels/plane_wave.rs`.
+- The lists' types (`PlaneWaveLists` on the host, `PlaneWavePlan` validated and uploaded,
+  `PlaneWaveScratch` for the waves, accumulators and incoming blocks), the layouts
+  (`PlaneWaveLayout`, a cube per item on GPUs, the CPU layout honouring the unit cap),
+  `bytes()` formulas.
+- Tests in `fmm-kernels/tests/kernels/translate/plane_wave.rs`.
+- `nd-fmm-tables` (additive, read-only): the accessors `outgoing_powers`,
+  `incoming_powers`, `multipole_rotation`, `local_rotation`, `child_shifts` of
+  `PlaneWaveTables`, with a test (`arrays_match_the_steps`); no table or step changes.
+
+As built: four launches per level call, one per step, the items as above; the local step
+holds each local across its three frames, so the frames add in the host's order. The
+self-review's blocking point (a plan validated against tables with more source shifts than
+a launch's) is refused at launch, and every buffer of a call is checked against the 32-bit
+index range.
 
 Public API: new items only. Conventions: none (§3.14 as it stands). Dependencies: none.
 `nd-fmm-plan`: untouched.
@@ -129,7 +139,14 @@ Timings are CH7.5c's.
   keeps the merge per (parent, direction) so that CH7.5c can measure it.
 
 ## Pending runs
-(none yet)
+None. Ran on 2026-11-05:
+- the M6, CPU runtime (release): the 3 plane-wave tests and the ignored sweep (p ≤ 20
+  against `direct::m2l`; level calls at f64 p = 12, 18, 20 and f32 p = 12), with the rest
+  of the crate's suite;
+- the M6, Metal (outside the sandbox): every ignored test of `nd-fmm-kernels` (66), the
+  plane-wave tests in f32 on the cube of 128 and of 32 units and the CPU layout;
+- locust, CUDA (H100): `cargo test -p nd-fmm-kernels --release --features cpu,cuda --
+  --include-ignored --show-output` and the crate's Clippy with `cpu,cuda`.
 
 ## Open questions
 Answered 2026-11-05 before the branch: the split as above ("a/b/c, Helmholtz → d"), and

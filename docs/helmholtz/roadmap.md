@@ -32,9 +32,11 @@ Kathleen down, its runs moved to CH6.2c (the user). 2026-11-05: CH7.5 split
 shift kernels) and Helmholtz's on them (CH7.5b); CH7.5a first on the priority list while
 Kathleen is down (the user). 2026-11-05: CH7.5a split (the user, "a/b/c, Helmholtz → d")
 into the kernels (CH7.5a), the device's `PlaneWave` behind an opt-in setting (CH7.5b) and
-the measurements with the adoption (CH7.5c); Helmholtz's renamed CH7.5d. Next: CH7.5a
-(*Machines:* locust, the M6), then CH7.5b and CH7.5c, then CH6.2c (*Machines:* Kathleen;
-D8) once Kathleen is back.
+the measurements with the adoption (CH7.5c); Helmholtz's renamed CH7.5d. 2026-11-05:
+CH7.5a done (the four steps of merge and shift as device kernels, every step bit for bit a
+host `mul_add` replica on the CPU runtime, Metal and CUDA, every p ≤ 20 within the
+quadrature's bound of `direct::m2l`). Next: CH7.5b (*Machines:* locust, the M6), then
+CH7.5c, then CH6.2c (*Machines:* Kathleen; D8) once Kathleen is back.
 
 ## How `/next-task` reads this file
 
@@ -816,7 +818,9 @@ at any kD.
   irregular merge lists the open device question. Split on 2026-11-05 (the user, "a/b/c,
   Helmholtz → d"; constraint 1 agreed: new kernels, the device's `PlaneWave` opt-in until
   CH7.5c's sign-off) into:
-- [ ] **CH7.5a The plane-wave kernels.** `nd-fmm-kernels` only, module `plane_wave`: the
+- [x] **CH7.5a The plane-wave kernels.** Record: `docs/helmholtz/tasks/CH7.5a.md`; tests
+  `fmm-kernels/tests/kernels/translate/plane_wave.rs`. `nd-fmm-kernels` only (with read-only
+  accessors of `nd_fmm_tables::PlaneWaveTables`), module `plane_wave`: the
   steps of `nd_fmm_tables::plane_wave` (CONVENTIONS §3.14) as kernels, one launch per step
   and level call (the outgoing waves per box and frame, the merge per parent and
   accumulator over a merge list built on the host, the gather with the child shifts, the
@@ -833,7 +837,10 @@ at any kD.
   `PlaneWave` on CH7.5a's kernels when a builder setting names it (otherwise "PlaneWave,
   run as dense on the device", as before): the merge lists from the V views at build, the
   waves buffer bounded by chunks of parents within the device's scratch budget, the
-  launches in the formula of `tests/device_common`. *Done when:* `PlaneWave` on the device
+  launches in the formula of `tests/device_common`; the lists built in the order of CH7.5a's
+  test (`Lists::new` in `fmm-kernels/tests/kernels/translate/plane_wave.rs`, the order of
+  `src/operator_plane_wave.rs`), several vectors as columns, each chunk's buffers within
+  the kernels' 32-bit index range (CH7.5a). *Done when:* `PlaneWave` on the device
   (CUDA f32 and f64, Metal f32, the CubeCL CPU runtime in CI) within 1.1× `Dense`'s errors
   against the direct sum at the C3.2 cube and the C3.3 Plummer sphere (T13's requirement 1,
   f64 p = 8, 12, 18 and f32 p = 8), device locals against the host `PlaneWave`'s within the
@@ -843,8 +850,9 @@ at any kD.
   the M6 (Metal).
 - [ ] **CH7.5c Measured, and adopted or dropped.** The device M2L stage and the evaluation
   under CH7.5b's setting against T7's dense M2L at f64 p = 8, 12, 18 on locust's H100 (f32
-  p = 8 on the M6's Metal); Laplace's device gates and benchmarks within noise (D9).
-  *Done when:* the report gives both; adopted as the device's `PlaneWave` where it wins at
+  p = 8 on the M6's Metal), with the kernels' layouts measured (CH7.5a's `GPU_UNITS` = 128
+  is a first choice; the merge's irregular lists are the spike's open question); Laplace's
+  device gates and benchmarks within noise (D9). *Done when:* the report gives both; adopted as the device's `PlaneWave` where it wins at
   p ≥ 12 (T13's gate; the setting becomes the default of `PlaneWave` on the device), else
   `PlaneWave` stays `Dense` on the device and the kernels are dropped; the device `Auto`
   unchanged (a change to it is a sign-off). *Needs:* CH7.5b. *Machines:* locust, the M6.

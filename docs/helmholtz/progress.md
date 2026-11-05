@@ -2162,3 +2162,61 @@ request, using this template:
     CH6.2c's line).
   - Kathleen's runs (fetch job 628611, `large` at 4 × 10 and 40 × 1, the report's §5):
     a sentence in CH6.2c's line.
+
+
+## 2026-11-05: CH7.5a The plane-wave kernels
+- Done:
+  - CH7.5a (priority list item 1) split on this branch into the kernels (CH7.5a), the
+    device's `PlaneWave` behind an opt-in setting (CH7.5b) and the measurements with the
+    adoption (CH7.5c); Helmholtz's device exponential M2L renamed CH7.5d (the user, 2026-11-05:
+    "a/b/c, Helmholtz → d"; constraint 1: "Go ahead").
+  - `nd-fmm-kernels`, module `plane_wave`: Laplace's merge and shift (CONVENTIONS §3.14) as
+    four launches per level call: `outgoing` (per source and frame the multipole rotated,
+    its modes and its up and down waves), `merge` (per accumulator Σ shift × wave over its
+    slots in order), `gather` (per incoming block its accumulators summed in order, times
+    its child shift), `local` (per target the three frames in order: the sums, the local in
+    the frame, rotated back and added). `PlaneWaveTables` (the tables of
+    `nd_fmm_tables::PlaneWaveTables` from plain arrays), `PlaneWaveLists`/`PlaneWavePlan`
+    (a level call's lists, validated on the host: CSR offsets, every index, distinct local
+    columns, the tables' shifts, the 32-bit index range), `PlaneWaveScratch`,
+    `PlaneWaveLayout` (`Cube { units }`, 128 units by default on Metal and CUDA; `Cpu`).
+    Every chain is the order of the host function it restates, every multiply–add an
+    explicit fma; no atomics.
+  - `nd-fmm-tables`: read-only accessors `outgoing_powers`, `incoming_powers`,
+    `multipole_rotation`, `local_rotation`, `child_shifts` of `PlaneWaveTables`.
+- Tests: `fmm-kernels/tests/kernels/translate/plane_wave.rs`: on the full and an adaptive
+  region (every seventh box absent, every fifth target without a V row) at p = 3 and 8 in
+  f32 and f64, every layout, every step bit for bit a host `mul_add` replica (the
+  accumulators and incoming blocks also `shift_add`, `add` and `shift` of the device's
+  own buffers), repeated calls bit-identical, four launches; the waves within 11.5 u_T
+  (bound 128) and the locals within 18.7 u_T (bound 1024; 110.5 at f64 p = 18) of the
+  tables' functions, relative to each block's or column's largest value; the locals
+  against Σ `PlaneWaveTables::m2l` per pair within twice the host level call's own
+  distance plus 64 u_T (the host's 15–97 u_T at p ≤ 12, 1995 u_T at f64 p = 18: merge and
+  shift equals the pair path to rounding that grows with p); one parent's 216 slots into
+  its children on levels 2, 9 and 16 within 0.007 of the quadrature's bound E Σ|q| of
+  `direct::m2l` at p = 3 and 8 (every p ≤ 20 at most 0.113 in the ignored sweep); the
+  refusals (a cube of no unit, a plan of other tables). `arrays_match_the_steps` in
+  `fmm-tables/src/plane_wave/tests.rs`. CPU runtime: 3 tests in about 1.3 s, the ignored
+  sweep 16 s (release, the M6).
+- Checks: ran `/verify` on the M6: format; Clippy default, examples, workspace all-targets
+  and `nd-fmm-kernels` with `cpu,metal`; `cargo check` with `cuda`; `cargo doc`; the
+  kernels' tests without a feature and on the CPU runtime with the ignored ones;
+  `cargo test` (15 min) and `cargo test --workspace` (20.5 min), all passed; the MPI list
+  at 2 and 4 ranks (`run-mpi-tests.sh`, every executable passed). Metal (the M6, outside
+  the sandbox): the 66 ignored kernel tests passed. locust (H100): Clippy with `cpu,cuda`
+  and the 166 kernel tests with `--include-ignored` (77 CUDA) passed, the plane-wave tests
+  again after the review's fixes; the CPU runtime's default plane-wave tests 2.6 s on
+  Grace. Not run: D9 (no Laplace path changed). A self-review by a subagent: one blocking
+  point fixed (a plan validated against tables with more source shifts than a launch's
+  would read out of bounds: now refused, tested), its other points taken (32-bit index
+  checks, every buffer compared on repeats, f32 at p = 12, docs).
+- Decisions: none. The proposal's §10 row CH7.5 (the exponential M2L on the device) is now
+  CH7.5d; the PR asks whether to amend the row.
+- Laplace: not touched (a new module of `nd-fmm-kernels` that no path calls yet;
+  additive accessors in `nd-fmm-tables`, no table or step changed).
+- Follow-ups:
+  - CH7.5b: the lists in the order of CH7.5a's test, several vectors as columns, chunks
+    within the kernels' 32-bit index range (a sentence in CH7.5b's line).
+  - CH7.5c: the kernels' layouts measured (`GPU_UNITS` = 128 a first choice) and the
+    merge's irregular lists (a sentence in CH7.5c's line).
