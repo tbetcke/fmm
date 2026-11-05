@@ -276,7 +276,9 @@
 //!   transfer; one scratch for the widest chunk, allocated at build and counted in the
 //!   memory check with the tables and lists;
 //! - **layout**: [`PlaneWaveLayout::default_for`], the CPU layout on the CPU runtime
-//!   (units capped by `threads(n)`) and a cube of 128 units on Metal and CUDA
+//!   (units capped by `threads(n)`) and a cube of 128 units on Metal and CUDA, unless
+//!   [`FmmBuilder::device_plane_wave_layout`](crate::fmm::FmmBuilder::device_plane_wave_layout)
+//!   names a cube (Helmholtz CH7.5c; every layout the same bits)
 //!   ([`DeviceReport::plane_wave_layout`]); the calls in [`DeviceReport::plane_waves`].
 //!
 //! Every accumulator, incoming block and local has one owner and sums in a fixed order
@@ -684,8 +686,8 @@ use nd_octree::morton;
 
 use crate::fmm::{
     Backend, DeviceGather, DeviceGemm, DeviceLeafLayout, DeviceP2pLayout, DevicePlaneWave,
-    DeviceReduction, DeviceStage, DeviceStageTimings, FmmError, MAX_LEVELS, OperatorKind,
-    OutputPass, Placement, SettingsError,
+    DevicePlaneWaveLayout, DeviceReduction, DeviceStage, DeviceStageTimings, FmmError, MAX_LEVELS,
+    OperatorKind, OutputPass, Placement, SettingsError,
 };
 use crate::operator::{LaplaceOperator, SimdScalar, SourceType};
 use crate::tables::M2lStrategy;
@@ -1376,6 +1378,9 @@ pub struct DeviceOptions {
     /// The budget of one chunk of a plane-wave level call in bytes (Helmholtz CH7.5b);
     /// `None` for the device's translation scratch budget, `default_scratch_bytes`.
     pub plane_wave_budget: Option<u64>,
+    /// The layout of the plane-wave launches (Helmholtz CH7.5c);
+    /// [`DevicePlaneWaveLayout::Auto`] by default.
+    pub plane_wave_layout: DevicePlaneWaveLayout,
     /// How to time the stages; [`StageTiming::Enqueue`] by default.
     /// [`StageTiming::DeviceTimestamps`] falls back to it on a device that does not time on
     /// itself.
@@ -1622,6 +1627,19 @@ impl DeviceP2pLayout {
             Self::Cpu => P2pLayout::Cpu {
                 vector_bits: nd_fmm_kernels::p2p::CPU_VECTOR_BITS,
             },
+        }
+    }
+}
+
+impl DevicePlaneWaveLayout {
+    /// The kernel layout of this choice on the device `info`: for
+    /// [`Auto`](DevicePlaneWaveLayout::Auto) the default of `nd-fmm-kernels`
+    /// ([`PlaneWaveLayout::default_for`]: the CPU layout on the CPU runtime, a cube of
+    /// `GPU_UNITS` units on the GPUs).
+    pub fn resolve(self, info: &DeviceInfo) -> PlaneWaveLayout {
+        match self {
+            Self::Auto => PlaneWaveLayout::default_for(info),
+            Self::Cube { units } => PlaneWaveLayout::Cube { units },
         }
     }
 }
@@ -3608,7 +3626,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             rotation_layout: RotationLayout::default_for(link.device.info(), p),
             plane_waves: Vec::new(),
             plane_wave_scratch: None,
-            plane_wave_layout: PlaneWaveLayout::default_for(link.device.info()),
+            plane_wave_layout: options.plane_wave_layout.resolve(link.device.info()),
         };
 
         // The rows of the rotation M2L level calls and the layout (T10).

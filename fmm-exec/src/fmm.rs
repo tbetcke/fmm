@@ -783,6 +783,29 @@ pub enum DevicePlaneWave {
     Kernels,
 }
 
+/// The layout of the device's plane-wave launches under [`DevicePlaneWave::Kernels`]
+/// ([`FmmBuilder::device_plane_wave_layout`]; Helmholtz CH7.5c,
+/// docs/helmholtz/tasks/CH7.5c.md). Every layout runs each item's chain in the same order,
+/// so every layout gives the same bits. Ignored by [`Backend::Host`] and wherever
+/// [`DevicePlaneWave::Kernels`] does not apply.
+///
+/// The enum exists without the `gpu` feature, as [`Backend`] does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DevicePlaneWaveLayout {
+    /// By backend: the CPU layout on the CPU runtime; on Metal and CUDA one cube of
+    /// `nd_fmm_kernels::plane_wave::GPU_UNITS` units per item.
+    #[default]
+    Auto,
+    /// One cube of `units` units per item, striding over its outputs, with shared memory
+    /// for the outgoing and local steps; refused at build where the device allows fewer
+    /// units per cube or has less shared memory than the layout needs at p. On the CPU
+    /// runtime correctness only.
+    Cube {
+        /// Units per cube, at least 1.
+        units: u32,
+    },
+}
+
 /// Where the output pass of an evaluation runs ([`FmmBuilder::output_pass`]; Phase 4S T9,
 /// decision 12): the pass that turns the leaf-ordered, leaf-scaled target output into φ
 /// and ∇φ in the caller's order, dividing by 4π r_t and 4π r_t² in f64 and rounding once
@@ -1220,6 +1243,7 @@ pub enum FmmError {
 /// | [`device_scratch_budget`](Self::device_scratch_budget) | 128 MB; 2 GB on CUDA |
 /// | [`device_plane_wave`](Self::device_plane_wave) | [`DevicePlaneWave::Dense`]: `PlaneWave` run as dense on a device |
 /// | [`device_plane_wave_budget`](Self::device_plane_wave_budget) | the device's translation scratch budget: 128 MB; 2 GB on CUDA |
+/// | [`device_plane_wave_layout`](Self::device_plane_wave_layout) | [`DevicePlaneWaveLayout::Auto`]: by backend |
 /// | [`tuning_cache`](Self::tuning_cache) | none: no tuning, the static rule |
 /// | [`tuning_budget`](Self::tuning_budget) | 10 s |
 /// | [`overlap`](Self::overlap) | off: the blocking exchanges |
@@ -1258,6 +1282,7 @@ pub struct FmmBuilder<T> {
     device_scratch_budget: Option<u64>,
     device_plane_wave: DevicePlaneWave,
     device_plane_wave_budget: Option<u64>,
+    device_plane_wave_layout: DevicePlaneWaveLayout,
     tuning_cache: Option<PathBuf>,
     tuning_budget: Duration,
     overlap: bool,
@@ -1301,6 +1326,7 @@ impl<T> FmmBuilder<T> {
             device_scratch_budget: None,
             device_plane_wave: DevicePlaneWave::Dense,
             device_plane_wave_budget: None,
+            device_plane_wave_layout: DevicePlaneWaveLayout::Auto,
             tuning_cache: None,
             tuning_budget: DEFAULT_TUNING_BUDGET,
             overlap: false,
@@ -1557,6 +1583,17 @@ impl<T> FmmBuilder<T> {
     /// [`device_plane_wave`](Self::device_plane_wave) does not apply.
     pub fn device_plane_wave_budget(mut self, bytes: u64) -> Self {
         self.device_plane_wave_budget = Some(bytes);
+        self
+    }
+
+    /// Sets the layout of the device's plane-wave launches under
+    /// [`DevicePlaneWave::Kernels`] ([`DevicePlaneWaveLayout`]; default
+    /// [`DevicePlaneWaveLayout::Auto`], by backend; Helmholtz CH7.5c). Every layout gives the
+    /// same bits; a layout the device cannot run is a device error at build. Reported by
+    /// `Fmm::device_report` (feature `gpu`). Ignored where
+    /// [`device_plane_wave`](Self::device_plane_wave) does not apply.
+    pub fn device_plane_wave_layout(mut self, layout: DevicePlaneWaveLayout) -> Self {
+        self.device_plane_wave_layout = layout;
         self
     }
 
@@ -2238,6 +2275,7 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             scratch_budget: self.device_scratch_budget,
             plane_wave: self.device_plane_wave,
             plane_wave_budget: self.device_plane_wave_budget,
+            plane_wave_layout: self.device_plane_wave_layout,
             stage_timing: if self.synchronous_stages {
                 device::StageTiming::Synchronous
             } else if self.device_timestamps {

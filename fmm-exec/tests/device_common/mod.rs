@@ -99,9 +99,9 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_exec::device::{DataKind, GroupedImage, PlaneWaveLayout, StageTiming, Traffic};
 use nd_fmm_exec::fmm::{
-    Backend, DeviceGather, DeviceGemm, DevicePlaneWave, DeviceReduction, Fmm, FmmBuilder,
-    KindTiming, NearRuleChoice, OperatorKind, Output, OutputMany, OutputPass, Placement,
-    SourceType, Sources,
+    Backend, DeviceGather, DeviceGemm, DevicePlaneWave, DevicePlaneWaveLayout, DeviceReduction,
+    Fmm, FmmBuilder, KindTiming, NearRuleChoice, OperatorKind, Output, OutputMany, OutputPass,
+    Placement, SourceType, Sources,
 };
 use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_exec::tables::M2lStrategy;
@@ -1278,6 +1278,7 @@ pub fn check_plane_waves<T: Stored + SimdScalar + Equivalence + Default>(
     let mut fmm = build(kernels.clone(), "PlaneWave on the kernels");
     let report = fmm.device_report().expect("a device backend");
     let what = format!("{backend}, PlaneWave, merge and shift");
+    let units_cap = report.info.max_units_per_cube.max(1);
     assert_eq!(
         report.strategy_name(),
         "PlaneWave, merge and shift on the device",
@@ -1346,14 +1347,40 @@ pub fn check_plane_waves<T: Stored + SimdScalar + Equivalence + Default>(
     }
     let first_bits = first_bits.expect("the first charges ran");
     let mut tight_chunks = 0;
-    for (name, builder) in [
-        ("a second build", kernels.clone()),
+    // Named layouts (Helmholtz CH7.5c), each the default's bits: on the CPU runtime a cube
+    // of one unit (correctness only; a multi-unit cube spins in `sync_cube` with several
+    // ranks per node, Phase 6 T7), on a GPU cubes of 32 and 256 units.
+    let cubes: Vec<u32> = match backend {
+        Backend::Cpu => vec![1],
+        _ => vec![32, 256.min(units_cap)],
+    };
+    let mut builds = vec![
+        ("a second build".to_owned(), kernels.clone(), None),
         (
-            "one parent per chunk",
+            "one parent per chunk".to_owned(),
             kernels.clone().device_plane_wave_budget(1),
+            None,
         ),
-    ] {
+    ];
+    for units in cubes {
+        builds.push((
+            format!("a cube of {units} units"),
+            kernels
+                .clone()
+                .device_plane_wave_layout(DevicePlaneWaveLayout::Cube { units }),
+            Some(units),
+        ));
+    }
+    for (name, builder, cube) in builds {
+        let name = name.as_str();
         let mut again = build(builder, name);
+        if let Some(units) = cube {
+            assert_eq!(
+                again.device_report().unwrap().plane_wave_layout,
+                PlaneWaveLayout::Cube { units },
+                "{what}: {name}: the layout"
+            );
+        }
         let output = again.evaluate(charges).expect("the device FMM evaluates");
         assert_eq!(
             output_bits(&output),
@@ -1380,6 +1407,17 @@ pub fn check_plane_waves<T: Stored + SimdScalar + Equivalence + Default>(
             tight_chunks = tight.iter().map(|r| r.chunks).sum();
         }
     }
+    // A cube of no unit is refused at build, on every rank.
+    let refused = kernels
+        .clone()
+        .device_plane_wave_layout(DevicePlaneWaveLayout::Cube { units: 0 })
+        .backend(backend)
+        .build(sources, targets, comm);
+    assert!(
+        refused.is_err(),
+        "{what}: a plane-wave cube of no unit was not refused"
+    );
+    drop(refused);
     // The expansions after the first charges on both paths (the host last evaluated the
     // second charges).
     host.evaluate(charges).expect("the host FMM evaluates");
