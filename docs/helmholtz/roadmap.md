@@ -840,7 +840,9 @@ at any kD.
   `fmm::DevicePlaneWave`, `FmmBuilder::{device_plane_wave, device_plane_wave_budget}`,
   `device::PlaneWaveReport`, `PlaneWaveScratch::covering`; tests
   `device_common::check_plane_waves`, `tests/mpi_exec.rs` (`check_plane_wave`), the gate in
-  `tests/device_fmm.rs`. `nd-fmm-exec`'s device path runs M2L under
+  `tests/device_fmm.rs`. "The CubeCL CPU runtime in CI" met by hand for `nd-fmm-exec` (no
+  CI job builds it with `cpu`; the kernels' tests run in CI): signed off 2026-11-05 as
+  recommended. `nd-fmm-exec`'s device path runs M2L under
   `PlaneWave` on CH7.5a's kernels when a builder setting names it (otherwise "PlaneWave,
   run as dense on the device", as before): the merge lists from the V views at build, the
   waves buffer bounded by chunks of parents within the device's scratch budget, the

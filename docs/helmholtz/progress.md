@@ -2256,8 +2256,10 @@ request, using this template:
 - Checks: ran `/verify` on the M6 (results in the PR); the device runs of the plan's
   "Runs" on the M6 (CPU runtime at 1, 2 and 4 ranks, Metal) and locust (CUDA), all passed.
   Not run: D9 (CH7.5c's: no default and no other strategy changes).
-- Decisions: none. Open question for the user (plan, question 1): the roadmap's "the
-  CubeCL CPU runtime in CI" for `nd-fmm-exec`, which no CI job builds with `cpu`.
+- Decisions: none. Question for sign-off (the PR): 1. the roadmap's "the CubeCL CPU
+  runtime in CI" for `nd-fmm-exec`, which no CI job builds with `cpu` (its device checks
+  ran by hand; the kernels' run in CI). Recommended: accept as is. Signed off 2026-11-05,
+  the user: "sign off the question as recommended".
 - Laplace: no default changed; without `DevicePlaneWave::Kernels` every device build keeps
   its tables, launches and bits (`check_plane_waves`: `PlaneWave` and `Dense` with and
   without the setting bit for bit `Dense`; every existing device check passed on the CPU

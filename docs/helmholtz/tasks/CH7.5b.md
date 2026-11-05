@@ -150,4 +150,5 @@ None.
    job builds it with `cpu`); the CPU runtime ran by hand, as every device check of
    `nd-fmm-exec` does. The kernels' plane-wave tests, the covering scratch included, do
    run in CI (`run-tests-kernels`). Accept, or add an exec CPU-runtime job (a separate
-   task)?
+   task)? Recommended: accept. Signed off 2026-11-05, the user: "sign off the question as
+   recommended" (accepted as is; no new task).
