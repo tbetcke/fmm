@@ -118,8 +118,36 @@ Timings are CH7.5c's.
 - Risk: the f32 Metal error ratio (the quadrature's error at f32 p = 8 is near the f32
   floor; T13 met 1.1× on the host in f32).
 
+## As built
+As planned. The review added a cap on each chunk's buffers at the kernels' 32-bit index
+range besides the budget, and a check that the setting under `Dense` changes nothing.
+The rank check runs on several ranks only.
+
+## Runs (2026-11-05)
+Correctness only; the evaluation times the gate prints are reported, never asserted, and
+are CH7.5c's to measure properly.
+- The M6, CPU runtime (release): `tests/mpi_exec.rs` at 1, 2 and 4 ranks (21 and 24
+  device plane-wave checks, the output within 2.3e-7 of the host's `PlaneWave` in f32,
+  M2L alone on the device bit for bit the one-rank run at 2 and 4 ranks; 163 s, 122 s,
+  322 s); `tests/device_ranks.rs` at 2 and 4 ranks (f64 within 5.9e-16, f32 within
+  3.2e-7); the `tests/device_fmm.rs` gate (820 s): PlaneWave over Dense, L2 errors φ
+  0.941–1.010 and ∇φ 0.949–1.011 on the cube and the Plummer sphere, f64 p = 8, 12, 18.
+- The M6, Metal (outside the sandbox): `tests/device_metal.rs` (every scenario, within
+  3.6e-7 of the host's `PlaneWave`, 1–5 chunks; 150 s); the gate (62 s): f32 p = 8, φ
+  1.011 (cube) and 0.999 (Plummer), ∇φ 1.004 and 1.005.
+- locust, CUDA (H100, idle): Clippy of nd-fmm-exec with `cpu,cuda`; `tests/device_cuda.rs`
+  (248 s); the gate (1274 s): f32 p = 8 and f64 p = 8, 12, 18, φ 0.941–1.010, ∇φ
+  0.949–1.011. After the review's fixes (9bf419b): Clippy of nd-fmm-exec and nd-fmm-kernels
+  with `cpu,cuda`, `tests/device_cuda.rs` again (245 s; f64 within 4.6e-16, f32 within
+  2.6e-7 of the host's `PlaneWave`, 1–5 chunks) and the kernels' seven plane-wave tests
+  with `--include-ignored` (CPU runtime and CUDA), all passed.
+
 ## Pending runs
-<filled in step 6>
+None.
 
 ## Open questions
-None yet.
+1. The roadmap's "the CubeCL CPU runtime in CI": CI runs no `nd-fmm-exec` device test (no
+   job builds it with `cpu`); the CPU runtime ran by hand, as every device check of
+   `nd-fmm-exec` does. The kernels' plane-wave tests, the covering scratch included, do
+   run in CI (`run-tests-kernels`). Accept, or add an exec CPU-runtime job (a separate
+   task)?

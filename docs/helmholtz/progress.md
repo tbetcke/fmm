@@ -2222,3 +2222,46 @@ request, using this template:
     within the kernels' 32-bit index range (a sentence in CH7.5b's line).
   - CH7.5c: the kernels' layouts measured (`GPU_UNITS` = 128 a first choice) and the
     merge's irregular lists (a sentence in CH7.5c's line).
+
+## 2026-11-05: CH7.5b The device's `PlaneWave`
+- Done:
+  - `nd-fmm-exec` (feature `gpu`): `fmm::DevicePlaneWave` (`Dense`, the default: "PlaneWave,
+    run as dense on the device", `Dense`'s bits; `Kernels`: merge and shift on the device),
+    `FmmBuilder::{device_plane_wave, device_plane_wave_budget}`,
+    `DeviceOptions::{plane_wave, plane_wave_budget}`. Under `PlaneWave` with `Kernels` and
+    M2L on the device: the host's `PlaneWaveTables` uploaded once; per level the lists of
+    the host's order from the V view (parents in index order, the slots from the computed
+    children's rows, every accumulator over its slots ascending, each computed child's
+    accumulators in order); chunks of whole parents within the budget (default the
+    translation scratch budget) and the kernels' 32-bit index range; the m vectors as
+    columns; four launches per chunk; one scratch for the widest chunk; all in the memory
+    check. `DeviceReport::{plane_wave, plane_wave_layout, plane_waves,
+    plane_wave_scratch_bytes}`, `PlaneWaveReport`; module docs "Plane-wave M2L on the
+    device".
+  - `nd-fmm-kernels` (`plane_wave` only): `PlaneWaveScratch::covering` (one scratch for
+    several plans; a launch checks the scratch holds at least its plan's buffers),
+    `PlaneWaveScratch::bytes_of`, `PlaneWaveTables::bytes_of`, `PlaneWaveLists::bytes`.
+- Tests: `device_common::check_plane_waves` (without the setting `Dense`'s bits, also with
+  it under `Dense`; with it every kind on the device, the report, the output and every
+  level's expansions within the FMM bounds of the host's `PlaneWave`, three evaluations,
+  a second build and one parent per chunk bit for bit, the transfer formula with four
+  launches per chunk, three vectors), run by `tests/mpi_exec.rs`'s `check_plane_wave`
+  (CPU runtime) and by `tests/device_metal.rs`, `tests/device_cuda.rs` and
+  `tests/device_ranks.rs`; in `check_plane_wave` on several ranks M2L alone on the device
+  against the one-rank `Fmm` bit for bit; the plane-wave gate of `tests/device_fmm.rs`
+  (within 1.1× the device `Dense`'s φ and ∇φ L2 errors on the cube and the Plummer sphere
+  at N = 10⁵: measured 0.941–1.011 on the CPU runtime f64 p = 8, 12, 18, Metal f32 p = 8,
+  CUDA f32 p = 8 and f64 p = 8, 12, 18); the kernels' `check_covering`. The tests were
+  written after the code in this task, not before.
+- Checks: ran `/verify` on the M6 (results in the PR); the device runs of the plan's
+  "Runs" on the M6 (CPU runtime at 1, 2 and 4 ranks, Metal) and locust (CUDA), all passed.
+  Not run: D9 (CH7.5c's: no default and no other strategy changes).
+- Decisions: none. Open question for the user (plan, question 1): the roadmap's "the
+  CubeCL CPU runtime in CI" for `nd-fmm-exec`, which no CI job builds with `cpu`.
+- Laplace: no default changed; without `DevicePlaneWave::Kernels` every device build keeps
+  its tables, launches and bits (`check_plane_waves`: `PlaneWave` and `Dense` with and
+  without the setting bit for bit `Dense`; every existing device check passed on the CPU
+  runtime, Metal and CUDA); the host path untouched.
+- Follow-ups:
+  - CH7.5c: the chunk budget measured with the layouts (a sentence in CH7.5c's line).
+
