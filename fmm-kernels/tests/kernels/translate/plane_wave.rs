@@ -593,6 +593,24 @@ fn device_call<T: Real>(
     )
     .unwrap();
     let mut scratch = PlaneWaveScratch::new(device, &plan, &uploaded).unwrap();
+    assert_eq!(
+        uploaded.bytes(),
+        PlaneWaveTables::bytes_of(&tables.arrays()),
+        "the tables' bytes before the upload"
+    );
+    assert_eq!(
+        plan.bytes(),
+        lists.view().bytes(),
+        "the lists' bytes before the upload"
+    );
+    assert_eq!(
+        PlaneWaveScratch::<T>::bytes(&plan, uploaded.block_len()),
+        PlaneWaveScratch::<T>::bytes_of(
+            [plan.sources(), plan.accumulators(), plan.incoming()],
+            uploaded.block_len()
+        ),
+        "the scratch's bytes"
+    );
     let input = device.upload(multipoles).unwrap();
     let mut output = device.upload(locals).unwrap();
     let mut results: Vec<Outcome<T>> = Vec::new();
@@ -769,8 +787,77 @@ fn check_region<T: Real>(device: &mut Device, p: usize, side: i64, adaptive: boo
     }
 }
 
+/// One scratch for several plans (`PlaneWaveScratch::covering`, Helmholtz CH7.5b): the
+/// full and the adaptive region of side 6 at p = 3, one level call each on a scratch that
+/// covers both, each bit for bit the host replica; a scratch of the adaptive plan alone is
+/// refused for the full one before any launch.
+fn check_covering<T: Real>(device: &mut Device) {
+    let tables = Tables::<T>::new(3);
+    let nc = tables.nc();
+    let uploaded = PlaneWaveTables::upload(device, &tables.arrays()).unwrap();
+    let layout = PlaneWaveLayout::default_for(device.info());
+    let regions = [Region::new(6, false), Region::new(6, true)];
+    let lists: Vec<Lists> = regions
+        .iter()
+        .map(|region| Lists::new(region, &tables.host))
+        .collect();
+    let plans: Vec<PlaneWavePlan> = lists
+        .iter()
+        .zip(&regions)
+        .map(|(lists, region)| {
+            PlaneWavePlan::new(
+                device,
+                &lists.view(),
+                &uploaded,
+                region.boxes(),
+                region.boxes(),
+            )
+            .unwrap()
+        })
+        .collect();
+    let mut covering = PlaneWaveScratch::covering(device, &plans, &uploaded).unwrap();
+    let mut rng = Rng::new(0xc75b);
+    // The adaptive plan last, so that the full plan's values lie beyond its buffers.
+    for ((region, lists), plan) in regions.iter().zip(&lists).zip(&plans) {
+        let multipoles = uniform::<T>(&mut rng, region.boxes() * nc);
+        let locals = uniform::<T>(&mut rng, region.boxes() * nc);
+        let want = host_call(&tables, lists, &multipoles, &locals, true);
+        let input = device.upload(&multipoles).unwrap();
+        let mut output = device.upload(&locals).unwrap();
+        m2l(
+            device,
+            layout,
+            plan,
+            &uploaded,
+            input.as_slice(),
+            output.as_slice_mut(),
+            &mut covering,
+        )
+        .unwrap();
+        let mut got = vec![t::<T>(0.0); output.len()];
+        device.download(output.as_slice(), &mut got).unwrap();
+        assert_same(
+            &format!("{} p = 3, a covering scratch: the locals", T::FLOAT),
+            &got,
+            &want.locals,
+        );
+    }
+    let mut small = PlaneWaveScratch::new(device, &plans[1], &uploaded).unwrap();
+    let launches = device.counters().launches;
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        nd_fmm_kernels::plane_wave::merge(device, layout, &plans[0], &uploaded, &mut small)
+    }));
+    assert!(refused.is_err(), "a scratch smaller than the plan's");
+    assert_eq!(device.counters().launches, launches, "nothing launched");
+    println!(
+        "  {} p = 3: one covering scratch for a full and an adaptive plan, bit for bit; a \
+         smaller scratch refused",
+        T::FLOAT
+    );
+}
+
 /// The replica, the host functions and the pair path: the full and the adaptive region
-/// of side 6, and the adaptive region of side 8 at p = 3.
+/// of side 6, and the adaptive region of side 8 at p = 3; a scratch covering two plans.
 fn plane_wave_level_calls(device: &mut Device) {
     fn body<T: Real>(device: &mut Device) {
         for p in [3, 8] {
@@ -778,6 +865,7 @@ fn plane_wave_level_calls(device: &mut Device) {
             check_region::<T>(device, p, 6, true);
         }
         check_region::<T>(device, 3, 8, true);
+        check_covering::<T>(device);
     }
     body::<f32>(device);
     if device.supports(Precision::F64) {
