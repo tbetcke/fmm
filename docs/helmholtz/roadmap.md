@@ -38,8 +38,12 @@ host `mul_add` replica on the CPU runtime, Metal and CUDA, every p ≤ 20 within
 quadrature's bound of `direct::m2l`). 2026-11-05: CH7.5b done (the device's `PlaneWave`
 on those kernels behind `DevicePlaneWave::Kernels`: within 1.011× the device `Dense`'s L2
 errors on the cube and the Plummer sphere on the CPU runtime, Metal and CUDA, the host's
-`PlaneWave` within 6e-16 in f64, rank-invariant with M2L alone on the device). Next: CH7.5c
-(*Machines:* locust, the M6), then CH6.2c (*Machines:* Kathleen; D8) once Kathleen is back.
+`PlaneWave` within 6e-16 in f64, rank-invariant with M2L alone on the device). 2026-11-05:
+CH7.5c measured (`fmm-validate/results/helmholtz-ch7-5c.md`; PR draft): on the H100 merge and
+shift takes 0.19–0.38× the dense M2L's time at every p measured (0.19–0.21× at f64 p = 12,
+and at p = 18 with 256-unit cubes), on Metal 0.47–0.60× (f32 p = 8); its adoption as the
+device's `PlaneWave` waits for the PR's sign-off. Next: CH7.5c's adoption on that sign-off,
+then CH6.2c (*Machines:* Kathleen; D8) once Kathleen is back.
 
 ## How `/next-task` reads this file
 

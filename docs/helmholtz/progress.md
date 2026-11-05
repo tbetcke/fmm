@@ -2267,3 +2267,39 @@ request, using this template:
 - Follow-ups:
   - CH7.5c: the chunk budget measured with the layouts (a sentence in CH7.5c's line).
 
+## 2026-11-05: CH7.5c Measured, and adopted or dropped (measurements; adoption on sign-off)
+- Done:
+  - `nd-fmm-exec` (feature `gpu`): `fmm::DevicePlaneWaveLayout` (`Auto`, by backend, as
+    before; `Cube { units }`) and `FmmBuilder::device_plane_wave_layout`, resolved in
+    `DeviceOptions::plane_wave_layout` and checked at build by `PlaneWaveLayout::check`;
+    every layout gives the same bits.
+  - `nd-fmm-validate`'s `layout_sweep`: the part `planewave` (Dense against merge and shift
+    at each cube of 32–1,024 units and each chunk budget of 128 MB–4 GB, M2L by
+    `KindTiming` and the evaluation; per level with each level call's chunks and items) and
+    `--dist cube|plummer`.
+  - The report `fmm-validate/results/helmholtz-ch7-5c.md`: locust's H100 (the cube and the
+    Plummer sphere at N = 10⁶ and 10⁷, f64 p = 8, 12, 18 and f32 p = 8; the units by p at
+    f64 p = 10–20) and the M6's Metal (f32 p = 8, both problems and sizes). Merge and shift
+    takes 0.30–0.38× the dense M2L's time at p = 8, 0.19–0.20× at f64 p = 12 and
+    0.19–0.21× at f64 p = 18 with 256-unit cubes on the H100 (the evaluation 0.79–0.90×,
+    0.52–0.68×, 0.36–0.45×), 0.47–0.60× on Metal (the evaluation 0.65–0.69×). T13's gate (the
+    gain at p ≥ 12) is met.
+- Tests: `device_common::check_plane_waves` builds named cube layouts (one unit on the CPU
+  runtime; 32 and 256 units on the GPUs), each the default's bits with the transfer
+  formula, and refuses a cube of no unit on every rank; the smoke run of
+  `layout_sweep --part planewave` on the CPU runtime by hand (the example has no test).
+- Checks: ran `/verify` on the M6 (format; Clippy default, examples, workspace all-targets,
+  `nd-fmm-exec` and `nd-fmm-validate` with `cpu,metal`; `cargo check` with `cuda`; `cargo
+  doc`, also `nd-fmm-exec` with `cpu`; `cargo test` 21 min and `cargo test --workspace`
+  50 min; the MPI list at 2 and 4 ranks; `mpi_exec` on the CPU runtime at 1, 2 and 4 ranks
+  (21 and 24 device plane-wave checks) and the ignored `device_ranks` at 2 and 4 ranks), all
+  passed. Pending: after the adoption, the device executables on Metal and CUDA and D9's
+  device benchmarks (the PR).
+- Decisions: none. Questions for sign-off (the PR): 1. adopt merge and shift as the default
+  of `PlaneWave` on every device, with cubes of 256 units from p = 13 on CUDA and a 1 GB
+  plane-wave budget on Metal; 2. a task for the device `Auto` to resolve to `PlaneWave`;
+  3. D9 for this change.
+- Laplace: no default changed yet; the new setting is ignored without
+  `DevicePlaneWave::Kernels`, and `check_plane_waves` keeps `PlaneWave` without the setting
+  `Dense`'s bits.
+- Follow-ups: the adoption on this branch after the sign-off (CH7.5c's line).
