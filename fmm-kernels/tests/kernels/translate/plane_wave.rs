@@ -198,9 +198,9 @@ impl Lists {
             ..Self::default()
         };
         let mut position = vec![u32::MAX; region.boxes()];
-        for b in 0..region.boxes() {
+        for (b, at) in position.iter_mut().enumerate() {
             if region.present[b] {
-                position[b] = lists.sources.len() as u32;
+                *at = lists.sources.len() as u32;
                 lists.sources.push(b as u32);
             }
         }
@@ -506,12 +506,12 @@ fn replica_local<T: Real>(h: &HostTables<T>, sums: &[T], local: &mut [T]) {
                 }
                 let q = 4 * (block.mode_start + m);
                 let s = &sums[q..q + 4];
-                let (up, down) = if m % 2 == 0 {
+                let (up, down) = if m.is_multiple_of(2) {
                     ((s[0], -s[1]), (s[2], -s[3]))
                 } else {
                     ((s[1], s[0]), (s[3], s[2]))
                 };
-                let (a, b) = if (n - m) % 2 == 0 {
+                let (a, b) = if (n - m).is_multiple_of(2) {
                     (up.0 + down.0, up.1 + down.1)
                 } else {
                     (down.0 - up.0, down.1 - up.1)
@@ -534,7 +534,7 @@ fn replica_local<T: Real>(h: &HostTables<T>, sums: &[T], local: &mut [T]) {
 fn replica_add_back<T: Real>(h: &HostTables<T>, frame: usize, local: &[T], out: &mut [T]) {
     if frame == 0 {
         for (o, &l) in out.iter_mut().zip(local) {
-            *o = *o + l;
+            *o += l;
         }
         return;
     }

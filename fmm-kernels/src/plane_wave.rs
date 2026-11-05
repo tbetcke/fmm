@@ -467,7 +467,7 @@ impl PlaneWavePlan {
             "PlaneWavePlan: two values per merge entry"
         );
         check_csr("merge", lists.merge_offsets, lists.merge_entries.len() / 2);
-        for entry in lists.merge_entries.chunks_exact(2) {
+        for entry in lists.merge_entries.as_chunks::<2>().0 {
             assert!(
                 (entry[0] as usize) < DIRECTIONS * nsources,
                 "PlaneWavePlan: wave block {} of {} sources",
@@ -1171,12 +1171,12 @@ fn weigh<F: Float>(m: usize, ar: F, ai: F) -> (F, F) {
         if m % 4 >= 2 {
             sign = F::new(-2.0f32);
         }
-        if m % 2 == 0 {
-            a = sign * ar;
-            b = -(sign * ai);
-        } else {
+        if m % 2 == 1 {
             a = -(sign * ar);
             b = sign * ai;
+        } else {
+            a = sign * ar;
+            b = -(sign * ai);
         }
     }
     (a, b)
@@ -1555,7 +1555,8 @@ fn merge_kernel<F: Float>(
 #[cube(launch_unchecked)]
 #[allow(
     clippy::too_many_arguments,
-    reason = "a kernel's arguments are its buffers and scalars"
+    clippy::needless_range_loop,
+    reason = "a kernel's arguments are its buffers and scalars, and #[cube] code has no iterators"
 )]
 fn gather_kernel<F: Float>(
     child: &[u32],
