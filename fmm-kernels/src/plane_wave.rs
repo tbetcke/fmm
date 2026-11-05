@@ -273,6 +273,33 @@ impl<T: DeviceFloat> PlaneWaveTables<T> {
         self.source_shift_count
     }
 
+    /// The bytes [`upload`](Self::upload) allocates for `arrays`, before any upload: the
+    /// arrays as given, five `u32` per λ node and one per value of a half block and per
+    /// mode.
+    pub fn bytes_of(arrays: &PlaneWaveArrays<'_, T>) -> u64 {
+        let (h, modes) = arrays
+            .nodes
+            .iter()
+            .fold((0, 0), |(h, f), node| (h + node.len, f + node.modes));
+        [
+            arrays.outgoing_powers.len(),
+            arrays.incoming_powers.len(),
+            arrays.cos.len(),
+            arrays.sin.len(),
+            arrays.multipole_rotations[0].len() + arrays.multipole_rotations[1].len(),
+            arrays.local_rotations[0].len() + arrays.local_rotations[1].len(),
+            arrays.source_shifts.len(),
+            arrays.child_shifts.len(),
+        ]
+        .into_iter()
+        .map(Device::buffer_bytes::<T>)
+        .sum::<u64>()
+            + [5 * arrays.nodes.len(), h, modes]
+                .into_iter()
+                .map(Device::buffer_bytes::<u32>)
+                .sum::<u64>()
+    }
+
     /// The bytes on the device.
     pub fn bytes(&self) -> u64 {
         [
@@ -396,6 +423,26 @@ pub struct PlaneWaveLists<'a> {
     pub locals: &'a [u32],
     /// Six values per local item: its incoming block per direction, or [`NO_BLOCK`].
     pub incoming: &'a [u32],
+}
+
+impl PlaneWaveLists<'_> {
+    /// The bytes [`PlaneWavePlan::new`] uploads for the lists: [`PlaneWavePlan::bytes`]
+    /// before the upload.
+    pub fn bytes(&self) -> u64 {
+        [
+            self.sources,
+            self.merge_offsets,
+            self.merge_entries,
+            self.gather_shifts,
+            self.gather_offsets,
+            self.gather_entries,
+            self.locals,
+            self.incoming,
+        ]
+        .iter()
+        .map(|b| Device::buffer_bytes::<u32>(b.len()))
+        .sum()
+    }
 }
 
 /// The lists of one level call on the device, validated: built once
@@ -629,11 +676,52 @@ impl<T: DeviceFloat> PlaneWaveScratch<T> {
         })
     }
 
+    /// The buffers of the widest of `plans` with `tables`, which serve every one of them
+    /// (three allocations): the most sources, accumulators and incoming blocks of any.
+    ///
+    /// # Errors
+    ///
+    /// As [`Device::alloc`].
+    pub fn covering<'a>(
+        device: &mut Device,
+        plans: impl IntoIterator<Item = &'a PlaneWavePlan>,
+        tables: &PlaneWaveTables<T>,
+    ) -> Result<Self, KernelError> {
+        let [sources, accumulators, incoming] = Self::widest(plans);
+        let w = tables.block_len();
+        Ok(Self {
+            waves: device.alloc(DIRECTIONS * sources * w)?,
+            accumulators: device.alloc(accumulators * w)?,
+            incoming: device.alloc(incoming * w)?,
+        })
+    }
+
+    /// The most sources, accumulators and incoming blocks of any of `plans`.
+    fn widest<'a>(plans: impl IntoIterator<Item = &'a PlaneWavePlan>) -> [usize; 3] {
+        plans.into_iter().fold([0; 3], |[s, a, g], plan| {
+            [
+                s.max(plan.nsources),
+                a.max(plan.naccumulators),
+                g.max(plan.nincoming),
+            ]
+        })
+    }
+
     /// The bytes [`new`](Self::new) allocates for `plan` with blocks of `block_len` values.
     pub fn bytes(plan: &PlaneWavePlan, block_len: usize) -> u64 {
-        Device::buffer_bytes::<T>(DIRECTIONS * plan.nsources * block_len)
-            + Device::buffer_bytes::<T>(plan.naccumulators * block_len)
-            + Device::buffer_bytes::<T>(plan.nincoming * block_len)
+        Self::bytes_of(
+            [plan.nsources, plan.naccumulators, plan.nincoming],
+            block_len,
+        )
+    }
+
+    /// The bytes of the buffers of a plan of `[sources, accumulators, incoming blocks]` with
+    /// blocks of `block_len` values, which [`new`](Self::new) and
+    /// [`covering`](Self::covering) allocate.
+    pub fn bytes_of([sources, accumulators, incoming]: [usize; 3], block_len: usize) -> u64 {
+        Device::buffer_bytes::<T>(DIRECTIONS * sources * block_len)
+            + Device::buffer_bytes::<T>(accumulators * block_len)
+            + Device::buffer_bytes::<T>(incoming * block_len)
     }
 
     /// The waves, wave block b at b 2H.
@@ -652,7 +740,7 @@ impl<T: DeviceFloat> PlaneWaveScratch<T> {
     }
 
     /// Panics unless `plan` was validated against tables like `tables` (their source
-    /// shifts and block length) and the buffers fit `plan` with them.
+    /// shifts and block length) and the buffers hold at least `plan`'s with them.
     fn check(&self, plan: &PlaneWavePlan, tables: &PlaneWaveTables<T>) {
         let w = tables.block_len();
         assert!(
@@ -660,10 +748,10 @@ impl<T: DeviceFloat> PlaneWaveScratch<T> {
             "plane_wave: the plan was validated against other tables"
         );
         assert!(
-            self.waves.len() == DIRECTIONS * plan.nsources * w
-                && self.accumulators.len() == plan.naccumulators * w
-                && self.incoming.len() == plan.nincoming * w,
-            "plane_wave: the scratch was made for another plan or tables"
+            self.waves.len() >= DIRECTIONS * plan.nsources * w
+                && self.accumulators.len() >= plan.naccumulators * w
+                && self.incoming.len() >= plan.nincoming * w,
+            "plane_wave: the scratch is too small for the plan with these tables"
         );
     }
 }
@@ -687,7 +775,7 @@ fn cpu_units(device: &Device, items: usize) -> u32 {
 /// # Panics
 ///
 /// If `multipoles` does not hold the plan's source bound of (p + 1)² values, the plan was
-/// validated against other tables, or the scratch was made for another plan or tables.
+/// validated against other tables, or the scratch is too small for the plan.
 pub fn outgoing<T: DeviceFloat>(
     device: &mut Device,
     layout: PlaneWaveLayout,
@@ -758,8 +846,8 @@ pub fn outgoing<T: DeviceFloat>(
     // (asserted). The nodes hold five values per λ node, the value and mode maps one node
     // index < s per value of a half block (H) and per mode (F), the powers (p + 1) s, cos
     // and sin each node's rows (checked at upload: the nodes are contiguous), the rotations
-    // two frames of blocks_len(p). The waves hold 6 nsources blocks of 2H (checked against
-    // the plan), and item c writes blocks 6 (c / 3) + 2 (c % 3) and the next, its own. The
+    // two frames of blocks_len(p). The waves hold at least 6 nsources blocks of 2H (checked
+    // against the plan), and item c writes blocks 6 (c / 3) + 2 (c % 3) and the next, its own. The
     // cube layout's shared memory holds (p + 1)² + 4F values, each written by its owner
     // between barriers that every unit of the cube reaches (the item is the cube's); the
     // CPU layout's units cover disjoint ranges of the items with local arrays.
@@ -801,8 +889,8 @@ pub fn outgoing<T: DeviceFloat>(
 ///
 /// # Panics
 ///
-/// If the plan was validated against other tables, or the scratch was made for another
-/// plan or tables.
+/// If the plan was validated against other tables, or the scratch is too small for the
+/// plan.
 pub fn merge<T: DeviceFloat>(
     device: &mut Device,
     layout: PlaneWaveLayout,
@@ -844,7 +932,7 @@ pub fn merge<T: DeviceFloat>(
     // (checked at the plan's build against tables with the shift count and block length of
     // these, asserted by the scratch check), read at block · 2H + j < their buffers' lengths (the
     // waves checked against the plan, the shifts whole blocks of 2H at upload). It writes
-    // its own block a of the accumulators (A blocks, checked). The CPU layout's units cover
+    // its own block a of the accumulators (at least A blocks, checked). The CPU layout's units cover
     // disjoint ranges of the accumulators.
     unsafe {
         merge_kernel::launch_unchecked::<T>(
@@ -875,8 +963,8 @@ pub fn merge<T: DeviceFloat>(
 ///
 /// # Panics
 ///
-/// If the plan was validated against other tables, or the scratch was made for another
-/// plan or tables.
+/// If the plan was validated against other tables, or the scratch is too small for the
+/// plan.
 pub fn gather<T: DeviceFloat>(
     device: &mut Device,
     layout: PlaneWaveLayout,
@@ -917,8 +1005,9 @@ pub fn gather<T: DeviceFloat>(
     // SAFETY: every handle is a whole buffer with its element count. Incoming block g < G
     // reads its child shift < 48 (checked; the child shifts hold 48 blocks of 2H, checked
     // at upload), the offsets g and g + 1 (G + 1, validated CSR) and its accumulators,
-    // each < A (checked), whose blocks lie in the accumulators (A blocks, checked against
-    // the plan). It writes its own block g of the incoming blocks (G blocks, checked). The
+    // each < A (checked), whose blocks lie in the accumulators (at least A blocks, checked
+    // against the plan). It writes its own block g of the incoming blocks (at least G
+    // blocks, checked). The
     // CPU layout's units cover disjoint ranges.
     unsafe {
         gather_kernel::launch_unchecked::<T>(
@@ -951,7 +1040,7 @@ pub fn gather<T: DeviceFloat>(
 /// # Panics
 ///
 /// If `locals` does not hold the plan's local bound of (p + 1)² values, the plan was
-/// validated against other tables, or the scratch was made for another plan or tables.
+/// validated against other tables, or the scratch is too small for the plan.
 pub fn local<T: DeviceFloat>(
     device: &mut Device,
     layout: PlaneWaveLayout,
@@ -1020,7 +1109,7 @@ pub fn local<T: DeviceFloat>(
     // its column < locals_bound (checked at the plan's build), so its local lies at the
     // offset plus t (p + 1)² + k < locals.len() (asserted), and its six incoming blocks,
     // each NO_BLOCK (not read) or < G (checked), read at block · 2H + j within the
-    // incoming blocks (G blocks, checked against the plan). The tables are read as in the
+    // incoming blocks (at least G blocks, checked against the plan). The tables are read as in the
     // outgoing step (the incoming powers s (p + 1), the local rotations two frames of
     // blocks_len(p)). The columns of one launch are distinct (checked at the plan's
     // build), so each local has one owner: in the cube layout unit u owns slots u, u + U, …

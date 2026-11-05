@@ -47,6 +47,14 @@
 //!   the uniform cube at the same p, N and backend; f32 is reported. The C3.2 gate on the
 //!   device path is in `tests/accuracy.rs`.
 //!
+//! **The plane-wave gate** (Helmholtz CH7.5b; T13's requirement 1 on the device): on the
+//! cube and the Plummer sphere at N = 10⁵ (f64 p = 8, 12, 18 on the CPU runtime and CUDA,
+//! f32 p = 8 on Metal and CUDA), the device `Fmm` under `PlaneWave` with
+//! `DevicePlaneWave::Kernels` (merge and shift on the device) against the device `Fmm`
+//! under `Dense` with the same near pairs and leaf size: the φ L2 and ∇φ L2 errors (the
+//! root mean squares over the eight vectors) at most 1.1× `Dense`'s; the max errors and
+//! the mean evaluation times are reported, never asserted.
+//!
 //! **The whole output at the C3.2 size** (Phase 4S T9, `tests/output_common`): on the
 //! C3.2 tree of `tests/accuracy.rs` at p = 6, gradients off and on (f64 on the CPU runtime,
 //! f32 on Metal, f32 and f64 on CUDA), the default build's output equals the output pass
@@ -80,8 +88,11 @@ use std::time::{Duration, Instant};
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
 use nd_fmm_exec::device::{Counters, DataKind, Traffic};
-use nd_fmm_exec::fmm::{Backend, Fmm, FmmBuilder, NearRuleChoice, OperatorKind, Output, Placement};
+use nd_fmm_exec::fmm::{
+    Backend, DevicePlaneWave, Fmm, FmmBuilder, NearRuleChoice, OperatorKind, Output, Placement,
+};
 use nd_fmm_exec::operator::SimdScalar;
+use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_math::RealScalar;
 use nd_fmm_ref::p2p::direct_sum;
 use nd_fmm_tables::cache::Stored;
@@ -581,6 +592,92 @@ fn tuning_budget<T: Stored + SimdScalar + Equivalence + Default + RealScalar>(
     )
 }
 
+/// The bound of the plane-wave gate on an error of the device's `PlaneWave` relative to the
+/// device's `Dense` (Helmholtz CH7.5b; T13's requirement 1 on the device).
+const PLANE_WAVE_RATIO: f64 = 1.1;
+
+/// The plane-wave gate (Helmholtz CH7.5b; module documentation) at one point: `Dense` and
+/// `PlaneWave` with `DevicePlaneWave::Kernels` on `backend` in T at degree p, with the
+/// `Dense` build's near pairs and leaf size, over the problem's charge vectors; pushes a
+/// failed check onto `failures` and returns the report's row.
+fn plane_wave_gate<T: Stored + SimdScalar + Equivalence + Default + RealScalar>(
+    backend: Backend,
+    problem: &Problem,
+    p: usize,
+    comm: &SimpleCommunicator,
+    failures: &mut Vec<String>,
+) -> String {
+    let precision = if size_of::<T>() == 8 { "f64" } else { "f32" };
+    let charges: Vec<Vec<T>> = problem
+        .charges
+        .iter()
+        .map(|q| q.iter().map(|&v| T::from_f64(v)).collect())
+        .collect();
+    let rounded: Vec<Vec<f64>> = charges
+        .iter()
+        .map(|q| q.iter().map(|&v| RealScalar::to_f64(v)).collect())
+        .collect();
+    let oracle = problem.oracle(&rounded);
+    let builder = FmmBuilder::<T>::new(p).gradients(true).backend(backend);
+    let mut dense = builder
+        .clone()
+        .strategy(M2lStrategy::Dense)
+        .build(&problem.points, &problem.points, comm)
+        .unwrap_or_else(|error| panic!("{backend}: the Dense FMM does not build: {error}"));
+    let mut waves = builder
+        .strategy(M2lStrategy::PlaneWave)
+        .device_plane_wave(DevicePlaneWave::Kernels)
+        .near_rule(same_near_pairs(&dense))
+        .max_points_per_leaf(dense.max_points_per_leaf())
+        .build(&problem.points, &problem.points, comm)
+        .unwrap_or_else(|error| panic!("{backend}: the PlaneWave FMM does not build: {error}"));
+    let what = format!("{backend}, {precision}, {}, p = {p}", problem.name);
+    let report = waves.device_report().expect("a device backend");
+    assert_eq!(
+        report.strategy_name(),
+        "PlaneWave, merge and shift on the device",
+        "{what}"
+    );
+    let chunks: usize = report.plane_waves.iter().map(|r| r.chunks).sum();
+    let (mut dense_errors, mut wave_errors) = (Vec::new(), Vec::new());
+    let (mut dense_time, mut wave_time) = (Duration::ZERO, Duration::ZERO);
+    for (q, exact) in charges.iter().zip(&oracle) {
+        let t = Instant::now();
+        let d = dense.evaluate(q).expect("the Dense FMM evaluates");
+        dense_time += t.elapsed();
+        let t = Instant::now();
+        let w = waves.evaluate(q).expect("the PlaneWave FMM evaluates");
+        wave_time += t.elapsed();
+        dense_errors.push(errors(&d, &problem.sample, exact));
+        wave_errors.push(errors(&w, &problem.sample, exact));
+    }
+    let rms = |each: &[[f64; 4]], c: usize| {
+        (each.iter().map(|e| e[c] * e[c]).sum::<f64>() / each.len() as f64).sqrt()
+    };
+    let mut cells = Vec::new();
+    for (c, name) in Errors::NAMES.iter().enumerate() {
+        let (d, w) = (rms(&dense_errors, c), rms(&wave_errors, c));
+        cells.push(format!("{w:.3e} / {d:.3e} = {:.4}", w / d));
+        // The L2 errors are the gate (T13's requirement 1); the max errors are reported.
+        if c % 2 == 0 && w > PLANE_WAVE_RATIO * d {
+            failures.push(format!(
+                "{what}: PlaneWave's {name} error {w:e} is {} times Dense's {d:e} on the \
+                 device (bound {PLANE_WAVE_RATIO})",
+                w / d
+            ));
+        }
+    }
+    let evaluations = charges.len() as u32;
+    format!(
+        "| {backend} | {precision} | {} | {p} | {} | {chunks} | {} | {:.1} ms | {:.1} ms |",
+        problem.name,
+        problem.points.len(),
+        cells.join(" | "),
+        (dense_time / evaluations).as_secs_f64() * 1e3,
+        (wave_time / evaluations).as_secs_f64() * 1e3,
+    )
+}
+
 /// The C3.3 gate on the device path (module documentation): in f64 the φ L2 error of each
 /// clustered distribution at most twice the cube's at the same backend, p and N.
 fn c33_gate(rows: &[Row], failures: &mut Vec<String>) -> Vec<String> {
@@ -795,6 +892,64 @@ fn device_fmm_gate() {
         ] {
             eprintln!("{line}");
             println!("\n{line}");
+        }
+    }
+    // The plane-wave gate (Helmholtz CH7.5b): the cube and the Plummer sphere, f64 p = 8,
+    // 12, 18 on the CPU runtime and CUDA, f32 p = 8 on Metal and CUDA.
+    let mut plane = Vec::new();
+    for name in ["cube", "plummer"] {
+        let problem = Problem::new(name, N);
+        let mut row = |line: String| {
+            eprintln!("{line}");
+            plane.push(line);
+        };
+        if Backend::Cpu.is_compiled() {
+            for (p, _) in F64_POINTS {
+                row(plane_wave_gate::<f64>(
+                    Backend::Cpu,
+                    &problem,
+                    p,
+                    &comm,
+                    &mut failures,
+                ));
+            }
+        }
+        if Backend::Metal.is_compiled() {
+            row(plane_wave_gate::<f32>(
+                Backend::Metal,
+                &problem,
+                8,
+                &comm,
+                &mut failures,
+            ));
+        }
+        if Backend::Cuda.is_compiled() {
+            row(plane_wave_gate::<f32>(
+                Backend::Cuda,
+                &problem,
+                8,
+                &comm,
+                &mut failures,
+            ));
+            for (p, _) in F64_POINTS {
+                row(plane_wave_gate::<f64>(
+                    Backend::Cuda,
+                    &problem,
+                    p,
+                    &comm,
+                    &mut failures,
+                ));
+            }
+        }
+    }
+    if !plane.is_empty() {
+        println!();
+        println!(
+            "| backend | precision | distribution | p | N | chunks | φ L2 PlaneWave / Dense | φ max | ∇φ L2 | ∇φ max | Dense evaluate | PlaneWave evaluate |"
+        );
+        println!("|---|---|---|---:|---:|---:|---|---|---|---|---:|---:|");
+        for line in &plane {
+            println!("{line}");
         }
     }
     let gate = c33_gate(&rows, &mut failures);

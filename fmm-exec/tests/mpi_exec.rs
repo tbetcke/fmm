@@ -395,7 +395,13 @@
 //!   build at the most threads, overlapped, bit for bit; the plane-wave kernels on the P2P
 //!   kernel's ISA; on several ranks the one-rank `Fmm` of `PlaneWave` bit for bit; with the
 //!   `gpu` feature, on every device backend compiled in (the CPU runtime), named "PlaneWave,
-//!   run as dense on the device" and the device `Fmm` under `Dense` bit for bit.
+//!   run as dense on the device" and the device `Fmm` under `Dense` bit for bit; and since
+//!   Helmholtz CH7.5b with `DevicePlaneWave::Kernels` (merge and shift on the device),
+//!   `device_common::check_plane_waves` (within the FMM bounds of the host's `PlaneWave`,
+//!   its locals per level too, run to run, a second build and one parent per chunk bit for
+//!   bit, three vectors, the transfers of the formula) and, on several ranks, M2L alone on
+//!   the device (every other kind on the host fallback) against the one-rank `Fmm` of the
+//!   same settings bit for bit.
 //! - **batched against per-pair** also runs the evaluator with `LaplaceOperator` and with
 //!   `PerPair<LaplaceOperator>` under `PlaneWave`: merge and shift against each pair
 //!   translated directly along the same direction, to rounding.
@@ -410,6 +416,8 @@ use mpi::datatype::PartitionMut;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
 use nd_fmm_exec::cost::M2lUnit;
+#[cfg(feature = "gpu")]
+use nd_fmm_exec::fmm::DevicePlaneWave;
 use nd_fmm_exec::fmm::{
     Backend, Fmm, FmmBuilder, FmmError, KindTiming, MultipoleRouting, NearRuleChoice, OperatorKind,
     Output, OutputMany, OutputPass, Placement, PointSet, SettingsError, SourceType, Sources,
@@ -700,6 +708,20 @@ fn distributed_scenarios() {
         );
     }
     drop(skipped);
+    #[cfg(feature = "gpu")]
+    {
+        let (checks, output, locals) = *PLANE_DEVICE_CHECKS.lock().unwrap();
+        eprintln!(
+            "rank {}: plane-wave M2L on the device (Helmholtz CH7.5b): {checks} checks; \
+             largest difference from the host's PlaneWave {output:.2e} (output), {locals:.2e} \
+             (a level's locals)",
+            comm.rank()
+        );
+        assert!(
+            device_backends().is_empty() || checks > 0,
+            "the device plane-wave check ran"
+        );
+    }
     let checks = ONE_RANK_CHECKS.load(std::sync::atomic::Ordering::Relaxed);
     eprintln!(
         "rank {}: one-rank reference (Phase 5 T6): {}",
@@ -1784,6 +1806,13 @@ fn check_near_rule<T: Stored + SimdScalar + Equivalence + Default>(
 static PLANE_CHECKS: std::sync::Mutex<([usize; 2], [f64; 2], f64)> =
     std::sync::Mutex::new(([0; 2], [0.0; 2], 0.0));
 
+/// The device's merge and shift (Helmholtz CH7.5b) in [`check_plane_wave`], for the closing
+/// line: the checks, the largest relative L2 difference of the output (φ, ∇φ) and of a
+/// level's locals from the host's `PlaneWave`.
+#[cfg(feature = "gpu")]
+static PLANE_DEVICE_CHECKS: std::sync::Mutex<(usize, f64, f64)> =
+    std::sync::Mutex::new((0, 0.0, 0.0));
+
 /// The (scenario, value size) whose plane waves [`check_plane_wave`] checked.
 static PLANE_SEEN: std::sync::Mutex<Vec<(&'static str, usize)>> = std::sync::Mutex::new(Vec::new());
 
@@ -1980,6 +2009,43 @@ fn check_plane_wave<T: Stored + SimdScalar + Equivalence + Default>(
         assert!(
             waves == dense,
             "rank {rank}: {scenario}: PlaneWave on {backend} differs from Dense"
+        );
+        // Merge and shift on the device (Helmholtz CH7.5b): against the host's PlaneWave
+        // within the FMM bounds, run to run, the budgets, three vectors, the transfers.
+        let d =
+            device_common::check_plane_waves(builder, (sources, targets), charges, backend, comm);
+        let mut device_checks = PLANE_DEVICE_CHECKS.lock().unwrap();
+        device_checks.0 += 1;
+        device_checks.1 = device_checks.1.max(d.potential).max(d.gradient);
+        device_checks.2 = device_checks.2.max(d.locals);
+        drop(device_checks);
+        // On several ranks, M2L alone on the device: the one-rank `Fmm` of the same
+        // settings bit for bit (the other kinds' device kernels differ from rank count to
+        // rank count by rounding, the host's do not).
+        if comm.size() == 1 {
+            continue;
+        }
+        let alone = builder
+            .clone()
+            .strategy(M2lStrategy::PlaneWave)
+            .device_plane_wave(DevicePlaneWave::Kernels)
+            .backend(backend)
+            .host_fallback(
+                OperatorKind::ALL
+                    .into_iter()
+                    .filter(|&kind| kind != OperatorKind::M2l),
+            );
+        let mut fmm = built(alone.clone().threads(1).build(sources, targets, comm), comm)
+            .expect("the device FMM builds");
+        assert_eq!(fmm.placement(OperatorKind::M2l), Placement::Device);
+        let output = fmm.evaluate(charges).expect("the device FMM evaluates");
+        check_one_rank(
+            &format!("{scenario}, PlaneWave on {backend}, M2L alone on the device"),
+            &alone,
+            (sources, targets),
+            charges,
+            &output,
+            comm,
         );
     }
     let precision = usize::from(size_of::<T>() == 8);

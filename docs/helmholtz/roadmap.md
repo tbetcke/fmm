@@ -35,8 +35,11 @@ into the kernels (CH7.5a), the device's `PlaneWave` behind an opt-in setting (CH
 the measurements with the adoption (CH7.5c); Helmholtz's renamed CH7.5d. 2026-11-05:
 CH7.5a done (the four steps of merge and shift as device kernels, every step bit for bit a
 host `mul_add` replica on the CPU runtime, Metal and CUDA, every p ≤ 20 within the
-quadrature's bound of `direct::m2l`). Next: CH7.5b (*Machines:* locust, the M6), then
-CH7.5c, then CH6.2c (*Machines:* Kathleen; D8) once Kathleen is back.
+quadrature's bound of `direct::m2l`). 2026-11-05: CH7.5b done (the device's `PlaneWave`
+on those kernels behind `DevicePlaneWave::Kernels`: within 1.011× the device `Dense`'s L2
+errors on the cube and the Plummer sphere on the CPU runtime, Metal and CUDA, the host's
+`PlaneWave` within 6e-16 in f64, rank-invariant with M2L alone on the device). Next: CH7.5c
+(*Machines:* locust, the M6), then CH6.2c (*Machines:* Kathleen; D8) once Kathleen is back.
 
 ## How `/next-task` reads this file
 
@@ -833,7 +836,13 @@ at any kD.
   levels 2, 9 and 16 within T13's quadrature bound (p ≤ 20 f64 in an ignored sweep); two
   launches bit for bit. No `nd-fmm-exec` change. *Needs:* Phase 6 T13 (merged).
   *Machines:* locust, the M6 (Metal).
-- [ ] **CH7.5b The device's `PlaneWave`.** `nd-fmm-exec`'s device path runs M2L under
+- [x] **CH7.5b The device's `PlaneWave`.** Record: `docs/helmholtz/tasks/CH7.5b.md`;
+  `fmm::DevicePlaneWave`, `FmmBuilder::{device_plane_wave, device_plane_wave_budget}`,
+  `device::PlaneWaveReport`, `PlaneWaveScratch::covering`; tests
+  `device_common::check_plane_waves`, `tests/mpi_exec.rs` (`check_plane_wave`), the gate in
+  `tests/device_fmm.rs`. "The CubeCL CPU runtime in CI" met by hand for `nd-fmm-exec` (no
+  CI job builds it with `cpu`; the kernels' tests run in CI): signed off 2026-11-05 as
+  recommended. `nd-fmm-exec`'s device path runs M2L under
   `PlaneWave` on CH7.5a's kernels when a builder setting names it (otherwise "PlaneWave,
   run as dense on the device", as before): the merge lists from the V views at build, the
   waves buffer bounded by chunks of parents within the device's scratch budget, the
@@ -851,7 +860,10 @@ at any kD.
 - [ ] **CH7.5c Measured, and adopted or dropped.** The device M2L stage and the evaluation
   under CH7.5b's setting against T7's dense M2L at f64 p = 8, 12, 18 on locust's H100 (f32
   p = 8 on the M6's Metal), with the kernels' layouts measured (CH7.5a's `GPU_UNITS` = 128
-  is a first choice; the merge's irregular lists are the spike's open question); Laplace's
+  is a first choice; the merge's irregular lists are the spike's open question) and the
+  chunk budget (CH7.5b: `device_plane_wave_budget`, default the translation scratch
+  budget; CH7.5b's gate printed, unmeasured, the cube at f64 p = 8 on the H100 slower than
+  `Dense` and the Plummer sphere faster); Laplace's
   device gates and benchmarks within noise (D9). *Done when:* the report gives both; adopted as the device's `PlaneWave` where it wins at
   p ≥ 12 (T13's gate; the setting becomes the default of `PlaneWave` on the device), else
   `PlaneWave` stays `Dense` on the device and the kernels are dropped; the device `Auto`

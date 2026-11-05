@@ -291,10 +291,17 @@ fn run<T: Stored + SimdScalar + Equivalence + Default>(
         // one-vector device FMM's, with the transfers of the formula for m vectors.
         let vectors =
             device_common::check_three_vectors(&builder, (&local, &local), &charges, backend, comm);
+        // The device's PlaneWave on its merge and shift kernels (Helmholtz CH7.5b) on the
+        // same ranks.
+        let plane =
+            device_common::check_plane_waves(&builder, (&local, &local), &charges, backend, comm);
         if rank == 0 {
             eprintln!(
                 "rank 0: {what}: {vectors} evaluations of three charge vectors bit for bit their \
-                 one-vector evaluations on {size} ranks"
+                 one-vector evaluations on {size} ranks; PlaneWave, merge and shift on the \
+                 device: within {:.1e} (φ) and {:.1e} (∇φ) of the host's PlaneWave, locals \
+                 {:.1e}, {} chunks",
+                plane.potential, plane.gradient, plane.locals, plane.chunks
             );
         }
         // The worst rank's differences.

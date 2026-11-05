@@ -72,6 +72,14 @@
 //!   `kind_timings(Device)`, one window per call and the one sync, alone and with
 //!   `device_timestamps(true)` (its five stage windows around the call windows).
 //!
+//! The device's `PlaneWave` (Helmholtz CH7.5b; [`check_plane_waves`], called by
+//! `tests/mpi_exec.rs`'s plane-wave check and the Metal, CUDA and several-rank executables):
+//! without `DevicePlaneWave::Kernels` the device runs it as `Dense`, `Dense`'s bits; with it,
+//! merge and shift on the device within the FMM bounds of the host's `PlaneWave` (the
+//! output and every level's multipoles and locals), run to run, a second build and one
+//! parent per chunk bit for bit, three vectors each the one-vector run's, and the transfers
+//! of [`expected_evaluation`] (four launches per chunk, from the report).
+//!
 //! On several ranks (Phase 5 T8, docs/design/distributed-fmm.md §7) every check runs as on
 //! one rank, against the host path on the same ranks: the host output and expansions there,
 //! and the formula extended by the exchanges' transfers on this rank
@@ -89,10 +97,11 @@
 use mpi::collective::SystemOperation;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
-use nd_fmm_exec::device::{DataKind, GroupedImage, StageTiming, Traffic};
+use nd_fmm_exec::device::{DataKind, GroupedImage, PlaneWaveLayout, StageTiming, Traffic};
 use nd_fmm_exec::fmm::{
-    Backend, DeviceGather, DeviceGemm, DeviceReduction, Fmm, FmmBuilder, KindTiming,
-    NearRuleChoice, OperatorKind, Output, OutputMany, OutputPass, Placement, SourceType, Sources,
+    Backend, DeviceGather, DeviceGemm, DevicePlaneWave, DeviceReduction, Fmm, FmmBuilder,
+    KindTiming, NearRuleChoice, OperatorKind, Output, OutputMany, OutputPass, Placement,
+    SourceType, Sources,
 };
 use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_exec::tables::M2lStrategy;
@@ -399,7 +408,23 @@ pub fn expected_evaluation<T: Stored + SimdScalar + Equivalence + Default>(
             }
         }
         if !lists.v().is_empty() {
-            if device(OperatorKind::M2l) && fmm.strategy() == M2lStrategy::Rotation {
+            let report = fmm.device_report().expect("a device backend");
+            if device(OperatorKind::M2l) && report.plane_wave == DevicePlaneWave::Kernels {
+                // Merge and shift (Helmholtz CH7.5b): four launches per chunk of parents,
+                // fewer for a step without items, reported with its pairs.
+                let calls: Vec<_> = report.plane_waves.iter().filter(|r| r.level == l).collect();
+                assert_eq!(calls.len(), 1, "plane-wave M2L level {l}: one report entry");
+                assert_eq!(
+                    calls[0].pairs,
+                    m * lists.v().len(),
+                    "plane-wave M2L level {l}: pairs, m per pair of the plan"
+                );
+                assert!(
+                    calls[0].chunks >= 1 && calls[0].launches <= 4 * calls[0].chunks,
+                    "plane-wave M2L level {l}: chunks and launches"
+                );
+                e.launches += calls[0].launches as u64;
+            } else if device(OperatorKind::M2l) && fmm.strategy() == M2lStrategy::Rotation {
                 // One launch of the rotation kernel (T10), reported with its pairs.
                 let report = fmm.device_report().expect("a device backend");
                 let calls: Vec<_> = report.rotations.iter().filter(|r| r.level == l).collect();
@@ -1150,6 +1175,225 @@ fn check_variants<T: Stored + SimdScalar + Equivalence + Default>(
         }
     }
     compared
+}
+
+/// What [`check_plane_waves`] measured: the largest relative L2 differences of the device's
+/// merge and shift from the host's `PlaneWave` (φ, ∇φ, and per level the locals), the
+/// chunks of the default budget and of one parent per chunk, and the three-vector
+/// evaluations compared.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PlaneWaveDifferences {
+    /// φ over all targets.
+    pub potential: f64,
+    /// ∇φ over all targets.
+    pub gradient: f64,
+    /// The locals, the worst level.
+    pub locals: f64,
+    /// The chunks of every level call at the default budget.
+    pub chunks: usize,
+    /// The chunks at a budget of one byte (one parent each).
+    pub tight_chunks: usize,
+    /// The three-vector evaluations compared bit for bit ([`check_three_vectors`]).
+    pub vectors: usize,
+}
+
+/// The device's `PlaneWave` on its merge and shift kernels (Helmholtz CH7.5b,
+/// `DevicePlaneWave::Kernels`), for `builder` (the strategy is set here) on `backend`,
+/// against the host `Fmm` under `PlaneWave` of the same settings at one thread, on this
+/// rank (module documentation, "The device's `PlaneWave`"):
+/// - without the setting the device runs `PlaneWave` as `Dense`, bit for bit the device
+///   `Fmm` under `Dense`, and the setting under `Dense` changes nothing (constraint 1);
+/// - with it: every kind on the device; the report names "PlaneWave, merge and shift on
+///   the device", the plane-wave tables and no dense M2L tables, the default layout and one
+///   level call per V view with a pair; the output within the FMM bounds of the host's for
+///   two charge vectors, the first twice bit for bit, the pass before Phase 4S T9's
+///   output, and the transfers, launches and syncs of [`expected_evaluation`] (with every
+///   kind on the device the design's minimum); a second build and a build with one parent
+///   per chunk (`device_plane_wave_budget(1)`, more chunks wherever a level has more than
+///   one parent) bit for bit; the multipoles and the locals of every level within the
+///   bounds of the host's; three vectors each the one-vector device run bit for bit
+///   ([`check_three_vectors`]).
+pub fn check_plane_waves<T: Stored + SimdScalar + Equivalence + Default>(
+    builder: &FmmBuilder<T>,
+    (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
+    charges: &[T],
+    backend: Backend,
+    comm: &SimpleCommunicator,
+) -> PlaneWaveDifferences {
+    let mut host = builder
+        .clone()
+        .strategy(M2lStrategy::PlaneWave)
+        .threads(1)
+        .build(sources, targets, comm)
+        .unwrap_or_else(|error| panic!("the host PlaneWave FMM does not build: {error}"));
+    let host_output = host.evaluate(charges).expect("the host FMM evaluates");
+    // The host's tree and near pairs (since Phase 6 T11 the leaf size's default depends on
+    // the backend, and the near rule's crossovers on the strategy's cost model).
+    let builder = builder
+        .clone()
+        .strategy(M2lStrategy::PlaneWave)
+        .max_points_per_leaf(host.max_points_per_leaf())
+        .near_rule(same_near_pairs(&host))
+        .threads(1);
+    let build = |builder: FmmBuilder<T>, what: &str| {
+        builder
+            .backend(backend)
+            .build(sources, targets, comm)
+            .unwrap_or_else(|error| panic!("{backend}: {what} does not build: {error}"))
+    };
+    // Without the setting: run as dense, `Dense`'s bits (constraint 1).
+    let mut as_dense = build(builder.clone(), "PlaneWave as dense");
+    assert_eq!(
+        as_dense
+            .device_report()
+            .map(|r| (r.strategy_name(), r.plane_wave)),
+        Some((
+            "PlaneWave, run as dense on the device".to_owned(),
+            DevicePlaneWave::Dense
+        )),
+        "{backend}: PlaneWave without the setting"
+    );
+    let dense_bits = output_bits(&as_dense.evaluate(charges).expect("the device evaluates"));
+    let mut dense = build(builder.clone().strategy(M2lStrategy::Dense), "Dense");
+    assert!(
+        output_bits(&dense.evaluate(charges).expect("the device evaluates")) == dense_bits,
+        "{backend}: PlaneWave without the setting differs from Dense"
+    );
+    // The setting under another strategy changes nothing.
+    let mut named = build(
+        builder
+            .clone()
+            .strategy(M2lStrategy::Dense)
+            .device_plane_wave(DevicePlaneWave::Kernels),
+        "Dense with the setting",
+    );
+    assert!(
+        named.device_report().map(|r| r.plane_wave) == Some(DevicePlaneWave::Dense)
+            && output_bits(&named.evaluate(charges).expect("the device evaluates")) == dense_bits,
+        "{backend}: Dense with DevicePlaneWave::Kernels differs from Dense"
+    );
+    drop((as_dense, dense, named));
+
+    let kernels = builder.clone().device_plane_wave(DevicePlaneWave::Kernels);
+    let mut fmm = build(kernels.clone(), "PlaneWave on the kernels");
+    let report = fmm.device_report().expect("a device backend");
+    let what = format!("{backend}, PlaneWave, merge and shift");
+    assert_eq!(
+        report.strategy_name(),
+        "PlaneWave, merge and shift on the device",
+        "{what}: the strategy"
+    );
+    assert_eq!(report.plane_wave, DevicePlaneWave::Kernels, "{what}");
+    for kind in OperatorKind::ALL {
+        assert_eq!(fmm.placement(kind), Placement::Device, "{what}: {kind}");
+    }
+    assert_eq!(
+        report.plane_wave_layout,
+        PlaneWaveLayout::default_for(&report.info),
+        "{what}: the default plane-wave layout"
+    );
+    let names: Vec<&str> = report.tables.iter().map(|t| t.name).collect();
+    assert!(
+        names.contains(&"M2L (plane waves)") && !names.contains(&"M2L"),
+        "{what}: the tables {names:?}"
+    );
+    let v_views: Vec<usize> = (0..fmm.nlevels())
+        .filter(|&l| !fmm.plan().level(l).v().is_empty())
+        .collect();
+    assert_eq!(
+        report
+            .plane_waves
+            .iter()
+            .map(|r| r.level)
+            .collect::<Vec<_>>(),
+        v_views,
+        "{what}: one plane-wave level call per V view with a pair"
+    );
+    assert!(
+        report.translations_of(OperatorKind::M2l).count() == 0 && report.rotations.is_empty(),
+        "{what}: no other M2L level call"
+    );
+    let chunks: usize = report.plane_waves.iter().map(|r| r.chunks).sum();
+    let expected = expected_evaluation(&fmm, &OperatorKind::ALL);
+    check_minimum(backend, &fmm, &expected);
+    let second: Vec<T> = charges.iter().rev().copied().collect();
+    let host_second = host.evaluate(&second).expect("the host FMM evaluates");
+    let bound = fmm_bound::<T>();
+    let mut worst = (0.0f64, 0.0f64);
+    let mut first_bits = None;
+    for (name, q, want) in [
+        ("first charges", charges, &host_output),
+        ("second charges", &second[..], &host_second),
+        ("first charges again", charges, &host_output),
+    ] {
+        let output = fmm.evaluate(q).expect("the device FMM evaluates");
+        let what = format!("{what}, {name}");
+        let (potential, gradient) = relative_l2(&output, want);
+        assert!(
+            potential <= bound && gradient <= bound,
+            "{what}: relative L2 difference from the host's PlaneWave φ {potential:e}, ∇φ \
+             {gradient:e} exceeds {bound:e}"
+        );
+        worst = (worst.0.max(potential), worst.1.max(gradient));
+        check_evaluation_counters(&what, &fmm, &expected);
+        let bits = output_bits(&output);
+        match (&first_bits, std::ptr::eq(q, charges)) {
+            (None, true) => first_bits = Some(bits),
+            (Some(first), true) => assert_eq!(&bits, first, "{what}: two evaluations differ"),
+            _ => {}
+        }
+        check_reference(&what, &mut fmm, &output);
+    }
+    let first_bits = first_bits.expect("the first charges ran");
+    let mut tight_chunks = 0;
+    for (name, builder) in [
+        ("a second build", kernels.clone()),
+        (
+            "one parent per chunk",
+            kernels.clone().device_plane_wave_budget(1),
+        ),
+    ] {
+        let mut again = build(builder, name);
+        let output = again.evaluate(charges).expect("the device FMM evaluates");
+        assert_eq!(
+            output_bits(&output),
+            first_bits,
+            "{what}: {name} differs from the first build"
+        );
+        let expected = expected_evaluation(&again, &OperatorKind::ALL);
+        check_evaluation_counters(&format!("{what}, {name}"), &again, &expected);
+        if name == "one parent per chunk" {
+            let tight = &again.device_report().unwrap().plane_waves;
+            let default = &fmm.device_report().unwrap().plane_waves;
+            for (t, d) in tight.iter().zip(default) {
+                // Each parent has at most eight local items per vector.
+                assert!(
+                    t.chunks >= d.chunks && (t.locals <= 8 * fmm.vectors() || t.chunks > 1),
+                    "{what}, {name}: level {}: {} chunks against {} by default ({} local \
+                     items)",
+                    t.level,
+                    t.chunks,
+                    d.chunks,
+                    t.locals
+                );
+            }
+            tight_chunks = tight.iter().map(|r| r.chunks).sum();
+        }
+    }
+    // The expansions after the first charges on both paths (the host last evaluated the
+    // second charges).
+    host.evaluate(charges).expect("the host FMM evaluates");
+    let (_, locals, _) = check_expansions(&what, &mut fmm, &mut host, bound);
+    drop(fmm);
+    let vectors = check_three_vectors(&kernels, (sources, targets), charges, backend, comm);
+    PlaneWaveDifferences {
+        potential: worst.0,
+        gradient: worst.1,
+        locals,
+        chunks,
+        tight_chunks,
+        vectors,
+    }
 }
 
 /// The kinds the device runs by default from T10 under `strategy`: every kind, M2L by the

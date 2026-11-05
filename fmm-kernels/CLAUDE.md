@@ -247,8 +247,11 @@ runs in `nd-fmm-exec` and CH7.5c measures).
   `local_from_sums`, `add_local_from_frame`) one fma per term: bit for bit a host `mul_add`
   replica of every step (tested), the tables' functions to rounding. The local items'
   columns are distinct (checked at the plan's build), and a frame with neither incoming
-  block is skipped, as the host skips it. Do not change the step order or the device
-  table layout without a sign-off.
+  block is skipped, as the host skips it. A scratch may serve several plans (Helmholtz
+  CH7.5b, `PlaneWaveScratch::covering`, the widest's buffers; a launch checks that the
+  scratch holds at least its plan's), and `PlaneWaveTables::bytes_of`,
+  `PlaneWaveLists::bytes` and `PlaneWaveScratch::bytes_of` give the bytes before any
+  upload. Do not change the step order or the device table layout without a sign-off.
 - Timing windows (T11, device-path.md §8.3): `Device::open_window` and `close_window`
   wrap CubeCL's `profile_start`/`profile_end`; `WindowTime::resolve` reads the time after
   the work has run. `Device::times_on_device` is true only on a GPU backend whose runtime
