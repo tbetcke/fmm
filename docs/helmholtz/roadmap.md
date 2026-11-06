@@ -38,8 +38,15 @@ host `mul_add` replica on the CPU runtime, Metal and CUDA, every p ≤ 20 within
 quadrature's bound of `direct::m2l`). 2026-11-05: CH7.5b done (the device's `PlaneWave`
 on those kernels behind `DevicePlaneWave::Kernels`: within 1.011× the device `Dense`'s L2
 errors on the cube and the Plummer sphere on the CPU runtime, Metal and CUDA, the host's
-`PlaneWave` within 6e-16 in f64, rank-invariant with M2L alone on the device). Next: CH7.5c
-(*Machines:* locust, the M6), then CH6.2c (*Machines:* Kathleen; D8) once Kathleen is back.
+`PlaneWave` within 6e-16 in f64, rank-invariant with M2L alone on the device). 2026-11-05:
+CH7.5c measured (`fmm-validate/results/helmholtz-ch7-5c.md`; PR draft): on the H100 merge and
+shift takes 0.15–0.38× the dense M2L's time at every p measured (0.19–0.21× at f64 p = 12,
+and at p = 18 with 256-unit cubes), on Metal 0.47–0.60× (f32 p = 8). 2026-11-06: CH7.5c's
+three questions signed off as recommended (the user): merge and shift adopted as the device's
+`PlaneWave` (`DevicePlaneWave::Kernels` the default; cubes of 128 units, 256 on CUDA from
+p = 13; Metal's plane-wave budget 1 GB), CH7.5e added for the device `Auto`, D9 by the
+device tests and one CUDA ABBA run. Next: CH6.2c (*Machines:* Kathleen; D8) once Kathleen is
+back.
 
 ## How `/next-task` reads this file
 
@@ -814,7 +821,7 @@ at any kD.
   request, splitting CH7.5: the device kernels of merge and shift (the complex products over
   a box's waves, the merge lists per parent, the shifts to the children), built first on
   Laplace, whose host strategy exists (Phase 6 T13, `M2lStrategy::PlaneWave`) and which on
-  a device runs as `Dense` today ("PlaneWave, run as dense on the device",
+  a device ran as `Dense` until CH7.5c ("PlaneWave, run as dense on the device",
   `fmm-exec/src/device.rs`); CH7.5d reuses them. The task T13's brief left for afterwards
   (docs/phase6/T13-plane-wave-m2l.md, "Afterwards"): T10 modelled it at 2.4–20× T7's dense
   M2L stage on the H100, larger at high p (`spikes/plane-wave/SPIKE_REPORT.md` §3), with the
@@ -857,7 +864,17 @@ at any kD.
   constraint 1: without the setting every strategy, the device's `PlaneWave` and Laplace's
   defaults bit for bit, the device `Auto` unchanged. *Needs:* CH7.5a. *Machines:* locust,
   the M6 (Metal).
-- [ ] **CH7.5c Measured, and adopted or dropped.** The device M2L stage and the evaluation
+- [x] **CH7.5c Measured, and adopted or dropped.** Record: `docs/helmholtz/tasks/CH7.5c.md`;
+  report `fmm-validate/results/helmholtz-ch7-5c.md`; `fmm::DevicePlaneWaveLayout`,
+  `FmmBuilder::device_plane_wave_layout`, `device::{default_plane_wave_budget,
+  CUDA_PLANE_WAVE_WIDE_UNITS, CUDA_PLANE_WAVE_WIDE_FROM, METAL_PLANE_WAVE_BUDGET}`,
+  `layout_sweep --part planewave`. Adopted (signed off 2026-11-06: "sign off all three
+  questions as recommended"): `DevicePlaneWave::Kernels` the default of `PlaneWave` on every
+  device (`Dense` the named opt-out), cubes of 128 units on Metal and on CUDA to p = 12 and
+  of 256 on CUDA from p = 13, Metal's plane-wave budget 1 GB, the kernels kept; the device
+  `Auto` unchanged (CH7.5e); D9 by the device executables and gates on the CPU runtime,
+  Metal and CUDA and one ABBA run of `nd-fmm-bench --backend cuda` against `main`.
+  The device M2L stage and the evaluation
   under CH7.5b's setting against T7's dense M2L at f64 p = 8, 12, 18 on locust's H100 (f32
   p = 8 on the M6's Metal), with the kernels' layouts measured (CH7.5a's `GPU_UNITS` = 128
   is a first choice; the merge's irregular lists are the spike's open question) and the
@@ -873,6 +890,19 @@ at any kD.
   merge and shift kernels, with the Helmholtz conversions (CH6.1c's pair chain) and the
   quadrature per level (CH6.1e). *Done when:* as CH6.1 on the device. *Needs:* CH7.5c,
   CH6.2, CH7.1, D8. *Machines:* locust.
+- [ ] **CH7.5e The device `Auto` on `PlaneWave`.** Added on 2026-11-06 (CH7.5c's question
+  2, signed off as recommended; off the priority list): the device's `M2lStrategy::Auto`
+  resolves to `Dense` or `Rotation` by the static rule and never to `PlaneWave`, although
+  `PlaneWave` on merge and shift took 0.19–0.21× `Dense`'s M2L time on the H100 at f64
+  p = 12 and 18 (CH7.5c). At N = 10⁵ the device gate's evaluation times (printed, not
+  asserted) put merge and shift behind `Dense` on the cube (11.8 against 3.7 ms at f32
+  p = 8 and 13.4 against 10.2 ms at f64 p = 12 on the H100; 16.5 against 8.2 ms on Metal)
+  and ahead on the Plummer sphere, so the rule needs N as well. Measure the device's
+  strategies against each other by backend, precision, p and N (the static rule's crossovers and the near rule's cost models on the
+  device, as Phase 6 T11 did for the host's `Auto`) and propose a rule. *Done when:* the
+  report gives the device `Auto`'s rule by backend, precision and p with `PlaneWave` in it
+  where it wins, adopted on sign-off; Laplace's device gates and benchmarks within noise
+  (D9). *Needs:* CH7.5c. *Machines:* locust, the M6 (Metal). *Sign-off:* the device `Auto`.
 - [ ] **CH7.6 Device performance against FMM3D at matched accuracy.** As CH4.5, the device
   path beside the host's. *Needs:* CH7.2, CH7.3, CH7.4, CH4.5. *Machines:* locust.
 - [ ] **H7.G Gate.** `/milestone-gate H7`. *Needs:* every task above.
