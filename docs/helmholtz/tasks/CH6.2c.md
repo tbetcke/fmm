@@ -50,7 +50,7 @@ for form; the tables script run on all outputs.
 - Kathleen job 628611 (2026-11-04, node-c11a-142): `matrix` and `large` at 1 × 40,
   completed. Fetched to the scratchpad and archived in
   `~/projects/fmm-archive/kathleen/logs/ch6-2b/`.
-- Kathleen job 629953 (2026-11-06, `singlenode`, 6 h limit): the build, then
+- Kathleen job 629953 (2026-11-06, `singlenode`, 6 h limit, node-c11b-041): the build, then
   `THREADS=40 SPLITS="4x10 40x1" tools/helmholtz/ch6-2b-runs.sh
   /scratch/scratch/ucahtbe/fmm/logs/ch6-2b large`. Decides Kathleen's ranks × threads
   split.
@@ -62,6 +62,15 @@ Kathleen's nodes are exclusive, so no quiet gate; the job and node named.
 
 ## Pending runs
 
-- Kathleen job 629953 (submitted 2026-11-06 18:36, running).
+- Done: Kathleen job 628611 (2026-11-04, node-c11a-142, 43 min, source 1e22995): `matrix`
+  and `large` at 1 × 40, fetched 2026-11-06.
+- Done: Kathleen job 629953 (2026-11-06, node-c11b-041, 70 min, source e6b29c0): the build
+  and `large` at 4 × 10 and 40 × 1, every launch exit 0.
+- Both archived in `~/projects/fmm-archive/kathleen/logs/ch6-2b/` with the Slurm logs.
+
+None pending.
 
 ## Open questions
+
+None. The tables script compares no checksums; the ABBA pairs (152) and the three splits of
+each large case were compared by a scratch script, all equal (report §5, §6).

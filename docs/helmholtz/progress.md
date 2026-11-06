@@ -2377,3 +2377,35 @@ request, using this template:
 - Follow-ups: CH1.3d writes CONVENTIONS §3.15 "Signatures" (question 5); CH4.3 measures the
   damped classes in the FMM-weighted norm and looks at the shorter transfer function (the
   roadmap's CH4.3 line); CH0.8b recounts §7 with S6's constants (its line already says so).
+
+## 2026-11-06: CH6.2c CH6.2b's Kathleen runs
+- Done:
+  - The split (`/next-task`'s size rule, Kathleen back): the former CH6.2c (FMM3D with D8)
+    into CH6.2c (CH6.2b's Kathleen runs), CH6.2d (beside FMM3D's exponential M2L, the
+    corner ρ = 4√2) and CH6.2e (D8, the coarse levels' remedy); D8 now prepared by CH6.2e,
+    the priority list's item 4 names all five.
+  - Kathleen's runs: job 628611's outputs fetched (`matrix` and `large` at 1 × 40,
+    2026-11-04) and job 629953 run (`large` at 4 × 10 and 40 × 1). CH6.2b's report
+    (`fmm-validate/results/helmholtz-ch6-2b.md`) has Kathleen's summary rows (§2), a splits
+    table (§4), §5 written, the observations for D8 checked (§7, retitled for CH6.2e) and
+    Kathleen's per-level tables in the appendix. Findings: at 10⁻⁶ the exponential M2L
+    0.24–0.61× Rotation's M2L on the larger cases (W1 at kD = 500 0.50×, W3 at kD = 100
+    0.24×; the evaluation 0.31–0.65× Auto's); level 2 4.4–25× Rotation's time at 1 × 40,
+    1.3–1.8× at 4 × 10; Auto's crossover 15 on AVX-512 runs Batched on degree-15 levels
+    (33× Rotation's on W1 at kD = 10's one level; on levels of many parents the exponential
+    M2L is faster); at 10⁻³ a per-level choice up to 2.10× the best single strategy; 1 × 40
+    the fastest split on W1 at kD = 500, within 10 % of 4 × 10 on W3 at kD = 100, 40 × 1
+    the slowest for the exponential M2L.
+  - Raw outputs in `~/projects/fmm-archive/kathleen/logs/ch6-2b/` (not committed).
+- Tests: none (no code). Every evaluation's checksum equal in both launches of all 152 ABBA
+  pairs, and each large case's the same at 1 × 40, 4 × 10 and 40 × 1 across the two
+  sources (1e22995, e6b29c0); the exponential M2L's errors 0.92–1.07× Rotation's.
+- Checks: no Rust, manifest or tool change, so `/verify`'s cargo checks do not apply (none
+  run); the tables regenerated with `tools/helmholtz/ch6-2b-tables.py`; Kathleen jobs
+  628611 and 629953, every launch exit 0.
+- Decisions: none.
+- Laplace: not touched.
+- Follow-ups: CH6.2e's line: Kathleen's level 2 at 4 × 10 (1.3–1.8× Rotation's against
+  4.4–25× at 1 × 40) for the coarse levels' remedy, Auto's AVX-512 crossover against the
+  exponential M2L, the per-level gain at 10⁻³; CH4.0 already covers Batched on sparse
+  levels.

@@ -133,7 +133,8 @@ beyond the gate on the M6 and Kathleen's exclusive node.
 - Done: locust, 2026-11-04, `THREADS=72 SPLITS="1x72 8x9 72x1" tools/helmholtz/ch6-2b-runs.sh
   /data/ucahtbe/logs/ch6-2b matrix large` (source 1e22995), and the W3 large cases at
   8 × 9 and 72 × 1 again after the stdin fix (8fb9f84). The report's §2–§4.
-Moved to CH6.2c (the amendment above):
+Moved to CH6.2c (the amendment above), done there on 2026-11-06 (jobs 628611 and 629953;
+the report's §4 and §5):
 
 - Kathleen job 628611 (node-c11a-142, 43 min, completed, every launch exit 0): the build,
   `THREADS=40 tools/helmholtz/ch6-2b-runs.sh /scratch/scratch/ucahtbe/fmm/logs/ch6-2b
