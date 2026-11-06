@@ -2,7 +2,8 @@
 
 Helmholtz task CH6.2b ([docs/helmholtz/tasks/CH6.2b.md](../../docs/helmholtz/tasks/CH6.2b.md));
 proposal [docs/design/helmholtz-fmm-proposal.md](../../docs/design/helmholtz-fmm-proposal.md)
-§10 CH6.2 (split on this branch: our strategies per level here, FMM3D and D8 in CH6.2c),
+§10 CH6.2 (split on this branch: our strategies per level here, FMM3D and D8 in CH6.2c, since
+2026-11-06 Kathleen's runs in CH6.2c, FMM3D in CH6.2d and D8 in CH6.2e),
 §2 (constraints 2, 7, 9), §5.3, §6.4. Measured on:
 
 - **the M6** (Apple M6, 24 GB, macOS; `tools/m6/machine.md`): one rank × 6 threads, under
@@ -12,7 +13,13 @@ proposal [docs/design/helmholtz-fmm-proposal.md](../../docs/design/helmholtz-fmm
   before): 1 × 72 for every case, and 8 × 9 and 72 × 1 for the large ones, on 2026-11-04,
   source 1e22995 (the W3 large cases at 8 × 9 and 72 × 1 from 8fb9f84, whose code is the
   same; §6);
-- **Kathleen**: not in this report; its runs moved to CH6.2c (§5).
+- **Kathleen** (two Xeon Gold 6248 sockets, 2 × 20 Cascade Lake cores, AVX-512,
+  `tools/kathleen/`; one exclusive node in `singlenode`): `matrix` and `large` at 1 × 40 in
+  job 628611 (node-c11a-142, 2026-11-04, source 1e22995), `large` at 4 × 10 and 40 × 1 in
+  job 629953 (node-c11b-041, 2026-11-06, source e6b29c0, `main` after CH6.2b's merge: the Helmholtz
+  host path differs only in comments, the example prints the seconds to the µs, and every
+  checksum agrees with job 628611's); added by CH6.2c (§5). Open MPI 4.1.6, the P2P kernel
+  `Auto` (AVX-512 there).
 
 Release builds, rustc 1.99.0, Open MPI 5.0.11 (M6) and 5.0.10 (locust), BLAS threads 1,
 the P2P kernel `Auto` (NEON on both), the default waves budget (8 GiB per node). Commands:
@@ -51,7 +58,7 @@ the P2P kernel `Auto` (NEON on both), the default waves budget (8 GiB per node).
   sphere at kD = 100 at 10⁻⁶ (1.03–1.06× Rotation's M2L, 1.65–1.88× the per-level best).
   The rule cannot choose by the thread count, which would make the output depend on it
   (proposal §2, constraint 2): a finer split of the coarse levels' level call, or a rule by
-  the level's boxes (a function of the tree, constraint 9), is CH6.2c's to weigh with D8
+  the level's boxes (a function of the tree, constraint 9), is CH6.2e's to weigh with D8
   (§7).
 - **Batched above Auto's crossover is slow**: 2–10× Rotation's M2L at p ≥ 15 on both
   machines (its tables, hundreds of MB per level, streamed per block), as CH3.2c measured;
@@ -63,9 +70,21 @@ the P2P kernel `Auto` (NEON on both), the default waves budget (8 GiB per node).
   10⁻⁶ held at every split (0.23–0.58× Rotation's M2L at 8 × 9, 0.38–0.70× at 72 × 1).
   The default waves budget held every case in memory: rank 0's peak 17.2 GB at 1 × 72 on
   W1 at kD = 500, 3.1 and 1.9 GB per rank at 8 × 9 and 72 × 1.
-- **Accuracy unchanged**: the exponential M2L's errors are 0.92–1.06× Rotation's on every
-  case (the rule of CH6.1e), and every evaluation's checksum is its strategy's on both
-  machines' ABBA pairs.
+- **Kathleen** (§5, added by CH6.2c) agrees: at 10⁻⁶ and 1 × 40 the exponential M2L took
+  0.24–0.61× Rotation's M2L on W1 at kD = 500, W3 at kD = 30 and 100, the four W4
+  distributions at kD = 1 and the W4 clusters at kD = 100 (W1 at kD = 500 0.50×, W3 at
+  kD = 100 0.24×; the evaluation 0.31–0.65× Auto's), and 0.73–0.92× on the other W4 cases
+  at kD = 100, held back by level 2: at 40 threads level 2 took 4.4–25× Rotation's time
+  (1.3–1.8× at 4 × 10, ten threads per rank). Auto's crossover is p ≤ 15 there (AVX-512),
+  so at 10⁻⁶ it runs Batched on levels of degree 15, slower than Rotation on small levels
+  (W1 at kD = 10, one level of 3,096 pairs: 33×) and slower than the exponential M2L on
+  levels of many parents. At 10⁻³ a per-level choice beats the best single strategy by up
+  to 2.10× (W3 at kD = 30; most cases 1.0–1.2×). One rank × 40 threads was the fastest
+  split on W1 at kD = 500 and within 0.91–1.09× of 4 × 10 on W3 at kD = 100; 40 × 1 was the
+  slowest for the exponential M2L (1.38–1.99× its 1 × 40 time).
+- **Accuracy unchanged**: the exponential M2L's errors are 0.92–1.07× Rotation's on every
+  case (the rule of CH6.1e), and every evaluation's checksum is its strategy's on all three
+  machines' ABBA pairs, and on Kathleen also the same at all three splits.
 
 ## 1. Method
 
@@ -171,6 +190,44 @@ strategy (s), the ABBA spread and the exponential M2L's errors over Rotation's (
 | locust | W4 sphere (N = 100000) | 1 | 1e-6 | 1×72 | 0.120 | 0.499 | 0.121 | 0.059 | 0.052 | 2.31 | 9.56 | 2.32 | 1.12 | 0.183 | 0.562 | 0.184 | 0.121 | 1.06 | 0.986/0.945 |
 | locust | W4 sphere (N = 100000) | 100 | 1e-3 | 1×72 | 0.056 | 0.507 | 0.055 | 0.120 | 0.050 | 1.11 | 10.12 | 1.10 | 2.39 | 0.087 | 0.540 | 0.088 | 0.152 | 1.04 | 1.000/1.000 |
 | locust | W4 sphere (N = 100000) | 100 | 1e-6 | 1×72 | 0.144 | 0.380 | 0.145 | 0.152 | 0.092 | 1.57 | 4.14 | 1.58 | 1.65 | 0.211 | 0.447 | 0.212 | 0.218 | 1.04 | 1.003/0.978 |
+| kathleen | W1 | 10 | 1e-3 | 1×40 | 0.001 | 0.005 | 0.004 | 0.013 | 0.001 | 1.00 | 10.22 | 7.15 | 24.35 | 0.002 | 0.007 | 0.006 | 0.015 | 1.29 | 1.000/1.000 |
+| kathleen | W1 | 10 | 1e-6 | 1×40 | 0.003 | 0.113 | 0.104 | 0.022 | 0.003 | 1.00 | 36.46 | 33.38 | 7.04 | 0.005 | 0.116 | 0.107 | 0.026 | 1.48 | 1.005/0.995 |
+| kathleen | W1 | 30 | 1e-3 | 1×40 | 0.007 | 0.044 | 0.044 | 0.047 | 0.007 | 1.00 | 6.75 | 6.77 | 7.18 | 0.012 | 0.050 | 0.051 | 0.053 | 1.10 | 1.000/1.000 |
+| kathleen | W1 | 30 | 1e-6 | 1×40 | 0.026 | 0.267 | 0.100 | 0.067 | 0.026 | 1.00 | 10.31 | 3.85 | 2.59 | 0.034 | 0.276 | 0.108 | 0.076 | 1.48 | 1.000/1.000 |
+| kathleen | W1 | 100 | 1e-3 | 1×40 | 0.225 | 0.472 | 0.168 | 0.417 | 0.171 | 1.32 | 2.77 | 0.99 | 2.44 | 0.316 | 0.558 | 0.251 | 0.504 | 1.23 | 1.000/1.000 |
+| kathleen | W1 | 100 | 1e-6 | 1×40 | 0.556 | 0.648 | 0.637 | 0.552 | 0.415 | 1.34 | 1.56 | 1.54 | 1.33 | 0.758 | 0.847 | 0.844 | 0.752 | 1.21 | 0.995/0.980 |
+| kathleen | W1 | 500 | 1e-3 | 1×40 | 21.771 | 19.579 | 19.420 | 15.370 | 13.118 | 1.66 | 1.49 | 1.48 | 1.17 | 23.570 | 21.407 | 21.334 | 17.160 | 1.09 | 1.000/1.000 |
+| kathleen | W1 | 500 | 1e-3 | 40×1 | 37.737 | 35.185 | 35.060 | 35.384 | 30.629 | 1.23 | 1.15 | 1.14 | 1.16 | 36.196 | 33.245 | 33.100 | 34.081 | 1.05 | 1.000/1.000 |
+| kathleen | W1 | 500 | 1e-3 | 4×10 | 24.686 | 22.113 | 24.074 | 17.835 | 15.630 | 1.58 | 1.41 | 1.54 | 1.14 | 25.746 | 23.356 | 24.731 | 19.035 | 1.17 | 1.000/1.000 |
+| kathleen | W1 | 500 | 1e-6 | 1×40 | 39.889 | 43.552 | 42.305 | 20.119 | 20.084 | 1.99 | 2.17 | 2.11 | 1.00 | 42.836 | 46.386 | 45.257 | 22.972 | 1.18 | 0.973/0.984 |
+| kathleen | W1 | 500 | 1e-6 | 40×1 | 64.585 | 65.598 | 64.911 | 44.346 | 44.539 | 1.45 | 1.47 | 1.46 | 1.00 | 61.646 | 61.722 | 61.433 | 43.910 | 1.03 | 0.973/0.984 |
+| kathleen | W1 | 500 | 1e-6 | 4×10 | 43.575 | 46.648 | 45.242 | 23.045 | 23.044 | 1.89 | 2.02 | 1.96 | 1.00 | 45.849 | 48.620 | 46.987 | 25.184 | 1.44 | 0.973/0.984 |
+| kathleen | W3 (N = 108849) | 30 | 1e-3 | 1×40 | 0.070 | 0.061 | 0.062 | 0.132 | 0.029 | 2.40 | 2.08 | 2.13 | 4.53 | 0.107 | 0.100 | 0.102 | 0.173 | 1.29 | 1.000/1.000 |
+| kathleen | W3 (N = 108849) | 30 | 1e-6 | 1×40 | 0.426 | 0.523 | 0.508 | 0.210 | 0.179 | 2.38 | 2.92 | 2.84 | 1.17 | 0.496 | 0.589 | 0.578 | 0.275 | 1.43 | 0.973/0.964 |
+| kathleen | W3 (N = 4031442) | 100 | 1e-3 | 1×40 | 5.540 | 1.954 | 1.831 | 4.923 | 1.699 | 3.26 | 1.15 | 1.08 | 2.90 | 6.906 | 3.278 | 3.123 | 6.308 | 1.36 | 1.000/1.000 |
+| kathleen | W3 (N = 4031442) | 100 | 1e-3 | 40×1 | 6.352 | 2.388 | 2.133 | 7.967 | 2.098 | 3.03 | 1.14 | 1.02 | 3.80 | 7.184 | 3.173 | 2.945 | 8.727 | 1.05 | 1.000/1.000 |
+| kathleen | W3 (N = 4031442) | 100 | 1e-3 | 4×10 | 6.584 | 2.101 | 2.060 | 5.061 | 1.864 | 3.53 | 1.13 | 1.11 | 2.72 | 7.495 | 2.986 | 2.985 | 6.030 | 1.32 | 1.000/1.000 |
+| kathleen | W3 (N = 4031442) | 100 | 1e-6 | 1×40 | 34.849 | 29.013 | 32.925 | 8.429 | 8.289 | 4.20 | 3.50 | 3.97 | 1.02 | 37.572 | 31.733 | 35.533 | 10.974 | 1.10 | 1.010/0.984 |
+| kathleen | W3 (N = 4031442) | 100 | 1e-6 | 40×1 | 39.737 | 33.038 | 32.842 | 14.043 | 13.671 | 2.91 | 2.42 | 2.40 | 1.03 | 41.628 | 34.991 | 34.798 | 15.858 | 1.04 | 1.010/0.984 |
+| kathleen | W3 (N = 4031442) | 100 | 1e-6 | 4×10 | 37.390 | 31.035 | 33.510 | 9.001 | 8.987 | 4.16 | 3.45 | 3.73 | 1.00 | 39.351 | 32.579 | 35.429 | 11.088 | 1.32 | 1.010/0.984 |
+| kathleen | W3 (N = 4032) | 10 | 1e-3 | 1×40 | 0.002 | 0.008 | 0.008 | 0.025 | 0.002 | 1.00 | 5.20 | 4.99 | 16.76 | 0.015 | 0.021 | 0.021 | 0.039 | 1.53 | 1.000/1.000 |
+| kathleen | W3 (N = 4032) | 10 | 1e-6 | 1×40 | 0.009 | 0.190 | 0.177 | 0.043 | 0.009 | 1.00 | 22.32 | 20.73 | 5.08 | 0.040 | 0.223 | 0.210 | 0.076 | 1.47 | 0.991/0.947 |
+| kathleen | W4 clusters (N = 100000) | 1 | 1e-3 | 1×40 | 0.111 | 0.063 | 0.064 | 0.192 | 0.055 | 2.00 | 1.13 | 1.15 | 3.47 | 0.261 | 0.213 | 0.219 | 0.344 | 1.50 | 1.000/1.000 |
+| kathleen | W4 clusters (N = 100000) | 1 | 1e-6 | 1×40 | 0.735 | 0.896 | 0.915 | 0.329 | 0.305 | 2.41 | 2.94 | 3.00 | 1.08 | 1.160 | 1.318 | 1.340 | 0.748 | 1.46 | 0.969/0.916 |
+| kathleen | W4 clusters (N = 100000) | 100 | 1e-3 | 1×40 | 0.128 | 0.110 | 0.122 | 0.278 | 0.067 | 1.89 | 1.62 | 1.81 | 4.13 | 0.278 | 0.268 | 0.277 | 0.433 | 1.23 | 1.000/1.000 |
+| kathleen | W4 clusters (N = 100000) | 100 | 1e-6 | 1×40 | 0.710 | 0.889 | 0.895 | 0.431 | 0.345 | 2.06 | 2.57 | 2.59 | 1.25 | 1.139 | 1.324 | 1.326 | 0.859 | 1.24 | 0.970/0.921 |
+| kathleen | W4 cube (N = 100000) | 1 | 1e-3 | 1×40 | 0.067 | 0.031 | 0.033 | 0.100 | 0.026 | 2.56 | 1.19 | 1.26 | 3.83 | 0.102 | 0.067 | 0.067 | 0.135 | 1.23 | 1.000/1.000 |
+| kathleen | W4 cube (N = 100000) | 1 | 1e-6 | 1×40 | 0.422 | 0.617 | 0.612 | 0.180 | 0.164 | 2.57 | 3.75 | 3.72 | 1.10 | 0.484 | 0.676 | 0.671 | 0.243 | 1.17 | 0.983/0.928 |
+| kathleen | W4 cube (N = 100000) | 100 | 1e-3 | 1×40 | 0.258 | 0.440 | 0.196 | 0.382 | 0.190 | 1.35 | 2.31 | 1.03 | 2.01 | 0.312 | 0.495 | 0.251 | 0.437 | 1.19 | 1.000/1.000 |
+| kathleen | W4 cube (N = 100000) | 100 | 1e-6 | 1×40 | 0.520 | 0.531 | 0.527 | 0.455 | 0.316 | 1.64 | 1.68 | 1.66 | 1.44 | 0.593 | 0.609 | 0.603 | 0.528 | 1.09 | 1.003/0.990 |
+| kathleen | W4 plummer (N = 100000) | 1 | 1e-3 | 1×40 | 0.087 | 0.059 | 0.054 | 0.178 | 0.052 | 1.68 | 1.14 | 1.05 | 3.44 | 0.244 | 0.219 | 0.211 | 0.342 | 1.35 | 1.000/1.000 |
+| kathleen | W4 plummer (N = 100000) | 1 | 1e-6 | 1×40 | 0.544 | 0.717 | 0.698 | 0.292 | 0.270 | 2.01 | 2.65 | 2.58 | 1.08 | 0.973 | 1.147 | 1.131 | 0.719 | 1.21 | 1.063/0.940 |
+| kathleen | W4 plummer (N = 100000) | 100 | 1e-3 | 1×40 | 0.269 | 0.503 | 0.206 | 0.461 | 0.208 | 1.29 | 2.41 | 0.99 | 2.21 | 0.434 | 0.664 | 0.369 | 0.628 | 1.26 | 1.000/1.000 |
+| kathleen | W4 plummer (N = 100000) | 100 | 1e-6 | 1×40 | 0.837 | 0.997 | 0.966 | 0.610 | 0.465 | 1.80 | 2.14 | 2.08 | 1.31 | 1.257 | 1.419 | 1.391 | 1.032 | 1.14 | 1.013/0.955 |
+| kathleen | W4 sphere (N = 100000) | 1 | 1e-3 | 1×40 | 0.086 | 0.039 | 0.040 | 0.158 | 0.034 | 2.53 | 1.15 | 1.17 | 4.64 | 0.158 | 0.114 | 0.116 | 0.231 | 1.18 | 1.000/1.000 |
+| kathleen | W4 sphere (N = 100000) | 1 | 1e-6 | 1×40 | 0.548 | 0.707 | 0.679 | 0.281 | 0.267 | 2.05 | 2.65 | 2.55 | 1.05 | 0.738 | 0.895 | 0.871 | 0.471 | 1.21 | 0.986/0.945 |
+| kathleen | W4 sphere (N = 100000) | 100 | 1e-3 | 1×40 | 0.242 | 0.417 | 0.176 | 0.424 | 0.175 | 1.38 | 2.39 | 1.01 | 2.43 | 0.326 | 0.505 | 0.260 | 0.515 | 1.26 | 1.000/1.000 |
+| kathleen | W4 sphere (N = 100000) | 100 | 1e-6 | 1×40 | 0.622 | 0.706 | 0.726 | 0.573 | 0.434 | 1.43 | 1.62 | 1.67 | 1.32 | 0.824 | 0.909 | 0.930 | 0.779 | 1.15 | 1.003/0.978 |
 
 ## 3. Per level
 
@@ -235,9 +292,9 @@ Batched (Auto) on levels 5–6 of degree 7 (W3 at kD = 100, locust, 1 × 72):
 | Σ | | | 1.3335 | 1.3439 | 0.9347 | 1.3188 | best 0.8758 | |
 | evaluate | | | 2.023 | 2.024 | 1.615 | 1.999 | | |
 
-## 4. Ranks × threads (locust)
+## 4. Ranks × threads (locust, Kathleen)
 
-The large cases at 1 × 72, 8 × 9 (`--map-by slot:PE=9 --bind-to core`) and 72 × 1, the
+On locust the large cases at 1 × 72, 8 × 9 (`--map-by slot:PE=9 --bind-to core`) and 72 × 1, the
 evaluation's seconds per strategy (ABBA means; the summary has the M2L):
 
 | case | ε | split | Rotation | Batched (fused) | Auto | exponential | rank 0 peak MB |
@@ -262,16 +319,72 @@ slowest (the exponential M2L at 10⁻³ 1.5× its 1 × 72 time). The exponential
 72 × 1). Rank 0's peak is the 1 × 72 run's whole tree; at 8 × 9 and 72 × 1 a rank holds
 its share (and its share of the default 8 GiB waves budget per node).
 
-## 5. Kathleen (moved to CH6.2c)
+On Kathleen (added by CH6.2c) at 1 × 40, 4 × 10 (CH3.6's split, two ranks per socket,
+`--map-by slot:PE=10 --bind-to core`) and 40 × 1, the evaluation's seconds per strategy
+(ABBA means; rank 0's peak the larger of the two launches):
 
-Job 628611 (one node, node-c11a-142, 43 min, 2026-11-04: the build, `matrix` and `large`
-at 1 × 40) completed with every launch's exit 0; its outputs are on Kathleen
-(`/scratch/scratch/ucahtbe/fmm/logs/ch6-2b/`) and were not fetched: from 2026-11-04 10:10
-Kathleen's login node refused every connection, so neither the fetch nor the second job
-(`large` at 4 × 10 and 40 × 1) could run. On 2026-11-04 the user moved both to CH6.2c,
-which runs on Kathleen anyway: Kathleen's per-level tables (the x86 AVX-512 class, where
-Auto's crossover differs, and a two-socket node) are added to this section there, before D8
-is proposed.
+| case | ε | split | Rotation | Batched (fused) | Auto | exponential | rank 0 peak MB |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| W1, kD = 500 | 1e-3 | 1 × 40 | 23.570 | 21.407 | 21.334 | 17.160 | 15,053 |
+| W1, kD = 500 | 1e-3 | 4 × 10 | 25.746 | 23.356 | 24.731 | 19.035 | 4,834 |
+| W1, kD = 500 | 1e-3 | 40 × 1 | 36.196 | 33.245 | 33.100 | 34.081 | 1,979 |
+| W1, kD = 500 | 1e-6 | 1 × 40 | 42.836 | 46.386 | 45.257 | 22.972 | 15,053 |
+| W1, kD = 500 | 1e-6 | 4 × 10 | 45.849 | 48.620 | 46.987 | 25.184 | 4,834 |
+| W1, kD = 500 | 1e-6 | 40 × 1 | 61.646 | 61.722 | 61.433 | 43.910 | 1,979 |
+| W3, kD = 100 | 1e-3 | 1 × 40 | 6.906 | 3.278 | 3.123 | 6.308 | 14,296 |
+| W3, kD = 100 | 1e-3 | 4 × 10 | 7.495 | 2.986 | 2.985 | 6.030 | 4,402 |
+| W3, kD = 100 | 1e-3 | 40 × 1 | 7.184 | 3.173 | 2.945 | 8.727 | 1,514 |
+| W3, kD = 100 | 1e-6 | 1 × 40 | 37.572 | 31.733 | 35.533 | 10.974 | 14,296 |
+| W3, kD = 100 | 1e-6 | 4 × 10 | 39.351 | 32.579 | 35.429 | 11.088 | 4,402 |
+| W3, kD = 100 | 1e-6 | 40 × 1 | 41.628 | 34.991 | 34.798 | 15.858 | 1,514 |
+
+As on locust, one rank with all cores is the fastest split on W1 at kD = 500 under every
+strategy (the exponential M2L at 10⁻⁶ 23.0 s against 25.2 s at 4 × 10 and 43.9 s at
+40 × 1), and on W3 at kD = 100 1 × 40 and 4 × 10 are within 0.91–1.09× of each other. 40 × 1
+is the slowest on W1 at kD = 500 and for the exponential M2L (1.38–1.99× its 1 × 40 time,
+Rotation 1.04–1.54×); on W3 at kD = 100 at 10⁻³ the table-based strategies run as fast at
+40 × 1 as at the other splits. Level 2 under the exponential M2L took 5.4–8.1× Rotation's
+time on W3 at kD = 100 at 1 × 40 (W1 at kD = 500 runs Rotation there), 5.5–7.9× at 40 × 1 and 1.3–1.8× at 4 × 10; why the middle
+split suffers least is CH6.2e's to find out with the coarse levels' remedy. The exponential M2L's gain at 10⁻⁶ holds
+at every split (0.24–0.69× Rotation's M2L). Two sockets do not change locust's answer: the
+large cases run fastest as one rank per node, or two per socket within 10 %.
+
+## 5. Kathleen (added by CH6.2c)
+
+Moved here on 2026-11-04 while Kathleen's login node refused every connection, and run by
+CH6.2c: job 628611 (`matrix` and `large` at 1 × 40, completed 2026-11-04, its outputs
+fetched 2026-11-06) and job 629953 (`large` at 4 × 10 and 40 × 1, 70 min). The x86
+AVX-512 class and a two-socket node change the picture in two places, not in its shape:
+
+- **At ε = 10⁻⁶ the exponential M2L is again the fastest method on the levels with a
+  quadrature and enough parents** (§2, the appendix): on W1 at kD = 500 0.27–0.52× Rotation's
+  time on levels 4–7 at 1 × 40 (the M2L 20.1 s against 39.9 s), on W3 at kD = 100 0.23–0.50×
+  on levels 4–6 (8.4 s against 34.8 s); within 1.05–1.10× of the per-level best on the W4
+  cases at kD = 1, 1.25–1.44× at kD = 100, where level 2 (p = 25–35, 3,096 pairs) costs
+  5.4–6.0× Rotation's time at 40 threads (locust: 9.3× at 72). Over every case level 2 took
+  4.4–25× Rotation's time at 1 × 40 (the most at 10⁻³ and p = 7), 1.3–1.8× at 4 × 10.
+- **Auto runs Batched to p = 15** (CH3.2d's crossover on AVX-512; 10 on NEON), so at 10⁻⁶
+  every level of degree 15 runs Batched under Auto, which on sparse or small levels is
+  slower than Rotation: W1 at kD = 10, one level of 3,096 pairs, 0.104 s against 0.003 s
+  (33×); W1 at kD = 500's level 7, 11.3 s against 9.5 s. On the dense W3 at kD = 100 Batched
+  is 0.83–1.02× Rotation's at p = 15. On the levels of many parents the exponential M2L
+  beats both (0.23–0.52× Rotation's); on the small ones Rotation does. CH4.0 (the rule's sparse-level term) already covers the first; for D8 it
+  means that on Kathleen at 10⁻⁶ the exponential M2L replaces Batched, not only Rotation.
+- **At ε = 10⁻³ a per-level choice gains more than on the other machines**: up to 2.10× over
+  the best single strategy (W3 at kD = 30: Rotation on levels 2–3, Batched on level 4), 1.64×
+  on the W4 clusters at kD = 100, 1.17× on W1 at kD = 500 (the exponential M2L on levels
+  4–6, Batched on 7); the M6 and locust gave up to 1.32×. Batched wins the levels of degree
+  7–11, the exponential M2L those of degree 13–36 with many parents, Rotation the coarse
+  ones.
+- **The splits** (§4): 1 × 40 fastest on W1 at kD = 500, 1 × 40 and 4 × 10 within 10 % on W3
+  at kD = 100, 40 × 1 the slowest for the exponential M2L.
+- Every evaluation's checksum is its strategy's in both launches of all 152 ABBA pairs, and
+  each large case's checksum is the same at 1 × 40, 4 × 10 and 40 × 1, across the two
+  sources (rank and thread invariance); the exponential M2L's errors are 0.92–1.07×
+  Rotation's. The ABBA spread is up to 1.53× on a level (small cases at 40 threads).
+
+The raw outputs are archived in `~/projects/fmm-archive/kathleen/logs/ch6-2b/` (the Mac),
+as the report's tables come from them (§8).
 
 ## 6. Runs and defects found on the way
 
@@ -285,16 +398,18 @@ is proposed.
   contended and repeated; that run was stopped and discarded, the gate fixed (cd67415)
   and the M6's runs made again. The one repeat in the M6's log is a real contention.
 - Every evaluation's checksum is its strategy's in both launches of a pair (104 pairs on
-  the M6, 152 on locust), and the exponential M2L's errors are 0.92–1.06× Rotation's.
+  the M6, 152 on locust, 152 on Kathleen), and the exponential M2L's errors are
+  0.92–1.07× Rotation's.
+- Kathleen: every launch of jobs 628611 and 629953 exited 0; no repeat.
 - The ABBA spread: up to 1.46× on a level on the M6 (6 threads, its known ±25 % at this
   size; CH3.4c) and up to 2.5× on locust's 8 × 9 split (W1 at kD = 500, 10⁻³); the
   summary's ratios between strategies are larger than that on the cases it draws from.
 
-## 7. Observations for CH6.2c and D8
+## 7. Observations for D8 (CH6.2e)
 
 - **At ε ≥ 10⁻⁶ the exponential M2L is the fastest method on the levels with a quadrature
   and enough parents, and close to the per-level best as a whole** (1.00–1.01× on the M6's
-  larger cases at 10⁻⁶, 1.00–1.04× on locust's large ones). A default that took it there
+  larger cases at 10⁻⁶, 1.00–1.04× on locust's large ones, 1.00–1.02× on Kathleen's). A default that took it there
   would cut the evaluation to 0.27–0.52× Auto's at 10⁻⁶ on the M6 and 0.30–0.49× on the
   large cases on locust; at 10⁻³ the gain is smaller and the choice per level matters.
 - **The level rule D8 needs** reads the level's degree, ε and its boxes (a function of the
@@ -303,11 +418,19 @@ is proposed.
   the quadratures' tables. The threads cannot enter it (constraint 2), so the coarse levels'
   loss at many threads is fixed in the level call (a split of the merge and shift below the
   parent, by frame, direction or child, and of the outgoing waves by box), or the rule takes
-  Rotation on levels of few parents on every machine. CH6.2c's line records it.
-- **Batched above the crossover** stays slow (2–10× Rotation's M2L at p ≥ 15 on both
-  machines): Auto is right not to take it.
+  Rotation on levels of few parents on every machine. CH6.2e's line records it. Kathleen's
+  level 2 adds a third machine to the evidence (4.4–25× Rotation's at 1 × 40) and a hint
+  for the remedy: at 4 × 10 the same level took 1.3–1.8×.
+- **Batched above the crossover** stays slow (2–10× Rotation's M2L at p ≥ 15 on the M6 and
+  locust): Auto is right not to take it. On Kathleen Auto's crossover is 15, and at 10⁻⁶ the
+  exponential M2L beats Batched on every level of degree 15–16 with many parents (0.23–0.52×
+  Rotation's against Batched's 0.83–1.27×); a D8 rule that takes the exponential M2L ahead
+  of Batched at p above about 12 is right on all three machines.
+- **At 10⁻³** the per-level choice among Batched, the exponential M2L and Rotation gains up
+  to 1.32× on the M6 and locust and 2.10× on Kathleen: D8's rule is per level, not per run.
 - **The splits**: on locust one rank with all 72 cores was fastest or within 10 % of
-  8 × 9, and 72 × 1 the slowest; on Kathleen (two sockets) CH3.6's 4 × 10 is CH6.2c's (§5).
+  8 × 9, and 72 × 1 the slowest; on Kathleen (two sockets) 1 × 40 was fastest or within
+  10 % of CH3.6's 4 × 10, and 40 × 1 the slowest for the exponential M2L (§4).
 
 ## 8. Reproducing
 
@@ -315,12 +438,13 @@ is proposed.
 cargo build --release -p nd-fmm-validate --example helmholtz_accuracy
 THREADS=6 tools/helmholtz/ch6-2b-runs.sh <out> matrix                          # the M6, unsandboxed
 THREADS=72 SPLITS="1x72 8x9 72x1" tools/helmholtz/ch6-2b-runs.sh <out> matrix large   # locust
-tools/helmholtz/ch6-2b-tables.py m6=<out-m6> locust=<out-locust> > tables.md
+tools/helmholtz/ch6-2b-tables.py m6=<out-m6> locust=<out-locust> kathleen=<out-kathleen> > tables.md
 ```
 
-On Kathleen inside one-node jobs (`tools/kathleen/submit.sh --time=06:00:00 -- run.sbatch
-'<build>' 'THREADS=40 tools/helmholtz/ch6-2b-runs.sh <out> matrix large'`, then
-`SPLITS="4x10 40x1"` with `large`).
+On Kathleen inside one-node jobs: `tools/kathleen/submit.sh --time=06:00:00 -- run.sbatch
+'cargo build --release -p nd-fmm-validate --example helmholtz_accuracy' 'THREADS=40
+tools/helmholtz/ch6-2b-runs.sh <out> matrix large'` (job 628611), then the same with
+`'THREADS=40 SPLITS="4x10 40x1" tools/helmholtz/ch6-2b-runs.sh <out> large'` (job 629953).
 
 ## Appendix: every case per level
 
@@ -1062,3 +1186,444 @@ other method; Σ the levels summed, "evaluate" the evaluation.
 | Σ | | | 0.1442 | 0.3799 | 0.1448 | 0.1517 | best 0.0918 | |
 | evaluate | | | 0.211 | 0.447 | 0.212 | 0.218 | | |
 
+### Kathleen
+
+#### W1 (N = 796), kD = 10, ε = 1e-3, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 7 | 3096 | 0.0005 | 0.0053 | 0.0037 (batched-fused) | 0.0126 (planewave i2) | rotation | 24.35 |
+| Σ | | | 0.0005 | 0.0053 | 0.0037 | 0.0126 | best 0.0005 | |
+| evaluate | | | 0.002 | 0.007 | 0.006 | 0.015 | | |
+
+#### W1 (N = 796), kD = 10, ε = 1e-6, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 15 | 3096 | 0.0031 | 0.1132 | 0.1036 (batched-fused) | 0.0219 (planewave i2) | rotation | 7.04 |
+| Σ | | | 0.0031 | 0.1132 | 0.1036 | 0.0219 | best 0.0031 | |
+| evaluate | | | 0.005 | 0.116 | 0.107 | 0.026 | | |
+
+#### W1 (N = 7162), kD = 30, ε = 1e-3, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 12 | 3096 | 0.0016 | 0.0362 | 0.0365 (batched-fused) | 0.0250 (planewave i2) | rotation | 15.35 |
+| 3 | 8 | 32256 | 0.0049 | 0.0080 | 0.0079 (batched-fused) | 0.0220 (planewave i2) | rotation | 4.48 |
+| Σ | | | 0.0065 | 0.0442 | 0.0444 | 0.0470 | best 0.0065 | |
+| evaluate | | | 0.012 | 0.050 | 0.051 | 0.053 | | |
+
+#### W1 (N = 7162), kD = 30, ε = 1e-6, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 16 | 3096 | 0.0036 | 0.1636 | 0.0043 (rot.) | 0.0318 (planewave i2) | rotation | 8.83 |
+| 3 | 15 | 32256 | 0.0223 | 0.1037 | 0.0955 (batched-fused) | 0.0352 (planewave i2) | rotation | 1.58 |
+| Σ | | | 0.0259 | 0.2673 | 0.0998 | 0.0671 | best 0.0259 | |
+| evaluate | | | 0.034 | 0.276 | 0.108 | 0.076 | | |
+
+#### W1 (N = 79578), kD = 100, ε = 1e-3, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 30 | 3096 | 0.0200 | 0.0202 (rot.) | 0.0196 (rot.) | 0.1478 (planewave i2) | rotation | 7.39 |
+| 3 | 18 | 53352 | 0.0629 | 0.3639 | 0.0611 (rot.) | 0.0837 (planewave i2) | rotation | 1.33 |
+| 4 | 11 | 385344 | 0.1146 | 0.0792 | 0.0798 (batched-fused) | 0.1085 (planewave i2) | batched-fused | 1.37 |
+| 5 | 7 | 244944 | 0.0276 | 0.0085 | 0.0078 (batched-fused) | 0.0767 (planewave i2) | batched-fused | 9.07 |
+| Σ | | | 0.2251 | 0.4718 | 0.1683 | 0.4167 | best 0.1706 | |
+| evaluate | | | 0.316 | 0.558 | 0.251 | 0.504 | | |
+
+#### W1 (N = 79578), kD = 100, ε = 1e-6, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 35 | 3096 | 0.0316 | 0.0298 (rot.) | 0.0306 (rot.) | 0.1687 (planewave i2) | rotation | 5.34 |
+| 3 | 22 | 53352 | 0.1103 | 0.1094 (rot.) | 0.1075 (rot.) | 0.1004 (planewave i2) | planewave i2 | 0.91 |
+| 4 | 15 | 385344 | 0.2541 | 0.3069 | 0.2988 (batched-fused) | 0.1412 (planewave i2) | planewave i2 | 0.56 |
+| 5 | 15 | 244944 | 0.1602 | 0.2022 | 0.2004 (batched-fused) | 0.1418 (planewave i2) | planewave i2 | 0.89 |
+| Σ | | | 0.5562 | 0.6483 | 0.6372 | 0.5521 | best 0.4150 | |
+| evaluate | | | 0.758 | 0.847 | 0.844 | 0.752 | | |
+
+#### W1 (N = 1989437), kD = 500, ε = 1e-3, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 123 | 3096 | 2.5902 | 2.6906 (rot.) | 2.6163 (rot.) | 2.6565 (rot.) | rotation | nan |
+| 3 | 66 | 53352 | 3.4979 | 3.4022 (rot.) | 3.2857 (rot.) | 3.5533 (rot.) | rotation | nan |
+| 4 | 36 | 511200 | 4.0569 | 4.0589 (rot.) | 4.0648 (rot.) | 1.4924 (planewave i2) | planewave i2 | 0.37 |
+| 5 | 21 | 2935296 | 4.9034 | 4.9078 (rot.) | 4.9137 (rot.) | 1.9887 (planewave i2) | planewave i2 | 0.41 |
+| 6 | 13 | 10439280 | 4.7081 | 3.7007 | 3.7059 (batched-fused) | 2.7299 (planewave i2) | planewave i2 | 0.74 |
+| 7 | 8 | 14492220 | 2.0144 | 0.8188 | 0.8333 (batched-fused) | 2.9492 (planewave i2) | batched-fused | 3.60 |
+| Σ | | | 21.7710 | 19.5791 | 19.4196 | 15.3700 | best 13.1180 | |
+| evaluate | | | 23.570 | 21.407 | 21.334 | 17.160 | | |
+
+#### W1 (N = 1989437), kD = 500, ε = 1e-3, 40 × 1
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 123 | 3096 | 6.1851 | 6.1759 (rot.) | 6.2446 (rot.) | 6.2583 (rot.) | rotation | nan |
+| 3 | 66 | 53352 | 8.1444 | 8.4955 (rot.) | 8.2447 (rot.) | 8.2493 (rot.) | rotation | nan |
+| 4 | 36 | 511200 | 7.4743 | 7.8909 (rot.) | 7.8942 (rot.) | 7.9423 (planewave i2) | rotation | 1.06 |
+| 5 | 21 | 2935296 | 7.7697 | 8.0251 (rot.) | 8.0633 (rot.) | 4.2283 (planewave i2) | planewave i2 | 0.54 |
+| 6 | 13 | 10439280 | 5.7938 | 3.7059 | 3.7216 (batched-fused) | 4.8073 (planewave i2) | batched-fused | 1.30 |
+| 7 | 8 | 14492220 | 2.3695 | 0.8913 | 0.8913 (batched-fused) | 3.8984 (planewave i2) | batched-fused | 4.37 |
+| Σ | | | 37.7368 | 35.1846 | 35.0596 | 35.3838 | best 30.6293 | |
+| evaluate | | | 36.196 | 33.245 | 33.100 | 34.081 | | |
+
+#### W1 (N = 1989437), kD = 500, ε = 1e-3, 4 × 10
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 123 | 3096 | 4.4814 | 4.2091 (rot.) | 4.4913 (rot.) | 4.5767 (rot.) | rotation | nan |
+| 3 | 66 | 53352 | 3.4451 | 3.5834 (rot.) | 3.6048 (rot.) | 3.3875 (rot.) | rotation | nan |
+| 4 | 36 | 511200 | 4.4697 | 4.3179 (rot.) | 4.3961 (rot.) | 1.8329 (planewave i2) | planewave i2 | 0.41 |
+| 5 | 21 | 2935296 | 5.1309 | 5.6607 (rot.) | 7.5011 (rot.) | 2.1501 (planewave i2) | planewave i2 | 0.42 |
+| 6 | 13 | 10439280 | 4.9848 | 3.5233 | 3.2623 (batched-fused) | 2.9021 (planewave i2) | planewave i2 | 0.82 |
+| 7 | 8 | 14492220 | 2.1738 | 0.8188 | 0.8188 (batched-fused) | 2.9854 (planewave i2) | batched-fused | 3.65 |
+| Σ | | | 24.6856 | 22.1132 | 24.0744 | 17.8347 | best 15.6304 | |
+| evaluate | | | 25.746 | 23.356 | 24.731 | 19.035 | | |
+
+#### W1 (N = 1989437), kD = 500, ε = 1e-6, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 131 | 3096 | 3.0801 | 3.0873 (rot.) | 3.2654 (rot.) | 3.2295 (rot.) | rotation | nan |
+| 3 | 72 | 53352 | 4.8835 | 4.7770 (rot.) | 4.6688 (rot.) | 4.7687 (rot.) | rotation | nan |
+| 4 | 41 | 511200 | 6.0605 | 6.0406 (rot.) | 6.0066 (rot.) | 1.6611 (planewave i2) | planewave i2 | 0.27 |
+| 5 | 25 | 2935296 | 8.1704 | 8.1704 (rot.) | 8.8939 (rot.) | 2.2514 (planewave i2) | planewave i2 | 0.28 |
+| 6 | 16 | 10439280 | 8.1583 | 9.3327 | 8.1374 (rot.) | 3.2518 (planewave i2) | planewave i2 | 0.40 |
+| 7 | 15 | 14492220 | 9.5359 | 12.1445 | 11.3329 (batched-fused) | 4.9563 (planewave i2) | planewave i2 | 0.52 |
+| Σ | | | 39.8887 | 43.5525 | 42.3051 | 20.1188 | best 20.0843 | |
+| evaluate | | | 42.836 | 46.386 | 45.257 | 22.972 | | |
+
+#### W1 (N = 1989437), kD = 500, ε = 1e-6, 40 × 1
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 131 | 3096 | 7.4152 | 7.3814 (rot.) | 7.3393 (rot.) | 7.4342 (rot.) | rotation | nan |
+| 3 | 72 | 53352 | 10.7703 | 10.6710 (rot.) | 10.7934 (rot.) | 10.5580 (rot.) | rotation | nan |
+| 4 | 41 | 511200 | 11.2490 | 12.2435 (rot.) | 11.2965 (rot.) | 8.8085 (planewave i2) | planewave i2 | 0.78 |
+| 5 | 25 | 2935296 | 13.5904 | 15.4690 (rot.) | 14.1525 (rot.) | 4.8741 (planewave i2) | planewave i2 | 0.36 |
+| 6 | 16 | 10439280 | 10.3871 | 9.3484 | 11.1126 (rot.) | 5.9034 (planewave i2) | planewave i2 | 0.63 |
+| 7 | 15 | 14492220 | 11.1735 | 10.4851 | 10.2170 (batched-fused) | 6.7679 (planewave i2) | planewave i2 | 0.65 |
+| Σ | | | 64.5854 | 65.5985 | 64.9113 | 44.3460 | best 44.5393 | |
+| evaluate | | | 61.646 | 61.722 | 61.433 | 43.910 | | |
+
+#### W1 (N = 1989437), kD = 500, ε = 1e-6, 4 × 10
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 131 | 3096 | 5.0312 | 5.3417 (rot.) | 5.0570 (rot.) | 5.1006 (rot.) | rotation | nan |
+| 3 | 72 | 53352 | 4.8371 | 4.8492 (rot.) | 4.8871 (rot.) | 4.7687 (rot.) | rotation | nan |
+| 4 | 41 | 511200 | 6.4582 | 8.0966 (rot.) | 7.7649 (rot.) | 2.0453 (planewave i2) | planewave i2 | 0.32 |
+| 5 | 25 | 2935296 | 8.5505 | 9.0994 (rot.) | 8.6063 (rot.) | 2.4745 (planewave i2) | planewave i2 | 0.29 |
+| 6 | 16 | 10439280 | 8.6907 | 8.7325 | 8.8473 (rot.) | 3.4972 (planewave i2) | planewave i2 | 0.40 |
+| 7 | 15 | 14492220 | 10.0069 | 10.5286 | 10.0793 (batched-fused) | 5.1592 (planewave i2) | planewave i2 | 0.52 |
+| Σ | | | 43.5746 | 46.6480 | 45.2419 | 23.0454 | best 23.0444 | |
+| evaluate | | | 45.849 | 48.620 | 46.987 | 25.184 | | |
+
+#### W3 (N = 108849), kD = 30, ε = 1e-3, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 12 | 3096 | 0.0017 | 0.0309 | 0.0308 (batched-fused) | 0.0252 (planewave i2) | rotation | 14.86 |
+| 3 | 8 | 53352 | 0.0082 | 0.0105 | 0.0108 (batched-fused) | 0.0267 (planewave i2) | rotation | 3.27 |
+| 4 | 7 | 584136 | 0.0602 | 0.0193 | 0.0204 (batched-fused) | 0.0800 (planewave i2) | batched-fused | 4.15 |
+| Σ | | | 0.0700 | 0.0607 | 0.0620 | 0.1319 | best 0.0291 | |
+| evaluate | | | 0.107 | 0.100 | 0.102 | 0.173 | | |
+
+#### W3 (N = 108849), kD = 30, ε = 1e-6, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 16 | 3096 | 0.0049 | 0.0043 (rot.) | 0.0042 (rot.) | 0.0318 (planewave i2) | rotation | 6.42 |
+| 3 | 15 | 53352 | 0.0397 | 0.1173 | 0.1207 (batched-fused) | 0.0435 (planewave i2) | rotation | 1.09 |
+| 4 | 15 | 584136 | 0.3817 | 0.4013 | 0.3829 (batched-fused) | 0.1344 (planewave i2) | planewave i2 | 0.35 |
+| Σ | | | 0.4264 | 0.5229 | 0.5077 | 0.2096 | best 0.1790 | |
+| evaluate | | | 0.496 | 0.589 | 0.578 | 0.275 | | |
+
+#### W3 (N = 4031442), kD = 100, ε = 1e-3, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 30 | 3096 | 0.0188 | 0.0196 (rot.) | 0.0203 (rot.) | 0.1525 (planewave i2) | rotation | 8.11 |
+| 3 | 18 | 53352 | 0.0616 | 0.3163 | 0.0616 (rot.) | 0.0861 (planewave i2) | rotation | 1.40 |
+| 4 | 11 | 584136 | 0.1726 | 0.1057 | 0.1081 (batched-fused) | 0.1490 (planewave i2) | batched-fused | 1.41 |
+| 5 | 7 | 5398920 | 0.5642 | 0.1701 | 0.1593 (batched-fused) | 0.5534 (planewave i2) | batched-fused | 3.25 |
+| 6 | 7 | 46298376 | 4.7224 | 1.3427 | 1.4815 (batched-fused) | 3.9817 (planewave i2) | batched-fused | 2.97 |
+| Σ | | | 5.5397 | 1.9543 | 1.8308 | 4.9227 | best 1.6989 | |
+| evaluate | | | 6.906 | 3.278 | 3.123 | 6.308 | | |
+
+#### W3 (N = 4031442), kD = 100, ε = 1e-3, 40 × 1
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 30 | 3096 | 0.0356 | 0.0348 (rot.) | 0.0341 (rot.) | 0.2806 (planewave i2) | rotation | 7.88 |
+| 3 | 18 | 53352 | 0.0992 | 0.3903 | 0.1069 (rot.) | 0.2404 (planewave i2) | rotation | 2.42 |
+| 4 | 11 | 584136 | 0.2319 | 0.1425 | 0.1434 (batched-fused) | 0.3519 (planewave i2) | batched-fused | 2.47 |
+| 5 | 7 | 5398920 | 0.6614 | 0.1998 | 0.2052 (batched-fused) | 0.9367 (planewave i2) | batched-fused | 4.69 |
+| 6 | 7 | 46298376 | 5.3243 | 1.6204 | 1.6436 (batched-fused) | 6.1577 (planewave i2) | batched-fused | 3.80 |
+| Σ | | | 6.3524 | 2.3878 | 2.1332 | 7.9673 | best 2.0975 | |
+| evaluate | | | 7.184 | 3.173 | 2.945 | 8.727 | | |
+
+#### W3 (N = 4031442), kD = 100, ε = 1e-3, 4 × 10
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 30 | 3096 | 0.0348 | 0.0343 (rot.) | 0.0358 (rot.) | 0.0624 (planewave i2) | rotation | 1.80 |
+| 3 | 18 | 53352 | 0.0624 | 0.2999 | 0.0630 (rot.) | 0.0810 (planewave i2) | rotation | 1.30 |
+| 4 | 11 | 584136 | 0.1732 | 0.1081 | 0.1098 (batched-fused) | 0.1495 (planewave i2) | batched-fused | 1.38 |
+| 5 | 7 | 5398920 | 0.6884 | 0.1539 | 0.1620 (batched-fused) | 0.5777 (planewave i2) | batched-fused | 3.75 |
+| 6 | 7 | 46298376 | 5.6253 | 1.5047 | 1.6899 (batched-fused) | 4.1900 (planewave i2) | batched-fused | 2.78 |
+| Σ | | | 6.5840 | 2.1009 | 2.0605 | 5.0607 | best 1.8638 | |
+| evaluate | | | 7.495 | 2.986 | 2.985 | 6.030 | | |
+
+#### W3 (N = 4031442), kD = 100, ε = 1e-6, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 35 | 3096 | 0.0321 | 0.0296 (rot.) | 0.0316 (rot.) | 0.1724 (planewave i2) | rotation | 5.37 |
+| 3 | 22 | 53352 | 0.1089 | 0.1080 (rot.) | 0.1085 (rot.) | 0.1019 (planewave i2) | planewave i2 | 0.94 |
+| 4 | 15 | 584136 | 0.3823 | 0.3890 | 0.3896 (batched-fused) | 0.1893 (planewave i2) | planewave i2 | 0.50 |
+| 5 | 15 | 5398920 | 3.7226 | 3.1611 | 3.2043 (batched-fused) | 0.9745 (planewave i2) | planewave i2 | 0.31 |
+| 6 | 15 | 46298376 | 30.6032 | 25.3252 | 29.1911 (batched-fused) | 6.9911 (planewave i2) | planewave i2 | 0.28 |
+| Σ | | | 34.8491 | 29.0128 | 32.9251 | 8.4291 | best 8.2888 | |
+| evaluate | | | 37.572 | 31.733 | 35.533 | 10.974 | | |
+
+#### W3 (N = 4031442), kD = 100, ε = 1e-6, 40 × 1
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 35 | 3096 | 0.0571 | 0.0561 (rot.) | 0.0571 (rot.) | 0.3124 (planewave i2) | rotation | 5.47 |
+| 3 | 22 | 53352 | 0.1807 | 0.1928 (rot.) | 0.1925 (rot.) | 0.2972 (planewave i2) | rotation | 1.64 |
+| 4 | 15 | 584136 | 0.5213 | 0.5517 | 0.5503 (batched-fused) | 0.4632 (planewave i2) | planewave i2 | 0.89 |
+| 5 | 15 | 5398920 | 4.3002 | 3.6254 | 3.6146 (batched-fused) | 1.7196 (planewave i2) | planewave i2 | 0.47 |
+| 6 | 15 | 46298376 | 34.6775 | 28.6124 | 28.4272 (batched-fused) | 11.2505 (planewave i2) | planewave i2 | 0.39 |
+| Σ | | | 39.7369 | 33.0384 | 32.8416 | 14.0429 | best 13.6711 | |
+| evaluate | | | 41.628 | 34.991 | 34.798 | 15.858 | | |
+
+#### W3 (N = 4031442), kD = 100, ε = 1e-6, 4 × 10
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 35 | 3096 | 0.0555 | 0.0549 (rot.) | 0.0546 (rot.) | 0.0700 (planewave i2) | rotation | 1.26 |
+| 3 | 22 | 53352 | 0.1109 | 0.1140 (rot.) | 0.1113 (rot.) | 0.0920 (planewave i2) | planewave i2 | 0.83 |
+| 4 | 15 | 584136 | 0.3911 | 0.3829 | 0.3946 (batched-fused) | 0.2033 (planewave i2) | planewave i2 | 0.53 |
+| 5 | 15 | 5398920 | 4.4001 | 3.7226 | 3.2259 (batched-fused) | 1.0663 (planewave i2) | planewave i2 | 0.29 |
+| 6 | 15 | 46298376 | 32.4320 | 26.7605 | 29.7236 (batched-fused) | 7.5698 (planewave i2) | planewave i2 | 0.28 |
+| Σ | | | 37.3897 | 31.0348 | 33.5099 | 9.0014 | best 8.9869 | |
+| evaluate | | | 39.351 | 32.579 | 35.429 | 11.088 | | |
+
+#### W3 (N = 4032), kD = 10, ε = 1e-3, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 7 | 3096 | 0.0006 | 0.0050 | 0.0042 (batched-fused) | 0.0125 (planewave i2) | rotation | 20.30 |
+| 3 | 7 | 5544 | 0.0009 | 0.0029 | 0.0034 (batched-fused) | 0.0129 (planewave i2) | rotation | 14.33 |
+| Σ | | | 0.0015 | 0.0079 | 0.0076 | 0.0254 | best 0.0015 | |
+| evaluate | | | 0.015 | 0.021 | 0.021 | 0.039 | | |
+
+#### W3 (N = 4032), kD = 10, ε = 1e-6, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 15 | 3096 | 0.0036 | 0.1148 | 0.0974 (batched-fused) | 0.0212 (planewave i2) | rotation | 5.97 |
+| 3 | 15 | 5544 | 0.0050 | 0.0754 | 0.0793 (batched-fused) | 0.0220 (planewave i2) | rotation | 4.44 |
+| Σ | | | 0.0085 | 0.1902 | 0.1767 | 0.0433 | best 0.0085 | |
+| evaluate | | | 0.040 | 0.223 | 0.210 | 0.076 | | |
+
+#### W4 clusters (N = 100000), kD = 1, ε = 1e-3, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 7 | 3096 | 0.0005 | 0.0047 | 0.0045 (batched-fused) | 0.0113 (planewave i2) | rotation | 21.23 |
+| 3 | 7 | 19782 | 0.0024 | 0.0052 | 0.0058 (batched-fused) | 0.0127 (planewave i2) | rotation | 5.25 |
+| 4 | 7 | 43392 | 0.0049 | 0.0051 | 0.0054 (batched-fused) | 0.0157 (planewave i2) | rotation | 3.19 |
+| 5 | 7 | 106500 | 0.0114 | 0.0077 | 0.0073 (batched-fused) | 0.0221 (planewave i2) | batched-fused | 2.88 |
+| 6 | 7 | 214818 | 0.0223 | 0.0100 | 0.0098 (batched-fused) | 0.0351 (planewave i2) | batched-fused | 3.52 |
+| 7 | 7 | 289194 | 0.0322 | 0.0140 | 0.0149 (batched-fused) | 0.0429 (planewave i2) | batched-fused | 3.06 |
+| 8 | 7 | 351936 | 0.0371 | 0.0158 | 0.0158 (batched-fused) | 0.0524 (planewave i2) | batched-fused | 3.31 |
+| Σ | | | 0.1110 | 0.0625 | 0.0636 | 0.1922 | best 0.0554 | |
+| evaluate | | | 0.261 | 0.213 | 0.219 | 0.344 | | |
+
+#### W4 clusters (N = 100000), kD = 1, ε = 1e-6, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 15 | 3096 | 0.0035 | 0.0036 (rot.) | 0.0030 (rot.) | 0.0201 (planewave i2) | rotation | 5.68 |
+| 3 | 15 | 19782 | 0.0153 | 0.0158 (rot.) | 0.0152 (rot.) | 0.0227 (planewave i2) | rotation | 1.49 |
+| 4 | 15 | 43392 | 0.0302 | 0.0302 (rot.) | 0.0308 (rot.) | 0.0264 (planewave i2) | planewave i2 | 0.88 |
+| 5 | 15 | 106500 | 0.0725 | 0.0752 (rot.) | 0.0726 (rot.) | 0.0361 (planewave i2) | planewave i2 | 0.50 |
+| 6 | 15 | 214818 | 0.1427 | 0.1782 | 0.1967 (batched-fused) | 0.0608 (planewave i2) | planewave i2 | 0.43 |
+| 7 | 15 | 289194 | 0.2006 | 0.2808 | 0.2757 (batched-fused) | 0.0748 (planewave i2) | planewave i2 | 0.37 |
+| 8 | 15 | 351936 | 0.2698 | 0.3118 | 0.3213 (batched-fused) | 0.0880 (planewave i2) | planewave i2 | 0.33 |
+| Σ | | | 0.7345 | 0.8956 | 0.9154 | 0.3288 | best 0.3048 | |
+| evaluate | | | 1.160 | 1.318 | 1.340 | 0.748 | | |
+
+#### W4 clusters (N = 100000), kD = 100, ε = 1e-3, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 21 | 3096 | 0.0070 | 0.0073 (rot.) | 0.0073 (rot.) | 0.0641 (planewave i2) | rotation | 9.20 |
+| 3 | 13 | 19782 | 0.0102 | 0.0499 | 0.0582 (batched-fused) | 0.0302 (planewave i2) | rotation | 2.95 |
+| 4 | 8 | 43392 | 0.0069 | 0.0090 | 0.0092 (batched-fused) | 0.0211 (planewave i2) | rotation | 3.06 |
+| 5 | 7 | 106500 | 0.0121 | 0.0073 | 0.0074 (batched-fused) | 0.0234 (planewave i2) | batched-fused | 3.19 |
+| 6 | 7 | 214818 | 0.0228 | 0.0084 | 0.0105 (batched-fused) | 0.0386 (planewave i2) | batched-fused | 4.60 |
+| 7 | 7 | 289194 | 0.0318 | 0.0121 | 0.0147 (batched-fused) | 0.0467 (planewave i2) | batched-fused | 3.85 |
+| 8 | 7 | 351936 | 0.0370 | 0.0155 | 0.0151 (batched-fused) | 0.0542 (planewave i2) | batched-fused | 3.50 |
+| Σ | | | 0.1277 | 0.1096 | 0.1224 | 0.2784 | best 0.0675 | |
+| evaluate | | | 0.278 | 0.268 | 0.277 | 0.433 | | |
+
+#### W4 clusters (N = 100000), kD = 100, ε = 1e-6, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 25 | 3096 | 0.0126 | 0.0127 (rot.) | 0.0116 (rot.) | 0.0759 (planewave i2) | rotation | 6.04 |
+| 3 | 16 | 19782 | 0.0187 | 0.0192 (rot.) | 0.0193 (rot.) | 0.0373 (planewave i2) | rotation | 1.99 |
+| 4 | 15 | 43392 | 0.0307 | 0.0306 (rot.) | 0.0314 (rot.) | 0.0347 (planewave i2) | rotation | 1.13 |
+| 5 | 15 | 106500 | 0.0720 | 0.0727 (rot.) | 0.0747 (rot.) | 0.0446 (planewave i2) | planewave i2 | 0.62 |
+| 6 | 15 | 214818 | 0.1426 | 0.1965 | 0.1777 (batched-fused) | 0.0653 (planewave i2) | planewave i2 | 0.46 |
+| 7 | 15 | 289194 | 0.2004 | 0.2474 | 0.2755 (batched-fused) | 0.0811 (planewave i2) | planewave i2 | 0.40 |
+| 8 | 15 | 351936 | 0.2332 | 0.3097 | 0.3048 (batched-fused) | 0.0922 (planewave i2) | planewave i2 | 0.40 |
+| Σ | | | 0.7103 | 0.8888 | 0.8949 | 0.4311 | best 0.3452 | |
+| evaluate | | | 1.139 | 1.324 | 1.326 | 0.859 | | |
+
+#### W4 cube (N = 100000), kD = 1, ε = 1e-3, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 7 | 3096 | 0.0005 | 0.0052 | 0.0054 (batched-fused) | 0.0110 (planewave i2) | rotation | 21.49 |
+| 3 | 7 | 53352 | 0.0061 | 0.0063 | 0.0064 (batched-fused) | 0.0187 (planewave i2) | rotation | 3.07 |
+| 4 | 7 | 584136 | 0.0605 | 0.0196 | 0.0210 (batched-fused) | 0.0704 (planewave i2) | batched-fused | 3.60 |
+| Σ | | | 0.0671 | 0.0311 | 0.0329 | 0.1001 | best 0.0262 | |
+| evaluate | | | 0.102 | 0.067 | 0.067 | 0.135 | | |
+
+#### W4 cube (N = 100000), kD = 1, ε = 1e-6, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 15 | 3096 | 0.0030 | 0.1197 | 0.1165 (batched-fused) | 0.0190 (planewave i2) | rotation | 6.31 |
+| 3 | 15 | 53352 | 0.0373 | 0.1096 | 0.1058 (batched-fused) | 0.0329 (planewave i2) | planewave i2 | 0.88 |
+| 4 | 15 | 584136 | 0.3820 | 0.3876 | 0.3899 (batched-fused) | 0.1285 (planewave i2) | planewave i2 | 0.34 |
+| Σ | | | 0.4223 | 0.6169 | 0.6122 | 0.1804 | best 0.1645 | |
+| evaluate | | | 0.484 | 0.676 | 0.671 | 0.243 | | |
+
+#### W4 cube (N = 100000), kD = 100, ε = 1e-3, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 30 | 3096 | 0.0223 | 0.0198 (rot.) | 0.0209 (rot.) | 0.1480 (planewave i2) | rotation | 6.62 |
+| 3 | 18 | 53352 | 0.0615 | 0.3133 | 0.0627 (rot.) | 0.0854 (planewave i2) | rotation | 1.39 |
+| 4 | 11 | 584136 | 0.1738 | 0.1066 | 0.1124 (batched-fused) | 0.1487 (planewave i2) | batched-fused | 1.39 |
+| Σ | | | 0.2576 | 0.4397 | 0.1960 | 0.3821 | best 0.1905 | |
+| evaluate | | | 0.312 | 0.495 | 0.251 | 0.437 | | |
+
+#### W4 cube (N = 100000), kD = 100, ε = 1e-6, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 35 | 3096 | 0.0302 | 0.0318 (rot.) | 0.0315 (rot.) | 0.1688 (planewave i2) | rotation | 5.59 |
+| 3 | 22 | 53352 | 0.1075 | 0.1092 (rot.) | 0.1087 (rot.) | 0.0982 (planewave i2) | planewave i2 | 0.91 |
+| 4 | 15 | 584136 | 0.3823 | 0.3905 | 0.3864 (batched-fused) | 0.1878 (planewave i2) | planewave i2 | 0.49 |
+| Σ | | | 0.5200 | 0.5315 | 0.5265 | 0.4549 | best 0.3162 | |
+| evaluate | | | 0.593 | 0.609 | 0.603 | 0.528 | | |
+
+#### W4 plummer (N = 100000), kD = 1, ε = 1e-3, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 7 | 3096 | 0.0005 | 0.0049 | 0.0052 (batched-fused) | 0.0114 (planewave i2) | rotation | 21.05 |
+| 3 | 7 | 53352 | 0.0063 | 0.0070 | 0.0057 (batched-fused) | 0.0188 (planewave i2) | rotation | 3.00 |
+| 4 | 7 | 53352 | 0.0061 | 0.0059 | 0.0065 (batched-fused) | 0.0196 (planewave i2) | batched-fused | 3.32 |
+| 5 | 7 | 109548 | 0.0119 | 0.0087 | 0.0077 (batched-fused) | 0.0286 (planewave i2) | batched-fused | 3.30 |
+| 6 | 7 | 205458 | 0.0226 | 0.0106 | 0.0106 (batched-fused) | 0.0353 (planewave i2) | batched-fused | 3.34 |
+| 7 | 7 | 333330 | 0.0352 | 0.0155 | 0.0125 (batched-fused) | 0.0458 (planewave i2) | batched-fused | 2.96 |
+| 8 | 7 | 35148 | 0.0043 | 0.0064 | 0.0062 (batched-fused) | 0.0187 (planewave i2) | rotation | 4.33 |
+| Σ | | | 0.0870 | 0.0589 | 0.0544 | 0.1782 | best 0.0518 | |
+| evaluate | | | 0.244 | 0.219 | 0.211 | 0.342 | | |
+
+#### W4 plummer (N = 100000), kD = 1, ε = 1e-6, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 15 | 3096 | 0.0042 | 0.0033 (rot.) | 0.0040 (rot.) | 0.0210 (planewave i2) | rotation | 5.03 |
+| 3 | 15 | 53352 | 0.0403 | 0.0384 (rot.) | 0.0387 (rot.) | 0.0343 (planewave i2) | planewave i2 | 0.85 |
+| 4 | 15 | 53352 | 0.0378 | 0.0381 (rot.) | 0.0372 (rot.) | 0.0356 (planewave i2) | planewave i2 | 0.94 |
+| 5 | 15 | 109548 | 0.0748 | 0.0749 (rot.) | 0.0739 (rot.) | 0.0409 (planewave i2) | planewave i2 | 0.55 |
+| 6 | 15 | 205458 | 0.1402 | 0.1959 | 0.1815 (batched-fused) | 0.0529 (planewave i2) | planewave i2 | 0.38 |
+| 7 | 15 | 333330 | 0.2205 | 0.2313 | 0.2360 (batched-fused) | 0.0763 (planewave i2) | planewave i2 | 0.35 |
+| 8 | 15 | 35148 | 0.0260 | 0.1354 | 0.1264 (batched-fused) | 0.0310 (planewave i2) | rotation | 1.19 |
+| Σ | | | 0.5439 | 0.7174 | 0.6977 | 0.2921 | best 0.2703 | |
+| evaluate | | | 0.973 | 1.147 | 1.131 | 0.719 | | |
+
+#### W4 plummer (N = 100000), kD = 100, ε = 1e-3, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 30 | 3096 | 0.0211 | 0.0218 (rot.) | 0.0204 (rot.) | 0.1457 (planewave i2) | rotation | 6.92 |
+| 3 | 18 | 53352 | 0.0613 | 0.3531 | 0.0623 (rot.) | 0.0835 (planewave i2) | rotation | 1.36 |
+| 4 | 11 | 380178 | 0.1135 | 0.0886 | 0.0863 (batched-fused) | 0.1011 (planewave i2) | batched-fused | 1.14 |
+| 5 | 7 | 109548 | 0.0119 | 0.0080 | 0.0085 (batched-fused) | 0.0310 (planewave i2) | batched-fused | 3.88 |
+| 6 | 7 | 205458 | 0.0223 | 0.0106 | 0.0093 (batched-fused) | 0.0308 (planewave i2) | batched-fused | 2.91 |
+| 7 | 7 | 333330 | 0.0347 | 0.0147 | 0.0133 (batched-fused) | 0.0505 (planewave i2) | batched-fused | 3.44 |
+| 8 | 7 | 35148 | 0.0043 | 0.0062 | 0.0057 (batched-fused) | 0.0182 (planewave i2) | rotation | 4.24 |
+| Σ | | | 0.2690 | 0.5029 | 0.2058 | 0.4608 | best 0.2085 | |
+| evaluate | | | 0.434 | 0.664 | 0.369 | 0.628 | | |
+
+#### W4 plummer (N = 100000), kD = 100, ε = 1e-6, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 35 | 3096 | 0.0306 | 0.0297 (rot.) | 0.0317 (rot.) | 0.1662 (planewave i2) | rotation | 5.43 |
+| 3 | 21 | 53352 | 0.0954 | 0.0952 (rot.) | 0.0937 (rot.) | 0.0969 (planewave i2) | rotation | 1.02 |
+| 4 | 15 | 380178 | 0.2509 | 0.2505 (rot.) | 0.2503 (rot.) | 0.1296 (planewave i2) | planewave i2 | 0.52 |
+| 5 | 15 | 109548 | 0.0761 | 0.0766 (rot.) | 0.0744 (rot.) | 0.0501 (planewave i2) | planewave i2 | 0.66 |
+| 6 | 15 | 205458 | 0.1368 | 0.1822 | 0.1742 (batched-fused) | 0.0542 (planewave i2) | planewave i2 | 0.40 |
+| 7 | 15 | 333330 | 0.2218 | 0.2263 | 0.2190 (batched-fused) | 0.0800 (planewave i2) | planewave i2 | 0.36 |
+| 8 | 15 | 35148 | 0.0256 | 0.1361 | 0.1228 (batched-fused) | 0.0325 (planewave i2) | rotation | 1.27 |
+| Σ | | | 0.8372 | 0.9966 | 0.9662 | 0.6096 | best 0.4655 | |
+| evaluate | | | 1.257 | 1.419 | 1.391 | 1.032 | | |
+
+#### W4 sphere (N = 100000), kD = 1, ε = 1e-3, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 7 | 3096 | 0.0005 | 0.0048 | 0.0048 (batched-fused) | 0.0108 (planewave i2) | rotation | 20.87 |
+| 3 | 7 | 53352 | 0.0060 | 0.0067 | 0.0059 (batched-fused) | 0.0183 (planewave i2) | rotation | 3.04 |
+| 4 | 7 | 385344 | 0.0460 | 0.0158 | 0.0160 (batched-fused) | 0.0559 (planewave i2) | batched-fused | 3.54 |
+| 5 | 7 | 325404 | 0.0335 | 0.0117 | 0.0133 (batched-fused) | 0.0732 (planewave i2) | batched-fused | 6.25 |
+| Σ | | | 0.0861 | 0.0391 | 0.0400 | 0.1582 | best 0.0341 | |
+| evaluate | | | 0.158 | 0.114 | 0.116 | 0.231 | | |
+
+#### W4 sphere (N = 100000), kD = 1, ε = 1e-6, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 15 | 3096 | 0.0042 | 0.0036 (rot.) | 0.0042 (rot.) | 0.0186 (planewave i2) | rotation | 4.38 |
+| 3 | 15 | 53352 | 0.0411 | 0.1210 | 0.1104 (batched-fused) | 0.0317 (planewave i2) | planewave i2 | 0.77 |
+| 4 | 15 | 385344 | 0.2711 | 0.2990 | 0.2826 (batched-fused) | 0.0967 (planewave i2) | planewave i2 | 0.36 |
+| 5 | 15 | 325404 | 0.2315 | 0.2836 | 0.2818 (batched-fused) | 0.1341 (planewave i2) | planewave i2 | 0.58 |
+| Σ | | | 0.5479 | 0.7072 | 0.6791 | 0.2811 | best 0.2668 | |
+| evaluate | | | 0.738 | 0.895 | 0.871 | 0.471 | | |
+
+#### W4 sphere (N = 100000), kD = 100, ε = 1e-3, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 30 | 3096 | 0.0213 | 0.0221 (rot.) | 0.0197 (rot.) | 0.1468 (planewave i2) | rotation | 6.88 |
+| 3 | 18 | 53352 | 0.0628 | 0.3044 | 0.0623 (rot.) | 0.0838 (planewave i2) | rotation | 1.33 |
+| 4 | 11 | 385344 | 0.1235 | 0.0780 | 0.0805 (batched-fused) | 0.1073 (planewave i2) | batched-fused | 1.38 |
+| 5 | 7 | 325404 | 0.0340 | 0.0125 | 0.0135 (batched-fused) | 0.0866 (planewave i2) | batched-fused | 6.91 |
+| Σ | | | 0.2417 | 0.4171 | 0.1761 | 0.4245 | best 0.1747 | |
+| evaluate | | | 0.326 | 0.505 | 0.260 | 0.515 | | |
+
+#### W4 sphere (N = 100000), kD = 100, ε = 1e-6, 1 × 40
+
+| level | p | V pairs | rotation | batched-fused | auto | planewave | fastest | planewave ÷ fastest other |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 35 | 3096 | 0.0291 | 0.0298 (rot.) | 0.0327 (rot.) | 0.1681 (planewave i2) | rotation | 5.78 |
+| 3 | 22 | 53352 | 0.1090 | 0.1101 (rot.) | 0.1087 (rot.) | 0.0989 (planewave i2) | planewave i2 | 0.91 |
+| 4 | 15 | 385344 | 0.2713 | 0.2734 | 0.3004 (batched-fused) | 0.1408 (planewave i2) | planewave i2 | 0.52 |
+| 5 | 15 | 325404 | 0.2130 | 0.2922 | 0.2841 (batched-fused) | 0.1655 (planewave i2) | planewave i2 | 0.78 |
+| Σ | | | 0.6223 | 0.7055 | 0.7258 | 0.5734 | best 0.4343 | |
+| evaluate | | | 0.824 | 0.909 | 0.930 | 0.779 | | |
