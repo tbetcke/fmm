@@ -86,8 +86,10 @@ pub enum M2lStrategy {
     /// errors against the direct sum within about 1.1× those of the exact M2L
     /// (`nd_fmm_tables::plane_wave::nodes_for_degree`); not `Dense`'s bits, but
     /// deterministic, the same at every thread count and overlap setting, and on P ranks
-    /// the one-rank output bit for bit. M2M and L2L are `Rotation`'s. The device runs it as
-    /// `Dense`, with dense tables the device path builds. [`Auto`](Self::Auto)'s choice on
+    /// the one-rank output bit for bit. M2M and L2L are `Rotation`'s. A device runs it by
+    /// merge and shift on the device (`FmmBuilder::device_plane_wave`, default
+    /// `DevicePlaneWave::Kernels` since Helmholtz CH7.5c), or as `Dense` with dense tables
+    /// the device path builds under `DevicePlaneWave::Dense`. [`Auto`](Self::Auto)'s choice on
     /// the host at f64 p ≥ 7 and f32 p ≥ 8 (Phase 6 T11).
     PlaneWave,
     /// On the host [`Batched`](Self::Batched) below a degree that depends on the

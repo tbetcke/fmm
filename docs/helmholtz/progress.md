@@ -2267,3 +2267,66 @@ request, using this template:
 - Follow-ups:
   - CH7.5c: the chunk budget measured with the layouts (a sentence in CH7.5c's line).
 
+## 2026-11-05: CH7.5c Measured, and adopted or dropped (adopted 2026-11-06)
+- Done:
+  - `nd-fmm-exec` (feature `gpu`): `fmm::DevicePlaneWaveLayout` (`Auto`, by backend, as
+    before; `Cube { units }`) and `FmmBuilder::device_plane_wave_layout`, resolved in
+    `DeviceOptions::plane_wave_layout` and checked at build by `PlaneWaveLayout::check`;
+    every layout gives the same bits.
+  - `nd-fmm-validate`'s `layout_sweep`: the part `planewave` (Dense against merge and shift
+    at each cube of 32–1,024 units and each chunk budget of 128 MB–4 GB, M2L by
+    `KindTiming` and the evaluation; per level with each level call's chunks and items) and
+    `--dist cube|plummer`.
+  - The report `fmm-validate/results/helmholtz-ch7-5c.md`: locust's H100 (the cube and the
+    Plummer sphere at N = 10⁶ and 10⁷, f64 p = 8, 12, 18 and f32 p = 8; the units by p at
+    f64 p = 10–20) and the M6's Metal (f32 p = 8, both problems and sizes). Merge and shift
+    takes 0.30–0.38× the dense M2L's time at p = 8, 0.19–0.20× at f64 p = 12 and
+    0.19–0.21× at f64 p = 18 with 256-unit cubes on the H100 (the evaluation 0.79–0.90×,
+    0.52–0.68×, 0.36–0.45×), 0.47–0.60× on Metal (the evaluation 0.65–0.69×). T13's gate (the
+    gain at p ≥ 12) is met.
+  - The adoption (2026-11-06, after the sign-off): `DevicePlaneWave::Kernels` the default
+    of `PlaneWave` on every device (`Dense` the named opt-out);
+    `DevicePlaneWaveLayout::resolve(info, p)` with 256-unit cubes on CUDA from p = 13
+    (`device::CUDA_PLANE_WAVE_WIDE_{UNITS,FROM}`), 128 otherwise, the CPU layout on the CPU
+    runtime; `device::default_plane_wave_budget`, 1 GB on Metal (`METAL_PLANE_WAVE_BUDGET`,
+    at most an eighth of the device's memory), the translation budget elsewhere.
+- Tests: `device_common::check_plane_waves` builds named cube layouts (one unit on the CPU
+  runtime; 32 and 256 units on the GPUs), each the default's bits with the transfer
+  formula, and refuses a cube of no unit on every rank; the smoke run of
+  `layout_sweep --part planewave` on the CPU runtime by hand (the example has no test).
+  After the adoption: `check_plane_waves` turned round (the default runs merge and shift,
+  bit for bit `Kernels` named; `DevicePlaneWave::Dense` gives `Dense`'s bits; either setting
+  under `Dense` changes nothing), `mpi_exec`'s run-as-dense check names `Dense`, the
+  `device_fmm` gate runs the default; the unit test
+  `plane_wave_defaults_follow_the_backend_and_p`.
+- Checks: ran `/verify` on the M6 (format; Clippy default, examples, workspace all-targets,
+  `nd-fmm-exec` and `nd-fmm-validate` with `cpu,metal`; `cargo check` with `cuda`; `cargo
+  doc`, also `nd-fmm-exec` with `cpu`; `cargo test` 21 min and `cargo test --workspace`
+  50 min; the MPI list at 2 and 4 ranks; `mpi_exec` on the CPU runtime at 1, 2 and 4 ranks
+  (21 and 24 device plane-wave checks) and the ignored `device_ranks` at 2 and 4 ranks), all
+  passed; `mpi_exec` again at 1 and 2 ranks after the review's over-cap refusal. After the
+  adoption: `cargo test -p nd-fmm-exec --features cpu --release` (every executable;
+  `device_tune` failed in the first run and passed in the second, and fails the same way
+  on `main` b69e031: the CPU runtime's tuner on the M6 sometimes picks Rotation, and the
+  wide-candidate check assumes Dense's M2L GEMM, a flaky test outside this task), `mpi_exec`
+  and `device_ranks` at 2 and 4 ranks (24 device plane-wave checks), the MPI list at 2 and
+  4 ranks; on the M6's Metal `device_metal` and the `device_fmm` gate (φ L2 1.011× and
+  0.999× `Dense`'s); on locust `device_cuda` (the 32- and 256-unit cubes on the GPU), the
+  gate (every L2 ratio ≤ 1.0114) and Clippy with `cpu,cuda`; Clippy (default, examples,
+  workspace, `cpu,metal`), `cargo doc` and `cargo test --workspace` (27 min); all passed. D9 on locust
+  (`nd-fmm-bench --backend cuda`, f32 and f64, p = 8, N = 10⁶, `Auto`; A `main` b69e031,
+  B the branch, A B B A A B B A A B): f32 −0.8 % (`main`'s spread 0.27 ms), f64 −6.0 %
+  (spread 4.16 ms), the errors identical, both pass. A self-review by a
+  subagent: nothing blocking; its points taken (the report's budget range and claims, the
+  near rule's share of the evaluation column, the over-cap refusal, docs).
+- Decisions: the PR's three questions, signed off 2026-11-06 ("sign off all three questions
+  as recommended"): 1. adopt merge and shift as the default of `PlaneWave` on every device,
+  with cubes of 256 units from p = 13 on CUDA and a 1 GB plane-wave budget on Metal; 2. a
+  task for the device `Auto` (CH7.5e); 3. D9 by the device tests and one CUDA ABBA run.
+- Laplace: a named `PlaneWave` on a device now runs merge and shift (within 1.1× `Dense`'s
+  errors, the gate); `DevicePlaneWave::Dense` keeps `Dense`'s bits. The device `Auto` never
+  resolves to `PlaneWave`, so every unnamed device evaluation and the host keep their code
+  and bits (D9 above).
+- Follow-ups: CH7.5e (the device `Auto` on `PlaneWave`, by backend, precision, p and N: at
+  N = 10⁵ the gate's printed times put merge and shift behind `Dense` on the cube); the
+  flaky `device_tune` wide-candidate check, a separate fix.

@@ -49,8 +49,9 @@
 //!
 //! **The plane-wave gate** (Helmholtz CH7.5b; T13's requirement 1 on the device): on the
 //! cube and the Plummer sphere at N = 10⁵ (f64 p = 8, 12, 18 on the CPU runtime and CUDA,
-//! f32 p = 8 on Metal and CUDA), the device `Fmm` under `PlaneWave` with
-//! `DevicePlaneWave::Kernels` (merge and shift on the device) against the device `Fmm`
+//! f32 p = 8 on Metal and CUDA), the device `Fmm` under `PlaneWave` with its default
+//! `DevicePlaneWave::Kernels` (merge and shift on the device, the default since Helmholtz
+//! CH7.5c) against the device `Fmm`
 //! under `Dense` with the same near pairs and leaf size: the φ L2 and ∇φ L2 errors (the
 //! root mean squares over the eight vectors) at most 1.1× `Dense`'s; the max errors and
 //! the mean evaluation times are reported, never asserted.
@@ -88,9 +89,7 @@ use std::time::{Duration, Instant};
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
 use nd_fmm_exec::device::{Counters, DataKind, Traffic};
-use nd_fmm_exec::fmm::{
-    Backend, DevicePlaneWave, Fmm, FmmBuilder, NearRuleChoice, OperatorKind, Output, Placement,
-};
+use nd_fmm_exec::fmm::{Backend, Fmm, FmmBuilder, NearRuleChoice, OperatorKind, Output, Placement};
 use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_math::RealScalar;
@@ -597,7 +596,7 @@ fn tuning_budget<T: Stored + SimdScalar + Equivalence + Default + RealScalar>(
 const PLANE_WAVE_RATIO: f64 = 1.1;
 
 /// The plane-wave gate (Helmholtz CH7.5b; module documentation) at one point: `Dense` and
-/// `PlaneWave` with `DevicePlaneWave::Kernels` on `backend` in T at degree p, with the
+/// `PlaneWave` (by default `DevicePlaneWave::Kernels`) on `backend` in T at degree p, with the
 /// `Dense` build's near pairs and leaf size, over the problem's charge vectors; pushes a
 /// failed check onto `failures` and returns the report's row.
 fn plane_wave_gate<T: Stored + SimdScalar + Equivalence + Default + RealScalar>(
@@ -626,7 +625,6 @@ fn plane_wave_gate<T: Stored + SimdScalar + Equivalence + Default + RealScalar>(
         .unwrap_or_else(|error| panic!("{backend}: the Dense FMM does not build: {error}"));
     let mut waves = builder
         .strategy(M2lStrategy::PlaneWave)
-        .device_plane_wave(DevicePlaneWave::Kernels)
         .near_rule(same_near_pairs(&dense))
         .max_points_per_leaf(dense.max_points_per_leaf())
         .build(&problem.points, &problem.points, comm)

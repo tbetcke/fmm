@@ -3,10 +3,11 @@
 //! defaults and tuner candidates can be chosen by measurement. Prints Markdown on stdout
 //! and progress on stderr. Feature `gpu` (with a backend).
 //!
-//! The problem is the uniform cube of the C3.3 workload (`fmm_accuracy::Config::c33`):
-//! N points (`--n`, default 10⁶), sources equal to targets, `max_level` 16, 64 points per
-//! leaf, gradients on, in `--precision` (f32 or f64) at each of `--degrees`. Parts
-//! (`--part`, default all):
+//! The problem is the uniform cube of the C3.3 workload (`fmm_accuracy::Config::c33`; or
+//! its Plummer sphere with `--dist plummer`, Helmholtz CH7.5c): N points (`--n`, default
+//! 10⁶), sources equal to targets, `max_level` 16, 64 points per leaf, gradients on, in
+//! `--precision` (f32 or f64) at each of `--degrees`. Parts (`--part`, default all: tuner,
+//! kinds and overheads):
 //!
 //! - **tuner**: the FMM built with a fresh tuning cache, a budget of `--budget` seconds
 //!   (default 1,200) and a [`TuningHook`] that offers every decision a wide candidate set
@@ -42,6 +43,21 @@
 //!   - the P2P layout (as in **tuner**), timing P2P;
 //!   - the chunk budget (`device_scratch_budget`: the device's default, then the others
 //!     of 128 MB, 512 MB, 1 GB, 2 GB and 4 GB), timing M2M, L2L and M2L.
+//! - **planewave** (Helmholtz CH7.5c, docs/helmholtz/tasks/CH7.5c.md; only when named): M2L
+//!   under `PlaneWave` with merge and shift on the device
+//!   (`DevicePlaneWave::Kernels`) against the device's dense M2L (`M2lStrategy::Dense`
+//!   under the static rule, Phase 6 T7's), timed as in **kinds** (M2L and the evaluation):
+//!   the default layout and budget, the cube layout with 32, 64, 128, 256, 512 and 1,024 units
+//!   (`device_plane_wave_layout`; a layout the device refuses is a "refused" row), and the
+//!   chunk budgets of 128 MB, 512 MB, 1 GB, 2 GB and 4 GB besides the default
+//!   (`device_plane_wave_budget`); then the M2L time per level of `Dense` and of the
+//!   default merge and shift, with each level call's pairs, chunks, sources,
+//!   accumulators, incoming blocks, local items and launches (`DeviceReport::plane_waves`)
+//!   and the plane-wave scratch. The ratio column of every table of **kinds** and
+//!   **planewave** is the kinds' time over the first row's (here Dense's). Both builds
+//!   take the library's near rule, whose crossovers come from each strategy's cost model,
+//!   so their W and X pairs may differ: the evaluation is that of naming each strategy,
+//!   M2L its own (the V lists are the same).
 //! - **overheads**: on the device alone (`nd_fmm_kernels::Device`):
 //!   - the cost of a launch: 10,000 launches of `movement::zero` over 256 values queued,
 //!     then one sync; the host's enqueue time per launch and the whole per launch;
@@ -60,7 +76,8 @@
 //!     VECLIB_MAXIMUM_THREADS=1 \
 //!     cargo run --release -p nd-fmm-validate --features cuda --example layout_sweep -- \
 //!     --device cuda --tuning-cache DIR [--precision f64] [--degrees 3,6,8] [--n 1000000] \
-//!     [--part tuner|kinds|overheads|all] [--table-cache DIR]
+//!     [--part tuner|kinds|planewave|overheads|all] [--dist cube|plummer] \
+//!     [--table-cache DIR]
 //! ```
 //!
 //! On locust (Phase 4S, by hand): after `tools/gh200/sync.sh`, through
@@ -79,9 +96,11 @@ use mpi::Threading;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::Equivalence;
 use nd_fmm_exec::fmm::{
-    Backend, DeviceLeafLayout, DeviceP2pLayout, Fmm, FmmBuilder, KindTiming, OperatorKind,
+    Backend, DeviceLeafLayout, DeviceP2pLayout, DevicePlaneWave, DevicePlaneWaveLayout, Fmm,
+    FmmBuilder, KindTiming, OperatorKind,
 };
 use nd_fmm_exec::operator::SimdScalar;
+use nd_fmm_exec::tables::M2lStrategy;
 use nd_fmm_exec::tune::{Candidate, Decision, GemmChoice, Timing, TuningHook, TuningReport};
 use nd_fmm_kernels::p2p::P2pLayout;
 use nd_fmm_kernels::translate::{GemmLayout, default_scratch_bytes};
@@ -97,6 +116,7 @@ use nd_fmm_validate::peaks::{self, Peaks};
 enum Part {
     Tuner,
     Kinds,
+    PlaneWave,
     Overheads,
 }
 
@@ -106,6 +126,7 @@ struct Arguments {
     precision: Option<String>,
     degrees: Option<Vec<usize>>,
     n: usize,
+    distribution: Distribution,
     parts: Vec<Part>,
     tuning_cache: Option<PathBuf>,
     table_cache: Option<PathBuf>,
@@ -119,7 +140,8 @@ fn arguments() -> Arguments {
     let usage = || -> ! {
         eprintln!(
             "usage: layout_sweep --device cpu|metal|cuda [--precision f32|f64] \
-             [--degrees p,p,...] [--n N] [--part tuner|kinds|overheads|all] \
+             [--degrees p,p,...] [--n N] [--part tuner|kinds|planewave|overheads|all] \
+             [--dist cube|plummer] \
              [--tuning-cache DIR] [--table-cache DIR] [--budget s] [--repeats r] \
              [--threads n]; got {args:?}"
         );
@@ -130,6 +152,7 @@ fn arguments() -> Arguments {
         precision: None,
         degrees: None,
         n: 1_000_000,
+        distribution: Distribution::Cube,
         parts: vec![Part::Tuner, Part::Kinds, Part::Overheads],
         tuning_cache: None,
         table_cache: None,
@@ -169,8 +192,17 @@ fn arguments() -> Arguments {
                 parsed.parts = match value.as_str() {
                     "tuner" => vec![Part::Tuner],
                     "kinds" => vec![Part::Kinds],
+                    "planewave" => vec![Part::PlaneWave],
                     "overheads" => vec![Part::Overheads],
                     "all" => vec![Part::Tuner, Part::Kinds, Part::Overheads],
+                    _ => usage(),
+                };
+                tail
+            }
+            ("--dist", [value, tail @ ..]) => {
+                parsed.distribution = match value.as_str() {
+                    "cube" => Distribution::Cube,
+                    "plummer" => Distribution::Plummer,
                     _ => usage(),
                 };
                 tail
@@ -257,8 +289,11 @@ fn main() {
     );
     println!("| precision | {precision} |");
     println!(
-        "| problem | the uniform cube of C3.3, N = {}, `max_level` 16, 64 points per leaf, \
-         gradients on |",
+        "| problem | {} of C3.3, N = {}, `max_level` 16, 64 points per leaf, gradients on |",
+        match arguments.distribution {
+            Distribution::Plummer => "the Plummer sphere",
+            _ => "the uniform cube",
+        },
         arguments.n
     );
     match peak {
@@ -293,9 +328,9 @@ fn main() {
         n: arguments.n,
         sampled: 1,
         charge_vectors: 1,
-        ..Config::c33(Distribution::Cube)
+        ..Config::c33(arguments.distribution)
     };
-    eprintln!("cube: drawing N = {}", config.n);
+    eprintln!("{:?}: drawing N = {}", arguments.distribution, config.n);
     let problem = Problem::new(&config);
     let sweep = Sweep {
         backend,
@@ -314,6 +349,8 @@ fn main() {
                 (Part::Tuner, Precision::F64) => sweep.tuner::<f64>(p),
                 (Part::Kinds, Precision::F32) => sweep.kinds::<f32>(p),
                 (Part::Kinds, Precision::F64) => sweep.kinds::<f64>(p),
+                (Part::PlaneWave, Precision::F32) => sweep.plane_wave::<f32>(p),
+                (Part::PlaneWave, Precision::F64) => sweep.plane_wave::<f64>(p),
                 (Part::Overheads, _) => {}
             }
         }
@@ -677,6 +714,135 @@ impl Sweep<'_> {
         );
     }
 
+    /// The planewave part at degree p (module documentation).
+    fn plane_wave<T>(&self, p: usize)
+    where
+        T: Stored + SimdScalar + Equivalence + Default + RealScalar,
+    {
+        let mode = if self.backend == Backend::Metal || self.backend == Backend::Cpu {
+            KindTiming::Synchronous
+        } else {
+            KindTiming::Device
+        };
+        let dense = || self.builder::<T>(p).strategy(M2lStrategy::Dense);
+        let kernels = || {
+            self.builder::<T>(p)
+                .strategy(M2lStrategy::PlaneWave)
+                .device_plane_wave(DevicePlaneWave::Kernels)
+        };
+        let default_budget = default_scratch_bytes(self.info);
+        let mut variants: Vec<(String, FmmBuilder<T>)> = vec![
+            ("Dense (static rule)".to_owned(), dense()),
+            (
+                format!(
+                    "PlaneWave, default layout, {} MB (default)",
+                    default_budget >> 20
+                ),
+                kernels(),
+            ),
+        ];
+        for units in [32u32, 64, 128, 256, 512, 1024] {
+            variants.push((
+                format!("PlaneWave, cube ({units} units)"),
+                kernels().device_plane_wave_layout(DevicePlaneWaveLayout::Cube { units }),
+            ));
+        }
+        for budget in BUDGETS.into_iter().filter(|&b| b != default_budget) {
+            variants.push((
+                format!("PlaneWave, default layout, {} MB", budget >> 20),
+                kernels().device_plane_wave_budget(budget),
+            ));
+        }
+        self.kinds_table(p, "plane-wave M2L", &[OperatorKind::M2l], variants, mode);
+        self.plane_wave_levels(p, mode, [("Dense", dense()), ("PlaneWave", kernels())]);
+    }
+
+    /// The M2L time per level of two builds (the median of `--repeats` evaluations after
+    /// two warm-ups), with the plane-wave level calls of the second.
+    fn plane_wave_levels<T>(&self, p: usize, mode: KindTiming, builds: [(&str, FmmBuilder<T>); 2])
+    where
+        T: Stored + SimdScalar + Equivalence + Default + RealScalar,
+    {
+        let points = &self.problem.points;
+        let charges = self.charges::<T>();
+        let mut levels: Vec<Vec<f64>> = Vec::new();
+        let mut report = None;
+        for (name, builder) in builds {
+            eprintln!("planewave, p = {p}: levels: {name}");
+            let mut fmm = match builder.kind_timings(mode).build(points, points, self.comm) {
+                Ok(fmm) => fmm,
+                Err(error) => {
+                    println!("{name} refused: {error}\n");
+                    return;
+                }
+            };
+            for _ in 0..2 {
+                fmm.evaluate(&charges).expect("it evaluates");
+            }
+            let mut per_level: Vec<Vec<f64>> = vec![Vec::new(); fmm.nlevels()];
+            for _ in 0..self.arguments.repeats {
+                let output = fmm.evaluate(&charges).expect("it evaluates");
+                if let Some(times) = output.timings.kinds {
+                    for (l, t) in per_level.iter_mut().enumerate() {
+                        t.push(times.get(OperatorKind::M2l).levels[l].as_secs_f64());
+                    }
+                }
+            }
+            levels.push(per_level.iter_mut().map(|t| median(t)).collect());
+            let device = fmm.device_report().expect("a device backend");
+            if device.plane_wave == DevicePlaneWave::Kernels {
+                report = Some((
+                    device.plane_waves.clone(),
+                    device.plane_wave_scratch_bytes,
+                    device.plane_wave_layout,
+                ));
+            }
+        }
+        let Some((calls, scratch, layout)) = report else {
+            return;
+        };
+        println!(
+            "## plane-wave M2L by level, {}, p = {p} (kind timings {mode:?})",
+            self.precision
+        );
+        println!();
+        println!(
+            "PlaneWave: layout {layout}, scratch {:.1} MB.",
+            scratch as f64 / 1e6
+        );
+        println!();
+        println!(
+            "| level | Dense ms | PlaneWave ms | / Dense | pairs | chunks | sources | \
+             accumulators | incoming | locals | launches |"
+        );
+        println!("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+        for call in &calls {
+            let (d, w) = (levels[0][call.level], levels[1][call.level]);
+            println!(
+                "| {} | {:.3} | {:.3} | {:.2} | {} | {} | {} | {} | {} | {} | {} |",
+                call.level,
+                d * 1e3,
+                w * 1e3,
+                if d > 0.0 { w / d } else { f64::NAN },
+                call.pairs,
+                call.chunks,
+                call.sources,
+                call.accumulators,
+                call.incoming,
+                call.locals,
+                call.launches
+            );
+        }
+        let (d, w): (f64, f64) = (levels[0].iter().sum(), levels[1].iter().sum());
+        println!(
+            "| Σ | {:.3} | {:.3} | {:.2} | | | | | | | |",
+            d * 1e3,
+            w * 1e3,
+            w / d
+        );
+        println!();
+    }
+
     /// One table of the kinds part: per variant, the median time of `kinds` and the
     /// evaluation.
     fn kinds_table<T>(
@@ -698,7 +864,7 @@ impl Sweep<'_> {
         println!();
         let names: Vec<String> = kinds.iter().map(|k| format!("{k} ms")).collect();
         println!(
-            "| variant | {} | kinds ms | evaluation ms | / default |",
+            "| variant | {} | kinds ms | evaluation ms | / first row |",
             names.join(" | ")
         );
         println!(

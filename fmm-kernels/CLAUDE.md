@@ -239,7 +239,7 @@ runs in `nd-fmm-exec` and CH7.5c measures).
   items. Two layouts (`PlaneWaveLayout`): `Cube { units }` (one cube per item, units
   striding over its outputs; `outgoing` and `local` stage (p + 1)² + 4F values in shared
   memory with `sync_cube` between their steps; default on Metal and CUDA with `GPU_UNITS`
-  = 128, a first choice that CH7.5c measures) and `Cpu` (one unit per core, contiguous
+  = 128, measured in CH7.5c, where `nd-fmm-exec` takes 256 units on CUDA from p = 13) and `Cpu` (one unit per core, contiguous
   items, local arrays; default on the CPU runtime). Each output has one owner and every
   chain the order of the host function it restates; the loops the tables write with
   `mul_add` (`waves_from_modes`, `shift_add`, `add` + `shift`, `sums_from_waves`) are the

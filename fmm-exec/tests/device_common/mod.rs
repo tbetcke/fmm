@@ -74,8 +74,8 @@
 //!
 //! The device's `PlaneWave` (Helmholtz CH7.5b; [`check_plane_waves`], called by
 //! `tests/mpi_exec.rs`'s plane-wave check and the Metal, CUDA and several-rank executables):
-//! without `DevicePlaneWave::Kernels` the device runs it as `Dense`, `Dense`'s bits; with it,
-//! merge and shift on the device within the FMM bounds of the host's `PlaneWave` (the
+//! with `DevicePlaneWave::Dense` the device runs it as `Dense`, `Dense`'s bits; by default
+//! (`DevicePlaneWave::Kernels` since Helmholtz CH7.5c) merge and shift on the device within the FMM bounds of the host's `PlaneWave` (the
 //! output and every level's multipoles and locals), run to run, a second build and one
 //! parent per chunk bit for bit, three vectors each the one-vector run's, and the transfers
 //! of [`expected_evaluation`] (four launches per chunk, from the report).
@@ -99,9 +99,9 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_exec::device::{DataKind, GroupedImage, PlaneWaveLayout, StageTiming, Traffic};
 use nd_fmm_exec::fmm::{
-    Backend, DeviceGather, DeviceGemm, DevicePlaneWave, DeviceReduction, Fmm, FmmBuilder,
-    KindTiming, NearRuleChoice, OperatorKind, Output, OutputMany, OutputPass, Placement,
-    SourceType, Sources,
+    Backend, DeviceGather, DeviceGemm, DevicePlaneWave, DevicePlaneWaveLayout, DeviceReduction,
+    Fmm, FmmBuilder, FmmError, KindTiming, NearRuleChoice, OperatorKind, Output, OutputMany,
+    OutputPass, Placement, SourceType, Sources,
 };
 use nd_fmm_exec::operator::SimdScalar;
 use nd_fmm_exec::tables::M2lStrategy;
@@ -1198,13 +1198,16 @@ pub struct PlaneWaveDifferences {
 }
 
 /// The device's `PlaneWave` on its merge and shift kernels (Helmholtz CH7.5b,
-/// `DevicePlaneWave::Kernels`), for `builder` (the strategy is set here) on `backend`,
-/// against the host `Fmm` under `PlaneWave` of the same settings at one thread, on this
-/// rank (module documentation, "The device's `PlaneWave`"):
-/// - without the setting the device runs `PlaneWave` as `Dense`, bit for bit the device
-///   `Fmm` under `Dense`, and the setting under `Dense` changes nothing (constraint 1);
-/// - with it: every kind on the device; the report names "PlaneWave, merge and shift on
-///   the device", the plane-wave tables and no dense M2L tables, the default layout and one
+/// `DevicePlaneWave::Kernels`, the default since CH7.5c), for `builder` (the strategy is set
+/// here) on `backend`, against the host `Fmm` under `PlaneWave` of the same settings at one
+/// thread, on this rank (module documentation, "The device's `PlaneWave`"):
+/// - with `DevicePlaneWave::Dense` the device runs `PlaneWave` as `Dense`, bit for bit the
+///   device `Fmm` under `Dense`, and either setting under `Dense` changes nothing
+///   (constraint 1);
+/// - without the setting, and with `DevicePlaneWave::Kernels` named, bit for bit: every
+///   kind on the device; the report names "PlaneWave, merge and shift on the device", the
+///   plane-wave tables and no dense M2L tables, the default layout by backend and p
+///   (`DevicePlaneWaveLayout::Auto`) and one
 ///   level call per V view with a pair; the output within the FMM bounds of the host's for
 ///   two charge vectors, the first twice bit for bit, the pass before Phase 4S T9's
 ///   output, and the transfers, launches and syncs of [`expected_evaluation`] (with every
@@ -1241,8 +1244,11 @@ pub fn check_plane_waves<T: Stored + SimdScalar + Equivalence + Default>(
             .build(sources, targets, comm)
             .unwrap_or_else(|error| panic!("{backend}: {what} does not build: {error}"))
     };
-    // Without the setting: run as dense, `Dense`'s bits (constraint 1).
-    let mut as_dense = build(builder.clone(), "PlaneWave as dense");
+    // `DevicePlaneWave::Dense`: run as dense, `Dense`'s bits (constraint 1).
+    let mut as_dense = build(
+        builder.clone().device_plane_wave(DevicePlaneWave::Dense),
+        "PlaneWave as dense",
+    );
     assert_eq!(
         as_dense
             .device_report()
@@ -1251,33 +1257,39 @@ pub fn check_plane_waves<T: Stored + SimdScalar + Equivalence + Default>(
             "PlaneWave, run as dense on the device".to_owned(),
             DevicePlaneWave::Dense
         )),
-        "{backend}: PlaneWave without the setting"
+        "{backend}: PlaneWave with DevicePlaneWave::Dense"
     );
     let dense_bits = output_bits(&as_dense.evaluate(charges).expect("the device evaluates"));
     let mut dense = build(builder.clone().strategy(M2lStrategy::Dense), "Dense");
     assert!(
         output_bits(&dense.evaluate(charges).expect("the device evaluates")) == dense_bits,
-        "{backend}: PlaneWave without the setting differs from Dense"
+        "{backend}: PlaneWave with DevicePlaneWave::Dense differs from Dense"
     );
-    // The setting under another strategy changes nothing.
-    let mut named = build(
-        builder
-            .clone()
-            .strategy(M2lStrategy::Dense)
-            .device_plane_wave(DevicePlaneWave::Kernels),
-        "Dense with the setting",
-    );
-    assert!(
-        named.device_report().map(|r| r.plane_wave) == Some(DevicePlaneWave::Dense)
-            && output_bits(&named.evaluate(charges).expect("the device evaluates")) == dense_bits,
-        "{backend}: Dense with DevicePlaneWave::Kernels differs from Dense"
-    );
-    drop((as_dense, dense, named));
+    // Either setting under another strategy changes nothing.
+    for setting in [DevicePlaneWave::Kernels, DevicePlaneWave::Dense] {
+        let mut named = build(
+            builder
+                .clone()
+                .strategy(M2lStrategy::Dense)
+                .device_plane_wave(setting),
+            "Dense with the setting",
+        );
+        assert!(
+            named.device_report().map(|r| r.plane_wave) == Some(DevicePlaneWave::Dense)
+                && output_bits(&named.evaluate(charges).expect("the device evaluates"))
+                    == dense_bits,
+            "{backend}: Dense with {setting:?} differs from Dense"
+        );
+    }
+    drop((as_dense, dense));
 
-    let kernels = builder.clone().device_plane_wave(DevicePlaneWave::Kernels);
+    // The default: merge and shift (Helmholtz CH7.5c); the setting named gives its bits
+    // (below, with the second build).
+    let kernels = builder.clone();
     let mut fmm = build(kernels.clone(), "PlaneWave on the kernels");
     let report = fmm.device_report().expect("a device backend");
     let what = format!("{backend}, PlaneWave, merge and shift");
+    let units_cap = report.info.max_units_per_cube.max(1);
     assert_eq!(
         report.strategy_name(),
         "PlaneWave, merge and shift on the device",
@@ -1289,7 +1301,7 @@ pub fn check_plane_waves<T: Stored + SimdScalar + Equivalence + Default>(
     }
     assert_eq!(
         report.plane_wave_layout,
-        PlaneWaveLayout::default_for(&report.info),
+        DevicePlaneWaveLayout::Auto.resolve(&report.info, fmm.p()),
         "{what}: the default plane-wave layout"
     );
     let names: Vec<&str> = report.tables.iter().map(|t| t.name).collect();
@@ -1346,14 +1358,45 @@ pub fn check_plane_waves<T: Stored + SimdScalar + Equivalence + Default>(
     }
     let first_bits = first_bits.expect("the first charges ran");
     let mut tight_chunks = 0;
-    for (name, builder) in [
-        ("a second build", kernels.clone()),
+    // Named layouts (Helmholtz CH7.5c), each the default's bits: on the CPU runtime a cube
+    // of one unit (correctness only; a multi-unit cube spins in `sync_cube` with several
+    // ranks per node, Phase 6 T7), on a GPU cubes of 32 and 256 units.
+    let cubes: Vec<u32> = match backend {
+        Backend::Cpu => vec![1],
+        _ => vec![32, 256.min(units_cap)],
+    };
+    let mut builds = vec![
+        ("a second build".to_owned(), kernels.clone(), None),
         (
-            "one parent per chunk",
-            kernels.clone().device_plane_wave_budget(1),
+            "DevicePlaneWave::Kernels named".to_owned(),
+            kernels.clone().device_plane_wave(DevicePlaneWave::Kernels),
+            None,
         ),
-    ] {
+        (
+            "one parent per chunk".to_owned(),
+            kernels.clone().device_plane_wave_budget(1),
+            None,
+        ),
+    ];
+    for units in cubes {
+        builds.push((
+            format!("a cube of {units} units"),
+            kernels
+                .clone()
+                .device_plane_wave_layout(DevicePlaneWaveLayout::Cube { units }),
+            Some(units),
+        ));
+    }
+    for (name, builder, cube) in builds {
+        let name = name.as_str();
         let mut again = build(builder, name);
+        if let Some(units) = cube {
+            assert_eq!(
+                again.device_report().unwrap().plane_wave_layout,
+                PlaneWaveLayout::Cube { units },
+                "{what}: {name}: the layout"
+            );
+        }
         let output = again.evaluate(charges).expect("the device FMM evaluates");
         assert_eq!(
             output_bits(&output),
@@ -1378,6 +1421,24 @@ pub fn check_plane_waves<T: Stored + SimdScalar + Equivalence + Default>(
                 );
             }
             tight_chunks = tight.iter().map(|r| r.chunks).sum();
+        }
+    }
+    // A cube of no unit and one of more units than the device allows are refused at
+    // build, on every rank: the rank's own device error names the layout, the others'
+    // agree on `OtherRank`.
+    for units in [0, units_cap + 1] {
+        let refused = kernels
+            .clone()
+            .device_plane_wave_layout(DevicePlaneWaveLayout::Cube { units })
+            .backend(backend)
+            .build(sources, targets, comm);
+        match refused {
+            Err(FmmError::OtherRank) => {}
+            Err(error) => assert!(
+                error.to_string().contains(&format!("cube ({units} units)")),
+                "{what}: a plane-wave cube of {units} units: {error}"
+            ),
+            Ok(_) => panic!("{what}: a plane-wave cube of {units} units was not refused"),
         }
     }
     // The expansions after the first charges on both paths (the host last evaluated the
