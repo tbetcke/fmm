@@ -33,9 +33,9 @@ impl Symmetry {
     /// S x.
     pub fn apply(&self, x: [i32; 3]) -> [i32; 3] {
         let mut y = x;
-        for d in 0..3 {
-            if self.flip[d] {
-                y[d] = -y[d];
+        for (v, &f) in y.iter_mut().zip(&self.flip) {
+            if f {
+                *v = -*v;
             }
         }
         if self.swap {

@@ -183,13 +183,7 @@ fn seed(cfg: &Config, placement: Placement, what: u64, offset: [i32; 3]) -> Rng 
 }
 
 /// The points of a C1 cloud of S7 (and its charges) in the box at `c`.
-pub fn cloud(
-    cfg: &Config,
-    placement: Placement,
-    what: u64,
-    offset: [i32; 3],
-    n: usize,
-) -> (Vec<[Dd; 3]>, Vec<Complex<Dd>>) {
+pub fn cloud(cfg: &Config, placement: Placement, what: u64, offset: [i32; 3], n: usize) -> Cloud {
     let mut rng = seed(cfg, placement, what, offset);
     let c = offset.map(|x| x as f64);
     let raw = geometry::points(placement, c, 1.0, 1.0, n, &mut rng);
@@ -298,10 +292,13 @@ pub struct UnitResult {
     pub seconds: f64,
 }
 
+/// Points and their charges.
+type Cloud = (Vec<[Dd; 3]>, Vec<Complex<Dd>>);
+
 /// Per placement: the sources, the double-double multipole and the signatures in f64 and
 /// f32 (ring after ring, N_φ samples each).
 struct Shared {
-    sources: Vec<(Vec<[Dd; 3]>, Vec<Complex<Dd>>)>,
+    sources: Vec<Cloud>,
     multipoles: Vec<Vec<Complex<Dd>>>,
     sig64: Vec<Vec<Complex<f64>>>,
     sig32: Vec<Vec<Complex<f32>>>,
