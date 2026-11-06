@@ -15,8 +15,9 @@
 //! - **a wider candidate** (Phase 4S T7): with a 1 MB chunk budget named in the builder
 //!   and a hook offering every GEMM and strategy decision a 1 GB candidate, no panic: the
 //!   strategy decision times it on its own scratch, a GEMM decision whose level call it
-//!   would overrun the operator's scratch on skips it (at f64 p = 6 at least once), the
-//!   named budget holds for every level call, and the output is within the FMM bounds;
+//!   would overrun the operator's scratch on skips it (with `full` at least once, under a
+//!   named `Dense`), the named budget holds for every level call, and the output is within
+//!   the FMM bounds;
 //! - **the cache round trip**: a second and a third build from the directory take every
 //!   tuned decision from the cache with the same choice, and all three outputs are equal
 //!   bit for bit;
@@ -438,7 +439,11 @@ pub fn check_tuning<T: Real>(
     // its own; a GEMM decision whose level call they would overrun the operator's scratch
     // on skips them with the reason, before building their plan, without a panic; the
     // budget the builder names holds for the tuner's own candidates and for every level
-    // call whatever was chosen.
+    // call whatever was chosen. With `full` the strategy is named `Dense`, so that every
+    // M2L level call is a GEMM decision and the skip is certain: under `Auto` the strategy
+    // decision is timed, and where it chose `Rotation` (the CPU runtime on the M6, at f64
+    // p = 6, from run to run) no M2L GEMM was left to skip. Without `full` `Auto` stays, so
+    // the strategy decision still times the candidate on its own scratch.
     {
         let dir = fresh(root, "wide");
         let small = 1u64 << 20;
@@ -459,9 +464,15 @@ pub fn check_tuning<T: Real>(
             Decision::Gemm { .. } => offers.iter().copied().map(Candidate::Gemm).collect(),
             Decision::P2p { .. } => Vec::new(),
         });
+        let strategy = if full {
+            M2lStrategy::Dense
+        } else {
+            M2lStrategy::Auto
+        };
         let mut fmm = build(
             &device
                 .clone()
+                .strategy(strategy)
                 .device_scratch_budget(small)
                 .tuning_cache(&dir)
                 .tuning_hook(hook),
@@ -483,9 +494,8 @@ pub fn check_tuning<T: Real>(
                 }
             }
         }
-        // At f64 p = 6 (`full`) the M2L level calls below the largest V level (timed by the
-        // strategy decision) have more than one 1 MB chunk, so the wide candidate overruns
-        // the operator's scratch there.
+        // With `full` (f64 p = 6, f32 p = 8) under `Dense` the M2L level calls have more
+        // than one 1 MB chunk, so the wide candidate overruns the operator's scratch there.
         assert!(
             timed + skipped >= 2 && (skipped >= 1 || !full),
             "{label}: the wide candidate was not offered or not skipped: {report}"
