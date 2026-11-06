@@ -394,9 +394,10 @@
 //!   and differing from its output by at most that error; two evaluations, and a second
 //!   build at the most threads, overlapped, bit for bit; the plane-wave kernels on the P2P
 //!   kernel's ISA; on several ranks the one-rank `Fmm` of `PlaneWave` bit for bit; with the
-//!   `gpu` feature, on every device backend compiled in (the CPU runtime), named "PlaneWave,
-//!   run as dense on the device" and the device `Fmm` under `Dense` bit for bit; and since
-//!   Helmholtz CH7.5b with `DevicePlaneWave::Kernels` (merge and shift on the device),
+//!   `gpu` feature, on every device backend compiled in (the CPU runtime), with
+//!   `DevicePlaneWave::Dense` named "PlaneWave, run as dense on the device" and the device
+//!   `Fmm` under `Dense` bit for bit; and since Helmholtz CH7.5b with
+//!   `DevicePlaneWave::Kernels` (merge and shift on the device, the default since CH7.5c),
 //!   `device_common::check_plane_waves` (within the FMM bounds of the host's `PlaneWave`,
 //!   its locals per level too, run to run, a second build and one parent per chunk bit for
 //!   bit, three vectors, the transfers of the formula) and, on several ranks, M2L alone on
@@ -1980,8 +1981,9 @@ fn check_plane_wave<T: Stored + SimdScalar + Equivalence + Default>(
         &waves,
         comm,
     );
-    // On a device it runs as `Dense` (the device path's dense tables): the device `Fmm`
-    // under `PlaneWave` is the device `Fmm` under `Dense` bit for bit.
+    // On a device with `DevicePlaneWave::Dense` it runs as `Dense` (the device path's dense
+    // tables): the device `Fmm` under `PlaneWave` is the device `Fmm` under `Dense` bit for
+    // bit.
     #[cfg(feature = "gpu")]
     for backend in device_backends() {
         let device = |strategy: M2lStrategy| {
@@ -1989,6 +1991,7 @@ fn check_plane_wave<T: Stored + SimdScalar + Equivalence + Default>(
                 builder
                     .clone()
                     .strategy(strategy)
+                    .device_plane_wave(DevicePlaneWave::Dense)
                     .threads(1)
                     .backend(backend)
                     .build(sources, targets, comm),

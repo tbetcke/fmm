@@ -42,8 +42,9 @@ fmm-validate/results/phase6-planewave.md); and the defaults of T11 (decision 7 o
 docs/phase6/README.md; report fmm-validate/results/phase6.md); Helmholtz CH7.5b (the
 device's `PlaneWave` on `nd_fmm_kernels::plane_wave`, opt-in: `DevicePlaneWave`,
 `FmmBuilder::{device_plane_wave, device_plane_wave_budget}`; docs/helmholtz/tasks/CH7.5b.md;
-CH7.5c, its measurement: `FmmBuilder::device_plane_wave_layout`, `DevicePlaneWaveLayout`;
-fmm-validate/results/helmholtz-ch7-5c.md).
+CH7.5c, its measurement and adoption: `FmmBuilder::device_plane_wave_layout`,
+`DevicePlaneWaveLayout`, `DevicePlaneWave::Kernels` the default, the layout by backend and p
+and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -735,18 +736,21 @@ fmm-validate/results/helmholtz-ch7-5c.md).
     build, the layout by backend in `DeviceReport::rotation_layout`, the calls in
     `DeviceReport::rotations`; M2M and L2L stay the dense octant GEMMs);
     `host_fallback` names a kind to keep it on the host;
-    and from Helmholtz CH7.5b M2L under `PlaneWave` on `nd_fmm_kernels::plane_wave` when
-    `FmmBuilder::device_plane_wave(DevicePlaneWave::Kernels)` names it (the default
-    `DevicePlaneWave::Dense` keeps "PlaneWave, run as dense on the device", `Dense`'s bits,
-    until Helmholtz CH7.5c decides the adoption; the `device` module docs, "Plane-wave M2L
-    on the device"): the host's `PlaneWaveTables` uploaded once, per level the lists of
+    and from Helmholtz CH7.5b M2L under `PlaneWave` on `nd_fmm_kernels::plane_wave`
+    (`FmmBuilder::device_plane_wave`, by default `DevicePlaneWave::Kernels` since Helmholtz
+    CH7.5c, signed off 2026-11-06; the named `DevicePlaneWave::Dense` keeps "PlaneWave, run
+    as dense on the device", `Dense`'s bits; the device `Auto` never resolves to
+    `PlaneWave`; the `device` module docs, "Plane-wave M2L on the device"): the host's `PlaneWaveTables` uploaded once, per level the lists of
     the host's order (`src/operator_plane_wave.rs`: parents in index order, the slots
     from the computed children's V rows, every accumulator over its slots ascending, each
     computed child's accumulators in order) built at build and cut into chunks of whole
-    parents within `device_plane_wave_budget` (default `default_scratch_bytes`), the m
+    parents within `device_plane_wave_budget` (default `device::default_plane_wave_budget`:
+    1 GB on Metal, `default_scratch_bytes` elsewhere; CH7.5c), the m
     vectors as columns, four launches per chunk in the layout of
-    `device_plane_wave_layout` (`DevicePlaneWaveLayout::Auto`, by backend, or a named cube;
-    Helmholtz CH7.5c, refused at build where the device cannot run it), one scratch for the widest chunk
+    `device_plane_wave_layout` (`DevicePlaneWaveLayout::Auto`, by backend and p: the CPU
+    layout, 128 units on Metal and on CUDA to p = 12, 256 on CUDA from p = 13
+    (`CUDA_PLANE_WAVE_WIDE_*`); or a named cube; Helmholtz CH7.5c, refused at build where
+    the device cannot run it), one scratch for the widest chunk
     (`PlaneWaveScratch::covering`), reported in `DeviceReport::{plane_wave,
     plane_wave_layout, plane_waves, plane_wave_scratch_bytes}` and "PlaneWave, merge and
     shift on the device". Within the FMM bounds of the host's `PlaneWave`, the same bits at
@@ -754,8 +758,9 @@ fmm-validate/results/helmholtz-ch7-5c.md).
     one-rank output's bit for bit. `device_common::check_plane_waves` (in `tests/mpi_exec.rs`'s
     `check_plane_wave` on the CPU runtime, `tests/device_metal.rs`, `tests/device_cuda.rs`,
     `tests/device_ranks.rs`) checks it with the transfer formula (four launches per chunk),
-    named cubes (one unit on the CPU runtime, 32 and 256 on the GPUs) bit for bit the
-    default and the refusal of a cube of no unit and of one above the device's units;
+    the default bit for bit `DevicePlaneWave::Kernels` named, `DevicePlaneWave::Dense`
+    `Dense`'s bits, named cubes (one unit on the CPU runtime, 32 and 256 on the GPUs) bit for
+    bit the default and the refusal of a cube of no unit and of one above the device's units;
     the ignored `tests/device_fmm.rs` its accuracy gate (within 1.1× the device `Dense`'s
     L2 errors on the cube and the Plummer sphere, f64 p = 8, 12, 18 and f32 p = 8).
     `tests/operator/device_leaf.rs` checks the four leaf operators against

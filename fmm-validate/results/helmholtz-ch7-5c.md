@@ -190,7 +190,12 @@ agrees with §2's quiet run within 0.6 % in M2L (the evaluations 3–5 % higher)
 
 ## 6. Proposal
 
-For sign-off (question 1 of the PR; the roadmap's *Sign-off: adoption on the device*):
+For sign-off (question 1 of the PR; the roadmap's *Sign-off: adoption on the device*).
+**Signed off 2026-11-06** ("sign off all three questions as recommended", the user) and
+adopted as stated: `DevicePlaneWave::Kernels` the default, `DevicePlaneWaveLayout::resolve`
+by backend and p (`device::CUDA_PLANE_WAVE_WIDE_UNITS` from `CUDA_PLANE_WAVE_WIDE_FROM`),
+`device::default_plane_wave_budget` (`METAL_PLANE_WAVE_BUDGET`); question 2 is the roadmap's
+CH7.5e, question 3 D9 as recommended (the PR).
 
 - **Adopt.** `DevicePlaneWave::Kernels` becomes the default of `M2lStrategy::PlaneWave` on
   every device backend; `DevicePlaneWave::Dense` stays as the named opt-out ("PlaneWave, run

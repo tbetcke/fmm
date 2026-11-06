@@ -74,8 +74,8 @@
 //!
 //! The device's `PlaneWave` (Helmholtz CH7.5b; [`check_plane_waves`], called by
 //! `tests/mpi_exec.rs`'s plane-wave check and the Metal, CUDA and several-rank executables):
-//! without `DevicePlaneWave::Kernels` the device runs it as `Dense`, `Dense`'s bits; with it,
-//! merge and shift on the device within the FMM bounds of the host's `PlaneWave` (the
+//! with `DevicePlaneWave::Dense` the device runs it as `Dense`, `Dense`'s bits; by default
+//! (`DevicePlaneWave::Kernels` since Helmholtz CH7.5c) merge and shift on the device within the FMM bounds of the host's `PlaneWave` (the
 //! output and every level's multipoles and locals), run to run, a second build and one
 //! parent per chunk bit for bit, three vectors each the one-vector run's, and the transfers
 //! of [`expected_evaluation`] (four launches per chunk, from the report).
@@ -1198,13 +1198,16 @@ pub struct PlaneWaveDifferences {
 }
 
 /// The device's `PlaneWave` on its merge and shift kernels (Helmholtz CH7.5b,
-/// `DevicePlaneWave::Kernels`), for `builder` (the strategy is set here) on `backend`,
-/// against the host `Fmm` under `PlaneWave` of the same settings at one thread, on this
-/// rank (module documentation, "The device's `PlaneWave`"):
-/// - without the setting the device runs `PlaneWave` as `Dense`, bit for bit the device
-///   `Fmm` under `Dense`, and the setting under `Dense` changes nothing (constraint 1);
-/// - with it: every kind on the device; the report names "PlaneWave, merge and shift on
-///   the device", the plane-wave tables and no dense M2L tables, the default layout and one
+/// `DevicePlaneWave::Kernels`, the default since CH7.5c), for `builder` (the strategy is set
+/// here) on `backend`, against the host `Fmm` under `PlaneWave` of the same settings at one
+/// thread, on this rank (module documentation, "The device's `PlaneWave`"):
+/// - with `DevicePlaneWave::Dense` the device runs `PlaneWave` as `Dense`, bit for bit the
+///   device `Fmm` under `Dense`, and either setting under `Dense` changes nothing
+///   (constraint 1);
+/// - without the setting, and with `DevicePlaneWave::Kernels` named, bit for bit: every
+///   kind on the device; the report names "PlaneWave, merge and shift on the device", the
+///   plane-wave tables and no dense M2L tables, the default layout by backend and p
+///   (`DevicePlaneWaveLayout::Auto`) and one
 ///   level call per V view with a pair; the output within the FMM bounds of the host's for
 ///   two charge vectors, the first twice bit for bit, the pass before Phase 4S T9's
 ///   output, and the transfers, launches and syncs of [`expected_evaluation`] (with every
@@ -1241,8 +1244,11 @@ pub fn check_plane_waves<T: Stored + SimdScalar + Equivalence + Default>(
             .build(sources, targets, comm)
             .unwrap_or_else(|error| panic!("{backend}: {what} does not build: {error}"))
     };
-    // Without the setting: run as dense, `Dense`'s bits (constraint 1).
-    let mut as_dense = build(builder.clone(), "PlaneWave as dense");
+    // `DevicePlaneWave::Dense`: run as dense, `Dense`'s bits (constraint 1).
+    let mut as_dense = build(
+        builder.clone().device_plane_wave(DevicePlaneWave::Dense),
+        "PlaneWave as dense",
+    );
     assert_eq!(
         as_dense
             .device_report()
@@ -1251,30 +1257,35 @@ pub fn check_plane_waves<T: Stored + SimdScalar + Equivalence + Default>(
             "PlaneWave, run as dense on the device".to_owned(),
             DevicePlaneWave::Dense
         )),
-        "{backend}: PlaneWave without the setting"
+        "{backend}: PlaneWave with DevicePlaneWave::Dense"
     );
     let dense_bits = output_bits(&as_dense.evaluate(charges).expect("the device evaluates"));
     let mut dense = build(builder.clone().strategy(M2lStrategy::Dense), "Dense");
     assert!(
         output_bits(&dense.evaluate(charges).expect("the device evaluates")) == dense_bits,
-        "{backend}: PlaneWave without the setting differs from Dense"
+        "{backend}: PlaneWave with DevicePlaneWave::Dense differs from Dense"
     );
-    // The setting under another strategy changes nothing.
-    let mut named = build(
-        builder
-            .clone()
-            .strategy(M2lStrategy::Dense)
-            .device_plane_wave(DevicePlaneWave::Kernels),
-        "Dense with the setting",
-    );
-    assert!(
-        named.device_report().map(|r| r.plane_wave) == Some(DevicePlaneWave::Dense)
-            && output_bits(&named.evaluate(charges).expect("the device evaluates")) == dense_bits,
-        "{backend}: Dense with DevicePlaneWave::Kernels differs from Dense"
-    );
-    drop((as_dense, dense, named));
+    // Either setting under another strategy changes nothing.
+    for setting in [DevicePlaneWave::Kernels, DevicePlaneWave::Dense] {
+        let mut named = build(
+            builder
+                .clone()
+                .strategy(M2lStrategy::Dense)
+                .device_plane_wave(setting),
+            "Dense with the setting",
+        );
+        assert!(
+            named.device_report().map(|r| r.plane_wave) == Some(DevicePlaneWave::Dense)
+                && output_bits(&named.evaluate(charges).expect("the device evaluates"))
+                    == dense_bits,
+            "{backend}: Dense with {setting:?} differs from Dense"
+        );
+    }
+    drop((as_dense, dense));
 
-    let kernels = builder.clone().device_plane_wave(DevicePlaneWave::Kernels);
+    // The default: merge and shift (Helmholtz CH7.5c); the setting named gives its bits
+    // (below, with the second build).
+    let kernels = builder.clone();
     let mut fmm = build(kernels.clone(), "PlaneWave on the kernels");
     let report = fmm.device_report().expect("a device backend");
     let what = format!("{backend}, PlaneWave, merge and shift");
@@ -1290,7 +1301,7 @@ pub fn check_plane_waves<T: Stored + SimdScalar + Equivalence + Default>(
     }
     assert_eq!(
         report.plane_wave_layout,
-        PlaneWaveLayout::default_for(&report.info),
+        DevicePlaneWaveLayout::Auto.resolve(&report.info, fmm.p()),
         "{what}: the default plane-wave layout"
     );
     let names: Vec<&str> = report.tables.iter().map(|t| t.name).collect();
@@ -1356,6 +1367,11 @@ pub fn check_plane_waves<T: Stored + SimdScalar + Equivalence + Default>(
     };
     let mut builds = vec![
         ("a second build".to_owned(), kernels.clone(), None),
+        (
+            "DevicePlaneWave::Kernels named".to_owned(),
+            kernels.clone().device_plane_wave(DevicePlaneWave::Kernels),
+            None,
+        ),
         (
             "one parent per chunk".to_owned(),
             kernels.clone().device_plane_wave_budget(1),

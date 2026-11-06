@@ -247,13 +247,14 @@
 //!
 //! # Plane-wave M2L on the device (Helmholtz CH7.5b)
 //!
-//! Under `PlaneWave` M2L runs as `Dense` on the device by default ("PlaneWave, run as dense
-//! on the device", Phase 6 T13: the dense tables, built or loaded here, and the output of
-//! `Dense` bit for bit). With
-//! [`FmmBuilder::device_plane_wave`](crate::fmm::FmmBuilder::device_plane_wave)`(`[`DevicePlaneWave::Kernels`]`)`
-//! it runs merge and shift on the device instead ("PlaneWave, merge and shift on the
-//! device"; docs/helmholtz/tasks/CH7.5b.md), the kernels of `nd_fmm_kernels::plane_wave`
-//! (CONVENTIONS §3.14; Helmholtz CH7.5a), opt-in until Helmholtz CH7.5c measures it:
+//! Under `PlaneWave` M2L runs merge and shift on the device ("PlaneWave, merge and shift on
+//! the device"; docs/helmholtz/tasks/CH7.5b.md), the kernels of `nd_fmm_kernels::plane_wave`
+//! (CONVENTIONS §3.14; Helmholtz CH7.5a), the default since Helmholtz CH7.5c measured it
+//! (fmm-validate/results/helmholtz-ch7-5c.md; signed off 2026-11-06). With
+//! [`FmmBuilder::device_plane_wave`](crate::fmm::FmmBuilder::device_plane_wave)`(`[`DevicePlaneWave::Dense`]`)`
+//! it runs as `Dense` instead ("PlaneWave, run as dense on the device", Phase 6 T13: the
+//! dense tables, built or loaded here, and the output of `Dense` bit for bit). The device's
+//! `Auto` never resolves to `PlaneWave`. Merge and shift:
 //!
 //! - **tables**: the host operator's `PlaneWaveTables` (its λ nodes, powers, cos and sin,
 //!   frame rotations, source and child shifts) uploaded once, as they are; no dense M2L
@@ -270,13 +271,15 @@
 //!   blocks per distinct source, the accumulators and the incoming blocks, 2H values each,
 //!   for all m vectors) fits
 //!   [`device_plane_wave_budget`](crate::fmm::FmmBuilder::device_plane_wave_budget)
-//!   (default the translation scratch budget, `default_scratch_bytes`), at least one
+//!   (default [`default_plane_wave_budget`]: 1 GB on Metal, the translation scratch budget
+//!   elsewhere; Helmholtz CH7.5c), at least one
 //!   parent each; the m vectors are columns, the chunk's lists repeated per vector on the
 //!   columns b m + v; four launches per chunk (`outgoing`, `merge`, `gather`, `local`), no
 //!   transfer; one scratch for the widest chunk, allocated at build and counted in the
 //!   memory check with the tables and lists;
-//! - **layout**: [`PlaneWaveLayout::default_for`], the CPU layout on the CPU runtime
-//!   (units capped by `threads(n)`) and a cube of 128 units on Metal and CUDA, unless
+//! - **layout**: [`DevicePlaneWaveLayout::resolve`], the CPU layout on the CPU runtime
+//!   (units capped by `threads(n)`), a cube of 128 units on Metal and on CUDA to p = 12 and
+//!   of 256 units on CUDA from p = 13 (Helmholtz CH7.5c, measured), unless
 //!   [`FmmBuilder::device_plane_wave_layout`](crate::fmm::FmmBuilder::device_plane_wave_layout)
 //!   names a cube (Helmholtz CH7.5c; every layout the same bits)
 //!   ([`DeviceReport::plane_wave_layout`]); the calls in [`DeviceReport::plane_waves`].
@@ -652,8 +655,8 @@ use nd_fmm_kernels::rotation::{
     Shift as DeviceShift,
 };
 use nd_fmm_kernels::translate::{
-    Accumulate, GroupedPlan, Operands, Orientation, PlanSettings, PlanSize, Tables,
-    TranslationScratch, default_scratch_bytes, grouped,
+    Accumulate, DEFAULT_SCRATCH_BYTES, GroupedPlan, Operands, Orientation, PlanSettings, PlanSize,
+    Tables, TranslationScratch, default_scratch_bytes, grouped,
 };
 pub use nd_fmm_kernels::translate::{Gather, Gemm, GemmLayout, Reduction};
 use nd_fmm_kernels::view::{
@@ -1112,9 +1115,10 @@ pub struct DeviceReport {
     /// [`DevicePlaneWave`] where it applies (`PlaneWave` with M2L on the device),
     /// [`DevicePlaneWave::Dense`] otherwise.
     pub plane_wave: DevicePlaneWave,
-    /// The layout of the device plane-wave M2L (Helmholtz CH7.5b): by default the CPU
-    /// layout on the CPU runtime and a cube of `nd_fmm_kernels::plane_wave::GPU_UNITS`
-    /// units on the GPUs ([`PlaneWaveLayout::default_for`]), or the cube that
+    /// The layout of the device plane-wave M2L (Helmholtz CH7.5b): by default by backend
+    /// and p ([`DevicePlaneWaveLayout::resolve`]: the CPU layout on the CPU runtime, a cube
+    /// of 128 units on Metal and on CUDA to p = 12, of 256 on CUDA from p = 13), or the cube
+    /// that
     /// [`FmmBuilder::device_plane_wave_layout`](crate::fmm::FmmBuilder::device_plane_wave_layout)
     /// names (Helmholtz CH7.5c). It runs only where [`plane_wave`](Self::plane_wave) is
     /// [`DevicePlaneWave::Kernels`].
@@ -1376,10 +1380,10 @@ pub struct DeviceOptions {
     /// runtime, 2 GB on CUDA; Phase 4S T7).
     pub scratch_budget: Option<u64>,
     /// How M2L runs on the device under `PlaneWave` (Helmholtz CH7.5b);
-    /// [`DevicePlaneWave::Dense`] by default.
+    /// [`DevicePlaneWave::Kernels`] by default (Helmholtz CH7.5c).
     pub plane_wave: DevicePlaneWave,
     /// The budget of one chunk of a plane-wave level call in bytes (Helmholtz CH7.5b);
-    /// `None` for the device's translation scratch budget, `default_scratch_bytes`.
+    /// `None` for the device's default, [`default_plane_wave_budget`].
     pub plane_wave_budget: Option<u64>,
     /// The layout of the plane-wave launches (Helmholtz CH7.5c);
     /// [`DevicePlaneWaveLayout::Auto`] by default.
@@ -1634,13 +1638,50 @@ impl DeviceP2pLayout {
     }
 }
 
+/// The units per cube of the plane-wave layout on CUDA from [`CUDA_PLANE_WAVE_WIDE_FROM`]
+/// (Helmholtz CH7.5c, measured on the H100 at f64 p = 8–20: 128 units fastest to p = 12,
+/// 4.7 % ahead of 256 there; 256 15 % ahead of 128 at p = 14 and within 3.6 % of the fastest
+/// above; p = 13 not measured; fmm-validate/results/helmholtz-ch7-5c.md §5).
+pub const CUDA_PLANE_WAVE_WIDE_UNITS: u32 = 256;
+
+/// The degree from which CUDA's plane-wave layout takes [`CUDA_PLANE_WAVE_WIDE_UNITS`]
+/// units per cube (Helmholtz CH7.5c).
+pub const CUDA_PLANE_WAVE_WIDE_FROM: usize = 13;
+
+/// The plane-wave chunk budget by default on Metal: 1 GB (Helmholtz CH7.5c, measured on the
+/// M6 at f32 p = 8: the translation scratch budget of 128 MB made up to 88 chunks per level
+/// call, and 1 GB was 14–17 % faster in M2L; fmm-validate/results/helmholtz-ch7-5c.md §3).
+pub const METAL_PLANE_WAVE_BUDGET: u64 = 1 << 30;
+
+/// The budget of one chunk of a plane-wave level call by default on the device `info`:
+/// [`METAL_PLANE_WAVE_BUDGET`] on Metal, at most an eighth of the memory the device reports
+/// and never below `nd_fmm_kernels::translate::DEFAULT_SCRATCH_BYTES` (128 MB), as the
+/// translation budget is bounded on CUDA; elsewhere the translation scratch budget,
+/// `default_scratch_bytes` (128 MB on the CPU runtime, 2 GB on CUDA; CH7.5c measured 4 GB
+/// 1–9 % faster than 2 GB on the H100 at p ≥ 12 and kept 2 GB).
+pub fn default_plane_wave_budget(info: &DeviceInfo) -> u64 {
+    match info.backend {
+        BackendKind::Metal => METAL_PLANE_WAVE_BUDGET
+            .min(info.max_memory.map_or(u64::MAX, |m| m / 8))
+            .max(DEFAULT_SCRATCH_BYTES),
+        BackendKind::Cpu | BackendKind::Cuda => default_scratch_bytes(info),
+    }
+}
+
 impl DevicePlaneWaveLayout {
-    /// The kernel layout of this choice on the device `info`: for
-    /// [`Auto`](DevicePlaneWaveLayout::Auto) the default of `nd-fmm-kernels`
+    /// The kernel layout of this choice on the device `info` at degree p: for
+    /// [`Auto`](DevicePlaneWaveLayout::Auto) by backend and p (Helmholtz CH7.5c): on CUDA
+    /// from [`CUDA_PLANE_WAVE_WIDE_FROM`] a cube of [`CUDA_PLANE_WAVE_WIDE_UNITS`] units (at
+    /// most the device's units per cube), otherwise the default of `nd-fmm-kernels`
     /// ([`PlaneWaveLayout::default_for`]: the CPU layout on the CPU runtime, a cube of
-    /// `GPU_UNITS` units on the GPUs).
-    pub fn resolve(self, info: &DeviceInfo) -> PlaneWaveLayout {
+    /// `GPU_UNITS` = 128 units on the GPUs).
+    pub fn resolve(self, info: &DeviceInfo, p: usize) -> PlaneWaveLayout {
         match self {
+            Self::Auto if info.backend == BackendKind::Cuda && p >= CUDA_PLANE_WAVE_WIDE_FROM => {
+                PlaneWaveLayout::Cube {
+                    units: CUDA_PLANE_WAVE_WIDE_UNITS.min(info.max_units_per_cube.max(1)),
+                }
+            }
             Self::Auto => PlaneWaveLayout::default_for(info),
             Self::Cube { units } => PlaneWaveLayout::Cube { units },
         }
@@ -3281,7 +3322,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
         // chunk's (Helmholtz CH7.5b).
         let plane_budget = options
             .plane_wave_budget
-            .unwrap_or_else(|| default_scratch_bytes(&info));
+            .unwrap_or_else(|| default_plane_wave_budget(&info));
         let plane_chunks: Vec<Vec<PlaneWaveChunk>> = match &plane_wave {
             Some(arrays) => plan
                 .levels()
@@ -3629,7 +3670,7 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             rotation_layout: RotationLayout::default_for(link.device.info(), p),
             plane_waves: Vec::new(),
             plane_wave_scratch: None,
-            plane_wave_layout: options.plane_wave_layout.resolve(link.device.info()),
+            plane_wave_layout: options.plane_wave_layout.resolve(link.device.info(), p),
         };
 
         // The rows of the rotation M2L level calls and the layout (T10).
@@ -5953,6 +5994,65 @@ mod tests {
             ..info
         };
         assert_eq!(budget(&tiny, 32, None), 128 << 20);
+    }
+
+    /// The plane-wave defaults by backend (Helmholtz CH7.5c): the layout by backend and p,
+    /// a named cube as named; the budget 1 GB on Metal within an eighth of the memory, the
+    /// translation budget elsewhere.
+    #[test]
+    fn plane_wave_defaults_follow_the_backend_and_p() {
+        use nd_fmm_kernels::BackendKind::{Cpu, Cuda, Metal};
+        let on = |backend, max_memory| DeviceInfo {
+            backend,
+            name: "Test Device".into(),
+            compiler: "test".into(),
+            cubecl_version: nd_fmm_kernels::CUBECL_VERSION,
+            f32: true,
+            f64: backend != Metal,
+            plane_size: (32, 32),
+            max_shared_memory: 32_768,
+            max_units_per_cube: 1024,
+            max_cube_count: (65_535, 65_535, 65_535),
+            max_memory,
+        };
+        let auto = |info: &DeviceInfo, p| DevicePlaneWaveLayout::Auto.resolve(info, p);
+        let cube = |units| PlaneWaveLayout::Cube { units };
+        for p in [3, 12, 13, 20] {
+            assert_eq!(auto(&on(Cpu, None), p), PlaneWaveLayout::Cpu);
+            assert_eq!(auto(&on(Metal, None), p), cube(128));
+            assert_eq!(
+                DevicePlaneWaveLayout::Cube { units: 32 }.resolve(&on(Cuda, None), p),
+                cube(32)
+            );
+        }
+        assert_eq!(auto(&on(Cuda, None), 12), cube(128));
+        assert_eq!(auto(&on(Cuda, None), 13), cube(256));
+        assert_eq!(auto(&on(Cuda, None), 20), cube(256));
+        let narrow = DeviceInfo {
+            max_units_per_cube: 192,
+            ..on(Cuda, None)
+        };
+        assert_eq!(auto(&narrow, 18), cube(192));
+
+        assert_eq!(default_plane_wave_budget(&on(Metal, None)), 1 << 30);
+        assert_eq!(
+            default_plane_wave_budget(&on(Metal, Some(24 << 30))),
+            1 << 30
+        );
+        assert_eq!(
+            default_plane_wave_budget(&on(Metal, Some(4 << 30))),
+            512 << 20
+        );
+        assert_eq!(
+            default_plane_wave_budget(&on(Metal, Some(256 << 20))),
+            128 << 20
+        );
+        assert_eq!(default_plane_wave_budget(&on(Cpu, None)), 128 << 20);
+        assert_eq!(default_plane_wave_budget(&on(Cuda, None)), 2 << 30);
+        assert_eq!(
+            default_plane_wave_budget(&on(Cuda, Some(96 << 30))),
+            default_scratch_bytes(&on(Cuda, Some(96 << 30)))
+        );
     }
 
     /// The column views of several vectors (Phase 6 T5): rows and batches with m columns

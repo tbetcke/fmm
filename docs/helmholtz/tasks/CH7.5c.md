@@ -141,3 +141,15 @@ Answered before any code (2026-11-05, the user): the plan "Go ahead (Recommended
 the layout setting and the planewave part, run on locust, the adoption question 1 of the
 PR; the M6 timings "Ask again first": prepare everything and run locust, then ask before
 any timing on the M6.
+
+Answered in the PR (2026-11-06, the user: "sign off all three questions as recommended"):
+1. adopt: `DevicePlaneWave::Kernels` the default of `PlaneWave` on every device
+   (`DevicePlaneWave::Dense` the named opt-out); `DevicePlaneWaveLayout::Auto` cubes of 128
+   units to p = 12 and 256 from p = 13 on CUDA, 128 on Metal, the CPU layout on the CPU
+   runtime; the plane-wave budget's default 1 GB on Metal (the translation budget
+   elsewhere); the kernels kept;
+2. a new roadmap task for the device `Auto` to resolve to `PlaneWave` (CH7.5e, off the
+   priority list);
+3. D9: the device executables and gates on the CPU runtime, Metal and CUDA as the
+   evidence, plus one ABBA run of `nd-fmm-bench --backend cuda` at the defaults (f32 and
+   f64, p = 8, N = 10⁶) against `main` on locust; no Metal D9 timing.
