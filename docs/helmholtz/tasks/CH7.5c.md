@@ -130,11 +130,41 @@ units. The review (a subagent) found nothing blocking; its points were taken (th
 budget range and claims, the near rule's effect on the evaluation column, the ratio
 column's header, the over-cap refusal, docs).
 
+The adoption (after the sign-off, 2026-11-06), as question 1 stated: the default of
+`DevicePlaneWave` flipped to `Kernels`; `DevicePlaneWaveLayout::resolve` takes p, with
+`device::CUDA_PLANE_WAVE_WIDE_UNITS` (256, at most the device's units per cube) on CUDA
+from `CUDA_PLANE_WAVE_WIDE_FROM` (13); `device::default_plane_wave_budget` gives Metal
+`METAL_PLANE_WAVE_BUDGET` (1 GB, at most an eighth of the memory the device reports and
+never below 128 MB, as CUDA's translation budget is bounded) and the translation budget
+elsewhere. All of it lives in `nd-fmm-exec`; `nd_fmm_kernels::plane_wave::GPU_UNITS` and
+`PlaneWaveLayout::default_for` are unchanged. The gate's printed evaluation times at
+N = 10⁵ put merge and shift behind `Dense` on the cube (CUDA and Metal), ahead on the
+Plummer sphere: left to CH7.5e, which measures the device `Auto` by N as well.
+
 ## Pending runs
-- After question 1's sign-off and the adoption: `tests/device_metal.rs` and the gate of
-  `tests/device_fmm.rs` on the M6 (Metal; also the new 32- and 256-unit cubes of
-  `check_plane_waves`, which have run on the CPU runtime only); on locust
-  `tests/device_cuda.rs`, the gate and Clippy with `cpu,cuda`; D9 as question 3 decides.
+None. Ran after the adoption (2026-11-06): on the M6's Metal `tests/device_metal.rs` and the
+gate of `tests/device_fmm.rs` (φ L2 1.011× and 0.999× `Dense`'s); on locust
+`tests/device_cuda.rs` (the 32- and 256-unit cubes of `check_plane_waves` on the GPU), the
+gate (every L2 ratio ≤ 1.0114) and Clippy with `cpu,cuda`; D9 (below). All passed.
+
+## D9
+locust, 2026-11-06 06:18–06:24 UTC, the H100 idle before every run;
+`nd-fmm-bench --backend cuda --precision f32,f64 --degree 8 --n 1000000` (`Auto`, 10 timed
+evaluations after 2 warm-ups, the BLAS thread variables at 1); A = `main` b69e031, B = the
+branch (959df26's tree); order A B B A A B B A A B; the spread max − min of `main`'s five
+run medians.
+
+| Row | `main` median of medians | branch | difference | `main`'s spread | D9 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| f32 p = 8, Auto → Dense | 30.80 ms | 30.57 ms | −0.24 ms (−0.8 %) | 0.27 ms | pass |
+| f64 p = 8, Auto → Dense | 58.28 ms | 54.80 ms | −3.48 ms (−6.0 %) | 4.16 ms | pass |
+
+The errors (φ 1.36e-5, ∇φ 4.59e-5) are the same in every run, and every run's repeats are
+bit-identical. In f64 `main`'s runs 4, 5, 8 and 9 took about 58 ms against 54.5 ms in its
+run 1 and 54.7–55.3 ms in the branch's; the code the device `Auto` runs is the same on both
+sides, so this is not the change's (B/A − 1 of adjacent pairs: +0.6, −6.5, −6.0, −5.2,
+−5.9 %). Build times 2.24 / 2.24 s (f32 and f64 together, `main` / branch medians of the
+f32 row). Reports on locust in /data/ucahtbe/runs/ch7-5c-d9.
 
 ## Open questions
 Answered before any code (2026-11-05, the user): the plan "Go ahead (Recommended)": build

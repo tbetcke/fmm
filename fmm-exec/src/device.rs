@@ -3089,9 +3089,9 @@ impl<T: DeviceScalar> DeviceOperator<T> {
             (None, None) => unreachable!("one of the two holds the octant tables"),
         };
         let expanded = host.tables().classes_m2l().map(|classes| classes.expand());
-        // Under `PlaneWave` the device runs M2L as `Dense` (Phase 6 T13): the dense tables,
-        // built or loaded here, where M2L runs on the device, unless the builder names merge
-        // and shift on the device (Helmholtz CH7.5b).
+        // Under `PlaneWave` with `DevicePlaneWave::Dense` the device runs M2L as `Dense`
+        // (Phase 6 T13): the dense tables, built or loaded here, where M2L runs on the
+        // device; the default runs merge and shift (Helmholtz CH7.5b, CH7.5c).
         let plane_dense = (strategy == M2lStrategy::PlaneWave
             && options.plane_wave == DevicePlaneWave::Dense
             && !options.host_fallback.contains(&OperatorKind::M2l))

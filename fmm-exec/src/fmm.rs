@@ -195,7 +195,9 @@
 //! setting, and on P ranks bit for bit the one-rank `PlaneWave` `Fmm` over the union. `build`
 //! sizes its waves buffer from the plan (one frame of the largest level, 4H values per
 //! box), and its cost model counts M2L per box with a V row (`cost::M2lUnit::Boxes`). With a
-//! device backend M2L on the device runs as `Dense`. [`Fmm::threading`] names the plane-wave
+//! device backend M2L on the device runs by merge and shift on the device
+//! ([`FmmBuilder::device_plane_wave`], default [`DevicePlaneWave::Kernels`] since Helmholtz
+//! CH7.5c), or as `Dense` under [`DevicePlaneWave::Dense`]. [`Fmm::threading`] names the plane-wave
 //! kernels' ISA ([`ThreadingReport::wave_kernel`]).
 //!
 //! # Several charge vectors (Phase 6 T5)
@@ -768,7 +770,7 @@ pub enum DeviceReduction {
 /// merge and shift on the device (`nd_fmm_kernels::plane_wave`, CONVENTIONS §3.14), which
 /// approximates M2L as the host's `PlaneWave` does. Merge and shift is the default since
 /// Helmholtz CH7.5c (docs/helmholtz/tasks/CH7.5c.md, signed off 2026-11-06: M2L 0.15–0.38×
-/// the dense M2L's time on the H100, 0.47–0.60× on Metal at f32 p = 8;
+/// the dense M2L's time on the H100, 0.40–0.51× on Metal at f32 p = 8 with its 1 GB budget;
 /// fmm-validate/results/helmholtz-ch7-5c.md). Ignored by [`Backend::Host`], by every other
 /// strategy and with M2L on the host fallback. The device's [`M2lStrategy::Auto`] never
 /// resolves to `PlaneWave`, so only a named `PlaneWave` runs either.
@@ -1585,7 +1587,8 @@ impl<T> FmmBuilder<T> {
     /// incoming blocks, for all [`vectors`](Self::vectors) (default 1 GB on Metal, Helmholtz
     /// CH7.5c, and elsewhere the device's translation scratch budget,
     /// `nd_fmm_kernels::translate::default_scratch_bytes`: 128 MB on the CPU runtime, 2 GB on
-    /// CUDA; each at most an eighth of the memory the device reports, never below 128 MB). A
+    /// CUDA, at most an eighth of the memory the device reports, never below 128 MB; Metal's
+    /// 1 GB likewise). A
     /// level call runs in chunks of whole parents within it, at least one parent
     /// each, with the same bits at every budget; the scratch is allocated once at build, no
     /// larger than the widest chunk, and counted in the device memory check. Ignored where

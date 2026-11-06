@@ -40,7 +40,7 @@ C6.5 (T13: the plane-wave M2L, `M2lStrategy::PlaneWave`, the level call in
 docs/design/optimisation.md §8.2, "As built in T13"; report
 fmm-validate/results/phase6-planewave.md); and the defaults of T11 (decision 7 of
 docs/phase6/README.md; report fmm-validate/results/phase6.md); Helmholtz CH7.5b (the
-device's `PlaneWave` on `nd_fmm_kernels::plane_wave`, opt-in: `DevicePlaneWave`,
+device's `PlaneWave` on `nd_fmm_kernels::plane_wave`, opt-in until CH7.5c: `DevicePlaneWave`,
 `FmmBuilder::{device_plane_wave, device_plane_wave_budget}`; docs/helmholtz/tasks/CH7.5b.md;
 CH7.5c, its measurement and adoption: `FmmBuilder::device_plane_wave_layout`,
 `DevicePlaneWaveLayout`, `DevicePlaneWave::Kernels` the default, the layout by backend and p
@@ -81,9 +81,10 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   on the rank. Its formulas stay in `nd-fmm-tables` and its loops in `nd-fmm-simd`
   (`WaveKernel`, on the P2P choice's ISA); the pair path (`m2l_pair`, `PairOperator`)
   translates each pair directly along the merge's direction (`Tables::m2l_at`), equal to
-  the level call to rounding. M2M and L2L are `Rotation`'s; on a device it runs as `Dense`
-  (the device path builds the dense tables) unless the builder names merge and shift on
-  the device (Helmholtz CH7.5b, below in the device path's rules). `Fmm` sizes its waves buffer from the plan
+  the level call to rounding. M2M and L2L are `Rotation`'s; on a device it runs merge and
+  shift on the device by default since Helmholtz CH7.5c (CH7.5b, below in the device path's
+  rules), as `Dense` under `DevicePlaneWave::Dense` (the device path builds the dense
+  tables). `Fmm` sizes its waves buffer from the plan
   (`with_plane_wave_boxes`), so no level call allocates; the cost model counts its M2L per
   box with a V row (`cost::M2lUnit::Boxes`). `Auto` resolves to it on the host at f64 p ≥ 7
   and f32 p ≥ 8 since Phase 6 T11 (below, "The defaults of Phase 6 T11").
