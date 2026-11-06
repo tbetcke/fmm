@@ -256,6 +256,11 @@ impl Interp {
             n0 -= 1.0;
             f += 1.0;
         }
+        // A tiny negative f rounds to f + 1 = 1 (ψ at a node from below, as for ŝ = t̂).
+        if f >= 1.0 {
+            n0 += 1.0;
+            f -= 1.0;
+        }
         let n0 = n0 as isize;
         if f == 0.0 {
             return self.at(n0);

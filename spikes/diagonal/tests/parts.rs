@@ -107,10 +107,13 @@ fn bound_term_matches_double_double() {
 #[test]
 fn interpolated_transfer_function() {
     let cfg = Config::default();
+    // (0, 2, 0) at p = 53: a sample on t̂ itself (the ring u = 0 at φ = π/2), ψ ≈ 0 from
+    // below.
     for (ka, p, rep) in [
         (8.0, 14, [0, 2, 0]),
         (30.0, 50, [1, 2, 1]),
         (60.0, 90, [3, 3, 3]),
+        (22.627, 53, [0, 2, 0]),
     ] {
         let setup = Setup::<Dd>::new(Kind::Real, ka);
         let grid = Grid::new(p);
@@ -118,12 +121,16 @@ fn interpolated_transfer_function() {
         let it = Interp::new(&tr, 0, cfg.sigma, cfg.half);
         let mut tv = [Complex::ZERO];
         let mut diff = 0.0f64;
-        for i in (0..grid.rings()).step_by(3) {
-            for j in (0..grid.nphi).step_by(5) {
+        for i in 0..grid.rings() {
+            for j in 0..grid.nphi {
                 let psi = angle(grid.direction(i, j), tr.that);
                 tr.eval(psi.sin_cos().1, &mut tv);
                 let want = tv[0].to_f64();
                 let got = it.eval(psi);
+                assert!(
+                    got.re.is_finite() && got.im.is_finite(),
+                    "k a {ka} p {p}: {got:?}"
+                );
                 diff = diff.max((got - want).abs());
             }
         }
