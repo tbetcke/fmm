@@ -287,6 +287,10 @@ the two conversions (prototype). The sweep itself took 188.7 core-hours.
 
 ## 9. Questions for sign-off
 
+Signed off 2026-11-06, all seven as recommended (the user on PR #191: "i agree with the
+recommendations"). The proposal's §3.5, §3.6, §5.4, §5.6, §1 and §6.5 are amended
+accordingly (its Appendix A, "Amended at CH0.6"), and D3 is recorded in the roadmap.
+
 1. **D3, f32 on high-frequency levels.** *Recommended*: high-frequency levels may run the
    diagonal form in f32 at ε ≥ 10⁻⁴ for real k and weak damping, each class by the bound in
    u = 2⁻²⁴ with C_T = 0.18 and θ = 1/2, failing classes on RCR; f64 below 10⁻⁴ and for

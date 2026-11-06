@@ -225,6 +225,9 @@ None. Done on locust, 2026-11-06 (all results fetched; rows archived on the M6 i
 
 ## Open questions
 
+Signed off 2026-11-06, the user: "i agree with the recommendations" (questions 1–7 of the
+report's §9, as recommended); the proposal amended and D3 recorded on this branch.
+
 The report's §9: D3 (f32 on high-frequency levels), the bound's constants and its damping
 factor e^{Im(k)(|t| + 2a)} (a correction of §3.6), T from extended precision or
 interpolated, §3.5's p_high constant, CONVENTIONS §3.15 "Signatures", the PR's size, the

@@ -2369,10 +2369,11 @@ request, using this template:
   damping factor), a correction of §3.6; 3. T from extended precision or interpolated; 4.
   §3.5's p_high constant against the 2007 report's eq. (25); 5. CONVENTIONS §3.15
   "Signatures" as proposed, written in CH1.3d; 6. the PR's size; 7. the damped bound's
-  conservatism.
+  conservatism. Signed off 2026-11-06, the user: "i agree with the recommendations" (all
+  seven as recommended): D3 recorded; the proposal's §3.5, §3.6, §5.4, §5.6, §1 and §6.5
+  amended (Appendix A, "Amended at CH0.6").
 - Laplace: not touched (a spike crate, a members entry, `Cargo.lock`, an additive impl in
   S7's spike); D9 does not apply.
 - Follow-ups: CH1.3d writes CONVENTIONS §3.15 "Signatures" (question 5); CH4.3 measures the
   damped classes in the FMM-weighted norm and looks at the shorter transfer function (the
-  roadmap's CH4.3 line); CH0.8b recounts §7 with S6's constants (its line already says so);
-  the proposal's §3.5 and §3.6 amended after the sign-off.
+  roadmap's CH4.3 line); CH0.8b recounts §7 with S6's constants (its line already says so).
