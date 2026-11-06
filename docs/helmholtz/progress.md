@@ -2312,7 +2312,8 @@ request, using this template:
   and `device_ranks` at 2 and 4 ranks (24 device plane-wave checks), the MPI list at 2 and
   4 ranks; on the M6's Metal `device_metal` and the `device_fmm` gate (φ L2 1.011× and
   0.999× `Dense`'s); on locust `device_cuda` (the 32- and 256-unit cubes on the GPU), the
-  gate (every L2 ratio ≤ 1.0114) and Clippy with `cpu,cuda`; all passed. D9 on locust
+  gate (every L2 ratio ≤ 1.0114) and Clippy with `cpu,cuda`; Clippy (default, examples,
+  workspace, `cpu,metal`), `cargo doc` and `cargo test --workspace` (27 min); all passed. D9 on locust
   (`nd-fmm-bench --backend cuda`, f32 and f64, p = 8, N = 10⁶, `Auto`; A `main` b69e031,
   B the branch, A B B A A B B A A B): f32 −0.8 % (`main`'s spread 0.27 ms), f64 −6.0 %
   (spread 4.16 ms), the errors identical, both pass. A self-review by a
