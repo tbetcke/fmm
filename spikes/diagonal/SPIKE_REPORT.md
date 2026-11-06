@@ -7,7 +7,10 @@ cores, release build, rustc 1.99.0); the tests and the seed comparison on the M6
 
 ## Summary
 
-Every acceptance item is met; seven questions go to sign-off (§9). Raw rows: 23,188
+The acceptance is met with the corrected bound of question 2 (a smaller C_T and a damping
+factor), pending its sign-off: the 2× criterion holds by construction of C_T, and without the
+damping factor the damped cases exceed the bound by up to 10⁴⁴. Seven questions go to
+sign-off (§9). Raw rows: 23,188
 (unit, class) runs, 682 units, 188.7 core-hours on locust; the rows (68 MB) are archived in
 `~/projects/fmm-archive/locust/runs/ch0-6/`, not committed; `results/summary.md` is their
 summary (`examples/summary.rs`), `results/times.md` the prototype times.
@@ -19,26 +22,28 @@ summary (`examples/summary.rs`), `results/times.md` the prototype times.
    **C_T = 0.153** and **θ = 1/2**: the largest ratio measured/E is exactly 2 by construction,
    at real k a 2.83, p 7, |t|² = 4 (§3). The proposal's C_T ≈ 2 is the seed's, whose model
    builds T in f64; in 3D with T from extended precision C_T is 13× smaller (§3, §6). For Im k > 0 the per-pair relative error grows like e^{Im(k) d} with d the largest
-   source–target distance of the pair; e^{Im(k)|t|} alone under-predicts by up to 1.6·10⁵
-   at the W1 patches (§7).
+   source–target distance of the pair; e^{Im(k)|t|} alone under-predicts by up to 610 at
+   the corner placement and 1.6·10⁵ at the W1 patches (§3).
 2. **T must come from extended precision.** T built in f64 (the seed's model) exceeds that
    bound by up to 47×; interpolating T in ŝ · t̂ from a double-double table keeps the bound's
    form with C_T = 0.23 (1.5×) and builds 11× faster at p = 256 (§5, §8).
-3. **Gumerov and Duraiswami's reading is confirmed** (a the circumradius, bandwidth 2P − 2,
-   grid (2P − 1)(4P − 3), one-box separation): the spike's chain with T built in f64 gives,
-   in 3D at §3.6's points, 0.3–0.5× the 1-D seed's errors on every level; the formula's
-   p_l are 144, 82, 50, 33 as in §3.5. Their eq. (25) as extracted reads
-   ½(3 ln 1/ε)^{2/3} where §3.5 has (3/2 ln 1/ε)^{2/3} (§6; a question).
+3. **Gumerov and Duraiswami's reading holds where S6 can test it** (a the circumradius,
+   bandwidth 2P − 2, grid (2P − 1)(4P − 3), one-box separation, as their 2007 report's text
+   gives it): the spike's chain with T built in f64 gives, in 3D at §3.6's points, 0.2–0.5×
+   the 1-D seed's errors on every level, so §3.5 and §5.4 need no correction of the scheme;
+   the formula's p_l are 144, 82, 50, 33 as in §3.5. Open: their eq. (25) as extracted reads
+   ½(3 ln 1/ε)^{2/3} where §3.5 has (3/2 ln 1/ε)^{2/3} (question 4), and §3.6's level-switch
+   table (their switch at P − p_hi ≤ 2) is not redone (§6).
 4. **Classes on RCR** (§4): with the bound, at kD = 500 and 10⁻⁶ with the formula's p, level
    2 none, levels 3 and 4 the class |t|² = 4, level 5 the classes 4, 5, 6 (0 / 3 / 3 / 29 %
    of an interior box's V pairs; the proposal had 0 / 3 / 16 / 29 %); with the calibrated p
    no class at all on levels 2–5. The measurement agrees with the bound or names one class
    fewer.
 5. **f32 (D3)**: for real k f32 meets 10⁻³ on all 34 classes at the calibrated p from k a = 8
-   up, and 10⁻⁴ from k a = 45 (33 of 34 from 16); with η = 0.1 most classes, with η = 1
-   none (§5). The bound in u = 2⁻²⁴ holds with C_T = 0.18.
+   up, and 10⁻⁴ from k a = 45 (33 or 34 of 34 from 16); with η = 0.1 most classes, with
+   η = 1 none at k a ≤ 5.7, above which those levels are pruned at 10⁻³ and 10⁻⁴ (§5). The bound in u = 2⁻²⁴ holds with C_T = 0.18.
 6. **The bandwidth is 2P − 2.** P − 1 truncates to O(1); ⌈3(P − 1)/2⌉ is not the truncated
-   M2L and fails at high k a, though it is more stable at small k a (§6).
+   M2L and fails at high k a, though its rounding is far smaller at small k a (§6).
 7. **Times** (§8, prototypes, one Grace core): RCR per pair costs 5× the diagonal pair at
    p = 24 and 53× at p = 256.
 
@@ -125,7 +130,9 @@ worst over the placements of max(potential, gradient), the relative ℓ2 norm ov
 **round** is the diagonal form against double-double RCR at the same p (rounding only; the
 truncation is RCR's), **total** against the direct sum. Points whose bound lies below 10⁻¹³
 in f64 form the floor (the chain's own rounding, about u times the conditioning of S → F
-and F → R); above it the ratio measured/E is fitted.
+and F → R); above it the ratio measured/E is fitted. The per-class rounding and total of every
+(kind, k a, p, rule's p, placement, variant), potential and gradient apart (output 1), are the
+archived rows; `results/summary.md` reduces them to the worst placement and norm.
 
 ## 3. C_T and θ (output 2)
 
@@ -138,7 +145,7 @@ T rounded from double-double at L = 2P − 2:
 | η = 0.1 | 0.17 / 2.8·10²⁰ | 2.8·10⁻⁴ / 0.16 |
 | η = 1 | 4.7·10⁵ / 3.9·10⁴⁴ | 4.7·10⁻⁷ / 5.7·10⁻⁴ |
 
-- **Real k.** The ratio lies in [3.5·10⁻⁴, 0.31] over 6,411 points; the largest at k a 2.83,
+- **Real k.** The ratio lies in [3.5·10⁻⁴, 0.31] over 7,184 points; the largest at k a 2.83,
   p 7, the nearest class. C_T = 0.153 (half the largest) and θ = 1/2: E ≤ θ ε then implies a
   measured rounding ≤ ε, and E never under-predicts by more than 2×. Below the floor the
   rounding stays below 176 u. The bound is not tight: at C_T = 0.153 its median
@@ -146,19 +153,20 @@ T rounded from double-double at L = 2P − 2:
   1-D seed does not).
 - **Damped k.** Without a factor the bound fails by up to 10⁴⁴. The local's field decays
   like e^{−Im(k) d} over the pair's source–target distances d, while the rounding keeps the
-  size of the undamped terms. With e^{Im(k)|t|} the largest ratio is 9 and 26 on the uniform
-  and corner placements but 1.6·10⁵ on the W1 patches, whose points sit up to 2a = √3 w
-  further apart; e^{Im(k)(|t| + 2a)}, the largest distance a pair can have, fits all three
+  size of the undamped terms. With e^{Im(k)|t|} the largest ratio is 14 on the uniform
+  placement (η = 1, k a 16), 610 at the corners (η = 0.1, k a 181) and 1.6·10⁵ on the W1
+  patches, whose points sit up to 2a = √3 w beyond |t| (counted from the archived rows per
+  placement; the summary takes the worst placement); e^{Im(k)(|t| + 2a)}, the largest distance a pair can have, fits all three
   (largest ratio 0.16 with η = 0.1, below real k's 0.31), so one C_T serves every kind. It
   over-predicts the damped cases (median 10⁻⁴ to 10⁻⁷ at C_T = 1), so damped levels send
   more classes to RCR than needed (§4).
 - **Variants.** The same fit for the other variants at 2P − 2 (largest ratio over kinds; C_T
   half of it): T interpolated 0.45 → C_T = 0.23; f32 with T rounded from double-double 0.35
-  → 0.18; T built in f64 7.2 → 3.6.
+  → 0.18, its floor 44 u (u = 2⁻²⁴); T built in f64 7.2 → 3.6.
 
 The correction of §3.6 (question 2): E(l, c) = C_T u k|t_c| maxⱼ≤₂P_l₋₂ (2j + 1)|hⱼ(k|t_c|)|
 e^{Im(k)(|t_c| + 2a_l)} + C₀ u, with C_T = 0.15 for T rounded from extended precision (0.23
-interpolated, 0.18 in f32), C₀ = 200 and θ = 1/2. For real k the factor is 1. It still
+interpolated, 0.18 in f32), C₀ = 200 (50 in f32) and θ = 1/2. For real k the factor is 1. It still
 depends only on k, w_l, P_l and the class (constraint 9).
 
 ## 4. Classes on RCR per (k a, ε) (output 3)
@@ -179,7 +187,7 @@ For real k the bound names the measured classes, or one class more; it never mis
 | 5 | 13.5 | [33] 4, 5, 6 / 4, 5 (29 %) | [25] none / none | 4, 5, 6 (29 %) |
 
 At 10⁻⁸ with the formula: level 2 class 4, level 3 classes 4 and 5, level 4 classes 4 to 6,
-level 5 18 classes (62 %), as §3.6 says; with the calibrated p: levels 2 and 3 none, levels 4
+as §3.6 says, and level 5 18 classes (62 %), where §3.6 says eight; with the calibrated p: levels 2 and 3 none, levels 4
 and 5 class 4 (3 %). The W1 sphere-surface shares of §3.6 are not redone (the sweep has no
 tree); CH0.8b recounts them with these constants.
 
@@ -195,12 +203,12 @@ and the rounding (worst placement), at the p of each rule:
 
 | kind | ε = 10⁻³, calibrated p | ε = 10⁻⁴, calibrated p |
 | --- | --- | --- |
-| real | 21–30 of 34 at k a ≤ 5.7; 34 of 34 from k a = 8 to 400 | 12–32 below k a = 16; 33 of 34 from 16 to 32; 34 of 34 from 45 to 400 |
+| real | 21–30 of 34 at k a ≤ 5.7; 34 of 34 from k a = 8 to 400 | 12–32 below k a = 16; 33–34 from 16 to 32; 34 from 45 to 400 |
 | η = 0.1 | 30–34 of 34 from k a = 8 to 45 (beyond: pruned) | 24–29 of 34 from 8 to 45, 12 at 64 |
-| η = 1 | none | none |
+| η = 1 | none at k a ≤ 5.7 (beyond: pruned) | none at k a ≤ 5.7 (beyond: pruned) |
 
-The formula's larger p passes fewer classes at small k a, and all from k a ≈ 45 (10⁻³) or
-128 (10⁻⁴).
+(`results/summary.md` §4, with the formula's p beside.) The formula's larger p passes fewer
+classes at small k a, and all from k a ≈ 45 (10⁻³) or 108 (10⁻⁴).
 The bound in u = 2⁻²⁴ holds with C_T = 0.18 (largest ratio 0.35). So the diagonal form in f32
 is stable for real k at ε ≥ 10⁻⁴ on every class of every high-frequency level that the
 calibrated rule produces from k a ≈ 45 (at 10⁻³ from k a ≈ 8), and the per-class bound
@@ -231,8 +239,11 @@ not, the two papers differ. It changes only §3.5's formula, which the calibrate
 | 4 | 27.1 | 50 | 1.5·10⁻² | 7.4·10⁻³ | 1.6·10⁻⁴ | 1.9·10⁻³ | 5.9·10⁻¹⁵ |
 | 5 | 13.5 | 33 | ≈ 10 | 4.2 | 0.13 | 0.64 | 7.9·10⁻¹¹ |
 
-With the seed's model (T built in f64) the 3D errors are 0.3–0.5× the seed's on every level:
-the reading holds in 3D, and §3.5 and §5.4 need no correction of the scheme. The 3D sums
+With the seed's model (T built in f64) the 3D errors are 0.2–0.5× the seed's on every level:
+the reading holds in 3D, and §3.5 and §5.4 need no correction of the scheme. Not redone:
+§3.6's level-switch table (E at their switch P − p_hi ≤ 2 per ε) and the check that a
+prescribed 10⁻⁴ gives about 10⁻⁶ in their runs; both concern their FMM's switch, which the
+per-class rule replaces. The 3D sums
 over the sphere average the rounding the 1-D model accumulates on the axis, and building T
 in extended precision removes most of the rest. Test 8 (`seed_reproduced_on_the_axis`)
 runs the seed's own geometry (one source and one target on the axis) in 3D: 0.11–1.2× the
@@ -240,9 +251,10 @@ seed's errors at 2w, never far above.
 
 **The bandwidth** (`results/summary.md` §6, real k, the formula's p): L = P − 1 truncates T
 to an error of order 1 from k a ≈ 32; ⌈3(P − 1)/2⌉ is no longer the truncated M2L, so its
-error grows with k a (0.2–0.5 at k a ≥ 256); 2P − 2 matches RCR wherever it is stable. At
-k a 5.7–45 and ε ≤ 10⁻⁶, though, ⌈3(P − 1)/2⌉ meets ε where 2P − 2 loses to rounding (k a 16,
-10⁻⁶: 2.2·10⁻⁶ against 1.1·10⁻²): a shorter T trades a truncation for stability. Using it
+error grows with k a (0.08–0.46 at k a ≥ 256); 2P − 2 matches RCR wherever it is stable.
+At k a 5.7–45 and ε ≤ 10⁻⁶, though, ⌈3(P − 1)/2⌉ stays within a few times ε where 2P − 2
+loses orders of magnitude to rounding (k a 16, 10⁻⁶: 2.2·10⁻⁶ against 1.1·10⁻²), and it
+meets 10⁻⁶ at k a 22.6–45: a shorter T trades a truncation for stability. Using it
 would need its own truncation analysis; this spike only records it (§9, follow-ups).
 
 ## 7. Interpolated T (output 5)
@@ -267,7 +279,7 @@ ring and order plus a DFT written as a product, O(p³) per box, not CH4.x's tran
 | 24 | 4,900 | 4.0 | 21 | 5.3 | 0.31 | 5 / 5 / 0 |
 | 48 | 19,012 | 19 | 161–183 | 8–10 | 2.7 | 36 / 18 / 0 |
 | 96 | 74,884 | 100–104 | 1,291–1,303 | 13 | 22 | 285 / 70 / 45 |
-| 128 | 132,612 | 119–138 | 3,022 | 22–25 | 54 | 673 / 124 / 120 |
+| 128 | 132,612 | 119–138 | 3,022 | 22–25 | 53 | 673 / 124 / 120 |
 | 256 | 527,364 | 548–557 | 29,034–29,209 | 52–53 | 513–526 | 5,341 / 491 / 1,509 |
 
 Per box with 189 V pairs at p = 256 RCR takes 5.5 s and the diagonal form 0.1 s plus 0.5 s for

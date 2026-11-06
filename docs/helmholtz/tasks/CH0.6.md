@@ -230,4 +230,8 @@ factor e^{Im(k)(|t| + 2a)} (a correction of §3.6), T from extended precision or
 interpolated, §3.5's p_high constant, CONVENTIONS §3.15 "Signatures", the PR's size, the
 damped bound's conservatism. As built, test 5 runs k a up to 16, not 32 (the plan): at 32
 the double-double test takes minutes, and the sweep compares the diagonal form with
-double-double RCR at every k a.
+double-double RCR at every k a. Test 8 is looser than planned: the 3D errors at the seed's
+geometry within [1/20, 2]× the seed's (not 1.5×; the 3D sphere averages the rounding the
+1-D seed accumulates, 0.11–1.2× measured), the bound's values within 5 % of the seed's (not
+10⁻¹²; the seed sums the Hankel terms in f64). The sweep's resume counts a unit with any row
+as done; no unit was cut short (all 682 have 816 rows).

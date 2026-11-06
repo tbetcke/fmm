@@ -782,7 +782,7 @@ at any kD.
   back to RCR when the scratch budget binds. Also from S6: the damped classes measured in
   the FMM-weighted norm of CH1.3c, against the per-pair bound's factor
   e^{Im(k)(|t| + 2a)} (its question 7), and whether a shorter transfer function
-  (⌈3(P − 1)/2⌉, stable where 2P − 2 is not at k a 6–45, its report §6) earns a truncation
+  (⌈3(P − 1)/2⌉, whose rounding stays far below 2P − 2's at k a 6–45, its report §6) earns a truncation
   analysis. *Needs:* CH4.2.
 - [ ] **CH4.4 kD sweep, with the FMM3D gate.** *Done when:* the FMM against the direct sum on
   W1 to kD = 1000, W2 to 500 and W3 to 200, beside `hfmm3d`; the full-target crosscheck mapped

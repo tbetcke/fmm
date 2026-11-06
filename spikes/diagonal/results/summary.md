@@ -6,7 +6,7 @@ Written by `examples/summary.rs` from 3 rows files: 682 units (kind, k a, p), 18
 
 measured / (u 10^term) (the proposal's E with C_T = 1) and measured / (u max|T|), each times the damping factor e^{Im(k)(|t| + 2a)} of §7 (1 for real k), quantiles 0, ½, 0.9, 1, over the points whose bound exceeds the floor (≥ 10⁻¹³ in f64, 10⁻⁵ in f32), and the largest measured error among the floor points:
 
-| kind | variant | points | E: min / median / 90 % / max | max|T|: min / median / 90 % / max | floor points: max measured |
+| kind | variant | points | E: min / median / 90 % / max | max\|T\|: min / median / 90 % / max | floor points: max measured |
 | --- | --- | --- | --- | --- | --- |
 | complex0.1 | f64:2P-2 | 7216 | 1.3e-17 / 2.8e-4 / 8.0e-3 / 1.6e-1 | 6.1e-15 / 2.1e-2 / 2.5e-1 / 7.2e0 | 6.2e-15 |
 | complex0.1 | f64:3(P-1)/2 | 7017 | 2.0e-16 / 3.9e-2 / 5.2e6 / 4.9e10 | 7.3e-14 / 4.2e0 / 3.5e8 / 7.3e11 | 2.6e-3 |
@@ -53,10 +53,10 @@ Each cell: the classes (|t|²/w²) whose diagonal form fails, by the bound E ≤
 | 22.627 | none / none (0 %) [36] | 4 / none (3 %) [39] | 4,5 / 4 (16 %) [41] | 4,5,6 / 4,5 (29 %) [44] | 4,5,6,8,9 / 4,5,6 (49 %) [47] | 19 classes / 4,5,6,8 (66 %) [49] | 29 classes / 4,5,6,8,9,10 (93 %) [52] | 34 classes / 23 classes (100 %) [55] |
 | 32.000 | none / none (0 %) [47] | 4 / none (3 %) [50] | 4,5 / 4 (16 %) [53] | 4,5,6 / 4,5 (29 %) [56] | 4,5,6,8,9,10 / 4,5,6 (56 %) [59] | 22 classes / 4,5,6 (72 %) [61] | 33 classes / 4,5,6,8,9 (99 %) [64] | 34 classes / 18 classes (100 %) [67] |
 | 45.255 | 4 / none (3 %) [62] | 4,5 / none (16 %) [65] | 4,5,6 / 4 (29 %) [69] | 4,5,6,8,9 / 4,5 (49 %) [72] | 25 classes / 4,5,6 (85 %) [75] | 34 classes / 4,5,6 (100 %) [78] | 34 classes / 4,5,6,8,9 (100 %) [81] | 34 classes / 4,5,6,8,9,10 (100 %) [83] |
-| 64.000 | 4,5 / none (16 %) [83] | 4,5,6 / none (29 %) [87] | 18 classes / 4 (62 %) [90] | 33 classes / 4,5 (99 %) [94] | 34 classes / 4,5,6 (100 %) [97] | 34 classes / 4,5,6 (100 %) [100] | 34 classes / 4,5,6,8,9 (100 %) [103] | 34 classes / 17 classes (100 %) [106] |
-| 90.510 | – | 34 classes / 4 (100 %) [116] | 34 classes / 4,5 (100 %) [120] | 34 classes / 4,5 (100 %) [124] | 34 classes / 4,5,6,9 (100 %) [128] | 34 classes / 4,5,6,8,9 (100 %) [131] | 34 classes / 18 classes (100 %) [135] | 34 classes / 28 classes (100 %) [138] |
-| 128.000 | – | 34 classes / 4,5 (100 %) [157] | 34 classes / 4,5,6,9 (100 %) [161] | – | 34 classes / 15 classes (100 %) [170] | 34 classes / 25 classes (100 %) [174] | 34 classes / 33 classes (100 %) [177] | 34 classes / 34 classes (100 %) [181] |
-| 181.019 | – | – | 34 classes / 18 classes (100 %) [218] | 34 classes / 26 classes (100 %) [223] | – | – | – | 34 classes / 34 classes (100 %) [241] |
+| 64.000 | – | 4,5,6 / none (29 %) [87] | 18 classes / 4 (62 %) [90] | 33 classes / 4,5 (99 %) [94] | 34 classes / 4,5,6 (100 %) [97] | 34 classes / 4,5,6 (100 %) [100] | 34 classes / 4,5,6,8,9 (100 %) [103] | 34 classes / 17 classes (100 %) [106] |
+| 90.510 | – | – | 34 classes / 4,5 (100 %) [120] | 34 classes / 4,5 (100 %) [124] | 34 classes / 4,5,6,9 (100 %) [128] | 34 classes / 4,5,6,8,9 (100 %) [131] | 34 classes / 18 classes (100 %) [135] | 34 classes / 28 classes (100 %) [138] |
+| 128.000 | – | – | – | – | 34 classes / 15 classes (100 %) [170] | 34 classes / 25 classes (100 %) [174] | 34 classes / 33 classes (100 %) [177] | 34 classes / 34 classes (100 %) [181] |
+| 181.019 | – | – | – | – | – | – | – | 34 classes / 34 classes (100 %) [241] |
 
 ## 3. complex0.1, S7: classes on RCR per (k a, ε)
 
@@ -74,8 +74,8 @@ Each cell: the classes (|t|²/w²) whose diagonal form fails, by the bound E ≤
 | 32.000 | none / none (0 %) [44] | none / none (0 %) [46] | 4 / none (3 %) [48] | 4,5 / 4 (16 %) [51] | 4,5,6 / 4,5 (29 %) [54] | 19 classes / 4,5,6 (66 %) [59] | 33 classes / 4,5,6,8,9 (99 %) [65] | 34 classes / 19 classes (100 %) [70] |
 | 45.255 | 4 / none (3 %) [61] | 4 / none (3 %) [63] | 4,5 / none (16 %) [65] | 4,5,6 / 4 (29 %) [67] | 4,5,6,8,9,10 / 4,5 (56 %) [69] | 31 classes / 4,5 (96 %) [71] | 34 classes / 4,5,6 (100 %) [76] | 34 classes / 4,5,6,8,9,10 (100 %) [81] |
 | 64.000 | – | 4,5,6 / none (29 %) [86] | 18 classes / 4 (62 %) [90] | 31 classes / 4,5 (96 %) [92] | 34 classes / 4,5 (100 %) [94] | 34 classes / 4,5,6 (100 %) [96] | 34 classes / 4,5,6 (100 %) [97] | 34 classes / 4,5,6,8,9 (100 %) [99] |
-| 90.510 | – | 34 classes / none (100 %) [109] | 34 classes / 4 (100 %) [113] | 34 classes / 4,5 (100 %) [117] | 34 classes / 4,5 (100 %) [121] | 34 classes / 4,5,6,9 (100 %) [124] | 34 classes / 4,5,6,8,9,10 (100 %) [127] | 34 classes / 23 classes (100 %) [130] |
-| 128.000 | – | – | – | 34 classes / 4,5,6,9 (100 %) [157] | 34 classes / 4,5,6,8,9 (100 %) [161] | 34 classes / 18 classes (100 %) [164] | 34 classes / 29 classes (100 %) [167] | 34 classes / 33 classes (100 %) [171] |
+| 90.510 | – | – | 34 classes / 4 (100 %) [113] | 34 classes / 4,5 (100 %) [117] | 34 classes / 4,5 (100 %) [121] | 34 classes / 4,5,6,9 (100 %) [124] | 34 classes / 4,5,6,8,9,10 (100 %) [127] | 34 classes / 23 classes (100 %) [130] |
+| 128.000 | – | – | – | – | 34 classes / 4,5,6,8,9 (100 %) [161] | 34 classes / 18 classes (100 %) [164] | 34 classes / 29 classes (100 %) [167] | 34 classes / 33 classes (100 %) [171] |
 | 181.019 | – | – | – | – | – | – | – | 34 classes / 34 classes (100 %) [223] |
 
 ## 3. complex0.1, calibrated: classes on RCR per (k a, ε)
@@ -107,9 +107,9 @@ Each cell: the classes (|t|²/w²) whose diagonal form fails, by the bound E ≤
 | 2.828 | 4,5,6 / none (29 %) [13] | 31 classes / 4,5,6,8,9 (96 %) [16] | 34 classes / 32 classes (100 %) [19] | 34 classes / 34 classes (100 %) [23] | 34 classes / 34 classes (100 %) [26] | 34 classes / 34 classes (100 %) [29] | 34 classes / 34 classes (100 %) [32] | 34 classes / 34 classes (100 %) [36] |
 | 4.000 | 4,5 / none (16 %) [14] | 25 classes / 4,5,6 (85 %) [17] | 34 classes / 24 classes (100 %) [20] | 34 classes / 34 classes (100 %) [23] | 34 classes / 34 classes (100 %) [26] | 34 classes / 34 classes (100 %) [30] | 34 classes / 34 classes (100 %) [33] | 34 classes / 34 classes (100 %) [36] |
 | 5.657 | 4,5 / none (16 %) [15] | 25 classes / 4 (85 %) [18] | 34 classes / 4,5,6,8,9 (100 %) [21] | 34 classes / 30 classes (100 %) [24] | 34 classes / 34 classes (100 %) [28] | 34 classes / 34 classes (100 %) [31] | 34 classes / 34 classes (100 %) [34] | 34 classes / 34 classes (100 %) [37] |
-| 8.000 | 19 classes / none (66 %) [18] | – | 34 classes / 4,5,6,8,9 (100 %) [24] | 34 classes / 26 classes (100 %) [27] | 34 classes / 34 classes (100 %) [30] | 34 classes / 34 classes (100 %) [33] | 34 classes / 34 classes (100 %) [36] | 34 classes / 34 classes (100 %) [39] |
-| 11.314 | 34 classes / none (100 %) [22] | – | – | 34 classes / 26 classes (100 %) [30] | 34 classes / 34 classes (100 %) [33] | 34 classes / 34 classes (100 %) [36] | 34 classes / 34 classes (100 %) [39] | 34 classes / 34 classes (100 %) [42] |
-| 16.000 | – | – | – | 34 classes / 33 classes (100 %) [36] | – | – | 34 classes / 34 classes (100 %) [44] | 34 classes / 34 classes (100 %) [47] |
+| 8.000 | – | – | 34 classes / 4,5,6,8,9 (100 %) [24] | 34 classes / 26 classes (100 %) [27] | 34 classes / 34 classes (100 %) [30] | 34 classes / 34 classes (100 %) [33] | 34 classes / 34 classes (100 %) [36] | 34 classes / 34 classes (100 %) [39] |
+| 11.314 | – | – | – | 34 classes / 26 classes (100 %) [30] | 34 classes / 34 classes (100 %) [33] | 34 classes / 34 classes (100 %) [36] | 34 classes / 34 classes (100 %) [39] | 34 classes / 34 classes (100 %) [42] |
+| 16.000 | – | – | – | – | – | – | 34 classes / 34 classes (100 %) [44] | 34 classes / 34 classes (100 %) [47] |
 
 ## 3. complex1, S7: classes on RCR per (k a, ε)
 
@@ -120,7 +120,7 @@ Each cell: the classes (|t|²/w²) whose diagonal form fails, by the bound E ≤
 | 2.828 | 34 classes / 25 classes (100 %) [19] | 34 classes / 34 classes (100 %) [25] | 34 classes / 34 classes (100 %) [30] | 34 classes / 34 classes (100 %) [37] | 34 classes / 34 classes (100 %) [44] | 34 classes / 34 classes (100 %) [52] | 34 classes / 34 classes (100 %) [56] | 34 classes / 34 classes (100 %) [65] |
 | 4.000 | 34 classes / 27 classes (100 %) [23] | 34 classes / 34 classes (100 %) [29] | 34 classes / 34 classes (100 %) [35] | 34 classes / 34 classes (100 %) [41] | 34 classes / 34 classes (100 %) [48] | 34 classes / 34 classes (100 %) [54] | 34 classes / 34 classes (100 %) [61] | 34 classes / 34 classes (100 %) [70] |
 | 5.657 | 34 classes / 33 classes (100 %) [29] | 34 classes / 34 classes (100 %) [35] | 34 classes / 34 classes (100 %) [43] | 34 classes / 34 classes (100 %) [48] | 34 classes / 34 classes (100 %) [54] | 34 classes / 34 classes (100 %) [61] | 34 classes / 34 classes (100 %) [66] | 34 classes / 34 classes (100 %) [73] |
-| 8.000 | 34 classes / 34 classes (100 %) [36] | – | 34 classes / 34 classes (100 %) [51] | 34 classes / 34 classes (100 %) [57] | 34 classes / 34 classes (100 %) [64] | 34 classes / 34 classes (100 %) [71] | 34 classes / 34 classes (100 %) [77] | 34 classes / 34 classes (100 %) [82] |
+| 8.000 | – | – | 34 classes / 34 classes (100 %) [51] | 34 classes / 34 classes (100 %) [57] | 34 classes / 34 classes (100 %) [64] | 34 classes / 34 classes (100 %) [71] | 34 classes / 34 classes (100 %) [77] | 34 classes / 34 classes (100 %) [82] |
 | 11.314 | – | – | – | 34 classes / 34 classes (100 %) [65] | 34 classes / 34 classes (100 %) [72] | 34 classes / 34 classes (100 %) [79] | 34 classes / 34 classes (100 %) [85] | 34 classes / 34 classes (100 %) [92] |
 | 16.000 | – | – | – | – | – | – | 34 classes / 34 classes (100 %) [104] | 34 classes / 34 classes (100 %) [110] |
 
@@ -231,49 +231,49 @@ The rounding (diagonal against RCR, worst placement) on the axis at |t| = 2w and
 
 ## 4. f32
 
-Per kind and k a: the smallest f32 total error over the classes and bandwidths at any p run, and the classes (|t|²) where f32 at L = 2P − 2 meets 10⁻³ at the p of the calibrated rule at 10⁻³.
+Per kind and k a: the smallest f32 total error over the classes and bandwidths at any p run, and the number of the 34 classes where f32 at L = 2P − 2 meets ε (total and rounding both ≤ ε) at the p of the calibrated rule and of the formula, for ε = 10⁻³ and 10⁻⁴; `–` where the level is pruned or the unit is missing.
 
-| kind | k a | best f32 total (class, band, p) | f32 meets 10⁻³ at calibrated p |
-| --- | --- | --- | --- |
-| complex0.1 | 2.828 | 6.9e-7 (27, f32:P-1, 15) | {9, 18, 19, 22} |
-| complex0.1 | 4.000 | 5.0e-7 (19, f32:P-1, 20) | {8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| complex0.1 | 5.657 | 6.0e-7 (18, f32:P-1, 23) | {6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| complex0.1 | 8.000 | 4.0e-7 (17, f32:P-1, 30) | {5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| complex0.1 | 11.314 | 3.9e-7 (13, f32:P-1, 37) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| complex0.1 | 16.000 | 4.1e-7 (27, f32:3(P-1)/2, 31) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| complex0.1 | 22.627 | 5.9e-7 (18, f32:P-1, 62) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| complex0.1 | 32.000 | 7.4e-7 (17, f32:3(P-1)/2, 52) | {5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| complex0.1 | 45.255 | 1.4e-6 (17, f32:3(P-1)/2, 67) | {5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| complex0.1 | 64.000 | 2.6e-6 (18, f32:3(P-1)/2, 89) | none |
-| complex0.1 | 90.510 | 1.3e-5 (18, f32:3(P-1)/2, 120) | none |
-| complex0.1 | 128.000 | 5.3e-5 (18, f32:3(P-1)/2, 154) | none |
-| complex0.1 | 181.019 | 1.1e-3 (18, f32:3(P-1)/2, 218) | none |
-| complex1 | 2.828 | 2.5e-5 (22, f32:P-1, 19) | none |
-| complex1 | 4.000 | 2.8e-5 (22, f32:3(P-1)/2, 14) | none |
-| complex1 | 5.657 | 2.7e-5 (22, f32:P-1, 24) | none |
-| complex1 | 8.000 | 2.7e-5 (17, f32:P-1, 30) | none |
-| complex1 | 11.314 | 1.1e-4 (18, f32:P-1, 36) | none |
-| complex1 | 16.000 | 7.8e-4 (18, f32:P-1, 44) | none |
-| real | 2.828 | 2.9e-7 (22, f32:P-1, 15) | {8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| real | 4.000 | 2.5e-7 (22, f32:P-1, 20) | {5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| real | 5.657 | 2.8e-7 (18, f32:P-1, 28) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| real | 8.000 | 1.9e-7 (17, f32:P-1, 30) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| real | 11.314 | 2.0e-7 (14, f32:3(P-1)/2, 27) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| real | 13.532 | 2.4e-7 (14, f32:3(P-1)/2, 27) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| real | 16.000 | 2.6e-7 (10, f32:P-1, 50) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| real | 22.627 | 2.8e-7 (10, f32:3(P-1)/2, 41) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| real | 27.063 | 3.5e-7 (11, f32:3(P-1)/2, 49) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| real | 32.000 | 3.1e-7 (14, f32:3(P-1)/2, 53) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| real | 45.255 | 3.8e-7 (18, f32:3(P-1)/2, 78) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| real | 54.127 | 4.2e-7 (13, f32:3(P-1)/2, 85) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| real | 64.000 | 4.5e-7 (10, f32:3(P-1)/2, 106) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| real | 90.510 | 5.5e-7 (14, f32:2P-2, 118) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| real | 108.253 | 5.7e-7 (14, f32:2P-2, 133) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| real | 128.000 | 5.9e-7 (6, f32:2P-2, 150) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| real | 181.019 | 6.6e-7 (13, f32:2P-2, 208) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| real | 256.000 | 8.6e-7 (18, f32:2P-2, 298) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| real | 362.039 | 9.8e-7 (14, f32:2P-2, 421) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
-| real | 400.000 | 1.0e-6 (13, f32:2P-2, 422) | {4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 22, 27} |
+| kind | k a | best f32 total (class, band, p) | 10⁻³: calibrated / formula | 10⁻⁴: calibrated / formula |
+| --- | --- | --- | --- | --- |
+| complex0.1 | 2.828 | 6.9e-7 (27, f32:P-1, 15) | 4 / 1 | 19 / 0 |
+| complex0.1 | 4.000 | 5.0e-7 (19, f32:P-1, 20) | 24 / 10 | 8 / 0 |
+| complex0.1 | 5.657 | 6.0e-7 (18, f32:P-1, 23) | 22 / 23 | 7 / 6 |
+| complex0.1 | 8.000 | 4.0e-7 (17, f32:P-1, 30) | 30 / 27 | 27 / 11 |
+| complex0.1 | 11.314 | 3.9e-7 (13, f32:P-1, 37) | 34 / 27 | 28 / 18 |
+| complex0.1 | 16.000 | 4.1e-7 (27, f32:3(P-1)/2, 31) | 33 / 29 | 29 / 23 |
+| complex0.1 | 22.627 | 5.9e-7 (18, f32:P-1, 62) | 33 / 29 | 29 / 25 |
+| complex0.1 | 32.000 | 7.4e-7 (17, f32:3(P-1)/2, 52) | 32 / 29 | 28 / 24 |
+| complex0.1 | 45.255 | 1.4e-6 (17, f32:3(P-1)/2, 67) | 30 / 27 | 24 / 16 |
+| complex0.1 | 64.000 | 2.6e-6 (18, f32:3(P-1)/2, 89) | – / – | 12 / 6 |
+| complex0.1 | 90.510 | 1.3e-5 (18, f32:3(P-1)/2, 120) | – / – | – / – |
+| complex0.1 | 128.000 | 5.3e-5 (18, f32:3(P-1)/2, 154) | – / – | – / – |
+| complex0.1 | 181.019 | 1.1e-3 (18, f32:3(P-1)/2, 218) | – / – | – / – |
+| complex1 | 2.828 | 2.5e-5 (22, f32:P-1, 19) | 0 / 0 | 0 / 0 |
+| complex1 | 4.000 | 2.8e-5 (22, f32:3(P-1)/2, 14) | 0 / 0 | 0 / 0 |
+| complex1 | 5.657 | 2.7e-5 (22, f32:P-1, 24) | 0 / 6 | 0 / 0 |
+| complex1 | 8.000 | 2.7e-5 (17, f32:P-1, 30) | – / – | – / – |
+| complex1 | 11.314 | 1.1e-4 (18, f32:P-1, 36) | – / – | – / – |
+| complex1 | 16.000 | 7.8e-4 (18, f32:P-1, 44) | – / – | – / – |
+| real | 2.828 | 2.9e-7 (22, f32:P-1, 15) | 21 / 3 | 22 / 0 |
+| real | 4.000 | 2.5e-7 (22, f32:P-1, 20) | 29 / 15 | 18 / 0 |
+| real | 5.657 | 2.8e-7 (18, f32:P-1, 28) | 30 / 27 | 12 / 9 |
+| real | 8.000 | 1.9e-7 (17, f32:P-1, 30) | 34 / 28 | 29 / 17 |
+| real | 11.314 | 2.0e-7 (14, f32:3(P-1)/2, 27) | 34 / 30 | 32 / 26 |
+| real | 13.532 | 2.4e-7 (14, f32:3(P-1)/2, 27) | 34 / 30 | 32 / 27 |
+| real | 16.000 | 2.6e-7 (10, f32:P-1, 50) | 34 / 32 | 33 / 27 |
+| real | 22.627 | 2.8e-7 (10, f32:3(P-1)/2, 41) | 34 / 32 | 33 / 29 |
+| real | 27.063 | 3.5e-7 (11, f32:3(P-1)/2, 49) | 34 / 32 | 34 / 29 |
+| real | 32.000 | 3.1e-7 (14, f32:3(P-1)/2, 53) | 34 / 32 | 33 / 29 |
+| real | 45.255 | 3.8e-7 (18, f32:3(P-1)/2, 78) | 34 / 34 | 34 / 32 |
+| real | 54.127 | 4.2e-7 (13, f32:3(P-1)/2, 85) | 34 / 34 | 34 / 32 |
+| real | 64.000 | 4.5e-7 (10, f32:3(P-1)/2, 106) | 34 / 34 | 34 / 32 |
+| real | 90.510 | 5.5e-7 (14, f32:2P-2, 118) | 34 / 34 | 34 / 33 |
+| real | 108.253 | 5.7e-7 (14, f32:2P-2, 133) | 34 / 34 | 34 / 34 |
+| real | 128.000 | 5.9e-7 (6, f32:2P-2, 150) | 34 / 34 | 34 / 34 |
+| real | 181.019 | 6.6e-7 (13, f32:2P-2, 208) | 34 / 34 | 34 / 34 |
+| real | 256.000 | 8.6e-7 (18, f32:2P-2, 298) | 34 / 34 | 34 / 34 |
+| real | 362.039 | 9.8e-7 (14, f32:2P-2, 421) | 34 / 34 | 34 / 34 |
+| real | 400.000 | 1.0e-6 (13, f32:2P-2, 422) | 34 / 34 | 34 / 34 |
 
 ## 5. T interpolated in ŝ · t̂, and T built in f64
 
@@ -359,7 +359,7 @@ The worst total error over the classes, and the nearest class (|t|² = 4), for L
 
 measured / (u 10^term) (f64, 2P − 2, C_T = 1) per kind and Im(k) a band, without a damping factor, with e^{Im(k)|t|} and with e^{Im(k)(|t| + 2a)}, over the points where the last bound lies above the floor (10⁻¹³): median / max of each.
 
-| kind | Im(k) a | points | no factor | e^{Im(k)|t|} | e^{Im(k)(|t| + 2a)} |
+| kind | Im(k) a | points | no factor | e^{Im(k)\|t\|} | e^{Im(k)(\|t\| + 2a)} |
 | --- | --- | --- | --- | --- | --- |
 | complex0.1 | [0.25, 0.5) | 1287 | 4.5e-2 / 1.2e0 | 1.2e-2 / 2.9e-1 | 5.9e-3 / 1.6e-1 |
 | complex0.1 | [0.5, 1) | 1203 | 1.7e-1 / 5.3e0 | 1.3e-2 / 1.5e-1 | 3.4e-3 / 3.7e-2 |

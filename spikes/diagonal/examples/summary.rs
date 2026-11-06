@@ -118,6 +118,12 @@ fn kind_eta(kind: &str) -> f64 {
     }
 }
 
+/// Whether a level at (kind, k a) is pruned at ε: Im(k) w > ln(1/ε) (the sweep's cut).
+fn pruned(kind: &str, ka: &str, eps: f64) -> bool {
+    let a = 3f64.sqrt() / 2.0;
+    kind_eta(kind) * ka.parse::<f64>().unwrap() / a > (1.0 / eps).ln()
+}
+
 /// log₁₀ of the damping factor e^{Im(k) d} for w = 1: Im(k) = η κ = η (κ a)/a with
 /// a = √3/2, and d = |t| + `extra` (|t| alone, or |t| + 2a, the largest distance between
 /// a source and a target of the pair).
@@ -163,7 +169,7 @@ fn main() {
          in f32), and the largest measured error among the floor points:\n"
     );
     println!(
-        "| kind | variant | points | E: min / median / 90 % / max | max|T|: min / median / 90 % / max | floor points: max measured |"
+        "| kind | variant | points | E: min / median / 90 % / max | max\\|T\\|: min / median / 90 % / max | floor points: max measured |"
     );
     println!("| --- | --- | --- | --- | --- | --- |");
     let variants = [
@@ -284,6 +290,10 @@ fn main() {
                         "S7" => s7.degree(kind, x, x, e).0,
                         _ => calibrated(x, eps),
                     };
+                    if pruned(kind, ka, eps) {
+                        row.push("–".to_string());
+                        continue;
+                    }
                     let (mut by_bound, mut by_meas) = (BTreeSet::new(), BTreeSet::new());
                     let mut found = false;
                     for c in 0..cs.len() {
@@ -374,15 +384,19 @@ fn main() {
         }
     }
 
-    // 4. f32: every (kind, k a, p, class) where an f32 variant meets 10⁻³ or 10⁻⁴.
+    // 4. f32: the classes where f32 at 2P − 2 meets ε at each rule's p, ε = 10⁻³ and 10⁻⁴.
     println!("\n## 4. f32\n");
     println!(
         "Per kind and k a: the smallest f32 total error over the classes and bandwidths at \
-         any p run, and the classes (|t|²) where f32 at L = 2P − 2 meets 10⁻³ at the p of \
-         the calibrated rule at 10⁻³.\n"
+         any p run, and the number of the 34 classes where f32 at L = 2P − 2 meets ε (total \
+         and rounding both ≤ ε) at the p of the calibrated rule and of the formula, for \
+         ε = 10⁻³ and 10⁻⁴; `–` where the level is pruned or the unit is missing.\n"
     );
-    println!("| kind | k a | best f32 total (class, band, p) | f32 meets 10⁻³ at calibrated p |");
-    println!("| --- | --- | --- | --- |");
+    println!(
+        "| kind | k a | best f32 total (class, band, p) | 10⁻³: calibrated / formula | \
+         10⁻⁴: calibrated / formula |"
+    );
+    println!("| --- | --- | --- | --- | --- |");
     for kind in &kinds {
         let mut kas: Vec<String> = units
             .iter()
@@ -400,20 +414,32 @@ fn main() {
                 }
             }
             let x: f64 = ka.parse().unwrap();
-            let p = calibrated(x, 1e-3);
-            let ok: BTreeSet<i32> = (0..cs.len())
-                .filter(|&c| get(kind, ka, p, c, "f32:2P-2").is_some_and(|pt| pt.total <= 1e-3))
-                .map(|c| cs[c].d2)
-                .collect();
-            println!(
-                "| {kind} | {ka} | {:.1e} ({}) | {} |",
-                best.0,
-                best.1,
-                if ok.is_empty() {
-                    "none".to_string()
-                } else {
-                    format!("{ok:?}")
+            let count = |eps: f64, p: usize| {
+                if pruned(kind, ka, eps) {
+                    return "–".to_string();
                 }
+                let run: Vec<&Point> = (0..cs.len())
+                    .filter_map(|c| get(kind, ka, p, c, "f32:2P-2"))
+                    .collect();
+                if run.is_empty() {
+                    return "–".to_string();
+                }
+                let ok = run
+                    .iter()
+                    .filter(|pt| pt.total <= eps && pt.round <= eps)
+                    .count();
+                format!("{ok}")
+            };
+            let cells = [1e-3, 1e-4].map(|eps| {
+                format!(
+                    "{} / {}",
+                    count(eps, calibrated(x, eps)),
+                    count(eps, formula(x, eps))
+                )
+            });
+            println!(
+                "| {kind} | {ka} | {:.1e} ({}) | {} | {} |",
+                best.0, best.1, cells[0], cells[1]
             );
         }
     }
@@ -502,7 +528,9 @@ fn main() {
          damping factor, with e^{{Im(k)|t|}} and with e^{{Im(k)(|t| + 2a)}}, over the points \
          where the last bound lies above the floor (10⁻¹³): median / max of each.\n"
     );
-    println!("| kind | Im(k) a | points | no factor | e^{{Im(k)|t|}} | e^{{Im(k)(|t| + 2a)}} |");
+    println!(
+        "| kind | Im(k) a | points | no factor | e^{{Im(k)\\|t\\|}} | e^{{Im(k)(\\|t\\| + 2a)}} |"
+    );
     println!("| --- | --- | --- | --- | --- | --- |");
     for kind in &kinds {
         let eta = kind_eta(kind);
