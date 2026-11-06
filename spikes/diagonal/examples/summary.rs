@@ -118,6 +118,15 @@ fn kind_eta(kind: &str) -> f64 {
     }
 }
 
+/// log₁₀ of the damping factor e^{Im(k) d} for w = 1: Im(k) = η κ = η (κ a)/a with
+/// a = √3/2, and d = |t| + `extra` (|t| alone, or |t| + 2a, the largest distance between
+/// a source and a target of the pair).
+fn log10_damping(kind: &str, ka: &str, d2: i32, extra: f64) -> f64 {
+    let a = 3f64.sqrt() / 2.0;
+    let im_k = kind_eta(kind) * ka.parse::<f64>().unwrap() / a;
+    im_k * ((d2 as f64).sqrt() + extra) / std::f64::consts::LN_10
+}
+
 fn main() {
     let paths: Vec<String> = std::env::args().skip(1).collect();
     let pts = load(&paths);
@@ -141,13 +150,17 @@ fn main() {
     let get = |kind: &str, ka: &str, p: usize, c: usize, v: &str| {
         pts.get(&(kind.to_string(), ka.to_string(), p, c, v.to_string()))
     };
+    // The bound's term with the damping factor e^{Im(k)(|t| + 2a)} (§7 of the output).
+    let two_a = 3f64.sqrt();
+    let damp = |k: &Key| log10_damping(&k.0, &k.1, cs[k.3].d2, two_a);
 
     // 1. The bound of §3.6 against the rounding, per variant and kind.
     println!("## 1. Rounding against the bounds\n");
     println!(
         "measured / (u 10^term) (the proposal's E with C_T = 1) and measured / (u max|T|), \
-         quantiles 0, ½, 0.9, 1, over the points whose bound exceeds the floor (u 10^term ≥ \
-         10⁻¹³ in f64, 10⁻⁵ in f32), and the largest ratio among the floor points:\n"
+         each times the damping factor e^{{Im(k)(|t| + 2a)}} of §7 (1 for real k), quantiles \
+         0, ½, 0.9, 1, over the points whose bound exceeds the floor (≥ 10⁻¹³ in f64, 10⁻⁵ \
+         in f32), and the largest measured error among the floor points:\n"
     );
     println!(
         "| kind | variant | points | E: min / median / 90 % / max | max|T|: min / median / 90 % / max | floor points: max measured |"
@@ -172,10 +185,10 @@ fn main() {
                 if &k.0 != kind || k.4 != v || !pt.round.is_finite() {
                     continue;
                 }
-                let e = u * 10f64.powf(pt.term);
+                let e = u * 10f64.powf(pt.term + damp(k));
                 if e >= floor {
                     re.push(pt.round / e);
-                    rt.push(pt.round / (u * 10f64.powf(pt.max_t)));
+                    rt.push(pt.round / (u * 10f64.powf(pt.max_t + damp(k))));
                 } else {
                     fl = fl.max(pt.round);
                 }
@@ -196,22 +209,25 @@ fn main() {
         }
     }
 
-    // 2. C_T and θ for the proposal's variant (f64, 2P − 2), every kind together, the
-    // floor included through a term C_0 u.
+    // 2. C_T and θ for the proposal's variant (f64, 2P − 2), every kind together through
+    // the damping factor, the floor included through a term C_0 u.
     let mut ratios = Vec::new();
+    let mut per_kind: BTreeMap<String, f64> = BTreeMap::new();
     let mut floor_max = 0.0f64;
     let mut worst_point = String::new();
     for (k, pt) in &pts {
         if k.4 != "f64:2P-2" || !pt.round.is_finite() {
             continue;
         }
-        let e = U64 * 10f64.powf(pt.term);
+        let e = U64 * 10f64.powf(pt.term + damp(k));
         if e >= 1e-13 {
             let r = pt.round / e;
             if r > ratios.iter().copied().fold(0.0, f64::max) {
                 worst_point = format!("{} k a {} p {} class {:?}", k.0, k.1, k.2, cs[k.3].rep);
             }
             ratios.push(r);
+            let m = per_kind.entry(k.0.clone()).or_default();
+            *m = m.max(r);
         } else {
             floor_max = floor_max.max(pt.round / U64);
         }
@@ -220,13 +236,21 @@ fn main() {
     let c_t = q[3] / 2.0;
     println!("\n## 2. C_T and θ (f64, L = 2P − 2, T rounded from double-double)\n");
     println!(
-        "Above the floor the ratio measured / (u 10^term) lies in [{:.1e}, {:.1e}] (median \
-         {:.1e}); the largest at {worst_point}. With C_T = {c_t:.2e} (half the largest ratio) \
-         the bound E = C_T u 10^term never under-predicts by more than 2×, and θ = 1/2 makes \
-         E ≤ θ ε imply a measured rounding error ≤ ε. Below the floor (u 10^term < 10⁻¹³) the \
-         rounding error is at most {floor_max:.0} u, so the bound with the floor is \
-         E = u (C_T 10^term + {floor_max:.0}).\n",
-        q[0], q[3], q[1]
+        "Above the floor the ratio measured / (u 10^term e^{{Im(k)(|t| + 2a)}}) lies in \
+         [{:.1e}, {:.1e}] (median {:.1e}); the largest at {worst_point}; the largest per kind: \
+         {}. With C_T = {c_t:.2e} (half the largest ratio) the bound \
+         E = C_T u 10^term e^{{Im(k)(|t| + 2a)}} never under-predicts by more than 2×, and \
+         θ = 1/2 makes E ≤ θ ε imply a measured rounding error ≤ ε. Below the floor \
+         (u 10^term e^{{…}} < 10⁻¹³) the rounding error is at most {floor_max:.0} u, so the \
+         bound with the floor is E = u (C_T 10^term e^{{…}} + {floor_max:.0}).\n",
+        q[0],
+        q[3],
+        q[1],
+        per_kind
+            .iter()
+            .map(|(k, m)| format!("{k} {m:.2e}"))
+            .collect::<Vec<_>>()
+            .join(", ")
     );
 
     // 3. Classes on RCR per (k a, ε), per rule, by the bound and by the measurement.
@@ -267,7 +291,8 @@ fn main() {
                             continue;
                         };
                         found = true;
-                        let e_bound = U64 * (c_t * 10f64.powf(pt.term) + floor_max);
+                        let key = (kind.clone(), ka.clone(), p, c, "f64:2P-2".to_string());
+                        let e_bound = U64 * (c_t * 10f64.powf(pt.term + damp(&key)) + floor_max);
                         // A non-finite value fails.
                         if e_bound.is_nan() || e_bound > 0.5 * eps {
                             by_bound.insert(c);
@@ -302,6 +327,50 @@ fn main() {
                 }
                 println!("| {ka} | {} |", row.join(" | "));
             }
+        }
+    }
+
+    // 3b. §3.6's example: kD = 500, levels 2–5, on the axis at |t| = 2w and 3w, against the
+    // 1-D seed's numbers (Appendix B.1).
+    let axis = |rep: [i32; 3]| cs.iter().position(|c| c.rep == rep).unwrap();
+    let (near, far) = (axis([0, 0, 2]), axis([0, 0, 3]));
+    let levels = [
+        (2, "108.253", "1e-7"),
+        (3, "54.127", "8e-5"),
+        (4, "27.063", "1.5e-2"),
+        (5, "13.532", "≈ 10"),
+    ];
+    if get(
+        "real",
+        levels[0].1,
+        formula(108.253, 1e-6),
+        near,
+        "f64:2P-2",
+    )
+    .is_some()
+    {
+        println!(
+            "\n## 3b. §3.6's example: kD = 500, ε = 10⁻⁶, the formula's p\n\nThe rounding \
+             (diagonal against RCR, worst placement) on the axis at |t| = 2w and 3w, with T \
+             rounded from double-double (f64) and built in f64 (f64b, the seed's model), \
+             against the 1-D seed of Appendix B.1 (§3.6: below 10⁻⁸ at 3w on every level).\n"
+        );
+        println!(
+            "| level | k a | p | seed, 2w | f64, 2w | f64b, 2w | f64, 3w | f64b, 3w | E (§2), 2w |"
+        );
+        println!("| --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+        for (l, ka, seed) in levels {
+            let p = formula(ka.parse().unwrap(), 1e-6);
+            let r = |c: usize, v: &str| get("real", ka, p, c, v).map_or(f64::NAN, |pt| pt.round);
+            let e = get("real", ka, p, near, "f64:2P-2")
+                .map_or(f64::NAN, |pt| U64 * (c_t * 10f64.powf(pt.term) + floor_max));
+            println!(
+                "| {l} | {ka} | {p} | {seed} | {:.1e} | {:.1e} | {:.1e} | {:.1e} | {e:.1e} |",
+                r(near, "f64:2P-2"),
+                r(near, "f64b:2P-2"),
+                r(far, "f64:2P-2"),
+                r(far, "f64b:2P-2")
+            );
         }
     }
 
@@ -369,7 +438,7 @@ fn main() {
                 if base.round > 1e-13 && pt.round.is_finite() {
                     r.push(pt.round / base.round);
                 }
-                let e = U64 * (c_t * 10f64.powf(pt.term) + floor_max);
+                let e = U64 * (c_t * 10f64.powf(pt.term + damp(k)) + floor_max);
                 over = over.max(pt.round / e);
             }
             let q = quantiles(r.clone());
@@ -426,48 +495,49 @@ fn main() {
         }
     }
 
-    // 7. Damped k: the ratio to E against Im(k) a.
+    // 7. Damped k: the ratio to E against Im(k) a, with and without a damping factor.
     println!("\n## 7. Damped k\n");
     println!(
-        "measured / E (f64, 2P − 2, above the floor) per kind and Im(k) a band: does the bound \
-         need a damping factor?\n"
+        "measured / (u 10^term) (f64, 2P − 2, C_T = 1) per kind and Im(k) a band, without a \
+         damping factor, with e^{{Im(k)|t|}} and with e^{{Im(k)(|t| + 2a)}}, over the points \
+         where the last bound lies above the floor (10⁻¹³): median / max of each.\n"
     );
-    println!("| kind | Im(k) a | points | min / median / max |");
-    println!("| --- | --- | --- | --- |");
+    println!("| kind | Im(k) a | points | no factor | e^{{Im(k)|t|}} | e^{{Im(k)(|t| + 2a)}} |");
+    println!("| --- | --- | --- | --- | --- | --- |");
     for kind in &kinds {
         let eta = kind_eta(kind);
-        let mut bands: BTreeMap<i64, Vec<f64>> = BTreeMap::new();
+        let mut bands: BTreeMap<i64, [Vec<f64>; 3]> = BTreeMap::new();
         for (k, pt) in &pts {
             if &k.0 != kind || k.4 != "f64:2P-2" || !pt.round.is_finite() {
                 continue;
             }
-            let e = U64 * 10f64.powf(pt.term);
-            if e < 1e-13 {
+            if U64 * 10f64.powf(pt.term + damp(k)) < 1e-13 {
                 continue;
             }
             let im = eta * k.1.parse::<f64>().unwrap();
-            bands
+            let band = bands
                 .entry(if im == 0.0 {
                     -1
                 } else {
                     im.log2().floor() as i64
                 })
-                .or_default()
-                .push(pt.round / e);
+                .or_default();
+            for (i, extra) in [None, Some(0.0), Some(two_a)].into_iter().enumerate() {
+                let d = extra.map_or(0.0, |x| log10_damping(&k.0, &k.1, cs[k.3].d2, x));
+                band[i].push(pt.round / (U64 * 10f64.powf(pt.term + d)));
+            }
         }
         for (b, v) in bands {
-            let q = quantiles(v.clone());
+            let n = v[0].len();
+            let q = v.map(quantiles);
             let label = if b < 0 && eta == 0.0 {
                 "0".to_string()
             } else {
                 format!("[{}, {})", 2f64.powi(b as i32), 2f64.powi(b as i32 + 1))
             };
             println!(
-                "| {kind} | {label} | {} | {:.1e} / {:.1e} / {:.1e} |",
-                v.len(),
-                q[0],
-                q[1],
-                q[3]
+                "| {kind} | {label} | {} | {:.1e} / {:.1e} | {:.1e} / {:.1e} | {:.1e} / {:.1e} |",
+                n, q[0][1], q[0][3], q[1][1], q[1][3], q[2][1], q[2][3]
             );
         }
     }
