@@ -55,9 +55,11 @@ and 10⁻⁶ with the calibrated p no class on RCR on levels 2–5; f32 stable f
 ε ≥ 10⁻⁴ from k a ≈ 45. 2026-11-06: Kathleen back; CH6.2c split (`/next-task`'s size rule)
 into Kathleen's runs (CH6.2c), FMM3D (CH6.2d) and D8 (CH6.2e); CH6.2c done (Kathleen's
 tables in `fmm-validate/results/helmholtz-ch6-2b.md`, §4, §5: at 10⁻⁶ the exponential M2L
-0.24–0.61× Rotation's M2L on the larger cases, level 2 4.4–25× at 40 threads and 1.3–1.8× at
-4 × 10, Auto's AVX-512 crossover 15 puts Batched where the exponential M2L is faster, a
-per-level choice up to 2.10× at 10⁻³; 1 × 40 the fastest split or within 10 % of 4 × 10).
+0.24–0.61× Rotation's M2L on W1 at kD = 500, W3 and the W4 cases at kD = 1, level 2
+4.4–25× Rotation's at 1 × 40 (on W3 at kD = 100 5.4–8.1× at 1 × 40, 5.5–7.9× at 40 × 1,
+1.3–1.8× at 4 × 10), Auto's AVX-512 crossover 15 puts Batched where the exponential M2L is
+faster, a per-level choice up to 2.08× at 10⁻³; 1 × 40 the fastest split or within 10 % of
+4 × 10).
 Next: CH6.2d (FMM3D's per-level times), then CH6.2e (D8).
 
 ## How `/next-task` reads this file
@@ -755,11 +757,12 @@ at any kD.
   call splits below the parent (by frame, direction or child) or the rule takes Rotation on
   levels of few boxes on every machine; and at ε = 10⁻³ a per-level choice among Batched,
   the exponential M2L and Rotation was up to 1.32× faster than any one strategy (CH6.2b's
-  per-level tables are the input). Also (CH6.2c, report §5): on Kathleen level 2 took
-  4.4–25× Rotation's time at 1 × 40 but 1.3–1.8× at 4 × 10 (why, for the remedy); Auto's
-  AVX-512 crossover (p ≤ 15) puts Batched on levels of degree 15, where the exponential
-  M2L is 0.23–0.52× Rotation's on levels of many parents and Batched 0.83–1.27×, and at
-  10⁻³ a per-level choice gained up to 2.10×. *Done when:* D8 proposed with the rule's inputs (degree,
+  per-level tables are the input). Also (CH6.2c, report §4–§5): on Kathleen level 2 on W3
+  at kD = 100 took 5.4–8.1× Rotation's time at 1 × 40 and 5.5–7.9× at 40 × 1 but 1.3–1.8×
+  at 4 × 10 (why, for the remedy); Auto's AVX-512 crossover (p ≤ 15) puts Batched on levels
+  of degree 15, where on the 34 levels of degree 15–16 with at least 200,000 pairs the
+  exponential M2L is 0.23–0.89× Rotation's and Batched 0.83–1.40×; at 10⁻³ a per-level
+  choice gained up to 2.08×. *Done when:* D8 proposed with the rule's inputs (degree,
   ε, the level's boxes) and the coarse levels' remedy measured. *Needs:* CH6.2c, CH6.2d.
   *Sign-off:* D8.
 - [ ] **H6.G Gate.** `/milestone-gate H6`. *Needs:* every task above.

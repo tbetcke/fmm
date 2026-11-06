@@ -16,13 +16,14 @@ proposal [docs/design/helmholtz-fmm-proposal.md](../../docs/design/helmholtz-fmm
 - **Kathleen** (two Xeon Gold 6248 sockets, 2 × 20 Cascade Lake cores, AVX-512,
   `tools/kathleen/`; one exclusive node in `singlenode`): `matrix` and `large` at 1 × 40 in
   job 628611 (node-c11a-142, 2026-11-04, source 1e22995), `large` at 4 × 10 and 40 × 1 in
-  job 629953 (node-c11b-041, 2026-11-06, source e6b29c0, `main` after CH6.2b's merge: the Helmholtz
-  host path differs only in comments, the example prints the seconds to the µs, and every
-  checksum agrees with job 628611's); added by CH6.2c (§5). Open MPI 4.1.6, the P2P kernel
-  `Auto` (AVX-512 there).
+  job 629953 (node-c11b-041, 2026-11-06, source e6b29c0, `main` after CH6.2b's merge: the
+  Helmholtz host path differs only in comments and device-only settings, the example prints
+  the seconds to the µs, and every checksum agrees with job 628611's); added by CH6.2c
+  (§5). Open MPI 4.1.6, the P2P kernel `Auto` (AVX-512 there).
 
 Release builds, rustc 1.99.0, Open MPI 5.0.11 (M6) and 5.0.10 (locust), BLAS threads 1,
-the P2P kernel `Auto` (NEON on both), the default waves budget (8 GiB per node). Commands:
+the P2P kernel `Auto` (NEON on both; Kathleen's in its bullet above), the default waves
+budget (8 GiB per node). Commands:
 §8.
 
 ## Summary
@@ -74,13 +75,14 @@ the P2P kernel `Auto` (NEON on both), the default waves budget (8 GiB per node).
   0.24–0.61× Rotation's M2L on W1 at kD = 500, W3 at kD = 30 and 100, the four W4
   distributions at kD = 1 and the W4 clusters at kD = 100 (W1 at kD = 500 0.50×, W3 at
   kD = 100 0.24×; the evaluation 0.31–0.65× Auto's), and 0.73–0.92× on the other W4 cases
-  at kD = 100, held back by level 2: at 40 threads level 2 took 4.4–25× Rotation's time
-  (1.3–1.8× at 4 × 10, ten threads per rank). Auto's crossover is p ≤ 15 there (AVX-512),
+  at kD = 100, held back by level 2, which took 4.4–25× Rotation's time at 1 × 40 (on W3
+  at kD = 100 5.4–8.1× at 1 × 40, 5.5–7.9× at 40 × 1 and 1.3–1.8× at 4 × 10, §4). Auto's
+  crossover is p ≤ 15 there (AVX-512),
   so at 10⁻⁶ it runs Batched on levels of degree 15, slower than Rotation on small levels
   (W1 at kD = 10, one level of 3,096 pairs: 33×) and slower than the exponential M2L on
   levels of many parents. At 10⁻³ a per-level choice beats the best single strategy by up
-  to 2.10× (W3 at kD = 30; most cases 1.0–1.2×). One rank × 40 threads was the fastest
-  split on W1 at kD = 500 and within 0.91–1.09× of 4 × 10 on W3 at kD = 100; 40 × 1 was the
+  to 2.08× (W3 at kD = 30; most cases 1.0–1.2×). One rank × 40 threads was the fastest
+  split on W1 at kD = 500 and within 10 % of 4 × 10 on W3 at kD = 100; 40 × 1 was the
   slowest for the exponential M2L (1.38–1.99× its 1 × 40 time).
 - **Accuracy unchanged**: the exponential M2L's errors are 0.92–1.07× Rotation's on every
   case (the rule of CH6.1e), and every evaluation's checksum is its strategy's on all three
@@ -294,8 +296,8 @@ Batched (Auto) on levels 5–6 of degree 7 (W3 at kD = 100, locust, 1 × 72):
 
 ## 4. Ranks × threads (locust, Kathleen)
 
-On locust the large cases at 1 × 72, 8 × 9 (`--map-by slot:PE=9 --bind-to core`) and 72 × 1, the
-evaluation's seconds per strategy (ABBA means; the summary has the M2L):
+On locust the large cases at 1 × 72, 8 × 9 (`--map-by slot:PE=9 --bind-to core`) and
+72 × 1, the evaluation's seconds per strategy (ABBA means; the summary has the M2L):
 
 | case | ε | split | Rotation | Batched (fused) | Auto | exponential | rank 0 peak MB |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
@@ -340,14 +342,17 @@ On Kathleen (added by CH6.2c) at 1 × 40, 4 × 10 (CH3.6's split, two ranks per 
 
 As on locust, one rank with all cores is the fastest split on W1 at kD = 500 under every
 strategy (the exponential M2L at 10⁻⁶ 23.0 s against 25.2 s at 4 × 10 and 43.9 s at
-40 × 1), and on W3 at kD = 100 1 × 40 and 4 × 10 are within 0.91–1.09× of each other. 40 × 1
+40 × 1), and on W3 at kD = 100 4 × 10 takes 0.91–1.09× 1 × 40's time. 40 × 1
 is the slowest on W1 at kD = 500 and for the exponential M2L (1.38–1.99× its 1 × 40 time,
 Rotation 1.04–1.54×); on W3 at kD = 100 at 10⁻³ the table-based strategies run as fast at
-40 × 1 as at the other splits. Level 2 under the exponential M2L took 5.4–8.1× Rotation's
-time on W3 at kD = 100 at 1 × 40 (W1 at kD = 500 runs Rotation there), 5.5–7.9× at 40 × 1 and 1.3–1.8× at 4 × 10; why the middle
-split suffers least is CH6.2e's to find out with the coarse levels' remedy. The exponential M2L's gain at 10⁻⁶ holds
-at every split (0.24–0.69× Rotation's M2L). Two sockets do not change locust's answer: the
-large cases run fastest as one rank per node, or two per socket within 10 %.
+40 × 1 as at the other splits (Auto at 10⁻³ is fastest at 40 × 1, 2.945 s). Level 2 under
+the exponential M2L took 5.4–8.1× Rotation's time on W3 at kD = 100 at 1 × 40 (W1 at
+kD = 500 runs Rotation there), 5.5–7.9× at 40 × 1 and 1.3–1.8× at 4 × 10: not a matter of
+threads per rank, since 40 × 1 has one; why the middle split suffers least is CH6.2e's to
+find out with the coarse levels' remedy. The exponential M2L's gain at 10⁻⁶ holds at every
+split (0.24–0.69× Rotation's M2L). Two sockets do not change locust's answer: the large
+cases run fastest as one rank per node, or two per socket within 10 %, Auto on W3 at 10⁻³
+excepted.
 
 ## 5. Kathleen (added by CH6.2c)
 
@@ -361,17 +366,21 @@ AVX-512 class and a two-socket node change the picture in two places, not in its
   time on levels 4–7 at 1 × 40 (the M2L 20.1 s against 39.9 s), on W3 at kD = 100 0.23–0.50×
   on levels 4–6 (8.4 s against 34.8 s); within 1.05–1.10× of the per-level best on the W4
   cases at kD = 1, 1.25–1.44× at kD = 100, where level 2 (p = 25–35, 3,096 pairs) costs
-  5.4–6.0× Rotation's time at 40 threads (locust: 9.3× at 72). Over every case level 2 took
-  4.4–25× Rotation's time at 1 × 40 (the most at 10⁻³ and p = 7), 1.3–1.8× at 4 × 10.
+  5.4–6.0× Rotation's time at 40 threads (locust: 9.2–10.1× at 72). Over every case level 2
+  took 4.4–25× Rotation's time at 1 × 40 (the most at 10⁻³ and p = 7, where job 628611's
+  binary printed Rotation's level to 0.1 ms, so 25× is good to one digit); on W3 at
+  kD = 100 5.4–8.1× at 1 × 40, 5.5–7.9× at 40 × 1 and 1.3–1.8× at 4 × 10 (§4).
 - **Auto runs Batched to p = 15** (CH3.2d's crossover on AVX-512; 10 on NEON), so at 10⁻⁶
   every level of degree 15 runs Batched under Auto, which on sparse or small levels is
   slower than Rotation: W1 at kD = 10, one level of 3,096 pairs, 0.104 s against 0.003 s
   (33×); W1 at kD = 500's level 7, 11.3 s against 9.5 s. On the dense W3 at kD = 100 Batched
-  is 0.83–1.02× Rotation's at p = 15. On the levels of many parents the exponential M2L
-  beats both (0.23–0.52× Rotation's); on the small ones Rotation does. CH4.0 (the rule's sparse-level term) already covers the first; for D8 it
-  means that on Kathleen at 10⁻⁶ the exponential M2L replaces Batched, not only Rotation.
-- **At ε = 10⁻³ a per-level choice gains more than on the other machines**: up to 2.10× over
-  the best single strategy (W3 at kD = 30: Rotation on levels 2–3, Batched on level 4), 1.64×
+  is 0.83–1.02× Rotation's at p = 15. On the levels of degree 15–16 with at least 200,000
+  V pairs (34 levels over all cases and splits) the exponential M2L beats Batched on every
+  one (0.23–0.89× Rotation's against Batched's 0.83–1.40×); on the small levels Rotation
+  wins. CH4.0 (the rule's sparse-level term) already covers the first; for D8 it means that
+  on Kathleen at 10⁻⁶ the exponential M2L replaces Batched, not only Rotation.
+- **At ε = 10⁻³ a per-level choice gains more than on the other machines**: up to 2.08× over
+  the best single strategy (W3 at kD = 30: Rotation on levels 2–3, Batched on level 4), 1.62×
   on the W4 clusters at kD = 100, 1.17× on W1 at kD = 500 (the exponential M2L on levels
   4–6, Batched on 7); the M6 and locust gave up to 1.32×. Batched wins the levels of degree
   7–11, the exponential M2L those of degree 13–36 with many parents, Rotation the coarse
@@ -409,7 +418,8 @@ as the report's tables come from them (§8).
 
 - **At ε ≥ 10⁻⁶ the exponential M2L is the fastest method on the levels with a quadrature
   and enough parents, and close to the per-level best as a whole** (1.00–1.01× on the M6's
-  larger cases at 10⁻⁶, 1.00–1.04× on locust's large ones, 1.00–1.02× on Kathleen's). A default that took it there
+  larger cases at 10⁻⁶, 1.00–1.04× on locust's large ones, 1.00–1.03× on Kathleen's). A
+  default that took it there
   would cut the evaluation to 0.27–0.52× Auto's at 10⁻⁶ on the M6 and 0.30–0.49× on the
   large cases on locust; at 10⁻³ the gain is smaller and the choice per level matters.
 - **The level rule D8 needs** reads the level's degree, ε and its boxes (a function of the
@@ -420,14 +430,17 @@ as the report's tables come from them (§8).
   parent, by frame, direction or child, and of the outgoing waves by box), or the rule takes
   Rotation on levels of few parents on every machine. CH6.2e's line records it. Kathleen's
   level 2 adds a third machine to the evidence (4.4–25× Rotation's at 1 × 40) and a hint
-  for the remedy: at 4 × 10 the same level took 1.3–1.8×.
+  for the remedy: on W3 at kD = 100 it took 5.4–8.1× at 1 × 40 and 5.5–7.9× at 40 × 1 but
+  1.3–1.8× at 4 × 10.
 - **Batched above the crossover** stays slow (2–10× Rotation's M2L at p ≥ 15 on the M6 and
   locust): Auto is right not to take it. On Kathleen Auto's crossover is 15, and at 10⁻⁶ the
-  exponential M2L beats Batched on every level of degree 15–16 with many parents (0.23–0.52×
-  Rotation's against Batched's 0.83–1.27×); a D8 rule that takes the exponential M2L ahead
-  of Batched at p above about 12 is right on all three machines.
+  exponential M2L beats Batched on every level of degree 15–16 with at least 200,000 V
+  pairs (0.23–0.89× Rotation's against Batched's 0.83–1.40×); a D8 rule that takes the
+  exponential M2L ahead of Batched at p ≥ 15 is right on all three machines (at p = 13 one
+  Kathleen level goes the other way: W1 at kD = 500, 10⁻³, 40 × 1, level 6, Batched 0.64×
+  and the exponential M2L 0.83× Rotation's).
 - **At 10⁻³** the per-level choice among Batched, the exponential M2L and Rotation gains up
-  to 1.32× on the M6 and locust and 2.10× on Kathleen: D8's rule is per level, not per run.
+  to 1.32× on the M6 and locust and 2.08× on Kathleen: D8's rule is per level, not per run.
 - **The splits**: on locust one rank with all 72 cores was fastest or within 10 % of
   8 × 9, and 72 × 1 the slowest; on Kathleen (two sockets) 1 × 40 was fastest or within
   10 % of CH3.6's 4 × 10, and 40 × 1 the slowest for the exponential M2L (§4).
