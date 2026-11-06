@@ -3,7 +3,7 @@
 Helmholtz task CH6.2b ([docs/helmholtz/tasks/CH6.2b.md](../../docs/helmholtz/tasks/CH6.2b.md));
 proposal [docs/design/helmholtz-fmm-proposal.md](../../docs/design/helmholtz-fmm-proposal.md)
 §10 CH6.2 (split on this branch: our strategies per level here, FMM3D and D8 in CH6.2c, since
-2026-11-06 Kathleen's runs in CH6.2c, FMM3D in CH6.2d and D8 in CH6.2e),
+2026-11-06 Kathleen's runs in CH6.2c, FMM3D in CH6.2d and D8 in CH6.2e, since the split of CH6.2d CH6.2f),
 §2 (constraints 2, 7, 9), §5.3, §6.4. Measured on:
 
 - **the M6** (Apple M6, 24 GB, macOS; `tools/m6/machine.md`): one rank × 6 threads, under
@@ -59,7 +59,7 @@ budget (8 GiB per node). Commands:
   sphere at kD = 100 at 10⁻⁶ (1.03–1.06× Rotation's M2L, 1.65–1.88× the per-level best).
   The rule cannot choose by the thread count, which would make the output depend on it
   (proposal §2, constraint 2): a finer split of the coarse levels' level call, or a rule by
-  the level's boxes (a function of the tree, constraint 9), is CH6.2e's to weigh with D8
+  the level's boxes (a function of the tree, constraint 9), is CH6.2f's to weigh with D8
   (§7).
 - **Batched above Auto's crossover is slow**: 2–10× Rotation's M2L at p ≥ 15 on both
   machines (its tables, hundreds of MB per level, streamed per block), as CH3.2c measured;
@@ -348,7 +348,7 @@ Rotation 1.04–1.54×); on W3 at kD = 100 at 10⁻³ the table-based strategies
 40 × 1 as at the other splits (Auto at 10⁻³ is fastest at 40 × 1, 2.945 s). Level 2 under
 the exponential M2L took 5.4–8.1× Rotation's time on W3 at kD = 100 at 1 × 40 (W1 at
 kD = 500 runs Rotation there), 5.5–7.9× at 40 × 1 and 1.3–1.8× at 4 × 10: not a matter of
-threads per rank, since 40 × 1 has one; why the middle split suffers least is CH6.2e's to
+threads per rank, since 40 × 1 has one; why the middle split suffers least is CH6.2f's to
 find out with the coarse levels' remedy. The exponential M2L's gain at 10⁻⁶ holds at every
 split (0.24–0.69× Rotation's M2L). Two sockets do not change locust's answer: the large
 cases run fastest as one rank per node, or two per socket within 10 %, Auto on W3 at 10⁻³
@@ -414,7 +414,7 @@ as the report's tables come from them (§8).
   size; CH3.4c) and up to 2.5× on locust's 8 × 9 split (W1 at kD = 500, 10⁻³); the
   summary's ratios between strategies are larger than that on the cases it draws from.
 
-## 7. Observations for D8 (CH6.2e)
+## 7. Observations for D8 (CH6.2f)
 
 - **At ε ≥ 10⁻⁶ the exponential M2L is the fastest method on the levels with a quadrature
   and enough parents, and close to the per-level best as a whole** (1.00–1.01× on the M6's
@@ -428,7 +428,7 @@ as the report's tables come from them (§8).
   the quadratures' tables. The threads cannot enter it (constraint 2), so the coarse levels'
   loss at many threads is fixed in the level call (a split of the merge and shift below the
   parent, by frame, direction or child, and of the outgoing waves by box), or the rule takes
-  Rotation on levels of few parents on every machine. CH6.2e's line records it. Kathleen's
+  Rotation on levels of few parents on every machine. CH6.2f's line records it. Kathleen's
   level 2 adds a third machine to the evidence (4.4–25× Rotation's at 1 × 40) and a hint
   for the remedy: on W3 at kD = 100 it took 5.4–8.1× at 1 × 40 and 5.5–7.9× at 40 × 1 but
   1.3–1.8× at 4 × 10.
