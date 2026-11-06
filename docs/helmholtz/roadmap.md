@@ -59,7 +59,9 @@ tables in `fmm-validate/results/helmholtz-ch6-2b.md`, §4, §5: at 10⁻⁶ the 
 4.4–25× Rotation's at 1 × 40 (on W3 at kD = 100 5.4–8.1× at 1 × 40, 5.5–7.9× at 40 × 1,
 1.3–1.8× at 4 × 10), Auto's AVX-512 crossover 15 puts Batched where the exponential M2L is
 faster, a per-level choice up to 2.08× at 10⁻³; 1 × 40 the fastest split or within 10 % of
-4 × 10).
+4 × 10). 2026-11-06: CH7.5f added (the user: "Please schedule right before CH7.5e") to
+move the CubeCL pins to cubecl 0.11.3 and cubek 0.3.1 and measure them before CH7.5e takes
+the device's new baselines.
 Next: CH6.2d (FMM3D's per-level times), then CH6.2e (D8).
 
 ## How `/next-task` reads this file
@@ -109,7 +111,7 @@ CH3.6 (#170) and H3.G.
 
 Off the list, in file order: CH0.6, CH0.8b, CH0.9, CH0.5 and H0.G; CHR.3 and HR.G; CH1.3d
 and H1.G; CH2.1, CH2.2, CH2.3, CH2.5 and H2.G; H6.G; H4 (CH4.0, CH4.0b and CH4.0c first),
-H5, H7 (CH7.5a, CH7.5b and CH7.5c apart), H8.
+H5, H7 (CH7.5a, CH7.5b and CH7.5c apart; CH7.5f before CH7.5e), H8.
 
 ## Decisions
 
@@ -929,6 +931,23 @@ at any kD.
   merge and shift kernels, with the Helmholtz conversions (CH6.1c's pair chain) and the
   quadrature per level (CH6.1e). *Done when:* as CH6.1 on the device. *Needs:* CH7.5c,
   CH6.2, CH7.1, D8. *Machines:* locust.
+- [ ] **CH7.5f CubeCL 0.11.3 and cubek 0.3.1.** Added on 2026-11-06 (the user: "Please
+  schedule right before CH7.5e"; off the priority list), so that CH7.5e's device baselines
+  are taken on the new releases. The workspace pins `cubecl` `=0.11.0`, `cubek-matmul` and
+  `cubek-std` `=0.3.0` move together to `=0.11.3` and `=0.3.1` (root `CLAUDE.md`, "Working
+  rules"; `run-dependency-checks` lists them as exempt, in #193). The releases fix none of
+  `docs/design/cubecl-upstream.md`'s entries; they bring LLVM for the native CPU on the CPU
+  runtime (cubecl #1833, which may move the CPU runtime's results in the last bits and
+  changes the `tracel-llvm` bundle, 23.1.0-3 to 23.1.0-4), a parked idle device server
+  (#1806, launch latency), a CUDA PTX placeholder fix (#1691), loop conditions in their own
+  scope (#1788) and the plane matmul's planes per cube floored at one (cubek #784).
+  *Done when:* the pins and `Cargo.lock` moved, with the `nd-fmm-kernels` checks of root
+  `CLAUDE.md` passing on the CPU runtime and Metal (the M6) and CUDA (locust); every
+  device test and gate passing, any changed bit identity explained; Laplace's device
+  benchmarks and CH7.5c's merge and shift times within noise of `main` (D9) on the M6's
+  Metal and locust's H100; `cargo deny` clean; `cubecl-upstream.md`'s "0.11.0: still
+  present" entries re-checked against 0.11.3, and the pin's sentences in root `CLAUDE.md`
+  updated. *Needs:* CH7.5c. *Machines:* locust, the M6 (Metal).
 - [ ] **CH7.5e The device `Auto` on `PlaneWave`.** Added on 2026-11-06 (CH7.5c's question
   2, signed off as recommended; off the priority list): the device's `M2lStrategy::Auto`
   resolves to `Dense` or `Rotation` by the static rule and never to `PlaneWave`, although
@@ -941,7 +960,8 @@ at any kD.
   device, as Phase 6 T11 did for the host's `Auto`) and propose a rule. *Done when:* the
   report gives the device `Auto`'s rule by backend, precision and p with `PlaneWave` in it
   where it wins, adopted on sign-off; Laplace's device gates and benchmarks within noise
-  (D9). *Needs:* CH7.5c. *Machines:* locust, the M6 (Metal). *Sign-off:* the device `Auto`.
+  (D9). *Needs:* CH7.5c, CH7.5f. *Machines:* locust, the M6 (Metal). *Sign-off:* the device
+  `Auto`.
 - [ ] **CH7.6 Device performance against FMM3D at matched accuracy.** As CH4.5, the device
   path beside the host's. *Needs:* CH7.2, CH7.3, CH7.4, CH4.5. *Machines:* locust.
 - [ ] **H7.G Gate.** `/milestone-gate H7`. *Needs:* every task above.
