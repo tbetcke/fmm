@@ -49,8 +49,8 @@ A spike only; no workspace crate, convention, table or Laplace path changes.
 - `spikes/diagonal/` (new, package `nd-fmm-spike-diagonal`), a workspace member outside
   `default-members` like the other spikes. Dependencies: S7's spike by path
   (`nd-fmm-spike-truncation`, for Dd, the basis, P2M/L2P, RCR, the direct sum and the
-  placements, so that the reference is S7's double-double chain unchanged) and `rayon`
-  (already in `[workspace.dependencies]`); no new external dependency.
+  placements, so that the reference is S7's double-double chain unchanged); no other
+  dependency (threads by S7's `calibrate::parallel_map`; as built, `rayon` was not needed).
   - `src/grid.rs`: the signature grid of §5.4 for P = p + 1: 2P − 1 Gauss–Legendre nodes in
     cos θ, N_φ = 4P − 3 padded to a multiple of 4, φ_j = 2πj/N_φ; p̄ₙᵐ(cos θᵢ) per ring
     in double-double, rounded to the working precision.
@@ -89,8 +89,8 @@ A spike only; no workspace crate, convention, table or Laplace path changes.
     acceptance's two, since it is what the FMM now uses and a smaller P widens the stable
     range, §3.5).
   - `examples/sweep.rs`: the sweep in parallel units (rayon), rows to `results/runs.csv`;
-    `examples/summary.rs` (or a `summary` mode): the fit of C_T and θ, the tables, to
-    `results/summary.md`; `examples/times.rs`: the prototype times.
+      `examples/summary.rs`: the fit of C_T and θ, the tables, to `results/summary.md`;
+    `examples/times.rs`: the prototype times.
   - `tests/`, `SPIKE_REPORT.md`, `seed.py` (Appendix B.1 verbatim, the 1-D model this
     spike replaces; run once to record its numbers for a test).
 - `spikes/truncation/src/real.rs`: `impl Real for f32` (additive; S7's code and results
@@ -106,7 +106,15 @@ A spike only; no workspace crate, convention, table or Laplace path changes.
   pass; the total error says which meets ε and how stable each is. This tests the reading
   of Gumerov and Duraiswami (2009): their reported accuracy at 10⁻⁴ (a prescribed 10⁻⁴
   gave about 10⁻⁶) against what each bandwidth gives at their level switch.
-- **T interpolated** (f64, L = 2P − 2): against T rounded per sample.
+- **T interpolated** (f64, L = 2P − 2): against T rounded per sample. As built: a table
+  oversampled σ = 3 in ψ, Gaussian-regularised sinc with 36 terms on each side, the
+  position on the grid from ψ in double-double (atan2 in f64 corrected), since ψ in f64
+  alone costs T about L u |T|.
+- **T built in f64** (f64, L = 2P − 2; added while building): the terms rounded to f64,
+  Pₗ and the sum in f64, μ from the f64 directions, as a host table build in working
+  precision would (the seed's model). The seed test showed the two builds differ (the
+  rounding of the terms against that of the values), and the bound of §3.6 was fitted to
+  the seed's.
 
 ### The sweep
 
@@ -206,7 +214,11 @@ spike's tests in release with `--include-ignored`. `cargo deny --locked check li
 
 ## Pending runs
 
-(filled in step 6)
+- locust, started 2026-11-06 09:13 UTC, binary of ee1c88a: the sweep in two shards
+  (`sweep-new --threads 36 --shard i/2 --out runs-i.csv`, PIDs 1521919 and 1521920) in
+  `/data/ucahtbe/fmm/runs/ch0-6/`, 612 units; then the four levels of §3.6's example
+  (`--kinds real --ka 13.532,27.063,54.127,108.253`) and the prototype times. Decides
+  outputs 1–6 and 8; the times output 7.
 
 ## Open questions
 
