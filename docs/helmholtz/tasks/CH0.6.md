@@ -214,12 +214,20 @@ spike's tests in release with `--include-ignored`. `cargo deny --locked check li
 
 ## Pending runs
 
-- locust, started 2026-11-06 09:13 UTC, binary of ee1c88a: the sweep in two shards
-  (`sweep-new --threads 36 --shard i/2 --out runs-i.csv`, PIDs 1521919 and 1521920) in
-  `/data/ucahtbe/fmm/runs/ch0-6/`, 612 units; then the four levels of §3.6's example
-  (`--kinds real --ka 13.532,27.063,54.127,108.253`) and the prototype times. Decides
-  outputs 1–6 and 8; the times output 7.
+None. Done on locust, 2026-11-06 (all results fetched; rows archived on the M6 in
+`~/projects/fmm-archive/locust/runs/ch0-6/`, 68 MB, not committed):
+- the sweep, binary of ee1c88a, two shards (`sweep --threads 36 --shard i/2`), 612 units,
+  09:13–12:06 UTC;
+- §3.6's four levels (`sweep --kinds real --ka 13.532,27.063,54.127,108.253 --threads
+  72`, binary of 01ef39d), 70 units, 17:13–17:16 UTC;
+- the prototype times (`times --reps 7`, one thread, `taskset -c 8`), twice, 17:15 and
+  17:17 UTC, load average 1.4 before (locust otherwise idle, GPU idle).
 
 ## Open questions
 
-(filled when they arise)
+The report's §9: D3 (f32 on high-frequency levels), the bound's constants and its damping
+factor e^{Im(k)(|t| + 2a)} (a correction of §3.6), T from extended precision or
+interpolated, §3.5's p_high constant, CONVENTIONS §3.15 "Signatures", the PR's size, the
+damped bound's conservatism. As built, test 5 runs k a up to 16, not 32 (the plan): at 32
+the double-double test takes minutes, and the sweep compares the diagonal form with
+double-double RCR at every k a.
