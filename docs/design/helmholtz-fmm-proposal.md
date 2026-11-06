@@ -105,7 +105,9 @@ the radius of the circumsphere of a box (a_l = (√3/2) w_l for box width w_l):
 - High-frequency levels in f32, unless spike S6 shows offset classes stable in f32. Since
   Metal and WGSL have no f64 (constraint 8), this means no high-frequency Helmholtz on
   Metal: the M3 Max runs the Helmholtz host path and low-frequency device configurations
-  only (decision D3).
+  only (decision D3). Amended at CH0.6: S6 found every class stable in f32 for real k at
+  ε ≥ 10⁻⁴ from k a ≈ 45 (10⁻³ from k a ≈ 8); D3 (signed off 2026-11-06) allows them per
+  class by the bound of Section 3.6.
 - A dependency on FFTW in any default build, or on the critical path of any phase.
 
 ### 1.4 Guiding principle
@@ -282,7 +284,10 @@ P = \left(p_{lo}^4 + p_{hi}^4\right)^{1/4}
 ```
 
 where P is a truncation number (degrees 0..P − 1); the degree in this repository's
-convention is p = ⌈P⌉ − 1. Their bound is conservative (a prescribed 10⁻⁴ gave about 10⁻⁶
+convention is p = ⌈P⌉ − 1. Their 2007 technical report (eq. 25, as its PDF's text layer
+gives it) has ½(3 ln 1/ε)^{2/3} in place of (3/2 ln 1/ε)^{2/3}, a transition term 1.26×
+smaller; the formula here is kept, since only the uncalibrated rule uses it (amended at
+CH0.6, spikes/diagonal/SPIKE_REPORT.md §6). Their bound is conservative (a prescribed 10⁻⁴ gave about 10⁻⁶
 in their runs), and its floor p_lo is far above what this library's Phase 3 calibration
 needs for Laplace (degree 12 for 10⁻⁶ in φ). The calibrated Helmholtz plateau (below) is 15
 at 10⁻⁶ with φ and ∇φ both within ε/2, consistent with Laplace: the gradient sets the
@@ -373,16 +378,36 @@ At kD = 500 and ε = 10⁻⁶ (the formula P of Section 3.5) the largest term at
 offset is about 4·10⁶ on level 2, 3·10⁹ on level 3, 2·10¹² on level 4 and 10¹⁵ on level 5.
 An axisymmetric f64 test of the scheme as specified (Appendix B) gives relative errors of
 1·10⁻⁷, 8·10⁻⁵, 1.5·10⁻² and about 10 at |t| = 2w on levels 2 to 5, and below 10⁻⁸ on the
-same levels at |t| = 3w.
+same levels at |t| = 3w. Spike S6's full 3D chain (amended at CH0.6) gives 0.2–0.5× those
+errors with T built in f64 as the seed does (2.9·10⁻⁸, 1.7·10⁻⁵, 7.4·10⁻³, 4.2), and with T
+computed in extended precision and rounded once 4.0·10⁻¹⁰, 2.6·10⁻⁷, 1.6·10⁻⁴ and 0.13: T
+must come from extended precision (below).
 
-**The bound.** Those runs follow, within about 3×, the estimate
+**The bound.** Amended at CH0.6 (spike S6, spikes/diagonal/SPIKE_REPORT.md §3; signed off
+2026-11-06). For an offset class c at distance |t_c| on level l, with a_l the circumradius
+and u the unit roundoff (1.1·10⁻¹⁶ in f64, 6.0·10⁻⁸ in f32):
 
 ```math
-E(l, c) = C_T \cdot k|\mathbf{t}_c| \cdot u \cdot \max_{j \le 2P_l - 2} (2j+1)\,|h_j(k|\mathbf{t}_c|)|
+E(l, c) = C_T \cdot |k||\mathbf{t}_c| \cdot u \cdot \max_{j \le 2P_l - 2} (2j+1)\,|h_j(k|\mathbf{t}_c|)|
+\cdot e^{\operatorname{Im}(k)(|\mathbf{t}_c| + 2a_l)} + C_0\, u
 ```
 
-for an offset class c at distance |t_c| on level l, with C_T ≈ 2 and u the unit roundoff
-(1.1·10⁻¹⁶ in f64, 6.0·10⁻⁸ in f32). With the formula P of Section 3.5:
+with C_T = 0.15 and C₀ = 200 in f64 (C_T = 0.18 and C₀ = 50 in f32), for T computed in
+extended precision and rounded once to the working precision; C_T = 0.23 for T interpolated
+in ŝ · t̂ from an extended-precision table (Section 5.4). Over S6's 23,188 (unit, class) runs
+(real k, η = 0.1 and η = 1, k a 2.8 to 400, ε 10⁻³ to 10⁻¹⁰, three placements) the measured
+rounding stays within 2E at C_T = 0.153 (here rounded to 0.15) and below 176 u where E is
+below 10⁻¹³, so θ = 1/2 keeps the measured rounding within about ε wherever E ≤ θ ε; for
+real k the bound over-predicts by 14× in the median. The damping factor is the pair's
+largest source–target distance: with e^{Im(k)|t_c|} alone the bound under-predicts by up to
+1.6·10⁵ (W1 patches); with it the damped bound is 10⁴–10⁷× conservative at η = 1, which
+CH4.3 measures with the FMM-weighted norm. T summed in the working precision exceeds the
+bound by up to 47× (C_T 3.6), so it is never built that way. The constant C_T ≈ 2 of draft
+0.8 was the 1-D seed's, which builds T in f64.
+
+The table below is draft 0.8's, from the 1-D seed with C_T = 2 and θ = 1, kept because S6
+did not redo it (it concerns Gumerov and Duraiswami's switch per level, which the per-class
+rule replaces); with S6's constants the distances shrink. With the formula P of Section 3.5:
 
 | ε | level switch of draft 0.6 (P − p_hi ≤ 2) | E there, nearest class | nearest class has E ≤ ε from |
 | --- | --- | --- | --- |
@@ -396,15 +421,18 @@ Calibrated P helps: if the 10⁻⁴ formula reaches 10⁻⁶, as in their runs, 
 stable from about 3.7 λ at 10⁻⁶; the 10⁻⁶ formula used for 10⁻⁸ still needs about 26 λ.
 
 These numbers come from a one-dimensional model of the proposal's reading of the paper (a
-the circumsphere radius, bandwidth 2P − 2, one-box separation). If their code differs in
-one of these, Sections 3.5 and 5.4 change instead. Spike S6 settles which, in full 3D, with
-realistic point placements and calibrated P.
+the circumsphere radius, bandwidth 2P − 2, one-box separation). Spike S6 confirmed the
+reading in full 3D (their 2007 report's text gives the same a, bandwidth, grid
+(2P − 1)(4P − 3) and separation): Sections 3.5 and 5.4 need no correction of the scheme.
+A bandwidth P − 1 truncates T to an error of order 1; ⌈3(P − 1)/2⌉ is no longer the
+truncated M2L, though at k a 5.7–45 and ε ≤ 10⁻⁶ its rounding is far smaller (a shorter T
+trading truncation for stability; CH4.3's to analyse).
 
 **The rule.** The M2L is chosen per offset class on a level, not per level:
 
 - class c on level l uses the diagonal form if E(l, c) ≤ θ ε and the diagonal form is
-  faster than RCR for that class on that level (CH4.3). θ ≤ 1 is a margin and C_T a
-  constant, both set by S6; the numbers in this section use θ = 1 and C_T = 2.
+  faster than RCR for that class on that level (CH4.3). θ = 1/2 and C_T, C₀ as above
+  (S6; CH4.3 confirms them in the full FMM).
 - every other class uses RCR, which is correct on every level;
 - a level converts to signatures only if some class passes and the level is faster that way,
   conversions included, with its signature scratch within the node budget (Section 7);
@@ -412,27 +440,38 @@ realistic point placements and calibrated P.
 
 The bound costs a few hundred Hankel evaluations per (level, class) at build time and
 depends only on k, w_l, P_l and the class (constraint 9). The classes that fail are the
-nearest ones, so the hybrid keeps most of the diagonal gain. At kD = 500 and 10⁻⁶:
+nearest ones, so the hybrid keeps most of the diagonal gain. At kD = 500 and 10⁻⁶ (S6,
+report §4; share of an interior box's V pairs; the sphere-surface shares of W1 are
+CH0.8b's to recount):
 
-| Level | Box | k a_l | p_l | classes on RCR (\|t\|²/w²) | V pairs on RCR, full cube / sphere surface (W1) |
-| --- | --- | --- | --- | --- | --- |
-| 2 | 19.9 λ | 108 | 144 | none | 0 / 0 |
-| 3 | 9.9 λ | 54 | 82 | 4 | 3 % / 6 % |
-| 4 | 5.0 λ | 27 | 50 | 4, 5 | 16 % / 23 % |
-| 5 | 2.5 λ | 13.5 | 33 | 4, 5, 6 | 29 % / 37 % |
+| Level | Box | k a_l | p_l, formula | classes on RCR (\|t\|²/w²): by the bound / measured | p_l, calibrated | classes on RCR |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2 | 19.9 λ | 108 | 144 | none / none (0 %) | 131 | none |
+| 3 | 9.9 λ | 54 | 82 | 4 / none (3 %) | 72 | none |
+| 4 | 5.0 λ | 27 | 50 | 4 / 4 (3 %) | 41 | none |
+| 5 | 2.5 λ | 13.5 | 33 | 4, 5, 6 / 4, 5 (29 %) | 25 | none |
 
-At 10⁻⁸ level 2 already puts class 4 on RCR, level 3 classes 4 and 5, level 4 classes 4 to
-6, and level 5 eight classes, two thirds of the pairs of an interior box. For W1 at
-kD = 500 the hybrid takes the M2L work of levels 2–5 from 28 to 38 billion complex multiply-adds, against 62
-with RCR on those levels; the low-frequency levels 6 and 7 take 126 billion with Rotation
-(Section 7).
+At 10⁻⁸ with the formula's p level 2 puts class 4 on RCR, level 3 classes 4 and 5, level 4
+classes 4 to 6, and level 5 18 classes (62 %); with the calibrated p levels 2 and 3 none,
+levels 4 and 5 class 4 (3 %). Draft 0.8's estimate of the M2L work (for W1 at kD = 500 the
+hybrid takes levels 2–5 from 28 to 38 billion complex multiply-adds, against 62 with RCR on
+those levels; the low-frequency levels 6 and 7 take 126 billion with Rotation, Section 7)
+used its larger RCR shares and the formula's p, so it is an upper bound.
 
-**f32.** u is 5·10⁸ times larger, so E ≤ 10⁻³ needs max_j (2j + 1)|h_j| below roughly
-10² to 10³ (depending on k|t|) at the nearest classes: in f32 the diagonal form is confined to classes far from the
-transition, if any. S6 measures it; until then no high-frequency level runs in f32 (D3).
+**f32** (amended at CH0.6; D3 signed off 2026-11-06). For real k the diagonal form in f32
+(T rounded from extended precision) meets 10⁻³ on all 34 classes at the calibrated p from
+k a = 8, and 10⁻⁴ from k a = 45 (33 or 34 of 34 from 16); with η = 0.1 most classes, with
+η = 1 none below the pruning cut. So high-frequency levels may run the diagonal form in f32
+at ε ≥ 10⁻⁴ for real k and weak damping, each class by the bound in u = 2⁻²⁴ (C_T = 0.18,
+θ = 1/2), the failing classes on RCR; f64 below 10⁻⁴ and for η ≈ 1. The f32 RCR fallback
+and the low-frequency levels are CH7.1's.
 
 **Complex k.** For Im k > 0 the plane waves and the transfer function grow with Im k times
-the box size (Section 5.6); S6 runs the bound and the test over (Re k, Im k) as well.
+the box size (Section 5.6). S6 (amended at CH0.6): the per-pair relative error grows like
+e^{Im(k) d} over the pair's source–target distances d, which the bound's factor
+e^{Im(k)(|t| + 2a)} covers at every placement; at η = 1 the bound sends every class to RCR
+from k a = 8 at the calibrated p while the measurement fails few, and such levels are pruned
+at 10⁻³ and 10⁻⁴ (Section 5.5).
 
 **Regimes.** Per level the classifier assigns one regime from (κ_r(l), κ_i(l)), the
 tolerance and the calibration:
@@ -617,9 +656,10 @@ Section 3.6:
 
 There is no interpolation or anterpolation between levels, because M2M and L2L stay in
 spherical harmonics (Section 5.2). The transfer functions are the diagonal forms of the
-translation operator, with bandwidth 2P − 2, computed in O(p³) per class at build time
-(S6 checks whether interpolating T in ŝ · t̂ keeps the bound, which would make the build
-O(p²) per class). Their memory is the dominant table cost (Section 7).
+translation operator, with bandwidth 2P − 2, computed in extended precision and rounded
+once, never summed in the working precision (Section 3.6): per sample in O(p³) per class at
+build time, or interpolated in ŝ · t̂ from an extended-precision table in O(p²) per class
+with C_T = 0.23 (S6: 11× faster to build at p = 256; amended at CH0.6). Their memory is the dominant table cost (Section 7).
 
 **Reflection classes.** The reflection symmetries of the grid reduce the 316 offsets per
 level to 34 classes, as Cecka and Darve (2013) show for their uniform grid. On this grid the
@@ -674,7 +714,8 @@ pruning test of Section 5.5 applies with Im k for κ. The high-frequency diagona
 care: for Im k > 0 the plane waves and the transfer function grow with Im k times the box
 size, so p_l, the grid and the bound of Section 3.6 need a damping-dependent rule; Grasso,
 Chaillat, Bonnet and Semblat (2012) give one, tuned empirically for visco-elastodynamics,
-and S6 measures it here. In practice strongly damped cases are pruned before they reach the
+and S6 measured it here (the bound's factor e^{Im(k)(|t| + 2a)}, Section 3.6; amended at
+CH0.6). In practice strongly damped cases are pruned before they reach the
 high-frequency levels; only weakly damped ones use them.
 
 ### 5.7 P2P
@@ -862,8 +903,9 @@ CH6.2 has measured it.
   shift kernels that CH7.5a–c build and measure for Laplace's plane-wave M2L first (amended
   at CH7.5a).
 - **Precision.** f64 on CUDA and the CPU runtime. f32 (Metal) only for low-frequency
-  configurations whose p_l and arguments pass the f32 accuracy contract; no high-frequency
-  level in f32 unless S6 finds classes stable in f32 (D3).
+  configurations whose p_l and arguments pass the f32 accuracy contract; high-frequency
+  classes in f32 at ε ≥ 10⁻⁴ for real k and weak damping by the bound of Section 3.6 (D3,
+  signed off 2026-11-06 from S6), the others on RCR or in f64.
 
 ### 6.6 Distributed path
 
@@ -1685,6 +1727,14 @@ these.
   recommended"): Section 10 table, CH7.5 split into Laplace's plane-wave M2L on the device
   (CH7.5a–c, a new row) and Helmholtz's exponential M2L on the device (CH7.5d, the former
   CH7.5, now needing CH7.5c); Section 6.5's device list names CH7.5d.
+- **Amended at CH0.6, 2026-11-06** (spike S6, spikes/diagonal/SPIKE_REPORT.md; signed off
+  by the user on PR #191, "i agree with the recommendations", questions 1–7): Section 3.6's
+  bound (C_T = 0.15, C₀ = 200, θ = 1/2, the damping factor e^{Im(k)(|t| + 2a)}; f32
+  C_T = 0.18, C₀ = 50; interpolated T C_T = 0.23), its classes table at kD = 500, the f32
+  and complex-k paragraphs and the seed's errors in 3D; Section 3.5 notes the 2007 report's
+  p_high term; Sections 5.4 and 5.6: T from extended precision (per sample or
+  interpolated), the damping factor; Sections 1 and 6.5: f32 on high-frequency levels by
+  D3.
 
 ## Appendix B. The stability check behind Section 3.6
 

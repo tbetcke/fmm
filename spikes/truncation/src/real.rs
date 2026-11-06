@@ -1,6 +1,7 @@
 //! The real scalar of the spike: `f64`, or [`Dd`], a double-double number of about 32
 //! significant digits, so that every operator of a chain runs in either precision from
-//! one source.
+//! one source. `f32` implements it too, for S6's working-precision chain
+//! (`spikes/diagonal`, Helmholtz CH0.6); this spike never runs in it.
 //!
 //! A [`Dd`] is an unevaluated sum hi + lo with |lo| ≤ ulp(hi)/2. The arithmetic follows
 //! the error-free transformations of Dekker and Knuth as in the QD library of Hida, Li
@@ -98,6 +99,37 @@ impl Real for f64 {
     }
     fn abs(self) -> f64 {
         f64::abs(self)
+    }
+}
+
+/// f32 (S6): [`Real::from_f64`] rounds to the nearest f32 and [`Real::EPSILON`] is 2⁻²⁴;
+/// the functions are `std`'s in f32.
+impl Real for f32 {
+    const ZERO: f32 = 0.0;
+    const ONE: f32 = 1.0;
+    const EPSILON: f64 = f32::EPSILON as f64 / 2.0;
+    const NAME: &'static str = "f32";
+
+    fn from_f64(x: f64) -> f32 {
+        x as f32
+    }
+    fn to_f64(self) -> f64 {
+        self as f64
+    }
+    fn sqrt(self) -> f32 {
+        f32::sqrt(self)
+    }
+    fn exp(self) -> f32 {
+        f32::exp(self)
+    }
+    fn sin_cos(self) -> (f32, f32) {
+        f32::sin_cos(self)
+    }
+    fn pi() -> f32 {
+        std::f32::consts::PI
+    }
+    fn abs(self) -> f32 {
+        f32::abs(self)
     }
 }
 
