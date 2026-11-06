@@ -2998,6 +2998,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nd-fmm-spike-diagonal"
+version = "0.0.0"
+dependencies = [
+ "nd-fmm-spike-truncation",
+]
+
+[[package]]
 name = "nd-fmm-spike-download-path"
 version = "0.0.0"
 dependencies = [

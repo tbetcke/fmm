@@ -1,0 +1,13 @@
+[package]
+name = "nd-fmm-spike-diagonal"
+version = "0.0.0"
+description = "Throwaway study: the stability of the Helmholtz FMM's diagonal M2L (signatures, transfer functions) in f64 and f32 on the 34 offset classes, against S7's double-double RCR and the direct sum (Helmholtz CH0.6, spike S6)."
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# S7's double-double scalar, basis, operators, RCR and placements, unchanged, so that the
+# reference is S7's chain.
+nd-fmm-spike-truncation = { path = "../truncation" }

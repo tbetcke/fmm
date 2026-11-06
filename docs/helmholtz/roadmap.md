@@ -45,8 +45,14 @@ and at p = 18 with 256-unit cubes), on Metal 0.47–0.60× (f32 p = 8). 2026-11-
 three questions signed off as recommended (the user): merge and shift adopted as the device's
 `PlaneWave` (`DevicePlaneWave::Kernels` the default; cubes of 128 units, 256 on CUDA from
 p = 13; Metal's plane-wave budget 1 GB), CH7.5e added for the device `Auto`, D9 by the
-device tests and one CUDA ABBA run. Next: CH6.2c (*Machines:* Kathleen; D8) once Kathleen is
-back.
+device tests and one CUDA ABBA run. 2026-11-06: CH0.6 (S6, off the priority list) done,
+`spikes/diagonal/SPIKE_REPORT.md` (seven questions, D3 among them, all signed off
+2026-11-06 as recommended, the proposal amended): the bound of
+§3.6 holds with C_T = 0.15, θ = 1/2, a floor 200 u and a damping factor e^{Im(k)(|t| + 2a)}
+for T rounded from extended precision (T summed in f64 breaks it by 47×; interpolated in
+ŝ · t̂ it needs C_T = 0.23); Gumerov and Duraiswami's reading confirmed in 3D; at kD = 500
+and 10⁻⁶ with the calibrated p no class on RCR on levels 2–5; f32 stable for real k at
+ε ≥ 10⁻⁴ from k a ≈ 45. Next: CH6.2c (*Machines:* Kathleen; D8) once Kathleen is back.
 
 ## How `/next-task` reads this file
 
@@ -107,7 +113,7 @@ The proposal's Section 12, plus D0. A decision is recorded here when the user ta
 | D0 | Draft 0.8 of the proposal as the plan of record | as written; later changes by sign-off | review of draft 0.7 | every task | signed off 2026-10-26: as written |
 | D1 | Target kD range and tolerances | for example kD ≤ 500 at 10⁻³ to 10⁻⁸ (proposal §12) | – | CH0.8b, CH3.0 | signed off 2026-10-31: kD ≤ 500 at 10⁻³ to 10⁻⁸, as recommended |
 | D2 | Placement: modules in the layer crates (A) or separate crates (B) | A (§6.1) | – | CH1.2 | signed off 2026-10-29: A, modules in the layer crates, as recommended |
-| D3 | f32 scope | f64 only until H7; then f32 for low-frequency configurations that pass an accuracy contract; high-frequency levels in f32 only if S6 finds stable classes | CH0.6 | CH7.1 | open |
+| D3 | f32 scope | f64 only until H7; then f32 for low-frequency configurations that pass an accuracy contract; high-frequency levels in f32 only if S6 finds stable classes | CH0.6 | CH7.1 | signed off 2026-11-06 (CH0.6, question 1; the user: "i agree with the recommendations"): as recommended, high-frequency levels may run the diagonal form in f32 at ε ≥ 10⁻⁴ for real k and weak damping, each class by the bound in u = 2⁻²⁴ with C_T = 0.18 and θ = 1/2, failing classes on RCR; f64 below 10⁻⁴ and for η ≈ 1; CH7.1 settles the f32 RCR and the low-frequency levels |
 | D4 | Yukawa: its own operator type, or the wavenumber kind as a type parameter | one `HelmholtzOperator<T, K>` if CH2.1 shows no cost to the complex path | CH2.1 | CH2.2 | open |
 | D5 | Source types of the first release | real and complex charges, potentials and gradients; dipoles once C6.4 exists for Laplace (note: Laplace dipoles were merged in Phase 6 T8 and T8d, so the condition is met) | – | CH1.1 | signed off 2026-10-29: charges now, dipoles later; §3.15 fixes real and complex charges with potentials and gradients, and dipoles get a later, separate task |
 | D6 | Order of H4 and H6 | H6 first | H3.G | CH6.1, CH4.1 | signed off 2026-11-02 (H3 gate, question 2): "i agree with the recommendations", H6 first, as recommended; on the gate report's reason (§3.3): the calibrated degrees cut the low-frequency share of the far field at kD = 500 to about half (an estimate), and the FMM is slowest against FMM3D on low-frequency trees at tight ε, which H6 targets |
@@ -187,13 +193,15 @@ D7, D10, D11, D12) put to the user.
   filling the boxes (uniform, corners, W1 patches), real, complex and imaginary k, in
   extended precision with the S1 and S2 prototypes; p as a function of (k a, ε, operator)
   meeting ε with a stated margin on every placement. *Needs:* CH0.1, CH0.2, CH0.3.
-- [ ] **CH0.6 S6: stability of the diagonal form.** Seeded by Appendix B.1. *Done when:* the
+- [x] **CH0.6 S6: stability of the diagonal form.** Seeded by Appendix B.1. *Done when:* the
   S → F, diagonal, F → R chain in f64 and f32 on all 34 classes against extended-precision
   RCR and the direct sum, with realistic placements, k a 3 to 400, ε 10⁻³ to 10⁻¹⁰, P from the
   formula and from S7, Im k > 0, |t| = 3w as a control; C_T and θ; the classes on RCR per
   (k a, ε); the f32 verdict (D3); whether interpolating T keeps the bound; prototype times.
   Accepted when the bound never under-predicts by more than 2×. *Needs:* CH0.3, CH0.7.
-  *Sign-off:* D3.
+  *Sign-off:* D3. Report `spikes/diagonal/SPIKE_REPORT.md` (results `spikes/diagonal/results/`;
+  the raw rows archived in `~/projects/fmm-archive/locust/runs/ch0-6/`). Signed off
+  2026-11-06 (questions 1–7 as recommended): D3, the proposal's §3.5 and §3.6 amended.
 - [ ] **CH0.8b S8: workload census, final pass.** *Done when:* the first pass repeated with
   the calibrated p of CH3.3 (`DegreeRule::CALIBRATED`, not S7's p, on the low-frequency
   levels; amended at H3.G, proposal §7) and S6's constants; its numbers replace §7's. *Needs:* CH0.8a, CH0.6, CH0.7, D1.
@@ -292,7 +300,8 @@ family, checked against FMM3D's fixtures.
   Yukawa two ways. *Needs:* CH1.3b.
 - [ ] **CH1.3d The diagonal form in extended precision.** The S → F, diagonal and F → R
   chain of §5.4 on the signatures CH0.6 fixes, its transfer functions in extended
-  precision, as the reference of CH4.x. *Done when:* against CH1.3c's RCR on the same
+  precision, as the reference of CH4.x; it writes CONVENTIONS §3.15 "Signatures" as S6's
+  report proposes (its question 5). *Done when:* against CH1.3c's RCR on the same
   class within the bound E of §3.6. *Needs:* CH0.6, CH1.3c.
 - [ ] **H1.G Gate.** `/milestone-gate H1`. *Needs:* every task above.
 
@@ -783,7 +792,11 @@ at any kD.
   deterministic with the RCR pairs added after F → R. *Needs:* CH4.1, CH0.6.
 - [ ] **CH4.3 The per-(level, class) rule, calibrated.** *Done when:* S6's C_T and θ
   confirmed in the full FMM on W1 and W3; the time crossover per class; a whole level falls
-  back to RCR when the scratch budget binds. *Needs:* CH4.2.
+  back to RCR when the scratch budget binds. Also from S6: the damped classes measured in
+  the FMM-weighted norm of CH1.3c, against the per-pair bound's factor
+  e^{Im(k)(|t| + 2a)} (its question 7), and whether a shorter transfer function
+  (⌈3(P − 1)/2⌉, whose rounding stays far below 2P − 2's at k a 6–45, its report §6) earns a truncation
+  analysis. *Needs:* CH4.2.
 - [ ] **CH4.4 kD sweep, with the FMM3D gate.** *Done when:* the FMM against the direct sum on
   W1 to kD = 1000, W2 to 500 and W3 to 200, beside `hfmm3d`; the full-target crosscheck mapped
   to levels and classes, with no error concentrated at a class boundary; time, memory and
