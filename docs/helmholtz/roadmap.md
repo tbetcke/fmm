@@ -88,7 +88,8 @@ CH3.6 (#170) and H3.G.
    2026-11-05 into CH7.5a, CH7.5b and CH7.5c, the user: "a/b/c, Helmholtz → d")
 2. CH0.4 S4: quadratures of the Helmholtz exponential M2L per k w_l
 3. CH6.1 The §3.14 machinery generalised (needs CH0.4): CH6.1a, CH6.1b, CH6.1c, CH6.1d, CH6.1e
-4. CH6.2 Measured (*Machines:* locust, Kathleen; *Sign-off:* D8): CH6.2a, CH6.2b, CH6.2c
+4. CH6.2 Measured (*Machines:* locust, Kathleen; *Sign-off:* D8): CH6.2a, CH6.2b, CH6.2c,
+   CH6.2d, CH6.2e (split on 2026-11-06)
 5. CH6.1f Quadratures for ε below 10⁻⁶ (needs CH6.1e; after CH6.2, before H6.G: CH6.1e's
    question 3, signed off 2026-11-03, "1–4 as recommended")
 
@@ -111,7 +112,7 @@ The proposal's Section 12, plus D0. A decision is recorded here when the user ta
 | D5 | Source types of the first release | real and complex charges, potentials and gradients; dipoles once C6.4 exists for Laplace (note: Laplace dipoles were merged in Phase 6 T8 and T8d, so the condition is met) | – | CH1.1 | signed off 2026-10-29: charges now, dipoles later; §3.15 fixes real and complex charges with potentials and gradients, and dipoles get a later, separate task |
 | D6 | Order of H4 and H6 | H6 first | H3.G | CH6.1, CH4.1 | signed off 2026-11-02 (H3 gate, question 2): "i agree with the recommendations", H6 first, as recommended; on the gate report's reason (§3.3): the calibrated degrees cut the low-frequency share of the far field at kD = 500 to about half (an estimate), and the FMM is slowest against FMM3D on low-frequency trees at tight ε, which H6 targets |
 | D7 | Host back ends of the φ step | the product as default and reference; FFTW behind the optional `fftw` feature; rustfft if S9 finds it deterministic per box and faster, decided per machine | CH0.9 | CHR.3, CH4.6 | open |
-| D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2c | CH7.5d | open |
+| D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2e | CH7.5d | open |
 | D9 | What "within noise" means for Laplace's benchmarks (constraint 1) | the run-to-run spread of the Laplace baseline, repeated on each machine before the change, per benchmark; plus the C3S.4 throughput gate | – | CHR.2, CH2.0 | signed off 2026-10-26: as recommended, the measured spread of the baseline per benchmark and machine, plus the C3S.4 gate. Clarified 2026-10-26 (CHR.2): one-sided, slower than `main` by more than the spread fails, faster passes when the outputs are bit for bit identical; from CH2.0 on five runs per side in the order A B B A A B B A A B, the spread max − min of `main`'s five run medians, never pooled with the branch's. Amended 2026-10-31 (CH2.0, the user: "as recommended"): a failing row may be repeated once and the repeat counts, with both results reported. Amended 2026-10-31 (the machine move, the user: "Amend: M6 replaces M3 Max"): the M6 (`tools/m6/machine.md`) replaces the M3 Max as a machine of record, its C3S.4 reference `spikes/p2p-simd/results-m6.md` |
 | D10 | cubek-fft on the device | after S5: adopt, contribute upstream first, or keep the transform as a GEMM | CH0.5 | CH7.4 | open |
 | D11 | Maximum leaf width c_leaf | from S8: the largest c_leaf with P2P and leaf costs within 10 % of their best on W1 and W3 (expected 0.5 to 1) | CH0.8a | CH3.0 | signed off 2026-10-28: as recommended (CH0.8a report §9, question 1), c_leaf = 1 by the revised rule, the largest c_leaf with no high-frequency leaf on any workload at 10⁻⁶ and 10⁻⁸, replacing the rule of this row, which is degenerate; a first-pass value that CH0.8b may revise with S6's constants and S7's p |
@@ -664,8 +665,9 @@ at any kD.
   FMM3D's on the same problems; D8 proposed. *Needs:* CH6.1 (a–e), CH1.4. Split on
   2026-11-03 into the bounded waves buffer (CH6.2a), which CH6.1e's sign-off 4 puts before
   any time is taken, and the measurements (CH6.2b), and on 2026-11-04 the measurements
-  again into our strategies per level (CH6.2b) and FMM3D with D8 (CH6.2c); CH6.2 is done
-  when all three are:
+  again into our strategies per level (CH6.2b) and FMM3D with D8 (CH6.2c), and on 2026-11-06
+  that into Kathleen's runs (CH6.2c), FMM3D (CH6.2d) and D8 (CH6.2e); CH6.2 is done when
+  all five are:
 - [x] **CH6.2a The waves buffer bounded.** Report:
   `fmm-validate/results/helmholtz-ch6-2a.md`; `HelmholtzOperator::with_plane_wave_buffer`,
   `plane_wave_counts`, `MIN_BUFFER_BOXES`, `HelmholtzFmmBuilder::plane_wave_budget`,
@@ -707,29 +709,38 @@ at any kD.
   at 1 × 40). Amended on 2026-11-04 (the user, "go ahead", Kathleen down: its login node
   refused every connection from 10:10): done on the M6 and locust, Kathleen's runs moved to
   CH6.2c, which runs on Kathleen anyway. *Needs:* CH6.2a. *Machines:* locust.
-- [ ] **CH6.2c Beside FMM3D's exponential M2L; D8.** Per-level accuracy and time beside
-  FMM3D's on the same problems: FMM3D's M2L per level from a timed build of `hfmm3d`
-  (per-level timers in its main routine, a patch applied by `tools/fmm3d/build.sh`, outside
-  the workspace), against CH6.2b's per-level times at matched ε; the per-level accuracy
-  against FMM3D's (each level's waves alone, as CH6.1e's scan). *Done when:* per-level
-  accuracy and time beside FMM3D's on the same problems; D8 proposed from CH6.2b's and
-  this task's times (adopted as a strategy where it wins, else kept opt-in or dropped).
-  Also (CH6.1a): CH6.1a's counts resolve the region's corner ρ = 4√2 at 1.31–1.51×
-  FMM3D's waves where Im κ < π/2; whether a pair ever needs the corner at the FMM's ε, so
-  fewer waves would do, is measured here. Also (CH6.2b, report §7): the exponential M2L's
-  level call splits merge and shift over parents, so a coarse level (level 2: 8 parents)
-  took 9–24× Rotation's time at 72 threads on locust (0.9–3.3× at 6 on the M6); D8's rule
-  cannot read the threads (constraint 2), so before a default either the level call splits
-  below the parent (by frame, direction or child) or the rule takes Rotation on levels of
-  few boxes on every machine; and at ε = 10⁻³ a per-level choice among Batched, the
-  exponential M2L and Rotation was up to 1.32× faster than any one strategy (CH6.2b's
-  per-level tables are the input). Also (CH6.2b, moved on 2026-11-04 while Kathleen was
-  down): CH6.2b's Kathleen runs, the x86 AVX-512 class and a two-socket node: fetch job
-  628611's outputs (`matrix` and `large` at 1 × 40, completed;
+- [ ] **CH6.2c CH6.2b's Kathleen runs.** Split on 2026-11-06 from the former CH6.2c
+  (FMM3D with D8; `/next-task`'s size rule, Kathleen back): CH6.2b's runs on Kathleen, the
+  x86 AVX-512 class and a two-socket node, moved here on 2026-11-04 while Kathleen was down.
+  Fetch job 628611's outputs (`matrix` and `large` at 1 × 40, completed;
   `/scratch/scratch/ucahtbe/fmm/logs/ch6-2b/`), run `large` at 4 × 10 and 40 × 1
   (`tools/helmholtz/ch6-2b-runs.sh`; the command in docs/helmholtz/tasks/CH6.2b.md,
-  "Pending runs"), and add Kathleen's per-level tables to CH6.2b's report (§5) before D8 is
-  proposed. *Needs:* CH6.2b, CH1.4. *Machines:* Kathleen. *Sign-off:* D8.
+  "Pending runs"). *Done when:* Kathleen's per-level tables, summary rows and ranks ×
+  threads table in CH6.2b's report (§2, §4, §5, the appendix), with the fastest strategy
+  per level on Kathleen and what a per-level choice gains there, and §7's observations
+  checked against them. *Needs:* CH6.2b. *Machines:* Kathleen.
+- [ ] **CH6.2d Beside FMM3D's exponential M2L.** Split on 2026-11-06 from the former
+  CH6.2c. Per-level accuracy and time beside FMM3D's on the same problems: FMM3D's M2L per
+  level from a timed build of `hfmm3d` (per-level timers in its main routine, a patch
+  applied by `tools/fmm3d/build.sh`, outside the workspace), against CH6.2b's per-level
+  times at matched ε; the per-level accuracy against FMM3D's (each level's waves alone, as
+  CH6.1e's scan). Also (CH6.1a): CH6.1a's counts resolve the region's corner ρ = 4√2 at
+  1.31–1.51× FMM3D's waves where Im κ < π/2; whether a pair ever needs the corner at the
+  FMM's ε, so fewer waves would do, is measured here. *Done when:* per-level accuracy and
+  time beside FMM3D's on the same problems, and the corner's answer. *Needs:* CH6.2b,
+  CH1.4.
+- [ ] **CH6.2e D8: the exponential M2L's level rule.** Split on 2026-11-06 from the former
+  CH6.2c. D8 proposed from CH6.2b's, CH6.2c's and CH6.2d's times (adopted as a strategy
+  where it wins, else kept opt-in or dropped). Also (CH6.2b, report §7): the exponential
+  M2L's level call splits merge and shift over parents, so a coarse level (level 2: 8
+  parents) took 9–24× Rotation's time at 72 threads on locust (0.9–3.3× at 6 on the M6);
+  D8's rule cannot read the threads (constraint 2), so before a default either the level
+  call splits below the parent (by frame, direction or child) or the rule takes Rotation on
+  levels of few boxes on every machine; and at ε = 10⁻³ a per-level choice among Batched,
+  the exponential M2L and Rotation was up to 1.32× faster than any one strategy (CH6.2b's
+  per-level tables are the input). *Done when:* D8 proposed with the rule's inputs (degree,
+  ε, the level's boxes) and the coarse levels' remedy measured. *Needs:* CH6.2c, CH6.2d.
+  *Sign-off:* D8.
 - [ ] **H6.G Gate.** `/milestone-gate H6`. *Needs:* every task above.
 
 ## H4: High-frequency levels
