@@ -20,8 +20,10 @@ jobs:
         with:
           submodules: "true"
 
+      # cargo-upgrades builds its HTTP client with TLS only on aarch64 macOS; without
+      # `native-tls` every crates.io lookup fails on Linux ("scheme is not http").
       - name: Install cargo-upgrades
-        run: cargo install cargo-upgrades
+        run: cargo install cargo-upgrades --locked --features native-tls
 
       - name: Check if dependencies are up-to-date
-        run: cargo upgrades
+        run: .github/scripts/dependency-check.sh
