@@ -281,7 +281,8 @@ Weekly jobs: `run-examples` runs `.github/scripts/run-examples.sh 3` (the exampl
 registered with templated-examples metadata, found through `cargo metadata`, at 3 ranks
 only; locally on macOS export `OMPI_MCA_btl_tcp_if_include=lo0` and
 `OMPI_MCA_oob_tcp_if_include=lo0` first); `run-dependency-checks`
-runs `cargo upgrades` (not `cargo audit`).
+runs `cargo upgrades` (not `cargo audit`) through `.github/scripts/dependency-check.sh`,
+which fails on a lookup error and lists the exact (`=`) pins' upgrades without failing.
 
 ## MPI
 - MPI is a required dependency of nd-octree and nd-fmm-plan, also for one-rank runs.
