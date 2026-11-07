@@ -672,7 +672,8 @@ const MEASURED_REACH: f64 = 4.5;
 
 /// The counts at [`FMM3D_REACH`] and [`MEASURED_REACH`] on every domain (Helmholtz CH6.2e):
 /// the kernel at ρ ≤ reach within [`KERNEL_BOUND`] at the nine points of every domain and
-/// precision; printed per reach and precision, the waves Σₖ Nₖ over the corner's (smallest,
+/// precision, and the point-to-point chain at ρ ≤ reach within [`CHAIN_BOUND`] at every
+/// domain's centre; printed per reach and precision, the waves Σₖ Nₖ over the corner's (smallest,
 /// largest, and over the domains with Im κ < π/2, where FMM3D's sit at 1/1.51 to 1/1.31 of
 /// the corner's, CH6.1a), the kernel's error on the whole region (the corner's) over the
 /// stated error, and the point-to-point chain at every domain's centre within ρ ≤ reach and
@@ -719,6 +720,13 @@ fn the_counts_for_a_smaller_reach_on_every_domain() {
                     ratio_type2 = [ratio_type2[0].min(r), ratio_type2[1].max(r)];
                 }
                 let [within, all] = chain_errors(&q, 4, reach);
+                assert!(
+                    within <= CHAIN_BOUND * q.stated_error(),
+                    "centre of domain {domain}, iprec {}: chain at ρ ≤ {reach} {:.2} × the \
+                     stated error",
+                    precision.iprec(),
+                    within / q.stated_error()
+                );
                 chain[0] = chain[0].max(within / q.stated_error());
                 chain[1] = chain[1].max(all / q.stated_error());
             }

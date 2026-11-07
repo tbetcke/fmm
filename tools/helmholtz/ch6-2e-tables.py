@@ -2,7 +2,11 @@
 """The tables of Helmholtz CH6.2e's report (fmm-validate/results/helmholtz-ch6-2e.md) from
 the outputs of tools/helmholtz/ch6-2e-runs.sh:
 
-    tools/helmholtz/ch6-2e-tables.py <out-dir> verify|scan|times
+    tools/helmholtz/ch6-2e-tables.py <out-dir>[,<out-dir>…] verify|scan|times
+
+Several output directories (comma-separated) are read as one: a later directory's rows of the
+same case and reach replace an earlier one's (the report's 4.25 launch beside the first, its
+two scans side by side).
 
 `verify`: per case (workload, kD, ε, charges) the larger of the φ and ∇φ ratios to
 Rotation's error at each reach, then per reach the largest ratio, the cases above 1.1 and
@@ -105,8 +109,15 @@ def case_name(case):
     return f"{workload} | {kd} | {degrees.replace('ε = ', '')}{extra}"
 
 
+def files_of(out, pattern):
+    """The files matching `pattern` in each comma-separated directory of `out`, in order."""
+    return [
+        f for d in out.split(",") for f in sorted(glob.glob(os.path.join(d, pattern)))
+    ]
+
+
 def verify(out):
-    files = sorted(glob.glob(os.path.join(out, "verify-*.md")))
+    files = files_of(out, "verify-*.md")
     table = defaultdict(dict)
     sizes = defaultdict(dict)
     reaches = set()
@@ -150,7 +161,7 @@ def verify(out):
 
 
 def scan(out):
-    files = sorted(glob.glob(os.path.join(out, "scan-*.md")))
+    files = files_of(out, "scan-*.md")
     table = defaultdict(dict)
     reaches = set()
     for path in files:
@@ -175,7 +186,7 @@ def scan(out):
 
 
 def times(out):
-    files = sorted(glob.glob(os.path.join(out, "times-*.md")))
+    files = files_of(out, "times-*.md")
     seconds = defaultdict(list)
     waves = {}
     evaluate = defaultdict(list)

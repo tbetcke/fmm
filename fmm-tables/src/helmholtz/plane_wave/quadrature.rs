@@ -341,10 +341,7 @@ impl Quadrature {
     ///
     /// If `reach` is not finite or not above [`SOURCE_REACH`].
     pub fn with_reach(kappa: Complex<f64>, precision: Precision, reach: f64) -> Option<Self> {
-        assert!(
-            reach.is_finite() && reach > SOURCE_REACH,
-            "the reach must be finite and above the source's reach √2/2, got {reach}"
-        );
+        assert_reach(reach);
         let domain = domain_of(kappa)?;
         let table = &domains(precision)[domain - 1];
         let s = table.nodes.len();
@@ -448,6 +445,16 @@ impl Quadrature {
     pub fn mode_count(&self) -> usize {
         self.fourier.iter().map(|&f| 2 * f + 1).sum()
     }
+}
+
+/// Panics unless `reach` is a valid reach of the α counts ([`Quadrature::with_reach`]):
+/// finite and above [`SOURCE_REACH`]. The settings that pass a reach on call it when they
+/// take it, so that an invalid reach panics whether or not a level builds a quadrature.
+pub fn assert_reach(reach: f64) {
+    assert!(
+        reach.is_finite() && reach > SOURCE_REACH,
+        "the reach must be finite and above the source's reach √2/2, got {reach}"
+    );
 }
 
 /// The fewest n ≥ 1 with `scale` max_{m ≥ n} max_{ρ ≤ reach} |J_m(t ρ)| ≤ `share`, the

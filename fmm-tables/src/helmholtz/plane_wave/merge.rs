@@ -50,7 +50,7 @@
 use nd_fmm_math::{Complex, RealScalar};
 
 use super::pair::PlaneWaveLevel;
-use super::quadrature::{Precision, Quadrature, RHO_MAX, domain_of};
+use super::quadrature::{Precision, Quadrature, RHO_MAX, assert_reach, domain_of};
 use crate::plane_wave::geometry::{self, CHILDREN, Direction, MergeGeometry, SLOTS};
 
 /// The smallest tolerance at which [`precision_for_tolerance`] gives a precision (Helmholtz
@@ -279,6 +279,7 @@ impl<T: RealScalar> PlaneWaveM2l<T> {
         precisions: &[Option<Precision>],
         reach: f64,
     ) -> Self {
+        assert_reach(reach);
         assert_eq!(
             precisions.len(),
             degrees.len(),

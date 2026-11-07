@@ -9,7 +9,7 @@ proposal [docs/design/helmholtz-fmm-proposal.md](../../docs/design/helmholtz-fmm
 ([helmholtz-ch6-2b.md](helmholtz-ch6-2b.md)). Measured on:
 
 - **locust** (NVIDIA GH200, 72 Neoverse-V2 cores, 572 GB, `tools/gh200/`), one rank × 72
-  threads, 2026-11-07 07:43–08:12, source 0a53256 (the reach setting; the later commits
+  threads, 2026-11-07 07:43–08:07, source 0a53256 (the reach setting; the later commits
   change tests, docs and tools only), the node idle before the runs (load 0.00, the GPU
   idle, no other session's job): `tools/helmholtz/ch6-2e-runs.sh` (§7);
 - **the M6**: the tests, the per-pair counts on every domain (§1) and a smoke run of the
@@ -25,12 +25,14 @@ quadrature, CH3.3's degrees.
   ρ ≤ ρ_max = 4√2 ≈ 5.66 box widths, the region's corner (CH6.1a). `Quadrature::with_reach`
   takes a smaller reach in its place (the Fourier counts Fₖ unchanged), up through
   `HelmholtzFmmBuilder::plane_wave_reach`; the corner stays the default, bit for bit.
-- **Per pair the corner is needed** (§1): with the counts for ρ ≤ 4 (FMM3D's reach) the
-  kernel holds 1.07–1.50× the stated error on ρ ≤ 4 on every domain, but at the corner it
-  errs by up to 1.1·10⁴ (iprec 1), 1.1·10⁷ (iprec 2) and 1.7·10⁹ (iprec 3) times the stated
-  error, on the domains of large Re κ (14π–16π): a pair with points at the corner gets a
-  wrong value, not a small error. With the counts for ρ ≤ 4.5 the bound holds on ρ ≤ 4.5
-  (1.08–1.50×), and the corner errs by up to 5.3·10³, 2.7·10⁵ and 1.1·10⁶ times it.
+- **The point-to-point chain needs the corner** (§1): with the counts for ρ ≤ 4 (FMM3D's
+  reach) the kernel stays within 2× the stated error on ρ ≤ 4 on every domain (at most
+  1.065×, 1.188× and 1.495× at iprec 1, 2 and 3), but at the corner it errs by up to
+  1.1·10⁴, 1.1·10⁷ and 1.7·10⁹ times the stated error, on the domains of large Re κ
+  (14π–16π): a point pair at the corner gets a wrong value, not a small error. With the
+  counts for ρ ≤ 4.5 the bound holds on ρ ≤ 4.5 (at most 1.079×, 1.188×, 1.495×), and the
+  corner errs by up to 5.3·10³, 2.7·10⁵ and 1.1·10⁶ times it. This is the chain of points,
+  not the FMM's chain of degree-p expansions (§4).
 - **In the FMM a reach of 4.25 to 4.5 suffices** (§2): on the 60 cases of CH6.1e's
   verification at the rule's tolerances (10⁻³ to 10⁻⁶, the two large cases included) the
   FMM's error stays within 1.070× Rotation's at reach 5, 4.5 and 4.25, the corner's largest
@@ -38,17 +40,18 @@ quadrature, CH3.3's degrees.
   0.003 (the W4 cube at kD = 100 and 10⁻⁶, 1.006 against 1.003). Reach 4 misses on three cases,
   all at 10⁻⁶ and kD ≥ 100 (the W4 cube at kD = 100 1.60×, W1 at kD = 500 1.62×, W3 at
   kD = 100 1.69×); 3.5 misses on 12 and 3 on 17. The threshold lies between 4 and 4.25,
-  next to the largest lateral offset of two boxes' centres, 3√2 ≈ 4.243 (§4).
+  next to the largest lateral offset of two boxes' centres, 3√2 ≈ 4.243 (§4); 4.25 was
+  verified on the cases, not scanned level by level.
 - **Level by level** (§3): CH6.1e's scan at iprec 2 on CH3.1c's matrix at 10⁻³ and 10⁻⁶,
   166 levels, each alone: at the corner and at 4.5 every level within 1.044×; at 4 one
   level misses, level 2 of the W4 cube at kD = 100 and 10⁻⁶ (κ = 25, p = 35; 1.59×), the
-  others as at the corner.
+  others as at the corner. 4.25 was not scanned.
 - **The waves and times** (§5): the waves per direction per level are 0.84–0.86× the
   corner's at 4.5 (0.77–0.80× at 4); the M2L per level 0.75–0.96× (0.69–0.89× at 4), per
   case summed over its levels 0.80–0.92× (0.73–0.89×), and the evaluation of the large
   cases 0.89–0.95× (0.85–0.90×). The tables and buffers take 0.85–0.88× the corner's bytes
-  at 4.5 on the small cases (0.99× on the large ones, whose waves buffer is held at the
-  budget).
+  at 4.5 on the small cases, 0.89× on W1 at kD = 500 and 0.99× on W3 at kD = 100, whose
+  waves buffer is held at the node budget.
 - **FMM3D's counts at iprec 2** (CH6.2d's question, §6): fewer waves than ours hold only
   down to a reach of about 4.25; the counts for ρ ≤ 4 fail at 10⁻⁶ on three cases, and
   FMM3D's own counts are fewer still where Im κ < π/2 (0.66–0.76× the corner's, CH6.1a,
@@ -78,15 +81,21 @@ reach and on the whole region (the corner's):
 | 4.5 | 3 | 0.798–1.083 | 0.837–0.857 | 1.495 | 1.07·10⁶ | 1.175 | 4.95·10⁵ |
 
 The worst region errors are on domains 45, 46 and 23 at reach 4 (Re κ from 14π to 16π, Im κ
-below 0.04) and 91, 69 and 138 at 4.5 (the same Re κ, Im κ to 1): there Nₖ ≈ |tₖ| ρ_max, and α sampled at the count for ρ ≤ 4 aliases the orders a
-pair at ρ = 4√2 needs, so its sum is wrong by about the kernel itself. Within the reach the
-bound holds as at the corner (CH6.1a's acceptance: 2× for the kernel, 3× for the chain).
+below 0.04) and 91, 69 and 138 at 4.5 (the same Re κ, Im κ to 1). Presumably α sampled at
+the count for the smaller reach aliases the orders a pair at ρ = 4√2 needs (there the counts
+grow about as |tₖ| ρ_max); the errors are of the size of the kernel itself (1/|u| ≈ 0.2,
+against stated errors of 10⁻⁴ to 10⁻¹⁰). Within the reach the bound holds as at the corner
+(CH6.1a's acceptance: 2× for the kernel, 3× for the chain).
 At reach 4 a few domains need more waves than at the corner (up to 1.25× on domain 276,
 Re κ in [15π, 16π], Im κ in [4π, 5π]; 1.09× and 1.07× at iprec 2 and 3, also strongly damped
-domains; at 4.5 up to 1.17× and 1.08×): `tail_count` takes the maximum over ρ at 64 equal steps of [0, reach], and on
-these domains the coarser steps of the corner miss a peak that reach 4's finer steps find.
-Where Im κ < π/2 (the real-k levels) reach 4 has 0.75–0.81× the corner's waves and 4.5
-0.82–0.87×. The test took 707 s for both reaches on the M6 beside `cargo test`.
+domains; at 4.5 up to 1.17× and 1.08×; and on some domains 4.5 has fewer than 4, at iprec 1
+down to 0.667× the corner's against 0.720×). `tail_count` takes the maximum over ρ at 64
+equal steps of [0, reach]; a plausible cause, not checked, is that on these domains the
+corner's coarser steps miss a peak that a smaller reach's finer steps find, so that the
+corner's own counts undersample there. The kernel test on every domain holds at the corner
+(CH6.1a), so the default meets its bound on the grid either way; a finer sampling of ρ is
+left to CH6.2g. Where Im κ < π/2 (the real-k levels) reach 4 has 0.75–0.81× the corner's
+waves and 4.5 0.82–0.87×. The test took 707 s for both reaches on the M6 beside `cargo test`.
 
 ## 2. The verification: the FMM's error at each reach
 
@@ -94,8 +103,9 @@ CH6.1e's verification cases at the rule's tolerances (CH3.1c's matrix at 10⁻³
 its real-charge and complex-k rows, its in-between cases at 10⁻⁴ and 10⁻⁵, and the two large
 cases; ε = 10⁻⁷ and 10⁻⁸ have no waves under the rule), `--m2l rotation,planewave` at each
 reach: the larger of the φ and ∇φ ratios to Rotation's error against the sampled direct
-sum (1,000 targets). 4.25 ran in a second launch (its own Rotation rows, the same
-checksums).
+sum (1,000 targets). 4.25 ran in a third launch, after the times and scan at 4.5 (its own
+Rotation rows, with the first launch's checksums); the waves per level were recorded at the
+corner, 4 and 4.5 only (§5), the other reaches by their bytes.
 
 | reach | cases | largest ratio | above 1.1 | tables and buffers over the corner's | the cases above 1.1 |
 | --- | ---: | ---: | ---: | --- | --- |
@@ -107,9 +117,10 @@ checksums).
 | 3.5 | 60 | 522 | 12 | 0.73–0.98 | the W4 cube at kD = 100 at every ε, W1 at kD = 500 and W3 at kD = 100 at both, the W4 sphere and W1's three rows at kD = 100 at 10⁻⁶ |
 | 3 | 60 | 15,700 | 17 | 0.66–0.89 | those, W1 at kD = 100 at 10⁻⁴ and 10⁻⁵, and three low-kD cases at 10⁻⁶ (Plummer at kD = 1 1.111×, the sphere at kD = 10 1.115×, W3 at kD = 30 1.102×) |
 
-The bytes are the exponential M2L's tables and buffers (`plane_wave_bytes`); on the large
-cases the waves buffer is held at the node budget, so they shrink by 1 % only, and the
-waves computed per box shrink as on the small ones.
+The bytes are the exponential M2L's tables and buffers (`plane_wave_bytes`). On W3 at
+kD = 100 the waves buffer is held at the node budget (8 GiB; more chunks, the same buffer),
+so its bytes shrink by 0.6 % at 4.5 while its waves per box shrink as on the small cases; on
+W1 at kD = 500 the buffer is below the budget at every reach and the bytes fall to 0.89×.
 
 The cases that miss at reach 4, at every reach:
 
@@ -136,8 +147,10 @@ and 10⁻⁶, 166 levels. The ratio to Rotation's error:
 
 The one level that misses at 4 is level 2 of the W4 cube at kD = 100 and 10⁻⁶ (κ = 25,
 p = 35: 1.003× at the corner, 1.590× at 4); level 2 of W1 at kD = 100 (the same κ and p)
-holds (1.001×), as do every level at 10⁻³ and every level with κ ≤ 12.5. A level's need
-grows with κ: the low-kD cases miss only at 3 (§2). Every level: the appendix, A.2.
+holds (1.001×), as do every level at 10⁻³ and every level with κ ≤ 12.5. The two large
+cases, which miss at 4 too (§2), were not scanned, so their failing levels are not known.
+The low-kD cases miss only at 3 (§2), which suggests a level's need grows with κ. Every
+level: the appendix, A.2 (the scan at 4.5 ran in the second launch).
 
 ## 4. Why about 4.25
 
@@ -221,7 +234,9 @@ REACH=4.5 SCAN_REACHES=4.5 tools/helmholtz/ch6-2e-runs.sh /data/ucahtbe/logs/ch6
 REACHES=4.25 tools/helmholtz/ch6-2e-runs.sh /data/ucahtbe/logs/ch6-2e-425 verify verify-large
 ```
 
-The tables: `tools/helmholtz/ch6-2e-tables.py <out-dir> verify|scan|times`. Every launch
+The tables: `tools/helmholtz/ch6-2e-tables.py <out-dir>[,<out-dir>…] verify|scan|times`;
+§2 and A.1 from `…/ch6-2e,…/ch6-2e-425 verify`, §3 and A.2 from `…/ch6-2e,…/ch6-2e-45
+scan`, §5 and A.3 from each times directory alone. Every launch
 exited 0 (38, 24 and 14 launches). The raw outputs are in
 `~/projects/fmm-archive/locust/data/ucahtbe/logs/ch6-2e*` on the M6. The per-pair counts:
 `cargo test --release -p nd-fmm-tables --test helmholtz -- --ignored
@@ -229,18 +244,23 @@ the_counts_for_a_smaller_reach_on_every_domain --nocapture`.
 
 ## 8. Questions for sign-off
 
-1. **The counts' reach 4.5 in place of 4√2.** The FMM's errors hold at 4.25 and 4.5 as at
-   the corner on all 60 cases and 166 levels; 4.5 is the smallest reach of the ladder with a
-   step of margin above the threshold (4 misses). It gives 0.85× the waves and tables and
-   0.80–0.92× the exponential M2L's time. A pair with points at the corner then errs by far
-   more than the stated error (§1); the FMM does not see it on D12's workloads (§2, §4).
-   Recommendation: adopt 4.5, with CH6.1a's acceptance and the module's statement of the
-   bound on ρ ≤ 4.5 (the kernel and the point-to-point chain within 2× and 3× there), and
-   CONVENTIONS §3.15's sentence on the quadrature's region ("|u_x|, |u_y| ≤ 4") amended to
-   say the counts bound ρ ≤ 4.5. Alternatives: 3√2 + a margin as a formula; a reach by κ
-   (the low-κ levels hold to 3.5, §2–3), which saves more where waves are few anyway; keep
-   the corner.
-2. **The adoption as its own task, CH6.2g, before CH6.2f (D8).** Changing the default
+1. **The counts' reach 4.5 in place of 4√2.** The FMM's errors hold at 4.5 as at the
+   corner on all 60 cases and 166 scanned levels, and at 4.25 on the 60 cases (not
+   scanned); 4.5 is a step of the ladder above the threshold (4 misses). It gives 0.84–0.86×
+   the waves per level and 0.80–0.92× the exponential M2L's time per case. A point pair at
+   the corner then errs by far more than the stated error (§1); whether an FMM pair at the
+   largest offset does is not measured (§4), and D12's workloads do not show it.
+   Recommendation: adopt 4.5 in CH6.2g, with a check this task lacks: one M2L pair at the
+   largest V offset (3, 3, 2) at the level's degree against Rotation on every domain, at
+   reach 4.5; CH6.1a's acceptance and the module's statement of the bound on ρ ≤ 4.5 (the
+   kernel and the point-to-point chain within 2× and 3× there); and CONVENTIONS §3.15's
+   sentence on the quadrature's region ("|u_x|, |u_y| ≤ 4") amended to say the counts bound
+   ρ ≤ 4.5, without a version bump (its subsection "Exponential M2L" is unversioned, as
+   CH6.1c's sign-off made it). Alternatives: 3√2 plus a margin as a formula; a reach by κ
+   (the low-κ cases hold to 3.5, §2), which saves more where waves are few anyway; keep the
+   corner.
+2. **The adoption as its own task, CH6.2g, before CH6.2f (D8)** (the roadmap lists it so,
+   pending this answer). Changing the default
    changes every level's waves, so CH6.1e's verification and nd-fmm-exec's tests rerun, and
    D8's times should be taken with the counts it will ship. Recommendation: CH6.2g before
    CH6.2f; alternative: fold it into CH6.2f.
@@ -249,7 +269,7 @@ the_counts_for_a_smaller_reach_on_every_domain --nocapture`.
 
 ### A.1 The verification, every case
 
-| workload | kD | ε | corner | 5 | 4.5 | 4.25 | 4 | 3.5 | 3 |
+| workload | kD | ε | ρ corner | ρ 5 | ρ 4.5 | ρ 4.25 | ρ 4 | ρ 3.5 | ρ 3 |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | W4 clusters (N = 100000) | 1 | 1e-4 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.001 |
 | W4 clusters (N = 100000) | 1 | 1e-5 | 0.991 | 0.991 | 0.991 | 0.991 | 0.991 | 0.991 | 0.996 |
@@ -314,7 +334,7 @@ the_counts_for_a_smaller_reach_on_every_domain --nocapture`.
 
 ### A.2 The scan, every level
 
-| workload | kD | ε | level | ρ corner | ρ 4 | ρ 4.5 |
+| workload | kD | ε | level | ρ corner | ρ 4.5 | ρ 4 |
 | --- | --- | --- | ---: | ---: | ---: | ---: |
 | W4 clusters (N = 100000) | 1 | 1e-3 | 2 | 1.000 | 1.000 | 1.000 |
 | W4 clusters (N = 100000) | 1 | 1e-3 | 3 | 1.000 | 1.000 | 1.000 |
@@ -373,7 +393,7 @@ the_counts_for_a_smaller_reach_on_every_domain --nocapture`.
 | W4 cube (N = 100000) | 100 | 1e-3 | 2 | 1.000 | 1.000 | 1.000 |
 | W4 cube (N = 100000) | 100 | 1e-3 | 3 | 1.000 | 1.000 | 1.000 |
 | W4 cube (N = 100000) | 100 | 1e-3 | 4 | 1.000 | 1.000 | 1.000 |
-| W4 cube (N = 100000) | 100 | 1e-6 | 2 | 1.003 | 1.590 | 1.003 |
+| W4 cube (N = 100000) | 100 | 1e-6 | 2 | 1.003 | 1.003 | 1.590 |
 | W4 cube (N = 100000) | 100 | 1e-6 | 3 | 1.006 | 1.006 | 1.006 |
 | W4 cube (N = 100000) | 100 | 1e-6 | 4 | 0.994 | 0.994 | 0.994 |
 | W4 plummer (N = 100000) | 1 | 1e-3 | 2 | 1.000 | 1.000 | 1.000 |
@@ -431,7 +451,7 @@ the_counts_for_a_smaller_reach_on_every_domain --nocapture`.
 | W4 sphere (N = 100000) | 10 | 1e-3 | 4 | 1.000 | 1.000 | 1.000 |
 | W4 sphere (N = 100000) | 10 | 1e-3 | 5 | 1.000 | 1.000 | 1.000 |
 | W4 sphere (N = 100000) | 10 | 1e-6 | 2 | 0.999 | 0.999 | 0.999 |
-| W4 sphere (N = 100000) | 10 | 1e-6 | 3 | 1.003 | 1.004 | 1.003 |
+| W4 sphere (N = 100000) | 10 | 1e-6 | 3 | 1.003 | 1.003 | 1.004 |
 | W4 sphere (N = 100000) | 10 | 1e-6 | 4 | 1.007 | 1.007 | 1.007 |
 | W4 sphere (N = 100000) | 10 | 1e-6 | 5 | 0.988 | 0.988 | 0.988 |
 | W4 sphere (N = 100000) | 100 | 1e-3 | 2 | 1.000 | 1.000 | 1.000 |
@@ -455,7 +475,7 @@ the_counts_for_a_smaller_reach_on_every_domain --nocapture`.
 | W1 | 100 | 1e-3, real | 4 | 1.000 | 1.000 | 1.000 |
 | W1 | 100 | 1e-3, real | 5 | 1.000 | 1.000 | 1.000 |
 | W1 | 100 | 1e-6, real | 2 | 1.001 | 1.001 | 1.001 |
-| W1 | 100 | 1e-6, real | 3 | 1.002 | 1.003 | 1.002 |
+| W1 | 100 | 1e-6, real | 3 | 1.002 | 1.002 | 1.003 |
 | W1 | 100 | 1e-6, real | 4 | 0.984 | 0.984 | 0.984 |
 | W1 | 100 | 1e-6, real | 5 | 1.001 | 1.001 | 1.001 |
 | W1 | 10 | 1e-3 | 2 | 1.000 | 1.000 | 1.000 |
@@ -469,7 +489,7 @@ the_counts_for_a_smaller_reach_on_every_domain --nocapture`.
 | W1 | 100 | 1e-3 | 4 | 1.000 | 1.000 | 1.000 |
 | W1 | 100 | 1e-3 | 5 | 1.000 | 1.000 | 1.000 |
 | W1 | 100 | 1e-6 | 2 | 1.001 | 1.001 | 1.001 |
-| W1 | 100 | 1e-6 | 3 | 1.005 | 1.010 | 1.005 |
+| W1 | 100 | 1e-6 | 3 | 1.005 | 1.005 | 1.010 |
 | W1 | 100 | 1e-6 | 4 | 0.988 | 0.988 | 0.988 |
 | W1 | 100 | 1e-6 | 5 | 1.001 | 1.001 | 1.001 |
 | W3 (N = 4032) | 10 | 1e-3 | 2 | 1.000 | 1.000 | 1.000 |

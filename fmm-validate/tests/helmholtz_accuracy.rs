@@ -276,7 +276,10 @@ const PLANE_WAVE_RATIO: f64 = 1.1;
 /// charges, ε = 10⁻³): φ and ∇φ within [`PLANE_WAVE_RATIO`] of Rotation's errors, the row's
 /// precisions the rule's (`precision_for_tolerance` of ε on every level with waves), and
 /// named precisions as named; at ε = 10⁻⁶ also `check_fmm`'s checks. Below the rule's
-/// tolerance (ε = 10⁻⁸) no level has waves and the output is Rotation's (the checksum).
+/// tolerance (ε = 10⁻⁸) no level has waves and the output is Rotation's (the checksum). The
+/// counts' reach (Helmholtz CH6.2e): the corner's by default, with waves exactly on the
+/// levels with a precision; at reach 4 at most the corner's waves per level and fewer in all,
+/// and on W1 within [`PLANE_WAVE_RATIO`] of Rotation's errors.
 fn check_plane_wave(world: &SimpleCommunicator) {
     let clusters = Workload::W4 {
         distribution: Distribution::Clusters,

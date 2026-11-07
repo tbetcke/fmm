@@ -93,7 +93,7 @@ use nd_fmm_plan::operator::{
 };
 use nd_fmm_plan::plan::Plan;
 use nd_fmm_tables::helmholtz::DEFAULT_BLOCK_BUDGET;
-use nd_fmm_tables::helmholtz::plane_wave::quadrature::RHO_MAX;
+use nd_fmm_tables::helmholtz::plane_wave::quadrature::{RHO_MAX, assert_reach};
 use nd_octree::constants::DEEPEST_LEVEL;
 use nd_octree::{Octree, OctreeOptions, PhysicalBox};
 use rayon::{ThreadPool, ThreadPoolBuilder};
@@ -329,9 +329,9 @@ impl HelmholtzFmmBuilder {
     ///
     /// # Panics
     ///
-    /// In [`build`](Self::build) under PlaneWave, if `reach` is not finite or not above the
-    /// source's reach √2/2.
+    /// If `reach` is not finite or not above the source's reach √2/2.
     pub fn plane_wave_reach(mut self, reach: f64) -> Self {
+        assert_reach(reach);
         self.plane_wave_reach = reach;
         self
     }

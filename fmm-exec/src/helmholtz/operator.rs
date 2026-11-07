@@ -218,7 +218,7 @@ use nd_fmm_tables::helmholtz::classes::{ClassM2l, ClassScratch};
 use nd_fmm_tables::helmholtz::dense::DenseM2l;
 use nd_fmm_tables::helmholtz::plane_wave::Precision;
 use nd_fmm_tables::helmholtz::plane_wave::merge::{PlaneWaveM2l, select};
-use nd_fmm_tables::helmholtz::plane_wave::quadrature::RHO_MAX;
+use nd_fmm_tables::helmholtz::plane_wave::quadrature::{RHO_MAX, assert_reach};
 use nd_fmm_tables::helmholtz::{DEFAULT_BLOCK_BUDGET, HelmholtzScratch, HelmholtzTables};
 use nd_octree::{MortonKey, morton};
 use rayon::ThreadPool;
@@ -599,14 +599,16 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// Takes the α counts of every level's quadrature under [`HelmholtzM2l::PlaneWave`] for
     /// the lateral offsets ρ ≤ `reach` (box widths; `Quadrature::with_reach`) in place of the
     /// region's corner 4√2 (`RHO_MAX`, the default), before or after
-    /// [`with_m2l`](Self::with_m2l); fewer waves, which bound the kernel on ρ ≤ `reach` only.
-    /// For the measurements (Helmholtz CH6.2e). Under PlaneWave the levels' tables are built
-    /// again.
+    /// [`with_m2l`](Self::with_m2l). The counts then bound the kernel on ρ ≤ `reach` only;
+    /// below the corner they are fewer where Im κ < π/2 (on some strongly damped levels
+    /// more; fmm-validate/results/helmholtz-ch6-2e.md §1). For the measurements (Helmholtz
+    /// CH6.2e). Under PlaneWave the levels' tables are built again.
     ///
     /// # Panics
     ///
-    /// Under PlaneWave, if `reach` is not finite or not above the source's reach √2/2.
+    /// If `reach` is not finite or not above the source's reach √2/2.
     pub fn with_plane_wave_reach(mut self, reach: f64) -> Self {
+        assert_reach(reach);
         self.kernel.plane_wave_reach = reach;
         if self.kernel.m2l == HelmholtzM2l::PlaneWave {
             self.select_tables();
