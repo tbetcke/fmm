@@ -53,8 +53,8 @@ Read as:
 
 ## Changes
 
-No library crate, convention, dependency, table or Laplace file changes. `tools/` and
-`nd-fmm-validate` (an example step) only.
+No convention, dependency, table or Laplace file changes. `tools/`, `nd-fmm-validate`, and
+since item 7 the Helmholtz operator of `nd-fmm-exec` (timers only).
 
 1. **The patch** `tools/fmm3d/hfmm3d-levels.patch` (a unified diff of `hfmm3d.f`, applied by
    `build.sh` to the variants `timed` and `fastker-timed`, `default` and `fastker` with it;
@@ -96,6 +96,14 @@ No library crate, convention, dependency, table or Laplace file changes. `tools/
    end-to-end errors of both codes.
 6. Docs: `fmm-validate/CLAUDE.md` (the `errors` step), the report
    `fmm-validate/results/helmholtz-ch6-2d.md`.
+7. **Our level call's passes** (added 2026-11-07, the user: "yes, add the per-pass timers to
+   our level call", after locust showed FMM3D's plane waves 2× faster than ours on the
+   coarse levels): `HelmholtzOperator::plane_wave_times` (`PlaneWaveTimes { waves, parents }`
+   per level: the waves of each chunk's sources and merge and shift, summed over chunks,
+   vectors and frames; four clock reads more per chunk, vector and frame, no value changed),
+   `helmholtz_accuracy::Row::plane_wave_seconds` (the slowest rank's of each), two columns of
+   the example's `--levels` table (waves s, merge and shift s), read by both table scripts
+   (CH6.2b's first twelve columns unchanged). The Helmholtz operator only: no Laplace path.
 
 ## Tests that prove it
 
@@ -116,7 +124,13 @@ No library crate, convention, dependency, table or Laplace file changes. `tools/
   (Changed from "a unit test of the row's numbers": a test of the example's printing would
   restate the existing one.)
 - The tables script: run on the outputs, its numbers checked by hand on one case per
-  machine in the self-review.
+  machine in the self-review; on CH6.2b's outputs both scripts give CH6.2b's and the first
+  CH6.2d tables byte for byte.
+- The passes (item 7): `fmm-exec/tests/helmholtz_fmm.rs`, `check_plane_wave_times` in
+  `check_plane_wave`: one entry per level, both passes positive and within the level's M2L
+  time on every level with waves and V pairs, zero elsewhere, on every rank or none (the
+  existing bit-for-bit checks show no value changed); `fmm-validate/tests/helmholtz_accuracy.rs`,
+  `check_levels`: the same on the harness's columns, on the exponential-M2L rows too.
 
 ## Checks
 
