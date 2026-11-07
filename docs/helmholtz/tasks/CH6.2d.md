@@ -109,9 +109,12 @@ No library crate, convention, dependency, table or Laplace file changes. `tools/
 - **The timers**: the per-level parts sum to within the call's step-3 time
   (`timeinfo(3)`); the timed build's whole call within the run-to-run spread of
   `default`'s (both printed).
-- `helmholtz_fmm3d errors`: a unit test of the row's numbers on a synthetic output
-  (`tests/helmholtz_accuracy.rs`' existing synthetic FMM3D files, the direct sum written in
-  the driver's format: errors zero to round-off), in the MPI-owning test.
+- `helmholtz_fmm3d errors`: its numbers are the module's `sample_errors` and `parse_sampled`
+  (behind `read_sampled`), which `tests/helmholtz_accuracy.rs` already checks on synthetic FMM3D
+  files (the direct sum in the driver's format: errors zero to round-off); the step itself
+  is example code (examples are not tested in this crate) and is exercised by every scan.
+  (Changed from "a unit test of the row's numbers": a test of the example's printing would
+  restate the existing one.)
 - The tables script: run on the outputs, its numbers checked by hand on one case per
   machine in the self-review.
 

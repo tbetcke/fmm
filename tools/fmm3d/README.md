@@ -11,10 +11,11 @@ nothing of it is committed (its sources, builds and outputs stay under `FMM3D_RO
 
 | File | Does |
 | --- | --- |
-| `build.sh` | fetches FMM3D at the pinned release (v2.1.0, the commit and the tarball's SHA-256 checked), builds it with OpenMP with the machine's compilers in two variants, and links the driver against each |
+| `build.sh` | fetches FMM3D at the pinned release (v2.1.0, the commit and the tarball's SHA-256 checked), builds it with OpenMP with the machine's compilers in two variants (four with the patched ones), and links the driver against each |
 | `driver.f90` | the FMM3D side: reads a problem file, checks FMM3D's normalisation, times FMM3D's setup and its calls, writes φ and ∇φ at the sampled targets |
 | `run.sh` | the steps of a machine's comparison: `problems`, `sweep`, `match`, `time`, and `crosscheck` (the two codes' outputs against each other at every point); `helmholtz` (CH3.6, below) |
 | `helmholtz.py` | Helmholtz CH1.4: the driver's Helmholtz modes from Python (problem and output files, the two-point check and the identification of FMM3D's conventions, the error norms) and the R12 sweep; Python 3.9 standard library only |
+| `hfmm3d-levels.patch` | Helmholtz CH6.2d: per-level timers and the plane-wave switch `FMM3D_PW_LEVEL` in `hfmm3d`'s main routine, for the variants `timed` and `fastker-timed` ("Per level (CH6.2d)" below) |
 
 Our side is the sweep `t9-fmm3d` of `tools/scaling/run.sh` (and `t9-device`, our CUDA
 path), on the same problems.
@@ -180,3 +181,36 @@ FMM3D_ROOT=... H_CASES='w1@10 w1@30' tools/fmm3d/run.sh helmholtz
 tools/kathleen/submit.sh --time=00:20:00 -- fmm3d.sbatch driver
 tools/kathleen/submit.sh '--export=ALL,OUT=/scratch/scratch/ucahtbe/fmm/logs/ch3-6-w1,H_CASES=w1@10 w1@30 w1@100 w1@500' -- fmm3d.sbatch helmholtz
 ```
+
+## Per level (CH6.2d)
+
+`hfmm3d-levels.patch` (Helmholtz CH6.2d, docs/helmholtz/tasks/CH6.2d.md; report
+`fmm-validate/results/helmholtz-ch6-2d.md`) instruments `hfmm3dmain` in
+`src/Helmholtz/hfmm3d.f`; `build.sh` applies it (`patch -p1`) to the variants `timed`
+(`default` with it) and `fastker-timed` (`fastker` with it), built only when named:
+
+```sh
+FMM3D_ROOT=... VARIANTS="default fastker timed fastker-timed" tools/fmm3d/build.sh build
+```
+
+- **The lines.** After each `hfmm3d` call, one `hfmm3d-steps:` line (the call's six step
+  times, `timeinfo`, and the switch below) and one `hfmm3d-level:` line per level, on
+  standard output (so in the driver's log): `ilev`, `zkre` and `zkim` (κ = k w of the
+  level), `nterms`, `mode` (0 no M2L, 1 plane waves, 2 point-and-shoot), `nlams` and
+  `nwaves` (the quadrature's nodes and Σ Nₖ, its waves), `nboxes`, and wall seconds of step
+  3: `setup` (the level's quadrature, factors and rotation matrices, built in every call),
+  `list4` (list 4's waves, `h3dlist4pw`), `m2e` (the multipoles to waves), `gather` (the
+  parents' loop: the shifts, the waves to the children's locals and list 3), with
+  `pw_ts` and `list3_ts` the thread-seconds of its plane-wave and list-3 parts; on a
+  point-and-shoot level `ps` (its M2L loop) and `ps_list3`; `hf_list4` (list 4 on
+  point-and-shoot levels). The clock reads change no value: `timed` writes the same
+  output as `default`, byte for byte (`tools/helmholtz/ch6-2d-runs.sh check`).
+- **The switch** `FMM3D_PW_LEVEL` (environment, read in each call): unset, FMM3D's own
+  regime per level; an integer l ≥ 2, only level l may take plane waves (where FMM3D's
+  tests allow them) and every other plane-wave level takes FMM3D's point-and-shoot path
+  (its M2L `h3dmploc`, list 3 and list 4 as on its high-frequency levels); −1, no level
+  takes plane waves. Both paths are FMM3D's own; the switch only chooses.
+
+`tools/helmholtz/ch6-2d-runs.sh` (stages `check`, `times`, `scan`) runs CH6.2d's
+measurements with these builds and `helmholtz_fmm3d errors`; `tools/helmholtz/ch6-2d-tables.py`
+makes the report's tables.
