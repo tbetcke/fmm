@@ -252,7 +252,7 @@ fn build_with_reach_takes_the_counts_of_the_reach() {
     let same = PlaneWaveM2l::<f64>::build_with_reach(k_root, &degrees, &named, RHO_MAX);
     let fewer = PlaneWaveM2l::<f64>::build_with_reach(k_root, &degrees, &named, 4.0);
     let geometry = corner.geometry();
-    for l in 2..5 {
+    for (l, precision) in named.iter().enumerate().skip(2) {
         let (a, b, c) = (
             corner.level(l).unwrap(),
             same.level(l).unwrap(),
@@ -263,7 +263,7 @@ fn build_with_reach_takes_the_counts_of_the_reach() {
         assert!(sa.iter().zip(&sb).all(|(x, y)| x.to_bits() == y.to_bits()));
         assert!(c.tables().wave_len() <= a.tables().wave_len(), "level {l}");
         let kappa = k_root * (0.5f64).powi(l as i32) * 2.0;
-        let q = Quadrature::with_reach(kappa, named[l].unwrap(), 4.0).unwrap();
+        let q = Quadrature::with_reach(kappa, precision.unwrap(), 4.0).unwrap();
         assert_eq!(c.tables().wave_len(), 2 * q.wave_count(), "level {l}");
     }
     assert!(fewer.bytes() < corner.bytes());
