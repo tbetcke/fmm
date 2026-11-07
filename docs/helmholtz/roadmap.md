@@ -63,7 +63,8 @@ faster, a per-level choice up to 2.08× at 10⁻³; 1 × 40 the fastest split or
 move the CubeCL pins to cubecl 0.11.3 and cubek 0.3.1 and measure them before CH7.5e takes
 the device's new baselines.
 2026-11-06: CH6.2d split (`/next-task`'s size rule) into FMM3D's per-level times and accuracy
-(CH6.2d) and the counts' corner (CH6.2e); D8 renamed CH6.2f.
+(CH6.2d) and the counts' corner (CH6.2e); D8 renamed CH6.2f. 2026-11-07: H9 added (the user)
+with CH9.1, the in-depth comparison with FMM3D once every optimisation and default is in.
 Next: CH6.2d (FMM3D's per-level times and accuracy), then CH6.2e (the corner), CH6.2f (D8).
 
 ## How `/next-task` reads this file
@@ -113,7 +114,8 @@ CH3.6 (#170) and H3.G.
 
 Off the list, in file order: CH0.6, CH0.8b, CH0.9, CH0.5 and H0.G; CHR.3 and HR.G; CH1.3d
 and H1.G; CH2.1, CH2.2, CH2.3, CH2.5 and H2.G; H6.G; H4 (CH4.0, CH4.0b and CH4.0c first),
-H5, H7 (CH7.5a, CH7.5b and CH7.5c apart; CH7.5f before CH7.5e), H8.
+H5, H7 (CH7.5a, CH7.5b and CH7.5c apart; CH7.5f before CH7.5e), H8, H9 (CH9.1, added
+2026-11-07, after every other milestone).
 
 ## Decisions
 
@@ -989,3 +991,34 @@ at any kD.
 - [ ] **CH8.2 Kathleen scaling at kD of a few hundred.** *Done when:* efficiency and memory
   reported as in Phase 5S, at most 4 nodes per job. *Needs:* CH8.1. *Machines:* Kathleen.
 - [ ] **H8.G Gate.** `/milestone-gate H8`. *Needs:* every task above.
+
+## H9: The final comparison with FMM3D
+
+**Gate:** CH9.1, our FMM with every optimisation and default beside FMM3D, in depth.
+
+- [ ] **CH9.1 The final comparison with FMM3D.** Added on 2026-11-07 (the user: "can you
+  schedule an in depth comparison with fmm3d when all optimizations are applied?"), after the
+  last optimisation: H4 to H8 closed and every default signed off (D7, D8, the device
+  `Auto`). Our FMM with its defaults beside `hfmm3d` (the `default` and `fastker` builds,
+  and CH6.2d's patched `timed` builds for the breakdown) on one node of the M6, locust and
+  Kathleen, as Laplace's T9 (`fmm-validate/results/phase6-fmm3d.md`) and CH4.5, in depth:
+  - accuracy: for each of our tolerances (10⁻³ to 10⁻⁸, D1) FMM3D at the same requested ε
+    and at the eps of the closest error (matched accuracy); both against the same sampled
+    direct sum, with the full-target crosscheck and the worst box;
+  - the reference workloads W1–W4 (D12) over D1's range (kD ≤ 500), complex k and Yukawa
+    where FMM3D meets its eps (CH2.5, CH5.3), real and complex charges, potentials and
+    gradients, several vectors (FMM3D's vectorised interface), dipoles if D5's task has
+    landed;
+  - time: the build (FMM3D's setup) apart from the evaluation, and the evaluations after
+    which ours is ahead; per stage and per level (FMM3D's from CH6.2d's patch: the M2L per
+    level, lists 3 and 4, P2P), at one thread and on the whole node (FMM3D's OpenMP on every
+    core, ours at the node's best ranks × threads split), each machine quiet for the whole
+    run (no other jobs; locust's load sampled during the runs);
+  - memory: the peak resident size per node;
+  - the device path (CH7.6) beside the host's, and our multi-node runs (H8) labelled apart:
+    FMM3D runs on one node.
+  *Done when:* the report has these tables on the three machines; every case where FMM3D is
+  more than 1.1× faster at matched accuracy is traced to its stage and level, with its cause
+  or a follow-up task; CH4.5's and CH7.6's results cited where unchanged. *Needs:* H4.G, H5.G,
+  H6.G, H7.G, H8.G. *Machines:* locust, Kathleen, the M6.
+- [ ] **H9.G Gate.** `/milestone-gate H9`. *Needs:* every task above.
