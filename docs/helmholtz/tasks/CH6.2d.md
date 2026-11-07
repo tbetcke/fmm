@@ -173,4 +173,19 @@ Decides: nothing by itself; the per-level comparison is CH6.2f's input for D8.
 
 ## Pending runs
 
+- Done: Kathleen job 630125 (node-c11a-109, 2026-11-07; the four FMM3D builds, `check`,
+  `times`, `scan`; 147 launches, exit 0) and job 630164 (node-c11a-111; ours with the passes,
+  `ch6-2b-runs.sh matrix large` at 1 × 40; 16 launches, exit 0). The report's §2–§4, §6.
+- Done, records only: locust 2026-11-07 00:07–00:22 (FMM3D `check` and `times`, source
+  3f683b5) and 00:43–01:10 (FMM3D `times` again and ours with the passes at 1 × 72, source
+  9ff114a), beside another session's `gridcl_geometry` test on one core (from 00:12).
+- **Pending, locust** (the user, 2026-11-07: "Wait for gridcl"): the chain
+  `/data/ucahtbe/logs/ch6-2d-chain2.sh` (pid 1933945) waits until no gridcl test has run
+  for 10 minutes and the load is below 2, then runs `THREADS=72 tools/helmholtz/ch6-2d-runs.sh
+  /data/ucahtbe/logs/ch6-2d-r3 times` and `THREADS=72 SPLITS=1x72 tools/helmholtz/ch6-2b-runs.sh
+  /data/ucahtbe/logs/ch6-2d-ours-r3 matrix large`; log `/data/ucahtbe/logs/ch6-2d-chain2.log`.
+  Decides locust's rows (the roadmap's *Done when* names Kathleen and locust); then the
+  tables with `locust=bench-results/ch6-2d/locust-r3,bench-results/ch6-2d/locust-ours-r3`,
+  the report's §2–§3 and §6, the roadmap tick.
+
 ## Open questions

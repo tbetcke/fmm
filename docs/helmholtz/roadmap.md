@@ -65,6 +65,11 @@ the device's new baselines.
 2026-11-06: CH6.2d split (`/next-task`'s size rule) into FMM3D's per-level times and accuracy
 (CH6.2d) and the counts' corner (CH6.2e); D8 renamed CH6.2f. 2026-11-07: H9 added (the user)
 with CH9.1, the in-depth comparison with FMM3D once every optimisation and default is in.
+2026-11-07: CH6.2d measured on Kathleen (`fmm-validate/results/helmholtz-ch6-2d.md`; PR
+draft, locust's runs pending a quiet node): FMM3D's exponential M2L per level 0.21–0.56×
+ours at 10⁻³ and 0.44–1.03× at 10⁻⁶ by level size, merge and shift most of ours and 2.4–3.8×
+FMM3D's on the coarse levels; per call ours faster on the large cases; FMM3D's counts miss ε
+at 10⁻³ on single levels where ours with the same nodes hold.
 Next: CH6.2d (FMM3D's per-level times and accuracy), then CH6.2e (the corner), CH6.2f (D8).
 
 ## How `/next-task` reads this file
@@ -764,7 +769,11 @@ at any kD.
   Rotation's, within 1.1×), with the waves per level and the exponential M2L's time per
   level (CH6.2b's harness). *Done when:* the corner's answer: the reach the counts need by
   the FMM's errors, with its waves and times, and a change to the counts proposed for
-  sign-off if fewer waves hold. *Needs:* CH6.2b. *Machines:* locust.
+  sign-off if fewer waves hold. Also (CH6.2d, report §4): FMM3D's own counts, one level alone
+  on plane waves at κ ≈ 12.5 and ε = 10⁻³ (iprec 1), gave 0.9–2.0 × 10⁻³ on W1 and the W4
+  cube and sphere at kD = 100, against 2–4 × 10⁻⁵ for ours with the same nodes: at iprec 1
+  FMM3D's counts are too few in the FMM; whether fewer than ours hold at iprec 2 (the rule's)
+  is this task's. *Needs:* CH6.2b. *Machines:* locust.
 - [ ] **CH6.2f D8: the exponential M2L's level rule.** Split on 2026-11-06 from the former
   CH6.2c (CH6.2e until the split of CH6.2d). D8 proposed from CH6.2b's, CH6.2c's, CH6.2d's
   and CH6.2e's times (adopted as a strategy where it wins, else kept opt-in or dropped). Also (CH6.2b, report §7): the exponential
@@ -779,7 +788,13 @@ at any kD.
   at 4 × 10 (why, for the remedy); Auto's AVX-512 crossover (p ≤ 15) puts Batched on levels
   of degree 15, where on the 34 levels of degree 15–16 with at least 200,000 pairs the
   exponential M2L is 0.23–0.89× Rotation's and Batched 0.83–1.40×; at 10⁻³ a per-level
-  choice gained up to 2.08×. *Done when:* D8 proposed with the rule's inputs (degree,
+  choice gained up to 2.08×. Also (CH6.2d, report §3): FMM3D's exponential M2L is faster
+  than ours per level on most levels (Kathleen, 1 × 40: FMM3D's over ours 0.21–0.56 at
+  10⁻³, 0.44–1.03 at 10⁻⁶ by level size); merge and shift is 87–88 % of ours on the coarse
+  levels and 2.4–3.8× FMM3D's parents' loop there (at par, 0.81–1.13×, on the full
+  levels), with both codes held to 8 threads on level 2: before the remedy, split merge and
+  shift's time into its shifts and its conversions to locals to find why a coarse level's
+  parent costs ours more. *Done when:* D8 proposed with the rule's inputs (degree,
   ε, the level's boxes) and the coarse levels' remedy measured. *Needs:* CH6.2c, CH6.2d,
   CH6.2e. *Sign-off:* D8.
 - [ ] **H6.G Gate.** `/milestone-gate H6`. *Needs:* every task above.
