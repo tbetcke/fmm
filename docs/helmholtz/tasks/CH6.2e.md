@@ -141,6 +141,41 @@ No M6 timing (accuracy and tests only there). No Kathleen job.
 - Risk: on some domains (S4 §3.2: 34, 11) FMM3D's counts miss the stated error within ρ ≤ 4
   as well; ours at reach 4 still bound ρ ≤ 4 per node, which the test checks.
 
+## Results
+
+locust (1 × 72, 2026-11-07 07:43–08:12, source 0a53256) and the M6 (tests, per-pair counts);
+report `fmm-validate/results/helmholtz-ch6-2e.md`.
+
+- **Per pair** (the ignored test, every domain): at reach 4 the kernel within 1.07–1.50× the
+  stated error on ρ ≤ 4 and the chain within 0.72–1.18×, but at the corner up to 10⁴, 10⁷
+  and 10⁹ times it (iprec 1–3; Re κ from 14π): a corner pair is wrong. Where Im κ < π/2 reach
+  4 has 0.75–0.81× the corner's waves; on a few strongly damped domains more (to 1.25×; the
+  64 sample steps of ρ).
+- **The verification** (60 cases at 10⁻³ to 10⁻⁶): within 1.070× Rotation's at the corner,
+  5, 4.5 (each case the corner's ratio to three digits) and 4.25 (within 0.003); reach 4
+  misses on three cases at 10⁻⁶ (the W4 cube at kD = 100 1.60×, W1 at kD = 500 1.62×, W3 at
+  kD = 100 1.69×), 3.5 on 12, 3 on 17. The plan's ladder had no 4.25: added (a third
+  launch) to place the threshold, which lies between 4 and 4.25, next to the centres'
+  largest lateral offset 3√2.
+- **The scan** (166 levels at iprec 2): the corner and 4.5 within 1.044×; at 4 one level
+  misses, level 2 of the W4 cube at kD = 100, 10⁻⁶ (κ = 25, p = 35; 1.59×). The plan named
+  4 and the corner; 4.5 added after the verification chose it.
+- **Times** (ABBA, the second evaluation): at 4.5 the waves per level 0.84–0.86×, the M2L per
+  level 0.75–0.96× and per case 0.80–0.92×, the large cases' evaluation 0.89–0.95×; at 4
+  0.77–0.80×, 0.69–0.89×, 0.73–0.89× and 0.85–0.90×.
+- **Tests**: `the_counts_for_a_smaller_reach` and the reach panic (nd-fmm-tables, debug),
+  `build_with_reach_takes_the_counts_of_the_reach`, the reach check of `check_plane_wave`
+  (nd-fmm-exec: corner bit for bit, reach 4 within 1.1× with fewer waves, 2 threads, the
+  one-rank FMM; `helmholtz_fmm` 214 s at one rank in debug on the M6, 203 s before), the
+  reach row of the harness test (W1 within 1.1×; `helmholtz_accuracy` 74 s in debug, 42 s
+  recorded by CH6.2d). Not as planned: per-node counts may exceed a larger reach's by one
+  (the sampled ρ), so the test asserts the waves monotone and each node within one.
+
 ## Pending runs
 
+None.
+
 ## Open questions
+
+For sign-off (the report's §8): 1. the counts' reach 4.5 in place of 4√2 (CH6.2g);
+2. CH6.2g before CH6.2f (D8).

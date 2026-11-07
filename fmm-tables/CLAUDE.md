@@ -93,8 +93,9 @@ rule of which Helmholtz CH6.1e measured.
   reach in place of the corner's `RHO_MAX` = 4√2 (the Fourier counts unchanged; the corner's
   reach is `new` and `build` bit for bit); `the_counts_for_a_smaller_reach` checks the kernel
   on ρ ≤ 4 within 2× at reach 4 on the fixture's domains, the ignored
-  `the_counts_for_a_smaller_reach_on_every_domain` (about 3 minutes in release) on every
-  domain, with the waves and the corner's error printed (docs/helmholtz/tasks/CH6.2e.md). The
+  `the_counts_for_a_smaller_reach_on_every_domain` (reaches 4 and 4.5, about 8 minutes in
+  release) on every domain, with the waves and the corner's error printed
+  (fmm-validate/results/helmholtz-ch6-2e.md §1). The
   trusted path is the kernel e^{iκ|u|}/|u| on the region: `tests/helmholtz/` checks the
   kernel within 2× and the point-to-point chain within 3× the stated error (on every domain
   in the ignored `the_counts_on_every_domain`, about 6 minutes in release). A change to

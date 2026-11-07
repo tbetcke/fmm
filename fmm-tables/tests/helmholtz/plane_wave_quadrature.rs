@@ -666,72 +666,79 @@ fn a_reach_within_the_source_box_panics() {
     let _ = Quadrature::with_reach(C::new(1.0, 0.0), Precision::Iprec2, 0.5);
 }
 
-/// The counts at [`FMM3D_REACH`] on every domain (Helmholtz CH6.2e): the kernel at ρ ≤ 4
-/// within [`KERNEL_BOUND`] at the nine points of every domain and precision; printed per
-/// precision, the waves Σₖ Nₖ over the corner's (smallest, largest, and over the domains with
-/// Im κ < π/2, where FMM3D's sit at 1/1.51 to 1/1.31 of the corner's, CH6.1a), the kernel's
-/// error on the whole region (the corner's) over the stated error, and the point-to-point
-/// chain at every domain's centre within ρ ≤ 4 and on the whole region. About 3 minutes on
-/// the M6.
+/// The reach the FMM's errors need (Helmholtz CH6.2e, fmm-validate/results/helmholtz-ch6-2e.md:
+/// 4.5 held on every case of CH6.1e's verification where 4 did not).
+const MEASURED_REACH: f64 = 4.5;
+
+/// The counts at [`FMM3D_REACH`] and [`MEASURED_REACH`] on every domain (Helmholtz CH6.2e):
+/// the kernel at ρ ≤ reach within [`KERNEL_BOUND`] at the nine points of every domain and
+/// precision; printed per reach and precision, the waves Σₖ Nₖ over the corner's (smallest,
+/// largest, and over the domains with Im κ < π/2, where FMM3D's sit at 1/1.51 to 1/1.31 of
+/// the corner's, CH6.1a), the kernel's error on the whole region (the corner's) over the
+/// stated error, and the point-to-point chain at every domain's centre within ρ ≤ reach and
+/// on the whole region. About 8 minutes on the M6.
 #[test]
-#[ignore = "release: 437 domains × 3 precisions, about 3 minutes"]
+#[ignore = "release: 437 domains × 3 precisions × 2 reaches, about 8 minutes"]
 fn the_counts_for_a_smaller_reach_on_every_domain() {
     let lower = |domain: usize| rectangle(domain).0;
-    for precision in Precision::ALL {
-        let mut ratio = [f64::INFINITY, 0.0];
-        let mut ratio_type2 = [f64::INFINITY, 0.0];
-        let mut kernel = [0.0f64; 2];
-        let mut chain = [0.0f64; 2];
-        let mut worst_corner = (0.0f64, 0usize);
-        let mut largest = 0;
-        for domain in 1..=DOMAINS {
-            for kappa in nine_points(domain) {
-                let q = Quadrature::with_reach(kappa, precision, FMM3D_REACH).unwrap();
-                let e = q.stated_error();
-                let [within, all] = kernel_errors(&q, q.alpha_counts(), FMM3D_REACH);
-                assert!(
-                    within <= KERNEL_BOUND * e,
-                    "κ = {kappa}, iprec {}, domain {domain}: kernel at ρ ≤ 4 {:.2} × the \
-                     stated error",
-                    precision.iprec(),
-                    within / e
-                );
-                kernel[0] = kernel[0].max(within / e);
-                kernel[1] = kernel[1].max(all / e);
-                if all / e > worst_corner.0 {
-                    worst_corner = (all / e, domain);
+    for reach in [FMM3D_REACH, MEASURED_REACH] {
+        for precision in Precision::ALL {
+            let mut ratio = [f64::INFINITY, 0.0];
+            let mut ratio_type2 = [f64::INFINITY, 0.0];
+            let mut kernel = [0.0f64; 2];
+            let mut chain = [0.0f64; 2];
+            let mut worst_corner = (0.0f64, 0usize);
+            let mut largest = 0;
+            for domain in 1..=DOMAINS {
+                for kappa in nine_points(domain) {
+                    let q = Quadrature::with_reach(kappa, precision, reach).unwrap();
+                    let e = q.stated_error();
+                    let [within, all] = kernel_errors(&q, q.alpha_counts(), reach);
+                    assert!(
+                        within <= KERNEL_BOUND * e,
+                        "κ = {kappa}, iprec {}, domain {domain}: kernel at ρ ≤ {reach} {:.2} \
+                         × the stated error",
+                        precision.iprec(),
+                        within / e
+                    );
+                    kernel[0] = kernel[0].max(within / e);
+                    kernel[1] = kernel[1].max(all / e);
+                    if all / e > worst_corner.0 {
+                        worst_corner = (all / e, domain);
+                    }
                 }
+                let kappa = centre(domain);
+                let corner = Quadrature::new(kappa, precision).unwrap();
+                let q = Quadrature::with_reach(kappa, precision, reach).unwrap();
+                let r = q.wave_count() as f64 / corner.wave_count() as f64;
+                if r > ratio[1] {
+                    largest = domain;
+                }
+                ratio = [ratio[0].min(r), ratio[1].max(r)];
+                if lower(domain).im < PI / 2.0 {
+                    ratio_type2 = [ratio_type2[0].min(r), ratio_type2[1].max(r)];
+                }
+                let [within, all] = chain_errors(&q, 4, reach);
+                chain[0] = chain[0].max(within / q.stated_error());
+                chain[1] = chain[1].max(all / q.stated_error());
             }
-            let kappa = centre(domain);
-            let corner = Quadrature::new(kappa, precision).unwrap();
-            let q = Quadrature::with_reach(kappa, precision, FMM3D_REACH).unwrap();
-            let r = q.wave_count() as f64 / corner.wave_count() as f64;
-            if r > ratio[1] {
-                largest = domain;
-            }
-            ratio = [ratio[0].min(r), ratio[1].max(r)];
-            if lower(domain).im < PI / 2.0 {
-                ratio_type2 = [ratio_type2[0].min(r), ratio_type2[1].max(r)];
-            }
-            let [within, all] = chain_errors(&q, 4, FMM3D_REACH);
-            chain[0] = chain[0].max(within / q.stated_error());
-            chain[1] = chain[1].max(all / q.stated_error());
+            println!(
+                "reach {reach}, iprec {}: waves over the corner's {:.3}–{:.3} (the largest on \
+                 domain {largest}; Im κ < π/2: {:.3}–{:.3}); kernel at ρ ≤ {reach} {:.3}, on \
+                 the region {:.3e} × the stated error (worst domain {}); chain at ρ ≤ {reach} \
+                 {:.3}, on the region {:.3e}",
+                precision.iprec(),
+                ratio[0],
+                ratio[1],
+                ratio_type2[0],
+                ratio_type2[1],
+                kernel[0],
+                kernel[1],
+                worst_corner.1,
+                chain[0],
+                chain[1],
+            );
         }
-        println!(
-            "iprec {}: waves at ρ_max = 4 over the corner's {:.3}–{:.3} (the largest on \
-             domain {largest}; Im κ < π/2: {:.3}–{:.3}); kernel at ρ ≤ 4 {:.3}, on the region {:.3} × the stated error \
-             (worst domain {}); chain at ρ ≤ 4 {:.3}, on the region {:.3}",
-            precision.iprec(),
-            ratio[0],
-            ratio[1],
-            ratio_type2[0],
-            ratio_type2[1],
-            kernel[0],
-            kernel[1],
-            worst_corner.1,
-            chain[0],
-            chain[1],
-        );
     }
 }
 
