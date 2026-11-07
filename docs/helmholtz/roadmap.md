@@ -65,12 +65,14 @@ the device's new baselines.
 2026-11-06: CH6.2d split (`/next-task`'s size rule) into FMM3D's per-level times and accuracy
 (CH6.2d) and the counts' corner (CH6.2e); D8 renamed CH6.2f. 2026-11-07: H9 added (the user)
 with CH9.1, the in-depth comparison with FMM3D once every optimisation and default is in.
-2026-11-07: CH6.2d measured on Kathleen (`fmm-validate/results/helmholtz-ch6-2d.md`; PR
-draft, locust's runs pending a quiet node): FMM3D's exponential M2L per level 0.22–0.56×
-ours at 10⁻³ and 0.44–1.11× at 10⁻⁶ by level size, merge and shift most of ours and 2.4–3.8×
-FMM3D's parents' loop on the coarse levels; per call ours faster on the large cases; single
-levels on FMM3D's plane waves miss ε at 10⁻³ where ours with the same nodes hold.
-Next: CH6.2d (FMM3D's per-level times and accuracy), then CH6.2e (the corner), CH6.2f (D8).
+2026-11-07: CH6.2d done (`fmm-validate/results/helmholtz-ch6-2d.md`; locust's runs on a quiet
+node, the user: "Wait for gridcl"): FMM3D's exponential M2L per level over ours, by level size,
+0.22–0.56 at 10⁻³ and 0.44–1.11 at 10⁻⁶ on Kathleen, 0.31–1.03 and 0.60–1.95 on locust
+(FMM3D wins the coarse levels on both, ours the matched larger ones at 10⁻⁶ on locust);
+merge and shift most of ours and 2.3–3.8× FMM3D's parents' loop on level 2, where both are
+held to 8 threads; per call ours faster on the large cases; single levels on FMM3D's plane
+waves miss ε at 10⁻³ where ours with the same nodes hold.
+Next: CH6.2e (the counts' corner), then CH6.2f (D8).
 
 ## How `/next-task` reads this file
 
@@ -750,7 +752,9 @@ at any kD.
   threads table in CH6.2b's report (§2, §4, §5, the appendix), with the fastest strategy
   per level on Kathleen and what a per-level choice gains there, and §7's observations
   checked against them. *Needs:* CH6.2b. *Machines:* Kathleen.
-- [ ] **CH6.2d Beside FMM3D's exponential M2L.** Split on 2026-11-06 from the former
+- [x] **CH6.2d Beside FMM3D's exponential M2L.** Report:
+  `fmm-validate/results/helmholtz-ch6-2d.md`; `tools/fmm3d/hfmm3d-levels.patch` (FMM3D's
+  per-level timers and `FMM3D_PW_LEVEL`), `HelmholtzOperator::plane_wave_times`. Split on 2026-11-06 from the former
   CH6.2c, and again on 2026-11-06 (`/next-task`'s size rule) into FMM3D's per-level times and
   accuracy (CH6.2d) and the counts' corner (CH6.2e). Per-level accuracy and time beside
   FMM3D's on the same problems: FMM3D's M2L per level from a timed build of `hfmm3d`

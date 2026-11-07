@@ -180,7 +180,9 @@ Decides: nothing by itself; the per-level comparison is CH6.2f's input for D8.
 - Done, records only: locust 2026-11-07 00:07–00:22 (FMM3D `check` and `times`, source
   3f683b5) and 00:43–01:10 (FMM3D `times` again and ours with the passes at 1 × 72, source
   9ff114a), beside another session's `gridcl_geometry` test on one core (from 00:12).
-- **Pending, locust** (the user, 2026-11-07: "Wait for gridcl"): the chain
+- Done, locust 01:24–01:50 (the user, 2026-11-07: "Wait for gridcl"; FMM3D `times` 60
+  launches, ours 16, every one exit 0, no gridcl process at either end): the report's §2a,
+  §6 and the locust appendix. The chain as it was queued:
   `/data/ucahtbe/logs/ch6-2d-chain2.sh` (pid 1933945) waits until no gridcl test has run
   for 10 minutes and the load is below 2, then runs `THREADS=72 tools/helmholtz/ch6-2d-runs.sh
   /data/ucahtbe/logs/ch6-2d-r3 times` and `THREADS=72 SPLITS=1x72 tools/helmholtz/ch6-2b-runs.sh

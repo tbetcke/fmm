@@ -2434,11 +2434,13 @@ request, using this template:
     call"): `HelmholtzOperator::plane_wave_times` (`PlaneWaveTimes`: the waves, and merge and
     shift, per level), `helmholtz_accuracy::Row::plane_wave_seconds`, two columns of
     `helmholtz_accuracy --levels`.
-  - The report `fmm-validate/results/helmholtz-ch6-2d.md` (Kathleen; locust pending): FMM3D's
+  - The report `fmm-validate/results/helmholtz-ch6-2d.md` (Kathleen and locust): FMM3D's
     M2L over ours by level size 0.22/0.45/0.56 at 10⁻³ and 0.44/0.89/1.11 at 10⁻⁶ (coarse,
     middle, full; the levels the two trees share); merge and shift 69–95 % of ours per coarse
     level and 2.4–3.8× FMM3D's parents' loop there in wall time, at par (0.81–1.13×) on the
-    full levels, both codes able to use at most 8 threads on level 2; per call ours faster on the large cases (W1 at kD = 500, 10⁻⁶: 22.4 s against
+    full levels, both codes able to use at most 8 threads on level 2; on locust (clean,
+    after the user's "Wait for gridcl") 0.31/0.73/1.03 and 0.60/1.95/1.93, merge and shift
+    2.3× FMM3D's loop on level 2; per call ours faster on the large cases (W1 at kD = 500, 10⁻⁶: 22.4 s against
     FMM3D's 61.6 and 43.2 s); the scan: FMM3D's point-and-shoot far below ε, one level at
     κ ≈ 12.5 on FMM3D's plane waves 0.9–2.0 × 10⁻³ at 10⁻³ against 2–4 × 10⁻⁵ for ours with
     the same nodes; FMM3D misses ε at 10⁻³ on three cases.
@@ -2454,7 +2456,8 @@ request, using this template:
   `cargo doc`, `cargo test` (888 s) and `cargo test --workspace` (1,337 s), the MPI list at 2
   and 4 ranks (`helmholtz_fmm` 188 and 167 s), all passed; `tests/helmholtz_fmm.rs` 203 s and
   `tests/helmholtz_accuracy.rs` 42 s at one rank in debug. Kathleen jobs 630125 and 630164,
-  every launch exit 0. Pending: locust's runs on a quiet node (the user: "Wait for gridcl").
+  every launch exit 0. locust 2026-11-07 01:24–01:50 after ten gridcl-free minutes (76
+  launches, exit 0); the earlier locust runs beside a gridcl test kept as records only.
 - Decisions: none.
 - Laplace: not touched (the Helmholtz operator's timers, `nd-fmm-validate`, `tools/`).
 - Follow-ups: CH6.2e's line (FMM3D's counts too few at iprec 1 in the FMM; iprec 2 still to

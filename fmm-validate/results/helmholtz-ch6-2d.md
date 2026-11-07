@@ -14,8 +14,11 @@ CH6.2f), §2 (constraints 1, 2, 6, 9), §5.3, §9.2 (the H6 row). Our side is CH
   (node-c11a-111, 2026-11-07, source 9ff114a, the pass timers), one rank × 40 threads,
   `tools/helmholtz/ch6-2b-runs.sh matrix large` (each case forward and reversed, ABBA, the
   second evaluation's times). Open MPI 4.1.6, the P2P kernel `Auto` (AVX-512).
-- **locust** (NVIDIA GH200, 72 Neoverse-V2 cores, `tools/gh200/`): pending, see §6. The runs
-  made so far had another session's test on one core and are kept as records only.
+- **locust** (NVIDIA GH200, 72 Neoverse-V2 cores, `tools/gh200/`; FMM3D with the system's GCC
+  11.4.1, `-O3 -march=native`): FMM3D on 72 OpenMP threads and ours at 1 × 72 with the pass
+  timers, 2026-11-07 01:24–01:50 (source 9ff114a), after ten minutes with no other job and
+  the load below 2, none at the end (§6); the earlier runs, beside another session's test on
+  one core, are records only.
 - **the M6**: the builds, the bit-for-bit check and smoke runs of every stage (§5); nothing
   timed.
 
@@ -56,6 +59,13 @@ calls); ours is the build apart from the evaluation. Commands: §7.
   on the coarse levels), merge and shift also converts each child's waves to a local, and
   our loops are scalar where FMM3D's are vectorised (`-march=native`, AVX-512 on
   Kathleen). The next measurements are CH6.2f's (CH6.2e measures the counts).
+- **locust differs on the larger levels** (§2a): FMM3D's M2L over ours 0.31, 0.73 and 1.03
+  at 10⁻³ and 0.60, 1.95 and 1.93 at 10⁻⁶ (coarse, middle, full): FMM3D still wins the
+  coarse levels, ours the matched middle and full levels at 10⁻⁶ (W1 at kD = 500 levels
+  4–5 1.53–1.72×, W3 at kD = 100 levels 4–5 2.08–2.26×). The merge and shift on level 2
+  took 2.3× FMM3D's parents' loop there (60.6 against 26.0 ms, FMM3D's loop on 7.8 threads),
+  against 3.8× on Kathleen: FMM3D's vectorised loops gain more on Kathleen's AVX-512 than on
+  the Grace cores' 128-bit vectors, which fits the scalar-code candidate of §3.
 - **The whole call is faster in ours on the large cases** (§2): one evaluation of W1 at
   kD = 500 took 22.4 s at 10⁻⁶ against FMM3D's 61.6 s (`timed`, the `default` build with
   the patch) and 43.2 s (`fastker-timed`) per call, W3 at kD = 100 10.9 s against 31.9 and 22.6 s, our build apart. Our RCR on the
@@ -163,6 +173,61 @@ against the same sampled direct sum):
 | w4-sphere-1 | 1e-6 | 0.506 | 0.298 | 0.438 | 0.866 | 2.10e-08, 4.74e-10 | 4.18e-08, 2.23e-09 |
 | w4-sphere-100 | 1e-3 | 0.972 | 0.428 | 0.491 | 0.259 | 9.08e-04, 1.83e-05 | 3.06e-05, 2.04e-06 |
 | w4-sphere-100 | 1e-6 | 1.042 | 0.581 | 0.732 | 0.889 | 2.25e-07, 6.41e-09 | 6.26e-08, 3.97e-09 |
+
+## 2a. locust: per level and per call
+
+FMM3D's M2L over ours, the same groups as §2 (levels the two trees share):
+
+| machine | eps | coarse | middle | full |
+| --- | --- | --- | --- | --- |
+| locust | 1e-3 | 0.31 (0.12–0.64, 25 levels) | 0.73 (0.33–1.22, 16 levels) | 1.03 (0.56–1.56, 12 levels) |
+| locust | 1e-6 | 0.60 (0.38–1.18, 23 levels) | 1.95 (1.47–2.42, 4 levels) | 1.93 (1.53–2.26, 3 levels) |
+
+Reading it:
+
+- **Coarse levels**: FMM3D ahead as on Kathleen, by less (1.6–8.3× at 10⁻³, 0.85–2.6× at
+  10⁻⁶).
+- **Middle and full levels at 10⁻⁶: ours ahead**, 1.47–2.42× (Kathleen 0.73–1.37); at 10⁻³
+  around par (0.33–1.56), FMM3D on iprec 1.
+- **Level 2's passes** (W1 and W3 at kD = 100, 10⁻⁶): our waves 1.5–2.4 ms, merge and shift
+  60.6–60.9 ms; FMM3D's multipoles to waves 4.1–8.0 ms, its parents' loop 25.6–26.0 ms with
+  7.8–8.0 threads busy (about 25.5 ms per parent): 2.3× in wall time, against 3.8× on
+  Kathleen. On level 3 (64 parents) FMM3D's loop kept 30–57 threads busy.
+
+Per call (as §2):
+
+| case | ε | FMM3D `timed` call s | FMM3D `fastker-timed` call s | ours evaluation s, exp. M2L | ours evaluation s, Auto | FMM3D M2L Σ ÷ ours |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| w1-10 | 1e-3 | 0.031 | 0.017 | 0.006 | 0.005 | 0.30 |
+| w1-10 | 1e-6 | 0.019 | 0.033 | 0.009 | 0.003 | 0.00 |
+| w1-30 | 1e-3 | 0.065 | 0.052 | 0.018 | 0.012 | 0.42 |
+| w1-30 | 1e-6 | 0.073 | 0.234 | 0.026 | 0.010 | 0.35 |
+| w1-100 | 1e-3 | 0.495 | 0.366 | 0.148 | 0.085 | 0.61 |
+| w1-100 | 1e-6 | 0.509 | 0.592 | 0.213 | 0.198 | 0.76 |
+| w1-500 | 1e-3 | 18.774 | 14.528 | 3.895 | 5.894 | 2.09 |
+| w1-500 | 1e-6 | 23.701 | 22.321 | 5.026 | 10.412 | 2.13 |
+| w3-10 | 1e-3 | 0.036 | 0.034 | 0.015 | 0.014 | 0.15 |
+| w3-10 | 1e-6 | 0.045 | 0.086 | 0.031 | 0.019 | 0.27 |
+| w3-30 | 1e-3 | 0.217 | 0.387 | 0.056 | 0.047 | 0.83 |
+| w3-30 | 1e-6 | 0.470 | 0.442 | 0.077 | 0.130 | 1.64 |
+| w3-100 | 1e-3 | 8.019 | 8.027 | 2.005 | 1.580 | 0.57 |
+| w3-100 | 1e-6 | 11.764 | 38.201 | 2.781 | 9.273 | 0.31 |
+| w4-clusters-1 | 1e-3 | 0.380 | 0.300 | 0.099 | 0.113 | 0.77 |
+| w4-clusters-1 | 1e-6 | 0.863 | 1.290 | 0.213 | 0.306 | 1.40 |
+| w4-clusters-100 | 1e-3 | 0.510 | 0.425 | 0.130 | 0.113 | 0.69 |
+| w4-clusters-100 | 1e-6 | 1.041 | 1.721 | 0.249 | 0.311 | 1.31 |
+| w4-cube-1 | 1e-3 | 0.154 | 0.220 | 0.044 | 0.044 | 0.63 |
+| w4-cube-1 | 1e-6 | 0.459 | 0.258 | 0.066 | 0.127 | 0.90 |
+| w4-cube-100 | 1e-3 | 0.394 | 0.442 | 0.134 | 0.085 | 0.62 |
+| w4-cube-100 | 1e-6 | 0.787 | 0.518 | 0.160 | 0.155 | 0.77 |
+| w4-plummer-1 | 1e-3 | 0.322 | 0.260 | 0.104 | 0.123 | 0.39 |
+| w4-plummer-1 | 1e-6 | 0.755 | 1.147 | 0.232 | 0.291 | 0.64 |
+| w4-plummer-100 | 1e-3 | 0.566 | 0.522 | 0.193 | 0.152 | 0.35 |
+| w4-plummer-100 | 1e-6 | 1.110 | 1.969 | 0.318 | 0.354 | 0.58 |
+| w4-sphere-1 | 1e-3 | 0.259 | 0.177 | 0.063 | 0.058 | 0.85 |
+| w4-sphere-1 | 1e-6 | 0.298 | 0.460 | 0.122 | 0.184 | 0.61 |
+| w4-sphere-100 | 1e-3 | 0.471 | 0.297 | 0.153 | 0.089 | 0.60 |
+| w4-sphere-100 | 1e-6 | 0.513 | 0.791 | 0.218 | 0.209 | 0.56 |
 
 ## 3. Our level call's two passes
 
@@ -404,17 +469,16 @@ Reading it:
   2 variants × 2 launches, `scan` on the 13 matrix cases; 147 launches, every one exit 0,
   2,302 s); job 630164 (node-c11a-111; ours, `matrix large` at 1 × 40, 16 launches, exit 0,
   43 min). The a/b spread of FMM3D's calls: 1.00–1.09.
-- **locust, pending** (the user, 2026-11-07: "Wait for gridcl"): another session's
-  `gridcl_geometry` tests held one of the 72 cores from 00:12 on, and a new one started as
-  soon as the last ended. FMM3D's OpenMP loops wait for their slowest thread, so a shared
-  core can slow a whole parallel loop. The runs made beside it are records only:
-  FMM3D's `times` of 00:07–00:22 (source 3f683b5; the large cases after 00:12), its repeat
-  and our runs with the pass timers of 00:43–01:10. A chain on locust repeats both once no
-  gridcl test has run for 10 minutes and the load is below 2
-  (`/data/ucahtbe/logs/ch6-2d-chain2.sh`); until then no locust number is used here. The
-  records agree with Kathleen in kind: our level 2 at 1 × 72 took 61 ms (waves 2 ms, merge
-  and shift 59 ms; CH6.2b's uncontended run 61 ms), FMM3D's parents' loop 26 ms with 7.9
-  threads busy.
+- **locust**: the runs of 01:24–01:50 (`/data/ucahtbe/logs/ch6-2d-chain2.sh`, the user's
+  "Wait for gridcl"): the chain waited for ten minutes without a `gridcl_geometry` process
+  and the load below 2 (load 0.51 at the start), then FMM3D's `times` (60 launches) and ours
+  (`ch6-2b-runs.sh matrix large` at 1 × 72, 16 launches), every one exit 0, no gridcl
+  process at either end. FMM3D's a/b spread 1.00–1.10. Records only (archived, not used):
+  FMM3D's `times` of 00:07–00:22 (source 3f683b5; another session's `gridcl_geometry`
+  test held one of the 72 cores from 00:12, during the large cases) and the repeat with ours
+  of 00:43–01:10 (another gridcl test from 00:43). Beside the clean runs, the contended ones
+  were within 1 % on W1 at kD = 500 (FMM3D's M2L summed, 9.07 against 9.06 s) but put FMM3D's
+  M2L 1.4× slower on W3 at kD = 100's levels 4–5.
 - **The M6**: the four builds, `check` (byte for byte), and smoke runs of `scan` (W1 at
   kD = 10, the W4 cube at kD = 100) and `times` (W1 at kD = 30) at 4 threads; nothing timed
   for the report (the user runs other jobs there).
@@ -440,15 +504,17 @@ tools/kathleen/submit.sh --time=02:00:00 -- run.sbatch \
     'THREADS=40 tools/helmholtz/ch6-2b-runs.sh /scratch/scratch/ucahtbe/fmm/logs/ch6-2d-ours matrix large'
 
 # locust (quiet: no other job)
-THREADS=72 tools/helmholtz/ch6-2d-runs.sh /data/ucahtbe/logs/ch6-2d-r3 check times
+THREADS=72 tools/helmholtz/ch6-2d-runs.sh /data/ucahtbe/logs/ch6-2d-r3 times
 THREADS=72 SPLITS=1x72 tools/helmholtz/ch6-2b-runs.sh /data/ucahtbe/logs/ch6-2d-ours-r3 matrix large
 
 # The tables (the outputs fetched to bench-results/ch6-2d/, CH6.1e's to bench-results/ch6-1e/)
 tools/helmholtz/ch6-2d-tables.py times kathleen=bench-results/ch6-2d/kathleen,bench-results/ch6-2d/kathleen-ours
+tools/helmholtz/ch6-2d-tables.py times locust=bench-results/ch6-2d/locust-r3,bench-results/ch6-2d/locust-ours-r3
 tools/helmholtz/ch6-2d-tables.py scan bench-results/ch6-2d/kathleen bench-results/ch6-1e
 ```
 
 The raw outputs are archived in `~/projects/fmm-archive/kathleen/logs/ch6-2d/` and
+`~/projects/fmm-archive/locust/logs/ch6-2d/` (the clean runs) and
 `~/projects/fmm-archive/locust/logs/ch6-2d-records/` (the records of §6; the Mac), not committed.
 
 ## Appendix: per level, both on plane waves (Kathleen)
@@ -573,3 +639,122 @@ are left out of the groups of §2.
 | kathleen | 1e-6 | w4-sphere-100 | 2 | 25 | 64 | 0.0500 | 0.1571 | 0.0081 + 0.1489 | 0.32 |
 | kathleen | 1e-6 | w4-sphere-100 | 3 | 12.5 | 512 | 0.0486 | 0.0932 | 0.0154 + 0.0778 | 0.52 |
 | kathleen | 1e-6 | w4-sphere-100 | 4 † | 6.25 | 1600 | 0.0906 | 0.1312 | 0.0405 + 0.0903 | 0.69 |
+
+## Appendix: per level, both on plane waves (locust)
+
+As Kathleen's: FMM3D `timed` at 72 threads, ours one rank × 72 threads.
+
+| machine | eps | case | our level | Re κ | FMM3D boxes | FMM3D M2L s | ours s | ours waves + merge and shift s | FMM3D ÷ ours |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| locust | 1e-3 | w1-10 | 2 | 2.5 | 64 | 0.0012 | 0.0041 | 0.0006 + 0.0035 | 0.30 |
+| locust | 1e-3 | w1-30 | 2 | 7.5 | 64 | 0.0028 | 0.0083 | 0.0005 + 0.0078 | 0.34 |
+| locust | 1e-3 | w1-30 | 3 | 3.75 | 384 | 0.0034 | 0.0066 | 0.0008 + 0.0057 | 0.52 |
+| locust | 1e-3 | w1-100 | 2 | 25 | 64 | 0.0184 | 0.0531 | 0.0014 + 0.0517 | 0.35 |
+| locust | 1e-3 | w1-100 | 3 | 12.5 | 512 | 0.0100 | 0.0272 | 0.0033 + 0.0238 | 0.37 |
+| locust | 1e-3 | w1-100 | 4 | 6.25 | 3200 | 0.0200 | 0.0223 | 0.0059 + 0.0162 | 0.90 |
+| locust | 1e-3 | w1-100 | 5 | 3.12 | 4824 | 0.0238 | 0.0153 | 0.0050 + 0.0102 | 1.56 |
+| locust | 1e-3 | w1-500 | 4 | 31.2 | 3840 | 0.3322 | 0.2878 | 0.0956 + 0.1920 | 1.15 |
+| locust | 1e-3 | w1-500 | 5 | 15.6 | 19968 | 0.3460 | 0.3713 | 0.1232 + 0.2458 | 0.93 |
+| locust | 1e-3 | w1-500 | 6 | 7.81 | 65920 | 0.6020 | 0.5794 | 0.1698 + 0.4030 | 1.04 |
+| locust | 1e-3 | w1-500 | 7 | 3.91 | 94368 | 0.7446 | 0.6304 | 0.2107 + 0.4073 | 1.18 |
+| locust | 1e-3 | w3-10 | 2 | 2.5 | 64 | 0.0011 | 0.0038 | 0.0004 + 0.0034 | 0.30 |
+| locust | 1e-3 | w3-30 | 2 | 7.5 | 64 | 0.0031 | 0.0085 | 0.0005 + 0.0080 | 0.36 |
+| locust | 1e-3 | w3-30 | 3 | 3.75 | 512 | 0.0053 | 0.0083 | 0.0009 + 0.0073 | 0.64 |
+| locust | 1e-3 | w3-30 | 4 | 1.87 | 4096 | 0.0185 | 0.0158 | 0.0039 + 0.0115 | 1.18 |
+| locust | 1e-3 | w3-100 | 2 | 25 | 64 | 0.0169 | 0.0532 | 0.0015 + 0.0517 | 0.32 |
+| locust | 1e-3 | w3-100 | 3 | 12.5 | 512 | 0.0079 | 0.0265 | 0.0027 + 0.0237 | 0.30 |
+| locust | 1e-3 | w3-100 | 4 | 6.25 | 4096 | 0.0243 | 0.0292 | 0.0076 + 0.0214 | 0.83 |
+| locust | 1e-3 | w3-100 | 5 | 3.12 | 32768 | 0.1060 | 0.1485 | 0.0372 + 0.1071 | 0.71 |
+| locust | 1e-3 | w3-100 | 6 | 1.56 | 262136 | 0.6000 | 1.0649 | 0.2859 + 0.7527 | 0.56 |
+| locust | 1e-3 | w4-clusters-1 | 3 † | 0.157 | 64 | 0.0004 | 0.0036 | 0.0006 + 0.0030 | 0.12 |
+| locust | 1e-3 | w4-clusters-1 | 4 | 0.0784 | 288 | 0.0007 | 0.0039 | 0.0008 + 0.0031 | 0.17 |
+| locust | 1e-3 | w4-clusters-1 | 5 | 0.0392 | 600 | 0.0025 | 0.0051 | 0.0012 + 0.0038 | 0.50 |
+| locust | 1e-3 | w4-clusters-1 | 6 † | 0.0196 | 1056 | 0.0055 | 0.0086 | 0.0018 + 0.0066 | 0.64 |
+| locust | 1e-3 | w4-clusters-1 | 7 | 0.00979 | 1928 | 0.0083 | 0.0081 | 0.0023 + 0.0056 | 1.03 |
+| locust | 1e-3 | w4-clusters-1 | 8 | 0.0049 | 2328 | 0.0070 | 0.0092 | 0.0025 + 0.0065 | 0.76 |
+| locust | 1e-3 | w4-clusters-100 | 3 † | 15.7 | 64 | 0.0062 | 0.0093 | 0.0010 + 0.0082 | 0.67 |
+| locust | 1e-3 | w4-clusters-100 | 4 | 7.84 | 288 | 0.0034 | 0.0061 | 0.0010 + 0.0050 | 0.57 |
+| locust | 1e-3 | w4-clusters-100 | 5 | 3.92 | 600 | 0.0072 | 0.0059 | 0.0013 + 0.0045 | 1.22 |
+| locust | 1e-3 | w4-clusters-100 | 6 † | 1.96 | 1056 | 0.0086 | 0.0095 | 0.0020 + 0.0074 | 0.91 |
+| locust | 1e-3 | w4-clusters-100 | 7 | 0.979 | 1928 | 0.0091 | 0.0087 | 0.0024 + 0.0061 | 1.05 |
+| locust | 1e-3 | w4-clusters-100 | 8 | 0.49 | 2328 | 0.0077 | 0.0107 | 0.0037 + 0.0068 | 0.72 |
+| locust | 1e-3 | w4-cube-1 | 2 | 0.25 | 64 | 0.0009 | 0.0035 | 0.0004 + 0.0032 | 0.26 |
+| locust | 1e-3 | w4-cube-1 | 3 | 0.125 | 512 | 0.0017 | 0.0057 | 0.0007 + 0.0050 | 0.29 |
+| locust | 1e-3 | w4-cube-1 | 4 | 0.0625 | 4096 | 0.0121 | 0.0140 | 0.0034 + 0.0102 | 0.86 |
+| locust | 1e-3 | w4-cube-100 | 2 | 25 | 64 | 0.0173 | 0.0533 | 0.0016 + 0.0517 | 0.32 |
+| locust | 1e-3 | w4-cube-100 | 3 | 12.5 | 512 | 0.0116 | 0.0265 | 0.0027 + 0.0238 | 0.44 |
+| locust | 1e-3 | w4-cube-100 | 4 | 6.25 | 4096 | 0.0393 | 0.0292 | 0.0074 + 0.0213 | 1.34 |
+| locust | 1e-3 | w4-plummer-1 | 2 | 0.246 | 64 | 0.0004 | 0.0035 | 0.0004 + 0.0031 | 0.12 |
+| locust | 1e-3 | w4-plummer-1 | 3 | 0.123 | 512 | 0.0009 | 0.0056 | 0.0007 + 0.0049 | 0.15 |
+| locust | 1e-3 | w4-plummer-1 | 4 | 0.0615 | 512 | 0.0017 | 0.0057 | 0.0007 + 0.0049 | 0.29 |
+| locust | 1e-3 | w4-plummer-1 | 5 | 0.0307 | 744 | 0.0021 | 0.0064 | 0.0010 + 0.0054 | 0.33 |
+| locust | 1e-3 | w4-plummer-1 | 6 | 0.0154 | 1368 | 0.0035 | 0.0071 | 0.0014 + 0.0055 | 0.50 |
+| locust | 1e-3 | w4-plummer-1 | 7 | 0.00769 | 1840 | 0.0063 | 0.0073 | 0.0020 + 0.0052 | 0.87 |
+| locust | 1e-3 | w4-plummer-1 | 8 † | 0.00384 | 96 | 0.0011 | 0.0053 | 0.0007 + 0.0046 | 0.21 |
+| locust | 1e-3 | w4-plummer-100 | 2 | 24.6 | 64 | 0.0165 | 0.0528 | 0.0014 + 0.0514 | 0.31 |
+| locust | 1e-3 | w4-plummer-100 | 3 | 12.3 | 512 | 0.0076 | 0.0262 | 0.0026 + 0.0236 | 0.29 |
+| locust | 1e-3 | w4-plummer-100 | 4 † | 6.15 | 512 | 0.0054 | 0.0201 | 0.0050 + 0.0148 | 0.27 |
+| locust | 1e-3 | w4-plummer-100 | 5 | 3.07 | 744 | 0.0032 | 0.0082 | 0.0011 + 0.0070 | 0.39 |
+| locust | 1e-3 | w4-plummer-100 | 6 | 1.54 | 1368 | 0.0039 | 0.0077 | 0.0015 + 0.0061 | 0.51 |
+| locust | 1e-3 | w4-plummer-100 | 7 | 0.769 | 1840 | 0.0071 | 0.0080 | 0.0022 + 0.0058 | 0.89 |
+| locust | 1e-3 | w4-plummer-100 | 8 † | 0.384 | 96 | 0.0012 | 0.0055 | 0.0007 + 0.0048 | 0.21 |
+| locust | 1e-3 | w4-sphere-1 | 2 | 0.25 | 64 | 0.0011 | 0.0035 | 0.0004 + 0.0031 | 0.32 |
+| locust | 1e-3 | w4-sphere-1 | 3 | 0.125 | 512 | 0.0018 | 0.0056 | 0.0007 + 0.0049 | 0.31 |
+| locust | 1e-3 | w4-sphere-1 | 4 | 0.0625 | 3200 | 0.0077 | 0.0104 | 0.0027 + 0.0075 | 0.74 |
+| locust | 1e-3 | w4-sphere-1 | 5 | 0.0312 | 5016 | 0.0183 | 0.0143 | 0.0044 + 0.0096 | 1.28 |
+| locust | 1e-3 | w4-sphere-100 | 2 | 25 | 64 | 0.0179 | 0.0531 | 0.0014 + 0.0517 | 0.34 |
+| locust | 1e-3 | w4-sphere-100 | 3 | 12.5 | 512 | 0.0088 | 0.0265 | 0.0027 + 0.0239 | 0.33 |
+| locust | 1e-3 | w4-sphere-100 | 4 | 6.25 | 3200 | 0.0210 | 0.0223 | 0.0059 + 0.0162 | 0.94 |
+| locust | 1e-3 | w4-sphere-100 | 5 | 3.12 | 5016 | 0.0247 | 0.0182 | 0.0058 + 0.0123 | 1.35 |
+| locust | 1e-6 | w1-30 | 2 | 7.5 | 64 | 0.0075 | 0.0108 | 0.0006 + 0.0102 | 0.70 |
+| locust | 1e-6 | w1-100 | 2 | 25 | 64 | 0.0341 | 0.0622 | 0.0015 + 0.0606 | 0.55 |
+| locust | 1e-6 | w1-100 | 3 | 12.5 | 512 | 0.0259 | 0.0317 | 0.0032 + 0.0284 | 0.82 |
+| locust | 1e-6 | w1-100 | 4 † | 6.25 | 1600 | 0.0521 | 0.0277 | 0.0080 + 0.0196 | 1.88 |
+| locust | 1e-6 | w1-500 | 4 | 31.2 | 3840 | 0.5406 | 0.3144 | 0.1041 + 0.2099 | 1.72 |
+| locust | 1e-6 | w1-500 | 5 | 15.6 | 16624 | 0.7272 | 0.4741 | 0.1587 + 0.3131 | 1.53 |
+| locust | 1e-6 | w1-500 | 6 † | 7.81 | 34432 | 1.0272 | 0.6525 | 0.2034 + 0.4438 | 1.57 |
+| locust | 1e-6 | w1-500 | 7 † | 3.91 | 3264 | 0.1137 | 0.9130 | 0.3194 + 0.5903 | 0.12 |
+| locust | 1e-6 | w3-10 | 2 | 2.5 | 64 | 0.0038 | 0.0071 | 0.0004 + 0.0066 | 0.54 |
+| locust | 1e-6 | w3-30 | 2 | 7.5 | 64 | 0.0068 | 0.0109 | 0.0005 + 0.0104 | 0.62 |
+| locust | 1e-6 | w3-30 | 3 | 3.75 | 512 | 0.0156 | 0.0133 | 0.0014 + 0.0119 | 1.18 |
+| locust | 1e-6 | w3-30 | 4 | 1.87 | 3224 | 0.0570 | 0.0242 | 0.0069 + 0.0170 | 2.35 |
+| locust | 1e-6 | w3-100 | 2 | 25 | 64 | 0.0296 | 0.0633 | 0.0024 + 0.0609 | 0.47 |
+| locust | 1e-6 | w3-100 | 3 | 12.5 | 512 | 0.0187 | 0.0318 | 0.0032 + 0.0285 | 0.59 |
+| locust | 1e-6 | w3-100 | 4 | 6.25 | 4096 | 0.0811 | 0.0359 | 0.0101 + 0.0253 | 2.26 |
+| locust | 1e-6 | w3-100 | 5 | 3.12 | 32768 | 0.4262 | 0.2052 | 0.0594 + 0.1421 | 2.08 |
+| locust | 1e-6 | w4-clusters-1 | 3 † | 0.157 | 64 | 0.0024 | 0.0065 | 0.0008 + 0.0057 | 0.37 |
+| locust | 1e-6 | w4-clusters-1 | 4 | 0.0784 | 288 | 0.0036 | 0.0068 | 0.0012 + 0.0055 | 0.53 |
+| locust | 1e-6 | w4-clusters-1 | 5 | 0.0392 | 600 | 0.0130 | 0.0088 | 0.0020 + 0.0068 | 1.47 |
+| locust | 1e-6 | w4-clusters-1 | 6 † | 0.0196 | 1024 | 0.0305 | 0.0148 | 0.0033 + 0.0115 | 2.06 |
+| locust | 1e-6 | w4-clusters-1 | 7 † | 0.00979 | 1328 | 0.0324 | 0.0136 | 0.0040 + 0.0094 | 2.39 |
+| locust | 1e-6 | w4-clusters-1 | 8 † | 0.0049 | 1296 | 0.0200 | 0.0158 | 0.0047 + 0.0108 | 1.26 |
+| locust | 1e-6 | w4-clusters-100 | 3 † | 15.7 | 64 | 0.0131 | 0.0110 | 0.0011 + 0.0099 | 1.19 |
+| locust | 1e-6 | w4-clusters-100 | 4 | 7.84 | 288 | 0.0094 | 0.0102 | 0.0021 + 0.0080 | 0.92 |
+| locust | 1e-6 | w4-clusters-100 | 5 | 3.92 | 600 | 0.0242 | 0.0100 | 0.0022 + 0.0077 | 2.42 |
+| locust | 1e-6 | w4-clusters-100 | 6 † | 1.96 | 1024 | 0.0359 | 0.0160 | 0.0035 + 0.0124 | 2.25 |
+| locust | 1e-6 | w4-clusters-100 | 7 † | 0.979 | 1328 | 0.0345 | 0.0146 | 0.0044 + 0.0101 | 2.36 |
+| locust | 1e-6 | w4-clusters-100 | 8 † | 0.49 | 1296 | 0.0216 | 0.0171 | 0.0051 + 0.0118 | 1.26 |
+| locust | 1e-6 | w4-cube-1 | 2 | 0.25 | 64 | 0.0032 | 0.0064 | 0.0004 + 0.0060 | 0.50 |
+| locust | 1e-6 | w4-cube-1 | 3 | 0.125 | 512 | 0.0073 | 0.0107 | 0.0011 + 0.0095 | 0.68 |
+| locust | 1e-6 | w4-cube-1 | 4 † | 0.0625 | 1496 | 0.0247 | 0.0222 | 0.0064 + 0.0154 | 1.11 |
+| locust | 1e-6 | w4-cube-100 | 2 | 25 | 64 | 0.0321 | 0.0628 | 0.0015 + 0.0612 | 0.51 |
+| locust | 1e-6 | w4-cube-100 | 3 | 12.5 | 512 | 0.0303 | 0.0318 | 0.0032 + 0.0286 | 0.95 |
+| locust | 1e-6 | w4-cube-100 | 4 † | 6.25 | 1496 | 0.0385 | 0.0356 | 0.0101 + 0.0252 | 1.08 |
+| locust | 1e-6 | w4-plummer-1 | 2 | 0.246 | 64 | 0.0024 | 0.0064 | 0.0004 + 0.0060 | 0.38 |
+| locust | 1e-6 | w4-plummer-1 | 3 | 0.123 | 504 | 0.0045 | 0.0100 | 0.0011 + 0.0089 | 0.45 |
+| locust | 1e-6 | w4-plummer-1 | 4 | 0.0615 | 504 | 0.0082 | 0.0101 | 0.0011 + 0.0090 | 0.81 |
+| locust | 1e-6 | w4-plummer-1 | 5 † | 0.0307 | 504 | 0.0085 | 0.0113 | 0.0016 + 0.0097 | 0.75 |
+| locust | 1e-6 | w4-plummer-1 | 6 † | 0.0154 | 688 | 0.0108 | 0.0122 | 0.0025 + 0.0096 | 0.88 |
+| locust | 1e-6 | w4-plummer-1 | 7 † | 0.00769 | 600 | 0.0121 | 0.0128 | 0.0041 + 0.0086 | 0.94 |
+| locust | 1e-6 | w4-plummer-100 | 2 | 24.6 | 64 | 0.0297 | 0.0618 | 0.0015 + 0.0603 | 0.48 |
+| locust | 1e-6 | w4-plummer-100 | 3 | 12.3 | 504 | 0.0173 | 0.0308 | 0.0030 + 0.0277 | 0.56 |
+| locust | 1e-6 | w4-plummer-100 | 4 † | 6.15 | 504 | 0.0161 | 0.0247 | 0.0067 + 0.0179 | 0.65 |
+| locust | 1e-6 | w4-plummer-100 | 5 † | 3.07 | 504 | 0.0107 | 0.0141 | 0.0019 + 0.0122 | 0.76 |
+| locust | 1e-6 | w4-plummer-100 | 6 † | 1.54 | 688 | 0.0108 | 0.0133 | 0.0027 + 0.0105 | 0.81 |
+| locust | 1e-6 | w4-plummer-100 | 7 † | 0.769 | 600 | 0.0129 | 0.0133 | 0.0040 + 0.0091 | 0.96 |
+| locust | 1e-6 | w4-sphere-1 | 2 | 0.25 | 64 | 0.0031 | 0.0064 | 0.0005 + 0.0060 | 0.48 |
+| locust | 1e-6 | w4-sphere-1 | 3 | 0.125 | 512 | 0.0075 | 0.0100 | 0.0011 + 0.0089 | 0.75 |
+| locust | 1e-6 | w4-sphere-1 | 4 † | 0.0625 | 1600 | 0.0253 | 0.0173 | 0.0052 + 0.0121 | 1.46 |
+| locust | 1e-6 | w4-sphere-100 | 2 | 25 | 64 | 0.0300 | 0.0621 | 0.0016 + 0.0605 | 0.48 |
+| locust | 1e-6 | w4-sphere-100 | 3 | 12.5 | 512 | 0.0163 | 0.0317 | 0.0032 + 0.0285 | 0.52 |
+| locust | 1e-6 | w4-sphere-100 | 4 † | 6.25 | 1600 | 0.0398 | 0.0277 | 0.0078 + 0.0197 | 1.44 |
