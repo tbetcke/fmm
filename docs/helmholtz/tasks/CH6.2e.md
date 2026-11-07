@@ -116,6 +116,15 @@ workspace all-targets, `cargo doc`, `cargo test` and `--workspace`, the MPI list
 ranks); `cargo test -p nd-fmm-tables --release -- --ignored` for the new ignored test
 (`fmm-tables/CLAUDE.md`); `shellcheck` of the script if installed.
 
+Run on the quiet M6 (2026-11-07, from 09:38, branch at 200bd44 plus docs only), all passed:
+`cargo fmt --all -- --check`; `cargo clippy -- -D warnings`, `--examples`, `--workspace
+--all-targets`; `cargo doc --no-deps`; `RUST_MIN_STACK=8388608 cargo test` (1219 passed, 909 s)
+and `--workspace` (1333 passed, 1236 s); `.github/scripts/run-mpi-tests.sh` at 2 and 4 ranks
+(`mpi_regressions`, `mpi_exec`, `mpi_threading`, `invariance`, `helmholtz_fmm` and the seven
+nd-octree examples, 1051 s); `cargo test --release -p nd-fmm-tables -- --ignored` (15 passed,
+553 s). `shellcheck`: not installed, not run. Laplace (constraint 1): no Laplace code changed; the bit-identity tests of
+`mpi_exec`, `mpi_threading` and `invariance` passed at 2 and 4 ranks.
+
 ## Machine runs
 
 locust (release, BLAS threads 1, one rank × 72 threads; after `nvidia-smi`, `uptime` and a
@@ -143,12 +152,15 @@ No M6 timing (accuracy and tests only there). No Kathleen job.
 
 ## Results
 
-locust (1 × 72, 2026-11-07 07:43–08:12, source 0a53256) and the M6 (tests, per-pair counts);
-report `fmm-validate/results/helmholtz-ch6-2e.md`.
+locust (1 × 72, 2026-11-07 07:43–08:07, source 0a53256) and the M6 (tests, per-pair counts,
+and the times at 4.5 at 1 × 6 on a quiet machine, 08:28–08:31, the user: "the m6 is quiet
+now"); report `fmm-validate/results/helmholtz-ch6-2e.md`.
 
-- **Per pair** (the ignored test, every domain): at reach 4 the kernel within 1.07–1.50× the
-  stated error on ρ ≤ 4 and the chain within 0.72–1.18×, but at the corner up to 10⁴, 10⁷
-  and 10⁹ times it (iprec 1–3; Re κ from 14π): a corner pair is wrong. Where Im κ < π/2 reach
+- **Per pair** (the ignored test, every domain): at reach 4 the kernel within 2× the stated
+  error on ρ ≤ 4 (at most 1.065×, 1.188×, 1.495× at iprec 1–3) and the point-to-point chain
+  within 3× (at most 0.784×, 0.716×, 1.175×), but at the corner up to 10⁴, 10⁷ and 10⁹
+  times it (Re κ from 14π): a corner point pair is wrong. At 4.5 the same bounds on
+  ρ ≤ 4.5, the corner up to 5·10³, 3·10⁵ and 10⁶ times. Where Im κ < π/2 reach
   4 has 0.75–0.81× the corner's waves; on a few strongly damped domains more (to 1.25×; the
   64 sample steps of ρ).
 - **The verification** (60 cases at 10⁻³ to 10⁻⁶): within 1.070× Rotation's at the corner,
@@ -160,16 +172,24 @@ report `fmm-validate/results/helmholtz-ch6-2e.md`.
 - **The scan** (166 levels at iprec 2): the corner and 4.5 within 1.044×; at 4 one level
   misses, level 2 of the W4 cube at kD = 100, 10⁻⁶ (κ = 25, p = 35; 1.59×). The plan named
   4 and the corner; 4.5 added after the verification chose it.
-- **Times** (ABBA, the second evaluation): at 4.5 the waves per level 0.84–0.86×, the M2L per
-  level 0.75–0.96× and per case 0.80–0.92×, the large cases' evaluation 0.89–0.95×; at 4
-  0.77–0.80×, 0.69–0.89×, 0.73–0.89× and 0.85–0.90×.
+- **Times** (ABBA, the second evaluation): on locust at 4.5 the waves per level 0.84–0.86×,
+  the M2L per level 0.75–0.96× and per case 0.80–0.92×, the large cases' evaluation
+  0.89–0.95×; at 4 0.77–0.80×, 0.69–0.89×, 0.73–0.89× and 0.85–0.90×. On the M6 at 4.5 (the
+  matrix only) the M2L 0.79–0.95× per level and 0.80–0.91× per case. The waves per level
+  were recorded at the corner, 4 and 4.5 only (the times runs); the ladder's other reaches
+  by the bytes of their tables and buffers (the report's §2), which narrows the
+  acceptance's "waves per level" to those three reaches.
 - **Tests**: `the_counts_for_a_smaller_reach` and the reach panic (nd-fmm-tables, debug),
   `build_with_reach_takes_the_counts_of_the_reach`, the reach check of `check_plane_wave`
   (nd-fmm-exec: corner bit for bit, reach 4 within 1.1× with fewer waves, 2 threads, the
-  one-rank FMM; `helmholtz_fmm` 214 s at one rank in debug on the M6, 203 s before), the
-  reach row of the harness test (W1 within 1.1×; `helmholtz_accuracy` 74 s in debug, 42 s
-  recorded by CH6.2d). Not as planned: per-node counts may exceed a larger reach's by one
-  (the sampled ρ), so the test asserts the waves monotone and each node within one.
+  one-rank FMM), the reach row of the harness test (W1 within 1.1×). Debug times at one rank
+  on the quiet M6: `helmholtz_fmm` 211 s (203 s recorded by CH6.2d), `helmholtz_accuracy`
+  46 s (42 s). Not as planned: per-node counts may exceed a larger reach's by one (the
+  sampled ρ), so the test asserts the waves monotone and each node within one; test 4's
+  "`plane_wave_waves` equal to the operator's" is not asserted (the row reads the operator,
+  so the check would be the same call twice). After the self-review: the reach checked
+  eagerly in every setter (`assert_reach`), and the ignored every-domain test asserts the
+  chain within 3× at both reaches.
 
 ## Pending runs
 

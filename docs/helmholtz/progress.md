@@ -2463,3 +2463,45 @@ request, using this template:
 - Follow-ups: CH6.2e's line (FMM3D's counts too few at iprec 1 in the FMM; iprec 2 still to
   measure); CH6.2f's line (merge and shift's split into shifts and conversions on the coarse
   levels, before the coarse-level remedy); CH9.1.
+
+## 2026-11-07: CH6.2e The counts' corner
+- Done:
+  - The α counts for a smaller reach: `Quadrature::with_reach` (`new` is the corner 4√2,
+    bit for bit), `assert_reach`, `MergeLevel::with_reach`, `PlaneWaveM2l::build_with_reach`,
+    `HelmholtzOperator::with_plane_wave_reach`, `plane_wave_reach`, `plane_wave_waves`,
+    `HelmholtzFmmBuilder::plane_wave_reach`; `helmholtz_accuracy --reach` and
+    `planewave-scan:<iprec>`, the rows' reach and waves per level, a "waves" column in
+    `--levels`; `tools/helmholtz/ch6-2e-runs.sh` and `ch6-2e-tables.py`.
+  - The report `fmm-validate/results/helmholtz-ch6-2e.md` (locust 1 × 72, 2026-11-07
+    07:43–08:07; the M6 1 × 6 08:28–08:31, the user: "the m6 is quiet now"). A pair needs the
+    corner: the point-to-point chain with counts for ρ ≤ 4 errs there by up to 1.1·10⁴,
+    1.1·10⁷ and 1.7·10⁹ × the stated error at iprec 1–3. The FMM did not on D12's workloads:
+    on CH6.1e's 60 verification cases at 10⁻³ to 10⁻⁶ the corner, 5, 4.5 and 4.25 within
+    1.070× Rotation's; 4 misses on three cases at 10⁻⁶ and kD ≥ 100 (1.60–1.69×), 3.5 on 12,
+    3 on 17; the scan (166 levels at iprec 2) the corner and 4.5 within 1.044×, 4 one level
+    (the W4 cube's level 2 at κ = 25, 1.59×). The threshold lies between 4 and 4.25, about
+    3√2. At 4.5 the waves 0.84–0.86×, the exponential M2L 0.75–0.96× per level and
+    0.80–0.92× per case on locust (0.79–0.95× and 0.80–0.91× on the M6), the large cases'
+    evaluation 0.89–0.95×. CH6.2d's question answered: at iprec 2 fewer counts than ours hold
+    (reach 4.5, 4.25), FMM3D's reach 4 does not on three cases.
+- Tests: `the_counts_for_a_smaller_reach`, `a_reach_within_the_source_box_panics` and the
+  ignored `the_counts_for_a_smaller_reach_on_every_domain` (kernel within 2×, chain within 3×
+  on ρ ≤ reach at 4 and 4.5) in nd-fmm-tables; `build_with_reach_takes_the_counts_of_the_reach`;
+  the reach checks of `check_plane_wave` in `fmm-exec/tests/helmholtz_fmm.rs` (the corner bit
+  for bit the default, reach 4 within 1.1× Rotation's with fewer waves, 2 threads, the
+  one-rank FMM) and of `fmm-validate/tests/helmholtz_accuracy.rs`. A self-review by a
+  subagent: its points taken (the large cases' bytes, 4.25 not scanned, hedged causes, the
+  reach checked eagerly, the chain asserted in the ignored test, the tables from several
+  outputs); its convention-version point rebutted (§3.15's "Exponential M2L" is unversioned).
+- Checks: ran `/verify` on the quiet M6: format, Clippy (default, examples, workspace
+  all-targets), `cargo doc`, `cargo test` (1219 passed, 909 s) and `cargo test --workspace`
+  (1333 passed, 1236 s), the MPI list at 2 and 4 ranks (1051 s), `cargo test --release -p
+  nd-fmm-tables -- --ignored` (15 passed, 553 s), all passed; `tests/helmholtz_fmm.rs` 211 s
+  and `tests/helmholtz_accuracy.rs` 46 s at one rank in debug (203 and 42 s before);
+  `shellcheck` not installed, not run. Pending: none.
+- Decisions: questions for sign-off: 1. the counts' reach 4.5 in place of the corner 4√2
+  (CH6.2g); 2. CH6.2g before CH6.2f (D8).
+- Laplace: not touched (the Helmholtz quadrature, merge and operator, `nd-fmm-validate`,
+  `tools/`); `mpi_exec`, `mpi_threading` and `invariance` passed at 2 and 4 ranks.
+- Follow-ups: CH6.2g (the reach adopted, with an M2L pair at the largest V offset against
+  Rotation on every domain), if question 1 is signed off; CH6.2f's place after it (question 2).
