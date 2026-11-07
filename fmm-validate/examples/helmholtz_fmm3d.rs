@@ -1,14 +1,17 @@
 //! The Helmholtz FMM beside FMM3D's `hfmm3d` on the reference workloads (Helmholtz CH3.6;
 //! docs/design/helmholtz-fmm-proposal.md §9.2, the H3 row). Prints Markdown on stdout.
 //!
-//! Two steps around `tools/fmm3d/driver.f90`'s `helmholtz` mode (`tools/fmm3d/run.sh
-//! helmholtz` runs all three):
+//! Three steps around `tools/fmm3d/driver.f90`'s `helmholtz` mode (`tools/fmm3d/run.sh
+//! helmholtz` runs the first two and the driver; `tools/helmholtz/ch6-2d-runs.sh` the
+//! first and the third):
 //!
 //! ```text
 //! helmholtz_fmm3d problem CASE --out FILE
 //! fmm3d_driver helmholtz FILE PREFIX K 0 1e-3,1e-6,1e-12 1 1      # FMM3D, FULL = 1
 //! helmholtz_fmm3d compare CASE --eps 1e-3,1e-6 --fmm3d default=PREFIX \
 //!     --reference 1e-12 [--problem FILE] [--threads t]
+//! helmholtz_fmm3d errors CASE --eps 1e-3,1e-6 --fmm3d ps=PREFIX1,pw3=PREFIX2,… \
+//!     [--problem FILE] [--threads t]
 //! ```
 //!
 //! `problem` writes the case's points, its one charge vector and its sampled targets as
@@ -21,10 +24,14 @@
 //! and FMM3D's full outputs (`PREFIX-<ε>.full.out`) with it at every point: the relative
 //! ℓ2 errors over all targets and the worst box of the FMM's deepest level, over ε and
 //! over the ℓ2 error (how far one box stands out)
-//! (`nd_fmm_validate::helmholtz_fmm3d`). A full output's values at the sampled targets
-//! must equal the sampled output's bit for bit, and with `--problem` the file must be the
-//! case's byte for byte; anything else stops the run on every rank before MPI's first
-//! collective.
+//! (`nd_fmm_validate::helmholtz_fmm3d`). `errors` (Helmholtz CH6.2d) measures FMM3D's
+//! outputs alone, without our FMM: per token of `--eps` and run of `--fmm3d`, its errors at
+//! the samples against the same direct sum, its seconds, and its errors over the first
+//! run's at the same token (CH6.2d's scan: the first run FMM3D with every level on its
+//! point-and-shoot M2L, the others one level each on plane waves). A full output's values
+//! at the sampled targets must equal the sampled output's bit for bit, and with
+//! `--problem` the file must be the case's byte for byte; anything else stops the run on
+//! every rank before MPI's first collective.
 //!
 //! CASE is:
 //!
@@ -100,7 +107,7 @@ fn arguments() -> Arguments {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let usage = || -> ! {
         eprintln!(
-            "usage: helmholtz_fmm3d problem|compare [--workload w1|w2|w3|w3:<n>|w4-<distribution>:<n>] \
+            "usage: helmholtz_fmm3d problem|compare|errors [--workload w1|w2|w3|w3:<n>|w4-<distribution>:<n>] \
              [--kd x] [--kim y] [--charges real|complex] [--samples n] [--out FILE] \
              [--eps e,…] [--fmm3d label=PREFIX,…] [--reference e] [--problem FILE] \
              [--threads t] [--oracle-threads t] [--p2p auto|reference|<isa>]; got {args:?}"
@@ -191,6 +198,7 @@ fn arguments() -> Arguments {
         && match parsed.step.as_str() {
             "problem" => parsed.out.is_some(),
             "compare" => parsed.reference.is_none() || !parsed.fmm3d.is_empty(),
+            "errors" => parsed.reference.is_none() && !parsed.fmm3d.is_empty(),
             _ => false,
         };
     if !valid {
@@ -345,6 +353,72 @@ fn worst_boxes(check: &Crosscheck, j: usize, count: usize) -> String {
     )
 }
 
+/// The step `errors`: FMM3D's runs at the samples against the case's oracle, one row per
+/// token and run, with each run's errors over the first run's at the token.
+fn errors(arguments: &Arguments, case: &Case, problem: &Problem, workload: Workload) {
+    let runs: Vec<Vec<Fmm3dRun>> = arguments
+        .fmm3d
+        .iter()
+        .map(|(_, prefix)| {
+            arguments
+                .eps
+                .iter()
+                .map(|e| read_run(prefix, e, problem))
+                .collect()
+        })
+        .collect();
+    let (universe, _) =
+        mpi::initialize_with_threading(Threading::Funneled).expect("MPI initialises");
+    let world = universe.world();
+    let oracle = Oracle::sharded(
+        complex_k(case),
+        problem,
+        true,
+        arguments.oracle_threads.unwrap_or(arguments.threads),
+        &world,
+    );
+    if world.rank() != 0 {
+        return;
+    }
+    println!(
+        "# FMM3D's errors: {} at kD = {} + {}i",
+        workload.name(),
+        arguments.kd,
+        arguments.kim
+    );
+    println!();
+    println!(
+        "N = {}, {} sampled targets; the ratios are each run's errors over the first run's \
+         ({}) at the same eps",
+        problem.len(),
+        problem.sample.len(),
+        arguments.fmm3d[0].0
+    );
+    println!();
+    println!("| Workload | N | kD | eps | run | threads | s | φ | ∇φ | φ ÷ first | ∇φ ÷ first |");
+    println!("| --- | ---: | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |");
+    for (j, token) in arguments.eps.iter().enumerate() {
+        let first = sample_errors(&runs[0][j].sampled, &oracle, 0);
+        for ((label, _), run) in arguments.fmm3d.iter().zip(&runs) {
+            let run = &run[j];
+            let e = sample_errors(&run.sampled, &oracle, 0);
+            let (time, threads) = run.seconds.map_or(("–".into(), "–".into()), |(s, t)| {
+                (format!("{s:.3}"), t.to_string())
+            });
+            println!(
+                "| {} | {} | {} | {token} | {label} | {threads} | {time} | {:.3e} | {:.3e} | {:.3} | {:.3} |",
+                workload.name(),
+                problem.len(),
+                arguments.kd,
+                e[0],
+                e[1],
+                e[0] / first[0],
+                e[1] / first[1],
+            );
+        }
+    }
+}
+
 fn main() {
     let arguments = arguments();
     let workload = workload(&arguments.workload, arguments.kd).expect("checked");
@@ -383,6 +457,10 @@ fn main() {
                 path.display()
             ));
         }
+    }
+    if arguments.step == "errors" {
+        errors(&arguments, &case, &problem, workload);
+        return;
     }
     let reference = arguments.reference.as_ref().map(|token| {
         let prefix = &arguments.fmm3d[0].1;
