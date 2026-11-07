@@ -340,6 +340,15 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   with the others; four clock reads more per chunk, vector and frame, no value changed):
   `check_plane_wave_times` in `check_plane_wave` checks both passes timed and within the
   level's M2L time on every level with waves and V pairs, zero elsewhere.
+  Since Helmholtz CH6.2e (docs/helmholtz/tasks/CH6.2e.md) `with_plane_wave_reach` and
+  `HelmholtzFmmBuilder::plane_wave_reach` name the lateral reach of the quadratures' α counts
+  (default `RHO_MAX` = 4√2, the region's corner; a smaller reach bounds the kernel on
+  ρ ≤ reach only, with fewer waves where Im κ < π/2 and on some strongly damped levels
+  more), for the measurements; an invalid reach panics in the setter; `plane_wave_reach` and
+  `plane_wave_waves(level)` report it. `check_plane_wave` checks the corner named bit for
+  bit the default, and reach 4 with at most the corner's waves per level within
+  `PLANE_WAVE_RATIO` of Rotation's error, at 2 threads and on P ranks the one-rank FMM (the
+  one-rank debug run on the M6: see docs/helmholtz/tasks/CH6.2e.md, "Results").
   The level call is the crate-private `src/helmholtz/operator_plane_wave.rs`, Laplace's
   order (`src/operator_plane_wave.rs`) restated in scalar loops on
   `nd_fmm_tables::helmholtz::plane_wave` (no `nd-fmm-simd` kernel: Laplace's `WaveKernel`

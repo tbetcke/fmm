@@ -135,7 +135,10 @@
 //! one by the level's degree; a function of k, the level's width, its degree and ε) or
 //! named per level, and only where κ_l = k w_l lies in the quadrature's tables; RCR on the
 //! others. Under the rule the FMM's errors stay within about 1.1× Rotation's on CH3.1c's
-//! cases (`fmm-validate/results/helmholtz-ch6-1e.md`). Its level call restates Laplace's
+//! cases (`fmm-validate/results/helmholtz-ch6-1e.md`). The quadratures' α counts bound the
+//! region's corner, lateral offsets to 4√2 box widths, unless
+//! [`with_plane_wave_reach`](HelmholtzOperator::with_plane_wave_reach) names a smaller reach
+//! (Helmholtz CH6.2e, for the measurements). Its level call restates Laplace's
 //! (`crate::operator`, "The plane-wave M2L") without its vector kernels, by chunks of
 //! parents (Helmholtz CH6.2a): the level is cut, in index order, into chunks of consecutive
 //! whole parents whose computed children's distinct V sources fit the waves buffer (each
@@ -215,6 +218,7 @@ use nd_fmm_tables::helmholtz::classes::{ClassM2l, ClassScratch};
 use nd_fmm_tables::helmholtz::dense::DenseM2l;
 use nd_fmm_tables::helmholtz::plane_wave::Precision;
 use nd_fmm_tables::helmholtz::plane_wave::merge::{PlaneWaveM2l, select};
+use nd_fmm_tables::helmholtz::plane_wave::quadrature::{RHO_MAX, assert_reach};
 use nd_fmm_tables::helmholtz::{DEFAULT_BLOCK_BUDGET, HelmholtzScratch, HelmholtzTables};
 use nd_octree::{MortonKey, morton};
 use rayon::ThreadPool;
@@ -383,6 +387,9 @@ struct Kernel<T: SimdScalar> {
     plane_wave_precision: PlaneWavePrecision,
     /// The FMM's tolerance, which [`PlaneWavePrecision::Rule`] reads, if it has one.
     plane_wave_tolerance: Option<f64>,
+    /// The lateral reach of the quadratures' α counts (`RHO_MAX`, the region's corner,
+    /// unless named; Helmholtz CH6.2e).
+    plane_wave_reach: f64,
     /// The exponential M2L's tables of the levels that have them, under
     /// [`HelmholtzM2l::PlaneWave`].
     plane_waves: Option<PlaneWaveM2l<T>>,
@@ -491,6 +498,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             batched: None,
             plane_wave_precision: PlaneWavePrecision::Rule,
             plane_wave_tolerance: None,
+            plane_wave_reach: RHO_MAX,
             plane_waves: None,
             matrix: MatrixKernel::detect(MulAdd::Separate),
             p2p: Some(P2pKernel::detect()),
@@ -586,6 +594,41 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             self.select_tables();
         }
         self
+    }
+
+    /// Takes the α counts of every level's quadrature under [`HelmholtzM2l::PlaneWave`] for
+    /// the lateral offsets ρ ≤ `reach` (box widths; `Quadrature::with_reach`) in place of the
+    /// region's corner 4√2 (`RHO_MAX`, the default), before or after
+    /// [`with_m2l`](Self::with_m2l). The counts then bound the kernel on ρ ≤ `reach` only;
+    /// below the corner they are fewer where Im κ < π/2 (on some strongly damped levels
+    /// more; fmm-validate/results/helmholtz-ch6-2e.md §1). For the measurements (Helmholtz
+    /// CH6.2e). Under PlaneWave the levels' tables are built again.
+    ///
+    /// # Panics
+    ///
+    /// If `reach` is not finite or not above the source's reach √2/2.
+    pub fn with_plane_wave_reach(mut self, reach: f64) -> Self {
+        assert_reach(reach);
+        self.kernel.plane_wave_reach = reach;
+        if self.kernel.m2l == HelmholtzM2l::PlaneWave {
+            self.select_tables();
+        }
+        self
+    }
+
+    /// The lateral reach of the quadratures' α counts
+    /// ([`with_plane_wave_reach`](Self::with_plane_wave_reach)).
+    pub fn plane_wave_reach(&self) -> f64 {
+        self.kernel.plane_wave_reach
+    }
+
+    /// The waves per direction of `level`, Σₖ Nₖ of its quadrature, under
+    /// [`HelmholtzM2l::PlaneWave`]; 0 where the level runs RCR (and under the other
+    /// settings).
+    pub fn plane_wave_waves(&self, level: usize) -> usize {
+        self.kernel
+            .plane_wave_level(level)
+            .map_or(0, |l| l.tables().wave_len() / 2)
     }
 
     /// The precision of `level`'s quadrature under [`HelmholtzM2l::PlaneWave`], `None` where
@@ -700,7 +743,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                     .map(|l| named.get(l).copied().flatten().filter(|_| l >= 2))
                     .collect(),
             };
-            PlaneWaveM2l::build(k_root, &degrees, &precisions)
+            PlaneWaveM2l::build_with_reach(k_root, &degrees, &precisions, kernel.plane_wave_reach)
         });
         // No level with waves: nothing to hold.
         kernel.plane_waves = kernel

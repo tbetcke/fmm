@@ -85,6 +85,7 @@ use nd_fmm_tables::helmholtz::classes::{ClassM2l, CubeTransforms};
 use nd_fmm_tables::helmholtz::dense::DenseM2l;
 use nd_fmm_tables::helmholtz::plane_wave::Precision;
 use nd_fmm_tables::helmholtz::plane_wave::merge::select;
+use nd_fmm_tables::helmholtz::plane_wave::quadrature::RHO_MAX;
 use nd_octree::PhysicalBox;
 
 type C = Complex<f64>;
@@ -983,6 +984,8 @@ fn check_plane_wave(scenario: &Scenario, bounds: bool, comm: &SimpleCommunicator
     );
     check_m2l_times(&name, &fmm, comm);
     check_plane_wave_times(&name, &fmm, comm);
+    assert_eq!(op.plane_wave_reach(), RHO_MAX);
+    let corner_waves: Vec<usize> = (0..degrees.len()).map(|l| op.plane_wave_waves(l)).collect();
     drop(fmm);
     let (phi, grad) = difference(&output, &rotation, comm);
     let (error_phi, error_grad) = errors(scenario, &inputs, &output, 0, comm);
@@ -1053,6 +1056,70 @@ fn check_plane_wave(scenario: &Scenario, bounds: bool, comm: &SimpleCommunicator
             "{name}: vector {v} of two is not the one-vector FMM bit for bit"
         );
     }
+
+    // The counts' reach (Helmholtz CH6.2e): the corner's named is the default bit for bit;
+    // FMM3D's reach 4 has at most the corner's waves on every level, fewer on one, within
+    // PLANE_WAVE_RATIO of Rotation's error, the same at 2 threads and on P ranks the
+    // one-rank FMM.
+    let (_, corner) = run(
+        &tables.clone().plane_wave_reach(RHO_MAX),
+        &inputs,
+        kind,
+        comm,
+    );
+    assert_same(
+        &format!("{name}, the corner's reach"),
+        &corner,
+        &output,
+        comm,
+    );
+    let reach = tables.clone().plane_wave_reach(4.0);
+    let (fmm, fewer) = run(&reach, &inputs, kind, comm);
+    let waves: Vec<usize> = (0..degrees.len())
+        .map(|l| fmm.operator().plane_wave_waves(l))
+        .collect();
+    drop(fmm);
+    assert!(
+        waves.iter().zip(&corner_waves).all(|(a, b)| a <= b) && waves != corner_waves,
+        "{name}: waves at reach 4 {waves:?}, at the corner {corner_waves:?}"
+    );
+    assert!(
+        waves
+            .iter()
+            .zip(&corner_waves)
+            .all(|(&a, &b)| (a == 0) == (b == 0)),
+        "{name}: the same levels with waves at reach 4"
+    );
+    let (reach_phi, reach_grad) = errors(scenario, &inputs, &fewer, 0, comm);
+    if rank == 0 {
+        println!(
+            "{name} at reach 4 (waves {waves:?} against {corner_waves:?}): φ {reach_phi:.2e}, \
+             ∇φ {reach_grad:.2e}, {:.3}× and {:.3}× Rotation's",
+            reach_phi / rotation_phi,
+            reach_grad / rotation_grad,
+        );
+    }
+    assert!(
+        reach_phi <= PLANE_WAVE_RATIO * rotation_phi
+            && reach_grad <= PLANE_WAVE_RATIO * rotation_grad,
+        "{name} at reach 4: φ {reach_phi:.2e}, ∇φ {reach_grad:.2e} against Rotation's \
+         {rotation_phi:.2e}, {rotation_grad:.2e}"
+    );
+    let (_, threaded) = run(&reach.clone().threads(2), &inputs, kind, comm);
+    assert_same(
+        &format!("{name}, reach 4, 2 threads"),
+        &threaded,
+        &fewer,
+        comm,
+    );
+    check_one_rank(
+        &format!("{name}, reach 4"),
+        &reach,
+        &inputs,
+        kind,
+        &fewer,
+        comm,
+    );
 
     // Named precisions: none on every level is Rotation's level call bit for bit; iprec 1
     // on the finest level and none above, the finest level alone.

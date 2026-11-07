@@ -29,6 +29,7 @@ use nd_fmm_exec::helmholtz::{
 };
 use nd_fmm_exec::operator::Isa;
 use nd_fmm_tables::helmholtz::plane_wave::merge::precision_for_tolerance;
+use nd_fmm_tables::helmholtz::plane_wave::quadrature::RHO_MAX;
 use nd_fmm_validate::SplitMix64;
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::helmholtz_accuracy::{
@@ -275,7 +276,10 @@ const PLANE_WAVE_RATIO: f64 = 1.1;
 /// charges, ε = 10⁻³): φ and ∇φ within [`PLANE_WAVE_RATIO`] of Rotation's errors, the row's
 /// precisions the rule's (`precision_for_tolerance` of ε on every level with waves), and
 /// named precisions as named; at ε = 10⁻⁶ also `check_fmm`'s checks. Below the rule's
-/// tolerance (ε = 10⁻⁸) no level has waves and the output is Rotation's (the checksum).
+/// tolerance (ε = 10⁻⁸) no level has waves and the output is Rotation's (the checksum). The
+/// counts' reach (Helmholtz CH6.2e): the corner's by default, with waves exactly on the
+/// levels with a precision; at reach 4 at most the corner's waves per level and fewer in all,
+/// and on W1 within [`PLANE_WAVE_RATIO`] of Rotation's errors.
 fn check_plane_wave(world: &SimpleCommunicator) {
     let clusters = Workload::W4 {
         distribution: Distribution::Clusters,
@@ -332,6 +336,40 @@ fn check_plane_wave(world: &SimpleCommunicator) {
         }
         if eps == 1e-6 {
             check_fmm(world, &case);
+        }
+        // The counts' reach (Helmholtz CH6.2e): the corner's by default; at 4 at most the
+        // corner's waves on every level with waves, fewer in all, within PLANE_WAVE_RATIO of
+        // Rotation's errors on W1.
+        assert_eq!(row.plane_wave_reach, RHO_MAX);
+        for (l, &w) in row.plane_wave_waves.iter().enumerate() {
+            assert_eq!(w > 0, row.plane_wave[l].is_some(), "level {l}");
+        }
+        case.plane_wave_reach = Some(4.0);
+        let reach = run(&case, &problem, &oracle, 1, world).expect("the FMM runs");
+        case.plane_wave_reach = None;
+        assert_eq!(reach.plane_wave_reach, 4.0);
+        assert_eq!(reach.plane_wave, row.plane_wave);
+        assert!(
+            reach
+                .plane_wave_waves
+                .iter()
+                .zip(&row.plane_wave_waves)
+                .all(|(a, b)| a <= b)
+                && reach.plane_wave_waves.iter().sum::<usize>()
+                    < row.plane_wave_waves.iter().sum::<usize>(),
+            "{workload:?} at ε = {eps}: waves at reach 4 {:?}, at the corner {:?}",
+            reach.plane_wave_waves,
+            row.plane_wave_waves
+        );
+        if workload == Workload::W1 {
+            let all = reach.errors.last().unwrap();
+            for j in 0..2 {
+                assert!(
+                    all[j] <= PLANE_WAVE_RATIO * reference[j],
+                    "{workload:?} at ε = {eps}, reach 4: errors {all:?} against Rotation's \
+                     {reference:?}"
+                );
+            }
         }
         // Named: one precision on the finest level alone.
         let finest = row.levels - 1;

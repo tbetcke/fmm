@@ -73,9 +73,15 @@ impl Grid {
     }
 }
 
-/// The largest |Q − G| on the grid, Q the quadrature with the α counts `counts`; the sums
-/// separated in x, y and z per (k, j).
+/// The largest |Q − G| on the grid, Q the quadrature with the α counts `counts`.
 fn kernel_error(q: &Quadrature, counts: &[usize]) -> f64 {
+    kernel_errors(q, counts, RHO_MAX)[1]
+}
+
+/// The largest |Q − G| on the grid points with lateral offset ρ ≤ `reach`, and on the whole
+/// grid, Q the quadrature with the α counts `counts`; the sums separated in x, y and z per
+/// (k, j).
+fn kernel_errors(q: &Quadrature, counts: &[usize], reach: f64) -> [f64; 2] {
     let grid = Grid::region();
     let (nx, nz) = (grid.xy.len(), grid.z.len());
     let mut sum = vec![C::new(0.0, 0.0); nz * nx * nx];
@@ -102,12 +108,16 @@ fn kernel_error(q: &Quadrature, counts: &[usize]) -> f64 {
             }
         }
     }
-    let mut worst = 0.0f64;
+    let mut worst = [0.0f64; 2];
     let mut i = 0;
     for &z in &grid.z {
         for &y in &grid.xy {
             for &x in &grid.xy {
-                worst = worst.max((sum[i] - kernel(q.kappa(), [x, y, z])).norm());
+                let e = (sum[i] - kernel(q.kappa(), [x, y, z])).norm();
+                if x * x + y * y <= reach * reach {
+                    worst[0] = worst[0].max(e);
+                }
+                worst[1] = worst[1].max(e);
                 i += 1;
             }
         }
@@ -132,6 +142,12 @@ fn lambda_error(q: &Quadrature) -> f64 {
 /// corners, edge and face midpoints and centres of the up direction's target boxes):
 /// the largest |Q − G|.
 fn chain_error(q: &Quadrature, interior: usize) -> f64 {
+    chain_errors(q, interior, RHO_MAX)[1]
+}
+
+/// The chain of [`chain_error`]: the largest |Q − G| over the pairs whose lateral offset
+/// is ρ ≤ `reach`, and over all pairs.
+fn chain_errors(q: &Quadrature, interior: usize, reach: f64) -> [f64; 2] {
     let mut sources = vec![[0.0; 3]];
     for b in 0..8 {
         let h = |bit: usize| if b & bit != 0 { 0.5 } else { -0.5 };
@@ -151,7 +167,7 @@ fn chain_error(q: &Quadrature, interior: usize) -> f64 {
     let target_xy: Vec<f64> = (0..15).map(|i| -3.5 + 0.5 * i as f64).collect();
     let target_z: Vec<f64> = (0..5).map(|i| 1.5 + 0.5 * i as f64).collect();
     let (nx, nz) = (target_xy.len(), target_z.len());
-    let mut worst = 0.0f64;
+    let mut worst = [0.0f64; 2];
     for s in &sources {
         let mut sum = vec![C::new(0.0, 0.0); nz * nx * nx];
         let (mut ex, mut ey) = (vec![C::new(0.0, 0.0); nx], vec![C::new(0.0, 0.0); nx]);
@@ -213,7 +229,11 @@ fn chain_error(q: &Quadrature, interior: usize) -> f64 {
             for &y in &target_xy {
                 for &x in &target_xy {
                     let u = [x - s[0], y - s[1], z - s[2]];
-                    worst = worst.max((sum[i] - kernel(q.kappa(), u)).norm());
+                    let e = (sum[i] - kernel(q.kappa(), u)).norm();
+                    if u[0] * u[0] + u[1] * u[1] <= reach * reach {
+                        worst[0] = worst[0].max(e);
+                    }
+                    worst[1] = worst[1].max(e);
                     i += 1;
                 }
             }
@@ -586,6 +606,147 @@ fn the_counts_on_every_domain() {
             "iprec {}: kernel {kernel:.3} and chain {chain:.3} × the stated error",
             p + 1
         );
+    }
+}
+
+/// FMM3D's reach (S4 §3.2), the smaller one CH6.2e measures beside the corner's.
+const FMM3D_REACH: f64 = 4.0;
+
+/// The counts for a smaller reach (Helmholtz CH6.2e): the corner's reach is `new` bit for
+/// bit, the waves do not grow as the reach shrinks and the Fourier counts stay, and at
+/// [`FMM3D_REACH`] the kernel on the grid points with ρ ≤ 4 is within [`KERNEL_BOUND`] of
+/// the stated error, at the centres of the fixture's domains at every precision.
+#[test]
+fn the_counts_for_a_smaller_reach() {
+    for precision in Precision::ALL {
+        for domain in FIXTURE_DOMAINS {
+            let kappa = centre(domain);
+            let corner = Quadrature::new(kappa, precision).unwrap();
+            assert_eq!(
+                Quadrature::with_reach(kappa, precision, RHO_MAX).as_ref(),
+                Some(&corner)
+            );
+            assert_eq!(corner.reach(), RHO_MAX);
+            let mut previous = corner.clone();
+            for reach in [5.0, FMM3D_REACH, 3.0] {
+                let q = Quadrature::with_reach(kappa, precision, reach).unwrap();
+                assert_eq!(q.reach(), reach);
+                assert_eq!(q.fourier_counts(), corner.fourier_counts());
+                assert_eq!(q.lambda(), corner.lambda());
+                assert_eq!(q.weights(), corner.weights());
+                // The maximum over ρ is sampled at 64 equal steps of [0, reach], so one
+                // node's count may exceed a larger reach's by a sample's worth (one).
+                for (n, m) in q.alpha_counts().iter().zip(previous.alpha_counts()) {
+                    assert!(*n <= m + 1, "domain {domain}, reach {reach}: {n} > {m} + 1");
+                }
+                assert!(
+                    q.wave_count() <= previous.wave_count(),
+                    "domain {domain}, reach {reach}: {} > {} waves",
+                    q.wave_count(),
+                    previous.wave_count()
+                );
+                previous = q;
+            }
+            let q = Quadrature::with_reach(kappa, precision, FMM3D_REACH).unwrap();
+            let e = q.stated_error();
+            let [within, _] = kernel_errors(&q, q.alpha_counts(), FMM3D_REACH);
+            assert!(
+                within <= KERNEL_BOUND * e,
+                "kernel at ρ ≤ 4, domain {domain}, iprec {}: {within:.3e} > {KERNEL_BOUND} × \
+                 {e:.3e}",
+                precision.iprec()
+            );
+        }
+    }
+}
+
+#[test]
+#[should_panic(expected = "the reach must be finite and above")]
+fn a_reach_within_the_source_box_panics() {
+    let _ = Quadrature::with_reach(C::new(1.0, 0.0), Precision::Iprec2, 0.5);
+}
+
+/// The reach the FMM's errors need (Helmholtz CH6.2e, fmm-validate/results/helmholtz-ch6-2e.md:
+/// 4.5 held on every case of CH6.1e's verification where 4 did not).
+const MEASURED_REACH: f64 = 4.5;
+
+/// The counts at [`FMM3D_REACH`] and [`MEASURED_REACH`] on every domain (Helmholtz CH6.2e):
+/// the kernel at ρ ≤ reach within [`KERNEL_BOUND`] at the nine points of every domain and
+/// precision, and the point-to-point chain at ρ ≤ reach within [`CHAIN_BOUND`] at every
+/// domain's centre; printed per reach and precision, the waves Σₖ Nₖ over the corner's (smallest,
+/// largest, and over the domains with Im κ < π/2, where FMM3D's sit at 1/1.51 to 1/1.31 of
+/// the corner's, CH6.1a), the kernel's error on the whole region (the corner's) over the
+/// stated error, and the point-to-point chain at every domain's centre within ρ ≤ reach and
+/// on the whole region. About 8 minutes on the M6.
+#[test]
+#[ignore = "release: 437 domains × 3 precisions × 2 reaches, about 8 minutes"]
+fn the_counts_for_a_smaller_reach_on_every_domain() {
+    let lower = |domain: usize| rectangle(domain).0;
+    for reach in [FMM3D_REACH, MEASURED_REACH] {
+        for precision in Precision::ALL {
+            let mut ratio = [f64::INFINITY, 0.0];
+            let mut ratio_type2 = [f64::INFINITY, 0.0];
+            let mut kernel = [0.0f64; 2];
+            let mut chain = [0.0f64; 2];
+            let mut worst_corner = (0.0f64, 0usize);
+            let mut largest = 0;
+            for domain in 1..=DOMAINS {
+                for kappa in nine_points(domain) {
+                    let q = Quadrature::with_reach(kappa, precision, reach).unwrap();
+                    let e = q.stated_error();
+                    let [within, all] = kernel_errors(&q, q.alpha_counts(), reach);
+                    assert!(
+                        within <= KERNEL_BOUND * e,
+                        "κ = {kappa}, iprec {}, domain {domain}: kernel at ρ ≤ {reach} {:.2} \
+                         × the stated error",
+                        precision.iprec(),
+                        within / e
+                    );
+                    kernel[0] = kernel[0].max(within / e);
+                    kernel[1] = kernel[1].max(all / e);
+                    if all / e > worst_corner.0 {
+                        worst_corner = (all / e, domain);
+                    }
+                }
+                let kappa = centre(domain);
+                let corner = Quadrature::new(kappa, precision).unwrap();
+                let q = Quadrature::with_reach(kappa, precision, reach).unwrap();
+                let r = q.wave_count() as f64 / corner.wave_count() as f64;
+                if r > ratio[1] {
+                    largest = domain;
+                }
+                ratio = [ratio[0].min(r), ratio[1].max(r)];
+                if lower(domain).im < PI / 2.0 {
+                    ratio_type2 = [ratio_type2[0].min(r), ratio_type2[1].max(r)];
+                }
+                let [within, all] = chain_errors(&q, 4, reach);
+                assert!(
+                    within <= CHAIN_BOUND * q.stated_error(),
+                    "centre of domain {domain}, iprec {}: chain at ρ ≤ {reach} {:.2} × the \
+                     stated error",
+                    precision.iprec(),
+                    within / q.stated_error()
+                );
+                chain[0] = chain[0].max(within / q.stated_error());
+                chain[1] = chain[1].max(all / q.stated_error());
+            }
+            println!(
+                "reach {reach}, iprec {}: waves over the corner's {:.3}–{:.3} (the largest on \
+                 domain {largest}; Im κ < π/2: {:.3}–{:.3}); kernel at ρ ≤ {reach} {:.3}, on \
+                 the region {:.3e} × the stated error (worst domain {}); chain at ρ ≤ {reach} \
+                 {:.3}, on the region {:.3e}",
+                precision.iprec(),
+                ratio[0],
+                ratio[1],
+                ratio_type2[0],
+                ratio_type2[1],
+                kernel[0],
+                kernel[1],
+                worst_corner.1,
+                chain[0],
+                chain[1],
+            );
+        }
     }
 }
 
