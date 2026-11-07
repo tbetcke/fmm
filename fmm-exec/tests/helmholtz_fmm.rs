@@ -75,7 +75,8 @@ use nd_fmm_exec::fmm::{FmmError, SettingsError};
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, HelmholtzFmm,
     HelmholtzFmmBuilder, HelmholtzFmmError, HelmholtzM2l, MIN_BUFFER_BOXES, OperatorError, Output,
-    PlaneWaveCounts, PlaneWavePrecision, Wavenumber, auto_batched_max_degree, auto_m2l_mul_add,
+    PlaneWaveCounts, PlaneWavePrecision, PlaneWaveTimes, Wavenumber, auto_batched_max_degree,
+    auto_m2l_mul_add,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -254,6 +255,33 @@ fn check_m2l_times(name: &str, fmm: &HelmholtzFmm<'_, f64>, comm: &SimpleCommuni
     assert!(
         everywhere(ok, comm),
         "{name}: an M2L time on every level with V pairs (rank {}: {times:?})",
+        comm.rank()
+    );
+}
+
+/// Checks the exponential M2L's passes per level (Helmholtz CH6.2d): one entry per level;
+/// on a level with waves and V pairs on this rank both passes timed and within the level's
+/// M2L time; zero elsewhere; on every rank or none.
+fn check_plane_wave_times(name: &str, fmm: &HelmholtzFmm<'_, f64>, comm: &SimpleCommunicator) {
+    let op = fmm.operator();
+    let (times, passes) = (op.m2l_times(), op.plane_wave_times());
+    let ok = passes.len() == fmm.nlevels()
+        && (0..fmm.nlevels()).all(|level| {
+            let pass = passes[level];
+            let waves =
+                op.plane_wave_precision(level).is_some() && !fmm.plan().level(level).v().is_empty();
+            if waves {
+                pass.waves > Duration::ZERO
+                    && pass.parents > Duration::ZERO
+                    && pass.waves + pass.parents <= times[level]
+            } else {
+                pass == PlaneWaveTimes::default()
+            }
+        });
+    assert!(
+        everywhere(ok, comm),
+        "{name}: both passes timed on every level with waves, within its M2L time (rank {}: \
+         {passes:?} of {times:?})",
         comm.rank()
     );
 }
@@ -954,6 +982,7 @@ fn check_plane_wave(scenario: &Scenario, bounds: bool, comm: &SimpleCommunicator
         "{name}: one chunk per level call within the default budget"
     );
     check_m2l_times(&name, &fmm, comm);
+    check_plane_wave_times(&name, &fmm, comm);
     drop(fmm);
     let (phi, grad) = difference(&output, &rotation, comm);
     let (error_phi, error_grad) = errors(scenario, &inputs, &output, 0, comm);

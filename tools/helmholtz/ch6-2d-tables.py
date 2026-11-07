@@ -15,7 +15,9 @@ and the reverse launch, and the main rows' errors). FMM3D's levels are matched t
 FMM3D's M2L on a plane-wave level is its multipoles to waves plus the parents' loop's wall
 time times the plane-wave share of its thread-seconds (the rest of that loop is list 3);
 its setup (the quadrature and the factors, built in every call) and list 3 and list 4 are
-apart. Prints per machine and case a table of the levels and a summary.
+apart. Where CH6.2b's outputs come from CH6.2d's harness, our exponential M2L's cell adds
+its two passes in brackets, [waves + merge and shift]. Prints per machine and case a table
+of the levels and a summary.
 
 `scan` reads CH6.2d's `scan-<case>.md` (FMM3D at each level alone on plane waves, against
 its point-and-shoot run) and CH6.1e's `scan-*.md` (ours at each level alone with the
@@ -144,13 +146,17 @@ def read_ours(directory):
             continue
         levels, rows = ch6_2b.read(os.path.join(directory, name))
         for c in levels:
-            workload, n, kd, eps, setting, rt, level, p, ran, pairs, seconds, per_pair = c
+            workload, n, kd, eps, setting, rt, level, p, ran, pairs, seconds, per_pair = c[:12]
             key = (case_of(workload), kd, eps.split("= ")[1])
             s = ch6_2b.strategy_of(setting)
             if level == "Σ":
                 ours[key]["evaluate"][s].append(float(re.match(r"evaluate ([0-9.]+) s", ran).group(1)))
                 continue
             ours[key]["levels"][int(level)][s].append(int(pairs) * float(per_pair) * 1e-9)
+            # The passes of merge and shift (CH6.2d's harness; absent in CH6.2b's outputs).
+            if s == "planewave" and len(c) >= 14 and c[12] != "–":
+                ours[key]["levels"][int(level)]["waves"].append(float(c[12]))
+                ours[key]["levels"][int(level)]["merge"].append(float(c[13]))
             info = ours[key]["info"].setdefault(int(level), {"p": p, "pairs": pairs, "ran": {}})
             info["ran"][s] = ran
         order = ch6_2b.STRATEGIES if m.group(4) == "forward" else ch6_2b.STRATEGIES[::-1]
@@ -239,6 +245,8 @@ def times(args):
                         fastest = min(methods, key=methods.get)
                         ran = info["ran"].get("planewave", "planewave")
                         tag = "" if ran.startswith("planewave") else f" ({ran})"
+                        if lv["waves"]:
+                            tag += f" [{mean(lv['waves']):.4f} + {mean(lv['merge']):.4f}]"
                         cells += [info["p"], info["pairs"], f"{pw:.4f}{tag}", f"{rot:.4f}",
                                   f"{fastest} {methods[fastest]:.4f}",
                                   f"{ratio(mean(m2l), pw):.2f}" if m2l else "–"]

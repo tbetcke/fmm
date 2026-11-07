@@ -178,7 +178,10 @@
 //!
 //! Every M2L level call, under every setting, is timed on the calling thread's clock and
 //! summed per level ([`m2l_times`](HelmholtzOperator::m2l_times); Helmholtz CH6.2b): two
-//! clock reads per call, no value changed.
+//! clock reads per call, no value changed. The exponential M2L's level call also times its
+//! two passes per chunk, vector and frame, the waves and merge and shift
+//! ([`plane_wave_times`](HelmholtzOperator::plane_wave_times); Helmholtz CH6.2d): four clock
+//! reads more, no value changed.
 //!
 //! # Execution
 //!
@@ -226,7 +229,7 @@ use crate::operator::{M2L_BLOCK_TARGETS, P2pChoice};
 #[path = "operator_plane_wave.rs"]
 mod plane_wave;
 
-pub use plane_wave::{MIN_BUFFER_BOXES, PlaneWaveCounts};
+pub use plane_wave::{MIN_BUFFER_BOXES, PlaneWaveCounts, PlaneWaveTimes};
 use plane_wave::{PlaneBuffer, PlaneScratch};
 
 /// Why [`HelmholtzOperator::new`] refused its inputs.
@@ -348,6 +351,9 @@ pub struct HelmholtzOperator<T: SimdScalar> {
     /// The M2L level calls' wall time per level since the tables were last chosen
     /// ([`m2l_times`](HelmholtzOperator::m2l_times)).
     m2l_times: Vec<Duration>,
+    /// The exponential M2L's passes per level since the tables were last chosen
+    /// ([`plane_wave_times`](HelmholtzOperator::plane_wave_times)).
+    plane_wave_times: Vec<PlaneWaveTimes>,
 }
 
 /// What the bodies read: the path, the levels and the tables.
@@ -495,11 +501,13 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             serial: false,
         };
         let m2l_times = vec![Duration::ZERO; kernel.tables.nlevels()];
+        let plane_wave_times = vec![PlaneWaveTimes::default(); kernel.tables.nlevels()];
         Ok(Self {
             kernel,
             execution,
             plane_buffer: PlaneBuffer::default(),
             m2l_times,
+            plane_wave_times,
         })
     }
 
@@ -632,6 +640,14 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         &self.m2l_times
     }
 
+    /// The wall time of the exponential M2L's two passes on each level since the tables were
+    /// last chosen (Helmholtz CH6.2d): one entry per level, zero where no level call ran merge
+    /// and shift; within the level's [`m2l_times`](Self::m2l_times) entry. This rank's, on
+    /// the calling thread's clock.
+    pub fn plane_wave_times(&self) -> &[PlaneWaveTimes] {
+        &self.plane_wave_times
+    }
+
     /// The bytes the exponential M2L holds: its tables, the level call's buffers (the waves,
     /// a position per box and the chunk's sources) and every scratch set's buffers (0 unless
     /// [`HelmholtzM2l::PlaneWave`] gives a level waves).
@@ -694,6 +710,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         self.plane_buffer.size(kernel.plane_waves.as_ref());
         self.plane_buffer.counts = PlaneWaveCounts::default();
         self.m2l_times.fill(Duration::ZERO);
+        self.plane_wave_times.fill(PlaneWaveTimes::default());
         // The class scratch, the batched columns and the exponential M2L's buffers are sized
         // by their tables' largest level.
         for scratch in &mut self.execution.scratch {

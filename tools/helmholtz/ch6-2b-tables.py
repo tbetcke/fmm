@@ -72,7 +72,8 @@ def main():
             split = m.group(3)
             levels, rows = read(os.path.join(directory, name))
             for c in levels:
-                workload, n, kd, eps, setting, rt, level, p, ran, pairs, seconds, per_pair = c
+                # CH6.2d added the passes' two columns; their first twelve are CH6.2b's.
+                workload, n, kd, eps, setting, rt, level, p, ran, pairs, seconds, per_pair = c[:12]
                 key = (workload, n, kd, eps, split)
                 s = strategy_of(setting)
                 if level == "Σ":
