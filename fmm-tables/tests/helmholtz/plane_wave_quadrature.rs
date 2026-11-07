@@ -671,10 +671,10 @@ fn a_reach_within_the_source_box_panics() {
 /// precision, the waves Σₖ Nₖ over the corner's (smallest, largest, and over the domains with
 /// Im κ < π/2, where FMM3D's sit at 1/1.51 to 1/1.31 of the corner's, CH6.1a), the kernel's
 /// error on the whole region (the corner's) over the stated error, and the point-to-point
-/// chain at every domain's centre within ρ ≤ 4 and on the whole region. About 7 minutes on
+/// chain at every domain's centre within ρ ≤ 4 and on the whole region. About 3 minutes on
 /// the M6.
 #[test]
-#[ignore = "release: 437 domains × 3 precisions, about 7 minutes"]
+#[ignore = "release: 437 domains × 3 precisions, about 3 minutes"]
 fn the_counts_for_a_smaller_reach_on_every_domain() {
     let lower = |domain: usize| rectangle(domain).0;
     for precision in Precision::ALL {

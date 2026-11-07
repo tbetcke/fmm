@@ -135,7 +135,10 @@
 //! one by the level's degree; a function of k, the level's width, its degree and ε) or
 //! named per level, and only where κ_l = k w_l lies in the quadrature's tables; RCR on the
 //! others. Under the rule the FMM's errors stay within about 1.1× Rotation's on CH3.1c's
-//! cases (`fmm-validate/results/helmholtz-ch6-1e.md`). Its level call restates Laplace's
+//! cases (`fmm-validate/results/helmholtz-ch6-1e.md`). The quadratures' α counts bound the
+//! region's corner, lateral offsets to 4√2 box widths, unless
+//! [`with_plane_wave_reach`](HelmholtzOperator::with_plane_wave_reach) names a smaller reach
+//! (Helmholtz CH6.2e, for the measurements). Its level call restates Laplace's
 //! (`crate::operator`, "The plane-wave M2L") without its vector kernels, by chunks of
 //! parents (Helmholtz CH6.2a): the level is cut, in index order, into chunks of consecutive
 //! whole parents whose computed children's distinct V sources fit the waves buffer (each

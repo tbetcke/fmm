@@ -87,7 +87,14 @@ rule of which Helmholtz CH6.1e measured.
   (`domain_of`, `Precision::for_tolerance`) and node maps; the α and Fourier counts not
   FMM3D's (`hnumphys` misses the stated error at the region's corner) but a Bessel bound per
   node with the share e/(4s) of the stated error, |J_m| of complex argument by Miller's
-  recurrence normalised by e^{iz} at Im z ≤ 0. A function of κ and the precision only. The
+  recurrence normalised by e^{iz} at Im z ≤ 0. A function of κ and the precision only.
+  `Quadrature::with_reach`, `MergeLevel::with_reach` and `PlaneWaveM2l::build_with_reach`
+  (Helmholtz CH6.2e, for the measurements) take the α counts for lateral offsets ρ ≤ a
+  reach in place of the corner's `RHO_MAX` = 4√2 (the Fourier counts unchanged; the corner's
+  reach is `new` and `build` bit for bit); `the_counts_for_a_smaller_reach` checks the kernel
+  on ρ ≤ 4 within 2× at reach 4 on the fixture's domains, the ignored
+  `the_counts_for_a_smaller_reach_on_every_domain` (about 3 minutes in release) on every
+  domain, with the waves and the corner's error printed (docs/helmholtz/tasks/CH6.2e.md). The
   trusted path is the kernel e^{iκ|u|}/|u| on the region: `tests/helmholtz/` checks the
   kernel within 2× and the point-to-point chain within 3× the stated error (on every domain
   in the ignored `the_counts_on_every_domain`, about 6 minutes in release). A change to

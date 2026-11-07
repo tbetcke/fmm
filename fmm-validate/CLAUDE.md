@@ -414,6 +414,16 @@ M2L's two passes, [waves, merge and shift], each the slowest rank's, from
 `tools/fmm3d/` (README.md there, "Per level (CH6.2d)"), `tools/helmholtz/ch6-2d-tables.py`
 makes the report's tables. Its report is `results/helmholtz-ch6-2d.md`.
 
+Helmholtz CH6.2e (the counts' reach; docs/helmholtz/tasks/CH6.2e.md) added
+`helmholtz_accuracy::Case::plane_wave_reach` (`HelmholtzFmmBuilder::plane_wave_reach`;
+`None` the library's corner) and `Row::{plane_wave_reach, plane_wave_waves}` (the reach as
+built, each level's waves per direction Σₖ Nₖ), and to the example `--reach corner|r,…`
+(each exponential-M2L run at each reach, the column "M2L" ending ` ρ r` off the corner),
+`planewave-scan:<1|2|3>` (the scan at one precision) and a last column "waves" in
+`--levels`' table. `tests/helmholtz_accuracy.rs` checks reach 4 with fewer waves within 1.1×
+Rotation's on W1. `tools/helmholtz/ch6-2e-runs.sh` runs the task's verification, scan and
+times. Its report is `results/helmholtz-ch6-2e.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`
