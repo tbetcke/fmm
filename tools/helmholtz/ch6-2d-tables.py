@@ -79,25 +79,25 @@ def keyvalues(line):
 
 
 def read_fmm3d_log(path):
-    """{eps token: (levels of the last call, the call's seconds)} of one driver log."""
+    """{eps token: (levels of the token's last call, the driver's seconds)} of one driver
+    log. The patch prints a call's `hfmm3d-steps:` line first, then its `hfmm3d-level:`
+    lines; the driver's `helmholtz: token=` line follows the token's calls."""
     result, calls, on = {}, [], False
-    current = []
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line.startswith("helmholtz: problem"):
-                on, calls, current = True, [], []
+                on, calls = True, []
             elif not on:
                 continue
+            elif line.startswith("hfmm3d-steps:"):
+                calls.append([])
             elif line.startswith("hfmm3d-level:"):
                 kv = keyvalues(line)
                 level = {k: float(kv[k]) for k in FIELDS}
                 level["ilev"] = int(level["ilev"])
                 level["mode"] = int(level["mode"])
-                current.append(level)
-            elif line.startswith("hfmm3d-steps:"):
-                calls.append(current)
-                current = []
+                calls[-1].append(level)
             elif line.startswith("helmholtz: token="):
                 kv = keyvalues(line.replace("helmholtz: ", ""))
                 token = re.search(r"token=(\S+)", line).group(1)
