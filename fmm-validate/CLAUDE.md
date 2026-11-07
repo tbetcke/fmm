@@ -406,7 +406,11 @@ the step `errors` to the `helmholtz_fmm3d` example: FMM3D's outputs alone (`--fm
 label=PREFIX,…`, each at every token of `--eps`) against the case's oracle at the samples,
 without our FMM, with each run's errors over the first run's (the scan's point-and-shoot
 reference); its numbers are `sample_errors` of the module, which `tests/helmholtz_accuracy.rs`
-covers. `tools/helmholtz/ch6-2d-runs.sh` runs it beside the patched FMM3D builds of
+covers. It also added `helmholtz_accuracy::Row::plane_wave_seconds` (per level the exponential
+M2L's two passes, [waves, merge and shift], each the slowest rank's, from
+`HelmholtzOperator::plane_wave_times`) and two columns of the example's `--levels` table
+(waves s, merge and shift s; CH6.2b's twelve columns unchanged before them), checked by
+`check_levels`. `tools/helmholtz/ch6-2d-runs.sh` runs it beside the patched FMM3D builds of
 `tools/fmm3d/` (README.md there, "Per level (CH6.2d)"), `tools/helmholtz/ch6-2d-tables.py`
 makes the report's tables. Its report is `results/helmholtz-ch6-2d.md`.
 

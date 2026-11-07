@@ -46,6 +46,9 @@ _spec.loader.exec_module(ch6_2b)
 FIELDS = ("ilev", "zkre", "zkim", "nterms", "mode", "nlams", "nwaves", "nboxes", "setup",
           "list4", "m2e", "gather", "pw_ts", "list3_ts", "ps", "ps_list3", "hf_list4")
 MODES = {0: "–", 1: "pw", 2: "ps"}
+# The most V-list sources of a box (6³ − 3³): our level's V pairs above this many per box of
+# FMM3D's level mean our level holds boxes FMM3D's tree does not (its leaves end above).
+MAX_V = 189
 
 
 def mean(values):
@@ -262,7 +265,8 @@ def times(args):
                                 and ran.startswith("planewave")):
                             pairs[(machine, eps)].append((
                                 case, ours_level, level["zkre"], int(level["nboxes"]),
-                                mean(m2l), pw, mean(lv["waves"]), mean(lv["merge"])))
+                                mean(m2l), pw, mean(lv["waves"]), mean(lv["merge"]),
+                                int(info["pairs"]) <= MAX_V * int(level["nboxes"])))
                     else:
                         cells += ["–"] * 6
                     print("| " + " | ".join(cells) + " |")
@@ -291,13 +295,15 @@ def times(args):
 
     print("\n## Per level, both on plane waves (FMM3D `timed`)\n")
     print("Levels by FMM3D's boxes: coarse ≤ 512, middle below 4,096, full from 4,096. The "
-          "ratio is FMM3D's M2L over ours; geometric mean, range.\n")
+          "ratio is FMM3D's M2L over ours; geometric mean, range. Levels where our V pairs "
+          f"exceed {MAX_V} per box of FMM3D's level (ours holds boxes FMM3D's tree does not) "
+          "are left out and marked † below.\n")
     print("| machine | eps | coarse | middle | full |")
     print("| --- | --- | --- | --- | --- |")
     for (machine, eps), rows in sorted(pairs.items()):
         cells = []
         for lo, hi in ((0, 512), (513, 4095), (4096, 1 << 62)):
-            r = [f / o for _, _, _, b, f, o, _, _ in rows if lo <= b <= hi and o > 0]
+            r = [f / o for _, _, _, b, f, o, _, _, ok in rows if lo <= b <= hi and o > 0 and ok]
             cells.append(f"{math.exp(sum(map(math.log, r)) / len(r)):.2f} "
                          f"({min(r):.2f}–{max(r):.2f}, {len(r)} levels)" if r else "–")
         print(f"| {machine} | {eps} | " + " | ".join(cells) + " |")
@@ -306,9 +312,10 @@ def times(args):
           "| ours waves + merge and shift s | FMM3D ÷ ours |")
     print("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |")
     for (machine, eps), rows in sorted(pairs.items()):
-        for case, l, k, b, f, o, w, m in rows:
+        for case, l, k, b, f, o, w, m, ok in rows:
             passes = f"{w:.4f} + {m:.4f}" if not math.isnan(w) else "–"
-            print(f"| {machine} | {eps} | {case} | {l} | {k:.3g} | {b} | {f:.4f} | {o:.4f} "
+            mark = "" if ok else " †"
+            print(f"| {machine} | {eps} | {case} | {l}{mark} | {k:.3g} | {b} | {f:.4f} | {o:.4f} "
                   f"| {passes} | {ratio(f, o):.2f} |")
 
 

@@ -2435,10 +2435,10 @@ request, using this template:
     shift, per level), `helmholtz_accuracy::Row::plane_wave_seconds`, two columns of
     `helmholtz_accuracy --levels`.
   - The report `fmm-validate/results/helmholtz-ch6-2d.md` (Kathleen; locust pending): FMM3D's
-    M2L over ours by level size 0.21/0.45/0.56 at 10⁻³ and 0.44/0.63/1.03 at 10⁻⁶ (coarse,
-    middle, full); merge and shift 87–88 % of ours on the coarse levels and 2.4–3.8× FMM3D's
-    parents' loop there, at par (0.81–1.13×) on the full levels, both codes held to 8 threads
-    on level 2; per call ours faster on the large cases (W1 at kD = 500, 10⁻⁶: 22.4 s against
+    M2L over ours by level size 0.22/0.45/0.56 at 10⁻³ and 0.44/0.89/1.11 at 10⁻⁶ (coarse,
+    middle, full; the levels the two trees share); merge and shift 69–95 % of ours per coarse
+    level and 2.4–3.8× FMM3D's parents' loop there in wall time, at par (0.81–1.13×) on the
+    full levels, both codes able to use at most 8 threads on level 2; per call ours faster on the large cases (W1 at kD = 500, 10⁻⁶: 22.4 s against
     FMM3D's 61.6 and 43.2 s); the scan: FMM3D's point-and-shoot far below ε, one level at
     κ ≈ 12.5 on FMM3D's plane waves 0.9–2.0 × 10⁻³ at 10⁻³ against 2–4 × 10⁻⁵ for ours with
     the same nodes; FMM3D misses ε at 10⁻³ on three cases.
@@ -2446,7 +2446,10 @@ request, using this template:
   within the level's M2L time on every level with waves, zero elsewhere, every rank or none);
   `check_levels` on the exponential-M2L rows of `fmm-validate/tests/helmholtz_accuracy.rs`;
   the patch's `check` (patched builds byte for byte the unpatched ones, both ε, two cases, on
-  Kathleen, locust and the M6).
+  Kathleen, locust and the M6). A self-review by a subagent: nothing blocking; its points
+  taken (the patched builds' labels, the 15.4 ms mean, per-level shares, wall-time ratios
+  not per parent, levels the two trees do not share left out of the groups, hedged causes,
+  docs, the run script's `problem` exit).
 - Checks: ran `/verify` on the M6: format, Clippy (default, examples, workspace all-targets),
   `cargo doc`, `cargo test` (888 s) and `cargo test --workspace` (1,337 s), the MPI list at 2
   and 4 ranks (`helmholtz_fmm` 188 and 167 s), all passed; `tests/helmholtz_fmm.rs` 203 s and

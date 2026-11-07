@@ -115,8 +115,9 @@ since item 7 the Helmholtz operator of `nd-fmm-exec` (timers only).
   the scan's ratio (FMM3D's point-and-shoot path is its own; the reference row of every
   scan); a level l alone gives `mode=pw` on l only.
 - **The timers**: the per-level parts sum to within the call's step-3 time
-  (`timeinfo(3)`); the timed build's whole call within the run-to-run spread of
-  `default`'s (both printed).
+  (`timeinfo(3)`); the timed build's whole call against `default`'s (both printed). (As run:
+  single calls of the check, 1.00–1.09×; `default` was not repeated, so its spread is not
+  known.)
 - `helmholtz_fmm3d errors`: its numbers are the module's `sample_errors` and `parse_sampled`
   (behind `read_sampled`), which `tests/helmholtz_accuracy.rs` already checks on synthetic FMM3D
   files (the direct sum in the driver's format: errors zero to round-off); the step itself

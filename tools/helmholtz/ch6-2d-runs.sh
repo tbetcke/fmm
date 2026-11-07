@@ -68,7 +68,8 @@ name() {
     echo "${workload%%:*}-${1#*@}"
 }
 
-# `problem <case>`: writes the case's problem file once, prints its path.
+# `problem <case>`: writes the case's problem file once, prints its path; fails (in its
+# command substitution, so the caller tests it) without one.
 problem() {
     local workload=${1%@*} kd=${1#*@} file
     file=$out/problems/$(name "$1").bin
@@ -99,7 +100,7 @@ driver() {
 check() {
     local status=0 c v w prob pre t
     for c in w1@30 w4-cube:100000@100; do
-        prob=$(problem "$c")
+        prob=$(problem "$c") || return 1
         for v in default timed fastker fastker-timed; do
             pre=$out/fmm3d/check-$(name "$c")-$v
             driver "$pre.log" "$v" "$prob" "$pre" "${c#*@}" 1 1 || status=1
@@ -124,7 +125,7 @@ check() {
 times() {
     local c v run prob pre labels
     for c in $CASES; do
-        prob=$(problem "$c")
+        prob=$(problem "$c") || continue
         labels=
         for run in a b; do
             for v in $VARIANTS; do
@@ -148,7 +149,7 @@ scan() {
     for c in $SCAN_CASES; do
         n=$(name "$c")
         [[ "scan-$n" =~ ${ONLY:-.} ]] || continue
-        prob=$(problem "$c")
+        prob=$(problem "$c") || continue
         pre=$out/fmm3d/scan-$n
         driver "$pre-fmm3d.log" timed "$prob" "$pre-fmm3d" "${c#*@}" 1 0
         FMM3D_PW_LEVEL=-1 driver "$pre-ps.log" timed "$prob" "$pre-ps" "${c#*@}" 1 0

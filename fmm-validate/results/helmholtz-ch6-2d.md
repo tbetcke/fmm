@@ -37,24 +37,28 @@ calls); ours is the build apart from the evaluation. Commands: §7.
   no value changed).
 - **Per level, FMM3D's exponential M2L is faster than ours on most levels on Kathleen**
   (§2): FMM3D's M2L over ours, geometric mean over the levels where both ran plane waves,
-  0.21 on coarse levels (at most 512 boxes), 0.45 on middle ones and 0.56 on full ones (from
-  4,096 boxes) at ε = 10⁻³; 0.44, 0.63 and 1.03 (0.78–1.37) at 10⁻⁶. At 10⁻³ FMM3D runs its
+  0.22 on coarse levels (at most 512 boxes), 0.45 on middle ones and 0.56 on full ones (from
+  4,096 boxes) at ε = 10⁻³; 0.44, 0.89 and 1.11 (0.78–1.37) at 10⁻⁶, over the levels the
+  two trees share (FMM3D's are shallower: 29 levels where ours holds more boxes are left
+  out). At 10⁻³ FMM3D runs its
   iprec 1, whose waves are fewer, and misses ε on three cases (below).
-- **Where the time goes in ours** (§3): merge and shift is 87–88 % of our exponential M2L
-  on the coarse levels and 65–69 % on the others (level 2 of W1 at kD = 100, 10⁻⁶: waves
-  12.5 ms, merge and shift 149 ms at 1 × 40). Against FMM3D's parents' loop it is at par on
-  the full levels (0.81–1.13×) and 2.4–3.8× slower on levels 2 and 3. Level 2 has 8
-  parents and both codes split this step by parent, so both use at most 8 threads there
-  (FMM3D's loop kept 7.7 of 40 busy, about 38 ms per parent for its six directions; ours
-  about 149 ms per parent for its three frames; 2.4× on locust in a record run). Our waves
-  (12.5 ms) match FMM3D's multipoles to waves (13.8 ms). Why a coarse level's parent costs
+- **Where the time goes in ours** (§3): merge and shift is most of our exponential M2L,
+  69–95 % per level on the coarse levels and 64–82 % on the others (87–88 % and 65–69 %
+  summed over the levels; level 2 of W1 at kD = 100, 10⁻⁶: waves 12.5 ms, merge and shift
+  149 ms at 1 × 40). Against FMM3D's parents' loop, in wall time, it is at par on the full
+  levels (0.81–1.13×) and 2.4–3.8× slower on levels 2 and 3. Level 2 has 8 parents and both
+  codes split this step by parent, so both can use at most 8 threads there (FMM3D's loop kept
+  7.7 of 40 busy, about 38 ms per parent for its six directions; how many threads ours kept
+  busy is not measured, so the 3.8× is a ratio of wall times; 2.4× on locust in a record
+  run). Our waves (12.5 ms) match FMM3D's multipoles to waves (15.4 ms, the mean of the two
+  launches). Why a coarse level's parent costs
   ours so much more is open: our counts give 1.31–1.51× FMM3D's waves (CH6.1a; most waves
   on the coarse levels), merge and shift also converts each child's waves to a local, and
   our loops are scalar where FMM3D's are vectorised (`-march=native`, AVX-512 on
   Kathleen). The next measurements are CH6.2f's (CH6.2e measures the counts).
 - **The whole call is faster in ours on the large cases** (§2): one evaluation of W1 at
-  kD = 500 took 22.4 s at 10⁻⁶ against FMM3D's 61.6 s (`default`) and 43.2 s (`fastker`)
-  per call, W3 at kD = 100 10.9 s against 31.9 and 22.6 s, our build apart. Our RCR on the
+  kD = 500 took 22.4 s at 10⁻⁶ against FMM3D's 61.6 s (`timed`, the `default` build with
+  the patch) and 43.2 s (`fastker-timed`) per call, W3 at kD = 100 10.9 s against 31.9 and 22.6 s, our build apart. Our RCR on the
   high-frequency levels (W1 at kD = 500, levels 2–3) and FMM3D's per-call setup (4.0 s at
   10⁻⁶ there) weigh more than the M2L levels FMM3D wins.
 - **Per-level accuracy** (§4): with every level on point-and-shoot, FMM3D's error is far
@@ -98,32 +102,36 @@ calls); ours is the build apart from the evaluation. Commands: §7.
 
 ## 2. Kathleen: per level and per call
 
-FMM3D's M2L over ours on the levels where both ran plane waves, by FMM3D's boxes on the level:
+FMM3D's M2L over ours on the levels where both ran plane waves, by FMM3D's boxes on the level,
+leaving out the levels where our tree holds boxes FMM3D's does not (our V pairs above 189 per
+box of FMM3D's level; † in the appendix):
 
 | machine | eps | coarse | middle | full |
 | --- | --- | --- | --- | --- |
-| kathleen | 1e-3 | 0.21 (0.07–0.51, 30 levels) | 0.45 (0.30–0.63, 18 levels) | 0.56 (0.36–0.75, 12 levels) |
-| kathleen | 1e-6 | 0.44 (0.21–0.74, 28 levels) | 0.63 (0.06–1.19, 20 levels) | 1.03 (0.78–1.37, 4 levels) |
+| kathleen | 1e-3 | 0.22 (0.09–0.51, 25 levels) | 0.45 (0.30–0.63, 16 levels) | 0.56 (0.36–0.75, 12 levels) |
+| kathleen | 1e-6 | 0.44 (0.25–0.74, 23 levels) | 0.89 (0.73–1.11, 4 levels) | 1.11 (0.78–1.37, 3 levels) |
 
 Reading it:
 
 - **Coarse levels** (64 and 512 boxes, levels 2 and 3 of most cases, and the deepest levels
-  of the W4 Plummer sphere and clusters): FMM3D 2.0–14× faster at 10⁻³ (4.8× in the
-  geometric mean) and 1.4–4.8× at 10⁻⁶ (2.3×). Both codes split merge and shift by parent
+  of the W4 Plummer sphere and clusters): FMM3D 2.0–11× faster at 10⁻³ (4.5× in the
+  geometric mean) and 1.4–4.0× at 10⁻⁶ (2.3×). Both codes split merge and shift by parent
   (§3); there are 8 parents on level 2, 64 on level 3.
 - **Middle and full levels**: FMM3D still ahead at 10⁻³ (0.30–0.75), where it runs iprec 1
   with fewer waves than our iprec 2, and misses ε on three cases (§4). At 10⁻⁶ the two
-  are within 0.78–1.37 on the full levels (W1 at kD = 500 levels 5–6: FMM3D 0.78–0.84×
-  ours; W3 at kD = 100 levels 4–5: 1.28–1.37×, ours faster).
+  are within 0.73–1.37 on the matched middle and full levels (W1 at kD = 500 level 5: FMM3D
+  0.78× ours; W3 at kD = 100 levels 4–5: 1.28–1.37×, ours faster).
 - Per level, per case: the appendix. The tables of every case with FMM3D's setup, list 3
   and list 4, our Rotation and the per-level best, are in `bench-results/ch6-2d/` (not
   committed), from `tools/helmholtz/ch6-2d-tables.py`.
 
-Per call, at the same requested ε (FMM3D's call includes its setup; ours is the evaluation
+Per call, at the same requested ε (FMM3D's patched builds, `timed` = `default` and
+`fastker-timed` = `fastker` with the patch, whose single calls of the check took 1.00–1.09×
+the unpatched ones'; FMM3D's call includes its setup; ours is the evaluation
 under the exponential M2L's rule and under `Auto`, our build apart; FMM3D's errors and ours
 against the same sampled direct sum):
 
-| case | ε | FMM3D `default` call s | FMM3D `fastker` call s | ours evaluation s, exp. M2L | ours evaluation s, Auto | FMM3D φ, ∇φ | ours φ, ∇φ (exp. M2L) |
+| case | ε | FMM3D `timed` call s | FMM3D `fastker-timed` call s | ours evaluation s, exp. M2L | ours evaluation s, Auto | FMM3D φ, ∇φ | ours φ, ∇φ (exp. M2L) |
 | --- | --- | ---: | ---: | ---: | ---: | --- | --- |
 | w1-10 | 1e-3 | 0.008 | 0.003 | 0.014 | 0.006 | 1.54e-05, 3.95e-05 | 4.40e-05, 1.53e-04 |
 | w1-10 | 1e-6 | 0.007 | 0.014 | 0.023 | 0.115 | 1.22e-15, 1.30e-15 | 5.65e-08, 4.09e-07 |
@@ -164,7 +172,7 @@ pool, including each child's conversion of its waves back to a local); the rest 
 level's M2L time is the chunking between them. Kathleen, 1 × 40, ε = 10⁻⁶, beside FMM3D's
 multipoles to waves and its parents' loop (with the threads its loop kept busy, its
 thread-seconds over its wall time; the loop includes list 3 where the level has any, on W1
-at kD = 500 levels 6–7):
+at kD = 500 levels 6–7; † as in the appendix, our level holding boxes FMM3D's does not):
 
 | case | level | boxes (FMM3D) | FMM3D multipoles to waves s | FMM3D parents' loop s (threads busy) | ours waves s | ours merge and shift s | merge and shift ÷ FMM3D's parents' loop |
 | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: |
@@ -177,13 +185,14 @@ at kD = 500 levels 6–7):
 | w3-100 | 5 | 32768 | 0.5229 | 0.7328 (38.2) | 0.3115 | 0.5972 | 0.81 |
 | w1-500 | 4 | 3840 | 0.3872 | 0.9059 (25.4) | 0.5515 | 1.0249 | 1.13 |
 | w1-500 | 5 | 16624 | 0.4341 | 1.2813 (20.2) | 0.7900 | 1.4033 | 1.10 |
-| w1-500 | 6 | 34432 | 0.6110 | 2.4994 (16.5) | 1.0602 | 2.0705 | 0.83 |
-| w1-500 | 7 | 3264 | 0.0629 | 2.0044 (1.7) | 1.7010 | 3.0409 | 1.52 |
+| w1-500 | 6 † | 34432 | 0.6110 | 2.4994 (16.5) | 1.0602 | 2.0705 | 0.83 |
+| w1-500 | 7 † | 3264 | 0.0629 | 2.0044 (1.7) | 1.7010 | 3.0409 | 1.52 |
 
 Reading it:
 
-- **Merge and shift is most of our exponential M2L**: 87–88 % of its time on the coarse
-  levels, 65–69 % on the others (Kathleen, every case, both ε).
+- **Merge and shift is most of our exponential M2L**: per level 69–95 % of its time on the
+  coarse levels and 64–82 % on the others, 87–88 % and 65–69 % summed over the levels
+  (Kathleen, every case, both ε).
 - **The waves** (ours) against FMM3D's multipoles to waves: 0.56–1.8×, ours faster on W3 at
   kD = 100, slower on W1 at kD = 500's levels 4–6.
 - **Merge and shift against FMM3D's parents' loop**: at par on the full levels (0.81–0.93×
@@ -191,8 +200,8 @@ Reading it:
   on the coarse ones (levels 2 and 3, κ = 25 and 12.5).
 - **Level 2 holds both codes to 8 threads.** It has 8 parents and both split this step by
   parent: FMM3D's loop kept 7.7 of 40 threads busy, about 38 ms per parent for its six
-  directions; ours took 149 ms of wall time, about 149 ms per parent for its three frames
-  (our level 2 takes 46 ms on the M6's 6 threads, 60 ms on locust's 72 and 161 ms on
+  directions; ours took 149 ms of wall time, about 149 ms per parent for its three frames if
+  its 8 parents ran at once (its busy threads are not measured; our level 2 takes 46 ms on the M6's 6 threads, 60 ms on locust's 72 and 161 ms on
   Kathleen's 40: the cores' speed, not their number). On level 3 (64 parents) FMM3D's loop
   kept 27–31 threads busy.
 - **Open: why a coarse level's parent costs ours 2.4–3.8× FMM3D's while a full level's does
@@ -352,10 +361,13 @@ Reading it:
   W4 cube at kD = 100, level 3, κ = 12.5), 1.2 × 10⁻³ (W1 at kD = 100, level 3) and
   9.0 × 10⁻⁴ (the W4 sphere at kD = 100, level 3), at or above ε; ours on the same levels
   with the same quadrature's nodes and our counts 2.1 × 10⁻⁵, 4.2 × 10⁻⁵ and 3.1 × 10⁻⁵
-  (1.007–1.11× Rotation's). FMM3D's end-to-end misses of ε at 10⁻³ (§2) come from these
-  levels. Our counts resolve the region's corner ρ = 4√2, FMM3D's about ρ = 4 (CH6.1a; S4
+  (1.007–1.11× Rotation's: our plane-wave error there is only bounded by Rotation's, so the
+  30–100× below is a lower bound). FMM3D's end-to-end misses of ε at 10⁻³ on W1 and the W4
+  cube at kD = 100 (§2) are of the size of these levels' errors alone; W3 at kD = 100 was not
+  scanned. Our counts resolve the region's corner ρ = 4√2, FMM3D's about ρ = 4 (CH6.1a; S4
   §3.2: FMM3D's counts miss the stated error at the corner by up to 83× at iprec 1); FMM3D's
-  degrees are larger than ours there (23 against 18), so the 30–100× points at its counts.
+  degrees are larger than ours there (23 against 18), so the 30–100× points at its counts,
+  though other differences between the two codes are not excluded.
   It is evidence for CH6.2e that FMM3D's counts are too few in the FMM at ε = 10⁻³ with
   iprec 1 on these levels. Our rule runs iprec 2 at every ε ≥ 10⁻⁶ (CH6.1e), so whether fewer
   waves than ours would hold at iprec 2 is still CH6.2e's to measure.
@@ -442,7 +454,10 @@ The raw outputs are archived in `~/projects/fmm-archive/kathleen/logs/ch6-2d/` a
 ## Appendix: per level, both on plane waves (Kathleen)
 
 FMM3D `timed` at 40 threads; ours one rank × 40 threads, the exponential M2L's rule, with its
-two passes. "FMM3D ÷ ours" is FMM3D's M2L over ours.
+two passes. "FMM3D ÷ ours" is FMM3D's M2L over ours. † marks a level whose V pairs in ours
+exceed 189 per box of FMM3D's level (the most V sources a box can have): our level holds
+boxes that FMM3D's shallower tree does not, so the two do different work there; these levels
+are left out of the groups of §2.
 
 | machine | eps | case | our level | Re κ | FMM3D boxes | FMM3D M2L s | ours s | ours waves + merge and shift s | FMM3D ÷ ours |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |
@@ -466,16 +481,16 @@ two passes. "FMM3D ÷ ours" is FMM3D's M2L over ours.
 | kathleen | 1e-3 | w3-100 | 4 | 6.25 | 4096 | 0.0696 | 0.1373 | 0.0397 + 0.0968 | 0.51 |
 | kathleen | 1e-3 | w3-100 | 5 | 3.12 | 32768 | 0.3306 | 0.5237 | 0.1542 + 0.3640 | 0.63 |
 | kathleen | 1e-3 | w3-100 | 6 | 1.56 | 262136 | 1.9782 | 3.8891 | 1.1613 + 2.6807 | 0.51 |
-| kathleen | 1e-3 | w4-clusters-1 | 3 | 0.157 | 64 | 0.0008 | 0.0113 | 0.0019 + 0.0094 | 0.07 |
+| kathleen | 1e-3 | w4-clusters-1 | 3 † | 0.157 | 64 | 0.0008 | 0.0113 | 0.0019 + 0.0094 | 0.07 |
 | kathleen | 1e-3 | w4-clusters-1 | 4 | 0.0784 | 288 | 0.0019 | 0.0127 | 0.0030 + 0.0096 | 0.15 |
 | kathleen | 1e-3 | w4-clusters-1 | 5 | 0.0392 | 600 | 0.0056 | 0.0187 | 0.0050 + 0.0136 | 0.30 |
-| kathleen | 1e-3 | w4-clusters-1 | 6 | 0.0196 | 1056 | 0.0134 | 0.0335 | 0.0085 + 0.0247 | 0.40 |
+| kathleen | 1e-3 | w4-clusters-1 | 6 † | 0.0196 | 1056 | 0.0134 | 0.0335 | 0.0085 + 0.0247 | 0.40 |
 | kathleen | 1e-3 | w4-clusters-1 | 7 | 0.00979 | 1928 | 0.0240 | 0.0393 | 0.0102 + 0.0287 | 0.61 |
 | kathleen | 1e-3 | w4-clusters-1 | 8 | 0.0049 | 2328 | 0.0239 | 0.0475 | 0.0123 + 0.0348 | 0.50 |
-| kathleen | 1e-3 | w4-clusters-100 | 3 | 15.7 | 64 | 0.0110 | 0.0281 | 0.0040 + 0.0240 | 0.39 |
+| kathleen | 1e-3 | w4-clusters-100 | 3 † | 15.7 | 64 | 0.0110 | 0.0281 | 0.0040 + 0.0240 | 0.39 |
 | kathleen | 1e-3 | w4-clusters-100 | 4 | 7.84 | 288 | 0.0090 | 0.0194 | 0.0043 + 0.0151 | 0.46 |
 | kathleen | 1e-3 | w4-clusters-100 | 5 | 3.92 | 600 | 0.0138 | 0.0217 | 0.0057 + 0.0159 | 0.63 |
-| kathleen | 1e-3 | w4-clusters-100 | 6 | 1.96 | 1056 | 0.0201 | 0.0360 | 0.0091 + 0.0266 | 0.56 |
+| kathleen | 1e-3 | w4-clusters-100 | 6 † | 1.96 | 1056 | 0.0201 | 0.0360 | 0.0091 + 0.0266 | 0.56 |
 | kathleen | 1e-3 | w4-clusters-100 | 7 | 0.979 | 1928 | 0.0256 | 0.0429 | 0.0111 + 0.0314 | 0.60 |
 | kathleen | 1e-3 | w4-clusters-100 | 8 | 0.49 | 2328 | 0.0238 | 0.0487 | 0.0123 + 0.0359 | 0.49 |
 | kathleen | 1e-3 | w4-cube-1 | 2 | 0.25 | 64 | 0.0010 | 0.0104 | 0.0014 + 0.0090 | 0.10 |
@@ -490,14 +505,14 @@ two passes. "FMM3D ÷ ours" is FMM3D's M2L over ours.
 | kathleen | 1e-3 | w4-plummer-1 | 5 | 0.0307 | 744 | 0.0065 | 0.0211 | 0.0038 + 0.0172 | 0.31 |
 | kathleen | 1e-3 | w4-plummer-1 | 6 | 0.0154 | 1368 | 0.0114 | 0.0265 | 0.0063 + 0.0199 | 0.43 |
 | kathleen | 1e-3 | w4-plummer-1 | 7 | 0.00769 | 1840 | 0.0199 | 0.0398 | 0.0097 + 0.0298 | 0.50 |
-| kathleen | 1e-3 | w4-plummer-1 | 8 | 0.00384 | 96 | 0.0026 | 0.0160 | 0.0022 + 0.0138 | 0.16 |
+| kathleen | 1e-3 | w4-plummer-1 | 8 † | 0.00384 | 96 | 0.0026 | 0.0160 | 0.0022 + 0.0138 | 0.16 |
 | kathleen | 1e-3 | w4-plummer-100 | 2 | 24.6 | 64 | 0.0340 | 0.1340 | 0.0071 + 0.1269 | 0.25 |
 | kathleen | 1e-3 | w4-plummer-100 | 3 | 12.3 | 512 | 0.0284 | 0.0778 | 0.0124 + 0.0653 | 0.36 |
-| kathleen | 1e-3 | w4-plummer-100 | 4 | 6.15 | 512 | 0.0142 | 0.0912 | 0.0258 + 0.0650 | 0.16 |
+| kathleen | 1e-3 | w4-plummer-100 | 4 † | 6.15 | 512 | 0.0142 | 0.0912 | 0.0258 + 0.0650 | 0.16 |
 | kathleen | 1e-3 | w4-plummer-100 | 5 | 3.07 | 744 | 0.0096 | 0.0256 | 0.0048 + 0.0207 | 0.37 |
 | kathleen | 1e-3 | w4-plummer-100 | 6 | 1.54 | 1368 | 0.0126 | 0.0304 | 0.0070 + 0.0231 | 0.41 |
 | kathleen | 1e-3 | w4-plummer-100 | 7 | 0.769 | 1840 | 0.0213 | 0.0427 | 0.0100 + 0.0322 | 0.50 |
-| kathleen | 1e-3 | w4-plummer-100 | 8 | 0.384 | 96 | 0.0026 | 0.0171 | 0.0024 + 0.0145 | 0.15 |
+| kathleen | 1e-3 | w4-plummer-100 | 8 † | 0.384 | 96 | 0.0026 | 0.0171 | 0.0024 + 0.0145 | 0.15 |
 | kathleen | 1e-3 | w4-sphere-1 | 2 | 0.25 | 64 | 0.0009 | 0.0102 | 0.0012 + 0.0089 | 0.09 |
 | kathleen | 1e-3 | w4-sphere-1 | 3 | 0.125 | 512 | 0.0025 | 0.0169 | 0.0026 + 0.0143 | 0.15 |
 | kathleen | 1e-3 | w4-sphere-1 | 4 | 0.0625 | 3200 | 0.0152 | 0.0503 | 0.0135 + 0.0365 | 0.30 |
@@ -509,11 +524,11 @@ two passes. "FMM3D ÷ ours" is FMM3D's M2L over ours.
 | kathleen | 1e-6 | w1-30 | 2 | 7.5 | 64 | 0.0117 | 0.0302 | 0.0022 + 0.0279 | 0.39 |
 | kathleen | 1e-6 | w1-100 | 2 | 25 | 64 | 0.0549 | 0.1613 | 0.0125 + 0.1487 | 0.34 |
 | kathleen | 1e-6 | w1-100 | 3 | 12.5 | 512 | 0.0488 | 0.0951 | 0.0156 + 0.0794 | 0.51 |
-| kathleen | 1e-6 | w1-100 | 4 | 6.25 | 1600 | 0.0928 | 0.1320 | 0.0417 + 0.0898 | 0.70 |
+| kathleen | 1e-6 | w1-100 | 4 † | 6.25 | 1600 | 0.0928 | 0.1320 | 0.0417 + 0.0898 | 0.70 |
 | kathleen | 1e-6 | w1-500 | 4 | 31.2 | 3840 | 1.2931 | 1.5773 | 0.5515 + 1.0249 | 0.82 |
 | kathleen | 1e-6 | w1-500 | 5 | 15.6 | 16624 | 1.7153 | 2.1971 | 0.7900 + 1.4033 | 0.78 |
-| kathleen | 1e-6 | w1-500 | 6 | 7.81 | 34432 | 2.6374 | 3.1422 | 1.0602 + 2.0705 | 0.84 |
-| kathleen | 1e-6 | w1-500 | 7 | 3.91 | 3264 | 0.2859 | 4.7607 | 1.7010 + 3.0409 | 0.06 |
+| kathleen | 1e-6 | w1-500 | 6 † | 7.81 | 34432 | 2.6374 | 3.1422 | 1.0602 + 2.0705 | 0.84 |
+| kathleen | 1e-6 | w1-500 | 7 † | 3.91 | 3264 | 0.2859 | 4.7607 | 1.7010 + 3.0409 | 0.06 |
 | kathleen | 1e-6 | w3-10 | 2 | 2.5 | 64 | 0.0061 | 0.0201 | 0.0022 + 0.0180 | 0.30 |
 | kathleen | 1e-6 | w3-30 | 2 | 7.5 | 64 | 0.0134 | 0.0297 | 0.0025 + 0.0271 | 0.45 |
 | kathleen | 1e-6 | w3-30 | 3 | 3.75 | 512 | 0.0291 | 0.0400 | 0.0062 + 0.0336 | 0.73 |
@@ -522,39 +537,39 @@ two passes. "FMM3D ÷ ours" is FMM3D's M2L over ours.
 | kathleen | 1e-6 | w3-100 | 3 | 12.5 | 512 | 0.0525 | 0.0958 | 0.0164 + 0.0793 | 0.55 |
 | kathleen | 1e-6 | w3-100 | 4 | 6.25 | 4096 | 0.2260 | 0.1770 | 0.0521 + 0.1241 | 1.28 |
 | kathleen | 1e-6 | w3-100 | 5 | 3.12 | 32768 | 1.2557 | 0.9178 | 0.3115 + 0.5972 | 1.37 |
-| kathleen | 1e-6 | w4-clusters-1 | 3 | 0.157 | 64 | 0.0043 | 0.0207 | 0.0036 + 0.0170 | 0.21 |
+| kathleen | 1e-6 | w4-clusters-1 | 3 † | 0.157 | 64 | 0.0043 | 0.0207 | 0.0036 + 0.0170 | 0.21 |
 | kathleen | 1e-6 | w4-clusters-1 | 4 | 0.0784 | 288 | 0.0092 | 0.0227 | 0.0054 + 0.0172 | 0.41 |
 | kathleen | 1e-6 | w4-clusters-1 | 5 | 0.0392 | 600 | 0.0249 | 0.0343 | 0.0102 + 0.0240 | 0.73 |
-| kathleen | 1e-6 | w4-clusters-1 | 6 | 0.0196 | 1024 | 0.0563 | 0.0562 | 0.0167 + 0.0391 | 1.00 |
-| kathleen | 1e-6 | w4-clusters-1 | 7 | 0.00979 | 1328 | 0.0796 | 0.0691 | 0.0210 + 0.0477 | 1.15 |
-| kathleen | 1e-6 | w4-clusters-1 | 8 | 0.0049 | 1296 | 0.0533 | 0.0822 | 0.0242 + 0.0575 | 0.65 |
-| kathleen | 1e-6 | w4-clusters-100 | 3 | 15.7 | 64 | 0.0215 | 0.0329 | 0.0048 + 0.0280 | 0.65 |
+| kathleen | 1e-6 | w4-clusters-1 | 6 † | 0.0196 | 1024 | 0.0563 | 0.0562 | 0.0167 + 0.0391 | 1.00 |
+| kathleen | 1e-6 | w4-clusters-1 | 7 † | 0.00979 | 1328 | 0.0796 | 0.0691 | 0.0210 + 0.0477 | 1.15 |
+| kathleen | 1e-6 | w4-clusters-1 | 8 † | 0.0049 | 1296 | 0.0533 | 0.0822 | 0.0242 + 0.0575 | 0.65 |
+| kathleen | 1e-6 | w4-clusters-100 | 3 † | 15.7 | 64 | 0.0215 | 0.0329 | 0.0048 + 0.0280 | 0.65 |
 | kathleen | 1e-6 | w4-clusters-100 | 4 | 7.84 | 288 | 0.0226 | 0.0316 | 0.0074 + 0.0241 | 0.72 |
 | kathleen | 1e-6 | w4-clusters-100 | 5 | 3.92 | 600 | 0.0419 | 0.0376 | 0.0109 + 0.0266 | 1.11 |
-| kathleen | 1e-6 | w4-clusters-100 | 6 | 1.96 | 1024 | 0.0682 | 0.0608 | 0.0182 + 0.0423 | 1.12 |
-| kathleen | 1e-6 | w4-clusters-100 | 7 | 0.979 | 1328 | 0.0886 | 0.0748 | 0.0226 + 0.0518 | 1.19 |
-| kathleen | 1e-6 | w4-clusters-100 | 8 | 0.49 | 1296 | 0.0575 | 0.0839 | 0.0249 + 0.0587 | 0.68 |
+| kathleen | 1e-6 | w4-clusters-100 | 6 † | 1.96 | 1024 | 0.0682 | 0.0608 | 0.0182 + 0.0423 | 1.12 |
+| kathleen | 1e-6 | w4-clusters-100 | 7 † | 0.979 | 1328 | 0.0886 | 0.0748 | 0.0226 + 0.0518 | 1.19 |
+| kathleen | 1e-6 | w4-clusters-100 | 8 † | 0.49 | 1296 | 0.0575 | 0.0839 | 0.0249 + 0.0587 | 0.68 |
 | kathleen | 1e-6 | w4-cube-1 | 2 | 0.25 | 64 | 0.0048 | 0.0190 | 0.0015 + 0.0175 | 0.25 |
 | kathleen | 1e-6 | w4-cube-1 | 3 | 0.125 | 512 | 0.0170 | 0.0311 | 0.0046 + 0.0265 | 0.55 |
-| kathleen | 1e-6 | w4-cube-1 | 4 | 0.0625 | 1496 | 0.0435 | 0.1180 | 0.0342 + 0.0832 | 0.37 |
+| kathleen | 1e-6 | w4-cube-1 | 4 † | 0.0625 | 1496 | 0.0435 | 0.1180 | 0.0342 + 0.0832 | 0.37 |
 | kathleen | 1e-6 | w4-cube-100 | 2 | 25 | 64 | 0.0511 | 0.1567 | 0.0081 + 0.1485 | 0.33 |
 | kathleen | 1e-6 | w4-cube-100 | 3 | 12.5 | 512 | 0.0551 | 0.0937 | 0.0153 + 0.0783 | 0.59 |
-| kathleen | 1e-6 | w4-cube-100 | 4 | 6.25 | 1496 | 0.0794 | 0.1729 | 0.0522 + 0.1201 | 0.46 |
+| kathleen | 1e-6 | w4-cube-100 | 4 † | 6.25 | 1496 | 0.0794 | 0.1729 | 0.0522 + 0.1201 | 0.46 |
 | kathleen | 1e-6 | w4-plummer-1 | 2 | 0.246 | 64 | 0.0071 | 0.0174 | 0.0015 + 0.0159 | 0.41 |
 | kathleen | 1e-6 | w4-plummer-1 | 3 | 0.123 | 504 | 0.0152 | 0.0299 | 0.0048 + 0.0250 | 0.51 |
 | kathleen | 1e-6 | w4-plummer-1 | 4 | 0.0615 | 504 | 0.0223 | 0.0301 | 0.0048 + 0.0253 | 0.74 |
-| kathleen | 1e-6 | w4-plummer-1 | 5 | 0.0307 | 504 | 0.0232 | 0.0370 | 0.0077 + 0.0291 | 0.63 |
-| kathleen | 1e-6 | w4-plummer-1 | 6 | 0.0154 | 688 | 0.0279 | 0.0462 | 0.0127 + 0.0333 | 0.60 |
-| kathleen | 1e-6 | w4-plummer-1 | 7 | 0.00769 | 600 | 0.0307 | 0.0682 | 0.0186 + 0.0494 | 0.45 |
+| kathleen | 1e-6 | w4-plummer-1 | 5 † | 0.0307 | 504 | 0.0232 | 0.0370 | 0.0077 + 0.0291 | 0.63 |
+| kathleen | 1e-6 | w4-plummer-1 | 6 † | 0.0154 | 688 | 0.0279 | 0.0462 | 0.0127 + 0.0333 | 0.60 |
+| kathleen | 1e-6 | w4-plummer-1 | 7 † | 0.00769 | 600 | 0.0307 | 0.0682 | 0.0186 + 0.0494 | 0.45 |
 | kathleen | 1e-6 | w4-plummer-100 | 2 | 24.6 | 64 | 0.0508 | 0.1577 | 0.0106 + 0.1471 | 0.32 |
 | kathleen | 1e-6 | w4-plummer-100 | 3 | 12.3 | 504 | 0.0525 | 0.0902 | 0.0149 + 0.0752 | 0.58 |
-| kathleen | 1e-6 | w4-plummer-100 | 4 | 6.15 | 504 | 0.0427 | 0.1173 | 0.0357 + 0.0811 | 0.36 |
-| kathleen | 1e-6 | w4-plummer-100 | 5 | 3.07 | 504 | 0.0310 | 0.0458 | 0.0097 + 0.0359 | 0.68 |
-| kathleen | 1e-6 | w4-plummer-100 | 6 | 1.54 | 688 | 0.0309 | 0.0510 | 0.0135 + 0.0371 | 0.61 |
-| kathleen | 1e-6 | w4-plummer-100 | 7 | 0.769 | 600 | 0.0331 | 0.0747 | 0.0200 + 0.0541 | 0.44 |
+| kathleen | 1e-6 | w4-plummer-100 | 4 † | 6.15 | 504 | 0.0427 | 0.1173 | 0.0357 + 0.0811 | 0.36 |
+| kathleen | 1e-6 | w4-plummer-100 | 5 † | 3.07 | 504 | 0.0310 | 0.0458 | 0.0097 + 0.0359 | 0.68 |
+| kathleen | 1e-6 | w4-plummer-100 | 6 † | 1.54 | 688 | 0.0309 | 0.0510 | 0.0135 + 0.0371 | 0.61 |
+| kathleen | 1e-6 | w4-plummer-100 | 7 † | 0.769 | 600 | 0.0331 | 0.0747 | 0.0200 + 0.0541 | 0.44 |
 | kathleen | 1e-6 | w4-sphere-1 | 2 | 0.25 | 64 | 0.0051 | 0.0175 | 0.0017 + 0.0158 | 0.29 |
 | kathleen | 1e-6 | w4-sphere-1 | 3 | 0.125 | 512 | 0.0138 | 0.0300 | 0.0047 + 0.0253 | 0.46 |
-| kathleen | 1e-6 | w4-sphere-1 | 4 | 0.0625 | 1600 | 0.0481 | 0.0873 | 0.0269 + 0.0602 | 0.55 |
+| kathleen | 1e-6 | w4-sphere-1 | 4 † | 0.0625 | 1600 | 0.0481 | 0.0873 | 0.0269 + 0.0602 | 0.55 |
 | kathleen | 1e-6 | w4-sphere-100 | 2 | 25 | 64 | 0.0500 | 0.1571 | 0.0081 + 0.1489 | 0.32 |
 | kathleen | 1e-6 | w4-sphere-100 | 3 | 12.5 | 512 | 0.0486 | 0.0932 | 0.0154 + 0.0778 | 0.52 |
-| kathleen | 1e-6 | w4-sphere-100 | 4 | 6.25 | 1600 | 0.0906 | 0.1312 | 0.0405 + 0.0903 | 0.69 |
+| kathleen | 1e-6 | w4-sphere-100 | 4 † | 6.25 | 1600 | 0.0906 | 0.1312 | 0.0405 + 0.0903 | 0.69 |
