@@ -173,6 +173,9 @@ def read_ours(directory):
 
 def times(args):
     summary = []
+    # pairs[(machine, eps)] = [(case, our level, κ, FMM3D boxes, FMM3D M2L, ours, waves,
+    # merge)] where both ran plane waves, FMM3D `timed`.
+    pairs = defaultdict(list)
     for arg in args:
         machine, dirs = arg.split("=", 1)
         mine, theirs = dirs.split(",", 1)
@@ -255,6 +258,11 @@ def times(args):
                         tot["ours_pw"] += pw
                         tot["ours_rot"] += rot
                         tot["ours_best"] += methods[fastest]
+                        if (variant == "timed" and level is not None and level["mode"] == 1
+                                and ran.startswith("planewave")):
+                            pairs[(machine, eps)].append((
+                                case, ours_level, level["zkre"], int(level["nboxes"]),
+                                mean(m2l), pw, mean(lv["waves"]), mean(lv["merge"])))
                     else:
                         cells += ["–"] * 6
                     print("| " + " | ".join(cells) + " |")
@@ -279,6 +287,29 @@ def times(args):
         print(f"| {machine} | {case} | {eps} | {variant} | {tot['fmm3d']:.3f} | {tot['setup']:.3f} "
               f"| {tot['ours_pw']:.3f} | {tot['ours_best']:.3f} | {ratio(tot['fmm3d'], tot['ours_pw']):.2f} "
               f"| {call:.3f} | {sp:.2f} | {ev:.3f} | {ev_auto:.3f} | {fe} | {oe} |")
+
+
+    print("\n## Per level, both on plane waves (FMM3D `timed`)\n")
+    print("Levels by FMM3D's boxes: coarse ≤ 512, middle below 4,096, full from 4,096. The "
+          "ratio is FMM3D's M2L over ours; geometric mean, range.\n")
+    print("| machine | eps | coarse | middle | full |")
+    print("| --- | --- | --- | --- | --- |")
+    for (machine, eps), rows in sorted(pairs.items()):
+        cells = []
+        for lo, hi in ((0, 512), (513, 4095), (4096, 1 << 62)):
+            r = [f / o for _, _, _, b, f, o, _, _ in rows if lo <= b <= hi and o > 0]
+            cells.append(f"{math.exp(sum(map(math.log, r)) / len(r)):.2f} "
+                         f"({min(r):.2f}–{max(r):.2f}, {len(r)} levels)" if r else "–")
+        print(f"| {machine} | {eps} | " + " | ".join(cells) + " |")
+    print()
+    print("| machine | eps | case | our level | Re κ | FMM3D boxes | FMM3D M2L s | ours s "
+          "| ours waves + merge and shift s | FMM3D ÷ ours |")
+    print("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |")
+    for (machine, eps), rows in sorted(pairs.items()):
+        for case, l, k, b, f, o, w, m in rows:
+            passes = f"{w:.4f} + {m:.4f}" if not math.isnan(w) else "–"
+            print(f"| {machine} | {eps} | {case} | {l} | {k:.3g} | {b} | {f:.4f} | {o:.4f} "
+                  f"| {passes} | {ratio(f, o):.2f} |")
 
 
 def read_ours_scan(directory):
