@@ -2415,3 +2415,45 @@ request, using this template:
   4 × 10 against 5.4–8.1× at 1 × 40 and 5.5–7.9× at 40 × 1) for the coarse levels' remedy,
   Auto's AVX-512 crossover against the exponential M2L, the per-level gain at 10⁻³; CH4.0
   already covers Batched on sparse levels.
+
+## 2026-11-07: CH6.2d Beside FMM3D's exponential M2L
+- Done:
+  - The split (`/next-task`'s size rule): CH6.2d into FMM3D's per-level times and accuracy
+    (CH6.2d) and the counts' corner (CH6.2e); D8 renamed CH6.2f (its references in the
+    roadmap and CH6.2b's report follow). H9 added with CH9.1 (the user: "can you schedule an
+    in depth comparison with fmm3d when all optimizations are applied?"), and H9 in the range
+    of `/milestone-gate` and the roadmap issue sync (the user: "you have my permission to
+    update the skills").
+  - `tools/fmm3d/hfmm3d-levels.patch`, applied by `build.sh` to the variants `timed` and
+    `fastker-timed`: per-level timers in `hfmm3dmain`'s step 3 (setup, list 4, multipoles to
+    waves, the parents' loop with its plane-wave and list-3 thread-seconds, point-and-shoot)
+    and the switch `FMM3D_PW_LEVEL` (one level on plane waves, or none);
+    `helmholtz_fmm3d errors` (FMM3D's outputs alone against the oracle);
+    `tools/helmholtz/ch6-2d-runs.sh` (`check`, `times`, `scan`) and `ch6-2d-tables.py`.
+  - Our level call's two passes timed (the user: "yes, add the per-pass timers to our level
+    call"): `HelmholtzOperator::plane_wave_times` (`PlaneWaveTimes`: the waves, and merge and
+    shift, per level), `helmholtz_accuracy::Row::plane_wave_seconds`, two columns of
+    `helmholtz_accuracy --levels`.
+  - The report `fmm-validate/results/helmholtz-ch6-2d.md` (Kathleen; locust pending): FMM3D's
+    M2L over ours by level size 0.21/0.45/0.56 at 10⁻³ and 0.44/0.63/1.03 at 10⁻⁶ (coarse,
+    middle, full); merge and shift 87–88 % of ours on the coarse levels and 2.4–3.8× FMM3D's
+    parents' loop there, at par (0.81–1.13×) on the full levels, both codes held to 8 threads
+    on level 2; per call ours faster on the large cases (W1 at kD = 500, 10⁻⁶: 22.4 s against
+    FMM3D's 61.6 and 43.2 s); the scan: FMM3D's point-and-shoot far below ε, one level at
+    κ ≈ 12.5 on FMM3D's plane waves 0.9–2.0 × 10⁻³ at 10⁻³ against 2–4 × 10⁻⁵ for ours with
+    the same nodes; FMM3D misses ε at 10⁻³ on three cases.
+- Tests: `check_plane_wave_times` in `fmm-exec/tests/helmholtz_fmm.rs` (both passes timed and
+  within the level's M2L time on every level with waves, zero elsewhere, every rank or none);
+  `check_levels` on the exponential-M2L rows of `fmm-validate/tests/helmholtz_accuracy.rs`;
+  the patch's `check` (patched builds byte for byte the unpatched ones, both ε, two cases, on
+  Kathleen, locust and the M6).
+- Checks: ran `/verify` on the M6: format, Clippy (default, examples, workspace all-targets),
+  `cargo doc`, `cargo test` (888 s) and `cargo test --workspace` (1,337 s), the MPI list at 2
+  and 4 ranks (`helmholtz_fmm` 188 and 167 s), all passed; `tests/helmholtz_fmm.rs` 203 s and
+  `tests/helmholtz_accuracy.rs` 42 s at one rank in debug. Kathleen jobs 630125 and 630164,
+  every launch exit 0. Pending: locust's runs on a quiet node (the user: "Wait for gridcl").
+- Decisions: none.
+- Laplace: not touched (the Helmholtz operator's timers, `nd-fmm-validate`, `tools/`).
+- Follow-ups: CH6.2e's line (FMM3D's counts too few at iprec 1 in the FMM; iprec 2 still to
+  measure); CH6.2f's line (merge and shift's split into shifts and conversions on the coarse
+  levels, before the coarse-level remedy); CH9.1.
