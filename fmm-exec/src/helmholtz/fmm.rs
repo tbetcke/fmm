@@ -93,6 +93,7 @@ use nd_fmm_plan::operator::{
 };
 use nd_fmm_plan::plan::Plan;
 use nd_fmm_tables::helmholtz::DEFAULT_BLOCK_BUDGET;
+use nd_fmm_tables::helmholtz::plane_wave::quadrature::RHO_MAX;
 use nd_octree::constants::DEEPEST_LEVEL;
 use nd_octree::{Octree, OctreeOptions, PhysicalBox};
 use rayon::{ThreadPool, ThreadPoolBuilder};
@@ -172,6 +173,7 @@ pub struct HelmholtzFmmBuilder {
     m2l_mul_add: Option<MulAdd>,
     m2l_max_degree: Option<usize>,
     plane_wave_precision: PlaneWavePrecision,
+    plane_wave_reach: f64,
     plane_wave_budget: usize,
     c_leaf: f64,
     p2p: P2pChoice,
@@ -203,6 +205,7 @@ impl HelmholtzFmmBuilder {
             m2l_mul_add: None,
             m2l_max_degree: None,
             plane_wave_precision: PlaneWavePrecision::Rule,
+            plane_wave_reach: RHO_MAX,
             plane_wave_budget: DEFAULT_PLANE_WAVE_NODE_BUDGET,
             c_leaf: C_LEAF,
             p2p: P2pChoice::Auto,
@@ -317,6 +320,19 @@ impl HelmholtzFmmBuilder {
     /// named here must be the same on every rank.
     pub fn plane_wave_precision(mut self, precision: PlaneWavePrecision) -> Self {
         self.plane_wave_precision = precision;
+        self
+    }
+
+    /// The lateral reach of the quadratures' α counts under [`HelmholtzM2l::PlaneWave`]
+    /// (default the region's corner 4√2; `HelmholtzOperator::with_plane_wave_reach`), for
+    /// the measurements (Helmholtz CH6.2e). The same on every rank.
+    ///
+    /// # Panics
+    ///
+    /// In [`build`](Self::build) under PlaneWave, if `reach` is not finite or not above the
+    /// source's reach √2/2.
+    pub fn plane_wave_reach(mut self, reach: f64) -> Self {
+        self.plane_wave_reach = reach;
         self
     }
 
@@ -543,6 +559,7 @@ impl HelmholtzFmmBuilder {
             Degrees::Tolerance(epsilon) => Some(epsilon),
             Degrees::PerLevel(_) => None,
         })
+        .with_plane_wave_reach(self.plane_wave_reach)
         .with_m2l(self.m2l, self.dense_budget)
         .with_plane_wave_boxes(&level_boxes)
         .with_plane_wave_buffer(

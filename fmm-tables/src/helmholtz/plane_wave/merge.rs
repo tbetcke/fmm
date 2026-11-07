@@ -50,7 +50,7 @@
 use nd_fmm_math::{Complex, RealScalar};
 
 use super::pair::PlaneWaveLevel;
-use super::quadrature::{Precision, Quadrature, domain_of};
+use super::quadrature::{Precision, Quadrature, RHO_MAX, domain_of};
 use crate::plane_wave::geometry::{self, CHILDREN, Direction, MergeGeometry, SLOTS};
 
 /// The smallest tolerance at which [`precision_for_tolerance`] gives a precision (Helmholtz
@@ -139,7 +139,25 @@ impl<T: RealScalar> MergeLevel<T> {
         precision: Precision,
         geometry: &MergeGeometry,
     ) -> Option<Self> {
-        let quadrature = Quadrature::new(k_hat * 2.0, precision)?;
+        Self::with_reach(k_hat, p, precision, geometry, RHO_MAX)
+    }
+
+    /// The level of [`new`](Self::new) with the α counts of
+    /// [`Quadrature::with_reach`] for the lateral reach `reach` (Helmholtz CH6.2e);
+    /// `with_reach(…, RHO_MAX)` is `new` bit for bit.
+    ///
+    /// # Panics
+    ///
+    /// As [`new`](Self::new), and as [`Quadrature::with_reach`] for a reach that is not
+    /// finite or not above the source's reach.
+    pub fn with_reach(
+        k_hat: Complex<f64>,
+        p: usize,
+        precision: Precision,
+        geometry: &MergeGeometry,
+        reach: f64,
+    ) -> Option<Self> {
+        let quadrature = Quadrature::with_reach(k_hat * 2.0, precision, reach)?;
         let tables = PlaneWaveLevel::new(k_hat, p, &quadrature);
         let w = tables.wave_len();
         let mut factors = vec![T::zero(); w];
@@ -244,6 +262,23 @@ impl<T: RealScalar> PlaneWaveM2l<T> {
         degrees: &[usize],
         precisions: &[Option<Precision>],
     ) -> Self {
+        Self::build_with_reach(k_root, degrees, precisions, RHO_MAX)
+    }
+
+    /// The levels of [`build`](Self::build), every level's α counts for the lateral reach
+    /// `reach` ([`Quadrature::with_reach`]; Helmholtz CH6.2e); `build_with_reach(…,
+    /// RHO_MAX)` is `build` bit for bit.
+    ///
+    /// # Panics
+    ///
+    /// As [`build`](Self::build), and for a reach that is not finite or not above the
+    /// source's reach.
+    pub fn build_with_reach(
+        k_root: Complex<f64>,
+        degrees: &[usize],
+        precisions: &[Option<Precision>],
+        reach: f64,
+    ) -> Self {
         assert_eq!(
             precisions.len(),
             degrees.len(),
@@ -262,7 +297,7 @@ impl<T: RealScalar> PlaneWaveM2l<T> {
             .enumerate()
             .map(|(l, (&p, &precision))| {
                 precision.and_then(|precision| {
-                    MergeLevel::new(level_k_hat(k_root, l), p, precision, &geometry)
+                    MergeLevel::with_reach(level_k_hat(k_root, l), p, precision, &geometry, reach)
                 })
             })
             .collect();

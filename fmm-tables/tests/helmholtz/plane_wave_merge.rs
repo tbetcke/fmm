@@ -13,7 +13,8 @@ use nd_fmm_tables::helmholtz::plane_wave::merge::{
     precision_for_degree, precision_for_tolerance, select, shift,
 };
 use nd_fmm_tables::helmholtz::plane_wave::pair::shift_add;
-use nd_fmm_tables::helmholtz::plane_wave::{Precision, quadrature::domain_of};
+use nd_fmm_tables::helmholtz::plane_wave::quadrature::{RHO_MAX, domain_of};
+use nd_fmm_tables::helmholtz::plane_wave::{Precision, Quadrature};
 use nd_fmm_tables::plane_wave::geometry::{
     CHILDREN, Direction, MergeGeometry, child_bits, slot_coordinates,
 };
@@ -215,6 +216,57 @@ fn build_takes_named_precisions() {
     assert!(level.bytes() > level.tables().bytes());
     let none = PlaneWaveM2l::<f64>::build(k_root, &degrees, &[None; 6]);
     assert_eq!(none.bytes(), 0);
+}
+
+/// The levels' shifts, every slot's and child's, in one list (bit for bit comparisons).
+fn shifts(level: &MergeLevel<f64>, geometry: &MergeGeometry) -> Vec<f64> {
+    let mut out = Vec::new();
+    for direction in Direction::ALL {
+        for accumulator in geometry.accumulators(direction) {
+            for &slot in &accumulator.slots {
+                out.extend_from_slice(level.source_shift(direction, slot as usize).unwrap());
+            }
+        }
+        for child in 0..CHILDREN {
+            out.extend_from_slice(level.child_shift(direction, child));
+        }
+    }
+    out
+}
+
+/// The counts for a smaller reach (Helmholtz CH6.2e): `build_with_reach` at the corner's
+/// reach is `build` bit for bit; at FMM3D's reach 4 every level has at most the corner's
+/// waves, its quadrature's counts those of `Quadrature::with_reach`.
+#[test]
+fn build_with_reach_takes_the_counts_of_the_reach() {
+    let k_root = C::new(60.0, 0.5);
+    let degrees = [8, 8, 9, 10, 11];
+    let named = [
+        None,
+        None,
+        Some(Precision::Iprec2),
+        Some(Precision::Iprec2),
+        Some(Precision::Iprec1),
+    ];
+    let corner = PlaneWaveM2l::<f64>::build(k_root, &degrees, &named);
+    let same = PlaneWaveM2l::<f64>::build_with_reach(k_root, &degrees, &named, RHO_MAX);
+    let fewer = PlaneWaveM2l::<f64>::build_with_reach(k_root, &degrees, &named, 4.0);
+    let geometry = corner.geometry();
+    for l in 2..5 {
+        let (a, b, c) = (
+            corner.level(l).unwrap(),
+            same.level(l).unwrap(),
+            fewer.level(l).unwrap(),
+        );
+        assert_eq!(a.tables().wave_len(), b.tables().wave_len());
+        let (sa, sb) = (shifts(a, geometry), shifts(b, geometry));
+        assert!(sa.iter().zip(&sb).all(|(x, y)| x.to_bits() == y.to_bits()));
+        assert!(c.tables().wave_len() <= a.tables().wave_len(), "level {l}");
+        let kappa = k_root * (0.5f64).powi(l as i32) * 2.0;
+        let q = Quadrature::with_reach(kappa, named[l].unwrap(), 4.0).unwrap();
+        assert_eq!(c.tables().wave_len(), 2 * q.wave_count(), "level {l}");
+    }
+    assert!(fewer.bytes() < corner.bytes());
 }
 
 #[test]

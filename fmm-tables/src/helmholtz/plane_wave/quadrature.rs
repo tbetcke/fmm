@@ -40,6 +40,12 @@
 //!   and at least the count for ρ_max − r_s plus Fₖ (the targets' reach from the source
 //!   box's centre), so that the truncated orders do not alias.
 //!
+//! ρ_max = 4√2 ([`RHO_MAX`]) is the region's corner, the largest lateral offset of a V
+//! pair's points (three boxes across in both directions). [`Quadrature::with_reach`] takes a
+//! smaller reach in its place, Fₖ unchanged, for the measurements of Helmholtz CH6.2e
+//! (FMM3D's counts resolve about ρ = 4, S4 §3.2): the counts then bound the kernel on
+//! ρ ≤ reach only, and a pair beyond it errs by more.
+//!
 //! The maxima over ρ are taken at 64 equal steps of ρ, and over all orders at or above the
 //! count, since below the turning point m ≈ |tₖ| ρ one |J_m| can vanish at a zero while the
 //! next order does not (S4 §4.1). |J_m(z)| of complex z comes from Miller's backward
@@ -316,12 +322,29 @@ pub struct Quadrature {
     weight: Vec<C>,
     alpha: Vec<usize>,
     fourier: Vec<usize>,
+    reach: f64,
 }
 
 impl Quadrature {
     /// The quadrature for κ = k w (the level's wavenumber in box widths) at a precision,
     /// or `None` where κ lies outside the tables ([`domain_of`]).
     pub fn new(kappa: Complex<f64>, precision: Precision) -> Option<Self> {
+        Self::with_reach(kappa, precision, RHO_MAX)
+    }
+
+    /// The quadrature of [`new`](Self::new) with the α counts for the lateral offsets
+    /// ρ ≤ `reach` in place of ρ_max = [`RHO_MAX`] (the module documentation, "The counts"),
+    /// the Fourier counts unchanged; `with_reach(κ, precision, RHO_MAX)` is `new` bit for
+    /// bit. For the measurements (Helmholtz CH6.2e).
+    ///
+    /// # Panics
+    ///
+    /// If `reach` is not finite or not above [`SOURCE_REACH`].
+    pub fn with_reach(kappa: Complex<f64>, precision: Precision, reach: f64) -> Option<Self> {
+        assert!(
+            reach.is_finite() && reach > SOURCE_REACH,
+            "the reach must be finite and above the source's reach √2/2, got {reach}"
+        );
         let domain = domain_of(kappa)?;
         let table = &domains(precision)[domain - 1];
         let s = table.nodes.len();
@@ -341,8 +364,8 @@ impl Quadrature {
         for k in 0..s {
             let scale = 2.0 * weight[k].norm() * (-lambda[k].re).exp();
             let f = tail_count(t[k], SOURCE_REACH, scale, share) - 1;
-            let n = tail_count(t[k], RHO_MAX, scale, share)
-                .max(tail_count(t[k], RHO_MAX - SOURCE_REACH, scale, share) + f);
+            let n = tail_count(t[k], reach, scale, share)
+                .max(tail_count(t[k], reach - SOURCE_REACH, scale, share) + f);
             alpha.push(n);
             fourier.push(f);
         }
@@ -356,7 +379,14 @@ impl Quadrature {
             weight,
             alpha,
             fourier,
+            reach,
         })
+    }
+
+    /// The lateral reach the α counts bound, [`RHO_MAX`] unless named
+    /// ([`with_reach`](Self::with_reach)).
+    pub fn reach(&self) -> f64 {
+        self.reach
     }
 
     /// κ = k w.

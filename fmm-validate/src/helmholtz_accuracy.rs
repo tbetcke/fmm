@@ -35,7 +35,9 @@
 //!   [`Case::m2l_max_degree`] (fused by default); [`Row::m2l_max_degree`] the agreed one.
 //!   The exponential M2L (Helmholtz CH6.1e), each level's quadrature by
 //!   [`Case::plane_wave`] (the rule by default, or named per level); [`Row::plane_wave`] the
-//!   precision each level ran.
+//!   precision each level ran. [`Case::plane_wave_reach`] (Helmholtz CH6.2e) the lateral
+//!   reach of the quadratures' α counts (the corner's by default); [`Row::plane_wave_reach`]
+//!   the one built and [`Row::plane_wave_waves`] each level's waves per direction.
 
 use std::ops::Range;
 use std::thread;
@@ -95,6 +97,10 @@ pub struct Case {
     /// The bytes per node of its waves buffer (`HelmholtzFmmBuilder::plane_wave_budget`,
     /// Helmholtz CH6.2a; `None` the library's default, `usize::MAX` a whole level).
     pub plane_wave_budget: Option<usize>,
+    /// The lateral reach of the quadratures' α counts under [`HelmholtzM2l::PlaneWave`]
+    /// (`HelmholtzFmmBuilder::plane_wave_reach`, Helmholtz CH6.2e; `None` the library's, the
+    /// region's corner 4√2).
+    pub plane_wave_reach: Option<f64>,
     /// The evaluations of one build (at least 1; Helmholtz CH6.2b): the row's times and
     /// errors are the last one's.
     pub evaluations: usize,
@@ -122,6 +128,7 @@ impl Case {
             m2l_max_degree: None,
             plane_wave: PlaneWavePrecision::Rule,
             plane_wave_budget: None,
+            plane_wave_reach: None,
             evaluations: 1,
         }
     }
@@ -447,6 +454,11 @@ pub struct Row {
     /// The exponential M2L's level calls, chunks and waves computed in the evaluation, this
     /// rank's (Helmholtz CH6.2a).
     pub plane_wave_counts: PlaneWaveCounts,
+    /// The lateral reach of the quadratures' α counts as built (Helmholtz CH6.2e).
+    pub plane_wave_reach: f64,
+    /// Per level, its waves per direction Σₖ Nₖ under [`HelmholtzM2l::PlaneWave`], 0 where
+    /// it ran RCR (and under every other setting; Helmholtz CH6.2e).
+    pub plane_wave_waves: Vec<usize>,
     /// The ranks.
     pub ranks: usize,
     /// The levels of the tree.
@@ -570,6 +582,9 @@ pub fn run_output<C: CommunicatorCollectives>(
     if let Some(budget) = case.plane_wave_budget {
         builder = builder.plane_wave_budget(budget);
     }
+    if let Some(reach) = case.plane_wave_reach {
+        builder = builder.plane_wave_reach(reach);
+    }
     let mut fmm: HelmholtzFmm<'_, f64, C> = builder.build(points, points, comm)?;
     let build = slowest(start.elapsed().as_secs_f64(), comm);
     let charges: Vec<Charges<'_, f64>> = (0..case.vectors)
@@ -658,6 +673,10 @@ pub fn run_output<C: CommunicatorCollectives>(
             .collect(),
         plane_wave_buffer: fmm.operator().plane_wave_buffer_bytes(),
         plane_wave_counts: fmm.operator().plane_wave_counts(),
+        plane_wave_reach: fmm.operator().plane_wave_reach(),
+        plane_wave_waves: (0..fmm.nlevels())
+            .map(|l| fmm.operator().plane_wave_waves(l))
+            .collect(),
         ranks: size,
         levels: fmm.nlevels(),
         min_leaf_level: fmm.min_leaf_level(),

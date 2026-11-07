@@ -41,7 +41,12 @@
 //!   quadrature by the rule, `planewave:<1|2|3>`, that iprec on every level whose κ_l = k w_l
 //!   lies in the quadrature's tables, and `planewave-scan`: Rotation, then each such level
 //!   ≥ 2 at iprec 1, 2 and 3 alone, the other levels Rotation; the column names the levels
-//!   with waves and their precisions (`planewave 3:i2`).
+//!   with waves and their precisions (`planewave 3:i2`). Also (Helmholtz CH6.2e)
+//!   `planewave-scan:<1|2|3>`, the scan at that precision alone.
+//! - `--reach r,…` (Helmholtz CH6.2e): the lateral reach of the quadratures' α counts in box
+//!   widths (`corner`, the default, the library's 4√2), each exponential-M2L run (the scan's
+//!   included) at each reach in turn; the column "M2L" of a row at another reach ends with
+//!   `ρ r`.
 //! - `--plane-wave-budget MB|whole` (Helmholtz CH6.2a): the exponential M2L's waves buffer
 //!   per node (default the library's, `DEFAULT_PLANE_WAVE_NODE_BUDGET`; `whole` a whole
 //!   level). The column "M2L" of an exponential-M2L row gives rank 0's waves buffer, its
@@ -54,8 +59,9 @@
 //!   ranks, the M2L level calls' seconds (the slowest rank's, `Row::m2l_seconds`) and
 //!   nanoseconds per pair, and (Helmholtz CH6.2d) where merge and shift ran its two passes'
 //!   seconds, the waves and merge and shift (each the slowest rank's,
-//!   `Row::plane_wave_seconds`); then a row `Σ` with the levels' seconds summed and the
-//!   evaluation's (with several evaluations also the first's).
+//!   `Row::plane_wave_seconds`), and (Helmholtz CH6.2e) the level's waves per direction
+//!   Σₖ Nₖ (`Row::plane_wave_waves`; `–` without waves); then a row `Σ` with the levels'
+//!   seconds summed and the evaluation's (with several evaluations also the first's).
 //! - `--evaluations n` (default 1; Helmholtz CH6.2b): n evaluations of each build; the
 //!   row's evaluation time, errors, checksum and M2L times are the last one's (the first
 //!   touches the buffers, which on a large exponential M2L's waves costs seconds).
@@ -88,7 +94,7 @@ use nd_fmm_exec::helmholtz::{
 use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
 use nd_fmm_tables::helmholtz::plane_wave::Precision;
-use nd_fmm_tables::helmholtz::plane_wave::quadrature::domain_of;
+use nd_fmm_tables::helmholtz::plane_wave::quadrature::{RHO_MAX, domain_of};
 use nd_fmm_validate::bench::{cores, cpu_model, target};
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::helmholtz_accuracy::{
@@ -113,6 +119,7 @@ struct Arguments {
     m2l: Vec<M2lRun>,
     dense_budget: usize,
     plane_wave_budget: Option<usize>,
+    reaches: Vec<Option<f64>>,
     s7: bool,
     levels: bool,
     evaluations: usize,
@@ -127,8 +134,9 @@ enum M2lRun {
     Sweep,
     /// The exponential M2L, by the rule (`None`) or one precision on every level.
     PlaneWave(Option<Precision>),
-    /// Rotation, then each level with a quadrature at each precision alone.
-    PlaneWaveScan,
+    /// Rotation, then each level with a quadrature at each precision alone (`None`) or at
+    /// one.
+    PlaneWaveScan(Option<Precision>),
 }
 
 /// The levels ≥ 2 of a row whose κ_l = k w_l lies in the quadrature's tables.
@@ -175,8 +183,9 @@ fn arguments() -> Arguments {
              [--vectors m] [--samples n] [--no-gradients] [--threads t,…] \
              [--oracle-threads t] [--rule calibrated|s7] [--p2p auto|reference|<isa>,…] \
              [--m2l rotation|dense|classes|batched|batched-fused|auto|auto:<d>|sweep|\
-             planewave|planewave:<1|2|3>|planewave-scan,…] \
-             [--dense-budget MB] [--plane-wave-budget MB|whole] [--levels] [--evaluations n]; got {args:?}"
+             planewave|planewave:<1|2|3>|planewave-scan|planewave-scan:<1|2|3>,…] \
+             [--dense-budget MB] [--plane-wave-budget MB|whole] [--reach corner|r,…] [--levels] \
+             [--evaluations n]; got {args:?}"
         );
         std::process::exit(2);
     };
@@ -195,6 +204,7 @@ fn arguments() -> Arguments {
         m2l: vec![M2lRun::Fixed(HelmholtzM2l::Rotation, None, None)],
         dense_budget: DEFAULT_DENSE_BUDGET,
         plane_wave_budget: None,
+        reaches: vec![None],
         s7: false,
         levels: false,
         evaluations: 1,
@@ -255,7 +265,16 @@ fn arguments() -> Arguments {
                                 "auto" => fixed(HelmholtzM2l::Auto, None),
                                 "sweep" => Some(M2lRun::Sweep),
                                 "planewave" => Some(M2lRun::PlaneWave(None)),
-                                "planewave-scan" => Some(M2lRun::PlaneWaveScan),
+                                "planewave-scan" => Some(M2lRun::PlaneWaveScan(None)),
+                                "planewave-scan:1" => {
+                                    Some(M2lRun::PlaneWaveScan(Some(Precision::Iprec1)))
+                                }
+                                "planewave-scan:2" => {
+                                    Some(M2lRun::PlaneWaveScan(Some(Precision::Iprec2)))
+                                }
+                                "planewave-scan:3" => {
+                                    Some(M2lRun::PlaneWaveScan(Some(Precision::Iprec3)))
+                                }
                                 "planewave:1" => Some(M2lRun::PlaneWave(Some(Precision::Iprec1))),
                                 "planewave:2" => Some(M2lRun::PlaneWave(Some(Precision::Iprec2))),
                                 "planewave:3" => Some(M2lRun::PlaneWave(Some(Precision::Iprec3))),
@@ -284,6 +303,20 @@ fn arguments() -> Arguments {
                     }
                     .map(|bytes| parsed.plane_wave_budget = Some(bytes))
                     .is_some(),
+                    "--reach" => value
+                        .split(',')
+                        .map(|v| match v {
+                            "corner" => Some(None),
+                            r => r
+                                .parse::<f64>()
+                                .ok()
+                                .filter(|&r| r.is_finite() && r > 0.75)
+                                .map(Some),
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .filter(|r| !r.is_empty())
+                        .map(|r| parsed.reaches = r)
+                        .is_some(),
                     "--rule" => match value.as_str() {
                         "calibrated" => Some(false),
                         "s7" => Some(true),
@@ -334,13 +367,14 @@ fn m2l_string(row: &Row) -> String {
         return match levels.is_empty() {
             true => "rotation".into(),
             false => format!(
-                "planewave {} ({:.0} MB; waves {:.0} MB, {} chunks in {} calls, {} waves)",
+                "planewave {} ({:.0} MB; waves {:.0} MB, {} chunks in {} calls, {} waves){}",
                 levels.join(","),
                 row.dense_bytes as f64 / 1e6,
                 row.plane_wave_buffer as f64 / 1e6,
                 row.plane_wave_counts.chunks,
                 row.plane_wave_counts.level_calls,
                 row.plane_wave_counts.waves,
+                reach_suffix(row),
             ),
         };
     }
@@ -371,8 +405,16 @@ fn m2l_string(row: &Row) -> String {
     }
 }
 
+/// ` ρ r` for an exponential-M2L row whose counts' reach is not the corner's, else empty.
+fn reach_suffix(row: &Row) -> String {
+    match row.m2l == HelmholtzM2l::PlaneWave && row.plane_wave_reach != RHO_MAX {
+        true => format!(" ρ {}", row.plane_wave_reach),
+        false => String::new(),
+    }
+}
+
 /// The setting of a row in one word: `rotation`, `dense`, `classes`, `batched`,
-/// `batched-fused`, `auto ≤ d` or `planewave`.
+/// `batched-fused`, `auto ≤ d` or `planewave` (with ` ρ r` at another reach).
 fn setting_name(row: &Row) -> String {
     match row.m2l {
         HelmholtzM2l::Rotation => "rotation".into(),
@@ -384,7 +426,7 @@ fn setting_name(row: &Row) -> String {
             Some(usize::MAX) | None => "auto ≤ ∞".into(),
             Some(d) => format!("auto ≤ {d}"),
         },
-        HelmholtzM2l::PlaneWave => "planewave".into(),
+        HelmholtzM2l::PlaneWave => format!("planewave{}", reach_suffix(row)),
     }
 }
 
@@ -571,8 +613,12 @@ fn main() {
                         } else {
                             "– | –".into()
                         };
+                        let waves = match row.plane_wave_waves[l] {
+                            0 => "–".to_string(),
+                            w => w.to_string(),
+                        };
                         format!(
-                            "{head} | {l} | {} | {} | {} | {:.6} | {:.0} | {passes} |",
+                            "{head} | {l} | {} | {} | {} | {:.6} | {:.0} | {passes} | {waves} |",
                             row.degrees[l],
                             level_m2l(row, l),
                             row.v_pairs[l],
@@ -589,11 +635,12 @@ fn main() {
                     ),
                 };
                 lines.push(format!(
-                    "{head} | Σ | – | {evaluate} | {} | {:.6} | – | {:.6} | {:.6} |",
+                    "{head} | Σ | – | {evaluate} | {} | {:.6} | – | {:.6} | {:.6} | {} |",
                     row.v_pairs.iter().sum::<usize>(),
                     row.m2l_seconds.iter().sum::<f64>(),
                     row.plane_wave_seconds.iter().map(|p| p[0]).sum::<f64>(),
                     row.plane_wave_seconds.iter().map(|p| p[1]).sum::<f64>(),
+                    row.plane_wave_waves.iter().sum::<usize>(),
                 ));
                 lines
             };
@@ -604,28 +651,42 @@ fn main() {
                 for &p2p in &arguments.p2p {
                     for &threads in &arguments.threads {
                         case.p2p = p2p;
-                        // The runs of the entry: (setting, mode, crossover, precisions),
-                        // one, or the sweep's (the first ∞, the others from its degrees),
-                        // or the scan's (Rotation first, the levels from its row).
+                        // The runs of the entry: (setting, mode, crossover, precisions,
+                        // reach), one (the exponential M2L's at each reach), or the sweep's
+                        // (the first ∞, the others from its degrees), or the scan's
+                        // (Rotation first, the levels from its row, each at each reach).
                         let fixed = |m2l, mul_add, max_degree| {
-                            (m2l, mul_add, max_degree, PlaneWavePrecision::Rule)
+                            (m2l, mul_add, max_degree, PlaneWavePrecision::Rule, None)
                         };
-                        let mut runs = vec![match m2l_run {
+                        let mut runs = match m2l_run {
                             M2lRun::Fixed(m2l, mul_add, max_degree) => {
-                                fixed(m2l, mul_add, max_degree)
+                                vec![fixed(m2l, mul_add, max_degree)]
                             }
-                            M2lRun::Sweep => fixed(HelmholtzM2l::Auto, None, Some(usize::MAX)),
-                            M2lRun::PlaneWave(precision) => (
-                                HelmholtzM2l::PlaneWave,
-                                None,
-                                None,
-                                match precision {
-                                    None => PlaneWavePrecision::Rule,
-                                    Some(q) => PlaneWavePrecision::PerLevel(vec![Some(q); 64]),
-                                },
-                            ),
-                            M2lRun::PlaneWaveScan => fixed(HelmholtzM2l::Rotation, None, None),
-                        }];
+                            M2lRun::Sweep => {
+                                vec![fixed(HelmholtzM2l::Auto, None, Some(usize::MAX))]
+                            }
+                            M2lRun::PlaneWave(precision) => arguments
+                                .reaches
+                                .iter()
+                                .map(|&reach| {
+                                    (
+                                        HelmholtzM2l::PlaneWave,
+                                        None,
+                                        None,
+                                        match precision {
+                                            None => PlaneWavePrecision::Rule,
+                                            Some(q) => {
+                                                PlaneWavePrecision::PerLevel(vec![Some(q); 64])
+                                            }
+                                        },
+                                        reach,
+                                    )
+                                })
+                                .collect(),
+                            M2lRun::PlaneWaveScan(_) => {
+                                vec![fixed(HelmholtzM2l::Rotation, None, None)]
+                            }
+                        };
                         let mut next = 0;
                         while next < runs.len() {
                             (
@@ -633,6 +694,7 @@ fn main() {
                                 case.m2l_mul_add,
                                 case.m2l_max_degree,
                                 case.plane_wave,
+                                case.plane_wave_reach,
                             ) = runs[next].clone();
                             next += 1;
                             match run(&case, &problem, &oracle, threads, &world) {
@@ -660,17 +722,24 @@ fn main() {
                                                     |&d| fixed(HelmholtzM2l::Auto, None, Some(d)),
                                                 ),
                                             ),
-                                            M2lRun::PlaneWaveScan => {
+                                            M2lRun::PlaneWaveScan(precision) => {
+                                                let precisions = match precision {
+                                                    Some(q) => vec![q],
+                                                    None => Precision::ALL.to_vec(),
+                                                };
                                                 for l in plane_wave_levels(&row, k) {
-                                                    for q in Precision::ALL {
-                                                        let mut named = vec![None; row.levels];
-                                                        named[l] = Some(q);
-                                                        runs.push((
-                                                            HelmholtzM2l::PlaneWave,
-                                                            None,
-                                                            None,
-                                                            PlaneWavePrecision::PerLevel(named),
-                                                        ));
+                                                    for &q in &precisions {
+                                                        for &reach in &arguments.reaches {
+                                                            let mut named = vec![None; row.levels];
+                                                            named[l] = Some(q);
+                                                            runs.push((
+                                                                HelmholtzM2l::PlaneWave,
+                                                                None,
+                                                                None,
+                                                                PlaneWavePrecision::PerLevel(named),
+                                                                reach,
+                                                            ));
+                                                        }
                                                     }
                                                 }
                                             }
@@ -705,11 +774,11 @@ fn main() {
         println!();
         println!(
             "| Workload | N | kD | degrees | M2L | ranks × threads | level | p | ran | V pairs \
-             | M2L s | ns per pair | waves s | merge and shift s |"
+             | M2L s | ns per pair | waves s | merge and shift s | waves |"
         );
         println!(
             "| --- | ---: | --- | --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: \
-             | ---: |"
+             | ---: | ---: |"
         );
         for line in &levels {
             println!("{line}");
