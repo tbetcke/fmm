@@ -1,6 +1,6 @@
 ---
 name: milestone-gate
-description: Checks the gate of a Helmholtz milestone (HR, H0 to H8) against docs/helmholtz/roadmap.md and the proposal, writes the gate report, and closes the milestone on the user's sign-off. Use when /next-task says a milestone is complete, or when the user asks to close one.
+description: Checks the gate of a Helmholtz milestone (HR, H0 to H9) against docs/helmholtz/roadmap.md and the proposal, writes the gate report, and closes the milestone on the user's sign-off. Use when /next-task says a milestone is complete, or when the user asks to close one.
 ---
 
 # Milestone gate
