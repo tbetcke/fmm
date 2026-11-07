@@ -37,6 +37,8 @@ import sys
 from collections import defaultdict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# No __pycache__ beside the scripts in the checkout.
+sys.dont_write_bytecode = True
 _spec = importlib.util.spec_from_file_location("ch6_2b", os.path.join(HERE, "ch6-2b-tables.py"))
 ch6_2b = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ch6_2b)
