@@ -198,4 +198,4 @@ None.
 ## Open questions
 
 For sign-off (the report's §8): 1. the counts' reach 4.5 in place of 4√2 (CH6.2g);
-2. CH6.2g before CH6.2f (D8).
+2. CH6.2g before CH6.2f (D8). Both signed off 2026-11-07 (the user: "1 and 2 as recommended").

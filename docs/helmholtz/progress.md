@@ -2499,9 +2499,9 @@ request, using this template:
   nd-fmm-tables -- --ignored` (15 passed, 553 s), all passed; `tests/helmholtz_fmm.rs` 211 s
   and `tests/helmholtz_accuracy.rs` 46 s at one rank in debug (203 and 42 s before);
   `shellcheck` not installed, not run. Pending: none.
-- Decisions: questions for sign-off: 1. the counts' reach 4.5 in place of the corner 4√2
-  (CH6.2g); 2. CH6.2g before CH6.2f (D8).
+- Decisions: questions 1. the counts' reach 4.5 in place of the corner 4√2 (CH6.2g) and
+  2. CH6.2g before CH6.2f (D8), both signed off 2026-11-07 (the user: "1 and 2 as recommended").
 - Laplace: not touched (the Helmholtz quadrature, merge and operator, `nd-fmm-validate`,
   `tools/`); `mpi_exec`, `mpi_threading` and `invariance` passed at 2 and 4 ranks.
 - Follow-ups: CH6.2g (the reach adopted, with an M2L pair at the largest V offset against
-  Rotation on every domain), if question 1 is signed off; CH6.2f's place after it (question 2).
+  Rotation on every domain), next; CH6.2f after it.

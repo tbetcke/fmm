@@ -60,7 +60,7 @@ quadrature, CH3.3's degrees.
   FMM3D's own counts are fewer still where Im κ < π/2 (0.66–0.76× the corner's, CH6.1a,
   against 0.75–0.81× for ours at 4), so they would not hold either on those cases. Not run with FMM3D's
   `hnumphys` itself.
-- **For sign-off** (§8): the counts' reach 4.5 in place of 4√2 (0.85× the waves, about
+- **Signed off** (§8; signed off 2026-11-07 (the user: "1 and 2 as recommended")): the counts' reach 4.5 in place of 4√2 (0.85× the waves, about
   0.9× the exponential M2L's time), with the per-pair bound restated on ρ ≤ 4.5; the
   adoption as its own task before D8 (CH6.2g).
 
@@ -252,6 +252,8 @@ exited 0 (38, 24 and 14 launches). The raw outputs are in
 the_counts_for_a_smaller_reach_on_every_domain --nocapture`.
 
 ## 8. Questions for sign-off
+
+Both signed off 2026-11-07 (the user: "1 and 2 as recommended"): reach 4.5 adopted in CH6.2g, which comes before CH6.2f.
 
 1. **The counts' reach 4.5 in place of 4√2.** The FMM's errors hold at 4.5 as at the
    corner on all 60 cases and 166 scanned levels, and at 4.25 on the 60 cases (not

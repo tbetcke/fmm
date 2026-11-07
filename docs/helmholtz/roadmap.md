@@ -72,14 +72,13 @@ node, the user: "Wait for gridcl"): FMM3D's exponential M2L per level over ours,
 merge and shift most of ours and 2.3–3.8× FMM3D's parents' loop on level 2, where both are
 held to 8 threads; per call ours faster on the large cases; single levels on FMM3D's plane
 waves miss ε at 10⁻³ where ours with the same nodes hold.
-2026-11-07: CH6.2e done (`fmm-validate/results/helmholtz-ch6-2e.md`; PR draft for its two
-questions): on D12's workloads the FMM's counts need not reach the corner; reach 4.5 holds as
+2026-11-07: CH6.2e done (`fmm-validate/results/helmholtz-ch6-2e.md`; its two questions
+signed off as recommended): on D12's workloads the FMM's counts need not reach the corner; reach 4.5 holds as
 the corner on CH6.1e's 60 verification cases and 166 scanned levels, 4.25 on the cases (not
 scanned), 4 misses on three cases at 10⁻⁶ and kD ≥ 100; 4.5 proposed (0.84–0.86× the waves,
-the exponential M2L 0.80–0.92× per case on locust and the M6) and its adoption as CH6.2g,
-before CH6.2f if question 2 is signed off as recommended.
-Next: CH6.2g after CH6.2e's sign-off (question 1), then CH6.2f (D8); CH6.2f first if
-question 1 is declined or question 2 answered otherwise.
+the exponential M2L 0.80–0.92× per case on locust and the M6) and adopted as CH6.2g,
+before CH6.2f.
+Next: CH6.2g (the reach 4.5 adopted), then CH6.2f (D8).
 
 ## How `/next-task` reads this file
 
@@ -123,7 +122,7 @@ CH3.6 (#170) and H3.G.
 3. CH6.1 The §3.14 machinery generalised (needs CH0.4): CH6.1a, CH6.1b, CH6.1c, CH6.1d, CH6.1e
 4. CH6.2 Measured (*Machines:* locust, Kathleen; *Sign-off:* D8): CH6.2a, CH6.2b, CH6.2c,
    CH6.2d, CH6.2e, CH6.2g, CH6.2f (split on 2026-11-06; CH6.2g added 2026-11-07 by CH6.2e,
-   its place before CH6.2f pending CH6.2e's question 2)
+   before CH6.2f by its question 2, signed off 2026-11-07)
 5. CH6.1f Quadratures for ε below 10⁻⁶ (needs CH6.1e; after CH6.2, before H6.G: CH6.1e's
    question 3, signed off 2026-11-03, "1–4 as recommended")
 
@@ -706,7 +705,7 @@ at any kD.
   again into our strategies per level (CH6.2b) and FMM3D with D8 (CH6.2c), and on 2026-11-06
   that into Kathleen's runs (CH6.2c), FMM3D (CH6.2d) and D8 (CH6.2e), and on 2026-11-06
   CH6.2d into FMM3D (CH6.2d) and the counts' corner (CH6.2e), D8 renamed CH6.2f; on
-  2026-11-07 CH6.2e added the counts' adoption (CH6.2g, if signed off); CH6.2 is done when
+  2026-11-07 CH6.2e added the counts' adoption (CH6.2g); CH6.2 is done when
   all are:
 - [x] **CH6.2a The waves buffer bounded.** Report:
   `fmm-validate/results/helmholtz-ch6-2a.md`; `HelmholtzOperator::with_plane_wave_buffer`,
@@ -782,8 +781,8 @@ at any kD.
   cases at 10⁻³ to 10⁻⁶ reach 4.5 and 4.25 hold as the corner (within 1.070× Rotation's),
   and 4.5 also on the 166 scanned levels; 4 misses on three cases at 10⁻⁶ and kD ≥ 100
   (1.60–1.69×; in the scan one level, the W4 cube's level 2 at κ = 25); at 4.5 0.84–0.86×
-  the waves, the exponential M2L 0.80–0.92× per case (locust, the M6). Reach 4.5 proposed
-  for sign-off (question 1; CH6.2g).
+  the waves, the exponential M2L 0.80–0.92× per case (locust, the M6). Reach 4.5 proposed;
+  questions 1 (adopt 4.5, CH6.2g) and 2 (CH6.2g before CH6.2f) signed off 2026-11-07 (the user: "1 and 2 as recommended").
   Split on 2026-11-06 from CH6.2d. From CH6.1a: its counts
   resolve the region's corner ρ = 4√2 at 1.31–1.51× FMM3D's waves where Im κ < π/2 (FMM3D's
   resolve about ρ = 4, S4 §3.2); whether a pair ever needs the corner at the FMM's ε, so
@@ -798,8 +797,8 @@ at any kD.
   bounded by Rotation's error): at iprec 1 this points at FMM3D's counts being too few in the
   FMM, other differences not excluded; whether fewer than ours hold at iprec 2 (the rule's)
   is this task's. *Needs:* CH6.2b. *Machines:* locust.
-- [ ] **CH6.2g The counts' reach adopted.** From CH6.2e (report §8, question 1, for
-  sign-off): the α counts for lateral offsets ρ ≤ 4.5 in place of the corner 4√2 as the
+- [ ] **CH6.2g The counts' reach adopted.** From CH6.2e (report §8, question 1,
+  signed off 2026-11-07 (the user: "1 and 2 as recommended")): the α counts for lateral offsets ρ ≤ 4.5 in place of the corner 4√2 as the
   default (`RHO_MAX`'s role), 0.84–0.86× the waves; CH6.1a's acceptance and the quadrature
   module's bound restated on ρ ≤ 4.5, CONVENTIONS §3.15's sentence on the quadrature's
   region amended (its subsection "Exponential M2L" is unversioned, so no version bump),
@@ -812,8 +811,8 @@ at any kD.
   FMM's chain, which CH6.2e did not test apart); CH6.1e's verification
   (`tools/helmholtz/ch6-1e-runs.sh verify verify-large`) within 1.1× Rotation's on every
   case; nd-fmm-exec's `tests/helmholtz_fmm.rs` and nd-fmm-validate's tests at the new
-  default. *Needs:* CH6.2e, its question 1 signed off. Before CH6.2f if
-  CH6.2e's question 2 is signed off as recommended.
+  default. *Needs:* CH6.2e. Before CH6.2f (CH6.2e's question 2, signed off
+  2026-11-07).
 - [ ] **CH6.2f D8: the exponential M2L's level rule.** Split on 2026-11-06 from the former
   CH6.2c (CH6.2e until the split of CH6.2d). D8 proposed from CH6.2b's, CH6.2c's, CH6.2d's
   and CH6.2e's times (adopted as a strategy where it wins, else kept opt-in or dropped). Also (CH6.2b, report §7): the exponential
