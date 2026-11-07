@@ -401,6 +401,19 @@ level call's chunks and items) and `--dist cube|plummer` (the C3.3 Plummer spher
 ratio column of **kinds** is headed "/ first row". Its report is
 `results/helmholtz-ch7-5c.md`.
 
+Helmholtz CH6.2d (FMM3D's exponential M2L per level; docs/helmholtz/tasks/CH6.2d.md) added
+the step `errors` to the `helmholtz_fmm3d` example: FMM3D's outputs alone (`--fmm3d
+label=PREFIX,…`, each at every token of `--eps`) against the case's oracle at the samples,
+without our FMM, with each run's errors over the first run's (the scan's point-and-shoot
+reference); its numbers are `sample_errors` of the module, which `tests/helmholtz_accuracy.rs`
+covers. It also added `helmholtz_accuracy::Row::plane_wave_seconds` (per level the exponential
+M2L's two passes, [waves, merge and shift], each the slowest rank's, from
+`HelmholtzOperator::plane_wave_times`) and two columns of the example's `--levels` table
+(waves s, merge and shift s; CH6.2b's twelve columns unchanged before them), checked by
+`check_levels`. `tools/helmholtz/ch6-2d-runs.sh` runs it beside the patched FMM3D builds of
+`tools/fmm3d/` (README.md there, "Per level (CH6.2d)"), `tools/helmholtz/ch6-2d-tables.py`
+makes the report's tables. Its report is `results/helmholtz-ch6-2d.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

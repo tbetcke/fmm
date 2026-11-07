@@ -333,7 +333,13 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   summed per level (`HelmholtzOperator::m2l_times`, reset with `plane_wave_counts` when the
   tables are chosen): two clock reads per call, no value changed (`check_auto` and
   `check_plane_wave` check an entry on every level with V pairs). Laplace's opt-in
-  `KindTiming` is untouched.
+  `KindTiming` is untouched. Since Helmholtz CH6.2d (docs/helmholtz/tasks/CH6.2d.md) the
+  exponential M2L's level call also times its two passes per level
+  (`HelmholtzOperator::plane_wave_times`, `PlaneWaveTimes { waves, parents }`: the waves of
+  each chunk's sources, and merge and shift; summed over chunks, vectors and frames, reset
+  with the others; four clock reads more per chunk, vector and frame, no value changed):
+  `check_plane_wave_times` in `check_plane_wave` checks both passes timed and within the
+  level's M2L time on every level with waves and V pairs, zero elsewhere.
   The level call is the crate-private `src/helmholtz/operator_plane_wave.rs`, Laplace's
   order (`src/operator_plane_wave.rs`) restated in scalar loops on
   `nd_fmm_tables::helmholtz::plane_wave` (no `nd-fmm-simd` kernel: Laplace's `WaveKernel`

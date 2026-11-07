@@ -46,7 +46,8 @@ use mpi::traits::CommunicatorCollectives;
 use nd_fmm_exec::geometry::{Domain, radius};
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzFmm, HelmholtzFmmBuilder,
-    HelmholtzFmmError, HelmholtzM2l, Output, PlaneWaveCounts, PlaneWavePrecision, Wavenumber,
+    HelmholtzFmmError, HelmholtzM2l, Output, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveTimes,
+    Wavenumber,
 };
 use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -470,6 +471,10 @@ pub struct Row {
     /// Per level, the M2L level calls' seconds in the last evaluation, the slowest rank's
     /// (`HelmholtzOperator::m2l_times`; Helmholtz CH6.2b).
     pub m2l_seconds: Vec<f64>,
+    /// Per level, the exponential M2L's passes in the last evaluation, [waves, merge and
+    /// shift] seconds, each the slowest rank's (`HelmholtzOperator::plane_wave_times`;
+    /// Helmholtz CH6.2d); zero where no level call ran merge and shift.
+    pub plane_wave_seconds: Vec<[f64; 2]>,
     /// Per level, the V-list pairs of the plan, each target counted on the rank that owns it
     /// and summed over the ranks: the same on every rank count (Helmholtz CH6.2b).
     pub v_pairs: Vec<usize>,
@@ -579,8 +584,10 @@ pub fn run_output<C: CommunicatorCollectives>(
     // The M2L times before the last evaluation, so that the row has the last one's.
     let (mut output, mut evaluate, mut first_evaluate) = (None, 0.0, 0.0);
     let mut before: Vec<Duration> = Vec::new();
+    let mut passes_before: Vec<PlaneWaveTimes> = Vec::new();
     for evaluation in 0..case.evaluations.max(1) {
         before = fmm.operator().m2l_times().to_vec();
+        passes_before = fmm.operator().plane_wave_times().to_vec();
         comm.barrier();
         let start = Instant::now();
         output = Some(fmm.evaluate(&charges)?);
@@ -604,6 +611,21 @@ pub fn run_output<C: CommunicatorCollectives>(
         .collect();
     let mut m2l_seconds = vec![0.0f64; nlevels];
     comm.all_reduce_into(&seconds[..], &mut m2l_seconds[..], SystemOperation::max());
+    let passes: Vec<f64> = fmm
+        .operator()
+        .plane_wave_times()
+        .iter()
+        .zip(&passes_before)
+        .flat_map(|(after, before)| {
+            [
+                (after.waves - before.waves).as_secs_f64(),
+                (after.parents - before.parents).as_secs_f64(),
+            ]
+        })
+        .collect();
+    let mut slowest_passes = vec![0.0f64; 2 * nlevels];
+    comm.all_reduce_into(&passes[..], &mut slowest_passes[..], SystemOperation::max());
+    let plane_wave_seconds: Vec<[f64; 2]> = slowest_passes.as_chunks::<2>().0.to_vec();
     // Each target once, on the rank that owns it (a replicated top box has rows on every
     // rank).
     let plan = fmm.plan();
@@ -649,6 +671,7 @@ pub fn run_output<C: CommunicatorCollectives>(
         evaluate,
         first_evaluate,
         m2l_seconds,
+        plane_wave_seconds,
         v_pairs: v_pairs.into_iter().map(|n| n as usize).collect(),
         errors,
         checksum,

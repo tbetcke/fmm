@@ -52,7 +52,9 @@
 //!   level with V pairs: the level's degree, the M2L that ran there (`rotation`, `dense`,
 //!   `classes`, `batched`, `batched-fused` or `planewave iq`), its V pairs summed over the
 //!   ranks, the M2L level calls' seconds (the slowest rank's, `Row::m2l_seconds`) and
-//!   nanoseconds per pair; then a row `Σ` with the levels' seconds summed and the
+//!   nanoseconds per pair, and (Helmholtz CH6.2d) where merge and shift ran its two passes'
+//!   seconds, the waves and merge and shift (each the slowest rank's,
+//!   `Row::plane_wave_seconds`); then a row `Σ` with the levels' seconds summed and the
 //!   evaluation's (with several evaluations also the first's).
 //! - `--evaluations n` (default 1; Helmholtz CH6.2b): n evaluations of each build; the
 //!   row's evaluation time, errors, checksum and M2L times are the last one's (the first
@@ -563,8 +565,14 @@ fn main() {
                 let mut lines: Vec<String> = (0..row.levels)
                     .filter(|&l| row.v_pairs[l] > 0)
                     .map(|l| {
+                        let [waves, parents] = row.plane_wave_seconds[l];
+                        let passes = if waves + parents > 0.0 {
+                            format!("{waves:.6} | {parents:.6}")
+                        } else {
+                            "– | –".into()
+                        };
                         format!(
-                            "{head} | {l} | {} | {} | {} | {:.6} | {:.0} |",
+                            "{head} | {l} | {} | {} | {} | {:.6} | {:.0} | {passes} |",
                             row.degrees[l],
                             level_m2l(row, l),
                             row.v_pairs[l],
@@ -581,9 +589,11 @@ fn main() {
                     ),
                 };
                 lines.push(format!(
-                    "{head} | Σ | – | {evaluate} | {} | {:.6} | – |",
+                    "{head} | Σ | – | {evaluate} | {} | {:.6} | – | {:.6} | {:.6} |",
                     row.v_pairs.iter().sum::<usize>(),
                     row.m2l_seconds.iter().sum::<f64>(),
+                    row.plane_wave_seconds.iter().map(|p| p[0]).sum::<f64>(),
+                    row.plane_wave_seconds.iter().map(|p| p[1]).sum::<f64>(),
                 ));
                 lines
             };
@@ -695,9 +705,12 @@ fn main() {
         println!();
         println!(
             "| Workload | N | kD | degrees | M2L | ranks × threads | level | p | ran | V pairs \
-             | M2L s | ns per pair |"
+             | M2L s | ns per pair | waves s | merge and shift s |"
         );
-        println!("| --- | ---: | --- | --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: |");
+        println!(
+            "| --- | ---: | --- | --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: \
+             | ---: |"
+        );
         for line in &levels {
             println!("{line}");
         }

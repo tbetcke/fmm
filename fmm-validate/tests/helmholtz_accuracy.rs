@@ -122,9 +122,31 @@ fn check_harness(world: &SimpleCommunicator) {
 
 /// The per-level columns of a row (Helmholtz CH6.2b): an entry per level, no V pairs on
 /// levels 0 and 1, no M2L time on level 0 (the downward pass calls M2L from level 1), a
-/// time on every level with V pairs.
+/// time on every level with V pairs; the exponential M2L's two passes (Helmholtz CH6.2d)
+/// timed on every level with waves and V pairs, each within the level's M2L time, and zero
+/// on the others.
 fn check_levels(row: &Row) {
     assert_eq!(row.m2l_seconds.len(), row.levels);
+    assert_eq!(row.plane_wave_seconds.len(), row.levels);
+    for (l, &[waves, parents]) in row.plane_wave_seconds.iter().enumerate() {
+        if row.plane_wave[l].is_some() && row.v_pairs[l] > 0 {
+            assert!(
+                waves > 0.0 && parents > 0.0,
+                "level {l}: passes {waves} s, {parents} s"
+            );
+            assert!(
+                waves <= row.m2l_seconds[l] && parents <= row.m2l_seconds[l],
+                "level {l}: passes {waves} s, {parents} s within {} s",
+                row.m2l_seconds[l]
+            );
+        } else {
+            assert_eq!(
+                [waves, parents],
+                [0.0, 0.0],
+                "level {l}: no merge and shift"
+            );
+        }
+    }
     assert_eq!(row.v_pairs.len(), row.levels);
     assert_eq!(&row.v_pairs[..2], &[0, 0], "no V pairs on levels 0 and 1");
     assert_eq!(row.m2l_seconds[0], 0.0, "no M2L on level 0");
@@ -276,6 +298,7 @@ fn check_plane_wave(world: &SimpleCommunicator) {
         case.m2l = HelmholtzM2l::PlaneWave;
         let row = run(&case, &problem, &oracle, 1, world).expect("the FMM runs");
         assert_eq!(row.m2l, HelmholtzM2l::PlaneWave);
+        check_levels(&row);
         for (l, precision) in row.plane_wave.iter().enumerate() {
             assert_eq!(row.dense_levels[l], precision.is_some(), "level {l}");
         }

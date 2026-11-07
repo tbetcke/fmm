@@ -23,6 +23,10 @@
 #   default   FMM3D as `make lib` builds it, with OpenMP: its "easy-to-install version"
 #   fastker   `make lib FAST_KER=ON`: its "high-performance mode", the vectorised direct
 #             kernels (C++, gcc 9 or later); FMM3D's install guide calls it that
+#   timed, fastker-timed
+#             default and fastker with hfmm3d-levels.patch beside this script applied
+#             (Helmholtz CH6.2d): per-level timers in hfmm3d's main routine and the switch
+#             FMM3D_PW_LEVEL (README.md, "Per level"); not built unless named in VARIANTS
 #
 # The compilers are the machine's own, with FMM3D's flags for it:
 #   macOS (the M3 Max)  Homebrew's GCC (gfortran, gcc-<v>, g++-<v>; GCC 16 in use) with
@@ -68,6 +72,7 @@ case "$FMM3D_ROOT/" in
     ;;
 esac
 VARIANTS=${VARIANTS:-"default fastker"}
+levels_patch=$here/hfmm3d-levels.patch
 tarball=$FMM3D_ROOT/src/FMM3D-$FMM3D_VERSION.tar.gz
 
 sha256() {
@@ -126,7 +131,7 @@ link_driver() {
         exit 1
     fi
     libs="-lm"
-    if [ "$1" = fastker ]; then libs="-lstdc++ $libs"; fi
+    case "$1" in fastker*) libs="-lstdc++ $libs" ;; esac
     # The driver with FMM3D's Fortran flags but -O2 (it only reads, copies and times).
     # shellcheck disable=SC2086 # the list is split on purpose
     "$FC" -O2 -fopenmp -o "$prefix/bin/fmm3d_driver" "$here/driver.f90" \
@@ -136,11 +141,14 @@ link_driver() {
 
 build_variant() {
     variant=$1
+    patched=
     case "$variant" in
     default) fast=OFF ;;
     fastker) fast=ON ;;
+    timed) fast=OFF patched=$levels_patch ;;
+    fastker-timed) fast=ON patched=$levels_patch ;;
     *)
-        echo "build.sh: unknown variant $variant (default or fastker)" >&2
+        echo "build.sh: unknown variant $variant (default, fastker, timed or fastker-timed)" >&2
         exit 2
         ;;
     esac
@@ -150,6 +158,12 @@ build_variant() {
     mkdir -p "$dir" "$prefix/lib" "$prefix/bin"
     tar -xzf "$tarball" -C "$dir"
     src=$dir/FMM3D-$FMM3D_VERSION
+    if [ -n "$patched" ]; then
+        (cd "$src" && patch -p1 --quiet <"$patched") || {
+            echo "build.sh: $patched does not apply to FMM3D $FMM3D_TAG" >&2
+            exit 1
+        }
+    fi
     if [ -n "$make_inc" ]; then
         # FMM3D's own make.inc for the machine, with this machine's compilers.
         {
@@ -174,6 +188,9 @@ build_variant() {
     {
         echo "FMM3D $FMM3D_TAG, commit $FMM3D_COMMIT, tarball SHA-256 $FMM3D_SHA256"
         echo "variant $variant: make lib FAST_KER=$fast (OpenMP on: FMM3D's default)"
+        if [ -n "$patched" ]; then
+            echo "patched: $(basename "$patched"), SHA-256 $(sha256 "$patched")"
+        fi
         echo "built $(date '+%Y-%m-%d %H:%M:%S %Z') on $(hostname) ($(uname -sm))"
         echo "FC  $FC: $("$FC" --version | head -n 1)"
         echo "CC  $CC: $("$CC" --version | head -n 1)"
@@ -194,7 +211,7 @@ build_variant() {
 test_variant() {
     src=$FMM3D_ROOT/build/$1/FMM3D-$FMM3D_VERSION
     fast=OFF
-    if [ "$1" = fastker ]; then fast=ON; fi
+    case "$1" in fastker*) fast=ON ;; esac
     (cd "$src" && make test FAST_KER="$fast" CC="$CC" CXX="$CXX" FC="$FC") \
         >"$FMM3D_ROOT/$1/test.log" 2>&1 || true
     echo "FMM3D's tests, variant $1 ($FMM3D_ROOT/$1/test.log):"

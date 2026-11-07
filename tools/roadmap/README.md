@@ -1,6 +1,6 @@
 # The roadmap's GitHub issues
 
-`sync_issues.py` mirrors the milestones of `docs/helmholtz/roadmap.md` (HR, H0 to H8) as
+`sync_issues.py` mirrors the milestones of `docs/helmholtz/roadmap.md` (HR, H0 to H9) as
 GitHub issues, one per milestone, labelled `enhancement` and `helmholtz`:
 
 - the body holds the milestone's gate, its progress, and every task as a task-list item,

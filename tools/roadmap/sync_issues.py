@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Mirror the milestones of docs/helmholtz/roadmap.md as GitHub issues.
 
-One issue per milestone (HR, H0 to H8), labelled `enhancement` and `helmholtz`. Its body
+One issue per milestone (HR, H0 to H9), labelled `enhancement` and `helmholtz`. Its body
 holds the milestone's gate and every task of the roadmap as a task-list item, ticked as
 the roadmap ticks it, with the merged pull requests titled `Helmholtz <ID>: …` linked.
 The issue is closed when the milestone's gate (`<milestone>.G`) is ticked, and reopened

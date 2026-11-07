@@ -3,6 +3,7 @@
 //! scratch, its order and its pair body ([module documentation](super#m2l)).
 
 use core::ops::Range;
+use std::time::{Duration, Instant};
 
 use nd_fmm_math::Layout;
 use nd_fmm_plan::lists::VList;
@@ -168,6 +169,18 @@ pub struct PlaneWaveCounts {
     /// Boxes whose waves were computed, once per chunk, vector and frame: the sources of a
     /// chunk's computed children, a source read by several chunks once in each.
     pub waves: usize,
+}
+
+/// The wall time of the two passes of the exponential M2L's level calls on one level, summed
+/// over its level calls, chunks, vectors and frames since the operator was built or its M2L
+/// last chosen ([`HelmholtzOperator::plane_wave_times`]; Helmholtz CH6.2d). The rest of the
+/// level's [`m2l_times`](HelmholtzOperator::m2l_times) entry is the chunking between them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlaneWaveTimes {
+    /// The waves of each chunk's sources, box by box on the pool.
+    pub waves: Duration,
+    /// Merge and shift, parent by parent on the pool.
+    pub parents: Duration,
 }
 
 impl<T> Default for PlaneBuffer<T> {
@@ -351,6 +364,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                 for frame in 0..3 {
                     let sources = &buffer.sources[..count];
                     let waves = &mut buffer.waves[..count * box_waves];
+                    let clock = Instant::now();
                     self.execution.chunks(waves, box_waves, |b, out, scratch| {
                         let source = sources[b] as usize;
                         let x = &multipoles.chunk(source)[v * planes * n..(v + 1) * planes * n];
@@ -360,6 +374,8 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                             .expect("the exponential M2L's scratch");
                         outgoing(tables, frame, x, planes, out, plane);
                     });
+                    self.plane_wave_times[level].waves += clock.elapsed();
+                    let clock = Instant::now();
                     let waves = (&buffer.waves[..count * box_waves], &buffer.position[..]);
                     let starts = |t: usize| {
                         t == 0
@@ -381,6 +397,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                                 plane,
                             );
                         });
+                    self.plane_wave_times[level].parents += clock.elapsed();
                 }
             }
             buffer.forget(0, count);

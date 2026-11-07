@@ -1,0 +1,277 @@
+tools/fmm3d/hfmm3d-levels.patch: per-level timers and a plane-wave level switch in FMM3D
+v2.1.0's hfmm3dmain (src/Helmholtz/hfmm3d.f), Helmholtz CH6.2d (docs/helmholtz/tasks/CH6.2d.md).
+tools/fmm3d/build.sh applies it (patch -p1 in the unpacked FMM3D-2.1.0) to the variants
+`timed` and `fastker-timed`; README.md beside it documents the switch and the lines.
+
+- Per level, wall times (omp_get_wtime) of step 3: on a plane-wave level the setup
+  (hwts3e to the zeroed waves), list 4's waves (h3dlist4pw), the multipoles to waves and the
+  parents' loop, with the thread-seconds of its plane-wave part and of list 3 inside it; on a
+  point-and-shoot level its M2L loop and its list-3 loops; list 4 on point-and-shoot levels.
+  Printed after each call, one `hfmm3d-level:` line per level and one `hfmm3d-steps:` line.
+- FMM3D_PW_LEVEL (environment): unset, FMM3D's own choice of the regime per level; an
+  integer l >= 2, only level l may take plane waves (where FMM3D's tests allow them) and
+  every other plane-wave level takes FMM3D's point-and-shoot path; -1, none does.
+No value is computed differently: the timers read the clock and the switch only chooses
+between FMM3D's own two code paths.
+
+--- a/src/Helmholtz/hfmm3d.f
++++ b/src/Helmholtz/hfmm3d.f
+@@ -701,6 +701,14 @@
+       integer *8 nthd,ithd
+       integer *8 omp_get_max_threads,omp_get_thread_num
+       integer *8 ntotl1
++c     tools/fmm3d/hfmm3d-levels.patch (nd-fmm, Helmholtz CH6.2d)
++      double precision, allocatable :: tlev(:,:),tthd(:,:)
++      integer *8, allocatable :: ilvmode(:),ilvnl(:),ilvnw(:)
++      logical, allocatable :: ifpwlev(:),ifpslev(:)
++      integer *8 ipwlev
++      integer ienvlen,ienvst
++      character*32 cenv
++      double precision tl0,tl1,tt0
+       nthd = 1
+ C$    nthd=omp_get_max_threads()
+ 
+@@ -816,6 +824,37 @@
+       do i=1,6
+         timeinfo(i)=0
+       enddo
++c     tools/fmm3d/hfmm3d-levels.patch (nd-fmm, Helmholtz CH6.2d)
++c     per level: the regime (FMM3D's tests, then the switch), the
++c     timers and the plane waves' counts
++      allocate(tlev(9,0:nlevels),tthd(2,nthd),ilvmode(0:nlevels))
++      allocate(ilvnl(0:nlevels),ilvnw(0:nlevels))
++      allocate(ifpwlev(0:nlevels),ifpslev(0:nlevels))
++      tl0 = 0
++      tl1 = 0
++      tt0 = 0
++      ipwlev = -2
++      call get_environment_variable('FMM3D_PW_LEVEL',cenv,ienvlen,
++     1    ienvst)
++      if(ienvst.eq.0.and.ienvlen.gt.0) read(cenv,*) ipwlev
++      do ilev=0,nlevels
++        do i=1,9
++          tlev(i,ilev) = 0
++        enddo
++        ilvmode(ilev) = 0
++        ilvnl(ilev) = 0
++        ilvnw(ilev) = 0
++        zk2 = zk*boxsize(ilev)
++        ifpwlev(ilev) = real(zk2).le.zkrupbound.and.
++     1      dimag(zk2).lt.zkiupbound.and.ilev.gt.ilevcutoff
++        ifpslev(ilev) = (real(zk2).gt.zkrupbound.or.
++     1      dimag(zk2).gt.zkiupbound).and.ilev.gt.ilevcutoff
++        if(ipwlev.ge.-1.and.ifpwlev(ilev).and.ilev.ge.2.and.
++     1      ilev.ne.ipwlev) then
++          ifpwlev(ilev) = .false.
++          ifpslev(ilev) = .true.
++        endif
++      enddo
+         
+       max_nodes = 10000
+       allocate(xnodes(max_nodes))
+@@ -1055,8 +1094,8 @@
+         allocate(iboxlexp(nd*(nterms(ilev)+1)*
+      1           (2*nterms(ilev)+1),8,nthd))
+         zk2 = zk*boxsize(ilev)
+-        if(real(zk2).le.zkrupbound.and.dimag(zk2).lt.zkiupbound.and.
+-     1        ilev.gt.ilevcutoff) then
++        if(ifpwlev(ilev)) then
++C$        tl0 = omp_get_wtime()
+ c             get new pw quadrature
+             
+           ier = 0
+@@ -1154,6 +1193,8 @@
+             rsc(i) = rsc(i-1)*r1
+           enddo
+ 
++C$        tl1 = omp_get_wtime()
++          tlev(1,ilev) = tl1 - tl0
+ c      generate ilev+1 list4 type box plane wave expansion
+           cntlist4=0
+           do ibox=laddr(1,ilev-1),laddr(2,ilev-1)
+@@ -1175,6 +1216,8 @@
+      6       mexpf1,mexpf2,tmp,tmp2,wlege,rlams,rsc,pgboxwexp,
+      7       cntlist4)
+ 
++C$        tl0 = omp_get_wtime()
++          tlev(2,ilev) = tl0 - tl1
+ c
+ cc         create multipole to plane wave expansion for
+ c          all boxes at this level
+@@ -1243,6 +1286,12 @@
+           enddo
+ C$OMP END PARALLEL DO       
+            
++C$        tl1 = omp_get_wtime()
++          tlev(3,ilev) = tl1 - tl0
++          do ithd=1,nthd
++            tthd(1,ithd) = 0
++            tthd(2,ithd) = 0
++          enddo
+ c
+ cc         loop over parent boxes and ship plane wave
+ c          expansions to the first child of parent 
+@@ -1266,6 +1315,7 @@
+ C$OMP$PRIVATE(nw2,nw4,nw6,nw8)
+ C$OMP$PRIVATE(npts0,ctmp,jstart,jend,i)
+ C$OMP$PRIVATE(ithd)
++C$OMP$PRIVATE(tt0)
+           do ibox = laddr(1,ilev-1),laddr(2,ilev-1)
+             ithd = 0
+ C$          ithd=omp_get_thread_num()
+@@ -1290,6 +1340,7 @@
+             endif
+ 
+ 
++C$          tt0 = omp_get_wtime()
+             if(npts.gt.0.and.nchild.gt.0) then
+               call getpwlistall(ibox,boxsize(ilev),nboxes,
+      1           itree(ipointer(6)+ibox-1),itree(ipointer(7)+
+@@ -1372,12 +1423,14 @@
+      9            fexpback,rlsc,pgboxwexp,cntlist4,list4ct,
+      9            nlist4,list4,mnlist4)
+             endif
++C$          tthd(1,ithd) = tthd(1,ithd) + omp_get_wtime() - tt0
+ 
+ 
+ c
+ c      handle mp eval
+ c
+ 
++C$          tt0 = omp_get_wtime()
+             if(nlist3(ibox).gt.0.and.npts.gt.0) then
+               call getlist3pwlistall(ibox,boxsize(ilev),nboxes,
+      1              nlist3(ibox),list3(1,ibox),isep,
+@@ -1553,9 +1606,19 @@
+                 endif
+               endif
+             endif
++C$          tthd(2,ithd) = tthd(2,ithd) + omp_get_wtime() - tt0
+           enddo
+ C$OMP END PARALLEL DO        
+ 
++C$        tl0 = omp_get_wtime()
++          tlev(4,ilev) = tl0 - tl1
++          do ithd=1,nthd
++            tlev(5,ilev) = tlev(5,ilev) + tthd(1,ithd)
++            tlev(6,ilev) = tlev(6,ilev) + tthd(2,ithd)
++          enddo
++          ilvmode(ilev) = 1
++          ilvnl(ilev) = nlams
++          ilvnw(ilev) = nexptotp
+           deallocate(xshift,yshift,zshift,rlsc,tmp,tmp2)
+           deallocate(carray,dc,rdplus,rdminus,rdsq3,rdmsq3)
+           deallocate(mexpf1,mexpf2,mexpp1,mexpp2,mexppall,mexp)
+@@ -1563,8 +1626,8 @@
+           deallocate(pgboxwexp)
+ 
+ 
+-        else if((real(zk2).gt.zkrupbound.or.dimag(zk2).gt.zkiupbound).
+-     1            and.ilev.gt.ilevcutoff) then
++        else if(ifpslev(ilev)) then
++C$        tl0 = omp_get_wtime()
+           nquad2 = nterms(ilev)*2.2
+           if(ifprint.ge.1) print *, "In point and shoot regime"
+           nquad2 = max(6,nquad2)
+@@ -1617,6 +1680,8 @@
+           enddo
+ C$OMP END PARALLEL DO     
+ 
++C$        tl1 = omp_get_wtime()
++          tlev(7,ilev) = tl1 - tl0
+ c
+ c
+ c         handle list 3 interactions at this level
+@@ -1708,6 +1773,9 @@
+             enddo
+ C$OMP END PARALLEL DO
+           endif
++C$        tl0 = omp_get_wtime()
++          tlev(8,ilev) = tl0 - tl1
++          ilvmode(ilev) = 2
+         endif
+         deallocate(iboxlexp)
+       enddo
+@@ -1720,8 +1788,8 @@
+       if(ifcharge.eq.1.and.ifdipole.eq.0) then
+         do ilev=1,nlevels
+           zk2 = zk*boxsize(ilev)
+-          if((real(zk2).gt.zkrupbound.or.dimag(zk2).gt.zkiupbound).
+-     1            and.ilev.gt.ilevcutoff) then
++          if(ifpslev(ilev)) then
++C$          tl0 = omp_get_wtime()
+ 
+ C$OMP PARALLEL DO DEFAULT(SHARED)
+ C$OMP$PRIVATE(ibox,jbox,istart,iend,npts,i)
+@@ -1747,6 +1815,7 @@
+               enddo
+             enddo
+ C$OMP END PARALLEL DO
++C$          tlev(9,ilev) = tlev(9,ilev) + omp_get_wtime() - tl0
+           endif
+         enddo
+       endif
+@@ -1755,8 +1824,8 @@
+       if(ifcharge.eq.0.and.ifdipole.eq.1) then
+         do ilev=1,nlevels
+           zk2 = zk*boxsize(ilev)
+-          if((real(zk2).gt.zkrupbound.or.dimag(zk2).gt.zkiupbound).
+-     1            and.ilev.gt.ilevcutoff) then
++          if(ifpslev(ilev)) then
++C$          tl0 = omp_get_wtime()
+ 
+ C$OMP PARALLEL DO DEFAULT(SHARED)
+ C$OMP$PRIVATE(ibox,jbox,istart,iend,npts,i)
+@@ -1782,6 +1851,7 @@
+               enddo
+             enddo
+ C$OMP END PARALLEL DO
++C$          tlev(9,ilev) = tlev(9,ilev) + omp_get_wtime() - tl0
+           endif
+         enddo
+       endif
+@@ -1790,8 +1860,8 @@
+       if(ifcharge.eq.1.and.ifdipole.eq.1) then
+         do ilev=1,nlevels
+           zk2 = zk*boxsize(ilev)
+-          if((real(zk2).gt.zkrupbound.or.dimag(zk2).gt.zkiupbound).
+-     1            and.ilev.gt.ilevcutoff) then
++          if(ifpslev(ilev)) then
++C$          tl0 = omp_get_wtime()
+ 
+ C$OMP PARALLEL DO DEFAULT(SHARED)
+ C$OMP$PRIVATE(ibox,jbox,istart,iend,npts,i)
+@@ -1818,6 +1888,7 @@
+               enddo
+             enddo
+ C$OMP END PARALLEL DO
++C$          tlev(9,ilev) = tlev(9,ilev) + omp_get_wtime() - tl0
+           endif
+         enddo
+       endif
+@@ -2345,6 +2416,25 @@
+       enddo
+ 
+       if(ifprint.ge.1) call prin2('sum(timeinfo)=*',d,1)
++c     tools/fmm3d/hfmm3d-levels.patch (nd-fmm, Helmholtz CH6.2d)
++c     one line per level and the steps' times, on standard output
++      print *,'hfmm3d-steps: pwlevel=',ipwlev,' t1=',timeinfo(1),
++     1  ' t2=',timeinfo(2),' t3=',timeinfo(3),' t4=',timeinfo(4),
++     2  ' t5=',timeinfo(5),' t6=',timeinfo(6)
++      do ilev=0,nlevels
++        zk2 = zk*boxsize(ilev)
++        print *,'hfmm3d-level: ilev=',ilev,' zkre=',real(zk2),
++     1    ' zkim=',dimag(zk2),' nterms=',nterms(ilev),
++     2    ' mode=',ilvmode(ilev),' nlams=',ilvnl(ilev),
++     3    ' nwaves=',ilvnw(ilev),
++     4    ' nboxes=',laddr(2,ilev)-laddr(1,ilev)+1,
++     5    ' setup=',tlev(1,ilev),' list4=',tlev(2,ilev),
++     6    ' m2e=',tlev(3,ilev),' gather=',tlev(4,ilev),
++     7    ' pw_ts=',tlev(5,ilev),' list3_ts=',tlev(6,ilev),
++     8    ' ps=',tlev(7,ilev),' ps_list3=',tlev(8,ilev),
++     9    ' hf_list4=',tlev(9,ilev)
++      enddo
++      deallocate(tlev,tthd,ilvmode,ilvnl,ilvnw,ifpwlev,ifpslev)
+ 
+ 
+       return
