@@ -1026,6 +1026,20 @@ fn check_auto_plane_wave(scenario: &Scenario, comm: &SimpleCommunicator) {
     assert_same(&format!("{name}, 2 threads"), &threaded, &output, comm);
     check_one_rank(&name, &split, &inputs, kind, &output, comm);
 
+    // The smallest degree above every level's: today's Auto bit for bit.
+    let above = degrees.iter().max().unwrap() + 1;
+    let (_, none) = run(
+        &split.clone().m2l_plane_wave_min_degree(above),
+        &inputs,
+        kind,
+        comm,
+    );
+    let today = builder(scenario)
+        .m2l(HelmholtzM2l::Auto)
+        .m2l_max_degree(crossover);
+    let (_, today) = run(&today, &inputs, kind, comm);
+    assert_same(&format!("{name}, above every degree"), &none, &today, comm);
+
     // The rule's smallest degree, agreed over the ranks; none while off.
     let planes = match (scenario.k.1 == 0.0, kind) {
         (true, ChargeKind::Real) => 1,

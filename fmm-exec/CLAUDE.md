@@ -391,9 +391,9 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   (named degrees, off, ε below 10⁻⁶, a damped level, f32, the ISA's rule);
   `check_auto_plane_wave` in `tests/helmholtz_fmm.rs` (on degrees varied as `check_auto`'s)
   PlaneWave bit for bit at degree 0, the mixed rule against the direct sum within
-  `PLANE_WAVE_RATIO` of Rotation's error, 2 threads and the one-rank FMM bit for bit, the
-  agreed degree and none by default. Its debug cost: about 26 s of the one-rank run on the
-  M6 (216 → 242 s).
+  `PLANE_WAVE_RATIO` of Rotation's error, 2 threads and the one-rank FMM bit for bit, today's
+  Auto bit for bit with the smallest degree above every level's, the agreed degree and none
+  by default. Its debug cost: about 39 s of the one-rank run on the M6 (216 → 255 s).
   The level call is the crate-private `src/helmholtz/operator_plane_wave.rs`, Laplace's
   order (`src/operator_plane_wave.rs`) restated in scalar loops on
   `nd_fmm_tables::helmholtz::plane_wave` (no `nd-fmm-simd` kernel: Laplace's `WaveKernel`

@@ -2,8 +2,8 @@
 //! and named, the levels it reports, and the pair body bit for bit the pair translation of
 //! `nd_fmm_tables::helmholtz::plane_wave` along the direction merge and shift gives the
 //! pair, for one and two multipole planes and two vectors; the split's setting (Helmholtz
-//! CH6.2f); Auto's levels with waves (Helmholtz CH6.2h). The level call by merge and shift is tested with the FMM in
-//! `tests/helmholtz_fmm.rs`.
+//! CH6.2f); Auto's levels with waves (Helmholtz CH6.2h). The level call by merge and shift
+//! is tested with the FMM in `tests/helmholtz_fmm.rs`.
 
 use nd_fmm_exec::geometry::Domain;
 use nd_fmm_exec::helmholtz::{
@@ -363,50 +363,64 @@ fn methods(op: &HelmholtzOperator<f64>) -> Vec<HelmholtzM2l> {
 }
 
 /// Auto's rule with waves: the exponential M2L from the smallest degree where the precision
-/// rule gives a quadrature, Batched at or below the crossover on the others, RCR else; off,
-/// or with no quadrature (ε below 10⁻⁶), Auto's levels as before.
+/// rule gives a quadrature (ε 10⁻³ and 10⁻⁶), Batched at or below the crossover on the
+/// others, RCR else; off, with no quadrature (ε below 10⁻⁶) or the smallest degree above
+/// every level's, Auto's levels and tables as before.
 #[test]
 fn auto_takes_the_waves_by_its_rule() {
     use HelmholtzM2l::{Batched, PlaneWave, Rotation};
     // κ_l = 20 · 2⁻ˡ in the tables on every level; DEGREES 6, 10, 15, 22 on levels 2–5
     // (crossover 6: Batched's tables at p ≥ 10 take seconds to build in debug).
     let k = Wavenumber::new(20.0, 0.0).unwrap();
-    for (d_b, d_pw, want) in [
-        (6, 10, [Batched, PlaneWave, PlaneWave, PlaneWave]),
-        (6, 16, [Batched, Rotation, Rotation, PlaneWave]),
-        (6, 15, [Batched, Rotation, PlaneWave, PlaneWave]),
-        // The exponential M2L first where both apply.
-        (6, 0, [PlaneWave; 4]),
-        (6, 23, [Batched, Rotation, Rotation, Rotation]),
-    ] {
-        let op = auto(k, Some(1e-6), d_b, Some(d_pw), true);
-        assert_eq!(methods(&op), want, "d_b {d_b}, d_pw {d_pw}");
-        assert_eq!(op.m2l_choice(), HelmholtzM2l::Auto);
-        assert_eq!(op.plane_wave_min_degree(), Some(d_pw));
-        assert_eq!(op.max_degree(), Some(d_b));
-        // The rule's precisions on the levels with waves.
-        let rule = select(Complex::new(10.0, 0.0), &DEGREES, Some(1e-6));
-        for (level, &on) in want.iter().enumerate() {
-            let expected = (on == PlaneWave).then_some(rule[level + 2]).flatten();
-            assert_eq!(op.plane_wave_precision(level + 2), expected);
-        }
-        // The levels with waves take no batched tables.
-        let batched = want.iter().filter(|&&m| m == Batched).count();
-        assert_eq!(op.batched_bytes() > 0, batched > 0);
-        assert_eq!(op.plane_wave_bytes() > 0, want.contains(&PlaneWave));
-        // Off, or below the rule's tolerances: Auto as before.
-        for off in [
-            auto(k, Some(1e-6), d_b, Some(d_pw), false),
-            auto(k, Some(1e-8), d_b, Some(d_pw), true),
+    // CH6.1e's rule gives iprec 2 at both tolerances (the same waves).
+    for tolerance in [1e-3, 1e-6] {
+        for (d_b, d_pw, want) in [
+            (6, 10, [Batched, PlaneWave, PlaneWave, PlaneWave]),
+            (6, 16, [Batched, Rotation, Rotation, PlaneWave]),
+            (6, 15, [Batched, Rotation, PlaneWave, PlaneWave]),
+            // The exponential M2L first where both apply.
+            (6, 0, [PlaneWave; 4]),
+            (6, 23, [Batched, Rotation, Rotation, Rotation]),
         ] {
-            let want: Vec<HelmholtzM2l> = DEGREES[2..]
-                .iter()
-                .map(|&p| if p <= d_b { Batched } else { Rotation })
-                .collect();
-            assert_eq!(methods(&off), want, "d_b {d_b}, no waves");
-            assert_eq!(off.plane_wave_bytes(), 0);
+            let case = format!("ε {tolerance:e}, d_b {d_b}, d_pw {d_pw}");
+            let op = auto(k, Some(tolerance), d_b, Some(d_pw), true);
+            assert_eq!(methods(&op), want, "{case}");
+            assert_eq!(op.m2l_choice(), HelmholtzM2l::Auto);
+            assert_eq!(op.plane_wave_min_degree(), Some(d_pw));
+            assert_eq!(op.max_degree(), Some(d_b));
+            // The rule's precisions on the levels with waves.
+            let rule = select(Complex::new(10.0, 0.0), &DEGREES, Some(tolerance));
+            for (level, &on) in want.iter().enumerate() {
+                let expected = (on == PlaneWave).then_some(rule[level + 2]).flatten();
+                assert_eq!(op.plane_wave_precision(level + 2), expected, "{case}");
+            }
+            // The levels with waves take no batched tables.
+            let batched = want.iter().filter(|&&m| m == Batched).count();
+            assert_eq!(op.batched_bytes() > 0, batched > 0, "{case}");
+            assert_eq!(
+                op.plane_wave_bytes() > 0,
+                want.contains(&PlaneWave),
+                "{case}"
+            );
         }
     }
+    // Off, below the rule's tolerances, or above every degree: Auto as before, its tables
+    // included.
+    let before = auto(k, Some(1e-6), 6, Some(10), false);
+    let want: Vec<HelmholtzM2l> = DEGREES[2..]
+        .iter()
+        .map(|&p| if p <= 6 { Batched } else { Rotation })
+        .collect();
+    assert_eq!(methods(&before), want);
+    for (case, op) in [
+        ("ε 1e-8", auto(k, Some(1e-8), 6, Some(10), true)),
+        ("d_pw 23", auto(k, Some(1e-6), 6, Some(23), true)),
+    ] {
+        assert_eq!(methods(&op), want, "{case}");
+        assert_eq!(op.batched_bytes(), before.batched_bytes(), "{case}");
+        assert_eq!(op.plane_wave_bytes(), 0, "{case}");
+    }
+    assert_eq!(before.plane_wave_bytes(), 0);
     // Off, the smallest degree is not reported; the setting before or after `with_m2l`.
     assert_eq!(
         auto(k, Some(1e-6), 6, None, false).plane_wave_min_degree(),

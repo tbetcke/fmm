@@ -2596,3 +2596,41 @@ request, using this template:
 - Follow-ups: CH6.2h (D8), next, with a sentence added: levels 2–3 now gain over Rotation,
   and a two-phase split (the repeated shifts) only if D8's margins need it.
   CH6.2i (Laplace's coarse levels), added by question 2.
+
+## 2026-11-08: CH6.2h D8: the exponential M2L's level rule
+- Done:
+  - The rule under `HelmholtzM2l::Auto`, behind `with_auto_plane_wave` and the builder's
+    `auto_plane_wave` (off until D8's sign-off): the exponential M2L on a level where
+    p_l ≥ d_pw (`auto_plane_wave_min_degree`: Batched's crossover + 1, 12 on AVX-512 with two
+    planes; agreed over the ranks and reported, named for runs by
+    `m2l_plane_wave_min_degree`), CH6.1e's rule gives a quadrature and Im κ_l < 5π
+    (`AUTO_PLANE_WAVE_MAX_IM_KAPPA`), f64 only; Batched at p_l ≤ d_b within the budget on the
+    rest; Rotation else. Each level runs an existing level call (CH6.2f's split included).
+  - The harness's `--m2l auto-pw` and `auto-pw:<d>`; `tools/helmholtz/ch6-2h-runs.sh`,
+    `ch6-2h-tables.py`.
+  - Runs: the M6 1 × 6 (the user's go-ahead), Kathleen 1 × 40 and 4 × 10 (jobs 630761,
+    630762, with `auto-pw:16`). Against today's `Auto` the M2L takes 0.14–0.70× on the M6 and
+    0.03–0.55× (matrix) and 0.23–0.49× (large) on Kathleen at 10⁻⁶; at 10⁻³ 0.47–1.07× and
+    0.26–1.19× (above 1 only where every level is today's choice). Within 1.10× of the
+    per-level best except ms-scale cases at 10⁻³, all on few-box levels, mostly Batched at
+    p = 7 on level 2 (today's `Auto` too). d_pw = 16 on AVX-512 is 1.6–35× slower at 10⁻⁶,
+    so 12. Errors 0.916–1.063× Rotation's. No boxes term needed for the exponential M2L on
+    CH6.2f's level call (at most 3.7 ms lost per evaluation at 10⁻³).
+  - The report `fmm-validate/results/helmholtz-ch6-2h.md`; raw outputs in
+    `~/projects/fmm-archive/{m6,kathleen,locust}/logs/ch6-2h*`.
+- Tests: `auto_takes_the_waves_by_its_rule`, `auto_waves_by_the_machine_class_and_the_damping`
+  (`tests/helmholtz/plane_wave.rs`); `check_auto_plane_wave` in `tests/helmholtz_fmm.rs` (bit
+  for bit PlaneWave at d_b = d_pw = 0, the split within 1.1× Rotation's errors, 2 threads,
+  P ranks against one, the agreed d_pw); nd-fmm-validate's `check_auto` extended.
+- Checks: ran on the M6: format, Clippy (default, examples, workspace all-targets),
+  `cargo doc`, `cargo test --workspace` (1339 passed), the MPI list at 2 and 4 ranks (all 12
+  passed), `cargo test -p nd-fmm-validate --test helmholtz_accuracy`; `cargo test` on the
+  default members not run apart from the workspace run. `tests/helmholtz_fmm.rs`' one-rank
+  debug run 242 s (216 s before). Pending: locust's clean pass (1 × 72, the plan's "Pending
+  runs").
+- Decisions: D8 proposed, for sign-off with d_pw on AVX-512, the Im κ bound, no boxes term,
+  and the proposal's §5.3 and §6.4 amended (the plan's "Open questions").
+- Laplace: not touched (the Helmholtz operator and builder, the harness and tools);
+  `mpi_exec`, `mpi_threading` and `invariance` passed at 2 and 4 ranks.
+- Follow-ups: Batched's few-box levels, a sentence added to CH4.0; on D8's sign-off the
+  default turned on in this PR; CH6.2i next.

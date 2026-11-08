@@ -132,8 +132,23 @@ over today's `Auto`, for D8.
 
 ## Pending runs
 
-(filled in step 6)
+- locust, one rank × 72, the matrix and the large cases behind a strict gate (others below
+  30 % of a core for five minutes, another user's long Python process left out; a sample
+  every 7 s during): `tools/gh200/remote.sh 'bash /data/ucahtbe/logs/ch6-2h-gated.sh'`, output
+  `/data/ucahtbe/logs/ch6-2h-b` (`gate.log`, `during.log`). Started 2026-11-08 20:48, waiting
+  for another session's GPU sweep. It decides locust's column of the report (§5) and whether
+  locust's first pass, where Batched at p = 7 lost to Rotation on dense levels at 72 threads,
+  holds on a quiet node. The first pass (beside a CUDA compile) is a record only.
+- Done: the M6 1 × 6 (21:39–21:45, the user's go-ahead); Kathleen jobs 630761 (matrix,
+  1 × 40) and 630762 (large, 1 × 40 and 4 × 10), both with `auto-pw:16`.
 
 ## Open questions
 
-(filled when they arise)
+For sign-off (the report §8):
+1. D8: `Auto` takes the rule by default (the builder's `auto_plane_wave` on), the defaults,
+   tests and docs restated on this branch after the sign-off.
+2. d_pw on AVX-512 with two planes: 12 (measured; d_b + 1 = 16 is 1.6–35× slower at 10⁻⁶).
+3. The Im κ_l < 5π bound (CH6.2g's guarded domains).
+4. No boxes term for the exponential M2L; Batched's few-box levels to a follow-up (CH4.0's
+   sentence).
+5. Proposal §5.3 and §6.4 ("opt-in until CH6.2") amended to D8's rule.

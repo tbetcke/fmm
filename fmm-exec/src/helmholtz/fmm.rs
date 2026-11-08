@@ -326,8 +326,10 @@ impl HelmholtzFmmBuilder {
     /// [`Degrees::Tolerance`]), with Im κ_l below
     /// [`AUTO_PLANE_WAVE_MAX_IM_KAPPA`](super::AUTO_PLANE_WAVE_MAX_IM_KAPPA), in f64 only;
     /// Batched and Rotation on the others as before
-    /// (`HelmholtzOperator::with_auto_plane_wave`). Those levels approximate M2L within their
-    /// quadrature's error, as under [`HelmholtzM2l::PlaneWave`].
+    /// (`HelmholtzOperator::with_auto_plane_wave`). With [`Degrees::PerLevel`] the quadrature
+    /// is each degree's, as under [`HelmholtzM2l::PlaneWave`] (iprec 2 to degree 15, none
+    /// above). Those levels approximate M2L within their quadrature's error, as under
+    /// [`HelmholtzM2l::PlaneWave`].
     pub fn auto_plane_wave(mut self, on: bool) -> Self {
         self.auto_plane_wave = on;
         self

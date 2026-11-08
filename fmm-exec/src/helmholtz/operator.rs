@@ -724,23 +724,24 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     }
 
     /// The waves per direction of `level`, Σₖ Nₖ of its quadrature, under
-    /// [`HelmholtzM2l::PlaneWave`]; 0 where the level runs RCR (and under the other
-    /// settings).
+    /// [`HelmholtzM2l::PlaneWave`] (or [`HelmholtzM2l::Auto`] with waves); 0 where the level
+    /// runs another M2L.
     pub fn plane_wave_waves(&self, level: usize) -> usize {
         self.kernel
             .plane_wave_level(level)
             .map_or(0, |l| l.tables().wave_len() / 2)
     }
 
-    /// The precision of `level`'s quadrature under [`HelmholtzM2l::PlaneWave`], `None` where
-    /// the level runs RCR (and under the other settings).
+    /// The precision of `level`'s quadrature under [`HelmholtzM2l::PlaneWave`] (or
+    /// [`HelmholtzM2l::Auto`] with waves), `None` where the level runs another M2L.
     pub fn plane_wave_precision(&self, level: usize) -> Option<Precision> {
         self.kernel.plane_wave_level(level).map(|l| l.precision())
     }
 
     /// Sizes the buffers of the exponential M2L's level call for levels of `boxes[l]` boxes
     /// (each level's own and ghost boxes), so that no level call grows them; nothing unless
-    /// [`HelmholtzM2l::PlaneWave`]. `HelmholtzFmmBuilder` sizes them from the plan.
+    /// a level has waves ([`HelmholtzM2l::PlaneWave`], or [`HelmholtzM2l::Auto`] with
+    /// waves). `HelmholtzFmmBuilder` sizes them from the plan.
     pub fn with_plane_wave_boxes(mut self, boxes: &[usize]) -> Self {
         self.plane_buffer.level_boxes = boxes.to_vec();
         self.plane_buffer.size(self.kernel.plane_waves.as_ref());
@@ -808,7 +809,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
 
     /// The bytes the exponential M2L holds: its tables, the level call's buffers (the waves,
     /// a position per box and the chunk's sources) and every scratch set's buffers (0 unless
-    /// [`HelmholtzM2l::PlaneWave`] gives a level waves).
+    /// a level has waves, under [`HelmholtzM2l::PlaneWave`] or [`HelmholtzM2l::Auto`]).
     pub fn plane_wave_bytes(&self) -> usize {
         let tables = self
             .kernel
@@ -925,8 +926,8 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// [`HelmholtzM2l::Batched`] where the level has dense, class or batched tables (under
     /// [`HelmholtzM2l::Auto`] the levels the rule gives Batched), [`HelmholtzM2l::PlaneWave`]
     /// where it has a quadrature (under [`HelmholtzM2l::Auto`] with
-    /// [`with_auto_plane_wave`](Self::with_auto_plane_wave) the levels its rule gives waves), [`HelmholtzM2l::Rotation`] everywhere else (levels 0 and 1
-    /// have no M2L).
+    /// [`with_auto_plane_wave`](Self::with_auto_plane_wave) the levels its rule gives
+    /// waves), [`HelmholtzM2l::Rotation`] everywhere else (levels 0 and 1 have no M2L).
     pub fn m2l_on(&self, level: usize) -> HelmholtzM2l {
         let kernel = &self.kernel;
         if kernel.plane_wave_level(level).is_some() {

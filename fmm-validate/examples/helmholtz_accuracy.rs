@@ -429,17 +429,21 @@ fn m2l_string(row: &Row) -> String {
         HelmholtzM2l::Batched | HelmholtzM2l::Auto => "batched",
         _ => "dense",
     };
-    let mut ran = match levels.is_empty() {
-        true => "rotation".into(),
-        false => format!("{name} {} ({:.0} MB)", levels.join(","), bytes as f64 / 1e6),
-    };
     let waves: Vec<String> = (0..row.plane_wave.len())
         .filter_map(|l| Some(format!("{l}:i{}", row.plane_wave[l]?.iprec())))
         .collect();
+    // With waves the bytes are both methods' and go after them.
+    let mut ran = match (levels.is_empty(), waves.is_empty()) {
+        (true, _) => "rotation".into(),
+        (false, true) => format!("{name} {} ({:.0} MB)", levels.join(","), bytes as f64 / 1e6),
+        (false, false) => format!("{name} {}", levels.join(",")),
+    };
     if !waves.is_empty() {
         ran = format!(
-            "{ran}; planewave {} (waves {:.0} MB, {} chunks in {} calls, {} waves){}",
+            "{ran}; planewave {} ({:.0} MB in all; waves {:.0} MB, {} chunks in {} calls, {} \
+             waves){}",
             waves.join(","),
+            bytes as f64 / 1e6,
             row.plane_wave_buffer as f64 / 1e6,
             row.plane_wave_counts.chunks,
             row.plane_wave_counts.level_calls,

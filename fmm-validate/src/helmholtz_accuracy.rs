@@ -464,8 +464,9 @@ pub struct Row {
     /// Per level, whether its M2L ran the setting's tables, Dense, Classes, Batched or the
     /// exponential M2L (else RCR).
     pub dense_levels: Vec<bool>,
-    /// The bytes of the dense, class or batched M2L tables per rank, or under
-    /// [`HelmholtzM2l::PlaneWave`] its tables and buffers (`plane_wave_bytes`).
+    /// The bytes of the dense, class or batched M2L tables per rank, plus under
+    /// [`HelmholtzM2l::PlaneWave`] (or Auto with [`Case::auto_plane_wave`]) the exponential
+    /// M2L's tables and buffers (`plane_wave_bytes`).
     pub dense_bytes: usize,
     /// Per level, the precision of its quadrature under [`HelmholtzM2l::PlaneWave`] (and
     /// under Auto with [`Case::auto_plane_wave`]), `None` where it ran another M2L.
