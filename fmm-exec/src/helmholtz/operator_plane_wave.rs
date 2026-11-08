@@ -743,7 +743,7 @@ mod tests {
     /// compute) are not counted.
     #[test]
     fn pieces_count_the_split_by_parents_with_work() {
-        let starts = |t: usize| t % 8 == 0;
+        let starts = |t: usize| t.is_multiple_of(8);
         let all = |_: usize| true;
         assert_eq!(pieces(0..64, &starts, &all), 1);
         assert_eq!(pieces(0..512, &starts, &all), 8);
