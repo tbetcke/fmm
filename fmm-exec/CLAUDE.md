@@ -363,9 +363,11 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   `Children` on `Execution::chunks`, one task per box of a chunk, each computed child summing
   the accumulators whose mask holds it and converting, the parent's call restricted to it
   (`parent_call`'s `serve` mask), so every local the same bits; `Auto` (the default) takes
-  `Children` on a chunk whose split by parents makes at most half as many pieces as the pool
-  has threads (`pieces` restates `driver::split_parents`' halving down to `PARENT_GRAIN` = 64
-  boxes; level 2 ran on one thread, level 3 on 8 pieces), since the split by child repeats
+  `Children` on a chunk whose split by parents makes at most half as many pieces holding a
+  computed box as the pool has threads (`pieces` restates `driver::split_parents`' halving
+  down to `PARENT_GRAIN` = 64 boxes; level 2 ran on one thread, level 3 on 8 pieces; on P
+  ranks a level's held boxes it does not compute make pieces without work, which at 4 × 10
+  on Kathleen kept level 3 by parents on 3 busy threads before they were left out), since the split by child repeats
   shared accumulators (1.4–3× the parents' thread time on CH6.2f's cases). `driver.rs`
   unchanged.
   `PlaneWaveTimes` gains merge and shift's thread-seconds by part (`busy`, `shifts`,

@@ -82,7 +82,7 @@ def ratio(a, b):
 def evaluate_seconds(rows):
     values = []
     for r in rows:
-        match = re.search(r"evaluate ([0-9.]+) s", r[9])
+        match = re.search(r"evaluate ([0-9.]+) s", r[8])
         if match:
             values.append(float(match.group(1)))
     if not values:

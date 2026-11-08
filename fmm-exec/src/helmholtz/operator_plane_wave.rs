@@ -195,8 +195,8 @@ pub struct PlaneWaveCounts {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PlaneWaveSplit {
     /// By child on a chunk where the split by parents, which never cuts a piece below
-    /// `PARENT_GRAIN` (64) boxes, makes at most half as many pieces as the pool has threads
-    /// (the split by child repeats shared accumulators, measured 1.4–3× the parents' thread
+    /// `PARENT_GRAIN` (64) boxes, makes at most half as many pieces holding a computed box
+    /// as the pool has threads (the split by child repeats shared accumulators, measured 1.4–3× the parents' thread
     /// time on CH6.2f's cases); by parents elsewhere and without a pool.
     #[default]
     Auto,
@@ -417,11 +417,12 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                     || morton::parent(index.key(level, start + t))
                         != morton::parent(index.key(level, start + t - 1))
             };
+            let computed = |t: usize| !call.view.row(start + t).0.is_empty();
             let by_child = match buffer.split {
                 PlaneWaveSplit::Parents => false,
                 PlaneWaveSplit::Children => true,
                 PlaneWaveSplit::Auto => {
-                    threads > 1 && 2 * pieces(0..end - start, &starts) <= threads
+                    threads > 1 && 2 * pieces(0..end - start, &starts, &computed) <= threads
                 }
             };
             buffer.counts.chunks += 1;
@@ -497,20 +498,26 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     }
 }
 
-/// The pieces into which the shared drivers' split by parents (`Execution::parents`,
-/// `driver::split_parents`) cuts the boxes `boxes`, `starts(t)` telling whether box t begins
-/// a parent: halved at the first parent boundary from the middle while a piece holds more
-/// than [`PARENT_GRAIN`] boxes, the driver's rule restated (it decides only the split, never
-/// a bit).
-fn pieces(boxes: Range<usize>, starts: &impl Fn(usize) -> bool) -> usize {
+/// The pieces with work into which the shared drivers' split by parents
+/// (`Execution::parents`, `driver::split_parents`) cuts the boxes `boxes`, `starts(t)`
+/// telling whether box t begins a parent and `computed(t)` whether it has a V row: halved at
+/// the first parent boundary from the middle while a piece holds more than [`PARENT_GRAIN`]
+/// boxes, the driver's rule restated (it decides only the split, never a bit), counting the
+/// pieces that hold a computed box (on P ranks a level also holds boxes its rank does not
+/// compute, whose pieces finish at once).
+fn pieces(
+    boxes: Range<usize>,
+    starts: &impl Fn(usize) -> bool,
+    computed: &impl Fn(usize) -> bool,
+) -> usize {
     let mut mid = boxes.start + boxes.len() / 2;
     while mid < boxes.end && !starts(mid) {
         mid += 1;
     }
     if boxes.len() <= PARENT_GRAIN || mid == boxes.end {
-        return 1;
+        return usize::from(boxes.into_iter().any(computed));
     }
-    pieces(boxes.start..mid, starts) + pieces(mid..boxes.end, starts)
+    pieces(boxes.start..mid, starts, computed) + pieces(mid..boxes.end, starts, computed)
 }
 
 /// The up and down waves of `frame` of one vector's multipole `x` (`planes` planes) into
@@ -725,4 +732,26 @@ fn parent_call<T: SimdScalar>(
         tables.add_local_from_frame(frame, frame_local, &mut locals[at..at + 2 * n]);
     }
     s.parts.conversions += clock.elapsed();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `pieces` against the driver's halving: a level of 64 boxes is one piece, of 512 eight,
+    /// and pieces without a computed box (on P ranks, boxes the rank holds but does not
+    /// compute) are not counted.
+    #[test]
+    fn pieces_count_the_split_by_parents_with_work() {
+        let starts = |t: usize| t % 8 == 0;
+        let all = |_: usize| true;
+        assert_eq!(pieces(0..64, &starts, &all), 1);
+        assert_eq!(pieces(0..512, &starts, &all), 8);
+        assert_eq!(pieces(0..65, &starts, &all), 2);
+        assert_eq!(pieces(0..512, &starts, &|t: usize| t < 128), 2);
+        assert_eq!(pieces(0..512, &starts, &|t: usize| t == 300), 1);
+        assert_eq!(pieces(0..512, &starts, &|_: usize| false), 0);
+        // One parent of 8 boxes cannot be cut, however many boxes follow without a boundary.
+        assert_eq!(pieces(0..200, &|t: usize| t == 0, &all), 1);
+    }
 }
