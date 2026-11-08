@@ -18,18 +18,23 @@
 //! multipole's tail (CH6.1c's degree study), which the counts do not govern, so the error is
 //! compared with the error of the same nodes with **converged** counts,
 //! Nₖ = ⌈|tₖ| 4√2⌉ + 2Fₖ + 40, far beyond any aliasing: the default counts may add at most
-//! [`COUNTS_ADDED`] times the stated error to it (measured: at most 3.2×; CH6.1a's
-//! point-to-point chain is within 3× in all). The counts for reach 4.5 (CH6.2e's proposal) are
-//! measured beside and printed, not asserted: on the domains of real κ's edge they add more
-//! than 10× the stated error from Re κ = 7π (16× there at ε = 10⁻⁶, 47× from 8π, 2·10⁴×
-//! near 16π), and on some damped domains from 1.5π (up to 16×), which is why the default
-//! keeps the corner (fmm-validate/results/helmholtz-ch6-2g.md §2). The domains
-//! from Im κ = [`DAMPED`] are left out: the field across a V offset is below e^{−2·5π} ≈ 2e-14
-//! of the near field there and the stated errors fall from 6·10⁻⁸ to 4·10⁻¹⁶, while both
-//! counts' chains err by 10⁻⁹ to 10⁻⁵ absolute (the report's §3).
+//! [`COUNTS_ADDED`] times the stated error to it. That bound is an empirical regression guard,
+//! not a derived one: the measured worst is 3.2× (damped domains), and tighter bounds (1.1×
+//! the converged counts' error, with or without the stated error added) failed on damped
+//! domains where the counts do add a little; it catches aliasing of the kind a smaller reach
+//! causes at high κ, not a regression of a few times the stated error. The counts for reach
+//! 4.5 (CH6.2e's proposal) are measured beside and printed, not asserted: on the weakly damped
+//! domains (Im κ < π/2) they add more than 10× the stated error from Re κ = 7π (16× there at
+//! ε = 10⁻⁶, 47× from 8π, 2·10⁴× near 16π), and on some damped domains from 1.5π (up to 16×),
+//! which is why the default keeps the corner (fmm-validate/results/helmholtz-ch6-2g.md §2).
+//! The domains from Im κ = [`DAMPED`] are left out, a known effect deferred to Helmholtz
+//! CH6.2f: the field across a V offset is below e^{−2·5π} ≈ 2e-14 of the near field there and
+//! the stated errors fall from 6·10⁻⁸ to 4·10⁻¹⁶, so a bound in their units means nothing,
+//! while both counts' chains err by 10⁻⁹ to 10⁻⁵ absolute, the default's up to about 3× the
+//! converged counts' (the report's §3).
 
 use nd_fmm_exec::helmholtz::{Wavenumber, degree};
-use nd_fmm_math::{Complex, Layout};
+use nd_fmm_math::Layout;
 use nd_fmm_ref::Frame;
 use nd_fmm_ref::helmholtz::{Level, Workspace, leaf};
 use nd_fmm_tables::geometry::m2l_offsets;
@@ -305,7 +310,7 @@ fn the_counts_at_the_largest_offsets() {
 }
 
 /// Every domain of iprec 2 below Im κ = [`DAMPED`] at ε = 10⁻³ and 10⁻⁶, the ends of iprec
-/// 2.s range under the rule (release, about 40 s on the M6).
+/// 2's range under the rule (release, about 40 s on the M6).
 #[test]
 #[ignore = "release: 437 domains at two tolerances"]
 fn the_counts_at_the_largest_offsets_on_every_domain() {

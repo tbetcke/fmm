@@ -26,7 +26,7 @@ nd-fmm-exec (§2, §3) and a throwaway example for the sampling (§1).
 - **Why CH6.2e did not see it** (§4): its largest κ with waves was 31.25 (W1 at kD = 500,
   level 4, Re κ in [9π, 10π]), where the FMM's error at reach 4.5 held (0.986× Rotation's at
   10⁻⁶) while the worst-case pair there errs about 10× Rotation's against the direct sum: the
-  FMM's error over sampled targets averages the worst case away. Above κ ≈ 31, up to about
+  FMM's error over sampled targets likely averages the worst case away (not measured). Above κ ≈ 31, up to about
   16π (kD ≈ 200 on level 2, kD ≈ 400 on level 3, inside D1's range), no FMM run exists.
 - **The decision**: the question went to the user with this evidence; answer 2026-11-08,
   "Keep the corner (Recommended)", confirmed the same day after a correction (the first
@@ -78,8 +78,8 @@ goes to each of the 24 offsets whose components are a permutation of (±3, ±3, 
 direction merge and shift gives it, and both locals are evaluated at the target box's 27
 points {−½, 0, ½}³, corners included (CH6.1c's measure: the largest |Δ| in box widths). The
 table gives the largest addition of each counts' error over the converged counts' error, in
-units of the stated error, over the Im κ of each Re κ column below 5π ("real": the domains of
-real κ's edge, Im κ < π/2):
+units of the stated error, over the Im κ of each Re κ column below 5π ("real": the weakly
+damped domains, Im κ < π/2):
 
 | Re κ | corner, 10⁻³ | 4.5, 10⁻³ | 4.5 real, 10⁻³ | corner, 10⁻⁶ | 4.5, 10⁻⁶ | 4.5 real, 10⁻⁶ |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -104,10 +104,16 @@ real κ's edge, Im κ < π/2):
 The degrees run from 7 (10⁻³) and 15 (10⁻⁶) on the low-κ plateau to 53 and 59 at Re κ ≈ 15.5π.
 The corner's largest additions, 3.2× (domain 188, κ ≈ 0.15 + 4.7i, 10⁻⁶) and 2.4× (domain 199,
 κ ≈ 23.6 + 4.7i, 10⁻³), are on damped domains; the test asserts at most 10×
-(`COUNTS_ADDED`) on every domain below Im κ = 5π, and prints reach 4.5's.
+(`COUNTS_ADDED`) on every domain below Im κ = 5π, and prints reach 4.5's. The 10× is an
+empirical regression guard with a margin of about 3× over the measured worst, chosen after
+tighter bounds failed on damped domains where the counts add a little: 1.1× the converged
+counts' error (domain 192, both errors near 1 % of the stated error), then that plus the
+stated error (domain 199, 2.4×). It catches the aliasing a smaller reach causes at high κ
+(reach 4.5 passes it below about Re κ = 7π on the weakly damped domains), not a regression of
+a few times the stated error.
 
 Against the direct sum (an instrumented copy of the same test, not committed, which also
-evaluated Σ q e^{ik̂r}/r at the 27 targets), on the domains of real κ's edge, the largest error
+evaluated Σ q e^{ik̂r}/r at the 27 targets), on the weakly damped domains, the largest error
 of each chain in box widths (the field is about 0.4 there):
 
 | Re κ | p (10⁻⁶) | Rotation | reach 4.5 | corner |
@@ -135,8 +141,9 @@ small against |tₖ| r_s, which is the low-frequency plateau. At high κ the deg
 
 ## 3. Beyond the counts
 
-Two observations from the same runs that the counts do not govern (the converged counts give
-the same errors):
+Two observations from the same runs that are not the counts' (on the low-κ plateau the
+converged counts give the same errors; on the damped domains the corner's counts add up to
+about 3× the converged counts' error):
 
 - **The truncated tail at ε = 10⁻⁶.** On the low-κ plateau (p = 15) the exponential M2L's
   largest-offset pairs err about 3·10⁻⁶ against the direct sum, against Rotation's 10⁻¹²–10⁻⁹:
@@ -149,7 +156,8 @@ the same errors):
 - **Strongly damped domains.** From Im κ = 5π (a V offset's field below e^{−10π} ≈ 2·10⁻¹⁴ of
   the near field) the stated errors fall from 6·10⁻⁸ to 4·10⁻¹⁶ while both counts' chains err
   10⁻⁹–10⁻⁵ absolute (e.g. domain 303, κ ≈ 0.15 + 20.4i, p = 15: 1.8·10⁻⁵ with the corner's
-  counts, 5.6·10⁻⁶ converged), with Rotation accurate. The test leaves these domains out.
+  counts, 5.6·10⁻⁶ converged), with Rotation accurate. The test leaves these domains out, a
+  known effect deferred to CH6.2f rather than a property of the counts alone.
   Under the rule such levels get waves only for strongly damped complex k (Yukawa's real path
   has none); D1's workloads have none.
 
@@ -164,10 +172,12 @@ levels) had waves on levels with κ up to 31.25: W1 at kD = 500 on level 4 (Re �
 p = 36 at 10⁻³ and 41 at 10⁻⁶), the other cases at most 25 (W1 and the W4 cases at kD = 100,
 level 2). On W1 at kD = 500 the FMM's error at reach 4.5 held, 0.986× Rotation's at 10⁻⁶
 (CH6.2e §2), while the pair test at that κ has the worst-case pair at about 10× Rotation's
-error against the direct sum (1.0·10⁻⁵ against 9.2·10⁻⁷ at Re κ ≈ 29.8, the table of §2). The
-FMM's relative L2 error over sampled targets averages the worst case away: the largest V
-offsets are 24 of the 316, and their worst points (charges and targets near box corners) are a
-small share of uniform points. Its larger additions at lower κ are on damped domains, which no
+error against the direct sum (1.0·10⁻⁵ against 9.2·10⁻⁷ at Re κ ≈ 29.8, the table of §2). Not
+measured here, but likely: the FMM's relative L2 error over sampled targets averages the worst
+case away, since the largest V offsets are 24 of the 316 and their worst points (charges and
+targets near box corners) are a small share of uniform points; or the FMM's error is set by
+other levels and the nearest offsets, as §3 argues for the truncated tail. No run concentrated
+points at box corners. Its larger additions at lower κ are on damped domains, which no
 case had. The pair test is the worst case the FMM's errors cannot exclude, and above κ ≈ 31,
 to about 16π, no FMM run exists at all.
 
