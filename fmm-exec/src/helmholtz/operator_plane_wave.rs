@@ -196,8 +196,9 @@ pub struct PlaneWaveCounts {
 pub enum PlaneWaveSplit {
     /// By child on a chunk where the split by parents, which never cuts a piece below
     /// `PARENT_GRAIN` (64) boxes, makes at most half as many pieces holding a computed box
-    /// as the pool has threads (the split by child repeats shared accumulators, measured 1.4–3× the parents' thread
-    /// time on CH6.2f's cases); by parents elsewhere and without a pool.
+    /// as the pool has threads (the split by child repeats shared accumulators, measured
+    /// 1.2–3× the parents' thread time on CH6.2f's cases); by parents elsewhere and without a
+    /// pool.
     #[default]
     Auto,
     /// By parents: the pool halves a chunk at parent boundaries down to pieces of 64 boxes,

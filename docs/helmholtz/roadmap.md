@@ -86,7 +86,13 @@ FMM errors averaged that worst case away (W1 at kD = 500, κ = 31.25, held at 0.
 corner stays the default, guarded by nd-fmm-exec's `tests/helmholtz/plane_wave_reach.rs`.
 2026-11-08: CH6.2f split (`/next-task`'s size rule) into the coarse levels' merge and shift
 (CH6.2f: its time split into shifts and conversions, the parents' pass split below the parent)
-and D8's rule (CH6.2h). Next: CH6.2f.
+and D8's rule (CH6.2h). 2026-11-08: CH6.2f done (`fmm-validate/results/helmholtz-ch6-2f.md`): merge and shift ran
+level 2 on one thread and level 3 on eight (the shared drivers' 64-box grain), not slow per
+parent; the conversions take 76–90 % of its thread time there. Split by child where the split
+by parents leaves threads idle (`PlaneWaveSplit::Auto`, the default; bit for bit), levels 2–3
+take 0.38–0.88× Rotation's time at one rank on locust and Kathleen (before up to 12×), level 2
+0.06–0.37× FMM3D's parents' loop; CH6.2c's 4 × 10 anomaly was the same one-thread level.
+Next: CH6.2h (D8).
 
 ## How `/next-task` reads this file
 
@@ -845,7 +851,9 @@ at any kD.
   case; nd-fmm-exec's `tests/helmholtz_fmm.rs` and nd-fmm-validate's tests at the new
   default. *Needs:* CH6.2e. Before CH6.2f (CH6.2e's question 2, signed off
   2026-11-07).
-- [ ] **CH6.2f The coarse levels' merge and shift.** Split on 2026-11-08 (`/next-task`'s size
+- [x] **CH6.2f The coarse levels' merge and shift.** Report:
+  `fmm-validate/results/helmholtz-ch6-2f.md`; `PlaneWaveSplit` (default `Auto`), the parts in
+  `PlaneWaveTimes`. Split on 2026-11-08 (`/next-task`'s size
   rule) from the former CH6.2f (D8, now CH6.2h): the coarse-level remedy that CH6.2h's rule
   needs, from CH6.2b's, CH6.2c's and CH6.2d's observations quoted there. Merge and shift's time
   split into its parts (the source shifts with their accumulators, the child shifts, and each
@@ -892,7 +900,13 @@ at any kD.
   near box corners; CH6.1c's truncated tail, not the counts), and on levels with Im κ ≥ 5π
   both counts' chains err 10⁻⁹–10⁻⁵ absolute (the corner's counts up to about 3× the
   converged counts'), where the field across a V offset is below 2·10⁻¹⁴ of the near field
-  and CH6.2g's guard test leaves the domains out: whether the rule keeps Rotation there. *Done when:* D8 proposed with the rule's inputs (degree,
+  and CH6.2g's guard test leaves the domains out: whether the rule keeps Rotation there. Also (CH6.2f, report §3–§6): the coarse-level remedy is in: `PlaneWaveSplit::Auto` splits
+  merge and shift by child where the split by parents leaves threads idle (it reads the
+  threads; no bit depends on it), so levels 2–3 take 0.38–0.88× Rotation's time at one rank
+  on locust (72 threads) and Kathleen (40), level 2 0.44–0.69× on the M6 (6), and 0.57–1.10×
+  at 4 × 10: the rule need not take Rotation on levels of few boxes on that account; the
+  remaining losses against Rotation are fine levels of low degree (W1 at kD = 100 level 5,
+  p = 7: 1.7–3.0×). D8's times are CH6.2f's `Auto` runs. *Done when:* D8 proposed with the rule's inputs (degree,
   ε, the level's boxes), on CH6.2f's level call (or with Rotation on levels of few boxes, if
   CH6.2f's split does not bring them within the rule). *Needs:* CH6.2c, CH6.2d, CH6.2e,
   CH6.2f. *Sign-off:* D8.

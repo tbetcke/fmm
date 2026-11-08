@@ -170,12 +170,13 @@
 //! function of its multipole alone, so the output is the same at every thread count and
 //! every bound of the buffer and, as Laplace's argument goes, on P ranks the one-rank output
 //! bit for bit, under either split (a child's chain is the same whichever task runs it). A
-//! source read by two chunks has its waves computed in each. The pair body ([`PairOperator`]) translates each pair by
-//! `PlaneWaveLevel::m2l` along the direction merge and shift gives it
-//! (`PlaneWaveTables::pair_direction` of the offset and the target's child index), which
-//! the level call equals to rounding (its two shift factors are the pair's to rounding).
-//! It approximates M2L within its quadrature's error, so it is not Rotation's output. The
-//! waves buffer holds one frame of a chunk's sources, 2W reals per box, at most a byte bound
+//! source read by two chunks has its waves computed in each. The pair body
+//! ([`PairOperator`]) translates each pair by `PlaneWaveLevel::m2l` along the direction
+//! merge and shift gives it (`PlaneWaveTables::pair_direction` of the offset and the
+//! target's child index), which the level call equals to rounding (its two shift factors
+//! are the pair's to rounding). It approximates M2L within its quadrature's error, so it is
+//! not Rotation's output. The waves buffer holds one frame of a chunk's sources, 2W reals
+//! per box, at most a byte bound
 //! ([`with_plane_wave_buffer`](HelmholtzOperator::with_plane_wave_buffer); none: a whole
 //! level; at least [`MIN_BUFFER_BOXES`] boxes of each level), with a position per box of the
 //! largest level and the chunk's source list, sized from the plan by `HelmholtzFmmBuilder`

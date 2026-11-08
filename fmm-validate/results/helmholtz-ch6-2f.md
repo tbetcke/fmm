@@ -357,7 +357,7 @@ Reading it:
 - **CH6.2h (D8)**: levels 2–3 under `Auto` now gain over Rotation on both machines at one
   rank (0.38–0.88×), so D8's rule need not take Rotation on levels of few boxes on that
   account; the remaining losses against Rotation are fine levels of low degree (W1 at
-  kD = 100 level 5, p = 7: 2.4–3.0×).
+  kD = 100 level 5, p = 7: 1.7–3.0×, the M6 1.7×).
 - **Laplace**: its plane-wave M2L (Phase 6 T13) runs on the same `Execution::parents` with
   the same 64-box grain, so its coarse levels are likely held to few threads too; not
   measured or changed here (constraint 1). A question for the PR.

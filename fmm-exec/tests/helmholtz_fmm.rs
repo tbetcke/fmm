@@ -1330,15 +1330,24 @@ fn check_plane_wave_buffer(
         drop(fmm);
         assert_same(&format!("{name}, unbounded"), &bounded, output, comm);
     }
-    // The floor at 2 threads, split by child (CH6.2f).
-    let children = floor.clone().plane_wave_split(PlaneWaveSplit::Children);
-    let (_, bounded) = run(&children.threads(2), inputs, kind, comm);
-    assert_same(
-        &format!("{name}, the floor, 2 threads, by child"),
-        &bounded,
-        output,
-        comm,
-    );
+    // The floor at 2 threads, split by child and by parents (CH6.2f).
+    for (split, label) in [
+        (PlaneWaveSplit::Children, "by child"),
+        (PlaneWaveSplit::Parents, "by parents"),
+    ] {
+        let (_, bounded) = run(
+            &floor.clone().plane_wave_split(split).threads(2),
+            inputs,
+            kind,
+            comm,
+        );
+        assert_same(
+            &format!("{name}, the floor, 2 threads, {label}"),
+            &bounded,
+            output,
+            comm,
+        );
+    }
     check_one_rank(
         &format!("{name}, the floor"),
         &floor,

@@ -368,7 +368,7 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   down to `PARENT_GRAIN` = 64 boxes; level 2 ran on one thread, level 3 on 8 pieces; on P
   ranks a level's held boxes it does not compute make pieces without work, which at 4 × 10
   on Kathleen kept level 3 by parents on 3 busy threads before they were left out), since the split by child repeats
-  shared accumulators (1.4–3× the parents' thread time on CH6.2f's cases). `driver.rs`
+  shared accumulators (1.2–3× the parents' thread time on CH6.2f's cases). `driver.rs`
   unchanged.
   `PlaneWaveTimes` gains merge and shift's thread-seconds by part (`busy`, `shifts`,
   `children`, `conversions`, each worker's clock in its `PlaneScratch`, drained after the
