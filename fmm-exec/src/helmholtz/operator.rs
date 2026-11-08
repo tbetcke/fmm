@@ -162,7 +162,8 @@
 //!    child alone (its siblings' shared accumulators computed again by each). The shared
 //!    drivers' split by parents never cuts a piece below `PARENT_GRAIN` = 64 boxes, so a
 //!    level of 64 boxes ran on one thread; [`PlaneWaveSplit::Auto`] takes the split by child
-//!    on a chunk of at most 64 boxes per thread of the pool.
+//!    on a chunk whose split by parents makes at most half as many pieces as the pool has
+//!    threads.
 //!
 //! Every local receives frame 0, then 1, then 2, each a fixed chain of its parent's
 //! accumulators, which depend on the geometry of the slots alone, and a box's waves are a

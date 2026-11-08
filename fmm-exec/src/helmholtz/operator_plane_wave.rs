@@ -194,9 +194,10 @@ pub struct PlaneWaveCounts {
 /// work and its spread over the threads differ.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PlaneWaveSplit {
-    /// By child on a chunk of at most `PARENT_GRAIN` (64) boxes per thread of the pool,
-    /// where the split by parents, which never cuts a piece below 64 boxes, leaves threads
-    /// idle; by parents elsewhere and without a pool.
+    /// By child on a chunk where the split by parents, which never cuts a piece below
+    /// `PARENT_GRAIN` (64) boxes, makes at most half as many pieces as the pool has threads
+    /// (the split by child repeats shared accumulators, measured 1.4–3× the parents' thread
+    /// time on CH6.2f's cases); by parents elsewhere and without a pool.
     #[default]
     Auto,
     /// By parents: the pool halves a chunk at parent boundaries down to pieces of 64 boxes,
@@ -411,10 +412,17 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                 start = end;
                 continue;
             }
+            let starts = |t: usize| {
+                t == 0
+                    || morton::parent(index.key(level, start + t))
+                        != morton::parent(index.key(level, start + t - 1))
+            };
             let by_child = match buffer.split {
                 PlaneWaveSplit::Parents => false,
                 PlaneWaveSplit::Children => true,
-                PlaneWaveSplit::Auto => threads > 1 && end - start <= PARENT_GRAIN * threads,
+                PlaneWaveSplit::Auto => {
+                    threads > 1 && 2 * pieces(0..end - start, &starts) <= threads
+                }
             };
             buffer.counts.chunks += 1;
             buffer.counts.waves += 3 * m * count;
@@ -450,11 +458,6 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                             plane.parts.busy += busy.elapsed();
                         });
                     } else {
-                        let starts = |t: usize| {
-                            t == 0
-                                || morton::parent(index.key(level, start + t))
-                                    != morton::parent(index.key(level, start + t - 1))
-                        };
                         self.execution
                             .parents(chunk, size, starts, |range, chunks, scratch| {
                                 let plane = scratch
@@ -492,6 +495,22 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             }
         }
     }
+}
+
+/// The pieces into which the shared drivers' split by parents (`Execution::parents`,
+/// `driver::split_parents`) cuts the boxes `boxes`, `starts(t)` telling whether box t begins
+/// a parent: halved at the first parent boundary from the middle while a piece holds more
+/// than [`PARENT_GRAIN`] boxes, the driver's rule restated (it decides only the split, never
+/// a bit).
+fn pieces(boxes: Range<usize>, starts: &impl Fn(usize) -> bool) -> usize {
+    let mut mid = boxes.start + boxes.len() / 2;
+    while mid < boxes.end && !starts(mid) {
+        mid += 1;
+    }
+    if boxes.len() <= PARENT_GRAIN || mid == boxes.end {
+        return 1;
+    }
+    pieces(boxes.start..mid, starts) + pieces(mid..boxes.end, starts)
 }
 
 /// The up and down waves of `frame` of one vector's multipole `x` (`planes` planes) into
