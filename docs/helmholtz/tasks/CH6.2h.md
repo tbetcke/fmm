@@ -135,8 +135,9 @@ over today's `Auto`, for D8.
 - locust, one rank × 72, the matrix and the large cases behind a strict gate (others below
   30 % of a core for five minutes, another user's long Python process left out; a sample
   every 7 s during): `tools/gh200/remote.sh 'bash /data/ucahtbe/logs/ch6-2h-gated.sh'`, output
-  `/data/ucahtbe/logs/ch6-2h-b` (`gate.log`, `during.log`). Started 2026-11-08 20:48, waiting
-  for another session's GPU sweep. It decides locust's column of the report (§5) and whether
+  `/data/ucahtbe/logs/ch6-2h-b` (`gate.log`, `during.log`; the script there, re-created from
+  the report §5 if gone). Started 2026-11-08 20:48 and stopped unrun at 23:50: the user's
+  other job holds locust for several hours. To run on a later pass, once locust is free. It decides locust's column of the report (§5) and whether
   locust's first pass, where Batched at p = 7 lost to Rotation on dense levels at 72 threads,
   holds on a quiet node. The first pass (beside a CUDA compile) is a record only.
 - Done: the M6 1 × 6 (21:39–21:45, the user's go-ahead); Kathleen jobs 630761 (matrix,

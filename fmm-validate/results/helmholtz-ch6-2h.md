@@ -178,8 +178,9 @@ The run is the matrix and the large cases at one rank × 72 threads behind a str
   user's long-running Python process (about one core, accepted in CH6.2f);
 - during the run, a sample every 7 s.
 
-Output goes to `/data/ucahtbe/logs/ch6-2h-b`. As of this writing it waits for another
-session's GPU sweep (`degree_sweep`) to finish.
+Output goes to `/data/ucahtbe/logs/ch6-2h-b`. It has not run: started 2026-11-08 20:48, its
+gate stayed closed behind another job on locust, which holds it for several hours, and it was
+stopped at 23:50 untimed. It runs on a later pass.
 
 The first pass (`bench-results/ch6-2h/locust-first`, 20:36–20:48) ran beside another
 session's CUDA compile, which a looser gate let through. It is kept as a record only; its
@@ -301,7 +302,7 @@ On sign-off, on this branch:
 | `cargo doc --no-deps` | passed |
 | `RUST_MIN_STACK=8388608 cargo test --workspace` | 1339 passed (16.6 min) |
 | `RUST_MIN_STACK=8388608 cargo test` (default members) | not run separately; its tests are a subset of the workspace run |
-| `.github/scripts/run-mpi-tests.sh` at 2 and 4 ranks | all 12 executables passed |
+| `.github/scripts/run-mpi-tests.sh` at 2 and 4 ranks | all 12 executables passed; `helmholtz_fmm` again after the self-review's added check (244 s and 227 s) |
 | `cargo test -p nd-fmm-validate --test helmholtz_accuracy` | passed (43.6 s) |
 | `tests/helmholtz_fmm.rs` one-rank debug run | 255 s with the self-review's added check (216 s at CH6.2f), above nd-fmm-exec's one-minute budget as before |
 
