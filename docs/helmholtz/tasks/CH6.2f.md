@@ -147,7 +147,9 @@ level 2 ran on one thread (the 64-box grain), not slow per parent; by child leve
 
 ## Open questions
 
-For sign-off in the PR (report §9):
+Signed off 2026-11-08, the user: "1 as recommended; schedule a Laplace task for 2":
+question 1 accepted as recommended; question 2 answered with CH6.2i in the roadmap (after
+CH6.2h on the priority list). The questions as asked (report §9):
 
 1. Constraint 9: `Auto` reads the threads and, since the third rule, the boxes this rank
    computes (a rank's share of the boxes). No bit depends on the choice (every split gives

@@ -2587,10 +2587,12 @@ request, using this template:
   list at 2 and 4 ranks (all 12 executables passed, at a 900 s launch timeout; the default
   300 s timed out three launches on a loaded M6). `tests/helmholtz_fmm.rs`' one-rank debug
   run 216 s (211 s before). Pending: none.
-- Decisions: none signed off; questions for sign-off: (1) `Auto` reads the threads and the
-  rank's computed boxes (constraint 9 names a rank's share), no bit depends on it; (2)
-  whether to schedule a Laplace task for the same 64-box grain in its plane-wave M2L.
+- Decisions: signed off 2026-11-08 (the user: "1 as recommended; schedule a Laplace task
+  for 2"): (1) `Auto` may read the threads and the rank's computed boxes (constraint 9 names a
+  rank's share; no bit depends on the split), as recommended; (2) a Laplace task for the same
+  64-box grain in its plane-wave M2L, CH6.2i, after CH6.2h on the priority list.
 - Laplace: not touched (`driver.rs` read only; the Helmholtz operator, harness and tools);
   `mpi_exec`, `mpi_threading` and `invariance` passed at 2 and 4 ranks.
 - Follow-ups: CH6.2h (D8), next, with a sentence added: levels 2–3 now gain over Rotation,
   and a two-phase split (the repeated shifts) only if D8's margins need it.
+  CH6.2i (Laplace's coarse levels), added by question 2.

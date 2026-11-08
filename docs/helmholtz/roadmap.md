@@ -92,7 +92,8 @@ parent; the conversions take 76–90 % of its thread time there. Split by child 
 by parents leaves threads idle (`PlaneWaveSplit::Auto`, the default; bit for bit), levels 2–3
 take 0.38–0.88× Rotation's time at one rank on locust and Kathleen (before up to 12×), level 2
 0.06–0.37× FMM3D's parents' loop; CH6.2c's 4 × 10 anomaly was the same one-thread level.
-Next: CH6.2h (D8).
+Its questions signed off the same day: question 1 as recommended, and CH6.2i (Laplace's
+plane-wave M2L on the coarse levels) added after CH6.2h. Next: CH6.2h (D8).
 
 ## How `/next-task` reads this file
 
@@ -138,7 +139,9 @@ CH3.6 (#170) and H3.G.
    CH6.2d, CH6.2e, CH6.2g, CH6.2f, CH6.2h (split on 2026-11-06; CH6.2g added 2026-11-07 by
    CH6.2e, before D8 by its question 2, signed off 2026-11-07; D8 split on 2026-11-08 into
    CH6.2f and CH6.2h)
-5. CH6.1f Quadratures for ε below 10⁻⁶ (needs CH6.1e; after CH6.2, before H6.G: CH6.1e's
+5. CH6.2i Laplace's plane-wave M2L on the coarse levels (added on 2026-11-08 after CH6.2h,
+   CH6.2f's question 2: "schedule a Laplace task for 2"; *Machines:* locust, Kathleen)
+6. CH6.1f Quadratures for ε below 10⁻⁶ (needs CH6.1e; after CH6.2, before H6.G: CH6.1e's
    question 3, signed off 2026-11-03, "1–4 as recommended")
 
 Off the list, in file order: CH0.6, CH0.8b, CH0.9, CH0.5 and H0.G; CHR.3 and HR.G; CH1.3d
@@ -853,7 +856,9 @@ at any kD.
   2026-11-07).
 - [x] **CH6.2f The coarse levels' merge and shift.** Report:
   `fmm-validate/results/helmholtz-ch6-2f.md`; `PlaneWaveSplit` (default `Auto`), the parts in
-  `PlaneWaveTimes`. Split on 2026-11-08 (`/next-task`'s size
+  `PlaneWaveTimes`. Signed off 2026-11-08 (the user: "1 as recommended; schedule a Laplace task
+  for 2"): `Auto` may read the threads and the boxes its rank computes (constraint 9 is
+  about what is computed; no bit depends on the split), and CH6.2i added. Split on 2026-11-08 (`/next-task`'s size
   rule) from the former CH6.2f (D8, now CH6.2h): the coarse-level remedy that CH6.2h's rule
   needs, from CH6.2b's, CH6.2c's and CH6.2d's observations quoted there. Merge and shift's time
   split into its parts (the source shifts with their accumulators, the child shifts, and each
@@ -913,6 +918,18 @@ at any kD.
   ε, the level's boxes), on CH6.2f's level call (or with Rotation on levels of few boxes, if
   CH6.2f's split does not bring them within the rule). *Needs:* CH6.2c, CH6.2d, CH6.2e,
   CH6.2f. *Sign-off:* D8.
+- [ ] **CH6.2i Laplace's plane-wave M2L on the coarse levels.** Added on 2026-11-08
+  (CH6.2f's question 2; the user: "schedule a Laplace task for 2"). Laplace's plane-wave M2L
+  (Phase 6 T13) runs merge and shift on the shared drivers' `Execution::parents` with the same
+  `PARENT_GRAIN` = 64 boxes, so its level 2 likely runs on one thread and level 3 on at most
+  8, as Helmholtz's did (CH6.2f report §2, §9). *Done when:* Laplace's plane-wave M2L per
+  level with the threads its merge and shift keeps busy, on locust (1 × 72), Kathleen
+  (1 × 40) and the M6 (with the user's go-ahead), on Phase 6 T13's cases; if the coarse
+  levels are held to few threads and weigh in the evaluation, a split below the parent (as
+  CH6.2f's by child), bit for bit the split by parents at 1, 2 and many threads and on P
+  ranks, adopted where it gains beyond D9's noise, Laplace's fixtures and bit-identity tests
+  unchanged; else recorded as no change. *Needs:* CH6.2f. *Machines:* locust, Kathleen.
+  *Sign-off:* constraint 1 (a change to a Laplace path).
 - [ ] **H6.G Gate.** `/milestone-gate H6`. *Needs:* every task above.
 
 ## H4: High-frequency levels

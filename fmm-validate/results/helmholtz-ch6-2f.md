@@ -368,7 +368,8 @@ was before this task.
   kD = 100 level 5, p = 7: 1.7–3.0×, the M6 1.7×).
 - **Laplace**: its plane-wave M2L (Phase 6 T13) runs on the same `Execution::parents` with
   the same 64-box grain, so its coarse levels are likely held to few threads too; not
-  measured or changed here (constraint 1). A question for the PR.
+  measured or changed here (constraint 1). Scheduled as CH6.2i (the user, 2026-11-08:
+  "schedule a Laplace task for 2").
 - **The repeated shifts**: a split in two phases (each parent's accumulators once, on the
   pool, then the children) would remove the child split's 1.2–3.0× thread time; `Auto`
   avoids the loss where it matters now, so it is a sentence in CH6.2h's roadmap line, to
@@ -376,7 +377,8 @@ was before this task.
 - **Constraint 9**: `Auto` reads the pool's threads and, since the third rule, which of the
   rank's boxes it computes (a rank's share of the boxes, which constraint 9 names). It is
   a choice of how to run, not of what to compute: every setting gives every local the same
-  bits (§7), so constraint 2 holds; a question for sign-off in the PR.
+  bits (§7), so constraint 2 holds. Signed off 2026-11-08 as recommended (the user: "1 as
+  recommended").
 
 ## 10. Reproducing
 
