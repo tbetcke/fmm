@@ -450,7 +450,7 @@ fn auto_waves_by_the_machine_class_and_the_damping() {
     let damped = Wavenumber::new(20.0, 100.0).unwrap();
     let rule = select(Complex::new(10.0, 50.0), &DEGREES, Some(1e-6));
     assert!(rule[2].is_some() && rule[3].is_some());
-    assert!(25.0 >= AUTO_PLANE_WAVE_MAX_IM_KAPPA && 12.5 < AUTO_PLANE_WAVE_MAX_IM_KAPPA);
+    const { assert!(25.0 >= AUTO_PLANE_WAVE_MAX_IM_KAPPA && 12.5 < AUTO_PLANE_WAVE_MAX_IM_KAPPA) };
     let op = auto(damped, Some(1e-6), 0, Some(0), true);
     assert_eq!(op.m2l_on(2), HelmholtzM2l::Rotation);
     assert_eq!(op.m2l_on(3), HelmholtzM2l::PlaneWave);
