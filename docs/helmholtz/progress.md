@@ -2611,7 +2611,7 @@ request, using this template:
   - Runs: the M6 1 × 6 (the user's go-ahead), Kathleen 1 × 40 and 4 × 10 (jobs 630761,
     630762, with `auto-pw:16`). Against today's `Auto` the M2L takes 0.14–0.70× on the M6 and
     0.03–0.55× (matrix) and 0.23–0.49× (large) on Kathleen at 10⁻⁶; at 10⁻³ 0.47–1.07× and
-    0.26–1.19× (above 1 only where every level is today's choice). Within 1.10× of the
+    0.26–1.19× (above 1 within the ABBA spread). Within 1.10× of the
     per-level best except ms-scale cases at 10⁻³, all on few-box levels, mostly Batched at
     p = 7 on level 2 (today's `Auto` too). d_pw = 16 on AVX-512 is 1.6–35× slower at 10⁻⁶,
     so 12. Errors 0.916–1.063× Rotation's. No boxes term needed for the exponential M2L on
@@ -2626,7 +2626,7 @@ request, using this template:
   `cargo doc`, `cargo test --workspace` (1339 passed), the MPI list at 2 and 4 ranks (all 12
   passed), `cargo test -p nd-fmm-validate --test helmholtz_accuracy`; `cargo test` on the
   default members not run apart from the workspace run. `tests/helmholtz_fmm.rs`' one-rank
-  debug run 242 s (216 s before). Pending: locust's clean pass (1 × 72, the plan's "Pending
+  debug run 255 s (216 s before). Pending: locust's clean pass (1 × 72, the plan's "Pending
   runs").
 - Decisions: D8 proposed, for sign-off with d_pw on AVX-512, the Im κ bound, no boxes term,
   and the proposal's §5.3 and §6.4 amended (the plan's "Open questions").

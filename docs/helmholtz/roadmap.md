@@ -98,7 +98,7 @@ plane-wave M2L on the coarse levels) added after CH6.2h. Next: CH6.2h (D8).
 pending): `Auto` takes the exponential M2L where p_l ≥ d_pw (Batched's crossover + 1, 12 on
 AVX-512), CH6.1e's rule gives a quadrature and Im κ_l < 5π, behind `auto_plane_wave` until
 the sign-off. Against today's `Auto` the M2L takes 0.14–0.70× on the M6 and 0.03–0.55× on
-Kathleen at 10⁻⁶, 0.26–1.19× at 10⁻³ (the cases above 1 the same methods); within 1.10× of the
+Kathleen at 10⁻⁶, 0.26–1.19× at 10⁻³ (above 1 within the ABBA spread); within 1.10× of the
 per-level best except ms-scale cases at 10⁻³, where Batched at p = 7 on level 2 loses to
 Rotation (today's `Auto` too; CH4.0's sentence). No boxes term. locust's clean pass pending.
 Next: D8's sign-off, then CH6.2i.

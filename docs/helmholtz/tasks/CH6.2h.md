@@ -152,3 +152,8 @@ For sign-off (the report §8):
 4. No boxes term for the exponential M2L; Batched's few-box levels to a follow-up (CH4.0's
    sentence).
 5. Proposal §5.3 and §6.4 ("opt-in until CH6.2") amended to D8's rule.
+
+Departures from "Tests that prove it" (the self-review): the operator tests live in
+`tests/helmholtz/plane_wave.rs`, not `dense.rs`; the harness's parsing of `auto-pw` is shown by
+the runs' rows, not a unit test (the example's parser has none); nd-fmm-validate's test checks
+the all-waves row (PlaneWave's checksum), the mixed rule being checked in `helmholtz_fmm.rs`.

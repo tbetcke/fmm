@@ -33,21 +33,24 @@ default split of the merge and shift (CH6.2f's `Auto`). Commands: §11.
   - At 10⁻⁶: 0.14–0.70× on the M6. On Kathleen 0.03–0.55× on the matrix and 0.23–0.49× on
     the large cases. The evaluation drops to 0.21–0.91× on the M6, 0.05–0.66× and 0.28–0.52×
     on Kathleen.
-  - At 10⁻³: 0.47–1.07× on the M6 and 0.26–1.19× on Kathleen. The cases above 1.0 take every
-    level as today's `Auto` does: the same checksum, within the ABBA spread.
+  - At 10⁻³: 0.47–1.07× on the M6 and 0.26–1.19× on Kathleen. The cases above 1.0 are within
+    the ABBA spread; all but one take every level as today's `Auto` does (the same checksum),
+    and the M6's W1 at kD = 30 (1.01) runs level 2 at p = 12 with waves.
 - **Against the per-level best** (each level's fastest of Rotation, Batched and PW):
   - Within 0.93–1.09× on the M6 and 0.92–1.18× on Kathleen, except five ms-scale cases at
     10⁻³: on the M6 W1 and W3 at kD = 10 (1.96×, 1.99×); on Kathleen W1 at kD = 10 and 30
     (8.8×, 1.4×) and W3 at kD = 10 (6.4×).
-  - Two 2–3 ms cases at 10⁻⁶ on Kathleen also exceed it (W1 and W3 at kD = 10, 1.51× and
-    1.27×). There the rule ran PlaneWave's methods level for level, so the excess is
-    run-to-run spread.
+  - Two ms-scale cases at 10⁻⁶ on Kathleen also exceed it (W1 and W3 at kD = 10, 3 and 9 ms
+    of M2L, 1.51× and 1.27×, 1–2 ms over). There the rule ran PlaneWave's methods level for
+    level, so the excess is run-to-run spread.
   - All of the excess is on levels with few boxes (§6), and most of it is Batched at p = 7
     on level 2, which today's `Auto` chooses too.
 - **No boxes term for PW** (§6). On CH6.2f's level call, PW loses to Rotation only at 10⁻³ on
   levels 2–3: at most 2.2× and 3.7 ms per evaluation, at most 23 % of an 8 ms case and
   under 6 % elsewhere. At 10⁻⁶ it is faster than Rotation on every level but one (Kathleen,
-  W4 clusters at kD = 1, level 2: 1.06×, 0.2 ms).
+  W4 clusters at kD = 1, level 2: 1.06×, 0.2 ms). These per-level losses are timed in
+  PlaneWave's runs (§2); the rule's own runs of the same levels were faster on some, so they
+  are an upper estimate.
 - **Batched's few-box levels** are a separate miss, of today's `Auto` (CH3.2d, the sparse-level
   term left to CH4.0). On level 2 (64 boxes, 3,096 V pairs) at p = 7, Batched takes 2.1–3.8×
   Rotation's time on the M6 and 8.5–9.3× on Kathleen (about 2 and 4 ms). Today's `Auto`
@@ -78,7 +81,9 @@ l ≥ 2, with degree p_l and κ_l = k w_l (the level's width in wavelengths):
 3. **Rotation** otherwise.
 
 d_pw is `auto_plane_wave_min_degree(isa, planes)`: d_b + 1 (NEON 11 with two planes and 13
-with one, AVX2 12, scalar 7 and 9), and 12 for AVX-512 with two planes, against its d_b of 15.
+with one, AVX2 12, scalar 7 and 9, AVX-512 16 with one), and 12 for AVX-512 with two planes,
+against its d_b of 15. Every run here has two planes (complex charges), so the one-plane
+values are d_b + 1 by the same reasoning, unmeasured.
 `with_m2l_plane_wave_min_degree` and the builder's `m2l_plane_wave_min_degree` name another
 value; the measurements use this. The builder agrees d_pw over the ranks with an all-reduce
 min, as for d_b, and `HelmholtzFmm::m2l_plane_wave_min_degree` reports it.
@@ -102,8 +107,12 @@ Kathleen's `auto-pw:16` appended, then one launch with the order reversed (ABBA)
 `--evaluations 2 --levels`, which times the M2L of each level in the second evaluation.
 `tools/helmholtz/ch6-2h-tables.py` reads the outputs:
 - each strategy's time per level, the mean of the two launches;
-- each level's fastest method, each method timed by the first strategy that ran it;
-- the rule's time over the fastest;
+- each level's fastest method, each method timed by the first strategy that ran it, in the
+  order Rotation, `Auto`, PlaneWave, the rule;
+- the time of the rule's method over the fastest. On a level where the rule ran waves that is
+  PlaneWave's run of the same call, not the rule's own; the two differ by the run-to-run
+  spread (W3 at kD = 100, 10⁻³, level 2 on Kathleen: 1.19× Rotation in PlaneWave's run,
+  0.91× in the rule's). The per-case sums use each strategy's own times;
 - per case, the sums, the evaluations, the largest ABBA spread, the rule's errors over
   Rotation's, and which strategies share its checksum.
 
@@ -119,8 +128,8 @@ Its output is the appendix.
 - **At 10⁻⁶** the rule takes PW on every level of every case (every level's degree is at
   least d_pw = 11), with the checksum and time of PlaneWave.
 - **At 10⁻³** PW takes the levels at p ≥ 11 and Batched the rest. Where every level is at
-  p ≤ 10 (the W4 at kD = 1, W1 and W3 at kD = 10, W1 at kD = 30 level 3), the rule is today's
-  `Auto`: same checksum, ratio 0.94–1.07 against an ABBA spread of up to 1.44.
+  p ≤ 10 (the W4 at kD = 1, W1 and W3 at kD = 10), the rule is today's `Auto`: same checksum,
+  ratio 0.94–1.07 against an ABBA spread of up to 1.44.
 - **Above 1.10× a level's fastest**, nine levels (§6):
   - p = 7 Batched on level 2: 2.1–3.8× Rotation, 1.1–2.2 ms;
   - W3 at kD = 10 level 3: 1.18×, 0.3 ms;
@@ -135,14 +144,15 @@ Its output is the appendix.
 | 10⁻³ | matrix | 0.26–1.19 | 0.35–1.04 | 1.01–1.18; W1 kD = 10, 30: 8.8, 1.4; W3 kD = 10: 6.4 |
 | 10⁻³ | large | 0.64–0.99 | 0.65–0.99 | 0.92–1.02 |
 
-Today's `Auto` is slow on Kathleen's small cases at 10⁻⁶. It takes p ≤ 15 to Batched, and
-Batched on a level of few boxes costs a fixed tenth of a second:
-- W1 at kD = 10, level 2 (p = 15, 3,096 pairs): 0.114 s against Rotation's 0.003 s;
-- W3 at kD = 10, levels 2–3: 0.12 and 0.09 s;
-- W1 at kD = 30, level 2 (p = 12): 0.034 s, against PW's 3.2 ms and Rotation's 2.1 ms.
+Today's `Auto` is slow on Kathleen's small cases. It takes p ≤ 15 to Batched, and Batched on
+a level of few boxes costs a fixed few hundredths to a tenth of a second:
+- W1 at kD = 10, 10⁻⁶, level 2 (p = 15, 3,096 pairs): 0.114 s against Rotation's 0.003 s;
+- W3 at kD = 10, 10⁻⁶, levels 2–3 (p = 15): 0.12 and 0.09 s;
+- W1 at kD = 30, 10⁻⁶, level 3 (p = 15, 32,256 pairs): 0.088 s against PW's 0.017 s;
+- W1 at kD = 30, 10⁻³, level 2 (p = 12): 0.034 s, against PW's 3.2 ms and Rotation's 2.1 ms.
 
-The rule takes these levels to PW. Hence the matrix ratios of 0.03–0.05 at kD = 10 and 0.23
-at kD = 30.
+The rule takes these levels to PW. Hence the matrix ratios of 0.03–0.04 at kD = 10 (10⁻⁶)
+and 0.23–0.26 for W1 at kD = 30.
 
 **d_pw: 12 or d_b + 1 = 16.** The column auto-pw:16 runs the rule with d_pw = 16, which
 leaves p = 12–15 to Batched. Its M2L over the rule's (d_pw = 12):
@@ -175,7 +185,7 @@ The first pass (`bench-results/ch6-2h/locust-first`, 20:36–20:48) ran beside a
 session's CUDA compile, which a looser gate let through. It is kept as a record only; its
 summary is in the appendix. At 10⁻⁶ it agrees with the M6 (auto-pw ÷ auto 0.21–1.07, ÷ best
 0.91–1.07). At 10⁻³ it shows Batched at p = 7 well behind Rotation at 72 threads, not only on
-few-box levels: 23–28× on level 2, 1.1–7.5× on levels of up to 3.5·10⁵ pairs. The clean pass
+few-box levels: 23–28× on level 2, 1.1–12× on the other levels (up to 3.5·10⁵ pairs). The clean pass
 decides whether that holds.
 
 ## 6. Levels of few boxes
@@ -253,13 +263,15 @@ On sign-off, on this branch:
   class, or the level's boxes) or a split of Batched's level call: a sentence added to CH4.0
   (the M2L rule's sparse-level term) in the roadmap.
 - **locust's clean pass** (§5): pending on this PR.
-- **d_pw on AVX2 and scalar**: d_b + 1, unmeasured; with the first AVX2 node.
+- **d_pw unmeasured**: AVX2 and scalar, and every class with one plane (real k with real
+  charges): d_b + 1; with the first AVX2 node and a one-plane run.
 
 ## 10. Tests and checks
 
 - `tests/helmholtz/plane_wave.rs`:
-  - `auto_takes_the_waves_by_its_rule`: the methods per level for named d_b and d_pw at
-    10⁻³, 10⁻⁶ and 10⁻⁸; off, and set after `with_m2l`; Rotation ignores it.
+  - `auto_takes_the_waves_by_its_rule`: the methods, precisions and tables per level for
+    named d_b and d_pw at 10⁻³ and 10⁻⁶; off, at 10⁻⁸ and with d_pw above every degree,
+    today's methods and batched tables; set after `with_m2l`; Rotation ignores it.
   - `auto_waves_by_the_machine_class_and_the_damping`: the ISA's d_pw through `with_p2p`;
     k = 20 + 100i gives Rotation on level 2 (Im κ ≥ 5π) and PW on level 3, while PlaneWave
     named keeps level 2; f32 gets no waves.
@@ -267,11 +279,18 @@ On sign-off, on this branch:
 - `tests/helmholtz_fmm.rs` (`check_auto_plane_wave`, scenarios 0 and 2; one rank and the MPI
   list's 2 and 4):
   - d_b = 0 and d_pw = 0 give PlaneWave bit for bit;
+  - d_pw above every degree gives today's `Auto` bit for bit;
   - the split (PW, PW, PW, Batched) has errors within 1.1× Rotation's, 2 threads bit for bit,
     and P ranks equal the one-rank FMM;
   - the agreed d_pw equals the all-reduce min of `auto_plane_wave_min_degree`, None by default.
 - `fmm-validate/tests/helmholtz_accuracy.rs` (`check_auto`): with waves at d_b = 0, `Auto`
   equals PlaneWave's checksum and precisions; errors within 1.1× Rotation's; off gives None.
+  The example's parsing of `auto-pw` and `auto-pw:<d>` has no unit test (none of its values
+  has); the runs show it: their M2L column names the setting (`auto ≤ 15, pw ≥ 12`,
+  `pw ≥ 16`) and the methods per level.
+- Not covered: a tree mixing waves and Batched with two planes at the FMM level (scenario 0's
+  debug tree has one level with V pairs; scenario 2, one plane, mixes them); the runs mix
+  them with two planes on every machine.
 
 `/verify` on the M6 (source 836b6b7; code as 4d44501):
 
@@ -284,7 +303,7 @@ On sign-off, on this branch:
 | `RUST_MIN_STACK=8388608 cargo test` (default members) | not run separately; its tests are a subset of the workspace run |
 | `.github/scripts/run-mpi-tests.sh` at 2 and 4 ranks | all 12 executables passed |
 | `cargo test -p nd-fmm-validate --test helmholtz_accuracy` | passed (43.6 s) |
-| `tests/helmholtz_fmm.rs` one-rank debug run | 242 s (216 s at CH6.2f), above nd-fmm-exec's one-minute budget as before |
+| `tests/helmholtz_fmm.rs` one-rank debug run | 255 s with the self-review's added check (216 s at CH6.2f), above nd-fmm-exec's one-minute budget as before |
 
 ## 11. Reproducing
 
