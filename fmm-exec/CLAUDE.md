@@ -349,6 +349,13 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   bit the default, and reach 4 with at most the corner's waves per level within
   `PLANE_WAVE_RATIO` of Rotation's error, at 2 threads and on P ranks the one-rank FMM (the
   one-rank debug run on the M6: see docs/helmholtz/tasks/CH6.2e.md, "Results").
+  Since Helmholtz CH6.2g (docs/helmholtz/tasks/CH6.2g.md) `tests/helmholtz/plane_wave_reach.rs`
+  checks the default counts at the 24 largest V offsets, (±3, ±3, ±2), along every direction
+  merge and shift gives them, at the calibrated degree with iprec 2: the error against RCR
+  within the error with converged counts plus 10× the stated error, on CH6.1a's fixture
+  domains at 10⁻⁶ in debug (16 s on the M6) and, ignored, on every domain below Im κ = 5π
+  at 10⁻³ and 10⁻⁶ (release, about 40 s); reach 4.5's error printed (CH6.2e's proposal,
+  withdrawn: up to 2·10⁴× the stated error at high κ).
   The level call is the crate-private `src/helmholtz/operator_plane_wave.rs`, Laplace's
   order (`src/operator_plane_wave.rs`) restated in scalar loops on
   `nd_fmm_tables::helmholtz::plane_wave` (no `nd-fmm-simd` kernel: Laplace's `WaveKernel`

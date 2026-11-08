@@ -45,6 +45,11 @@
 //! smaller reach in its place, Fₖ unchanged, for the measurements of Helmholtz CH6.2e
 //! (FMM3D's counts resolve about ρ = 4, S4 §3.2): the counts then bound the kernel on
 //! ρ ≤ reach only, and a pair beyond it errs by more.
+//! The FMM's chain needs the corner where its expansions resolve their boxes: a multipole and
+//! a local of the level's degree at the largest V offsets, (±3, ±3, ±2), with the counts for
+//! reach 4.5 err by more than 10× the stated error from Re κ = 7π and by up to 2·10⁴× near
+//! 16π, where the corner's add at most 3.2× to converged counts' error (Helmholtz CH6.2g,
+//! nd-fmm-exec's `tests/helmholtz/plane_wave_reach.rs`), so the default stays the corner.
 //!
 //! The maxima over ρ are taken at 64 equal steps of ρ, and over all orders at or above the
 //! count, since below the turning point m ≈ |tₖ| ρ one |J_m| can vanish at a zero while the

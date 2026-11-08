@@ -10,6 +10,14 @@ M2L"; CH6.2e's report `fmm-validate/results/helmholtz-ch6-2e.md` (§1, §4, §8)
 Make the α counts for lateral offsets ρ ≤ 4.5 the default of the Helmholtz exponential M2L
 in place of the region's corner 4√2, as signed off on 2026-11-07 (CH6.2e, question 1).
 
+**Outcome (2026-11-08): not adopted; the default stays the corner.** The largest-offset pair
+check failed at high κ (see "Results"); asked, the user answered "Keep the corner
+(Recommended)", and confirmed it after a correction of the question (it said wrongly that
+CH6.2e had no level with waves above κ ≈ 25; W1 at kD = 500 has κ = 31.25 on level 4). The
+task lands the guard test, the sampling check and the report
+`fmm-validate/results/helmholtz-ch6-2g.md`; the default-change steps below were implemented,
+then reverted before commit.
+
 ## Acceptance (proposal §10, verbatim)
 
 CH6.1: "errors within about 1.1× Rotation's, as T13's budget for Laplace". CH6.2: "per-level
@@ -116,11 +124,8 @@ nd-fmm-exec test in release.
 
 ## Machine runs
 
-locust (1 × 72, accuracy only, not timed): after `tools/gh200/sync.sh`,
-`cargo build --release -p nd-fmm-validate --example helmholtz_accuracy` and
-`THREADS=72 tools/helmholtz/ch6-1e-runs.sh /data/ucahtbe/logs/ch6-2g verify verify-large`.
-Decides the acceptance's verification. Checked first: `uptime`, `nvidia-smi` and other
-sessions' processes.
+Planned: locust (1 × 72, accuracy only): CH6.1e's `verify verify-large` at the new default.
+Not run: the default was not changed.
 
 ## Constraints and risks
 
@@ -135,16 +140,33 @@ sessions' processes.
 - Every level's waves change under `HelmholtzM2l::PlaneWave`, so its outputs change (not
   Rotation's or the other strategies'); D8's times (CH6.2f) follow this task.
 
+## Results
+
+- The new test `fmm-exec/tests/helmholtz/plane_wave_reach.rs`, first written with the bound
+  max(3× the stated error, 1.1× the corner's error), failed on fixture domain 172 (κ ≈ 11 +
+  2.4i, p = 20, 10⁻⁶: reach 4.5 1.23× the corner's). An exploration on every domain
+  (against RCR and the direct sum) showed reach 4.5 adding more than 10× the stated error
+  from Re κ = 7π and up to 2·10⁴× near 16π, and against the direct sum up to about 2,000×
+  Rotation's error (report §2). Decision as above.
+- The test then became the guard of the default counts: against the same nodes with converged
+  α counts (Nₖ = ⌈|tₖ| 4√2⌉ + 2Fₖ + 40), the default may add at most 10× the stated error,
+  on every domain below Im κ = 5π. Two intermediate bounds were tried and failed for reasons
+  the counts do not govern: 1.1× the converged counts' error (domain 192, both errors at 1 %
+  of the stated error), then that plus the stated error (domain 199, κ ≈ 23.6 + 4.7i, the
+  corner adding 2.4×). The distribution over all domains is the report's §2: the corner adds at
+  most 3.2× below Im κ = 5π; from 5π the stated errors fall to round-off while both chains err
+  10⁻⁹–10⁻⁵ absolute, so those domains are left out (report §3).
+- `tail_count`'s sampling: with 64 steps of [0, reach] the counts at 4.5 exceed the corner's on
+  11–16 of 437 domains per precision, all with Im κ ≥ 17, by one or two waves in all; at 1,024
+  steps (the same at 4,096) never. Kept at 64 (the bounds hold); report §1.
+- No machine run: the default is unchanged, so the FMM's outputs are bit for bit `main`'s.
+
 ## Pending runs
 
-(filled in step 6)
+None.
 
 ## Open questions
 
-- `tail_count`'s ρ sampling (checked here, planning run 2026-11-08 on the M6 with a
-  throwaway example): with 64 steps of [0, reach] the counts at 4.5 exceed the corner's on
-  11–16 of the 437 domains per precision, by 1–2 waves in total, all strongly damped
-  (Im κ ≥ 17); at 1024 steps no domain's 4.5 counts exceed the corner's, the corner's
-  having risen to them. Finer sampling would add waves on 38–55 domains (21–41 in total at
-  4.5). The kernel bound holds with 64 steps on every domain's nine points (the ignored
-  tests), so the plan keeps 64 steps; the report records it.
+None open. Follow-ups for CH6.2f (roadmap): the exponential M2L's largest-offset pairs at the
+level's degree err about 10× ε relative at 10⁻⁶ on the low-κ plateau (CH6.1c's truncated
+tail), and both counts' chains err 10⁻⁹–10⁻⁵ absolute on domains with Im κ ≥ 5π (report §3).

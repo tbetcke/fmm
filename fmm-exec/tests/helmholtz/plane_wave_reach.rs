@@ -305,7 +305,7 @@ fn the_counts_at_the_largest_offsets() {
 }
 
 /// Every domain of iprec 2 below Im κ = [`DAMPED`] at ε = 10⁻³ and 10⁻⁶, the ends of iprec
-/// 2's range under the rule (release, about 20 s on the M6).
+/// 2.s range under the rule (release, about 40 s on the M6).
 #[test]
 #[ignore = "release: 437 domains at two tolerances"]
 fn the_counts_at_the_largest_offsets_on_every_domain() {
