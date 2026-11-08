@@ -79,7 +79,9 @@ changed (`Execution::chunks` exists).
    by child's thread time 1.5–1.9× the parents' on levels 2–4, the repeated shifts 3–9×).
    Now `Children` where the split by parents makes at most half as many pieces as the pool
    has threads (`pieces` restates the driver's halving), the measured repetition rounded up
-   to 2.
+   to 2. **Changed after Kathleen's 4 × 10 (2026-11-08):** a rank's level also holds boxes
+   it does not compute, whose pieces have no work but counted, so level 3 stayed split by
+   parents at 4 × 10 on 3 busy threads; now the pieces holding a computed box are counted.
 3. **The harness.** `helmholtz_accuracy --plane-wave-split <auto|parents|children>`, the row's
    setting and its parts per level (`Row::plane_wave_parts`), a column per part and the busy
    threads in `--levels`; `tools/helmholtz/ch6-2f-runs.sh` and `ch6-2f-tables.py`.
@@ -131,7 +133,17 @@ FMM3D's parents' loop is CH6.2d's (same problems, same machines), not run again.
 
 ## Pending runs
 
-(none yet)
+None. Ran: locust 1 × 72 (2026-11-08, the second rule; the first rule's pass a record);
+Kathleen job 630738 (1 × 40 and 4 × 10, the second rule) and job 630756 (the third rule:
+W1 and W3 at kD = 100 at 1 × 40 and 4 × 10, W1 at kD = 500 at 4 × 10; `Auto` takes level 3
+by child at 4 × 10, one rank unchanged); the M6 1 × 6 on W1 and W3 at kD = 100 (the third
+rule, with the user's go-ahead, 2026-11-08).
+
+## Results
+
+[fmm-validate/results/helmholtz-ch6-2f.md](../../../fmm-validate/results/helmholtz-ch6-2f.md):
+level 2 ran on one thread (the 64-box grain), not slow per parent; by child levels 2–3 take
+0.38–0.88× Rotation's time at one rank, `Auto` the better split on every level.
 
 ## Open questions
 
