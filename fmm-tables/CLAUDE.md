@@ -95,7 +95,10 @@ rule of which Helmholtz CH6.1e measured.
   on ρ ≤ 4 within 2× at reach 4 on the fixture's domains, the ignored
   `the_counts_for_a_smaller_reach_on_every_domain` (reaches 4 and 4.5, about 8 minutes in
   release) on every domain, with the waves and the corner's error printed
-  (fmm-validate/results/helmholtz-ch6-2e.md §1). The
+  (fmm-validate/results/helmholtz-ch6-2e.md §1). The corner stays the default (Helmholtz
+  CH6.2g, fmm-validate/results/helmholtz-ch6-2g.md): at the largest V offsets the FMM's
+  chain errs by up to 2·10⁴× the stated error with the counts for reach 4.5 at high κ,
+  nd-fmm-exec's `tests/helmholtz/plane_wave_reach.rs`. The
   trusted path is the kernel e^{iκ|u|}/|u| on the region: `tests/helmholtz/` checks the
   kernel within 2× and the point-to-point chain within 3× the stated error (on every domain
   in the ignored `the_counts_on_every_domain`, about 6 minutes in release). A change to

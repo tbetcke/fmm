@@ -2505,3 +2505,45 @@ request, using this template:
   `tools/`); `mpi_exec`, `mpi_threading` and `invariance` passed at 2 and 4 ranks.
 - Follow-ups: CH6.2g (the reach adopted, with an M2L pair at the largest V offset against
   Rotation on every domain), next; CH6.2f after it.
+
+## 2026-11-08: CH6.2g The counts' reach adopted (not adopted: the corner kept)
+- Done:
+  - The check CH6.2e's question 1 asked for, one M2L pair at the largest V offsets at the
+    level's degree against Rotation on every domain, written first (nd-fmm-exec's
+    `tests/helmholtz/plane_wave_reach.rs`), failed for reach 4.5: at the 24 offsets
+    (±3, ±3, ±2) the counts for 4.5 add more than 10× the stated error over converged counts
+    from Re κ = 7π on the weakly damped domains (47× from 8π, 2·10⁴× near 16π), against the
+    direct sum at 10⁻⁶ up to about 2,000× Rotation's error; the corner's add at most 3.2×.
+    Asked with that evidence, the user answered "Keep the corner (Recommended)"; asked again
+    after a correction (the first question said wrongly that CH6.2e had no level with waves
+    above κ ≈ 25: W1 at kD = 500 has κ = 31.25 on level 4, where the FMM held at 0.986×), the
+    answer stood. The default-change steps (`DEFAULT_REACH`, the restated tests) were
+    implemented and reverted before commit.
+  - The test kept as the guard of the default counts (at most 10× the stated error added over
+    converged counts on every domain below Im κ = 5π, an empirical bound; reach 4.5's
+    printed); a paragraph in the quadrature module's docs and the crate `CLAUDE.md` files.
+  - `tail_count`'s sampling checked (a throwaway example at 64–4,096 steps): the 4.5-above-corner
+    inversions are the 64 steps' (none at 1,024 and 4,096), all with Im κ ≥ 17, one or two waves
+    in all; kept at 64.
+  - The report `fmm-validate/results/helmholtz-ch6-2g.md` (the M6, release, accuracy only);
+    raw lines in `~/projects/fmm-archive/m6/ch6-2g/`.
+- Tests: `plane_wave_reach::the_counts_at_the_largest_offsets` (debug: CH6.1a's fixture domains
+  and domain 92 at 10⁻⁶, 16 s on the M6; asserts reach 4.5 adds more than 100× on domain 92)
+  and the ignored `…_on_every_domain` (release, 437 domains less those from Im κ = 5π, at 10⁻³
+  and 10⁻⁶, about 40 s; passed: the corner adds at most 2.45× and 3.21×). A self-review by a
+  subagent: its points taken (an uncommitted import fix, the 10× bound called empirical, the
+  damped carve-out named a deferred effect, causes hedged, "real κ's edge" made one term).
+- Checks: ran on the M6: format, Clippy (default, examples, workspace all-targets: the last
+  first failed on an unused import, fixed), `cargo doc`, `cargo test` (1220 passed, 784 s),
+  `cargo test --workspace` (1334 passed, 1001 s), the MPI list at 2 and 4 ranks (passed: all 12 executables at 2 and 4 ranks (1168 s with the build));
+  the new ignored test in release. The helmholtz test executable's debug run 31 s (about
+  15 s before; under nd-fmm-exec's one-minute budget). Not run: the planned locust
+  verification (the default is unchanged, outputs bit for bit `main`'s). Pending: none.
+- Decisions: CH6.2e's question 1 (reach 4.5) withdrawn 2026-11-08 (the user: "Keep the corner
+  (Recommended)", twice); no new sign-off.
+- Laplace: not touched (a new Helmholtz test, docs); `mpi_exec`, `mpi_threading` and
+  `invariance` in the MPI list (passed: all 12 executables at 2 and 4 ranks (1168 s with the build)).
+- Follow-ups: CH6.2f (D8), next, with two sentences added from the report's §3: the
+  exponential M2L's largest-offset pairs at the level's degree err about 10× ε relative at
+  10⁻⁶ on the low-κ plateau (CH6.1c's truncated tail), and on levels with Im κ ≥ 5π both
+  counts' chains err 10⁻⁹–10⁻⁵ absolute (whether the rule keeps Rotation there).

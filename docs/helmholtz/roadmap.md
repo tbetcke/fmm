@@ -78,7 +78,13 @@ the corner on CH6.1e's 60 verification cases and 166 scanned levels, 4.25 on the
 scanned), 4 misses on three cases at 10⁻⁶ and kD ≥ 100; 4.5 proposed (0.84–0.86× the waves,
 the exponential M2L 0.80–0.92× per case on locust and the M6) and adopted as CH6.2g,
 before CH6.2f.
-Next: CH6.2g (the reach 4.5 adopted), then CH6.2f (D8).
+2026-11-08: CH6.2g done, the reach **not** adopted (`fmm-validate/results/helmholtz-ch6-2g.md`;
+the user: "Keep the corner (Recommended)", confirmed after a corrected question): at the 24
+largest V offsets at the level's degree the counts for reach 4.5 add more than 10× the stated
+error from Re κ = 7π and up to 2·10⁴× near 16π, where the corner's add at most 3.2×; CH6.2e's
+FMM errors averaged that worst case away (W1 at kD = 500, κ = 31.25, held at 0.986×). The
+corner stays the default, guarded by nd-fmm-exec's `tests/helmholtz/plane_wave_reach.rs`.
+Next: CH6.2f (D8).
 
 ## How `/next-task` reads this file
 
@@ -705,7 +711,8 @@ at any kD.
   again into our strategies per level (CH6.2b) and FMM3D with D8 (CH6.2c), and on 2026-11-06
   that into Kathleen's runs (CH6.2c), FMM3D (CH6.2d) and D8 (CH6.2e), and on 2026-11-06
   CH6.2d into FMM3D (CH6.2d) and the counts' corner (CH6.2e), D8 renamed CH6.2f; on
-  2026-11-07 CH6.2e added the counts' adoption (CH6.2g); CH6.2 is done when
+  2026-11-07 CH6.2e added the counts' adoption (CH6.2g, done 2026-11-08 without adopting it);
+  CH6.2 is done when
   all are:
 - [x] **CH6.2a The waves buffer bounded.** Report:
   `fmm-validate/results/helmholtz-ch6-2a.md`; `HelmholtzOperator::with_plane_wave_buffer`,
@@ -782,7 +789,9 @@ at any kD.
   and 4.5 also on the 166 scanned levels; 4 misses on three cases at 10⁻⁶ and kD ≥ 100
   (1.60–1.69×; in the scan one level, the W4 cube's level 2 at κ = 25); at 4.5 0.84–0.86×
   the waves, the exponential M2L 0.80–0.92× per case (locust, the M6). Reach 4.5 proposed;
-  questions 1 (adopt 4.5, CH6.2g) and 2 (CH6.2g before CH6.2f) signed off 2026-11-07 (the user: "1 and 2 as recommended").
+  questions 1 (adopt 4.5, CH6.2g) and 2 (CH6.2g before CH6.2f) signed off 2026-11-07 (the user: "1 and 2 as recommended");
+  question 1 withdrawn 2026-11-08 by CH6.2g's check (the user: "Keep the corner (Recommended)"):
+  the corner stays the default.
   Split on 2026-11-06 from CH6.2d. From CH6.1a: its counts
   resolve the region's corner ρ = 4√2 at 1.31–1.51× FMM3D's waves where Im κ < π/2 (FMM3D's
   resolve about ρ = 4, S4 §3.2); whether a pair ever needs the corner at the FMM's ε, so
@@ -797,8 +806,27 @@ at any kD.
   bounded by Rotation's error): at iprec 1 this points at FMM3D's counts being too few in the
   FMM, other differences not excluded; whether fewer than ours hold at iprec 2 (the rule's)
   is this task's. *Needs:* CH6.2b. *Machines:* locust.
-- [ ] **CH6.2g The counts' reach adopted.** From CH6.2e (report §8, question 1,
-  signed off 2026-11-07 (the user: "1 and 2 as recommended")): the α counts for lateral offsets ρ ≤ 4.5 in place of the corner 4√2 as the
+- [x] **CH6.2g The counts' reach adopted.** Report: `fmm-validate/results/helmholtz-ch6-2g.md`;
+  `fmm-exec/tests/helmholtz/plane_wave_reach.rs`. **Not adopted: the corner stays the default**
+  (2026-11-08, the user, asked with the evidence below: "Keep the corner (Recommended)"; asked
+  again the same day after a correction, the first question having said wrongly that CH6.2e had
+  no level with waves above κ ≈ 25, and the answer stood). The check this line asked for, one
+  M2L pair at the largest V offsets (the 24 permutations of (±3, ±3, ±2), along every direction
+  merge and shift gives them) at the level's calibrated degree against Rotation on every domain
+  of iprec 2, failed for reach 4.5: against the same nodes with converged α counts it adds more
+  than 10× the stated error from Re κ = 7π on the domains of real κ's edge (47× from 8π,
+  2·10⁴× near 16π; on some damped domains up to 16× from 1.5π), and against the direct sum
+  at 10⁻⁶ up to about 2,000× Rotation's error, while the corner's counts add at most 3.2×. The
+  FMM's chain needs the corner where its local resolves its box (the counts take the source's
+  orders apart, not the target's; report §2). CH6.2e's FMM errors held at reach 4.5 on W1 at
+  kD = 500 (κ = 31.25, where the worst-case pair errs about 10× Rotation's) because the error
+  over sampled targets likely averages the worst case away (report §4, not measured). The test now guards the
+  default counts: at most 10× the stated error added over converged counts on every domain
+  below Im κ = 5π, reach 4.5's printed. `tail_count`'s sampling checked (report §1): the
+  inversions are the 64 steps' (none at 1,024), on strongly damped domains, one or two waves in
+  all; kept. CONVENTIONS §3.15 and `nd-fmm-ref`'s generator unchanged. The line as planned
+  (from CH6.2e, report §8, question 1, signed off 2026-11-07, the user: "1 and 2 as
+  recommended"): the α counts for lateral offsets ρ ≤ 4.5 in place of the corner 4√2 as the
   default (`RHO_MAX`'s role), 0.84–0.86× the waves; CH6.1a's acceptance and the quadrature
   module's bound restated on ρ ≤ 4.5, CONVENTIONS §3.15's sentence on the quadrature's
   region amended (its subsection "Exponential M2L" is unversioned, so no version bump),
@@ -834,7 +862,13 @@ at any kD.
   (at par, 0.81–1.13×, on the full levels), with both codes able to use at most 8 threads on
   level 2: before the remedy, split merge and
   shift's time into its shifts and its conversions to locals to find why a coarse level's
-  parent costs ours more. *Done when:* D8 proposed with the rule's inputs (degree,
+  parent costs ours more. Also (CH6.2g, report §3): D8's times at the corner's counts, the
+  default kept; and at the level's degree the exponential M2L's largest-offset pairs err about
+  10× ε relative at 10⁻⁶ on the low-κ plateau (3·10⁻⁶ against Rotation's 10⁻¹²–10⁻⁹ at points
+  near box corners; CH6.1c's truncated tail, not the counts), and on levels with Im κ ≥ 5π
+  both counts' chains err 10⁻⁹–10⁻⁵ absolute (the corner's counts up to about 3× the
+  converged counts'), where the field across a V offset is below 2·10⁻¹⁴ of the near field
+  and CH6.2g's guard test leaves the domains out: whether the rule keeps Rotation there. *Done when:* D8 proposed with the rule's inputs (degree,
   ε, the level's boxes) and the coarse levels' remedy measured. *Needs:* CH6.2c, CH6.2d,
   CH6.2e. *Sign-off:* D8.
 - [ ] **H6.G Gate.** `/milestone-gate H6`. *Needs:* every task above.
