@@ -1,13 +1,14 @@
 //! The operator's exponential M2L (Helmholtz CH6.1d): each level's precision by the rule
 //! and named, the levels it reports, and the pair body bit for bit the pair translation of
 //! `nd_fmm_tables::helmholtz::plane_wave` along the direction merge and shift gives the
-//! pair, for one and two multipole planes and two vectors. The level call by merge and
-//! shift is tested with the FMM in `tests/helmholtz_fmm.rs`.
+//! pair, for one and two multipole planes and two vectors; the split's setting (Helmholtz
+//! CH6.2f). The level call by merge and shift is tested with the FMM in
+//! `tests/helmholtz_fmm.rs`.
 
 use nd_fmm_exec::geometry::Domain;
 use nd_fmm_exec::helmholtz::{
     ChargeKind, DegreeRule, Densities, HelmholtzM2l, HelmholtzOperator, MIN_BUFFER_BOXES,
-    PlaneWaveCounts, PlaneWavePrecision, Wavenumber,
+    PlaneWaveCounts, PlaneWavePrecision, PlaneWaveSplit, Wavenumber,
 };
 use nd_fmm_math::{Complex, Layout};
 use nd_fmm_plan::operator::{FmmSizes, PairOperator};
@@ -258,6 +259,28 @@ fn named_precisions() {
         precisions(&op),
         [None, None, None, Some(Iprec1), Some(Iprec1), Some(Iprec1)]
     );
+}
+
+#[test]
+fn the_split_is_a_setting() {
+    let k = Wavenumber::new(20.0, 0.0).unwrap();
+    let op = operator(k, ChargeKind::Real, 1, PlaneWavePrecision::Rule);
+    assert_eq!(op.plane_wave_split(), PlaneWaveSplit::Auto);
+    assert_eq!(PlaneWaveSplit::default(), PlaneWaveSplit::Auto);
+    // Kept through a later choice of the tables, and before `with_m2l` alike.
+    for split in [PlaneWaveSplit::Parents, PlaneWaveSplit::Children] {
+        let op = operator(k, ChargeKind::Real, 1, PlaneWavePrecision::Rule)
+            .with_plane_wave_split(split)
+            .with_plane_wave_reach(5.0);
+        assert_eq!(op.plane_wave_split(), split);
+        let densities = Densities::new(k.kind(), ChargeKind::Real, 1);
+        let before = HelmholtzOperator::<f64>::new(k, densities, &domain(), &DEGREES, false, 8)
+            .unwrap()
+            .with_plane_wave_split(split)
+            .with_m2l(HelmholtzM2l::PlaneWave, 0);
+        assert_eq!(before.plane_wave_split(), split);
+        assert_eq!(before.plane_wave_counts(), PlaneWaveCounts::default());
+    }
 }
 
 #[test]

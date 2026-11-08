@@ -233,7 +233,7 @@ use crate::operator::{M2L_BLOCK_TARGETS, P2pChoice};
 #[path = "operator_plane_wave.rs"]
 mod plane_wave;
 
-pub use plane_wave::{MIN_BUFFER_BOXES, PlaneWaveCounts, PlaneWaveTimes};
+pub use plane_wave::{MIN_BUFFER_BOXES, PlaneWaveCounts, PlaneWaveSplit, PlaneWaveTimes};
 use plane_wave::{PlaneBuffer, PlaneScratch};
 
 /// Why [`HelmholtzOperator::new`] refused its inputs.
@@ -656,6 +656,20 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         self.plane_buffer.bound = bytes;
         self.plane_buffer.size(self.kernel.plane_waves.as_ref());
         self
+    }
+
+    /// Splits the exponential M2L's merge and shift over the pool by `split` (default
+    /// [`PlaneWaveSplit::Auto`]; Helmholtz CH6.2f). The output is the same bit for bit under
+    /// every setting.
+    pub fn with_plane_wave_split(mut self, split: PlaneWaveSplit) -> Self {
+        self.plane_buffer.split = split;
+        self
+    }
+
+    /// How merge and shift splits over the pool
+    /// ([`with_plane_wave_split`](Self::with_plane_wave_split)).
+    pub fn plane_wave_split(&self) -> PlaneWaveSplit {
+        self.plane_buffer.split
     }
 
     /// The waves buffer's byte bound ([`with_plane_wave_buffer`](Self::with_plane_wave_buffer)).

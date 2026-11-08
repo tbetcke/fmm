@@ -3,6 +3,7 @@
 //! scratch, its order and its pair body ([module documentation](super#m2l)).
 
 use core::ops::Range;
+use std::sync::PoisonError;
 use std::time::{Duration, Instant};
 
 use nd_fmm_math::Layout;
@@ -19,7 +20,7 @@ use nd_fmm_tables::plane_wave::{CHILDREN, Direction, MergeGeometry, SLOTS};
 use nd_octree::morton;
 
 use super::{HelmholtzOperator, Kernel, Scratch, SimdScalar};
-use crate::driver::BoxCall;
+use crate::driver::{BoxCall, PARENT_GRAIN};
 
 /// The slot of the source of V pair (child index o, offset index d) at `8 d + o`, or
 /// [`NO_SLOT`] (`nd_fmm_tables::plane_wave::geometry::slot_of`, tabulated once).
@@ -53,6 +54,17 @@ pub(super) struct PlaneScratch<T> {
     pairs: Vec<Option<PlaneWaveLevelScratch<T>>>,
     /// The values of `pairs`.
     pair_values: usize,
+    /// This thread's time in merge and shift's parts since the level call last drained it.
+    parts: Parts,
+}
+
+/// One thread's time in merge and shift's parts ([`PlaneWaveTimes`]'s thread-seconds).
+#[derive(Clone, Copy, Debug, Default)]
+struct Parts {
+    shifts: Duration,
+    children: Duration,
+    conversions: Duration,
+    busy: Duration,
 }
 
 impl<T: SimdScalar> PlaneScratch<T> {
@@ -86,6 +98,7 @@ impl<T: SimdScalar> PlaneScratch<T> {
                     4 * Layout::new(t.p()).len() + t.mode_len() + 4 * t.wave_len() + t.sum_len()
                 })
                 .sum(),
+            parts: Parts::default(),
         }
     }
 
@@ -156,6 +169,8 @@ pub(super) struct PlaneBuffer<T> {
     /// The boxes of each level, own and ghost, if the plan named them.
     pub(super) level_boxes: Vec<usize>,
     pub(super) counts: PlaneWaveCounts,
+    /// How merge and shift splits a chunk over the pool.
+    pub(super) split: PlaneWaveSplit,
 }
 
 /// The counts of the exponential M2L's level calls since the operator was built or its M2L
@@ -169,6 +184,28 @@ pub struct PlaneWaveCounts {
     /// Boxes whose waves were computed, once per chunk, vector and frame: the sources of a
     /// chunk's computed children, a source read by several chunks once in each.
     pub waves: usize,
+    /// Chunks whose merge and shift ran by child ([`PlaneWaveSplit`]; Helmholtz CH6.2f).
+    pub by_child: usize,
+}
+
+/// How the exponential M2L's level call splits merge and shift over the pool (Helmholtz
+/// CH6.2f; [`HelmholtzOperator::with_plane_wave_split`]). Every setting gives every local
+/// the same arithmetic in the same order, so the output is the same bit for bit; only the
+/// work and its spread over the threads differ.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlaneWaveSplit {
+    /// By child on a chunk of at most `PARENT_GRAIN` (64) boxes per thread of the pool,
+    /// where the split by parents, which never cuts a piece below 64 boxes, leaves threads
+    /// idle; by parents elsewhere and without a pool.
+    #[default]
+    Auto,
+    /// By parents: the pool halves a chunk at parent boundaries down to pieces of 64 boxes,
+    /// and each parent's accumulators serve all its computed children.
+    Parents,
+    /// By child: one task per box of the chunk, each computed child summing the
+    /// accumulators that serve it (siblings computing a shared accumulator again) and
+    /// converting its waves.
+    Children,
 }
 
 /// The wall time of the two passes of the exponential M2L's level calls on one level, summed
@@ -179,8 +216,20 @@ pub struct PlaneWaveCounts {
 pub struct PlaneWaveTimes {
     /// The waves of each chunk's sources, box by box on the pool.
     pub waves: Duration,
-    /// Merge and shift, parent by parent on the pool.
+    /// Merge and shift, by parents or by child on the pool ([`PlaneWaveSplit`]).
     pub parents: Duration,
+    /// Merge and shift's thread-seconds (Helmholtz CH6.2f): the time of its tasks summed
+    /// over the threads, so `busy` over `parents` is the threads it kept busy.
+    pub busy: Duration,
+    /// The thread-seconds of the accumulators, each summing its slots' waves times their
+    /// source shifts (part of `busy`).
+    pub shifts: Duration,
+    /// The thread-seconds of the children's sums of their accumulators and their child
+    /// shifts (part of `busy`).
+    pub children: Duration,
+    /// The thread-seconds of the children's conversions of their waves into locals, rotated
+    /// back (part of `busy`).
+    pub conversions: Duration,
 }
 
 impl<T> Default for PlaneBuffer<T> {
@@ -192,6 +241,7 @@ impl<T> Default for PlaneBuffer<T> {
             bound: None,
             level_boxes: Vec::new(),
             counts: PlaneWaveCounts::default(),
+            split: PlaneWaveSplit::Auto,
         }
     }
 }
@@ -308,8 +358,8 @@ impl<T: SimdScalar> PlaneBuffer<T> {
 impl<T: SimdScalar> HelmholtzOperator<T> {
     /// The level call by merge and shift (module documentation, "M2L"): chunk by chunk of
     /// whole parents, per vector and frame the up and down waves of the chunk's sources on
-    /// the pool, then merge and shift parent by parent, the pool splitting the chunk at
-    /// parent boundaries.
+    /// the pool, then merge and shift by parents (the pool splitting the chunk at parent
+    /// boundaries) or by child ([`PlaneWaveSplit`]).
     pub(super) fn plane_wave_m2l(&mut self, batch: M2l<'_, T>) {
         let M2l {
             level,
@@ -342,6 +392,10 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         let n = Layout::new(tables.p()).len();
         let box_waves = 2 * tables.wave_len();
         let boxes = multipoles.as_slice().len() / (m * planes * n);
+        let threads = match (&self.execution.pool, self.execution.serial) {
+            (Some(_), false) => self.execution.scratch.len(),
+            _ => 1,
+        };
         let buffer = &mut self.plane_buffer;
         let capacity = buffer.capacity(boxes, box_waves);
         buffer.reserve(boxes, capacity, box_waves);
@@ -357,8 +411,14 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                 start = end;
                 continue;
             }
+            let by_child = match buffer.split {
+                PlaneWaveSplit::Parents => false,
+                PlaneWaveSplit::Children => true,
+                PlaneWaveSplit::Auto => threads > 1 && end - start <= PARENT_GRAIN * threads,
+            };
             buffer.counts.chunks += 1;
             buffer.counts.waves += 3 * m * count;
+            buffer.counts.by_child += usize::from(by_child);
             let chunk = &mut locals[start * size..end * size];
             for v in 0..m {
                 for frame in 0..3 {
@@ -377,31 +437,59 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                     self.plane_wave_times[level].waves += clock.elapsed();
                     let clock = Instant::now();
                     let waves = (&buffer.waves[..count * box_waves], &buffer.position[..]);
-                    let starts = |t: usize| {
-                        t == 0
-                            || morton::parent(index.key(level, start + t))
-                                != morton::parent(index.key(level, start + t - 1))
-                    };
-                    self.execution
-                        .parents(chunk, size, starts, |range, chunks, scratch| {
+                    let tables = (merge, geometry);
+                    let wave = (frame, v, waves);
+                    if by_child {
+                        self.execution.chunks(chunk, size, |i, local, scratch| {
                             let plane = scratch
                                 .plane
                                 .as_mut()
                                 .expect("the exponential M2L's scratch");
-                            parents(
-                                &call,
-                                (merge, geometry),
-                                (frame, v, waves),
-                                start + range.start..start + range.end,
-                                chunks,
-                                plane,
-                            );
+                            let busy = Instant::now();
+                            child(&call, tables, wave, (start..end, start + i), local, plane);
+                            plane.parts.busy += busy.elapsed();
                         });
+                    } else {
+                        let starts = |t: usize| {
+                            t == 0
+                                || morton::parent(index.key(level, start + t))
+                                    != morton::parent(index.key(level, start + t - 1))
+                        };
+                        self.execution
+                            .parents(chunk, size, starts, |range, chunks, scratch| {
+                                let plane = scratch
+                                    .plane
+                                    .as_mut()
+                                    .expect("the exponential M2L's scratch");
+                                let busy = Instant::now();
+                                parents(
+                                    &call,
+                                    tables,
+                                    wave,
+                                    start + range.start..start + range.end,
+                                    chunks,
+                                    plane,
+                                );
+                                plane.parts.busy += busy.elapsed();
+                            });
+                    }
                     self.plane_wave_times[level].parents += clock.elapsed();
                 }
             }
             buffer.forget(0, count);
             start = end;
+        }
+        // Every thread's parts, into the level's times.
+        let times = &mut self.plane_wave_times[level];
+        for set in &mut self.execution.scratch {
+            let set = set.get_mut().unwrap_or_else(PoisonError::into_inner);
+            if let Some(plane) = set.plane.as_mut() {
+                let parts = core::mem::take(&mut plane.parts);
+                times.busy += parts.busy;
+                times.shifts += parts.shifts;
+                times.children += parts.children;
+                times.conversions += parts.conversions;
+            }
         }
     }
 }
@@ -439,40 +527,62 @@ fn parents<T: SimdScalar>(
     let size = locals.len() / boxes.len();
     let mut t = boxes.start;
     while t < boxes.end {
-        let parent = morton::parent(call.index.key(call.level, t));
-        let mut end = t + 1;
-        while end < boxes.end && morton::parent(call.index.key(call.level, end)) == parent {
-            end += 1;
-        }
+        let end = parent_end(call, t, boxes.end);
         let run = &mut locals[(t - boxes.start) * size..(end - boxes.start) * size];
-        parent_call(call, tables, wave, t..end, run, s);
+        let children = sources_by_slot(call, tables.1, t..end, s);
+        parent_call(tables, wave, children, (t, size), run, s);
         t = end;
     }
 }
 
-/// Merge and shift of `frame` for vector `v` into the children `children` of one parent
-/// (consecutive boxes) whose locals are `locals`: per direction of the frame, every
-/// accumulator whose mask holds a computed child sums its slots present in ascending order,
-/// each source's waves times its source shift, from zero; each computed child adds its
-/// accumulators in ascending mask order and multiplies by its child shift; then each
-/// computed child with waves converts its up and its down waves into a local in the frame
-/// and adds it rotated back.
-fn parent_call<T: SimdScalar>(
+/// The end of the run of boxes from `t` that share its parent, at most `end`.
+fn parent_end<T>(call: &BoxCall<'_, VList, LevelSlice<'_, T>>, t: usize, end: usize) -> usize {
+    let parent = morton::parent(call.index.key(call.level, t));
+    let mut next = t + 1;
+    while next < end && morton::parent(call.index.key(call.level, next)) == parent {
+        next += 1;
+    }
+    next
+}
+
+/// Merge and shift of `frame` for vector `v` into box `t` alone, whose local is `local`,
+/// the boxes `chunk` being whole parents (the split by child): its parent's run of boxes
+/// and their sources by slot, as the parent's call has them, then the call for this child
+/// alone, so the child's local gets the parent's call's arithmetic in its order.
+fn child<T: SimdScalar>(
     call: &BoxCall<'_, VList, LevelSlice<'_, T>>,
-    (merge, geometry): (&MergeLevel<T>, &MergeGeometry),
-    (frame, v, (waves, position)): (usize, usize, (&[T], &[u32])),
-    children: Range<usize>,
-    locals: &mut [T],
+    tables: (&MergeLevel<T>, &MergeGeometry),
+    wave: (usize, usize, (&[T], &[u32])),
+    (chunk, t): (Range<usize>, usize),
+    local: &mut [T],
     s: &mut PlaneScratch<T>,
 ) {
-    let tables = merge.tables();
-    let w = tables.wave_len();
-    let n = Layout::new(tables.p()).len();
-    let size = locals.len() / children.len();
-    // The children this rank computes (a V row), by child index.
+    if call.view.row(t).0.is_empty() {
+        return;
+    }
+    let parent = morton::parent(call.index.key(call.level, t));
+    let mut first = t;
+    while first > chunk.start && morton::parent(call.index.key(call.level, first - 1)) == parent {
+        first -= 1;
+    }
+    let siblings = first..parent_end(call, t, chunk.end);
+    let (boxes, computed) = sources_by_slot(call, tables.1, siblings, s);
+    let o = morton::child_index(call.index.key(call.level, t));
+    debug_assert!(computed & (1 << o) != 0, "a box with a V row is computed");
+    parent_call(tables, wave, (boxes, 1 << o), (t, local.len()), local, s);
+}
+
+/// The children `children` of one parent (consecutive boxes) by child index, and the
+/// computed ones (with a V row) as a mask; their sources into `s.slots` by slot.
+fn sources_by_slot<T>(
+    call: &BoxCall<'_, VList, LevelSlice<'_, T>>,
+    geometry: &MergeGeometry,
+    children: Range<usize>,
+    s: &mut PlaneScratch<T>,
+) -> ([usize; CHILDREN], u8) {
     let mut boxes = [usize::MAX; CHILDREN];
     let mut computed = 0u8;
-    for t in children.clone() {
+    for t in children {
         let o = morton::child_index(call.index.key(call.level, t));
         boxes[o] = t;
         if !call.view.row(t).0.is_empty() {
@@ -480,9 +590,8 @@ fn parent_call<T: SimdScalar>(
         }
     }
     if computed == 0 {
-        return;
+        return (boxes, computed);
     }
-    // The sources by slot, from the computed children's rows.
     s.slots.fill(NO_BOX);
     for (o, &t) in boxes.iter().enumerate() {
         if computed & (1 << o) == 0 {
@@ -496,15 +605,42 @@ fn parent_call<T: SimdScalar>(
             s.slots[slot as usize] = source;
         }
     }
+    (boxes, computed)
+}
+
+/// Merge and shift of `frame` for vector `v` into the children `serve` of one parent
+/// (`boxes` by child index; the computed children, or one of them under the split by
+/// child), the sources by slot in `s.slots`, whose locals are `locals` from box `first`,
+/// `size` values per box: per direction of the frame, every accumulator whose mask holds a
+/// child served sums its slots present in ascending order, each source's waves times its
+/// source shift, from zero; each child served adds its accumulators in ascending mask order
+/// and multiplies by its child shift; then each child served with waves converts its up
+/// and its down waves into a local in the frame and adds it rotated back. A child's
+/// arithmetic does not depend on the others served.
+fn parent_call<T: SimdScalar>(
+    (merge, geometry): (&MergeLevel<T>, &MergeGeometry),
+    (frame, v, (waves, position)): (usize, usize, (&[T], &[u32])),
+    (boxes, serve): ([usize; CHILDREN], u8),
+    (first, size): (usize, usize),
+    locals: &mut [T],
+    s: &mut PlaneScratch<T>,
+) {
+    if serve == 0 {
+        return;
+    }
+    let tables = merge.tables();
+    let w = tables.wave_len();
+    let n = Layout::new(tables.p()).len();
     // Per child, whether it received up waves (0) and down waves (1).
     let mut has = [[false; 2]; CHILDREN];
     for direction in [0, 1].map(|half| Direction::ALL[2 * frame + half]) {
         let half = usize::from(!direction.is_up());
         let accumulators = geometry.accumulators(direction);
-        // The accumulators of the computed children, each over its slots in order.
+        // The accumulators of the children served, each over its slots in order.
+        let clock = Instant::now();
         for (a, accumulator) in accumulators.iter().enumerate() {
             s.present[a] = false;
-            if accumulator.mask & computed == 0 {
+            if accumulator.mask & serve == 0 {
                 continue;
             }
             let acc = &mut s.accs[a * w..(a + 1) * w];
@@ -524,9 +660,11 @@ fn parent_call<T: SimdScalar>(
                 shift_add(acc, &waves[at..at + w], factors);
             }
         }
-        // Each computed child: its accumulators in order, then its shift.
+        let shifted = Instant::now();
+        s.parts.shifts += shifted - clock;
+        // Each child served: its accumulators in order, then its shift.
         for (o, has) in has.iter_mut().enumerate() {
-            if computed & (1 << o) == 0 {
+            if serve & (1 << o) == 0 {
                 continue;
             }
             let incoming = &mut s.incoming[(2 * o + half) * w..(2 * o + half + 1) * w];
@@ -545,9 +683,11 @@ fn parent_call<T: SimdScalar>(
                 shift(incoming, merge.child_shift(direction, o));
             }
         }
+        s.parts.children += shifted.elapsed();
     }
     // Each child's local: the sums of its up and down waves, the local in the frame, and
     // back into the box's frame.
+    let clock = Instant::now();
     for (o, has) in has.iter().enumerate() {
         if !has[0] && !has[1] {
             continue;
@@ -562,7 +702,8 @@ fn parent_call<T: SimdScalar>(
                 tables.add_local_from_sums(sums, half == 0, frame_local);
             }
         }
-        let at = (boxes[o] - children.start) * size + v * 2 * n;
+        let at = (boxes[o] - first) * size + v * 2 * n;
         tables.add_local_from_frame(frame, frame_local, &mut locals[at..at + 2 * n]);
     }
+    s.parts.conversions += clock.elapsed();
 }
