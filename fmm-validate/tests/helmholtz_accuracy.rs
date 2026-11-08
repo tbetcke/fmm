@@ -24,8 +24,8 @@ use mpi::Threading;
 use mpi::topology::SimpleCommunicator;
 use mpi::traits::Communicator;
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, Degrees, Densities, HelmholtzM2l, Output, PlaneWavePrecision, Wavenumber,
-    WavenumberKind, auto_m2l_mul_add, s7_degree,
+    ChargeKind, Degrees, Densities, HelmholtzM2l, Output, PlaneWavePrecision, PlaneWaveSplit,
+    Wavenumber, WavenumberKind, auto_m2l_mul_add, s7_degree,
 };
 use nd_fmm_exec::operator::Isa;
 use nd_fmm_tables::helmholtz::plane_wave::merge::precision_for_tolerance;
@@ -129,11 +129,19 @@ fn check_harness(world: &SimpleCommunicator) {
 fn check_levels(row: &Row) {
     assert_eq!(row.m2l_seconds.len(), row.levels);
     assert_eq!(row.plane_wave_seconds.len(), row.levels);
+    assert_eq!(row.plane_wave_parts.len(), row.levels);
     for (l, &[waves, parents]) in row.plane_wave_seconds.iter().enumerate() {
+        let [busy, shifts, children, conversions] = row.plane_wave_parts[l];
         if row.plane_wave[l].is_some() && row.v_pairs[l] > 0 {
             assert!(
                 waves > 0.0 && parents > 0.0,
                 "level {l}: passes {waves} s, {parents} s"
+            );
+            // The parts (CH6.2f), each rank's within its busy time, the slowest of each.
+            assert!(
+                busy > 0.0 && conversions > 0.0 && shifts.max(children).max(conversions) <= busy,
+                "level {l}: parts {:?}",
+                row.plane_wave_parts[l]
             );
             assert!(
                 waves <= row.m2l_seconds[l] && parents <= row.m2l_seconds[l],
@@ -146,6 +154,7 @@ fn check_levels(row: &Row) {
                 [0.0, 0.0],
                 "level {l}: no merge and shift"
             );
+            assert_eq!(row.plane_wave_parts[l], [0.0; 4], "level {l}: no parts");
         }
     }
     assert_eq!(row.v_pairs.len(), row.levels);
@@ -279,7 +288,8 @@ const PLANE_WAVE_RATIO: f64 = 1.1;
 /// tolerance (ε = 10⁻⁸) no level has waves and the output is Rotation's (the checksum). The
 /// counts' reach (Helmholtz CH6.2e): the corner's by default, with waves exactly on the
 /// levels with a precision; at reach 4 at most the corner's waves per level and fewer in all,
-/// and on W1 within [`PLANE_WAVE_RATIO`] of Rotation's errors.
+/// and on W1 within [`PLANE_WAVE_RATIO`] of Rotation's errors. The split by child
+/// (Helmholtz CH6.2f) at 2 threads the default's checksum.
 fn check_plane_wave(world: &SimpleCommunicator) {
     let clusters = Workload::W4 {
         distribution: Distribution::Clusters,
@@ -371,6 +381,16 @@ fn check_plane_wave(world: &SimpleCommunicator) {
                 );
             }
         }
+        // The split by child (CH6.2f): the default's output at 2 threads.
+        assert_eq!(row.plane_wave_split, PlaneWaveSplit::Auto);
+        case.plane_wave_split = Some(PlaneWaveSplit::Children);
+        let children = run(&case, &problem, &oracle, 2, world).expect("the FMM runs");
+        case.plane_wave_split = None;
+        assert_eq!(children.plane_wave_split, PlaneWaveSplit::Children);
+        assert_eq!(
+            children.checksum, row.checksum,
+            "{workload:?} at ε = {eps}: the split by child"
+        );
         // Named: one precision on the finest level alone.
         let finest = row.levels - 1;
         let mut named = vec![None; row.levels];

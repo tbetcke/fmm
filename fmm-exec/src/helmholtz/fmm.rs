@@ -102,7 +102,7 @@ use thiserror::Error;
 use super::{
     C_LEAF, ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DegreeError, Degrees, Densities,
     DensityError, HelmholtzM2l, HelmholtzOperator, OperatorError, Output, PlaneWavePrecision,
-    Wavenumber, WavenumberKind, auto_batched_max_degree, min_leaf_level,
+    PlaneWaveSplit, Wavenumber, WavenumberKind, auto_batched_max_degree, min_leaf_level,
 };
 use crate::fmm::{DEFAULT_MAX_POINTS_PER_LEAF, FmmError, PointSet, SettingsError};
 use crate::geometry::Domain;
@@ -175,6 +175,7 @@ pub struct HelmholtzFmmBuilder {
     plane_wave_precision: PlaneWavePrecision,
     plane_wave_reach: f64,
     plane_wave_budget: usize,
+    plane_wave_split: PlaneWaveSplit,
     c_leaf: f64,
     p2p: P2pChoice,
     pair_calls: bool,
@@ -207,6 +208,7 @@ impl HelmholtzFmmBuilder {
             plane_wave_precision: PlaneWavePrecision::Rule,
             plane_wave_reach: RHO_MAX,
             plane_wave_budget: DEFAULT_PLANE_WAVE_NODE_BUDGET,
+            plane_wave_split: PlaneWaveSplit::Auto,
             c_leaf: C_LEAF,
             p2p: P2pChoice::Auto,
             pair_calls: false,
@@ -333,6 +335,14 @@ impl HelmholtzFmmBuilder {
     pub fn plane_wave_reach(mut self, reach: f64) -> Self {
         assert_reach(reach);
         self.plane_wave_reach = reach;
+        self
+    }
+
+    /// How the exponential M2L's merge and shift splits over the threads (default
+    /// [`PlaneWaveSplit::Auto`]; `HelmholtzOperator::with_plane_wave_split`), for the
+    /// measurements (Helmholtz CH6.2f). Every setting gives the same output bit for bit.
+    pub fn plane_wave_split(mut self, split: PlaneWaveSplit) -> Self {
+        self.plane_wave_split = split;
         self
     }
 
@@ -560,6 +570,7 @@ impl HelmholtzFmmBuilder {
             Degrees::PerLevel(_) => None,
         })
         .with_plane_wave_reach(self.plane_wave_reach)
+        .with_plane_wave_split(self.plane_wave_split)
         .with_m2l(self.m2l, self.dense_budget)
         .with_plane_wave_boxes(&level_boxes)
         .with_plane_wave_buffer(

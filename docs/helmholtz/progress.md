@@ -2547,3 +2547,52 @@ request, using this template:
   exponential M2L's largest-offset pairs at the level's degree err about 10× ε relative at
   10⁻⁶ on the low-κ plateau (CH6.1c's truncated tail), and on levels with Im κ ≥ 5π both
   counts' chains err 10⁻⁹–10⁻⁵ absolute (whether the rule keeps Rotation there).
+
+## 2026-11-08: CH6.2f The coarse levels' merge and shift
+- Done:
+  - Split by `/next-task`'s size rule from the former CH6.2f: the coarse levels here, D8's
+    rule in CH6.2h.
+  - Merge and shift's parts timed (`PlaneWaveTimes::{busy, shifts, children, conversions}`,
+    each worker's clock, no value changed): level 2 ran on **one thread** and level 3 on
+    eight under the shared drivers' split by parents (`PARENT_GRAIN` = 64 boxes), not slow
+    per parent (Kathleen 15–18 ms of thread time per parent against FMM3D's 23–38 ms);
+    the conversions take 76–90 % of levels 2–3's thread time. CH6.2d's open question answered.
+  - `PlaneWaveSplit` (`Auto` the default, `Parents`, `Children`; operator and builder
+    setters): by child, one task per box, each computed child running its parent's call for
+    itself alone (the same arithmetic and order, so the same bits). `Auto` takes it where the
+    split by parents makes at most half as many pieces holding a computed box as the pool
+    has threads. The rule changed twice on the branch: the first (≤ 64 × threads boxes) took
+    level 4 at 72 threads, 1.24–1.32× slower; the second counted pieces without work on P
+    ranks and kept level 3 by parents at 4 × 10.
+  - Runs: locust 1 × 72, Kathleen 1 × 40 and 4 × 10 (jobs 630738 and 630756), the M6 1 × 6
+    (the user's go-ahead). At one rank `Auto` takes levels 2–3 by child: 0.38–0.73×
+    Rotation's time on locust, 0.43–0.88× on Kathleen (before up to 12.3× and 7.8×), level 2
+    on the M6 0.44–0.69×; elsewhere 0.87–1.03× the split by parents'. Our level-2 merge and
+    shift is now 0.06–0.37× FMM3D's parents' loop (before 2.3–5.1×). CH6.2c's 4 × 10
+    anomaly was the same one-thread level seen from two sides; at 4 × 10 `Auto` takes levels
+    2–3 by child (0.57–1.10× Rotation's).
+  - The report `fmm-validate/results/helmholtz-ch6-2f.md`; `tools/helmholtz/ch6-2f-runs.sh`,
+    `ch6-2f-tables.py`; the harness's `--split` and parts columns; raw outputs in
+    `~/projects/fmm-archive/{locust,kathleen,m6}/logs/ch6-2f*`.
+- Tests: `check_plane_wave_split` (in `check_plane_wave`: `Auto` the default, never by child
+  at 1 thread, by child on some rank at 2; `Parents` at 2 threads, `Children` at 1 and 2 bit
+  for bit the default; `Children` on P ranks against one rank); the floor at 2 threads by
+  child and by parents; `check_plane_wave_times` (the parts within `busy`);
+  `the_split_is_a_setting`; the unit test `pieces_count_the_split_by_parents_with_work`;
+  nd-fmm-validate's parts columns and `Children`'s checksum. The runs' checksums agree across
+  the three settings and 1 × 40 against 4 × 10. A self-review by a subagent: its points taken
+  (`Parents` at the floor restored, the sign-off on constraint 9, records, doc ranges).
+- Checks: ran on the M6: format, Clippy (default, examples, workspace all-targets),
+  `cargo doc`, `cargo test` (1222 passed), `cargo test --workspace` (1336 passed), the MPI
+  list at 2 and 4 ranks (all 12 executables passed, at a 900 s launch timeout; the default
+  300 s timed out three launches on a loaded M6). `tests/helmholtz_fmm.rs`' one-rank debug
+  run 216 s (211 s before). Pending: none.
+- Decisions: signed off 2026-11-08 (the user: "1 as recommended; schedule a Laplace task
+  for 2"): (1) `Auto` may read the threads and the rank's computed boxes (constraint 9 names a
+  rank's share; no bit depends on the split), as recommended; (2) a Laplace task for the same
+  64-box grain in its plane-wave M2L, CH6.2i, after CH6.2h on the priority list.
+- Laplace: not touched (`driver.rs` read only; the Helmholtz operator, harness and tools);
+  `mpi_exec`, `mpi_threading` and `invariance` passed at 2 and 4 ranks.
+- Follow-ups: CH6.2h (D8), next, with a sentence added: levels 2–3 now gain over Rotation,
+  and a two-phase split (the repeated shifts) only if D8's margins need it.
+  CH6.2i (Laplace's coarse levels), added by question 2.

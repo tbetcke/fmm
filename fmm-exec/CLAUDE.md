@@ -357,6 +357,26 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   at 10⁻³ and 10⁻⁶ (release, about 40 s; the domains from 5π, where the stated errors fall to
   round-off, are a known effect left to CH6.2f); reach 4.5's error printed (CH6.2e's proposal,
   withdrawn: up to 2·10⁴× the stated error at high κ).
+  Since Helmholtz CH6.2f (docs/helmholtz/tasks/CH6.2f.md; fmm-validate/results/helmholtz-ch6-2f.md)
+  merge and shift splits over the pool by `PlaneWaveSplit` (`with_plane_wave_split`,
+  `HelmholtzFmmBuilder::plane_wave_split`): `Parents` on `Execution::parents` as before, or
+  `Children` on `Execution::chunks`, one task per box of a chunk, each computed child summing
+  the accumulators whose mask holds it and converting, the parent's call restricted to it
+  (`parent_call`'s `serve` mask), so every local the same bits; `Auto` (the default) takes
+  `Children` on a chunk whose split by parents makes at most half as many pieces holding a
+  computed box as the pool has threads (`pieces` restates `driver::split_parents`' halving
+  down to `PARENT_GRAIN` = 64 boxes; level 2 ran on one thread, level 3 on 8 pieces; on P
+  ranks a level's held boxes it does not compute make pieces without work, which at 4 × 10
+  on Kathleen kept level 3 by parents on 3 busy threads before they were left out), since the split by child repeats
+  shared accumulators (1.2–3× the parents' thread time on CH6.2f's cases). `driver.rs`
+  unchanged.
+  `PlaneWaveTimes` gains merge and shift's thread-seconds by part (`busy`, `shifts`,
+  `children`, `conversions`, each worker's clock in its `PlaneScratch`, drained after the
+  level call) and `PlaneWaveCounts::by_child`. `check_plane_wave_split` (in
+  `check_plane_wave`) checks `Parents` at 2 threads and `Children` at 1 and 2 against the
+  default bit for bit with every chunk split as named, `Children` on P ranks against the
+  one-rank FMM, the default by child at 2 threads and never at 1; the floor at 2 threads
+  runs `Children`; `check_plane_wave_times` the parts within `busy`.
   The level call is the crate-private `src/helmholtz/operator_plane_wave.rs`, Laplace's
   order (`src/operator_plane_wave.rs`) restated in scalar loops on
   `nd_fmm_tables::helmholtz::plane_wave` (no `nd-fmm-simd` kernel: Laplace's `WaveKernel`

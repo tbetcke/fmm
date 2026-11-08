@@ -51,6 +51,9 @@
 //! for bit, vector v of two the one-vector FMM bit for bit, precisions named per level
 //! (Rotation's level call bit for bit where every level names none). In debug builds the
 //! pair path of a tree with waves on several levels runs on the finest level's alone.
+//! Merge and shift split by child and by parents (Helmholtz CH6.2f): each the default bit
+//! for bit at 1 and 2 threads, by child at the buffer's floor and on P ranks the one-rank
+//! FMM; the default split by child at 2 threads and never at 1; its parts timed.
 //!
 //! Then vectors (vector v of an FMM of two bit for bit the one-vector FMM, of complex and
 //! of real charges), real charges against complex ones with Im q = 0, and the errors (an
@@ -75,8 +78,8 @@ use nd_fmm_exec::fmm::{FmmError, SettingsError};
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, HelmholtzFmm,
     HelmholtzFmmBuilder, HelmholtzFmmError, HelmholtzM2l, MIN_BUFFER_BOXES, OperatorError, Output,
-    PlaneWaveCounts, PlaneWavePrecision, PlaneWaveTimes, Wavenumber, auto_batched_max_degree,
-    auto_m2l_mul_add,
+    PlaneWaveCounts, PlaneWavePrecision, PlaneWaveSplit, PlaneWaveTimes, Wavenumber,
+    auto_batched_max_degree, auto_m2l_mul_add,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -275,13 +278,18 @@ fn check_plane_wave_times(name: &str, fmm: &HelmholtzFmm<'_, f64>, comm: &Simple
                 pass.waves > Duration::ZERO
                     && pass.parents > Duration::ZERO
                     && pass.waves + pass.parents <= times[level]
+                    // The parts (CH6.2f): thread-seconds, within the busy time.
+                    && pass.busy > Duration::ZERO
+                    && pass.conversions > Duration::ZERO
+                    && pass.shifts + pass.children + pass.conversions <= pass.busy
             } else {
                 pass == PlaneWaveTimes::default()
             }
         });
     assert!(
         everywhere(ok, comm),
-        "{name}: both passes timed on every level with waves, within its M2L time (rank {}: \
+        "{name}: both passes and the parts timed on every level with waves, within its M2L \
+         time (rank {}: \
          {passes:?} of {times:?})",
         comm.rank()
     );
@@ -985,6 +993,7 @@ fn check_plane_wave(scenario: &Scenario, bounds: bool, comm: &SimpleCommunicator
     check_m2l_times(&name, &fmm, comm);
     check_plane_wave_times(&name, &fmm, comm);
     assert_eq!(op.plane_wave_reach(), RHO_MAX);
+    assert_eq!(op.plane_wave_split(), PlaneWaveSplit::Auto);
     let corner_waves: Vec<usize> = (0..degrees.len()).map(|l| op.plane_wave_waves(l)).collect();
     drop(fmm);
     let (phi, grad) = difference(&output, &rotation, comm);
@@ -1011,9 +1020,18 @@ fn check_plane_wave(scenario: &Scenario, bounds: bool, comm: &SimpleCommunicator
         "{name}: φ {error_phi:.2e}, ∇φ {error_grad:.2e} against Rotation's {rotation_phi:.2e}, \
          {rotation_grad:.2e}"
     );
-    let (_, threaded) = run(&tables.clone().threads(2), &inputs, kind, comm);
+    let (fmm, threaded) = run(&tables.clone().threads(2), &inputs, kind, comm);
+    let threaded_counts = fmm.operator().plane_wave_counts();
+    drop(fmm);
     assert_same(&format!("{name}, 2 threads"), &threaded, &output, comm);
     check_one_rank(&name, &tables, &inputs, kind, &output, comm);
+    check_plane_wave_split(
+        &name,
+        &tables,
+        (&inputs, kind, &output),
+        (whole_counts, threaded_counts),
+        comm,
+    );
 
     // The bounded buffer, on the scenarios the caller names (in debug builds the one whose
     // levels chunk).
@@ -1179,6 +1197,63 @@ fn check_plane_wave(scenario: &Scenario, bounds: bool, comm: &SimpleCommunicator
     chunked
 }
 
+/// Merge and shift split by child and by parents (CH6.2f): each named the default's output
+/// bit for bit, by parents at 2 threads (at 1 it is the default's path), by child at 1 and 2
+/// threads and on several ranks against the one-rank FMM, each chunk split as named; the
+/// default (`counts` at 1 and at 2 threads) never by child at one thread and by child on some
+/// rank at 2 (level 2 has at most 64 boxes, within 64 per thread).
+fn check_plane_wave_split(
+    name: &str,
+    tables: &HelmholtzFmmBuilder,
+    (inputs, kind, output): (&Inputs, ChargeKind, &Output<f64>),
+    (one, two): (PlaneWaveCounts, PlaneWaveCounts),
+    comm: &SimpleCommunicator,
+) {
+    let mut by_child = 0usize;
+    comm.all_reduce_into(&two.by_child, &mut by_child, SystemOperation::sum());
+    assert!(
+        everywhere(one.by_child == 0, comm) && by_child > 0,
+        "{name}: the default split by child at 2 threads only ({one:?}, {two:?})"
+    );
+    for (split, threads) in [
+        (PlaneWaveSplit::Parents, 2),
+        (PlaneWaveSplit::Children, 1),
+        (PlaneWaveSplit::Children, 2),
+    ] {
+        let named = tables.clone().plane_wave_split(split).threads(threads);
+        let (fmm, got) = run(&named, inputs, kind, comm);
+        let op = fmm.operator();
+        let counts = op.plane_wave_counts();
+        let want = match split {
+            PlaneWaveSplit::Children => counts.chunks,
+            _ => 0,
+        };
+        assert!(
+            everywhere(
+                op.plane_wave_split() == split && counts.by_child == want,
+                comm
+            ),
+            "{name}: {split:?} at {threads} threads split {counts:?}"
+        );
+        drop(fmm);
+        assert_same(
+            &format!("{name}, {split:?}, {threads} threads"),
+            &got,
+            output,
+            comm,
+        );
+    }
+    let children = tables.clone().plane_wave_split(PlaneWaveSplit::Children);
+    check_one_rank(
+        &format!("{name}, {:?}", PlaneWaveSplit::Children),
+        &children,
+        inputs,
+        kind,
+        output,
+        comm,
+    );
+}
+
 /// The waves buffer bounded (CH6.2a): at the floor (a budget of 0: `MIN_BUFFER_BOXES` boxes
 /// of a level), at twice the floor's buffer and (in release builds) unbounded, the output
 /// of the default budget, `output` (a whole level here), bit for bit; the floor at 2 threads
@@ -1255,13 +1330,24 @@ fn check_plane_wave_buffer(
         drop(fmm);
         assert_same(&format!("{name}, unbounded"), &bounded, output, comm);
     }
-    let (_, bounded) = run(&floor.clone().threads(2), inputs, kind, comm);
-    assert_same(
-        &format!("{name}, the floor, 2 threads"),
-        &bounded,
-        output,
-        comm,
-    );
+    // The floor at 2 threads, split by child and by parents (CH6.2f).
+    for (split, label) in [
+        (PlaneWaveSplit::Children, "by child"),
+        (PlaneWaveSplit::Parents, "by parents"),
+    ] {
+        let (_, bounded) = run(
+            &floor.clone().plane_wave_split(split).threads(2),
+            inputs,
+            kind,
+            comm,
+        );
+        assert_same(
+            &format!("{name}, the floor, 2 threads, {label}"),
+            &bounded,
+            output,
+            comm,
+        );
+    }
     check_one_rank(
         &format!("{name}, the floor"),
         &floor,

@@ -156,17 +156,27 @@
 //!    every computed child adds its accumulators in ascending mask order and multiplies the
 //!    sum by its child shift; then each computed child with waves converts its up and then
 //!    its down waves into a local in the frame and adds it, rotated back by Oⁿ(Q)ᵀ.
+//!    Or by child ([`PlaneWaveSplit`]; Helmholtz CH6.2f), one task per box of the chunk:
+//!    each computed child finds its parent's run and their sources by slot, sums the
+//!    accumulators whose mask holds it, adds them and converts, the steps above for this
+//!    child alone (its siblings' shared accumulators computed again by each). The shared
+//!    drivers' split by parents never cuts a piece below `PARENT_GRAIN` = 64 boxes, so a
+//!    level of 64 boxes ran on one thread; [`PlaneWaveSplit::Auto`] takes the split by child
+//!    on a chunk whose split by parents makes at most half as many pieces holding a computed
+//!    box as the pool has threads.
 //!
 //! Every local receives frame 0, then 1, then 2, each a fixed chain of its parent's
 //! accumulators, which depend on the geometry of the slots alone, and a box's waves are a
 //! function of its multipole alone, so the output is the same at every thread count and
 //! every bound of the buffer and, as Laplace's argument goes, on P ranks the one-rank output
-//! bit for bit. A source read by two chunks has its waves computed in each. The pair body ([`PairOperator`]) translates each pair by
-//! `PlaneWaveLevel::m2l` along the direction merge and shift gives it
-//! (`PlaneWaveTables::pair_direction` of the offset and the target's child index), which
-//! the level call equals to rounding (its two shift factors are the pair's to rounding).
-//! It approximates M2L within its quadrature's error, so it is not Rotation's output. The
-//! waves buffer holds one frame of a chunk's sources, 2W reals per box, at most a byte bound
+//! bit for bit, under either split (a child's chain is the same whichever task runs it). A
+//! source read by two chunks has its waves computed in each. The pair body
+//! ([`PairOperator`]) translates each pair by `PlaneWaveLevel::m2l` along the direction
+//! merge and shift gives it (`PlaneWaveTables::pair_direction` of the offset and the
+//! target's child index), which the level call equals to rounding (its two shift factors
+//! are the pair's to rounding). It approximates M2L within its quadrature's error, so it is
+//! not Rotation's output. The waves buffer holds one frame of a chunk's sources, 2W reals
+//! per box, at most a byte bound
 //! ([`with_plane_wave_buffer`](HelmholtzOperator::with_plane_wave_buffer); none: a whole
 //! level; at least [`MIN_BUFFER_BOXES`] boxes of each level), with a position per box of the
 //! largest level and the chunk's source list, sized from the plan by `HelmholtzFmmBuilder`
@@ -184,7 +194,10 @@
 //! clock reads per call, no value changed. The exponential M2L's level call also times its
 //! two passes per chunk, vector and frame, the waves and merge and shift
 //! ([`plane_wave_times`](HelmholtzOperator::plane_wave_times); Helmholtz CH6.2d): four clock
-//! reads more, no value changed.
+//! reads more, no value changed; and merge and shift's thread-seconds by part, on each
+//! worker's own clock (Helmholtz CH6.2f): its tasks (busy), the accumulators' shifts, the
+//! children's sums and shifts, and the conversions, a few clock reads per parent or child
+//! and frame, drained from the scratch sets after the level call.
 //!
 //! # Execution
 //!
@@ -233,7 +246,7 @@ use crate::operator::{M2L_BLOCK_TARGETS, P2pChoice};
 #[path = "operator_plane_wave.rs"]
 mod plane_wave;
 
-pub use plane_wave::{MIN_BUFFER_BOXES, PlaneWaveCounts, PlaneWaveTimes};
+pub use plane_wave::{MIN_BUFFER_BOXES, PlaneWaveCounts, PlaneWaveSplit, PlaneWaveTimes};
 use plane_wave::{PlaneBuffer, PlaneScratch};
 
 /// Why [`HelmholtzOperator::new`] refused its inputs.
@@ -656,6 +669,20 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         self.plane_buffer.bound = bytes;
         self.plane_buffer.size(self.kernel.plane_waves.as_ref());
         self
+    }
+
+    /// Splits the exponential M2L's merge and shift over the pool by `split` (default
+    /// [`PlaneWaveSplit::Auto`]; Helmholtz CH6.2f). The output is the same bit for bit under
+    /// every setting.
+    pub fn with_plane_wave_split(mut self, split: PlaneWaveSplit) -> Self {
+        self.plane_buffer.split = split;
+        self
+    }
+
+    /// How merge and shift splits over the pool
+    /// ([`with_plane_wave_split`](Self::with_plane_wave_split)).
+    pub fn plane_wave_split(&self) -> PlaneWaveSplit {
+        self.plane_buffer.split
     }
 
     /// The waves buffer's byte bound ([`with_plane_wave_buffer`](Self::with_plane_wave_buffer)).

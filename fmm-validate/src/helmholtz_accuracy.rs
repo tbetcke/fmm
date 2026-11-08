@@ -38,6 +38,9 @@
 //!   precision each level ran. [`Case::plane_wave_reach`] (Helmholtz CH6.2e) the lateral
 //!   reach of the quadratures' α counts (the corner's by default); [`Row::plane_wave_reach`]
 //!   the one built and [`Row::plane_wave_waves`] each level's waves per direction.
+//!   [`Case::plane_wave_split`] (Helmholtz CH6.2f) how merge and shift splits over the
+//!   threads (the library's `Auto` by default); [`Row::plane_wave_split`] the setting and
+//!   [`Row::plane_wave_parts`] its thread-seconds by part per level.
 
 use std::ops::Range;
 use std::thread;
@@ -48,8 +51,8 @@ use mpi::traits::CommunicatorCollectives;
 use nd_fmm_exec::geometry::{Domain, radius};
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzFmm, HelmholtzFmmBuilder,
-    HelmholtzFmmError, HelmholtzM2l, Output, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveTimes,
-    Wavenumber,
+    HelmholtzFmmError, HelmholtzM2l, Output, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveSplit,
+    PlaneWaveTimes, Wavenumber,
 };
 use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -101,6 +104,10 @@ pub struct Case {
     /// (`HelmholtzFmmBuilder::plane_wave_reach`, Helmholtz CH6.2e; `None` the library's, the
     /// region's corner 4√2).
     pub plane_wave_reach: Option<f64>,
+    /// How merge and shift splits over the threads under [`HelmholtzM2l::PlaneWave`]
+    /// (`HelmholtzFmmBuilder::plane_wave_split`, Helmholtz CH6.2f; `None` the library's,
+    /// `Auto`). No bit depends on it.
+    pub plane_wave_split: Option<PlaneWaveSplit>,
     /// The evaluations of one build (at least 1; Helmholtz CH6.2b): the row's times and
     /// errors are the last one's.
     pub evaluations: usize,
@@ -129,6 +136,7 @@ impl Case {
             plane_wave: PlaneWavePrecision::Rule,
             plane_wave_budget: None,
             plane_wave_reach: None,
+            plane_wave_split: None,
             evaluations: 1,
         }
     }
@@ -456,6 +464,8 @@ pub struct Row {
     pub plane_wave_counts: PlaneWaveCounts,
     /// The lateral reach of the quadratures' α counts as built (Helmholtz CH6.2e).
     pub plane_wave_reach: f64,
+    /// How merge and shift split over the threads (Helmholtz CH6.2f).
+    pub plane_wave_split: PlaneWaveSplit,
     /// Per level, its waves per direction Σₖ Nₖ under [`HelmholtzM2l::PlaneWave`], 0 where
     /// it ran RCR (and under every other setting; Helmholtz CH6.2e).
     pub plane_wave_waves: Vec<usize>,
@@ -487,6 +497,10 @@ pub struct Row {
     /// shift] seconds, each the slowest rank's (`HelmholtzOperator::plane_wave_times`;
     /// Helmholtz CH6.2d); zero where no level call ran merge and shift.
     pub plane_wave_seconds: Vec<[f64; 2]>,
+    /// Per level, merge and shift's thread-seconds in the last evaluation, [busy, shifts,
+    /// children, conversions], each the slowest rank's (`PlaneWaveTimes`' parts; Helmholtz
+    /// CH6.2f): busy over merge and shift's seconds is the threads it kept busy.
+    pub plane_wave_parts: Vec<[f64; 4]>,
     /// Per level, the V-list pairs of the plan, each target counted on the rank that owns it
     /// and summed over the ranks: the same on every rank count (Helmholtz CH6.2b).
     pub v_pairs: Vec<usize>,
@@ -585,6 +599,9 @@ pub fn run_output<C: CommunicatorCollectives>(
     if let Some(reach) = case.plane_wave_reach {
         builder = builder.plane_wave_reach(reach);
     }
+    if let Some(split) = case.plane_wave_split {
+        builder = builder.plane_wave_split(split);
+    }
     let mut fmm: HelmholtzFmm<'_, f64, C> = builder.build(points, points, comm)?;
     let build = slowest(start.elapsed().as_secs_f64(), comm);
     let charges: Vec<Charges<'_, f64>> = (0..case.vectors)
@@ -641,6 +658,23 @@ pub fn run_output<C: CommunicatorCollectives>(
     let mut slowest_passes = vec![0.0f64; 2 * nlevels];
     comm.all_reduce_into(&passes[..], &mut slowest_passes[..], SystemOperation::max());
     let plane_wave_seconds: Vec<[f64; 2]> = slowest_passes.as_chunks::<2>().0.to_vec();
+    let parts: Vec<f64> = fmm
+        .operator()
+        .plane_wave_times()
+        .iter()
+        .zip(&passes_before)
+        .flat_map(|(after, before)| {
+            [
+                (after.busy - before.busy).as_secs_f64(),
+                (after.shifts - before.shifts).as_secs_f64(),
+                (after.children - before.children).as_secs_f64(),
+                (after.conversions - before.conversions).as_secs_f64(),
+            ]
+        })
+        .collect();
+    let mut slowest_parts = vec![0.0f64; 4 * nlevels];
+    comm.all_reduce_into(&parts[..], &mut slowest_parts[..], SystemOperation::max());
+    let plane_wave_parts: Vec<[f64; 4]> = slowest_parts.as_chunks::<4>().0.to_vec();
     // Each target once, on the rank that owns it (a replicated top box has rows on every
     // rank).
     let plan = fmm.plan();
@@ -674,6 +708,7 @@ pub fn run_output<C: CommunicatorCollectives>(
         plane_wave_buffer: fmm.operator().plane_wave_buffer_bytes(),
         plane_wave_counts: fmm.operator().plane_wave_counts(),
         plane_wave_reach: fmm.operator().plane_wave_reach(),
+        plane_wave_split: fmm.operator().plane_wave_split(),
         plane_wave_waves: (0..fmm.nlevels())
             .map(|l| fmm.operator().plane_wave_waves(l))
             .collect(),
@@ -691,6 +726,7 @@ pub fn run_output<C: CommunicatorCollectives>(
         first_evaluate,
         m2l_seconds,
         plane_wave_seconds,
+        plane_wave_parts,
         v_pairs: v_pairs.into_iter().map(|n| n as usize).collect(),
         errors,
         checksum,

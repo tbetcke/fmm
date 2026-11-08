@@ -47,6 +47,10 @@
 //!   widths (`corner`, the default, the library's 4√2), each exponential-M2L run (the scan's
 //!   included) at each reach in turn; the column "M2L" of a row at another reach ends with
 //!   `ρ r`.
+//! - `--split auto|parents|children,…` (Helmholtz CH6.2f): how merge and shift splits over
+//!   the threads (`auto`, the default, the library's), each exponential-M2L run (the scan's
+//!   at the first) at each split in turn; the column "M2L" of a row at another split ends
+//!   with `/parents` or `/children`. No bit depends on it.
 //! - `--plane-wave-budget MB|whole` (Helmholtz CH6.2a): the exponential M2L's waves buffer
 //!   per node (default the library's, `DEFAULT_PLANE_WAVE_NODE_BUDGET`; `whole` a whole
 //!   level). The column "M2L" of an exponential-M2L row gives rank 0's waves buffer, its
@@ -60,7 +64,9 @@
 //!   nanoseconds per pair, and (Helmholtz CH6.2d) where merge and shift ran its two passes'
 //!   seconds, the waves and merge and shift (each the slowest rank's,
 //!   `Row::plane_wave_seconds`), and (Helmholtz CH6.2e) the level's waves per direction
-//!   Σₖ Nₖ (`Row::plane_wave_waves`; `–` without waves); then a row `Σ` with the levels'
+//!   Σₖ Nₖ (`Row::plane_wave_waves`; `–` without waves), and (Helmholtz CH6.2f) merge and
+//!   shift's thread-seconds, busy, shifts, children and conversions (`Row::plane_wave_parts`),
+//!   with the threads it kept busy (busy over merge and shift's seconds); then a row `Σ` with the levels'
 //!   seconds summed and the evaluation's (with several evaluations also the first's).
 //! - `--evaluations n` (default 1; Helmholtz CH6.2b): n evaluations of each build; the
 //!   row's evaluation time, errors, checksum and M2L times are the last one's (the first
@@ -88,8 +94,8 @@ use std::time::Instant;
 use mpi::Threading;
 use mpi::traits::*;
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzM2l, PlaneWavePrecision, Wavenumber,
-    s7_degree,
+    ChargeKind, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzM2l, PlaneWavePrecision, PlaneWaveSplit,
+    Wavenumber, s7_degree,
 };
 use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -120,6 +126,7 @@ struct Arguments {
     dense_budget: usize,
     plane_wave_budget: Option<usize>,
     reaches: Vec<Option<f64>>,
+    splits: Vec<Option<PlaneWaveSplit>>,
     s7: bool,
     levels: bool,
     evaluations: usize,
@@ -184,7 +191,8 @@ fn arguments() -> Arguments {
              [--oracle-threads t] [--rule calibrated|s7] [--p2p auto|reference|<isa>,…] \
              [--m2l rotation|dense|classes|batched|batched-fused|auto|auto:<d>|sweep|\
              planewave|planewave:<1|2|3>|planewave-scan|planewave-scan:<1|2|3>,…] \
-             [--dense-budget MB] [--plane-wave-budget MB|whole] [--reach corner|r,…] [--levels] \
+             [--dense-budget MB] [--plane-wave-budget MB|whole] [--reach corner|r,…] \
+             [--split auto|parents|children,…] [--levels] \
              [--evaluations n]; got {args:?}"
         );
         std::process::exit(2);
@@ -205,6 +213,7 @@ fn arguments() -> Arguments {
         dense_budget: DEFAULT_DENSE_BUDGET,
         plane_wave_budget: None,
         reaches: vec![None],
+        splits: vec![None],
         s7: false,
         levels: false,
         evaluations: 1,
@@ -317,6 +326,17 @@ fn arguments() -> Arguments {
                         .filter(|r| !r.is_empty())
                         .map(|r| parsed.reaches = r)
                         .is_some(),
+                    "--split" => value
+                        .split(',')
+                        .map(|v| match v {
+                            "auto" => Some(None),
+                            "parents" => Some(Some(PlaneWaveSplit::Parents)),
+                            "children" => Some(Some(PlaneWaveSplit::Children)),
+                            _ => None,
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .map(|s| parsed.splits = s)
+                        .is_some(),
                     "--rule" => match value.as_str() {
                         "calibrated" => Some(false),
                         "s7" => Some(true),
@@ -405,12 +425,22 @@ fn m2l_string(row: &Row) -> String {
     }
 }
 
-/// ` ρ r` for an exponential-M2L row whose counts' reach is not the corner's, else empty.
+/// For an exponential-M2L row, ` ρ r` where its counts' reach is not the corner's and
+/// `/parents` or `/children` where its split is named; else empty.
 fn reach_suffix(row: &Row) -> String {
-    match row.m2l == HelmholtzM2l::PlaneWave && row.plane_wave_reach != RHO_MAX {
+    if row.m2l != HelmholtzM2l::PlaneWave {
+        return String::new();
+    }
+    let reach = match row.plane_wave_reach != RHO_MAX {
         true => format!(" ρ {}", row.plane_wave_reach),
         false => String::new(),
-    }
+    };
+    let split = match row.plane_wave_split {
+        PlaneWaveSplit::Auto => "",
+        PlaneWaveSplit::Parents => "/parents",
+        PlaneWaveSplit::Children => "/children",
+    };
+    format!("{reach}{split}")
 }
 
 /// The setting of a row in one word: `rotation`, `dense`, `classes`, `batched`,
@@ -617,8 +647,19 @@ fn main() {
                             0 => "–".to_string(),
                             w => w.to_string(),
                         };
+                        let [busy, shifts, children, conversions] = row.plane_wave_parts[l];
+                        let parts = if busy > 0.0 {
+                            format!(
+                                "{busy:.6} | {shifts:.6} | {children:.6} | {conversions:.6} \
+                                 | {:.1}",
+                                busy / parents
+                            )
+                        } else {
+                            "– | – | – | – | –".into()
+                        };
                         format!(
-                            "{head} | {l} | {} | {} | {} | {:.6} | {:.0} | {passes} | {waves} |",
+                            "{head} | {l} | {} | {} | {} | {:.6} | {:.0} | {passes} | {waves} \
+                             | {parts} |",
                             row.degrees[l],
                             level_m2l(row, l),
                             row.v_pairs[l],
@@ -627,6 +668,7 @@ fn main() {
                         )
                     })
                     .collect();
+                let sum = |j: usize| row.plane_wave_parts.iter().map(|p| p[j]).sum::<f64>();
                 let evaluate = match arguments.evaluations {
                     1 => format!("evaluate {:.4} s", row.evaluate),
                     n => format!(
@@ -635,12 +677,17 @@ fn main() {
                     ),
                 };
                 lines.push(format!(
-                    "{head} | Σ | – | {evaluate} | {} | {:.6} | – | {:.6} | {:.6} | {} |",
+                    "{head} | Σ | – | {evaluate} | {} | {:.6} | – | {:.6} | {:.6} | {} | {:.6} \
+                     | {:.6} | {:.6} | {:.6} | – |",
                     row.v_pairs.iter().sum::<usize>(),
                     row.m2l_seconds.iter().sum::<f64>(),
                     row.plane_wave_seconds.iter().map(|p| p[0]).sum::<f64>(),
                     row.plane_wave_seconds.iter().map(|p| p[1]).sum::<f64>(),
                     row.plane_wave_waves.iter().sum::<usize>(),
+                    sum(0),
+                    sum(1),
+                    sum(2),
+                    sum(3),
                 ));
                 lines
             };
@@ -656,7 +703,14 @@ fn main() {
                         // (the first ∞, the others from its degrees), or the scan's
                         // (Rotation first, the levels from its row, each at each reach).
                         let fixed = |m2l, mul_add, max_degree| {
-                            (m2l, mul_add, max_degree, PlaneWavePrecision::Rule, None)
+                            (
+                                m2l,
+                                mul_add,
+                                max_degree,
+                                PlaneWavePrecision::Rule,
+                                None,
+                                None,
+                            )
                         };
                         let mut runs = match m2l_run {
                             M2lRun::Fixed(m2l, mul_add, max_degree) => {
@@ -668,7 +722,10 @@ fn main() {
                             M2lRun::PlaneWave(precision) => arguments
                                 .reaches
                                 .iter()
-                                .map(|&reach| {
+                                .flat_map(|&reach| {
+                                    arguments.splits.iter().map(move |&split| (reach, split))
+                                })
+                                .map(|(reach, split)| {
                                     (
                                         HelmholtzM2l::PlaneWave,
                                         None,
@@ -680,6 +737,7 @@ fn main() {
                                             }
                                         },
                                         reach,
+                                        split,
                                     )
                                 })
                                 .collect(),
@@ -695,6 +753,7 @@ fn main() {
                                 case.m2l_max_degree,
                                 case.plane_wave,
                                 case.plane_wave_reach,
+                                case.plane_wave_split,
                             ) = runs[next].clone();
                             next += 1;
                             match run(&case, &problem, &oracle, threads, &world) {
@@ -738,6 +797,7 @@ fn main() {
                                                                 None,
                                                                 PlaneWavePrecision::PerLevel(named),
                                                                 reach,
+                                                                arguments.splits[0],
                                                             ));
                                                         }
                                                     }
@@ -774,11 +834,12 @@ fn main() {
         println!();
         println!(
             "| Workload | N | kD | degrees | M2L | ranks × threads | level | p | ran | V pairs \
-             | M2L s | ns per pair | waves s | merge and shift s | waves |"
+             | M2L s | ns per pair | waves s | merge and shift s | waves | busy s | shifts s \
+             | children s | conversions s | threads busy |"
         );
         println!(
             "| --- | ---: | --- | --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: \
-             | ---: | ---: |"
+             | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
         );
         for line in &levels {
             println!("{line}");
