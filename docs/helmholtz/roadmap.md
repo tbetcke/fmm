@@ -906,7 +906,10 @@ at any kD.
   on locust (72 threads) and Kathleen (40), level 2 0.44–0.69× on the M6 (6), and 0.57–1.10×
   at 4 × 10: the rule need not take Rotation on levels of few boxes on that account; the
   remaining losses against Rotation are fine levels of low degree (W1 at kD = 100 level 5,
-  p = 7: 1.7–3.0×). D8's times are CH6.2f's `Auto` runs. *Done when:* D8 proposed with the rule's inputs (degree,
+  p = 7: 1.7–3.0×). D8's times are CH6.2f's `Auto` runs. The child split repeats shared
+  accumulators (1.2–3× the parents' thread time); a split in two phases (each parent's
+  accumulators once on the pool, then its children) would remove that, a remedy to take up
+  only if D8's margins on levels 2–3 need it (CH6.2f report §9). *Done when:* D8 proposed with the rule's inputs (degree,
   ε, the level's boxes), on CH6.2f's level call (or with Rotation on levels of few boxes, if
   CH6.2f's split does not bring them within the rule). *Needs:* CH6.2c, CH6.2d, CH6.2e,
   CH6.2f. *Sign-off:* D8.

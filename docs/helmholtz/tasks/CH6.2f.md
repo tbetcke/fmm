@@ -147,4 +147,13 @@ level 2 ran on one thread (the 64-box grain), not slow per parent; by child leve
 
 ## Open questions
 
-(none yet)
+For sign-off in the PR (report §9):
+
+1. Constraint 9: `Auto` reads the threads and, since the third rule, the boxes this rank
+   computes (a rank's share of the boxes). No bit depends on the choice (every split gives
+   every local the same bits; tested at 1 and 2 threads, the floor and 2 and 4 ranks; the
+   runs' checksums agree across splits and 1 × 40 against 4 × 10). Recommended: accept, as a
+   choice of execution outside constraint 9's per-level and per-class decisions.
+2. Laplace's plane-wave M2L (Phase 6 T13) runs on the same `Execution::parents` with the same
+   64-box grain; whether to schedule a Laplace task to measure and, if it pays, split its
+   coarse levels likewise (not measured here; constraint 1).

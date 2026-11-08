@@ -42,7 +42,7 @@ Commands: §10.
 - **The split by child** (`PlaneWaveSplit::Children`, §3), one task per box, each computed
   child running its parent's call for itself alone (the same arithmetic in the same order,
   so the same bits), takes level 2 to 0.05–0.07× the split by parents' time on locust and
-  0.11–0.14× on Kathleen, level 3 to 0.31–0.38× and 0.49–0.53×. It repeats the shared
+  0.11–0.13× on Kathleen, level 3 to 0.31–0.38× and 0.50–0.53×. It repeats the shared
   accumulators' shifts (3–14× the parents' shift time) and spends 1.2–3.0× their
   thread-seconds, so on levels the split by parents already spreads (level 4 and finer) it is
   1.08–2.39× slower.
@@ -62,7 +62,7 @@ Commands: §10.
 - **The 4 × 10 anomaly** (§5): under the split by parents level 2 runs on one thread per
   rank, so 4 × 10 puts four threads on it where 1 × 40 puts one, while Rotation's level 2 is
   1.7–1.9× slower at 4 × 10: CH6.2c's 1.3–1.8× against 5.4–8.1× is the same defect seen from
-  two sides. By child, level 2 takes 0.63–0.64× the parents' time at 4 × 10, and `Auto` (after
+  two sides. By child, level 2 takes 0.61–0.66× the parents' time at 4 × 10, and `Auto` (after
   its third rule, §8) takes levels 2 and 3 by child there too, level 3 0.67–0.74× the parents'.
 - **The M6** (§6, 1 × 6, with the user's go-ahead): `Auto` takes the child split on level 2
   only (0.42–0.46× the parents' time, 0.44–0.69× Rotation's); level 3's eight pieces already
@@ -82,7 +82,8 @@ Commands: §10.
 - **Per level**: the M2L's seconds (`m2l_times`), the two passes (CH6.2d: the waves, merge
   and shift), and this task's parts of merge and shift (`PlaneWaveTimes::{busy, shifts,
   children, conversions}`): each worker's own clock, summed over threads, so `busy` ÷ the
-  pass's wall time is the threads it kept busy. On P ranks the slowest rank's.
+  pass's wall time is the threads it kept busy. On P ranks the largest over the ranks, each
+  figure apart (so the threads busy may divide one rank's busy time by another's wall time).
 - **Settings**: `planewave/parents` (`PlaneWaveSplit::Parents`, as before this task),
   `planewave/children` (`Children`), `planewave` (`Auto`), and Rotation. All three
   exponential-M2L settings take the rule's levels and quadrature (iprec 2, CH6.1e).
@@ -174,7 +175,7 @@ Reading it:
 
 - **By child, level 2 uses the pool** (30 of 40 threads busy on Kathleen, 41–53 of 72 on
   locust) and level 3 too (37–38 and 51–60): level 2 0.05–0.07× the split by parents' time
-  on locust, 0.11–0.14× on Kathleen; level 3 0.31–0.38× and 0.49–0.53×.
+  on locust, 0.11–0.13× on Kathleen; level 3 0.31–0.38× and 0.50–0.53×.
 - **It costs thread time**: the child split's thread-seconds are 1.5–1.9× the parents' on
   locust's levels 2–3 and 2.0–2.4× on Kathleen's (1.2–3.0× on all levels); its shifts 3–14×
   the parents' (a shared accumulator is computed once per child it serves, up to 8; level 2's
@@ -270,8 +271,8 @@ Reading it:
   (0.032–0.050 s against 0.018–0.027 s; not separated here). Both move the ratio: here
   5.9–7.5× at 1 × 40 and 1.2–1.7× at 4 × 10 on W3, CH6.2c's figures. Nothing in the 4 × 10
   split itself is better for merge and shift.
-- **By child the anomaly is gone**: level 2 takes 0.11–0.14× the parents' time at 1 × 40 and
-  0.63–0.64× at 4 × 10 (each rank's 16 boxes keep 4.3–4.6 of its 10 threads busy); `Auto`
+- **By child the anomaly is gone**: level 2 takes 0.11–0.17× the parents' time at 1 × 40 and
+  0.61–0.66× at 4 × 10 (each rank's 16 boxes keep 4.3–4.6 of its 10 threads busy); `Auto`
   takes it on both levels 2 and 3 at 4 × 10, level 3 0.67–0.74× the parents'.
 - **The second rule's defect** (§8): at 4 × 10 it kept level 3 by parents on 3 busy threads,
   since a rank's level-3 locals hold boxes the rank does not compute, whose pieces have no
@@ -329,7 +330,14 @@ Reading it:
 - In the runs: the three settings' checksums equal on every case, ε and split (49 groups, all
   machines), 4 × 10's equal to 1 × 40's.
 
-`/verify`: PENDING (§9 of the PR).
+`/verify` on the M6 (source 836d64b): format, Clippy (default, examples, workspace
+all-targets), `cargo doc`, `cargo test` (1222 passed), `cargo test --workspace` (1336
+passed), the MPI list at 2 and 4 ranks (all 12 executables passed; `helmholtz_fmm` 215 and
+193 s, `mpi_exec` 214 and 189 s, under a 900 s launch timeout: a first run with the script's
+default 300 s timed out `mpi_exec` at 2 and 4 ranks and `helmholtz_fmm` at 4 on the M6 under
+a load average of 13–19, other jobs'). `tests/helmholtz_fmm.rs`'s one-rank debug run 216 s
+(211 s at CH6.2e; the new split runs included), above nd-fmm-exec's one-minute budget as it
+was before this task.
 
 ## 8. Runs, records and defects
 
@@ -363,7 +371,12 @@ Reading it:
   measured or changed here (constraint 1). A question for the PR.
 - **The repeated shifts**: a split in two phases (each parent's accumulators once, on the
   pool, then the children) would remove the child split's 1.2–3.0× thread time; `Auto`
-  avoids the loss where it matters now, so it is noted, not scheduled.
+  avoids the loss where it matters now, so it is a sentence in CH6.2h's roadmap line, to
+  take up only if D8's margins on levels 2–3 need it.
+- **Constraint 9**: `Auto` reads the pool's threads and, since the third rule, which of the
+  rank's boxes it computes (a rank's share of the boxes, which constraint 9 names). It is
+  a choice of how to run, not of what to compute: every setting gives every local the same
+  bits (§7), so constraint 2 holds; a question for sign-off in the PR.
 
 ## 10. Reproducing
 
