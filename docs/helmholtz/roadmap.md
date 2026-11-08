@@ -84,7 +84,9 @@ largest V offsets at the level's degree the counts for reach 4.5 add more than 1
 error from Re κ = 7π and up to 2·10⁴× near 16π, where the corner's add at most 3.2×; CH6.2e's
 FMM errors averaged that worst case away (W1 at kD = 500, κ = 31.25, held at 0.986×). The
 corner stays the default, guarded by nd-fmm-exec's `tests/helmholtz/plane_wave_reach.rs`.
-Next: CH6.2f (D8).
+2026-11-08: CH6.2f split (`/next-task`'s size rule) into the coarse levels' merge and shift
+(CH6.2f: its time split into shifts and conversions, the parents' pass split below the parent)
+and D8's rule (CH6.2h). Next: CH6.2f.
 
 ## How `/next-task` reads this file
 
@@ -127,8 +129,9 @@ CH3.6 (#170) and H3.G.
 2. CH0.4 S4: quadratures of the Helmholtz exponential M2L per k w_l
 3. CH6.1 The §3.14 machinery generalised (needs CH0.4): CH6.1a, CH6.1b, CH6.1c, CH6.1d, CH6.1e
 4. CH6.2 Measured (*Machines:* locust, Kathleen; *Sign-off:* D8): CH6.2a, CH6.2b, CH6.2c,
-   CH6.2d, CH6.2e, CH6.2g, CH6.2f (split on 2026-11-06; CH6.2g added 2026-11-07 by CH6.2e,
-   before CH6.2f by its question 2, signed off 2026-11-07)
+   CH6.2d, CH6.2e, CH6.2g, CH6.2f, CH6.2h (split on 2026-11-06; CH6.2g added 2026-11-07 by
+   CH6.2e, before D8 by its question 2, signed off 2026-11-07; D8 split on 2026-11-08 into
+   CH6.2f and CH6.2h)
 5. CH6.1f Quadratures for ε below 10⁻⁶ (needs CH6.1e; after CH6.2, before H6.G: CH6.1e's
    question 3, signed off 2026-11-03, "1–4 as recommended")
 
@@ -152,7 +155,7 @@ The proposal's Section 12, plus D0. A decision is recorded here when the user ta
 | D5 | Source types of the first release | real and complex charges, potentials and gradients; dipoles once C6.4 exists for Laplace (note: Laplace dipoles were merged in Phase 6 T8 and T8d, so the condition is met) | – | CH1.1 | signed off 2026-10-29: charges now, dipoles later; §3.15 fixes real and complex charges with potentials and gradients, and dipoles get a later, separate task |
 | D6 | Order of H4 and H6 | H6 first | H3.G | CH6.1, CH4.1 | signed off 2026-11-02 (H3 gate, question 2): "i agree with the recommendations", H6 first, as recommended; on the gate report's reason (§3.3): the calibrated degrees cut the low-frequency share of the far field at kD = 500 to about half (an estimate), and the FMM is slowest against FMM3D on low-frequency trees at tight ε, which H6 targets |
 | D7 | Host back ends of the φ step | the product as default and reference; FFTW behind the optional `fftw` feature; rustfft if S9 finds it deterministic per box and faster, decided per machine | CH0.9 | CHR.3, CH4.6 | open |
-| D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2f | CH7.5d | open |
+| D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2h | CH7.5d | open |
 | D9 | What "within noise" means for Laplace's benchmarks (constraint 1) | the run-to-run spread of the Laplace baseline, repeated on each machine before the change, per benchmark; plus the C3S.4 throughput gate | – | CHR.2, CH2.0 | signed off 2026-10-26: as recommended, the measured spread of the baseline per benchmark and machine, plus the C3S.4 gate. Clarified 2026-10-26 (CHR.2): one-sided, slower than `main` by more than the spread fails, faster passes when the outputs are bit for bit identical; from CH2.0 on five runs per side in the order A B B A A B B A A B, the spread max − min of `main`'s five run medians, never pooled with the branch's. Amended 2026-10-31 (CH2.0, the user: "as recommended"): a failing row may be repeated once and the repeat counts, with both results reported. Amended 2026-10-31 (the machine move, the user: "Amend: M6 replaces M3 Max"): the M6 (`tools/m6/machine.md`) replaces the M3 Max as a machine of record, its C3S.4 reference `spikes/p2p-simd/results-m6.md` |
 | D10 | cubek-fft on the device | after S5: adopt, contribute upstream first, or keep the transform as a GEMM | CH0.5 | CH7.4 | open |
 | D11 | Maximum leaf width c_leaf | from S8: the largest c_leaf with P2P and leaf costs within 10 % of their best on W1 and W3 (expected 0.5 to 1) | CH0.8a | CH3.0 | signed off 2026-10-28: as recommended (CH0.8a report §9, question 1), c_leaf = 1 by the revised rule, the largest c_leaf with no high-frequency leaf on any workload at 10⁻⁶ and 10⁻⁸, replacing the rule of this row, which is degenerate; a first-pass value that CH0.8b may revise with S6's constants and S7's p |
@@ -712,7 +715,8 @@ at any kD.
   that into Kathleen's runs (CH6.2c), FMM3D (CH6.2d) and D8 (CH6.2e), and on 2026-11-06
   CH6.2d into FMM3D (CH6.2d) and the counts' corner (CH6.2e), D8 renamed CH6.2f; on
   2026-11-07 CH6.2e added the counts' adoption (CH6.2g, done 2026-11-08 without adopting it);
-  CH6.2 is done when
+  on 2026-11-08 D8 split into the coarse levels' merge and shift (CH6.2f) and D8's rule
+  (CH6.2h); CH6.2 is done when
   all are:
 - [x] **CH6.2a The waves buffer bounded.** Report:
   `fmm-validate/results/helmholtz-ch6-2a.md`; `HelmholtzOperator::with_plane_wave_buffer`,
@@ -841,8 +845,28 @@ at any kD.
   case; nd-fmm-exec's `tests/helmholtz_fmm.rs` and nd-fmm-validate's tests at the new
   default. *Needs:* CH6.2e. Before CH6.2f (CH6.2e's question 2, signed off
   2026-11-07).
-- [ ] **CH6.2f D8: the exponential M2L's level rule.** Split on 2026-11-06 from the former
-  CH6.2c (CH6.2e until the split of CH6.2d). D8 proposed from CH6.2b's, CH6.2c's, CH6.2d's
+- [ ] **CH6.2f The coarse levels' merge and shift.** Split on 2026-11-08 (`/next-task`'s size
+  rule) from the former CH6.2f (D8, now CH6.2h): the coarse-level remedy that CH6.2h's rule
+  needs, from CH6.2b's, CH6.2c's and CH6.2d's observations quoted there. Merge and shift's time
+  split into its parts (the source shifts with their accumulators, the child shifts, and each
+  child's conversion of its waves to a local), summed per level as thread-seconds on the
+  workers' own clocks, no value changed; and the parents' pass split by child where the
+  split by parents leaves threads idle (the shared drivers' `Execution::parents` runs pieces
+  of at least `PARENT_GRAIN` = 64 boxes, so level 2 runs on one thread and level 3 on at
+  most 8): each computed child sums the accumulators its mask holds, each over its slots in
+  order as its parent's call does (siblings computing a shared accumulator again), and
+  converts its waves, every child's arithmetic and order the split by parents', so bit for
+  bit its output (the choice reads the threads, which no bit depends on). *Done when:* the parts per
+  level on Kathleen (1 × 40) and locust (1 × 72) on W1 and W3 at kD = 100 and W1 at kD = 500,
+  ε = 10⁻³ and 10⁻⁶, beside FMM3D's parents' loop (CH6.2d's report §3); the split below the
+  parent bit for bit the split by parents at 1, 2 and many threads, at the buffer's floor and
+  on P ranks the one-rank output; levels 2 and 3's exponential M2L time against Rotation's
+  and against the split by parents on both machines (the M6 with the user's go-ahead), with
+  the 4 × 10 anomaly of CH6.2c checked against it. *Needs:* CH6.2d. *Machines:* locust,
+  Kathleen.
+- [ ] **CH6.2h D8: the exponential M2L's level rule.** Split on 2026-11-06 from the former
+  CH6.2c (CH6.2e until the split of CH6.2d; CH6.2f until 2026-11-08, when the coarse levels'
+  remedy moved to CH6.2f). D8 proposed from CH6.2b's, CH6.2c's, CH6.2d's
   and CH6.2e's times (adopted as a strategy where it wins, else kept opt-in or dropped). Also (CH6.2b, report §7): the exponential
   M2L's level call splits merge and shift over parents, so a coarse level (level 2: 8
   parents) took 9–24× Rotation's time at 72 threads on locust (0.9–3.3× at 6 on the M6);
@@ -869,8 +893,9 @@ at any kD.
   both counts' chains err 10⁻⁹–10⁻⁵ absolute (the corner's counts up to about 3× the
   converged counts'), where the field across a V offset is below 2·10⁻¹⁴ of the near field
   and CH6.2g's guard test leaves the domains out: whether the rule keeps Rotation there. *Done when:* D8 proposed with the rule's inputs (degree,
-  ε, the level's boxes) and the coarse levels' remedy measured. *Needs:* CH6.2c, CH6.2d,
-  CH6.2e. *Sign-off:* D8.
+  ε, the level's boxes), on CH6.2f's level call (or with Rotation on levels of few boxes, if
+  CH6.2f's split does not bring them within the rule). *Needs:* CH6.2c, CH6.2d, CH6.2e,
+  CH6.2f. *Sign-off:* D8.
 - [ ] **H6.G Gate.** `/milestone-gate H6`. *Needs:* every task above.
 
 ## H4: High-frequency levels
