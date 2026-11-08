@@ -72,7 +72,14 @@ changed (`Execution::chunks` exists).
    threads idle, a chunk of at most `PARENT_GRAIN` × threads boxes (the threads of the pool;
    no bit depends on the choice, so constraint 2 holds and constraint 9 is not engaged),
    `Parents` elsewhere and serially. Whether `Auto` is the default is this task's measurement:
-   if `Children` loses where `Auto` takes it, the rule changes before the PR.
+   if `Children` loses where `Auto` takes it, the rule changes before the PR. **Changed after
+   locust's first cases (2026-11-08):** the first rule, a chunk of at most `PARENT_GRAIN` ×
+   threads boxes, took `Children` on level 4 of W1 and W3 at kD = 100 at 72 threads,
+   1.24–1.36× slower than `Parents` there (which already kept about 50 threads busy; the split
+   by child's thread time 1.5–1.9× the parents' on levels 2–4, the repeated shifts 3–9×).
+   Now `Children` where the split by parents makes at most half as many pieces as the pool
+   has threads (`pieces` restates the driver's halving), the measured repetition rounded up
+   to 2.
 3. **The harness.** `helmholtz_accuracy --plane-wave-split <auto|parents|children>`, the row's
    setting and its parts per level (`Row::plane_wave_parts`), a column per part and the busy
    threads in `--levels`; `tools/helmholtz/ch6-2f-runs.sh` and `ch6-2f-tables.py`.
