@@ -231,7 +231,9 @@ fn check_fmm(world: &SimpleCommunicator, case: &Case) {
 
 /// Auto on W1 at kD = 10: at a crossover below every degree the row reports it and the
 /// output is Rotation's bit for bit (the checksum); above every degree every level with M2L
-/// runs Batched; at either, `check_fmm`'s checks.
+/// runs Batched; at either, `check_fmm`'s checks. With the exponential M2L (Helmholtz
+/// CH6.2h) from degree 0 and no Batched level, the exponential M2L's checksum, the agreed
+/// degree reported and the errors within [`PLANE_WAVE_RATIO`] of Rotation's; off, none.
 fn check_auto(world: &SimpleCommunicator) {
     let mut case = Case::new(Workload::W1, (10.0, 0.0), Degrees::Tolerance(1e-3));
     let problem = Problem::new(&case);
@@ -262,6 +264,30 @@ fn check_auto(world: &SimpleCommunicator) {
         (HelmholtzM2l::Batched, Some(every.m2l_mul_add), None);
     let fused = run(&batched, &problem, &oracle, 1, world).expect("the FMM runs");
     assert_eq!(every.checksum, fused.checksum, "Auto above every degree");
+    assert_eq!(every.m2l_plane_wave_min_degree, None, "off");
+    // With waves from degree 0 and no Batched level: PlaneWave's output.
+    let mut plane_wave = case.clone();
+    (plane_wave.m2l, plane_wave.m2l_max_degree) = (HelmholtzM2l::PlaneWave, None);
+    let plane_wave = run(&plane_wave, &problem, &oracle, 1, world).expect("the FMM runs");
+    let mut waves = case.clone();
+    waves.m2l_max_degree = Some(0);
+    waves.auto_plane_wave = true;
+    waves.m2l_plane_wave_min_degree = Some(0);
+    let row = run(&waves, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert_eq!(row.m2l_plane_wave_min_degree, Some(0));
+    assert_eq!(row.plane_wave, plane_wave.plane_wave);
+    assert!(row.plane_wave.iter().any(Option::is_some));
+    assert_eq!(row.checksum, plane_wave.checksum, "Auto with every wave");
+    check_levels(&row);
+    let ([phi, grad], [rotation_phi, rotation_grad]) = (
+        *row.errors.last().expect("errors"),
+        *rotation.errors.last().expect("errors"),
+    );
+    assert!(
+        phi <= PLANE_WAVE_RATIO * rotation_phi && grad <= PLANE_WAVE_RATIO * rotation_grad,
+        "Auto with waves: {phi:e}, {grad:e} against Rotation's {rotation_phi:e}, \
+         {rotation_grad:e}"
+    );
     // The sweep's crossovers: every choice once, from every level to none.
     let sweep = sweep_crossovers(&rotation.degrees);
     assert_eq!(sweep.first(), Some(&usize::MAX));

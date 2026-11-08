@@ -37,7 +37,10 @@
 //!   d, and `sweep`: Auto at every crossover that chooses differently, from Batched on every
 //!   level that fits (crossover ∞) down to Rotation on every level (one below the smallest
 //!   p_l), the crossovers after the first from its degrees; the column names the crossover
-//!   (`auto ≤ d`). Also (Helmholtz CH6.1e) `planewave`, the exponential M2L with each level's
+//!   (`auto ≤ d`). Also (Helmholtz CH6.2h) `auto-pw`, Auto with the exponential M2L from the
+//!   rule's smallest degree (`HelmholtzFmmBuilder::auto_plane_wave`), and `auto-pw:<e>` from
+//!   degree e, each at each split of `--split`; the column `auto ≤ d, pw ≥ e: …`; `auto`
+//!   names the setting off whatever the library's default. Also (Helmholtz CH6.1e) `planewave`, the exponential M2L with each level's
 //!   quadrature by the rule, `planewave:<1|2|3>`, that iprec on every level whose κ_l = k w_l
 //!   lies in the quadrature's tables, and `planewave-scan`: Rotation, then each such level
 //!   ≥ 2 at iprec 1, 2 and 3 alone, the other levels Rotation; the column names the levels
@@ -141,6 +144,9 @@ enum M2lRun {
     Sweep,
     /// The exponential M2L, by the rule (`None`) or one precision on every level.
     PlaneWave(Option<Precision>),
+    /// Auto with the exponential M2L from the rule's smallest degree (`None`) or a named one
+    /// (Helmholtz CH6.2h).
+    AutoPlaneWave(Option<usize>),
     /// Rotation, then each level with a quadrature at each precision alone (`None`) or at
     /// one.
     PlaneWaveScan(Option<Precision>),
@@ -189,7 +195,8 @@ fn arguments() -> Arguments {
              [--kd x,…] [--kim y] [--eps e,…|--degree p] [--charges real|complex] \
              [--vectors m] [--samples n] [--no-gradients] [--threads t,…] \
              [--oracle-threads t] [--rule calibrated|s7] [--p2p auto|reference|<isa>,…] \
-             [--m2l rotation|dense|classes|batched|batched-fused|auto|auto:<d>|sweep|\
+             [--m2l rotation|dense|classes|batched|batched-fused|auto|auto:<d>|auto-pw|\
+             auto-pw:<d>|sweep|\
              planewave|planewave:<1|2|3>|planewave-scan|planewave-scan:<1|2|3>,…] \
              [--dense-budget MB] [--plane-wave-budget MB|whole] [--reach corner|r,…] \
              [--split auto|parents|children,…] [--levels] \
@@ -272,6 +279,7 @@ fn arguments() -> Arguments {
                                     fixed(HelmholtzM2l::Batched, Some(MulAdd::Fused))
                                 }
                                 "auto" => fixed(HelmholtzM2l::Auto, None),
+                                "auto-pw" => Some(M2lRun::AutoPlaneWave(None)),
                                 "sweep" => Some(M2lRun::Sweep),
                                 "planewave" => Some(M2lRun::PlaneWave(None)),
                                 "planewave-scan" => Some(M2lRun::PlaneWaveScan(None)),
@@ -287,11 +295,16 @@ fn arguments() -> Arguments {
                                 "planewave:1" => Some(M2lRun::PlaneWave(Some(Precision::Iprec1))),
                                 "planewave:2" => Some(M2lRun::PlaneWave(Some(Precision::Iprec2))),
                                 "planewave:3" => Some(M2lRun::PlaneWave(Some(Precision::Iprec3))),
-                                _ => v
-                                    .strip_prefix("auto:")?
-                                    .parse()
-                                    .ok()
-                                    .map(|d| M2lRun::Fixed(HelmholtzM2l::Auto, None, Some(d))),
+                                _ => {
+                                    match v.strip_prefix("auto-pw:") {
+                                        Some(d) => {
+                                            d.parse().ok().map(|d| M2lRun::AutoPlaneWave(Some(d)))
+                                        }
+                                        None => v.strip_prefix("auto:")?.parse().ok().map(|d| {
+                                            M2lRun::Fixed(HelmholtzM2l::Auto, None, Some(d))
+                                        }),
+                                    }
+                                }
                             }
                         })
                         .collect::<Option<Vec<_>>>()
@@ -377,8 +390,9 @@ fn arguments() -> Arguments {
 
 /// The M2L of a row: `rotation`, or `dense l…`, `classes l…`, `batched l…` or
 /// `batched-fused l…` with the levels that ran the setting's tables and their MB; under
-/// Auto prefixed with `auto ≤ d: ` (`∞` for no bound); `planewave l:iq…` with each level's
-/// precision, its MB, and the waves buffer's MB, chunks, level calls and waves computed.
+/// Auto prefixed with `auto ≤ d: ` (`∞` for no bound; `auto ≤ d, pw ≥ e: ` with waves,
+/// whose levels follow as `; planewave l:iq…` with the waves buffer's MB, chunks, level calls
+/// and waves computed); `planewave l:iq…` with each level's precision, its MB, and the same.
 fn m2l_string(row: &Row) -> String {
     if row.m2l == HelmholtzM2l::PlaneWave {
         let levels: Vec<String> = (0..row.plane_wave.len())
@@ -404,8 +418,9 @@ fn m2l_string(row: &Row) -> String {
         row.dense_levels.as_slice(),
         row.dense_bytes,
     );
+    // Under Auto with the exponential M2L its levels are listed apart.
     let levels: Vec<String> = (0..dense.len())
-        .filter(|&l| dense[l])
+        .filter(|&l| dense[l] && row.plane_wave[l].is_none())
         .map(|l| l.to_string())
         .collect();
     let name = match m2l {
@@ -414,21 +429,47 @@ fn m2l_string(row: &Row) -> String {
         HelmholtzM2l::Batched | HelmholtzM2l::Auto => "batched",
         _ => "dense",
     };
-    let ran = match levels.is_empty() {
+    let mut ran = match levels.is_empty() {
         true => "rotation".into(),
         false => format!("{name} {} ({:.0} MB)", levels.join(","), bytes as f64 / 1e6),
     };
-    match row.m2l_max_degree {
-        Some(usize::MAX) => format!("auto ≤ ∞: {ran}"),
-        Some(d) => format!("auto ≤ {d}: {ran}"),
+    let waves: Vec<String> = (0..row.plane_wave.len())
+        .filter_map(|l| Some(format!("{l}:i{}", row.plane_wave[l]?.iprec())))
+        .collect();
+    if !waves.is_empty() {
+        ran = format!(
+            "{ran}; planewave {} (waves {:.0} MB, {} chunks in {} calls, {} waves){}",
+            waves.join(","),
+            row.plane_wave_buffer as f64 / 1e6,
+            row.plane_wave_counts.chunks,
+            row.plane_wave_counts.level_calls,
+            row.plane_wave_counts.waves,
+            reach_suffix(row),
+        );
+    }
+    match auto_name(row) {
+        Some(name) => format!("{name}: {ran}"),
         None => ran,
     }
 }
 
-/// For an exponential-M2L row, ` ρ r` where its counts' reach is not the corner's and
-/// `/parents` or `/children` where its split is named; else empty.
+/// Auto's name, `auto ≤ d` (`∞` for no bound), with `, pw ≥ e` where it takes the
+/// exponential M2L from degree e (Helmholtz CH6.2h); `None` under the other settings.
+fn auto_name(row: &Row) -> Option<String> {
+    let batched = match row.m2l_max_degree? {
+        usize::MAX => "auto ≤ ∞".to_string(),
+        d => format!("auto ≤ {d}"),
+    };
+    Some(match row.m2l_plane_wave_min_degree {
+        Some(e) => format!("{batched}, pw ≥ {e}"),
+        None => batched,
+    })
+}
+
+/// For an exponential-M2L row (or Auto's with waves), ` ρ r` where its counts' reach is not
+/// the corner's and `/parents` or `/children` where its split is named; else empty.
 fn reach_suffix(row: &Row) -> String {
-    if row.m2l != HelmholtzM2l::PlaneWave {
+    if row.m2l != HelmholtzM2l::PlaneWave && row.m2l_plane_wave_min_degree.is_none() {
         return String::new();
     }
     let reach = match row.plane_wave_reach != RHO_MAX {
@@ -444,7 +485,8 @@ fn reach_suffix(row: &Row) -> String {
 }
 
 /// The setting of a row in one word: `rotation`, `dense`, `classes`, `batched`,
-/// `batched-fused`, `auto ≤ d` or `planewave` (with ` ρ r` at another reach).
+/// `batched-fused`, `auto ≤ d` (`auto ≤ d, pw ≥ e` with waves) or `planewave` (with ` ρ r`
+/// at another reach).
 fn setting_name(row: &Row) -> String {
     match row.m2l {
         HelmholtzM2l::Rotation => "rotation".into(),
@@ -452,9 +494,9 @@ fn setting_name(row: &Row) -> String {
         HelmholtzM2l::Classes => "classes".into(),
         HelmholtzM2l::Batched if row.m2l_mul_add == MulAdd::Fused => "batched-fused".into(),
         HelmholtzM2l::Batched => "batched".into(),
-        HelmholtzM2l::Auto => match row.m2l_max_degree {
-            Some(usize::MAX) | None => "auto ≤ ∞".into(),
-            Some(d) => format!("auto ≤ {d}"),
+        HelmholtzM2l::Auto => match auto_name(row) {
+            Some(name) => format!("{name}{}", reach_suffix(row)),
+            None => "auto ≤ ∞".into(),
         },
         HelmholtzM2l::PlaneWave => format!("planewave{}", reach_suffix(row)),
     }
@@ -710,6 +752,7 @@ fn main() {
                                 PlaneWavePrecision::Rule,
                                 None,
                                 None,
+                                None,
                             )
                         };
                         let mut runs = match m2l_run {
@@ -738,6 +781,22 @@ fn main() {
                                         },
                                         reach,
                                         split,
+                                        None,
+                                    )
+                                })
+                                .collect(),
+                            M2lRun::AutoPlaneWave(min_degree) => arguments
+                                .splits
+                                .iter()
+                                .map(|&split| {
+                                    (
+                                        HelmholtzM2l::Auto,
+                                        None,
+                                        None,
+                                        PlaneWavePrecision::Rule,
+                                        None,
+                                        split,
+                                        Some(min_degree),
                                     )
                                 })
                                 .collect(),
@@ -747,6 +806,7 @@ fn main() {
                         };
                         let mut next = 0;
                         while next < runs.len() {
+                            let auto_plane_wave;
                             (
                                 case.m2l,
                                 case.m2l_mul_add,
@@ -754,7 +814,10 @@ fn main() {
                                 case.plane_wave,
                                 case.plane_wave_reach,
                                 case.plane_wave_split,
+                                auto_plane_wave,
                             ) = runs[next].clone();
+                            case.auto_plane_wave = auto_plane_wave.is_some();
+                            case.m2l_plane_wave_min_degree = auto_plane_wave.flatten();
                             next += 1;
                             match run(&case, &problem, &oracle, threads, &world) {
                                 Ok(row) => {
@@ -798,6 +861,7 @@ fn main() {
                                                                 PlaneWavePrecision::PerLevel(named),
                                                                 reach,
                                                                 arguments.splits[0],
+                                                                None,
                                                             ));
                                                         }
                                                     }
