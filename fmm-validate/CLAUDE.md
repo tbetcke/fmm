@@ -424,6 +424,17 @@ built, each level's waves per direction Σₖ Nₖ), and to the example `--reach
 Rotation's on W1. `tools/helmholtz/ch6-2e-runs.sh` runs the task's verification, scan and
 times. Its report is `results/helmholtz-ch6-2e.md`.
 
+Helmholtz CH6.2f (the coarse levels' merge and shift; docs/helmholtz/tasks/CH6.2f.md) added
+`helmholtz_accuracy::Case::plane_wave_split` (`HelmholtzFmmBuilder::plane_wave_split`; `None`
+the library's `Auto`) and `Row::{plane_wave_split, plane_wave_parts}` (per level merge and
+shift's thread-seconds [busy, shifts, children, conversions], each the slowest rank's), and
+to the example `--split auto|parents|children,…` (each exponential-M2L run at each split, the
+column "M2L" ending `/parents` or `/children` where named) and five columns of `--levels`
+(the four parts and the threads busy, busy over merge and shift's seconds).
+`tests/helmholtz_accuracy.rs` checks the parts and the split by child's checksum.
+`tools/helmholtz/ch6-2f-runs.sh` runs the task's measurements. Its report is
+`results/helmholtz-ch6-2f.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

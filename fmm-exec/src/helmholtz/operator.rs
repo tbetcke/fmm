@@ -156,12 +156,20 @@
 //!    every computed child adds its accumulators in ascending mask order and multiplies the
 //!    sum by its child shift; then each computed child with waves converts its up and then
 //!    its down waves into a local in the frame and adds it, rotated back by Oⁿ(Q)ᵀ.
+//!    Or by child ([`PlaneWaveSplit`]; Helmholtz CH6.2f), one task per box of the chunk:
+//!    each computed child finds its parent's run and their sources by slot, sums the
+//!    accumulators whose mask holds it, adds them and converts, the steps above for this
+//!    child alone (its siblings' shared accumulators computed again by each). The shared
+//!    drivers' split by parents never cuts a piece below `PARENT_GRAIN` = 64 boxes, so a
+//!    level of 64 boxes ran on one thread; [`PlaneWaveSplit::Auto`] takes the split by child
+//!    on a chunk of at most 64 boxes per thread of the pool.
 //!
 //! Every local receives frame 0, then 1, then 2, each a fixed chain of its parent's
 //! accumulators, which depend on the geometry of the slots alone, and a box's waves are a
 //! function of its multipole alone, so the output is the same at every thread count and
 //! every bound of the buffer and, as Laplace's argument goes, on P ranks the one-rank output
-//! bit for bit. A source read by two chunks has its waves computed in each. The pair body ([`PairOperator`]) translates each pair by
+//! bit for bit, under either split (a child's chain is the same whichever task runs it). A
+//! source read by two chunks has its waves computed in each. The pair body ([`PairOperator`]) translates each pair by
 //! `PlaneWaveLevel::m2l` along the direction merge and shift gives it
 //! (`PlaneWaveTables::pair_direction` of the offset and the target's child index), which
 //! the level call equals to rounding (its two shift factors are the pair's to rounding).
@@ -184,7 +192,10 @@
 //! clock reads per call, no value changed. The exponential M2L's level call also times its
 //! two passes per chunk, vector and frame, the waves and merge and shift
 //! ([`plane_wave_times`](HelmholtzOperator::plane_wave_times); Helmholtz CH6.2d): four clock
-//! reads more, no value changed.
+//! reads more, no value changed; and merge and shift's thread-seconds by part, on each
+//! worker's own clock (Helmholtz CH6.2f): its tasks (busy), the accumulators' shifts, the
+//! children's sums and shifts, and the conversions, a few clock reads per parent or child
+//! and frame, drained from the scratch sets after the level call.
 //!
 //! # Execution
 //!
