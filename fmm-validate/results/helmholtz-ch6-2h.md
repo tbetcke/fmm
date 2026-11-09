@@ -14,10 +14,12 @@ proposal [docs/design/helmholtz-fmm-proposal.md](../../docs/design/helmholtz-fmm
   matrix at one rank × 40 threads; job 630762 (node-c11a-003, 22:12–23:23), the large cases at
   1 × 40 and 4 × 10 (`--map-by slot:PE=10 --bind-to core`, Open MPI 4.1.6). Both with
   `auto-pw:16` added (§4).
-- **locust** (NVIDIA GH200, 72 Neoverse-V2 cores): pending (§5). A first pass ran beside
-  another session's CUDA compile and is a record only.
+- **locust** (NVIDIA GH200, 72 Neoverse-V2 cores): one rank × 72 threads, the matrix and the
+  large cases, 2026-11-09 06:25–06:36, behind a strict quiet gate (§5). A first pass ran
+  beside another session's CUDA compile and is a record only.
 
-Source 4d44501 for every run (the later commits change the tables script and docs only),
+Source 4d44501 for the M6 and Kathleen, 694962d for locust (the commits between change the
+tables script, the docs and the defaults; the example names every setting it runs),
 release builds, rustc 1.99.0, BLAS threads 1, the default waves budget (8 GiB per node), the
 default split of the merge and shift (CH6.2f's `Auto`). Commands: §11.
 
@@ -31,11 +33,14 @@ default split of the merge and shift (CH6.2f's `Auto`). Commands: §11.
   The rule has no boxes term (below).
 - **Against today's `Auto`** (Batched to d_b, Rotation above), M2L summed over the levels:
   - At 10⁻⁶: 0.14–0.70× on the M6. On Kathleen 0.03–0.55× on the matrix and 0.23–0.49× on
-    the large cases. The evaluation drops to 0.21–0.91× on the M6, 0.05–0.66× and 0.28–0.52×
-    on Kathleen.
-  - At 10⁻³: 0.47–1.07× on the M6 and 0.26–1.19× on Kathleen. The cases above 1.0 are within
-    the ABBA spread; all but one take every level as today's `Auto` does (the same checksum),
-    and the M6's W1 at kD = 30 (1.01) runs level 2 at p = 12 with waves.
+    the large cases. On locust 0.21–0.69×, and 1.05–1.07× on two ms-scale cases within their
+    ABBA spread. The evaluation drops to 0.21–0.91× on the M6, 0.05–0.66× and 0.28–0.52× on
+    Kathleen, and 0.29–1.10× on locust.
+  - At 10⁻³: 0.47–1.07× on the M6, 0.26–1.19× on Kathleen and 0.62–1.05× on locust. The
+    cases above 1.0 are within the ABBA spread. On the M6 and Kathleen all but one take every
+    level as today's `Auto` does (the same checksum), and the M6's W1 at kD = 30 (1.01) runs
+    level 2 at p = 12 with waves; on locust W1 and W3 at kD = 30 (1.05, 1.03; spread 1.05,
+    1.07) do so too, where PW takes about 2× Rotation's time on level 2, 0.4 ms more.
 - **Against the per-level best** (each level's fastest of Rotation, Batched and PW):
   - Within 0.93–1.09× on the M6 and 0.92–1.18× on Kathleen, except five ms-scale cases at
     10⁻³: on the M6 W1 and W3 at kD = 10 (1.96×, 1.99×); on Kathleen W1 at kD = 10 and 30
@@ -43,19 +48,23 @@ default split of the merge and shift (CH6.2f's `Auto`). Commands: §11.
   - Two ms-scale cases at 10⁻⁶ on Kathleen also exceed it (W1 and W3 at kD = 10, 3 and 9 ms
     of M2L, 1.51× and 1.27×, 1–2 ms over). There the rule ran PlaneWave's methods level for
     level, so the excess is run-to-run spread.
-  - All of the excess is on levels with few boxes (§6), and most of it is Batched at p = 7
-    on level 2, which today's `Auto` chooses too.
+  - On the M6 and Kathleen all of the excess is on levels with few boxes (§6), and most of
+    it is Batched at p = 7 on level 2, which today's `Auto` chooses too.
+  - On locust 0.97–1.05× at 10⁻⁶. At 10⁻³ 1.00–1.03× on five cases and 1.46–17.4× on ten,
+    almost all of it Batched at p = 7–8 at 72 threads, today's `Auto`'s choice (below).
 - **No boxes term for PW** (§6). On CH6.2f's level call, PW loses to Rotation only at 10⁻³ on
   levels 2–3: at most 2.2× and 3.7 ms per evaluation, at most 23 % of an 8 ms case and
-  under 6 % elsewhere. At 10⁻⁶ it is faster than Rotation on every level but one (Kathleen,
-  W4 clusters at kD = 1, level 2: 1.06×, 0.2 ms). These per-level losses are timed in
+  under 6 % elsewhere. At 10⁻⁶ it is faster than Rotation on every level but two, both on
+  level 2 and 0.2 ms (Kathleen, W4 clusters at kD = 1: 1.06×; locust, W3 at kD = 10: 1.29×). These per-level losses are timed in
   PlaneWave's runs (§2); the rule's own runs of the same levels were faster on some, so they
   are an upper estimate.
 - **Batched's few-box levels** are a separate miss, of today's `Auto` (CH3.2d, the sparse-level
   term left to CH4.0). On level 2 (64 boxes, 3,096 V pairs) at p = 7, Batched takes 2.1–3.8×
   Rotation's time on the M6 and 8.5–9.3× on Kathleen (about 2 and 4 ms). Today's `Auto`
   takes p = 15 to Batched on Kathleen at 0.09–0.12 s per level against Rotation's 3–5 ms (up
-  to 38×); the rule removes that by taking PW from p = 12. Proposed as a follow-up (§9).
+  to 38×); the rule removes that by taking PW from p = 12. On locust at 72 threads Batched
+  at p = 7–8 also loses on denser levels, to about 3.5·10⁵ pairs (1.0–28× Rotation; up to 32 %
+  of a W4 evaluation at 10⁻³, §5). Proposed as a follow-up (§9).
 - **d_pw on AVX-512** (§4): 12, not d_b + 1 = 16. With 16, levels at p = 12–15 run Batched.
   That is never faster beyond noise (0.91–1.03× on the cases where it changes nothing), and
   it takes 1.6–35× the M2L at 10⁻⁶ (1.29–3.88× on the large cases) and up to 4.1× at 10⁻³.
@@ -172,35 +181,66 @@ leaves p = 12–15 to Batched. Its M2L over the rule's (d_pw = 12):
 - The AVX2 machine class (d_pw = 12, d_b + 1) and the scalar classes remain unmeasured: no
   AVX2 node of our own (CH6.2b's report).
 
-## 5. locust (pending)
+## 5. locust
 
-The run is the matrix and the large cases at one rank × 72 threads behind a strict gate:
-- before the run, other processes below 30 % of a core for five minutes, excluding another
-  user's long-running Python process (about one core, accepted in CH6.2f);
-- during the run, a sample every 7 s.
+One rank × 72 threads, the matrix and the large cases, 2026-11-09 06:25–06:36 (source
+694962d: the example names `auto_plane_wave` for every entry, so D8's default changes none
+of its runs). The gate opened after five minutes with other processes below 30 % of a core
+(06:24:57, load 0.00; the gate leaves out another user's long-running Python process, as in
+CH6.2f, which did not run this time); during the run they reached at most 10 % (a sample
+every 7 s), and no other process above 10 % of a core showed.
 
-Output goes to `/data/ucahtbe/logs/ch6-2h-b`. It has not run: started 2026-11-08 20:48, its
-gate stayed closed behind another job on locust, which holds it for several hours, and it was
-stopped at 23:50 untimed. It runs on a later pass.
+| ε | M2L Σ auto-pw ÷ auto | evaluate auto-pw ÷ auto | auto-pw ÷ per-level best |
+| --- | --- | --- | --- |
+| 10⁻⁶ | 0.21–0.69; W1, W3 kD = 10: 1.05, 1.07 (1–2 ms; ABBA spread 1.10, 1.57) | 0.29–1.10 | 0.97–1.05 |
+| 10⁻³ | 0.62–1.05 | 0.66–1.01 | 1.00–1.03 on five cases; 1.46–17.4 on ten (below) |
 
-The first pass (`bench-results/ch6-2h/locust-first`, 20:36–20:48) ran beside another
-session's CUDA compile, which a looser gate let through. It is kept as a record only; its
-summary is in the appendix. At 10⁻⁶ it agrees with the M6 (auto-pw ÷ auto 0.21–1.07, ÷ best
-0.91–1.07). At 10⁻³ it shows Batched at p = 7 well behind Rotation at 72 threads, not only on
-few-box levels: 23–28× on level 2, 1.1–12× on the other levels (up to 3.5·10⁵ pairs). The clean pass
-decides whether that holds.
+- **At 10⁻⁶** as on the M6 and Kathleen: PW on every level, PlaneWave's checksum and time.
+  One level is above 1.10× its fastest: W3 at kD = 10, level 2 (p = 15), 1.29× Rotation,
+  0.2 ms.
+- **At 10⁻³** the rule's PW levels (p ≥ 11) win or tie, except level 2 at p = 12 (W1, W3 at
+  kD = 30): 1.95–2.08× Rotation, 0.4 ms. W1 at kD = 100 and 500, W3 at kD = 100 and the W4 at
+  kD = 100 gain 0.62–0.83×.
+- **Batched at 72 threads.** The first pass's finding holds on the quiet node. Batched
+  (fused, p = 7–8) is slower than Rotation on every level below about 3.5·10⁵ pairs: 1.1–28×
+  (the largest on level 2, 3,096 pairs; 1.0–2.3× at 2–3.5·10⁵ pairs). It is faster from
+  about 4·10⁵ pairs (0.67–0.89× at 3.9·10⁵–4.6·10⁷). On the M6 (6 threads) and Kathleen (40)
+  it lost only on levels of few pairs (levels 2–3, and W4 Plummer's level 8 of 35,148 pairs).
+  - These are today's `Auto`'s levels too: at kD = 1 the rule's checksum is `Auto`'s and its
+    M2L 0.99–1.00× `Auto`'s.
+  - The rule over the per-level best costs 1–39 ms per evaluation. That is 17–32 % of the
+    evaluation on the W4 at kD = 1 and the clusters and Plummer sphere at kD = 100, 21 % on
+    W3 at kD = 30, and 50–80 % on the ms-scale W1 and W3 at kD = 10 and W1 at kD = 30.
+    It is 1 % or less on the large cases.
+  - A lower d_pw would not recover it: PW at p = 7–8 on those levels takes 0.9–5× Rotation's
+    time, mostly 1.0–2.5×. Rotation is the fastest on all but one of them (W4 Plummer at
+    kD = 1, level 7: PW 0.88×).
+  - This is Batched's rule (CH3.2d's d_b = 10 on locust), not D8's. It goes to CH4.0, whose
+    sentence names it (§9). Whether its term can catch it without reading the thread count
+    (constraint 2) is CH4.0's question.
+- **Accuracy**: the rule's errors over Rotation's are 0.969–1.063 / 0.916–1.000 (φ / ∇φ) at
+  10⁻⁶ and 1.000 / 1.000 at 10⁻³, as on the other machines.
+
+The first pass (`bench-results/ch6-2h/locust-first`, 2026-11-08 20:36–20:48) ran beside
+another session's CUDA compile and is kept as a record; the clean pass agrees with it within
+the ABBA spread (W1 at kD = 500, 10⁻⁶: 0.45 and 0.45; W3 at kD = 100: 0.21 and 0.21).
 
 ## 6. Levels of few boxes
 
 The roadmap asks whether CH6.2f's split brings coarse levels within the rule or needs a boxes
 term (or Rotation on few-box levels). The rule's levels above 1.10× the level's fastest, on
-the M6 and Kathleen (appendix, last tables):
+the M6 and Kathleen (appendix, last tables; locust below the table):
 
 | method the rule ran | where | ratio to the fastest (Rotation) | lost per evaluation |
 | --- | --- | --- | --- |
 | PW, 10⁻³ | level 2 at p = 12 (W1, W3 at kD = 30); Kathleen also W4 clusters kD = 100 levels 2–3 (p = 21, 13), W3 kD = 100 level 2 (p = 30) | M6 1.19–1.25; Kathleen 1.15–2.16 | 0.5–3.7 ms; ≤ 23 % of an 8 ms case, ≤ 6 % elsewhere |
 | PW, 10⁻⁶ | none above 1.10×; one level at 1.06× (Kathleen, W4 clusters kD = 1, level 2) | – | – |
 | Batched p = 7–8, 10⁻³ | level 2 (64 boxes) of every case at p = 7; level 3 of W3 kD = 10, W4 clusters; W1 and W3 kD = 30 level 3 (p = 8); W4 Plummer level 8 (35,148 pairs) | M6 1.18–3.79; Kathleen 1.14–9.31 | 0.3–4.4 ms |
+
+locust at 72 threads (§5) has the same PW levels (10⁻³: level 2 at p = 12, 1.95–2.08×,
+0.4 ms; 10⁻⁶: W3 at kD = 10 level 2, 1.29×, 0.2 ms), and Batched at p = 7–8 above 1.10× on
+every level below about 3.5·10⁵ pairs, not only on few-box levels (1.1–28×, 1–10 ms per
+level).
 
 **PW needs no boxes term.**
 - After CH6.2f's split, PW on levels 2–3 is within 1.25× of Rotation on the M6. On Kathleen
@@ -227,7 +267,7 @@ the M6 and Kathleen (appendix, last tables):
   points):
   - 0.969–1.063 / 0.916–1.000 at 10⁻⁶;
   - 1.000 / 1.000 at 10⁻³ (three decimals), PW levels included.
-- These are the same on the M6 and Kathleen, and at 1 × 40 and 4 × 10. They are within
+- These are the same on the M6, Kathleen and locust, and at 1 × 40 and 4 × 10. They are within
   CH6.1e's 1.1× of Rotation.
 - Checksums:
   - at 10⁻⁶ the rule's equals PlaneWave's on every case;
@@ -260,12 +300,16 @@ the Im κ bound, no boxes term, the proposal amended). On this branch:
 - the docs (module "M2L", `HelmholtzM2l::Auto`, the crate `CLAUDE.md`s) are restated;
 - proposal §5.3 and §6.4 ("opt-in until CH6.2") are amended.
 
+locust's clean pass (§5, 2026-11-09) came after the sign-off. It adds one PW level at 10⁻⁶
+(1.29×, 0.2 ms) and Batched's losses at 72 threads, which are today's `Auto`'s and go to
+CH4.0. Neither changes the rule.
+
 ## 9. Follow-ups
 
 - **Batched's few-box levels** (§6): a sparse-level term in `Auto`'s Batched choice (pairs per
   class, or the level's boxes) or a split of Batched's level call: a sentence added to CH4.0
-  (the M2L rule's sparse-level term) in the roadmap.
-- **locust's clean pass** (§5): pending on this PR.
+  (the M2L rule's sparse-level term) in the roadmap. On locust at 72 threads the term must
+  also reach levels to about 3.5·10⁵ pairs (§5); CH4.0's sentence says so.
 - **d_pw unmeasured**: AVX2 and scalar, and every class with one plane (real k with real
   charges): d_b + 1; with the first AVX2 node and a one-plane run.
 
@@ -321,16 +365,19 @@ tools/kathleen/submit.sh --time=06:00:00 -- run.sbatch \
 tools/kathleen/submit.sh --time=06:00:00 -- run.sbatch \
   'cargo build --release -p nd-fmm-validate --example helmholtz_accuracy' \
   'THREADS=40 SPLITS="1x40 4x10" EXTRA=auto-pw:16 tools/helmholtz/ch6-2h-runs.sh /scratch/scratch/ucahtbe/fmm/logs/ch6-2h-large large'
-# locust (tools/gh200/sync.sh first; quiet node)
+# locust (tools/gh200/sync.sh, then the release build there, first): the gated script,
+# /data/ucahtbe/logs/ch6-2h-gated.sh, waits for five quiet minutes (others ≤ 30 % of a core),
+# samples the others every 7 s, and runs
 tools/gh200/remote.sh 'THREADS=72 SPLITS=1x72 tools/helmholtz/ch6-2h-runs.sh /data/ucahtbe/logs/ch6-2h-b matrix large'
 # The tables (outputs fetched to bench-results/ch6-2h/<machine>/)
 tools/helmholtz/ch6-2h-tables.py m6=bench-results/ch6-2h/m6
 tools/helmholtz/ch6-2h-tables.py --extra auto-pw:16 kathleen=bench-results/ch6-2h/kathleen \
   kathleen-large=bench-results/ch6-2h/kathleen-large
+tools/helmholtz/ch6-2h-tables.py locust=bench-results/ch6-2h/locust
 ```
 
 The raw outputs: `~/projects/fmm-archive/m6/logs/ch6-2h`, `kathleen/logs/ch6-2h{,-large}`,
-`locust/logs/ch6-2h-first` (copies of `bench-results/ch6-2h/`, which git ignores).
+`locust/logs/ch6-2h{,-first}` (copies of `bench-results/ch6-2h/`, which git ignores).
 
 ## Appendix: the tables script's output
 
@@ -1131,6 +1178,425 @@ The raw outputs: `~/projects/fmm-archive/m6/logs/ch6-2h`, `kathleen/logs/ch6-2h{
 | kathleen | W4 plummer (N = 100000) | 100 | 1e-3 | 1×40 | 8 | 7 | 35148 | b-f | rot. | 1.33 | 0.0016 | 0.009 |
 | kathleen | W4 sphere (N = 100000) | 1 | 1e-3 | 1×40 | 2 | 7 | 3096 | b-f | rot. | 8.54 | 0.0042 | 0.114 |
 | kathleen-large | W3 (N = 4031442) | 100 | 1e-3 | 1×40 | 2 | 30 | 3096 | pw i2 | rot. | 1.19 | 0.0037 | 0.002 |
+
+### locust (1 × 72, 2026-11-09)
+
+#### locust
+
+##### W1 (N = 796), kD = 10, ε = 1e-3, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 7 | 3096 | 0.0002 | 0.0038 (b-f) | 0.0038 (b-f) | 0.0005 | rot. | 15.54 |
+| Σ | | | 0.0002 | 0.0038 | 0.0038 | 0.0005 | best 0.0002 | |
+| evaluate | | | 0.002 | 0.005 | 0.005 | 0.002 | | |
+
+##### W1 (N = 796), kD = 10, ε = 1e-6, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 15 | 3096 | 0.0007 | 0.0007 (rot.) | 0.0007 (pw i2) | 0.0007 | pw i2 | 1.00 |
+| Σ | | | 0.0007 | 0.0007 | 0.0007 | 0.0007 | best 0.0007 | |
+| evaluate | | | 0.003 | 0.002 | 0.002 | 0.002 | | |
+
+##### W1 (N = 7162), kD = 30, ε = 1e-3, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 12 | 3096 | 0.0004 | 0.0004 (rot.) | 0.0008 (pw i2) | 0.0008 | rot. | 1.95 |
+| 3 | 8 | 32256 | 0.0013 | 0.0085 (b-f) | 0.0086 (b-f) | 0.0024 | rot. | 6.77 |
+| Σ | | | 0.0017 | 0.0089 | 0.0094 | 0.0032 | best 0.0017 | |
+| evaluate | | | 0.005 | 0.012 | 0.013 | 0.006 | | |
+
+##### W1 (N = 7162), kD = 30, ε = 1e-6, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 16 | 3096 | 0.0008 | 0.0008 (rot.) | 0.0008 (pw i2) | 0.0009 | rot. | 1.07 |
+| 3 | 15 | 32256 | 0.0055 | 0.0054 (rot.) | 0.0035 (pw i2) | 0.0033 | pw i2 | 1.00 |
+| Σ | | | 0.0063 | 0.0062 | 0.0043 | 0.0042 | best 0.0041 | |
+| evaluate | | | 0.010 | 0.010 | 0.008 | 0.008 | | |
+
+##### W1 (N = 79578), kD = 100, ε = 1e-3, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 30 | 3096 | 0.0042 | 0.0042 (rot.) | 0.0027 (pw i2) | 0.0027 | pw i2 | 1.00 |
+| 3 | 18 | 53352 | 0.0154 | 0.0150 (rot.) | 0.0083 (pw i2) | 0.0083 | pw i2 | 1.00 |
+| 4 | 11 | 385344 | 0.0268 | 0.0266 (rot.) | 0.0225 (pw i2) | 0.0225 | pw i2 | 1.00 |
+| 5 | 7 | 244944 | 0.0061 | 0.0071 (b-f) | 0.0071 (b-f) | 0.0154 | rot. | 1.16 |
+| Σ | | | 0.0525 | 0.0529 | 0.0407 | 0.0490 | best 0.0397 | |
+| evaluate | | | 0.082 | 0.083 | 0.071 | 0.080 | | |
+
+##### W1 (N = 79578), kD = 100, ε = 1e-6, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 35 | 3096 | 0.0066 | 0.0066 (rot.) | 0.0030 (pw i2) | 0.0030 | pw i2 | 1.00 |
+| 3 | 22 | 53352 | 0.0268 | 0.0268 (rot.) | 0.0096 (pw i2) | 0.0106 | pw i2 | 1.00 |
+| 4 | 15 | 385344 | 0.0593 | 0.0593 (rot.) | 0.0281 (pw i2) | 0.0287 | pw i2 | 1.00 |
+| 5 | 15 | 244944 | 0.0375 | 0.0376 (rot.) | 0.0269 (pw i2) | 0.0268 | pw i2 | 1.00 |
+| Σ | | | 0.1302 | 0.1303 | 0.0677 | 0.0691 | best 0.0691 | |
+| evaluate | | | 0.196 | 0.195 | 0.133 | 0.134 | | |
+
+##### W1 (N = 1989437), kD = 500, ε = 1e-3, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 123 | 3096 | 0.7580 | 0.7728 (rot.) | 0.7535 (rot.) | 0.7710 (rot.) | rot. | 1.00 |
+| 3 | 66 | 53352 | 0.7335 | 0.7311 (rot.) | 0.7758 (rot.) | 0.7234 (rot.) | rot. | 1.00 |
+| 4 | 36 | 511200 | 0.9237 | 0.9240 (rot.) | 0.2860 (pw i2) | 0.2863 | pw i2 | 1.00 |
+| 5 | 21 | 2935296 | 1.1360 | 1.1345 (rot.) | 0.3713 (pw i2) | 0.3787 | pw i2 | 1.00 |
+| 6 | 13 | 10439280 | 1.1118 | 1.0961 (rot.) | 0.5742 (pw i2) | 0.5794 | pw i2 | 1.00 |
+| 7 | 8 | 14492220 | 0.4710 | 0.3768 (b-f) | 0.3768 (b-f) | 0.6232 | b-f | 1.00 |
+| Σ | | | 5.1340 | 5.0353 | 3.1375 | 3.3619 | best 3.1126 | |
+| evaluate | | | 5.700 | 5.604 | 3.712 | 3.919 | | |
+
+##### W1 (N = 1989437), kD = 500, ε = 1e-6, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 131 | 3096 | 0.9572 | 0.9660 (rot.) | 0.9479 (rot.) | 0.9110 (rot.) | rot. | 1.00 |
+| 3 | 72 | 53352 | 0.9770 | 0.9742 (rot.) | 0.9893 (rot.) | 1.0439 (rot.) | rot. | 1.00 |
+| 4 | 41 | 511200 | 1.3808 | 1.3869 (rot.) | 0.3141 (pw i2) | 0.3126 | pw i2 | 1.00 |
+| 5 | 25 | 2935296 | 1.8977 | 1.8903 (rot.) | 0.4227 (pw i2) | 0.4212 | pw i2 | 1.00 |
+| 6 | 16 | 10439280 | 1.9365 | 1.9313 (rot.) | 0.6629 (pw i2) | 0.6577 | pw i2 | 1.00 |
+| 7 | 15 | 14492220 | 2.2753 | 2.2608 (rot.) | 0.9203 (pw i2) | 0.9130 | pw i2 | 1.00 |
+| Σ | | | 9.4244 | 9.4094 | 4.2571 | 4.2594 | best 4.2387 | |
+| evaluate | | | 10.191 | 10.221 | 5.013 | 5.019 | | |
+
+##### W3 (N = 108849), kD = 30, ε = 1e-3, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 12 | 3096 | 0.0004 | 0.0004 (rot.) | 0.0008 (pw i2) | 0.0008 | rot. | 2.08 |
+| 3 | 8 | 53352 | 0.0021 | 0.0115 (b-f) | 0.0116 (b-f) | 0.0032 | rot. | 5.58 |
+| 4 | 7 | 584136 | 0.0146 | 0.0123 (b-f) | 0.0126 (b-f) | 0.0158 | b-f | 1.00 |
+| Σ | | | 0.0170 | 0.0241 | 0.0250 | 0.0198 | best 0.0147 | |
+| evaluate | | | 0.039 | 0.047 | 0.048 | 0.043 | | |
+
+##### W3 (N = 108849), kD = 30, ε = 1e-6, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 16 | 3096 | 0.0008 | 0.0008 (rot.) | 0.0009 (pw i2) | 0.0009 | rot. | 1.08 |
+| 3 | 15 | 53352 | 0.0092 | 0.0093 (rot.) | 0.0048 (pw i2) | 0.0044 | pw i2 | 1.00 |
+| 4 | 15 | 584136 | 0.0897 | 0.0894 (rot.) | 0.0242 (pw i2) | 0.0242 | pw i2 | 1.00 |
+| Σ | | | 0.0997 | 0.0995 | 0.0300 | 0.0295 | best 0.0295 | |
+| evaluate | | | 0.128 | 0.128 | 0.059 | 0.059 | | |
+
+##### W3 (N = 4031442), kD = 100, ε = 1e-3, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 30 | 3096 | 0.0043 | 0.0043 (rot.) | 0.0028 (pw i2) | 0.0030 | pw i2 | 1.00 |
+| 3 | 18 | 53352 | 0.0152 | 0.0154 (rot.) | 0.0085 (pw i2) | 0.0084 | pw i2 | 1.00 |
+| 4 | 11 | 584136 | 0.0409 | 0.0409 (rot.) | 0.0292 (pw i2) | 0.0292 | pw i2 | 1.00 |
+| 5 | 7 | 5398920 | 0.1296 | 0.0864 (b-f) | 0.0864 (b-f) | 0.1485 | b-f | 1.00 |
+| 6 | 7 | 46298376 | 1.1343 | 0.7408 (b-f) | 0.7639 (b-f) | 1.0880 | b-f | 1.00 |
+| Σ | | | 1.3243 | 0.8878 | 0.8908 | 1.2770 | best 0.8677 | |
+| evaluate | | | 2.003 | 1.572 | 1.594 | 1.963 | | |
+
+##### W3 (N = 4031442), kD = 100, ε = 1e-6, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 35 | 3096 | 0.0070 | 0.0069 (rot.) | 0.0038 (pw i2) | 0.0032 | pw i2 | 1.00 |
+| 3 | 22 | 53352 | 0.0274 | 0.0281 (rot.) | 0.0099 (pw i2) | 0.0098 | pw i2 | 1.00 |
+| 4 | 15 | 584136 | 0.0908 | 0.0905 (rot.) | 0.0359 (pw i2) | 0.0362 | pw i2 | 1.00 |
+| 5 | 15 | 5398920 | 0.8260 | 0.8503 (rot.) | 0.2052 (pw i2) | 0.2052 | pw i2 | 1.00 |
+| 6 | 15 | 46298376 | 7.1762 | 7.2920 (rot.) | 1.4815 (pw i2) | 1.5047 | pw i2 | 1.00 |
+| Σ | | | 8.1275 | 8.2678 | 1.7363 | 1.7591 | best 1.7591 | |
+| evaluate | | | 9.097 | 9.256 | 2.701 | 2.731 | | |
+
+##### W3 (N = 4032), kD = 10, ε = 1e-3, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 7 | 3096 | 0.0002 | 0.0037 (b-f) | 0.0038 (b-f) | 0.0005 | rot. | 24.45 |
+| 3 | 7 | 5544 | 0.0002 | 0.0028 (b-f) | 0.0028 (b-f) | 0.0008 | rot. | 12.58 |
+| Σ | | | 0.0004 | 0.0066 | 0.0066 | 0.0012 | best 0.0004 | |
+| evaluate | | | 0.008 | 0.014 | 0.014 | 0.008 | | |
+
+##### W3 (N = 4032), kD = 10, ε = 1e-6, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 15 | 3096 | 0.0007 | 0.0007 (rot.) | 0.0007 (pw i2) | 0.0009 | rot. | 1.29 |
+| 3 | 15 | 5544 | 0.0013 | 0.0012 (rot.) | 0.0014 (pw i2) | 0.0014 | rot. | 1.06 |
+| Σ | | | 0.0020 | 0.0019 | 0.0020 | 0.0022 | best 0.0020 | |
+| evaluate | | | 0.019 | 0.019 | 0.019 | 0.020 | | |
+
+##### W4 clusters (N = 100000), kD = 1, ε = 1e-3, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 7 | 3096 | 0.0002 | 0.0042 (b-f) | 0.0042 (b-f) | 0.0005 | rot. | 25.10 |
+| 3 | 7 | 19782 | 0.0007 | 0.0052 (b-f) | 0.0052 (b-f) | 0.0013 | rot. | 7.76 |
+| 4 | 7 | 43392 | 0.0013 | 0.0068 (b-f) | 0.0069 (b-f) | 0.0021 | rot. | 5.43 |
+| 5 | 7 | 106500 | 0.0028 | 0.0088 (b-f) | 0.0089 (b-f) | 0.0048 | rot. | 3.13 |
+| 6 | 7 | 214818 | 0.0056 | 0.0099 (b-f) | 0.0099 (b-f) | 0.0087 | rot. | 1.77 |
+| 7 | 7 | 289194 | 0.0072 | 0.0113 (b-f) | 0.0113 (b-f) | 0.0081 | rot. | 1.56 |
+| 8 | 7 | 351936 | 0.0088 | 0.0099 (b-f) | 0.0099 (b-f) | 0.0093 | rot. | 1.12 |
+| Σ | | | 0.0265 | 0.0561 | 0.0563 | 0.0348 | best 0.0265 | |
+| evaluate | | | 0.083 | 0.112 | 0.112 | 0.091 | | |
+
+##### W4 clusters (N = 100000), kD = 1, ε = 1e-6, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 15 | 3096 | 0.0007 | 0.0007 (rot.) | 0.0007 (pw i2) | 0.0006 | pw i2 | 1.00 |
+| 3 | 15 | 19782 | 0.0038 | 0.0037 (rot.) | 0.0018 (pw i2) | 0.0019 | pw i2 | 1.00 |
+| 4 | 15 | 43392 | 0.0076 | 0.0077 (rot.) | 0.0030 (pw i2) | 0.0030 | pw i2 | 1.00 |
+| 5 | 15 | 106500 | 0.0174 | 0.0174 (rot.) | 0.0061 (pw i2) | 0.0061 | pw i2 | 1.00 |
+| 6 | 15 | 214818 | 0.0336 | 0.0336 (rot.) | 0.0153 (pw i2) | 0.0151 | pw i2 | 1.00 |
+| 7 | 15 | 289194 | 0.0454 | 0.0451 (rot.) | 0.0137 (pw i2) | 0.0137 | pw i2 | 1.00 |
+| 8 | 15 | 351936 | 0.0544 | 0.0546 (rot.) | 0.0158 (pw i2) | 0.0158 | pw i2 | 1.00 |
+| Σ | | | 0.1628 | 0.1627 | 0.0564 | 0.0563 | best 0.0563 | |
+| evaluate | | | 0.305 | 0.303 | 0.197 | 0.197 | | |
+
+##### W4 clusters (N = 100000), kD = 100, ε = 1e-3, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 21 | 3096 | 0.0016 | 0.0016 (rot.) | 0.0014 (pw i2) | 0.0014 | pw i2 | 1.00 |
+| 3 | 13 | 19782 | 0.0026 | 0.0026 (rot.) | 0.0027 (pw i2) | 0.0026 | rot. | 1.02 |
+| 4 | 8 | 43392 | 0.0016 | 0.0112 (b-f) | 0.0113 (b-f) | 0.0031 | rot. | 6.88 |
+| 5 | 7 | 106500 | 0.0030 | 0.0089 (b-f) | 0.0089 (b-f) | 0.0050 | rot. | 2.93 |
+| 6 | 7 | 214818 | 0.0056 | 0.0099 (b-f) | 0.0100 (b-f) | 0.0097 | rot. | 1.77 |
+| 7 | 7 | 289194 | 0.0074 | 0.0113 (b-f) | 0.0111 (b-f) | 0.0087 | rot. | 1.53 |
+| 8 | 7 | 351936 | 0.0090 | 0.0099 (b-f) | 0.0099 (b-f) | 0.0099 | rot. | 1.10 |
+| Σ | | | 0.0308 | 0.0553 | 0.0552 | 0.0402 | best 0.0306 | |
+| evaluate | | | 0.088 | 0.113 | 0.113 | 0.098 | | |
+
+##### W4 clusters (N = 100000), kD = 100, ε = 1e-6, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 25 | 3096 | 0.0026 | 0.0025 (rot.) | 0.0016 (pw i2) | 0.0016 | pw i2 | 1.00 |
+| 3 | 16 | 19782 | 0.0046 | 0.0045 (rot.) | 0.0030 (pw i2) | 0.0031 | pw i2 | 1.00 |
+| 4 | 15 | 43392 | 0.0079 | 0.0076 (rot.) | 0.0048 (pw i2) | 0.0043 | pw i2 | 1.00 |
+| 5 | 15 | 106500 | 0.0176 | 0.0174 (rot.) | 0.0074 (pw i2) | 0.0071 | pw i2 | 1.00 |
+| 6 | 15 | 214818 | 0.0337 | 0.0339 (rot.) | 0.0166 (pw i2) | 0.0166 | pw i2 | 1.00 |
+| 7 | 15 | 289194 | 0.0451 | 0.0454 (rot.) | 0.0149 (pw i2) | 0.0147 | pw i2 | 1.00 |
+| 8 | 15 | 351936 | 0.0547 | 0.0546 (rot.) | 0.0165 (pw i2) | 0.0165 | pw i2 | 1.00 |
+| Σ | | | 0.1662 | 0.1659 | 0.0650 | 0.0640 | best 0.0640 | |
+| evaluate | | | 0.309 | 0.308 | 0.207 | 0.208 | | |
+
+##### W4 cube (N = 100000), kD = 1, ε = 1e-3, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 7 | 3096 | 0.0001 | 0.0040 (b-f) | 0.0041 (b-f) | 0.0005 | rot. | 28.05 |
+| 3 | 7 | 53352 | 0.0016 | 0.0070 (b-f) | 0.0070 (b-f) | 0.0023 | rot. | 4.47 |
+| 4 | 7 | 584136 | 0.0146 | 0.0126 (b-f) | 0.0126 (b-f) | 0.0146 | b-f | 1.00 |
+| Σ | | | 0.0163 | 0.0236 | 0.0236 | 0.0174 | best 0.0143 | |
+| evaluate | | | 0.035 | 0.043 | 0.043 | 0.037 | | |
+
+##### W4 cube (N = 100000), kD = 1, ε = 1e-6, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 15 | 3096 | 0.0007 | 0.0007 (rot.) | 0.0006 (pw i2) | 0.0006 | pw i2 | 1.00 |
+| 3 | 15 | 53352 | 0.0096 | 0.0093 (rot.) | 0.0033 (pw i2) | 0.0034 | pw i2 | 1.00 |
+| 4 | 15 | 584136 | 0.0894 | 0.0897 (rot.) | 0.0222 (pw i2) | 0.0228 | pw i2 | 1.00 |
+| Σ | | | 0.0996 | 0.0996 | 0.0261 | 0.0269 | best 0.0269 | |
+| evaluate | | | 0.126 | 0.126 | 0.052 | 0.053 | | |
+
+##### W4 cube (N = 100000), kD = 100, ε = 1e-3, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 30 | 3096 | 0.0042 | 0.0042 (rot.) | 0.0027 (pw i2) | 0.0027 | pw i2 | 1.00 |
+| 3 | 18 | 53352 | 0.0155 | 0.0151 (rot.) | 0.0083 (pw i2) | 0.0084 | pw i2 | 1.00 |
+| 4 | 11 | 584136 | 0.0409 | 0.0406 (rot.) | 0.0289 (pw i2) | 0.0289 | pw i2 | 1.00 |
+| Σ | | | 0.0606 | 0.0598 | 0.0400 | 0.0400 | best 0.0400 | |
+| evaluate | | | 0.084 | 0.084 | 0.065 | 0.066 | | |
+
+##### W4 cube (N = 100000), kD = 100, ε = 1e-6, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 35 | 3096 | 0.0066 | 0.0065 (rot.) | 0.0030 (pw i2) | 0.0030 | pw i2 | 1.00 |
+| 3 | 22 | 53352 | 0.0273 | 0.0268 (rot.) | 0.0096 (pw i2) | 0.0095 | pw i2 | 1.00 |
+| 4 | 15 | 584136 | 0.0897 | 0.0900 (rot.) | 0.0356 (pw i2) | 0.0356 | pw i2 | 1.00 |
+| Σ | | | 0.1235 | 0.1233 | 0.0483 | 0.0481 | best 0.0481 | |
+| evaluate | | | 0.153 | 0.153 | 0.078 | 0.078 | | |
+
+##### W4 plummer (N = 100000), kD = 1, ε = 1e-3, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 7 | 3096 | 0.0002 | 0.0044 (b-f) | 0.0043 (b-f) | 0.0005 | rot. | 28.41 |
+| 3 | 7 | 53352 | 0.0016 | 0.0071 (b-f) | 0.0070 (b-f) | 0.0023 | rot. | 4.49 |
+| 4 | 7 | 53352 | 0.0016 | 0.0071 (b-f) | 0.0070 (b-f) | 0.0024 | rot. | 4.49 |
+| 5 | 7 | 109548 | 0.0030 | 0.0103 (b-f) | 0.0102 (b-f) | 0.0039 | rot. | 3.48 |
+| 6 | 7 | 205458 | 0.0052 | 0.0119 (b-f) | 0.0117 (b-f) | 0.0072 | rot. | 2.27 |
+| 7 | 7 | 333330 | 0.0083 | 0.0113 (b-f) | 0.0113 (b-f) | 0.0073 | pw i2 | 1.55 |
+| 8 | 7 | 35148 | 0.0011 | 0.0076 (b-f) | 0.0076 (b-f) | 0.0018 | rot. | 6.94 |
+| Σ | | | 0.0209 | 0.0596 | 0.0592 | 0.0255 | best 0.0199 | |
+| evaluate | | | 0.083 | 0.123 | 0.123 | 0.089 | | |
+
+##### W4 plummer (N = 100000), kD = 1, ε = 1e-6, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 15 | 3096 | 0.0006 | 0.0007 (rot.) | 0.0007 (pw i2) | 0.0007 | rot. | 1.01 |
+| 3 | 15 | 53352 | 0.0092 | 0.0092 (rot.) | 0.0032 (pw i2) | 0.0032 | pw i2 | 1.00 |
+| 4 | 15 | 53352 | 0.0094 | 0.0090 (rot.) | 0.0033 (pw i2) | 0.0033 | pw i2 | 1.00 |
+| 5 | 15 | 109548 | 0.0179 | 0.0176 (rot.) | 0.0056 (pw i2) | 0.0056 | pw i2 | 1.00 |
+| 6 | 15 | 205458 | 0.0325 | 0.0324 (rot.) | 0.0101 (pw i2) | 0.0103 | pw i2 | 1.00 |
+| 7 | 15 | 333330 | 0.0517 | 0.0517 (rot.) | 0.0123 (pw i2) | 0.0123 | pw i2 | 1.00 |
+| 8 | 15 | 35148 | 0.0063 | 0.0063 (rot.) | 0.0033 (pw i2) | 0.0025 | pw i2 | 1.00 |
+| Σ | | | 0.1276 | 0.1268 | 0.0385 | 0.0379 | best 0.0379 | |
+| evaluate | | | 0.288 | 0.287 | 0.197 | 0.198 | | |
+
+##### W4 plummer (N = 100000), kD = 100, ε = 1e-3, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 30 | 3096 | 0.0042 | 0.0042 (rot.) | 0.0027 (pw i2) | 0.0027 | pw i2 | 1.00 |
+| 3 | 18 | 53352 | 0.0157 | 0.0149 (rot.) | 0.0083 (pw i2) | 0.0085 | pw i2 | 1.00 |
+| 4 | 11 | 380178 | 0.0266 | 0.0266 (rot.) | 0.0201 (pw i2) | 0.0203 | pw i2 | 1.00 |
+| 5 | 7 | 109548 | 0.0030 | 0.0102 (b-f) | 0.0103 (b-f) | 0.0050 | rot. | 3.40 |
+| 6 | 7 | 205458 | 0.0052 | 0.0117 (b-f) | 0.0117 (b-f) | 0.0079 | rot. | 2.24 |
+| 7 | 7 | 333330 | 0.0083 | 0.0113 (b-f) | 0.0113 (b-f) | 0.0087 | rot. | 1.36 |
+| 8 | 7 | 35148 | 0.0011 | 0.0076 (b-f) | 0.0075 (b-f) | 0.0018 | rot. | 6.97 |
+| Σ | | | 0.0642 | 0.0866 | 0.0720 | 0.0550 | best 0.0492 | |
+| evaluate | | | 0.128 | 0.150 | 0.136 | 0.119 | | |
+
+##### W4 plummer (N = 100000), kD = 100, ε = 1e-6, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 35 | 3096 | 0.0066 | 0.0065 (rot.) | 0.0030 (pw i2) | 0.0030 | pw i2 | 1.00 |
+| 3 | 21 | 53352 | 0.0229 | 0.0230 (rot.) | 0.0093 (pw i2) | 0.0091 | pw i2 | 1.00 |
+| 4 | 15 | 380178 | 0.0585 | 0.0587 (rot.) | 0.0249 (pw i2) | 0.0247 | pw i2 | 1.00 |
+| 5 | 15 | 109548 | 0.0179 | 0.0178 (rot.) | 0.0071 (pw i2) | 0.0070 | pw i2 | 1.00 |
+| 6 | 15 | 205458 | 0.0323 | 0.0325 (rot.) | 0.0110 (pw i2) | 0.0109 | pw i2 | 1.00 |
+| 7 | 15 | 333330 | 0.0518 | 0.0520 (rot.) | 0.0150 (pw i2) | 0.0135 | pw i2 | 1.00 |
+| 8 | 15 | 35148 | 0.0065 | 0.0064 (rot.) | 0.0027 (pw i2) | 0.0026 | pw i2 | 1.00 |
+| Σ | | | 0.1965 | 0.1969 | 0.0729 | 0.0708 | best 0.0708 | |
+| evaluate | | | 0.348 | 0.347 | 0.224 | 0.223 | | |
+
+##### W4 sphere (N = 100000), kD = 1, ε = 1e-3, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 7 | 3096 | 0.0001 | 0.0042 (b-f) | 0.0041 (b-f) | 0.0005 | rot. | 28.29 |
+| 3 | 7 | 53352 | 0.0016 | 0.0071 (b-f) | 0.0070 (b-f) | 0.0023 | rot. | 4.42 |
+| 4 | 7 | 385344 | 0.0096 | 0.0085 (b-f) | 0.0085 (b-f) | 0.0104 | b-f | 1.00 |
+| 5 | 7 | 325404 | 0.0078 | 0.0083 (b-f) | 0.0081 (b-f) | 0.0142 | rot. | 1.06 |
+| Σ | | | 0.0192 | 0.0280 | 0.0277 | 0.0274 | best 0.0180 | |
+| evaluate | | | 0.047 | 0.057 | 0.057 | 0.056 | | |
+
+##### W4 sphere (N = 100000), kD = 1, ε = 1e-6, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 15 | 3096 | 0.0007 | 0.0007 (rot.) | 0.0007 (pw i2) | 0.0006 | pw i2 | 1.00 |
+| 3 | 15 | 53352 | 0.0093 | 0.0093 (rot.) | 0.0033 (pw i2) | 0.0039 | pw i2 | 1.00 |
+| 4 | 15 | 385344 | 0.0592 | 0.0592 (rot.) | 0.0175 (pw i2) | 0.0183 | pw i2 | 1.00 |
+| 5 | 15 | 325404 | 0.0495 | 0.0496 (rot.) | 0.0252 (pw i2) | 0.0249 | pw i2 | 1.00 |
+| Σ | | | 0.1186 | 0.1188 | 0.0467 | 0.0477 | best 0.0477 | |
+| evaluate | | | 0.183 | 0.182 | 0.109 | 0.110 | | |
+
+##### W4 sphere (N = 100000), kD = 100, ε = 1e-3, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 30 | 3096 | 0.0042 | 0.0042 (rot.) | 0.0027 (pw i2) | 0.0027 | pw i2 | 1.00 |
+| 3 | 18 | 53352 | 0.0153 | 0.0153 (rot.) | 0.0083 (pw i2) | 0.0083 | pw i2 | 1.00 |
+| 4 | 11 | 385344 | 0.0266 | 0.0268 (rot.) | 0.0223 (pw i2) | 0.0223 | pw i2 | 1.00 |
+| 5 | 7 | 325404 | 0.0081 | 0.0083 (b-f) | 0.0083 (b-f) | 0.0182 | rot. | 1.02 |
+| Σ | | | 0.0542 | 0.0546 | 0.0416 | 0.0516 | best 0.0415 | |
+| evaluate | | | 0.087 | 0.087 | 0.075 | 0.085 | | |
+
+##### W4 sphere (N = 100000), kD = 100, ε = 1e-6, 1 × 72
+
+| level | p | V pairs | rotation | auto | auto-pw | planewave | fastest | auto-pw ÷ fastest |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 2 | 35 | 3096 | 0.0066 | 0.0066 (rot.) | 0.0030 (pw i2) | 0.0030 | pw i2 | 1.00 |
+| 3 | 22 | 53352 | 0.0270 | 0.0263 (rot.) | 0.0094 (pw i2) | 0.0096 | pw i2 | 1.00 |
+| 4 | 15 | 385344 | 0.0593 | 0.0592 (rot.) | 0.0279 (pw i2) | 0.0279 | pw i2 | 1.00 |
+| 5 | 15 | 325404 | 0.0495 | 0.0495 (rot.) | 0.0312 (pw i2) | 0.0316 | pw i2 | 1.00 |
+| Σ | | | 0.1424 | 0.1415 | 0.0716 | 0.0721 | best 0.0721 | |
+| evaluate | | | 0.209 | 0.208 | 0.138 | 0.138 | | |
+
+#### Summary
+
+| machine | workload | kD | ε | split | M2L Σ rotation | auto | auto-pw | planewave | best per level | auto-pw/best | auto-pw/auto | evaluate rotation | auto | auto-pw | planewave | auto-pw/auto | ABBA max | auto-pw ÷ rot. error φ/∇φ | auto-pw's checksum also |
+| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| locust | W1 | 10 | 1e-3 | 1×72 | 0.000 | 0.004 | 0.004 | 0.000 | 0.000 | 15.56 | 1.00 | 0.002 | 0.005 | 0.005 | 0.002 | 0.98 | 1.98 | 1.000/1.000 | auto |
+| locust | W1 | 10 | 1e-6 | 1×72 | 0.001 | 0.001 | 0.001 | 0.001 | 0.001 | 1.05 | 1.05 | 0.003 | 0.002 | 0.002 | 0.002 | 1.10 | 1.10 | 1.005/0.995 | planewave |
+| locust | W1 | 30 | 1e-3 | 1×72 | 0.002 | 0.009 | 0.009 | 0.003 | 0.002 | 5.65 | 1.05 | 0.005 | 0.012 | 0.013 | 0.006 | 1.01 | 1.05 | 1.000/1.000 | – |
+| locust | W1 | 30 | 1e-6 | 1×72 | 0.006 | 0.006 | 0.004 | 0.004 | 0.004 | 1.04 | 0.69 | 0.010 | 0.010 | 0.008 | 0.008 | 0.80 | 1.11 | 1.000/1.000 | planewave |
+| locust | W1 | 100 | 1e-3 | 1×72 | 0.052 | 0.053 | 0.041 | 0.049 | 0.040 | 1.02 | 0.77 | 0.082 | 0.083 | 0.071 | 0.080 | 0.85 | 1.06 | 1.000/1.000 | – |
+| locust | W1 | 100 | 1e-6 | 1×72 | 0.130 | 0.130 | 0.068 | 0.069 | 0.069 | 0.98 | 0.52 | 0.196 | 0.195 | 0.133 | 0.134 | 0.68 | 1.23 | 0.995/0.980 | planewave |
+| locust | W1 | 500 | 1e-3 | 1×72 | 5.134 | 5.035 | 3.138 | 3.362 | 3.113 | 1.01 | 0.62 | 5.700 | 5.604 | 3.712 | 3.919 | 0.66 | 1.14 | 1.000/1.000 | – |
+| locust | W1 | 500 | 1e-6 | 1×72 | 9.424 | 9.409 | 4.257 | 4.259 | 4.239 | 1.00 | 0.45 | 10.191 | 10.221 | 5.013 | 5.019 | 0.49 | 1.06 | 0.973/0.984 | planewave |
+| locust | W3 (N = 108849) | 30 | 1e-3 | 1×72 | 0.017 | 0.024 | 0.025 | 0.020 | 0.015 | 1.70 | 1.03 | 0.039 | 0.047 | 0.048 | 0.043 | 1.01 | 1.07 | 1.000/1.000 | – |
+| locust | W3 (N = 108849) | 30 | 1e-6 | 1×72 | 0.100 | 0.099 | 0.030 | 0.030 | 0.029 | 1.02 | 0.30 | 0.128 | 0.128 | 0.059 | 0.059 | 0.46 | 1.24 | 0.973/0.964 | planewave |
+| locust | W3 (N = 4031442) | 100 | 1e-3 | 1×72 | 1.324 | 0.888 | 0.891 | 1.277 | 0.868 | 1.03 | 1.00 | 2.003 | 1.572 | 1.594 | 1.963 | 1.01 | 1.06 | 1.000/1.000 | – |
+| locust | W3 (N = 4031442) | 100 | 1e-6 | 1×72 | 8.128 | 8.268 | 1.736 | 1.759 | 1.759 | 0.99 | 0.21 | 9.097 | 9.256 | 2.701 | 2.731 | 0.29 | 1.07 | 1.010/0.984 | planewave |
+| locust | W3 (N = 4032) | 10 | 1e-3 | 1×72 | 0.000 | 0.007 | 0.007 | 0.001 | 0.000 | 17.37 | 1.00 | 0.008 | 0.014 | 0.014 | 0.008 | 1.00 | 1.16 | 1.000/1.000 | auto |
+| locust | W3 (N = 4032) | 10 | 1e-6 | 1×72 | 0.002 | 0.002 | 0.002 | 0.002 | 0.002 | 1.04 | 1.07 | 0.019 | 0.019 | 0.019 | 0.020 | 1.00 | 1.57 | 0.991/0.947 | planewave |
+| locust | W4 clusters (N = 100000) | 1 | 1e-3 | 1×72 | 0.027 | 0.056 | 0.056 | 0.035 | 0.027 | 2.12 | 1.00 | 0.083 | 0.112 | 0.112 | 0.091 | 1.00 | 1.28 | 1.000/1.000 | auto |
+| locust | W4 clusters (N = 100000) | 1 | 1e-6 | 1×72 | 0.163 | 0.163 | 0.056 | 0.056 | 0.056 | 1.00 | 0.35 | 0.305 | 0.303 | 0.197 | 0.197 | 0.65 | 1.11 | 0.969/0.916 | planewave |
+| locust | W4 clusters (N = 100000) | 100 | 1e-3 | 1×72 | 0.031 | 0.055 | 0.055 | 0.040 | 0.031 | 1.80 | 1.00 | 0.088 | 0.113 | 0.113 | 0.098 | 1.00 | 1.11 | 1.000/1.000 | – |
+| locust | W4 clusters (N = 100000) | 100 | 1e-6 | 1×72 | 0.166 | 0.166 | 0.065 | 0.064 | 0.064 | 1.01 | 0.39 | 0.309 | 0.308 | 0.207 | 0.208 | 0.67 | 1.11 | 0.970/0.921 | planewave |
+| locust | W4 cube (N = 100000) | 1 | 1e-3 | 1×72 | 0.016 | 0.024 | 0.024 | 0.017 | 0.014 | 1.66 | 1.00 | 0.035 | 0.043 | 0.043 | 0.037 | 1.00 | 1.16 | 1.000/1.000 | auto |
+| locust | W4 cube (N = 100000) | 1 | 1e-6 | 1×72 | 0.100 | 0.100 | 0.026 | 0.027 | 0.027 | 0.97 | 0.26 | 0.126 | 0.126 | 0.052 | 0.053 | 0.41 | 1.15 | 0.983/0.928 | planewave |
+| locust | W4 cube (N = 100000) | 100 | 1e-3 | 1×72 | 0.061 | 0.060 | 0.040 | 0.040 | 0.040 | 1.00 | 0.67 | 0.084 | 0.084 | 0.065 | 0.066 | 0.78 | 1.05 | 1.000/1.000 | planewave |
+| locust | W4 cube (N = 100000) | 100 | 1e-6 | 1×72 | 0.124 | 0.123 | 0.048 | 0.048 | 0.048 | 1.00 | 0.39 | 0.153 | 0.153 | 0.078 | 0.078 | 0.51 | 1.03 | 1.003/0.990 | planewave |
+| locust | W4 plummer (N = 100000) | 1 | 1e-3 | 1×72 | 0.021 | 0.060 | 0.059 | 0.026 | 0.020 | 2.97 | 0.99 | 0.083 | 0.123 | 0.123 | 0.089 | 1.00 | 1.09 | 1.000/1.000 | auto |
+| locust | W4 plummer (N = 100000) | 1 | 1e-6 | 1×72 | 0.128 | 0.127 | 0.038 | 0.038 | 0.038 | 1.01 | 0.30 | 0.288 | 0.287 | 0.197 | 0.198 | 0.69 | 1.65 | 1.063/0.940 | planewave |
+| locust | W4 plummer (N = 100000) | 100 | 1e-3 | 1×72 | 0.064 | 0.087 | 0.072 | 0.055 | 0.049 | 1.46 | 0.83 | 0.128 | 0.150 | 0.136 | 0.119 | 0.90 | 1.08 | 1.000/1.000 | – |
+| locust | W4 plummer (N = 100000) | 100 | 1e-6 | 1×72 | 0.196 | 0.197 | 0.073 | 0.071 | 0.071 | 1.03 | 0.37 | 0.348 | 0.347 | 0.224 | 0.223 | 0.65 | 1.05 | 1.013/0.955 | planewave |
+| locust | W4 sphere (N = 100000) | 1 | 1e-3 | 1×72 | 0.019 | 0.028 | 0.028 | 0.027 | 0.018 | 1.54 | 0.99 | 0.047 | 0.057 | 0.057 | 0.056 | 1.00 | 1.13 | 1.000/1.000 | auto |
+| locust | W4 sphere (N = 100000) | 1 | 1e-6 | 1×72 | 0.119 | 0.119 | 0.047 | 0.048 | 0.048 | 0.98 | 0.39 | 0.183 | 0.182 | 0.109 | 0.110 | 0.60 | 1.42 | 0.986/0.945 | planewave |
+| locust | W4 sphere (N = 100000) | 100 | 1e-3 | 1×72 | 0.054 | 0.055 | 0.042 | 0.052 | 0.041 | 1.00 | 0.76 | 0.087 | 0.087 | 0.075 | 0.085 | 0.86 | 1.04 | 1.000/1.000 | – |
+| locust | W4 sphere (N = 100000) | 100 | 1e-6 | 1×72 | 0.142 | 0.142 | 0.072 | 0.072 | 0.072 | 0.99 | 0.51 | 0.209 | 0.208 | 0.138 | 0.138 | 0.67 | 1.04 | 1.003/0.978 | planewave |
+
+#### The rule's levels above 1.10× the fastest
+
+| machine | workload | kD | ε | split | level | p | V pairs | auto-pw ran | fastest | ratio | lost s | lost ÷ case best |
+| --- | --- | --- | --- | --- | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: |
+| locust | W1 | 10 | 1e-3 | 1×72 | 2 | 7 | 3096 | b-f | rot. | 15.54 | 0.0036 | 14.544 |
+| locust | W1 | 30 | 1e-3 | 1×72 | 2 | 12 | 3096 | pw i2 | rot. | 1.95 | 0.0004 | 0.230 |
+| locust | W1 | 30 | 1e-3 | 1×72 | 3 | 8 | 32256 | b-f | rot. | 6.77 | 0.0073 | 4.379 |
+| locust | W1 | 100 | 1e-3 | 1×72 | 5 | 7 | 244944 | b-f | rot. | 1.16 | 0.0010 | 0.025 |
+| locust | W3 (N = 108849) | 30 | 1e-3 | 1×72 | 2 | 12 | 3096 | pw i2 | rot. | 2.08 | 0.0004 | 0.028 |
+| locust | W3 (N = 108849) | 30 | 1e-3 | 1×72 | 3 | 8 | 53352 | b-f | rot. | 5.58 | 0.0094 | 0.640 |
+| locust | W3 (N = 4032) | 10 | 1e-3 | 1×72 | 2 | 7 | 3096 | b-f | rot. | 24.45 | 0.0036 | 9.515 |
+| locust | W3 (N = 4032) | 10 | 1e-3 | 1×72 | 3 | 7 | 5544 | b-f | rot. | 12.58 | 0.0026 | 6.883 |
+| locust | W3 (N = 4032) | 10 | 1e-6 | 1×72 | 2 | 15 | 3096 | pw i2 | rot. | 1.29 | 0.0002 | 0.098 |
+| locust | W4 clusters (N = 100000) | 1 | 1e-3 | 1×72 | 2 | 7 | 3096 | b-f | rot. | 25.10 | 0.0040 | 0.150 |
+| locust | W4 clusters (N = 100000) | 1 | 1e-3 | 1×72 | 3 | 7 | 19782 | b-f | rot. | 7.76 | 0.0045 | 0.171 |
+| locust | W4 clusters (N = 100000) | 1 | 1e-3 | 1×72 | 4 | 7 | 43392 | b-f | rot. | 5.43 | 0.0056 | 0.210 |
+| locust | W4 clusters (N = 100000) | 1 | 1e-3 | 1×72 | 5 | 7 | 106500 | b-f | rot. | 3.13 | 0.0060 | 0.227 |
+| locust | W4 clusters (N = 100000) | 1 | 1e-3 | 1×72 | 6 | 7 | 214818 | b-f | rot. | 1.77 | 0.0043 | 0.162 |
+| locust | W4 clusters (N = 100000) | 1 | 1e-3 | 1×72 | 7 | 7 | 289194 | b-f | rot. | 1.56 | 0.0040 | 0.153 |
+| locust | W4 clusters (N = 100000) | 1 | 1e-3 | 1×72 | 8 | 7 | 351936 | b-f | rot. | 1.12 | 0.0011 | 0.040 |
+| locust | W4 clusters (N = 100000) | 100 | 1e-3 | 1×72 | 4 | 8 | 43392 | b-f | rot. | 6.88 | 0.0096 | 0.313 |
+| locust | W4 clusters (N = 100000) | 100 | 1e-3 | 1×72 | 5 | 7 | 106500 | b-f | rot. | 2.93 | 0.0059 | 0.192 |
+| locust | W4 clusters (N = 100000) | 100 | 1e-3 | 1×72 | 6 | 7 | 214818 | b-f | rot. | 1.77 | 0.0043 | 0.141 |
+| locust | W4 clusters (N = 100000) | 100 | 1e-3 | 1×72 | 7 | 7 | 289194 | b-f | rot. | 1.53 | 0.0039 | 0.128 |
+| locust | W4 cube (N = 100000) | 1 | 1e-3 | 1×72 | 2 | 7 | 3096 | b-f | rot. | 28.05 | 0.0039 | 0.273 |
+| locust | W4 cube (N = 100000) | 1 | 1e-3 | 1×72 | 3 | 7 | 53352 | b-f | rot. | 4.47 | 0.0055 | 0.383 |
+| locust | W4 plummer (N = 100000) | 1 | 1e-3 | 1×72 | 2 | 7 | 3096 | b-f | rot. | 28.41 | 0.0042 | 0.211 |
+| locust | W4 plummer (N = 100000) | 1 | 1e-3 | 1×72 | 3 | 7 | 53352 | b-f | rot. | 4.49 | 0.0055 | 0.276 |
+| locust | W4 plummer (N = 100000) | 1 | 1e-3 | 1×72 | 4 | 7 | 53352 | b-f | rot. | 4.49 | 0.0055 | 0.276 |
+| locust | W4 plummer (N = 100000) | 1 | 1e-3 | 1×72 | 5 | 7 | 109548 | b-f | rot. | 3.48 | 0.0073 | 0.368 |
+| locust | W4 plummer (N = 100000) | 1 | 1e-3 | 1×72 | 6 | 7 | 205458 | b-f | rot. | 2.27 | 0.0067 | 0.335 |
+| locust | W4 plummer (N = 100000) | 1 | 1e-3 | 1×72 | 7 | 7 | 333330 | b-f | pw i2 | 1.55 | 0.0040 | 0.201 |
+| locust | W4 plummer (N = 100000) | 1 | 1e-3 | 1×72 | 8 | 7 | 35148 | b-f | rot. | 6.94 | 0.0065 | 0.325 |
+| locust | W4 plummer (N = 100000) | 100 | 1e-3 | 1×72 | 5 | 7 | 109548 | b-f | rot. | 3.40 | 0.0072 | 0.147 |
+| locust | W4 plummer (N = 100000) | 100 | 1e-3 | 1×72 | 6 | 7 | 205458 | b-f | rot. | 2.24 | 0.0065 | 0.131 |
+| locust | W4 plummer (N = 100000) | 100 | 1e-3 | 1×72 | 7 | 7 | 333330 | b-f | rot. | 1.36 | 0.0030 | 0.061 |
+| locust | W4 plummer (N = 100000) | 100 | 1e-3 | 1×72 | 8 | 7 | 35148 | b-f | rot. | 6.97 | 0.0065 | 0.132 |
+| locust | W4 sphere (N = 100000) | 1 | 1e-3 | 1×72 | 2 | 7 | 3096 | b-f | rot. | 28.29 | 0.0040 | 0.223 |
+| locust | W4 sphere (N = 100000) | 1 | 1e-3 | 1×72 | 3 | 7 | 53352 | b-f | rot. | 4.42 | 0.0055 | 0.303 |
 
 ### locust's first pass (a record: beside another session's CUDA compile)
 

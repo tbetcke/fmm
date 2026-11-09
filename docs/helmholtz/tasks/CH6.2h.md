@@ -132,15 +132,17 @@ over today's `Auto`, for D8.
 
 ## Pending runs
 
+None. All done:
 - locust, one rank × 72, the matrix and the large cases behind a strict gate (others below
-  30 % of a core for five minutes, another user's long Python process left out; a sample
-  every 7 s during): `tools/gh200/remote.sh 'bash /data/ucahtbe/logs/ch6-2h-gated.sh'`, output
-  `/data/ucahtbe/logs/ch6-2h-b` (`gate.log`, `during.log`; the script there, re-created from
-  the report §5 if gone). Started 2026-11-08 20:48 and stopped unrun at 23:50: the user's
-  other job holds locust for several hours. To run on a later pass, once locust is free. It decides locust's column of the report (§5) and whether
-  locust's first pass, where Batched at p = 7 lost to Rotation on dense levels at 72 threads,
-  holds on a quiet node. The first pass (beside a CUDA compile) is a record only.
-- Done: the M6 1 × 6 (21:39–21:45, the user's go-ahead); Kathleen jobs 630761 (matrix,
+  30 % of a core for five minutes; a sample every 7 s during, at most 10 %):
+  `/data/ucahtbe/logs/ch6-2h-gated.sh` through `tools/gh200/remote.sh`, 2026-11-09
+  06:25–06:36 at 694962d, every launch exit 0. Report §5: the rule as on the M6 at 10⁻⁶;
+  Batched at p = 7–8 behind Rotation below about 3.5·10⁵ pairs at 72 threads (the first
+  pass's finding confirmed; today's `Auto`'s choice, to CH4.0). The first attempt
+  (2026-11-08 20:48) was stopped untimed at 23:50 while another job held locust; the first
+  pass (beside a CUDA compile) is a record only. Raw outputs in
+  `~/projects/fmm-archive/locust/logs/ch6-2h{,-first}`.
+- the M6 1 × 6 (21:39–21:45, the user's go-ahead); Kathleen jobs 630761 (matrix,
   1 × 40) and 630762 (large, 1 × 40 and 4 × 10), both with `auto-pw:16`.
 
 ## Open questions

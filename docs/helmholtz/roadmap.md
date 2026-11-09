@@ -100,9 +100,11 @@ AVX-512), CH6.1e's rule gives a quadrature and Im κ_l < 5π, behind `auto_plane
 the sign-off. Against today's `Auto` the M2L takes 0.14–0.70× on the M6 and 0.03–0.55× on
 Kathleen at 10⁻⁶, 0.26–1.19× at 10⁻³ (above 1 within the ABBA spread); within 1.10× of the
 per-level best except ms-scale cases at 10⁻³, where Batched at p = 7 on level 2 loses to
-Rotation (today's `Auto` too; CH4.0's sentence). No boxes term. locust's clean pass pending.
+Rotation (today's `Auto` too; CH4.0's sentence). No boxes term.
 D8 signed off the same day (the user: "1–5 as recommended"): the rule is `Auto`'s default.
-Next: CH6.2i.
+2026-11-09: locust's clean pass (1 × 72) agrees at 10⁻⁶ (0.21–0.69× today's `Auto`); at
+10⁻³ Batched at p = 7–8 loses to Rotation below about 3.5·10⁵ pairs at 72 threads (today's
+`Auto`'s choice; CH4.0's sentence extended). Next: CH6.2i.
 
 ## How `/next-task` reads this file
 
@@ -964,8 +966,11 @@ at any kD.
   2.1–3.8× Rotation's time on the M6 and 8.5–9.3× on Kathleen, about 2 and 4 ms; at p = 15 on
   Kathleen 0.09–0.12 s against 3–5 ms, which D8's rule gives to the exponential M2L), so the
   term covers coarse levels as well as sparse ones, or Batched's level call splits as
-  CH6.2f's did; locust's first pass (a record) showed p = 7 Batched behind Rotation at 72
-  threads on denser levels too (to 3.5·10⁵ pairs), for CH6.2h's clean pass to confirm.
+  CH6.2f's did. CH6.2h's clean locust pass (report §5, 1 × 72) confirmed that at 72 threads
+  Batched at p = 7–8 is behind Rotation on every level below about 3.5·10⁵ pairs, not only
+  coarse ones (1.0–28×; up to 32 % of a W4 evaluation at 10⁻³), and ahead from about
+  4·10⁵ pairs; the term must catch these levels too, within constraint 2 (it cannot read the
+  thread count).
   *Needs:* CH3.2d. *Machines:* locust, Kathleen.
 - [ ] **CH4.0b The worst-box concentration.** Added on 2026-11-02 at the H3 gate (question
   4a; CH3.6's sign-off 1, "a follow-up before H4"): on W1 at 10⁻⁶ and 10⁻⁸ CH3.6's worst
