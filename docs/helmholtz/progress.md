@@ -2706,8 +2706,9 @@ request, using this template:
   `cargo doc`, `cargo test` (1233 passed), `cargo test --workspace` (1347 passed), the three
   ignored release tests above. Debug runs: nd-fmm-ref's Helmholtz tests 46 s (22 s before),
   nd-fmm-tables' 35 s. MPI list not run (no MPI crate changed). Pending: none.
-- Decisions: none yet; three questions for sign-off (report §5): candidate 4 for CH6.1g, the
-  degree raised on the level first, `generate_for_degree` kept as a trusted path only.
+- Decisions: report §5 signed off 2026-11-09 (the user: "1–3 as recommended"): (1) candidate 4
+  for CH6.1g, the resolving degree; (2) the degree raised on the level first; (3)
+  `generate_for_degree` kept as a trusted path only.
 - Laplace: not touched (nd-fmm-ref's Helmholtz quadrature builder and tests only; no table,
   driver or kernel changed).
 - Follow-ups: CH6.1g (roadmap), the FMM below 10⁻⁶ by the signed-off rule.

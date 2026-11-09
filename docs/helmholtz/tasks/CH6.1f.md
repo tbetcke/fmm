@@ -194,7 +194,7 @@ None.
 
 ## Open questions
 
-For sign-off (the report's §5):
+The report's §5, signed off 2026-11-09 (the user: "1–3 as recommended"):
 
 1. CH6.1g takes candidate 4, the resolving degree: below 10⁻⁶ a level with a quadrature runs
    its exponential M2L at p_w = max(p_l, 24) with iprec 2 for 10⁻⁷ ≤ ε < 10⁻⁶ and at

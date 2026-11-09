@@ -224,6 +224,8 @@ the M6 and 0.03–0.55× on Kathleen (CH6.2h).
 
 ## 5. Questions for sign-off
 
+All three signed off 2026-11-09 (the user: "1–3 as recommended").
+
 1. **CH6.1g takes candidate 4, the resolving degree** (§3): below 10⁻⁶ a level with a quadrature
    runs its exponential M2L at p_w = max(p_l, 24) with iprec 2 for 10⁻⁷ ≤ ε < 10⁻⁶ and at
    p_w = max(p_l, 32) with iprec 3 for 10⁻⁸ ≤ ε < 10⁻⁷; Rotation below 10⁻⁸. A function of ε and
