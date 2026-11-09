@@ -114,8 +114,8 @@ use mpi::traits::{Communicator, CommunicatorCollectives, Destination, Equivalenc
 use nd_fmm_exec::cost::CostModel;
 use nd_fmm_exec::fmm::{
     Backend, BuildTimings, DeviceGather, DeviceGemm, DeviceReduction, ExchangeTraffic, Fmm,
-    FmmBuilder, KindTiming, ListSizes, MultipoleRouting, NearRuleChoice, OperatorKind, Output,
-    OutputMany, StageTimings, TREE_FAN_OUT, Traffic, default_m2l_mul_add,
+    FmmBuilder, KindTiming, ListSizes, MAX_LEVELS, MultipoleRouting, NearRuleChoice, OperatorKind,
+    Output, OutputMany, PlaneWaveSplit, StageTimings, TREE_FAN_OUT, Traffic, default_m2l_mul_add,
     default_max_points_per_leaf,
 };
 use nd_fmm_exec::geometry::{contains, integer_centre};
@@ -125,6 +125,7 @@ use nd_fmm_exec::threading::ThreadingReport;
 use nd_fmm_math::RealScalar;
 use nd_fmm_ref::p2p::direct_sum;
 use nd_fmm_tables::cache::Stored;
+use nd_octree::morton::{self, MortonKey};
 
 use crate::bench::{cores, cpu_model, target, toolchain};
 use crate::fmm_accuracy::{CLUSTER_CENTRES, CLUSTER_WIDTH, Distribution, PLUMMER_SCALE};
@@ -403,6 +404,9 @@ pub struct Settings {
     /// or the library's default of p if `None` (`fmm::default_m2l_mul_add`, Phase 6 T11:
     /// fused from p = 6): only `M2lStrategy::Batched` uses it.
     pub m2l_mul_add: Option<MulAdd>,
+    /// How the plane-wave M2L splits merge and shift over the pool
+    /// (`FmmBuilder::plane_wave_split`, Helmholtz CH6.2i; the library's `Auto` by default).
+    pub plane_wave_split: PlaneWaveSplit,
     /// The evaluation paths.
     pub overlap: Overlap,
     /// Where the points are passed in.
@@ -496,6 +500,7 @@ impl Settings {
             strategy: M2lStrategy::Auto,
             dense_node_budget: None,
             m2l_mul_add: None,
+            plane_wave_split: PlaneWaveSplit::Auto,
             overlap: Overlap::Off,
             input: Input::Share,
             builds: 1,
@@ -632,6 +637,86 @@ fn kind_values(t: &StageTimings) -> [f64; 8] {
         Some(kinds) => OperatorKind::ALL.map(|kind| kinds.get(kind).total().as_secs_f64()),
         None => [f64::NAN; 8],
     }
+}
+
+/// The M2L time of each level in one evaluation, seconds (`KindTime::levels`); NaN without
+/// kind timings.
+fn m2l_level_values(t: &StageTimings) -> [f64; MAX_LEVELS] {
+    match &t.kinds {
+        Some(kinds) => kinds
+            .get(OperatorKind::M2l)
+            .levels
+            .map(|time| time.as_secs_f64()),
+        None => [f64::NAN; MAX_LEVELS],
+    }
+}
+
+/// The boxes of a merge-and-shift piece below which the shared drivers' split by parents
+/// halves no further (`nd-fmm-exec`'s crate-private `driver::PARENT_GRAIN`, restated).
+pub const PARENT_GRAIN: usize = 64;
+
+/// One level of a rank's plan as its M2L level call sees it (Helmholtz CH6.2i): the boxes
+/// of the level, those with a V row (the targets the rank computes), and the pieces with
+/// such a box into which the split by parents cuts the level ([`parent_pieces`]), the
+/// pieces the plane-wave M2L's merge and shift runs on at most.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct M2lLevel {
+    /// The boxes of the level, ghosts included.
+    pub boxes: usize,
+    /// The boxes with a V row.
+    pub computed: usize,
+    /// The pieces of the split by parents that hold a box with a V row.
+    pub pieces: usize,
+}
+
+impl M2lLevel {
+    /// Its three values, as gathered.
+    const VALUES: usize = 3;
+}
+
+/// The pieces with work into which the shared drivers' split by parents
+/// (`Execution::parents`, `driver::split_parents` of `nd-fmm-exec`) cuts the boxes of one
+/// level whose keys are `keys`: halved at the first parent boundary from the middle while a
+/// piece holds more than [`PARENT_GRAIN`] boxes, counting the pieces in which
+/// `computed(t)` holds for some box t (the driver's rule restated, as
+/// `nd-fmm-exec`'s crate-private `driver::parent_pieces`; keep the two alike).
+pub fn parent_pieces(keys: &[MortonKey], computed: &impl Fn(usize) -> bool) -> usize {
+    fn pieces(
+        keys: &[MortonKey],
+        boxes: core::ops::Range<usize>,
+        computed: &impl Fn(usize) -> bool,
+    ) -> usize {
+        let starts = |t: usize| t == 0 || morton::parent(keys[t]) != morton::parent(keys[t - 1]);
+        let mut mid = boxes.start + boxes.len() / 2;
+        while mid < boxes.end && !starts(mid) {
+            mid += 1;
+        }
+        if boxes.len() <= PARENT_GRAIN || mid == boxes.end {
+            return usize::from(boxes.into_iter().any(computed));
+        }
+        pieces(keys, boxes.start..mid, computed) + pieces(keys, mid..boxes.end, computed)
+    }
+    pieces(keys, 0..keys.len(), computed)
+}
+
+/// Every level of `fmm`'s plan as its M2L level call sees it ([`M2lLevel`]).
+fn m2l_levels<T: Stored + SimdScalar + Equivalence + Default>(
+    fmm: &Fmm<'_, T>,
+) -> [M2lLevel; MAX_LEVELS] {
+    let plan = fmm.plan();
+    let index = plan.index();
+    let mut levels = [M2lLevel::default(); MAX_LEVELS];
+    for (level, lists) in plan.levels().iter().enumerate().take(MAX_LEVELS) {
+        let keys = index.keys(level);
+        let v = lists.v();
+        let computed = |t: usize| t < v.nrows() && !v.row(t).0.is_empty();
+        levels[level] = M2lLevel {
+            boxes: keys.len(),
+            computed: (0..keys.len()).filter(|&t| computed(t)).count(),
+            pieces: parent_pieces(keys, &computed),
+        };
+    }
+    levels
 }
 
 /// The details of the overlapped path as a [`run`] reports them, from `OverlapTimes`
@@ -1108,6 +1193,9 @@ pub struct PathTimes {
     /// With [`Settings::kinds`], per rank the median of each of [`KINDS`] over the
     /// evaluations, seconds; empty otherwise.
     pub kinds: Vec<[f64; 8]>,
+    /// With [`Settings::kinds`], per rank the median of the M2L time of each level over the
+    /// evaluations, seconds (Helmholtz CH6.2i); empty otherwise.
+    pub m2l_levels: Vec<[f64; MAX_LEVELS]>,
     /// In the overlapped path, per rank the median over the evaluations of each value of
     /// [`NOVERLAP`] (Phase 5S T9), seconds; empty in the blocking path.
     pub overlap: Vec<[f64; NOVERLAP]>,
@@ -1123,6 +1211,12 @@ impl PathTimes {
     /// kind timings.
     pub fn kind(&self, k: usize) -> [f64; 3] {
         reduce_over(self.kinds.iter().map(|t| t[k]))
+    }
+
+    /// The maximum over the ranks of the M2L time of `level`, seconds; NaN without kind
+    /// timings.
+    pub fn m2l_level(&self, level: usize) -> f64 {
+        reduce_over(self.m2l_levels.iter().map(|t| t[level]))[0]
     }
 
     /// The maximum, minimum and mean over the ranks of value `k` of [`NOVERLAP`]; NaN in
@@ -1299,6 +1393,9 @@ pub struct Report {
     pub nlevels: usize,
     /// Every rank's row, in rank order.
     pub rows: Vec<RankRow>,
+    /// Every rank's levels as its M2L level calls see them, in rank order (Helmholtz
+    /// CH6.2i).
+    pub m2l_levels: Vec<[M2lLevel; MAX_LEVELS]>,
     /// Each path's stage times, blocking first.
     pub paths: Vec<PathTimes>,
     /// With [`Overlap::Both`], the values of the two paths that differ in any bit, over
@@ -2023,6 +2120,7 @@ fn builder<T: Stored + SimdScalar + Equivalence + Default>(settings: &Settings) 
         .threads(settings.threads)
         .strategy(settings.strategy)
         .m2l_mul_add(settings.mul_add())
+        .plane_wave_split(settings.plane_wave_split)
         .p2p_kernel(settings.p2p)
         .overlap(settings.overlap == Overlap::On)
         .kind_timings(if settings.kinds {
@@ -2125,6 +2223,7 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
     let paths = settings.overlap.paths();
     let mut times: Vec<Vec<[f64; NSTAGES]>> = vec![Vec::new(); paths.len()];
     let mut kinds: Vec<Vec<[f64; 8]>> = vec![Vec::new(); paths.len()];
+    let mut level_times: Vec<Vec<[f64; MAX_LEVELS]>> = vec![Vec::new(); paths.len()];
     let mut overlap: Vec<Vec<[f64; NOVERLAP]>> = vec![Vec::new(); paths.len()];
     let mut differing = 0usize;
     let mut last = None;
@@ -2148,6 +2247,7 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
             if e > 0 {
                 times[path].push(stage_values(&timings, overlapped));
                 kinds[path].push(kind_values(&timings));
+                level_times[path].push(m2l_level_values(&timings));
                 overlap[path].push(overlap_values(&timings));
             }
             outputs.push((output, output_bits));
@@ -2183,14 +2283,21 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
                 })
                 .collect(),
         );
-        let kind_medians = if settings.kinds {
+        let (kind_medians, level_medians) = if settings.kinds {
             let local: [f64; 8] =
                 core::array::from_fn(|k| median(kinds[path].iter().map(|t| t[k]).collect()));
             let mut every = vec![0.0f64; 8 * size];
             comm.all_gather_into(&local[..], &mut every[..]);
-            every.as_chunks::<8>().0.to_vec()
+            let local: [f64; MAX_LEVELS] =
+                core::array::from_fn(|l| median(level_times[path].iter().map(|t| t[l]).collect()));
+            let mut levels = vec![0.0f64; MAX_LEVELS * size];
+            comm.all_gather_into(&local[..], &mut levels[..]);
+            (
+                every.as_chunks::<8>().0.to_vec(),
+                levels.as_chunks::<MAX_LEVELS>().0.to_vec(),
+            )
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         let overlap_medians = if overlapped {
             let local: [f64; NOVERLAP] =
@@ -2206,6 +2313,7 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
             medians: every.as_chunks::<NSTAGES>().0.to_vec(),
             wall,
             kinds: kind_medians,
+            m2l_levels: level_medians,
             overlap: overlap_medians,
         });
     }
@@ -2244,6 +2352,25 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         .chunks_exact(local.len())
         .map(RankRow::decode)
         .collect();
+    let local: Vec<u64> = m2l_levels(&fmm)
+        .iter()
+        .flat_map(|l| [l.boxes, l.computed, l.pieces].map(|v| v as u64))
+        .collect();
+    let mut every = vec![0u64; local.len() * size];
+    comm.all_gather_into(&local[..], &mut every[..]);
+    let levels = every
+        .chunks_exact(local.len())
+        .map(|rank| {
+            core::array::from_fn(|l| {
+                let v = &rank[M2lLevel::VALUES * l..M2lLevel::VALUES * (l + 1)];
+                M2lLevel {
+                    boxes: v[0] as usize,
+                    computed: v[1] as usize,
+                    pieces: v[2] as usize,
+                }
+            })
+        })
+        .collect();
 
     Ok(Report {
         machine: if rank == 0 { machine() } else { String::new() },
@@ -2256,6 +2383,7 @@ pub fn run<T: Stored + SimdScalar + Equivalence + Default>(
         threading: fmm.threading().clone(),
         nlevels: fmm.nlevels(),
         rows,
+        m2l_levels: levels,
         paths: path_times,
         differing,
         errors,
@@ -2999,7 +3127,44 @@ fn mb(bytes: f64) -> String {
 /// Above this rank count the per-rank tables are left out (the reduced ones stay).
 pub const PER_RANK_ROWS: usize = 128;
 
+/// One level of [`Report::m2l_level_rows`]: the level, its boxes summed over the ranks, and
+/// the most boxes with a V row and pieces of the split by parents of a rank ([`M2lLevel`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct M2lLevelRow {
+    /// The level.
+    pub level: usize,
+    /// Its boxes, summed over the ranks (a ghost on every rank that holds it).
+    pub boxes: usize,
+    /// The most boxes with a V row of a rank.
+    pub computed: usize,
+    /// The most pieces with work of the split by parents of a rank.
+    pub pieces: usize,
+}
+
 impl Report {
+    /// The levels with a V row on some rank, as [`M2lLevelRow`]s (Helmholtz CH6.2i).
+    pub fn m2l_level_rows(&self) -> Vec<M2lLevelRow> {
+        (0..MAX_LEVELS)
+            .map(|level| M2lLevelRow {
+                level,
+                boxes: self.m2l_levels.iter().map(|r| r[level].boxes).sum(),
+                computed: self
+                    .m2l_levels
+                    .iter()
+                    .map(|r| r[level].computed)
+                    .max()
+                    .unwrap_or(0),
+                pieces: self
+                    .m2l_levels
+                    .iter()
+                    .map(|r| r[level].pieces)
+                    .max()
+                    .unwrap_or(0),
+            })
+            .filter(|row| row.computed > 0)
+            .collect()
+    }
+
     /// The private dense tables of `ranks` ranks at this p and precision, in bytes:
     /// `ranks` × 332 (p + 1)⁴ values (`NodeContext::dense_node_bytes`), whatever the
     /// strategy.
@@ -3056,6 +3221,10 @@ impl Report {
                     format!("strategy={:?}", self.strategy),
                     format!("requested={:?}", self.settings.strategy),
                     format!("mul_add={}", self.settings.mul_add()),
+                    format!(
+                        "split={}",
+                        format!("{:?}", self.settings.plane_wave_split).to_lowercase()
+                    ),
                     format!("p2p={}", self.p2p),
                     format!("leaf={}", self.settings.leaf_points()),
                     format!(
@@ -3179,6 +3348,18 @@ impl Report {
                     fields.push(format!(
                         "m2l_us_per_pair={:.4}",
                         1e6 * path.per_v_pair(rows, |r| path.kinds[r][2])
+                    ));
+                    let levels = self.m2l_level_rows();
+                    let joined = |f: &dyn Fn(&M2lLevelRow) -> String| {
+                        levels.iter().map(f).collect::<Vec<_>>().join(",")
+                    };
+                    fields.push(format!(
+                        "m2l_level_ms={}",
+                        joined(&|l| format!("{}:{}", l.level, ms(path.m2l_level(l.level))))
+                    ));
+                    fields.push(format!(
+                        "m2l_level_pieces={}",
+                        joined(&|l| format!("{}:{}", l.level, l.pieces))
                     ));
                 }
                 if let Some(fit) = path.fit(rows) {
@@ -3949,6 +4130,27 @@ impl fmt::Display for Report {
                     1e6 * path.per_v_pair(rows, |r| path.medians[r][DOWNWARD])
                 )?;
                 writeln!(f)?;
+                let total = path.kind(2)[0];
+                writeln!(
+                    f,
+                    "| level | boxes | with a V row (most of a rank) | pieces of the split by \
+                     parents (most of a rank) | M2L ms (slowest rank) | share of M2L |"
+                )?;
+                writeln!(f, "| ---: | ---: | ---: | ---: | ---: | ---: |")?;
+                for l in self.m2l_level_rows() {
+                    let time = path.m2l_level(l.level);
+                    writeln!(
+                        f,
+                        "| {} | {} | {} | {} | {} | {:.3} |",
+                        l.level,
+                        l.boxes,
+                        l.computed,
+                        l.pieces,
+                        ms(time),
+                        time / total
+                    )?;
+                }
+                writeln!(f)?;
                 if let Some(fit) = path.fit(rows) {
                     let alpha: Vec<String> = KINDS
                         .iter()
@@ -4076,5 +4278,39 @@ impl fmt::Display for Report {
             writeln!(f, "{line}")?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The keys of every box of `level` of the uniform tree, ascending.
+    fn uniform(level: usize) -> Vec<MortonKey> {
+        let mut keys = vec![morton::root()];
+        for _ in 0..level {
+            keys = keys
+                .iter()
+                .flat_map(|&k| morton::children(k).expect("a finer level"))
+                .collect();
+        }
+        keys.sort_unstable();
+        keys
+    }
+
+    /// The split by parents restated: level 2 (64 boxes) whole, level 3 (512 boxes) in
+    /// eight pieces of 64, level 4 in 64; pieces without a computed box not counted.
+    #[test]
+    fn parent_pieces_restate_the_split_by_parents() {
+        let all = |_: usize| true;
+        assert_eq!(parent_pieces(&uniform(2), &all), 1);
+        assert_eq!(parent_pieces(&uniform(3), &all), 8);
+        assert_eq!(parent_pieces(&uniform(4), &all), 64);
+        assert_eq!(parent_pieces(&uniform(3), &|t: usize| t < 64), 1);
+        assert_eq!(parent_pieces(&uniform(3), &|_: usize| false), 0);
+        // 72 boxes: no parent boundary splits it below 64, at its middle a boundary does.
+        let keys = &uniform(3)[..72];
+        assert_eq!(parent_pieces(keys, &all), 2);
+        assert_eq!(parent_pieces(&[], &all), 0);
     }
 }

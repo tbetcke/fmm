@@ -477,6 +477,32 @@ fn kinds_and_reference_strategy(comm: &SimpleCommunicator) {
         );
     }
     assert!(path.per_v_pair(&report.rows, |r| path.kinds[r][2]) > 0.0);
+    // The M2L per level (Helmholtz CH6.2i): per rank the levels sum to the kind's time
+    // (both medians of two evaluations, so means), a level timed only where the rank has
+    // a V row, and at most one piece of the split by parents per box with a V row.
+    assert_eq!(path.m2l_levels.len(), report.ranks);
+    for (r, levels) in path.m2l_levels.iter().enumerate() {
+        let sum: f64 = levels.iter().sum();
+        let m2l = path.kinds[r][2];
+        assert!(
+            (sum - m2l).abs() <= 1e-9 * m2l + 1e-12,
+            "rank {r}: M2L levels {sum} s against the kind's {m2l} s"
+        );
+        for (level, (&time, plan)) in levels.iter().zip(&report.m2l_levels[r]).enumerate() {
+            if plan.computed == 0 {
+                assert_eq!(time, 0.0, "rank {r}, level {level}: no V row, timed");
+            }
+            assert!(plan.computed <= plan.boxes && plan.pieces <= plan.computed);
+            assert_eq!(
+                plan.pieces == 0,
+                plan.computed == 0,
+                "rank {r}, level {level}"
+            );
+        }
+    }
+    let levels = report.m2l_level_rows();
+    assert!(!levels.is_empty());
+    assert!(levels.iter().all(|l| l.level >= 2 && l.pieces >= 1));
     // Error measure: relative L2 of φ and ∇φ between the two strategies, which apply the
     // same truncated translations and differ in rounding only.
     let reference = report.reference.unwrap();
@@ -487,6 +513,8 @@ fn kinds_and_reference_strategy(comm: &SimpleCommunicator) {
     let summary = &report.summaries()[0];
     for key in [
         "m2l_us_per_pair=",
+        "m2l_level_ms=",
+        "m2l_level_pieces=",
         "reference_strategy=Rotation",
         "tables_ms=",
     ] {

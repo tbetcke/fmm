@@ -421,7 +421,8 @@ use nd_fmm_exec::cost::M2lUnit;
 use nd_fmm_exec::fmm::DevicePlaneWave;
 use nd_fmm_exec::fmm::{
     Backend, Fmm, FmmBuilder, FmmError, KindTiming, MultipoleRouting, NearRuleChoice, OperatorKind,
-    Output, OutputMany, OutputPass, Placement, PointSet, SettingsError, SourceType, Sources,
+    Output, OutputMany, OutputPass, Placement, PlaneWaveSplit, PointSet, SettingsError, SourceType,
+    Sources,
 };
 use nd_fmm_exec::geometry::{Domain, GeometryError, leaf_coordinates, radius};
 use nd_fmm_exec::operator::{Isa, LaplaceOperator, MulAdd, P2pChoice, SimdScalar};
@@ -1841,6 +1842,89 @@ const PLANE_ERROR_BOUND: f64 = 1.1;
 /// evaluations bit for bit; a second build at the most threads of `threads`, overlapped,
 /// bit for bit; the plane-wave kernels on the P2P kernel's ISA; on several ranks the
 /// one-rank `Fmm` of `PlaneWave` over the union bit for bit (`check_one_rank`).
+/// The split of the plane-wave M2L's merge and shift (Helmholtz CH6.2i): `Children` and
+/// `Parents` named, at one thread (`fmm`), at the most threads overlapped (`threaded`) and at
+/// four threads, each bit for bit the default's output `bits`; the default (`Auto`) never by
+/// child at one thread and by child at four on some rank with V pairs (the level of 64 boxes
+/// is one piece of the split by parents, at most a quarter of the threads); on several ranks
+/// `Children` at two threads against the one-rank `Fmm`.
+fn check_plane_wave_split<'a, T: Stored + SimdScalar + Equivalence + Default>(
+    (plane, fmm, threaded): (&FmmBuilder<T>, &mut Fmm<'a, T>, &mut Fmm<'a, T>),
+    (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
+    charges: &[T],
+    bits: &[u64],
+    comm: &SimpleCommunicator,
+) {
+    let scenario = *SCENARIO.lock().unwrap();
+    let rank = comm.rank();
+    assert_eq!(fmm.plane_wave_split(), PlaneWaveSplit::Auto);
+    assert_eq!(
+        fmm.plane_wave_by_child(),
+        0,
+        "rank {rank}: {scenario}: Auto at one thread splits by parents"
+    );
+    for split in [PlaneWaveSplit::Children, PlaneWaveSplit::Parents] {
+        for (fmm, name) in [
+            (&mut *fmm, "one thread"),
+            (&mut *threaded, "the most threads"),
+        ] {
+            fmm.set_plane_wave_split(split);
+            let before = fmm.plane_wave_by_child();
+            let output = fmm.evaluate(charges).expect("the plane-wave FMM evaluates");
+            assert!(
+                output_bits(&output) == bits,
+                "rank {rank}: {scenario}: PlaneWave split {split:?} at {name}"
+            );
+            let by_child = fmm.plane_wave_by_child() > before;
+            let pairs = (0..fmm.plan().nlevels()).any(|l| !fmm.plan().level(l).v().is_empty());
+            assert_eq!(
+                by_child,
+                split == PlaneWaveSplit::Children && pairs,
+                "rank {rank}: {scenario}: {split:?} at {name}, split by child"
+            );
+            fmm.set_plane_wave_split(PlaneWaveSplit::Auto);
+        }
+    }
+    let mut four = built(plane.clone().threads(4).build(sources, targets, comm), comm)
+        .expect("the plane-wave FMM builds");
+    let output = four
+        .evaluate(charges)
+        .expect("the plane-wave FMM evaluates");
+    assert!(
+        output_bits(&output) == bits,
+        "rank {rank}: {scenario}: PlaneWave at four threads"
+    );
+    let v_pairs: usize = (0..four.plan().nlevels())
+        .map(|l| four.plan().level(l).v().len())
+        .sum();
+    let local = [usize::from(four.plane_wave_by_child() > 0), v_pairs];
+    let mut global = [0usize; 2];
+    comm.all_reduce_into(&local[..], &mut global[..], SystemOperation::sum());
+    assert!(
+        global[1] == 0 || global[0] > 0,
+        "rank {rank}: {scenario}: Auto at four threads split no level call by child \
+         ({} V pairs over the ranks)",
+        global[1]
+    );
+    if comm.size() > 1 {
+        let children = plane
+            .clone()
+            .plane_wave_split(PlaneWaveSplit::Children)
+            .threads(2);
+        let mut fmm = built(children.clone().build(sources, targets, comm), comm)
+            .expect("the plane-wave FMM builds");
+        let output = fmm.evaluate(charges).expect("the plane-wave FMM evaluates");
+        check_one_rank(
+            &format!("{scenario}, PlaneWave by child"),
+            &children,
+            (sources, targets),
+            charges,
+            &output,
+            comm,
+        );
+    }
+}
+
 fn check_plane_wave<T: Stored + SimdScalar + Equivalence + Default>(
     builder: &FmmBuilder<T>,
     (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
@@ -1972,6 +2056,13 @@ fn check_plane_wave<T: Stored + SimdScalar + Equivalence + Default>(
     assert!(
         output_bits(&output_threaded) == bits,
         "rank {rank}: {scenario}: PlaneWave at {most} threads, overlapped"
+    );
+    check_plane_wave_split(
+        (&plane, &mut fmm, &mut threaded),
+        (sources, targets),
+        charges,
+        &bits,
+        comm,
     );
     check_one_rank(
         &format!("{scenario}, PlaneWave"),

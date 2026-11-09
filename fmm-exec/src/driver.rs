@@ -385,6 +385,28 @@ fn split_parents<T: Send, S: Send, F, B>(
     );
 }
 
+/// The pieces with work into which [`split_parents`] cuts the boxes `boxes`, `starts(t)`
+/// telling whether box t begins a parent and `computed(t)` whether it has a V row: its
+/// halving restated (it decides only how a level call is split over the pool, never a bit),
+/// counting the pieces that hold a computed box (on P ranks a level also holds boxes its
+/// rank does not compute, whose pieces finish at once). The plane-wave M2L's split by child
+/// reads it (`PlaneWaveSplit::Auto`; Helmholtz CH6.2f, CH6.2i).
+pub(crate) fn parent_pieces(
+    boxes: Range<usize>,
+    starts: &impl Fn(usize) -> bool,
+    computed: &impl Fn(usize) -> bool,
+) -> usize {
+    let mut mid = boxes.start + boxes.len() / 2;
+    while mid < boxes.end && !starts(mid) {
+        mid += 1;
+    }
+    if boxes.len() <= PARENT_GRAIN || mid == boxes.end {
+        return usize::from(boxes.into_iter().any(computed));
+    }
+    parent_pieces(boxes.start..mid, starts, computed)
+        + parent_pieces(mid..boxes.end, starts, computed)
+}
+
 /// Runs `f` with the scratch set of the current pool thread.
 ///
 /// # Panics
@@ -935,4 +957,26 @@ pub(crate) fn debug_check_octant(child: MortonKey, parent: MortonKey, o: usize) 
         Key(child)
     );
     debug_assert_eq!(morton::child_index(child), o, "octant of {}", Key(child));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `parent_pieces` against the halving: a level of 64 boxes is one piece, of 512 eight,
+    /// and pieces without a computed box (on P ranks, boxes the rank holds but does not
+    /// compute) are not counted.
+    #[test]
+    fn parent_pieces_count_the_split_by_parents_with_work() {
+        let starts = |t: usize| t.is_multiple_of(8);
+        let all = |_: usize| true;
+        assert_eq!(parent_pieces(0..64, &starts, &all), 1);
+        assert_eq!(parent_pieces(0..512, &starts, &all), 8);
+        assert_eq!(parent_pieces(0..65, &starts, &all), 2);
+        assert_eq!(parent_pieces(0..512, &starts, &|t: usize| t < 128), 2);
+        assert_eq!(parent_pieces(0..512, &starts, &|t: usize| t == 300), 1);
+        assert_eq!(parent_pieces(0..512, &starts, &|_: usize| false), 0);
+        // One parent of 8 boxes cannot be cut, however many boxes follow without a boundary.
+        assert_eq!(parent_pieces(0..200, &|t: usize| t == 0, &all), 1);
+    }
 }

@@ -105,6 +105,12 @@ D8 signed off the same day (the user: "1–5 as recommended"): the rule is `Auto
 2026-11-09: locust's clean pass (1 × 72) agrees at 10⁻⁶ (0.21–0.69× today's `Auto`); at
 10⁻³ Batched at p = 7–8 loses to Rotation below about 3.5·10⁵ pairs at 72 threads (today's
 `Auto`'s choice; CH4.0's sentence extended). Next: CH6.2i.
+2026-11-09: CH6.2i done (`fmm-validate/results/helmholtz-ch6-2i.md`; signed off the same
+day, "ok, 1–3 as recommended"): Laplace's plane-wave M2L held level 2 to one thread and level 3 to eight (levels 2–3
+1.9–4.1 % of the evaluation at N = 10⁶ on locust, 2.2–3.0 % on Kathleen); split by child
+where the split by parents leaves three quarters of the pool idle (`PlaneWaveSplit::Auto`, bit
+for bit), levels 2–3 take 0.27–0.54× the time; D9 no row slower on locust, Kathleen and the
+M6, two locust rows faster beyond the spread. Next: CH6.1f.
 
 ## How `/next-task` reads this file
 
@@ -933,7 +939,13 @@ at any kD.
   ε, the level's boxes), on CH6.2f's level call (or with Rotation on levels of few boxes, if
   CH6.2f's split does not bring them within the rule). *Needs:* CH6.2c, CH6.2d, CH6.2e,
   CH6.2f. *Sign-off:* D8.
-- [ ] **CH6.2i Laplace's plane-wave M2L on the coarse levels.** Added on 2026-11-08
+- [x] **CH6.2i Laplace's plane-wave M2L on the coarse levels.** Report:
+  `fmm-validate/results/helmholtz-ch6-2i.md`; record `docs/helmholtz/tasks/CH6.2i.md`;
+  `PlaneWaveSplit` shared with Helmholtz (`FmmBuilder::plane_wave_split`, `Auto` by child at
+  a quarter of the threads), `driver::parent_pieces`, `scaling`'s M2L per level and
+  `--split`. Signed off 2026-11-09 (the user: "ok, 1–3 as recommended"): `Auto` Laplace's
+  default (constraint 1), Laplace's rule at a quarter of the threads, the `driver.rs`
+  addition. Added on 2026-11-08
   (CH6.2f's question 2; the user: "schedule a Laplace task for 2"). Laplace's plane-wave M2L
   (Phase 6 T13) runs merge and shift on the shared drivers' `Execution::parents` with the same
   `PARENT_GRAIN` = 64 boxes, so its level 2 likely runs on one thread and level 3 on at most

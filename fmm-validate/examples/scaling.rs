@@ -72,6 +72,9 @@
 //! - `--mul-add auto|separate|fused` the batched M2L's multiply–add mode
 //!   (`FmmBuilder::m2l_mul_add`; `auto`, the library's default of p since Phase 6 T11:
 //!   fused from p = 6, else separate, bit for bit `dense`);
+//! - `--split auto|parents|children` how the plane-wave M2L splits merge and shift over
+//!   the pool (`FmmBuilder::plane_wave_split`, Helmholtz CH6.2i; default `auto`, the
+//!   library's; the summary's `split`);
 //! - `--budget MB` the node budget in MB of 10⁶ bytes (`FmmBuilder::dense_node_budget`;
 //!   the library's 64 if not given; Phase 5N T4: `tools/scaling/run.sh` passes 56 on the
 //!   M3 Max and 96 on locust and Kathleen; reported only since Phase 6 T11, whose rule of
@@ -131,7 +134,7 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::Communicator;
 use nd_fmm_exec::cost::CostModel;
 use nd_fmm_exec::fmm::{
-    DeviceGather, DeviceGemm, DeviceReduction, MultipoleRouting, NearRuleChoice,
+    DeviceGather, DeviceGemm, DeviceReduction, MultipoleRouting, NearRuleChoice, PlaneWaveSplit,
 };
 use nd_fmm_exec::operator::P2pChoice;
 use nd_fmm_exec::tables::M2lStrategy;
@@ -196,6 +199,14 @@ fn arguments() -> Arguments {
                 if let Err(error) = s.p2p.resolve() {
                     fail(&format!("--p2p: {error}"));
                 }
+            }
+            "--split" => {
+                s.plane_wave_split = match value.as_str() {
+                    "auto" => PlaneWaveSplit::Auto,
+                    "parents" => PlaneWaveSplit::Parents,
+                    "children" => PlaneWaveSplit::Children,
+                    _ => fail("--split: auto, parents or children"),
+                };
             }
             "--mul-add" => {
                 s.m2l_mul_add = match value.as_str() {

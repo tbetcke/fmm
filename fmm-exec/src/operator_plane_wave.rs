@@ -172,29 +172,59 @@ impl<T: SimdScalar> Kernels<T> {
                 end += 1;
             }
             let run = &mut locals[(t - boxes.start) * size..(end - boxes.start) * size];
-            self.plane_parent(call, (frame, v, waves), t..end, run, scratch);
+            let children = self.sources_by_slot(call, t..end, scratch);
+            self.plane_parent((frame, v, waves), children, t, run, scratch);
             t = end;
         }
     }
 
-    /// Merge and shift of `frame` for vector `v` into the children `children` of one
-    /// parent (consecutive boxes) whose locals are `locals`.
-    fn plane_parent(
+    /// Merge and shift of `frame` for vector `v` into box `t` alone of a level call of
+    /// `boxes` boxes, whose local is `local` (the split by child,
+    /// [`PlaneWaveSplit::Children`](super::PlaneWaveSplit::Children); Helmholtz CH6.2i): its
+    /// parent's run of boxes and their sources by slot, as the parent's call has them, then
+    /// the call for this child alone, so the child's local gets the arithmetic of its
+    /// parent's call in its order.
+    pub(crate) fn plane_child(
         &self,
         call: &BoxCall<'_, VList, LevelSlice<'_, T>>,
         (frame, v, waves): (usize, usize, &[T]),
-        children: Range<usize>,
-        locals: &mut [T],
+        (t, boxes): (usize, usize),
+        local: &mut [T],
         scratch: &mut Scratch<T>,
     ) {
-        let (tables, kernels) = self.plane_waves().expect("PlaneWave tables");
-        let kernel = &kernels.kernel;
+        if call.view.row(t).0.is_empty() {
+            return;
+        }
+        let key = |b: usize| call.index.key(call.level, b);
+        let parent = morton::parent(key(t));
+        let mut first = t;
+        while first > 0 && morton::parent(key(first - 1)) == parent {
+            first -= 1;
+        }
+        let mut end = t + 1;
+        while end < boxes && morton::parent(key(end)) == parent {
+            end += 1;
+        }
+        let o = morton::child_index(key(t));
+        let (children, computed) = self.sources_by_slot(call, first..end, scratch);
+        debug_assert!(computed & (1 << o) != 0, "a box with a V row is computed");
+        self.plane_parent((frame, v, waves), (children, 1 << o), t, local, scratch);
+    }
+
+    /// The children `children` of one parent (consecutive boxes) by child index, and the
+    /// computed ones (with a V row) as a mask; their sources into the scratch's slots.
+    fn sources_by_slot(
+        &self,
+        call: &BoxCall<'_, VList, LevelSlice<'_, T>>,
+        children: Range<usize>,
+        scratch: &mut Scratch<T>,
+    ) -> ([usize; CHILDREN], u8) {
+        let (tables, _) = self.plane_waves().expect("PlaneWave tables");
         let plane = scratch.plane.as_mut().expect("PlaneWave scratch");
-        let (w, n, size) = (tables.wave_len(), (self.p + 1).pow(2), self.box_size());
         // The children this rank computes (a V row), by child index.
         let mut boxes = [usize::MAX; CHILDREN];
         let mut computed = 0u8;
-        for t in children.clone() {
+        for t in children {
             let o = morton::child_index(call.index.key(call.level, t));
             boxes[o] = t;
             if !call.view.row(t).0.is_empty() {
@@ -202,7 +232,7 @@ impl<T: SimdScalar> Kernels<T> {
             }
         }
         if computed == 0 {
-            return;
+            return (boxes, computed);
         }
         // The sources by slot, from the computed children's rows.
         plane.slots.fill(NO_BOX);
@@ -220,14 +250,41 @@ impl<T: SimdScalar> Kernels<T> {
                 plane.slots[slot as usize] = s;
             }
         }
+        (boxes, computed)
+    }
+
+    /// Merge and shift of `frame` for vector `v` into the children `serve` of one parent
+    /// (`boxes` by child index; its computed children, or one of them under the split by
+    /// child), the sources by slot in the scratch, whose locals are `locals` from box
+    /// `first`: per direction of the frame, every accumulator whose mask holds a child
+    /// served sums its slots present in ascending order (`WaveKernel::merge`, from zero);
+    /// each child served gathers its accumulators in ascending order (`WaveKernel::gather`);
+    /// then each child served with waves converts them into its local. A child's arithmetic
+    /// does not depend on the others served.
+    fn plane_parent(
+        &self,
+        (frame, v, waves): (usize, usize, &[T]),
+        (boxes, serve): ([usize; CHILDREN], u8),
+        first: usize,
+        locals: &mut [T],
+        scratch: &mut Scratch<T>,
+    ) {
+        if serve == 0 {
+            return;
+        }
+        let (tables, kernels) = self.plane_waves().expect("PlaneWave tables");
+        let kernel = &kernels.kernel;
+        let plane = scratch.plane.as_mut().expect("PlaneWave scratch");
+        let (w, n, size) = (tables.wave_len(), (self.p + 1).pow(2), self.box_size());
+        let geometry = tables.geometry();
         let mut has = [[false; 2]; CHILDREN];
         for half in 0..2 {
             let direction = Direction::ALL[2 * frame + half];
             let accumulators = geometry.accumulators(direction);
-            // The accumulators of the computed children, each over its slots in order.
+            // The accumulators of the children served, each over its slots in order.
             for (a, accumulator) in accumulators.iter().enumerate() {
                 plane.present[a] = false;
-                if accumulator.mask & computed == 0 {
+                if accumulator.mask & serve == 0 {
                     continue;
                 }
                 plane.wave_offsets.clear();
@@ -258,9 +315,9 @@ impl<T: SimdScalar> Kernels<T> {
                 );
                 plane.present[a] = true;
             }
-            // Each computed child: its accumulators in order, then its shift.
+            // Each child served: its accumulators in order, then its shift.
             for (o, has) in has.iter_mut().enumerate() {
-                if computed & (1 << o) == 0 {
+                if serve & (1 << o) == 0 {
                     continue;
                 }
                 plane.acc_offsets.clear();
@@ -297,7 +354,7 @@ impl<T: SimdScalar> Kernels<T> {
             let (up, down) = incoming.split_at(w);
             kernel.sums(&kernels.tables, up, down, &mut plane.sums);
             tables.local_from_sums(&plane.sums, &mut plane.frame);
-            let at = (boxes[o] - children.start) * size + v * n;
+            let at = (boxes[o] - first) * size + v * n;
             tables.add_local_from_frame(frame, &plane.frame, &mut locals[at..at + n]);
         }
     }

@@ -20,7 +20,7 @@ use nd_fmm_tables::plane_wave::{CHILDREN, Direction, MergeGeometry, SLOTS};
 use nd_octree::morton;
 
 use super::{HelmholtzOperator, Kernel, Scratch, SimdScalar};
-use crate::driver::{BoxCall, PARENT_GRAIN};
+use crate::driver::{BoxCall, parent_pieces};
 
 /// The slot of the source of V pair (child index o, offset index d) at `8 d + o`, or
 /// [`NO_SLOT`] (`nd_fmm_tables::plane_wave::geometry::slot_of`, tabulated once).
@@ -188,27 +188,7 @@ pub struct PlaneWaveCounts {
     pub by_child: usize,
 }
 
-/// How the exponential M2L's level call splits merge and shift over the pool (Helmholtz
-/// CH6.2f; [`HelmholtzOperator::with_plane_wave_split`]). Every setting gives every local
-/// the same arithmetic in the same order, so the output is the same bit for bit; only the
-/// work and its spread over the threads differ.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum PlaneWaveSplit {
-    /// By child on a chunk where the split by parents, which never cuts a piece below
-    /// `PARENT_GRAIN` (64) boxes, makes at most half as many pieces holding a computed box
-    /// as the pool has threads (the split by child repeats shared accumulators, measured
-    /// 1.2–3× the parents' thread time on CH6.2f's cases); by parents elsewhere and without a
-    /// pool.
-    #[default]
-    Auto,
-    /// By parents: the pool halves a chunk at parent boundaries down to pieces of 64 boxes,
-    /// and each parent's accumulators serve all its computed children.
-    Parents,
-    /// By child: one task per box of the chunk, each computed child summing the
-    /// accumulators that serve it (siblings computing a shared accumulator again) and
-    /// converting its waves.
-    Children,
-}
+pub use crate::operator::PlaneWaveSplit;
 
 /// The wall time of the two passes of the exponential M2L's level calls on one level, summed
 /// over its level calls, chunks, vectors and frames since the operator was built or its M2L
@@ -423,7 +403,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                 PlaneWaveSplit::Parents => false,
                 PlaneWaveSplit::Children => true,
                 PlaneWaveSplit::Auto => {
-                    threads > 1 && 2 * pieces(0..end - start, &starts, &computed) <= threads
+                    threads > 1 && 2 * parent_pieces(0..end - start, &starts, &computed) <= threads
                 }
             };
             buffer.counts.chunks += 1;
@@ -497,28 +477,6 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             }
         }
     }
-}
-
-/// The pieces with work into which the shared drivers' split by parents
-/// (`Execution::parents`, `driver::split_parents`) cuts the boxes `boxes`, `starts(t)`
-/// telling whether box t begins a parent and `computed(t)` whether it has a V row: halved at
-/// the first parent boundary from the middle while a piece holds more than [`PARENT_GRAIN`]
-/// boxes, the driver's rule restated (it decides only the split, never a bit), counting the
-/// pieces that hold a computed box (on P ranks a level also holds boxes its rank does not
-/// compute, whose pieces finish at once).
-fn pieces(
-    boxes: Range<usize>,
-    starts: &impl Fn(usize) -> bool,
-    computed: &impl Fn(usize) -> bool,
-) -> usize {
-    let mut mid = boxes.start + boxes.len() / 2;
-    while mid < boxes.end && !starts(mid) {
-        mid += 1;
-    }
-    if boxes.len() <= PARENT_GRAIN || mid == boxes.end {
-        return usize::from(boxes.into_iter().any(computed));
-    }
-    pieces(boxes.start..mid, starts, computed) + pieces(mid..boxes.end, starts, computed)
 }
 
 /// The up and down waves of `frame` of one vector's multipole `x` (`planes` planes) into
@@ -733,26 +691,4 @@ fn parent_call<T: SimdScalar>(
         tables.add_local_from_frame(frame, frame_local, &mut locals[at..at + 2 * n]);
     }
     s.parts.conversions += clock.elapsed();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// `pieces` against the driver's halving: a level of 64 boxes is one piece, of 512 eight,
-    /// and pieces without a computed box (on P ranks, boxes the rank holds but does not
-    /// compute) are not counted.
-    #[test]
-    fn pieces_count_the_split_by_parents_with_work() {
-        let starts = |t: usize| t.is_multiple_of(8);
-        let all = |_: usize| true;
-        assert_eq!(pieces(0..64, &starts, &all), 1);
-        assert_eq!(pieces(0..512, &starts, &all), 8);
-        assert_eq!(pieces(0..65, &starts, &all), 2);
-        assert_eq!(pieces(0..512, &starts, &|t: usize| t < 128), 2);
-        assert_eq!(pieces(0..512, &starts, &|t: usize| t == 300), 1);
-        assert_eq!(pieces(0..512, &starts, &|_: usize| false), 0);
-        // One parent of 8 boxes cannot be cut, however many boxes follow without a boundary.
-        assert_eq!(pieces(0..200, &|t: usize| t == 0, &all), 1);
-    }
 }
