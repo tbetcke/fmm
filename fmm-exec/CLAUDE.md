@@ -377,6 +377,23 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   default bit for bit with every chunk split as named, `Children` on P ranks against the
   one-rank FMM, the default by child at 2 threads and never at 1; the floor at 2 threads
   runs `Children`; `check_plane_wave_times` the parts within `busy`.
+  Since Helmholtz CH6.2h (D8; docs/helmholtz/tasks/CH6.2h.md;
+  fmm-validate/results/helmholtz-ch6-2h.md) `HelmholtzM2l::Auto` may take the exponential
+  M2L: `with_auto_plane_wave` and `HelmholtzFmmBuilder::auto_plane_wave` (on by default
+  since D8's sign-off, 2026-11-08; `false` gives CH3.2d's rule), on each level of degree at least `auto_plane_wave_min_degree(isa, planes)` (one
+  above Batched's crossover, 12 on AVX-512 with two planes; named by
+  `with_m2l_plane_wave_min_degree` and the builder's `m2l_plane_wave_min_degree`, agreed
+  over the ranks by an all-reduce min, reported by `plane_wave_min_degree` and
+  `HelmholtzFmm::m2l_plane_wave_min_degree`) with a quadrature of `select` and Im κ_l below
+  `AUTO_PLANE_WAVE_MAX_IM_KAPPA` (5π), f64 only; then Batched on the other levels (the
+  levels with waves take no batched tables and none of the budget), RCR else. Each level
+  runs an existing level call. `tests/helmholtz/plane_wave.rs` checks the choice per level
+  (named degrees, off, ε below 10⁻⁶, a damped level, f32, the ISA's rule);
+  `check_auto_plane_wave` in `tests/helmholtz_fmm.rs` (on degrees varied as `check_auto`'s)
+  PlaneWave bit for bit at degree 0, the mixed rule against the direct sum within
+  `PLANE_WAVE_RATIO` of Rotation's error, 2 threads and the one-rank FMM bit for bit, today's
+  Auto bit for bit with the smallest degree above every level's, the agreed degree and none
+  by default. Its debug cost: about 39 s of the one-rank run on the M6 (216 → 255 s).
   The level call is the crate-private `src/helmholtz/operator_plane_wave.rs`, Laplace's
   order (`src/operator_plane_wave.rs`) restated in scalar loops on
   `nd_fmm_tables::helmholtz::plane_wave` (no `nd-fmm-simd` kernel: Laplace's `WaveKernel`

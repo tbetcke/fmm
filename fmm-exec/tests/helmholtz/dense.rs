@@ -60,6 +60,7 @@ fn operator(
     let densities = Densities::new(k.kind(), kind, m);
     HelmholtzOperator::new(k, densities, &domain(), &degrees(&k), false, 8)
         .unwrap()
+        .with_auto_plane_wave(false)
         .with_m2l(m2l, budget)
 }
 
@@ -454,6 +455,7 @@ fn auto_at_the_extremes_and_its_mode() {
     let named = HelmholtzOperator::<f64>::new(k, densities, &domain(), &degrees(&k), false, 8)
         .unwrap()
         .with_m2l_mul_add(MulAdd::Separate)
+        .with_auto_plane_wave(false)
         .with_m2l(HelmholtzM2l::Auto, 0);
     assert_eq!(named.m2l_mul_add(), MulAdd::Separate);
     let back = operator(k, ChargeKind::Complex, 1, HelmholtzM2l::Auto, 0)
@@ -514,6 +516,7 @@ fn auto_takes_the_rule_of_the_kernel() {
                 .unwrap()
                 .with_p2p(choice)
                 .unwrap()
+                .with_auto_plane_wave(false)
                 .with_m2l(HelmholtzM2l::Auto, usize::MAX);
             assert_eq!(after.max_degree(), Some(rule), "{choice}");
             assert_eq!(before.max_degree(), Some(rule), "{choice}");

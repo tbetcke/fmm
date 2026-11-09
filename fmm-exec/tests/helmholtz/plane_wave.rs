@@ -2,16 +2,19 @@
 //! and named, the levels it reports, and the pair body bit for bit the pair translation of
 //! `nd_fmm_tables::helmholtz::plane_wave` along the direction merge and shift gives the
 //! pair, for one and two multipole planes and two vectors; the split's setting (Helmholtz
-//! CH6.2f). The level call by merge and shift is tested with the FMM in
-//! `tests/helmholtz_fmm.rs`.
+//! CH6.2f); Auto's levels with waves (Helmholtz CH6.2h). The level call by merge and shift
+//! is tested with the FMM in `tests/helmholtz_fmm.rs`.
 
 use nd_fmm_exec::geometry::Domain;
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, DegreeRule, Densities, HelmholtzM2l, HelmholtzOperator, MIN_BUFFER_BOXES,
-    PlaneWaveCounts, PlaneWavePrecision, PlaneWaveSplit, Wavenumber,
+    AUTO_PLANE_WAVE_MAX_IM_KAPPA, ChargeKind, DegreeRule, Densities, HelmholtzM2l,
+    HelmholtzOperator, MIN_BUFFER_BOXES, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveSplit,
+    Wavenumber, auto_batched_max_degree, auto_plane_wave_min_degree,
 };
+use nd_fmm_exec::operator::P2pChoice;
 use nd_fmm_math::{Complex, Layout};
 use nd_fmm_plan::operator::{FmmSizes, PairOperator};
+use nd_fmm_simd::Isa;
 use nd_fmm_tables::PlaneWaveTables;
 use nd_fmm_tables::geometry::{M2L_OFFSET_COUNT, m2l_offsets};
 use nd_fmm_tables::helmholtz::plane_wave::Precision;
@@ -332,6 +335,169 @@ fn the_pair_body_is_the_pair_translation() {
                     "k = {re} + {im}i, level {level}, d = {d}: not the pair translation"
                 );
             }
+        }
+    }
+}
+
+/// Auto with the exponential M2L (Helmholtz CH6.2h) on `DEGREES` at k, the crossover `d_b`
+/// and the smallest degree `d_pw` named, at `tolerance`.
+fn auto(
+    k: Wavenumber,
+    tolerance: Option<f64>,
+    d_b: usize,
+    d_pw: Option<usize>,
+    on: bool,
+) -> HelmholtzOperator<f64> {
+    let densities = Densities::new(k.kind(), ChargeKind::Complex, 1);
+    HelmholtzOperator::new(k, densities, &domain(), &DEGREES, false, 8)
+        .unwrap()
+        .with_plane_wave_tolerance(tolerance)
+        .with_m2l_max_degree(Some(d_b))
+        .with_m2l_plane_wave_min_degree(d_pw)
+        .with_auto_plane_wave(on)
+        .with_m2l(HelmholtzM2l::Auto, usize::MAX)
+}
+
+fn methods(op: &HelmholtzOperator<f64>) -> Vec<HelmholtzM2l> {
+    (2..op.nlevels()).map(|l| op.m2l_on(l)).collect()
+}
+
+/// Auto's rule with waves: the exponential M2L from the smallest degree where the precision
+/// rule gives a quadrature (ε 10⁻³ and 10⁻⁶), Batched at or below the crossover on the
+/// others, RCR else; off, with no quadrature (ε below 10⁻⁶) or the smallest degree above
+/// every level's, Auto's levels and tables as before.
+#[test]
+fn auto_takes_the_waves_by_its_rule() {
+    use HelmholtzM2l::{Batched, PlaneWave, Rotation};
+    // κ_l = 20 · 2⁻ˡ in the tables on every level; DEGREES 6, 10, 15, 22 on levels 2–5
+    // (crossover 6: Batched's tables at p ≥ 10 take seconds to build in debug).
+    let k = Wavenumber::new(20.0, 0.0).unwrap();
+    // CH6.1e's rule gives iprec 2 at both tolerances (the same waves).
+    for tolerance in [1e-3, 1e-6] {
+        for (d_b, d_pw, want) in [
+            (6, 10, [Batched, PlaneWave, PlaneWave, PlaneWave]),
+            (6, 16, [Batched, Rotation, Rotation, PlaneWave]),
+            (6, 15, [Batched, Rotation, PlaneWave, PlaneWave]),
+            // The exponential M2L first where both apply.
+            (6, 0, [PlaneWave; 4]),
+            (6, 23, [Batched, Rotation, Rotation, Rotation]),
+        ] {
+            let case = format!("ε {tolerance:e}, d_b {d_b}, d_pw {d_pw}");
+            let op = auto(k, Some(tolerance), d_b, Some(d_pw), true);
+            assert_eq!(methods(&op), want, "{case}");
+            assert_eq!(op.m2l_choice(), HelmholtzM2l::Auto);
+            assert_eq!(op.plane_wave_min_degree(), Some(d_pw));
+            assert_eq!(op.max_degree(), Some(d_b));
+            // The rule's precisions on the levels with waves.
+            let rule = select(Complex::new(10.0, 0.0), &DEGREES, Some(tolerance));
+            for (level, &on) in want.iter().enumerate() {
+                let expected = (on == PlaneWave).then_some(rule[level + 2]).flatten();
+                assert_eq!(op.plane_wave_precision(level + 2), expected, "{case}");
+            }
+            // The levels with waves take no batched tables.
+            let batched = want.iter().filter(|&&m| m == Batched).count();
+            assert_eq!(op.batched_bytes() > 0, batched > 0, "{case}");
+            assert_eq!(
+                op.plane_wave_bytes() > 0,
+                want.contains(&PlaneWave),
+                "{case}"
+            );
+        }
+    }
+    // Off, below the rule's tolerances, or above every degree: Auto as before, its tables
+    // included.
+    let before = auto(k, Some(1e-6), 6, Some(10), false);
+    let want: Vec<HelmholtzM2l> = DEGREES[2..]
+        .iter()
+        .map(|&p| if p <= 6 { Batched } else { Rotation })
+        .collect();
+    assert_eq!(methods(&before), want);
+    for (case, op) in [
+        ("ε 1e-8", auto(k, Some(1e-8), 6, Some(10), true)),
+        ("d_pw 23", auto(k, Some(1e-6), 6, Some(23), true)),
+    ] {
+        assert_eq!(methods(&op), want, "{case}");
+        assert_eq!(op.batched_bytes(), before.batched_bytes(), "{case}");
+        assert_eq!(op.plane_wave_bytes(), 0, "{case}");
+    }
+    assert_eq!(before.plane_wave_bytes(), 0);
+    // Off, the smallest degree is not reported; the setting before or after `with_m2l`.
+    assert_eq!(
+        auto(k, Some(1e-6), 6, None, false).plane_wave_min_degree(),
+        None
+    );
+    let densities = Densities::new(k.kind(), ChargeKind::Complex, 1);
+    let after = HelmholtzOperator::<f64>::new(k, densities, &domain(), &DEGREES, false, 8)
+        .unwrap()
+        .with_m2l(HelmholtzM2l::Auto, usize::MAX)
+        .with_m2l_max_degree(Some(6))
+        .with_plane_wave_tolerance(Some(1e-6))
+        .with_auto_plane_wave(true)
+        .with_m2l_plane_wave_min_degree(Some(10));
+    assert_eq!(
+        methods(&after),
+        methods(&auto(k, Some(1e-6), 6, Some(10), true))
+    );
+    // Another setting ignores it.
+    let rotation = after.with_m2l(HelmholtzM2l::Rotation, 0);
+    assert_eq!(methods(&rotation), [Rotation; 4]);
+    assert_eq!(rotation.plane_wave_min_degree(), None);
+}
+
+/// The rule's smallest degree follows the kernel's ISA, as the crossover does; strongly
+/// damped levels (Im κ_l from 5π) run without waves; f32 never takes them.
+#[test]
+fn auto_waves_by_the_machine_class_and_the_damping() {
+    let k = Wavenumber::new(20.0, 0.0).unwrap();
+    for isa in [Isa::Scalar, Isa::detect()] {
+        let op = auto(k, Some(1e-6), 6, None, true)
+            .with_m2l_max_degree(None)
+            .with_p2p(P2pChoice::Isa(isa))
+            .unwrap();
+        assert_eq!(
+            op.plane_wave_min_degree(),
+            Some(auto_plane_wave_min_degree(isa, 2))
+        );
+        assert_eq!(op.max_degree(), Some(auto_batched_max_degree(isa, 2)));
+    }
+    // κ_l = (20 + 100i) 2⁻ˡ: Im κ₂ = 25 above 5π, Im κ₃ = 12.5 below; both in the tables.
+    let damped = Wavenumber::new(20.0, 100.0).unwrap();
+    let rule = select(Complex::new(10.0, 50.0), &DEGREES, Some(1e-6));
+    assert!(rule[2].is_some() && rule[3].is_some());
+    const { assert!(25.0 >= AUTO_PLANE_WAVE_MAX_IM_KAPPA && 12.5 < AUTO_PLANE_WAVE_MAX_IM_KAPPA) };
+    let op = auto(damped, Some(1e-6), 0, Some(0), true);
+    assert_eq!(op.m2l_on(2), HelmholtzM2l::Rotation);
+    assert_eq!(op.m2l_on(3), HelmholtzM2l::PlaneWave);
+    // PlaneWave itself keeps the level.
+    let densities = Densities::new(damped.kind(), ChargeKind::Complex, 1);
+    let named = HelmholtzOperator::<f64>::new(damped, densities, &domain(), &DEGREES, false, 8)
+        .unwrap()
+        .with_plane_wave_tolerance(Some(1e-6))
+        .with_m2l(HelmholtzM2l::PlaneWave, 0);
+    assert_eq!(named.m2l_on(2), HelmholtzM2l::PlaneWave);
+    // f32: none.
+    let densities = Densities::new(k.kind(), ChargeKind::Complex, 1);
+    let single = HelmholtzOperator::<f32>::new(k, densities, &domain(), &DEGREES, false, 8)
+        .unwrap()
+        .with_plane_wave_tolerance(Some(1e-6))
+        .with_m2l_plane_wave_min_degree(Some(0))
+        .with_auto_plane_wave(true)
+        .with_m2l(HelmholtzM2l::Auto, usize::MAX);
+    assert_eq!(single.plane_wave_min_degree(), None);
+    assert!((2..single.nlevels()).all(|l| single.m2l_on(l) != HelmholtzM2l::PlaneWave));
+}
+
+/// The smallest degree is one above Batched's crossover, but 12 on AVX-512 with two planes.
+#[test]
+fn the_plane_wave_degrees_follow_the_crossovers() {
+    for isa in [Isa::Scalar, Isa::Avx2, Isa::Avx512, Isa::Neon] {
+        for planes in [1, 2] {
+            let want = match (isa, planes) {
+                (Isa::Avx512, 2) => 12,
+                _ => auto_batched_max_degree(isa, planes) + 1,
+            };
+            assert_eq!(auto_plane_wave_min_degree(isa, planes), want, "{isa:?}");
+            assert!(want <= auto_batched_max_degree(isa, planes) + 1);
         }
     }
 }

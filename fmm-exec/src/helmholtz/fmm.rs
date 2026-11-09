@@ -102,7 +102,8 @@ use thiserror::Error;
 use super::{
     C_LEAF, ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DegreeError, Degrees, Densities,
     DensityError, HelmholtzM2l, HelmholtzOperator, OperatorError, Output, PlaneWavePrecision,
-    PlaneWaveSplit, Wavenumber, WavenumberKind, auto_batched_max_degree, min_leaf_level,
+    PlaneWaveSplit, Wavenumber, WavenumberKind, auto_batched_max_degree,
+    auto_plane_wave_min_degree, min_leaf_level,
 };
 use crate::fmm::{DEFAULT_MAX_POINTS_PER_LEAF, FmmError, PointSet, SettingsError};
 use crate::geometry::Domain;
@@ -172,6 +173,8 @@ pub struct HelmholtzFmmBuilder {
     dense_budget: usize,
     m2l_mul_add: Option<MulAdd>,
     m2l_max_degree: Option<usize>,
+    auto_plane_wave: bool,
+    m2l_plane_wave_min_degree: Option<usize>,
     plane_wave_precision: PlaneWavePrecision,
     plane_wave_reach: f64,
     plane_wave_budget: usize,
@@ -205,6 +208,8 @@ impl HelmholtzFmmBuilder {
             dense_budget: DEFAULT_DENSE_BUDGET,
             m2l_mul_add: None,
             m2l_max_degree: None,
+            auto_plane_wave: true,
+            m2l_plane_wave_min_degree: None,
             plane_wave_precision: PlaneWavePrecision::Rule,
             plane_wave_reach: RHO_MAX,
             plane_wave_budget: DEFAULT_PLANE_WAVE_NODE_BUDGET,
@@ -274,7 +279,8 @@ impl HelmholtzFmmBuilder {
     /// off on 2026-11-02; the operator module documentation, "M2L"). Under
     /// [`HelmholtzM2l::Dense`], [`HelmholtzM2l::Classes`], [`HelmholtzM2l::Batched`] and
     /// [`HelmholtzM2l::Auto`] the output agrees with Rotation's to rounding, not bit for bit
-    /// (Auto's is Rotation's bit for bit on the levels it leaves to Rotation); Batched's is
+    /// (Auto's is Rotation's bit for bit on the levels it leaves to Rotation, and its levels
+    /// with waves, by default, approximate M2L as PlaneWave's do); Batched's is
     /// Dense's bit for bit with real multipoles (real k, real charges). Under
     /// [`HelmholtzM2l::PlaneWave`] (opt-in) the levels with waves approximate M2L within their
     /// quadrature's error ([`plane_wave_precision`](Self::plane_wave_precision)); f64 only
@@ -311,6 +317,33 @@ impl HelmholtzFmmBuilder {
     /// chooses the same levels; [`HelmholtzFmm::m2l_max_degree`] reports it.
     pub fn m2l_max_degree(mut self, max_degree: usize) -> Self {
         self.m2l_max_degree = Some(max_degree);
+        self
+    }
+
+    /// Lets [`HelmholtzM2l::Auto`] take the exponential M2L (Helmholtz CH6.2h, decision D8;
+    /// default on since its sign-off, 2026-11-08; `false` gives CH3.2d's rule): on the levels
+    /// of degree at least
+    /// [`m2l_plane_wave_min_degree`](Self::m2l_plane_wave_min_degree) to which the precision
+    /// rule gives a quadrature (iprec 2 at ε ≥ 10⁻⁶ from the tolerance of
+    /// [`Degrees::Tolerance`]), with Im κ_l below
+    /// [`AUTO_PLANE_WAVE_MAX_IM_KAPPA`](super::AUTO_PLANE_WAVE_MAX_IM_KAPPA), in f64 only;
+    /// Batched and Rotation on the others as before
+    /// (`HelmholtzOperator::with_auto_plane_wave`). With [`Degrees::PerLevel`] the quadrature
+    /// is each degree's, as under [`HelmholtzM2l::PlaneWave`] (iprec 2 to degree 15, none
+    /// above). Those levels approximate M2L within their quadrature's error, as under
+    /// [`HelmholtzM2l::PlaneWave`].
+    pub fn auto_plane_wave(mut self, on: bool) -> Self {
+        self.auto_plane_wave = on;
+        self
+    }
+
+    /// The smallest degree at which [`HelmholtzM2l::Auto`] takes the exponential M2L under
+    /// [`auto_plane_wave`](Self::auto_plane_wave) (default the rule's,
+    /// `auto_plane_wave_min_degree` of the P2P kernel's ISA and the multipole planes). Either
+    /// way [`build`](Self::build) agrees it over the ranks (the smallest);
+    /// [`HelmholtzFmm::m2l_plane_wave_min_degree`] reports it.
+    pub fn m2l_plane_wave_min_degree(mut self, min_degree: usize) -> Self {
+        self.m2l_plane_wave_min_degree = Some(min_degree);
         self
     }
 
@@ -547,6 +580,13 @@ impl HelmholtzFmmBuilder {
             as u64;
         let mut max_degree = 0u64;
         comm.all_reduce_into(&local, &mut max_degree, SystemOperation::min());
+        // And the smallest degree of Auto's exponential M2L, agreed alike (Helmholtz CH6.2h).
+        let local = self
+            .m2l_plane_wave_min_degree
+            .unwrap_or_else(|| auto_plane_wave_min_degree(isa, densities.multipole_planes()))
+            as u64;
+        let mut plane_wave_min_degree = 0u64;
+        comm.all_reduce_into(&local, &mut plane_wave_min_degree, SystemOperation::min());
         // Under `PlaneWave` the level call's buffers, for each level's boxes, own and ghost,
         // and the waves within the node budget's share of this rank.
         let level_boxes: Vec<usize> = (0..plan.index().nlevels())
@@ -564,6 +604,10 @@ impl HelmholtzFmmBuilder {
         .with_p2p(self.p2p)
         .expect("the P2P kernel's ISA is available (checked in step 1)")
         .with_m2l_max_degree(Some(usize::try_from(max_degree).unwrap_or(usize::MAX)))
+        .with_m2l_plane_wave_min_degree(Some(
+            usize::try_from(plane_wave_min_degree).unwrap_or(usize::MAX),
+        ))
+        .with_auto_plane_wave(self.auto_plane_wave)
         .with_plane_wave_precision(self.plane_wave_precision.clone())
         .with_plane_wave_tolerance(match self.degrees {
             Degrees::Tolerance(epsilon) => Some(epsilon),
@@ -898,6 +942,13 @@ where
     /// operator's `m2l_on` gives each level's M2L.
     pub fn m2l_max_degree(&self) -> Option<usize> {
         self.operator().max_degree()
+    }
+
+    /// The agreed smallest degree at which [`HelmholtzM2l::Auto`] takes the exponential M2L
+    /// ([`HelmholtzFmmBuilder::m2l_plane_wave_min_degree`]), `None` unless Auto with
+    /// [`HelmholtzFmmBuilder::auto_plane_wave`] in f64.
+    pub fn m2l_plane_wave_min_degree(&self) -> Option<usize> {
+        self.operator().plane_wave_min_degree()
     }
 
     /// The largest number of ranks on one node, agreed at build: the divisor of the

@@ -70,9 +70,9 @@ pub use fmm::{
     DEFAULT_PLANE_WAVE_NODE_BUDGET, HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError,
 };
 pub use operator::{
-    DEFAULT_DENSE_BUDGET, HelmholtzM2l, HelmholtzOperator, MIN_BUFFER_BOXES, OperatorError,
-    PlaneWaveCounts, PlaneWavePrecision, PlaneWaveSplit, PlaneWaveTimes, auto_batched_max_degree,
-    auto_m2l_mul_add,
+    AUTO_PLANE_WAVE_MAX_IM_KAPPA, DEFAULT_DENSE_BUDGET, HelmholtzM2l, HelmholtzOperator,
+    MIN_BUFFER_BOXES, OperatorError, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveSplit,
+    PlaneWaveTimes, auto_batched_max_degree, auto_m2l_mul_add, auto_plane_wave_min_degree,
 };
 
 /// The deepest level of a Morton key, 16 (CONVENTIONS §3.12).

@@ -40,7 +40,10 @@
 //!   the one built and [`Row::plane_wave_waves`] each level's waves per direction.
 //!   [`Case::plane_wave_split`] (Helmholtz CH6.2f) how merge and shift splits over the
 //!   threads (the library's `Auto` by default); [`Row::plane_wave_split`] the setting and
-//!   [`Row::plane_wave_parts`] its thread-seconds by part per level.
+//!   [`Row::plane_wave_parts`] its thread-seconds by part per level. Auto with the
+//!   exponential M2L (Helmholtz CH6.2h, D8): [`Case::auto_plane_wave`], at the rule's
+//!   smallest degree or [`Case::m2l_plane_wave_min_degree`]; [`Row::m2l_plane_wave_min_degree`]
+//!   the agreed one and [`Row::plane_wave`] the levels with waves.
 
 use std::ops::Range;
 use std::thread;
@@ -94,6 +97,13 @@ pub struct Case {
     pub m2l_mul_add: Option<MulAdd>,
     /// The crossover degree of [`HelmholtzM2l::Auto`] (`None` the rule's).
     pub m2l_max_degree: Option<usize>,
+    /// Whether [`HelmholtzM2l::Auto`] takes the exponential M2L
+    /// (`HelmholtzFmmBuilder::auto_plane_wave`, Helmholtz CH6.2h; `true` in [`Case::new`], the
+    /// library's default since D8); named always, so that the earlier reports' `auto` runs
+    /// repeat whatever the library's default.
+    pub auto_plane_wave: bool,
+    /// The smallest degree at which Auto takes the exponential M2L (`None` the rule's).
+    pub m2l_plane_wave_min_degree: Option<usize>,
     /// The precision of each level's quadrature under [`HelmholtzM2l::PlaneWave`]
     /// (Helmholtz CH6.1e).
     pub plane_wave: PlaneWavePrecision,
@@ -133,6 +143,8 @@ impl Case {
             dense_budget: DEFAULT_DENSE_BUDGET,
             m2l_mul_add: None,
             m2l_max_degree: None,
+            auto_plane_wave: true,
+            m2l_plane_wave_min_degree: None,
             plane_wave: PlaneWavePrecision::Rule,
             plane_wave_budget: None,
             plane_wave_reach: None,
@@ -447,14 +459,18 @@ pub struct Row {
     pub m2l_mul_add: MulAdd,
     /// The agreed crossover degree under [`HelmholtzM2l::Auto`], else `None`.
     pub m2l_max_degree: Option<usize>,
+    /// The agreed smallest degree of Auto's exponential M2L, `None` unless
+    /// [`Case::auto_plane_wave`] (Helmholtz CH6.2h).
+    pub m2l_plane_wave_min_degree: Option<usize>,
     /// Per level, whether its M2L ran the setting's tables, Dense, Classes, Batched or the
     /// exponential M2L (else RCR).
     pub dense_levels: Vec<bool>,
-    /// The bytes of the dense, class or batched M2L tables per rank, or under
-    /// [`HelmholtzM2l::PlaneWave`] its tables and buffers (`plane_wave_bytes`).
+    /// The bytes of the dense, class or batched M2L tables per rank, plus under
+    /// [`HelmholtzM2l::PlaneWave`] (or Auto with [`Case::auto_plane_wave`]) the exponential
+    /// M2L's tables and buffers (`plane_wave_bytes`).
     pub dense_bytes: usize,
-    /// Per level, the precision of its quadrature under [`HelmholtzM2l::PlaneWave`], `None`
-    /// where it ran RCR (and under every other setting).
+    /// Per level, the precision of its quadrature under [`HelmholtzM2l::PlaneWave`] (and
+    /// under Auto with [`Case::auto_plane_wave`]), `None` where it ran another M2L.
     pub plane_wave: Vec<Option<Precision>>,
     /// The bytes of the exponential M2L's waves buffer per rank (part of `dense_bytes`;
     /// Helmholtz CH6.2a).
@@ -586,12 +602,16 @@ pub fn run_output<C: CommunicatorCollectives>(
         .p2p_kernel(case.p2p)
         .m2l(case.m2l)
         .dense_budget(case.dense_budget)
+        .auto_plane_wave(case.auto_plane_wave)
         .plane_wave_precision(case.plane_wave.clone());
     if let Some(mul_add) = case.m2l_mul_add {
         builder = builder.m2l_mul_add(mul_add);
     }
     if let Some(max_degree) = case.m2l_max_degree {
         builder = builder.m2l_max_degree(max_degree);
+    }
+    if let Some(min_degree) = case.m2l_plane_wave_min_degree {
+        builder = builder.m2l_plane_wave_min_degree(min_degree);
     }
     if let Some(budget) = case.plane_wave_budget {
         builder = builder.plane_wave_budget(budget);
@@ -695,6 +715,7 @@ pub fn run_output<C: CommunicatorCollectives>(
         m2l: fmm.operator().m2l_choice(),
         m2l_mul_add: fmm.operator().m2l_mul_add(),
         m2l_max_degree: fmm.m2l_max_degree(),
+        m2l_plane_wave_min_degree: fmm.m2l_plane_wave_min_degree(),
         dense_levels: (0..fmm.nlevels())
             .map(|l| fmm.operator().m2l_on(l) != HelmholtzM2l::Rotation)
             .collect(),

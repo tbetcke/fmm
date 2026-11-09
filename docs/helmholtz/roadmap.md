@@ -94,6 +94,17 @@ take 0.38–0.88× Rotation's time at one rank on locust and Kathleen (before up
 0.06–0.37× FMM3D's parents' loop; CH6.2c's 4 × 10 anomaly was the same one-thread level.
 Its questions signed off the same day: question 1 as recommended, and CH6.2i (Laplace's
 plane-wave M2L on the coarse levels) added after CH6.2h. Next: CH6.2h (D8).
+2026-11-08: CH6.2h done, D8 proposed (`fmm-validate/results/helmholtz-ch6-2h.md`; sign-off
+pending): `Auto` takes the exponential M2L where p_l ≥ d_pw (Batched's crossover + 1, 12 on
+AVX-512), CH6.1e's rule gives a quadrature and Im κ_l < 5π, behind `auto_plane_wave` until
+the sign-off. Against today's `Auto` the M2L takes 0.14–0.70× on the M6 and 0.03–0.55× on
+Kathleen at 10⁻⁶, 0.26–1.19× at 10⁻³ (above 1 within the ABBA spread); within 1.10× of the
+per-level best except ms-scale cases at 10⁻³, where Batched at p = 7 on level 2 loses to
+Rotation (today's `Auto` too; CH4.0's sentence). No boxes term.
+D8 signed off the same day (the user: "1–5 as recommended"): the rule is `Auto`'s default.
+2026-11-09: locust's clean pass (1 × 72) agrees at 10⁻⁶ (0.21–0.69× today's `Auto`); at
+10⁻³ Batched at p = 7–8 loses to Rotation below about 3.5·10⁵ pairs at 72 threads (today's
+`Auto`'s choice; CH4.0's sentence extended). Next: CH6.2i.
 
 ## How `/next-task` reads this file
 
@@ -164,7 +175,7 @@ The proposal's Section 12, plus D0. A decision is recorded here when the user ta
 | D5 | Source types of the first release | real and complex charges, potentials and gradients; dipoles once C6.4 exists for Laplace (note: Laplace dipoles were merged in Phase 6 T8 and T8d, so the condition is met) | – | CH1.1 | signed off 2026-10-29: charges now, dipoles later; §3.15 fixes real and complex charges with potentials and gradients, and dipoles get a later, separate task |
 | D6 | Order of H4 and H6 | H6 first | H3.G | CH6.1, CH4.1 | signed off 2026-11-02 (H3 gate, question 2): "i agree with the recommendations", H6 first, as recommended; on the gate report's reason (§3.3): the calibrated degrees cut the low-frequency share of the far field at kD = 500 to about half (an estimate), and the FMM is slowest against FMM3D on low-frequency trees at tight ε, which H6 targets |
 | D7 | Host back ends of the φ step | the product as default and reference; FFTW behind the optional `fftw` feature; rustfft if S9 finds it deterministic per box and faster, decided per machine | CH0.9 | CHR.3, CH4.6 | open |
-| D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2h | CH7.5d | open |
+| D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2h | CH7.5d | signed off 2026-11-08 (CH6.2h, questions 1–5; the user: "1–5 as recommended"): `Auto` takes the exponential M2L by default where p_l ≥ d_pw (Batched's crossover + 1; 12 on AVX-512 with two planes), CH6.1e's rule gives a quadrature (ε ≥ 10⁻⁶) and Im κ_l < 5π, f64 only; no boxes term (Batched's few-box levels to CH4.0); proposal §5.3 and §6.4 amended |
 | D9 | What "within noise" means for Laplace's benchmarks (constraint 1) | the run-to-run spread of the Laplace baseline, repeated on each machine before the change, per benchmark; plus the C3S.4 throughput gate | – | CHR.2, CH2.0 | signed off 2026-10-26: as recommended, the measured spread of the baseline per benchmark and machine, plus the C3S.4 gate. Clarified 2026-10-26 (CHR.2): one-sided, slower than `main` by more than the spread fails, faster passes when the outputs are bit for bit identical; from CH2.0 on five runs per side in the order A B B A A B B A A B, the spread max − min of `main`'s five run medians, never pooled with the branch's. Amended 2026-10-31 (CH2.0, the user: "as recommended"): a failing row may be repeated once and the repeat counts, with both results reported. Amended 2026-10-31 (the machine move, the user: "Amend: M6 replaces M3 Max"): the M6 (`tools/m6/machine.md`) replaces the M3 Max as a machine of record, its C3S.4 reference `spikes/p2p-simd/results-m6.md` |
 | D10 | cubek-fft on the device | after S5: adopt, contribute upstream first, or keep the transform as a GEMM | CH0.5 | CH7.4 | open |
 | D11 | Maximum leaf width c_leaf | from S8: the largest c_leaf with P2P and leaf costs within 10 % of their best on W1 and W3 (expected 0.5 to 1) | CH0.8a | CH3.0 | signed off 2026-10-28: as recommended (CH0.8a report §9, question 1), c_leaf = 1 by the revised rule, the largest c_leaf with no high-frequency leaf on any workload at 10⁻⁶ and 10⁻⁸, replacing the rule of this row, which is degenerate; a first-pass value that CH0.8b may revise with S6's constants and S7's p |
@@ -877,7 +888,11 @@ at any kD.
   and against the split by parents on both machines (the M6 with the user's go-ahead), with
   the 4 × 10 anomaly of CH6.2c checked against it. *Needs:* CH6.2d. *Machines:* locust,
   Kathleen.
-- [ ] **CH6.2h D8: the exponential M2L's level rule.** Split on 2026-11-06 from the former
+- [x] **CH6.2h D8: the exponential M2L's level rule.** Report:
+  `fmm-validate/results/helmholtz-ch6-2h.md`; D8 signed off 2026-11-08 (the user: "1–5 as
+  recommended"), the rule `Auto`'s default,
+  `auto_plane_wave` and `m2l_plane_wave_min_degree` on the operator and builder,
+  `auto_plane_wave_min_degree`, `AUTO_PLANE_WAVE_MAX_IM_KAPPA`. Split on 2026-11-06 from the former
   CH6.2c (CH6.2e until the split of CH6.2d; CH6.2f until 2026-11-08, when the coarse levels'
   remedy moved to CH6.2f). D8 proposed from CH6.2b's, CH6.2c's, CH6.2d's
   and CH6.2e's times (adopted as a strategy where it wins, else kept opt-in or dropped). Also (CH6.2b, report §7): the exponential
@@ -946,6 +961,16 @@ at any kD.
   deterministic and rank-invariant. Also, from the H3 gate (§5, signed off 2026-11-02): the
   Helmholtz dense budget counted per node, as Laplace's node rule does (constraint 7; it is
   1 GiB per rank since CH3.2a), before any multi-rank run with Auto as the default.
+  Also (CH6.2h, report §6): Batched on levels of few boxes loses to Rotation at any degree
+  (it reads each class's whole table for few pairs; level 2, 64 boxes, 3,096 pairs: at p = 7
+  2.1–3.8× Rotation's time on the M6 and 8.5–9.3× on Kathleen, about 2 and 4 ms; at p = 15 on
+  Kathleen 0.09–0.12 s against 3–5 ms, which D8's rule gives to the exponential M2L), so the
+  term covers coarse levels as well as sparse ones, or Batched's level call splits as
+  CH6.2f's did. CH6.2h's clean locust pass (report §5, 1 × 72) confirmed that at 72 threads
+  Batched at p = 7–8 is behind Rotation on every level below about 3.5·10⁵ pairs, not only
+  coarse ones (1.0–28×; up to 32 % of a W4 evaluation at 10⁻³), and ahead from about
+  4·10⁵ pairs; the term must catch these levels too, within constraint 2 (it cannot read the
+  thread count).
   *Needs:* CH3.2d. *Machines:* locust, Kathleen.
 - [ ] **CH4.0b The worst-box concentration.** Added on 2026-11-02 at the H3 gate (question
   4a; CH3.6's sign-off 1, "a follow-up before H4"): on W1 at 10⁻⁶ and 10⁻⁸ CH3.6's worst

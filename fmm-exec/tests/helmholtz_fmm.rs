@@ -79,7 +79,7 @@ use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, HelmholtzFmm,
     HelmholtzFmmBuilder, HelmholtzFmmError, HelmholtzM2l, MIN_BUFFER_BOXES, OperatorError, Output,
     PlaneWaveCounts, PlaneWavePrecision, PlaneWaveSplit, PlaneWaveTimes, Wavenumber,
-    auto_batched_max_degree, auto_m2l_mul_add,
+    auto_batched_max_degree, auto_m2l_mul_add, auto_plane_wave_min_degree,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -855,8 +855,10 @@ fn check_auto(scenario: &Scenario, comm: &SimpleCommunicator) {
         ..scenario.clone()
     };
     let (_, rotation) = run(&builder(&split), &inputs, kind, comm);
+    // CH3.2d's rule: the exponential M2L (D8's default) off; with it in check_auto_plane_wave.
     let auto = builder(&split)
         .m2l(HelmholtzM2l::Auto)
+        .auto_plane_wave(false)
         .m2l_max_degree(crossover);
     let (fmm, output) = run(&auto, &inputs, kind, comm);
     let op = fmm.operator();
@@ -928,6 +930,146 @@ fn check_auto(scenario: &Scenario, comm: &SimpleCommunicator) {
     if rank == 0 {
         println!(
             "{name}: the rule's crossover {agreed} ({planes} planes); checks passed in {:.1?}",
+            start.elapsed()
+        );
+    }
+}
+
+/// Auto with the exponential M2L (Helmholtz CH6.2h, D8), on the scenario's degrees with one
+/// added on levels 2 to the finest but one (as `check_auto`), so that levels differ: with
+/// the crossover and the smallest degree named 0 it is PlaneWave bit for bit; with the
+/// crossover at the finest level's degree and the smallest degree one above it, each level's
+/// method by the rule, against the direct sum within `PLANE_WAVE_RATIO` of Rotation's error,
+/// 2 threads and the one-rank FMM bit for bit; the rule's smallest degree agreed over the
+/// ranks, on by default (D8) and none while off.
+fn check_auto_plane_wave(scenario: &Scenario, comm: &SimpleCommunicator) {
+    let start = Instant::now();
+    let rank = comm.rank();
+    let name = format!("{}: Auto with waves", scenario.name);
+    let inputs = Inputs::new(scenario, 1, comm);
+    let kind = scenario.charges;
+    let built = |builder: &HelmholtzFmmBuilder| {
+        builder
+            .clone()
+            .dense_budget(0)
+            .build::<f64, _>(&inputs.sources, &inputs.targets, comm)
+            .unwrap_or_else(|error| panic!("rank {rank}: the build: {error}"))
+    };
+    let mut degrees = built(&builder(scenario)).degrees().to_vec();
+    let finest = degrees.len() - 1;
+    let crossover = degrees[finest];
+    for p in &mut degrees[2..finest] {
+        *p += 1;
+    }
+    let scenario = &Scenario {
+        degrees: Degrees::PerLevel(degrees.clone()),
+        ..scenario.clone()
+    };
+    let k_root = C::new(scenario.k.0, scenario.k.1) * 0.5;
+    let rule = select(k_root, &degrees, None);
+    let auto = builder(scenario)
+        .m2l(HelmholtzM2l::Auto)
+        .auto_plane_wave(true);
+
+    // Every level the rule gives waves: PlaneWave's output.
+    let (_, plane_wave) = run(
+        &builder(scenario).m2l(HelmholtzM2l::PlaneWave),
+        &inputs,
+        kind,
+        comm,
+    );
+    let every = auto.clone().m2l_max_degree(0).m2l_plane_wave_min_degree(0);
+    let (fmm, output) = run(&every, &inputs, kind, comm);
+    assert_eq!(fmm.m2l_plane_wave_min_degree(), Some(0));
+    for (level, &precision) in rule.iter().enumerate().skip(2) {
+        assert_eq!(fmm.operator().plane_wave_precision(level), precision);
+    }
+    drop(fmm);
+    assert_same(&format!("{name}, PlaneWave"), &output, &plane_wave, comm);
+
+    // The rule: Batched to the finest level's degree, waves above it.
+    let (_, rotation) = run(&builder(scenario), &inputs, kind, comm);
+    let split = auto
+        .clone()
+        .m2l_max_degree(crossover)
+        .m2l_plane_wave_min_degree(crossover + 1);
+    let (fmm, output) = run(&split, &inputs, kind, comm);
+    let op = fmm.operator();
+    let mut methods = Vec::new();
+    for level in 2..degrees.len() {
+        let want = if degrees[level] > crossover && rule[level].is_some() {
+            HelmholtzM2l::PlaneWave
+        } else if degrees[level] <= crossover {
+            HelmholtzM2l::Batched
+        } else {
+            HelmholtzM2l::Rotation
+        };
+        assert_eq!(op.m2l_on(level), want, "{name}, level {level}");
+        methods.push(want);
+    }
+    check_m2l_times(&name, &fmm, comm);
+    drop(fmm);
+    let (error_phi, error_grad) = errors(scenario, &inputs, &output, 0, comm);
+    let (rotation_phi, rotation_grad) = errors(scenario, &inputs, &rotation, 0, comm);
+    if rank == 0 {
+        println!(
+            "{name} (degrees {degrees:?}, levels 2– {methods:?}) against the direct sum: φ \
+             {error_phi:.2e}, ∇φ {error_grad:.2e}; Rotation's φ {rotation_phi:.2e}, ∇φ \
+             {rotation_grad:.2e}"
+        );
+    }
+    assert!(
+        error_phi <= PLANE_WAVE_RATIO * rotation_phi
+            && error_grad <= PLANE_WAVE_RATIO * rotation_grad,
+        "{name}: φ {error_phi:.2e}, ∇φ {error_grad:.2e} against Rotation's {rotation_phi:.2e}, \
+         {rotation_grad:.2e}"
+    );
+    let (_, threaded) = run(&split.clone().threads(2), &inputs, kind, comm);
+    assert_same(&format!("{name}, 2 threads"), &threaded, &output, comm);
+    check_one_rank(&name, &split, &inputs, kind, &output, comm);
+
+    // The smallest degree above every level's: today's Auto bit for bit.
+    let above = degrees.iter().max().unwrap() + 1;
+    let (_, none) = run(
+        &split.clone().m2l_plane_wave_min_degree(above),
+        &inputs,
+        kind,
+        comm,
+    );
+    let today = builder(scenario)
+        .m2l(HelmholtzM2l::Auto)
+        .auto_plane_wave(false)
+        .m2l_max_degree(crossover);
+    let (_, today) = run(&today, &inputs, kind, comm);
+    assert_same(&format!("{name}, above every degree"), &none, &today, comm);
+
+    // The rule's smallest degree, agreed over the ranks; on by default (D8), none while off.
+    let planes = match (scenario.k.1 == 0.0, kind) {
+        (true, ChargeKind::Real) => 1,
+        _ => 2,
+    };
+    let own = auto_plane_wave_min_degree(Isa::detect(), planes);
+    let mut smallest = 0u64;
+    comm.all_reduce_into(&(own as u64), &mut smallest, SystemOperation::min());
+    assert_eq!(
+        built(&auto).m2l_plane_wave_min_degree().map(|d| d as u64),
+        Some(smallest),
+        "{name}: the agreed smallest degree"
+    );
+    assert_eq!(
+        built(&default_builder(scenario)).m2l_plane_wave_min_degree(),
+        Some(smallest as usize),
+        "{name}: on by default"
+    );
+    assert_eq!(
+        built(&default_builder(scenario).auto_plane_wave(false)).m2l_plane_wave_min_degree(),
+        None,
+        "{name}: off"
+    );
+    if rank == 0 {
+        println!(
+            "{name}: the rule's smallest degree {smallest} ({planes} planes); checks passed in \
+             {:.1?}",
             start.elapsed()
         );
     }
@@ -1712,6 +1854,7 @@ fn helmholtz_fmm() {
         check_tables(scenario, HelmholtzM2l::Classes, None, &comm);
         check_tables(scenario, HelmholtzM2l::Batched, Some(&dense), &comm);
         check_auto(scenario, &comm);
+        check_auto_plane_wave(scenario, &comm);
         // The bounded buffer in debug builds on the clusters alone (scenario 2), whose
         // finest level with waves chunks at the floor.
         chunked |= check_plane_wave(scenario, !debug || i == 2, &comm);

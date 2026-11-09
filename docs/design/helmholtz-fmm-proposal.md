@@ -630,7 +630,10 @@ is for Laplace:
   (generated or tabulated; spike S4), unlike the single Laplace table of §3.14. Gumerov and Duraiswami found RCR
   about as efficient as exponential forms at moderate p in their 2009 code; the
   repository's own Laplace measurement points the other way, so the decision is a
-  measurement (CH6.2).
+  measurement (CH6.2). (Amended at CH6.2h; D8 signed off 2026-11-08: `Auto` takes it by
+  default on each level of degree at least one above Batched's crossover, 12 on AVX-512 with
+  two planes, where the precision rule gives a quadrature, ε ≥ 10⁻⁶, and Im k w_l < 5π, in
+  f64; fmm-validate/results/helmholtz-ch6-2h.md.)
 
 ### 5.4 M2L on high-frequency levels: signatures
 
@@ -873,8 +876,10 @@ measured time, and for the level as a whole signatures or not, by time and by th
 budget, in which the signature scratch counts like tables (Section 7). On low-frequency
 levels, among Rotation, Dense, Classes, Batched and the exponential M2L, by the node budget
 of node-m2l.md (bytes of a rank and of a node) and by measured cost constants. Dense never
-resolves on a level whose tables exceed the budget. The exponential M2L is opt-in until
-CH6.2 has measured it.
+resolves on a level whose tables exceed the budget. The exponential M2L was opt-in until
+CH6.2 had measured it; since D8's sign-off (2026-11-08, CH6.2h) `Auto` takes it first, on the
+levels of Section 5.3's rule, Batched to its crossover on the others, Rotation else, with no
+term for the level's boxes (amended at CH6.2h).
 
 ### 6.5 Device path
 
