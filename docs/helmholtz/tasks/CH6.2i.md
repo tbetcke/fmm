@@ -163,3 +163,9 @@ Asked with the plan, answered 2026-11-09 (the user):
    `LaplaceOperator::with_plane_wave_split`.
 3. The M6's timing runs: "Yes, when I start them" (the `ch6-2i` sweep and D9's ABBA runs,
    gated on a quiet machine).
+
+Signed off 2026-11-09 (the user: "ok, 1–3 as recommended"), the report's §7:
+1. Constraint 1: `PlaneWaveSplit::Auto` adopted as Laplace's default.
+2. Laplace's rule at a quarter of the threads, Helmholtz's at half, each by its own
+   measurement.
+3. `driver.rs`: the one added crate-private function (`parent_pieces`) accepted.
