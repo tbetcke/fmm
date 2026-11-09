@@ -115,7 +115,7 @@ use nd_fmm_exec::cost::CostModel;
 use nd_fmm_exec::fmm::{
     Backend, BuildTimings, DeviceGather, DeviceGemm, DeviceReduction, ExchangeTraffic, Fmm,
     FmmBuilder, KindTiming, ListSizes, MAX_LEVELS, MultipoleRouting, NearRuleChoice, OperatorKind,
-    Output, OutputMany, StageTimings, TREE_FAN_OUT, Traffic, default_m2l_mul_add,
+    Output, OutputMany, PlaneWaveSplit, StageTimings, TREE_FAN_OUT, Traffic, default_m2l_mul_add,
     default_max_points_per_leaf,
 };
 use nd_fmm_exec::geometry::{contains, integer_centre};
@@ -404,6 +404,9 @@ pub struct Settings {
     /// or the library's default of p if `None` (`fmm::default_m2l_mul_add`, Phase 6 T11:
     /// fused from p = 6): only `M2lStrategy::Batched` uses it.
     pub m2l_mul_add: Option<MulAdd>,
+    /// How the plane-wave M2L splits merge and shift over the pool
+    /// (`FmmBuilder::plane_wave_split`, Helmholtz CH6.2i; the library's `Auto` by default).
+    pub plane_wave_split: PlaneWaveSplit,
     /// The evaluation paths.
     pub overlap: Overlap,
     /// Where the points are passed in.
@@ -497,6 +500,7 @@ impl Settings {
             strategy: M2lStrategy::Auto,
             dense_node_budget: None,
             m2l_mul_add: None,
+            plane_wave_split: PlaneWaveSplit::Auto,
             overlap: Overlap::Off,
             input: Input::Share,
             builds: 1,
@@ -2116,6 +2120,7 @@ fn builder<T: Stored + SimdScalar + Equivalence + Default>(settings: &Settings) 
         .threads(settings.threads)
         .strategy(settings.strategy)
         .m2l_mul_add(settings.mul_add())
+        .plane_wave_split(settings.plane_wave_split)
         .p2p_kernel(settings.p2p)
         .overlap(settings.overlap == Overlap::On)
         .kind_timings(if settings.kinds {
@@ -3216,6 +3221,10 @@ impl Report {
                     format!("strategy={:?}", self.strategy),
                     format!("requested={:?}", self.settings.strategy),
                     format!("mul_add={}", self.settings.mul_add()),
+                    format!(
+                        "split={}",
+                        format!("{:?}", self.settings.plane_wave_split).to_lowercase()
+                    ),
                     format!("p2p={}", self.p2p),
                     format!("leaf={}", self.settings.leaf_points()),
                     format!(

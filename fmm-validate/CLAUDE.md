@@ -435,6 +435,16 @@ column "M2L" ending `/parents` or `/children` where named) and five columns of `
 `tools/helmholtz/ch6-2f-runs.sh` runs the task's measurements. Its report is
 `results/helmholtz-ch6-2f.md`.
 
+Helmholtz CH6.2i (Laplace's plane-wave M2L on the coarse levels; docs/helmholtz/tasks/CH6.2i.md)
+added to `scaling`: with `--kinds` the M2L per level (`PathTimes::m2l_levels`, the median per
+rank of `KindTime::levels`; `PathTimes::m2l_level`), each level's boxes, boxes with a V row and
+pieces of merge and shift's split by parents (`Report::m2l_levels`, `M2lLevel`,
+`m2l_level_rows`; `parent_pieces` restates the driver's halving, `PARENT_GRAIN`), a table of
+the report and the summary's `m2l_level_ms` and `m2l_level_pieces`; `Settings::plane_wave_split`
+(`--split auto|parents|children`, `FmmBuilder::plane_wave_split`; the summary's `split`).
+`tests/scaling.rs` covers the levels; `tools/scaling/run.sh` has the sweep `ch6-2i`
+(`CH6_2I_SPLITS`). Its report is `results/helmholtz-ch6-2i.md`.
+
 Helmholtz CH6.2h (D8, the exponential M2L under Auto; docs/helmholtz/tasks/CH6.2h.md) added
 `helmholtz_accuracy::Case::{auto_plane_wave, m2l_plane_wave_min_degree}` (`true` in
 `Case::new`, the library's default since D8; named always, so that the example's `auto` runs

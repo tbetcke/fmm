@@ -169,12 +169,22 @@
 //!    Then each computed child with any waves: the incoming sums (`WaveKernel::sums`),
 //!    the local in the frame (`PlaneWaveTables::local_from_sums`) and back into its
 //!    local (`PlaneWaveTables::add_local_from_frame`). The pool splits the level at
-//!    parent boundaries (`split_parents`; pieces of at least `PARENT_GRAIN` = 64 boxes).
+//!    parent boundaries (`split_parents`; pieces of at least `PARENT_GRAIN` = 64 boxes),
+//!    or by child ([`PlaneWaveSplit`]; Helmholtz CH6.2i), one task per box: a computed
+//!    child finds its parent's run of siblings and their sources by slot, and runs its
+//!    parent's call for itself alone (every accumulator whose mask holds it, from zero over
+//!    its slots in order; its gather; its conversion), so the same bits; siblings compute
+//!    a shared accumulator again. [`PlaneWaveSplit::Auto`] (the default) takes the split
+//!    by child on a level call whose split by parents makes at most half as many pieces
+//!    holding a computed box as the pool has threads (`driver::parent_pieces`; level 2,
+//!    one piece, at 2 threads and more; level 3 from 16), by parents elsewhere. Without
+//!    the split by child level 2 ran on one thread at every pool size (Helmholtz CH6.2i,
+//!    `fmm-validate/results/helmholtz-ch6-2i.md`).
 //!
 //! **Order and bits.** Every local receives frame 0, then 1, then 2, each a fixed chain
 //! of its parent's accumulators, which depend on the geometry of the slots alone: the
-//! output is the same at every thread count and overlap setting (each parent runs whole
-//! on one thread), from evaluation to evaluation, and on every ISA (the kernels' chains
+//! output is the same at every thread count, overlap setting and split (each parent, or
+//! each child under the split by child, runs whole on one thread), from evaluation to evaluation, and on every ISA (the kernels' chains
 //! are the same on all; `nd_fmm_simd::WaveKernel`). On P ranks a rank computes the
 //! accumulators of its computed children only; each holds the same sources, summed in the
 //! same order, as on one rank (a source of an accumulator lies in the V row of every child
@@ -523,6 +533,34 @@ pub struct LaplaceOperator<T: SimdScalar> {
     /// Under `PlaneWave`, the waves of one frame of every box of a level call, 4H values
     /// per box (module documentation, "The plane-wave M2L"); empty otherwise.
     waves: Vec<T>,
+    /// How the plane-wave M2L splits merge and shift over the pool (Helmholtz CH6.2i).
+    split: PlaneWaveSplit,
+    /// The (vector, frame) passes of plane-wave level calls whose merge and shift ran by
+    /// child since the operator was built.
+    by_child: usize,
+}
+
+/// How the plane-wave M2L's level call splits merge and shift over the pool: Laplace's
+/// ([`LaplaceOperator::with_plane_wave_split`]; Helmholtz CH6.2i) and Helmholtz's
+/// exponential M2L ([`HelmholtzOperator::with_plane_wave_split`](crate::helmholtz::HelmholtzOperator::with_plane_wave_split);
+/// Helmholtz CH6.2f), whose level call it splits chunk by chunk of parents. Every setting
+/// gives every local the same arithmetic in the same order, so the output is the same bit
+/// for bit; only the work and its spread over the threads differ.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlaneWaveSplit {
+    /// By child on a level call (Helmholtz: a chunk) where the split by parents, which
+    /// never cuts a piece below `PARENT_GRAIN` (64) boxes, makes at most half as many
+    /// pieces holding a computed box as the pool has threads (the split by child repeats
+    /// shared accumulators, measured 1.2–3× the parents' thread time on Helmholtz CH6.2f's
+    /// cases); by parents elsewhere and without a pool.
+    #[default]
+    Auto,
+    /// By parents: the pool halves the boxes at parent boundaries down to pieces of 64
+    /// boxes, and each parent's accumulators serve all its computed children.
+    Parents,
+    /// By child: one task per box, each computed child summing the accumulators that serve
+    /// it (siblings computing a shared accumulator again) and converting its waves.
+    Children,
 }
 
 /// The read-only part of the operator: what every target body shares.
@@ -644,6 +682,8 @@ impl<T: SimdScalar> LaplaceOperator<T> {
             kernels,
             execution,
             waves: Vec::new(),
+            split: PlaneWaveSplit::Auto,
+            by_child: 0,
         }
     }
 
@@ -850,6 +890,34 @@ impl<T: SimdScalar> LaplaceOperator<T> {
     /// comparisons and timings. Without a pool it changes nothing.
     pub fn set_serial(&mut self, serial: bool) {
         self.execution.serial = serial;
+    }
+
+    /// Splits the plane-wave M2L's merge and shift over the pool by `split` ([module
+    /// documentation](self#the-plane-wave-m2l); [`PlaneWaveSplit::Auto`] by default;
+    /// Helmholtz CH6.2i). The output is the same bit for bit under every setting; every
+    /// other strategy ignores it.
+    pub fn with_plane_wave_split(mut self, split: PlaneWaveSplit) -> Self {
+        self.split = split;
+        self
+    }
+
+    /// Sets the split of [`with_plane_wave_split`](Self::with_plane_wave_split) for the next
+    /// level calls.
+    pub fn set_plane_wave_split(&mut self, split: PlaneWaveSplit) {
+        self.split = split;
+    }
+
+    /// The split of the plane-wave M2L's merge and shift
+    /// ([`with_plane_wave_split`](Self::with_plane_wave_split)).
+    pub fn plane_wave_split(&self) -> PlaneWaveSplit {
+        self.split
+    }
+
+    /// The (vector, frame) passes of the plane-wave M2L's level calls whose merge and shift
+    /// ran by child since the operator was built (Helmholtz CH6.2i); for the tests.
+    #[doc(hidden)]
+    pub fn plane_wave_by_child(&self) -> usize {
+        self.by_child
     }
 
     /// Returns the expansion degree p.
@@ -1582,6 +1650,27 @@ impl<T: SimdScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
             let mut locals = locals;
             let size = locals.size();
             let locals = locals.as_mut_slice();
+            let starts = |t: usize| {
+                t == 0
+                    || morton::parent(index.key(level, t))
+                        != morton::parent(index.key(level, t - 1))
+            };
+            // The split of merge and shift, once per level call (Helmholtz CH6.2i): by
+            // child where the split by parents leaves at least half the pool idle.
+            let threads = match (&self.execution.pool, self.execution.serial) {
+                (Some(_), false) => self.execution.scratch.len(),
+                _ => 1,
+            };
+            let by_child = match self.split {
+                PlaneWaveSplit::Parents => false,
+                PlaneWaveSplit::Children => true,
+                PlaneWaveSplit::Auto => {
+                    let computed = |t: usize| !pairs.row(t).0.is_empty();
+                    threads > 1
+                        && 2 * driver::parent_pieces(0..locals.len() / size, &starts, &computed)
+                            <= threads
+                }
+            };
             for v in 0..m {
                 for frame in 0..3 {
                     let waves = &mut self.waves[..boxes * box_waves];
@@ -1590,15 +1679,25 @@ impl<T: SimdScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
                         kernels.plane_outgoing(frame, multipole, out, scratch);
                     });
                     let waves = &self.waves[..boxes * box_waves];
-                    let starts = |t: usize| {
-                        t == 0
-                            || morton::parent(index.key(level, t))
-                                != morton::parent(index.key(level, t - 1))
-                    };
-                    self.execution
-                        .parents(locals, size, starts, |range, chunks, scratch| {
-                            kernels.plane_parents(&call, (frame, v, waves), range, chunks, scratch);
+                    if by_child {
+                        self.by_child += 1;
+                        let level_boxes = locals.len() / size;
+                        self.execution.chunks(locals, size, |t, local, scratch| {
+                            let at = (t, level_boxes);
+                            kernels.plane_child(&call, (frame, v, waves), at, local, scratch);
                         });
+                    } else {
+                        self.execution
+                            .parents(locals, size, starts, |range, chunks, scratch| {
+                                kernels.plane_parents(
+                                    &call,
+                                    (frame, v, waves),
+                                    range,
+                                    chunks,
+                                    scratch,
+                                );
+                            });
+                    }
                 }
             }
             return;

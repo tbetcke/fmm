@@ -87,7 +87,16 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   tables). `Fmm` sizes its waves buffer from the plan
   (`with_plane_wave_boxes`), so no level call allocates; the cost model counts its M2L per
   box with a V row (`cost::M2lUnit::Boxes`). `Auto` resolves to it on the host at f64 p ≥ 7
-  and f32 p ≥ 8 since Phase 6 T11 (below, "The defaults of Phase 6 T11").
+  and f32 p ≥ 8 since Phase 6 T11 (below, "The defaults of Phase 6 T11"). Since Helmholtz
+  CH6.2i (docs/helmholtz/tasks/CH6.2i.md; fmm-validate/results/helmholtz-ch6-2i.md) merge
+  and shift splits over the pool by `PlaneWaveSplit` (moved from `helmholtz`, re-exported
+  there and from `fmm`; `LaplaceOperator::{with_plane_wave_split, set_plane_wave_split}`,
+  `FmmBuilder::plane_wave_split`, `Fmm::{plane_wave_split, set_plane_wave_split}`): by
+  parents as before, or by child on `Execution::chunks` (`Kernels::plane_child`: the
+  parent's call restricted to the child, `plane_parent`'s `serve` mask, so the same bits),
+  `Auto` by child where `driver::parent_pieces` (moved from Helmholtz's `pieces`; the one
+  addition to `driver.rs`) gives at most half as many pieces with work as the pool has
+  threads, once per level call; the doc-hidden `plane_wave_by_child` counts the passes.
 - Several charge vectors (Phase 6 T5, C6.3; the `operator` and `fmm` module docs,
   "Several charge vectors"; CONVENTIONS §3.13, "Several charge vectors"):
   `LaplaceOperator::with_vectors(m)` sizes every store for m vectors (m (p + 1)² values per
@@ -364,7 +373,7 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   the accumulators whose mask holds it and converting, the parent's call restricted to it
   (`parent_call`'s `serve` mask), so every local the same bits; `Auto` (the default) takes
   `Children` on a chunk whose split by parents makes at most half as many pieces holding a
-  computed box as the pool has threads (`pieces` restates `driver::split_parents`' halving
+  computed box as the pool has threads (`driver::parent_pieces`, `pieces` until CH6.2i, restates `driver::split_parents`' halving
   down to `PARENT_GRAIN` = 64 boxes; level 2 ran on one thread, level 3 on 8 pieces; on P
   ranks a level's held boxes it does not compute make pieces without work, which at 4 × 10
   on Kathleen kept level 3 by parents on 3 busy threads before they were left out), since the split by child repeats
@@ -523,6 +532,11 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
     (0.5 s, the slowest rank's time, agreed; CI's 4-rank run had 496 of its 600 s before
     T13) and names the others, which the release runs check. It added about 15 s to the
     one-rank debug run (about 180 → 195 s on the M3 Max).
+    Since Helmholtz CH6.2i `check_plane_wave_split` (in `check_plane_wave`) checks
+    `Children` and `Parents` named at one thread and at the most threads overlapped, the
+    default at two threads, each bit for bit the default's output, `Auto` never by child
+    at one thread and by child at two on some rank, and on several ranks `Children` at two
+    threads against the one-rank `Fmm`.
     `tests/invariance.rs` runs every workload under `PlaneWave` (f64 p = 8, the graded
     tree also f32 p = 6); `tests/multi_rank.rs` the variant `planewave` with C6.5's check;
     the ignored `tests/accuracy.rs` and `tests/adaptive.rs` its gates at f64 p = 8, 12,

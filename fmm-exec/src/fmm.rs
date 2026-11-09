@@ -479,8 +479,8 @@ use crate::device::{
     self, DeviceCounters, DeviceDriver, DeviceOptions, DeviceOutput, DeviceReport, ViewsImage,
 };
 use crate::geometry::{Domain, GeometryError};
-pub use crate::operator::SourceType;
 use crate::operator::{Isa, LaplaceOperator, MulAdd, P2pChoice, SimdScalar};
+pub use crate::operator::{PlaneWaveSplit, SourceType};
 // Read by the device path and by the unit tests of the output pass.
 #[cfg_attr(not(feature = "gpu"), allow(unused_imports))]
 use crate::pipeline::interleave_output;
@@ -1237,6 +1237,7 @@ pub enum FmmError {
 /// | [`threads`](Self::threads) | 1: no pool, the calling thread |
 /// | [`p2p_kernel`](Self::p2p_kernel) | [`P2pChoice::Auto`]: the kernel of `nd-fmm-simd` on the default ISA of this machine (`Isa::detect`) |
 /// | [`m2l_mul_add`](Self::m2l_mul_add) | [`default_m2l_mul_add`]: [`MulAdd::Fused`] from p = 6, [`MulAdd::Separate`] (`Batched` bit for bit `Dense`) below |
+/// | [`plane_wave_split`](Self::plane_wave_split) | [`PlaneWaveSplit::Auto`]: `PlaneWave`'s merge and shift by child where the split by parents leaves half the pool idle |
 /// | [`backend`](Self::backend) | [`Backend::Host`]: the host path |
 /// | [`host_fallback`](Self::host_fallback) | none |
 /// | [`synchronous_stages`](Self::synchronous_stages) | off |
@@ -1276,6 +1277,7 @@ pub struct FmmBuilder<T> {
     threads: usize,
     p2p: P2pChoice,
     m2l_mul_add: Option<MulAdd>,
+    plane_wave_split: PlaneWaveSplit,
     backend: Backend,
     host_fallback: Vec<OperatorKind>,
     synchronous_stages: bool,
@@ -1320,6 +1322,7 @@ impl<T> FmmBuilder<T> {
             threads: 1,
             p2p: P2pChoice::Auto,
             m2l_mul_add: None,
+            plane_wave_split: PlaneWaveSplit::Auto,
             backend: Backend::Host,
             host_fallback: Vec::new(),
             synchronous_stages: false,
@@ -1474,6 +1477,17 @@ impl<T> FmmBuilder<T> {
     /// device, ignores it; [`Fmm::threading`] reports it.
     pub fn m2l_mul_add(mut self, mul_add: MulAdd) -> Self {
         self.m2l_mul_add = Some(mul_add);
+        self
+    }
+
+    /// Sets how the plane-wave M2L ([`M2lStrategy::PlaneWave`] on the host) splits merge
+    /// and shift over the pool (Helmholtz CH6.2i; [`LaplaceOperator::with_plane_wave_split`]):
+    /// [`PlaneWaveSplit::Auto`] (the default) by child on a level whose split by parents,
+    /// which never cuts below 64 boxes, leaves at least half the pool idle (level 2, and
+    /// level 3 from 16 threads), by parents elsewhere. Every setting gives the same output
+    /// bit for bit; every other strategy, and the device, ignores it.
+    pub fn plane_wave_split(mut self, split: PlaneWaveSplit) -> Self {
+        self.plane_wave_split = split;
         self
     }
 
@@ -2102,7 +2116,8 @@ impl<T: Stored + SimdScalar + Equivalence + Default> FmmBuilder<T> {
             )
             .with_vectors(self.vectors)
             .with_sources(self.sources)
-            .with_plane_wave_boxes(level_boxes);
+            .with_plane_wave_boxes(level_boxes)
+            .with_plane_wave_split(self.plane_wave_split);
         threading.m2l_kernel = operator
             .m2l_kernel()
             .map(|kernel| (kernel.isa(), kernel.mul_add()));
@@ -4529,6 +4544,33 @@ where
         self.threading.m2l_kernel = host
             .m2l_kernel()
             .map(|kernel| (kernel.isa(), kernel.mul_add()));
+    }
+
+    /// How the plane-wave M2L splits merge and shift over the pool
+    /// ([`FmmBuilder::plane_wave_split`]).
+    pub fn plane_wave_split(&self) -> PlaneWaveSplit {
+        self.evaluator.operator().engine.host().plane_wave_split()
+    }
+
+    /// Sets the split of [`FmmBuilder::plane_wave_split`] for the next evaluations, on the
+    /// same build: the output is the same bit for bit. Every rank may set its own.
+    pub fn set_plane_wave_split(&mut self, split: PlaneWaveSplit) {
+        self.evaluator
+            .operator_mut()
+            .engine
+            .host_mut()
+            .set_plane_wave_split(split);
+    }
+
+    /// The (vector, frame) passes of the host's plane-wave level calls whose merge and
+    /// shift ran by child since the build (Helmholtz CH6.2i); for the tests.
+    #[doc(hidden)]
+    pub fn plane_wave_by_child(&self) -> usize {
+        self.evaluator
+            .operator()
+            .engine
+            .host()
+            .plane_wave_by_child()
     }
 
     /// With `serial`, runs the next evaluations on the calling thread even if the FMM
