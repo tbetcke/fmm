@@ -2692,7 +2692,7 @@ request, using this template:
     (iprec 2 1.08–4.1× RCR's error at 10⁻⁷, 0.67–6.3× at 10⁻⁸; iprec 3 up to 15× and 53×) and
     hold on the high branch's (0.93–1.00×). Candidate 4, the resolving degree
     p_w = max(p_l, 24) with iprec 2 at 10⁻⁷ and max(p_l, 32) with iprec 3 at 10⁻⁸: 0.10–0.81×
-    and 0.03–0.17×. Candidate 3, `generate_for_degree` at ε/20: 1.000–1.010× at 1.6–2.9×
+    and 0.010–0.17×. Candidate 3, `generate_for_degree` at ε/20: 1.000–1.010× at 1.6–2.9×
     iprec 3's waves, about a minute to generate at p = 24. Candidate 2 erratic.
   - The fit's face centres: without them the chain met ε on the samples but erred 2.68ε and
     7.91ε between them at p = 24 (0.06ε and 0.02ε with them).

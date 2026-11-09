@@ -184,8 +184,8 @@ fn rcr_values(kappa: C, p: usize, samples: &Samples) -> Vec<C> {
 }
 
 /// One point's truncated expansion (the [module documentation](self)): its x, and
-/// (2n + 1) σⁿ e^{Im z} ĵₙ(z) for n ≤ p with σ = ±i, and σ/z; `None` at the centre, where
-/// the expansion is 1.
+/// (2n + 1) (±i)ⁿ e^{Im z} ĵₙ(z) for n ≤ p, the scale s = min(|z|, 1) of ĵₙ, and s/z;
+/// [`Expansion::new`] gives `None` at the centre, where the expansion is 1.
 struct Expansion {
     x: [f64; 3],
     radial: Vec<C>,
@@ -327,9 +327,10 @@ fn error(cols: &[Vec<C>], weight: &[C], values: &[C]) -> f64 {
 /// plane-wave expansions (Gegenbauer's series), against RCR at degree p (this crate's
 /// `helmholtz::{leaf, rcr}`) at sources and targets on their boxes' corners, face centres
 /// and centres and the 98 centre offsets of the region (d_z ∈ {2, 3}, |d_x|, |d_y| ≤ 3),
-/// checked at seeded points. The contour runs from the kernel's Re λ = ln(4/ε) + 4 up to p further
-/// until the full rule meets RCR; every node keeps the orders m ≤ p (Fₖ = p), and Nₖ is the
-/// fewest angles within the share ε/(4s) of the node's resolved trapezoid.
+/// checked at seeded points. The contour runs from Re λ = ln(4/ε) + 4 (the kernel's at ε/4)
+/// up to p further until the full rule meets RCR; every node keeps the orders m ≤ p
+/// (Fₖ = p), and Nₖ is the count, found by bisection, within the share ε/(4s) of the node's
+/// resolved trapezoid (the final check against RCR catches a count the bisection misjudges).
 ///
 /// The chain at degree p is then within ε of RCR at degree p on the samples, absolute in
 /// box widths per unit charge, or [`Quadrature::shortfall`] says how far it is. A function

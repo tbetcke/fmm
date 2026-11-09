@@ -25,7 +25,7 @@ time, for orientation.
   precision has a degree from which its waves of a degree-p multipole resolve the tail: about
   24 for iprec 2 and 32 for iprec 3. Running a level's M2L at p_w = max(p_l, 24) with iprec 2
   at 10⁻⁷, and at p_w = max(p_l, 32) with iprec 3 at 10⁻⁸, keeps the chain at **0.10–0.81×**
-  RCR's error at 10⁻⁷ and **0.03–0.17×** at 10⁻⁸ on the plateau, and 0.93–1.00× above it (§3).
+  RCR's error at 10⁻⁷ and **0.010–0.17×** at 10⁻⁸ on the plateau, and 0.93–1.00× above it (§3).
   This holds with the multipole formed as in the FMM, by M2M from children at p, and the local
   taken back to p by L2L. The cost is the degree, not the waves.
 - **Candidate 3, the degree-matched quadrature, holds without raising the degree, at 1.6–2.9×
@@ -199,7 +199,7 @@ the M6 and 0.03–0.55× on Kathleen (CH6.2h).
 - **The fit.** Samples: sources and targets at their boxes' corners, face centres and centres,
   the 98 centre offsets of the region (d_z ∈ {2, 3}, |d_x|, |d_y| ≤ 3); a check set of four seeded sources
   and targets. The trusted values are nd-fmm-ref's RCR at degree p (P2M, `rcr::m2l`, L2P). The
-  generator's panels on the contour of real t, lengthened from the kernel's Re λ = ln(4/ε) + 4
+  generator's panels on the contour of real t, lengthened from Re λ = ln(4/ε) + 4 (the kernel's contour at ε/4)
   by p/4, p/2, p until the full rule meets RCR to ε/16; then its column-pivoted Gram–Schmidt with
   weights refitted to RCR's values; Fₖ = p; Nₖ the fewest angles whose trapezoid is within
   ε/(4s|wₖ|) of the node's resolved one (the chain is exactly that trapezoid).

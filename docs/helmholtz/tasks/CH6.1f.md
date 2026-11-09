@@ -171,7 +171,7 @@ The study's 260 rows took 34.8 minutes (19.9 before the face centres, below).
   1.08–4.1× (iprec 2) and up to 15× (iprec 3) RCR's error on the pair chain at 10⁻⁷, 0.67–6.3×
   and up to 53× at 10⁻⁸; on the high branch's degrees they hold (0.93–1.00×).
 - Candidate 4, as a resolving degree: p_w = max(p_l, 24) with iprec 2 at 10⁻⁷ (0.10–0.81×) and
-  max(p_l, 32) with iprec 3 at 10⁻⁸ (0.03–0.17×), the tables' waves; the same with the
+  max(p_l, 32) with iprec 3 at 10⁻⁸ (0.010–0.17×), the tables' waves; the same with the
   multipole by M2M from children at p (the FMM's path) as by P2M.
 - Candidate 3, `generate_for_degree` at ε/20: 1.000–1.010× on all 26 points, at 1.6–2.9×
   iprec 3's waves and 1.7–3.3× its modes, a contour to Re λ ≈ 37 at p = 24, 55.4 s to generate

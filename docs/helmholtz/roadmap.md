@@ -114,7 +114,7 @@ M6, two locust rows faster beyond the spread. Next: CH6.1f.
 2026-11-09: CH6.1f split (`/next-task`'s size rule) into the study on the pair chain (CH6.1f)
 and the FMM (CH6.1g); CH6.1f done (`fmm-validate/results/helmholtz-ch6-1f.md`; sign-off
 pending): below 10⁻⁶ the FMM3D tables fail on the plateau's degrees, not the high branch's;
-at a resolving degree (24 for iprec 2, 32 for iprec 3) they hold at 0.03–0.81× RCR's error with
+at a resolving degree (24 for iprec 2, 32 for iprec 3) they hold at 0.010–0.81× RCR's error with
 their own waves, and a quadrature matched to the degree (`generate_for_degree`, new) at
 1.00–1.01× with 1.6–2.9× iprec 3's waves. Next: CH6.1g, after the sign-off.
 
@@ -733,7 +733,7 @@ at any kD.
   tests `fmm-ref/tests/helmholtz/plane_wave.rs`, `fmm-tables/tests/helmholtz/plane_wave_pair.rs`
   (`degree_matched_study`). On the pair chain the failures are the plateau's degrees (p = 20,
   24); FMM3D's tables at a resolving degree p_w = max(p_l, 24) (iprec 2, 10⁻⁷) and
-  max(p_l, 32) (iprec 3, 10⁻⁸) hold at 0.03–0.81× RCR's error with their own waves; the
+  max(p_l, 32) (iprec 3, 10⁻⁸) hold at 0.010–0.81× RCR's error with their own waves; the
   degree-matched quadrature at 1.00–1.01× with 1.6–2.9× iprec 3's waves. Recommendation and
   questions for sign-off in the report's §5 (pending). Plan:
   `docs/helmholtz/tasks/CH6.1f.md`. From CH6.1e (report §3, §7): no precision of FMM3D's
