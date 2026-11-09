@@ -175,9 +175,9 @@
 //!    parent's call for itself alone (every accumulator whose mask holds it, from zero over
 //!    its slots in order; its gather; its conversion), so the same bits; siblings compute
 //!    a shared accumulator again. [`PlaneWaveSplit::Auto`] (the default) takes the split
-//!    by child on a level call whose split by parents makes at most half as many pieces
-//!    holding a computed box as the pool has threads (`driver::parent_pieces`; level 2,
-//!    one piece, at 2 threads and more; level 3 from 16), by parents elsewhere. Without
+//!    by child on a level call whose split by parents makes at most a quarter as many
+//!    pieces holding a computed box as the pool has threads (`driver::parent_pieces`;
+//!    level 2, one piece, from 4 threads; level 3 from 32), by parents elsewhere. Without
 //!    the split by child level 2 ran on one thread at every pool size (Helmholtz CH6.2i,
 //!    `fmm-validate/results/helmholtz-ch6-2i.md`).
 //!
@@ -540,6 +540,13 @@ pub struct LaplaceOperator<T: SimdScalar> {
     by_child: usize,
 }
 
+/// Under [`PlaneWaveSplit::Auto`], Laplace's plane-wave M2L splits merge and shift by child
+/// on a level call whose split by parents makes at most 1 / `PLANE_CHILD_SHARE` as many
+/// pieces holding a computed box as the pool has threads (Helmholtz CH6.2i: on locust at 72
+/// threads by child level 2 took 0.2–0.35× and level 3 0.4–0.8× the split by parents' time,
+/// but level 4 of the Plummer sphere, 32 pieces, 1.02–1.22×).
+const PLANE_CHILD_SHARE: usize = 4;
+
 /// How the plane-wave M2L's level call splits merge and shift over the pool: Laplace's
 /// ([`LaplaceOperator::with_plane_wave_split`]; Helmholtz CH6.2i) and Helmholtz's
 /// exponential M2L ([`HelmholtzOperator::with_plane_wave_split`](crate::helmholtz::HelmholtzOperator::with_plane_wave_split);
@@ -549,10 +556,13 @@ pub struct LaplaceOperator<T: SimdScalar> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PlaneWaveSplit {
     /// By child on a level call (Helmholtz: a chunk) where the split by parents, which
-    /// never cuts a piece below `PARENT_GRAIN` (64) boxes, makes at most half as many
-    /// pieces holding a computed box as the pool has threads (the split by child repeats
-    /// shared accumulators, measured 1.2–3× the parents' thread time on Helmholtz CH6.2f's
-    /// cases); by parents elsewhere and without a pool.
+    /// never cuts a piece below `PARENT_GRAIN` (64) boxes, leaves most of the pool idle, by
+    /// parents elsewhere and without a pool: the split by child repeats shared accumulators
+    /// (1.2–3× the parents' thread time on Helmholtz CH6.2f's cases, 1.6–2.2× on Laplace's
+    /// fine levels in CH6.2i). Helmholtz's exponential M2L takes it where the split by
+    /// parents makes at most half as many pieces holding a computed box as the pool has
+    /// threads, Laplace's plane-wave M2L at most a quarter (level 2 from 4 threads, level 3
+    /// from 32).
     #[default]
     Auto,
     /// By parents: the pool halves the boxes at parent boundaries down to pieces of 64
@@ -1656,7 +1666,8 @@ impl<T: SimdScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
                         != morton::parent(index.key(level, t - 1))
             };
             // The split of merge and shift, once per level call (Helmholtz CH6.2i): by
-            // child where the split by parents leaves at least half the pool idle.
+            // child where the split by parents leaves at least three quarters of the pool
+            // idle.
             let threads = match (&self.execution.pool, self.execution.serial) {
                 (Some(_), false) => self.execution.scratch.len(),
                 _ => 1,
@@ -1667,7 +1678,8 @@ impl<T: SimdScalar + Equivalence + Default> FmmOperator for LaplaceOperator<T> {
                 PlaneWaveSplit::Auto => {
                     let computed = |t: usize| !pairs.row(t).0.is_empty();
                     threads > 1
-                        && 2 * driver::parent_pieces(0..locals.len() / size, &starts, &computed)
+                        && PLANE_CHILD_SHARE
+                            * driver::parent_pieces(0..locals.len() / size, &starts, &computed)
                             <= threads
                 }
             };

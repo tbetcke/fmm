@@ -95,8 +95,9 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   parents as before, or by child on `Execution::chunks` (`Kernels::plane_child`: the
   parent's call restricted to the child, `plane_parent`'s `serve` mask, so the same bits),
   `Auto` by child where `driver::parent_pieces` (moved from Helmholtz's `pieces`; the one
-  addition to `driver.rs`) gives at most half as many pieces with work as the pool has
-  threads, once per level call; the doc-hidden `plane_wave_by_child` counts the passes.
+  addition to `driver.rs`) gives at most a quarter as many pieces with work as the pool
+  has threads (`PLANE_CHILD_SHARE`; Helmholtz's rule takes half: Laplace's level 4 of 32
+  pieces lost by child at 72 threads), once per level call; the doc-hidden `plane_wave_by_child` counts the passes.
 - Several charge vectors (Phase 6 T5, C6.3; the `operator` and `fmm` module docs,
   "Several charge vectors"; CONVENTIONS §3.13, "Several charge vectors"):
   `LaplaceOperator::with_vectors(m)` sizes every store for m vectors (m (p + 1)² values per
@@ -534,8 +535,8 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
     one-rank debug run (about 180 → 195 s on the M3 Max).
     Since Helmholtz CH6.2i `check_plane_wave_split` (in `check_plane_wave`) checks
     `Children` and `Parents` named at one thread and at the most threads overlapped, the
-    default at two threads, each bit for bit the default's output, `Auto` never by child
-    at one thread and by child at two on some rank, and on several ranks `Children` at two
+    default at four threads, each bit for bit the default's output, `Auto` never by child
+    at one thread and by child at four on some rank, and on several ranks `Children` at two
     threads against the one-rank `Fmm`.
     `tests/invariance.rs` runs every workload under `PlaneWave` (f64 p = 8, the graded
     tree also f32 p = 6); `tests/multi_rank.rs` the variant `planewave` with C6.5's check;

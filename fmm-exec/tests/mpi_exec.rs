@@ -1844,10 +1844,10 @@ const PLANE_ERROR_BOUND: f64 = 1.1;
 /// one-rank `Fmm` of `PlaneWave` over the union bit for bit (`check_one_rank`).
 /// The split of the plane-wave M2L's merge and shift (Helmholtz CH6.2i): `Children` and
 /// `Parents` named, at one thread (`fmm`), at the most threads overlapped (`threaded`) and at
-/// two threads, each bit for bit the default's output `bits`; the default (`Auto`) never by
-/// child at one thread and by child at two on some rank with V pairs (the level of 64 boxes
-/// is one piece of the split by parents); on several ranks `Children` at two threads against
-/// the one-rank `Fmm`.
+/// four threads, each bit for bit the default's output `bits`; the default (`Auto`) never by
+/// child at one thread and by child at four on some rank with V pairs (the level of 64 boxes
+/// is one piece of the split by parents, at most a quarter of the threads); on several ranks
+/// `Children` at two threads against the one-rank `Fmm`.
 fn check_plane_wave_split<'a, T: Stored + SimdScalar + Equivalence + Default>(
     (plane, fmm, threaded): (&FmmBuilder<T>, &mut Fmm<'a, T>, &mut Fmm<'a, T>),
     (sources, targets): (&[[f64; 3]], &[[f64; 3]]),
@@ -1885,22 +1885,24 @@ fn check_plane_wave_split<'a, T: Stored + SimdScalar + Equivalence + Default>(
             fmm.set_plane_wave_split(PlaneWaveSplit::Auto);
         }
     }
-    let mut two = built(plane.clone().threads(2).build(sources, targets, comm), comm)
+    let mut four = built(plane.clone().threads(4).build(sources, targets, comm), comm)
         .expect("the plane-wave FMM builds");
-    let output = two.evaluate(charges).expect("the plane-wave FMM evaluates");
+    let output = four
+        .evaluate(charges)
+        .expect("the plane-wave FMM evaluates");
     assert!(
         output_bits(&output) == bits,
-        "rank {rank}: {scenario}: PlaneWave at two threads"
+        "rank {rank}: {scenario}: PlaneWave at four threads"
     );
-    let v_pairs: usize = (0..two.plan().nlevels())
-        .map(|l| two.plan().level(l).v().len())
+    let v_pairs: usize = (0..four.plan().nlevels())
+        .map(|l| four.plan().level(l).v().len())
         .sum();
-    let local = [usize::from(two.plane_wave_by_child() > 0), v_pairs];
+    let local = [usize::from(four.plane_wave_by_child() > 0), v_pairs];
     let mut global = [0usize; 2];
     comm.all_reduce_into(&local[..], &mut global[..], SystemOperation::sum());
     assert!(
         global[1] == 0 || global[0] > 0,
-        "rank {rank}: {scenario}: Auto at two threads split no level call by child \
+        "rank {rank}: {scenario}: Auto at four threads split no level call by child \
          ({} V pairs over the ranks)",
         global[1]
     );

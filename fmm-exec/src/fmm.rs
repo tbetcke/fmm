@@ -1483,8 +1483,8 @@ impl<T> FmmBuilder<T> {
     /// Sets how the plane-wave M2L ([`M2lStrategy::PlaneWave`] on the host) splits merge
     /// and shift over the pool (Helmholtz CH6.2i; [`LaplaceOperator::with_plane_wave_split`]):
     /// [`PlaneWaveSplit::Auto`] (the default) by child on a level whose split by parents,
-    /// which never cuts below 64 boxes, leaves at least half the pool idle (level 2, and
-    /// level 3 from 16 threads), by parents elsewhere. Every setting gives the same output
+    /// which never cuts below 64 boxes, leaves at least three quarters of the pool idle
+    /// (level 2 from 4 threads, level 3 from 32), by parents elsewhere. Every setting gives the same output
     /// bit for bit; every other strategy, and the device, ignores it.
     pub fn plane_wave_split(mut self, split: PlaneWaveSplit) -> Self {
         self.plane_wave_split = split;
