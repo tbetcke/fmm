@@ -2677,3 +2677,38 @@ request, using this template:
   D9 as above.
 - Follow-ups: none.
 
+
+## 2026-11-09: CH6.1f The quadratures below 10⁻⁶ on the pair chain
+- Done:
+  - Split (`/next-task`'s size rule): CH6.1f the study on the pair chain, CH6.1g the FMM after
+    the sign-off.
+  - `nd_fmm_ref::helmholtz::plane_wave::generate_for_degree` (`plane_wave/degree.rs`): the λ
+    rule fitted to the exponential M2L's chain at degree p (Gegenbauer's truncated expansions)
+    against nd-fmm-ref's RCR at degree p, on the boxes' corners, face centres and centres and
+    the region's 98 offsets; `Quadrature::degree`; `rule::panel_rule_to` (`panel_rule` the
+    same arithmetic, so `generate`'s bits are unchanged).
+  - The study (`degree_matched_study`, 260 rows, 13 levels at 10⁻⁷ and 10⁻⁸, the multipole by
+    M2M from children at p as in the FMM): FMM3D's tables fail on the plateau's degrees
+    (iprec 2 1.08–4.1× RCR's error at 10⁻⁷, 0.67–6.3× at 10⁻⁸; iprec 3 up to 15× and 53×) and
+    hold on the high branch's (0.93–1.00×). Candidate 4, the resolving degree
+    p_w = max(p_l, 24) with iprec 2 at 10⁻⁷ and max(p_l, 32) with iprec 3 at 10⁻⁸: 0.10–0.81×
+    and 0.010–0.17×. Candidate 3, `generate_for_degree` at ε/20: 1.000–1.010× at 1.6–2.9×
+    iprec 3's waves, about a minute to generate at p = 24. Candidate 2 erratic.
+  - The fit's face centres: without them the chain met ε on the samples but erred 2.68ε and
+    7.91ε between them at p = 24 (0.06ε and 0.02ε with them).
+  - The report `fmm-validate/results/helmholtz-ch6-1f.md` (the M6, release, 34.8 minutes).
+- Tests: nd-fmm-ref `degree.rs`'s unit tests (the expansions, RCR's normalisation) and
+  `tests/helmholtz/plane_wave.rs` (against RCR off the samples within 2ε; ignored at the FMM's
+  degrees, 0.00–0.06ε; determinism, `degree()`, κ = 0); nd-fmm-tables
+  `tests/helmholtz/plane_wave_pair.rs` (through `PlaneWaveLevel` within 3ε, 0.01ε; ignored at
+  the FMM's degrees, 0.01–0.16ε; the study).
+- Checks: ran on the M6: format, Clippy (default, examples, workspace all-targets),
+  `cargo doc`, `cargo test` (1233 passed), `cargo test --workspace` (1347 passed), the three
+  ignored release tests above. Debug runs: nd-fmm-ref's Helmholtz tests 46 s (22 s before),
+  nd-fmm-tables' 35 s. MPI list not run (no MPI crate changed). Pending: none.
+- Decisions: report §5 signed off 2026-11-09 (the user: "1–3 as recommended"): (1) candidate 4
+  for CH6.1g, the resolving degree; (2) the degree raised on the level first; (3)
+  `generate_for_degree` kept as a trusted path only.
+- Laplace: not touched (nd-fmm-ref's Helmholtz quadrature builder and tests only; no table,
+  driver or kernel changed).
+- Follow-ups: CH6.1g (roadmap), the FMM below 10⁻⁶ by the signed-off rule.
