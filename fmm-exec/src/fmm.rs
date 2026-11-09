@@ -1237,7 +1237,7 @@ pub enum FmmError {
 /// | [`threads`](Self::threads) | 1: no pool, the calling thread |
 /// | [`p2p_kernel`](Self::p2p_kernel) | [`P2pChoice::Auto`]: the kernel of `nd-fmm-simd` on the default ISA of this machine (`Isa::detect`) |
 /// | [`m2l_mul_add`](Self::m2l_mul_add) | [`default_m2l_mul_add`]: [`MulAdd::Fused`] from p = 6, [`MulAdd::Separate`] (`Batched` bit for bit `Dense`) below |
-/// | [`plane_wave_split`](Self::plane_wave_split) | [`PlaneWaveSplit::Auto`]: `PlaneWave`'s merge and shift by child where the split by parents leaves half the pool idle |
+/// | [`plane_wave_split`](Self::plane_wave_split) | [`PlaneWaveSplit::Auto`]: `PlaneWave`'s merge and shift by child where the split by parents leaves three quarters of the pool idle |
 /// | [`backend`](Self::backend) | [`Backend::Host`]: the host path |
 /// | [`host_fallback`](Self::host_fallback) | none |
 /// | [`synchronous_stages`](Self::synchronous_stages) | off |
@@ -1484,8 +1484,8 @@ impl<T> FmmBuilder<T> {
     /// and shift over the pool (Helmholtz CH6.2i; [`LaplaceOperator::with_plane_wave_split`]):
     /// [`PlaneWaveSplit::Auto`] (the default) by child on a level whose split by parents,
     /// which never cuts below 64 boxes, leaves at least three quarters of the pool idle
-    /// (level 2 from 4 threads, level 3 from 32), by parents elsewhere. Every setting gives the same output
-    /// bit for bit; every other strategy, and the device, ignores it.
+    /// (level 2 from 4 threads, level 3 from 32), by parents elsewhere. Every setting gives
+    /// the same output bit for bit; every other strategy, and the device, ignores it.
     pub fn plane_wave_split(mut self, split: PlaneWaveSplit) -> Self {
         self.plane_wave_split = split;
         self

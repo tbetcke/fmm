@@ -184,8 +184,9 @@
 //! **Order and bits.** Every local receives frame 0, then 1, then 2, each a fixed chain
 //! of its parent's accumulators, which depend on the geometry of the slots alone: the
 //! output is the same at every thread count, overlap setting and split (each parent, or
-//! each child under the split by child, runs whole on one thread), from evaluation to evaluation, and on every ISA (the kernels' chains
-//! are the same on all; `nd_fmm_simd::WaveKernel`). On P ranks a rank computes the
+//! each child under the split by child, runs whole on one thread), from evaluation to
+//! evaluation, and on every ISA (the kernels' chains are the same on all;
+//! `nd_fmm_simd::WaveKernel`). On P ranks a rank computes the
 //! accumulators of its computed children only; each holds the same sources, summed in the
 //! same order, as on one rank (a source of an accumulator lies in the V row of every child
 //! of its mask, so the rank holds its multipole), so the output is the one-rank `Fmm`'s
@@ -558,8 +559,8 @@ pub enum PlaneWaveSplit {
     /// By child on a level call (Helmholtz: a chunk) where the split by parents, which
     /// never cuts a piece below `PARENT_GRAIN` (64) boxes, leaves most of the pool idle, by
     /// parents elsewhere and without a pool: the split by child repeats shared accumulators
-    /// (1.2–3× the parents' thread time on Helmholtz CH6.2f's cases, 1.6–2.2× on Laplace's
-    /// fine levels in CH6.2i). Helmholtz's exponential M2L takes it where the split by
+    /// (1.2–3× the parents' thread time on Helmholtz CH6.2f's cases; Laplace's M2L 1.4–2.3×
+    /// by child on every level in CH6.2i). Helmholtz's exponential M2L takes it where the split by
     /// parents makes at most half as many pieces holding a computed box as the pool has
     /// threads, Laplace's plane-wave M2L at most a quarter (level 2 from 4 threads, level 3
     /// from 32).

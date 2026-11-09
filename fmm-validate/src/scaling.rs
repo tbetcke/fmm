@@ -679,7 +679,7 @@ impl M2lLevel {
 /// level whose keys are `keys`: halved at the first parent boundary from the middle while a
 /// piece holds more than [`PARENT_GRAIN`] boxes, counting the pieces in which
 /// `computed(t)` holds for some box t (the driver's rule restated, as
-/// `helmholtz::operator_plane_wave`'s `pieces`).
+/// `nd-fmm-exec`'s crate-private `driver::parent_pieces`; keep the two alike).
 pub fn parent_pieces(keys: &[MortonKey], computed: &impl Fn(usize) -> bool) -> usize {
     fn pieces(
         keys: &[MortonKey],

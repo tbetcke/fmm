@@ -129,7 +129,28 @@ budget.
 
 ## Pending runs
 
-(filled in step 6)
+- Kathleen job 630796 (`run.sbatch` with the D9 script: `main` b73c362 against bf7c262, five
+  runs per side): decides Kathleen's D9 rows (report §5).
+
+Ran: locust 2026-11-09 (the sweep at every split; D9), Kathleen job 630794 (the sweep at every
+split, node-c11b-017), the M6 (the sweep and D9, with the user's go-ahead).
+
+## Results
+
+[fmm-validate/results/helmholtz-ch6-2i.md](../../../fmm-validate/results/helmholtz-ch6-2i.md):
+by parents level 2 ran on one thread and level 3 on eight (levels 2–3 1.9–4.1 % of the
+evaluation at N = 10⁶ on locust); `Auto` takes them by child, 0.27–0.54× their time; D9 no row
+slower, two locust rows faster beyond the spread.
+
+Departures from the plan, each from a measurement:
+- **`Auto` at a quarter of the threads**, not Helmholtz's half: at 72 threads on locust the
+  half rule took the Plummer sphere's level 4 (32 pieces) by child, 1.02–1.22× slower
+  (`PLANE_CHILD_SHARE` = 4; report §4). Helmholtz keeps its rule.
+- **The tests**: `Auto` by child is asserted at four threads (the quarter rule keeps two
+  threads by parents); `Children` runs at two threads on every rank count (bit for bit the
+  default; on P ranks also the one-rank `Fmm`), `Children` and `Parents` at one thread and at
+  the most threads overlapped.
+- Stage A and B ran together on Kathleen (`--split parents` is the code before the split).
 
 ## Open questions
 

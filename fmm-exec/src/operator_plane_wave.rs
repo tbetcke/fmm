@@ -179,10 +179,11 @@ impl<T: SimdScalar> Kernels<T> {
     }
 
     /// Merge and shift of `frame` for vector `v` into box `t` alone of a level call of
-    /// `boxes` boxes, whose local is `local` (the split by child, [`PlaneWaveSplit::Children`](super::PlaneWaveSplit); Helmholtz
-    /// CH6.2i): its parent's run of boxes and their sources by slot, as the parent's call
-    /// has them, then the call for this child alone, so the child's local gets the
-    /// arithmetic of its parent's call in its order.
+    /// `boxes` boxes, whose local is `local` (the split by child,
+    /// [`PlaneWaveSplit::Children`](super::PlaneWaveSplit::Children); Helmholtz CH6.2i): its
+    /// parent's run of boxes and their sources by slot, as the parent's call has them, then
+    /// the call for this child alone, so the child's local gets the arithmetic of its
+    /// parent's call in its order.
     pub(crate) fn plane_child(
         &self,
         call: &BoxCall<'_, VList, LevelSlice<'_, T>>,
