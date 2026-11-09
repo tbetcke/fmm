@@ -23,7 +23,7 @@ default split of the merge and shift (CH6.2f's `Auto`). Commands: §11.
 
 ## Summary
 
-- **The rule** (§1), behind `auto_plane_wave(true)` until D8's sign-off: on each level l ≥ 2,
+- **The rule** (§1), `Auto`'s default since D8's sign-off (2026-11-08): on each level l ≥ 2,
   PW where p_l ≥ d_pw, CH6.1e's precision rule gives a quadrature (ε ≥ 10⁻⁶) and
   Im κ_l < 5π (f64 only); Batched where p_l ≤ d_b within the dense budget; Rotation
   otherwise. d_pw is d_b + 1 (PW above Batched's crossover), except AVX-512 with two planes,
@@ -62,12 +62,13 @@ default split of the merge and shift (CH6.2f's `Auto`). Commands: §11.
 - **Accuracy** (§7): the rule's errors are 0.916–1.063× Rotation's (φ and ∇φ) on every case
   and machine, within CH6.1e's 1.1× bound. At 10⁻⁶ its checksum equals PlaneWave's on every
   case: each level that has waves runs the same call.
-- **D8 proposed** (§8): `Auto` takes this rule by default, the builder's `auto_plane_wave` on.
+- **D8 signed off** (§8; 2026-11-08, the user: "1–5 as recommended"): `Auto` takes this rule
+  by default, the builder's `auto_plane_wave` on.
 
 ## 1. The rule
 
 `HelmholtzOperator::with_auto_plane_wave(bool)` and `HelmholtzFmmBuilder::auto_plane_wave(bool)`
-(off by default until D8's sign-off) set the rule under `HelmholtzM2l::Auto`. The rule only
+(on by default since D8's sign-off; off gives CH3.2d's rule) set the rule under `HelmholtzM2l::Auto`. The rule only
 chooses which level call each level runs; the calls themselves are unchanged. For each level
 l ≥ 2, with degree p_l and κ_l = k w_l (the level's width in wavelengths):
 
@@ -234,7 +235,7 @@ the M6 and Kathleen (appendix, last tables):
   - on Kathleen it equals auto-pw:16's where the two choose the same methods;
   - at 4 × 10 it equals 1 × 40's.
 
-## 8. D8 proposed
+## 8. D8 (signed off 2026-11-08)
 
 > **D8.** `HelmholtzM2l::Auto` (the default) takes the exponential M2L on a level l ≥ 2 where:
 > - p_l ≥ d_pw: Batched's crossover + 1, 12 on AVX-512 with two planes;
@@ -252,9 +253,10 @@ the M6 and Kathleen (appendix, last tables):
 > Batched's few-box levels go to a follow-up of Batched's rule. The builder's
 > `auto_plane_wave` becomes `true`.
 
-On sign-off, on this branch:
-- the builder's and the operator's defaults turn on;
-- the tests that pin today's `Auto` name the setting off;
+Signed off 2026-11-08 (the user: "1–5 as recommended": the default, d_pw = 12 on AVX-512,
+the Im κ bound, no boxes term, the proposal amended). On this branch:
+- the builder's, the operator's and the harness's `Case::new` defaults are on;
+- the tests that pin CH3.2d's rule name the setting off;
 - the docs (module "M2L", `HelmholtzM2l::Auto`, the crate `CLAUDE.md`s) are restated;
 - proposal §5.3 and §6.4 ("opt-in until CH6.2") are amended.
 
@@ -300,9 +302,9 @@ On sign-off, on this branch:
 | `cargo fmt --all -- --check` | passed |
 | `cargo clippy -- -D warnings`, `--examples`, `--workspace --all-targets` | passed |
 | `cargo doc --no-deps` | passed |
-| `RUST_MIN_STACK=8388608 cargo test --workspace` | 1339 passed (16.6 min) |
+| `RUST_MIN_STACK=8388608 cargo test --workspace` | 1339 passed (16.6 min); again with D8's default on, 1339 passed |
 | `RUST_MIN_STACK=8388608 cargo test` (default members) | not run separately; its tests are a subset of the workspace run |
-| `.github/scripts/run-mpi-tests.sh` at 2 and 4 ranks | all 12 executables passed; `helmholtz_fmm` again after the self-review's added check (244 s and 227 s) |
+| `.github/scripts/run-mpi-tests.sh` at 2 and 4 ranks | all 12 executables passed; again with D8's default on, all 12 passed (`helmholtz_fmm` 257 s and 232 s) |
 | `cargo test -p nd-fmm-validate --test helmholtz_accuracy` | passed (43.6 s) |
 | `tests/helmholtz_fmm.rs` one-rank debug run | 255 s with the self-review's added check (216 s at CH6.2f), above nd-fmm-exec's one-minute budget as before |
 

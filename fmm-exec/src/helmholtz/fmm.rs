@@ -208,7 +208,7 @@ impl HelmholtzFmmBuilder {
             dense_budget: DEFAULT_DENSE_BUDGET,
             m2l_mul_add: None,
             m2l_max_degree: None,
-            auto_plane_wave: false,
+            auto_plane_wave: true,
             m2l_plane_wave_min_degree: None,
             plane_wave_precision: PlaneWavePrecision::Rule,
             plane_wave_reach: RHO_MAX,
@@ -279,7 +279,8 @@ impl HelmholtzFmmBuilder {
     /// off on 2026-11-02; the operator module documentation, "M2L"). Under
     /// [`HelmholtzM2l::Dense`], [`HelmholtzM2l::Classes`], [`HelmholtzM2l::Batched`] and
     /// [`HelmholtzM2l::Auto`] the output agrees with Rotation's to rounding, not bit for bit
-    /// (Auto's is Rotation's bit for bit on the levels it leaves to Rotation); Batched's is
+    /// (Auto's is Rotation's bit for bit on the levels it leaves to Rotation, and its levels
+    /// with waves, by default, approximate M2L as PlaneWave's do); Batched's is
     /// Dense's bit for bit with real multipoles (real k, real charges). Under
     /// [`HelmholtzM2l::PlaneWave`] (opt-in) the levels with waves approximate M2L within their
     /// quadrature's error ([`plane_wave_precision`](Self::plane_wave_precision)); f64 only
@@ -320,7 +321,8 @@ impl HelmholtzFmmBuilder {
     }
 
     /// Lets [`HelmholtzM2l::Auto`] take the exponential M2L (Helmholtz CH6.2h, decision D8;
-    /// default off): on the levels of degree at least
+    /// default on since its sign-off, 2026-11-08; `false` gives CH3.2d's rule): on the levels
+    /// of degree at least
     /// [`m2l_plane_wave_min_degree`](Self::m2l_plane_wave_min_degree) to which the precision
     /// rule gives a quadrature (iprec 2 at ε ≥ 10⁻⁶ from the tolerance of
     /// [`Degrees::Tolerance`]), with Im κ_l below

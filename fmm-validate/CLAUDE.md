@@ -436,8 +436,9 @@ column "M2L" ending `/parents` or `/children` where named) and five columns of `
 `results/helmholtz-ch6-2f.md`.
 
 Helmholtz CH6.2h (D8, the exponential M2L under Auto; docs/helmholtz/tasks/CH6.2h.md) added
-`helmholtz_accuracy::Case::{auto_plane_wave, m2l_plane_wave_min_degree}` (named always, so
-that `auto` runs repeat whatever the library's default) and `Row::m2l_plane_wave_min_degree`,
+`helmholtz_accuracy::Case::{auto_plane_wave, m2l_plane_wave_min_degree}` (`true` in
+`Case::new`, the library's default since D8; named always, so that the example's `auto` runs
+CH3.2d's rule whatever the default) and `Row::m2l_plane_wave_min_degree`,
 and to the example's `--m2l` the entries `auto-pw` (Auto with the exponential M2L from the
 rule's smallest degree) and `auto-pw:<e>` (from degree e), the column "M2L" `auto ≤ d, pw ≥ e:
 …`. `tests/helmholtz_accuracy.rs` checks Auto with waves from degree 0 and no Batched level

@@ -2600,7 +2600,7 @@ request, using this template:
 ## 2026-11-08: CH6.2h D8: the exponential M2L's level rule
 - Done:
   - The rule under `HelmholtzM2l::Auto`, behind `with_auto_plane_wave` and the builder's
-    `auto_plane_wave` (off until D8's sign-off): the exponential M2L on a level where
+    `auto_plane_wave` (on by default since D8's sign-off): the exponential M2L on a level where
     p_l ≥ d_pw (`auto_plane_wave_min_degree`: Batched's crossover + 1, 12 on AVX-512 with two
     planes; agreed over the ranks and reported, named for runs by
     `m2l_plane_wave_min_degree`), CH6.1e's rule gives a quadrature and Im κ_l < 5π
@@ -2622,15 +2622,17 @@ request, using this template:
   (`tests/helmholtz/plane_wave.rs`); `check_auto_plane_wave` in `tests/helmholtz_fmm.rs` (bit
   for bit PlaneWave at d_b = d_pw = 0, the split within 1.1× Rotation's errors, 2 threads,
   P ranks against one, the agreed d_pw); nd-fmm-validate's `check_auto` extended.
-- Checks: ran on the M6: format, Clippy (default, examples, workspace all-targets),
-  `cargo doc`, `cargo test --workspace` (1339 passed), the MPI list at 2 and 4 ranks (all 12
-  passed), `cargo test -p nd-fmm-validate --test helmholtz_accuracy`; `cargo test` on the
+- Checks: ran on the M6, again after the defaults turned on: format, Clippy (default,
+  examples, workspace all-targets), `cargo doc`, `cargo test --workspace` (1339 passed), the
+  MPI list at 2 and 4 ranks (all 12 passed), `cargo test -p nd-fmm-validate --test helmholtz_accuracy`; `cargo test` on the
   default members not run apart from the workspace run. `tests/helmholtz_fmm.rs`' one-rank
   debug run 255 s (216 s before). Pending: locust's clean pass (1 × 72, the plan's "Pending
   runs").
-- Decisions: D8 proposed, for sign-off with d_pw on AVX-512, the Im κ bound, no boxes term,
-  and the proposal's §5.3 and §6.4 amended (the plan's "Open questions").
+- Decisions: D8 signed off 2026-11-08 (the user: "1–5 as recommended"): (1) the rule is
+  `Auto`'s default (builder, operator and `Case::new`; the tests that pin CH3.2d's rule name
+  it off); (2) d_pw = 12 on AVX-512 with two planes, d_b + 1 elsewhere; (3) Im κ_l < 5π;
+  (4) no boxes term, Batched's few-box levels to CH4.0; (5) proposal §5.3 and §6.4 amended.
 - Laplace: not touched (the Helmholtz operator and builder, the harness and tools);
   `mpi_exec`, `mpi_threading` and `invariance` passed at 2 and 4 ranks.
-- Follow-ups: Batched's few-box levels, a sentence added to CH4.0; on D8's sign-off the
-  default turned on in this PR; CH6.2i next.
+- Follow-ups: Batched's few-box levels, a sentence added to CH4.0; locust's 1 × 72 run on a
+  later pass (the plan's "Pending runs"); CH6.2i next.

@@ -379,8 +379,8 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   runs `Children`; `check_plane_wave_times` the parts within `busy`.
   Since Helmholtz CH6.2h (D8; docs/helmholtz/tasks/CH6.2h.md;
   fmm-validate/results/helmholtz-ch6-2h.md) `HelmholtzM2l::Auto` may take the exponential
-  M2L: `with_auto_plane_wave` and `HelmholtzFmmBuilder::auto_plane_wave` (off until D8's
-  sign-off), on each level of degree at least `auto_plane_wave_min_degree(isa, planes)` (one
+  M2L: `with_auto_plane_wave` and `HelmholtzFmmBuilder::auto_plane_wave` (on by default
+  since D8's sign-off, 2026-11-08; `false` gives CH3.2d's rule), on each level of degree at least `auto_plane_wave_min_degree(isa, planes)` (one
   above Batched's crossover, 12 on AVX-512 with two planes; named by
   `with_m2l_plane_wave_min_degree` and the builder's `m2l_plane_wave_min_degree`, agreed
   over the ranks by an all-reduce min, reported by `plane_wave_min_degree` and

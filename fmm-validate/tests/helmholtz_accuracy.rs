@@ -246,6 +246,9 @@ fn check_auto(world: &SimpleCommunicator) {
         .copied()
         .expect("levels with M2L");
     case.m2l = HelmholtzM2l::Auto;
+    // CH3.2d's rule: the exponential M2L, the default since D8, named off (with it below).
+    assert!(case.auto_plane_wave);
+    case.auto_plane_wave = false;
     case.m2l_max_degree = Some(smallest - 1);
     let below = run(&case, &problem, &oracle, 1, world).expect("the FMM runs");
     assert_eq!(below.m2l, HelmholtzM2l::Auto);

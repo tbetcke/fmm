@@ -145,7 +145,7 @@ over today's `Auto`, for D8.
 
 ## Open questions
 
-For sign-off (the report §8):
+Signed off 2026-11-08 (the user: "1–5 as recommended"), the defaults turned on on this branch:
 1. D8: `Auto` takes the rule by default (the builder's `auto_plane_wave` on), the defaults,
    tests and docs restated on this branch after the sign-off.
 2. d_pw on AVX-512 with two planes: 12 (measured; d_b + 1 = 16 is 1.6–35× slower at 10⁻⁶).

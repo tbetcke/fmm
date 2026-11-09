@@ -101,7 +101,8 @@ the sign-off. Against today's `Auto` the M2L takes 0.14–0.70× on the M6 and 0
 Kathleen at 10⁻⁶, 0.26–1.19× at 10⁻³ (above 1 within the ABBA spread); within 1.10× of the
 per-level best except ms-scale cases at 10⁻³, where Batched at p = 7 on level 2 loses to
 Rotation (today's `Auto` too; CH4.0's sentence). No boxes term. locust's clean pass pending.
-Next: D8's sign-off, then CH6.2i.
+D8 signed off the same day (the user: "1–5 as recommended"): the rule is `Auto`'s default.
+Next: CH6.2i.
 
 ## How `/next-task` reads this file
 
@@ -172,7 +173,7 @@ The proposal's Section 12, plus D0. A decision is recorded here when the user ta
 | D5 | Source types of the first release | real and complex charges, potentials and gradients; dipoles once C6.4 exists for Laplace (note: Laplace dipoles were merged in Phase 6 T8 and T8d, so the condition is met) | – | CH1.1 | signed off 2026-10-29: charges now, dipoles later; §3.15 fixes real and complex charges with potentials and gradients, and dipoles get a later, separate task |
 | D6 | Order of H4 and H6 | H6 first | H3.G | CH6.1, CH4.1 | signed off 2026-11-02 (H3 gate, question 2): "i agree with the recommendations", H6 first, as recommended; on the gate report's reason (§3.3): the calibrated degrees cut the low-frequency share of the far field at kD = 500 to about half (an estimate), and the FMM is slowest against FMM3D on low-frequency trees at tight ε, which H6 targets |
 | D7 | Host back ends of the φ step | the product as default and reference; FFTW behind the optional `fftw` feature; rustfft if S9 finds it deterministic per box and faster, decided per machine | CH0.9 | CHR.3, CH4.6 | open |
-| D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2h | CH7.5d | open |
+| D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2h | CH7.5d | signed off 2026-11-08 (CH6.2h, questions 1–5; the user: "1–5 as recommended"): `Auto` takes the exponential M2L by default where p_l ≥ d_pw (Batched's crossover + 1; 12 on AVX-512 with two planes), CH6.1e's rule gives a quadrature (ε ≥ 10⁻⁶) and Im κ_l < 5π, f64 only; no boxes term (Batched's few-box levels to CH4.0); proposal §5.3 and §6.4 amended |
 | D9 | What "within noise" means for Laplace's benchmarks (constraint 1) | the run-to-run spread of the Laplace baseline, repeated on each machine before the change, per benchmark; plus the C3S.4 throughput gate | – | CHR.2, CH2.0 | signed off 2026-10-26: as recommended, the measured spread of the baseline per benchmark and machine, plus the C3S.4 gate. Clarified 2026-10-26 (CHR.2): one-sided, slower than `main` by more than the spread fails, faster passes when the outputs are bit for bit identical; from CH2.0 on five runs per side in the order A B B A A B B A A B, the spread max − min of `main`'s five run medians, never pooled with the branch's. Amended 2026-10-31 (CH2.0, the user: "as recommended"): a failing row may be repeated once and the repeat counts, with both results reported. Amended 2026-10-31 (the machine move, the user: "Amend: M6 replaces M3 Max"): the M6 (`tools/m6/machine.md`) replaces the M3 Max as a machine of record, its C3S.4 reference `spikes/p2p-simd/results-m6.md` |
 | D10 | cubek-fft on the device | after S5: adopt, contribute upstream first, or keep the transform as a GEMM | CH0.5 | CH7.4 | open |
 | D11 | Maximum leaf width c_leaf | from S8: the largest c_leaf with P2P and leaf costs within 10 % of their best on W1 and W3 (expected 0.5 to 1) | CH0.8a | CH3.0 | signed off 2026-10-28: as recommended (CH0.8a report §9, question 1), c_leaf = 1 by the revised rule, the largest c_leaf with no high-frequency leaf on any workload at 10⁻⁶ and 10⁻⁸, replacing the rule of this row, which is degenerate; a first-pass value that CH0.8b may revise with S6's constants and S7's p |
@@ -886,7 +887,8 @@ at any kD.
   the 4 × 10 anomaly of CH6.2c checked against it. *Needs:* CH6.2d. *Machines:* locust,
   Kathleen.
 - [x] **CH6.2h D8: the exponential M2L's level rule.** Report:
-  `fmm-validate/results/helmholtz-ch6-2h.md`; D8 proposed (§8 there; sign-off pending),
+  `fmm-validate/results/helmholtz-ch6-2h.md`; D8 signed off 2026-11-08 (the user: "1–5 as
+  recommended"), the rule `Auto`'s default,
   `auto_plane_wave` and `m2l_plane_wave_min_degree` on the operator and builder,
   `auto_plane_wave_min_degree`, `AUTO_PLANE_WAVE_MAX_IM_KAPPA`. Split on 2026-11-06 from the former
   CH6.2c (CH6.2e until the split of CH6.2d; CH6.2f until 2026-11-08, when the coarse levels'

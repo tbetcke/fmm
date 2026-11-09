@@ -855,8 +855,10 @@ fn check_auto(scenario: &Scenario, comm: &SimpleCommunicator) {
         ..scenario.clone()
     };
     let (_, rotation) = run(&builder(&split), &inputs, kind, comm);
+    // CH3.2d's rule: the exponential M2L (D8's default) off; with it in check_auto_plane_wave.
     let auto = builder(&split)
         .m2l(HelmholtzM2l::Auto)
+        .auto_plane_wave(false)
         .m2l_max_degree(crossover);
     let (fmm, output) = run(&auto, &inputs, kind, comm);
     let op = fmm.operator();
@@ -939,7 +941,7 @@ fn check_auto(scenario: &Scenario, comm: &SimpleCommunicator) {
 /// crossover at the finest level's degree and the smallest degree one above it, each level's
 /// method by the rule, against the direct sum within `PLANE_WAVE_RATIO` of Rotation's error,
 /// 2 threads and the one-rank FMM bit for bit; the rule's smallest degree agreed over the
-/// ranks, and none while off.
+/// ranks, on by default (D8) and none while off.
 fn check_auto_plane_wave(scenario: &Scenario, comm: &SimpleCommunicator) {
     let start = Instant::now();
     let rank = comm.rank();
@@ -1036,11 +1038,12 @@ fn check_auto_plane_wave(scenario: &Scenario, comm: &SimpleCommunicator) {
     );
     let today = builder(scenario)
         .m2l(HelmholtzM2l::Auto)
+        .auto_plane_wave(false)
         .m2l_max_degree(crossover);
     let (_, today) = run(&today, &inputs, kind, comm);
     assert_same(&format!("{name}, above every degree"), &none, &today, comm);
 
-    // The rule's smallest degree, agreed over the ranks; none while off.
+    // The rule's smallest degree, agreed over the ranks; on by default (D8), none while off.
     let planes = match (scenario.k.1 == 0.0, kind) {
         (true, ChargeKind::Real) => 1,
         _ => 2,
@@ -1055,8 +1058,13 @@ fn check_auto_plane_wave(scenario: &Scenario, comm: &SimpleCommunicator) {
     );
     assert_eq!(
         built(&default_builder(scenario)).m2l_plane_wave_min_degree(),
+        Some(smallest as usize),
+        "{name}: on by default"
+    );
+    assert_eq!(
+        built(&default_builder(scenario).auto_plane_wave(false)).m2l_plane_wave_min_degree(),
         None,
-        "{name}: off by default"
+        "{name}: off"
     );
     if rank == 0 {
         println!(

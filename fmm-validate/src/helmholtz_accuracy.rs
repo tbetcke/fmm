@@ -98,8 +98,9 @@ pub struct Case {
     /// The crossover degree of [`HelmholtzM2l::Auto`] (`None` the rule's).
     pub m2l_max_degree: Option<usize>,
     /// Whether [`HelmholtzM2l::Auto`] takes the exponential M2L
-    /// (`HelmholtzFmmBuilder::auto_plane_wave`, Helmholtz CH6.2h); named always, so that the
-    /// earlier reports' `auto` runs repeat whatever the library's default.
+    /// (`HelmholtzFmmBuilder::auto_plane_wave`, Helmholtz CH6.2h; `true` in [`Case::new`], the
+    /// library's default since D8); named always, so that the earlier reports' `auto` runs
+    /// repeat whatever the library's default.
     pub auto_plane_wave: bool,
     /// The smallest degree at which Auto takes the exponential M2L (`None` the rule's).
     pub m2l_plane_wave_min_degree: Option<usize>,
@@ -142,7 +143,7 @@ impl Case {
             dense_budget: DEFAULT_DENSE_BUDGET,
             m2l_mul_add: None,
             m2l_max_degree: None,
-            auto_plane_wave: false,
+            auto_plane_wave: true,
             m2l_plane_wave_min_degree: None,
             plane_wave: PlaneWavePrecision::Rule,
             plane_wave_budget: None,

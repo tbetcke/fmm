@@ -126,8 +126,9 @@
 //! settings do, deterministic and rank-invariant alike. `HelmholtzFmmBuilder` agrees the
 //! crossover over the ranks.
 //!
-//! With [`with_auto_plane_wave`](HelmholtzOperator::with_auto_plane_wave) (Helmholtz CH6.2h,
-//! decision D8) Auto takes the exponential M2L first: on each level of degree p_l at least
+//! By default (Helmholtz CH6.2h, decision D8, signed off 2026-11-08;
+//! [`with_auto_plane_wave`](HelmholtzOperator::with_auto_plane_wave) turns it off) Auto takes
+//! the exponential M2L first: on each level of degree p_l at least
 //! [`auto_plane_wave_min_degree`] of the ISA and the planes (or the degree named by
 //! [`with_m2l_plane_wave_min_degree`](HelmholtzOperator::with_m2l_plane_wave_min_degree)) to
 //! which the precision rule below gives a quadrature, with Im κ_l below
@@ -307,8 +308,9 @@ pub enum HelmholtzM2l {
     /// on the levels of degree at most the crossover of the machine class
     /// ([`auto_batched_max_degree`]) whose tables fit the dense budget, from the finest level
     /// up; RCR on the others. The default of `HelmholtzFmmBuilder` (and of this type) since
-    /// Helmholtz CH3.2d. With [`with_auto_plane_wave`](HelmholtzOperator::with_auto_plane_wave)
-    /// (Helmholtz CH6.2h, D8) the exponential M2L first, on the levels of degree at least
+    /// Helmholtz CH3.2d. Since Helmholtz CH6.2h (D8; off with
+    /// [`with_auto_plane_wave`](HelmholtzOperator::with_auto_plane_wave)) the exponential M2L
+    /// first, on the levels of degree at least
     /// [`auto_plane_wave_min_degree`] with a quadrature of the rule and Im κ_l below
     /// [`AUTO_PLANE_WAVE_MAX_IM_KAPPA`], in f64 only.
     #[default]
@@ -548,7 +550,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             m2l: HelmholtzM2l::Rotation,
             dense_budget: DEFAULT_DENSE_BUDGET,
             max_degree: None,
-            auto_plane_wave: false,
+            auto_plane_wave: true,
             plane_wave_min_degree: None,
             mul_add: None,
             dense: None,
@@ -631,7 +633,8 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     }
 
     /// Lets [`HelmholtzM2l::Auto`] take the exponential M2L (Helmholtz CH6.2h, D8; module
-    /// documentation, "M2L"; off by default): on each level of degree at least
+    /// documentation, "M2L"; on by default since D8's sign-off, 2026-11-08): on each level
+    /// of degree at least
     /// [`plane_wave_min_degree`](Self::plane_wave_min_degree) to which the precision rule
     /// (`nd_fmm_tables::helmholtz::plane_wave::merge::select`, with the tolerance of
     /// [`with_plane_wave_tolerance`](Self::with_plane_wave_tolerance)) gives a quadrature and
