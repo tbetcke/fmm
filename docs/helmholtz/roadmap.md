@@ -111,6 +111,12 @@ day, "ok, 1–3 as recommended"): Laplace's plane-wave M2L held level 2 to one t
 where the split by parents leaves three quarters of the pool idle (`PlaneWaveSplit::Auto`, bit
 for bit), levels 2–3 take 0.27–0.54× the time; D9 no row slower on locust, Kathleen and the
 M6, two locust rows faster beyond the spread. Next: CH6.1f.
+2026-11-09: CH6.1f split (`/next-task`'s size rule) into the study on the pair chain (CH6.1f)
+and the FMM (CH6.1g); CH6.1f done (`fmm-validate/results/helmholtz-ch6-1f.md`; sign-off
+pending): below 10⁻⁶ the FMM3D tables fail on the plateau's degrees, not the high branch's;
+at a resolving degree (24 for iprec 2, 32 for iprec 3) they hold at 0.03–0.81× RCR's error with
+their own waves, and a quadrature matched to the degree (`generate_for_degree`, new) at
+1.00–1.01× with 1.6–2.9× iprec 3's waves. Next: CH6.1g, after the sign-off.
 
 ## How `/next-task` reads this file
 
@@ -722,7 +728,14 @@ at any kD.
   each precision forced per level on CH3.1c's cases; the FMM within about 1.1× Rotation's
   error on every case, asserted in the tests; the report names the levels left to Rotation.
   *Needs:* CH6.1d.
-- [ ] **CH6.1f The degree-matched quadrature on the pair chain.** Plan:
+- [x] **CH6.1f The degree-matched quadrature on the pair chain.** Report:
+  `fmm-validate/results/helmholtz-ch6-1f.md`; `nd_fmm_ref::helmholtz::plane_wave::generate_for_degree`,
+  tests `fmm-ref/tests/helmholtz/plane_wave.rs`, `fmm-tables/tests/helmholtz/plane_wave_pair.rs`
+  (`degree_matched_study`). On the pair chain the failures are the plateau's degrees (p = 20,
+  24); FMM3D's tables at a resolving degree p_w = max(p_l, 24) (iprec 2, 10⁻⁷) and
+  max(p_l, 32) (iprec 3, 10⁻⁸) hold at 0.03–0.81× RCR's error with their own waves; the
+  degree-matched quadrature at 1.00–1.01× with 1.6–2.9× iprec 3's waves. Recommendation and
+  questions for sign-off in the report's §5 (pending). Plan:
   `docs/helmholtz/tasks/CH6.1f.md`. From CH6.1e (report §3, §7): no precision of FMM3D's
   tables keeps the FMM within 1.1× Rotation's error below ε = 10⁻⁶ (iprec 2's stated error
   is the FMM's own; iprec 3's waves of a degree-p multipole err on its truncated tail at
@@ -742,11 +755,14 @@ at any kD.
   the report shows none is, and what it would cost. *Needs:* CH6.1e. *Sign-off:* the
   recommendation.
 - [ ] **CH6.1g The quadrature below 10⁻⁶ in the FMM.** CH6.1f's recommended quadrature in
-  `PlaneWaveM2l`'s rule below `PLANE_WAVE_MIN_TOLERANCE`. *Done when:* the FMM within about
-  1.1× Rotation's error at ε = 10⁻⁷ and 10⁻⁸ on CH6.1e's cases, the clustered trees' deep
-  levels included, asserted in the tests on small cases, with the rule still a function of
-  k, w_l, p_l and ε (constraint 9); times beside Rotation's; D8's bound ε ≥ 10⁻⁶ revisited
-  as a question; or, if CH6.1f recommends none, the rule unchanged and the report's reason
+  `PlaneWaveM2l`'s rule below `PLANE_WAVE_MIN_TOLERANCE`: as proposed by CH6.1f (report §5,
+  for sign-off), the resolving degree, each level with a quadrature at p_w = max(p_l, 24) with
+  iprec 2 for 10⁻⁷ ≤ ε < 10⁻⁶ and p_w = max(p_l, 32) with iprec 3 for 10⁻⁸ ≤ ε < 10⁻⁷, the
+  degree raised on the level first and on the M2L alone only if that costs the gain. *Done
+  when:* the FMM within about 1.1× Rotation's error at ε = 10⁻⁷ and 10⁻⁸ on CH6.1e's cases, the
+  clustered trees' deep levels included, asserted in the tests on small cases, with the rule
+  still a function of k, w_l, p_l and ε (constraint 9); times beside Rotation's; D8's bound
+  ε ≥ 10⁻⁶ revisited as a question; or, if CH6.1f recommends none, the rule unchanged and the report's reason
   recorded. *Needs:* CH6.1f and its sign-off.
 - CH6.2 Measured. Against Rotation and the table-based strategies on the three machines,
   and against `hfmm3d`'s exponential M2L. *Done when:* per-level accuracy and time beside
