@@ -19,7 +19,7 @@ parent. Measured on:
 - **Kathleen** (2 × 20 Cascade Lake cores, AVX-512, `tools/kathleen/`): job 630794
   (node-c11b-017, `singlenode`, exclusive, 07:56–08:28, source d9449b7), one rank × 1 and 40
   threads (`--map-by slot:PE=40 --bind-to core`), Open MPI 4.1.6, P2P `Auto` (AVX-512); D9 in
-  job 630796 (§5).
+  job 630796 (node-c11a-010, 10:52–11:23, §5).
 - **the M6** (Apple M6, `tools/m6/machine.md`): one rank × 1 and 6 threads (`tools/scaling/run.sh`'s `CORES` on the M6), 08:09–08:15
   (source bf7c262), then D9 (08:15–08:30, every core: 12 threads), with the user's go-ahead
   ("the m6 is quiet now"), under the run script's quiet gate.
@@ -46,10 +46,10 @@ Release builds, rustc 1.99.0, BLAS threads 1. Commands: §8.
   Plummer sphere at N = 10⁶ (32 pieces) by child at 72 threads on locust, 1.02–1.22× slower there; at
   a quarter it stays by parents. Levels 2–3 under `Auto`: 0.27–0.49× on locust, 0.39–0.54×
   on Kathleen, 0.81–0.96× on the M6 at 6 threads (level 2 alone).
-- **D9** (§5): no row slower than `main` on locust and the M6; the errors equal in every run. On
+- **D9** (§5): no row slower than `main` on any machine; the errors equal in every run. On
   locust f32 p = 8 (−1.5 %) and f64 p = 18 (−3.8 %) are faster beyond `main`'s spread, f64
   p = 8 (−3.7 %) within it, f64 p = 12 level; the M6 within noise everywhere (−0.5 to
-  +0.8 %); Kathleen's D9 is pending (job 630796). One thread (never by child) is unchanged on every
+  +0.8 %), Kathleen within noise everywhere (−2.4 to +1.1 %, job 630796). One thread (never by child) is unchanged on every
   machine.
 - **Correctness** (§6): every split bit for bit the split by parents in `tests/mpi_exec.rs`
   (one thread, the most threads overlapped, four threads; `Children` on 2 and 4 ranks
@@ -234,9 +234,18 @@ sampled targets the same in all ten runs.
 
 ### Kathleen (40 threads)
 
-Pending: job 630796 (`tools/kathleen/submit.sh --time=01:30:00 -- run.sbatch 'bash
-<root>/logs/ch6-2i-d9.sh <root>/src/d9-main-b73c362 <root>/src/tbetcke_h-ch6-2i
-<root>/logs/ch6-2i-d9'`), queued for a node since 08:30.
+Job 630796 (node-c11a-010, `singlenode`, exclusive, 10:52–11:23, `main` b73c362 against
+bf7c262, one rank × 40 threads,
+`tools/kathleen/submit.sh --time=01:30:00 -- run.sbatch 'bash <root>/logs/ch6-2i-d9.sh
+<root>/src/d9-main-b73c362 <root>/src/tbetcke_h-ch6-2i <root>/logs/ch6-2i-d9'`; P2P AVX-512).
+
+| precision | p | threads | main medians (ms) | branch medians (ms) | spread (ms) | Δ median of medians | within noise | errors equal |
+| --- | ---: | --- | --- | --- | ---: | ---: | --- | --- |
+| f32 | 8 | 40 | 151.72, 156.23, 153.45, 149.12, 155.92 | 145.65, 150.84, 149.83, 148.09, 152.93 | 7.11 | −3.62 (−2.4 %) | yes | yes |
+| f64 | 8 | 40 | 204.91, 205.35, 205.91, 217.97, 207.66 | 203.56, 203.13, 202.07, 201.59, 203.45 | 13.05 | −2.78 (−1.3 %) | yes | yes |
+| f64 | 12 | 40 | 320.58, 331.53, 324.81, 327.82, 323.97 | 312.06, 311.00, 321.24, 326.94, 319.94 | 10.95 | −4.87 (−1.5 %) | yes | yes |
+| f64 | 18 | 40 | 697.23, 683.83, 678.98, 700.20, 684.20 | 679.59, 703.59, 681.27, 677.36, 687.82 | 21.22 | −2.93 (−0.4 %) | yes | yes |
+| f64 | 8 | 1 | 3180.32, 3156.96, 3198.35, 3190.39, 3193.64 | 3224.65, 3255.73, 3234.55, 3202.96, 3222.33 | 41.39 | +34.26 (+1.1 %) | yes | yes |
 
 ### the M6 (12 threads, every core)
 

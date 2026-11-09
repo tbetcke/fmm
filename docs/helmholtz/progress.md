@@ -2656,7 +2656,7 @@ request, using this template:
     threads, 1.02–1.22× slower. Levels 2–3 under `Auto` 0.27–0.49× on locust, 0.39–0.54× on
     Kathleen, 0.81–0.96× on the M6; by child on every level the M2L 1.4–2.3×.
   - D9 (`main` b73c362 against the branch, A B B A A B B A A B, nd-fmm-bench at N = 10⁶,
-    PlaneWave): no row slower on locust and the M6; locust f32 p = 8 −1.5 % and f64 p = 18
+    PlaneWave): no row slower on locust, Kathleen (job 630796) and the M6; locust f32 p = 8 −1.5 % and f64 p = 18
     −3.8 % faster beyond the spread; errors equal in every run.
   - The report `fmm-validate/results/helmholtz-ch6-2i.md`; raw outputs in
     `~/projects/fmm-archive/{locust,kathleen,m6}/logs/ch6-2i/`.
@@ -2669,7 +2669,7 @@ request, using this template:
 - Checks: ran on the M6: format, Clippy (default, examples, workspace all-targets),
   `cargo doc`, `cargo test` (1226 passed), `cargo test --workspace` (1340 passed), the MPI
   list at 2 and 4 ranks (24 of 24), `tests/mpi_exec.rs` at 1, 2, 4 and 8 ranks
-  (passed: 169, 229, 220 and 218 s). Pending: Kathleen's D9 (job 630796).
+  (passed: 169, 229, 220 and 218 s). Pending: none.
 - Decisions: signed off 2026-11-09 (the user: "ok, 1–3 as recommended"): (1) constraint 1,
   `Auto` as Laplace's default; (2) Laplace's rule at a quarter of the threads, Helmholtz's at
   half; (3) `driver.rs`'s added function.

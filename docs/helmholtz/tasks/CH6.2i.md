@@ -129,11 +129,10 @@ budget.
 
 ## Pending runs
 
-- Kathleen job 630796 (`run.sbatch` with the D9 script: `main` b73c362 against bf7c262, five
-  runs per side): decides Kathleen's D9 rows (report §5).
+None.
 
 Ran: locust 2026-11-09 (the sweep at every split; D9), Kathleen job 630794 (the sweep at every
-split, node-c11b-017), the M6 (the sweep and D9, with the user's go-ahead).
+split, node-c11b-017), Kathleen job 630796 (D9, node-c11a-010: every row within noise), the M6 (the sweep and D9, with the user's go-ahead).
 
 ## Results
 

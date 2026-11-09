@@ -109,8 +109,8 @@ D8 signed off the same day (the user: "1–5 as recommended"): the rule is `Auto
 day, "ok, 1–3 as recommended"): Laplace's plane-wave M2L held level 2 to one thread and level 3 to eight (levels 2–3
 1.9–4.1 % of the evaluation at N = 10⁶ on locust, 2.2–3.0 % on Kathleen); split by child
 where the split by parents leaves three quarters of the pool idle (`PlaneWaveSplit::Auto`, bit
-for bit), levels 2–3 take 0.27–0.54× the time; D9 no row slower on locust and the M6, two
-locust rows faster beyond the spread (Kathleen's D9 pending, job 630796). Next: CH6.1f.
+for bit), levels 2–3 take 0.27–0.54× the time; D9 no row slower on locust, Kathleen and the
+M6, two locust rows faster beyond the spread. Next: CH6.1f.
 
 ## How `/next-task` reads this file
 
