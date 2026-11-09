@@ -14,7 +14,7 @@
 use nd_fmm_math::orthonormal::{harmonics, legendre};
 use nd_fmm_math::{Complex, Layout};
 use nd_fmm_ref::Frame;
-use nd_fmm_ref::helmholtz::plane_wave::generate;
+use nd_fmm_ref::helmholtz::plane_wave::{generate, generate_for_degree};
 use nd_fmm_ref::helmholtz::{Level, Workspace, leaf};
 use nd_fmm_tables::geometry::{M2L_OFFSET_COUNT, m2l_offsets};
 use nd_fmm_tables::helmholtz::plane_wave::pair::{
@@ -268,6 +268,58 @@ fn check_generated(k_root: C, level: usize, base: usize, eps: f64, step: usize) 
             "level {level}: {:.2} ε",
             error / eps
         );
+    }
+}
+
+/// The degree-matched quadrature (CH6.1f, `generate_for_degree`) through
+/// [`PlaneWaveLevel`] on one level at degree `p`: within [`CHAIN_BOUND`] ε of RCR at that
+/// degree (the module's measure, every `step`-th offset and its directions), where FMM3D's
+/// quadratures, fitted to the kernel, err on the truncated multipole's tail.
+fn check_degree_matched(k_root: C, level: usize, p: usize, eps: f64, step: usize) {
+    let degrees: Vec<usize> = (0..=level).map(|l| if l < 2 { 0 } else { p }).collect();
+    let rcr = HelmholtzTables::<f64>::build(k_root, &degrees, DEFAULT_BLOCK_BUDGET);
+    let k_hat = rcr.k_hat(level);
+    let q = generate_for_degree(2.0 * k_hat, eps, p);
+    assert!(q.shortfall().is_none(), "{:?}", q.shortfall());
+    let waves = PlaneWaveLevel::<f64>::from_nodes(k_hat, p, nodes_of(&q));
+    let case = Case {
+        rcr: &rcr,
+        level,
+        waves: &waves,
+    };
+    for &planes in plane_counts(&rcr) {
+        let error = pair_error(&case, planes, (0..M2L_OFFSET_COUNT).step_by(step));
+        println!(
+            "k̂₀ = {k_root}, level {level} (κ = {:.4}), matched at ε = {eps:.0e}, p = {p}, \
+             {planes} plane(s): {error:.2e}, {:.2} ε",
+            2.0 * k_hat,
+            error / eps
+        );
+        assert!(
+            error <= CHAIN_BOUND * eps,
+            "level {level}: {:.2} ε",
+            error / eps
+        );
+    }
+}
+
+#[test]
+fn against_rcr_with_degree_matched_quadratures() {
+    check_degree_matched(C::new(5.0, 1.0), 3, 5, 1e-4, 7);
+}
+
+#[test]
+#[ignore = "release: CH6.1f's degrees, about 5 minutes on the M6"]
+fn against_rcr_with_degree_matched_quadratures_at_the_fmms_degrees() {
+    // κ_2 = k̂₀/2: 0.31 and 2.5, and κ_4 = 0.078 (k̂₀ = 0.625).
+    for (k_root, level) in [
+        (C::new(0.625, 0.0), 4),
+        (C::new(0.625, 0.0), 2),
+        (C::new(5.0, 0.0), 2),
+    ] {
+        for (eps, p) in [(1e-7, 20), (1e-8, 24)] {
+            check_degree_matched(k_root, level, p, eps / 20.0, 3);
+        }
     }
 }
 
@@ -664,4 +716,197 @@ fn a_local_of_another_degree_is_refused() {
         &mut local,
         &mut scratch,
     );
+}
+
+/// The errors of one candidate of CH6.1f (docs/helmholtz/tasks/CH6.1f.md) against the
+/// direct sum, with the level between finer ones as in the FMM: [`degree_study`]'s sources
+/// and seeded charges, on level 2 of k̂₀ = 2κ (κ_2 = κ), every third offset; the multipole
+/// formed by P2M into the eight children at degree `p` and M2M to the parent at `p_chain`;
+/// each local L2L to the target's child at `p` and L2P there. RCR runs the same path at
+/// `p` throughout. Returns [chain − direct, RCR − direct], [`degree_study`]'s measure.
+fn against_direct_children(
+    kappa: C,
+    p: usize,
+    p_chain: usize,
+    waves: &PlaneWaveLevel<f64>,
+) -> [f64; 2] {
+    use nd_fmm_ref::helmholtz::rcr;
+    let level = 2;
+    let rcr_tables = HelmholtzTables::<f64>::build(kappa * 2.0, &[0, 0, p], DEFAULT_BLOCK_BUDGET);
+    let k_hat = rcr_tables.k_hat(level);
+    let (parent, child) = (Level::new(k_hat, 1.0), Level::new(k_hat, 0.5));
+    let (points, charges) = sources(false, level as u64);
+    let octant = |x: &[f64; 3]| -> [f64; 3] { x.map(|v| if v >= 0.0 { 0.5 } else { -0.5 }) };
+    let mut ws = Workspace::new(p_chain.max(p));
+    let multipole_at = |q: usize, ws: &mut Workspace<f64>| {
+        let table = rcr::m2m_table(p, q, &child);
+        let mut out = vec![0.0; 2 * Layout::new(q).len()];
+        for c in 0..8 {
+            let centre = [c & 4, c & 2, c & 1].map(|b| if b == 0 { -0.5 } else { 0.5 });
+            let (mut pts, mut qs) = (Vec::new(), Vec::new());
+            for (x, w) in points.iter().zip(&charges) {
+                if octant(x) == centre {
+                    pts.push(*x);
+                    qs.push(*w);
+                }
+            }
+            if pts.is_empty() {
+                continue;
+            }
+            let from = Frame::new(centre, 0.5);
+            let mut m = vec![0.0; 2 * Layout::new(p).len()];
+            leaf::p2m(p, &child, &from, &pts, &qs, ws, &mut m);
+            let to = Frame::new([0.0; 3], 1.0);
+            rcr::m2m(p, q, &child, &parent, &from, &to, &table, ws, &m, &mut out);
+        }
+        out
+    };
+    let (m, m_chain) = (multipole_at(p, &mut ws), multipole_at(p_chain, &mut ws));
+    let l2l_p = rcr::l2l_table(p, p, &child);
+    let l2l_chain = rcr::l2l_table(p_chain, p, &child);
+    let evaluate = |q: usize,
+                    table: &nd_fmm_math::coaxial::CoaxialTable<f64>,
+                    local: &[f64],
+                    centre: [f64; 3],
+                    x: [f64; 3],
+                    ws: &mut Workspace<f64>| {
+        let to = Frame::new(centre, 1.0);
+        let c = octant(&core::array::from_fn(|a| x[a] - centre[a]));
+        let child_centre = core::array::from_fn(|a| centre[a] + c[a]);
+        let child_frame = Frame::new(child_centre, 0.5);
+        let mut l = vec![0.0; 2 * Layout::new(p).len()];
+        rcr::l2l(
+            q,
+            p,
+            &parent,
+            &child,
+            &to,
+            &child_frame,
+            table,
+            ws,
+            local,
+            &mut l,
+        );
+        let mut out = [C::new(0.0, 0.0)];
+        leaf::l2p(p, &child, &child_frame, &l, &[x], ws, &mut out, None);
+        out[0]
+    };
+    let (mut rcr_scratch, mut scratch) = (rcr_tables.scratch(), waves.scratch());
+    let mut worst = [0.0f64; 2];
+    for index in (0..M2L_OFFSET_COUNT).step_by(3) {
+        let d = m2l_offsets()[index];
+        let centre = d.map(|x| 2.0 * x as f64);
+        let mut a = vec![0.0; 2 * Layout::new(p).len()];
+        let mut b = vec![0.0; 2 * Layout::new(p_chain).len()];
+        rcr_tables.m2l(level, index, &m, 2, &mut a, 1, &mut rcr_scratch);
+        waves.m2l_of_offset(index, &m_chain, 2, &mut b, &mut scratch);
+        for x in targets(d) {
+            let direct: C = points
+                .iter()
+                .zip(&charges)
+                .map(|(y, q)| {
+                    let r = (0..3).map(|a| (x[a] - y[a]).powi(2)).sum::<f64>().sqrt();
+                    *q * (C::i() * k_hat * r).exp() / r
+                })
+                .sum();
+            let va = evaluate(p, &l2l_p, &a, centre, x, &mut ws);
+            let vb = evaluate(p_chain, &l2l_chain, &b, centre, x, &mut ws);
+            worst[0] = worst[0].max(2.0 * (vb - direct).norm());
+            worst[1] = worst[1].max(2.0 * (va - direct).norm());
+        }
+    }
+    worst
+}
+
+/// CH6.1f's wavenumbers κ = k w_l: CH6.1e's levels at 10⁻⁷ and 10⁻⁸ (the clustered trees'
+/// deep levels at κ ≤ 0.08), up to level 2 of kD = 100 and below the tables' 16π, and three
+/// complex ones.
+const STUDY_KAPPAS: [(f64, f64); 13] = [
+    (0.0078, 0.0),
+    (0.031, 0.0),
+    (0.078, 0.0),
+    (0.31, 0.0),
+    (1.25, 0.0),
+    (2.5, 0.0),
+    (6.25, 0.0),
+    (12.5, 0.0),
+    (25.0, 0.0),
+    (40.0, 0.0),
+    (1.25, 0.1875),
+    (0.625, 1.25),
+    (10.0, 5.0),
+];
+
+/// The FMM's degree of a level of κ = k w at ε: `nd_fmm_exec::helmholtz::DegreeRule::
+/// CALIBRATED` at x = Re(k) a = (√3/2) Re κ, restated (nd-fmm-tables does not depend on
+/// nd-fmm-exec).
+fn calibrated_degree(kappa: C, eps: f64) -> usize {
+    let l = (1.0 / eps).log10();
+    let up = |v: f64| (v - 1e-9).ceil().max(0.0) as usize;
+    let x = 0.75f64.sqrt() * kappa.re;
+    up((0.30 * l + 0.25) * l + 2.60).max(up(x + 0.80 * (1.0 / eps).ln().powf(2.0 / 3.0) * x.cbrt()))
+}
+
+/// CH6.1f's study: at the FMM's degree p of 10⁻⁷ and 10⁻⁸ on each κ of [`STUDY_KAPPAS`],
+/// each candidate's chain − direct over RCR − direct ([`against_direct_children`]) with its
+/// waves Σₖ Nₖ and modes Σₖ (2Fₖ + 1): FMM3D's iprec 2 and 3 at p and at p + 4 and p + 8
+/// (candidates 1 and 4), the generator at ε_g = 10⁻⁶ to 10⁻⁸ (candidate 2) and the
+/// degree-matched quadrature at ε/20 (candidate 3), whose shortfall, if any, is printed.
+#[test]
+#[ignore = "release: CH6.1f's study, prints the report's table (about 30 minutes on the M6)"]
+fn degree_matched_study() {
+    println!("| κ | ε | p | candidate | waves | modes | chain − direct | RCR − direct | ratio |");
+    println!("| --- | --- | ---: | --- | ---: | ---: | --- | --- | ---: |");
+    for (re, im) in STUDY_KAPPAS {
+        let kappa = C::new(re, im);
+        let k_hat = kappa * 0.5;
+        for eps in [1e-7, 1e-8] {
+            let p = calibrated_degree(kappa, eps);
+            let row = |name: &str,
+                       p_chain: usize,
+                       waves: &PlaneWaveLevel<f64>,
+                       counts: [usize; 2]| {
+                let [chain, rcr] = against_direct_children(kappa, p, p_chain, waves);
+                println!(
+                    "| {re} + {im}i | {eps:.0e} | {p} | {name} | {} | {} | {chain:.2e} | {rcr:.2e} | \
+                     {:.3} |",
+                    counts[0],
+                    counts[1],
+                    chain / rcr
+                );
+            };
+            for precision in [Precision::Iprec2, Precision::Iprec3] {
+                let q = Quadrature::new(kappa, precision).expect("κ in the tables");
+                for dp in [0, 4, 8] {
+                    let waves = PlaneWaveLevel::<f64>::new(k_hat, p + dp, &q);
+                    let name = format!("iprec {} at p + {dp}", precision.iprec());
+                    row(&name, p + dp, &waves, [q.wave_count(), q.mode_count()]);
+                }
+            }
+            for eps_g in [1e-6, 1e-7, 1e-8] {
+                let q = generate(kappa, eps_g);
+                let waves = PlaneWaveLevel::<f64>::from_nodes(k_hat, p, nodes_of(&q));
+                let name = format!("generated at {eps_g:.0e}");
+                row(&name, p, &waves, [q.wave_count(), q.mode_count()]);
+            }
+            let q = generate_for_degree(kappa, eps / 20.0, p);
+            if let Some(shortfall) = q.shortfall() {
+                println!("<!-- κ = {kappa}, ε = {eps:e}: shortfall {shortfall:?} -->");
+            }
+            let waves = PlaneWaveLevel::<f64>::from_nodes(k_hat, p, nodes_of(&q));
+            let name = format!("matched at {:.0e}", eps / 20.0);
+            row(&name, p, &waves, [q.wave_count(), q.mode_count()]);
+        }
+    }
+}
+
+/// A generated quadrature's [`Nodes`].
+fn nodes_of(q: &nd_fmm_ref::helmholtz::plane_wave::Quadrature) -> Nodes<'_> {
+    Nodes {
+        lambda: q.lambda(),
+        t: q.t(),
+        weights: q.weights(),
+        alpha: q.alpha_counts(),
+        fourier: q.fourier_counts(),
+    }
 }

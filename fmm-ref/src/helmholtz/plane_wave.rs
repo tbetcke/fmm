@@ -69,9 +69,19 @@
 //! Laplace tables). Everything is f64 and a function of κ and ε only (proposal §2,
 //! constraint 9). The generator is slow beside a table lookup (its tests' 35 κ and ε take
 //! 14 s together in release on the M6), as a trusted path may be.
+//!
+//! # Matched to a degree
+//!
+//! [`generate_for_degree`] (Helmholtz CH6.1f) fits the λ rule to the chain at a degree p
+//! instead of the kernel, so that the chain reproduces RCR at degree p where a quadrature
+//! fitted to the kernel errs on the truncated multipole's tail (its module
+//! documentation).
 
+mod degree;
 mod rule;
 mod special;
+
+pub use degree::generate_for_degree;
 
 use core::f64::consts::TAU;
 
@@ -116,10 +126,13 @@ pub enum Bound {
     Tightening,
 }
 
-/// How a generated quadrature misses the requested ε on the region's grid.
+/// How a generated quadrature misses the requested ε: on the region's grid for
+/// [`generate`], on its samples against RCR at its degree for [`generate_for_degree`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shortfall {
-    /// The largest |Q − G| on the grid, in box widths, above the requested ε.
+    /// The largest error reached, in box widths, above the requested ε: |Q − G| on the
+    /// grid ([`generate`]), or |chain − RCR| per unit charge on the samples
+    /// ([`generate_for_degree`]).
     pub error: f64,
     /// The bounds hit by the final attempt, in the order of [`Bound`]'s variants.
     pub bounds: Vec<Bound>,
@@ -136,6 +149,7 @@ pub struct Quadrature {
     alpha: Vec<usize>,
     fourier: Vec<usize>,
     shortfall: Option<Shortfall>,
+    degree: Option<usize>,
 }
 
 /// The region's grid: z ∈ {1, 1.25, …, 4}, x, y ∈ {−4, −3.5, …, 4}.
@@ -184,6 +198,7 @@ impl Quadrature {
             alpha,
             fourier,
             shortfall: None,
+            degree: None,
         }
     }
 
@@ -195,6 +210,12 @@ impl Quadrature {
     /// The requested ε.
     pub fn eps(&self) -> f64 {
         self.eps
+    }
+
+    /// The degree p the quadrature was matched to ([`generate_for_degree`]), `None` for
+    /// [`generate`]'s, which are fitted to the kernel.
+    pub fn degree(&self) -> Option<usize> {
+        self.degree
     }
 
     /// The number of nodes, s.
@@ -238,8 +259,9 @@ impl Quadrature {
         self.fourier.iter().map(|&f| 2 * f + 1).sum()
     }
 
-    /// `None` when the quadrature meets the requested ε on the region's grid; otherwise
-    /// the error reached and the bounds that stopped the generator.
+    /// `None` when the quadrature meets the requested ε (on the region's grid, or for a
+    /// degree-matched one against RCR on its samples); otherwise the error reached and the
+    /// bounds that stopped the generator.
     pub fn shortfall(&self) -> Option<&Shortfall> {
         self.shortfall.as_ref()
     }

@@ -82,8 +82,13 @@ fn panels(b: f64, n: usize, towards_end: bool, width: f64) -> Vec<(f64, f64)> {
 /// The composite rule with `n` panels per segment (steps 1 and 2 of the module
 /// documentation, one panel count).
 pub(super) fn panel_rule(kappa: C, eps: f64, n: usize) -> Rule {
+    panel_rule_to(kappa, (1.0 / eps).ln() + 4.0, n)
+}
+
+/// [`panel_rule`] on the contour up to Re λ = `lambda_max` (the degree-matched rule's
+/// longer contour, `super::degree`).
+pub(super) fn panel_rule_to(kappa: C, lambda_max: f64, n: usize) -> Rule {
     let (kr, ki) = (kappa.re, kappa.im);
-    let lambda_max = (1.0 / eps).ln() + 4.0;
     let t_max = (lambda_max * lambda_max + kappa.norm_sqr()).sqrt();
     let (gx, gw) = legendre(ORDER, 0.0, 1.0);
     let mut rule = Rule::default();
@@ -182,7 +187,7 @@ fn lambda_error(kappa: C, cols: &[Vec<C>], weight: &[C], samples: &[(f64, f64)])
 /// Column-pivoted modified Gram–Schmidt: the selected columns, in order, until the
 /// largest remaining column norm is at most `tol` times the largest initial one; then
 /// the least-squares weights of the selected columns for the right-hand side `rhs`.
-fn compress(cols: &[Vec<C>], rhs: &[C], tol: f64) -> (Vec<usize>, Vec<C>) {
+pub(super) fn compress(cols: &[Vec<C>], rhs: &[C], tol: f64) -> (Vec<usize>, Vec<C>) {
     let m = rhs.len();
     let mut work: Vec<Vec<C>> = cols.to_vec();
     let norm2 = |v: &[C]| v.iter().map(|x| x.norm_sqr()).sum::<f64>();
