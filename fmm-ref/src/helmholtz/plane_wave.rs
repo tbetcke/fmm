@@ -74,8 +74,12 @@
 //!
 //! [`generate_for_degree`] (Helmholtz CH6.1f) fits the λ rule to the chain at a degree p
 //! instead of the kernel, so that the chain reproduces RCR at degree p where a quadrature
-//! fitted to the kernel errs on the truncated multipole's tail (its module
-//! documentation).
+//! fitted to the kernel errs on the truncated multipole's tail. The chain is exact per
+//! degree (CONVENTIONS §3.15, "The degree"), but the waves of a degree-p multipole are the
+//! truncations S_p and T_p of the source's e^{−i q·s} and the target's e^{i q·y}
+//! (q = κŝ = (t cos α, t sin α, iλ)), which depart from the kernel's integrand at large λ;
+//! the rule is fitted to the quadrature of S_p e^{i q·d} T_p itself, on a longer contour,
+//! with every order to p at every node (fmm-validate/results/helmholtz-ch6-1f.md).
 
 mod degree;
 mod rule;

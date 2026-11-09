@@ -34,6 +34,13 @@ tabulated ones of `nd_fmm_tables::helmholtz::plane_wave`, checked in
 `tests/helmholtz/plane_wave.rs` against the kernel e^{iκ|u|}/|u| on the region, off its
 grid and in the point-to-point chain, and bit for bit against the spike
 (`spikes/pw-quadrature/examples/generated.rs`, by hand).
+Helmholtz CH6.1f: `helmholtz::plane_wave::generate_for_degree`, the degree-matched
+quadrature (`plane_wave/degree.rs`): the λ rule fitted to the exponential M2L's chain at a
+degree p (Gegenbauer's truncated expansions of the source and target waves) against this
+crate's RCR at degree p, on a contour longer than the kernel's; `Quadrature::degree`. Checked
+in `degree.rs`'s unit tests (the expansions, RCR's normalisation) and in
+`tests/helmholtz/plane_wave.rs` against RCR at points it did not fit
+(fmm-validate/results/helmholtz-ch6-1f.md).
 
 ## Rules
 - Read docs/CONVENTIONS.md before changing any formula; never change a convention here.
@@ -56,7 +63,10 @@ grid and in the point-to-point chain, and bit for bit against the spike
   spike's order of operations, its own Gauss–Legendre rule and Jₙ included, so that its
   values are the spike's bit for bit; a change to its arithmetic reruns
   `examples/generated.rs` and says so. It reports where it stops short of ε
-  (`Quadrature::shortfall`) instead of returning silently.
+  (`Quadrature::shortfall`) instead of returning silently. `generate_for_degree` (CH6.1f) shares
+  its panels (`rule::panel_rule_to`, of which `panel_rule` is the kernel's contour, the same
+  arithmetic) and `compress`; its own code is in `degree.rs`, so `generate`'s bits do not
+  depend on it. Its ε is against RCR at its degree, per unit charge, on its samples.
 - This crate is the oracle: clarity over speed. Optimisation belongs in nd-fmm-tables,
   nd-fmm-kernels, nd-fmm-simd and nd-fmm-exec.
 - Tests name their error measure (docs/phase1/README.md, "Error measures").

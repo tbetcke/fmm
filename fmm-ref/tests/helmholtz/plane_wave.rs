@@ -331,7 +331,7 @@ fn the_degree_matched_quadrature_meets_rcr() {
 }
 
 #[test]
-#[ignore = "release: about 5 minutes on the M6"]
+#[ignore = "release: about 7 minutes on the M6"]
 fn the_degree_matched_quadrature_meets_rcr_at_the_fmms_degrees() {
     for (re, im) in [(0.0078, 0.0), (0.31, 0.0), (2.5, 0.0), (1.25, 0.1875)] {
         for (eps, p) in [(1e-7, 20), (1e-8, 24)] {
@@ -345,8 +345,8 @@ fn the_degree_matched_quadrature_meets_rcr_at_the_fmms_degrees() {
 fn the_degree_matched_quadrature_is_deterministic() {
     let kappa = C::new(0.5, 0.25);
     let (a, b) = (
-        generate_for_degree(kappa, 1e-4, 4),
-        generate_for_degree(kappa, 1e-4, 4),
+        generate_for_degree(kappa, 1e-3, 3),
+        generate_for_degree(kappa, 1e-3, 3),
     );
     let bits = |v: &[C]| -> Vec<(u64, u64)> {
         v.iter().map(|z| (z.re.to_bits(), z.im.to_bits())).collect()

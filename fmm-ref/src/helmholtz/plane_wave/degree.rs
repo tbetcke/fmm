@@ -30,10 +30,11 @@
 //!
 //! # The rule
 //!
-//! 1. **Samples**: sources and targets at their boxes' corners (±½)³ and centres, and the
-//!    98 centre offsets d = (d_x, d_y, d_z), d_z ∈ {2, 3}, |d_x|, |d_y| ≤ 3, of the region of
-//!    the kernel's quadrature (1 ≤ u_z ≤ 4, |u_x|, |u_y| ≤ 4); for the check, four seeded
-//!    sources and targets in their boxes at the same offsets.
+//! 1. **Samples**: sources and targets at their boxes' corners (±½)³, face centres and
+//!    centres (the corners and centres alone leave errors of up to 8ε between them at
+//!    p = 24), and the 98 centre offsets d = (d_x, d_y, d_z), d_z ∈ {2, 3}, |d_x|, |d_y| ≤ 3,
+//!    of the region of the kernel's quadrature (1 ≤ u_z ≤ 4, |u_x|, |u_y| ≤ 4); for the
+//!    check, four seeded sources and targets in their boxes at the same offsets.
 //! 2. **The trusted values**: RCR at degree p (`crate::helmholtz::{leaf, rcr}`: P2M of a unit
 //!    charge, M2L, L2P, on a level of box width 1 and wavenumber κ) at every sample.
 //! 3. **The full rule**: the generator's composite Gauss–Legendre rule on the contour of
@@ -92,12 +93,19 @@ impl Samples {
         out
     }
 
-    /// The fit's samples: the corners and the centre of both boxes.
+    /// The fit's samples: the corners, the face centres and the centre of both boxes.
     fn fit() -> Self {
         let mut points: Vec<[f64; 3]> = (0..8)
             .map(|c| [c & 4, c & 2, c & 1].map(|b| if b == 0 { -0.5 } else { 0.5 }))
             .collect();
         points.push([0.0; 3]);
+        for axis in 0..3 {
+            for side in [-0.5, 0.5] {
+                let mut face = [0.0; 3];
+                face[axis] = side;
+                points.push(face);
+            }
+        }
         Self {
             sources: points.clone(),
             targets: points,
@@ -313,9 +321,19 @@ fn error(cols: &[Vec<C>], weight: &[C], values: &[C]) -> f64 {
         .fold(0.0, f64::max)
 }
 
-/// The degree-matched quadrature for κ at ε and degree p (the [module
-/// documentation](self)): the chain at degree p within ε of RCR at degree p on the
-/// samples, absolute in box widths per unit charge, or a shortfall that says how far.
+/// The degree-matched quadrature for κ at ε and degree p ([module
+/// documentation](super), "Matched to a degree"): the λ rule fitted to the exponential
+/// M2L's chain at degree p, the truncations at degree p of the source's and the target's
+/// plane-wave expansions (Gegenbauer's series), against RCR at degree p (this crate's
+/// `helmholtz::{leaf, rcr}`) at sources and targets on their boxes' corners, face centres
+/// and centres and the 98 centre offsets of the region (d_z ∈ {2, 3}, |d_x|, |d_y| ≤ 3),
+/// checked at seeded points. The contour runs from the kernel's Re λ = ln(4/ε) + 4 up to p further
+/// until the full rule meets RCR; every node keeps the orders m ≤ p (Fₖ = p), and Nₖ is the
+/// fewest angles within the share ε/(4s) of the node's resolved trapezoid.
+///
+/// The chain at degree p is then within ε of RCR at degree p on the samples, absolute in
+/// box widths per unit charge, or [`Quadrature::shortfall`] says how far it is. A function
+/// of κ, ε and p only (proposal §2, constraint 9); seconds to a minute in release.
 ///
 /// # Panics
 ///

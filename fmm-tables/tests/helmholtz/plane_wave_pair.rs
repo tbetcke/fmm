@@ -853,7 +853,7 @@ fn calibrated_degree(kappa: C, eps: f64) -> usize {
 /// (candidates 1 and 4), the generator at ε_g = 10⁻⁶ to 10⁻⁸ (candidate 2) and the
 /// degree-matched quadrature at ε/20 (candidate 3), whose shortfall, if any, is printed.
 #[test]
-#[ignore = "release: CH6.1f's study, prints the report's table (about 30 minutes on the M6)"]
+#[ignore = "release: CH6.1f's study, prints the report's table (about 35 minutes on the M6)"]
 fn degree_matched_study() {
     println!("| κ | ε | p | candidate | waves | modes | chain − direct | RCR − direct | ratio |");
     println!("| --- | --- | ---: | --- | ---: | ---: | --- | --- | ---: |");

@@ -162,10 +162,43 @@ None beyond the M6, and no timing: the study measures errors and counts only
 - Risk: the generator's cost at tight ε and p = 24 (seconds per κ) is fine for a trusted
   path; CH6.1g decides whether the FMM generates per level or tabulates.
 
+## Results
+
+The report: `fmm-validate/results/helmholtz-ch6-1f.md` (the M6, release, f64, 2026-11-09).
+The study's 260 rows took 34.8 minutes (19.9 before the face centres, below).
+
+- The failures are on the plateau (p = 20, 24): FMM3D's tables at the FMM's degree are
+  1.08–4.1× (iprec 2) and up to 15× (iprec 3) RCR's error on the pair chain at 10⁻⁷, 0.67–6.3×
+  and up to 53× at 10⁻⁸; on the high branch's degrees they hold (0.93–1.00×).
+- Candidate 4, as a resolving degree: p_w = max(p_l, 24) with iprec 2 at 10⁻⁷ (0.10–0.81×) and
+  max(p_l, 32) with iprec 3 at 10⁻⁸ (0.03–0.17×), the tables' waves; the same with the
+  multipole by M2M from children at p (the FMM's path) as by P2M.
+- Candidate 3, `generate_for_degree` at ε/20: 1.000–1.010× on all 26 points, at 1.6–2.9×
+  iprec 3's waves and 1.7–3.3× its modes, a contour to Re λ ≈ 37 at p = 24, 55.4 s to generate
+  at κ = 1.25, p = 24.
+- Candidate 2 erratic (0.35–5.8× on the plateau).
+- Changed on the way: the α counts of `generate_for_degree` have no floor of 2p + 1 (the chain
+  is the trapezoid at any count; 7,774 → 7,316 waves at κ = 1.25, p = 24); the fit's samples
+  gained the boxes' face centres (the corners and centres alone met ε on the samples but erred
+  up to 2.68ε and 7.91ε between them at p = 24, and 1.114× and 1.191× in the study; with the
+  face centres 0.06ε and 0.02ε, report §4), so the off-sample test keeps its 2ε; they make a
+  generation about 3× slower, so the determinism test runs at ε = 10⁻³, p = 3; the debug checks
+  are small (p = 5 and 6) to keep the crates' debug runs short (nd-fmm-ref's Helmholtz
+  executable 46 s at opt-level 0 against 22 s without them, 1.6 s at CI's opt-level 1); the
+  trusted values' check uses interior points (at the corners p = 30 still truncates at
+  5·10⁻⁷).
+
 ## Pending runs
 
 None.
 
 ## Open questions
 
-None yet.
+For sign-off (the report's §5):
+
+1. CH6.1g takes candidate 4, the resolving degree: below 10⁻⁶ a level with a quadrature runs
+   its exponential M2L at p_w = max(p_l, 24) with iprec 2 for 10⁻⁷ ≤ ε < 10⁻⁶ and at
+   p_w = max(p_l, 32) with iprec 3 for 10⁻⁸ ≤ ε < 10⁻⁷; Rotation below 10⁻⁸.
+2. Where CH6.1g raises the degree: (a) on the level (`Degrees` per level), first; (b) on the
+   M2L alone only if (a)'s costs eat the gain.
+3. `generate_for_degree` stays in nd-fmm-ref as a trusted path, not used by the FMM now.

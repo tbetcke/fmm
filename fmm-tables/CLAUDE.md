@@ -120,7 +120,13 @@ rule of which Helmholtz CH6.1e measured.
   them the chain also errs on the truncated multipole's tail, which the ignored
   `degree_study` records (docs/helmholtz/tasks/CH6.1c.md) and CH6.1d's choice of the
   quadrature per degree must answer. Every product and sum rounded apart (no `mul_add`
-  yet: no SIMD kernel restates these steps). Not cached.
+  yet: no SIMD kernel restates these steps). Not cached. Helmholtz CH6.1f (fmm-validate/results/helmholtz-ch6-1f.md) added
+  `against_rcr_with_degree_matched_quadratures` (`nd_fmm_ref`'s `generate_for_degree` through
+  `PlaneWaveLevel` against RCR at its degree, within 3ε; its ignored `…_at_the_fmms_degrees`)
+  and the ignored `degree_matched_study` (about 35 minutes in release): the four candidates of
+  CH6.1f at the FMM's degrees of 10⁻⁷ and 10⁻⁸, each level between children at p as in the
+  FMM, against the direct sum over RCR's (FMM3D's tables at p and at a raised degree, the
+  generator at a chosen ε, the degree-matched quadrature).
   `helmholtz::plane_wave::merge` (Helmholtz CH6.1d; its module docs): `MergeLevel`, a
   level's `PlaneWaveLevel` with the merge's shift factors of CONVENTIONS §3.14's geometry
   (`crate::plane_wave::geometry`, read only): the source shifts slot → parent, one table
