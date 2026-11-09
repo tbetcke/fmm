@@ -74,6 +74,16 @@
 #   t13-cut         the same launches with the second cut (`--cut work`): how the
 #                   constants balance the ranks' work under PlaneWave
 #
+# The plane-wave M2L's coarse levels (Helmholtz CH6.2i, docs/helmholtz/tasks/CH6.2i.md):
+#   ch6-2i          one rank under PlaneWave with --kinds (the M2L per level, with the
+#                   boxes and the pieces of merge and shift's split by parents), overlap
+#                   off, the P2P choice's ISA (auto): the cube and the Plummer sphere at
+#                   N = 10^6 at 1 thread and every core (CORES), and at T13_NS at every
+#                   core, f64 p = 8, 12, 18 and f32 p = 8 (where the host's Auto takes
+#                   PlaneWave); three timed evaluations (two at p = 12, one at p = 18);
+#                   each split of CH6_2I_SPLITS (default "default", the library's; or
+#                   "parents", "children", "auto", which the harness's --split names)
+#
 # Sweeps of several charge vectors (Phase 6 T5, docs/phase6/T5-multiple-rhs.md;
 # docs/design/optimisation.md §4), every host launch with --kinds, overlap off, three timed
 # evaluations, at `--rhs m` for every m of T5_RHS (default "1 2 4 8 16 32"); the time per
@@ -426,6 +436,7 @@ Darwin)
 esac
 
 T5_RHS=${T5_RHS:-"1 2 4 8 16 32"}
+CH6_2I_SPLITS=${CH6_2I_SPLITS:-default}
 T11_NS=${T11_NS:-"1000000 10000000"}
 T11_DEGREES=${T11_DEGREES:-"f64:3 f64:6 f64:8 f64:12 f64:18 f32:3 f32:6 f32:8"}
 T11_VARIANTS=${T11_VARIANTS:-"batched batched-fused rotation planewave"}
@@ -1061,6 +1072,29 @@ for sweep in "$@"; do
                     for variant in $t13_variants; do
                         t13_launch "t13-host-$dist-n$n-f64-p$p" 1 "$CORES" "$variant" \
                             --dist $dist --n "$n" --precision f64 --p "$p" --evals 1
+                    done
+                done
+            done
+        done
+        ;;
+    ch6-2i)
+        for dist in cube plummer; do
+            for dp in f64:8 f64:12 f64:18 f32:8; do
+                prec=${dp%%:*} p=${dp##*:} evals=3
+                if [ "$p" -ge 12 ]; then evals=2; fi
+                if [ "$p" -ge 18 ]; then evals=1; fi
+                for n in 1000000 $T13_NS; do
+                    threads="1 $CORES"
+                    if [ "$n" != 1000000 ]; then threads=$CORES; fi
+                    for t in $threads; do
+                        for split in $CH6_2I_SPLITS; do
+                            args=""
+                            if [ "$split" != default ]; then args="--split $split"; fi
+                            # shellcheck disable=SC2086
+                            launch "$sweep-$dist-n$n-$prec-p$p-planewave-$split-r1x$t" 1 "$t" \
+                                --dist $dist --n "$n" --precision "$prec" --p "$p" \
+                                --strategy planewave --kinds --overlap off --evals "$evals" $args
+                        done
                     done
                 done
             done
