@@ -9,7 +9,8 @@ Per case (workload, kD, ε), Rotation and PlaneWave by the rule in each `PlaneWa
 times of the two launches (forward and reverse order; the smaller of each): the evaluation,
 the rest of the evaluation (evaluation − M2L summed over the levels), the M2L and the
 build, each form's over Rotation's. The checksums of a run's two launches must agree (the
-output is deterministic). Then the ranges per ε, measure and form.
+output is deterministic). Then the ranges per ε, measure and form; the times' ranges over
+the cases run in both orders only (a stage run forward alone, as `e7x`, is marked *).
 """
 
 import glob
@@ -92,7 +93,7 @@ def main():
                 "rest": min(x[2] - x[1] for x in launches),
                 "build": min(float(x[0]["build s"]) for x in launches),
             }
-        measures[case] = (first, m)
+        measures[case] = (first, m, len(runs["rotation"]))
 
     print("Errors, each form's over Rotation's:")
     print()
@@ -100,7 +101,7 @@ def main():
           "| Leaves φ | ∇φ | M2l φ | ∇φ |")
     print("| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for case in cases:
-        first, m = measures[case]
+        first, m, _ = measures[case]
         rot = m["rotation"]
         eps = case[2].split("= ")[1]
         line = (f"| {eps} | {case[0]} | {case[1]} | {first['rotation']['p by level']} → "
@@ -109,7 +110,8 @@ def main():
             line += f" {ratio(rot['φ'], m[form]['φ']):.3f} | {ratio(rot['∇φ'], m[form]['∇φ']):.3f} |"
         print(line)
     print()
-    print("Times (s; the smaller of the two launches), each form's over Rotation's:")
+    print("Times (s; the smaller of the two launches, or of one where marked *), each form's "
+          "over Rotation's:")
     print()
     print("| ε | workload | kD | evaluate Rot. | Level | Leaves | M2l | rest Rot. | Level | Leaves "
           "| M2l | M2L Rot. | Level | Leaves | M2l | build Rot. | Level | Leaves | M2l |")
@@ -117,10 +119,11 @@ def main():
           "| ---: | ---: | ---: | ---: | ---: | ---: |")
     worst = {}
     for case in cases:
-        _, m = measures[case]
+        _, m, launches = measures[case]
         rot = m["rotation"]
         eps = case[2].split("= ")[1]
-        line = f"| {eps} | {case[0]} | {case[1]} |"
+        mark = "" if launches > 1 else " *"
+        line = f"| {eps} | {case[0]} | {case[1]}{mark} |"
         for name in ("evaluate", "rest", "M2L", "build"):
             line += f" {rot[name]:.3f} |"
             for form in FORMS:
@@ -131,11 +134,13 @@ def main():
                 x = ratio(rot[name], m[form][name])
                 if x != x:  # a build below the column's resolution
                     continue
+                if launches < 2 and name not in ("φ", "∇φ"):
+                    continue  # times of one launch: in the table, not the ranges
                 key = (eps, name, NAMES[form])
                 lo, hi = worst.get(key, (float("inf"), 0.0))
                 worst[key] = (min(lo, x), max(hi, x))
             # M2l and Leaves over Level, the evaluation.
-            if form != "planewave":
+            if form != "planewave" and launches > 1:
                 x = ratio(m["planewave"]["evaluate"], m[form]["evaluate"])
                 key = (eps, "evaluate ÷ Level's", NAMES[form])
                 lo, hi = worst.get(key, (float("inf"), 0.0))

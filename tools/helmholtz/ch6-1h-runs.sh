@@ -9,7 +9,9 @@
 # Stages: `e7` (CH6.1e's cases at ε = 1e-7, its `between` list: W1 at kD = 10, 30, 100, W3
 # at kD = 10, 30, the cube and the clusters at N = 10⁵ and kD = 1, 100) and `e8` (its
 # matrix at ε = 1e-8: W1 at kD = 10, 30, 100, W3 at kD = 10, 30, the four W4 distributions
-# at N = 10⁵ and kD = 1, 10, 100; CH6.1g's cases). Each case is one launch with
+# at N = 10⁵ and kD = 1, 10, 100; CH6.1g's cases), and `e7x` (the W4 cases of `e8` at 1e-7
+# that `e7` lacks: the sphere and the Plummer sphere at kD = 1, 10, 100, the cube and the
+# clusters at kD = 10; for the errors, run forward only with ONLY=-forward). Each case is one launch with
 # `--m2l rotation,planewave --raise level,leaves,m2l` (Rotation, then PlaneWave by the rule
 # at the resolving degree in each `PlaneWaveRaise` form: the whole level raised, the raised
 # levels' translations at the degrees given, those and the leaves' operators at the degrees
@@ -58,6 +60,14 @@ cases() {
             echo "w3|--workload w3 --kd 10,30 --eps 1e-8"
             for d in cube sphere plummer clusters; do
                 echo "w4-$d|--workload w4-$d:100000 --kd 1,10,100 --eps 1e-8"
+            done
+            ;;
+        e7x)
+            for d in sphere plummer; do
+                echo "w4-$d|--workload w4-$d:100000 --kd 1,10,100 --eps 1e-7"
+            done
+            for d in cube clusters; do
+                echo "w4-$d|--workload w4-$d:100000 --kd 10 --eps 1e-7"
             done
             ;;
         *) echo "unknown stage $1" >&2; exit 2 ;;
