@@ -25,23 +25,42 @@
 //! Measured in the FMM (Helmholtz CH6.1e, `fmm-validate/results/helmholtz-ch6-1e.md`): on
 //! CH3.1c's cases at the calibrated degrees, each level with a quadrature forced to each
 //! precision alone, the FMM's relative ℓ2 errors of φ and ∇φ against the direct sum over
-//! Rotation's. The precision a level needs follows the FMM's tolerance ε, not its degree or
-//! κ_l: iprec 2 stays within 1.05× Rotation's on every level and case for
-//! 10⁻⁶ ≤ ε ≤ 10⁻³ ([`PLANE_WAVE_MIN_TOLERANCE`]) and misses it from ε = 10⁻⁷ (up to 5.4×
-//! there, 77× at 10⁻⁸); iprec 1 misses it from ε = 10⁻³ (up to 1.15× on one level alone,
-//! 3.6× at 10⁻⁴); iprec 3
-//! holds on most levels at 10⁻⁷ and 10⁻⁸ but not on the deep levels of the clustered trees
-//! (κ_l ≤ 0.08: 1.12× at 10⁻⁷, 1.76× at 10⁻⁸ on one level alone), where its degree-p
-//! waves err on the truncated multipole's tail (CH6.1c's degree study). So
-//! [`precision_for_tolerance`] takes iprec 2 for ε ≥ [`PLANE_WAVE_MIN_TOLERANCE`] and no
-//! precision below (Rotation there).
+//! Rotation's. At the level's own degree the precision a level needs follows the FMM's
+//! tolerance ε, not its degree or κ_l: iprec 2 stays within 1.05× Rotation's on every level
+//! and case for 10⁻⁶ ≤ ε ≤ 10⁻³ ([`PLANE_WAVE_MIN_TOLERANCE`]) and misses it from ε = 10⁻⁷
+//! (up to 5.4× there, 77× at 10⁻⁸); iprec 1 misses it from ε = 10⁻³ (up to 1.15× on one
+//! level alone, 3.6× at 10⁻⁴); iprec 3 holds on most levels at 10⁻⁷ and 10⁻⁸ but not on
+//! the deep levels of the clustered trees (κ_l ≤ 0.08: 1.12× at 10⁻⁷, 1.76× at 10⁻⁸ on one
+//! level alone), where its degree-p waves err on the truncated multipole's tail (CH6.1c's
+//! degree study).
+//!
+//! Below 10⁻⁶ the level's degree is raised (Helmholtz CH6.1f, the resolving degree,
+//! `fmm-validate/results/helmholtz-ch6-1f.md` §3; signed off 2026-11-09): on the pair chain
+//! FMM3D's tables fail only on the plateau's degrees (p = 20 at 10⁻⁷, 24 at 10⁻⁸), whose
+//! multipoles' tails their waves do not resolve, and hold at 0.010–0.81× RCR's error from a
+//! degree of 24 with iprec 2 and of 32 with iprec 3. So a level with a quadrature runs at
+//! p_w = max(p_l, d) ([`plane_wave_degree`], d the [`resolving_degree`]):
+//!
+//! | ε | precision | d |
+//! | --- | --- | ---: |
+//! | ε ≥ [`PLANE_WAVE_MIN_TOLERANCE`] (10⁻⁶) | iprec 2 | – (p_l) |
+//! | [`IPREC3_TOLERANCE`] (10⁻⁷) ≤ ε < 10⁻⁶ | iprec 2 | [`RESOLVING_DEGREE_IPREC2`] (24) |
+//! | [`RESOLVING_MIN_TOLERANCE`] (10⁻⁸) ≤ ε < 10⁻⁷ | iprec 3 | [`RESOLVING_DEGREE_IPREC3`] (32) |
+//! | ε < 10⁻⁸ | none (Rotation) | – |
+//!
+//! [`precision_for_tolerance`] gives the precision, [`resolving_degree`] d; the FMM raises
+//! the level's degree itself (`nd_fmm_exec::helmholtz::HelmholtzOperator`), so every
+//! operator of the level runs at p_w. In the FMM (Helmholtz CH6.1g,
+//! `fmm-validate/results/helmholtz-ch6-1g.md`) the rule keeps CH6.1e's cases at 10⁻⁷ and
+//! 10⁻⁸ within 1.1× Rotation's error at the level's own degree.
 //!
 //! An FMM with named degrees has no tolerance. [`precision_for_degree`] then takes the
 //! tolerance a degree p meets on the low-frequency plateau of the calibrated degree rule
 //! (`nd_fmm_exec::helmholtz::DegreeRule::CALIBRATED`, ⌈0.30 L² + 0.25 L + 2.60⌉ with
 //! L = log₁₀(1/ε)): iprec 2 to [`MAX_PLANE_WAVE_DEGREE`], the plateau at
-//! [`PLANE_WAVE_MIN_TOLERANCE`], none above. A high-frequency level has a larger degree at
-//! the same ε, so it may get none where the tolerance would give it iprec 2.
+//! [`PLANE_WAVE_MIN_TOLERANCE`], none above, and never a raised degree. A high-frequency
+//! level has a larger degree at the same ε, so it may get none where the tolerance would
+//! give it iprec 2.
 //!
 //! [`select`] applies either on every level with a V list whose κ_l = k w_l lies in the
 //! tables. Both are functions of k, the level's width, its degree and ε only (proposal §2,
@@ -53,23 +72,69 @@ use super::pair::PlaneWaveLevel;
 use super::quadrature::{Precision, Quadrature, RHO_MAX, assert_reach, domain_of};
 use crate::plane_wave::geometry::{self, CHILDREN, Direction, MergeGeometry, SLOTS};
 
-/// The smallest tolerance at which [`precision_for_tolerance`] gives a precision (Helmholtz
-/// CH6.1e).
+/// The smallest tolerance at which a level with a quadrature runs at its own degree
+/// (Helmholtz CH6.1e; the [module documentation](self)); below it [`resolving_degree`]
+/// raises the degree. D8's bound on `HelmholtzM2l::Auto`'s exponential M2L.
 pub const PLANE_WAVE_MIN_TOLERANCE: f64 = 1e-6;
+
+/// The tolerance below which the rule takes iprec 3 (Helmholtz CH6.1f).
+pub const IPREC3_TOLERANCE: f64 = 1e-7;
+
+/// The smallest tolerance at which [`precision_for_tolerance`] gives a precision (Helmholtz
+/// CH6.1f); Rotation below.
+pub const RESOLVING_MIN_TOLERANCE: f64 = 1e-8;
+
+/// The resolving degree of iprec 2, for [`IPREC3_TOLERANCE`] ≤ ε <
+/// [`PLANE_WAVE_MIN_TOLERANCE`] (Helmholtz CH6.1f).
+pub const RESOLVING_DEGREE_IPREC2: usize = 24;
+
+/// The resolving degree of iprec 3, for [`RESOLVING_MIN_TOLERANCE`] ≤ ε <
+/// [`IPREC3_TOLERANCE`] (Helmholtz CH6.1f).
+pub const RESOLVING_DEGREE_IPREC3: usize = 32;
 
 /// The largest degree [`precision_for_degree`] gives a precision: the calibrated plateau
 /// at [`PLANE_WAVE_MIN_TOLERANCE`].
 pub const MAX_PLANE_WAVE_DEGREE: usize = 15;
 
-/// The precision the rule takes where it takes one, iprec 2 (the [module
+/// The precision the rule takes at ε ≥ [`IPREC3_TOLERANCE`], iprec 2 (the [module
 /// documentation](self)).
 pub const RULE_PRECISION: Precision = Precision::Iprec2;
 
 /// The precision of the levels of an FMM at tolerance ε (the [module
-/// documentation](self)): [`RULE_PRECISION`] for ε ≥ [`PLANE_WAVE_MIN_TOLERANCE`], `None`
-/// below (Rotation there) and for a ε that is not positive and finite.
+/// documentation](self)): [`RULE_PRECISION`] for ε ≥ [`IPREC3_TOLERANCE`], iprec 3 for
+/// [`RESOLVING_MIN_TOLERANCE`] ≤ ε < [`IPREC3_TOLERANCE`], `None` below (Rotation there)
+/// and for a ε that is not positive and finite. Below [`PLANE_WAVE_MIN_TOLERANCE`] the
+/// precision holds at the [`resolving_degree`] only.
 pub fn precision_for_tolerance(epsilon: f64) -> Option<Precision> {
-    (epsilon >= PLANE_WAVE_MIN_TOLERANCE && epsilon.is_finite()).then_some(RULE_PRECISION)
+    if !epsilon.is_finite() || epsilon < RESOLVING_MIN_TOLERANCE {
+        None
+    } else if epsilon < IPREC3_TOLERANCE {
+        Some(Precision::Iprec3)
+    } else {
+        Some(RULE_PRECISION)
+    }
+}
+
+/// The resolving degree d of the levels with a quadrature at tolerance ε (Helmholtz CH6.1f;
+/// the [module documentation](self)): 0 (the level's own degree) for
+/// ε ≥ [`PLANE_WAVE_MIN_TOLERANCE`], [`RESOLVING_DEGREE_IPREC2`] for
+/// [`IPREC3_TOLERANCE`] ≤ ε < [`PLANE_WAVE_MIN_TOLERANCE`], [`RESOLVING_DEGREE_IPREC3`]
+/// for [`RESOLVING_MIN_TOLERANCE`] ≤ ε < [`IPREC3_TOLERANCE`], and 0 where
+/// [`precision_for_tolerance`] gives none.
+pub fn resolving_degree(epsilon: f64) -> usize {
+    match precision_for_tolerance(epsilon) {
+        Some(_) if epsilon >= PLANE_WAVE_MIN_TOLERANCE => 0,
+        Some(Precision::Iprec3) => RESOLVING_DEGREE_IPREC3,
+        Some(_) => RESOLVING_DEGREE_IPREC2,
+        None => 0,
+    }
+}
+
+/// The degree p_w = max(p, d) at which a level of degree `p` with a quadrature runs at the
+/// FMM's tolerance ε, d the [`resolving_degree`] (Helmholtz CH6.1g): p itself for
+/// ε ≥ [`PLANE_WAVE_MIN_TOLERANCE`], never below p.
+pub fn plane_wave_degree(p: usize, epsilon: f64) -> usize {
+    p.max(resolving_degree(epsilon))
 }
 
 /// The precision of a level of named degree `p`, without a tolerance (the [module
@@ -80,7 +145,8 @@ pub fn precision_for_degree(p: usize) -> Option<Precision> {
 }
 
 /// The precision of each level of a tree with k̂₀ = k r₀ at the root and degrees p_l, at
-/// the FMM's tolerance if it has one: [`precision_for_tolerance`] of `tolerance`, or
+/// the FMM's tolerance if it has one: [`precision_for_tolerance`] of `tolerance` (which
+/// below [`PLANE_WAVE_MIN_TOLERANCE`] holds at [`plane_wave_degree`] only), or
 /// without one [`precision_for_degree`] of p_l, on the levels l ≥ 2 whose
 /// κ_l = 2 k̂₀ 2⁻ˡ lies in the tables ([`domain_of`]), `None` on levels 0 and 1 (no V list)
 /// and on the others. `None` everywhere unless Re k̂₀ > 0 and Im k̂₀ ≥ 0 are finite.

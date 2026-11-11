@@ -9,8 +9,10 @@
 
 use nd_fmm_math::Complex;
 use nd_fmm_tables::helmholtz::plane_wave::merge::{
-    MAX_PLANE_WAVE_DEGREE, MergeLevel, PLANE_WAVE_MIN_TOLERANCE, PlaneWaveM2l, RULE_PRECISION, add,
-    precision_for_degree, precision_for_tolerance, select, shift,
+    IPREC3_TOLERANCE, MAX_PLANE_WAVE_DEGREE, MergeLevel, PLANE_WAVE_MIN_TOLERANCE, PlaneWaveM2l,
+    RESOLVING_DEGREE_IPREC2, RESOLVING_DEGREE_IPREC3, RESOLVING_MIN_TOLERANCE, RULE_PRECISION, add,
+    plane_wave_degree, precision_for_degree, precision_for_tolerance, resolving_degree, select,
+    shift,
 };
 use nd_fmm_tables::helmholtz::plane_wave::pair::shift_add;
 use nd_fmm_tables::helmholtz::plane_wave::quadrature::{RHO_MAX, domain_of};
@@ -112,21 +114,62 @@ fn slot_and_child_shifts_factor_the_pair_shift() {
 #[test]
 fn the_rule_pairs_tolerances_with_precisions() {
     let iprec2 = Some(Precision::Iprec2);
+    let iprec3 = Some(Precision::Iprec3);
     assert_eq!(RULE_PRECISION, Precision::Iprec2);
+    assert_eq!(
+        (
+            PLANE_WAVE_MIN_TOLERANCE,
+            IPREC3_TOLERANCE,
+            RESOLVING_MIN_TOLERANCE
+        ),
+        (1e-6, 1e-7, 1e-8)
+    );
+    // CH6.1e's iprec 2 at ε ≥ 10⁻⁶; CH6.1f's resolving degree below (iprec 2 to 10⁻⁷,
+    // iprec 3 to 10⁻⁸; Helmholtz CH6.1g); none below 10⁻⁸.
     for (eps, want) in [
         (1e-1, iprec2),
         (1e-3, iprec2),
         (1e-6, iprec2),
         (PLANE_WAVE_MIN_TOLERANCE, iprec2),
-        (PLANE_WAVE_MIN_TOLERANCE * 0.999, None),
-        (1e-7, None),
-        (1e-8, None),
+        (PLANE_WAVE_MIN_TOLERANCE * 0.999, iprec2),
+        (IPREC3_TOLERANCE, iprec2),
+        (IPREC3_TOLERANCE * 0.999, iprec3),
+        (RESOLVING_MIN_TOLERANCE, iprec3),
+        (RESOLVING_MIN_TOLERANCE * 0.999, None),
+        (1e-9, None),
         (0.0, None),
         (-1e-3, None),
         (f64::NAN, None),
         (f64::INFINITY, None),
     ] {
         assert_eq!(precision_for_tolerance(eps), want, "ε = {eps:e}");
+    }
+}
+
+#[test]
+fn the_rule_raises_the_degree_below_the_level_degrees_tolerance() {
+    assert_eq!((RESOLVING_DEGREE_IPREC2, RESOLVING_DEGREE_IPREC3), (24, 32));
+    for (eps, want) in [
+        (1e-3, 0),
+        (PLANE_WAVE_MIN_TOLERANCE, 0),
+        (PLANE_WAVE_MIN_TOLERANCE * 0.999, 24),
+        (IPREC3_TOLERANCE, 24),
+        (IPREC3_TOLERANCE * 0.999, 32),
+        (RESOLVING_MIN_TOLERANCE, 32),
+        (RESOLVING_MIN_TOLERANCE * 0.999, 0),
+        (0.0, 0),
+        (f64::NAN, 0),
+        (f64::INFINITY, 0),
+    ] {
+        assert_eq!(resolving_degree(eps), want, "ε = {eps:e}");
+        // The level's degree, raised to the resolving degree and never lowered.
+        for p in [0, 7, 20, 24, 30, 32, 40] {
+            assert_eq!(
+                plane_wave_degree(p, eps),
+                p.max(want),
+                "ε = {eps:e}, p = {p}"
+            );
+        }
     }
 }
 
@@ -150,7 +193,14 @@ fn select_applies_the_rule_where_the_tables_reach() {
     // κ₀ = 2k̂₀ = 400: levels 0–2 (κ_l = 400, 200, 100 ≥ 16π) lie outside the tables.
     let k_root = C::new(200.0, 0.0);
     let degrees = [30, 30, 30, 30, 30, 24, 15, 8, 6];
-    for tolerance in [None, Some(1e-3), Some(1e-6), Some(1e-8)] {
+    for tolerance in [
+        None,
+        Some(1e-3),
+        Some(1e-6),
+        Some(1e-7),
+        Some(1e-8),
+        Some(1e-9),
+    ] {
         let chosen = select(k_root, &degrees, tolerance);
         for (l, (&p, &got)) in degrees.iter().zip(&chosen).enumerate() {
             let kappa = k_root * 2.0 * 0.5f64.powi(l as i32);
@@ -171,7 +221,12 @@ fn select_applies_the_rule_where_the_tables_reach() {
     // By the tolerance, whatever the degrees.
     assert_eq!(&select(k_root, &degrees, Some(1e-3))[3..], &[iprec2; 6]);
     assert_eq!(&select(k_root, &degrees, Some(1e-6))[3..], &[iprec2; 6]);
-    assert_eq!(&select(k_root, &degrees, Some(1e-8))[3..], &[None; 6]);
+    assert_eq!(&select(k_root, &degrees, Some(1e-7))[3..], &[iprec2; 6]);
+    assert_eq!(
+        &select(k_root, &degrees, Some(1e-8))[3..],
+        &[Some(Precision::Iprec3); 6]
+    );
+    assert_eq!(&select(k_root, &degrees, Some(1e-9))[3..], &[None; 6]);
     // Complex k; and k̂₀ with Re k̂₀ = 0 (Yukawa) or Im k̂₀ < 0, none.
     assert_eq!(
         select(C::new(3.0, 1.0), &[8, 8, 8, 8], None),
