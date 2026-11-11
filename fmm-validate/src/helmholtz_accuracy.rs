@@ -495,7 +495,8 @@ pub struct Row {
     pub plane_wave_raise: PlaneWaveRaise,
     /// Per level, the degree of its translations to and from its parent level
     /// (`HelmholtzOperator::translation_degree`): `degrees`' but on the levels
-    /// [`PlaneWaveRaise::M2l`] keeps at the degree given (Helmholtz CH6.1h).
+    /// [`PlaneWaveRaise::Leaves`] and [`PlaneWaveRaise::M2l`] keep at the degree given
+    /// (Helmholtz CH6.1h).
     pub translation_degrees: Vec<usize>,
     /// Per level, its waves per direction Σₖ Nₖ under [`HelmholtzM2l::PlaneWave`], 0 where
     /// it ran RCR (and under every other setting; Helmholtz CH6.2e).

@@ -315,9 +315,9 @@ const PLANE_WAVE_RATIO: f64 = 1.1;
 /// precisions the rule's (`precision_for_tolerance` of ε on every level with waves), and
 /// named precisions as named; at ε = 10⁻⁶ also `check_fmm`'s checks. At ε = 10⁻⁸ the rule
 /// takes iprec 3 at the resolving degree (Helmholtz CH6.1g): each level with waves at
-/// max(p_l, 32), the others at Rotation's degrees; under `PlaneWaveRaise::M2l` (Helmholtz
-/// CH6.1h) the same degrees, the translations at Rotation's, within [`PLANE_WAVE_RATIO`] of
-/// Rotation's errors. The counts' reach (Helmholtz CH6.2e): the corner's by default, with waves exactly on the
+/// max(p_l, 32), the others at Rotation's degrees; under `PlaneWaveRaise::Leaves` and
+/// `PlaneWaveRaise::M2l` (Helmholtz CH6.1h) the same degrees, the translations at
+/// Rotation's, within [`PLANE_WAVE_RATIO`] of Rotation's errors. The counts' reach (Helmholtz CH6.2e): the corner's by default, with waves exactly on the
 /// levels with a precision; at reach 4 at most the corner's waves per level and fewer in all,
 /// and on W1 within [`PLANE_WAVE_RATIO`] of Rotation's errors. The split by child
 /// (Helmholtz CH6.2f) at 2 threads the default's checksum.
@@ -424,19 +424,22 @@ fn check_plane_wave(world: &SimpleCommunicator) {
         // The raised levels' translations at the degrees given (CH6.1h).
         assert_eq!(row.plane_wave_raise, PlaneWaveRaise::Level);
         assert_eq!(row.translation_degrees, row.degrees);
-        if eps < 1e-6 {
-            case.plane_wave_raise = Some(PlaneWaveRaise::M2l);
+        for raise in [PlaneWaveRaise::Leaves, PlaneWaveRaise::M2l] {
+            if eps >= 1e-6 {
+                break;
+            }
+            case.plane_wave_raise = Some(raise);
             let m2l = run(&case, &problem, &oracle, 1, world).expect("the FMM runs");
             case.plane_wave_raise = None;
-            assert_eq!(m2l.plane_wave_raise, PlaneWaveRaise::M2l);
+            assert_eq!(m2l.plane_wave_raise, raise);
             assert_eq!(m2l.degrees, row.degrees);
             assert_eq!(m2l.translation_degrees, rotation.degrees);
             let all = m2l.errors.last().unwrap();
             for j in 0..2 {
                 assert!(
                     all[j] <= PLANE_WAVE_RATIO * reference[j],
-                    "{workload:?} at ε = {eps}, raised on the M2L alone: errors {all:?} \
-                     against Rotation's {reference:?}"
+                    "{workload:?} at ε = {eps}, raised by {raise:?}: errors {all:?} against \
+                     Rotation's {reference:?}"
                 );
             }
         }

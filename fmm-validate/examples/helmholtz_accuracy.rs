@@ -54,11 +54,12 @@
 //!   the threads (`auto`, the default, the library's), each exponential-M2L run (the scan's
 //!   at the first) at each split in turn; the column "M2L" of a row at another split ends
 //!   with `/parents` or `/children`. No bit depends on it.
-//! - `--raise level|m2l,…` (Helmholtz CH6.1h): which operators of a level the rule raises
-//!   below 10⁻⁶ run at the raised degree (`level`, the default, the library's: every one;
-//!   `m2l`: the level's translations to and from its parent at the degree given), each
-//!   exponential-M2L run (the scan's at the first; Auto's with waves too) at each in turn,
-//!   inside `--split`'s loop; the column "M2L" of a row with `m2l` ends with `/m2l`.
+//! - `--raise level|leaves|m2l,…` (Helmholtz CH6.1h, `PlaneWaveRaise`): which operators of a
+//!   level the rule raises below 10⁻⁶ run at the raised degree (`level`, the default, the
+//!   library's: every one; `leaves`: the level's translations to and from its parent at the
+//!   degree given; `m2l`: those and its leaves' operators), each exponential-M2L run (the
+//!   scan's at the first; Auto's with waves too) at each in turn, inside `--split`'s loop;
+//!   the column "M2L" of a row ends with `/leaves` or `/m2l` where named.
 //! - `--plane-wave-budget MB|whole` (Helmholtz CH6.2a): the exponential M2L's waves buffer
 //!   per node (default the library's, `DEFAULT_PLANE_WAVE_NODE_BUDGET`; `whole` a whole
 //!   level). The column "M2L" of an exponential-M2L row gives rank 0's waves buffer, its
@@ -205,7 +206,7 @@ fn arguments() -> Arguments {
              auto-pw:<d>|sweep|\
              planewave|planewave:<1|2|3>|planewave-scan|planewave-scan:<1|2|3>,…] \
              [--dense-budget MB] [--plane-wave-budget MB|whole] [--reach corner|r,…] \
-             [--split auto|parents|children,…] [--raise level|m2l,…] [--levels] \
+             [--split auto|parents|children,…] [--raise level|leaves|m2l,…] [--levels] \
              [--evaluations n]; got {args:?}"
         );
         std::process::exit(2);
@@ -361,6 +362,7 @@ fn arguments() -> Arguments {
                         .split(',')
                         .map(|v| match v {
                             "level" => Some(None),
+                            "leaves" => Some(Some(PlaneWaveRaise::Leaves)),
                             "m2l" => Some(Some(PlaneWaveRaise::M2l)),
                             _ => None,
                         })
@@ -488,8 +490,8 @@ fn auto_name(row: &Row) -> Option<String> {
 }
 
 /// For an exponential-M2L row (or Auto's with waves), ` ρ r` where its counts' reach is not
-/// the corner's, `/parents` or `/children` where its split is named and `/m2l` where the
-/// raised levels' translations keep the degrees given; else empty.
+/// the corner's, `/parents` or `/children` where its split is named and `/leaves` or `/m2l`
+/// where the raised levels' form is; else empty.
 fn reach_suffix(row: &Row) -> String {
     if row.m2l != HelmholtzM2l::PlaneWave && row.m2l_plane_wave_min_degree.is_none() {
         return String::new();
@@ -505,6 +507,7 @@ fn reach_suffix(row: &Row) -> String {
     };
     let raise = match row.plane_wave_raise {
         PlaneWaveRaise::Level => "",
+        PlaneWaveRaise::Leaves => "/leaves",
         PlaneWaveRaise::M2l => "/m2l",
     };
     format!("{reach}{split}{raise}")
