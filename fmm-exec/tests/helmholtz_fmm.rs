@@ -1346,7 +1346,10 @@ fn check_plane_wave(scenario: &Scenario, bounds: bool, comm: &SimpleCommunicator
 /// the degrees given (CH6.1's acceptance) and within the scenario's bound; 2 threads and,
 /// on several ranks, the one-rank FMM bit for bit. The clusters at kD = 1 have levels with
 /// waves at κ_l ≤ 0.08, the clustered trees' deep levels where CH6.1e's iprec 3 at p_l
-/// missed 1.1×. Returns the smallest |κ_l| of a level with waves and M2L pairs.
+/// missed 1.1×. The default M2L (Auto, D8's bound lifted below 10⁻⁷ and kept in
+/// 10⁻⁷ ≤ ε < 10⁻⁶; signed off 2026-11-11): PlaneWave's output bit for bit at 10⁻⁸, and at
+/// 10⁻⁷ Rotation's (every level's degree above Batched's crossover). Returns the smallest
+/// |κ_l| of a level with waves and M2L pairs.
 fn check_resolving_degree(scenario: &Scenario, comm: &SimpleCommunicator) -> f64 {
     let start = Instant::now();
     let rank = comm.rank();
@@ -1413,6 +1416,21 @@ fn check_resolving_degree(scenario: &Scenario, comm: &SimpleCommunicator) -> f64
     let (_, threaded) = run(&tables.clone().threads(2), &inputs, kind, comm);
     assert_same(&format!("{name}, 2 threads"), &threaded, &output, comm);
     check_one_rank(&name, &tables, &inputs, kind, &output, comm);
+    let (fmm, auto) = run(&default_builder(scenario), &inputs, kind, comm);
+    assert_eq!(fmm.operator().m2l_choice(), HelmholtzM2l::Auto);
+    let max_degree = fmm.m2l_max_degree().expect("Auto's crossover");
+    assert!(
+        given.iter().skip(2).all(|&p| p > max_degree),
+        "{name}: above the crossover"
+    );
+    if epsilon < 1e-7 {
+        assert_eq!(fmm.degrees(), raised, "{name}: Auto's degrees");
+        assert_same(&format!("{name}, Auto"), &auto, &output, comm);
+    } else {
+        assert_eq!(fmm.degrees(), given, "{name}: Auto's degrees");
+        assert_same(&format!("{name}, Auto"), &auto, &rotation, comm);
+    }
+    drop(fmm);
     if rank == 0 {
         println!("{name}: {:.1?}", start.elapsed());
     }

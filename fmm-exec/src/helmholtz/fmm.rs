@@ -327,8 +327,9 @@ impl HelmholtzFmmBuilder {
     /// default on since its sign-off, 2026-11-08; `false` gives CH3.2d's rule): on the levels
     /// of degree at least
     /// [`m2l_plane_wave_min_degree`](Self::m2l_plane_wave_min_degree) to which the precision
-    /// rule gives a quadrature (iprec 2 at ε ≥ 10⁻⁶ from the tolerance of
-    /// [`Degrees::Tolerance`]), with Im κ_l below
+    /// rule gives a quadrature (from the tolerance of [`Degrees::Tolerance`]: iprec 2 at
+    /// ε ≥ 10⁻⁶, and since Helmholtz CH6.1g iprec 3 at the raised degree max(p_l, 32) for
+    /// 10⁻⁸ ≤ ε < 10⁻⁷; none in 10⁻⁷ ≤ ε < 10⁻⁶, D8's bound kept there), with Im κ_l below
     /// [`AUTO_PLANE_WAVE_MAX_IM_KAPPA`](super::AUTO_PLANE_WAVE_MAX_IM_KAPPA), in f64 only;
     /// Batched and Rotation on the others as before
     /// (`HelmholtzOperator::with_auto_plane_wave`). With [`Degrees::PerLevel`] the quadrature

@@ -136,9 +136,19 @@ acceptance (errors) and the times beside Rotation, and so the D8 question. No M6
 - Risk: the debug cost of `tests/helmholtz_fmm.rs` (255 s one rank on the M6); the new
   check stays small (two trees of about 1,000 points).
 
+## Results
+
+The report `fmm-validate/results/helmholtz-ch6-1g.md`. Kathleen jobs 632472 (ε = 10⁻⁷, 85 s
+of runs) and 632473 (10⁻⁸, 270 s), one node 1 × 40, 20 launches, all exit 0; raw outputs in
+`~/projects/fmm-archive/kathleen/logs/ch6-1g/`. Every one of CH6.1e's 26 cases within 1.1×
+Rotation's error (largest 0.80, φ, W1 at kD = 100, 10⁻⁷). Times beside Rotation: report §3.
+The changes after question 1 (iprec 3 at 28) were synced to Kathleen before both jobs ran; the
+Auto change of question 2 came after them and does not touch what they ran (`rotation`,
+`planewave`).
+
 ## Pending runs
 
-(filled in step 6)
+None.
 
 ## Open questions
 
@@ -153,3 +163,8 @@ acceptance (errors) and the times beside Rotation, and so the D8 question. No M6
    floor, so it did not show. Asked; **signed off 2026-11-11: "iprec 3 at max(p,28)"**
    (the recommendation: on the pair chain iprec 3 at p + 8 = 28 is 0.02–0.93× RCR's error at
    every κ of CH6.1f's study at 10⁻⁷). The 10⁻⁸ band unchanged.
+2. **D8's bound** (the task's question; report §4): **signed off 2026-11-11, "Lift for
+   10⁻⁸–10⁻⁷ only (Recommended)"**: Auto takes the waves at 10⁻⁸ ≤ ε < 10⁻⁷, keeps Rotation at
+   10⁻⁷ ≤ ε < 10⁻⁶ until CH6.1h. Built on this branch with its tests.
+3. **The M2L-alone raise** (CH6.1f's option (b)): **signed off 2026-11-11, "Add CH6.1h, next on
+   the list (Recommended)"**: roadmap line and priority list item 6.

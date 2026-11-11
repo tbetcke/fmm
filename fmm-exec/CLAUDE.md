@@ -414,13 +414,17 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   again in `select_tables` where the degrees change (and back at the degrees given when a
   later setting takes the waves away), so every operator of the level and the store sizes
   follow; `degree` and `HelmholtzFmm::degrees` report the degrees run. Named precisions and
-  named degrees raise nothing; Auto keeps D8's bound (no waves on a level that would need a
-  raise). `tests/helmholtz/plane_wave.rs` checks the degrees, sizes and tables per level,
+  named degrees raise nothing. Auto takes the rule's levels, raised, at 10⁻⁸ ≤ ε < 10⁻⁷ and
+  keeps D8's bound in 10⁻⁷ ≤ ε < 10⁻⁶ (no waves there; signed off 2026-11-11, until
+  CH6.1h's M2L-alone raise is measured). `tests/helmholtz/plane_wave.rs` checks the degrees, sizes and tables per level,
   the order of the calls, Rotation afterwards, named precisions and Auto;
   `check_resolving_degree` in `tests/helmholtz_fmm.rs` (the clusters at kD = 1, with levels
   at κ_l ≤ 0.08, and the cube at kD = 20 + 2i, each at 10⁻⁷ and 10⁻⁸) the errors within
   `PLANE_WAVE_RATIO` of Rotation's at the degrees given, 2 threads and the one-rank FMM bit
-  for bit.
+  for bit, and the default (Auto) PlaneWave's output bit for bit at 10⁻⁸ and Rotation's at
+  10⁻⁷. Its debug cost: 157 s of the one-rank run (603 s) on a loaded M6 (load about 20),
+  where every other check ran about 1.7× slower than on a quiet one, so about 90 s quiet
+  (an estimate; not measured quiet).
   The level call is the crate-private `src/helmholtz/operator_plane_wave.rs`, Laplace's
   order (`src/operator_plane_wave.rs`) restated in scalar loops on
   `nd_fmm_tables::helmholtz::plane_wave` (no `nd-fmm-simd` kernel: Laplace's `WaveKernel`

@@ -290,14 +290,19 @@ fn the_rule_raises_the_degrees_below_the_level_degrees_tolerance() {
             .with_plane_wave_precision(PlaneWavePrecision::PerLevel(vec![Some(precision); 6]));
         assert_eq!(degrees(&named), DEGREES);
         assert_eq!(precisions(&named), want);
-        // Auto (f64, the exponential M2L from degree 0) keeps D8's bound: waves at the
-        // degrees given, none where the rule would raise them.
+        // Auto (f64, the exponential M2L from degree 0) keeps D8's bound in
+        // 10⁻⁷ ≤ ε < 10⁻⁶ and takes the rule's levels, raised, elsewhere (signed off
+        // 2026-11-11).
         let auto = given()
             .with_plane_wave_tolerance(Some(tolerance))
             .with_m2l_plane_wave_min_degree(Some(0))
             .with_m2l(HelmholtzM2l::Auto, 0);
-        assert_eq!(degrees(&auto), DEGREES, "Auto at ε = {tolerance:e}");
-        let auto_want = if d == 0 { want.clone() } else { vec![None; 6] };
+        let (auto_degrees, auto_want) = if tolerance == 1e-7 {
+            (DEGREES.to_vec(), vec![None; 6])
+        } else {
+            (raised.clone(), want.clone())
+        };
+        assert_eq!(degrees(&auto), auto_degrees, "Auto at ε = {tolerance:e}");
         assert_eq!(precisions(&auto), auto_want, "Auto at ε = {tolerance:e}");
     }
     // Without a tolerance (named degrees) nothing is raised.
@@ -450,9 +455,10 @@ fn methods(op: &HelmholtzOperator<f64>) -> Vec<HelmholtzM2l> {
 }
 
 /// Auto's rule with waves: the exponential M2L from the smallest degree where the precision
-/// rule gives a quadrature (ε 10⁻³ and 10⁻⁶), Batched at or below the crossover on the
-/// others, RCR else; off, with no quadrature (ε below 10⁻⁶) or the smallest degree above
-/// every level's, Auto's levels and tables as before.
+/// rule gives a quadrature (ε 10⁻³ and 10⁻⁶; at 10⁻⁸ at the resolving degree, Helmholtz
+/// CH6.1g), Batched at or below the crossover on the others, RCR else; off, with no
+/// quadrature (ε below 10⁻⁸), in D8's kept band 10⁻⁷ ≤ ε < 10⁻⁶, or with the smallest
+/// degree above every level's, Auto's levels and tables as before.
 #[test]
 fn auto_takes_the_waves_by_its_rule() {
     use HelmholtzM2l::{Batched, PlaneWave, Rotation};
@@ -500,14 +506,26 @@ fn auto_takes_the_waves_by_its_rule() {
         .collect();
     assert_eq!(methods(&before), want);
     for (case, op) in [
-        ("ε 1e-8", auto(k, Some(1e-8), 6, Some(10), true)),
+        ("ε 1e-7", auto(k, Some(1e-7), 6, Some(10), true)),
+        ("ε 1e-9", auto(k, Some(1e-9), 6, Some(10), true)),
         ("d_pw 23", auto(k, Some(1e-6), 6, Some(23), true)),
     ] {
         assert_eq!(methods(&op), want, "{case}");
+        assert_eq!(degrees(&op), DEGREES, "{case}");
         assert_eq!(op.batched_bytes(), before.batched_bytes(), "{case}");
         assert_eq!(op.plane_wave_bytes(), 0, "{case}");
     }
     assert_eq!(before.plane_wave_bytes(), 0);
+    // At 10⁻⁸ (Helmholtz CH6.1g, D8's bound lifted there): iprec 3 on the levels of degree
+    // at least d_pw, each raised to max(p_l, 32); Batched on level 2 at its own degree.
+    let op = auto(k, Some(1e-8), 6, Some(10), true);
+    assert_eq!(methods(&op), [Batched, PlaneWave, PlaneWave, PlaneWave]);
+    assert_eq!(degrees(&op), [0, 0, 6, 32, 32, 32]);
+    assert_eq!(
+        precisions(&op),
+        [None, None, None, Some(Iprec3), Some(Iprec3), Some(Iprec3)]
+    );
+    assert!(op.batched_bytes() > 0);
     // Off, the smallest degree is not reported; the setting before or after `with_m2l`.
     assert_eq!(
         auto(k, Some(1e-6), 6, None, false).plane_wave_min_degree(),

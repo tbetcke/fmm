@@ -118,6 +118,14 @@ fail on the plateau's degrees, not the high branch's; at a resolving degree (24 
 for iprec 3) they hold at 0.010–0.81× RCR's error with their own waves, and a quadrature matched
 to the degree (`generate_for_degree`, new) at 1.00–1.01× with 1.6–2.9× iprec 3's waves. Next:
 CH6.1g.
+2026-11-11: CH6.1g done (`fmm-validate/results/helmholtz-ch6-1g.md`; its three questions signed
+off the same day): below 10⁻⁶ the exponential M2L runs iprec 3 with the level's degree raised to
+max(p_l, 28) at 10⁻⁷ ≤ ε < 10⁻⁶ and max(p_l, 32) at 10⁻⁸ ≤ ε < 10⁻⁷ (CH6.1f's iprec 2 at 10⁻⁷
+erred above Rotation in the FMM at any degree). On CH6.1e's 26 cases (Kathleen 1 × 40) the
+errors 0.002–0.80× Rotation's, the evaluation 0.37–0.81× at 10⁻⁸ and 0.54–1.10× at 10⁻⁷ on the
+cases above 0.1 s; the raised leaves, M2M and L2L (1.3–1.9×) eat the M2L's gain at 10⁻⁷ on the
+deep trees. D8 amended: `Auto` takes it at 10⁻⁸ ≤ ε < 10⁻⁷, not yet at 10⁻⁷ ≤ ε < 10⁻⁶. CH6.1h
+(the degree raised on the M2L alone) added after it. Next: CH6.1h.
 
 ## How `/next-task` reads this file
 
@@ -167,7 +175,8 @@ CH3.6 (#170) and H3.G.
    CH6.2f's question 2: "schedule a Laplace task for 2"; *Machines:* locust, Kathleen)
 6. CH6.1f Quadratures for ε below 10⁻⁶ (needs CH6.1e; after CH6.2, before H6.G: CH6.1e's
    question 3, signed off 2026-11-03, "1–4 as recommended"): CH6.1f, CH6.1g (split on
-   2026-11-09)
+   2026-11-09), CH6.1h (added 2026-11-11 by CH6.1g's sign-off 3, "Add CH6.1h, next on the
+   list")
 
 Off the list, in file order: CH0.6, CH0.8b, CH0.9, CH0.5 and H0.G; CHR.3 and HR.G; CH1.3d
 and H1.G; CH2.1, CH2.2, CH2.3, CH2.5 and H2.G; H6.G; H4 (CH4.0, CH4.0b and CH4.0c first),
@@ -189,7 +198,7 @@ The proposal's Section 12, plus D0. A decision is recorded here when the user ta
 | D5 | Source types of the first release | real and complex charges, potentials and gradients; dipoles once C6.4 exists for Laplace (note: Laplace dipoles were merged in Phase 6 T8 and T8d, so the condition is met) | – | CH1.1 | signed off 2026-10-29: charges now, dipoles later; §3.15 fixes real and complex charges with potentials and gradients, and dipoles get a later, separate task |
 | D6 | Order of H4 and H6 | H6 first | H3.G | CH6.1, CH4.1 | signed off 2026-11-02 (H3 gate, question 2): "i agree with the recommendations", H6 first, as recommended; on the gate report's reason (§3.3): the calibrated degrees cut the low-frequency share of the far field at kD = 500 to about half (an estimate), and the FMM is slowest against FMM3D on low-frequency trees at tight ε, which H6 targets |
 | D7 | Host back ends of the φ step | the product as default and reference; FFTW behind the optional `fftw` feature; rustfft if S9 finds it deterministic per box and faster, decided per machine | CH0.9 | CHR.3, CH4.6 | open |
-| D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2h | CH7.5d | signed off 2026-11-08 (CH6.2h, questions 1–5; the user: "1–5 as recommended"): `Auto` takes the exponential M2L by default where p_l ≥ d_pw (Batched's crossover + 1; 12 on AVX-512 with two planes), CH6.1e's rule gives a quadrature (ε ≥ 10⁻⁶) and Im κ_l < 5π, f64 only; no boxes term (Batched's few-box levels to CH4.0); proposal §5.3 and §6.4 amended |
+| D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2h | CH7.5d | signed off 2026-11-08 (CH6.2h, questions 1–5; the user: "1–5 as recommended"): `Auto` takes the exponential M2L by default where p_l ≥ d_pw (Batched's crossover + 1; 12 on AVX-512 with two planes), CH6.1e's rule gives a quadrature (ε ≥ 10⁻⁶) and Im κ_l < 5π, f64 only; no boxes term (Batched's few-box levels to CH4.0); proposal §5.3 and §6.4 amended. Amended 2026-11-11 (CH6.1g, question 2; the user: "Lift for 10⁻⁸–10⁻⁷ only (Recommended)"): `Auto` also takes it at 10⁻⁸ ≤ ε < 10⁻⁷, where the rule runs iprec 3 at the raised degree max(p_l, 32), and not at 10⁻⁷ ≤ ε < 10⁻⁶ until CH6.1h; proposal §5.3 amended |
 | D9 | What "within noise" means for Laplace's benchmarks (constraint 1) | the run-to-run spread of the Laplace baseline, repeated on each machine before the change, per benchmark; plus the C3S.4 throughput gate | – | CHR.2, CH2.0 | signed off 2026-10-26: as recommended, the measured spread of the baseline per benchmark and machine, plus the C3S.4 gate. Clarified 2026-10-26 (CHR.2): one-sided, slower than `main` by more than the spread fails, faster passes when the outputs are bit for bit identical; from CH2.0 on five runs per side in the order A B B A A B B A A B, the spread max − min of `main`'s five run medians, never pooled with the branch's. Amended 2026-10-31 (CH2.0, the user: "as recommended"): a failing row may be repeated once and the repeat counts, with both results reported. Amended 2026-10-31 (the machine move, the user: "Amend: M6 replaces M3 Max"): the M6 (`tools/m6/machine.md`) replaces the M3 Max as a machine of record, its C3S.4 reference `spikes/p2p-simd/results-m6.md` |
 | D10 | cubek-fft on the device | after S5: adopt, contribute upstream first, or keep the transform as a GEMM | CH0.5 | CH7.4 | open |
 | D11 | Maximum leaf width c_leaf | from S8: the largest c_leaf with P2P and leaf costs within 10 % of their best on W1 and W3 (expected 0.5 to 1) | CH0.8a | CH3.0 | signed off 2026-10-28: as recommended (CH0.8a report §9, question 1), c_leaf = 1 by the revised rule, the largest c_leaf with no high-frequency leaf on any workload at 10⁻⁶ and 10⁻⁸, replacing the rule of this row, which is degenerate; a first-pass value that CH0.8b may revise with S6's constants and S7's p |
@@ -757,7 +766,17 @@ at any kD.
   recommended for CH6.1g with its rule a function of k, w_l, p_l and ε, for sign-off; or
   the report shows none is, and what it would cost. *Needs:* CH6.1e. *Sign-off:* the
   recommendation.
-- [ ] **CH6.1g The quadrature below 10⁻⁶ in the FMM.** CH6.1f's recommended quadrature in
+- [x] **CH6.1g The quadrature below 10⁻⁶ in the FMM.** Report:
+  `fmm-validate/results/helmholtz-ch6-1g.md`; plan `docs/helmholtz/tasks/CH6.1g.md`. Built:
+  iprec 3 at the raised degree max(p_l, 28) for 10⁻⁷ ≤ ε < 10⁻⁶ and max(p_l, 32) for
+  10⁻⁸ ≤ ε < 10⁻⁷, the degree raised on the whole level (`merge::plane_wave_degree`, the
+  operator's RCR tables built at p_w); on CH6.1e's 26 cases at 10⁻⁷ and 10⁻⁸ (Kathleen 1 × 40)
+  the errors 0.002–0.80× Rotation's, the M2L 0.26–0.84× at 10⁻⁸ and 0.42–1.46× at 10⁻⁷, the
+  evaluation 0.37–0.81× at 10⁻⁸ and 0.54–1.10× at 10⁻⁷ on the cases above 0.1 s. Signed off
+  2026-11-11: (1) iprec 2 at 10⁻⁷ missed 1.1× Rotation's in the FMM at any degree (its own
+  error floor), so that band takes iprec 3 (the user: "iprec 3 at max(p,28)"); (2) D8's bound
+  lifted at 10⁻⁸ ≤ ε < 10⁻⁷ and kept at 10⁻⁷ ≤ ε < 10⁻⁶ ("Lift for 10⁻⁸–10⁻⁷ only"); (3) CH6.1h
+  added, next on the priority list ("Add CH6.1h, next on the list"). CH6.1f's recommended quadrature in
   `PlaneWaveM2l`'s rule below `PLANE_WAVE_MIN_TOLERANCE`: by CH6.1f (report §5, signed off
   2026-11-09 (the user: "1–3 as recommended")), the resolving degree, each level with a
   quadrature at p_w = max(p_l, 24) with iprec 2 for 10⁻⁷ ≤ ε < 10⁻⁶ and p_w = max(p_l, 32) with
@@ -767,6 +786,17 @@ at any kD.
   small cases, with the rule still a function of k, w_l, p_l and ε (constraint 9); times beside
   Rotation's; D8's bound ε ≥ 10⁻⁶ revisited as a question; or, if CH6.1f recommends none, the
   rule unchanged and the report's reason recorded. *Needs:* CH6.1f and its sign-off.
+- [ ] **CH6.1h The resolving degree on the M2L alone.** CH6.1f's option (b), from CH6.1g's
+  sign-off 3 (2026-11-11): on a level with waves below 10⁻⁶, the M2L at p_w with the level's
+  other operators at p_l: a second multipole at p_w formed by M2M from the children at p_l,
+  and the local at p_w taken to the children by L2L at p_l (or the equivalent at the level's
+  own boxes), so the leaves, M2M and L2L keep p_l. CH6.1g's whole-level raise cost them
+  1.29–1.88× and ate the M2L's gain at 10⁻⁷ on the deep trees (the clusters 1.00×, W1 at
+  kD = 100 1.05×), with errors 50–250× below Rotation's. *Done when:* the FMM within about 1.1×
+  Rotation's error at 10⁻⁷ and 10⁻⁸ on CH6.1e's cases (asserted on small cases), deterministic
+  and rank-invariant; the evaluation timed beside CH6.1g's and Rotation's on the same cases on
+  Kathleen; the faster form made the rule's, and D8's bound at 10⁻⁷ ≤ ε < 10⁻⁶ asked again.
+  *Needs:* CH6.1g. *Machines:* Kathleen. *Sign-off:* the form and D8's bound.
 - CH6.2 Measured. Against Rotation and the table-based strategies on the three machines,
   and against `hfmm3d`'s exponential M2L. *Done when:* per-level accuracy and time beside
   FMM3D's on the same problems; D8 proposed. *Needs:* CH6.1 (a–e), CH1.4. Split on
