@@ -242,9 +242,8 @@ fn degrees(op: &HelmholtzOperator<f64>) -> Vec<usize> {
 fn the_rule_raises_the_degrees_below_the_level_degrees_tolerance() {
     let k = Wavenumber::new(20.0, 0.0).unwrap();
     let densities = Densities::new(k.kind(), ChargeKind::Complex, 1);
-    let given = || {
-        HelmholtzOperator::<f64>::new(k, densities.clone(), &domain(), &DEGREES, false, 8).unwrap()
-    };
+    let given =
+        || HelmholtzOperator::<f64>::new(k, densities, &domain(), &DEGREES, false, 8).unwrap();
     let sizes = |op: &HelmholtzOperator<f64>| -> Vec<(usize, usize)> {
         (0..op.nlevels())
             .map(|l| (op.multipole_size(l), op.local_size(l)))
@@ -268,11 +267,10 @@ fn the_rule_raises_the_degrees_below_the_level_degrees_tolerance() {
         assert_eq!(base, DEGREES);
         // The stores and the tables of the raised degrees: an operator named at them.
         let named =
-            HelmholtzOperator::<f64>::new(k, densities.clone(), &domain(), &raised, false, 8)
-                .unwrap();
+            HelmholtzOperator::<f64>::new(k, densities, &domain(), &raised, false, 8).unwrap();
         assert_eq!(sizes(&op), sizes(&named), "ε = {tolerance:e}");
-        for l in 0..op.nlevels() {
-            assert_eq!(op.tables().degree(l), raised[l], "level {l}");
+        for (l, &p) in raised.iter().enumerate() {
+            assert_eq!(op.tables().degree(l), p, "level {l}");
         }
         // The order of the calls does not matter.
         let after = given()
