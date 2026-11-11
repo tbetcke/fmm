@@ -45,7 +45,7 @@
 //!   smallest degree or [`Case::m2l_plane_wave_min_degree`]; [`Row::m2l_plane_wave_min_degree`]
 //!   the agreed one and [`Row::plane_wave`] the levels with waves.
 //!   [`Case::plane_wave_raise`] (Helmholtz CH6.1h) which operators of a level the rule raises
-//!   below 10⁻⁶ run at the raised degree (the library's `Level`, every one, by default);
+//!   below 10⁻⁶ run at the raised degree (the library's `Rule` by default);
 //!   [`Row::plane_wave_raise`] the setting and [`Row::translation_degrees`] each level's
 //!   translation degree.
 
@@ -124,7 +124,7 @@ pub struct Case {
     pub plane_wave_split: Option<PlaneWaveSplit>,
     /// Which operators of a level the rule raises below 10⁻⁶ run at the raised degree
     /// (`HelmholtzFmmBuilder::plane_wave_raise`, Helmholtz CH6.1h; `None` the library's,
-    /// `Level`).
+    /// `Rule`).
     pub plane_wave_raise: Option<PlaneWaveRaise>,
     /// The evaluations of one build (at least 1; Helmholtz CH6.2b): the row's times and
     /// errors are the last one's.

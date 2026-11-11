@@ -219,7 +219,7 @@ impl HelmholtzFmmBuilder {
             plane_wave_reach: RHO_MAX,
             plane_wave_budget: DEFAULT_PLANE_WAVE_NODE_BUDGET,
             plane_wave_split: PlaneWaveSplit::Auto,
-            plane_wave_raise: PlaneWaveRaise::Level,
+            plane_wave_raise: PlaneWaveRaise::Rule,
             c_leaf: C_LEAF,
             p2p: P2pChoice::Auto,
             pair_calls: false,
@@ -331,8 +331,8 @@ impl HelmholtzFmmBuilder {
     /// of degree at least
     /// [`m2l_plane_wave_min_degree`](Self::m2l_plane_wave_min_degree) to which the precision
     /// rule gives a quadrature (from the tolerance of [`Degrees::Tolerance`]: iprec 2 at
-    /// ε ≥ 10⁻⁶, and since Helmholtz CH6.1g iprec 3 at the raised degree max(p_l, 32) for
-    /// 10⁻⁸ ≤ ε < 10⁻⁷; none in 10⁻⁷ ≤ ε < 10⁻⁶, D8's bound kept there), with Im κ_l below
+    /// ε ≥ 10⁻⁶, and since Helmholtz CH6.1g iprec 3 at the raised degree for 10⁻⁸ ≤ ε < 10⁻⁷,
+    /// since Helmholtz CH6.1h's sign-off for 10⁻⁷ ≤ ε < 10⁻⁶ too), with Im κ_l below
     /// [`AUTO_PLANE_WAVE_MAX_IM_KAPPA`](super::AUTO_PLANE_WAVE_MAX_IM_KAPPA), in f64 only;
     /// Batched and Rotation on the others as before
     /// (`HelmholtzOperator::with_auto_plane_wave`). With [`Degrees::PerLevel`] the quadrature
@@ -389,9 +389,11 @@ impl HelmholtzFmmBuilder {
     }
 
     /// Which operators of a level the rule raises to the resolving degree run at it (default
-    /// [`PlaneWaveRaise::Level`], every one; `HelmholtzOperator::with_plane_wave_raise`;
-    /// Helmholtz CH6.1h): [`PlaneWaveRaise::M2l`] keeps the level's translations to and from
-    /// its parent at the degree given. The same on every rank.
+    /// [`PlaneWaveRaise::Rule`]: the M2L alone at 10⁻⁷ ≤ ε < 10⁻⁶, also the leaves at
+    /// 10⁻⁸ ≤ ε < 10⁻⁷; `HelmholtzOperator::with_plane_wave_raise`; Helmholtz CH6.1h, signed
+    /// off 2026-11-11). [`PlaneWaveRaise::Level`] raises every operator (CH6.1g's form),
+    /// [`PlaneWaveRaise::Leaves`] all but the translations to and from the parent,
+    /// [`PlaneWaveRaise::M2l`] the M2L alone. The same on every rank.
     pub fn plane_wave_raise(mut self, raise: PlaneWaveRaise) -> Self {
         self.plane_wave_raise = raise;
         self

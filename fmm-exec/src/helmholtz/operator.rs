@@ -132,8 +132,8 @@
 //! [`auto_plane_wave_min_degree`] of the ISA and the planes (or the degree named by
 //! [`with_m2l_plane_wave_min_degree`](HelmholtzOperator::with_m2l_plane_wave_min_degree)) to
 //! which the precision rule below gives a quadrature, at the level's own degree for
-//! ε ≥ 10⁻⁶ or no tolerance and at the raised degree for 10⁻⁸ ≤ ε < 10⁻⁷ (Helmholtz
-//! CH6.1g; none in 10⁻⁷ ≤ ε < 10⁻⁶, where D8's bound stays until CH6.1h), with Im κ_l below
+//! ε ≥ 10⁻⁶ or no tolerance and at the raised degree for 10⁻⁸ ≤ ε < 10⁻⁶ (Helmholtz
+//! CH6.1g; from 10⁻⁷ since CH6.1h's sign-off, 2026-11-11, D8 amended), with Im κ_l below
 //! [`AUTO_PLANE_WAVE_MAX_IM_KAPPA`], in f64 only; then Batched on the other levels as before
 //! (the levels with waves take no batched tables and none of the budget), RCR on the rest.
 //! A function of k, the levels' widths and degrees, the tolerance and the machine class
@@ -157,14 +157,16 @@
 //! and its leaves' operators run at p_w ([`degree`](HelmholtzOperator::degree);
 //! [`base_degree`](HelmholtzOperator::base_degree) the degree given), and by
 //! [`PlaneWaveRaise`] ([`with_plane_wave_raise`](HelmholtzOperator::with_plane_wave_raise);
-//! Helmholtz CH6.1h) its translations too ([`PlaneWaveRaise::Level`], the default) or not:
+//! Helmholtz CH6.1h) its translations too ([`PlaneWaveRaise::Level`]) or not:
 //! under [`PlaneWaveRaise::Leaves`] and [`PlaneWaveRaise::M2l`] the M2M from the level to
 //! its parent reads, and the L2L into it fills, the first p_l degrees of its expansions
 //! ([`translation_degree`](HelmholtzOperator::translation_degree);
 //! `HelmholtzTables::build_with_m2l_degrees`), while the M2M from its children fills, and the
 //! L2L to them reads, all p_w; under [`PlaneWaveRaise::M2l`] its leaves' operators (P2M, L2P,
 //! P2L into and M2P from its boxes) also work on the first p_l degrees, through a scratch
-//! expansion at p_l. Named precisions and named degrees raise nothing. Under the rule the FMM's errors stay within about 1.1×
+//! expansion at p_l. The default, [`PlaneWaveRaise::Rule`] (signed off 2026-11-11), runs `M2l`
+//! at 10⁻⁷ ≤ ε < 10⁻⁶ and `Leaves` at 10⁻⁸ ≤ ε < 10⁻⁷. Named precisions and named degrees
+//! raise nothing. Under the rule the FMM's errors stay within about 1.1×
 //! Rotation's at the degrees given on CH3.1c's cases (`fmm-validate/results/helmholtz-ch6-1e.md`)
 //! and, below 10⁻⁶, on CH6.1e's cases at 10⁻⁷ and 10⁻⁸
 //! (`fmm-validate/results/helmholtz-ch6-1g.md`). The quadratures' α counts bound the
@@ -263,7 +265,7 @@ use nd_fmm_tables::helmholtz::classes::{ClassM2l, ClassScratch};
 use nd_fmm_tables::helmholtz::dense::DenseM2l;
 use nd_fmm_tables::helmholtz::plane_wave::Precision;
 use nd_fmm_tables::helmholtz::plane_wave::merge::{
-    PLANE_WAVE_MIN_TOLERANCE, PlaneWaveM2l, RESOLVING_STEP_TOLERANCE, plane_wave_degree, select,
+    PlaneWaveM2l, RESOLVING_STEP_TOLERANCE, plane_wave_degree, select,
 };
 use nd_fmm_tables::helmholtz::plane_wave::quadrature::{RHO_MAX, assert_reach};
 use nd_fmm_tables::helmholtz::{DEFAULT_BLOCK_BUDGET, HelmholtzScratch, HelmholtzTables};
@@ -368,10 +370,15 @@ pub enum PlaneWavePrecision {
 /// each is deterministic and rank-invariant.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PlaneWaveRaise {
+    /// The rule (the default; Helmholtz CH6.1h, signed off 2026-11-11): [`Self::M2l`] at
+    /// 10⁻⁷ ≤ ε < 10⁻⁶ and [`Self::Leaves`] at 10⁻⁸ ≤ ε < 10⁻⁷ (`M2l` erred 1.53× Rotation's
+    /// at 10⁻⁸ on the clusters at kD = 10; fmm-validate/results/helmholtz-ch6-1h.md), a
+    /// function of ε only ([`resolved`](Self::resolved)).
+    #[default]
+    Rule,
     /// Every operator of the level at p_w (Helmholtz CH6.1g): also the M2M to its parent
     /// and the L2L from it, and its leaves' operators (P2M, L2P, P2L into and M2P from its
     /// boxes).
-    #[default]
     Level,
     /// The leaves' operators at p_w, the M2M to the parent from the first p_l degrees and
     /// the L2L from the parent into them (Helmholtz CH6.1h).
@@ -380,6 +387,21 @@ pub enum PlaneWaveRaise {
     /// and the L2L from it on the first p_l degrees. A leaf's multipole then has no degree
     /// above p_l, and its L2P reads none.
     M2l,
+}
+
+impl PlaneWaveRaise {
+    /// The form that runs at the FMM's tolerance: [`Self::Rule`]'s choice, [`Self::M2l`]
+    /// for ε ≥ 10⁻⁷ (`RESOLVING_STEP_TOLERANCE`; also without a tolerance, where nothing is
+    /// raised) and [`Self::Leaves`] below; a named form as named.
+    pub fn resolved(self, tolerance: Option<f64>) -> Self {
+        match self {
+            Self::Rule => match tolerance {
+                Some(epsilon) if epsilon < RESOLVING_STEP_TOLERANCE => Self::Leaves,
+                _ => Self::M2l,
+            },
+            named => named,
+        }
+    }
 }
 
 /// The crossover degree of [`HelmholtzM2l::Auto`] (Helmholtz CH3.2d; the operator module
@@ -615,7 +637,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             plane_wave_precision: PlaneWavePrecision::Rule,
             plane_wave_tolerance: None,
             plane_wave_reach: RHO_MAX,
-            plane_wave_raise: PlaneWaveRaise::Level,
+            plane_wave_raise: PlaneWaveRaise::Rule,
             plane_waves: None,
             matrix: MatrixKernel::detect(MulAdd::Separate),
             p2p: Some(P2pKernel::detect()),
@@ -695,9 +717,8 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// [`plane_wave_min_degree`](Self::plane_wave_min_degree) to which the precision rule
     /// (`nd_fmm_tables::helmholtz::plane_wave::merge::select`, with the tolerance of
     /// [`with_plane_wave_tolerance`](Self::with_plane_wave_tolerance)) gives a quadrature and
-    /// whose Im κ_l is below [`AUTO_PLANE_WAVE_MAX_IM_KAPPA`], in f64 only, except for a
-    /// tolerance in 10⁻⁷ ≤ ε < 10⁻⁶ (D8's bound kept there; Helmholtz CH6.1g), the level at
-    /// the rule's raised degree below 10⁻⁶; Batched and RCR on the other levels as before. Before or after [`with_m2l`](Self::with_m2l); under
+    /// whose Im κ_l is below [`AUTO_PLANE_WAVE_MAX_IM_KAPPA`], in f64 only, the level at
+    /// the rule's raised degree below 10⁻⁶ (Helmholtz CH6.1g, CH6.1h); Batched and RCR on the other levels as before. Before or after [`with_m2l`](Self::with_m2l); under
     /// Auto the levels are chosen again; the other settings ignore it.
     pub fn with_auto_plane_wave(mut self, on: bool) -> Self {
         if self.kernel.auto_plane_wave != on {
@@ -779,7 +800,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     }
 
     /// Runs the translations of each raised level by `raise` (default
-    /// [`PlaneWaveRaise::Level`]; Helmholtz CH6.1h), before or after
+    /// [`PlaneWaveRaise::Rule`]; Helmholtz CH6.1h), before or after
     /// [`with_m2l`](Self::with_m2l). Where the rule raises a level (PlaneWave's rule below
     /// ε = 10⁻⁶, Auto at 10⁻⁸ ≤ ε < 10⁻⁷) the tables are built again.
     pub fn with_plane_wave_raise(mut self, raise: PlaneWaveRaise) -> Self {
@@ -924,13 +945,10 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                     .collect(),
             }),
             // Auto's levels with waves (Helmholtz CH6.2h): the rule's quadratures from the
-            // smallest degree on, below the bound on Im κ_l; none in 10⁻⁷ ≤ ε < 10⁻⁶ (D8's
-            // bound kept there by CH6.1g's sign-off, 2026-11-11).
+            // smallest degree on, below the bound on Im κ_l (since CH6.1h's sign-off,
+            // 2026-11-11, at every tolerance with a quadrature).
             HelmholtzM2l::Auto if kernel.auto_takes_plane_waves() => {
                 let min_degree = kernel.auto_plane_wave_min_degree();
-                let outside_kept_band = tolerance.is_none_or(|e| {
-                    !(RESOLVING_STEP_TOLERANCE..PLANE_WAVE_MIN_TOLERANCE).contains(&e)
-                });
                 let precisions = select(k_root, &base, tolerance);
                 Some(
                     precisions
@@ -939,9 +957,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                         .map(|(l, precision)| {
                             let kappa = kernel.tables.k_hat(l) * 2.0;
                             precision.filter(|_| {
-                                outside_kept_band
-                                    && base[l] >= min_degree
-                                    && kappa.im < AUTO_PLANE_WAVE_MAX_IM_KAPPA
+                                base[l] >= min_degree && kappa.im < AUTO_PLANE_WAVE_MAX_IM_KAPPA
                             })
                         })
                         .collect(),
@@ -967,8 +983,8 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                 .collect(),
             _ => base.clone(),
         };
-        let translation = match kernel.plane_wave_raise {
-            PlaneWaveRaise::Level => &degrees,
+        let translation = match kernel.plane_wave_raise.resolved(tolerance) {
+            PlaneWaveRaise::Rule | PlaneWaveRaise::Level => &degrees,
             PlaneWaveRaise::Leaves | PlaneWaveRaise::M2l => &base,
         };
         if (0..degrees.len()).any(|l| {
@@ -1266,9 +1282,11 @@ impl<T: SimdScalar> Kernel<T> {
     /// its expansions' unless [`PlaneWaveRaise::M2l`] keeps a raised level's at its
     /// translation degree (Helmholtz CH6.1h).
     fn leaf_degree(&self, level: usize) -> usize {
-        match self.plane_wave_raise {
+        match self.plane_wave_raise.resolved(self.plane_wave_tolerance) {
             PlaneWaveRaise::M2l => self.tables.degree(level),
-            PlaneWaveRaise::Level | PlaneWaveRaise::Leaves => self.tables.m2l_degree(level),
+            PlaneWaveRaise::Rule | PlaneWaveRaise::Level | PlaneWaveRaise::Leaves => {
+                self.tables.m2l_degree(level)
+            }
         }
     }
 

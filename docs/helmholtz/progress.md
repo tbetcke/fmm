@@ -2774,8 +2774,9 @@ request, using this template:
   the four resolving scenarios within `PLANE_WAVE_RATIO`, 2 threads, the one-rank FMM bit for
   bit); nd-fmm-validate's W1 at 10⁻⁸ under both forms.
 - Checks: see the PR.
-- Decisions: pending (report §5): (1) the form by ε, `M2l` at 10⁻⁷ ≤ ε < 10⁻⁶ and `Leaves` at
-  10⁻⁸ ≤ ε < 10⁻⁷; (2) D8's bound lifted at 10⁻⁷ ≤ ε < 10⁻⁶.
+- Decisions: signed off 2026-11-11 (report §5): (1) "M2l at 1e-7, Leaves at 1e-8
+  (Recommended)": `PlaneWaveRaise::Rule`, the default; (2) "Lift it (Recommended)": `Auto` takes
+  the exponential M2L at 10⁻⁷ ≤ ε < 10⁻⁶ too (D8 and proposal §5.3 amended).
 - Laplace: not touched (nd-fmm-tables' `helmholtz` module, the Helmholtz operator and builder;
   tests, harness, tools).
-- Follow-ups: none yet.
+- Follow-ups: none; CH6.1 is done, next H6.G (`/milestone-gate H6`).

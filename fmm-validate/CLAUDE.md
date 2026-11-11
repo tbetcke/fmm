@@ -458,9 +458,9 @@ the report and the summary's `m2l_level_ms` and `m2l_level_pieces`; `Settings::p
 Helmholtz CH6.1h (the resolving degree on the M2L alone; docs/helmholtz/tasks/CH6.1h.md) added
 `helmholtz_accuracy::Case::plane_wave_raise` (`HelmholtzFmmBuilder::plane_wave_raise`; `None`
 the library's) and `Row::{plane_wave_raise, translation_degrees}`, and to the example
-`--raise level|leaves|m2l,…` (each exponential-M2L run in each form, the column "M2L" ending
-`/leaves` or `/m2l`). `tests/helmholtz_accuracy.rs` checks both forms on W1 at 10⁻⁸ within
-1.1× Rotation's. `tools/helmholtz/ch6-1h-runs.sh` runs the task's measurements,
+`--raise rule|level|leaves|m2l,…` (each exponential-M2L run in each form, `rule` the library's
+default, the column "M2L" ending `/level`, `/leaves` or `/m2l` where named). `tests/helmholtz_accuracy.rs` checks the default and the named forms on W1 at 10⁻⁸ (the
+rule's form the default's checksum, `Level` within 1.1× Rotation's, `M2l` printed). `tools/helmholtz/ch6-1h-runs.sh` runs the task's measurements,
 `ch6-1h-tables.py` makes the report's tables. Its report is `results/helmholtz-ch6-1h.md`.
 
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI

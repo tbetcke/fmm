@@ -315,9 +315,9 @@ const PLANE_WAVE_RATIO: f64 = 1.1;
 /// precisions the rule's (`precision_for_tolerance` of ε on every level with waves), and
 /// named precisions as named; at ε = 10⁻⁶ also `check_fmm`'s checks. At ε = 10⁻⁸ the rule
 /// takes iprec 3 at the resolving degree (Helmholtz CH6.1g): each level with waves at
-/// max(p_l, 32), the others at Rotation's degrees; under `PlaneWaveRaise::Leaves` and
-/// `PlaneWaveRaise::M2l` (Helmholtz CH6.1h) the same degrees, the translations at
-/// Rotation's, within [`PLANE_WAVE_RATIO`] of Rotation's errors. The counts' reach (Helmholtz CH6.2e): the corner's by default, with waves exactly on the
+/// max(p_l, 32), the others at Rotation's degrees, the translations at Rotation's (the
+/// default `PlaneWaveRaise::Rule`, `Leaves` there; Helmholtz CH6.1h); `Level` within
+/// [`PLANE_WAVE_RATIO`] of Rotation's errors, `M2l` printed. The counts' reach (Helmholtz CH6.2e): the corner's by default, with waves exactly on the
 /// levels with a precision; at reach 4 at most the corner's waves per level and fewer in all,
 /// and on W1 within [`PLANE_WAVE_RATIO`] of Rotation's errors. The split by child
 /// (Helmholtz CH6.2f) at 2 threads the default's checksum.
@@ -421,20 +421,40 @@ fn check_plane_wave(world: &SimpleCommunicator) {
             children.checksum, row.checksum,
             "{workload:?} at ε = {eps}: the split by child"
         );
-        // The raised levels' translations at the degrees given (CH6.1h).
-        assert_eq!(row.plane_wave_raise, PlaneWaveRaise::Level);
-        assert_eq!(row.translation_degrees, row.degrees);
-        for raise in [PlaneWaveRaise::Leaves, PlaneWaveRaise::M2l] {
+        // The raised levels' translations at the degrees given (CH6.1h): the rule's form, and
+        // each named one.
+        assert_eq!(row.plane_wave_raise, PlaneWaveRaise::Rule);
+        assert_eq!(row.translation_degrees, rotation.degrees);
+        let resolved = PlaneWaveRaise::Rule.resolved(Some(eps));
+        for raise in [
+            PlaneWaveRaise::Level,
+            PlaneWaveRaise::Leaves,
+            PlaneWaveRaise::M2l,
+        ] {
             if eps >= 1e-6 {
                 break;
             }
             case.plane_wave_raise = Some(raise);
-            let m2l = run(&case, &problem, &oracle, 1, world).expect("the FMM runs");
+            let named = run(&case, &problem, &oracle, 1, world).expect("the FMM runs");
             case.plane_wave_raise = None;
-            assert_eq!(m2l.plane_wave_raise, raise);
-            assert_eq!(m2l.degrees, row.degrees);
-            assert_eq!(m2l.translation_degrees, rotation.degrees);
-            let all = m2l.errors.last().unwrap();
+            assert_eq!(named.plane_wave_raise, raise);
+            assert_eq!(named.degrees, row.degrees);
+            let translations = match raise {
+                PlaneWaveRaise::Level => &row.degrees,
+                _ => &rotation.degrees,
+            };
+            assert_eq!(&named.translation_degrees, translations);
+            if raise == resolved {
+                assert_eq!(named.checksum, row.checksum, "{raise:?}: the rule's form");
+            }
+            let all = named.errors.last().unwrap();
+            println!(
+                "{workload:?} at ε = {eps}, {raise:?}: errors {all:?}, Rotation's {reference:?}"
+            );
+            // M2l outside the rule's band (10⁻⁷ ≤ ε < 10⁻⁶) is not held to the ratio.
+            if raise == PlaneWaveRaise::M2l && eps < 1e-7 {
+                continue;
+            }
             for j in 0..2 {
                 assert!(
                     all[j] <= PLANE_WAVE_RATIO * reference[j],

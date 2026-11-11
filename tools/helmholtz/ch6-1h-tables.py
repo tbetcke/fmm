@@ -28,6 +28,8 @@ def cells(line):
 def run_name(m2l):
     """`rotation`, or `planewave` with the form's suffix of the example's column "M2L"."""
     first = m2l.split()[0]
+    if m2l.endswith("/level"):
+        return first  # `Level` named (the example's default before the rule)
     for suffix in ("/leaves", "/m2l"):
         if m2l.endswith(suffix) and not first.endswith(suffix):
             return first + suffix

@@ -31,13 +31,13 @@ errors), one rank × 40 threads, release build, f64, AVX-512 P2P, BLAS threads 1
   multipole and local at p_l are iprec 3's chain at p_l, which CH6.1f's study (§4) and CH6.1g
   §1 found at about Rotation's error; the interior boxes, at p_w, pull the FMM's error below it,
   by how much depending on the tree.
-- **Recommended (question 1):** the form by ε, a function of ε only (constraint 9): `M2l` at
+- **Signed off (question 1):** the form by ε, a function of ε only (constraint 9): `M2l` at
   10⁻⁷ ≤ ε < 10⁻⁶ and `Leaves` at 10⁻⁸ ≤ ε < 10⁻⁷. Then at 10⁻⁷ the evaluation takes **0.43–0.83×
   Rotation's** on every case above 0.1 s (0.95–1.13× on three ms cases), against 0.48–0.95× under
-  `Level`; at 10⁻⁸ 0.31–0.71× above 0.1 s, as `Level` (W3 at N = 4,032, 0.10 s, 1.43×, `Level` 1.39×, as under
-  `Level`).
-- **D8 (question 2):** with `M2l` at 10⁻⁷ the exponential M2L beats Rotation there on every case
-  above 0.1 s; recommended: `Auto` takes it at 10⁻⁷ ≤ ε < 10⁻⁶ too.
+  `Level`; at 10⁻⁸ 0.31–0.71× above 0.1 s, as `Level` (W3 at N = 4,032, 0.10 s: 1.43×, `Level`
+  1.39×).
+- **D8 (question 2, signed off):** with `M2l` at 10⁻⁷ the exponential M2L beats Rotation there on
+  every case above 0.1 s; `Auto` takes it at 10⁻⁷ ≤ ε < 10⁻⁶ too.
 
 ## 1. The forms
 
@@ -239,6 +239,12 @@ Ranges, each form's over Rotation's (or `Level`'s), the cases run in both orders
   and the stores. Peak resident memory at most 1.4 GB.
 
 ## 5. Questions for sign-off
+
+Both signed off 2026-11-11 as recommended (the user: "M2l at 1e-7, Leaves at 1e-8
+(Recommended)" and "Lift it (Recommended)"). Built on the branch: `PlaneWaveRaise::Rule`, the
+default (`PlaneWaveRaise::resolved`: `M2l` for ε ≥ 10⁻⁷, `Leaves` below), and `Auto` without
+D8's kept band; the forms run are the measured ones bit for bit (`check_m2l_raise`), so the
+runs above stand for the rule.
 
 1. **The form by ε (recommended):** `PlaneWaveRaise` by the rule, a function of ε only:
    **`M2l` at 10⁻⁷ ≤ ε < 10⁻⁶, `Leaves` at 10⁻⁸ ≤ ε < 10⁻⁷**, built as the default (a new

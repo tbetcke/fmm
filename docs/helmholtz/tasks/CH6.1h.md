@@ -170,3 +170,9 @@ None.
 
    Within 1.1× on all four, against the reading of CH6.1f §4, so `PlaneWaveRaise::M2l` was
    built and joins the runs. Its margin is thin (the test trees: 0.98–0.99× at 10⁻⁷, 0.56–1.04× at 10⁻⁸).
+2. **The form by ε** (report §5, question 1): **signed off 2026-11-11, "M2l at 1e-7, Leaves at
+   1e-8 (Recommended)"**. Built: `PlaneWaveRaise::Rule`, the default (`resolved`: `M2l` for
+   ε ≥ 10⁻⁷, `Leaves` below).
+3. **D8's bound at 10⁻⁷ ≤ ε < 10⁻⁶** (question 2): **signed off 2026-11-11, "Lift it
+   (Recommended)"**. Built: Auto's kept band removed; `check_resolving_degree` checks Auto
+   bit for bit PlaneWave's output at 10⁻⁷ and 10⁻⁸; proposal §5.3 and the D8 row amended.

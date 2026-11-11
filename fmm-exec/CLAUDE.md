@@ -415,8 +415,7 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   later setting takes the waves away), so every operator of the level and the store sizes
   follow; `degree` and `HelmholtzFmm::degrees` report the degrees run. Named precisions and
   named degrees raise nothing. Auto takes the rule's levels, raised, at 10⁻⁸ ≤ ε < 10⁻⁷ and
-  keeps D8's bound in 10⁻⁷ ≤ ε < 10⁻⁶ (no waves there; signed off 2026-11-11, until
-  CH6.1h's M2L-alone raise is measured). `tests/helmholtz/plane_wave.rs` checks the degrees, sizes and tables per level,
+  kept D8's bound in 10⁻⁷ ≤ ε < 10⁻⁶ (signed off 2026-11-11) until CH6.1h lifted it (below). `tests/helmholtz/plane_wave.rs` checks the degrees, sizes and tables per level,
   the order of the calls, Rotation afterwards, named precisions and Auto;
   `check_resolving_degree` in `tests/helmholtz_fmm.rs` (the clusters at kD = 1, with levels
   at κ_l ≤ 0.08, and the cube at kD = 20 + 2i, each at 10⁻⁷ and 10⁻⁸) the errors within
@@ -428,7 +427,7 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   Since Helmholtz CH6.1h (docs/helmholtz/tasks/CH6.1h.md;
   fmm-validate/results/helmholtz-ch6-1h.md) `PlaneWaveRaise` (`with_plane_wave_raise`,
   `plane_wave_raise`, `HelmholtzFmmBuilder::plane_wave_raise`) names which operators of a
-  raised level run at p_w: `Level` (CH6.1g's, every one; the default until the sign-off),
+  raised level run at p_w: `Level` (CH6.1g's, every one),
   `Leaves` (the M2M to the parent and the L2L from it on the first p_l degrees,
   `translation_degree`, by `HelmholtzTables::build_with_m2l_degrees`) and `M2l` (those and
   the leaves' P2M, L2P, P2L and M2P on the first p_l degrees, through the scratch's `first`
@@ -442,7 +441,14 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   Rotation afterwards and Auto; `check_m2l_raise` in `tests/helmholtz_fmm.rs` both forms on
   `check_resolving_degree`'s four trees within `PLANE_WAVE_RATIO` of Rotation's, 2 threads,
   the one-rank FMM bit for bit, and `Leaves` bit for bit `Level`'s where only level 2 is
-  raised.
+  raised. Signed off 2026-11-11: `PlaneWaveRaise::Rule`, the default (`resolved`: `M2l` at
+  10⁻⁷ ≤ ε < 10⁻⁶, `Leaves` at 10⁻⁸ ≤ ε < 10⁻⁷, where `M2l` erred 1.53× on one case), and D8's
+  bound lifted there: Auto takes the rule's levels, raised, at every ε ≥ 10⁻⁸ with a
+  quadrature. `check_resolving_degree` checks the default's translation degrees, Auto bit for
+  bit PlaneWave's output at both tolerances, and `check_m2l_raise` the named forms against it
+  (the rule's form bit for bit; `M2l` at 10⁻⁸ printed, not held to the ratio);
+  `tests/helmholtz/plane_wave.rs` also the four leaf operators by form with one and two
+  multipole planes (`the_raised_levels_leaf_operators_by_the_form`).
   The level call is the crate-private `src/helmholtz/operator_plane_wave.rs`, Laplace's
   order (`src/operator_plane_wave.rs`) restated in scalar loops on
   `nd_fmm_tables::helmholtz::plane_wave` (no `nd-fmm-simd` kernel: Laplace's `WaveKernel`
