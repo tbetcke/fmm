@@ -106,7 +106,7 @@ use thiserror::Error;
 use super::{
     C_LEAF, ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DegreeError, Degrees, Densities,
     DensityError, HelmholtzM2l, HelmholtzOperator, OperatorError, Output, PlaneWavePrecision,
-    PlaneWaveSplit, Wavenumber, WavenumberKind, auto_batched_max_degree,
+    PlaneWaveRaise, PlaneWaveSplit, Wavenumber, WavenumberKind, auto_batched_max_degree,
     auto_plane_wave_min_degree, min_leaf_level,
 };
 use crate::fmm::{DEFAULT_MAX_POINTS_PER_LEAF, FmmError, PointSet, SettingsError};
@@ -183,6 +183,7 @@ pub struct HelmholtzFmmBuilder {
     plane_wave_reach: f64,
     plane_wave_budget: usize,
     plane_wave_split: PlaneWaveSplit,
+    plane_wave_raise: PlaneWaveRaise,
     c_leaf: f64,
     p2p: P2pChoice,
     pair_calls: bool,
@@ -218,6 +219,7 @@ impl HelmholtzFmmBuilder {
             plane_wave_reach: RHO_MAX,
             plane_wave_budget: DEFAULT_PLANE_WAVE_NODE_BUDGET,
             plane_wave_split: PlaneWaveSplit::Auto,
+            plane_wave_raise: PlaneWaveRaise::Level,
             c_leaf: C_LEAF,
             p2p: P2pChoice::Auto,
             pair_calls: false,
@@ -383,6 +385,15 @@ impl HelmholtzFmmBuilder {
     /// measurements (Helmholtz CH6.2f). Every setting gives the same output bit for bit.
     pub fn plane_wave_split(mut self, split: PlaneWaveSplit) -> Self {
         self.plane_wave_split = split;
+        self
+    }
+
+    /// Which operators of a level the rule raises to the resolving degree run at it (default
+    /// [`PlaneWaveRaise::Level`], every one; `HelmholtzOperator::with_plane_wave_raise`;
+    /// Helmholtz CH6.1h): [`PlaneWaveRaise::M2l`] keeps the level's translations to and from
+    /// its parent at the degree given. The same on every rank.
+    pub fn plane_wave_raise(mut self, raise: PlaneWaveRaise) -> Self {
+        self.plane_wave_raise = raise;
         self
     }
 
@@ -622,6 +633,7 @@ impl HelmholtzFmmBuilder {
         })
         .with_plane_wave_reach(self.plane_wave_reach)
         .with_plane_wave_split(self.plane_wave_split)
+        .with_plane_wave_raise(self.plane_wave_raise)
         .with_m2l(self.m2l, self.dense_budget)
         .with_plane_wave_boxes(&level_boxes)
         .with_plane_wave_buffer(

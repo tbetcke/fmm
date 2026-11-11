@@ -59,7 +59,9 @@
 //! the cube at kD = 20 + 2i at 10⁻⁷ and 10⁻⁸ under PlaneWave's rule, each level with waves
 //! at the resolving degree, within `PLANE_WAVE_RATIO` of Rotation's errors at the degrees
 //! given, 2 threads and the one-rank FMM bit for bit, and the default (Auto) PlaneWave's
-//! output at 10⁻⁸ and Rotation's at 10⁻⁷, bit for bit.
+//! output at 10⁻⁸ and Rotation's at 10⁻⁷, bit for bit; and the same under
+//! `PlaneWaveRaise::M2l` (Helmholtz CH6.1h: the raised levels' translations to and from the
+//! parent at the degrees given), with its own errors within `PLANE_WAVE_RATIO` of Rotation's.
 //!
 //! Then vectors (vector v of an FMM of two bit for bit the one-vector FMM, of complex and
 //! of real charges), real charges against complex ones with Im q = 0, and the errors (an
@@ -84,8 +86,8 @@ use nd_fmm_exec::fmm::{FmmError, SettingsError};
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, HelmholtzFmm,
     HelmholtzFmmBuilder, HelmholtzFmmError, HelmholtzM2l, MIN_BUFFER_BOXES, OperatorError, Output,
-    PlaneWaveCounts, PlaneWavePrecision, PlaneWaveSplit, PlaneWaveTimes, Wavenumber,
-    auto_batched_max_degree, auto_m2l_mul_add, auto_plane_wave_min_degree,
+    PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes,
+    Wavenumber, auto_batched_max_degree, auto_m2l_mul_add, auto_plane_wave_min_degree,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -1428,6 +1430,13 @@ fn check_resolving_degree(scenario: &Scenario, comm: &SimpleCommunicator) -> f64
     let (_, threaded) = run(&tables.clone().threads(2), &inputs, kind, comm);
     assert_same(&format!("{name}, 2 threads"), &threaded, &output, comm);
     check_one_rank(&name, &tables, &inputs, kind, &output, comm);
+    check_m2l_raise(
+        scenario,
+        &tables,
+        (&inputs, &given, &raised, &output),
+        (rotation_phi, rotation_grad),
+        comm,
+    );
     let (fmm, auto) = run(&default_builder(scenario), &inputs, kind, comm);
     assert_eq!(fmm.operator().m2l_choice(), HelmholtzM2l::Auto);
     let max_degree = fmm.m2l_max_degree().expect("Auto's crossover");
@@ -1447,6 +1456,57 @@ fn check_resolving_degree(scenario: &Scenario, comm: &SimpleCommunicator) -> f64
         println!("{name}: {:.1?}", start.elapsed());
     }
     deep
+}
+
+/// `PlaneWaveRaise::M2l` (CH6.1h) on a scenario of [`check_resolving_degree`]: the stores
+/// and M2L at its raised degrees, the translations at the degrees given, the errors against
+/// the direct sum within `PLANE_WAVE_RATIO` of Rotation's, 2 threads and on P ranks the
+/// one-rank FMM bit for bit; `PlaneWaveRaise::Level`'s output (`level`) bit for bit where no
+/// level below level 2 is raised (the translations between raised levels and level 1 or 0
+/// carry nothing that reaches the output), else not.
+fn check_m2l_raise(
+    scenario: &Scenario,
+    tables: &HelmholtzFmmBuilder,
+    (inputs, given, raised, level): (&Inputs, &[usize], &[usize], &Output<f64>),
+    (rotation_phi, rotation_grad): (f64, f64),
+    comm: &SimpleCommunicator,
+) {
+    let name = format!("{}: PlaneWave raised on the M2L alone", scenario.name);
+    let kind = scenario.charges;
+    let m2l = tables.clone().plane_wave_raise(PlaneWaveRaise::M2l);
+    let (fmm, output) = run(&m2l, inputs, kind, comm);
+    let op = fmm.operator();
+    assert_eq!(op.plane_wave_raise(), PlaneWaveRaise::M2l, "{name}");
+    assert_eq!(fmm.degrees(), raised, "{name}: the degrees");
+    let translations: Vec<usize> = (0..given.len()).map(|l| op.translation_degree(l)).collect();
+    assert_eq!(translations, given, "{name}: the translation degrees");
+    drop(fmm);
+    let (error_phi, error_grad) = errors(scenario, inputs, &output, 0, comm);
+    let ratio = |a: f64, b: f64| if b > 0.0 { a / b } else { 0.0 };
+    if comm.rank() == 0 {
+        println!(
+            "{name} against the direct sum: φ {error_phi:.2e}, ∇φ {error_grad:.2e}, {:.3}× and \
+             {:.3}× Rotation's",
+            ratio(error_phi, rotation_phi),
+            ratio(error_grad, rotation_grad),
+        );
+    }
+    assert!(
+        error_phi <= PLANE_WAVE_RATIO * rotation_phi
+            && error_grad <= PLANE_WAVE_RATIO * rotation_grad,
+        "{name}: φ {error_phi:.2e}, ∇φ {error_grad:.2e} against Rotation's {rotation_phi:.2e}, \
+         {rotation_grad:.2e}"
+    );
+    let (_, threaded) = run(&m2l.clone().threads(2), inputs, kind, comm);
+    assert_same(&format!("{name}, 2 threads"), &threaded, &output, comm);
+    check_one_rank(&name, &m2l, inputs, kind, &output, comm);
+    let deep = (3..given.len()).any(|l| given[l] < raised[l]);
+    if deep {
+        let same = everywhere(bits(&output) == bits(level), comm);
+        assert!(!same, "{name}: not PlaneWaveRaise::Level's output");
+    } else {
+        assert_same(&format!("{name}, Level's output"), &output, level, comm);
+    }
 }
 
 /// Merge and shift split by child and by parents (CH6.2f): each named the default's output

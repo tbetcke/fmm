@@ -2,14 +2,15 @@
 //! and named, the levels it reports, and the pair body bit for bit the pair translation of
 //! `nd_fmm_tables::helmholtz::plane_wave` along the direction merge and shift gives the
 //! pair, for one and two multipole planes and two vectors; the split's setting (Helmholtz
-//! CH6.2f); Auto's levels with waves (Helmholtz CH6.2h). The level call by merge and shift
+//! CH6.2f); Auto's levels with waves (Helmholtz CH6.2h); the raised degrees (Helmholtz
+//! CH6.1g) and where they apply (Helmholtz CH6.1h). The level call by merge and shift
 //! is tested with the FMM in `tests/helmholtz_fmm.rs`.
 
 use nd_fmm_exec::geometry::Domain;
 use nd_fmm_exec::helmholtz::{
     AUTO_PLANE_WAVE_MAX_IM_KAPPA, ChargeKind, DegreeRule, Densities, HelmholtzM2l,
-    HelmholtzOperator, MIN_BUFFER_BOXES, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveSplit,
-    Wavenumber, auto_batched_max_degree, auto_plane_wave_min_degree,
+    HelmholtzOperator, MIN_BUFFER_BOXES, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise,
+    PlaneWaveSplit, Wavenumber, auto_batched_max_degree, auto_plane_wave_min_degree,
 };
 use nd_fmm_exec::operator::P2pChoice;
 use nd_fmm_math::{Complex, Layout};
@@ -313,6 +314,107 @@ fn the_rule_raises_the_degrees_below_the_level_degrees_tolerance() {
         .with_m2l(HelmholtzM2l::PlaneWave, 0);
     assert_eq!(degrees(&op), DEGREES);
     assert_eq!(precisions(&op), vec![None; 6]);
+}
+
+/// The translation degrees an operator runs at, level by level.
+fn translation_degrees(op: &HelmholtzOperator<f64>) -> Vec<usize> {
+    (0..op.nlevels())
+        .map(|l| op.translation_degree(l))
+        .collect()
+}
+
+/// [`PlaneWaveRaise::M2l`] (Helmholtz CH6.1h): the raised levels' stores, M2L and tables at
+/// the resolving degree as under [`PlaneWaveRaise::Level`] (the default), their translations
+/// to and from the parent at the degrees given; the M2L pair body the same bits under both;
+/// the setting kept in either order of the calls, Rotation afterwards back at the degrees
+/// given, and nothing raised at 10⁻⁶.
+#[test]
+fn the_m2l_raise_keeps_the_translations_at_the_degrees_given() {
+    let k = Wavenumber::new(20.0, 0.0).unwrap();
+    let densities = Densities::new(k.kind(), ChargeKind::Complex, 1);
+    let given =
+        || HelmholtzOperator::<f64>::new(k, densities, &domain(), &DEGREES, false, 8).unwrap();
+    let sizes = |op: &HelmholtzOperator<f64>| -> Vec<(usize, usize)> {
+        (0..op.nlevels())
+            .map(|l| (op.multipole_size(l), op.local_size(l)))
+            .collect()
+    };
+    assert_eq!(given().plane_wave_raise(), PlaneWaveRaise::Level);
+    assert_eq!(PlaneWaveRaise::default(), PlaneWaveRaise::Level);
+    for (tolerance, d) in [(1e-6, 0), (1e-7, 28), (1e-8, 32)] {
+        let raised: Vec<usize> = DEGREES
+            .iter()
+            .enumerate()
+            .map(|(l, &p)| if l >= 2 { p.max(d) } else { p })
+            .collect();
+        let plane_wave = |raise| {
+            given()
+                .with_plane_wave_tolerance(Some(tolerance))
+                .with_plane_wave_raise(raise)
+                .with_m2l(HelmholtzM2l::PlaneWave, 0)
+        };
+        let mut level = plane_wave(PlaneWaveRaise::Level);
+        let mut m2l = plane_wave(PlaneWaveRaise::M2l);
+        assert_eq!(m2l.plane_wave_raise(), PlaneWaveRaise::M2l);
+        assert_eq!(degrees(&level), raised, "ε = {tolerance:e}");
+        assert_eq!(translation_degrees(&level), raised, "ε = {tolerance:e}");
+        assert_eq!(degrees(&m2l), raised, "ε = {tolerance:e}");
+        assert_eq!(translation_degrees(&m2l), DEGREES, "ε = {tolerance:e}");
+        assert_eq!(sizes(&m2l), sizes(&level), "ε = {tolerance:e}");
+        assert_eq!(precisions(&m2l), precisions(&level), "ε = {tolerance:e}");
+        for (l, (&p, &q)) in DEGREES.iter().zip(&raised).enumerate() {
+            assert_eq!(m2l.tables().degree(l), p, "level {l}");
+            assert_eq!(m2l.tables().m2l_degree(l), q, "level {l}");
+        }
+        // The default is `Level`, bit for bit.
+        let default = given()
+            .with_plane_wave_tolerance(Some(tolerance))
+            .with_m2l(HelmholtzM2l::PlaneWave, 0);
+        assert_eq!(translation_degrees(&default), raised);
+        // The M2L of a raised level reads and fills whole expansions at p_w: the same bits.
+        let mut rng = Rng(11);
+        for level_index in 2..DEGREES.len() {
+            let multipole: Vec<f64> = (0..m2l.multipole_size(level_index))
+                .map(|_| rng.next())
+                .collect();
+            let start: Vec<f64> = (0..m2l.local_size(level_index))
+                .map(|_| rng.next())
+                .collect();
+            let (source, target) = pair(level_index, 100);
+            let (mut a, mut b) = (start.clone(), start);
+            level.m2l(source, target, 100, &multipole, &mut a);
+            m2l.m2l(source, target, 100, &multipole, &mut b);
+            assert!(a == b, "ε = {tolerance:e}, level {level_index}: M2L");
+        }
+        // Named first, then the M2L chosen: the same; Rotation afterwards: the degrees given.
+        let after = given()
+            .with_m2l(HelmholtzM2l::PlaneWave, 0)
+            .with_plane_wave_tolerance(Some(tolerance))
+            .with_plane_wave_raise(PlaneWaveRaise::M2l);
+        assert_eq!(degrees(&after), raised);
+        assert_eq!(translation_degrees(&after), DEGREES);
+        let rotation = m2l.with_m2l(HelmholtzM2l::Rotation, 0);
+        assert_eq!(degrees(&rotation), DEGREES);
+        assert_eq!(translation_degrees(&rotation), DEGREES);
+        assert_eq!(rotation.plane_wave_raise(), PlaneWaveRaise::M2l);
+        // Auto at 10⁻⁸ raises the same levels with the translations kept.
+        let auto = given()
+            .with_plane_wave_tolerance(Some(tolerance))
+            .with_plane_wave_raise(PlaneWaveRaise::M2l)
+            .with_m2l_plane_wave_min_degree(Some(0))
+            .with_m2l(HelmholtzM2l::Auto, 0);
+        let auto_raised = if tolerance == 1e-7 {
+            &DEGREES[..]
+        } else {
+            &raised[..]
+        };
+        assert_eq!(degrees(&auto), auto_raised, "Auto at ε = {tolerance:e}");
+        assert_eq!(
+            translation_degrees(&auto),
+            DEGREES,
+            "Auto at ε = {tolerance:e}"
+        );
+    }
 }
 
 /// The rule's largest degree without a tolerance is the calibrated plateau at its tolerance.

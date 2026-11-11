@@ -153,10 +153,16 @@
 //! (Helmholtz CH6.1g, CH6.1f's resolving degree; `merge::plane_wave_degree`): iprec 3 at
 //! p_w = max(p_l, 28) for 10⁻⁷ ≤ ε < 10⁻⁶ and at max(p_l, 32) for 10⁻⁸ ≤ ε < 10⁻⁷, none
 //! below 10⁻⁸. The operator then builds its RCR tables at those degrees (again at the
-//! degrees given when a later setting takes the waves away), so every operator of the level
-//! and its stores run at p_w ([`degree`](HelmholtzOperator::degree);
-//! [`base_degree`](HelmholtzOperator::base_degree) the degree given); named precisions and
-//! named degrees raise nothing. Under the rule the FMM's errors stay within about 1.1×
+//! degrees given when a later setting takes the waves away), so the level's stores, its M2L
+//! and its leaves' operators run at p_w ([`degree`](HelmholtzOperator::degree);
+//! [`base_degree`](HelmholtzOperator::base_degree) the degree given), and by
+//! [`PlaneWaveRaise`] ([`with_plane_wave_raise`](HelmholtzOperator::with_plane_wave_raise);
+//! Helmholtz CH6.1h) its translations too ([`PlaneWaveRaise::Level`], the default) or not:
+//! under [`PlaneWaveRaise::M2l`] the M2M from the level to its parent reads, and the L2L into
+//! it fills, the first p_l degrees of its expansions
+//! ([`translation_degree`](HelmholtzOperator::translation_degree);
+//! `HelmholtzTables::build_with_m2l_degrees`), while the M2M from its children fills, and the
+//! L2L to them reads, all p_w. Named precisions and named degrees raise nothing. Under the rule the FMM's errors stay within about 1.1×
 //! Rotation's at the degrees given on CH3.1c's cases (`fmm-validate/results/helmholtz-ch6-1e.md`)
 //! and, below 10⁻⁶, on CH6.1e's cases at 10⁻⁷ and 10⁻⁸
 //! (`fmm-validate/results/helmholtz-ch6-1g.md`). The quadratures' α counts bound the
@@ -352,6 +358,24 @@ pub enum PlaneWavePrecision {
     PerLevel(Vec<Option<Precision>>),
 }
 
+/// Which operators of a level with waves run at the resolving degree p_w where
+/// [`PlaneWavePrecision::Rule`] raises it below ε = 10⁻⁶ (Helmholtz CH6.1g, CH6.1h; module
+/// documentation, "M2L"). The output differs between the two (the translations' degrees
+/// differ); each is deterministic and rank-invariant.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlaneWaveRaise {
+    /// Every operator of the level at p_w (Helmholtz CH6.1g): its stores, M2L, P2M, L2P, P2L,
+    /// M2P, the M2M into and out of it and the L2L into and out of it.
+    #[default]
+    Level,
+    /// The level's stores, its M2L and its leaves' operators (P2M, L2P, P2L, M2P) at p_w, the
+    /// M2M from its children into p_w and the L2L from p_w to its children; the M2M to its
+    /// parent from the first p_l degrees and the L2L from its parent into them (Helmholtz
+    /// CH6.1h). A leaf keeps p_w: its multipole and local work at the box's own radius,
+    /// where the quadrature needs the raised degree (CH6.1f's report, §4).
+    M2l,
+}
+
 /// The crossover degree of [`HelmholtzM2l::Auto`] (Helmholtz CH3.2d; the operator module
 /// documentation, "M2L"): the largest p_l at which the rule runs the fused Batched M2L, for
 /// the column kernel's ISA (the machine class) and the multipole's planes (1 for real k with
@@ -467,6 +491,8 @@ struct Kernel<T: SimdScalar> {
     /// The lateral reach of the quadratures' α counts (`RHO_MAX`, the region's corner,
     /// unless named; Helmholtz CH6.2e).
     plane_wave_reach: f64,
+    /// Which operators of a raised level run at p_w (Helmholtz CH6.1h).
+    plane_wave_raise: PlaneWaveRaise,
     /// The exponential M2L's tables of the levels that have them, under
     /// [`HelmholtzM2l::PlaneWave`].
     plane_waves: Option<PlaneWaveM2l<T>>,
@@ -580,6 +606,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             plane_wave_precision: PlaneWavePrecision::Rule,
             plane_wave_tolerance: None,
             plane_wave_reach: RHO_MAX,
+            plane_wave_raise: PlaneWaveRaise::Level,
             plane_waves: None,
             matrix: MatrixKernel::detect(MulAdd::Separate),
             p2p: Some(P2pKernel::detect()),
@@ -742,6 +769,24 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         self
     }
 
+    /// Runs the translations of each raised level by `raise` (default
+    /// [`PlaneWaveRaise::Level`]; Helmholtz CH6.1h), before or after
+    /// [`with_m2l`](Self::with_m2l). Where the rule raises a level (PlaneWave's rule below
+    /// ε = 10⁻⁶, Auto at 10⁻⁸ ≤ ε < 10⁻⁷) the tables are built again.
+    pub fn with_plane_wave_raise(mut self, raise: PlaneWaveRaise) -> Self {
+        self.kernel.plane_wave_raise = raise;
+        if self.kernel.m2l == HelmholtzM2l::PlaneWave || self.kernel.auto_takes_plane_waves() {
+            self.select_tables();
+        }
+        self
+    }
+
+    /// Which operators of a raised level run at p_w
+    /// ([`with_plane_wave_raise`](Self::with_plane_wave_raise)).
+    pub fn plane_wave_raise(&self) -> PlaneWaveRaise {
+        self.kernel.plane_wave_raise
+    }
+
     /// The lateral reach of the quadratures' α counts
     /// ([`with_plane_wave_reach`](Self::with_plane_wave_reach)).
     pub fn plane_wave_reach(&self) -> f64 {
@@ -896,8 +941,9 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             _ => None,
         };
         // The rule's resolving degree on the levels with waves (Helmholtz CH6.1g), under
-        // PlaneWave's rule and under Auto: every operator of the level, and its stores, at
-        // p_w = max(p_l, d).
+        // PlaneWave's rule and under Auto: the level's stores, its M2L and its leaves at
+        // p_w = max(p_l, d), and its translations to and from its parent too unless
+        // `PlaneWaveRaise::M2l` keeps them at p_l (Helmholtz CH6.1h).
         let by_rule = choice == HelmholtzM2l::Auto
             || (choice == HelmholtzM2l::PlaneWave
                 && kernel.plane_wave_precision == PlaneWavePrecision::Rule);
@@ -910,10 +956,21 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                     None => p,
                 })
                 .collect(),
-            _ => base,
+            _ => base.clone(),
         };
-        if (0..degrees.len()).any(|l| kernel.tables.degree(l) != degrees[l]) {
-            kernel.tables = HelmholtzTables::build(k_root, &degrees, kernel.block_budget);
+        let translation = match kernel.plane_wave_raise {
+            PlaneWaveRaise::Level => &degrees,
+            PlaneWaveRaise::M2l => &base,
+        };
+        if (0..degrees.len()).any(|l| {
+            kernel.tables.m2l_degree(l) != degrees[l] || kernel.tables.degree(l) != translation[l]
+        }) {
+            kernel.tables = HelmholtzTables::build_with_m2l_degrees(
+                k_root,
+                translation,
+                &degrees,
+                kernel.block_budget,
+            );
         }
         kernel.dense = (choice == HelmholtzM2l::Dense).then(|| {
             let levels = DenseM2l::<T>::select(&degrees, dense_budget);
@@ -1068,11 +1125,19 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         }
     }
 
-    /// The degree p_l at which `level` runs: the degree given, or the raised degree of a
-    /// level with waves under [`HelmholtzM2l::PlaneWave`]'s rule below ε = 10⁻⁶ and under
-    /// [`HelmholtzM2l::Auto`] at 10⁻⁸ ≤ ε < 10⁻⁷ (Helmholtz CH6.1g; module documentation,
-    /// "M2L").
+    /// The degree p_l at which `level` runs, of its stores, its M2L and its leaves'
+    /// operators: the degree given, or the raised degree of a level with waves under
+    /// [`HelmholtzM2l::PlaneWave`]'s rule below ε = 10⁻⁶ and under [`HelmholtzM2l::Auto`] at
+    /// 10⁻⁸ ≤ ε < 10⁻⁷ (Helmholtz CH6.1g; module documentation, "M2L").
     pub fn degree(&self, level: usize) -> usize {
+        self.kernel.tables.m2l_degree(level)
+    }
+
+    /// The degree of `level`'s translations to and from its parent level (the M2M out of
+    /// it reads, the L2L into it fills, its expansions' first degrees): [`degree`](Self::degree)
+    /// unless [`PlaneWaveRaise::M2l`] keeps a raised level's at the degree given (Helmholtz
+    /// CH6.1h).
+    pub fn translation_degree(&self, level: usize) -> usize {
         self.kernel.tables.degree(level)
     }
 
@@ -1110,7 +1175,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
 impl<T: SimdScalar> Scratch<T> {
     fn new(kernel: &Kernel<T>) -> Self {
         let p_max = (0..kernel.tables.nlevels())
-            .map(|l| kernel.tables.degree(l))
+            .map(|l| kernel.tables.m2l_degree(l))
             .max()
             .unwrap_or(0);
         // The batched M2L's largest n, and m columns per pair of a block.
@@ -1180,8 +1245,9 @@ impl<T: SimdScalar> Kernel<T> {
             && std::mem::size_of::<T>() == std::mem::size_of::<f64>()
     }
 
+    /// The degree of `level`'s expansions, M2L and leaf operators.
     fn p(&self, level: usize) -> usize {
-        self.tables.degree(level)
+        self.tables.m2l_degree(level)
     }
 
     /// The batched M2L of `level`, if it has tables.
