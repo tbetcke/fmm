@@ -87,7 +87,7 @@ use nd_fmm_ref::helmholtz::p2p;
 use nd_fmm_tables::helmholtz::classes::{ClassM2l, CubeTransforms};
 use nd_fmm_tables::helmholtz::dense::DenseM2l;
 use nd_fmm_tables::helmholtz::plane_wave::Precision;
-use nd_fmm_tables::helmholtz::plane_wave::merge::select;
+use nd_fmm_tables::helmholtz::plane_wave::merge::{plane_wave_degree, select};
 use nd_fmm_tables::helmholtz::plane_wave::quadrature::RHO_MAX;
 use nd_octree::PhysicalBox;
 
@@ -1339,6 +1339,86 @@ fn check_plane_wave(scenario: &Scenario, bounds: bool, comm: &SimpleCommunicator
     chunked
 }
 
+/// The exponential M2L below ε = 10⁻⁶ (Helmholtz CH6.1g; CH6.1f's resolving degree): at
+/// ε = 10⁻⁷ and 10⁻⁸ under PlaneWave's rule every level with a quadrature runs iprec 3, at
+/// max(p_l, 28) and at max(p_l, 32), the others at the degrees
+/// given; the errors against the direct sum within [`PLANE_WAVE_RATIO`] of Rotation's at
+/// the degrees given (CH6.1's acceptance) and within the scenario's bound; 2 threads and,
+/// on several ranks, the one-rank FMM bit for bit. The clusters at kD = 1 have levels with
+/// waves at κ_l ≤ 0.08, the clustered trees' deep levels where CH6.1e's iprec 3 at p_l
+/// missed 1.1×. Returns the smallest |κ_l| of a level with waves and M2L pairs.
+fn check_resolving_degree(scenario: &Scenario, comm: &SimpleCommunicator) -> f64 {
+    let start = Instant::now();
+    let rank = comm.rank();
+    let Degrees::Tolerance(epsilon) = scenario.degrees else {
+        panic!("{}: the rule reads a tolerance", scenario.name);
+    };
+    let name = format!("{}: PlaneWave at the resolving degree", scenario.name);
+    let inputs = Inputs::new(scenario, 1, comm);
+    let kind = scenario.charges;
+    let (fmm, rotation) = run(&builder(scenario), &inputs, kind, comm);
+    let given = fmm.degrees().to_vec();
+    drop(fmm);
+    // The domain is the unit cube, r₀ = ½, so κ_l = 2 k r_l = k 2⁻ˡ.
+    let k = C::new(scenario.k.0, scenario.k.1);
+    let rule = select(k * 0.5, &given, Some(epsilon));
+    let tables = builder(scenario).m2l(HelmholtzM2l::PlaneWave);
+    let (fmm, output) = run(&tables, &inputs, kind, comm);
+    let op = fmm.operator();
+    let mut deep = f64::INFINITY;
+    for (level, &precision) in rule.iter().enumerate() {
+        assert_eq!(
+            op.plane_wave_precision(level),
+            precision,
+            "{name}, level {level}"
+        );
+        let want = match precision {
+            Some(_) => plane_wave_degree(given[level], epsilon),
+            None => given[level],
+        };
+        assert_eq!(fmm.degrees()[level], want, "{name}, level {level}");
+        assert_eq!(op.base_degree(level), given[level], "{name}, level {level}");
+        if precision.is_some() && op.m2l_times()[level] > Duration::ZERO {
+            deep = deep.min((k * 0.5f64.powi(level as i32)).norm());
+        }
+    }
+    assert!(
+        rule.iter().any(|&q| q.is_some()) && fmm.degrees() != given,
+        "{name}: a raised level with waves"
+    );
+    let raised = fmm.degrees().to_vec();
+    drop(fmm);
+    let (error_phi, error_grad) = errors(scenario, &inputs, &output, 0, comm);
+    let (rotation_phi, rotation_grad) = errors(scenario, &inputs, &rotation, 0, comm);
+    let ratio = |a: f64, b: f64| if b > 0.0 { a / b } else { 0.0 };
+    if rank == 0 {
+        println!(
+            "{name} (degrees {given:?} → {raised:?}, precisions {rule:?}, smallest |κ_l| with \
+             M2L pairs {deep:.3}) against the direct sum: φ {error_phi:.2e}, ∇φ \
+             {error_grad:.2e}, {:.3}× and {:.3}× Rotation's",
+            ratio(error_phi, rotation_phi),
+            ratio(error_grad, rotation_grad),
+        );
+    }
+    assert!(
+        error_phi < scenario.bound && error_grad < scenario.bound,
+        "{name}: φ {error_phi:.2e}, ∇φ {error_grad:.2e} against the direct sum"
+    );
+    assert!(
+        error_phi <= PLANE_WAVE_RATIO * rotation_phi
+            && error_grad <= PLANE_WAVE_RATIO * rotation_grad,
+        "{name}: φ {error_phi:.2e}, ∇φ {error_grad:.2e} against Rotation's {rotation_phi:.2e}, \
+         {rotation_grad:.2e}"
+    );
+    let (_, threaded) = run(&tables.clone().threads(2), &inputs, kind, comm);
+    assert_same(&format!("{name}, 2 threads"), &threaded, &output, comm);
+    check_one_rank(&name, &tables, &inputs, kind, &output, comm);
+    if rank == 0 {
+        println!("{name}: {:.1?}", start.elapsed());
+    }
+    deep
+}
+
 /// Merge and shift split by child and by parents (CH6.2f): each named the default's output
 /// bit for bit, by parents at 2 threads (at 1 it is the default's path), by child at 1 and 2
 /// threads and on several ranks against the one-rank FMM, each chunk split as named; the
@@ -1821,6 +1901,47 @@ fn scenarios() -> Vec<Scenario> {
     ]
 }
 
+/// The scenarios of [`check_resolving_degree`], at ε = 10⁻⁷ and 10⁻⁸: the clusters at
+/// kD = 1 (their deep levels at κ_l ≤ 0.08) and the cube at complex kD = 20 + 2i.
+fn resolving_scenarios() -> Vec<Scenario> {
+    let mut list = Vec::new();
+    for epsilon in [1e-7, 1e-8] {
+        list.push(Scenario {
+            name: if epsilon == 1e-7 {
+                "clusters, kD = 1, ε = 1e-7, complex charges"
+            } else {
+                "clusters, kD = 1, ε = 1e-8, complex charges"
+            },
+            layout: Layout::Clusters,
+            n: (1000, None),
+            k: (1.0, 0.0),
+            degrees: Degrees::Tolerance(epsilon),
+            bound: ERROR_FACTOR * epsilon,
+            charges: ChargeKind::Complex,
+            gradients: false,
+            debug: true,
+            empty_rank0: false,
+        });
+        list.push(Scenario {
+            name: if epsilon == 1e-7 {
+                "cube, kD = 20 + 2i, ε = 1e-7, real charges, gradients"
+            } else {
+                "cube, kD = 20 + 2i, ε = 1e-8, real charges, gradients"
+            },
+            layout: Layout::Cube,
+            n: (800, None),
+            k: (20.0, 2.0),
+            degrees: Degrees::Tolerance(epsilon),
+            bound: ERROR_FACTOR * epsilon,
+            charges: ChargeKind::Real,
+            gradients: true,
+            debug: true,
+            empty_rank0: false,
+        });
+    }
+    list
+}
+
 #[test]
 fn helmholtz_fmm() {
     let (universe, provided) = mpi::initialize_with_threading(Threading::Funneled)
@@ -1858,6 +1979,18 @@ fn helmholtz_fmm() {
         // The bounded buffer in debug builds on the clusters alone (scenario 2), whose
         // finest level with waves chunks at the floor.
         chunked |= check_plane_wave(scenario, !debug || i == 2, &comm);
+    }
+    // The exponential M2L below 10⁻⁶ at the resolving degree (CH6.1g), the clusters' deep
+    // levels included.
+    for scenario in resolving_scenarios() {
+        let deep = check_resolving_degree(&scenario, &comm);
+        if matches!(scenario.layout, Layout::Clusters) {
+            assert!(
+                deep <= 0.08,
+                "{}: a deep level, |κ_l| {deep}",
+                scenario.name
+            );
+        }
     }
     // The exponential M2L's bounded buffer chunked a level call (CH6.2a): on one rank the
     // clusters' finest level with waves has more sources than the floor holds; on several

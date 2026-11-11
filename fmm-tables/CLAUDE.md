@@ -138,10 +138,15 @@ rule of which Helmholtz CH6.1e measured.
   `precision_for_tolerance`, `precision_for_degree` and `select`, each level's precision
   where κ_l lies in the tables (a function of k, w_l, p_l and ε: constraint 9), measured
   in the FMM by Helmholtz CH6.1e (fmm-validate/results/helmholtz-ch6-1e.md): iprec 2 at
-  the FMM's tolerance ε ≥ `PLANE_WAVE_MIN_TOLERANCE` (10⁻⁶) and none below; without a
+  the FMM's tolerance ε ≥ `PLANE_WAVE_MIN_TOLERANCE` (10⁻⁶) at the level's degree; below,
+  since Helmholtz CH6.1g (CH6.1f's resolving degree, fmm-validate/results/helmholtz-ch6-1g.md),
+  iprec 3 to `RESOLVING_MIN_TOLERANCE` (10⁻⁸) at `plane_wave_degree` = max(p_l,
+  `resolving_degree`): 28 to `RESOLVING_STEP_TOLERANCE` (10⁻⁷), 32 below (iprec 2's own
+  error lies above Rotation's at 10⁻⁷ whatever the degree), which nd-fmm-exec's operator
+  raises the level to, and none below 10⁻⁸; without a
   tolerance (named degrees) iprec 2 to `MAX_PLANE_WAVE_DEGREE` (15, the calibrated plateau
-  at 10⁻⁶) and none above. iprec 1 misses 1.1× Rotation's error from ε = 10⁻³, iprec 3 on
-  the clustered trees' deep levels at 10⁻⁷ and 10⁻⁸. A change to the rule changes the FMM's
+  at 10⁻⁶), none above and never raised. iprec 1 misses 1.1× Rotation's error from ε = 10⁻³, iprec 3 at the
+  level's degree on the clustered trees' deep levels at 10⁻⁷ and 10⁻⁸. A change to the rule changes the FMM's
   errors under `HelmholtzM2l::PlaneWave`: rerun the report's verification
   (`tools/helmholtz/ch6-1e-runs.sh verify`) and nd-fmm-exec's `tests/helmholtz_fmm.rs`.
   `tests/helmholtz/plane_wave_merge.rs` checks slot shift × child shift against the pair's

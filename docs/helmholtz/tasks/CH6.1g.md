@@ -12,7 +12,8 @@ Proposal: §10 CH6.1 ("errors within about 1.1× Rotation's"); §5.3 (Exponentia
 Run the exponential M2L below ε = 10⁻⁶ by CH6.1f's signed-off rule, the resolving degree:
 a level with a quadrature at p_w = max(p_l, 24) with iprec 2 for 10⁻⁷ ≤ ε < 10⁻⁶ and at
 p_w = max(p_l, 32) with iprec 3 for 10⁻⁸ ≤ ε < 10⁻⁷, the degree raised on the level; and
-measure its errors and times beside Rotation's.
+measure its errors and times beside Rotation's. (Changed 2026-11-11, "Open questions" 1:
+iprec 3 at max(p_l, 28) for 10⁻⁷ ≤ ε < 10⁻⁶.)
 
 ## Acceptance (proposal §10, verbatim)
 
@@ -53,12 +54,14 @@ at kD = 1, 100 at 10⁻⁷. 26 cases.
 No convention, dependency, `nd-fmm-plan` or Laplace change.
 
 1. **nd-fmm-tables, `helmholtz::plane_wave::merge`** (the rule):
-   - `precision_for_tolerance(ε)`: iprec 2 for ε ≥ 10⁻⁷ (`IPREC3_TOLERANCE`), iprec 3 for
-     10⁻⁸ ≤ ε < 10⁻⁷ (`RESOLVING_MIN_TOLERANCE`, the smallest tolerance with a precision);
-     none below or for ε not positive and finite.
+   - `precision_for_tolerance(ε)`: iprec 2 for ε ≥ 10⁻⁶, iprec 3 for 10⁻⁸ ≤ ε < 10⁻⁶
+     (`RESOLVING_MIN_TOLERANCE`, the smallest tolerance with a precision); none below or
+     for ε not positive and finite (as built after question 1; the plan first had iprec 2
+     to 10⁻⁷).
    - `resolving_degree(ε)`: 0 for ε ≥ 10⁻⁶ (`PLANE_WAVE_MIN_TOLERANCE`, kept: CH6.1e's
      bound, the smallest tolerance at which a level runs at its own degree, and D8's),
-     24 for 10⁻⁷ ≤ ε < 10⁻⁶, 32 for 10⁻⁸ ≤ ε < 10⁻⁷ (`RESOLVING_DEGREE_IPREC2`, `_IPREC3`);
+     28 for 10⁻⁷ ≤ ε < 10⁻⁶ (`RESOLVING_STEP_TOLERANCE`), 32 for 10⁻⁸ ≤ ε < 10⁻⁷
+     (`RESOLVING_DEGREE`, `RESOLVING_DEGREE_TIGHT`);
      `plane_wave_degree(p, ε)` = max(p, d).
    - `select` unchanged in form (it reads `precision_for_tolerance`); the module docs
      record CH6.1f's study and this task's measurement.
@@ -139,4 +142,14 @@ acceptance (errors) and the times beside Rotation, and so the D8 question. No M6
 
 ## Open questions
 
-(filled when they arise)
+1. **iprec 2 at 10⁻⁷ misses in the FMM** (2026-11-11, `check_resolving_degree`'s first
+   debug run). iprec 2's own error (stated up to 10⁻⁷) lies above Rotation's on the tests'
+   trees at 10⁻⁷ whatever the degree: on the clusters at kD = 1 (N = 1,000 and 4,000) and
+   the cube at kD = 20 + 2i (N = 1,000 and 4,000), release, the M6, φ over Rotation's:
+   iprec 2 at p_l 4.18×, 6.61×, 1.15×, 1.42×; at max(p_l, 24) 4.09×, 6.56×, 0.42×, 1.25×;
+   at 32 the same as at 24. iprec 3 at p_l 0.94–0.99×, at max(p_l, 24) 0.04–0.10×, at 32
+   at most 0.002×. At 10⁻⁸ the signed-off iprec 3 at max(p_l, 32) 0.004–0.014×. CH6.1f's
+   pair chain compared with RCR's worst-case error (5.8e-8 at p = 20), above iprec 2's
+   floor, so it did not show. Asked; **signed off 2026-11-11: "iprec 3 at max(p,28)"**
+   (the recommendation: on the pair chain iprec 3 at p + 8 = 28 is 0.02–0.93× RCR's error at
+   every κ of CH6.1f's study at 10⁻⁷). The 10⁻⁸ band unchanged.

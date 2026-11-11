@@ -9,8 +9,8 @@
 
 use nd_fmm_math::Complex;
 use nd_fmm_tables::helmholtz::plane_wave::merge::{
-    IPREC3_TOLERANCE, MAX_PLANE_WAVE_DEGREE, MergeLevel, PLANE_WAVE_MIN_TOLERANCE, PlaneWaveM2l,
-    RESOLVING_DEGREE_IPREC2, RESOLVING_DEGREE_IPREC3, RESOLVING_MIN_TOLERANCE, RULE_PRECISION, add,
+    MAX_PLANE_WAVE_DEGREE, MergeLevel, PLANE_WAVE_MIN_TOLERANCE, PlaneWaveM2l, RESOLVING_DEGREE,
+    RESOLVING_DEGREE_TIGHT, RESOLVING_MIN_TOLERANCE, RESOLVING_STEP_TOLERANCE, RULE_PRECISION, add,
     plane_wave_degree, precision_for_degree, precision_for_tolerance, resolving_degree, select,
     shift,
 };
@@ -119,21 +119,21 @@ fn the_rule_pairs_tolerances_with_precisions() {
     assert_eq!(
         (
             PLANE_WAVE_MIN_TOLERANCE,
-            IPREC3_TOLERANCE,
+            RESOLVING_STEP_TOLERANCE,
             RESOLVING_MIN_TOLERANCE
         ),
         (1e-6, 1e-7, 1e-8)
     );
-    // CH6.1e's iprec 2 at ε ≥ 10⁻⁶; CH6.1f's resolving degree below (iprec 2 to 10⁻⁷,
-    // iprec 3 to 10⁻⁸; Helmholtz CH6.1g); none below 10⁻⁸.
+    // CH6.1e's iprec 2 at ε ≥ 10⁻⁶; iprec 3 at the resolving degree below, to 10⁻⁸
+    // (Helmholtz CH6.1f and CH6.1g); none below 10⁻⁸.
     for (eps, want) in [
         (1e-1, iprec2),
         (1e-3, iprec2),
         (1e-6, iprec2),
         (PLANE_WAVE_MIN_TOLERANCE, iprec2),
-        (PLANE_WAVE_MIN_TOLERANCE * 0.999, iprec2),
-        (IPREC3_TOLERANCE, iprec2),
-        (IPREC3_TOLERANCE * 0.999, iprec3),
+        (PLANE_WAVE_MIN_TOLERANCE * 0.999, iprec3),
+        (RESOLVING_STEP_TOLERANCE, iprec3),
+        (RESOLVING_STEP_TOLERANCE * 0.999, iprec3),
         (RESOLVING_MIN_TOLERANCE, iprec3),
         (RESOLVING_MIN_TOLERANCE * 0.999, None),
         (1e-9, None),
@@ -148,13 +148,13 @@ fn the_rule_pairs_tolerances_with_precisions() {
 
 #[test]
 fn the_rule_raises_the_degree_below_the_level_degrees_tolerance() {
-    assert_eq!((RESOLVING_DEGREE_IPREC2, RESOLVING_DEGREE_IPREC3), (24, 32));
+    assert_eq!((RESOLVING_DEGREE, RESOLVING_DEGREE_TIGHT), (28, 32));
     for (eps, want) in [
         (1e-3, 0),
         (PLANE_WAVE_MIN_TOLERANCE, 0),
-        (PLANE_WAVE_MIN_TOLERANCE * 0.999, 24),
-        (IPREC3_TOLERANCE, 24),
-        (IPREC3_TOLERANCE * 0.999, 32),
+        (PLANE_WAVE_MIN_TOLERANCE * 0.999, 28),
+        (RESOLVING_STEP_TOLERANCE, 28),
+        (RESOLVING_STEP_TOLERANCE * 0.999, 32),
         (RESOLVING_MIN_TOLERANCE, 32),
         (RESOLVING_MIN_TOLERANCE * 0.999, 0),
         (0.0, 0),
@@ -221,7 +221,10 @@ fn select_applies_the_rule_where_the_tables_reach() {
     // By the tolerance, whatever the degrees.
     assert_eq!(&select(k_root, &degrees, Some(1e-3))[3..], &[iprec2; 6]);
     assert_eq!(&select(k_root, &degrees, Some(1e-6))[3..], &[iprec2; 6]);
-    assert_eq!(&select(k_root, &degrees, Some(1e-7))[3..], &[iprec2; 6]);
+    assert_eq!(
+        &select(k_root, &degrees, Some(1e-7))[3..],
+        &[Some(Precision::Iprec3); 6]
+    );
     assert_eq!(
         &select(k_root, &degrees, Some(1e-8))[3..],
         &[Some(Precision::Iprec3); 6]

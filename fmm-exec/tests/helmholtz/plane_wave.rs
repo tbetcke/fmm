@@ -185,7 +185,12 @@ fn the_waves_buffer_is_bounded() {
 #[test]
 fn the_rule_reads_the_tolerance() {
     let k = Wavenumber::new(20.0, 0.0).unwrap();
-    for (tolerance, want) in [(1e-3, Some(Iprec2)), (1e-6, Some(Iprec2)), (1e-8, None)] {
+    for (tolerance, want) in [
+        (1e-3, Some(Iprec2)),
+        (1e-6, Some(Iprec2)),
+        (1e-7, Some(Iprec3)),
+        (1e-9, None),
+    ] {
         let mut expected = vec![want; 6];
         expected[..2].fill(None);
         // Before and after `with_m2l`, the same.
@@ -222,6 +227,88 @@ fn the_rule_reads_the_tolerance() {
         precisions(&op),
         select(Complex::new(10.0, 0.0), &DEGREES, None)
     );
+}
+
+/// The degrees an operator runs at, level by level.
+fn degrees(op: &HelmholtzOperator<f64>) -> Vec<usize> {
+    (0..op.nlevels()).map(|l| op.degree(l)).collect()
+}
+
+/// Below 10⁻⁶ the rule raises every level with a quadrature to the resolving degree
+/// (Helmholtz CH6.1g; CH6.1f's candidate 4), the store sizes and every operator of the level
+/// with it; a later setting without those waves takes the degrees given back. Named
+/// precisions and named degrees raise nothing, and Auto keeps D8's bound ε ≥ 10⁻⁶.
+#[test]
+fn the_rule_raises_the_degrees_below_the_level_degrees_tolerance() {
+    let k = Wavenumber::new(20.0, 0.0).unwrap();
+    let densities = Densities::new(k.kind(), ChargeKind::Complex, 1);
+    let given = || {
+        HelmholtzOperator::<f64>::new(k, densities.clone(), &domain(), &DEGREES, false, 8).unwrap()
+    };
+    let sizes = |op: &HelmholtzOperator<f64>| -> Vec<(usize, usize)> {
+        (0..op.nlevels())
+            .map(|l| (op.multipole_size(l), op.local_size(l)))
+            .collect()
+    };
+    let given_sizes = sizes(&given());
+    for (tolerance, precision, d) in [(1e-6, Iprec2, 0), (1e-7, Iprec3, 28), (1e-8, Iprec3, 32)] {
+        let raised: Vec<usize> = DEGREES
+            .iter()
+            .enumerate()
+            .map(|(l, &p)| if l >= 2 { p.max(d) } else { p })
+            .collect();
+        let op = given()
+            .with_plane_wave_tolerance(Some(tolerance))
+            .with_m2l(HelmholtzM2l::PlaneWave, 0);
+        let mut want = vec![Some(precision); DEGREES.len()];
+        want[..2].fill(None);
+        assert_eq!(precisions(&op), want, "ε = {tolerance:e}");
+        assert_eq!(degrees(&op), raised, "ε = {tolerance:e}");
+        let base: Vec<usize> = (0..op.nlevels()).map(|l| op.base_degree(l)).collect();
+        assert_eq!(base, DEGREES);
+        // The stores and the tables of the raised degrees: an operator named at them.
+        let named =
+            HelmholtzOperator::<f64>::new(k, densities.clone(), &domain(), &raised, false, 8)
+                .unwrap();
+        assert_eq!(sizes(&op), sizes(&named), "ε = {tolerance:e}");
+        for l in 0..op.nlevels() {
+            assert_eq!(op.tables().degree(l), raised[l], "level {l}");
+        }
+        // The order of the calls does not matter.
+        let after = given()
+            .with_m2l(HelmholtzM2l::PlaneWave, 0)
+            .with_plane_wave_tolerance(Some(tolerance));
+        assert_eq!(degrees(&after), raised);
+        assert_eq!(precisions(&after), want);
+        // Rotation afterwards: the degrees given, and their stores.
+        let rotation = op.with_m2l(HelmholtzM2l::Rotation, 0);
+        assert_eq!(degrees(&rotation), DEGREES);
+        assert_eq!(sizes(&rotation), given_sizes);
+        // Named precisions raise nothing.
+        let named = rotation
+            .with_m2l(HelmholtzM2l::PlaneWave, 0)
+            .with_plane_wave_precision(PlaneWavePrecision::PerLevel(vec![Some(precision); 6]));
+        assert_eq!(degrees(&named), DEGREES);
+        assert_eq!(precisions(&named), want);
+        // Auto (f64, the exponential M2L from degree 0) keeps D8's bound: waves at the
+        // degrees given, none where the rule would raise them.
+        let auto = given()
+            .with_plane_wave_tolerance(Some(tolerance))
+            .with_m2l_plane_wave_min_degree(Some(0))
+            .with_m2l(HelmholtzM2l::Auto, 0);
+        assert_eq!(degrees(&auto), DEGREES, "Auto at ε = {tolerance:e}");
+        let auto_want = if d == 0 { want.clone() } else { vec![None; 6] };
+        assert_eq!(precisions(&auto), auto_want, "Auto at ε = {tolerance:e}");
+    }
+    // Without a tolerance (named degrees) nothing is raised.
+    let op = given().with_m2l(HelmholtzM2l::PlaneWave, 0);
+    assert_eq!(degrees(&op), DEGREES);
+    // And below the rule's tolerances no level has waves, none raised.
+    let op = given()
+        .with_plane_wave_tolerance(Some(1e-9))
+        .with_m2l(HelmholtzM2l::PlaneWave, 0);
+    assert_eq!(degrees(&op), DEGREES);
+    assert_eq!(precisions(&op), vec![None; 6]);
 }
 
 /// The rule's largest degree without a tolerance is the calibrated plateau at its tolerance.

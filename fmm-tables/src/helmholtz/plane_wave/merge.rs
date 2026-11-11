@@ -37,15 +37,20 @@
 //! Below 10⁻⁶ the level's degree is raised (Helmholtz CH6.1f, the resolving degree,
 //! `fmm-validate/results/helmholtz-ch6-1f.md` §3; signed off 2026-11-09): on the pair chain
 //! FMM3D's tables fail only on the plateau's degrees (p = 20 at 10⁻⁷, 24 at 10⁻⁸), whose
-//! multipoles' tails their waves do not resolve, and hold at 0.010–0.81× RCR's error from a
-//! degree of 24 with iprec 2 and of 32 with iprec 3. So a level with a quadrature runs at
-//! p_w = max(p_l, d) ([`plane_wave_degree`], d the [`resolving_degree`]):
+//! multipoles' tails their waves do not resolve, and hold from a raised degree. iprec 2's
+//! own error, though (its stated error reaches 10⁻⁷), lies above Rotation's on the FMM's
+//! trees at 10⁻⁷ whatever the degree (Helmholtz CH6.1g: 1.25–6.6× on the tests' trees at
+//! degrees 24 and 32, where the pair chain's worst-case charges hid it), so the band below
+//! 10⁻⁶ takes iprec 3 (signed off 2026-11-11: "iprec 3 at max(p,28)"), at a degree that
+//! resolves its tail on the pair chain (p + 8: 0.02–0.93× RCR's error at 10⁻⁷, 0.01–0.17× at
+//! 10⁻⁸). A level with a quadrature runs at p_w = max(p_l, d) ([`plane_wave_degree`], d the
+//! [`resolving_degree`]):
 //!
 //! | ε | precision | d |
 //! | --- | --- | ---: |
 //! | ε ≥ [`PLANE_WAVE_MIN_TOLERANCE`] (10⁻⁶) | iprec 2 | – (p_l) |
-//! | [`IPREC3_TOLERANCE`] (10⁻⁷) ≤ ε < 10⁻⁶ | iprec 2 | [`RESOLVING_DEGREE_IPREC2`] (24) |
-//! | [`RESOLVING_MIN_TOLERANCE`] (10⁻⁸) ≤ ε < 10⁻⁷ | iprec 3 | [`RESOLVING_DEGREE_IPREC3`] (32) |
+//! | [`RESOLVING_STEP_TOLERANCE`] (10⁻⁷) ≤ ε < 10⁻⁶ | iprec 3 | [`RESOLVING_DEGREE`] (28) |
+//! | [`RESOLVING_MIN_TOLERANCE`] (10⁻⁸) ≤ ε < 10⁻⁷ | iprec 3 | [`RESOLVING_DEGREE_TIGHT`] (32) |
 //! | ε < 10⁻⁸ | none (Rotation) | – |
 //!
 //! [`precision_for_tolerance`] gives the precision, [`resolving_degree`] d; the FMM raises
@@ -77,56 +82,57 @@ use crate::plane_wave::geometry::{self, CHILDREN, Direction, MergeGeometry, SLOT
 /// raises the degree. D8's bound on `HelmholtzM2l::Auto`'s exponential M2L.
 pub const PLANE_WAVE_MIN_TOLERANCE: f64 = 1e-6;
 
-/// The tolerance below which the rule takes iprec 3 (Helmholtz CH6.1f).
-pub const IPREC3_TOLERANCE: f64 = 1e-7;
+/// The tolerance below which the [`resolving_degree`] is [`RESOLVING_DEGREE_TIGHT`]
+/// (Helmholtz CH6.1g).
+pub const RESOLVING_STEP_TOLERANCE: f64 = 1e-7;
 
 /// The smallest tolerance at which [`precision_for_tolerance`] gives a precision (Helmholtz
 /// CH6.1f); Rotation below.
 pub const RESOLVING_MIN_TOLERANCE: f64 = 1e-8;
 
-/// The resolving degree of iprec 2, for [`IPREC3_TOLERANCE`] ≤ ε <
-/// [`PLANE_WAVE_MIN_TOLERANCE`] (Helmholtz CH6.1f).
-pub const RESOLVING_DEGREE_IPREC2: usize = 24;
+/// The resolving degree for [`RESOLVING_STEP_TOLERANCE`] ≤ ε < [`PLANE_WAVE_MIN_TOLERANCE`]
+/// (Helmholtz CH6.1g; signed off 2026-11-11).
+pub const RESOLVING_DEGREE: usize = 28;
 
-/// The resolving degree of iprec 3, for [`RESOLVING_MIN_TOLERANCE`] ≤ ε <
-/// [`IPREC3_TOLERANCE`] (Helmholtz CH6.1f).
-pub const RESOLVING_DEGREE_IPREC3: usize = 32;
+/// The resolving degree for [`RESOLVING_MIN_TOLERANCE`] ≤ ε < [`RESOLVING_STEP_TOLERANCE`]
+/// (Helmholtz CH6.1f; signed off 2026-11-09).
+pub const RESOLVING_DEGREE_TIGHT: usize = 32;
 
 /// The largest degree [`precision_for_degree`] gives a precision: the calibrated plateau
 /// at [`PLANE_WAVE_MIN_TOLERANCE`].
 pub const MAX_PLANE_WAVE_DEGREE: usize = 15;
 
-/// The precision the rule takes at ε ≥ [`IPREC3_TOLERANCE`], iprec 2 (the [module
-/// documentation](self)).
+/// The precision the rule takes at ε ≥ [`PLANE_WAVE_MIN_TOLERANCE`], iprec 2 (the [module
+/// documentation](self)); iprec 3 below.
 pub const RULE_PRECISION: Precision = Precision::Iprec2;
 
 /// The precision of the levels of an FMM at tolerance ε (the [module
-/// documentation](self)): [`RULE_PRECISION`] for ε ≥ [`IPREC3_TOLERANCE`], iprec 3 for
-/// [`RESOLVING_MIN_TOLERANCE`] ≤ ε < [`IPREC3_TOLERANCE`], `None` below (Rotation there)
-/// and for a ε that is not positive and finite. Below [`PLANE_WAVE_MIN_TOLERANCE`] the
-/// precision holds at the [`resolving_degree`] only.
+/// documentation](self)): [`RULE_PRECISION`] for ε ≥ [`PLANE_WAVE_MIN_TOLERANCE`], iprec 3
+/// for [`RESOLVING_MIN_TOLERANCE`] ≤ ε < [`PLANE_WAVE_MIN_TOLERANCE`], `None` below
+/// (Rotation there) and for a ε that is not positive and finite. Below
+/// [`PLANE_WAVE_MIN_TOLERANCE`] the precision holds at the [`resolving_degree`] only.
 pub fn precision_for_tolerance(epsilon: f64) -> Option<Precision> {
     if !epsilon.is_finite() || epsilon < RESOLVING_MIN_TOLERANCE {
         None
-    } else if epsilon < IPREC3_TOLERANCE {
+    } else if epsilon < PLANE_WAVE_MIN_TOLERANCE {
         Some(Precision::Iprec3)
     } else {
         Some(RULE_PRECISION)
     }
 }
 
-/// The resolving degree d of the levels with a quadrature at tolerance ε (Helmholtz CH6.1f;
-/// the [module documentation](self)): 0 (the level's own degree) for
-/// ε ≥ [`PLANE_WAVE_MIN_TOLERANCE`], [`RESOLVING_DEGREE_IPREC2`] for
-/// [`IPREC3_TOLERANCE`] ≤ ε < [`PLANE_WAVE_MIN_TOLERANCE`], [`RESOLVING_DEGREE_IPREC3`]
-/// for [`RESOLVING_MIN_TOLERANCE`] ≤ ε < [`IPREC3_TOLERANCE`], and 0 where
-/// [`precision_for_tolerance`] gives none.
+/// The resolving degree d of the levels with a quadrature at tolerance ε (Helmholtz CH6.1f
+/// and CH6.1g; the [module documentation](self)): 0 (the level's own degree) for
+/// ε ≥ [`PLANE_WAVE_MIN_TOLERANCE`], [`RESOLVING_DEGREE`] for
+/// [`RESOLVING_STEP_TOLERANCE`] ≤ ε < [`PLANE_WAVE_MIN_TOLERANCE`],
+/// [`RESOLVING_DEGREE_TIGHT`] for [`RESOLVING_MIN_TOLERANCE`] ≤ ε <
+/// [`RESOLVING_STEP_TOLERANCE`], and 0 where [`precision_for_tolerance`] gives none.
 pub fn resolving_degree(epsilon: f64) -> usize {
     match precision_for_tolerance(epsilon) {
-        Some(_) if epsilon >= PLANE_WAVE_MIN_TOLERANCE => 0,
-        Some(Precision::Iprec3) => RESOLVING_DEGREE_IPREC3,
-        Some(_) => RESOLVING_DEGREE_IPREC2,
         None => 0,
+        Some(_) if epsilon >= PLANE_WAVE_MIN_TOLERANCE => 0,
+        Some(_) if epsilon >= RESOLVING_STEP_TOLERANCE => RESOLVING_DEGREE,
+        Some(_) => RESOLVING_DEGREE_TIGHT,
     }
 }
 
