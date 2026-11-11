@@ -28,7 +28,7 @@ use nd_fmm_exec::helmholtz::{
     Wavenumber, WavenumberKind, auto_m2l_mul_add, s7_degree,
 };
 use nd_fmm_exec::operator::Isa;
-use nd_fmm_tables::helmholtz::plane_wave::merge::precision_for_tolerance;
+use nd_fmm_tables::helmholtz::plane_wave::merge::{plane_wave_degree, precision_for_tolerance};
 use nd_fmm_tables::helmholtz::plane_wave::quadrature::RHO_MAX;
 use nd_fmm_validate::SplitMix64;
 use nd_fmm_validate::fmm_accuracy::Distribution;
@@ -313,8 +313,9 @@ const PLANE_WAVE_RATIO: f64 = 1.1;
 /// kD = 10 at ε = 10⁻³, 10⁻⁶ and 10⁻⁸; W4's clusters at N = 2,000, complex k, real
 /// charges, ε = 10⁻³): φ and ∇φ within [`PLANE_WAVE_RATIO`] of Rotation's errors, the row's
 /// precisions the rule's (`precision_for_tolerance` of ε on every level with waves), and
-/// named precisions as named; at ε = 10⁻⁶ also `check_fmm`'s checks. Below the rule's
-/// tolerance (ε = 10⁻⁸) no level has waves and the output is Rotation's (the checksum). The
+/// named precisions as named; at ε = 10⁻⁶ also `check_fmm`'s checks. At ε = 10⁻⁸ the rule
+/// takes iprec 3 at the resolving degree (Helmholtz CH6.1g): each level with waves at
+/// max(p_l, 32), the others at Rotation's degrees. The
 /// counts' reach (Helmholtz CH6.2e): the corner's by default, with waves exactly on the
 /// levels with a precision; at reach 4 at most the corner's waves per level and fewer in all,
 /// and on W1 within [`PLANE_WAVE_RATIO`] of Rotation's errors. The split by child
@@ -345,15 +346,14 @@ fn check_plane_wave(world: &SimpleCommunicator) {
         for (l, precision) in row.plane_wave.iter().enumerate() {
             assert_eq!(row.dense_levels[l], precision.is_some(), "level {l}");
         }
-        let Some(want) = precision_for_tolerance(eps) else {
-            // Below the rule's tolerance: Rotation on every level, bit for bit.
-            assert!(row.plane_wave.iter().all(Option::is_none), "ε = {eps}");
-            assert_eq!(
-                row.checksum, rotation.checksum,
-                "ε = {eps}: Rotation's output"
-            );
-            continue;
-        };
+        let want = precision_for_tolerance(eps).expect("a precision at every ε of the list");
+        for (l, precision) in row.plane_wave.iter().enumerate() {
+            let degree = match precision {
+                Some(_) => plane_wave_degree(rotation.degrees[l], eps),
+                None => rotation.degrees[l],
+            };
+            assert_eq!(row.degrees[l], degree, "ε = {eps}, level {l}");
+        }
         assert!(
             row.plane_wave.iter().any(Option::is_some),
             "{workload:?} at ε = {eps}: a level with waves, {:?}",

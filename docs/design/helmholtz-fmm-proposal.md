@@ -633,7 +633,10 @@ is for Laplace:
   measurement (CH6.2). (Amended at CH6.2h; D8 signed off 2026-11-08: `Auto` takes it by
   default on each level of degree at least one above Batched's crossover, 12 on AVX-512 with
   two planes, where the precision rule gives a quadrature, ε ≥ 10⁻⁶, and Im k w_l < 5π, in
-  f64; fmm-validate/results/helmholtz-ch6-2h.md.)
+  f64; fmm-validate/results/helmholtz-ch6-2h.md.) (Amended at CH6.1g; D8's bound revisited and
+  signed off 2026-11-11: also at 10⁻⁸ ≤ ε < 10⁻⁷, where the rule runs iprec 3 with the level's
+  degree raised to max(p_l, 32); not at 10⁻⁷ ≤ ε < 10⁻⁶ until the degree raised on the M2L
+  alone is measured (CH6.1h); fmm-validate/results/helmholtz-ch6-1g.md.)
 
 ### 5.4 M2L on high-frequency levels: signatures
 

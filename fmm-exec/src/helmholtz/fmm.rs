@@ -21,7 +21,11 @@
 //! 5. and 6. every point to the rank that owns its leaf, the leaf ranges, radii and the
 //!    output order;
 //! 7. the degree of every level ([`Degrees::resolve`]), the [`HelmholtzOperator`] with its
-//!    tables, on the pool, and the evaluator; the largest leaf is agreed on every rank;
+//!    tables, on the pool, and the evaluator; the largest leaf is agreed on every rank.
+//!    Under [`HelmholtzM2l::PlaneWave`]'s rule below ε = 10⁻⁶, and under the default
+//!    [`HelmholtzM2l::Auto`] at 10⁻⁸ ≤ ε < 10⁻⁷, the operator raises the
+//!    degree of each level with waves to the resolving degree (Helmholtz CH6.1g), and
+//!    [`HelmholtzFmm::degrees`] reports the degrees it runs at;
 //! 8. the leaf-scaled coordinates (CONVENTIONS §3.13).
 //!
 //! The degrees, the leaf level and the tables depend on k, the domain, ε and c_leaf only
@@ -324,8 +328,9 @@ impl HelmholtzFmmBuilder {
     /// default on since its sign-off, 2026-11-08; `false` gives CH3.2d's rule): on the levels
     /// of degree at least
     /// [`m2l_plane_wave_min_degree`](Self::m2l_plane_wave_min_degree) to which the precision
-    /// rule gives a quadrature (iprec 2 at ε ≥ 10⁻⁶ from the tolerance of
-    /// [`Degrees::Tolerance`]), with Im κ_l below
+    /// rule gives a quadrature (from the tolerance of [`Degrees::Tolerance`]: iprec 2 at
+    /// ε ≥ 10⁻⁶, and since Helmholtz CH6.1g iprec 3 at the raised degree max(p_l, 32) for
+    /// 10⁻⁸ ≤ ε < 10⁻⁷; none in 10⁻⁷ ≤ ε < 10⁻⁶, D8's bound kept there), with Im κ_l below
     /// [`AUTO_PLANE_WAVE_MAX_IM_KAPPA`](super::AUTO_PLANE_WAVE_MAX_IM_KAPPA), in f64 only;
     /// Batched and Rotation on the others as before
     /// (`HelmholtzOperator::with_auto_plane_wave`). With [`Degrees::PerLevel`] the quadrature
@@ -351,8 +356,10 @@ impl HelmholtzFmmBuilder {
     /// [`PlaneWavePrecision::Rule`]; `HelmholtzOperator::with_plane_wave_precision`). The
     /// rule reads the tolerance of [`Degrees::Tolerance`], or with named degrees each
     /// level's degree (`HelmholtzOperator::with_plane_wave_tolerance`); it is a function of
-    /// k, the domain, the degrees and the tolerance, so every rank chooses alike. A list
-    /// named here must be the same on every rank.
+    /// k, the domain, the degrees and the tolerance, so every rank chooses alike. Below
+    /// ε = 10⁻⁶ the rule raises the degree of each level with a quadrature
+    /// (`nd_fmm_tables::helmholtz::plane_wave::merge::plane_wave_degree`; Helmholtz CH6.1g);
+    /// named precisions keep the degrees. A list named here must be the same on every rank.
     pub fn plane_wave_precision(mut self, precision: PlaneWavePrecision) -> Self {
         self.plane_wave_precision = precision;
         self
@@ -626,6 +633,8 @@ impl HelmholtzFmmBuilder {
         if let Some(pool) = &pool {
             operator = operator.with_pool(Arc::clone(pool));
         }
+        // The degrees the operator runs at (raised on the levels with waves below 10⁻⁶).
+        let degrees: Vec<usize> = (0..degrees.len()).map(|l| operator.degree(l)).collect();
         let calls = if self.pair_calls {
             Calls::Pairs(PerPair(operator))
         } else {
@@ -972,7 +981,10 @@ where
         self.gradients
     }
 
-    /// The degree p_l of every level.
+    /// The degree p_l at which every level runs: [`Degrees::resolve`]'s, or under
+    /// [`HelmholtzM2l::PlaneWave`]'s rule below ε = 10⁻⁶ and under [`HelmholtzM2l::Auto`]
+    /// at 10⁻⁸ ≤ ε < 10⁻⁷ the raised degree of a level with waves
+    /// (`HelmholtzOperator::degree`; Helmholtz CH6.1g).
     pub fn degrees(&self) -> &[usize] {
         &self.degrees
     }

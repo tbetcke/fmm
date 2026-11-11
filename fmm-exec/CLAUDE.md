@@ -317,7 +317,7 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   docs/helmholtz/tasks/CH6.1d.md): `HelmholtzM2l::PlaneWave` (opt-in), merge and shift on
   the levels whose `PlaneWavePrecision` gives a quadrature (`Rule`, the default:
   `nd_fmm_tables::helmholtz::plane_wave::merge::select`, measured by Helmholtz CH6.1e:
-  iprec 2 at the FMM's tolerance ε ≥ 10⁻⁶, none below, which the builder passes from
+  iprec 2 at the FMM's tolerance ε ≥ 10⁻⁶, none below until CH6.1g (below), which the builder passes from
   `Degrees::Tolerance` through `with_plane_wave_tolerance`; with named degrees iprec 2 to
   p = 15; or `PerLevel`, for the measurements), RCR elsewhere; `with_plane_wave_precision`,
   `plane_wave_precision(level)`, `plane_wave_bytes`, `with_plane_wave_boxes` (the builder
@@ -404,6 +404,27 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   `PLANE_WAVE_RATIO` of Rotation's error, 2 threads and the one-rank FMM bit for bit, today's
   Auto bit for bit with the smallest degree above every level's, the agreed degree and none
   by default. Its debug cost: about 39 s of the one-rank run on the M6 (216 → 255 s).
+  Since Helmholtz CH6.1g (docs/helmholtz/tasks/CH6.1g.md;
+  fmm-validate/results/helmholtz-ch6-1g.md) PlaneWave's rule reaches below ε = 10⁻⁶ by
+  CH6.1f's resolving degree (signed off 2026-11-09): the operator keeps the degrees it was
+  given (`base_degree`) and, under `PlaneWavePrecision::Rule` with a tolerance, raises each
+  level with a quadrature to `merge::plane_wave_degree` (iprec 3 at max(p_l, 28) for
+  10⁻⁷ ≤ ε < 10⁻⁶ and at max(p_l, 32) for 10⁻⁸ ≤ ε < 10⁻⁷; signed off 2026-11-11, iprec 2
+  erring above Rotation at 10⁻⁷ whatever the degree), building `HelmholtzTables`
+  again in `select_tables` where the degrees change (and back at the degrees given when a
+  later setting takes the waves away), so every operator of the level and the store sizes
+  follow; `degree` and `HelmholtzFmm::degrees` report the degrees run. Named precisions and
+  named degrees raise nothing. Auto takes the rule's levels, raised, at 10⁻⁸ ≤ ε < 10⁻⁷ and
+  keeps D8's bound in 10⁻⁷ ≤ ε < 10⁻⁶ (no waves there; signed off 2026-11-11, until
+  CH6.1h's M2L-alone raise is measured). `tests/helmholtz/plane_wave.rs` checks the degrees, sizes and tables per level,
+  the order of the calls, Rotation afterwards, named precisions and Auto;
+  `check_resolving_degree` in `tests/helmholtz_fmm.rs` (the clusters at kD = 1, with levels
+  at κ_l ≤ 0.08, and the cube at kD = 20 + 2i, each at 10⁻⁷ and 10⁻⁸) the errors within
+  `PLANE_WAVE_RATIO` of Rotation's at the degrees given, 2 threads and the one-rank FMM bit
+  for bit, and the default (Auto) PlaneWave's output bit for bit at 10⁻⁸ and Rotation's at
+  10⁻⁷. Its debug cost: 157 s of the one-rank run (603 s) on a loaded M6 (load about 20),
+  where every other check ran about 1.7× slower than on a quiet one, so about 90 s quiet
+  (an estimate; not measured quiet).
   The level call is the crate-private `src/helmholtz/operator_plane_wave.rs`, Laplace's
   order (`src/operator_plane_wave.rs`) restated in scalar loops on
   `nd_fmm_tables::helmholtz::plane_wave` (no `nd-fmm-simd` kernel: Laplace's `WaveKernel`

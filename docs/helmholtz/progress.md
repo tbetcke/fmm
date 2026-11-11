@@ -2712,3 +2712,37 @@ request, using this template:
 - Laplace: not touched (nd-fmm-ref's Helmholtz quadrature builder and tests only; no table,
   driver or kernel changed).
 - Follow-ups: CH6.1g (roadmap), the FMM below 10⁻⁶ by the signed-off rule.
+
+## 2026-11-11: CH6.1g The quadrature below 10⁻⁶ in the FMM
+- Done:
+  - The rule (`nd_fmm_tables::helmholtz::plane_wave::merge`): below ε = 10⁻⁶ iprec 3 with the
+    level's degree raised to `plane_wave_degree` = max(p_l, 28) for 10⁻⁷ ≤ ε < 10⁻⁶ and
+    max(p_l, 32) for 10⁻⁸ ≤ ε < 10⁻⁷, Rotation below 10⁻⁸ (`resolving_degree`,
+    `RESOLVING_*`); named degrees unchanged.
+  - The operator (`HelmholtzOperator`) keeps the degrees given (`base_degree`) and, under
+    PlaneWave's rule and under Auto, builds its RCR tables at p_w on the levels with waves (the
+    whole level, CH6.1f's sign-off 2(a)); `degree` and `HelmholtzFmm::degrees` report p_w.
+  - CH6.1f's iprec 2 at 10⁻⁷ did not hold in the FMM: its own error floor lies above
+    Rotation's on the tests' trees at any degree (1.25–6.6× at 24 and 32), which the pair
+    chain's worst-case comparison hid; iprec 3 at 24 gave 0.04–0.10×. Asked mid-task.
+  - Runs: Kathleen 1 × 40 (jobs 632472, 632473), CH6.1e's 26 cases at 10⁻⁷ and 10⁻⁸, Rotation
+    and PlaneWave in both orders: errors 0.004–0.80× (φ) and 0.004–0.54× (∇φ) Rotation's at
+    10⁻⁷, 0.003–0.48× and 0.002–0.32× at 10⁻⁸; the M2L 0.42–1.46× and 0.26–0.84×; the
+    evaluation 0.54–1.05× at 10⁻⁷ and 0.37–0.81× at 10⁻⁸ on the cases above 0.1 s (two ms
+    cases slower); the rest of the evaluation at p_w 1.29–1.88×.
+  - The report `fmm-validate/results/helmholtz-ch6-1g.md`; `tools/helmholtz/ch6-1g-runs.sh`,
+    `ch6-1g-tables.py`; raw outputs in `~/projects/fmm-archive/kathleen/logs/ch6-1g/`.
+- Tests: nd-fmm-tables `the_rule_pairs_tolerances_with_precisions`,
+  `the_rule_raises_the_degree_below_the_level_degrees_tolerance`, `select` at 10⁻⁷–10⁻⁹;
+  nd-fmm-exec `the_rule_raises_the_degrees_below_the_level_degrees_tolerance` and
+  `auto_takes_the_waves_by_its_rule` (`tests/helmholtz/plane_wave.rs`), `check_resolving_degree`
+  in `tests/helmholtz_fmm.rs` (the clusters at kD = 1 and the cube at kD = 20 + 2i at 10⁻⁷ and
+  10⁻⁸: 0.003–0.011× Rotation's, 2 threads, the one-rank FMM, Auto bit for bit PlaneWave's at
+  10⁻⁸ and Rotation's at 10⁻⁷); nd-fmm-validate's W1 at 10⁻⁸ under the rule.
+- Checks: see the PR (the M6; `/verify` after the Auto change).
+- Decisions: signed off 2026-11-11: (1) "iprec 3 at max(p,28)" for 10⁻⁷ ≤ ε < 10⁻⁶ (in place
+  of CH6.1f's iprec 2 at 24); (2) D8 amended, "Lift for 10⁻⁸–10⁻⁷ only (Recommended)": Auto
+  takes the waves at 10⁻⁸ ≤ ε < 10⁻⁷, not at 10⁻⁷ ≤ ε < 10⁻⁶; proposal §5.3 amended; (3) "Add
+  CH6.1h, next on the list (Recommended)".
+- Laplace: not touched (the Helmholtz merge rule, operator and builder; tests and tools).
+- Follow-ups: CH6.1h (roadmap, priority list item 6), the degree raised on the M2L alone.
