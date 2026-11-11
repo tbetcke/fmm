@@ -54,6 +54,11 @@
 //!   the threads (`auto`, the default, the library's), each exponential-M2L run (the scan's
 //!   at the first) at each split in turn; the column "M2L" of a row at another split ends
 //!   with `/parents` or `/children`. No bit depends on it.
+//! - `--raise level|m2l,…` (Helmholtz CH6.1h): which operators of a level the rule raises
+//!   below 10⁻⁶ run at the raised degree (`level`, the default, the library's: every one;
+//!   `m2l`: the level's translations to and from its parent at the degree given), each
+//!   exponential-M2L run (the scan's at the first; Auto's with waves too) at each in turn,
+//!   inside `--split`'s loop; the column "M2L" of a row with `m2l` ends with `/m2l`.
 //! - `--plane-wave-budget MB|whole` (Helmholtz CH6.2a): the exponential M2L's waves buffer
 //!   per node (default the library's, `DEFAULT_PLANE_WAVE_NODE_BUDGET`; `whole` a whole
 //!   level). The column "M2L" of an exponential-M2L row gives rank 0's waves buffer, its
@@ -97,8 +102,8 @@ use std::time::Instant;
 use mpi::Threading;
 use mpi::traits::*;
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzM2l, PlaneWavePrecision, PlaneWaveSplit,
-    Wavenumber, s7_degree,
+    ChargeKind, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzM2l, PlaneWavePrecision, PlaneWaveRaise,
+    PlaneWaveSplit, Wavenumber, s7_degree,
 };
 use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -130,6 +135,7 @@ struct Arguments {
     plane_wave_budget: Option<usize>,
     reaches: Vec<Option<f64>>,
     splits: Vec<Option<PlaneWaveSplit>>,
+    raises: Vec<Option<PlaneWaveRaise>>,
     s7: bool,
     levels: bool,
     evaluations: usize,
@@ -199,7 +205,7 @@ fn arguments() -> Arguments {
              auto-pw:<d>|sweep|\
              planewave|planewave:<1|2|3>|planewave-scan|planewave-scan:<1|2|3>,…] \
              [--dense-budget MB] [--plane-wave-budget MB|whole] [--reach corner|r,…] \
-             [--split auto|parents|children,…] [--levels] \
+             [--split auto|parents|children,…] [--raise level|m2l,…] [--levels] \
              [--evaluations n]; got {args:?}"
         );
         std::process::exit(2);
@@ -221,6 +227,7 @@ fn arguments() -> Arguments {
         plane_wave_budget: None,
         reaches: vec![None],
         splits: vec![None],
+        raises: vec![None],
         s7: false,
         levels: false,
         evaluations: 1,
@@ -350,6 +357,16 @@ fn arguments() -> Arguments {
                         .collect::<Option<Vec<_>>>()
                         .map(|s| parsed.splits = s)
                         .is_some(),
+                    "--raise" => value
+                        .split(',')
+                        .map(|v| match v {
+                            "level" => Some(None),
+                            "m2l" => Some(Some(PlaneWaveRaise::M2l)),
+                            _ => None,
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .map(|r| parsed.raises = r)
+                        .is_some(),
                     "--rule" => match value.as_str() {
                         "calibrated" => Some(false),
                         "s7" => Some(true),
@@ -471,7 +488,8 @@ fn auto_name(row: &Row) -> Option<String> {
 }
 
 /// For an exponential-M2L row (or Auto's with waves), ` ρ r` where its counts' reach is not
-/// the corner's and `/parents` or `/children` where its split is named; else empty.
+/// the corner's, `/parents` or `/children` where its split is named and `/m2l` where the
+/// raised levels' translations keep the degrees given; else empty.
 fn reach_suffix(row: &Row) -> String {
     if row.m2l != HelmholtzM2l::PlaneWave && row.m2l_plane_wave_min_degree.is_none() {
         return String::new();
@@ -485,7 +503,11 @@ fn reach_suffix(row: &Row) -> String {
         PlaneWaveSplit::Parents => "/parents",
         PlaneWaveSplit::Children => "/children",
     };
-    format!("{reach}{split}")
+    let raise = match row.plane_wave_raise {
+        PlaneWaveRaise::Level => "",
+        PlaneWaveRaise::M2l => "/m2l",
+    };
+    format!("{reach}{split}{raise}")
 }
 
 /// The setting of a row in one word: `rotation`, `dense`, `classes`, `batched`,
@@ -757,8 +779,10 @@ fn main() {
                                 None,
                                 None,
                                 None,
+                                None,
                             )
                         };
+                        let raises = &arguments.raises;
                         let mut runs = match m2l_run {
                             M2lRun::Fixed(m2l, mul_add, max_degree) => {
                                 vec![fixed(m2l, mul_add, max_degree)]
@@ -770,9 +794,11 @@ fn main() {
                                 .reaches
                                 .iter()
                                 .flat_map(|&reach| {
-                                    arguments.splits.iter().map(move |&split| (reach, split))
+                                    arguments.splits.iter().flat_map(move |&split| {
+                                        raises.iter().map(move |&raise| (reach, split, raise))
+                                    })
                                 })
-                                .map(|(reach, split)| {
+                                .map(|(reach, split, raise)| {
                                     (
                                         HelmholtzM2l::PlaneWave,
                                         None,
@@ -786,13 +812,15 @@ fn main() {
                                         reach,
                                         split,
                                         None,
+                                        raise,
                                     )
                                 })
                                 .collect(),
                             M2lRun::AutoPlaneWave(min_degree) => arguments
                                 .splits
                                 .iter()
-                                .map(|&split| {
+                                .flat_map(|&split| raises.iter().map(move |&raise| (split, raise)))
+                                .map(|(split, raise)| {
                                     (
                                         HelmholtzM2l::Auto,
                                         None,
@@ -801,6 +829,7 @@ fn main() {
                                         None,
                                         split,
                                         Some(min_degree),
+                                        raise,
                                     )
                                 })
                                 .collect(),
@@ -819,6 +848,7 @@ fn main() {
                                 case.plane_wave_reach,
                                 case.plane_wave_split,
                                 auto_plane_wave,
+                                case.plane_wave_raise,
                             ) = runs[next].clone();
                             case.auto_plane_wave = auto_plane_wave.is_some();
                             case.m2l_plane_wave_min_degree = auto_plane_wave.flatten();
@@ -866,6 +896,7 @@ fn main() {
                                                                 reach,
                                                                 arguments.splits[0],
                                                                 None,
+                                                                arguments.raises[0],
                                                             ));
                                                         }
                                                     }
