@@ -130,7 +130,7 @@ deep trees. D8 amended: `Auto` takes it at 10⁻⁸ ≤ ε < 10⁻⁷, not yet a
 questions for sign-off): three forms of a raised level, the whole level (`Level`, CH6.1g's),
 its translations to and from the parent at p_l (`Leaves`: `Level`'s errors, 0.93–1.03× its
 evaluation) and also its leaves at p_l (`M2l`: the rest 1.03–1.35× Rotation's against
-1.36–1.88×, the evaluation 0.66–0.96× `Level`'s; errors 0.11–1.00× Rotation's at 10⁻⁷ on 17
+1.36–1.88× on the cases run in both orders, the evaluation 0.66–0.96× `Level`'s; errors 0.11–1.00× Rotation's at 10⁻⁷ on 17
 cases, at 10⁻⁸ 1.53× on the clusters at kD = 10). Proposed: `M2l` at 10⁻⁷ ≤ ε < 10⁻⁶, `Leaves`
 at 10⁻⁸ ≤ ε < 10⁻⁷, and D8's bound lifted at 10⁻⁷ (the evaluation 0.43–0.83× Rotation's above
 0.1 s).

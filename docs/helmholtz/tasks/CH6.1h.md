@@ -146,7 +146,7 @@ The report `fmm-validate/results/helmholtz-ch6-1h.md`. Kathleen jobs 632717 (CH6
 in both orders, `e7` and `e8`, 706 s of runs) and 632725 (`e7x`, eight more W4 cases at 10⁻⁷,
 forward only, 125 s), one node 1 × 40 (node-c11a-031), 28 launches, all exit 0; raw outputs in
 `~/projects/fmm-archive/kathleen/logs/ch6-1h/`. `Leaves`: `Level`'s errors (at most 0.81×),
-0.93–1.03× its evaluation. `M2l`: the rest 1.03–1.35× Rotation's (`Level` 1.36–1.88×), the
+0.93–1.03× its evaluation. `M2l`: the rest 1.03–1.35× Rotation's (`Level` 1.36–1.88×; the cases run in both orders), the
 evaluation 0.66–0.96× `Level`'s; errors 0.11–1.00× at 10⁻⁷ on all 17 cases, at 10⁻⁸ 1.53× (φ)
 on the clusters at kD = 10 (fails), 0.06–1.00× on the other 16. Recommended (report §5): `M2l`
 at 10⁻⁷ ≤ ε < 10⁻⁶ and `Leaves` at 10⁻⁸ ≤ ε < 10⁻⁷, and D8's bound lifted at 10⁻⁷.
@@ -169,4 +169,4 @@ None.
    | W4 Plummer N = 10⁵, kD = 1, 10⁻⁸ | 0.003/0.005 | 0.003/0.005 | 0.247/0.745 |
 
    Within 1.1× on all four, against the reading of CH6.1f §4, so `PlaneWaveRaise::M2l` was
-   built and joins the runs. Its margin is thin (the test trees: 0.56–1.04×).
+   built and joins the runs. Its margin is thin (the test trees: 0.98–0.99× at 10⁻⁷, 0.56–1.04× at 10⁻⁸).

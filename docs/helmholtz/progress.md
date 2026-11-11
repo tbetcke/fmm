@@ -2762,14 +2762,14 @@ request, using this template:
     `ch6-1h-tables.py`.
   - Runs: Kathleen 1 × 40 (jobs 632717, 632725), CH6.1g's 26 cases in both orders and 8 more W4
     cases at 10⁻⁷: `Leaves` at `Level`'s errors (at most 0.81× Rotation's), 0.93–1.03× its
-    evaluation; `M2l` the rest 1.03–1.35× Rotation's (`Level` 1.36–1.88×), the evaluation
+    evaluation; `M2l` the rest 1.03–1.35× Rotation's (`Level` 1.36–1.88×; the cases run in both orders), the evaluation
     0.66–0.96× `Level`'s, errors 0.11–1.00× at 10⁻⁷ (17 cases), 1.53× (φ) on the clusters at
     kD = 10 and 10⁻⁸ (fails), 0.06–1.00× on the other 16.
   - The report `fmm-validate/results/helmholtz-ch6-1h.md`; raw outputs in
     `~/projects/fmm-archive/kathleen/logs/ch6-1h/`.
 - Tests: nd-fmm-tables `m2m_and_l2l_on_the_first_degrees_of_raised_levels`,
-  `build_is_the_m2l_degrees_at_the_degrees`, `m2l_degrees_below_the_degrees_are_refused`;
-  nd-fmm-exec `the_raised_levels_translations_keep_the_degrees_given`
+  `m2l_degrees_below_the_degrees_are_refused`; nd-fmm-exec
+  `the_raised_levels_translations_keep_the_degrees_given`, `the_raised_levels_leaf_operators_by_the_form`
   (`tests/helmholtz/plane_wave.rs`), `check_m2l_raise` in `tests/helmholtz_fmm.rs` (both forms on
   the four resolving scenarios within `PLANE_WAVE_RATIO`, 2 threads, the one-rank FMM bit for
   bit); nd-fmm-validate's W1 at 10⁻⁸ under both forms.

@@ -1134,8 +1134,9 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         }
     }
 
-    /// The degree p_l at which `level` runs, of its stores, its M2L and its leaves'
-    /// operators: the degree given, or the raised degree of a level with waves under
+    /// The degree p_l at which `level` runs, of its stores and its M2L (and of its leaves'
+    /// operators but under [`PlaneWaveRaise::M2l`], [`translation_degree`](Self::translation_degree)):
+    /// the degree given, or the raised degree of a level with waves under
     /// [`HelmholtzM2l::PlaneWave`]'s rule below ε = 10⁻⁶ and under [`HelmholtzM2l::Auto`] at
     /// 10⁻⁸ ≤ ε < 10⁻⁷ (Helmholtz CH6.1g; module documentation, "M2L").
     pub fn degree(&self, level: usize) -> usize {

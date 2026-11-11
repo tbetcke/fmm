@@ -464,6 +464,126 @@ fn the_raised_levels_translations_keep_the_degrees_given() {
     }
 }
 
+/// The leaf operators of a raised level (Helmholtz CH6.1h), at ε = 10⁻⁸ on level 4 (15 → 32),
+/// with one multipole plane (real k, real charges) and two (complex k, complex charges): under
+/// [`PlaneWaveRaise::Leaves`] P2M, L2P, P2L and M2P are `Level`'s bit for bit; under
+/// [`PlaneWaveRaise::M2l`] Rotation's at the degree given on the first degrees, P2M's and
+/// P2L's others zero.
+#[test]
+fn the_raised_levels_leaf_operators_by_the_form() {
+    // The target leaf on level 4, a W box on level 5 (a child of a neighbour, not adjacent),
+    // an X leaf on level 3 (a neighbour of the parent, not adjacent).
+    let leaf = morton::from_index_and_level([3, 5, 6], 4);
+    let w_box = morton::from_index_and_level([9, 10, 12], 5);
+    let x_leaf = morton::from_index_and_level([0, 2, 3], 3);
+    for (k, kind) in [
+        (Wavenumber::new(20.0, 0.0).unwrap(), ChargeKind::Real),
+        (Wavenumber::new(20.0, 2.0).unwrap(), ChargeKind::Complex),
+    ] {
+        let densities = Densities::new(k.kind(), kind, 1);
+        let planes = densities.multipole_planes();
+        let op = |m2l, raise| {
+            HelmholtzOperator::<f64>::new(k, densities, &domain(), &DEGREES, false, 8)
+                .unwrap()
+                .with_plane_wave_tolerance(Some(1e-8))
+                .with_plane_wave_raise(raise)
+                .with_m2l(m2l, 0)
+        };
+        let mut rotation = op(HelmholtzM2l::Rotation, PlaneWaveRaise::Level);
+        let mut level = op(HelmholtzM2l::PlaneWave, PlaneWaveRaise::Level);
+        let mut leaves = op(HelmholtzM2l::PlaneWave, PlaneWaveRaise::Leaves);
+        let mut m2l = op(HelmholtzM2l::PlaneWave, PlaneWaveRaise::M2l);
+        assert_eq!((level.degree(4), level.degree(5)), (32, 32), "{kind:?}");
+        assert_eq!(m2l.translation_degree(4), 15, "{kind:?}");
+        // 8 sources and targets in the leaf's units; the charges after the positions.
+        let mut rng = Rng(9);
+        let n = 8;
+        let columns = densities.source_point_size() - 3;
+        let chunk: Vec<f64> = (0..(3 + columns) * n)
+            .map(|i| {
+                if i < 3 * n {
+                    0.9 * rng.next()
+                } else {
+                    rng.next()
+                }
+            })
+            .collect();
+        let targets: Vec<f64> = (0..3 * n).map(|_| 0.9 * rng.next()).collect();
+        let output_len = level.target_output_point_size() * n;
+        type Ops<'a> = [&'a mut HelmholtzOperator<f64>; 3];
+        let what = |name: &str| format!("{kind:?}: {name}");
+        // P2M into the leaf, P2L from the X leaf into the leaf as a box.
+        for (name, source) in [("P2M", None), ("P2L", Some(x_leaf))] {
+            let run = |op: &mut HelmholtzOperator<f64>| {
+                let size = match source {
+                    None => op.multipole_size(4),
+                    Some(_) => op.local_size(4),
+                };
+                let mut out = vec![0.0; size];
+                match source {
+                    None => op.p2m(leaf, &chunk, &mut out),
+                    Some(s) => op.p2l(s, leaf, &chunk, &mut out),
+                }
+                out
+            };
+            let [a, b, c]: Ops = [&mut level, &mut leaves, &mut m2l];
+            let (at_level, at_leaves, at_m2l) = (run(a), run(b), run(c));
+            assert!(at_leaves == at_level, "{}", what(name));
+            let want = run(&mut rotation);
+            let plane_count = if source.is_some() { 2 } else { planes };
+            check_first_degrees(&at_m2l, &want, plane_count, 15, 32, &what(name));
+        }
+        // L2P from the leaf's local, M2P from the W box's multipole.
+        let local: Vec<f64> = (0..level.local_size(4)).map(|_| rng.next()).collect();
+        let multipole: Vec<f64> = (0..level.multipole_size(5)).map(|_| rng.next()).collect();
+        for (name, from, plane_count, p) in
+            [("L2P", &local, 2, 15), ("M2P", &multipole, planes, 22)]
+        {
+            let run = |op: &mut HelmholtzOperator<f64>, input: &[f64]| {
+                let mut out = vec![0.0; output_len];
+                match name {
+                    "L2P" => op.l2p(leaf, input, &targets, &mut out),
+                    _ => op.m2p(w_box, leaf, input, &targets, &mut out),
+                }
+                out
+            };
+            let at_level = run(&mut level, from);
+            assert!(run(&mut leaves, from) == at_level, "{}", what(name));
+            let first = first_degrees(from, plane_count, p, 32);
+            assert!(
+                run(&mut m2l, from) == run(&mut rotation, &first),
+                "{}: Rotation's on the first degrees",
+                what(name)
+            );
+        }
+    }
+}
+
+/// The degrees ≤ p of `planes` planes (each vector's, one after the other) of degree q.
+fn first_degrees(block: &[f64], planes: usize, p: usize, q: usize) -> Vec<f64> {
+    let (len, stride) = (Layout::new(p).len(), Layout::new(q).len());
+    assert_eq!(block.len() % (planes * stride), 0);
+    block
+        .chunks_exact(stride)
+        .flat_map(|plane| plane[..len].iter().copied())
+        .collect()
+}
+
+/// `got`, planes of degree q, holds `want`'s planes of degree p in its first degrees and zero
+/// above.
+fn check_first_degrees(got: &[f64], want: &[f64], planes: usize, p: usize, q: usize, what: &str) {
+    let (len, stride) = (Layout::new(p).len(), Layout::new(q).len());
+    assert_eq!(got.len() / stride, want.len() / len, "{what}: planes");
+    assert_eq!(got.len() % (planes * stride), 0, "{what}: planes");
+    for (got, want) in got.chunks_exact(stride).zip(want.chunks_exact(len)) {
+        assert!(got[..len] == *want, "{what}: the first degrees");
+        assert!(
+            got[len..].iter().all(|&x| x == 0.0),
+            "{what}: above the degree given"
+        );
+    }
+}
+
 /// The rule's largest degree without a tolerance is the calibrated plateau at its tolerance.
 #[test]
 fn the_rules_degree_is_the_calibrated_plateau() {

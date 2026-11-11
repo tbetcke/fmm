@@ -23,16 +23,18 @@ errors), one rank × 40 threads, release build, f64, AVX-512 P2P, BLAS threads 1
   `Level`'s (at most 0.81× Rotation's), its evaluation 0.93–1.01× `Level`'s at 10⁻⁷ and
   0.94–1.03× at 10⁻⁸: the leaves' P2M and L2P at p_w are most of the raised rest.
 - **`M2l` is fast but close to the limit.** Its rest (evaluation − M2L) takes 1.06–1.35×
-  Rotation's (`Level`: 1.36–1.88×), its evaluation 0.66–0.96× `Level`'s. At 10⁻⁷ its errors are
+  Rotation's (`Level`: 1.36–1.88×; the 26 cases run in both orders), its evaluation 0.66–0.96×
+  `Level`'s. At 10⁻⁷ its errors are
   **0.11–1.00× Rotation's on all 17 cases** (CH6.1g's 9 and 8 more); at 10⁻⁸ 0.06–1.00× on 16 of
-  17, but **1.53× (φ) on the clusters at kD = 10**, which fails the acceptance. A leaf's
+  17, but **1.53× (φ) on the clusters at kD = 10**, which fails the acceptance (CH6.1e's worst
+  level for iprec 3 at p_l, 1.76× there). A leaf's
   multipole and local at p_l are iprec 3's chain at p_l, which CH6.1f's study (§4) and CH6.1g
   §1 found at about Rotation's error; the interior boxes, at p_w, pull the FMM's error below it,
   by how much depending on the tree.
 - **Recommended (question 1):** the form by ε, a function of ε only (constraint 9): `M2l` at
   10⁻⁷ ≤ ε < 10⁻⁶ and `Leaves` at 10⁻⁸ ≤ ε < 10⁻⁷. Then at 10⁻⁷ the evaluation takes **0.43–0.83×
   Rotation's** on every case above 0.1 s (0.95–1.13× on three ms cases), against 0.48–0.95× under
-  `Level`; at 10⁻⁸ 0.31–0.71× above 0.1 s, as `Level` (W3 at N = 4,032, 0.10 s, 1.43×, as under
+  `Level`; at 10⁻⁸ 0.31–0.71× above 0.1 s, as `Level` (W3 at N = 4,032, 0.10 s, 1.43×, `Level` 1.39×, as under
   `Level`).
 - **D8 (question 2):** with `M2l` at 10⁻⁷ the exponential M2L beats Rotation there on every case
   above 0.1 s; recommended: `Auto` takes it at 10⁻⁷ ≤ ε < 10⁻⁶ too.
@@ -123,9 +125,14 @@ Ranges of each form's errors over Rotation's (φ and ∇φ):
 - **`Leaves`** stays at `Level`'s errors: the translations to and from the parent at p_l
   truncate what L2L and M2M carry between levels, as Rotation at p_l does.
 - **`M2l`** sits at 1.00× where a raised level is all leaves (W1 at kD = 10: level 2 alone),
-  the chain of iprec 3 at p_l; elsewhere the interior boxes at p_w bring it to 0.06–0.96×. At
+  the chain of iprec 3 at p_l; elsewhere the interior boxes at p_w bring it to 0.06–1.00× (∇φ on the sphere at kD = 1,
+  10⁻⁸, 1.00× with four raised levels; most cases well below). At
   10⁻⁸ the clusters at kD = 10 reach 1.53× (φ; ∇φ 1.05×), while the same clusters at kD = 1 and
-  100 give 0.83× and 0.49× (why kD = 10 alone is not analysed here). At 10⁻⁷ no case of the 17 exceeds 1.00×; the test trees' 0.98–0.99×
+  100 give 0.83× and 0.49×. It is CH6.1e's worst level: there iprec 3 at p_l on one level alone
+  erred 1.76× Rotation's on the clusters' level 7 at kD = 10 and 10⁻⁸ (κ ≈ 0.08), 1.30× on the
+  Plummer sphere's level 7 at kD = 1 and 10⁻⁸ and 1.12× on the clusters' level 7 at kD = 1 and
+  10⁻⁷ ([helmholtz-ch6-1e.md](helmholtz-ch6-1e.md) §3); under `M2l` those levels' leaves run the
+  same chain at p_l, the interior boxes at p_w (here 1.53×, 0.25× and 0.90×). At 10⁻⁷ no case of the 17 exceeds 1.00×; the test trees' (`check_m2l_raise`, debug, the M6) 0.98–0.99× at 10⁻⁷ and 0.56–1.04× at 10⁻⁸
   (`check_m2l_raise`) agree.
 
 ## 4. Times
@@ -216,7 +223,9 @@ Ranges, each form's over Rotation's (or `Level`'s), the cases run in both orders
 | 1e-8 | ∇φ | M2l | 0.187 | 1.048 |
 
 - **The rest** (leaves, P2P, M2M, L2L): `Level` 1.36–1.88× Rotation's at 10⁻⁷ and 1.55–1.85×
-  at 10⁻⁸, `Leaves` 1.20–1.85× and 1.25–1.76×, `M2l` 1.06–1.35× and 1.03–1.30×. The leaves'
+  at 10⁻⁸, `Leaves` 1.20–1.85× and 1.25–1.76×, `M2l` 1.06–1.35× and 1.03–1.30× (the cases run in
+  both orders; the one-launch `e7x` rows reach 1.99× under `Level`, 1.90× under `Leaves` and
+  1.27× under `M2l`). The leaves'
   operators at p_w are most of the raise; the translations to and from the parent, which
   `Leaves` saves, a small part of it.
 - **The evaluation, `M2l`**: at 10⁻⁷ on the cases above 0.1 s 0.43–0.83× Rotation's (W1 at
@@ -225,7 +234,7 @@ Ranges, each form's over Rotation's (or `Level`'s), the cases run in both orders
   0.30–0.65× above 0.1 s. `Level`'s at 10⁻⁷: 0.48–0.95× above 0.1 s in this job (CH6.1g's job
   632472 had 0.54–1.05×: the clusters 1.00 there, 0.87–0.90 here; between jobs the same case
   moves by up to about 10 %, within a job the forms' order is reversed, A B C D D C B A).
-- **The M2L** is the same in all three forms (0.37–1.32× Rotation's at 10⁻⁷, 0.24–0.89× at
+- **The M2L** is the same in all three forms (0.37–1.33× Rotation's at 10⁻⁷, 0.24–0.89× at
   10⁻⁸), as are the build (2.1–9× Rotation's: the RCR and plane-wave tables at p_w; under 1 s)
   and the stores. Peak resident memory at most 1.4 GB.
 
@@ -234,8 +243,12 @@ Ranges, each form's over Rotation's (or `Level`'s), the cases run in both orders
 1. **The form by ε (recommended):** `PlaneWaveRaise` by the rule, a function of ε only:
    **`M2l` at 10⁻⁷ ≤ ε < 10⁻⁶, `Leaves` at 10⁻⁸ ≤ ε < 10⁻⁷**, built as the default (a new
    variant, the rule's; the named forms stay for the measurements). At 10⁻⁷ it holds on all 17
-   cases (0.11–1.00×) and takes 0.43–0.83× Rotation's evaluation above 0.1 s; its margin is
-   thin where a raised level is all leaves (1.00×), so a tree not measured could exceed 1.1×. At
+   cases (0.11–1.00×) and takes 0.43–0.83× Rotation's evaluation above 0.1 s. Its margin is
+   thin: where a raised level is all leaves it is iprec 3's chain at p_l (1.00×; the test trees
+   0.98–0.99×), the same form fails at 10⁻⁸ on the clusters at kD = 10 (1.53×, the level where
+   CH6.1e measured iprec 3 at p_l at 1.76×), and at 10⁻⁷ CH6.1e measured iprec 3 at p_l at 1.12×
+   on the clusters' level 7 at kD = 1, which `M2l` holds at 0.90× with that level's interior
+   boxes at p_w; a tree whose deep levels are more nearly all leaves could exceed 1.1× at 10⁻⁷. At
    10⁻⁸ `M2l` fails once (1.53×) and `Leaves` holds as `Level` does, 0.94–1.03× its time.
    Alternatives: `Leaves` in both bands (`Level`'s margin, at most 0.81×; 0.93–1.03× `Level`'s
    time); `Level` in both (CH6.1g as merged).
@@ -251,16 +264,19 @@ Ranges, each form's over Rotation's (or `Level`'s), the cases run in both orders
 - nd-fmm-tables `tests/helmholtz/main.rs`: `m2m_and_l2l_on_the_first_degrees_of_raised_levels`
   (M2M and L2L between every pair of levels on the first degrees against `rcr`, the degrees
   above NaN or untouched, five wavenumbers; M2L on every offset of levels 2–4 bit for bit the
-  tables built at the raised degrees), `build_is_the_m2l_degrees_at_the_degrees`,
-  `m2l_degrees_below_the_degrees_are_refused`.
+  tables built at the raised degrees), `m2l_degrees_below_the_degrees_are_refused`.
 - nd-fmm-exec `tests/helmholtz/plane_wave.rs`,
   `the_raised_levels_translations_keep_the_degrees_given`: per form the degrees, translation
   degrees, store sizes and tables per level, the M2L pair body `Level`'s bits, a leaf's P2M and
   L2P (`Level`'s under `Leaves`; Rotation's at p_l on the first degrees under `M2l`, the others
   zero), the order of the calls, Rotation afterwards, Auto, nothing raised at 10⁻⁶.
+  `the_raised_levels_leaf_operators_by_the_form`: P2M, L2P, P2L and M2P on a raised level with one
+  multipole plane (real k, real charges) and two, `Leaves` `Level`'s bit for bit and `M2l`
+  Rotation's at p_l on the first degrees.
 - nd-fmm-exec `tests/helmholtz_fmm.rs`, `check_m2l_raise` in `check_resolving_degree`: both forms
   on the clusters at kD = 1 and the cube at kD = 20 + 2i at 10⁻⁷ and 10⁻⁸, within
-  `PLANE_WAVE_RATIO` of Rotation's (`Leaves` 0.003–0.011×, `M2l` 0.56–1.04×), 2 threads and on P
+  `PLANE_WAVE_RATIO` of Rotation's (`Leaves` 0.003–0.011×, `M2l` 0.98–0.99× at 10⁻⁷ and
+  0.56–1.04× at 10⁻⁸), 2 threads and on P
   ranks the one-rank FMM bit for bit; `Leaves` bit for bit `Level`'s where only level 2 is
   raised, both differing from it elsewhere.
 - nd-fmm-validate `tests/helmholtz_accuracy.rs`: both forms on W1 at kD = 10, 10⁻⁸, within 1.1×

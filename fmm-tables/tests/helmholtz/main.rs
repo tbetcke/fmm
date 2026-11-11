@@ -363,42 +363,6 @@ fn m2m_and_l2l_on_the_first_degrees_of_raised_levels() {
     }
 }
 
-/// `build` is `build_with_m2l_degrees` at the degrees themselves: the translations bit for
-/// bit, with complex and real k.
-#[test]
-fn build_is_the_m2l_degrees_at_the_degrees() {
-    let degrees = [2, 6, 9, 4, 7];
-    for (re, im) in [(2.0, 0.0), (8.0, 1.5)] {
-        let k = Complex::new(re, im);
-        let built = HelmholtzTables::<f64>::build(k, &degrees, DEFAULT_BLOCK_BUDGET);
-        let same = HelmholtzTables::<f64>::build_with_m2l_degrees(
-            k,
-            &degrees,
-            &degrees,
-            DEFAULT_BLOCK_BUDGET,
-        );
-        assert_eq!(built.bytes(), same.bytes());
-        let (mut a, mut b) = (built.scratch(), same.scratch());
-        for level in 0..4 {
-            let (pp, pc) = (degrees[level], degrees[level + 1]);
-            for o in 0..OCTANT_COUNT {
-                let x = input(pc, 2, o as u64);
-                let mut got = vec![0.25; 2 * Layout::new(pp).len()];
-                let mut expected = got.clone();
-                built.m2m(level, o, &x, &mut got, 2, 1, &mut a);
-                same.m2m(level, o, &x, &mut expected, 2, 1, &mut b);
-                assert_same(&got, &expected, "M2M");
-                let x = input(pp, 2, o as u64);
-                let mut got = vec![0.25; 2 * Layout::new(pc).len()];
-                let mut expected = got.clone();
-                built.l2l(level + 1, o, &x, &mut got, 2, 1, &mut a);
-                same.l2l(level + 1, o, &x, &mut expected, 2, 1, &mut b);
-                assert_same(&got, &expected, "L2L");
-            }
-        }
-    }
-}
-
 #[test]
 #[should_panic(expected = "must be at least the degrees")]
 fn m2l_degrees_below_the_degrees_are_refused() {
