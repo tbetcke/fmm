@@ -2,7 +2,9 @@
 //! `nd_fmm_tables::helmholtz`): M2M and L2L on the 8 octants and M2L on the 316 offsets
 //! against `nd_fmm_ref::helmholtz::rcr` at the same frames, for real and complex k, one and
 //! two planes, rectangular degrees, and above the projection threshold of CONVENTIONS
-//! §3.15; the stored and per-call blocks, several vectors and the key counts.
+//! §3.15; the stored and per-call blocks, several vectors and the key counts; and the M2L
+//! degrees raised above the translations' (Helmholtz CH6.1h): M2M and L2L on the first
+//! degrees of the expansions, M2L bit for bit the tables built at the raised degrees.
 //!
 //! Error measure: the FMM-weighted error of `nd-fmm-ref`'s translation tests,
 //! ‖tables − rcr‖_w / ‖rcr‖_w, within [`BOUND`] times max(1, |k̂| a) of the level
@@ -74,7 +76,7 @@ fn check_m2l(
     level: usize,
     offsets: impl Iterator<Item = usize>,
 ) -> f64 {
-    let p = tables.degree(level);
+    let p = tables.m2l_degree(level);
     let len = Layout::new(p).len();
     let k_level = Level::new(tables.k_hat(level), 1.0);
     let w = weights(&k_level, false, p);
@@ -111,10 +113,14 @@ fn check_m2l(
 
 /// M2M and L2L of every octant between `level` and `level` + 1 against `rcr`, in the
 /// child's units; L2L against ½ `rcr`'s (the change of units, module docs of
-/// `nd_fmm_tables::helmholtz`). Complex k: bit for bit. Real k: the real shifts against `rcr`'s complex
-/// step in the FMM-weighted measure, returning the largest error ([`compare`]).
+/// `nd_fmm_tables::helmholtz`), returning the largest error in the FMM-weighted measure
+/// ([`compare`]). The parent's expansion at its M2L degree q_l, the child's degrees
+/// p_{l+1} within its M2L degree's expansion: M2M's child an expansion whose degrees above
+/// p_{l+1} are NaN (so that reading them shows), L2L's child one whose degrees above
+/// p_{l+1} must keep their values.
 fn check_shifts(tables: &HelmholtzTables<f64>, level: usize) -> f64 {
-    let (p_parent, p_child) = (tables.degree(level), tables.degree(level + 1));
+    let (p_parent, p_child) = (tables.m2l_degree(level), tables.degree(level + 1));
+    let q_child = tables.m2l_degree(level + 1);
     let (len_parent, len_child) = (Layout::new(p_parent).len(), Layout::new(p_child).len());
     let k = tables.k_hat(level + 1);
     let child_level = Level::new(k, 1.0);
@@ -131,7 +137,8 @@ fn check_shifts(tables: &HelmholtzTables<f64>, level: usize) -> f64 {
         for &planes in plane_counts {
             let x = input(p_child, planes, o as u64);
             let mut got = vec![0.25; planes * len_parent];
-            tables.m2m(level, o, &x, &mut got, planes, 1, &mut scratch);
+            let block = embed(&x, planes, p_child, q_child, f64::NAN);
+            tables.m2m(level, o, &block, &mut got, planes, 1, &mut scratch);
             let mut expected = vec![0.25; 2 * len_parent];
             rcr::m2m(
                 p_child,
@@ -153,9 +160,18 @@ fn check_shifts(tables: &HelmholtzTables<f64>, level: usize) -> f64 {
             ));
 
             let x = input(p_parent, planes, 8 + o as u64);
-            // From zero, so that ½ rcr's output is exact.
-            let mut got = vec![0.0; planes * len_child];
-            tables.l2l(level + 1, o, &x, &mut got, planes, 1, &mut scratch);
+            // From zero, so that ½ rcr's output is exact; the degrees above p_{l+1} at 7.
+            let mut block = embed(
+                &vec![0.0; planes * len_child],
+                planes,
+                p_child,
+                q_child,
+                7.0,
+            );
+            tables.l2l(level + 1, o, &x, &mut block, planes, 1, &mut scratch);
+            let got = prefix(&block, planes, p_child, q_child);
+            let untouched = embed(&got, planes, p_child, q_child, 7.0);
+            assert_same(&block, &untouched, "L2L beyond the child's degree");
             let mut expected = vec![0.0; 2 * len_child];
             rcr::l2l(
                 p_parent,
@@ -179,6 +195,25 @@ fn check_shifts(tables: &HelmholtzTables<f64>, level: usize) -> f64 {
         }
     }
     worst
+}
+
+/// An expansion of `planes` planes at degree q whose degrees ≤ p are `x`'s (planes at p)
+/// and the others `fill`.
+fn embed(x: &[f64], planes: usize, p: usize, q: usize, fill: f64) -> Vec<f64> {
+    let (len, stride) = (Layout::new(p).len(), Layout::new(q).len());
+    let mut out = vec![fill; planes * stride];
+    for plane in 0..planes {
+        out[plane * stride..plane * stride + len].copy_from_slice(&x[plane * len..][..len]);
+    }
+    out
+}
+
+/// The degrees ≤ p of an expansion of `planes` planes at degree q.
+fn prefix(block: &[f64], planes: usize, p: usize, q: usize) -> Vec<f64> {
+    let (len, stride) = (Layout::new(p).len(), Layout::new(q).len());
+    (0..planes)
+        .flat_map(|plane| block[plane * stride..plane * stride + len].iter().copied())
+        .collect()
 }
 
 /// The outputs started at `initial`: the FMM-weighted error of the reference tests,
@@ -280,6 +315,99 @@ fn m2m_and_l2l_on_every_octant_match_rcr() {
         );
         assert!(worst <= BOUND, "k̂₀ = {re} + {im}i: {worst:e}");
     }
+}
+
+/// The M2L degrees raised above the translations' on some levels (Helmholtz CH6.1h): M2M
+/// and L2L between every pair of levels against `rcr` from and into the first degrees
+/// (`check_shifts`), and M2L on every offset of levels 2–4 bit for bit the tables built at
+/// the raised degrees (the same coaxial tables and blocks).
+#[test]
+fn m2m_and_l2l_on_the_first_degrees_of_raised_levels() {
+    let (degrees, raised) = ([2, 6, 9, 4, 7], [2, 8, 12, 4, 10]);
+    for (re, im) in K_ROOTS {
+        let k = Complex::new(re, im);
+        let tables = HelmholtzTables::<f64>::build_with_m2l_degrees(
+            k,
+            &degrees,
+            &raised,
+            DEFAULT_BLOCK_BUDGET,
+        );
+        let worst = (0..4)
+            .map(|level| check_shifts(&tables, level) / conditioning(&tables, level))
+            .fold(0.0, f64::max);
+        println!(
+            "k̂₀ = {re} + {im}i: M2M and L2L at degrees {degrees:?} within {raised:?} against \
+             rcr, worst {worst:.2e} per unit of conditioning"
+        );
+        assert!(worst <= BOUND, "k̂₀ = {re} + {im}i: {worst:e}");
+        let at_raised = HelmholtzTables::<f64>::build(k, &raised, DEFAULT_BLOCK_BUDGET);
+        let (mut a, mut b) = (tables.scratch(), at_raised.scratch());
+        for level in 2..5 {
+            assert_eq!(tables.degree(level), degrees[level]);
+            assert_eq!(tables.m2l_degree(level), raised[level]);
+            assert_eq!(at_raised.m2l_degree(level), raised[level]);
+            let q = raised[level];
+            for d in 0..M2L_OFFSET_COUNT {
+                let x = input(q, 2, d as u64);
+                let mut got = vec![0.5; 2 * Layout::new(q).len()];
+                let mut expected = got.clone();
+                tables.m2l(level, d, &x, 2, &mut got, 1, &mut a);
+                at_raised.m2l(level, d, &x, 2, &mut expected, 1, &mut b);
+                assert_same(
+                    &got,
+                    &expected,
+                    &format!("M2L on level {level}, offset {d}"),
+                );
+            }
+        }
+    }
+}
+
+/// `build` is `build_with_m2l_degrees` at the degrees themselves: the translations bit for
+/// bit, with complex and real k.
+#[test]
+fn build_is_the_m2l_degrees_at_the_degrees() {
+    let degrees = [2, 6, 9, 4, 7];
+    for (re, im) in [(2.0, 0.0), (8.0, 1.5)] {
+        let k = Complex::new(re, im);
+        let built = HelmholtzTables::<f64>::build(k, &degrees, DEFAULT_BLOCK_BUDGET);
+        let same = HelmholtzTables::<f64>::build_with_m2l_degrees(
+            k,
+            &degrees,
+            &degrees,
+            DEFAULT_BLOCK_BUDGET,
+        );
+        assert_eq!(built.bytes(), same.bytes());
+        let (mut a, mut b) = (built.scratch(), same.scratch());
+        for level in 0..4 {
+            let (pp, pc) = (degrees[level], degrees[level + 1]);
+            for o in 0..OCTANT_COUNT {
+                let x = input(pc, 2, o as u64);
+                let mut got = vec![0.25; 2 * Layout::new(pp).len()];
+                let mut expected = got.clone();
+                built.m2m(level, o, &x, &mut got, 2, 1, &mut a);
+                same.m2m(level, o, &x, &mut expected, 2, 1, &mut b);
+                assert_same(&got, &expected, "M2M");
+                let x = input(pp, 2, o as u64);
+                let mut got = vec![0.25; 2 * Layout::new(pc).len()];
+                let mut expected = got.clone();
+                built.l2l(level + 1, o, &x, &mut got, 2, 1, &mut a);
+                same.l2l(level + 1, o, &x, &mut expected, 2, 1, &mut b);
+                assert_same(&got, &expected, "L2L");
+            }
+        }
+    }
+}
+
+#[test]
+#[should_panic(expected = "must be at least the degrees")]
+fn m2l_degrees_below_the_degrees_are_refused() {
+    let _ = HelmholtzTables::<f64>::build_with_m2l_degrees(
+        Complex::new(2.0, 0.0),
+        &[0, 0, 8],
+        &[0, 0, 7],
+        DEFAULT_BLOCK_BUDGET,
+    );
 }
 
 /// Above the projection threshold Re(k) a > 40 of §3.15 (M2L on level 2 at Re(k̂) a ≈ 52;
