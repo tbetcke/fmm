@@ -2746,3 +2746,37 @@ request, using this template:
   CH6.1h, next on the list (Recommended)".
 - Laplace: not touched (the Helmholtz merge rule, operator and builder; tests and tools).
 - Follow-ups: CH6.1h (roadmap, priority list item 6), the degree raised on the M2L alone.
+
+## 2026-11-11: CH6.1h The resolving degree on the M2L alone
+- Done:
+  - `HelmholtzTables::build_with_m2l_degrees` (nd-fmm-tables): a level's expansions and M2L at
+    q_l, its translations to and from the parent on the first p_l degrees (`m2l_degree`;
+    `translate` on the first degrees of larger expansions; `build` unchanged).
+  - `PlaneWaveRaise` (nd-fmm-exec; `with_plane_wave_raise`, `translation_degree`,
+    `HelmholtzFmmBuilder::plane_wave_raise`): `Level` (CH6.1g's, the default, bit for bit),
+    `Leaves` (the M2M to the parent and the L2L from it at p_l), `M2l` (also the leaves' P2M,
+    L2P, P2L and M2P at p_l through a scratch expansion). `M2l` was added after a probe on the
+    M6 held 1.1× with the leaves at p_l, against CH6.1f §4's reading (the plan's open
+    question 1).
+  - The harness's `--raise level|leaves|m2l`; `tools/helmholtz/ch6-1h-runs.sh`,
+    `ch6-1h-tables.py`.
+  - Runs: Kathleen 1 × 40 (jobs 632717, 632725), CH6.1g's 26 cases in both orders and 8 more W4
+    cases at 10⁻⁷: `Leaves` at `Level`'s errors (at most 0.81× Rotation's), 0.93–1.03× its
+    evaluation; `M2l` the rest 1.03–1.35× Rotation's (`Level` 1.36–1.88×; the cases run in both orders), the evaluation
+    0.66–0.96× `Level`'s, errors 0.11–1.00× at 10⁻⁷ (17 cases), 1.53× (φ) on the clusters at
+    kD = 10 and 10⁻⁸ (fails), 0.06–1.00× on the other 16.
+  - The report `fmm-validate/results/helmholtz-ch6-1h.md`; raw outputs in
+    `~/projects/fmm-archive/kathleen/logs/ch6-1h/`.
+- Tests: nd-fmm-tables `m2m_and_l2l_on_the_first_degrees_of_raised_levels`,
+  `m2l_degrees_below_the_degrees_are_refused`; nd-fmm-exec
+  `the_raised_levels_translations_keep_the_degrees_given`, `the_raised_levels_leaf_operators_by_the_form`
+  (`tests/helmholtz/plane_wave.rs`), `check_m2l_raise` in `tests/helmholtz_fmm.rs` (both forms on
+  the four resolving scenarios within `PLANE_WAVE_RATIO`, 2 threads, the one-rank FMM bit for
+  bit); nd-fmm-validate's W1 at 10⁻⁸ under both forms.
+- Checks: see the PR.
+- Decisions: signed off 2026-11-11 (report §5): (1) "M2l at 1e-7, Leaves at 1e-8
+  (Recommended)": `PlaneWaveRaise::Rule`, the default; (2) "Lift it (Recommended)": `Auto` takes
+  the exponential M2L at 10⁻⁷ ≤ ε < 10⁻⁶ too (D8 and proposal §5.3 amended).
+- Laplace: not touched (nd-fmm-tables' `helmholtz` module, the Helmholtz operator and builder;
+  tests, harness, tools).
+- Follow-ups: none; CH6.1 is done, next H6.G (`/milestone-gate H6`).

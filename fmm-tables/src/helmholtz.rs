@@ -19,15 +19,24 @@
 //!
 //! | Operator | Level | From | To | Shift t | Degrees |
 //! | --- | --- | --- | --- | --- | --- |
-//! | M2M | the parent's, l | child o of l + 1 | its parent | −s_o (child units) | p_{l+1} → p_l |
-//! | L2L | the child's, l + 1 | the parent on l | child o | s_o (child units) | p_l → p_{l+1} |
-//! | M2L | l ≥ 2 | source | target, offset d | 2d | p_l → p_l |
+//! | M2M | the parent's, l | child o of l + 1 | its parent | −s_o (child units) | p_{l+1} → q_l |
+//! | L2L | the child's, l + 1 | the parent on l | child o | s_o (child units) | q_l → p_{l+1} |
+//! | M2L | l ≥ 2 | source | target, offset d | 2d | q_l → q_l |
 //!
 //! with s_o the octant direction ([`octant_direction`]) and d the V-list offset
 //! index(target) − index(source) ([`m2l_offsets`]). The M2M and L2L tables of a level pair
 //! are built in the child's units, as `rcr` builds them from the child's level:
-//! `rcr::m2m_table(p_{l+1}, p_l, child)` and `rcr::l2l_table(p_l, p_{l+1}, child)` with
+//! `rcr::m2m_table(p_{l+1}, q_l, child)` and `rcr::l2l_table(q_l, p_{l+1}, child)` with
 //! child = `Level::new(k̂_{l+1}, 1)` and parent = `Level::new(k̂_{l+1}, 2)`.
+//!
+//! Each level has two degrees ([`HelmholtzTables::build_with_m2l_degrees`]; Helmholtz
+//! CH6.1h): its expansions, and its M2L, have degree q_l (the
+//! [`m2l_degree`](HelmholtzTables::m2l_degree)), and the translations between it and its
+//! parent read or fill their first p_l ≤ q_l degrees (the [`degree`](HelmholtzTables::degree)):
+//! the M2M from level l to its parent reads degrees ≤ p_l of the child's expansion and the L2L
+//! into level l fills degrees ≤ p_l of it, the rest of the expansion untouched. So the M2L of
+//! a level can run at a degree above its translations'. [`HelmholtzTables::build`] takes
+//! q_l = p_l, where every expansion is read and filled whole.
 //!
 //! In its own units a box of level l represents r_l φ̃, φ̃ the potential with the factor 4π
 //! of CONVENTIONS §3.15 ("Where the factors go"), as a leaf's chunk does (CONVENTIONS
@@ -75,8 +84,8 @@
 //!
 //! The y-blocks of degree p take [`compact_blocks_len`]`(p)` values, about (2/3) p³. The two
 //! polar angles of the octants (cos θ = ±1/√3) serve M2M and L2L of a level pair at degree
-//! max(p_l, p_{l+1}) and are always stored. M2L's blocks, one set per distinct polar angle
-//! at degree p_l, are stored level by level from the finest wherever they fit in what is
+//! max(q_l, p_{l+1}) and are always stored. M2L's blocks, one set per distinct polar angle
+//! at degree q_l, are stored level by level from the finest wherever they fit in what is
 //! left of the byte budget ([`HelmholtzTables::build`]; a level that does not fit is
 //! skipped, and a coarser one may still fit); on the other levels they are formed per call
 //! into the scratch, by the same function from the same angles, so the bits do not
@@ -89,7 +98,7 @@
 //!
 //! [`HelmholtzTables::m2m`], [`l2l`](HelmholtzTables::l2l) and
 //! [`m2l`](HelmholtzTables::m2l) translate m expansions per box, one after the other, each
-//! of one or two planes of (p + 1)² values (real part, then imaginary part) in the layout
+//! of one or two planes of (q_l + 1)² values (real part, then imaginary part) in the layout
 //! of CONVENTIONS §3.6, and add (+=) into the output. The steps restate `rcr`'s private
 //! `translate`, in its order of operations: per plane the 2 × 2 rotations by −φ and the
 //! transposed y-block; per output slot the coaxial sum over the input degrees, a complex
@@ -174,7 +183,7 @@ pub struct HelmholtzTables<T: RealScalar> {
     offsets: Vec<OffsetKeys<T>>,
     /// The distinct (cos θ, sin θ) of the 316 shifts, by key.
     m2l_angles: Vec<(T, T)>,
-    /// The largest degree of any level.
+    /// The largest degree q_l of any level.
     p_max: usize,
 }
 
@@ -183,17 +192,20 @@ pub struct HelmholtzTables<T: RealScalar> {
 struct LevelTables<T: RealScalar> {
     /// k̂_l = k r_l in f64.
     k_hat: Complex<f64>,
+    /// The degree p_l of the translations to and from the parent level.
     p: usize,
+    /// The degree q_l ≥ p_l of the expansions and the M2L.
+    q: usize,
     /// M2M from level l + 1 into this level, and L2L from this level into level l + 1;
     /// `None` on the finest level.
     up: Option<Shift<T>>,
     down: Option<Shift<T>>,
-    /// The y-blocks of the octant angles at max(p_l, p_{l+1}), by key; empty on the finest
+    /// The y-blocks of the octant angles at max(q_l, p_{l+1}), by key; empty on the finest
     /// level.
     pair_blocks: [Vec<T>; 2],
     /// M2L per distance key; empty on levels 0 and 1.
     m2l: Vec<Shift<T>>,
-    /// The M2L y-blocks per polar-angle key at p_l, if stored.
+    /// The M2L y-blocks per polar-angle key at q_l, if stored.
     m2l_blocks: Option<Vec<Vec<T>>>,
 }
 
@@ -252,6 +264,26 @@ impl<T: RealScalar> HelmholtzTables<T> {
     /// module documentation, "Tested range": at ε = 10⁻¹⁰ and S7's degrees from about level
     /// 14 at kD = 0.1).
     pub fn build(k_root: Complex<f64>, degrees: &[usize], block_budget: usize) -> Self {
+        Self::build_with_m2l_degrees(k_root, degrees, degrees, block_budget)
+    }
+
+    /// As [`build`](Self::build), with the expansions and the M2L of level l at degree
+    /// q_l = `m2l_degrees[l]` ≥ p_l = `degrees[l]` (module documentation, "Levels and units";
+    /// Helmholtz CH6.1h): the M2M into level l fills degrees ≤ q_l from degrees ≤ p_{l+1} of
+    /// the child's, and the L2L from level l reads degrees ≤ q_l into degrees ≤ p_{l+1} of the
+    /// child's; the M2M out of level l reads, and the L2L into it fills, degrees ≤ p_l. With
+    /// q = p it is `build`, bit for bit.
+    ///
+    /// # Panics
+    ///
+    /// As [`build`](Self::build), and unless `m2l_degrees` has one degree per level, each at
+    /// least the level's degree.
+    pub fn build_with_m2l_degrees(
+        k_root: Complex<f64>,
+        degrees: &[usize],
+        m2l_degrees: &[usize],
+        block_budget: usize,
+    ) -> Self {
         assert!(
             k_root.re.is_finite() && k_root.im.is_finite(),
             "k̂₀ must be finite"
@@ -261,6 +293,11 @@ impl<T: RealScalar> HelmholtzTables<T> {
             "k̂₀ must have Re > 0 and Im ≥ 0 (Yukawa's real path is not served)"
         );
         assert!(!degrees.is_empty(), "no levels");
+        assert!(
+            m2l_degrees.len() == degrees.len()
+                && degrees.iter().zip(m2l_degrees).all(|(p, q)| q >= p),
+            "the M2L degrees {m2l_degrees:?} must be at least the degrees {degrees:?}, one per level"
+        );
         let real_shifts = k_root.im == 0.0;
         let nlevels = degrees.len();
         let k_hat = |l: usize| k_root * (0.5f64).powi(l as i32);
@@ -292,9 +329,9 @@ impl<T: RealScalar> HelmholtzTables<T> {
 
         let mut levels: Vec<LevelTables<T>> = (0..nlevels)
             .map(|l| {
-                let p = degrees[l];
+                let (p, q) = (degrees[l], m2l_degrees[l]);
                 let (up, down, pair_blocks) = if l + 1 < nlevels {
-                    let (p_parent, p_child) = (p, degrees[l + 1]);
+                    let (p_parent, p_child) = (q, degrees[l + 1]);
                     let child = Level::new(k_hat(l + 1), 1.0);
                     let parent = Level::new(k_hat(l + 1), 2.0);
                     let (sc, sp) = (child.scale(), parent.scale());
@@ -327,9 +364,9 @@ impl<T: RealScalar> HelmholtzTables<T> {
                         .map(|&squared| {
                             // |t| = 2 |d| in the level's units.
                             let t = 2.0 * (squared as f64).sqrt();
-                            let table = CoaxialTable::m2l(k, t, a, s, p, p);
+                            let table = CoaxialTable::m2l(k, t, a, s, q, q);
                             let factor = four_pi_ik(k) * (beta + beta - k.im * t).exp();
-                            Shift::new(p, p, false, |m, n_out, n_in| {
+                            Shift::new(q, q, false, |m, n_out, n_in| {
                                 table.get(m, n_out, n_in) * factor
                             })
                         })
@@ -340,6 +377,7 @@ impl<T: RealScalar> HelmholtzTables<T> {
                 LevelTables {
                     k_hat: k_hat(l),
                     p,
+                    q,
                     up,
                     down,
                     pair_blocks,
@@ -352,18 +390,18 @@ impl<T: RealScalar> HelmholtzTables<T> {
         // M2L's blocks, finest level first, within the budget.
         let mut left = block_budget;
         for level in levels.iter_mut().skip(2).rev() {
-            let bytes = m2l_angles.len() * compact_blocks_len(level.p) * size_of::<T>();
+            let bytes = m2l_angles.len() * compact_blocks_len(level.q) * size_of::<T>();
             if bytes > left {
                 continue;
             }
             left -= bytes;
-            let mut scratch = BlockScratch::new(level.p);
+            let mut scratch = BlockScratch::new(level.q);
             level.m2l_blocks = Some(
                 m2l_angles
                     .iter()
                     .map(|&(c, s)| {
-                        let mut out = vec![T::zero(); compact_blocks_len(level.p)];
-                        y_blocks(level.p, c, s, &mut out, &mut scratch);
+                        let mut out = vec![T::zero(); compact_blocks_len(level.q)];
+                        y_blocks(level.q, c, s, &mut out, &mut scratch);
                         out
                     })
                     .collect(),
@@ -372,7 +410,7 @@ impl<T: RealScalar> HelmholtzTables<T> {
 
         Self {
             real_shifts,
-            p_max: degrees.iter().copied().max().unwrap_or(0),
+            p_max: m2l_degrees.iter().copied().max().unwrap_or(0),
             levels,
             octants,
             offsets,
@@ -385,9 +423,16 @@ impl<T: RealScalar> HelmholtzTables<T> {
         self.levels.len()
     }
 
-    /// The degree p_l of `level`.
+    /// The degree p_l of `level`'s translations to and from its parent level (module
+    /// documentation, "Levels and units"), its expansions' unless
+    /// [`build_with_m2l_degrees`](Self::build_with_m2l_degrees) raised them.
     pub fn degree(&self, level: usize) -> usize {
         self.levels[level].p
+    }
+
+    /// The degree q_l ≥ p_l of `level`'s expansions and M2L (Helmholtz CH6.1h).
+    pub fn m2l_degree(&self, level: usize) -> usize {
+        self.levels[level].q
     }
 
     /// k̂_l = k r_l of `level`, in f64: the wavenumber in the level's units.
@@ -444,12 +489,14 @@ impl<T: RealScalar> HelmholtzTables<T> {
 
     /// M2M: adds the `vectors` multipoles of child `o` (on `level` + 1) to those of its
     /// parent on `level`, each of `planes` planes (2, or 1 for the real multipoles of real
-    /// k and real charges).
+    /// k and real charges): degrees ≤ p_{l+1} of the child's into the parent's, each slice's
+    /// expansions at their level's [`m2l_degree`](Self::m2l_degree).
     ///
     /// # Panics
     ///
     /// If `level` has no child level, o ≥ 8, `planes` is not 1 or 2 (1 only with real
-    /// shifts), or a slice is not `vectors` expansions of `planes` planes at its degree.
+    /// shifts), or a slice is not `vectors` expansions of `planes` planes at its level's
+    /// [`m2l_degree`](Self::m2l_degree).
     #[allow(clippy::too_many_arguments)]
     pub fn m2m(
         &self,
@@ -468,15 +515,17 @@ impl<T: RealScalar> HelmholtzTables<T> {
             shift,
             Blocks::Stored(&tables.pair_blocks[key]),
             azimuth,
-            (child, planes),
-            (parent, planes),
+            (child, planes, self.levels[level + 1].q),
+            (parent, planes, tables.q),
             vectors,
             scratch,
         );
     }
 
     /// L2L: adds the `vectors` locals of the parent on `level` − 1 to those of its child
-    /// `o` on `level`, each of `planes` planes (2, or 1 with real shifts only).
+    /// `o` on `level`, each of `planes` planes (2, or 1 with real shifts only): the parent's
+    /// into degrees ≤ p_l of the child's, the rest of the child's untouched; each slice's
+    /// expansions at their level's [`m2l_degree`](Self::m2l_degree).
     ///
     /// # Panics
     ///
@@ -505,8 +554,8 @@ impl<T: RealScalar> HelmholtzTables<T> {
             shift,
             Blocks::Stored(&tables.pair_blocks[1 - key]),
             azimuth,
-            (parent, planes),
-            (child, planes),
+            (parent, planes, tables.q),
+            (child, planes, self.levels[level].q),
             vectors,
             scratch,
         );
@@ -519,7 +568,7 @@ impl<T: RealScalar> HelmholtzTables<T> {
     /// # Panics
     ///
     /// If `level` < 2, d ≥ 316, `multipole_planes` is not 1 or 2, or a slice is not
-    /// `vectors` expansions at the level's degree.
+    /// `vectors` expansions at the level's [`m2l_degree`](Self::m2l_degree).
     #[allow(clippy::too_many_arguments)]
     pub fn m2l(
         &self,
@@ -543,22 +592,24 @@ impl<T: RealScalar> HelmholtzTables<T> {
             &tables.m2l[keys.distance],
             blocks,
             keys.azimuth,
-            (multipole, multipole_planes),
-            (local, 2),
+            (multipole, multipole_planes, tables.q),
+            (local, 2, tables.q),
             vectors,
             scratch,
         );
     }
 
-    /// The three steps of the module documentation for `vectors` expansions.
+    /// The three steps of the module documentation for `vectors` expansions, each plane of
+    /// the input and the output an expansion of the degree given (at least the shift's), of
+    /// which the shift reads or fills the first degrees.
     #[allow(clippy::too_many_arguments)]
     fn translate(
         &self,
         shift: &Shift<T>,
         blocks: Blocks<'_, T>,
         azimuth: Azimuth<T>,
-        (input, in_planes): (&[T], usize),
-        (output, out_planes): (&mut [T], usize),
+        (input, in_planes, in_degree): (&[T], usize, usize),
+        (output, out_planes, out_degree): (&mut [T], usize, usize),
         vectors: usize,
         scratch: &mut HelmholtzScratch<T>,
     ) {
@@ -575,7 +626,13 @@ impl<T: RealScalar> HelmholtzTables<T> {
         );
         let (p_in, p_out) = (shift.p_in, shift.p_out);
         let (len_in, len_out) = (Layout::new(p_in).len(), Layout::new(p_out).len());
-        let (size_in, size_out) = (in_planes * len_in, out_planes * len_out);
+        // The planes' strides: the expansions' lengths.
+        let (stride_in, stride_out) = (Layout::new(in_degree).len(), Layout::new(out_degree).len());
+        let (size_in, size_out) = (in_planes * stride_in, out_planes * stride_out);
+        assert!(
+            in_degree >= p_in && out_degree >= p_out,
+            "expansions of degree {in_degree} and {out_degree} for a step from {p_in} to {p_out}"
+        );
         assert_eq!(input.len(), vectors * size_in, "input length");
         assert_eq!(output.len(), vectors * size_out, "output length");
         let HelmholtzScratch {
@@ -600,7 +657,7 @@ impl<T: RealScalar> HelmholtzTables<T> {
             // 1. Rotate each plane: z by −φ, then the transposed y-block.
             for plane in 0..in_planes {
                 let x = &mut work[..len_in];
-                x.copy_from_slice(&input[plane * len_in..(plane + 1) * len_in]);
+                x.copy_from_slice(&input[plane * stride_in..plane * stride_in + len_in]);
                 rotate_z(p_in, azimuth, -T::one(), x);
                 apply_y(
                     p_in,
@@ -658,7 +715,7 @@ impl<T: RealScalar> HelmholtzTables<T> {
                     y,
                 );
                 rotate_z(p_out, azimuth, T::one(), y);
-                for (o, &v) in output[plane * len_out..(plane + 1) * len_out]
+                for (o, &v) in output[plane * stride_out..plane * stride_out + len_out]
                     .iter_mut()
                     .zip(y.iter())
                 {

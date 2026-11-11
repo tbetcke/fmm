@@ -2,14 +2,15 @@
 //! and named, the levels it reports, and the pair body bit for bit the pair translation of
 //! `nd_fmm_tables::helmholtz::plane_wave` along the direction merge and shift gives the
 //! pair, for one and two multipole planes and two vectors; the split's setting (Helmholtz
-//! CH6.2f); Auto's levels with waves (Helmholtz CH6.2h). The level call by merge and shift
+//! CH6.2f); Auto's levels with waves (Helmholtz CH6.2h); the raised degrees (Helmholtz
+//! CH6.1g) and where they apply (Helmholtz CH6.1h). The level call by merge and shift
 //! is tested with the FMM in `tests/helmholtz_fmm.rs`.
 
 use nd_fmm_exec::geometry::Domain;
 use nd_fmm_exec::helmholtz::{
     AUTO_PLANE_WAVE_MAX_IM_KAPPA, ChargeKind, DegreeRule, Densities, HelmholtzM2l,
-    HelmholtzOperator, MIN_BUFFER_BOXES, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveSplit,
-    Wavenumber, auto_batched_max_degree, auto_plane_wave_min_degree,
+    HelmholtzOperator, MIN_BUFFER_BOXES, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise,
+    PlaneWaveSplit, Wavenumber, auto_batched_max_degree, auto_plane_wave_min_degree,
 };
 use nd_fmm_exec::operator::P2pChoice;
 use nd_fmm_math::{Complex, Layout};
@@ -235,10 +236,10 @@ fn degrees(op: &HelmholtzOperator<f64>) -> Vec<usize> {
 }
 
 /// Below 10⁻⁶ the rule raises every level with a quadrature to the resolving degree
-/// (Helmholtz CH6.1g; CH6.1f's candidate 4), the store sizes and every operator of the level
-/// with it; a later setting without those waves takes the degrees given back. Named
-/// precisions and named degrees raise nothing; Auto takes the raised levels at 10⁻⁸ and keeps
-/// D8's bound in 10⁻⁷ ≤ ε < 10⁻⁶.
+/// (Helmholtz CH6.1g; CH6.1f's candidate 4), the store sizes and the operators of the level
+/// with it (its translations to and from the parent by `PlaneWaveRaise`, CH6.1h); a later setting without those waves takes the degrees given back. Named
+/// precisions and named degrees raise nothing; Auto takes the raised levels at 10⁻⁷ and 10⁻⁸
+/// (D8's bound lifted in 10⁻⁷ ≤ ε < 10⁻⁶ by CH6.1h's sign-off).
 #[test]
 fn the_rule_raises_the_degrees_below_the_level_degrees_tolerance() {
     let k = Wavenumber::new(20.0, 0.0).unwrap();
@@ -270,8 +271,10 @@ fn the_rule_raises_the_degrees_below_the_level_degrees_tolerance() {
         let named =
             HelmholtzOperator::<f64>::new(k, densities, &domain(), &raised, false, 8).unwrap();
         assert_eq!(sizes(&op), sizes(&named), "ε = {tolerance:e}");
+        // The expansions' degrees; the translations' by the default form (CH6.1h).
         for (l, &p) in raised.iter().enumerate() {
-            assert_eq!(op.tables().degree(l), p, "level {l}");
+            assert_eq!(op.tables().m2l_degree(l), p, "level {l}");
+            assert_eq!(op.tables().degree(l), DEGREES[l], "level {l}");
         }
         // The order of the calls does not matter.
         let after = given()
@@ -289,20 +292,15 @@ fn the_rule_raises_the_degrees_below_the_level_degrees_tolerance() {
             .with_plane_wave_precision(PlaneWavePrecision::PerLevel(vec![Some(precision); 6]));
         assert_eq!(degrees(&named), DEGREES);
         assert_eq!(precisions(&named), want);
-        // Auto (f64, the exponential M2L from degree 0) keeps D8's bound in
-        // 10⁻⁷ ≤ ε < 10⁻⁶ and takes the rule's levels, raised, elsewhere (signed off
+        // Auto (f64, the exponential M2L from degree 0) takes the rule's levels, raised, at
+        // every tolerance (D8's bound lifted at 10⁻⁷ ≤ ε < 10⁻⁶, CH6.1h's sign-off,
         // 2026-11-11).
         let auto = given()
             .with_plane_wave_tolerance(Some(tolerance))
             .with_m2l_plane_wave_min_degree(Some(0))
             .with_m2l(HelmholtzM2l::Auto, 0);
-        let (auto_degrees, auto_want) = if tolerance == 1e-7 {
-            (DEGREES.to_vec(), vec![None; 6])
-        } else {
-            (raised.clone(), want.clone())
-        };
-        assert_eq!(degrees(&auto), auto_degrees, "Auto at ε = {tolerance:e}");
-        assert_eq!(precisions(&auto), auto_want, "Auto at ε = {tolerance:e}");
+        assert_eq!(degrees(&auto), raised, "Auto at ε = {tolerance:e}");
+        assert_eq!(precisions(&auto), want, "Auto at ε = {tolerance:e}");
     }
     // Without a tolerance (named degrees) nothing is raised.
     let op = given().with_m2l(HelmholtzM2l::PlaneWave, 0);
@@ -313,6 +311,297 @@ fn the_rule_raises_the_degrees_below_the_level_degrees_tolerance() {
         .with_m2l(HelmholtzM2l::PlaneWave, 0);
     assert_eq!(degrees(&op), DEGREES);
     assert_eq!(precisions(&op), vec![None; 6]);
+}
+
+/// The translation degrees an operator runs at, level by level.
+fn translation_degrees(op: &HelmholtzOperator<f64>) -> Vec<usize> {
+    (0..op.nlevels())
+        .map(|l| op.translation_degree(l))
+        .collect()
+}
+
+/// [`PlaneWaveRaise::Leaves`] and [`PlaneWaveRaise::M2l`] (Helmholtz CH6.1h): the raised
+/// levels' stores, M2L and tables at the resolving degree as under [`PlaneWaveRaise::Level`],
+/// their translations to and from the parent at the degrees given; the M2L pair body the
+/// same bits under every form; the leaves' P2M and L2P `Level`'s under `Leaves` and, under
+/// `M2l`, Rotation's at the degrees given on the first degrees, the multipole's others zero;
+/// the default, [`PlaneWaveRaise::Rule`], `M2l`'s at 10⁻⁷ and `Leaves`' at 10⁻⁸ (signed off
+/// 2026-11-11); the setting kept in either order of the calls, Rotation afterwards back at
+/// the degrees given, Auto alike, and nothing raised at 10⁻⁶.
+#[test]
+fn the_raised_levels_translations_keep_the_degrees_given() {
+    let k = Wavenumber::new(20.0, 0.0).unwrap();
+    let densities = Densities::new(k.kind(), ChargeKind::Complex, 1);
+    let given =
+        || HelmholtzOperator::<f64>::new(k, densities, &domain(), &DEGREES, false, 8).unwrap();
+    let sizes = |op: &HelmholtzOperator<f64>| -> Vec<(usize, usize)> {
+        (0..op.nlevels())
+            .map(|l| (op.multipole_size(l), op.local_size(l)))
+            .collect()
+    };
+    assert_eq!(given().plane_wave_raise(), PlaneWaveRaise::Rule);
+    assert_eq!(PlaneWaveRaise::default(), PlaneWaveRaise::Rule);
+    for (tolerance, want) in [
+        (Some(1e-6), PlaneWaveRaise::M2l),
+        (Some(1e-7), PlaneWaveRaise::M2l),
+        (Some(9.9e-8), PlaneWaveRaise::Leaves),
+        (Some(1e-8), PlaneWaveRaise::Leaves),
+        (None, PlaneWaveRaise::M2l),
+    ] {
+        assert_eq!(
+            PlaneWaveRaise::Rule.resolved(tolerance),
+            want,
+            "{tolerance:?}"
+        );
+        assert_eq!(
+            PlaneWaveRaise::Level.resolved(tolerance),
+            PlaneWaveRaise::Level
+        );
+    }
+    let mut rotation = given().with_m2l(HelmholtzM2l::Rotation, 0);
+    // A leaf of level 4 (degree 15 given) with 8 sources and targets in its units.
+    let leaf = morton::from_index_and_level([3, 5, 6], 4);
+    let mut rng = Rng(5);
+    let n = 8;
+    let mut chunk: Vec<f64> = (0..3 * n).map(|_| 0.9 * rng.next()).collect();
+    let charges: Vec<[f64; 2]> = (0..n).map(|_| [rng.next(), rng.next()]).collect();
+    for (j, &[re, im]) in charges.iter().enumerate() {
+        chunk.extend([re, im]);
+        assert_eq!(densities.charge_index(n, j, 0, 1), 3 * n + 2 * j + 1);
+    }
+    let targets: Vec<f64> = (0..3 * n).map(|_| 0.9 * rng.next()).collect();
+    for (tolerance, d) in [(1e-6, 0), (1e-7, 28), (1e-8, 32)] {
+        let raised: Vec<usize> = DEGREES
+            .iter()
+            .enumerate()
+            .map(|(l, &p)| if l >= 2 { p.max(d) } else { p })
+            .collect();
+        let plane_wave = |raise| {
+            given()
+                .with_plane_wave_tolerance(Some(tolerance))
+                .with_plane_wave_raise(raise)
+                .with_m2l(HelmholtzM2l::PlaneWave, 0)
+        };
+        let mut level = plane_wave(PlaneWaveRaise::Level);
+        assert_eq!(degrees(&level), raised, "ε = {tolerance:e}");
+        assert_eq!(translation_degrees(&level), raised, "ε = {tolerance:e}");
+        // The default, the rule's form: the translations at the degrees given.
+        let mut default = given()
+            .with_plane_wave_tolerance(Some(tolerance))
+            .with_m2l(HelmholtzM2l::PlaneWave, 0);
+        assert_eq!(degrees(&default), raised);
+        assert_eq!(translation_degrees(&default), DEGREES);
+        let rule = PlaneWaveRaise::Rule.resolved(Some(tolerance));
+        let multipole_size = level.multipole_size(4);
+        let local: Vec<f64> = (0..level.local_size(4)).map(|_| rng.next()).collect();
+        let mut level_multipole = vec![0.0; multipole_size];
+        level.p2m(leaf, &chunk, &mut level_multipole);
+        let mut level_output = vec![0.0; level.target_output_point_size() * n];
+        level.l2p(leaf, &local, &targets, &mut level_output);
+        let mut default_multipole = vec![0.0; multipole_size];
+        default.p2m(leaf, &chunk, &mut default_multipole);
+        let mut default_output = vec![0.0; level_output.len()];
+        default.l2p(leaf, &local, &targets, &mut default_output);
+        for raise in [PlaneWaveRaise::Leaves, PlaneWaveRaise::M2l] {
+            let what = format!("{raise:?} at ε = {tolerance:e}");
+            let mut op = plane_wave(raise);
+            assert_eq!(op.plane_wave_raise(), raise);
+            assert_eq!(degrees(&op), raised, "{what}");
+            assert_eq!(translation_degrees(&op), DEGREES, "{what}");
+            assert_eq!(sizes(&op), sizes(&level), "{what}");
+            assert_eq!(precisions(&op), precisions(&level), "{what}");
+            for (l, (&p, &q)) in DEGREES.iter().zip(&raised).enumerate() {
+                assert_eq!(op.tables().degree(l), p, "{what}, level {l}");
+                assert_eq!(op.tables().m2l_degree(l), q, "{what}, level {l}");
+            }
+            // The M2L of a raised level reads and fills whole expansions at p_w: the same
+            // bits.
+            for level_index in 2..DEGREES.len() {
+                let multipole: Vec<f64> = (0..op.multipole_size(level_index))
+                    .map(|_| rng.next())
+                    .collect();
+                let start: Vec<f64> = (0..op.local_size(level_index))
+                    .map(|_| rng.next())
+                    .collect();
+                let (source, target) = pair(level_index, 100);
+                let (mut a, mut b) = (start.clone(), start);
+                level.m2l(source, target, 100, &multipole, &mut a);
+                op.m2l(source, target, 100, &multipole, &mut b);
+                assert!(a == b, "{what}, level {level_index}: M2L");
+            }
+            // The leaf's P2M and L2P: `Level`'s, or under `M2l` Rotation's at the degree
+            // given on the first degrees.
+            let mut multipole = vec![0.0; multipole_size];
+            op.p2m(leaf, &chunk, &mut multipole);
+            let mut output = vec![0.0; level_output.len()];
+            op.l2p(leaf, &local, &targets, &mut output);
+            if raise == rule {
+                assert!(multipole == default_multipole, "{what}: the default's P2M");
+                assert!(output == default_output, "{what}: the default's L2P");
+            }
+            let (q, p) = (raised[4], DEGREES[4]);
+            if raise == PlaneWaveRaise::Leaves || q == p {
+                assert!(multipole == level_multipole, "{what}: P2M");
+                assert!(output == level_output, "{what}: L2P");
+            } else {
+                let (len, stride) = (Layout::new(p).len(), Layout::new(q).len());
+                let mut want = vec![0.0; rotation.multipole_size(4)];
+                rotation.p2m(leaf, &chunk, &mut want);
+                for (plane, want) in want.chunks_exact(len).enumerate() {
+                    let got = &multipole[plane * stride..(plane + 1) * stride];
+                    assert!(got[..len] == *want, "{what}: P2M's first degrees");
+                    assert!(got[len..].iter().all(|&x| x == 0.0), "{what}: P2M above p");
+                }
+                let first: Vec<f64> = local
+                    .chunks_exact(stride)
+                    .flat_map(|plane| plane[..len].iter().copied())
+                    .collect();
+                let mut want = vec![0.0; output.len()];
+                rotation.l2p(leaf, &first, &targets, &mut want);
+                assert!(output == want, "{what}: L2P on the first degrees");
+            }
+            // Named first, then the M2L chosen: the same; Rotation afterwards: the degrees
+            // given.
+            let after = given()
+                .with_m2l(HelmholtzM2l::PlaneWave, 0)
+                .with_plane_wave_tolerance(Some(tolerance))
+                .with_plane_wave_raise(raise);
+            assert_eq!(degrees(&after), raised, "{what}");
+            assert_eq!(translation_degrees(&after), DEGREES, "{what}");
+            let back = op.with_m2l(HelmholtzM2l::Rotation, 0);
+            assert_eq!(degrees(&back), DEGREES, "{what}");
+            assert_eq!(translation_degrees(&back), DEGREES, "{what}");
+            assert_eq!(back.plane_wave_raise(), raise, "{what}");
+            // Auto raises the same levels with the translations kept.
+            let auto = given()
+                .with_plane_wave_tolerance(Some(tolerance))
+                .with_plane_wave_raise(raise)
+                .with_m2l_plane_wave_min_degree(Some(0))
+                .with_m2l(HelmholtzM2l::Auto, 0);
+            assert_eq!(degrees(&auto), raised, "Auto, {what}");
+            assert_eq!(translation_degrees(&auto), DEGREES, "Auto, {what}");
+        }
+    }
+}
+
+/// The leaf operators of a raised level (Helmholtz CH6.1h), at ε = 10⁻⁸ on level 4 (15 → 32),
+/// with one multipole plane (real k, real charges) and two (complex k, complex charges): under
+/// [`PlaneWaveRaise::Leaves`] P2M, L2P, P2L and M2P are `Level`'s bit for bit; under
+/// [`PlaneWaveRaise::M2l`] Rotation's at the degree given on the first degrees, P2M's and
+/// P2L's others zero.
+#[test]
+fn the_raised_levels_leaf_operators_by_the_form() {
+    // The target leaf on level 4, a W box on level 5 (a child of a neighbour, not adjacent),
+    // an X leaf on level 3 (a neighbour of the parent, not adjacent).
+    let leaf = morton::from_index_and_level([3, 5, 6], 4);
+    let w_box = morton::from_index_and_level([9, 10, 12], 5);
+    let x_leaf = morton::from_index_and_level([0, 2, 3], 3);
+    for (k, kind) in [
+        (Wavenumber::new(20.0, 0.0).unwrap(), ChargeKind::Real),
+        (Wavenumber::new(20.0, 2.0).unwrap(), ChargeKind::Complex),
+    ] {
+        let densities = Densities::new(k.kind(), kind, 1);
+        let planes = densities.multipole_planes();
+        let op = |m2l, raise| {
+            HelmholtzOperator::<f64>::new(k, densities, &domain(), &DEGREES, false, 8)
+                .unwrap()
+                .with_plane_wave_tolerance(Some(1e-8))
+                .with_plane_wave_raise(raise)
+                .with_m2l(m2l, 0)
+        };
+        let mut rotation = op(HelmholtzM2l::Rotation, PlaneWaveRaise::Level);
+        let mut level = op(HelmholtzM2l::PlaneWave, PlaneWaveRaise::Level);
+        let mut leaves = op(HelmholtzM2l::PlaneWave, PlaneWaveRaise::Leaves);
+        let mut m2l = op(HelmholtzM2l::PlaneWave, PlaneWaveRaise::M2l);
+        assert_eq!((level.degree(4), level.degree(5)), (32, 32), "{kind:?}");
+        assert_eq!(m2l.translation_degree(4), 15, "{kind:?}");
+        // 8 sources and targets in the leaf's units; the charges after the positions.
+        let mut rng = Rng(9);
+        let n = 8;
+        let columns = densities.source_point_size() - 3;
+        let chunk: Vec<f64> = (0..(3 + columns) * n)
+            .map(|i| {
+                if i < 3 * n {
+                    0.9 * rng.next()
+                } else {
+                    rng.next()
+                }
+            })
+            .collect();
+        let targets: Vec<f64> = (0..3 * n).map(|_| 0.9 * rng.next()).collect();
+        let output_len = level.target_output_point_size() * n;
+        type Ops<'a> = [&'a mut HelmholtzOperator<f64>; 3];
+        let what = |name: &str| format!("{kind:?}: {name}");
+        // P2M into the leaf, P2L from the X leaf into the leaf as a box.
+        for (name, source) in [("P2M", None), ("P2L", Some(x_leaf))] {
+            let run = |op: &mut HelmholtzOperator<f64>| {
+                let size = match source {
+                    None => op.multipole_size(4),
+                    Some(_) => op.local_size(4),
+                };
+                let mut out = vec![0.0; size];
+                match source {
+                    None => op.p2m(leaf, &chunk, &mut out),
+                    Some(s) => op.p2l(s, leaf, &chunk, &mut out),
+                }
+                out
+            };
+            let [a, b, c]: Ops = [&mut level, &mut leaves, &mut m2l];
+            let (at_level, at_leaves, at_m2l) = (run(a), run(b), run(c));
+            assert!(at_leaves == at_level, "{}", what(name));
+            let want = run(&mut rotation);
+            let plane_count = if source.is_some() { 2 } else { planes };
+            check_first_degrees(&at_m2l, &want, plane_count, 15, 32, &what(name));
+        }
+        // L2P from the leaf's local, M2P from the W box's multipole.
+        let local: Vec<f64> = (0..level.local_size(4)).map(|_| rng.next()).collect();
+        let multipole: Vec<f64> = (0..level.multipole_size(5)).map(|_| rng.next()).collect();
+        for (name, from, plane_count, p) in
+            [("L2P", &local, 2, 15), ("M2P", &multipole, planes, 22)]
+        {
+            let run = |op: &mut HelmholtzOperator<f64>, input: &[f64]| {
+                let mut out = vec![0.0; output_len];
+                match name {
+                    "L2P" => op.l2p(leaf, input, &targets, &mut out),
+                    _ => op.m2p(w_box, leaf, input, &targets, &mut out),
+                }
+                out
+            };
+            let at_level = run(&mut level, from);
+            assert!(run(&mut leaves, from) == at_level, "{}", what(name));
+            let first = first_degrees(from, plane_count, p, 32);
+            assert!(
+                run(&mut m2l, from) == run(&mut rotation, &first),
+                "{}: Rotation's on the first degrees",
+                what(name)
+            );
+        }
+    }
+}
+
+/// The degrees ≤ p of `planes` planes (each vector's, one after the other) of degree q.
+fn first_degrees(block: &[f64], planes: usize, p: usize, q: usize) -> Vec<f64> {
+    let (len, stride) = (Layout::new(p).len(), Layout::new(q).len());
+    assert_eq!(block.len() % (planes * stride), 0);
+    block
+        .chunks_exact(stride)
+        .flat_map(|plane| plane[..len].iter().copied())
+        .collect()
+}
+
+/// `got`, planes of degree q, holds `want`'s planes of degree p in its first degrees and zero
+/// above.
+fn check_first_degrees(got: &[f64], want: &[f64], planes: usize, p: usize, q: usize, what: &str) {
+    let (len, stride) = (Layout::new(p).len(), Layout::new(q).len());
+    assert_eq!(got.len() / stride, want.len() / len, "{what}: planes");
+    assert_eq!(got.len() % (planes * stride), 0, "{what}: planes");
+    for (got, want) in got.chunks_exact(stride).zip(want.chunks_exact(len)) {
+        assert!(got[..len] == *want, "{what}: the first degrees");
+        assert!(
+            got[len..].iter().all(|&x| x == 0.0),
+            "{what}: above the degree given"
+        );
+    }
 }
 
 /// The rule's largest degree without a tolerance is the calibrated plateau at its tolerance.
@@ -456,8 +745,9 @@ fn methods(op: &HelmholtzOperator<f64>) -> Vec<HelmholtzM2l> {
 /// Auto's rule with waves: the exponential M2L from the smallest degree where the precision
 /// rule gives a quadrature (ε 10⁻³ and 10⁻⁶; at 10⁻⁸ at the resolving degree, Helmholtz
 /// CH6.1g), Batched at or below the crossover on the others, RCR else; off, with no
-/// quadrature (ε below 10⁻⁸), in D8's kept band 10⁻⁷ ≤ ε < 10⁻⁶, or with the smallest
-/// degree above every level's, Auto's levels and tables as before.
+/// quadrature (ε below 10⁻⁸) or with the smallest degree above every level's, Auto's levels
+/// and tables as before; at 10⁻⁷ (D8's bound lifted there by CH6.1h's sign-off) and 10⁻⁸ the
+/// waves at the resolving degree.
 #[test]
 fn auto_takes_the_waves_by_its_rule() {
     use HelmholtzM2l::{Batched, PlaneWave, Rotation};
@@ -505,7 +795,6 @@ fn auto_takes_the_waves_by_its_rule() {
         .collect();
     assert_eq!(methods(&before), want);
     for (case, op) in [
-        ("ε 1e-7", auto(k, Some(1e-7), 6, Some(10), true)),
         ("ε 1e-9", auto(k, Some(1e-9), 6, Some(10), true)),
         ("d_pw 23", auto(k, Some(1e-6), 6, Some(23), true)),
     ] {
@@ -515,16 +804,19 @@ fn auto_takes_the_waves_by_its_rule() {
         assert_eq!(op.plane_wave_bytes(), 0, "{case}");
     }
     assert_eq!(before.plane_wave_bytes(), 0);
-    // At 10⁻⁸ (Helmholtz CH6.1g, D8's bound lifted there): iprec 3 on the levels of degree
-    // at least d_pw, each raised to max(p_l, 32); Batched on level 2 at its own degree.
-    let op = auto(k, Some(1e-8), 6, Some(10), true);
-    assert_eq!(methods(&op), [Batched, PlaneWave, PlaneWave, PlaneWave]);
-    assert_eq!(degrees(&op), [0, 0, 6, 32, 32, 32]);
-    assert_eq!(
-        precisions(&op),
-        [None, None, None, Some(Iprec3), Some(Iprec3), Some(Iprec3)]
-    );
-    assert!(op.batched_bytes() > 0);
+    // At 10⁻⁸ (Helmholtz CH6.1g, D8's bound lifted there) and 10⁻⁷ (CH6.1h): iprec 3 on the
+    // levels of degree at least d_pw, each raised to max(p_l, 32) or max(p_l, 28); Batched
+    // on level 2 at its own degree.
+    for (tolerance, d) in [(1e-8, 32), (1e-7, 28)] {
+        let op = auto(k, Some(tolerance), 6, Some(10), true);
+        assert_eq!(methods(&op), [Batched, PlaneWave, PlaneWave, PlaneWave]);
+        assert_eq!(degrees(&op), [0, 0, 6, d, d, d]);
+        assert_eq!(
+            precisions(&op),
+            [None, None, None, Some(Iprec3), Some(Iprec3), Some(Iprec3)]
+        );
+        assert!(op.batched_bytes() > 0);
+    }
     // Off, the smallest degree is not reported; the setting before or after `with_m2l`.
     assert_eq!(
         auto(k, Some(1e-6), 6, None, false).plane_wave_min_degree(),

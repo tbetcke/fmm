@@ -126,6 +126,16 @@ errors 0.002–0.80× Rotation's, the evaluation 0.37–0.81× at 10⁻⁸ and 0
 cases above 0.1 s; the raised leaves, M2M and L2L (1.3–1.9×) eat the M2L's gain at 10⁻⁷ on the
 deep trees. D8 amended: `Auto` takes it at 10⁻⁸ ≤ ε < 10⁻⁷, not yet at 10⁻⁷ ≤ ε < 10⁻⁶. CH6.1h
 (the degree raised on the M2L alone) added after it. Next: CH6.1h.
+2026-11-11: CH6.1h done (`fmm-validate/results/helmholtz-ch6-1h.md`): three forms of a raised
+level, the whole level (`Level`, CH6.1g's), its translations to and from the parent at p_l
+(`Leaves`: `Level`'s errors, 0.93–1.03× its evaluation) and also its leaves at p_l (`M2l`: the
+rest 1.03–1.35× Rotation's against 1.36–1.88× on the cases run in both orders, the evaluation
+0.66–0.96× `Level`'s; errors 0.11–1.00× Rotation's at 10⁻⁷ on 17 cases, at 10⁻⁸ 1.53× on the
+clusters at kD = 10). Signed off the same day as recommended: `M2l` at 10⁻⁷ ≤ ε < 10⁻⁶,
+`Leaves` at 10⁻⁸ ≤ ε < 10⁻⁷, and D8's bound lifted at 10⁻⁷ (the evaluation 0.43–0.83×
+Rotation's above 0.1 s): `PlaneWaveRaise::Rule`, the default, and `Auto` takes the exponential
+M2L at every ε ≥ 10⁻⁸ with a quadrature (D8 amended). CH6.1 is done (CH6.1a–h); the priority
+list's items are all ticked. Next: H6.G, `/milestone-gate H6` (its tasks CH6.1 and CH6.2 done).
 
 ## How `/next-task` reads this file
 
@@ -198,7 +208,7 @@ The proposal's Section 12, plus D0. A decision is recorded here when the user ta
 | D5 | Source types of the first release | real and complex charges, potentials and gradients; dipoles once C6.4 exists for Laplace (note: Laplace dipoles were merged in Phase 6 T8 and T8d, so the condition is met) | – | CH1.1 | signed off 2026-10-29: charges now, dipoles later; §3.15 fixes real and complex charges with potentials and gradients, and dipoles get a later, separate task |
 | D6 | Order of H4 and H6 | H6 first | H3.G | CH6.1, CH4.1 | signed off 2026-11-02 (H3 gate, question 2): "i agree with the recommendations", H6 first, as recommended; on the gate report's reason (§3.3): the calibrated degrees cut the low-frequency share of the far field at kD = 500 to about half (an estimate), and the FMM is slowest against FMM3D on low-frequency trees at tight ε, which H6 targets |
 | D7 | Host back ends of the φ step | the product as default and reference; FFTW behind the optional `fftw` feature; rustfft if S9 finds it deterministic per box and faster, decided per machine | CH0.9 | CHR.3, CH4.6 | open |
-| D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2h | CH7.5d | signed off 2026-11-08 (CH6.2h, questions 1–5; the user: "1–5 as recommended"): `Auto` takes the exponential M2L by default where p_l ≥ d_pw (Batched's crossover + 1; 12 on AVX-512 with two planes), CH6.1e's rule gives a quadrature (ε ≥ 10⁻⁶) and Im κ_l < 5π, f64 only; no boxes term (Batched's few-box levels to CH4.0); proposal §5.3 and §6.4 amended. Amended 2026-11-11 (CH6.1g, question 2; the user: "Lift for 10⁻⁸–10⁻⁷ only (Recommended)"): `Auto` also takes it at 10⁻⁸ ≤ ε < 10⁻⁷, where the rule runs iprec 3 at the raised degree max(p_l, 32), and not at 10⁻⁷ ≤ ε < 10⁻⁶ until CH6.1h; proposal §5.3 amended |
+| D8 | Exponential M2L as a default on low-frequency levels | after CH6.2 | CH6.2h | CH7.5d | signed off 2026-11-08 (CH6.2h, questions 1–5; the user: "1–5 as recommended"): `Auto` takes the exponential M2L by default where p_l ≥ d_pw (Batched's crossover + 1; 12 on AVX-512 with two planes), CH6.1e's rule gives a quadrature (ε ≥ 10⁻⁶) and Im κ_l < 5π, f64 only; no boxes term (Batched's few-box levels to CH4.0); proposal §5.3 and §6.4 amended. Amended 2026-11-11 (CH6.1g, question 2; the user: "Lift for 10⁻⁸–10⁻⁷ only (Recommended)"): `Auto` also takes it at 10⁻⁸ ≤ ε < 10⁻⁷, where the rule runs iprec 3 at the raised degree max(p_l, 32), and not at 10⁻⁷ ≤ ε < 10⁻⁶ until CH6.1h; proposal §5.3 amended. Amended 2026-11-11 (CH6.1h, question 2; the user: "Lift it (Recommended)"): `Auto` also takes it at 10⁻⁷ ≤ ε < 10⁻⁶, with the raised degree on the M2L alone there (`PlaneWaveRaise::Rule`); proposal §5.3 amended |
 | D9 | What "within noise" means for Laplace's benchmarks (constraint 1) | the run-to-run spread of the Laplace baseline, repeated on each machine before the change, per benchmark; plus the C3S.4 throughput gate | – | CHR.2, CH2.0 | signed off 2026-10-26: as recommended, the measured spread of the baseline per benchmark and machine, plus the C3S.4 gate. Clarified 2026-10-26 (CHR.2): one-sided, slower than `main` by more than the spread fails, faster passes when the outputs are bit for bit identical; from CH2.0 on five runs per side in the order A B B A A B B A A B, the spread max − min of `main`'s five run medians, never pooled with the branch's. Amended 2026-10-31 (CH2.0, the user: "as recommended"): a failing row may be repeated once and the repeat counts, with both results reported. Amended 2026-10-31 (the machine move, the user: "Amend: M6 replaces M3 Max"): the M6 (`tools/m6/machine.md`) replaces the M3 Max as a machine of record, its C3S.4 reference `spikes/p2p-simd/results-m6.md` |
 | D10 | cubek-fft on the device | after S5: adopt, contribute upstream first, or keep the transform as a GEMM | CH0.5 | CH7.4 | open |
 | D11 | Maximum leaf width c_leaf | from S8: the largest c_leaf with P2P and leaf costs within 10 % of their best on W1 and W3 (expected 0.5 to 1) | CH0.8a | CH3.0 | signed off 2026-10-28: as recommended (CH0.8a report §9, question 1), c_leaf = 1 by the revised rule, the largest c_leaf with no high-frequency leaf on any workload at 10⁻⁶ and 10⁻⁸, replacing the rule of this row, which is degenerate; a first-pass value that CH0.8b may revise with S6's constants and S7's p |
@@ -787,7 +797,15 @@ at any kD.
   small cases, with the rule still a function of k, w_l, p_l and ε (constraint 9); times beside
   Rotation's; D8's bound ε ≥ 10⁻⁶ revisited as a question; or, if CH6.1f recommends none, the
   rule unchanged and the report's reason recorded. *Needs:* CH6.1f and its sign-off.
-- [ ] **CH6.1h The resolving degree on the M2L alone.** CH6.1f's option (b), from CH6.1g's
+- [x] **CH6.1h The resolving degree on the M2L alone.** Report:
+  `fmm-validate/results/helmholtz-ch6-1h.md`; plan `docs/helmholtz/tasks/CH6.1h.md`. Built:
+  `HelmholtzTables::build_with_m2l_degrees` and `PlaneWaveRaise` (`Level`, CH6.1g's; `Leaves`,
+  the translations to and from the parent at p_l; `M2l`, also the leaves at p_l; `Rule`, the
+  default). Signed off 2026-11-11 (the user: "M2l at 1e-7, Leaves at 1e-8 (Recommended)", "Lift
+  it (Recommended)"): (1) `M2l` at 10⁻⁷ ≤ ε < 10⁻⁶ (errors 0.11–1.00× Rotation's on 17 cases,
+  the evaluation 0.43–0.83× above 0.1 s on Kathleen), `Leaves` at 10⁻⁸ ≤ ε < 10⁻⁷ (`M2l` erred
+  1.53× on the clusters at kD = 10 there); (2) D8's bound lifted at 10⁻⁷ ≤ ε < 10⁻⁶. As
+  planned: CH6.1f's option (b), from CH6.1g's
   sign-off 3 (2026-11-11): on a level with waves below 10⁻⁶, the M2L at p_w with the level's
   other operators at p_l: a second multipole at p_w formed by M2M from the children at p_l,
   and the local at p_w taken to the children by L2L at p_l (or the equivalent at the level's

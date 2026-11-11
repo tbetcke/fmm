@@ -44,6 +44,10 @@
 //!   exponential M2L (Helmholtz CH6.2h, D8): [`Case::auto_plane_wave`], at the rule's
 //!   smallest degree or [`Case::m2l_plane_wave_min_degree`]; [`Row::m2l_plane_wave_min_degree`]
 //!   the agreed one and [`Row::plane_wave`] the levels with waves.
+//!   [`Case::plane_wave_raise`] (Helmholtz CH6.1h) which operators of a level the rule raises
+//!   below 10⁻⁶ run at the raised degree (the library's `Rule` by default);
+//!   [`Row::plane_wave_raise`] the setting and [`Row::translation_degrees`] each level's
+//!   translation degree.
 
 use std::ops::Range;
 use std::thread;
@@ -54,8 +58,8 @@ use mpi::traits::CommunicatorCollectives;
 use nd_fmm_exec::geometry::{Domain, radius};
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzFmm, HelmholtzFmmBuilder,
-    HelmholtzFmmError, HelmholtzM2l, Output, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveSplit,
-    PlaneWaveTimes, Wavenumber,
+    HelmholtzFmmError, HelmholtzM2l, Output, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise,
+    PlaneWaveSplit, PlaneWaveTimes, Wavenumber,
 };
 use nd_fmm_exec::operator::{MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
@@ -118,6 +122,10 @@ pub struct Case {
     /// (`HelmholtzFmmBuilder::plane_wave_split`, Helmholtz CH6.2f; `None` the library's,
     /// `Auto`). No bit depends on it.
     pub plane_wave_split: Option<PlaneWaveSplit>,
+    /// Which operators of a level the rule raises below 10⁻⁶ run at the raised degree
+    /// (`HelmholtzFmmBuilder::plane_wave_raise`, Helmholtz CH6.1h; `None` the library's,
+    /// `Rule`).
+    pub plane_wave_raise: Option<PlaneWaveRaise>,
     /// The evaluations of one build (at least 1; Helmholtz CH6.2b): the row's times and
     /// errors are the last one's.
     pub evaluations: usize,
@@ -149,6 +157,7 @@ impl Case {
             plane_wave_budget: None,
             plane_wave_reach: None,
             plane_wave_split: None,
+            plane_wave_raise: None,
             evaluations: 1,
         }
     }
@@ -482,6 +491,13 @@ pub struct Row {
     pub plane_wave_reach: f64,
     /// How merge and shift split over the threads (Helmholtz CH6.2f).
     pub plane_wave_split: PlaneWaveSplit,
+    /// Which operators of a raised level ran at the raised degree (Helmholtz CH6.1h).
+    pub plane_wave_raise: PlaneWaveRaise,
+    /// Per level, the degree of its translations to and from its parent level
+    /// (`HelmholtzOperator::translation_degree`): `degrees`' but on the levels
+    /// [`PlaneWaveRaise::Leaves`] and [`PlaneWaveRaise::M2l`] keep at the degree given
+    /// (Helmholtz CH6.1h).
+    pub translation_degrees: Vec<usize>,
     /// Per level, its waves per direction Σₖ Nₖ under [`HelmholtzM2l::PlaneWave`], 0 where
     /// it ran RCR (and under every other setting; Helmholtz CH6.2e).
     pub plane_wave_waves: Vec<usize>,
@@ -622,6 +638,9 @@ pub fn run_output<C: CommunicatorCollectives>(
     if let Some(split) = case.plane_wave_split {
         builder = builder.plane_wave_split(split);
     }
+    if let Some(raise) = case.plane_wave_raise {
+        builder = builder.plane_wave_raise(raise);
+    }
     let mut fmm: HelmholtzFmm<'_, f64, C> = builder.build(points, points, comm)?;
     let build = slowest(start.elapsed().as_secs_f64(), comm);
     let charges: Vec<Charges<'_, f64>> = (0..case.vectors)
@@ -730,6 +749,10 @@ pub fn run_output<C: CommunicatorCollectives>(
         plane_wave_counts: fmm.operator().plane_wave_counts(),
         plane_wave_reach: fmm.operator().plane_wave_reach(),
         plane_wave_split: fmm.operator().plane_wave_split(),
+        plane_wave_raise: fmm.operator().plane_wave_raise(),
+        translation_degrees: (0..fmm.nlevels())
+            .map(|l| fmm.operator().translation_degree(l))
+            .collect(),
         plane_wave_waves: (0..fmm.nlevels())
             .map(|l| fmm.operator().plane_wave_waves(l))
             .collect(),

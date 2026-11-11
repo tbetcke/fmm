@@ -106,7 +106,7 @@ use thiserror::Error;
 use super::{
     C_LEAF, ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DegreeError, Degrees, Densities,
     DensityError, HelmholtzM2l, HelmholtzOperator, OperatorError, Output, PlaneWavePrecision,
-    PlaneWaveSplit, Wavenumber, WavenumberKind, auto_batched_max_degree,
+    PlaneWaveRaise, PlaneWaveSplit, Wavenumber, WavenumberKind, auto_batched_max_degree,
     auto_plane_wave_min_degree, min_leaf_level,
 };
 use crate::fmm::{DEFAULT_MAX_POINTS_PER_LEAF, FmmError, PointSet, SettingsError};
@@ -183,6 +183,7 @@ pub struct HelmholtzFmmBuilder {
     plane_wave_reach: f64,
     plane_wave_budget: usize,
     plane_wave_split: PlaneWaveSplit,
+    plane_wave_raise: PlaneWaveRaise,
     c_leaf: f64,
     p2p: P2pChoice,
     pair_calls: bool,
@@ -218,6 +219,7 @@ impl HelmholtzFmmBuilder {
             plane_wave_reach: RHO_MAX,
             plane_wave_budget: DEFAULT_PLANE_WAVE_NODE_BUDGET,
             plane_wave_split: PlaneWaveSplit::Auto,
+            plane_wave_raise: PlaneWaveRaise::Rule,
             c_leaf: C_LEAF,
             p2p: P2pChoice::Auto,
             pair_calls: false,
@@ -329,8 +331,8 @@ impl HelmholtzFmmBuilder {
     /// of degree at least
     /// [`m2l_plane_wave_min_degree`](Self::m2l_plane_wave_min_degree) to which the precision
     /// rule gives a quadrature (from the tolerance of [`Degrees::Tolerance`]: iprec 2 at
-    /// ε ≥ 10⁻⁶, and since Helmholtz CH6.1g iprec 3 at the raised degree max(p_l, 32) for
-    /// 10⁻⁸ ≤ ε < 10⁻⁷; none in 10⁻⁷ ≤ ε < 10⁻⁶, D8's bound kept there), with Im κ_l below
+    /// ε ≥ 10⁻⁶, and since Helmholtz CH6.1g iprec 3 at the raised degree for 10⁻⁸ ≤ ε < 10⁻⁷,
+    /// since Helmholtz CH6.1h's sign-off for 10⁻⁷ ≤ ε < 10⁻⁶ too), with Im κ_l below
     /// [`AUTO_PLANE_WAVE_MAX_IM_KAPPA`](super::AUTO_PLANE_WAVE_MAX_IM_KAPPA), in f64 only;
     /// Batched and Rotation on the others as before
     /// (`HelmholtzOperator::with_auto_plane_wave`). With [`Degrees::PerLevel`] the quadrature
@@ -383,6 +385,17 @@ impl HelmholtzFmmBuilder {
     /// measurements (Helmholtz CH6.2f). Every setting gives the same output bit for bit.
     pub fn plane_wave_split(mut self, split: PlaneWaveSplit) -> Self {
         self.plane_wave_split = split;
+        self
+    }
+
+    /// Which operators of a level the rule raises to the resolving degree run at it (default
+    /// [`PlaneWaveRaise::Rule`]: the M2L alone at 10⁻⁷ ≤ ε < 10⁻⁶, also the leaves at
+    /// 10⁻⁸ ≤ ε < 10⁻⁷; `HelmholtzOperator::with_plane_wave_raise`; Helmholtz CH6.1h, signed
+    /// off 2026-11-11). [`PlaneWaveRaise::Level`] raises every operator (CH6.1g's form),
+    /// [`PlaneWaveRaise::Leaves`] all but the translations to and from the parent,
+    /// [`PlaneWaveRaise::M2l`] the M2L alone. The same on every rank.
+    pub fn plane_wave_raise(mut self, raise: PlaneWaveRaise) -> Self {
+        self.plane_wave_raise = raise;
         self
     }
 
@@ -622,6 +635,7 @@ impl HelmholtzFmmBuilder {
         })
         .with_plane_wave_reach(self.plane_wave_reach)
         .with_plane_wave_split(self.plane_wave_split)
+        .with_plane_wave_raise(self.plane_wave_raise)
         .with_m2l(self.m2l, self.dense_budget)
         .with_plane_wave_boxes(&level_boxes)
         .with_plane_wave_buffer(
