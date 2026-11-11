@@ -455,6 +455,14 @@ the report and the summary's `m2l_level_ms` and `m2l_level_pieces`; `Settings::p
 `tests/scaling.rs` covers the levels; `tools/scaling/run.sh` has the sweep `ch6-2i`
 (`CH6_2I_SPLITS`). Its report is `results/helmholtz-ch6-2i.md`.
 
+Helmholtz CH6.1h (the resolving degree on the M2L alone; docs/helmholtz/tasks/CH6.1h.md) added
+`helmholtz_accuracy::Case::plane_wave_raise` (`HelmholtzFmmBuilder::plane_wave_raise`; `None`
+the library's) and `Row::{plane_wave_raise, translation_degrees}`, and to the example
+`--raise level|leaves|m2l,…` (each exponential-M2L run in each form, the column "M2L" ending
+`/leaves` or `/m2l`). `tests/helmholtz_accuracy.rs` checks both forms on W1 at 10⁻⁸ within
+1.1× Rotation's. `tools/helmholtz/ch6-1h-runs.sh` runs the task's measurements,
+`ch6-1h-tables.py` makes the report's tables. Its report is `results/helmholtz-ch6-1h.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`

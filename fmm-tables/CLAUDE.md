@@ -52,6 +52,13 @@ rule of which Helmholtz CH6.1e measured.
   measured on the M6). Its y-blocks are built in T, as `rcr`
   builds them per call, so that stored and per-call blocks agree; the M2L blocks are
   stored from the finest level up within a byte budget. Not cached (CH2.2).
+  Since Helmholtz CH6.1h `HelmholtzTables::build_with_m2l_degrees` gives each level a
+  second degree q_l ≥ p_l (`m2l_degree`): its expansions and M2L at q_l, the M2M into it
+  from the children's first p_{l+1} degrees into q_l, the L2L from q_l into the children's
+  first p_{l+1}; `translate` reads and writes the first degrees of each plane of a larger
+  expansion. `build` is it with q = p (bit for bit as before). `tests/helmholtz/main.rs`
+  checks the translations on the first degrees against `rcr` (the degrees above NaN, or
+  left untouched) and M2L bit for bit the tables built at q.
   `helmholtz::dense` (Helmholtz CH3.2a; its module docs): `DenseM2l`, per level and offset
   the complex M2L as one 2n × n column-major matrix [A_r; A_i], column j Rotation's M2L of
   e_j built by `HelmholtzTables<f64>` and rounded to T (so Dense equals Rotation to

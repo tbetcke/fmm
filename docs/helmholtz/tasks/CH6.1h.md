@@ -33,22 +33,22 @@ holds at p_w; the study's chain held with the multipole formed by M2M from child
 waves the M2L needs its multipole and local at p_w; what reads or forms them at the box's
 own radius needs p_w too, what works at the children's radius does not:
 
-| operator on a raised level l | CH6.1g (`Level`) | CH6.1h (`M2l`) |
-| --- | --- | --- |
-| stores (multipole, local), ghost exchange | p_w | p_w |
-| M2L (merge and shift) | p_w | p_w |
-| M2M from the children into l | p_{l+1} or p_w → p_w | p_{l+1} → p_w (read: the children's p_{l+1}) |
-| M2M from l to its parent | p_w → p_{l−1} | **p_l** → p_{l−1} (the first p_l degrees) |
-| L2L from the parent into l | p_{l−1} → p_w | p_{l−1} → **p_l** (the first p_l degrees) |
-| L2L from l to the children | p_w → p_{l+1} or p_w | p_w → p_{l+1} |
-| P2M, L2P on l's leaves | p_w | p_w (a leaf has no children: S and T at the box's radius) |
-| P2L into, M2P from a box of l | p_w | p_w (unchanged: reads and writes the stores) |
+| operator on a raised level l | CH6.1g (`Level`) | `Leaves` | `M2l` (the M2L alone) |
+| --- | --- | --- | --- |
+| stores (multipole, local), ghost exchange | p_w | p_w | p_w |
+| M2L (merge and shift) | p_w | p_w | p_w |
+| M2M from the children into l | p_{l+1} or p_w → p_w | p_{l+1} → p_w | p_{l+1} → p_w |
+| M2M from l to its parent | p_w → p_{l−1} | **p_l** → p_{l−1} | **p_l** → p_{l−1} |
+| L2L from the parent into l | p_{l−1} → p_w | p_{l−1} → **p_l** | p_{l−1} → **p_l** |
+| L2L from l to the children | p_w → p_{l+1} or p_w | p_w → p_{l+1} | p_w → p_{l+1} |
+| P2M, L2P on l's leaves; P2L into, M2P from its boxes | p_w | p_w | **p_l** (the first degrees) |
 
-The roadmap's line hoped that the leaves keep p_l too. By the reading above a leaf's P2M at
-p_l gives S_{p_l} at the box's own radius, the failing chain of iprec 3 at p_l (CH6.1g §1:
-0.56–1.07× Rotation's on the test trees, CH6.1e: up to 1.76× on the clustered trees' deep
-levels), and its L2P at p_l T_{p_l}. This task checks that once, with a temporary test (leaves
-at p_l, as CH6.1g §1's exploration, not committed), and records the numbers in the report.
+(p_{l+1} under `Leaves` and `M2l` is the child level's translation degree, its base.) The
+plan first built `Leaves` alone: by the reading above a leaf's P2M at p_l gives S_{p_l} at
+the box's own radius, the failing chain of iprec 3 at p_l (CH6.1g §1: 0.56–1.07× Rotation's
+on the test trees; CH6.1e: up to 1.76× on the clustered trees' deep levels). A temporary
+probe (leaves at p_l, not committed; "Open questions" 1) held 0.25–0.96× Rotation's on four
+of CH6.1e's large cases, so `M2l`, the roadmap's "M2L alone", is built and measured too.
 
 ## Read first
 
@@ -74,19 +74,21 @@ nd-fmm-tables and the Helmholtz operator of nd-fmm-exec only).
    block; `build` is it with q = p, bit for bit. `translate` reads and writes the first
    degrees of each plane of a larger block (the block's degree a parameter; the copy into
    `work` already exists). `m2l_degree(level)`; the module docs' table of degrees.
-2. **nd-fmm-exec, `HelmholtzOperator`**: `PlaneWaveRaise { Level, M2l }` (re-exported from
-   `helmholtz`), `with_plane_wave_raise`, `plane_wave_raise()`; `select_tables` builds the
-   tables with degrees = q = p_w under `Level` (CH6.1g's, bit for bit) and degrees = the
-   base, q = p_w under `M2l`. The stores, P2M, L2P, P2L, M2P and M2L at q_l
-   (`Kernel::p` reads `m2l_degree`); `degree(level)` stays the degree of the stores and the
-   M2L (q_l), `translation_degree(level)` new (p_l of the M2M out and the L2L in).
+2. **nd-fmm-exec, `HelmholtzOperator`**: `PlaneWaveRaise { Level, Leaves, M2l }`
+   (re-exported from `helmholtz`), `with_plane_wave_raise`, `plane_wave_raise()`;
+   `select_tables` builds the tables with degrees = q = p_w under `Level` (CH6.1g's, bit for
+   bit) and degrees = the base, q = p_w under `Leaves` and `M2l`. The stores and the M2L at
+   q_l (`Kernel::p` reads `m2l_degree`), the leaves' operators at q_l or, under `M2l`, at
+   p_l on the first degrees through a scratch expansion (`Kernel::leaf_degree`);
+   `degree(level)` stays the degree of the stores and the M2L (q_l),
+   `translation_degree(level)` new (p_l of the M2M out and the L2L in).
    `HelmholtzFmmBuilder::plane_wave_raise`; the default `Level` until the sign-off (then
    the form signed off).
 3. **nd-fmm-validate**: `helmholtz_accuracy::Case::plane_wave_raise`, `Row::plane_wave_raise`,
-   the example's `--raise level|m2l,…` (each exponential-M2L run at each form, the column
-   "M2L" ending `/m2l` where named), as `--split`.
+   the example's `--raise level|leaves|m2l,…` (each exponential-M2L run at each form, the
+   column "M2L" ending `/leaves` or `/m2l` where named), as `--split`.
 4. **tools**: `tools/helmholtz/ch6-1h-runs.sh` (CH6.1g's 26 cases, `--m2l rotation,planewave
-   --raise level,m2l`, the order reversed in the second launch), `ch6-1h-tables.py`.
+   --raise level,leaves,m2l`, the order reversed in the second launch), `ch6-1h-tables.py`.
 5. Docs: fmm-tables/CLAUDE.md, fmm-exec/CLAUDE.md, fmm-validate/CLAUDE.md, the module docs;
    the report `fmm-validate/results/helmholtz-ch6-1h.md`.
 
@@ -141,3 +143,17 @@ data for D8's question. No M6 timing.
 ## Pending runs
 
 ## Open questions
+
+1. **The leaves at p_l** (2026-11-11, before the Kathleen runs; not a question for the user).
+   A temporary change (P2M and L2P of a raised level's leaves at p_l on the first degrees,
+   not committed), the M6, release, 4 threads, errors only, φ/∇φ over Rotation's:
+
+   | case | `Level` | `Leaves` | leaves at p_l |
+   | --- | --- | --- | --- |
+   | W4 cube N = 10⁵, kD = 1, 10⁻⁸ | 0.008/0.005 | 0.008/0.005 | 0.407/0.592 |
+   | W4 clusters N = 10⁵, kD = 1, 10⁻⁷ | 0.019/0.019 | 0.019/0.019 | 0.899/0.961 |
+   | W1, kD = 100, 10⁻⁷ | 0.803/0.545 | 0.809/0.574 | 0.816/0.645 |
+   | W4 Plummer N = 10⁵, kD = 1, 10⁻⁸ | 0.003/0.005 | 0.003/0.005 | 0.247/0.745 |
+
+   Within 1.1× on all four, against the reading of CH6.1f §4, so `PlaneWaveRaise::M2l` was
+   built and joins the runs. Its margin is thin (the test trees: 0.56–1.04×).

@@ -425,6 +425,24 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   10⁻⁷. Its debug cost: 157 s of the one-rank run (603 s) on a loaded M6 (load about 20),
   where every other check ran about 1.7× slower than on a quiet one, so about 90 s quiet
   (an estimate; not measured quiet).
+  Since Helmholtz CH6.1h (docs/helmholtz/tasks/CH6.1h.md;
+  fmm-validate/results/helmholtz-ch6-1h.md) `PlaneWaveRaise` (`with_plane_wave_raise`,
+  `plane_wave_raise`, `HelmholtzFmmBuilder::plane_wave_raise`) names which operators of a
+  raised level run at p_w: `Level` (CH6.1g's, every one; the default until the sign-off),
+  `Leaves` (the M2M to the parent and the L2L from it on the first p_l degrees,
+  `translation_degree`, by `HelmholtzTables::build_with_m2l_degrees`) and `M2l` (those and
+  the leaves' P2M, L2P, P2L and M2P on the first p_l degrees, through the scratch's `first`
+  expansion: zeroed, computed at p_l and added into the first degrees, or copied out of
+  them). The stores, the ghost exchange, the M2L and the M2M from the children and the L2L
+  to them stay at p_w in every form, so `degree` is unchanged. `Level` is CH6.1g's output
+  bit for bit. `tests/helmholtz/plane_wave.rs`
+  (`the_raised_levels_translations_keep_the_degrees_given`) checks the degrees, sizes and
+  tables per form, the M2L pair body the same bits, a leaf's P2M and L2P (`Level`'s under
+  `Leaves`, Rotation's at p_l on the first degrees under `M2l`), the order of the calls,
+  Rotation afterwards and Auto; `check_m2l_raise` in `tests/helmholtz_fmm.rs` both forms on
+  `check_resolving_degree`'s four trees within `PLANE_WAVE_RATIO` of Rotation's, 2 threads,
+  the one-rank FMM bit for bit, and `Leaves` bit for bit `Level`'s where only level 2 is
+  raised.
   The level call is the crate-private `src/helmholtz/operator_plane_wave.rs`, Laplace's
   order (`src/operator_plane_wave.rs`) restated in scalar loops on
   `nd_fmm_tables::helmholtz::plane_wave` (no `nd-fmm-simd` kernel: Laplace's `WaveKernel`
