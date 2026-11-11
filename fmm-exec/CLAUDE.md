@@ -448,7 +448,9 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   bit PlaneWave's output at both tolerances, and `check_m2l_raise` the named forms against it
   (the rule's form bit for bit; `M2l` at 10⁻⁸ printed, not held to the ratio);
   `tests/helmholtz/plane_wave.rs` also the four leaf operators by form with one and two
-  multipole planes (`the_raised_levels_leaf_operators_by_the_form`).
+  multipole planes (`the_raised_levels_leaf_operators_by_the_form`). Its debug cost: the
+  one-rank run 715 s on a loaded M6 (load 14–22; CH6.1g's 603 s at load about 20); CI's
+  `run-tests-mpi` 54 s at 2 ranks and 103 s at 4 (opt-level 1, its 900 s timeout).
   The level call is the crate-private `src/helmholtz/operator_plane_wave.rs`, Laplace's
   order (`src/operator_plane_wave.rs`) restated in scalar loops on
   `nd_fmm_tables::helmholtz::plane_wave` (no `nd-fmm-simd` kernel: Laplace's `WaveKernel`
