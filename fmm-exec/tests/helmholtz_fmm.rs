@@ -60,8 +60,9 @@
 //! at the resolving degree, within `PLANE_WAVE_RATIO` of Rotation's errors at the degrees
 //! given, 2 threads and the one-rank FMM bit for bit, and the default (Auto) PlaneWave's
 //! output at 10⁻⁸ and Rotation's at 10⁻⁷, bit for bit; and the same under
-//! `PlaneWaveRaise::M2l` (Helmholtz CH6.1h: the raised levels' translations to and from the
-//! parent at the degrees given), with its own errors within `PLANE_WAVE_RATIO` of Rotation's.
+//! `PlaneWaveRaise::Leaves` and `PlaneWaveRaise::M2l` (Helmholtz CH6.1h: the raised levels'
+//! translations to and from the parent, and under `M2l` their leaves' operators, at the
+//! degrees given), each with its own errors within `PLANE_WAVE_RATIO` of Rotation's.
 //!
 //! Then vectors (vector v of an FMM of two bit for bit the one-vector FMM, of complex and
 //! of real charges), real charges against complex ones with Im q = 0, and the errors (an
@@ -1458,25 +1459,48 @@ fn check_resolving_degree(scenario: &Scenario, comm: &SimpleCommunicator) -> f64
     deep
 }
 
-/// `PlaneWaveRaise::M2l` (CH6.1h) on a scenario of [`check_resolving_degree`]: the stores
-/// and M2L at its raised degrees, the translations at the degrees given, the errors against
-/// the direct sum within `PLANE_WAVE_RATIO` of Rotation's, 2 threads and on P ranks the
-/// one-rank FMM bit for bit; `PlaneWaveRaise::Level`'s output (`level`) bit for bit where no
-/// level below level 2 is raised (the translations between raised levels and level 1 or 0
-/// carry nothing that reaches the output), else not.
+/// `PlaneWaveRaise::Leaves` and `PlaneWaveRaise::M2l` (CH6.1h) on a scenario of
+/// [`check_resolving_degree`]: the stores and M2L at its raised degrees, the translations at
+/// the degrees given, the errors against the direct sum within `PLANE_WAVE_RATIO` of
+/// Rotation's, 2 threads and on P ranks the one-rank FMM bit for bit. `Leaves`:
+/// `PlaneWaveRaise::Level`'s output (`level`) bit for bit where no level below level 2 is
+/// raised (the translations between raised levels and level 1 or 0 carry nothing that
+/// reaches the output), else not; `M2l` not (the raised levels' leaves at the degrees
+/// given).
 fn check_m2l_raise(
     scenario: &Scenario,
+    tables: &HelmholtzFmmBuilder,
+    (inputs, given, raised, level): (&Inputs, &[usize], &[usize], &Output<f64>),
+    rotation: (f64, f64),
+    comm: &SimpleCommunicator,
+) {
+    for raise in [PlaneWaveRaise::Leaves, PlaneWaveRaise::M2l] {
+        check_raise(
+            scenario,
+            raise,
+            tables,
+            (inputs, given, raised, level),
+            rotation,
+            comm,
+        );
+    }
+}
+
+/// [`check_m2l_raise`] under one form.
+fn check_raise(
+    scenario: &Scenario,
+    raise: PlaneWaveRaise,
     tables: &HelmholtzFmmBuilder,
     (inputs, given, raised, level): (&Inputs, &[usize], &[usize], &Output<f64>),
     (rotation_phi, rotation_grad): (f64, f64),
     comm: &SimpleCommunicator,
 ) {
-    let name = format!("{}: PlaneWave raised on the M2L alone", scenario.name);
+    let name = format!("{}: PlaneWave raised by {raise:?}", scenario.name);
     let kind = scenario.charges;
-    let m2l = tables.clone().plane_wave_raise(PlaneWaveRaise::M2l);
+    let m2l = tables.clone().plane_wave_raise(raise);
     let (fmm, output) = run(&m2l, inputs, kind, comm);
     let op = fmm.operator();
-    assert_eq!(op.plane_wave_raise(), PlaneWaveRaise::M2l, "{name}");
+    assert_eq!(op.plane_wave_raise(), raise, "{name}");
     assert_eq!(fmm.degrees(), raised, "{name}: the degrees");
     let translations: Vec<usize> = (0..given.len()).map(|l| op.translation_degree(l)).collect();
     assert_eq!(translations, given, "{name}: the translation degrees");
@@ -1501,7 +1525,7 @@ fn check_m2l_raise(
     assert_same(&format!("{name}, 2 threads"), &threaded, &output, comm);
     check_one_rank(&name, &m2l, inputs, kind, &output, comm);
     let deep = (3..given.len()).any(|l| given[l] < raised[l]);
-    if deep {
+    if deep || raise == PlaneWaveRaise::M2l {
         let same = everywhere(bits(&output) == bits(level), comm);
         assert!(!same, "{name}: not PlaneWaveRaise::Level's output");
     } else {

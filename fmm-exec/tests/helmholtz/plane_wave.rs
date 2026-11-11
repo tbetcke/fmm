@@ -323,13 +323,15 @@ fn translation_degrees(op: &HelmholtzOperator<f64>) -> Vec<usize> {
         .collect()
 }
 
-/// [`PlaneWaveRaise::M2l`] (Helmholtz CH6.1h): the raised levels' stores, M2L and tables at
-/// the resolving degree as under [`PlaneWaveRaise::Level`] (the default), their translations
-/// to and from the parent at the degrees given; the M2L pair body the same bits under both;
-/// the setting kept in either order of the calls, Rotation afterwards back at the degrees
-/// given, and nothing raised at 10⁻⁶.
+/// [`PlaneWaveRaise::Leaves`] and [`PlaneWaveRaise::M2l`] (Helmholtz CH6.1h): the raised
+/// levels' stores, M2L and tables at the resolving degree as under [`PlaneWaveRaise::Level`]
+/// (the default), their translations to and from the parent at the degrees given; the M2L
+/// pair body the same bits under every form; the leaves' P2M and L2P `Level`'s under
+/// `Leaves` and, under `M2l`, Rotation's at the degrees given on the first degrees, the
+/// multipole's others zero; the setting kept in either order of the calls, Rotation
+/// afterwards back at the degrees given, Auto alike, and nothing raised at 10⁻⁶.
 #[test]
-fn the_m2l_raise_keeps_the_translations_at_the_degrees_given() {
+fn the_raised_levels_translations_keep_the_degrees_given() {
     let k = Wavenumber::new(20.0, 0.0).unwrap();
     let densities = Densities::new(k.kind(), ChargeKind::Complex, 1);
     let given =
@@ -341,6 +343,18 @@ fn the_m2l_raise_keeps_the_translations_at_the_degrees_given() {
     };
     assert_eq!(given().plane_wave_raise(), PlaneWaveRaise::Level);
     assert_eq!(PlaneWaveRaise::default(), PlaneWaveRaise::Level);
+    let mut rotation = given().with_m2l(HelmholtzM2l::Rotation, 0);
+    // A leaf of level 4 (degree 15 given) with 8 sources and targets in its units.
+    let leaf = morton::from_index_and_level([3, 5, 6], 4);
+    let mut rng = Rng(5);
+    let n = 8;
+    let mut chunk: Vec<f64> = (0..3 * n).map(|_| 0.9 * rng.next()).collect();
+    let charges: Vec<[f64; 2]> = (0..n).map(|_| [rng.next(), rng.next()]).collect();
+    for (j, &[re, im]) in charges.iter().enumerate() {
+        chunk.extend([re, im]);
+        assert_eq!(densities.charge_index(n, j, 0, 1), 3 * n + 2 * j + 1);
+    }
+    let targets: Vec<f64> = (0..3 * n).map(|_| 0.9 * rng.next()).collect();
     for (tolerance, d) in [(1e-6, 0), (1e-7, 28), (1e-8, 32)] {
         let raised: Vec<usize> = DEGREES
             .iter()
@@ -354,66 +368,99 @@ fn the_m2l_raise_keeps_the_translations_at_the_degrees_given() {
                 .with_m2l(HelmholtzM2l::PlaneWave, 0)
         };
         let mut level = plane_wave(PlaneWaveRaise::Level);
-        let mut m2l = plane_wave(PlaneWaveRaise::M2l);
-        assert_eq!(m2l.plane_wave_raise(), PlaneWaveRaise::M2l);
         assert_eq!(degrees(&level), raised, "ε = {tolerance:e}");
         assert_eq!(translation_degrees(&level), raised, "ε = {tolerance:e}");
-        assert_eq!(degrees(&m2l), raised, "ε = {tolerance:e}");
-        assert_eq!(translation_degrees(&m2l), DEGREES, "ε = {tolerance:e}");
-        assert_eq!(sizes(&m2l), sizes(&level), "ε = {tolerance:e}");
-        assert_eq!(precisions(&m2l), precisions(&level), "ε = {tolerance:e}");
-        for (l, (&p, &q)) in DEGREES.iter().zip(&raised).enumerate() {
-            assert_eq!(m2l.tables().degree(l), p, "level {l}");
-            assert_eq!(m2l.tables().m2l_degree(l), q, "level {l}");
-        }
-        // The default is `Level`, bit for bit.
+        // The default is `Level`.
         let default = given()
             .with_plane_wave_tolerance(Some(tolerance))
             .with_m2l(HelmholtzM2l::PlaneWave, 0);
         assert_eq!(translation_degrees(&default), raised);
-        // The M2L of a raised level reads and fills whole expansions at p_w: the same bits.
-        let mut rng = Rng(11);
-        for level_index in 2..DEGREES.len() {
-            let multipole: Vec<f64> = (0..m2l.multipole_size(level_index))
-                .map(|_| rng.next())
-                .collect();
-            let start: Vec<f64> = (0..m2l.local_size(level_index))
-                .map(|_| rng.next())
-                .collect();
-            let (source, target) = pair(level_index, 100);
-            let (mut a, mut b) = (start.clone(), start);
-            level.m2l(source, target, 100, &multipole, &mut a);
-            m2l.m2l(source, target, 100, &multipole, &mut b);
-            assert!(a == b, "ε = {tolerance:e}, level {level_index}: M2L");
+        let multipole_size = level.multipole_size(4);
+        let local: Vec<f64> = (0..level.local_size(4)).map(|_| rng.next()).collect();
+        let mut level_multipole = vec![0.0; multipole_size];
+        level.p2m(leaf, &chunk, &mut level_multipole);
+        let mut level_output = vec![0.0; level.target_output_point_size() * n];
+        level.l2p(leaf, &local, &targets, &mut level_output);
+        for raise in [PlaneWaveRaise::Leaves, PlaneWaveRaise::M2l] {
+            let what = format!("{raise:?} at ε = {tolerance:e}");
+            let mut op = plane_wave(raise);
+            assert_eq!(op.plane_wave_raise(), raise);
+            assert_eq!(degrees(&op), raised, "{what}");
+            assert_eq!(translation_degrees(&op), DEGREES, "{what}");
+            assert_eq!(sizes(&op), sizes(&level), "{what}");
+            assert_eq!(precisions(&op), precisions(&level), "{what}");
+            for (l, (&p, &q)) in DEGREES.iter().zip(&raised).enumerate() {
+                assert_eq!(op.tables().degree(l), p, "{what}, level {l}");
+                assert_eq!(op.tables().m2l_degree(l), q, "{what}, level {l}");
+            }
+            // The M2L of a raised level reads and fills whole expansions at p_w: the same
+            // bits.
+            for level_index in 2..DEGREES.len() {
+                let multipole: Vec<f64> = (0..op.multipole_size(level_index))
+                    .map(|_| rng.next())
+                    .collect();
+                let start: Vec<f64> = (0..op.local_size(level_index))
+                    .map(|_| rng.next())
+                    .collect();
+                let (source, target) = pair(level_index, 100);
+                let (mut a, mut b) = (start.clone(), start);
+                level.m2l(source, target, 100, &multipole, &mut a);
+                op.m2l(source, target, 100, &multipole, &mut b);
+                assert!(a == b, "{what}, level {level_index}: M2L");
+            }
+            // The leaf's P2M and L2P: `Level`'s, or under `M2l` Rotation's at the degree
+            // given on the first degrees.
+            let mut multipole = vec![0.0; multipole_size];
+            op.p2m(leaf, &chunk, &mut multipole);
+            let mut output = vec![0.0; level_output.len()];
+            op.l2p(leaf, &local, &targets, &mut output);
+            let (q, p) = (raised[4], DEGREES[4]);
+            if raise == PlaneWaveRaise::Leaves || q == p {
+                assert!(multipole == level_multipole, "{what}: P2M");
+                assert!(output == level_output, "{what}: L2P");
+            } else {
+                let (len, stride) = (Layout::new(p).len(), Layout::new(q).len());
+                let mut want = vec![0.0; rotation.multipole_size(4)];
+                rotation.p2m(leaf, &chunk, &mut want);
+                for (plane, want) in want.chunks_exact(len).enumerate() {
+                    let got = &multipole[plane * stride..(plane + 1) * stride];
+                    assert!(got[..len] == *want, "{what}: P2M's first degrees");
+                    assert!(got[len..].iter().all(|&x| x == 0.0), "{what}: P2M above p");
+                }
+                let first: Vec<f64> = local
+                    .chunks_exact(stride)
+                    .flat_map(|plane| plane[..len].iter().copied())
+                    .collect();
+                let mut want = vec![0.0; output.len()];
+                rotation.l2p(leaf, &first, &targets, &mut want);
+                assert!(output == want, "{what}: L2P on the first degrees");
+            }
+            // Named first, then the M2L chosen: the same; Rotation afterwards: the degrees
+            // given.
+            let after = given()
+                .with_m2l(HelmholtzM2l::PlaneWave, 0)
+                .with_plane_wave_tolerance(Some(tolerance))
+                .with_plane_wave_raise(raise);
+            assert_eq!(degrees(&after), raised, "{what}");
+            assert_eq!(translation_degrees(&after), DEGREES, "{what}");
+            let back = op.with_m2l(HelmholtzM2l::Rotation, 0);
+            assert_eq!(degrees(&back), DEGREES, "{what}");
+            assert_eq!(translation_degrees(&back), DEGREES, "{what}");
+            assert_eq!(back.plane_wave_raise(), raise, "{what}");
+            // Auto at 10⁻⁸ raises the same levels with the translations kept.
+            let auto = given()
+                .with_plane_wave_tolerance(Some(tolerance))
+                .with_plane_wave_raise(raise)
+                .with_m2l_plane_wave_min_degree(Some(0))
+                .with_m2l(HelmholtzM2l::Auto, 0);
+            let auto_raised = if tolerance == 1e-7 {
+                &DEGREES[..]
+            } else {
+                &raised[..]
+            };
+            assert_eq!(degrees(&auto), auto_raised, "Auto, {what}");
+            assert_eq!(translation_degrees(&auto), DEGREES, "Auto, {what}");
         }
-        // Named first, then the M2L chosen: the same; Rotation afterwards: the degrees given.
-        let after = given()
-            .with_m2l(HelmholtzM2l::PlaneWave, 0)
-            .with_plane_wave_tolerance(Some(tolerance))
-            .with_plane_wave_raise(PlaneWaveRaise::M2l);
-        assert_eq!(degrees(&after), raised);
-        assert_eq!(translation_degrees(&after), DEGREES);
-        let rotation = m2l.with_m2l(HelmholtzM2l::Rotation, 0);
-        assert_eq!(degrees(&rotation), DEGREES);
-        assert_eq!(translation_degrees(&rotation), DEGREES);
-        assert_eq!(rotation.plane_wave_raise(), PlaneWaveRaise::M2l);
-        // Auto at 10⁻⁸ raises the same levels with the translations kept.
-        let auto = given()
-            .with_plane_wave_tolerance(Some(tolerance))
-            .with_plane_wave_raise(PlaneWaveRaise::M2l)
-            .with_m2l_plane_wave_min_degree(Some(0))
-            .with_m2l(HelmholtzM2l::Auto, 0);
-        let auto_raised = if tolerance == 1e-7 {
-            &DEGREES[..]
-        } else {
-            &raised[..]
-        };
-        assert_eq!(degrees(&auto), auto_raised, "Auto at ε = {tolerance:e}");
-        assert_eq!(
-            translation_degrees(&auto),
-            DEGREES,
-            "Auto at ε = {tolerance:e}"
-        );
     }
 }
 

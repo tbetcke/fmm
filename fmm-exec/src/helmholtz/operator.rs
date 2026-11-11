@@ -158,11 +158,13 @@
 //! [`base_degree`](HelmholtzOperator::base_degree) the degree given), and by
 //! [`PlaneWaveRaise`] ([`with_plane_wave_raise`](HelmholtzOperator::with_plane_wave_raise);
 //! Helmholtz CH6.1h) its translations too ([`PlaneWaveRaise::Level`], the default) or not:
-//! under [`PlaneWaveRaise::M2l`] the M2M from the level to its parent reads, and the L2L into
-//! it fills, the first p_l degrees of its expansions
+//! under [`PlaneWaveRaise::Leaves`] and [`PlaneWaveRaise::M2l`] the M2M from the level to
+//! its parent reads, and the L2L into it fills, the first p_l degrees of its expansions
 //! ([`translation_degree`](HelmholtzOperator::translation_degree);
 //! `HelmholtzTables::build_with_m2l_degrees`), while the M2M from its children fills, and the
-//! L2L to them reads, all p_w. Named precisions and named degrees raise nothing. Under the rule the FMM's errors stay within about 1.1×
+//! L2L to them reads, all p_w; under [`PlaneWaveRaise::M2l`] its leaves' operators (P2M, L2P,
+//! P2L into and M2P from its boxes) also work on the first p_l degrees, through a scratch
+//! expansion at p_l. Named precisions and named degrees raise nothing. Under the rule the FMM's errors stay within about 1.1×
 //! Rotation's at the degrees given on CH3.1c's cases (`fmm-validate/results/helmholtz-ch6-1e.md`)
 //! and, below 10⁻⁶, on CH6.1e's cases at 10⁻⁷ and 10⁻⁸
 //! (`fmm-validate/results/helmholtz-ch6-1g.md`). The quadratures' α counts bound the
@@ -360,19 +362,23 @@ pub enum PlaneWavePrecision {
 
 /// Which operators of a level with waves run at the resolving degree p_w where
 /// [`PlaneWavePrecision::Rule`] raises it below ε = 10⁻⁶ (Helmholtz CH6.1g, CH6.1h; module
-/// documentation, "M2L"). The output differs between the two (the translations' degrees
-/// differ); each is deterministic and rank-invariant.
+/// documentation, "M2L"). In every form the level's stores (and so the ghost exchange) and
+/// its M2L are at p_w, and so are the M2M from its children (it fills all p_w degrees from
+/// the children's) and the L2L to them (it reads all p_w). The outputs of the forms differ;
+/// each is deterministic and rank-invariant.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PlaneWaveRaise {
-    /// Every operator of the level at p_w (Helmholtz CH6.1g): its stores, M2L, P2M, L2P, P2L,
-    /// M2P, the M2M into and out of it and the L2L into and out of it.
+    /// Every operator of the level at p_w (Helmholtz CH6.1g): also the M2M to its parent
+    /// and the L2L from it, and its leaves' operators (P2M, L2P, P2L into and M2P from its
+    /// boxes).
     #[default]
     Level,
-    /// The level's stores, its M2L and its leaves' operators (P2M, L2P, P2L, M2P) at p_w, the
-    /// M2M from its children into p_w and the L2L from p_w to its children; the M2M to its
-    /// parent from the first p_l degrees and the L2L from its parent into them (Helmholtz
-    /// CH6.1h). A leaf keeps p_w: its multipole and local work at the box's own radius,
-    /// where the quadrature needs the raised degree (CH6.1f's report, §4).
+    /// The leaves' operators at p_w, the M2M to the parent from the first p_l degrees and
+    /// the L2L from the parent into them (Helmholtz CH6.1h).
+    Leaves,
+    /// The M2L alone at p_w (Helmholtz CH6.1h): the leaves' operators, the M2M to the parent
+    /// and the L2L from it on the first p_l degrees. A leaf's multipole then has no degree
+    /// above p_l, and its L2P reads none.
     M2l,
 }
 
@@ -509,6 +515,9 @@ struct Scratch<T: SimdScalar> {
     tables: HelmholtzScratch<T>,
     /// The class M2L's rotated multipole and translated local.
     classes: ClassScratch<T>,
+    /// The leaf operators' expansions at a level's translation degree, under
+    /// [`PlaneWaveRaise::M2l`] (Helmholtz CH6.1h): m locals at the largest degree.
+    first: Vec<T>,
     /// Another leaf's sources in the target's units (P2P).
     mapped: Vec<[T; 3]>,
     /// One vector's charges.
@@ -960,7 +969,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         };
         let translation = match kernel.plane_wave_raise {
             PlaneWaveRaise::Level => &degrees,
-            PlaneWaveRaise::M2l => &base,
+            PlaneWaveRaise::Leaves | PlaneWaveRaise::M2l => &base,
         };
         if (0..degrees.len()).any(|l| {
             kernel.tables.m2l_degree(l) != degrees[l] || kernel.tables.degree(l) != translation[l]
@@ -1135,8 +1144,9 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
 
     /// The degree of `level`'s translations to and from its parent level (the M2M out of
     /// it reads, the L2L into it fills, its expansions' first degrees): [`degree`](Self::degree)
-    /// unless [`PlaneWaveRaise::M2l`] keeps a raised level's at the degree given (Helmholtz
-    /// CH6.1h).
+    /// unless [`PlaneWaveRaise::Leaves`] or [`PlaneWaveRaise::M2l`] keeps a raised level's at
+    /// the degree given (Helmholtz CH6.1h); under [`PlaneWaveRaise::M2l`] also its leaves'
+    /// operators'.
     pub fn translation_degree(&self, level: usize) -> usize {
         self.kernel.tables.degree(level)
     }
@@ -1198,6 +1208,7 @@ impl<T: SimdScalar> Scratch<T> {
                 .classes
                 .as_ref()
                 .map_or_else(|| ClassScratch::new(0), ClassM2l::scratch),
+            first: vec![T::zero(); kernel.densities.local_size(p_max)],
             mapped: vec![[T::zero(); 3]; kernel.max_leaf_points],
             charges: vec![Complex::new(T::zero(), T::zero()); kernel.max_leaf_points],
             strengths: vec![T::zero(); 2 * kernel.max_leaf_points],
@@ -1245,9 +1256,19 @@ impl<T: SimdScalar> Kernel<T> {
             && std::mem::size_of::<T>() == std::mem::size_of::<f64>()
     }
 
-    /// The degree of `level`'s expansions, M2L and leaf operators.
+    /// The degree of `level`'s expansions and M2L.
     fn p(&self, level: usize) -> usize {
         self.tables.m2l_degree(level)
+    }
+
+    /// The degree of `level`'s leaf operators (P2M, L2P, P2L into and M2P from its boxes):
+    /// its expansions' unless [`PlaneWaveRaise::M2l`] keeps a raised level's at its
+    /// translation degree (Helmholtz CH6.1h).
+    fn leaf_degree(&self, level: usize) -> usize {
+        match self.plane_wave_raise {
+            PlaneWaveRaise::M2l => self.tables.degree(level),
+            PlaneWaveRaise::Level | PlaneWaveRaise::Leaves => self.tables.m2l_degree(level),
+        }
     }
 
     /// The batched M2L of `level`, if it has tables.
@@ -1309,23 +1330,47 @@ impl<T: SimdScalar> Kernel<T> {
         if n == 0 {
             return;
         }
-        let p = self.p(level);
-        self.densities.p2m(
-            &self.k,
-            self.radii[level],
-            p,
-            sources,
-            n,
-            &mut s.leaf,
-            multipole,
-        );
+        let (p, q) = (self.leaf_degree(level), self.p(level));
+        if p == q {
+            self.densities.p2m(
+                &self.k,
+                self.radii[level],
+                p,
+                sources,
+                n,
+                &mut s.leaf,
+                multipole,
+            );
+        } else {
+            // At p into zero, then added into the first degrees (PlaneWaveRaise::M2l).
+            let first = &mut s.first[..self.densities.multipole_size(p)];
+            first.fill(T::zero());
+            self.densities.p2m(
+                &self.k,
+                self.radii[level],
+                p,
+                sources,
+                n,
+                &mut s.leaf,
+                first,
+            );
+            add_to_first_degrees(first, p, multipole, q);
+        }
     }
 
     fn l2p(&self, level: usize, local: &[T], targets: &[T], output: &mut [T], s: &mut Scratch<T>) {
         if targets.is_empty() {
             return;
         }
-        let p = self.p(level);
+        let (p, q) = (self.leaf_degree(level), self.p(level));
+        let local = if p == q {
+            local
+        } else {
+            // The first degrees at p (PlaneWaveRaise::M2l).
+            let first = &mut s.first[..self.densities.local_size(p)];
+            copy_first_degrees(local, q, first, p);
+            &*first
+        };
         self.densities.l2p(
             &self.k,
             self.radii[level],
@@ -1393,11 +1438,11 @@ impl<T: SimdScalar> Kernel<T> {
         if n == 0 {
             return;
         }
-        let p = self.p(level);
+        let (p, q) = (self.leaf_degree(level), self.p(level));
         // r̂(t|s) = r_t / r_s = 2^(l_s − l_t).
         let source_level = Self::shifted(level, Self::levels_apart(frame));
         let units = Level::new(self.k_hat(source_level), frame.radius);
-        let size = self.densities.local_size(p) / self.densities.vectors();
+        let size = self.densities.local_size(q) / self.densities.vectors();
         for (v, local) in local.chunks_exact_mut(size).enumerate() {
             self.charges_of(sources, n, v, &mut s.charges);
             // In the leaf's units the reference forms r_s φ̃; the box holds r_t φ̃:
@@ -1405,15 +1450,31 @@ impl<T: SimdScalar> Kernel<T> {
             for q in &mut s.charges[..n] {
                 *q = *q * frame.radius;
             }
-            leaf::p2l(
-                p,
-                &units,
-                frame,
-                points,
-                &s.charges[..n],
-                &mut s.workspace,
-                local,
-            );
+            if p == q {
+                leaf::p2l(
+                    p,
+                    &units,
+                    frame,
+                    points,
+                    &s.charges[..n],
+                    &mut s.workspace,
+                    local,
+                );
+            } else {
+                // At p into zero, then added into the first degrees (PlaneWaveRaise::M2l).
+                let first = &mut s.first[..2 * Layout::new(p).len()];
+                first.fill(T::zero());
+                leaf::p2l(
+                    p,
+                    &units,
+                    frame,
+                    points,
+                    &s.charges[..n],
+                    &mut s.workspace,
+                    first,
+                );
+                add_to_first_degrees(first, p, local, q);
+            }
         }
     }
 
@@ -1434,14 +1495,25 @@ impl<T: SimdScalar> Kernel<T> {
         }
         // r̂(s|t) = r_s / r_t = 2^(l_t − l_s).
         let source_level = Self::shifted(level, -Self::levels_apart(frame));
-        let p = self.p(source_level);
+        let (p, q) = (self.leaf_degree(source_level), self.p(source_level));
         let units = Level::new(self.k_hat(level), frame.radius);
         let planes = self.densities.multipole_planes();
-        let len = Layout::new(p).len();
+        let (len, stride) = (Layout::new(p).len(), Layout::new(q).len());
         let Scratch {
-            workspace, widened, ..
+            workspace,
+            widened,
+            first,
+            ..
         } = s;
-        for (v, multipole) in multipole.chunks_exact(planes * len).enumerate() {
+        for (v, multipole) in multipole.chunks_exact(planes * stride).enumerate() {
+            // The first degrees at p (PlaneWaveRaise::M2l).
+            let multipole = if p == q {
+                multipole
+            } else {
+                let first = &mut first[..planes * len];
+                copy_first_degrees(multipole, q, first, p);
+                &*first
+            };
             let multipole = if planes == 2 {
                 multipole
             } else {
@@ -1705,6 +1777,26 @@ impl<T: SimdScalar + Equivalence + Default> FmmSizes for HelmholtzOperator<T> {
         self.kernel
             .densities
             .target_output_point_size(self.kernel.gradients)
+    }
+}
+
+/// Adds the expansions of degree p in `from`, one plane after the other, to the first degrees
+/// of as many planes of degree q ≥ p in `to` (`PlaneWaveRaise::M2l`; Helmholtz CH6.1h).
+fn add_to_first_degrees<T: SimdScalar>(from: &[T], p: usize, to: &mut [T], q: usize) {
+    let (len, stride) = (Layout::new(p).len(), Layout::new(q).len());
+    for (from, to) in from.chunks_exact(len).zip(to.chunks_exact_mut(stride)) {
+        for (t, &f) in to.iter_mut().zip(from) {
+            *t = *t + f;
+        }
+    }
+}
+
+/// Copies the first degrees ≤ p of the planes of degree q in `from` into planes of degree p
+/// in `to` (`PlaneWaveRaise::M2l`; Helmholtz CH6.1h).
+fn copy_first_degrees<T: SimdScalar>(from: &[T], q: usize, to: &mut [T], p: usize) {
+    let (len, stride) = (Layout::new(p).len(), Layout::new(q).len());
+    for (from, to) in from.chunks_exact(stride).zip(to.chunks_exact_mut(len)) {
+        to.copy_from_slice(&from[..len]);
     }
 }
 
