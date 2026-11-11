@@ -22,7 +22,8 @@
 //!    output order;
 //! 7. the degree of every level ([`Degrees::resolve`]), the [`HelmholtzOperator`] with its
 //!    tables, on the pool, and the evaluator; the largest leaf is agreed on every rank.
-//!    Under [`HelmholtzM2l::PlaneWave`]'s rule below ε = 10⁻⁶ the operator raises the
+//!    Under [`HelmholtzM2l::PlaneWave`]'s rule below ε = 10⁻⁶, and under the default
+//!    [`HelmholtzM2l::Auto`] at 10⁻⁸ ≤ ε < 10⁻⁷, the operator raises the
 //!    degree of each level with waves to the resolving degree (Helmholtz CH6.1g), and
 //!    [`HelmholtzFmm::degrees`] reports the degrees it runs at;
 //! 8. the leaf-scaled coordinates (CONVENTIONS §3.13).
@@ -632,7 +633,7 @@ impl HelmholtzFmmBuilder {
         if let Some(pool) = &pool {
             operator = operator.with_pool(Arc::clone(pool));
         }
-        // The degrees the operator runs at (raised under PlaneWave's rule below 10⁻⁶).
+        // The degrees the operator runs at (raised on the levels with waves below 10⁻⁶).
         let degrees: Vec<usize> = (0..degrees.len()).map(|l| operator.degree(l)).collect();
         let calls = if self.pair_calls {
             Calls::Pairs(PerPair(operator))
@@ -981,8 +982,9 @@ where
     }
 
     /// The degree p_l at which every level runs: [`Degrees::resolve`]'s, or under
-    /// [`HelmholtzM2l::PlaneWave`]'s rule below ε = 10⁻⁶ the raised degree of a level with
-    /// waves (`HelmholtzOperator::degree`; Helmholtz CH6.1g).
+    /// [`HelmholtzM2l::PlaneWave`]'s rule below ε = 10⁻⁶ and under [`HelmholtzM2l::Auto`]
+    /// at 10⁻⁸ ≤ ε < 10⁻⁷ the raised degree of a level with waves
+    /// (`HelmholtzOperator::degree`; Helmholtz CH6.1g).
     pub fn degrees(&self) -> &[usize] {
         &self.degrees
     }

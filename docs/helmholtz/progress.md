@@ -2728,7 +2728,7 @@ request, using this template:
   - Runs: Kathleen 1 × 40 (jobs 632472, 632473), CH6.1e's 26 cases at 10⁻⁷ and 10⁻⁸, Rotation
     and PlaneWave in both orders: errors 0.004–0.80× (φ) and 0.004–0.54× (∇φ) Rotation's at
     10⁻⁷, 0.003–0.48× and 0.002–0.32× at 10⁻⁸; the M2L 0.42–1.46× and 0.26–0.84×; the
-    evaluation 0.54–1.10× at 10⁻⁷ and 0.37–0.81× at 10⁻⁸ on the cases above 0.1 s (two ms
+    evaluation 0.54–1.05× at 10⁻⁷ and 0.37–0.81× at 10⁻⁸ on the cases above 0.1 s (two ms
     cases slower); the rest of the evaluation at p_w 1.29–1.88×.
   - The report `fmm-validate/results/helmholtz-ch6-1g.md`; `tools/helmholtz/ch6-1g-runs.sh`,
     `ch6-1g-tables.py`; raw outputs in `~/projects/fmm-archive/kathleen/logs/ch6-1g/`.

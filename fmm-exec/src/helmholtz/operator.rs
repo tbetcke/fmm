@@ -852,8 +852,9 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
 
     /// Builds the M2L tables of the setting, the budget and (under Auto) the crossover, and
     /// the scratch sized for them; under [`HelmholtzM2l::PlaneWave`]'s rule with a tolerance
-    /// below 10⁻⁶, the RCR tables at the raised degrees (Helmholtz CH6.1g), or again at the
-    /// degrees given where an earlier setting raised them.
+    /// below 10⁻⁶, and under [`HelmholtzM2l::Auto`] at 10⁻⁸ ≤ ε < 10⁻⁷, the RCR tables at
+    /// the raised degrees (Helmholtz CH6.1g), or again at the degrees given where an earlier
+    /// setting raised them.
     fn select_tables(&mut self) {
         let kernel = &mut self.kernel;
         let choice = kernel.m2l;
@@ -873,7 +874,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             // bound kept there by CH6.1g's sign-off, 2026-11-11).
             HelmholtzM2l::Auto if kernel.auto_takes_plane_waves() => {
                 let min_degree = kernel.auto_plane_wave_min_degree();
-                let own_degree = tolerance.is_none_or(|e| {
+                let outside_kept_band = tolerance.is_none_or(|e| {
                     !(RESOLVING_STEP_TOLERANCE..PLANE_WAVE_MIN_TOLERANCE).contains(&e)
                 });
                 let precisions = select(k_root, &base, tolerance);
@@ -884,7 +885,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                         .map(|(l, precision)| {
                             let kappa = kernel.tables.k_hat(l) * 2.0;
                             precision.filter(|_| {
-                                own_degree
+                                outside_kept_band
                                     && base[l] >= min_degree
                                     && kappa.im < AUTO_PLANE_WAVE_MAX_IM_KAPPA
                             })
@@ -1067,9 +1068,10 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
         }
     }
 
-    /// The degree p_l at which `level` runs: the degree given, or under
-    /// [`HelmholtzM2l::PlaneWave`]'s rule below ε = 10⁻⁶ the raised degree of a level with
-    /// waves (Helmholtz CH6.1g; module documentation, "M2L").
+    /// The degree p_l at which `level` runs: the degree given, or the raised degree of a
+    /// level with waves under [`HelmholtzM2l::PlaneWave`]'s rule below ε = 10⁻⁶ and under
+    /// [`HelmholtzM2l::Auto`] at 10⁻⁸ ≤ ε < 10⁻⁷ (Helmholtz CH6.1g; module documentation,
+    /// "M2L").
     pub fn degree(&self, level: usize) -> usize {
         self.kernel.tables.degree(level)
     }

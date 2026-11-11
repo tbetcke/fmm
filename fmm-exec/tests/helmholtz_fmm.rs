@@ -55,6 +55,12 @@
 //! for bit at 1 and 2 threads, by child at the buffer's floor and on P ranks the one-rank
 //! FMM; the default split by child at 2 threads and never at 1; its parts timed.
 //!
+//! Below ε = 10⁻⁶ (Helmholtz CH6.1g, `check_resolving_degree`): the clusters at kD = 1 and
+//! the cube at kD = 20 + 2i at 10⁻⁷ and 10⁻⁸ under PlaneWave's rule, each level with waves
+//! at the resolving degree, within `PLANE_WAVE_RATIO` of Rotation's errors at the degrees
+//! given, 2 threads and the one-rank FMM bit for bit, and the default (Auto) PlaneWave's
+//! output at 10⁻⁸ and Rotation's at 10⁻⁷, bit for bit.
+//!
 //! Then vectors (vector v of an FMM of two bit for bit the one-vector FMM, of complex and
 //! of real charges), real charges against complex ones with Im q = 0, and the errors (an
 //! ISA this machine lacks among them), each on every rank or on none. One scenario leaves
@@ -1346,7 +1352,8 @@ fn check_plane_wave(scenario: &Scenario, bounds: bool, comm: &SimpleCommunicator
 /// the degrees given (CH6.1's acceptance) and within the scenario's bound; 2 threads and,
 /// on several ranks, the one-rank FMM bit for bit. The clusters at kD = 1 have levels with
 /// waves at κ_l ≤ 0.08, the clustered trees' deep levels where CH6.1e's iprec 3 at p_l
-/// missed 1.1×. The default M2L (Auto, D8's bound lifted below 10⁻⁷ and kept in
+/// missed 1.1×; the smallest |κ_l| of a level with waves and M2L pairs is agreed over the
+/// ranks. The default M2L (Auto, D8's bound lifted below 10⁻⁷ and kept in
 /// 10⁻⁷ ≤ ε < 10⁻⁶; signed off 2026-11-11): PlaneWave's output bit for bit at 10⁻⁸, and at
 /// 10⁻⁷ Rotation's (every level's degree above Batched's crossover). Returns the smallest
 /// |κ_l| of a level with waves and M2L pairs.
@@ -1391,6 +1398,11 @@ fn check_resolving_degree(scenario: &Scenario, comm: &SimpleCommunicator) -> f64
     );
     let raised = fmm.degrees().to_vec();
     drop(fmm);
+    // The deepest level with waves and M2L pairs on any rank, so that every rank asserts on
+    // the same value.
+    let mut deepest = f64::INFINITY;
+    comm.all_reduce_into(&deep, &mut deepest, SystemOperation::min());
+    let deep = deepest;
     let (error_phi, error_grad) = errors(scenario, &inputs, &output, 0, comm);
     let (rotation_phi, rotation_grad) = errors(scenario, &inputs, &rotation, 0, comm);
     let ratio = |a: f64, b: f64| if b > 0.0 { a / b } else { 0.0 };

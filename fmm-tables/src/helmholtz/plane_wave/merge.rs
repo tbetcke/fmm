@@ -79,7 +79,8 @@ use crate::plane_wave::geometry::{self, CHILDREN, Direction, MergeGeometry, SLOT
 
 /// The smallest tolerance at which a level with a quadrature runs at its own degree
 /// (Helmholtz CH6.1e; the [module documentation](self)); below it [`resolving_degree`]
-/// raises the degree. D8's bound on `HelmholtzM2l::Auto`'s exponential M2L.
+/// raises the degree. With [`RESOLVING_STEP_TOLERANCE`] the band 10⁻⁷ ≤ ε < 10⁻⁶ in which
+/// `HelmholtzM2l::Auto` keeps Rotation (D8, amended at Helmholtz CH6.1g).
 pub const PLANE_WAVE_MIN_TOLERANCE: f64 = 1e-6;
 
 /// The tolerance below which the [`resolving_degree`] is [`RESOLVING_DEGREE_TIGHT`]

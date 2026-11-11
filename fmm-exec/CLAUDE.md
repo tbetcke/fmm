@@ -317,7 +317,7 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   docs/helmholtz/tasks/CH6.1d.md): `HelmholtzM2l::PlaneWave` (opt-in), merge and shift on
   the levels whose `PlaneWavePrecision` gives a quadrature (`Rule`, the default:
   `nd_fmm_tables::helmholtz::plane_wave::merge::select`, measured by Helmholtz CH6.1e:
-  iprec 2 at the FMM's tolerance ε ≥ 10⁻⁶, none below, which the builder passes from
+  iprec 2 at the FMM's tolerance ε ≥ 10⁻⁶, none below until CH6.1g (below), which the builder passes from
   `Degrees::Tolerance` through `with_plane_wave_tolerance`; with named degrees iprec 2 to
   p = 15; or `PerLevel`, for the measurements), RCR elsewhere; `with_plane_wave_precision`,
   `plane_wave_precision(level)`, `plane_wave_bytes`, `with_plane_wave_boxes` (the builder

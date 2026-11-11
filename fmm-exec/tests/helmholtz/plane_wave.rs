@@ -237,7 +237,8 @@ fn degrees(op: &HelmholtzOperator<f64>) -> Vec<usize> {
 /// Below 10⁻⁶ the rule raises every level with a quadrature to the resolving degree
 /// (Helmholtz CH6.1g; CH6.1f's candidate 4), the store sizes and every operator of the level
 /// with it; a later setting without those waves takes the degrees given back. Named
-/// precisions and named degrees raise nothing, and Auto keeps D8's bound ε ≥ 10⁻⁶.
+/// precisions and named degrees raise nothing; Auto takes the raised levels at 10⁻⁸ and keeps
+/// D8's bound in 10⁻⁷ ≤ ε < 10⁻⁶.
 #[test]
 fn the_rule_raises_the_degrees_below_the_level_degrees_tolerance() {
     let k = Wavenumber::new(20.0, 0.0).unwrap();

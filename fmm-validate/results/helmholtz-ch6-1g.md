@@ -28,12 +28,13 @@ do not exercise (they name `rotation` and `planewave`). The test trees of §1 on
 - **Acceptance met on CH6.1e's 26 cases at 10⁻⁷ and 10⁻⁸ (§3):** the errors over Rotation's at
   the degrees given are **0.004–0.80 (φ) and 0.004–0.54 (∇φ) at 10⁻⁷, 0.003–0.48 and
   0.002–0.32 at 10⁻⁸**, the clustered trees' deep levels included (the clusters and the Plummer
-  sphere at kD = 1, levels with waves to κ₈ = 2⁻⁸ ≈ 0.004). The raised degree mostly over-delivers: 50–250×
-  below Rotation's error on the plateau's trees.
+  sphere at kD = 1, levels with waves to κ₈ = 2⁻⁸ ≈ 0.004). The raised degree over-delivers:
+  on the cases whose levels with waves are all raised, φ 0.003–0.076× Rotation's error
+  (13–330× below it).
 - **Times beside Rotation (§3):** the M2L takes **0.26–0.84×** Rotation's at 10⁻⁸ and
   0.42–1.46× at 10⁻⁷ (above 1 only on two ms-scale cases); the evaluation 0.37–0.81× at 10⁻⁸ on
-  every case above 0.1 s, and 0.54–1.10× at 10⁻⁷ there (1.00× on the clusters, 1.05× on W1 at
-  kD = 100). The rest of the evaluation (leaves, M2M, L2L at p_w) costs 1.29–1.88×, which at
+  every case above 0.1 s, and 0.54–1.05× at 10⁻⁷ there (1.00× on the clusters, 1.05× on W1 at
+  kD = 100; 1.10× on W1 at kD = 30, 0.06 s). The rest of the evaluation (leaves, M2M, L2L at p_w) costs 1.29–1.88×, which at
   10⁻⁷ eats the M2L's gain on the deep trees. The build takes 2.1–10× Rotation's (the RCR and
   plane-wave tables at p_w; at most 0.97 s on these cases, Rotation's at most 0.31 s).
 - **D8's bound revisited (§4), signed off 2026-11-11:** `Auto` takes the exponential M2L also at
@@ -155,8 +156,8 @@ and its answer, signed off 2026-11-11 (the user: "Lift for 10⁻⁸–10⁻⁷ o
 
 - **10⁻⁸ ≤ ε < 10⁻⁷: Auto takes it** (the evaluation 0.37–0.81× on every case above 0.1 s; one
   ms case slower, W3 at N = 4,032, 0.09 → 0.13 s);
-- **10⁻⁷ ≤ ε < 10⁻⁶: Auto keeps Rotation** (0.54–1.10× on the cases above 0.1 s, 1.0–1.1× on
-  the clusters and W1) until CH6.1h measures the degree raised on the M2L alone.
+- **10⁻⁷ ≤ ε < 10⁻⁶: Auto keeps Rotation** (0.54–1.05× on the cases above 0.1 s, 0.99–1.05× on
+  the clusters and W1 at kD = 100, 1.10× on W1 at kD = 30 at 0.06 s) until CH6.1h measures the degree raised on the M2L alone.
 
 Auto's other conditions are unchanged (degree at least `auto_plane_wave_min_degree`,
 Im κ_l < 5π, f64). `tests/helmholtz_fmm.rs` checks the default (Auto) bit for bit PlaneWave's
@@ -165,7 +166,7 @@ output at 10⁻⁸ and Rotation's at 10⁻⁷ on its four trees.
 ## 5. Follow-up: CH6.1h (signed off 2026-11-11, next on the priority list)
 
 The whole-level raise costs the leaves, M2M and L2L of a raised level 1.3–1.9× and buys accuracy
-nobody asked for (50–250× below Rotation's error). CH6.1f's option (b): a second multipole at p_w
+nobody asked for (φ 13–330× below Rotation's error where every level with waves is raised). CH6.1f's option (b): a second multipole at p_w
 on a level with waves, formed by M2M from the children at p_l, and its local at p_w, taken to the
 children by L2L at p_l, so only the M2L runs at p_w. CH6.1h builds it and times it against
 CH6.1g's on these cases; if it wins at 10⁻⁷, D8's bound there is asked again.

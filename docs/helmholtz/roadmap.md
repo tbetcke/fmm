@@ -122,7 +122,7 @@ CH6.1g.
 off the same day): below 10⁻⁶ the exponential M2L runs iprec 3 with the level's degree raised to
 max(p_l, 28) at 10⁻⁷ ≤ ε < 10⁻⁶ and max(p_l, 32) at 10⁻⁸ ≤ ε < 10⁻⁷ (CH6.1f's iprec 2 at 10⁻⁷
 erred above Rotation in the FMM at any degree). On CH6.1e's 26 cases (Kathleen 1 × 40) the
-errors 0.002–0.80× Rotation's, the evaluation 0.37–0.81× at 10⁻⁸ and 0.54–1.10× at 10⁻⁷ on the
+errors 0.002–0.80× Rotation's, the evaluation 0.37–0.81× at 10⁻⁸ and 0.54–1.05× at 10⁻⁷ on the
 cases above 0.1 s; the raised leaves, M2M and L2L (1.3–1.9×) eat the M2L's gain at 10⁻⁷ on the
 deep trees. D8 amended: `Auto` takes it at 10⁻⁸ ≤ ε < 10⁻⁷, not yet at 10⁻⁷ ≤ ε < 10⁻⁶. CH6.1h
 (the degree raised on the M2L alone) added after it. Next: CH6.1h.
@@ -772,11 +772,12 @@ at any kD.
   10⁻⁸ ≤ ε < 10⁻⁷, the degree raised on the whole level (`merge::plane_wave_degree`, the
   operator's RCR tables built at p_w); on CH6.1e's 26 cases at 10⁻⁷ and 10⁻⁸ (Kathleen 1 × 40)
   the errors 0.002–0.80× Rotation's, the M2L 0.26–0.84× at 10⁻⁸ and 0.42–1.46× at 10⁻⁷, the
-  evaluation 0.37–0.81× at 10⁻⁸ and 0.54–1.10× at 10⁻⁷ on the cases above 0.1 s. Signed off
+  evaluation 0.37–0.81× at 10⁻⁸ and 0.54–1.05× at 10⁻⁷ on the cases above 0.1 s. Signed off
   2026-11-11: (1) iprec 2 at 10⁻⁷ missed 1.1× Rotation's in the FMM at any degree (its own
   error floor), so that band takes iprec 3 (the user: "iprec 3 at max(p,28)"); (2) D8's bound
   lifted at 10⁻⁸ ≤ ε < 10⁻⁷ and kept at 10⁻⁷ ≤ ε < 10⁻⁶ ("Lift for 10⁻⁸–10⁻⁷ only"); (3) CH6.1h
-  added, next on the priority list ("Add CH6.1h, next on the list"). CH6.1f's recommended quadrature in
+  added, next on the priority list ("Add CH6.1h, next on the list"). As planned (before
+  sign-off 1): CH6.1f's recommended quadrature in
   `PlaneWaveM2l`'s rule below `PLANE_WAVE_MIN_TOLERANCE`: by CH6.1f (report §5, signed off
   2026-11-09 (the user: "1–3 as recommended")), the resolving degree, each level with a
   quadrature at p_w = max(p_l, 24) with iprec 2 for 10⁻⁷ ≤ ε < 10⁻⁶ and p_w = max(p_l, 32) with
@@ -792,7 +793,8 @@ at any kD.
   and the local at p_w taken to the children by L2L at p_l (or the equivalent at the level's
   own boxes), so the leaves, M2M and L2L keep p_l. CH6.1g's whole-level raise cost them
   1.29–1.88× and ate the M2L's gain at 10⁻⁷ on the deep trees (the clusters 1.00×, W1 at
-  kD = 100 1.05×), with errors 50–250× below Rotation's. *Done when:* the FMM within about 1.1×
+  kD = 100 1.05×), with φ 13–330× below Rotation's error where every level with waves is
+  raised. *Done when:* the FMM within about 1.1×
   Rotation's error at 10⁻⁷ and 10⁻⁸ on CH6.1e's cases (asserted on small cases), deterministic
   and rank-invariant; the evaluation timed beside CH6.1g's and Rotation's on the same cases on
   Kathleen; the faster form made the rule's, and D8's bound at 10⁻⁷ ≤ ε < 10⁻⁶ asked again.

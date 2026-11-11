@@ -76,7 +76,9 @@ No convention, dependency, `nd-fmm-plan` or Laplace change.
    `base_degree(level)` the one given.
    - **Auto keeps D8's bound** (signed off: "CH6.1e's rule gives a quadrature (ε ≥ 10⁻⁶)"):
      its filter adds that the level needs no raise (the tolerance, if any, at least
-     `PLANE_WAVE_MIN_TOLERANCE`). Lifting it is this task's question for sign-off.
+     `PLANE_WAVE_MIN_TOLERANCE`). Lifting it is this task's question for sign-off. As built
+     after question 2: Auto takes the rule's levels, raised, at 10⁻⁸ ≤ ε < 10⁻⁷ and none
+     in 10⁻⁷ ≤ ε < 10⁻⁶; the raise applies under Auto too.
 3. **nd-fmm-exec, `HelmholtzFmmBuilder`/`HelmholtzFmm`**: `degrees()` the operator's (the
    degrees run), so that the harness's rows show p_w; the module docs say so.
 4. **nd-fmm-validate**: `tests/helmholtz_accuracy.rs`'s W1 at kD = 10 and ε = 10⁻⁸ now
@@ -91,18 +93,21 @@ No convention, dependency, `nd-fmm-plan` or Laplace change.
 ## Tests that prove it
 
 - nd-fmm-tables `tests/helmholtz/plane_wave_merge.rs`: the rule's tolerances and precisions
-  (iprec 2 to 10⁻⁷, iprec 3 to 10⁻⁸, none below, the bounds exact), the resolving degree
+  (as built: iprec 2 to 10⁻⁶, iprec 3 to 10⁻⁸, none below, the bounds exact), the resolving degree
   and `plane_wave_degree` at and around each bound; `select` as before.
 - nd-fmm-exec `tests/helmholtz/plane_wave.rs` (no MPI): an operator at ε = 10⁻⁷ and 10⁻⁸
   under PlaneWave has the rule's precisions and the degrees max(p_l, d) exactly on the
   levels with waves, the base degrees elsewhere; `with_m2l(Rotation)` afterwards restores
-  the base degrees and the store sizes; named precisions raise nothing; Auto at 10⁻⁸ takes
-  no waves and raises nothing (D8's bound); at 10⁻⁶ nothing raised (bit for bit as before).
+  the base degrees and the store sizes; named precisions raise nothing; at 10⁻⁶ nothing
+  raised (bit for bit as before); Auto (as built after question 2) at 10⁻⁸ raised, at 10⁻⁷
+  and 10⁻⁹ no waves and nothing raised.
 - nd-fmm-exec `tests/helmholtz_fmm.rs` (`check_resolving_degree`, debug and CI): the cube at
-  kD = 1 and the clusters at kD = 1 (deep levels at κ_l ≤ 0.08), N about 1,000, at
+  kD = 20 + 2i (as built; kD = 1 planned) and the clusters at kD = 1 (deep levels at
+  κ_l ≤ 0.08), N about 1,000, at
   ε = 10⁻⁷ and 10⁻⁸: PlaneWave's errors against the direct sum within `PLANE_WAVE_RATIO`
   (1.1) of Rotation's at the base degrees, the degrees and precisions per level as the
-  rule's, 2 threads bit for bit, on P ranks the one-rank FMM bit for bit.
+  rule's, 2 threads bit for bit, on P ranks the one-rank FMM bit for bit; as built also the
+  default (Auto) PlaneWave's output at 10⁻⁸ and Rotation's at 10⁻⁷ bit for bit.
 - nd-fmm-validate `tests/helmholtz_accuracy.rs`: W1 at kD = 10, ε = 10⁻⁸ under the rule
   within 1.1× Rotation's (with the reach and split checks it already runs).
 - The report's runs: the 26 cases, every one within 1.1× Rotation's (φ and ∇φ).
@@ -145,6 +150,17 @@ Rotation's error (largest 0.80, φ, W1 at kD = 100, 10⁻⁷). Times beside Rota
 The changes after question 1 (iprec 3 at 28) were synced to Kathleen before both jobs ran; the
 Auto change of question 2 came after them and does not touch what they ran (`rotation`,
 `planewave`).
+
+## Self-review
+
+A subagent's review (2026-11-11) found nothing blocking. Taken: the deep level agreed over
+the ranks before it is asserted (it was a per-rank assertion); the docs after Auto's change;
+the report's 10⁻⁷ evaluation range above 0.1 s (0.54–1.05×, not 1.10×) and the accuracy
+margin from the table (φ 13–330× below Rotation's where every level with waves is raised);
+`own_degree` renamed `outside_kept_band`; this plan's body marked as built; the test's
+module docs. Left: the RCR tables built twice at the operator's construction under a raised
+rule (first at the degrees given, then at p_w; part of the reported build times; the PR
+names it).
 
 ## Pending runs
 
