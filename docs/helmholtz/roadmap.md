@@ -126,6 +126,14 @@ errors 0.002–0.80× Rotation's, the evaluation 0.37–0.81× at 10⁻⁸ and 0
 cases above 0.1 s; the raised leaves, M2M and L2L (1.3–1.9×) eat the M2L's gain at 10⁻⁷ on the
 deep trees. D8 amended: `Auto` takes it at 10⁻⁸ ≤ ε < 10⁻⁷, not yet at 10⁻⁷ ≤ ε < 10⁻⁶. CH6.1h
 (the degree raised on the M2L alone) added after it. Next: CH6.1h.
+2026-11-11: CH6.1h measured (`fmm-validate/results/helmholtz-ch6-1h.md`; PR draft, its two
+questions for sign-off): three forms of a raised level, the whole level (`Level`, CH6.1g's),
+its translations to and from the parent at p_l (`Leaves`: `Level`'s errors, 0.93–1.03× its
+evaluation) and also its leaves at p_l (`M2l`: the rest 1.03–1.35× Rotation's against
+1.36–1.88×, the evaluation 0.66–0.96× `Level`'s; errors 0.11–1.00× Rotation's at 10⁻⁷ on 17
+cases, at 10⁻⁸ 1.53× on the clusters at kD = 10). Proposed: `M2l` at 10⁻⁷ ≤ ε < 10⁻⁶, `Leaves`
+at 10⁻⁸ ≤ ε < 10⁻⁷, and D8's bound lifted at 10⁻⁷ (the evaluation 0.43–0.83× Rotation's above
+0.1 s).
 
 ## How `/next-task` reads this file
 
