@@ -130,10 +130,42 @@ workspace tests at opt-level 1, docs; no Laplace path, no MPI test list change).
 - Risk: the per-box sample at kD = 500 under-reads the box maximum; the full reference at
   kD ≤ 100 is the measure of record, kD = 500 a check.
 
+## Results
+
+The report is `fmm-validate/results/helmholtz-ch4-0b.md`; raw outputs in
+`~/projects/fmm-archive/m6/logs/ch4-0b/` (cause, densities to kD = 100) and
+`~/projects/fmm-archive/kathleen/logs/ch4-0b/` (job 633154, node-c11b-041, 1 × 40: W1 at
+kD = 500, the pointwise runs).
+
+- Stage A located the cause; stage B (the per-pair chain) was not needed and was not built.
+  The levels' parts add up to the whole error (rest ≤ 0.002), and binning them by the target's
+  distance from its box centre shows the corner effect on every level and workload.
+- The cause: placement near a box corner, mostly on the coarsest plateau level of the degree
+  rule; W1's tangent points are box vertices on every level; clipped boxes elsewhere. Not the
+  lists (a tree of one leaf level), not the boundary (margins), not a defect (the levels'
+  truncation accounts for all of it); which operator of a level was not separated.
+- The smooth densities meet ε in ℓ2 at every point of the matrix; the constant density is
+  the hardest, 0.66 ε. Below D1's range (10⁻⁹, 10⁻¹⁰) the constant density misses ε in ℓ2
+  (1.5–3.4×), all from level 2's high-frequency degree: a sentence in CH4.0c's roadmap line.
+- The self-review (a subagent on the plan, §10 and §2) found five numbers that did not match
+  the outputs and claims stated beyond the data (the operator, the sources, the tangent
+  points' sum, the smooth densities' worst boxes); fixed, with the extra runs in
+  `~/projects/fmm-archive/m6/logs/ch4-0b/extra/` (the default's and the constant density's
+  worst boxes placed, the constant density's pointwise scan and its levels at 10⁻¹⁰).
+- A pointwise criterion: ε/10 at 10⁻³ and 10⁻⁶, ε/30–ε/100 at 10⁻⁸ (§4 of the report).
+- The CH3.6 values re-run here agree to every printed digit with CH3.6's (FMM3D at 10⁻¹² as
+  reference there, the direct sum here).
+- Test cost: the one-rank debug run of `tests/helmholtz_accuracy.rs` 95–99 s against `main`'s
+  83–87 s, back to back on a loaded M6 (load 19–21, another project's tests); a first version
+  of the checks took 161 s against 76 s and was cut (the named domain at kD = 20, the constant
+  density in one run).
+
 ## Pending runs
 
-None yet.
+None.
 
 ## Open questions
 
-None yet.
+For sign-off (the report's §5): 1. the criterion (recommended: ℓ2 stays, the box measure a
+gate bound of 100 ε); 2. the charge model (recommended: §9.1's random charges stay; CH4.3 and
+CH4.4 verify on the constant density and the plane wave's trace too).

@@ -2892,3 +2892,41 @@ request, using this template:
   (roadmap, H8; the user, on #211), one copy of the M2L tables per node in an MPI shared window.
   Laplace has no shared tables either: Phase 5N spiked one (node-m2l.md §2.6) and its decision 6
   left it out, to revisit in Phase 5S, which did not take it up.
+
+## 2026-11-12: CH4.0b The worst-box concentration
+- Done:
+  - `helmholtz_accuracy::Density` (random, a plane wave's trace, constant) and
+    `Case::{density, domain, max_points_per_leaf}`; `helmholtz_boxes` (the direct sum at every
+    point or a per-box sample, §9.1's box measure, a target's place per level, the levels' parts
+    of the error) and its example; `tools/helmholtz/ch4-0b-runs.sh`.
+  - The cause (the M6, Rotation, against the direct sum at every point): placement. A level's
+    error at targets beyond 1.5 half-widths from their box centre is 19–45× its RMS within one
+    half-width (W1 at kD = 100, the dominant level, 10⁻³ to 10⁻⁸); by an argument from the
+    operators' form (not measured) the same for sources. The coarsest
+    level on the degree rule's plateau carries most of it (70–96 % of Σ|Δ∇φ|² on W1 at
+    kD = 100). W1's six tangent points are box vertices on every level, so the levels' worst
+    cases add there; with a margin the worst boxes are boxes the sphere clips at a corner (to
+    30.6 ε at 10⁻⁸). Not the lists (one leaf level: the same), the boundary or a defect; which
+    operator of a level was not separated.
+  - The smooth densities (W1 at kD = 10, 30, 100 on the M6; 500 on Kathleen job 633154): the
+    plane wave's trace and the constant density meet ε in ℓ2 at 10⁻³, 10⁻⁶ and 10⁻⁸ under
+    Rotation and the default; the constant density is the hardest (∇φ 0.66 ε at kD = 100,
+    10⁻⁸); p_w at 10⁻⁶ needs no change. Below D1 the constant density misses ε in ℓ2 (1.5× at
+    10⁻⁹, 3.4× at 10⁻¹⁰ on W1 at kD = 100), all from level 2's high-frequency degree.
+  - A pointwise criterion would take the rule at ε/10 (10⁻³, 10⁻⁶; 1.1–2.3× the evaluation)
+    and ε/30–ε/100 (10⁻⁸; 2.9–5.2×).
+  - The report `fmm-validate/results/helmholtz-ch4-0b.md`; raw outputs in
+    `~/projects/fmm-archive/{m6,kathleen}/logs/ch4-0b/`.
+- Tests: `helmholtz_boxes`' unit tests (offsets, the per-box sample, the level shares, the
+  worst boxes); `tests/helmholtz_accuracy.rs` `check_densities` (the plane wave's trace through
+  `check_fmm`, the constant density within ε, a named domain and leaf size with the leaves'
+  count) and `check_box_study` (the reference against the oracle bit for bit, the box measure
+  against `crosscheck` bit for bit), at 1, 2 and 4 ranks.
+- Checks: `/verify` on the M6: fmt, Clippy (default, examples, workspace), docs, the default
+  and workspace tests at opt-level 1, `tests/helmholtz_accuracy.rs` at 2 and 4 ranks, its
+  one-rank debug run 95–99 s against `main`'s 83–87 s (loaded M6). Nothing pending.
+- Decisions: questions for sign-off in the PR: (1) the criterion; (2) the gates' charge model.
+- Laplace: not touched (nd-fmm-validate's Helmholtz modules, tests, tools, docs).
+- Follow-ups: CH4.0c (roadmap: its runs include the constant density, which shows the
+  high-frequency branch short below 10⁻⁸); others depend on the sign-off (an opt-in pointwise
+  tolerance under option (c)).
