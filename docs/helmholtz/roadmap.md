@@ -9,15 +9,14 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status (2026-11-12): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
 `docs/helmholtz/gates/H6.md`, 2026-11-12). The RCR FMM on every level meets ε against FMM3D
-(CH3.6). The exponential M2L is `Auto`'s default on the low-frequency levels at every
-ε ≥ 10⁻⁸ (D8, signed off at CH6.2h and amended at CH6.1g and CH6.1h). It is within 1.1×
-Rotation's error everywhere measured, the large cases at 10⁻⁷ and 10⁻⁸ included (H6 gate §8),
-and the evaluation takes 0.05–0.91× the previous default's time at 10⁻⁶ and 0.27–0.83× at
-10⁻⁷ and 10⁻⁸ (cases above 0.1 s). HR, H0, H1 and
-H2 are still open; of H7, CH7.5a–c are done (Laplace's plane-wave M2L on the device, adopted
-2026-11-06), and of H0, CH0.4 and CH0.6. Next: the priority list for H4 below, from CH4.0. The
-history of this line until H6.G is in `progress.md` and in this file's history
-(`git show 4b5b37f:docs/helmholtz/roadmap.md`).
+(CH3.6); `Auto` takes the exponential M2L on the low-frequency levels at every ε ≥ 10⁻⁸ (D8).
+CH4.0, the first task of the H4 list, adds `Auto`'s term for Batched from the global tree
+(CH3.2d's sweeps within 1.049 of the per-level best on the three machines), Batched's split
+by the threads and the dense budget per node (signed off on #211); its residual at 40–72
+threads is CH4.0f, off the list. HR, H0,
+H1 and H2 are still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: the
+priority list for H4 below, from CH4.0b. The history of this line until H6.G is in
+`progress.md` and in this file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
 ## How `/next-task` reads this file
 
@@ -74,7 +73,7 @@ recommendations): CH4.0e and CHA.1 to CHA.3 before CH1.3d.
 8. CH4.1, CH4.2, CH4.3, CH4.4, CH4.5
 9. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
 
-Off the list, in file order: CH0.8b, CH0.5 and H0.G; HR.G; H1.G; CH2.1, CH2.2, CH2.3, CH2.5
+Off the list, in file order: CH0.8b, CH0.5 and H0.G; CH4.0f (the user, 2026-11-12, on #211); HR.G; H1.G; CH2.1, CH2.2, CH2.3, CH2.5
 and H2.G; H5, H7 (CH7.5d now has D8 and waits for CH7.1; CH7.5f before CH7.5e), H8, H9 (CH9.1,
 after every other milestone); CHA.4 to CHA.10 (CHA.7 before CH8.1, through its *Needs*;
 CHA.6 recommended before CH7.5d).
@@ -477,27 +476,15 @@ task's full line is in its record or report and its progress entry
 
 **Gate:** CH4.4 and CH4.5, the kD sweep and host performance against FMM3D.
 
-- [ ] **CH4.0 The M2L rule's sparse-level term.** Added on 2026-11-02 at CH3.2d (the user,
-  "Accept, follow-up"): CH3.2d's rule by degree and machine class batched a sparse W1 level
-  at p = 15 on Kathleen at 1.106× the best choice (W1, kD = 30, ε = 10⁻⁶), past its 1.10
-  margin, while the W4 cube at the same degree needs Batched. A per-level term from the
-  global tree (the mean V-list length per box, counted once per box over the ranks, the
-  replicated top included), so the rule stays rank-invariant (constraint 9). *Done when:*
-  CH3.2d's sweeps within 1.10 on every case of the three machines, sparse levels included;
-  deterministic and rank-invariant. Also, from the H3 gate (§5, signed off 2026-11-02): the
-  Helmholtz dense budget counted per node, as Laplace's node rule does (constraint 7; it is
-  1 GiB per rank since CH3.2a), before any multi-rank run with Auto as the default.
-  Also (CH6.2h, report §6): Batched on levels of few boxes loses to Rotation at any degree
-  (it reads each class's whole table for few pairs; level 2, 64 boxes, 3,096 pairs: at p = 7
-  2.1–3.8× Rotation's time on the M6 and 8.5–9.3× on Kathleen, about 2 and 4 ms; at p = 15 on
-  Kathleen 0.09–0.12 s against 3–5 ms, which D8's rule gives to the exponential M2L), so the
-  term covers coarse levels as well as sparse ones, or Batched's level call splits as
-  CH6.2f's did. CH6.2h's clean locust pass (report §5, 1 × 72) confirmed that at 72 threads
-  Batched at p = 7–8 is behind Rotation on every level below about 3.5·10⁵ pairs, not only
-  coarse ones (1.0–28×; up to 32 % of a W4 evaluation at 10⁻³), and ahead from about
-  4·10⁵ pairs; the term must catch these levels too, within constraint 2 (it cannot read the
-  thread count).
-  *Needs:* CH3.2d. *Machines:* locust, Kathleen.
+- [x] **CH4.0 The M2L rule's sparse-level term.** Report:
+  `fmm-validate/results/helmholtz-ch4-0.md`. `Auto` batches a level only where m̂, its
+  columns per table read from the global tree, reaches m* of the machine class (agreed over
+  the ranks); Batched's blocks split by the threads (no bit changes); the dense budget per node
+  (8 GiB). CH3.2d's sweeps within 1.049 of the per-level best on the three machines (its miss
+  1.196 → 1.000); at 40–72 threads the evaluation 0.36–1.07× the previous default's, levels of
+  64–5,000 boxes still behind Rotation (CH4.0f). Signed off (the user, 2026-11-12, on #211): the node budget 8 GiB, a few
+  ranks per node with threads the advice (CH8.0 added); done with its residual left to CH4.0f,
+  off the priority list; proposal §6.4 amended. *Needs:* CH3.2d.
 - [ ] **CH4.0b The worst-box concentration.** Added on 2026-11-02 at the H3 gate (question
   4a; CH3.6's sign-off 1, "a follow-up before H4"): on W1 at 10⁻⁶ and 10⁻⁸ CH3.6's worst
   box was up to 146× the all-target ℓ2 error (FMM3D 37×), pointwise up to 57 ε, in boxes
@@ -571,6 +558,18 @@ task's full line is in its record or report and its progress entry
   *Done when:* the tables on Kathleen and locust; the estimate; the order of H4's tasks
   confirmed or changed. *Needs:* CH4.0d. *Machines:* Kathleen, locust. *Sign-off:* H4's
   go-ahead and order.
+- [ ] **CH4.0f Batched's split across the matrix's rows.** Added on 2026-11-12 at CH4.0
+  (report §4, §8): with CH4.0's split by blocks, Batched on levels of 64–5,000 boxes at 40–72
+  threads is still 1.1–5× Rotation's level time (0.2–2 ms per level, up to 1.28× of the
+  per-level best on ms-scale evaluations), because narrower blocks read each table for fewer
+  columns. Split a block's column-kernel calls across the threads by rows of the n × n table
+  (each thread a slice of the local's coefficients for every column), so that a level of few
+  blocks keeps its columns per read; every element keeps its chain. *Done when:* the level call
+  the pair chain bit for bit at every split and thread count; on CH6.2h's matrix at 1 × 40 and
+  1 × 72 the levels of 64–5,000 boxes within 1.10 of Rotation's level time or Rotation's, the
+  evaluation within 1.10 of the per-level best. It needs a row-slice entry point of
+  `nd_fmm_simd::MatrixKernel` (Laplace's crate: constraint 1, bit for bit and D9 on the three
+  machines). *Needs:* CH4.0. *Machines:* Kathleen, locust (the M6 with the user's go-ahead).
 - [ ] **CH4.1 S → F and F → R by the transform as a product.** Per-box aligned signature
   buffers; source signatures kept per level call, target accumulators chunked under the node
   budget. *Done when:* round trips to the grid's bandwidth; bits independent of the chunk
@@ -747,6 +746,29 @@ task's full line is in its record or report and its progress entry
 
 **Gate:** Kathleen scaling at kD of a few hundred, rank-invariant.
 
+- [ ] **CH8.0 One copy of the M2L tables per node.** Added on 2026-11-12 at CH4.0 (question 1
+  of #211; the user: "With regards to a shared table per node can you add a task to the roadmap
+  to do this?"). Every rank builds and holds its own copy of the tables that are the same on
+  every rank: Helmholtz's dense, class and Batched tables per level, and Laplace's dense
+  tables. Since CH4.0 Helmholtz's share a node budget (8 GiB), so at 40 ranks per node a rank
+  holds 205 MB and the levels beyond it run Rotation; threads per rank are today's remedy
+  (node-m2l.md §7). Laplace has no shared copy either: Phase 5N's spike measured one in an
+  `MPI_Win_allocate_shared` window (node-m2l.md §2.6: Dense's per-pair cost 2.4–5.8× below
+  private copies at one rank per core, about what 4 × 10 threads gives), and its decision 6
+  left it out ("no shared window in this phase", to revisit in Phase 5S, which did not).
+  - One rank per node (`split_shared`) builds the tables into a node window, the others read
+    them after a barrier; the node budget then counts one copy per node, not one per rank.
+  - The FFI through `mpi-sys` (rsmpi 0.8.2 has no window API; the user's permission of
+    2026-10-10): the crate and module that hold it named, every public function safe, a
+    `// SAFETY:` comment on every block, root CLAUDE.md's `unsafe` rule amended in the same PR.
+  - Laplace's tables in the same window behind an option, its default and outputs unchanged
+    (constraint 1), or left out with the reason.
+  *Done when:* the outputs bit for bit the private tables' at 1, 2 and 4 ranks (CI) and at
+  40 ranks per node on Kathleen; the resident memory per node at 40 × 1, 10 × 4 and 1 × 40
+  against private copies; the evaluation at 40 × 1 against 4 × 10 and 1 × 40 on W1 at
+  kD = 100 and 500 at 10⁻⁶, where the node budget now sends levels to Rotation; a default
+  proposed (the window on or off, the node budget with it). *Needs:* CH4.0. *Machines:*
+  Kathleen, locust. *Sign-off:* the `unsafe` exception and the default.
 - [ ] **CH8.1 Byte cap for the replicated top; exchange of the high-frequency levels.**
   *Done when:* bit for bit the one-rank output on P ranks; memory per rank and per node
   bounded. *Needs:* CH4.4, CHA.7. *Machines:* Kathleen.

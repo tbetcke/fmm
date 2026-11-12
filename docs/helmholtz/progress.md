@@ -2834,3 +2834,61 @@ request, using this template:
     - an Appendix A line with every proposal amendment;
     - the MPI crates' debug tests at opt-level 1;
     - done roadmap lines kept short.
+
+## 2026-11-12: CH4.0 The M2L rule's sparse-level term
+- Done:
+  - The term (`LevelShape`, `with_level_shapes`, `auto_batched_min_columns`): `Auto` runs
+    Batched on a level only where m̂, the estimate of its columns per table read from the
+    level's V pairs and boxes over the whole tree (summed over the ranks at build), reaches
+    m*(p) of the machine class, besides p_l ≤ d_b; the builder agrees a table of m* over the
+    ranks (all-reduce max) as it agrees the crossover; `batched_term(false)` gives CH3.2d's
+    rule.
+  - m* from both measures: the pair fit per degree (`helmholtz_m2l` at 1–64 columns, a/c + b)
+    at each class's margin, set from the FMM's per-level times at one thread (1.45 on AVX-512
+    and AVX2 with two planes, 1.2 with one, 1.15 on NEON; NEON's the larger of the M6's and
+    locust's, but m*(11) with one plane the M6's, where the levels contradict locust's fit).
+  - The split (`batched_block_targets`, `with_m2l_block_targets`, the builder's
+    `m2l_block_targets`): Batched's blocks ⌈rows / threads⌉ within 8 to 64 on a level of
+    fewer blocks than threads; no bit changes.
+  - The node budget (`dense_node_budget`, `DEFAULT_DENSE_NODE_BUDGET` 8 GiB): each rank
+    min(1 GiB, node budget / ranks per node).
+  - The harness's `--term`, `--block`, the levels' boxes, m̂, visits and exact columns per
+    read; `tools/helmholtz/ch4-0-runs.sh`, `ch4-0-tables.py` (`pairs`, `fmm`, `rule`).
+  - Runs: the pair sweeps (the M6, locust, Kathleen job 633057); CH3.2d's nine cases at one
+    thread (the M6, locust, Kathleen 633066), CH6.2h's matrix and large cases at the machines'
+    threads (the M6 1 × 6, locust 1 × 72, Kathleen 633065 at 1 × 40); the confirmation at the
+    final constants (Kathleen 633071, locust).
+  - Results: CH3.2d's sweeps within 1.049 of the per-level best on every case of the three
+    machines (its miss 1.196 → 1.000; the rule's own runs within 1.010 on AVX-512, 1.035 on
+    AVX2, 1.003 on locust); at the machines' threads the default's evaluation 0.36–1.07× the
+    previous default's, within 1.09 (the M6), 1.21 (Kathleen) and 1.28 (locust) of the
+    per-level best, the excess on ms-scale cases. Under D8's default the term changed no level
+    of these cases (the same checksums in all 172 launches); the gain at many threads is the
+    split's.
+  - The report `fmm-validate/results/helmholtz-ch4-0.md`; raw outputs in
+    `~/projects/fmm-archive/{m6,locust,kathleen}/logs/ch4-0/`.
+- Tests: nd-fmm-exec `auto_reads_the_level_shapes` (a sparse level Rotation's bits, dense ones
+  Batched's, a named m* table), `the_level_shapes_are_one_per_level`,
+  `the_columns_per_read_on_hand_shapes`, `the_term_and_the_split_widths`
+  (`tests/helmholtz/dense.rs`); `check_batched_term` in `tests/helmholtz_fmm.rs` (the shapes
+  and m* the same on every rank and the one-rank tree's, a level sent to Rotation by the term,
+  within `DENSE_TOLERANCE` of Rotation, 2 threads and the one-rank FMM bit for bit, the
+  library's default against the direct sum and one rank, block widths bit for bit, the node
+  budget's share); nd-fmm-validate's columns and a named width (`tests/helmholtz_accuracy.rs`).
+- Checks: `/verify` on the M6: fmt, Clippy (default, examples, workspace), docs, the
+  workspace tests at opt-level 1 (2,600 passed), the MPI list at 2 and 4 ranks (24 of 24),
+  `helmholtz_fmm` again at 1, 2 and 4 ranks after the last test change; the one-rank debug run
+  of `helmholtz_fmm` 526 s at opt-level 0 (load 2–6), `check_batched_term` 91 s of it (21 %).
+  Nothing pending.
+- Decisions: questions for sign-off in the PR: (1) the default node budget, 8 GiB; (2) CH4.0
+  done with its residual at 40–72 threads left to CH4.0f, and CH4.0f's place in the list; (3)
+  proposal §6.4 amended for the term and the split. Signed off (the user, 2026-11-12, on #211): (1) "I agree to your
+  recommendation", 8 GiB, with a few ranks per node and threads per rank the documented advice;
+  (2) "Q2 as recommended", CH4.0 done and CH4.0f off the priority list; (3) "yes to Q3",
+  proposal §6.4 and its Appendix A line amended on the PR.
+- Laplace: not touched (the Helmholtz operator, builder and batched level call; tests,
+  harness, tools; `driver.rs` used, not changed).
+- Follow-ups: CH4.0f (roadmap, after CH4.0e), Batched's split across the matrix's rows; CH8.0
+  (roadmap, H8; the user, on #211), one copy of the M2L tables per node in an MPI shared window.
+  Laplace has no shared tables either: Phase 5N spiked one (node-m2l.md §2.6) and its decision 6
+  left it out, to revisit in Phase 5S, which did not take it up.

@@ -58,10 +58,10 @@ use mpi::traits::CommunicatorCollectives;
 use nd_fmm_exec::geometry::{Domain, radius};
 use nd_fmm_exec::helmholtz::{
     ChargeKind, Charges, DEFAULT_DENSE_BUDGET, Degrees, HelmholtzFmm, HelmholtzFmmBuilder,
-    HelmholtzFmmError, HelmholtzM2l, Output, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise,
-    PlaneWaveSplit, PlaneWaveTimes, Wavenumber,
+    HelmholtzFmmError, HelmholtzM2l, LevelShape, Output, PlaneWaveCounts, PlaneWavePrecision,
+    PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, Wavenumber,
 };
-use nd_fmm_exec::operator::{MulAdd, P2pChoice};
+use nd_fmm_exec::operator::{M2L_BLOCK_TARGETS, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
 use nd_fmm_ref::helmholtz::p2p::direct_sum;
 use nd_fmm_tables::helmholtz::plane_wave::Precision;
@@ -108,6 +108,13 @@ pub struct Case {
     pub auto_plane_wave: bool,
     /// The smallest degree at which Auto takes the exponential M2L (`None` the rule's).
     pub m2l_plane_wave_min_degree: Option<usize>,
+    /// Whether [`HelmholtzM2l::Auto`] reads the levels' V lists
+    /// (`HelmholtzFmmBuilder::batched_term`, Helmholtz CH4.0; `true` in [`Case::new`], the
+    /// library's default); named always, as `auto_plane_wave`.
+    pub batched_term: bool,
+    /// The width of Batched's blocks (`HelmholtzFmmBuilder::m2l_block_targets`, Helmholtz
+    /// CH4.0; `None` the library's split). No bit depends on it.
+    pub m2l_block_targets: Option<usize>,
     /// The precision of each level's quadrature under [`HelmholtzM2l::PlaneWave`]
     /// (Helmholtz CH6.1e).
     pub plane_wave: PlaneWavePrecision,
@@ -153,6 +160,8 @@ impl Case {
             m2l_max_degree: None,
             auto_plane_wave: true,
             m2l_plane_wave_min_degree: None,
+            batched_term: true,
+            m2l_block_targets: None,
             plane_wave: PlaneWavePrecision::Rule,
             plane_wave_budget: None,
             plane_wave_reach: None,
@@ -536,6 +545,21 @@ pub struct Row {
     /// Per level, the V-list pairs of the plan, each target counted on the rank that owns it
     /// and summed over the ranks: the same on every rank count (Helmholtz CH6.2b).
     pub v_pairs: Vec<usize>,
+    /// Per level, its boxes, each counted on the rank that owns it and summed over the ranks
+    /// (Helmholtz CH4.0): with `v_pairs` the level's `LevelShape`.
+    pub v_targets: Vec<usize>,
+    /// Per level, the estimate m̂ of Batched's columns per table read from the level's
+    /// shape (`LevelShape::batched_columns`, Helmholtz CH4.0), which Auto's term reads.
+    pub batched_columns: Vec<f64>,
+    /// Per level, the (block, offset) visits of Batched's level call at blocks of 64 rows,
+    /// counted on each rank over the targets it owns and summed over the ranks (Helmholtz
+    /// CH4.0): on one rank the level call's own count, so `v_pairs` over it is the exact
+    /// columns per table read that m̂ estimates.
+    pub block_visits: Vec<usize>,
+    /// Whether Auto read the levels' V lists (Helmholtz CH4.0).
+    pub batched_term: bool,
+    /// The width of Batched's blocks if named (Helmholtz CH4.0).
+    pub m2l_block_targets: Option<usize>,
     /// The relative ℓ2 errors [φ, ∇φ] per vector, then over all vectors.
     pub errors: Vec<[f64; 2]>,
     /// The checksum of the whole output.
@@ -619,7 +643,11 @@ pub fn run_output<C: CommunicatorCollectives>(
         .m2l(case.m2l)
         .dense_budget(case.dense_budget)
         .auto_plane_wave(case.auto_plane_wave)
+        .batched_term(case.batched_term)
         .plane_wave_precision(case.plane_wave.clone());
+    if let Some(width) = case.m2l_block_targets {
+        builder = builder.m2l_block_targets(width);
+    }
     if let Some(mul_add) = case.m2l_mul_add {
         builder = builder.m2l_mul_add(mul_add);
     }
@@ -728,6 +756,32 @@ pub fn run_output<C: CommunicatorCollectives>(
         .collect();
     let mut v_pairs = vec![0u64; nlevels];
     comm.all_reduce_into(&pairs[..], &mut v_pairs[..], SystemOperation::sum());
+    // The boxes, and the (block, offset) visits of Batched's level call at blocks of 64 rows
+    // (each offset's batch lists its targets ascending), per rank over its own targets.
+    let mut local = vec![0u64; 2 * nlevels];
+    for (l, counts) in local.as_chunks_mut::<2>().0.iter_mut().enumerate() {
+        let v = plan.level(l).v();
+        counts[0] = (0..v.nrows()).filter(|&t| plan.computes(l, t)).count() as u64;
+        for d in 0..v.ngroups() {
+            let mut last = None;
+            for &t in v.batch(d).0 {
+                let block = t as usize / M2L_BLOCK_TARGETS;
+                if plan.computes(l, t as usize) && last != Some(block) {
+                    counts[1] += 1;
+                    last = Some(block);
+                }
+            }
+        }
+    }
+    let mut summed = vec![0u64; 2 * nlevels];
+    comm.all_reduce_into(&local[..], &mut summed[..], SystemOperation::sum());
+    let v_targets: Vec<usize> = summed.iter().step_by(2).map(|&n| n as usize).collect();
+    let block_visits: Vec<usize> = summed
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .map(|&n| n as usize)
+        .collect();
     let row = Row {
         threads,
         p2p: fmm.p2p_kernel(),
@@ -771,7 +825,22 @@ pub fn run_output<C: CommunicatorCollectives>(
         m2l_seconds,
         plane_wave_seconds,
         plane_wave_parts,
+        batched_columns: v_pairs
+            .iter()
+            .zip(&v_targets)
+            .map(|(&pairs, &targets)| {
+                LevelShape {
+                    pairs,
+                    targets: targets as u64,
+                }
+                .batched_columns()
+            })
+            .collect(),
         v_pairs: v_pairs.into_iter().map(|n| n as usize).collect(),
+        v_targets,
+        block_visits,
+        batched_term: fmm.level_shapes().is_some(),
+        m2l_block_targets: fmm.operator().m2l_block_targets(),
         errors,
         checksum,
     };

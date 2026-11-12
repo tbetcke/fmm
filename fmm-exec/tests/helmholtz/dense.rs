@@ -6,13 +6,16 @@
 //! and in both modes the same bits on every ISA; the
 //! levels chosen by the budget; a budget of zero is Rotation bit for bit. The rule per level
 //! (Helmholtz CH3.2d), level by level: fused Batched bit for bit on the levels of degree at
-//! most the crossover, Rotation bit for bit above. The FMM under each is tested in
-//! `tests/helmholtz_fmm.rs`.
+//! most the crossover, Rotation bit for bit above; the term of the levels' V lists (Helmholtz
+//! CH4.0): a sparse level Rotation, a dense one Batched, the estimate of the columns per
+//! table read on hand shapes, and the block widths of the split. The FMM under each is
+//! tested in `tests/helmholtz_fmm.rs`.
 
 use nd_fmm_exec::geometry::Domain;
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, DEFAULT_DENSE_BUDGET, Densities, HelmholtzM2l, HelmholtzOperator, Wavenumber,
-    auto_batched_max_degree, auto_m2l_mul_add,
+    ChargeKind, DEFAULT_DENSE_BUDGET, Densities, HelmholtzM2l, HelmholtzOperator, LevelShape,
+    M2L_MIN_BLOCK_TARGETS, Wavenumber, auto_batched_max_degree, auto_batched_min_columns,
+    auto_m2l_mul_add, batched_block_targets,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_plan::operator::{FmmSizes, PairOperator};
@@ -533,6 +536,155 @@ fn auto_takes_the_rule_of_the_kernel() {
             assert!(compare(&mut after, &mut before).1, "{choice}");
         }
     }
+}
+
+/// A level shape of `targets` boxes with `per_box` V pairs each.
+fn shape(targets: u64, per_box: u64) -> LevelShape {
+    LevelShape {
+        pairs: targets * per_box,
+        targets,
+    }
+}
+
+/// The term of the levels' V lists (Helmholtz CH4.0): with the crossover above every degree,
+/// a level whose estimate falls below m* of its degree runs Rotation (its bits), the others
+/// Batched (theirs); the shapes before or after `with_m2l` give the same levels; `None`
+/// gives CH3.2d's choice; the other settings ignore the shapes.
+#[test]
+fn auto_reads_the_level_shapes() {
+    let k = Wavenumber::new(20.0, 2.0).unwrap();
+    let kind = ChargeKind::Complex;
+    // Level 2 a single box with one pair (one column per read), levels 3 and 4 full and
+    // uniform (about 38 columns per read).
+    let shapes = vec![
+        LevelShape::default(),
+        LevelShape::default(),
+        shape(1, 1),
+        shape(512, 189),
+        shape(4096, 189),
+    ];
+    let planes = 2;
+    for (level, &p) in degrees(&k).iter().enumerate().skip(2) {
+        let (m, need) = (
+            shapes[level].batched_columns(),
+            auto_batched_min_columns(Isa::Scalar, planes, p),
+        );
+        assert_eq!(m < need, level == 2, "level {level}: m̂ {m}, m* {need}");
+    }
+    let named = |m2l| {
+        operator(k, kind, 1, m2l, usize::MAX)
+            .with_m2l_max_degree(Some(usize::MAX))
+            .with_p2p(P2pChoice::Reference)
+            .unwrap()
+    };
+    let mut after = named(HelmholtzM2l::Auto).with_level_shapes(Some(shapes.clone()));
+    let densities = Densities::new(k.kind(), kind, 1);
+    let mut before = HelmholtzOperator::new(k, densities, &domain(), &degrees(&k), false, 8)
+        .unwrap()
+        .with_auto_plane_wave(false)
+        .with_m2l_max_degree(Some(usize::MAX))
+        .with_p2p(P2pChoice::Reference)
+        .unwrap()
+        .with_level_shapes(Some(shapes.clone()))
+        .with_m2l(HelmholtzM2l::Auto, usize::MAX);
+    let mut fused = named(HelmholtzM2l::Batched).with_m2l_mul_add(auto_m2l_mul_add(Isa::Scalar));
+    let mut rotation = named(HelmholtzM2l::Rotation);
+    assert_eq!(after.level_shapes(), Some(&shapes[..]));
+    for level in 2..LEVELS {
+        let want = if level == 2 {
+            HelmholtzM2l::Rotation
+        } else {
+            HelmholtzM2l::Batched
+        };
+        assert_eq!(after.m2l_on(level), want, "level {level}");
+        assert_eq!(before.m2l_on(level), want, "level {level}");
+        let same = if level == 2 {
+            same_on(&mut after, &mut rotation, level)
+        } else {
+            same_on(&mut after, &mut fused, level)
+        };
+        assert!(same, "level {level}: not {want:?}'s bits");
+    }
+    assert!(compare(&mut after, &mut before).1);
+    // A named m* table: none of the levels reaches 64 columns, every one reaches 0; the
+    // operator reports the table's.
+    let mut none = named(HelmholtzM2l::Auto)
+        .with_level_shapes(Some(shapes.clone()))
+        .with_m2l_min_columns(Some(vec![64.0; 30]));
+    assert!((2..LEVELS).all(|l| none.m2l_on(l) == HelmholtzM2l::Rotation));
+    assert_eq!(none.m2l_min_columns(8), 64.0);
+    assert!(same_on(&mut none, &mut rotation, 3));
+    let all = named(HelmholtzM2l::Auto)
+        .with_m2l_min_columns(Some(vec![0.0; 30]))
+        .with_level_shapes(Some(shapes.clone()));
+    assert!((2..LEVELS).all(|l| all.m2l_on(l) == HelmholtzM2l::Batched));
+    assert_eq!(all.m2l_min_columns(100), 64.0, "beyond the table");
+    assert_eq!(
+        after.m2l_min_columns(8),
+        auto_batched_min_columns(Isa::Scalar, planes, 8),
+        "the rule's without a table"
+    );
+    let without = named(HelmholtzM2l::Auto)
+        .with_level_shapes(Some(shapes.clone()))
+        .with_level_shapes(None);
+    assert!((2..LEVELS).all(|l| without.m2l_on(l) == HelmholtzM2l::Batched));
+    let batched = named(HelmholtzM2l::Batched).with_level_shapes(Some(shapes));
+    assert!((2..LEVELS).all(|l| batched.m2l_on(l) == HelmholtzM2l::Batched));
+}
+
+/// One level shape per level, or a panic.
+#[test]
+#[should_panic(expected = "one level shape per level")]
+fn the_level_shapes_are_one_per_level() {
+    let k = Wavenumber::new(20.0, 2.0).unwrap();
+    let _ = operator(k, ChargeKind::Complex, 1, HelmholtzM2l::Auto, usize::MAX)
+        .with_level_shapes(Some(vec![LevelShape::default(); LEVELS - 1]));
+}
+
+/// The estimate of the columns per table read on hand shapes: none without pairs; a full
+/// block whose boxes meet every offset, 64; a box with ten pairs, one; the uniform level of
+/// 4096 boxes with CONVENTIONS §3.12's 189 interior offsets each, 64 · 189 / 316; level 2
+/// (64 boxes, 3,096 pairs), 3096 / 316 to within 10⁻³.
+#[test]
+fn the_columns_per_read_on_hand_shapes() {
+    assert_eq!(LevelShape::default().batched_columns(), 0.0);
+    assert_eq!(shape(5, 0).batched_columns(), 0.0);
+    assert!((shape(64, 316).batched_columns() - 64.0).abs() < 1e-12);
+    assert!((shape(1, 10).batched_columns() - 1.0).abs() < 1e-12);
+    let uniform = shape(4096, 189).batched_columns();
+    assert!((uniform - 64.0 * 189.0 / 316.0).abs() < 1e-9, "{uniform}");
+    let coarse = LevelShape {
+        pairs: 3096,
+        targets: 64,
+    }
+    .batched_columns();
+    assert!((coarse - 3096.0 / 316.0).abs() < 1e-3, "{coarse}");
+}
+
+/// m* is positive and finite and does not fall as p grows, for every class; the split's
+/// widths: 64 on one thread or with a block per thread, ⌈rows / threads⌉ between, at least
+/// `M2L_MIN_BLOCK_TARGETS`.
+#[test]
+fn the_term_and_the_split_widths() {
+    for isa in Isa::all() {
+        for planes in [1, 2] {
+            let m: Vec<f64> = (0..=20)
+                .map(|p| auto_batched_min_columns(isa, planes, p))
+                .collect();
+            assert!(
+                m.iter().all(|x| x.is_finite() && *x > 0.0),
+                "{isa} {planes}"
+            );
+            assert!(m.windows(2).all(|w| w[0] <= w[1]), "{isa} {planes}: {m:?}");
+        }
+    }
+    assert_eq!(batched_block_targets(1000, 1), 64);
+    assert_eq!(batched_block_targets(100_000, 72), 64);
+    assert_eq!(batched_block_targets(3000, 72), 42);
+    assert_eq!(batched_block_targets(64, 40), M2L_MIN_BLOCK_TARGETS);
+    assert_eq!(batched_block_targets(0, 4), M2L_MIN_BLOCK_TARGETS);
+    assert_eq!(batched_block_targets(64 * 6, 6), 64);
+    assert_eq!(batched_block_targets(64 * 6, 7), 55);
 }
 
 /// The crossovers: one plane at least two planes' on every ISA (a real multipole costs

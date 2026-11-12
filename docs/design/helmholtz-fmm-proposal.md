@@ -922,8 +922,15 @@ levels, among Rotation, Dense, Classes, Batched and the exponential M2L, by the 
 of node-m2l.md (bytes of a rank and of a node) and by measured cost constants. Dense never
 resolves on a level whose tables exceed the budget. The exponential M2L was opt-in until
 CH6.2 had measured it; since D8's sign-off (2026-11-08, CH6.2h) `Auto` takes it first, on the
-levels of Section 5.3's rule, Batched to its crossover on the others, Rotation else, with no
-term for the level's boxes (amended at CH6.2h).
+levels of Section 5.3's rule, with no term for the level's boxes. On the other levels Batched
+runs where its tables are read for enough columns: since CH4.0, where m̂, the level's V pairs
+over its blocks' table reads estimated from the global tree, reaches m*(p) of the machine class
+(measured per pair and per level, agreed over the ranks), and p_l is at most its crossover;
+Rotation else. The choice reads no thread count (constraint 2); instead Batched's level call
+narrows its blocks on levels of fewer blocks than threads, with no bit changed (constraint 9 as
+amended at H6.G). The dense, class and Batched tables of a rank take at most the node budget
+over the ranks per node (8 GiB by default, at most 1 GiB a rank), so the levels a rank batches
+depend on the ranks per node, as for Laplace's node rule (amended at CH6.2h and CH4.0).
 
 ### 6.5 Device path
 
@@ -1840,6 +1847,10 @@ these.
   - Section 7: the 22.4 s of W1 at kD = 500 is our evaluation with the build apart, FMM3D's
     times its whole call.
   - Sections 3.4 and 3.1 against CONVENTIONS §3.15 (M2) are left to CH1.3d.
+- **Amended at CH4.0, 2026-11-12** (fmm-validate/results/helmholtz-ch4-0.md; signed off by the
+  user on PR #211, question 3, "yes to Q3"): Section 6.4, Batched under `Auto` only where its
+  columns per table read reach m* of the machine class, its blocks split by the threads with no
+  bit changed, and the dense tables under a node budget (8 GiB, question 1).
 
 ## Appendix B. The stability check behind Section 3.6
 

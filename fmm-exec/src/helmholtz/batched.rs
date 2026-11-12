@@ -33,15 +33,17 @@ impl<T: SimdScalar> Batched<'_, T> {
         Layout::new(self.tables.degree(level)).len()
     }
 
-    /// The M2L level call on a level with tables: blocks of [`M2L_BLOCK_TARGETS`] targets,
-    /// and in each, for every offset index d in order, the pairs of `batch(d)` whose target
-    /// lies in the block (two binary searches), m columns each, through [`apply`]. Each
-    /// local receives the chain of [`pair`](Self::pair) for each of its sources in the
-    /// order of its row, so the call is the pair-by-pair operator bit for bit.
+    /// The M2L level call on a level with tables: blocks of `width` targets (at most
+    /// [`M2L_BLOCK_TARGETS`], the size of the column lists), and in each, for every offset
+    /// index d in order, the pairs of `batch(d)` whose target lies in the block (two binary
+    /// searches), m columns each, through [`apply`]. Each local receives the chain of
+    /// [`pair`](Self::pair) for each of its sources in the order of its row, so the call is
+    /// the pair-by-pair operator bit for bit at every width.
     pub(super) fn m2l<S: Send>(
         &self,
         execution: &mut Execution<S>,
         batch: M2l<'_, T>,
+        width: usize,
         columns: fn(&mut S) -> &mut Columns<T>,
     ) {
         let M2l {
@@ -57,7 +59,8 @@ impl<T: SimdScalar> Batched<'_, T> {
         let (m, n) = (self.vectors, self.n(level));
         let (multipole_size, local_size) = (self.planes * n, 2 * n);
         let multipoles = multipoles.as_slice();
-        execution.blocks(locals, M2L_BLOCK_TARGETS, |first, block, scratch| {
+        let width = width.clamp(1, M2L_BLOCK_TARGETS);
+        execution.blocks(locals, width, |first, block, scratch| {
             let end = first + block.len() / (m * local_size);
             let Columns {
                 pack,
