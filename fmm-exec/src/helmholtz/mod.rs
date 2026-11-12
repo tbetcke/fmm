@@ -67,13 +67,14 @@ use crate::geometry::Domain;
 pub use degree::{DegreeError, DegreeRule, Degrees, degree, s7_degree};
 pub use densities::{ChargeKind, Charges, Densities, DensityError, LeafScratch, Output, Split};
 pub use fmm::{
-    DEFAULT_PLANE_WAVE_NODE_BUDGET, HelmholtzFmm, HelmholtzFmmBuilder, HelmholtzFmmError,
+    DEFAULT_DENSE_NODE_BUDGET, DEFAULT_PLANE_WAVE_NODE_BUDGET, HelmholtzFmm, HelmholtzFmmBuilder,
+    HelmholtzFmmError,
 };
 pub use operator::{
     AUTO_PLANE_WAVE_MAX_IM_KAPPA, DEFAULT_DENSE_BUDGET, HelmholtzM2l, HelmholtzOperator,
-    MIN_BUFFER_BOXES, OperatorError, PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise,
-    PlaneWaveSplit, PlaneWaveTimes, auto_batched_max_degree, auto_m2l_mul_add,
-    auto_plane_wave_min_degree,
+    LevelShape, M2L_MIN_BLOCK_TARGETS, MIN_BUFFER_BOXES, OperatorError, PlaneWaveCounts,
+    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, auto_batched_max_degree,
+    auto_batched_min_columns, auto_m2l_mul_add, auto_plane_wave_min_degree, batched_block_targets,
 };
 
 /// The deepest level of a Morton key, 16 (CONVENTIONS §3.12).

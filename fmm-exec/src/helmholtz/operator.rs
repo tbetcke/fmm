@@ -126,6 +126,22 @@
 //! settings do, deterministic and rank-invariant alike. `HelmholtzFmmBuilder` agrees the
 //! crossover over the ranks.
 //!
+//! Since Helmholtz CH4.0 Auto also reads each level's V list over the whole tree, a
+//! [`LevelShape`] of its pairs and boxes ([`with_level_shapes`](HelmholtzOperator::with_level_shapes),
+//! which `HelmholtzFmmBuilder` counts and sums over the ranks): Batched reads each offset's
+//! table once per block and offset met, so on a level whose blocks meet few pairs per offset
+//! (a sparse level: a surface's boxes have short V rows; or a coarse one: level 2 is a single
+//! block) it reads n² values for few columns and loses to Rotation. A level then runs
+//! Batched only where the estimate of its columns per table read,
+//! [`LevelShape::batched_columns`], is at least [`auto_batched_min_columns`] of the ISA, the
+//! planes and its degree (and p_l at most the crossover, as before). The shapes are integers
+//! summed over the ranks, so this term is a function of the global tree (constraint 9) and
+//! every rank chooses alike. Batched's level call also narrows its blocks on a level with
+//! fewer blocks than threads ([`batched_block_targets`]; or a width named by
+//! [`with_m2l_block_targets`](HelmholtzOperator::with_m2l_block_targets)), so that every thread
+//! has a block: a split of the execution only, since the call is the pair chain bit for bit
+//! at every width. The term cannot read the thread count (Batched's bits are not Rotation's).
+//!
 //! By default (Helmholtz CH6.2h, decision D8, signed off 2026-11-08;
 //! [`with_auto_plane_wave`](HelmholtzOperator::with_auto_plane_wave) turns it off) Auto takes
 //! the exponential M2L first: on each level of degree p_l at least
@@ -251,6 +267,7 @@ use std::time::{Duration, Instant};
 
 use mpi::traits::Equivalence;
 use nd_fmm_math::{Complex, Layout};
+use nd_fmm_plan::lists::NOFFSETS;
 use nd_fmm_plan::operator::{
     FmmOperator, FmmSizes, L2l, L2p, M2l, M2m, M2p, P2l, P2m, P2p, PairOperator,
 };
@@ -462,6 +479,77 @@ pub fn auto_m2l_mul_add(isa: Isa) -> MulAdd {
     }
 }
 
+/// The V list of one level over the whole tree (Helmholtz CH4.0): its pairs and its boxes,
+/// each counted once over the ranks, by the rank that computes the box (`Plan::computes`,
+/// the replicated top included). Integers summed over the ranks, so the same on every rank
+/// and at every rank count; `HelmholtzFmmBuilder` counts them from its plan
+/// ([`with_level_shapes`](HelmholtzOperator::with_level_shapes)).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LevelShape {
+    /// The V pairs whose target is a box of the level.
+    pub pairs: u64,
+    /// The boxes of the level.
+    pub targets: u64,
+}
+
+impl LevelShape {
+    /// m̂, the estimate of the columns per table read of Batched's level call on this level
+    /// at one rank (the operator module documentation, "M2L"): the pairs over the (block,
+    /// offset) visits of ⌈targets / 64⌉ blocks of [`M2L_BLOCK_TARGETS`] consecutive boxes,
+    /// each block of b̄ boxes (the mean) meeting 316 (1 − (1 − L̄/316)^b̄) distinct offsets of
+    /// the 316, L̄ = pairs / targets the mean V row. 0 without pairs. A function of the two
+    /// counts alone, so every rank computes the same value.
+    pub fn batched_columns(&self) -> f64 {
+        if self.pairs == 0 || self.targets == 0 {
+            return 0.0;
+        }
+        let (pairs, targets) = (self.pairs as f64, self.targets as f64);
+        let blocks = self.targets.div_ceil(M2L_BLOCK_TARGETS as u64) as f64;
+        let per_block = targets / blocks;
+        let offsets = NOFFSETS as f64;
+        let row = (pairs / targets).min(offsets);
+        let visited = offsets * (1.0 - (1.0 - row / offsets).powf(per_block));
+        pairs / (blocks * visited)
+    }
+}
+
+/// m*, the fewest columns per table read at which [`HelmholtzM2l::Auto`] runs Batched on a
+/// level of degree p (Helmholtz CH4.0), for the column kernel's ISA and the multipole's
+/// planes: the smallest column count at which the fused Batched M2L per pair reaches 1.1×
+/// Rotation's speed in `helmholtz_m2l` (fmm-validate/results/helmholtz-ch4-0.md, §1).
+/// Auto runs Batched on a level only where [`LevelShape::batched_columns`] is at least this,
+/// and p_l at most its crossover ([`auto_batched_max_degree`] or the degree named), which
+/// stays a condition of its own. A function of the machine class and p alone (proposal §2,
+/// constraint 9).
+pub fn auto_batched_min_columns(isa: Isa, planes: usize, p: usize) -> f64 {
+    let _ = (isa, planes);
+    // Provisional until the pair evidence: about two columns per read to p = 8, more
+    // towards the crossover.
+    match p {
+        0..=8 => 2.0,
+        9..=11 => 4.0,
+        _ => 8.0,
+    }
+}
+
+/// The narrowest block of Batched's level call under the split of
+/// [`batched_block_targets`] (Helmholtz CH4.0).
+pub const M2L_MIN_BLOCK_TARGETS: usize = 8;
+
+/// The width of Batched's blocks on a level of `rows` boxes run on `threads` threads
+/// (Helmholtz CH4.0): [`M2L_BLOCK_TARGETS`] on one thread; on more, ⌈rows / threads⌉ within
+/// [`M2L_MIN_BLOCK_TARGETS`] to [`M2L_BLOCK_TARGETS`], so that a level of fewer than
+/// `threads` full blocks still gives each thread a block. An execution split: the level call
+/// is the pair chain bit for bit at every width (the operator module documentation, "M2L";
+/// proposal §2, constraint 9 as amended at H6.G).
+pub fn batched_block_targets(rows: usize, threads: usize) -> usize {
+    if threads <= 1 {
+        return M2L_BLOCK_TARGETS;
+    }
+    rows.div_ceil(threads)
+        .clamp(M2L_MIN_BLOCK_TARGETS, M2L_BLOCK_TARGETS)
+}
+
 /// The default byte budget of the dense or class M2L tables of one rank, 1 GiB.
 pub const DEFAULT_DENSE_BUDGET: usize = 1 << 30;
 
@@ -504,6 +592,11 @@ struct Kernel<T: SimdScalar> {
     /// The smallest degree at which Auto takes the exponential M2L if named, else `None`
     /// for the rule's ([`auto_plane_wave_min_degree`]).
     plane_wave_min_degree: Option<usize>,
+    /// The levels' V lists over the whole tree, which Auto's term for Batched reads
+    /// (Helmholtz CH4.0); `None`: no term.
+    shapes: Option<Vec<LevelShape>>,
+    /// The width of Batched's blocks if named, else `None` for [`batched_block_targets`].
+    block_targets: Option<usize>,
     /// The batched M2L's multiply–add mode if named, else `None` (the setting's default).
     mul_add: Option<MulAdd>,
     /// The dense M2L tables of the levels that have them, under [`HelmholtzM2l::Dense`].
@@ -630,6 +723,8 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             max_degree: None,
             auto_plane_wave: true,
             plane_wave_min_degree: None,
+            shapes: None,
+            block_targets: None,
             mul_add: None,
             dense: None,
             classes: None,
@@ -709,6 +804,68 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// the column kernel's ISA and the multipole planes; `None` under the other settings.
     pub fn max_degree(&self) -> Option<usize> {
         (self.kernel.m2l == HelmholtzM2l::Auto).then(|| self.kernel.auto_max_degree())
+    }
+
+    /// Gives [`HelmholtzM2l::Auto`] the levels' V lists over the whole tree, one
+    /// [`LevelShape`] per level (Helmholtz CH4.0; module documentation, "M2L"): a level then
+    /// runs Batched only where its [`LevelShape::batched_columns`] is at least
+    /// [`auto_batched_min_columns`] of the ISA, the planes and its degree. `None` (the
+    /// operator's default): no such term, CH3.2d's rule. Under Auto the levels are chosen
+    /// again; the other settings ignore it.
+    ///
+    /// # Panics
+    ///
+    /// If the shapes are not one per level.
+    pub fn with_level_shapes(mut self, shapes: Option<Vec<LevelShape>>) -> Self {
+        if let Some(shapes) = &shapes {
+            assert_eq!(
+                shapes.len(),
+                self.kernel.base_degrees.len(),
+                "one level shape per level"
+            );
+        }
+        if self.kernel.shapes != shapes {
+            self.kernel.shapes = shapes;
+            if self.kernel.m2l == HelmholtzM2l::Auto {
+                self.select_tables();
+            }
+        }
+        self
+    }
+
+    /// The byte budget of the M2L tables ([`with_m2l`](Self::with_m2l)).
+    pub fn dense_budget(&self) -> usize {
+        self.kernel.dense_budget
+    }
+
+    /// The levels' V lists Auto's term reads ([`with_level_shapes`](Self::with_level_shapes)),
+    /// if given.
+    pub fn level_shapes(&self) -> Option<&[LevelShape]> {
+        self.kernel.shapes.as_deref()
+    }
+
+    /// Names the width of Batched's blocks in its level call (`None`, the default:
+    /// [`batched_block_targets`] of the level's boxes and the pool's threads), for the
+    /// measurements and the tests; at least 1, and above [`M2L_BLOCK_TARGETS`] run at that.
+    /// The output does not depend on it (module documentation, "M2L").
+    ///
+    /// # Panics
+    ///
+    /// If the width is 0.
+    pub fn with_m2l_block_targets(mut self, targets: Option<usize>) -> Self {
+        assert_ne!(
+            targets,
+            Some(0),
+            "a block of Batched holds at least one target"
+        );
+        self.kernel.block_targets = targets;
+        self
+    }
+
+    /// The width of Batched's blocks if named
+    /// ([`with_m2l_block_targets`](Self::with_m2l_block_targets)).
+    pub fn m2l_block_targets(&self) -> Option<usize> {
+        self.kernel.block_targets
     }
 
     /// Lets [`HelmholtzM2l::Auto`] take the exponential M2L (Helmholtz CH6.2h, D8; module
@@ -1011,25 +1168,31 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             _ => None,
         };
         kernel.batched = max_degree.map(|max_degree| {
-            let levels = match &precisions {
-                // `select_within`'s choice with the levels that have waves left out: they
+            let levels = if choice == HelmholtzM2l::Auto {
+                // `select_within`'s choice with the levels that have waves, and those whose
+                // tables would be read for too few columns (Helmholtz CH4.0), left out: they
                 // take no batched tables and spend none of the budget.
-                Some(precisions) => {
-                    let mut chosen = vec![false; degrees.len()];
-                    let mut left = dense_budget;
-                    for (l, &p) in degrees.iter().enumerate().skip(2).rev() {
-                        if precisions[l].is_some() || p > max_degree {
-                            continue;
-                        }
-                        let bytes = BatchedM2l::<T>::level_bytes(p);
-                        if bytes <= left {
-                            left -= bytes;
-                            chosen[l] = true;
-                        }
+                let planes = kernel.densities.multipole_planes();
+                let isa = kernel.matrix.isa();
+                let mut chosen = vec![false; degrees.len()];
+                let mut left = dense_budget;
+                for (l, &p) in degrees.iter().enumerate().skip(2).rev() {
+                    let waves = precisions.as_ref().is_some_and(|w| w[l].is_some());
+                    let sparse = kernel.shapes.as_ref().is_some_and(|shapes| {
+                        shapes[l].batched_columns() < auto_batched_min_columns(isa, planes, p)
+                    });
+                    if waves || sparse || p > max_degree {
+                        continue;
                     }
-                    chosen
+                    let bytes = BatchedM2l::<T>::level_bytes(p);
+                    if bytes <= left {
+                        left -= bytes;
+                        chosen[l] = true;
+                    }
                 }
-                None => BatchedM2l::<T>::select_within(&degrees, dense_budget, max_degree),
+                chosen
+            } else {
+                BatchedM2l::<T>::select_within(&degrees, dense_budget, max_degree)
             };
             BatchedM2l::build(k_root, &degrees, &levels)
         });
@@ -1842,7 +2005,19 @@ impl<T: SimdScalar + Equivalence + Default> FmmOperator for HelmholtzOperator<T>
             self.plane_wave_m2l(batch);
         } else {
             match self.kernel.batched(level) {
-                Some(batched) => batched.m2l(&mut self.execution, batch, |s| &mut s.columns),
+                Some(batched) => {
+                    // The block width: named, or by the level's boxes and the threads that
+                    // run the call (Helmholtz CH4.0), which changes no bit.
+                    let threads = match (&self.execution.pool, self.execution.serial) {
+                        (Some(pool), false) => pool.current_num_threads(),
+                        _ => 1,
+                    };
+                    let width = self
+                        .kernel
+                        .block_targets
+                        .unwrap_or_else(|| batched_block_targets(batch.locals.len(), threads));
+                    batched.m2l(&mut self.execution, batch, width, |s| &mut s.columns)
+                }
                 None => driver::m2l(&self.kernel, &mut self.execution, batch),
             }
         }

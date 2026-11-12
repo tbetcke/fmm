@@ -41,7 +41,13 @@
 //! `DENSE_TOLERANCE` of Rotation of the same degrees and the scenario's bound of the direct
 //! sum, 2 threads, pair by pair and the one-rank FMM bit for bit; the rule's
 //! own crossover agreed alike on every rank, a named mode kept, and Auto the builder's
-//! default (every other check names Rotation, its reference). The exponential M2L
+//! default (every other check names Rotation, its reference); these with the term of the
+//! levels' V lists off (CH3.2d's rule). The term (Helmholtz CH4.0, `check_batched_term`):
+//! the levels' shapes the same on every rank and the one-rank FMM's, each level Batched
+//! exactly where its degree and its estimate of the columns per read allow, within
+//! `DENSE_TOLERANCE` of Rotation, 2 threads and the one-rank FMM bit for bit; Batched's
+//! blocks of 1, 7 and 64 targets at 1 and 2 threads the default's bits; the dense budget per
+//! rank the node budget over the ranks per node. The exponential M2L
 //! (Helmholtz CH6.1d), `PlaneWave`, on the same two scenarios: each level's precision as
 //! the rule gives it (`nd_fmm_tables::helmholtz::plane_wave::merge::select`, at the
 //! scenario's tolerance or its named degrees), the scenario's bound of the direct sum and
@@ -85,14 +91,17 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::{Communicator, CommunicatorCollectives, Equivalence};
 use nd_fmm_exec::fmm::{FmmError, SettingsError};
 use nd_fmm_exec::helmholtz::{
-    ChargeKind, Charges, DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, HelmholtzFmm,
-    HelmholtzFmmBuilder, HelmholtzFmmError, HelmholtzM2l, MIN_BUFFER_BOXES, OperatorError, Output,
-    PlaneWaveCounts, PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes,
-    Wavenumber, auto_batched_max_degree, auto_m2l_mul_add, auto_plane_wave_min_degree,
+    ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DEFAULT_DENSE_NODE_BUDGET,
+    DEFAULT_PLANE_WAVE_NODE_BUDGET, Degrees, DensityError, HelmholtzFmm, HelmholtzFmmBuilder,
+    HelmholtzFmmError, HelmholtzM2l, MIN_BUFFER_BOXES, OperatorError, Output, PlaneWaveCounts,
+    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, PlaneWaveTimes, Wavenumber,
+    auto_batched_max_degree, auto_batched_min_columns, auto_m2l_mul_add,
+    auto_plane_wave_min_degree,
 };
 use nd_fmm_exec::operator::{Isa, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
 use nd_fmm_ref::helmholtz::p2p;
+use nd_fmm_tables::helmholtz::batched::BatchedM2l;
 use nd_fmm_tables::helmholtz::classes::{ClassM2l, CubeTransforms};
 use nd_fmm_tables::helmholtz::dense::DenseM2l;
 use nd_fmm_tables::helmholtz::plane_wave::Precision;
@@ -868,6 +877,7 @@ fn check_auto(scenario: &Scenario, comm: &SimpleCommunicator) {
     let auto = builder(&split)
         .m2l(HelmholtzM2l::Auto)
         .auto_plane_wave(false)
+        .batched_term(false)
         .m2l_max_degree(crossover);
     let (fmm, output) = run(&auto, &inputs, kind, comm);
     let op = fmm.operator();
@@ -944,6 +954,164 @@ fn check_auto(scenario: &Scenario, comm: &SimpleCommunicator) {
     }
 }
 
+/// Auto's term of the levels' V lists (Helmholtz CH4.0), on the scenario's degrees with one
+/// added on levels 2 to the finest but one (as `check_auto`), the crossover above every
+/// degree and the exponential M2L off: the shapes the same on every rank and the one-rank
+/// FMM's; each level Batched exactly where its estimate of the columns per read reaches m*
+/// of its degree; within `DENSE_TOLERANCE` of Rotation, 2 threads and the one-rank FMM bit
+/// for bit. Batched on every level at named block widths, each the default width's bits at
+/// 1 and 2 threads. The dense budget per rank: the node budget over the ranks per node.
+fn check_batched_term(scenario: &Scenario, comm: &SimpleCommunicator) {
+    let start = Instant::now();
+    let rank = comm.rank();
+    let name = format!("{}: Batched's term", scenario.name);
+    let inputs = Inputs::new(scenario, 1, comm);
+    let kind = scenario.charges;
+    let (fmm, _) = run(&builder(scenario), &inputs, kind, comm);
+    let mut degrees = fmm.degrees().to_vec();
+    drop(fmm);
+    let finest = degrees.len() - 1;
+    for p in &mut degrees[2..finest] {
+        *p += 1;
+    }
+    let scenario = &Scenario {
+        degrees: Degrees::PerLevel(degrees.clone()),
+        ..scenario.clone()
+    };
+    let (_, rotation) = run(&builder(scenario), &inputs, kind, comm);
+    let auto = builder(scenario)
+        .m2l(HelmholtzM2l::Auto)
+        .auto_plane_wave(false)
+        .m2l_max_degree(usize::MAX);
+    let (fmm, output) = run(&auto, &inputs, kind, comm);
+    let shapes = fmm
+        .level_shapes()
+        .expect("the term is on by default")
+        .to_vec();
+    assert_eq!(shapes.len(), degrees.len());
+    let planes = fmm.densities().multipole_planes();
+    // The column kernel runs on the P2P kernel's ISA, the scalar one for the reference.
+    let isa = match fmm.operator().p2p_kernel() {
+        P2pChoice::Isa(isa) => isa,
+        _ => Isa::Scalar,
+    };
+    let mut on = Vec::new();
+    for (level, (shape, &p)) in shapes.iter().zip(&degrees).enumerate().skip(2) {
+        let want = if shape.batched_columns() >= auto_batched_min_columns(isa, planes, p) {
+            HelmholtzM2l::Batched
+        } else {
+            HelmholtzM2l::Rotation
+        };
+        assert_eq!(fmm.operator().m2l_on(level), want, "{name}, level {level}");
+        on.push(want);
+    }
+    // The shapes: every rank's the same, and the one-rank tree's.
+    let flat: Vec<u64> = shapes.iter().flat_map(|s| [s.pairs, s.targets]).collect();
+    let mut low = vec![0u64; flat.len()];
+    let mut high = vec![0u64; flat.len()];
+    comm.all_reduce_into(&flat[..], &mut low[..], SystemOperation::min());
+    comm.all_reduce_into(&flat[..], &mut high[..], SystemOperation::max());
+    assert_eq!(low, high, "{name}: the shapes differ between ranks");
+    let (sources, _) = union_points(&inputs.sources, comm);
+    let (targets, _) = union_points(&inputs.targets, comm);
+    let one = SimpleCommunicator::self_comm();
+    let single = auto
+        .clone()
+        .build::<f64, _>(&sources, &targets, &one)
+        .unwrap_or_else(|error| panic!("rank {rank}: the one-rank build: {error}"));
+    assert_eq!(
+        single.level_shapes(),
+        Some(&shapes[..]),
+        "{name}: not the one-rank tree's shapes"
+    );
+    drop(single);
+    check_m2l_times(&name, &fmm, comm);
+    drop(fmm);
+    let (phi, grad) = difference(&output, &rotation, comm);
+    if rank == 0 {
+        let columns: Vec<String> = shapes[2..]
+            .iter()
+            .map(|s| format!("{:.1}", s.batched_columns()))
+            .collect();
+        println!(
+            "{name} (degrees {degrees:?}; columns per read {columns:?}; levels {on:?}) against \
+             Rotation: relative L2 φ {phi:.2e}, ∇φ {grad:.2e}"
+        );
+    }
+    assert!(
+        phi <= DENSE_TOLERANCE && grad <= DENSE_TOLERANCE,
+        "{name} against Rotation: φ {phi:e}, ∇φ {grad:e}"
+    );
+    let (_, threaded) = run(&auto.clone().threads(2), &inputs, kind, comm);
+    assert_same(&format!("{name}, 2 threads"), &threaded, &output, comm);
+    check_one_rank(&name, &auto, &inputs, kind, &output, comm);
+
+    // The split: Batched on every level (no term) at the default width and at named ones.
+    let every = auto.clone().batched_term(false);
+    let (fmm, wide) = run(&every, &inputs, kind, comm);
+    assert!((2..=finest).all(|l| fmm.operator().m2l_on(l) == HelmholtzM2l::Batched));
+    assert_eq!(fmm.level_shapes(), None);
+    drop(fmm);
+    for width in [1, 7, 64] {
+        for threads in [1, 2] {
+            let (fmm, narrow) = run(
+                &every.clone().m2l_block_targets(width).threads(threads),
+                &inputs,
+                kind,
+                comm,
+            );
+            assert_eq!(fmm.operator().m2l_block_targets(), Some(width));
+            drop(fmm);
+            assert_same(
+                &format!("{name}, blocks of {width} at {threads} threads"),
+                &narrow,
+                &wide,
+                comm,
+            );
+        }
+    }
+
+    // The node budget: the default per rank, and a node budget of the finest level's tables
+    // per rank, which batches the finest level alone.
+    let fmm = auto
+        .clone()
+        .batched_term(false)
+        .dense_budget(0)
+        .build::<f64, _>(&inputs.sources, &inputs.targets, comm)
+        .unwrap_or_else(|error| panic!("rank {rank}: the build: {error}"));
+    let ranks = fmm.ranks_per_node();
+    assert_eq!(fmm.dense_budget(), 0);
+    drop(fmm);
+    let fmm = auto
+        .clone()
+        .batched_term(false)
+        .build::<f64, _>(&inputs.sources, &inputs.targets, comm)
+        .unwrap_or_else(|error| panic!("rank {rank}: the build: {error}"));
+    assert_eq!(
+        fmm.dense_budget(),
+        DEFAULT_DENSE_BUDGET.min(DEFAULT_DENSE_NODE_BUDGET / ranks),
+        "{name}: the default budget per rank"
+    );
+    drop(fmm);
+    let finest_bytes = BatchedM2l::<f64>::level_bytes(degrees[finest]);
+    let fmm = auto
+        .clone()
+        .batched_term(false)
+        .dense_node_budget(finest_bytes * ranks)
+        .build::<f64, _>(&inputs.sources, &inputs.targets, comm)
+        .unwrap_or_else(|error| panic!("rank {rank}: the build: {error}"));
+    assert_eq!(fmm.dense_budget(), finest_bytes, "{name}: the node's share");
+    assert_eq!(fmm.operator().m2l_on(finest), HelmholtzM2l::Batched);
+    assert!((2..finest).all(|l| fmm.operator().m2l_on(l) == HelmholtzM2l::Rotation));
+    drop(fmm);
+    if rank == 0 {
+        println!(
+            "{name}: {ranks} rank(s) per node; checks passed in {:.1?}",
+            start.elapsed()
+        );
+    }
+}
+
 /// Auto with the exponential M2L (Helmholtz CH6.2h, D8), on the scenario's degrees with one
 /// added on levels 2 to the finest but one (as `check_auto`), so that levels differ: with
 /// the crossover and the smallest degree named 0 it is PlaneWave bit for bit; with the
@@ -976,9 +1144,12 @@ fn check_auto_plane_wave(scenario: &Scenario, comm: &SimpleCommunicator) {
     };
     let k_root = C::new(scenario.k.0, scenario.k.1) * 0.5;
     let rule = select(k_root, &degrees, None);
+    // The levels split by degree alone: the term of the levels' V lists off (its check is
+    // `check_batched_term`).
     let auto = builder(scenario)
         .m2l(HelmholtzM2l::Auto)
-        .auto_plane_wave(true);
+        .auto_plane_wave(true)
+        .batched_term(false);
 
     // Every level the rule gives waves: PlaneWave's output.
     let (_, plane_wave) = run(
@@ -1048,6 +1219,7 @@ fn check_auto_plane_wave(scenario: &Scenario, comm: &SimpleCommunicator) {
     let today = builder(scenario)
         .m2l(HelmholtzM2l::Auto)
         .auto_plane_wave(false)
+        .batched_term(false)
         .m2l_max_degree(crossover);
     let (_, today) = run(&today, &inputs, kind, comm);
     assert_same(&format!("{name}, above every degree"), &none, &today, comm);
@@ -2124,6 +2296,7 @@ fn helmholtz_fmm() {
         check_tables(scenario, HelmholtzM2l::Classes, None, &comm);
         check_tables(scenario, HelmholtzM2l::Batched, Some(&dense), &comm);
         check_auto(scenario, &comm);
+        check_batched_term(scenario, &comm);
         check_auto_plane_wave(scenario, &comm);
         // The bounded buffer in debug builds on the clusters alone (scenario 2), whose
         // finest level with waves chunks at the floor.

@@ -105,9 +105,9 @@ use thiserror::Error;
 
 use super::{
     C_LEAF, ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DegreeError, Degrees, Densities,
-    DensityError, HelmholtzM2l, HelmholtzOperator, OperatorError, Output, PlaneWavePrecision,
-    PlaneWaveRaise, PlaneWaveSplit, Wavenumber, WavenumberKind, auto_batched_max_degree,
-    auto_plane_wave_min_degree, min_leaf_level,
+    DensityError, HelmholtzM2l, HelmholtzOperator, LevelShape, OperatorError, Output,
+    PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, Wavenumber, WavenumberKind,
+    auto_batched_max_degree, auto_plane_wave_min_degree, min_leaf_level,
 };
 use crate::fmm::{DEFAULT_MAX_POINTS_PER_LEAF, FmmError, PointSet, SettingsError};
 use crate::geometry::Domain;
@@ -124,6 +124,12 @@ const DEEPEST: usize = DEEPEST_LEVEL as usize;
 /// The default bytes per node of the exponential M2L's waves buffer, 8 GiB
 /// ([`HelmholtzFmmBuilder::plane_wave_budget`]; Helmholtz CH6.2a, signed off 2026-11-04).
 pub const DEFAULT_PLANE_WAVE_NODE_BUDGET: usize = 8 << 30;
+
+/// The default bytes per node of the dense, class and batched M2L tables, 8 GiB
+/// ([`HelmholtzFmmBuilder::dense_node_budget`]; Helmholtz CH4.0, proposal §2, constraint 7):
+/// each rank's budget is the smaller of [`HelmholtzFmmBuilder::dense_budget`] and this over
+/// the ranks per node.
+pub const DEFAULT_DENSE_NODE_BUDGET: usize = 8 << 30;
 
 /// Why a Helmholtz FMM was not built or not evaluated.
 #[derive(Debug, Error)]
@@ -175,8 +181,11 @@ pub struct HelmholtzFmmBuilder {
     block_budget: usize,
     m2l: HelmholtzM2l,
     dense_budget: usize,
+    dense_node_budget: usize,
     m2l_mul_add: Option<MulAdd>,
     m2l_max_degree: Option<usize>,
+    batched_term: bool,
+    m2l_block_targets: Option<usize>,
     auto_plane_wave: bool,
     m2l_plane_wave_min_degree: Option<usize>,
     plane_wave_precision: PlaneWavePrecision,
@@ -194,7 +203,8 @@ impl HelmholtzFmmBuilder {
     /// vector, potentials only, one thread, the domain from the points,
     /// [`DEFAULT_MAX_POINTS_PER_LEAF`] points per leaf, leaves down to level 16, the
     /// default block budget of the M2L y-blocks, M2L by the rule per level
-    /// [`HelmholtzM2l::Auto`] within [`DEFAULT_DENSE_BUDGET`], the exponential M2L's waves
+    /// [`HelmholtzM2l::Auto`] within [`DEFAULT_DENSE_BUDGET`] per rank and
+    /// [`DEFAULT_DENSE_NODE_BUDGET`] per node, the exponential M2L's waves
     /// within [`DEFAULT_PLANE_WAVE_NODE_BUDGET`] per node, the leaf width [`C_LEAF`] and the
     /// P2P kernel of [`P2pChoice::Auto`].
     pub fn new(k: Wavenumber, degrees: Degrees) -> Self {
@@ -211,8 +221,11 @@ impl HelmholtzFmmBuilder {
             block_budget: DEFAULT_BLOCK_BUDGET,
             m2l: HelmholtzM2l::Auto,
             dense_budget: DEFAULT_DENSE_BUDGET,
+            dense_node_budget: DEFAULT_DENSE_NODE_BUDGET,
             m2l_mul_add: None,
             m2l_max_degree: None,
+            batched_term: true,
+            m2l_block_targets: None,
             auto_plane_wave: true,
             m2l_plane_wave_min_degree: None,
             plane_wave_precision: PlaneWavePrecision::Rule,
@@ -299,10 +312,22 @@ impl HelmholtzFmmBuilder {
     /// The bytes of the dense M2L tables of each rank under [`HelmholtzM2l::Dense`] and
     /// [`HelmholtzM2l::Batched`] (the same tables in split planes), and of the class tables
     /// with their transforms under [`HelmholtzM2l::Classes`] (default
-    /// [`DEFAULT_DENSE_BUDGET`]): the levels that fit, from the finest level up, run the
-    /// setting, the others RCR.
+    /// [`DEFAULT_DENSE_BUDGET`]), at most the node budget's share
+    /// ([`dense_node_budget`](Self::dense_node_budget)): the levels that fit, from the finest
+    /// level up, run the setting, the others RCR.
     pub fn dense_budget(mut self, bytes: usize) -> Self {
         self.dense_budget = bytes;
+        self
+    }
+
+    /// The bytes of the tables of [`dense_budget`](Self::dense_budget) on one node (default
+    /// [`DEFAULT_DENSE_NODE_BUDGET`]; Helmholtz CH4.0, proposal §2, constraint 7): each rank
+    /// takes at most this over the largest number of ranks on one node, agreed at
+    /// [`build`](Self::build), so the levels a rank's tables cover may depend on the ranks
+    /// per node (as Laplace's node rule, Phase 5N T4); [`HelmholtzFmm::dense_budget`]
+    /// reports the budget per rank. `usize::MAX`: the per-rank budget alone.
+    pub fn dense_node_budget(mut self, bytes: usize) -> Self {
+        self.dense_node_budget = bytes;
         self
     }
 
@@ -323,6 +348,26 @@ impl HelmholtzFmmBuilder {
     /// chooses the same levels; [`HelmholtzFmm::m2l_max_degree`] reports it.
     pub fn m2l_max_degree(mut self, max_degree: usize) -> Self {
         self.m2l_max_degree = Some(max_degree);
+        self
+    }
+
+    /// Whether [`HelmholtzM2l::Auto`] reads the levels' V lists over the whole tree
+    /// (Helmholtz CH4.0; default on): Batched only on the levels whose tables its level call
+    /// would read for enough columns (`LevelShape::batched_columns` at least
+    /// `auto_batched_min_columns`, the operator module documentation, "M2L"). `false` gives
+    /// CH3.2d's rule, for the measurements. The counts are summed over the ranks at
+    /// [`build`](Self::build) (one all-reduce), so every rank chooses alike;
+    /// [`HelmholtzFmm::level_shapes`] reports them.
+    pub fn batched_term(mut self, on: bool) -> Self {
+        self.batched_term = on;
+        self
+    }
+
+    /// The width of Batched's blocks in its level call (default: by the level's boxes and
+    /// the threads, `batched_block_targets`; Helmholtz CH4.0), for the measurements and the
+    /// tests (0 is taken as 1). The output does not depend on it.
+    pub fn m2l_block_targets(mut self, targets: usize) -> Self {
+        self.m2l_block_targets = Some(targets.max(1));
         self
     }
 
@@ -607,6 +652,39 @@ impl HelmholtzFmmBuilder {
             as u64;
         let mut plane_wave_min_degree = 0u64;
         comm.all_reduce_into(&local, &mut plane_wave_min_degree, SystemOperation::min());
+        // Auto's term for Batched (Helmholtz CH4.0): each level's V pairs and boxes, each
+        // box counted by the rank that computes it, summed over the ranks.
+        let shapes = if self.batched_term {
+            let nlevels = plan.nlevels();
+            let mut local = vec![0u64; 2 * nlevels];
+            for (l, counts) in local.as_chunks_mut::<2>().0.iter_mut().enumerate() {
+                let v = plan.level(l).v();
+                for t in (0..v.nrows()).filter(|&t| plan.computes(l, t)) {
+                    counts[0] += v.row(t).0.len() as u64;
+                    counts[1] += 1;
+                }
+            }
+            let mut summed = vec![0u64; 2 * nlevels];
+            comm.all_reduce_into(&local[..], &mut summed[..], SystemOperation::sum());
+            Some(
+                summed
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| LevelShape {
+                        pairs: c[0],
+                        targets: c[1],
+                    })
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        // The dense budget of this rank: its own, at most the node's over the ranks per node
+        // (constraint 7).
+        let dense_budget = self
+            .dense_budget
+            .min(self.dense_node_budget / ranks_per_node);
         // Under `PlaneWave` the level call's buffers, for each level's boxes, own and ghost,
         // and the waves within the node budget's share of this rank.
         let level_boxes: Vec<usize> = (0..plan.index().nlevels())
@@ -636,7 +714,9 @@ impl HelmholtzFmmBuilder {
         .with_plane_wave_reach(self.plane_wave_reach)
         .with_plane_wave_split(self.plane_wave_split)
         .with_plane_wave_raise(self.plane_wave_raise)
-        .with_m2l(self.m2l, self.dense_budget)
+        .with_level_shapes(shapes)
+        .with_m2l_block_targets(self.m2l_block_targets)
+        .with_m2l(self.m2l, dense_budget)
         .with_plane_wave_boxes(&level_boxes)
         .with_plane_wave_buffer(
             (self.plane_wave_budget != usize::MAX).then(|| self.plane_wave_budget / ranks_per_node),
@@ -958,6 +1038,21 @@ where
     /// [`P2pChoice::Auto`].
     pub fn p2p_kernel(&self) -> P2pChoice {
         self.operator().p2p_kernel()
+    }
+
+    /// The levels' V lists over the whole tree that [`HelmholtzM2l::Auto`]'s term reads
+    /// ([`HelmholtzFmmBuilder::batched_term`]; Helmholtz CH4.0), one per level, the same on
+    /// every rank; `None` with the term off.
+    pub fn level_shapes(&self) -> Option<&[LevelShape]> {
+        self.operator().level_shapes()
+    }
+
+    /// The bytes of the dense, class or batched M2L tables this rank may hold: the builder's
+    /// [`dense_budget`](HelmholtzFmmBuilder::dense_budget), at most the
+    /// [`dense_node_budget`](HelmholtzFmmBuilder::dense_node_budget) over the ranks per node
+    /// (Helmholtz CH4.0).
+    pub fn dense_budget(&self) -> usize {
+        self.operator().dense_budget()
     }
 
     /// The agreed crossover degree under [`HelmholtzM2l::Auto`]
