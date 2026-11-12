@@ -136,8 +136,8 @@ impl TransferF64 {
     pub fn eval_mu(&self, mu: f64) -> Complex<f64> {
         let (mut p0, mut p1) = (1.0, mu);
         let mut acc = self.coeffs[0];
-        for l in 1..self.coeffs.len() {
-            acc += self.coeffs[l] * p1;
+        for (l, &c) in self.coeffs.iter().enumerate().skip(1) {
+            acc += c * p1;
             let p2 = ((2 * l + 1) as f64 * mu * p1 - l as f64 * p0) / (l + 1) as f64;
             p0 = p1;
             p1 = p2;

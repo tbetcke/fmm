@@ -197,10 +197,10 @@ impl Tables {
     /// If a file cannot be read or parsed, or a domain's counts do not match its nodes.
     pub fn load(dir: &Path) -> Self {
         let mut tables = Tables::default();
-        for p in 0..PRECISIONS {
+        for (p, precision) in tables.precisions.iter_mut().enumerate() {
             let path = dir.join(format!("hwts_3d_iprec{p}.txt"));
             if let Ok(text) = std::fs::read_to_string(&path) {
-                tables.precisions[p] = parse_weights(&text);
+                *precision = parse_weights(&text);
             }
         }
         let read = |name: &str| {

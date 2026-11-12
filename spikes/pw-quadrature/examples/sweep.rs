@@ -14,7 +14,7 @@
 //!   pruned (proposal §5.5 with θ_D = 1).
 
 use nd_fmm_spike_pw_quadrature::C;
-use nd_fmm_spike_pw_quadrature::fmm3d::{self, DOMAINS, NX, NY, PRECISIONS, Tables};
+use nd_fmm_spike_pw_quadrature::fmm3d::{self, DOMAINS, NX, NY, Tables};
 use nd_fmm_spike_pw_quadrature::generator;
 use nd_fmm_spike_pw_quadrature::quadrature::Quadrature;
 use nd_fmm_spike_pw_quadrature::region::{Grid, Pairs};
@@ -87,11 +87,11 @@ fn domains(tables: &Tables) -> String {
          Absolute errors are in box widths (G = e^{{iκ|u|}}/|u|).\n"
     )
     .unwrap();
-    for p in 0..PRECISIONS {
+    for (p, precision) in tables.precisions.iter().enumerate() {
         let rows: Vec<(usize, DomainRow)> = (1..=DOMAINS)
             .into_par_iter()
             .map(|d| {
-                let dom = &tables.precisions[p][&d];
+                let dom = &precision[&d];
                 let mut row = DomainRow {
                     stated: dom.stated_error,
                     nodes: dom.len(),

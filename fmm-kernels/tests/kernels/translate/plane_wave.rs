@@ -377,8 +377,9 @@ fn gather_on_host<T: Real>(lists: &Lists, accumulators: &[T], shifts: &[T], wlen
     let mut out = vec![t::<T>(0.0); count * wlen];
     for g in 0..count {
         let v = &mut out[g * wlen..(g + 1) * wlen];
-        for e in lists.gather_offsets[g] as usize..lists.gather_offsets[g + 1] as usize {
-            let a = lists.gather_entries[e] as usize;
+        let entries = lists.gather_offsets[g] as usize..lists.gather_offsets[g + 1] as usize;
+        for &a in &lists.gather_entries[entries] {
+            let a = a as usize;
             add(v, &accumulators[a * wlen..(a + 1) * wlen]);
         }
         let c = lists.gather_shifts[g] as usize;

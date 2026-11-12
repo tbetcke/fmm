@@ -8,9 +8,9 @@ use std::path::Path;
 fn every_domain_and_precision() {
     let dir = std::env::var("FMM3D_HELMHOLTZ").expect("FMM3D_HELMHOLTZ");
     let t = Tables::load(Path::new(&dir));
-    for p in 0..fmm3d::PRECISIONS {
-        assert_eq!(t.precisions[p].len(), fmm3d::DOMAINS, "iprec {p}");
-        for (&d, dom) in &t.precisions[p] {
+    for (p, precision) in t.precisions.iter().enumerate() {
+        assert_eq!(precision.len(), fmm3d::DOMAINS, "iprec {p}");
+        for (&d, dom) in precision {
             let (lo, hi) = fmm3d::rectangle(d);
             assert!(
                 (dom.rk0 - lo).norm() <= 1e-14 * hi.norm()
