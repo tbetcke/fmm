@@ -118,6 +118,22 @@ fixtures, the one-rank run), with the tolerance or bit identity, threads and ran
 <filled when they arise>
 ```
 
+Two rules for "Tests that prove it" and "Machine runs" (from the H6 gate,
+`docs/helmholtz/gates/H6.md` §7):
+- **A wider scope widens the verification set.** If the task lifts a bound, widens a default
+  or moves a rule's range (a tolerance, a degree, a κ limit, a machine class), list the cases
+  that earlier sign-offs or reports left out for the old scope ("left to Rotation", "not
+  run", "excluded"; search the progress entries and reports of the tasks it builds on), and
+  put them in the plan's runs, or record why each is not needed. CH6.1e's sign-off left the
+  large cases out at 10⁻⁸ because Rotation ran there; CH6.1g and CH6.1h put waves there and
+  did not bring them back, and the gate had to.
+- **Pair evidence and FMM evidence, both.** A numerical rule (a quadrature, a precision, a
+  degree, a count or a reach) changes only on both measures: the worst case per pair or per
+  domain over everything the rule covers, and the FMM's errors on the cases. A study on one
+  measure may recommend; the other confirms before the PR asks to adopt it. CH6.1f's pair
+  chain recommended iprec 2 at 10⁻⁷ and the FMM refuted it (CH6.1g); CH6.2e's FMM held at
+  reach 4.5 and the worst pair refuted it (CH6.2g).
+
 Stop and ask, with the plan, before going on if the plan:
 - changes code on Laplace's paths (constraint 1 of proposal §2: the host drivers, tables and
   layouts, `nd-fmm-simd`, `nd-fmm-kernels`' Laplace kernels, `nd-octree`, `nd-fmm-plan`) or a
@@ -171,14 +187,22 @@ rules of root `CLAUDE.md`. Fix what blocks; list the rest in the PR text.
 ## 8. Record
 
 On the branch:
-- tick the task in `docs/helmholtz/roadmap.md`, adding the report's path;
-- update the roadmap's status line: the date, the task just done, what comes next;
+- tick the task in `docs/helmholtz/roadmap.md`, adding the report's path, and cut its line to
+  two or three lines: the result, the report or record, the sign-offs in the user's words.
+  The plan's detail lives in the record, the history in the progress entry; a ticked line
+  is not a log (the H6 gate condensed H3's and H6's);
+- rewrite the roadmap's status line to the current state, one short paragraph: the date,
+  the milestones closed, the task just done, what comes next. Rewrite it, do not append;
 - give every follow-up that a sign-off or the work creates ("a follow-up before H4", "left
   to CH4.3") a roadmap line in the same PR: a new task with *Done when* and *Needs*, or a
   sentence in the task it belongs to. The progress entry's follow-ups name that line;
 - append to `docs/helmholtz/progress.md`, using its template;
 - where the work shows the proposal wrong, do not edit it silently: put the correction in
-  the PR as a question for sign-off.
+  the PR as a question for sign-off;
+- when a signed-off answer amends the proposal, edit it in the same PR with an inline
+  "(amended at <ID>)" and a line in its Appendix A: "Amended at <ID>, <YYYY-MM-DD>", the
+  report, the PR and the user's words, and the sections changed. CH0.4, CH6.2h, CH6.1g and
+  CH6.1h amended it inline only, and the H6 gate added their lines.
 
 Commit as `Helmholtz <ID>: roadmap and progress`.
 

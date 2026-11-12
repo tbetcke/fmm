@@ -20,13 +20,21 @@ runs" add to what follows.
 cargo fmt --all -- --check
 cargo clippy -- -D warnings
 cargo clippy --examples -- -D warnings
-RUST_MIN_STACK=8388608 cargo test
 cargo doc --no-deps
 cargo clippy --workspace --all-targets -- -D warnings
+export CARGO_PROFILE_DEV_OPT_LEVEL=1 CARGO_TARGET_DIR=target/opt1   # the tests as CI runs them
+RUST_MIN_STACK=8388608 cargo test
 RUST_MIN_STACK=8388608 cargo test --workspace
 ```
 
-The tests of MPI crates need a working MPI.
+The tests run at opt-level 1, in a target directory of their own so that the opt-level 0
+build of Clippy and the docs is kept (root `CLAUDE.md`, "Checks"; since the H6 gate). The
+dev profile's debug assertions and overflow checks stay on and no float result changes, so
+every test means what it does at opt-level 0, 2–20 times faster: at opt-level 0
+`helmholtz_fmm`'s one-rank run had grown to 715 s on a loaded M6 by CH6.1h (CI: 54 s and
+103 s at 2 and 4 ranks). The MPI script below takes the same two variables. The opt-level 0
+run is kept only for the debug-time check of section 3. The tests of MPI crates need a
+working MPI.
 
 ## 3. By what changed
 
@@ -38,11 +46,14 @@ The tests of MPI crates need a working MPI.
 - **nd-fmm-kernels**: the commands of root `CLAUDE.md` (Clippy with `cpu,metal`, the CUDA
   check, the CPU-runtime tests; the Metal tests by hand outside the sandbox; CUDA on locust).
 - **nd-octree, nd-fmm-plan, nd-fmm-exec, or code they call**:
-  `.github/scripts/run-mpi-tests.sh build <list>`, then `run <list> 2 4`, on macOS with
+  `.github/scripts/run-mpi-tests.sh build <list>`, then `run <list> 2 4`, with section 2's
+  `CARGO_PROFILE_DEV_OPT_LEVEL=1` and `CARGO_TARGET_DIR` (as CI's `run-tests-mpi`), on macOS with
   `MPIRUN_FLAGS="--mca btl_tcp_if_include lo0 --mca oob_tcp_if_include lo0"`, under an
   external timeout. For distributed changes also 8 ranks by hand.
 - **Debug test time**: for each test executable the change adds to, time its one-rank
-  debug run and report it beside the figure the crate's `CLAUDE.md` records. Flag a run
+  debug run at opt-level 0 (unset `CARGO_PROFILE_DEV_OPT_LEVEL`, the default target
+  directory: the tests' `cfg!(debug_assertions)` budgets are set there) and report it
+  beside the figure the crate's `CLAUDE.md` records, with the machine's load. Flag a run
   above the crate's budget (nd-fmm-exec: the debug run under a minute) or one that grew
   by more than about 20 %.
 - **Spikes**: their own tests (they are not default members), reported apart.

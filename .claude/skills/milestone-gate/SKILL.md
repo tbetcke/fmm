@@ -28,6 +28,13 @@ The one named, else the first whose tasks are all ticked on `main` while its gat
   (the "Laplace" line of each progress entry).
 - Measured numbers set against the proposal's expectations (for example §7's memory model,
   §3.5's p tables), and the corrections they imply.
+- The defaults as they stand at the gate, on the cases they now cover: for every case a
+  sign-off or report left out under an earlier scope ("left to Rotation", "not run"), check
+  that a later task ran it once a default reached it. If none did, run it on the gate branch
+  before closing, or ask (the H6 gate's §2 and §8: Kathleen job 633000).
+- Every inline "amended at <ID>" of the proposal has its Appendix A line.
+- `main`'s CI jobs over the milestone: failures, cancellations (the cause from the job's
+  log) and each job's time against its `timeout-minutes`.
 
 ## 3. The report
 
@@ -42,7 +49,12 @@ to change in `/next-task`, `/verify` or the roadmap).
 Ask the user to sign off the gate and the proposed corrections. On their answer, on the
 branch `tbetcke/h-<milestone>-gate`: tick the gate line; record the sign-offs in the
 decision table in the user's words; apply the signed-off corrections to the proposal with a
-line in its Appendix A; update the roadmap's status line; append a progress entry. Commit as
+line in its Appendix A; rewrite the roadmap's status line to the current state; condense the
+milestone's ticked lines to two or three lines each (the result, the report or record, the
+sign-offs), with a note naming the commit that holds them in full (`git show
+<sha>:docs/helmholtz/roadmap.md`), and check that `tools/roadmap/sync_issues.py` still parses
+the roadmap; if the milestone finishes the priority list, propose the next one; append a
+progress entry. Commit as
 `Helmholtz <milestone>: gate`, push, and open the PR, its text ending with `Part of #<n>`,
 the milestone's issue (`python3 tools/roadmap/sync_issues.py --issue-of <milestone>`); the
 issue closes when the PR is merged (tools/roadmap/README.md).
