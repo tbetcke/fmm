@@ -334,7 +334,9 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   `with_m2l_block_targets` and the builder's `m2l_block_targets`), the pair chain bit for bit
   at every width. The dense budget per rank is min(`dense_budget`, `dense_node_budget` /
   ranks per node) (`DEFAULT_DENSE_NODE_BUDGET` 8 GiB; `HelmholtzFmm::dense_budget`), so the
-  levels a rank batches depend on the ranks per node, as for Laplace's node rule.
+  levels a rank batches depend on the ranks per node, as for Laplace's node rule (8 GiB signed
+  off on #211; each rank holds its own copy, shared by its threads, so the documented advice is
+  a few ranks per node with threads; one copy per node is CH8.0).
   `tests/helmholtz/dense.rs` checks the term level by level (a sparse level Rotation's bits,
   dense ones Batched's, either order of the calls, `None` CH3.2d's choice, a named m* table),
   m̂ on hand shapes, m*'s order and the widths; `check_batched_term` in

@@ -165,7 +165,15 @@ Kathleen jobs 633057, 633065, 633066 and 633071.
   all-reduce max), no test that the term's Rotation branch ran (added), the library's default
   not run end to end with the term (added).
 
-## Open questions
+## Answers
+
+Signed off by the user on #211, 2026-11-12: question 1 "I agree to your recommendation" (8 GiB;
+the advice of a few ranks per node with threads documented on `dense_node_budget`), and a task
+for one copy of the tables per node added (CH8.0, H8); question 2 "Q2 as recommended" (CH4.0
+done, CH4.0f off the priority list); question 3 "yes to Q3" (proposal §6.4 amended, its
+Appendix A line).
+
+## Open questions (answered above)
 
 For sign-off in the PR:
 1. The default node budget of the dense tables, `DEFAULT_DENSE_NODE_BUDGET` = 8 GiB (the

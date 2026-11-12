@@ -56,10 +56,12 @@ one rank, f64, BLAS threads 1. Times are indicative (§9); nothing here is timed
   cases). Narrower blocks read each table for fewer columns; a split across the matrix's rows
   would keep them, and needs a rectangular entry point in `nd-fmm-simd`'s column kernel, a
   Laplace path (constraint 1): proposed as CH4.0f (§8). Whether CH4.0 counts as done with this
-  residual left to CH4.0f is question 2 of the PR.
+  residual left to CH4.0f was question 2 of the PR: CH4.0 done, CH4.0f off the priority list
+  (the user, 2026-11-12, on #211, "Q2 as recommended").
 - **The node budget** (§6). Each rank's dense budget is min(`dense_budget`,
   `dense_node_budget` / ranks per node), `DEFAULT_DENSE_NODE_BUDGET` 8 GiB (the waves' node
-  budget); one rank per node is unchanged (1 GiB). Question 1 of the PR.
+  budget); one rank per node is unchanged (1 GiB). Signed off (the user, 2026-11-12, on #211, question 1): 8 GiB,
+  with a few ranks per node and threads per rank the advice.
 - **Accuracy** (§7): the term moves levels between Batched and Rotation, which agree to
   rounding; every error of the default is the previous default's to three digits, and the
   one-thread runs' are Rotation's (1.000).
@@ -279,6 +281,13 @@ the ranks per node, so the one-rank reference of a multi-rank run names the budg
 resolved (`check_batched_term`: the default per rank, and a node budget of the finest level's
 tables per rank, which batches the finest level alone, at 1, 2 and 4 ranks). No timing.
 
+Signed off (the user, 2026-11-12, on #211, question 1): 8 GiB stays the default. The budget binds only above 8 ranks
+per node, and a level it leaves out runs Rotation (no failure). Each rank holds its own copy of
+the tables and its threads share it, so the advice is a few ranks per node with threads per
+rank (4 × 10 on a Kathleen node keeps 1 GiB per rank; node-m2l.md §7 measured the same for
+Laplace's Dense). One copy per node, through an MPI shared window, is CH8.0 on the roadmap:
+Laplace has none either (Phase 5N's spike, node-m2l.md §2.6, and its decision 6).
+
 ## 7. Accuracy and determinism
 
 - The term moves a level between Batched and Rotation, which agree to rounding (CH3.2c);
@@ -300,7 +309,8 @@ tables per rank, which batches the finest level alone, at 1, 2 and 4 ranks). No 
   for a row slice of the n × n table (`nd_fmm_simd::MatrixKernel::accumulate_columns` takes
   square column-major tables), a change to `nd-fmm-simd`, which Laplace runs (constraint 1:
   bit for bit and D9). Gain: at most 1–2 ms per level at 40–72 threads on these cases. Added to
-  the roadmap after CH4.0e, off the priority list until the user places it (question 2).
+  the roadmap after CH4.0e, off the priority list (the user, 2026-11-12, on #211, question 2).
+- **CH8.0, one copy of the tables per node** (§6; the user, 2026-11-12, on #211): added to the roadmap's H8.
 - **m* for the scalar kernel and AVX2 with one plane's crossover**: unmeasured end to end;
   with the first need.
 

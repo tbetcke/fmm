@@ -12,7 +12,8 @@ Status (2026-11-12): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11
 (CH3.6); `Auto` takes the exponential M2L on the low-frequency levels at every ε ≥ 10⁻⁸ (D8).
 CH4.0, the first task of the H4 list, adds `Auto`'s term for Batched from the global tree
 (CH3.2d's sweeps within 1.049 of the per-level best on the three machines), Batched's split
-by the threads and the dense budget per node; its residual at 40–72 threads is CH4.0f. HR, H0,
+by the threads and the dense budget per node (signed off on #211); its residual at 40–72
+threads is CH4.0f, off the list. HR, H0,
 H1 and H2 are still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: the
 priority list for H4 below, from CH4.0b. The history of this line until H6.G is in
 `progress.md` and in this file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
@@ -72,7 +73,7 @@ recommendations): CH4.0e and CHA.1 to CHA.3 before CH1.3d.
 8. CH4.1, CH4.2, CH4.3, CH4.4, CH4.5
 9. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
 
-Off the list, in file order: CH0.8b, CH0.5 and H0.G; HR.G; H1.G; CH2.1, CH2.2, CH2.3, CH2.5
+Off the list, in file order: CH0.8b, CH0.5 and H0.G; CH4.0f (the user, 2026-11-12, on #211); HR.G; H1.G; CH2.1, CH2.2, CH2.3, CH2.5
 and H2.G; H5, H7 (CH7.5d now has D8 and waits for CH7.1; CH7.5f before CH7.5e), H8, H9 (CH9.1,
 after every other milestone); CHA.4 to CHA.10 (CHA.7 before CH8.1, through its *Needs*;
 CHA.6 recommended before CH7.5d).
@@ -481,7 +482,9 @@ task's full line is in its record or report and its progress entry
   the ranks); Batched's blocks split by the threads (no bit changes); the dense budget per node
   (8 GiB). CH3.2d's sweeps within 1.049 of the per-level best on the three machines (its miss
   1.196 → 1.000); at 40–72 threads the evaluation 0.36–1.07× the previous default's, levels of
-  64–5,000 boxes still behind Rotation (CH4.0f). Sign-offs: the PR's questions. *Needs:* CH3.2d.
+  64–5,000 boxes still behind Rotation (CH4.0f). Signed off (the user, 2026-11-12, on #211): the node budget 8 GiB, a few
+  ranks per node with threads the advice (CH8.0 added); done with its residual left to CH4.0f,
+  off the priority list; proposal §6.4 amended. *Needs:* CH3.2d.
 - [ ] **CH4.0b The worst-box concentration.** Added on 2026-11-02 at the H3 gate (question
   4a; CH3.6's sign-off 1, "a follow-up before H4"): on W1 at 10⁻⁶ and 10⁻⁸ CH3.6's worst
   box was up to 146× the all-target ℓ2 error (FMM3D 37×), pointwise up to 57 ε, in boxes
@@ -743,6 +746,29 @@ task's full line is in its record or report and its progress entry
 
 **Gate:** Kathleen scaling at kD of a few hundred, rank-invariant.
 
+- [ ] **CH8.0 One copy of the M2L tables per node.** Added on 2026-11-12 at CH4.0 (question 1
+  of #211; the user: "With regards to a shared table per node can you add a task to the roadmap
+  to do this?"). Every rank builds and holds its own copy of the tables that are the same on
+  every rank: Helmholtz's dense, class and Batched tables per level, and Laplace's dense
+  tables. Since CH4.0 Helmholtz's share a node budget (8 GiB), so at 40 ranks per node a rank
+  holds 205 MB and the levels beyond it run Rotation; threads per rank are today's remedy
+  (node-m2l.md §7). Laplace has no shared copy either: Phase 5N's spike measured one in an
+  `MPI_Win_allocate_shared` window (node-m2l.md §2.6: Dense's per-pair cost 2.4–5.8× below
+  private copies at one rank per core, about what 4 × 10 threads gives), and its decision 6
+  left it out ("no shared window in this phase", to revisit in Phase 5S, which did not).
+  - One rank per node (`split_shared`) builds the tables into a node window, the others read
+    them after a barrier; the node budget then counts one copy per node, not one per rank.
+  - The FFI through `mpi-sys` (rsmpi 0.8.2 has no window API; the user's permission of
+    2026-10-10): the crate and module that hold it named, every public function safe, a
+    `// SAFETY:` comment on every block, root CLAUDE.md's `unsafe` rule amended in the same PR.
+  - Laplace's tables in the same window behind an option, its default and outputs unchanged
+    (constraint 1), or left out with the reason.
+  *Done when:* the outputs bit for bit the private tables' at 1, 2 and 4 ranks (CI) and at
+  40 ranks per node on Kathleen; the resident memory per node at 40 × 1, 10 × 4 and 1 × 40
+  against private copies; the evaluation at 40 × 1 against 4 × 10 and 1 × 40 on W1 at
+  kD = 100 and 500 at 10⁻⁶, where the node budget now sends levels to Rotation; a default
+  proposed (the window on or off, the node budget with it). *Needs:* CH4.0. *Machines:*
+  Kathleen, locust. *Sign-off:* the `unsafe` exception and the default.
 - [ ] **CH8.1 Byte cap for the replicated top; exchange of the high-frequency levels.**
   *Done when:* bit for bit the one-rank output on P ranks; memory per rank and per node
   bounded. *Needs:* CH4.4, CHA.7. *Machines:* Kathleen.

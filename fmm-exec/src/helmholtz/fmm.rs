@@ -329,7 +329,10 @@ impl HelmholtzFmmBuilder {
     /// takes at most this over the largest number of ranks on one node, agreed at
     /// [`build`](Self::build), so the levels a rank's tables cover may depend on the ranks
     /// per node (as Laplace's node rule, Phase 5N T4); [`HelmholtzFmm::dense_budget`]
-    /// reports the budget per rank. `usize::MAX`: the per-rank budget alone.
+    /// reports the budget per rank. `usize::MAX`: the per-rank budget alone. Every rank holds
+    /// its own copy of the tables, which its threads share: on a node of many cores, run a
+    /// few ranks with threads each (on a 40-core node 4 × 10 keeps 1 GiB per rank under the
+    /// default, where 40 × 1 leaves 205 MB a rank).
     pub fn dense_node_budget(mut self, bytes: usize) -> Self {
         self.dense_node_budget = bytes;
         self

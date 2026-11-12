@@ -2882,7 +2882,13 @@ request, using this template:
   Nothing pending.
 - Decisions: questions for sign-off in the PR: (1) the default node budget, 8 GiB; (2) CH4.0
   done with its residual at 40–72 threads left to CH4.0f, and CH4.0f's place in the list; (3)
-  proposal §6.4 amended for the term and the split.
+  proposal §6.4 amended for the term and the split. Signed off (the user, 2026-11-12, on #211): (1) "I agree to your
+  recommendation", 8 GiB, with a few ranks per node and threads per rank the documented advice;
+  (2) "Q2 as recommended", CH4.0 done and CH4.0f off the priority list; (3) "yes to Q3",
+  proposal §6.4 and its Appendix A line amended on the PR.
 - Laplace: not touched (the Helmholtz operator, builder and batched level call; tests,
   harness, tools; `driver.rs` used, not changed).
-- Follow-ups: CH4.0f (roadmap, after CH4.0e), Batched's split across the matrix's rows.
+- Follow-ups: CH4.0f (roadmap, after CH4.0e), Batched's split across the matrix's rows; CH8.0
+  (roadmap, H8; the user, on #211), one copy of the M2L tables per node in an MPI shared window.
+  Laplace has no shared tables either: Phase 5N spiked one (node-m2l.md §2.6) and its decision 6
+  left it out, to revisit in Phase 5S, which did not take it up.
