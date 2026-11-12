@@ -43,6 +43,10 @@ history of this line until H6.G is in `progress.md` and in this file's history
 - *Machines* names the machines its runs need besides the development Mac (the M6 since
   2026-10-31, the M3 Max before). *Sign-off* marks a task whose PR ends with questions for
   the user; the tasks that need it wait for the answer.
+- "Review <date>, <finding>" cites a finding of a project review in `docs/reviews/`
+  (`docs/reviews/2026-11-12-H6.md`: M5, A2, L1, …). The architecture tasks that come out of a
+  review are the section "HA" at the end of this file, with IDs CHA.<n>; it is not a
+  milestone, has no gate and no issue, so a CHA task's PR has no `Part of` line.
 
 ## Priority list: the path to H4
 
@@ -59,14 +63,20 @@ also needs.
 4. CH4.0d The Helmholtz leaf size (added on 2026-11-12, the user: "After CH4.0c
    (Recommended)"; it changes the trees that CH4.0's rule and CH4.4's and CH4.5's timings
    run on)
-5. CH1.3d The diagonal form in extended precision (CONVENTIONS §3.15 "Signatures", CH4.2's
+5. CH4.0e The comparison under the default, and H4's expected gain (proposed on 2026-11-12
+   by the review's triage, `docs/reviews/2026-11-12-H6.md` §3, A1 and B2; pending the user's
+   sign-off, question 1 of its pull request)
+6. CHA.1, CHA.2, CHA.3 The spikes out of the workspace, `unsafe` enforced, the superseded
+   configuration removed (proposed with CH4.0e; question 3)
+7. CH1.3d The diagonal form in extended precision (CONVENTIONS §3.15 "Signatures", CH4.2's
    trusted path)
-6. CH4.1, CH4.2, CH4.3, CH4.4, CH4.5
-7. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
+8. CH4.1, CH4.2, CH4.3, CH4.4, CH4.5
+9. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
 
 Off the list, in file order: CH0.8b, CH0.5 and H0.G; HR.G; H1.G; CH2.1, CH2.2, CH2.3, CH2.5
 and H2.G; H5, H7 (CH7.5d now has D8 and waits for CH7.1; CH7.5f before CH7.5e), H8, H9 (CH9.1,
-after every other milestone).
+after every other milestone); CHA.4 to CHA.10 (CHA.6 before CH7.5d and CHA.7 before CH8.1,
+through their *Needs*).
 
 ## Decisions
 
@@ -269,7 +279,12 @@ family, checked against FMM3D's fixtures.
   chain of §5.4 on the signatures CH0.6 fixes, its transfer functions in extended
   precision, as the reference of CH4.x; it writes CONVENTIONS §3.15 "Signatures" as S6's
   report proposes (its question 5). *Done when:* against CH1.3c's RCR on the same
-  class within the bound E of §3.6. *Needs:* CH0.6, CH1.3c.
+  class within the bound E of §3.6. Also (review 2026-11-12, M1, M3, M4), in the same
+  revision of §3.15: the stored expansions as CH3.1a built them (the level units r_l φ̃ and
+  k̂_l = k r_l, the factor 4πik̂_l, the ½ of the L2L tables, P2L's charge scale), CH3.1a's
+  deferred question 2; whether the "Exponential M2L" subsection stays unversioned inside a
+  versioned section; and F_k' stated in one convention with §3.14's. Proposed in the PR
+  description first, as every change to CONVENTIONS. *Needs:* CH0.6, CH1.3c.
 - [ ] **H1.G Gate.** `/milestone-gate H1`. *Needs:* every task above.
 
 ## H2: Yukawa on the host
@@ -431,7 +446,8 @@ task's full line is in its record or report and its progress entry
   (§2, §4, §5). 0.24–0.61× Rotation's M2L at 10⁻⁶; level 2 slow at 1 × 40 (CH6.2f).
 - [x] **CH6.2d Beside FMM3D's exponential M2L.** Report:
   `fmm-validate/results/helmholtz-ch6-2d.md`. Per level FMM3D's over ours 0.44/0.89/1.11 at
-  10⁻⁶ on Kathleen; W1 at kD = 500 22.4 s against 61.6 and 43.2 s.
+  10⁻⁶ on Kathleen; W1 at kD = 500 22.4 s, our evaluation with the build (10–15 s, H6 §8)
+  apart, against 61.6 and 43.2 s for FMM3D's whole call (review 2026-11-12, B1).
 - [x] **CH6.2e The counts' corner.** Report: `fmm-validate/results/helmholtz-ch6-2e.md`. The FMM
   held at reach 4.5; its adoption signed off 2026-11-07 and withdrawn by CH6.2g.
 - [x] **CH6.2g The counts' reach adopted.** Report: `fmm-validate/results/helmholtz-ch6-2g.md`.
@@ -483,14 +499,23 @@ task's full line is in its record or report and its progress entry
   where the sphere touches its bounding cube. Before the diagonal form adds a second source
   of error, on all-RCR trees. *Done when:* the cause located (level, list, operator or
   placement) with the box measure of proposal §9.1; whether a pointwise criterion joins
-  §9.1's ℓ2 proposed. *Needs:* CH3.6. *Machines:* Kathleen. *Sign-off:* the criterion.
+  §9.1's ℓ2 proposed. Also (review 2026-11-12, M5 and A3): every calibration and gate so
+  far has random charges in [−1, 1], whose near field dominates the norms. A smooth density
+  on W1 (q = e^{ik d·x}, the trace of a plane wave; a constant density at low kD), at 10⁻³,
+  10⁻⁶ and 10⁻⁸ under the default and on all-RCR, in ℓ2 and per box against the sampled
+  direct sum: within ε, or the degrees (the plateau, p_w at 10⁻⁶ on the exponential M2L)
+  that such a density needs, before CH4.3 calibrates on this rule. *Needs:* CH3.6.
+  *Machines:* Kathleen. *Sign-off:* the criterion; the charge model of the gates.
 - [ ] **CH4.0c The degree rule beyond its measured range.** Added on 2026-11-02 at the H3
   gate (question 4b; CH3.3's sign-off 2): the high-frequency branch is measured to x = 65
   and checked at x = 108 only, and falls below S7's per-pair p* above that at ε ≤ 10⁻⁷.
   W1 at kD ≈ 1000 and 10⁻⁸ on all-RCR against the sampled direct sum; and proposal §9
   item 8's under-resolved W3 (N = 10⁶ at kD = 200 and 500), the FMM run H3 did not make.
   *Done when:* within ε, or the rule corrected or S7's degrees named per level above its
-  range. *Needs:* CH3.6. *Machines:* Kathleen.
+  range. Also (review 2026-11-12, M6, M7): the range of ε the rule is measured on (D1's
+  10⁻³ to 10⁻⁸) stated where the rule is documented, in place of CH3.3's 10⁻¹⁸ to 10⁻¹; it
+  stays before CH4.1, as CH4.4 runs at kD = 1000 on a second new source of error.
+  *Needs:* CH3.6. *Machines:* Kathleen.
 - [ ] **CH4.0d The Helmholtz leaf size.** Added on 2026-11-12 after the H6 gate (the user:
   "Can you add leaf size tuning to the roadmap?"). `HelmholtzFmmBuilder` refines to a fixed
   `DEFAULT_MAX_POINTS_PER_LEAF` = 64 points per leaf. That is Laplace's base value without
@@ -508,6 +533,11 @@ task's full line is in its record or report and its progress entry
     and W1 at kD = 500 and W3 at kD = 100.
   - The leaf size's effect on the degrees and the near field's share recorded, with the
     leaf rule's forced levels named where c_leaf binds before the points do.
+  - Proposed (review 2026-11-12, A2; question 2 of its pull request, as it reopens D11):
+    c_leaf swept as well, from 1 to 2, on the cases where it binds. On W1 at kD = 500 every
+    leaf is forced to level 7 at about 27 points, so the sweep of the points alone cannot
+    change that tree. The errors still within ε and CH3.4b's contract range checked at
+    each c_leaf.
   *Done when:* a default leaf size by ε (or p), the machine class and the multipole planes,
   proposed for sign-off with its gain per case, as T11 did for Laplace. Inputs that do not
   depend on the data (constraint 9). The errors within ε, at most CH3.4b's contract range
@@ -515,6 +545,23 @@ task's full line is in its record or report and its progress entry
   Laplace's defaults unchanged (the Helmholtz builder only). Or the report shows that 64
   stays best, and why `fastker`'s leaves do not carry over. *Needs:* CH6.2h, CH3.4c.
   *Machines:* Kathleen, locust (the M6 with the user's go-ahead). *Sign-off:* the default.
+- [ ] **CH4.0e The comparison under the default, and H4's expected gain.** Proposed on
+  2026-11-12 by the review's triage (`docs/reviews/2026-11-12-H6.md`, A1, B2, B5). CH3.6 is
+  the only matrix with both codes at the same settings, and it is from before `Auto`, D8
+  and the raised degree; the figures since are estimates across rank × thread splits. And
+  the levels H4 can change are 35–40 % of W1's evaluation at kD = 500 and 10⁻⁶, about 20 %
+  at 10⁻⁷ and 10⁻⁸, and about nothing at kD ≤ 100.
+  - CH3.6's matrix again under the defaults as they stand after CH4.0d, beside `hfmm3d`
+    (`default` and `fastker`), each code on the whole node at its best split, repeated; the
+    build and the evaluation apart for ours, the whole call beside FMM3D's, at the same
+    requested ε and at matched accuracy.
+  - From the measured per-level times and S6's ratios (RCR over the diagonal pair), a
+    bounded estimate of H4's gain per kD and ε, and what remains to FMM3D after it.
+  - Kathleen against locust per level on W1 at kD = 500 (3.3–5.4× at a core ratio of 1.8),
+    explained in a sentence or measured.
+  *Done when:* the tables on Kathleen and locust; the estimate; the order of H4's tasks
+  confirmed or changed. *Needs:* CH4.0d. *Machines:* Kathleen, locust. *Sign-off:* H4's
+  go-ahead and order.
 - [ ] **CH4.1 S → F and F → R by the transform as a product.** Per-box aligned signature
   buffers; source signatures kept per level call, target accumulators chunked under the node
   budget. *Done when:* round trips to the grid's bandwidth; bits independent of the chunk
@@ -530,7 +577,9 @@ task's full line is in its record or report and its progress entry
   the FMM-weighted norm of CH1.3c, against the per-pair bound's factor
   e^{Im(k)(|t| + 2a)} (its question 7), and whether a shorter transfer function
   (⌈3(P − 1)/2⌉, whose rounding stays far below 2P − 2's at k a 6–45, its report §6) earns a truncation
-  analysis. *Needs:* CH4.2.
+  analysis. Also (review 2026-11-12, M8): the excess-bandwidth length
+  L ≈ 2ka + c (2ka)^{1/3} of the high-frequency FMM literature, between S6's last two, in
+  the same sweep. *Needs:* CH4.2.
 - [ ] **CH4.4 kD sweep, with the FMM3D gate.** *Done when:* the FMM against the direct sum on
   W1 to kD = 1000, W2 to 500 and W3 to 200, beside `hfmm3d`; the full-target crosscheck mapped
   to levels and classes, with no error concentrated at a class boundary; time, memory and
@@ -565,8 +614,10 @@ task's full line is in its record or report and its progress entry
 
 - [ ] **CH7.1 Rotation and translation kernels on complex planes.** Real coaxial steps of
   M2M and L2L, the complex (S|R) step of the M2L, the stacked GEMM where Dense applies.
-  *Done when:* device output within the host's error. *Needs:* CH3.1, D3.
-  *Machines:* locust.
+  *Done when:* device output within the host's error. Also (review 2026-11-12, M9): in
+  f32 the stored low-frequency quantities carry 1/(2n + 1)!!, about 10⁻⁴¹ at n = 30, below
+  f32's normal range, and the raised degrees are 28 and 32; the degrees f32 supports
+  stated and refused beyond. *Needs:* CH3.1, D3. *Machines:* locust.
 - [ ] **CH7.2 Device P2P for Helmholtz and Yukawa.** *Done when:* an accuracy contract as the
   host's; cost per pair against the host and Laplace's device P2P. *Needs:* CH3.4.
   *Machines:* locust.
@@ -647,7 +698,7 @@ task's full line is in its record or report and its progress entry
 - [ ] **CH7.5d Exponential M2L on the device**, if D8 adopted it on the host. On CH7.5a's
   merge and shift kernels, with the Helmholtz conversions (CH6.1c's pair chain) and the
   quadrature per level (CH6.1e). *Done when:* as CH6.1 on the device. *Needs:* CH7.5c,
-  CH6.2, CH7.1, D8. *Machines:* locust.
+  CH6.2, CH7.1, D8, CHA.6 (proposed, question 3). *Machines:* locust.
 - [ ] **CH7.5f CubeCL 0.11.3 and cubek 0.3.1.** Added on 2026-11-06 (the user: "Please
   schedule right before CH7.5e"; off the priority list), so that CH7.5e's device baselines
   are taken on the new releases. The workspace pins `cubecl` `=0.11.0`, `cubek-matmul` and
@@ -689,7 +740,7 @@ task's full line is in its record or report and its progress entry
 
 - [ ] **CH8.1 Byte cap for the replicated top; exchange of the high-frequency levels.**
   *Done when:* bit for bit the one-rank output on P ranks; memory per rank and per node
-  bounded. *Needs:* CH4.4. *Machines:* Kathleen.
+  bounded. *Needs:* CH4.4, CHA.7 (proposed, question 3). *Machines:* Kathleen.
 - [ ] **CH8.2 Kathleen scaling at kD of a few hundred.** *Done when:* efficiency and memory
   reported as in Phase 5S, at most 4 nodes per job. *Needs:* CH8.1. *Machines:* Kathleen.
 - [ ] **H8.G Gate.** `/milestone-gate H8`. *Needs:* every task above.
@@ -724,3 +775,85 @@ task's full line is in its record or report and its progress entry
   or a follow-up task; CH4.5's and CH7.6's results cited where unchanged. *Needs:* H4.G, H5.G,
   H6.G, H7.G, H8.G. *Machines:* locust, Kathleen, the M6.
 - [ ] **H9.G Gate.** `/milestone-gate H9`. *Needs:* every task above.
+
+## Architecture and cleanup (HA)
+
+From the architecture pass of the project reviews (`docs/reviews/`; the first,
+`docs/reviews/2026-11-12-H6.md` §2, after the H6 gate), proposed by its triage on 2026-11-12
+and pending the user's sign-off (question 3 of its pull request). Not a milestone: no gate,
+no issue, and `/milestone-gate` does not close it; each later review adds to it.
+
+Every task here keeps constraint 1 of the proposal's §2 in its own *Done when*: Laplace's
+outputs bit for bit, its benchmarks within D9's spread wherever a host or device path's code
+moves, `/verify`'s Laplace protection run. No behaviour or default changes, and a public
+item is removed only where the task names it.
+
+- [ ] **CHA.1 The spikes out of the workspace.** Review K3, U1. The twelve spikes are
+  members, so the strict checks (`--workspace`) compile them, `Cargo.lock` carries two RLST
+  versions and a git dependency, and the root `[patch]` serves `spikes/p2p-simd` alone.
+  *Done when:* the finished spikes are outside `members` (excluded, each with what it needs
+  to build by hand, or archived to `../fmm-archive` with their reports kept in the tree);
+  `spikes/p2p-simd` still builds and runs as C3S.4's reference (D9), and every spike a test
+  or a report's reproduction names still builds by hand, each said in its README; the
+  `[patch]`, the second RLST and the spike-only entries of `[workspace.dependencies]` gone
+  from the root if no member needs them; `deny.toml` and the root CLAUDE.md's "Layout" (no
+  crate-level lock files) brought in line. *Sign-off:* which spikes are archived, and the
+  lock files of the kept ones.
+- [ ] **CHA.2 `unsafe` enforced.** Review C1. *Done when:* `#![forbid(unsafe_code)]` in
+  nd-fmm-math, -ref, -tables, -exec, -validate and -bench, `#![deny(unsafe_code)]` in
+  nd-fmm-plan and nd-octree; `octree/src/octree.rs:1411` made safe, or kept with its
+  `// SAFETY:` comment if the safe form is measurably slower; the counting allocator of
+  `fmm-plan/examples/plan_build_cost.rs` allowed in that file with its reason; the root
+  CLAUDE.md's rule names the exceptions.
+- [ ] **CHA.3 The superseded M2L configuration removed.** Review P1. *Done when:*
+  `NodeContext`'s unused fields, `FmmBuilder::dense_node_budget`, the `AUTO_DENSE_*`
+  constants, the deprecated `resolve(p)` and the harness's `--budget` are gone, with the
+  tests that only they serve; the history of the Phase 5N rule in
+  `docs/design/node-m2l.md`, not in rustdoc; `M2lStrategy::Auto`'s choices unchanged on
+  every case of `tests/operator/strategy.rs`. A public API change, named in the PR.
+- [ ] **CHA.4 A test-support crate.** Review T1, C3. A small crate without workspace
+  dependencies (the generator, the point sets, the error norms, the machine facts) that
+  every crate may dev-depend on and nd-fmm-bench depends on in place of nd-fmm-validate
+  where that is all it needs. *Done when:* the 41 copies of the generator and the copies of
+  `relative_l2`, `plummer` and `cube` replaced where the draws stay the same (checked per
+  file by the tests' own fixed values); `workspace-structure.md` has the crate.
+- [ ] **CHA.5 The Helmholtz builder's measurement settings apart.** Review P2, P5. *Done
+  when:* `HelmholtzFmmBuilder` shows the user's settings; the measurement settings
+  (`plane_wave_split`, `auto_plane_wave`, `m2l_plane_wave_min_degree`, `m2l_max_degree`,
+  `block_budget`, `PlaneWavePrecision::PerLevel`, `pair_calls`) sit behind one hidden
+  tuning struct; `plane_wave_reach` and `PlaneWaveRaise::Level` removed if their guard
+  tests (CH6.2g, CH6.1h) can keep their checks without them, else kept there; the harness
+  and the reports' reproduction scripts still run. *Sign-off:* the settings removed.
+- [ ] **CHA.6 One plane-wave M2L traversal.** Review L2. The slot table, the parent runs
+  and the split by child of `operator_plane_wave.rs` and
+  `helmholtz/operator_plane_wave.rs` in `driver.rs`, generic over a small kernel trait
+  (outgoing, merge for the parent, convert for the child), as `HostKernel` is. *Done when:*
+  both operators bit for bit; Laplace within D9 on the three machines; the two split
+  thresholds (a quarter, a half) kept as each operator's own constant, or unified by a
+  measurement. *Machines:* locust, Kathleen.
+- [ ] **CHA.7 One distributed build for both facades.** Review L1, L3. The steps of
+  `FmmBuilder::build` (the settings' agreement, the node split, the plan, the near rule and
+  the second cut, the routing by node, the evaluator, the timings) in `pipeline`, behind a
+  crate-private trait the two builders implement; `ExecOperator`'s kind and stage timings
+  generic over the operator. *Done when:* Laplace bit for bit and within D9; `HelmholtzFmm`
+  routes by node (`Evaluator::with_routing` with the node of its `split_shared`), with the
+  work-weighted cut and the timings, rank-invariant as before; what CH8.1 still has to add
+  listed. Split into lettered sub-tasks before it starts. *Machines:* locust, Kathleen.
+- [ ] **CHA.8 The large files of nd-fmm-exec split.** Review C2, K4, T2, U2. `device.rs`
+  into modules and `DeviceOperator::new` into staged constructors; `fmm.rs`'s option enums
+  and report types into submodules; `tests/mpi_exec.rs` into `tests/mpi_exec/main.rs` with
+  one module per scenario. Moves only. *Done when:* bit for bit; within D9 with the
+  placement checked (`-align-loops=64` where a time moves); one PR per file.
+  *Machines:* locust, Kathleen.
+- [ ] **CHA.9 Documentation of what is, not of how it came.** Review K1, L4. *Done when:*
+  the rustdoc of public items says what the item does and why its default is what it is,
+  the history in `progress.md` and the phase documents; each crate CLAUDE.md cut to its
+  rules and checks (the time rule of `fmm-exec/CLAUDE.md` restated to what holds);
+  `docs/design/workspace-structure.md` has the Helmholtz modules; the crate descriptions
+  and `fmm-exec/src/lib.rs` name Helmholtz. Comments and documents only, one crate per PR.
+- [ ] **CHA.10 Housekeeping.** Review K2, U3. *Done when:* the one-off scripts of
+  `tools/helmholtz/` and the task-named cases of `tools/scaling/run.sh` are apart from the
+  living tools, each report's reproduction line still valid; `octree/Cargo.toml` takes its
+  versions from `[workspace.dependencies]` (the migration the root CLAUDE.md leaves open;
+  *Sign-off*) and points at the GitHub repository; its unused features removed if no
+  example or test names them.
