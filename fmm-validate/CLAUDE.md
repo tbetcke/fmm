@@ -463,6 +463,20 @@ default, the column "M2L" ending `/level`, `/leaves` or `/m2l` where named). `te
 rule's form the default's checksum, `Level` within 1.1× Rotation's, `M2l` printed). `tools/helmholtz/ch6-1h-runs.sh` runs the task's measurements,
 `ch6-1h-tables.py` makes the report's tables. Its report is `results/helmholtz-ch6-1h.md`.
 
+Helmholtz CH4.0 (the M2L rule's sparse-level term; docs/helmholtz/tasks/CH4.0.md) added
+`helmholtz_accuracy::Case::{batched_term, m2l_block_targets}` (`HelmholtzFmmBuilder::batched_term`,
+`true` in `Case::new` and named always; `m2l_block_targets`, `None` the library's split) and
+`Row::{v_targets, batched_columns, block_visits, batched_term, m2l_block_targets}` (per level
+the boxes, m̂ of the level's `LevelShape`, and Batched's (block, offset) visits at blocks of
+64 counted per rank over its own targets and summed: on one rank the level call's count, so
+`v_pairs` over it is the exact columns per read), and to the example `--term on|off,…` and
+`--block auto|w,…` (each Auto or Batched run at each; the column "M2L" ending `/no-term` or
+`/wN`) and four last columns of `--levels` (boxes, m̂, visits, columns per read).
+`tests/helmholtz_accuracy.rs` checks the columns' bounds, the term reported and a named width
+the same checksum. `tools/helmholtz/ch4-0-runs.sh` runs the task's pair and FMM measurements
+(gated on macOS, and with `GATE=1` elsewhere), `ch4-0-tables.py` makes the report's tables. Its
+report is `results/helmholtz-ch4-0.md`.
+
 Since Phase 3, building this crate, and so `cargo test -p nd-fmm-validate`, needs an MPI
 installation. Tests that run an FMM initialise MPI, at most one test per test
 executable (`tests/fmm_accuracy.rs`; `tests/helmholtz_accuracy.rs`; `tests/scaling.rs`, the smoke run of the `scaling`
