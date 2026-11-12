@@ -321,9 +321,14 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   `HelmholtzFmm::level_shapes`), and under `Auto` Batched only where
   `LevelShape::batched_columns` (m̂, the estimate of the columns per table read at blocks of
   64: pairs over ⌈targets/64⌉ blocks × 316 (1 − (1 − L̄/316)^b̄) offsets) is at least
-  `auto_batched_min_columns(isa, planes, p)` (m*, per machine class from the pair evidence),
-  besides p_l ≤ the crossover; the builder's `batched_term(false)` gives CH3.2d's rule (the
-  tests that pin the split by degree name it). Batched's level call narrows its blocks on a
+  `auto_batched_min_columns(isa, planes, p)` (m*, per machine class: the pair fit at the
+  class's margin, 1.45 on x86 with two planes, 1.2 with one, 1.15 on NEON), besides p_l ≤ the
+  crossover; `build` agrees a table of m* for p ≤ 64 over the ranks (all-reduce max;
+  `with_m2l_min_columns`, `m2l_min_columns`), as the crossover; the builder's
+  `batched_term(false)` gives CH3.2d's rule (the tests that pin the split by degree name it).
+  Under D8's default the term changed no level of CH6.2h's cases (the waves take the levels
+  where it would bind); it decides with the waves off, in f32, at Im κ_l ≥ 5π and below
+  10⁻⁸. Batched's level call narrows its blocks on a
   level of fewer blocks than threads (`batched_block_targets(rows, threads)`: 64 on one
   thread, else ⌈rows/threads⌉ within `M2L_MIN_BLOCK_TARGETS` and 64; named by
   `with_m2l_block_targets` and the builder's `m2l_block_targets`), the pair chain bit for bit
@@ -331,11 +336,13 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   ranks per node) (`DEFAULT_DENSE_NODE_BUDGET` 8 GiB; `HelmholtzFmm::dense_budget`), so the
   levels a rank batches depend on the ranks per node, as for Laplace's node rule.
   `tests/helmholtz/dense.rs` checks the term level by level (a sparse level Rotation's bits,
-  dense ones Batched's, either order of the calls, `None` CH3.2d's choice), m̂ on hand shapes,
-  m*'s order and the widths; `check_batched_term` in `tests/helmholtz_fmm.rs` the shapes the
-  same on every rank and the one-rank tree's, each level's method by the term, within
-  `DENSE_TOLERANCE` of Rotation, 2 threads and the one-rank FMM bit for bit, widths 1, 7 and
-  64 at 1 and 2 threads the default's bits, and the node budget's share per rank.
+  dense ones Batched's, either order of the calls, `None` CH3.2d's choice, a named m* table),
+  m̂ on hand shapes, m*'s order and the widths; `check_batched_term` in
+  `tests/helmholtz_fmm.rs` the shapes the same on every rank and the one-rank tree's, the
+  agreed m*, each level's method by the term (some level Rotation by the term alone), within
+  `DENSE_TOLERANCE` of Rotation, 2 threads and the one-rank FMM bit for bit, the library's
+  default against the direct sum and one rank, widths 1, 7 and 64 at 1 and 2 threads the
+  default's bits (in debug builds 1 at 1 and 7 at 2), and the node budget's share per rank.
 - The exponential M2L (Helmholtz CH6.1d; the `helmholtz::operator` module docs, "M2L";
   docs/helmholtz/tasks/CH6.1d.md): `HelmholtzM2l::PlaneWave` (opt-in), merge and shift on
   the levels whose `PlaneWavePrecision` gives a quadrature (`Rule`, the default:

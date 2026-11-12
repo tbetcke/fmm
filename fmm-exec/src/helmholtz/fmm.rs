@@ -107,7 +107,7 @@ use super::{
     C_LEAF, ChargeKind, Charges, DEFAULT_DENSE_BUDGET, DegreeError, Degrees, Densities,
     DensityError, HelmholtzM2l, HelmholtzOperator, LevelShape, OperatorError, Output,
     PlaneWavePrecision, PlaneWaveRaise, PlaneWaveSplit, Wavenumber, WavenumberKind,
-    auto_batched_max_degree, auto_plane_wave_min_degree, min_leaf_level,
+    auto_batched_max_degree, auto_batched_min_columns, auto_plane_wave_min_degree, min_leaf_level,
 };
 use crate::fmm::{DEFAULT_MAX_POINTS_PER_LEAF, FmmError, PointSet, SettingsError};
 use crate::geometry::Domain;
@@ -130,6 +130,10 @@ pub const DEFAULT_PLANE_WAVE_NODE_BUDGET: usize = 8 << 30;
 /// each rank's budget is the smaller of [`HelmholtzFmmBuilder::dense_budget`] and this over
 /// the ranks per node.
 pub const DEFAULT_DENSE_NODE_BUDGET: usize = 8 << 30;
+
+/// The degrees of the m* table that `build` agrees over the ranks (Helmholtz CH4.0): 0 to
+/// 64; a degree above it takes 64 columns, which no level reaches.
+const MAX_TERM_DEGREE: usize = 64;
 
 /// Why a Helmholtz FMM was not built or not evaluated.
 #[derive(Debug, Error)]
@@ -680,6 +684,13 @@ impl HelmholtzFmmBuilder {
         } else {
             None
         };
+        // And m* by degree, agreed alike (the largest), so that ranks of different ISAs
+        // choose the same levels (constraints 2 and 9).
+        let local: Vec<f64> = (0..=MAX_TERM_DEGREE)
+            .map(|p| auto_batched_min_columns(isa, densities.multipole_planes(), p))
+            .collect();
+        let mut min_columns = vec![0.0f64; local.len()];
+        comm.all_reduce_into(&local[..], &mut min_columns[..], SystemOperation::max());
         // The dense budget of this rank: its own, at most the node's over the ranks per node
         // (constraint 7).
         let dense_budget = self
@@ -714,6 +725,7 @@ impl HelmholtzFmmBuilder {
         .with_plane_wave_reach(self.plane_wave_reach)
         .with_plane_wave_split(self.plane_wave_split)
         .with_plane_wave_raise(self.plane_wave_raise)
+        .with_m2l_min_columns(Some(min_columns))
         .with_level_shapes(shapes)
         .with_m2l_block_targets(self.m2l_block_targets)
         .with_m2l(self.m2l, dense_budget)

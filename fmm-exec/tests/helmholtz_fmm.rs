@@ -43,11 +43,13 @@
 //! own crossover agreed alike on every rank, a named mode kept, and Auto the builder's
 //! default (every other check names Rotation, its reference); these with the term of the
 //! levels' V lists off (CH3.2d's rule). The term (Helmholtz CH4.0, `check_batched_term`):
-//! the levels' shapes the same on every rank and the one-rank FMM's, each level Batched
-//! exactly where its degree and its estimate of the columns per read allow, within
-//! `DENSE_TOLERANCE` of Rotation, 2 threads and the one-rank FMM bit for bit; Batched's
-//! blocks of 1, 7 and 64 targets at 1 and 2 threads the default's bits; the dense budget per
-//! rank the node budget over the ranks per node. The exponential M2L
+//! the levels' shapes the same on every rank and the one-rank FMM's, m* the table agreed over
+//! the ranks, each level Batched exactly where its estimate of the columns per read reaches it
+//! (some level Rotation by the term alone), within `DENSE_TOLERANCE` of Rotation, 2 threads
+//! and the one-rank FMM bit for bit; the library's default against the direct sum and the
+//! one-rank FMM; Batched's blocks of 1, 7 and 64 targets at 1 and 2 threads (in debug builds
+//! 1 at 1 and 7 at 2) the default's bits; the dense budget per rank the node budget over the
+//! ranks per node. The exponential M2L
 //! (Helmholtz CH6.1d), `PlaneWave`, on the same two scenarios: each level's precision as
 //! the rule gives it (`nd_fmm_tables::helmholtz::plane_wave::merge::select`, at the
 //! scenario's tolerance or its named degrees), the scenario's bound of the direct sum and
@@ -958,10 +960,13 @@ fn check_auto(scenario: &Scenario, comm: &SimpleCommunicator) {
 /// added on levels 2 to the finest but one (as `check_auto`), the crossover above every
 /// degree and the exponential M2L off: the shapes the same on every rank and the one-rank
 /// FMM's; each level Batched exactly where its estimate of the columns per read reaches m*
-/// of its degree; within `DENSE_TOLERANCE` of Rotation, 2 threads and the one-rank FMM bit
-/// for bit. Batched on every level at named block widths, each the default width's bits at
-/// 1 and 2 threads. The dense budget per rank: the node budget over the ranks per node.
-fn check_batched_term(scenario: &Scenario, comm: &SimpleCommunicator) {
+/// of its degree, m* the agreed table (every rank's largest); within `DENSE_TOLERANCE` of
+/// Rotation, 2 threads and the one-rank FMM bit for bit. The library's default (the term and
+/// the exponential M2L on) against the direct sum and the one-rank FMM. Batched on every level
+/// at named block widths, each the default width's bits (blocks of 1, 7 and 64 at 1 and 2
+/// threads; in debug builds 1 at 1 thread and 7 at 2). The dense budget per rank: the node
+/// budget over the ranks per node. Returns whether a level ran Rotation by the term alone.
+fn check_batched_term(scenario: &Scenario, comm: &SimpleCommunicator) -> bool {
     let start = Instant::now();
     let rank = comm.rank();
     let name = format!("{}: Batched's term", scenario.name);
@@ -995,9 +1000,22 @@ fn check_batched_term(scenario: &Scenario, comm: &SimpleCommunicator) {
         P2pChoice::Isa(isa) => isa,
         _ => Isa::Scalar,
     };
+    // m*: the largest of every rank's table, which one machine class makes its own.
+    let local: Vec<f64> = (0..=20)
+        .map(|p| auto_batched_min_columns(isa, planes, p))
+        .collect();
+    let mut agreed = vec![0.0f64; local.len()];
+    comm.all_reduce_into(&local[..], &mut agreed[..], SystemOperation::max());
+    for (p, &m) in agreed.iter().enumerate() {
+        assert_eq!(
+            fmm.operator().m2l_min_columns(p),
+            m,
+            "{name}: m* at p = {p}"
+        );
+    }
     let mut on = Vec::new();
     for (level, (shape, &p)) in shapes.iter().zip(&degrees).enumerate().skip(2) {
-        let want = if shape.batched_columns() >= auto_batched_min_columns(isa, planes, p) {
+        let want = if shape.batched_columns() >= agreed[p] {
             HelmholtzM2l::Batched
         } else {
             HelmholtzM2l::Rotation
@@ -1046,45 +1064,63 @@ fn check_batched_term(scenario: &Scenario, comm: &SimpleCommunicator) {
     assert_same(&format!("{name}, 2 threads"), &threaded, &output, comm);
     check_one_rank(&name, &auto, &inputs, kind, &output, comm);
 
+    // The library's default, the term and the exponential M2L on, at the rule's crossover.
+    let default = default_builder(scenario);
+    let (fmm, output) = run(&default, &inputs, kind, comm);
+    assert!(fmm.level_shapes().is_some(), "{name}: the term by default");
+    drop(fmm);
+    let (error_phi, error_grad) = errors(scenario, &inputs, &output, 0, comm);
+    assert!(
+        error_phi < scenario.bound && error_grad < scenario.bound,
+        "{name}, the default: φ {error_phi:.2e}, ∇φ {error_grad:.2e} against the direct sum"
+    );
+    check_one_rank(
+        &format!("{name}, the default"),
+        &default,
+        &inputs,
+        kind,
+        &output,
+        comm,
+    );
+
     // The split: Batched on every level (no term) at the default width and at named ones.
     let every = auto.clone().batched_term(false);
     let (fmm, wide) = run(&every, &inputs, kind, comm);
     assert!((2..=finest).all(|l| fmm.operator().m2l_on(l) == HelmholtzM2l::Batched));
     assert_eq!(fmm.level_shapes(), None);
     drop(fmm);
-    for width in [1, 7, 64] {
-        for threads in [1, 2] {
-            let (fmm, narrow) = run(
-                &every.clone().m2l_block_targets(width).threads(threads),
-                &inputs,
-                kind,
-                comm,
-            );
-            assert_eq!(fmm.operator().m2l_block_targets(), Some(width));
-            drop(fmm);
-            assert_same(
-                &format!("{name}, blocks of {width} at {threads} threads"),
-                &narrow,
-                &wide,
-                comm,
-            );
-        }
+    let widths: &[(usize, usize)] = if cfg!(debug_assertions) {
+        &[(1, 1), (7, 2)]
+    } else {
+        &[(1, 1), (1, 2), (7, 1), (7, 2), (64, 1), (64, 2)]
+    };
+    for &(width, threads) in widths {
+        let (fmm, narrow) = run(
+            &every.clone().m2l_block_targets(width).threads(threads),
+            &inputs,
+            kind,
+            comm,
+        );
+        assert_eq!(fmm.operator().m2l_block_targets(), Some(width));
+        drop(fmm);
+        assert_same(
+            &format!("{name}, blocks of {width} at {threads} threads"),
+            &narrow,
+            &wide,
+            comm,
+        );
     }
 
-    // The node budget: the default per rank, and a node budget of the finest level's tables
-    // per rank, which batches the finest level alone.
-    let fmm = auto
-        .clone()
-        .batched_term(false)
+    // The node budget: the default per rank (read from a build without tables), and a node
+    // budget of the finest level's tables per rank, which batches the finest level alone.
+    let fmm = builder(scenario)
         .dense_budget(0)
         .build::<f64, _>(&inputs.sources, &inputs.targets, comm)
         .unwrap_or_else(|error| panic!("rank {rank}: the build: {error}"));
     let ranks = fmm.ranks_per_node();
     assert_eq!(fmm.dense_budget(), 0);
     drop(fmm);
-    let fmm = auto
-        .clone()
-        .batched_term(false)
+    let fmm = builder(scenario)
         .build::<f64, _>(&inputs.sources, &inputs.targets, comm)
         .unwrap_or_else(|error| panic!("rank {rank}: the build: {error}"));
     assert_eq!(
@@ -1110,6 +1146,7 @@ fn check_batched_term(scenario: &Scenario, comm: &SimpleCommunicator) {
             start.elapsed()
         );
     }
+    on.contains(&HelmholtzM2l::Rotation)
 }
 
 /// Auto with the exponential M2L (Helmholtz CH6.2h, D8), on the scenario's degrees with one
@@ -2290,18 +2327,22 @@ fn helmholtz_fmm() {
     // The Dense, Classes and Batched M2L: complex k with complex charges, real k with real
     // charges (real multipoles, one plane).
     let mut chunked = false;
+    let mut by_term = false;
     for i in [0, 2] {
         let scenario = &scenarios()[i];
         let dense = check_tables(scenario, HelmholtzM2l::Dense, None, &comm);
         check_tables(scenario, HelmholtzM2l::Classes, None, &comm);
         check_tables(scenario, HelmholtzM2l::Batched, Some(&dense), &comm);
         check_auto(scenario, &comm);
-        check_batched_term(scenario, &comm);
+        by_term |= check_batched_term(scenario, &comm);
         check_auto_plane_wave(scenario, &comm);
         // The bounded buffer in debug builds on the clusters alone (scenario 2), whose
         // finest level with waves chunks at the floor.
         chunked |= check_plane_wave(scenario, !debug || i == 2, &comm);
     }
+    // The term sent a level to Rotation (the clusters' finest level, about one column per
+    // read, below m* of every class).
+    assert!(by_term, "the term chose Rotation on no level");
     // The exponential M2L below 10⁻⁶ at the resolving degree (CH6.1g), the clusters' deep
     // levels included.
     for scenario in resolving_scenarios() {

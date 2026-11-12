@@ -606,6 +606,24 @@ fn auto_reads_the_level_shapes() {
         assert!(same, "level {level}: not {want:?}'s bits");
     }
     assert!(compare(&mut after, &mut before).1);
+    // A named m* table: none of the levels reaches 64 columns, every one reaches 0; the
+    // operator reports the table's.
+    let mut none = named(HelmholtzM2l::Auto)
+        .with_level_shapes(Some(shapes.clone()))
+        .with_m2l_min_columns(Some(vec![64.0; 30]));
+    assert!((2..LEVELS).all(|l| none.m2l_on(l) == HelmholtzM2l::Rotation));
+    assert_eq!(none.m2l_min_columns(8), 64.0);
+    assert!(same_on(&mut none, &mut rotation, 3));
+    let all = named(HelmholtzM2l::Auto)
+        .with_m2l_min_columns(Some(vec![0.0; 30]))
+        .with_level_shapes(Some(shapes.clone()));
+    assert!((2..LEVELS).all(|l| all.m2l_on(l) == HelmholtzM2l::Batched));
+    assert_eq!(all.m2l_min_columns(100), 64.0, "beyond the table");
+    assert_eq!(
+        after.m2l_min_columns(8),
+        auto_batched_min_columns(Isa::Scalar, planes, 8),
+        "the rule's without a table"
+    );
     let without = named(HelmholtzM2l::Auto)
         .with_level_shapes(Some(shapes.clone()))
         .with_level_shapes(None);

@@ -300,8 +300,7 @@ fn check_auto(world: &SimpleCommunicator) {
     assert_eq!(every.checksum, fused.checksum, "Auto above every degree");
     assert_eq!(every.m2l_plane_wave_min_degree, None, "off");
     assert!(!every.batched_term);
-    // The term on: reported, each level Batched or not as its estimate says, at named block
-    // widths the same output.
+    // The term on: reported, and at a named block width and two threads the same output.
     let mut term = case.clone();
     term.batched_term = true;
     let on = run(&term, &problem, &oracle, 1, world).expect("the FMM runs");

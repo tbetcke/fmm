@@ -622,6 +622,9 @@ struct Kernel<T: SimdScalar> {
     /// The levels' V lists over the whole tree, which Auto's term for Batched reads
     /// (Helmholtz CH4.0); `None`: no term.
     shapes: Option<Vec<LevelShape>>,
+    /// m* by degree if named (an agreement over ranks), else `None` for
+    /// [`auto_batched_min_columns`]'s.
+    min_columns: Option<Vec<f64>>,
     /// The width of Batched's blocks if named, else `None` for [`batched_block_targets`].
     block_targets: Option<usize>,
     /// The batched M2L's multiply–add mode if named, else `None` (the setting's default).
@@ -751,6 +754,7 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
             auto_plane_wave: true,
             plane_wave_min_degree: None,
             shapes: None,
+            min_columns: None,
             block_targets: None,
             mul_add: None,
             dense: None,
@@ -869,6 +873,27 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
     /// if given.
     pub fn level_shapes(&self) -> Option<&[LevelShape]> {
         self.kernel.shapes.as_deref()
+    }
+
+    /// Names m*, Auto's fewest columns per table read for Batched, by degree: entry p for a
+    /// level of degree p, [`M2L_BLOCK_TARGETS`] beyond the table (`None`, the default: the
+    /// rule's, [`auto_batched_min_columns`] of the column kernel's ISA and the multipole
+    /// planes), for an agreement over ranks (`HelmholtzFmmBuilder::build` names the largest
+    /// of every rank's, so ranks of different ISAs choose alike) and the tests. Under Auto
+    /// with level shapes the levels are chosen again; the other settings ignore it.
+    pub fn with_m2l_min_columns(mut self, table: Option<Vec<f64>>) -> Self {
+        if self.kernel.min_columns != table {
+            self.kernel.min_columns = table;
+            if self.kernel.m2l == HelmholtzM2l::Auto && self.kernel.shapes.is_some() {
+                self.select_tables();
+            }
+        }
+        self
+    }
+
+    /// m* of degree p that Auto's term reads: the named table's, else the rule's.
+    pub fn m2l_min_columns(&self, p: usize) -> f64 {
+        self.kernel.auto_min_columns(p)
     }
 
     /// Names the width of Batched's blocks in its level call (`None`, the default:
@@ -1199,14 +1224,12 @@ impl<T: SimdScalar> HelmholtzOperator<T> {
                 // `select_within`'s choice with the levels that have waves, and those whose
                 // tables would be read for too few columns (Helmholtz CH4.0), left out: they
                 // take no batched tables and spend none of the budget.
-                let planes = kernel.densities.multipole_planes();
-                let isa = kernel.matrix.isa();
                 let mut chosen = vec![false; degrees.len()];
                 let mut left = dense_budget;
                 for (l, &p) in degrees.iter().enumerate().skip(2).rev() {
                     let waves = precisions.as_ref().is_some_and(|w| w[l].is_some());
                     let sparse = kernel.shapes.as_ref().is_some_and(|shapes| {
-                        shapes[l].batched_columns() < auto_batched_min_columns(isa, planes, p)
+                        shapes[l].batched_columns() < kernel.auto_min_columns(p)
                     });
                     if waves || sparse || p > max_degree {
                         continue;
@@ -1445,6 +1468,17 @@ impl<T: SimdScalar> Kernel<T> {
         self.max_degree.unwrap_or_else(|| {
             auto_batched_max_degree(self.matrix.isa(), self.densities.multipole_planes())
         })
+    }
+
+    /// m* of degree p under [`HelmholtzM2l::Auto`]'s term: the named table's (64 beyond it),
+    /// else [`auto_batched_min_columns`] of the column kernel's ISA and the planes.
+    fn auto_min_columns(&self, p: usize) -> f64 {
+        match &self.min_columns {
+            Some(table) => table.get(p).copied().unwrap_or(M2L_BLOCK_TARGETS as f64),
+            None => {
+                auto_batched_min_columns(self.matrix.isa(), self.densities.multipole_planes(), p)
+            }
+        }
     }
 
     /// The smallest degree at which [`HelmholtzM2l::Auto`] takes the exponential M2L: the
