@@ -56,10 +56,13 @@ also needs.
 1. CH4.0 The M2L rule's sparse-level term
 2. CH4.0b The worst-box concentration
 3. CH4.0c The degree rule beyond its measured range
-4. CH1.3d The diagonal form in extended precision (CONVENTIONS §3.15 "Signatures", CH4.2's
+4. CH4.0d The Helmholtz leaf size (added on 2026-11-12, the user: "After CH4.0c
+   (Recommended)"; it changes the trees that CH4.0's rule and CH4.4's and CH4.5's timings
+   run on)
+5. CH1.3d The diagonal form in extended precision (CONVENTIONS §3.15 "Signatures", CH4.2's
    trusted path)
-5. CH4.1, CH4.2, CH4.3, CH4.4, CH4.5
-6. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
+6. CH4.1, CH4.2, CH4.3, CH4.4, CH4.5
+7. CH0.9 S9, CHR.3 the FFTW wrapper, CH4.6 the optional FFTW back end
 
 Off the list, in file order: CH0.8b, CH0.5 and H0.G; HR.G; H1.G; CH2.1, CH2.2, CH2.3, CH2.5
 and H2.G; H5, H7 (CH7.5d now has D8 and waits for CH7.1; CH7.5f before CH7.5e), H8, H9 (CH9.1,
@@ -488,6 +491,30 @@ task's full line is in its record or report and its progress entry
   item 8's under-resolved W3 (N = 10⁶ at kD = 200 and 500), the FMM run H3 did not make.
   *Done when:* within ε, or the rule corrected or S7's degrees named per level above its
   range. *Needs:* CH3.6. *Machines:* Kathleen.
+- [ ] **CH4.0d The Helmholtz leaf size.** Added on 2026-11-12 after the H6 gate (the user:
+  "Can you add leaf size tuning to the roadmap?"). `HelmholtzFmmBuilder` refines to a fixed
+  `DEFAULT_MAX_POINTS_PER_LEAF` = 64 points per leaf. That is Laplace's base value without
+  Phase 6 T11's per-p rule (`default_max_points_per_leaf`: 128 from p = 12 on the host).
+  The leaf rule of §3.7 (c_leaf = 1 wavelength, D11) only refines further. FMM3D's
+  `hfmm3d` allows 40–700 points per leaf in its default build and 300–1000 in `fastker`
+  (`hndiv.f`, `hndiv_fast.f`, v2.1.0): fewer, larger leaves on its vectorised P2P. At 10⁻⁸,
+  after H6, `fastker` is still 1.2–3.9× faster than our default on CH3.6's cases (estimated from
+  CH3.6, CH6.1h and job 633000). Below kD ≈ 100
+  much of that is likely the shallower trees: our P2P is already vectorised (CH3.4b), and the
+  trees are not. Not measured.
+  - The FMM's build plus evaluation against the points per leaf (32 to 1,024), under the
+    default M2L (D8), with c_leaf kept as the width cap.
+  - Cases: CH3.6's matrix at 10⁻³, 10⁻⁶ and 10⁻⁸ (W1, W3 and the four W4 distributions),
+    and W1 at kD = 500 and W3 at kD = 100.
+  - The leaf size's effect on the degrees and the near field's share recorded, with the
+    leaf rule's forced levels named where c_leaf binds before the points do.
+  *Done when:* a default leaf size by ε (or p), the machine class and the multipole planes,
+  proposed for sign-off with its gain per case, as T11 did for Laplace. Inputs that do not
+  depend on the data (constraint 9). The errors within ε, at most CH3.4b's contract range
+  (Re(k) r ≤ 22 c_leaf, unchanged). Deterministic and rank-invariant at each leaf size.
+  Laplace's defaults unchanged (the Helmholtz builder only). Or the report shows that 64
+  stays best, and why `fastker`'s leaves do not carry over. *Needs:* CH6.2h, CH3.4c.
+  *Machines:* Kathleen, locust (the M6 with the user's go-ahead). *Sign-off:* the default.
 - [ ] **CH4.1 S → F and F → R by the transform as a product.** Per-box aligned signature
   buffers; source signatures kept per level call, target accumulators chunked under the node
   budget. *Done when:* round trips to the grid's bandwidth; bits independent of the chunk
