@@ -2780,3 +2780,57 @@ request, using this template:
 - Laplace: not touched (nd-fmm-tables' `helmholtz` module, the Helmholtz operator and builder;
   tests, harness, tools).
 - Follow-ups: none; CH6.1 is done, next H6.G (`/milestone-gate H6`).
+
+## 2026-11-12: H6.G Gate
+- Done:
+  - `/milestone-gate H6`. Report `docs/helmholtz/gates/H6.md`:
+    - the gate condition, D8 adopted under `Auto`;
+    - all 17 tasks (#179–#204), each with its report and sign-offs, no pending run, 31
+      questions signed off;
+    - CI on `main` and its job times against their limits;
+    - proposal §9's items and constraint 1 (CH6.2i, the one Laplace change);
+    - the measurements against §5.3, §3.5, §7, §9.2 and §2;
+    - corrections C1–C8, recommendations, a retrospective on the loop.
+  - The gap the gate found: the default at 10⁻⁷ and 10⁻⁸ had never run on D1's large cases
+    (CH6.1e's sign-off 1 left them to Rotation; CH6.1g and CH6.1h did not bring them back).
+    Closed on the branch (question 2, "Run first, then close") by Kathleen job 633000
+    (node-c11a-048, one rank × 40, `tools/helmholtz/h6-gate-runs.sh`, Rotation against
+    `auto-pw` with the rule's raise in both orders, `main`'s 4b5b37f):
+    - W1 at kD = 500 and W3 at kD = 100 at 10⁻⁷ and 10⁻⁸: errors 0.45–0.84× Rotation's;
+    - the evaluation 0.27–0.65×, the M2L 0.22–0.61×, the build 1.0–1.4×;
+    - each launch's peak 19.1–22.5 GB, the waves buffer at its 8 GiB bound;
+    - checksums equal in both orders. Raw outputs in
+      `~/projects/fmm-archive/kathleen/logs/h6-gate/`; the report's §8.
+  - Roadmap:
+    - H6.G ticked;
+    - the status line rewritten to the current state;
+    - the priority list for H4 (CH4.0, CH4.0b, CH4.0c, CH1.3d, CH4.1–CH4.5, CH0.9, CHR.3,
+      CH4.6);
+    - CH0.8b counts the waves;
+    - H3's and H6's ticked lines condensed (1,292 → 698 lines), the full lines in git
+      history (4b5b37f).
+  - Proposal (draft 0.8 kept): C1–C8 applied, a line in its Appendix A ("Amended at H6.G"),
+    and the missing lines of CH0.4, CH6.2h, CH6.1g and CH6.1h.
+- Tests: none (documents and a run script).
+- Checks:
+  - None of cargo's (no Rust or manifest change). `bash -n` on the run script; `shellcheck`
+    not installed.
+  - `tools/roadmap/sync_issues.py`'s parser reads the edited roadmap (every milestone ends
+    with its gate).
+  - CI on `main`: every H6 merge passed every job. #188's run-tests (CH7.5b) was cancelled
+    at its 30-minute limit on a cold-cache build after a Rust release; its next run passed.
+- Decisions: signed off 2026-11-12 (the user):
+  1–2. "Run first, then close (Recommended)";
+  3. C1–C8, "Accept all (Recommended)";
+  4. the H4 priority list, "As proposed (Recommended)";
+  5–6. "run-tests limit 30→45 min, Condense the roadmap".
+- Laplace: not touched (documents only).
+- Follow-ups:
+  - run-tests' `timeout-minutes` 30 → 45, the separate PR of question 5.
+  - The retrospective's changes to `/next-task`, `/verify` and `/milestone-gate`, for the
+    user (`.claude/skills/` is not writable from the session):
+    - re-run cases an earlier sign-off excluded when a scope widens;
+    - pair and FMM evidence both before a numerical rule changes;
+    - an Appendix A line with every proposal amendment;
+    - the MPI crates' debug tests at opt-level 1;
+    - done roadmap lines kept short.
