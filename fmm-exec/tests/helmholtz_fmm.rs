@@ -961,7 +961,8 @@ fn check_auto(scenario: &Scenario, comm: &SimpleCommunicator) {
 /// degree and the exponential M2L off: the shapes the same on every rank and the one-rank
 /// FMM's; each level Batched exactly where its estimate of the columns per read reaches m*
 /// of its degree, m* the agreed table (every rank's largest); within `DENSE_TOLERANCE` of
-/// Rotation, 2 threads and the one-rank FMM bit for bit. The library's default (the term and
+/// Rotation, 2 threads (in release builds; in debug builds the width checks' runs at 2
+/// threads) and the one-rank FMM bit for bit. The library's default (the term and
 /// the exponential M2L on) against the direct sum and the one-rank FMM. Batched on every level
 /// at named block widths, each the default width's bits (blocks of 1, 7 and 64 at 1 and 2
 /// threads; in debug builds 1 at 1 thread and 7 at 2). The dense budget per rank: the node
@@ -1030,19 +1031,20 @@ fn check_batched_term(scenario: &Scenario, comm: &SimpleCommunicator) -> bool {
     comm.all_reduce_into(&flat[..], &mut low[..], SystemOperation::min());
     comm.all_reduce_into(&flat[..], &mut high[..], SystemOperation::max());
     assert_eq!(low, high, "{name}: the shapes differ between ranks");
-    let (sources, _) = union_points(&inputs.sources, comm);
-    let (targets, _) = union_points(&inputs.targets, comm);
-    let one = SimpleCommunicator::self_comm();
-    let single = auto
-        .clone()
-        .build::<f64, _>(&sources, &targets, &one)
-        .unwrap_or_else(|error| panic!("rank {rank}: the one-rank build: {error}"));
-    assert_eq!(
-        single.level_shapes(),
-        Some(&shapes[..]),
-        "{name}: not the one-rank tree's shapes"
-    );
-    drop(single);
+    if comm.size() > 1 {
+        let (sources, _) = union_points(&inputs.sources, comm);
+        let (targets, _) = union_points(&inputs.targets, comm);
+        let one = SimpleCommunicator::self_comm();
+        let single = auto
+            .clone()
+            .build::<f64, _>(&sources, &targets, &one)
+            .unwrap_or_else(|error| panic!("rank {rank}: the one-rank build: {error}"));
+        assert_eq!(
+            single.level_shapes(),
+            Some(&shapes[..]),
+            "{name}: not the one-rank tree's shapes"
+        );
+    }
     check_m2l_times(&name, &fmm, comm);
     drop(fmm);
     let (phi, grad) = difference(&output, &rotation, comm);
@@ -1060,8 +1062,11 @@ fn check_batched_term(scenario: &Scenario, comm: &SimpleCommunicator) -> bool {
         phi <= DENSE_TOLERANCE && grad <= DENSE_TOLERANCE,
         "{name} against Rotation: φ {phi:e}, ∇φ {grad:e}"
     );
-    let (_, threaded) = run(&auto.clone().threads(2), &inputs, kind, comm);
-    assert_same(&format!("{name}, 2 threads"), &threaded, &output, comm);
+    // At 2 threads (in debug builds the width checks below run Batched at 2 threads).
+    if !cfg!(debug_assertions) {
+        let (_, threaded) = run(&auto.clone().threads(2), &inputs, kind, comm);
+        assert_same(&format!("{name}, 2 threads"), &threaded, &output, comm);
+    }
     check_one_rank(&name, &auto, &inputs, kind, &output, comm);
 
     // The library's default, the term and the exponential M2L on, at the rule's crossover.

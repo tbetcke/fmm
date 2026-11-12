@@ -343,6 +343,9 @@ and Metal's 1 GB plane-wave budget; fmm-validate/results/helmholtz-ch7-5c.md).
   `DENSE_TOLERANCE` of Rotation, 2 threads and the one-rank FMM bit for bit, the library's
   default against the direct sum and one rank, widths 1, 7 and 64 at 1 and 2 threads the
   default's bits (in debug builds 1 at 1 and 7 at 2), and the node budget's share per rank.
+  Its debug cost: about 91 s of the one-rank run on the M6 (526 s in all at opt-level 0, load
+  2–6; 21 % on the rest); at CI's opt-level 1 the whole executable takes 28 s at 1, 2 and 4
+  ranks.
 - The exponential M2L (Helmholtz CH6.1d; the `helmholtz::operator` module docs, "M2L";
   docs/helmholtz/tasks/CH6.1d.md): `HelmholtzM2l::PlaneWave` (opt-in), merge and shift on
   the levels whose `PlaneWavePrecision` gives a quadrature (`Rule`, the default:

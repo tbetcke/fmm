@@ -9,15 +9,13 @@ Progress is logged in `docs/helmholtz/progress.md`; each task's plan is
 
 Status (2026-11-12): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11-02;
 `docs/helmholtz/gates/H6.md`, 2026-11-12). The RCR FMM on every level meets ε against FMM3D
-(CH3.6). The exponential M2L is `Auto`'s default on the low-frequency levels at every
-ε ≥ 10⁻⁸ (D8, signed off at CH6.2h and amended at CH6.1g and CH6.1h). It is within 1.1×
-Rotation's error everywhere measured, the large cases at 10⁻⁷ and 10⁻⁸ included (H6 gate §8),
-and the evaluation takes 0.05–0.91× the previous default's time at 10⁻⁶ and 0.27–0.83× at
-10⁻⁷ and 10⁻⁸ (cases above 0.1 s). HR, H0, H1 and
-H2 are still open; of H7, CH7.5a–c are done (Laplace's plane-wave M2L on the device, adopted
-2026-11-06), and of H0, CH0.4 and CH0.6. Next: the priority list for H4 below, from CH4.0. The
-history of this line until H6.G is in `progress.md` and in this file's history
-(`git show 4b5b37f:docs/helmholtz/roadmap.md`).
+(CH3.6); `Auto` takes the exponential M2L on the low-frequency levels at every ε ≥ 10⁻⁸ (D8).
+CH4.0, the first task of the H4 list, adds `Auto`'s term for Batched from the global tree
+(CH3.2d's sweeps within 1.049 of the per-level best on the three machines), Batched's split
+by the threads and the dense budget per node; its residual at 40–72 threads is CH4.0f. HR, H0,
+H1 and H2 are still open; of H7, CH7.5a–c are done, and of H0, CH0.4 and CH0.6. Next: the
+priority list for H4 below, from CH4.0b. The history of this line until H6.G is in
+`progress.md` and in this file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
 ## How `/next-task` reads this file
 
@@ -477,27 +475,13 @@ task's full line is in its record or report and its progress entry
 
 **Gate:** CH4.4 and CH4.5, the kD sweep and host performance against FMM3D.
 
-- [ ] **CH4.0 The M2L rule's sparse-level term.** Added on 2026-11-02 at CH3.2d (the user,
-  "Accept, follow-up"): CH3.2d's rule by degree and machine class batched a sparse W1 level
-  at p = 15 on Kathleen at 1.106× the best choice (W1, kD = 30, ε = 10⁻⁶), past its 1.10
-  margin, while the W4 cube at the same degree needs Batched. A per-level term from the
-  global tree (the mean V-list length per box, counted once per box over the ranks, the
-  replicated top included), so the rule stays rank-invariant (constraint 9). *Done when:*
-  CH3.2d's sweeps within 1.10 on every case of the three machines, sparse levels included;
-  deterministic and rank-invariant. Also, from the H3 gate (§5, signed off 2026-11-02): the
-  Helmholtz dense budget counted per node, as Laplace's node rule does (constraint 7; it is
-  1 GiB per rank since CH3.2a), before any multi-rank run with Auto as the default.
-  Also (CH6.2h, report §6): Batched on levels of few boxes loses to Rotation at any degree
-  (it reads each class's whole table for few pairs; level 2, 64 boxes, 3,096 pairs: at p = 7
-  2.1–3.8× Rotation's time on the M6 and 8.5–9.3× on Kathleen, about 2 and 4 ms; at p = 15 on
-  Kathleen 0.09–0.12 s against 3–5 ms, which D8's rule gives to the exponential M2L), so the
-  term covers coarse levels as well as sparse ones, or Batched's level call splits as
-  CH6.2f's did. CH6.2h's clean locust pass (report §5, 1 × 72) confirmed that at 72 threads
-  Batched at p = 7–8 is behind Rotation on every level below about 3.5·10⁵ pairs, not only
-  coarse ones (1.0–28×; up to 32 % of a W4 evaluation at 10⁻³), and ahead from about
-  4·10⁵ pairs; the term must catch these levels too, within constraint 2 (it cannot read the
-  thread count).
-  *Needs:* CH3.2d. *Machines:* locust, Kathleen.
+- [x] **CH4.0 The M2L rule's sparse-level term.** Report:
+  `fmm-validate/results/helmholtz-ch4-0.md`. `Auto` batches a level only where m̂, its
+  columns per table read from the global tree, reaches m* of the machine class (agreed over
+  the ranks); Batched's blocks split by the threads (no bit changes); the dense budget per node
+  (8 GiB). CH3.2d's sweeps within 1.049 of the per-level best on the three machines (its miss
+  1.196 → 1.000); at 40–72 threads the evaluation 0.36–1.07× the previous default's, levels of
+  64–5,000 boxes still behind Rotation (CH4.0f). Sign-offs: the PR's questions. *Needs:* CH3.2d.
 - [ ] **CH4.0b The worst-box concentration.** Added on 2026-11-02 at the H3 gate (question
   4a; CH3.6's sign-off 1, "a follow-up before H4"): on W1 at 10⁻⁶ and 10⁻⁸ CH3.6's worst
   box was up to 146× the all-target ℓ2 error (FMM3D 37×), pointwise up to 57 ε, in boxes
@@ -571,6 +555,18 @@ task's full line is in its record or report and its progress entry
   *Done when:* the tables on Kathleen and locust; the estimate; the order of H4's tasks
   confirmed or changed. *Needs:* CH4.0d. *Machines:* Kathleen, locust. *Sign-off:* H4's
   go-ahead and order.
+- [ ] **CH4.0f Batched's split across the matrix's rows.** Added on 2026-11-12 at CH4.0
+  (report §4, §8): with CH4.0's split by blocks, Batched on levels of 64–5,000 boxes at 40–72
+  threads is still 1.1–5× Rotation's level time (0.2–2 ms per level, up to 1.28× of the
+  per-level best on ms-scale evaluations), because narrower blocks read each table for fewer
+  columns. Split a block's column-kernel calls across the threads by rows of the n × n table
+  (each thread a slice of the local's coefficients for every column), so that a level of few
+  blocks keeps its columns per read; every element keeps its chain. *Done when:* the level call
+  the pair chain bit for bit at every split and thread count; on CH6.2h's matrix at 1 × 40 and
+  1 × 72 the levels of 64–5,000 boxes within 1.10 of Rotation's level time or Rotation's, the
+  evaluation within 1.10 of the per-level best. It needs a row-slice entry point of
+  `nd_fmm_simd::MatrixKernel` (Laplace's crate: constraint 1, bit for bit and D9 on the three
+  machines). *Needs:* CH4.0. *Machines:* Kathleen, locust (the M6 with the user's go-ahead).
 - [ ] **CH4.1 S → F and F → R by the transform as a product.** Per-box aligned signature
   buffers; source signatures kept per level call, target accumulators chunked under the node
   budget. *Done when:* round trips to the grid's bandwidth; bits independent of the chunk
