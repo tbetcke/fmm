@@ -148,4 +148,31 @@ The report `fmm-validate/results/helmholtz-ch4-0.md`.
 
 ## Pending runs
 
+None. Every run is in the report (§9): the M6 (the user's go-ahead, 2026-11-12), locust, and
+Kathleen jobs 633057, 633065, 633066 and 633071.
+
+## Departures from this plan
+
+- `helmholtz_m2l --columns-list` was not added: the run script loops over `--columns`.
+- The harness test checks `block_visits`' bounds against the pairs, not a hand count on a small
+  tree; the exact count is the level call's on one rank by construction (the same batches).
+- `M2L_MIN_BLOCK_TARGETS` = 8 was chosen, not measured (the runs compare the split with blocks
+  of 64).
+- m* is not the pair evidence at 1.1 alone: the FMM's per-level times showed the level call
+  needs more on x86 with two planes, so each class has its own margin (report §2).
+- The self-review (a subagent on the plan, §10 and §2) found: the 72-thread item met in part
+  (question 2), a committed `.pyc` (removed), m* not agreed over the ranks (fixed: an
+  all-reduce max), no test that the term's Rotation branch ran (added), the library's default
+  not run end to end with the term (added).
+
 ## Open questions
+
+For sign-off in the PR:
+1. The default node budget of the dense tables, `DEFAULT_DENSE_NODE_BUDGET` = 8 GiB (the
+   waves' node budget), with the per-rank 1 GiB kept as a cap: at 40 ranks per node 205 MB a
+   rank.
+2. CH4.0 done with its residual at 40–72 threads left to CH4.0f (the roadmap's sentence asks
+   the term to catch those levels, which constraint 2 rules out; the split recovers most), and
+   CH4.0f's place in the priority list.
+3. Proposal §6.4 amended for Batched's term and split (it says the rule has "no term for the
+   level's boxes", which is about the exponential M2L).
