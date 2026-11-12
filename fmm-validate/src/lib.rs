@@ -111,6 +111,7 @@ pub mod calibration;
 pub mod device_fmm;
 pub mod fmm_accuracy;
 pub mod helmholtz_accuracy;
+pub mod helmholtz_boxes;
 pub mod helmholtz_calibration;
 pub mod helmholtz_fmm3d;
 pub mod helmholtz_workloads;

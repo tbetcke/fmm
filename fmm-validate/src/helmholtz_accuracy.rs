@@ -12,7 +12,8 @@
 //!   [`Problem::block`] of the workload's points; the FMM moves them to the ranks that own
 //!   their leaves.
 //! - **Charges.** §9.1: per vector, parts uniform in [−1, 1), drawn from the generator of
-//!   `seed + 1 + v`, Re q at every point, then Im q (complex charges only).
+//!   `seed + 1 + v`, Re q at every point, then Im q (complex charges only). Or a smooth
+//!   density ([`Case::density`], Helmholtz CH4.0b): the trace of a plane wave or a constant.
 //! - **Errors.** §9.1's norms over the sampled targets: the relative ℓ2 error of the
 //!   complex potential, ‖φ − φ_ref‖₂ / ‖φ_ref‖₂, and the same over the 3-vector gradient
 //!   field, per vector and over all vectors together (the sums of squares added), reduced
@@ -65,6 +66,7 @@ use nd_fmm_exec::operator::{M2L_BLOCK_TARGETS, MulAdd, P2pChoice};
 use nd_fmm_math::Complex;
 use nd_fmm_ref::helmholtz::p2p::direct_sum;
 use nd_fmm_tables::helmholtz::plane_wave::Precision;
+use nd_octree::PhysicalBox;
 
 use crate::SplitMix64;
 use crate::helmholtz_workloads::{SEED, Workload};
@@ -81,6 +83,8 @@ pub struct Case {
     pub degrees: Degrees,
     /// Real or complex charges.
     pub charges: ChargeKind,
+    /// The charges' values (Helmholtz CH4.0b; [`Density::Random`], §9.1's, by default).
+    pub density: Density,
     /// The number of charge vectors.
     pub vectors: usize,
     /// Whether the FMM computes gradients (and the errors include ∇φ).
@@ -136,6 +140,13 @@ pub struct Case {
     /// The evaluations of one build (at least 1; Helmholtz CH6.2b): the row's times and
     /// errors are the last one's.
     pub evaluations: usize,
+    /// The FMM's domain `[x_min, y_min, z_min, x_max, y_max, z_max]`
+    /// (`HelmholtzFmmBuilder::domain`, Helmholtz CH4.0b; `None` the library's, the points'
+    /// bounding cube).
+    pub domain: Option<[f64; 6]>,
+    /// The points per leaf (`HelmholtzFmmBuilder::max_points_per_leaf`, Helmholtz CH4.0b;
+    /// `None` the library's); above N, a tree of leaves on the leaf rule's level alone.
+    pub max_points_per_leaf: Option<usize>,
 }
 
 impl Case {
@@ -149,6 +160,7 @@ impl Case {
             k,
             degrees,
             charges: ChargeKind::Complex,
+            density: Density::Random,
             vectors: 1,
             gradients: true,
             samples: 1000,
@@ -168,9 +180,45 @@ impl Case {
             plane_wave_split: None,
             plane_wave_raise: None,
             evaluations: 1,
+            domain: None,
+            max_points_per_leaf: None,
         }
     }
 }
+
+/// The values of the charges (Helmholtz CH4.0b; review 2026-11-12, M5): §9.1's random
+/// charges, or a smooth density, whose far field is coherent and dominates the norms.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Density {
+    /// §9.1's: per vector Re q and Im q uniform in [−1, 1).
+    Random,
+    /// The trace of a plane wave, q_j = e^{i Re(k) d·x_j} with d = [`PLANE_WAVE_DIRECTION`],
+    /// the same for every vector; complex charges only.
+    PlaneWave,
+    /// q_j = 1 for every point and vector.
+    Constant,
+}
+
+impl Density {
+    /// A short name: `random`, `planewave`, `constant`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Density::Random => "random",
+            Density::PlaneWave => "planewave",
+            Density::Constant => "constant",
+        }
+    }
+
+    /// The density of a [`name`](Self::name).
+    pub fn from_name(name: &str) -> Option<Self> {
+        [Density::Random, Density::PlaneWave, Density::Constant]
+            .into_iter()
+            .find(|d| d.name() == name)
+    }
+}
+
+/// The direction d of [`Density::PlaneWave`], a unit vector off the axes and the diagonals.
+pub const PLANE_WAVE_DIRECTION: [f64; 3] = [0.36, 0.48, 0.8];
 
 /// The points, sampled targets and charge vectors of a [`Case`].
 #[derive(Clone, Debug, PartialEq)]
@@ -188,7 +236,11 @@ pub struct Problem {
 impl Problem {
     /// Draws the problem: the workload's points, the sample (a partial Fisher–Yates
     /// shuffle from the generator of `case.seed`, at most N targets) and charge vector v
-    /// from the generator of `case.seed + 1 + v`.
+    /// from the generator of `case.seed + 1 + v`, or by [`Case::density`].
+    ///
+    /// # Panics
+    ///
+    /// For [`Density::PlaneWave`] with real charges.
     pub fn new(case: &Case) -> Self {
         let points = case.workload.points(case.k.0);
         let n = points.len();
@@ -201,13 +253,31 @@ impl Problem {
         }
         order.truncate(samples);
         let (mut re, mut im) = (Vec::new(), Vec::new());
+        let complex = case.charges == ChargeKind::Complex;
         for v in 0..case.vectors as u64 {
-            let mut rng = SplitMix64::new(case.seed + 1 + v);
-            re.push(points::charges(&mut rng, n));
-            im.push(match case.charges {
-                ChargeKind::Complex => points::charges(&mut rng, n),
-                ChargeKind::Real => Vec::new(),
-            });
+            match case.density {
+                Density::Random => {
+                    let mut rng = SplitMix64::new(case.seed + 1 + v);
+                    re.push(points::charges(&mut rng, n));
+                    im.push(if complex {
+                        points::charges(&mut rng, n)
+                    } else {
+                        Vec::new()
+                    });
+                }
+                Density::PlaneWave => {
+                    assert!(complex, "a plane wave's trace needs complex charges");
+                    let phase = |x: &[f64; 3]| {
+                        case.k.0 * (0..3).map(|a| PLANE_WAVE_DIRECTION[a] * x[a]).sum::<f64>()
+                    };
+                    re.push(points.iter().map(|x| phase(x).cos()).collect());
+                    im.push(points.iter().map(|x| phase(x).sin()).collect());
+                }
+                Density::Constant => {
+                    re.push(vec![1.0; n]);
+                    im.push(if complex { vec![0.0; n] } else { Vec::new() });
+                }
+            }
         }
         Self {
             points,
@@ -668,6 +738,12 @@ pub fn run_output<C: CommunicatorCollectives>(
     }
     if let Some(raise) = case.plane_wave_raise {
         builder = builder.plane_wave_raise(raise);
+    }
+    if let Some(domain) = case.domain {
+        builder = builder.domain(PhysicalBox::new(domain));
+    }
+    if let Some(points) = case.max_points_per_leaf {
+        builder = builder.max_points_per_leaf(points);
     }
     let mut fmm: HelmholtzFmm<'_, f64, C> = builder.build(points, points, comm)?;
     let build = slowest(start.elapsed().as_secs_f64(), comm);

@@ -35,8 +35,10 @@ use nd_fmm_tables::helmholtz::plane_wave::quadrature::RHO_MAX;
 use nd_fmm_validate::SplitMix64;
 use nd_fmm_validate::fmm_accuracy::Distribution;
 use nd_fmm_validate::helmholtz_accuracy::{
-    Case, Oracle, Problem, Row, checksum, complex_k, run, run_output, sweep_crossovers,
+    Case, Density, Oracle, PLANE_WAVE_DIRECTION, Problem, Row, checksum, complex_k, run,
+    run_output, sweep_crossovers,
 };
+use nd_fmm_validate::helmholtz_boxes::{Errors, Reference, box_sample};
 use nd_fmm_validate::helmholtz_calibration::Curve;
 use nd_fmm_validate::helmholtz_fmm3d::{
     Grid, Values, crosscheck, crosscheck_values, full_bytes, parse_full, parse_sampled,
@@ -644,4 +646,130 @@ fn helmholtz_accuracy_harness() {
     check_plane_wave(&world);
     check_calibration_scan(&world);
     check_fmm3d_measures(&world);
+    check_densities(&world);
+    check_box_study(&world);
+}
+
+/// The smooth densities (Helmholtz CH4.0b): the plane wave's trace q_j = e^{ik d·x_j} and the
+/// constant density, each through `check_fmm` on W1 at kD = 10; §9.1's random charges the
+/// same problem with the density named; on W1 at kD = 30 a named domain with a margin and a
+/// tree of one leaf level (no leaf size bound) through `check_fmm`, the domain as named.
+fn check_densities(world: &SimpleCommunicator) {
+    let case = Case::new(Workload::W1, (10.0, 0.0), Degrees::Tolerance(1e-3));
+    let random = Case {
+        density: Density::Random,
+        ..case.clone()
+    };
+    assert_eq!(Problem::new(&random), Problem::new(&case));
+    let wave = Case {
+        density: Density::PlaneWave,
+        ..case.clone()
+    };
+    let problem = Problem::new(&wave);
+    for (i, x) in problem.points.iter().enumerate() {
+        let phase = 10.0 * (0..3).map(|a| PLANE_WAVE_DIRECTION[a] * x[a]).sum::<f64>();
+        assert_eq!(problem.re[0][i], phase.cos());
+        assert_eq!(problem.im[0][i], phase.sin());
+    }
+    check_fmm(world, &wave);
+    let mut constant = Case {
+        density: Density::Constant,
+        ..case.clone()
+    };
+    constant.charges = ChargeKind::Real;
+    assert!(Problem::new(&constant).re[0].iter().all(|&q| q == 1.0));
+    check_fmm(world, &constant);
+    for name in ["random", "planewave", "constant"] {
+        assert_eq!(Density::from_name(name).map(|d| d.name()), Some(name));
+    }
+
+    // At kD = 30 the leaf rule puts the leaves on level 3 of the domain of side 1.2.
+    let named = Case {
+        k: (30.0, 0.0),
+        domain: Some([-0.1, -0.1, -0.1, 1.1, 1.1, 1.1]),
+        max_points_per_leaf: Some(usize::MAX),
+        ..case.clone()
+    };
+    check_fmm(world, &named);
+    let problem = Problem::new(&named);
+    let oracle = Oracle::sharded(complex_k(&named), &problem, true, 2, world);
+    let run = run_output(&named, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert_eq!(run.domain.lower(), [-0.1; 3]);
+    assert!((run.domain.side() - 1.2).abs() < 1e-15);
+    // One leaf level: every box above the deepest level L that holds points is refined, so
+    // the leaves, empty ones included, are Σ_{l<L} 8 occ(l) − Σ_{0<l<L} occ(l); a bound of 8
+    // points per leaf refines further.
+    let deepest = run.row.levels - 1;
+    let occupied = |level: usize| {
+        let grid = Grid {
+            domain: run.domain,
+            level,
+        };
+        let mut keys: Vec<u64> = problem.points.iter().map(|&x| grid.box_of(x)).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        keys.len()
+    };
+    let children: usize = (0..deepest).map(|l| 8 * occupied(l)).sum();
+    let refined: usize = (1..deepest).map(occupied).sum();
+    assert_eq!(run.row.leaves, children - refined);
+    let fine = Case {
+        max_points_per_leaf: Some(8),
+        ..named.clone()
+    };
+    let refined = run_output(&fine, &problem, &oracle, 1, world).expect("the FMM runs");
+    assert!(refined.row.leaves > run.row.leaves);
+}
+
+/// The box study's measures (Helmholtz CH4.0b) on W1 at kD = 10 on one rank (each rank its
+/// own): the reference at every point equals the sharded oracle at the samples bit for bit,
+/// and a per-box sample the reference at every point at its targets; the box measure is the
+/// FMM3D comparison's `crosscheck` against the same reference bit for bit, its ℓ2 errors to
+/// rounding.
+fn check_box_study(world: &SimpleCommunicator) {
+    let case = Case::new(Workload::W1, (10.0, 0.0), Degrees::Tolerance(1e-3));
+    let problem = Problem::new(&case);
+    let k = complex_k(&case);
+    let oracle = Oracle::sharded(k, &problem, true, 2, world);
+    let every = Reference::every(k, &problem, 0, 3);
+    assert_eq!(every.targets, (0..problem.len()).collect::<Vec<_>>());
+    assert_eq!(every, Reference::every(k, &problem, 0, 1), "threads");
+    for (s, &i) in problem.sample.iter().enumerate() {
+        assert_eq!(every.potential[i], oracle.potential[0][s]);
+        assert_eq!(every.gradient[i], oracle.gradient[0][s]);
+    }
+
+    let one = SimpleCommunicator::self_comm();
+    let run = run_output(&case, &problem, &oracle, 2, &one).expect("the FMM runs");
+    let grid = Grid {
+        domain: run.domain,
+        level: run.row.levels - 1,
+    };
+    let targets = box_sample(&problem.points, &problem.sample[..10], &grid, 2, 7);
+    let sampled = Reference::at(k, &problem, 0, targets.clone(), 2);
+    assert_eq!(sampled.targets, targets);
+    for (j, &i) in targets.iter().enumerate() {
+        assert_eq!(sampled.potential[j], every.potential[i]);
+        assert_eq!(sampled.gradient[j], every.gradient[i]);
+    }
+
+    let errors = Errors::of(&run.output, 0, &every);
+    let boxes = errors.boxes(&every, &problem.points, &grid);
+    let full = Values {
+        potential: every.potential.clone(),
+        gradient: every.gradient.clone(),
+    };
+    let all = 0..problem.len();
+    let check = crosscheck(&run.output, 0, &problem, &all, &full, &grid, &one);
+    let ours: Vec<(u64, [f64; 2])> = boxes.iter().map(|b| (b.key, b.error)).collect();
+    assert_eq!(ours, check.boxes);
+    let l2 = errors.l2(&every);
+    for (ours, theirs) in l2.iter().zip(check.errors) {
+        assert!((ours - theirs).abs() <= 1e-12 * theirs);
+    }
+    assert!(boxes.iter().all(|b| b.targets > 0));
+    assert_eq!(
+        boxes.iter().map(|b| b.targets).sum::<usize>(),
+        problem.len()
+    );
 }
