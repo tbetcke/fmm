@@ -1395,9 +1395,11 @@ refers to the relative ℓ2 norm.
 
 The box measure, as CH3.6 built it (amended at H3.G): per box of the deepest level, the
 largest error at one of its targets over the reference's RMS over all targets, reported
-beside the all-target ℓ2 error. It is reported, not gated, until CH4.0b decides whether a
-pointwise criterion joins the ℓ2 norm; CH4.4's "no error concentrated at a class boundary"
-is read with it.
+beside the all-target ℓ2 error. A gate checks it against a bound: the worst box at most
+100 ε (amended at CH4.0b). ε stays the relative ℓ2 tolerance, on which the degree rule is
+calibrated; pointwise the errors reach 10–60 ε near box corners, where the truncation is
+largest (fmm-validate/results/helmholtz-ch4-0b.md), and a worst box above 100 ε is a finding
+as an ℓ2 miss is. CH4.4's "no error concentrated at a class boundary" is read with it.
 
 ### 9.2 FMM3D as an independent reference
 
@@ -1851,6 +1853,10 @@ these.
   user on PR #211, question 3, "yes to Q3"): Section 6.4, Batched under `Auto` only where its
   columns per table read reach m* of the machine class, its blocks split by the threads with no
   bit changed, and the dense tables under a node budget (8 GiB, question 1).
+- **Amended at CH4.0b, 2026-11-12** (fmm-validate/results/helmholtz-ch4-0b.md; signed off by
+  the user on PR #212, "Sign off 1 and 2 as recommended"): Section 9.1, the box measure a gate bound
+  of 100 ε beside the ℓ2 tolerance, which ε stays (question 1); the charges of §9.1 unchanged
+  (D12), with the smooth densities in the verification of CH4.0c, CH4.3 and CH4.4 (question 2).
 
 ## Appendix B. The stability check behind Section 3.6
 

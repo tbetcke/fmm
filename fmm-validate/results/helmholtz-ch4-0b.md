@@ -336,6 +336,9 @@ The constant density on W1 at kD = 100 on the M6 (accuracy only; `extra/`):
 
 ## 5. Questions for sign-off
 
+Signed off by the user on 2026-11-12 (#212): "Sign off 1 and 2 as recommended". Proposal §9.1
+amended (Appendix A); CH4.0c, CH4.3 and CH4.4 carry question 2's verification.
+
 1. **The criterion.** Recommended: ε stays §9.1's relative ℓ2 tolerance, on which the rule is
    calibrated and every gate measured; the box measure joins §9.1 as a bound the gates
    check: the worst box of the deepest level at most 100 ε, reported per case as now. The

@@ -11,8 +11,8 @@ Status (2026-11-12): **H3 and H6 closed** (`docs/helmholtz/gates/H3.md`, 2026-11
 `docs/helmholtz/gates/H6.md`, 2026-11-12). The RCR FMM on every level meets ε against FMM3D
 (CH3.6); `Auto` takes the exponential M2L on the low-frequency levels at every ε ≥ 10⁻⁸ (D8).
 Of the H4 list, CH4.0 (Batched's term, split and node budget) is merged and CH4.0b (the
-worst boxes: corner placement on the coarsest plateau level; the smooth densities within ε)
-waits for its sign-off. HR, H0, H1 and H2 are still open; of H7, CH7.5a–c are done, and of
+worst boxes: corner placement on the coarsest plateau level; the smooth densities within ε;
+ε stays an ℓ2 tolerance, the worst box a gate bound of 100 ε) is signed off on #212. HR, H0, H1 and H2 are still open; of H7, CH7.5a–c are done, and of
 H0, CH0.4 and CH0.6. Next: CH4.0c. The history of this line until H6.G is in `progress.md`
 and in this file's history (`git show 4b5b37f:docs/helmholtz/roadmap.md`).
 
@@ -489,7 +489,9 @@ task's full line is in its record or report and its progress entry
   vertices on every level, and boxes clipped at a corner elsewhere; not a list, the boundary or
   a defect. The smooth densities (a plane wave's trace, a constant) meet ε in ℓ2 on W1 at
   kD = 10–500, 10⁻³–10⁻⁸, under Rotation and the default (the constant 0.66 ε at most).
-  Sign-off pending (#212): the criterion; the charge model. *Needs:* CH3.6.
+  Signed off (the user, 2026-11-12, on #212, "Sign off 1 and 2 as recommended"): ε stays §9.1's ℓ2
+  tolerance and the box measure a gate bound of 100 ε (proposal §9.1 amended); the gates keep
+  the random charges (D12), CH4.0c, CH4.3 and CH4.4 verify on the smooth densities too. *Needs:* CH3.6.
 - [ ] **CH4.0c The degree rule beyond its measured range.** Added on 2026-11-02 at the H3
   gate (question 4b; CH3.3's sign-off 2): the high-frequency branch is measured to x = 65
   and checked at x = 108 only, and falls below S7's per-pair p* above that at ε ≤ 10⁻⁷.
@@ -501,7 +503,8 @@ task's full line is in its record or report and its progress entry
   stays before CH4.1, as CH4.4 runs at kD = 1000 on a second new source of error. Also
   (CH4.0b, report §4): on W1 at kD = 100 the constant density misses ε in ℓ2 below 10⁻⁸
   (1.5× at 10⁻⁹, 3.4× at 10⁻¹⁰), all of it from level 2 on the high-frequency branch (p = 40
-  at x = 21.7); the random charges do not show it. CH4.0c's runs include the constant density.
+  at x = 21.7); the random charges do not show it. CH4.0c's runs include the constant density
+  (CH4.0b's sign-off 2).
   *Needs:* CH3.6. *Machines:* Kathleen.
 - [ ] **CH4.0d The Helmholtz leaf size.** Added on 2026-11-12 after the H6 gate (the user:
   "Can you add leaf size tuning to the roadmap?"). `HelmholtzFmmBuilder` refines to a fixed
@@ -580,11 +583,15 @@ task's full line is in its record or report and its progress entry
   (⌈3(P − 1)/2⌉, whose rounding stays far below 2P − 2's at k a 6–45, its report §6) earns a truncation
   analysis. Also (review 2026-11-12, M8): the excess-bandwidth length
   L ≈ 2ka + c (2ka)^{1/3} of the high-frequency FMM literature, between S6's last two, in
-  the same sweep. *Needs:* CH4.2.
+  the same sweep. Also (CH4.0b's sign-off 2): the calibration verified on the constant
+  density (kD ≤ 100) and the plane wave's trace (kD = 500) as well as on §9.1's charges
+  (`helmholtz_accuracy::Density`). *Needs:* CH4.2.
 - [ ] **CH4.4 kD sweep, with the FMM3D gate.** *Done when:* the FMM against the direct sum on
   W1 to kD = 1000, W2 to 500 and W3 to 200, beside `hfmm3d`; the full-target crosscheck mapped
-  to levels and classes, with no error concentrated at a class boundary; time, memory and
-  build cost per k. *Needs:* CH4.3, CH1.4. *Machines:* Kathleen.
+  to levels and classes, with no error concentrated at a class boundary and the worst box at
+  most 100 ε (proposal §9.1, amended at CH4.0b); time, memory and build cost per k. Also
+  (CH4.0b's sign-off 2): the plane wave's trace at kD = 500 and 1000 beside §9.1's charges.
+  *Needs:* CH4.3, CH1.4. *Machines:* Kathleen.
 - [ ] **CH4.5 Host performance against FMM3D at matched accuracy.** As C6.8, setup apart,
   one node, on CH4.4's sweep. *Needs:* CH4.4. *Machines:* locust, Kathleen.
 - [ ] **CH4.6 The optional FFTW back end of the φ step.** *Done when:* against the product to

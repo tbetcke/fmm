@@ -2925,8 +2925,12 @@ request, using this template:
 - Checks: `/verify` on the M6: fmt, Clippy (default, examples, workspace), docs, the default
   and workspace tests at opt-level 1, `tests/helmholtz_accuracy.rs` at 2 and 4 ranks, its
   one-rank debug run 95–99 s against `main`'s 83–87 s (loaded M6). Nothing pending.
-- Decisions: questions for sign-off in the PR: (1) the criterion; (2) the gates' charge model.
+- Decisions: signed off (the user, 2026-11-12, on #212, "Sign off 1 and 2 as recommended"): (1) ε stays §9.1's
+  relative ℓ2 tolerance and the box measure joins §9.1 as a gate bound of 100 ε (proposal §9.1
+  and its Appendix A amended; the degree rule's documentation notes the pointwise errors);
+  (2) the gates keep §9.1's random charges (D12 unchanged), and CH4.0c, CH4.3 and CH4.4 verify
+  on the constant density and the plane wave's trace too (their roadmap lines).
 - Laplace: not touched (nd-fmm-validate's Helmholtz modules, tests, tools, docs).
 - Follow-ups: CH4.0c (roadmap: its runs include the constant density, which shows the
-  high-frequency branch short below 10⁻⁸); others depend on the sign-off (an opt-in pointwise
-  tolerance under option (c)).
+  high-frequency branch short below 10⁻⁸); CH4.3 and CH4.4 (roadmap: the smooth densities in
+  their verification; CH4.4 the 100 ε bound).

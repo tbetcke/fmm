@@ -166,6 +166,7 @@ None.
 
 ## Open questions
 
-For sign-off (the report's §5): 1. the criterion (recommended: ℓ2 stays, the box measure a
-gate bound of 100 ε); 2. the charge model (recommended: §9.1's random charges stay; CH4.3 and
-CH4.4 verify on the constant density and the plane wave's trace too).
+None. Signed off 2026-11-12 (the user, on #212, "Sign off 1 and 2 as recommended"): 1. ε stays §9.1's
+ℓ2 tolerance and the box measure a gate bound of 100 ε (proposal §9.1 amended, its Appendix
+A line; the degree rule's documentation); 2. §9.1's random charges stay for the gates, and
+CH4.0c, CH4.3 and CH4.4 verify on the constant density and the plane wave's trace too.
